@@ -1,0 +1,219 @@
+[arts-transform] Run the ARTSTransform Module Pass
+[arts-transform] Analyzing main function
+
+[AADataEnvFunction] initialize: main
+; Function Attrs: mustprogress norecurse uwtable
+define dso_local noundef i32 @main() #9 !dbg !66 {
+entry:
+  %call = call i32 @rand() #6, !dbg !67
+  call void @omp_set_dynamic(i32 noundef 0), !dbg !68
+  call void @omp_set_num_threads(i32 noundef 4), !dbg !69
+  %n.casted.sroa.0.0.insert.ext = zext i32 %call to i64, !dbg !70
+  call void (ptr, i32, ptr, ...) @__kmpc_fork_call(ptr @10, i32 1, ptr @main.omp_outlined, i64 %n.casted.sroa.0.0.insert.ext), !dbg !70
+  %call1 = call i32 (ptr, ...) @printf(ptr noundef @.str.4, i32 noundef %call), !dbg !71
+  ret i32 0, !dbg !72
+}
+
+[AADataEnvCallSite] ----- initialize: rand
+[AADataEnvCallSite] Other instruction - FOUND
+[AADataEnvCallSite] Unknown caller or declarations are not analyzable, we give up.
+[AADataEnvCallSite] ----- initialize: omp_set_dynamic
+[AADataEnvCallSite] Other instruction - FOUND
+[AADataEnvCallSite] Unknown caller or declarations are not analyzable, we give up.
+[AADataEnvCallSite] ----- initialize: omp_set_num_threads
+Number of threads: 4
+[AADataEnvCallSite] ----- initialize: __kmpc_fork_call
+[AADataEnvCallSite] Parallel region - FOUND
+
+[AADataEnvFunction] initialize: main.omp_outlined
+; Function Attrs: alwaysinline norecurse nounwind uwtable
+define internal void @main.omp_outlined(ptr noalias noundef %.global_tid., ptr noalias noundef %.bound_tid., i64 noundef %n) #11 personality ptr @__gxx_personality_v0 !dbg !78 {
+entry:
+  %n.addr.sroa.0.0.extract.trunc = trunc i64 %n to i32
+  %n.addr.sroa.3.0.extract.shift = lshr i64 %n, 32
+  %0 = load i32, ptr %.global_tid., align 4, !dbg !79, !tbaa !32
+  %1 = call i32 @__kmpc_single(ptr @7, i32 %0), !dbg !79
+  %2 = icmp ne i32 %1, 0, !dbg !79
+  br i1 %2, label %omp_if.then, label %omp_if.end, !dbg !79
+
+omp_if.then:                                      ; preds = %entry
+  %call = call noundef i32 @_Z3fibi(i32 noundef %n.addr.sroa.0.0.extract.trunc), !dbg !80
+  %call1 = call i32 (ptr, ...) @printf(ptr noundef @.str, i32 noundef %n.addr.sroa.0.0.extract.trunc, i32 noundef %call), !dbg !81
+  call void @__kmpc_end_single(ptr @7, i32 %0), !dbg !81
+  br label %omp_if.end, !dbg !81
+
+omp_if.end:                                       ; preds = %omp_if.then, %entry
+  call void @__kmpc_barrier(ptr @8, i32 %0), !dbg !82
+  ret void, !dbg !83
+}
+
+[AADataEnvCallSite] ----- initialize: __kmpc_single
+[AADataEnvCallSite] Other instruction - FOUND
+[AADataEnvCallSite] Unknown caller or declarations are not analyzable, we give up.
+[AADataEnvCallSite] ----- initialize: _Z3fibi
+[AADataEnvCallSite] Other instruction - FOUND
+[AADataEnvCallSite] Doing IPA for function.
+
+[AADataEnvFunction] initialize: _Z3fibi
+; Function Attrs: mustprogress nounwind uwtable
+define dso_local noundef i32 @_Z3fibi(i32 noundef %n) #0 !dbg !10 {
+entry:
+  %i = alloca i32, align 4
+  %j = alloca i32, align 4
+  %0 = call i32 @__kmpc_global_thread_num(ptr @1)
+  call void @llvm.lifetime.start.p0(i64 4, ptr %i) #6, !dbg !13
+  call void @llvm.lifetime.start.p0(i64 4, ptr %j) #6, !dbg !13
+  %cmp = icmp slt i32 %n, 2, !dbg !14
+  br i1 %cmp, label %if.then, label %if.else, !dbg !15
+
+if.then:                                          ; preds = %entry
+  br label %cleanup, !dbg !16
+
+if.else:                                          ; preds = %entry
+  %1 = call ptr @__kmpc_omp_task_alloc(ptr @1, i32 %0, i32 1, i64 48, i64 8, ptr @.omp_task_entry.), !dbg !17
+  %2 = load ptr, ptr %1, align 8, !dbg !17, !tbaa !18
+  store ptr %i, ptr %2, align 8, !dbg !17, !tbaa.struct !26
+  %3 = getelementptr inbounds %struct.kmp_task_t_with_privates, ptr %1, i32 0, i32 1, !dbg !17
+  store i32 %n, ptr %3, align 8, !dbg !17, !tbaa !28
+  %4 = call i32 @__kmpc_omp_task(ptr @1, i32 %0, ptr %1), !dbg !17
+  %5 = call ptr @__kmpc_omp_task_alloc(ptr @3, i32 %0, i32 1, i64 48, i64 8, ptr @.omp_task_entry..3), !dbg !29
+  %6 = load ptr, ptr %5, align 8, !dbg !29, !tbaa !18
+  store ptr %j, ptr %6, align 8, !dbg !29, !tbaa.struct !26
+  %7 = getelementptr inbounds %struct.kmp_task_t_with_privates.1, ptr %5, i32 0, i32 1, !dbg !29
+  store i32 %n, ptr %7, align 8, !dbg !29, !tbaa !28
+  %8 = call i32 @__kmpc_omp_task(ptr @3, i32 %0, ptr %5), !dbg !29
+  %9 = call i32 @__kmpc_omp_taskwait(ptr @5, i32 %0), !dbg !30
+  %10 = load i32, ptr %i, align 4, !dbg !31, !tbaa !32
+  %11 = load i32, ptr %j, align 4, !dbg !33, !tbaa !32
+  %add = add nsw i32 %10, %11, !dbg !34
+  br label %cleanup, !dbg !35
+
+cleanup:                                          ; preds = %if.else, %if.then
+  %retval.0 = phi i32 [ %n, %if.then ], [ %add, %if.else ], !dbg !36
+  call void @llvm.lifetime.end.p0(i64 4, ptr %j) #6, !dbg !37
+  call void @llvm.lifetime.end.p0(i64 4, ptr %i) #6, !dbg !37
+  ret i32 %retval.0, !dbg !37
+}
+
+[AADataEnvCallSite] ----- initialize: __kmpc_global_thread_num
+[AADataEnvCallSite] Other instruction - FOUND
+[AADataEnvCallSite] Unknown caller or declarations are not analyzable, we give up.
+[AADataEnvCallSite] ----- initialize: llvm.lifetime.start.p0
+[AADataEnvCallSite] Other instruction - FOUND
+[AADataEnvCallSite] Unknown caller or declarations are not analyzable, we give up.
+[AADataEnvCallSite] ----- initialize: llvm.lifetime.start.p0
+[AADataEnvCallSite] Other instruction - FOUND
+[AADataEnvCallSite] Unknown caller or declarations are not analyzable, we give up.
+[AADataEnvCallSite] ----- initialize: __kmpc_omp_task_alloc
+[AADataEnvCallSite] Task alloc - FOUND
+kmp_task_t size: 40
+[AADataEnvCallSite] AAPointerInfo is valid with: 3 bins
+[2147483647-4294967294] : 1
+     - 14 -   %4 = call i32 @__kmpc_omp_task(ptr @1, i32 %0, ptr nocapture %1), !dbg !17
+[40-44] : 1
+     - 9 -   store i32 %n, ptr %3, align 8, !dbg !17, !tbaa !28
+       -- Store instruction
+       - c: value i32 %n
+[0-8] : 1
+     - 5 -   %2 = load ptr, ptr %1, align 8, !dbg !17, !tbaa !18
+       -- Read instruction
+       - Load instruction. Running AA on this.
+[0-8] : 1
+     - 9 -   store ptr %i, ptr %2, align 8, !dbg !17, !tbaa.struct !26
+       -- Store instruction
+       - c: value   %i = alloca i32, align 4
+[AADataEnvCallSite] ----- initialize: __kmpc_omp_task
+[AADataEnvCallSite] ----- initialize: __kmpc_omp_task_alloc
+[AADataEnvCallSite] Task alloc - FOUND
+kmp_task_t size: 40
+[AADataEnvCallSite] AAPointerInfo is valid with: 3 bins
+[2147483647-4294967294] : 1
+     - 14 -   %8 = call i32 @__kmpc_omp_task(ptr @3, i32 %0, ptr nocapture %5), !dbg !29
+[40-44] : 1
+     - 9 -   store i32 %n, ptr %7, align 8, !dbg !29, !tbaa !28
+       -- Store instruction
+       - c: value i32 %n
+[0-8] : 1
+     - 5 -   %6 = load ptr, ptr %5, align 8, !dbg !29, !tbaa !18
+       -- Read instruction
+       - Load instruction. Running AA on this.
+[0-8] : 1
+     - 9 -   store ptr %j, ptr %6, align 8, !dbg !29, !tbaa.struct !26
+       -- Store instruction
+       - c: value   %j = alloca i32, align 4
+[AADataEnvCallSite] ----- initialize: __kmpc_omp_task
+[AADataEnvCallSite] ----- initialize: __kmpc_omp_taskwait
+[AADataEnvCallSite] ----- initialize: llvm.lifetime.end.p0
+[AADataEnvCallSite] Other instruction - FOUND
+[AADataEnvCallSite] Unknown caller or declarations are not analyzable, we give up.
+[AADataEnvCallSite] ----- initialize: llvm.lifetime.end.p0
+[AADataEnvCallSite] Other instruction - FOUND
+[AADataEnvCallSite] Unknown caller or declarations are not analyzable, we give up.
+[AADataEnvFunction] updateImpl: _Z3fibi
+[AADataEnvCallSite] ----- initialize: printf
+[AADataEnvCallSite] Other instruction - FOUND
+[AADataEnvCallSite] Unknown caller or declarations are not analyzable, we give up.
+[AADataEnvCallSite] ----- initialize: __kmpc_end_single
+[AADataEnvCallSite] Other instruction - FOUND
+[AADataEnvCallSite] Unknown caller or declarations are not analyzable, we give up.
+[AADataEnvCallSite] ----- initialize: __kmpc_barrier
+[AADataEnvCallSite] Other instruction - FOUND
+[AADataEnvCallSite] Unknown caller or declarations are not analyzable, we give up.
+[AADataEnvFunction] updateImpl: main.omp_outlined
+[AADataEnvCallSite] ----- initialize: printf
+[AADataEnvCallSite] Other instruction - FOUND
+[AADataEnvCallSite] Unknown caller or declarations are not analyzable, we give up.
+[AADataEnvFunction] updateImpl: main
+[AADataEnvCallSite] updateImpl: __kmpc_fork_call
+[AADataEnvCallSite] updateImpl: _Z3fibi
+[AADataEnvCallSite] updateImpl: __kmpc_omp_task_alloc
+[AADataEnvCallSite] Task alloc - FOUND
+kmp_task_t size: 40
+[AADataEnvCallSite] AAPointerInfo is valid with: 3 bins
+[2147483647-4294967294] : 1
+     - 14 -   %4 = call i32 @__kmpc_omp_task(ptr @1, i32 %0, ptr nocapture %1), !dbg !17
+[40-44] : 1
+     - 9 -   store i32 %n, ptr %3, align 8, !dbg !17, !tbaa !28
+       -- Store instruction
+       - c: value i32 %n
+[0-8] : 1
+     - 5 -   %2 = load ptr, ptr %1, align 8, !dbg !17, !tbaa !18
+       -- Read instruction
+       - Load instruction. Running AA on this.
+[0-8] : 1
+     - 9 -   store ptr %i, ptr %2, align 8, !dbg !17, !tbaa.struct !26
+       -- Store instruction
+       - c: value   %i = alloca i32, align 4
+[AADataEnvCallSite] updateImpl: __kmpc_omp_task
+[AADataEnvCallSite] updateImpl: __kmpc_omp_task_alloc
+[AADataEnvCallSite] Task alloc - FOUND
+kmp_task_t size: 40
+[AADataEnvCallSite] AAPointerInfo is valid with: 3 bins
+[2147483647-4294967294] : 1
+     - 14 -   %8 = call i32 @__kmpc_omp_task(ptr @3, i32 %0, ptr nocapture %5), !dbg !29
+[40-44] : 1
+     - 9 -   store i32 %n, ptr %7, align 8, !dbg !29, !tbaa !28
+       -- Store instruction
+       - c: value i32 %n
+[0-8] : 1
+     - 5 -   %6 = load ptr, ptr %5, align 8, !dbg !29, !tbaa !18
+       -- Read instruction
+       - Load instruction. Running AA on this.
+[0-8] : 1
+     - 9 -   store ptr %j, ptr %6, align 8, !dbg !29, !tbaa.struct !26
+       -- Store instruction
+       - c: value   %j = alloca i32, align 4
+[AADataEnvCallSite] updateImpl: __kmpc_omp_task
+[AADataEnvCallSite] updateImpl: __kmpc_omp_taskwait
+[AADataEnvFunction] Manifest
+[AADataEnvCallSite] Manifest
+[AADataEnvCallSite] Manifest
+[AADataEnvFunction] Manifest
+[AADataEnvCallSite] Manifest
+[AADataEnvFunction] Manifest
+[AADataEnvCallSite] Manifest
+[AADataEnvCallSite] Manifest
+[AADataEnvCallSite] Manifest
+[AADataEnvCallSite] Manifest
+[AADataEnvCallSite] Manifest
+[Attributor] Done, result: unchanged.
