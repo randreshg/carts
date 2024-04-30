@@ -7,7 +7,10 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Frontend/ARTS/ARTSIRBuilder.h"
+#include "ARTSIRBuilder.h"
+#include "ARTSConstants.h"
+#include "ARTSTransform.h"
+
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
@@ -18,7 +21,6 @@
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Bitcode/BitcodeReader.h"
-#include "llvm/Frontend/ARTS/ARTSConstants.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/CFG.h"
@@ -35,7 +37,7 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Transforms/ARTS/ARTSTransform.h"
+
 // #include "llvm/MC/TargetRegistry.h"
 // #include "llvm/Support/CommandLine.h"
 // #include "llvm/Support/ErrorHandling.h"

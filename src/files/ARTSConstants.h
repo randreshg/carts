@@ -18,11 +18,11 @@ namespace arts {
 /// IDs for all arts runtime library (RTL) functions.
 enum class RuntimeFunction {
   #define ARTS_RTL(Enum, ...) Enum,
-  #include "llvm/Frontend/ARTS/ARTSKinds.def"
+  #include "ARTSKinds.def"
 };
 
 #define ARTS_RTL(Enum, ...) constexpr auto Enum = arts::RuntimeFunction::Enum;
-#include "llvm/Frontend/ARTS/ARTSKinds.def"
+#include "ARTSKinds.def"
 
 } // end namespace arts
 } // end namespace llvm
