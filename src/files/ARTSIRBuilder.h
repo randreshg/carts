@@ -12,9 +12,9 @@
 // #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/Support/Allocator.h"
-#include "llvm/Frontend/ARTS/ARTSConstants.h"
 
-#include "llvm/Transforms/ARTS/ARTSTransform.h"
+#include "ARTSConstants.h"
+#include "ARTSTransform.h"
 
 namespace llvm {
 // class ARTSIRBuilder;
