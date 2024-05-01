@@ -47,10 +47,10 @@ file(GLOB CARTSPassSrc "*.cpp")
 set_source_files_properties(${CARTSPassSrc} PROPERTIES COMPILE_FLAGS " -std=c++17")
 
 # Name of the LLVM pass
-set(CARTSPassName "CAT")
+set(CARTSPassName "CARTS")
 
 set(LLVM_RUNTIME_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/)
 set(LLVM_LIBRARY_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/)
 
 # Declare the LLVM pass to compile
-add_llvm_library(${CATPassName} MODULE ${CARTSPassSrc})
+add_llvm_library(${CARTSPassName} MODULE ${CARTSPassSrc})

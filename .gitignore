@@ -4,5 +4,4 @@
 .install
 .build
 compile_commands.json
-external/noelle
-external/arts
+external
