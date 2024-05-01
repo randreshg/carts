@@ -58,5 +58,6 @@ set(CMAKE_INSTALL_BINDIR ${CMAKE_INSTALL_PREFIX}/bin)
 set(CMAKE_INSTALL_INCLUDEDIR ${CMAKE_INSTALL_PREFIX}/include)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+configure_file(.cmake/enable.in enable @ONLY)
 
 add_subdirectory(src)
