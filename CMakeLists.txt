@@ -58,6 +58,13 @@ set(CMAKE_INSTALL_BINDIR ${CMAKE_INSTALL_PREFIX}/bin)
 set(CMAKE_INSTALL_INCLUDEDIR ${CMAKE_INSTALL_PREFIX}/include)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+add_custom_target(
+  CompileCommands ALL
+  COMMAND ${CMAKE_COMMAND} -E create_symlink
+    ${CMAKE_BINARY_DIR}/compile_commands.json
+    ${CMAKE_SOURCE_DIR}/compile_commands.json
+)
+
 configure_file(.cmake/enable.in enable @ONLY)
 
-add_subdirectory(src)
+add_subdirectory(carts)

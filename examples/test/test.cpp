@@ -18,7 +18,7 @@
 #include <cstdlib>
 #include <stdio.h>
 
-#include <iostream>
+#include <omp.h>
 // #include <stdlib.h>
 
 int main() {

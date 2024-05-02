@@ -3,11 +3,11 @@ LIBS=
 all: test_opt
 
 %.bc: %.cpp
-	clang++ -O1 -g0 -Xclang -disable-llvm-passes -emit-llvm -c $< -o $@
+	clang++ -fopenmp -O3 -g0 -Xclang -disable-llvm-passes -emit-llvm -c $< -o $@ -lstdc++
 	llvm-dis $@
 
 %.bc: %.c
-	clang -O1 -g0 -Xclang -disable-llvm-passes -emit-llvm -c $< -o $@
+	clang -fopenmp -O3 -g0 -Xclang -disable-llvm-passes -emit-llvm -c $< -o $@
 	llvm-dis $@
 
 test_norm.bc: test.bc
@@ -19,11 +19,11 @@ test_with_metadata.bc: test_norm.bc
 	llvm-dis $@
 
 test_opt.bc: test_with_metadata.bc
-	noelle-load -load /home/rherreraguaitero/ME/ARTS-env/CARTS/.build/CARTS.so -CARTS $< -o $@
+	noelle-load -load /home/rherreraguaitero/ME/ARTS-env/CARTS/.build/CARTS.so -CARTS -debug $< -o $@
 	llvm-dis $@
 
 test_opt: test_opt.bc
-	clang $< -O3 -march=native -o $@
+	clang++ -fopenmp $< -O3 -march=native -o $@ -lstdc++
 
 clean:
 	rm -f *.bc *.ll test_opt test_pre_prof output.prof default.* ;
