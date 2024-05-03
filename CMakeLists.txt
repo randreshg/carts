@@ -3,9 +3,7 @@ cmake_minimum_required(VERSION 3.13)
 
 project(CARTS C CXX)
 
-set(CMAKE_EXPORT_COMPILE_COMMANDS OFF)
-
-set(LLVM_VERSION 14.0.1)
+set(LLVM_VERSION 14.0.6)
 set(CLANG_ID "Clang")
 
 message_blue("Compiling CARTS for LLVM version ${LLVM_VERSION}")
@@ -51,6 +49,31 @@ if (NOT NOELLE_INSTALL_DIR)
     "    Please set NOELLE_INSTALL_DIR to the path where NOELLE is installed.")
 endif()
 
+# include(FetchContent)
+# FetchContent_Declare(
+#   noelle
+#   GIT_REPOSITORY  "https://github.com/randreshg/noelle.git"
+#   GIT_TAG         v14
+# )
+# set(NOELLE_SVF OFF)
+# set(NOELLE_SCAF ON)
+# FetchContent_MakeAvailable(noelle)
+# FetchContent_GetProperties(noelle)
+# include_directories(${noelle_SOURCE_DIR}/include)
+include(ExternalProject)
+ExternalProject_Add(
+    noelle
+    GIT_REPOSITORY  "https://github.com/randreshg/noelle.git"
+    GIT_TAG         v14
+    BUILD_COMMAND   ${CMAKE_COMMAND} --build . -j16
+    INSTALL_COMMAND ${CMAKE_COMMAND} --install .
+    CMAKE_ARGS
+        -DCMAKE_INSTALL_PREFIX=${NOELLE_INSTALL_DIR}
+        -DNOELLE_SVF=OFF
+        -DNOELLE_SCAF=ON
+)
+include_directories(${NOELLE_INSTALL_DIR}/include)
+
 # Set up the build and install paths.
 set(CMAKE_STAGING_PREFIX ${CMAKE_BINARY_DIR})
 set(CMAKE_INSTALL_LIBDIR ${CMAKE_INSTALL_PREFIX}/lib)
@@ -65,6 +88,6 @@ add_custom_target(
     ${CMAKE_SOURCE_DIR}/compile_commands.json
 )
 
-configure_file(.cmake/enable.in enable @ONLY)
+# configure_file(.cmake/enable.in enable @ONLY)
 
 add_subdirectory(carts)

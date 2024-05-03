@@ -1,0 +1,4 @@
+export PATH=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin:$PATH
+export LD_LIBRARY_PATH=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib:$LD_LIBRARY_PATH
+export PATH=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/noelle/bin:$PATH
+export LD_LIBRARY_PATH=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/noelle/lib:$LD_LIBRARY_PATH
