@@ -19,7 +19,7 @@ test_with_metadata.bc: test_norm.bc
 	llvm-dis $@
 
 test_opt.bc: test_with_metadata.bc
-	noelle-load -load /home/rherreraguaitero/ME/ARTS-env/CARTS/.build/CARTS.so -CARTS -debug $< -o $@
+	noelle-load -debug-only=carts,arts-analyzer -load /home/rherreraguaitero/ME/ARTS-env/CARTS/.build/CARTS.so -CARTS $< -o $@
 	llvm-dis $@
 
 test_opt: test_opt.bc

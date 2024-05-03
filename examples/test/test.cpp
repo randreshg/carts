@@ -7,7 +7,7 @@
 /// exampleOutput.ll
 
 /// clang++ -fopenmp -Rpass=arts-transform -mllvm -arts-enable -mllvm
-/// -debug-only=arts-transform,arts-ir-builder,attributor -O3 -g0 example.cpp -o
+/// -debug-only=carts,arts-analyzer -O3 -g0 example.cpp -o
 /// example &> exampleOutput.ll
 
 /// Compiler explorer

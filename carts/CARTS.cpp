@@ -44,12 +44,11 @@ struct CARTS : public ModulePass {
   bool doInitialization(Module &M) override { return false; }
 
   bool runOnModule(Module &M) override {
-
+    LLVM_DEBUG(dbgs() <<  "\n ---------------------------------------- \n");
     /// Fetch NOELLE Manager
     auto &NM= getAnalysis<Noelle>();
     /// Use NOELLE
     auto Insts = NM.numberOfProgramInstructions();
-    errs() << "The program has " << Insts << " instructions\n";
 
     /// Fetch the PDG
     auto PDG = NM.getProgramDependenceGraph();
@@ -61,9 +60,10 @@ struct CARTS : public ModulePass {
 
     /// Identify number of OpenMP regions
     auto AA = ARTSAnalyzer();
-    LLVM_DEBUG(dbgs() << " - OpenMP Regions:" << AA.getNumberofOpenMPRegions(M)
-                      << "\n");
+    AA.getNumberofOpenMPRegions(M);
+    LLVM_DEBUG(dbgs() << TAG << "- Number of instructions: " << Insts << "\n");
 
+    LLVM_DEBUG(dbgs() <<  "\n ---------------------------------------- \n");
     return false;
   }
 

@@ -25,7 +25,7 @@ void ARTSAnalyzer::analyzeDeps() {
 }
 
 uint64_t ARTSAnalyzer::getNumberofOpenMPRegions(Module &M) {
-  LLVM_DEBUG(dbgs() << " - OpenMP Regions:" << 10 << "\n");
+  LLVM_DEBUG(dbgs() << TAG << " - OpenMP Regions:" << 10 << "\n");
 
   return 10;
 }

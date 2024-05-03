@@ -41,7 +41,10 @@ link_directories(${LLVM_LIBRARY_DIRS})
 file(GLOB CARTSPassSrc "*.cpp" "src/*.cpp")
 
 # Compilation flags
-set_source_files_properties(${CARTSPassSrc} PROPERTIES COMPILE_FLAGS " -std=c++17")
+add_compile_options(${CARTS_CXX_FLAGS})
+# set_source_files_properties(${CARTSPassSrc} PROPERTIES COMPILE_FLAGS)
+# set_source_files_properties(${CARTSPassSrc} PROPERTIES COMPILE_FLAGS " -std=c++17")
+
 
 # Name of the LLVM pass
 set(CARTSPassName "CARTS")
