@@ -22,6 +22,7 @@
 #include "noelle/core/Noelle.hpp"
 #include "ARTS.h"
 #include "ARTSAnalyzer.h"
+#include "ARTSIRBuilder.h"
 
 using namespace llvm;
 using namespace arcana::noelle;
@@ -59,8 +60,11 @@ struct CARTS : public ModulePass {
     auto FDG = PDG->createFunctionSubgraph(*MainFunction);
 
     /// Identify number of OpenMP regions
-    auto AA = ARTSAnalyzer();
-    AA.getNumberofOpenMPRegions(M);
+    auto AIB = ARTSIRBuilder(M);
+    auto AA = ARTSAnalyzer(AIB);
+
+    // AA.getNumberofOpenMPRegions(M);
+    AA.identifyEDTs(*MainFunction);
     LLVM_DEBUG(dbgs() << TAG << "- Number of instructions: " << Insts << "\n");
 
     LLVM_DEBUG(dbgs() <<  "\n ---------------------------------------- \n");

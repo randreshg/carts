@@ -1,15 +1,13 @@
-// //===- ARTSIRBuilder.cpp - Builder for LLVM-IR for ARTS directives ----===//
-// //===----------------------------------------------------------------------===//
-// /// \file
-// ///
-// /// This file implements the ARTSIRBuilder class, which is used as a
-// /// convenient way to create LLVM instructions for ARTS directives.
-// ///
-// //===----------------------------------------------------------------------===//
+//===- ARTSIRBuilder.cpp - Builder for LLVM-IR for ARTS directives ----===//
+//===----------------------------------------------------------------------===//
+/// \file
+///
+/// This file implements the ARTSIRBuilder class, which is used as a
+/// convenient way to create LLVM instructions for ARTS directives.
+///
+//===----------------------------------------------------------------------===//
 
-// #include "ARTSIRBuilder.h"
-// #include "ARTSConstants.h"
-// #include "ARTSTransform.h"
+#include "ARTSIRBuilder.h"
 
 // #include "llvm/ADT/SmallSet.h"
 // #include "llvm/ADT/StringExtras.h"
@@ -38,89 +36,90 @@
 // #include "llvm/IR/Value.h"
 // #include "llvm/Support/Debug.h"
 
-// // #include "llvm/MC/TargetRegistry.h"
-// // #include "llvm/Support/CommandLine.h"
-// // #include "llvm/Support/ErrorHandling.h"
-// // #include "llvm/Support/FileSystem.h"
-// // #include "llvm/Target/TargetMachine.h"
-// // #include "llvm/Target/TargetOptions.h"
-// // #include "llvm/Transforms/Utils/BasicBlockUtils.h"
-// // #include "llvm/Transforms/Utils/Cloning.h"
-// // #include "llvm/Transforms/Utils/CodeExtractor.h"
-// // #include "llvm/Transforms/Utils/LoopPeel.h"
-// // #include "llvm/Transforms/Utils/UnrollLoop.h"
+#include <cstdint>
+#include <optional>
 
-// #include <cstdint>
-// #include <optional>
-
-// // DEBUG
-// #define DEBUG_TYPE "arts-ir-builder"
-// #if !defined(NDEBUG)
-// static constexpr auto TAG = "[" DEBUG_TYPE "] ";
-// #endif
+// DEBUG
+#define DEBUG_TYPE "arts-ir-builder"
+#if !defined(NDEBUG)
+static constexpr auto TAG = "[" DEBUG_TYPE "] ";
+#endif
 
 // using namespace llvm;
-// using namespace arts;
+using namespace arts;
+using namespace arts::types;
 
-// FunctionCallee ARTSIRBuilder::getOrCreateRuntimeFunction(Module &M,
-//                                                          RuntimeFunction FnID) {
-//   FunctionType *FnTy = nullptr;
-//   Function *Fn = nullptr;
+void ARTSIRBuilder::initialize() {
+  LLVM_DEBUG(dbgs() << TAG  << TAG << "Initializing ARTSIRBuilder\n");
+  // Initialize the module with the runtime functions.
+  initializeTypes();
+  LLVM_DEBUG(dbgs() << TAG  << TAG << "ARTSIRBuilder initialized\n");
+}
 
-//   // Try to find the declaration in the module first.
-//   switch (FnID) {
-// #define ARTS_RTL(Enum, Str, IsVarArg, ReturnType, ...)                         \
-//   case Enum:                                                                   \
-//     FnTy = FunctionType::get(ReturnType, ArrayRef<Type *>{__VA_ARGS__},        \
-//                              IsVarArg);                                        \
-//     Fn = M.getFunction(Str);                                                   \
-//     break;
-// #include "llvm/Frontend/ARTS/ARTSKinds.def"
-//   }
+void ARTSIRBuilder::finalize() {
+  LLVM_DEBUG(dbgs() << TAG  << TAG << "Finalizing ARTSIRBuilder\n");
+  // Finalize the module with the runtime functions.
+  // finalizeModule(M);
+  LLVM_DEBUG(dbgs() << TAG  << TAG << "ARTSIRBuilder finalized\n");
+}
 
-//   if (!Fn) {
-//     // Create a new declaration if we need one.
-//     switch (FnID) {
-// #define ARTS_RTL(Enum, Str, ...)                                               \
-//   case Enum:                                                                   \
-//     Fn = Function::Create(FnTy, GlobalValue::ExternalLinkage, Str, M);         \
-//     break;
-// #include "llvm/Frontend/ARTS/ARTSKinds.def"
-//     }
+FunctionCallee ARTSIRBuilder::getOrCreateRuntimeFunction(Module &M,
+                                                         RuntimeFunction FnID) {
+  FunctionType *FnTy = nullptr;
+  Function *Fn = nullptr;
 
-//     LLVM_DEBUG(dbgs() << "Created ARTS runtime function " << Fn->getName()
-//                       << " with type " << *Fn->getFunctionType() << "\n");
-//     // addAttributes(FnID, *Fn);
+  // Try to find the declaration in the module first.
+  switch (FnID) {
+#define ARTS_RTL(Enum, Str, IsVarArg, ReturnType, ...)                         \
+  case Enum:                                                                   \
+    FnTy = FunctionType::get(ReturnType, ArrayRef<Type *>{__VA_ARGS__},        \
+                             IsVarArg);                                        \
+    Fn = M.getFunction(Str);                                                   \
+    break;
+#include "ARTSKinds.def"
+  }
 
-//   } else {
-//     LLVM_DEBUG(dbgs() << "Found ARTS runtime function " << Fn->getName()
-//                       << " with type " << *Fn->getFunctionType() << "\n");
-//   }
+  if (!Fn) {
+    // Create a new declaration if we need one.
+    switch (FnID) {
+#define ARTS_RTL(Enum, Str, ...)                                               \
+  case Enum:                                                                   \
+    Fn = Function::Create(FnTy, GlobalValue::ExternalLinkage, Str, M);         \
+    break;
+#include "ARTSKinds.def"
+    }
 
-//   assert(Fn && "Failed to create ARTS runtime function");
+    LLVM_DEBUG(dbgs() << TAG  << "Created ARTS runtime function " << Fn->getName()
+                      << " with type " << *Fn->getFunctionType() << "\n");
+    // addAttributes(FnID, *Fn);
 
-//   return {FnTy, Fn};
-// }
+  } else {
+    LLVM_DEBUG(dbgs() << TAG  << "Found ARTS runtime function " << Fn->getName()
+                      << " with type " << *Fn->getFunctionType() << "\n");
+  }
 
-// Function *ARTSIRBuilder::getOrCreateRuntimeFunctionPtr(RuntimeFunction FnID) {
-//   FunctionCallee RTLFn = getOrCreateRuntimeFunction(M, FnID);
-//   auto *Fn = dyn_cast<llvm::Function>(RTLFn.getCallee());
-//   assert(Fn && "Failed to create ARTS runtime function pointer");
-//   return Fn;
-// }
+  assert(Fn && "Failed to create ARTS runtime function");
 
-// void ARTSIRBuilder::initialize() {
-//   LLVM_DEBUG(dbgs() << TAG << "Initializing ARTSIRBuilder\n");
-//   // Initialize the module with the runtime functions.
-//   initializeTypes();
-//   LLVM_DEBUG(dbgs() << TAG << "ARTSIRBuilder initialized\n");
-// }
+  return {FnTy, Fn};
+}
 
-// void ARTSIRBuilder::finalize() {
-//   LLVM_DEBUG(dbgs() << TAG << "Finalizing ARTSIRBuilder\n");
-//   // Finalize the module with the runtime functions.
-//   // finalizeModule(M);
-//   LLVM_DEBUG(dbgs() << TAG << "ARTSIRBuilder finalized\n");
+Function *ARTSIRBuilder::getOrCreateRuntimeFunctionPtr(RuntimeFunction FnID) {
+  FunctionCallee RTLFn = getOrCreateRuntimeFunction(M, FnID);
+  auto *Fn = dyn_cast<llvm::Function>(RTLFn.getCallee());
+  assert(Fn && "Failed to create ARTS runtime function pointer");
+  return Fn;
+}
+
+// Function *ARTSIRBuilder::createEdt(StringRef Name) {
+//   const std::string FuncName = (Name + ".edt").str();
+//   LLVM_DEBUG(dbgs() << TAG  << TAG << "Creating EDT: " << FuncName << "\n");
+//   Function *Func =
+//       Function::Create(EdtFunction, GlobalValue::InternalLinkage, FuncName, M);
+//   /// Add entry BB that returns void
+//   BasicBlock *EntryBB = BasicBlock::Create(Builder.getContext(), "entry", Func);
+//   Builder.SetInsertPoint(EntryBB);
+//   Builder.CreateRetVoid();
+//   return Func;
 // }
 
 // AllocaInst *ARTSIRBuilder::reserveEDTGuid(BasicBlock *EntryBB, uint32_t Node) {
@@ -142,34 +141,22 @@
 //   return GuidAddr;
 // }
 
-// // void ARTSIRBuilder::insertEDTBlock(EDTBlock *EB, Function *EDTFunc) {
-// //   LLVM_DEBUG(dbgs() << TAG << "Inserting EDT Block\n");
-// //   auto *BB = EB->BB;
-// //   /// Detach BB from its parent
-// //   BB->removeFromParent();
-// //   /// Attach BB to the EDT Func
-// //   if(EB->isEntry()) {
-// //     /// Remove entry block
-// //     BasicBlock *EntryBB = &EDTFunc->getEntryBlock();
-// //     EntryBB->removeFromParent();
-// //   }
-// //   BB->insertInto(EDTFunc);
-// //   /// Redirect last BB to BB
-// //   BasicBlock *LastBB = &EDTFunc->back();
-// //   if(LastBB != BB)
-// //     redirectTo(LastBB, BB);
-// // }
-
-// Function *ARTSIRBuilder::createEdt(StringRef Name) {
-//   const std::string FuncName = (Name + ".edt").str();
-//   LLVM_DEBUG(dbgs() << TAG << "Creating EDT: " << FuncName << "\n");
-//   Function *Func =
-//       Function::Create(EdtFunction, GlobalValue::InternalLinkage, FuncName, M);
-//   /// Add entry BB that returns void
-//   BasicBlock *EntryBB = BasicBlock::Create(Builder.getContext(), "entry", Func);
-//   Builder.SetInsertPoint(EntryBB);
-//   Builder.CreateRetVoid();
-//   return Func;
+// void ARTSIRBuilder::insertEDTBlock(EDTBlock *EB, Function *EDTFunc) {
+//   LLVM_DEBUG(dbgs() << TAG  << TAG << "Inserting EDT Block\n");
+//   auto *BB = EB->BB;
+//   /// Detach BB from its parent
+//   BB->removeFromParent();
+//   /// Attach BB to the EDT Func
+//   if(EB->isEntry()) {
+//     /// Remove entry block
+//     BasicBlock *EntryBB = &EDTFunc->getEntryBlock();
+//     EntryBB->removeFromParent();
+//   }
+//   BB->insertInto(EDTFunc);
+//   /// Redirect last BB to BB
+//   BasicBlock *LastBB = &EDTFunc->back();
+//   if(LastBB != BB)
+//     redirectTo(LastBB, BB);
 // }
 
 // Function *ARTSIRBuilder::initializeEDT(EdtInfo &EI, Function *EDTFunc,
@@ -177,7 +164,7 @@
 //   auto &DE = EI.DE;
 //   /// Get CurBB parent
 //   Function *Func = CurBB->getParent();
-//   LLVM_DEBUG(dbgs() << TAG << "CurBB parent: " << Func->getName() << "\n");
+//   LLVM_DEBUG(dbgs() << TAG  << TAG << "CurBB parent: " << Func->getName() << "\n");
 //   /// Generate entry region.
 //   /// This region will have the declarations of the GUIDs.
 //   BasicBlock *EntryBB =
@@ -187,10 +174,10 @@
 //     /// Create a copy of CurBB terminator
 //     Instruction *Term = CurBB->getTerminator();
 //     if (!Term) {
-//       LLVM_DEBUG(dbgs() << TAG << "CurBB has no terminator\n");
+//       LLVM_DEBUG(dbgs() << TAG  << TAG << "CurBB has no terminator\n");
 //       // return nullptr;
 //     } else
-//       LLVM_DEBUG(dbgs() << TAG << "CurBB has terminator: " << *Term << "\n");
+//       LLVM_DEBUG(dbgs() << TAG  << TAG << "CurBB has terminator: " << *Term << "\n");
 //     // redirectTo(CurBB, EntryBB);
 //     BBNameAppend = CurBB->getName();
 //     EntryBB->setName("edt.entry." + BBNameAppend);
@@ -250,43 +237,43 @@
 //                    Builder.CreateLoad(Int32, DepC)};
 
 //   Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
-//   LLVM_DEBUG(dbgs() << TAG << "Creating call to artsEdtCreateWithGuid: \n"
+//   LLVM_DEBUG(dbgs() << TAG  << TAG << "Creating call to artsEdtCreateWithGuid: \n"
 //                     << *F << "\n");
 //   Builder.CreateCall(F, Args);
 //   return nullptr;
 // }
 
-// /// ---------------------------- Private ---------------------------- ///
-// void ARTSIRBuilder::initializeTypes() {
-//   LLVMContext &Ctx = M.getContext();
-//   StructType *T;
-// #define ARTS_TYPE(VarName, InitValue) VarName = InitValue;
-// #define ARTS_ARRAY_TYPE(VarName, ElemTy, ArraySize)                            \
-//   VarName##Ty = ArrayType::get(ElemTy, ArraySize);                             \
-//   VarName##PtrTy = PointerType::getUnqual(VarName##Ty);
-// #define ARTS_FUNCTION_TYPE(VarName, IsVarArg, ReturnType, ...)                 \
-//   VarName = FunctionType::get(ReturnType, {__VA_ARGS__}, IsVarArg);            \
-//   VarName##Ptr = PointerType::getUnqual(VarName);
-// #define ARTS_STRUCT_TYPE(VarName, StructName, Packed, ...)                     \
-//   T = StructType::getTypeByName(Ctx, StructName);                              \
-//   if (!T)                                                                      \
-//     T = StructType::create(Ctx, {__VA_ARGS__}, StructName, Packed);            \
-//   VarName = T;                                                                 \
-//   VarName##Ptr = PointerType::getUnqual(T);
-// #include "llvm/Frontend/ARTS/ARTSKinds.def"
-// }
+/// ---------------------------- Private ---------------------------- ///
+void ARTSIRBuilder::initializeTypes() {
+  LLVMContext &Ctx = M.getContext();
+  StructType *T;
+#define ARTS_TYPE(VarName, InitValue) VarName = InitValue;
+#define ARTS_ARRAY_TYPE(VarName, ElemTy, ArraySize)                            \
+  VarName##Ty = ArrayType::get(ElemTy, ArraySize);                             \
+  VarName##PtrTy = PointerType::getUnqual(VarName##Ty);
+#define ARTS_FUNCTION_TYPE(VarName, IsVarArg, ReturnType, ...)                 \
+  VarName = FunctionType::get(ReturnType, {__VA_ARGS__}, IsVarArg);            \
+  VarName##Ptr = PointerType::getUnqual(VarName);
+#define ARTS_STRUCT_TYPE(VarName, StructName, Packed, ...)                     \
+  T = StructType::getTypeByName(Ctx, StructName);                              \
+  if (!T)                                                                      \
+    T = StructType::create(Ctx, {__VA_ARGS__}, StructName, Packed);            \
+  VarName = T;                                                                 \
+  VarName##Ptr = PointerType::getUnqual(T);
+#include "ARTSKinds.def"
+}
 
-// /// ---------------------------- Utils ---------------------------- ///
-// void ARTSIRBuilder::redirectTo(BasicBlock *Source, BasicBlock *Target) {
-//   if (Instruction *Term = Source->getTerminator()) {
-//     auto *Br = cast<BranchInst>(Term);
-//     assert(!Br->isConditional() &&
-//            "BB's terminator must be an unconditional branch (or degenerate)");
-//     BasicBlock *Succ = Br->getSuccessor(0);
-//     Succ->removePredecessor(Source, /*KeepOneInputPHIs=*/true);
-//     Br->setSuccessor(0, Target);
-//     return;
-//   }
-//   /// Create unconditional branch
-//   BranchInst::Create(Target, Source);
-// }
+/// ---------------------------- Utils ---------------------------- ///
+void ARTSIRBuilder::redirectTo(BasicBlock *Source, BasicBlock *Target) {
+  if (Instruction *Term = Source->getTerminator()) {
+    auto *Br = cast<BranchInst>(Term);
+    assert(!Br->isConditional() &&
+           "BB's terminator must be an unconditional branch (or degenerate)");
+    BasicBlock *Succ = Br->getSuccessor(0);
+    Succ->removePredecessor(Source, /*KeepOneInputPHIs=*/true);
+    Br->setSuccessor(0, Target);
+    return;
+  }
+  /// Create unconditional branch
+  BranchInst::Create(Target, Source);
+}
