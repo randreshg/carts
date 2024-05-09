@@ -67,53 +67,13 @@ struct OMPInfo {
   };
 
   /// Helper Functions
-  static RTFType getRTFunction(Function *F) {
-    if (!F)
-      return RTFType::OTHER;
-    auto CalleeName = F->getName();
-    if (CalleeName == "__kmpc_fork_call")
-      return RTFType::PARALLEL;
-    if (CalleeName == "__kmpc_omp_task_alloc")
-      return RTFType::TASKALLOC;
-    if (CalleeName == "__kmpc_omp_task")
-      return RTFType::TASK;
-    if (CalleeName == "__kmpc_omp_task_alloc_with_deps")
-      return RTFType::TASKDEP;
-    if (CalleeName == "__kmpc_omp_taskwait")
-      return RTFType::TASKWAIT;
-    if (CalleeName == "omp_set_num_threads")
-      return RTFType::SET_NUM_THREADS;
-    if (CalleeName == "__kmpc_for_static_init_4")
-      return RTFType::PARALLEL_FOR;
-    return RTFType::OTHER;
-  }
+  static void rewireDataAndControlFlow(CallBase *ParallelCall);
 
-  static RTFType getRTFunction(CallBase &CB) {
-    auto *Callee = CB.getCalledFunction();
-    return getRTFunction(Callee);
-  }
-
-  static RTFType getRTFunction(Instruction *I) {
-    auto *CB = dyn_cast<CallBase>(I);
-    if (!CB)
-      return RTFType::OTHER;
-    return getRTFunction(*CB);
-  }
-
-  static bool isTaskFunction(Function *F) {
-    auto RT = getRTFunction(F);
-    if (RT == RTFType::TASK || RT == RTFType::TASKDEP ||
-        RT == RTFType::TASKWAIT)
-      return true;
-    return false;
-  }
-
-  static bool isRTFunction(CallBase &CB) {
-    auto RT = getRTFunction(CB);
-    if (RT != RTFType::OTHER)
-      return true;
-    return false;
-  }
+  static RTFType getRTFunction(Function *F);
+  static RTFType getRTFunction(CallBase &CB);
+  static RTFType getRTFunction(Instruction *I);
+  static bool isTaskFunction(Function *F);
+  static bool isRTFunction(CallBase &CB);
 };
 } // namespace omp
 } // namespace arts

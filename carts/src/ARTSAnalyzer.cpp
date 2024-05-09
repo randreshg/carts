@@ -1,4 +1,5 @@
 #include "ARTSAnalyzer.h"
+#include "ARTS.h"
 #include "ARTSUtils.h"
 #include "llvm/Support/Debug.h"
 
@@ -57,8 +58,8 @@ bool ARTSAnalyzer::identifyEDTs(Function &F) {
   removeLifetimeMarkers(F);
 
   /// Aux variables
-  LoopInfo *LI = nullptr;
-  DominatorTree *DT;
+  // LoopInfo *LI = nullptr;
+  // DominatorTree *DT;
   //  = AG.getAnalysis<DominatorTreeAnalysis>(F);
 
   LLVM_DEBUG(dbgs() << "\n");
@@ -86,7 +87,7 @@ bool ARTSAnalyzer::identifyEDTs(Function &F) {
       case OMPInfo::PARALLEL: {
         LLVM_DEBUG(dbgs() << TAG << "Parallel Region Found: " << "\n  " << *CB
                           << "\n");
-
+        handleParallelRegion(CB);
         // /// Split block at __kmpc_parallel
         // auto ParallelItrStr = std::to_string(ParallelRegion++);
         // auto ParallelName = "par.region." + ParallelItrStr;
@@ -442,18 +443,76 @@ void ARTSAnalyzer::analyzeDeps() {
   //   // }
 }
 
-bool ARTSAnalyzer::handleParallelOutlinedRegion(CallBase *RTCall) {
-  //   /// Analyze outlined region
-  //   const uint32_t ParallelOutlinedFunctionPos = 2;
-  //   const uint32_t KeepArgsFrom = 2;
-  //   const uint32_t KeepCallArgsFrom = 3;
-  //   Function *OldFn =
-  //       dyn_cast<Function>(RTCall->getArgOperand(ParallelOutlinedFunctionPos));
-  //   /// Remove arguments from the outlined function
-  //   for (uint32_t ArgItr = 0; ArgItr < KeepArgsFrom; ArgItr++) {
-  //     Value *Arg = OldFn->args().begin() + ArgItr;
-  //     removeValue(Arg, true, false);
+bool ARTSAnalyzer::handleParallelRegion(CallBase *CB) {
+  /// Analyze outlined region
+  static const uint32_t ParallelOutlinedFunctionPos = 2;
+  static const uint32_t KeepArgsFrom = 2;
+  static const uint32_t KeepCallArgsFrom = 3;
+
+  auto *OutlinedFn = dyn_cast<Function>(
+      CB->getArgOperand(ParallelOutlinedFunctionPos)->stripPointerCasts());
+  LLVM_DEBUG(dbgs() << TAG << "Outlined function: " << OutlinedFn->getName()
+                    << "\n");
+
+  EDT &ParallelEDT = *createEDT(EDT::Type::PARALLEL);
+  /// Get call (original) arguments
+  for (auto ArgNum = KeepCallArgsFrom; ArgNum < CB->data_operands_size();
+       ++ArgNum) {
+    auto *Arg = CB->getArgOperand(ArgNum);
+    ParallelEDT.insertValueToEnv(Arg);
+  }
+
+  /// InsertEDTEntry
+  AIB.insertEDTEntry(ParallelEDT);
+  LLVM_DEBUG(dbgs() << ParallelEDT << "\n");
+  OMPInfo::rewireDataAndControlFlow(CB);
+  ParallelEDT.cloneAndAddBasicBlocks(OutlinedFn);
+  // ParallelEDT.adjustDataAndControlFlowToUseClones();
+
+  /// Debug
+  LLVM_DEBUG(dbgs() << ParallelEDT << "\n");
+  // LLVM_DEBUG(dbgs() << TAG << Env << "\n");
+
+  //   for (unsigned OldArgNum = KeepCallArgsFrom;
+  //         OldArgNum < OldCB->data_operands_size(); ++OldArgNum) {
+  //     auto *Arg = OldCB->getArgOperand(OldArgNum);
+  //     NewArgOperands.push_back(Arg);
+  //     NewArgOperandAttributes.push_back(
+  //         OldCallAttributeList.getParamAttrs(OldArgNum));
+  //     /// Map Value (Shared) with list of EDTs that use it
+  //     // if (PointerType *PT = dyn_cast<PointerType>(Arg->getType()))
+  //     //   AT.insertValueToEdt(Arg, &ParallelEDT);
   //   }
+
+  /// For now assume that if it is a pointer, it is a shared variable
+  //     // if (PointerType *PT = dyn_cast<PointerType>(ArgType))
+  //     //   AT.insertArgToDE(Arg, DataEnv::SHARED, ParallelEDT);
+  //     // /// If not, it is a first private variable
+  //     // else
+  //     //   AT.insertArgToDE(Arg, DataEnv::FIRSTPRIVATE, ParallelEDT);
+
+  // ParallelEDT.adjustDataAndControlFlowToUseClones();
+
+  /// Get bitcast first argument
+  // if(auto *BCI =
+  // dyn_cast<BitCastInst>(CB->getArgOperand(ParallelOutlinedFunctionPos))) {
+  //   /// Bitcast to function
+  //   if(auto *OutlinedFn = dyn_cast<Function>(BCI->getOperand(0))) {
+
+  //   }
+  //   else {
+  //     LLVM_DEBUG(dbgs() << TAG << "Outlined function not found\n");
+  //   }
+  // }
+  // else {
+  //   LLVM_DEBUG(dbgs() << TAG << "Bitcast not found\n");
+  // }
+
+  /// Remove arguments from the outlined function
+  // for (uint32_t ArgItr = 0; ArgItr < KeepArgsFrom; ArgItr++) {
+  //   Value *Arg = OldFn->args().begin() + ArgItr;
+  //   removeValue(Arg, true, false);
+  // }
 
   //   /// Generate new outlined function
   //   SmallVector<Type *, 16> NewArgumentTypes;
@@ -569,7 +628,7 @@ bool ARTSAnalyzer::handleParallelOutlinedRegion(CallBase *RTCall) {
   return true;
 }
 
-bool ARTSAnalyzer::handleTaskOutlinedRegion(CallBase *CB) {
+bool ARTSAnalyzer::handleTaskRegion(CallBase *CB) {
   //   /// Analyze return pointer
   //   // For the shared variables we are interested in all stores that are done
   //   // to the shareds field of the kmp_task_t struct. For the firstprivate
@@ -807,8 +866,11 @@ BasicBlock *ARTSAnalyzer::handleDoneRegion(BasicBlock *DoneBB,
 uint64_t ARTSAnalyzer::getNumEDTs() { return EDTs.size(); }
 
 /// Create EDT
-EDT *ARTSAnalyzer::createEDT(EDT::Type Ty, Module &M) {
-  auto E = new EDT(Ty, AIB.EdtFunction, M);
+EDT *ARTSAnalyzer::createEDT(EDT::Type Ty) {
+  LLVM_DEBUG(dbgs() << TAG << "Creating EDT with signature: "
+                    << *AIB.EdtFunction << "\n");
+  auto E = new EDT(Ty, AIB.EdtFunction, M, "arts_edt");
+  AIB.initializeEDT(*E);
   insertEDT(E);
   return E;
 }

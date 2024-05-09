@@ -9,7 +9,7 @@
 #define LLVM_API_ARTS_ARTSIRBUILDER_H
 
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/Support/Allocator.h"
+// #include "llvm/Support/Allocator.h"
 
 #include "ARTS.h"
 
@@ -20,7 +20,9 @@ namespace arts {
 class ARTSIRBuilder {
 public:
   /// Create a new ARTSIRBuilder operating on the given module \p M.
-  ARTSIRBuilder(Module &M) : M(M), Builder(M.getContext()) {}
+  ARTSIRBuilder(Module &M) : M(M), Builder(M.getContext()) {
+    initialize();
+  }
   ~ARTSIRBuilder() {}
 
   /// ---------------------------- Interface ---------------------------- ///
@@ -46,6 +48,11 @@ public:
 
   /// Interface to add ARTS methods
 
+  /// Set Terminator Instruction
+  // void setVoidTerminator(BasicBlock *BB);
+  void initializeEDT(EDT &E);
+  /// Insert/Update EDT Preheader
+  void insertEDTEntry(EDT &E);
   /// Creates EDT Function. It creates an empty function with the
   /// correct signature and returns it.
   // Function *createEdt(StringRef Name);

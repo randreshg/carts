@@ -2,238 +2,27 @@ clang++ -fopenmp -O3 -g0 -Xclang -disable-llvm-passes -emit-llvm -c test.cpp -o 
 clang-14: warning: -Z-reserved-lib-stdc++: 'linker' input unused [-Wunused-command-line-argument]
 llvm-dis test.bc
 noelle-norm test.bc -o test_norm.bc
-opt -basic-aa -mem2reg -simplifycfg-sink-common=false -lowerswitch -mergereturn --break-crit-edges -loop-simplify -lcssa -indvars --function-attrs --rpo-function-attrs test.bc -o test_norm.bc
-noelle-meta-loop-embed test_norm.bc -o test_norm.bc
-noelle-load -load /home/rherreraguaitero/ME/ARTS-env/CARTS/.install/noelle/lib/LoopMetadata.so -LoopMetadata test_norm.bc -o test_norm.bc
 llvm-dis test_norm.bc
 noelle-meta-pdg-embed test_norm.bc -o test_with_metadata.bc
-noelle-load -PDGGenerator -noelle-pdg-verbose=3 -noelle-pdg-embed test_norm.bc -o test_with_metadata.bc
 PDGGenerator: Construct PDG from Analysis
 Embed PDG as metadata
 llvm-dis test_with_metadata.bc
-noelle-load -load /home/rherreraguaitero/ME/ARTS-env/CARTS/.build/CARTS.so -CARTS test_with_metadata.bc -o test_opt.bc
-The program has 147 instructions
-Instruction "  %1 = alloca i32, align 4, !noelle.pdg.inst.id !65" depends on
-Instruction "  %2 = alloca i32, align 4, !noelle.pdg.inst.id !66" depends on
-Instruction "  %3 = alloca i32, align 4, !noelle.pdg.inst.id !67" depends on
-Instruction "  %4 = alloca i32, align 4, !noelle.pdg.inst.id !68" depends on
-Instruction "  %5 = bitcast i32* %1 to i8*, !noelle.pdg.inst.id !69" depends on
-     %1 = alloca i32, align 4, !noelle.pdg.inst.id !65  DATA  RAW 
-Instruction "  call void @llvm.lifetime.start.p0i8(i64 4, i8* %5) #3, !noelle.pdg.inst.id !70" depends on
-     %5 = bitcast i32* %1 to i8*, !noelle.pdg.inst.id !69  DATA  RAW 
-Instruction "  store i32 1, i32* %1, align 4, !tbaa !71, !noelle.pdg.inst.id !19" depends on
-     %1 = alloca i32, align 4, !noelle.pdg.inst.id !65  DATA  RAW 
-Instruction "  %6 = bitcast i32* %2 to i8*, !noelle.pdg.inst.id !75" depends on
-     %2 = alloca i32, align 4, !noelle.pdg.inst.id !66  DATA  RAW 
-Instruction "  call void @llvm.lifetime.start.p0i8(i64 4, i8* %6) #3, !noelle.pdg.inst.id !76" depends on
-     %6 = bitcast i32* %2 to i8*, !noelle.pdg.inst.id !75  DATA  RAW 
-Instruction "  store i32 10000, i32* %2, align 4, !tbaa !71, !noelle.pdg.inst.id !29" depends on
-     %2 = alloca i32, align 4, !noelle.pdg.inst.id !66  DATA  RAW 
-Instruction "  %7 = bitcast i32* %3 to i8*, !noelle.pdg.inst.id !77" depends on
-     %3 = alloca i32, align 4, !noelle.pdg.inst.id !67  DATA  RAW 
-Instruction "  call void @llvm.lifetime.start.p0i8(i64 4, i8* %7) #3, !noelle.pdg.inst.id !78" depends on
-     %7 = bitcast i32* %3 to i8*, !noelle.pdg.inst.id !77  DATA  RAW 
-Instruction "  %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22" depends on
-     store i32 10000, i32* %2, align 4, !tbaa !71, !noelle.pdg.inst.id !29  DATA  RAW  MEMORY  MAY 
-     store i32 10000, i32* %2, align 4, !tbaa !71, !noelle.pdg.inst.id !29  DATA  WAW  MEMORY  MAY 
-     store i32 1, i32* %1, align 4, !tbaa !71, !noelle.pdg.inst.id !19  DATA  RAW  MEMORY  MAY 
-     store i32 1, i32* %1, align 4, !tbaa !71, !noelle.pdg.inst.id !19  DATA  WAW  MEMORY  MAY 
-Instruction "  %9 = srem i32 %8, 10, !noelle.pdg.inst.id !79" depends on
-     %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22  DATA  RAW 
-Instruction "  %10 = add nsw i32 %9, 10, !noelle.pdg.inst.id !80" depends on
-     %9 = srem i32 %8, 10, !noelle.pdg.inst.id !79  DATA  RAW 
-Instruction "  store i32 %10, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !40" depends on
-     %10 = add nsw i32 %9, 10, !noelle.pdg.inst.id !80  DATA  RAW 
-     %3 = alloca i32, align 4, !noelle.pdg.inst.id !67  DATA  RAW 
-     %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22  DATA  WAR  MEMORY  MAY 
-     %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22  DATA  WAW  MEMORY  MAY 
-Instruction "  %11 = bitcast i32* %4 to i8*, !noelle.pdg.inst.id !81" depends on
-     %4 = alloca i32, align 4, !noelle.pdg.inst.id !68  DATA  RAW 
-Instruction "  call void @llvm.lifetime.start.p0i8(i64 4, i8* %11) #3, !noelle.pdg.inst.id !82" depends on
-     %11 = bitcast i32* %4 to i8*, !noelle.pdg.inst.id !81  DATA  RAW 
-Instruction "  %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25" depends on
-     store i32 %10, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !40  DATA  WAW  MEMORY  MAY 
-     store i32 %10, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !40  DATA  RAW  MEMORY  MAY 
-     %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22  DATA  RAW  MEMORY  MAY 
-     %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22  DATA  WAW  MEMORY  MAY 
-     store i32 10000, i32* %2, align 4, !tbaa !71, !noelle.pdg.inst.id !29  DATA  RAW  MEMORY  MAY 
-     store i32 10000, i32* %2, align 4, !tbaa !71, !noelle.pdg.inst.id !29  DATA  WAW  MEMORY  MAY 
-     store i32 1, i32* %1, align 4, !tbaa !71, !noelle.pdg.inst.id !19  DATA  RAW  MEMORY  MAY 
-     store i32 1, i32* %1, align 4, !tbaa !71, !noelle.pdg.inst.id !19  DATA  WAW  MEMORY  MAY 
-Instruction "  store i32 %12, i32* %4, align 4, !tbaa !71, !noelle.pdg.inst.id !46" depends on
-     %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25  DATA  RAW 
-     %4 = alloca i32, align 4, !noelle.pdg.inst.id !68  DATA  RAW 
-     %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25  DATA  WAW  MEMORY  MAY 
-     %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25  DATA  WAR  MEMORY  MAY 
-     %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22  DATA  WAR  MEMORY  MAY 
-     %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22  DATA  WAW  MEMORY  MAY 
-Instruction "  call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7" depends on
-     %4 = alloca i32, align 4, !noelle.pdg.inst.id !68  DATA  RAW 
-     %2 = alloca i32, align 4, !noelle.pdg.inst.id !66  DATA  RAW 
-     %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22  DATA  WAW  MEMORY  MAY 
-     store i32 1, i32* %1, align 4, !tbaa !71, !noelle.pdg.inst.id !19  DATA  RAW  MEMORY  MAY 
-     store i32 10000, i32* %2, align 4, !tbaa !71, !noelle.pdg.inst.id !29  DATA  RAW  MEMORY  MAY 
-     %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25  DATA  WAW  MEMORY  MAY 
-     store i32 10000, i32* %2, align 4, !tbaa !71, !noelle.pdg.inst.id !29  DATA  WAW  MEMORY  MAY 
-     %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22  DATA  RAW  MEMORY  MAY 
-     store i32 %12, i32* %4, align 4, !tbaa !71, !noelle.pdg.inst.id !46  DATA  WAW  MEMORY  MAY 
-     store i32 %10, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !40  DATA  WAW  MEMORY  MAY 
-     store i32 1, i32* %1, align 4, !tbaa !71, !noelle.pdg.inst.id !19  DATA  WAW  MEMORY  MAY 
-     %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25  DATA  RAW  MEMORY  MAY 
-     store i32 %10, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !40  DATA  RAW  MEMORY  MAY 
-     %3 = alloca i32, align 4, !noelle.pdg.inst.id !67  DATA  RAW 
-     store i32 %12, i32* %4, align 4, !tbaa !71, !noelle.pdg.inst.id !46  DATA  RAW  MEMORY  MAY 
-     %1 = alloca i32, align 4, !noelle.pdg.inst.id !65  DATA  RAW 
-Instruction "  %13 = load i32, i32* %1, align 4, !tbaa !71, !noelle.pdg.inst.id !15" depends on
-     %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25  DATA  RAW  MEMORY  MAY 
-     %1 = alloca i32, align 4, !noelle.pdg.inst.id !65  DATA  RAW 
-     %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22  DATA  RAW  MEMORY  MAY 
-     store i32 1, i32* %1, align 4, !tbaa !71, !noelle.pdg.inst.id !19  DATA  RAW  MEMORY  MAY 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  RAW  MEMORY  MAY 
-Instruction "  %14 = load i32, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !17" depends on
-     %3 = alloca i32, align 4, !noelle.pdg.inst.id !67  DATA  RAW 
-     store i32 %10, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !40  DATA  RAW  MEMORY  MAY 
-     %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22  DATA  RAW  MEMORY  MAY 
-     %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25  DATA  RAW  MEMORY  MAY 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  RAW  MEMORY  MAY 
-Instruction "  %15 = call i32 (i8*, ...) @printf(i8* noundef getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %13, i32 noundef %14), !noelle.pdg.inst.id !8" depends on
-     %13 = load i32, i32* %1, align 4, !tbaa !71, !noelle.pdg.inst.id !15  DATA  RAW 
-     %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25  DATA  WAW  MEMORY  MAY 
-     %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25  DATA  RAW  MEMORY  MAY 
-     %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22  DATA  WAW  MEMORY  MAY 
-     %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22  DATA  RAW  MEMORY  MAY 
-     %14 = load i32, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !17  DATA  RAW 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  WAW  MEMORY  MAY 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  RAW  MEMORY  MAY 
-Instruction "  %16 = bitcast i32* %4 to i8*, !noelle.pdg.inst.id !83" depends on
-     %4 = alloca i32, align 4, !noelle.pdg.inst.id !68  DATA  RAW 
-Instruction "  call void @llvm.lifetime.end.p0i8(i64 4, i8* %16) #3, !noelle.pdg.inst.id !84" depends on
-     %16 = bitcast i32* %4 to i8*, !noelle.pdg.inst.id !83  DATA  RAW 
-Instruction "  %17 = bitcast i32* %3 to i8*, !noelle.pdg.inst.id !85" depends on
-     %3 = alloca i32, align 4, !noelle.pdg.inst.id !67  DATA  RAW 
-Instruction "  call void @llvm.lifetime.end.p0i8(i64 4, i8* %17) #3, !noelle.pdg.inst.id !86" depends on
-     %17 = bitcast i32* %3 to i8*, !noelle.pdg.inst.id !85  DATA  RAW 
-Instruction "  %18 = bitcast i32* %2 to i8*, !noelle.pdg.inst.id !87" depends on
-     %2 = alloca i32, align 4, !noelle.pdg.inst.id !66  DATA  RAW 
-Instruction "  call void @llvm.lifetime.end.p0i8(i64 4, i8* %18) #3, !noelle.pdg.inst.id !88" depends on
-     %18 = bitcast i32* %2 to i8*, !noelle.pdg.inst.id !87  DATA  RAW 
-Instruction "  %19 = bitcast i32* %1 to i8*, !noelle.pdg.inst.id !89" depends on
-     %1 = alloca i32, align 4, !noelle.pdg.inst.id !65  DATA  RAW 
-Instruction "  call void @llvm.lifetime.end.p0i8(i64 4, i8* %19) #3, !noelle.pdg.inst.id !90" depends on
-     %19 = bitcast i32* %1 to i8*, !noelle.pdg.inst.id !89  DATA  RAW 
-Instruction "  ret i32 0, !noelle.pdg.inst.id !91" depends on
-Instruction "  %1 = alloca i32, align 4, !noelle.pdg.inst.id !65" outgoing dependences
-     %5 = bitcast i32* %1 to i8*, !noelle.pdg.inst.id !69  DATA  RAW 
-     store i32 1, i32* %1, align 4, !tbaa !71, !noelle.pdg.inst.id !19  DATA  RAW 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  RAW 
-     %13 = load i32, i32* %1, align 4, !tbaa !71, !noelle.pdg.inst.id !15  DATA  RAW 
-     %19 = bitcast i32* %1 to i8*, !noelle.pdg.inst.id !89  DATA  RAW 
-Instruction "  %2 = alloca i32, align 4, !noelle.pdg.inst.id !66" outgoing dependences
-     %6 = bitcast i32* %2 to i8*, !noelle.pdg.inst.id !75  DATA  RAW 
-     store i32 10000, i32* %2, align 4, !tbaa !71, !noelle.pdg.inst.id !29  DATA  RAW 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  RAW 
-     %18 = bitcast i32* %2 to i8*, !noelle.pdg.inst.id !87  DATA  RAW 
-Instruction "  %3 = alloca i32, align 4, !noelle.pdg.inst.id !67" outgoing dependences
-     %7 = bitcast i32* %3 to i8*, !noelle.pdg.inst.id !77  DATA  RAW 
-     store i32 %10, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !40  DATA  RAW 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  RAW 
-     %14 = load i32, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !17  DATA  RAW 
-     %17 = bitcast i32* %3 to i8*, !noelle.pdg.inst.id !85  DATA  RAW 
-Instruction "  %4 = alloca i32, align 4, !noelle.pdg.inst.id !68" outgoing dependences
-     %11 = bitcast i32* %4 to i8*, !noelle.pdg.inst.id !81  DATA  RAW 
-     store i32 %12, i32* %4, align 4, !tbaa !71, !noelle.pdg.inst.id !46  DATA  RAW 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  RAW 
-     %16 = bitcast i32* %4 to i8*, !noelle.pdg.inst.id !83  DATA  RAW 
-Instruction "  %5 = bitcast i32* %1 to i8*, !noelle.pdg.inst.id !69" outgoing dependences
-     call void @llvm.lifetime.start.p0i8(i64 4, i8* %5) #3, !noelle.pdg.inst.id !70  DATA  RAW 
-Instruction "  call void @llvm.lifetime.start.p0i8(i64 4, i8* %5) #3, !noelle.pdg.inst.id !70" outgoing dependences
-Instruction "  store i32 1, i32* %1, align 4, !tbaa !71, !noelle.pdg.inst.id !19" outgoing dependences
-     %13 = load i32, i32* %1, align 4, !tbaa !71, !noelle.pdg.inst.id !15  DATA  RAW  MEMORY  MAY 
-     %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25  DATA  WAW  MEMORY  MAY 
-     %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25  DATA  RAW  MEMORY  MAY 
-     %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22  DATA  RAW  MEMORY  MAY 
-     %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22  DATA  WAW  MEMORY  MAY 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  RAW  MEMORY  MAY 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  WAW  MEMORY  MAY 
-Instruction "  %6 = bitcast i32* %2 to i8*, !noelle.pdg.inst.id !75" outgoing dependences
-     call void @llvm.lifetime.start.p0i8(i64 4, i8* %6) #3, !noelle.pdg.inst.id !76  DATA  RAW 
-Instruction "  call void @llvm.lifetime.start.p0i8(i64 4, i8* %6) #3, !noelle.pdg.inst.id !76" outgoing dependences
-Instruction "  store i32 10000, i32* %2, align 4, !tbaa !71, !noelle.pdg.inst.id !29" outgoing dependences
-     %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25  DATA  RAW  MEMORY  MAY 
-     %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22  DATA  RAW  MEMORY  MAY 
-     %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22  DATA  WAW  MEMORY  MAY 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  WAW  MEMORY  MAY 
-     %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25  DATA  WAW  MEMORY  MAY 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  RAW  MEMORY  MAY 
-Instruction "  %7 = bitcast i32* %3 to i8*, !noelle.pdg.inst.id !77" outgoing dependences
-     call void @llvm.lifetime.start.p0i8(i64 4, i8* %7) #3, !noelle.pdg.inst.id !78  DATA  RAW 
-Instruction "  call void @llvm.lifetime.start.p0i8(i64 4, i8* %7) #3, !noelle.pdg.inst.id !78" outgoing dependences
-Instruction "  %8 = call i32 @rand() #3, !noelle.pdg.inst.id !22" outgoing dependences
-     store i32 %12, i32* %4, align 4, !tbaa !71, !noelle.pdg.inst.id !46  DATA  WAW  MEMORY  MAY 
-     %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25  DATA  RAW  MEMORY  MAY 
-     %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25  DATA  WAW  MEMORY  MAY 
-     %14 = load i32, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !17  DATA  RAW  MEMORY  MAY 
-     store i32 %10, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !40  DATA  WAW  MEMORY  MAY 
-     %13 = load i32, i32* %1, align 4, !tbaa !71, !noelle.pdg.inst.id !15  DATA  RAW  MEMORY  MAY 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  WAW  MEMORY  MAY 
-     store i32 %12, i32* %4, align 4, !tbaa !71, !noelle.pdg.inst.id !46  DATA  WAR  MEMORY  MAY 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  RAW  MEMORY  MAY 
-     %15 = call i32 (i8*, ...) @printf(i8* noundef getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %13, i32 noundef %14), !noelle.pdg.inst.id !8  DATA  WAW  MEMORY  MAY 
-     %9 = srem i32 %8, 10, !noelle.pdg.inst.id !79  DATA  RAW 
-     store i32 %10, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !40  DATA  WAR  MEMORY  MAY 
-     %15 = call i32 (i8*, ...) @printf(i8* noundef getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %13, i32 noundef %14), !noelle.pdg.inst.id !8  DATA  RAW  MEMORY  MAY 
-Instruction "  %9 = srem i32 %8, 10, !noelle.pdg.inst.id !79" outgoing dependences
-     %10 = add nsw i32 %9, 10, !noelle.pdg.inst.id !80  DATA  RAW 
-Instruction "  %10 = add nsw i32 %9, 10, !noelle.pdg.inst.id !80" outgoing dependences
-     store i32 %10, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !40  DATA  RAW 
-Instruction "  store i32 %10, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !40" outgoing dependences
-     %14 = load i32, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !17  DATA  RAW  MEMORY  MAY 
-     %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25  DATA  WAW  MEMORY  MAY 
-     %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25  DATA  RAW  MEMORY  MAY 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  RAW  MEMORY  MAY 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  WAW  MEMORY  MAY 
-Instruction "  %11 = bitcast i32* %4 to i8*, !noelle.pdg.inst.id !81" outgoing dependences
-     call void @llvm.lifetime.start.p0i8(i64 4, i8* %11) #3, !noelle.pdg.inst.id !82  DATA  RAW 
-Instruction "  call void @llvm.lifetime.start.p0i8(i64 4, i8* %11) #3, !noelle.pdg.inst.id !82" outgoing dependences
-Instruction "  %12 = call i32 @rand() #3, !noelle.pdg.inst.id !25" outgoing dependences
-     %14 = load i32, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !17  DATA  RAW  MEMORY  MAY 
-     %13 = load i32, i32* %1, align 4, !tbaa !71, !noelle.pdg.inst.id !15  DATA  RAW  MEMORY  MAY 
-     store i32 %12, i32* %4, align 4, !tbaa !71, !noelle.pdg.inst.id !46  DATA  WAW  MEMORY  MAY 
-     store i32 %12, i32* %4, align 4, !tbaa !71, !noelle.pdg.inst.id !46  DATA  WAR  MEMORY  MAY 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  WAW  MEMORY  MAY 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  RAW  MEMORY  MAY 
-     store i32 %12, i32* %4, align 4, !tbaa !71, !noelle.pdg.inst.id !46  DATA  RAW 
-     %15 = call i32 (i8*, ...) @printf(i8* noundef getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %13, i32 noundef %14), !noelle.pdg.inst.id !8  DATA  WAW  MEMORY  MAY 
-     %15 = call i32 (i8*, ...) @printf(i8* noundef getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %13, i32 noundef %14), !noelle.pdg.inst.id !8  DATA  RAW  MEMORY  MAY 
-Instruction "  store i32 %12, i32* %4, align 4, !tbaa !71, !noelle.pdg.inst.id !46" outgoing dependences
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  WAW  MEMORY  MAY 
-     call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7  DATA  RAW  MEMORY  MAY 
-Instruction "  call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %3, i32* %4, i32* %1, i32* %2), !noelle.pdg.inst.id !7" outgoing dependences
-     %14 = load i32, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !17  DATA  RAW  MEMORY  MAY 
-     %13 = load i32, i32* %1, align 4, !tbaa !71, !noelle.pdg.inst.id !15  DATA  RAW  MEMORY  MAY 
-     %15 = call i32 (i8*, ...) @printf(i8* noundef getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %13, i32 noundef %14), !noelle.pdg.inst.id !8  DATA  WAW  MEMORY  MAY 
-     %15 = call i32 (i8*, ...) @printf(i8* noundef getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %13, i32 noundef %14), !noelle.pdg.inst.id !8  DATA  RAW  MEMORY  MAY 
-Instruction "  %13 = load i32, i32* %1, align 4, !tbaa !71, !noelle.pdg.inst.id !15" outgoing dependences
-     %15 = call i32 (i8*, ...) @printf(i8* noundef getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %13, i32 noundef %14), !noelle.pdg.inst.id !8  DATA  RAW 
-Instruction "  %14 = load i32, i32* %3, align 4, !tbaa !71, !noelle.pdg.inst.id !17" outgoing dependences
-     %15 = call i32 (i8*, ...) @printf(i8* noundef getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %13, i32 noundef %14), !noelle.pdg.inst.id !8  DATA  RAW 
-Instruction "  %15 = call i32 (i8*, ...) @printf(i8* noundef getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %13, i32 noundef %14), !noelle.pdg.inst.id !8" outgoing dependences
-Instruction "  %16 = bitcast i32* %4 to i8*, !noelle.pdg.inst.id !83" outgoing dependences
-     call void @llvm.lifetime.end.p0i8(i64 4, i8* %16) #3, !noelle.pdg.inst.id !84  DATA  RAW 
-Instruction "  call void @llvm.lifetime.end.p0i8(i64 4, i8* %16) #3, !noelle.pdg.inst.id !84" outgoing dependences
-Instruction "  %17 = bitcast i32* %3 to i8*, !noelle.pdg.inst.id !85" outgoing dependences
-     call void @llvm.lifetime.end.p0i8(i64 4, i8* %17) #3, !noelle.pdg.inst.id !86  DATA  RAW 
-Instruction "  call void @llvm.lifetime.end.p0i8(i64 4, i8* %17) #3, !noelle.pdg.inst.id !86" outgoing dependences
-Instruction "  %18 = bitcast i32* %2 to i8*, !noelle.pdg.inst.id !87" outgoing dependences
-     call void @llvm.lifetime.end.p0i8(i64 4, i8* %18) #3, !noelle.pdg.inst.id !88  DATA  RAW 
-Instruction "  call void @llvm.lifetime.end.p0i8(i64 4, i8* %18) #3, !noelle.pdg.inst.id !88" outgoing dependences
-Instruction "  %19 = bitcast i32* %1 to i8*, !noelle.pdg.inst.id !89" outgoing dependences
-     call void @llvm.lifetime.end.p0i8(i64 4, i8* %19) #3, !noelle.pdg.inst.id !90  DATA  RAW 
-Instruction "  call void @llvm.lifetime.end.p0i8(i64 4, i8* %19) #3, !noelle.pdg.inst.id !90" outgoing dependences
-Instruction "  ret i32 0, !noelle.pdg.inst.id !91" outgoing dependences
-A DGEdge  = 40
-A Control  = 40
-A Variable  = 48
-A Memory  = 48
+noelle-load -debug-only=carts,arts-analyzer -load /home/rherreraguaitero/ME/ARTS-env/CARTS/.build/CARTS.so -CARTS test_with_metadata.bc -o test_opt.bc
+
+ ---------------------------------------- 
+[carts] Running CARTS on Module: 
+test_with_metadata.bc
+
+[arts-analyzer] Identifying EDTs for: main
+[arts-analyzer] Other Function Found: 
+    %call = call i32 @rand() #8, !noelle.pdg.inst.id !20
+[arts-analyzer] Other Function Found: 
+    %call1 = call i32 @rand() #8, !noelle.pdg.inst.id !8
+[arts-analyzer] Parallel Region Found: 
+    call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* %random_number, i32* %NewRandom, i32* %number, i32* %shared_number), !noelle.pdg.inst.id !15
+[arts-analyzer] Other Function Found: 
+    %call2 = call i32 (i8*, ...) @printf(i8* noundef getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %4, i32 noundef %5), !noelle.pdg.inst.id !30
+
+ ---------------------------------------- 
 llvm-dis test_opt.bc
 clang++ -fopenmp test_opt.bc -O3 -march=native -o test_opt -lstdc++
