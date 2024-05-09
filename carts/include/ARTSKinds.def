@@ -28,7 +28,6 @@
 #endif
 
 #define __ARTS_TYPE(VarName) ARTS_TYPE(VarName, Type::get##VarName##Ty(Ctx))
-#define __ARTS_PTR_TYPE(VarName) ARTS_TYPE(VarName, PointerType::get(Ctx, 0))
 
 __ARTS_TYPE(Void)
 __ARTS_TYPE(Int1)
@@ -36,24 +35,25 @@ __ARTS_TYPE(Int8)
 __ARTS_TYPE(Int16)
 __ARTS_TYPE(Int32)
 __ARTS_TYPE(Int64)
-__ARTS_PTR_TYPE(Int8Ptr)
-__ARTS_PTR_TYPE(Int16Ptr)
-__ARTS_PTR_TYPE(Int32Ptr)
-__ARTS_PTR_TYPE(Int64Ptr)
+__ARTS_TYPE(Int8Ptr)
+__ARTS_TYPE(Int16Ptr)
+__ARTS_TYPE(Int32Ptr)
+__ARTS_TYPE(Int64Ptr)
 __ARTS_TYPE(Double)
 
 ARTS_TYPE(SizeTy, M.getDataLayout().getIntPtrType(Ctx))
 
-__ARTS_PTR_TYPE(VoidPtr)
-__ARTS_PTR_TYPE(VoidPtrPtr)
-__ARTS_PTR_TYPE(VoidPtrPtrPtr)
+#define __ARTS_PTR_TYPE(NAME, BASE) ARTS_TYPE(NAME, BASE->getPointerTo())
 
-__ARTS_PTR_TYPE(Int8PtrPtr)
-__ARTS_PTR_TYPE(Int8PtrPtrPtr)
+__ARTS_PTR_TYPE(VoidPtr, Int8)
+__ARTS_PTR_TYPE(VoidPtrPtr, VoidPtr)
+__ARTS_PTR_TYPE(VoidPtrPtrPtr, VoidPtrPtr)
 
-__ARTS_PTR_TYPE(CharPtrPtr)
 
+__ARTS_PTR_TYPE(Int8PtrPtr, Int8Ptr)
+__ARTS_PTR_TYPE(Int8PtrPtrPtr, Int8PtrPtr)
 #undef __ARTS_PTR_TYPE
+
 #undef __ARTS_TYPE
 #undef ARTS_TYPE
 ///}
@@ -166,7 +166,7 @@ __ARTS_FUNCTION_TYPE(EdtFunction, false, Void, Int32, Int64Ptr, Int32, EdtDepPtr
 #define __ARTS_RTL(Name, IsVarArg, ReturnType, ...)                             \
   ARTS_RTL(ARTSRTL_##Name, #Name, IsVarArg, ReturnType, __VA_ARGS__)
 
-__ARTS_RTL(artsRT, false, Void, Int32, CharPtrPtr)
+// __ARTS_RTL(artsRT, false, Void, Int32, CharPtrPtr)
 __ARTS_RTL(artsShutdown, false, Void, )
 __ARTS_RTL(artsMalloc, false, VoidPtr, SizeTy)
 __ARTS_RTL(artsMallocAlign, false, VoidPtr, SizeTy, SizeTy)

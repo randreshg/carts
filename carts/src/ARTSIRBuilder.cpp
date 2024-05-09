@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "ARTSIRBuilder.h"
+#include "llvm/Support/Debug.h"
 
 // #include "llvm/ADT/SmallSet.h"
 // #include "llvm/ADT/StringExtras.h"
@@ -36,6 +37,7 @@
 // #include "llvm/IR/Value.h"
 // #include "llvm/Support/Debug.h"
 
+#include <cassert>
 #include <cstdint>
 #include <optional>
 
@@ -50,17 +52,17 @@ using namespace arts;
 using namespace arts::types;
 
 void ARTSIRBuilder::initialize() {
-  LLVM_DEBUG(dbgs() << TAG  << TAG << "Initializing ARTSIRBuilder\n");
+  LLVM_DEBUG(dbgs() << TAG << "Initializing ARTSIRBuilder\n");
   // Initialize the module with the runtime functions.
   initializeTypes();
-  LLVM_DEBUG(dbgs() << TAG  << TAG << "ARTSIRBuilder initialized\n");
+  LLVM_DEBUG(dbgs() << TAG << "ARTSIRBuilder initialized\n");
 }
 
 void ARTSIRBuilder::finalize() {
-  LLVM_DEBUG(dbgs() << TAG  << TAG << "Finalizing ARTSIRBuilder\n");
+  LLVM_DEBUG(dbgs() << TAG << TAG << "Finalizing ARTSIRBuilder\n");
   // Finalize the module with the runtime functions.
   // finalizeModule(M);
-  LLVM_DEBUG(dbgs() << TAG  << TAG << "ARTSIRBuilder finalized\n");
+  LLVM_DEBUG(dbgs() << TAG << TAG << "ARTSIRBuilder finalized\n");
 }
 
 FunctionCallee ARTSIRBuilder::getOrCreateRuntimeFunction(Module &M,
@@ -89,12 +91,13 @@ FunctionCallee ARTSIRBuilder::getOrCreateRuntimeFunction(Module &M,
 #include "ARTSKinds.def"
     }
 
-    LLVM_DEBUG(dbgs() << TAG  << "Created ARTS runtime function " << Fn->getName()
-                      << " with type " << *Fn->getFunctionType() << "\n");
+    LLVM_DEBUG(dbgs() << TAG << "Created ARTS runtime function "
+                      << Fn->getName() << " with type "
+                      << *Fn->getFunctionType() << "\n");
     // addAttributes(FnID, *Fn);
 
   } else {
-    LLVM_DEBUG(dbgs() << TAG  << "Found ARTS runtime function " << Fn->getName()
+    LLVM_DEBUG(dbgs() << TAG << "Found ARTS runtime function " << Fn->getName()
                       << " with type " << *Fn->getFunctionType() << "\n");
   }
 
@@ -110,31 +113,92 @@ Function *ARTSIRBuilder::getOrCreateRuntimeFunctionPtr(RuntimeFunction FnID) {
   return Fn;
 }
 
+void ARTSIRBuilder::initializeEDT(EDT &E) {
+  LLVM_DEBUG(dbgs() << TAG << "Initializing EDT\n");
+  auto *EntryBB = E.getEntry();
+  EntryBB->setName("edt.entry");
+  auto *ExitBB = E.getExit();
+  ExitBB->setName("edt.exit");
+  /// Change EDT Task body function signature
+  auto *EdtBody = E.getTaskBody();
+  EdtBody->setName("arts_edt_" + std::to_string(E.getID()));
+  (EdtBody->arg_begin())->setName("paramc");
+  (EdtBody->arg_begin() + 1)->setName("depc");
+  (EdtBody->arg_begin() + 2)->setName("paramv");
+  (EdtBody->arg_begin() + 3)->setName("depv");
+}
+
+void ARTSIRBuilder::insertEDTEntry(EDT &E) {
+  LLVM_DEBUG(dbgs() << TAG << "Inserting EDT Entry\n");
+  auto &Env = E.getEnv();
+  auto *EntryBB = E.getEntry();
+  auto *EdtBody = EntryBB->getParent();
+  assert((EdtBody == E.getTaskBody()) &&
+         "Entry BB parent must be the EDT Func");
+
+  auto OldInsertPoint = Builder.saveIP();
+  Builder.SetInsertPoint(EntryBB->getTerminator());
+  /// Insert ParamV
+  auto ParamVArg = EdtBody->arg_begin() + 1;
+  for (auto En : enumerate(Env.ParamV)) {
+    unsigned Index = En.index();
+    Value *OriginalVal = En.value();
+    Value *ParamVArrayElemPtr = Builder.CreateConstInBoundsGEP2_64(
+        Int64Ptr, ParamVArg, 0, Index, "paramv." + OriginalVal->getName());
+    Value *CastedVal =
+        Builder.CreateBitCast(ParamVArrayElemPtr, OriginalVal->getType(),
+                              "paramv." + OriginalVal->getName() + ".casted");
+    E.addLiveIn(OriginalVal, CastedVal);
+  }
+
+  /// Insert DepV
+  auto DepVArg = EdtBody->arg_begin() + 3;
+  for (auto En : enumerate(Env.DepV)) {
+    unsigned Index = En.index();
+    Value *OriginalVal = En.value();
+    Value *DepVArrayElemPtr = Builder.CreateConstInBoundsGEP2_32(
+        EdtDep, DepVArg, Index, 2, "depv." + OriginalVal->getName());
+    Value *CastedVal =
+        Builder.CreateBitCast(DepVArrayElemPtr, OriginalVal->getType(),
+                              "depv." + OriginalVal->getName() + ".casted");
+    E.addLiveIn(OriginalVal, CastedVal);
+    // E.addLiveOut(OriginalVal, CastedVal);
+  }
+
+  redirectTo(EntryBB, E.getExit());
+  Builder.restoreIP(OldInsertPoint);
+  // EntryBB->insertInto(EdtBody);
+  /// Add entry to the EDTBody function
+}
+
 // Function *ARTSIRBuilder::createEdt(StringRef Name) {
 //   const std::string FuncName = (Name + ".edt").str();
 //   LLVM_DEBUG(dbgs() << TAG  << TAG << "Creating EDT: " << FuncName << "\n");
 //   Function *Func =
-//       Function::Create(EdtFunction, GlobalValue::InternalLinkage, FuncName, M);
+//       Function::Create(EdtFunction, GlobalValue::InternalLinkage, FuncName,
+//       M);
 //   /// Add entry BB that returns void
-//   BasicBlock *EntryBB = BasicBlock::Create(Builder.getContext(), "entry", Func);
-//   Builder.SetInsertPoint(EntryBB);
-//   Builder.CreateRetVoid();
-//   return Func;
+//   BasicBlock *EntryBB = BasicBlock::Create(Builder.getContext(), "entry",
+//   Func); Builder.SetInsertPoint(EntryBB); Builder.CreateRetVoid(); return
+//   Func;
 // }
 
-// AllocaInst *ARTSIRBuilder::reserveEDTGuid(BasicBlock *EntryBB, uint32_t Node) {
+// AllocaInst *ARTSIRBuilder::reserveEDTGuid(BasicBlock *EntryBB, uint32_t Node)
+// {
 //   auto OldInsertPoint = Builder.saveIP();
 //   Builder.SetInsertPoint(EntryBB);
 //   /// Create the call to reserve the GUID
 //   ConstantInt *ARTS_EDT_Enum =
 //       ConstantInt::get(Builder.getContext(), APInt(32, 1));
 //   Value *Args[] = {ARTS_EDT_Enum,
-//                    Builder.CreateIntCast(ConstantInt::get(Int32, Node), Int32,
+//                    Builder.CreateIntCast(ConstantInt::get(Int32, Node),
+//                    Int32,
 //                                          /*isSigned*/ false)};
 //   CallInst *ReserveGuidCall = Builder.CreateCall(
 //       getOrCreateRuntimeFunctionPtr(ARTSRTL_artsReserveGuidRoute), Args);
 //   /// Create allocation of the GUID
-//   AllocaInst *GuidAddr = Builder.CreateAlloca(Int32Ptr, nullptr, "guid.addr");
+//   AllocaInst *GuidAddr = Builder.CreateAlloca(Int32Ptr, nullptr,
+//   "guid.addr");
 //   /// Store the GUID
 //   Builder.CreateStore(ReserveGuidCall, GuidAddr);
 //   Builder.restoreIP(OldInsertPoint);
@@ -164,7 +228,8 @@ Function *ARTSIRBuilder::getOrCreateRuntimeFunctionPtr(RuntimeFunction FnID) {
 //   auto &DE = EI.DE;
 //   /// Get CurBB parent
 //   Function *Func = CurBB->getParent();
-//   LLVM_DEBUG(dbgs() << TAG  << TAG << "CurBB parent: " << Func->getName() << "\n");
+//   LLVM_DEBUG(dbgs() << TAG  << TAG << "CurBB parent: " << Func->getName() <<
+//   "\n");
 //   /// Generate entry region.
 //   /// This region will have the declarations of the GUIDs.
 //   BasicBlock *EntryBB =
@@ -177,7 +242,8 @@ Function *ARTSIRBuilder::getOrCreateRuntimeFunctionPtr(RuntimeFunction FnID) {
 //       LLVM_DEBUG(dbgs() << TAG  << TAG << "CurBB has no terminator\n");
 //       // return nullptr;
 //     } else
-//       LLVM_DEBUG(dbgs() << TAG  << TAG << "CurBB has terminator: " << *Term << "\n");
+//       LLVM_DEBUG(dbgs() << TAG  << TAG << "CurBB has terminator: " << *Term
+//       << "\n");
 //     // redirectTo(CurBB, EntryBB);
 //     BBNameAppend = CurBB->getName();
 //     EntryBB->setName("edt.entry." + BBNameAppend);
@@ -206,11 +272,13 @@ Function *ARTSIRBuilder::getOrCreateRuntimeFunctionPtr(RuntimeFunction FnID) {
 //     Value *Val = En.value();
 //     /// Create the GEP to store the value in the ParamV array
 //     Value *ParamVArrayElemPtr = Builder.CreateConstInBoundsGEP2_64(
-//         Int64Ptr, ParamVArray, 0, Index, "paramv.array.elem." + Twine(Index));
+//         Int64Ptr, ParamVArray, 0, Index, "paramv.array.elem." +
+//         Twine(Index));
 //     /// If the value is a constant int, we need to store it in a variable
 //     if (ConstantInt *CI = dyn_cast<ConstantInt>(Val)) {
 //       /// Create the variable
-//       Val = Builder.CreateAlloca(Int32, nullptr, "paramv.val." + Twine(Index));
+//       Val = Builder.CreateAlloca(Int32, nullptr, "paramv.val." +
+//       Twine(Index));
 //       /// Store the value in the variable
 //       Builder.CreateStore(CI, Val);
 //     }
@@ -237,7 +305,8 @@ Function *ARTSIRBuilder::getOrCreateRuntimeFunctionPtr(RuntimeFunction FnID) {
 //                    Builder.CreateLoad(Int32, DepC)};
 
 //   Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
-//   LLVM_DEBUG(dbgs() << TAG  << TAG << "Creating call to artsEdtCreateWithGuid: \n"
+//   LLVM_DEBUG(dbgs() << TAG  << TAG << "Creating call to
+//   artsEdtCreateWithGuid: \n"
 //                     << *F << "\n");
 //   Builder.CreateCall(F, Args);
 //   return nullptr;

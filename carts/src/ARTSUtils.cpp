@@ -23,6 +23,79 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 
 /// ARTSUtils
 namespace arts {
+
+namespace omp {
+  /// OMP INFO
+  void OMPInfo::rewireDataAndControlFlow(CallBase *ParallelCall) {
+    assert((getRTFunction(ParallelCall) == RTFType::PARALLEL) &&
+           "Only parallel region is supported - as of now");
+    const uint32_t ParallelOutlinedFunctionPos = 2;
+    const uint32_t KeepArgsFrom = 2;
+    const uint32_t KeepCallArgsFrom = 3;
+
+    auto *OutlinedFn = dyn_cast<Function>(
+        ParallelCall->getArgOperand(ParallelOutlinedFunctionPos)
+            ->stripPointerCasts());
+
+    Argument *FnArgItr = OutlinedFn->arg_begin() + KeepArgsFrom;
+    Use *CallArgItr = ParallelCall->arg_begin() + KeepCallArgsFrom;
+    for (unsigned ArgNum = KeepArgsFrom; ArgNum < OutlinedFn->arg_size();
+         ++CallArgItr, ++FnArgItr) {
+      // Value *CallArgVal = *CallArgItr;
+      LLVM_DEBUG(dbgs() << "Rewiring: " << *FnArgItr << " with " << *CallArgItr
+                        << "\n");
+      // FnArgItr->replaceAllUsesWith(*CallArgItr);
+    }
+  }
+
+  OMPInfo::RTFType OMPInfo::getRTFunction(Function *F) {
+    if (!F)
+      return RTFType::OTHER;
+    auto CalleeName = F->getName();
+    if (CalleeName == "__kmpc_fork_call")
+      return RTFType::PARALLEL;
+    if (CalleeName == "__kmpc_omp_task_alloc")
+      return RTFType::TASKALLOC;
+    if (CalleeName == "__kmpc_omp_task")
+      return RTFType::TASK;
+    if (CalleeName == "__kmpc_omp_task_alloc_with_deps")
+      return RTFType::TASKDEP;
+    if (CalleeName == "__kmpc_omp_taskwait")
+      return RTFType::TASKWAIT;
+    if (CalleeName == "omp_set_num_threads")
+      return RTFType::SET_NUM_THREADS;
+    if (CalleeName == "__kmpc_for_static_init_4")
+      return RTFType::PARALLEL_FOR;
+    return RTFType::OTHER;
+  }
+
+  OMPInfo::RTFType OMPInfo::getRTFunction(CallBase &CB) {
+    auto *Callee = CB.getCalledFunction();
+    return getRTFunction(Callee);
+  }
+
+  OMPInfo::RTFType OMPInfo::getRTFunction(Instruction *I) {
+    auto *CB = dyn_cast<CallBase>(I);
+    if (!CB)
+      return RTFType::OTHER;
+    return getRTFunction(*CB);
+  }
+
+  bool OMPInfo::isTaskFunction(Function *F) {
+    auto RT = getRTFunction(F);
+    if (RT == RTFType::TASK || RT == RTFType::TASKDEP ||
+        RT == RTFType::TASKWAIT)
+      return true;
+    return false;
+  }
+
+  bool OMPInfo::isRTFunction(CallBase &CB) {
+    auto RT = getRTFunction(CB);
+    if (RT != RTFType::OTHER)
+      return true;
+    return false;
+  }
+}
 // void getInputsOutputs(BlockSequence Region, DominatorTree *DT,
 //                       SetVector<Value *> &Inputs,
 //                       SetVector<Value *> &Outputs,

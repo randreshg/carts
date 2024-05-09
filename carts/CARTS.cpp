@@ -25,7 +25,6 @@
 #include "ARTSIRBuilder.h"
 
 using namespace llvm;
-using namespace arcana::noelle;
 using namespace arts;
 // using BlockSequence = SmallVector<BasicBlock *, 0>;
 
@@ -46,28 +45,30 @@ struct CARTS : public ModulePass {
 
   bool runOnModule(Module &M) override {
     LLVM_DEBUG(dbgs() <<  "\n ---------------------------------------- \n");
+    LLVM_DEBUG(dbgs() << TAG << "Running CARTS on Module: \n" << M.getName() << "\n");
     /// Fetch NOELLE Manager
     auto &NM= getAnalysis<Noelle>();
     /// Use NOELLE
     auto Insts = NM.numberOfProgramInstructions();
 
     /// Fetch the PDG
-    auto PDG = NM.getProgramDependenceGraph();
+    auto &PDG = *NM.getProgramDependenceGraph();
 
     /// Fetch the FDG of "main"
     auto FM = NM.getFunctionsManager();
     auto MainFunction = FM->getEntryFunction();
-    auto FDG = PDG->createFunctionSubgraph(*MainFunction);
+    // auto FDG = PDG->createFunctionSubgraph(*MainFunction);
 
     /// Identify number of OpenMP regions
     auto AIB = ARTSIRBuilder(M);
-    auto AA = ARTSAnalyzer(AIB);
+    auto AA = ARTSAnalyzer(M, PDG, AIB);
 
     // AA.getNumberofOpenMPRegions(M);
     AA.identifyEDTs(*MainFunction);
-    LLVM_DEBUG(dbgs() << TAG << "- Number of instructions: " << Insts << "\n");
-
+    // LLVM_DEBUG(dbgs() << TAG << "- Number of instructions: " << Insts << "\n");
+    /// Print module info
     LLVM_DEBUG(dbgs() <<  "\n ---------------------------------------- \n");
+    LLVM_DEBUG(dbgs() << TAG << "Module: " << "\n");
     return false;
   }
 
