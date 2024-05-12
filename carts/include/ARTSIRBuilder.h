@@ -8,7 +8,9 @@
 #ifndef LLVM_API_ARTS_ARTSIRBUILDER_H
 #define LLVM_API_ARTS_ARTSIRBUILDER_H
 
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Instruction.h"
 // #include "llvm/Support/Allocator.h"
 
 #include "ARTS.h"
@@ -20,9 +22,7 @@ namespace arts {
 class ARTSIRBuilder {
 public:
   /// Create a new ARTSIRBuilder operating on the given module \p M.
-  ARTSIRBuilder(Module &M) : M(M), Builder(M.getContext()) {
-    initialize();
-  }
+  ARTSIRBuilder(Module &M) : M(M), Builder(M.getContext()) { initialize(); }
   ~ARTSIRBuilder() {}
 
   /// ---------------------------- Interface ---------------------------- ///
@@ -43,31 +43,30 @@ public:
   /// Return the function declaration for the runtime function with \p FnID.
   FunctionCallee getOrCreateRuntimeFunction(Module &M,
                                             types::RuntimeFunction FnID);
-
   Function *getOrCreateRuntimeFunctionPtr(types::RuntimeFunction FnID);
 
   /// Interface to add ARTS methods
-
-  /// Set Terminator Instruction
-  // void setVoidTerminator(BasicBlock *BB);
   void initializeEDT(EDT &E);
-  /// Insert/Update EDT Preheader
   void insertEDTEntry(EDT &E);
-  /// Creates EDT Function. It creates an empty function with the
-  /// correct signature and returns it.
-  // Function *createEdt(StringRef Name);
+  CallInst *insertEDTCall(EDT &E);
+  void reserveEDTGuid(EDT &E);
 
-  /// Given a EDT Block and a EDT Function, it inserts the Basic Block
-  /// into the Function.
-  // void insertEDTBlock(EDTBlock *EB, Function *EDTFunc);
 
-  /// Initializes EDT Function. It inserts the call to the
-  /// runtime function to reserve the GUID for the EDT, then it calls
-  /// artsEdtCreateWithGuid to create the EDT.
-  // Function *initializeEDT(EdtInfo &EDTI, Function *EDTFunc,
-  //                         BasicBlock *CurBB = nullptr);
-  // AllocaInst *reserveEDTGuid(BasicBlock *EntryBB, uint32_t Node);
+  /// ---------------------------- Utils ---------------------------- ///
+  /// Make \p Source branch to \p Target.
+  ///
+  /// Handles two situations:
+  /// * \p Source already has an unconditional branch.
+  /// * \p Source is a degenerate block (no terminator because the BB is
+  ///             the current head of the IR construction).
+  void redirectTo(BasicBlock *Source, BasicBlock *Target);
+  void redirectTo(Function *Source, BasicBlock *Target);
+  void redirectEntryAndExit(EDT &E, BasicBlock *OriginalEntry);
+  /// Insertion Points
+  void setInsertPoint(BasicBlock *BB);
+  void setInsertPoint(Instruction *I);
 
+  /// ---------------------------- Types ---------------------------- ///
   /// Declarations for LLVM-IR types (simple, array, function and structure) are
   /// generated below. Their names are defined and used in ARTSKinds.def. Here
   /// we provide the declarations, the initializeTypes function will provide the
@@ -86,16 +85,6 @@ public:
     PointerType *VarName##Ptr = nullptr;
   #include "ARTSKinds.def"
   ///}
-
-  /// ---------------------------- Utils ---------------------------- ///
-  /// Make \p Source branch to \p Target.
-  ///
-  /// Handles two situations:
-  /// * \p Source already has an unconditional branch.
-  /// * \p Source is a degenerate block (no terminator because the BB is
-  ///             the current head of the IR construction).
-  void redirectTo(BasicBlock *Source, BasicBlock *Target);
-
 private:
   /// ---------------------------- Private ---------------------------- ///
   /// Create all simple and struct types exposed by the runtime and remember
@@ -105,7 +94,6 @@ private:
   /// ---------------------------- Attributes ---------------------------- ///
   /// The underlying LLVM-IR module
   Module &M;
-
   /// The LLVM-IR Builder used to create IR.
   IRBuilder<> Builder;
 };

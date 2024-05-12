@@ -1056,7 +1056,7 @@
 //     Instruction *FirstI = &*DoneBB->begin();
 //     /// If it is a callbase, check if its a call to a RT function
 //     if(auto *CB = dyn_cast<CallBase>(FirstI)) {
-//       if(OMPInfo::isRTFunction(*CB))
+//       if(omp::isRTFunction(*CB))
 //         return DoneBB;
 //       /// TODO: What about other callbase?
 //     }
@@ -1187,9 +1187,9 @@
 //         if (!CB)
 //           continue;
 //         /// Get the callee
-//         OMPInfo::RTFType RTF = OMPInfo::getRTFunction(*CB);
+//         omp::Type RTF = omp::getRTFunction(*CB);
 //         switch (RTF) {
-//         case OMPInfo::PARALLEL: {
+//         case omp::PARALLEL: {
 //           LLVM_DEBUG(dbgs() << TAG << "Parallel Region Found: " << "\n  "
 //                             <<  *CB << "\n");
 
@@ -1219,7 +1219,7 @@
 //           /// Analyze Outlined Region
 //           handleParallelOutlinedRegion(CB);
 //         } break;
-//         case OMPInfo::TASKALLOC: {
+//         case omp::TASKALLOC: {
 //           LLVM_DEBUG(dbgs() << TAG << "Task Region Found: " << "\n  "
 //                             <<  *CB << "\n");
 
@@ -1238,7 +1238,7 @@
 //           /// Find the task call 
 //           while ((CurrentI = CurrentI->getNextNonDebugInstruction())) {
 //             auto *TCB = dyn_cast<CallBase>(CurrentI);
-//             if (TCB && OMPInfo::getRTFunction(*TCB) == OMPInfo::TASK)
+//             if (TCB && omp::getRTFunction(*TCB) == omp::TASK)
 //               break;
 //           }
 //           assert(CurrentI && "Task RT call not found");
@@ -1258,7 +1258,7 @@
 //           /// Analyze Outlined Region
 //           handleTaskOutlinedRegion(CB);
 //         } break;
-//         case OMPInfo::TASKWAIT: {
+//         case omp::TASKWAIT: {
 //           /// \Note A taskwait requires an event.
 //           /// Split block at __kmpc_omp_taskwait
 //           BasicBlock *TaskWaitBB =
@@ -1274,7 +1274,7 @@
 //           // AT.insertEDTBlock(TaskWaitBB, RTF, CB);
 //           TaskRegion++;
 //         } break;
-//         case OMPInfo::OTHER: {
+//         case omp::OTHER: {
 //           // if (!Callee || !A.isFunctionIPOAmendable(*Callee))
 //           //   continue;
 //           // /// Get return type of the callee
