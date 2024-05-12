@@ -1,6 +1,7 @@
 #include "ARTSAnalyzer.h"
 #include "ARTS.h"
 #include "ARTSUtils.h"
+#include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
 
 /// DEBUG
@@ -82,12 +83,13 @@ bool ARTSAnalyzer::identifyEDTs(Function &F) {
       if (!CB)
         continue;
       /// Get the callee
-      OMPInfo::RTFType RTF = OMPInfo::getRTFunction(*CB);
+      omp::Type RTF = omp::getRTFunction(*CB);
       switch (RTF) {
-      case OMPInfo::PARALLEL: {
+      case omp::PARALLEL: {
         LLVM_DEBUG(dbgs() << TAG << "Parallel Region Found: " << "\n  " << *CB
                           << "\n");
-        handleParallelRegion(CB);
+        CurrentI = handleParallelRegion(CB);
+        LLVM_DEBUG(dbgs() << " - NEW MODULE: " << *F.getParent() << "\n");
         // /// Split block at __kmpc_parallel
         // auto ParallelItrStr = std::to_string(ParallelRegion++);
         // auto ParallelName = "par.region." + ParallelItrStr;
@@ -114,7 +116,7 @@ bool ARTSAnalyzer::identifyEDTs(Function &F) {
         /// Analyze Outlined Region
         // handleParallelOutlinedRegion(CB);
       } break;
-      case OMPInfo::TASKALLOC: {
+      case omp::TASKALLOC: {
         LLVM_DEBUG(dbgs() << TAG << "Task Region Found: " << "\n  " << *CB
                           << "\n");
 
@@ -133,7 +135,7 @@ bool ARTSAnalyzer::identifyEDTs(Function &F) {
         // /// Find the task call
         // while ((CurrentI = CurrentI->getNextNonDebugInstruction())) {
         //   auto *TCB = dyn_cast<CallBase>(CurrentI);
-        //   if (TCB && OMPInfo::getRTFunction(*TCB) == OMPInfo::TASK)
+        //   if (TCB && omp::getRTFunction(*TCB) == omp::TASK)
         //     break;
         // }
         // assert(CurrentI && "Task RT call not found");
@@ -154,7 +156,7 @@ bool ARTSAnalyzer::identifyEDTs(Function &F) {
         /// Analyze Outlined Region
         // handleTaskOutlinedRegion(CB);
       } break;
-      case OMPInfo::TASKWAIT: {
+      case omp::TASKWAIT: {
         // /// \Note A taskwait requires an event.
         // /// Split block at __kmpc_omp_taskwait
         // BasicBlock *TaskWaitBB =
@@ -170,7 +172,7 @@ bool ARTSAnalyzer::identifyEDTs(Function &F) {
         // // AT.insertEDTBlock(TaskWaitBB, RTF, CB);
         // TaskRegion++;
       } break;
-      case OMPInfo::OTHER: {
+      case omp::OTHER: {
         LLVM_DEBUG(dbgs() << TAG << "Other Function Found: " << "\n  " << *CB
                           << "\n");
         // if (!Callee || !A.isFunctionIPOAmendable(*Callee))
@@ -443,189 +445,37 @@ void ARTSAnalyzer::analyzeDeps() {
   //   // }
 }
 
-bool ARTSAnalyzer::handleParallelRegion(CallBase *CB) {
-  /// Analyze outlined region
-  static const uint32_t ParallelOutlinedFunctionPos = 2;
-  static const uint32_t KeepArgsFrom = 2;
-  static const uint32_t KeepCallArgsFrom = 3;
-
+Instruction *ARTSAnalyzer::handleParallelRegion(CallBase *CB) {
+  /// Get RTF Info
+  const Data &RTI = omp::getRTData(omp::PARALLEL);
   auto *OutlinedFn = dyn_cast<Function>(
-      CB->getArgOperand(ParallelOutlinedFunctionPos)->stripPointerCasts());
-  LLVM_DEBUG(dbgs() << TAG << "Outlined function: " << OutlinedFn->getName()
-                    << "\n");
-
+      CB->getArgOperand(RTI.OutlinedFnPos)->stripPointerCasts());
+  /// Create ParallelEDT
   EDT &ParallelEDT = *createEDT(EDT::Type::PARALLEL);
-  /// Get call (original) arguments
-  for (auto ArgNum = KeepCallArgsFrom; ArgNum < CB->data_operands_size();
+  /// Set EDTEnv with the Call Arguments
+  for (auto ArgNum = RTI.KeepCallArgsFrom; ArgNum < CB->data_operands_size();
        ++ArgNum) {
     auto *Arg = CB->getArgOperand(ArgNum);
     ParallelEDT.insertValueToEnv(Arg);
   }
-
-  /// InsertEDTEntry
+  omp::preprocessing(CB);
+  /// Insert EdtEntry in the ParallelEdt and add BBs of the OutlinedFn into the
+  /// ParallelEDT Body
   AIB.insertEDTEntry(ParallelEDT);
-  LLVM_DEBUG(dbgs() << ParallelEDT << "\n");
-  OMPInfo::rewireDataAndControlFlow(CB);
   ParallelEDT.cloneAndAddBasicBlocks(OutlinedFn);
-  // ParallelEDT.adjustDataAndControlFlowToUseClones();
+  AIB.redirectEntryAndExit(ParallelEDT, &(OutlinedFn->getEntryBlock()));
+  ParallelEDT.adjustDataAndControlFlowToUseClones();
 
   /// Debug
-  LLVM_DEBUG(dbgs() << ParallelEDT << "\n");
-  // LLVM_DEBUG(dbgs() << TAG << Env << "\n");
-
-  //   for (unsigned OldArgNum = KeepCallArgsFrom;
-  //         OldArgNum < OldCB->data_operands_size(); ++OldArgNum) {
-  //     auto *Arg = OldCB->getArgOperand(OldArgNum);
-  //     NewArgOperands.push_back(Arg);
-  //     NewArgOperandAttributes.push_back(
-  //         OldCallAttributeList.getParamAttrs(OldArgNum));
-  //     /// Map Value (Shared) with list of EDTs that use it
-  //     // if (PointerType *PT = dyn_cast<PointerType>(Arg->getType()))
-  //     //   AT.insertValueToEdt(Arg, &ParallelEDT);
-  //   }
-
-  /// For now assume that if it is a pointer, it is a shared variable
-  //     // if (PointerType *PT = dyn_cast<PointerType>(ArgType))
-  //     //   AT.insertArgToDE(Arg, DataEnv::SHARED, ParallelEDT);
-  //     // /// If not, it is a first private variable
-  //     // else
-  //     //   AT.insertArgToDE(Arg, DataEnv::FIRSTPRIVATE, ParallelEDT);
-
-  // ParallelEDT.adjustDataAndControlFlowToUseClones();
-
-  /// Get bitcast first argument
-  // if(auto *BCI =
-  // dyn_cast<BitCastInst>(CB->getArgOperand(ParallelOutlinedFunctionPos))) {
-  //   /// Bitcast to function
-  //   if(auto *OutlinedFn = dyn_cast<Function>(BCI->getOperand(0))) {
-
-  //   }
-  //   else {
-  //     LLVM_DEBUG(dbgs() << TAG << "Outlined function not found\n");
-  //   }
-  // }
-  // else {
-  //   LLVM_DEBUG(dbgs() << TAG << "Bitcast not found\n");
-  // }
-
-  /// Remove arguments from the outlined function
-  // for (uint32_t ArgItr = 0; ArgItr < KeepArgsFrom; ArgItr++) {
-  //   Value *Arg = OldFn->args().begin() + ArgItr;
-  //   removeValue(Arg, true, false);
-  // }
-
-  //   /// Generate new outlined function
-  //   SmallVector<Type *, 16> NewArgumentTypes;
-  //   SmallVector<AttributeSet, 16> NewArgumentAttributes;
-
-  //   // Collect replacement argument types and copy over existing attributes.
-  //   for (auto ArgItr = KeepArgsFrom; ArgItr < OldFn->arg_size(); ArgItr++) {
-  //     Value *Arg = OldFn->args().begin() + ArgItr;
-  //     NewArgumentTypes.push_back(Arg->getType());
-  //   }
-
-  //   // Construct the new function type using the new arguments types.
-  //   FunctionType *OldFnTy = OldFn->getFunctionType();
-  //   Type *RetTy = OldFnTy->getReturnType();
-  //   FunctionType *NewFnTy =
-  //       FunctionType::get(RetTy, NewArgumentTypes, OldFnTy->isVarArg());
-  //   LLVM_DEBUG(dbgs() << " - Function rewrite '" << OldFn->getName()
-  //                     << "' from " << *OldFn->getFunctionType() << " to "
-  //                     << *NewFnTy << "\n");
-
-  //   // Create the new function body and insert it into the module.
-  //   Function *NewFn = Function::Create(NewFnTy, OldFn->getLinkage(),
-  //                                       OldFn->getAddressSpace(), "");
-  //   OldFn->getParent()->getFunctionList().insert(OldFn->getIterator(),
-  //   NewFn);
-  //   // NewFn->takeName(OldFn);
-  //   NewFn->setName("parallel.edt");
-  //   OldFn->setSubprogram(nullptr);
-
-  //   // Create Parallel EDT
-  //   // EdtInfo &ParallelEDT = *AT.insertEdt(EdtInfo::PARALLEL, NewFn);
-
-  //   // Since we have now created the new function, splice the body of the old
-  //   // function right into the new function, leaving the old rotting hulk of
-  //   the
-  //   // function empty.
-  //   NewFn->splice(NewFn->begin(), OldFn);
-
-  //   // Collect the new argument operands for the replacement call site.
-  //   CallBase *OldCB = dyn_cast<CallBase>(RTCall);
-  //   const AttributeList &OldCallAttributeList = OldCB->getAttributes();
-  //   SmallVector<Value *, 16> NewArgOperands;
-  //   SmallVector<AttributeSet, 16> NewArgOperandAttributes;
-
-  //   for (unsigned OldArgNum = KeepCallArgsFrom;
-  //         OldArgNum < OldCB->data_operands_size(); ++OldArgNum) {
-  //     auto *Arg = OldCB->getArgOperand(OldArgNum);
-  //     NewArgOperands.push_back(Arg);
-  //     NewArgOperandAttributes.push_back(
-  //         OldCallAttributeList.getParamAttrs(OldArgNum));
-  //     /// Map Value (Shared) with list of EDTs that use it
-  //     // if (PointerType *PT = dyn_cast<PointerType>(Arg->getType()))
-  //     //   AT.insertValueToEdt(Arg, &ParallelEDT);
-  //   }
-
-  //   // Create a new call or invoke instruction to replace the old one.
-  //   auto *NewCI =
-  //       CallInst::Create(NewFn, NewArgOperands, std::nullopt, "", OldCB);
-  //   NewCI->setTailCallKind(cast<CallInst>(OldCB)->getTailCallKind());
-  //   // AT.insertEdtforBlock(&ParallelEDT, NewCI->getParent());
-
-  //   // Copy over various properties and the new attributes.
-  //   LLVMContext &Ctx = OldFn->getContext();
-  //   CallBase *NewCB = NewCI;
-  //   // AT.insertEdtCall(NewCB);
-  //   NewCB->setCallingConv(OldCB->getCallingConv());
-  //   NewCB->takeName(OldCB);
-  //   NewCB->setAttributes(AttributeList::get(
-  //       Ctx, OldCallAttributeList.getFnAttrs(),
-  //       OldCallAttributeList.getRetAttrs(), NewArgOperandAttributes));
-
-  //   // Rewire the function arguments.
-  //   Argument *OldFnArgIt = OldFn->arg_begin() + KeepArgsFrom;
-  //   Argument *NewFnArgIt = NewFn->arg_begin();
-  //   for (unsigned OldArgNum = KeepArgsFrom; OldArgNum < OldFn->arg_size();
-  //         ++OldArgNum, ++OldFnArgIt) {
-  //     NewFnArgIt->takeName(&*OldFnArgIt);
-  //     OldFnArgIt->replaceAllUsesWith(&*NewFnArgIt);
-  //     /// Add to Parallel EDT Data Environment
-  //     Argument *Arg = &*NewFnArgIt;
-  //     Type *ArgType = NewFnArgIt->getType();
-  //     /// For now assume that if it is a pointer, it is a shared variable
-  //     // if (PointerType *PT = dyn_cast<PointerType>(ArgType))
-  //     //   AT.insertArgToDE(Arg, DataEnv::SHARED, ParallelEDT);
-  //     // /// If not, it is a first private variable
-  //     // else
-  //     //   AT.insertArgToDE(Arg, DataEnv::FIRSTPRIVATE, ParallelEDT);
-
-  //     /// NOTES: The outline function or the variable should have attributes
-  //     /// that provide more information about the lifetime of the variable.
-  //     It
-  //     /// is also important to consider the underlying type of the variable.
-  //     /// There may be cases, where there is a firstprivate variable that is
-  //     a
-  //     /// pointer. For this case, the pointer is private, but the data it
-  //     points
-  //     /// to is shared.
-  //     ++NewFnArgIt;
-  //   }
-
-  //   // Eliminate the instructions *after* we visited all of them.
-  //   OldCB->replaceAllUsesWith(NewCB);
-  //   OldCB->eraseFromParent();
-  //   ValuesToRemove.push_back(OldFn);
-
-  //   assert(NewFn->isDeclaration() == false && "New function is a
-  //   declaration"); LLVM_DEBUG(dbgs() << " - New CB: " << *NewCB << "\n");
-  //   // LLVM_DEBUG(dbgs() << ParallelEDT.DE << "\n");
-
-  //   /// Identify EDT for new function
-  //   if(!identifyEDTs(*NewFn))
-  //     return false;
-  return true;
+  // LLVM_DEBUG(dbgs() << ParallelEDT << "\n");
+  /// InsertEDTCall
+  AIB.setInsertPoint(CB);
+  auto *EDTCall = AIB.insertEDTCall(ParallelEDT);
+  /// Remove the call to the parallel region
+  omp::postprocessing(CB);
+  removeValue(CB, true);
+  OutlinedFn->eraseFromParent();
+  return EDTCall;
 }
 
 bool ARTSAnalyzer::handleTaskRegion(CallBase *CB) {
@@ -827,7 +677,7 @@ BasicBlock *ARTSAnalyzer::handleDoneRegion(BasicBlock *DoneBB,
   //   Instruction *FirstI = &*DoneBB->begin();
   //   /// If it is a callbase, check if its a call to a RT function
   //   if(auto *CB = dyn_cast<CallBase>(FirstI)) {
-  //     if(OMPInfo::isRTFunction(*CB))
+  //     if(omp::isRTFunction(*CB))
   //       return DoneBB;
   //     /// TODO: What about other callbase?
   //   }
@@ -869,7 +719,7 @@ uint64_t ARTSAnalyzer::getNumEDTs() { return EDTs.size(); }
 EDT *ARTSAnalyzer::createEDT(EDT::Type Ty) {
   LLVM_DEBUG(dbgs() << TAG << "Creating EDT with signature: "
                     << *AIB.EdtFunction << "\n");
-  auto E = new EDT(Ty, AIB.EdtFunction, M, "arts_edt");
+  auto E = new EDT(Ty, AIB.EdtFunction, M);
   AIB.initializeEDT(*E);
   insertEDT(E);
   return E;

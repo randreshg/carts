@@ -24,7 +24,7 @@ struct ARTSAnalyzer {
   /// Analyzes the outlined region, replaces the RT call with a call to the
   /// outlined function, which is also modified to remove the arguments that
   /// are not needed.
-  bool handleParallelRegion(CallBase *CB);
+  Instruction *handleParallelRegion(CallBase *CB);
   /// Analyzes Task region
   bool handleTaskRegion(CallBase *CB);
   /// Analyzes the done region and return next BB to analyze

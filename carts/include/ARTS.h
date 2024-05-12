@@ -13,6 +13,7 @@
 #include "noelle/core/Noelle.hpp"
 #include "noelle/core/Task.hpp"
 #include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/Instruction.h"
 
 namespace arts {
 /// Namespace for all ARTS related functionality.
@@ -27,14 +28,16 @@ public:
 
   void insertParamV(Value *V);
   void insertDepV(Value *V);
+  uint32_t getParamC();
+  uint32_t getDepC();
 
   EDT *E;
   /// Paramc are the number of static parameters.
   /// It corresponds to the number of first private variables.
-  uint64_t ParamC = 0;
+  // uint64_t ParamC = 0;
   /// Depc is the number of dependencies required for the EDT to run.
   /// It corresponds to the number of shared variables.
-  uint64_t DepC = 0;
+  // uint64_t DepC = 0;
   /// Paramv are the static parameters that are copied into the EDT closure.
   /// It corresponds to the private variables.
   SetVector<Value *> ParamV;
@@ -65,19 +68,25 @@ public:
     OTHER,
   };
 
-  EDT(Type Ty, FunctionType *TaskSignature, Module &M,
-      const std::string &EDTName)
-      : Task(TaskSignature, M, EDTName), Env(this), Ty(Ty) {}
+  EDT(Type Ty, FunctionType *TaskSignature, Module &M)
+      : Task(TaskSignature, M), Env(this), Ty(Ty) {
+        setName();
+      }
 
+  /// Interface
   void insertValueToEnv(Value *Val);
   void cloneAndAddBasicBlocks(Function *F);
-  void setF(Function *F) { this->F = F; }
+
+  const std::string getName() { return ("edt_" + Twine(ID)).str(); }
+  Instruction *getGuidAddr() { return GuidAddr; }
+  void setName() { F->setName("arts_" + getName());}
   Type getType() { return Ty; }
   EDTEnvironment &getEnv() { return Env; }
 
   /// Attributes
   EDTEnvironment Env;
   Type Ty = Type::OTHER;
+  Instruction *GuidAddr = nullptr;
 };
 
 inline raw_ostream &operator<<(raw_ostream &OS, EDT &Edt) {

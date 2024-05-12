@@ -8,6 +8,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "ARTSIRBuilder.h"
+#include "ARTS.h"
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/Support/Debug.h"
 
 // #include "llvm/ADT/SmallSet.h"
@@ -121,7 +123,6 @@ void ARTSIRBuilder::initializeEDT(EDT &E) {
   ExitBB->setName("edt.exit");
   /// Change EDT Task body function signature
   auto *EdtBody = E.getTaskBody();
-  EdtBody->setName("arts_edt_" + std::to_string(E.getID()));
   (EdtBody->arg_begin())->setName("paramc");
   (EdtBody->arg_begin() + 1)->setName("depc");
   (EdtBody->arg_begin() + 2)->setName("paramv");
@@ -135,9 +136,11 @@ void ARTSIRBuilder::insertEDTEntry(EDT &E) {
   auto *EdtBody = EntryBB->getParent();
   assert((EdtBody == E.getTaskBody()) &&
          "Entry BB parent must be the EDT Func");
-
   auto OldInsertPoint = Builder.saveIP();
-  Builder.SetInsertPoint(EntryBB->getTerminator());
+  if (EntryBB->getTerminator())
+    Builder.SetInsertPoint(EntryBB->getTerminator());
+  else
+    Builder.SetInsertPoint(EntryBB);
   /// Insert ParamV
   auto ParamVArg = EdtBody->arg_begin() + 1;
   for (auto En : enumerate(Env.ParamV)) {
@@ -167,61 +170,69 @@ void ARTSIRBuilder::insertEDTEntry(EDT &E) {
 
   redirectTo(EntryBB, E.getExit());
   Builder.restoreIP(OldInsertPoint);
-  // EntryBB->insertInto(EdtBody);
-  /// Add entry to the EDTBody function
 }
 
-// Function *ARTSIRBuilder::createEdt(StringRef Name) {
-//   const std::string FuncName = (Name + ".edt").str();
-//   LLVM_DEBUG(dbgs() << TAG  << TAG << "Creating EDT: " << FuncName << "\n");
-//   Function *Func =
-//       Function::Create(EdtFunction, GlobalValue::InternalLinkage, FuncName,
-//       M);
-//   /// Add entry BB that returns void
-//   BasicBlock *EntryBB = BasicBlock::Create(Builder.getContext(), "entry",
-//   Func); Builder.SetInsertPoint(EntryBB); Builder.CreateRetVoid(); return
-//   Func;
-// }
+CallInst *ARTSIRBuilder::insertEDTCall(EDT &E) {
+  LLVM_DEBUG(dbgs() << TAG << "Inserting EDT Call\n");
+  auto *EdtBody = E.getTaskBody();
+  auto &EdtEnv = E.getEnv();
+  const auto EdtName = E.getName();
+  /// Guid
+  reserveEDTGuid(E);
+  /// ParamC
+  AllocaInst *ParamC =
+      Builder.CreateAlloca(Int32, nullptr, EdtName + "_paramc");
+  Builder.CreateStore(ConstantInt::get(Int32, EdtEnv.getParamC()), ParamC);
+  /// ParamV
+  AllocaInst *ParamV =
+      Builder.CreateAlloca(Int64Ptr, nullptr, EdtName + "_paramv");
+  for (auto En : enumerate(EdtEnv.ParamV)) {
+    unsigned Index = En.index();
+    Value *Val = En.value();
+    auto ParamVName = "paramv." + Val->getName();
+    /// Create the GEP to store the value in the ParamV array
+    Value *ParamVElemPtr = Builder.CreateConstInBoundsGEP2_64(
+        Int64Ptr, ParamV, 0, Index, ParamVName);
+    /// If the value is a constant int, we need to store it in a variable
+    if (ConstantInt *CI = dyn_cast<ConstantInt>(Val)) {
+      Val = Builder.CreateAlloca(Int32, nullptr, ParamVName + ".val");
+      Builder.CreateStore(CI, Val);
+    }
+    /// Cast the value to int64
+    Value *Casted =
+        Builder.CreateBitCast(Val, Int64Ptr, ParamVName + ".val.casted");
+    Builder.CreateStore(Casted, ParamVElemPtr);
+  }
+  /// Depc
+  AllocaInst *DepC = Builder.CreateAlloca(Int32, nullptr, "depc");
+  Builder.CreateStore(ConstantInt::get(Int32, EdtEnv.getDepC()), DepC);
+  Value *Args[] = {Builder.CreateBitCast(EdtBody, EdtFunctionPtr),
+                   Builder.CreateBitCast(E.getGuidAddr(), Int32Ptr),
+                   Builder.CreateLoad(Int32, ParamC),
+                   Builder.CreateBitCast(ParamV, Int64Ptr),
+                   Builder.CreateLoad(Int32, DepC)};
+  Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
+  // LLVM_DEBUG(dbgs() << TAG << "Creating call to artsEdtCreateWithGuid: \n"
+  //                   << *F << "\n");
+  return Builder.CreateCall(F, Args);
+}
 
-// AllocaInst *ARTSIRBuilder::reserveEDTGuid(BasicBlock *EntryBB, uint32_t Node)
-// {
-//   auto OldInsertPoint = Builder.saveIP();
-//   Builder.SetInsertPoint(EntryBB);
-//   /// Create the call to reserve the GUID
-//   ConstantInt *ARTS_EDT_Enum =
-//       ConstantInt::get(Builder.getContext(), APInt(32, 1));
-//   Value *Args[] = {ARTS_EDT_Enum,
-//                    Builder.CreateIntCast(ConstantInt::get(Int32, Node),
-//                    Int32,
-//                                          /*isSigned*/ false)};
-//   CallInst *ReserveGuidCall = Builder.CreateCall(
-//       getOrCreateRuntimeFunctionPtr(ARTSRTL_artsReserveGuidRoute), Args);
-//   /// Create allocation of the GUID
-//   AllocaInst *GuidAddr = Builder.CreateAlloca(Int32Ptr, nullptr,
-//   "guid.addr");
-//   /// Store the GUID
-//   Builder.CreateStore(ReserveGuidCall, GuidAddr);
-//   Builder.restoreIP(OldInsertPoint);
-//   return GuidAddr;
-// }
-
-// void ARTSIRBuilder::insertEDTBlock(EDTBlock *EB, Function *EDTFunc) {
-//   LLVM_DEBUG(dbgs() << TAG  << TAG << "Inserting EDT Block\n");
-//   auto *BB = EB->BB;
-//   /// Detach BB from its parent
-//   BB->removeFromParent();
-//   /// Attach BB to the EDT Func
-//   if(EB->isEntry()) {
-//     /// Remove entry block
-//     BasicBlock *EntryBB = &EDTFunc->getEntryBlock();
-//     EntryBB->removeFromParent();
-//   }
-//   BB->insertInto(EDTFunc);
-//   /// Redirect last BB to BB
-//   BasicBlock *LastBB = &EDTFunc->back();
-//   if(LastBB != BB)
-//     redirectTo(LastBB, BB);
-// }
+void ARTSIRBuilder::reserveEDTGuid(EDT &E) {
+  const auto Node = 0;
+  /// Create the call to reserve the GUID
+  ConstantInt *ARTS_EDT_Enum =
+      ConstantInt::get(Builder.getContext(), APInt(32, 1));
+  Value *Args[] = {
+      ARTS_EDT_Enum,
+      Builder.CreateIntCast(ConstantInt::get(Int32, Node), Int32, false)};
+  CallInst *ReserveGuidCall = Builder.CreateCall(
+      getOrCreateRuntimeFunctionPtr(ARTSRTL_artsReserveGuidRoute), Args);
+  /// Create allocation of the GUID
+  E.GuidAddr =
+      Builder.CreateAlloca(Int32Ptr, nullptr, E.getName() + "_guid.addr");
+  /// Store the GUID
+  Builder.CreateStore(ReserveGuidCall, E.GuidAddr);
+}
 
 // Function *ARTSIRBuilder::initializeEDT(EdtInfo &EI, Function *EDTFunc,
 //                                        BasicBlock *CurBB) {
@@ -312,6 +323,63 @@ void ARTSIRBuilder::insertEDTEntry(EDT &E) {
 //   return nullptr;
 // }
 
+// Function *ARTSIRBuilder::createEdt(StringRef Name) {
+//   const std::string FuncName = (Name + ".edt").str();
+//   LLVM_DEBUG(dbgs() << TAG  << TAG << "Creating EDT: " << FuncName << "\n");
+//   Function *Func =
+//       Function::Create(EdtFunction, GlobalValue::InternalLinkage, FuncName,
+//       M);
+//   /// Add entry BB that returns void
+//   BasicBlock *EntryBB = BasicBlock::Create(Builder.getContext(), "entry",
+//   Func); Builder.SetInsertPoint(EntryBB); Builder.CreateRetVoid(); return
+//   Func;
+// }
+
+/// ---------------------------- Utils ---------------------------- ///
+void ARTSIRBuilder::redirectTo(BasicBlock *Source, BasicBlock *Target) {
+  if (Instruction *Term = Source->getTerminator()) {
+    auto *Br = cast<BranchInst>(Term);
+    assert(!Br->isConditional() &&
+           "BB's terminator must be an unconditional branch (or degenerate)");
+    BasicBlock *Succ = Br->getSuccessor(0);
+    Succ->removePredecessor(Source, /*KeepOneInputPHIs=*/true);
+    Br->setSuccessor(0, Target);
+    return;
+  }
+  /// Create unconditional branch
+  BranchInst::Create(Target, Source);
+}
+
+void ARTSIRBuilder::redirectTo(Function *Source, BasicBlock *Target) {
+  for (auto &SourceBB : *Source)
+    redirectTo(&SourceBB, Target);
+}
+
+void ARTSIRBuilder::redirectEntryAndExit(EDT &E, BasicBlock *OriginalEntry) {
+  /// Redirect Entry
+  auto *ClonedEntry = E.getCloneOfOriginalBasicBlock(OriginalEntry);
+  ClonedEntry->setName("edt.body");
+  redirectTo(E.getEntry(), ClonedEntry);
+  /// Redirect Exit
+  auto OriginalParent = OriginalEntry->getParent();
+  for (auto &BB : *OriginalParent) {
+    auto *Terminator = BB.getTerminator();
+    if (Terminator->getNumSuccessors() == 0) {
+      auto *ClonedBB = E.getCloneOfOriginalBasicBlock(&BB);
+      ClonedBB->getTerminator()->eraseFromParent();
+      redirectTo(ClonedBB, E.getExit());
+    }
+  }
+}
+
+void ARTSIRBuilder::setInsertPoint(BasicBlock *BB) {
+  Builder.SetInsertPoint(BB);
+}
+
+void ARTSIRBuilder::setInsertPoint(Instruction *I) {
+  Builder.SetInsertPoint(I);
+}
+
 /// ---------------------------- Private ---------------------------- ///
 void ARTSIRBuilder::initializeTypes() {
   LLVMContext &Ctx = M.getContext();
@@ -330,19 +398,4 @@ void ARTSIRBuilder::initializeTypes() {
   VarName = T;                                                                 \
   VarName##Ptr = PointerType::getUnqual(T);
 #include "ARTSKinds.def"
-}
-
-/// ---------------------------- Utils ---------------------------- ///
-void ARTSIRBuilder::redirectTo(BasicBlock *Source, BasicBlock *Target) {
-  if (Instruction *Term = Source->getTerminator()) {
-    auto *Br = cast<BranchInst>(Term);
-    assert(!Br->isConditional() &&
-           "BB's terminator must be an unconditional branch (or degenerate)");
-    BasicBlock *Succ = Br->getSuccessor(0);
-    Succ->removePredecessor(Source, /*KeepOneInputPHIs=*/true);
-    Br->setSuccessor(0, Target);
-    return;
-  }
-  /// Create unconditional branch
-  BranchInst::Create(Target, Source);
 }

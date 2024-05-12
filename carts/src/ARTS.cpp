@@ -16,6 +16,8 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 /// EDT Environment
 void EDTEnvironment::insertParamV(Value *V) { ParamV.insert(V); }
 void EDTEnvironment::insertDepV(Value *V) { DepV.insert(V); }
+uint32_t EDTEnvironment::getParamC() { return ParamV.size(); }
+uint32_t EDTEnvironment::getDepC() { return DepV.size(); }
 
 /// EDT
 void EDT::insertValueToEnv(Value *Val) {
