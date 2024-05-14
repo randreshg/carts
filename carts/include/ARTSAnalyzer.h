@@ -15,7 +15,7 @@ using namespace llvm;
 namespace arts {
 struct ARTSAnalyzer {
   // ARTSAnalyzer(AnalysisGetter AG) : AG(AG) {}
-  ARTSAnalyzer(Module &M, PDG &DG, ARTSIRBuilder &AIB) : M(M), DG(DG), AIB(AIB) {}
+  ARTSAnalyzer(Module &M, Noelle &NM, ARTSIRBuilder &AIB) : M(M), NM(NM), AIB(AIB) {}
 
   /// This function identifies the EDTs in the function
   bool identifyEDTs(Function &F);
@@ -24,12 +24,11 @@ struct ARTSAnalyzer {
   /// Analyzes the outlined region, replaces the RT call with a call to the
   /// outlined function, which is also modified to remove the arguments that
   /// are not needed.
-  Instruction *handleParallelRegion(CallBase *CB);
+  EDT *handleParallelRegion(CallBase *CB);
   /// Analyzes Task region
-  bool handleTaskRegion(CallBase *CB);
+  EDT *handleTaskRegion(CallBase *CB);
   /// Analyzes the done region and return next BB to analyze
-  BasicBlock *handleDoneRegion(BasicBlock *DoneBB, DominatorTree *DT,
-                               std::string PrefixName, std::string SuffixBB);
+  EDT *handleDoneRegion(EDT *DomEDT);
   /// EDTs
   uint64_t getNumEDTs();
 
@@ -40,9 +39,11 @@ private:
 
   /// Attributes
   Module &M;
+  /// Noelle Manager
+  Noelle &NM;
   // AnalysisGetter AG;
   /// Program Dependence Graph
-  PDG &DG;
+  // PDG &DG;
   /// ARTS IR Builder
   ARTSIRBuilder &AIB;
   /// Set of EDTs

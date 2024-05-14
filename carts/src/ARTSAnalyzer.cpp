@@ -3,6 +3,7 @@
 #include "ARTSUtils.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Support/Debug.h"
+#include <unordered_set>
 
 /// DEBUG
 #define DEBUG_TYPE "arts-analyzer"
@@ -88,33 +89,9 @@ bool ARTSAnalyzer::identifyEDTs(Function &F) {
       case omp::PARALLEL: {
         LLVM_DEBUG(dbgs() << TAG << "Parallel Region Found: " << "\n  " << *CB
                           << "\n");
-        CurrentI = handleParallelRegion(CB);
-        LLVM_DEBUG(dbgs() << " - NEW MODULE: " << *F.getParent() << "\n");
-        // /// Split block at __kmpc_parallel
-        // auto ParallelItrStr = std::to_string(ParallelRegion++);
-        // auto ParallelName = "par.region." + ParallelItrStr;
-        // BasicBlock *ParallelBB;
-        // if (CurrentI != &(CurrentBB->front())) {
-        //   ParallelBB = SplitBlock(CurrentI->getParent(), CurrentI, DT, LI,
-        //                           nullptr, ParallelName);
-        // } else {
-        //   ParallelBB = CurrentBB;
-        //   ParallelBB->setName(ParallelName);
-        // }
-
-        // /// Split block at the next instruction
-        // CurrentI = CurrentI->getNextNonDebugInstruction();
-
-        // /// Analyze Done Region
-        // if (!isa<ReturnInst>(CurrentI)) {
-        //   BasicBlock *ParallelDone =
-        //       SplitBlock(ParallelBB, CurrentI, DT, LI, nullptr);
-        //   NextBB = handleDoneRegion(ParallelDone, DT, "par.",
-        //   ParallelItrStr);
-        // }
-
-        /// Analyze Outlined Region
-        // handleParallelOutlinedRegion(CB);
+        auto *ParallelEDT = handleParallelRegion(CB);
+        auto *DoneEDT = handleDoneRegion(ParallelEDT);
+        CurrentI = DoneEDT->CallInst;
       } break;
       case omp::TASKALLOC: {
         LLVM_DEBUG(dbgs() << TAG << "Task Region Found: " << "\n  " << *CB
@@ -204,248 +181,10 @@ void ARTSAnalyzer::analyzeDeps() {
   ///   guarantee that the changes performed in the region are visible
   ///   after the region. This is because the task may not be executed
   ///   immediately.
-
-  //   /// Analyze callgraph
-  //   LLVM_DEBUG(dbgs() << TAG << "Analyzing EDTs\n");
-  //   /// Iterate through all the functions that represents an EDT
-
-  //   CallGraph &CG = AM.getResult<CallGraphAnalysis>(AT.M);
-  //   LoopInfo *LI = nullptr;
-  //   // // CG.dump();
-
-  //   // LLVM_DEBUG(dbgs() << "\n---------------------------------\n");
-  //   for(auto &CGItr : CG) {
-  //     const Function *F = CGItr.first;
-  //     /// Skip external functions
-  //     if (!F || !F->isDefinitionExact())
-  //       continue;
-
-  //     /// Get the Caller EDT -> EDT representing F that calls other EDTs
-  //     EdtInfo *CallerEdt = AT.getEdt(const_cast<Function*>(F));
-  //     if(!CallerEdt)
-  //       continue;
-  //     LLVM_DEBUG(dbgs() << TAG << "EDT: " << F->getName() << "\n");
-
-  //     /// Analyze Callees
-  //     CallGraphNode *CGN = CGItr.second.get();
-  //     for(CallGraphNode::CallRecord &Edge : *CGN) {
-  //       if (!Edge.first)
-  //         continue;
-
-  //       /// We are only concerned with calls to EDTs
-  //       CallBase *CB = cast<CallBase>(*Edge.first);
-  //       Function *CalleeFn = CB->getCalledFunction();
-  //       EdtInfo *CalleeEdt = AT.getEdt(CalleeFn);
-  //       if(!CalleeEdt)
-  //         continue;
-  //       LLVM_DEBUG(dbgs() << "  - Callee: " << CalleeFn->getName() << "\n");
-
-  //       /// For now, we are only concerned with Parallel EDTs
-  //       // if(CalleeEdt->getType() != EdtInfo::PARALLEL)
-  //       //   continue;
-
-  //       /// If CB is in a loop, continue
-  //       // Loop *L = LI->getLoopFor(CB->getParent());
-
-  //       /// If Callee EDT is a parallel region, we are only concerned with
-  //       the successor
-  //       /// EDT. (Note: There should be only one successor)
-
-  //       /// Get the successor BasicBlock
-  //       BasicBlock *CBParent = CB->getParent();
-
-  //       /// Assert that there is only one successor
-
-  //       switch(CalleeEdt->getType()){
-  //         case EdtInfo::PARALLEL: {
-  //           LLVM_DEBUG(dbgs() << "   - This is a ParallelEDT. Analyzing
-  //           ParalllelEDT Done \n");
-  //           /// Get the successor EDT
-  //           BasicBlock *SuccBB = CBParent->getSingleSuccessor();
-  //           assert(SuccBB && "There should be only one successor");
-  //           CallBase *EdtCall = AT.getEdtCall(SuccBB);
-  //           EdtInfo *SuccEdt = AT.getEdt(EdtCall);
-  //           assert(SuccEdt && "Successor EDT not found");
-  //           /// Analyze call arguments t
-  //           /// Analyze shared variables of CalleeEdt
-  //           // for(auto &Shared : CalleeEdt->DE.Shareds) {
-  //           //   /// If the shared variable is not in the successor EDT, add
-  //           it
-  //           //   if(!SuccEdt->DE.Shareds.count(Shared)) {
-  //           //     SuccEdt->DE.Shareds.insert(Shared);
-  //           //     LLVM_DEBUG(dbgs() << "   - Adding shared variable: " <<
-  //           *Shared << "\n");
-  //           //   }
-  //           // }
-
-  //         } break;
-  //         case EdtInfo::TASK: {
-  //           // /// Get the successor EDT
-  //           // EdtInfo *SuccEdt = CalleeEdt->Successors[0];
-  //           // LLVM_DEBUG(dbgs() << "    - Succ: " << SuccEdt->F->getName()
-  //           <<
-  //           "\n");
-  //           // /// Add dependency
-  //           // CallerEdt->Successors.push_back(SuccEdt);
-  //           // SuccEdt->Predecessors.push_back(CallerEdt);
-  //         } break;
-  //         case EdtInfo::OTHER: {
-  //           // /// Get the successor EDT
-  //           // EdtInfo *SuccEdt = CalleeEdt->Successors[0];
-  //           // LLVM_DEBUG(dbgs() << "    - Succ: " << SuccEdt->F->getName()
-  //           <<
-  //           "\n");
-  //           // /// Add dependency
-  //           // CallerEdt->Successors.push_back(SuccEdt);
-  //           // SuccEdt->Predecessors.push_back(CallerEdt);
-  //         } break;
-  //         default:
-  //           break;
-  //       }
-  //       /// Get the successor EDT
-  //       // EdtInfo *SuccEdt = nullptr;
-  //       // if(CalleeEdt->Type == EdtInfo::PARALLEL) {
-  //       //   SuccEdt = CalleeEdt->Successors[0];
-  //       //   LLVM_DEBUG(dbgs() << "    - Succ: " << SuccEdt->F->getName() <<
-  //       "\n");
-  //       // }
-
-  //     }
-  //   }
-
-  // //   DominatorTree *DT = AG.getAnalysis<DominatorTreeAnalysis>(*F);
-  // //   // auto &MSSA = AG.getAnalysis<MemorySSAAnalysis>(*F,
-  // false)->getMSSA();
-  // //   auto *MD = AG.getAnalysis<MemoryDependenceAnalysis>(*F);
-  // // // MemorySSA &MSSA = AM.getResult<MemorySSAAnalysis>(F).getMSSA();
-  // //   LLVM_DEBUG(dbgs()<<*F<<"\n");
-  // //   // MSSA.dump();
-
-  // //     /// Iterate through the arguments of the call
-  // //     for(uint32_t ArgItr = 0; ArgItr < CB->data_operands_size();
-  // ArgItr++)
-  // {
-  // //       Value *Arg = CB->getArgOperand(ArgItr);
-  // //       LLVM_DEBUG(dbgs() << "     -- Arg: " << *Arg << "\n");
-  // //       /// We are only concerned with instructions
-  // //       Instruction *ArgInst = dyn_cast<Instruction>(Arg);
-  // //       if(!ArgInst)
-  // //         continue;
-  // //       /// Is used after the BB?
-  // //       if(!ArgInst->isUsedOutsideOfBlock(ArgInst->getParent()))
-  // //         continue;
-  // //       LLVM_DEBUG(dbgs() << "     -- It is used outside the BB\n");
-  // //       /// Get Dep
-  // //       MemDepResult Dep = MD->getDependency(ArgInst);
-  // //       if(Dep.getInst())
-  // //         LLVM_DEBUG(dbgs() << "     -- Dep: " << *Dep.getInst() << "\n");
-  // //       // const MemoryDependenceResults::NonLocalDepInfo &Deps =
-  // MD->getNonLocalPointerDependency(Arg, CB->getParent());
-  // //       // for (const NonLocalDepEntry &I : Deps) {
-  // //         // LLVM_DEBUG(dbgs() << "     -- NonLocalDepBB: " <<
-  // I.getBB()->getName() << "\n");
-  // //       // }
-  // //     }
-
-  // //     // MD->getDependency(CB);
-  // //     // MemDepResult Dep = MD->getDependency(CB);
-  // //     // Instruction *DepInst = Dep.getInst();
-  // //     // if(!DepInst)
-  // //     //   continue;
-  // //     // LLVM_DEBUG(dbgs() << "     -- Dep: " << *DepInst << "\n");
-
-  // //     // // Non-local case.
-  // //     // const MemoryDependenceResults::NonLocalDepInfo &deps =
-  // //     //   MD->getNonLocalCallDependency(CB);
-  // //     // // FIXME: Move the checking logic to MemDep!
-  // //     // CallInst* cdep = nullptr;
-  // //     // // Check to see if we have a single dominating call instruction
-  // that is
-  // //     // // identical to C.
-  // //     // for (const NonLocalDepEntry &I : deps) {
-  // //     //   LLVM_DEBUG(dbgs() << "     -- NonLocalDepBB: " <<
-  // I.getBB()->getName() << "\n");
-  // //     //   // LLVM_DEBUG(dbgs() << "     -- NonLocalDepEntry: " <<
-  // *I.getResult().getInst() << "\n");
-  // //     //   // if (I.getResult().isNonLocal())
-  // //     //   //   continue;
-
-  // //     //   // // We don't handle non-definitions.  If we already have a
-  // call, reject
-  // //     //   // // instruction dependencies.
-  // //     //   // if (!I.getResult().isDef() || cdep != nullptr) {
-  // //     //   //   cdep = nullptr;
-  // //     //   //   break;
-  // //     //   // }
-
-  // //     //   // CallInst *NonLocalDepCall =
-  // dyn_cast<CallInst>(I.getResult().getInst());
-  // //     //   // // FIXME: All duplicated with non-local case.
-  // //     //   // if (NonLocalDepCall && DT->properlyDominates(I.getBB(),
-  // C->getParent())) {
-  // //     //   //   cdep = NonLocalDepCall;
-  // //     //   //   continue;
-  // //     //   // }
-
-  // //     //   // cdep = nullptr;
-  // //     //   // break;
-  // //     // }
-
-  // //   }
-
-  // //   // }
-  // // }
-
-  // // LLVM_DEBUG(dbgs() << "\n---------------------------------\n");
-  // // We do a bottom-up SCC traversal of the call graph.  In other words, we
-  // // visit all callees before callers (leaf-first).
-  // // for (scc_iterator<CallGraph *> I = scc_begin(&CG); !I.isAtEnd(); ++I) {
-  // //   const std::vector<CallGraphNode *> &SCC = *I;
-  // //   assert(!SCC.empty() && "SCC with no functions?");
-
-  // //   // Skip external node SCCs.
-  // //   Function *F = SCC[0]->getFunction();
-  // //   if (!F || !F->isDefinitionExact())
-  // //     continue;
-  // //   /// Get corresponding EDT
-  // //   EdtInfo *EdtInfo = AT.getEdt(F);
-  // //   if(!EdtInfo)
-  // //     continue;
-
-  // //   /// Debug SCC
-  // //   LLVM_DEBUG(dbgs() << TAG << "SCC: \n");
-  // //   /// Called Functions
-  // //   LLVM_DEBUG(for (CallGraphNode *CGN : SCC) {
-  // //     // CGN->getFunction()
-  // //     // if (!SCCI.hasCycle()) // We only care about cycles, not
-  // standalone nodes.
-  // //     // continue;
-  // //     dbgs() << TAG << "  - " << CGN->getFunction()->getName() << "\n";
-  // //     /// DEBUG CGN
-  // //     CGN->dump();
-
-  // //   });
-  // // }
-  //   /// Analyze EDTs
-  //   // for(auto Itr : AT.`orFunction) {
-  //     // auto *F = Itr.first;
-  //     // auto &EdtInfo = Itr.second;
-  //     // /// Analyze Data Environment
-  //     // for (auto &Arg : F->args()) {
-  //     //   Type *ArgType = Arg.getType();
-  //     //   /// For now assume that if it is a pointer, it is a shared
-  //     variable
-  //     //   if (PointerType *PT = dyn_cast<PointerType>(ArgType))
-  //     //     AT.insertArgToDE(&Arg, DataEnv::SHARED, EdtInfo);
-  //     //   /// If not, it is a first private variable
-  //     //   else
-  //     //     AT.insertArgToDE(&Arg, DataEnv::FIRSTPRIVATE, EdtInfo);
-  //     // }
-  //     // LLVM_DEBUG(dbgs() << EdtInfo.DE << "\n");
-  //   // }
 }
 
-Instruction *ARTSAnalyzer::handleParallelRegion(CallBase *CB) {
+EDT *ARTSAnalyzer::handleParallelRegion(CallBase *CB) {
+  LLVM_DEBUG(dbgs() << "\n" << TAG << "Handling parallel region\n");
   /// Get RTF Info
   const Data &RTI = omp::getRTData(omp::PARALLEL);
   auto *OutlinedFn = dyn_cast<Function>(
@@ -458,58 +197,49 @@ Instruction *ARTSAnalyzer::handleParallelRegion(CallBase *CB) {
     auto *Arg = CB->getArgOperand(ArgNum);
     ParallelEDT.insertValueToEnv(Arg);
   }
-  omp::preprocessing(CB);
-  /// Insert EdtEntry in the ParallelEdt and add BBs of the OutlinedFn into the
   /// ParallelEDT Body
+  omp::preprocessing(CB);
   AIB.insertEDTEntry(ParallelEDT);
   ParallelEDT.cloneAndAddBasicBlocks(OutlinedFn);
   AIB.redirectEntryAndExit(ParallelEDT, &(OutlinedFn->getEntryBlock()));
   ParallelEDT.adjustDataAndControlFlowToUseClones();
-
-  /// Debug
-  // LLVM_DEBUG(dbgs() << ParallelEDT << "\n");
   /// InsertEDTCall
   AIB.setInsertPoint(CB);
-  auto *EDTCall = AIB.insertEDTCall(ParallelEDT);
-  /// Remove the call to the parallel region
+  ParallelEDT.CallInst = AIB.insertEDTCall(ParallelEDT);
   omp::postprocessing(CB);
   removeValue(CB, true);
   OutlinedFn->eraseFromParent();
-  return EDTCall;
+  return &ParallelEDT;
 }
 
-bool ARTSAnalyzer::handleTaskRegion(CallBase *CB) {
-  //   /// Analyze return pointer
-  //   // For the shared variables we are interested in all stores that are done
-  //   // to the shareds field of the kmp_task_t struct. For the firstprivate
-  //   // variables we are interested in all stores that are done to the
-  //   privates
-  //   // field of the kmp_task_t_with_privates struct.
-  //   //
-  //   // The returned Val is a pointer to the
-  //   // kmp_task_t_with_privates struct.
-  //   // struct kmp_task_t_with_privates {
-  //   //    kmp_task_t task_data;
-  //   //    kmp_privates_t privates;
-  //   // };
-  //   // typedef struct kmp_task {
-  //   //   void *shareds;
-  //   //   kmp_routine_entry_t routine;
-  //   //   kmp_int32 part_id;
-  //   //   kmp_cmplrdata_t data1;
-  //   //   kmp_cmplrdata_t data2;
-  //   // } kmp_task_t;
-  //   //
-  //   // - For shared variables, the access of the shareds field is obtained by
-  //   // obtaining stores done to offset 0 of the returned Val of the
+EDT *ARTSAnalyzer::handleTaskRegion(CallBase *CB) {
+  /// Analyze return pointer
+  // For the shared variables we are interested in all stores that are done
+  // to the shareds field of the kmp_task_t struct. For the firstprivate
+  // variables we are interested in all stores that are done to the
+  // privates
+  // field of the kmp_task_t_with_privates struct.
+  //
+  // The returned Val is a pointer to the
+  // kmp_task_t_with_privates struct.
+  // struct kmp_task_t_with_privates {
+  //    kmp_task_t task_data;
+  //    kmp_privates_t privates;
+  // };
+  // typedef struct kmp_task {
+  //   void *shareds;
+  //   kmp_routine_entry_t routine;
+  //   kmp_int32 part_id;
+  //   kmp_cmplrdata_t data1;
+  //   kmp_cmplrdata_t data2;
+  // } kmp_task_t;
+  //
+  // - For shared variables, the access of the shareds field is obtained by
+  //   obtaining stores done to offset 0 of the returned Val of the
   //   taskalloc.
-  //   // -For firstprivate variables, the access of the privates field is
-  //   obtained
-  //   // by obtaining stores done to offset 8 of the returned Val of the
-  //   // kmp_task_t_with_privates struct.
-  //   //
-  //   // The function returns ChangeStatus::CHANGED if the data environment is
-  //   // updated, ChangeStatus::UNCHANGED otherwise.
+  // - For firstprivate variables, the access of the privates field is
+  //   obtained by obtaining stores done to offset 8 of the returned Val of the
+  //   kmp_task_t_with_privates struct.
 
   //   const uint32_t TaskOutlinedFunctionPos = 5;
   //   /// Maps a value to an offset in the task data
@@ -665,52 +395,53 @@ bool ARTSAnalyzer::handleTaskRegion(CallBase *CB) {
 
   //   if(!identifyEDTs(*NewFn))
   //     return false;
-  return true;
+  return nullptr;
 }
 
-BasicBlock *ARTSAnalyzer::handleDoneRegion(BasicBlock *DoneBB,
-                                           DominatorTree *DT,
-                                           std::string PrefixName,
-                                           std::string SuffixBB) {
-  //   LLVM_DEBUG(dbgs() << "\n" <<  TAG << "Handling done region\n");
+EDT *ARTSAnalyzer::handleDoneRegion(EDT *DomEDT) {
+  LLVM_DEBUG(dbgs() << "\n" << TAG << "Handling done region\n");
+  auto *CallToEDT = DomEDT->CallInst;
+  auto *SplitInst = CallToEDT->getNextNonDebugInstruction();
+
   //   /// Get first instruction of BB to analyze if we need a new function
-  //   Instruction *FirstI = &*DoneBB->begin();
-  //   /// If it is a callbase, check if its a call to a RT function
-  //   if(auto *CB = dyn_cast<CallBase>(FirstI)) {
-  //     if(omp::isRTFunction(*CB))
-  //       return DoneBB;
-  //     /// TODO: What about other callbase?
-  //   }
+  // If Instruction is a return, we do not need a new function...
+  // If it is a call to another EDT, we do not need a new function...
 
-  //   /// Handle other instructions
-  //   auto DoneFnName = PrefixName + "edt.done";
-  //   Function *DoneFunction = createFunction(DT, DoneBB, true, DoneFnName);
-  //   // EdtInfo *DoneEDT = AT.insertEdt(EdtInfo::OTHER, DoneFunction);
-
-  //   /// Analyze Data Environment
-  //   /// The function arguments provide this information.
-  //   for (auto &Arg : DoneFunction->args()) {
-  //     Type *ArgType = Arg.getType();
-  //     /// For now assume that if it is a pointer, it is a shared variable
-  //     // if (PointerType *PT = dyn_cast<PointerType>(ArgType))
-  //     //   AT.insertArgToDE(&Arg, DataEnv::SHARED, *DoneEDT);
-  //     // /// If not, it is a first private variable
-  //     // else
-  //     //   AT.insertArgToDE(&Arg, DataEnv::FIRSTPRIVATE, *DoneEDT);
-  //   }
-  //   // LLVM_DEBUG(dbgs() << DoneEDT->DE << "\n");
-
-  //   /// Get caller of the Done function, and rename BB to par.done
-  //   auto DoneBBName = PrefixName + "done." + SuffixBB;
-  //   CallBase *DoneCB = dyn_cast<CallBase>(DoneFunction->user_back());
-  //   // AT.insertEdtCall(DoneCB);
-  //   auto *NewDoneBB = DoneCB->getParent();
-  //   NewDoneBB->setName(DoneBBName);
-
-  //   /// Analyze the instructions of the Done function
-  //   identifyEDTs(*DoneFunction);
-  //   return NewDoneBB->getNextNode();
-  return nullptr;
+  /// Split block at Call to EDT
+  LoopInfo *LI = nullptr;
+  DominatorTree *DT = nullptr;
+  BasicBlock *DoneBB = SplitBlock(CallToEDT->getParent(), SplitInst, DT, LI);
+  /// Create DoneEDT
+  auto &NDT = NM.getDominators(CallToEDT->getFunction())->DT;
+  auto Region = NDT.getDescendants(DoneBB);
+  BlockSequence RegionSeq;
+  for (auto *BB : Region)
+    RegionSeq.push_back(BB);
+  EDT &DoneEDT = *createEDT(EDT::Type::DONE);
+  /// Set DataEnvironment
+  CodeExtractor CE(RegionSeq);
+  SetVector<Value *> Inputs, Outputs, Sinks;
+  CE.findInputsOutputs(Inputs, Outputs, Sinks);
+  for (auto *I : Inputs)
+    DoneEDT.insertValueToEnv(I);
+  /// DoneEDT Body
+  AIB.insertEDTEntry(DoneEDT);
+  DoneEDT.cloneAndAddBasicBlocks(RegionSeq);
+  AIB.redirectEntryAndExit(DoneEDT, RegionSeq.front());
+  DoneEDT.adjustDataAndControlFlowToUseClones();
+  /// InsertEDTCall
+  auto *NextInst = CallToEDT->getNextNonDebugInstruction();
+  assert(isa<BranchInst>(NextInst) && "Next instruction is not a BranchInst");
+  AIB.setInsertPoint(NextInst);
+  DoneEDT.CallInst = AIB.insertEDTCall(DoneEDT);
+  /// Replace NextInst with a ret instruction
+  IRBuilder<> Builder(NextInst);
+  Builder.CreateRet(Builder.getInt32(0));
+  NextInst->eraseFromParent();
+  // Remove BBs
+  for (auto *BB : RegionSeq)
+    BB->eraseFromParent();
+  return &DoneEDT;
 }
 
 uint64_t ARTSAnalyzer::getNumEDTs() { return EDTs.size(); }

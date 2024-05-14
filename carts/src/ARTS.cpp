@@ -37,3 +37,8 @@ void EDT::cloneAndAddBasicBlocks(Function *F) {
   for (auto &BB : *F)
     cloneAndAddBasicBlock(&BB);
 }
+
+void EDT::cloneAndAddBasicBlocks(BlockSequence &BBs) {
+  for (auto BB : BBs)
+    cloneAndAddBasicBlock(BB);
+}

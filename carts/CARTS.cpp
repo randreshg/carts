@@ -61,7 +61,7 @@ struct CARTS : public ModulePass {
 
     /// Identify number of OpenMP regions
     auto AIB = ARTSIRBuilder(M);
-    auto AA = ARTSAnalyzer(M, PDG, AIB);
+    auto AA = ARTSAnalyzer(M, NM, AIB);
 
     // AA.getNumberofOpenMPRegions(M);
     AA.identifyEDTs(*MainFunction);
