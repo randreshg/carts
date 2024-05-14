@@ -65,7 +65,8 @@ public:
     LOOP,
     PARALLEL,
     WRAPPER,
-    OTHER,
+    DONE,
+    OTHER
   };
 
   EDT(Type Ty, FunctionType *TaskSignature, Module &M)
@@ -76,6 +77,7 @@ public:
   /// Interface
   void insertValueToEnv(Value *Val);
   void cloneAndAddBasicBlocks(Function *F);
+  void cloneAndAddBasicBlocks(BlockSequence &BBs);
 
   const std::string getName() { return ("edt_" + Twine(ID)).str(); }
   Instruction *getGuidAddr() { return GuidAddr; }
@@ -86,7 +88,10 @@ public:
   /// Attributes
   EDTEnvironment Env;
   Type Ty = Type::OTHER;
-  Instruction *GuidAddr = nullptr;
+  /// First and last instruction of the EDT
+  Instruction *GuidAddr = nullptr;  // First instruction
+  Instruction *CallInst = nullptr;  // Last instruction
+
 };
 
 inline raw_ostream &operator<<(raw_ostream &OS, EDT &Edt) {

@@ -13,32 +13,19 @@
 #include <cstdint>
 
 namespace arts {
-using BlockSequence = SmallVector<BasicBlock *, 0>;
-
-/// This function finds the inputs and outputs of a region.
-void getInputsOutputs(BlockSequence Region, DominatorTree *DT,
-                      SetVector<Value *> &Inputs, SetVector<Value *> &Outputs,
-                      SetVector<Value *> &Sinks);
 
 /// It finds the BBs that are dominated by FromBB and add
 /// them to the DominatedBlocks vector.
 void getDominatedBBs(BasicBlock *FromBB, DominatorTree &DT,
                      BlockSequence &DominatedBlocks);
-
 /// This function finds the calls that are dominated by CB and add
 /// them to the Calls vector.
-void getDominatedCalls(CallBase *CB, DominatorTree *DT,
-                       SmallSetVector<CallBase *, 16> &Calls);
-
-/// Remove Instruction
-void removeInstruction(Instruction *I);
-
+// void getDominatedCalls(CallBase *CB, DominatorTree *DT,
+//                        SmallSetVector<CallBase *, 16> &Calls);
 /// Remove values interface
 void removeValue(Value *V, bool RecursiveRemove = false,
                  bool RecursiveUndef = true, Instruction *Exclude = nullptr);
-
 void removeValues(SmallVector<Value *, 16> ValuesToRemove);
-
 /// Function to replace uses of a Value with UndefValue.
 /// - Instructions can be removed if requested.
 /// - The processs can also be performed in a recursive way by replacing
@@ -46,17 +33,6 @@ void removeValues(SmallVector<Value *, 16> ValuesToRemove);
 void replaceValueWithUndef(Value *V, bool RemoveInsts = false,
                            bool Recursive = true,
                            Instruction *Exclude = nullptr);
-// void replaceFunctionArgWithUndef(Function *F);
-// void replaceFunctionArgWithUndef(Function *F, uint32_t ArgNum);
-// void replaceFunctionArgWithUndef(Argument *Arg);
-
-/// Given a basic block, this function creates a function that contains
-/// the instructions of the BB. The function is then inserted to the
-/// module.
-Function *createFunction(DominatorTree *DT, BasicBlock *FromBB, bool DTAnalysis,
-                         std::string FunctionName,
-                         SmallVector<Value *, 0> *ExcludeArgsFromAggregate);
-
 /// Removes the lifetime markers from the function.
 void removeLifetimeMarkers(Function &F);
 

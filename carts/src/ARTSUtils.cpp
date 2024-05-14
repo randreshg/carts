@@ -26,148 +26,14 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 /// ARTSUtils
 namespace arts {
 
-namespace omp {
-/// OMP INFO
-void preprocessing(CallBase *CB) {
-  assert((getRTFunction(CB) == Type::PARALLEL) &&
-         "Only parallel region is supported - as of now");
-  auto Data = getRTData(Type::PARALLEL);
-  auto *OutlinedFn = dyn_cast<Function>(
-      CB->getArgOperand(Data.OutlinedFnPos)->stripPointerCasts());
-
-  Argument *FnArgItr = OutlinedFn->arg_begin() + Data.KeepArgsFrom;
-  Use *CallArgItr = CB->arg_begin() + Data.KeepCallArgsFrom;
-  for (auto ArgNum = Data.KeepArgsFrom; ArgNum < OutlinedFn->arg_size();
-       ++CallArgItr, ++FnArgItr, ++ArgNum) {
-    FnArgItr->replaceAllUsesWith(*CallArgItr);
-  }
-  /// Replace with Undef the function arguments that are not needed
-  FnArgItr = OutlinedFn->arg_begin();
-  for (auto ArgNum = 0u; ArgNum < Data.KeepArgsFrom; ++ArgNum, ++FnArgItr) {
-    FnArgItr->replaceAllUsesWith(UndefValue::get(FnArgItr->getType()));
+void getDominatedBBs(BasicBlock *FromBB, DominatorTree &DT,
+                     BlockSequence &DominatedBlocks) {
+  Function &F = *FromBB->getParent();
+  for (auto &ToBB : F) {
+    if (DT.dominates(FromBB, &ToBB))
+      DominatedBlocks.push_back(&ToBB);
   }
 }
-
-void postprocessing(CallBase *CB) {
-  assert((getRTFunction(CB) == Type::PARALLEL) &&
-         "Only parallel region is supported - as of now");
-  auto Data = getRTData(Type::PARALLEL);
-  auto *OutlinedFn = dyn_cast<Function>(
-      CB->getArgOperand(Data.OutlinedFnPos)->stripPointerCasts());
-
-  Use *CallArgItr = CB->arg_begin() + Data.KeepCallArgsFrom;
-  Argument *FnArgItr = OutlinedFn->arg_begin() + Data.KeepArgsFrom;
-  for (auto ArgNum = Data.KeepCallArgsFrom; ArgNum < CB->arg_size();
-       ++CallArgItr, ++FnArgItr, ++ArgNum) {
-    /// Iterate users
-    SmallVector<Use *> ListOfUsesToReplace;
-    for (User *Usr : (*CallArgItr)->users()) {
-      Instruction &UsrI = *cast<Instruction>(Usr);
-      if (UsrI.getParent()->getParent() == OutlinedFn) {
-        for (Use &U : Usr->operands())
-          ListOfUsesToReplace.push_back(&U);
-      }
-    }
-    for (auto *U : ListOfUsesToReplace)
-      U->set(UndefValue::get((*CallArgItr)->getType()));
-    CallArgItr->set(UndefValue::get((*CallArgItr)->getType()));
-  }
-}
-
-Data getRTData(omp::Type RTF) {
-  switch (RTF) {
-  case omp::Type::PARALLEL:
-    return {2, 2, 3};
-  case omp::Type::TASK:
-    return {5, 0, 0};
-  default:
-    return {0, 0, 0};
-  }
-}
-
-omp::Type getRTFunction(Function *F) {
-  if (!F)
-    return Type::OTHER;
-  auto CalleeName = F->getName();
-  if (CalleeName == "__kmpc_fork_call")
-    return Type::PARALLEL;
-  if (CalleeName == "__kmpc_omp_task_alloc")
-    return Type::TASKALLOC;
-  if (CalleeName == "__kmpc_omp_task")
-    return Type::TASK;
-  if (CalleeName == "__kmpc_omp_task_alloc_with_deps")
-    return Type::TASKDEP;
-  if (CalleeName == "__kmpc_omp_taskwait")
-    return Type::TASKWAIT;
-  if (CalleeName == "omp_set_num_threads")
-    return Type::SET_NUM_THREADS;
-  if (CalleeName == "__kmpc_for_static_init_4")
-    return Type::PARALLEL_FOR;
-  return Type::OTHER;
-}
-
-omp::Type getRTFunction(CallBase &CB) {
-  auto *Callee = CB.getCalledFunction();
-  return getRTFunction(Callee);
-}
-
-omp::Type getRTFunction(Instruction *I) {
-  auto *CB = dyn_cast<CallBase>(I);
-  if (!CB)
-    return Type::OTHER;
-  return getRTFunction(*CB);
-}
-
-bool isTaskFunction(Function *F) {
-  auto RT = getRTFunction(F);
-  if (RT == Type::TASK || RT == Type::TASKDEP || RT == Type::TASKWAIT)
-    return true;
-  return false;
-}
-
-bool isRTFunction(CallBase &CB) {
-  auto RT = getRTFunction(CB);
-  if (RT != Type::OTHER)
-    return true;
-  return false;
-}
-} // namespace omp
-
-// void getInputsOutputs(BlockSequence Region, DominatorTree *DT,
-//                       SetVector<Value *> &Inputs,
-//                       SetVector<Value *> &Outputs,
-//                       SetVector<Value *> &Sinks) {
-//   Function &F = *Region.front()->getParent();
-//   AssumptionCache *AC = AG.getAnalysis<AssumptionAnalysis>(F);
-//   CodeExtractorAnalysisCache CEAC(F);
-//   CodeExtractor CE(Region, DT, /* AggregateArgs */ false, /* BFI */ nullptr,
-//                     /* BPI */ nullptr, AC, /* AllowVarArgs */ false,
-//                     /* AllowAlloca */ false, /* Suffix */ "");
-
-//   // SetVector<Value *> Inputs, Outputs, Sinks;
-//   CE.findInputsOutputs(Inputs, Outputs, Sinks);
-//   LLVM_DEBUG(dbgs() << TAG << "  - Inputs: \n");
-//   for (auto *I : Inputs) {
-//     LLVM_DEBUG(dbgs() << "    -- " <<  *I << "\n");
-//   }
-//   LLVM_DEBUG(dbgs() << TAG << "  - Outputs: \n");
-//   for (auto *O : Outputs) {
-//     LLVM_DEBUG(dbgs() << "  -- " << *O << "\n");
-//   }
-//   LLVM_DEBUG(dbgs() << TAG << "  - Sinks: \n");
-//   for (auto *S : Sinks) {
-//     LLVM_DEBUG(dbgs() << "    -- " << *S << "\n");
-//   }
-// }
-
-// void getDominatedBBs(BasicBlock *FromBB, DominatorTree &DT,
-//                      BlockSequence &DominatedBlocks) {
-//   Function &F = *FromBB->getParent();
-//   for (auto &ToBB : F) {
-//     if (DT.dominates(FromBB, &ToBB))
-//       DominatedBlocks.push_back(&ToBB);
-//   }
-// }
 
 // void getDominatedCalls(CallBase *CB, DominatorTree *DT,
 //                        SmallSetVector<CallBase *, 16> &Calls) {
@@ -271,20 +137,6 @@ void replaceValueWithUndef(Value *V, bool RemoveInsts, bool Recursive,
   }
 }
 
-// void replaceFunctionArgWithUndef(Function *F) {
-//   for (auto &Arg : F->args())
-//     replaceValueWithUndef(&Arg, true, true);
-// }
-
-// void replaceFunctionArgWithUndef(Function *F, uint32_t ArgNum) {
-//   auto ArgItr = F->arg_begin() + ArgNum;
-//   replaceValueWithUndef(&*ArgItr, true, true);
-// }
-
-// void replaceFunctionArgWithUndef(Argument *Arg) {
-//   replaceValueWithUndef(Arg, true, true);
-// }
-
 // Function *
 // createFunction(DominatorTree *DT, BasicBlock *FromBB,
 //                bool DTAnalysis = false, std::string FunctionName = "",
@@ -343,5 +195,110 @@ void removeLifetimeMarkers(Function &F) {
     }
   }
 }
+/// -------------------------------- OMP -------------------------------- ///
+namespace omp {
+void preprocessing(CallBase *CB) {
+  assert((getRTFunction(CB) == Type::PARALLEL) &&
+         "Only parallel region is supported - as of now");
+  auto Data = getRTData(Type::PARALLEL);
+  auto *OutlinedFn = dyn_cast<Function>(
+      CB->getArgOperand(Data.OutlinedFnPos)->stripPointerCasts());
+
+  Argument *FnArgItr = OutlinedFn->arg_begin() + Data.KeepArgsFrom;
+  Use *CallArgItr = CB->arg_begin() + Data.KeepCallArgsFrom;
+  for (auto ArgNum = Data.KeepArgsFrom; ArgNum < OutlinedFn->arg_size();
+       ++CallArgItr, ++FnArgItr, ++ArgNum) {
+    FnArgItr->replaceAllUsesWith(*CallArgItr);
+  }
+  /// Replace with Undef the function arguments that are not needed
+  FnArgItr = OutlinedFn->arg_begin();
+  for (auto ArgNum = 0u; ArgNum < Data.KeepArgsFrom; ++ArgNum, ++FnArgItr) {
+    FnArgItr->replaceAllUsesWith(UndefValue::get(FnArgItr->getType()));
+  }
+}
+
+void postprocessing(CallBase *CB) {
+  assert((getRTFunction(CB) == Type::PARALLEL) &&
+         "Only parallel region is supported - as of now");
+  auto Data = getRTData(Type::PARALLEL);
+  auto *OutlinedFn = dyn_cast<Function>(
+      CB->getArgOperand(Data.OutlinedFnPos)->stripPointerCasts());
+
+  Use *CallArgItr = CB->arg_begin() + Data.KeepCallArgsFrom;
+  Argument *FnArgItr = OutlinedFn->arg_begin() + Data.KeepArgsFrom;
+  for (auto ArgNum = Data.KeepCallArgsFrom; ArgNum < CB->arg_size();
+       ++CallArgItr, ++FnArgItr, ++ArgNum) {
+    SmallVector<Use *> ListOfUsesToReplace;
+    for (User *Usr : (*CallArgItr)->users()) {
+      Instruction &UsrI = *cast<Instruction>(Usr);
+      if (UsrI.getParent()->getParent() == OutlinedFn) {
+        for (Use &U : Usr->operands())
+          ListOfUsesToReplace.push_back(&U);
+      }
+    }
+    for (auto *U : ListOfUsesToReplace)
+      U->set(UndefValue::get((*CallArgItr)->getType()));
+    CallArgItr->set(UndefValue::get((*CallArgItr)->getType()));
+  }
+}
+
+Data getRTData(omp::Type RTF) {
+  switch (RTF) {
+  case omp::Type::PARALLEL:
+    return {2, 2, 3};
+  case omp::Type::TASK:
+    return {5, 0, 0};
+  default:
+    return {0, 0, 0};
+  }
+}
+
+omp::Type getRTFunction(Function *F) {
+  if (!F)
+    return Type::OTHER;
+  auto CalleeName = F->getName();
+  if (CalleeName == "__kmpc_fork_call")
+    return Type::PARALLEL;
+  if (CalleeName == "__kmpc_omp_task_alloc")
+    return Type::TASKALLOC;
+  if (CalleeName == "__kmpc_omp_task")
+    return Type::TASK;
+  if (CalleeName == "__kmpc_omp_task_alloc_with_deps")
+    return Type::TASKDEP;
+  if (CalleeName == "__kmpc_omp_taskwait")
+    return Type::TASKWAIT;
+  if (CalleeName == "omp_set_num_threads")
+    return Type::SET_NUM_THREADS;
+  if (CalleeName == "__kmpc_for_static_init_4")
+    return Type::PARALLEL_FOR;
+  return Type::OTHER;
+}
+
+omp::Type getRTFunction(CallBase &CB) {
+  auto *Callee = CB.getCalledFunction();
+  return getRTFunction(Callee);
+}
+
+omp::Type getRTFunction(Instruction *I) {
+  auto *CB = dyn_cast<CallBase>(I);
+  if (!CB)
+    return Type::OTHER;
+  return getRTFunction(*CB);
+}
+
+bool isTaskFunction(Function *F) {
+  auto RT = getRTFunction(F);
+  if (RT == Type::TASK || RT == Type::TASKDEP || RT == Type::TASKWAIT)
+    return true;
+  return false;
+}
+
+bool isRTFunction(CallBase &CB) {
+  auto RT = getRTFunction(CB);
+  if (RT != Type::OTHER)
+    return true;
+  return false;
+}
+} // namespace omp
 
 } // namespace arts
