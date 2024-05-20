@@ -12,6 +12,7 @@
 
 #include "noelle/core/Noelle.hpp"
 #include "noelle/core/Task.hpp"
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 
@@ -59,39 +60,34 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDTEnvironment &Env) {
 /// EDT
 class EDT : public Task {
 public:
-  enum class Type {
-    MAIN,
-    TASK,
-    LOOP,
-    PARALLEL,
-    WRAPPER,
-    DONE,
-    OTHER
-  };
+  enum class Type { MAIN, TASK, LOOP, PARALLEL, WRAPPER, DONE, OTHER };
 
   EDT(Type Ty, FunctionType *TaskSignature, Module &M)
       : Task(TaskSignature, M), Env(this), Ty(Ty) {
-        setName();
-      }
+    setName();
+  }
 
   /// Interface
   void insertValueToEnv(Value *Val);
+  void insertValueToEnv(Value *Val, bool IsDepV);
   void cloneAndAddBasicBlocks(Function *F);
   void cloneAndAddBasicBlocks(BlockSequence &BBs);
 
   const std::string getName() { return ("edt_" + Twine(ID)).str(); }
+  void setName() { F->setName("arts_" + getName()); }
   Instruction *getGuidAddr() { return GuidAddr; }
-  void setName() { F->setName("arts_" + getName());}
   Type getType() { return Ty; }
   EDTEnvironment &getEnv() { return Env; }
+  BasicBlock *getBody() { return Body; }
+  void setBody(BasicBlock *BB) { Body = BB; }
 
   /// Attributes
   EDTEnvironment Env;
   Type Ty = Type::OTHER;
+  BasicBlock *Body = nullptr;
   /// First and last instruction of the EDT
-  Instruction *GuidAddr = nullptr;  // First instruction
-  Instruction *CallInst = nullptr;  // Last instruction
-
+  Instruction *GuidAddr = nullptr; // First instruction
+  Instruction *CallInst = nullptr; // Last instruction
 };
 
 inline raw_ostream &operator<<(raw_ostream &OS, EDT &Edt) {

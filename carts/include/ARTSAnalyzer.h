@@ -31,6 +31,7 @@ struct ARTSAnalyzer {
   EDT *handleDoneRegion(EDT *DomEDT);
   /// EDTs
   uint64_t getNumEDTs();
+  EDT *getEDT(Function *F);
 
 private:
   EDT *createEDT(EDT::Type Ty);
@@ -48,6 +49,8 @@ private:
   ARTSIRBuilder &AIB;
   /// Set of EDTs
   SetVector<EDT *> EDTs;
+  /// EDT per function
+  DenseMap<Function *, EDT *> EDTPerFunction;
 };
 } // namespace arts
 

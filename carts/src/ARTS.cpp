@@ -31,6 +31,14 @@ void EDT::insertValueToEnv(Value *Val) {
   /// Data Sharing attributes
 }
 
+void EDT::insertValueToEnv(Value *Val, bool IsDepV) {
+  /// Pointer is a depv, else, it is a paramv
+  if (IsDepV)
+    Env.insertDepV(Val);
+  else
+    Env.insertParamV(Val);
+}
+
 void EDT::cloneAndAddBasicBlocks(Function *F) {
   assert((Ty == Type::TASK) || (Ty == Type::PARALLEL) ||
          (Ty == Type::LOOP) && "Only tasks, parallel and loop can be cloned");

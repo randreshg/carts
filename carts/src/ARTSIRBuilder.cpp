@@ -10,6 +10,7 @@
 #include "ARTSIRBuilder.h"
 #include "ARTS.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Type.h"
 #include "llvm/Support/Debug.h"
 
 // #include "llvm/ADT/SmallSet.h"
@@ -61,10 +62,10 @@ void ARTSIRBuilder::initialize() {
 }
 
 void ARTSIRBuilder::finalize() {
-  LLVM_DEBUG(dbgs() << TAG << TAG << "Finalizing ARTSIRBuilder\n");
+  LLVM_DEBUG(dbgs() << TAG << "Finalizing ARTSIRBuilder\n");
   // Finalize the module with the runtime functions.
   // finalizeModule(M);
-  LLVM_DEBUG(dbgs() << TAG << TAG << "ARTSIRBuilder finalized\n");
+  LLVM_DEBUG(dbgs() << TAG << "ARTSIRBuilder finalized\n");
 }
 
 FunctionCallee ARTSIRBuilder::getOrCreateRuntimeFunction(Module &M,
@@ -124,8 +125,8 @@ void ARTSIRBuilder::initializeEDT(EDT &E) {
   /// Change EDT Task body function signature
   auto *EdtBody = E.getTaskBody();
   (EdtBody->arg_begin())->setName("paramc");
-  (EdtBody->arg_begin() + 1)->setName("depc");
-  (EdtBody->arg_begin() + 2)->setName("paramv");
+  (EdtBody->arg_begin() + 1)->setName("paramv");
+  (EdtBody->arg_begin() + 2)->setName("depc");
   (EdtBody->arg_begin() + 3)->setName("depv");
 }
 
@@ -146,11 +147,36 @@ void ARTSIRBuilder::insertEDTEntry(EDT &E) {
   for (auto En : enumerate(Env.ParamV)) {
     unsigned Index = En.index();
     Value *OriginalVal = En.value();
-    Value *ParamVArrayElemPtr = Builder.CreateConstInBoundsGEP2_64(
-        Int64Ptr, ParamVArg, 0, Index, "paramv." + OriginalVal->getName());
-    Value *CastedVal =
-        Builder.CreateBitCast(ParamVArrayElemPtr, OriginalVal->getType(),
-                              "paramv." + OriginalVal->getName() + ".casted");
+    auto ParamVName = (OriginalVal->getName() == "")
+                          ? ("paramv." + std::to_string(Index))
+                          : ("paramv." + OriginalVal->getName());
+    Value *ParamVElemPtr =
+        Builder.CreateConstInBoundsGEP1_64(Int64, ParamVArg, Index, ParamVName);
+    /// Load the value from the array
+    Value *LoadedVal = Builder.CreateLoad(Int64, ParamVElemPtr);
+    /// Cast the value to the original type
+    Value *CastedVal = LoadedVal;
+    auto *OriginalType = OriginalVal->getType();
+    switch (OriginalType->getTypeID()) {
+    /// Integer
+    case llvm::Type::IntegerTyID: {
+      if (OriginalType != Int64)
+        CastedVal = Builder.CreateTrunc(LoadedVal, OriginalType);
+    } break;
+    /// Float
+    case llvm::Type::FloatTyID: {
+      assert(false && "Float type not supported yet");
+    } break;
+    /// Pointer
+    case llvm::Type::PointerTyID: {
+      assert(false && "Pointer type not supported yet");
+      break;
+    }
+    default:
+      assert(false && "Type not supported yet");
+      break;
+    }
+
     E.addLiveIn(OriginalVal, CastedVal);
   }
 
@@ -159,11 +185,13 @@ void ARTSIRBuilder::insertEDTEntry(EDT &E) {
   for (auto En : enumerate(Env.DepV)) {
     unsigned Index = En.index();
     Value *OriginalVal = En.value();
-    Value *DepVArrayElemPtr = Builder.CreateConstInBoundsGEP2_32(
-        EdtDep, DepVArg, Index, 2, "depv." + OriginalVal->getName());
+    auto DepVName = (OriginalVal->getName() == "")
+                        ? ("depv." + std::to_string(Index))
+                        : ("depv." + std::string(OriginalVal->getName()));
+    Value *DepVArrayElemPtr =
+        Builder.CreateConstInBoundsGEP2_32(EdtDep, DepVArg, Index, 2, DepVName);
     Value *CastedVal =
-        Builder.CreateBitCast(DepVArrayElemPtr, OriginalVal->getType(),
-                              "depv." + OriginalVal->getName() + ".casted");
+        Builder.CreateBitCast(DepVArrayElemPtr, OriginalVal->getType());
     E.addLiveIn(OriginalVal, CastedVal);
     // E.addLiveOut(OriginalVal, CastedVal);
   }
@@ -183,37 +211,47 @@ CallInst *ARTSIRBuilder::insertEDTCall(EDT &E) {
   AllocaInst *ParamC =
       Builder.CreateAlloca(Int32, nullptr, EdtName + "_paramc");
   Builder.CreateStore(ConstantInt::get(Int32, EdtEnv.getParamC()), ParamC);
+  auto *LoadedParamC = Builder.CreateLoad(Int32, ParamC);
   /// ParamV
   AllocaInst *ParamV =
-      Builder.CreateAlloca(Int64Ptr, nullptr, EdtName + "_paramv");
+      Builder.CreateAlloca(Int64, LoadedParamC, EdtName + "_paramv");
   for (auto En : enumerate(EdtEnv.ParamV)) {
     unsigned Index = En.index();
     Value *Val = En.value();
-    auto ParamVName = "paramv." + Val->getName();
+    auto ParamVName = (Val->getName() == "")
+                          ? (EdtName + "_paramv." + std::to_string(Index))
+                          : (EdtName + "_paramv." + Val->getName());
     /// Create the GEP to store the value in the ParamV array
-    Value *ParamVElemPtr = Builder.CreateConstInBoundsGEP2_64(
-        Int64Ptr, ParamV, 0, Index, ParamVName);
-    /// If the value is a constant int, we need to store it in a variable
-    if (ConstantInt *CI = dyn_cast<ConstantInt>(Val)) {
-      Val = Builder.CreateAlloca(Int32, nullptr, ParamVName + ".val");
-      Builder.CreateStore(CI, Val);
-    }
+    Value *ParamVElemPtr =
+        Builder.CreateConstInBoundsGEP1_64(Int64, ParamV, Index, ParamVName);
     /// Cast the value to int64
-    Value *Casted =
-        Builder.CreateBitCast(Val, Int64Ptr, ParamVName + ".val.casted");
-    Builder.CreateStore(Casted, ParamVElemPtr);
+    Value *CastedVal = nullptr;
+    auto *ValType = Val->getType();
+    switch (ValType->getTypeID()) {
+    /// Integer
+    case llvm::Type::IntegerTyID: {
+      if (ValType != Int64)
+        CastedVal = Builder.CreateSExtOrTrunc(Val, Int64);
+      else
+        CastedVal = Val;
+    } break;
+    /// Default
+    default:
+      assert(false && "Type not supported yet");
+      break;
+    }
+    Builder.CreateStore(CastedVal, ParamVElemPtr);
   }
   /// Depc
-  AllocaInst *DepC = Builder.CreateAlloca(Int32, nullptr, "depc");
+  AllocaInst *DepC = Builder.CreateAlloca(Int32, nullptr);
   Builder.CreateStore(ConstantInt::get(Int32, EdtEnv.getDepC()), DepC);
   Value *Args[] = {Builder.CreateBitCast(EdtBody, EdtFunctionPtr),
                    Builder.CreateBitCast(E.getGuidAddr(), Int32Ptr),
-                   Builder.CreateLoad(Int32, ParamC),
-                   Builder.CreateBitCast(ParamV, Int64Ptr),
+                   LoadedParamC,
+                   ParamV,
+                  //  Builder.CreateBitCast(ParamV, Int64Ptr),
                    Builder.CreateLoad(Int32, DepC)};
   Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
-  // LLVM_DEBUG(dbgs() << TAG << "Creating call to artsEdtCreateWithGuid: \n"
-  //                   << *F << "\n");
   return Builder.CreateCall(F, Args);
 }
 
@@ -233,107 +271,6 @@ void ARTSIRBuilder::reserveEDTGuid(EDT &E) {
   /// Store the GUID
   Builder.CreateStore(ReserveGuidCall, E.GuidAddr);
 }
-
-// Function *ARTSIRBuilder::initializeEDT(EdtInfo &EI, Function *EDTFunc,
-//                                        BasicBlock *CurBB) {
-//   auto &DE = EI.DE;
-//   /// Get CurBB parent
-//   Function *Func = CurBB->getParent();
-//   LLVM_DEBUG(dbgs() << TAG  << TAG << "CurBB parent: " << Func->getName() <<
-//   "\n");
-//   /// Generate entry region.
-//   /// This region will have the declarations of the GUIDs.
-//   BasicBlock *EntryBB =
-//       BasicBlock::Create(Builder.getContext(), "edt.entry", Func);
-//   StringRef BBNameAppend = "";
-//   if (CurBB) {
-//     /// Create a copy of CurBB terminator
-//     Instruction *Term = CurBB->getTerminator();
-//     if (!Term) {
-//       LLVM_DEBUG(dbgs() << TAG  << TAG << "CurBB has no terminator\n");
-//       // return nullptr;
-//     } else
-//       LLVM_DEBUG(dbgs() << TAG  << TAG << "CurBB has terminator: " << *Term
-//       << "\n");
-//     // redirectTo(CurBB, EntryBB);
-//     BBNameAppend = CurBB->getName();
-//     EntryBB->setName("edt.entry." + BBNameAppend);
-//   }
-//   /// Reserve the GUIDs for the EDTs
-//   AllocaInst *GuidAddr = reserveEDTGuid(EntryBB, 0);
-//   /// Create EDT body
-//   BasicBlock *BodyBB = BasicBlock::Create(Builder.getContext(),
-//                                           "edt.body." + BBNameAppend, Func);
-//   Builder.SetInsertPoint(BodyBB);
-//   /// Branch to the body
-//   redirectTo(EntryBB, BodyBB);
-
-//   /// Paramc are the number of static parameters.
-//   /// It corresponds to the number of first private variables.
-//   int32_t NumParamC = DE.FirstPrivates.size();
-//   AllocaInst *ParamC = Builder.CreateAlloca(Int32, nullptr, "paramc");
-//   Builder.CreateStore(ConstantInt::get(Int32, NumParamC), ParamC);
-
-//   /// Paramv are the static parameters that are copied into the EDT closure.
-//   /// It corresponds to the private variables.
-//   AllocaInst *ParamVArray =
-//       Builder.CreateAlloca(Int64Ptr, nullptr, "paramv.array");
-//   for (auto En : enumerate(DE.FirstPrivates)) {
-//     unsigned Index = En.index();
-//     Value *Val = En.value();
-//     /// Create the GEP to store the value in the ParamV array
-//     Value *ParamVArrayElemPtr = Builder.CreateConstInBoundsGEP2_64(
-//         Int64Ptr, ParamVArray, 0, Index, "paramv.array.elem." +
-//         Twine(Index));
-//     /// If the value is a constant int, we need to store it in a variable
-//     if (ConstantInt *CI = dyn_cast<ConstantInt>(Val)) {
-//       /// Create the variable
-//       Val = Builder.CreateAlloca(Int32, nullptr, "paramv.val." +
-//       Twine(Index));
-//       /// Store the value in the variable
-//       Builder.CreateStore(CI, Val);
-//     }
-//     /// Cast the value to int64
-//     Value *Casted = Builder.CreateBitCast(
-//         Val, Int64Ptr, "paramv.val." + Twine(Index) + ".casted");
-//     Builder.CreateStore(Casted, ParamVArrayElemPtr);
-//   }
-
-//   /// Depc is the number of dependencies required for the EDT to run.
-//   /// It corresponds to the number of shared variables.
-//   int32_t NumDepC = DE.Shareds.size();
-//   AllocaInst *DepC = Builder.CreateAlloca(Int32, nullptr, "depc");
-//   Builder.CreateStore(ConstantInt::get(Int32, NumDepC), DepC);
-
-//   /// Insert call to artsEdtCreateWithGuid
-//   // Function *EDTFunc = Function::Create(EdtFunction,
-//   //                                      GlobalValue::ExternalLinkage,
-//   //                                      FuncName, M);
-//   Value *Args[] = {Builder.CreateBitCast(EDTFunc, EdtFunctionPtr),
-//                    Builder.CreateBitCast(GuidAddr, Int32Ptr),
-//                    Builder.CreateLoad(Int32, ParamC),
-//                    Builder.CreateBitCast(ParamVArray, Int64Ptr),
-//                    Builder.CreateLoad(Int32, DepC)};
-
-//   Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
-//   LLVM_DEBUG(dbgs() << TAG  << TAG << "Creating call to
-//   artsEdtCreateWithGuid: \n"
-//                     << *F << "\n");
-//   Builder.CreateCall(F, Args);
-//   return nullptr;
-// }
-
-// Function *ARTSIRBuilder::createEdt(StringRef Name) {
-//   const std::string FuncName = (Name + ".edt").str();
-//   LLVM_DEBUG(dbgs() << TAG  << TAG << "Creating EDT: " << FuncName << "\n");
-//   Function *Func =
-//       Function::Create(EdtFunction, GlobalValue::InternalLinkage, FuncName,
-//       M);
-//   /// Add entry BB that returns void
-//   BasicBlock *EntryBB = BasicBlock::Create(Builder.getContext(), "entry",
-//   Func); Builder.SetInsertPoint(EntryBB); Builder.CreateRetVoid(); return
-//   Func;
-// }
 
 /// ---------------------------- Utils ---------------------------- ///
 void ARTSIRBuilder::redirectTo(BasicBlock *Source, BasicBlock *Target) {
@@ -359,6 +296,7 @@ void ARTSIRBuilder::redirectEntryAndExit(EDT &E, BasicBlock *OriginalEntry) {
   /// Redirect Entry
   auto *ClonedEntry = E.getCloneOfOriginalBasicBlock(OriginalEntry);
   ClonedEntry->setName("edt.body");
+  E.setBody(ClonedEntry);
   redirectTo(E.getEntry(), ClonedEntry);
   /// Redirect Exit
   auto OriginalParent = OriginalEntry->getParent();

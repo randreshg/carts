@@ -5,6 +5,7 @@
 #include "llvm/Analysis/AssumptionCache.h"
 // #include "llvm/Analysis/CallGraph.h"
 #include "ARTS.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
@@ -18,21 +19,31 @@ namespace arts {
 /// them to the DominatedBlocks vector.
 void getDominatedBBs(BasicBlock *FromBB, DominatorTree &DT,
                      BlockSequence &DominatedBlocks);
-/// This function finds the calls that are dominated by CB and add
-/// them to the Calls vector.
-// void getDominatedCalls(CallBase *CB, DominatorTree *DT,
-//                        SmallSetVector<CallBase *, 16> &Calls);
+
+/// Rewire the values in the RewiringMap.
+///   - Key: Old Value
+///   - Value: New Value
+void rewireValues(DenseMap<Value *, Value *> &RewiringMap);
+
+/// Function
+void cleanFunction(Function *F);
+void removeFunction(Function *F);
+
 /// Remove values interface
-void removeValue(Value *V, bool RecursiveRemove = false,
-                 bool RecursiveUndef = true, Instruction *Exclude = nullptr);
+void removeValue(Value *V, bool RecursiveRemove = false, bool RecursiveUndef = true);
+void removeValue(Value *V, Instruction *ExcludeInst,
+                 bool RecursiveRemove = false, bool RecursiveUndef = true);
 void removeValues(SmallVector<Value *, 16> ValuesToRemove);
 /// Function to replace uses of a Value with UndefValue.
 /// - Instructions can be removed if requested.
 /// - The processs can also be performed in a recursive way by replacing
 ///   uses of the instructions that use the value with UndefValue.
-void replaceValueWithUndef(Value *V, bool RemoveInsts = false,
-                           bool Recursive = true,
-                           Instruction *Exclude = nullptr);
+/// - The depth of the recursion can be controlled.
+void replaceUsesWithUndef(Value *V, bool RemoveUses = false, bool Recursive = true,
+                          uint32_t MaxDepth = UINT32_MAX);
+void replaceUsesWithUndef(Value *V, Instruction *ExcludeInst = nullptr,
+                          bool RemoveUses = false, bool Recursive = true,
+                          uint32_t MaxDepth = UINT32_MAX);
 /// Removes the lifetime markers from the function.
 void removeLifetimeMarkers(Function &F);
 
@@ -56,18 +67,14 @@ enum Type {
   SET_NUM_THREADS
 };
 
-/// Rewire the values in the Call with the arguments of the outlined function.
-/// and undef the rest of the values.
-void preprocessing(CallBase *Call);
-/// Undefine the values previously rewired and its uses in the outlined
-/// function.
-void postprocessing(CallBase *Call);
 /// Helper Functions
+Function *getOutlinedFunction(CallBase *Call);
 Data getRTData(Type RTF);
 Type getRTFunction(Function *F);
 Type getRTFunction(CallBase &CB);
 Type getRTFunction(Instruction *I);
 bool isTaskFunction(Function *F);
+bool isTaskFunction(CallBase &CB);
 bool isRTFunction(CallBase &CB);
 
 } // namespace omp
