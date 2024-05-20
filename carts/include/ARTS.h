@@ -49,7 +49,13 @@ public:
 inline raw_ostream &operator<<(raw_ostream &OS, EDTEnvironment &Env) {
   OS << "Data environment for EDT: \n";
   OS << "Number of ParamV: " << Env.ParamV.size() << "\n";
+  for (auto &V : Env.ParamV) {
+    OS << "  - " << *V << "\n";
+  }
   OS << "Number of DepV: " << Env.DepV.size() << "\n";
+  for (auto &V : Env.DepV) {
+    OS << "  - " << *V << "\n";
+  }
   return OS;
 }
 
@@ -82,6 +88,13 @@ public:
   EDTEnvironment &getEnv() { return Env; }
   BasicBlock *getBody() { return Body; }
   void setBody(BasicBlock *BB) { Body = BB; }
+  std::unordered_map<Instruction *, std::unordered_set<Instruction *>> &
+  getLiveOuts() {
+    return liveOutClones;
+  }
+  std::unordered_map<Value *, Value *> &getLiveIns() {
+    return liveInClones;
+  }
 
   /// Attributes
   EDTEnvironment Env;
@@ -93,8 +106,25 @@ public:
 
 inline raw_ostream &operator<<(raw_ostream &OS, EDT &Edt) {
   OS << "EDT #" << Edt.getID() << "\n";
-  OS << Edt.getEnv() << "\n";
-  OS << "Function: " << *Edt.getTaskBody() << "\n";
+  OS << Edt.getEnv();
+  OS << "Function: " << Edt.getTaskBody()->getName() << "\n";
+  /// Live in instructions
+  OS << "Live in instructions: \n";
+  auto &LiveIns = Edt.getLiveIns();
+  for (auto &LI : LiveIns) {
+    OS << "  - " << *LI.first << "\n";
+    OS << "    - " << *LI.second << "\n";
+  }
+  /// Live out instructions
+  OS << "Live out instructions: \n";
+  std::unordered_map<Instruction *, std::unordered_set<Instruction *>>
+      &LiveOuts = Edt.getLiveOuts();
+  for (auto &LO : LiveOuts) {
+    OS << "  - " << *LO.first << "\n";
+    for (auto &LOI : LO.second) {
+      OS << "    - " << *LOI << "\n";
+    }
+  }
   return OS;
 }
 

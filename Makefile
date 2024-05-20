@@ -70,19 +70,19 @@ arts-clean:
 	rm -f -r $(ARTS_INSTALL_DIR)
 
 # NOELLE
-# $(NOELLE_DIR):
-# 	mkdir -p $@
-# 	git clone --depth 1 --branch v14 https://github.com/randreshg/noelle.git $@
-# noelle: .noelle
-# .noelle: $(NOELLE_DIR)
-# 	mkdir -p $(NOELLE_INSTALL_DIR)
-# 	NOELLE_INSTALL_DIR=$(NOELLE_INSTALL_DIR) NOELLE_SCAF=OFF NOELLE_SVF=OFF NOELLE_AUTOTUNER=OFF make -C $<
-# 	touch $@
-# noelle-clean:
-# 	[[ -d $(NOELLE_DIR) ]] && make -C $(NOELLE_DIR) uninstall
-# 	[[ -d $(NOELLE_DIR) ]] && rm -rf $(NOELLE_DIR)
-# 	rm -f -r .noelle
-# 	rm -f -r $(NOELLE_INSTALL_DIR)
+$(NOELLE_DIR):
+	mkdir -p $@
+	git clone --depth 1 --branch v14 https://github.com/randreshg/noelle.git $@
+noelle: .noelle
+.noelle: $(NOELLE_DIR)
+	mkdir -p $(NOELLE_INSTALL_DIR)
+	NOELLE_INSTALL_DIR=$(NOELLE_INSTALL_DIR) NOELLE_SCAF=OFF NOELLE_SVF=OFF NOELLE_AUTOTUNER=OFF make -C $<
+	touch $@
+noelle-clean:
+	[[ -d $(NOELLE_DIR) ]] && make -C $(NOELLE_DIR) uninstall
+	[[ -d $(NOELLE_DIR) ]] && rm -rf $(NOELLE_DIR)
+	rm -f -r .noelle
+	rm -f -r $(NOELLE_INSTALL_DIR)
 
 # CARTS
 build:

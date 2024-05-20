@@ -13,6 +13,8 @@ noelle-load -debug-only=arts,carts,arts-analyzer,arts-ir-builder -load /home/rhe
  ---------------------------------------- 
 [carts] Running CARTS on Module: 
 test_with_metadata.bc
+
+ ---------------------------------------- 
 [arts-ir-builder] Initializing ARTSIRBuilder
 [arts-ir-builder] ARTSIRBuilder initialized
 --------------------------------------------------
@@ -21,7 +23,7 @@ test_with_metadata.bc
     %call = tail call i32 @rand() #6, !noelle.pdg.inst.id !8
 [arts-analyzer] Other Function Found: 
     %call1 = tail call i32 @rand() #6, !noelle.pdg.inst.id !15
-- - - - - -- - - - - - - - - -
+- - - - - - - - - - - - - - - -
 [arts-analyzer] Parallel Region Found:   call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* nonnull @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* nonnull %random_number, i32* nonnull %NewRandom, i32* nonnull %number, i32* nonnull %shared_number), !noelle.pdg.inst.id !18
 
 [arts-analyzer] Handling parallel region
@@ -35,7 +37,7 @@ test_with_metadata.bc
 Identifying EDTs in the Parallel Body
 --------------------------------------------------
 [arts-analyzer] Identifying EDTs for: arts_edt_0
-- - - - - -- - - - - - - - - -
+- - - - - - - - - - - - - - - -
 [arts-analyzer] Task Region Found:   %4 = tail call i8* @__kmpc_omp_task_alloc(%struct.ident_t* nonnull @1, i32 undef, i32 1, i64 48, i64 16, i32 (i32, i8*)* bitcast (i32 (i32, %struct.kmp_task_t_with_privates*)* @.omp_task_entry. to i32 (i32, i8*)*)), !noelle.pdg.inst.id !5
 
 [arts-analyzer] Handling task region
@@ -94,8 +96,8 @@ edt.body:                                         ; preds = %edt.entry
   br label %edt.exit
 }
 - - - - - -- - - - - - - - - - - - - - - - -
-- - - - - -- - - - - - - - - -
-- - - - - -- - - - - - - - - -
+- - - - - - - - - - - - - - - -
+- - - - - - - - - - - - - - - -
 [arts-analyzer] Task Region Found:   %23 = tail call i8* @__kmpc_omp_task_alloc(%struct.ident_t* nonnull @1, i32 undef, i32 1, i64 48, i64 1, i32 (i32, i8*)* bitcast (i32 (i32, %struct.kmp_task_t_with_privates.1*)* @.omp_task_entry..5 to i32 (i32, i8*)*)), !noelle.pdg.inst.id !34
 
 [arts-analyzer] Handling task region
@@ -137,7 +139,7 @@ edt.body:                                         ; preds = %edt.entry
   br label %edt.exit
 }
 - - - - - -- - - - - - - - - - - - - - - - -
-- - - - - -- - - - - - - - - -
+- - - - - - - - - - - - - - - -
 
 [arts-analyzer] Handling done region
 [arts-analyzer] Creating EDT with signature: void (i32, i64*, i32, %struct.artsEdtDep_t*)
@@ -146,7 +148,7 @@ edt.body:                                         ; preds = %edt.entry
 [arts-ir-builder] Inserting EDT Call
 [arts-ir-builder] Found ARTS runtime function artsReserveGuidRoute with type i32* (i32, i32)
 [arts-ir-builder] Found ARTS runtime function artsEdtCreateWithGuid with type i32* (void (i32, i64*, i32, %struct.artsEdtDep_t*)*, i32*, i32, i64*, i32)
-- - - - - -- - - - - - - - - - - - - - - - - - -
+- - - - - - - - - - - - - - - - - - - - - - - - -
 DoneEDT CallInst:   %15 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_3, i32* %13, i32 %11, i64* %edt_3_paramv, i32 %14)
 
 DoneEDT:
@@ -167,7 +169,7 @@ edt.body:                                         ; preds = %edt.entry
   %4 = call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %2, i32 noundef %3), !noelle.pdg.inst.id !30
   br label %edt.exit
 }
-- - - - - -- - - - - - - - - - - - - - - - - - -
+- - - - - - - - - - - - - - - - - - - - - - - - -
 [arts] Deleting dead instructions in EDT: arts_edt_0
 [arts] - Removing:   %4 = bitcast i8* undef to i8**, !noelle.pdg.inst.id !5
 [arts] - Removing:   %5 = load i8*, i8** undef, align 8, !tbaa !6, !noelle.pdg.inst.id !14
@@ -239,10 +241,96 @@ edt.body:                                         ; preds = %edt.entry
   br label %edt.exit
 }
 - - - - - -- - - - - - - - - - - - - - - - - - -
-- - - - - -- - - - - - - - - -
+- - - - - - - - - - - - - - - -
+- - - - - - - - - - - - - - - - - - - - - -
+EDTs: 4
+- EDT #0
+Data environment for EDT: 
+Number of ParamV: 0
+Number of DepV: 4
+  -   %random_number = alloca i32, align 4, !noelle.pdg.inst.id !67
+  -   %NewRandom = alloca i32, align 4, !noelle.pdg.inst.id !68
+  -   %number = alloca i32, align 4, !noelle.pdg.inst.id !65
+  -   %shared_number = alloca i32, align 4, !noelle.pdg.inst.id !66
+Function: arts_edt_0
+Live in instructions: 
+  -   %shared_number = alloca i32, align 4, !noelle.pdg.inst.id !66
+    -   %3 = bitcast i8** %depv.shared_number to i32*
+  -   %number = alloca i32, align 4, !noelle.pdg.inst.id !65
+    -   %2 = bitcast i8** %depv.number to i32*
+  -   %NewRandom = alloca i32, align 4, !noelle.pdg.inst.id !68
+    -   %1 = bitcast i8** %depv.NewRandom to i32*
+  -   %random_number = alloca i32, align 4, !noelle.pdg.inst.id !67
+    -   %0 = bitcast i8** %depv.random_number to i32*
+Live out instructions: 
+  -   %shared_number = alloca i32, align 4, !noelle.pdg.inst.id !66
+    -   %3 = bitcast i8** %depv.shared_number to i32*
+  -   %number = alloca i32, align 4, !noelle.pdg.inst.id !65
+    -   %2 = bitcast i8** %depv.number to i32*
+  -   %NewRandom = alloca i32, align 4, !noelle.pdg.inst.id !68
+    -   %1 = bitcast i8** %depv.NewRandom to i32*
+  -   %random_number = alloca i32, align 4, !noelle.pdg.inst.id !67
+    -   %0 = bitcast i8** %depv.random_number to i32*
+
+- EDT #1
+Data environment for EDT: 
+Number of ParamV: 2
+  -   %5 = load i32, i32* %0, align 4, !tbaa !14, !noelle.pdg.inst.id !16
+  -   %6 = load i32, i32* %1, align 4, !tbaa !14, !noelle.pdg.inst.id !17
+Number of DepV: 2
+  -   %2 = bitcast i8** %depv.number to i32*
+  -   %3 = bitcast i8** %depv.shared_number to i32*
+Function: arts_edt_1
+Live in instructions: 
+  -   %2 = bitcast i8** %depv.number to i32*
+    -   %4 = bitcast i8** %depv.0 to i32*
+  -   %6 = load i32, i32* %1, align 4, !tbaa !14, !noelle.pdg.inst.id !17
+    -   %3 = trunc i64 %2 to i32
+  -   %3 = bitcast i8** %depv.shared_number to i32*
+    -   %5 = bitcast i8** %depv.1 to i32*
+  -   %5 = load i32, i32* %0, align 4, !tbaa !14, !noelle.pdg.inst.id !16
+    -   %1 = trunc i64 %0 to i32
+Live out instructions: 
+  -   %3 = bitcast i8** %depv.shared_number to i32*
+    -   %5 = bitcast i8** %depv.1 to i32*
+  -   %2 = bitcast i8** %depv.number to i32*
+    -   %4 = bitcast i8** %depv.0 to i32*
+
+- EDT #2
+Data environment for EDT: 
+Number of ParamV: 1
+  -   %15 = load i32, i32* %2, align 4, !tbaa !14, !noelle.pdg.inst.id !18
+Number of DepV: 0
+Function: arts_edt_2
+Live in instructions: 
+  -   %15 = load i32, i32* %2, align 4, !tbaa !14, !noelle.pdg.inst.id !18
+    -   %1 = trunc i64 %0 to i32
+Live out instructions: 
+
+- EDT #3
+Data environment for EDT: 
+Number of ParamV: 0
+Number of DepV: 2
+  -   %number = alloca i32, align 4, !noelle.pdg.inst.id !65
+  -   %random_number = alloca i32, align 4, !noelle.pdg.inst.id !67
+Function: arts_edt_3
+Live in instructions: 
+  -   %random_number = alloca i32, align 4, !noelle.pdg.inst.id !67
+    -   %1 = bitcast i8** %depv.random_number to i32*
+  -   %number = alloca i32, align 4, !noelle.pdg.inst.id !65
+    -   %0 = bitcast i8** %depv.number to i32*
+Live out instructions: 
+  -   %random_number = alloca i32, align 4, !noelle.pdg.inst.id !67
+    -   %1 = bitcast i8** %depv.random_number to i32*
+  -   %number = alloca i32, align 4, !noelle.pdg.inst.id !65
+    -   %0 = bitcast i8** %depv.number to i32*
+
+- - - - - - - - - - - - - - - - - - - - - -
 
  ---------------------------------------- 
-[carts] Module: ; ModuleID = 'test_with_metadata.bc'
+[carts] Process has finished
+
+; ModuleID = 'test_with_metadata.bc'
 source_filename = "test.cpp"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
@@ -578,10 +666,13 @@ attributes #5 = { inaccessiblememonly nofree nosync nounwind willreturn }
 !107 = !{i64 85}
 !108 = !{i64 88}
 !109 = !{i64 89}
+
+
+ ---------------------------------------- 
 # noelle-load -debug-only=arts,carts,arts-analyzer -load-pass-plugin /home/rherreraguaitero/ME/ARTS-env/CARTS/.build/CARTS.so -passes=CARTS test_with_metadata.bc -o test_opt.bc
 llvm-dis test_opt.bc
 clang++ -fopenmp test_opt.bc -O3 -march=native -o test_opt -lstdc++
-/usr/lib64/gcc/x86_64-suse-linux/7/../../../../x86_64-suse-linux/bin/ld: /tmp/test_opt-bf03e7.o: in function `main':
+/usr/lib64/gcc/x86_64-suse-linux/7/../../../../x86_64-suse-linux/bin/ld: /tmp/test_opt-aae354.o: in function `main':
 test.cpp:(.text+0x17): undefined reference to `artsReserveGuidRoute'
 /usr/lib64/gcc/x86_64-suse-linux/7/../../../../x86_64-suse-linux/bin/ld: test.cpp:(.text+0x3d): undefined reference to `artsEdtCreateWithGuid'
 /usr/lib64/gcc/x86_64-suse-linux/7/../../../../x86_64-suse-linux/bin/ld: test.cpp:(.text+0x49): undefined reference to `artsReserveGuidRoute'

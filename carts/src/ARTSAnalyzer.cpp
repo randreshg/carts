@@ -21,6 +21,14 @@ using namespace arts;
 using namespace arts_utils;
 using namespace arts_utils::omp;
 
+void ARTSAnalyzer::debug() {
+  LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - -\n");
+  LLVM_DEBUG(dbgs() << "EDTs: " << EDTs.size() << "\n");
+  for (auto *E : EDTs)
+    LLVM_DEBUG(dbgs() << "- " << *E << "\n");
+  LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - -\n");
+}
+
 bool ARTSAnalyzer::identifyEDTs(Function &F) {
   /// This function identifies the regions that will be transformed to
   /// have and EDT initializer.
@@ -31,35 +39,6 @@ bool ARTSAnalyzer::identifyEDTs(Function &F) {
   /// - __kmpc_omp_taskwait or __kmpc_omp_taskwait_deps
   /// - function with a pointer return type (not void) that is used
   ///   after the call.
-  ///
-  /// The BB that meet the criteria are split into two BBs. Check example:
-  /// BB1:
-  ///   %0 = alloca i32, align 4
-  ///   %1 = call i32 @__kmpc_fork_call(i32 1, i32 (i32, i8*)*
-  ///   @__omp_offloading_fib, i8* %0)
-  ///   ...
-  ///   ret i32 0
-  /// It is transformed to:
-  /// BB1:
-  ///   %0 = alloca i32, align 4
-  ///   %1 = call i32 @__kmpc_fork_call(i32 1, i32 (i32, i8*)*
-  ///   @__omp_offloading_fib, i8* %0) br label %edt.done.0
-  /// edt.done.0:
-  ///   ...
-  ///   ret i32 0
-  ///
-  /// For the example above, the BB that contains the call to __kmpc_fork_call
-  /// will be then replaced by the EDT initializer (GUID reserve + call to EDT
-  /// allocator) and the parallel outlined function will be the EDT. We then
-  /// have to analyze whether the par.done BB needs to be transformed to an
-  /// EDT. This is done by analyzing the instructions of the BB to obtain its
-  /// data environment. If any of the instructions in the BB uses a shared
-  /// variable, the BB is transformed to an EDT.
-  ///
-  /// By the end of this function, we should have a map that contains the BBs
-  /// that can be transformed to EDTs. The key of the map is the BB that
-  /// contains the call to the function that creates the region (e.g.
-  /// __kmpc_fork_call) and the Val is the struct EDTInfo. Aux variables
 
   /// Remove of lifetime markers
   removeLifetimeMarkers(F);
@@ -92,16 +71,16 @@ bool ARTSAnalyzer::identifyEDTs(Function &F) {
       omp::Type RTF = omp::getRTFunction(*CB);
       switch (RTF) {
       case omp::PARALLEL: {
-        LLVM_DEBUG(dbgs() << "- - - - - -- - - - - - - - - -\n");
+        LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
         LLVM_DEBUG(dbgs() << TAG << "Parallel Region Found: " << *CB << "\n");
         CurrentI = handleParallelRegion(CB);
-        LLVM_DEBUG(dbgs() << "- - - - - -- - - - - - - - - -\n");
+        LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
       } break;
       case omp::TASKALLOC: {
-        LLVM_DEBUG(dbgs() << "- - - - - -- - - - - - - - - -\n");
+        LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
         LLVM_DEBUG(dbgs() << TAG << "Task Region Found: " << *CB << "\n");
         CurrentI = handleTaskRegion(CB);
-        LLVM_DEBUG(dbgs() << "- - - - - -- - - - - - - - - -\n");
+        LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
       } break;
       case omp::TASKWAIT: {
         assert(false && "Taskwait not implemented yet");
