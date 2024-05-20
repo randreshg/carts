@@ -3,11 +3,11 @@ LIBS=
 all: test_opt
 
 %.bc: %.cpp
-	clang++ -fopenmp -O3 -g0 -Xclang -disable-llvm-passes -emit-llvm -c $< -o $@ -lstdc++
+	clang++ -fopenmp -O3 -g0 -emit-llvm -c $< -o $@ -lstdc++
 	llvm-dis $@
 
 %.bc: %.c
-	clang -fopenmp -O3 -g0 -Xclang -disable-llvm-passes -emit-llvm -c $< -o $@
+	clang -fopenmp -O3 -g0 -emit-llvm -c $< -o $@
 	llvm-dis $@
 
 test_norm.bc: test.bc
@@ -19,7 +19,8 @@ test_with_metadata.bc: test_norm.bc
 	llvm-dis $@
 
 test_opt.bc: test_with_metadata.bc
-	noelle-load -debug-only=arts,carts,arts-analyzer,arts-ir-builder,arts-utils -load /home/rherreraguaitero/ME/ARTS-env/CARTS/.build/CARTS.so -CARTS $< -o $@
+	# noelle-load -debug-only=arts,carts,arts-analyzer,arts-ir-builder,arts-utils -load /home/rherreraguaitero/ME/ARTS-env/CARTS/.build/CARTS.so -CARTS $< -o $@
+	noelle-load -debug-only=arts,carts,arts-analyzer,arts-ir-builder -load /home/rherreraguaitero/ME/ARTS-env/CARTS/.build/CARTS.so -CARTS $< -o $@
 	llvm-dis $@
 
 # test_opt.bc: test.bc

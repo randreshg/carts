@@ -1,5 +1,6 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/Use.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -12,6 +13,7 @@
 #include "ARTS.h"
 #include "ARTSUtils.h"
 #include "llvm/Support/Debug.h"
+#include <sys/types.h>
 
 using namespace llvm;
 // using namespace arcana::noelle;
@@ -35,26 +37,34 @@ void getDominatedBBs(BasicBlock *FromBB, DominatorTree &DT,
   }
 }
 
-// void getDominatedCalls(CallBase *CB, DominatorTree *DT,
-//                        SmallSetVector<CallBase *, 16> &Calls) {
-//   /// Get BB of the call
-//   BasicBlock *BB = CB->getParent();
-//   BlockSequence DominatedBBs;
-//   getDominatedBBs(BB, *DT, DominatedBBs);
-//   /// Get calls in dominated BBs
-//   for(auto *DominatedBB : DominatedBBs) {
-//     for(auto &I : *DominatedBB) {
-//       if(auto *CB = dyn_cast<CallBase>(&I)) {
-//         Calls.insert(CB);
-//       }
-//     }
-//   }
-// }
+void rewireValues(DenseMap<Value *, Value *> &RewiringMap) {
+  for (auto &Rewire : RewiringMap) {
+    auto *OldValue = Rewire.first;
+    auto *NewValue = Rewire.second;
+    OldValue->replaceAllUsesWith(NewValue);
+  }
+}
 
-void removeValue(Value *V, bool RecursiveRemove, bool RecursiveUndef,
-                 Instruction *Exclude) {
-  if (isa<UndefValue>(V) || V == Exclude)
+void cleanFunction(Function *F) {
+  for (auto &Arg : F->args())
+    replaceUsesWithUndef(&Arg, true, true, 1);
+}
+
+void removeFunction(Function *F) {
+  for (auto &Arg : F->args())
+    replaceUsesWithUndef(&Arg, false, false);
+  F->removeFromParent();
+}
+
+void removeValue(Value *V, bool RecursiveRemove, bool RecursiveUndef) {
+  removeValue(V, nullptr, RecursiveRemove, RecursiveUndef);
+}
+
+void removeValue(Value *V, Instruction *ExcludeInst, bool RecursiveRemove,
+                 bool RecursiveUndef) {
+  if (!V || isa<UndefValue>(V) || V == ExcludeInst)
     return;
+
   /// Instructions
   if (auto *I = dyn_cast<Instruction>(V)) {
     /// Call instructions
@@ -65,16 +75,17 @@ void removeValue(Value *V, bool RecursiveRemove, bool RecursiveUndef,
         if (!isa<PointerType>(Arg->getType()))
           continue;
 
-        removeValue(Arg, RecursiveRemove, RecursiveUndef, CBI);
+        removeValue(Arg, CBI, RecursiveRemove, RecursiveUndef);
       }
     }
     LLVM_DEBUG(dbgs() << TAG << "   - Removing instruction: " << *I << "\n");
-    replaceValueWithUndef(I, RecursiveRemove, RecursiveUndef, Exclude);
+    replaceUsesWithUndef(I, ExcludeInst, RecursiveRemove, RecursiveUndef);
     I->eraseFromParent();
     return;
   }
 
-  replaceValueWithUndef(V, RecursiveRemove, RecursiveUndef, Exclude);
+  /// Value is not a instruction. It can be a constant, global variable, etc.
+  replaceUsesWithUndef(V, ExcludeInst, RecursiveRemove, RecursiveUndef);
   /// Global variables are not instructions, but we still need to remove them
   if (GlobalVariable *GV = dyn_cast<GlobalVariable>(V)) {
     LLVM_DEBUG(dbgs() << TAG << "   - Removing global variable: " << *GV
@@ -96,10 +107,15 @@ void removeValues(SmallVector<Value *, 16> ValuesToRemove) {
     removeValue(V, true, true);
 }
 
-void replaceValueWithUndef(Value *V, bool RemoveInsts, bool Recursive,
-                           Instruction *Exclude) {
+void replaceUsesWithUndef(Value *V, bool RemoveUses, bool Recursive,
+                          uint32_t MaxDepth) {
+  replaceUsesWithUndef(V, nullptr, RemoveUses, Recursive, MaxDepth);
+}
+
+void replaceUsesWithUndef(Value *V, Instruction *ExcludeInst, bool RemoveUses,
+                          bool Recursive, uint32_t MaxDepth) {
   /// If the value is undef, we dont need to do anything
-  if (isa<UndefValue>(V))
+  if (!V || isa<UndefValue>(V))
     return;
 
   LLVM_DEBUG(dbgs() << TAG << "  - Replacing uses of: " << *V << "\n");
@@ -113,13 +129,15 @@ void replaceValueWithUndef(Value *V, bool RemoveInsts, bool Recursive,
 
   /// Replace uses with UndefValue and mark instructions for removal
   V->replaceAllUsesWith(UndefValue::get(V->getType()));
+  auto Depth = 0u;
   while (!Worklist.empty()) {
     Instruction *Inst = Worklist.pop_back_val();
-    if (Exclude || Inst == Exclude)
+    if (ExcludeInst || Inst == ExcludeInst)
       continue;
     LLVM_DEBUG(dbgs() << TAG << "   - Replacing: " << *Inst << "\n");
     /// Add users of this instruction to the worklist for further processing
-    if (Recursive) {
+    if (Recursive && (Depth >= MaxDepth)) {
+      Depth++;
       for (auto &Use : Inst->uses()) {
         if (Instruction *UserInst = dyn_cast<Instruction>(Use.getUser()))
           Worklist.push_back(UserInst);
@@ -127,51 +145,15 @@ void replaceValueWithUndef(Value *V, bool RemoveInsts, bool Recursive,
     }
 
     /// Replace uses of the argument with UndefValue
-    Value *Undef = UndefValue::get(Inst->getType());
-    Inst->replaceAllUsesWith(Undef);
+    Inst->replaceAllUsesWith(UndefValue::get(Inst->getType()));
     /// Mark the instruction for removal
-    if (RemoveInsts) {
-      LLVM_DEBUG(dbgs() << TAG << "    -> Instruction removed\n");
-      Inst->eraseFromParent();
+    if (RemoveUses) {
+      removeValue(Inst, ExcludeInst, false, false);
+      // LLVM_DEBUG(dbgs() << TAG << "    -> Instruction removed\n");
+      // Inst->eraseFromParent();
     }
   }
 }
-
-// Function *
-// createFunction(DominatorTree *DT, BasicBlock *FromBB,
-//                bool DTAnalysis = false, std::string FunctionName = "",
-//                SmallVector<Value *, 0> *ExcludeArgsFromAggregate = nullptr) {
-//   Function &F = *FromBB->getParent();
-//   AssumptionCache *AC = AG.getAnalysis<AssumptionAnalysis>(F);
-//   CodeExtractorAnalysisCache CEAC(F);
-
-//   /// Collect blocks
-//   BlockSequence Region;
-//   /// Get all BBs that are dominated by FromBB
-//   if (DTAnalysis)
-//     getDominatedBBs(FromBB, *DT, Region);
-//   else
-//     Region.push_back(FromBB);
-
-//   /// Extract code from the region
-//   CodeExtractor CE(Region, DT, /* AggregateArgs */ false, /* BFI */ nullptr,
-//                     /* BPI */ nullptr, AC, /* AllowVarArgs */ false,
-//                     /* AllowAlloca */ true, /* AllocaBlock */ nullptr);
-
-//   assert(CE.isEligible() && "Expected Region outlining to be possible!");
-
-//   if (ExcludeArgsFromAggregate)
-//     for (auto *V : *ExcludeArgsFromAggregate)
-//       CE.excludeArgFromAggregate(V);
-
-//   /// Generate function
-//   Function *OutF = CE.extractCodeRegion(CEAC);
-//   if(FunctionName != "")
-//     OutF->setName(FunctionName);
-
-//   // LLVM_DEBUG(dbgs() << TAG << TAG << "Function created: " <<
-//   OutF->getName() << "\n"); return OutF;
-// }
 
 void removeLifetimeMarkers(Function &F) {
   for (auto &BB : F) {
@@ -195,58 +177,20 @@ void removeLifetimeMarkers(Function &F) {
     }
   }
 }
+
 /// -------------------------------- OMP -------------------------------- ///
 namespace omp {
-void preprocessing(CallBase *CB) {
-  assert((getRTFunction(CB) == Type::PARALLEL) &&
-         "Only parallel region is supported - as of now");
-  auto Data = getRTData(Type::PARALLEL);
-  auto *OutlinedFn = dyn_cast<Function>(
-      CB->getArgOperand(Data.OutlinedFnPos)->stripPointerCasts());
-
-  Argument *FnArgItr = OutlinedFn->arg_begin() + Data.KeepArgsFrom;
-  Use *CallArgItr = CB->arg_begin() + Data.KeepCallArgsFrom;
-  for (auto ArgNum = Data.KeepArgsFrom; ArgNum < OutlinedFn->arg_size();
-       ++CallArgItr, ++FnArgItr, ++ArgNum) {
-    FnArgItr->replaceAllUsesWith(*CallArgItr);
-  }
-  /// Replace with Undef the function arguments that are not needed
-  FnArgItr = OutlinedFn->arg_begin();
-  for (auto ArgNum = 0u; ArgNum < Data.KeepArgsFrom; ++ArgNum, ++FnArgItr) {
-    FnArgItr->replaceAllUsesWith(UndefValue::get(FnArgItr->getType()));
-  }
-}
-
-void postprocessing(CallBase *CB) {
-  assert((getRTFunction(CB) == Type::PARALLEL) &&
-         "Only parallel region is supported - as of now");
-  auto Data = getRTData(Type::PARALLEL);
-  auto *OutlinedFn = dyn_cast<Function>(
-      CB->getArgOperand(Data.OutlinedFnPos)->stripPointerCasts());
-
-  Use *CallArgItr = CB->arg_begin() + Data.KeepCallArgsFrom;
-  Argument *FnArgItr = OutlinedFn->arg_begin() + Data.KeepArgsFrom;
-  for (auto ArgNum = Data.KeepCallArgsFrom; ArgNum < CB->arg_size();
-       ++CallArgItr, ++FnArgItr, ++ArgNum) {
-    SmallVector<Use *> ListOfUsesToReplace;
-    for (User *Usr : (*CallArgItr)->users()) {
-      Instruction &UsrI = *cast<Instruction>(Usr);
-      if (UsrI.getParent()->getParent() == OutlinedFn) {
-        for (Use &U : Usr->operands())
-          ListOfUsesToReplace.push_back(&U);
-      }
-    }
-    for (auto *U : ListOfUsesToReplace)
-      U->set(UndefValue::get((*CallArgItr)->getType()));
-    CallArgItr->set(UndefValue::get((*CallArgItr)->getType()));
-  }
+Function *getOutlinedFunction(CallBase *Call) {
+  auto Data = getRTData(getRTFunction(*Call));
+  return dyn_cast<Function>(
+      Call->getArgOperand(Data.OutlinedFnPos)->stripPointerCasts());
 }
 
 Data getRTData(omp::Type RTF) {
   switch (RTF) {
   case omp::Type::PARALLEL:
     return {2, 2, 3};
-  case omp::Type::TASK:
+  case omp::Type::TASKALLOC:
     return {5, 0, 0};
   default:
     return {0, 0, 0};
@@ -288,6 +232,13 @@ omp::Type getRTFunction(Instruction *I) {
 
 bool isTaskFunction(Function *F) {
   auto RT = getRTFunction(F);
+  if (RT == Type::TASK || RT == Type::TASKDEP || RT == Type::TASKWAIT)
+    return true;
+  return false;
+}
+
+bool isTaskFunction(CallBase &CB) {
+  auto RT = getRTFunction(CB);
   if (RT == Type::TASK || RT == Type::TASKDEP || RT == Type::TASKWAIT)
     return true;
   return false;

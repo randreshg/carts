@@ -615,12 +615,12 @@
 //         }
 //       }
 //       // LLVM_DEBUG(dbgs() << "   - Removing instruction: " << *I << "\n");
-//       replaceValueWithUndef(I, RecursiveRemove, RecursiveUndef, Exclude);
+//       replaceUsesWithUndef(I, RecursiveRemove, RecursiveUndef, Exclude);
 //       I->eraseFromParent();
 //       return;
 //     }
 
-//     replaceValueWithUndef(V, RecursiveRemove, RecursiveUndef, Exclude);
+//     replaceUsesWithUndef(V, RecursiveRemove, RecursiveUndef, Exclude);
 //     /// Global variables are not instructions, but we still need to remove them
 //     if (GlobalVariable *GV = dyn_cast<GlobalVariable>(V)) {
 //       // LLVM_DEBUG(dbgs() << "   - Removing global variable: " << *GV << "\n");
@@ -647,7 +647,7 @@
 //   /// - Instructions can be removed if requested.
 //   /// - The processs can also be performed in a recursive way by replacing
 //   ///   uses of the instructions that use the value with UndefValue.
-//   void replaceValueWithUndef(Value *V, bool RemoveInsts = false, bool Recursive = true,
+//   void replaceUsesWithUndef(Value *V, bool RemoveUses = false, bool Recursive = true,
 //                              Instruction *Exclude = nullptr) {
 //     /// If the value is undef, we dont need to do anything
 //     if (isa<UndefValue>(V))
@@ -681,7 +681,7 @@
 //       Value *Undef = UndefValue::get(Inst->getType());
 //       Inst->replaceAllUsesWith(Undef);
 //       // Mark the instruction for removal
-//       if(RemoveInsts) {
+//       if(RemoveUses) {
 //         // LLVM_DEBUG(dbgs() << "    -> Instruction removed\n");
 //         Inst->eraseFromParent();
 //       }
@@ -1029,8 +1029,8 @@
 //     LLVM_DEBUG(dbgs() << TaskEdt.DE << "\n");
 
 //     /// Remove Argument 0 and 1 from Original Task Outlined Function
-//     replaceValueWithUndef(OutlinedFn->getArg(0), true);
-//     replaceValueWithUndef(OutlinedFn->getArg(1), true);
+//     replaceUsesWithUndef(OutlinedFn->getArg(0), true);
+//     replaceUsesWithUndef(OutlinedFn->getArg(1), true);
 //     ValuesToRemove.push_back(CB);
   
 //     // Iterate through the basic blocks and check/replace terminators

@@ -49,17 +49,6 @@ if (NOT NOELLE_INSTALL_DIR)
     "    Please set NOELLE_INSTALL_DIR to the path where NOELLE is installed.")
 endif()
 
-# include(FetchContent)
-# FetchContent_Declare(
-#   noelle
-#   GIT_REPOSITORY  "https://github.com/randreshg/noelle.git"
-#   GIT_TAG         v14
-# )
-# set(NOELLE_SVF OFF)
-# set(NOELLE_SCAF ON)
-# FetchContent_MakeAvailable(noelle)
-# FetchContent_GetProperties(noelle)
-# include_directories(${noelle_SOURCE_DIR}/include)
 include(ExternalProject)
 ExternalProject_Add(
     noelle

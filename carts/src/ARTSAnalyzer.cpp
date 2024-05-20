@@ -1,9 +1,11 @@
 #include "ARTSAnalyzer.h"
 #include "ARTS.h"
 #include "ARTSUtils.h"
+
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/Debug.h"
-#include <unordered_set>
 
 /// DEBUG
 #define DEBUG_TYPE "arts-analyzer"
@@ -64,7 +66,7 @@ bool ARTSAnalyzer::identifyEDTs(Function &F) {
   // DominatorTree *DT;
   //  = AG.getAnalysis<DominatorTreeAnalysis>(F);
 
-  LLVM_DEBUG(dbgs() << "\n");
+  LLVM_DEBUG(dbgs() << "--------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << "Identifying EDTs for: " << F.getName() << "\n");
 
   /// If function is not IPO amendable, we give up
@@ -87,67 +89,25 @@ bool ARTSAnalyzer::identifyEDTs(Function &F) {
       omp::Type RTF = omp::getRTFunction(*CB);
       switch (RTF) {
       case omp::PARALLEL: {
-        LLVM_DEBUG(dbgs() << TAG << "Parallel Region Found: " << "\n  " << *CB
-                          << "\n");
+        LLVM_DEBUG(dbgs() << "- - - - - -- - - - - - - - - -\n");
+        LLVM_DEBUG(dbgs() << TAG << "Parallel Region Found: " << *CB << "\n");
         auto *ParallelEDT = handleParallelRegion(CB);
+        LLVM_DEBUG(dbgs() << "- - - - - -- - - - - - - - - -\n");
+        identifyEDTs(*ParallelEDT->getTaskBody());
         auto *DoneEDT = handleDoneRegion(ParallelEDT);
         CurrentI = DoneEDT->CallInst;
       } break;
       case omp::TASKALLOC: {
-        LLVM_DEBUG(dbgs() << TAG << "Task Region Found: " << "\n  " << *CB
-                          << "\n");
-
-        /// Split block at __kmpc_omp_task_alloc
-        // auto TaskItrStr = std::to_string(TaskRegion++);
-        // auto TaskName = "task.region." + TaskItrStr;
-        // BasicBlock *TaskBB;
-        // if (CurrentI != &(CurrentBB->front())) {
-        //   TaskBB = SplitBlock(CurrentI->getParent(), CurrentI, DT, LI,
-        //   nullptr,
-        //                       TaskName);
-        // } else {
-        //   TaskBB = CurrentBB;
-        //   TaskBB->setName(TaskName);
-        // }
-        // /// Find the task call
-        // while ((CurrentI = CurrentI->getNextNonDebugInstruction())) {
-        //   auto *TCB = dyn_cast<CallBase>(CurrentI);
-        //   if (TCB && omp::getRTFunction(*TCB) == omp::TASK)
-        //     break;
-        // }
-        // assert(CurrentI && "Task RT call not found");
-        // /// Remove the task call. We dont need it anymore, and this helps in
-        // /// memory analysis
-        // auto *NextI = CurrentI->getNextNonDebugInstruction();
-        // CurrentI->eraseFromParent();
-        // CurrentI = NextI;
-
-        // /// Task are asynchronous. So no need to handle "Done region"
-        // if (!isa<ReturnInst>(CurrentI)) {
-        //   BasicBlock *TaskDone = SplitBlock(TaskBB, CurrentI, DT, LI,
-        //   nullptr);
-        //   // NextBB = handleDoneRegion(TaskDone, DT, "task.", TaskItrStr);
-        //   NextBB = TaskDone;
-        // }
-
-        /// Analyze Outlined Region
-        // handleTaskOutlinedRegion(CB);
+        LLVM_DEBUG(dbgs() << "- - - - - -- - - - - - - - - -\n");
+        LLVM_DEBUG(dbgs() << TAG << "Task Region Found: " << *CB << "\n");
+        auto *TaskEDT = handleTaskRegion(CB);
+        LLVM_DEBUG(dbgs() << "- - - - - -- - - - - - - - - -\n");
+        identifyEDTs(*TaskEDT->getTaskBody());
+        CurrentI = TaskEDT->CallInst;
+        // LLVM_DEBUG(dbgs() << "\n" << *CurrentI->getModule() << "\n");
       } break;
       case omp::TASKWAIT: {
-        // /// \Note A taskwait requires an event.
-        // /// Split block at __kmpc_omp_taskwait
-        // BasicBlock *TaskWaitBB =
-        //     SplitBlock(CurrentI->getParent(), CurrentI, DT, LI, nullptr,
-        //                "taskwait.region." + std::to_string(TaskRegion));
-        // /// Split block again at the next instruction
-        // CurrentI = CurrentI->getNextNonDebugInstruction();
-        // BasicBlock *TaskWaitDone =
-        //     SplitBlock(TaskWaitBB, CurrentI, DT, LI, nullptr,
-        //                "taskwait.done." + std::to_string(TaskRegion));
-        // NextBB = TaskWaitDone;
-        // /// Add the taskwait region to the map
-        // // AT.insertEDTBlock(TaskWaitBB, RTF, CB);
-        // TaskRegion++;
+        assert(false && "Taskwait not implemented yet");
       } break;
       case omp::OTHER: {
         LLVM_DEBUG(dbgs() << TAG << "Other Function Found: " << "\n  " << *CB
@@ -168,7 +128,7 @@ bool ARTSAnalyzer::identifyEDTs(Function &F) {
       }
     } while ((CurrentI = CurrentI->getNextNonDebugInstruction()));
   } while ((CurrentBB = NextBB));
-  return false;
+  return true;
 }
 
 void ARTSAnalyzer::analyzeDeps() {
@@ -185,20 +145,23 @@ void ARTSAnalyzer::analyzeDeps() {
 
 EDT *ARTSAnalyzer::handleParallelRegion(CallBase *CB) {
   LLVM_DEBUG(dbgs() << "\n" << TAG << "Handling parallel region\n");
-  /// Get RTF Info
-  const Data &RTI = omp::getRTData(omp::PARALLEL);
-  auto *OutlinedFn = dyn_cast<Function>(
-      CB->getArgOperand(RTI.OutlinedFnPos)->stripPointerCasts());
+  auto *OutlinedFn = omp::getOutlinedFunction(CB);
   /// Create ParallelEDT
   EDT &ParallelEDT = *createEDT(EDT::Type::PARALLEL);
-  /// Set EDTEnv with the Call Arguments
-  for (auto ArgNum = RTI.KeepCallArgsFrom; ArgNum < CB->data_operands_size();
-       ++ArgNum) {
-    auto *Arg = CB->getArgOperand(ArgNum);
-    ParallelEDT.insertValueToEnv(Arg);
+  /// Set EDT Data environment
+  DenseMap<Value *, Value *> RewiringMap;
+  const Data &RTI = omp::getRTData(omp::getRTFunction(*CB));
+  Argument *FnArgItr = OutlinedFn->arg_begin() + RTI.KeepArgsFrom;
+  Use *CallArgItr = CB->arg_begin() + RTI.KeepCallArgsFrom;
+  for (auto ArgNum = RTI.KeepArgsFrom; ArgNum < OutlinedFn->arg_size();
+       ++CallArgItr, ++FnArgItr, ++ArgNum) {
+    ParallelEDT.insertValueToEnv(*CallArgItr);
+    RewiringMap[FnArgItr] = *CallArgItr;
   }
-  /// ParallelEDT Body
-  omp::preprocessing(CB);
+  /// Preprocessing
+  rewireValues(RewiringMap);
+  cleanFunction(OutlinedFn);
+  /// Add function to EDT
   AIB.insertEDTEntry(ParallelEDT);
   ParallelEDT.cloneAndAddBasicBlocks(OutlinedFn);
   AIB.redirectEntryAndExit(ParallelEDT, &(OutlinedFn->getEntryBlock()));
@@ -206,9 +169,9 @@ EDT *ARTSAnalyzer::handleParallelRegion(CallBase *CB) {
   /// InsertEDTCall
   AIB.setInsertPoint(CB);
   ParallelEDT.CallInst = AIB.insertEDTCall(ParallelEDT);
-  omp::postprocessing(CB);
-  removeValue(CB, true);
-  OutlinedFn->eraseFromParent();
+  /// Remove instructions
+  removeValue(CB);
+  removeValue(OutlinedFn);
   return &ParallelEDT;
 }
 
@@ -240,162 +203,110 @@ EDT *ARTSAnalyzer::handleTaskRegion(CallBase *CB) {
   // - For firstprivate variables, the access of the privates field is
   //   obtained by obtaining stores done to offset 8 of the returned Val of the
   //   kmp_task_t_with_privates struct.
+  LLVM_DEBUG(dbgs() << "\n" << TAG << "Handling task region\n");
+  /// Create TaskEDT
+  EDT &TaskEDT = *createEDT(EDT::Type::TASK);
+  /// Get the size of the kmp_task_t struct
+  const DataLayout &DL = CB->getModule()->getDataLayout();
+  LLVMContext &Ctx = CB->getContext();
+  const auto *TaskStruct = dyn_cast<StructType>(CB->getType());
+  const auto TaskDataSize = static_cast<int64_t>(
+      DL.getTypeAllocSize(TaskStruct->getTypeByName(Ctx, "struct.kmp_task_t")));
 
-  //   const uint32_t TaskOutlinedFunctionPos = 5;
-  //   /// Maps a value to an offset in the task data
-  //   DenseMap<Value *, int64_t> ValueToOffsetTD;
-  //   /// Maps an offset to a value in the Outlined Function
-  //   DenseMap<int64_t, Value *> OffsetToValueOF;
+  /// Analyze Task Data
+  /// This analysis assumes we only have stores to the task struct
+  /// Get offsets and values from the Task Data - Call to __kmpc_omp_task_alloc
+  DenseMap<Value *, int64_t> ValueToOffsetTD;
+  Instruction *CurI = CB;
+  do {
+    if (auto *SI = dyn_cast<StoreInst>(CurI)) {
+      int64_t Offset = -1;
+      auto *Val = SI->getValueOperand();
+      GetPointerBaseWithConstantOffset(SI->getPointerOperand(), Offset, DL);
+      ValueToOffsetTD[Val] = Offset;
+      /// Private variables
+      if (Offset >= TaskDataSize) {
+        TaskEDT.insertValueToEnv(Val, false);
+        continue;
+      }
+      /// Shared variables
+      TaskEDT.insertValueToEnv(Val, true);
+      continue;
+    }
+    /// Break if we find a call to a task function
+    if (auto *CI = dyn_cast<CallInst>(CurI)) {
+      if (omp::isTaskFunction(*CI))
+        break;
+    }
+  } while ((CurI = CurI->getNextNonDebugInstruction()));
 
-  //   /// Get context and module
-  //   const DataLayout &DL = CB->getModule()->getDataLayout();
-  //   LLVMContext &Ctx = CB->getContext();
+  /// Rewrite Task Outlined Function arguments to match the Task Data
+  auto *OutlinedFn = omp::getOutlinedFunction(CB);
+  Argument *TaskData = dyn_cast<Argument>(OutlinedFn->arg_begin() + 1);
+  /// This assumes the 'desaggregation' happens in the first basic block
+  BasicBlock &EntryBB = OutlinedFn->getEntryBlock();
+  auto *TaskDataPtr = &*(++EntryBB.begin());
+  /// Get offsets and values from the Task Data - Task Outlined function
+  DenseMap<int64_t, Value *> OffsetToValueOF;
+  CurI = &*EntryBB.begin();
+  while ((CurI = CurI->getNextNonDebugInstruction())) {
+    if (!isa<LoadInst>(CurI))
+      continue;
 
-  //   /// Get the size of the kmp_task_t struct
-  //   const auto *TaskStruct = dyn_cast<StructType>(CB->getType());
-  //   const auto TaskDataSize = static_cast<int64_t>(DL.getTypeAllocSize(
-  //       TaskStruct->getTypeByName(Ctx, "struct.kmp_task_t")));
+    auto *L = cast<LoadInst>(CurI);
+    auto *Val = L->getPointerOperand();
+    int64_t Offset = -1;
+    auto *BasePointer = GetPointerBaseWithConstantOffset(Val, Offset, DL);
 
-  //   /// Analyze Task Data
-  //   /// This analysis assumes we only have stores to the task struct
-  //   DataEnv TaskInfoDE;
-  //   BasicBlock *BB = CB->getParent();
-  //   for (Instruction &I : *BB) {
-  //     if (&I == CB)
-  //       continue;
-  //     if (!isa<StoreInst>(&I))
-  //       continue;
+    if (Offset == -1)
+      continue;
 
-  //     int64_t Offset = -1;
-  //     auto *S = cast<StoreInst>(&I);
-  //     GetPointerBaseWithConstantOffset(S->getPointerOperand(), Offset, DL);
-  //     auto *Val = S->getValueOperand();
-  //     ValueToOffsetTD[Val] = Offset;
+    bool Cond = (Offset >= TaskDataSize && BasePointer == TaskData) ||
+                (Offset < TaskDataSize && BasePointer == TaskDataPtr);
+    if (!Cond)
+      continue;
 
-  //     /// Private variables
-  //     if(Offset >= TaskDataSize) {
-  //       TaskInfoDE.Privates.insert(Val);
-  //       continue;
-  //     }
-  //     /// Shared variables
-  //     TaskInfoDE.Shareds.insert(Val);
-  //   }
+    OffsetToValueOF[Offset] = L;
+    if (OffsetToValueOF.size() == ValueToOffsetTD.size())
+      break;
+  }
+  assert(ValueToOffsetTD.size() == OffsetToValueOF.size() &&
+         "ValueToOffsetTD and ValueToOffsetOF have different sizes");
 
-  //   /// Analyze Outlined Function
-  //   Function *OutlinedFn =
-  //     dyn_cast<Function>(CB->getArgOperand(TaskOutlinedFunctionPos));
-  //   Argument *TaskData = dyn_cast<Argument>(OutlinedFn->arg_begin() + 1);
-  //   /// This assumes the 'desaggregation' happens in the first basic block
-  //   BasicBlock *EntryBB = &OutlinedFn->getEntryBlock();
-  //   BasicBlock::iterator Itr = EntryBB->begin();
-  //   auto *TaskDataPtr = &*Itr;
+  /// Preprocessing
+  DenseMap<Value *, Value *> RewiringMap;
+  for (auto Itr : ValueToOffsetTD) {
+    auto *From = Itr.first;
+    auto *To = OffsetToValueOF[Itr.second];
+    RewiringMap[To] = From;
+  }
+  rewireValues(RewiringMap);
+  cleanFunction(OutlinedFn);
 
-  //   // Iterate from the second instruction onwards
-  //   ++Itr;
-  //   for (; Itr != BB->end(); ++Itr) {
-  //     Instruction &I = *Itr;
-  //     if(!isa<LoadInst>(&I))
-  //       continue;
+  /// Add function to EDT
+  AIB.insertEDTEntry(TaskEDT);
+  TaskEDT.cloneAndAddBasicBlocks(OutlinedFn);
+  AIB.redirectEntryAndExit(TaskEDT, &(OutlinedFn->getEntryBlock()));
+  TaskEDT.adjustDataAndControlFlowToUseClones();
+  /// Get call to __kmpc_omp_task
+  CurI = CB;
+  while ((CurI = CurI->getNextNonDebugInstruction())) {
+    auto *TCB = dyn_cast<CallBase>(CurI);
+    if (TCB && omp::getRTFunction(*TCB) == omp::TASK)
+      break;
+  }
+  assert(CurI && "Task RT call not found");
+  /// Insert Call to TaskEDT
+  AIB.setInsertPoint(CurI);
+  TaskEDT.CallInst = AIB.insertEDTCall(TaskEDT);
+  /// Remove instructions
+  removeValue(CB);
+  // removeValue(CurI);
+  removeValue(OutlinedFn);
 
-  //     auto *L = cast<LoadInst>(&I);
-  //     auto *Val = L->getPointerOperand();
-  //     int64_t Offset = -1;
-  //     auto *BasePointer = GetPointerBaseWithConstantOffset(Val, Offset, DL);
-
-  //     if(Offset == -1)
-  //       continue;
-
-  //     auto Cond = (Offset >= TaskDataSize && BasePointer == TaskData) ||
-  //                       (Offset <  TaskDataSize && BasePointer ==
-  //                       TaskDataPtr);
-  //     if(!Cond)
-  //       continue;
-
-  //     OffsetToValueOF[Offset] = L;
-  //     if(OffsetToValueOF.size() == ValueToOffsetTD.size())
-  //       break;
-  //   }
-
-  //   /// Assert size of value to offset map
-  //   assert(ValueToOffsetTD.size() == OffsetToValueOF.size() &&
-  //           "ValueToOffsetTD and ValueToOffsetOF have different sizes");
-
-  //   /// Generate new function signature using OffsetToValueTD
-  //   SmallVector<Type *, 16> NewArgumentTypes;
-  //   for(auto Itr : ValueToOffsetTD) {
-  //     auto *V = Itr.first;
-  //     NewArgumentTypes.push_back(V->getType());
-  //   }
-  //   FunctionType *NewFnTy =
-  //       FunctionType::get(Type::getVoidTy(Ctx), NewArgumentTypes, false);
-  //   LLVM_DEBUG(dbgs() << " - Function rewrite '" << OutlinedFn->getName()
-  //                     << "' from " << *OutlinedFn->getFunctionType() << " to
-  //                     "
-  //                     << *NewFnTy << "\n");
-
-  //   /// Create the new function body and insert it into the module.
-  //   Function *NewFn = Function::Create(NewFnTy, OutlinedFn->getLinkage(),
-  //                                       OutlinedFn->getAddressSpace());
-  //   OutlinedFn->getParent()->getFunctionList().insert(
-  //     OutlinedFn->getIterator(), NewFn);
-  //   NewFn->takeName(OutlinedFn);
-  //   NewFn->setName("task.edt");
-  //   OutlinedFn->setSubprogram(nullptr);
-  //   OutlinedFn->setMetadata("dbg", nullptr);
-
-  //   /// Create Edt for new function
-  //   EdtInfo &TaskEdt = *AT.insertEdt(EdtInfo::TASK, NewFn);
-
-  //   /// Move BB to new function
-  //   NewFn->splice(NewFn->begin(), OutlinedFn);
-  //   /// Rewire the function arguments.
-  //   Argument *NewFnArgItr = NewFn->arg_begin();
-  //   for (auto TDItr : ValueToOffsetTD) {
-  //     Value *V = OffsetToValueOF[TDItr.second];
-  //     V->replaceAllUsesWith(NewFnArgItr);
-  //     /// Add to Task data environment
-  //     DataEnv::Type Type = TaskInfoDE.getType(TDItr.first);
-  //     AT.insertArgToDE(&*NewFnArgItr, Type, TaskEdt);
-  //     ++NewFnArgItr;
-  //   }
-
-  //   /// Generate CallInst to NewFn
-  //   SmallVector<Value *, 0> NewCallArgs;
-  //   for (auto TDItr : ValueToOffsetTD) {
-  //     auto *Arg = TDItr.first;
-  //     NewCallArgs.push_back(Arg);
-  //     /// Map Value (Shared) with list of EDTs that use it
-  //     // if (PointerType *PT = dyn_cast<PointerType>(Arg->getType()))
-  //     //   AT.insertValueToEdt(Arg, &TaskEdt);
-  //   }
-
-  //   auto *LastInstruction = BB->getTerminator();
-  //   auto *NewCI =
-  //       CallInst::Create(NewFn, NewCallArgs, std::nullopt, "",
-  //       LastInstruction);
-  //   AT.insertEdtCall(NewCI);
-  //   NewCI->setTailCallKind(cast<CallInst>(CB)->getTailCallKind());
-  //   LLVM_DEBUG(dbgs() << " - New CB: " << *NewCI << "\n");
-  //   LLVM_DEBUG(dbgs() << TaskEdt.DE << "\n");
-
-  //   /// Remove Argument 0 and 1 from Original Task Outlined Function
-  //   replaceValueWithUndef(OutlinedFn->getArg(0), true);
-  //   replaceValueWithUndef(OutlinedFn->getArg(1), true);
-  //   ValuesToRemove.push_back(CB);
-
-  //   // Iterate through the basic blocks and check/replace terminators
-  //   for (auto &NewBB : *NewFn) {
-  //     auto *Terminator = NewBB.getTerminator();
-  //     if (isa<ReturnInst>(Terminator)) {
-  //       IRBuilder<> Builder(Terminator);
-  //       Builder.CreateRetVoid();
-  //       Terminator->eraseFromParent();
-  //     }
-  //   }
-
-  //   if(!identifyEDTs(*NewFn))
-  //     return false;
-  return nullptr;
+  // LLVM_DEBUG(dbgs() << "CURI BB: " << *TaskEDT.getTaskBody()->getParent()
+  //                   << "\n");
+  return &TaskEDT;
 }
 
 EDT *ARTSAnalyzer::handleDoneRegion(EDT *DomEDT) {
@@ -444,9 +355,9 @@ EDT *ARTSAnalyzer::handleDoneRegion(EDT *DomEDT) {
   return &DoneEDT;
 }
 
+/// EDT Interface
 uint64_t ARTSAnalyzer::getNumEDTs() { return EDTs.size(); }
 
-/// Create EDT
 EDT *ARTSAnalyzer::createEDT(EDT::Type Ty) {
   LLVM_DEBUG(dbgs() << TAG << "Creating EDT with signature: "
                     << *AIB.EdtFunction << "\n");
@@ -456,8 +367,15 @@ EDT *ARTSAnalyzer::createEDT(EDT::Type Ty) {
   return E;
 }
 
-/// Insert an EDT
 void ARTSAnalyzer::insertEDT(EDT *E) {
   EDTs.insert(E);
-  // EDTsPerType[E->getType()].insert(E);
+  EDTPerFunction[E->getTaskBody()] = E;
 }
+
+void ARTSAnalyzer::removeEDT(EDT *E) {
+  LLVM_DEBUG(dbgs() << TAG << "Removing EDT: " << E->getName() << "\n");
+  EDTs.remove(E);
+  EDTPerFunction.erase(E->getTaskBody());
+}
+
+EDT *ARTSAnalyzer::getEDT(Function *F) { return EDTPerFunction[F]; }

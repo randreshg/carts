@@ -147,7 +147,7 @@ __ARTS_STRUCT_TYPE(Edt, artsEdt, false, Header, EdtPtr, Int32, Int32, artsGuid_t
 
 /*
 typedef void (*artsEdt_t) (
-  uint32_t paramc, uint64_t * paramv, uint32_t depc, artsEdtDep_t depv[]);
+  uint32_t paramc, uint64_t *paramv, uint32_t depc, artsEdtDep_t depv[]);
 */
 __ARTS_FUNCTION_TYPE(EdtFunction, false, Void, Int32, Int64Ptr, Int32, EdtDepPtr)
 

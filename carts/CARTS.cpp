@@ -65,10 +65,11 @@ struct CARTS : public ModulePass {
 
     // AA.getNumberofOpenMPRegions(M);
     AA.identifyEDTs(*MainFunction);
+
     // LLVM_DEBUG(dbgs() << TAG << "- Number of instructions: " << Insts << "\n");
     /// Print module info
     LLVM_DEBUG(dbgs() <<  "\n ---------------------------------------- \n");
-    LLVM_DEBUG(dbgs() << TAG << "Module: " << "\n");
+    LLVM_DEBUG(dbgs() << TAG << "Module: " << M);
     return false;
   }
 
