@@ -1,24 +1,28 @@
 #ifndef LLVM_ARTS_UTILS_H
 #define LLVM_ARTS_UTILS_H
 
-#include "noelle/core/Noelle.hpp"
+#include <cstdint>
+
 #include "llvm/Analysis/AssumptionCache.h"
-// #include "llvm/Analysis/CallGraph.h"
-#include "ARTS.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
-#include <cstdint>
 
-namespace arts {
+#include "ARTS.h"
+
+/// ------------------------------------------------------------------- ///
+///                            ARTS UTILS                               ///
+/// Set of utilities to handle IR values and functions.
+/// ------------------------------------------------------------------- ///
+namespace arts_utils {
 
 /// It finds the BBs that are dominated by FromBB and add
 /// them to the DominatedBlocks vector.
 void getDominatedBBs(BasicBlock *FromBB, DominatorTree &DT,
-                     BlockSequence &DominatedBlocks);
+                     arts::BlockSequence &DominatedBlocks);
 
 /// Rewire the values in the RewiringMap.
 ///   - Key: Old Value
@@ -30,7 +34,8 @@ void cleanFunction(Function *F);
 void removeFunction(Function *F);
 
 /// Remove values interface
-void removeValue(Value *V, bool RecursiveRemove = false, bool RecursiveUndef = true);
+void removeValue(Value *V, bool RecursiveRemove = false,
+                 bool RecursiveUndef = true);
 void removeValue(Value *V, Instruction *ExcludeInst,
                  bool RecursiveRemove = false, bool RecursiveUndef = true);
 void removeValues(SmallVector<Value *, 16> ValuesToRemove);
@@ -39,7 +44,8 @@ void removeValues(SmallVector<Value *, 16> ValuesToRemove);
 /// - The processs can also be performed in a recursive way by replacing
 ///   uses of the instructions that use the value with UndefValue.
 /// - The depth of the recursion can be controlled.
-void replaceUsesWithUndef(Value *V, bool RemoveUses = false, bool Recursive = true,
+void replaceUsesWithUndef(Value *V, bool RemoveUses = false,
+                          bool Recursive = true,
                           uint32_t MaxDepth = UINT32_MAX);
 void replaceUsesWithUndef(Value *V, Instruction *ExcludeInst = nullptr,
                           bool RemoveUses = false, bool Recursive = true,
@@ -47,6 +53,12 @@ void replaceUsesWithUndef(Value *V, Instruction *ExcludeInst = nullptr,
 /// Removes the lifetime markers from the function.
 void removeLifetimeMarkers(Function &F);
 
+/// ------------------------------------------------------------------- ///
+///                               OMP                                   ///
+/// OpenMP related utilities. It contains helper functions to get       ///
+/// information about OpenMP regions and runtime function, and          ///
+/// check if a function is an OpenMP runtime function.
+/// ------------------------------------------------------------------- ///
 namespace omp {
 /// OMP INFO
 /// Helper Struct to get OpenMP related information
@@ -78,6 +90,6 @@ bool isTaskFunction(CallBase &CB);
 bool isRTFunction(CallBase &CB);
 
 } // namespace omp
-} // namespace arts
+} // namespace arts_utils
 
 #endif // LLVM_ARTS_UTILS_H

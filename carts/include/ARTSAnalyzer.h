@@ -1,29 +1,31 @@
+//===- ARTSAnalyzer.h ------*- C++ -*-===//
 #ifndef LLVM_ARTS_ANALYZER_H
 #define LLVM_ARTS_ANALYZER_H
+
+#include <cstdint>
+#include <sys/types.h>
 
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Value.h"
-#include "llvm/Support/InstructionCost.h"
-#include "llvm/Transforms/IPO/Attributor.h"
-#include <cstdint>
-#include <sys/types.h>
+
+#include "noelle/core/Noelle.hpp"
 
 #include "ARTSIRBuilder.h"
 
 using namespace llvm;
 namespace arts {
 struct ARTSAnalyzer {
-  // ARTSAnalyzer(AnalysisGetter AG) : AG(AG) {}
-  ARTSAnalyzer(Module &M, Noelle &NM, ARTSIRBuilder &AIB) : M(M), NM(NM), AIB(AIB) {}
+  ARTSAnalyzer(Module &M, Noelle &NM, ARTSIRBuilder &AIB)
+      : M(M), NM(NM), AIB(AIB) {}
 
   /// This function identifies the EDTs in the function
   bool identifyEDTs(Function &F);
   /// Analyze EDTs
   void analyzeDeps();
   Instruction *handleParallelRegion(CallBase *CB);
-  Instruction *handleParallelDoneRegion(EDT *DomEDT);
+  Instruction *handleParallelDoneRegion(CallBase *CB);
   Instruction *handleTaskRegion(CallBase *CB);
   /// EDTs
   uint64_t getNumEDTs();
@@ -38,9 +40,6 @@ private:
   Module &M;
   /// Noelle Manager
   Noelle &NM;
-  // AnalysisGetter AG;
-  /// Program Dependence Graph
-  // PDG &DG;
   /// ARTS IR Builder
   ARTSIRBuilder &AIB;
   /// Set of EDTs

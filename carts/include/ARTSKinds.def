@@ -40,6 +40,7 @@ __ARTS_TYPE(Int16Ptr)
 __ARTS_TYPE(Int32Ptr)
 __ARTS_TYPE(Int64Ptr)
 __ARTS_TYPE(Double)
+__ARTS_TYPE(Float)
 
 ARTS_TYPE(SizeTy, M.getDataLayout().getIntPtrType(Ctx))
 

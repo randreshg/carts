@@ -1,24 +1,21 @@
+#include <sys/types.h>
+
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Use.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 
-// #include "noelle/core/Noelle.hpp"
-// #include "llvm/Analysis/CallGraph.h"
 #include "ARTS.h"
 #include "ARTSUtils.h"
-#include "llvm/Support/Debug.h"
-#include <sys/types.h>
 
 using namespace llvm;
-// using namespace arcana::noelle;
-// using BlockSequence = SmallVector<BasicBlock *, 0>;
 
 /// DEBUG
 #define DEBUG_TYPE "arts-utils"
@@ -27,8 +24,12 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 #endif
 
 /// ARTSUtils
-namespace arts {
+namespace arts_utils {
+using namespace arts;
 
+/// ------------------------------------------------------------------- ///
+/// --------------------------- ARTS UTILS ---------------------------- ///
+/// ------------------------------------------------------------------- ///
 void getDominatedBBs(BasicBlock *FromBB, DominatorTree &DT,
                      BlockSequence &DominatedBlocks) {
   Function &F = *FromBB->getParent();
@@ -187,7 +188,9 @@ void removeLifetimeMarkers(Function &F) {
   }
 }
 
-/// -------------------------------- OMP -------------------------------- ///
+/// ------------------------------------------------------------------- ///
+/// ------------------------------ OMP -------------------------------- ///
+/// ------------------------------------------------------------------- ///
 namespace omp {
 Function *getOutlinedFunction(CallBase *Call) {
   auto Data = getRTData(getRTFunction(*Call));
@@ -259,6 +262,6 @@ bool isRTFunction(CallBase &CB) {
     return true;
   return false;
 }
-} // namespace omp
 
-} // namespace arts
+} // namespace omp
+} // namespace arts_utils

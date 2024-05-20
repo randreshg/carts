@@ -1,11 +1,13 @@
 
-#include "ARTS.h"
-#include "ARTSAnalyzer.h"
-#include "ARTSIRBuilder.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Transforms/Utils/Local.h"
+
+#include "ARTS.h"
+#include "ARTSUtils.h"
 
 using namespace llvm;
 using namespace arts;
+using namespace arts_utils;
 
 /// DEBUG
 #define DEBUG_TYPE "arts"
@@ -20,6 +22,32 @@ uint32_t EDTEnvironment::getParamC() { return ParamV.size(); }
 uint32_t EDTEnvironment::getDepC() { return DepV.size(); }
 
 /// EDT
+void EDT::removeDeadInstructions() {
+  LLVM_DEBUG(dbgs() << TAG << "Deleting dead instructions in EDT: "
+                    << F->getName() << "\n");
+  SmallVector<Value *, 16> ValuesToRemove;
+  for (auto &BB : *F) {
+    for (auto &I : BB) {
+      /// If the instruction is trivially dead, remove it
+      if (isInstructionTriviallyDead(&I)) {
+        LLVM_DEBUG(dbgs() << TAG << "- Removing: " << I << "\n");
+        ValuesToRemove.push_back(&I);
+        continue;
+      }
+      /// However, if the instruction is not trivially dead, check its operands
+      /// If any of them is undef, remove the instruction
+      for (auto &Op : I.operands()) {
+        if (isa<UndefValue>(Op.get())) {
+          LLVM_DEBUG(dbgs() << TAG << "- Removing: " << I << "\n");
+          ValuesToRemove.push_back(&I);
+          break;
+        }
+      }
+    }
+  }
+  removeValues(ValuesToRemove);
+}
+
 void EDT::insertValueToEnv(Value *Val) {
   /// Pointer is a depv, else, it is a paramv
   if (PointerType *PT = dyn_cast<PointerType>(Val->getType()))

@@ -7,6 +7,7 @@
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Transforms/Utils/Local.h"
 
 /// DEBUG
 #define DEBUG_TYPE "arts-analyzer"
@@ -17,7 +18,8 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 /// Namespaces
 using namespace llvm;
 using namespace arts;
-using namespace arts::omp;
+using namespace arts_utils;
+using namespace arts_utils::omp;
 
 bool ARTSAnalyzer::identifyEDTs(Function &F) {
   /// This function identifies the regions that will be transformed to
@@ -157,33 +159,35 @@ Instruction *ARTSAnalyzer::handleParallelRegion(CallBase *CB) {
   ParallelEDT.CallInst = AIB.insertEDTCall(ParallelEDT);
 
   /// Identify EDTs in the Parallel Body
+  LLVM_DEBUG(dbgs() << "\nIdentifying EDTs in the Parallel Body\n");
   identifyEDTs(*ParallelEDT.getTaskBody());
 
   /// Identify EDTs in the Done Region
-  auto *DoneEDT = handleParallelDoneRegion(&ParallelEDT);
+  auto *NextInst = handleParallelDoneRegion(CB);
 
   /// Remove instructions
   removeValue(CB, false, true);
   removeValue(OutlinedFn);
-  return ParallelEDT.CallInst;
+  ParallelEDT.removeDeadInstructions();
+
+  LLVM_DEBUG(dbgs() << "- - - - - -- - - - - - - - - - - - - - - - - - -\n");
+  LLVM_DEBUG(dbgs() << "ParallelEDT CallInst: " << *ParallelEDT.CallInst
+                    << "\n\n");
+  LLVM_DEBUG(dbgs() << "ParallelEDT: \n" << *ParallelEDT.getTaskBody());
+  LLVM_DEBUG(dbgs() << "- - - - - -- - - - - - - - - - - - - - - - - - -\n");
+  return NextInst;
 }
 
-
-Instruction *ARTSAnalyzer::handleParallelDoneRegion(EDT *DomEDT) {
+Instruction *ARTSAnalyzer::handleParallelDoneRegion(CallBase *CB) {
   LLVM_DEBUG(dbgs() << "\n" << TAG << "Handling done region\n");
-  auto *CallToEDT = DomEDT->CallInst;
-  auto *SplitInst = CallToEDT->getNextNonDebugInstruction();
-
-  //   /// Get first instruction of BB to analyze if we need a new function
-  // If Instruction is a return, we do not need a new function...
-  // If it is a call to another EDT, we do not need a new function...
+  auto *SplitInst = CB->getNextNonDebugInstruction();
 
   /// Split block at Call to EDT
   LoopInfo *LI = nullptr;
   DominatorTree *DT = nullptr;
-  BasicBlock *DoneBB = SplitBlock(CallToEDT->getParent(), SplitInst, DT, LI);
+  BasicBlock *DoneBB = SplitBlock(CB->getParent(), SplitInst, DT, LI);
   /// Create DoneEDT
-  auto &NDT = NM.getDominators(CallToEDT->getFunction())->DT;
+  auto &NDT = NM.getDominators(CB->getFunction())->DT;
   auto Region = NDT.getDescendants(DoneBB);
   BlockSequence RegionSeq;
   for (auto *BB : Region)
@@ -201,48 +205,52 @@ Instruction *ARTSAnalyzer::handleParallelDoneRegion(EDT *DomEDT) {
   AIB.redirectEntryAndExit(DoneEDT, RegionSeq.front());
   DoneEDT.adjustDataAndControlFlowToUseClones();
   /// InsertEDTCall
-  auto *NextInst = CallToEDT->getNextNonDebugInstruction();
+  auto *NextInst = CB->getNextNonDebugInstruction();
   assert(isa<BranchInst>(NextInst) && "Next instruction is not a BranchInst");
   AIB.setInsertPoint(NextInst);
   DoneEDT.CallInst = AIB.insertEDTCall(DoneEDT);
   /// Replace NextInst with a ret instruction
   IRBuilder<> Builder(NextInst);
   Builder.CreateRet(Builder.getInt32(0));
-  NextInst->eraseFromParent();
-  // Remove BBs
+  /// Remove instructions
+  removeValue(NextInst);
   for (auto *BB : RegionSeq)
     BB->eraseFromParent();
+
+  LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - - - - -\n");
+  LLVM_DEBUG(dbgs() << "DoneEDT CallInst: " << *DoneEDT.CallInst << "\n\n");
+  LLVM_DEBUG(dbgs() << "DoneEDT:\n" << *DoneEDT.getTaskBody());
+  LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - - - - -\n");
   return DoneEDT.CallInst;
 }
 
 Instruction *ARTSAnalyzer::handleTaskRegion(CallBase *CB) {
   /// Analyze return pointer
-  // For the shared variables we are interested in all stores that are done
-  // to the shareds field of the kmp_task_t struct. For the firstprivate
-  // variables we are interested in all stores that are done to the
-  // privates
-  // field of the kmp_task_t_with_privates struct.
-  //
-  // The returned Val is a pointer to the
-  // kmp_task_t_with_privates struct.
-  // struct kmp_task_t_with_privates {
-  //    kmp_task_t task_data;
-  //    kmp_privates_t privates;
-  // };
-  // typedef struct kmp_task {
-  //   void *shareds;
-  //   kmp_routine_entry_t routine;
-  //   kmp_int32 part_id;
-  //   kmp_cmplrdata_t data1;
-  //   kmp_cmplrdata_t data2;
-  // } kmp_task_t;
-  //
-  // - For shared variables, the access of the shareds field is obtained by
-  //   obtaining stores done to offset 0 of the returned Val of the
-  //   taskalloc.
-  // - For firstprivate variables, the access of the privates field is
-  //   obtained by obtaining stores done to offset 8 of the returned Val of the
-  //   kmp_task_t_with_privates struct.
+  /// For the shared variables we are interested in all stores that are done
+  /// to the shareds field of the kmp_task_t struct. For the firstprivate
+  /// variables we are interested in all stores that are done to the
+  /// privates fields of the kmp_task_t_with_privates struct.
+  ///
+  /// The returned Val is a pointer to the
+  /// kmp_task_t_with_privates struct.
+  /// struct kmp_task_t_with_privates {
+  ///    kmp_task_t task_data;
+  ///    kmp_privates_t privates;
+  /// };
+  /// typedef struct kmp_task {
+  ///   void *shareds;
+  ///   kmp_routine_entry_t routine;
+  ///   kmp_int32 part_id;
+  ///   kmp_cmplrdata_t data1;
+  ///   kmp_cmplrdata_t data2;
+  /// } kmp_task_t;
+  ///
+  /// - For shared variables, the access of the shareds field is obtained by
+  ///   obtaining stores done to offset 0 of the returned Val of the
+  ///   taskalloc.
+  /// - For firstprivate variables, the access of the privates field is
+  ///   obtained by obtaining stores done to offset 8 of the returned Val of the
+  ///   kmp_task_t_with_privates struct.
   LLVM_DEBUG(dbgs() << "\n" << TAG << "Handling task region\n");
   /// Create TaskEDT
   EDT &TaskEDT = *createEDT(EDT::Type::TASK);
@@ -341,19 +349,22 @@ Instruction *ARTSAnalyzer::handleTaskRegion(CallBase *CB) {
   TaskEDT.CallInst = AIB.insertEDTCall(TaskEDT);
 
   /// Identify EDTs in the Task Body
+  LLVM_DEBUG(dbgs() << "\nIdentifying EDTs in the Task Body\n");
   identifyEDTs(*TaskEDT.getTaskBody());
 
   /// Remove instructions
   removeValue(CB);
   removeValue(CurI, false);
   removeValue(OutlinedFn);
+  TaskEDT.removeDeadInstructions();
 
-  // LLVM_DEBUG(dbgs() << "CURI BB: " << *TaskEDT.getTaskBody()->getParent()
-  //                   << "\n");
+  LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - - -\n");
+  LLVM_DEBUG(dbgs() << "TaskEDT CallInst: " << *TaskEDT.CallInst << "\n\n");
+  LLVM_DEBUG(dbgs() << "TaskEDT \n" << *TaskEDT.getTaskBody());
+  LLVM_DEBUG(dbgs() << "- - - - - -- - - - - - - - - - - - - - - - -\n");
   return TaskEDT.CallInst;
 }
 
-/// EDT Interface
 uint64_t ARTSAnalyzer::getNumEDTs() { return EDTs.size(); }
 
 EDT *ARTSAnalyzer::createEDT(EDT::Type Ty) {
