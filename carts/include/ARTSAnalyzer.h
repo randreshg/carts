@@ -20,6 +20,8 @@ struct ARTSAnalyzer {
   ARTSAnalyzer(Module &M, Noelle &NM, ARTSIRBuilder &AIB)
       : M(M), NM(NM), AIB(AIB) {}
 
+  /// Print the EDTs
+  void debug();
   /// This function identifies the EDTs in the function
   bool identifyEDTs(Function &F);
   /// Analyze EDTs

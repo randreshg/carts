@@ -193,7 +193,11 @@ void ARTSIRBuilder::insertEDTEntry(EDT &E) {
     Value *CastedVal =
         Builder.CreateBitCast(DepVArrayElemPtr, OriginalVal->getType());
     E.addLiveIn(OriginalVal, CastedVal);
-    // E.addLiveOut(OriginalVal, CastedVal);
+    /// Cast to Instruction
+    auto *CastedInst = dyn_cast<Instruction>(CastedVal);
+    auto *OriginalInst = dyn_cast<Instruction>(OriginalVal);
+    if(CastedInst && OriginalInst)
+      E.addLiveOut(OriginalInst, CastedInst);
   }
 
   redirectTo(EntryBB, E.getExit());

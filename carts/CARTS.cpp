@@ -35,13 +35,9 @@ struct CARTS : public ModulePass {
     LLVM_DEBUG(dbgs() << "\n ---------------------------------------- \n");
     LLVM_DEBUG(dbgs() << TAG << "Running CARTS on Module: \n"
                       << M.getName() << "\n");
+    LLVM_DEBUG(dbgs() << "\n ---------------------------------------- \n");
     /// Fetch NOELLE Manager
     auto &NM = getAnalysis<Noelle>();
-    /// Use NOELLE
-    // auto Insts = NM.numberOfProgramInstructions();
-    // /// Fetch the PDG
-    // auto &PDG = *NM.getProgramDependenceGraph();
-
     /// Fetch the FDG of "main"
     auto FM = NM.getFunctionsManager();
     auto MainFunction = FM->getEntryFunction();
@@ -50,13 +46,13 @@ struct CARTS : public ModulePass {
     /// Identify number of OpenMP regions
     auto AIB = ARTSIRBuilder(M);
     auto AA = ARTSAnalyzer(M, NM, AIB);
-
-    // AA.getNumberofOpenMPRegions(M);
     AA.identifyEDTs(*MainFunction);
+    AA.debug();
 
     /// Print module info
     LLVM_DEBUG(dbgs() << "\n ---------------------------------------- \n");
-    LLVM_DEBUG(dbgs() << TAG << "Module: " << M);
+    LLVM_DEBUG(dbgs() << TAG << "Process has finished\n\n" << M << "\n");
+    LLVM_DEBUG(dbgs() << "\n ---------------------------------------- \n");
     return false;
   }
 
@@ -65,7 +61,7 @@ struct CARTS : public ModulePass {
   }
 };
 
-}// namespace
+} // namespace
 
 // Next there is code to register your pass to "opt"
 char CARTS::ID = 0;
@@ -87,33 +83,3 @@ static RegisterStandardPasses
                   PM.add(_PassMaker = new CARTS());
                 }
               }); // ** for -O0
-
-/// CARTS optimizations pass.
-// class CARTSPass : public PassInfoMixin<CARTSPass> {
-// public:
-//   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
-//     LLVM_DEBUG(dbgs() << "\n ---------------------------------------- \n");
-//     LLVM_DEBUG(dbgs() << TAG << "Running CARTS on Module: \n"
-//                       << M.getName() << "\n");
-
-//     // Assuming you did not change anything of the IR code
-//     return PreservedAnalyses::all();
-//   }
-// };
-
-// } // namespace
-
-// // This part is the new way of registering your pass
-// extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
-// llvmGetPassPluginInfo() {
-//   return {LLVM_PLUGIN_API_VERSION, "CARTS", "v0.1", [](PassBuilder &PB) {
-//             PB.registerPipelineParsingCallback(
-//                 [](StringRef Name, ModulePassManager &MPM,
-//                    ArrayRef<PassBuilder::PipelineElement>) {
-//                   if (Name == "CARTS") {
-//                     MPM.addPass(CARTSPass());
-//                     return true;
-//                   }
-//                   return false;
-//                 });
-//           }};
