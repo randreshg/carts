@@ -1,23 +1,12 @@
-//===- ARTSConstants.h - OpenMP related constants and helpers ------ C++
-//-*-===//
-//===----------------------------------------------------------------------===//
-/// \file
-///
-/// This file defines constants and helpers used when dealing with OpenMP.
-///
+//===- ARTS.h - ARTS-Related stucts -----------------------------*- C++ -*-===//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_ARTS_H
 #define LLVM_ARTS_H
 
-#include "noelle/core/Noelle.hpp"
 #include "noelle/core/Task.hpp"
 #include "llvm/IR/BasicBlock.h"
-#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
-#include "llvm/IR/PassManager.h"
-
-
 
 namespace arts {
 /// Namespace for all ARTS related functionality.
@@ -26,6 +15,22 @@ using namespace arcana::noelle;
 
 /// Data Environment EDT
 class EDT;
+
+/// ------------------------------------------------------------------- ///
+///                          DATA ENVIRONMENT                           ///
+/// Contains the list of parameters and dependencies required for the
+/// EDT to run. It contains the following information:
+/// - Paramc are the number of static parameters.
+///   It corresponds to the number of first private variables.
+/// - Depc is the number of dependencies required for the EDT to run.
+///   It corresponds to the number of shared variables.
+/// - Paramv are the static parameters that are copied into the EDT
+///   closure.It corresponds to the private variables.
+/// - Depv are the dependencies that are copied into the EDT closure.
+///   It corresponds to the shared variables.
+/// IMPORTANT: Firstprivate is live-in, shared is both live-in and live-out,
+/// lastprivate is live-out
+/// ------------------------------------------------------------------- ///
 class EDTEnvironment {
 public:
   EDTEnvironment(EDT *E) : E(E) {}
@@ -35,22 +40,10 @@ public:
   uint32_t getParamC();
   uint32_t getDepC();
 
+  /// Attributes
   EDT *E;
-  /// Paramc are the number of static parameters.
-  /// It corresponds to the number of first private variables.
-  // uint64_t ParamC = 0;
-  /// Depc is the number of dependencies required for the EDT to run.
-  /// It corresponds to the number of shared variables.
-  // uint64_t DepC = 0;
-  /// Paramv are the static parameters that are copied into the EDT closure.
-  /// It corresponds to the private variables.
   SetVector<Value *> ParamV;
-  /// Depv are the dependencies that are copied into the EDT closure.
-  /// It corresponds to the shared variables.
   SetVector<Value *> DepV;
-
-  /// IMPORTANT: Firstprivate is live-in, shared is both live-in and live-out,
-  /// lastprivate is live-out
 };
 
 inline raw_ostream &operator<<(raw_ostream &OS, EDTEnvironment &Env) {
@@ -60,7 +53,11 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDTEnvironment &Env) {
   return OS;
 }
 
-/// EDT
+/// ------------------------------------------------------------------- ///
+///                          EDT INTERFACE                              ///
+/// The EDT is the main abstraction used by ARTS to represent the tasks
+/// in the program.
+/// ------------------------------------------------------------------- ///
 class EDT : public Task {
 public:
   enum class Type { MAIN, TASK, LOOP, PARALLEL, WRAPPER, DONE, OTHER };
@@ -70,7 +67,9 @@ public:
     setName();
   }
 
-  /// Interface
+  /// Analyzes the instructions in the EDT and removes the dead ones.
+  void removeDeadInstructions();
+  /// Others
   void insertValueToEnv(Value *Val);
   void insertValueToEnv(Value *Val, bool IsDepV);
   void cloneAndAddBasicBlocks(Function *F);
@@ -88,7 +87,6 @@ public:
   EDTEnvironment Env;
   Type Ty = Type::OTHER;
   BasicBlock *Body = nullptr;
-  /// First and last instruction of the EDT
   Instruction *GuidAddr = nullptr; // First instruction
   Instruction *CallInst = nullptr; // Last instruction
 };
@@ -100,7 +98,10 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDT &Edt) {
   return OS;
 }
 
-/// ----------------------------------------------------- ///
+/// ------------------------------------------------------------------- ///
+///                            ART TYPES                                ///
+/// It contains the types used by the ARTS runtime library.
+/// ------------------------------------------------------------------- ///
 namespace types {
 /// IDs for all arts runtime library (RTL) functions.
 enum class RuntimeFunction {
@@ -113,7 +114,5 @@ enum class RuntimeFunction {
 #include "ARTSKinds.def"
 
 } // end namespace types
-
 } // end namespace arts
-
 #endif // LLVM_ARTS_H

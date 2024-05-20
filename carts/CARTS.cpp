@@ -1,37 +1,20 @@
-#include "llvm/Analysis/RegionInfo.h"
-#include "llvm/IR/Function.h"
-// #include "llvm/IR/LegacyPassManager.h"
-#include "llvm/Pass.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/raw_ostream.h"
+// Description: Main file for the Compiler for ARTS (CARTS) pass.
 
-#include "llvm/IR/PassManager.h"
-#include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
-
-#include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
-#include "llvm/IR/DerivedTypes.h"
-#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Value.h"
-#include "llvm/Transforms/IPO/Attributor.h"
-#include "llvm/Transforms/Utils/BasicBlockUtils.h"
-#include "llvm/Transforms/Utils/Cloning.h"
-#include "llvm/Transforms/Utils/CodeExtractor.h"
+#include "llvm/Pass.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/Debug.h"
 
-#include "llvm/Transforms/IPO/Attributor.h"
+#include "noelle/core/Noelle.hpp"
 
-#include "ARTS.h"
 #include "ARTSAnalyzer.h"
 #include "ARTSIRBuilder.h"
-#include "noelle/core/Noelle.hpp"
 
 using namespace llvm;
 using namespace arts;
-// using BlockSequence = SmallVector<BasicBlock *, 0>;
 
 /// DEBUG
 #define DEBUG_TYPE "carts"
@@ -71,7 +54,6 @@ struct CARTS : public ModulePass {
     // AA.getNumberofOpenMPRegions(M);
     AA.identifyEDTs(*MainFunction);
 
-  
     /// Print module info
     LLVM_DEBUG(dbgs() << "\n ---------------------------------------- \n");
     LLVM_DEBUG(dbgs() << TAG << "Module: " << M);
@@ -83,7 +65,7 @@ struct CARTS : public ModulePass {
   }
 };
 
-}
+}// namespace
 
 // Next there is code to register your pass to "opt"
 char CARTS::ID = 0;
@@ -105,7 +87,6 @@ static RegisterStandardPasses
                   PM.add(_PassMaker = new CARTS());
                 }
               }); // ** for -O0
-
 
 /// CARTS optimizations pass.
 // class CARTSPass : public PassInfoMixin<CARTSPass> {
