@@ -15,6 +15,9 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/PassManager.h"
+
+
 
 namespace arts {
 /// Namespace for all ARTS related functionality.

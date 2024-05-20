@@ -21,6 +21,23 @@
 #include <omp.h>
 #include <stdlib.h>
 
+// int main() {
+//   // Generate a random number between 10 and 10
+//   int shared_number = rand();
+//   int random_number = rand() % 10 + 10;
+//   #pragma omp parallel
+//   {
+//     #pragma omp task firstprivate(random_number)
+//     {
+//       printf("I think the number is %d/%d\n",
+//              shared_number, random_number);
+//       shared_number--;
+//     }
+//   }
+//   printf("The final number is %d - %d.\n", shared_number, random_number);
+//   return 0;
+// }
+
 int main() {
   // Generate a random number between 10 and 10
   int number = 1;

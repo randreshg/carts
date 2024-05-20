@@ -1,5 +1,6 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AssumptionCache.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Use.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -69,15 +70,23 @@ void removeValue(Value *V, Instruction *ExcludeInst, bool RecursiveRemove,
   if (auto *I = dyn_cast<Instruction>(V)) {
     /// Call instructions
     if (auto *CBI = dyn_cast<CallBase>(I)) {
-      /// Iterate through the arguments and replace them with undef using int
-      for (uint32_t ArgItr = 0; ArgItr < CBI->data_operands_size(); ArgItr++) {
-        Value *Arg = CBI->getArgOperand(ArgItr);
-        if (!isa<PointerType>(Arg->getType()))
-          continue;
-
-        removeValue(Arg, CBI, RecursiveRemove, RecursiveUndef);
+      if (RecursiveRemove) {
+        for (auto *CallArgItr = CBI->arg_begin(); CallArgItr != CBI->arg_end();
+             ++CallArgItr) {
+          Value *Arg = *CallArgItr;
+          if (!isa<PointerType>(Arg->getType()))
+            continue;
+          removeValue(Arg, CBI, RecursiveRemove, RecursiveUndef);
+        }
+      } else {
+        for (auto *CallArgItr = CBI->arg_begin(); CallArgItr != CBI->arg_end();
+             ++CallArgItr) {
+          CallArgItr->set(UndefValue::get((*CallArgItr)->getType()));
+        }
       }
+      ExcludeInst = nullptr;
     }
+
     LLVM_DEBUG(dbgs() << TAG << "   - Removing instruction: " << *I << "\n");
     replaceUsesWithUndef(I, ExcludeInst, RecursiveRemove, RecursiveUndef);
     I->eraseFromParent();

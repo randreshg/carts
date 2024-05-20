@@ -4,6 +4,7 @@
 
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Support/Debug.h"
 
@@ -91,20 +92,14 @@ bool ARTSAnalyzer::identifyEDTs(Function &F) {
       case omp::PARALLEL: {
         LLVM_DEBUG(dbgs() << "- - - - - -- - - - - - - - - -\n");
         LLVM_DEBUG(dbgs() << TAG << "Parallel Region Found: " << *CB << "\n");
-        auto *ParallelEDT = handleParallelRegion(CB);
+        CurrentI = handleParallelRegion(CB);
         LLVM_DEBUG(dbgs() << "- - - - - -- - - - - - - - - -\n");
-        identifyEDTs(*ParallelEDT->getTaskBody());
-        auto *DoneEDT = handleDoneRegion(ParallelEDT);
-        CurrentI = DoneEDT->CallInst;
       } break;
       case omp::TASKALLOC: {
         LLVM_DEBUG(dbgs() << "- - - - - -- - - - - - - - - -\n");
         LLVM_DEBUG(dbgs() << TAG << "Task Region Found: " << *CB << "\n");
-        auto *TaskEDT = handleTaskRegion(CB);
+        CurrentI = handleTaskRegion(CB);
         LLVM_DEBUG(dbgs() << "- - - - - -- - - - - - - - - -\n");
-        identifyEDTs(*TaskEDT->getTaskBody());
-        CurrentI = TaskEDT->CallInst;
-        // LLVM_DEBUG(dbgs() << "\n" << *CurrentI->getModule() << "\n");
       } break;
       case omp::TASKWAIT: {
         assert(false && "Taskwait not implemented yet");
@@ -112,15 +107,6 @@ bool ARTSAnalyzer::identifyEDTs(Function &F) {
       case omp::OTHER: {
         LLVM_DEBUG(dbgs() << TAG << "Other Function Found: " << "\n  " << *CB
                           << "\n");
-        // if (!Callee || !A.isFunctionIPOAmendable(*Callee))
-        //   continue;
-        // /// Get return type of the callee
-        // Type *RetTy = Callee->getReturnType();
-        // /// If the return type is void, we are not interested
-        // if(RetTy->isVoidTy())
-        //   continue;
-        /// If the return type is a pointer, it is because we probably would
-        /// use the returned Val. For this case, we need to create an EDT.
       } break;
       default:
         continue;
@@ -143,7 +129,7 @@ void ARTSAnalyzer::analyzeDeps() {
   ///   immediately.
 }
 
-EDT *ARTSAnalyzer::handleParallelRegion(CallBase *CB) {
+Instruction *ARTSAnalyzer::handleParallelRegion(CallBase *CB) {
   LLVM_DEBUG(dbgs() << "\n" << TAG << "Handling parallel region\n");
   auto *OutlinedFn = omp::getOutlinedFunction(CB);
   /// Create ParallelEDT
@@ -169,13 +155,67 @@ EDT *ARTSAnalyzer::handleParallelRegion(CallBase *CB) {
   /// InsertEDTCall
   AIB.setInsertPoint(CB);
   ParallelEDT.CallInst = AIB.insertEDTCall(ParallelEDT);
+
+  /// Identify EDTs in the Parallel Body
+  identifyEDTs(*ParallelEDT.getTaskBody());
+
+  /// Identify EDTs in the Done Region
+  auto *DoneEDT = handleParallelDoneRegion(&ParallelEDT);
+
   /// Remove instructions
-  removeValue(CB);
+  removeValue(CB, false, true);
   removeValue(OutlinedFn);
-  return &ParallelEDT;
+  return ParallelEDT.CallInst;
 }
 
-EDT *ARTSAnalyzer::handleTaskRegion(CallBase *CB) {
+
+Instruction *ARTSAnalyzer::handleParallelDoneRegion(EDT *DomEDT) {
+  LLVM_DEBUG(dbgs() << "\n" << TAG << "Handling done region\n");
+  auto *CallToEDT = DomEDT->CallInst;
+  auto *SplitInst = CallToEDT->getNextNonDebugInstruction();
+
+  //   /// Get first instruction of BB to analyze if we need a new function
+  // If Instruction is a return, we do not need a new function...
+  // If it is a call to another EDT, we do not need a new function...
+
+  /// Split block at Call to EDT
+  LoopInfo *LI = nullptr;
+  DominatorTree *DT = nullptr;
+  BasicBlock *DoneBB = SplitBlock(CallToEDT->getParent(), SplitInst, DT, LI);
+  /// Create DoneEDT
+  auto &NDT = NM.getDominators(CallToEDT->getFunction())->DT;
+  auto Region = NDT.getDescendants(DoneBB);
+  BlockSequence RegionSeq;
+  for (auto *BB : Region)
+    RegionSeq.push_back(BB);
+  EDT &DoneEDT = *createEDT(EDT::Type::DONE);
+  /// Set DataEnvironment
+  CodeExtractor CE(RegionSeq);
+  SetVector<Value *> Inputs, Outputs, Sinks;
+  CE.findInputsOutputs(Inputs, Outputs, Sinks);
+  for (auto *I : Inputs)
+    DoneEDT.insertValueToEnv(I);
+  /// DoneEDT Body
+  AIB.insertEDTEntry(DoneEDT);
+  DoneEDT.cloneAndAddBasicBlocks(RegionSeq);
+  AIB.redirectEntryAndExit(DoneEDT, RegionSeq.front());
+  DoneEDT.adjustDataAndControlFlowToUseClones();
+  /// InsertEDTCall
+  auto *NextInst = CallToEDT->getNextNonDebugInstruction();
+  assert(isa<BranchInst>(NextInst) && "Next instruction is not a BranchInst");
+  AIB.setInsertPoint(NextInst);
+  DoneEDT.CallInst = AIB.insertEDTCall(DoneEDT);
+  /// Replace NextInst with a ret instruction
+  IRBuilder<> Builder(NextInst);
+  Builder.CreateRet(Builder.getInt32(0));
+  NextInst->eraseFromParent();
+  // Remove BBs
+  for (auto *BB : RegionSeq)
+    BB->eraseFromParent();
+  return DoneEDT.CallInst;
+}
+
+Instruction *ARTSAnalyzer::handleTaskRegion(CallBase *CB) {
   /// Analyze return pointer
   // For the shared variables we are interested in all stores that are done
   // to the shareds field of the kmp_task_t struct. For the firstprivate
@@ -299,60 +339,18 @@ EDT *ARTSAnalyzer::handleTaskRegion(CallBase *CB) {
   /// Insert Call to TaskEDT
   AIB.setInsertPoint(CurI);
   TaskEDT.CallInst = AIB.insertEDTCall(TaskEDT);
+
+  /// Identify EDTs in the Task Body
+  identifyEDTs(*TaskEDT.getTaskBody());
+
   /// Remove instructions
   removeValue(CB);
-  // removeValue(CurI);
+  removeValue(CurI, false);
   removeValue(OutlinedFn);
 
   // LLVM_DEBUG(dbgs() << "CURI BB: " << *TaskEDT.getTaskBody()->getParent()
   //                   << "\n");
-  return &TaskEDT;
-}
-
-EDT *ARTSAnalyzer::handleDoneRegion(EDT *DomEDT) {
-  LLVM_DEBUG(dbgs() << "\n" << TAG << "Handling done region\n");
-  auto *CallToEDT = DomEDT->CallInst;
-  auto *SplitInst = CallToEDT->getNextNonDebugInstruction();
-
-  //   /// Get first instruction of BB to analyze if we need a new function
-  // If Instruction is a return, we do not need a new function...
-  // If it is a call to another EDT, we do not need a new function...
-
-  /// Split block at Call to EDT
-  LoopInfo *LI = nullptr;
-  DominatorTree *DT = nullptr;
-  BasicBlock *DoneBB = SplitBlock(CallToEDT->getParent(), SplitInst, DT, LI);
-  /// Create DoneEDT
-  auto &NDT = NM.getDominators(CallToEDT->getFunction())->DT;
-  auto Region = NDT.getDescendants(DoneBB);
-  BlockSequence RegionSeq;
-  for (auto *BB : Region)
-    RegionSeq.push_back(BB);
-  EDT &DoneEDT = *createEDT(EDT::Type::DONE);
-  /// Set DataEnvironment
-  CodeExtractor CE(RegionSeq);
-  SetVector<Value *> Inputs, Outputs, Sinks;
-  CE.findInputsOutputs(Inputs, Outputs, Sinks);
-  for (auto *I : Inputs)
-    DoneEDT.insertValueToEnv(I);
-  /// DoneEDT Body
-  AIB.insertEDTEntry(DoneEDT);
-  DoneEDT.cloneAndAddBasicBlocks(RegionSeq);
-  AIB.redirectEntryAndExit(DoneEDT, RegionSeq.front());
-  DoneEDT.adjustDataAndControlFlowToUseClones();
-  /// InsertEDTCall
-  auto *NextInst = CallToEDT->getNextNonDebugInstruction();
-  assert(isa<BranchInst>(NextInst) && "Next instruction is not a BranchInst");
-  AIB.setInsertPoint(NextInst);
-  DoneEDT.CallInst = AIB.insertEDTCall(DoneEDT);
-  /// Replace NextInst with a ret instruction
-  IRBuilder<> Builder(NextInst);
-  Builder.CreateRet(Builder.getInt32(0));
-  NextInst->eraseFromParent();
-  // Remove BBs
-  for (auto *BB : RegionSeq)
-    BB->eraseFromParent();
-  return &DoneEDT;
+  return TaskEDT.CallInst;
 }
 
 /// EDT Interface

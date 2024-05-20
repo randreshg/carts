@@ -1,10 +1,13 @@
-#include "llvm/Pass.h"
-#include "llvm/IR/Function.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/IR/LegacyPassManager.h"
-#include "llvm/Transforms/IPO/PassManagerBuilder.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Analysis/RegionInfo.h"
+#include "llvm/IR/Function.h"
+// #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/Pass.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
+
+#include "llvm/IR/PassManager.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/PassPlugin.h"
 
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
@@ -19,10 +22,12 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
 
-#include "noelle/core/Noelle.hpp"
+#include "llvm/Transforms/IPO/Attributor.h"
+
 #include "ARTS.h"
 #include "ARTSAnalyzer.h"
 #include "ARTSIRBuilder.h"
+#include "noelle/core/Noelle.hpp"
 
 using namespace llvm;
 using namespace arts;
@@ -44,15 +49,15 @@ struct CARTS : public ModulePass {
   bool doInitialization(Module &M) override { return false; }
 
   bool runOnModule(Module &M) override {
-    LLVM_DEBUG(dbgs() <<  "\n ---------------------------------------- \n");
-    LLVM_DEBUG(dbgs() << TAG << "Running CARTS on Module: \n" << M.getName() << "\n");
+    LLVM_DEBUG(dbgs() << "\n ---------------------------------------- \n");
+    LLVM_DEBUG(dbgs() << TAG << "Running CARTS on Module: \n"
+                      << M.getName() << "\n");
     /// Fetch NOELLE Manager
-    auto &NM= getAnalysis<Noelle>();
+    auto &NM = getAnalysis<Noelle>();
     /// Use NOELLE
-    auto Insts = NM.numberOfProgramInstructions();
-
-    /// Fetch the PDG
-    auto &PDG = *NM.getProgramDependenceGraph();
+    // auto Insts = NM.numberOfProgramInstructions();
+    // /// Fetch the PDG
+    // auto &PDG = *NM.getProgramDependenceGraph();
 
     /// Fetch the FDG of "main"
     auto FM = NM.getFunctionsManager();
@@ -66,9 +71,9 @@ struct CARTS : public ModulePass {
     // AA.getNumberofOpenMPRegions(M);
     AA.identifyEDTs(*MainFunction);
 
-    // LLVM_DEBUG(dbgs() << TAG << "- Number of instructions: " << Insts << "\n");
+  
     /// Print module info
-    LLVM_DEBUG(dbgs() <<  "\n ---------------------------------------- \n");
+    LLVM_DEBUG(dbgs() << "\n ---------------------------------------- \n");
     LLVM_DEBUG(dbgs() << TAG << "Module: " << M);
     return false;
   }
@@ -78,7 +83,7 @@ struct CARTS : public ModulePass {
   }
 };
 
-} // namespace
+}
 
 // Next there is code to register your pass to "opt"
 char CARTS::ID = 0;
@@ -100,3 +105,34 @@ static RegisterStandardPasses
                   PM.add(_PassMaker = new CARTS());
                 }
               }); // ** for -O0
+
+
+/// CARTS optimizations pass.
+// class CARTSPass : public PassInfoMixin<CARTSPass> {
+// public:
+//   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
+//     LLVM_DEBUG(dbgs() << "\n ---------------------------------------- \n");
+//     LLVM_DEBUG(dbgs() << TAG << "Running CARTS on Module: \n"
+//                       << M.getName() << "\n");
+
+//     // Assuming you did not change anything of the IR code
+//     return PreservedAnalyses::all();
+//   }
+// };
+
+// } // namespace
+
+// // This part is the new way of registering your pass
+// extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+// llvmGetPassPluginInfo() {
+//   return {LLVM_PLUGIN_API_VERSION, "CARTS", "v0.1", [](PassBuilder &PB) {
+//             PB.registerPipelineParsingCallback(
+//                 [](StringRef Name, ModulePassManager &MPM,
+//                    ArrayRef<PassBuilder::PipelineElement>) {
+//                   if (Name == "CARTS") {
+//                     MPM.addPass(CARTSPass());
+//                     return true;
+//                   }
+//                   return false;
+//                 });
+//           }};

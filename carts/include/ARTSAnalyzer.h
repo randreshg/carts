@@ -5,6 +5,7 @@
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Value.h"
+#include "llvm/Support/InstructionCost.h"
 #include "llvm/Transforms/IPO/Attributor.h"
 #include <cstdint>
 #include <sys/types.h>
@@ -21,14 +22,9 @@ struct ARTSAnalyzer {
   bool identifyEDTs(Function &F);
   /// Analyze EDTs
   void analyzeDeps();
-  /// Analyzes the outlined region, replaces the RT call with a call to the
-  /// outlined function, which is also modified to remove the arguments that
-  /// are not needed.
-  EDT *handleParallelRegion(CallBase *CB);
-  /// Analyzes Task region
-  EDT *handleTaskRegion(CallBase *CB);
-  /// Analyzes the done region and return next BB to analyze
-  EDT *handleDoneRegion(EDT *DomEDT);
+  Instruction *handleParallelRegion(CallBase *CB);
+  Instruction *handleParallelDoneRegion(EDT *DomEDT);
+  Instruction *handleTaskRegion(CallBase *CB);
   /// EDTs
   uint64_t getNumEDTs();
   EDT *getEDT(Function *F);
