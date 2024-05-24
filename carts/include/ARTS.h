@@ -7,6 +7,7 @@
 #include "noelle/core/Task.hpp"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/Module.h"
 
 namespace arts {
 /// Namespace for all ARTS related functionality.
@@ -92,9 +93,7 @@ public:
   getLiveOuts() {
     return liveOutClones;
   }
-  std::unordered_map<Value *, Value *> &getLiveIns() {
-    return liveInClones;
-  }
+  std::unordered_map<Value *, Value *> &getLiveIns() { return liveInClones; }
 
   /// Attributes
   EDTEnvironment Env;
@@ -127,6 +126,53 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDT &Edt) {
   }
   return OS;
 }
+
+/// ------------------------------------------------------------------- ///
+///                             EDT GRAPH                               ///
+/// The data structure used to represent the EDTs and its dependencies
+/// in the program.
+/// ------------------------------------------------------------------- ///
+class EDTGraphEdge {
+public:
+  EDTGraphEdge() = default;
+  virtual ~EDTGraphEdge();
+
+  void isDataDep(void);
+  void isControlDep(void);
+  virtual void print() = 0;
+
+private:
+  bool IsDataDep = false;
+  bool IsControlDep = false;
+};
+
+class EDTGraphNode {
+public:
+  EDTGraphNode(EDT &E);
+  virtual void print(void) = 0;
+  virtual ~EDTGraphNode();
+
+private:
+  EDT &E;
+};
+
+class EDTGraph {
+public:
+  EDTGraph(Module &M);
+
+  EDTGraphNode *getEntryNode(void) const;
+  EDTGraphNode *getEDTNode(EDT *E) const;
+
+private:
+  Module &M;
+  std::unordered_map<Function *, EDTGraphNode *> EDTs;
+  std::unordered_map<EDTGraphNode *,
+                     std::unordered_map<EDTGraphNode *, EDTGraphEdge *>>
+      IncomingEdges;
+  std::unordered_map<EDTGraphNode *,
+                     std::unordered_map<EDTGraphNode *, EDTGraphEdge *>>
+      OutgoingEdges;
+};
 
 /// ------------------------------------------------------------------- ///
 ///                            ART TYPES                                ///

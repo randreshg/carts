@@ -78,3 +78,20 @@ void EDT::cloneAndAddBasicBlocks(BlockSequence &BBs) {
   for (auto BB : BBs)
     cloneAndAddBasicBlock(BB);
 }
+
+/// EDT Graph
+EDTGraph::EDTGraph(Module &M) : M(M) {}
+
+EDTGraphNode *CallGraph::getEntryNode(void) const {
+  Function *f = M.getFunction("main");
+  return this->getFunctionNode(f);
+}
+
+EDTGraphNode *CallGraph::getFunctionNode(Function *f) const {
+  if (this->functions.find(f) == this->functions.end()) {
+    return nullptr;
+  }
+  auto n = this->functions.at(f);
+
+  return n;
+}
