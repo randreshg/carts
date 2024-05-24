@@ -13,36 +13,7 @@
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Debug.h"
 
-// #include "llvm/ADT/SmallSet.h"
-// #include "llvm/ADT/StringExtras.h"
-// #include "llvm/ADT/StringRef.h"
-// #include "llvm/Analysis/AssumptionCache.h"
-// #include "llvm/Analysis/CodeMetrics.h"
-// #include "llvm/Analysis/LoopInfo.h"
-// #include "llvm/Analysis/OptimizationRemarkEmitter.h"
-// #include "llvm/Analysis/ScalarEvolution.h"
-// #include "llvm/Analysis/TargetLibraryInfo.h"
-// #include "llvm/Bitcode/BitcodeReader.h"
-// #include "llvm/IR/Attributes.h"
-// #include "llvm/IR/BasicBlock.h"
-// #include "llvm/IR/CFG.h"
-// #include "llvm/IR/CallingConv.h"
-// #include "llvm/IR/Constant.h"
-// #include "llvm/IR/Constants.h"
-// #include "llvm/IR/DebugInfoMetadata.h"
-// #include "llvm/IR/DerivedTypes.h"
-// #include "llvm/IR/GlobalVariable.h"
-// #include "llvm/IR/IRBuilder.h"
-// #include "llvm/IR/LLVMContext.h"
-// #include "llvm/IR/MDBuilder.h"
-// #include "llvm/IR/Metadata.h"
-// #include "llvm/IR/PassManager.h"
-// #include "llvm/IR/Value.h"
-// #include "llvm/Support/Debug.h"
-
 #include <cassert>
-#include <cstdint>
-#include <optional>
 
 // DEBUG
 #define DEBUG_TYPE "arts-ir-builder"
@@ -196,7 +167,7 @@ void ARTSIRBuilder::insertEDTEntry(EDT &E) {
     /// Cast to Instruction
     auto *CastedInst = dyn_cast<Instruction>(CastedVal);
     auto *OriginalInst = dyn_cast<Instruction>(OriginalVal);
-    if(CastedInst && OriginalInst)
+    if (CastedInst && OriginalInst)
       E.addLiveOut(OriginalInst, CastedInst);
   }
 
@@ -251,9 +222,8 @@ CallInst *ARTSIRBuilder::insertEDTCall(EDT &E) {
   Builder.CreateStore(ConstantInt::get(Int32, EdtEnv.getDepC()), DepC);
   Value *Args[] = {Builder.CreateBitCast(EdtBody, EdtFunctionPtr),
                    Builder.CreateBitCast(E.getGuidAddr(), Int32Ptr),
-                   LoadedParamC,
-                   ParamV,
-                  //  Builder.CreateBitCast(ParamV, Int64Ptr),
+                   LoadedParamC, ParamV,
+                   //  Builder.CreateBitCast(ParamV, Int64Ptr),
                    Builder.CreateLoad(Int32, DepC)};
   Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
   return Builder.CreateCall(F, Args);

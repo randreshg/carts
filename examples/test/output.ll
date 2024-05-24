@@ -326,6 +326,41 @@ Live out instructions:
     -   %0 = bitcast i8** %depv.number to i32*
 
 - - - - - - - - - - - - - - - - - - - - - -
+[carts] Fetching the call graph
+ The function "arts_edt_0" invokes the following functions:
+   [must] "artsReserveGuidRoute"
+     [must]   %16 = call i32* @artsReserveGuidRoute(i32 1, i32 0)
+     [must]   %7 = call i32* @artsReserveGuidRoute(i32 1, i32 0)
+   [must] "artsEdtCreateWithGuid"
+     [must]   %22 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_2, i32* %20, i32 %17, i64* %edt_2_paramv, i32 %21)
+     [EDT] edt_2
+     [must]   %14 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_1, i32* %12, i32 %8, i64* %edt_1_paramv, i32 %13)
+     [EDT] edt_1
+ The function "arts_edt_2" invokes the following functions:
+   [must] "llvm.experimental.noalias.scope.decl"
+     [must]   tail call void @llvm.experimental.noalias.scope.decl(metadata !104), !noelle.pdg.inst.id !107
+   [must] "printf"
+     [must]   %2 = tail call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([27 x i8], [27 x i8]* @.str.3, i64 0, i64 0), i32 noundef %1) #4, !noalias !5, !noelle.pdg.inst.id !9
+ The function "main" invokes the following functions:
+   [must] "rand"
+     [must]   %call1 = tail call i32 @rand() #4, !noelle.pdg.inst.id !15
+     [must]   %call = tail call i32 @rand() #4, !noelle.pdg.inst.id !8
+   [must] "artsReserveGuidRoute"
+     [must]   %10 = call i32* @artsReserveGuidRoute(i32 1, i32 0)
+     [must]   %4 = call i32* @artsReserveGuidRoute(i32 1, i32 0)
+   [must] "artsEdtCreateWithGuid"
+     [must]   %15 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_3, i32* %13, i32 %11, i64* %edt_3_paramv, i32 %14)
+     [EDT] edt_3
+     [must]   %9 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_0, i32* %7, i32 %5, i64* %edt_0_paramv, i32 %8)
+     [EDT] edt_0
+ The function "arts_edt_1" invokes the following functions:
+   [must] "llvm.experimental.noalias.scope.decl"
+     [must]   tail call void @llvm.experimental.noalias.scope.decl(metadata !91), !noelle.pdg.inst.id !94
+   [must] "printf"
+     [must]   %8 = tail call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([44 x i8], [44 x i8]* @.str, i64 0, i64 0), i32 noundef %6, i32 noundef %7, i32 noundef %1, i32 noundef %3) #4, !noalias !5, !noelle.pdg.inst.id !15
+ The function "arts_edt_3" invokes the following functions:
+   [must] "printf"
+     [must]   %4 = call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %2, i32 noundef %3), !noelle.pdg.inst.id !11
 
  ---------------------------------------- 
 [carts] Process has finished
@@ -672,7 +707,7 @@ attributes #5 = { inaccessiblememonly nofree nosync nounwind willreturn }
 # noelle-load -debug-only=arts,carts,arts-analyzer -load-pass-plugin /home/rherreraguaitero/ME/ARTS-env/CARTS/.build/CARTS.so -passes=CARTS test_with_metadata.bc -o test_opt.bc
 llvm-dis test_opt.bc
 clang++ -fopenmp test_opt.bc -O3 -march=native -o test_opt -lstdc++
-/usr/lib64/gcc/x86_64-suse-linux/7/../../../../x86_64-suse-linux/bin/ld: /tmp/test_opt-aae354.o: in function `main':
+/usr/lib64/gcc/x86_64-suse-linux/7/../../../../x86_64-suse-linux/bin/ld: /tmp/test_opt-85d6ba.o: in function `main':
 test.cpp:(.text+0x17): undefined reference to `artsReserveGuidRoute'
 /usr/lib64/gcc/x86_64-suse-linux/7/../../../../x86_64-suse-linux/bin/ld: test.cpp:(.text+0x3d): undefined reference to `artsEdtCreateWithGuid'
 /usr/lib64/gcc/x86_64-suse-linux/7/../../../../x86_64-suse-linux/bin/ld: test.cpp:(.text+0x49): undefined reference to `artsReserveGuidRoute'

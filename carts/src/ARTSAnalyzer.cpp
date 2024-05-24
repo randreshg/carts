@@ -43,11 +43,6 @@ bool ARTSAnalyzer::identifyEDTs(Function &F) {
   /// Remove of lifetime markers
   removeLifetimeMarkers(F);
 
-  /// Aux variables
-  // LoopInfo *LI = nullptr;
-  // DominatorTree *DT;
-  //  = AG.getAnalysis<DominatorTreeAnalysis>(F);
-
   LLVM_DEBUG(dbgs() << "--------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << "Identifying EDTs for: " << F.getName() << "\n");
 
@@ -135,7 +130,9 @@ Instruction *ARTSAnalyzer::handleParallelRegion(CallBase *CB) {
   ParallelEDT.adjustDataAndControlFlowToUseClones();
   /// InsertEDTCall
   AIB.setInsertPoint(CB);
-  ParallelEDT.CallInst = AIB.insertEDTCall(ParallelEDT);
+  auto *NewCall = AIB.insertEDTCall(ParallelEDT);
+  ParallelEDT.CallInst = NewCall;
+  EDTPerCallBase[NewCall] = &ParallelEDT;
 
   /// Identify EDTs in the Parallel Body
   LLVM_DEBUG(dbgs() << "\nIdentifying EDTs in the Parallel Body\n");
@@ -165,6 +162,7 @@ Instruction *ARTSAnalyzer::handleParallelDoneRegion(CallBase *CB) {
   LoopInfo *LI = nullptr;
   DominatorTree *DT = nullptr;
   BasicBlock *DoneBB = SplitBlock(CB->getParent(), SplitInst, DT, LI);
+
   /// Create DoneEDT
   auto &NDT = NM.getDominators(CB->getFunction())->DT;
   auto Region = NDT.getDescendants(DoneBB);
@@ -172,22 +170,28 @@ Instruction *ARTSAnalyzer::handleParallelDoneRegion(CallBase *CB) {
   for (auto *BB : Region)
     RegionSeq.push_back(BB);
   EDT &DoneEDT = *createEDT(EDT::Type::DONE);
+
   /// Set DataEnvironment
   CodeExtractor CE(RegionSeq);
   SetVector<Value *> Inputs, Outputs, Sinks;
   CE.findInputsOutputs(Inputs, Outputs, Sinks);
   for (auto *I : Inputs)
     DoneEDT.insertValueToEnv(I);
+
   /// DoneEDT Body
   AIB.insertEDTEntry(DoneEDT);
   DoneEDT.cloneAndAddBasicBlocks(RegionSeq);
   AIB.redirectEntryAndExit(DoneEDT, RegionSeq.front());
   DoneEDT.adjustDataAndControlFlowToUseClones();
+
   /// InsertEDTCall
   auto *NextInst = CB->getNextNonDebugInstruction();
   assert(isa<BranchInst>(NextInst) && "Next instruction is not a BranchInst");
   AIB.setInsertPoint(NextInst);
-  DoneEDT.CallInst = AIB.insertEDTCall(DoneEDT);
+  auto *NewCall = AIB.insertEDTCall(DoneEDT);
+  DoneEDT.CallInst = NewCall;
+  EDTPerCallBase[NewCall] = &DoneEDT;
+
   /// Replace NextInst with a ret instruction
   IRBuilder<> Builder(NextInst);
   Builder.CreateRet(Builder.getInt32(0));
@@ -200,7 +204,7 @@ Instruction *ARTSAnalyzer::handleParallelDoneRegion(CallBase *CB) {
   LLVM_DEBUG(dbgs() << "DoneEDT CallInst: " << *DoneEDT.CallInst << "\n\n");
   LLVM_DEBUG(dbgs() << "DoneEDT:\n" << *DoneEDT.getTaskBody());
   LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - - - - -\n");
-  return DoneEDT.CallInst;
+  return NewCall;
 }
 
 Instruction *ARTSAnalyzer::handleTaskRegion(CallBase *CB) {
@@ -325,7 +329,9 @@ Instruction *ARTSAnalyzer::handleTaskRegion(CallBase *CB) {
   assert(CurI && "Task RT call not found");
   /// Insert Call to TaskEDT
   AIB.setInsertPoint(CurI);
-  TaskEDT.CallInst = AIB.insertEDTCall(TaskEDT);
+  auto *NewCall = AIB.insertEDTCall(TaskEDT);
+  TaskEDT.CallInst = NewCall;
+  EDTPerCallBase[NewCall] = &TaskEDT;
 
   /// Identify EDTs in the Task Body
   LLVM_DEBUG(dbgs() << "\nIdentifying EDTs in the Task Body\n");
@@ -341,7 +347,7 @@ Instruction *ARTSAnalyzer::handleTaskRegion(CallBase *CB) {
   LLVM_DEBUG(dbgs() << "TaskEDT CallInst: " << *TaskEDT.CallInst << "\n\n");
   LLVM_DEBUG(dbgs() << "TaskEDT \n" << *TaskEDT.getTaskBody());
   LLVM_DEBUG(dbgs() << "- - - - - -- - - - - - - - - - - - - - - - -\n");
-  return TaskEDT.CallInst;
+  return NewCall;
 }
 
 uint64_t ARTSAnalyzer::getNumEDTs() { return EDTs.size(); }
@@ -366,4 +372,10 @@ void ARTSAnalyzer::removeEDT(EDT *E) {
   EDTPerFunction.erase(E->getTaskBody());
 }
 
-EDT *ARTSAnalyzer::getEDT(Function *F) { return EDTPerFunction[F]; }
+EDT *ARTSAnalyzer::getEDT(Function *F) {
+  return EDTPerFunction.count(F) ? EDTPerFunction[F] : nullptr;
+}
+
+EDT *ARTSAnalyzer::getEDT(CallBase *CB) {
+  return EDTPerCallBase.count(CB) ? EDTPerCallBase[CB] : nullptr;
+}

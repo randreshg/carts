@@ -32,6 +32,7 @@ struct ARTSAnalyzer {
   /// EDTs
   uint64_t getNumEDTs();
   EDT *getEDT(Function *F);
+  EDT *getEDT(CallBase *CB);
 
 private:
   EDT *createEDT(EDT::Type Ty);
@@ -48,6 +49,9 @@ private:
   SetVector<EDT *> EDTs;
   /// EDT per function
   DenseMap<Function *, EDT *> EDTPerFunction;
+  /// EDT per callbase
+  DenseMap<CallBase *, EDT *> EDTPerCallBase;
+  /// Maps a value
 };
 } // namespace arts
 
