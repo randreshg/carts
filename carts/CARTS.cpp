@@ -8,13 +8,16 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/Debug.h"
 
+#include "ARTS.h"
 #include "noelle/core/Noelle.hpp"
 
-#include "ARTSAnalyzer.h"
-#include "ARTSIRBuilder.h"
+// #include "ARTSAnalyzer.h"
+// #include "ARTSIRBuilder.h"
+#include "EDTGraph.h"
 
 using namespace llvm;
 using namespace arts;
+using namespace arcana::noelle;
 
 /// DEBUG
 #define DEBUG_TYPE "carts"
@@ -38,72 +41,164 @@ struct CARTS : public ModulePass {
     LLVM_DEBUG(dbgs() << "\n ---------------------------------------- \n");
     /// Fetch NOELLE Manager
     auto &NM = getAnalysis<Noelle>();
+    EDTCache Cache(M, NM);
+    EDTGraph EDTG(Cache);
+    EDTG.print();
     /// Fetch the FDG of "main"
-    auto FM = NM.getFunctionsManager();
+    
 
-    auto MainFunction = FM->getEntryFunction();
+    /*
+     * Fetch the entry point.
+     */
+    // auto fm = NM.getFunctionsManager();
+    // auto mainF = fm->getEntryFunction();
+
+    /*
+     * Data flow analyses
+     */
+    // auto dfa = NM.getDataFlowAnalyses();
+    // auto dfr = dfa.runReachableAnalysis(mainF);
+    // errs() << "Data flow reachable analysis\n";
+    // for (auto &inst : instructions(mainF)) {
+    //   errs() << " Next are the instructions reachable from " << inst << "\n";
+    //   auto &outSet = dfr->OUT(&inst);
+    //   for (auto reachInst : outSet) {
+    //     errs() << "   " << *reachInst << "\n";
+    //   }
+    // }
+
+    /*
+     * Fetch the PDG
+     */
+    // auto PDG = NM.getProgramDependenceGraph();
+
+    /*
+     * Fetch the FDG of "main"
+     */
+    // auto fm = NM.getFunctionsManager();
+    // auto mainF = fm->getEntryFunction();
+    // auto FDG = PDG->createFunctionSubgraph(*mainF);
+
+    // /*
+    //  * Iterate over the dependences
+    //  */
+    // auto iterF = [](Value *src, DGEdge<Value, Value> *dep) -> bool {
+    //   errs() << "   " << *src << " ";
+
+    //   if (isa<ControlDependence<Value, Value>>(dep)) {
+    //     errs() << " CONTROL ";
+    //   } else {
+    //     errs() << " DATA ";
+    //     auto dataDep = cast<DataDependence<Value, Value>>(dep);
+    //     if (dataDep->isRAWDependence()) {
+    //       errs() << " RAW ";
+    //     }
+    //     if (dataDep->isWARDependence()) {
+    //       errs() << " WAR ";
+    //     }
+    //     if (dataDep->isWAWDependence()) {
+    //       errs() << " WAW ";
+    //     }
+    //     if (isa<MemoryDependence<Value, Value>>(dataDep)) {
+    //       errs() << " MEMORY ";
+    //       auto memDep = cast<MemoryDependence<Value, Value>>(dataDep);
+    //       if (isa<MustMemoryDependence<Value, Value>>(memDep)) {
+    //         errs() << " MUST ";
+    //       } else {
+    //         errs() << " MAY ";
+    //       }
+    //     }
+    //   }
+
+    //   errs() << "\n";
+    //   return false;
+    // };
+
+    // for (auto &inst : instructions(mainF)) {
+    //   errs() << "Instruction \"" << inst << "\" depends on\n";
+    //   FDG->iterateOverDependencesTo(&inst, true, true, true, iterF);
+    // }
+
+    // for (auto &inst : instructions(mainF)) {
+    //   errs() << "Instruction \"" << inst << "\" outgoing dependences\n";
+    //   FDG->iterateOverDependencesFrom(&inst, true, true, true, iterF);
+    // }
+
+    // for (auto &inst : instructions(mainF)) {
+    //   for (auto &inst2 : instructions(mainF)) {
+    //     for (auto dep : FDG->getDependences(&inst, &inst2)) {
+    //     }
+    //   }
+    // }
+
+
+    /// Alias analysis
+    // auto AAEngines = NM.getAliasAnalysisEngines();
+    // for (auto e : AAEngines) {
+    //   LLVM_DEBUG(dbgs() << "   " << e->getName() << "  " << e->getRawPointer() << "\n");
+    // }
     // auto FDG = PDG->createFunctionSubgraph(*MainFunction);
 
     /// Identify number of OpenMP regions
-    auto AIB = ARTSIRBuilder(M);
-    auto AA = ARTSAnalyzer(M, NM, AIB);
-    AA.identifyEDTs(*MainFunction);
-    AA.debug();
+    // auto AIB = ARTSIRBuilder(M);
+    // auto AA = ARTSAnalyzer(M, NM, AIB);
+    // AA.identifyEDTs(*MainFunction);
+    // AA.debug();
 
     /// Fetch the call graph.
-    LLVM_DEBUG(dbgs() << TAG << "Fetching the call graph\n");
-    auto *PCG = FM->getProgramCallGraph();
-    for (auto *Node : PCG->getFunctionNodes(true)) {
+    // LLVM_DEBUG(dbgs() << TAG << "Fetching the call graph\n");
+    // auto *PCG = FM->getProgramCallGraph();
+    // for (auto *Node : PCG->getFunctionNodes(true)) {
 
-      /// Fetch the next program's function.
-      auto *Fn = Node->getFunction();
+    //   /// Fetch the next program's function.
+    //   auto *Fn = Node->getFunction();
 
-      /// Fetch the outgoing edges.
-      auto OutEdges = PCG->getOutgoingEdges(Node);
-      if (OutEdges.size() == 0) {
-        LLVM_DEBUG(dbgs() << " The function \"" << Fn->getName()
-                          << "\" has no calls\n");
-        continue;
-      }
+    //   /// Fetch the outgoing edges.
+    //   auto OutEdges = PCG->getOutgoingEdges(Node);
+    //   if (OutEdges.size() == 0) {
+    //     LLVM_DEBUG(dbgs() << " The function \"" << Fn->getName()
+    //                       << "\" has no calls\n");
+    //     continue;
+    //   }
 
-      /// Print the outgoing edges.
-      LLVM_DEBUG(dbgs() << " The function \"" << Fn->getName() << "\"");
-      LLVM_DEBUG(dbgs() << " invokes the following functions:\n");
-      for (auto *CallEdge : OutEdges) {
-        auto *CalleerNode = CallEdge->getCaller();
-        auto *CalleeNode = CallEdge->getCallee();
-        auto *CalleeF = CalleeNode->getFunction();
+    //   /// Print the outgoing edges.
+    //   LLVM_DEBUG(dbgs() << " The function \"" << Fn->getName() << "\"");
+    //   LLVM_DEBUG(dbgs() << " invokes the following functions:\n");
+    //   for (auto *CallEdge : OutEdges) {
+    //     auto *CalleerNode = CallEdge->getCaller();
+    //     auto *CalleeNode = CallEdge->getCallee();
+    //     auto *CalleeF = CalleeNode->getFunction();
 
-        LLVM_DEBUG(dbgs() << "   [");
-        if (CallEdge->isAMustCall()) {
-          LLVM_DEBUG(dbgs() << "must");
-        } else {
-          LLVM_DEBUG(dbgs() << "may");
-        }
-        LLVM_DEBUG(dbgs() << "] \"" << CalleeF->getName() << "\"\n");
+    //     LLVM_DEBUG(dbgs() << "   [");
+    //     if (CallEdge->isAMustCall()) {
+    //       LLVM_DEBUG(dbgs() << "must");
+    //     } else {
+    //       LLVM_DEBUG(dbgs() << "may");
+    //     }
+    //     LLVM_DEBUG(dbgs() << "] \"" << CalleeF->getName() << "\"\n");
 
-        /// Print the sub-edges.
-        for (auto *SubEdge : CallEdge->getSubEdges()) {
-          auto *CallerSubEdge = SubEdge->getCaller();
-          LLVM_DEBUG(dbgs() << "     [");
-          if (SubEdge->isAMustCall()) {
-            LLVM_DEBUG(dbgs() << "must");
-          } else {
-            LLVM_DEBUG(dbgs() << "may");
-          }
-          LLVM_DEBUG(dbgs()
-                     << "] " << *CallerSubEdge->getInstruction() << "\n");
-          /// Check if the it is a call to create an EDT
-          auto *CallInst = dyn_cast<CallBase>(CallerSubEdge->getInstruction());
-          if(!CallInst)
-            continue;
-          EDT *E = AA.getEDT(CallInst);
-          if (!E)
-            continue;
-          LLVM_DEBUG(dbgs() << "     [EDT] " << E->getName() << "\n");
-        }
-      }
-    }
+    //     /// Print the sub-edges.
+    //     for (auto *SubEdge : CallEdge->getSubEdges()) {
+    //       auto *CallerSubEdge = SubEdge->getCaller();
+    //       LLVM_DEBUG(dbgs() << "     [");
+    //       if (SubEdge->isAMustCall()) {
+    //         LLVM_DEBUG(dbgs() << "must");
+    //       } else {
+    //         LLVM_DEBUG(dbgs() << "may");
+    //       }
+    //       LLVM_DEBUG(dbgs()
+    //                  << "] " << *CallerSubEdge->getInstruction() << "\n");
+    //       /// Check if the it is a call to create an EDT
+    //       auto *CallInst = dyn_cast<CallBase>(CallerSubEdge->getInstruction());
+    //       if(!CallInst)
+    //         continue;
+    //       EDT *E = AA.getEDT(CallInst);
+    //       if (!E)
+    //         continue;
+    //       LLVM_DEBUG(dbgs() << "     [EDT] " << E->getName() << "\n");
+    //     }
+    //   }
+    // }
 
     /// Print module info
     LLVM_DEBUG(dbgs() << "\n ---------------------------------------- \n");
