@@ -12,9 +12,11 @@
 
 #include "noelle/core/Noelle.hpp"
 
+#include "ARTS.h"
 #include "ARTSIRBuilder.h"
 
 using namespace llvm;
+using namespace arcana::noelle;
 namespace arts {
 struct ARTSAnalyzer {
   ARTSAnalyzer(Module &M, Noelle &NM, ARTSIRBuilder &AIB)
@@ -26,6 +28,7 @@ struct ARTSAnalyzer {
   bool identifyEDTs(Function &F);
   /// Analyze EDTs
   void analyzeDeps();
+  /// Handle OpenMP calls
   Instruction *handleParallelRegion(CallBase *CB);
   Instruction *handleParallelDoneRegion(CallBase *CB);
   Instruction *handleTaskRegion(CallBase *CB);
@@ -35,7 +38,7 @@ struct ARTSAnalyzer {
   EDT *getEDT(CallBase *CB);
 
 private:
-  EDT *createEDT(EDT::Type Ty);
+  // EDT *createEDT(EDT::Type Ty);
   void insertEDT(EDT *E);
   void removeEDT(EDT *E);
 

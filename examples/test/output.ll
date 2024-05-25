@@ -8,243 +8,84 @@ PDGGenerator: Construct PDG from Analysis
 Embed PDG as metadata
 llvm-dis test_with_metadata.bc
 # noelle-load -debug-only=arts,carts,arts-analyzer,arts-ir-builder,arts-utils -load /home/rherreraguaitero/ME/ARTS-env/CARTS/.build/CARTS.so -CARTS test_with_metadata.bc -o test_opt.bc
-noelle-load -debug-only=arts,carts,arts-analyzer,arts-ir-builder -load /home/rherreraguaitero/ME/ARTS-env/CARTS/.build/CARTS.so -CARTS test_with_metadata.bc -o test_opt.bc
+noelle-load -debug-only=arts,carts,arts-analyzer,arts-ir-builder,edt-graph -load /home/rherreraguaitero/ME/ARTS-env/CARTS/.build/CARTS.so -CARTS test_with_metadata.bc -o test_opt.bc
 
  ---------------------------------------- 
 [carts] Running CARTS on Module: 
 test_with_metadata.bc
 
  ---------------------------------------- 
-[arts-ir-builder] Initializing ARTSIRBuilder
-[arts-ir-builder] ARTSIRBuilder initialized
---------------------------------------------------
-[arts-analyzer] Identifying EDTs for: main
-[arts-analyzer] Other Function Found: 
-    %call = tail call i32 @rand() #6, !noelle.pdg.inst.id !8
-[arts-analyzer] Other Function Found: 
-    %call1 = tail call i32 @rand() #6, !noelle.pdg.inst.id !15
+[edt-graph] Building the EDT Graph
+[edt-graph] Processing function: main
+
 - - - - - - - - - - - - - - - -
-[arts-analyzer] Parallel Region Found:   call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* nonnull @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* nonnull %random_number, i32* nonnull %NewRandom, i32* nonnull %number, i32* nonnull %shared_number), !noelle.pdg.inst.id !18
+[edt-graph] Other Function Found:
+  %call = tail call i32 @rand() #6, !noelle.pdg.inst.id !8
 
-[arts-analyzer] Handling parallel region
-[arts-analyzer] Creating EDT with signature: void (i32, i64*, i32, %struct.artsEdtDep_t*)
-[arts-ir-builder] Initializing EDT
-[arts-ir-builder] Inserting EDT Entry
-[arts-ir-builder] Inserting EDT Call
-[arts-ir-builder] Created ARTS runtime function artsReserveGuidRoute with type i32* (i32, i32)
-[arts-ir-builder] Created ARTS runtime function artsEdtCreateWithGuid with type i32* (void (i32, i64*, i32, %struct.artsEdtDep_t*)*, i32*, i32, i64*, i32)
-
-Identifying EDTs in the Parallel Body
---------------------------------------------------
-[arts-analyzer] Identifying EDTs for: arts_edt_0
 - - - - - - - - - - - - - - - -
-[arts-analyzer] Task Region Found:   %4 = tail call i8* @__kmpc_omp_task_alloc(%struct.ident_t* nonnull @1, i32 undef, i32 1, i64 48, i64 16, i32 (i32, i8*)* bitcast (i32 (i32, %struct.kmp_task_t_with_privates*)* @.omp_task_entry. to i32 (i32, i8*)*)), !noelle.pdg.inst.id !5
+[edt-graph] Other Function Found:
+  %call1 = tail call i32 @rand() #6, !noelle.pdg.inst.id !15
 
-[arts-analyzer] Handling task region
-[arts-analyzer] Creating EDT with signature: void (i32, i64*, i32, %struct.artsEdtDep_t*)
-[arts-ir-builder] Initializing EDT
-[arts-ir-builder] Inserting EDT Entry
-[arts-ir-builder] Inserting EDT Call
-[arts-ir-builder] Found ARTS runtime function artsReserveGuidRoute with type i32* (i32, i32)
-[arts-ir-builder] Found ARTS runtime function artsEdtCreateWithGuid with type i32* (void (i32, i64*, i32, %struct.artsEdtDep_t*)*, i32*, i32, i64*, i32)
-
-Identifying EDTs in the Task Body
---------------------------------------------------
-[arts-analyzer] Identifying EDTs for: arts_edt_1
-[arts-analyzer] Other Function Found: 
-    tail call void @llvm.experimental.noalias.scope.decl(metadata !293), !noelle.pdg.inst.id !239
-[arts-analyzer] Other Function Found: 
-    %15 = tail call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([44 x i8], [44 x i8]* @.str, i64 0, i64 0), i32 noundef %11, i32 noundef %12, i32 noundef %1, i32 noundef %3) #6, !noalias !21, !noelle.pdg.inst.id !30
-[arts] Deleting dead instructions in EDT: arts_edt_1
-[arts] - Removing:   %6 = load %struct.anon*, %struct.anon** undef, align 8, !tbaa !5, !noelle.pdg.inst.id !13
-[arts] - Removing:   %8 = load i32*, i32** %7, align 8, !tbaa !15, !noelle.pdg.inst.id !17
-[arts] - Removing:   %10 = load i32*, i32** %9, align 8, !tbaa !19, !noelle.pdg.inst.id !20
-[arts] - Removing:   %13 = load i32, i32* undef, align 4, !tbaa !25, !alias.scope !21, !noelle.pdg.inst.id !28
-[arts] - Removing:   %14 = load i32, i32* undef, align 4, !tbaa !25, !alias.scope !21, !noelle.pdg.inst.id !29
-- - - - - - - - - - - - - - - - - - - - - - -
-TaskEDT CallInst:   %22 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_1, i32* %20, i32 %16, i64* %edt_1_paramv, i32 %21)
-
-TaskEDT 
-define void @arts_edt_1(i32 %paramc, i64* %paramv, i32 %depc, %struct.artsEdtDep_t* %depv) {
-edt.entry:
-  %paramv.0 = getelementptr inbounds i64, i64* %paramv, i64 0
-  %0 = load i64, i64* %paramv.0, align 8
-  %1 = trunc i64 %0 to i32
-  %paramv.1 = getelementptr inbounds i64, i64* %paramv, i64 1
-  %2 = load i64, i64* %paramv.1, align 8
-  %3 = trunc i64 %2 to i32
-  %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, %struct.artsEdtDep_t* %depv, i32 0, i32 2
-  %4 = bitcast i8** %depv.0 to i32*
-  %depv.1 = getelementptr inbounds %struct.artsEdtDep_t, %struct.artsEdtDep_t* %depv, i32 1, i32 2
-  %5 = bitcast i8** %depv.1 to i32*
-  br label %edt.body
-
-edt.exit:                                         ; preds = %edt.body
-  ret void
-
-edt.body:                                         ; preds = %edt.entry
-  tail call void @llvm.experimental.noalias.scope.decl(metadata !257), !noelle.pdg.inst.id !260
-  %6 = load i32, i32* %4, align 4, !tbaa !70, !noalias !257, !noelle.pdg.inst.id !261
-  %7 = load i32, i32* %5, align 4, !tbaa !70, !noalias !257, !noelle.pdg.inst.id !262
-  %8 = tail call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([44 x i8], [44 x i8]* @.str, i64 0, i64 0), i32 noundef %6, i32 noundef %7, i32 noundef %1, i32 noundef %3) #5, !noalias !257, !noelle.pdg.inst.id !263
-  %9 = load i32, i32* %4, align 4, !tbaa !70, !noalias !257, !noelle.pdg.inst.id !264
-  %10 = add nsw i32 %9, 1, !noelle.pdg.inst.id !265
-  store i32 %10, i32* %4, align 4, !tbaa !70, !noalias !257, !noelle.pdg.inst.id !266
-  %11 = load i32, i32* %5, align 4, !tbaa !70, !noalias !257, !noelle.pdg.inst.id !267
-  %12 = add nsw i32 %11, -1, !noelle.pdg.inst.id !268
-  store i32 %12, i32* %5, align 4, !tbaa !70, !noalias !257, !noelle.pdg.inst.id !269
-  br label %edt.exit
-}
-- - - - - -- - - - - - - - - - - - - - - - -
 - - - - - - - - - - - - - - - -
+[edt-graph] Parallel Region Found:
+  call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* nonnull @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* nonnull %random_number, i32* nonnull %NewRandom, i32* nonnull %number, i32* nonnull %shared_number), !noelle.pdg.inst.id !18
+[arts]  - Setting data environment for ParallelEDT
+
 - - - - - - - - - - - - - - - -
-[arts-analyzer] Task Region Found:   %23 = tail call i8* @__kmpc_omp_task_alloc(%struct.ident_t* nonnull @1, i32 undef, i32 1, i64 48, i64 1, i32 (i32, i8*)* bitcast (i32 (i32, %struct.kmp_task_t_with_privates.1*)* @.omp_task_entry..5 to i32 (i32, i8*)*)), !noelle.pdg.inst.id !34
+[edt-graph] Other Function Found:
+  %call2 = call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %4, i32 noundef %5), !noelle.pdg.inst.id !30
+[edt-graph] Processing function: .omp_outlined.
 
-[arts-analyzer] Handling task region
-[arts-analyzer] Creating EDT with signature: void (i32, i64*, i32, %struct.artsEdtDep_t*)
-[arts-ir-builder] Initializing EDT
-[arts-ir-builder] Inserting EDT Entry
-[arts-ir-builder] Inserting EDT Call
-[arts-ir-builder] Found ARTS runtime function artsReserveGuidRoute with type i32* (i32, i32)
-[arts-ir-builder] Found ARTS runtime function artsEdtCreateWithGuid with type i32* (void (i32, i64*, i32, %struct.artsEdtDep_t*)*, i32*, i32, i64*, i32)
+- - - - - - - - - - - - - - - -
+[edt-graph] Task Region Found:
+  %1 = tail call i8* @__kmpc_omp_task_alloc(%struct.ident_t* nonnull @1, i32 %0, i32 1, i64 48, i64 16, i32 (i32, i8*)* bitcast (i32 (i32, %struct.kmp_task_t_with_privates*)* @.omp_task_entry. to i32 (i32, i8*)*)), !noelle.pdg.inst.id !61
+[arts]  - Setting data environment for TaskEDT
 
-Identifying EDTs in the Task Body
---------------------------------------------------
-[arts-analyzer] Identifying EDTs for: arts_edt_2
-[arts-analyzer] Other Function Found: 
-    tail call void @llvm.experimental.noalias.scope.decl(metadata !249), !noelle.pdg.inst.id !238
-[arts-analyzer] Other Function Found: 
-    %3 = tail call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([27 x i8], [27 x i8]* @.str.3, i64 0, i64 0), i32 noundef %1) #5, !noalias !5, !noelle.pdg.inst.id !14
-[arts] Deleting dead instructions in EDT: arts_edt_2
-[arts] - Removing:   %2 = load i32, i32* undef, align 4, !tbaa !9, !alias.scope !5, !noelle.pdg.inst.id !13
-[arts] - Removing:   store i32 %4, i32* undef, align 4, !tbaa !9, !alias.scope !5, !noelle.pdg.inst.id !16
-- - - - - - - - - - - - - - - - - - - - - - -
-TaskEDT CallInst:   %32 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_2, i32* %30, i32 %27, i64* %edt_2_paramv, i32 %31)
+- - - - - - - - - - - - - - - -
+[edt-graph] Task Region Found:
+  %11 = tail call i8* @__kmpc_omp_task_alloc(%struct.ident_t* nonnull @1, i32 %0, i32 1, i64 48, i64 1, i32 (i32, i8*)* bitcast (i32 (i32, %struct.kmp_task_t_with_privates.1*)* @.omp_task_entry..5 to i32 (i32, i8*)*)), !noelle.pdg.inst.id !22
+[arts]  - Setting data environment for TaskEDT
+[edt-graph] Processing function: .omp_task_entry.
 
-TaskEDT 
-define void @arts_edt_2(i32 %paramc, i64* %paramv, i32 %depc, %struct.artsEdtDep_t* %depv) {
-edt.entry:
-  %paramv.0 = getelementptr inbounds i64, i64* %paramv, i64 0
-  %0 = load i64, i64* %paramv.0, align 8
-  %1 = trunc i64 %0 to i32
-  br label %edt.body
+- - - - - - - - - - - - - - - -
+[edt-graph] Other Function Found:
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !294), !noelle.pdg.inst.id !239
 
-edt.exit:                                         ; preds = %edt.body
-  ret void
+- - - - - - - - - - - - - - - -
+[edt-graph] Other Function Found:
+  %call.i = tail call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([44 x i8], [44 x i8]* @.str, i64 0, i64 0), i32 noundef %6, i32 noundef %7, i32 noundef %8, i32 noundef %9) #6, !noalias !79, !noelle.pdg.inst.id !37
+[edt-graph] Processing function: .omp_task_entry..5
 
-edt.body:                                         ; preds = %edt.entry
-  tail call void @llvm.experimental.noalias.scope.decl(metadata !248), !noelle.pdg.inst.id !251
-  %2 = tail call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([27 x i8], [27 x i8]* @.str.3, i64 0, i64 0), i32 noundef %1) #5, !noalias !248, !noelle.pdg.inst.id !252
-  %3 = add nsw i32 %1, 1, !noelle.pdg.inst.id !253
-  br label %edt.exit
-}
-- - - - - -- - - - - - - - - - - - - - - - -
+- - - - - - - - - - - - - - - -
+[edt-graph] Other Function Found:
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !318), !noelle.pdg.inst.id !307
+
+- - - - - - - - - - - - - - - -
+[edt-graph] Other Function Found:
+  %call.i = tail call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([27 x i8], [27 x i8]* @.str.3, i64 0, i64 0), i32 noundef %3) #6, !noalias !26, !noelle.pdg.inst.id !16
+
 - - - - - - - - - - - - - - - -
 
-[arts-analyzer] Handling done region
-[arts-analyzer] Creating EDT with signature: void (i32, i64*, i32, %struct.artsEdtDep_t*)
-[arts-ir-builder] Initializing EDT
-[arts-ir-builder] Inserting EDT Entry
-[arts-ir-builder] Inserting EDT Call
-[arts-ir-builder] Found ARTS runtime function artsReserveGuidRoute with type i32* (i32, i32)
-[arts-ir-builder] Found ARTS runtime function artsEdtCreateWithGuid with type i32* (void (i32, i64*, i32, %struct.artsEdtDep_t*)*, i32*, i32, i64*, i32)
-- - - - - - - - - - - - - - - - - - - - - - - - -
-DoneEDT CallInst:   %15 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_3, i32* %13, i32 %11, i64* %edt_3_paramv, i32 %14)
+[edt-graph] Printing the EDT Graph
+EDT NODE:
+- EDT for.omp_task_entry..5
+Data environment for EDT: 
+Number of ParamV: 1
+  -   %14 = load i32, i32* %number, align 4, !tbaa !139, !noelle.pdg.inst.id !25
+Number of DepV: 0
 
-DoneEDT:
-define void @arts_edt_3(i32 %paramc, i64* %paramv, i32 %depc, %struct.artsEdtDep_t* %depv) {
-edt.entry:
-  %depv.number = getelementptr inbounds %struct.artsEdtDep_t, %struct.artsEdtDep_t* %depv, i32 0, i32 2
-  %0 = bitcast i8** %depv.number to i32*
-  %depv.random_number = getelementptr inbounds %struct.artsEdtDep_t, %struct.artsEdtDep_t* %depv, i32 1, i32 2
-  %1 = bitcast i8** %depv.random_number to i32*
-  br label %edt.body
+EDT NODE:
+- EDT for.omp_task_entry.
+Data environment for EDT: 
+Number of ParamV: 2
+  -   %6 = load i32, i32* %random_number, align 4, !tbaa !139, !noelle.pdg.inst.id !87
+  -   %9 = load i32, i32* %NewRandom, align 4, !tbaa !139, !noelle.pdg.inst.id !31
+Number of DepV: 2
+  - i32* %number
+  - i32* %shared_number
 
-edt.exit:                                         ; preds = %edt.body
-  ret void
-
-edt.body:                                         ; preds = %edt.entry
-  %2 = load i32, i32* %0, align 4, !tbaa !70, !noelle.pdg.inst.id !21
-  %3 = load i32, i32* %1, align 4, !tbaa !70, !noelle.pdg.inst.id !45
-  %4 = call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %2, i32 noundef %3), !noelle.pdg.inst.id !30
-  br label %edt.exit
-}
-- - - - - - - - - - - - - - - - - - - - - - - - -
-[arts] Deleting dead instructions in EDT: arts_edt_0
-[arts] - Removing:   %4 = bitcast i8* undef to i8**, !noelle.pdg.inst.id !5
-[arts] - Removing:   %5 = load i8*, i8** undef, align 8, !tbaa !6, !noelle.pdg.inst.id !14
-[arts] - Removing:   %9 = getelementptr inbounds i8, i8* undef, i64 40, !noelle.pdg.inst.id !23
-[arts] - Removing:   %10 = bitcast i8* undef to i32*, !noelle.pdg.inst.id !24
-[arts] - Removing:   %12 = getelementptr inbounds i8, i8* undef, i64 44, !noelle.pdg.inst.id !29
-[arts] - Removing:   %13 = bitcast i8* undef to i32*, !noelle.pdg.inst.id !30
-[arts] - Removing:   %23 = getelementptr inbounds i8, i8* undef, i64 40, !noelle.pdg.inst.id !34
-[arts] - Removing:   %24 = bitcast i8* undef to i32*, !noelle.pdg.inst.id !35
-- - - - - -- - - - - - - - - - - - - - - - - - -
-ParallelEDT CallInst:   %9 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_0, i32* %7, i32 %5, i64* %edt_0_paramv, i32 %8)
-
-ParallelEDT: 
-define void @arts_edt_0(i32 %paramc, i64* %paramv, i32 %depc, %struct.artsEdtDep_t* %depv) {
-edt.entry:
-  %depv.random_number = getelementptr inbounds %struct.artsEdtDep_t, %struct.artsEdtDep_t* %depv, i32 0, i32 2
-  %0 = bitcast i8** %depv.random_number to i32*
-  %depv.NewRandom = getelementptr inbounds %struct.artsEdtDep_t, %struct.artsEdtDep_t* %depv, i32 1, i32 2
-  %1 = bitcast i8** %depv.NewRandom to i32*
-  %depv.number = getelementptr inbounds %struct.artsEdtDep_t, %struct.artsEdtDep_t* %depv, i32 2, i32 2
-  %2 = bitcast i8** %depv.number to i32*
-  %depv.shared_number = getelementptr inbounds %struct.artsEdtDep_t, %struct.artsEdtDep_t* %depv, i32 3, i32 2
-  %3 = bitcast i8** %depv.shared_number to i32*
-  br label %edt.body
-
-edt.exit:                                         ; preds = %edt.body
-  ret void
-
-edt.body:                                         ; preds = %edt.entry
-  store i32* %2, i32** undef, align 8, !tbaa.struct !81, !noelle.pdg.inst.id !84
-  %4 = bitcast i8* undef to i32**, !noelle.pdg.inst.id !85
-  store i32* %3, i32** %4, align 8, !tbaa.struct !86, !noelle.pdg.inst.id !87
-  %5 = load i32, i32* %0, align 4, !tbaa !70, !noelle.pdg.inst.id !88
-  %6 = load i32, i32* %1, align 4, !tbaa !70, !noelle.pdg.inst.id !89
-  %7 = call i32* @artsReserveGuidRoute(i32 1, i32 0)
-  %edt_1_guid.addr = alloca i32*, align 8
-  store i32* %7, i32** %edt_1_guid.addr, align 8
-  %edt_1_paramc = alloca i32, align 4
-  store i32 2, i32* %edt_1_paramc, align 4
-  %8 = load i32, i32* %edt_1_paramc, align 4
-  %edt_1_paramv = alloca i64, i32 %8, align 8
-  %edt_1_paramv.0 = getelementptr inbounds i64, i64* %edt_1_paramv, i64 0
-  %9 = sext i32 %5 to i64
-  store i64 %9, i64* %edt_1_paramv.0, align 8
-  %edt_1_paramv.1 = getelementptr inbounds i64, i64* %edt_1_paramv, i64 1
-  %10 = sext i32 %6 to i64
-  store i64 %10, i64* %edt_1_paramv.1, align 8
-  %11 = alloca i32, align 4
-  store i32 2, i32* %11, align 4
-  %12 = bitcast i32** %edt_1_guid.addr to i32*
-  %13 = load i32, i32* %11, align 4
-  %14 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_1, i32* %12, i32 %8, i64* %edt_1_paramv, i32 %13)
-  %15 = load i32, i32* %2, align 4, !tbaa !70, !noelle.pdg.inst.id !90
-  %16 = call i32* @artsReserveGuidRoute(i32 1, i32 0)
-  %edt_2_guid.addr = alloca i32*, align 8
-  store i32* %16, i32** %edt_2_guid.addr, align 8
-  %edt_2_paramc = alloca i32, align 4
-  store i32 1, i32* %edt_2_paramc, align 4
-  %17 = load i32, i32* %edt_2_paramc, align 4
-  %edt_2_paramv = alloca i64, i32 %17, align 8
-  %edt_2_paramv.0 = getelementptr inbounds i64, i64* %edt_2_paramv, i64 0
-  %18 = sext i32 %15 to i64
-  store i64 %18, i64* %edt_2_paramv.0, align 8
-  %19 = alloca i32, align 4
-  store i32 0, i32* %19, align 4
-  %20 = bitcast i32** %edt_2_guid.addr to i32*
-  %21 = load i32, i32* %19, align 4
-  %22 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_2, i32* %20, i32 %17, i64* %edt_2_paramv, i32 %21)
-  br label %edt.exit
-}
-- - - - - -- - - - - - - - - - - - - - - - - - -
-- - - - - - - - - - - - - - - -
-- - - - - - - - - - - - - - - - - - - - - -
-EDTs: 4
-- EDT #0
+EDT NODE:
+- EDT for.omp_outlined.
 Data environment for EDT: 
 Number of ParamV: 0
 Number of DepV: 4
@@ -252,115 +93,7 @@ Number of DepV: 4
   -   %NewRandom = alloca i32, align 4, !noelle.pdg.inst.id !68
   -   %number = alloca i32, align 4, !noelle.pdg.inst.id !65
   -   %shared_number = alloca i32, align 4, !noelle.pdg.inst.id !66
-Function: arts_edt_0
-Live in instructions: 
-  -   %shared_number = alloca i32, align 4, !noelle.pdg.inst.id !66
-    -   %3 = bitcast i8** %depv.shared_number to i32*
-  -   %number = alloca i32, align 4, !noelle.pdg.inst.id !65
-    -   %2 = bitcast i8** %depv.number to i32*
-  -   %NewRandom = alloca i32, align 4, !noelle.pdg.inst.id !68
-    -   %1 = bitcast i8** %depv.NewRandom to i32*
-  -   %random_number = alloca i32, align 4, !noelle.pdg.inst.id !67
-    -   %0 = bitcast i8** %depv.random_number to i32*
-Live out instructions: 
-  -   %shared_number = alloca i32, align 4, !noelle.pdg.inst.id !66
-    -   %3 = bitcast i8** %depv.shared_number to i32*
-  -   %number = alloca i32, align 4, !noelle.pdg.inst.id !65
-    -   %2 = bitcast i8** %depv.number to i32*
-  -   %NewRandom = alloca i32, align 4, !noelle.pdg.inst.id !68
-    -   %1 = bitcast i8** %depv.NewRandom to i32*
-  -   %random_number = alloca i32, align 4, !noelle.pdg.inst.id !67
-    -   %0 = bitcast i8** %depv.random_number to i32*
 
-- EDT #1
-Data environment for EDT: 
-Number of ParamV: 2
-  -   %5 = load i32, i32* %0, align 4, !tbaa !14, !noelle.pdg.inst.id !16
-  -   %6 = load i32, i32* %1, align 4, !tbaa !14, !noelle.pdg.inst.id !17
-Number of DepV: 2
-  -   %2 = bitcast i8** %depv.number to i32*
-  -   %3 = bitcast i8** %depv.shared_number to i32*
-Function: arts_edt_1
-Live in instructions: 
-  -   %2 = bitcast i8** %depv.number to i32*
-    -   %4 = bitcast i8** %depv.0 to i32*
-  -   %6 = load i32, i32* %1, align 4, !tbaa !14, !noelle.pdg.inst.id !17
-    -   %3 = trunc i64 %2 to i32
-  -   %3 = bitcast i8** %depv.shared_number to i32*
-    -   %5 = bitcast i8** %depv.1 to i32*
-  -   %5 = load i32, i32* %0, align 4, !tbaa !14, !noelle.pdg.inst.id !16
-    -   %1 = trunc i64 %0 to i32
-Live out instructions: 
-  -   %3 = bitcast i8** %depv.shared_number to i32*
-    -   %5 = bitcast i8** %depv.1 to i32*
-  -   %2 = bitcast i8** %depv.number to i32*
-    -   %4 = bitcast i8** %depv.0 to i32*
-
-- EDT #2
-Data environment for EDT: 
-Number of ParamV: 1
-  -   %15 = load i32, i32* %2, align 4, !tbaa !14, !noelle.pdg.inst.id !18
-Number of DepV: 0
-Function: arts_edt_2
-Live in instructions: 
-  -   %15 = load i32, i32* %2, align 4, !tbaa !14, !noelle.pdg.inst.id !18
-    -   %1 = trunc i64 %0 to i32
-Live out instructions: 
-
-- EDT #3
-Data environment for EDT: 
-Number of ParamV: 0
-Number of DepV: 2
-  -   %number = alloca i32, align 4, !noelle.pdg.inst.id !65
-  -   %random_number = alloca i32, align 4, !noelle.pdg.inst.id !67
-Function: arts_edt_3
-Live in instructions: 
-  -   %random_number = alloca i32, align 4, !noelle.pdg.inst.id !67
-    -   %1 = bitcast i8** %depv.random_number to i32*
-  -   %number = alloca i32, align 4, !noelle.pdg.inst.id !65
-    -   %0 = bitcast i8** %depv.number to i32*
-Live out instructions: 
-  -   %random_number = alloca i32, align 4, !noelle.pdg.inst.id !67
-    -   %1 = bitcast i8** %depv.random_number to i32*
-  -   %number = alloca i32, align 4, !noelle.pdg.inst.id !65
-    -   %0 = bitcast i8** %depv.number to i32*
-
-- - - - - - - - - - - - - - - - - - - - - -
-[carts] Fetching the call graph
- The function "arts_edt_0" invokes the following functions:
-   [must] "artsReserveGuidRoute"
-     [must]   %16 = call i32* @artsReserveGuidRoute(i32 1, i32 0)
-     [must]   %7 = call i32* @artsReserveGuidRoute(i32 1, i32 0)
-   [must] "artsEdtCreateWithGuid"
-     [must]   %22 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_2, i32* %20, i32 %17, i64* %edt_2_paramv, i32 %21)
-     [EDT] edt_2
-     [must]   %14 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_1, i32* %12, i32 %8, i64* %edt_1_paramv, i32 %13)
-     [EDT] edt_1
- The function "arts_edt_2" invokes the following functions:
-   [must] "llvm.experimental.noalias.scope.decl"
-     [must]   tail call void @llvm.experimental.noalias.scope.decl(metadata !104), !noelle.pdg.inst.id !107
-   [must] "printf"
-     [must]   %2 = tail call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([27 x i8], [27 x i8]* @.str.3, i64 0, i64 0), i32 noundef %1) #4, !noalias !5, !noelle.pdg.inst.id !9
- The function "main" invokes the following functions:
-   [must] "rand"
-     [must]   %call1 = tail call i32 @rand() #4, !noelle.pdg.inst.id !15
-     [must]   %call = tail call i32 @rand() #4, !noelle.pdg.inst.id !8
-   [must] "artsReserveGuidRoute"
-     [must]   %10 = call i32* @artsReserveGuidRoute(i32 1, i32 0)
-     [must]   %4 = call i32* @artsReserveGuidRoute(i32 1, i32 0)
-   [must] "artsEdtCreateWithGuid"
-     [must]   %15 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_3, i32* %13, i32 %11, i64* %edt_3_paramv, i32 %14)
-     [EDT] edt_3
-     [must]   %9 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_0, i32* %7, i32 %5, i64* %edt_0_paramv, i32 %8)
-     [EDT] edt_0
- The function "arts_edt_1" invokes the following functions:
-   [must] "llvm.experimental.noalias.scope.decl"
-     [must]   tail call void @llvm.experimental.noalias.scope.decl(metadata !91), !noelle.pdg.inst.id !94
-   [must] "printf"
-     [must]   %8 = tail call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([44 x i8], [44 x i8]* @.str, i64 0, i64 0), i32 noundef %6, i32 noundef %7, i32 noundef %1, i32 noundef %3) #4, !noalias !5, !noelle.pdg.inst.id !15
- The function "arts_edt_3" invokes the following functions:
-   [must] "printf"
-     [must]   %4 = call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %2, i32 noundef %3), !noelle.pdg.inst.id !11
 
  ---------------------------------------- 
 [carts] Process has finished
@@ -371,7 +104,13 @@ target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16
 target triple = "x86_64-unknown-linux-gnu"
 
 %struct.ident_t = type { i32, i32, i32, i32, i8* }
-%struct.artsEdtDep_t = type { i32*, i32, i8* }
+%struct.kmp_task_t_with_privates = type { %struct.kmp_task_t, %struct..kmp_privates.t }
+%struct.kmp_task_t = type { i8*, i32 (i32, i8*)*, i32, %union.kmp_cmplrdata_t, %union.kmp_cmplrdata_t }
+%union.kmp_cmplrdata_t = type { i32 (i32, i8*)* }
+%struct..kmp_privates.t = type { i32, i32 }
+%struct.anon = type { i32*, i32* }
+%struct.kmp_task_t_with_privates.1 = type { %struct.kmp_task_t, %struct..kmp_privates.t.2 }
+%struct..kmp_privates.t.2 = type { i32 }
 
 @.str = private unnamed_addr constant [44 x i8] c"I think the number is %d/%d. with %d -- %d\0A\00", align 1
 @0 = private unnamed_addr constant [23 x i8] c";unknown;unknown;0;0;;\00", align 1
@@ -391,38 +130,18 @@ entry:
   %1 = bitcast i32* %shared_number to i8*, !noelle.pdg.inst.id !74
   store i32 10000, i32* %shared_number, align 4, !tbaa !70, !noelle.pdg.inst.id !23
   %2 = bitcast i32* %random_number to i8*, !noelle.pdg.inst.id !75
-  %call = tail call i32 @rand() #4, !noelle.pdg.inst.id !8
+  %call = tail call i32 @rand() #6, !noelle.pdg.inst.id !8
   %rem = srem i32 %call, 10, !noelle.pdg.inst.id !76
   %add = add nsw i32 %rem, 10, !noelle.pdg.inst.id !77
   store i32 %add, i32* %random_number, align 4, !tbaa !70, !noelle.pdg.inst.id !33
   %3 = bitcast i32* %NewRandom to i8*, !noelle.pdg.inst.id !78
-  %call1 = tail call i32 @rand() #4, !noelle.pdg.inst.id !15
+  %call1 = tail call i32 @rand() #6, !noelle.pdg.inst.id !15
   store i32 %call1, i32* %NewRandom, align 4, !tbaa !70, !noelle.pdg.inst.id !39
-  %4 = call i32* @artsReserveGuidRoute(i32 1, i32 0)
-  %edt_0_guid.addr = alloca i32*, align 8
-  store i32* %4, i32** %edt_0_guid.addr, align 8
-  %edt_0_paramc = alloca i32, align 4
-  store i32 0, i32* %edt_0_paramc, align 4
-  %5 = load i32, i32* %edt_0_paramc, align 4
-  %edt_0_paramv = alloca i64, i32 %5, align 8
-  %6 = alloca i32, align 4
-  store i32 4, i32* %6, align 4
-  %7 = bitcast i32** %edt_0_guid.addr to i32*
-  %8 = load i32, i32* %6, align 4
-  %9 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_0, i32* %7, i32 %5, i64* %edt_0_paramv, i32 %8)
-  %10 = call i32* @artsReserveGuidRoute(i32 1, i32 0)
-  %edt_3_guid.addr = alloca i32*, align 8
-  store i32* %10, i32** %edt_3_guid.addr, align 8
-  %edt_3_paramc = alloca i32, align 4
-  store i32 0, i32* %edt_3_paramc, align 4
-  %11 = load i32, i32* %edt_3_paramc, align 4
-  %edt_3_paramv = alloca i64, i32 %11, align 8
-  %12 = alloca i32, align 4
-  store i32 2, i32* %12, align 4
-  %13 = bitcast i32** %edt_3_guid.addr to i32*
-  %14 = load i32, i32* %12, align 4
-  %15 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_3, i32* %13, i32 %11, i64* %edt_3_paramv, i32 %14)
-  ret i32 0
+  call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* nonnull @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* nonnull %random_number, i32* nonnull %NewRandom, i32* nonnull %number, i32* nonnull %shared_number), !noelle.pdg.inst.id !18
+  %4 = load i32, i32* %number, align 4, !tbaa !70, !noelle.pdg.inst.id !21
+  %5 = load i32, i32* %random_number, align 4, !tbaa !70, !noelle.pdg.inst.id !45
+  %call2 = call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %4, i32 noundef %5), !noelle.pdg.inst.id !30
+  ret i32 0, !noelle.pdg.inst.id !79
 }
 
 ; Function Attrs: argmemonly nofree nosync nounwind willreturn
@@ -431,160 +150,102 @@ declare void @llvm.lifetime.start.p0i8(i64 immarg, i8* nocapture) #1
 ; Function Attrs: nounwind
 declare dso_local i32 @rand() local_unnamed_addr #2
 
+; Function Attrs: alwaysinline norecurse nounwind uwtable
+define internal void @.omp_outlined.(i32* noalias nocapture noundef readonly %.global_tid., i32* noalias nocapture noundef readnone %.bound_tid., i32* nocapture noundef nonnull readonly align 4 dereferenceable(4) %random_number, i32* nocapture noundef nonnull readonly align 4 dereferenceable(4) %NewRandom, i32* noundef nonnull align 4 dereferenceable(4) %number, i32* noundef nonnull align 4 dereferenceable(4) %shared_number) #3 !noelle.pdg.args.id !80 !noelle.pdg.edges !87 {
+entry:
+  %0 = load i32, i32* %.global_tid., align 4, !tbaa !70, !noelle.pdg.inst.id !125
+  %1 = tail call i8* @__kmpc_omp_task_alloc(%struct.ident_t* nonnull @1, i32 %0, i32 1, i64 48, i64 16, i32 (i32, i8*)* bitcast (i32 (i32, %struct.kmp_task_t_with_privates*)* @.omp_task_entry. to i32 (i32, i8*)*)), !noelle.pdg.inst.id !131
+  %2 = bitcast i8* %1 to i8**, !noelle.pdg.inst.id !209
+  %3 = load i8*, i8** %2, align 8, !tbaa !210, !noelle.pdg.inst.id !151
+  %agg.captured.sroa.0.0..sroa_cast = bitcast i8* %3 to i32**, !noelle.pdg.inst.id !215
+  store i32* %number, i32** %agg.captured.sroa.0.0..sroa_cast, align 8, !tbaa.struct !216, !noelle.pdg.inst.id !133
+  %agg.captured.sroa.2.0..sroa_idx = getelementptr inbounds i8, i8* %3, i64 8, !noelle.pdg.inst.id !218
+  %agg.captured.sroa.2.0..sroa_cast = bitcast i8* %agg.captured.sroa.2.0..sroa_idx to i32**, !noelle.pdg.inst.id !219
+  store i32* %shared_number, i32** %agg.captured.sroa.2.0..sroa_cast, align 8, !tbaa.struct !220, !noelle.pdg.inst.id !135
+  %4 = getelementptr inbounds i8, i8* %1, i64 40, !noelle.pdg.inst.id !221
+  %5 = bitcast i8* %4 to i32*, !noelle.pdg.inst.id !222
+  %6 = load i32, i32* %random_number, align 4, !tbaa !70, !noelle.pdg.inst.id !157
+  store i32 %6, i32* %5, align 8, !tbaa !223, !noelle.pdg.inst.id !137
+  %7 = getelementptr inbounds i8, i8* %1, i64 44, !noelle.pdg.inst.id !224
+  %8 = bitcast i8* %7 to i32*, !noelle.pdg.inst.id !225
+  %9 = load i32, i32* %NewRandom, align 4, !tbaa !70, !noelle.pdg.inst.id !101
+  store i32 %9, i32* %8, align 4, !tbaa !226, !noelle.pdg.inst.id !104
+  %10 = tail call i32 @__kmpc_omp_task(%struct.ident_t* nonnull @1, i32 %0, i8* %1), !noelle.pdg.inst.id !89
+  %11 = tail call i8* @__kmpc_omp_task_alloc(%struct.ident_t* nonnull @1, i32 %0, i32 1, i64 48, i64 1, i32 (i32, i8*)* bitcast (i32 (i32, %struct.kmp_task_t_with_privates.1*)* @.omp_task_entry..5 to i32 (i32, i8*)*)), !noelle.pdg.inst.id !93
+  %12 = getelementptr inbounds i8, i8* %11, i64 40, !noelle.pdg.inst.id !227
+  %13 = bitcast i8* %12 to i32*, !noelle.pdg.inst.id !228
+  %14 = load i32, i32* %number, align 4, !tbaa !70, !noelle.pdg.inst.id !96
+  store i32 %14, i32* %13, align 8, !tbaa !229, !noelle.pdg.inst.id !98
+  %15 = tail call i32 @__kmpc_omp_task(%struct.ident_t* nonnull @1, i32 %0, i8* %11), !noelle.pdg.inst.id !90
+  ret void, !noelle.pdg.inst.id !232
+}
+
 ; Function Attrs: nofree nounwind
-declare dso_local noundef i32 @printf(i8* nocapture noundef readonly, ...) local_unnamed_addr #3
+declare dso_local noundef i32 @printf(i8* nocapture noundef readonly, ...) local_unnamed_addr #4
 
 declare dso_local i32 @__gxx_personality_v0(...)
 
-; Function Attrs: nounwind
-declare i8* @__kmpc_omp_task_alloc(%struct.ident_t*, i32, i32, i64, i64, i32 (i32, i8*)*) local_unnamed_addr #4
+; Function Attrs: nofree norecurse nounwind uwtable
+define internal noundef i32 @.omp_task_entry.(i32 noundef %0, %struct.kmp_task_t_with_privates* noalias nocapture noundef readonly %1) #5 personality i32 (...)* @__gxx_personality_v0 !noelle.pdg.args.id !233 !noelle.pdg.edges !236 {
+entry:
+  %2 = bitcast %struct.kmp_task_t_with_privates* %1 to %struct.anon**, !noelle.pdg.inst.id !288
+  %3 = load %struct.anon*, %struct.anon** %2, align 8, !tbaa !210, !noelle.pdg.inst.id !238
+  %.idx = getelementptr %struct.anon, %struct.anon* %3, i64 0, i32 0, !noelle.pdg.inst.id !289
+  %.idx.val = load i32*, i32** %.idx, align 8, !tbaa !290, !noelle.pdg.inst.id !245
+  %.idx2 = getelementptr %struct.anon, %struct.anon* %3, i64 0, i32 1, !noelle.pdg.inst.id !292
+  %.idx2.val = load i32*, i32** %.idx2, align 8, !tbaa !293, !noelle.pdg.inst.id !249
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !294), !noelle.pdg.inst.id !239
+  %4 = getelementptr inbounds %struct.kmp_task_t_with_privates, %struct.kmp_task_t_with_privates* %1, i64 0, i32 1, i32 0, !noelle.pdg.inst.id !297
+  %5 = getelementptr inbounds %struct.kmp_task_t_with_privates, %struct.kmp_task_t_with_privates* %1, i64 0, i32 1, i32 1, !noelle.pdg.inst.id !298
+  %6 = load i32, i32* %.idx.val, align 4, !tbaa !70, !noalias !294, !noelle.pdg.inst.id !253
+  %7 = load i32, i32* %.idx2.val, align 4, !tbaa !70, !noalias !294, !noelle.pdg.inst.id !255
+  %8 = load i32, i32* %4, align 4, !tbaa !70, !alias.scope !294, !noelle.pdg.inst.id !257
+  %9 = load i32, i32* %5, align 4, !tbaa !70, !alias.scope !294, !noelle.pdg.inst.id !259
+  %call.i = tail call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([44 x i8], [44 x i8]* @.str, i64 0, i64 0), i32 noundef %6, i32 noundef %7, i32 noundef %8, i32 noundef %9) #6, !noalias !294, !noelle.pdg.inst.id !261
+  %10 = load i32, i32* %.idx.val, align 4, !tbaa !70, !noalias !294, !noelle.pdg.inst.id !264
+  %inc.i = add nsw i32 %10, 1, !noelle.pdg.inst.id !299
+  store i32 %inc.i, i32* %.idx.val, align 4, !tbaa !70, !noalias !294, !noelle.pdg.inst.id !241
+  %11 = load i32, i32* %.idx2.val, align 4, !tbaa !70, !noalias !294, !noelle.pdg.inst.id !268
+  %dec.i = add nsw i32 %11, -1, !noelle.pdg.inst.id !300
+  store i32 %dec.i, i32* %.idx2.val, align 4, !tbaa !70, !noalias !294, !noelle.pdg.inst.id !243
+  ret i32 0, !noelle.pdg.inst.id !301
+}
 
 ; Function Attrs: nounwind
-declare i32 @__kmpc_omp_task(%struct.ident_t*, i32, i8*) local_unnamed_addr #4
+declare i8* @__kmpc_omp_task_alloc(%struct.ident_t*, i32, i32, i64, i64, i32 (i32, i8*)*) local_unnamed_addr #6
 
 ; Function Attrs: nounwind
-declare !callback !79 void @__kmpc_fork_call(%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) local_unnamed_addr #4
+declare i32 @__kmpc_omp_task(%struct.ident_t*, i32, i8*) local_unnamed_addr #6
+
+; Function Attrs: nofree norecurse nounwind uwtable
+define internal noundef i32 @.omp_task_entry..5(i32 noundef %0, %struct.kmp_task_t_with_privates.1* noalias nocapture noundef %1) #5 personality i32 (...)* @__gxx_personality_v0 !noelle.pdg.args.id !302 !noelle.pdg.edges !305 {
+entry:
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !318), !noelle.pdg.inst.id !307
+  %2 = getelementptr inbounds %struct.kmp_task_t_with_privates.1, %struct.kmp_task_t_with_privates.1* %1, i64 0, i32 1, i32 0, !noelle.pdg.inst.id !321
+  %3 = load i32, i32* %2, align 4, !tbaa !70, !alias.scope !318, !noelle.pdg.inst.id !308
+  %call.i = tail call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([27 x i8], [27 x i8]* @.str.3, i64 0, i64 0), i32 noundef %3) #6, !noalias !318, !noelle.pdg.inst.id !310
+  %inc.i = add nsw i32 %3, 1, !noelle.pdg.inst.id !322
+  store i32 %inc.i, i32* %2, align 4, !tbaa !70, !alias.scope !318, !noelle.pdg.inst.id !313
+  ret i32 0, !noelle.pdg.inst.id !323
+}
+
+; Function Attrs: nounwind
+declare !callback !324 void @__kmpc_fork_call(%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) local_unnamed_addr #6
 
 ; Function Attrs: argmemonly nofree nosync nounwind willreturn
 declare void @llvm.lifetime.end.p0i8(i64 immarg, i8* nocapture) #1
 
 ; Function Attrs: inaccessiblememonly nofree nosync nounwind willreturn
-declare void @llvm.experimental.noalias.scope.decl(metadata) #5
-
-define void @arts_edt_0(i32 %paramc, i64* %paramv, i32 %depc, %struct.artsEdtDep_t* %depv) {
-edt.entry:
-  %depv.random_number = getelementptr inbounds %struct.artsEdtDep_t, %struct.artsEdtDep_t* %depv, i32 0, i32 2
-  %0 = bitcast i8** %depv.random_number to i32*
-  %depv.NewRandom = getelementptr inbounds %struct.artsEdtDep_t, %struct.artsEdtDep_t* %depv, i32 1, i32 2
-  %1 = bitcast i8** %depv.NewRandom to i32*
-  %depv.number = getelementptr inbounds %struct.artsEdtDep_t, %struct.artsEdtDep_t* %depv, i32 2, i32 2
-  %2 = bitcast i8** %depv.number to i32*
-  %depv.shared_number = getelementptr inbounds %struct.artsEdtDep_t, %struct.artsEdtDep_t* %depv, i32 3, i32 2
-  %3 = bitcast i8** %depv.shared_number to i32*
-  br label %edt.body
-
-edt.exit:                                         ; preds = %edt.body
-  ret void
-
-edt.body:                                         ; preds = %edt.entry
-  store i32* %2, i32** undef, align 8, !tbaa.struct !81, !noelle.pdg.inst.id !84
-  %4 = bitcast i8* undef to i32**, !noelle.pdg.inst.id !85
-  store i32* %3, i32** %4, align 8, !tbaa.struct !86, !noelle.pdg.inst.id !87
-  %5 = load i32, i32* %0, align 4, !tbaa !70, !noelle.pdg.inst.id !88
-  %6 = load i32, i32* %1, align 4, !tbaa !70, !noelle.pdg.inst.id !89
-  %7 = call i32* @artsReserveGuidRoute(i32 1, i32 0)
-  %edt_1_guid.addr = alloca i32*, align 8
-  store i32* %7, i32** %edt_1_guid.addr, align 8
-  %edt_1_paramc = alloca i32, align 4
-  store i32 2, i32* %edt_1_paramc, align 4
-  %8 = load i32, i32* %edt_1_paramc, align 4
-  %edt_1_paramv = alloca i64, i32 %8, align 8
-  %edt_1_paramv.0 = getelementptr inbounds i64, i64* %edt_1_paramv, i64 0
-  %9 = sext i32 %5 to i64
-  store i64 %9, i64* %edt_1_paramv.0, align 8
-  %edt_1_paramv.1 = getelementptr inbounds i64, i64* %edt_1_paramv, i64 1
-  %10 = sext i32 %6 to i64
-  store i64 %10, i64* %edt_1_paramv.1, align 8
-  %11 = alloca i32, align 4
-  store i32 2, i32* %11, align 4
-  %12 = bitcast i32** %edt_1_guid.addr to i32*
-  %13 = load i32, i32* %11, align 4
-  %14 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_1, i32* %12, i32 %8, i64* %edt_1_paramv, i32 %13)
-  %15 = load i32, i32* %2, align 4, !tbaa !70, !noelle.pdg.inst.id !90
-  %16 = call i32* @artsReserveGuidRoute(i32 1, i32 0)
-  %edt_2_guid.addr = alloca i32*, align 8
-  store i32* %16, i32** %edt_2_guid.addr, align 8
-  %edt_2_paramc = alloca i32, align 4
-  store i32 1, i32* %edt_2_paramc, align 4
-  %17 = load i32, i32* %edt_2_paramc, align 4
-  %edt_2_paramv = alloca i64, i32 %17, align 8
-  %edt_2_paramv.0 = getelementptr inbounds i64, i64* %edt_2_paramv, i64 0
-  %18 = sext i32 %15 to i64
-  store i64 %18, i64* %edt_2_paramv.0, align 8
-  %19 = alloca i32, align 4
-  store i32 0, i32* %19, align 4
-  %20 = bitcast i32** %edt_2_guid.addr to i32*
-  %21 = load i32, i32* %19, align 4
-  %22 = call i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)* @arts_edt_2, i32* %20, i32 %17, i64* %edt_2_paramv, i32 %21)
-  br label %edt.exit
-}
-
-declare i32* @artsReserveGuidRoute(i32, i32)
-
-declare i32* @artsEdtCreateWithGuid(void (i32, i64*, i32, %struct.artsEdtDep_t*)*, i32*, i32, i64*, i32)
-
-define void @arts_edt_1(i32 %paramc, i64* %paramv, i32 %depc, %struct.artsEdtDep_t* %depv) {
-edt.entry:
-  %paramv.0 = getelementptr inbounds i64, i64* %paramv, i64 0
-  %0 = load i64, i64* %paramv.0, align 8
-  %1 = trunc i64 %0 to i32
-  %paramv.1 = getelementptr inbounds i64, i64* %paramv, i64 1
-  %2 = load i64, i64* %paramv.1, align 8
-  %3 = trunc i64 %2 to i32
-  %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, %struct.artsEdtDep_t* %depv, i32 0, i32 2
-  %4 = bitcast i8** %depv.0 to i32*
-  %depv.1 = getelementptr inbounds %struct.artsEdtDep_t, %struct.artsEdtDep_t* %depv, i32 1, i32 2
-  %5 = bitcast i8** %depv.1 to i32*
-  br label %edt.body
-
-edt.exit:                                         ; preds = %edt.body
-  ret void
-
-edt.body:                                         ; preds = %edt.entry
-  tail call void @llvm.experimental.noalias.scope.decl(metadata !91), !noelle.pdg.inst.id !94
-  %6 = load i32, i32* %4, align 4, !tbaa !70, !noalias !91, !noelle.pdg.inst.id !95
-  %7 = load i32, i32* %5, align 4, !tbaa !70, !noalias !91, !noelle.pdg.inst.id !96
-  %8 = tail call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([44 x i8], [44 x i8]* @.str, i64 0, i64 0), i32 noundef %6, i32 noundef %7, i32 noundef %1, i32 noundef %3) #4, !noalias !91, !noelle.pdg.inst.id !97
-  %9 = load i32, i32* %4, align 4, !tbaa !70, !noalias !91, !noelle.pdg.inst.id !98
-  %10 = add nsw i32 %9, 1, !noelle.pdg.inst.id !99
-  store i32 %10, i32* %4, align 4, !tbaa !70, !noalias !91, !noelle.pdg.inst.id !100
-  %11 = load i32, i32* %5, align 4, !tbaa !70, !noalias !91, !noelle.pdg.inst.id !101
-  %12 = add nsw i32 %11, -1, !noelle.pdg.inst.id !102
-  store i32 %12, i32* %5, align 4, !tbaa !70, !noalias !91, !noelle.pdg.inst.id !103
-  br label %edt.exit
-}
-
-define void @arts_edt_2(i32 %paramc, i64* %paramv, i32 %depc, %struct.artsEdtDep_t* %depv) {
-edt.entry:
-  %paramv.0 = getelementptr inbounds i64, i64* %paramv, i64 0
-  %0 = load i64, i64* %paramv.0, align 8
-  %1 = trunc i64 %0 to i32
-  br label %edt.body
-
-edt.exit:                                         ; preds = %edt.body
-  ret void
-
-edt.body:                                         ; preds = %edt.entry
-  tail call void @llvm.experimental.noalias.scope.decl(metadata !104), !noelle.pdg.inst.id !107
-  %2 = tail call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([27 x i8], [27 x i8]* @.str.3, i64 0, i64 0), i32 noundef %1) #4, !noalias !104, !noelle.pdg.inst.id !108
-  %3 = add nsw i32 %1, 1, !noelle.pdg.inst.id !109
-  br label %edt.exit
-}
-
-define void @arts_edt_3(i32 %paramc, i64* %paramv, i32 %depc, %struct.artsEdtDep_t* %depv) {
-edt.entry:
-  %depv.number = getelementptr inbounds %struct.artsEdtDep_t, %struct.artsEdtDep_t* %depv, i32 0, i32 2
-  %0 = bitcast i8** %depv.number to i32*
-  %depv.random_number = getelementptr inbounds %struct.artsEdtDep_t, %struct.artsEdtDep_t* %depv, i32 1, i32 2
-  %1 = bitcast i8** %depv.random_number to i32*
-  br label %edt.body
-
-edt.exit:                                         ; preds = %edt.body
-  ret void
-
-edt.body:                                         ; preds = %edt.entry
-  %2 = load i32, i32* %0, align 4, !tbaa !70, !noelle.pdg.inst.id !21
-  %3 = load i32, i32* %1, align 4, !tbaa !70, !noelle.pdg.inst.id !45
-  %4 = call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %2, i32 noundef %3), !noelle.pdg.inst.id !30
-  br label %edt.exit
-}
+declare void @llvm.experimental.noalias.scope.decl(metadata) #7
 
 attributes #0 = { mustprogress norecurse nounwind uwtable "frame-pointer"="none" "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
 attributes #1 = { argmemonly nofree nosync nounwind willreturn }
 attributes #2 = { nounwind "frame-pointer"="none" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
-attributes #3 = { nofree nounwind "frame-pointer"="none" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
-attributes #4 = { nounwind }
-attributes #5 = { inaccessiblememonly nofree nosync nounwind willreturn }
+attributes #3 = { alwaysinline norecurse nounwind uwtable "frame-pointer"="none" "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
+attributes #4 = { nofree nounwind "frame-pointer"="none" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
+attributes #5 = { nofree norecurse nounwind uwtable "frame-pointer"="none" "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
+attributes #6 = { nounwind }
+attributes #7 = { inaccessiblememonly nofree nosync nounwind willreturn }
 
 !llvm.module.flags = !{!0, !1, !2}
 !llvm.ident = !{!3}
@@ -611,7 +272,7 @@ attributes #5 = { inaccessiblememonly nofree nosync nounwind willreturn }
 !17 = !{!7, !18, !4, !9, !13, !9, !9, !11}
 !18 = !{i64 20}
 !19 = !{!7, !18, !4, !9, !10, !9, !9, !11}
-!20 = !{!7, !21, !4, !9, !10, !9, !9, !11}
+!20 = !{!7, !21, !4, !4, !10, !9, !9, !11}
 !21 = !{i64 21}
 !22 = !{!23, !8, !4, !9, !10, !9, !9, !11}
 !23 = !{i64 9}
@@ -641,7 +302,7 @@ attributes #5 = { inaccessiblememonly nofree nosync nounwind willreturn }
 !47 = !{!33, !15, !4, !9, !13, !9, !9, !11}
 !48 = !{!33, !18, !4, !9, !10, !9, !9, !11}
 !49 = !{!33, !18, !4, !9, !13, !9, !9, !11}
-!50 = !{!33, !45, !4, !9, !10, !9, !9, !11}
+!50 = !{!33, !45, !4, !4, !10, !9, !9, !11}
 !51 = !{!15, !30, !4, !9, !10, !9, !9, !11}
 !52 = !{!15, !30, !4, !9, !13, !9, !9, !11}
 !53 = !{!15, !39, !4, !9, !34, !9, !9, !11}
@@ -670,47 +331,256 @@ attributes #5 = { inaccessiblememonly nofree nosync nounwind willreturn }
 !76 = !{i64 13}
 !77 = !{i64 14}
 !78 = !{i64 16}
-!79 = !{!80}
-!80 = !{i64 2, i64 -1, i64 -1, i1 true}
-!81 = !{i64 0, i64 8, !82, i64 8, i64 8, !82}
-!82 = !{!83, !83, i64 0}
-!83 = !{!"any pointer", !72, i64 0}
-!84 = !{i64 40}
-!85 = !{i64 42}
-!86 = !{i64 0, i64 8, !82}
-!87 = !{i64 43}
-!88 = !{i64 46}
-!89 = !{i64 50}
-!90 = !{i64 56}
-!91 = !{!92}
-!92 = distinct !{!92, !93, !".omp_outlined..1: %.privates."}
-!93 = distinct !{!93, !".omp_outlined..1"}
-!94 = !{i64 68}
-!95 = !{i64 71}
-!96 = !{i64 72}
-!97 = !{i64 75}
-!98 = !{i64 76}
-!99 = !{i64 77}
-!100 = !{i64 78}
-!101 = !{i64 79}
-!102 = !{i64 80}
-!103 = !{i64 81}
-!104 = !{!105}
-!105 = distinct !{!105, !106, !".omp_outlined..2: %.privates."}
-!106 = distinct !{!106, !".omp_outlined..2"}
-!107 = !{i64 85}
-!108 = !{i64 88}
-!109 = !{i64 89}
+!79 = !{i64 28}
+!80 = !{!81, !82, !83, !84, !85, !86}
+!81 = !{i64 29}
+!82 = !{i64 30}
+!83 = !{i64 31}
+!84 = !{i64 32}
+!85 = !{i64 33}
+!86 = !{i64 34}
+!87 = !{!88, !91, !92, !94, !95, !97, !99, !100, !102, !103, !105, !106, !107, !108, !109, !110, !111, !112, !113, !114, !115, !116, !117, !118, !119, !120, !121, !122, !123, !124, !126, !127, !128, !129, !130, !132, !134, !136, !138, !139, !140, !141, !142, !143, !144, !145, !146, !147, !148, !149, !150, !152, !153, !154, !155, !156, !158, !159, !160, !161, !162, !163, !164, !165, !166, !167, !168, !169, !170, !171, !172, !173, !174, !175, !176, !177, !178, !179, !180, !181, !182, !183, !184, !185, !186, !187, !188, !189, !190, !191, !192, !193, !194, !195, !196, !197, !198, !199, !200, !201, !202, !203, !204, !205, !206, !207, !208}
+!88 = !{!89, !90, !4, !9, !13, !9, !9, !11}
+!89 = !{i64 52}
+!90 = !{i64 58}
+!91 = !{!89, !90, !4, !9, !10, !9, !9, !11}
+!92 = !{!89, !93, !4, !9, !13, !9, !9, !11}
+!93 = !{i64 53}
+!94 = !{!89, !93, !4, !9, !10, !9, !9, !11}
+!95 = !{!89, !96, !4, !9, !10, !9, !9, !11}
+!96 = !{i64 56}
+!97 = !{!89, !98, !4, !9, !13, !9, !9, !11}
+!98 = !{i64 57}
+!99 = !{!89, !98, !4, !9, !34, !9, !9, !11}
+!100 = !{!101, !90, !4, !9, !34, !9, !9, !11}
+!101 = !{i64 50}
+!102 = !{!101, !89, !4, !9, !34, !9, !9, !11}
+!103 = !{!101, !104, !4, !9, !34, !9, !9, !11}
+!104 = !{i64 51}
+!105 = !{!101, !93, !4, !9, !34, !9, !9, !11}
+!106 = !{!101, !98, !4, !9, !34, !9, !9, !11}
+!107 = !{!104, !90, !4, !9, !10, !9, !9, !11}
+!108 = !{!104, !90, !4, !9, !13, !9, !9, !11}
+!109 = !{!104, !89, !4, !9, !10, !9, !9, !11}
+!110 = !{!104, !89, !4, !9, !13, !9, !9, !11}
+!111 = !{!104, !93, !4, !9, !10, !9, !9, !11}
+!112 = !{!104, !93, !4, !9, !13, !9, !9, !11}
+!113 = !{!104, !96, !4, !9, !10, !9, !9, !11}
+!114 = !{!104, !98, !4, !9, !13, !9, !9, !11}
+!115 = !{!93, !90, !4, !9, !10, !9, !9, !11}
+!116 = !{!93, !90, !4, !9, !13, !9, !9, !11}
+!117 = !{!93, !96, !4, !9, !10, !9, !9, !11}
+!118 = !{!93, !98, !4, !9, !13, !9, !9, !11}
+!119 = !{!93, !98, !4, !9, !34, !9, !9, !11}
+!120 = !{!96, !90, !4, !9, !34, !9, !9, !11}
+!121 = !{!96, !98, !4, !9, !34, !9, !9, !11}
+!122 = !{!98, !90, !4, !9, !13, !9, !9, !11}
+!123 = !{!98, !90, !4, !9, !10, !9, !9, !11}
+!124 = !{!125, !90, !4, !9, !34, !9, !9, !11}
+!125 = !{i64 35}
+!126 = !{!125, !89, !4, !9, !34, !9, !9, !11}
+!127 = !{!125, !104, !4, !9, !34, !9, !9, !11}
+!128 = !{!125, !93, !4, !9, !34, !9, !9, !11}
+!129 = !{!125, !98, !4, !9, !34, !9, !9, !11}
+!130 = !{!125, !131, !4, !9, !34, !9, !9, !11}
+!131 = !{i64 36}
+!132 = !{!125, !133, !4, !9, !34, !9, !9, !11}
+!133 = !{i64 40}
+!134 = !{!125, !135, !4, !9, !34, !9, !9, !11}
+!135 = !{i64 43}
+!136 = !{!125, !137, !4, !9, !34, !9, !9, !11}
+!137 = !{i64 47}
+!138 = !{!131, !90, !4, !9, !13, !9, !9, !11}
+!139 = !{!131, !90, !4, !9, !10, !9, !9, !11}
+!140 = !{!131, !89, !4, !9, !13, !9, !9, !11}
+!141 = !{!131, !89, !4, !9, !10, !9, !9, !11}
+!142 = !{!131, !101, !4, !9, !10, !9, !9, !11}
+!143 = !{!131, !104, !4, !9, !34, !9, !9, !11}
+!144 = !{!131, !104, !4, !9, !13, !9, !9, !11}
+!145 = !{!131, !93, !4, !9, !13, !9, !9, !11}
+!146 = !{!131, !93, !4, !9, !10, !9, !9, !11}
+!147 = !{!131, !96, !4, !9, !10, !9, !9, !11}
+!148 = !{!131, !98, !4, !9, !13, !9, !9, !11}
+!149 = !{!131, !98, !4, !9, !34, !9, !9, !11}
+!150 = !{!131, !151, !4, !9, !10, !9, !9, !11}
+!151 = !{i64 38}
+!152 = !{!131, !133, !4, !9, !13, !9, !9, !11}
+!153 = !{!131, !133, !4, !9, !34, !9, !9, !11}
+!154 = !{!131, !135, !4, !9, !34, !9, !9, !11}
+!155 = !{!131, !135, !4, !9, !13, !9, !9, !11}
+!156 = !{!131, !157, !4, !9, !10, !9, !9, !11}
+!157 = !{i64 46}
+!158 = !{!131, !137, !4, !9, !34, !9, !9, !11}
+!159 = !{!131, !137, !4, !9, !13, !9, !9, !11}
+!160 = !{!151, !90, !4, !9, !34, !9, !9, !11}
+!161 = !{!151, !89, !4, !9, !34, !9, !9, !11}
+!162 = !{!151, !104, !4, !9, !34, !9, !9, !11}
+!163 = !{!151, !93, !4, !9, !34, !9, !9, !11}
+!164 = !{!151, !98, !4, !9, !34, !9, !9, !11}
+!165 = !{!151, !133, !4, !9, !34, !9, !9, !11}
+!166 = !{!151, !135, !4, !9, !34, !9, !9, !11}
+!167 = !{!151, !137, !4, !9, !34, !9, !9, !11}
+!168 = !{!133, !90, !4, !9, !13, !9, !9, !11}
+!169 = !{!133, !90, !4, !9, !10, !9, !9, !11}
+!170 = !{!133, !89, !4, !9, !10, !9, !9, !11}
+!171 = !{!133, !89, !4, !9, !13, !9, !9, !11}
+!172 = !{!133, !101, !4, !9, !10, !9, !9, !11}
+!173 = !{!133, !104, !4, !9, !13, !9, !9, !11}
+!174 = !{!133, !93, !4, !9, !10, !9, !9, !11}
+!175 = !{!133, !93, !4, !9, !13, !9, !9, !11}
+!176 = !{!133, !96, !4, !9, !10, !9, !9, !11}
+!177 = !{!133, !98, !4, !9, !13, !9, !9, !11}
+!178 = !{!133, !135, !4, !9, !13, !9, !9, !11}
+!179 = !{!133, !157, !4, !9, !10, !9, !9, !11}
+!180 = !{!133, !137, !4, !9, !13, !9, !9, !11}
+!181 = !{!135, !90, !4, !9, !13, !9, !9, !11}
+!182 = !{!135, !90, !4, !9, !10, !9, !9, !11}
+!183 = !{!135, !89, !4, !9, !10, !9, !9, !11}
+!184 = !{!135, !89, !4, !9, !13, !9, !9, !11}
+!185 = !{!135, !101, !4, !9, !10, !9, !9, !11}
+!186 = !{!135, !104, !4, !9, !13, !9, !9, !11}
+!187 = !{!135, !93, !4, !9, !13, !9, !9, !11}
+!188 = !{!135, !93, !4, !9, !10, !9, !9, !11}
+!189 = !{!135, !96, !4, !9, !10, !9, !9, !11}
+!190 = !{!135, !98, !4, !9, !13, !9, !9, !11}
+!191 = !{!135, !157, !4, !9, !10, !9, !9, !11}
+!192 = !{!135, !137, !4, !9, !13, !9, !9, !11}
+!193 = !{!157, !90, !4, !9, !34, !9, !9, !11}
+!194 = !{!157, !89, !4, !9, !34, !9, !9, !11}
+!195 = !{!157, !104, !4, !9, !34, !9, !9, !11}
+!196 = !{!157, !93, !4, !9, !34, !9, !9, !11}
+!197 = !{!157, !98, !4, !9, !34, !9, !9, !11}
+!198 = !{!157, !137, !4, !9, !34, !9, !9, !11}
+!199 = !{!137, !90, !4, !9, !10, !9, !9, !11}
+!200 = !{!137, !90, !4, !9, !13, !9, !9, !11}
+!201 = !{!137, !89, !4, !9, !10, !9, !9, !11}
+!202 = !{!137, !89, !4, !9, !13, !9, !9, !11}
+!203 = !{!137, !101, !4, !9, !10, !9, !9, !11}
+!204 = !{!137, !104, !4, !9, !13, !9, !9, !11}
+!205 = !{!137, !93, !4, !9, !10, !9, !9, !11}
+!206 = !{!137, !93, !4, !9, !13, !9, !9, !11}
+!207 = !{!137, !96, !4, !9, !10, !9, !9, !11}
+!208 = !{!137, !98, !4, !9, !13, !9, !9, !11}
+!209 = !{i64 37}
+!210 = !{!211, !213, i64 0}
+!211 = !{!"_ZTS24kmp_task_t_with_privates", !212, i64 0, !214, i64 40}
+!212 = !{!"_ZTS10kmp_task_t", !213, i64 0, !213, i64 8, !71, i64 16, !72, i64 24, !72, i64 32}
+!213 = !{!"any pointer", !72, i64 0}
+!214 = !{!"_ZTS15.kmp_privates.t", !71, i64 0, !71, i64 4}
+!215 = !{i64 39}
+!216 = !{i64 0, i64 8, !217, i64 8, i64 8, !217}
+!217 = !{!213, !213, i64 0}
+!218 = !{i64 41}
+!219 = !{i64 42}
+!220 = !{i64 0, i64 8, !217}
+!221 = !{i64 44}
+!222 = !{i64 45}
+!223 = !{!211, !71, i64 40}
+!224 = !{i64 48}
+!225 = !{i64 49}
+!226 = !{!211, !71, i64 44}
+!227 = !{i64 54}
+!228 = !{i64 55}
+!229 = !{!230, !71, i64 40}
+!230 = !{!"_ZTS24kmp_task_t_with_privates", !212, i64 0, !231, i64 40}
+!231 = !{!"_ZTS15.kmp_privates.t", !71, i64 0}
+!232 = !{i64 59}
+!233 = !{!234, !235}
+!234 = !{i64 60}
+!235 = !{i64 61}
+!236 = !{!237, !240, !242, !244, !246, !247, !248, !250, !251, !252, !254, !256, !258, !260, !262, !263, !265, !266, !267, !269, !270, !271, !272, !273, !274, !275, !276, !277, !278, !279, !280, !281, !282, !283, !284, !285, !286, !287}
+!237 = !{!238, !239, !4, !9, !34, !9, !9, !11}
+!238 = !{i64 63}
+!239 = !{i64 68}
+!240 = !{!238, !241, !4, !9, !34, !9, !9, !11}
+!241 = !{i64 78}
+!242 = !{!238, !243, !4, !9, !34, !9, !9, !11}
+!243 = !{i64 81}
+!244 = !{!245, !239, !4, !9, !34, !9, !9, !11}
+!245 = !{i64 65}
+!246 = !{!245, !241, !4, !9, !34, !9, !9, !11}
+!247 = !{!245, !243, !4, !9, !34, !9, !9, !11}
+!248 = !{!249, !239, !4, !9, !34, !9, !9, !11}
+!249 = !{i64 67}
+!250 = !{!249, !241, !4, !9, !34, !9, !9, !11}
+!251 = !{!249, !243, !4, !9, !34, !9, !9, !11}
+!252 = !{!239, !253, !4, !9, !10, !9, !9, !11}
+!253 = !{i64 71}
+!254 = !{!239, !255, !4, !9, !10, !9, !9, !11}
+!255 = !{i64 72}
+!256 = !{!239, !257, !4, !9, !10, !9, !9, !11}
+!257 = !{i64 73}
+!258 = !{!239, !259, !4, !9, !10, !9, !9, !11}
+!259 = !{i64 74}
+!260 = !{!239, !261, !4, !9, !10, !9, !9, !11}
+!261 = !{i64 75}
+!262 = !{!239, !261, !4, !9, !13, !9, !9, !11}
+!263 = !{!239, !264, !4, !9, !10, !9, !9, !11}
+!264 = !{i64 76}
+!265 = !{!239, !241, !4, !9, !34, !9, !9, !11}
+!266 = !{!239, !241, !4, !9, !13, !9, !9, !11}
+!267 = !{!239, !268, !4, !9, !10, !9, !9, !11}
+!268 = !{i64 79}
+!269 = !{!239, !243, !4, !9, !34, !9, !9, !11}
+!270 = !{!239, !243, !4, !9, !13, !9, !9, !11}
+!271 = !{!253, !241, !4, !4, !34, !9, !9, !11}
+!272 = !{!253, !243, !4, !9, !34, !9, !9, !11}
+!273 = !{!255, !241, !4, !9, !34, !9, !9, !11}
+!274 = !{!255, !243, !4, !4, !34, !9, !9, !11}
+!275 = !{!257, !241, !4, !9, !34, !9, !9, !11}
+!276 = !{!257, !243, !4, !9, !34, !9, !9, !11}
+!277 = !{!259, !241, !4, !9, !34, !9, !9, !11}
+!278 = !{!259, !243, !4, !9, !34, !9, !9, !11}
+!279 = !{!261, !241, !4, !9, !13, !9, !9, !11}
+!280 = !{!261, !241, !4, !9, !34, !9, !9, !11}
+!281 = !{!261, !243, !4, !9, !34, !9, !9, !11}
+!282 = !{!261, !243, !4, !9, !13, !9, !9, !11}
+!283 = !{!264, !241, !4, !4, !34, !9, !9, !11}
+!284 = !{!264, !243, !4, !9, !34, !9, !9, !11}
+!285 = !{!241, !268, !4, !9, !10, !9, !9, !11}
+!286 = !{!241, !243, !4, !9, !13, !9, !9, !11}
+!287 = !{!268, !243, !4, !4, !34, !9, !9, !11}
+!288 = !{i64 62}
+!289 = !{i64 64}
+!290 = !{!291, !213, i64 0}
+!291 = !{!"_ZTSZ4mainE3$_0", !213, i64 0, !213, i64 8}
+!292 = !{i64 66}
+!293 = !{!291, !213, i64 8}
+!294 = !{!295}
+!295 = distinct !{!295, !296, !".omp_outlined..1: %.privates."}
+!296 = distinct !{!296, !".omp_outlined..1"}
+!297 = !{i64 69}
+!298 = !{i64 70}
+!299 = !{i64 77}
+!300 = !{i64 80}
+!301 = !{i64 82}
+!302 = !{!303, !304}
+!303 = !{i64 83}
+!304 = !{i64 84}
+!305 = !{!306, !309, !311, !312, !314, !315, !316, !317}
+!306 = !{!307, !308, !4, !9, !10, !9, !9, !11}
+!307 = !{i64 85}
+!308 = !{i64 87}
+!309 = !{!307, !310, !4, !9, !13, !9, !9, !11}
+!310 = !{i64 88}
+!311 = !{!307, !310, !4, !9, !10, !9, !9, !11}
+!312 = !{!307, !313, !4, !9, !34, !9, !9, !11}
+!313 = !{i64 90}
+!314 = !{!307, !313, !4, !9, !13, !9, !9, !11}
+!315 = !{!308, !313, !4, !4, !34, !9, !9, !11}
+!316 = !{!310, !313, !4, !9, !13, !9, !9, !11}
+!317 = !{!310, !313, !4, !9, !34, !9, !9, !11}
+!318 = !{!319}
+!319 = distinct !{!319, !320, !".omp_outlined..2: %.privates."}
+!320 = distinct !{!320, !".omp_outlined..2"}
+!321 = !{i64 86}
+!322 = !{i64 89}
+!323 = !{i64 91}
+!324 = !{!325}
+!325 = !{i64 2, i64 -1, i64 -1, i1 true}
 
 
  ---------------------------------------- 
 # noelle-load -debug-only=arts,carts,arts-analyzer -load-pass-plugin /home/rherreraguaitero/ME/ARTS-env/CARTS/.build/CARTS.so -passes=CARTS test_with_metadata.bc -o test_opt.bc
 llvm-dis test_opt.bc
 clang++ -fopenmp test_opt.bc -O3 -march=native -o test_opt -lstdc++
-/usr/lib64/gcc/x86_64-suse-linux/7/../../../../x86_64-suse-linux/bin/ld: /tmp/test_opt-85d6ba.o: in function `main':
-test.cpp:(.text+0x17): undefined reference to `artsReserveGuidRoute'
-/usr/lib64/gcc/x86_64-suse-linux/7/../../../../x86_64-suse-linux/bin/ld: test.cpp:(.text+0x3d): undefined reference to `artsEdtCreateWithGuid'
-/usr/lib64/gcc/x86_64-suse-linux/7/../../../../x86_64-suse-linux/bin/ld: test.cpp:(.text+0x49): undefined reference to `artsReserveGuidRoute'
-/usr/lib64/gcc/x86_64-suse-linux/7/../../../../x86_64-suse-linux/bin/ld: test.cpp:(.text+0x6a): undefined reference to `artsEdtCreateWithGuid'
-clang-14: error: linker command failed with exit code 1 (use -v to see invocation)
-make: *** [Makefile:32: test_opt] Error 1

@@ -4,18 +4,34 @@
 #ifndef LLVM_ARTS_H
 #define LLVM_ARTS_H
 
+#include "noelle/core/Noelle.hpp"
 #include "noelle/core/Task.hpp"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Module.h"
 
 namespace arts {
 /// Namespace for all ARTS related functionality.
 using BlockSequence = SmallVector<BasicBlock *, 0>;
-using namespace arcana::noelle;
+using namespace arcana;
+using namespace std;
+/// ------------------------------------------------------------------- ///
+///                            ART TYPES                                ///
+/// It contains the types used by the ARTS runtime library.
+/// ------------------------------------------------------------------- ///
+namespace types {
+/// IDs for all arts runtime library (RTL) functions.
+enum class RuntimeFunction {
+#define ARTS_RTL(Enum, ...) Enum,
+#include "ARTSKinds.def"
+};
 
-/// Data Environment EDT
-class EDT;
+#define ARTS_RTL(Enum, ...)                                                    \
+  constexpr auto Enum = arts::types::RuntimeFunction::Enum;
+#include "ARTSKinds.def"
+
+} // end namespace types
 
 /// ------------------------------------------------------------------- ///
 ///                          DATA ENVIRONMENT                           ///
@@ -32,6 +48,24 @@ class EDT;
 /// IMPORTANT: Firstprivate is live-in, shared is both live-in and live-out,
 /// lastprivate is live-out
 /// ------------------------------------------------------------------- ///
+class EDT;
+class EDTCache {
+public:
+  EDTCache(Module &M, noelle::Noelle &NM);
+  ~EDTCache();
+
+  void insertEDT(Value *V, EDT *E);
+  bool isValueInEDT(Value *V, EDT *E);
+  SetVector<EDT *> getEDTs(Value *V);
+  noelle::Noelle &getNoelle() { return NM; }
+  Module &getModule() { return M; }
+
+private:
+  Module &M;
+  noelle::Noelle &NM;
+  DenseMap<Value *, SetVector<EDT *>> Values;
+};
+
 class EDTEnvironment {
 public:
   EDTEnvironment(EDT *E) : E(E) {}
@@ -65,130 +99,124 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDTEnvironment &Env) {
 /// The EDT is the main abstraction used by ARTS to represent the tasks
 /// in the program.
 /// ------------------------------------------------------------------- ///
-class EDT : public Task {
+class EDTTask : public noelle::Task {
 public:
-  enum class Type { MAIN, TASK, LOOP, PARALLEL, WRAPPER, DONE, OTHER };
+  EDTTask(FunctionType *TaskSignature, Module &M) : Task(TaskSignature, M){};
+  EDTTask(FunctionType *TaskSignature, Module &M, const string &TaskName)
+      : Task(TaskSignature, M, TaskName) {}
 
-  EDT(Type Ty, FunctionType *TaskSignature, Module &M)
-      : Task(TaskSignature, M), Env(this), Ty(Ty) {
-    setName();
-  }
-
-  /// Analyzes the instructions in the EDT and removes the dead ones.
   void removeDeadInstructions();
-  /// Others
-  void insertValueToEnv(Value *Val);
-  void insertValueToEnv(Value *Val, bool IsDepV);
   void cloneAndAddBasicBlocks(Function *F);
   void cloneAndAddBasicBlocks(BlockSequence &BBs);
-
-  const std::string getName() { return ("edt_" + Twine(ID)).str(); }
-  void setName() { F->setName("arts_" + getName()); }
-  Instruction *getGuidAddr() { return GuidAddr; }
-  Type getType() { return Ty; }
-  EDTEnvironment &getEnv() { return Env; }
-  BasicBlock *getBody() { return Body; }
-  void setBody(BasicBlock *BB) { Body = BB; }
-  std::unordered_map<Instruction *, std::unordered_set<Instruction *>> &
-  getLiveOuts() {
+  unordered_map<Instruction *, unordered_set<Instruction *>> &getLiveOuts() {
     return liveOutClones;
   }
-  std::unordered_map<Value *, Value *> &getLiveIns() { return liveInClones; }
+  unordered_map<Value *, Value *> &getLiveIns() { return liveInClones; }
 
+  /// Getters and setters
+  Instruction *getGuidAddr() { return GuidAddr; }
+  BasicBlock *getBody() { return Body; }
+  void setBody(BasicBlock *BB) { Body = BB; }
+  const string getName() { return ("edt_" + Twine(ID)).str(); }
+  void setName() { F->setName("arts_" + getName()); }
+
+private:
   /// Attributes
-  EDTEnvironment Env;
-  Type Ty = Type::OTHER;
   BasicBlock *Body = nullptr;
-  Instruction *GuidAddr = nullptr; // First instruction
-  Instruction *CallInst = nullptr; // Last instruction
+  /// Call to GuidAddr allocation
+  Instruction *GuidAddr = nullptr;
+  /// Call to EDTCreate function
+  Instruction *CallBase = nullptr;
 };
 
-inline raw_ostream &operator<<(raw_ostream &OS, EDT &Edt) {
-  OS << "EDT #" << Edt.getID() << "\n";
-  OS << Edt.getEnv();
-  OS << "Function: " << Edt.getTaskBody()->getName() << "\n";
-  /// Live in instructions
-  OS << "Live in instructions: \n";
-  auto &LiveIns = Edt.getLiveIns();
-  for (auto &LI : LiveIns) {
-    OS << "  - " << *LI.first << "\n";
-    OS << "    - " << *LI.second << "\n";
-  }
-  /// Live out instructions
-  OS << "Live out instructions: \n";
-  std::unordered_map<Instruction *, std::unordered_set<Instruction *>>
-      &LiveOuts = Edt.getLiveOuts();
-  for (auto &LO : LiveOuts) {
-    OS << "  - " << *LO.first << "\n";
-    for (auto &LOI : LO.second) {
-      OS << "    - " << *LOI << "\n";
-    }
-  }
+class EDT {
+public:
+  EDT(EDTCache &Cache) : Cache(Cache), Env(this){};
+
+  virtual ~EDT() = default;
+
+  void insertValueToEnv(Value *Val);
+  void insertValueToEnv(Value *Val, bool IsDepV);
+
+  CallBase *getOMPCall() { return OMPCall; }
+  Function *getOMPOutlinedFn() { return OMPOutlinedFn; }
+  EDTEnvironment &getDataEnv() { return Env; }
+  EDTTask *getTask() { return Task; }
+  void setTask(EDTTask *T) { Task = T; }
+
+  virtual void createTask() = 0;
+  virtual void setDataEnv(CallBase *CB) = 0;
+
+protected:
+  EDTCache &Cache;
+  EDTEnvironment Env;
+  EDTTask *Task;
+  /// OMP Info
+  CallBase *OMPCall = nullptr;
+  Function *OMPOutlinedFn = nullptr;
+  DenseMap<Value *, Value *> RewiringMap;
+};
+
+inline raw_ostream &operator<<(raw_ostream &OS, EDT &E) {
+  auto FnName = E.getOMPOutlinedFn()->getName();
+  OS << "- EDT for" << FnName << "\n";
+  OS << E.getDataEnv();
+
   return OS;
 }
 
-/// ------------------------------------------------------------------- ///
-///                             EDT GRAPH                               ///
-/// The data structure used to represent the EDTs and its dependencies
-/// in the program.
-/// ------------------------------------------------------------------- ///
-class EDTGraphEdge {
+class ParallelEDT : public EDT {
 public:
-  EDTGraphEdge() = default;
-  virtual ~EDTGraphEdge();
+  ParallelEDT(EDTCache &Cache) : EDT(Cache) {}
+  ParallelEDT(EDTCache &Cache, CallBase *OMPCall);
+  ~ParallelEDT() = default;
 
-  void isDataDep(void);
-  void isControlDep(void);
-  virtual void print() = 0;
-
-private:
-  bool IsDataDep = false;
-  bool IsControlDep = false;
+  void createTask() override;
+  void setDataEnv(CallBase *CB) override;
 };
 
-class EDTGraphNode {
+class ParallelDoneEDT : public EDT {
 public:
-  EDTGraphNode(EDT &E);
-  virtual void print(void) = 0;
-  virtual ~EDTGraphNode();
+  ParallelDoneEDT(EDTCache &Cache) : EDT(Cache) {}
+  ParallelDoneEDT(EDTCache &Cache, CallBase *OMPCall);
+  ~ParallelDoneEDT() = default;
 
-private:
-  EDT &E;
+  void createTask() override;
+  void setDataEnv(CallBase *CB) override;
 };
 
-class EDTGraph {
+class TaskEDT : public EDT {
 public:
-  EDTGraph(Module &M);
+  TaskEDT(EDTCache &Cache) : EDT(Cache) {}
+  TaskEDT(EDTCache &Cache, CallBase *OMPCall);
+  ~TaskEDT() = default;
 
-  EDTGraphNode *getEntryNode(void) const;
-  EDTGraphNode *getEDTNode(EDT *E) const;
-
-private:
-  Module &M;
-  std::unordered_map<Function *, EDTGraphNode *> EDTs;
-  std::unordered_map<EDTGraphNode *,
-                     std::unordered_map<EDTGraphNode *, EDTGraphEdge *>>
-      IncomingEdges;
-  std::unordered_map<EDTGraphNode *,
-                     std::unordered_map<EDTGraphNode *, EDTGraphEdge *>>
-      OutgoingEdges;
+  void createTask() override;
+  void setDataEnv(CallBase *CB) override;
 };
 
-/// ------------------------------------------------------------------- ///
-///                            ART TYPES                                ///
-/// It contains the types used by the ARTS runtime library.
-/// ------------------------------------------------------------------- ///
-namespace types {
-/// IDs for all arts runtime library (RTL) functions.
-enum class RuntimeFunction {
-#define ARTS_RTL(Enum, ...) Enum,
-#include "ARTSKinds.def"
-};
-
-#define ARTS_RTL(Enum, ...)                                                    \
-  constexpr auto Enum = arts::types::RuntimeFunction::Enum;
-#include "ARTSKinds.def"
-
-} // end namespace types
+// inline raw_ostream &operator<<(raw_ostream &OS, EDTTask &Task) {
+//   OS << "EDT #" << Task.getID() << "\n";
+//   // OS << Task.getEnv();
+//   OS << "Function: " << Task.getTaskBody()->getName() << "\n";
+//   /// Live in instructions
+//   OS << "Live in instructions: \n";
+//   auto &LiveIns = Task.getLiveIns();
+//   for (auto &LI : LiveIns) {
+//     OS << "  - " << *LI.first << "\n";
+//     OS << "    - " << *LI.second << "\n";
+//   }
+//   /// Live out instructions
+//   OS << "Live out instructions: \n";
+//   unordered_map<Instruction *, unordered_set<Instruction *>> &LiveOuts =
+//       Task.getLiveOuts();
+//   for (auto &LO : LiveOuts) {
+//     OS << "  - " << *LO.first << "\n";
+//     for (auto &LOI : LO.second) {
+//       OS << "    - " << *LOI << "\n";
+//     }
+//   }
+//   return OS;
+// }
 } // end namespace arts
 #endif // LLVM_ARTS_H
