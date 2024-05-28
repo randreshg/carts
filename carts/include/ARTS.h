@@ -6,6 +6,7 @@
 
 #include "noelle/core/Noelle.hpp"
 #include "noelle/core/Task.hpp"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
@@ -56,7 +57,7 @@ public:
 
   void insertEDT(Value *V, EDT *E);
   bool isValueInEDT(Value *V, EDT *E);
-  SetVector<EDT *> getEDTs(Value *V);
+  SetVector<EDT *> getEDTs(Value *V) const;
   noelle::Noelle &getNoelle() { return NM; }
   Module &getModule() { return M; }
 
@@ -138,11 +139,17 @@ public:
   void insertValueToEnv(Value *Val);
   void insertValueToEnv(Value *Val, bool IsDepV);
 
-  CallBase *getOMPCall() { return OMPCall; }
-  Function *getOMPOutlinedFn() { return OMPOutlinedFn; }
+  CallBase *getCall() { return OMPCall; }
+  Function *getOutlinedFn() { return OMPOutlinedFn; }
   EDTEnvironment &getDataEnv() { return Env; }
   EDTTask *getTask() { return Task; }
   void setTask(EDTTask *T) { Task = T; }
+  string getName() { return Task->getName(); }
+  StringRef getOutlinedFnName() {
+    if (!OMPOutlinedFn)
+      return "MainFunction";
+    return OMPOutlinedFn->getName();
+  }
 
   virtual void createTask() = 0;
   virtual void setDataEnv(CallBase *CB) = 0;
@@ -158,8 +165,7 @@ protected:
 };
 
 inline raw_ostream &operator<<(raw_ostream &OS, EDT &E) {
-  auto FnName = E.getOMPOutlinedFn()->getName();
-  OS << "- EDT for" << FnName << "\n";
+  OS << "- EDT for" << E.getOutlinedFnName() << "\n";
   OS << E.getDataEnv();
 
   return OS;
@@ -195,6 +201,14 @@ public:
   void setDataEnv(CallBase *CB) override;
 };
 
+class MainEDT : public EDT {
+public:
+  MainEDT(EDTCache &Cache) : EDT(Cache) {}
+  ~MainEDT() = default;
+
+  void createTask() override;
+  void setDataEnv(CallBase *CB) override;
+};
 // inline raw_ostream &operator<<(raw_ostream &OS, EDTTask &Task) {
 //   OS << "EDT #" << Task.getID() << "\n";
 //   // OS << Task.getEnv();
