@@ -53,9 +53,9 @@ int main() {
       number++;
       shared_number--;
     }
-    #pragma omp task firstprivate(number)
+    #pragma omp task firstprivate(number) shared(shared_number)
     {
-      printf("I think the number is %d.\n", number);
+      printf("I think the number is %d - %d.\n", number, shared_number);
       number++;
     }
   }

@@ -35,15 +35,15 @@ struct CARTS : public ModulePass {
   bool doInitialization(Module &M) override { return false; }
 
   bool runOnModule(Module &M) override {
-    LLVM_DEBUG(dbgs() << "\n ---------------------------------------- \n");
+    LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
     LLVM_DEBUG(dbgs() << TAG << "Running CARTS on Module: \n"
                       << M.getName() << "\n");
-    LLVM_DEBUG(dbgs() << "\n ---------------------------------------- \n");
+    LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
     /// Fetch NOELLE Manager
     auto &NM = getAnalysis<Noelle>();
     EDTCache Cache(M, NM);
     EDTGraph EDTG(Cache);
-    EDTG.print();
+    // EDTG.print();
     /// Fetch the FDG of "main"
     
 
@@ -145,65 +145,10 @@ struct CARTS : public ModulePass {
     // AA.identifyEDTs(*MainFunction);
     // AA.debug();
 
-    /// Fetch the call graph.
-    // LLVM_DEBUG(dbgs() << TAG << "Fetching the call graph\n");
-    // auto *PCG = FM->getProgramCallGraph();
-    // for (auto *Node : PCG->getFunctionNodes(true)) {
-
-    //   /// Fetch the next program's function.
-    //   auto *Fn = Node->getFunction();
-
-    //   /// Fetch the outgoing edges.
-    //   auto OutEdges = PCG->getOutgoingEdges(Node);
-    //   if (OutEdges.size() == 0) {
-    //     LLVM_DEBUG(dbgs() << " The function \"" << Fn->getName()
-    //                       << "\" has no calls\n");
-    //     continue;
-    //   }
-
-    //   /// Print the outgoing edges.
-    //   LLVM_DEBUG(dbgs() << " The function \"" << Fn->getName() << "\"");
-    //   LLVM_DEBUG(dbgs() << " invokes the following functions:\n");
-    //   for (auto *CallEdge : OutEdges) {
-    //     auto *CalleerNode = CallEdge->getCaller();
-    //     auto *CalleeNode = CallEdge->getCallee();
-    //     auto *CalleeF = CalleeNode->getFunction();
-
-    //     LLVM_DEBUG(dbgs() << "   [");
-    //     if (CallEdge->isAMustCall()) {
-    //       LLVM_DEBUG(dbgs() << "must");
-    //     } else {
-    //       LLVM_DEBUG(dbgs() << "may");
-    //     }
-    //     LLVM_DEBUG(dbgs() << "] \"" << CalleeF->getName() << "\"\n");
-
-    //     /// Print the sub-edges.
-    //     for (auto *SubEdge : CallEdge->getSubEdges()) {
-    //       auto *CallerSubEdge = SubEdge->getCaller();
-    //       LLVM_DEBUG(dbgs() << "     [");
-    //       if (SubEdge->isAMustCall()) {
-    //         LLVM_DEBUG(dbgs() << "must");
-    //       } else {
-    //         LLVM_DEBUG(dbgs() << "may");
-    //       }
-    //       LLVM_DEBUG(dbgs()
-    //                  << "] " << *CallerSubEdge->getInstruction() << "\n");
-    //       /// Check if the it is a call to create an EDT
-    //       auto *CallInst = dyn_cast<CallBase>(CallerSubEdge->getInstruction());
-    //       if(!CallInst)
-    //         continue;
-    //       EDT *E = AA.getEDT(CallInst);
-    //       if (!E)
-    //         continue;
-    //       LLVM_DEBUG(dbgs() << "     [EDT] " << E->getName() << "\n");
-    //     }
-    //   }
-    // }
-
     /// Print module info
-    LLVM_DEBUG(dbgs() << "\n ---------------------------------------- \n");
+    LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
     LLVM_DEBUG(dbgs() << TAG << "Process has finished\n\n" << M << "\n");
-    LLVM_DEBUG(dbgs() << "\n ---------------------------------------- \n");
+    LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
     return false;
   }
 

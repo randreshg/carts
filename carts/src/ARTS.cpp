@@ -8,6 +8,7 @@
 
 #include "ARTS.h"
 #include "ARTSUtils.h"
+#include "noelle/core/Task.hpp"
 
 using namespace llvm;
 using namespace arts;
@@ -31,9 +32,7 @@ uint32_t EDTEnvironment::getDepC() { return DepV.size(); }
 EDTCache::EDTCache(Module &M, noelle::Noelle &NM) : M(M), NM(NM) {}
 EDTCache::~EDTCache() {}
 
-void EDTCache::insertEDT(Value *V, EDT *E) { 
-  Values[V].insert(E);
-}
+void EDTCache::insertEDT(Value *V, EDT *E) { Values[V].insert(E); }
 
 bool EDTCache::isValueInEDT(Value *V, EDT *E) {
   auto Itr = Values.find(V);
@@ -42,13 +41,12 @@ bool EDTCache::isValueInEDT(Value *V, EDT *E) {
   return Itr->second.count(E);
 }
 
-SetVector<EDT *> EDTCache::getEDTs(Value *V) {
+SetVector<EDT *> EDTCache::getEDTs(Value *V) const {
   auto Itr = Values.find(V);
   if (Itr == Values.end())
     return SetVector<EDT *>();
   return Itr->second;
 }
-
 
 /// EDT Task
 void EDTTask::removeDeadInstructions() {
@@ -89,10 +87,11 @@ void EDTTask::cloneAndAddBasicBlocks(BlockSequence &BBs) {
 
 /// EDT
 void EDT::insertValueToEnv(Value *Val) {
-  Cache.insertEDT(Val, this);
   /// Pointer is a depv, else, it is a paramv
-  if (PointerType *PT = dyn_cast<PointerType>(Val->getType()))
+  if (PointerType *PT = dyn_cast<PointerType>(Val->getType())) {
+    Cache.insertEDT(Val, this);
     Env.insertDepV(Val);
+  }
   else
     Env.insertParamV(Val);
   /// TODO: Add extra info to OpenMP Frontend to have info about
@@ -100,10 +99,11 @@ void EDT::insertValueToEnv(Value *Val) {
 }
 
 void EDT::insertValueToEnv(Value *Val, bool IsDepV) {
-  Cache.insertEDT(Val, this);
   /// Pointer is a depv, else, it is a paramv
-  if (IsDepV)
+  if (IsDepV) {
+    Cache.insertEDT(Val, this);
     Env.insertDepV(Val);
+  }
   else
     Env.insertParamV(Val);
 }
@@ -121,7 +121,7 @@ void ParallelEDT::createTask() {
 
 void ParallelEDT::setDataEnv(CallBase *CB) {
   assert(OMPOutlinedFn && "Outlined function not found");
-  LLVM_DEBUG(dbgs() << TAG << " - Setting data environment for ParallelEDT\n");
+  LLVM_DEBUG(dbgs() << TAG << "Setting data environment for ParallelEDT\n");
   const Data &RTI = omp::getRTData(omp::getRTFunction(*CB));
   Use *CallArgItr = CB->arg_begin() + RTI.KeepCallArgsFrom;
   Argument *FnArgItr = OMPOutlinedFn->arg_begin() + RTI.KeepArgsFrom;
@@ -283,3 +283,10 @@ void TaskEDT::setDataEnv(CallBase *CB) {
     RewiringMap[To] = From;
   }
 }
+
+/// Main EDT
+void MainEDT::createTask() {
+  LLVM_DEBUG(dbgs() << TAG << "Creating Task for TaskEDT\n");
+}
+
+void MainEDT::setDataEnv(CallBase *CB) {}
