@@ -12,15 +12,17 @@
 
 #include "noelle/core/Noelle.hpp"
 
-#include "ARTS.h"
-#include "ARTSIRBuilder.h"
+#include "carts/analysis/ARTS.h"
+// #include "ARTSIRBuilder.h"
 
 using namespace llvm;
 using namespace arcana::noelle;
 namespace arts {
 struct ARTSAnalyzer {
-  ARTSAnalyzer(Module &M, Noelle &NM, ARTSIRBuilder &AIB)
-      : M(M), NM(NM), AIB(AIB) {}
+  // ARTSAnalyzer(Module &M, Noelle &NM, ARTSIRBuilder &AIB)
+  //     : M(M), NM(NM), AIB(AIB) {}
+  ARTSAnalyzer(Module &M, Noelle &NM)
+      : M(M), NM(NM) {}
 
   /// Print the EDTs
   void debug();
@@ -47,7 +49,7 @@ private:
   /// Noelle Manager
   Noelle &NM;
   /// ARTS IR Builder
-  ARTSIRBuilder &AIB;
+  // ARTSIRBuilder &AIB;
   /// Set of EDTs
   SetVector<EDT *> EDTs;
   /// EDT per function

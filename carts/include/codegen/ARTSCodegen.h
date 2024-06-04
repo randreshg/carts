@@ -1,6 +1,6 @@
 //===----------------------------------------------------------------------===//
 //
-// This file defines the ARTSIRBuilder class and helpers used as a convenient
+// This file defines the ARTSCodegen class and helpers used as a convenient
 // way to create LLVM instructions for ARTS directives.
 //
 //===----------------------------------------------------------------------===//
@@ -13,23 +13,23 @@
 #include "llvm/IR/Instruction.h"
 // #include "llvm/Support/Allocator.h"
 
-#include "ARTS.h"
+#include "carts/analysis/ARTS.h"
 
 namespace arts {
 /// An interface to create LLVM-IR for ARTS directives.
 ///
 /// Each ARTS directive has a corresponding public generator method.
-class ARTSIRBuilder {
+class ARTSCodegen {
 public:
-  /// Create a new ARTSIRBuilder operating on the given module \p M.
-  ARTSIRBuilder(Module &M) : M(M), Builder(M.getContext()) { initialize(); }
-  ~ARTSIRBuilder() {}
+  /// Create a new ARTSCodegen operating on the given module \p M.
+  ARTSCodegen(Module &M) : M(M), Builder(M.getContext()) { initialize(); }
+  ~ARTSCodegen() {}
 
   /// ---------------------------- Interface ---------------------------- ///
   /// Initialize the internal state, this will put structures types and
   /// potentially other helpers into the underlying module. Must be called
   /// before any other method and only once! This internal state includes
-  /// Types used in the ARTSIRBuilder generated from ARTSKinds.def
+  /// Types used in the ARTSCodegen generated from ARTSKinds.def
   void initialize();
 
   /// Finalize the underlying module, e.g., by outlining regions.

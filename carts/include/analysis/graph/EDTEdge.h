@@ -4,7 +4,7 @@
 #ifndef LLVM_EDTEDGE_H
 #define LLVM_EDTEDGE_H
 
-#include "EDTGraph.h"
+#include "carts/analysis/graph/EDTGraph.h"
 #include <unordered_set>
 
 /// ------------------------------------------------------------------- ///

@@ -4,10 +4,10 @@
 #include "llvm/Support/Debug.h"
 #include <cassert>
 
-#include "ARTS.h"
-#include "ARTSUtils.h"
-#include "EDTEdge.h"
-#include "EDTGraph.h"
+#include "carts/analysis/ARTS.h"
+#include "carts/utils/ARTSUtils.h"
+#include "carts/analysis/graph/EDTEdge.h"
+#include "carts/analysis/graph/EDTGraph.h"
 
 using namespace llvm;
 using namespace arts;
