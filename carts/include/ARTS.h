@@ -139,16 +139,16 @@ public:
   void insertValueToEnv(Value *Val);
   void insertValueToEnv(Value *Val, bool IsDepV);
 
-  CallBase *getCall() { return OMPCall; }
-  Function *getOutlinedFn() { return OMPOutlinedFn; }
+  CallBase *getCall() { return OutlinedFnCall; }
+  Function *getOutlinedFn() { return OutlinedFn; }
   EDTEnvironment &getDataEnv() { return Env; }
   EDTTask *getTask() { return Task; }
   void setTask(EDTTask *T) { Task = T; }
   string getName() { return Task->getName(); }
   StringRef getOutlinedFnName() {
-    if (!OMPOutlinedFn)
+    if (!OutlinedFn)
       return "MainFunction";
-    return OMPOutlinedFn->getName();
+    return OutlinedFn->getName();
   }
 
   virtual void createTask() = 0;
@@ -158,9 +158,9 @@ protected:
   EDTCache &Cache;
   EDTEnvironment Env;
   EDTTask *Task;
-  /// OMP Info
-  CallBase *OMPCall = nullptr;
-  Function *OMPOutlinedFn = nullptr;
+  /// Outlined Function Info
+  CallBase *OutlinedFnCall = nullptr;
+  Function *OutlinedFn = nullptr;
   DenseMap<Value *, Value *> RewiringMap;
 };
 
@@ -174,7 +174,7 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDT &E) {
 class ParallelEDT : public EDT {
 public:
   ParallelEDT(EDTCache &Cache) : EDT(Cache) {}
-  ParallelEDT(EDTCache &Cache, CallBase *OMPCall);
+  ParallelEDT(EDTCache &Cache, CallBase *OutlinedFnCall);
   ~ParallelEDT() = default;
 
   void createTask() override;
@@ -184,17 +184,18 @@ public:
 class ParallelDoneEDT : public EDT {
 public:
   ParallelDoneEDT(EDTCache &Cache) : EDT(Cache) {}
-  ParallelDoneEDT(EDTCache &Cache, CallBase *OMPCall);
+  ParallelDoneEDT(EDTCache &Cache, CallBase *OutlinedFnCall);
   ~ParallelDoneEDT() = default;
 
   void createTask() override;
   void setDataEnv(CallBase *CB) override;
+  void createOutlinedFn(CallBase *CB);
 };
 
 class TaskEDT : public EDT {
 public:
   TaskEDT(EDTCache &Cache) : EDT(Cache) {}
-  TaskEDT(EDTCache &Cache, CallBase *OMPCall);
+  TaskEDT(EDTCache &Cache, CallBase *OutlinedFnCall);
   ~TaskEDT() = default;
 
   void createTask() override;

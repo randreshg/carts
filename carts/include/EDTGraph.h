@@ -36,10 +36,11 @@ public:
   EDTGraphNode *getNode(EDT *E) const;
 
 private:
+  void createNode(Function &F);
   void createNodes();
   std::unordered_set<EDTGraphNode *> getNodes();
   EDTGraphNode *insertNode(EDT *E);
-  EDTGraphNode *insertNode(EDT *E, EDTGraphNode *ParentNode);
+  EDTGraphNode *insertNode(EDT *E, EDTGraphNode *ParentNode, Function *F = nullptr);
   EDTGraphNode *insertNode(EDT *E, Function &F);
   /// Edges
   EDTGraphEdge *getEdge(EDTGraphNode *From, EDTGraphNode *To);
@@ -52,6 +53,7 @@ private:
   void addCreationEdge(EDTGraphNode *From, EDTGraphNode *To);
   void addDataEdge(EDTGraphNode *From, EDTGraphNode *To, Value *V = nullptr);
   void addControlEdge(EDTGraphNode *From, EDTGraphNode *To);
+  void removeEdge(EDTGraphEdge *Edge);
   void removeEdge(EDTGraphNode *From, EDTGraphNode *To);
 
   /// Attributes

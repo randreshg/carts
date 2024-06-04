@@ -43,7 +43,7 @@ public:
   bool isDataEdge() const override { return false; }
   bool isControlEdge() const override { return true; }
 
-  static bool classof(const EDTGraphEdge *E) { return !E->isDataEdge(); }
+  static bool classof(const EDTGraphEdge *E) { return E->isControlEdge(); }
 
 private:
   // bool IsBackEdge = false;
@@ -58,14 +58,16 @@ public:
   virtual ~EDTGraphDataEdge();
   void addValue(Value *V);
   void removeValue(Value *V);
-  std::unordered_set<EDTGraphDataEdgeVal *> getValues() { return Values; }
+  // std::unordered_set<EDTGraphDataEdgeVal *> getValues() { return Values; }
+  std::unordered_set<Value *> getValues() { return Values; }
   bool isDataEdge() const override { return true; }
   bool isControlEdge() const override { return false; }
 
   static bool classof(const EDTGraphEdge *E) { return E->isDataEdge(); }
 
 private:
-  std::unordered_set<EDTGraphDataEdgeVal *> Values;
+  // std::unordered_set<EDTGraphDataEdgeVal *> Values;
+  std::unordered_set<Value *> Values;
 };
 
 class EDTGraphDataEdgeVal {
