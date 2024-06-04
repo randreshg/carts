@@ -35,19 +35,24 @@ struct CARTS : public ModulePass {
   bool doInitialization(Module &M) override { return false; }
 
   bool runOnModule(Module &M) override {
-    LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
+    LLVM_DEBUG(
+        dbgs() << "\n-------------------------------------------------\n");
     LLVM_DEBUG(dbgs() << TAG << "Running CARTS on Module: \n"
                       << M.getName() << "\n");
-    LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
+    LLVM_DEBUG(
+        dbgs() << "\n-------------------------------------------------\n");
     /// Fetch NOELLE Manager
     auto &NM = getAnalysis<Noelle>();
     EDTCache Cache(M, NM);
     EDTGraph EDTG(Cache);
+    EDTG.print();
 
     /// Print module info
-    LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
+    LLVM_DEBUG(
+        dbgs() << "\n-------------------------------------------------\n");
     LLVM_DEBUG(dbgs() << TAG << "Process has finished\n\n" << M << "\n");
-    LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
+    LLVM_DEBUG(
+        dbgs() << "\n-------------------------------------------------\n");
     return false;
   }
 

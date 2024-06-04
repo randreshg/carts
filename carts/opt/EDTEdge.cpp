@@ -37,23 +37,24 @@ EDTGraphDataEdge::EDTGraphDataEdge(EDTGraphNode *From, EDTGraphNode *To)
     : EDTGraphEdge(From, To) {}
 
 EDTGraphDataEdge::~EDTGraphDataEdge() {
-  for (auto *V : Values)
-    delete V;
+  // for (auto *V : Values)
+  //   delete V;
 }
 
 void EDTGraphDataEdge::addValue(Value *V) {
-  Values.insert(new EDTGraphDataEdgeVal(this, V));
+  // Values.insert(new EDTGraphDataEdgeVal(this, V));
+  Values.insert(V);
 }
 
 void EDTGraphDataEdge::removeValue(Value *V) {
-  auto It =
-      std::find_if(Values.begin(), Values.end(), [V](EDTGraphDataEdgeVal *Val) {
-        return Val->getValue() == V;
-      });
-  if (It != Values.end()) {
-    delete *It;
-    Values.erase(It);
-  }
+  // auto It =
+  //     std::find_if(Values.begin(), Values.end(), [V](EDTGraphDataEdgeVal *Val) {
+  //       return Val->getValue() == V;
+  //     });
+  // if (It != Values.end()) {
+  //   delete *It;
+  //   Values.erase(It);
+  // }
 }
 
 /// EDTGraphDataEdgeVal

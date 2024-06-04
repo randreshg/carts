@@ -26,7 +26,8 @@ EDTGraph::EDTGraph(EDTCache &Cache) : Cache(Cache) {
   LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << "Building the EDT Graph\n");
   createNodes();
-  print();
+  LLVM_DEBUG(dbgs() << Cache.getModule());
+  /// Debug Module
   LLVM_DEBUG(dbgs() << TAG << "Analyzing dependencies\n");
   /// Fetch the PDG
   auto &NM = Cache.getNoelle();
@@ -47,20 +48,34 @@ EDTGraph::EDTGraph(EDTCache &Cache) : Cache(Cache) {
       LLVM_DEBUG(dbgs() << "   - The EDT doesn't have outgoing edges\n");
       continue;
     }
-
     /// Analyze the outgoing edges.
+    LLVM_DEBUG(dbgs() << "   The EDT has " << OutEdges.size()
+                      << " outgoing edges\n");
     for (auto *DepEdge : OutEdges) {
       /// If the edge is not a creation edge, skip it
-      if (!DepEdge->isControlEdge() && !DepEdge->hasCreationDep())
+      if (!DepEdge->hasCreationDep()) {
+        /// The edge from @fromNode to @toNode is not a creation edge.
+        /// It is a data or control edge.
+        LLVM_DEBUG(dbgs() << "   - The edge from \""
+                          << FromEDT.getOutlinedFnName() << "\" to \""
+                          << DepEdge->getTo()->getEDT()->getOutlinedFnName()
+                          << "\" is not a creation edge\n");
         continue;
+      }
       auto &ToEDTNode = *DepEdge->getTo();
       auto &ToEDT = *ToEDTNode.getEDT();
       auto *ToEDTCall = ToEDT.getCall();
       assert(ToEDTCall != nullptr && "The EDT doesn't have a call");
 
       LLVM_DEBUG(dbgs() << "   - EDT \"" << ToEDT.getOutlinedFnName()
-                        << "\" depends on: \n");
-      /// Iterate over the dependences
+                        << "\" depends on:\n");
+      /// DepV are the values that the EDT depends on.
+      auto &ToDE = ToEDT.getDataEnv();
+      for (auto &D : ToDE.DepV) {
+        LLVM_DEBUG(dbgs() << "     " << *D << " - DATA DEPV\n");
+        addDataEdge(&FromEDTNode, &ToEDTNode, D);
+      }
+      /// Iterate over the rest of dependencies
       auto IterFn = [this, &Cache, &ToEDT, &FromEDTNode, &ToEDTNode](
                         Value *Src, DGEdge<Value, Value> *Dep) -> bool {
         auto SrcEDTs = Cache.getEDTs(Src);
@@ -69,53 +84,45 @@ EDTGraph::EDTGraph(EDTCache &Cache) : Cache(Cache) {
         /// Check if the source is EDTTo
         if (!is_contained(SrcEDTs, &ToEDT))
           return false;
-        LLVM_DEBUG(dbgs() << "   " << *Src << " - ");
+        LLVM_DEBUG(dbgs() << "     " << *Src << " - ");
         /// Control dependencies
         if (isa<ControlDependence<Value, Value>>(Dep)) {
-          LLVM_DEBUG(dbgs() << " CONTROL ");
+          LLVM_DEBUG(dbgs() << " CONTROL\n");
           assert(false && "Not implemented yet");
           return false;
         }
         /// Data dependencies -> Registers
-        LLVM_DEBUG(dbgs() << " DATA ");
+        LLVM_DEBUG(dbgs() << " DATA\n");
         auto DataDep = cast<DataDependence<Value, Value>>(Dep);
-        if (DataDep->isRAWDependence()) {
-          LLVM_DEBUG(dbgs() << " RAW ");
-        }
-        if (DataDep->isWARDependence()) {
-          LLVM_DEBUG(dbgs() << " WAR ");
-        }
-        if (DataDep->isWAWDependence()) {
-          LLVM_DEBUG(dbgs() << " WAW ");
-        }
+        // if (DataDep->isRAWDependence()) {
+        //   LLVM_DEBUG(dbgs() << " RAW ");
+        // }
+        // if (DataDep->isWARDependence()) {
+        //   LLVM_DEBUG(dbgs() << " WAR ");
+        // }
+        // if (DataDep->isWAWDependence()) {
+        //   LLVM_DEBUG(dbgs() << " WAW ");
+        // }
         /// Further analysis has to be performed here to guarantee that the
         /// dependence is a memory dependence. Leave it as it is for now.
         if (isa<MemoryDependence<Value, Value>>(DataDep)) {
-          LLVM_DEBUG(dbgs() << " MEMORY ");
-          auto memDep = cast<MemoryDependence<Value, Value>>(DataDep);
-          if (isa<MustMemoryDependence<Value, Value>>(memDep)) {
-            LLVM_DEBUG(dbgs() << " MUST ");
-          } else {
-            LLVM_DEBUG(dbgs() << " MAY ");
-          }
+          LLVM_DEBUG(dbgs() << " MEMORY\n");
+          // auto memDep = cast<MemoryDependence<Value, Value>>(DataDep);
+          // if (isa<MustMemoryDependence<Value, Value>>(memDep)) {
+          //   LLVM_DEBUG(dbgs() << " MUST ");
+          // } else {
+          //   LLVM_DEBUG(dbgs() << " MAY ");
+          // }
         }
 
         /// Create the data edge
-        LLVM_DEBUG(dbgs() << "\n        Adding Data Edge\n");
         addDataEdge(&FromEDTNode, &ToEDTNode, Src);
-        LLVM_DEBUG(dbgs() << "\n");
+        // LLVM_DEBUG(dbgs() << "\n");
         return false;
       };
       FDG->iterateOverDependencesTo(ToEDTCall, true, true, true, IterFn);
-
-      /// Get DepV from ToEDT
-      auto &ToDE = ToEDT.getDataEnv();
-      for (auto &D : ToDE.DepV) {
-        LLVM_DEBUG(dbgs() << "   " << *D << " - DATA\n");
-      }
     }
   }
-  // LLVM_DEBUG(dbgs() << "\n- - - - - - - - - - - - - - - -\n\n");
   LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
 }
 
@@ -126,6 +133,47 @@ EDTGraph::~EDTGraph() {
 }
 
 /// Nodes
+void EDTGraph::createNode(Function &F) {
+  if (F.isDeclaration() && !F.hasLocalLinkage())
+    return;
+  LLVM_DEBUG(dbgs() << "\n- - - - - - - - - - - - - - - - - - - - - - - -\n");
+  LLVM_DEBUG(dbgs() << TAG << "Processing function: " << F.getName() << "\n");
+  auto *ParentEDTNode = getNode(F);
+  assert(ParentEDTNode != nullptr && "ParentEDTNode is null");
+  removeLifetimeMarkers(F);
+  for (auto &Inst : instructions(&F)) {
+    auto *CB = dyn_cast<CallBase>(&Inst);
+    if (!CB)
+      continue;
+    /// Get the callee
+    omp::Type RTF = omp::getRTFunction(*CB);
+    switch (RTF) {
+    case omp::PARALLEL: {
+      LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
+      LLVM_DEBUG(dbgs() << TAG << "Parallel Region Found:\n" << *CB << "\n");
+      insertNode(new ParallelEDT(Cache, CB), ParentEDTNode);
+      insertNode(new ParallelDoneEDT(Cache, CB), ParentEDTNode);
+    } break;
+    case omp::TASKALLOC: {
+      LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
+      LLVM_DEBUG(dbgs() << TAG << "Task Region Found:\n" << *CB << "\n");
+      insertNode(new TaskEDT(Cache, CB), ParentEDTNode);
+    } break;
+    case omp::TASKWAIT: {
+      assert(false && "Taskwait not implemented yet");
+    } break;
+    case omp::OTHER: {
+      // LLVM_DEBUG(dbgs() << "\n- - - - - - - - - - - - - - - -\n");
+      // LLVM_DEBUG(dbgs() << TAG << "Other Function Found:\n" << *CB <<
+      // "\n"); IPA?
+    } break;
+    default:
+      continue;
+      break;
+    }
+  }
+}
+
 void EDTGraph::createNodes() {
   auto &M = Cache.getModule();
   LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
@@ -136,44 +184,8 @@ void EDTGraph::createNodes() {
   auto FM = NM.getFunctionsManager();
   insertNode(new MainEDT(Cache), *FM->getEntryFunction());
 
-  for (auto &F : M) {
-    if (F.isDeclaration() && !F.hasLocalLinkage())
-      continue;
-    LLVM_DEBUG(dbgs() << "\n- - - - - - - - - - - - - - - - - - - - - - - -\n");
-    LLVM_DEBUG(dbgs() << TAG << "Processing function: " << F.getName() << "\n");
-    auto *ParentEDTNode = getNode(F);
-    removeLifetimeMarkers(F);
-    for (auto &Inst : instructions(&F)) {
-      auto *CB = dyn_cast<CallBase>(&Inst);
-      if (!CB)
-        continue;
-      /// Get the callee
-      omp::Type RTF = omp::getRTFunction(*CB);
-      switch (RTF) {
-      case omp::PARALLEL: {
-        LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
-        LLVM_DEBUG(dbgs() << TAG << "Parallel Region Found:\n" << *CB << "\n");
-        insertNode(new ParallelEDT(Cache, CB), ParentEDTNode);
-      } break;
-      case omp::TASKALLOC: {
-        LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
-        LLVM_DEBUG(dbgs() << TAG << "Task Region Found:\n" << *CB << "\n");
-        insertNode(new TaskEDT(Cache, CB), ParentEDTNode);
-      } break;
-      case omp::TASKWAIT: {
-        assert(false && "Taskwait not implemented yet");
-      } break;
-      case omp::OTHER: {
-        // LLVM_DEBUG(dbgs() << "\n- - - - - - - - - - - - - - - -\n");
-        // LLVM_DEBUG(dbgs() << TAG << "Other Function Found:\n" << *CB <<
-        // "\n"); IPA?
-      } break;
-      default:
-        continue;
-        break;
-      }
-    }
-  }
+  for (auto &F : M)
+    createNode(F);
 
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << EDTs.size() << " EDT Nodes were created\n");
@@ -214,8 +226,9 @@ EDTGraphNode *EDTGraph::insertNode(EDT *E) {
   return EDTNode;
 }
 
-EDTGraphNode *EDTGraph::insertNode(EDT *E, EDTGraphNode *ParentNode) {
-  EDTGraphNode *EDTNode = insertNode(E);
+EDTGraphNode *EDTGraph::insertNode(EDT *E, EDTGraphNode *ParentNode,
+                                   Function *F) {
+  EDTGraphNode *EDTNode = (F == nullptr) ? insertNode(E) : insertNode(E, *F);
   addCreationEdge(ParentNode, EDTNode);
   return EDTNode;
 }
@@ -271,40 +284,42 @@ std::unordered_set<EDTGraphEdge *> EDTGraph::getEdges(EDTGraphNode *Node) {
 EDTGraphEdge *EDTGraph::fetchOrCreateEdge(EDTGraphNode *From, EDTGraphNode *To,
                                           bool IsDataEdge) {
   auto *ExistingEdge = getEdge(From, To);
-  LLVM_DEBUG(dbgs() << TAG << "Creating edge from \""
-                    << From->getEDT()->getOutlinedFnName() << "\" to \""
-                    << To->getEDT()->getOutlinedFnName() << "\"\n");
   if (ExistingEdge == nullptr) {
-    LLVM_DEBUG(dbgs() << TAG << "The edge doesn't exist yet\n");
     /// The edge from @fromNode to @toNode doesn't exist yet
+    LLVM_DEBUG(dbgs() << "        - Creating edge from \""
+                      << From->getEDT()->getOutlinedFnName() << "\" to \""
+                      << To->getEDT()->getOutlinedFnName() << "\"\n");
     EDTGraphEdge *NewEdge;
-    if (IsDataEdge)
+    if (IsDataEdge) {
       NewEdge = new EDTGraphDataEdge(From, To);
-    else
+      LLVM_DEBUG(dbgs() << "          Data Edge\n");
+    } else {
       NewEdge = new EDTGraphControlEdge(From, To);
+      LLVM_DEBUG(dbgs() << "          Control Edge\n");
+    }
     /// Add the new edge.
     addEdge(From, To, NewEdge);
     return NewEdge;
   }
   assert(ExistingEdge != nullptr);
-  LLVM_DEBUG(dbgs() << TAG << "The edge already exists\n");
   /// The edge is a control edge
   if (ExistingEdge->isControlEdge()) {
-    LLVM_DEBUG(dbgs() << TAG << "The edge is a Control Edge\n");
     if (!IsDataEdge)
       return ExistingEdge;
     /// The edge is a control edge with creation dep.
     /// Convert it to a data edge.
     assert(ExistingEdge->hasCreationDep() &&
            "The edge is not a creation edge - Can not convert to Data Edge");
-    LLVM_DEBUG(dbgs() << TAG << "Converting the edge to a Data Edge\n");
+    LLVM_DEBUG(dbgs() << "        - Converting edge from \""
+                      << From->getEDT()->getOutlinedFnName() << "\" to \""
+                      << To->getEDT()->getOutlinedFnName() << "\"\n");
     auto *NewDataEdge = new EDTGraphDataEdge(From, To);
     NewDataEdge->setCreationDep(true);
     removeEdge(ExistingEdge);
+    addEdge(From, To, NewDataEdge);
     return NewDataEdge;
   }
   /// The edge is a data edge
-  LLVM_DEBUG(dbgs() << TAG << "The edge is a Data Edge\n");
   assert(IsDataEdge && "The edge is a Data edge - Can not convert to Control "
                        "Edge");
   return ExistingEdge;
@@ -334,6 +349,14 @@ void EDTGraph::addControlEdge(EDTGraphNode *From, EDTGraphNode *To) {
   fetchOrCreateEdge(From, To, false);
 }
 
+void EDTGraph::removeEdge(EDTGraphEdge *Edge) {
+  auto *From = Edge->getFrom();
+  auto *To = Edge->getTo();
+  OutgoingEdges[From].erase(To);
+  IncomingEdges[To].erase(From);
+  delete Edge;
+}
+
 void EDTGraph::removeEdge(EDTGraphNode *From, EDTGraphNode *To) {
   auto *Edge = getEdge(From, To);
   if (Edge == nullptr)
@@ -348,7 +371,6 @@ void EDTGraph::print(void) {
   LLVM_DEBUG(dbgs() << TAG << "Printing the EDT Graph\n");
   /// Print the outgoing edges.
   for (auto *EDTNode : getNodes()) {
-    auto OutEdges = getOutgoingEdges(EDTNode);
     auto *E = EDTNode->getEDT();
     LLVM_DEBUG(dbgs() << "- EDT \"" << E->getOutlinedFnName() << "\"\n");
     /// Data environment
@@ -365,25 +387,55 @@ void EDTGraph::print(void) {
       LLVM_DEBUG(dbgs() << "      - " << *D << "\n");
     }
     /// Dependencies
-    LLVM_DEBUG(dbgs() << "  - Dependencies:\n");
+    LLVM_DEBUG(dbgs() << "  - Incoming Edges:\n");
+    auto InEdges = getIncomingEdges(EDTNode);
+    if (InEdges.size() == 0) {
+      LLVM_DEBUG(dbgs() << "    - The EDT has no incoming edges\n");
+    } else {
+      /// Print the incoming edges.
+      for (auto *DepEdge : InEdges) {
+        auto *From = DepEdge->getFrom();
+        auto *FromE = From->getEDT();
+        LLVM_DEBUG(dbgs() << "    - [");
+        if (DepEdge->hasCreationDep()) {
+          LLVM_DEBUG(dbgs() << "creation");
+        } else if (DepEdge->isDataEdge()) {
+          LLVM_DEBUG(dbgs() << "data");
+        } else if (DepEdge->isControlEdge()) {
+          LLVM_DEBUG(dbgs() << "control");
+        }
+        LLVM_DEBUG(dbgs() << "] \"" << FromE->getOutlinedFnName() << "\"\n");
+      }
+    }
+
+    LLVM_DEBUG(dbgs() << "  - Outgoing Edges:\n");
+    auto OutEdges = getOutgoingEdges(EDTNode);
     if (OutEdges.size() == 0) {
       LLVM_DEBUG(dbgs() << "    - The EDT has no outgoing edges\n");
-      continue;
-    }
-    /// Print the outgoing edges.
-    for (auto *DepEdge : OutEdges) {
-      auto *To = DepEdge->getTo();
-      auto *ToE = To->getEDT();
-      LLVM_DEBUG(dbgs() << "    - [");
-      if (DepEdge->hasCreationDep()) {
-        LLVM_DEBUG(dbgs() << "creation");
-      } else if (DepEdge->isDataEdge()) {
-        LLVM_DEBUG(dbgs() << "data");
-      } else if (DepEdge->isControlEdge()) {
-        LLVM_DEBUG(dbgs() << "control");
+    } else {
+      /// Print the outgoing edges.
+      for (auto *DepEdge : OutEdges) {
+        auto *To = DepEdge->getTo();
+        auto *ToE = To->getEDT();
+        LLVM_DEBUG(dbgs() << "    - [");
+        if (DepEdge->hasCreationDep()) {
+          LLVM_DEBUG(dbgs() << "creation");
+        } else if (DepEdge->isDataEdge()) {
+          LLVM_DEBUG(dbgs() << "data");
+        } else if (DepEdge->isControlEdge()) {
+          LLVM_DEBUG(dbgs() << "control");
+        }
+        LLVM_DEBUG(dbgs() << "] \"" << ToE->getOutlinedFnName() << "\"\n");
+        if (DepEdge->isDataEdge()) {
+          auto *DataEdge = cast<EDTGraphDataEdge>(DepEdge);
+          auto Values = DataEdge->getValues();
+          for (auto *V : Values) {
+            LLVM_DEBUG(dbgs() << "        - " << *V << "\n");
+          }
+        }
       }
-      LLVM_DEBUG(dbgs() << "] \"" << ToE->getOutlinedFnName() << "\"\n");
     }
+    LLVM_DEBUG(dbgs() << "\n");
   }
   LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - - - -\n\n");
 }

@@ -91,8 +91,7 @@ void EDT::insertValueToEnv(Value *Val) {
   if (PointerType *PT = dyn_cast<PointerType>(Val->getType())) {
     Cache.insertEDT(Val, this);
     Env.insertDepV(Val);
-  }
-  else
+  } else
     Env.insertParamV(Val);
   /// TODO: Add extra info to OpenMP Frontend to have info about
   /// Data Sharing attributes
@@ -103,15 +102,14 @@ void EDT::insertValueToEnv(Value *Val, bool IsDepV) {
   if (IsDepV) {
     Cache.insertEDT(Val, this);
     Env.insertDepV(Val);
-  }
-  else
+  } else
     Env.insertParamV(Val);
 }
 
 /// Parallel EDT
 ParallelEDT::ParallelEDT(EDTCache &Cache, CallBase *CB) : EDT(Cache) {
-  OMPCall = CB;
-  OMPOutlinedFn = omp::getOutlinedFunction(CB);
+  OutlinedFnCall = CB;
+  OutlinedFn = omp::getOutlinedFunction(CB);
   setDataEnv(CB);
 }
 
@@ -120,12 +118,12 @@ void ParallelEDT::createTask() {
 }
 
 void ParallelEDT::setDataEnv(CallBase *CB) {
-  assert(OMPOutlinedFn && "Outlined function not found");
+  assert(OutlinedFn && "Outlined function not found");
   LLVM_DEBUG(dbgs() << TAG << "Setting data environment for ParallelEDT\n");
   const Data &RTI = omp::getRTData(omp::getRTFunction(*CB));
   Use *CallArgItr = CB->arg_begin() + RTI.KeepCallArgsFrom;
-  Argument *FnArgItr = OMPOutlinedFn->arg_begin() + RTI.KeepArgsFrom;
-  for (auto ArgNum = RTI.KeepArgsFrom; ArgNum < OMPOutlinedFn->arg_size();
+  Argument *FnArgItr = OutlinedFn->arg_begin() + RTI.KeepArgsFrom;
+  for (auto ArgNum = RTI.KeepArgsFrom; ArgNum < OutlinedFn->arg_size();
        ++CallArgItr, ++FnArgItr, ++ArgNum) {
     insertValueToEnv(*CallArgItr);
     RewiringMap[FnArgItr] = *CallArgItr;
@@ -134,9 +132,8 @@ void ParallelEDT::setDataEnv(CallBase *CB) {
 
 /// ParallelDone EDT
 ParallelDoneEDT::ParallelDoneEDT(EDTCache &Cache, CallBase *CB) : EDT(Cache) {
-  OMPCall = CB;
-  OMPOutlinedFn = omp::getOutlinedFunction(CB);
   setDataEnv(CB);
+
 }
 
 void ParallelDoneEDT::createTask() {
@@ -145,7 +142,7 @@ void ParallelDoneEDT::createTask() {
 
 void ParallelDoneEDT::setDataEnv(CallBase *CB) {
   LLVM_DEBUG(dbgs() << TAG
-                    << " - Setting data environment for ParallelDoneEDT\n");
+                    << "Setting data environment for ParallelDoneEDT\n");
   auto *SplitInst = CB->getNextNonDebugInstruction();
 
   /// Split block at Call to EDT
@@ -167,12 +164,33 @@ void ParallelDoneEDT::setDataEnv(CallBase *CB) {
   CE.findInputsOutputs(Inputs, Outputs, Sinks);
   for (auto *I : Inputs)
     insertValueToEnv(I);
+  // LLVM_DEBUG(dbgs() << TAG << " - DoneEDT OutlinedFn: " << OutlinedFn->getName()
+  //                   << "\n");
+  // LLVM_DEBUG(dbgs() << TAG << " - DoneEDT OutlinedFnCall: " << *OutlinedFnCall
+  //                   << "\n");
+}
+
+void ParallelDoneEDT::createOutlinedFn(CallBase *CB) {
+  /// Extract code region
+  // CodeExtractorAnalysisCache CEAC(*CB->getFunction());
+  // /// Set OutlinedFn info
+  // OutlinedFn = CE.extractCodeRegion(CEAC);
+  // /// Get Call to OutlinedFn
+  // for(auto &U : OutlinedFn->uses()) {
+  //   if (auto *CI = dyn_cast<CallInst>(U.getUser())) {
+  //     if (CI->getCalledFunction() == OutlinedFn) {
+  //       OutlinedFnCall = CI;
+  //       break;
+  //     }
+  //   }
+  // }
+  // assert(OutlinedFnCall && "Call to OutlinedFn not found");
 }
 
 /// Task EDT
 TaskEDT::TaskEDT(EDTCache &Cache, CallBase *CB) : EDT(Cache) {
-  OMPCall = CB;
-  OMPOutlinedFn = omp::getOutlinedFunction(CB);
+  OutlinedFnCall = CB;
+  OutlinedFn = omp::getOutlinedFunction(CB);
   setDataEnv(CB);
 }
 
