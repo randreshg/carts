@@ -6,8 +6,8 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Utils/Local.h"
 
-#include "ARTS.h"
-#include "ARTSUtils.h"
+#include "carts/analysis/ARTS.h"
+#include "carts/utils/ARTSUtils.h"
 #include "noelle/core/Task.hpp"
 
 using namespace llvm;
