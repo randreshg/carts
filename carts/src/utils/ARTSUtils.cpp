@@ -12,8 +12,8 @@
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 
-#include "ARTS.h"
-#include "ARTSUtils.h"
+#include "carts/analysis/ARTS.h"
+#include "carts/utils/ARTSUtils.h"
 
 using namespace llvm;
 
@@ -24,8 +24,8 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 #endif
 
 /// ARTSUtils
-namespace arts_utils {
-using namespace arts;
+namespace arts {
+namespace utils {
 
 /// ------------------------------------------------------------------- ///
 /// --------------------------- ARTS UTILS ---------------------------- ///
@@ -56,6 +56,13 @@ void removeFunction(Function *F) {
   for (auto &Arg : F->args())
     replaceUsesWithUndef(&Arg, false, false);
   F->removeFromParent();
+}
+
+void moveBasicBlocks(Function *Src, Function *Dst){
+  while (!Src->empty()) {
+    BasicBlock &BB = Src->front();
+    BB.moveAfter(&Dst->back());
+  }
 }
 
 void removeValue(Value *V, bool RecursiveRemove, bool RecursiveUndef) {
@@ -187,81 +194,5 @@ void removeLifetimeMarkers(Function &F) {
     }
   }
 }
-
-/// ------------------------------------------------------------------- ///
-/// ------------------------------ OMP -------------------------------- ///
-/// ------------------------------------------------------------------- ///
-namespace omp {
-Function *getOutlinedFunction(CallBase *Call) {
-  auto Data = getRTData(getRTFunction(*Call));
-  return dyn_cast<Function>(
-      Call->getArgOperand(Data.OutlinedFnPos)->stripPointerCasts());
-}
-
-Data getRTData(omp::Type RTF) {
-  switch (RTF) {
-  case omp::Type::PARALLEL:
-    return {2, 2, 3};
-  case omp::Type::TASKALLOC:
-    return {5, 0, 0};
-  default:
-    return {0, 0, 0};
-  }
-}
-
-omp::Type getRTFunction(Function *F) {
-  if (!F)
-    return Type::OTHER;
-  auto CalleeName = F->getName();
-  if (CalleeName == "__kmpc_fork_call")
-    return Type::PARALLEL;
-  if (CalleeName == "__kmpc_omp_task_alloc")
-    return Type::TASKALLOC;
-  if (CalleeName == "__kmpc_omp_task")
-    return Type::TASK;
-  if (CalleeName == "__kmpc_omp_task_alloc_with_deps")
-    return Type::TASKDEP;
-  if (CalleeName == "__kmpc_omp_taskwait")
-    return Type::TASKWAIT;
-  if (CalleeName == "omp_set_num_threads")
-    return Type::SET_NUM_THREADS;
-  if (CalleeName == "__kmpc_for_static_init_4")
-    return Type::PARALLEL_FOR;
-  return Type::OTHER;
-}
-
-omp::Type getRTFunction(CallBase &CB) {
-  auto *Callee = CB.getCalledFunction();
-  return getRTFunction(Callee);
-}
-
-omp::Type getRTFunction(Instruction *I) {
-  auto *CB = dyn_cast<CallBase>(I);
-  if (!CB)
-    return Type::OTHER;
-  return getRTFunction(*CB);
-}
-
-bool isTaskFunction(Function *F) {
-  auto RT = getRTFunction(F);
-  if (RT == Type::TASK || RT == Type::TASKDEP || RT == Type::TASKWAIT)
-    return true;
-  return false;
-}
-
-bool isTaskFunction(CallBase &CB) {
-  auto RT = getRTFunction(CB);
-  if (RT == Type::TASK || RT == Type::TASKDEP || RT == Type::TASKWAIT)
-    return true;
-  return false;
-}
-
-bool isRTFunction(CallBase &CB) {
-  auto RT = getRTFunction(CB);
-  if (RT != Type::OTHER)
-    return true;
-  return false;
-}
-
-} // namespace omp
-} // namespace arts_utils
+} // namespace utils
+} // namespace arts

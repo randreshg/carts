@@ -100,6 +100,8 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDTEnvironment &Env) {
 /// The EDT is the main abstraction used by ARTS to represent the tasks
 /// in the program.
 /// ------------------------------------------------------------------- ///
+enum class EDTType { Parallel, Task, Main };
+enum class EDTArgType { Param, Dep };
 class EDTTask : public noelle::Task {
 public:
   EDTTask(FunctionType *TaskSignature, Module &M) : Task(TaskSignature, M){};
