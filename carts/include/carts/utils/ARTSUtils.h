@@ -17,12 +17,12 @@
 ///                            ARTS UTILS                               ///
 /// Set of utilities to handle IR values and functions.
 /// ------------------------------------------------------------------- ///
-namespace arts_utils {
-
+namespace arts {
+namespace utils {
 /// It finds the BBs that are dominated by FromBB and add
 /// them to the DominatedBlocks vector.
 void getDominatedBBs(BasicBlock *FromBB, DominatorTree &DT,
-                     arts::BlockSequence &DominatedBlocks);
+                     BlockSequence &DominatedBlocks);
 
 /// Rewire the values in the RewiringMap.
 ///   - Key: Old Value
@@ -32,6 +32,9 @@ void rewireValues(DenseMap<Value *, Value *> &RewiringMap);
 /// Function
 void cleanFunction(Function *F);
 void removeFunction(Function *F);
+/// Remove the basic blocks from the source function
+/// and add them to the destination function
+void moveBasicBlocks(Function *Src, Function *Dst);
 
 /// Remove values interface
 void removeValue(Value *V, bool RecursiveRemove = false,
@@ -53,43 +56,7 @@ void replaceUsesWithUndef(Value *V, Instruction *ExcludeInst = nullptr,
 /// Removes the lifetime markers from the function.
 void removeLifetimeMarkers(Function &F);
 
-/// ------------------------------------------------------------------- ///
-///                               OMP                                   ///
-/// OpenMP related utilities. It contains helper functions to get       ///
-/// information about OpenMP regions and runtime function, and          ///
-/// check if a function is an OpenMP runtime function.
-/// ------------------------------------------------------------------- ///
-namespace omp {
-/// OMP INFO
-/// Helper Struct to get OpenMP related information
-struct Data {
-  uint32_t OutlinedFnPos;
-  uint32_t KeepArgsFrom;
-  uint32_t KeepCallArgsFrom;
-};
-
-enum Type {
-  OTHER = 0,
-  PARALLEL,
-  PARALLEL_FOR,
-  TASKALLOC,
-  TASK,
-  TASKWAIT,
-  TASKDEP,
-  SET_NUM_THREADS
-};
-
-/// Helper Functions
-Function *getOutlinedFunction(CallBase *Call);
-Data getRTData(Type RTF);
-Type getRTFunction(Function *F);
-Type getRTFunction(CallBase &CB);
-Type getRTFunction(Instruction *I);
-bool isTaskFunction(Function *F);
-bool isTaskFunction(CallBase &CB);
-bool isRTFunction(CallBase &CB);
-
-} // namespace omp
-} // namespace arts_utils
+} // namespace utils
+} // namespace arts
 
 #endif // LLVM_ARTS_UTILS_H
