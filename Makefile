@@ -69,27 +69,14 @@ arts-clean:
 	rm -f -r $(ARTS_DIR)
 	rm -f -r $(ARTS_INSTALL_DIR)
 
-# NOELLE
-# $(NOELLE_DIR):
-# 	mkdir -p $@
-# 	git clone --depth 1 --branch v14 https://github.com/randreshg/noelle.git $@
-# noelle: .noelle
-# .noelle: $(NOELLE_DIR)
-# 	mkdir -p $(NOELLE_INSTALL_DIR)
-# 	NOELLE_INSTALL_DIR=$(NOELLE_INSTALL_DIR) NOELLE_SCAF=OFF NOELLE_SVF=OFF NOELLE_AUTOTUNER=OFF make -C $<
-# 	touch $@
-# noelle-clean:
-# 	[[ -d $(NOELLE_DIR) ]] && make -C $(NOELLE_DIR) uninstall
-# 	[[ -d $(NOELLE_DIR) ]] && rm -rf $(NOELLE_DIR)
-# 	rm -f -r .noelle
-# 	rm -f -r $(NOELLE_INSTALL_DIR)
-
 # CARTS
 build:
+	# mkdir -p $(NOELLE_DIR)
 	mkdir -p $(BUILD_DIR)
 	mkdir -p $(CARTS_INSTALL_DIR)
-	cmake -DCMAKE_INSTALL_PREFIX=$(CARTS_INSTALL_DIR) \
-				-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DNOELLE_INSTALL_DIR=$(NOELLE_INSTALL_DIR) -S . -B $(BUILD_DIR)
+	cmake -DCMAKE_INSTALL_PREFIX=$(CARTS_INSTALL_DIR)/carts \
+				-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DNOELLE_INSTALL_DIR=$(NOELLE_INSTALL_DIR) \
+				-DNOELLE_DIR=${NOELLE_DIR} -S . -B $(BUILD_DIR)
 	make -C $(BUILD_DIR) all -j32
 
 install: build

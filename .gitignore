@@ -6,3 +6,4 @@
 .noelle
 compile_commands.json
 external
+CMakeFiles
