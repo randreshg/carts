@@ -49,18 +49,34 @@ if (NOT NOELLE_INSTALL_DIR)
     "    Please set NOELLE_INSTALL_DIR to the path where NOELLE is installed.")
 endif()
 
-include(ExternalProject)
-ExternalProject_Add(
-    noelle
-    GIT_REPOSITORY  "https://github.com/randreshg/noelle.git"
-    GIT_TAG         v14
-    BUILD_COMMAND   ${CMAKE_COMMAND} --build . -j16
-    INSTALL_COMMAND ${CMAKE_COMMAND} --install .
-    CMAKE_ARGS
-        -DCMAKE_INSTALL_PREFIX=${NOELLE_INSTALL_DIR}
-        -DNOELLE_SVF=OFF
-        -DNOELLE_SCAF=ON
+
+# Install NOELLE
+message_blue("Installing NOELLE.")
+set(NOELLE_BUILD_DIR ${CMAKE_CURRENT_BINARY_DIR}/${NOELLE_DIR})
+message_blue("NOELLE_BUILD_DIR: ${NOELLE_BUILD_DIR}")
+configure_file(
+  ${CMAKE_SOURCE_DIR}/.cmake/NoelleConfig.cmake.in
+  ${NOELLE_BUILD_DIR}/CMakeLists.txt
 )
+
+execute_process(
+  COMMAND ${CMAKE_COMMAND} -G "${CMAKE_GENERATOR}"
+        -D "CMAKE_MAKE_PROGRAM:FILE=${CMAKE_MAKE_PROGRAM}"
+        .
+  RESULT_VARIABLE NoelleInstallResult
+  WORKING_DIRECTORY "${NOELLE_BUILD_DIR}"
+)
+if(NoelleInstallResult)
+  error_red( "CMake step for NOELLE failed: ${NoelleInstallResult}")
+endif()
+execute_process(COMMAND ${CMAKE_COMMAND} --build .
+                RESULT_VARIABLE NoelleInstallResult
+                WORKING_DIRECTORY "${NOELLE_BUILD_DIR}"
+)
+if(NoelleInstallResult)
+  error_red("Build step for NOELLE failed: ${NoelleInstallResult}")
+endif()
+
 include_directories(${NOELLE_INSTALL_DIR}/include)
 
 # Set up the build and install paths.
@@ -77,6 +93,7 @@ add_custom_target(
     ${CMAKE_SOURCE_DIR}/compile_commands.json
 )
 
-# configure_file(.cmake/enable.in enable @ONLY)
+# # configure_file(.cmake/enable.in enable @ONLY)
+message_blue("Adding CARTS subdirectory...")
 
 add_subdirectory(carts)

@@ -5,8 +5,8 @@
 // //
 // //===----------------------------------------------------------------------===//
 
-// #ifndef LLVM_API_ARTS_ARTSIRBUILDER_H
-// #define LLVM_API_ARTS_ARTSIRBUILDER_H
+// #ifndef LLVM_API_CARTS_ARTSIRBUILDER_H
+// #define LLVM_API_CARTS_ARTSIRBUILDER_H
 
 // #include "llvm/IR/DerivedTypes.h"
 // #include "llvm/IR/IRBuilder.h"
@@ -100,4 +100,4 @@
 
 // } // namespace arts
 
-// #endif // LLVM_API_ARTS_ARTSIRBUILDER_H
+// #endif // LLVM_API_CARTS_ARTSIRBUILDER_H

@@ -1,7 +1,4 @@
-# include("../.cmake/CMakeColors.txt")
 
-# Install scripts.
-# add_subdirectory(scripts)
 set(CARTS_CXX_FLAGS 
   -O3
   -g0
@@ -29,7 +26,7 @@ add_definitions(${LLVM_DEFINITIONS})
 include_directories(
   # LLVM
   ${LLVM_INCLUDE_DIRS}
-  ${CMAKE_CURRENT_SOURCE_DIR}
+  # ${CMAKE_CURRENT_SOURCE_DIR}
   # External
   ${NOELLE_INSTALL_DIR}/include
   # Include files
@@ -38,7 +35,7 @@ include_directories(
 link_directories(${LLVM_LIBRARY_DIRS})
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - #
 # Sources
-file(GLOB CARTSPassSrc "*.cpp" "src/*.cpp")
+# file(GLOB CARTSPassSrc "*.cpp" "src/*.cpp")
 
 # Compilation flags
 add_compile_options(${CARTS_CXX_FLAGS})
@@ -49,8 +46,8 @@ add_compile_options(${CARTS_CXX_FLAGS})
 # Name of the LLVM pass
 set(CARTSPassName "CARTS")
 
-set(LLVM_RUNTIME_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/)
-set(LLVM_LIBRARY_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/)
+# set(LLVM_RUNTIME_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/)
+# set(LLVM_LIBRARY_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/)
 
-# Declare the LLVM pass to compile
-add_llvm_library(${CARTSPassName} MODULE ${CARTSPassSrc})
+# Add src directory
+add_subdirectory(src)
