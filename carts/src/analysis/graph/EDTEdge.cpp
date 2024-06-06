@@ -3,11 +3,10 @@
 #include <cassert>
 
 #include "carts/analysis/ARTS.h"
-#include "EDTEdge.h"
+#include "carts/analysis/graph/EDTEdge.h"
 
 using namespace llvm;
 using namespace arts;
-using namespace arcana::noelle;
 
 /// DEBUG
 #define DEBUG_TYPE "edt-graph"
@@ -16,6 +15,7 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 #endif
 
 /// EDTGraphEdge
+
 EDTGraphEdge::EDTGraphEdge(EDTGraphNode *From, EDTGraphNode *To)
     : From(From), To(To) {}
 EDTGraphEdge::~EDTGraphEdge() {}

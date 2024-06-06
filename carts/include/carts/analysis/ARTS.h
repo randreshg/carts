@@ -4,7 +4,7 @@
 #ifndef LLVM_ARTS_H
 #define LLVM_ARTS_H
 
-#include "noelle/core/Noelle.hpp"
+// #include "noelle/core/Noelle.hpp"
 #include "noelle/core/Task.hpp"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/IR/BasicBlock.h"
@@ -15,7 +15,7 @@
 namespace arts {
 /// Namespace for all ARTS related functionality.
 using BlockSequence = SmallVector<BasicBlock *, 0>;
-using namespace arcana;
+// using namespace arcana;
 using namespace std;
 /// ------------------------------------------------------------------- ///
 ///                            ART TYPES                                ///
@@ -52,18 +52,19 @@ enum class RuntimeFunction {
 class EDT;
 class EDTCache {
 public:
-  EDTCache(Module &M, noelle::Noelle &NM);
+  // EDTCache(Module &M, noelle::Noelle &NM);
+  EDTCache(Module &M) : M(M) {}
   ~EDTCache();
 
   void insertEDT(Value *V, EDT *E);
   bool isValueInEDT(Value *V, EDT *E);
   SetVector<EDT *> getEDTs(Value *V) const;
-  noelle::Noelle &getNoelle() { return NM; }
+  // noelle::Noelle &getNoelle() { return NM; }
   Module &getModule() { return M; }
 
 private:
   Module &M;
-  noelle::Noelle &NM;
+  // noelle::Noelle &NM;
   DenseMap<Value *, SetVector<EDT *>> Values;
 };
 
@@ -102,35 +103,36 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDTEnvironment &Env) {
 /// ------------------------------------------------------------------- ///
 enum class EDTType { Parallel, Task, Main };
 enum class EDTArgType { Param, Dep };
-class EDTTask : public noelle::Task {
-public:
-  EDTTask(FunctionType *TaskSignature, Module &M) : Task(TaskSignature, M){};
-  EDTTask(FunctionType *TaskSignature, Module &M, const string &TaskName)
-      : Task(TaskSignature, M, TaskName) {}
+class EDTTask;
+// class EDTTask : public noelle::Task {
+// public:
+//   EDTTask(FunctionType *TaskSignature, Module &M) : Task(TaskSignature, M){};
+//   EDTTask(FunctionType *TaskSignature, Module &M, const string &TaskName)
+//       : Task(TaskSignature, M, TaskName) {}
 
-  void removeDeadInstructions();
-  void cloneAndAddBasicBlocks(Function *F);
-  void cloneAndAddBasicBlocks(BlockSequence &BBs);
-  unordered_map<Instruction *, unordered_set<Instruction *>> &getLiveOuts() {
-    return liveOutClones;
-  }
-  unordered_map<Value *, Value *> &getLiveIns() { return liveInClones; }
+//   void removeDeadInstructions();
+//   void cloneAndAddBasicBlocks(Function *F);
+//   void cloneAndAddBasicBlocks(BlockSequence &BBs);
+//   unordered_map<Instruction *, unordered_set<Instruction *>> &getLiveOuts() {
+//     return liveOutClones;
+//   }
+//   unordered_map<Value *, Value *> &getLiveIns() { return liveInClones; }
 
-  /// Getters and setters
-  Instruction *getGuidAddr() { return GuidAddr; }
-  BasicBlock *getBody() { return Body; }
-  void setBody(BasicBlock *BB) { Body = BB; }
-  const string getName() { return ("edt_" + Twine(ID)).str(); }
-  void setName() { F->setName("arts_" + getName()); }
+//   /// Getters and setters
+//   Instruction *getGuidAddr() { return GuidAddr; }
+//   BasicBlock *getBody() { return Body; }
+//   void setBody(BasicBlock *BB) { Body = BB; }
+//   const string getName() { return ("edt_" + Twine(ID)).str(); }
+//   void setName() { F->setName("arts_" + getName()); }
 
-private:
-  /// Attributes
-  BasicBlock *Body = nullptr;
-  /// Call to GuidAddr allocation
-  Instruction *GuidAddr = nullptr;
-  /// Call to EDTCreate function
-  Instruction *CallBase = nullptr;
-};
+// private:
+//   /// Attributes
+//   BasicBlock *Body = nullptr;
+//   /// Call to GuidAddr allocation
+//   Instruction *GuidAddr = nullptr;
+//   /// Call to EDTCreate function
+//   Instruction *CallBase = nullptr;
+// };
 
 class EDT {
 public:
@@ -146,7 +148,7 @@ public:
   EDTEnvironment &getDataEnv() { return Env; }
   EDTTask *getTask() { return Task; }
   void setTask(EDTTask *T) { Task = T; }
-  string getName() { return Task->getName(); }
+  // string getName() { return Task->getName(); }
   StringRef getOutlinedFnName() {
     if (!OutlinedFn)
       return "MainFunction";

@@ -32,9 +32,6 @@ void rewireValues(DenseMap<Value *, Value *> &RewiringMap);
 /// Function
 void cleanFunction(Function *F);
 void removeFunction(Function *F);
-/// Remove the basic blocks from the source function
-/// and add them to the destination function
-void moveBasicBlocks(Function *Src, Function *Dst);
 
 /// Remove values interface
 void removeValue(Value *V, bool RecursiveRemove = false,

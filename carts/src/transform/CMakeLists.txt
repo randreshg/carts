@@ -1,9 +1,8 @@
-# add_llvm_loadable_module( OMPTransform
-#   OMPTransform.cpp
-#   PLUGIN_TOOL
-#   opt
-# )
 
+message_blue("Adding OMPTransform module")
 add_llvm_library( OMPTransform
   MODULE 
-  OMPTransform.cpp)
+  OMPTransform.cpp
+  ${CARTS_ANALYSIS_SOURCE_FILES}
+  ${CARTS_UTILS_SOURCE_FILES}
+  )

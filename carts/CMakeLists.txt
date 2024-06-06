@@ -26,9 +26,8 @@ add_definitions(${LLVM_DEFINITIONS})
 include_directories(
   # LLVM
   ${LLVM_INCLUDE_DIRS}
-  # ${CMAKE_CURRENT_SOURCE_DIR}
   # External
-  ${NOELLE_INSTALL_DIR}/include
+  # ${NOELLE_INSTALL_DIR}/include
   # Include files
   ./include
 )
@@ -44,7 +43,7 @@ add_compile_options(${CARTS_CXX_FLAGS})
 
 
 # Name of the LLVM pass
-set(CARTSPassName "CARTS")
+# set(CARTSPassName "CARTS")
 
 # set(LLVM_RUNTIME_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/)
 # set(LLVM_LIBRARY_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/)

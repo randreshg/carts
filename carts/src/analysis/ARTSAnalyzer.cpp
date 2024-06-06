@@ -113,9 +113,9 @@
 //   /// Set EDT Data environment
 //   DenseMap<Value *, Value *> RewiringMap;
 //   const Data &RTI = omp::getRTData(omp::getRTFunction(*CB));
-//   Argument *FnArgItr = OutlinedFn->arg_begin() + RTI.KeepArgsFrom;
+//   Argument *FnArgItr = OutlinedFn->arg_begin() + RTI.KeepFnArgsFrom;
 //   Use *CallArgItr = CB->arg_begin() + RTI.KeepCallArgsFrom;
-//   for (auto ArgNum = RTI.KeepArgsFrom; ArgNum < OutlinedFn->arg_size();
+//   for (auto ArgNum = RTI.KeepFnArgsFrom; ArgNum < OutlinedFn->arg_size();
 //        ++CallArgItr, ++FnArgItr, ++ArgNum) {
 //     ParallelEDT.insertValueToEnv(*CallArgItr);
 //     RewiringMap[FnArgItr] = *CallArgItr;

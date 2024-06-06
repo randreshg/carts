@@ -18,11 +18,6 @@
 #include "carts/transform/OMPTransform.h"
 #include "carts/utils/ARTSIRBuilder.h"
 #include "carts/utils/ARTSUtils.h"
-#include "noelle/core/Noelle.hpp"
-
-// #include "ARTSAnalyzer.h"
-// #include "ARTSIRBuilder.h"
-// #include "EDTGraph.h"
 
 using namespace llvm;
 using namespace arts;
@@ -47,7 +42,7 @@ bool OMPTransform::run(ModuleAnalysisManager &AM) {
       continue;
     Functions.insert(&F);
   }
-
+  identifyEDTs();
   return true;
 }
 
@@ -63,15 +58,13 @@ void OMPTransform::handleParallelRegion(CallBase &CB) {
   auto *OutlinedFn = getOutlinedFunction(&CB);
   const OMPData &RTI = getRTData(getRTFunction(CB));
   Use *CallArgItr = CB.arg_begin() + RTI.KeepCallArgsFrom;
-  Argument *FnArgItr = OutlinedFn->arg_begin() + RTI.KeepArgsFrom;
-  for (uint32_t ArgNum = 0; ArgNum < OutlinedFn->arg_size();
+  Argument *FnArgItr = OutlinedFn->arg_begin() + RTI.KeepFnArgsFrom;
+  LLVM_DEBUG(dbgs() << TAG << "Outlined Function: " << OutlinedFn->getName()
+                    << "\n");
+  for (uint32_t ArgNum = RTI.KeepFnArgsFrom; ArgNum < OutlinedFn->arg_size();
        ++CallArgItr, ++FnArgItr, ++ArgNum) {
-    if (ArgNum < RTI.KeepCallArgsFrom) {
-      IRB.insertUnusedArg(FnArgItr);
-      continue;
-    }
-    /// Insert values
     Value *CallV = *CallArgItr;
+    LLVM_DEBUG(dbgs() << TAG << " - Inserting value: " << *CallV << "\n");
     if (PointerType *PT = dyn_cast<PointerType>(CallV->getType()))
       IRB.insertDep(CallV, FnArgItr);
     else
@@ -79,6 +72,29 @@ void OMPTransform::handleParallelRegion(CallBase &CB) {
   }
   /// Build the EDT
   IRB.buildEDT(M, &CB, OutlinedFn);
+}
+
+void OMPTransform::handleTaskRegion(CallBase &CB) {
+  // EDTIRBuilder IRB(EDTType::Task);
+  // auto *OutlinedFn = getOutlinedFunction(&CB);
+  // const OMPData &RTI = getRTData(getRTFunction(CB));
+  // Use *CallArgItr = CB.arg_begin() + RTI.KeepCallArgsFrom;
+  // Argument *FnArgItr = OutlinedFn->arg_begin() + RTI.KeepFnArgsFrom;
+  // for (uint32_t ArgNum = 0; ArgNum < OutlinedFn->arg_size();
+  //      ++CallArgItr, ++FnArgItr, ++ArgNum) {
+  //   if (ArgNum < RTI.KeepCallArgsFrom) {
+  //     IRB.insertUnusedArg(FnArgItr);
+  //     continue;
+  //   }
+  //   /// Insert values
+  //   Value *CallV = *CallArgItr;
+  //   if (PointerType *PT = dyn_cast<PointerType>(CallV->getType()))
+  //     IRB.insertDep(CallV, FnArgItr);
+  //   else
+  //     IRB.insertParam(CallV, FnArgItr);
+  // }
+  // /// Build the EDT
+  // IRB.buildEDT(M, &CB, OutlinedFn);
 }
 
 void OMPTransform::identifyEDTs(Function &F) {
@@ -103,7 +119,7 @@ void OMPTransform::identifyEDTs(Function &F) {
     case OMPType::TASKALLOC: {
       LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
       LLVM_DEBUG(dbgs() << TAG << "Task Region Found:\n" << *CB << "\n");
-      handleTaskRegion(*CB);
+      // handleTaskRegion(*CB);
       // insertNode(new TaskEDT(Cache, CB), ParentEDTNode);
     } break;
     case OMPType::TASKWAIT: {
@@ -155,7 +171,7 @@ llvmGetPassPluginInfo() {
 /// ------------------------------------------------------------------- ///
 /// ------------------------------ OMP -------------------------------- ///
 /// ------------------------------------------------------------------- ///
-namespace omp {
+namespace arts::omp {
 Function *getOutlinedFunction(CallBase *Call) {
   auto Data = getRTData(getRTFunction(*Call));
   return dyn_cast<Function>(
