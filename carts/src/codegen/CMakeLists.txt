@@ -1,0 +1,4 @@
+
+set (CARTS_CODEGEN_SOURCE_FILES
+  ARTSCodeGen.cpp
+)

@@ -56,7 +56,7 @@ namespace omp {
 /// Helper Struct to get OpenMP related information
 struct OMPData {
   uint32_t OutlinedFnPos;
-  uint32_t KeepArgsFrom;
+  uint32_t KeepFnArgsFrom;
   uint32_t KeepCallArgsFrom;
 };
 

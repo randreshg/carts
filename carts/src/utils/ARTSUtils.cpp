@@ -58,13 +58,6 @@ void removeFunction(Function *F) {
   F->removeFromParent();
 }
 
-void moveBasicBlocks(Function *Src, Function *Dst){
-  while (!Src->empty()) {
-    BasicBlock &BB = Src->front();
-    BB.moveAfter(&Dst->back());
-  }
-}
-
 void removeValue(Value *V, bool RecursiveRemove, bool RecursiveUndef) {
   removeValue(V, nullptr, RecursiveRemove, RecursiveUndef);
 }

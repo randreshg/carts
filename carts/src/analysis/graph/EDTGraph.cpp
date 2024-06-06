@@ -11,9 +11,8 @@
 
 using namespace llvm;
 using namespace arts;
-using namespace arts_utils;
-using namespace arts_utils::omp;
-using namespace arcana::noelle;
+using namespace arts::utils;
+// using namespace arcana::noelle;
 
 /// DEBUG
 #define DEBUG_TYPE "edt-graph"
@@ -23,107 +22,107 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 
 /// EDTGraph
 EDTGraph::EDTGraph(EDTCache &Cache) : Cache(Cache) {
-  LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << TAG << "Building the EDT Graph\n");
-  createNodes();
-  LLVM_DEBUG(dbgs() << Cache.getModule());
-  /// Debug Module
-  LLVM_DEBUG(dbgs() << TAG << "Analyzing dependencies\n");
-  /// Fetch the PDG
-  auto &NM = Cache.getNoelle();
-  // auto FM = NM.getFunctionsManager();
-  auto PDG = NM.getProgramDependenceGraph();
+  // LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
+  // LLVM_DEBUG(dbgs() << TAG << "Building the EDT Graph\n");
+  // createNodes();
+  // LLVM_DEBUG(dbgs() << Cache.getModule());
+  // /// Debug Module
+  // LLVM_DEBUG(dbgs() << TAG << "Analyzing dependencies\n");
+  // /// Fetch the PDG
+  // // auto &NM = Cache.getNoelle();
+  // // auto FM = NM.getFunctionsManager();
+  // auto PDG = NM.getProgramDependenceGraph();
 
-  /// Iterate through the list of EDTs
-  for (auto &EDTPair : EDTs) {
-    auto *EDTFn = EDTPair.first;
-    auto FDG = PDG->createFunctionSubgraph(*EDTFn);
+  // /// Iterate through the list of EDTs
+  // for (auto &EDTPair : EDTs) {
+  //   auto *EDTFn = EDTPair.first;
+  //   auto FDG = PDG->createFunctionSubgraph(*EDTFn);
 
-    auto &FromEDTNode = *EDTPair.second;
-    auto &FromEDT = *FromEDTNode.getEDT();
-    /// Analyze outgoing edges
-    auto OutEdges = getOutgoingEdges(&FromEDTNode);
-    LLVM_DEBUG(dbgs() << "- EDT \"" << FromEDT.getOutlinedFnName() << "\"\n");
-    if (OutEdges.size() == 0) {
-      LLVM_DEBUG(dbgs() << "   - The EDT doesn't have outgoing edges\n");
-      continue;
-    }
-    /// Analyze the outgoing edges.
-    LLVM_DEBUG(dbgs() << "   The EDT has " << OutEdges.size()
-                      << " outgoing edges\n");
-    for (auto *DepEdge : OutEdges) {
-      /// If the edge is not a creation edge, skip it
-      if (!DepEdge->hasCreationDep()) {
-        /// The edge from @fromNode to @toNode is not a creation edge.
-        /// It is a data or control edge.
-        LLVM_DEBUG(dbgs() << "   - The edge from \""
-                          << FromEDT.getOutlinedFnName() << "\" to \""
-                          << DepEdge->getTo()->getEDT()->getOutlinedFnName()
-                          << "\" is not a creation edge\n");
-        continue;
-      }
-      auto &ToEDTNode = *DepEdge->getTo();
-      auto &ToEDT = *ToEDTNode.getEDT();
-      auto *ToEDTCall = ToEDT.getCall();
-      assert(ToEDTCall != nullptr && "The EDT doesn't have a call");
+  //   auto &FromEDTNode = *EDTPair.second;
+  //   auto &FromEDT = *FromEDTNode.getEDT();
+  //   /// Analyze outgoing edges
+  //   auto OutEdges = getOutgoingEdges(&FromEDTNode);
+  //   LLVM_DEBUG(dbgs() << "- EDT \"" << FromEDT.getOutlinedFnName() << "\"\n");
+  //   if (OutEdges.size() == 0) {
+  //     LLVM_DEBUG(dbgs() << "   - The EDT doesn't have outgoing edges\n");
+  //     continue;
+  //   }
+  //   /// Analyze the outgoing edges.
+  //   LLVM_DEBUG(dbgs() << "   The EDT has " << OutEdges.size()
+  //                     << " outgoing edges\n");
+  //   for (auto *DepEdge : OutEdges) {
+  //     /// If the edge is not a creation edge, skip it
+  //     if (!DepEdge->hasCreationDep()) {
+  //       /// The edge from @fromNode to @toNode is not a creation edge.
+  //       /// It is a data or control edge.
+  //       LLVM_DEBUG(dbgs() << "   - The edge from \""
+  //                         << FromEDT.getOutlinedFnName() << "\" to \""
+  //                         << DepEdge->getTo()->getEDT()->getOutlinedFnName()
+  //                         << "\" is not a creation edge\n");
+  //       continue;
+  //     }
+  //     auto &ToEDTNode = *DepEdge->getTo();
+  //     auto &ToEDT = *ToEDTNode.getEDT();
+  //     auto *ToEDTCall = ToEDT.getCall();
+  //     assert(ToEDTCall != nullptr && "The EDT doesn't have a call");
 
-      LLVM_DEBUG(dbgs() << "   - EDT \"" << ToEDT.getOutlinedFnName()
-                        << "\" depends on:\n");
-      /// DepV are the values that the EDT depends on.
-      auto &ToDE = ToEDT.getDataEnv();
-      for (auto &D : ToDE.DepV) {
-        LLVM_DEBUG(dbgs() << "     " << *D << " - DATA DEPV\n");
-        addDataEdge(&FromEDTNode, &ToEDTNode, D);
-      }
-      /// Iterate over the rest of dependencies
-      auto IterFn = [this, &Cache, &ToEDT, &FromEDTNode, &ToEDTNode](
-                        Value *Src, DGEdge<Value, Value> *Dep) -> bool {
-        auto SrcEDTs = Cache.getEDTs(Src);
-        if (SrcEDTs.size() == 0)
-          return false;
-        /// Check if the source is EDTTo
-        if (!is_contained(SrcEDTs, &ToEDT))
-          return false;
-        LLVM_DEBUG(dbgs() << "     " << *Src << " - ");
-        /// Control dependencies
-        if (isa<ControlDependence<Value, Value>>(Dep)) {
-          LLVM_DEBUG(dbgs() << " CONTROL\n");
-          assert(false && "Not implemented yet");
-          return false;
-        }
-        /// Data dependencies -> Registers
-        LLVM_DEBUG(dbgs() << " DATA\n");
-        auto DataDep = cast<DataDependence<Value, Value>>(Dep);
-        // if (DataDep->isRAWDependence()) {
-        //   LLVM_DEBUG(dbgs() << " RAW ");
-        // }
-        // if (DataDep->isWARDependence()) {
-        //   LLVM_DEBUG(dbgs() << " WAR ");
-        // }
-        // if (DataDep->isWAWDependence()) {
-        //   LLVM_DEBUG(dbgs() << " WAW ");
-        // }
-        /// Further analysis has to be performed here to guarantee that the
-        /// dependence is a memory dependence. Leave it as it is for now.
-        if (isa<MemoryDependence<Value, Value>>(DataDep)) {
-          LLVM_DEBUG(dbgs() << " MEMORY\n");
-          // auto memDep = cast<MemoryDependence<Value, Value>>(DataDep);
-          // if (isa<MustMemoryDependence<Value, Value>>(memDep)) {
-          //   LLVM_DEBUG(dbgs() << " MUST ");
-          // } else {
-          //   LLVM_DEBUG(dbgs() << " MAY ");
-          // }
-        }
+  //     LLVM_DEBUG(dbgs() << "   - EDT \"" << ToEDT.getOutlinedFnName()
+  //                       << "\" depends on:\n");
+  //     /// DepV are the values that the EDT depends on.
+  //     auto &ToDE = ToEDT.getDataEnv();
+  //     for (auto &D : ToDE.DepV) {
+  //       LLVM_DEBUG(dbgs() << "     " << *D << " - DATA DEPV\n");
+  //       addDataEdge(&FromEDTNode, &ToEDTNode, D);
+  //     }
+  //     /// Iterate over the rest of dependencies
+  //     auto IterFn = [this, &Cache, &ToEDT, &FromEDTNode, &ToEDTNode](
+  //                       Value *Src, DGEdge<Value, Value> *Dep) -> bool {
+  //       auto SrcEDTs = Cache.getEDTs(Src);
+  //       if (SrcEDTs.size() == 0)
+  //         return false;
+  //       /// Check if the source is EDTTo
+  //       if (!is_contained(SrcEDTs, &ToEDT))
+  //         return false;
+  //       LLVM_DEBUG(dbgs() << "     " << *Src << " - ");
+  //       /// Control dependencies
+  //       if (isa<ControlDependence<Value, Value>>(Dep)) {
+  //         LLVM_DEBUG(dbgs() << " CONTROL\n");
+  //         assert(false && "Not implemented yet");
+  //         return false;
+  //       }
+  //       /// Data dependencies -> Registers
+  //       LLVM_DEBUG(dbgs() << " DATA\n");
+  //       auto DataDep = cast<DataDependence<Value, Value>>(Dep);
+  //       // if (DataDep->isRAWDependence()) {
+  //       //   LLVM_DEBUG(dbgs() << " RAW ");
+  //       // }
+  //       // if (DataDep->isWARDependence()) {
+  //       //   LLVM_DEBUG(dbgs() << " WAR ");
+  //       // }
+  //       // if (DataDep->isWAWDependence()) {
+  //       //   LLVM_DEBUG(dbgs() << " WAW ");
+  //       // }
+  //       /// Further analysis has to be performed here to guarantee that the
+  //       /// dependence is a memory dependence. Leave it as it is for now.
+  //       if (isa<MemoryDependence<Value, Value>>(DataDep)) {
+  //         LLVM_DEBUG(dbgs() << " MEMORY\n");
+  //         // auto memDep = cast<MemoryDependence<Value, Value>>(DataDep);
+  //         // if (isa<MustMemoryDependence<Value, Value>>(memDep)) {
+  //         //   LLVM_DEBUG(dbgs() << " MUST ");
+  //         // } else {
+  //         //   LLVM_DEBUG(dbgs() << " MAY ");
+  //         // }
+  //       }
 
-        /// Create the data edge
-        addDataEdge(&FromEDTNode, &ToEDTNode, Src);
-        // LLVM_DEBUG(dbgs() << "\n");
-        return false;
-      };
-      FDG->iterateOverDependencesTo(ToEDTCall, true, true, true, IterFn);
-    }
-  }
-  LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
+  //       /// Create the data edge
+  //       addDataEdge(&FromEDTNode, &ToEDTNode, Src);
+  //       // LLVM_DEBUG(dbgs() << "\n");
+  //       return false;
+  //     };
+  //     FDG->iterateOverDependencesTo(ToEDTCall, true, true, true, IterFn);
+  //   }
+  // }
+  // LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
 }
 
 EDTGraph::~EDTGraph() {
@@ -134,62 +133,62 @@ EDTGraph::~EDTGraph() {
 
 /// Nodes
 void EDTGraph::createNode(Function &F) {
-  if (F.isDeclaration() && !F.hasLocalLinkage())
-    return;
-  LLVM_DEBUG(dbgs() << "\n- - - - - - - - - - - - - - - - - - - - - - - -\n");
-  LLVM_DEBUG(dbgs() << TAG << "Processing function: " << F.getName() << "\n");
-  auto *ParentEDTNode = getNode(F);
-  assert(ParentEDTNode != nullptr && "ParentEDTNode is null");
-  removeLifetimeMarkers(F);
-  for (auto &Inst : instructions(&F)) {
-    auto *CB = dyn_cast<CallBase>(&Inst);
-    if (!CB)
-      continue;
-    /// Get the callee
-    omp::Type RTF = omp::getRTFunction(*CB);
-    switch (RTF) {
-    case omp::PARALLEL: {
-      LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
-      LLVM_DEBUG(dbgs() << TAG << "Parallel Region Found:\n" << *CB << "\n");
-      insertNode(new ParallelEDT(Cache, CB), ParentEDTNode);
-      insertNode(new ParallelDoneEDT(Cache, CB), ParentEDTNode);
-    } break;
-    case omp::TASKALLOC: {
-      LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
-      LLVM_DEBUG(dbgs() << TAG << "Task Region Found:\n" << *CB << "\n");
-      insertNode(new TaskEDT(Cache, CB), ParentEDTNode);
-    } break;
-    case omp::TASKWAIT: {
-      assert(false && "Taskwait not implemented yet");
-    } break;
-    case omp::OTHER: {
-      // LLVM_DEBUG(dbgs() << "\n- - - - - - - - - - - - - - - -\n");
-      // LLVM_DEBUG(dbgs() << TAG << "Other Function Found:\n" << *CB <<
-      // "\n"); IPA?
-    } break;
-    default:
-      continue;
-      break;
-    }
-  }
+  // if (F.isDeclaration() && !F.hasLocalLinkage())
+  //   return;
+  // LLVM_DEBUG(dbgs() << "\n- - - - - - - - - - - - - - - - - - - - - - - -\n");
+  // LLVM_DEBUG(dbgs() << TAG << "Processing function: " << F.getName() << "\n");
+  // auto *ParentEDTNode = getNode(F);
+  // assert(ParentEDTNode != nullptr && "ParentEDTNode is null");
+  // removeLifetimeMarkers(F);
+  // for (auto &Inst : instructions(&F)) {
+  //   auto *CB = dyn_cast<CallBase>(&Inst);
+  //   if (!CB)
+  //     continue;
+  //   /// Get the callee
+  //   omp::Type RTF = omp::getRTFunction(*CB);
+  //   switch (RTF) {
+  //   case omp::PARALLEL: {
+  //     LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
+  //     LLVM_DEBUG(dbgs() << TAG << "Parallel Region Found:\n" << *CB << "\n");
+  //     insertNode(new ParallelEDT(Cache, CB), ParentEDTNode);
+  //     insertNode(new ParallelDoneEDT(Cache, CB), ParentEDTNode);
+  //   } break;
+  //   case omp::TASKALLOC: {
+  //     LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
+  //     LLVM_DEBUG(dbgs() << TAG << "Task Region Found:\n" << *CB << "\n");
+  //     insertNode(new TaskEDT(Cache, CB), ParentEDTNode);
+  //   } break;
+  //   case omp::TASKWAIT: {
+  //     assert(false && "Taskwait not implemented yet");
+  //   } break;
+  //   case omp::OTHER: {
+  //     // LLVM_DEBUG(dbgs() << "\n- - - - - - - - - - - - - - - -\n");
+  //     // LLVM_DEBUG(dbgs() << TAG << "Other Function Found:\n" << *CB <<
+  //     // "\n"); IPA?
+  //   } break;
+  //   default:
+  //     continue;
+  //     break;
+  //   }
+  // }
 }
 
 void EDTGraph::createNodes() {
-  auto &M = Cache.getModule();
-  LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << TAG << "Creating the EDT Nodes\n");
-  /// Create MainEDT
-  auto &NM = Cache.getNoelle();
-  auto FM = NM.getFunctionsManager();
-  insertNode(new MainEDT(Cache), *FM->getEntryFunction());
+  // auto &M = Cache.getModule();
+  // LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
+  // LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
+  // LLVM_DEBUG(dbgs() << TAG << "Creating the EDT Nodes\n");
+  // /// Create MainEDT
+  // auto &NM = Cache.getNoelle();
+  // auto FM = NM.getFunctionsManager();
+  // insertNode(new MainEDT(Cache), *FM->getEntryFunction());
 
-  for (auto &F : M)
-    createNode(F);
+  // for (auto &F : M)
+  //   createNode(F);
 
-  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << TAG << EDTs.size() << " EDT Nodes were created\n");
-  LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
+  // LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
+  // LLVM_DEBUG(dbgs() << TAG << EDTs.size() << " EDT Nodes were created\n");
+  // LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
 }
 
 std::unordered_set<EDTGraphNode *> EDTGraph::getNodes() {
@@ -202,10 +201,10 @@ std::unordered_set<EDTGraphNode *> EDTGraph::getNodes() {
 }
 
 EDTGraphNode *EDTGraph::getEntryNode(void) const {
-  const auto it =
-      EDTs.find(Cache.getNoelle().getFunctionsManager()->getEntryFunction());
-  if (it != EDTs.end())
-    return it->second;
+  // const auto it =
+  //     EDTs.find(Cache.getNoelle().getFunctionsManager()->getEntryFunction());
+  // if (it != EDTs.end())
+  //   return it->second;
   return nullptr;
 }
 
