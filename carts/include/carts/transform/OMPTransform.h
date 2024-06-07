@@ -38,14 +38,6 @@ private:
 };
 
 /// ------------------------------------------------------------------- ///
-///                        OMPTransformPass                             ///
-/// ------------------------------------------------------------------- ///
-class OMPTransformPass : public PassInfoMixin<OMPTransformPass> {
-public:
-  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
-};
-
-/// ------------------------------------------------------------------- ///
 ///                               OMP                                   ///
 /// OpenMP related utilities. It contains helper functions to get       ///
 /// information about OpenMP regions and runtime function, and          ///

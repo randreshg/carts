@@ -1,0 +1,70 @@
+// Description: Main file for the Compiler for ARTS (OmpTransform) pass.
+#include "llvm/ADT/SetVector.h"
+#include "llvm/IR/PassManager.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/PassPlugin.h"
+#include <cstdint>
+
+#include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/IR/Value.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/IPO/Attributor.h"
+
+#include "carts/transform/OMPTransform.h"
+
+using namespace llvm;
+using namespace arts;
+using namespace arts::omp;
+// using namespace arts::utils;
+
+/// DEBUG
+#define DEBUG_TYPE "omp-transform"
+#if !defined(NDEBUG)
+static constexpr auto TAG = "[" DEBUG_TYPE "] ";
+#endif
+
+/// ------------------------------------------------------------------- ///
+///                        OMPTransformPass                             ///
+/// ------------------------------------------------------------------- ///
+class OMPTransformPass : public PassInfoMixin<OMPTransformPass> {
+public:
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+};
+
+PreservedAnalyses OMPTransformPass::run(Module &M, ModuleAnalysisManager &AM) {
+  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
+  LLVM_DEBUG(dbgs() << TAG << "Running OmpTransformPass on Module: \n"
+                    << M.getName() << "\n");
+  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
+  FunctionAnalysisManager &FAM =
+      AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+  AnalysisGetter AG(FAM);
+  OMPTransform OT(M, AG);
+  OT.run(AM);
+
+  /// Print module info
+  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
+  LLVM_DEBUG(dbgs() << TAG << "OmpTransformPass has finished\n\n" << M << "\n");
+  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
+  return PreservedAnalyses::all();
+}
+
+// This part is the new way of registering your pass
+extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+llvmGetPassPluginInfo() {
+  return {LLVM_PLUGIN_API_VERSION, "OMPTransform", "v0.1", [](PassBuilder &PB) {
+            PB.registerPipelineParsingCallback(
+                [](StringRef Name, ModulePassManager &FPM,
+                   ArrayRef<PassBuilder::PipelineElement>) {
+                  if (Name == "omp-transform") {
+                    FPM.addPass(OMPTransformPass());
+                    return true;
+                  }
+                  return false;
+                });
+          }};
+}
