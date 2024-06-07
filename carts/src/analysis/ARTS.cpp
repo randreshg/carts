@@ -87,6 +87,28 @@ SetVector<EDT *> EDTCache::getEDTs(Value *V) const {
 // }
 
 /// EDT
+string arts::toString(EDTType Ty) {
+  switch (Ty) {
+  case EDTType::Parallel:
+    return "parallel";
+  case EDTType::Task:
+    return "task";
+  case EDTType::Main:
+    return "main";
+  }
+  return "unknown";
+}
+
+string arts::toString(EDTArgType Ty) {
+  switch (Ty) {
+  case EDTArgType::Param:
+    return "param";
+  case EDTArgType::Dep:
+    return "dep";
+  }
+  return "unknown";
+}
+
 void EDT::insertValueToEnv(Value *Val) {
   /// Pointer is a depv, else, it is a paramv
   if (PointerType *PT = dyn_cast<PointerType>(Val->getType())) {

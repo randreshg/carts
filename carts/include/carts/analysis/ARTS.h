@@ -103,6 +103,8 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDTEnvironment &Env) {
 /// ------------------------------------------------------------------- ///
 enum class EDTType { Parallel, Task, Main };
 enum class EDTArgType { Param, Dep };
+string toString(EDTType Ty);
+string toString(EDTArgType Ty);
 class EDTTask;
 // class EDTTask : public noelle::Task {
 // public:

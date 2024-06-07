@@ -1,9 +1,11 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Debug.h"
 
+#include "carts/analysis/ARTS.h"
 #include "carts/utils/ARTSIRBuilder.h"
 #include "carts/utils/ARTSUtils.h"
 
@@ -16,8 +18,10 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 // using namespace llvm;
 using namespace arts;
 using namespace arts::utils;
-// using namespace arts::types;
 
+/// ------------------------------------------------------------------- ///
+///                          EDT IR BUILDER                             ///
+/// ------------------------------------------------------------------- ///
 void EDTIRBuilder::insertDep(Value *CallV) {
   CallArgs.push_back(CallV);
   CallArgTypeMap[CallV] = EDTArgType::Dep;
@@ -50,7 +54,6 @@ CallBase *EDTIRBuilder::buildEDT(
   Function *NewFn = Function::Create(NewFnTy, OldFn->getLinkage(),
                                      OldFn->getAddressSpace(), "");
   OldFn->getParent()->getFunctionList().insert(OldFn->getIterator(), NewFn);
-  // NewFn->takeName(OldFn);
   NewFn->setName("edt");
   OldFn->setSubprogram(nullptr);
   /// Splice the body of the old function right into the new function
@@ -63,7 +66,7 @@ CallBase *EDTIRBuilder::buildEDT(
     }
   }
   // LLVM_DEBUG(dbgs() << TAG << "Created new function: " << *NewFn << "\n");
-  /// Fill the rewire map and rewire the arguments
+  /// Fill the rewiring map and rewire the arguments
   fillRewiringMapFn(this, OldFn, NewFn);
   for (auto &MapItr : RewiringMap) {
     Value *OldV = MapItr.first;
@@ -89,5 +92,31 @@ CallBase *EDTIRBuilder::buildEDT(
   // LLVM_DEBUG(dbgs() << TAG << "New function: " << *NewFn << "\n");
   removeValue(OldFn, true, true);
   assert(!NewFn->isDeclaration() && "New function is a declaration");
+  /// Set metadata
+  setMetadata(*NewFn);
   return NewCI;
+}
+
+void EDTIRBuilder::setMetadata(Function &Fn) {
+  LLVMContext &Ctx = Fn.getContext();
+  auto TyStr = toString(Ty);
+  /// Metadata Nodes for Argument Values
+  SmallVector<Metadata *, 16> ArgMDs;
+  for (auto *CallArg : CallArgs) {
+    EDTArgType CallTy = CallArgTypeMap[CallArg];
+    auto MDStr = "edt.arg." + toString(CallTy);
+    ArgMDs.push_back( MDString::get(Ctx, MDStr));
+  }
+  MDNode *ArgNode = MDNode::get(Ctx, ArgMDs);
+  /// Metadata Node for EDT
+  SmallVector<Metadata *, 16> EDTMDs;
+  EDTMDs.push_back(MDString::get(Ctx, "edt." + TyStr));
+  EDTMDs.push_back(ArgNode);
+  /// Set specific metadata for the function
+  /// TODO: If it is parallel, add the number of threads...
+  Fn.setMetadata("carts.metadata", MDNode::get(Ctx, EDTMDs));
+}
+
+void EDTIRBuilder::setArgType(Value *FnArg, EDTArgType Ty) {
+  // CallArgTypeMap[FnArg] = Ty;
 }

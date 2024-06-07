@@ -1,7 +1,5 @@
 // Description: Main file for the Compiler for ARTS (OmpTransform) pass.
-#include "llvm/IR/PassManager.h"
-#include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
+#include "llvm/ADT/SetVector.h"
 #include <cstdint>
 
 #include "llvm/Analysis/ValueTracking.h"
@@ -143,9 +141,19 @@ Instruction *OMPTransform::handleParallelDoneRegion(CallBase &CB) {
   /// Set DataEnvironment
   CodeExtractor CE(Region);
   CodeExtractorAnalysisCache CEAC(ParentFn);
-  auto *DoneEDTFn = CE.extractCodeRegion(CEAC);
+  SetVector<Value *> Inputs, Outputs;
+  auto *DoneEDTFn = CE.extractCodeRegion(CEAC, Inputs, Outputs);
   DoneEDTFn->setName("edt");
   CallBase *DoneCB = dyn_cast<CallBase>(DoneEDTFn->user_back());
+  /// Debug DoneCB arguments
+  EDTIRBuilder IRB(EDTType::Task);
+  for (auto &Arg : DoneCB->args()) {
+    if (dyn_cast<PointerType>(Arg->getType()))
+      IRB.insertDep(Arg.get());
+    else
+      IRB.insertParam(Arg.get());
+  }
+  IRB.setMetadata(*DoneEDTFn);
   return DoneCB;
 }
 
@@ -262,43 +270,6 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
   auto *NewCB = IRB.buildEDT(&CB, OutlinedFn, fillRewiringMapFn);
   identifyEDTs(*NewCB->getCalledFunction());
   return NewCB;
-}
-
-/// ------------------------------------------------------------------- ///
-///                        OMPTransformPass                             ///
-/// ------------------------------------------------------------------- ///
-PreservedAnalyses OMPTransformPass::run(Module &M, ModuleAnalysisManager &AM) {
-  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << TAG << "Running OmpTransformPass on Module: \n"
-                    << M.getName() << "\n");
-  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
-  FunctionAnalysisManager &FAM =
-      AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
-  AnalysisGetter AG(FAM);
-  OMPTransform OT(M, AG);
-  OT.run(AM);
-
-  /// Print module info
-  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << TAG << "OmpTransformPass has finished\n\n" << M << "\n");
-  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
-  return PreservedAnalyses::all();
-}
-
-// This part is the new way of registering your pass
-extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
-llvmGetPassPluginInfo() {
-  return {LLVM_PLUGIN_API_VERSION, "OMPTransform", "v0.1", [](PassBuilder &PB) {
-            PB.registerPipelineParsingCallback(
-                [](StringRef Name, ModulePassManager &FPM,
-                   ArrayRef<PassBuilder::PipelineElement>) {
-                  if (Name == "omp-transform") {
-                    FPM.addPass(OMPTransformPass());
-                    return true;
-                  }
-                  return false;
-                });
-          }};
 }
 
 /// ------------------------------------------------------------------- ///
