@@ -1,4 +1,6 @@
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Debug.h"
 
@@ -16,27 +18,32 @@ using namespace arts;
 using namespace arts::utils;
 // using namespace arts::types;
 
-void EDTIRBuilder::insertDep(Value *CallV, Value *FunctionV) {
-  CallArgs.insert(CallV);
-  ArgTypeMap[FunctionV] = EDTArgType::Dep;
-  RewiringMap[FunctionV] = CallV;
+void EDTIRBuilder::insertDep(Value *CallV) {
+  CallArgs.push_back(CallV);
+  CallArgTypeMap[CallV] = EDTArgType::Dep;
 }
 
-void EDTIRBuilder::insertParam(Value *CallV, Value *FunctionV) {
-  CallArgs.insert(CallV);
-  ArgTypeMap[FunctionV] = EDTArgType::Param;
-  RewiringMap[FunctionV] = CallV;
+void EDTIRBuilder::insertParam(Value *CallV) {
+  CallArgs.push_back(CallV);
+  CallArgTypeMap[CallV] = EDTArgType::Param;
 }
 
-void EDTIRBuilder::insertUnusedArg(Value *V) { UnusedArgs.insert(V); }
+void EDTIRBuilder::insertMapValue(Value *OldV, Value *NewV) {
+  RewiringMap[OldV] = NewV;
+}
+void EDTIRBuilder::insertUnusedArg(Value *V) { UnusedArgs.push_back(V); }
 
-void EDTIRBuilder::buildEDT(Module &M, CallBase *OldCB, Function *OldFn) {
+CallBase *EDTIRBuilder::buildEDT(
+    CallBase *OldCB, Function *OldFn,
+    function<void(EDTIRBuilder *, Function *, Function *)> fillRewiringMapFn) {
+  // LLVM_DEBUG(dbgs() << TAG << "Old function: " << *OldFn << "\n");
   /// Collect replacement argument types and copy over existing attributes.
   SmallVector<Type *, 16> NewArgumentTypes;
   for (auto Arg : CallArgs)
     NewArgumentTypes.push_back(Arg->getType());
 
   /// Construct the new function type using the new arguments types.
+  Module &M = *OldFn->getParent();
   Type *RetTy = Type::getVoidTy(M.getContext());
   FunctionType *NewFnTy = FunctionType::get(RetTy, NewArgumentTypes, false);
   /// Create the new function body and insert it into the module.
@@ -44,19 +51,43 @@ void EDTIRBuilder::buildEDT(Module &M, CallBase *OldCB, Function *OldFn) {
                                      OldFn->getAddressSpace(), "");
   OldFn->getParent()->getFunctionList().insert(OldFn->getIterator(), NewFn);
   // NewFn->takeName(OldFn);
-  NewFn->setName("parallel.edt");
+  NewFn->setName("edt");
   OldFn->setSubprogram(nullptr);
   /// Splice the body of the old function right into the new function
   NewFn->getBasicBlockList().splice(NewFn->begin(), OldFn->getBasicBlockList());
-  LLVM_DEBUG(dbgs() << TAG << "Created new function: " << *NewFn << "\n");
-  // NewFn->copyAttributesFrom(OldFn);
-
-  /// Eliminate the instructions *after* we visited all of them.
-  // OldCB->replaceAllUsesWith(NewCB);
-  // OldCB->eraseFromParent();
-  // ValuesToRemove.push_back(OldFn);
-
-  /// Since we have now created the new function, splice the body of the old
-  /// function right into the new function, leaving the old rotting hulk
-  /// of the function empty.
+  /// If any early return, remove terminator and return void
+  for (auto &BB : *NewFn) {
+    if (auto *TI = dyn_cast<ReturnInst>(BB.getTerminator())) {
+      TI->eraseFromParent();
+      ReturnInst::Create(M.getContext(), nullptr, &BB);
+    }
+  }
+  // LLVM_DEBUG(dbgs() << TAG << "Created new function: " << *NewFn << "\n");
+  /// Fill the rewire map and rewire the arguments
+  fillRewiringMapFn(this, OldFn, NewFn);
+  for (auto &MapItr : RewiringMap) {
+    Value *OldV = MapItr.first;
+    Value *NewV = MapItr.second;
+    assert(OldV->getType() == NewV->getType() && "Types do not match");
+    NewV->takeName(OldV);
+    OldV->replaceAllUsesWith(NewV);
+  }
+  // LLVM_DEBUG(dbgs() << TAG << "New function after arguments were rewired: "
+  //                   << *NewFn << "\n");
+  /// Create new callsite.
+  auto *NewCI = CallInst::Create(NewFnTy, NewFn, CallArgs, "", OldCB);
+  /// Remove the old callsite
+  if (OldCB->getType()->isVoidTy())
+    OldCB->replaceAllUsesWith(NewCI);
+  else
+    replaceUsesWithUndef(OldCB, false, true, 1);
+  OldCB->eraseFromParent();
+  /// Remove unused arguments
+  for (auto *UnusedArg : UnusedArgs)
+    removeValue(UnusedArg, true, true);
+  // LLVM_DEBUG(dbgs() << TAG << "New callsite: " << *NewCI << "\n");
+  // LLVM_DEBUG(dbgs() << TAG << "New function: " << *NewFn << "\n");
+  removeValue(OldFn, true, true);
+  assert(!NewFn->isDeclaration() && "New function is a declaration");
+  return NewCI;
 }

@@ -1,11 +1,11 @@
 #include <sys/types.h>
-
+#include "llvm/Support/Debug.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Use.h"
-#include "llvm/Support/Debug.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
@@ -186,6 +186,30 @@ void removeLifetimeMarkers(Function &F) {
       InstIt = NextIt;
     }
   }
+}
+
+void removeDeadInstructions(Function &F) {
+  SmallVector<Value *, 16> ValuesToRemove;
+  for (auto &BB : F) {
+    for (auto &I : BB) {
+      /// If the instruction is trivially dead, remove it
+      if (isInstructionTriviallyDead(&I)) {
+        LLVM_DEBUG(dbgs() << TAG << "- Removing: " << I << "\n");
+        ValuesToRemove.push_back(&I);
+        continue;
+      }
+      /// However, if the instruction is not trivially dead, check its operands
+      /// If any of them is undef, remove the instruction
+      for (auto &Op : I.operands()) {
+        if (isa<UndefValue>(Op.get())) {
+          LLVM_DEBUG(dbgs() << TAG << "- Removing: " << I << "\n");
+          ValuesToRemove.push_back(&I);
+          break;
+        }
+      }
+    }
+  }
+  removeValues(ValuesToRemove);
 }
 } // namespace utils
 } // namespace arts

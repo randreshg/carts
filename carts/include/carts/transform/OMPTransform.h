@@ -21,19 +21,19 @@ using namespace llvm;
 class OMPTransform  {
 public:
   /// Interface 
-  OMPTransform(Module &M) : M(M) {}
+  OMPTransform(Module &M, AnalysisGetter &AG) : M(M), AG(AG) {}
   ~OMPTransform() {}
   bool run(ModuleAnalysisManager &AM);
   bool runAttributor(Attributor &A);
-  void identifyEDTs();
   void identifyEDTs(Function &F);
 
 private:
-  void handleParallelRegion(CallBase &CB);
-  void handleParallelDoneRegion(CallBase &CB);
-  void handleTaskRegion(CallBase &CB);
+  Instruction *handleParallelRegion(CallBase &CB);
+  Instruction *handleParallelDoneRegion(CallBase &CB);
+  Instruction *handleTaskRegion(CallBase &CB);
   ///  Attributes
   Module &M;
+  AnalysisGetter &AG;
   SetVector<Function *> Functions;
 };
 

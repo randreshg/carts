@@ -8,7 +8,6 @@
 #ifndef LLVM_API_CARTS_ARTSIRBUILDER_H
 #define LLVM_API_CARTS_ARTSIRBUILDER_H
 
-
 #include "llvm/ADT/SetVector.h"
 #include "llvm/IR/Module.h"
 
@@ -23,31 +22,37 @@ public:
   EDTIRBuilder(EDTType Ty) : Ty(Ty) {}
   ~EDTIRBuilder() {}
 
-  void insertDep(Value *CallV, Value *FunctionV);
-  void insertParam(Value *CallV, Value *FunctionV);
+  void insertDep(Value *CallV);
+  void insertParam(Value *CallV);
   void insertUnusedArg(Value *V);
-  void buildEDT(Module &M, CallBase *OldCB, Function *OldFn);
+  void insertMapValue(Value *OldV, Value *NewV);
+  /// Builds the EDT and returns call instruction
+  CallBase *buildEDT(
+      CallBase *OldCB, Function *OldFn,
+      function<void(EDTIRBuilder *, Function *, Function *)> fillRewiringMapFn);
   EDTType getTy() { return Ty; }
 
-private:
+// private:
   /// Set of inputs
   // Module &M;
   EDTType Ty;
-  SmallSetVector<Value *, 4> CallArgs;
-  // SmallSetVector<Value *, 4> NewFnArgs;
   /// Unused Arguments
-  SmallSetVector<Value *, 4> UnusedArgs;
+  SmallVector<Value *, 16> UnusedArgs;
+  /// Call Arguments
+  SmallVector<Value *, 16> CallArgs;
+  // SmallSetVector<Value *, 4> NewFnArgs;
+
   /// Map to rewire values
   DenseMap<Value *, Value *> RewiringMap;
-  /// Maps the function argument to an EDTArgType
-  DenseMap<Value *, EDTArgType> ArgTypeMap;
+  /// Maps the call argument to an EDTArgType
+  DenseMap<Value *, EDTArgType> CallArgTypeMap;
 };
 
 /// An interface to create LLVM-IR for ARTS directives.
 class ARTSIRBuilder {
 public:
   /// Create a new ARTSIRBuilder operating on the given module \p M.
-  ARTSIRBuilder(Module &M) : M(M) { }
+  ARTSIRBuilder(Module &M) : M(M) {}
   ~ARTSIRBuilder() {}
 
   /// ---------------------------- Attributes ---------------------------- ///
