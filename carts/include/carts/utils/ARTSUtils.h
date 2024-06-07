@@ -52,6 +52,8 @@ void replaceUsesWithUndef(Value *V, Instruction *ExcludeInst = nullptr,
                           uint32_t MaxDepth = UINT32_MAX);
 /// Removes the lifetime markers from the function.
 void removeLifetimeMarkers(Function &F);
+/// Removes dead instructions
+void removeDeadInstructions(Function &F);
 
 } // namespace utils
 } // namespace arts
