@@ -5,6 +5,7 @@
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Debug.h"
@@ -36,6 +37,10 @@ bool OMPTransform::run(ModuleAnalysisManager &AM) {
   /// Get main function
   auto &MainFn = *M.getFunction("main");
   identifyEDTs(MainFn);
+  
+  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
+  LLVM_DEBUG(dbgs() << TAG << "Module after Identifying EDTs\n" << M << "\n");
+  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   return true;
 }
 
@@ -83,6 +88,8 @@ void OMPTransform::identifyEDTs(Function &F) {
       }
     } while ((CurrentI = CurrentI->getNextNonDebugInstruction()));
   } while ((CurrentBB = NextBB));
+  LLVM_DEBUG(dbgs() << TAG << "Processing function: " << F.getName() << " - Finished\n");
+  LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - - - -\n");
 }
 
 Instruction *OMPTransform::handleParallelRegion(CallBase &CB) {
@@ -106,9 +113,11 @@ Instruction *OMPTransform::handleParallelRegion(CallBase &CB) {
   /// Fill the EDTRewireMap
   auto fillRewiringMapFn = [&](EDTIRBuilder *Me, Function *OldFn,
                                Function *NewFn) {
+    // LLVM_DEBUG(dbgs() << TAG << "RewiringMap for Parallel Region:\n");
     Argument *OldFnArgIt = OldFn->arg_begin() + RTI.KeepFnArgsFrom;
     Argument *NewFnArgIt = NewFn->arg_begin();
     for (; OldFnArgIt != OldFn->arg_end(); ++OldFnArgIt, ++NewFnArgIt) {
+      // LLVM_DEBUG(dbgs() << *OldFnArgIt << "->" << *NewFnArgIt << "\n");
       Me->insertMapValue(OldFnArgIt, NewFnArgIt);
     }
   };
@@ -116,7 +125,8 @@ Instruction *OMPTransform::handleParallelRegion(CallBase &CB) {
   /// Build the EDT
   auto *NewCB = IRB.buildEDT(&CB, OutlinedFn, fillRewiringMapFn);
   identifyEDTs(*NewCB->getCalledFunction());
-  return handleParallelDoneRegion(*NewCB);
+  auto *NextInst = handleParallelDoneRegion(*NewCB);
+  return NextInst;
 }
 
 Instruction *OMPTransform::handleParallelDoneRegion(CallBase &CB) {
@@ -195,6 +205,7 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
   /// Analyze Task Data
   /// This analysis assumes we only have stores to the task struct
   /// Get offsets and values from the Task Data - Call to __kmpc_omp_task_alloc
+  CallBase *CallToOmpTask = nullptr;
   DenseMap<Value *, int64_t> ValueToOffsetTD;
   Instruction *CurI = &CB;
   do {
@@ -214,15 +225,17 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
     }
     /// Break if we find a call to a task function
     if (auto *CI = dyn_cast<CallInst>(CurI)) {
-      if (omp::isTaskFunction(*CI))
+      if (omp::isTaskFunction(*CI)) {
+        CallToOmpTask = CI;
         break;
+      }
     }
   } while ((CurI = CurI->getNextNonDebugInstruction()));
 
   /// Rewrite Task Outlined Function arguments to match the Task Data
   auto *OutlinedFn = omp::getOutlinedFunction(&CB);
   Argument *TaskData = dyn_cast<Argument>(OutlinedFn->arg_begin() + 1);
-  /// This assumes the 'desaggregation' happens in the first basic block
+  /// This assumes the 'disaggregation' happens in the first basic block
   BasicBlock &EntryBB = OutlinedFn->getEntryBlock();
   auto *TaskDataPtr = &*(++EntryBB.begin());
   /// Get offsets and values from the Task Data - Task Outlined function
@@ -261,13 +274,15 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
     for (uint32_t CallArgsItr = 0; CallArgsItr < IRB.CallArgs.size();
          ++CallArgsItr) {
       Value *CallArg = IRB.CallArgs[CallArgsItr];
+      // LLVM_DEBUG(dbgs() << TAG << "CallArg: " << *CallArg << "\n");
       Value *OldValue = OffsetToValueOF[ValueToOffsetTD[CallArg]];
       Value *NewValue = NewFn->arg_begin() + CallArgsItr;
+      // LLVM_DEBUG(dbgs() << TAG << "Rewiring: " << *OldValue << " -> " << *NewValue << "\n");
       Me->insertMapValue(OldValue, NewValue);
     }
   };
   /// Build the EDT
-  auto *NewCB = IRB.buildEDT(&CB, OutlinedFn, fillRewiringMapFn);
+  auto *NewCB = IRB.buildEDT(&CB, OutlinedFn, fillRewiringMapFn, CallToOmpTask);
   identifyEDTs(*NewCB->getCalledFunction());
   return NewCB;
 }

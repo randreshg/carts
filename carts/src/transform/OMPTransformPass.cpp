@@ -15,11 +15,12 @@
 #include "llvm/Transforms/IPO/Attributor.h"
 
 #include "carts/transform/OMPTransform.h"
+#include "carts/utils/ARTSUtils.h"
 
 using namespace llvm;
 using namespace arts;
 using namespace arts::omp;
-// using namespace arts::utils;
+using namespace arts::utils;
 
 /// DEBUG
 #define DEBUG_TYPE "omp-transform"
@@ -45,6 +46,29 @@ PreservedAnalyses OMPTransformPass::run(Module &M, ModuleAnalysisManager &AM) {
   AnalysisGetter AG(FAM);
   OMPTransform OT(M, AG);
   OT.run(AM);
+  /// Get the set of functions in the module
+  SetVector<Function *> Functions;
+  for (Function &F : M) {
+    if (F.isDeclaration() && !F.hasLocalLinkage())
+      continue;
+    removeDeadInstructions(F);
+    Functions.insert(&F);
+  }
+
+  /// Create attributor
+  CallGraphUpdater CGUpdater;
+  BumpPtrAllocator Allocator;
+  InformationCache InfoCache(M, AG, Allocator, &Functions);
+  Attributor A(Functions, InfoCache, CGUpdater, nullptr, true, false);
+  /// Register attributes for functions
+  for (Function *F : Functions) { 
+    for (Argument &Arg : F->args())
+      A.getOrCreateAAFor<AAMemoryBehavior>(IRPosition::argument(Arg));
+  }
+
+  ChangeStatus Changed = A.run();
+  LLVM_DEBUG(dbgs() << TAG << "[Attributor] Done with " << Functions.size()
+                    << " functions, result: " << Changed << ".\n");
 
   /// Print module info
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");

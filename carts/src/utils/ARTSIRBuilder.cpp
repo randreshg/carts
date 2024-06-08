@@ -39,7 +39,9 @@ void EDTIRBuilder::insertUnusedArg(Value *V) { UnusedArgs.push_back(V); }
 
 CallBase *EDTIRBuilder::buildEDT(
     CallBase *OldCB, Function *OldFn,
-    function<void(EDTIRBuilder *, Function *, Function *)> fillRewiringMapFn) {
+    function<void(EDTIRBuilder *, Function *, Function *)> fillRewiringMapFn,
+    Instruction *InsertBefore) {
+  LLVM_DEBUG(dbgs() << TAG << "Building EDT:\n");
   // LLVM_DEBUG(dbgs() << TAG << "Old function: " << *OldFn << "\n");
   /// Collect replacement argument types and copy over existing attributes.
   SmallVector<Type *, 16> NewArgumentTypes;
@@ -56,6 +58,7 @@ CallBase *EDTIRBuilder::buildEDT(
   OldFn->getParent()->getFunctionList().insert(OldFn->getIterator(), NewFn);
   NewFn->setName("edt");
   OldFn->setSubprogram(nullptr);
+  LLVM_DEBUG(dbgs() << "Created new function: " << *NewFn);
   /// Splice the body of the old function right into the new function
   NewFn->getBasicBlockList().splice(NewFn->begin(), OldFn->getBasicBlockList());
   /// If any early return, remove terminator and return void
@@ -65,32 +68,33 @@ CallBase *EDTIRBuilder::buildEDT(
       ReturnInst::Create(M.getContext(), nullptr, &BB);
     }
   }
-  // LLVM_DEBUG(dbgs() << TAG << "Created new function: " << *NewFn << "\n");
   /// Fill the rewiring map and rewire the arguments
   fillRewiringMapFn(this, OldFn, NewFn);
+  LLVM_DEBUG(dbgs() << "Rewiring new function arguments:\n");
   for (auto &MapItr : RewiringMap) {
     Value *OldV = MapItr.first;
     Value *NewV = MapItr.second;
     assert(OldV->getType() == NewV->getType() && "Types do not match");
-    NewV->takeName(OldV);
+    LLVM_DEBUG(dbgs() << "  - Rewiring: " << *OldV << " -> " << *NewV << "\n");
     OldV->replaceAllUsesWith(NewV);
   }
-  // LLVM_DEBUG(dbgs() << TAG << "New function after arguments were rewired: "
-  //                   << *NewFn << "\n");
   /// Create new callsite.
-  auto *NewCI = CallInst::Create(NewFnTy, NewFn, CallArgs, "", OldCB);
-  /// Remove the old callsite
-  if (OldCB->getType()->isVoidTy())
-    OldCB->replaceAllUsesWith(NewCI);
+  CallInst *NewCI;
+  if (InsertBefore)
+    NewCI = CallInst::Create(NewFn, CallArgs, "", InsertBefore);
   else
-    replaceUsesWithUndef(OldCB, false, true, 1);
-  OldCB->eraseFromParent();
-  /// Remove unused arguments
+    NewCI = CallInst::Create(NewFn, CallArgs, "", OldCB);
+  /// Clean EDTIR after building the EDT
+  LLVM_DEBUG(dbgs() << "New callsite: " << *NewCI << "\n");
+  removeValue(OldCB, true, true);
+  removeFunction(OldFn);
+  // removeValue(OldFn, true, true);
+  LLVM_DEBUG(dbgs() << "Current Function after undefining OldCB:\n"
+                    << *(NewCI->getFunction()) << "\n");
+  /// Undefine unused arguments
   for (auto *UnusedArg : UnusedArgs)
-    removeValue(UnusedArg, true, true);
-  // LLVM_DEBUG(dbgs() << TAG << "New callsite: " << *NewCI << "\n");
-  // LLVM_DEBUG(dbgs() << TAG << "New function: " << *NewFn << "\n");
-  removeValue(OldFn, true, true);
+    UnusedArg->replaceAllUsesWith(UndefValue::get(UnusedArg->getType()));
+  LLVM_DEBUG(dbgs() << TAG << "New function:\n" << *NewFn << "\n");
   assert(!NewFn->isDeclaration() && "New function is a declaration");
   /// Set metadata
   setMetadata(*NewFn);
@@ -105,7 +109,7 @@ void EDTIRBuilder::setMetadata(Function &Fn) {
   for (auto *CallArg : CallArgs) {
     EDTArgType CallTy = CallArgTypeMap[CallArg];
     auto MDStr = "edt.arg." + toString(CallTy);
-    ArgMDs.push_back( MDString::get(Ctx, MDStr));
+    ArgMDs.push_back(MDString::get(Ctx, MDStr));
   }
   MDNode *ArgNode = MDNode::get(Ctx, ArgMDs);
   /// Metadata Node for EDT

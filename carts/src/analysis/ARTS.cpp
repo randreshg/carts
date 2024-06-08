@@ -13,8 +13,7 @@
 using namespace llvm;
 using namespace arts;
 using namespace arts::utils;
-// using namespace arts_utils::omp;
-// using namespace arcana::noelle;
+using namespace arts::types;
 
 /// DEBUG
 #define DEBUG_TYPE "arts"
@@ -22,15 +21,55 @@ using namespace arts::utils;
 static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 #endif
 
-/// EDT Environment
-void EDTEnvironment::insertParamV(Value *V) { ParamV.insert(V); }
-void EDTEnvironment::insertDepV(Value *V) { DepV.insert(V); }
-uint32_t EDTEnvironment::getParamC() { return ParamV.size(); }
-uint32_t EDTEnvironment::getDepC() { return DepV.size(); }
+/// EDT Types
+namespace arts::types {
+string toString(EDTType Ty) {
+  switch (Ty) {
+  case EDTType::Parallel:
+    return "parallel";
+  case EDTType::Task:
+    return "task";
+  case EDTType::Main:
+    return "main";
+  default:
+    break;
+  }
+  return "unknown";
+}
+
+string toString(EDTArgType Ty) {
+  switch (Ty) {
+  case EDTArgType::Param:
+    return "param";
+  case EDTArgType::Dep:
+    return "dep";
+  default:
+    break;
+  }
+  return "unknown";
+}
+
+EDTType toEDTType(StringRef Str) {
+  if (Str == "parallel")
+    return EDTType::Parallel;
+  if (Str == "task")
+    return EDTType::Task;
+  if (Str == "main")
+    return EDTType::Main;
+  return EDTType::Unknown;
+}
+
+EDTArgType toEDTArgType(StringRef Str) {
+  if (Str == "param")
+    return EDTArgType::Param;
+  if (Str == "dep")
+    return EDTArgType::Dep;
+  return EDTArgType::Unknown;
+}
+} // namespace arts::types
 
 /// EDT Cache
 // EDTCache::EDTCache(Module &M, noelle::Noelle &NM) : M(M), NM(NM) {}
-
 EDTCache::~EDTCache() {}
 
 void EDTCache::insertEDT(Value *V, EDT *E) { Values[V].insert(E); }
@@ -49,6 +88,12 @@ SetVector<EDT *> EDTCache::getEDTs(Value *V) const {
   return Itr->second;
 }
 
+/// EDT Environment
+void EDTEnvironment::insertParamV(Value *V) { ParamV.insert(V); }
+void EDTEnvironment::insertDepV(Value *V) { DepV.insert(V); }
+uint32_t EDTEnvironment::getParamC() { return ParamV.size(); }
+uint32_t EDTEnvironment::getDepC() { return DepV.size(); }
+
 /// EDT Task
 // void EDTTask::removeDeadInstructions() {
 //   LLVM_DEBUG(dbgs() << TAG << "Deleting dead instructions in EDT: "
@@ -62,7 +107,8 @@ SetVector<EDT *> EDTCache::getEDTs(Value *V) const {
 //         ValuesToRemove.push_back(&I);
 //         continue;
 //       }
-//       /// However, if the instruction is not trivially dead, check its operands
+//       /// However, if the instruction is not trivially dead, check its
+//       operands
 //       /// If any of them is undef, remove the instruction
 //       for (auto &Op : I.operands()) {
 //         if (isa<UndefValue>(Op.get())) {
@@ -85,29 +131,6 @@ SetVector<EDT *> EDTCache::getEDTs(Value *V) const {
 //   for (auto BB : BBs)
 //     cloneAndAddBasicBlock(BB);
 // }
-
-/// EDT
-string arts::toString(EDTType Ty) {
-  switch (Ty) {
-  case EDTType::Parallel:
-    return "parallel";
-  case EDTType::Task:
-    return "task";
-  case EDTType::Main:
-    return "main";
-  }
-  return "unknown";
-}
-
-string arts::toString(EDTArgType Ty) {
-  switch (Ty) {
-  case EDTArgType::Param:
-    return "param";
-  case EDTArgType::Dep:
-    return "dep";
-  }
-  return "unknown";
-}
 
 void EDT::insertValueToEnv(Value *Val) {
   /// Pointer is a depv, else, it is a paramv
@@ -156,7 +179,6 @@ void ParallelEDT::setDataEnv(CallBase *CB) {
 /// ParallelDone EDT
 ParallelDoneEDT::ParallelDoneEDT(EDTCache &Cache, CallBase *CB) : EDT(Cache) {
   setDataEnv(CB);
-
 }
 
 void ParallelDoneEDT::createTask() {
@@ -187,9 +209,11 @@ void ParallelDoneEDT::setDataEnv(CallBase *CB) {
   // CE.findInputsOutputs(Inputs, Outputs, Sinks);
   // for (auto *I : Inputs)
   //   insertValueToEnv(I);
-  // LLVM_DEBUG(dbgs() << TAG << " - DoneEDT OutlinedFn: " << OutlinedFn->getName()
+  // LLVM_DEBUG(dbgs() << TAG << " - DoneEDT OutlinedFn: " <<
+  // OutlinedFn->getName()
   //                   << "\n");
-  // LLVM_DEBUG(dbgs() << TAG << " - DoneEDT OutlinedFnCall: " << *OutlinedFnCall
+  // LLVM_DEBUG(dbgs() << TAG << " - DoneEDT OutlinedFnCall: " <<
+  // *OutlinedFnCall
   //                   << "\n");
 }
 
@@ -247,19 +271,21 @@ void TaskEDT::setDataEnv(CallBase *CB) {
   // ///   obtaining stores done to offset 0 of the returned Val of the
   // ///   taskalloc.
   // /// - For firstprivate variables, the access of the privates field is
-  // ///   obtained by obtaining stores done to offset 8 of the returned Val of the
+  // ///   obtained by obtaining stores done to offset 8 of the returned Val of
+  // the
   // ///   kmp_task_t_with_privates struct.
   // /// Get the size of the kmp_task_t struct
   // const DataLayout &DL = CB->getModule()->getDataLayout();
   // LLVMContext &Ctx = CB->getContext();
   // const auto *TaskStruct = dyn_cast<StructType>(CB->getType());
   // const auto TaskDataSize = static_cast<int64_t>(
-  //     DL.getTypeAllocSize(TaskStruct->getTypeByName(Ctx, "struct.kmp_task_t")));
+  //     DL.getTypeAllocSize(TaskStruct->getTypeByName(Ctx,
+  //     "struct.kmp_task_t")));
 
   // /// Analyze Task Data
   // /// This analysis assumes we only have stores to the task struct
-  // /// Get offsets and values from the Task Data - Call to __kmpc_omp_task_alloc
-  // DenseMap<Value *, int64_t> ValueToOffsetTD;
+  // /// Get offsets and values from the Task Data - Call to
+  // __kmpc_omp_task_alloc DenseMap<Value *, int64_t> ValueToOffsetTD;
   // Instruction *CurI = CB;
   // do {
   //   if (auto *SI = dyn_cast<StoreInst>(CurI)) {

@@ -22,6 +22,13 @@ using namespace std;
 /// It contains the types used by the ARTS runtime library.
 /// ------------------------------------------------------------------- ///
 namespace types {
+/// EDT types
+enum class EDTType { Parallel, Task, Main, Unknown };
+enum class EDTArgType { Param, Dep, Unknown };
+string toString(EDTType Ty);
+string toString(EDTArgType Ty);
+EDTType toEDTType(StringRef Str);
+EDTArgType toEDTArgType(StringRef Str);
 /// IDs for all arts runtime library (RTL) functions.
 enum class RuntimeFunction {
 #define ARTS_RTL(Enum, ...) Enum,
@@ -101,10 +108,6 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDTEnvironment &Env) {
 /// The EDT is the main abstraction used by ARTS to represent the tasks
 /// in the program.
 /// ------------------------------------------------------------------- ///
-enum class EDTType { Parallel, Task, Main };
-enum class EDTArgType { Param, Dep };
-string toString(EDTType Ty);
-string toString(EDTArgType Ty);
 class EDTTask;
 // class EDTTask : public noelle::Task {
 // public:

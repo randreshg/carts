@@ -17,6 +17,7 @@
 namespace arts {
 using namespace std;
 using namespace llvm;
+using namespace arts::types;
 /// ------------------------------------------------------------------- ///
 ///                            EDT Metadata                             ///
 /// ------------------------------------------------------------------- ///
@@ -90,7 +91,8 @@ public:
   /// Builds the EDT and returns call instruction
   CallBase *buildEDT(
       CallBase *OldCB, Function *OldFn,
-      function<void(EDTIRBuilder *, Function *, Function *)> fillRewiringMapFn);
+      function<void(EDTIRBuilder *, Function *, Function *)> fillRewiringMapFn,
+      Instruction *InsertBefore=nullptr);
 
   // private:
   EDTType Ty;
