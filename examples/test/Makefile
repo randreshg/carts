@@ -11,14 +11,14 @@ all: test_opt
 	llvm-dis $@
 
 test_arts.bc: test.bc
-	opt -debug-only=arts,carts,arts-analyzer,arts-ir-builder,edt-graph,omp-transform \
+	opt -debug-only=arts,carts,arts-analyzer,arts-ir-builder,edt-graph,omp-transform,arts-utils \
 		-load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/OMPTransform.so \
 		-passes="omp-transform" $< -o $@
 	llvm-dis $@
 
-# test_norm.bc: test.bc
-# 	noelle-norm $^ -o $@
-# 	llvm-dis $@
+test_norm.bc: test_arts.bc
+	noelle-norm $^ -o $@
+	llvm-dis $@
 
 test_with_metadata.bc: test_norm.bc
 	noelle-meta-pdg-embed $^ -o $@
@@ -34,7 +34,7 @@ test_with_metadata.bc: test_norm.bc
 # 	noelle-load -debug-only=carts,arts-analyzer -load /home/rherreraguaitero/ME/ARTS-env/CARTS/.build/CARTS.so -CARTS $< -o $@
 # 	llvm-dis $@
 
-test_opt: test_arts.bc
+test_opt: test_with_metadata.bc
 	clang++ -fopenmp $< -O3 -march=native -o $@ -lstdc++
 
 clean:

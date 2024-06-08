@@ -80,15 +80,18 @@ entry:
   %9 = load i32, i32* %NewRandom, align 4, !tbaa !4
   store i32 %9, i32* %8, align 4, !tbaa !17
   %10 = tail call i32 @__kmpc_omp_task(%struct.ident_t* nonnull @1, i32 %0, i8* %1)
-  %11 = tail call i8* @__kmpc_omp_task_alloc(%struct.ident_t* nonnull @1, i32 %0, i32 1, i64 48, i64 8, i32 (i32, i8*)* bitcast (i32 (i32, %struct.kmp_task_t_with_privates.1*)* @.omp_task_entry..5 to i32 (i32, i8*)*))
-  %12 = bitcast i8* %11 to i32***
-  %13 = load i32**, i32*** %12, align 8, !tbaa !18
-  store i32* %shared_number, i32** %13, align 8, !tbaa.struct !15
-  %14 = getelementptr inbounds i8, i8* %11, i64 40
-  %15 = bitcast i8* %14 to i32*
-  %16 = load i32, i32* %number, align 4, !tbaa !4
-  store i32 %16, i32* %15, align 8, !tbaa !21
-  %17 = tail call i32 @__kmpc_omp_task(%struct.ident_t* nonnull @1, i32 %0, i8* %11)
+  %11 = load i32, i32* %shared_number, align 4, !tbaa !4
+  %inc = add nsw i32 %11, 1
+  store i32 %inc, i32* %shared_number, align 4, !tbaa !4
+  %12 = tail call i8* @__kmpc_omp_task_alloc(%struct.ident_t* nonnull @1, i32 %0, i32 1, i64 48, i64 8, i32 (i32, i8*)* bitcast (i32 (i32, %struct.kmp_task_t_with_privates.1*)* @.omp_task_entry..5 to i32 (i32, i8*)*))
+  %13 = bitcast i8* %12 to i32***
+  %14 = load i32**, i32*** %13, align 8, !tbaa !18
+  store i32* %shared_number, i32** %14, align 8, !tbaa.struct !15
+  %15 = getelementptr inbounds i8, i8* %12, i64 40
+  %16 = bitcast i8* %15 to i32*
+  %17 = load i32, i32* %number, align 4, !tbaa !4
+  store i32 %17, i32* %16, align 8, !tbaa !21
+  %18 = tail call i32 @__kmpc_omp_task(%struct.ident_t* nonnull @1, i32 %0, i8* %12)
   ret void
 }
 

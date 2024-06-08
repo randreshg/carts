@@ -30,14 +30,14 @@ void getDominatedBBs(BasicBlock *FromBB, DominatorTree &DT,
 void rewireValues(DenseMap<Value *, Value *> &RewiringMap);
 
 /// Function
-void cleanFunction(Function *F);
 void removeFunction(Function *F);
 
 /// Remove values interface
 void removeValue(Value *V, bool RecursiveRemove = false,
                  bool RecursiveUndef = true);
 void removeValue(Value *V, Instruction *ExcludeInst,
-                 bool RecursiveRemove = false, bool RecursiveUndef = true);
+                 bool RecursiveRemove = false, bool RecursiveUndef = true,
+                 bool UndefineUses = true);
 void removeValues(SmallVector<Value *, 16> ValuesToRemove);
 /// Function to replace uses of a Value with UndefValue.
 /// - Instructions can be removed if requested.

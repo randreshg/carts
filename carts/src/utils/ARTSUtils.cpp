@@ -47,14 +47,10 @@ void rewireValues(DenseMap<Value *, Value *> &RewiringMap) {
   }
 }
 
-void cleanFunction(Function *F) {
-  for (auto &Arg : F->args())
-    replaceUsesWithUndef(&Arg, true, true, 1);
-}
-
 void removeFunction(Function *F) {
   for (auto &Arg : F->args())
     replaceUsesWithUndef(&Arg, false, false);
+  F->deleteBody();
   F->removeFromParent();
 }
 
@@ -63,39 +59,26 @@ void removeValue(Value *V, bool RecursiveRemove, bool RecursiveUndef) {
 }
 
 void removeValue(Value *V, Instruction *ExcludeInst, bool RecursiveRemove,
-                 bool RecursiveUndef) {
+                 bool RecursiveUndef, bool UndefineUses) {
   if (!V || isa<UndefValue>(V) || V == ExcludeInst)
     return;
 
   /// Instructions
   if (auto *I = dyn_cast<Instruction>(V)) {
-    /// Call instructions
-    if (auto *CBI = dyn_cast<CallBase>(I)) {
-      if (RecursiveRemove) {
-        for (auto *CallArgItr = CBI->arg_begin(); CallArgItr != CBI->arg_end();
-             ++CallArgItr) {
-          Value *Arg = *CallArgItr;
-          if (!isa<PointerType>(Arg->getType()))
-            continue;
-          removeValue(Arg, CBI, RecursiveRemove, RecursiveUndef);
-        }
-      } else {
-        for (auto *CallArgItr = CBI->arg_begin(); CallArgItr != CBI->arg_end();
-             ++CallArgItr) {
-          CallArgItr->set(UndefValue::get((*CallArgItr)->getType()));
-        }
-      }
-      ExcludeInst = nullptr;
-    }
-
+    if (I->getParent() == nullptr)
+      return;
+    if (UndefineUses)
+      replaceUsesWithUndef(V, ExcludeInst, RecursiveRemove, RecursiveUndef);
     LLVM_DEBUG(dbgs() << TAG << "   - Removing instruction: " << *I << "\n");
-    replaceUsesWithUndef(I, ExcludeInst, RecursiveRemove, RecursiveUndef);
+    /// If the instruction is a call to an OMP runtime function, we need to
+    /// remove the call and its arguments
     I->eraseFromParent();
     return;
   }
 
+  if (UndefineUses)
+    replaceUsesWithUndef(V, ExcludeInst, RecursiveRemove, RecursiveUndef);
   /// Value is not a instruction. It can be a constant, global variable, etc.
-  replaceUsesWithUndef(V, ExcludeInst, RecursiveRemove, RecursiveUndef);
   /// Global variables are not instructions, but we still need to remove them
   if (GlobalVariable *GV = dyn_cast<GlobalVariable>(V)) {
     LLVM_DEBUG(dbgs() << TAG << "   - Removing global variable: " << *GV
@@ -113,8 +96,10 @@ void removeValue(Value *V, Instruction *ExcludeInst, bool RecursiveRemove,
 }
 
 void removeValues(SmallVector<Value *, 16> ValuesToRemove) {
-  for (auto *V : ValuesToRemove)
+  for (Value *V : ValuesToRemove) {
+    // LLVM_DEBUG(dbgs() << TAG << "- Removing: " << *V << "\n");
     removeValue(V, true, true);
+  }
 }
 
 void replaceUsesWithUndef(Value *V, bool RemoveUses, bool Recursive,
@@ -142,11 +127,11 @@ void replaceUsesWithUndef(Value *V, Instruction *ExcludeInst, bool RemoveUses,
   auto Depth = 0u;
   while (!Worklist.empty()) {
     Instruction *Inst = Worklist.pop_back_val();
-    if (ExcludeInst || Inst == ExcludeInst)
+    if (!Inst || ExcludeInst || Inst == ExcludeInst)
       continue;
     LLVM_DEBUG(dbgs() << TAG << "   - Replacing: " << *Inst << "\n");
     /// Add users of this instruction to the worklist for further processing
-    if (Recursive && (Depth >= MaxDepth)) {
+    if (Recursive && (Depth <= MaxDepth)) {
       Depth++;
       for (auto &Use : Inst->uses()) {
         if (Instruction *UserInst = dyn_cast<Instruction>(Use.getUser()))
@@ -157,11 +142,8 @@ void replaceUsesWithUndef(Value *V, Instruction *ExcludeInst, bool RemoveUses,
     /// Replace uses of the argument with UndefValue
     Inst->replaceAllUsesWith(UndefValue::get(Inst->getType()));
     /// Mark the instruction for removal
-    if (RemoveUses) {
-      removeValue(Inst, ExcludeInst, false, false);
-      // LLVM_DEBUG(dbgs() << TAG << "    -> Instruction removed\n");
-      // Inst->eraseFromParent();
-    }
+    if (RemoveUses)
+      removeValue(Inst, ExcludeInst, false, false, false);
   }
 }
 
@@ -189,6 +171,8 @@ void removeLifetimeMarkers(Function &F) {
 }
 
 void removeDeadInstructions(Function &F) {
+  LLVM_DEBUG(dbgs() << TAG << "Removing dead instructions from: " << F.getName()
+                    << "\n");
   SmallVector<Value *, 16> ValuesToRemove;
   for (auto &BB : F) {
     for (auto &I : BB) {
@@ -209,7 +193,10 @@ void removeDeadInstructions(Function &F) {
       }
     }
   }
+  LLVM_DEBUG(dbgs() << TAG << "Removing " << ValuesToRemove.size()
+                    << " dead instructions\n");
   removeValues(ValuesToRemove);
+  LLVM_DEBUG(dbgs() << "\n");
 }
 } // namespace utils
 } // namespace arts
