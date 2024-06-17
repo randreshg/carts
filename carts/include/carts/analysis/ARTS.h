@@ -5,18 +5,21 @@
 #define LLVM_ARTS_H
 
 // #include "noelle/core/Noelle.hpp"
-#include "noelle/core/Task.hpp"
+// #include "noelle/core/Task.hpp"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Module.h"
+#include <sys/types.h>
 
 namespace arts {
+using namespace llvm;
+using namespace std;
 /// Namespace for all ARTS related functionality.
 using BlockSequence = SmallVector<BasicBlock *, 0>;
 // using namespace arcana;
-using namespace std;
 /// ------------------------------------------------------------------- ///
 ///                            ART TYPES                                ///
 /// It contains the types used by the ARTS runtime library.
@@ -25,8 +28,8 @@ namespace types {
 /// EDT types
 enum class EDTType { Parallel, Task, Main, Unknown };
 enum class EDTArgType { Param, Dep, Unknown };
-string toString(EDTType Ty);
-string toString(EDTArgType Ty);
+StringRef toString(EDTType Ty);
+StringRef toString(EDTArgType Ty);
 EDTType toEDTType(StringRef Str);
 EDTArgType toEDTArgType(StringRef Str);
 /// IDs for all arts runtime library (RTL) functions.
@@ -109,40 +112,9 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDTEnvironment &Env) {
 /// in the program.
 /// ------------------------------------------------------------------- ///
 class EDTTask;
-// class EDTTask : public noelle::Task {
-// public:
-//   EDTTask(FunctionType *TaskSignature, Module &M) : Task(TaskSignature, M){};
-//   EDTTask(FunctionType *TaskSignature, Module &M, const string &TaskName)
-//       : Task(TaskSignature, M, TaskName) {}
-
-//   void removeDeadInstructions();
-//   void cloneAndAddBasicBlocks(Function *F);
-//   void cloneAndAddBasicBlocks(BlockSequence &BBs);
-//   unordered_map<Instruction *, unordered_set<Instruction *>> &getLiveOuts() {
-//     return liveOutClones;
-//   }
-//   unordered_map<Value *, Value *> &getLiveIns() { return liveInClones; }
-
-//   /// Getters and setters
-//   Instruction *getGuidAddr() { return GuidAddr; }
-//   BasicBlock *getBody() { return Body; }
-//   void setBody(BasicBlock *BB) { Body = BB; }
-//   const string getName() { return ("edt_" + Twine(ID)).str(); }
-//   void setName() { F->setName("arts_" + getName()); }
-
-// private:
-//   /// Attributes
-//   BasicBlock *Body = nullptr;
-//   /// Call to GuidAddr allocation
-//   Instruction *GuidAddr = nullptr;
-//   /// Call to EDTCreate function
-//   Instruction *CallBase = nullptr;
-// };
-
 class EDT {
 public:
-  EDT(EDTCache &Cache) : Cache(Cache), Env(this){};
-
+  EDT(EDTCache &Cache, CallBase &CB);
   virtual ~EDT() = default;
 
   void insertValueToEnv(Value *Val);
@@ -151,74 +123,58 @@ public:
   CallBase *getCall() { return OutlinedFnCall; }
   Function *getOutlinedFn() { return OutlinedFn; }
   EDTEnvironment &getDataEnv() { return Env; }
-  EDTTask *getTask() { return Task; }
-  void setTask(EDTTask *T) { Task = T; }
-  // string getName() { return Task->getName(); }
-  StringRef getOutlinedFnName() {
-    if (!OutlinedFn)
-      return "MainFunction";
-    return OutlinedFn->getName();
-  }
+  StringRef getName() { return OutlinedFn->getName(); }
 
   virtual void createTask() = 0;
-  virtual void setDataEnv(CallBase *CB) = 0;
+  // virtual void setDataEnv(CallBase *CB) = 0;
 
 protected:
   EDTCache &Cache;
   EDTEnvironment Env;
   EDTTask *Task;
+private:
+  uint32_t ID;
   /// Outlined Function Info
   CallBase *OutlinedFnCall = nullptr;
   Function *OutlinedFn = nullptr;
-  DenseMap<Value *, Value *> RewiringMap;
 };
 
 inline raw_ostream &operator<<(raw_ostream &OS, EDT &E) {
-  OS << "- EDT for" << E.getOutlinedFnName() << "\n";
+  OS << "- EDT for" << E.getName() << "\n";
   OS << E.getDataEnv();
 
   return OS;
 }
 
-class ParallelEDT : public EDT {
-public:
-  ParallelEDT(EDTCache &Cache) : EDT(Cache) {}
-  ParallelEDT(EDTCache &Cache, CallBase *OutlinedFnCall);
-  ~ParallelEDT() = default;
+// class ParallelEDT : public EDT {
+// public:
+//   ParallelEDT(EDTCache &Cache) : EDT(Cache) {}
+//   ParallelEDT(EDTCache &Cache, CallBase *OutlinedFnCall);
+//   ~ParallelEDT() = default;
 
-  void createTask() override;
-  void setDataEnv(CallBase *CB) override;
-};
+//   void createTask() override;
+//   void setDataEnv(CallBase *CB) override;
+// };
 
-class ParallelDoneEDT : public EDT {
-public:
-  ParallelDoneEDT(EDTCache &Cache) : EDT(Cache) {}
-  ParallelDoneEDT(EDTCache &Cache, CallBase *OutlinedFnCall);
-  ~ParallelDoneEDT() = default;
+// class TaskEDT : public EDT {
+// public:
+//   TaskEDT(EDTCache &Cache) : EDT(Cache) {}
+//   TaskEDT(EDTCache &Cache, CallBase *OutlinedFnCall);
+//   ~TaskEDT() = default;
 
-  void createTask() override;
-  void setDataEnv(CallBase *CB) override;
-  void createOutlinedFn(CallBase *CB);
-};
+//   void createTask() override;
+//   void setDataEnv(CallBase *CB) override;
+// };
 
-class TaskEDT : public EDT {
-public:
-  TaskEDT(EDTCache &Cache) : EDT(Cache) {}
-  TaskEDT(EDTCache &Cache, CallBase *OutlinedFnCall);
-  ~TaskEDT() = default;
+// class MainEDT : public EDT {
+// public:
+//   MainEDT(EDTCache &Cache) : EDT(Cache) {}
+//   ~MainEDT() = default;
 
-  void createTask() override;
-  void setDataEnv(CallBase *CB) override;
-};
+//   void createTask() override;
+//   void setDataEnv(CallBase *CB) override;
+// };
 
-class MainEDT : public EDT {
-public:
-  MainEDT(EDTCache &Cache) : EDT(Cache) {}
-  ~MainEDT() = default;
-
-  void createTask() override;
-  void setDataEnv(CallBase *CB) override;
-};
 // inline raw_ostream &operator<<(raw_ostream &OS, EDTTask &Task) {
 //   OS << "EDT #" << Task.getID() << "\n";
 //   // OS << Task.getEnv();

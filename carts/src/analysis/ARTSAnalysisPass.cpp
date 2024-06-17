@@ -14,31 +14,31 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO/Attributor.h"
 
-#include "carts/transform/OMPTransform.h"
+// #include "carts/transform/OMPTransform.h"
 #include "carts/utils/ARTSUtils.h"
 
 using namespace llvm;
 using namespace arts;
-using namespace arts::omp;
+// using namespace arts::omp;
 using namespace arts::utils;
 
 /// DEBUG
-#define DEBUG_TYPE "omp-transform"
+#define DEBUG_TYPE "arts-analysis"
 #if !defined(NDEBUG)
 static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 #endif
 
 /// ------------------------------------------------------------------- ///
-///                        OMPTransformPass                             ///
+///                        ARTSAnalysisPass                             ///
 /// ------------------------------------------------------------------- ///
-class OMPTransformPass : public PassInfoMixin<OMPTransformPass> {
+class ARTSAnalysisPass : public PassInfoMixin<ARTSAnalysisPass> {
 public:
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
 };
 
-PreservedAnalyses OMPTransformPass::run(Module &M, ModuleAnalysisManager &AM) {
+PreservedAnalyses ARTSAnalysisPass::run(Module &M, ModuleAnalysisManager &AM) {
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << TAG << "Running OmpTransformPass on Module: \n"
+  LLVM_DEBUG(dbgs() << TAG << "Running ARTSAnalysisPass on Module: \n"
                     << M.getName() << "\n");
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   FunctionAnalysisManager &FAM =
@@ -61,7 +61,7 @@ PreservedAnalyses OMPTransformPass::run(Module &M, ModuleAnalysisManager &AM) {
   InformationCache InfoCache(M, AG, Allocator, &Functions);
   Attributor A(Functions, InfoCache, CGUpdater, nullptr, true, false);
   /// Register attributes for functions
-  for (Function *F : Functions) {
+  for (Function *F : Functions) { 
     for (Argument &Arg : F->args())
       A.getOrCreateAAFor<AAMemoryBehavior>(IRPosition::argument(Arg));
   }
@@ -72,7 +72,7 @@ PreservedAnalyses OMPTransformPass::run(Module &M, ModuleAnalysisManager &AM) {
 
   /// Print module info
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << TAG << "OmpTransformPass has finished\n\n" << M << "\n");
+  LLVM_DEBUG(dbgs() << TAG << "ARTSAnalysisPass has finished\n\n" << M << "\n");
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   return PreservedAnalyses::all();
 }
@@ -85,7 +85,7 @@ llvmGetPassPluginInfo() {
                 [](StringRef Name, ModulePassManager &FPM,
                    ArrayRef<PassBuilder::PipelineElement>) {
                   if (Name == "omp-transform") {
-                    FPM.addPass(OMPTransformPass());
+                    FPM.addPass(ARTSAnalysisPass());
                     return true;
                   }
                   return false;

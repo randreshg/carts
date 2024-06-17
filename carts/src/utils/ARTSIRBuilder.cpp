@@ -1,3 +1,4 @@
+#include "llvm/ADT/StringRef.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Metadata.h"
@@ -103,12 +104,12 @@ CallBase *EDTIRBuilder::buildEDT(
 
 void EDTIRBuilder::setMetadata(Function &Fn) {
   LLVMContext &Ctx = Fn.getContext();
-  auto TyStr = toString(Ty);
+  StringRef TyStr = toString(Ty);
   /// Metadata Nodes for Argument Values
   SmallVector<Metadata *, 16> ArgMDs;
   for (auto *CallArg : CallArgs) {
     EDTArgType CallTy = CallArgTypeMap[CallArg];
-    auto MDStr = "edt.arg." + toString(CallTy);
+    StringRef MDStr = "edt.arg." + toString(CallTy);
     ArgMDs.push_back(MDString::get(Ctx, MDStr));
   }
   MDNode *ArgNode = MDNode::get(Ctx, ArgMDs);

@@ -42,7 +42,7 @@ EDTGraph::EDTGraph(EDTCache &Cache) : Cache(Cache) {
   //   auto &FromEDT = *FromEDTNode.getEDT();
   //   /// Analyze outgoing edges
   //   auto OutEdges = getOutgoingEdges(&FromEDTNode);
-  //   LLVM_DEBUG(dbgs() << "- EDT \"" << FromEDT.getOutlinedFnName() << "\"\n");
+  //   LLVM_DEBUG(dbgs() << "- EDT \"" << FromEDT.getName() << "\"\n");
   //   if (OutEdges.size() == 0) {
   //     LLVM_DEBUG(dbgs() << "   - The EDT doesn't have outgoing edges\n");
   //     continue;
@@ -56,8 +56,8 @@ EDTGraph::EDTGraph(EDTCache &Cache) : Cache(Cache) {
   //       /// The edge from @fromNode to @toNode is not a creation edge.
   //       /// It is a data or control edge.
   //       LLVM_DEBUG(dbgs() << "   - The edge from \""
-  //                         << FromEDT.getOutlinedFnName() << "\" to \""
-  //                         << DepEdge->getTo()->getEDT()->getOutlinedFnName()
+  //                         << FromEDT.getName() << "\" to \""
+  //                         << DepEdge->getTo()->getEDT()->getName()
   //                         << "\" is not a creation edge\n");
   //       continue;
   //     }
@@ -66,7 +66,7 @@ EDTGraph::EDTGraph(EDTCache &Cache) : Cache(Cache) {
   //     auto *ToEDTCall = ToEDT.getCall();
   //     assert(ToEDTCall != nullptr && "The EDT doesn't have a call");
 
-  //     LLVM_DEBUG(dbgs() << "   - EDT \"" << ToEDT.getOutlinedFnName()
+  //     LLVM_DEBUG(dbgs() << "   - EDT \"" << ToEDT.getName()
   //                       << "\" depends on:\n");
   //     /// DepV are the values that the EDT depends on.
   //     auto &ToDE = ToEDT.getDataEnv();
@@ -286,8 +286,8 @@ EDTGraphEdge *EDTGraph::fetchOrCreateEdge(EDTGraphNode *From, EDTGraphNode *To,
   if (ExistingEdge == nullptr) {
     /// The edge from @fromNode to @toNode doesn't exist yet
     LLVM_DEBUG(dbgs() << "        - Creating edge from \""
-                      << From->getEDT()->getOutlinedFnName() << "\" to \""
-                      << To->getEDT()->getOutlinedFnName() << "\"\n");
+                      << From->getEDT()->getName() << "\" to \""
+                      << To->getEDT()->getName() << "\"\n");
     EDTGraphEdge *NewEdge;
     if (IsDataEdge) {
       NewEdge = new EDTGraphDataEdge(From, To);
@@ -310,8 +310,8 @@ EDTGraphEdge *EDTGraph::fetchOrCreateEdge(EDTGraphNode *From, EDTGraphNode *To,
     assert(ExistingEdge->hasCreationDep() &&
            "The edge is not a creation edge - Can not convert to Data Edge");
     LLVM_DEBUG(dbgs() << "        - Converting edge from \""
-                      << From->getEDT()->getOutlinedFnName() << "\" to \""
-                      << To->getEDT()->getOutlinedFnName() << "\"\n");
+                      << From->getEDT()->getName() << "\" to \""
+                      << To->getEDT()->getName() << "\"\n");
     auto *NewDataEdge = new EDTGraphDataEdge(From, To);
     NewDataEdge->setCreationDep(true);
     removeEdge(ExistingEdge);
@@ -371,7 +371,7 @@ void EDTGraph::print(void) {
   /// Print the outgoing edges.
   for (auto *EDTNode : getNodes()) {
     auto *E = EDTNode->getEDT();
-    LLVM_DEBUG(dbgs() << "- EDT \"" << E->getOutlinedFnName() << "\"\n");
+    LLVM_DEBUG(dbgs() << "- EDT \"" << E->getName() << "\"\n");
     /// Data environment
     LLVM_DEBUG(dbgs() << "  - Data Environment:\n");
     auto &DE = E->getDataEnv();
@@ -403,7 +403,7 @@ void EDTGraph::print(void) {
         } else if (DepEdge->isControlEdge()) {
           LLVM_DEBUG(dbgs() << "control");
         }
-        LLVM_DEBUG(dbgs() << "] \"" << FromE->getOutlinedFnName() << "\"\n");
+        LLVM_DEBUG(dbgs() << "] \"" << FromE->getName() << "\"\n");
       }
     }
 
@@ -424,7 +424,7 @@ void EDTGraph::print(void) {
         } else if (DepEdge->isControlEdge()) {
           LLVM_DEBUG(dbgs() << "control");
         }
-        LLVM_DEBUG(dbgs() << "] \"" << ToE->getOutlinedFnName() << "\"\n");
+        LLVM_DEBUG(dbgs() << "] \"" << ToE->getName() << "\"\n");
         if (DepEdge->isDataEdge()) {
           auto *DataEdge = cast<EDTGraphDataEdge>(DepEdge);
           auto Values = DataEdge->getValues();

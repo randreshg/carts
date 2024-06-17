@@ -29,7 +29,7 @@ struct ARTSAnalyzer {
   /// This function identifies the EDTs in the function
   bool identifyEDTs(Function &F);
   /// Analyze EDTs
-  void analyzeDeps();
+  // void analyzeDeps();
   /// Handle OpenMP calls
   Instruction *handleParallelRegion(CallBase *CB);
   Instruction *handleParallelDoneRegion(CallBase *CB);
