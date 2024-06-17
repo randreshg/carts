@@ -18,57 +18,6 @@ namespace arts {
 using namespace std;
 using namespace llvm;
 using namespace arts::types;
-/// ------------------------------------------------------------------- ///
-///                            EDT Metadata                             ///
-/// ------------------------------------------------------------------- ///
-// class EDTMetadata {
-// public:
-//   EDTMetadata(MDNode *Node) : Node(Node) {}
-//   ~EDTMetadata() {}
-
-// private:
-//   /// MDNode for the EDT Metadata
-//   MDNode *Node;
-// };
-
-// class ParallelEDTMetadata : public EDTMetadata {
-// public:
-//   ParallelEDTMetadata(MDNode *Node) : EDTMetadata(Node) {}
-//   ~ParallelEDTMetadata() {}
-
-//   uint32_t getNumberOfThreads() const;
-//   void setNumberOfThreads(uint32_t NumThreads);
-// };
-
-// class TaskEDTMetadata : public EDTMetadata {
-// public:
-//   TaskEDTMetadata(MDNode *Node) : EDTMetadata(Node) {}
-//   ~TaskEDTMetadata() {}
-
-//   // uint32_t getNumberOfThreads() const;
-// };
-
-// class MainEDTMetadata : public EDTMetadata {
-// public:
-//   MainEDTMetadata(MDNode *Node) : EDTMetadata(Node) {}
-//   ~MainEDTMetadata() {}
-
-//   // uint32_t getNumberOfThreads() const;
-// };
-
-/// ------------------------------------------------------------------- ///
-///                          ARTS IR BUILDER                            ///
-/// An interface to create LLVM-IR for ARTS directives.
-/// ------------------------------------------------------------------- ///
-// class ARTSIRBuilder {
-// public:
-//   /// Create a new ARTSIRBuilder operating on the given module \p M.
-//   // ARTSIRBuilder(Module &M) : M(M) {}
-//   ARTSIRBuilder() {}
-//   virtual ~ARTSIRBuilder() = default;
-//   /// Set EDTMetadata
-//   virtual void setMetadata();
-// };
 
 /// ------------------------------------------------------------------- ///
 ///                          EDT IR BUILDER                             ///

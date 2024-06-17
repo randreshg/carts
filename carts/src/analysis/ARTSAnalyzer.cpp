@@ -1,4 +1,6 @@
-// #include "ARTSAnalyzer.h"
+#include "carts/analysis/ARTSAnalyzer.h"
+
+
 // #include "ARTS.h"
 // #include "ARTSUtils.h"
 
@@ -6,92 +8,81 @@
 // #include "llvm/IR/Function.h"
 // #include "llvm/IR/Instruction.h"
 // #include "llvm/IR/LLVMContext.h"
-// #include "llvm/Support/Debug.h"
+#include "llvm/Support/Debug.h"
 // #include "llvm/Transforms/Utils/Local.h"
 
-// /// DEBUG
-// #define DEBUG_TYPE "arts-analyzer"
-// #if !defined(NDEBUG)
-// static constexpr auto TAG = "[" DEBUG_TYPE "] ";
-// #endif
+/// DEBUG
+#define DEBUG_TYPE "arts-analyzer"
+#if !defined(NDEBUG)
+static constexpr auto TAG = "[" DEBUG_TYPE "] ";
+#endif
 
 // /// Namespaces
 // using namespace llvm;
-// using namespace arts;
+using namespace arts;
 // using namespace arts_utils;
-// using namespace arts_utils::omp;
 
-// void ARTSAnalyzer::debug() {
-//   LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - -\n");
-//   LLVM_DEBUG(dbgs() << "EDTs: " << EDTs.size() << "\n");
-//   for (auto *E : EDTs)
-//     LLVM_DEBUG(dbgs() << "- " << *E << "\n");
-//   LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - -\n");
-// }
+void ARTSAnalyzer::debug() {
+  LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - -\n");
+  LLVM_DEBUG(dbgs() << "EDTs: " << EDTs.size() << "\n");
+  for (auto *E : EDTs)
+    LLVM_DEBUG(dbgs() << "- " << *E << "\n");
+  LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - -\n");
+}
 
-// bool ARTSAnalyzer::identifyEDTs(Function &F) {
-//   /// This function identifies the regions that will be transformed to
-//   /// have and EDT initializer.
-//   /// If a basic block contains a call to the following functions, it
-//   /// most likely can be transformed to an EDT:
-//   /// - __kmpc_fork_call.
-//   /// - __kmpc_single
-//   /// - __kmpc_omp_taskwait or __kmpc_omp_taskwait_deps
-//   /// - function with a pointer return type (not void) that is used
-//   ///   after the call.
+bool ARTSAnalyzer::identifyEDTs(Function &F) {
+  /// This function identifies the call to EDT functions and creates the
+  /// necessary EDTs for the program.
 
-//   /// Remove of lifetime markers
-//   removeLifetimeMarkers(F);
+  LLVM_DEBUG(dbgs() << "--------------------------------------------------\n");
+  LLVM_DEBUG(dbgs() << TAG << "Identifying EDTs for: " << F.getName() << "\n");
 
-//   LLVM_DEBUG(dbgs() << "--------------------------------------------------\n");
-//   LLVM_DEBUG(dbgs() << TAG << "Identifying EDTs for: " << F.getName() << "\n");
+  /// If function is not IPO amendable, we give up
+  if (F.isDeclaration() && !F.hasLocalLinkage())
+    return false;
 
-//   /// If function is not IPO amendable, we give up
-//   if (F.isDeclaration() && !F.hasLocalLinkage())
-//     return false;
-
-//   /// Get entry block
-//   BasicBlock *CurrentBB = &(F.getEntryBlock());
-//   BasicBlock *NextBB = nullptr;
-//   do {
-//     NextBB = CurrentBB->getNextNode();
-//     /// Get first instruction of the function
-//     Instruction *CurrentI = &(CurrentBB->front());
-//     do {
-//       /// We are only interested in call instructions
-//       auto *CB = dyn_cast<CallBase>(CurrentI);
-//       if (!CB)
-//         continue;
-//       /// Get the callee
-//       omp::Type RTF = omp::getRTFunction(*CB);
-//       switch (RTF) {
-//       case omp::PARALLEL: {
-//         LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
-//         LLVM_DEBUG(dbgs() << TAG << "Parallel Region Found: " << *CB << "\n");
-//         CurrentI = handleParallelRegion(CB);
-//         LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
-//       } break;
-//       case omp::TASKALLOC: {
-//         LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
-//         LLVM_DEBUG(dbgs() << TAG << "Task Region Found: " << *CB << "\n");
-//         CurrentI = handleTaskRegion(CB);
-//         LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
-//       } break;
-//       case omp::TASKWAIT: {
-//         assert(false && "Taskwait not implemented yet");
-//       } break;
-//       case omp::OTHER: {
-//         LLVM_DEBUG(dbgs() << TAG << "Other Function Found: " << "\n  " << *CB
-//                           << "\n");
-//       } break;
-//       default:
-//         continue;
-//         break;
-//       }
-//     } while ((CurrentI = CurrentI->getNextNonDebugInstruction()));
-//   } while ((CurrentBB = NextBB));
-//   return true;
-// }
+  /// Get entry block
+  BasicBlock *CurrentBB = &(F.getEntryBlock());
+  BasicBlock *NextBB = nullptr;
+  do {
+    NextBB = CurrentBB->getNextNode();
+    /// Get first instruction of the function
+    Instruction *CurrentI = &(CurrentBB->front());
+    do {
+      /// We are only interested in call instructions
+      auto *CB = dyn_cast<CallBase>(CurrentI);
+      if (!CB)
+        continue;
+      /// Get the callee
+      // omp::Type RTF = omp::getRTFunction(*CB);
+      // switch (RTF) {
+      // case omp::PARALLEL: {
+      //   LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
+      //   LLVM_DEBUG(dbgs() << TAG << "Parallel Region Found: " << *CB << "\n");
+      //   CurrentI = handleParallelRegion(CB);
+      //   LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
+      // } break;
+      // case omp::TASKALLOC: {
+      //   LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
+      //   LLVM_DEBUG(dbgs() << TAG << "Task Region Found: " << *CB << "\n");
+      //   CurrentI = handleTaskRegion(CB);
+      //   LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
+      // } break;
+      // case omp::TASKWAIT: {
+      //   assert(false && "Taskwait not implemented yet");
+      // } break;
+      // case omp::OTHER: {
+      //   LLVM_DEBUG(dbgs() << TAG << "Other Function Found: " << "\n  " << *CB
+      //                     << "\n");
+      // } break;
+      // default:
+      //   continue;
+      //   break;
+      // }
+    } while ((CurrentI = CurrentI->getNextNonDebugInstruction()));
+  } while ((CurrentBB = NextBB));
+  return true;
+}
 
 // void ARTSAnalyzer::analyzeDeps() {
 //   /// This function analyzes de EDT and finds dependencies between them.

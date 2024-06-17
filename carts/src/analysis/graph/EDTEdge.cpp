@@ -22,9 +22,9 @@ EDTGraphEdge::~EDTGraphEdge() {}
 
 void EDTGraphEdge::print(void) {
   LLVM_DEBUG(dbgs() << "EDT EDGE:\n");
-  LLVM_DEBUG(dbgs() << "  - From: " << From->getEDT()->getOutlinedFnName()
+  LLVM_DEBUG(dbgs() << "  - From: " << From->getEDT()->getName()
                     << "\n");
-  LLVM_DEBUG(dbgs() << "  - To: " << To->getEDT()->getOutlinedFnName() << "\n");
+  LLVM_DEBUG(dbgs() << "  - To: " << To->getEDT()->getName() << "\n");
 }
 
 /// EDTGraphControlEdge

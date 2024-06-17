@@ -46,19 +46,24 @@ int main() {
   int NewRandom = rand();
   #pragma omp parallel
   {
-    #pragma omp task firstprivate(random_number, NewRandom)
+
+    #pragma omp single 
     {
-      printf("I think the number is %d/%d. with %d -- %d\n", number,
-             shared_number, random_number, NewRandom);
-      number++;
-      shared_number--;
+      #pragma omp task firstprivate(random_number, NewRandom)
+      {
+        printf("I think the number is %d/%d. with %d -- %d\n", number,
+              shared_number, random_number, NewRandom);
+        number++;
+        shared_number--;
+      }
+      shared_number++;
+      #pragma omp task firstprivate(number) shared(shared_number)
+      {
+        printf("I think the number is %d - %d.\n", number, shared_number);
+        number++;
+      }
     }
-    shared_number++;
-    #pragma omp task firstprivate(number) shared(shared_number)
-    {
-      printf("I think the number is %d - %d.\n", number, shared_number);
-      number++;
-    }
+    
   }
   printf("The final number is %d - % d.\n", number, random_number);
   return 0;

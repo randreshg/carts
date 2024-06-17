@@ -23,7 +23,7 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 
 /// EDT Types
 namespace arts::types {
-string toString(EDTType Ty) {
+StringRef toString(EDTType Ty) {
   switch (Ty) {
   case EDTType::Parallel:
     return "parallel";
@@ -37,7 +37,7 @@ string toString(EDTType Ty) {
   return "unknown";
 }
 
-string toString(EDTArgType Ty) {
+StringRef toString(EDTArgType Ty) {
   switch (Ty) {
   case EDTArgType::Param:
     return "param";

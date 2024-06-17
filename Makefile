@@ -51,7 +51,7 @@ llvm: .llvm
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
 	ninja -C $</build -j32 install
 llvm-clean:
-	[[ -d $(LLVM_DIR) ]] && make -C $(LLVM_DIR) uninstall
+	# [[ -d $(LLVM_DIR) ]] && make -C $(LLVM_DIR) uninstall
 	[[ -d $(LLVM_DIR) ]] && rm -rf $(LLVM_DIR)
 	rm -f -r $(LLVM_INSTALL_DIR)
 
