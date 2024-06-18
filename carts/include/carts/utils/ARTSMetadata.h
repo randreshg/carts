@@ -3,12 +3,11 @@
 
 #include <cstdint>
 
-// #include "carts/analysis/ARTS.h"
 #include "carts/utils/ARTSIRBuilder.h"
-#include "llvm/ADT/SetVector.h"
+#include "carts/utils/ARTSTypes.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Function.h"
-
+#include "llvm/IR/GlobalValue.h"
 
 /// ------------------------------------------------------------------- ///
 ///                            ARTS METADATA                            ///
@@ -57,26 +56,38 @@ public:
   EDTMetadata(Function &Fn);
   ~EDTMetadata();
 
+  /// Static functions
   static EDTMetadata *getEDT(Function &Fn);
   static string getName(EDTType Ty);
   static void setMetadata(Function &Fn, EDTIRBuilder &Builder);
   static bool classof(const EDTMetadata *M) { return true; }
+
+  /// Getters
   Function &getFunction() { return Fn; }
+  EDTType getTy() const { return Ty; }
 
 private:
-  // MDNode *Node;
   Function &Fn;
   SmallVector<EDTArgMetadata, 4> Args;
+protected:
+  EDTType Ty = EDTType::Unknown;
 };
 
 class ParallelEDTMetadata : public EDTMetadata {
 public:
-  ParallelEDTMetadata(Function &Fn) : EDTMetadata(Fn) {}
+  ParallelEDTMetadata(Function &Fn) : EDTMetadata(Fn) {
+    Ty = EDTType::Parallel;
+  }
   ~ParallelEDTMetadata() {}
   static string getName();
-  // static bool classof(const EDTMetadata *M);
+  static bool classof(const EDTMetadata *M) {
+    return M->getTy() == EDTType::Parallel;
+  }
 
-  uint32_t getNumberOfThreads() const { return 1; }
+  uint32_t getNumberOfThreads() const { return NumberOfThreads; }
+
+private:
+  uint32_t NumberOfThreads = 1;
 };
 
 class TaskEDTMetadata : public EDTMetadata {
@@ -84,9 +95,14 @@ public:
   TaskEDTMetadata(Function &Fn) : EDTMetadata(Fn) {}
   ~TaskEDTMetadata() {}
   static string getName();
-  // static bool classof(const EDTMetadata *M);
+  static bool classof(const EDTMetadata *M) {
+    return M->getTy() == EDTType::Task;
+  }
 
-  uint32_t getThreadNumber() const { return 0; }
+  uint32_t getThreadNumber() const { return ThreadNumber; }
+
+private:
+  uint32_t ThreadNumber = 0;
 };
 
 class MainEDTMetadata : public EDTMetadata {
@@ -94,7 +110,9 @@ public:
   MainEDTMetadata(Function &Fn) : EDTMetadata(Fn) {}
   ~MainEDTMetadata() {}
   static string getName();
-  // static bool classof(const EDTMetadata *M);
+  static bool classof(const EDTMetadata *M) {
+    return M->getTy() == EDTType::Main;
+  }
 };
 
 } // namespace arts

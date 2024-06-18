@@ -5,43 +5,18 @@
 #define LLVM_ARTS_H
 
 #include "llvm/ADT/SetVector.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Module.h"
 #include <sys/types.h>
 
+#include "carts/utils/ARTSMetadata.h"
+
 
 namespace arts {
 using namespace llvm;
 using namespace std;
-
-/// Namespace for all ARTS related functionality.
-using BlockSequence = SmallVector<BasicBlock *, 0>;
-/// ------------------------------------------------------------------- ///
-///                            ART TYPES                                ///
-/// It contains the types used by the ARTS runtime library.
-/// ------------------------------------------------------------------- ///
-namespace types {
-/// EDT types
-enum class EDTType { Parallel, Task, Main, Unknown };
-enum class EDTArgType { Param, Dep, Unknown };
-Twine toString(EDTType Ty);
-Twine toString(EDTArgType Ty);
-EDTType toEDTType(StringRef Str);
-EDTArgType toEDTArgType(StringRef Str);
-/// IDs for all arts runtime library (RTL) functions.
-enum class RuntimeFunction {
-#define ARTS_RTL(Enum, ...) Enum,
-#include "carts/codegen/ARTSKinds.def"
-};
-
-#define ARTS_RTL(Enum, ...)                                                    \
-  constexpr auto Enum = arts::types::RuntimeFunction::Enum;
-#include "carts/codegen/ARTSKinds.def"
-
-} // end namespace types
 
 /// ------------------------------------------------------------------- ///
 ///                          DATA ENVIRONMENT                           ///
@@ -108,11 +83,10 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDTEnvironment &Env) {
 /// in the program.
 /// ------------------------------------------------------------------- ///
 class EDTTask;
-class EDTMetadata;
-// class EDTMetadata;
+
 class EDT {
 public:
-  EDT(EDTCache &Cache, EDTMetadata &MD, CallBase *Call);
+  EDT(EDTCache &Cache, EDTMetadata *MD, CallBase *Call);
   virtual ~EDT() = default;
   /// Data environment
   void insertValueToEnv(Value *Val);
@@ -121,13 +95,15 @@ public:
   CallBase *getCall();
   Function *getFn();
   EDTEnvironment &getDataEnv();
+  virtual EDTMetadata *getMD();
   Twine getName();
   uint32_t getID();
 
 protected:
   EDTCache &Cache;
-  EDTMetadata &MD;
+  EDTMetadata *MD;
   EDTEnvironment Env;
+
 private:
   CallBase *Call = nullptr;
   static uint32_t ID;
@@ -140,34 +116,26 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDT &E) {
   return OS;
 }
 
-// class ParallelEDT : public EDT {
-// public:
-//   ParallelEDT(EDTCache &Cache) : EDT(Cache) {}
-//   ParallelEDT(EDTCache &Cache, CallBase *Call);
-//   ~ParallelEDT() = default;
+class ParallelEDT : public EDT {
+public:
+  ParallelEDT(EDTCache &Cache, EDTMetadata *MD, CallBase *Call);
+  ~ParallelEDT() = default;
+  ParallelEDTMetadata *getMD() override;
+};
 
-//   void createTask() override;
-//   void setDataEnv(CallBase *CB) override;
-// };
+class TaskEDT : public EDT {
+public:
+  TaskEDT(EDTCache &Cache, EDTMetadata *MD, CallBase *Call);
+  ~TaskEDT() = default;
+  TaskEDTMetadata *getMD() override;
+};
 
-// class TaskEDT : public EDT {
-// public:
-//   TaskEDT(EDTCache &Cache) : EDT(Cache) {}
-//   TaskEDT(EDTCache &Cache, CallBase *Call);
-//   ~TaskEDT() = default;
-
-//   void createTask() override;
-//   void setDataEnv(CallBase *CB) override;
-// };
-
-// class MainEDT : public EDT {
-// public:
-//   MainEDT(EDTCache &Cache) : EDT(Cache) {}
-//   ~MainEDT() = default;
-
-//   void createTask() override;
-//   void setDataEnv(CallBase *CB) override;
-// };
+class MainEDT : public EDT {
+public:
+  MainEDT(EDTCache &Cache, EDTMetadata *MD, CallBase *Call);
+  ~MainEDT() = default;
+  MainEDTMetadata *getMD() override;
+};
 
 // inline raw_ostream &operator<<(raw_ostream &OS, EDTTask &Task) {
 //   OS << "EDT #" << Task.getID() << "\n";

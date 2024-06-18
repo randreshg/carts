@@ -12,7 +12,6 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO/Attributor.h"
 
-#include "carts/analysis/ARTS.h"
 #include "carts/transform/OMPTransform.h"
 #include "carts/utils/ARTSIRBuilder.h"
 #include "carts/utils/ARTSUtils.h"
