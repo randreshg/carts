@@ -17,7 +17,7 @@ using namespace llvm;
 using namespace arts::types;
 
 EDTMetadata *EDTMetadata::getEDT(Function &Fn) {
-  LLVMContext &C = Fn.getContext();
+  // LLVMContext &C = Fn.getContext();
   // if (Fn.hasFnAttribute(ARTS::Parallel))
   //   return new ParallelEDTMetadata(Fn);
   // SmallVector<std::pair<unsigned, MDNode *>, 4> MDs;

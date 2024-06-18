@@ -8,11 +8,9 @@
 #ifndef LLVM_API_CARTS_ARTSIRBUILDER_H
 #define LLVM_API_CARTS_ARTSIRBUILDER_H
 
-#include "llvm/ADT/SetVector.h"
-#include "llvm/IR/Metadata.h"
-#include "llvm/IR/Module.h"
-
-#include "carts/analysis/ARTS.h"
+#include "carts/utils/ARTSTypes.h"
+#include "llvm/IR/Instruction.h"
+#include "llvm/IR/InstrTypes.h"
 
 namespace arts {
 using namespace std;
