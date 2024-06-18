@@ -60,7 +60,7 @@ declare void @llvm.lifetime.start.p0i8(i64 immarg, i8* nocapture) #1
 declare dso_local i32 @rand() local_unnamed_addr #2
 
 ; Function Attrs: alwaysinline norecurse nounwind uwtable
-define internal void @.omp_outlined.(i32* noalias nocapture noundef readonly %.global_tid., i32* noalias nocapture noundef readnone %.bound_tid., i32* nocapture noundef nonnull readonly align 4 dereferenceable(4) %random_number, i32* nocapture noundef nonnull readonly align 4 dereferenceable(4) %NewRandom, i32* noundef nonnull align 4 dereferenceable(4) %number, i32* noundef nonnull align 4 dereferenceable(4) %shared_number) #3 !11 {
+define internal void @.omp_outlined.(i32* noalias nocapture noundef readonly %.global_tid., i32* noalias nocapture noundef readnone %.bound_tid., i32* nocapture noundef nonnull readonly align 4 dereferenceable(4) %random_number, i32* nocapture noundef nonnull readonly align 4 dereferenceable(4) %NewRandom, i32* noundef nonnull align 4 dereferenceable(4) %number, i32* noundef nonnull align 4 dereferenceable(4) %shared_number) #3 {
 entry:
   %0 = load i32, i32* %.global_tid., align 4, !tbaa !4
   %1 = tail call i8* @__kmpc_omp_task_alloc(%struct.ident_t* nonnull @1, i32 %0, i32 1, i64 48, i64 16, i32 (i32, i8*)* bitcast (i32 (i32, %struct.kmp_task_t_with_privates*)* @.omp_task_entry. to i32 (i32, i8*)*))
@@ -182,7 +182,6 @@ attributes #7 = { inaccessiblememonly nofree nosync nounwind willreturn }
 !8 = !{!9, !11, i64 0}
 !9 = !{!"_ZTS24kmp_task_t_with_privates", !10, i64 0, !12, i64 40}
 !10 = !{!"_ZTS10kmp_task_t", !11, i64 0, !11, i64 8, !5, i64 16, !6, i64 24, !6, i64 32}
-
 !11 = !{!"any pointer", !6, i64 0}
 !12 = !{!"_ZTS15.kmp_privates.t", !5, i64 0, !5, i64 4}
 !13 = !{i64 0, i64 8, !14, i64 8, i64 8, !14}

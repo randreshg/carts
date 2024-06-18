@@ -41,14 +41,14 @@ public:
   CallBase *buildEDT(
       CallBase *OldCB, Function *OldFn,
       function<void(EDTIRBuilder *, Function *, Function *)> fillRewiringMapFn,
-      Instruction *InsertBefore=nullptr);
+      Instruction *InsertBefore = nullptr);
 
   // private:
   EDTType Ty;
   SmallVector<Value *, 16> UnusedArgs;
-  SmallVector<Value *, 16> CallArgs;
   DenseMap<Value *, Value *> RewiringMap;
   /// Maps the call argument to an EDTArgType
+  SmallVector<Value *, 16> CallArgs;
   DenseMap<Value *, EDTArgType> CallArgTypeMap;
 };
 

@@ -44,17 +44,17 @@ bool OMPTransform::run(ModuleAnalysisManager &AM) {
   return true;
 }
 
-void OMPTransform::identifyEDTs(Function &F) {
+void OMPTransform::identifyEDTs(Function &Fn) {
   /// If the function is not analyzable, return
-  if (F.isDeclaration() && !F.hasLocalLinkage())
+  if (Fn.isDeclaration() && !Fn.hasLocalLinkage())
     return;
-  Functions.insert(&F);
+  Functions.insert(&Fn);
   LLVM_DEBUG(dbgs() << "\n- - - - - - - - - - - - - - - - - - - - - - - -\n");
-  LLVM_DEBUG(dbgs() << TAG << "Processing function: " << F.getName() << "\n");
-  removeLifetimeMarkers(F);
+  LLVM_DEBUG(dbgs() << TAG << "Processing function: " << Fn.getName() << "\n");
+  removeLifetimeMarkers(Fn);
 
   /// Get entry block
-  BasicBlock *CurrentBB = &(F.getEntryBlock());
+  BasicBlock *CurrentBB = &(Fn.getEntryBlock());
   BasicBlock *NextBB = nullptr;
   do {
     NextBB = CurrentBB->getNextNode();
@@ -88,22 +88,22 @@ void OMPTransform::identifyEDTs(Function &F) {
       }
     } while ((CurrentI = CurrentI->getNextNonDebugInstruction()));
   } while ((CurrentBB = NextBB));
-  LLVM_DEBUG(dbgs() << TAG << "Processing function: " << F.getName() << " - Finished\n");
+  LLVM_DEBUG(dbgs() << TAG << "Processing function: " << Fn.getName() << " - Finished\n");
   LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - - - -\n");
 }
 
 Instruction *OMPTransform::handleParallelRegion(CallBase &CB) {
   EDTIRBuilder IRB(EDTType::Parallel);
-  auto *OutlinedFn = getOutlinedFunction(&CB);
+  auto *Fn = getOutlinedFunction(&CB);
   const OMPData &RTI = getRTData(getRTFunction(CB));
   Use *CallArgItr = CB.arg_begin() + RTI.KeepCallArgsFrom;
-  Argument *FnArgItr = OutlinedFn->arg_begin() + RTI.KeepFnArgsFrom;
+  Argument *FnArgItr = Fn->arg_begin() + RTI.KeepFnArgsFrom;
   /// Insert unused arguments
-  for (auto *FnArg = OutlinedFn->arg_begin(); FnArg != FnArgItr; ++FnArg) {
+  for (auto *FnArg = Fn->arg_begin(); FnArg != FnArgItr; ++FnArg) {
     IRB.insertUnusedArg(FnArg);
   }
   /// Insert call arguments
-  for (; FnArgItr < OutlinedFn->arg_end(); ++CallArgItr, ++FnArgItr) {
+  for (; FnArgItr < Fn->arg_end(); ++CallArgItr, ++FnArgItr) {
     Value *CallV = *CallArgItr;
     if (dyn_cast<PointerType>(CallV->getType()))
       IRB.insertDep(CallV);
@@ -123,7 +123,7 @@ Instruction *OMPTransform::handleParallelRegion(CallBase &CB) {
   };
 
   /// Build the EDT
-  auto *NewCB = IRB.buildEDT(&CB, OutlinedFn, fillRewiringMapFn);
+  auto *NewCB = IRB.buildEDT(&CB, Fn, fillRewiringMapFn);
   identifyEDTs(*NewCB->getCalledFunction());
   auto *NextInst = handleParallelDoneRegion(*NewCB);
   return NextInst;
@@ -233,10 +233,10 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
   } while ((CurI = CurI->getNextNonDebugInstruction()));
 
   /// Rewrite Task Outlined Function arguments to match the Task Data
-  auto *OutlinedFn = omp::getOutlinedFunction(&CB);
-  Argument *TaskData = dyn_cast<Argument>(OutlinedFn->arg_begin() + 1);
+  auto *Fn = omp::getOutlinedFunction(&CB);
+  Argument *TaskData = dyn_cast<Argument>(Fn->arg_begin() + 1);
   /// This assumes the 'disaggregation' happens in the first basic block
-  BasicBlock &EntryBB = OutlinedFn->getEntryBlock();
+  BasicBlock &EntryBB = Fn->getEntryBlock();
   auto *TaskDataPtr = &*(++EntryBB.begin());
   /// Get offsets and values from the Task Data - Task Outlined function
   DenseMap<int64_t, Value *> OffsetToValueOF;
@@ -265,8 +265,8 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
   assert(ValueToOffsetTD.size() == OffsetToValueOF.size() &&
          "ValueToOffsetTD and ValueToOffsetOF have different sizes");
   /// Unused arguments
-  IRB.insertUnusedArg(OutlinedFn->arg_begin());
-  IRB.insertUnusedArg(OutlinedFn->arg_begin() + 1);
+  IRB.insertUnusedArg(Fn->arg_begin());
+  IRB.insertUnusedArg(Fn->arg_begin() + 1);
 
   /// Fill the EDTRewireMap
   auto fillRewiringMapFn = [&](EDTIRBuilder *Me, Function *OldFn,
@@ -282,7 +282,7 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
     }
   };
   /// Build the EDT
-  auto *NewCB = IRB.buildEDT(&CB, OutlinedFn, fillRewiringMapFn, CallToOmpTask);
+  auto *NewCB = IRB.buildEDT(&CB, Fn, fillRewiringMapFn, CallToOmpTask);
   identifyEDTs(*NewCB->getCalledFunction());
   return NewCB;
 }
@@ -294,7 +294,7 @@ namespace arts::omp {
 Function *getOutlinedFunction(CallBase *Call) {
   auto Data = getRTData(getRTFunction(*Call));
   return dyn_cast<Function>(
-      Call->getArgOperand(Data.OutlinedFnPos)->stripPointerCasts());
+      Call->getArgOperand(Data.FnPos)->stripPointerCasts());
 }
 
 OMPData getRTData(OMPType RTF) {
@@ -308,10 +308,10 @@ OMPData getRTData(OMPType RTF) {
   }
 }
 
-OMPType getRTFunction(Function *F) {
-  if (!F)
+OMPType getRTFunction(Function *Fn) {
+  if (!Fn)
     return OMPType::OTHER;
-  auto CalleeName = F->getName();
+  auto CalleeName = Fn->getName();
   if (CalleeName == "__kmpc_fork_call")
     return OMPType::PARALLEL;
   if (CalleeName == "__kmpc_omp_task_alloc")
@@ -341,8 +341,8 @@ OMPType getRTFunction(Instruction *I) {
   return getRTFunction(*CB);
 }
 
-bool isTaskFunction(Function *F) {
-  auto RT = getRTFunction(F);
+bool isTaskFunction(Function *Fn) {
+  auto RT = getRTFunction(Fn);
   if (RT == OMPType::TASK || RT == OMPType::TASKDEP || RT == OMPType::TASKWAIT)
     return true;
   return false;

@@ -22,10 +22,10 @@ test.bc
 [arts-ir-builder] Building EDT:
 Created new function: declare internal void @edt(i32*, i32*, i32*, i32*)
 Rewiring new function arguments:
-  - Rewiring: i32* %random_number -> i32* %0
   - Rewiring: i32* %shared_number -> i32* %3
   - Rewiring: i32* %NewRandom -> i32* %1
   - Rewiring: i32* %number -> i32* %2
+  - Rewiring: i32* %random_number -> i32* %0
 New callsite:   call void @edt(i32* %random_number, i32* %NewRandom, i32* %number, i32* %shared_number)
 [arts-utils]   - Replacing uses of:   call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* nonnull @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* nonnull %random_number, i32* nonnull %NewRandom, i32* nonnull %number, i32* nonnull %shared_number)
 [arts-utils]    - Removing instruction:   call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* nonnull @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* nonnull %random_number, i32* nonnull %NewRandom, i32* nonnull %number, i32* nonnull %shared_number)
@@ -108,9 +108,9 @@ entry:
 [arts-ir-builder] Building EDT:
 Created new function: declare internal void @edt.1(i32*, i32*, i32, i32)
 Rewiring new function arguments:
-  - Rewiring:   %10 = load i32, i32* %6, align 4, !tbaa !18, !alias.scope !15 -> i32 %2
   - Rewiring:   %11 = load i32, i32* %7, align 4, !tbaa !18, !alias.scope !15 -> i32 %3
   - Rewiring:   %.idx2.val = load i32*, i32** %.idx2, align 8, !tbaa !14 -> i32* %1
+  - Rewiring:   %10 = load i32, i32* %6, align 4, !tbaa !18, !alias.scope !15 -> i32 %2
   - Rewiring:   %.idx.val = load i32*, i32** %.idx, align 8, !tbaa !12 -> i32* %0
 New callsite:   call void @edt.1(i32* %2, i32* %3, i32 %10, i32 %13)
 [arts-utils]   - Replacing uses of:   %5 = tail call i8* @__kmpc_omp_task_alloc(%struct.ident_t* nonnull @1, i32 undef, i32 1, i64 48, i64 16, i32 (i32, i8*)* bitcast (i32 (i32, %struct.kmp_task_t_with_privates*)* @.omp_task_entry. to i32 (i32, i8*)*))
@@ -207,8 +207,8 @@ entry:
 [arts-ir-builder] Building EDT:
 Created new function: declare internal void @edt.2(i32*, i32)
 Rewiring new function arguments:
-  - Rewiring:   %5 = load i32, i32* %4, align 4, !tbaa !14, !alias.scope !15 -> i32 %1
   - Rewiring:   %.idx.val = load i32*, i32** %.idx, align 8, !tbaa !12 -> i32* %0
+  - Rewiring:   %5 = load i32, i32* %4, align 4, !tbaa !14, !alias.scope !15 -> i32 %1
 New callsite:   call void @edt.2(i32* %3, i32 %13)
 [arts-utils]   - Replacing uses of:   %8 = tail call i8* @__kmpc_omp_task_alloc(%struct.ident_t* nonnull @1, i32 undef, i32 1, i64 48, i64 8, i32 (i32, i8*)* bitcast (i32 (i32, %struct.kmp_task_t_with_privates.1*)* @.omp_task_entry..5 to i32 (i32, i8*)*))
 [arts-utils]    - Replacing:   %14 = tail call i32 @__kmpc_omp_task(%struct.ident_t* nonnull @1, i32 undef, i8* undef)
@@ -552,7 +552,7 @@ attributes #5 = { inaccessiblememonly nofree nosync nounwind willreturn }
 
 
 -------------------------------------------------
-[omp-transform] OmpTransformPass has finished
+[omp-transform] Module after removing dead instructions
 
 ; ModuleID = 'test.bc'
 source_filename = "test.cpp"
