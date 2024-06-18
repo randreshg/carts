@@ -30,14 +30,15 @@ using namespace std;
 ///   closure.It corresponds to the private variables.
 /// - Depv are the dependencies that are copied into the EDT closure.
 ///   It corresponds to the shared variables.
-/// IMPORTANT: Firstprivate is live-in, shared is both live-in and live-out,
-/// lastprivate is live-out
+/// IMPORTANT: Firstprivate is live-in, shared is both live-in and
+///            live-out, lastprivate is live-out
 /// ------------------------------------------------------------------- ///
 class EDT;
 class EDTCache {
 public:
-  EDTCache(Module &M);
-  ~EDTCache();
+  EDTCache(Module &M): M(M) {};
+  ~EDTCache() = default;
+
 
   void insertEDT(Value *V, EDT *E);
   bool isValueInEDT(Value *V, EDT *E);
@@ -78,12 +79,10 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDTEnvironment &Env) {
 }
 
 /// ------------------------------------------------------------------- ///
-///                          EDT INTERFACE                              ///
+///                               EDT                                  ///
 /// The EDT is the main abstraction used by ARTS to represent the tasks
 /// in the program.
 /// ------------------------------------------------------------------- ///
-class EDTTask;
-
 class EDT {
 public:
   EDT(EDTCache &Cache, EDTMetadata *MD, CallBase *Call);

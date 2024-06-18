@@ -2,14 +2,12 @@
 #include "llvm/Support/Debug.h"
 #include <cassert>
 
-#include "carts/analysis/ARTS.h"
+#include "carts/utils/ARTS.h"
 #include "carts/analysis/graph/EDTEdge.h"
 #include "carts/analysis/graph/EDTGraph.h"
-// #include "carts/utils/ARTSUtils.h"
 
 using namespace llvm;
 using namespace arts;
-// using namespace arts::utils;
 using namespace arcana::noelle;
 using namespace std;
 
@@ -44,6 +42,10 @@ void EDTGraph::createNode(Function &Fn) {
   LLVM_DEBUG(dbgs() << TAG << " Processing function: " << Fn.getName() << "\n");
   auto *ParentEDTNode = getNode(Fn);
   assert(ParentEDTNode != nullptr && "ParentEDTNode is null");
+
+  /// Iterate through all the functions of the module and create the EDT Nodes
+  /// Check callgraph... Analyze functions.
+  /// Recursion? -> Not allowed aas of now
   for (auto &Inst : instructions(&Fn)) {
     auto *CB = dyn_cast<CallBase>(&Inst);
     if (!CB)
