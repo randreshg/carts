@@ -1,26 +1,13 @@
-// Description: Main file for the Compiler for ARTS (OmpTransform) pass.
-#include "llvm/ADT/SetVector.h"
+// Description: Main file for the ARTS Analysis pass.
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
-#include <cstdint>
-
-#include "llvm/Analysis/ValueTracking.h"
-#include "llvm/IR/BasicBlock.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/Instruction.h"
-#include "llvm/IR/Value.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/IPO/Attributor.h"
 
-// #include "carts/transform/OMPTransform.h"
-#include "carts/utils/ARTSUtils.h"
+#include "carts/analysis/graph/EDTGraph.h"
 
 using namespace llvm;
 using namespace arts;
-// using namespace arts::omp;
-using namespace arts::utils;
 
 /// DEBUG
 #define DEBUG_TYPE "arts-analysis"
@@ -31,64 +18,63 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 /// ------------------------------------------------------------------- ///
 ///                        ARTSAnalysisPass                             ///
 /// ------------------------------------------------------------------- ///
-class ARTSAnalysisPass : public PassInfoMixin<ARTSAnalysisPass> {
-public:
-  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
+
+namespace {
+
+struct ARTSAnalysisPass : public ModulePass {
+  static char ID;
+
+  ARTSAnalysisPass() : ModulePass(ID) {}
+
+  bool doInitialization(Module &M) override { return false; }
+
+  bool runOnModule(Module &M) override {
+    LLVM_DEBUG(
+        dbgs() << "\n-------------------------------------------------\n");
+    LLVM_DEBUG(dbgs() << TAG << "Running ARTS Analysis pass on Module: \n"
+                      << M.getName() << "\n");
+    LLVM_DEBUG(
+        dbgs() << "\n-------------------------------------------------\n");
+    /// Fetch NOELLE Manager
+    auto &NM = getAnalysis<Noelle>();
+    EDTNoelleCache Cache(M, NM);
+    EDTGraph EDTG(Cache);
+    // EDTG.print();
+
+    /// Print module info
+    LLVM_DEBUG(
+        dbgs() << "\n-------------------------------------------------\n");
+    LLVM_DEBUG(dbgs() << TAG << "Process has finished\n\n" << M << "\n");
+    LLVM_DEBUG(
+        dbgs() << "\n-------------------------------------------------\n");
+    return false;
+  }
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<Noelle>();
+  }
 };
 
-PreservedAnalyses ARTSAnalysisPass::run(Module &M, ModuleAnalysisManager &AM) {
-  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << TAG << "Running ARTSAnalysisPass on Module: \n"
-                    << M.getName() << "\n");
-  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
-  FunctionAnalysisManager &FAM =
-      AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
-  AnalysisGetter AG(FAM);
-  OMPTransform OT(M, AG);
-  OT.run(AM);
-  /// Get the set of functions in the module
-  SetVector<Function *> Functions;
-  for (Function &F : M) {
-    if (F.isDeclaration() && !F.hasLocalLinkage())
-      continue;
-    removeDeadInstructions(F);
-    Functions.insert(&F);
-  }
+} // namespace
 
-  /// Create attributor
-  CallGraphUpdater CGUpdater;
-  BumpPtrAllocator Allocator;
-  InformationCache InfoCache(M, AG, Allocator, &Functions);
-  Attributor A(Functions, InfoCache, CGUpdater, nullptr, true, false);
-  /// Register attributes for functions
-  for (Function *F : Functions) { 
-    for (Argument &Arg : F->args())
-      A.getOrCreateAAFor<AAMemoryBehavior>(IRPosition::argument(Arg));
-  }
+// Next there is code to register your pass to "opt"
+char ARTSAnalysisPass::ID = 0;
+static RegisterPass<ARTSAnalysisPass> X("ARTSAnalysisPass",
+                                        "Analysis pass for ARTS");
 
-  ChangeStatus Changed = A.run();
-  LLVM_DEBUG(dbgs() << TAG << "[Attributor] Done with " << Functions.size()
-                    << " functions, result: " << Changed << ".\n");
-
-  /// Print module info
-  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << TAG << "ARTSAnalysisPass has finished\n\n" << M << "\n");
-  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
-  return PreservedAnalyses::all();
-}
-
-// This part is the new way of registering your pass
-extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
-llvmGetPassPluginInfo() {
-  return {LLVM_PLUGIN_API_VERSION, "OMPTransform", "v0.1", [](PassBuilder &PB) {
-            PB.registerPipelineParsingCallback(
-                [](StringRef Name, ModulePassManager &FPM,
-                   ArrayRef<PassBuilder::PipelineElement>) {
-                  if (Name == "omp-transform") {
-                    FPM.addPass(ARTSAnalysisPass());
-                    return true;
-                  }
-                  return false;
-                });
-          }};
-}
+// Next there is code to register your pass to "clang"
+static ARTSAnalysisPass *_PassMaker = NULL;
+static RegisterStandardPasses
+    _RegPass1(PassManagerBuilder::EP_OptimizerLast,
+              [](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
+                if (!_PassMaker) {
+                  PM.add(_PassMaker = new ARTSAnalysisPass());
+                }
+              }); // ** for -Ox
+static RegisterStandardPasses
+    _RegPass2(PassManagerBuilder::EP_EnabledOnOptLevel0,
+              [](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
+                if (!_PassMaker) {
+                  PM.add(_PassMaker = new ARTSAnalysisPass());
+                }
+              }); // ** for -O0

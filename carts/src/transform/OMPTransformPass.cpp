@@ -48,13 +48,17 @@ PreservedAnalyses OMPTransformPass::run(Module &M, ModuleAnalysisManager &AM) {
   OT.run(AM);
   /// Get the set of functions in the module
   SetVector<Function *> Functions;
-  for (Function &F : M) {
-    if (F.isDeclaration() && !F.hasLocalLinkage())
+  for (Function &Fn : M) {
+    if (Fn.isDeclaration() && !Fn.hasLocalLinkage())
       continue;
-    removeDeadInstructions(F);
-    Functions.insert(&F);
+    removeDeadInstructions(Fn);
+    Functions.insert(&Fn);
   }
 
+  /// Print module info
+  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
+  LLVM_DEBUG(dbgs() << TAG << "Module after removing dead instructions\n\n" << M << "\n");
+  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   /// Create attributor
   CallGraphUpdater CGUpdater;
   BumpPtrAllocator Allocator;

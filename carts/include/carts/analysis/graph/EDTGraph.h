@@ -4,6 +4,7 @@
 #ifndef LLVM_EDTGRAPH_H
 #define LLVM_EDTGRAPH_H
 
+#include "noelle/core/Noelle.hpp"
 #include "carts/analysis/ARTS.h"
 #include "llvm/IR/Function.h"
 #include <unordered_set>
@@ -14,6 +15,18 @@
 /// in the program.
 /// ------------------------------------------------------------------- ///
 namespace arts {
+using namespace std;
+using namespace arcana::noelle;
+
+class EDTNoelleCache : public EDTCache {
+public:
+  EDTNoelleCache(Module &M, Noelle &NM) : EDTCache(M), NM(NM){}
+  ~EDTNoelleCache() {}
+  Noelle &getNoelle() { return NM; }
+private:
+  Noelle &NM;
+};
+
 class EDTGraphEdge;
 class EDTGraphNode {
 public:
@@ -28,25 +41,27 @@ private:
 
 class EDTGraph {
 public:
-  EDTGraph(EDTCache &Cache);
+  EDTGraph(EDTNoelleCache &Cache);
   ~EDTGraph();
 
   EDTGraphNode *getEntryNode() const;
-  EDTGraphNode *getNode(Function &F) const;
+  EDTGraphNode *getNode(Function &Fn) const;
   EDTGraphNode *getNode(EDT *E) const;
 
 private:
-  void createNode(Function &F);
+  void createNode(Function &Fn);
   void createNodes();
-  std::unordered_set<EDTGraphNode *> getNodes();
+  void analyzeDeps();
+  unordered_set<EDTGraphNode *> getNodes();
   EDTGraphNode *insertNode(EDT *E);
-  EDTGraphNode *insertNode(EDT *E, EDTGraphNode *ParentNode, Function *F = nullptr);
-  EDTGraphNode *insertNode(EDT *E, Function &F);
+  EDTGraphNode *insertNode(EDT *E, EDTGraphNode *ParentNode,
+                           Function *F = nullptr);
+  EDTGraphNode *insertNode(EDT *E, Function &Fn);
   /// Edges
   EDTGraphEdge *getEdge(EDTGraphNode *From, EDTGraphNode *To);
-  std::unordered_set<EDTGraphEdge *> getIncomingEdges(EDTGraphNode *Node);
-  std::unordered_set<EDTGraphEdge *> getOutgoingEdges(EDTGraphNode *Node);
-  std::unordered_set<EDTGraphEdge *> getEdges(EDTGraphNode *Node);
+  unordered_set<EDTGraphEdge *> getIncomingEdges(EDTGraphNode *Node);
+  unordered_set<EDTGraphEdge *> getOutgoingEdges(EDTGraphNode *Node);
+  unordered_set<EDTGraphEdge *> getEdges(EDTGraphNode *Node);
   EDTGraphEdge *fetchOrCreateEdge(EDTGraphNode *From, EDTGraphNode *To,
                                   bool IsDataEdge);
   void addEdge(EDTGraphNode *From, EDTGraphNode *To, EDTGraphEdge *Edge);
@@ -57,13 +72,11 @@ private:
   void removeEdge(EDTGraphNode *From, EDTGraphNode *To);
 
   /// Attributes
-  EDTCache &Cache;
-  std::unordered_map<Function *, EDTGraphNode *> EDTs;
-  std::unordered_map<EDTGraphNode *,
-                     std::unordered_map<EDTGraphNode *, EDTGraphEdge *>>
+  EDTNoelleCache &Cache;
+  unordered_map<Function *, EDTGraphNode *> EDTs;
+  unordered_map<EDTGraphNode *, unordered_map<EDTGraphNode *, EDTGraphEdge *>>
       IncomingEdges;
-  std::unordered_map<EDTGraphNode *,
-                     std::unordered_map<EDTGraphNode *, EDTGraphEdge *>>
+  unordered_map<EDTGraphNode *, unordered_map<EDTGraphNode *, EDTGraphEdge *>>
       OutgoingEdges;
 
 public:

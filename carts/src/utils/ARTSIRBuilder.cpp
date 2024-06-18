@@ -9,6 +9,7 @@
 #include "carts/analysis/ARTS.h"
 #include "carts/utils/ARTSIRBuilder.h"
 #include "carts/utils/ARTSUtils.h"
+#include "carts/utils/ARTSMetadata.h"
 
 // DEBUG
 #define DEBUG_TYPE "arts-ir-builder"
@@ -16,7 +17,7 @@
 static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 #endif
 
-// using namespace llvm;
+using namespace llvm;
 using namespace arts;
 using namespace arts::utils;
 
@@ -103,25 +104,5 @@ CallBase *EDTIRBuilder::buildEDT(
 }
 
 void EDTIRBuilder::setMetadata(Function &Fn) {
-  LLVMContext &Ctx = Fn.getContext();
-  StringRef TyStr = toString(Ty);
-  /// Metadata Nodes for Argument Values
-  SmallVector<Metadata *, 16> ArgMDs;
-  for (auto *CallArg : CallArgs) {
-    EDTArgType CallTy = CallArgTypeMap[CallArg];
-    StringRef MDStr = "edt.arg." + toString(CallTy);
-    ArgMDs.push_back(MDString::get(Ctx, MDStr));
-  }
-  MDNode *ArgNode = MDNode::get(Ctx, ArgMDs);
-  /// Metadata Node for EDT
-  SmallVector<Metadata *, 16> EDTMDs;
-  EDTMDs.push_back(MDString::get(Ctx, "edt." + TyStr));
-  EDTMDs.push_back(ArgNode);
-  /// Set specific metadata for the function
-  /// TODO: If it is parallel, add the number of threads...
-  Fn.setMetadata("carts.metadata", MDNode::get(Ctx, EDTMDs));
-}
-
-void EDTIRBuilder::setArgType(Value *FnArg, EDTArgType Ty) {
-  // CallArgTypeMap[FnArg] = Ty;
+  EDTMetadata::setMetadata(Fn, *this);
 }

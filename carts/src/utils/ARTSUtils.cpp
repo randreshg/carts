@@ -1,15 +1,18 @@
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Analysis/AssumptionCache.h"
+// #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Use.h"
-#include "llvm/Support/Debug.h"
+
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
+#include "llvm/Support/Debug.h"
 #include <sys/types.h>
 
 #include "carts/analysis/ARTS.h"
@@ -32,8 +35,8 @@ namespace utils {
 /// ------------------------------------------------------------------- ///
 void getDominatedBBs(BasicBlock *FromBB, DominatorTree &DT,
                      BlockSequence &DominatedBlocks) {
-  Function &F = *FromBB->getParent();
-  for (auto &ToBB : F) {
+  Function &Fn = *FromBB->getParent();
+  for (auto &ToBB : Fn) {
     if (DT.dominates(FromBB, &ToBB))
       DominatedBlocks.push_back(&ToBB);
   }
@@ -47,11 +50,11 @@ void rewireValues(DenseMap<Value *, Value *> &RewiringMap) {
   }
 }
 
-void removeFunction(Function *F) {
-  for (auto &Arg : F->args())
+void removeFunction(Function *Fn) {
+  for (auto &Arg : Fn->args())
     replaceUsesWithUndef(&Arg, false, false);
-  F->deleteBody();
-  F->removeFromParent();
+  Fn->deleteBody();
+  Fn->removeFromParent();
 }
 
 void removeValue(Value *V, bool RecursiveRemove, bool RecursiveUndef) {
@@ -88,9 +91,9 @@ void removeValue(Value *V, Instruction *ExcludeInst, bool RecursiveRemove,
   }
 
   /// Function
-  if (Function *F = dyn_cast<Function>(V)) {
-    LLVM_DEBUG(dbgs() << TAG << "   - Removing function: " << *F << "\n");
-    F->eraseFromParent();
+  if (Function *Fn = dyn_cast<Function>(V)) {
+    LLVM_DEBUG(dbgs() << TAG << "   - Removing function: " << *Fn << "\n");
+    Fn->eraseFromParent();
     return;
   }
 }
@@ -147,8 +150,8 @@ void replaceUsesWithUndef(Value *V, Instruction *ExcludeInst, bool RemoveUses,
   }
 }
 
-void removeLifetimeMarkers(Function &F) {
-  for (auto &BB : F) {
+void removeLifetimeMarkers(Function &Fn) {
+  for (auto &BB : Fn) {
     auto InstIt = BB.begin();
     auto InstEnd = BB.end();
 
@@ -170,11 +173,11 @@ void removeLifetimeMarkers(Function &F) {
   }
 }
 
-void removeDeadInstructions(Function &F) {
-  LLVM_DEBUG(dbgs() << TAG << "Removing dead instructions from: " << F.getName()
-                    << "\n");
+void removeDeadInstructions(Function &Fn) {
+  LLVM_DEBUG(dbgs() << TAG << "Removing dead instructions from: "
+                    << Fn.getName() << "\n");
   SmallVector<Value *, 16> ValuesToRemove;
-  for (auto &BB : F) {
+  for (auto &BB : Fn) {
     for (auto &I : BB) {
       /// If the instruction is trivially dead, remove it
       if (isInstructionTriviallyDead(&I)) {

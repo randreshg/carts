@@ -25,7 +25,7 @@ public:
   ~OMPTransform() {}
   bool run(ModuleAnalysisManager &AM);
   bool runAttributor(Attributor &A);
-  void identifyEDTs(Function &F);
+  void identifyEDTs(Function &Fn);
 
 private:
   Instruction *handleParallelRegion(CallBase &CB);
@@ -47,7 +47,7 @@ namespace omp {
 /// OMP INFO
 /// Helper Struct to get OpenMP related information
 struct OMPData {
-  uint32_t OutlinedFnPos;
+  uint32_t FnPos;
   uint32_t KeepFnArgsFrom;
   uint32_t KeepCallArgsFrom;
 };

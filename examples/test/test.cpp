@@ -46,8 +46,7 @@ int main() {
   int NewRandom = rand();
   #pragma omp parallel
   {
-
-    #pragma omp single 
+    // #pragma omp single 
     {
       #pragma omp task firstprivate(random_number, NewRandom)
       {

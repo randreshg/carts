@@ -26,8 +26,6 @@ add_definitions(${LLVM_DEFINITIONS})
 include_directories(
   # LLVM
   ${LLVM_INCLUDE_DIRS}
-  # External
-  # ${NOELLE_INSTALL_DIR}/include
   # Include files
   ./include
 )
