@@ -15,7 +15,7 @@
 #include "llvm/Support/Debug.h"
 #include <sys/types.h>
 
-#include "carts/analysis/ARTS.h"
+#include "carts/utils/ARTS.h"
 #include "carts/utils/ARTSUtils.h"
 
 using namespace llvm;

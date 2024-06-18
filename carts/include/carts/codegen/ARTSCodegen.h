@@ -11,9 +11,8 @@
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instruction.h"
-// #include "llvm/Support/Allocator.h"
 
-#include "carts/analysis/ARTS.h"
+#include "carts/utils/ARTS.h"
 
 namespace arts {
 /// An interface to create LLVM-IR for ARTS directives.

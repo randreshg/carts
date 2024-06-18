@@ -4,14 +4,15 @@
 #include <cstdint>
 
 #include "llvm/Analysis/AssumptionCache.h"
-#include "llvm/IR/Instruction.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 
-#include "carts/analysis/ARTS.h"
+#include "carts/utils/ARTSTypes.h"
+
 
 /// ------------------------------------------------------------------- ///
 ///                            ARTS UTILS                               ///
@@ -19,6 +20,7 @@
 /// ------------------------------------------------------------------- ///
 namespace arts {
 namespace utils {
+using namespace llvm  ;
 /// It finds the BBs that are dominated by FromBB and add
 /// them to the DominatedBlocks vector.
 void getDominatedBBs(BasicBlock *FromBB, DominatorTree &DT,

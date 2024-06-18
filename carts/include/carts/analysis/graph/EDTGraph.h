@@ -4,10 +4,11 @@
 #ifndef LLVM_EDTGRAPH_H
 #define LLVM_EDTGRAPH_H
 
-#include "noelle/core/Noelle.hpp"
-#include "carts/analysis/ARTS.h"
 #include "llvm/IR/Function.h"
 #include <unordered_set>
+
+#include "carts/utils/ARTS.h"
+#include "noelle/core/Noelle.hpp"
 
 /// ------------------------------------------------------------------- ///
 ///                             EDT GRAPH                               ///

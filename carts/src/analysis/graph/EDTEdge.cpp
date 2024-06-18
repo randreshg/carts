@@ -2,7 +2,7 @@
 #include "llvm/Support/Debug.h"
 #include <cassert>
 
-#include "carts/analysis/ARTS.h"
+#include "carts/utils/ARTS.h"
 #include "carts/analysis/graph/EDTEdge.h"
 
 using namespace llvm;

@@ -3,7 +3,6 @@
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
-#include <cstdint>
 
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/BasicBlock.h"
@@ -54,11 +53,6 @@ PreservedAnalyses OMPTransformPass::run(Module &M, ModuleAnalysisManager &AM) {
     removeDeadInstructions(Fn);
     Functions.insert(&Fn);
   }
-
-  /// Print module info
-  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << TAG << "Module after removing dead instructions\n\n" << M << "\n");
-  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   /// Create attributor
   CallGraphUpdater CGUpdater;
   BumpPtrAllocator Allocator;

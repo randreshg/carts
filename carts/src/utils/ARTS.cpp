@@ -5,13 +5,11 @@
 #include "llvm/Transforms/Utils/Local.h"
 #include <cstdint>
 
-#include "carts/analysis/ARTS.h"
+#include "carts/utils/ARTS.h"
 #include "carts/utils/ARTSTypes.h"
 #include "carts/utils/ARTSMetadata.h"
 
 using namespace llvm;
-using namespace arts;
-using namespace arts::types;
 
 /// DEBUG
 #define DEBUG_TYPE "arts"
@@ -68,9 +66,11 @@ EDTArgType toEDTArgType(StringRef Str) {
 }
 } // namespace arts::types
 
-/// EDT Cache
-EDTCache::EDTCache(Module &M) : M(M) {}
-EDTCache::~EDTCache() {}
+
+namespace arts{
+/// ------------------------------------------------------------------- ///
+///                             EDT CACHE                               ///
+/// ------------------------------------------------------------------- ///
 void EDTCache::insertEDT(Value *V, EDT *E) { Values[V].insert(E); }
 
 bool EDTCache::isValueInEDT(Value *V, EDT *E) {
@@ -98,6 +98,8 @@ uint32_t EDTEnvironment::getDepC() { return DepV.size(); }
 /// ------------------------------------------------------------------- ///
 ///                                 EDT                                 ///
 /// ------------------------------------------------------------------- ///
+uint32_t EDT::ID = 0;
+
 EDT::EDT(EDTCache &Cache, EDTMetadata *MD, CallBase *Call)
     : Cache(Cache), MD(MD), Env(this), Call(Call) {
   ID++;
@@ -158,3 +160,4 @@ MainEDT::MainEDT(EDTCache &Cache, EDTMetadata *MD, CallBase *Call)
 }
 
 MainEDTMetadata *MainEDT::getMD() { return dyn_cast<MainEDTMetadata>(MD); }
+} // namespace arts

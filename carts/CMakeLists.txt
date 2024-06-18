@@ -31,8 +31,6 @@ include_directories(
 )
 link_directories(${LLVM_LIBRARY_DIRS})
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - #
-# Sources
-# file(GLOB CARTSPassSrc "*.cpp" "src/*.cpp")
 
 # Compilation flags
 add_compile_options(${CARTS_CXX_FLAGS})

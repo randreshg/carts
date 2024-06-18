@@ -1,10 +1,10 @@
 // Description: Main file for the ARTS Analysis pass.
-#include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/Debug.h"
 
+// #include "carts/utils/ARTS.h"
 #include "carts/analysis/graph/EDTGraph.h"
+#include "noelle/core/Noelle.hpp"
 
 using namespace llvm;
 using namespace arts;
@@ -20,6 +20,7 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 /// ------------------------------------------------------------------- ///
 
 namespace {
+using namespace arcana::noelle;
 
 struct ARTSAnalysisPass : public ModulePass {
   static char ID;
