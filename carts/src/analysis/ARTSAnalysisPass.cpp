@@ -1,10 +1,16 @@
 // Description: Main file for the ARTS Analysis pass.
-#include "llvm/Passes/PassBuilder.h"
+#include "llvm/InitializePasses.h"
+#include "llvm/Pass.h"
+#include "llvm/Analysis/MemorySSA.h"
+// #include "llvm/Analysis/MemorySSAWrapperPass.h"
+#include "llvm/IR/LegacyPassManager.h"
+// #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/Debug.h"
 
 // #include "carts/utils/ARTS.h"
 #include "carts/analysis/graph/EDTGraph.h"
 #include "noelle/core/Noelle.hpp"
+#include "llvm/Analysis/MemorySSA.h"
 
 using namespace llvm;
 using namespace arts;
@@ -38,21 +44,28 @@ struct ARTSAnalysisPass : public ModulePass {
         dbgs() << "\n-------------------------------------------------\n");
     /// Fetch NOELLE Manager
     auto &NM = getAnalysis<Noelle>();
-    EDTNoelleCache Cache(M, NM);
-    EDTGraph EDTG(Cache);
+    Function *F = M.getFunction("main");
+    auto &MSSA = getAnalysis<MemorySSAWrapperPass>(*F).getMSSA();
+    MSSA.print(dbgs());
+    // EDTGraphCache Cache(M, NM, MSSA);
+    // EDTGraph EDTG(Cache);
     // EDTG.print();
 
-    /// Print module info
-    LLVM_DEBUG(
-        dbgs() << "\n-------------------------------------------------\n");
-    LLVM_DEBUG(dbgs() << TAG << "Process has finished\n\n" << M << "\n");
-    LLVM_DEBUG(
-        dbgs() << "\n-------------------------------------------------\n");
+    // /// Print module info
+    // LLVM_DEBUG(
+    //     dbgs() << "\n-------------------------------------------------\n");
+    // // LLVM_DEBUG(dbgs() << TAG << "Process has finished\n\n" << M << "\n");
+    // LLVM_DEBUG(dbgs() << TAG << "Process has finished\n");
+    // LLVM_DEBUG(
+    //     dbgs() << "\n-------------------------------------------------\n");
     return false;
   }
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addPreserved<MemorySSAWrapperPass>();
+    AU.addRequired<MemorySSAWrapperPass>();
     AU.addRequired<Noelle>();
+    ModulePass::getAnalysisUsage(AU);
   }
 };
 
@@ -61,21 +74,4 @@ struct ARTSAnalysisPass : public ModulePass {
 // Next there is code to register your pass to "opt"
 char ARTSAnalysisPass::ID = 0;
 static RegisterPass<ARTSAnalysisPass> X("ARTSAnalysisPass",
-                                        "Analysis pass for ARTS");
-
-// Next there is code to register your pass to "clang"
-static ARTSAnalysisPass *_PassMaker = NULL;
-static RegisterStandardPasses
-    _RegPass1(PassManagerBuilder::EP_OptimizerLast,
-              [](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
-                if (!_PassMaker) {
-                  PM.add(_PassMaker = new ARTSAnalysisPass());
-                }
-              }); // ** for -Ox
-static RegisterStandardPasses
-    _RegPass2(PassManagerBuilder::EP_EnabledOnOptLevel0,
-              [](const PassManagerBuilder &, legacy::PassManagerBase &PM) {
-                if (!_PassMaker) {
-                  PM.add(_PassMaker = new ARTSAnalysisPass());
-                }
-              }); // ** for -O0
+                                        "ARTS Analysis Pass", false, false);

@@ -1,5 +1,4 @@
 #include "llvm/ADT/SmallVector.h"
-// #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/IntrinsicInst.h"
