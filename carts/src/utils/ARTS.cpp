@@ -1,13 +1,15 @@
 #include "llvm/Analysis/ValueTracking.h"
-#include "llvm/IR/Module.h"
+#include "llvm/IR/Function.h"
+#include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Utils/Local.h"
+#include <cassert>
 #include <cstdint>
 
 #include "carts/utils/ARTS.h"
-#include "carts/utils/ARTSTypes.h"
 #include "carts/utils/ARTSMetadata.h"
+#include "carts/utils/ARTSTypes.h"
 
 using namespace llvm;
 
@@ -66,8 +68,7 @@ EDTArgType toEDTArgType(StringRef Str) {
 }
 } // namespace arts::types
 
-
-namespace arts{
+namespace arts {
 /// ------------------------------------------------------------------- ///
 ///                             EDT CACHE                               ///
 /// ------------------------------------------------------------------- ///
@@ -90,6 +91,18 @@ SetVector<EDT *> EDTCache::getEDTs(Value *V) const {
 /// ------------------------------------------------------------------- ///
 ///                          DATA ENVIRONMENT                           ///
 /// ------------------------------------------------------------------- ///
+EDTEnvironment::EDTEnvironment(EDT *E) : E(E) {}
+EDTEnvironment::EDTEnvironment(EDT *E, SmallVector<EDTArgMetadata *, 4> &Args)
+    : E(E) {
+  /// Fill the environment based on the arguments metadata
+  for (auto *Arg : Args) {
+    Value *V = Arg->getV();
+    if (Arg->getTy() == EDTArgType::Dep)
+      insertDepV(V);
+    else
+      insertParamV(V);
+  }
+}
 void EDTEnvironment::insertParamV(Value *V) { ParamV.insert(V); }
 void EDTEnvironment::insertDepV(Value *V) { DepV.insert(V); }
 uint32_t EDTEnvironment::getParamC() { return ParamV.size(); }
@@ -98,20 +111,37 @@ uint32_t EDTEnvironment::getDepC() { return DepV.size(); }
 /// ------------------------------------------------------------------- ///
 ///                                 EDT                                 ///
 /// ------------------------------------------------------------------- ///
-uint32_t EDT::ID = 0;
+uint32_t EDT::Counter = 0;
 
-EDT::EDT(EDTCache &Cache, EDTMetadata *MD, CallBase *Call)
-    : Cache(Cache), MD(MD), Env(this), Call(Call) {
-  ID++;
+EDT::EDT(EDTCache &Cache, EDTMetadata *MD) : Cache(Cache) {
+  ID = Counter++;
+  LLVM_DEBUG(dbgs() << TAG << "Creating EDT #" << ID << "\n");
+  /// Copy the metadata into the EDT
+  *this = *MD;
+  /// Create the environment
+  Env = new EDTEnvironment(this, MD->Args);
+}
+
+EDT *EDT::get(EDTCache &Cache, EDTMetadata *MD) {
+  switch (MD->getTy()) {
+  case EDTType::Parallel:
+    return new ParallelEDT(Cache, MD);
+  case EDTType::Task:
+    return new TaskEDT(Cache, MD);
+  case EDTType::Main:
+    return new MainEDT(Cache, MD);
+  default:
+    break;
+  }
+  return nullptr;
 }
 
 void EDT::insertValueToEnv(Value *Val) {
   /// Pointer is a depv, else, it is a paramv
   if (PointerType *PT = dyn_cast<PointerType>(Val->getType())) {
-    Cache.insertEDT(Val, this);
-    Env.insertDepV(Val);
+    Env->insertDepV(Val);
   } else
-    Env.insertParamV(Val);
+    Env->insertParamV(Val);
   /// TODO: Add extra info to OpenMP Frontend to have info about
   /// Data Sharing attributes
 }
@@ -119,45 +149,56 @@ void EDT::insertValueToEnv(Value *Val) {
 void EDT::insertValueToEnv(Value *Val, bool IsDepV) {
   /// Pointer is a depv, else, it is a paramv
   if (IsDepV) {
-    Cache.insertEDT(Val, this);
-    Env.insertDepV(Val);
+    Env->insertDepV(Val);
   } else
-    Env.insertParamV(Val);
+    Env->insertParamV(Val);
 }
 
 CallBase *EDT::getCall() { return Call; }
-Function *EDT::getFn() { return &MD->getFunction(); }
-EDTEnvironment &EDT::getDataEnv() { return Env; }
-EDTMetadata *EDT::getMD() { return MD; }
-Twine EDT::getName() { return getFn()->getName(); }
+Function *EDT::getFn() { return Fn; }
+EDTEnvironment &EDT::getDataEnv() { return *Env; }
+Twine EDT::getName() { return Fn->getName(); }
 uint32_t EDT::getID() { return ID; }
-
-/// Parallel EDT
-ParallelEDT::ParallelEDT(EDTCache &Cache, EDTMetadata *MD, CallBase *Call)
-    : EDT(Cache, MD, Call) {
-  LLVM_DEBUG(dbgs() << TAG << "Creating Parallel EDT for function: "
-                    << getFn()->getName() << "\n");
+void EDT::setCall(CallBase *Call) { 
+  assert((Call && !(this->Call)) && "Invalid Call");
+  this->Call = Call;
+  /// Update cache
+  for(auto &Arg : Call->args())
+    Cache.insertEDT(Arg, this);
 }
 
-ParallelEDTMetadata *ParallelEDT::getMD() {
-  return dyn_cast<ParallelEDTMetadata>(MD);
+/// Parallel EDT
+ParallelEDT::ParallelEDT(EDTCache &Cache, EDTMetadata *MD) : EDT(Cache, MD) {
+  LLVM_DEBUG(dbgs() << TAG << "Creating Parallel EDT for function: "
+                    << getFn()->getName() << "\n");
+  Ty = EDTType::Parallel;
+  IsAsync = false;
+  assert(MD->getTy() == Ty && "Invalid EDT Metadata Type");
+  /// Copy the metadata into the Parallel EDT
+  auto *PMD = cast<ParallelEDTMetadata>(MD);
+  *this = *PMD;
 }
 
 /// Task EDT
-TaskEDT::TaskEDT(EDTCache &Cache, EDTMetadata *MD, CallBase *Call)
-    : EDT(Cache, MD, Call) {
+TaskEDT::TaskEDT(EDTCache &Cache, EDTMetadata *MD) : EDT(Cache, MD) {
   LLVM_DEBUG(dbgs() << TAG << "Creating Task EDT for function: "
                     << getFn()->getName() << "\n");
+  Ty = EDTType::Task;
+  assert(MD->getTy() == Ty && "Invalid EDT Metadata Type");
+  /// Copy the metadata into the Task EDT
+  auto *TMD = cast<TaskEDTMetadata>(MD);
+  *this = *TMD;
 }
-
-TaskEDTMetadata *TaskEDT::getMD() { return dyn_cast<TaskEDTMetadata>(MD); }
 
 /// Main EDT
-MainEDT::MainEDT(EDTCache &Cache, EDTMetadata *MD, CallBase *Call)
-    : EDT(Cache, MD, Call) {
+MainEDT::MainEDT(EDTCache &Cache, EDTMetadata *MD) : EDT(Cache, MD) {
   LLVM_DEBUG(dbgs() << TAG << "Creating Main EDT for function: "
                     << getFn()->getName() << "\n");
+  Ty = EDTType::Main;
+  assert(MD->getTy() == Ty && "Invalid EDT Metadata Type");
+  /// Copy the metadata into the Main EDT
+  auto *MMD = cast<MainEDTMetadata>(MD);
+  *this = *MMD;
 }
 
-MainEDTMetadata *MainEDT::getMD() { return dyn_cast<MainEDTMetadata>(MD); }
 } // namespace arts

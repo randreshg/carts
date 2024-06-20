@@ -47,7 +47,9 @@ int main() {
   #pragma omp parallel
   {
     // #pragma omp single 
+    /// Parallel EDT
     {
+      /// Task1
       #pragma omp task firstprivate(random_number, NewRandom)
       {
         printf("I think the number is %d/%d. with %d -- %d\n", number,
@@ -55,7 +57,10 @@ int main() {
         number++;
         shared_number--;
       }
+
       shared_number++;
+
+      /// Task2
       #pragma omp task firstprivate(number) shared(shared_number)
       {
         printf("I think the number is %d - %d.\n", number, shared_number);
@@ -64,7 +69,11 @@ int main() {
     }
     
   }
-  printf("The final number is %d - % d.\n", number, random_number);
+  /// Paralllel done EDT
+  {
+    printf("The final number is %d - % d.\n", number, random_number);
+  }
+  
   return 0;
 }
 

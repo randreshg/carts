@@ -7,7 +7,6 @@
 #include "carts/utils/ARTSTypes.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Function.h"
-#include "llvm/IR/GlobalValue.h"
 
 /// ------------------------------------------------------------------- ///
 ///                            ARTS METADATA                            ///
@@ -15,37 +14,50 @@
 namespace arts {
 using namespace arts::types;
 
+#define CARTS_MD "carts.metadata"
+#define EDT_MD "edt."
+#define EDT_ARG_MD "edt.arg."
+
 /// ------------------------------------------------------------------- ///
 ///                           EDT ARG METADATA                          ///
 /// ------------------------------------------------------------------- ///
 class EDTArgMetadata {
 public:
-  EDTArgMetadata(Value &V);
+  EDTArgMetadata(Value *V);
   ~EDTArgMetadata();
 
   static string getName(EDTArgType Ty);
-
   static bool classof(const EDTArgMetadata *M) { return true; }
+  EDTArgType getTy() const { return Ty; }
+  Value *getV() const { return V; }
+
+protected:
+  EDTArgType Ty = EDTArgType::Unknown;
+private:
+  Value *V;
 };
 
 class EDTDepArgMetadata : public EDTArgMetadata {
 public:
-  EDTDepArgMetadata(Value &V);
+  EDTDepArgMetadata(Value *V);
   ~EDTDepArgMetadata();
-
   static string getName();
+  static bool classof(const EDTArgMetadata *M) {
+    return M->getTy() == EDTArgType::Dep;
+  }
 
-  static bool classof(const EDTArgMetadata *M) { return true; }
 };
 
 class EDTParamArgMetadata : public EDTArgMetadata {
 public:
-  EDTParamArgMetadata(Value &V);
+  EDTParamArgMetadata(Value *V);
   ~EDTParamArgMetadata();
 
   static string getName();
 
-  static bool classof(const EDTArgMetadata *M) { return true; }
+  static bool classof(const EDTArgMetadata *M) {
+    return M->getTy() == EDTArgType::Param;
+  }
 };
 
 /// ------------------------------------------------------------------- ///
@@ -57,62 +69,71 @@ public:
   ~EDTMetadata();
 
   /// Static functions
-  static EDTMetadata *getEDT(Function &Fn);
   static string getName(EDTType Ty);
+  static EDTMetadata *getMetadata(Function &Fn);
   static void setMetadata(Function &Fn, EDTIRBuilder &Builder);
   static bool classof(const EDTMetadata *M) { return true; }
+  void insertArg(EDTArgMetadata *Arg) { Args.push_back(Arg); }
 
   /// Getters
-  Function &getFunction() { return Fn; }
+  Function &getFn() { return Fn; }
   EDTType getTy() const { return Ty; }
+  /// Friends
+  friend class EDT;
 
 private:
   Function &Fn;
-  SmallVector<EDTArgMetadata, 4> Args;
+  SmallVector<EDTArgMetadata *, 4> Args;
+
 protected:
   EDTType Ty = EDTType::Unknown;
 };
 
 class ParallelEDTMetadata : public EDTMetadata {
 public:
-  ParallelEDTMetadata(Function &Fn) : EDTMetadata(Fn) {
-    Ty = EDTType::Parallel;
-  }
+  ParallelEDTMetadata(Function &Fn);
   ~ParallelEDTMetadata() {}
   static string getName();
   static bool classof(const EDTMetadata *M) {
     return M->getTy() == EDTType::Parallel;
   }
 
-  uint32_t getNumberOfThreads() const { return NumberOfThreads; }
+  uint32_t getNumThreads() const { return NumThreads; }
+
+  friend class ParallelEDT;
 
 private:
-  uint32_t NumberOfThreads = 1;
+  uint32_t NumThreads = 0;
+  uint32_t NumTasks = 0;
 };
 
 class TaskEDTMetadata : public EDTMetadata {
 public:
-  TaskEDTMetadata(Function &Fn) : EDTMetadata(Fn) {}
+  TaskEDTMetadata(Function &Fn);
   ~TaskEDTMetadata() {}
   static string getName();
   static bool classof(const EDTMetadata *M) {
     return M->getTy() == EDTType::Task;
   }
 
-  uint32_t getThreadNumber() const { return ThreadNumber; }
+  uint32_t getThreadNum() const { return ThreadNum; }
+
+  friend class TaskEDT;
 
 private:
-  uint32_t ThreadNumber = 0;
+  uint32_t ThreadNum = 0;
 };
 
 class MainEDTMetadata : public EDTMetadata {
 public:
-  MainEDTMetadata(Function &Fn) : EDTMetadata(Fn) {}
+  MainEDTMetadata(Function &Fn);
   ~MainEDTMetadata() {}
   static string getName();
   static bool classof(const EDTMetadata *M) {
     return M->getTy() == EDTType::Main;
   }
+
+  friend class MainEDT;
 };
 
 } // namespace arts

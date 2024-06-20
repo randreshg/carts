@@ -36,6 +36,9 @@ bool OMPTransform::run(ModuleAnalysisManager &AM) {
   /// Get main function
   auto &MainFn = *M.getFunction("main");
   identifyEDTs(MainFn);
+  /// Set metadata for Main EDT
+  EDTIRBuilder IRB(EDTType::Main);
+  IRB.setMetadata(MainFn);
   
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << "Module after Identifying EDTs\n" << M << "\n");

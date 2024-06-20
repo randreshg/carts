@@ -30,7 +30,7 @@ test_with_metadata.bc: test_norm.bc
 
 # Run the ARTS analysis pass
 test_arts_analysis.bc: test_with_metadata.bc
-	noelle-load -debug-only=arts-analyzer,arts,carts,arts-ir-builder,edt-graph \
+	noelle-load -debug-only=arts-analyzer,arts,carts,arts-ir-builder,edt-graph,carts-metadata \
 		-load /home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so -ARTSAnalysisPass $< -o $@
 	llvm-dis $@
 

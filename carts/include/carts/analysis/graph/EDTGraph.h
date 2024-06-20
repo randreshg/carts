@@ -4,6 +4,8 @@
 #ifndef LLVM_EDTGRAPH_H
 #define LLVM_EDTGRAPH_H
 
+#include "llvm/ADT/SetVector.h"
+#include "llvm/Analysis/MemorySSA.h"
 #include "llvm/IR/Function.h"
 #include <unordered_set>
 
@@ -11,7 +13,7 @@
 #include "noelle/core/Noelle.hpp"
 
 /// ------------------------------------------------------------------- ///
-///                             EDT GRAPH                               ///
+///                              EDT GRAPH                              ///
 /// The data structure used to represent the EDTs and its dependencies
 /// in the program.
 /// ------------------------------------------------------------------- ///
@@ -19,13 +21,17 @@ namespace arts {
 using namespace std;
 using namespace arcana::noelle;
 
-class EDTNoelleCache : public EDTCache {
+class EDTGraphCache : public EDTCache {
 public:
-  EDTNoelleCache(Module &M, Noelle &NM) : EDTCache(M), NM(NM){}
-  ~EDTNoelleCache() {}
+  EDTGraphCache(Module &M, Noelle &NM, MemorySSA &MSSA)
+      : EDTCache(M), NM(NM), MSSA(MSSA) {}
+  ~EDTGraphCache() {}
   Noelle &getNoelle() { return NM; }
+  MemorySSA &getMemorySSA() { return MSSA; }
+
 private:
   Noelle &NM;
+  MemorySSA &MSSA;
 };
 
 class EDTGraphEdge;
@@ -42,7 +48,7 @@ private:
 
 class EDTGraph {
 public:
-  EDTGraph(EDTNoelleCache &Cache);
+  EDTGraph(EDTGraphCache &Cache);
   ~EDTGraph();
 
   EDTGraphNode *getEntryNode() const;
@@ -52,7 +58,9 @@ public:
 private:
   void createNode(Function &Fn);
   void createNodes();
+  void setCreationDeps();
   void analyzeDeps();
+  void analyzeReachability();
   unordered_set<EDTGraphNode *> getNodes();
   EDTGraphNode *insertNode(EDT *E);
   EDTGraphNode *insertNode(EDT *E, EDTGraphNode *ParentNode,
@@ -71,14 +79,17 @@ private:
   void addControlEdge(EDTGraphNode *From, EDTGraphNode *To);
   void removeEdge(EDTGraphEdge *Edge);
   void removeEdge(EDTGraphNode *From, EDTGraphNode *To);
+  void addReachableEDT(EDTGraphNode *From);
 
   /// Attributes
-  EDTNoelleCache &Cache;
-  unordered_map<Function *, EDTGraphNode *> EDTs;
-  unordered_map<EDTGraphNode *, unordered_map<EDTGraphNode *, EDTGraphEdge *>>
+  EDTGraphCache &Cache;
+  DenseMap<Function *, EDTGraphNode *> EDTs;
+  DenseMap<EDTGraphNode *, DenseMap<EDTGraphNode *, EDTGraphEdge *>>
       IncomingEdges;
-  unordered_map<EDTGraphNode *, unordered_map<EDTGraphNode *, EDTGraphEdge *>>
+  DenseMap<EDTGraphNode *, DenseMap<EDTGraphNode *, EDTGraphEdge *>>
       OutgoingEdges;
+  SmallSetVector<EDTGraphNode *, 4> InReachableEDTs;
+  SmallSetVector<EDTGraphNode *, 4> OutReachableEDTs;
 
 public:
   void print();
