@@ -6,13 +6,14 @@
 #include "llvm/Transforms/Utils/Local.h"
 #include <cassert>
 #include <cstdint>
+#include <string>
 
 #include "carts/utils/ARTS.h"
 #include "carts/utils/ARTSMetadata.h"
 #include "carts/utils/ARTSTypes.h"
 
 using namespace llvm;
-
+using namespace std;
 /// DEBUG
 #define DEBUG_TYPE "arts"
 #if !defined(NDEBUG)

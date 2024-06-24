@@ -58,7 +58,7 @@ CallBase *EDTIRBuilder::buildEDT(
   Function *NewFn = Function::Create(NewFnTy, OldFn->getLinkage(),
                                      OldFn->getAddressSpace(), "");
   OldFn->getParent()->getFunctionList().insert(OldFn->getIterator(), NewFn);
-  NewFn->setName("edt");
+  NewFn->setName("carts.edt");
   OldFn->setSubprogram(nullptr);
   LLVM_DEBUG(dbgs() << "Created new function: " << *NewFn);
   /// Splice the body of the old function right into the new function

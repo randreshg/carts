@@ -9,6 +9,7 @@
 #include "llvm/IR/Function.h"
 #include <unordered_set>
 
+#include "carts/analysis/ARTSAnalysisPass.h"
 #include "carts/utils/ARTS.h"
 #include "noelle/core/Noelle.hpp"
 
@@ -23,15 +24,13 @@ using namespace arcana::noelle;
 
 class EDTGraphCache : public EDTCache {
 public:
-  EDTGraphCache(Module &M, Noelle &NM, MemorySSA &MSSA)
-      : EDTCache(M), NM(NM), MSSA(MSSA) {}
+  EDTGraphCache(Module &M, ARTSAnalysisPass *AP) : EDTCache(M), AP(AP) {}
   ~EDTGraphCache() {}
-  Noelle &getNoelle() { return NM; }
-  MemorySSA &getMemorySSA() { return MSSA; }
+  Noelle &getNoelle() { return AP->getNoelle(); }
+  MemorySSA &getMemorySSA(Function &F) { return AP->getMemorySSA(F); }
 
 private:
-  Noelle &NM;
-  MemorySSA &MSSA;
+  ARTSAnalysisPass *AP;
 };
 
 class EDTGraphEdge;
@@ -59,6 +58,8 @@ private:
   void createNode(Function &Fn);
   void createNodes();
   void setCreationDeps();
+  void setDataDeps();
+  EDTGraphNode *getClobberingEDT(MemorySSA &MSSA, CallBase *Inst);
   void analyzeDeps();
   void analyzeReachability();
   unordered_set<EDTGraphNode *> getNodes();

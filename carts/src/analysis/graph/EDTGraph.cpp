@@ -1,4 +1,6 @@
 
+#include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include <cassert>
@@ -91,8 +93,8 @@ void EDTGraph::setCreationDeps() {
   /// Analyze the CallGraph
   auto *FM = Cache.getNoelle().getFunctionsManager();
   auto PCF = FM->getProgramCallGraph();
-  for (auto Node : PCF->getFunctionNodes(true)) {
-    /// Fetch the next program's function.
+  auto FunctionNodes = PCF->getFunctionNodes(true);
+  for (auto Node : FunctionNodes) {
     auto *NodeFn = Node->getFunction();
     auto *ParentEDTNode = getNode(*NodeFn);
     if (!ParentEDTNode)
@@ -109,7 +111,6 @@ void EDTGraph::setCreationDeps() {
     /// Print the outgoing edges.
     LLVM_DEBUG(dbgs() << "The EDT #" << EDTID
                       << " creates the following EDTs:\n");
-
     for (auto *CallEdge : OutEdges) {
       // auto CalleerNode = CallEdge->getCaller();
       auto CalleeNode = CallEdge->getCallee();
@@ -147,83 +148,153 @@ void EDTGraph::setCreationDeps() {
   }
 }
 
+EDTGraphNode *EDTGraph::getClobberingEDT(MemorySSA &MSSA, CallBase *Inst) {
+  MemorySSAWalker *Walker = MSSA.getWalker();
+  SmallVector<MemoryAccess *> WorkList{Walker->getClobberingMemoryAccess(Inst)};
+  SmallSet<MemoryAccess *, 8> Visited;
+  // MemoryLocation Loc(MemoryLocation::get(Inst));
+
+  LLVM_DEBUG(dbgs() << "     Checking clobbering of: "
+                    << Inst->getCalledFunction()->getName() << '\n');
+
+  while (!WorkList.empty()) {
+    MemoryAccess *MA = WorkList.pop_back_val();
+    if (!Visited.insert(MA).second)
+      continue;
+    // MA->dump();
+    if (MemoryDef *Def = dyn_cast<MemoryDef>(MA)) {
+      /// Check if it is a call to an EDT
+      Instruction *DefInst = Def->getMemoryInst();
+      if (!DefInst) {
+        /// Is it live on entry?
+        if (MSSA.isLiveOnEntryDef(MA)) {
+          LLVM_DEBUG(dbgs() << "        - Data dependency with Parent EDT\n");
+          /// Ignore for now, we will out this information, after we have the
+          /// other dependencies.
+          /// NOTE: What about phi nodes?
+        }
+        continue;
+      }
+      /// Is it a call?
+      if (auto *Call = dyn_cast<CallBase>(DefInst)) {
+        if (auto *EDTNode = getNode(*Call->getCalledFunction())) {
+          /// Is it really a dependency?
+          LLVM_DEBUG(dbgs() << "        - Data dependency with EDT #"
+                            << EDTNode->getEDT()->getID() << "\n");
+        }
+      }
+      /// Push work to the WorkList
+      WorkList.push_back(Def->getDefiningAccess());
+      continue;
+    }
+    /// Push work to the WorkList
+    if (MemoryPhi *Phi = cast<MemoryPhi>(MA)) {
+      for (auto &Use : Phi->incoming_values())
+        WorkList.push_back(cast<MemoryAccess>(&Use));
+    }
+  }
+
+  return nullptr;
+}
+
 void EDTGraph::analyzeDeps() {
   LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << "Analyzing dependencies\n");
   /// Fetch the PDG
   auto &NM = Cache.getNoelle();
-  // auto FM = NM.getFunctionsManager();
   auto PDG = NM.getProgramDependenceGraph();
+  /// Analyze Memory SSA
+  /// Iterate through the EDT Nodes
+  auto EDTNodes = getNodes();
+  for (auto *EDTNode : EDTNodes) {
+    auto &EDT = *EDTNode->getEDT();
+    LLVM_DEBUG(dbgs() << " - EDT #" << EDT.getID() << "\n");
+    auto &EDTFn = *EDT.getFn();
+    /// Get the Memory SSA for the function
+    auto &MSSA = Cache.getMemorySSA(EDTFn);
+    MSSA.print(dbgs());
+    /// Iterate though the edges
+    auto OutEdges = getOutgoingEdges(EDTNode);
+    for (auto *DepEdge : OutEdges) {
+      auto *ToEDTNode = DepEdge->getTo();
+      auto &ToEDT = *ToEDTNode->getEDT();
+      auto *ToEDTCall = ToEDT.getCall();
+      LLVM_DEBUG(dbgs() << "   - EDTChild #" << ToEDT.getID() << "\n");
+      LLVM_DEBUG(dbgs() << "     - Its call is : "
+                        << ToEDTCall->getCalledFunction()->getName() << "\n");
+      /// Get MemSSA definition of ToEDT Call
+      auto *ClobberingEDT = getClobberingEDT(MSSA, ToEDTCall);
+    }
 
-  MemorySSA &MSSA = Cache.getMemorySSA();
-  // LLVM_DEBUG(dbgs() << );
-  MSSA.print(dbgs());
-  /// For every Value that is a dependency in an EDT, check if it is used by
-  /// another EDT.
-  auto &DepValues = Cache.getValues();
-  for (auto &DepValItr : DepValues) {
-    auto *EDTDep = DepValItr.first;
-    LLVM_DEBUG(dbgs() << " - Value: " << *EDTDep << "\n");
-    auto &EDTs = DepValItr.second;
-    auto FDG = PDG->createFunctionSubgraph(*EDTs[0]->getCall()->getFunction());
+    LLVM_DEBUG(
+        dbgs() << "\n\n-------------------------------------------------\n");
+    /// For every Value that is a dependency in an EDT, check if it is used by
+    /// another EDT.
+    // auto &DepValues = Cache.getValues();
+    // for (auto &DepValItr : DepValues) {
+    //   auto *EDTDep = DepValItr.first;
+    //   LLVM_DEBUG(dbgs() << " - Value: " << *EDTDep << "\n");
+    //   auto &EDTs = DepValItr.second;
+    //   auto FDG =
+    //       PDG->createFunctionSubgraph(*EDTs[0]->getCall()->getFunction());
 
-    auto IterFn = [&](Value *Src, DGEdge<Value, Value> *Dep) -> bool {
-      LLVM_DEBUG(dbgs() << "     " << *Src << " - ");
-      /// Control dependencies
-      if (isa<ControlDependence<Value, Value>>(Dep)) {
-        LLVM_DEBUG(dbgs() << " CONTROL\n");
-        assert(false && "Not implemented yet");
-        return false;
-      }
-      /// Data dependencies -> Registers
-      LLVM_DEBUG(dbgs() << " DATA ");
-      auto DataDep = cast<DataDependence<Value, Value>>(Dep);
-      if (DataDep->isRAWDependence()) {
-        LLVM_DEBUG(dbgs() << " RAW ");
-      }
-      if (DataDep->isWARDependence()) {
-        LLVM_DEBUG(dbgs() << " WAR ");
-      }
-      if (DataDep->isWAWDependence()) {
-        LLVM_DEBUG(dbgs() << " WAW ");
-      }
-      /// Further analysis has to be performed here to guarantee that the
-      /// dependence is a memory dependence. Leave it as it is for now.
-      if (isa<MemoryDependence<Value, Value>>(DataDep)) {
-        LLVM_DEBUG(dbgs() << " MEMORY");
-        auto memDep = cast<MemoryDependence<Value, Value>>(DataDep);
-        if (isa<MustMemoryDependence<Value, Value>>(memDep)) {
-          LLVM_DEBUG(dbgs() << "-> MUST ");
-        } else {
-          LLVM_DEBUG(dbgs() << "-> MAY ");
-        }
-      }
+    //   auto IterFn = [&](Value *Src, DGEdge<Value, Value> *Dep) -> bool {
+    //     LLVM_DEBUG(dbgs() << "     " << *Src << " - ");
+    //     /// Control dependencies
+    //     if (isa<ControlDependence<Value, Value>>(Dep)) {
+    //       LLVM_DEBUG(dbgs() << " CONTROL\n");
+    //       assert(false && "Not implemented yet");
+    //       return false;
+    //     }
+    //     /// Data dependencies -> Registers
+    //     LLVM_DEBUG(dbgs() << " DATA ");
+    //     auto DataDep = cast<DataDependence<Value, Value>>(Dep);
+    //     if (DataDep->isRAWDependence()) {
+    //       LLVM_DEBUG(dbgs() << " RAW ");
+    //     }
+    //     if (DataDep->isWARDependence()) {
+    //       LLVM_DEBUG(dbgs() << " WAR ");
+    //     }
+    //     if (DataDep->isWAWDependence()) {
+    //       LLVM_DEBUG(dbgs() << " WAW ");
+    //     }
+    //     /// Further analysis has to be performed here to guarantee that the
+    //     /// dependence is a memory dependence. Leave it as it is for now.
+    //     if (isa<MemoryDependence<Value, Value>>(DataDep)) {
+    //       LLVM_DEBUG(dbgs() << " MEMORY");
+    //       auto memDep = cast<MemoryDependence<Value, Value>>(DataDep);
+    //       if (isa<MustMemoryDependence<Value, Value>>(memDep)) {
+    //         LLVM_DEBUG(dbgs() << "-> MUST ");
+    //       } else {
+    //         LLVM_DEBUG(dbgs() << "-> MAY ");
+    //       }
+    //     }
 
-      /// Create the data edge
-      LLVM_DEBUG(dbgs() << "\n");
-      // addDataEdge(&FromEDTNode, &ToEDTNode, Src);
-      return false;
-    };
-    FDG->iterateOverDependencesTo(EDTDep, true, true, true, IterFn);
+    //     /// Create the data edge
+    //     LLVM_DEBUG(dbgs() << "\n");
+    //     // addDataEdge(&FromEDTNode, &ToEDTNode, Src);
+    //     return false;
+    //   };
+    //   FDG->iterateOverDependencesTo(EDTDep, true, true, true, IterFn);
 
-    // auto EDTC = EDTs.size();
-    // if (EDTC == 0) {
-    //   LLVM_DEBUG(dbgs() << "   - The value " << *V
-    //                     << " is not used by any EDTCall\n");
-    //   continue;
-    // }
-    // LLVM_DEBUG(dbgs() << "   - The value " << *V << " is used by " << EDTC
-    //                   << " EDTCalls\n");
-    // for (auto *E : EDTs) {
-    //   LLVM_DEBUG(dbgs() << "     - EDT #" << E->getID() << "\n");
+    //   // auto EDTC = EDTs.size();
+    //   // if (EDTC == 0) {
+    //   //   LLVM_DEBUG(dbgs() << "   - The value " << *V
+    //   //                     << " is not used by any EDTCall\n");
+    //   //   continue;
+    //   // }
+    //   // LLVM_DEBUG(dbgs() << "   - The value " << *V << " is used by " <<
+    //   EDTC
+    //   //                   << " EDTCalls\n");
+    //   // for (auto *E : EDTs) {
+    //   //   LLVM_DEBUG(dbgs() << "     - EDT #" << E->getID() << "\n");
+    //   // }
     // }
   }
-
   /// Iterate through the list of EDTs
   // for (auto &EDTPair : EDTs) {
   //   auto *EDTFn = EDTPair.first;
   //   auto FDG = PDG->createFunctionSubgraph(*EDTFn);
-
   //   auto &FromEDTNode = *EDTPair.second;
   //   auto &FromEDT = *FromEDTNode.getEDT();
   //   auto FromEDTID = FromEDT.getID();
@@ -252,7 +323,6 @@ void EDTGraph::analyzeDeps() {
   //     auto &ToEDT = *ToEDTNode.getEDT();
   //     auto *ToEDTCall = ToEDT.getCall();
   //     assert(ToEDTCall != nullptr && "The EDT doesn't have a call");
-
   //     LLVM_DEBUG(dbgs() << "   - EDT #" << ToEDT.getID() << " depends
   //     on:\n");
   //     /// DepV are the values that the EDT depends on.
@@ -270,7 +340,8 @@ void EDTGraph::analyzeDeps() {
   //       /// Check if the source is EDTTo
   //       if (!is_contained(SrcEDTs, &ToEDT)) {
   //         LLVM_DEBUG(dbgs() << "     " << *Src
-  //                           << " - Is a dep that is not sent to the EDT\n");
+  //                           << " - Is a dep that is not sent to the
+  //                           EDT\n");
   //         return false;
   //       }
   //       LLVM_DEBUG(dbgs() << "     " << *Src << " - ");
@@ -303,9 +374,9 @@ void EDTGraph::analyzeDeps() {
   //           LLVM_DEBUG(dbgs() << "-> MAY ");
   //         }
   //       }
-
   //       if (SrcEDTsLen > 1) {
-  //         LLVM_DEBUG(dbgs() << " (The value is used by more than one EDT)");
+  //         LLVM_DEBUG(dbgs() << " (The value is used by more than one
+  //         EDT)");
   //       }
   //       /// Create the data edge
   //       LLVM_DEBUG(dbgs() << "\n");
