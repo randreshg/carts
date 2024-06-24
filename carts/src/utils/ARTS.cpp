@@ -71,25 +71,6 @@ EDTArgType toEDTArgType(StringRef Str) {
 
 namespace arts {
 /// ------------------------------------------------------------------- ///
-///                             EDT CACHE                               ///
-/// ------------------------------------------------------------------- ///
-void EDTCache::insertEDT(Value *V, EDT *E) { Values[V].insert(E); }
-
-bool EDTCache::isValueInEDT(Value *V, EDT *E) {
-  auto Itr = Values.find(V);
-  if (Itr == Values.end())
-    return false;
-  return Itr->second.count(E);
-}
-
-SetVector<EDT *> EDTCache::getEDTs(Value *V) const {
-  auto Itr = Values.find(V);
-  if (Itr == Values.end())
-    return SetVector<EDT *>();
-  return Itr->second;
-}
-
-/// ------------------------------------------------------------------- ///
 ///                          DATA ENVIRONMENT                           ///
 /// ------------------------------------------------------------------- ///
 EDTEnvironment::EDTEnvironment(EDT *E) : E(E) {}
@@ -114,7 +95,7 @@ uint32_t EDTEnvironment::getDepC() { return DepV.size(); }
 /// ------------------------------------------------------------------- ///
 uint32_t EDT::Counter = 0;
 
-EDT::EDT(EDTCache &Cache, EDTMetadata *MD) : Cache(Cache) {
+EDT::EDT(EDTMetadata *MD) {
   ID = Counter++;
   LLVM_DEBUG(dbgs() << TAG << "Creating EDT #" << ID << "\n");
   /// Copy the metadata into the EDT
@@ -123,14 +104,14 @@ EDT::EDT(EDTCache &Cache, EDTMetadata *MD) : Cache(Cache) {
   Env = new EDTEnvironment(this, MD->Args);
 }
 
-EDT *EDT::get(EDTCache &Cache, EDTMetadata *MD) {
+EDT *EDT::get(EDTMetadata *MD) {
   switch (MD->getTy()) {
   case EDTType::Parallel:
-    return new ParallelEDT(Cache, MD);
+    return new ParallelEDT(MD);
   case EDTType::Task:
-    return new TaskEDT(Cache, MD);
+    return new TaskEDT(MD);
   case EDTType::Main:
-    return new MainEDT(Cache, MD);
+    return new MainEDT(MD);
   default:
     break;
   }
@@ -155,8 +136,8 @@ void EDT::insertValueToEnv(Value *Val, bool IsDepV) {
     Env->insertParamV(Val);
 }
 
-CallBase *EDT::getCall() { return Call; }
-Function *EDT::getFn() { return Fn; }
+EDTCallBase EDT::getCall() { return Call; }
+EDTFunction EDT::getFn() { return Fn; }
 EDTEnvironment &EDT::getDataEnv() { return *Env; }
 Twine EDT::getName() { return Fn->getName(); }
 uint32_t EDT::getID() { return ID; }
@@ -164,12 +145,12 @@ void EDT::setCall(CallBase *Call) {
   assert((Call && !(this->Call)) && "Invalid Call");
   this->Call = Call;
   /// Update cache
-  for(auto &Arg : Call->args())
-    Cache.insertEDT(Arg, this);
+  // for(auto &Arg : Call->args())
+  //   Cache.insertEDT(Arg, this);
 }
 
 /// Parallel EDT
-ParallelEDT::ParallelEDT(EDTCache &Cache, EDTMetadata *MD) : EDT(Cache, MD) {
+ParallelEDT::ParallelEDT(EDTMetadata *MD) : EDT(MD) {
   LLVM_DEBUG(dbgs() << TAG << "Creating Parallel EDT for function: "
                     << getFn()->getName() << "\n");
   Ty = EDTType::Parallel;
@@ -181,7 +162,7 @@ ParallelEDT::ParallelEDT(EDTCache &Cache, EDTMetadata *MD) : EDT(Cache, MD) {
 }
 
 /// Task EDT
-TaskEDT::TaskEDT(EDTCache &Cache, EDTMetadata *MD) : EDT(Cache, MD) {
+TaskEDT::TaskEDT(EDTMetadata *MD) : EDT(MD) {
   LLVM_DEBUG(dbgs() << TAG << "Creating Task EDT for function: "
                     << getFn()->getName() << "\n");
   Ty = EDTType::Task;
@@ -192,7 +173,7 @@ TaskEDT::TaskEDT(EDTCache &Cache, EDTMetadata *MD) : EDT(Cache, MD) {
 }
 
 /// Main EDT
-MainEDT::MainEDT(EDTCache &Cache, EDTMetadata *MD) : EDT(Cache, MD) {
+MainEDT::MainEDT(EDTMetadata *MD) : EDT(MD) {
   LLVM_DEBUG(dbgs() << TAG << "Creating Main EDT for function: "
                     << getFn()->getName() << "\n");
   Ty = EDTType::Main;

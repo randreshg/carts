@@ -21,27 +21,11 @@ using namespace llvm;
 using namespace std;
 
 class EDT;
+using EDTCallBase = CallBase *;
+using EDTFunction = Function *;
+using EDTFunctionSet = SetVector<EDTFunction>;
+using EDTSet = SetVector<EDT *>;
 
-/// ------------------------------------------------------------------- ///
-///                              EDTCache                               ///
-/// The EDTCache provides information that is shared between the EDTs.
-/// ------------------------------------------------------------------- ///
-class EDTCache {
-public:
-  EDTCache(Module &M) : M(M){};
-  ~EDTCache() = default;
-
-  void insertEDT(Value *V, EDT *E);
-  bool isValueInEDT(Value *V, EDT *E);
-  SetVector<EDT *> getEDTs(Value *V) const;
-  DenseMap<Value *, SetVector<EDT *>> &getValues() { return Values; }
-  Module &getModule() { return M; }
-
-private:
-  Module &M;
-  /// Values that may be modified by the EDTs (Calls)
-  DenseMap<Value *, SetVector<EDT *>> Values;
-};
 
 /// ------------------------------------------------------------------- ///
 ///                          DATA ENVIRONMENT                           ///
@@ -96,25 +80,24 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDTEnvironment &Env) {
 /// ------------------------------------------------------------------- ///
 class EDT {
 public:
-  EDT(EDTCache &Cache, Function *Fn);
-  EDT(EDTCache &Cache, EDTMetadata *MD);
+  EDT(EDTCallBase Fn);
+  EDT(EDTMetadata *MD);
   virtual ~EDT() = default;
-  static EDT *get(EDTCache &Cache, EDTMetadata *MD);
+  static EDT *get(EDTMetadata *MD);
   static uint32_t Counter;
   /// Data environment
   void insertValueToEnv(Value *Val);
   void insertValueToEnv(Value *Val, bool IsDepV);
   ///  Getters
-  CallBase *getCall();
-  Function *getFn();
+  EDTCallBase getCall();
+  EDTFunction getFn();
   EDTEnvironment &getDataEnv();
   Twine getName();
   uint32_t getID();
   EDTType getTy() { return Ty; }
-  EDTCache &getCache() { return Cache; }
 
   /// Setters
-  void setCall(CallBase *Call);
+  void setCall(EDTCallBase Call);
 
   static bool classof(const EDTMetadata *M) { return true; }
 
@@ -126,14 +109,13 @@ public:
   }
 
 protected:
-  EDTCache &Cache;
   EDTEnvironment *Env;
   EDTType Ty = EDTType::Unknown;
   bool IsAsync = true;
 
 private:
-  CallBase *Call = nullptr;
-  Function *Fn = nullptr;
+  EDTCallBase Call = nullptr;
+  EDTFunction Fn = nullptr;
   uint32_t ID;
 };
 
@@ -148,7 +130,7 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDT &E) {
 
 class ParallelEDT : public EDT {
 public:
-  ParallelEDT(EDTCache &Cache, EDTMetadata *MD);
+  ParallelEDT(EDTMetadata *MD);
   ~ParallelEDT() = default;
   /// Getters
   uint32_t getNumThreads() { return NumThreads; }
@@ -171,7 +153,7 @@ private:
 
 class TaskEDT : public EDT {
 public:
-  TaskEDT(EDTCache &Cache, EDTMetadata *MD);
+  TaskEDT(EDTMetadata *MD);
   ~TaskEDT() = default;
   /// Getters
   uint32_t getThreadNum() { return ThreadNum; }
@@ -191,7 +173,7 @@ private:
 
 class MainEDT : public EDT {
 public:
-  MainEDT(EDTCache &Cache, EDTMetadata *MD);
+  MainEDT(EDTMetadata *MD);
   ~MainEDT() = default;
 
   static bool classof(const EDTMetadata *M) {

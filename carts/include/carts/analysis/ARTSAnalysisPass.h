@@ -21,6 +21,7 @@ struct ARTSAnalysisPass : public ModulePass {
   bool runOnModule(Module &M) override;
   void getAnalysisUsage(AnalysisUsage &AU) const override;
 
+  
   Noelle &getNoelle();
   MemorySSA &getMemorySSA(Function &F);
   
