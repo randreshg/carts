@@ -155,7 +155,7 @@ Instruction *OMPTransform::handleParallelDoneRegion(CallBase &CB) {
   CodeExtractorAnalysisCache CEAC(ParentFn);
   SetVector<Value *> Inputs, Outputs;
   auto *DoneEDTFn = CE.extractCodeRegion(CEAC, Inputs, Outputs);
-  DoneEDTFn->setName("edt");
+  DoneEDTFn->setName("carts.edt");
   CallBase *DoneCB = dyn_cast<CallBase>(DoneEDTFn->user_back());
   /// Debug DoneCB arguments
   EDTIRBuilder IRB(EDTType::Task);
