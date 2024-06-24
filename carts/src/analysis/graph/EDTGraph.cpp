@@ -12,6 +12,7 @@
 #include "carts/analysis/graph/EDTGraph.h"
 #include "carts/utils/ARTS.h"
 #include "carts/utils/ARTSMetadata.h"
+#include "noelle/core/CallGraphNode.hpp"
 #include "noelle/core/Noelle.hpp"
 
 using namespace llvm;
@@ -27,31 +28,35 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 
 namespace arts {
 /// EDTGraph
-EDTGraph::EDTGraph(EDTGraphCache &Cache) : Cache(Cache) {
-  LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << TAG << "Building the EDT Graph\n");
-  createNodes();
-  setCreationDeps();
-  /// Debug Cache
-  LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << TAG << "Printing the Cache\n");
-  for (auto &ValItr : Cache.getValues()) {
-    auto *V = ValItr.first;
-    auto &EDTs = ValItr.second;
-    /// Get EDT Call parent function
-    auto *ParentEDT = getNode(*EDTs[0]->getCall()->getFunction());
-    LLVM_DEBUG(dbgs() << "  Value: " << *V << " in EDT #"
-                      << ParentEDT->getEDT()->getID() << "\n");
-    for (auto *E : EDTs) {
-      LLVM_DEBUG(dbgs() << "    - EDT #" << E->getID() << "\n");
-    }
-  }
-  LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
-  analyzeDeps();
-  /// Debug module
-  // LLVM_DEBUG(dbgs() << Cache.getModule());
-  LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
-}
+EDTGraph::EDTGraph() {}
+// EDTGraph::EDTGraph(EDTGraphCache &Cache) : Cache(Cache) {
+//   LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
+//   LLVM_DEBUG(dbgs() << TAG << "Building the EDT Graph\n");
+//   FM = Cache.getNoelle().getFunctionsManager();
+//   CG = FM->getProgramCallGraph();
+//   /// Create nodes
+//   createNodes();
+//   setCreationDeps();
+//   /// Debug Cache
+//   LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
+//   LLVM_DEBUG(dbgs() << TAG << "Printing the Cache\n");
+//   for (auto &ValItr : Cache.getValues()) {
+//     auto *V = ValItr.first;
+//     auto &EDTs = ValItr.second;
+//     /// Get EDT Call parent function
+//     auto *ParentEDT = getNode(*EDTs[0]->getCall()->getFunction());
+//     LLVM_DEBUG(dbgs() << "  Value: " << *V << " in EDT #"
+//                       << ParentEDT->getEDT()->getID() << "\n");
+//     for (auto *E : EDTs) {
+//       LLVM_DEBUG(dbgs() << "    - EDT #" << E->getID() << "\n");
+//     }
+//   }
+//   LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
+//   analyzeDeps();
+//   /// Debug module
+//   // LLVM_DEBUG(dbgs() << Cache.getModule());
+//   LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
+// }
 
 EDTGraph::~EDTGraph() {
   LLVM_DEBUG(dbgs() << TAG << "Destroying the EDT Graph\n");
@@ -69,7 +74,7 @@ void EDTGraph::createNode(Function &Fn) {
   EDTMetadata *MD = EDTMetadata::getMetadata(Fn);
   if (MD == nullptr)
     return;
-  auto *E = EDT::get(Cache, MD);
+  auto *E = EDT::get(MD);
   assert(E != nullptr && "The EDT is null");
   insertNode(E);
   /// Free memory
@@ -77,74 +82,93 @@ void EDTGraph::createNode(Function &Fn) {
 }
 
 void EDTGraph::createNodes() {
-  auto &M = Cache.getModule();
+  // auto &M = Cache.getModule();
   LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << "Creating the EDT Nodes\n");
-  for (auto &Fn : M)
-    createNode(Fn);
+  // for (auto &Fn : M)
+  //   createNode(Fn);
 
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << EDTs.size() << " EDT Nodes were created\n");
   LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
 }
 
+void EDTGraph::setDeps(EDTGraphNode *Node) {
+  auto *ParentEDTNode = Node;
+  if (!ParentEDTNode)
+    return;
+  auto *ParentEDT = ParentEDTNode->getEDT();
+  const auto ParentID = ParentEDT->getID();
+  auto *ParentEDTFn = ParentEDT->getFn();
+  auto *ParentCGNode = CG->getFunctionNode(ParentEDTFn);
+  /// Fetch the outgoing edges.
+  auto CallOutEdges = CG->getOutgoingEdges(ParentCGNode);
+  if (CallOutEdges.size() == 0) {
+    LLVM_DEBUG(dbgs() << " The EDT #" << ParentID
+                      << "doesn't create any other EDTs\n");
+    return;
+  }
+
+  /// Creation dependencies
+  LLVM_DEBUG(dbgs() << "The EDT #" << ParentID
+                    << " creates the following EDTs:\n");
+  for (auto *ChildEdge : CallOutEdges) {
+    auto *ChildNode = ChildEdge->getCallee();
+    auto *ChildEDTNode = getNode(*ChildNode->getFunction());
+    if (!ChildEDTNode)
+      continue;
+    LLVM_DEBUG(dbgs() << "   [");
+    if (ChildEdge->isAMustCall()) {
+      LLVM_DEBUG(dbgs() << "must");
+    } else {
+      LLVM_DEBUG(dbgs() << "may");
+      assert(false && "Not implemented yet");
+    }
+    LLVM_DEBUG(dbgs() << "] EDT #" << ChildEDTNode->getEDT()->getID() << "\n");
+
+    /// Print the sub-edges.
+    for (auto ChildSubEdge : ChildEdge->getSubEdges()) {
+      errs() << "     [";
+      if (ChildSubEdge->isAMustCall()) {
+        LLVM_DEBUG(dbgs() << "must");
+      } else {
+        LLVM_DEBUG(dbgs() << "may");
+        assert(false && "Not implemented yet");
+      }
+      auto *ChildEDTCall =
+          dyn_cast<CallBase>(ChildSubEdge->getCaller()->getInstruction());
+      LLVM_DEBUG(dbgs() << "] \"" << *ChildEDTCall << "\"\n");
+      ChildEDTNode->getEDT()->setCall(ChildEDTCall);
+      addCreationEdge(ParentEDTNode, ChildEDTNode);
+    }
+  }
+
+  /// Data dependencies
+  auto &MSSA = Cache.getMemorySSA(*ParentEDTFn);
+  /// Iterate though the edges
+  auto OutEdges = getOutgoingEdges(ParentEDTNode);
+  for (auto *DepEdge : OutEdges) {
+    auto *ToEDTNode = DepEdge->getTo();
+    auto &ToEDT = *ToEDTNode->getEDT();
+    auto *ToEDTCall = ToEDT.getCall();
+    LLVM_DEBUG(dbgs() << "   - EDTChild #" << ToEDT.getID() << "\n");
+    LLVM_DEBUG(dbgs() << "     - Its call is : "
+                      << ToEDTCall->getCalledFunction()->getName() << "\n");
+    /// Get MemSSA definition of ToEDT Call
+    auto *ClobberingEDT = getClobberingEDT(MSSA, ToEDTCall);
+  }
+}
+
 void EDTGraph::setCreationDeps() {
   /// Analyze the CallGraph
-  auto *FM = Cache.getNoelle().getFunctionsManager();
-  auto PCF = FM->getProgramCallGraph();
-  auto FunctionNodes = PCF->getFunctionNodes(true);
+  auto FunctionNodes = CG->getFunctionNodes(true);
   for (auto Node : FunctionNodes) {
     auto *NodeFn = Node->getFunction();
     auto *ParentEDTNode = getNode(*NodeFn);
     if (!ParentEDTNode)
       continue;
     /// Fetch the outgoing edges.
-    auto EDTID = ParentEDTNode->getEDT()->getID();
-    auto OutEdges = PCF->getOutgoingEdges(Node);
-    if (OutEdges.size() == 0) {
-      LLVM_DEBUG(dbgs() << " The EDT #" << EDTID
-                        << "doesn't create any other EDTs\n");
-      continue;
-    }
-
-    /// Print the outgoing edges.
-    LLVM_DEBUG(dbgs() << "The EDT #" << EDTID
-                      << " creates the following EDTs:\n");
-    for (auto *CallEdge : OutEdges) {
-      // auto CalleerNode = CallEdge->getCaller();
-      auto CalleeNode = CallEdge->getCallee();
-      auto CalleeF = CalleeNode->getFunction();
-      auto *ChildEDTNode = getNode(*CalleeF);
-      if (!ChildEDTNode)
-        continue;
-      LLVM_DEBUG(dbgs() << "   [");
-      if (CallEdge->isAMustCall()) {
-        LLVM_DEBUG(dbgs() << "must");
-      } else {
-        LLVM_DEBUG(dbgs() << "may");
-        assert(false && "Not implemented yet");
-      }
-      LLVM_DEBUG(dbgs() << "] EDT #" << ChildEDTNode->getEDT()->getID()
-                        << "\n");
-
-      /// Print the sub-edges.
-      for (auto SubEdge : CallEdge->getSubEdges()) {
-        auto CallerSubEdge = SubEdge->getCaller();
-        errs() << "     [";
-        if (SubEdge->isAMustCall()) {
-          LLVM_DEBUG(dbgs() << "must");
-        } else {
-          LLVM_DEBUG(dbgs() << "may");
-          assert(false && "Not implemented yet");
-        }
-        auto *ChildEDTCall =
-            dyn_cast<CallBase>(CallerSubEdge->getInstruction());
-        LLVM_DEBUG(dbgs() << "] \"" << *ChildEDTCall << "\"\n");
-        ChildEDTNode->getEDT()->setCall(ChildEDTCall);
-        addCreationEdge(ParentEDTNode, ChildEDTNode);
-      }
-    }
   }
 }
 
@@ -556,18 +580,6 @@ void EDTGraph::removeEdge(EDTGraphNode *From, EDTGraphNode *To) {
   OutgoingEdges[From].erase(To);
   IncomingEdges[To].erase(From);
   delete Edge;
-}
-
-void EDTGraph::addReachableEDT(EDTGraphNode *From) {
-  // auto OutEdges = getOutgoingEdges(From);
-  // for (auto *DepEdge : OutEdges) {
-  //   auto *To = DepEdge->getTo();
-  //   auto *ToE = To->getEDT();
-  //   if (ToE->isReachable())
-  //     continue;
-  //   ToE->setReachable(true);
-  //   addReachableEDT(To);
-  // }
 }
 
 void EDTGraph::print(void) {

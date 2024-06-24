@@ -11,6 +11,7 @@
 
 #include "carts/analysis/ARTSAnalysisPass.h"
 #include "carts/utils/ARTS.h"
+#include "noelle/core/CallGraph.hpp"
 #include "noelle/core/Noelle.hpp"
 
 /// ------------------------------------------------------------------- ///
@@ -47,7 +48,7 @@ private:
 
 class EDTGraph {
 public:
-  EDTGraph(EDTGraphCache &Cache);
+  EDTGraph();
   ~EDTGraph();
 
   EDTGraphNode *getEntryNode() const;
@@ -57,6 +58,7 @@ public:
 private:
   void createNode(Function &Fn);
   void createNodes();
+  void setDeps(EDTGraphNode *Node);
   void setCreationDeps();
   void setDataDeps();
   EDTGraphNode *getClobberingEDT(MemorySSA &MSSA, CallBase *Inst);
@@ -83,15 +85,16 @@ private:
   void addReachableEDT(EDTGraphNode *From);
 
   /// Attributes
-  EDTGraphCache &Cache;
+  // EDTGraphCache &Cache;
   DenseMap<Function *, EDTGraphNode *> EDTs;
   DenseMap<EDTGraphNode *, DenseMap<EDTGraphNode *, EDTGraphEdge *>>
       IncomingEdges;
   DenseMap<EDTGraphNode *, DenseMap<EDTGraphNode *, EDTGraphEdge *>>
       OutgoingEdges;
-  SmallSetVector<EDTGraphNode *, 4> InReachableEDTs;
-  SmallSetVector<EDTGraphNode *, 4> OutReachableEDTs;
 
+  ////
+  FunctionsManager *FM;
+  arcana::noelle::CallGraph *CG;
 public:
   void print();
 };
