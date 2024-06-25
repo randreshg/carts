@@ -12,9 +12,13 @@ all: test_opt
 	llvm-dis $@
 
 # Run OMP transform pass
+# test_arts_ir.bc: test.bc
+# 	opt -debug-only=omp-transform,arts,carts,arts-ir-builder,arts-utils\
+# 		-load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/OMPTransform.so \
+# 		-passes="omp-transform" $< -o $@
+# 	llvm-dis $@
 test_arts_ir.bc: test.bc
-	opt -debug-only=omp-transform,arts,carts,arts-ir-builder,arts-utils\
-		-load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/OMPTransform.so \
+	opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/OMPTransform.so \
 		-passes="omp-transform" $< -o $@
 	llvm-dis $@
 
@@ -30,7 +34,7 @@ test_with_metadata.bc: test_norm.bc
 
 # Run the ARTS analysis pass
 test_arts_analysis.bc: test_with_metadata.bc
-	noelle-load -debug-only=arts-analyzer,arts,carts,arts-ir-builder,edt-graph,carts-metadata \
+	noelle-load -debug-only=arts-analysis,arts,carts,arts-ir-builder,edt-graph,carts-metadata \
 		-load /home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so -ARTSAnalysisPass $< -o $@
 	llvm-dis $@
 

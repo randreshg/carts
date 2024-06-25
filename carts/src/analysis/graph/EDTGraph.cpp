@@ -110,54 +110,54 @@ void EDTGraph::setDeps(EDTGraphNode *Node) {
     return;
   }
 
-  /// Creation dependencies
-  LLVM_DEBUG(dbgs() << "The EDT #" << ParentID
-                    << " creates the following EDTs:\n");
-  for (auto *ChildEdge : CallOutEdges) {
-    auto *ChildNode = ChildEdge->getCallee();
-    auto *ChildEDTNode = getNode(*ChildNode->getFunction());
-    if (!ChildEDTNode)
-      continue;
-    LLVM_DEBUG(dbgs() << "   [");
-    if (ChildEdge->isAMustCall()) {
-      LLVM_DEBUG(dbgs() << "must");
-    } else {
-      LLVM_DEBUG(dbgs() << "may");
-      assert(false && "Not implemented yet");
-    }
-    LLVM_DEBUG(dbgs() << "] EDT #" << ChildEDTNode->getEDT()->getID() << "\n");
+  // /// Creation dependencies
+  // LLVM_DEBUG(dbgs() << "The EDT #" << ParentID
+  //                   << " creates the following EDTs:\n");
+  // for (auto *ChildEdge : CallOutEdges) {
+  //   auto *ChildNode = ChildEdge->getCallee();
+  //   auto *ChildEDTNode = getNode(*ChildNode->getFunction());
+  //   if (!ChildEDTNode)
+  //     continue;
+  //   LLVM_DEBUG(dbgs() << "   [");
+  //   if (ChildEdge->isAMustCall()) {
+  //     LLVM_DEBUG(dbgs() << "must");
+  //   } else {
+  //     LLVM_DEBUG(dbgs() << "may");
+  //     assert(false && "Not implemented yet");
+  //   }
+  //   LLVM_DEBUG(dbgs() << "] EDT #" << ChildEDTNode->getEDT()->getID() << "\n");
 
-    /// Print the sub-edges.
-    for (auto ChildSubEdge : ChildEdge->getSubEdges()) {
-      errs() << "     [";
-      if (ChildSubEdge->isAMustCall()) {
-        LLVM_DEBUG(dbgs() << "must");
-      } else {
-        LLVM_DEBUG(dbgs() << "may");
-        assert(false && "Not implemented yet");
-      }
-      auto *ChildEDTCall =
-          dyn_cast<CallBase>(ChildSubEdge->getCaller()->getInstruction());
-      LLVM_DEBUG(dbgs() << "] \"" << *ChildEDTCall << "\"\n");
-      ChildEDTNode->getEDT()->setCall(ChildEDTCall);
-      addCreationEdge(ParentEDTNode, ChildEDTNode);
-    }
-  }
+  //   /// Print the sub-edges.
+  //   for (auto ChildSubEdge : ChildEdge->getSubEdges()) {
+  //     errs() << "     [";
+  //     if (ChildSubEdge->isAMustCall()) {
+  //       LLVM_DEBUG(dbgs() << "must");
+  //     } else {
+  //       LLVM_DEBUG(dbgs() << "may");
+  //       assert(false && "Not implemented yet");
+  //     }
+  //     auto *ChildEDTCall =
+  //         dyn_cast<CallBase>(ChildSubEdge->getCaller()->getInstruction());
+  //     LLVM_DEBUG(dbgs() << "] \"" << *ChildEDTCall << "\"\n");
+  //     ChildEDTNode->getEDT()->setCall(ChildEDTCall);
+  //     addCreationEdge(ParentEDTNode, ChildEDTNode);
+  //   }
+  // }
 
-  /// Data dependencies
-  auto &MSSA = Cache.getMemorySSA(*ParentEDTFn);
-  /// Iterate though the edges
-  auto OutEdges = getOutgoingEdges(ParentEDTNode);
-  for (auto *DepEdge : OutEdges) {
-    auto *ToEDTNode = DepEdge->getTo();
-    auto &ToEDT = *ToEDTNode->getEDT();
-    auto *ToEDTCall = ToEDT.getCall();
-    LLVM_DEBUG(dbgs() << "   - EDTChild #" << ToEDT.getID() << "\n");
-    LLVM_DEBUG(dbgs() << "     - Its call is : "
-                      << ToEDTCall->getCalledFunction()->getName() << "\n");
-    /// Get MemSSA definition of ToEDT Call
-    auto *ClobberingEDT = getClobberingEDT(MSSA, ToEDTCall);
-  }
+  // /// Data dependencies
+  // auto &MSSA = Cache.getMemorySSA(*ParentEDTFn);
+  // /// Iterate though the edges
+  // auto OutEdges = getOutgoingEdges(ParentEDTNode);
+  // for (auto *DepEdge : OutEdges) {
+  //   auto *ToEDTNode = DepEdge->getTo();
+  //   auto &ToEDT = *ToEDTNode->getEDT();
+  //   auto *ToEDTCall = ToEDT.getCall();
+  //   LLVM_DEBUG(dbgs() << "   - EDTChild #" << ToEDT.getID() << "\n");
+  //   LLVM_DEBUG(dbgs() << "     - Its call is : "
+  //                     << ToEDTCall->getCalledFunction()->getName() << "\n");
+  //   /// Get MemSSA definition of ToEDT Call
+  //   auto *ClobberingEDT = getClobberingEDT(MSSA, ToEDTCall);
+  // }
 }
 
 void EDTGraph::setCreationDeps() {
@@ -222,36 +222,36 @@ EDTGraphNode *EDTGraph::getClobberingEDT(MemorySSA &MSSA, CallBase *Inst) {
 }
 
 void EDTGraph::analyzeDeps() {
-  LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << TAG << "Analyzing dependencies\n");
-  /// Fetch the PDG
-  auto &NM = Cache.getNoelle();
-  auto PDG = NM.getProgramDependenceGraph();
-  /// Analyze Memory SSA
-  /// Iterate through the EDT Nodes
-  auto EDTNodes = getNodes();
-  for (auto *EDTNode : EDTNodes) {
-    auto &EDT = *EDTNode->getEDT();
-    LLVM_DEBUG(dbgs() << " - EDT #" << EDT.getID() << "\n");
-    auto &EDTFn = *EDT.getFn();
-    /// Get the Memory SSA for the function
-    auto &MSSA = Cache.getMemorySSA(EDTFn);
-    MSSA.print(dbgs());
-    /// Iterate though the edges
-    auto OutEdges = getOutgoingEdges(EDTNode);
-    for (auto *DepEdge : OutEdges) {
-      auto *ToEDTNode = DepEdge->getTo();
-      auto &ToEDT = *ToEDTNode->getEDT();
-      auto *ToEDTCall = ToEDT.getCall();
-      LLVM_DEBUG(dbgs() << "   - EDTChild #" << ToEDT.getID() << "\n");
-      LLVM_DEBUG(dbgs() << "     - Its call is : "
-                        << ToEDTCall->getCalledFunction()->getName() << "\n");
-      /// Get MemSSA definition of ToEDT Call
-      auto *ClobberingEDT = getClobberingEDT(MSSA, ToEDTCall);
-    }
+  // LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
+  // LLVM_DEBUG(dbgs() << TAG << "Analyzing dependencies\n");
+  // /// Fetch the PDG
+  // auto &NM = Cache.getNoelle();
+  // auto PDG = NM.getProgramDependenceGraph();
+  // /// Analyze Memory SSA
+  // /// Iterate through the EDT Nodes
+  // auto EDTNodes = getNodes();
+  // for (auto *EDTNode : EDTNodes) {
+  //   auto &EDT = *EDTNode->getEDT();
+  //   LLVM_DEBUG(dbgs() << " - EDT #" << EDT.getID() << "\n");
+  //   auto &EDTFn = *EDT.getFn();
+  //   /// Get the Memory SSA for the function
+  //   auto &MSSA = Cache.getMemorySSA(EDTFn);
+  //   MSSA.print(dbgs());
+  //   /// Iterate though the edges
+  //   auto OutEdges = getOutgoingEdges(EDTNode);
+  //   for (auto *DepEdge : OutEdges) {
+  //     auto *ToEDTNode = DepEdge->getTo();
+  //     auto &ToEDT = *ToEDTNode->getEDT();
+  //     auto *ToEDTCall = ToEDT.getCall();
+  //     LLVM_DEBUG(dbgs() << "   - EDTChild #" << ToEDT.getID() << "\n");
+  //     LLVM_DEBUG(dbgs() << "     - Its call is : "
+  //                       << ToEDTCall->getCalledFunction()->getName() << "\n");
+  //     /// Get MemSSA definition of ToEDT Call
+  //     auto *ClobberingEDT = getClobberingEDT(MSSA, ToEDTCall);
+  //   }
 
-    LLVM_DEBUG(
-        dbgs() << "\n\n-------------------------------------------------\n");
+  //   LLVM_DEBUG(
+  //       dbgs() << "\n\n-------------------------------------------------\n");
     /// For every Value that is a dependency in an EDT, check if it is used by
     /// another EDT.
     // auto &DepValues = Cache.getValues();
@@ -314,7 +314,7 @@ void EDTGraph::analyzeDeps() {
     //   //   LLVM_DEBUG(dbgs() << "     - EDT #" << E->getID() << "\n");
     //   // }
     // }
-  }
+  // }
   /// Iterate through the list of EDTs
   // for (auto &EDTPair : EDTs) {
   //   auto *EDTFn = EDTPair.first;
