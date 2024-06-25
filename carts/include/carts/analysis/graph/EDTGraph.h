@@ -23,17 +23,6 @@ namespace arts {
 using namespace std;
 using namespace arcana::noelle;
 
-class EDTGraphCache : public EDTCache {
-public:
-  EDTGraphCache(Module &M, ARTSAnalysisPass *AP) : EDTCache(M), AP(AP) {}
-  ~EDTGraphCache() {}
-  Noelle &getNoelle() { return AP->getNoelle(); }
-  MemorySSA &getMemorySSA(Function &F) { return AP->getMemorySSA(F); }
-
-private:
-  ARTSAnalysisPass *AP;
-};
-
 class EDTGraphEdge;
 class EDTGraphNode {
 public:
