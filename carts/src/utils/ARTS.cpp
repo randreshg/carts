@@ -89,6 +89,7 @@ void EDTEnvironment::insertParamV(Value *V) { ParamV.insert(V); }
 void EDTEnvironment::insertDepV(Value *V) { DepV.insert(V); }
 uint32_t EDTEnvironment::getParamC() { return ParamV.size(); }
 uint32_t EDTEnvironment::getDepC() { return DepV.size(); }
+bool EDTEnvironment::isDepV(Value *V) { return DepV.count(V); }
 
 /// ------------------------------------------------------------------- ///
 ///                                 EDT                                 ///
@@ -141,12 +142,14 @@ EDTFunction EDT::getFn() { return Fn; }
 EDTEnvironment &EDT::getDataEnv() { return *Env; }
 Twine EDT::getName() { return Fn->getName(); }
 uint32_t EDT::getID() { return ID; }
-void EDT::setCall(CallBase *Call) { 
+void EDT::setCall(CallBase *Call) {
   assert((Call && !(this->Call)) && "Invalid Call");
   this->Call = Call;
-  /// Update cache
-  // for(auto &Arg : Call->args())
-  //   Cache.insertEDT(Arg, this);
+}
+
+bool EDT::isDep(uint32_t ArgItr) {
+  auto *Arg = Fn->getArg(ArgItr);
+  return Env->isDepV(Arg);
 }
 
 /// Parallel EDT

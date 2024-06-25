@@ -48,18 +48,66 @@ AAEDTInfoFunction::initialize-> EDT #3 for function "carts.edt.2"
 AAEDTInfoFunction::initialize-> EDT #4 for function "carts.edt.3"
 AAEDTInfoChild::initialize: EDT #1
 AAEDTInfoChild::initialize: EDT #4
+AAEDTInfoFunction::updateImpl: MemorySSA Analysis
 AAEDTInfoChild::initialize: EDT #2
 AAEDTInfoChild::initialize: EDT #3
-AAEDTInfoFunction::updateImpl: All children were fixed for EDT #2 --> Optimistic FixPoint
-AAEDTInfoFunction::updateImpl: All children were fixed for EDT #3 --> Optimistic FixPoint
-AAEDTInfoFunction::updateImpl: All children were fixed for EDT #4 --> Optimistic FixPoint
-AAEDTInfoFunction::updateImpl: All children were fixed for EDT #1 --> Optimistic FixPoint
-AAEDTInfoFunction::updateImpl: All children were fixed for EDT #0 --> Optimistic FixPoint
+AAEDTInfoFunction::updateImpl: MemorySSA Analysis
+AAEDTInfoFunction::updateImpl: MemorySSA Analysis
+AAEDTInfoFunction::updateImpl: MemorySSA Analysis
+AAEDTInfoFunction::updateImpl: MemorySSA Analysis
+AAEDTInfoFunction::updateImpl: MemorySSA Analysis
+AAEDTInfoFunction::updateImpl: MemorySSA Analysis
+AAEDTInfoFunction::updateImpl: MemorySSA Analysis
+AAEDTInfoFunction::updateImpl: MemorySSA Analysis
+AAEDTInfoFunction::updateImpl: MemorySSA Analysis
+AAEDTInfoFunction::updateImpl: MemorySSA Analysis
 AAEDTInfoFunction::manifest: EDT #0 -> #Reached EDTs: 4{1, 4, 2, 3}, #Child EDTs: 2{1, 4}
+- EDT #0: main
+Ty: main
+Data environment for EDT: 
+Number of ParamV: 0
+Number of DepV: 0
+
 AAEDTInfoFunction::manifest: EDT #1 -> #Reached EDTs: 2{2, 3}, #Child EDTs: 2{2, 3}
+- EDT #1: carts.edt
+Ty: parallel
+Data environment for EDT: 
+Number of ParamV: 0
+Number of DepV: 4
+  - i32* %0
+  - i32* %1
+  - i32* %2
+  - i32* %3
+
 AAEDTInfoFunction::manifest: EDT #2 -> #Reached EDTs: 0{}, #Child EDTs: 0{}
+- EDT #2: carts.edt.1
+Ty: task
+Data environment for EDT: 
+Number of ParamV: 2
+  - i32 %2
+  - i32 %3
+Number of DepV: 2
+  - i32* %0
+  - i32* %1
+
 AAEDTInfoFunction::manifest: EDT #3 -> #Reached EDTs: 0{}, #Child EDTs: 0{}
+- EDT #3: carts.edt.2
+Ty: task
+Data environment for EDT: 
+Number of ParamV: 1
+  - i32 %1
+Number of DepV: 1
+  - i32* %0
+
 AAEDTInfoFunction::manifest: EDT #4 -> #Reached EDTs: 0{}, #Child EDTs: 0{}
+- EDT #4: carts.edt.3
+Ty: task
+Data environment for EDT: 
+Number of ParamV: 0
+Number of DepV: 2
+  - i32* %number
+  - i32* %random_number
+
 [Attributor] Done with 5 functions, result: changed.
 
 -------------------------------------------------

@@ -26,7 +26,6 @@ using EDTFunction = Function *;
 using EDTFunctionSet = SetVector<EDTFunction>;
 using EDTSet = SetVector<EDT *>;
 
-
 /// ------------------------------------------------------------------- ///
 ///                          DATA ENVIRONMENT                           ///
 /// Contains the list of parameters and dependencies required for the
@@ -52,6 +51,8 @@ public:
   void insertDepV(Value *V);
   uint32_t getParamC();
   uint32_t getDepC();
+  /// 
+  bool isDepV(Value *V);
 
   /// Attributes
   EDT *E;
@@ -95,6 +96,7 @@ public:
   Twine getName();
   uint32_t getID();
   EDTType getTy() { return Ty; }
+  bool isDep(uint32_t ArgItr);
 
   /// Setters
   void setCall(EDTCallBase Call);
@@ -120,8 +122,7 @@ private:
 };
 
 inline raw_ostream &operator<<(raw_ostream &OS, EDT &E) {
-  OS << "- EDT for" << E.getName() << "\n";
-  OS << "ID: " << E.getID() << "\n";
+  OS << "- EDT #" << E.getID() << ": " << E.getName() << "\n";
   OS << "Ty: " << toString(E.getTy()) << "\n";
   OS << E.getDataEnv();
 
@@ -181,7 +182,6 @@ public:
   }
 
   MainEDT &operator=(const MainEDTMetadata &MD) { return *this; }
-
 };
 
 // inline raw_ostream &operator<<(raw_ostream &OS, EDTTask &Task) {
