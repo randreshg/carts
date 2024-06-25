@@ -159,7 +159,6 @@ struct AAEDTInfo : public StateWrapper<EDTInfoState, AbstractAttribute> {
     if (!isValidState() || !EDTNode)
       return "<invalid>";
     std::string EDTStr = "EDT #" + std::to_string(EDTNode->getID()) + " -> ";
-
     auto ReachedEDTStr = [&]() {
       if (!ReachedEDTs.isValidState())
         return "<invalid> with " + std::to_string(ReachedEDTs.size()) + " EDTs";
@@ -209,19 +208,29 @@ struct EDTInfoCache : public InformationCache {
       : InformationCache(M, AG, Allocator, &Functions), EDTs(EDTs),
         FunctionEDTMap(FunctionEDTMap) {}
 
-  void insertEDT(Value *V, EDT *E) { Values[V].insert(E); }
+  void insertEDT(Value *V, EDT *E) {
+    DepsToEDTs[V].insert(E);
+    EDTToDeps[E].insert(V);
+  }
 
   bool isValueInEDT(Value *V, EDT *E) {
-    auto Itr = Values.find(V);
-    if (Itr == Values.end())
+    auto Itr = DepsToEDTs.find(V);
+    if (Itr == DepsToEDTs.end())
       return false;
     return Itr->second.count(E);
   }
 
   SetVector<EDT *> getEDTs(Value *V) const {
-    auto Itr = Values.find(V);
-    if (Itr == Values.end())
+    auto Itr = DepsToEDTs.find(V);
+    if (Itr == DepsToEDTs.end())
       return SetVector<EDT *>();
+    return Itr->second;
+  }
+
+  SetVector<Value *> getDeps(EDT *E) const {
+    auto Itr = EDTToDeps.find(E);
+    if (Itr == EDTToDeps.end())
+      return SetVector<Value *>();
     return Itr->second;
   }
 
@@ -236,8 +245,10 @@ struct EDTInfoCache : public InformationCache {
   EDTSet &EDTs;
   DenseMap<EDTFunction, EDT *> &FunctionEDTMap;
   EDTGraph *Graph;
-  /// Values that may be modified by the EDTs (Calls)
-  DenseMap<Value *, SetVector<EDT *>> Values;
+  /// Deps (Calls) to EDTs
+  DenseMap<Value *, SetVector<EDT *>> DepsToEDTs;
+  /// EDT to deps (Calls)
+  DenseMap<EDT *, SetVector<Value *>> EDTToDeps;
 };
 
 /// The function kernel info abstract attribute, basically, what can we say
@@ -304,17 +315,34 @@ struct AAEDTInfoFunction : AAEDTInfo {
       return indicatePessimisticFixpoint();
     }
 
-    /// If we were able to check all call instructions we can indicate that
-    /// we are at a fixpoint with the ChildEDTs.
+    /// If we got to this point, we know that all children were created
     ChildEDTs.indicateOptimisticFixpoint();
 
-    // Fix the state if all children were fixed
-    if (AllEDTChildrenWereFixed) {
-      LLVM_DEBUG(dbgs() << "AAEDTInfoFunction::updateImpl: "
-                        << "All children were fixed for EDT #"
-                        << EDTNode->getID() << " --> Optimistic FixPoint\n");
+    /// Iff all the EDT children were fixed, we are done.
+    if (AllEDTChildrenWereFixed)
       indicateOptimisticFixpoint();
-    }
+
+    LLVM_DEBUG(dbgs() << "AAEDTInfoFunction::updateImpl: MemorySSA Analysis\n";);
+    /// Check if current EDT can reach any EDT child
+    auto &MSSA =
+        EDTCache
+            .getAnalysisResultForFunction<MemorySSAAnalysis>(*EDTNode->getFn())
+            ->getMSSA();
+    // MSSA.dump();
+    // std::function<bool(const Function &)> GoBackwardsCB{
+    //     [](const Function &Fn) { return false; }};
+
+    // for (auto *EDTChild : CBAA.ChildEDTs) {
+    //   if(EDTChild == EDTNode)
+    //     continue;
+    //   if (AA::isPotentiallyReachable(A, CB, *EDTChild->getFn(), *this,
+    //                                  GoBackwardsCB)) {
+    //     LLVM_DEBUG(dbgs() << "AAEDTInfoChild::updateImpl: EDT #"
+    //                       << EDTChild->getID() << " is reachable from EDT #"
+    //                       << EDTNode->getID() << "\n");
+    //     ReachedEDTs.insert(EDTChild);
+    //   }
+    // }
 
     return StateBefore == getState() ? ChangeStatus::UNCHANGED
                                      : ChangeStatus::CHANGED;
@@ -325,6 +353,7 @@ struct AAEDTInfoFunction : AAEDTInfo {
   ChangeStatus manifest(Attributor &A) override {
     /// Debug output info
     LLVM_DEBUG(dbgs() << "AAEDTInfoFunction::manifest: " << getAsStr() << "\n");
+    LLVM_DEBUG(dbgs() << *EDTNode << "\n");
     ChangeStatus Changed = ChangeStatus::UNCHANGED;
     return Changed;
   }
@@ -332,6 +361,15 @@ struct AAEDTInfoFunction : AAEDTInfo {
 
 struct AAEDTInfoChild : AAEDTInfo {
   AAEDTInfoChild(const IRPosition &IRP, Attributor &A) : AAEDTInfo(IRP, A) {}
+
+  void setCacheDeps(EDTInfoCache &EDTCache, CallBase &CB, EDT &EDTNode) {
+    for (uint32_t ArgItr = 0; ArgItr < CB.data_operands_size(); ++ArgItr) {
+      if (!EDTNode.isDep(ArgItr))
+        continue;
+      auto *Arg = CB.getArgOperand(ArgItr);
+      EDTCache.insertEDT(Arg, &EDTNode);
+    }
+  }
 
   /// See AbstractAttribute::initialize(...).
   void initialize(Attributor &A) override {
@@ -341,20 +379,23 @@ struct AAEDTInfoChild : AAEDTInfo {
     auto *CalledFunction = CB.getCalledFunction();
     EDTNode = EDTCache.getEDT(CalledFunction);
     assert(EDTNode && "EDTNode is null!");
-
     LLVM_DEBUG(dbgs() << "AAEDTInfoChild::initialize: EDT #" << EDTNode->getID()
                       << "\n");
+    setCacheDeps(EDTCache, CB, *EDTNode);
   }
 
   /// See AbstractAttribute::updateImpl(Attributor &A).
   ChangeStatus updateImpl(Attributor &A) override {
     EDTInfoState StateBefore = getState();
-    /// What do we know about the child EDT?
     auto &CB = cast<CallBase>(getAnchorValue());
+
+    /// What do we know about the child EDT?
     auto &CBAA = A.getAAFor<AAEDTInfo>(
         *this, IRPosition::function(*CB.getCalledFunction()),
         DepClassTy::OPTIONAL);
+    /// Clamping the state with the state of the child EDT
     getState() ^= CBAA.getState();
+
     if (CBAA.isAtFixpoint())
       indicateOptimisticFixpoint();
     return StateBefore == getState() ? ChangeStatus::UNCHANGED
@@ -457,8 +498,7 @@ MemorySSA &ARTSAnalysisPass::getMemorySSA(Function &F) {
 }
 
 void ARTSAnalysisPass::getAnalysisUsage(AnalysisUsage &AU) const {
-  AU.addPreserved<MemorySSAWrapperPass>();
-  AU.addRequired<MemorySSAWrapperPass>();
+  AU.addRequired<MemorySSAAnalysis>();
   AU.addRequired<Noelle>();
   ModulePass::getAnalysisUsage(AU);
 }
