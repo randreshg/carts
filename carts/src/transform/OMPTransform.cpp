@@ -1,16 +1,15 @@
 // Description: Main file for the Compiler for ARTS (OmpTransform) pass.
-#include "llvm/ADT/SetVector.h"
 #include <cstdint>
 
+#include "llvm/Transforms/IPO/Attributor.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/Transforms/IPO/Attributor.h"
 
 #include "carts/transform/OMPTransform.h"
 #include "carts/utils/ARTSIRBuilder.h"

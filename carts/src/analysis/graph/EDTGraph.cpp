@@ -12,12 +12,9 @@
 #include "carts/analysis/graph/EDTGraph.h"
 #include "carts/utils/ARTS.h"
 #include "carts/utils/ARTSMetadata.h"
-#include "noelle/core/CallGraphNode.hpp"
-#include "noelle/core/Noelle.hpp"
 
 using namespace llvm;
 using namespace arts;
-using namespace arcana::noelle;
 using namespace std;
 
 /// DEBUG
@@ -95,20 +92,20 @@ void EDTGraph::createNodes() {
 }
 
 void EDTGraph::setDeps(EDTGraphNode *Node) {
-  auto *ParentEDTNode = Node;
-  if (!ParentEDTNode)
-    return;
-  auto *ParentEDT = ParentEDTNode->getEDT();
-  const auto ParentID = ParentEDT->getID();
-  auto *ParentEDTFn = ParentEDT->getFn();
-  auto *ParentCGNode = CG->getFunctionNode(ParentEDTFn);
-  /// Fetch the outgoing edges.
-  auto CallOutEdges = CG->getOutgoingEdges(ParentCGNode);
-  if (CallOutEdges.size() == 0) {
-    LLVM_DEBUG(dbgs() << " The EDT #" << ParentID
-                      << "doesn't create any other EDTs\n");
-    return;
-  }
+  // auto *ParentEDTNode = Node;
+  // if (!ParentEDTNode)
+  //   return;
+  // auto *ParentEDT = ParentEDTNode->getEDT();
+  // const auto ParentID = ParentEDT->getID();
+  // auto *ParentEDTFn = ParentEDT->getFn();
+  // auto *ParentCGNode = CG->getFunctionNode(ParentEDTFn);
+  // /// Fetch the outgoing edges.
+  // auto CallOutEdges = CG->getOutgoingEdges(ParentCGNode);
+  // if (CallOutEdges.size() == 0) {
+  //   LLVM_DEBUG(dbgs() << " The EDT #" << ParentID
+  //                     << "doesn't create any other EDTs\n");
+  //   return;
+  // }
 
   // /// Creation dependencies
   // LLVM_DEBUG(dbgs() << "The EDT #" << ParentID
@@ -162,14 +159,14 @@ void EDTGraph::setDeps(EDTGraphNode *Node) {
 
 void EDTGraph::setCreationDeps() {
   /// Analyze the CallGraph
-  auto FunctionNodes = CG->getFunctionNodes(true);
-  for (auto Node : FunctionNodes) {
-    auto *NodeFn = Node->getFunction();
-    auto *ParentEDTNode = getNode(*NodeFn);
-    if (!ParentEDTNode)
-      continue;
-    /// Fetch the outgoing edges.
-  }
+  // auto FunctionNodes = CG->getFunctionNodes(true);
+  // for (auto Node : FunctionNodes) {
+  //   auto *NodeFn = Node->getFunction();
+  //   auto *ParentEDTNode = getNode(*NodeFn);
+  //   if (!ParentEDTNode)
+  //     continue;
+  //   /// Fetch the outgoing edges.
+  // }
 }
 
 EDTGraphNode *EDTGraph::getClobberingEDT(MemorySSA &MSSA, CallBase *Inst) {

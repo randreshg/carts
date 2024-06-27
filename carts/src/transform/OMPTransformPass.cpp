@@ -1,5 +1,5 @@
 // Description: Main file for the Compiler for ARTS (OmpTransform) pass.
-#include "llvm/ADT/SetVector.h"
+
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
@@ -9,9 +9,11 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Value.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/raw_ostream.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Transforms/IPO/Attributor.h"
+
+#include "llvm/Support/Debug.h"
+
 
 #include "carts/transform/OMPTransform.h"
 #include "carts/utils/ARTSUtils.h"
@@ -57,7 +59,14 @@ PreservedAnalyses OMPTransformPass::run(Module &M, ModuleAnalysisManager &AM) {
   CallGraphUpdater CGUpdater;
   BumpPtrAllocator Allocator;
   InformationCache InfoCache(M, AG, Allocator, &Functions);
-  Attributor A(Functions, InfoCache, CGUpdater, nullptr, true, false);
+  AttributorConfig AC(CGUpdater);
+  AC.DefaultInitializeLiveInternals = false;
+  AC.IsModulePass = true;
+  AC.RewriteSignatures = false;
+  AC.MaxFixpointIterations = 32;
+  AC.DeleteFns = false;
+  AC.PassName = DEBUG_TYPE;
+  Attributor A(Functions, InfoCache, AC);
   /// Register attributes for functions
   for (Function *F : Functions) {
     for (Argument &Arg : F->args())

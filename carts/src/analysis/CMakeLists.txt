@@ -2,10 +2,6 @@
 file(GLOB CARTS_ANALYSIS_GRAPH_SOURCE_FILES "graph/*.cpp")
 set(CARTS_ANALYSIS_GRAPH_SOURCE_FILES ${CARTS_ANALYSIS_GRAPH_SOURCE_FILES} PARENT_SCOPE)
 
-include_directories(
-  ${NOELLE_INSTALL_DIR}/include
-)
-
 message_blue("Adding ARTSAnalysisPass")
 add_llvm_library( ARTSAnalysis
   MODULE 
