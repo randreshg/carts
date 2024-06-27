@@ -1,19 +1,21 @@
 // Description: Main file for the ARTS Analysis pass.
+#include <cassert>
+#include <cstdint>
+
+#include "llvm/IR/PassManager.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Passes/PassPlugin.h"
+
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/ValueTracking.h"
-#include "llvm/IR/LegacyPassManager.h"
-#include "llvm/Pass.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/Transforms/IPO/Attributor.h"
 #include "llvm/Transforms/Utils/CallGraphUpdater.h"
-#include <cassert>
-#include <cstdint>
+#include "llvm/Support/Debug.h"
 
 #include "carts/analysis/ARTSAnalysisPass.h"
 #include "carts/analysis/graph/EDTGraph.h"
 #include "carts/utils/ARTS.h"
-#include "noelle/core/Noelle.hpp"
 
 using namespace llvm;
 using namespace arts;
@@ -155,7 +157,7 @@ struct AAEDTInfo : public StateWrapper<EDTInfoState, AbstractAttribute> {
   void trackStatistics() const override {}
 
   /// See AbstractAttribute::getAsStr()
-  const std::string getAsStr() const override {
+  const std::string getAsStr(Attributor *) const override {
     if (!isValidState() || !EDTNode)
       return "<invalid>";
     std::string EDTStr = "EDT #" + std::to_string(EDTNode->getID()) + " -> ";
@@ -288,7 +290,7 @@ struct AAEDTInfoFunction : AAEDTInfo {
       auto *CalledEDT = EDTCache.getEDT(CalledFn);
       if (!CalledEDT)
         return true;
-      auto &CBAA = A.getAAFor<AAEDTInfo>(
+      auto *CBAA = A.getAAFor<AAEDTInfo>(
           *this, IRPosition::callsite_function(CB), DepClassTy::OPTIONAL);
       /// Merge the state of the associated function with the state of the
       /// call to child
@@ -296,11 +298,11 @@ struct AAEDTInfoFunction : AAEDTInfo {
       //                   << CB.getCalledFunction()->getName() << "\n");
       // auto FixPoint = CBAA.isAtFixpoint() ? "true" : "false";
       // LLVM_DEBUG(dbgs() << "    - Fixpoint: " << FixPoint << "\n");
-      AllEDTChildrenWereFixed &= CBAA.isAtFixpoint();
-      getState() ^= CBAA.getState();
+      AllEDTChildrenWereFixed &= CBAA->isAtFixpoint();
+      getState() ^= CBAA->getState();
 
       /// Add child and reached EDTs to the set
-      if (auto *Child = CBAA.getEDT()) {
+      if (auto *Child = CBAA->getEDT()) {
         ChildEDTs.insert(Child);
         ReachedEDTs.insert(Child);
       }
@@ -328,7 +330,7 @@ struct AAEDTInfoFunction : AAEDTInfo {
         EDTCache
             .getAnalysisResultForFunction<MemorySSAAnalysis>(*EDTNode->getFn())
             ->getMSSA();
-    // MSSA.dump();
+    MSSA.dump();
     // std::function<bool(const Function &)> GoBackwardsCB{
     //     [](const Function &Fn) { return false; }};
 
@@ -352,7 +354,7 @@ struct AAEDTInfoFunction : AAEDTInfo {
   /// finished now.
   ChangeStatus manifest(Attributor &A) override {
     /// Debug output info
-    LLVM_DEBUG(dbgs() << "AAEDTInfoFunction::manifest: " << getAsStr() << "\n");
+    LLVM_DEBUG(dbgs() << "AAEDTInfoFunction::manifest: " << getAsStr(&A) << "\n");
     LLVM_DEBUG(dbgs() << *EDTNode << "\n");
     ChangeStatus Changed = ChangeStatus::UNCHANGED;
     return Changed;
@@ -390,13 +392,18 @@ struct AAEDTInfoChild : AAEDTInfo {
     auto &CB = cast<CallBase>(getAnchorValue());
 
     /// What do we know about the child EDT?
-    auto &CBAA = A.getAAFor<AAEDTInfo>(
+    auto *CBAA = A.getAAFor<AAEDTInfo>(
         *this, IRPosition::function(*CB.getCalledFunction()),
         DepClassTy::OPTIONAL);
     /// Clamping the state with the state of the child EDT
-    getState() ^= CBAA.getState();
+    getState() ^= CBAA->getState();
 
-    if (CBAA.isAtFixpoint())
+    /// Get the set of EDTCalls that are reached from the current EDT
+    /// We do so, by getting the set of datablocks that are dominated
+    /// by the call instruction.
+    auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
+    
+    if (CBAA->isAtFixpoint())
       indicateOptimisticFixpoint();
     return StateBefore == getState() ? ChangeStatus::UNCHANGED
                                      : ChangeStatus::CHANGED;
@@ -437,11 +444,7 @@ AAEDTInfo &AAEDTInfo::createForPosition(const IRPosition &IRP, Attributor &A) {
 
 namespace arts {
 
-ARTSAnalysisPass::ARTSAnalysisPass() : ModulePass(ID) {}
-
-bool ARTSAnalysisPass::doInitialization(Module &M) { return false; }
-
-bool ARTSAnalysisPass::runOnModule(Module &M) {
+PreservedAnalyses ARTSAnalysisPass::run(Module &M, ModuleAnalysisManager &AM) {
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << "Running ARTS Analysis pass on Module: \n"
                     << M.getName() << "\n");
@@ -463,14 +466,21 @@ bool ARTSAnalysisPass::runOnModule(Module &M) {
   }
 
   LLVM_DEBUG(dbgs() << "\n\n" << TAG << "Initializing AAEDTInfo: \n");
-  /// Create Attributor
-  AnalysisGetter AG;
-  BumpPtrAllocator Allocator;
+  /// Create attributor
+  FunctionAnalysisManager &FAM =
+      AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+  AnalysisGetter AG(FAM);
   CallGraphUpdater CGUpdater;
-  const unsigned MaxFixpointIterations = 32;
-  EDTInfoCache InfoCache(M, AG, Allocator, Functions, EDTs, FunctionEDTMap);
-  Attributor A(Functions, InfoCache, CGUpdater, nullptr, false, true,
-               MaxFixpointIterations, nullptr, DEBUG_TYPE);
+  BumpPtrAllocator Allocator;
+  InformationCache InfoCache(M, AG, Allocator, &Functions);
+  AttributorConfig AC(CGUpdater);
+  AC.DefaultInitializeLiveInternals = false;
+  AC.IsModulePass = true;
+  AC.RewriteSignatures = false;
+  AC.MaxFixpointIterations = 32;
+  AC.DeleteFns = false;
+  AC.PassName = DEBUG_TYPE;
+  Attributor A(Functions, InfoCache, AC);
 
   /// Register AAs
   for (EDT *E : EDTs) {
@@ -488,24 +498,23 @@ bool ARTSAnalysisPass::runOnModule(Module &M) {
   // LLVM_DEBUG(dbgs() << TAG << "Process has finished\n\n" << M << "\n");
   LLVM_DEBUG(dbgs() << TAG << "Process has finished\n");
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
-  return false;
-}
-
-Noelle &ARTSAnalysisPass::getNoelle() { return getAnalysis<Noelle>(); }
-
-MemorySSA &ARTSAnalysisPass::getMemorySSA(Function &F) {
-  return getAnalysis<MemorySSAWrapperPass>(F).getMSSA();
-}
-
-void ARTSAnalysisPass::getAnalysisUsage(AnalysisUsage &AU) const {
-  AU.addRequired<MemorySSAAnalysis>();
-  AU.addRequired<Noelle>();
-  ModulePass::getAnalysisUsage(AU);
+  return PreservedAnalyses::all();
 }
 
 } // namespace arts
 
-// Next there is code to register your pass to "opt"
-char ARTSAnalysisPass::ID = 0;
-static RegisterPass<ARTSAnalysisPass> X("ARTSAnalysisPass",
-                                        "ARTS Analysis Pass", false, false);
+// This part is the new way of registering your pass
+extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+llvmGetPassPluginInfo() {
+  return {LLVM_PLUGIN_API_VERSION, "ARTSAnalysisPass", "v0.1", [](PassBuilder &PB) {
+            PB.registerPipelineParsingCallback(
+                [](StringRef Name, ModulePassManager &FPM,
+                   ArrayRef<PassBuilder::PipelineElement>) {
+                  if (Name == "arts-analysis") {
+                    FPM.addPass(ARTSAnalysisPass());
+                    return true;
+                  }
+                  return false;
+                });
+          }};
+}

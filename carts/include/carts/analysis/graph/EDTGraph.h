@@ -11,8 +11,6 @@
 
 #include "carts/analysis/ARTSAnalysisPass.h"
 #include "carts/utils/ARTS.h"
-#include "noelle/core/CallGraph.hpp"
-#include "noelle/core/Noelle.hpp"
 
 /// ------------------------------------------------------------------- ///
 ///                              EDT GRAPH                              ///
@@ -21,7 +19,6 @@
 /// ------------------------------------------------------------------- ///
 namespace arts {
 using namespace std;
-using namespace arcana::noelle;
 
 class EDTGraphEdge;
 class EDTGraphNode {
@@ -82,8 +79,7 @@ private:
       OutgoingEdges;
 
   ////
-  FunctionsManager *FM;
-  arcana::noelle::CallGraph *CG;
+  // FunctionsManager *FM;
 public:
   void print();
 };

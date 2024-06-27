@@ -2,11 +2,11 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Metadata.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Debug.h"
 
-// #include "carts/utils/ARTS.h"
 #include "carts/utils/ARTSIRBuilder.h"
 #include "carts/utils/ARTSUtils.h"
 #include "carts/utils/ARTSMetadata.h"
@@ -62,11 +62,11 @@ CallBase *EDTIRBuilder::buildEDT(
   OldFn->setSubprogram(nullptr);
   LLVM_DEBUG(dbgs() << "Created new function: " << *NewFn);
   /// Splice the body of the old function right into the new function
-  NewFn->getBasicBlockList().splice(NewFn->begin(), OldFn->getBasicBlockList());
+  NewFn->splice(NewFn->begin(), OldFn);
   /// If any early return, remove terminator and return void
   for (auto &BB : *NewFn) {
-    if (auto *TI = dyn_cast<ReturnInst>(BB.getTerminator())) {
-      TI->eraseFromParent();
+    if (auto *RI = dyn_cast<ReturnInst>(BB.getTerminator())) {
+      RI->eraseFromParent();
       ReturnInst::Create(M.getContext(), nullptr, &BB);
     }
   }

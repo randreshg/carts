@@ -1,23 +1,22 @@
 ; ModuleID = 'test.bc'
 source_filename = "test.cpp"
-target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
 
-%struct.ident_t = type { i32, i32, i32, i32, i8* }
+%struct.ident_t = type { i32, i32, i32, i32, ptr }
 %struct.kmp_task_t_with_privates = type { %struct.kmp_task_t, %struct..kmp_privates.t }
-%struct.kmp_task_t = type { i8*, i32 (i32, i8*)*, i32, %union.kmp_cmplrdata_t, %union.kmp_cmplrdata_t }
-%union.kmp_cmplrdata_t = type { i32 (i32, i8*)* }
+%struct.kmp_task_t = type { ptr, ptr, i32, %union.kmp_cmplrdata_t, %union.kmp_cmplrdata_t }
+%union.kmp_cmplrdata_t = type { ptr }
 %struct..kmp_privates.t = type { i32, i32 }
-%struct.anon = type { i32*, i32* }
 %struct.kmp_task_t_with_privates.1 = type { %struct.kmp_task_t, %struct..kmp_privates.t.2 }
 %struct..kmp_privates.t.2 = type { i32 }
-%struct.anon.0 = type { i32* }
+%struct.anon = type { ptr, ptr }
 
 @.str = private unnamed_addr constant [44 x i8] c"I think the number is %d/%d. with %d -- %d\0A\00", align 1
 @0 = private unnamed_addr constant [23 x i8] c";unknown;unknown;0;0;;\00", align 1
-@1 = private unnamed_addr constant %struct.ident_t { i32 0, i32 2, i32 0, i32 22, i8* getelementptr inbounds ([23 x i8], [23 x i8]* @0, i32 0, i32 0) }, align 8
-@.str.3 = private unnamed_addr constant [32 x i8] c"I think the number is %d - %d.\0A\00", align 1
-@.str.6 = private unnamed_addr constant [31 x i8] c"The final number is %d - % d.\0A\00", align 1
+@1 = private unnamed_addr constant %struct.ident_t { i32 0, i32 2, i32 0, i32 22, ptr @0 }, align 8
+@.str.2 = private unnamed_addr constant [32 x i8] c"I think the number is %d - %d.\0A\00", align 1
+@.str.5 = private unnamed_addr constant [31 x i8] c"The final number is %d - % d.\0A\00", align 1
 
 ; Function Attrs: mustprogress norecurse nounwind uwtable
 define dso_local noundef i32 @main() local_unnamed_addr #0 {
@@ -26,183 +25,173 @@ entry:
   %shared_number = alloca i32, align 4
   %random_number = alloca i32, align 4
   %NewRandom = alloca i32, align 4
-  %0 = bitcast i32* %number to i8*
-  call void @llvm.lifetime.start.p0i8(i64 4, i8* nonnull %0) #6
-  store i32 1, i32* %number, align 4, !tbaa !4
-  %1 = bitcast i32* %shared_number to i8*
-  call void @llvm.lifetime.start.p0i8(i64 4, i8* nonnull %1) #6
-  store i32 10000, i32* %shared_number, align 4, !tbaa !4
-  %2 = bitcast i32* %random_number to i8*
-  call void @llvm.lifetime.start.p0i8(i64 4, i8* nonnull %2) #6
+  call void @llvm.lifetime.start.p0(i64 4, ptr nonnull %number) #6
+  store i32 1, ptr %number, align 4, !tbaa !6
+  call void @llvm.lifetime.start.p0(i64 4, ptr nonnull %shared_number) #6
+  store i32 10000, ptr %shared_number, align 4, !tbaa !6
+  call void @llvm.lifetime.start.p0(i64 4, ptr nonnull %random_number) #6
   %call = tail call i32 @rand() #6
   %rem = srem i32 %call, 10
   %add = add nsw i32 %rem, 10
-  store i32 %add, i32* %random_number, align 4, !tbaa !4
-  %3 = bitcast i32* %NewRandom to i8*
-  call void @llvm.lifetime.start.p0i8(i64 4, i8* nonnull %3) #6
+  store i32 %add, ptr %random_number, align 4, !tbaa !6
+  call void @llvm.lifetime.start.p0(i64 4, ptr nonnull %NewRandom) #6
   %call1 = tail call i32 @rand() #6
-  store i32 %call1, i32* %NewRandom, align 4, !tbaa !4
-  call void (%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) @__kmpc_fork_call(%struct.ident_t* nonnull @1, i32 4, void (i32*, i32*, ...)* bitcast (void (i32*, i32*, i32*, i32*, i32*, i32*)* @.omp_outlined. to void (i32*, i32*, ...)*), i32* nonnull %random_number, i32* nonnull %NewRandom, i32* nonnull %number, i32* nonnull %shared_number)
-  %4 = load i32, i32* %number, align 4, !tbaa !4
-  %5 = load i32, i32* %random_number, align 4, !tbaa !4
-  %call2 = call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([31 x i8], [31 x i8]* @.str.6, i64 0, i64 0), i32 noundef %4, i32 noundef %5)
-  call void @llvm.lifetime.end.p0i8(i64 4, i8* nonnull %3) #6
-  call void @llvm.lifetime.end.p0i8(i64 4, i8* nonnull %2) #6
-  call void @llvm.lifetime.end.p0i8(i64 4, i8* nonnull %1) #6
-  call void @llvm.lifetime.end.p0i8(i64 4, i8* nonnull %0) #6
+  store i32 %call1, ptr %NewRandom, align 4, !tbaa !6
+  call void (ptr, i32, ptr, ...) @__kmpc_fork_call(ptr nonnull @1, i32 4, ptr nonnull @main.omp_outlined, ptr nonnull %random_number, ptr nonnull %NewRandom, ptr nonnull %number, ptr nonnull %shared_number)
+  %0 = load i32, ptr %number, align 4, !tbaa !6
+  %1 = load i32, ptr %random_number, align 4, !tbaa !6
+  %call2 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.5, i32 noundef %0, i32 noundef %1)
+  call void @llvm.lifetime.end.p0(i64 4, ptr nonnull %NewRandom) #6
+  call void @llvm.lifetime.end.p0(i64 4, ptr nonnull %random_number) #6
+  call void @llvm.lifetime.end.p0(i64 4, ptr nonnull %shared_number) #6
+  call void @llvm.lifetime.end.p0(i64 4, ptr nonnull %number) #6
   ret i32 0
 }
 
-; Function Attrs: argmemonly nofree nosync nounwind willreturn
-declare void @llvm.lifetime.start.p0i8(i64 immarg, i8* nocapture) #1
+; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) #1
 
 ; Function Attrs: nounwind
-declare dso_local i32 @rand() local_unnamed_addr #2
+declare i32 @rand() local_unnamed_addr #2
 
 ; Function Attrs: alwaysinline norecurse nounwind uwtable
-define internal void @.omp_outlined.(i32* noalias nocapture noundef readonly %.global_tid., i32* noalias nocapture noundef readnone %.bound_tid., i32* nocapture noundef nonnull readonly align 4 dereferenceable(4) %random_number, i32* nocapture noundef nonnull readonly align 4 dereferenceable(4) %NewRandom, i32* noundef nonnull align 4 dereferenceable(4) %number, i32* noundef nonnull align 4 dereferenceable(4) %shared_number) #3 {
+define internal void @main.omp_outlined(ptr noalias nocapture noundef readonly %.global_tid., ptr noalias nocapture readnone %.bound_tid., ptr nocapture noundef nonnull readonly align 4 dereferenceable(4) %random_number, ptr nocapture noundef nonnull readonly align 4 dereferenceable(4) %NewRandom, ptr noundef nonnull align 4 dereferenceable(4) %number, ptr noundef nonnull align 4 dereferenceable(4) %shared_number) #3 {
 entry:
-  %0 = load i32, i32* %.global_tid., align 4, !tbaa !4
-  %1 = tail call i8* @__kmpc_omp_task_alloc(%struct.ident_t* nonnull @1, i32 %0, i32 1, i64 48, i64 16, i32 (i32, i8*)* bitcast (i32 (i32, %struct.kmp_task_t_with_privates*)* @.omp_task_entry. to i32 (i32, i8*)*))
-  %2 = bitcast i8* %1 to i8**
-  %3 = load i8*, i8** %2, align 8, !tbaa !8
-  %agg.captured.sroa.0.0..sroa_cast = bitcast i8* %3 to i32**
-  store i32* %number, i32** %agg.captured.sroa.0.0..sroa_cast, align 8, !tbaa.struct !13
-  %agg.captured.sroa.2.0..sroa_idx = getelementptr inbounds i8, i8* %3, i64 8
-  %agg.captured.sroa.2.0..sroa_cast = bitcast i8* %agg.captured.sroa.2.0..sroa_idx to i32**
-  store i32* %shared_number, i32** %agg.captured.sroa.2.0..sroa_cast, align 8, !tbaa.struct !15
-  %4 = getelementptr inbounds i8, i8* %1, i64 40
-  %5 = bitcast i8* %4 to i32*
-  %6 = load i32, i32* %random_number, align 4, !tbaa !4
-  store i32 %6, i32* %5, align 8, !tbaa !16
-  %7 = getelementptr inbounds i8, i8* %1, i64 44
-  %8 = bitcast i8* %7 to i32*
-  %9 = load i32, i32* %NewRandom, align 4, !tbaa !4
-  store i32 %9, i32* %8, align 4, !tbaa !17
-  %10 = tail call i32 @__kmpc_omp_task(%struct.ident_t* nonnull @1, i32 %0, i8* %1)
-  %11 = load i32, i32* %shared_number, align 4, !tbaa !4
-  %inc = add nsw i32 %11, 1
-  store i32 %inc, i32* %shared_number, align 4, !tbaa !4
-  %12 = tail call i8* @__kmpc_omp_task_alloc(%struct.ident_t* nonnull @1, i32 %0, i32 1, i64 48, i64 8, i32 (i32, i8*)* bitcast (i32 (i32, %struct.kmp_task_t_with_privates.1*)* @.omp_task_entry..5 to i32 (i32, i8*)*))
-  %13 = bitcast i8* %12 to i32***
-  %14 = load i32**, i32*** %13, align 8, !tbaa !18
-  store i32* %shared_number, i32** %14, align 8, !tbaa.struct !15
-  %15 = getelementptr inbounds i8, i8* %12, i64 40
-  %16 = bitcast i8* %15 to i32*
-  %17 = load i32, i32* %number, align 4, !tbaa !4
-  store i32 %17, i32* %16, align 8, !tbaa !21
-  %18 = tail call i32 @__kmpc_omp_task(%struct.ident_t* nonnull @1, i32 %0, i8* %12)
+  %0 = load i32, ptr %.global_tid., align 4, !tbaa !6
+  %1 = tail call ptr @__kmpc_omp_task_alloc(ptr nonnull @1, i32 %0, i32 1, i64 48, i64 16, ptr nonnull @.omp_task_entry.)
+  %2 = load ptr, ptr %1, align 8, !tbaa !10
+  store ptr %number, ptr %2, align 8, !tbaa.struct !15
+  %agg.captured.sroa.2.0..sroa_idx = getelementptr inbounds i8, ptr %2, i64 8
+  store ptr %shared_number, ptr %agg.captured.sroa.2.0..sroa_idx, align 8, !tbaa.struct !17
+  %3 = getelementptr inbounds %struct.kmp_task_t_with_privates, ptr %1, i64 0, i32 1
+  %4 = load i32, ptr %random_number, align 4, !tbaa !6
+  store i32 %4, ptr %3, align 8, !tbaa !18
+  %5 = getelementptr inbounds %struct.kmp_task_t_with_privates, ptr %1, i64 0, i32 1, i32 1
+  %6 = load i32, ptr %NewRandom, align 4, !tbaa !6
+  store i32 %6, ptr %5, align 4, !tbaa !19
+  %7 = tail call i32 @__kmpc_omp_task(ptr nonnull @1, i32 %0, ptr nonnull %1)
+  %8 = load i32, ptr %shared_number, align 4, !tbaa !6
+  %inc = add nsw i32 %8, 1
+  store i32 %inc, ptr %shared_number, align 4, !tbaa !6
+  %9 = tail call ptr @__kmpc_omp_task_alloc(ptr nonnull @1, i32 %0, i32 1, i64 48, i64 8, ptr nonnull @.omp_task_entry..4)
+  %10 = load ptr, ptr %9, align 8, !tbaa !20
+  store ptr %shared_number, ptr %10, align 8, !tbaa.struct !17
+  %11 = getelementptr inbounds %struct.kmp_task_t_with_privates.1, ptr %9, i64 0, i32 1
+  %12 = load i32, ptr %number, align 4, !tbaa !6
+  store i32 %12, ptr %11, align 8, !tbaa !23
+  %13 = tail call i32 @__kmpc_omp_task(ptr nonnull @1, i32 %0, ptr nonnull %9)
   ret void
 }
 
 ; Function Attrs: nofree nounwind
-declare dso_local noundef i32 @printf(i8* nocapture noundef readonly, ...) local_unnamed_addr #4
+declare noundef i32 @printf(ptr nocapture noundef readonly, ...) local_unnamed_addr #4
 
-declare dso_local i32 @__gxx_personality_v0(...)
+declare i32 @__gxx_personality_v0(...)
 
 ; Function Attrs: nofree norecurse nounwind uwtable
-define internal noundef i32 @.omp_task_entry.(i32 noundef %0, %struct.kmp_task_t_with_privates* noalias nocapture noundef readonly %1) #5 personality i32 (...)* @__gxx_personality_v0 {
+define internal noundef i32 @.omp_task_entry.(i32 %0, ptr noalias nocapture noundef readonly %1) #5 personality ptr @__gxx_personality_v0 {
 entry:
-  %2 = bitcast %struct.kmp_task_t_with_privates* %1 to %struct.anon**
-  %3 = load %struct.anon*, %struct.anon** %2, align 8, !tbaa !8
-  %.idx = getelementptr %struct.anon, %struct.anon* %3, i64 0, i32 0
-  %.idx.val = load i32*, i32** %.idx, align 8, !tbaa !22
-  %.idx2 = getelementptr %struct.anon, %struct.anon* %3, i64 0, i32 1
-  %.idx2.val = load i32*, i32** %.idx2, align 8, !tbaa !24
-  tail call void @llvm.experimental.noalias.scope.decl(metadata !25)
-  %4 = getelementptr inbounds %struct.kmp_task_t_with_privates, %struct.kmp_task_t_with_privates* %1, i64 0, i32 1, i32 0
-  %5 = getelementptr inbounds %struct.kmp_task_t_with_privates, %struct.kmp_task_t_with_privates* %1, i64 0, i32 1, i32 1
-  %6 = load i32, i32* %.idx.val, align 4, !tbaa !4, !noalias !25
-  %7 = load i32, i32* %.idx2.val, align 4, !tbaa !4, !noalias !25
-  %8 = load i32, i32* %4, align 4, !tbaa !4, !alias.scope !25
-  %9 = load i32, i32* %5, align 4, !tbaa !4, !alias.scope !25
-  %call.i = tail call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([44 x i8], [44 x i8]* @.str, i64 0, i64 0), i32 noundef %6, i32 noundef %7, i32 noundef %8, i32 noundef %9) #6, !noalias !25
-  %10 = load i32, i32* %.idx.val, align 4, !tbaa !4, !noalias !25
-  %inc.i = add nsw i32 %10, 1
-  store i32 %inc.i, i32* %.idx.val, align 4, !tbaa !4, !noalias !25
-  %11 = load i32, i32* %.idx2.val, align 4, !tbaa !4, !noalias !25
-  %dec.i = add nsw i32 %11, -1
-  store i32 %dec.i, i32* %.idx2.val, align 4, !tbaa !4, !noalias !25
+  %2 = load ptr, ptr %1, align 8, !tbaa !10
+  %3 = getelementptr inbounds %struct.kmp_task_t_with_privates, ptr %1, i64 0, i32 1
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !24)
+  %4 = getelementptr inbounds %struct.kmp_task_t_with_privates, ptr %1, i64 0, i32 1, i32 1
+  %5 = load ptr, ptr %2, align 8, !tbaa !27, !alias.scope !24, !noalias !29
+  %6 = load i32, ptr %5, align 4, !tbaa !6, !noalias !24
+  %7 = getelementptr inbounds %struct.anon, ptr %2, i64 0, i32 1
+  %8 = load ptr, ptr %7, align 8, !tbaa !31, !alias.scope !24, !noalias !29
+  %9 = load i32, ptr %8, align 4, !tbaa !6, !noalias !24
+  %10 = load i32, ptr %3, align 4, !tbaa !6, !noalias !24
+  %11 = load i32, ptr %4, align 4, !tbaa !6, !noalias !24
+  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %6, i32 noundef %9, i32 noundef %10, i32 noundef %11), !noalias !24
+  %12 = load i32, ptr %5, align 4, !tbaa !6, !noalias !24
+  %inc.i = add nsw i32 %12, 1
+  store i32 %inc.i, ptr %5, align 4, !tbaa !6, !noalias !24
+  %13 = load i32, ptr %8, align 4, !tbaa !6, !noalias !24
+  %dec.i = add nsw i32 %13, -1
+  store i32 %dec.i, ptr %8, align 4, !tbaa !6, !noalias !24
   ret i32 0
 }
 
 ; Function Attrs: nounwind
-declare i8* @__kmpc_omp_task_alloc(%struct.ident_t*, i32, i32, i64, i64, i32 (i32, i8*)*) local_unnamed_addr #6
+declare noalias ptr @__kmpc_omp_task_alloc(ptr, i32, i32, i64, i64, ptr) local_unnamed_addr #6
 
 ; Function Attrs: nounwind
-declare i32 @__kmpc_omp_task(%struct.ident_t*, i32, i8*) local_unnamed_addr #6
+declare i32 @__kmpc_omp_task(ptr, i32, ptr) local_unnamed_addr #6
 
 ; Function Attrs: nofree norecurse nounwind uwtable
-define internal noundef i32 @.omp_task_entry..5(i32 noundef %0, %struct.kmp_task_t_with_privates.1* noalias nocapture noundef %1) #5 personality i32 (...)* @__gxx_personality_v0 {
+define internal noundef i32 @.omp_task_entry..4(i32 %0, ptr noalias nocapture noundef %1) #5 personality ptr @__gxx_personality_v0 {
 entry:
-  %2 = bitcast %struct.kmp_task_t_with_privates.1* %1 to %struct.anon.0**
-  %3 = load %struct.anon.0*, %struct.anon.0** %2, align 8, !tbaa !18
-  %.idx = getelementptr %struct.anon.0, %struct.anon.0* %3, i64 0, i32 0
-  %.idx.val = load i32*, i32** %.idx, align 8, !tbaa !28
-  %.idx.val.val = load i32, i32* %.idx.val, align 4, !tbaa !4
-  tail call void @llvm.experimental.noalias.scope.decl(metadata !30)
-  %4 = getelementptr inbounds %struct.kmp_task_t_with_privates.1, %struct.kmp_task_t_with_privates.1* %1, i64 0, i32 1, i32 0
-  %5 = load i32, i32* %4, align 4, !tbaa !4, !alias.scope !30
-  %call.i = tail call i32 (i8*, ...) @printf(i8* noundef nonnull dereferenceable(1) getelementptr inbounds ([32 x i8], [32 x i8]* @.str.3, i64 0, i64 0), i32 noundef %5, i32 noundef %.idx.val.val) #6, !noalias !30
-  %inc.i = add nsw i32 %5, 1
-  store i32 %inc.i, i32* %4, align 4, !tbaa !4, !alias.scope !30
+  %2 = load ptr, ptr %1, align 8, !tbaa !20
+  %3 = getelementptr inbounds %struct.kmp_task_t_with_privates.1, ptr %1, i64 0, i32 1
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !32)
+  %4 = load i32, ptr %3, align 4, !tbaa !6, !noalias !32
+  %5 = load ptr, ptr %2, align 8, !tbaa !35, !alias.scope !32, !noalias !37
+  %6 = load i32, ptr %5, align 4, !tbaa !6, !noalias !32
+  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %4, i32 noundef %6), !noalias !32
+  %inc.i = add nsw i32 %4, 1
+  store i32 %inc.i, ptr %3, align 4, !tbaa !6, !noalias !32
   ret i32 0
 }
 
 ; Function Attrs: nounwind
-declare !callback !33 void @__kmpc_fork_call(%struct.ident_t*, i32, void (i32*, i32*, ...)*, ...) local_unnamed_addr #6
+declare !callback !39 void @__kmpc_fork_call(ptr, i32, ptr, ...) local_unnamed_addr #6
 
-; Function Attrs: argmemonly nofree nosync nounwind willreturn
-declare void @llvm.lifetime.end.p0i8(i64 immarg, i8* nocapture) #1
+; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) #1
 
-; Function Attrs: inaccessiblememonly nofree nosync nounwind willreturn
+; Function Attrs: nocallback nofree nosync nounwind willreturn memory(inaccessiblemem: readwrite)
 declare void @llvm.experimental.noalias.scope.decl(metadata) #7
 
-attributes #0 = { mustprogress norecurse nounwind uwtable "frame-pointer"="none" "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
-attributes #1 = { argmemonly nofree nosync nounwind willreturn }
-attributes #2 = { nounwind "frame-pointer"="none" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
-attributes #3 = { alwaysinline norecurse nounwind uwtable "frame-pointer"="none" "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
-attributes #4 = { nofree nounwind "frame-pointer"="none" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
-attributes #5 = { nofree norecurse nounwind uwtable "frame-pointer"="none" "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
+attributes #0 = { mustprogress norecurse nounwind uwtable "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
+attributes #1 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
+attributes #2 = { nounwind "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
+attributes #3 = { alwaysinline norecurse nounwind uwtable "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
+attributes #4 = { nofree nounwind "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
+attributes #5 = { nofree norecurse nounwind uwtable "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
 attributes #6 = { nounwind }
-attributes #7 = { inaccessiblememonly nofree nosync nounwind willreturn }
+attributes #7 = { nocallback nofree nosync nounwind willreturn memory(inaccessiblemem: readwrite) }
 
-!llvm.module.flags = !{!0, !1, !2}
-!llvm.ident = !{!3}
-!nvvm.annotations = !{}
+!llvm.module.flags = !{!0, !1, !2, !3, !4}
+!llvm.ident = !{!5}
 
 !0 = !{i32 1, !"wchar_size", i32 4}
-!1 = !{i32 7, !"openmp", i32 50}
-!2 = !{i32 7, !"uwtable", i32 1}
-!3 = !{!"clang version 14.0.6"}
-!4 = !{!5, !5, i64 0}
-!5 = !{!"int", !6, i64 0}
-!6 = !{!"omnipotent char", !7, i64 0}
-!7 = !{!"Simple C++ TBAA"}
-!8 = !{!9, !11, i64 0}
-!9 = !{!"_ZTS24kmp_task_t_with_privates", !10, i64 0, !12, i64 40}
-!10 = !{!"_ZTS10kmp_task_t", !11, i64 0, !11, i64 8, !5, i64 16, !6, i64 24, !6, i64 32}
-!11 = !{!"any pointer", !6, i64 0}
-!12 = !{!"_ZTS15.kmp_privates.t", !5, i64 0, !5, i64 4}
-!13 = !{i64 0, i64 8, !14, i64 8, i64 8, !14}
-!14 = !{!11, !11, i64 0}
-!15 = !{i64 0, i64 8, !14}
-!16 = !{!9, !5, i64 40}
-!17 = !{!9, !5, i64 44}
-!18 = !{!19, !11, i64 0}
-!19 = !{!"_ZTS24kmp_task_t_with_privates", !10, i64 0, !20, i64 40}
-!20 = !{!"_ZTS15.kmp_privates.t", !5, i64 0}
-!21 = !{!19, !5, i64 40}
-!22 = !{!23, !11, i64 0}
-!23 = !{!"_ZTSZ4mainE3$_0", !11, i64 0, !11, i64 8}
-!24 = !{!23, !11, i64 8}
-!25 = !{!26}
-!26 = distinct !{!26, !27, !".omp_outlined..1: %.privates."}
-!27 = distinct !{!27, !".omp_outlined..1"}
-!28 = !{!29, !11, i64 0}
-!29 = !{!"_ZTSZ4mainE3$_1", !11, i64 0}
-!30 = !{!31}
-!31 = distinct !{!31, !32, !".omp_outlined..2: %.privates."}
-!32 = distinct !{!32, !".omp_outlined..2"}
-!33 = !{!34}
-!34 = !{i64 2, i64 -1, i64 -1, i1 true}
+!1 = !{i32 7, !"openmp", i32 51}
+!2 = !{i32 8, !"PIC Level", i32 2}
+!3 = !{i32 7, !"PIE Level", i32 2}
+!4 = !{i32 7, !"uwtable", i32 2}
+!5 = !{!"clang version 18.1.8"}
+!6 = !{!7, !7, i64 0}
+!7 = !{!"int", !8, i64 0}
+!8 = !{!"omnipotent char", !9, i64 0}
+!9 = !{!"Simple C++ TBAA"}
+!10 = !{!11, !13, i64 0}
+!11 = !{!"_ZTS24kmp_task_t_with_privates", !12, i64 0, !14, i64 40}
+!12 = !{!"_ZTS10kmp_task_t", !13, i64 0, !13, i64 8, !7, i64 16, !8, i64 24, !8, i64 32}
+!13 = !{!"any pointer", !8, i64 0}
+!14 = !{!"_ZTS15.kmp_privates.t", !7, i64 0, !7, i64 4}
+!15 = !{i64 0, i64 8, !16, i64 8, i64 8, !16}
+!16 = !{!13, !13, i64 0}
+!17 = !{i64 0, i64 8, !16}
+!18 = !{!11, !7, i64 40}
+!19 = !{!11, !7, i64 44}
+!20 = !{!21, !13, i64 0}
+!21 = !{!"_ZTS24kmp_task_t_with_privates", !12, i64 0, !22, i64 40}
+!22 = !{!"_ZTS15.kmp_privates.t", !7, i64 0}
+!23 = !{!21, !7, i64 40}
+!24 = !{!25}
+!25 = distinct !{!25, !26, !".omp_outlined.: %__context"}
+!26 = distinct !{!26, !".omp_outlined."}
+!27 = !{!28, !13, i64 0}
+!28 = !{!"_ZTSZ4mainE3$_0", !13, i64 0, !13, i64 8}
+!29 = !{!30}
+!30 = distinct !{!30, !26, !".omp_outlined.: %.privates."}
+!31 = !{!28, !13, i64 8}
+!32 = !{!33}
+!33 = distinct !{!33, !34, !".omp_outlined..1: %__context"}
+!34 = distinct !{!34, !".omp_outlined..1"}
+!35 = !{!36, !13, i64 0}
+!36 = !{!"_ZTSZ4mainE3$_1", !13, i64 0}
+!37 = !{!38}
+!38 = distinct !{!38, !34, !".omp_outlined..1: %.privates."}
+!39 = !{!40}
+!40 = !{i64 2, i64 -1, i64 -1, i1 true}

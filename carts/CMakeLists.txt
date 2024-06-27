@@ -9,13 +9,12 @@ set(CARTS_CXX_FLAGS
 
 # Configure LLVM 
 message_blue("Finding dependencies: ")
-find_package(LLVM 14 REQUIRED CONFIG)
+find_package(LLVM ${LLVM_VERSION} REQUIRED CONFIG)
 
 set(LLVM_RUNTIME_OUTPUT_INTDIR ${CMAKE_INSTALL_LIBDIR}/)
 set(LLVM_LIBRARY_OUTPUT_INTDIR ${CMAKE_INSTALL_LIBDIR}/)
 
 message_green("Found LLVM ${LLVM_PACKAGE_VERSION} in ${LLVM_DIR}")
-message_green("Found NOELLE ${NOELLE_VERSION} in ${NOELLE_INSTALL_DIR}")
 
 # Prepare the pass to be included in the source tree
 list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
@@ -34,15 +33,6 @@ link_directories(${LLVM_LIBRARY_DIRS})
 
 # Compilation flags
 add_compile_options(${CARTS_CXX_FLAGS})
-# set_source_files_properties(${CARTSPassSrc} PROPERTIES COMPILE_FLAGS)
-# set_source_files_properties(${CARTSPassSrc} PROPERTIES COMPILE_FLAGS " -std=c++17")
-
-
-# Name of the LLVM pass
-# set(CARTSPassName "CARTS")
-
-# set(LLVM_RUNTIME_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/)
-# set(LLVM_LIBRARY_OUTPUT_INTDIR ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/)
 
 # Add src directory
 add_subdirectory(src)
