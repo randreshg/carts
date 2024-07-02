@@ -44,7 +44,6 @@ CallBase *EDTIRBuilder::buildEDT(
     function<void(EDTIRBuilder *, Function *, Function *)> fillRewiringMapFn,
     Instruction *InsertBefore) {
   LLVM_DEBUG(dbgs() << TAG << "Building EDT:\n");
-  // LLVM_DEBUG(dbgs() << TAG << "Old function: " << *OldFn << "\n");
   /// Collect replacement argument types and copy over existing attributes.
   SmallVector<Type *, 16> NewArgumentTypes;
   for (auto Arg : CallArgs)
@@ -87,15 +86,11 @@ CallBase *EDTIRBuilder::buildEDT(
   else
     NewCI = CallInst::Create(NewFn, CallArgs, "", OldCB);
   /// Clean EDTIR after building the EDT
-  LLVM_DEBUG(dbgs() << "New callsite: " << *NewCI << "\n");
+  LLVM_DEBUG(dbgs() << TAG << "New callsite: " << *NewCI << "\n");
   removeValue(OldCB, true, true);
   removeFunction(OldFn);
-  // removeValue(OldFn, true, true);
   LLVM_DEBUG(dbgs() << "Current Function after undefining OldCB:\n"
                     << *(NewCI->getFunction()) << "\n");
-  /// Undefine unused arguments
-  for (auto *UnusedArg : UnusedArgs)
-    UnusedArg->replaceAllUsesWith(UndefValue::get(UnusedArg->getType()));
   LLVM_DEBUG(dbgs() << TAG << "New function:\n" << *NewFn << "\n");
   assert(!NewFn->isDeclaration() && "New function is a declaration");
   /// Set metadata

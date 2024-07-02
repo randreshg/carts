@@ -5,13 +5,13 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Use.h"
 
+#include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/CodeExtractor.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
-#include "llvm/Support/Debug.h"
 #include <sys/types.h>
 
 #include "carts/utils/ARTS.h"
@@ -52,8 +52,14 @@ void rewireValues(DenseMap<Value *, Value *> &RewiringMap) {
 void removeFunction(Function *Fn) {
   for (auto &Arg : Fn->args())
     replaceUsesWithUndef(&Arg, false, false);
+  /// Iterate over function operators and remove them
+  for (auto &BB : *Fn) {
+    for (auto &I : BB) {
+      removeValue(&I, false, false);
+    }
+  }
   Fn->deleteBody();
-  Fn->removeFromParent();
+  removeValue(Fn, false, false);
 }
 
 void removeValue(Value *V, bool RecursiveRemove, bool RecursiveUndef) {

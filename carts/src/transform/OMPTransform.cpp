@@ -1,15 +1,15 @@
 // Description: Main file for the Compiler for ARTS (OmpTransform) pass.
 #include <cstdint>
 
-#include "llvm/Transforms/IPO/Attributor.h"
-#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Transforms/IPO/Attributor.h"
 
 #include "carts/transform/OMPTransform.h"
 #include "carts/utils/ARTSIRBuilder.h"
@@ -38,7 +38,7 @@ bool OMPTransform::run(ModuleAnalysisManager &AM) {
   /// Set metadata for Main EDT
   EDTIRBuilder IRB(EDTType::Main);
   IRB.setMetadata(MainFn);
-  
+
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << "Module after Identifying EDTs\n" << M << "\n");
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
@@ -89,7 +89,8 @@ void OMPTransform::identifyEDTs(Function &Fn) {
       }
     } while ((CurrentI = CurrentI->getNextNonDebugInstruction()));
   } while ((CurrentBB = NextBB));
-  LLVM_DEBUG(dbgs() << TAG << "Processing function: " << Fn.getName() << " - Finished\n");
+  LLVM_DEBUG(dbgs() << TAG << "Processing function: " << Fn.getName()
+                    << " - Finished\n");
   LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - - - -\n");
 }
 
@@ -99,10 +100,6 @@ Instruction *OMPTransform::handleParallelRegion(CallBase &CB) {
   const OMPData &RTI = getRTData(getRTFunction(CB));
   Use *CallArgItr = CB.arg_begin() + RTI.KeepCallArgsFrom;
   Argument *FnArgItr = Fn->arg_begin() + RTI.KeepFnArgsFrom;
-  /// Insert unused arguments
-  for (auto *FnArg = Fn->arg_begin(); FnArg != FnArgItr; ++FnArg) {
-    IRB.insertUnusedArg(FnArg);
-  }
   /// Insert call arguments
   for (; FnArgItr < Fn->arg_end(); ++CallArgItr, ++FnArgItr) {
     Value *CallV = *CallArgItr;
@@ -114,11 +111,9 @@ Instruction *OMPTransform::handleParallelRegion(CallBase &CB) {
   /// Fill the EDTRewireMap
   auto fillRewiringMapFn = [&](EDTIRBuilder *Me, Function *OldFn,
                                Function *NewFn) {
-    // LLVM_DEBUG(dbgs() << TAG << "RewiringMap for Parallel Region:\n");
     Argument *OldFnArgIt = OldFn->arg_begin() + RTI.KeepFnArgsFrom;
     Argument *NewFnArgIt = NewFn->arg_begin();
     for (; OldFnArgIt != OldFn->arg_end(); ++OldFnArgIt, ++NewFnArgIt) {
-      // LLVM_DEBUG(dbgs() << *OldFnArgIt << "->" << *NewFnArgIt << "\n");
       Me->insertMapValue(OldFnArgIt, NewFnArgIt);
     }
   };
@@ -171,7 +166,7 @@ Instruction *OMPTransform::handleParallelDoneRegion(CallBase &CB) {
 Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
   /// Analyze return pointer
   /// For the shared variables we are interested in all stores that are done
-  /// to the shareds field of the kmp_task_t struct. For the firstprivate
+  /// to the shared fields of the kmp_task_t struct. For the firstprivate
   /// variables we are interested in all stores that are done to the
   /// privates fields of the kmp_task_t_with_privates struct.
   ///
@@ -235,10 +230,10 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
 
   /// Rewrite Task Outlined Function arguments to match the Task Data
   auto *Fn = omp::getOutlinedFunction(&CB);
-  Argument *TaskData = dyn_cast<Argument>(Fn->arg_begin() + 1);
+  Argument *TaskDataArg = dyn_cast<Argument>(Fn->arg_begin() + 1);
   /// This assumes the 'disaggregation' happens in the first basic block
   BasicBlock &EntryBB = Fn->getEntryBlock();
-  auto *TaskDataPtr = &*(++EntryBB.begin());
+  auto *TaskDataPtr = &*(EntryBB.begin());
   /// Get offsets and values from the Task Data - Task Outlined function
   DenseMap<int64_t, Value *> OffsetToValueOF;
   CurI = &*EntryBB.begin();
@@ -248,13 +243,14 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
 
     auto *L = cast<LoadInst>(CurI);
     auto *Val = L->getPointerOperand();
+    // LLVM_DEBUG(dbgs() << TAG << "LoadInst: " << *L << "\n");
     int64_t Offset = -1;
     auto *BasePointer = GetPointerBaseWithConstantOffset(Val, Offset, DL);
 
     if (Offset == -1)
       continue;
 
-    bool Cond = (Offset >= TaskDataSize && BasePointer == TaskData) ||
+    bool Cond = (Offset >= TaskDataSize && BasePointer == TaskDataArg) ||
                 (Offset < TaskDataSize && BasePointer == TaskDataPtr);
     if (!Cond)
       continue;
@@ -263,11 +259,9 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
     if (OffsetToValueOF.size() == ValueToOffsetTD.size())
       break;
   }
+
   assert(ValueToOffsetTD.size() == OffsetToValueOF.size() &&
          "ValueToOffsetTD and ValueToOffsetOF have different sizes");
-  /// Unused arguments
-  IRB.insertUnusedArg(Fn->arg_begin());
-  IRB.insertUnusedArg(Fn->arg_begin() + 1);
 
   /// Fill the EDTRewireMap
   auto fillRewiringMapFn = [&](EDTIRBuilder *Me, Function *OldFn,
@@ -278,7 +272,8 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
       // LLVM_DEBUG(dbgs() << TAG << "CallArg: " << *CallArg << "\n");
       Value *OldValue = OffsetToValueOF[ValueToOffsetTD[CallArg]];
       Value *NewValue = NewFn->arg_begin() + CallArgsItr;
-      // LLVM_DEBUG(dbgs() << TAG << "Rewiring: " << *OldValue << " -> " << *NewValue << "\n");
+      // LLVM_DEBUG(dbgs() << TAG << "Rewiring: " << *OldValue << " -> " <<
+      // *NewValue << "\n");
       Me->insertMapValue(OldValue, NewValue);
     }
   };
