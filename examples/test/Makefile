@@ -13,36 +13,17 @@ all: test_opt
 
 # Run OMP transform pass
 test_arts_ir.bc: test.bc
-	opt -debug-only=omp-transform,arts,carts,arts-ir-builder,arts-utils\
-		-load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/OMPTransform.so \
+	opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/OMPTransform.so \
 		-passes="omp-transform" $< -o $@
+	# -debug-only=omp-transform,arts,carts,arts-ir-builder,arts-utils\
 	llvm-dis $@
-# test_arts_ir.bc: test.bc
-# 	opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/OMPTransform.so \
-# 		-passes="omp-transform" $< -o $@
-# 	llvm-dis $@
-
-# Normalize the IR with NOELLE
-# test_norm.bc: test_arts_ir.bc
-# 	noelle-norm $^ -o $@
-# 	llvm-dis $@
-
-# # Embed NOELLE PDG metadata in the IR
-# test_with_metadata.bc: test_norm.bc
-# 	noelle-meta-pdg-embed $^ -o $@
-# 	llvm-dis $@
 
 # Run the ARTS analysis pass
 test_arts_analysis.bc:  test_arts_ir.bc
-	opt -debug-only=arts-analysis,arts,carts,arts-ir-builder,edt-graph,carts-metadata\
-			-load /home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so \
-			-ARTSAnalysisPass -passes="arts-analysis" $< -o $@
-	noelle-load -debug-only=arts-analysis,arts,carts,arts-ir-builder,edt-graph,carts-metadata \
-		-load /home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so -ARTSAnalysisPass $< -o $@
+	opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so \
+			-debug-only=arts-analysis,arts,carts,arts-ir-builder,edt-graph,carts-metadata\
+			-passes="arts-analysis" $< -o $@
 	llvm-dis $@
-
-# noelle-load -debug-only=arts,carts,arts-analyzer,arts-ir-builder,arts-utils -load /home/rherreraguaitero/ME/ARTS-env/CARTS/.build/CARTS.so -CARTS $< -o $@
-# noelle-load -debug-only=arts,carts,arts-analyzer -load-pass-plugin /home/rherreraguaitero/ME/ARTS-env/CARTS/.build/CARTS.so -passes=CARTS $< -o $@
 
 
 

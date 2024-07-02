@@ -9,13 +9,14 @@
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Transforms/IPO/Attributor.h"
 #include "llvm/Transforms/Utils/CallGraphUpdater.h"
-#include "llvm/Support/Debug.h"
 
-#include "carts/analysis/ARTSAnalysisPass.h"
-#include "carts/analysis/graph/EDTGraph.h"
+// #include "carts/analysis/ARTSAnalysisPass.h"
 #include "carts/utils/ARTS.h"
+#include "carts/analysis/graph/EDTGraph.h"
+
 
 using namespace llvm;
 using namespace arts;
@@ -324,7 +325,8 @@ struct AAEDTInfoFunction : AAEDTInfo {
     if (AllEDTChildrenWereFixed)
       indicateOptimisticFixpoint();
 
-    LLVM_DEBUG(dbgs() << "AAEDTInfoFunction::updateImpl: MemorySSA Analysis\n";);
+    LLVM_DEBUG(
+        dbgs() << "AAEDTInfoFunction::updateImpl: MemorySSA Analysis\n";);
     /// Check if current EDT can reach any EDT child
     auto &MSSA =
         EDTCache
@@ -354,7 +356,8 @@ struct AAEDTInfoFunction : AAEDTInfo {
   /// finished now.
   ChangeStatus manifest(Attributor &A) override {
     /// Debug output info
-    LLVM_DEBUG(dbgs() << "AAEDTInfoFunction::manifest: " << getAsStr(&A) << "\n");
+    LLVM_DEBUG(dbgs() << "AAEDTInfoFunction::manifest: " << getAsStr(&A)
+                      << "\n");
     LLVM_DEBUG(dbgs() << *EDTNode << "\n");
     ChangeStatus Changed = ChangeStatus::UNCHANGED;
     return Changed;
@@ -402,7 +405,7 @@ struct AAEDTInfoChild : AAEDTInfo {
     /// We do so, by getting the set of datablocks that are dominated
     /// by the call instruction.
     auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
-    
+
     if (CBAA->isAtFixpoint())
       indicateOptimisticFixpoint();
     return StateBefore == getState() ? ChangeStatus::UNCHANGED
@@ -416,7 +419,6 @@ struct AAEDTInfoChild : AAEDTInfo {
 };
 
 const char AAEDTInfo::ID = 0;
-
 AAEDTInfo &AAEDTInfo::createForPosition(const IRPosition &IRP, Attributor &A) {
   AAEDTInfo *AA = nullptr;
   switch (IRP.getPositionKind()) {
@@ -441,10 +443,11 @@ AAEDTInfo &AAEDTInfo::createForPosition(const IRPosition &IRP, Attributor &A) {
 /// ------------------------------------------------------------------- ///
 ///                        ARTSAnalysisPass                             ///
 /// ------------------------------------------------------------------- ///
+namespace {
 
-namespace arts {
-
-PreservedAnalyses ARTSAnalysisPass::run(Module &M, ModuleAnalysisManager &AM) {
+class ARTSAnalysisPass : public PassInfoMixin<ARTSAnalysisPass> {
+public:
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << "Running ARTS Analysis pass on Module: \n"
                     << M.getName() << "\n");
@@ -500,13 +503,15 @@ PreservedAnalyses ARTSAnalysisPass::run(Module &M, ModuleAnalysisManager &AM) {
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   return PreservedAnalyses::all();
 }
+};
 
 } // namespace arts
 
 // This part is the new way of registering your pass
 extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
 llvmGetPassPluginInfo() {
-  return {LLVM_PLUGIN_API_VERSION, "ARTSAnalysisPass", "v0.1", [](PassBuilder &PB) {
+  return {LLVM_PLUGIN_API_VERSION, "ARTSAnalysisPass", "v0.1",
+          [](PassBuilder &PB) {
             PB.registerPipelineParsingCallback(
                 [](StringRef Name, ModulePassManager &FPM,
                    ArrayRef<PassBuilder::PipelineElement>) {

@@ -4,12 +4,11 @@
 #ifndef LLVM_EDTGRAPH_H
 #define LLVM_EDTGRAPH_H
 
-#include "llvm/ADT/SetVector.h"
+// #include "llvm/ADT/SetVector.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/IR/Function.h"
 #include <unordered_set>
 
-#include "carts/analysis/ARTSAnalysisPass.h"
 #include "carts/utils/ARTS.h"
 
 /// ------------------------------------------------------------------- ///
