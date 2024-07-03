@@ -137,8 +137,8 @@ void EDT::insertValueToEnv(Value *Val, bool IsDepV) {
     Env->insertParamV(Val);
 }
 
-EDTCallBase EDT::getCall() { return Call; }
-EDTFunction EDT::getFn() { return Fn; }
+EDTCallBase *EDT::getCall() { return Call; }
+EDTFunction *EDT::getFn() { return Fn; }
 EDTEnvironment &EDT::getDataEnv() { return *Env; }
 Twine EDT::getName() { return Fn->getName(); }
 uint32_t EDT::getID() { return ID; }
@@ -147,8 +147,8 @@ void EDT::setCall(CallBase *Call) {
   this->Call = Call;
 }
 
-bool EDT::isDep(uint32_t ArgItr) {
-  auto *Arg = Fn->getArg(ArgItr);
+bool EDT::isDep(uint32_t CallArgItr) {
+  auto *Arg = Fn->getArg(CallArgItr);
   return Env->isDepV(Arg);
 }
 
