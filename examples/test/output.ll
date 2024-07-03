@@ -37,23 +37,106 @@ test_arts_ir.bc
 
 
 [arts-analysis] Initializing AAEDTInfo: 
-AAEDTInfoFunction::manifest: <invalid>
-- EDT #PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/ and include the crash backtrace.
-Stack dump:
-0.	Program arguments: opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so -debug-only=arts-analysis,arts,carts,arts-ir-builder,edt-graph,carts-metadata -passes=arts-analysis test_arts_ir.bc -o test_arts_analysis.bc
- #0 0x00007f4477b4eef8 llvm::sys::PrintStackTrace(llvm::raw_ostream&, int) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0x191ef8)
- #1 0x00007f4477b4cb7e llvm::sys::RunSignalHandlers() (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0x18fb7e)
- #2 0x00007f4477b4f5ad SignalHandler(int) Signals.cpp:0:0
- #3 0x00007f447a890910 __restore_rt (/lib64/libpthread.so.0+0x16910)
- #4 0x00007f44760ee2f0 arts::EDT::getID() (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0x142f0)
- #5 0x00007f44760e9e98 arts::operator<<(llvm::raw_ostream&, arts::EDT&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0xfe98)
- #6 0x00007f44760e97d3 AAEDTInfoFunction::manifest(llvm::Attributor&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0xf7d3)
- #7 0x00007f447a2cd3fb llvm::Attributor::manifestAttributes() (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMipo.so.18.1+0x933fb)
- #8 0x00007f447a2d21e6 llvm::Attributor::run() (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMipo.so.18.1+0x981e6)
- #9 0x00007f44760eba55 llvm::detail::PassModel<llvm::Module, (anonymous namespace)::ARTSAnalysisPass, llvm::PreservedAnalyses, llvm::AnalysisManager<llvm::Module>>::run(llvm::Module&, llvm::AnalysisManager<llvm::Module>&) ARTSAnalysisPass.cpp:0:0
-#10 0x00007f4477f422a6 llvm::PassManager<llvm::Module, llvm::AnalysisManager<llvm::Module>>::run(llvm::Module&, llvm::AnalysisManager<llvm::Module>&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMCore.so.18.1+0x2c02a6)
-#11 0x000055cb2115f293 llvm::runPassPipeline(llvm::StringRef, llvm::Module&, llvm::TargetMachine*, llvm::TargetLibraryInfoImpl*, llvm::ToolOutputFile*, llvm::ToolOutputFile*, llvm::ToolOutputFile*, llvm::StringRef, llvm::ArrayRef<llvm::PassPlugin>, llvm::opt_tool::OutputKind, llvm::opt_tool::VerifierKind, bool, bool, bool, bool, bool, bool, bool) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x19293)
-#12 0x000055cb2116caaa main (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x26aaa)
-#13 0x00007f447744424d __libc_start_main (/lib64/libc.so.6+0x3524d)
-#14 0x000055cb21158a3a _start /home/abuild/rpmbuild/BUILD/glibc-2.31/csu/../sysdeps/x86_64/start.S:122:0
-make: *** [Makefile:23: test_arts_analysis.bc] Segmentation fault
+AAEDTInfoFunction::initialize-> EDT #0 for function "main"
+AAEDTInfoFunction::initialize-> EDT #1 for function "carts.edt"
+AAEDTInfoFunction::initialize-> EDT #2 for function "carts.edt.1"
+AAEDTInfoFunction::initialize-> EDT #3 for function "carts.edt.2"
+AAEDTInfoFunction::initialize-> EDT #4 for function "carts.edt.3"
+AAEDTInfoFunction::updateImpl-> EDT #0
+AAEDTInfoChild::initialize: EDT #0
+AAEDTInfoFunction::updateImpl: EDT #0 is a child of EDT #0
+AAEDTInfoFunction::updateImpl: EDT #0 is reached from EDT #0
+AAEDTInfoChild::initialize: EDT #0
+AAEDTInfoFunction::updateImpl: EDT #0 is a child of EDT #0
+AAEDTInfoFunction::updateImpl: EDT #0 is reached from EDT #0
+AAEDTInfoFunction::updateImpl: All EDT children were fixed!
+AAEDTInfoFunction::updateImpl-> EDT #1
+AAEDTInfoChild::initialize: EDT #1
+AAEDTInfoFunction::updateImpl: EDT #1 is a child of EDT #1
+AAEDTInfoFunction::updateImpl: EDT #1 is reached from EDT #1
+AAEDTInfoChild::initialize: EDT #1
+AAEDTInfoFunction::updateImpl: EDT #1 is a child of EDT #1
+AAEDTInfoFunction::updateImpl: EDT #1 is reached from EDT #1
+AAEDTInfoFunction::updateImpl-> EDT #2
+AAEDTInfoFunction::updateImpl: All EDT children were fixed!
+AAEDTInfoFunction::updateImpl-> EDT #3
+AAEDTInfoFunction::updateImpl: All EDT children were fixed!
+AAEDTInfoFunction::updateImpl-> EDT #4
+AAEDTInfoFunction::updateImpl: All EDT children were fixed!
+AAEDTInfoFunction::updateImpl-> EDT #1
+AAEDTInfoFunction::updateImpl: EDT #1 is a child of EDT #1
+AAEDTInfoFunction::updateImpl: EDT #1 is reached from EDT #1
+AAEDTInfoFunction::updateImpl: EDT #1 is a child of EDT #1
+AAEDTInfoFunction::updateImpl: EDT #1 is reached from EDT #1
+AAEDTDataBlockInfoValue::initialize: CallArg#0 from:
+  call void @carts.edt.1(ptr nocapture %2, ptr nocapture %3, i32 %4, i32 %5) #5
+AAEDTDataBlockInfoValue::initialize: CallArg#1 from:
+  call void @carts.edt.1(ptr nocapture %2, ptr nocapture %3, i32 %4, i32 %5) #5
+AAEDTDataBlockInfoValue::initialize: CallArg#2 from:
+  call void @carts.edt.1(ptr nocapture %2, ptr nocapture %3, i32 %4, i32 %5) #5
+AAEDTDataBlockInfoValue::initialize: CallArg#3 from:
+  call void @carts.edt.1(ptr nocapture %2, ptr nocapture %3, i32 %4, i32 %5) #5
+AAEDTDataBlockInfoValue::initialize: CallArg#0 from:
+  call void @carts.edt.2(ptr nocapture readonly %3, i32 %7) #5
+AAEDTDataBlockInfoValue::initialize: CallArg#1 from:
+  call void @carts.edt.2(ptr nocapture readonly %3, i32 %7) #5
+AAEDTInfoFunction::updateImpl-> EDT #1
+AAEDTInfoFunction::updateImpl: EDT #1 is a child of EDT #1
+AAEDTInfoFunction::updateImpl: EDT #1 is reached from EDT #1
+AAEDTInfoFunction::updateImpl: EDT #1 is a child of EDT #1
+AAEDTInfoFunction::updateImpl: EDT #1 is reached from EDT #1
+AAEDTInfoFunction::manifest: EDT #0 -> #Reached EDTs: 1{0}, #Child EDTs: 1{0}
+- EDT #0: main
+Ty: main
+Data environment for EDT: 
+Number of ParamV: 0
+Number of DepV: 0
+
+AAEDTInfoFunction::manifest: EDT #1 -> #Reached EDTs: 1{1}, #Child EDTs: 1{1}
+- EDT #1: carts.edt
+Ty: parallel
+Data environment for EDT: 
+Number of ParamV: 0
+Number of DepV: 4
+  - ptr %0
+  - ptr %1
+  - ptr %2
+  - ptr %3
+
+AAEDTInfoFunction::manifest: EDT #2 -> #Reached EDTs: 0{}, #Child EDTs: 0{}
+- EDT #2: carts.edt.1
+Ty: task
+Data environment for EDT: 
+Number of ParamV: 2
+  - i32 %2
+  - i32 %3
+Number of DepV: 2
+  - ptr %0
+  - ptr %1
+
+AAEDTInfoFunction::manifest: EDT #3 -> #Reached EDTs: 0{}, #Child EDTs: 0{}
+- EDT #3: carts.edt.2
+Ty: task
+Data environment for EDT: 
+Number of ParamV: 1
+  - i32 %1
+Number of DepV: 1
+  - ptr %0
+
+AAEDTInfoFunction::manifest: EDT #4 -> #Reached EDTs: 0{}, #Child EDTs: 0{}
+- EDT #4: carts.edt.3
+Ty: task
+Data environment for EDT: 
+Number of ParamV: 0
+Number of DepV: 2
+  - ptr %number
+  - ptr %random_number
+
+[Attributor] Done with 5 functions, result: unchanged.
+
+-------------------------------------------------
+[arts-analysis] Process has finished
+
+-------------------------------------------------
+llvm-dis test_arts_analysis.bc
+clang++ -fopenmp test_arts_analysis.bc -O3 -march=native -o test_opt -lstdc++

@@ -8,8 +8,6 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/InstrTypes.h"
-#include "llvm/IR/Instruction.h"
-#include "llvm/IR/Module.h"
 #include <cstdint>
 #include <sys/types.h>
 
@@ -21,10 +19,14 @@ using namespace llvm;
 using namespace std;
 
 class EDT;
-using EDTCallBase = CallBase *;
-using EDTFunction = Function *;
-using EDTFunctionSet = SetVector<EDTFunction>;
+class EDTDataBlock;
+
+using EDTValue = Value;
+using EDTCallBase = CallBase;
+using EDTFunction = Function;
+using EDTFunctionSet = SetVector<EDTFunction *>;
 using EDTSet = SetVector<EDT *>;
+using EDTDataBlockSet = SetVector<EDTDataBlock *>;
 
 /// ------------------------------------------------------------------- ///
 ///                          DATA ENVIRONMENT                           ///
@@ -41,24 +43,40 @@ using EDTSet = SetVector<EDT *>;
 /// IMPORTANT: Firstprivate is live-in, shared is both live-in and
 ///            live-out, lastprivate is live-out
 /// ------------------------------------------------------------------- ///
+class EDTDataBlock {
+public:
+  enum Mode { ReadOnly, WriteOnly, ReadWrite };
+  EDTDataBlock(EDTValue *V) : V(V) {}
+  EDTDataBlock(EDTValue *V, Mode M) : V(V), M(M) {}
+  ~EDTDataBlock() = default;
+
+  EDTValue *getValue() { return V; }
+  Mode getMode() { return M; }
+
+private:
+  /// Getters
+  EDTValue *V = nullptr;
+  Mode M = Mode::ReadWrite;
+};
+
 class EDTEnvironment {
 public:
   EDTEnvironment(EDT *E);
   EDTEnvironment(EDT *E, SmallVector<EDTArgMetadata *, 4> &Args);
 
   /// Getters and setters
-  void insertParamV(Value *V);
-  void insertDepV(Value *V);
+  void insertParamV(EDTValue *V);
+  void insertDepV(EDTValue *V);
   uint32_t getParamC();
   uint32_t getDepC();
-  /// 
-  bool isDepV(Value *V);
+  ///
+  bool isDepV(EDTValue *V);
 
   /// Attributes
   EDT *E;
   /// These values correspond to the EDT Function arguments
-  SetVector<Value *> ParamV;
-  SetVector<Value *> DepV;
+  SetVector<EDTValue *> ParamV;
+  SetVector<EDTValue *> DepV;
 };
 
 inline raw_ostream &operator<<(raw_ostream &OS, EDTEnvironment &Env) {
@@ -90,16 +108,17 @@ public:
   void insertValueToEnv(Value *Val);
   void insertValueToEnv(Value *Val, bool IsDepV);
   ///  Getters
-  EDTCallBase getCall();
-  EDTFunction getFn();
+  EDTCallBase *getCall();
+  EDTFunction *getFn();
   EDTEnvironment &getDataEnv();
   Twine getName();
   uint32_t getID();
   EDTType getTy() { return Ty; }
-  bool isDep(uint32_t ArgItr);
+  bool isAsync() { return IsAsync; }
+  bool isDep(uint32_t CallArgItr);
 
   /// Setters
-  void setCall(EDTCallBase Call);
+  void setCall(EDTCallBase *Call);
 
   static bool classof(const EDTMetadata *M) { return true; }
 
@@ -116,8 +135,8 @@ protected:
   bool IsAsync = true;
 
 private:
-  EDTCallBase Call = nullptr;
-  EDTFunction Fn = nullptr;
+  EDTCallBase *Call = nullptr;
+  EDTFunction *Fn = nullptr;
   uint32_t ID;
 };
 

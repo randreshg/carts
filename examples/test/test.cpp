@@ -77,6 +77,47 @@ int main() {
   return 0;
 }
 
+// int main() {
+//   // Generate a random number between 10 and 10
+//   int number = 1;
+//   int shared_number = 10000;
+//   int random_number = rand() % 10 + 10;
+//   int NewRandom = rand();
+//   #pragma omp parallel
+//   {
+
+//     presinglework();
+//     #pragma omp single 
+//     /// Parallel EDT
+//     {
+//       /// Task1
+//       #pragma omp task firstprivate(random_number, NewRandom) shared(shared_number.....)
+//       {
+//         printf("I think the number is %d/%d. with %d -- %d\n", number,
+//               shared_number, random_number, NewRandom);
+//         number++;
+//         shared_number--;
+//       }
+
+//       // shared_number++;
+
+//       #pragma omp taskwait 
+//       /// Task2
+//       #pragma omp task firstprivate(number) shared(shared_number)
+//       {
+//         printf("I think the number is %d - %d.\n", number, shared_number);
+//         number++;
+//       }
+//     }
+//     postsingle();
+//   }
+//   /// Paralllel done EDT
+//   {
+//     printf("The final number is %d - % d.\n", number, random_number);
+//   }
+  
+//   return 0;
+// }
 
 // #include <stdio.h>
 // #include <stdlib.h>
