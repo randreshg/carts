@@ -62,6 +62,14 @@ CallBase *EDTIRBuilder::buildEDT(
   LLVM_DEBUG(dbgs() << "Created new function: " << *NewFn);
   /// Splice the body of the old function right into the new function
   NewFn->splice(NewFn->begin(), OldFn);
+  /// Add the following attributes to the new function:
+  /// nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+  NewFn->addFnAttr(Attribute::NoCallback);
+  NewFn->addFnAttr(Attribute::NoFree);
+  NewFn->addFnAttr(Attribute::NoSync);
+  NewFn->addFnAttr(Attribute::NoUnwind);
+  NewFn->addFnAttr(Attribute::WillReturn);
+  NewFn->setOnlyAccessesArgMemory();
   /// If any early return, remove terminator and return void
   for (auto &BB : *NewFn) {
     if (auto *RI = dyn_cast<ReturnInst>(BB.getTerminator())) {
@@ -95,6 +103,7 @@ CallBase *EDTIRBuilder::buildEDT(
   assert(!NewFn->isDeclaration() && "New function is a declaration");
   /// Set metadata
   setMetadata(*NewFn);
+  NewCI->setOnlyAccessesArgMemory();
   return NewCI;
 }
 
