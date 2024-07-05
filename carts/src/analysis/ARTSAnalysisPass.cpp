@@ -516,20 +516,20 @@ struct AAEDTInfoFunction : AAEDTInfo {
 struct AAEDTInfoChild : AAEDTInfo {
   AAEDTInfoChild(const IRPosition &IRP, Attributor &A) : AAEDTInfo(IRP, A) {}
 
-  void setCacheDeps(EDTInfoCache &EDTCache, CallBase &CB, EDT &EDTNode) {
-    for (uint32_t ArgItr = 0; ArgItr < CB.data_operands_size(); ++ArgItr) {
-      if (!EDTNode.isDep(ArgItr))
-        continue;
-      auto *Arg = CB.getArgOperand(ArgItr);
-      EDTCache.insertEDT(Arg, &EDTNode);
-    }
-  }
+  // void setCacheDeps(EDTInfoCache &EDTCache, CallBase &CB, EDT &EDTNode) {
+  //   for (uint32_t ArgItr = 0; ArgItr < CB.data_operands_size(); ++ArgItr) {
+  //     if (!EDTNode.isDep(ArgItr))
+  //       continue;
+  //     auto *Arg = CB.getArgOperand(ArgItr);
+  //     EDTCache.insertEDT(Arg, &EDTNode);
+  //   }
+  // }
 
   /// See AbstractAttribute::initialize(...).
   void initialize(Attributor &A) override {
     auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
     /// Get the EDTChildNode
-    auto &CB = cast<CallBase>(getAnchorValue());
+    // auto &CB = cast<CallBase>(getAnchorValue());
     EDTNode = EDTCache.getEDT(getAnchorScope());
     assert(EDTNode && "EDTNode is null!");
     LLVM_DEBUG(dbgs() << "AAEDTInfoChild::initialize: EDT #" << EDTNode->getID()
@@ -609,11 +609,12 @@ struct AAEDTDataBlockInfoValue : AAEDTDataBlockInfo {
     /// Check the Mode of the value
     Value &V = getAssociatedValue();
     CallBase &CB = cast<CallBase>(getAnchorValue());
-    LLVM_DEBUG(dbgs() << "AAEDTDataBlockInfoValue::initialize: CallArg#"
-                      << getCallSiteArgNo() << " from:\n"
-                      << CB << "\n");
     auto *CalledEDT = EDTCache.getEDT(CB.getCalledFunction());
     assert(CalledEDT && "CalledEDT is null!");
+
+    LLVM_DEBUG(dbgs() << "AAEDTDataBlockInfoValue::initialize: CallArg#"
+                      << getCallSiteArgNo() << " from EDT #"
+                      << CalledEDT->getID() << "\n");
 
     EDTDataBlock::Mode M = CalledEDT->isDep(getCallSiteArgNo())
                                ? EDTDataBlock::Mode::ReadWrite
@@ -623,33 +624,67 @@ struct AAEDTDataBlockInfoValue : AAEDTDataBlockInfo {
 
   /// See AbstractAttribute::updateImpl(Attributor &A).
   ChangeStatus updateImpl(Attributor &A) override {
+    LLVM_DEBUG(dbgs() << "AAEDTDataBlockInfoValue::updateImpl: "
+                      << getAssociatedValue() << "\n");
     ChangeStatus Changed = ChangeStatus::UNCHANGED;
     EDTDataBlockInfoState StateBefore = getState();
     /// Run AAPointerInfo on the value
-    // const AAPointerInfo *PI =
-    // A.getAAFor<AAPointerInfo>(*this, IRPosition::value(Obj),
-    //                                      DepClassTy::NONE);
+    CallBase &CB = cast<CallBase>(getAnchorValue());
+    const AAPointerInfo *PI = A.getAAFor<AAPointerInfo>(
+        *this, IRPosition::callsite_argument(CB, getCallSiteArgNo()),
+        DepClassTy::OPTIONAL);
+    if (!PI) {
+      LLVM_DEBUG(dbgs() << "AAEDTDataBlockInfoValue::updateImpl: "
+                        << "Failed to get AAPointerInfo!\n");
+      return indicatePessimisticFixpoint();
+    }
+    if (!PI->getState().isValidState()) {
+      LLVM_DEBUG(dbgs() << "AAEDTDataBlockInfoValue::updateImpl: "
+                        << "AAPointerInfo for " << getAssociatedValue()
+                        << " is invalid!\n");
+      return Changed;
+    }
 
-    // A.getAAFor<AAPointerInfo>(
-    //       *this, IRPosition::value(*Arg), DepClassTy::OPTIONAL);
-    //     A.getOrCreateAAFor<AAPointerInfo>(IRP, *this, DepClassTy::REQUIRED);
+    int64_t BinSize = PI->numOffsetBins();
+    if(BinSize < 1) {
+      LLVM_DEBUG(dbgs() << "AAEDTDataBlockInfoValue::updateImpl: "
+                        << "No offset bins for " << getAssociatedValue() << "\n");
+      indicateOptimisticFixpoint();
+      return Changed;
+    }
 
-    // if (!PI)
-    //   return indicatePessimisticFixpoint();
+    for(auto PIItr = PI->begin(); PIItr != PI->end(); ++PIItr) {
+      const auto &It = PI->begin();
+      const AA::RangeTy &Range = It->first;
+      const SmallSet<unsigned, 4> &AccessIndex = It->second;
+      /// Analyze all accesses
+      for (auto AI : AccessIndex) {
+        const AAPointerInfo::Access &Acc = PI->getAccess(AI);
+        Instruction *LocalInst = Acc.getLocalInst();
+        LLVM_DEBUG(dbgs() << "     - " << Acc.getKind() << " - " << *LocalInst << "\n");
 
-    // if (!PI->getState().isValidState())
-    //   return indicatePessimisticFixpoint();
-    // auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
-    // Value *V = getAssociatedValue();
-    // EDTDataBlockSet DataBlocks = EDTCache.getEDTDataBlockSet(V);
-    // for (auto *DataBlock : DataBlocks) {
-    //   auto ReachedEDTs = EDTCache.getEDTs(DataBlock);
-    //   for (auto *EDT : ReachedEDTs) {
-    //     insertValueToEnv(EDT);
-    //   }
-    // }
-    // return StateBefore == getState() ? ChangeStatus::UNCHANGED
-    //                                  : ChangeStatus::CHANGED;
+        /// Analyze dependencies on Callbase
+        if(auto *CBTo = dyn_cast<CallBase>(LocalInst)) {
+          /// Check if the callbase is a call to an EDT
+          // auto *CalledEDT = A.getIRPositionCallSite(CBTo).getAssociatedFunction();
+          LLVM_DEBUG(dbgs() << "     - " << *CBTo << "\n");
+        }
+        /// Debug output
+        if (Acc.getLocalInst() != Acc.getRemoteInst())
+          LLVM_DEBUG(dbgs() << "     -->RM:                         " << *Acc.getRemoteInst()
+                            << "\n");
+        if (!Acc.isWrittenValueYetUndetermined()) {
+          if (isa_and_nonnull<Function>(Acc.getWrittenValue()))
+            LLVM_DEBUG(dbgs() << "       - c: func " << Acc.getWrittenValue()->getName()
+                              << "\n");
+          else if (Acc.getWrittenValue())
+            LLVM_DEBUG(dbgs() << "       - c: " << *Acc.getWrittenValue() << "\n");
+          else
+            LLVM_DEBUG(dbgs() << "       - c: <unknown>\n");
+        }
+      }
+
+    }
     return Changed;
   }
 
@@ -713,27 +748,26 @@ namespace {
 class ARTSAnalysisPass : public PassInfoMixin<ARTSAnalysisPass> {
 public:
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM) {
-    LLVM_DEBUG(
-        dbgs() << "\n-------------------------------------------------\n");
+    LLVM_DEBUG(dbgs() << "\n"
+                      << "-------------------------------------------------\n");
     LLVM_DEBUG(dbgs() << TAG << "Running ARTS Analysis pass on Module: \n"
                       << M.getName() << "\n");
     LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
     /// Get all functions and EDTs of the module
     LLVM_DEBUG(dbgs() << TAG << "Creating and Initializing EDTs: \n");
-    SetVector<Function *> Functions;
     EDTSet EDTs;
+    SetVector<Function *> Functions;
     DenseMap<EDTFunction *, EDT *> FunctionEDTMap;
     for (Function &Fn : M) {
       if (Fn.isDeclaration() && !Fn.hasLocalLinkage())
         continue;
       Functions.insert(&Fn);
       if (EDTMetadata *MD = EDTMetadata::getMetadata(Fn)) {
-        auto *CurrentEDT = EDT::get(MD);
+        EDT *CurrentEDT = EDT::get(MD);
         EDTs.insert(CurrentEDT);
         FunctionEDTMap[&Fn] = CurrentEDT;
       }
     }
-
     LLVM_DEBUG(dbgs() << "\n\n" << TAG << "Initializing AAEDTInfo: \n");
     /// Create attributor
     FunctionAnalysisManager &FAM =
@@ -763,12 +797,11 @@ public:
                       << " functions, result: " << Changed << ".\n");
 
     /// Print module info
-    LLVM_DEBUG(
-        dbgs() << "\n-------------------------------------------------\n");
-    // LLVM_DEBUG(dbgs() << TAG << "Process has finished\n\n" << M << "\n");
+    LLVM_DEBUG(dbgs() << "\n"
+                      << "-------------------------------------------------\n");
     LLVM_DEBUG(dbgs() << TAG << "Process has finished\n");
-    LLVM_DEBUG(
-        dbgs() << "\n-------------------------------------------------\n");
+    LLVM_DEBUG(dbgs() << "\n"
+                      << "-------------------------------------------------\n");
     return PreservedAnalyses::all();
   }
 };
