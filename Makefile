@@ -25,7 +25,7 @@ enable:
 # LLVM
 $(LLVM_DIR):
 	mkdir -p $@
-	[[ -z "$(shell ls -A $@)" ]] &&  git clone --depth 1 --branch release/18.x https://github.com/llvm/llvm-project.git $@
+	[[ -z "$(shell ls -A $@)" ]] &&  git clone --depth 1 --branch carts https://github.com/randreshg/llvm-project.git $@
 llvm: .llvm
 .llvm: $(LLVM_DIR)
 	mkdir -p $</build
