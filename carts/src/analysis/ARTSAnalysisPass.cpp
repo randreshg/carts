@@ -2,7 +2,10 @@
 #include <cassert>
 #include <cstdint>
 
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -83,16 +86,29 @@ struct EDTInfoState : AbstractState {
   bool IsAtFixpoint = false;
 
   /// The EDTS we know are reached from the associated EDT.
-  BooleanStateWithPtrSetVector<EDT, /* InsertInvalidates */ false> ReachedEDTs;
+  BooleanStateWithPtrSetVector<EDT, /* InsertInvalidates */ false>
+      ReachedChildEDTs;
 
   /// The EDTs we know are created by the associated EDT.
   BooleanStateWithPtrSetVector<EDT, /* InsertInvalidates */ false> ChildEDTs;
 
+  /// The set of EDTs we know we may signal from the associated EDT.
+  BooleanStateWithPtrSetVector<EDT, /* InsertInvalidates */ false>
+      MaySignalChildEDTs;
+  DenseMap<EDT *, EDTValueSet> MaySignalEDTValues;
+
+  /// The EDTS we know are dependent from the associated EDT.
+  BooleanStateWithPtrSetVector<EDT, /* InsertInvalidates */ false>
+      DependentEDTs;
+
   /// The set of EDTDataBlocks
-  BooleanStateWithPtrSetVector<EDTDataBlock, /* InsertInvalidates */ false>
-      EDTDBs;
+  // BooleanStateWithPtrSetVector<EDTDataBlock, /* InsertInvalidates */ false>
+  //     DataBlocks;
 
   EDT *getEDT() const { return EDTNode; }
+
+  /// Reachability
+  bool canReachChild(EDT *E) const { return ReachedChildEDTs.contains(E); }
 
   /// Abstract State interface
   ///{
@@ -111,16 +127,20 @@ struct EDTInfoState : AbstractState {
   /// See AbstractState::indicatePessimisticFixpoint(...)
   ChangeStatus indicatePessimisticFixpoint() override {
     IsAtFixpoint = true;
-    ReachedEDTs.indicatePessimisticFixpoint();
     ChildEDTs.indicatePessimisticFixpoint();
+    ReachedChildEDTs.indicatePessimisticFixpoint();
+    MaySignalChildEDTs.indicatePessimisticFixpoint();
+    DependentEDTs.indicatePessimisticFixpoint();
     return ChangeStatus::CHANGED;
   }
 
   /// See AbstractState::indicateOptimisticFixpoint(...)
   ChangeStatus indicateOptimisticFixpoint() override {
     IsAtFixpoint = true;
-    ReachedEDTs.indicateOptimisticFixpoint();
     ChildEDTs.indicateOptimisticFixpoint();
+    ReachedChildEDTs.indicateOptimisticFixpoint();
+    MaySignalChildEDTs.indicateOptimisticFixpoint();
+    DependentEDTs.indicateOptimisticFixpoint();
     return ChangeStatus::UNCHANGED;
   }
 
@@ -129,9 +149,11 @@ struct EDTInfoState : AbstractState {
   const EDTInfoState &getAssumed() const { return *this; }
 
   bool operator==(const EDTInfoState &RHS) const {
-    if (ReachedEDTs != RHS.ReachedEDTs)
+    if (ReachedChildEDTs != RHS.ReachedChildEDTs)
       return false;
     if (ChildEDTs != RHS.ChildEDTs)
+      return false;
+    if (MaySignalChildEDTs != RHS.MaySignalChildEDTs)
       return false;
     return true;
   }
@@ -146,7 +168,9 @@ struct EDTInfoState : AbstractState {
 
   /// "Clamp" this state with \p KIS.
   EDTInfoState operator^=(const EDTInfoState &KIS) {
-    ReachedEDTs ^= KIS.ReachedEDTs;
+    ReachedChildEDTs ^= KIS.ReachedChildEDTs;
+    MaySignalChildEDTs ^= KIS.MaySignalChildEDTs;
+
     return *this;
   }
 
@@ -157,20 +181,51 @@ struct EDTInfoState : AbstractState {
 
 /// All the information we have about an EDT data block
 struct EDTDataBlockInfoState : AbstractState {
+  EDT *ParentEDT = nullptr;
+  Value *DBVal = nullptr;
   /// The data block
   EDTDataBlock *DB = nullptr;
-
   /// Flag to track if we reached a fixpoint.
   bool IsAtFixpoint = false;
-
-  //// Set of EDTs that are reached from the data block
-  BooleanStateWithPtrSetVector<EDT, /* InsertInvalidates */ false> ReachedEDTs;
+  /// Set of child EDTs (seen from the perspective of the ParentEDT) that
+  /// are reached from the associated DataBlock.
+  BooleanStateWithPtrSetVector<EDT, /* InsertInvalidates */ false>
+      ReachedChildEDTs;
+  /// Map of DataMovements
+  DenseMap<EDT *, EDTSet> DataMovements;
 
   /// Size
 
   /// Usability
 
   /// Location
+
+  /// INTERFACE
+  EDT *getParentEDT() const { return ParentEDT; }
+  Value *getDataBlockValue() const { return DBVal; }
+  EDTDataBlock *getDataBlock() const { return DB; }
+
+  /// Reachability
+  bool canReach(EDT *E) const { return ReachedChildEDTs.contains(E); }
+
+  /// Data Movements
+  void insertDataMovement(EDT *From, EDT *To) {
+    DataMovements[From].insert(To);
+  }
+
+  EDTSet getDataMovements(EDT *From) const {
+    auto Itr = DataMovements.find(From);
+    if (Itr == DataMovements.end())
+      return EDTSet();
+    return Itr->second;
+  }
+
+  bool isMoved(EDT *From, EDT *To) const {
+    auto Itr = DataMovements.find(From);
+    if (Itr == DataMovements.end())
+      return false;
+    return Itr->second.count(To);
+  }
 
   /// Abstract State interface
   ///{
@@ -189,14 +244,14 @@ struct EDTDataBlockInfoState : AbstractState {
   /// See AbstractState::indicatePessimisticFixpoint(...)
   ChangeStatus indicatePessimisticFixpoint() override {
     IsAtFixpoint = true;
-    ReachedEDTs.indicatePessimisticFixpoint();
+    ReachedChildEDTs.indicatePessimisticFixpoint();
     return ChangeStatus::CHANGED;
   }
 
   /// See AbstractState::indicateOptimisticFixpoint(...)
   ChangeStatus indicateOptimisticFixpoint() override {
     IsAtFixpoint = true;
-    ReachedEDTs.indicateOptimisticFixpoint();
+    ReachedChildEDTs.indicateOptimisticFixpoint();
     return ChangeStatus::UNCHANGED;
   }
 
@@ -205,7 +260,7 @@ struct EDTDataBlockInfoState : AbstractState {
   const EDTDataBlockInfoState &getAssumed() const { return *this; }
 
   bool operator==(const EDTDataBlockInfoState &RHS) const {
-    if (ReachedEDTs != RHS.ReachedEDTs)
+    if (ReachedChildEDTs != RHS.ReachedChildEDTs)
       return false;
     return true;
   }
@@ -226,7 +281,7 @@ struct EDTDataBlockInfoState : AbstractState {
 
   /// "Clamp" this state with \p KIS.
   EDTDataBlockInfoState operator^=(const EDTDataBlockInfoState &KIS) {
-    ReachedEDTs ^= KIS.ReachedEDTs;
+    ReachedChildEDTs ^= KIS.ReachedChildEDTs;
     return *this;
   }
 
@@ -250,14 +305,15 @@ struct AAEDTInfo : public StateWrapper<EDTInfoState, AbstractAttribute> {
     if (!isValidState() || !EDTNode)
       return "<invalid>";
 
-    auto ReachedEDTStr = [&]() {
-      if (!ReachedEDTs.isValidState())
-        return "<invalid> with " + std::to_string(ReachedEDTs.size()) + " EDTs";
+    auto ReachedChildEDTstr = [&]() {
+      if (!ReachedChildEDTs.isValidState())
+        return "<invalid> with " + std::to_string(ReachedChildEDTs.size()) +
+               " EDTs";
       std::string Str;
-      for (EDT *E : ReachedEDTs)
+      for (EDT *E : ReachedChildEDTs)
         Str += (Str.empty() ? "" : ", ") + std::to_string(E->getID());
-      Str = "#Reached EDTs: " + std::to_string(ReachedEDTs.size()) + "{" + Str +
-            "}";
+      Str = "#Reached ChildEDTs: " + std::to_string(ReachedChildEDTs.size()) +
+            "{" + Str + "}";
       return Str;
     };
 
@@ -272,8 +328,34 @@ struct AAEDTInfo : public StateWrapper<EDTInfoState, AbstractAttribute> {
       return Str;
     };
 
+    // auto MaySignalEDTStr = [&]() {
+    //   if (!MaySignalEDTs.isValidState())
+    //     return "<invalid> with " + std::to_string(MaySignalEDTs.size()) +
+    //            " EDTs";
+    //   std::string Str;
+    //   for (EDT *E : MaySignalEDTs)
+    //     Str += (Str.empty() ? "" : ", ") + std::to_string(E->getID());
+    //   Str = "#MaySignal EDTs: " + std::to_string(MaySignalEDTs.size()) + "{"
+    //   +
+    //         Str + "}";
+    //   return Str;
+    // };
+
+    // auto DepEDTStr = [&]() {
+    //   if (!DependentEDTs.isValidState())
+    //     return "<invalid> with " + std::to_string(DependentEDTs.size()) +
+    //            " EDTs";
+    //   std::string Str;
+    //   for (EDT *E : DependentEDTs)
+    //     Str += (Str.empty() ? "" : ", ") + std::to_string(E->getID());
+    //   Str = "#Dependent EDTs: " + std::to_string(DependentEDTs.size()) + "{"
+    //   +
+    //         Str + "}";
+    //   return Str;
+    // };
+
     std::string EDTStr = "EDT #" + std::to_string(EDTNode->getID()) + " -> ";
-    return (EDTStr + ReachedEDTStr() + ", " + ChildEDTStr());
+    return (EDTStr + ReachedChildEDTstr() + ", " + ChildEDTStr());
   }
   /// Create an abstract attribute biew for the position \p IRP.
   static AAEDTInfo &createForPosition(const IRPosition &IRP, Attributor &A);
@@ -306,19 +388,20 @@ struct AAEDTDataBlockInfo
     if (!isValidState())
       return "<invalid>";
 
-    auto ReachedEDTStr = [&]() {
-      if (!ReachedEDTs.isValidState())
-        return "<invalid> with " + std::to_string(ReachedEDTs.size()) + " EDTs";
+    auto ReachedChildEDTstr = [&]() {
+      if (!ReachedChildEDTs.isValidState())
+        return "<invalid> with " + std::to_string(ReachedChildEDTs.size()) +
+               " EDTs";
       std::string Str;
-      for (EDT *E : ReachedEDTs)
+      for (EDT *E : ReachedChildEDTs)
         Str += (Str.empty() ? "" : ", ") + std::to_string(E->getID());
-      Str = "#Reached EDTs: " + std::to_string(ReachedEDTs.size()) + "{" + Str +
-            "}";
+      Str = "#Reached EDTs: " + std::to_string(ReachedChildEDTs.size()) + "{" +
+            Str + "}";
       return Str;
     };
 
     std::string EDTStr = "EDTDataBlock -> ";
-    return (EDTStr + ReachedEDTStr());
+    return (EDTStr + ReachedChildEDTstr());
   }
 
   /// Create an abstract attribute biew for the position \p IRP.
@@ -411,6 +494,8 @@ struct EDTInfoCache : public InformationCache {
   /// Collection of known EDTs in the module
   EDTSet &EDTs;
   DenseMap<EDTFunction *, EDT *> &FunctionEDTMap;
+  /// Maps an underlying EDTValue to an EDTDataBlock
+  // DenseMap<EDTValue *, EDTDataBlock> ValueToDataBlock;
   /// Maps a value to a the set of DataBlocks that have it
   DenseMap<EDTValue *, EDTDataBlockSet> ValueToDataBlocks;
 
@@ -435,7 +520,7 @@ struct AAEDTInfoFunction : AAEDTInfo {
       return;
     }
 
-    LLVM_DEBUG(dbgs() << "AAEDTInfoFunction::initialize-> EDT #"
+    LLVM_DEBUG(dbgs() << "[AAEDTInfoFunction::initialize] EDT #"
                       << EDTNode->getID() << " for function \"" << Fn->getName()
                       << "\"\n");
   }
@@ -444,11 +529,13 @@ struct AAEDTInfoFunction : AAEDTInfo {
   /// dependence changed its state (and in the beginning).
   ChangeStatus updateImpl(Attributor &A) override {
     auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
-    LLVM_DEBUG(dbgs() << "AAEDTInfoFunction::updateImpl-> EDT #"
+    LLVM_DEBUG(dbgs() << "[AAEDTInfoFunction::updateImp] EDT #"
                       << EDTNode->getID() << "\n";);
     EDTInfoState StateBefore = getState();
+
     /// Callback to check a call instruction.
     bool AllEDTChildrenWereFixed = true;
+    bool AllChildEDTsWereFixed = true;
     auto CheckCallInst = [&](Instruction &I) {
       auto &CB = cast<CallBase>(I);
       auto *CalledFn = CB.getCalledFunction();
@@ -461,19 +548,17 @@ struct AAEDTInfoFunction : AAEDTInfo {
           *this, IRPosition::callsite_function(CB), DepClassTy::OPTIONAL);
       /// Merge the state of the associated function with the state of the
       /// call to child
+      AllChildEDTsWereFixed &= CBAA->ChildEDTs.isAtFixpoint();
       AllEDTChildrenWereFixed &= CBAA->isAtFixpoint();
       getState() ^= CBAA->getState();
 
       /// Add child and reached EDTs to the set
       if (auto *Child = CBAA->getEDT()) {
-        LLVM_DEBUG(dbgs() << "AAEDTInfoFunction::updateImpl: EDT #"
-                          << Child->getID() << " is a child of EDT #"
-                          << EDTNode->getID() << "\n");
+        LLVM_DEBUG(dbgs() << "   - EDT #" << Child->getID()
+                          << " is a child of EDT #" << EDTNode->getID()
+                          << "\n");
         ChildEDTs.insert(Child);
-        LLVM_DEBUG(dbgs() << "AAEDTInfoFunction::updateImpl: EDT #"
-                          << Child->getID() << " is reached from EDT #"
-                          << EDTNode->getID() << "\n");
-        ReachedEDTs.insert(Child);
+        ReachedChildEDTs.insert(Child);
       }
       return true;
     };
@@ -481,18 +566,22 @@ struct AAEDTInfoFunction : AAEDTInfo {
     bool UsedAssumedInfoInCheckCallInst = false;
     if (!A.checkForAllCallLikeInstructions(CheckCallInst, *this,
                                            UsedAssumedInfoInCheckCallInst)) {
-      LLVM_DEBUG(dbgs() << "AAEDTInfoFunction::updateImpl: "
-                        << "Failed to visit all call-like instructions!\n";);
+      LLVM_DEBUG(
+          dbgs() << "   - Failed to visit all call-like instructions!\n";);
       return indicatePessimisticFixpoint();
     }
 
     /// If we got to this point, we know that all children were created
     ChildEDTs.indicateOptimisticFixpoint();
 
-    /// Iff all the EDT children were fixed, we are done.
+    if (AllChildEDTsWereFixed) {
+      LLVM_DEBUG(dbgs() << "   - All reached EDT children were fixed!\n");
+      ReachedChildEDTs.indicateOptimisticFixpoint();
+    }
+
+    /// If all the EDT children were fixed, we are done.
     if (AllEDTChildrenWereFixed) {
-      LLVM_DEBUG(dbgs() << "AAEDTInfoFunction::updateImpl: "
-                        << "All EDT children were fixed!\n";);
+      LLVM_DEBUG(dbgs() << "   - All EDT children were fixed!\n";);
       indicateOptimisticFixpoint();
     }
 
@@ -513,28 +602,18 @@ struct AAEDTInfoFunction : AAEDTInfo {
   }
 };
 
-struct AAEDTInfoChild : AAEDTInfo {
-  AAEDTInfoChild(const IRPosition &IRP, Attributor &A) : AAEDTInfo(IRP, A) {}
-
-  // void setCacheDeps(EDTInfoCache &EDTCache, CallBase &CB, EDT &EDTNode) {
-  //   for (uint32_t ArgItr = 0; ArgItr < CB.data_operands_size(); ++ArgItr) {
-  //     if (!EDTNode.isDep(ArgItr))
-  //       continue;
-  //     auto *Arg = CB.getArgOperand(ArgItr);
-  //     EDTCache.insertEDT(Arg, &EDTNode);
-  //   }
-  // }
+struct AAEDTInfoCallsite : AAEDTInfo {
+  AAEDTInfoCallsite(const IRPosition &IRP, Attributor &A) : AAEDTInfo(IRP, A) {}
 
   /// See AbstractAttribute::initialize(...).
   void initialize(Attributor &A) override {
     auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
-    /// Get the EDTChildNode
-    // auto &CB = cast<CallBase>(getAnchorValue());
-    EDTNode = EDTCache.getEDT(getAnchorScope());
+    /// Get the Called EDT
+    auto &EDTCall = cast<CallBase>(getAnchorValue());
+    EDTNode = EDTCache.getEDT(EDTCall.getCalledFunction());
     assert(EDTNode && "EDTNode is null!");
-    LLVM_DEBUG(dbgs() << "AAEDTInfoChild::initialize: EDT #" << EDTNode->getID()
-                      << "\n");
-    // setCacheDeps(EDTCache, CB, *EDTNode);
+    LLVM_DEBUG(dbgs() << "[AAEDTInfoCallsite::initialize] EDT #"
+                      << EDTNode->getID() << "\n");
   }
 
   /// See AbstractAttribute::updateImpl(Attributor &A).
@@ -542,51 +621,185 @@ struct AAEDTInfoChild : AAEDTInfo {
     ChangeStatus Changed = ChangeStatus::UNCHANGED;
     EDTInfoState StateBefore = getState();
 
-    /// What do we know about the child EDT?
-    auto *ChildEDTAA = A.getAAFor<AAEDTInfo>(
+    /// What do we know about the Called EDT?
+    auto *CalledEDTAA = A.getAAFor<AAEDTInfo>(
         *this, IRPosition::function(*EDTNode->getFn()), DepClassTy::OPTIONAL);
-    /// Clamping the state with the state of the child EDT
-    getState() ^= ChildEDTAA->getState();
+    /// Clamping the state with the state of the called EDT
+    /// NOTE: In case of recursion, it might not be a child. As of now, we
+    /// assume it is.
+    getState() ^= CalledEDTAA->getState();
     Changed = StateBefore == getState() ? ChangeStatus::UNCHANGED
                                         : ChangeStatus::CHANGED;
 
-    /// If the parent EDT is async, we are done.
-    auto *ParentFn = getAnchorScope();
+    /// If the ChildEDTs of the parentEDT are not at fixpoint, continue.
+    /// We need this info to check dependencies.
+    auto *ParentEDTFn = getAnchorScope();
     auto *ParentEDTAA = A.getAAFor<AAEDTInfo>(
-        *this, IRPosition::function(*ParentFn), DepClassTy::NONE);
-    auto *ParentEDT = ParentEDTAA->getEDT();
-    if (ParentEDT->isAsync()) {
-      indicateOptimisticFixpoint();
-      return Changed;
-    }
-
-    /// If the ChildEDTs of the parentEDT are not at fixpoint, continue
+        *this, IRPosition::function(*ParentEDTFn), DepClassTy::NONE);
     if (!ParentEDTAA->ChildEDTs.isAtFixpoint())
       return Changed;
 
     /// Run AAEDTDatablockInfo on each argument of the call instruction
-    auto &CB = cast<CallBase>(getAnchorValue());
-    for (uint32_t ArgItr = 0; ArgItr < CB.data_operands_size(); ++ArgItr) {
-      auto *ArgEDTDataBlockAA = A.getAAFor<AAEDTDataBlockInfo>(
-          *this, IRPosition::callsite_argument(CB, ArgItr),
+    bool AllDBsWereFixed = true;
+    auto &EDTCall = cast<CallBase>(getAnchorValue());
+    for (uint32_t CallArgItr = 0; CallArgItr < EDTCall.data_operands_size();
+         ++CallArgItr) {
+      auto *ArgEDTDataBlockAA = A.getAAFor<AAEDTInfo>(
+          *this, IRPosition::callsite_argument(EDTCall, CallArgItr),
           DepClassTy::OPTIONAL);
+      AllDBsWereFixed &= ArgEDTDataBlockAA->isAtFixpoint();
+      /// Here we clamp the set of MaySignalChildEDTs and DependentEDTs
+      getState() ^= ArgEDTDataBlockAA->getState();
+    }
+    /// Indicate optimistic fixpoint if all DataBlocks were fixed
+    if (AllDBsWereFixed)
+      indicateOptimisticFixpoint();
+    return StateBefore == getState() ? ChangeStatus::UNCHANGED
+                                     : ChangeStatus::CHANGED;
+  }
+
+  /// See AbstractAttribute::manifest(Attributor &A).
+  ChangeStatus manifest(Attributor &A) override {
+    return ChangeStatus::UNCHANGED;
+  }
+};
+
+struct AAEDTInfoCallsiteArg : AAEDTInfo {
+  AAEDTInfoCallsiteArg(const IRPosition &IRP, Attributor &A)
+      : AAEDTInfo(IRP, A) {}
+
+  /// See AbstractAttribute::initialize(...).
+  void initialize(Attributor &A) override {
+    auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
+    /// Get the called EDT
+    CallBase &EDTCall = cast<CallBase>(getAnchorValue());
+    EDTNode = EDTCache.getEDT(EDTCall.getCalledFunction());
+    assert(EDTNode && "CalledEDT is null!");
+
+    LLVM_DEBUG(dbgs() << "[AAEDTInfoCallsiteArg::initialize] CallArg #"
+                      << getCallSiteArgNo() << " from EDT #" << EDTNode->getID()
+                      << "\n");
+  }
+
+  /// See AbstractAttribute::updateImpl(Attributor &A).
+  ChangeStatus updateImpl(Attributor &A) override {
+    EDT *CalledEDT = getEDT();
+    LLVM_DEBUG(dbgs() << "[AAEDTDataBlockInfoArg::updateImpl] "
+                      << getAssociatedValue() << " from EDT #"
+                      << CalledEDT->getID() << "\n");
+    ChangeStatus Changed = ChangeStatus::UNCHANGED;
+    EDTInfoState StateBefore = getState();
+
+    /// Get the value associated with the argument. In case of load/store, get
+    /// the pointer operand.
+    Value &ArgVal = getAssociatedValue();
+    Value *V = nullptr;
+    if (auto *I = dyn_cast<Instruction>(&ArgVal)) {
+      if (auto *LI = dyn_cast<LoadInst>(I))
+        V = LI->getPointerOperand();
+      else if (auto *SI = dyn_cast<StoreInst>(I))
+        V = SI->getPointerOperand();
+    }
+    /// If the value is not an load/store instruction, use the value itself
+    if (!V)
+      V = &ArgVal;
+
+    /// Run AAUnderlyingObjects (inter/intra procedural analysis) on the value
+    const auto *UnderlyingObjsAA = A.getAAFor<AAUnderlyingObjects>(
+        *this, IRPosition::value(*V), DepClassTy::OPTIONAL);
+    if (!UnderlyingObjsAA) {
+      LLVM_DEBUG(dbgs() << "  - Failed to get AAUnderlyingObjects!\n");
+      return indicatePessimisticFixpoint();
+    }
+    if (!UnderlyingObjsAA->getState().isAtFixpoint()) {
+      LLVM_DEBUG(dbgs() << "   - Underlying objects are not at fixpoint!\n");
+      return Changed;
     }
 
-    /// If the ParentEDT is sync, check if I can reach any child of the parent
-    /// EDT.
-    // for (auto *ParentChildEDT : ParentEDTAA->ChildEDTs) {
-    //   /// If the parentEDT is the same as the childEDT, continue
-    //   // if (ParentChildEDT == EDTNode)
+    /// Lambda to check the underlying object
+    auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
+    auto *ParentEDT = EDTCache.getEDT(getAnchorScope());
+    Value *UnderlyingObjVal = nullptr;
+    uint64_t UnderlyingObjsCount = 0;
+    auto CheckUnderlyingObj = [&](Value &Obj,
+                                  AA::ValueScope Scope = AA::AnyScope) {
+      LLVM_DEBUG(dbgs() << "   - Underlying object: " << Obj << "\n");
+      UnderlyingObjsCount++;
+      UnderlyingObjVal = &Obj;
+      return true;
+    };
 
-    //   /// Otherwise run
-    // }
-    /// Get the set of EDTCalls that are reached from the current EDT
-    /// We do so, by getting the set of datablocks that are dominated
-    /// by the call instruction.
-    // auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
+    if (!UnderlyingObjsAA->forallUnderlyingObjects(CheckUnderlyingObj)) {
+      LLVM_DEBUG(dbgs() << "   - Failed to visit all underlying objects!\n");
+      return indicatePessimisticFixpoint();
+    }
 
-    // if (CBAA->isAtFixpoint())
-    //   indicateOptimisticFixpoint();
+    if (UnderlyingObjsCount > 1) {
+      LLVM_DEBUG(dbgs() << "Multiple underlying objects not supported yet.\n");
+      return indicatePessimisticFixpoint();
+    }
+
+    /// Assert expected instruction
+    Instruction *UnderlyingObjInst = dyn_cast<Instruction>(UnderlyingObjVal);
+    assert(UnderlyingObjInst && "Underlying object is not an instruction!");
+    /// Run AAEDTInfo on the underlying object value
+    auto *UnderlyingObjDBAA = A.getAAFor<AAEDTDataBlockInfo>(
+        *this, IRPosition::value(*UnderlyingObjInst), DepClassTy::OPTIONAL);
+    if (!UnderlyingObjDBAA) {
+      LLVM_DEBUG(dbgs() << "   - Failed to get AAEDTDataBlockInfo!\n");
+      return indicatePessimisticFixpoint();
+    }
+    if (!UnderlyingObjDBAA->isAtFixpoint()) {
+      LLVM_DEBUG(dbgs() << "   - Underlying object is not at fixpoint!\n");
+      return Changed;
+    }
+    /// Now we have to check whether the underlying object is local (belongs to
+    /// the parent EDT) or remote (belongs to another EDT).
+    auto *UnderlyingEDT = EDTCache.getEDT(UnderlyingObjInst->getFunction());
+    bool IsLocal = (UnderlyingEDT == ParentEDT);
+    /// If it is local, clamp the list of ReachedChildEDTs of the DataBlock with
+    /// the MaySignalEDTs.
+    if (IsLocal) {
+      LLVM_DEBUG(
+          dbgs() << "   - Underlying object belongs to the parent EDT!\n");
+      /// We only care about dependencies if the CalledEDT is synchronous
+      if (CalledEDT->isAsync()) {
+        LLVM_DEBUG(dbgs() << "   - CalledEDT is asynchronous!\n");
+        return indicateOptimisticFixpoint();
+      }
+
+      /// Merge the state of the underlying object with the state of the
+      /// argument. Continue if it reaches the CalledEDT.
+      for (auto *ChildEDT : UnderlyingObjDBAA->ReachedChildEDTs) {
+        if (ChildEDT == CalledEDT)
+          continue;
+        MaySignalChildEDTs.insert(ChildEDT);
+      }
+      indicateOptimisticFixpoint();
+      // UnderlyingObjDBAA->getState().insertDataMovement(ParentEDT, CalledEDT);
+    }
+    /// If it is remote, check whether the DB reaches any childEDTs that the
+    /// called EDT can not reach.
+    else {
+      LLVM_DEBUG(dbgs() << "   - Underlying object does not belong to the "
+                           "parent EDT!. It belongs to EDT #"
+                        << UnderlyingEDT->getID() << "\n");
+
+      for (auto *ChildEDT : UnderlyingObjDBAA->ReachedChildEDTs) {
+        auto *ChildEDTAA = A.getAAFor<AAEDTInfo>(
+            *this, IRPosition::function(*ChildEDT->getFn()), DepClassTy::NONE);
+        if (!ChildEDTAA->ReachedChildEDTs.isAtFixpoint())
+          return Changed;
+        /// Continue if the childEDT is an ancestor of the called EDT
+        if (ChildEDTAA->canReachChild(CalledEDT))
+          continue;
+        DependentEDTs.insert(ChildEDT);
+      }
+      indicateOptimisticFixpoint();
+    }
+
+    /// If we got to this point, we know all the dependencies of the value
+    // return indicateOptimisticFixpoint();
     return StateBefore == getState() ? ChangeStatus::UNCHANGED
                                      : ChangeStatus::CHANGED;
   }
@@ -599,93 +812,104 @@ struct AAEDTInfoChild : AAEDTInfo {
 
 /// The EDTDataBlock info abstract attribute, basically, what can we say
 /// about a DataBlock with regards to the EDTDataBlockInfoState.
-struct AAEDTDataBlockInfoValue : AAEDTDataBlockInfo {
-  AAEDTDataBlockInfoValue(const IRPosition &IRP, Attributor &A)
+struct AAEDTDataBlockInfoVal : AAEDTDataBlockInfo {
+  AAEDTDataBlockInfoVal(const IRPosition &IRP, Attributor &A)
       : AAEDTDataBlockInfo(IRP, A) {}
 
   /// See AbstractAttribute::initialize(...).
   void initialize(Attributor &A) override {
+    DBVal = &getAssociatedValue();
+    auto *Inst = dyn_cast<Instruction>(DBVal);
+    assert(isa<Instruction>(Inst) && "Value is not an instruction!");
+
+    /// Set EDT DataBlock info
     auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
-    /// Check the Mode of the value
-    Value &V = getAssociatedValue();
-    CallBase &CB = cast<CallBase>(getAnchorValue());
-    auto *CalledEDT = EDTCache.getEDT(CB.getCalledFunction());
-    assert(CalledEDT && "CalledEDT is null!");
-
-    LLVM_DEBUG(dbgs() << "AAEDTDataBlockInfoValue::initialize: CallArg#"
-                      << getCallSiteArgNo() << " from EDT #"
-                      << CalledEDT->getID() << "\n");
-
-    EDTDataBlock::Mode M = CalledEDT->isDep(getCallSiteArgNo())
-                               ? EDTDataBlock::Mode::ReadWrite
-                               : EDTDataBlock::Mode::ReadOnly;
-    DB = EDTCache.getOrCreateEDTDataBlock(&V, M);
+    ParentEDT = EDTCache.getEDT(Inst->getFunction());
+    /// NOTE: Later on, create EDT here based on the mode.
+    /// ReadWrite if the values is a dependency
+    /// ReadOnly if the value is a parameter
+    LLVM_DEBUG(dbgs() << "[AAEDTDataBlockInfoVal::initialize] Value #" << *DBVal
+                      << "\n");
   }
 
   /// See AbstractAttribute::updateImpl(Attributor &A).
   ChangeStatus updateImpl(Attributor &A) override {
-    LLVM_DEBUG(dbgs() << "AAEDTDataBlockInfoValue::updateImpl: "
+    LLVM_DEBUG(dbgs() << "[AAEDTDataBlockInfoVal::updateImpl] "
                       << getAssociatedValue() << "\n");
     ChangeStatus Changed = ChangeStatus::UNCHANGED;
     EDTDataBlockInfoState StateBefore = getState();
+
     /// Run AAPointerInfo on the value
-    CallBase &CB = cast<CallBase>(getAnchorValue());
     const AAPointerInfo *PI = A.getAAFor<AAPointerInfo>(
-        *this, IRPosition::callsite_argument(CB, getCallSiteArgNo()),
-        DepClassTy::OPTIONAL);
+        *this, IRPosition::value(*DBVal), DepClassTy::OPTIONAL);
     if (!PI) {
-      LLVM_DEBUG(dbgs() << "AAEDTDataBlockInfoValue::updateImpl: "
-                        << "Failed to get AAPointerInfo!\n");
+      LLVM_DEBUG(dbgs() << "   - Failed to get AAPointerInfo!\n");
       return indicatePessimisticFixpoint();
     }
     if (!PI->getState().isValidState()) {
-      LLVM_DEBUG(dbgs() << "AAEDTDataBlockInfoValue::updateImpl: "
-                        << "AAPointerInfo for " << getAssociatedValue()
-                        << " is invalid!\n");
+      LLVM_DEBUG(dbgs() << "   - AAPointerInfo is invalid!\n");
+      return Changed;
+    }
+
+    if (!PI->getState().isAtFixpoint()) {
+      LLVM_DEBUG(dbgs() << "   - AAPointerInfo is not at fixpoint!\n");
       return Changed;
     }
 
     int64_t BinSize = PI->numOffsetBins();
-    if(BinSize < 1) {
-      LLVM_DEBUG(dbgs() << "AAEDTDataBlockInfoValue::updateImpl: "
-                        << "No offset bins for " << getAssociatedValue() << "\n");
+    if (BinSize < 1) {
+      LLVM_DEBUG(dbgs() << "- No offset bins for the value\n");
       indicateOptimisticFixpoint();
       return Changed;
     }
 
-    for(auto PIItr = PI->begin(); PIItr != PI->end(); ++PIItr) {
+    // LLVM_DEBUG(dbgs() << "   - Offset bins: " << BinSize << "\n");
+    auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
+    for (auto PIItr = PI->begin(); PIItr != PI->end(); ++PIItr) {
       const auto &It = PI->begin();
-      const AA::RangeTy &Range = It->first;
+      // const AA::RangeTy &Range = It->first;
       const SmallSet<unsigned, 4> &AccessIndex = It->second;
       /// Analyze all accesses
       for (auto AI : AccessIndex) {
         const AAPointerInfo::Access &Acc = PI->getAccess(AI);
         Instruction *LocalInst = Acc.getLocalInst();
-        LLVM_DEBUG(dbgs() << "     - " << Acc.getKind() << " - " << *LocalInst << "\n");
+        /// Analyze dependencies on Call Instruction
+        if (auto *CBTo = dyn_cast<CallBase>(LocalInst)) {
+          /// Check if the CallInst is a call to an EDT
+          auto *ToEDT = EDTCache.getEDT(CBTo->getCalledFunction());
+          if (!ToEDT)
+            continue;
 
-        /// Analyze dependencies on Callbase
-        if(auto *CBTo = dyn_cast<CallBase>(LocalInst)) {
-          /// Check if the callbase is a call to an EDT
-          // auto *CalledEDT = A.getIRPositionCallSite(CBTo).getAssociatedFunction();
-          LLVM_DEBUG(dbgs() << "     - " << *CBTo << "\n");
+          if (ReachedChildEDTs.insert(ToEDT)) {
+            LLVM_DEBUG(dbgs() << "   - ReachedChildEDTs: EDT #"
+                              << ToEDT->getID() << "\n");
+          }
         }
+
         /// Debug output
-        if (Acc.getLocalInst() != Acc.getRemoteInst())
-          LLVM_DEBUG(dbgs() << "     -->RM:                         " << *Acc.getRemoteInst()
-                            << "\n");
-        if (!Acc.isWrittenValueYetUndetermined()) {
-          if (isa_and_nonnull<Function>(Acc.getWrittenValue()))
-            LLVM_DEBUG(dbgs() << "       - c: func " << Acc.getWrittenValue()->getName()
-                              << "\n");
-          else if (Acc.getWrittenValue())
-            LLVM_DEBUG(dbgs() << "       - c: " << *Acc.getWrittenValue() << "\n");
-          else
-            LLVM_DEBUG(dbgs() << "       - c: <unknown>\n");
-        }
+        // LLVM_DEBUG(dbgs() << "      - " << Acc.getKind() << " - " <<
+        // *LocalInst
+        //                   << "\n");
+        // if (Acc.getLocalInst() != Acc.getRemoteInst())
+        //   LLVM_DEBUG(dbgs() << "       -->RM:" << *Acc.getRemoteInst() <<
+        //   "\n");
+        // if (!Acc.isWrittenValueYetUndetermined()) {
+        //   if (isa_and_nonnull<Function>(Acc.getWrittenValue()))
+        //     LLVM_DEBUG(dbgs() << "       - c: func "
+        //                       << Acc.getWrittenValue()->getName() << "\n");
+        //   else if (Acc.getWrittenValue())
+        //     LLVM_DEBUG(dbgs()
+        //                << "       - c: " << *Acc.getWrittenValue() << "\n");
+        //   else
+        //     LLVM_DEBUG(dbgs() << "       - c: <unknown>\n");
+        // }
       }
-
     }
-    return Changed;
+    /// If we got to this point, we know all the dependencies of the value
+    /// Indicate Optimistic Fixpoint for now
+    indicateOptimisticFixpoint();
+    return StateBefore == getState() ? ChangeStatus::UNCHANGED
+                                     : ChangeStatus::CHANGED;
   }
 
   /// See AbstractAttribute::manifest(Attributor &A).
@@ -693,6 +917,171 @@ struct AAEDTDataBlockInfoValue : AAEDTDataBlockInfo {
     return ChangeStatus::UNCHANGED;
   }
 };
+
+// struct AAEDTDataBlockInfoVal : AAEDTDataBlockInfo {
+//   AAEDTDataBlockInfoVal(const IRPosition &IRP, Attributor &A)
+//       : AAEDTDataBlockInfo(IRP, A) {}
+
+//   /// See AbstractAttribute::initialize(...).
+//   void initialize(Attributor &A) override {
+//     // auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
+//     // /// Check the Mode of the value
+
+//     // CallBase &CB = cast<CallBase>(getAnchorValue());
+//     // CalledEDT = EDTCache.getEDT(CB.getCalledFunction());
+//     // assert(CalledEDT && "CalledEDT is null!");
+
+//     // LLVM_DEBUG(dbgs() << "[AAEDTDataBlockInfoArg::initialize] CallArg #"
+//     //                   << getCallSiteArgNo() << " from EDT #"
+//     //                   << CalledEDT->getID() << "\n");
+//   }
+
+//   /// See AbstractAttribute::updateImpl(Attriebutor &A).
+//   ChangeStatus updateImpl(Attributor &A) override {
+//     // LLVM_DEBUG(dbgs() << "[AAEDTDataBlockInfoArg::updateImpl] "
+//     //                   << getAssociatedValue() << " from EDT #"
+//     //                   << CalledEDT->getID() << "\n");
+//     ChangeStatus Changed = ChangeStatus::UNCHANGED;
+//     // EDTDataBlockInfoState StateBefore = getState();
+
+//     // /// Run AAUnderlyingObjects (inter/intra procedural analysis) on the
+//     // value Value &ArgVal = getAssociatedValue(); Value *V = nullptr;
+//     // /// If Instruction is a load/store, get load operand
+//     // if (auto *I = dyn_cast<Instruction>(&ArgVal)) {
+//     //   if (auto *LI = dyn_cast<LoadInst>(I))
+//     //     V = LI->getPointerOperand();
+//     //   else if (auto *SI = dyn_cast<StoreInst>(I))
+//     //     V = SI->getPointerOperand();
+//     // }
+//     // if (!V)
+//     //   V = &ArgVal;
+//     // const auto *UnderlyingObjsAA = A.getAAFor<AAUnderlyingObjects>(
+//     //     *this, IRPosition::value(*V), DepClassTy::OPTIONAL);
+//     // if (!UnderlyingObjsAA || !UnderlyingObjsAA->getState().isAtFixpoint())
+//     {
+//     //   LLVM_DEBUG(dbgs() << "   - Underlying objects are not at
+//     fixpoint!\n");
+//     //   return Changed;
+//     // }
+
+//     // Value *UnderlyingObj = nullptr;
+//     // uint64_t UnderlyingObjsCount = 0;
+//     // UnderlyingObjsAA->forallUnderlyingObjects(
+//     //     [&](Value &Obj, AA::ValueScope Scope = AA::AnyScope) {
+//     //       LLVM_DEBUG(dbgs() << "   - Underlying object: " << Obj << "\n");
+//     //       UnderlyingObjsCount++;
+//     //       UnderlyingObj = &Obj;
+//     //       return true;
+//     //     });
+
+//     // if (UnderlyingObjsCount > 1) {
+//     //   LLVM_DEBUG(dbgs() << "Multiple underlying objects not supported
+//     //   yet.\n"); indicateOptimisticFixpoint(); return Changed;
+//     // }
+
+//     // Instruction *UnderlyingObjInst = dyn_cast<Instruction>(UnderlyingObj);
+//     // assert(UnderlyingObjInst && "Underlying object is not an
+//     instruction!");
+//     // /// Does the underlying object belong to current EDT?
+//     // auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
+//     // auto *UnderlyingObjEDT =
+//     // EDTCache.getEDT(UnderlyingObjInst->getFunction());
+
+//     // /// GetOrCreate EDTDataBlock for the underlying object
+//     // DB = EDTCache.getOrCreateEDTDataBlock(UnderlyingObjInst,
+//     //                                       EDTDataBlock::Mode::ReadWrite);
+//     // bool IsDep = CalledEDT->isDep(getCallSiteArgNo());
+//     // /// Create a new EDTDataBlock for the value if it does not exist
+//     // EDTDataBlock::Mode M =
+//     //     IsDep ? EDTDataBlock::Mode::ReadWrite :
+//     //     EDTDataBlock::Mode::ReadOnly;
+//     // DB = EDTCache.getOrCreateEDTDataBlock(&V, M);
+//     // ReachedChildEDTs.insert(CalledEDT);
+//     // /// If it is not a dep, we are done, for now
+//     // if (!CalledEDT->isDep(getCallSiteArgNo())) {
+//     //   LLVM_DEBUG(dbgs() << "   - CallArg#" << getCallSiteArgNo()
+//     //                     << " is not a dep!\n");
+//     //   indicateOptimisticFixpoint();
+//     //   return;
+//     // }
+
+//     /// Run AAPointerInfo on the value
+//     // const AAPointerInfo *PI = A.getAAFor<AAPointerInfo>(
+//     //     *this, IRPosition::value(*DB->getValue()), DepClassTy::OPTIONAL);
+//     // if (!PI) {
+//     //   LLVM_DEBUG(dbgs() << "   - Failed to get AAPointerInfo!\n");
+//     //   return indicatePessimisticFixpoint();
+//     // }
+//     // if (!PI->getState().isValidState()) {
+//     //   LLVM_DEBUG(dbgs() << "   - AAPointerInfo is invalid!\n");
+//     //   return Changed;
+//     // }
+
+//     // if (!PI->getState().isAtFixpoint()) {
+//     //   LLVM_DEBUG(dbgs() << "   - AAPointerInfo is not at fixpoint!\n");
+//     //   return Changed;
+//     // }
+
+//     // int64_t BinSize = PI->numOffsetBins();
+//     // if (BinSize < 1) {
+//     //   LLVM_DEBUG(dbgs() << "AAEDTDataBlockInfoArg::updateImpl: "
+//     //                     << "No offset bins for " << getAssociatedValue()
+//     //                     << "\n");
+//     //   indicateOptimisticFixpoint();
+//     //   return Changed;
+//     // }
+
+//     // LLVM_DEBUG(dbgs() << "   - Offset bins for " << getAssociatedValue()
+//     <<
+//     // ": "
+//     //                   << BinSize << "\n");
+//     // auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
+//     // for (auto PIItr = PI->begin(); PIItr != PI->end(); ++PIItr) {
+//     //   const auto &It = PI->begin();
+//     //   // const AA::RangeTy &Range = It->first;
+//     //   const SmallSet<unsigned, 4> &AccessIndex = It->second;
+//     //   /// Analyze all accesses
+//     //   for (auto AI : AccessIndex) {
+//     //     const AAPointerInfo::Access &Acc = PI->getAccess(AI);
+//     //     Instruction *LocalInst = Acc.getLocalInst();
+
+//     //     /// Analyze dependencies on Callbase
+//     //     // if (auto *CBTo = dyn_cast<CallBase>(LocalInst)) {
+//     //     //   /// Check if the callbase is a call to an EDT
+//     //     //   auto *ToEDT = EDTCache.getEDT(CBTo->getCalledFunction());
+//     //     //   if (!ToEDT || ToEDT == CalledEDT)
+//     //     //     continue;
+//     //     //   LLVM_DEBUG(dbgs() << "     - Dep from EDT #" <<
+//     //     CalledEDT->getID()
+//     //     //                     << " to EDT #" << ToEDT->getID() << "\n");
+//     //     //   ReachedChildEDTs.insert(ToEDT);
+//     //     // }
+
+//     //     /// Debug output
+//     //     LLVM_DEBUG(dbgs() << "      - " << Acc.getKind() << " - " <<
+//     //     *LocalInst
+//     //                       << "\n");
+//     //     if (Acc.getLocalInst() != Acc.getRemoteInst())
+//     //       LLVM_DEBUG(dbgs() << "       -->RM:" << *Acc.getRemoteInst() <<
+//     //       "\n");
+//     //     if (!Acc.isWrittenValueYetUndetermined()) {
+//     //       if (isa_and_nonnull<Function>(Acc.getWrittenValue()))
+//     //         LLVM_DEBUG(dbgs() << "       - c: func "
+//     //                           << Acc.getWrittenValue()->getName() <<
+//     "\n");
+//     //       else if (Acc.getWrittenValue())
+//     //         LLVM_DEBUG(dbgs()
+//     //                    << "       - c: " << *Acc.getWrittenValue() <<
+//     //                    "\n");
+//     //       else
+//     //         LLVM_DEBUG(dbgs() << "       - c: <unknown>\n");
+//     //     }
+//     //   }
+//     // }
+//     // indicateOptimisticFixpoint();
+//     return Changed;
+//   }
+// };
 
 /// Create for position
 const char AAEDTInfo::ID = 0;
@@ -702,14 +1091,16 @@ AAEDTInfo &AAEDTInfo::createForPosition(const IRPosition &IRP, Attributor &A) {
   AAEDTInfo *AA = nullptr;
   switch (IRP.getPositionKind()) {
   case IRPosition::IRP_INVALID:
-  case IRPosition::IRP_FLOAT:
   case IRPosition::IRP_ARGUMENT:
   case IRPosition::IRP_RETURNED:
   case IRPosition::IRP_CALL_SITE_RETURNED:
+  case IRPosition::IRP_FLOAT:
+    llvm_unreachable("EDTInfo can only be created for this IR position!");
   case IRPosition::IRP_CALL_SITE_ARGUMENT:
-    llvm_unreachable("EDTInfo can only be created for function position!");
+    AA = new (A.Allocator) AAEDTInfoCallsiteArg(IRP, A);
+    break;
   case IRPosition::IRP_CALL_SITE:
-    AA = new (A.Allocator) AAEDTInfoChild(IRP, A);
+    AA = new (A.Allocator) AAEDTInfoCallsite(IRP, A);
     break;
   case IRPosition::IRP_FUNCTION:
     AA = new (A.Allocator) AAEDTInfoFunction(IRP, A);
@@ -727,13 +1118,13 @@ AAEDTDataBlockInfo &AAEDTDataBlockInfo::createForPosition(const IRPosition &IRP,
   case IRPosition::IRP_ARGUMENT:
   case IRPosition::IRP_RETURNED:
   case IRPosition::IRP_CALL_SITE_RETURNED:
-  case IRPosition::IRP_FLOAT:
+  case IRPosition::IRP_CALL_SITE_ARGUMENT:
   case IRPosition::IRP_CALL_SITE:
   case IRPosition::IRP_FUNCTION:
     llvm_unreachable(
         "EDTDataBlockInfo can only be created for floating position!");
-  case IRPosition::IRP_CALL_SITE_ARGUMENT:
-    AA = new (A.Allocator) AAEDTDataBlockInfoValue(IRP, A);
+  case IRPosition::IRP_FLOAT:
+    AA = new (A.Allocator) AAEDTDataBlockInfoVal(IRP, A);
     break;
   }
 
@@ -764,6 +1155,8 @@ public:
       Functions.insert(&Fn);
       if (EDTMetadata *MD = EDTMetadata::getMetadata(Fn)) {
         EDT *CurrentEDT = EDT::get(MD);
+        /// Change name if it is not the main function
+        // Fn.setName("carts_edt." + std::to_string(CurrentEDT->getID()));
         EDTs.insert(CurrentEDT);
         FunctionEDTMap[&Fn] = CurrentEDT;
       }
