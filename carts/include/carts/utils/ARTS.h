@@ -22,6 +22,7 @@ class EDT;
 class EDTDataBlock;
 
 using EDTValue = Value;
+using EDTValueSet = SetVector<EDTValue *>;
 using EDTCallBase = CallBase;
 using EDTFunction = Function;
 using EDTFunctionSet = SetVector<EDTFunction *>;
