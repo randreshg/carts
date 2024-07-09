@@ -40,15 +40,21 @@ public:
   EDTGraphNode *getNode(Function &Fn) const;
   EDTGraphNode *getNode(EDT *E) const;
 
-private:
+  /// Analysis
+  bool isReachable(EDTGraphNode *From, EDTGraphNode *To);
+  bool isCreationReachable(EDTGraphNode *From, EDTGraphNode *To);
+  bool isDataDependent(EDTGraphNode *From, EDTGraphNode *To);
+
+  /// Nodes
   void createNode(Function &Fn);
   void createNodes();
-  void setDeps(EDTGraphNode *Node);
-  void setCreationDeps();
-  void setDataDeps();
-  EDTGraphNode *getClobberingEDT(MemorySSA &MSSA, CallBase *Inst);
-  void analyzeDeps();
-  void analyzeReachability();
+  // void setDeps(EDTGraphNode *Node);
+  // void setCreationDeps();
+  // void setDataDeps();
+  // EDTGraphNode *getClobberingEDT(MemorySSA &MSSA, CallBase *Inst);
+  // void analyzeDeps();
+  // void analyzeReachability();
+
   unordered_set<EDTGraphNode *> getNodes();
   EDTGraphNode *insertNode(EDT *E);
   EDTGraphNode *insertNode(EDT *E, EDTGraphNode *ParentNode,
@@ -62,9 +68,15 @@ private:
   EDTGraphEdge *fetchOrCreateEdge(EDTGraphNode *From, EDTGraphNode *To,
                                   bool IsDataEdge);
   void addEdge(EDTGraphNode *From, EDTGraphNode *To, EDTGraphEdge *Edge);
+  /// Add edges with EDT
+  void addCreationEdge(EDT *From, EDT *To);
+  void addDataEdge(EDT *From, EDT *To, Value *V);
+  void addControlEdge(EDT *From, EDT *To);
+  /// Add edges with EDTGraphNode
   void addCreationEdge(EDTGraphNode *From, EDTGraphNode *To);
   void addDataEdge(EDTGraphNode *From, EDTGraphNode *To, Value *V = nullptr);
   void addControlEdge(EDTGraphNode *From, EDTGraphNode *To);
+
   void removeEdge(EDTGraphEdge *Edge);
   void removeEdge(EDTGraphNode *From, EDTGraphNode *To);
   void addReachableEDT(EDTGraphNode *From);

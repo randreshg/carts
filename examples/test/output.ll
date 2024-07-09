@@ -45,15 +45,22 @@ test_arts_ir.bc
 [AAEDTInfoFunction::initialize] EDT #4 for function "carts.edt.3"
 [AAEDTInfoFunction::updateImpl] EDT #0
    - EDT #1 is a child of EDT #0
+        - Creating edge from "EDT #0" to "EDT #1"
+          Control Edge
    - EDT #4 is a child of EDT #0
-[AAEDTInfoFunction::updateImpl] EDT #0 Changed: YES
+        - Creating edge from "EDT #0" to "EDT #4"
+          Control Edge
 [AAEDTInfoFunction::updateImpl] EDT #1
    - EDT #2 is a child of EDT #1
+        - Creating edge from "EDT #1" to "EDT #2"
+          Control Edge
    - EDT #3 is a child of EDT #1
+        - Creating edge from "EDT #1" to "EDT #3"
+          Control Edge
 [AAEDTInfoCallsite::initialize] EDT #1
 [AAEDTInfoCallsite::updateImpl] EDT #1
 [AAEDTInfoCallsiteArg::initialize] CallArg #0 from EDT #1
-[AAEDTDataBlockInfoArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
    - Underlying object:   %random_number = alloca i32, align 4
 [AAEDTDataBlockInfoVal::initialize] Value #  %random_number = alloca i32, align 4
 [AAEDTDataBlockInfoVal::updateImpl]   %random_number = alloca i32, align 4
@@ -61,196 +68,105 @@ test_arts_ir.bc
    - ReachedChildEDTs: EDT #4
    - Underlying object belongs to the parent EDT!
    - MaySignalChildEDTs: EDT #4
-[AAEDTDataBlockInfoArg::updateImpl] EDT #1 Changed: YES
+[AAEDTInfoCallsiteArg::updateImpl] EDT #1 Changed: YES
 [AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #1
-[AAEDTDataBlockInfoArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
+[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
    - Underlying object:   %NewRandom = alloca i32, align 4
 [AAEDTDataBlockInfoVal::initialize] Value #  %NewRandom = alloca i32, align 4
 [AAEDTDataBlockInfoVal::updateImpl]   %NewRandom = alloca i32, align 4
    - ReachedChildEDTs: EDT #1
    - Underlying object belongs to the parent EDT!
-[AAEDTDataBlockInfoArg::updateImpl] EDT #1 Changed: YES
+[AAEDTInfoCallsiteArg::updateImpl] EDT #1 Changed: YES
 [AAEDTInfoCallsiteArg::initialize] CallArg #2 from EDT #1
-[AAEDTDataBlockInfoArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
+[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
    - Underlying object:   %number = alloca i32, align 4
 [AAEDTDataBlockInfoVal::initialize] Value #  %number = alloca i32, align 4
 [AAEDTDataBlockInfoVal::updateImpl]   %number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
-   - Underlying object DataBlock is not at fixpoint!
+   - ReachedChildEDTs: EDT #1
+   - ReachedChildEDTs: EDT #4
+   - Underlying object belongs to the parent EDT!
+   - MaySignalChildEDTs: EDT #4
+[AAEDTInfoCallsiteArg::updateImpl] EDT #1 Changed: YES
 [AAEDTInfoCallsiteArg::initialize] CallArg #3 from EDT #1
-[AAEDTDataBlockInfoArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
    - Underlying object:   %shared_number = alloca i32, align 4
 [AAEDTDataBlockInfoVal::initialize] Value #  %shared_number = alloca i32, align 4
 [AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
-   - Underlying object DataBlock is not at fixpoint!
-[AAEDTInfoFunction::updateImpl] EDT #1 Changed: YES
+   - ReachedChildEDTs: EDT #1
+   - Underlying object belongs to the parent EDT!
+[AAEDTInfoCallsiteArg::updateImpl] EDT #1 Changed: YES
+   - All DataBlocks were fixed for EDT #1
 [AAEDTInfoFunction::updateImpl] EDT #2
 [AAEDTInfoCallsite::initialize] EDT #2
 [AAEDTInfoCallsite::updateImpl] EDT #2
 [AAEDTInfoCallsiteArg::initialize] CallArg #0 from EDT #2
-[AAEDTDataBlockInfoArg::updateImpl] ptr %2 from EDT #2
+[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #2
    - Underlying object:   %number = alloca i32, align 4
-   - Underlying object DataBlock is not at fixpoint!
+   - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
+   - EDT #1 can reach 2
+   - DependentEDTs: EDT #4
+        - Creating edge from "EDT #2" to "EDT #4"
+          Data Edge
+[AAEDTInfoCallsiteArg::updateImpl] EDT #2 Changed: YES
 [AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #2
-[AAEDTDataBlockInfoArg::updateImpl] ptr %3 from EDT #2
+[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #2
    - Underlying object:   %shared_number = alloca i32, align 4
-   - Underlying object DataBlock is not at fixpoint!
+   - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
+   - EDT #1 can reach 2
+[AAEDTInfoCallsiteArg::updateImpl] EDT #2 Changed: YES
 [AAEDTInfoCallsiteArg::initialize] CallArg #2 from EDT #2
-[AAEDTDataBlockInfoArg::updateImpl]   %4 = load i32, ptr %0, align 4, !tbaa !8 from EDT #2
+[AAEDTInfoCallsiteArg::updateImpl]   %4 = load i32, ptr %0, align 4, !tbaa !8 from EDT #2
    - Underlying object:   %random_number = alloca i32, align 4
    - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
    - EDT #1 can reach 2
    - DependentEDTs: EDT #4
-[AAEDTDataBlockInfoArg::updateImpl] EDT #2 Changed: YES
+[AAEDTInfoCallsiteArg::updateImpl] EDT #2 Changed: YES
 [AAEDTInfoCallsiteArg::initialize] CallArg #3 from EDT #2
-[AAEDTDataBlockInfoArg::updateImpl]   %5 = load i32, ptr %1, align 4, !tbaa !8 from EDT #2
+[AAEDTInfoCallsiteArg::updateImpl]   %5 = load i32, ptr %1, align 4, !tbaa !8 from EDT #2
    - Underlying object:   %NewRandom = alloca i32, align 4
    - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
    - EDT #1 can reach 2
-[AAEDTDataBlockInfoArg::updateImpl] EDT #2 Changed: YES
-[AAEDTInfoFunction::updateImpl] EDT #2 Changed: YES
+[AAEDTInfoCallsiteArg::updateImpl] EDT #2 Changed: YES
+   - All DataBlocks were fixed for EDT #2
 [AAEDTInfoFunction::updateImpl] EDT #3
 [AAEDTInfoCallsite::initialize] EDT #3
 [AAEDTInfoCallsite::updateImpl] EDT #3
 [AAEDTInfoCallsiteArg::initialize] CallArg #0 from EDT #3
-[AAEDTDataBlockInfoArg::updateImpl] ptr %3 from EDT #3
+[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
    - Underlying object:   %shared_number = alloca i32, align 4
-   - Underlying object DataBlock is not at fixpoint!
+   - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
+   - EDT #1 can reach 3
+[AAEDTInfoCallsiteArg::updateImpl] EDT #3 Changed: YES
 [AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #3
-[AAEDTDataBlockInfoArg::updateImpl]   %7 = load i32, ptr %2, align 4, !tbaa !8 from EDT #3
+[AAEDTInfoCallsiteArg::updateImpl]   %7 = load i32, ptr %2, align 4, !tbaa !8 from EDT #3
    - Underlying object:   %number = alloca i32, align 4
-   - Underlying object DataBlock is not at fixpoint!
-[AAEDTInfoFunction::updateImpl] EDT #3 Changed: YES
+   - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
+   - EDT #1 can reach 3
+   - DependentEDTs: EDT #4
+        - Creating edge from "EDT #3" to "EDT #4"
+          Data Edge
+[AAEDTInfoCallsiteArg::updateImpl] EDT #3 Changed: YES
+   - All DataBlocks were fixed for EDT #3
 [AAEDTInfoFunction::updateImpl] EDT #4
 [AAEDTInfoCallsite::initialize] EDT #4
 [AAEDTInfoCallsite::updateImpl] EDT #4
 [AAEDTInfoCallsiteArg::initialize] CallArg #0 from EDT #4
-[AAEDTDataBlockInfoArg::updateImpl]   %number = alloca i32, align 4 from EDT #4
+[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #4
    - Underlying object:   %number = alloca i32, align 4
-   - Underlying object DataBlock is not at fixpoint!
+   - Underlying object belongs to the parent EDT!
+   - CalledEDT is asynchronous!
 [AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #4
-[AAEDTDataBlockInfoArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #4
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #4
    - Underlying object:   %random_number = alloca i32, align 4
    - Underlying object belongs to the parent EDT!
    - CalledEDT is asynchronous!
-[AAEDTInfoFunction::updateImpl] EDT #4 Changed: YES
+   - All DataBlocks were fixed for EDT #4
 [AAEDTInfoFunction::updateImpl] EDT #0
    - EDT #1 is a child of EDT #0
    - EDT #4 is a child of EDT #0
-[AAEDTInfoFunction::updateImpl] EDT #0 Changed: YES
-[AAEDTInfoFunction::updateImpl] EDT #1
-   - EDT #2 is a child of EDT #1
-   - EDT #3 is a child of EDT #1
-[AAEDTInfoFunction::updateImpl] EDT #1 Changed: YES
-[AAEDTInfoFunction::updateImpl] EDT #2
-[AAEDTInfoFunction::updateImpl] EDT #2 Changed: NO
-[AAEDTInfoFunction::updateImpl] EDT #3
-[AAEDTInfoFunction::updateImpl] EDT #3 Changed: NO
-[AAEDTInfoFunction::updateImpl] EDT #4
-[AAEDTInfoFunction::updateImpl] EDT #4 Changed: NO
-[AAEDTInfoCallsite::updateImpl] EDT #1
-[AAEDTDataBlockInfoArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-   - Underlying object:   %number = alloca i32, align 4
-   - Underlying object DataBlock is not at fixpoint!
-[AAEDTDataBlockInfoVal::updateImpl]   %number = alloca i32, align 4
-   - AAPointerInfo is not at fixpoint!
-[AAEDTDataBlockInfoArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-   - Underlying object:   %shared_number = alloca i32, align 4
-   - Underlying object DataBlock is not at fixpoint!
-[AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
-   - AAPointerInfo is not at fixpoint!
-[AAEDTInfoCallsite::updateImpl] EDT #2
-[AAEDTDataBlockInfoArg::updateImpl] ptr %2 from EDT #2
-   - Underlying object:   %number = alloca i32, align 4
-   - Underlying object DataBlock is not at fixpoint!
-[AAEDTDataBlockInfoArg::updateImpl] ptr %3 from EDT #2
-   - Underlying object:   %shared_number = alloca i32, align 4
-   - Underlying object DataBlock is not at fixpoint!
-[AAEDTInfoCallsite::updateImpl] EDT #3
-[AAEDTDataBlockInfoArg::updateImpl] ptr %3 from EDT #3
-   - Underlying object:   %shared_number = alloca i32, align 4
-   - Underlying object DataBlock is not at fixpoint!
-[AAEDTDataBlockInfoArg::updateImpl]   %7 = load i32, ptr %2, align 4, !tbaa !8 from EDT #3
-   - Underlying object:   %number = alloca i32, align 4
-   - Underlying object DataBlock is not at fixpoint!
-[AAEDTInfoCallsite::updateImpl] EDT #4
-[AAEDTDataBlockInfoArg::updateImpl]   %number = alloca i32, align 4 from EDT #4
-   - Underlying object:   %number = alloca i32, align 4
-   - Underlying object DataBlock is not at fixpoint!
 [AAEDTInfoFunction::updateImpl] EDT #0
-   - EDT #1 is a child of EDT #0
-   - EDT #4 is a child of EDT #0
-[AAEDTInfoFunction::updateImpl] EDT #0 Changed: YES
-[AAEDTInfoFunction::updateImpl] EDT #1
-[AAEDTInfoFunction::updateImpl] EDT #1 Changed: NO
-[AAEDTInfoFunction::updateImpl] EDT #0
-[AAEDTInfoFunction::updateImpl] EDT #0 Changed: NO
-[AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
-   - AAPointerInfo is not at fixpoint!
-[AAEDTDataBlockInfoVal::updateImpl]   %number = alloca i32, align 4
-   - AAPointerInfo is not at fixpoint!
-[AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
-   - AAPointerInfo is not at fixpoint!
-[AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
-   - AAPointerInfo is not at fixpoint!
-[AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
-   - ReachedChildEDTs: EDT #1
-[AAEDTDataBlockInfoArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-   - Underlying object:   %shared_number = alloca i32, align 4
-   - Underlying object belongs to the parent EDT!
-[AAEDTDataBlockInfoArg::updateImpl] EDT #1 Changed: YES
-[AAEDTDataBlockInfoArg::updateImpl] ptr %3 from EDT #2
-   - Underlying object:   %shared_number = alloca i32, align 4
-   - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
-   - EDT #1 can reach 2
-[AAEDTDataBlockInfoArg::updateImpl] EDT #2 Changed: YES
-[AAEDTDataBlockInfoArg::updateImpl] ptr %3 from EDT #3
-   - Underlying object:   %shared_number = alloca i32, align 4
-   - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
-   - EDT #1 can reach 3
-[AAEDTDataBlockInfoArg::updateImpl] EDT #3 Changed: YES
-[AAEDTDataBlockInfoVal::updateImpl]   %number = alloca i32, align 4
-   - ReachedChildEDTs: EDT #1
-   - ReachedChildEDTs: EDT #4
-[AAEDTInfoCallsite::updateImpl] EDT #1
-[AAEDTInfoCallsite::updateImpl] EDT #2
-[AAEDTInfoCallsite::updateImpl] EDT #3
-[AAEDTDataBlockInfoArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-   - Underlying object:   %number = alloca i32, align 4
-   - Underlying object belongs to the parent EDT!
-   - MaySignalChildEDTs: EDT #4
-[AAEDTDataBlockInfoArg::updateImpl] EDT #1 Changed: YES
-[AAEDTDataBlockInfoArg::updateImpl] ptr %2 from EDT #2
-   - Underlying object:   %number = alloca i32, align 4
-   - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
-   - EDT #1 can reach 2
-   - DependentEDTs: EDT #4
-[AAEDTDataBlockInfoArg::updateImpl] EDT #2 Changed: YES
-[AAEDTDataBlockInfoArg::updateImpl]   %7 = load i32, ptr %2, align 4, !tbaa !8 from EDT #3
-   - Underlying object:   %number = alloca i32, align 4
-   - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
-   - EDT #1 can reach 3
-   - DependentEDTs: EDT #4
-[AAEDTDataBlockInfoArg::updateImpl] EDT #3 Changed: YES
-[AAEDTDataBlockInfoArg::updateImpl]   %number = alloca i32, align 4 from EDT #4
-   - Underlying object:   %number = alloca i32, align 4
-   - Underlying object belongs to the parent EDT!
-   - CalledEDT is asynchronous!
-[AAEDTInfoCallsite::updateImpl] EDT #1
-   - All DataBlocks were fixed for EDT #1
-[AAEDTInfoCallsite::updateImpl] EDT #2
-   - All DataBlocks were fixed for EDT #2
-[AAEDTInfoCallsite::updateImpl] EDT #3
-   - All DataBlocks were fixed for EDT #3
-[AAEDTInfoFunction::updateImpl] EDT #1
-[AAEDTInfoFunction::updateImpl] EDT #1 Changed: NO
-[AAEDTInfoFunction::updateImpl] EDT #2
-[AAEDTInfoFunction::updateImpl] EDT #2 Changed: NO
-[AAEDTInfoFunction::updateImpl] EDT #3
-[AAEDTInfoFunction::updateImpl] EDT #3 Changed: YES
-[AAEDTInfoFunction::updateImpl] EDT #3
-[AAEDTInfoFunction::updateImpl] EDT #3 Changed: NO
 AAEDTInfoFunction::manifest: EDT #0 -> 
      #Child EDTs: 2{1, 4}
      #Reached ChildEDTs: 4{1, 4, 2, 3}
@@ -322,7 +238,81 @@ Number of DepV: 2
 
 -------------------------------------------------
 [arts-analysis] Process has finished
+- - - - - - - - - - - - - - - - - - - - - - - -
+[edt-graph] Printing the EDT Graph
+
+- EDT #0 - "main"
+  - Type: main
+  - Data Environment:
+    - Number of ParamV = 0
+    - Number of DepV = 0
+  - Incoming Edges:
+    - The EDT has no incoming edges
+  - Outgoing Edges:
+    - [control/ creation] "EDT #1"
+    - [control/ creation] "EDT #4"
+
+- EDT #1 - "carts.edt"
+  - Type: parallel
+  - Data Environment:
+    - Number of ParamV = 0
+    - Number of DepV = 4
+      - ptr %0
+      - ptr %1
+      - ptr %2
+      - ptr %3
+  - Incoming Edges:
+    - [control/ creation] "main"
+  - Outgoing Edges:
+    - [control/ creation] "EDT #2"
+    - [control/ creation] "EDT #3"
+
+- EDT #2 - "carts.edt.1"
+  - Type: task
+  - Data Environment:
+    - Number of ParamV = 2
+      - i32 %2
+      - i32 %3
+    - Number of DepV = 2
+      - ptr %0
+      - ptr %1
+  - Incoming Edges:
+    - [control/ creation] "carts.edt"
+  - Outgoing Edges:
+    - [data] "EDT #4"
+        -   %random_number = alloca i32, align 4
+        -   %number = alloca i32, align 4
+
+- EDT #3 - "carts.edt.2"
+  - Type: task
+  - Data Environment:
+    - Number of ParamV = 1
+      - i32 %1
+    - Number of DepV = 1
+      - ptr %0
+  - Incoming Edges:
+    - [control/ creation] "carts.edt"
+  - Outgoing Edges:
+    - [data] "EDT #4"
+        -   %number = alloca i32, align 4
+
+- EDT #4 - "carts.edt.3"
+  - Type: task
+  - Data Environment:
+    - Number of ParamV = 0
+    - Number of DepV = 2
+      - ptr %number
+      - ptr %random_number
+  - Incoming Edges:
+    - [data] "carts.edt.1"
+    - [control/ creation] "main"
+    - [data] "carts.edt.2"
+  - Outgoing Edges:
+    - The EDT has no outgoing edges
+- - - - - - - - - - - - - - - - - - - - - - - -
+
 
 -------------------------------------------------
+[edt-graph] Destroying the EDT Graph
 llvm-dis test_arts_analysis.bc
 clang++ -fopenmp test_arts_analysis.bc -O3 -march=native -o test_opt -lstdc++
