@@ -4,6 +4,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/PassManager.h"
@@ -14,6 +15,7 @@
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/IPO/Attributor.h"
 #include "llvm/Transforms/Utils/CallGraphUpdater.h"
@@ -35,6 +37,26 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 ///                           EDTAnalyzer                               ///
 /// ------------------------------------------------------------------- ///
 /// Attribute state
+template <typename Ty> struct BooleanStatePtr : public BooleanState {
+  void set(Ty *Val) { Ptr = Val; }
+  Ty *get() const { return Ptr; }
+
+  bool operator==(const BooleanStatePtr &RHS) const {
+    return BooleanState::operator==(RHS) && Ptr == RHS.Ptr;
+  }
+
+  bool operator!=(const BooleanStatePtr &RHS) const { return !(*this == RHS); }
+  /// "Clamp" this state with \p RHS.
+  BooleanStatePtr &operator^=(const BooleanStatePtr &RHS) {
+    BooleanState::operator^=(RHS);
+    Ptr = RHS.Ptr;
+    return *this;
+  }
+
+private:
+  Ty *Ptr = nullptr;
+};
+
 template <typename Ty, bool InsertInvalidates = true>
 struct BooleanStateWithSetVector : public BooleanState {
   bool contains(const Ty &Elem) const { return Set.contains(Elem); }
@@ -82,7 +104,6 @@ struct EDTInfoState : AbstractState {
   /// EDT Node
   EDT *EDTInfo = nullptr;
   EDT *ParentEDT = nullptr;
-  EDT *ParentSyncEDT = nullptr;
 
   /// For sync EDTs
   EDT *DoneEDT = nullptr;
@@ -90,12 +111,15 @@ struct EDTInfoState : AbstractState {
   /// Flag to track if we reached a fixpoint.
   bool IsAtFixpoint = false;
 
+  /// ParentSyncEDT
+  BooleanStatePtr<EDT> ParentSyncEDT;
+
   /// The EDTs we know are created by the associated EDT.
   BooleanStateWithPtrSetVector<EDT, /* InsertInvalidates */ false> ChildEDTs;
 
   /// The EDTS we know are reached from the associated EDT.
   BooleanStateWithPtrSetVector<EDT, /* InsertInvalidates */ false>
-      ReachedChildEDTs;
+      ReachedDescendantEDTs;
 
   /// The EDTS we know are dependent from the associated EDT.
   BooleanStateWithPtrSetVector<EDT, /* InsertInvalidates */ false>
@@ -114,11 +138,16 @@ struct EDTInfoState : AbstractState {
 
   EDT *getEDT() const { return EDTInfo; }
   EDT *getParentEDT() const { return ParentEDT; }
-  EDT *getParentSyncEDT() const { return ParentSyncEDT; }
   EDT *getDoneEDT() const { return DoneEDT; }
 
   /// Reachability
-  bool canReachChild(EDT *E) const { return ReachedChildEDTs.contains(E); }
+  bool canReach(EDT *E) const {
+    return ReachedDescendantEDTs.contains(E) || ChildEDTs.contains(E);
+  }
+
+  bool isReachabilityInfoAtFixpoint() const {
+    return ReachedDescendantEDTs.isAtFixpoint() && ChildEDTs.isAtFixpoint();
+  }
 
   /// Abstract State interface
   ///{
@@ -143,11 +172,13 @@ struct EDTInfoState : AbstractState {
   ChangeStatus indicatePessimisticFixpoint() override {
     IsAtFixpoint = true;
     ChildEDTs.indicatePessimisticFixpoint();
-    ReachedChildEDTs.indicatePessimisticFixpoint();
+    ReachedDescendantEDTs.indicatePessimisticFixpoint();
     DependentEDTs.indicatePessimisticFixpoint();
     /// MaySignalEDTs
     MaySignalLocalEDTs.indicatePessimisticFixpoint();
     MaySignalRemoteEDTs.indicatePessimisticFixpoint();
+    /// Sync Info
+    ParentSyncEDT.indicatePessimisticFixpoint();
     return ChangeStatus::CHANGED;
   }
 
@@ -155,11 +186,13 @@ struct EDTInfoState : AbstractState {
   ChangeStatus indicateOptimisticFixpoint() override {
     IsAtFixpoint = true;
     ChildEDTs.indicateOptimisticFixpoint();
-    ReachedChildEDTs.indicateOptimisticFixpoint();
+    ReachedDescendantEDTs.indicateOptimisticFixpoint();
     DependentEDTs.indicateOptimisticFixpoint();
     /// MaySignalEDTs
     MaySignalLocalEDTs.indicateOptimisticFixpoint();
     MaySignalRemoteEDTs.indicateOptimisticFixpoint();
+    /// Sync Info
+    ParentSyncEDT.indicateOptimisticFixpoint();
     return ChangeStatus::UNCHANGED;
   }
 
@@ -170,13 +203,15 @@ struct EDTInfoState : AbstractState {
   bool operator==(const EDTInfoState &RHS) const {
     if (ChildEDTs != RHS.ChildEDTs)
       return false;
-    if (ReachedChildEDTs != RHS.ReachedChildEDTs)
+    if (ReachedDescendantEDTs != RHS.ReachedDescendantEDTs)
       return false;
     if (DependentEDTs != RHS.DependentEDTs)
       return false;
     if (MaySignalLocalEDTs != RHS.MaySignalLocalEDTs)
       return false;
     if (MaySignalRemoteEDTs != RHS.MaySignalRemoteEDTs)
+      return false;
+    if (ParentSyncEDT != RHS.ParentSyncEDT)
       return false;
     return true;
   }
@@ -192,7 +227,7 @@ struct EDTInfoState : AbstractState {
   /// "Clamp" this state with \p KIS.
   EDTInfoState operator^=(const EDTInfoState &KIS) {
     ChildEDTs ^= KIS.ChildEDTs;
-    ReachedChildEDTs ^= KIS.ReachedChildEDTs;
+    ReachedDescendantEDTs ^= KIS.ReachedDescendantEDTs;
     DependentEDTs ^= KIS.DependentEDTs;
     /// MaySignalEDTs
     MaySignalLocalEDTs ^= KIS.MaySignalLocalEDTs;
@@ -205,7 +240,7 @@ struct EDTInfoState : AbstractState {
   }
 
   /// "Clamp" this state with \p KIS, ignoring the ChildEDTs and
-  /// ReachedChildEDTs.
+  /// ReachedDescendantEDTs.
   EDTInfoState operator*=(const EDTInfoState &KIS) {
     DependentEDTs ^= KIS.DependentEDTs;
     /// MaySignalEDTs
@@ -352,21 +387,32 @@ struct AAEDTInfo : public StateWrapper<EDTInfoState, AbstractAttribute> {
     if (!isValidState() || !EDTInfo)
       return "<invalid>";
 
-    auto ReachedChildEDTStr = [&]() {
-      if (!ReachedChildEDTs.isValidState())
-        return "<invalid> with " + std::to_string(ReachedChildEDTs.size()) +
-               " EDTs\n";
+    auto ParentSyncEDTStr = [&]() {
+      if (!ParentSyncEDT.isValidState())
+        return string("     -ParentSyncEDT invalid\n");
+      if (!ParentSyncEDT.get())
+        return string("     -ParentSyncEDT: <null>\n");
+      EDT *EDTPtr = ParentSyncEDT.get();
+      return (string("     -ParentSyncEDT: EDT #") +
+              std::to_string(EDTPtr->getID()) + "\n");
+    };
+
+    auto ReachedDescendantEDTstr = [&]() {
+      if (!ReachedDescendantEDTs.isValidState())
+        return "     -Reached DescendantEDTs invalid with " +
+               std::to_string(ReachedDescendantEDTs.size()) + " EDTs\n";
       std::string Str;
-      for (EDT *E : ReachedChildEDTs)
+      for (EDT *E : ReachedDescendantEDTs)
         Str += (Str.empty() ? "" : ", ") + std::to_string(E->getID());
-      Str = "     #Reached ChildEDTs: " +
-            std::to_string(ReachedChildEDTs.size()) + "{" + Str + "}\n";
+      Str = "     #Reached DescendantEDTs: " +
+            std::to_string(ReachedDescendantEDTs.size()) + "{" + Str + "}\n";
       return Str;
     };
 
     auto ChildEDTStr = [&]() {
       if (!ChildEDTs.isValidState())
-        return "<invalid> with " + std::to_string(ChildEDTs.size()) + " EDTs\n";
+        return "     -Child EDTs invalid with " +
+               std::to_string(ChildEDTs.size()) + " EDTs\n";
       std::string Str;
       for (EDT *E : ChildEDTs)
         Str += (Str.empty() ? "" : ", ") + std::to_string(E->getID());
@@ -377,8 +423,8 @@ struct AAEDTInfo : public StateWrapper<EDTInfoState, AbstractAttribute> {
 
     auto MaySignalLocalEDTStr = [&]() {
       if (!MaySignalLocalEDTs.isValidState())
-        return "<invalid> with " + std::to_string(MaySignalLocalEDTs.size()) +
-               " EDTs\n";
+        return "     -MaySignalLocal EDTs invalid with " +
+               std::to_string(MaySignalLocalEDTs.size()) + " EDTs\n";
       std::string Str;
       for (EDT *E : MaySignalLocalEDTs)
         Str += (Str.empty() ? "" : ", ") + std::to_string(E->getID());
@@ -389,8 +435,8 @@ struct AAEDTInfo : public StateWrapper<EDTInfoState, AbstractAttribute> {
 
     auto MaySignalRemoteEDTStr = [&]() {
       if (!MaySignalRemoteEDTs.isValidState())
-        return "<invalid> with " + std::to_string(MaySignalRemoteEDTs.size()) +
-               " EDTs\n";
+        return "     -MaySignalRemote EDTs invalid with " +
+               std::to_string(MaySignalRemoteEDTs.size()) + " EDTs\n";
       std::string Str;
       for (EDT *E : MaySignalRemoteEDTs)
         Str += (Str.empty() ? "" : ", ") + std::to_string(E->getID());
@@ -401,8 +447,8 @@ struct AAEDTInfo : public StateWrapper<EDTInfoState, AbstractAttribute> {
 
     auto DepEDTStr = [&]() {
       if (!DependentEDTs.isValidState())
-        return "<invalid> with " + std::to_string(DependentEDTs.size()) +
-               " EDTs";
+        return "     -Dependent EDTs invalid with " +
+               std::to_string(DependentEDTs.size()) + " EDTs";
       std::string Str;
       for (EDT *E : DependentEDTs)
         Str += (Str.empty() ? "" : ", ") + std::to_string(E->getID());
@@ -411,9 +457,14 @@ struct AAEDTInfo : public StateWrapper<EDTInfoState, AbstractAttribute> {
       return Str;
     };
 
-    std::string EDTStr = "EDT #" + std::to_string(EDTInfo->getID()) + " -> \n";
-    return (EDTStr + ChildEDTStr() + ReachedChildEDTStr() +
-            MaySignalLocalEDTStr() + MaySignalRemoteEDTStr() + DepEDTStr());
+    std::string EDTStr =
+        "\nEDT #" + std::to_string(EDTInfo->getID()) + " -> \n";
+    if (ParentEDT)
+      EDTStr +=
+          "     -ParentEDT: EDT #" + std::to_string(ParentEDT->getID()) + "\n";
+    return (EDTStr + ParentSyncEDTStr() + ChildEDTStr() +
+            ReachedDescendantEDTstr() + MaySignalLocalEDTStr() +
+            MaySignalRemoteEDTStr() + DepEDTStr());
   }
   /// Create an abstract attribute biew for the position \p IRP.
   static AAEDTInfo &createForPosition(const IRPosition &IRP, Attributor &A);
@@ -480,13 +531,19 @@ struct AAEDTDataBlockInfo
   static const char ID;
 };
 
-/// EDTInfoCache
 struct EDTInfoCache : public InformationCache {
   EDTInfoCache(Module &M, AnalysisGetter &AG, BumpPtrAllocator &Allocator,
                SetVector<Function *> &Functions, EDTSet &EDTs,
                DenseMap<EDTFunction *, EDT *> &FunctionEDTMap)
       : InformationCache(M, AG, Allocator, &Functions), EDTs(EDTs),
         FunctionEDTMap(FunctionEDTMap) {}
+
+  /// EDTInfoCache
+  struct UpdateInfo {
+    enum UpdateType { NewParentEDT, NewDataMovement };
+    UpdateType Type;
+    EDTInfoState EDTUpdate;
+  };
 
   /// EDTGraph
   EDTGraph &getGraph() { return Graph; }
@@ -530,6 +587,31 @@ struct EDTInfoCache : public InformationCache {
     return DB;
   }
 
+  /// Get updates for the EDT
+  bool hasUpdate(EDT *E) const { return UpdateMap.count(E); }
+
+  UpdateInfo *popUpdate(EDT *E) {
+    auto Itr = UpdateMap.find(E);
+    if (Itr == UpdateMap.end())
+      return nullptr;
+    UpdateInfo *Info = Itr->second.pop_back_val();
+    /// If the update list is empty, remove the entry
+    if (Itr->second.empty())
+      UpdateMap.erase(Itr);
+    return Info;
+  }
+
+  void pushUpdate(EDT *E, UpdateInfo *Info) { UpdateMap[E].push_back(Info); }
+
+  void pushNewParentEDT(EDT *E, EDT *ParentEDT) {
+    UpdateInfo *Info = new UpdateInfo();
+    Info->Type = UpdateInfo::NewParentEDT;
+    Info->EDTUpdate.ParentEDT = ParentEDT;
+    pushUpdate(E, Info);
+  }
+
+  /// Map of Updates
+  DenseMap<EDT *, SmallVector<UpdateInfo *, 4>> UpdateMap;
   /// Collection of known EDTs in the module
   EDTSet &EDTs;
   DenseMap<EDTFunction *, EDT *> &FunctionEDTMap;
@@ -546,7 +628,9 @@ struct EDTInfoCache : public InformationCache {
 struct AAEDTInfoFunction : AAEDTInfo {
   AAEDTInfoFunction(const IRPosition &IRP, Attributor &A) : AAEDTInfo(IRP, A) {}
 
+  bool isQueryAA() const override { return true; }
   /// See AbstractAttribute::initialize(...).
+
   void initialize(Attributor &A) override {
     auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
     EDTFunction *Fn = getAnchorScope();
@@ -574,6 +658,11 @@ struct AAEDTInfoFunction : AAEDTInfo {
       /// Not supported yet...
       assert(EDTCallCounter == 1 &&
              "Multiple calls to EDTFunction not supported yet.");
+      /// Set ParentEDT
+      /// Is the EDT called from another EDT? For now, assume it is
+      auto *Caller = EDTCall->getCaller();
+      ParentEDT = EDTCache.getEDT(Caller);
+      assert(ParentEDT && "EDT is not called from another EDT");
       return true;
     };
 
@@ -588,18 +677,17 @@ struct AAEDTInfoFunction : AAEDTInfo {
         indicatePessimisticFixpoint();
         return;
       }
-      ///
     }
   }
 
   bool updateChildEDTs(Attributor &A) {
     /// No need to update if we are already at a fixpoint
-    if (ChildEDTs.isAtFixpoint() && ReachedChildEDTs.isAtFixpoint())
+    if (isReachabilityInfoAtFixpoint())
       return true;
 
     auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
     /// Flags to determine fixpoint
-    bool AllReachedChildEDTsWereFixed = true;
+    bool AllReachedEDTsWereFixed = true;
     /// Check calls to EDTChilds
     auto CheckCallInst = [&](Instruction &I) {
       auto &EDTCall = cast<CallBase>(I);
@@ -610,9 +698,8 @@ struct AAEDTInfoFunction : AAEDTInfo {
       LLVM_DEBUG(dbgs() << "   - EDT #" << CalledEDT->getID()
                         << " is a child of EDT #" << EDTInfo->getID() << "\n");
 
-      /// Add the EDT to the set of ChildEDTs and ReachedChildEDTs.
+      /// Add the EDT to the set of ChildEDTs and ReachedDescendantEDTs.
       ChildEDTs.insert(CalledEDT);
-      ReachedChildEDTs.insert(CalledEDT);
       /// Add the creation edge to the graph
       EDTCache.getGraph().addCreationEdge(EDTInfo, CalledEDT);
 
@@ -621,11 +708,11 @@ struct AAEDTInfoFunction : AAEDTInfo {
           *this, IRPosition::function(*CalledEDT->getFn()),
           DepClassTy::OPTIONAL);
       assert(ChildEDTAA && "ChildEDTAA is null!");
-      /// Clamp set of ReachedChildEDTs of the ChildEDT
-      ReachedChildEDTs ^= ChildEDTAA->ReachedChildEDTs;
+      /// Clamp set of ReachedDescendantEDTs of the ChildEDT
+      ReachedDescendantEDTs ^= ChildEDTAA->ReachedDescendantEDTs;
+      ReachedDescendantEDTs ^= ChildEDTAA->ChildEDTs;
       /// Fixpoint check
-      AllReachedChildEDTsWereFixed &=
-          ChildEDTAA->ReachedChildEDTs.isAtFixpoint();
+      AllReachedEDTsWereFixed &= ChildEDTAA->isReachabilityInfoAtFixpoint();
       return true;
     };
 
@@ -640,12 +727,117 @@ struct AAEDTInfoFunction : AAEDTInfo {
 
     /// If we got to this point, we know that all children were created
     ChildEDTs.indicateOptimisticFixpoint();
-    /// Indicate Optimistic Fixpoint if all the ReachedChildEDTs are fixed
-    if (AllReachedChildEDTsWereFixed) {
-      ReachedChildEDTs.indicateOptimisticFixpoint();
+    /// Indicate Optimistic Fixpoint if all the ReachedDescendantEDTs are fixed
+    if (!AllReachedEDTsWereFixed)
+      return false;
+    LLVM_DEBUG(dbgs() << "   - All ReachedEDTs are fixed for EDT #"
+                      << EDTInfo->getID() << "\n");
+    ReachedDescendantEDTs.indicateOptimisticFixpoint();
+    pushSyncUpdates(A);
+    return true;
+  }
+
+  void pushSyncUpdates(Attributor &A) {
+    /// If the current EDT is sync, push updates to the child and/or descendant
+    /// EDTs
+    if (EDTInfo->isAsync()) {
+      LLVM_DEBUG(dbgs() << "   - EDT #" << EDTInfo->getID()
+                        << " is async. No updates to push\n");
+      return;
+    }
+
+    LLVM_DEBUG(dbgs() << "   - Pushing updates from EDT #" << EDTInfo->getID()
+                      << "\n");
+    /// Debug EDT Type
+    SyncEDT &SyncEDTInfo = *dyn_cast<SyncEDT>(EDTInfo);
+    SetVector<EDT *> EDTsToUpdate;
+    /// Add the ChildEDTs to the EDTsToUpdate set
+    if (SyncEDTInfo.mustSyncChilds()) {
+      LLVM_DEBUG(dbgs() << "   - EDT #" << EDTInfo->getID()
+                        << " must sync ChildEDTs: " << ChildEDTs.size()
+                        << "\n");
+      EDTsToUpdate.insert(ChildEDTs.begin(), ChildEDTs.end());
+    }
+
+    /// Add the ReachedDescendantEDTs to the EDTsToUpdate set
+    if (SyncEDTInfo.mustSyncDescendants()) {
+      LLVM_DEBUG(dbgs() << "   - EDT #" << EDTInfo->getID()
+                        << " must sync DescendantEDTs: "
+                        << ReachedDescendantEDTs.size() << "\n");
+      EDTsToUpdate.insert(ReachedDescendantEDTs.begin(),
+                          ReachedDescendantEDTs.end());
+    }
+
+    auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
+    for (auto *E : EDTsToUpdate) {
+      LLVM_DEBUG(dbgs() << "      - Pushing update to EDT #" << E->getID()
+                        << "\n");
+      EDTCache.pushNewParentEDT(E, EDTInfo);
+      /// Register update in the AA
+      auto *ChildEDTAA =
+          A.lookupAAFor<AAEDTInfo>(IRPosition::function(*E->getFn()));
+      A.registerForUpdate(*ChildEDTAA);
+    }
+  }
+
+  /// Update the ParentSyncEDT. Returns true if the update can be removed
+  /// from the update list.
+  bool updateParentSyncEDT(Attributor &A, EDTInfoCache::UpdateInfo &Update) {
+    if (ParentSyncEDT.isAtFixpoint())
+      return true;
+
+    EDT *NewParentEDT = Update.EDTUpdate.ParentEDT;
+    if (!ParentSyncEDT.get()) {
+      ParentSyncEDT.set(NewParentEDT);
       return true;
     }
-    return false;
+
+    if (ParentSyncEDT.get() == NewParentEDT)
+      return true;
+
+    /// If the new ParentSyncEDT reaches the current ParentSyncEDT, ignore it
+    auto *NewParentEDTAA =
+        A.lookupAAFor<AAEDTInfo>(IRPosition::function(*NewParentEDT->getFn()));
+    if (!NewParentEDTAA->isReachabilityInfoAtFixpoint())
+      return false;
+
+    if (NewParentEDTAA->canReach(ParentSyncEDT.get()))
+      return false;
+
+    ParentSyncEDT.set(NewParentEDT);
+    return true;
+  }
+
+  void getUpdates(Attributor &A) {
+    auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
+
+    LLVM_DEBUG(dbgs() << "   - Getting updates for EDT #" << EDTInfo->getID()
+                      << "\n");
+    SetVector<EDTInfoCache::UpdateInfo *> AddBack;
+    while (EDTCache.hasUpdate(EDTInfo)) {
+      bool RemoveUpdate = false;
+      /// Pop the update
+      auto *Update = EDTCache.popUpdate(EDTInfo);
+      /// Process the update
+      switch (Update->Type) {
+      case EDTInfoCache::UpdateInfo::NewParentEDT:
+        RemoveUpdate = updateParentSyncEDT(A, *Update);
+        break;
+      default:
+        llvm_unreachable("EDTUpdate not supported yet!");
+      }
+      /// Push the update back if it is not removed
+      if (!RemoveUpdate)
+        AddBack.insert(Update);
+      else
+        delete Update;
+    }
+
+    /// Add the updates back
+    for (auto &Update : AddBack)
+      EDTCache.pushUpdate(EDTInfo, Update);
+    LLVM_DEBUG(dbgs() << "   - Finished getting updates for EDT #"
+                      << EDTInfo->getID() << "\n");
   }
 
   void updateDependencies(Attributor &A) {
@@ -705,14 +897,18 @@ struct AAEDTInfoFunction : AAEDTInfo {
                       << EDTInfo->getID() << "\n";);
     EDTInfoState StateBefore = getState();
 
-    /// Update the ChildEDTs and ReachedChildEDTs of the EDT
-    /// It continues only if the ChildEDTs and ReachedChildEDTs is at a fixpoint
+    /// Update the ChildEDTs and ReachedDescendantEDTs of the EDT
+    /// It continues only if the ChildEDTs and ReachedDescendantEDTs is at a
+    /// fixpoint
     if (!updateChildEDTs(A))
       return hasChanged(StateBefore);
 
     /// If not EDTCall, return optimistic fixpoint, for now.
     if (!EDTCall)
       return indicateOptimisticFixpoint();
+
+    /// Attend any external update, if any
+    getUpdates(A);
 
     /// Run AAEDTInfo on the EDTCall
     auto *EDTCallAA = A.getOrCreateAAFor<AAEDTInfo>(
@@ -762,6 +958,29 @@ struct AAEDTInfoCallsite : AAEDTInfo {
     assert(EDTInfo && "EDTInfo is null!");
     LLVM_DEBUG(dbgs() << "[AAEDTInfoCallsite::initialize] EDT #"
                       << EDTInfo->getID() << "\n");
+    /// Check if it is a sync EDT
+    if (!EDTInfo->isAsync())
+      return;
+
+    /// SyncEDTs always have a DoneEDT. Find it.
+    /// Start by looking at the next instruction after the EDTCall
+    Instruction *I = &EDTCall;
+    do {
+      auto *CB = dyn_cast<CallBase>(I);
+      if (!CB)
+        continue;
+
+      if (EDT *DoneEDT = EDTCache.getEDT(CB)) {
+        this->DoneEDT = DoneEDT;
+        break;
+      }
+    } while ((I = I->getNextNonDebugInstruction()));
+    assert(
+        DoneEDT &&
+        "DoneEDT is null! It should have been found in the same BasicBlock!");
+
+    /// Also, Sync EDTs do not have a ParentSyncEDT
+    ParentSyncEDT.indicateOptimisticFixpoint();
   }
 
   /// See AbstractAttribute::updateImpl(Attributor &A).
@@ -924,9 +1143,9 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     /// the parent EDT) or remote (belongs to another EDT).
     EDT *UnderlyingEDT = UnderlyingObjDBInfoAA->getParentEDT();
     if (UnderlyingEDT == ParentEDT) {
-      /// If it belongs to parent, clamp the list of ReachedChildEDTs of the
-      /// DataBlock with the MaySignalEDTs.
-      /// We only care about dependencies if the CalledEDT is synchronous
+      /// If it belongs to parent, clamp the list of ReachedDescendantEDTs of
+      /// the DataBlock with the MaySignalEDTs. We only care about dependencies
+      /// if the CalledEDT is synchronous
       if (CalledEDT->isAsync()) {
         LLVM_DEBUG(dbgs() << "   - CalledEDT is asynchronous!\n");
         return indicateOptimisticFixpoint();
@@ -961,9 +1180,9 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
       auto *ChildEDTAA = A.getAAFor<AAEDTInfo>(
           *this, IRPosition::function(*ChildEDT->getFn()), DepClassTy::NONE);
       /// Continue if the childEDT is an ancestor of the called EDT or if it has
-      /// any childEDTs
-      if (ChildEDTAA->canReachChild(CalledEDT) ||
-          CalledEDTAA->ChildEDTs.size() > 0)
+      /// any childEDTs. In other words it is remote if it can not reached the
+      /// CalledEDT through the ChildEDTs.
+      if (ChildEDTAA->canReach(CalledEDT) || CalledEDTAA->ChildEDTs.size() > 0)
         continue;
 
       /// We know for sure that there is a dependency if the calledEDT does not
@@ -1067,13 +1286,6 @@ struct AAEDTDataBlockInfoVal : AAEDTDataBlockInfo {
     if (!ReachedEDTs.isAtFixpoint())
       return hasChanged(StateBefore);
 
-    /// Analyze data movements based on the ReachedChildEDTs
-    // for (auto *ChildEDT : ReachedChildEDTs) {
-    //   auto *ChildEDTAA = A.getAAFor<AAEDTInfo>(
-    //       *this, IRPosition::function(*ChildEDT->getFn()), DepClassTy::NONE);
-    //   if (!ChildEDTAA)
-    //     continue;
-    // }
     /// Indicate optimistic fixpoint for now
     indicateOptimisticFixpoint();
     return hasChanged(StateBefore);
