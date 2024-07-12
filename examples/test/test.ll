@@ -16,7 +16,7 @@ target triple = "x86_64-unknown-linux-gnu"
 @0 = private unnamed_addr constant [23 x i8] c";unknown;unknown;0;0;;\00", align 1
 @1 = private unnamed_addr constant %struct.ident_t { i32 0, i32 2, i32 0, i32 22, ptr @0 }, align 8
 @.str.2 = private unnamed_addr constant [32 x i8] c"I think the number is %d - %d.\0A\00", align 1
-@.str.5 = private unnamed_addr constant [31 x i8] c"The final number is %d - % d.\0A\00", align 1
+@.str.5 = private unnamed_addr constant [36 x i8] c"The final number is %d - % d - %d.\0A\00", align 1
 
 ; Function Attrs: mustprogress norecurse nounwind uwtable
 define dso_local noundef i32 @main() local_unnamed_addr #0 {
@@ -40,7 +40,8 @@ entry:
   call void (ptr, i32, ptr, ...) @__kmpc_fork_call(ptr nonnull @1, i32 4, ptr nonnull @main.omp_outlined, ptr nonnull %random_number, ptr nonnull %NewRandom, ptr nonnull %number, ptr nonnull %shared_number)
   %0 = load i32, ptr %number, align 4, !tbaa !6
   %1 = load i32, ptr %random_number, align 4, !tbaa !6
-  %call2 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.5, i32 noundef %0, i32 noundef %1)
+  %2 = load i32, ptr %shared_number, align 4, !tbaa !6
+  %call2 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.5, i32 noundef %0, i32 noundef %1, i32 noundef %2)
   call void @llvm.lifetime.end.p0(i64 4, ptr nonnull %NewRandom) #6
   call void @llvm.lifetime.end.p0(i64 4, ptr nonnull %random_number) #6
   call void @llvm.lifetime.end.p0(i64 4, ptr nonnull %shared_number) #6

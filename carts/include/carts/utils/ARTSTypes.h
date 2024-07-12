@@ -18,12 +18,12 @@ using BlockSequence = SmallVector<BasicBlock *, 0>;
 /// ------------------------------------------------------------------- ///
 namespace types {
 /// EDT types
-enum class EDTType { Parallel, Task, Main, Unknown };
+enum class EDTType { Task, Main, Sync, Parallel, Unknown };
 enum class EDTArgType { Param, Dep, Unknown };
-const Twine toString(EDTType Ty);
-const Twine toString(EDTArgType Ty);
-EDTType toEDTType(StringRef Str);
-EDTArgType toEDTArgType(StringRef Str);
+const Twine toString(const EDTType Ty);
+const Twine toString(const EDTArgType Ty);
+EDTType toEDTType(const StringRef Str);
+EDTArgType toEDTArgType(const StringRef Str);
 /// IDs for all arts runtime library (RTL) functions.
 enum class RuntimeFunction {
 #define ARTS_RTL(Enum, ...) Enum,

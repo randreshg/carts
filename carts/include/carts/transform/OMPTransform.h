@@ -29,7 +29,7 @@ public:
 
 private:
   Instruction *handleParallelRegion(CallBase &CB);
-  Instruction *handleParallelDoneRegion(CallBase &CB);
+  Instruction *handleSyncDoneRegion(CallBase &CB);
   Instruction *handleTaskRegion(CallBase &CB);
   ///  Attributes
   Module &M;
