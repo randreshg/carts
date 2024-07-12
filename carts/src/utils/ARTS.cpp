@@ -9,7 +9,6 @@
 #include <string>
 
 #include "carts/utils/ARTS.h"
-#include "carts/utils/ARTSMetadata.h"
 #include "carts/utils/ARTSTypes.h"
 
 using namespace llvm;
@@ -101,15 +100,24 @@ bool EDTEnvironment::isDepV(Value *V) { return DepV.count(V); }
 /// ------------------------------------------------------------------- ///
 uint32_t EDT::Counter = 0;
 
-EDT::EDT() {
+EDT::EDT(EDTFunction *Fn) : Fn(Fn) {
   ID = Counter++;
-  LLVM_DEBUG(dbgs() << TAG << "Creating EDT #" << ID << "\n");
-  /// Copy the metadata into the EDT
-  // *this = *MD;
-  /// Create the environment
-  // Env = new EDTEnvironment(this, MD->Args);
+  LLVM_DEBUG(dbgs() << TAG << "Creating EDT #" << ID << " for function: "
+                    << Fn->getName() << "\n");
+  Env = new EDTEnvironment(this);
+
+  MDNode *MD = Fn->getMetadata(CARTS_MD);
+  assert(MD && "CARTS Metadata Node is null");
+  assert(MD->getNumOperands() > 0 && "CARTS Metadata Node is empty");
+  
 }
 
+EDT::~EDT() {
+  LLVM_DEBUG(dbgs() << TAG << "Destroying EDT #" << ID << "\n");
+  delete Env;
+}
+
+/// Get the EDT from the function
 EDT *EDT::get(EDTFunction *Fn) {
   if (!Fn->hasMetadata(CARTS_MD)) {
     LLVM_DEBUG(dbgs() << TAG << "Function: " << Fn->getName()
@@ -142,6 +150,7 @@ EDT *EDT::get(EDTFunction *Fn) {
   return nullptr;
 }
 
+/// Data Environment
 void EDT::insertValueToEnv(Value *Val) {
   /// Pointer is a depv, else, it is a paramv
   if (PointerType *PT = dyn_cast<PointerType>(Val->getType())) {
@@ -160,8 +169,15 @@ void EDT::insertValueToEnv(Value *Val, bool IsDepV) {
     Env->insertParamV(Val);
 }
 
-EDTEnvironment &EDT::getDataEnv() { return *Env; }
+/// Getters
 uint32_t EDT::getID() { return ID; }
+EDTEnvironment &EDT::getDataEnv() { return *Env; }
+EDTType EDT::getTy() const { return Ty; }
+EDTFunction *EDT::getFn() { return Fn; }
+Twine EDT::getName() { return Fn->getName(); }
+
+/// Helpers
+bool EDT::isAsync() { return dyn_cast<SyncEDT>(this); }
 
 bool EDT::isDep(uint32_t CallArgItr) {
   auto *Arg = Fn->getArg(CallArgItr);
@@ -194,6 +210,8 @@ ParallelEDT::ParallelEDT(EDTFunction *Fn) : SyncEDT(Fn) {
   LLVM_DEBUG(dbgs() << TAG << "Creating Parallel EDT for function: "
                     << Fn->getName() << "\n");
   Ty = EDTType::Parallel;
+  SyncChilds = true;
+  SyncDescendents = true;
 }
 
 } // namespace arts

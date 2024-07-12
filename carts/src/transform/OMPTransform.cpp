@@ -12,6 +12,7 @@
 #include "llvm/Transforms/IPO/Attributor.h"
 
 #include "carts/transform/OMPTransform.h"
+#include "carts/utils/ARTS.h"
 #include "carts/utils/ARTSIRBuilder.h"
 #include "carts/utils/ARTSUtils.h"
 
@@ -36,8 +37,8 @@ bool OMPTransform::run(ModuleAnalysisManager &AM) {
   auto &MainFn = *M.getFunction("main");
   identifyEDTs(MainFn);
   /// Set metadata for Main EDT
-  EDTIRBuilder IRB(EDTType::Main);
-  IRB.setMetadata(MainFn);
+  EDTIRBuilder IRB(EDTType::Main, &MainFn);
+  MainEDT::setMetadata(IRB);
 
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << "Module after Identifying EDTs\n" << M << "\n");
@@ -114,15 +115,16 @@ Instruction *OMPTransform::handleParallelRegion(CallBase &CB) {
     Argument *OldFnArgIt = OldFn->arg_begin() + RTI.KeepFnArgsFrom;
     Argument *NewFnArgIt = NewFn->arg_begin();
     for (; OldFnArgIt != OldFn->arg_end(); ++OldFnArgIt, ++NewFnArgIt) {
-      Me->insertMapValue(OldFnArgIt, NewFnArgIt);
+      Me->insertRewireValue(OldFnArgIt, NewFnArgIt);
     }
   };
 
   /// Build the EDT
   auto *NewCB = IRB.buildEDT(&CB, Fn, fillRewiringMapFn);
-  auto *NewFn = NewCB->getCalledFunction();
-  IRB.setMetadata(*NewFn);
-  identifyEDTs(*NewFn);
+  ParallelEDT::setMetadata(IRB, -1, -1);
+  /// Identify EDTs for the new function
+  identifyEDTs(*IRB.getNewFn());
+  /// Handle the sync done region
   auto *NextInst = handleSyncDoneRegion(*NewCB);
   return NextInst;
 }
@@ -145,23 +147,23 @@ Instruction *OMPTransform::handleSyncDoneRegion(CallBase &CB) {
   /// Create DoneEDT
   BlockSequence Region;
   getDominatedBBs(DoneBB, *DT, Region);
-
-  /// Set DataEnvironment
   CodeExtractor CE(Region);
   CodeExtractorAnalysisCache CEAC(ParentFn);
   SetVector<Value *> Inputs, Outputs;
   auto *DoneEDTFn = CE.extractCodeRegion(CEAC, Inputs, Outputs);
   DoneEDTFn->setName("carts.edt");
   CallBase *DoneCB = dyn_cast<CallBase>(DoneEDTFn->user_back());
-  /// Debug DoneCB arguments
-  EDTIRBuilder IRB(EDTType::Task);
+  /// Set Metadata
+  EDTIRBuilder IRB(EDTType::Task, DoneEDTFn);
   for (auto &Arg : DoneCB->args()) {
     if (dyn_cast<PointerType>(Arg->getType()))
       IRB.insertDep(Arg.get());
     else
       IRB.insertParam(Arg.get());
   }
-  IRB.setMetadata(*DoneEDTFn);
+  TaskEDT::setMetadata(IRB, -1);
+  /// Identify EDTs for the new function
+  identifyEDTs(*DoneEDTFn);
   return DoneCB;
 }
 
@@ -266,24 +268,24 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
          "ValueToOffsetTD and ValueToOffsetOF have different sizes");
 
   /// Fill the EDTRewireMap
+  auto &CallArgs = IRB.getCallArgs();
   auto fillRewiringMapFn = [&](EDTIRBuilder *Me, Function *OldFn,
                                Function *NewFn) {
-    for (uint32_t CallArgsItr = 0; CallArgsItr < IRB.CallArgs.size();
+    for (uint32_t CallArgsItr = 0; CallArgsItr < CallArgs.size();
          ++CallArgsItr) {
-      Value *CallArg = IRB.CallArgs[CallArgsItr];
+      Value *CallArg = CallArgs[CallArgsItr];
       // LLVM_DEBUG(dbgs() << TAG << "CallArg: " << *CallArg << "\n");
       Value *OldValue = OffsetToValueOF[ValueToOffsetTD[CallArg]];
       Value *NewValue = NewFn->arg_begin() + CallArgsItr;
       // LLVM_DEBUG(dbgs() << TAG << "Rewiring: " << *OldValue << " -> " <<
       // *NewValue << "\n");
-      Me->insertMapValue(OldValue, NewValue);
+      Me->insertRewireValue(OldValue, NewValue);
     }
   };
   /// Build the EDT
   auto *NewCB = IRB.buildEDT(&CB, Fn, fillRewiringMapFn, CallToOmpTask);
-  auto *NewFn = NewCB->getCalledFunction();
-  IRB.setMetadata(*NewFn);
-  identifyEDTs(*NewFn);
+  TaskEDT::setMetadata(IRB, -1);
+  identifyEDTs(*IRB.getNewFn());
   return NewCB;
 }
 
