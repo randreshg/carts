@@ -115,9 +115,10 @@ public:
   ///  Getters
   uint32_t getID();
   EDTEnvironment &getDataEnv();
-  EDTType getTy() const;
   EDTFunction *getFn();
   Twine getName();
+  EDTTypeKind getTypeKind() const;
+  EDTType getTy() const;
 
   /// Helpers
   bool isAsync();
@@ -125,12 +126,13 @@ public:
 
   /// Static interface
   static void setMetadata(EDTIRBuilder &Builder);
-  static bool classof(const EDT *M) { return true; }
+  static bool classof(const EDT *E) { return true; }
 
 protected:
   EDTFunction *Fn = nullptr;
   EDTEnvironment *Env = nullptr;
   EDTType Ty = EDTType::Unknown;
+  EDTTypeKind Kind;
 
 private:
   uint32_t ID;
@@ -153,9 +155,10 @@ public:
   int32_t getThreadNum() { return ThreadNum; }
 
   /// Static interface
-  static void setMetadata(EDTIRBuilder &Builder,
-                          int32_t ThreadNum = -1);
-  static bool classof(const TaskEDT *M) { return M->getTy() == EDTType::Task; }
+  static void setMetadata(EDTIRBuilder &Builder, int32_t ThreadNum = -1);
+  static bool classof(const EDT *E) {
+    return (E->getTypeKind() & EDTTypeKind::TK_TASK) == EDTTypeKind::TK_TASK;
+  }
 
 private:
   int32_t ThreadNum = -1;
@@ -167,9 +170,9 @@ public:
   ~MainEDT() = default;
 
   static void setMetadata(EDTIRBuilder &Builder);
-  static bool classof(const EDT *M) { return M->getTy() == EDTType::Main; }
-
-  MainEDT &operator=(const MainEDT &MD) { return *this; }
+  static bool classof(const EDT *E) {
+    return (E->getTypeKind() & EDTTypeKind::TK_MAIN) == EDTTypeKind::TK_MAIN;
+  }
 };
 
 class SyncEDT : public TaskEDT {
@@ -179,17 +182,18 @@ public:
 
   /// Getters
   bool mustSyncChilds() const { return SyncChilds; }
-  bool mustSyncDescendents() const { return SyncDescendents; }
+  bool mustSyncDescendants() const { return SyncDescendants; }
 
-  static void setMetadata(EDTIRBuilder &Builder,
-                          SetVector<EDT *> &Inputs, SetVector<EDT *> &Outputs,
-                          bool SyncChilds = true, bool SyncDescendents = false,
-                          int32_t ThreadNum = -1);
-  static bool classof(const EDT *M) { return M->getTy() == EDTType::Sync; }
+  static void setMetadata(EDTIRBuilder &Builder, SetVector<EDT *> &Inputs,
+                          SetVector<EDT *> &Outputs, bool SyncChilds = true,
+                          bool SyncDescendants = false, int32_t ThreadNum = -1);
+  static bool classof(const EDT *E) {
+    return (E->getTypeKind() & EDTTypeKind::TK_SYNC) == EDTTypeKind::TK_SYNC;
+  }
 
 protected:
   bool SyncChilds = true;
-  bool SyncDescendents = true;
+  bool SyncDescendants = true;
   SetVector<EDT *> Inputs;
   SetVector<EDT *> Outputs;
 };
@@ -201,10 +205,14 @@ public:
 
   uint32_t getNumThreads() const { return NumThreads; }
 
-  static void setMetadata(EDTIRBuilder &Builder,
-                          int32_t ThreadNum = -1, uint32_t NumThreads = 1);
+  static void setMetadata(EDTIRBuilder &Builder, int32_t ThreadNum = -1,
+                          uint32_t NumThreads = 1);
+  static bool classof(const EDT *E) {
+    return (E->getTypeKind() & EDTTypeKind::TK_PARALLEL) ==
+           EDTTypeKind::TK_PARALLEL;
+  }
 
-protected:
+private:
   uint32_t NumThreads = 1;
 };
 

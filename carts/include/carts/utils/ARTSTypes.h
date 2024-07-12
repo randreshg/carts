@@ -18,6 +18,15 @@ using BlockSequence = SmallVector<BasicBlock *, 0>;
 /// ------------------------------------------------------------------- ///
 namespace types {
 /// EDT types
+enum EDTTypeKind {
+  TK_UNKNOWN = 0,
+  TK_TASK = (1 << 0),               // "0001"
+  TK_SYNC = (1 << 1) | TK_TASK,     // "0011"
+  TK_MAIN = (1 << 2) | TK_TASK,     // "0101"
+  TK_PARALLEL = (1 << 3) | TK_SYNC, // "1011"
+
+};
+
 enum class EDTType { Task, Main, Sync, Parallel, Unknown };
 enum class EDTArgType { Param, Dep, Unknown };
 const Twine toString(const EDTType Ty);

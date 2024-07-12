@@ -54,7 +54,7 @@ void MainEDT::setMetadata(EDTIRBuilder &Builder) {
 
 void SyncEDT::setMetadata(EDTIRBuilder &Builder,
                           SetVector<EDT *> &Inputs, SetVector<EDT *> &Outputs,
-                          bool SyncChilds, bool SyncDescendents,
+                          bool SyncChilds, bool SyncDescendants,
                           int32_t ThreadNum) {
   TaskEDT::setMetadata(Builder, ThreadNum);
   /// TODO: Add the inputs and outputs, and the sync flags...
