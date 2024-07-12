@@ -14,25 +14,23 @@ opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/li
 test_arts_ir.bc
 -------------------------------------------------
 [arts-analysis] Creating and Initializing EDTs: 
-[carts-metadata] Function: main has CARTS Metadata
-[carts-metadata] Creating Main EDT Metadata
-[arts] Creating EDT #0
+[arts] Function: main has CARTS Metadata
+[arts] Creating EDT #0 for function: main
+[arts] Creating Task EDT for function: main
 [arts] Creating Main EDT for function: main
-[carts-metadata] Function: carts.edt has CARTS Metadata
-[carts-metadata] Creating Parallel EDT Metadata
-[arts] Creating EDT #1
+[arts] Function: carts.edt has CARTS Metadata
+[arts] Creating EDT #1 for function: carts.edt
+[arts] Creating Task EDT for function: carts.edt
+[arts] Creating Sync EDT for function: carts.edt
 [arts] Creating Parallel EDT for function: carts.edt
-[carts-metadata] Function: carts.edt.1 has CARTS Metadata
-[carts-metadata] Creating Task EDT Metadata
-[arts] Creating EDT #2
+[arts] Function: carts.edt.1 has CARTS Metadata
+[arts] Creating EDT #2 for function: carts.edt.1
 [arts] Creating Task EDT for function: carts.edt.1
-[carts-metadata] Function: carts.edt.2 has CARTS Metadata
-[carts-metadata] Creating Task EDT Metadata
-[arts] Creating EDT #3
+[arts] Function: carts.edt.2 has CARTS Metadata
+[arts] Creating EDT #3 for function: carts.edt.2
 [arts] Creating Task EDT for function: carts.edt.2
-[carts-metadata] Function: carts.edt.3 has CARTS Metadata
-[carts-metadata] Creating Task EDT Metadata
-[arts] Creating EDT #4
+[arts] Function: carts.edt.3 has CARTS Metadata
+[arts] Creating EDT #4 for function: carts.edt.3
 [arts] Creating Task EDT for function: carts.edt.3
 
 
@@ -79,7 +77,31 @@ test_arts_ir.bc
 [AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
 [AAEDTInfoCallsiteArg::initialize] CallArg #2 from EDT #2
+[AAEDTInfoCallsiteArg::updateImpl]   %4 = load i32, ptr %0, align 4, !tbaa !8 from EDT #2
+[AAEDTDataBlockInfoVal::initialize] Value #ptr %0
+[AAEDTDataBlockInfoVal::updateImpl] ptr %0
+   - Underlying object:   %random_number = alloca i32, align 4
+[AAEDTDataBlockInfoVal::initialize] Value #  %random_number = alloca i32, align 4
+[AAEDTDataBlockInfoVal::updateImpl]   %random_number = alloca i32, align 4
+   - ReachedEDTs: EDT #1
+   - ReachedEDTs: EDT #4
+   - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
+   - DependentEDTs: EDT #4
+        - Creating edge from "EDT #2" to "EDT #4"
+          Data Edge
+[AAEDTInfoCallsiteArg::updateImpl]   %4 = load i32, ptr %0, align 4, !tbaa !8 from EDT #2
+   - Underlying object:   %random_number = alloca i32, align 4
+   - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
+   - DependentEDTs: EDT #4
 [AAEDTInfoCallsiteArg::initialize] CallArg #3 from EDT #2
+[AAEDTInfoCallsiteArg::updateImpl]   %5 = load i32, ptr %1, align 4, !tbaa !8 from EDT #2
+[AAEDTDataBlockInfoVal::initialize] Value #ptr %1
+[AAEDTDataBlockInfoVal::updateImpl] ptr %1
+   - Underlying object:   %NewRandom = alloca i32, align 4
+[AAEDTDataBlockInfoVal::initialize] Value #  %NewRandom = alloca i32, align 4
+[AAEDTDataBlockInfoVal::updateImpl]   %NewRandom = alloca i32, align 4
+   - ReachedEDTs: EDT #1
+   - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
 [AAEDTInfoFunction::updateImpl] EDT #3
 [AAEDTInfoCallsite::initialize] EDT #3
 [AAEDTInfoCallsite::updateImpl] EDT #3
@@ -87,6 +109,8 @@ test_arts_ir.bc
 [AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
    - Underlying object:   %shared_number = alloca i32, align 4
 [AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #3
+[AAEDTInfoCallsiteArg::updateImpl]   %7 = load i32, ptr %2, align 4, !tbaa !8 from EDT #3
+   - Underlying object:   %number = alloca i32, align 4
 [AAEDTInfoFunction::updateImpl] EDT #4
 [AAEDTInfoCallsite::initialize] EDT #4
 [AAEDTInfoCallsite::updateImpl] EDT #4
@@ -95,13 +119,11 @@ test_arts_ir.bc
    - Underlying object:   %number = alloca i32, align 4
 [AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #4
 [AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #4
-[AAEDTDataBlockInfoVal::initialize] Value #  %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoVal::updateImpl]   %random_number = alloca i32, align 4
-   - ReachedEDTs: EDT #1
-   - ReachedEDTs: EDT #4
    - Underlying object:   %random_number = alloca i32, align 4
-   - Underlying object belongs to the parent EDT!
-   - CalledEDT is asynchronous!
+   - MaySignalEDTs: EDT #1
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #4
+   - Underlying object:   %random_number = alloca i32, align 4
+   - MaySignalEDTs: EDT #1
 [AAEDTInfoCallsiteArg::initialize] CallArg #2 from EDT #4
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #4
    - Underlying object:   %shared_number = alloca i32, align 4
@@ -116,22 +138,15 @@ test_arts_ir.bc
 [AAEDTInfoCallsiteArg::initialize] CallArg #0 from EDT #1
 [AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
    - Underlying object:   %random_number = alloca i32, align 4
-   - Underlying object belongs to the parent EDT!
    - MaySignalEDTs: EDT #4
 [AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
    - Underlying object:   %random_number = alloca i32, align 4
-   - Underlying object belongs to the parent EDT!
    - MaySignalEDTs: EDT #4
 [AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #1
 [AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoVal::initialize] Value #  %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoVal::updateImpl]   %NewRandom = alloca i32, align 4
-   - ReachedEDTs: EDT #1
    - Underlying object:   %NewRandom = alloca i32, align 4
-   - Underlying object belongs to the parent EDT!
 [AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
    - Underlying object:   %NewRandom = alloca i32, align 4
-   - Underlying object belongs to the parent EDT!
 [AAEDTInfoCallsiteArg::initialize] CallArg #2 from EDT #1
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
    - Underlying object:   %number = alloca i32, align 4
@@ -157,6 +172,8 @@ test_arts_ir.bc
 [AAEDTInfoCallsite::updateImpl] EDT #3
 [AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
    - Underlying object:   %shared_number = alloca i32, align 4
+[AAEDTInfoCallsiteArg::updateImpl]   %7 = load i32, ptr %2, align 4, !tbaa !8 from EDT #3
+   - Underlying object:   %number = alloca i32, align 4
 [AAEDTInfoCallsite::updateImpl] EDT #4
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #4
    - Underlying object:   %number = alloca i32, align 4
@@ -201,20 +218,18 @@ test_arts_ir.bc
    - ReachedEDTs: EDT #4
 [AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #2
    - Underlying object:   %number = alloca i32, align 4
+[AAEDTInfoCallsiteArg::updateImpl]   %7 = load i32, ptr %2, align 4, !tbaa !8 from EDT #3
+   - Underlying object:   %number = alloca i32, align 4
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
    - Underlying object:   %shared_number = alloca i32, align 4
-   - Underlying object belongs to the parent EDT!
    - MaySignalEDTs: EDT #4
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
    - Underlying object:   %shared_number = alloca i32, align 4
-   - Underlying object belongs to the parent EDT!
    - MaySignalEDTs: EDT #4
 [AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #2
    - Underlying object:   %shared_number = alloca i32, align 4
    - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
    - DependentEDTs: EDT #4
-        - Creating edge from "EDT #2" to "EDT #4"
-          Data Edge
 [AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #2
    - Underlying object:   %shared_number = alloca i32, align 4
    - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
@@ -231,53 +246,65 @@ test_arts_ir.bc
    - DependentEDTs: EDT #4
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #4
    - Underlying object:   %shared_number = alloca i32, align 4
-   - Underlying object belongs to the parent EDT!
-   - CalledEDT is asynchronous!
+   - MaySignalEDTs: EDT #1
+[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #4
+   - Underlying object:   %shared_number = alloca i32, align 4
+   - MaySignalEDTs: EDT #1
 [AAEDTDataBlockInfoVal::updateImpl]   %number = alloca i32, align 4
    - ReachedEDTs: EDT #1
    - ReachedEDTs: EDT #4
 [AAEDTInfoCallsite::updateImpl] EDT #1
 [AAEDTInfoCallsite::updateImpl] EDT #2
 [AAEDTInfoCallsite::updateImpl] EDT #3
-   - All DataBlocks were fixed for EDT #3
-[AAEDTInfoCallsite::updateImpl] EDT #2
+[AAEDTInfoCallsite::updateImpl] EDT #4
+[AAEDTInfoCallsite::updateImpl] EDT #3
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
    - Underlying object:   %number = alloca i32, align 4
-   - Underlying object belongs to the parent EDT!
    - MaySignalEDTs: EDT #4
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
    - Underlying object:   %number = alloca i32, align 4
-   - Underlying object belongs to the parent EDT!
    - MaySignalEDTs: EDT #4
 [AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #2
    - Underlying object:   %number = alloca i32, align 4
    - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
    - DependentEDTs: EDT #4
 [AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #2
+   - Underlying object:   %number = alloca i32, align 4
+   - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
+   - DependentEDTs: EDT #4
+[AAEDTInfoCallsiteArg::updateImpl]   %7 = load i32, ptr %2, align 4, !tbaa !8 from EDT #3
+   - Underlying object:   %number = alloca i32, align 4
+   - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
+   - DependentEDTs: EDT #4
+[AAEDTInfoCallsiteArg::updateImpl]   %7 = load i32, ptr %2, align 4, !tbaa !8 from EDT #3
    - Underlying object:   %number = alloca i32, align 4
    - Underlying object does not belong to the parent EDT!. It belongs to EDT #0
    - DependentEDTs: EDT #4
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #4
    - Underlying object:   %number = alloca i32, align 4
-   - Underlying object belongs to the parent EDT!
-   - CalledEDT is asynchronous!
-[AAEDTInfoFunction::updateImpl] EDT #2
+   - MaySignalEDTs: EDT #1
+[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #4
+   - Underlying object:   %number = alloca i32, align 4
+   - MaySignalEDTs: EDT #1
 [AAEDTInfoFunction::updateImpl] EDT #3
-[AAEDTInfoFunction::updateImpl] EDT #2
+[AAEDTInfoFunction::updateImpl] EDT #3
 [AAEDTInfoCallsite::updateImpl] EDT #1
    - All DataBlocks were fixed for EDT #1
 [AAEDTInfoCallsite::updateImpl] EDT #2
    - All DataBlocks were fixed for EDT #2
+[AAEDTInfoCallsite::updateImpl] EDT #3
+   - All DataBlocks were fixed for EDT #3
+[AAEDTInfoCallsite::updateImpl] EDT #4
+   - All DataBlocks were fixed for EDT #4
 [AAEDTInfoFunction::updateImpl] EDT #1
-   - MaySignalEDT #4 has 3 values
-     - Value:   %random_number = alloca i32, align 4
-     - Value:   %shared_number = alloca i32, align 4
-     - Value:   %number = alloca i32, align 4
 [AAEDTInfoFunction::updateImpl] EDT #2
+[AAEDTInfoFunction::updateImpl] EDT #3
+[AAEDTInfoFunction::updateImpl] EDT #4
 AAEDTInfoFunction::manifest: EDT #0 -> 
      #Child EDTs: 2{1, 4}
      #Reached ChildEDTs: 4{1, 4, 2, 3}
-     #MaySignal EDTs: 0{}
+     #MaySignalLocal EDTs: 0{}
+     #MaySignalRemote EDTs: 0{}
      #Dependent EDTs: 0{}
 - EDT #0: main
 Ty: main
@@ -288,7 +315,8 @@ Number of DepV: 0
 AAEDTInfoFunction::manifest: EDT #1 -> 
      #Child EDTs: 2{2, 3}
      #Reached ChildEDTs: 2{2, 3}
-     #MaySignal EDTs: 1{4}
+     #MaySignalLocal EDTs: 0{}
+     #MaySignalRemote EDTs: 1{4}
      #Dependent EDTs: 0{}
 - EDT #1: carts.edt
 Ty: parallel
@@ -303,35 +331,38 @@ Number of DepV: 4
 AAEDTInfoFunction::manifest: EDT #2 -> 
      #Child EDTs: 0{}
      #Reached ChildEDTs: 0{}
-     #MaySignal EDTs: 0{}
+     #MaySignalLocal EDTs: 0{}
+     #MaySignalRemote EDTs: 0{}
      #Dependent EDTs: 1{4}
 - EDT #2: carts.edt.1
 Ty: task
 Data environment for EDT: 
-Number of ParamV: 2
-  - i32 %2
-  - i32 %3
-Number of DepV: 2
+Number of ParamV: 0
+Number of DepV: 4
   - ptr %0
   - ptr %1
+  - i32 %2
+  - i32 %3
 
 AAEDTInfoFunction::manifest: EDT #3 -> 
      #Child EDTs: 0{}
      #Reached ChildEDTs: 0{}
-     #MaySignal EDTs: 0{}
+     #MaySignalLocal EDTs: 0{}
+     #MaySignalRemote EDTs: 0{}
      #Dependent EDTs: 1{4}
 - EDT #3: carts.edt.2
 Ty: task
 Data environment for EDT: 
-Number of ParamV: 1
-  - i32 %1
-Number of DepV: 1
+Number of ParamV: 0
+Number of DepV: 2
   - ptr %0
+  - i32 %1
 
 AAEDTInfoFunction::manifest: EDT #4 -> 
      #Child EDTs: 0{}
      #Reached ChildEDTs: 0{}
-     #MaySignal EDTs: 0{}
+     #MaySignalLocal EDTs: 0{}
+     #MaySignalRemote EDTs: 1{1}
      #Dependent EDTs: 0{}
 - EDT #4: carts.edt.3
 Ty: task
@@ -348,6 +379,38 @@ Number of DepV: 3
 [arts-analysis] Process has finished
 - - - - - - - - - - - - - - - - - - - - - - - -
 [edt-graph] Printing the EDT Graph
+- EDT #4 - "carts.edt.3"
+  - Type: task
+  - Data Environment:
+    - Number of ParamV = 0
+    - Number of DepV = 3
+      - ptr %number
+      - ptr %random_number
+      - ptr %shared_number
+  - Incoming Edges:
+    - [data] "EDT #2"
+    - [data] "EDT #3"
+    - [control/ creation] "EDT #0"
+  - Outgoing Edges:
+    - The EDT has no outgoing edges
+
+- EDT #2 - "carts.edt.1"
+  - Type: task
+  - Data Environment:
+    - Number of ParamV = 0
+    - Number of DepV = 4
+      - ptr %0
+      - ptr %1
+      - i32 %2
+      - i32 %3
+  - Incoming Edges:
+    - [control/ creation] "EDT #1"
+  - Outgoing Edges:
+    - [data] "EDT #4"
+        -   %number = alloca i32, align 4
+        -   %shared_number = alloca i32, align 4
+        -   %random_number = alloca i32, align 4
+
 - EDT #0 - "main"
   - Type: main
   - Data Environment:
@@ -362,14 +425,15 @@ Number of DepV: 3
 - EDT #3 - "carts.edt.2"
   - Type: task
   - Data Environment:
-    - Number of ParamV = 1
-      - i32 %1
-    - Number of DepV = 1
+    - Number of ParamV = 0
+    - Number of DepV = 2
       - ptr %0
+      - i32 %1
   - Incoming Edges:
     - [control/ creation] "EDT #1"
   - Outgoing Edges:
     - [data] "EDT #4"
+        -   %number = alloca i32, align 4
         -   %shared_number = alloca i32, align 4
 
 - EDT #1 - "carts.edt"
@@ -384,39 +448,8 @@ Number of DepV: 3
   - Incoming Edges:
     - [control/ creation] "EDT #0"
   - Outgoing Edges:
-    - [control/ creation] "EDT #3"
     - [control/ creation] "EDT #2"
-
-- EDT #4 - "carts.edt.3"
-  - Type: task
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 3
-      - ptr %number
-      - ptr %random_number
-      - ptr %shared_number
-  - Incoming Edges:
-    - [data] "EDT #3"
-    - [data] "EDT #2"
-    - [control/ creation] "EDT #0"
-  - Outgoing Edges:
-    - The EDT has no outgoing edges
-
-- EDT #2 - "carts.edt.1"
-  - Type: task
-  - Data Environment:
-    - Number of ParamV = 2
-      - i32 %2
-      - i32 %3
-    - Number of DepV = 2
-      - ptr %0
-      - ptr %1
-  - Incoming Edges:
-    - [control/ creation] "EDT #1"
-  - Outgoing Edges:
-    - [data] "EDT #4"
-        -   %number = alloca i32, align 4
-        -   %shared_number = alloca i32, align 4
+    - [control/ creation] "EDT #3"
 
 - - - - - - - - - - - - - - - - - - - - - - - -
 

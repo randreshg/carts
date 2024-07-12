@@ -36,8 +36,7 @@ void EDT::setMetadata(EDTIRBuilder &Builder) {
   SmallVector<Metadata *, 16> EDTMDs;
   string EDTTyStr = toString(Builder.getEDTType()).str();
   EDTMDs.push_back(MDString::get(Ctx, EDTTyStr));
-  if (ArgMDs.size() > 0)
-    EDTMDs.push_back(ArgNode);
+  EDTMDs.push_back(ArgNode);
   /// Set specific metadata for the function
   /// TODO: If it is parallel, add the number of threads...
   Fn->setMetadata(CARTS_MD, MDNode::get(Ctx, EDTMDs));

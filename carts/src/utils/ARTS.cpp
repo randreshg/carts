@@ -3,6 +3,7 @@
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include <cassert>
 #include <cstdint>
@@ -102,14 +103,34 @@ uint32_t EDT::Counter = 0;
 
 EDT::EDT(EDTFunction *Fn) : Fn(Fn) {
   ID = Counter++;
-  LLVM_DEBUG(dbgs() << TAG << "Creating EDT #" << ID << " for function: "
-                    << Fn->getName() << "\n");
+  LLVM_DEBUG(dbgs() << TAG << "Creating EDT #" << ID
+                    << " for function: " << Fn->getName() << "\n");
   Env = new EDTEnvironment(this);
 
+  /// Fill out the EDT Data Environment
   MDNode *MD = Fn->getMetadata(CARTS_MD);
-  assert(MD && "CARTS Metadata Node is null");
-  assert(MD->getNumOperands() > 0 && "CARTS Metadata Node is empty");
-  
+  auto *ArgMD = dyn_cast<MDNode>(MD->getOperand(1).get());
+  assert(ArgMD && "Arg Metadata Node is null");
+  assert(ArgMD->getNumOperands() == Fn->arg_size() &&
+         "Arg Metadata Node has invalid number of arguments");
+  auto ArgMDItr = ArgMD->op_begin();
+  for (auto &FnArg : Fn->args()) {
+    Value *V = &FnArg;
+    auto *ArgStr = dyn_cast<MDString>(ArgMDItr->get());
+    assert(ArgStr && "Arg Metadata String is null");
+    EDTArgType ArgTy = toEDTArgType(ArgStr->getString());
+    switch (ArgTy) {
+    case EDTArgType::Dep:
+      Env->insertDepV(V);
+      break;
+    case EDTArgType::Param:
+      Env->insertParamV(V);
+      break;
+    default:
+      llvm_unreachable("Unknown EDTArgType");
+      break;
+    }
+  }
 }
 
 EDT::~EDT() {
@@ -129,7 +150,7 @@ EDT *EDT::get(EDTFunction *Fn) {
   /// Get the metadata node
   MDNode *MD = Fn->getMetadata(CARTS_MD);
   assert(MD && "CARTS Metadata Node is null");
-  assert(MD->getNumOperands() > 0 && "CARTS Metadata Node is empty");
+  assert(MD->getNumOperands() == 2  && "CARTS Metadata Node is empty or incomplete");
   /// Get the EDT Type
   auto *TyMD = dyn_cast<MDString>(MD->getOperand(0).get());
   assert(TyMD && "EDT Type Metadata is null");
