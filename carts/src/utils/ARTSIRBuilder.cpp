@@ -1,15 +1,15 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Metadata.h"
-#include "llvm/IR/Constants.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Debug.h"
 
 #include "carts/utils/ARTSIRBuilder.h"
+// #include "carts/utils/ARTS.h"
 #include "carts/utils/ARTSUtils.h"
-#include "carts/utils/ARTSMetadata.h"
 
 // DEBUG
 #define DEBUG_TYPE "arts-ir-builder"
@@ -34,11 +34,22 @@ void EDTIRBuilder::insertParam(Value *CallV) {
   CallArgTypeMap[CallV] = EDTArgType::Param;
 }
 
-void EDTIRBuilder::insertMapValue(Value *OldV, Value *NewV) {
+void EDTIRBuilder::insertRewireValue(Value *OldV, Value *NewV) {
   RewiringMap[OldV] = NewV;
 }
+
 void EDTIRBuilder::insertUnusedArg(Value *V) { UnusedArgs.push_back(V); }
 
+/// Getters
+Function *EDTIRBuilder::getNewFn() { return NewFn; }
+EDTType EDTIRBuilder::getEDTType() { return Ty; }
+EDTArgType EDTIRBuilder::getArgType(Value *V) { return CallArgTypeMap[V]; }
+SmallVector<Value *, 16> &EDTIRBuilder::getCallArgs() { return CallArgs; }
+
+/// Setters
+void EDTIRBuilder::setNewFn(Function *Fn) { NewFn = Fn; }
+
+/// Build EDT
 CallBase *EDTIRBuilder::buildEDT(
     CallBase *OldCB, Function *OldFn,
     function<void(EDTIRBuilder *, Function *, Function *)> fillRewiringMapFn,
@@ -54,8 +65,8 @@ CallBase *EDTIRBuilder::buildEDT(
   Type *RetTy = Type::getVoidTy(M.getContext());
   FunctionType *NewFnTy = FunctionType::get(RetTy, NewArgumentTypes, false);
   /// Create the new function body and insert it into the module.
-  Function *NewFn = Function::Create(NewFnTy, OldFn->getLinkage(),
-                                     OldFn->getAddressSpace(), "");
+  NewFn = Function::Create(NewFnTy, OldFn->getLinkage(),
+                           OldFn->getAddressSpace(), "");
   OldFn->getParent()->getFunctionList().insert(OldFn->getIterator(), NewFn);
   NewFn->setName("carts.edt");
   OldFn->setSubprogram(nullptr);
@@ -103,8 +114,4 @@ CallBase *EDTIRBuilder::buildEDT(
   assert(!NewFn->isDeclaration() && "New function is a declaration");
   NewCI->setOnlyAccessesArgMemory();
   return NewCI;
-}
-
-void EDTIRBuilder::setMetadata(Function &Fn) {
-  // EDTMetadata::setMetadata(Fn, *this);
 }

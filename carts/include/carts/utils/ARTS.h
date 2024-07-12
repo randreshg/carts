@@ -12,11 +12,12 @@
 #include <cstdint>
 #include <sys/types.h>
 
-// #include "carts/utils/ARTSMetadata.h"
 #include "carts/utils/ARTSIRBuilder.h"
 #include "carts/utils/ARTSTypes.h"
 
 namespace arts {
+#define CARTS_MD "carts"
+
 using namespace llvm;
 using namespace std;
 
@@ -100,33 +101,30 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDTEnvironment &Env) {
 /// The EDT is the main abstraction used by ARTS to represent the tasks
 /// in the program.
 /// ------------------------------------------------------------------- ///
-class SyncEDT;
-
 class EDT {
 public:
   EDT(EDTFunction *Fn);
-  EDT();
-  virtual ~EDT() = default;
-  static EDT *get(EDTFunction *Fn);
+  virtual ~EDT();
   static uint32_t Counter;
+  static EDT *get(EDTFunction *Fn);
 
-  /// Data environment
+  /// Data Environment
   void insertValueToEnv(Value *Val);
   void insertValueToEnv(Value *Val, bool IsDepV);
 
   ///  Getters
-  EDTEnvironment &getDataEnv();
   uint32_t getID();
+  EDTEnvironment &getDataEnv();
+  EDTType getTy() const;
+  EDTFunction *getFn();
+  Twine getName();
 
-  EDTType getTy() const { return Ty; }
-  EDTFunction *getFn() { return Fn; }
-  Twine getName() { return Fn->getName(); }
-
-  bool isAsync() { return dyn_cast<SyncEDT>(this); }
+  /// Helpers
+  bool isAsync();
   bool isDep(uint32_t CallArgItr);
 
   /// Static interface
-  static void setMetadata(EDTFunction *Fn, EDTIRBuilder &Builder);
+  static void setMetadata(EDTIRBuilder &Builder);
   static bool classof(const EDT *M) { return true; }
 
 protected:
@@ -140,7 +138,7 @@ private:
 
 inline raw_ostream &operator<<(raw_ostream &OS, EDT &E) {
   OS << "- EDT #" << E.getID() << ": " << E.getName() << "\n";
-  // OS << "Ty: " << toString(E.getTy()) << "\n";
+  OS << "Ty: " << toString(E.getTy()) << "\n";
   OS << E.getDataEnv();
 
   return OS;
@@ -155,7 +153,7 @@ public:
   int32_t getThreadNum() { return ThreadNum; }
 
   /// Static interface
-  static void setMetadata(EDTFunction *Fn, EDTIRBuilder &Builder,
+  static void setMetadata(EDTIRBuilder &Builder,
                           int32_t ThreadNum = -1);
   static bool classof(const TaskEDT *M) { return M->getTy() == EDTType::Task; }
 
@@ -168,7 +166,7 @@ public:
   MainEDT(EDTFunction *Fn);
   ~MainEDT() = default;
 
-  static void setMetadata(EDTFunction *Fn, EDTIRBuilder &Builder);
+  static void setMetadata(EDTIRBuilder &Builder);
   static bool classof(const EDT *M) { return M->getTy() == EDTType::Main; }
 
   MainEDT &operator=(const MainEDT &MD) { return *this; }
@@ -183,7 +181,7 @@ public:
   bool mustSyncChilds() const { return SyncChilds; }
   bool mustSyncDescendents() const { return SyncDescendents; }
 
-  static void setMetadata(EDTFunction *Fn, EDTIRBuilder &Builder,
+  static void setMetadata(EDTIRBuilder &Builder,
                           SetVector<EDT *> &Inputs, SetVector<EDT *> &Outputs,
                           bool SyncChilds = true, bool SyncDescendents = false,
                           int32_t ThreadNum = -1);
@@ -203,7 +201,7 @@ public:
 
   uint32_t getNumThreads() const { return NumThreads; }
 
-  static void setMetadata(EDTFunction *Fn, EDTIRBuilder &Builder,
+  static void setMetadata(EDTIRBuilder &Builder,
                           int32_t ThreadNum = -1, uint32_t NumThreads = 1);
 
 protected:
