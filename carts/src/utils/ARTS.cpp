@@ -26,12 +26,14 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 namespace arts::types {
 const Twine toString(EDTType Ty) {
   switch (Ty) {
-  case EDTType::Parallel:
-    return "parallel";
   case EDTType::Task:
     return "task";
   case EDTType::Main:
     return "main";
+  case EDTType::Sync:
+    return "sync";
+  case EDTType::Parallel:
+    return "parallel";
   default:
     break;
   }
@@ -51,12 +53,14 @@ const Twine toString(EDTArgType Ty) {
 }
 
 EDTType toEDTType(StringRef Str) {
-  if (Str == "parallel")
-    return EDTType::Parallel;
   if (Str == "task")
     return EDTType::Task;
   if (Str == "main")
     return EDTType::Main;
+  if (Str == "sync")
+    return EDTType::Sync;
+  if (Str == "parallel")
+    return EDTType::Parallel;
   return EDTType::Unknown;
 }
 
@@ -74,17 +78,18 @@ namespace arts {
 ///                          DATA ENVIRONMENT                           ///
 /// ------------------------------------------------------------------- ///
 EDTEnvironment::EDTEnvironment(EDT *E) : E(E) {}
-EDTEnvironment::EDTEnvironment(EDT *E, SmallVector<EDTArgMetadata *, 4> &Args)
-    : E(E) {
-  /// Fill the environment based on the arguments metadata
-  for (auto *Arg : Args) {
-    Value *V = Arg->getV();
-    if (Arg->getTy() == EDTArgType::Dep)
-      insertDepV(V);
-    else
-      insertParamV(V);
-  }
-}
+// EDTEnvironment::EDTEnvironment(EDT *E, SmallVector<EDTArgMetadata *, 4>
+// &Args)
+//     : E(E) {
+//   /// Fill the environment based on the arguments metadata
+//   for (auto *Arg : Args) {
+//     Value *V = Arg->getVal();
+//     if (Arg->getTy() == EDTArgType::Dep)
+//       insertDepV(V);
+//     else
+//       insertParamV(V);
+//   }
+// }
 void EDTEnvironment::insertParamV(Value *V) { ParamV.insert(V); }
 void EDTEnvironment::insertDepV(Value *V) { DepV.insert(V); }
 uint32_t EDTEnvironment::getParamC() { return ParamV.size(); }
@@ -96,23 +101,41 @@ bool EDTEnvironment::isDepV(Value *V) { return DepV.count(V); }
 /// ------------------------------------------------------------------- ///
 uint32_t EDT::Counter = 0;
 
-EDT::EDT(EDTMetadata *MD) {
+EDT::EDT() {
   ID = Counter++;
   LLVM_DEBUG(dbgs() << TAG << "Creating EDT #" << ID << "\n");
   /// Copy the metadata into the EDT
-  *this = *MD;
+  // *this = *MD;
   /// Create the environment
-  Env = new EDTEnvironment(this, MD->Args);
+  // Env = new EDTEnvironment(this, MD->Args);
 }
 
-EDT *EDT::get(EDTMetadata *MD) {
-  switch (MD->getTy()) {
-  case EDTType::Parallel:
-    return new ParallelEDT(MD);
+EDT *EDT::get(EDTFunction *Fn) {
+  if (!Fn->hasMetadata(CARTS_MD)) {
+    LLVM_DEBUG(dbgs() << TAG << "Function: " << Fn->getName()
+                      << " doesn't have CARTS Metadata\n");
+    return nullptr;
+  }
+  LLVM_DEBUG(dbgs() << TAG << "Function: " << Fn->getName()
+                    << " has CARTS Metadata\n");
+  /// Get the metadata node
+  MDNode *MD = Fn->getMetadata(CARTS_MD);
+  assert(MD && "CARTS Metadata Node is null");
+  assert(MD->getNumOperands() > 0 && "CARTS Metadata Node is empty");
+  /// Get the EDT Type
+  auto *TyMD = dyn_cast<MDString>(MD->getOperand(0).get());
+  assert(TyMD && "EDT Type Metadata is null");
+  EDTType Ty = toEDTType(TyMD->getString());
+
+  switch (Ty) {
   case EDTType::Task:
-    return new TaskEDT(MD);
+    return new TaskEDT(Fn);
   case EDTType::Main:
-    return new MainEDT(MD);
+    return new MainEDT(Fn);
+  case EDTType::Sync:
+    return new SyncEDT(Fn);
+  case EDTType::Parallel:
+    return new ParallelEDT(Fn);
   default:
     break;
   }
@@ -137,53 +160,40 @@ void EDT::insertValueToEnv(Value *Val, bool IsDepV) {
     Env->insertParamV(Val);
 }
 
-EDTCallBase *EDT::getCall() { return Call; }
-EDTFunction *EDT::getFn() { return Fn; }
 EDTEnvironment &EDT::getDataEnv() { return *Env; }
-Twine EDT::getName() { return Fn->getName(); }
 uint32_t EDT::getID() { return ID; }
-void EDT::setCall(CallBase *Call) {
-  assert((Call && !(this->Call)) && "Invalid Call");
-  this->Call = Call;
-}
 
 bool EDT::isDep(uint32_t CallArgItr) {
   auto *Arg = Fn->getArg(CallArgItr);
   return Env->isDepV(Arg);
 }
 
-/// Parallel EDT
-ParallelEDT::ParallelEDT(EDTMetadata *MD) : EDT(MD) {
-  LLVM_DEBUG(dbgs() << TAG << "Creating Parallel EDT for function: "
-                    << getFn()->getName() << "\n");
-  Ty = EDTType::Parallel;
-  IsAsync = false;
-  assert(MD->getTy() == Ty && "Invalid EDT Metadata Type");
-  /// Copy the metadata into the Parallel EDT
-  auto *PMD = cast<ParallelEDTMetadata>(MD);
-  *this = *PMD;
-}
-
 /// Task EDT
-TaskEDT::TaskEDT(EDTMetadata *MD) : EDT(MD) {
+TaskEDT::TaskEDT(EDTFunction *Fn) : EDT(Fn) {
   LLVM_DEBUG(dbgs() << TAG << "Creating Task EDT for function: "
-                    << getFn()->getName() << "\n");
+                    << Fn->getName() << "\n");
   Ty = EDTType::Task;
-  assert(MD->getTy() == Ty && "Invalid EDT Metadata Type");
-  /// Copy the metadata into the Task EDT
-  auto *TMD = cast<TaskEDTMetadata>(MD);
-  *this = *TMD;
 }
 
 /// Main EDT
-MainEDT::MainEDT(EDTMetadata *MD) : EDT(MD) {
+MainEDT::MainEDT(EDTFunction *Fn) : TaskEDT(Fn) {
   LLVM_DEBUG(dbgs() << TAG << "Creating Main EDT for function: "
-                    << getFn()->getName() << "\n");
+                    << Fn->getName() << "\n");
   Ty = EDTType::Main;
-  assert(MD->getTy() == Ty && "Invalid EDT Metadata Type");
-  /// Copy the metadata into the Main EDT
-  auto *MMD = cast<MainEDTMetadata>(MD);
-  *this = *MMD;
+}
+
+/// Sync EDT
+SyncEDT::SyncEDT(EDTFunction *Fn) : TaskEDT(Fn) {
+  LLVM_DEBUG(dbgs() << TAG << "Creating Sync EDT for function: "
+                    << Fn->getName() << "\n");
+  Ty = EDTType::Sync;
+}
+
+/// Parallel EDT
+ParallelEDT::ParallelEDT(EDTFunction *Fn) : SyncEDT(Fn) {
+  LLVM_DEBUG(dbgs() << TAG << "Creating Parallel EDT for function: "
+                    << Fn->getName() << "\n");
+  Ty = EDTType::Parallel;
 }
 
 } // namespace arts

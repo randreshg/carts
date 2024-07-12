@@ -8,10 +8,12 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/InstrTypes.h"
+#include "llvm/Support/Casting.h"
 #include <cstdint>
 #include <sys/types.h>
 
-#include "carts/utils/ARTSMetadata.h"
+// #include "carts/utils/ARTSMetadata.h"
+#include "carts/utils/ARTSIRBuilder.h"
 #include "carts/utils/ARTSTypes.h"
 
 namespace arts {
@@ -63,7 +65,7 @@ private:
 class EDTEnvironment {
 public:
   EDTEnvironment(EDT *E);
-  EDTEnvironment(EDT *E, SmallVector<EDTArgMetadata *, 4> &Args);
+  // EDTEnvironment(EDT *E, SmallVector<EDTArgMetadata *, 4> &Args);
 
   /// Getters and setters
   void insertParamV(EDTValue *V);
@@ -98,134 +100,115 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDTEnvironment &Env) {
 /// The EDT is the main abstraction used by ARTS to represent the tasks
 /// in the program.
 /// ------------------------------------------------------------------- ///
+class SyncEDT;
+
 class EDT {
 public:
-  EDT(EDTCallBase Fn);
-  EDT(EDTMetadata *MD);
+  EDT(EDTFunction *Fn);
+  EDT();
   virtual ~EDT() = default;
-  static EDT *get(EDTMetadata *MD);
+  static EDT *get(EDTFunction *Fn);
   static uint32_t Counter;
+
   /// Data environment
   void insertValueToEnv(Value *Val);
   void insertValueToEnv(Value *Val, bool IsDepV);
+
   ///  Getters
-  EDTCallBase *getCall();
-  EDTFunction *getFn();
   EDTEnvironment &getDataEnv();
-  Twine getName();
   uint32_t getID();
-  EDTType getTy() { return Ty; }
-  bool isAsync() { return IsAsync; }
+
+  EDTType getTy() const { return Ty; }
+  EDTFunction *getFn() { return Fn; }
+  Twine getName() { return Fn->getName(); }
+
+  bool isAsync() { return dyn_cast<SyncEDT>(this); }
   bool isDep(uint32_t CallArgItr);
 
-  /// Setters
-  void setCall(EDTCallBase *Call);
-
-  static bool classof(const EDTMetadata *M) { return true; }
-
-  /// Override copy constructor to EDTMetadata
-  EDT &operator=(const EDTMetadata &MD) {
-    this->Fn = &MD.Fn;
-    this->Ty = MD.Ty;
-    return *this;
-  }
+  /// Static interface
+  static void setMetadata(EDTFunction *Fn, EDTIRBuilder &Builder);
+  static bool classof(const EDT *M) { return true; }
 
 protected:
-  EDTEnvironment *Env;
+  EDTFunction *Fn = nullptr;
+  EDTEnvironment *Env = nullptr;
   EDTType Ty = EDTType::Unknown;
-  bool IsAsync = true;
 
 private:
-  EDTCallBase *Call = nullptr;
-  EDTFunction *Fn = nullptr;
   uint32_t ID;
 };
 
 inline raw_ostream &operator<<(raw_ostream &OS, EDT &E) {
   OS << "- EDT #" << E.getID() << ": " << E.getName() << "\n";
-  OS << "Ty: " << toString(E.getTy()) << "\n";
+  // OS << "Ty: " << toString(E.getTy()) << "\n";
   OS << E.getDataEnv();
 
   return OS;
 }
 
-class ParallelEDT : public EDT {
-public:
-  ParallelEDT(EDTMetadata *MD);
-  ~ParallelEDT() = default;
-  /// Getters
-  uint32_t getNumThreads() { return NumThreads; }
-  uint32_t getNumTasks() { return NumTasks; }
-
-  static bool classof(const EDTMetadata *M) {
-    return M->getTy() == EDTType::Parallel;
-  }
-
-  ParallelEDT &operator=(const ParallelEDTMetadata &MD) {
-    this->NumThreads = MD.NumThreads;
-    this->NumTasks = MD.NumTasks;
-    return *this;
-  }
-
-private:
-  uint32_t NumThreads;
-  uint32_t NumTasks;
-};
-
 class TaskEDT : public EDT {
 public:
-  TaskEDT(EDTMetadata *MD);
+  TaskEDT(EDTFunction *Fn);
   ~TaskEDT() = default;
+
   /// Getters
-  uint32_t getThreadNum() { return ThreadNum; }
+  int32_t getThreadNum() { return ThreadNum; }
 
-  static bool classof(const EDTMetadata *M) {
-    return M->getTy() == EDTType::Task;
-  }
-
-  TaskEDT &operator=(const TaskEDTMetadata &MD) {
-    this->ThreadNum = MD.ThreadNum;
-    return *this;
-  }
+  /// Static interface
+  static void setMetadata(EDTFunction *Fn, EDTIRBuilder &Builder,
+                          int32_t ThreadNum = -1);
+  static bool classof(const TaskEDT *M) { return M->getTy() == EDTType::Task; }
 
 private:
-  uint32_t ThreadNum;
+  int32_t ThreadNum = -1;
 };
 
-class MainEDT : public EDT {
+class MainEDT : public TaskEDT {
 public:
-  MainEDT(EDTMetadata *MD);
+  MainEDT(EDTFunction *Fn);
   ~MainEDT() = default;
 
-  static bool classof(const EDTMetadata *M) {
-    return M->getTy() == EDTType::Main;
-  }
+  static void setMetadata(EDTFunction *Fn, EDTIRBuilder &Builder);
+  static bool classof(const EDT *M) { return M->getTy() == EDTType::Main; }
 
-  MainEDT &operator=(const MainEDTMetadata &MD) { return *this; }
+  MainEDT &operator=(const MainEDT &MD) { return *this; }
 };
 
-// inline raw_ostream &operator<<(raw_ostream &OS, EDTTask &Task) {
-//   OS << "EDT #" << Task.getID() << "\n";
-//   // OS << Task.getEnv();
-//   OS << "Function: " << Task.getTaskBody()->getName() << "\n";
-//   /// Live in instructions
-//   OS << "Live in instructions: \n";
-//   auto &LiveIns = Task.getLiveIns();
-//   for (auto &LI : LiveIns) {
-//     OS << "  - " << *LI.first << "\n";
-//     OS << "    - " << *LI.second << "\n";
-//   }
-//   /// Live out instructions
-//   OS << "Live out instructions: \n";
-//   unordered_map<Instruction *, unordered_set<Instruction *>> &LiveOuts =
-//       Task.getLiveOuts();
-//   for (auto &LO : LiveOuts) {
-//     OS << "  - " << *LO.first << "\n";
-//     for (auto &LOI : LO.second) {
-//       OS << "    - " << *LOI << "\n";
-//     }
-//   }
-//   return OS;
-// }
+class SyncEDT : public TaskEDT {
+public:
+  SyncEDT(EDTFunction *Fn);
+  ~SyncEDT() = default;
+
+  /// Getters
+  bool mustSyncChilds() const { return SyncChilds; }
+  bool mustSyncDescendents() const { return SyncDescendents; }
+
+  static void setMetadata(EDTFunction *Fn, EDTIRBuilder &Builder,
+                          SetVector<EDT *> &Inputs, SetVector<EDT *> &Outputs,
+                          bool SyncChilds = true, bool SyncDescendents = false,
+                          int32_t ThreadNum = -1);
+  static bool classof(const EDT *M) { return M->getTy() == EDTType::Sync; }
+
+protected:
+  bool SyncChilds = true;
+  bool SyncDescendents = true;
+  SetVector<EDT *> Inputs;
+  SetVector<EDT *> Outputs;
+};
+
+class ParallelEDT : public SyncEDT {
+public:
+  ParallelEDT(EDTFunction *Fn);
+  ~ParallelEDT() = default;
+
+  uint32_t getNumThreads() const { return NumThreads; }
+
+  static void setMetadata(EDTFunction *Fn, EDTIRBuilder &Builder,
+                          int32_t ThreadNum = -1, uint32_t NumThreads = 1);
+
+protected:
+  uint32_t NumThreads = 1;
+};
+
 } // end namespace arts
 #endif // LLVM_ARTS_H

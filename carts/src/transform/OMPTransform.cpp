@@ -120,12 +120,14 @@ Instruction *OMPTransform::handleParallelRegion(CallBase &CB) {
 
   /// Build the EDT
   auto *NewCB = IRB.buildEDT(&CB, Fn, fillRewiringMapFn);
-  identifyEDTs(*NewCB->getCalledFunction());
-  auto *NextInst = handleParallelDoneRegion(*NewCB);
+  auto *NewFn = NewCB->getCalledFunction();
+  IRB.setMetadata(*NewFn);
+  identifyEDTs(*NewFn);
+  auto *NextInst = handleSyncDoneRegion(*NewCB);
   return NextInst;
 }
 
-Instruction *OMPTransform::handleParallelDoneRegion(CallBase &CB) {
+Instruction *OMPTransform::handleSyncDoneRegion(CallBase &CB) {
   auto *SplitInst = CB.getNextNonDebugInstruction();
   /// If it is a callbase, check if its a call to a RT function
   if (auto *SCB = dyn_cast<CallBase>(SplitInst)) {
@@ -279,7 +281,9 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
   };
   /// Build the EDT
   auto *NewCB = IRB.buildEDT(&CB, Fn, fillRewiringMapFn, CallToOmpTask);
-  identifyEDTs(*NewCB->getCalledFunction());
+  auto *NewFn = NewCB->getCalledFunction();
+  IRB.setMetadata(*NewFn);
+  identifyEDTs(*NewFn);
   return NewCB;
 }
 

@@ -101,12 +101,10 @@ CallBase *EDTIRBuilder::buildEDT(
                     << *(NewCI->getFunction()) << "\n");
   LLVM_DEBUG(dbgs() << TAG << "New function:\n" << *NewFn << "\n");
   assert(!NewFn->isDeclaration() && "New function is a declaration");
-  /// Set metadata
-  setMetadata(*NewFn);
   NewCI->setOnlyAccessesArgMemory();
   return NewCI;
 }
 
 void EDTIRBuilder::setMetadata(Function &Fn) {
-  EDTMetadata::setMetadata(Fn, *this);
+  // EDTMetadata::setMetadata(Fn, *this);
 }
