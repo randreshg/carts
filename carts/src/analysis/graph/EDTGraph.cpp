@@ -11,7 +11,6 @@
 #include "carts/analysis/graph/EDTEdge.h"
 #include "carts/analysis/graph/EDTGraph.h"
 #include "carts/utils/ARTS.h"
-#include "carts/utils/ARTSMetadata.h"
 
 using namespace llvm;
 using namespace arts;
@@ -101,18 +100,12 @@ void EDTGraph::createNode(Function &Fn) {
   LLVM_DEBUG(dbgs() << "\n- - - - - - - - - - - - - - - - - - - - - - - -\n");
   LLVM_DEBUG(dbgs() << TAG << " Processing function: " << Fn.getName() << "\n");
 
-  EDTMetadata *MD = EDTMetadata::getMetadata(Fn);
-  if (MD == nullptr)
-    return;
-  auto *E = EDT::get(MD);
+  auto *E = EDT::get(&Fn);
   assert(E != nullptr && "The EDT is null");
   insertNode(E);
-  /// Free memory
-  delete MD;
 }
 
 void EDTGraph::createNodes() {
-  // auto &M = Cache.getModule();
   LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << "Creating the EDT Nodes\n");

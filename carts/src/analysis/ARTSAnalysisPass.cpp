@@ -563,13 +563,17 @@ struct AAEDTInfoFunction : AAEDTInfo {
     EDTCache.getGraph().insertNode(EDTInfo);
 
     /// Callback to check all the calls to the EDT Function.
+    uint32_t EDTCallCounter = 0;
     auto CheckCallSite = [&](AbstractCallSite ACS) {
-      auto *EDTCall = cast<CallBase>(ACS.getInstruction());
+      EDTCallCounter++;
+      EDTCall = cast<CallBase>(ACS.getInstruction());
+      /// Verify it is a call to the EDT Function
       auto *CalledEDT = EDTCache.getEDT(EDTCall);
       assert(CalledEDT == EDTInfo &&
              "EDTCall doesn't correspond to the EDTInfo of the function!");
-      assert(!CalledEDT->getCall() && "Multiple calls to EDTFunction not supported yet.");
-      CalledEDT->setCall(EDTCall);
+      /// Not supported yet...
+      assert(EDTCallCounter == 1 &&
+             "Multiple calls to EDTFunction not supported yet.");
       return true;
     };
 
@@ -650,12 +654,12 @@ struct AAEDTInfoFunction : AAEDTInfo {
     /// Basically it is a dependency it the value is a not a dependency
     /// of any of my childEDT.
     auto &EDTCache = static_cast<EDTInfoCache &>(A.getInfoCache());
-    auto &EDTGraph = EDTCache.getGraph();
+    // auto &EDTGraph = EDTCache.getGraph();
 
     for (auto *MaySignalEDT : MaySignalLocalEDTs) {
       /// Get values to signal from the MaySignalEDTValues map
       auto &ValuesToSignal = MaySignalEDTValues[MaySignalEDT];
-      bool IsDependency = true;
+      // bool IsDependency = true;
       ///
       LLVM_DEBUG(dbgs() << "   - MaySignalEDT #" << MaySignalEDT->getID()
                         << " has " << ValuesToSignal.size() << " values\n");
@@ -707,7 +711,6 @@ struct AAEDTInfoFunction : AAEDTInfo {
       return hasChanged(StateBefore);
 
     /// If not EDTCall, return optimistic fixpoint, for now.
-    auto *EDTCall = EDTInfo->getCall();
     if (!EDTCall)
       return indicateOptimisticFixpoint();
 
@@ -740,6 +743,9 @@ struct AAEDTInfoFunction : AAEDTInfo {
     ChangeStatus Changed = ChangeStatus::UNCHANGED;
     return Changed;
   }
+
+private:
+  EDTCallBase *EDTCall = nullptr;
 };
 
 /// AAEDTInfoCallsite
@@ -764,14 +770,14 @@ struct AAEDTInfoCallsite : AAEDTInfo {
     LLVM_DEBUG(dbgs() << "[AAEDTInfoCallsite::updateImpl] EDT #"
                       << EDTInfo->getID() << "\n");
 
-    auto *EDTCall = EDTInfo->getCall();
+    auto &EDTCall = cast<CallBase>(getAnchorValue());
     /// Run AAEDTDataBlockInfo on each argument of the call instruction
     bool AllDBsWereFixed = true;
     bool AllMaySignalEDTsWereFixed = true;
-    for (uint32_t CallArgItr = 0; CallArgItr < EDTCall->data_operands_size();
+    for (uint32_t CallArgItr = 0; CallArgItr < EDTCall.data_operands_size();
          ++CallArgItr) {
       auto *ArgEDTDataBlockAA = A.getOrCreateAAFor<AAEDTInfo>(
-          IRPosition::callsite_argument(*EDTCall, CallArgItr), this,
+          IRPosition::callsite_argument(EDTCall, CallArgItr), this,
           DepClassTy::OPTIONAL, false, true);
       AllDBsWereFixed &= ArgEDTDataBlockAA->isAtFixpoint();
       AllMaySignalEDTsWereFixed &=
@@ -1148,10 +1154,7 @@ public:
       if (Fn.isDeclaration() && !Fn.hasLocalLinkage())
         continue;
       Functions.insert(&Fn);
-      if (EDTMetadata *MD = EDTMetadata::getMetadata(Fn)) {
-        EDT *CurrentEDT = EDT::get(MD);
-        /// Change name if it is not the main function
-        // Fn.setName("carts_edt." + std::to_string(CurrentEDT->getID()));
+      if (EDT *CurrentEDT = EDT::get(&Fn)) {
         EDTs.insert(CurrentEDT);
         FunctionEDTMap[&Fn] = CurrentEDT;
       }
