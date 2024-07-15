@@ -44,6 +44,7 @@ public:
   bool isReachable(EDTGraphNode *From, EDTGraphNode *To);
   bool isCreationReachable(EDTGraphNode *From, EDTGraphNode *To);
   bool isDataDependent(EDTGraphNode *From, EDTGraphNode *To);
+  EDT *getParentSyncEDT(EDTGraphNode *Node, uint32_t Depth = 0);
 
   /// Nodes
   void createNode(Function &Fn);

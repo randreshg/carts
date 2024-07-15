@@ -5,8 +5,8 @@
 #include "llvm/Support/Debug.h"
 #include <cassert>
 
-#include "llvm/Analysis/MemorySSA.h"
-#include "llvm/Analysis/MemorySSAUpdater.h"
+// #include "llvm/Analysis/MemorySSA.h"
+// #include "llvm/Analysis/MemorySSAUpdater.h"
 
 #include "carts/analysis/graph/EDTEdge.h"
 #include "carts/analysis/graph/EDTGraph.h"
@@ -91,6 +91,26 @@ bool EDTGraph::isDataDependent(EDTGraphNode *From, EDTGraphNode *To) {
     }
   }
   return false;
+}
+
+EDT *EDTGraph::getParentSyncEDT(EDTGraphNode *Node, uint32_t Depth) {
+  for (auto *Edge : getIncomingEdges(Node)) {
+    /// We are only concerned with creation edges
+    if (!Edge->hasCreationDep())
+      continue;
+
+    auto *ParentEDT = Edge->getFrom()->getEDT();
+    if (ParentEDT->isAsync())
+      return getParentSyncEDT(Edge->getFrom(), Depth + 1);
+
+    SyncEDT *ParentSyncEDT = dyn_cast<SyncEDT>(ParentEDT);
+    if (ParentSyncEDT->mustSyncChilds() && Depth == 0)
+      return ParentSyncEDT;
+    if (ParentSyncEDT->mustSyncDescendants() && Depth > 0)
+      return ParentSyncEDT;
+    return nullptr;
+  }
+  return nullptr;
 }
 
 /// Nodes
