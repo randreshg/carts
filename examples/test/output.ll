@@ -38,9 +38,14 @@ test_arts_ir.bc
 [AAEDTInfoFunction::initialize] EDT #0 for function "main"
    - Failed to visit all Callsites!
 [AAEDTInfoFunction::initialize] EDT #1 for function "carts.edt"
+   - ParentEDT: EDT #0
+   - DoneEDT: EDT #4
 [AAEDTInfoFunction::initialize] EDT #2 for function "carts.edt.1"
+   - ParentEDT: EDT #1
 [AAEDTInfoFunction::initialize] EDT #3 for function "carts.edt.2"
+   - ParentEDT: EDT #1
 [AAEDTInfoFunction::initialize] EDT #4 for function "carts.edt.3"
+   - ParentEDT: EDT #0
 [AAEDTInfoFunction::updateImpl] EDT #0
    - EDT #1 is a child of EDT #0
         - Creating edge from "EDT #0" to "EDT #1"
@@ -76,13 +81,20 @@ test_arts_ir.bc
 [AAEDTInfoCallsiteArg::updateImpl]   %4 = load i32, ptr %0, align 4, !tbaa !8 from EDT #2
 [AAEDTDataBlockInfoVal::initialize] Value #ptr %0
 [AAEDTDataBlockInfoVal::updateImpl] ptr %0
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl]   %4 = load i32, ptr %0, align 4, !tbaa !8 from EDT #2
+   - Analyzing sync remote dependencies
 [AAEDTInfoCallsiteArg::initialize] CallArg #3 from EDT #2
 [AAEDTInfoCallsiteArg::updateImpl]   %5 = load i32, ptr %1, align 4, !tbaa !8 from EDT #2
 [AAEDTDataBlockInfoVal::initialize] Value #ptr %1
 [AAEDTDataBlockInfoVal::updateImpl] ptr %1
-   - All DataBlocks were fixed for EDT #2
-[AAEDTInfoCallsite::updateImpl] EDT #2
-   - All DataBlocks were fixed for EDT #2
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl]   %5 = load i32, ptr %1, align 4, !tbaa !8 from EDT #2
+   - Analyzing sync remote dependencies
 [AAEDTInfoFunction::updateImpl] EDT #3
    - All ReachedEDTs are fixed for EDT #3
    - EDT #3 is async. No updates to push
@@ -94,9 +106,6 @@ test_arts_ir.bc
 [AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
 [AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #3
 [AAEDTInfoCallsiteArg::updateImpl]   %7 = load i32, ptr %2, align 4, !tbaa !8 from EDT #3
-   - All DataBlocks were fixed for EDT #3
-[AAEDTInfoCallsite::updateImpl] EDT #3
-   - All DataBlocks were fixed for EDT #3
 [AAEDTInfoFunction::updateImpl] EDT #4
    - All ReachedEDTs are fixed for EDT #4
    - EDT #4 is async. No updates to push
@@ -113,16 +122,20 @@ test_arts_ir.bc
 [AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #4
 [AAEDTDataBlockInfoVal::initialize] Value #  %random_number = alloca i32, align 4
 [AAEDTDataBlockInfoVal::updateImpl]   %random_number = alloca i32, align 4
-   - ReachedLocalEDTs: EDT #1   - ReachedLocalEDTs: EDT #4[AAEDTDataBlockInfoVal::initialize] Value #ptr %random_number
+   - ReachedLocalEDTs: EDT #1
+   - ReachedLocalEDTs: EDT #4
+[AAEDTDataBlockInfoVal::initialize] Value #ptr %random_number
 [AAEDTDataBlockInfoVal::updateImpl] ptr %random_number
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #4
+   - Analyzing sync remote dependencies
 [AAEDTInfoCallsiteArg::initialize] CallArg #2 from EDT #4
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #4
 [AAEDTDataBlockInfoVal::initialize] Value #  %shared_number = alloca i32, align 4
 [AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
-   - All DataBlocks were fixed for EDT #4
-[AAEDTInfoCallsite::updateImpl] EDT #4
-   - All DataBlocks were fixed for EDT #4
 [AAEDTInfoFunction::updateImpl] EDT #0
    - EDT #1 is a child of EDT #0
    - EDT #4 is a child of EDT #0
@@ -141,23 +154,43 @@ test_arts_ir.bc
 [AAEDTInfoCallsite::updateImpl] EDT #1
 [AAEDTInfoCallsiteArg::initialize] CallArg #0 from EDT #1
 [AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+   - Analyzing local dependencies
+   - Analyzing sync remote dependencies
 [AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #1
 [AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
 [AAEDTDataBlockInfoVal::initialize] Value #  %NewRandom = alloca i32, align 4
 [AAEDTDataBlockInfoVal::updateImpl]   %NewRandom = alloca i32, align 4
-   - ReachedLocalEDTs: EDT #1[AAEDTInfoCallsiteArg::initialize] CallArg #2 from EDT #1
+   - ReachedLocalEDTs: EDT #1
+   - Analyzing local dependencies
+   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::initialize] CallArg #2 from EDT #1
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
 [AAEDTInfoCallsiteArg::initialize] CallArg #3 from EDT #1
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-   - All DataBlocks were fixed for EDT #1
-[AAEDTInfoCallsite::updateImpl] EDT #1
-   - All DataBlocks were fixed for EDT #1
+[AAEDTInfoFunction::updateImpl] EDT #2
+   - Getting updates for EDT #2
+   - Finished getting updates for EDT #2
+[AAEDTInfoFunction::updateImpl] EDT #3
+   - Getting updates for EDT #3
+   - Finished getting updates for EDT #3
+[AAEDTInfoFunction::updateImpl] EDT #4
+   - Getting updates for EDT #4
+   - Finished getting updates for EDT #4
+[AAEDTInfoCallsite::updateImpl] EDT #2
+[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #2
 [AAEDTDataBlockInfoVal::updateImpl] ptr %2
    - AAPointerInfo is not at fixpoint!
+[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #2
 [AAEDTDataBlockInfoVal::updateImpl] ptr %3
    - AAPointerInfo is not at fixpoint!
+[AAEDTInfoCallsite::updateImpl] EDT #3
+[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
+[AAEDTInfoCallsiteArg::updateImpl]   %7 = load i32, ptr %2, align 4, !tbaa !8 from EDT #3
+[AAEDTInfoCallsite::updateImpl] EDT #4
+[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #4
 [AAEDTDataBlockInfoVal::updateImpl]   %number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
+[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #4
 [AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
 [AAEDTInfoFunction::updateImpl] EDT #0
@@ -165,6 +198,22 @@ test_arts_ir.bc
    - EDT #4 is a child of EDT #0
    - All ReachedEDTs are fixed for EDT #0
    - EDT #0 is async. No updates to push
+[AAEDTInfoFunction::updateImpl] EDT #1
+   - Getting updates for EDT #1
+   - Finished getting updates for EDT #1
+[AAEDTInfoCallsite::updateImpl] EDT #1
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
+   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
+[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+[AAEDTInfoFunction::updateImpl] EDT #2
+   - Getting updates for EDT #2
+   - Finished getting updates for EDT #2
+[AAEDTInfoFunction::updateImpl] EDT #3
+   - Getting updates for EDT #3
+   - Finished getting updates for EDT #3
 [AAEDTDataBlockInfoVal::updateImpl] ptr %3
    - AAPointerInfo is not at fixpoint!
 [AAEDTDataBlockInfoVal::updateImpl] ptr %2
@@ -182,19 +231,123 @@ test_arts_ir.bc
 [AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
 [AAEDTDataBlockInfoVal::updateImpl] ptr %3
-   - ReachedLocalEDTs: EDT #2   - ReachedLocalEDTs: EDT #3[AAEDTDataBlockInfoVal::initialize] Value #ptr %1
+   - ReachedLocalEDTs: EDT #2
+   - ReachedLocalEDTs: EDT #3
+[AAEDTDataBlockInfoVal::initialize] Value #ptr %1
 [AAEDTDataBlockInfoVal::updateImpl] ptr %1
 [AAEDTDataBlockInfoVal::initialize] Value #ptr %0
 [AAEDTDataBlockInfoVal::updateImpl] ptr %0
+[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #2
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #2
+   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
+   - Analyzing sync remote dependencies
 [AAEDTDataBlockInfoVal::updateImpl] ptr %2
-   - ReachedLocalEDTs: EDT #2[AAEDTDataBlockInfoVal::initialize] Value #ptr %0
+   - ReachedLocalEDTs: EDT #2
+[AAEDTDataBlockInfoVal::initialize] Value #ptr %0
 [AAEDTDataBlockInfoVal::updateImpl] ptr %0
 [AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
-   - ReachedLocalEDTs: EDT #1   - ReachedLocalEDTs: EDT #4[AAEDTDataBlockInfoVal::initialize] Value #ptr %shared_number
+   - ReachedLocalEDTs: EDT #1
+   - ReachedLocalEDTs: EDT #4
+[AAEDTDataBlockInfoVal::initialize] Value #ptr %shared_number
 [AAEDTDataBlockInfoVal::updateImpl] ptr %shared_number
+[AAEDTInfoCallsite::updateImpl] EDT #2
+[AAEDTInfoCallsite::updateImpl] EDT #3
+[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #2
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #2
+   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl]   %7 = load i32, ptr %2, align 4, !tbaa !8 from EDT #3
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl]   %7 = load i32, ptr %2, align 4, !tbaa !8 from EDT #3
+   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+   - Analyzing local dependencies
+   - Analyzing sync remote dependencies
+        - Creating edge from "EDT #2" to "EDT #4"
+          Data Edge
+     - EDT #2 must signal the value to EDT #4
+        - Creating edge from "EDT #3" to "EDT #4"
+          Data Edge
+     - EDT #3 must signal the value to EDT #4
+[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #4
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #4
+   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+   - Analyzing sync remote dependencies
+     - EDT #2 must signal the value to EDT #4
+     - EDT #3 must signal the value to EDT #4
 [AAEDTDataBlockInfoVal::updateImpl]   %number = alloca i32, align 4
-   - ReachedLocalEDTs: EDT #1   - ReachedLocalEDTs: EDT #4[AAEDTDataBlockInfoVal::initialize] Value #ptr %number
+   - ReachedLocalEDTs: EDT #1
+   - ReachedLocalEDTs: EDT #4
+[AAEDTDataBlockInfoVal::initialize] Value #ptr %number
 [AAEDTDataBlockInfoVal::updateImpl] ptr %number
+[AAEDTInfoCallsite::updateImpl] EDT #2
+   - All DataBlocks were fixed for EDT #2
+[AAEDTInfoCallsite::updateImpl] EDT #2
+   - All DataBlocks were fixed for EDT #2
+[AAEDTInfoCallsite::updateImpl] EDT #3
+   - All DataBlocks were fixed for EDT #3
+[AAEDTInfoCallsite::updateImpl] EDT #3
+   - All DataBlocks were fixed for EDT #3
+[AAEDTInfoCallsite::updateImpl] EDT #1
+[AAEDTInfoCallsite::updateImpl] EDT #4
+[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
+   - Analyzing local dependencies
+   - Analyzing sync remote dependencies
+     - EDT #2 must signal the value to EDT #4
+[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #4
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #4
+   - Analyzing sync remote dependencies
+[AAEDTInfoFunction::updateImpl] EDT #2
+   - Getting updates for EDT #2
+   - Finished getting updates for EDT #2
+[AAEDTInfoFunction::updateImpl] EDT #3
+   - Getting updates for EDT #3
+   - Finished getting updates for EDT #3
+[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
+   - Analyzing sync remote dependencies
+     - EDT #2 must signal the value to EDT #4
+[AAEDTInfoCallsite::updateImpl] EDT #1
+[AAEDTInfoCallsite::updateImpl] EDT #4
+   - All DataBlocks were fixed for EDT #4
+[AAEDTInfoCallsite::updateImpl] EDT #4
+   - All DataBlocks were fixed for EDT #4
+[AAEDTInfoFunction::updateImpl] EDT #1
+   - Getting updates for EDT #1
+   - Finished getting updates for EDT #1
+[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+   - Analyzing sync remote dependencies
+     - EDT #2 must signal the value to EDT #4
+     - EDT #3 must signal the value to EDT #4
+[AAEDTInfoCallsite::updateImpl] EDT #1
+[AAEDTInfoFunction::updateImpl] EDT #4
+   - Getting updates for EDT #4
+   - Finished getting updates for EDT #4
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
+   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
+   - Analyzing sync remote dependencies
+     - EDT #2 must signal the value to EDT #4
 AAEDTInfoFunction::manifest: 
 EDT #0 -> 
      -ParentSyncEDT: <null>
@@ -215,7 +368,7 @@ EDT #1 ->
      -ParentSyncEDT: <null>
      #Child EDTs: 2{2, 3}
      #Reached DescendantEDTs: 0{}
-     #MaySignalLocal EDTs: 0{}
+     #MaySignalLocal EDTs: 1{4}
      #MaySignalRemote EDTs: 0{}
      #Dependent EDTs: 0{}
 - EDT #1: carts.edt
@@ -231,7 +384,7 @@ Number of DepV: 4
 AAEDTInfoFunction::manifest: 
 EDT #2 -> 
      -ParentEDT: EDT #1
-     -ParentSyncEDT: <null>
+     -ParentSyncEDT: EDT #1
      #Child EDTs: 0{}
      #Reached DescendantEDTs: 0{}
      #MaySignalLocal EDTs: 0{}
@@ -250,7 +403,7 @@ Number of DepV: 4
 AAEDTInfoFunction::manifest: 
 EDT #3 -> 
      -ParentEDT: EDT #1
-     -ParentSyncEDT: <null>
+     -ParentSyncEDT: EDT #1
      #Child EDTs: 0{}
      #Reached DescendantEDTs: 0{}
      #MaySignalLocal EDTs: 0{}
@@ -382,8 +535,37 @@ EDTDataBlock ->
       - ptr %shared_number
   - Incoming Edges:
     - [control/ creation] "EDT #0"
+    - [data] "EDT #2"
+    - [data] "EDT #3"
   - Outgoing Edges:
     - The EDT has no outgoing edges
+
+- EDT #2 - "carts.edt.1"
+  - Type: task
+  - Data Environment:
+    - Number of ParamV = 0
+    - Number of DepV = 4
+      - ptr %0
+      - ptr %1
+      - i32 %2
+      - i32 %3
+  - Incoming Edges:
+    - [control/ creation] "EDT #1"
+  - Outgoing Edges:
+    - [data] "EDT #4"
+        -   %number = alloca i32, align 4
+        -   %shared_number = alloca i32, align 4
+
+- EDT #0 - "main"
+  - Type: main
+  - Data Environment:
+    - Number of ParamV = 0
+    - Number of DepV = 0
+  - Incoming Edges:
+    - The EDT has no incoming edges
+  - Outgoing Edges:
+    - [control/ creation] "EDT #1"
+    - [control/ creation] "EDT #4"
 
 - EDT #3 - "carts.edt.2"
   - Type: task
@@ -395,7 +577,8 @@ EDTDataBlock ->
   - Incoming Edges:
     - [control/ creation] "EDT #1"
   - Outgoing Edges:
-    - The EDT has no outgoing edges
+    - [data] "EDT #4"
+        -   %shared_number = alloca i32, align 4
 
 - EDT #1 - "carts.edt"
   - Type: parallel
@@ -411,31 +594,6 @@ EDTDataBlock ->
   - Outgoing Edges:
     - [control/ creation] "EDT #2"
     - [control/ creation] "EDT #3"
-
-- EDT #2 - "carts.edt.1"
-  - Type: task
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 4
-      - ptr %0
-      - ptr %1
-      - i32 %2
-      - i32 %3
-  - Incoming Edges:
-    - [control/ creation] "EDT #1"
-  - Outgoing Edges:
-    - The EDT has no outgoing edges
-
-- EDT #0 - "main"
-  - Type: main
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 0
-  - Incoming Edges:
-    - The EDT has no incoming edges
-  - Outgoing Edges:
-    - [control/ creation] "EDT #4"
-    - [control/ creation] "EDT #1"
 
 - - - - - - - - - - - - - - - - - - - - - - - -
 
