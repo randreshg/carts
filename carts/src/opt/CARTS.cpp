@@ -43,7 +43,7 @@
 //         dbgs() << "\n-------------------------------------------------\n");
 //     /// Fetch NOELLE Manager
 //     auto &NM = getAnalysis<Noelle>();
-//     EDTCache Cache(M, NM);
+//     CARTSCache Cache(M, NM);
 //     EDTGraph EDTG(Cache);
 //     EDTG.print();
 
