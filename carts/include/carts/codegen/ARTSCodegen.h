@@ -5,24 +5,26 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_API_CARTS_ARTSIRBUILDER_H
-#define LLVM_API_CARTS_ARTSIRBUILDER_H
+#ifndef LLVM_ARTS_CODEGEN_H
+#define LLVM_ARTS_CODEGEN_H
 
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instruction.h"
 
 #include "carts/utils/ARTS.h"
+#include "carts/utils/ARTSTypes.h"
 
 namespace arts {
+using namespace types;
 /// An interface to create LLVM-IR for ARTS directives.
 ///
 /// Each ARTS directive has a corresponding public generator method.
 class ARTSCodegen {
 public:
   /// Create a new ARTSCodegen operating on the given module \p M.
-  ARTSCodegen(Module &M) : M(M), Builder(M.getContext()) { initialize(); }
-  ~ARTSCodegen() {}
+  ARTSCodegen(Module &M);
+  ~ARTSCodegen();
 
   /// ---------------------------- Interface ---------------------------- ///
   /// Initialize the internal state, this will put structures types and
@@ -32,8 +34,8 @@ public:
   void initialize();
 
   /// Finalize the underlying module, e.g., by outlining regions.
-  /// \param Fn                    The function to be finalized. If not used,
-  ///                              all functions are finalized.
+  /// \param Fn  The function to be finalized. If not used,
+  ///            all functions are finalized.
   void finalize();
 
   /// Type used throughout for insertion points.
@@ -50,7 +52,6 @@ public:
   CallInst *insertEDTCall(EDT &E);
   void reserveEDTGuid(EDT &E);
 
-
   /// ---------------------------- Utils ---------------------------- ///
   /// Make \p Source branch to \p Target.
   ///
@@ -65,24 +66,24 @@ public:
   void setInsertPoint(BasicBlock *BB);
   void setInsertPoint(Instruction *I);
 
-  /// ---------------------------- Types ---------------------------- ///
-  /// Declarations for LLVM-IR types (simple, array, function and structure) are
-  /// generated below. Their names are defined and used in ARTSKinds.def. Here
-  /// we provide the declarations, the initializeTypes function will provide the
-  /// values.
-  ///
-  ///{
-  #define ARTS_TYPE(VarName, InitValue) Type *VarName = nullptr;
-  #define ARTS_ARRAY_TYPE(VarName, ElemTy, ArraySize)                            \
-    ArrayType *VarName##Ty = nullptr;                                            \
-    PointerType *VarName##PtrTy = nullptr;
-  #define ARTS_FUNCTION_TYPE(VarName, IsVarArg, ReturnType, ...)                 \
-    FunctionType *VarName = nullptr;                                             \
-    PointerType *VarName##Ptr = nullptr;
-  #define ARTS_STRUCT_TYPE(VarName, StrName, ...)                                \
-    StructType *VarName = nullptr;                                               \
-    PointerType *VarName##Ptr = nullptr;
-  #include "ARTSKinds.def"
+/// ---------------------------- Types ---------------------------- ///
+/// Declarations for LLVM-IR types (simple, array, function and structure) are
+/// generated below. Their names are defined and used in ARTSKinds.def. Here
+/// we provide the declarations, the initializeTypes function will provide the
+/// values.
+///
+///{
+#define ARTS_TYPE(VarName, InitValue) Type *VarName = nullptr;
+#define ARTS_ARRAY_TYPE(VarName, ElemTy, ArraySize)                            \
+  ArrayType *VarName##Ty = nullptr;                                            \
+  PointerType *VarName##PtrTy = nullptr;
+#define ARTS_FUNCTION_TYPE(VarName, IsVarArg, ReturnType, ...)                 \
+  FunctionType *VarName = nullptr;                                             \
+  PointerType *VarName##Ptr = nullptr;
+#define ARTS_STRUCT_TYPE(VarName, StrName, ...)                                \
+  StructType *VarName = nullptr;                                               \
+  PointerType *VarName##Ptr = nullptr;
+#include "ARTSKinds.def"
   ///}
 private:
   /// ---------------------------- Private ---------------------------- ///
@@ -96,7 +97,6 @@ private:
   /// The LLVM-IR Builder used to create IR.
   IRBuilder<> Builder;
 };
-
 } // namespace arts
 
-#endif // LLVM_API_CARTS_ARTSIRBUILDER_H
+#endif // LLVM_ARTS_CODEGEN_H
