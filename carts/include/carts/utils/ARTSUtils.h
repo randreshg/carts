@@ -20,7 +20,7 @@
 /// ------------------------------------------------------------------- ///
 namespace arts {
 namespace utils {
-using namespace llvm  ;
+using namespace llvm;
 /// It finds the BBs that are dominated by FromBB and add
 /// them to the DominatedBlocks vector.
 void getDominatedBBs(BasicBlock *FromBB, DominatorTree &DT,

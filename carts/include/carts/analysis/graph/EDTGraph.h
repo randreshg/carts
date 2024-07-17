@@ -4,7 +4,6 @@
 #ifndef LLVM_EDTGRAPH_H
 #define LLVM_EDTGRAPH_H
 
-// #include "llvm/ADT/SetVector.h"
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/IR/Function.h"
 #include <unordered_set>
@@ -49,12 +48,6 @@ public:
   /// Nodes
   void createNode(Function &Fn);
   void createNodes();
-  // void setDeps(EDTGraphNode *Node);
-  // void setCreationDeps();
-  // void setDataDeps();
-  // EDTGraphNode *getClobberingEDT(MemorySSA &MSSA, CallBase *Inst);
-  // void analyzeDeps();
-  // void analyzeReachability();
 
   unordered_set<EDTGraphNode *> getNodes();
   EDTGraphNode *insertNode(EDT *E);
@@ -83,15 +76,11 @@ public:
   void addReachableEDT(EDTGraphNode *From);
 
   /// Attributes
-  // EDTGraphCache &Cache;
   DenseMap<Function *, EDTGraphNode *> EDTs;
   DenseMap<EDTGraphNode *, DenseMap<EDTGraphNode *, EDTGraphEdge *>>
       IncomingEdges;
   DenseMap<EDTGraphNode *, DenseMap<EDTGraphNode *, EDTGraphEdge *>>
       OutgoingEdges;
-
-  ////
-  // FunctionsManager *FM;
 public:
   void print();
 };

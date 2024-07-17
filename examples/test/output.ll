@@ -34,7 +34,7 @@ test_arts_ir.bc
 [arts] Creating Task EDT for function: carts.edt.3
 
 
-[arts-analysis] Initializing AAEDTInfo: 
+[arts-analysis] [Attributor] Initializing AAEDTInfo: 
 [AAEDTInfoFunction::initialize] EDT #0 for function "main"
    - Failed to visit all Callsites!
 [AAEDTInfoFunction::initialize] EDT #1 for function "carts.edt"
@@ -201,6 +201,12 @@ test_arts_ir.bc
 [AAEDTInfoFunction::updateImpl] EDT #1
    - Getting updates for EDT #1
    - Finished getting updates for EDT #1
+[AAEDTInfoFunction::updateImpl] EDT #2
+   - Getting updates for EDT #2
+   - Finished getting updates for EDT #2
+[AAEDTInfoFunction::updateImpl] EDT #3
+   - Getting updates for EDT #3
+   - Finished getting updates for EDT #3
 [AAEDTInfoCallsite::updateImpl] EDT #1
 [AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
    - Analyzing sync remote dependencies
@@ -208,12 +214,6 @@ test_arts_ir.bc
    - Analyzing sync remote dependencies
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoFunction::updateImpl] EDT #2
-   - Getting updates for EDT #2
-   - Finished getting updates for EDT #2
-[AAEDTInfoFunction::updateImpl] EDT #3
-   - Getting updates for EDT #3
-   - Finished getting updates for EDT #3
 [AAEDTDataBlockInfoVal::updateImpl] ptr %3
    - AAPointerInfo is not at fixpoint!
 [AAEDTDataBlockInfoVal::updateImpl] ptr %2
@@ -291,6 +291,12 @@ test_arts_ir.bc
    - Analyzing sync remote dependencies
      - EDT #2 must signal the value to EDT #4
      - EDT #3 must signal the value to EDT #4
+[AAEDTInfoFunction::updateImpl] EDT #2
+   - Getting updates for EDT #2
+   - Finished getting updates for EDT #2
+[AAEDTInfoFunction::updateImpl] EDT #3
+   - Getting updates for EDT #3
+   - Finished getting updates for EDT #3
 [AAEDTDataBlockInfoVal::updateImpl]   %number = alloca i32, align 4
    - ReachedLocalEDTs: EDT #1
    - ReachedLocalEDTs: EDT #4
@@ -306,6 +312,12 @@ test_arts_ir.bc
    - All DataBlocks were fixed for EDT #3
 [AAEDTInfoCallsite::updateImpl] EDT #1
 [AAEDTInfoCallsite::updateImpl] EDT #4
+[AAEDTInfoFunction::updateImpl] EDT #2
+   - Getting updates for EDT #2
+   - Finished getting updates for EDT #2
+[AAEDTInfoFunction::updateImpl] EDT #3
+   - Getting updates for EDT #3
+   - Finished getting updates for EDT #3
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
    - Analyzing local dependencies
    - Analyzing sync remote dependencies
@@ -316,28 +328,22 @@ test_arts_ir.bc
    - Analyzing sync remote dependencies
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #4
    - Analyzing sync remote dependencies
-[AAEDTInfoFunction::updateImpl] EDT #2
-   - Getting updates for EDT #2
-   - Finished getting updates for EDT #2
-[AAEDTInfoFunction::updateImpl] EDT #3
-   - Getting updates for EDT #3
-   - Finished getting updates for EDT #3
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
    - Analyzing sync remote dependencies
      - EDT #2 must signal the value to EDT #4
-[AAEDTInfoCallsite::updateImpl] EDT #1
-[AAEDTInfoCallsite::updateImpl] EDT #4
-   - All DataBlocks were fixed for EDT #4
-[AAEDTInfoCallsite::updateImpl] EDT #4
-   - All DataBlocks were fixed for EDT #4
-[AAEDTInfoFunction::updateImpl] EDT #1
-   - Getting updates for EDT #1
-   - Finished getting updates for EDT #1
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
    - Analyzing sync remote dependencies
      - EDT #2 must signal the value to EDT #4
      - EDT #3 must signal the value to EDT #4
 [AAEDTInfoCallsite::updateImpl] EDT #1
+[AAEDTInfoCallsite::updateImpl] EDT #4
+   - All DataBlocks were fixed for EDT #4
+[AAEDTInfoCallsite::updateImpl] EDT #4
+   - All DataBlocks were fixed for EDT #4
+[AAEDTInfoCallsite::updateImpl] EDT #1
+[AAEDTInfoFunction::updateImpl] EDT #1
+   - Getting updates for EDT #1
+   - Finished getting updates for EDT #1
 [AAEDTInfoFunction::updateImpl] EDT #4
    - Getting updates for EDT #4
    - Finished getting updates for EDT #4
@@ -345,6 +351,10 @@ test_arts_ir.bc
    - Analyzing sync remote dependencies
 [AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
    - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+   - Analyzing sync remote dependencies
+     - EDT #2 must signal the value to EDT #4
+     - EDT #3 must signal the value to EDT #4
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
    - Analyzing sync remote dependencies
      - EDT #2 must signal the value to EDT #4
@@ -525,48 +535,6 @@ EDTDataBlock ->
 [arts-analysis] Process has finished
 - - - - - - - - - - - - - - - - - - - - - - - -
 [edt-graph] Printing the EDT Graph
-- EDT #4 - "carts.edt.3"
-  - Type: task
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 3
-      - ptr %number
-      - ptr %random_number
-      - ptr %shared_number
-  - Incoming Edges:
-    - [control/ creation] "EDT #0"
-    - [data] "EDT #2"
-    - [data] "EDT #3"
-  - Outgoing Edges:
-    - The EDT has no outgoing edges
-
-- EDT #2 - "carts.edt.1"
-  - Type: task
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 4
-      - ptr %0
-      - ptr %1
-      - i32 %2
-      - i32 %3
-  - Incoming Edges:
-    - [control/ creation] "EDT #1"
-  - Outgoing Edges:
-    - [data] "EDT #4"
-        -   %number = alloca i32, align 4
-        -   %shared_number = alloca i32, align 4
-
-- EDT #0 - "main"
-  - Type: main
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 0
-  - Incoming Edges:
-    - The EDT has no incoming edges
-  - Outgoing Edges:
-    - [control/ creation] "EDT #1"
-    - [control/ creation] "EDT #4"
-
 - EDT #3 - "carts.edt.2"
   - Type: task
   - Data Environment:
@@ -594,6 +562,48 @@ EDTDataBlock ->
   - Outgoing Edges:
     - [control/ creation] "EDT #2"
     - [control/ creation] "EDT #3"
+
+- EDT #0 - "main"
+  - Type: main
+  - Data Environment:
+    - Number of ParamV = 0
+    - Number of DepV = 0
+  - Incoming Edges:
+    - The EDT has no incoming edges
+  - Outgoing Edges:
+    - [control/ creation] "EDT #4"
+    - [control/ creation] "EDT #1"
+
+- EDT #2 - "carts.edt.1"
+  - Type: task
+  - Data Environment:
+    - Number of ParamV = 0
+    - Number of DepV = 4
+      - ptr %0
+      - ptr %1
+      - i32 %2
+      - i32 %3
+  - Incoming Edges:
+    - [control/ creation] "EDT #1"
+  - Outgoing Edges:
+    - [data] "EDT #4"
+        -   %number = alloca i32, align 4
+        -   %shared_number = alloca i32, align 4
+
+- EDT #4 - "carts.edt.3"
+  - Type: task
+  - Data Environment:
+    - Number of ParamV = 0
+    - Number of DepV = 3
+      - ptr %number
+      - ptr %random_number
+      - ptr %shared_number
+  - Incoming Edges:
+    - [data] "EDT #2"
+    - [data] "EDT #3"
+    - [control/ creation] "EDT #0"
+  - Outgoing Edges:
+    - The EDT has no outgoing edges
 
 - - - - - - - - - - - - - - - - - - - - - - - -
 

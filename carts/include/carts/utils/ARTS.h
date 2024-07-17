@@ -1,14 +1,12 @@
-//===- ARTS.h - ARTS-Related stucts -----------------------------*- C++ -*-===//
+//===- ARTS.h - ARTS-Related structs ----------------------------*- C++ -*-===//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_ARTS_H
 #define LLVM_ARTS_H
 
 #include "llvm/ADT/SetVector.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/InstrTypes.h"
-#include "llvm/Support/Casting.h"
 #include <cstdint>
 #include <sys/types.h>
 

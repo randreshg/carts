@@ -25,35 +25,6 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 namespace arts {
 /// EDTGraph
 EDTGraph::EDTGraph() {}
-// EDTGraph::EDTGraph(EDTGraphCache &Cache) : Cache(Cache) {
-//   LLVM_DEBUG(dbgs() <<
-//   "-------------------------------------------------\n"); LLVM_DEBUG(dbgs()
-//   << TAG << "Building the EDT Graph\n"); FM =
-//   Cache.getNoelle().getFunctionsManager(); CG = FM->getProgramCallGraph();
-//   /// Create nodes
-//   createNodes();
-//   setCreationDeps();
-//   /// Debug Cache
-//   LLVM_DEBUG(dbgs() <<
-//   "-------------------------------------------------\n"); LLVM_DEBUG(dbgs()
-//   << TAG << "Printing the Cache\n"); for (auto &ValItr : Cache.getValues()) {
-//     auto *V = ValItr.first;
-//     auto &EDTs = ValItr.second;
-//     /// Get EDT Call parent function
-//     auto *ParentEDT = getNode(*EDTs[0]->getCall()->getFunction());
-//     LLVM_DEBUG(dbgs() << "  Value: " << *V << " in EDT #"
-//                       << ParentEDT->getEDT()->getID() << "\n");
-//     for (auto *E : EDTs) {
-//       LLVM_DEBUG(dbgs() << "    - EDT #" << E->getID() << "\n");
-//     }
-//   }
-//   LLVM_DEBUG(dbgs() <<
-//   "-------------------------------------------------\n"); analyzeDeps();
-//   /// Debug module
-//   // LLVM_DEBUG(dbgs() << Cache.getModule());
-//   LLVM_DEBUG(dbgs() <<
-//   "-------------------------------------------------\n");
-// }
 
 EDTGraph::~EDTGraph() {
   LLVM_DEBUG(dbgs() << TAG << "Destroying the EDT Graph\n");
@@ -95,7 +66,6 @@ bool EDTGraph::isDataDependent(EDTGraphNode *From, EDTGraphNode *To) {
 
 EDT *EDTGraph::getParentSyncEDT(EDTGraphNode *Node, uint32_t Depth) {
   for (auto *Edge : getIncomingEdges(Node)) {
-    /// We are only concerned with creation edges
     if (!Edge->hasCreationDep())
       continue;
 
