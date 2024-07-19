@@ -45,12 +45,17 @@ public:
   FunctionCallee getOrCreateRuntimeFunction(Module &M,
                                             types::RuntimeFunction FnID);
   Function *getOrCreateRuntimeFunctionPtr(types::RuntimeFunction FnID);
-
   /// Interface to add ARTS methods
   void initializeEDT(EDT &E);
   void insertEDTEntry(EDT &E);
   CallInst *insertEDTCall(EDT &E);
   void reserveEDTGuid(EDT &E);
+  /// Handle interface
+  void generateEDT(EDT &E);
+  void generateParallelEDT(EDT &E);
+  void generateTaskEDT(EDT &E);
+  void generateMainEDT(EDT &E);
+  void generateSyncEDT(EDT &E);
 
   /// ---------------------------- Utils ---------------------------- ///
   /// Make \p Source branch to \p Target.

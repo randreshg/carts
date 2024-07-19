@@ -20,6 +20,7 @@
 #include "llvm/Transforms/IPO/Attributor.h"
 #include "llvm/Transforms/Utils/CallGraphUpdater.h"
 
+#include "carts/analysis/graph/EDTEdge.h"
 #include "carts/analysis/graph/EDTGraph.h"
 #include "carts/codegen/ARTSCodegen.h"
 #include "carts/utils/ARTS.h"
@@ -93,33 +94,33 @@ struct CARTSInfoCache : public InformationCache {
   EDT *getEDT(CallBase *CB) const { return getEDT(CB->getCalledFunction()); }
 
   /// EDTDataBlock
-  // EDTDataBlockSet getEDTDataBlocks(Value *V) const {
-  //   auto Itr = ValueToDataBlocks.find(V);
-  //   if (Itr == ValueToDataBlocks.end())
-  //     return EDTDataBlockSet();
-  //   return Itr->second;
-  // }
+  EDTDataBlockSet getEDTDataBlocks(Value *V) const {
+    auto Itr = ValueToDataBlocks.find(V);
+    if (Itr == ValueToDataBlocks.end())
+      return EDTDataBlockSet();
+    return Itr->second;
+  }
 
-  // EDTDataBlock *getOrCreateEDTDataBlock(Value *V, EDTDataBlock::Mode M) {
-  //   auto Itr = ValueToDataBlocks.find(V);
-  //   /// If the value is not in the map, create a new DataBlock
-  //   if (Itr == ValueToDataBlocks.end()) {
-  //     auto *DB = new EDTDataBlock(V, M);
-  //     DataBlocks.insert(DB);
-  //     ValueToDataBlocks[V].insert(DB);
-  //     return DB;
-  //   }
-  //   /// If the value is in the map, check if the DataBlock is already there
-  //   for (auto *DB : Itr->second) {
-  //     if (DB->getMode() == M)
-  //       return DB;
-  //   }
-  //   /// If the DataBlock is not there, create a new one
-  //   auto *DB = new EDTDataBlock(V, M);
-  //   DataBlocks.insert(DB);
-  //   Itr->second.insert(DB);
-  //   return DB;
-  // }
+  EDTDataBlock *getOrCreateEDTDataBlock(Value *V, EDTDataBlock::Mode M) {
+    auto Itr = ValueToDataBlocks.find(V);
+    /// If the value is not in the map, create a new DataBlock
+    if (Itr == ValueToDataBlocks.end()) {
+      auto *DB = new EDTDataBlock(V, M);
+      DataBlocks.insert(DB);
+      ValueToDataBlocks[V].insert(DB);
+      return DB;
+    }
+    /// If the value is in the map, check if the DataBlock is already there
+    for (auto *DB : Itr->second) {
+      if (DB->getMode() == M)
+        return DB;
+    }
+    /// If the DataBlock is not there, create a new one
+    auto *DB = new EDTDataBlock(V, M);
+    DataBlocks.insert(DB);
+    Itr->second.insert(DB);
+    return DB;
+  }
 
   /// Updates Interface
   bool hasUpdate(EDT *E) const { return UpdateMap.count(E); }
@@ -751,16 +752,16 @@ struct AAEDTInfoFunction : AAEDTInfo {
     uint32_t EDTCallCounter = 0;
     auto CheckCallSite = [&](AbstractCallSite ACS) {
       EDTCallCounter++;
-      EDTCall = cast<CallBase>(ACS.getInstruction());
-
       /// Verify it is a call to the EDT Function
+      EDTCall = cast<CallBase>(ACS.getInstruction());
       auto *CalledEDT = CARTSCache->getEDT(EDTCall);
       assert(CalledEDT == EDTInfo &&
              "EDTCall doesn't correspond to the EDTInfo of the function!");
-
-      /// Not supported yet...
       assert(EDTCallCounter == 1 &&
              "Multiple calls to EDTFunction not supported yet.");
+
+      /// Set EDTCall
+      EDTInfo->setCall(EDTCall);
 
       /// Set ParentEDT - Is the EDT called from another EDT?
       ParentEDT = CARTSCache->getEDT(EDTCall->getCaller());
@@ -1038,7 +1039,7 @@ struct AAEDTInfoCallsite : AAEDTInfo {
   void initialize(Attributor &A) override {
     CARTSCache = &static_cast<CARTSInfoCache &>(A.getInfoCache());
     /// Get the Called EDT
-    auto &EDTCall = cast<CallBase>(getAnchorValue());
+    CallBase &EDTCall = cast<CallBase>(getAnchorValue());
     EDTInfo = CARTSCache->getEDT(EDTCall.getCalledFunction());
     assert(EDTInfo && "EDTInfo is null!");
     LLVM_DEBUG(dbgs() << "[AAEDTInfoCallsite::initialize] EDT #"
@@ -1051,7 +1052,7 @@ struct AAEDTInfoCallsite : AAEDTInfo {
     LLVM_DEBUG(dbgs() << "[AAEDTInfoCallsite::updateImpl] EDT #"
                       << EDTInfo->getID() << "\n");
 
-    auto &EDTCall = cast<CallBase>(getAnchorValue());
+    CallBase &EDTCall = cast<CallBase>(getAnchorValue());
     /// Run AAEDTDataBlockInfo on each argument of the call instruction
     bool AllDBsWereFixed = true;
     bool AllMaySignalEDTsWereFixed = true;
@@ -1479,8 +1480,7 @@ public:
     return PreservedAnalyses::all();
   }
 
-  void computeGraph(Module &M, ModuleAnalysisManager &AM,
-                         EDTGraph &Graph) {
+  void computeGraph(Module &M, ModuleAnalysisManager &AM, EDTGraph &Graph) {
     /// Get all functions and EDTs of the module
     LLVM_DEBUG(dbgs() << TAG << "Creating and Initializing EDTs: \n");
     EDTSet EDTs;
@@ -1496,8 +1496,7 @@ public:
       }
     }
 
-    LLVM_DEBUG(dbgs() << "\n\n"
-                      << TAG << "[Attributor] Initializing AAEDTInfo: \n");
+    LLVM_DEBUG(dbgs() << "\n\n[Attributor] Initializing AAEDTInfo: \n");
     /// Create attributor
     FunctionAnalysisManager &FAM =
         AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
@@ -1527,7 +1526,88 @@ public:
                       << " functions, result: " << Changed << ".\n");
   }
 
-  void generateCode(Module &M, EDTGraph &CARTSGraph) { ARTSCodegen CG(M); }
+  void generateCode(Module &M, EDTGraph &CARTSGraph) {
+    ARTSCodegen CG(M);
+    auto EDTNodes = CARTSGraph.getNodes();
+    for (EDTGraphNode *EDTNode : EDTNodes) {
+      EDT &CurrentEDT = *EDTNode->getEDT();
+      switch (CurrentEDT.getTy()) {
+      case EDTType::Task:
+        CG.generateAsyncEDT(CurrentEDT);
+        break;
+
+
+      // LLVM_DEBUG(dbgs() << "- EDT #" << E->getID() << " - \"" << E->getName()
+      //                   << "\"\n");
+      // LLVM_DEBUG(dbgs() << "  - Type: " << toString(E->getTy()) << "\n");
+      // /// Data environment
+      // LLVM_DEBUG(dbgs() << "  - Data Environment:\n");
+      // auto &DE = E->getDataEnv();
+      // LLVM_DEBUG(dbgs() << "    - " << "Number of ParamV = " <<
+      // DE.getParamC()
+      //                   << "\n");
+      // for (auto &P : DE.ParamV) {
+      //   LLVM_DEBUG(dbgs() << "      - " << *P << "\n");
+      // }
+      // LLVM_DEBUG(dbgs() << "    - " << "Number of DepV = " << DE.getDepC()
+      //                   << "\n");
+      // for (auto &D : DE.DepV) {
+      //   LLVM_DEBUG(dbgs() << "      - " << *D << "\n");
+      // }
+      /// Dependencies
+      LLVM_DEBUG(dbgs() << "  - Incoming Edges:\n");
+      auto InEdges = CARTSGraph.getIncomingEdges(EDTNode);
+      if (InEdges.size() == 0) {
+        LLVM_DEBUG(dbgs() << "    - The EDT has no incoming edges\n");
+      } else {
+        /// Print the incoming edges.
+        for (auto *DepEdge : InEdges) {
+          auto *From = DepEdge->getFrom();
+          auto *FromE = From->getEDT();
+          // LLVM_DEBUG(dbgs() << "    - [");
+          // if (DepEdge->isDataEdge()) {
+          //   LLVM_DEBUG(dbgs() << "data");
+          // } else if (DepEdge->isControlEdge()) {
+          //   LLVM_DEBUG(dbgs() << "control");
+          // }
+          // if (DepEdge->hasCreationDep()) {
+          //   LLVM_DEBUG(dbgs() << "/ creation");
+          // }
+          // LLVM_DEBUG(dbgs() << "] \"EDT #" << FromE->getID() << "\"\n");
+        }
+      }
+
+      LLVM_DEBUG(dbgs() << "  - Outgoing Edges:\n");
+      auto OutEdges = CARTSGraph.getOutgoingEdges(EDTNode);
+      if (OutEdges.size() == 0) {
+        LLVM_DEBUG(dbgs() << "    - The EDT has no outgoing edges\n");
+      } else {
+        /// Print the outgoing edges.
+        for (auto *DepEdge : OutEdges) {
+          auto *To = DepEdge->getTo();
+          auto *ToE = To->getEDT();
+          // LLVM_DEBUG(dbgs() << "    - [");
+          // if (DepEdge->isDataEdge()) {
+          //   LLVM_DEBUG(dbgs() << "data");
+          // } else if (DepEdge->isControlEdge()) {
+          //   LLVM_DEBUG(dbgs() << "control");
+          // }
+          // if (DepEdge->hasCreationDep()) {
+          //   LLVM_DEBUG(dbgs() << "/ creation");
+          // }
+          // LLVM_DEBUG(dbgs() << "] \"EDT #" << ToE->getID() << "\"\n");
+          // if (DepEdge->isDataEdge()) {
+          //   auto *DataEdge = cast<EDTGraphDataEdge>(DepEdge);
+          //   auto Values = DataEdge->getValues();
+          //   for (auto *V : Values) {
+          //     LLVM_DEBUG(dbgs() << "        - " << *V << "\n");
+          //   }
+          // }
+        }
+      }
+      LLVM_DEBUG(dbgs() << "\n");
+    }
+  }
 };
 
 } // namespace
