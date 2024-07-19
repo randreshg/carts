@@ -112,11 +112,17 @@ public:
 
   ///  Getters
   uint32_t getID();
-  EDTEnvironment &getDataEnv();
   EDTFunction *getFn();
+  EDTEnvironment &getDataEnv();
   Twine getName();
   EDTTypeKind getTypeKind() const;
   EDTType getTy() const;
+  uint32_t getNode();
+  EDTCallBase *getCall();
+
+  /// Setters
+  void setCall(EDTCallBase *Call);
+  void setNode(uint32_t Node);
 
   /// Helpers
   bool isAsync();
@@ -129,11 +135,13 @@ public:
 protected:
   EDTFunction *Fn = nullptr;
   EDTEnvironment *Env = nullptr;
+  EDTCallBase *Call = nullptr;
   EDTType Ty = EDTType::Unknown;
   EDTTypeKind Kind;
 
 private:
   uint32_t ID;
+  uint32_t Node = 0;
 };
 
 inline raw_ostream &operator<<(raw_ostream &OS, EDT &E) {

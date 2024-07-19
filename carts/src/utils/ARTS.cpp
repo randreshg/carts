@@ -138,7 +138,8 @@ EDT *EDT::get(EDTFunction *Fn) {
   /// Get the metadata node
   MDNode *MD = Fn->getMetadata(CARTS_MD);
   assert(MD && "CARTS Metadata Node is null");
-  assert(MD->getNumOperands() == 2  && "CARTS Metadata Node is empty or incomplete");
+  assert(MD->getNumOperands() == 2 &&
+         "CARTS Metadata Node is empty or incomplete");
   /// Get the EDT Type
   auto *TyMD = dyn_cast<MDString>(MD->getOperand(0).get());
   assert(TyMD && "EDT Type Metadata is null");
@@ -180,11 +181,17 @@ void EDT::insertValueToEnv(Value *Val, bool IsDepV) {
 
 /// Getters
 uint32_t EDT::getID() { return ID; }
-EDTEnvironment &EDT::getDataEnv() { return *Env; }
-EDTType EDT::getTy() const { return Ty; }
 EDTFunction *EDT::getFn() { return Fn; }
+EDTEnvironment &EDT::getDataEnv() { return *Env; }
 Twine EDT::getName() { return Fn->getName(); }
 EDTTypeKind EDT::getTypeKind() const { return Kind; }
+EDTType EDT::getTy() const { return Ty; }
+uint32_t EDT::getNode() { return Node; }
+EDTCallBase *EDT::getCall() { return Call; }
+
+/// Setters
+void EDT::setCall(EDTCallBase *Call) { this->Call = Call; }
+void EDT::setNode(uint32_t Node) { this->Node = Node; }
 
 /// Helpers
 bool EDT::isAsync() { return !isa<SyncEDT>(this); }

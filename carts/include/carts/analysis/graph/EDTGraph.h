@@ -47,8 +47,7 @@ public:
 
   /// Nodes
   void createNode(Function &Fn);
-  void createNodes();
-
+  
   unordered_set<EDTGraphNode *> getNodes();
   EDTGraphNode *insertNode(EDT *E);
   EDTGraphNode *insertNode(EDT *E, EDTGraphNode *ParentNode,

@@ -1,12 +1,7 @@
-
 #include "llvm/IR/InstrTypes.h"
-#include "llvm/IR/Instruction.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include <cassert>
-
-// #include "llvm/Analysis/MemorySSA.h"
-// #include "llvm/Analysis/MemorySSAUpdater.h"
 
 #include "carts/analysis/graph/EDTEdge.h"
 #include "carts/analysis/graph/EDTGraph.h"
@@ -93,18 +88,6 @@ void EDTGraph::createNode(Function &Fn) {
   auto *E = EDT::get(&Fn);
   assert(E != nullptr && "The EDT is null");
   insertNode(E);
-}
-
-void EDTGraph::createNodes() {
-  LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << TAG << "Creating the EDT Nodes\n");
-  // for (auto &Fn : M)
-  //   createNode(Fn);
-
-  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << TAG << EDTs.size() << " EDT Nodes were created\n");
-  LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
 }
 
 unordered_set<EDTGraphNode *> EDTGraph::getNodes() {

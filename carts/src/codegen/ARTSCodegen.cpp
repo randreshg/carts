@@ -254,6 +254,34 @@ void ARTSCodegen::reserveEDTGuid(EDT &E) {
   // Builder.CreateStore(ReserveGuidCall, E.GuidAddr);
 }
 
+/// ------------------------ Handle Functions ------------------------ ///
+void ARTSCodegen::generateEDT(EDT &E) {
+  LLVM_DEBUG(dbgs() << TAG << "Handling EDT\n");
+  initializeEDT(E);
+  insertEDTEntry(E);
+  insertEDTCall(E);
+}
+
+void ARTSCodegen::handleParallelEDT(EDT &E) {
+  LLVM_DEBUG(dbgs() << TAG << "Handling Parallel EDT\n");
+  handleEDT(E);
+}
+
+void ARTSCodegen::handleTaskEDT(EDT &E) {
+  LLVM_DEBUG(dbgs() << TAG << "Handling Task EDT\n");
+  handleEDT(E);
+}
+
+void ARTSCodegen::handleMainEDT(EDT &E) {
+  LLVM_DEBUG(dbgs() << TAG << "Handling Main EDT\n");
+  handleEDT(E);
+}
+
+void ARTSCodegen::handleSyncEDT(EDT &E) {
+  LLVM_DEBUG(dbgs() << TAG << "Handling Sync EDT\n");
+  handleEDT(E);
+}
+
 /// ---------------------------- Utils ---------------------------- ///
 void ARTSCodegen::redirectTo(BasicBlock *Source, BasicBlock *Target) {
   if (Instruction *Term = Source->getTerminator()) {
