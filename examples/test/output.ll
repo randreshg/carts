@@ -6,7 +6,7 @@ opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/li
 # -debug-only=omp-transform,arts,carts,arts-ir-builder,arts-utils\
 llvm-dis test_arts_ir.bc
 opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so \
-		-debug-only=arts-analysis,arts,carts,arts-ir-builder,edt-graph,carts-metadata\
+		-debug-only=arts-analysis,arts,carts,arts-ir-builder,edt-graph,carts-metadata,arts-codegen\
 		-passes="arts-analysis" test_arts_ir.bc -o test_arts_analysis.bc
 
 -------------------------------------------------
@@ -34,7 +34,7 @@ test_arts_ir.bc
 [arts] Creating Task EDT for function: carts.edt.3
 
 
-[arts-analysis] [Attributor] Initializing AAEDTInfo: 
+[Attributor] Initializing AAEDTInfo: 
 [AAEDTInfoFunction::initialize] EDT #0 for function "main"
    - Failed to visit all Callsites!
 [AAEDTInfoFunction::initialize] EDT #1 for function "carts.edt"
@@ -530,85 +530,33 @@ EDTDataBlock ->
      - #ReachedRemoteEDTs: 0{}
 
 [Attributor] Done with 5 functions, result: unchanged.
-
--------------------------------------------------
-[arts-analysis] Process has finished
-- - - - - - - - - - - - - - - - - - - - - - - -
-[edt-graph] Printing the EDT Graph
-- EDT #3 - "carts.edt.2"
-  - Type: task
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 2
-      - ptr %0
-      - i32 %1
-  - Incoming Edges:
-    - [control/ creation] "EDT #1"
-  - Outgoing Edges:
-    - [data] "EDT #4"
-        -   %shared_number = alloca i32, align 4
-
-- EDT #1 - "carts.edt"
-  - Type: parallel
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 4
-      - ptr %0
-      - ptr %1
-      - ptr %2
-      - ptr %3
-  - Incoming Edges:
-    - [control/ creation] "EDT #0"
-  - Outgoing Edges:
-    - [control/ creation] "EDT #2"
-    - [control/ creation] "EDT #3"
-
-- EDT #0 - "main"
-  - Type: main
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 0
-  - Incoming Edges:
-    - The EDT has no incoming edges
-  - Outgoing Edges:
-    - [control/ creation] "EDT #4"
-    - [control/ creation] "EDT #1"
-
-- EDT #2 - "carts.edt.1"
-  - Type: task
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 4
-      - ptr %0
-      - ptr %1
-      - i32 %2
-      - i32 %3
-  - Incoming Edges:
-    - [control/ creation] "EDT #1"
-  - Outgoing Edges:
-    - [data] "EDT #4"
-        -   %number = alloca i32, align 4
-        -   %shared_number = alloca i32, align 4
-
-- EDT #4 - "carts.edt.3"
-  - Type: task
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 3
-      - ptr %number
-      - ptr %random_number
-      - ptr %shared_number
-  - Incoming Edges:
-    - [data] "EDT #2"
-    - [data] "EDT #3"
-    - [control/ creation] "EDT #0"
-  - Outgoing Edges:
-    - The EDT has no outgoing edges
-
-- - - - - - - - - - - - - - - - - - - - - - - -
-
-
--------------------------------------------------
-[edt-graph] Destroying the EDT Graph
-llvm-dis test_arts_analysis.bc
-clang++ -fopenmp test_arts_analysis.bc -O3 -march=native -o test_opt -lstdc++
+[arts-codegen] Initializing ARTSCodegen
+[arts-codegen] ARTSCodegen initialized
+[arts-codegen] Creating function for EDT #3
+[arts-codegen] Created ARTS runtime function artsEdtCreateWithGuid with type ptr (ptr, ptr, i32, ptr, i32)
+[arts-codegen] EDT Function carts.edt.2_edt created
+[arts-codegen] Inserting Entry for EDT #3
+ - EntryBB: entry
+ - Inserting Entry
+ - Inserting ParamV
+opt: /home/rherreraguaitero/ME/ARTS-env/CARTS/external/llvm/llvm/lib/IR/Instructions.cpp:3335: static CastInst *llvm::CastInst::Create(Instruction::CastOps, Value *, Type *, const Twine &, Instruction *): Assertion `castIsValid(op, S, Ty) && "Invalid cast!"' failed.
+PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/ and include the crash backtrace.
+Stack dump:
+0.	Program arguments: opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so -debug-only=arts-analysis,arts,carts,arts-ir-builder,edt-graph,carts-metadata,arts-codegen -passes=arts-analysis test_arts_ir.bc -o test_arts_analysis.bc
+ #0 0x00007ffb155f5ef8 llvm::sys::PrintStackTrace(llvm::raw_ostream&, int) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0x191ef8)
+ #1 0x00007ffb155f3b7e llvm::sys::RunSignalHandlers() (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0x18fb7e)
+ #2 0x00007ffb155f65ad SignalHandler(int) Signals.cpp:0:0
+ #3 0x00007ffb18337910 __restore_rt (/lib64/libpthread.so.0+0x16910)
+ #4 0x00007ffb14f00d2b raise (/lib64/libc.so.6+0x4ad2b)
+ #5 0x00007ffb14f023e5 abort (/lib64/libc.so.6+0x4c3e5)
+ #6 0x00007ffb14ef8c6a __assert_fail_base (/lib64/libc.so.6+0x42c6a)
+ #7 0x00007ffb14ef8cf2 (/lib64/libc.so.6+0x42cf2)
+ #8 0x00007ffb15985334 llvm::CastInst::Create(llvm::Instruction::CastOps, llvm::Value*, llvm::Type*, llvm::Twine const&, llvm::Instruction*) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMCore.so.18.1+0x25c334)
+ #9 0x00007ffb13b8ec79 arts::ARTSCodegen::insertEDTEntry(arts::EDT&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0x23c79)
+#10 0x00007ffb13b8a2ce llvm::detail::PassModel<llvm::Module, (anonymous namespace)::ARTSAnalysisPass, llvm::PreservedAnalyses, llvm::AnalysisManager<llvm::Module>>::run(llvm::Module&, llvm::AnalysisManager<llvm::Module>&) ARTSAnalysisPass.cpp:0:0
+#11 0x00007ffb159e92a6 llvm::PassManager<llvm::Module, llvm::AnalysisManager<llvm::Module>>::run(llvm::Module&, llvm::AnalysisManager<llvm::Module>&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMCore.so.18.1+0x2c02a6)
+#12 0x000055f66f360293 llvm::runPassPipeline(llvm::StringRef, llvm::Module&, llvm::TargetMachine*, llvm::TargetLibraryInfoImpl*, llvm::ToolOutputFile*, llvm::ToolOutputFile*, llvm::ToolOutputFile*, llvm::StringRef, llvm::ArrayRef<llvm::PassPlugin>, llvm::opt_tool::OutputKind, llvm::opt_tool::VerifierKind, bool, bool, bool, bool, bool, bool, bool) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x19293)
+#13 0x000055f66f36daaa main (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x26aaa)
+#14 0x00007ffb14eeb24d __libc_start_main (/lib64/libc.so.6+0x3524d)
+#15 0x000055f66f359a3a _start /home/abuild/rpmbuild/BUILD/glibc-2.31/csu/../sysdeps/x86_64/start.S:122:0
+make: *** [Makefile:23: test_arts_analysis.bc] Aborted

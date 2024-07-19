@@ -90,14 +90,15 @@ CallBase *EDTIRBuilder::buildEDT(
   }
   /// Fill the rewiring map and rewire the arguments
   fillRewiringMapFn(this, OldFn, NewFn);
-  LLVM_DEBUG(dbgs() << "Rewiring new function arguments:\n");
-  for (auto &MapItr : RewiringMap) {
-    Value *OldV = MapItr.first;
-    Value *NewV = MapItr.second;
-    assert(OldV->getType() == NewV->getType() && "Types do not match");
-    LLVM_DEBUG(dbgs() << "  - Rewiring: " << *OldV << " -> " << *NewV << "\n");
-    OldV->replaceAllUsesWith(NewV);
-  }
+  rewireValues(RewiringMap);
+  // LLVM_DEBUG(dbgs() << "Rewiring new function arguments:\n");
+  // for (auto &MapItr : RewiringMap) {
+  //   Value *OldV = MapItr.first;
+  //   Value *NewV = MapItr.second;
+  //   assert(OldV->getType() == NewV->getType() && "Types do not match");
+  //   LLVM_DEBUG(dbgs() << "  - Rewiring: " << *OldV << " -> " << *NewV << "\n");
+  //   OldV->replaceAllUsesWith(NewV);
+  // }
   /// Create new callsite.
   CallInst *NewCI;
   if (InsertBefore)
