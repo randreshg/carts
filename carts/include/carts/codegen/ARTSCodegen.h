@@ -45,17 +45,22 @@ public:
   FunctionCallee getOrCreateRuntimeFunction(Module &M,
                                             types::RuntimeFunction FnID);
   Function *getOrCreateRuntimeFunctionPtr(types::RuntimeFunction FnID);
+  Function *getOrCreateEDTFunction(EDT &E);
+
   /// Interface to add ARTS methods
   void initializeEDT(EDT &E);
   void insertEDTEntry(EDT &E);
   CallInst *insertEDTCall(EDT &E);
+  // Function *insertEDTFn(EDT &E);
+
   void reserveEDTGuid(EDT &E);
   /// Handle interface
-  void generateEDT(EDT &E);
-  void generateParallelEDT(EDT &E);
-  void generateTaskEDT(EDT &E);
-  void generateMainEDT(EDT &E);
-  void generateSyncEDT(EDT &E);
+  void handleEDT(EDT &E);
+  // void generateEDT(EDT &E);
+  // void generateParallelEDT(EDT &E);
+  // void generateTaskEDT(EDT &E);
+  // void generateMainEDT(EDT &E);
+  // void generateSyncEDT(EDT &E);
 
   /// ---------------------------- Utils ---------------------------- ///
   /// Make \p Source branch to \p Target.
@@ -101,6 +106,8 @@ private:
   Module &M;
   /// The LLVM-IR Builder used to create IR.
   IRBuilder<> Builder;
+  /// Maps the EDT to the new function
+  DenseMap<EDT *, Function *> EDTFunctions;
 };
 } // namespace arts
 

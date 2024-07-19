@@ -17,6 +17,7 @@
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Transforms/IPO/Attributor.h"
 #include "llvm/Transforms/Utils/CallGraphUpdater.h"
 
@@ -904,7 +905,6 @@ struct AAEDTInfoFunction : AAEDTInfo {
 
   /// Check Cache to get updates if any.
   void getUpdates(Attributor &A) {
-
     LLVM_DEBUG(dbgs() << "   - Getting updates for EDT #" << EDTInfo->getID()
                       << "\n");
     SetVector<EDTUpdateInfo *> AddBack;
@@ -1470,7 +1470,7 @@ public:
     LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
     EDTGraph CARTSGraph;
     computeGraph(M, AM, CARTSGraph);
-
+    generateCode(M, CARTSGraph);
     LLVM_DEBUG(dbgs() << "\n"
                       << "-------------------------------------------------\n");
     LLVM_DEBUG(dbgs() << TAG << "Process has finished\n");
@@ -1531,11 +1531,22 @@ public:
     auto EDTNodes = CARTSGraph.getNodes();
     for (EDTGraphNode *EDTNode : EDTNodes) {
       EDT &CurrentEDT = *EDTNode->getEDT();
-      switch (CurrentEDT.getTy()) {
-      case EDTType::Task:
-        CG.generateAsyncEDT(CurrentEDT);
-        break;
-
+      // CG.insertEDTFn(CurrentEDT);
+      CG.getOrCreateEDTFunction(CurrentEDT);
+      CG.insertEDTEntry(CurrentEDT);
+      // switch (CurrentEDT.getTy()) {
+      // case EDTType::Task:
+      //   CG.generateTaskEDT(CurrentEDT);
+      //   break;
+      // case EDTType::Sync:
+      //   CG.generateSyncEDT(CurrentEDT);
+      //   break;
+      // case EDTType::Parallel:
+      //   CG.generateParallelEDT(CurrentEDT);
+      //   break;
+      // default:
+      //   llvm_unreachable("EDT Type not supported!");
+      // }
 
       // LLVM_DEBUG(dbgs() << "- EDT #" << E->getID() << " - \"" << E->getName()
       //                   << "\"\n");
@@ -1555,57 +1566,57 @@ public:
       //   LLVM_DEBUG(dbgs() << "      - " << *D << "\n");
       // }
       /// Dependencies
-      LLVM_DEBUG(dbgs() << "  - Incoming Edges:\n");
-      auto InEdges = CARTSGraph.getIncomingEdges(EDTNode);
-      if (InEdges.size() == 0) {
-        LLVM_DEBUG(dbgs() << "    - The EDT has no incoming edges\n");
-      } else {
-        /// Print the incoming edges.
-        for (auto *DepEdge : InEdges) {
-          auto *From = DepEdge->getFrom();
-          auto *FromE = From->getEDT();
-          // LLVM_DEBUG(dbgs() << "    - [");
-          // if (DepEdge->isDataEdge()) {
-          //   LLVM_DEBUG(dbgs() << "data");
-          // } else if (DepEdge->isControlEdge()) {
-          //   LLVM_DEBUG(dbgs() << "control");
-          // }
-          // if (DepEdge->hasCreationDep()) {
-          //   LLVM_DEBUG(dbgs() << "/ creation");
-          // }
-          // LLVM_DEBUG(dbgs() << "] \"EDT #" << FromE->getID() << "\"\n");
-        }
-      }
+      // LLVM_DEBUG(dbgs() << "  - Incoming Edges:\n");
+      // auto InEdges = CARTSGraph.getIncomingEdges(EDTNode);
+      // if (InEdges.size() == 0) {
+      //   LLVM_DEBUG(dbgs() << "    - The EDT has no incoming edges\n");
+      // } else {
+      //   /// Print the incoming edges.
+      //   for (auto *DepEdge : InEdges) {
+      //     auto *From = DepEdge->getFrom();
+      //     auto *FromE = From->getEDT();
+      //     // LLVM_DEBUG(dbgs() << "    - [");
+      //     // if (DepEdge->isDataEdge()) {
+      //     //   LLVM_DEBUG(dbgs() << "data");
+      //     // } else if (DepEdge->isControlEdge()) {
+      //     //   LLVM_DEBUG(dbgs() << "control");
+      //     // }
+      //     // if (DepEdge->hasCreationDep()) {
+      //     //   LLVM_DEBUG(dbgs() << "/ creation");
+      //     // }
+      //     // LLVM_DEBUG(dbgs() << "] \"EDT #" << FromE->getID() << "\"\n");
+      //   }
+      // }
 
-      LLVM_DEBUG(dbgs() << "  - Outgoing Edges:\n");
-      auto OutEdges = CARTSGraph.getOutgoingEdges(EDTNode);
-      if (OutEdges.size() == 0) {
-        LLVM_DEBUG(dbgs() << "    - The EDT has no outgoing edges\n");
-      } else {
-        /// Print the outgoing edges.
-        for (auto *DepEdge : OutEdges) {
-          auto *To = DepEdge->getTo();
-          auto *ToE = To->getEDT();
-          // LLVM_DEBUG(dbgs() << "    - [");
-          // if (DepEdge->isDataEdge()) {
-          //   LLVM_DEBUG(dbgs() << "data");
-          // } else if (DepEdge->isControlEdge()) {
-          //   LLVM_DEBUG(dbgs() << "control");
-          // }
-          // if (DepEdge->hasCreationDep()) {
-          //   LLVM_DEBUG(dbgs() << "/ creation");
-          // }
-          // LLVM_DEBUG(dbgs() << "] \"EDT #" << ToE->getID() << "\"\n");
-          // if (DepEdge->isDataEdge()) {
-          //   auto *DataEdge = cast<EDTGraphDataEdge>(DepEdge);
-          //   auto Values = DataEdge->getValues();
-          //   for (auto *V : Values) {
-          //     LLVM_DEBUG(dbgs() << "        - " << *V << "\n");
-          //   }
-          // }
-        }
-      }
-      LLVM_DEBUG(dbgs() << "\n");
+      // LLVM_DEBUG(dbgs() << "  - Outgoing Edges:\n");
+      // auto OutEdges = CARTSGraph.getOutgoingEdges(EDTNode);
+      // if (OutEdges.size() == 0) {
+      //   LLVM_DEBUG(dbgs() << "    - The EDT has no outgoing edges\n");
+      // } else {
+      //   /// Print the outgoing edges.
+      //   for (auto *DepEdge : OutEdges) {
+      //     auto *To = DepEdge->getTo();
+      //     auto *ToE = To->getEDT();
+      //     // LLVM_DEBUG(dbgs() << "    - [");
+      //     // if (DepEdge->isDataEdge()) {
+      //     //   LLVM_DEBUG(dbgs() << "data");
+      //     // } else if (DepEdge->isControlEdge()) {
+      //     //   LLVM_DEBUG(dbgs() << "control");
+      //     // }
+      //     // if (DepEdge->hasCreationDep()) {
+      //     //   LLVM_DEBUG(dbgs() << "/ creation");
+      //     // }
+      //     // LLVM_DEBUG(dbgs() << "] \"EDT #" << ToE->getID() << "\"\n");
+      //     // if (DepEdge->isDataEdge()) {
+      //     //   auto *DataEdge = cast<EDTGraphDataEdge>(DepEdge);
+      //     //   auto Values = DataEdge->getValues();
+      //     //   for (auto *V : Values) {
+      //     //     LLVM_DEBUG(dbgs() << "        - " << *V << "\n");
+      //     //   }
+      //     // }
+      //   }
+      // }
+      // LLVM_DEBUG(dbgs() << "\n");
     }
   }
 };

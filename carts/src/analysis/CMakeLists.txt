@@ -6,6 +6,7 @@ message_blue("Adding ARTSAnalysisPass")
 add_llvm_library( ARTSAnalysis
   MODULE 
   ARTSAnalysisPass.cpp
+  ${CARTS_CODEGEN_SOURCE_FILES}
   ${CARTS_UTILS_SOURCE_FILES}
   ${CARTS_ANALYSIS_GRAPH_SOURCE_FILES}
 )
