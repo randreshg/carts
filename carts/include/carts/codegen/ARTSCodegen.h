@@ -70,7 +70,8 @@ public:
   /// * \p Source is a degenerate block (no terminator because the BB is
   ///             the current head of the IR construction).
   void redirectTo(BasicBlock *Source, BasicBlock *Target);
-  void redirectTo(Function *Source, BasicBlock *Target);
+  // void redirectTo(Function *Source, BasicBlock *Target);
+  void redirectExitsTo(Function *Source, BasicBlock *Target);
   void redirectEntryAndExit(EDT &E, BasicBlock *OriginalEntry);
   /// Insertion Points
   void setInsertPoint(BasicBlock *BB);

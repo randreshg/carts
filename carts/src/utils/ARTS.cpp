@@ -109,15 +109,18 @@ EDT::EDT(EDTFunction *Fn) : Fn(Fn) {
     EDTArgType ArgTy = toEDTArgType(ArgStr->getString());
     switch (ArgTy) {
     case EDTArgType::Dep:
+      LLVM_DEBUG(dbgs() << "   - DepV: " << *V << "\n");
       Env->insertDepV(V);
       break;
     case EDTArgType::Param:
+      LLVM_DEBUG(dbgs() << "   - ParamV: " << *V << "\n");
       Env->insertParamV(V);
       break;
     default:
       llvm_unreachable("Unknown EDTArgType");
       break;
     }
+    ArgMDItr++;
   }
 }
 
