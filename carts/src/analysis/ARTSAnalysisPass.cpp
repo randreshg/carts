@@ -1470,11 +1470,12 @@ public:
     LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
     EDTGraph CARTSGraph;
     computeGraph(M, AM, CARTSGraph);
+    /// 
     generateCode(M, CARTSGraph);
     LLVM_DEBUG(dbgs() << "\n"
                       << "-------------------------------------------------\n");
     LLVM_DEBUG(dbgs() << TAG << "Process has finished\n");
-    CARTSGraph.print();
+    LLVM_DEBUG(dbgs() << "\n" << M << "\n");
     LLVM_DEBUG(dbgs() << "\n"
                       << "-------------------------------------------------\n");
     return PreservedAnalyses::all();
@@ -1524,6 +1525,7 @@ public:
     ChangeStatus Changed = A.run();
     LLVM_DEBUG(dbgs() << "[Attributor] Done with " << Functions.size()
                       << " functions, result: " << Changed << ".\n");
+    Graph.print();
   }
 
   void generateCode(Module &M, EDTGraph &CARTSGraph) {

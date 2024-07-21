@@ -8,8 +8,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #include "carts/codegen/ARTSCodegen.h"
@@ -122,9 +124,11 @@ Function *ARTSCodegen::getOrCreateEDTFunction(EDT &E) {
 
   LLVM_DEBUG(dbgs() << TAG << "Creating function for EDT #" << E.getID()
                     << "\n");
+  Function *OldFn = E.getFn();
   Function *EDTFn =
       getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
-  const auto EDTName = E.getName() + "_edt";
+  const auto EDTName =
+      "edt." + std::to_string(E.getID()) + "." + toString(E.getTy());
   EDTFn =
       Function::Create(EdtFunction, GlobalValue::InternalLinkage, EDTName, M);
   (EDTFn->arg_begin())->setName("paramc");
@@ -132,14 +136,21 @@ Function *ARTSCodegen::getOrCreateEDTFunction(EDT &E) {
   (EDTFn->arg_begin() + 2)->setName("depc");
   (EDTFn->arg_begin() + 3)->setName("depv");
   EDTFunctions[&E] = EDTFn;
-  /// Entry and Exit BB
+  /// Redirect Entry BB
   BasicBlock *EntryBB = BasicBlock::Create(M.getContext(), "entry", EDTFn);
+  BasicBlock *OldEntryBB = &OldFn->getEntryBlock();
+  OldEntryBB->setName("edt.body");
+  redirectTo(EntryBB, OldEntryBB);
+
+  /// Redirect Exit BB
   BasicBlock *ExitBB = BasicBlock::Create(M.getContext(), "exit", EDTFn);
   Builder.SetInsertPoint(ExitBB);
   Builder.CreateRetVoid();
-  /// Jump from EntryBB to ExitBB
-  Builder.SetInsertPoint(EntryBB);
-  Builder.CreateBr(ExitBB);
+  redirectExitsTo(OldFn, ExitBB);
+
+  /// Splice the body of the old function right into the new function
+  EDTFn->splice(++EDTFn->begin(), E.getFn());
+
   /// Return the created function
   LLVM_DEBUG(dbgs() << TAG << "EDT Function " << EDTName << " created\n");
   return EDTFn;
@@ -208,6 +219,8 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
     auto DepVName = (OriginalVal->getName() == "")
                         ? ("depv." + std::to_string(Index))
                         : ("depv." + std::string(OriginalVal->getName()));
+    LLVM_DEBUG(dbgs() << "   - DepV[" << Index << "]: " << *OriginalVal
+                      << "\n");
     Value *DepVArrayElemPtr =
         Builder.CreateConstInBoundsGEP2_32(EdtDep, DepVArg, Index, 2, DepVName);
     Value *CastedVal =
@@ -307,10 +320,20 @@ void ARTSCodegen::redirectTo(BasicBlock *Source, BasicBlock *Target) {
   BranchInst::Create(Target, Source);
 }
 
-void ARTSCodegen::redirectTo(Function *Source, BasicBlock *Target) {
-  for (auto &SourceBB : *Source)
-    redirectTo(&SourceBB, Target);
+void ARTSCodegen::redirectExitsTo(Function *Source, BasicBlock *Target) {
+  for (BasicBlock &BB : *Source) {
+    Instruction *Terminator = BB.getTerminator();
+    if (Terminator->getNumSuccessors() > 0)
+      continue;
+    /// Remove the terminator and redirect the exit and
+    Terminator->eraseFromParent();
+    redirectTo(&BB, Target);
+  }
 }
+// void ARTSCodegen::redirectTo(Function *Source, BasicBlock *Target) {
+//   for (BasicBlock &SourceBB : *Source)
+//     redirectTo(&SourceBB, Target);
+// }
 
 void ARTSCodegen::redirectEntryAndExit(EDT &E, BasicBlock *OriginalEntry) {
   /// Redirect Entry
