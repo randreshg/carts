@@ -103,8 +103,12 @@ class EDT {
 public:
   EDT(EDTFunction *Fn);
   virtual ~EDT();
+  
+  /// Static interface
   static uint32_t Counter;
   static EDT *get(EDTFunction *Fn);
+  static void setMetadata(EDTIRBuilder &Builder);
+  static bool classof(const EDT *E) { return true; }
 
   /// Data Environment
   void insertValueToEnv(Value *Val);
@@ -117,31 +121,45 @@ public:
   Twine getName();
   EDTTypeKind getTypeKind() const;
   EDTType getTy() const;
-  uint32_t getNode();
-  EDTCallBase *getCall();
-
-  /// Setters
-  void setCall(EDTCallBase *Call);
-  void setNode(uint32_t Node);
 
   /// Helpers
   bool isAsync();
   bool isDep(uint32_t CallArgItr);
 
-  /// Static interface
-  static void setMetadata(EDTIRBuilder &Builder);
-  static bool classof(const EDT *E) { return true; }
-
 protected:
   EDTFunction *Fn = nullptr;
   EDTEnvironment *Env = nullptr;
-  EDTCallBase *Call = nullptr;
   EDTType Ty = EDTType::Unknown;
   EDTTypeKind Kind;
 
 private:
   uint32_t ID;
+
+/// What we learned after running the Attributor
+public:
+  void setCall(EDTCallBase *Call);
+  void setParent(EDT *Parent);
+  void setNode(uint32_t Node);
+
+  EDTCallBase *getCall();
+  EDT *getParent();
+  uint32_t getNode();
+
+private:
   uint32_t Node = 0;
+  EDTCallBase *Call = nullptr;
+  EDT *Parent = nullptr;
+
+/// Information regarding the generated EDT
+public:
+  Function *getNewFn();
+  Value *getGuidAddress();
+  void setNewFn(Function *Fn);
+  void setGuidAddress(Value *V);
+
+private:
+  Function *NewFn = nullptr;
+  Value *GuidAddress = nullptr;
 };
 
 inline raw_ostream &operator<<(raw_ostream &OS, EDT &E) {

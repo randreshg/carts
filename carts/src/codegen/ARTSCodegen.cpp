@@ -11,7 +11,7 @@
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/Error.h"
+// #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 
 #include "carts/codegen/ARTSCodegen.h"
@@ -125,16 +125,15 @@ Function *ARTSCodegen::getOrCreateEDTFunction(EDT &E) {
   LLVM_DEBUG(dbgs() << TAG << "Creating function for EDT #" << E.getID()
                     << "\n");
   Function *OldFn = E.getFn();
-  Function *EDTFn =
-      getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
-  const auto EDTName =
-      "edt." + std::to_string(E.getID()) + "." + toString(E.getTy());
-  EDTFn =
-      Function::Create(EdtFunction, GlobalValue::InternalLinkage, EDTName, M);
+  auto FnName = E.getName();
+  LLVM_DEBUG(dbgs() << " - EDT Name: " << FnName << "\n");
+  Function *EDTFn = Function::Create(EdtFunction, GlobalValue::InternalLinkage,
+                                     E.getName(), M);
   (EDTFn->arg_begin())->setName("paramc");
   (EDTFn->arg_begin() + 1)->setName("paramv");
   (EDTFn->arg_begin() + 2)->setName("depc");
   (EDTFn->arg_begin() + 3)->setName("depv");
+  E.setNewFn(EDTFn);
   EDTFunctions[&E] = EDTFn;
   /// Redirect Entry BB
   BasicBlock *EntryBB = BasicBlock::Create(M.getContext(), "entry", EDTFn);
@@ -150,9 +149,6 @@ Function *ARTSCodegen::getOrCreateEDTFunction(EDT &E) {
 
   /// Splice the body of the old function right into the new function
   EDTFn->splice(++EDTFn->begin(), E.getFn());
-
-  /// Return the created function
-  LLVM_DEBUG(dbgs() << TAG << "EDT Function " << EDTName << " created\n");
   return EDTFn;
 }
 
@@ -235,7 +231,7 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
 }
 
 CallInst *ARTSCodegen::insertEDTCall(EDT &E) {
-  // LLVM_DEBUG(dbgs() << TAG << "Inserting EDT Call\n");
+  LLVM_DEBUG(dbgs() << TAG << "Inserting Call for EDT #" << E.getID() << "\n");
   // auto *EdtBody = E.getTaskBody();
   // auto &EdtEnv = E.getEnv();
   // const auto EdtName = E.getName();
@@ -288,21 +284,40 @@ CallInst *ARTSCodegen::insertEDTCall(EDT &E) {
   // return Builder.CreateCall(F, Args);
 }
 
-void ARTSCodegen::reserveEDTGuid(EDT &E) {
-  // const auto Node = 0;
-  // /// Create the call to reserve the GUID
-  // ConstantInt *ARTS_EDT_Enum =
-  //     ConstantInt::get(Builder.getContext(), APInt(32, 1));
-  // Value *Args[] = {
-  //     ARTS_EDT_Enum,
-  //     Builder.CreateIntCast(ConstantInt::get(Int32, Node), Int32, false)};
-  // CallInst *ReserveGuidCall = Builder.CreateCall(
-  //     getOrCreateRuntimeFunctionPtr(ARTSRTL_artsReserveGuidRoute), Args);
-  // /// Create allocation of the GUID
-  // E.GuidAddr =
-  //     Builder.CreateAlloca(Int32Ptr, nullptr, E.getName() + "_guid.addr");
-  // /// Store the GUID
-  // Builder.CreateStore(ReserveGuidCall, E.GuidAddr);
+Instruction *ARTSCodegen::reserveEDTGuid(EDT &E) {
+  LLVM_DEBUG(dbgs() << TAG << "Reserving GUID for EDT #" << E.getID() << "\n");
+  EDT *EDTParent = E.getParent();
+  if (!EDTParent) {
+    LLVM_DEBUG(dbgs() << "     EDT #" << E.getID() << " is a root EDT\n");
+    return nullptr;
+  }
+
+  auto *ParentNewFn = getOrCreateEDTFunction(*EDTParent);
+  auto &ParentEntryBB = ParentNewFn->getEntryBlock();
+  auto OldInsertPoint = Builder.saveIP();
+
+  if (ParentEntryBB.getTerminator())
+    Builder.SetInsertPoint(ParentEntryBB.getTerminator());
+  else
+    Builder.SetInsertPoint(&ParentEntryBB);
+
+  /// Create the call to reserve the GUID
+  ConstantInt *ARTS_EDT_Enum =
+      ConstantInt::get(Builder.getContext(), APInt(32, 1));
+  Value *Args[] = {ARTS_EDT_Enum,
+                   Builder.CreateIntCast(ConstantInt::get(Int32, E.getNode()),
+                                         Int32, false)};
+  CallInst *ReserveGuidCall = Builder.CreateCall(
+      getOrCreateRuntimeFunctionPtr(ARTSRTL_artsReserveGuidRoute), Args);
+  /// Create allocation of the GUID
+  auto *GuidAddress =
+      Builder.CreateAlloca(Int32Ptr, nullptr, E.getName() + "_guid.addr");
+  Builder.CreateStore(ReserveGuidCall, GuidAddress);
+  E.setGuidAddress(GuidAddress);
+
+  /// Restore the insertion point
+  Builder.restoreIP(OldInsertPoint);
+  return GuidAddress;
 }
 
 /// ---------------------------- Utils ---------------------------- ///
@@ -330,6 +345,7 @@ void ARTSCodegen::redirectExitsTo(Function *Source, BasicBlock *Target) {
     redirectTo(&BB, Target);
   }
 }
+
 // void ARTSCodegen::redirectTo(Function *Source, BasicBlock *Target) {
 //   for (BasicBlock &SourceBB : *Source)
 //     redirectTo(&SourceBB, Target);

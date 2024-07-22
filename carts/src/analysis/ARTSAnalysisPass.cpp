@@ -769,6 +769,7 @@ struct AAEDTInfoFunction : AAEDTInfo {
       LLVM_DEBUG(dbgs() << "   - ParentEDT: EDT #" << ParentEDT->getID()
                         << "\n");
       assert(ParentEDT && "EDT is not called from another EDT");
+      EDTInfo->setParent(ParentEDT);
 
       /// Check if it is a sync EDT
       if (EDTInfo->isAsync())
@@ -1534,7 +1535,10 @@ public:
     for (EDTGraphNode *EDTNode : EDTNodes) {
       EDT &CurrentEDT = *EDTNode->getEDT();
       // CG.insertEDTFn(CurrentEDT);
-      CG.getOrCreateEDTFunction(CurrentEDT);
+      if(!CG.reserveEDTGuid(CurrentEDT))
+        continue;
+
+      //CG.getOrCreateEDTFunction(CurrentEDT);
       CG.insertEDTEntry(CurrentEDT);
       // switch (CurrentEDT.getTy()) {
       // case EDTType::Task:
