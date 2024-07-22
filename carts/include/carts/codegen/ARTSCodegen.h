@@ -53,7 +53,7 @@ public:
   CallInst *insertEDTCall(EDT &E);
   // Function *insertEDTFn(EDT &E);
 
-  void reserveEDTGuid(EDT &E);
+  Instruction *reserveEDTGuid(EDT &E);
   /// Handle interface
   void handleEDT(EDT &E);
   // void generateEDT(EDT &E);

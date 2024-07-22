@@ -186,15 +186,12 @@ void EDT::insertValueToEnv(Value *Val, bool IsDepV) {
 uint32_t EDT::getID() { return ID; }
 EDTFunction *EDT::getFn() { return Fn; }
 EDTEnvironment &EDT::getDataEnv() { return *Env; }
-Twine EDT::getName() { return Fn->getName(); }
+Twine EDT::getName() {
+  return "edt." + std::to_string(ID) + "." + toString(Ty);
+}
 EDTTypeKind EDT::getTypeKind() const { return Kind; }
 EDTType EDT::getTy() const { return Ty; }
-uint32_t EDT::getNode() { return Node; }
-EDTCallBase *EDT::getCall() { return Call; }
 
-/// Setters
-void EDT::setCall(EDTCallBase *Call) { this->Call = Call; }
-void EDT::setNode(uint32_t Node) { this->Node = Node; }
 
 /// Helpers
 bool EDT::isAsync() { return !isa<SyncEDT>(this); }
@@ -203,6 +200,21 @@ bool EDT::isDep(uint32_t CallArgItr) {
   auto *Arg = Fn->getArg(CallArgItr);
   return Env->isDepV(Arg);
 }
+
+/// What we learned after running the Attributor
+void EDT::setCall(EDTCallBase *Call) { this->Call = Call; }
+void EDT::setParent(EDT *Parent) { this->Parent = Parent; }
+void EDT::setNode(uint32_t Node) { this->Node = Node; }
+
+EDTCallBase *EDT::getCall() { return Call; }
+uint32_t EDT::getNode() { return Node; }
+EDT *EDT::getParent() { return Parent; }
+
+/// Information regarding the generated EDT
+Function *EDT::getNewFn() { return NewFn; }
+Value *EDT::getGuidAddress() { return GuidAddress; }
+void EDT::setNewFn(Function *Fn) { NewFn = Fn; }
+void EDT::setGuidAddress(Value *V) { GuidAddress = V; }
 
 /// Task EDT
 TaskEDT::TaskEDT(EDTFunction *Fn) : EDT(Fn) {
