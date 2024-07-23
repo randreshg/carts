@@ -41,7 +41,7 @@ void getDominatedBBs(BasicBlock *FromBB, DominatorTree &DT,
   }
 }
 
-void rewireValues(DenseMap<Value *, Value *> &RewiringMap) {
+void rewireValues(DenseMap<Value *, Value *> &RewiringMap, Function *Parent) {
   LLVM_DEBUG(dbgs() << "Rewiring new function arguments:\n");
   for (auto &MapItr : RewiringMap) {
     Value *OldValue = MapItr.first;
@@ -49,7 +49,11 @@ void rewireValues(DenseMap<Value *, Value *> &RewiringMap) {
     assert(OldValue->getType() == NewValue->getType() && "Types do not match");
     LLVM_DEBUG(dbgs() << "  - Rewiring: " << *OldValue << " -> " << *NewValue
                       << "\n");
-    OldValue->replaceAllUsesWith(NewValue);
+    if (Parent) {
+      OldValue->replaceUsesWithIf(
+          NewValue, [Parent](Use &U) { return U.getUser() != Parent; });
+    } else
+      OldValue->replaceAllUsesWith(NewValue);
   }
 }
 

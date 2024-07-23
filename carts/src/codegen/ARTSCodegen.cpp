@@ -126,7 +126,6 @@ Function *ARTSCodegen::getOrCreateEDTFunction(EDT &E) {
                     << "\n");
   Function *OldFn = E.getFn();
   auto FnName = E.getName();
-  LLVM_DEBUG(dbgs() << " - EDT Name: " << FnName << "\n");
   Function *EDTFn = Function::Create(EdtFunction, GlobalValue::InternalLinkage,
                                      E.getName(), M);
   (EDTFn->arg_begin())->setName("paramc");
@@ -150,6 +149,50 @@ Function *ARTSCodegen::getOrCreateEDTFunction(EDT &E) {
   /// Splice the body of the old function right into the new function
   EDTFn->splice(++EDTFn->begin(), E.getFn());
   return EDTFn;
+}
+
+Value *ARTSCodegen::getOrCreateEDTGuid(EDT &E) {
+  /// Check if the EDT already has a GUID
+  if (E.getGuidAddress())
+    return E.getGuidAddress();
+
+  LLVM_DEBUG(dbgs() << TAG << "Reserving GUID for EDT #" << E.getID() << "\n");
+  /// EDTs are allocated in the parent sync EDT function
+  EDT *EDTParentSync = E.getParentSync();
+  EDT *EDTParent = EDTParentSync ? EDTParentSync : E.getParent();
+  if (!EDTParent) {
+    LLVM_DEBUG(dbgs() << "     EDT #" << E.getID()
+                      << " doesn't have a parent EDT\n");
+    return nullptr;
+  }
+
+  Function *ParentSyncNewFn = getOrCreateEDTFunction(*EDTParent);
+  BasicBlock &ParentSyncEntryBB = ParentSyncNewFn->getEntryBlock();
+  auto OldInsertPoint = Builder.saveIP();
+
+  if (ParentSyncEntryBB.getTerminator())
+    Builder.SetInsertPoint(ParentSyncEntryBB.getTerminator());
+  else
+    Builder.SetInsertPoint(&ParentSyncEntryBB);
+
+  /// Create the call to reserve the GUID
+  ConstantInt *ARTS_EDT_Enum =
+      ConstantInt::get(Builder.getContext(), APInt(32, 1));
+  Value *Args[] = {ARTS_EDT_Enum,
+                   Builder.CreateIntCast(ConstantInt::get(Int32, E.getNode()),
+                                         Int32, false)};
+  CallInst *ReserveGuidCall = Builder.CreateCall(
+      getOrCreateRuntimeFunctionPtr(ARTSRTL_artsReserveGuidRoute), Args);
+  /// Create allocation of the GUID
+  auto *GuidAddress =
+      Builder.CreateAlloca(Int32Ptr, nullptr, E.getName() + "_guid.addr");
+  Builder.CreateStore(ReserveGuidCall, GuidAddress);
+  E.setGuidAddress(GuidAddress);
+  EDTGuids.insert(GuidAddress);
+
+  /// Restore the insertion point
+  Builder.restoreIP(OldInsertPoint);
+  return GuidAddress;
 }
 
 void ARTSCodegen::insertEDTEntry(EDT &E) {
@@ -284,40 +327,16 @@ CallInst *ARTSCodegen::insertEDTCall(EDT &E) {
   // return Builder.CreateCall(F, Args);
 }
 
-Instruction *ARTSCodegen::reserveEDTGuid(EDT &E) {
-  LLVM_DEBUG(dbgs() << TAG << "Reserving GUID for EDT #" << E.getID() << "\n");
-  EDT *EDTParent = E.getParent();
-  if (!EDTParent) {
-    LLVM_DEBUG(dbgs() << "     EDT #" << E.getID() << " is a root EDT\n");
-    return nullptr;
-  }
+void ARTSCodegen::signalEDTGuid(EDT &From, EDT &To, Value *Signal) {
+  Value *FromGuidInt = Builder.CreatePtrToInt(From.getGuidAddress(), Int32);
+  Value *ToGuidInt = Builder.CreatePtrToInt(To.getGuidAddress(), Int32);
+  Value *Args[] = {FromGuidInt, ToGuidInt};
 
-  auto *ParentNewFn = getOrCreateEDTFunction(*EDTParent);
-  auto &ParentEntryBB = ParentNewFn->getEntryBlock();
-  auto OldInsertPoint = Builder.saveIP();
+  // void artsSignalEdtValue(artsGuid_t edtGuid, uint32_t slot, uint64_t data);
+  // void artsSignalEdtPtr(artsGuid_t edtGuid, uint32_t slot, void * ptr, unsigned int size);
 
-  if (ParentEntryBB.getTerminator())
-    Builder.SetInsertPoint(ParentEntryBB.getTerminator());
-  else
-    Builder.SetInsertPoint(&ParentEntryBB);
-
-  /// Create the call to reserve the GUID
-  ConstantInt *ARTS_EDT_Enum =
-      ConstantInt::get(Builder.getContext(), APInt(32, 1));
-  Value *Args[] = {ARTS_EDT_Enum,
-                   Builder.CreateIntCast(ConstantInt::get(Int32, E.getNode()),
-                                         Int32, false)};
-  CallInst *ReserveGuidCall = Builder.CreateCall(
-      getOrCreateRuntimeFunctionPtr(ARTSRTL_artsReserveGuidRoute), Args);
-  /// Create allocation of the GUID
-  auto *GuidAddress =
-      Builder.CreateAlloca(Int32Ptr, nullptr, E.getName() + "_guid.addr");
-  Builder.CreateStore(ReserveGuidCall, GuidAddress);
-  E.setGuidAddress(GuidAddress);
-
-  /// Restore the insertion point
-  Builder.restoreIP(OldInsertPoint);
-  return GuidAddress;
+  // Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsSignalEdt);
+  // Builder.CreateCall(F, Args);
 }
 
 /// ---------------------------- Utils ---------------------------- ///

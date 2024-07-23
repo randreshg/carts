@@ -45,15 +45,18 @@ public:
   FunctionCallee getOrCreateRuntimeFunction(Module &M,
                                             types::RuntimeFunction FnID);
   Function *getOrCreateRuntimeFunctionPtr(types::RuntimeFunction FnID);
-  Function *getOrCreateEDTFunction(EDT &E);
 
   /// Interface to add ARTS methods
+  Function *getOrCreateEDTFunction(EDT &E);
+  Value *getOrCreateEDTGuid(EDT &E);
   void initializeEDT(EDT &E);
   void insertEDTEntry(EDT &E);
   CallInst *insertEDTCall(EDT &E);
+  void signalEDTGuid(EDT &From, EDT &To, Value *Signal);
+  void signalEDTValue(EDT &From, EDT &To, Value *Signal);
+  void signalEDTDataBlock(EDT &From, EDT &To, Value *Signal);
   // Function *insertEDTFn(EDT &E);
 
-  Instruction *reserveEDTGuid(EDT &E);
   /// Handle interface
   void handleEDT(EDT &E);
   // void generateEDT(EDT &E);
@@ -61,6 +64,9 @@ public:
   // void generateTaskEDT(EDT &E);
   // void generateMainEDT(EDT &E);
   // void generateSyncEDT(EDT &E);
+
+  /// Guid interface
+  bool isEDTGuid(Value *V);
 
   /// ---------------------------- Utils ---------------------------- ///
   /// Make \p Source branch to \p Target.
@@ -109,6 +115,8 @@ private:
   IRBuilder<> Builder;
   /// Maps the EDT to the new function
   DenseMap<EDT *, Function *> EDTFunctions;
+  /// Set of EDTGuids
+  DenseSet<Value *> EDTGuids;
 };
 } // namespace arts
 

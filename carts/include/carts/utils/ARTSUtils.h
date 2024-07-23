@@ -13,7 +13,6 @@
 
 #include "carts/utils/ARTSTypes.h"
 
-
 /// ------------------------------------------------------------------- ///
 ///                            ARTS UTILS                               ///
 /// Set of utilities to handle IR values and functions.
@@ -29,7 +28,9 @@ void getDominatedBBs(BasicBlock *FromBB, DominatorTree &DT,
 /// Rewire the values in the RewiringMap.
 ///   - Key: Old Value
 ///   - Value: New Value
-void rewireValues(DenseMap<Value *, Value *> &RewiringMap);
+/// If a parent is provided, only uses in the parent are rewired.
+void rewireValues(DenseMap<Value *, Value *> &RewiringMap,
+                  Function *Parent = nullptr);
 
 /// Function
 void removeFunction(Function *F);

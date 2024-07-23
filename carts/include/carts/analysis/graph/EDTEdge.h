@@ -5,6 +5,7 @@
 #define LLVM_EDTEDGE_H
 
 #include "carts/analysis/graph/EDTGraph.h"
+#include "carts/utils/ARTS.h"
 #include <unordered_set>
 
 /// ------------------------------------------------------------------- ///
@@ -26,7 +27,7 @@ public:
   }
   bool hasCreationDep() { return HasCreationDep; }
   virtual bool isDataEdge() const = 0;
-  virtual bool isControlEdge() const  = 0;
+  virtual bool isControlEdge() const = 0;
 
   static bool classof(const EDTGraphEdge *E) { return true; }
 
@@ -51,35 +52,33 @@ private:
   // bool IsLoop = false;
 };
 
-class EDTGraphDataEdgeVal;
+class EDTGraphDataBlockEdge;
 class EDTGraphDataEdge : public EDTGraphEdge {
 public:
   EDTGraphDataEdge(EDTGraphNode *From, EDTGraphNode *To);
   virtual ~EDTGraphDataEdge();
-  void addValue(Value *V);
-  void removeValue(Value *V);
-  // std::unordered_set<EDTGraphDataEdgeVal *> getValues() { return Values; }
-  std::unordered_set<Value *> getValues() { return Values; }
+  void addDataBlock(EDTDataBlock *DB);
+  void removeDataBlock(EDTDataBlock *DB);
+  std::unordered_set<EDTGraphDataBlockEdge *> getDataBlocks() { return DataBlocks; }
   bool isDataEdge() const override { return true; }
   bool isControlEdge() const override { return false; }
 
   static bool classof(const EDTGraphEdge *E) { return E->isDataEdge(); }
 
 private:
-  // std::unordered_set<EDTGraphDataEdgeVal *> Values;
-  std::unordered_set<Value *> Values;
+  std::unordered_set<EDTGraphDataBlockEdge *> DataBlocks;
 };
 
-class EDTGraphDataEdgeVal {
+class EDTGraphDataBlockEdge {
 public:
-  EDTGraphDataEdgeVal(EDTGraphDataEdge *Parent, Value *V);
-  ~EDTGraphDataEdgeVal();
+  EDTGraphDataBlockEdge(EDTGraphDataEdge *Parent, EDTDataBlock *DB);
+  ~EDTGraphDataBlockEdge();
   EDTGraphDataEdge *getParent() { return Parent; }
-  Value *getValue() { return V; }
+  EDTDataBlock *getDataBlock() { return DB; }
 
 private:
   EDTGraphDataEdge *Parent;
-  Value *V;
+  EDTDataBlock *DB;
 };
 
 } // namespace arts
