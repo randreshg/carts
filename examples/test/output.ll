@@ -23,6 +23,7 @@ test_arts_ir.bc
 [arts] Creating EDT #0 for function: main
 [arts] Creating Task EDT for function: main
 [arts] Creating Main EDT for function: main
+
 [AAEDTInfoFunction::initialize] EDT #0 for function "main"
    - Failed to visit all Callsites!
 [arts] Function: carts.edt has CARTS Metadata
@@ -34,6 +35,7 @@ test_arts_ir.bc
 [arts] Creating Task EDT for function: carts.edt
 [arts] Creating Sync EDT for function: carts.edt
 [arts] Creating Parallel EDT for function: carts.edt
+
 [AAEDTInfoFunction::initialize] EDT #1 for function "carts.edt"
    - ParentEDT: EDT #0
 [arts] Function: carts.edt.3 has CARTS Metadata
@@ -50,6 +52,7 @@ test_arts_ir.bc
    - ParamV: i32 %2
    - ParamV: i32 %3
 [arts] Creating Task EDT for function: carts.edt.1
+
 [AAEDTInfoFunction::initialize] EDT #3 for function "carts.edt.1"
    - ParentEDT: EDT #1
 [arts] Function: carts.edt.2 has CARTS Metadata
@@ -57,19 +60,21 @@ test_arts_ir.bc
    - DepV: ptr %0
    - ParamV: i32 %1
 [arts] Creating Task EDT for function: carts.edt.2
+
 [AAEDTInfoFunction::initialize] EDT #4 for function "carts.edt.2"
    - ParentEDT: EDT #1
+
 [AAEDTInfoFunction::initialize] EDT #2 for function "carts.edt.3"
    - ParentEDT: EDT #0
+
 [AAEDTInfoFunction::updateImpl] EDT #0
-[arts] Function: rand doesn't have CARTS Metadata
-[arts] Function: rand doesn't have CARTS Metadata
    - EDT #1 is a child of EDT #0
         - Creating edge from "EDT #0" to "EDT #1"
           Control Edge
    - EDT #2 is a child of EDT #0
         - Creating edge from "EDT #0" to "EDT #2"
           Control Edge
+
 [AAEDTInfoFunction::updateImpl] EDT #1
    - EDT #3 is a child of EDT #1
         - Creating edge from "EDT #1" to "EDT #3"
@@ -77,85 +82,142 @@ test_arts_ir.bc
    - EDT #4 is a child of EDT #1
         - Creating edge from "EDT #1" to "EDT #4"
           Control Edge
+
 [AAEDTInfoFunction::updateImpl] EDT #3
-[arts] Function: llvm.experimental.noalias.scope.decl doesn't have CARTS Metadata
-[arts] Function: printf doesn't have CARTS Metadata
    - All ReachedEDTs are fixed for EDT #3
    - EDT #3 is async. No updates to push
    - Getting updates for EDT #3
    - Finished getting updates for EDT #3
+
 [AAEDTInfoCallsite::initialize] EDT #3
+
 [AAEDTInfoCallsite::updateImpl] EDT #3
+
 [AAEDTInfoCallsiteArg::initialize] CallArg #0 from EDT #3
+
 [AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTDataBlockInfoCtxAndVal::initialize] Value ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoVal::initialize] Value ptr %2
+
+[AAEDTDataBlockInfoCtxAndVal::initialize] ptr %2 from EDT #3
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2 from EDT #3
+
+[AAEDTDataBlockInfoVal::initialize] ptr %2
+
 [AAEDTDataBlockInfoVal::updateImpl] ptr %2
    - AAPointerInfo is not at fixpoint!
+
 [AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #3
+
 [AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTDataBlockInfoCtxAndVal::initialize] Value ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoVal::initialize] Value ptr %3
+
+[AAEDTDataBlockInfoCtxAndVal::initialize] ptr %3 from EDT #3
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #3
+
+[AAEDTDataBlockInfoVal::initialize] ptr %3
+
 [AAEDTDataBlockInfoVal::updateImpl] ptr %3
    - AAPointerInfo is not at fixpoint!
+
 [AAEDTInfoCallsiteArg::initialize] CallArg #2 from EDT #3
+
 [AAEDTInfoCallsiteArg::initialize] CallArg #3 from EDT #3
+
 [AAEDTInfoFunction::updateImpl] EDT #4
-[arts] Function: llvm.experimental.noalias.scope.decl doesn't have CARTS Metadata
-[arts] Function: printf doesn't have CARTS Metadata
    - All ReachedEDTs are fixed for EDT #4
    - EDT #4 is async. No updates to push
    - Getting updates for EDT #4
    - Finished getting updates for EDT #4
+
 [AAEDTInfoCallsite::initialize] EDT #4
+
 [AAEDTInfoCallsite::updateImpl] EDT #4
+
 [AAEDTInfoCallsiteArg::initialize] CallArg #0 from EDT #4
+
 [AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTDataBlockInfoCtxAndVal::initialize] Value ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
+
+[AAEDTDataBlockInfoCtxAndVal::initialize] ptr %3 from EDT #4
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #4
+
 [AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #4
+
 [AAEDTInfoFunction::updateImpl] EDT #2
-[arts] Function: printf doesn't have CARTS Metadata
    - All ReachedEDTs are fixed for EDT #2
    - EDT #2 is async. No updates to push
    - Getting updates for EDT #2
    - Finished getting updates for EDT #2
+
 [AAEDTInfoCallsite::initialize] EDT #2
+
 [AAEDTInfoCallsite::updateImpl] EDT #2
+
 [AAEDTInfoCallsiteArg::initialize] CallArg #0 from EDT #2
+
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTDataBlockInfoCtxAndVal::initialize] Value   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoVal::initialize] Value   %number = alloca i32, align 4
+
+[AAEDTDataBlockInfoCtxAndVal::initialize]   %number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoVal::initialize]   %number = alloca i32, align 4
+
 [AAEDTDataBlockInfoVal::updateImpl]   %number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
+
 [AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #2
+
 [AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTDataBlockInfoCtxAndVal::initialize] Value   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoVal::initialize] Value   %random_number = alloca i32, align 4
+
+[AAEDTDataBlockInfoCtxAndVal::initialize]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoVal::initialize]   %random_number = alloca i32, align 4
+
 [AAEDTDataBlockInfoVal::updateImpl]   %random_number = alloca i32, align 4
    - ReachedLocalEDTs: EDT #1
    - ReachedLocalEDTs: EDT #2
-[AAEDTDataBlockInfoVal::initialize] Value ptr %0
+   - Number of ReachedLocalEDTs: 2
+
+[AAEDTDataBlockInfoVal::initialize] ptr %0
+
 [AAEDTDataBlockInfoVal::updateImpl] ptr %0
-[AAEDTDataBlockInfoVal::initialize] Value ptr %random_number
+   - No local EDTs reached!
+   - Number of ReachedRemoteEDTs: 0
+
+[AAEDTDataBlockInfoVal::initialize] ptr %random_number
+
 [AAEDTDataBlockInfoVal::updateImpl] ptr %random_number
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
+   - No local EDTs reached!
+   - Number of ReachedRemoteEDTs: 0
+   - Number of ReachedRemoteEDTs: 0
+ ReachabilityInfo is at fixpoint!
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync remote dependencies
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+   - Analyzing sync remote dependencies
+
 [AAEDTInfoCallsiteArg::initialize] CallArg #2 from EDT #2
+
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTDataBlockInfoCtxAndVal::initialize] Value   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoVal::initialize] Value   %shared_number = alloca i32, align 4
+
+[AAEDTDataBlockInfoCtxAndVal::initialize]   %shared_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoVal::initialize]   %shared_number = alloca i32, align 4
+
 [AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
+
 [AAEDTInfoFunction::updateImpl] EDT #0
-[arts] Function: rand doesn't have CARTS Metadata
-[arts] Function: rand doesn't have CARTS Metadata
    - EDT #1 is a child of EDT #0
    - EDT #2 is a child of EDT #0
+
 [AAEDTInfoFunction::updateImpl] EDT #1
    - EDT #3 is a child of EDT #1
    - EDT #4 is a child of EDT #1
@@ -167,934 +229,353 @@ test_arts_ir.bc
       - Pushing update to EDT #4
    - Getting updates for EDT #1
    - Finished getting updates for EDT #1
+
 [AAEDTInfoCallsite::initialize] EDT #1
+
 [AAEDTInfoCallsite::updateImpl] EDT #1
+
 [AAEDTInfoCallsiteArg::initialize] CallArg #0 from EDT #1
+
 [AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::initialize] Value   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
+
+[AAEDTDataBlockInfoCtxAndVal::initialize]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+ ReachabilityInfo is at fixpoint!
+   - Analyzing local dependencies
+   - Analyzing sync remote dependencies
+
 [AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #1
+
 [AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::initialize] Value   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoVal::initialize] Value   %NewRandom = alloca i32, align 4
+
+[AAEDTDataBlockInfoCtxAndVal::initialize]   %NewRandom = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoVal::initialize]   %NewRandom = alloca i32, align 4
+
 [AAEDTDataBlockInfoVal::updateImpl]   %NewRandom = alloca i32, align 4
    - ReachedLocalEDTs: EDT #1
-[AAEDTDataBlockInfoVal::initialize] Value ptr %1
+   - Number of ReachedLocalEDTs: 1
+
+[AAEDTDataBlockInfoVal::initialize] ptr %1
+
 [AAEDTDataBlockInfoVal::updateImpl] ptr %1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
+   - No local EDTs reached!
+   - Number of ReachedRemoteEDTs: 0
+   - Number of ReachedRemoteEDTs: 0
+ ReachabilityInfo is at fixpoint!
+   - Analyzing local dependencies
+   - Analyzing sync remote dependencies
+
 [AAEDTInfoCallsiteArg::initialize] CallArg #2 from EDT #1
+
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::initialize] Value   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
+
+[AAEDTDataBlockInfoCtxAndVal::initialize]   %number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #1
+
 [AAEDTInfoCallsiteArg::initialize] CallArg #3 from EDT #1
+
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::initialize] Value   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
+
+[AAEDTDataBlockInfoCtxAndVal::initialize]   %shared_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+
 [AAEDTInfoFunction::updateImpl] EDT #3
    - Getting updates for EDT #3
    - Finished getting updates for EDT #3
+
 [AAEDTInfoFunction::updateImpl] EDT #4
    - Getting updates for EDT #4
    - Finished getting updates for EDT #4
+
 [AAEDTInfoFunction::updateImpl] EDT #2
    - Getting updates for EDT #2
    - Finished getting updates for EDT #2
+
 [AAEDTInfoCallsite::updateImpl] EDT #3
+
 [AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2 from EDT #3
+
 [AAEDTDataBlockInfoVal::updateImpl] ptr %2
    - AAPointerInfo is not at fixpoint!
+
 [AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #3
+
 [AAEDTDataBlockInfoVal::updateImpl] ptr %3
    - AAPointerInfo is not at fixpoint!
+
 [AAEDTInfoCallsite::updateImpl] EDT #4
+
 [AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #4
+
 [AAEDTInfoCallsite::updateImpl] EDT #2
+
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #2
+
 [AAEDTDataBlockInfoVal::updateImpl]   %number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
+
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
+
 [AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
+
 [AAEDTInfoFunction::updateImpl] EDT #0
-[arts] Function: rand doesn't have CARTS Metadata
-[arts] Function: rand doesn't have CARTS Metadata
    - EDT #1 is a child of EDT #0
    - EDT #2 is a child of EDT #0
    - All ReachedEDTs are fixed for EDT #0
    - EDT #0 is async. No updates to push
+
 [AAEDTInfoFunction::updateImpl] EDT #1
    - Getting updates for EDT #1
    - Finished getting updates for EDT #1
+
 [AAEDTInfoFunction::updateImpl] EDT #3
    - Getting updates for EDT #3
    - Finished getting updates for EDT #3
+
 [AAEDTInfoFunction::updateImpl] EDT #4
    - Getting updates for EDT #4
    - Finished getting updates for EDT #4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
+
 [AAEDTInfoCallsite::updateImpl] EDT #1
+
 [AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
+   - Analyzing sync remote dependencies
+
 [AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
+   - Analyzing sync remote dependencies
+
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #1
+
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+
 [AAEDTDataBlockInfoVal::updateImpl] ptr %3
    - AAPointerInfo is not at fixpoint!
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+
 [AAEDTDataBlockInfoVal::updateImpl] ptr %2
    - AAPointerInfo is not at fixpoint!
+
 [AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
+
 [AAEDTDataBlockInfoVal::updateImpl] ptr %3
    - AAPointerInfo is not at fixpoint!
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+
 [AAEDTDataBlockInfoVal::updateImpl]   %number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
+
 [AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+
 [AAEDTDataBlockInfoVal::updateImpl] ptr %3
    - AAPointerInfo is not at fixpoint!
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+
 [AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
+
 [AAEDTDataBlockInfoVal::updateImpl] ptr %3
    - ReachedLocalEDTs: EDT #3
    - ReachedLocalEDTs: EDT #4
-[AAEDTDataBlockInfoVal::initialize] Value ptr %1
+   - Number of ReachedLocalEDTs: 2
+
+[AAEDTDataBlockInfoVal::initialize] ptr %1
+
 [AAEDTDataBlockInfoVal::updateImpl] ptr %1
-[AAEDTDataBlockInfoVal::initialize] Value ptr %0
+   - No local EDTs reached!
+   - Number of ReachedRemoteEDTs: 0
+
+[AAEDTDataBlockInfoVal::initialize] ptr %0
+
 [AAEDTDataBlockInfoVal::updateImpl] ptr %0
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+   - No local EDTs reached!
+   - Number of ReachedRemoteEDTs: 0
+   - Number of ReachedRemoteEDTs: 0
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #3
+ ReachabilityInfo is at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #4
+ ReachabilityInfo is at fixpoint!
+
 [AAEDTDataBlockInfoVal::updateImpl] ptr %2
    - ReachedLocalEDTs: EDT #3
-[AAEDTDataBlockInfoVal::initialize] Value ptr %0
+   - Number of ReachedLocalEDTs: 1
+
+[AAEDTDataBlockInfoVal::initialize] ptr %0
+
 [AAEDTDataBlockInfoVal::updateImpl] ptr %0
+   - No local EDTs reached!
+   - Number of ReachedRemoteEDTs: 0
+   - Number of ReachedRemoteEDTs: 0
+
 [AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
    - ReachedLocalEDTs: EDT #1
    - ReachedLocalEDTs: EDT #2
-[AAEDTDataBlockInfoVal::initialize] Value ptr %shared_number
+   - Number of ReachedLocalEDTs: 2
+
+[AAEDTDataBlockInfoVal::initialize] ptr %shared_number
+
 [AAEDTDataBlockInfoVal::updateImpl] ptr %shared_number
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
+   - No local EDTs reached!
+   - Number of ReachedRemoteEDTs: 0
+   - Number of ReachedRemoteEDTs: 2
+
 [AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync remote dependencies
+
 [AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
+   - Analyzing sync remote dependencies
+
 [AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync remote dependencies
+
+[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
+   - Analyzing sync remote dependencies
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2 from EDT #3
+ ReachabilityInfo is at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+ ReachabilityInfo is at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
+ ReachabilityInfo is at fixpoint!
+
+[AAEDTInfoCallsite::updateImpl] EDT #3
+
+[AAEDTInfoCallsite::updateImpl] EDT #4
+   - All DataBlocks were fixed for EDT #4
+
+[AAEDTInfoCallsite::updateImpl] EDT #4
+   - All DataBlocks were fixed for EDT #4
+
 [AAEDTDataBlockInfoVal::updateImpl]   %number = alloca i32, align 4
    - ReachedLocalEDTs: EDT #1
    - ReachedLocalEDTs: EDT #2
-[AAEDTDataBlockInfoVal::initialize] Value ptr %number
+   - Number of ReachedLocalEDTs: 2
+
+[AAEDTDataBlockInfoVal::initialize] ptr %number
+
 [AAEDTDataBlockInfoVal::updateImpl] ptr %number
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
+   - No local EDTs reached!
+   - Number of ReachedRemoteEDTs: 0
+   - Number of ReachedRemoteEDTs: 1
+
 [AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync remote dependencies
+
 [AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
+   - Analyzing sync remote dependencies
+
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+   - Analyzing local dependencies
+   - Analyzing sync remote dependencies
+
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync remote dependencies
+
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
+   - Analyzing sync remote dependencies
+
+[AAEDTInfoFunction::updateImpl] EDT #4
+   - Getting updates for EDT #4
+   - Finished getting updates for EDT #4
+
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
+   - Analyzing sync remote dependencies
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #1
+ ReachabilityInfo is at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #2
+ ReachabilityInfo is at fixpoint!
+
+[AAEDTInfoCallsite::updateImpl] EDT #3
+   - All DataBlocks were fixed for EDT #3
+
+[AAEDTInfoCallsite::updateImpl] EDT #3
+   - All DataBlocks were fixed for EDT #3
+
+[AAEDTInfoCallsite::updateImpl] EDT #1
+
+[AAEDTInfoCallsite::updateImpl] EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
+   - Analyzing local dependencies
+   - Analyzing sync remote dependencies
+
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync remote dependencies
+
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
+   - Analyzing sync remote dependencies
+
+[AAEDTInfoFunction::updateImpl] EDT #3
+   - Getting updates for EDT #3
+   - Finished getting updates for EDT #3
+
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
+   - Analyzing sync remote dependencies
+
+[AAEDTInfoCallsite::updateImpl] EDT #1
+
+[AAEDTInfoCallsite::updateImpl] EDT #2
+   - All DataBlocks were fixed for EDT #2
+
+[AAEDTInfoCallsite::updateImpl] EDT #2
+   - All DataBlocks were fixed for EDT #2
+
+[AAEDTInfoCallsite::updateImpl] EDT #1
+
+[AAEDTInfoFunction::updateImpl] EDT #1
+   - Getting updates for EDT #1
+   - Finished getting updates for EDT #1
+
+[AAEDTInfoFunction::updateImpl] EDT #2
+   - Getting updates for EDT #2
+   - Finished getting updates for EDT #2
+
 [AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+   - Analyzing sync remote dependencies
+
 [AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
+   - Analyzing sync remote dependencies
+
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
+   - Analyzing sync remote dependencies
+
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+   - Analyzing sync remote dependencies
 -------------------------------
 AAEDTInfoFunction::manifest: 
 State for EDT #0 -> 
@@ -1120,9 +601,9 @@ State for EDT #1 ->
      -ParentSyncEDT: <null>
      #Child EDTs: 2{3, 4}
      #Reached DescendantEDTs: 0{}
-     -MaySignalLocal EDTs invalid with 0 EDTs
-     -MaySignalRemote EDTs invalid with 0 EDTs
-     -Dependent EDTs invalid with 0 EDTs
+     #MaySignalLocal EDTs: 0{}
+     #MaySignalRemote EDTs: 0{}
+     #Dependent EDTs: 0{}
 
 - EDT #1: edt.1.parallel
 Ty: parallel
@@ -1140,12 +621,12 @@ Number of DepV: 4
 AAEDTInfoFunction::manifest: 
 State for EDT #3 -> 
      -ParentEDT: EDT #1
-     -ParentSyncEDT invalid
+     -ParentSyncEDT: EDT #1
      #Child EDTs: 0{}
      #Reached DescendantEDTs: 0{}
-     -MaySignalLocal EDTs invalid with 0 EDTs
-     -MaySignalRemote EDTs invalid with 0 EDTs
-     -Dependent EDTs invalid with 0 EDTs
+     #MaySignalLocal EDTs: 0{}
+     #MaySignalRemote EDTs: 0{}
+     #Dependent EDTs: 0{}
 
 - EDT #3: edt.3.task
 Ty: task
@@ -1163,12 +644,12 @@ Number of DepV: 2
 AAEDTInfoFunction::manifest: 
 State for EDT #4 -> 
      -ParentEDT: EDT #1
-     -ParentSyncEDT invalid
+     -ParentSyncEDT: EDT #1
      #Child EDTs: 0{}
      #Reached DescendantEDTs: 0{}
-     -MaySignalLocal EDTs invalid with 0 EDTs
-     -MaySignalRemote EDTs invalid with 0 EDTs
-     -Dependent EDTs invalid with 0 EDTs
+     #MaySignalLocal EDTs: 0{}
+     #MaySignalRemote EDTs: 0{}
+     #Dependent EDTs: 0{}
 
 - EDT #4: edt.4.task
 Ty: task
@@ -1184,12 +665,12 @@ Number of DepV: 1
 AAEDTInfoFunction::manifest: 
 State for EDT #2 -> 
      -ParentEDT: EDT #0
-     -ParentSyncEDT invalid
+     -ParentSyncEDT: <null>
      #Child EDTs: 0{}
      #Reached DescendantEDTs: 0{}
-     -MaySignalLocal EDTs invalid with 0 EDTs
-     -MaySignalRemote EDTs invalid with 0 EDTs
-     -Dependent EDTs invalid with 0 EDTs
+     #MaySignalLocal EDTs: 0{}
+     #MaySignalRemote EDTs: 0{}
+     #Dependent EDTs: 0{}
 
 - EDT #2: edt.2.task
 Ty: task
@@ -1205,6 +686,20 @@ Number of DepV: 3
 [Attributor] Done with 5 functions, result: changed.
 - - - - - - - - - - - - - - - - - - - - - - - -
 [edt-graph] Printing the EDT Graph
+- EDT #3 - "edt.3.task"
+  - Type: task
+  - Data Environment:
+    - Number of ParamV = 2
+      - i32 %2
+      - i32 %3
+    - Number of DepV = 2
+      - ptr %0
+      - ptr %1
+  - Incoming Edges:
+    - [control/ creation] "EDT #1"
+  - Outgoing Edges:
+    - The EDT has no outgoing edges
+
 - EDT #1 - "edt.1.parallel"
   - Type: parallel
   - Data Environment:
@@ -1228,20 +723,8 @@ Number of DepV: 3
   - Incoming Edges:
     - The EDT has no incoming edges
   - Outgoing Edges:
+    - [control/ creation] "EDT #1"
     - [control/ creation] "EDT #2"
-    - [control/ creation] "EDT #1"
-
-- EDT #4 - "edt.4.task"
-  - Type: task
-  - Data Environment:
-    - Number of ParamV = 1
-      - i32 %1
-    - Number of DepV = 1
-      - ptr %0
-  - Incoming Edges:
-    - [control/ creation] "EDT #1"
-  - Outgoing Edges:
-    - The EDT has no outgoing edges
 
 - EDT #2 - "edt.2.task"
   - Type: task
@@ -1256,15 +739,13 @@ Number of DepV: 3
   - Outgoing Edges:
     - The EDT has no outgoing edges
 
-- EDT #3 - "edt.3.task"
+- EDT #4 - "edt.4.task"
   - Type: task
   - Data Environment:
-    - Number of ParamV = 2
-      - i32 %2
-      - i32 %3
-    - Number of DepV = 2
+    - Number of ParamV = 1
+      - i32 %1
+    - Number of DepV = 1
       - ptr %0
-      - ptr %1
   - Incoming Edges:
     - [control/ creation] "EDT #1"
   - Outgoing Edges:
@@ -1545,19 +1026,19 @@ LLVM ERROR: Broken module found, compilation aborted!
 PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/ and include the crash backtrace.
 Stack dump:
 0.	Program arguments: opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so -debug-only=arts-analysis,arts,carts,arts-ir-builder,edt-graph,carts-metadata,arts-codegen -passes=arts-analysis test_arts_ir.bc -o test_arts_analysis.bc
- #0 0x00007f3560b0eef8 llvm::sys::PrintStackTrace(llvm::raw_ostream&, int) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0x191ef8)
- #1 0x00007f3560b0cb7e llvm::sys::RunSignalHandlers() (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0x18fb7e)
- #2 0x00007f3560b0f5ad SignalHandler(int) Signals.cpp:0:0
- #3 0x00007f3563850910 __restore_rt (/lib64/libpthread.so.0+0x16910)
- #4 0x00007f3560419d2b raise (/lib64/libc.so.6+0x4ad2b)
- #5 0x00007f356041b3e5 abort (/lib64/libc.so.6+0x4c3e5)
- #6 0x00007f3560a5ad3c llvm::report_fatal_error(llvm::Twine const&, bool) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0xddd3c)
- #7 0x00007f3560a5ab66 (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0xddb66)
- #8 0x00007f3560f3bbca (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMCore.so.18.1+0x2f9bca)
- #9 0x00005574a2de832d llvm::detail::PassModel<llvm::Module, llvm::VerifierPass, llvm::PreservedAnalyses, llvm::AnalysisManager<llvm::Module>>::run(llvm::Module&, llvm::AnalysisManager<llvm::Module>&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x2032d)
-#10 0x00007f3560f022a6 llvm::PassManager<llvm::Module, llvm::AnalysisManager<llvm::Module>>::run(llvm::Module&, llvm::AnalysisManager<llvm::Module>&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMCore.so.18.1+0x2c02a6)
-#11 0x00005574a2de1293 llvm::runPassPipeline(llvm::StringRef, llvm::Module&, llvm::TargetMachine*, llvm::TargetLibraryInfoImpl*, llvm::ToolOutputFile*, llvm::ToolOutputFile*, llvm::ToolOutputFile*, llvm::StringRef, llvm::ArrayRef<llvm::PassPlugin>, llvm::opt_tool::OutputKind, llvm::opt_tool::VerifierKind, bool, bool, bool, bool, bool, bool, bool) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x19293)
-#12 0x00005574a2deeaaa main (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x26aaa)
-#13 0x00007f356040424d __libc_start_main (/lib64/libc.so.6+0x3524d)
-#14 0x00005574a2ddaa3a _start /home/abuild/rpmbuild/BUILD/glibc-2.31/csu/../sysdeps/x86_64/start.S:122:0
+ #0 0x00007f0702dc6ef8 llvm::sys::PrintStackTrace(llvm::raw_ostream&, int) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0x191ef8)
+ #1 0x00007f0702dc4b7e llvm::sys::RunSignalHandlers() (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0x18fb7e)
+ #2 0x00007f0702dc75ad SignalHandler(int) Signals.cpp:0:0
+ #3 0x00007f0705b08910 __restore_rt (/lib64/libpthread.so.0+0x16910)
+ #4 0x00007f07026d1d2b raise (/lib64/libc.so.6+0x4ad2b)
+ #5 0x00007f07026d33e5 abort (/lib64/libc.so.6+0x4c3e5)
+ #6 0x00007f0702d12d3c llvm::report_fatal_error(llvm::Twine const&, bool) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0xddd3c)
+ #7 0x00007f0702d12b66 (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0xddb66)
+ #8 0x00007f07031f3bca (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMCore.so.18.1+0x2f9bca)
+ #9 0x0000562b2f18c32d llvm::detail::PassModel<llvm::Module, llvm::VerifierPass, llvm::PreservedAnalyses, llvm::AnalysisManager<llvm::Module>>::run(llvm::Module&, llvm::AnalysisManager<llvm::Module>&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x2032d)
+#10 0x00007f07031ba2a6 llvm::PassManager<llvm::Module, llvm::AnalysisManager<llvm::Module>>::run(llvm::Module&, llvm::AnalysisManager<llvm::Module>&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMCore.so.18.1+0x2c02a6)
+#11 0x0000562b2f185293 llvm::runPassPipeline(llvm::StringRef, llvm::Module&, llvm::TargetMachine*, llvm::TargetLibraryInfoImpl*, llvm::ToolOutputFile*, llvm::ToolOutputFile*, llvm::ToolOutputFile*, llvm::StringRef, llvm::ArrayRef<llvm::PassPlugin>, llvm::opt_tool::OutputKind, llvm::opt_tool::VerifierKind, bool, bool, bool, bool, bool, bool, bool) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x19293)
+#12 0x0000562b2f192aaa main (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x26aaa)
+#13 0x00007f07026bc24d __libc_start_main (/lib64/libc.so.6+0x3524d)
+#14 0x0000562b2f17ea3a _start /home/abuild/rpmbuild/BUILD/glibc-2.31/csu/../sysdeps/x86_64/start.S:122:0
 make: *** [Makefile:23: test_arts_analysis.bc] Aborted
