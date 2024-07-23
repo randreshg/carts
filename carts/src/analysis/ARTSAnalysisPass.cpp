@@ -70,9 +70,7 @@ struct CARTSInfoCache : public InformationCache {
     return nullptr;
   }
 
-  EDT *getEDT(const CallBase *CB) {
-    return getEDT(CB->getCalledFunction());
-  }
+  EDT *getEDT(const CallBase *CB) { return getEDT(CB->getCalledFunction()); }
 
   EDT *getOrCreateEDT(Function *F) {
     EDT *E = getEDT(F);
@@ -723,6 +721,8 @@ struct AAEDTDataBlockInfo
   using Base = StateWrapper<EDTDataBlockInfoState, AbstractAttribute>;
   AAEDTDataBlockInfo(const IRPosition &IRP, Attributor &A) : Base(IRP) {}
 
+  bool isQueryAA() const override { return true; }
+
   /// Statistics are tracked as part of manifest for now.
   void trackStatistics() const override {}
 
@@ -801,7 +801,7 @@ struct AAEDTInfoFunction : AAEDTInfo {
       indicatePessimisticFixpoint();
       return;
     }
-    LLVM_DEBUG(dbgs() << "[AAEDTInfoFunction::initialize] EDT #"
+    LLVM_DEBUG(dbgs() << "\n[AAEDTInfoFunction::initialize] EDT #"
                       << EDTInfo->getID() << " for function \"" << Fn->getName()
                       << "\"\n");
     CARTSCache->insertGraphNode(EDTInfo);
@@ -1040,7 +1040,7 @@ struct AAEDTInfoFunction : AAEDTInfo {
   /// Fixpoint iteration update function. Will be called every time a
   /// dependence changed its state (and in the beginning).
   ChangeStatus updateImpl(Attributor &A) override {
-    LLVM_DEBUG(dbgs() << "[AAEDTInfoFunction::updateImpl] EDT #"
+    LLVM_DEBUG(dbgs() << "\n[AAEDTInfoFunction::updateImpl] EDT #"
                       << EDTInfo->getID() << "\n";);
     EDTInfoState StateBefore = getState();
 
@@ -1111,14 +1111,14 @@ struct AAEDTInfoCallsite : AAEDTInfo {
     CallBase &EDTCall = cast<CallBase>(getAnchorValue());
     EDTInfo = CARTSCache->getEDT(EDTCall.getCalledFunction());
     assert(EDTInfo && "EDTInfo is null!");
-    LLVM_DEBUG(dbgs() << "[AAEDTInfoCallsite::initialize] EDT #"
+    LLVM_DEBUG(dbgs() << "\n[AAEDTInfoCallsite::initialize] EDT #"
                       << EDTInfo->getID() << "\n");
   }
 
   /// See AbstractAttribute::updateImpl(Attributor &A).
   ChangeStatus updateImpl(Attributor &A) override {
     EDTInfoState StateBefore = getState();
-    LLVM_DEBUG(dbgs() << "[AAEDTInfoCallsite::updateImpl] EDT #"
+    LLVM_DEBUG(dbgs() << "\n[AAEDTInfoCallsite::updateImpl] EDT #"
                       << EDTInfo->getID() << "\n");
 
     CallBase &EDTCall = cast<CallBase>(getAnchorValue());
@@ -1169,7 +1169,7 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     assert(EDTInfo && "CalledEDT is null!");
 
     auto CallArgItr = getCallSiteArgNo();
-    LLVM_DEBUG(dbgs() << "[AAEDTInfoCallsiteArg::initialize] CallArg #"
+    LLVM_DEBUG(dbgs() << "\n[AAEDTInfoCallsiteArg::initialize] CallArg #"
                       << CallArgItr << " from EDT #" << EDTInfo->getID()
                       << "\n");
 
@@ -1191,7 +1191,7 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
   /// See AbstractAttribute::updateImpl(Attributor &A).
   ChangeStatus updateImpl(Attributor &A) override {
     EDT *CalledEDT = getEDT();
-    LLVM_DEBUG(dbgs() << "[AAEDTInfoCallsiteArg::updateImpl] "
+    LLVM_DEBUG(dbgs() << "\n[AAEDTInfoCallsiteArg::updateImpl] "
                       << getAssociatedValue() << " from EDT #"
                       << CalledEDT->getID() << "\n");
     ChangeStatus Changed = ChangeStatus::UNCHANGED;
@@ -1222,6 +1222,7 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
                                 const AAEDTDataBlockInfo *DBInfo) {
     if (MaySignalLocalEDTs.isAtFixpoint())
       return ChangeStatus::UNCHANGED;
+
     LLVM_DEBUG(dbgs() << "   - Analyzing local dependencies\n");
     /// We are only concerned with local dependencies if syncs EDTs
     EDT *CalledEDT = getEDT();
@@ -1255,7 +1256,7 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
 
     EDTGraph &Graph = CARTSCache->getGraph();
     SetVector<AAEDTInfo *> DependOnEDTsAA, MayDependOnEDTsAA;
-    for (auto *ReachedEDT : DBInfo->ReachedRemoteEDTs) {
+    for (EDT *ReachedEDT : DBInfo->ReachedRemoteEDTs) {
       /// Get the AAEDTInfo for the ReachedEDT with an optional dependency
       /// in case the ParentSyncEDT changes
       auto *ReachedEDTAA =
@@ -1337,15 +1338,23 @@ struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
     Value *ArgVal = &getAssociatedValue();
     AA::ValueAndContext VAC(*ArgVal, EDTCall);
     DB = CARTSCache->getOrCreateDataBlock(VAC, getCallSiteArgNo());
+    ParentEDT = CARTSCache->getEDT(EDTCall.getCaller());
 
-    LLVM_DEBUG(dbgs() << "[AAEDTDataBlockInfoCtxAndVal::initialize] Value "
-                      << *DB->getValue() << "\n");
+    LLVM_DEBUG(
+        dbgs() << "\n[AAEDTDataBlockInfoCtxAndVal::initialize] "
+               << *DB->getValue() << " from EDT #"
+               << CARTSCache->getEDT(EDTCall.getCalledFunction())->getID()
+               << "\n");
   }
 
   /// See AbstractAttribute::updateImpl(Attributor &A).
   ChangeStatus updateImpl(Attributor &A) override {
-    LLVM_DEBUG(dbgs() << "[AAEDTDataBlockInfoCtxAndVal::updateImpl] "
-                      << getAssociatedValue() << "\n");
+    LLVM_DEBUG(
+        CallBase &EDTCall = cast<CallBase>(getAnchorValue());
+        dbgs() << "\n[AAEDTDataBlockInfoCtxAndVal::updateImpl] "
+               << getAssociatedValue() << " from EDT #"
+               << CARTSCache->getEDT(EDTCall.getCalledFunction())->getID()
+               << "\n");
     EDTValue &PointerValue = *CARTSCache->getPointerVal(DB->getValue());
     auto *ArgValDBInfoAA = A.getAAFor<AAEDTDataBlockInfo>(
         *this, IRPosition::value(PointerValue), DepClassTy::OPTIONAL);
@@ -1354,23 +1363,26 @@ struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
                         << PointerValue << "\n");
       return indicatePessimisticFixpoint();
     }
+
+    if (!ArgValDBInfoAA->isReachabilityInfoAtFixpoint())
+      return ChangeStatus::UNCHANGED;
+
     /// Clamp state
     *this ^= ArgValDBInfoAA;
+    LLVM_DEBUG(dbgs() << " ReachabilityInfo is at fixpoint!\n");
+    indicateOptimisticFixpoint();
     return ChangeStatus::CHANGED;
   }
 
   /// See AbstractAttribute::manifest(Attributor &A).
   ChangeStatus manifest(Attributor &A) override {
     /// Debug output info
-    LLVM_DEBUG(dbgs() << "AAEDTDataBlockInfoCtxAndVal::manifest: "
+    LLVM_DEBUG(dbgs() << "[AAEDTDataBlockInfoCtxAndVal::manifest] "
                       << *DB->getValue() << "\n"
                       << getAsStr(&A) << "\n");
     ChangeStatus Changed = ChangeStatus::UNCHANGED;
     return Changed;
   }
-
-private:
-  SetVector<Value *> RemoteValues;
 };
 
 struct AAEDTDataBlockInfoVal : AAEDTDataBlockInfo {
@@ -1381,7 +1393,7 @@ struct AAEDTDataBlockInfoVal : AAEDTDataBlockInfo {
   void initialize(Attributor &A) override {
     /// Set EDT DataBlock info
     CARTSCache = &static_cast<CARTSInfoCache &>(A.getInfoCache());
-    LLVM_DEBUG(dbgs() << "[AAEDTDataBlockInfoVal::initialize] Value "
+    LLVM_DEBUG(dbgs() << "\n[AAEDTDataBlockInfoVal::initialize] "
                       << getAssociatedValue() << "\n");
   }
 
@@ -1403,7 +1415,6 @@ struct AAEDTDataBlockInfoVal : AAEDTDataBlockInfo {
 
     for (auto PIItr = PI->begin(); PIItr != PI->end(); ++PIItr) {
       const auto &It = PI->begin();
-      // const AA::RangeTy &Range = It->first;
       const SmallSet<unsigned, 4> &AccessIndex = It->second;
       /// Analyze all accesses
       for (auto AI : AccessIndex) {
@@ -1427,6 +1438,11 @@ struct AAEDTDataBlockInfoVal : AAEDTDataBlockInfo {
       }
     }
 
+    if (ReachedLocalEDTs.empty())
+      LLVM_DEBUG(dbgs() << "   - No local EDTs reached!\n");
+    else
+      LLVM_DEBUG(dbgs() << "   - Number of ReachedLocalEDTs: "
+                        << ReachedLocalEDTs.size() << "\n");
     /// If we got to this point, we know all the ReachedEDTs of the value
     ReachedLocalEDTs.indicateOptimisticFixpoint();
     return ChangeStatus::CHANGED;
@@ -1460,8 +1476,12 @@ struct AAEDTDataBlockInfoVal : AAEDTDataBlockInfo {
     }
 
     /// If all the RemoteValues are fixed, we can indicate optimistic fixpoint
-    if (AllRemoteValuesWereFixed)
+    if (AllRemoteValuesWereFixed) {
       ReachedRemoteEDTs.indicateOptimisticFixpoint();
+      LLVM_DEBUG(dbgs() << "   - Number of ReachedRemoteEDTs: "
+                        << ReachedRemoteEDTs.size() << "\n");
+    }
+
     return ChangeStatus::CHANGED;
   }
 
@@ -1474,7 +1494,7 @@ struct AAEDTDataBlockInfoVal : AAEDTDataBlockInfo {
 
   /// See AbstractAttribute::updateImpl(Attributor &A).
   ChangeStatus updateImpl(Attributor &A) override {
-    LLVM_DEBUG(dbgs() << "[AAEDTDataBlockInfoVal::updateImpl] "
+    LLVM_DEBUG(dbgs() << "\n[AAEDTDataBlockInfoVal::updateImpl] "
                       << getAssociatedValue() << "\n");
     ChangeStatus Changed = ChangeStatus::UNCHANGED;
     Changed |= updateReachedEDTs(A);
