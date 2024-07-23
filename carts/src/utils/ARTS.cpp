@@ -75,6 +75,18 @@ EDTArgType toEDTArgType(StringRef Str) {
 
 namespace arts {
 /// ------------------------------------------------------------------- ///
+///                            EDT DATABLOCK                            ///
+/// ------------------------------------------------------------------- ///
+EDTDataBlock::EDTDataBlock(EDTValue *V) : V(V) {}
+EDTDataBlock::EDTDataBlock(EDTValue *V, Mode M)
+    : V(V), M(M) {}
+
+/// Getters
+EDTValue *EDTDataBlock::getValue() { return V; }
+EDTDataBlock::Mode EDTDataBlock::getMode() { return M; }
+EDT *EDTDataBlock::getParent() { return Parent; }
+
+/// ------------------------------------------------------------------- ///
 ///                          DATA ENVIRONMENT                           ///
 /// ------------------------------------------------------------------- ///
 EDTEnvironment::EDTEnvironment(EDT *E) : E(E) {}
@@ -186,12 +198,11 @@ void EDT::insertValueToEnv(Value *Val, bool IsDepV) {
 uint32_t EDT::getID() { return ID; }
 EDTFunction *EDT::getFn() { return Fn; }
 EDTEnvironment &EDT::getDataEnv() { return *Env; }
-Twine EDT::getName() {
-  return "edt." + std::to_string(ID) + "." + toString(Ty);
+string EDT::getName() {
+  return ("edt." + std::to_string(ID) + "." + toString(Ty)).str();
 }
 EDTTypeKind EDT::getTypeKind() const { return Kind; }
 EDTType EDT::getTy() const { return Ty; }
-
 
 /// Helpers
 bool EDT::isAsync() { return !isa<SyncEDT>(this); }
@@ -204,11 +215,15 @@ bool EDT::isDep(uint32_t CallArgItr) {
 /// What we learned after running the Attributor
 void EDT::setCall(EDTCallBase *Call) { this->Call = Call; }
 void EDT::setParent(EDT *Parent) { this->Parent = Parent; }
+void EDT::setParentSync(EDT *ParentSync) { this->ParentSync = ParentSync; }
+void EDT::setDoneSync(EDT *DoneSync) { this->DoneSync = DoneSync; }
 void EDT::setNode(uint32_t Node) { this->Node = Node; }
 
 EDTCallBase *EDT::getCall() { return Call; }
-uint32_t EDT::getNode() { return Node; }
 EDT *EDT::getParent() { return Parent; }
+EDT *EDT::getParentSync() { return ParentSync; }
+EDT *EDT::getDoneSync() { return DoneSync; }
+uint32_t EDT::getNode() { return Node; }
 
 /// Information regarding the generated EDT
 Function *EDT::getNewFn() { return NewFn; }

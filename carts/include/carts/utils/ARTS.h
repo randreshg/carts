@@ -48,17 +48,18 @@ using EDTDataBlockSet = SetVector<EDTDataBlock *>;
 class EDTDataBlock {
 public:
   enum Mode { ReadOnly, WriteOnly, ReadWrite };
-  EDTDataBlock(EDTValue *V) : V(V) {}
-  EDTDataBlock(EDTValue *V, Mode M) : V(V), M(M) {}
+  EDTDataBlock(EDTValue *V);
+  EDTDataBlock(EDTValue *V, Mode M);
   ~EDTDataBlock() = default;
 
-  EDTValue *getValue() { return V; }
-  Mode getMode() { return M; }
+  EDTValue *getValue();
+  Mode getMode();
+  EDT *getParent();
 
 private:
-  /// Getters
   EDTValue *V = nullptr;
   Mode M = Mode::ReadWrite;
+  EDT *Parent = nullptr;
 };
 
 class EDTEnvironment {
@@ -103,7 +104,7 @@ class EDT {
 public:
   EDT(EDTFunction *Fn);
   virtual ~EDT();
-  
+
   /// Static interface
   static uint32_t Counter;
   static EDT *get(EDTFunction *Fn);
@@ -118,7 +119,7 @@ public:
   uint32_t getID();
   EDTFunction *getFn();
   EDTEnvironment &getDataEnv();
-  Twine getName();
+  string getName();
   EDTTypeKind getTypeKind() const;
   EDTType getTy() const;
 
@@ -135,22 +136,28 @@ protected:
 private:
   uint32_t ID;
 
-/// What we learned after running the Attributor
+  /// What we learned after running the Attributor
 public:
   void setCall(EDTCallBase *Call);
   void setParent(EDT *Parent);
+  void setParentSync(EDT *ParentSync);
+  void setDoneSync(EDT *DoneSync);
   void setNode(uint32_t Node);
 
   EDTCallBase *getCall();
   EDT *getParent();
+  EDT *getParentSync();
+  EDT *getDoneSync();
   uint32_t getNode();
 
 private:
   uint32_t Node = 0;
   EDTCallBase *Call = nullptr;
   EDT *Parent = nullptr;
+  EDT *ParentSync = nullptr;
+  EDT *DoneSync = nullptr;
 
-/// Information regarding the generated EDT
+  /// Information regarding the generated EDT
 public:
   Function *getNewFn();
   Value *getGuidAddress();

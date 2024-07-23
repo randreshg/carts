@@ -47,7 +47,7 @@ public:
 
   /// Nodes
   void createNode(Function &Fn);
-  
+
   unordered_set<EDTGraphNode *> getNodes();
   EDTGraphNode *insertNode(EDT *E);
   EDTGraphNode *insertNode(EDT *E, EDTGraphNode *ParentNode,
@@ -63,11 +63,11 @@ public:
   void addEdge(EDTGraphNode *From, EDTGraphNode *To, EDTGraphEdge *Edge);
   /// Add edges with EDT
   void addCreationEdge(EDT *From, EDT *To);
-  void addDataEdge(EDT *From, EDT *To, Value *V);
+  void addDataEdge(EDT *From, EDT *To, EDTDataBlock *DB);
   void addControlEdge(EDT *From, EDT *To);
   /// Add edges with EDTGraphNode
   void addCreationEdge(EDTGraphNode *From, EDTGraphNode *To);
-  void addDataEdge(EDTGraphNode *From, EDTGraphNode *To, Value *V = nullptr);
+  void addDataEdge(EDTGraphNode *From, EDTGraphNode *To, EDTDataBlock *DB);
   void addControlEdge(EDTGraphNode *From, EDTGraphNode *To);
 
   void removeEdge(EDTGraphEdge *Edge);
@@ -80,6 +80,7 @@ public:
       IncomingEdges;
   DenseMap<EDTGraphNode *, DenseMap<EDTGraphNode *, EDTGraphEdge *>>
       OutgoingEdges;
+
 public:
   void print();
 };

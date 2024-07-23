@@ -2,8 +2,8 @@
 #include "llvm/Support/Debug.h"
 #include <cassert>
 
-#include "carts/utils/ARTS.h"
 #include "carts/analysis/graph/EDTEdge.h"
+#include "carts/utils/ARTS.h"
 
 using namespace llvm;
 using namespace arts;
@@ -22,8 +22,7 @@ EDTGraphEdge::~EDTGraphEdge() {}
 
 void EDTGraphEdge::print(void) {
   LLVM_DEBUG(dbgs() << "EDT EDGE:\n");
-  LLVM_DEBUG(dbgs() << "  - From: " << From->getEDT()->getName()
-                    << "\n");
+  LLVM_DEBUG(dbgs() << "  - From: " << From->getEDT()->getName() << "\n");
   LLVM_DEBUG(dbgs() << "  - To: " << To->getEDT()->getName() << "\n");
 }
 
@@ -41,14 +40,14 @@ EDTGraphDataEdge::~EDTGraphDataEdge() {
   //   delete V;
 }
 
-void EDTGraphDataEdge::addValue(Value *V) {
-  // Values.insert(new EDTGraphDataEdgeVal(this, V));
-  Values.insert(V);
+void EDTGraphDataEdge::addDataBlock(EDTDataBlock *DB) {
+  DataBlocks.insert(new EDTGraphDataBlockEdge(this, DB));
 }
 
-void EDTGraphDataEdge::removeValue(Value *V) {
+void EDTGraphDataEdge::removeDataBlock(EDTDataBlock *DB) {
   // auto It =
-  //     std::find_if(Values.begin(), Values.end(), [V](EDTGraphDataEdgeVal *Val) {
+  //     std::find_if(Values.begin(), Values.end(), [V](EDTGraphDataBlockEdge
+  //     *Val) {
   //       return Val->getValue() == V;
   //     });
   // if (It != Values.end()) {
@@ -57,10 +56,11 @@ void EDTGraphDataEdge::removeValue(Value *V) {
   // }
 }
 
-/// EDTGraphDataEdgeVal
-EDTGraphDataEdgeVal::EDTGraphDataEdgeVal(EDTGraphDataEdge *Parent, Value *V)
-    : Parent(Parent), V(V){};
-EDTGraphDataEdgeVal::~EDTGraphDataEdgeVal() {}
+/// EDTGraphDataBlockEdge
+EDTGraphDataBlockEdge::EDTGraphDataBlockEdge(EDTGraphDataEdge *Parent,
+                                             EDTDataBlock *DB)
+    : Parent(Parent), DB(DB){};
+EDTGraphDataBlockEdge::~EDTGraphDataBlockEdge() {}
 
 /// EDTGraphNode
 EDTGraphNode::EDTGraphNode(EDT &E) : E(E) {}

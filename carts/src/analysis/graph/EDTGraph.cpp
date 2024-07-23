@@ -203,7 +203,7 @@ EDTGraphEdge *EDTGraph::fetchOrCreateEdge(EDTGraphNode *From, EDTGraphNode *To,
     /// Convert it to a data edge.
     assert(ExistingEdge->hasCreationDep() &&
            "The edge is not a creation edge - Can not convert to Data Edge");
-    LLVM_DEBUG(dbgs() << "        - Converting control edge to date edge [\""
+    LLVM_DEBUG(dbgs() << "        - Converting Control edge to Data edge [\""
                       << From->getEDT()->getName() << "\" -> \""
                       << To->getEDT()->getName() << "\"]\n");
     auto *NewDataEdge = new EDTGraphDataEdge(From, To);
@@ -231,8 +231,8 @@ void EDTGraph::addCreationEdge(EDT *From, EDT *To) {
   addCreationEdge(getNode(From), getNode(To));
 }
 
-void EDTGraph::addDataEdge(EDT *From, EDT *To, Value *V) {
-  addDataEdge(getNode(From), getNode(To), V);
+void EDTGraph::addDataEdge(EDT *From, EDT *To, EDTDataBlock *DB) {
+  addDataEdge(getNode(From), getNode(To), DB);
 }
 
 void EDTGraph::addControlEdge(EDT *From, EDT *To) {
@@ -245,11 +245,12 @@ void EDTGraph::addCreationEdge(EDTGraphNode *From, EDTGraphNode *To) {
   E->setCreationDep(true);
 }
 
-void EDTGraph::addDataEdge(EDTGraphNode *From, EDTGraphNode *To, Value *V) {
+void EDTGraph::addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
+                           EDTDataBlock *DB) {
+  assert(DB != nullptr && "The data block is null");
   auto *DataEdge =
       dyn_cast<EDTGraphDataEdge>(fetchOrCreateEdge(From, To, true));
-  if (V != nullptr)
-    DataEdge->addValue(V);
+  DataEdge->addDataBlock(DB);
 }
 
 void EDTGraph::addControlEdge(EDTGraphNode *From, EDTGraphNode *To) {
@@ -339,9 +340,10 @@ void EDTGraph::print(void) {
         LLVM_DEBUG(dbgs() << "] \"EDT #" << ToE->getID() << "\"\n");
         if (DepEdge->isDataEdge()) {
           auto *DataEdge = cast<EDTGraphDataEdge>(DepEdge);
-          auto Values = DataEdge->getValues();
-          for (auto *V : Values) {
-            LLVM_DEBUG(dbgs() << "        - " << *V << "\n");
+          auto DataBlocks = DataEdge->getDataBlocks();
+          for (auto *DB : DataBlocks) {
+            LLVM_DEBUG(dbgs() << "        - " << *DB->getDataBlock()->getValue()
+                              << "\n");
           }
         }
       }

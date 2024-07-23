@@ -5,6 +5,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/PassManager.h"
@@ -21,7 +22,7 @@
 #include "llvm/Transforms/IPO/Attributor.h"
 #include "llvm/Transforms/Utils/CallGraphUpdater.h"
 
-#include "carts/analysis/graph/EDTEdge.h"
+// #include "carts/analysis/graph/EDTEdge.h"
 #include "carts/analysis/graph/EDTGraph.h"
 #include "carts/codegen/ARTSCodegen.h"
 #include "carts/utils/ARTS.h"
@@ -57,71 +58,102 @@ private:
 
 struct CARTSInfoCache : public InformationCache {
   CARTSInfoCache(Module &M, AnalysisGetter &AG, BumpPtrAllocator &Allocator,
-                 SetVector<Function *> &Functions, EDTSet &EDTs,
-                 DenseMap<EDTFunction *, EDT *> &FunctionEDTMap,
-                 EDTGraph &Graph)
-      : InformationCache(M, AG, Allocator, &Functions), EDTs(EDTs),
-        FunctionEDTMap(FunctionEDTMap), Graph(Graph) {}
-
-  /// Helper functions
-  EDTValue *getPointerVal(Value *Val) {
-    Value *PointerVal = nullptr;
-    if (auto *I = dyn_cast<Instruction>(Val)) {
-      if (auto *LI = dyn_cast<LoadInst>(I))
-        PointerVal = LI->getPointerOperand();
-      else if (auto *SI = dyn_cast<StoreInst>(I))
-        PointerVal = SI->getPointerOperand();
-    }
-    /// If the value is not an load/store instruction, use the value itself
-    if (!PointerVal)
-      PointerVal = Val;
-    return PointerVal;
-  }
-
-  /// CARTSInfoCache
-
-  /// EDTGraph
-  EDTGraph &getGraph() { return Graph; }
-  void insertGraphNode(EDT *E) { Graph.insertNode(E); }
+                 SetVector<Function *> &Functions)
+      : InformationCache(M, AG, Allocator, &Functions), M(M),
+        Functions(Functions), CG(M) {}
 
   /// EDTs
-  EDT *getEDT(Function *F) const {
+  EDT *getEDT(Function *F) {
     auto Itr = FunctionEDTMap.find(F);
-    if (Itr == FunctionEDTMap.end())
-      return nullptr;
-    return Itr->second;
+    if (Itr != FunctionEDTMap.end())
+      return Itr->second;
+    return nullptr;
   }
 
-  EDT *getEDT(CallBase *CB) const { return getEDT(CB->getCalledFunction()); }
+  EDT *getEDT(const CallBase *CB) {
+    return getEDT(CB->getCalledFunction());
+  }
+
+  EDT *getOrCreateEDT(Function *F) {
+    EDT *E = getEDT(F);
+    if (E)
+      return E;
+
+    if (EDT *CurrentEDT = EDT::get(F)) {
+      EDTs.insert(CurrentEDT);
+      FunctionEDTMap[F] = CurrentEDT;
+      return CurrentEDT;
+    }
+    return nullptr;
+  }
+
+  EDT *getOrCreateEDT(const CallBase *CB) {
+    return getOrCreateEDT(CB->getCalledFunction());
+  }
 
   /// EDTDataBlock
-  EDTDataBlockSet getEDTDataBlocks(Value *V) const {
-    auto Itr = ValueToDataBlocks.find(V);
-    if (Itr == ValueToDataBlocks.end())
-      return EDTDataBlockSet();
-    return Itr->second;
-  }
-
-  EDTDataBlock *getOrCreateEDTDataBlock(Value *V, EDTDataBlock::Mode M) {
-    auto Itr = ValueToDataBlocks.find(V);
-    /// If the value is not in the map, create a new DataBlock
-    if (Itr == ValueToDataBlocks.end()) {
-      auto *DB = new EDTDataBlock(V, M);
-      DataBlocks.insert(DB);
-      ValueToDataBlocks[V].insert(DB);
-      return DB;
-    }
-    /// If the value is in the map, check if the DataBlock is already there
-    for (auto *DB : Itr->second) {
-      if (DB->getMode() == M)
-        return DB;
-    }
-    /// If the DataBlock is not there, create a new one
-    auto *DB = new EDTDataBlock(V, M);
+  EDTDataBlock *createDataBlock(AA::ValueAndContext VAC, EDTDataBlock::Mode M) {
+    EDTDataBlock *DB = new EDTDataBlock(VAC.getValue(), M);
+    /// Insert the DataBlock into the map with its associated Context
     DataBlocks.insert(DB);
-    Itr->second.insert(DB);
+    ValueAndCtxToDataBlocks[VAC] = DB;
     return DB;
   }
+
+  int32_t getArgNo(AA::ValueAndContext VAC, int32_t ArgNo = -1) {
+    /// If value is different from -1, learn it and return it
+    if (ArgNo != -1) {
+      ValueAndCtxToCallArgItr[VAC] = ArgNo;
+      return ArgNo;
+    }
+    /// Try to find it in the map first
+    auto Itr = ValueAndCtxToCallArgItr.find(VAC);
+    if (Itr != ValueAndCtxToCallArgItr.end())
+      return Itr->second;
+    /// Find the argument number
+    Value *V = VAC.getValue();
+    const CallBase *ContextCB = cast<CallBase>(VAC.getCtxI());
+    for (uint32_t i = 0; i < ContextCB->data_operands_size(); i++) {
+      if (ContextCB->getArgOperand(i) == V) {
+        ValueAndCtxToCallArgItr[VAC] = i;
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  EDTDataBlock *getOrCreateDataBlock(AA::ValueAndContext VAC,
+                                     int32_t ArgNo = -1) {
+    /// Assert that it is an EDTContext
+    const CallBase *ContextCB = cast<CallBase>(VAC.getCtxI());
+    EDT *EDTCtxt = getOrCreateEDT(ContextCB);
+    assert(EDTCtxt && "EDT Context not found");
+    /// Get the Argument Number
+    ArgNo = getArgNo(VAC, ArgNo);
+    assert(ArgNo != -1 && "Argument number not found");
+    /// If the value is not a dependency, the DataBlock Mode is ReadOnly
+    /// otherwise it is ReadWrite. NOTE: Later on, check the Attributes of the
+    /// value to determine the mode/
+    bool ValueIsDep = EDTCtxt->isDep(ArgNo);
+    EDTDataBlock::Mode DBMode = ValueIsDep ? EDTDataBlock::Mode::ReadWrite
+                                           : EDTDataBlock::Mode::ReadOnly;
+
+    /// If the ValueAndCtx are not in the map, create a new DataBlock
+    auto Itr = ValueAndCtxToDataBlocks.find(VAC);
+    if (Itr == ValueAndCtxToDataBlocks.end())
+      return createDataBlock(VAC, DBMode);
+
+    /// If the value is in the map, make sure the DataBlock is the same
+    EDTDataBlock *DB = Itr->second;
+    if (DB->getMode() == DBMode)
+      return DB;
+    else
+      llvm_unreachable("DataBlock Mode mismatch");
+    return DB;
+  }
+
+  /// Helper
+  void insertGraphNode(EDT *E) { Graph.insertNode(E); }
 
   /// Updates Interface
   bool hasUpdate(EDT *E) const { return UpdateMap.count(E); }
@@ -139,16 +171,44 @@ struct CARTSInfoCache : public InformationCache {
     return Info;
   }
 
-  /// Map of Updates
-  DenseMap<EDT *, SmallVector<EDTUpdateInfo *, 4>> UpdateMap;
+  /// Getters
+  Module &getModule() { return M; }
+  SetVector<Function *> &getFunctions() const { return Functions; }
+  EDTSet &getEDTs() { return EDTs; }
+  EDTGraph &getGraph() { return Graph; }
+  ARTSCodegen &getCG() { return CG; }
+
+  /// Helper
+  EDTValue *getPointerVal(Value *Val) {
+    Value *PointerVal = nullptr;
+    if (auto *I = dyn_cast<Instruction>(Val)) {
+      if (auto *LI = dyn_cast<LoadInst>(I))
+        PointerVal = LI->getPointerOperand();
+      else if (auto *SI = dyn_cast<StoreInst>(I))
+        PointerVal = SI->getPointerOperand();
+    }
+    /// If the value is not an load/store instruction, use the value itself
+    if (!PointerVal)
+      PointerVal = Val;
+    return PointerVal;
+  }
+
+  /// Module
+  Module &M;
+  /// Collection of IPO Functions
+  SetVector<Function *> &Functions;
   /// Collection of known EDTs in the module
-  EDTSet &EDTs;
-  DenseMap<EDTFunction *, EDT *> &FunctionEDTMap;
-  /// EDTGraph
-  EDTGraph &Graph;
+  EDTSet EDTs;
+  DenseMap<EDTFunction *, EDT *> FunctionEDTMap;
   /// Collection of known DataBlocks in the module
   EDTDataBlockSet DataBlocks;
-  DenseMap<EDTValue *, EDTDataBlockSet> ValueToDataBlocks;
+  DenseMap<AA::ValueAndContext, int32_t> ValueAndCtxToCallArgItr;
+  DenseMap<AA::ValueAndContext, EDTDataBlock *> ValueAndCtxToDataBlocks;
+  /// Map of Updates
+  DenseMap<EDT *, SmallVector<EDTUpdateInfo *, 4>> UpdateMap;
+  /// Analysis Output
+  EDTGraph Graph;
+  ARTSCodegen CG;
 };
 
 /// ------------------------------------------------------------------- ///
@@ -252,14 +312,14 @@ struct EDTInfoState : AbstractState {
   /// The EDTs we know are dependent from the associated EDT.
   BooleanStateWithPtrSetVector<EDT, /* InsertInvalidates */ false>
       DependentEDTs;
-  DenseMap<EDT *, EDTValueSet> DependentEDTValues;
+  DenseMap<EDT *, EDTDataBlockSet> DependentEDTDBs;
 
   /// The set of EDTs we know we may signal from the associated EDT.
   BooleanStateWithPtrSetVector<EDT, /* InsertInvalidates */ false>
       MaySignalLocalEDTs;
   BooleanStateWithPtrSetVector<EDT, /* InsertInvalidates */ false>
       MaySignalRemoteEDTs;
-  DenseMap<EDT *, EDTValueSet> MaySignalEDTValues;
+  DenseMap<EDT *, EDTDataBlockSet> MaySignalEDTDBs;
 
   /// Insert
   bool insertChildEDT(EDT *ChildEDT) {
@@ -267,9 +327,9 @@ struct EDTInfoState : AbstractState {
     return ChildEDTs.insert(ChildEDT);
   }
 
-  bool insertDependentEDT(EDT *ToEDT, EDTValue *V) {
-    CARTSCache->getGraph().addDataEdge(EDTInfo, ToEDT, V);
-    DependentEDTValues[ToEDT].insert(V);
+  bool insertDependentEDT(EDT *ToEDT, EDTDataBlock *DB) {
+    CARTSCache->getGraph().addDataEdge(EDTInfo, ToEDT, DB);
+    DependentEDTDBs[ToEDT].insert(DB);
     return DependentEDTs.insert(ToEDT);
   }
 
@@ -375,9 +435,8 @@ struct EDTInfoState : AbstractState {
     /// MaySignalEDTs
     MaySignalLocalEDTs ^= KIS.MaySignalLocalEDTs;
     MaySignalRemoteEDTs ^= KIS.MaySignalRemoteEDTs;
-    for (auto &Itr : KIS.MaySignalEDTValues) {
-      MaySignalEDTValues[Itr.first].insert(Itr.second.begin(),
-                                           Itr.second.end());
+    for (auto &Itr : KIS.MaySignalEDTDBs) {
+      MaySignalEDTDBs[Itr.first].insert(Itr.second.begin(), Itr.second.end());
     }
     return *this;
   }
@@ -389,9 +448,8 @@ struct EDTInfoState : AbstractState {
     /// MaySignalEDTs
     MaySignalLocalEDTs ^= KIS.MaySignalLocalEDTs;
     MaySignalRemoteEDTs ^= KIS.MaySignalRemoteEDTs;
-    for (auto &Itr : KIS.MaySignalEDTValues) {
-      MaySignalEDTValues[Itr.first].insert(Itr.second.begin(),
-                                           Itr.second.end());
+    for (auto &Itr : KIS.MaySignalEDTDBs) {
+      MaySignalEDTDBs[Itr.first].insert(Itr.second.begin(), Itr.second.end());
     }
     return *this;
   }
@@ -485,7 +543,7 @@ struct AAEDTInfo : public StateWrapper<EDTInfoState, AbstractAttribute> {
     };
 
     std::string EDTStr =
-        "\nEDT #" + std::to_string(EDTInfo->getID()) + " -> \n";
+        "\nState for EDT #" + std::to_string(EDTInfo->getID()) + " -> \n";
     if (ParentEDT)
       EDTStr +=
           "     -ParentEDT: EDT #" + std::to_string(ParentEDT->getID()) + "\n";
@@ -519,12 +577,11 @@ struct EDTDataBlockInfoState : AbstractState {
   CARTSInfoCache *CARTSCache = nullptr;
 
   /// NOTE: EDTDataBlock should have a context. Fix this later
-
-  /// The EDT that creates the data block
-  EDT *ParentEDT = nullptr;
-  Value *DBVal = nullptr;
   /// The data block
   EDTDataBlock *DB = nullptr;
+  /// The EDT that creates the data block
+  EDT *ParentEDT = nullptr;
+  // Value *DBVal = nullptr;
   /// Flag to track if we reached a fixpoint.
   bool IsAtFixpoint = false;
   /// Set of Local EDTs that are reached from the associated EDTDataBlock.
@@ -545,7 +602,7 @@ struct EDTDataBlockInfoState : AbstractState {
 
   /// INTERFACE
   EDT *getParentEDT() const { return ParentEDT; }
-  Value *getValue() const { return DBVal; }
+  Value *getValue() const { return DB->getValue(); }
   EDTDataBlock *getDataBlock() const { return DB; }
 
   /// Reachability
@@ -739,7 +796,7 @@ struct AAEDTInfoFunction : AAEDTInfo {
   void initialize(Attributor &A) override {
     CARTSCache = &static_cast<CARTSInfoCache &>(A.getInfoCache());
     EDTFunction *Fn = getAnchorScope();
-    EDTInfo = CARTSCache->getEDT(Fn);
+    EDTInfo = CARTSCache->getOrCreateEDT(Fn);
     if (!EDTInfo) {
       indicatePessimisticFixpoint();
       return;
@@ -755,7 +812,7 @@ struct AAEDTInfoFunction : AAEDTInfo {
       EDTCallCounter++;
       /// Verify it is a call to the EDT Function
       EDTCall = cast<CallBase>(ACS.getInstruction());
-      auto *CalledEDT = CARTSCache->getEDT(EDTCall);
+      auto *CalledEDT = CARTSCache->getOrCreateEDT(EDTCall);
       assert(CalledEDT == EDTInfo &&
              "EDTCall doesn't correspond to the EDTInfo of the function!");
       assert(EDTCallCounter == 1 &&
@@ -765,10 +822,10 @@ struct AAEDTInfoFunction : AAEDTInfo {
       EDTInfo->setCall(EDTCall);
 
       /// Set ParentEDT - Is the EDT called from another EDT?
-      ParentEDT = CARTSCache->getEDT(EDTCall->getCaller());
+      ParentEDT = CARTSCache->getOrCreateEDT(EDTCall->getCaller());
+      assert(ParentEDT && "EDT is not called from another EDT");
       LLVM_DEBUG(dbgs() << "   - ParentEDT: EDT #" << ParentEDT->getID()
                         << "\n");
-      assert(ParentEDT && "EDT is not called from another EDT");
       EDTInfo->setParent(ParentEDT);
 
       /// Check if it is a sync EDT
@@ -781,7 +838,7 @@ struct AAEDTInfoFunction : AAEDTInfo {
       auto *NextBB = EDTCall->getParent()->getNextNode();
       auto *CB = dyn_cast<CallBase>(&NextBB->front());
       assert(CB && "Next instruction is not a CallBase!");
-      DoneEDT = CARTSCache->getEDT(CB);
+      DoneEDT = CARTSCache->getOrCreateEDT(CB);
       assert(
           DoneEDT &&
           "DoneEDT is null! It should have been found in the next BasicBlock!");
@@ -1019,12 +1076,23 @@ struct AAEDTInfoFunction : AAEDTInfo {
   /// finished now.
   ChangeStatus manifest(Attributor &A) override {
     /// Debug output info
-    LLVM_DEBUG(dbgs() << "AAEDTInfoFunction::manifest: " << getAsStr(&A)
-                      << "\n");
-    if (EDTInfo)
-      LLVM_DEBUG(dbgs() << *EDTInfo << "\n");
-    ChangeStatus Changed = ChangeStatus::UNCHANGED;
-    return Changed;
+    LLVM_DEBUG(dbgs() << "-------------------------------\n"
+                      << "AAEDTInfoFunction::manifest: " << getAsStr(&A)
+                      << "\n\n");
+    if (!EDTInfo)
+      return ChangeStatus::UNCHANGED;
+    LLVM_DEBUG(dbgs() << *EDTInfo);
+
+    /// Store information in the respective EDT
+    EDTInfo->setParent(ParentEDT);
+    EDTInfo->setParentSync(ParentSyncEDT.get());
+    EDTInfo->setDoneSync(DoneEDT);
+
+    /// Reserve EDTGuid
+    ARTSCodegen &CG = CARTSCache->getCG();
+    CG.getOrCreateEDTFunction(*EDTInfo);
+    CG.getOrCreateEDTGuid(*EDTInfo);
+    return ChangeStatus::UNCHANGED;
   }
 
 private:
@@ -1100,18 +1168,24 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     EDTInfo = CARTSCache->getEDT(EDTCall.getCalledFunction());
     assert(EDTInfo && "CalledEDT is null!");
 
+    auto CallArgItr = getCallSiteArgNo();
     LLVM_DEBUG(dbgs() << "[AAEDTInfoCallsiteArg::initialize] CallArg #"
-                      << getCallSiteArgNo() << " from EDT #" << EDTInfo->getID()
+                      << CallArgItr << " from EDT #" << EDTInfo->getID()
                       << "\n");
-
-    /// If the value is a not a dependency of the EDT, indicate optimistic
-    /// fixpoint
-    if (!EDTInfo->isDep(getCallSiteArgNo()))
-      indicateOptimisticFixpoint();
 
     /// Get the value associated with the argument. In case of load/store, get
     /// the pointer operand.
-    ArgVal = CARTSCache->getPointerVal(&getAssociatedValue());
+    ArgVal = &getAssociatedValue();
+    assert(ArgVal && "ArgVal is null!");
+
+    /// Create DataBlockInfo for the argument
+    AA::ValueAndContext VAC(*ArgVal, EDTCall);
+    CARTSCache->getOrCreateDataBlock(VAC, CallArgItr);
+
+    /// If the value is a not a dependency of the EDT, indicate optimistic
+    /// fixpoint
+    if (!EDTInfo->isDep(CallArgItr))
+      indicateOptimisticFixpoint();
   }
 
   /// See AbstractAttribute::updateImpl(Attributor &A).
@@ -1123,10 +1197,10 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     ChangeStatus Changed = ChangeStatus::UNCHANGED;
 
     /// Run AAEDTDataBlockInfo on the associated value
+    CallBase &EDTCall = cast<CallBase>(getAnchorValue());
     auto *ArgValDBInfoAA = A.getAAFor<AAEDTDataBlockInfo>(
-        *this, IRPosition::value(*ArgVal), DepClassTy::OPTIONAL);
-    // A.lookupAAFor<AAEDTDataBlockInfo>(
-    //     IRPosition::value(*ArgVal), this, DepClassTy::NONE);
+        *this, IRPosition::callsite_argument(EDTCall, getCallSiteArgNo()),
+        DepClassTy::OPTIONAL);
     if (!ArgValDBInfoAA || !ArgValDBInfoAA->getState().isValidState()) {
       LLVM_DEBUG(dbgs() << "     - Failed to get AAEDTDataBlockInfo for value: "
                         << *ArgVal << "\n");
@@ -1158,11 +1232,11 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     }
 
     /// Fill the MaySignalLocalEDTs
-    for (auto *ReachedEDT : DBInfo->ReachedLocalEDTs) {
+    for (EDT *ReachedEDT : DBInfo->ReachedLocalEDTs) {
       if (ReachedEDT == CalledEDT)
         continue;
       MaySignalLocalEDTs.insert(ReachedEDT);
-      MaySignalEDTValues[ReachedEDT].insert(ArgVal);
+      MaySignalEDTDBs[ReachedEDT].insert(DBInfo->getDataBlock());
     }
     MaySignalLocalEDTs.indicateOptimisticFixpoint();
     return ChangeStatus::CHANGED;
@@ -1180,7 +1254,6 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     EDT *CalledEDTDone = CalledEDTAA->getDoneEDT();
 
     EDTGraph &Graph = CARTSCache->getGraph();
-    auto *DBVal = DBInfo->getValue();
     SetVector<AAEDTInfo *> DependOnEDTsAA, MayDependOnEDTsAA;
     for (auto *ReachedEDT : DBInfo->ReachedRemoteEDTs) {
       /// Get the AAEDTInfo for the ReachedEDT with an optional dependency
@@ -1196,7 +1269,7 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
       /// If reachedEDTAA has no children, it is a dependency
       if (ReachedEDTAA->ChildEDTs.empty()) {
         DependOnEDTsAA.insert(ReachedEDTAA);
-        Graph.addDataEdge(ReachedEDT, CalledEDTDone, DBVal);
+        Graph.addDataEdge(ReachedEDT, CalledEDTDone, DBInfo->getDataBlock());
         LLVM_DEBUG(dbgs() << "     - EDT #" << ReachedEDT->getID()
                           << " must signal the value to EDT #"
                           << CalledEDTDone->getID() << "\n");
@@ -1219,7 +1292,8 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
       if (CanReach)
         continue;
 
-      Graph.addDataEdge(MayDependOnEDT->getEDT(), CalledEDTDone, DBVal);
+      Graph.addDataEdge(MayDependOnEDT->getEDT(), CalledEDTDone,
+                        DBInfo->getDataBlock());
       DependOnEDTsAA.insert(MayDependOnEDT);
       LLVM_DEBUG(dbgs() << "     - EDT #" << MayDependOnEDT->getEDT()->getID()
                         << " must signal the value to EDT #"
@@ -1250,23 +1324,65 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
 /// ------------------------------------------------------------------- ///
 /// The EDTDataBlock info abstract attribute, basically, what can we say
 /// about a DataBlock with regards to the EDTDataBlockInfoState.
+struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
+  AAEDTDataBlockInfoCtxAndVal(const IRPosition &IRP, Attributor &A)
+      : AAEDTDataBlockInfo(IRP, A) {}
+
+  /// See AbstractAttribute::initialize(...).
+  void initialize(Attributor &A) override {
+    /// Set EDT DataBlock info
+    CARTSCache = &static_cast<CARTSInfoCache &>(A.getInfoCache());
+    /// Create DataBlockInfo for the argument
+    CallBase &EDTCall = cast<CallBase>(getAnchorValue());
+    Value *ArgVal = &getAssociatedValue();
+    AA::ValueAndContext VAC(*ArgVal, EDTCall);
+    DB = CARTSCache->getOrCreateDataBlock(VAC, getCallSiteArgNo());
+
+    LLVM_DEBUG(dbgs() << "[AAEDTDataBlockInfoCtxAndVal::initialize] Value "
+                      << *DB->getValue() << "\n");
+  }
+
+  /// See AbstractAttribute::updateImpl(Attributor &A).
+  ChangeStatus updateImpl(Attributor &A) override {
+    LLVM_DEBUG(dbgs() << "[AAEDTDataBlockInfoCtxAndVal::updateImpl] "
+                      << getAssociatedValue() << "\n");
+    EDTValue &PointerValue = *CARTSCache->getPointerVal(DB->getValue());
+    auto *ArgValDBInfoAA = A.getAAFor<AAEDTDataBlockInfo>(
+        *this, IRPosition::value(PointerValue), DepClassTy::OPTIONAL);
+    if (!ArgValDBInfoAA || !ArgValDBInfoAA->getState().isValidState()) {
+      LLVM_DEBUG(dbgs() << "     - Failed to get AAEDTDataBlockInfo for value: "
+                        << PointerValue << "\n");
+      return indicatePessimisticFixpoint();
+    }
+    /// Clamp state
+    *this ^= ArgValDBInfoAA;
+    return ChangeStatus::CHANGED;
+  }
+
+  /// See AbstractAttribute::manifest(Attributor &A).
+  ChangeStatus manifest(Attributor &A) override {
+    /// Debug output info
+    LLVM_DEBUG(dbgs() << "AAEDTDataBlockInfoCtxAndVal::manifest: "
+                      << *DB->getValue() << "\n"
+                      << getAsStr(&A) << "\n");
+    ChangeStatus Changed = ChangeStatus::UNCHANGED;
+    return Changed;
+  }
+
+private:
+  SetVector<Value *> RemoteValues;
+};
+
 struct AAEDTDataBlockInfoVal : AAEDTDataBlockInfo {
   AAEDTDataBlockInfoVal(const IRPosition &IRP, Attributor &A)
       : AAEDTDataBlockInfo(IRP, A) {}
 
   /// See AbstractAttribute::initialize(...).
   void initialize(Attributor &A) override {
-    DBVal = &getAssociatedValue();
-
     /// Set EDT DataBlock info
     CARTSCache = &static_cast<CARTSInfoCache &>(A.getInfoCache());
-    ParentEDT = CARTSCache->getEDT(getAnchorScope());
-
-    /// NOTE: Later on, create EDT here based on the mode.
-    /// ReadWrite if the values is a dependency
-    /// ReadOnly if the value is a parameter
-    LLVM_DEBUG(dbgs() << "[AAEDTDataBlockInfoVal::initialize] Value #" << *DBVal
-                      << "\n");
+    LLVM_DEBUG(dbgs() << "[AAEDTDataBlockInfoVal::initialize] Value "
+                      << getAssociatedValue() << "\n");
   }
 
   ChangeStatus updateLocalReachedEDTs(Attributor &A) {
@@ -1275,7 +1391,7 @@ struct AAEDTDataBlockInfoVal : AAEDTDataBlockInfo {
 
     /// Run AAPointerInfo on the value
     const AAPointerInfo *PI = A.getAAFor<AAPointerInfo>(
-        *this, IRPosition::value(*DBVal), DepClassTy::OPTIONAL);
+        *this, IRPosition::value(getAssociatedValue()), DepClassTy::OPTIONAL);
     if (!PI || !PI->getState().isValidState()) {
       LLVM_DEBUG(dbgs() << "   - AAPointerInfo Failed or is invalid!\n");
       return indicatePessimisticFixpoint();
@@ -1322,13 +1438,13 @@ struct AAEDTDataBlockInfoVal : AAEDTDataBlockInfo {
 
     /// Run AAEDTDataBlockInfoVal on the RemoteValue, and clamp the state
     bool AllRemoteValuesWereFixed = true;
-    for (auto *RemoteValue : RemoteValues) {
+    for (Value *RemoteValue : RemoteValues) {
       /// Get the value associated with the argument. In case of load/store, get
       /// the pointer operand.
-      Value *Val = CARTSCache->getPointerVal(RemoteValue);
       /// NOTE: Check if later on is require to get the UnderlyingObject
       auto *RemoteValueDBInfoAA = A.getAAFor<AAEDTDataBlockInfo>(
-          *this, IRPosition::value(*Val), DepClassTy::OPTIONAL);
+          *this, IRPosition::value(*CARTSCache->getPointerVal(RemoteValue)),
+          DepClassTy::OPTIONAL);
       if (!RemoteValueDBInfoAA) {
         LLVM_DEBUG(dbgs() << "   - Failed to get AAEDTDataBlockInfo for value: "
                           << *RemoteValue << "\n");
@@ -1372,11 +1488,7 @@ struct AAEDTDataBlockInfoVal : AAEDTDataBlockInfo {
 
   /// See AbstractAttribute::manifest(Attributor &A).
   ChangeStatus manifest(Attributor &A) override {
-    /// Debug output info
-    LLVM_DEBUG(dbgs() << "AAEDTInfoFunction::manifest: " << *DBVal << "\n"
-                      << getAsStr(&A) << "\n");
-    ChangeStatus Changed = ChangeStatus::UNCHANGED;
-    return Changed;
+    return ChangeStatus::UNCHANGED;
   }
 
 private:
@@ -1420,7 +1532,6 @@ AAEDTDataBlockInfo &AAEDTDataBlockInfo::createForPosition(const IRPosition &IRP,
   case IRPosition::IRP_INVALID:
   case IRPosition::IRP_RETURNED:
   case IRPosition::IRP_CALL_SITE_RETURNED:
-  case IRPosition::IRP_CALL_SITE_ARGUMENT:
   case IRPosition::IRP_CALL_SITE:
   case IRPosition::IRP_FUNCTION:
     llvm_unreachable(
@@ -1428,6 +1539,9 @@ AAEDTDataBlockInfo &AAEDTDataBlockInfo::createForPosition(const IRPosition &IRP,
   case IRPosition::IRP_ARGUMENT:
   case IRPosition::IRP_FLOAT:
     AA = new (A.Allocator) AAEDTDataBlockInfoVal(IRP, A);
+    break;
+  case IRPosition::IRP_CALL_SITE_ARGUMENT:
+    AA = new (A.Allocator) AAEDTDataBlockInfoCtxAndVal(IRP, A);
     break;
   }
 
@@ -1469,10 +1583,23 @@ public:
     LLVM_DEBUG(dbgs() << TAG << "Running ARTS Analysis pass on Module: \n"
                       << M.getName() << "\n");
     LLVM_DEBUG(dbgs() << "-------------------------------------------------\n");
-    EDTGraph CARTSGraph;
-    computeGraph(M, AM, CARTSGraph);
-    /// 
-    generateCode(M, CARTSGraph);
+    /// EDT Cache
+    LLVM_DEBUG(dbgs() << TAG << "Creating and Initializing EDTs: \n");
+    SetVector<Function *> Functions;
+    for (Function &Fn : M) {
+      if (Fn.isDeclaration() && !Fn.hasLocalLinkage())
+        continue;
+      Functions.insert(&Fn);
+    }
+
+    FunctionAnalysisManager &FAM =
+        AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+    AnalysisGetter AG(FAM);
+    BumpPtrAllocator Allocator;
+    CARTSInfoCache InfoCache(M, AG, Allocator, Functions);
+
+    computeGraph(M, InfoCache);
+    generateCode(M, InfoCache);
     LLVM_DEBUG(dbgs() << "\n"
                       << "-------------------------------------------------\n");
     LLVM_DEBUG(dbgs() << TAG << "Process has finished\n");
@@ -1482,31 +1609,11 @@ public:
     return PreservedAnalyses::all();
   }
 
-  void computeGraph(Module &M, ModuleAnalysisManager &AM, EDTGraph &Graph) {
-    /// Get all functions and EDTs of the module
-    LLVM_DEBUG(dbgs() << TAG << "Creating and Initializing EDTs: \n");
-    EDTSet EDTs;
-    SetVector<Function *> Functions;
-    DenseMap<EDTFunction *, EDT *> FunctionEDTMap;
-    for (Function &Fn : M) {
-      if (Fn.isDeclaration() && !Fn.hasLocalLinkage())
-        continue;
-      Functions.insert(&Fn);
-      if (EDT *CurrentEDT = EDT::get(&Fn)) {
-        EDTs.insert(CurrentEDT);
-        FunctionEDTMap[&Fn] = CurrentEDT;
-      }
-    }
-
+  void computeGraph(Module &M, CARTSInfoCache &InfoCache) {
     LLVM_DEBUG(dbgs() << "\n\n[Attributor] Initializing AAEDTInfo: \n");
     /// Create attributor
-    FunctionAnalysisManager &FAM =
-        AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
-    AnalysisGetter AG(FAM);
+    auto &Functions = InfoCache.getFunctions();
     CallGraphUpdater CGUpdater;
-    BumpPtrAllocator Allocator;
-    CARTSInfoCache InfoCache(M, AG, Allocator, Functions, EDTs, FunctionEDTMap,
-                             Graph);
     AttributorConfig AC(CGUpdater);
     AC.DefaultInitializeLiveInternals = false;
     AC.IsModulePass = true;
@@ -1517,8 +1624,8 @@ public:
     Attributor A(Functions, InfoCache, AC);
 
     /// Register AAs
-    for (EDT *E : EDTs) {
-      A.getOrCreateAAFor<AAEDTInfo>(IRPosition::function(*E->getFn()),
+    for (Function *Fn : Functions) {
+      A.getOrCreateAAFor<AAEDTInfo>(IRPosition::function(*Fn),
                                     /* QueryingAA */ nullptr, DepClassTy::NONE,
                                     /* ForceUpdate */ false,
                                     /* UpdateAfterInit */ false);
@@ -1526,104 +1633,130 @@ public:
     ChangeStatus Changed = A.run();
     LLVM_DEBUG(dbgs() << "[Attributor] Done with " << Functions.size()
                       << " functions, result: " << Changed << ".\n");
-    Graph.print();
+    InfoCache.getGraph().print();
   }
 
-  void generateCode(Module &M, EDTGraph &CARTSGraph) {
-    ARTSCodegen CG(M);
-    auto EDTNodes = CARTSGraph.getNodes();
-    for (EDTGraphNode *EDTNode : EDTNodes) {
-      EDT &CurrentEDT = *EDTNode->getEDT();
-      // CG.insertEDTFn(CurrentEDT);
-      if(!CG.reserveEDTGuid(CurrentEDT))
-        continue;
+  void generateCode(Module &M, CARTSInfoCache &InfoCache) {
+    ARTSCodegen &CG = InfoCache.getCG();
+    EDTGraph &Graph = InfoCache.getGraph();
+    auto EDTNodes = Graph.getNodes();
+    /// Reserve GUIDs for all EDTs
+    // LLVM_DEBUG(dbgs() << "\nAll EDT Guids have been reserved\n");
+    // for (EDTGraphNode *EDTNode : EDTNodes) {
+    //   EDT &CurrentEDT = *EDTNode->getEDT();
+    //   /// For now ignore sync EDTs
+    //   if (!CurrentEDT.isAsync())
+    //     continue;
+    //   /// Modify data environments based on dependencies.
+    //   /// EDTs can only signal to DoneEDTs. Check if any output data edges
+    //   auto OutEdges = Graph.getOutgoingEdges(EDTNode);
+    //   if (OutEdges.size() == 0) {
+    //     continue;
+    //   } else {
+    //     /// Print the outgoing edges.
+    //     EDT *ParentSyncEDT = CurrentEDT.getParentSync();
+    //     for (EDTGraphEdge *DepEdge : OutEdges) {
+    //       EDTGraphNode *ToNode = DepEdge->getTo();
+    //       EDT *ToEDT = ToNode->getEDT();
+    //       /// For now ignore not Data edges
+    //       if (!DepEdge->isDataEdge())
+    //         continue;
 
-      //CG.getOrCreateEDTFunction(CurrentEDT);
-      CG.insertEDTEntry(CurrentEDT);
-      // switch (CurrentEDT.getTy()) {
-      // case EDTType::Task:
-      //   CG.generateTaskEDT(CurrentEDT);
-      //   break;
-      // case EDTType::Sync:
-      //   CG.generateSyncEDT(CurrentEDT);
-      //   break;
-      // case EDTType::Parallel:
-      //   CG.generateParallelEDT(CurrentEDT);
-      //   break;
-      // default:
-      //   llvm_unreachable("EDT Type not supported!");
-      // }
+    //       /// Make sure the EDT knows where to signal the value.
+    //       LLVM_DEBUG(dbgs() << "    - EDT #" << ParentSyncEDT->getID()
+    //                         << " must signal the DoneSyncEDTGuid to EDT #"
+    //                         << CurrentEDT.getID() << "\n");
+    //       Value *DoneSyncGuid = CurrentEDT.getDoneSync()->getGuidAddress();
+    //       assert(DoneSyncGuid && "DoneSyncGuid is null!");
+    //       EDTDataBlock *DoneSyncGuidDB = InfoCache.getOrCreateDataBlock(
+    //           DoneSyncGuid, EDTDataBlock::Mode::ReadOnly, ParentSyncEDT);
+    //       CurrentEDT.insertValueToEnv(DoneSyncGuid, true);
+    //       Graph.addDataEdge(ParentSyncEDT, &CurrentEDT, DoneSyncGuidDB);
+    //       /// Insert signal to the EDT in the exit block
+    //     }
+    //   }
+    //   // LLVM_DEBUG(dbgs() << "\n");
+    // }
 
-      // LLVM_DEBUG(dbgs() << "- EDT #" << E->getID() << " - \"" << E->getName()
-      //                   << "\"\n");
-      // LLVM_DEBUG(dbgs() << "  - Type: " << toString(E->getTy()) << "\n");
-      // /// Data environment
-      // LLVM_DEBUG(dbgs() << "  - Data Environment:\n");
-      // auto &DE = E->getDataEnv();
-      // LLVM_DEBUG(dbgs() << "    - " << "Number of ParamV = " <<
-      // DE.getParamC()
-      //                   << "\n");
-      // for (auto &P : DE.ParamV) {
-      //   LLVM_DEBUG(dbgs() << "      - " << *P << "\n");
-      // }
-      // LLVM_DEBUG(dbgs() << "    - " << "Number of DepV = " << DE.getDepC()
-      //                   << "\n");
-      // for (auto &D : DE.DepV) {
-      //   LLVM_DEBUG(dbgs() << "      - " << *D << "\n");
-      // }
-      /// Dependencies
-      // LLVM_DEBUG(dbgs() << "  - Incoming Edges:\n");
-      // auto InEdges = CARTSGraph.getIncomingEdges(EDTNode);
-      // if (InEdges.size() == 0) {
-      //   LLVM_DEBUG(dbgs() << "    - The EDT has no incoming edges\n");
-      // } else {
-      //   /// Print the incoming edges.
-      //   for (auto *DepEdge : InEdges) {
-      //     auto *From = DepEdge->getFrom();
-      //     auto *FromE = From->getEDT();
-      //     // LLVM_DEBUG(dbgs() << "    - [");
-      //     // if (DepEdge->isDataEdge()) {
-      //     //   LLVM_DEBUG(dbgs() << "data");
-      //     // } else if (DepEdge->isControlEdge()) {
-      //     //   LLVM_DEBUG(dbgs() << "control");
-      //     // }
-      //     // if (DepEdge->hasCreationDep()) {
-      //     //   LLVM_DEBUG(dbgs() << "/ creation");
-      //     // }
-      //     // LLVM_DEBUG(dbgs() << "] \"EDT #" << FromE->getID() << "\"\n");
-      //   }
-      // }
+    // LLVM_DEBUG(dbgs() << "    - [");
+    // if (DepEdge->isDataEdge()) {
+    //   LLVM_DEBUG(dbgs() << "data");
+    // } else if (DepEdge->isControlEdge()) {
+    //   LLVM_DEBUG(dbgs() << "control");
+    // }
+    // if (DepEdge->hasCreationDep()) {
+    //   LLVM_DEBUG(dbgs() << "/ creation");
+    // }
+    // LLVM_DEBUG(dbgs() << "] \"EDT #" << ToE->getID() << "\"\n");
+    // if (DepEdge->isDataEdge()) {
+    //   auto *DataEdge = cast<EDTGraphDataEdge>(DepEdge);
+    //   auto Values = DataEdge->getValues();
+    //   for (auto *V : Values) {
+    //     LLVM_DEBUG(dbgs() << "        - " << *V << "\n");
+    //   }
+    // }
+    //   /// Analyze output edges. If any data dependency, check if I need to
+    //   /// signal a GUID address or not.
+    //   //
+    //   // CG.insertEDTEntry(CurrentEDT);
 
-      // LLVM_DEBUG(dbgs() << "  - Outgoing Edges:\n");
-      // auto OutEdges = CARTSGraph.getOutgoingEdges(EDTNode);
-      // if (OutEdges.size() == 0) {
-      //   LLVM_DEBUG(dbgs() << "    - The EDT has no outgoing edges\n");
-      // } else {
-      //   /// Print the outgoing edges.
-      //   for (auto *DepEdge : OutEdges) {
-      //     auto *To = DepEdge->getTo();
-      //     auto *ToE = To->getEDT();
-      //     // LLVM_DEBUG(dbgs() << "    - [");
-      //     // if (DepEdge->isDataEdge()) {
-      //     //   LLVM_DEBUG(dbgs() << "data");
-      //     // } else if (DepEdge->isControlEdge()) {
-      //     //   LLVM_DEBUG(dbgs() << "control");
-      //     // }
-      //     // if (DepEdge->hasCreationDep()) {
-      //     //   LLVM_DEBUG(dbgs() << "/ creation");
-      //     // }
-      //     // LLVM_DEBUG(dbgs() << "] \"EDT #" << ToE->getID() << "\"\n");
-      //     // if (DepEdge->isDataEdge()) {
-      //     //   auto *DataEdge = cast<EDTGraphDataEdge>(DepEdge);
-      //     //   auto Values = DataEdge->getValues();
-      //     //   for (auto *V : Values) {
-      //     //     LLVM_DEBUG(dbgs() << "        - " << *V << "\n");
-      //     //   }
-      //     // }
-      //   }
-      // }
-      // LLVM_DEBUG(dbgs() << "\n");
-    }
+    //   // return;
+    //   // switch (CurrentEDT.getTy()) {
+    //   // case EDTType::Task:
+    //   //   CG.generateTaskEDT(CurrentEDT);
+    //   //   break;
+    //   // case EDTType::Sync:
+    //   //   CG.generateSyncEDT(CurrentEDT);
+    //   //   break;
+    //   // case EDTType::Parallel:
+    //   //   CG.generateParallelEDT(CurrentEDT);
+    //   //   break;
+    //   // default:
+    //   //   llvm_unreachable("EDT Type not supported!");
+    //   // }
+
+    //   // LLVM_DEBUG(dbgs() << "- EDT #" << E->getID() << " - \"" <<
+    //   E->getName()
+    //   //                   << "\"\n");
+    //   // LLVM_DEBUG(dbgs() << "  - Type: " << toString(E->getTy()) << "\n");
+    //   // /// Data environment
+    //   // LLVM_DEBUG(dbgs() << "  - Data Environment:\n");
+    //   // auto &DE = E->getDataEnv();
+    //   // LLVM_DEBUG(dbgs() << "    - " << "Number of ParamV = " <<
+    //   // DE.getParamC()
+    //   //                   << "\n");
+    //   // for (auto &P : DE.ParamV) {
+    //   //   LLVM_DEBUG(dbgs() << "      - " << *P << "\n");
+    //   // }
+    //   // LLVM_DEBUG(dbgs() << "    - " << "Number of DepV = " << DE.getDepC()
+    //   //                   << "\n");
+    //   // for (auto &D : DE.DepV) {
+    //   //   LLVM_DEBUG(dbgs() << "      - " << *D << "\n");
+    //   // }
+    //   /// Dependencies
+    //   // LLVM_DEBUG(dbgs() << "  - Incoming Edges:\n");
+    //   // auto InEdges = CARTSGraph.getIncomingEdges(EDTNode);
+    //   // if (InEdges.size() == 0) {
+    //   //   LLVM_DEBUG(dbgs() << "    - The EDT has no incoming edges\n");
+    //   // } else {
+    //   //   /// Print the incoming edges.
+    //   //   for (auto *DepEdge : InEdges) {
+    //   //     auto *From = DepEdge->getFrom();
+    //   //     auto *FromE = From->getEDT();
+    //   //     // LLVM_DEBUG(dbgs() << "    - [");
+    //   //     // if (DepEdge->isDataEdge()) {
+    //   //     //   LLVM_DEBUG(dbgs() << "data");
+    //   //     // } else if (DepEdge->isControlEdge()) {
+    //   //     //   LLVM_DEBUG(dbgs() << "control");
+    //   //     // }
+    //   //     // if (DepEdge->hasCreationDep()) {
+    //   //     //   LLVM_DEBUG(dbgs() << "/ creation");
+    //   //     // }
+    //   //     // LLVM_DEBUG(dbgs() << "] \"EDT #" << FromE->getID() <<
+    //   "\"\n");
+    //   //   }
+    //   // }
+    // }
   }
 };
 
