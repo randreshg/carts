@@ -40,20 +40,22 @@ EDTGraphDataEdge::~EDTGraphDataEdge() {
   //   delete V;
 }
 
-void EDTGraphDataEdge::addDataBlock(EDTDataBlock *DB) {
-  DataBlocks.insert(new EDTGraphDataBlockEdge(this, DB));
+bool EDTGraphDataEdge::addDataBlock(EDTDataBlock *DB) {
+  return DataBlocks.insert(DB);
 }
 
-void EDTGraphDataEdge::removeDataBlock(EDTDataBlock *DB) {
-  // auto It =
-  //     std::find_if(Values.begin(), Values.end(), [V](EDTGraphDataBlockEdge
-  //     *Val) {
-  //       return Val->getValue() == V;
-  //     });
-  // if (It != Values.end()) {
-  //   delete *It;
-  //   Values.erase(It);
-  // }
+bool EDTGraphDataEdge::addEDTValue(EDTValue *V) { return Values.insert(V); }
+
+bool EDTGraphDataEdge::addEDTGuid(EDT *Guid) { return EDTGuids.insert(Guid); }
+
+bool EDTGraphDataEdge::removeDataBlock(EDTDataBlock *DB) {
+  return DataBlocks.remove(DB);
+}
+
+bool EDTGraphDataEdge::removeEDTValue(EDTValue *V) { return Values.remove(V); }
+
+bool EDTGraphDataEdge::removeEDTGuid(EDT *EDTGuid) {
+  return EDTGuids.remove(EDTGuid);
 }
 
 /// EDTGraphDataBlockEdge

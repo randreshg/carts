@@ -227,34 +227,36 @@ void EDTGraph::addEdge(EDTGraphNode *From, EDTGraphNode *To,
 }
 
 /// Add edges with EDT
-void EDTGraph::addCreationEdge(EDT *From, EDT *To) {
-  addCreationEdge(getNode(From), getNode(To));
+EDTGraphEdge *EDTGraph::addCreationEdge(EDT *From, EDT *To) {
+  return addCreationEdge(getNode(From), getNode(To));
 }
 
-void EDTGraph::addDataEdge(EDT *From, EDT *To, EDTDataBlock *DB) {
-  addDataEdge(getNode(From), getNode(To), DB);
+EDTGraphEdge *EDTGraph::addDataEdge(EDT *From, EDT *To, EDTDataBlock *DB) {
+  return addDataEdge(getNode(From), getNode(To), DB);
 }
 
-void EDTGraph::addControlEdge(EDT *From, EDT *To) {
-  addControlEdge(getNode(From), getNode(To));
+EDTGraphEdge *EDTGraph::addControlEdge(EDT *From, EDT *To) {
+  return addControlEdge(getNode(From), getNode(To));
 }
 
 /// Add edges with EDTGraphNode
-void EDTGraph::addCreationEdge(EDTGraphNode *From, EDTGraphNode *To) {
-  EDTGraphEdge *E = fetchOrCreateEdge(From, To, false);
-  E->setCreationDep(true);
+EDTGraphEdge *EDTGraph::addCreationEdge(EDTGraphNode *From, EDTGraphNode *To) {
+  EDTGraphEdge *CreationEdge = fetchOrCreateEdge(From, To, false);
+  CreationEdge->setCreationDep(true);
+  return CreationEdge;
 }
 
-void EDTGraph::addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
-                           EDTDataBlock *DB) {
+EDTGraphEdge *EDTGraph::addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
+                                    EDTDataBlock *DB) {
   assert(DB != nullptr && "The data block is null");
   auto *DataEdge =
       dyn_cast<EDTGraphDataEdge>(fetchOrCreateEdge(From, To, true));
   DataEdge->addDataBlock(DB);
+  return DataEdge;
 }
 
-void EDTGraph::addControlEdge(EDTGraphNode *From, EDTGraphNode *To) {
-  fetchOrCreateEdge(From, To, false);
+EDTGraphEdge *EDTGraph::addControlEdge(EDTGraphNode *From, EDTGraphNode *To) {
+  return fetchOrCreateEdge(From, To, false);
 }
 
 void EDTGraph::removeEdge(EDTGraphEdge *Edge) {
@@ -342,8 +344,7 @@ void EDTGraph::print(void) {
           auto *DataEdge = cast<EDTGraphDataEdge>(DepEdge);
           auto DataBlocks = DataEdge->getDataBlocks();
           for (auto *DB : DataBlocks) {
-            LLVM_DEBUG(dbgs() << "        - " << *DB->getDataBlock()->getValue()
-                              << "\n");
+            LLVM_DEBUG(dbgs() << "        - " << *DB << "\n");
           }
         }
       }

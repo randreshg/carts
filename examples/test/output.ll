@@ -100,10 +100,9 @@ test_arts_ir.bc
 [AAEDTDataBlockInfoCtxAndVal::initialize] ptr %2 from EDT #3
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2 from EDT #3
-
-[AAEDTDataBlockInfoVal::initialize] ptr %2
-
-[AAEDTDataBlockInfoVal::updateImpl] ptr %2
+   - Analyzing DependentChildEDTs on ptr %2 (ptr %0)
+   - AAPointerInfo is not at fixpoint!
+   - Analyzing DependentSiblingEDTs on ptr %2
    - AAPointerInfo is not at fixpoint!
 
 [AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #3
@@ -113,10 +112,9 @@ test_arts_ir.bc
 [AAEDTDataBlockInfoCtxAndVal::initialize] ptr %3 from EDT #3
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #3
-
-[AAEDTDataBlockInfoVal::initialize] ptr %3
-
-[AAEDTDataBlockInfoVal::updateImpl] ptr %3
+   - Analyzing DependentChildEDTs on ptr %3 (ptr %1)
+   - AAPointerInfo is not at fixpoint!
+   - Analyzing DependentSiblingEDTs on ptr %3
    - AAPointerInfo is not at fixpoint!
 
 [AAEDTInfoCallsiteArg::initialize] CallArg #2 from EDT #3
@@ -140,6 +138,10 @@ test_arts_ir.bc
 [AAEDTDataBlockInfoCtxAndVal::initialize] ptr %3 from EDT #4
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #4
+   - Analyzing DependentChildEDTs on ptr %3 (ptr %0)
+        - Number of DependentChildEDTs: 0
+   - Analyzing DependentSiblingEDTs on ptr %3
+   - AAPointerInfo is not at fixpoint!
 
 [AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #4
 
@@ -160,10 +162,9 @@ test_arts_ir.bc
 [AAEDTDataBlockInfoCtxAndVal::initialize]   %number = alloca i32, align 4 from EDT #2
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #2
-
-[AAEDTDataBlockInfoVal::initialize]   %number = alloca i32, align 4
-
-[AAEDTDataBlockInfoVal::updateImpl]   %number = alloca i32, align 4
+   - Analyzing DependentChildEDTs on   %number = alloca i32, align 4 (ptr %number)
+        - Number of DependentChildEDTs: 0
+   - Analyzing DependentSiblingEDTs on   %number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
 
 [AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #2
@@ -173,33 +174,18 @@ test_arts_ir.bc
 [AAEDTDataBlockInfoCtxAndVal::initialize]   %random_number = alloca i32, align 4 from EDT #2
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+   - Analyzing DependentChildEDTs on   %random_number = alloca i32, align 4 (ptr %random_number)
+        - Number of DependentChildEDTs: 0
+   - Analyzing DependentSiblingEDTs on   %random_number = alloca i32, align 4
+        - Number of DependentSiblingEDTs: 1
 
-[AAEDTDataBlockInfoVal::initialize]   %random_number = alloca i32, align 4
+[AAEDTDataBlockInfoCtxAndVal::initialize]   %random_number = alloca i32, align 4 from EDT #1
 
-[AAEDTDataBlockInfoVal::updateImpl]   %random_number = alloca i32, align 4
-   - ReachedLocalEDTs: EDT #1
-   - ReachedLocalEDTs: EDT #2
-   - Number of ReachedLocalEDTs: 2
-
-[AAEDTDataBlockInfoVal::initialize] ptr %0
-
-[AAEDTDataBlockInfoVal::updateImpl] ptr %0
-   - No local EDTs reached!
-   - Number of ReachedRemoteEDTs: 0
-
-[AAEDTDataBlockInfoVal::initialize] ptr %random_number
-
-[AAEDTDataBlockInfoVal::updateImpl] ptr %random_number
-   - No local EDTs reached!
-   - Number of ReachedRemoteEDTs: 0
-   - Number of ReachedRemoteEDTs: 0
- ReachabilityInfo is at fixpoint!
-   - Analyzing local dependencies
-     - No local deps, EDT is asynchronous!
-   - Analyzing sync remote dependencies
-
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-   - Analyzing sync remote dependencies
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+   - Analyzing DependentChildEDTs on   %random_number = alloca i32, align 4 (ptr %0)
+        - Number of DependentChildEDTs: 0
+   - Analyzing DependentSiblingEDTs on   %random_number = alloca i32, align 4
+        - Number of DependentSiblingEDTs: 1
 
 [AAEDTInfoCallsiteArg::initialize] CallArg #2 from EDT #2
 
@@ -208,10 +194,9 @@ test_arts_ir.bc
 [AAEDTDataBlockInfoCtxAndVal::initialize]   %shared_number = alloca i32, align 4 from EDT #2
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-
-[AAEDTDataBlockInfoVal::initialize]   %shared_number = alloca i32, align 4
-
-[AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
+   - Analyzing DependentChildEDTs on   %shared_number = alloca i32, align 4 (ptr %shared_number)
+        - Number of DependentChildEDTs: 0
+   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
 
 [AAEDTInfoFunction::updateImpl] EDT #0
@@ -238,13 +223,6 @@ test_arts_ir.bc
 
 [AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
 
-[AAEDTDataBlockInfoCtxAndVal::initialize]   %random_number = alloca i32, align 4 from EDT #1
-
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
- ReachabilityInfo is at fixpoint!
-   - Analyzing local dependencies
-   - Analyzing sync remote dependencies
-
 [AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #1
 
 [AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
@@ -252,22 +230,10 @@ test_arts_ir.bc
 [AAEDTDataBlockInfoCtxAndVal::initialize]   %NewRandom = alloca i32, align 4 from EDT #1
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-
-[AAEDTDataBlockInfoVal::initialize]   %NewRandom = alloca i32, align 4
-
-[AAEDTDataBlockInfoVal::updateImpl]   %NewRandom = alloca i32, align 4
-   - ReachedLocalEDTs: EDT #1
-   - Number of ReachedLocalEDTs: 1
-
-[AAEDTDataBlockInfoVal::initialize] ptr %1
-
-[AAEDTDataBlockInfoVal::updateImpl] ptr %1
-   - No local EDTs reached!
-   - Number of ReachedRemoteEDTs: 0
-   - Number of ReachedRemoteEDTs: 0
- ReachabilityInfo is at fixpoint!
-   - Analyzing local dependencies
-   - Analyzing sync remote dependencies
+   - Analyzing DependentChildEDTs on   %NewRandom = alloca i32, align 4 (ptr %1)
+        - Number of DependentChildEDTs: 0
+   - Analyzing DependentSiblingEDTs on   %NewRandom = alloca i32, align 4
+        - Number of DependentSiblingEDTs: 0
 
 [AAEDTInfoCallsiteArg::initialize] CallArg #2 from EDT #1
 
@@ -276,6 +242,10 @@ test_arts_ir.bc
 [AAEDTDataBlockInfoCtxAndVal::initialize]   %number = alloca i32, align 4 from EDT #1
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #1
+   - Analyzing DependentChildEDTs on   %number = alloca i32, align 4 (ptr %2)
+   - AAPointerInfo is not at fixpoint!
+   - Analyzing DependentSiblingEDTs on   %number = alloca i32, align 4
+   - AAPointerInfo is not at fixpoint!
 
 [AAEDTInfoCallsiteArg::initialize] CallArg #3 from EDT #1
 
@@ -284,6 +254,10 @@ test_arts_ir.bc
 [AAEDTDataBlockInfoCtxAndVal::initialize]   %shared_number = alloca i32, align 4 from EDT #1
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+   - Analyzing DependentChildEDTs on   %shared_number = alloca i32, align 4 (ptr %3)
+   - AAPointerInfo is not at fixpoint!
+   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
+   - AAPointerInfo is not at fixpoint!
 
 [AAEDTInfoFunction::updateImpl] EDT #3
    - Getting updates for EDT #3
@@ -302,15 +276,17 @@ test_arts_ir.bc
 [AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2 from EDT #3
-
-[AAEDTDataBlockInfoVal::updateImpl] ptr %2
+   - Analyzing DependentChildEDTs on ptr %2 (ptr %0)
+   - AAPointerInfo is not at fixpoint!
+   - Analyzing DependentSiblingEDTs on ptr %2
    - AAPointerInfo is not at fixpoint!
 
 [AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #3
-
-[AAEDTDataBlockInfoVal::updateImpl] ptr %3
+   - Analyzing DependentChildEDTs on ptr %3 (ptr %1)
+   - AAPointerInfo is not at fixpoint!
+   - Analyzing DependentSiblingEDTs on ptr %3
    - AAPointerInfo is not at fixpoint!
 
 [AAEDTInfoCallsite::updateImpl] EDT #4
@@ -318,21 +294,27 @@ test_arts_ir.bc
 [AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #4
+   - Analyzing DependentSiblingEDTs on ptr %3
+   - AAPointerInfo is not at fixpoint!
 
 [AAEDTInfoCallsite::updateImpl] EDT #2
 
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #2
-
-[AAEDTDataBlockInfoVal::updateImpl]   %number = alloca i32, align 4
+   - Analyzing DependentSiblingEDTs on   %number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
 
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-
-[AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
+   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
 
 [AAEDTInfoFunction::updateImpl] EDT #0
@@ -353,231 +335,443 @@ test_arts_ir.bc
    - Getting updates for EDT #4
    - Finished getting updates for EDT #4
 
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
 [AAEDTInfoCallsite::updateImpl] EDT #1
 
 [AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-   - Analyzing sync remote dependencies
-
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-   - Analyzing sync remote dependencies
 
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #1
+   - Analyzing DependentChildEDTs on   %number = alloca i32, align 4 (ptr %2)
+   - AAPointerInfo is not at fixpoint!
+   - Analyzing DependentSiblingEDTs on   %number = alloca i32, align 4
+   - AAPointerInfo is not at fixpoint!
 
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-
-[AAEDTDataBlockInfoVal::updateImpl] ptr %3
+   - Analyzing DependentChildEDTs on   %shared_number = alloca i32, align 4 (ptr %3)
+   - AAPointerInfo is not at fixpoint!
+   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
    - AAPointerInfo is not at fixpoint!
 
-[AAEDTDataBlockInfoVal::updateImpl] ptr %2
-   - AAPointerInfo is not at fixpoint!
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
 
-[AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
-   - AAPointerInfo is not at fixpoint!
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
 
-[AAEDTDataBlockInfoVal::updateImpl] ptr %3
-   - AAPointerInfo is not at fixpoint!
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
 
-[AAEDTDataBlockInfoVal::updateImpl]   %number = alloca i32, align 4
-   - AAPointerInfo is not at fixpoint!
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
 
-[AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
-   - AAPointerInfo is not at fixpoint!
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
 
-[AAEDTDataBlockInfoVal::updateImpl] ptr %3
-   - AAPointerInfo is not at fixpoint!
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
 
-[AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
-   - AAPointerInfo is not at fixpoint!
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
 
-[AAEDTDataBlockInfoVal::updateImpl] ptr %3
-   - ReachedLocalEDTs: EDT #3
-   - ReachedLocalEDTs: EDT #4
-   - Number of ReachedLocalEDTs: 2
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
 
-[AAEDTDataBlockInfoVal::initialize] ptr %1
-
-[AAEDTDataBlockInfoVal::updateImpl] ptr %1
-   - No local EDTs reached!
-   - Number of ReachedRemoteEDTs: 0
-
-[AAEDTDataBlockInfoVal::initialize] ptr %0
-
-[AAEDTDataBlockInfoVal::updateImpl] ptr %0
-   - No local EDTs reached!
-   - Number of ReachedRemoteEDTs: 0
-   - Number of ReachedRemoteEDTs: 0
-
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #3
- ReachabilityInfo is at fixpoint!
-
-[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #4
- ReachabilityInfo is at fixpoint!
-
-[AAEDTDataBlockInfoVal::updateImpl] ptr %2
-   - ReachedLocalEDTs: EDT #3
-   - Number of ReachedLocalEDTs: 1
-
-[AAEDTDataBlockInfoVal::initialize] ptr %0
-
-[AAEDTDataBlockInfoVal::updateImpl] ptr %0
-   - No local EDTs reached!
-   - Number of ReachedRemoteEDTs: 0
-   - Number of ReachedRemoteEDTs: 0
-
-[AAEDTDataBlockInfoVal::updateImpl]   %shared_number = alloca i32, align 4
-   - ReachedLocalEDTs: EDT #1
-   - ReachedLocalEDTs: EDT #2
-   - Number of ReachedLocalEDTs: 2
-
-[AAEDTDataBlockInfoVal::initialize] ptr %shared_number
-
-[AAEDTDataBlockInfoVal::updateImpl] ptr %shared_number
-   - No local EDTs reached!
-   - Number of ReachedRemoteEDTs: 0
-   - Number of ReachedRemoteEDTs: 2
-
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-   - Analyzing local dependencies
-     - No local deps, EDT is asynchronous!
-   - Analyzing sync remote dependencies
-
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
-   - Analyzing sync remote dependencies
-
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-   - Analyzing local dependencies
-     - No local deps, EDT is asynchronous!
-   - Analyzing sync remote dependencies
-
-[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
-   - Analyzing sync remote dependencies
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2 from EDT #3
- ReachabilityInfo is at fixpoint!
+   - Analyzing DependentChildEDTs on ptr %2 (ptr %0)
+   - AAPointerInfo is not at fixpoint!
+   - Analyzing DependentSiblingEDTs on ptr %2
+   - AAPointerInfo is not at fixpoint!
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
- ReachabilityInfo is at fixpoint!
+   - Analyzing DependentChildEDTs on   %shared_number = alloca i32, align 4 (ptr %3)
+   - AAPointerInfo is not at fixpoint!
+   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
+   - AAPointerInfo is not at fixpoint!
 
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
- ReachabilityInfo is at fixpoint!
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #3
+   - Analyzing DependentChildEDTs on ptr %3 (ptr %1)
+   - AAPointerInfo is not at fixpoint!
+   - Analyzing DependentSiblingEDTs on ptr %3
+   - AAPointerInfo is not at fixpoint!
 
-[AAEDTInfoCallsite::updateImpl] EDT #3
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #4
+   - Analyzing DependentSiblingEDTs on ptr %3
+   - AAPointerInfo is not at fixpoint!
 
-[AAEDTInfoCallsite::updateImpl] EDT #4
-   - All DataBlocks were fixed for EDT #4
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
 
-[AAEDTInfoCallsite::updateImpl] EDT #4
-   - All DataBlocks were fixed for EDT #4
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
 
-[AAEDTDataBlockInfoVal::updateImpl]   %number = alloca i32, align 4
-   - ReachedLocalEDTs: EDT #1
-   - ReachedLocalEDTs: EDT #2
-   - Number of ReachedLocalEDTs: 2
-
-[AAEDTDataBlockInfoVal::initialize] ptr %number
-
-[AAEDTDataBlockInfoVal::updateImpl] ptr %number
-   - No local EDTs reached!
-   - Number of ReachedRemoteEDTs: 0
-   - Number of ReachedRemoteEDTs: 1
-
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-   - Analyzing local dependencies
-     - No local deps, EDT is asynchronous!
-   - Analyzing sync remote dependencies
-
-[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
-   - Analyzing sync remote dependencies
-
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-   - Analyzing local dependencies
-   - Analyzing sync remote dependencies
-
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-   - Analyzing local dependencies
-     - No local deps, EDT is asynchronous!
-   - Analyzing sync remote dependencies
-
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-   - Analyzing sync remote dependencies
-
-[AAEDTInfoFunction::updateImpl] EDT #4
-   - Getting updates for EDT #4
-   - Finished getting updates for EDT #4
-
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-   - Analyzing sync remote dependencies
-
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #1
- ReachabilityInfo is at fixpoint!
-
-[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #2
- ReachabilityInfo is at fixpoint!
-
-[AAEDTInfoCallsite::updateImpl] EDT #3
-   - All DataBlocks were fixed for EDT #3
-
-[AAEDTInfoCallsite::updateImpl] EDT #3
-   - All DataBlocks were fixed for EDT #3
-
-[AAEDTInfoCallsite::updateImpl] EDT #1
-
-[AAEDTInfoCallsite::updateImpl] EDT #2
-
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-   - Analyzing local dependencies
-   - Analyzing sync remote dependencies
-
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-   - Analyzing local dependencies
-     - No local deps, EDT is asynchronous!
-   - Analyzing sync remote dependencies
-
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
-   - Analyzing sync remote dependencies
-
-[AAEDTInfoFunction::updateImpl] EDT #3
-   - Getting updates for EDT #3
-   - Finished getting updates for EDT #3
-
-[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-   - Analyzing sync remote dependencies
-
-[AAEDTInfoCallsite::updateImpl] EDT #1
-
-[AAEDTInfoCallsite::updateImpl] EDT #2
-   - All DataBlocks were fixed for EDT #2
-
-[AAEDTInfoCallsite::updateImpl] EDT #2
-   - All DataBlocks were fixed for EDT #2
-
-[AAEDTInfoCallsite::updateImpl] EDT #1
-
-[AAEDTInfoFunction::updateImpl] EDT #1
-   - Getting updates for EDT #1
-   - Finished getting updates for EDT #1
-
-[AAEDTInfoFunction::updateImpl] EDT #2
-   - Getting updates for EDT #2
-   - Finished getting updates for EDT #2
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
 
 [AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-   - Analyzing sync remote dependencies
 
-[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
-   - Analyzing sync remote dependencies
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #1
+   - Analyzing DependentChildEDTs on   %number = alloca i32, align 4 (ptr %2)
+   - AAPointerInfo is not at fixpoint!
+   - Analyzing DependentSiblingEDTs on   %number = alloca i32, align 4
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2 from EDT #3
+   - Analyzing DependentChildEDTs on ptr %2 (ptr %0)
+   - AAPointerInfo is not at fixpoint!
+   - Analyzing DependentSiblingEDTs on ptr %2
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+   - Analyzing DependentChildEDTs on   %shared_number = alloca i32, align 4 (ptr %3)
+   - AAPointerInfo is not at fixpoint!
+   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
+   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #3
+   - Analyzing DependentChildEDTs on ptr %3 (ptr %1)
+   - AAPointerInfo is not at fixpoint!
+   - Analyzing DependentSiblingEDTs on ptr %3
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #4
+   - Analyzing DependentSiblingEDTs on ptr %3
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #1
+   - Analyzing DependentChildEDTs on   %number = alloca i32, align 4 (ptr %2)
+   - AAPointerInfo is not at fixpoint!
+   - Analyzing DependentSiblingEDTs on   %number = alloca i32, align 4
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #2
+   - Analyzing DependentSiblingEDTs on   %number = alloca i32, align 4
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+   - Analyzing DependentChildEDTs on   %shared_number = alloca i32, align 4 (ptr %3)
+   - AAPointerInfo is not at fixpoint!
+   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
+   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+   - Analyzing DependentChildEDTs on   %shared_number = alloca i32, align 4 (ptr %3)
+   - AAPointerInfo is not at fixpoint!
+   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #3
+   - Analyzing DependentChildEDTs on ptr %3 (ptr %1)
+        - Number of DependentChildEDTs: 0
+   - Analyzing DependentSiblingEDTs on ptr %3
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #4
+   - Analyzing DependentSiblingEDTs on ptr %3
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #3
+   - Analyzing DependentSiblingEDTs on ptr %3
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2 from EDT #3
+   - Analyzing DependentChildEDTs on ptr %2 (ptr %0)
+        - Number of DependentChildEDTs: 0
+   - Analyzing DependentSiblingEDTs on ptr %2
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+   - Analyzing DependentChildEDTs on   %shared_number = alloca i32, align 4 (ptr %3)
+        - Number of DependentChildEDTs: 2
+   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
+   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #3
+   - Analyzing DependentSiblingEDTs on ptr %3
+        - Number of DependentSiblingEDTs: 1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %3 from EDT #4
+   - Analyzing DependentSiblingEDTs on ptr %3
+        - Number of DependentSiblingEDTs: 1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2 from EDT #3
+   - Analyzing DependentSiblingEDTs on ptr %2
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
 
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-   - Analyzing sync remote dependencies
+
+[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
+
+[AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #1
+   - Analyzing DependentChildEDTs on   %number = alloca i32, align 4 (ptr %2)
+        - Number of DependentChildEDTs: 1
+   - Analyzing DependentSiblingEDTs on   %number = alloca i32, align 4
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl] ptr %2 from EDT #3
+   - Analyzing DependentSiblingEDTs on ptr %2
+        - Number of DependentSiblingEDTs: 0
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
+        - Number of DependentSiblingEDTs: 1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
+   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
+        - Number of DependentSiblingEDTs: 1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #1
+   - Analyzing DependentSiblingEDTs on   %number = alloca i32, align 4
+   - AAPointerInfo is not at fixpoint!
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
 
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
-   - Analyzing sync remote dependencies
+
+[AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
+
+[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #1
+   - Analyzing DependentSiblingEDTs on   %number = alloca i32, align 4
+        - Number of DependentSiblingEDTs: 1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %number = alloca i32, align 4 from EDT #2
+   - Analyzing DependentSiblingEDTs on   %number = alloca i32, align 4
+        - Number of DependentSiblingEDTs: 1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
+
+[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
 -------------------------------
-AAEDTInfoFunction::manifest: 
+[AAEDTInfoFunction::manifest] 
 State for EDT #0 -> 
      -ParentSyncEDT: <null>
      #Child EDTs: 2{1, 2}
@@ -591,19 +785,16 @@ Ty: main
 Data environment for EDT: 
 Number of ParamV: 0
 Number of DepV: 0
-[arts-codegen] Creating function for EDT #0
-[arts-codegen] Reserving GUID for EDT #0
-     EDT #0 doesn't have a parent EDT
 -------------------------------
-AAEDTInfoFunction::manifest: 
+[AAEDTInfoFunction::manifest] 
 State for EDT #1 -> 
      -ParentEDT: EDT #0
      -ParentSyncEDT: <null>
      #Child EDTs: 2{3, 4}
      #Reached DescendantEDTs: 0{}
-     #MaySignalLocal EDTs: 0{}
-     #MaySignalRemote EDTs: 0{}
-     #Dependent EDTs: 0{}
+     -MaySignalLocal EDTs invalid with 0 EDTs
+     -MaySignalRemote EDTs invalid with 0 EDTs
+     -Dependent EDTs invalid with 0 EDTs
 
 - EDT #1: edt.1.parallel
 Ty: parallel
@@ -614,11 +805,8 @@ Number of DepV: 4
   - ptr %1
   - ptr %2
   - ptr %3
-[arts-codegen] Creating function for EDT #1
-[arts-codegen] Reserving GUID for EDT #1
-[arts-codegen] Created ARTS runtime function artsReserveGuidRoute with type ptr (i32, i32)
 -------------------------------
-AAEDTInfoFunction::manifest: 
+[AAEDTInfoFunction::manifest] 
 State for EDT #3 -> 
      -ParentEDT: EDT #1
      -ParentSyncEDT: EDT #1
@@ -637,11 +825,8 @@ Number of ParamV: 2
 Number of DepV: 2
   - ptr %0
   - ptr %1
-[arts-codegen] Creating function for EDT #3
-[arts-codegen] Reserving GUID for EDT #3
-[arts-codegen] Found ARTS runtime function artsReserveGuidRoute with type ptr (i32, i32)
 -------------------------------
-AAEDTInfoFunction::manifest: 
+[AAEDTInfoFunction::manifest] 
 State for EDT #4 -> 
      -ParentEDT: EDT #1
      -ParentSyncEDT: EDT #1
@@ -658,19 +843,16 @@ Number of ParamV: 1
   - i32 %1
 Number of DepV: 1
   - ptr %0
-[arts-codegen] Creating function for EDT #4
-[arts-codegen] Reserving GUID for EDT #4
-[arts-codegen] Found ARTS runtime function artsReserveGuidRoute with type ptr (i32, i32)
 -------------------------------
-AAEDTInfoFunction::manifest: 
+[AAEDTInfoFunction::manifest] 
 State for EDT #2 -> 
      -ParentEDT: EDT #0
-     -ParentSyncEDT: <null>
+     -ParentSyncEDT invalid
      #Child EDTs: 0{}
      #Reached DescendantEDTs: 0{}
-     #MaySignalLocal EDTs: 0{}
-     #MaySignalRemote EDTs: 0{}
-     #Dependent EDTs: 0{}
+     -MaySignalLocal EDTs invalid with 0 EDTs
+     -MaySignalRemote EDTs invalid with 0 EDTs
+     -Dependent EDTs invalid with 0 EDTs
 
 - EDT #2: edt.2.task
 Ty: task
@@ -680,10 +862,97 @@ Number of DepV: 3
   - ptr %number
   - ptr %random_number
   - ptr %shared_number
-[arts-codegen] Creating function for EDT #2
-[arts-codegen] Reserving GUID for EDT #2
-[arts-codegen] Found ARTS runtime function artsReserveGuidRoute with type ptr (i32, i32)
-[Attributor] Done with 5 functions, result: changed.
+-------------------------------
+[AAEDTDataBlockInfoCtxAndVal::manifest] ptr %2 from EDT #3
+EDTDataBlock ->
+     - ParentEDT: EDT #1
+     - #DependentChildEDTs: 0{}
+     - #DependentChildDescendantEDTs: 0{}
+     - #DependentSiblingEDTs: 0{}
+     - #DependentSiblingDescendantEDTs: 0{}
+
+-------------------------------
+[AAEDTDataBlockInfoCtxAndVal::manifest] ptr %3 from EDT #3
+EDTDataBlock ->
+     - ParentEDT: EDT #1
+     - #DependentChildEDTs: 0{}
+     - #DependentChildDescendantEDTs: 0{}
+     - #DependentSiblingEDTs: 1{4}
+     - #DependentSiblingDescendantEDTs: 0{}
+
+-------------------------------
+[AAEDTDataBlockInfoCtxAndVal::manifest] ptr %3 from EDT #4
+EDTDataBlock ->
+     - ParentEDT: EDT #1
+     - #DependentChildEDTs: 0{}
+     - #DependentChildDescendantEDTs: 0{}
+     - #DependentSiblingEDTs: 1{3}
+     - #DependentSiblingDescendantEDTs: 0{}
+
+-------------------------------
+[AAEDTDataBlockInfoCtxAndVal::manifest]   %number = alloca i32, align 4 from EDT #2
+EDTDataBlock ->
+     - ParentEDT: EDT #0
+     - #DependentChildEDTs: 0{}
+     - #DependentChildDescendantEDTs: 0{}
+     - #DependentSiblingEDTs: 1{1}
+     - #DependentSiblingDescendantEDTs: 0{}
+
+-------------------------------
+[AAEDTDataBlockInfoCtxAndVal::manifest]   %random_number = alloca i32, align 4 from EDT #2
+EDTDataBlock ->
+     - ParentEDT: EDT #0
+     - #DependentChildEDTs: 0{}
+     - #DependentChildDescendantEDTs: 0{}
+     - #DependentSiblingEDTs: 1{1}
+     - DependentSiblingDescendantEDTs invalid with 0 EDTs
+
+-------------------------------
+[AAEDTDataBlockInfoCtxAndVal::manifest]   %random_number = alloca i32, align 4 from EDT #1
+EDTDataBlock ->
+     - ParentEDT: EDT #0
+     - #DependentChildEDTs: 0{}
+     - #DependentChildDescendantEDTs: 0{}
+     - #DependentSiblingEDTs: 1{2}
+     - DependentSiblingDescendantEDTs invalid with 0 EDTs
+
+-------------------------------
+[AAEDTDataBlockInfoCtxAndVal::manifest]   %shared_number = alloca i32, align 4 from EDT #2
+EDTDataBlock ->
+     - ParentEDT: EDT #0
+     - #DependentChildEDTs: 0{}
+     - #DependentChildDescendantEDTs: 0{}
+     - #DependentSiblingEDTs: 1{1}
+     - #DependentSiblingDescendantEDTs: 0{}
+
+-------------------------------
+[AAEDTDataBlockInfoCtxAndVal::manifest]   %NewRandom = alloca i32, align 4 from EDT #1
+EDTDataBlock ->
+     - ParentEDT: EDT #0
+     - #DependentChildEDTs: 0{}
+     - #DependentChildDescendantEDTs: 0{}
+     - #DependentSiblingEDTs: 0{}
+     - #DependentSiblingDescendantEDTs: 0{}
+
+-------------------------------
+[AAEDTDataBlockInfoCtxAndVal::manifest]   %number = alloca i32, align 4 from EDT #1
+EDTDataBlock ->
+     - ParentEDT: EDT #0
+     - #DependentChildEDTs: 1{3}
+     - #DependentChildDescendantEDTs: 0{}
+     - #DependentSiblingEDTs: 1{2}
+     - #DependentSiblingDescendantEDTs: 0{}
+
+-------------------------------
+[AAEDTDataBlockInfoCtxAndVal::manifest]   %shared_number = alloca i32, align 4 from EDT #1
+EDTDataBlock ->
+     - ParentEDT: EDT #0
+     - #DependentChildEDTs: 2{3, 4}
+     - #DependentChildDescendantEDTs: 0{}
+     - #DependentSiblingEDTs: 1{2}
+     - #DependentSiblingDescendantEDTs: 0{}
+
+[Attributor] Done with 5 functions, result: unchanged.
 - - - - - - - - - - - - - - - - - - - - - - - -
 [edt-graph] Printing the EDT Graph
 - EDT #3 - "edt.3.task"
@@ -712,19 +981,8 @@ Number of DepV: 3
   - Incoming Edges:
     - [control/ creation] "EDT #0"
   - Outgoing Edges:
-    - [control/ creation] "EDT #4"
     - [control/ creation] "EDT #3"
-
-- EDT #0 - "edt.0.main"
-  - Type: main
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 0
-  - Incoming Edges:
-    - The EDT has no incoming edges
-  - Outgoing Edges:
-    - [control/ creation] "EDT #1"
-    - [control/ creation] "EDT #2"
+    - [control/ creation] "EDT #4"
 
 - EDT #2 - "edt.2.task"
   - Type: task
@@ -751,6 +1009,17 @@ Number of DepV: 3
   - Outgoing Edges:
     - The EDT has no outgoing edges
 
+- EDT #0 - "edt.0.main"
+  - Type: main
+  - Data Environment:
+    - Number of ParamV = 0
+    - Number of DepV = 0
+  - Incoming Edges:
+    - The EDT has no incoming edges
+  - Outgoing Edges:
+    - [control/ creation] "EDT #1"
+    - [control/ creation] "EDT #2"
+
 - - - - - - - - - - - - - - - - - - - - - - - -
 
 
@@ -771,7 +1040,30 @@ target triple = "x86_64-unknown-linux-gnu"
 @.str.5 = private unnamed_addr constant [36 x i8] c"The final number is %d - % d - %d.\0A\00", align 1
 
 ; Function Attrs: mustprogress norecurse nounwind uwtable
-declare !carts !6 dso_local noundef i32 @main() local_unnamed_addr #0
+define dso_local noundef i32 @main() local_unnamed_addr #0 !carts !6 {
+entry:
+  %number = alloca i32, align 4
+  %shared_number = alloca i32, align 4
+  %random_number = alloca i32, align 4
+  %NewRandom = alloca i32, align 4
+  store i32 1, ptr %number, align 4, !tbaa !8
+  store i32 10000, ptr %shared_number, align 4, !tbaa !8
+  %call = tail call i32 @rand() #5
+  %rem = srem i32 %call, 10
+  %add = add nsw i32 %rem, 10
+  store i32 %add, ptr %random_number, align 4, !tbaa !8
+  %call1 = tail call i32 @rand() #5
+  store i32 %call1, ptr %NewRandom, align 4, !tbaa !8
+  call void @carts.edt(ptr nocapture %random_number, ptr nocapture %NewRandom, ptr nocapture %number, ptr nocapture %shared_number) #7
+  br label %codeRepl
+
+codeRepl:                                         ; preds = %entry
+  call void @carts.edt.3(ptr nocapture %number, ptr nocapture %random_number, ptr nocapture %shared_number) #5
+  br label %entry.split.ret
+
+entry.split.ret:                                  ; preds = %codeRepl
+  ret i32 0
+}
 
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
 declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) #1
@@ -780,7 +1072,18 @@ declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) #1
 declare i32 @rand() local_unnamed_addr #2
 
 ; Function Attrs: nocallback nofree norecurse nosync nounwind willreturn memory(readwrite)
-declare !carts !8 internal void @carts.edt(ptr nocapture readonly, ptr nocapture readonly, ptr nocapture, ptr nocapture) #3
+define internal void @carts.edt(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture %2, ptr nocapture %3) #3 !carts !12 {
+entry:
+  %4 = load i32, ptr %0, align 4, !tbaa !8
+  %5 = load i32, ptr %1, align 4, !tbaa !8
+  call void @carts.edt.1(ptr nocapture %2, ptr nocapture %3, i32 %4, i32 %5) #8
+  %6 = load i32, ptr %3, align 4, !tbaa !8
+  %inc = add nsw i32 %6, 1
+  store i32 %inc, ptr %3, align 4, !tbaa !8
+  %7 = load i32, ptr %2, align 4, !tbaa !8
+  call void @carts.edt.2(ptr nocapture readonly %3, i32 %7) #8
+  ret void
+}
 
 ; Function Attrs: nofree nounwind
 declare noundef i32 @printf(ptr nocapture noundef readonly, ...) local_unnamed_addr #4
@@ -788,7 +1091,20 @@ declare noundef i32 @printf(ptr nocapture noundef readonly, ...) local_unnamed_a
 declare i32 @__gxx_personality_v0(...)
 
 ; Function Attrs: nocallback nofree norecurse nosync nounwind willreturn memory(readwrite)
-declare !carts !10 internal void @carts.edt.1(ptr nocapture, ptr nocapture, i32, i32) #3
+define internal void @carts.edt.1(ptr nocapture %0, ptr nocapture %1, i32 %2, i32 %3) #3 !carts !14 {
+entry:
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !16)
+  %4 = load i32, ptr %0, align 4, !tbaa !8, !noalias !16
+  %5 = load i32, ptr %1, align 4, !tbaa !8, !noalias !16
+  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %4, i32 noundef %5, i32 noundef %2, i32 noundef %3) #5, !noalias !16
+  %6 = load i32, ptr %0, align 4, !tbaa !8, !noalias !16
+  %inc.i = add nsw i32 %6, 1
+  store i32 %inc.i, ptr %0, align 4, !tbaa !8, !noalias !16
+  %7 = load i32, ptr %1, align 4, !tbaa !8, !noalias !16
+  %dec.i = add nsw i32 %7, -1
+  store i32 %dec.i, ptr %1, align 4, !tbaa !8, !noalias !16
+  ret void
+}
 
 ; Function Attrs: nounwind
 declare noalias ptr @__kmpc_omp_task_alloc(ptr, i32, i32, i64, i64, ptr) local_unnamed_addr #5
@@ -797,10 +1113,16 @@ declare noalias ptr @__kmpc_omp_task_alloc(ptr, i32, i32, i64, i64, ptr) local_u
 declare i32 @__kmpc_omp_task(ptr, i32, ptr) local_unnamed_addr #5
 
 ; Function Attrs: nocallback nofree norecurse nosync nounwind willreturn memory(readwrite)
-declare !carts !12 internal void @carts.edt.2(ptr nocapture readonly, i32) #3
+define internal void @carts.edt.2(ptr nocapture readonly %0, i32 %1) #3 !carts !19 {
+entry:
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !21)
+  %2 = load i32, ptr %0, align 4, !tbaa !8, !noalias !21
+  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %1, i32 noundef %2) #5, !noalias !21
+  ret void
+}
 
 ; Function Attrs: nounwind
-declare !callback !14 void @__kmpc_fork_call(ptr, i32, ptr, ...) local_unnamed_addr #5
+declare !callback !24 void @__kmpc_fork_call(ptr, i32, ptr, ...) local_unnamed_addr #5
 
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
 declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) #1
@@ -809,125 +1131,18 @@ declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) #1
 declare void @llvm.experimental.noalias.scope.decl(metadata) #6
 
 ; Function Attrs: mustprogress norecurse nounwind uwtable
-declare !carts !16 internal void @carts.edt.3(ptr nocapture readonly, ptr nocapture readonly, ptr nocapture readonly) #0
-
-define internal void @edt.0.main(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
-entry:
-  %0 = call ptr @artsReserveGuidRoute(i32 1, i32 0)
-  %edt.1.parallel_guid.addr = alloca ptr, align 8
-  store ptr %0, ptr %edt.1.parallel_guid.addr, align 8
-  %1 = call ptr @artsReserveGuidRoute(i32 1, i32 0)
-  %edt.2.task_guid.addr = alloca ptr, align 8
-  store ptr %1, ptr %edt.2.task_guid.addr, align 8
-  br label %edt.body
-
-edt.body:                                         ; preds = %entry
-  %number = alloca i32, align 4
-  %shared_number = alloca i32, align 4
-  %random_number = alloca i32, align 4
-  %NewRandom = alloca i32, align 4
-  store i32 1, ptr %number, align 4, !tbaa !18
-  store i32 10000, ptr %shared_number, align 4, !tbaa !18
-  %call = tail call i32 @rand() #5
-  %rem = srem i32 %call, 10
-  %add = add nsw i32 %rem, 10
-  store i32 %add, ptr %random_number, align 4, !tbaa !18
-  %call1 = tail call i32 @rand() #5
-  store i32 %call1, ptr %NewRandom, align 4, !tbaa !18
-  call void @carts.edt(ptr nocapture %random_number, ptr nocapture %NewRandom, ptr nocapture %number, ptr nocapture %shared_number) #7
-  br label %codeRepl
-
-codeRepl:                                         ; preds = %edt.body
-  call void @carts.edt.3(ptr nocapture %number, ptr nocapture %random_number, ptr nocapture %shared_number) #5
-  br label %entry.split.ret
-
-entry.split.ret:                                  ; preds = %codeRepl
-  br label %exit
-
-exit:                                             ; preds = %entry.split.ret
-  ret void
-}
-
-define internal void @edt.1.parallel(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
-entry:
-  %0 = call ptr @artsReserveGuidRoute(i32 1, i32 0)
-  %edt.3.task_guid.addr = alloca ptr, align 8
-  store ptr %0, ptr %edt.3.task_guid.addr, align 8
-  %1 = call ptr @artsReserveGuidRoute(i32 1, i32 0)
-  %edt.4.task_guid.addr = alloca ptr, align 8
-  store ptr %1, ptr %edt.4.task_guid.addr, align 8
-  br label %edt.body
-
-edt.body:                                         ; preds = %entry
-  %2 = load i32, ptr %0, align 4, !tbaa !18
-  %3 = load i32, ptr %1, align 4, !tbaa !18
-  call void @carts.edt.1(ptr nocapture %2, ptr nocapture %3, i32 %2, i32 %3) #8
-  %4 = load i32, ptr %3, align 4, !tbaa !18
-  %inc = add nsw i32 %4, 1
-  store i32 %inc, ptr %3, align 4, !tbaa !18
-  %5 = load i32, ptr %2, align 4, !tbaa !18
-  call void @carts.edt.2(ptr nocapture readonly %3, i32 %5) #8
-  br label %exit
-
-exit:                                             ; preds = %edt.body
-  ret void
-}
-
-declare ptr @artsReserveGuidRoute(i32, i32)
-
-define internal void @edt.3.task(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
-entry:
-  br label %edt.body
-
-edt.body:                                         ; preds = %entry
-  tail call void @llvm.experimental.noalias.scope.decl(metadata !22)
-  %0 = load i32, ptr %0, align 4, !tbaa !18, !noalias !22
-  %1 = load i32, ptr %1, align 4, !tbaa !18, !noalias !22
-  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %0, i32 noundef %1, i32 noundef %2, i32 noundef %3) #5, !noalias !22
-  %2 = load i32, ptr %0, align 4, !tbaa !18, !noalias !22
-  %inc.i = add nsw i32 %2, 1
-  store i32 %inc.i, ptr %0, align 4, !tbaa !18, !noalias !22
-  %3 = load i32, ptr %1, align 4, !tbaa !18, !noalias !22
-  %dec.i = add nsw i32 %3, -1
-  store i32 %dec.i, ptr %1, align 4, !tbaa !18, !noalias !22
-  br label %exit
-
-exit:                                             ; preds = %edt.body
-  ret void
-}
-
-define internal void @edt.4.task(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
-entry:
-  br label %edt.body
-
-edt.body:                                         ; preds = %entry
-  tail call void @llvm.experimental.noalias.scope.decl(metadata !25)
-  %0 = load i32, ptr %0, align 4, !tbaa !18, !noalias !25
-  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %1, i32 noundef %0) #5, !noalias !25
-  br label %exit
-
-exit:                                             ; preds = %edt.body
-  ret void
-}
-
-define internal void @edt.2.task(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
-entry:
-  br label %edt.body
-
-edt.body:                                         ; preds = %entry
+define internal void @carts.edt.3(ptr nocapture readonly %number, ptr nocapture readonly %random_number, ptr nocapture readonly %shared_number) #0 !carts !26 {
+newFuncRoot:
   br label %entry.split
 
-entry.split:                                      ; preds = %edt.body
-  %0 = load i32, ptr %number, align 4, !tbaa !18
-  %1 = load i32, ptr %random_number, align 4, !tbaa !18
-  %2 = load i32, ptr %shared_number, align 4, !tbaa !18
+entry.split:                                      ; preds = %newFuncRoot
+  %0 = load i32, ptr %number, align 4, !tbaa !8
+  %1 = load i32, ptr %random_number, align 4, !tbaa !8
+  %2 = load i32, ptr %shared_number, align 4, !tbaa !8
   %call2 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.5, i32 noundef %0, i32 noundef %1, i32 noundef %2) #5
   br label %entry.split.ret.exitStub
 
 entry.split.ret.exitStub:                         ; preds = %entry.split
-  br label %exit
-
-exit:                                             ; preds = %entry.split.ret.exitStub
   ret void
 }
 
@@ -952,93 +1167,29 @@ attributes #8 = { nounwind memory(readwrite) }
 !5 = !{!"clang version 18.1.8"}
 !6 = !{!"main", !7}
 !7 = !{}
-!8 = !{!"parallel", !9}
-!9 = !{!"dep", !"dep", !"dep", !"dep"}
-!10 = !{!"task", !11}
-!11 = !{!"dep", !"dep", !"param", !"param"}
-!12 = !{!"task", !13}
-!13 = !{!"dep", !"param"}
-!14 = !{!15}
-!15 = !{i64 2, i64 -1, i64 -1, i1 true}
-!16 = !{!"task", !17}
-!17 = !{!"dep", !"dep", !"dep"}
-!18 = !{!19, !19, i64 0}
-!19 = !{!"int", !20, i64 0}
-!20 = !{!"omnipotent char", !21, i64 0}
-!21 = !{!"Simple C++ TBAA"}
-!22 = !{!23}
-!23 = distinct !{!23, !24, !".omp_outlined.: %__context"}
-!24 = distinct !{!24, !".omp_outlined."}
-!25 = !{!26}
-!26 = distinct !{!26, !27, !".omp_outlined..1: %__context"}
-!27 = distinct !{!27, !".omp_outlined..1"}
+!8 = !{!9, !9, i64 0}
+!9 = !{!"int", !10, i64 0}
+!10 = !{!"omnipotent char", !11, i64 0}
+!11 = !{!"Simple C++ TBAA"}
+!12 = !{!"parallel", !13}
+!13 = !{!"dep", !"dep", !"dep", !"dep"}
+!14 = !{!"task", !15}
+!15 = !{!"dep", !"dep", !"param", !"param"}
+!16 = !{!17}
+!17 = distinct !{!17, !18, !".omp_outlined.: %__context"}
+!18 = distinct !{!18, !".omp_outlined."}
+!19 = !{!"task", !20}
+!20 = !{!"dep", !"param"}
+!21 = !{!22}
+!22 = distinct !{!22, !23, !".omp_outlined..1: %__context"}
+!23 = distinct !{!23, !".omp_outlined..1"}
+!24 = !{!25}
+!25 = !{i64 2, i64 -1, i64 -1, i1 true}
+!26 = !{!"task", !27}
+!27 = !{!"dep", !"dep", !"dep"}
 
 
 -------------------------------------------------
 [edt-graph] Destroying the EDT Graph
-Global is external, but doesn't have external or weak linkage!
-ptr @carts.edt
-Global is external, but doesn't have external or weak linkage!
-ptr @carts.edt.1
-Global is external, but doesn't have external or weak linkage!
-ptr @carts.edt.2
-Global is external, but doesn't have external or weak linkage!
-ptr @carts.edt.3
-Referring to an argument in another function!
-  %2 = load i32, ptr %0, align 4, !tbaa !18
-Referring to an argument in another function!
-  %3 = load i32, ptr %1, align 4, !tbaa !18
-Referring to an argument in another function!
-  call void @carts.edt.1(ptr nocapture %2, ptr nocapture %3, i32 %2, i32 %3) #7
-Referring to an argument in another function!
-  %4 = load i32, ptr %3, align 4, !tbaa !18
-Referring to an argument in another function!
-  store i32 %inc, ptr %3, align 4, !tbaa !18
-Referring to an argument in another function!
-  %5 = load i32, ptr %2, align 4, !tbaa !18
-Referring to an argument in another function!
-  call void @carts.edt.2(ptr nocapture readonly %3, i32 %5) #7
-Referring to an argument in another function!
-  %0 = load i32, ptr %0, align 4, !tbaa !18, !noalias !22
-Referring to an argument in another function!
-  %1 = load i32, ptr %1, align 4, !tbaa !18, !noalias !22
-Referring to an argument in another function!
-  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %0, i32 noundef %1, i32 noundef %2, i32 noundef %3) #5, !noalias !22
-Referring to an argument in another function!
-  %2 = load i32, ptr %0, align 4, !tbaa !18, !noalias !22
-Referring to an argument in another function!
-  store i32 %inc.i, ptr %0, align 4, !tbaa !18, !noalias !22
-Referring to an argument in another function!
-  %3 = load i32, ptr %1, align 4, !tbaa !18, !noalias !22
-Referring to an argument in another function!
-  store i32 %dec.i, ptr %1, align 4, !tbaa !18, !noalias !22
-Referring to an argument in another function!
-  %0 = load i32, ptr %0, align 4, !tbaa !18, !noalias !25
-Referring to an argument in another function!
-  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %1, i32 noundef %0) #5, !noalias !25
-Referring to an argument in another function!
-  %0 = load i32, ptr %number, align 4, !tbaa !18
-Referring to an argument in another function!
-  %1 = load i32, ptr %random_number, align 4, !tbaa !18
-Referring to an argument in another function!
-  %2 = load i32, ptr %shared_number, align 4, !tbaa !18
-LLVM ERROR: Broken module found, compilation aborted!
-PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/ and include the crash backtrace.
-Stack dump:
-0.	Program arguments: opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so -debug-only=arts-analysis,arts,carts,arts-ir-builder,edt-graph,carts-metadata,arts-codegen -passes=arts-analysis test_arts_ir.bc -o test_arts_analysis.bc
- #0 0x00007f0702dc6ef8 llvm::sys::PrintStackTrace(llvm::raw_ostream&, int) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0x191ef8)
- #1 0x00007f0702dc4b7e llvm::sys::RunSignalHandlers() (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0x18fb7e)
- #2 0x00007f0702dc75ad SignalHandler(int) Signals.cpp:0:0
- #3 0x00007f0705b08910 __restore_rt (/lib64/libpthread.so.0+0x16910)
- #4 0x00007f07026d1d2b raise (/lib64/libc.so.6+0x4ad2b)
- #5 0x00007f07026d33e5 abort (/lib64/libc.so.6+0x4c3e5)
- #6 0x00007f0702d12d3c llvm::report_fatal_error(llvm::Twine const&, bool) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0xddd3c)
- #7 0x00007f0702d12b66 (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0xddb66)
- #8 0x00007f07031f3bca (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMCore.so.18.1+0x2f9bca)
- #9 0x0000562b2f18c32d llvm::detail::PassModel<llvm::Module, llvm::VerifierPass, llvm::PreservedAnalyses, llvm::AnalysisManager<llvm::Module>>::run(llvm::Module&, llvm::AnalysisManager<llvm::Module>&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x2032d)
-#10 0x00007f07031ba2a6 llvm::PassManager<llvm::Module, llvm::AnalysisManager<llvm::Module>>::run(llvm::Module&, llvm::AnalysisManager<llvm::Module>&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMCore.so.18.1+0x2c02a6)
-#11 0x0000562b2f185293 llvm::runPassPipeline(llvm::StringRef, llvm::Module&, llvm::TargetMachine*, llvm::TargetLibraryInfoImpl*, llvm::ToolOutputFile*, llvm::ToolOutputFile*, llvm::ToolOutputFile*, llvm::StringRef, llvm::ArrayRef<llvm::PassPlugin>, llvm::opt_tool::OutputKind, llvm::opt_tool::VerifierKind, bool, bool, bool, bool, bool, bool, bool) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x19293)
-#12 0x0000562b2f192aaa main (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x26aaa)
-#13 0x00007f07026bc24d __libc_start_main (/lib64/libc.so.6+0x3524d)
-#14 0x0000562b2f17ea3a _start /home/abuild/rpmbuild/BUILD/glibc-2.31/csu/../sysdeps/x86_64/start.S:122:0
-make: *** [Makefile:23: test_arts_analysis.bc] Aborted
+llvm-dis test_arts_analysis.bc
+clang++ -fopenmp test_arts_analysis.bc -O3 -march=native -o test_opt -lstdc++

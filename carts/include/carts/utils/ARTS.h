@@ -62,6 +62,22 @@ private:
   EDT *Parent = nullptr;
 };
 
+inline raw_ostream &operator<<(raw_ostream &OS, EDTDataBlock &DB) {
+  OS << *DB.getValue() << " / ";
+  switch (DB.getMode()) {
+  case EDTDataBlock::Mode::ReadOnly:
+    OS << "ReadOnly";
+    break;
+  case EDTDataBlock::Mode::WriteOnly:
+    OS << "WriteOnly";
+    break;
+  case EDTDataBlock::Mode::ReadWrite:
+    OS << "ReadWrite";
+    break;
+  }
+  return OS;
+}
+
 class EDTEnvironment {
 public:
   EDTEnvironment(EDT *E);

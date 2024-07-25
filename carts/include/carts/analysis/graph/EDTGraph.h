@@ -62,13 +62,13 @@ public:
                                   bool IsDataEdge);
   void addEdge(EDTGraphNode *From, EDTGraphNode *To, EDTGraphEdge *Edge);
   /// Add edges with EDT
-  void addCreationEdge(EDT *From, EDT *To);
-  void addDataEdge(EDT *From, EDT *To, EDTDataBlock *DB);
-  void addControlEdge(EDT *From, EDT *To);
+  EDTGraphEdge *addCreationEdge(EDT *From, EDT *To);
+  EDTGraphEdge *addDataEdge(EDT *From, EDT *To, EDTDataBlock *DB);
+  EDTGraphEdge *addControlEdge(EDT *From, EDT *To);
   /// Add edges with EDTGraphNode
-  void addCreationEdge(EDTGraphNode *From, EDTGraphNode *To);
-  void addDataEdge(EDTGraphNode *From, EDTGraphNode *To, EDTDataBlock *DB);
-  void addControlEdge(EDTGraphNode *From, EDTGraphNode *To);
+  EDTGraphEdge *addCreationEdge(EDTGraphNode *From, EDTGraphNode *To);
+  EDTGraphEdge *addDataEdge(EDTGraphNode *From, EDTGraphNode *To, EDTDataBlock *DB);
+  EDTGraphEdge *addControlEdge(EDTGraphNode *From, EDTGraphNode *To);
 
   void removeEdge(EDTGraphEdge *Edge);
   void removeEdge(EDTGraphNode *From, EDTGraphNode *To);
