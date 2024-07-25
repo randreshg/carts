@@ -6,6 +6,7 @@
 
 #include "carts/analysis/graph/EDTGraph.h"
 #include "carts/utils/ARTS.h"
+#include "llvm/ADT/SetVector.h"
 #include <unordered_set>
 
 /// ------------------------------------------------------------------- ///
@@ -57,16 +58,31 @@ class EDTGraphDataEdge : public EDTGraphEdge {
 public:
   EDTGraphDataEdge(EDTGraphNode *From, EDTGraphNode *To);
   virtual ~EDTGraphDataEdge();
-  void addDataBlock(EDTDataBlock *DB);
-  void removeDataBlock(EDTDataBlock *DB);
-  std::unordered_set<EDTGraphDataBlockEdge *> getDataBlocks() { return DataBlocks; }
+  /// Add interface
+  bool addDataBlock(EDTDataBlock *DB);
+  bool addEDTValue(EDTValue *V);
+  bool addEDTGuid(EDT *Guid);
+
+  /// Remove interface
+  bool removeDataBlock(EDTDataBlock *DB);
+  bool removeEDTValue(EDTValue *V);
+  bool removeEDTGuid(EDT *EDTGuid);
+
+  /// Getters
+  SetVector<EDTDataBlock *> getDataBlocks() { return DataBlocks; }
+  SetVector<EDTValue *> getValues() { return Values; }
+  SetVector<EDT *> getEDTGuids() { return EDTGuids; }
+
+  /// Helpers
   bool isDataEdge() const override { return true; }
   bool isControlEdge() const override { return false; }
 
   static bool classof(const EDTGraphEdge *E) { return E->isDataEdge(); }
 
 private:
-  std::unordered_set<EDTGraphDataBlockEdge *> DataBlocks;
+  SetVector<EDTDataBlock *> DataBlocks;
+  SetVector<EDTValue *> Values;
+  SetVector<EDT *> EDTGuids;
 };
 
 class EDTGraphDataBlockEdge {

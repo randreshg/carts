@@ -38,6 +38,7 @@
 //   return 0;
 // }
 
+/// EDT 0
 int main() {
   // Generate a random number between 10 and 10
   int number = 1;
@@ -50,7 +51,7 @@ int main() {
     // #pragma omp single 
     /// Parallel EDT
     {
-      /// EDT 2
+      /// EDT 3
       #pragma omp task firstprivate(random_number, NewRandom)
       {
         printf("I think the number is %d/%d. with %d -- %d\n", number,
@@ -61,7 +62,7 @@ int main() {
 
       shared_number++;
 
-      /// EDT 3
+      /// EDT 4
       #pragma omp task firstprivate(number) shared(shared_number)
       {
         printf("I think the number is %d - %d.\n", number, shared_number);
@@ -70,7 +71,7 @@ int main() {
     }
     
   }
-  /// EDT 4
+  /// EDT 2
   /// Parallel done EDT
   {
     printf("The final number is %d - % d - %d.\n", number, random_number, shared_number);
