@@ -156,7 +156,7 @@ private:
 public:
   void setCall(EDTCallBase *Call);
   void setParent(EDT *Parent);
-  void setParentSync(EDT *ParentSync);
+  void setParentSync(EDT *ParentSync, bool SetDoneSync = true);
   void setDoneSync(EDT *DoneSync);
   void setNode(uint32_t Node);
 

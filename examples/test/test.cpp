@@ -21,140 +21,28 @@
 #include <omp.h>
 #include <stdlib.h>
 
-// int main() {
-//   // Generate a random number between 10 and 10
-//   int shared_number = rand();
-//   int random_number = rand() % 10 + 10;
-//   #pragma omp parallel
-//   {
-//     #pragma omp task firstprivate(random_number)
-//     {
-//       printf("I think the number is %d/%d\n",
-//              shared_number, random_number);
-//       shared_number--;
-//     }
-//   }
-//   printf("The final number is %d - %d.\n", shared_number, random_number);
-//   return 0;
-// }
-
-/// EDT 0
 int main() {
   // Generate a random number between 10 and 10
-  int number = 1;
-  int shared_number = 10000;
+  int shared_number = rand();
   int random_number = rand() % 10 + 10;
-  int NewRandom = rand();
-  /// EDT 1
+  /// EDT 0
   #pragma omp parallel
   {
-    // #pragma omp single 
-    /// Parallel EDT
-    {
-      /// EDT 3
-      #pragma omp task firstprivate(random_number, NewRandom)
-      {
-        printf("I think the number is %d/%d. with %d -- %d\n", number,
-              shared_number, random_number, NewRandom);
-        number++;
-        shared_number--;
-      }
-
-      shared_number++;
-
-      /// EDT 4
-      #pragma omp task firstprivate(number) shared(shared_number)
-      {
-        printf("I think the number is %d - %d.\n", number, shared_number);
-        number++;
-      }
-    }
+    // #pragma omp single
     
+    ///EDT 1
+    #pragma omp task firstprivate(random_number)
+    {
+      printf("I think the number is %d/%d\n",
+             shared_number, random_number);
+      ///EDT 2
+      // #pragma omp task shared(shared_number)
+      shared_number--;
+    }
+
+    // #taskwait
   }
   /// EDT 2
-  /// Parallel done EDT
-  {
-    printf("The final number is %d - % d - %d.\n", number, random_number, shared_number);
-  }
-  
+  printf("The final number is %d - %d.\n", shared_number, random_number);
   return 0;
 }
-
-// int main() {
-//   // Generate a random number between 10 and 10
-//   int number = 1;
-//   int shared_number = 10000;
-//   int random_number = rand() % 10 + 10;
-//   int NewRandom = rand();
-//   #pragma omp parallel
-//   {
-
-//     presinglework();
-//     #pragma omp single 
-//     /// Parallel EDT
-//     {
-//       /// Task1
-//       #pragma omp task firstprivate(random_number, NewRandom) shared(shared_number.....)
-//       {
-//         printf("I think the number is %d/%d. with %d -- %d\n", number,
-//               shared_number, random_number, NewRandom);
-//         number++;
-//         shared_number--;
-//       }
-
-//       // shared_number++;
-
-//       #pragma omp taskwait 
-//       /// Task2
-//       #pragma omp task firstprivate(number) shared(shared_number)
-//       {
-//         printf("I think the number is %d - %d.\n", number, shared_number);
-//         number++;
-//       }
-//     }
-//     postsingle();
-//   }
-//   /// Paralllel done EDT
-//   {
-//     printf("The final number is %d - % d.\n", number, random_number);
-//   }
-  
-//   return 0;
-// }
-
-// #include <stdio.h>
-// #include <stdlib.h>
-// #include <stdint.h>
-
-// int32_t ** allocateMatrix (int32_t l){
-//   int32_t **p = (int32_t **)malloc(sizeof(int32_t *) * l);
-//   for (int32_t i=0; i < l; i++){
-//     p[i] = (int32_t *) malloc(sizeof(int32_t) * l);
-//     for (int32_t j=0; j < l; j++){
-//       p[i][j] = i + j;
-//     }
-//   }
-
-//   return p;
-// }
-
-// int main (int argc, char *argv[]){
-//   if (argc < 2){
-//     return 1;
-//   }
-//   int32_t l = atoi(argv[1]);
-//   int32_t **m = allocateMatrix(l);
-
-//   for (int32_t i=0; i < l; i++){
-//     for (int32_t j=0; j < l; j++){
-//       printf("[%d][%d] = %d\n", i, j, m[i][j]);
-//     }
-//   }
-
-//   for (int32_t i=0; i < l; i++){
-//     free(m[i]);
-//   }
-//   free(m);
-
-//   return 0;
-// }

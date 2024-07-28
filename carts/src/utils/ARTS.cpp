@@ -78,8 +78,7 @@ namespace arts {
 ///                            EDT DATABLOCK                            ///
 /// ------------------------------------------------------------------- ///
 EDTDataBlock::EDTDataBlock(EDTValue *V) : V(V) {}
-EDTDataBlock::EDTDataBlock(EDTValue *V, Mode M)
-    : V(V), M(M) {}
+EDTDataBlock::EDTDataBlock(EDTValue *V, Mode M) : V(V), M(M) {}
 
 /// Getters
 EDTValue *EDTDataBlock::getValue() { return V; }
@@ -215,7 +214,11 @@ bool EDT::isDep(uint32_t CallArgItr) {
 /// What we learned after running the Attributor
 void EDT::setCall(EDTCallBase *Call) { this->Call = Call; }
 void EDT::setParent(EDT *Parent) { this->Parent = Parent; }
-void EDT::setParentSync(EDT *ParentSync) { this->ParentSync = ParentSync; }
+void EDT::setParentSync(EDT *ParentSync, bool SetDoneSync) {
+  this->ParentSync = ParentSync;
+  if (SetDoneSync)
+    setDoneSync(ParentSync->getDoneSync());
+}
 void EDT::setDoneSync(EDT *DoneSync) { this->DoneSync = DoneSync; }
 void EDT::setNode(uint32_t Node) { this->Node = Node; }
 

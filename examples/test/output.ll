@@ -234,6 +234,8 @@ test_arts_ir.bc
         - Number of DependentChildEDTs: 0
    - Analyzing DependentSiblingEDTs on   %NewRandom = alloca i32, align 4
         - Number of DependentSiblingEDTs: 0
+   - Analyzing local dependencies
+   - Analyzing sync dependencies
 
 [AAEDTInfoCallsiteArg::initialize] CallArg #2 from EDT #1
 
@@ -342,6 +344,9 @@ test_arts_ir.bc
 [AAEDTInfoCallsite::updateImpl] EDT #1
 
 [AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
+
+[AAEDTInfoCallsiteArg::updateImpl]   %NewRandom = alloca i32, align 4 from EDT #1
+   - Analyzing sync dependencies
 
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
 
@@ -574,8 +579,16 @@ test_arts_ir.bc
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
 
 [AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #3
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync dependencies
+     - No sync deps, EDT is asynchronous!
 
 [AAEDTInfoCallsiteArg::updateImpl] ptr %3 from EDT #4
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync dependencies
+     - No sync deps, EDT is asynchronous!
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
 
@@ -618,10 +631,23 @@ test_arts_ir.bc
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
 
 [AAEDTInfoCallsiteArg::updateImpl] ptr %2 from EDT #3
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync dependencies
+     - No sync deps, EDT is asynchronous!
 
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
+   - Analyzing local dependencies
+     - EDT #1 may signal EDT #3
+     - EDT #1 may signal EDT #4
+   - Analyzing sync dependencies
+    - Analyzing EDT #2
 
 [AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync dependencies
+     - No sync deps, EDT is asynchronous!
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
 
@@ -648,8 +674,16 @@ test_arts_ir.bc
 [AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
 
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #1
+   - Analyzing local dependencies
+     - EDT #1 may signal EDT #3
+   - Analyzing sync dependencies
+    - Analyzing EDT #2
 
 [AAEDTInfoCallsiteArg::updateImpl]   %number = alloca i32, align 4 from EDT #2
+   - Analyzing local dependencies
+     - No local deps, EDT is asynchronous!
+   - Analyzing sync dependencies
+     - No sync deps, EDT is asynchronous!
 
 [AAEDTDataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
 
@@ -981,8 +1015,8 @@ EDTDataBlock ->
   - Incoming Edges:
     - [control/ creation] "EDT #0"
   - Outgoing Edges:
-    - [control/ creation] "EDT #3"
     - [control/ creation] "EDT #4"
+    - [control/ creation] "EDT #3"
 
 - EDT #2 - "edt.2.task"
   - Type: task
