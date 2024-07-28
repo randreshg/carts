@@ -205,6 +205,7 @@ EDTType EDT::getTy() const { return Ty; }
 
 /// Helpers
 bool EDT::isAsync() { return !isa<SyncEDT>(this); }
+bool EDT::isMain() { return isa<MainEDT>(this); }
 
 bool EDT::isDep(uint32_t CallArgItr) {
   auto *Arg = Fn->getArg(CallArgItr);
@@ -220,12 +221,14 @@ void EDT::setParentSync(EDT *ParentSync, bool SetDoneSync) {
     setDoneSync(ParentSync->getDoneSync());
 }
 void EDT::setDoneSync(EDT *DoneSync) { this->DoneSync = DoneSync; }
+// void EDT::setIsDoneSync(bool IsDoneSync) { this->IsDoneSync = IsDoneSync; }
 void EDT::setNode(uint32_t Node) { this->Node = Node; }
 
 EDTCallBase *EDT::getCall() { return Call; }
 EDT *EDT::getParent() { return Parent; }
 EDT *EDT::getParentSync() { return ParentSync; }
 EDT *EDT::getDoneSync() { return DoneSync; }
+// bool EDT::isDoneSync() { return IsDoneSync; }
 uint32_t EDT::getNode() { return Node; }
 
 /// Information regarding the generated EDT

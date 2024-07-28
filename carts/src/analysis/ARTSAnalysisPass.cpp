@@ -287,14 +287,19 @@ struct EDTInfoState : AbstractState {
 
   /// Insert
   bool insertChildEDT(EDT *ChildEDT) {
-    CARTSCache->getGraph().addCreationEdge(EDTInfo, ChildEDT);
-    return ChildEDTs.insert(ChildEDT);
+    bool Inserted = ChildEDTs.insert(ChildEDT);
+    if (Inserted)
+      CARTSCache->getGraph().addCreationEdge(EDTInfo, ChildEDT);
+    return Inserted;
   }
 
   bool insertDependentEDT(EDT *ToEDT, EDTDataBlock *DB) {
-    CARTSCache->getGraph().addDataEdge(EDTInfo, ToEDT, DB);
-    DependentEDTDBs[ToEDT].insert(DB);
-    return DependentEDTs.insert(ToEDT);
+    bool Inserted = DependentEDTs.insert(ToEDT);
+    if (Inserted) {
+      CARTSCache->getGraph().addDataEdge(EDTInfo, ToEDT, DB);
+      DependentEDTDBs[ToEDT].insert(DB);
+    }
+    return Inserted;
   }
 
   /// Getters
@@ -745,21 +750,25 @@ struct AAEDTInfoFunction : AAEDTInfo {
                         << "\n");
       EDTInfo->setParent(ParentEDT);
 
-      /// Check if it is a sync EDT
-      if (EDTInfo->isAsync())
+      /// AsyncEDTs do not have a SiblingDoneEDT
+      if (EDTInfo->isAsync()) {
+        /// If the parent is the MainEDT, we don't need a ParentSyncEDT
+        if (ParentEDT->isMain())
+          ParentSyncEDT.indicateOptimisticFixpoint();
         return true;
+      }
 
-      /// SyncEDTs must have a DoneEDT.
+      /// If it is a SyncEDT, it must have a DoneEDT
       /// It is usually in the first instruction of the next BB.
       /// Start by looking at the next instruction after the EDTCall
       auto *NextBB = EDTCall->getParent()->getNextNode();
       auto *CB = dyn_cast<CallBase>(&NextBB->front());
       assert(CB && "Next instruction is not a CallBase!");
       DoneEDT = CARTSCache->getOrCreateEDT(CB);
+      EDTInfo->setDoneSync(DoneEDT);
       assert(
           DoneEDT &&
           "DoneEDT is null! It should have been found in the next BasicBlock!");
-
       LLVM_DEBUG(dbgs() << "   - DoneEDT: EDT #" << DoneEDT->getID() << "\n");
 
       /// Also, Sync EDTs do not have a ParentSyncEDT
@@ -839,6 +848,8 @@ struct AAEDTInfoFunction : AAEDTInfo {
   EDT *getParentSyncEDTInfo(EDT *ParentSyncEDTInfo, uint32_t Depth = 0) {
     /// The ParentSyncEDT had to eventually created me. Analyze the
     /// ParentSyncEDTInfo and its ancestors to find the ParentSyncEDT
+    if (!ParentSyncEDTInfo)
+      return nullptr;
 
     /// Check if the ParentSyncEDTInfo is a SyncEDT
     SyncEDT *SyncEDTInfo = dyn_cast<SyncEDT>(ParentSyncEDTInfo);
@@ -870,22 +881,25 @@ struct AAEDTInfoFunction : AAEDTInfo {
     if (!updateChildEDTs(A))
       return hasChanged(StateBefore);
 
+    /// If not EDTCall, return optimistic fixpoint, for now.
+    if (!EDTCall) {
+      assert(EDTInfo->isMain() && "EDTCall is null for non MainEDT");
+      return indicateOptimisticFixpoint();
+    }
+
     /// Set the ParentSyncEDT if it is not set
     if (!ParentSyncEDT.isAtFixpoint()) {
+      LLVM_DEBUG(dbgs() << "   - Getting ParentSyncEDT\n");
       if (EDT *ParentSyncEDTInfo = getParentSyncEDTInfo(ParentEDT)) {
-        LLVM_DEBUG(dbgs() << "   - ParentSyncEDT: EDT #"
+        LLVM_DEBUG(dbgs() << "     - ParentSyncEDT: EDT #"
                           << ParentSyncEDTInfo->getID() << "\n");
         ParentSyncEDT.set(ParentSyncEDTInfo);
         ParentSyncEDT.indicateOptimisticFixpoint();
         EDTInfo->setParentSync(ParentSyncEDT.get());
       } else {
-        LLVM_DEBUG(dbgs() << "   - ParentSyncEDT could not be found\n");
+        llvm_unreachable("ParentSyncEDT could not be found!");
       }
     }
-
-    /// If not EDTCall, return optimistic fixpoint, for now.
-    if (!EDTCall)
-      return indicateOptimisticFixpoint();
 
     /// Run AAEDTInfo on the EDTCall
     auto *EDTCallAA = A.getOrCreateAAFor<AAEDTInfo>(
@@ -934,6 +948,10 @@ struct AAEDTInfoCallsite : AAEDTInfo {
     CallBase &EDTCall = cast<CallBase>(getAnchorValue());
     EDTInfo = CARTSCache->getEDT(EDTCall.getCalledFunction());
     assert(EDTInfo && "EDTInfo is null!");
+
+    ///Set Control dependency with DoneEDT
+    if (EDTInfo->getDoneSync())
+      CARTSCache->getGraph().addControlEdge(EDTInfo, EDTInfo->getDoneSync());
     LLVM_DEBUG(dbgs() << "\n[AAEDTInfoCallsite::initialize] EDT #"
                       << EDTInfo->getID() << "\n");
   }
@@ -1001,10 +1019,12 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     AA::ValueAndContext VAC(*ArgVal, EDTCall);
     CARTSCache->getOrCreateDataBlock(VAC, CallArgItr);
 
-    /// If the value is a not a dependency of the EDT, indicate optimistic
-    /// fixpoint
-    if (!EDTInfo->isDep(CallArgItr))
+    /// If the value is a not a dependency of the EDT, add the parameter to the
+    /// graph and indicate optimistic fixpoint
+    if (!EDTInfo->isDep(CallArgItr)) {
+      insertParameter(EDTInfo->getParent(), EDTInfo, ArgVal);
       indicateOptimisticFixpoint();
+    }
   }
 
   /// See AbstractAttribute::updateImpl(Attributor &A).
@@ -1033,7 +1053,7 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     if (SignalEDT) {
       LLVM_DEBUG(dbgs() << "     - EDT #" << CalledEDT->getID()
                         << " signals to EDT #" << SignalEDT->getID() << "\n");
-      insertDataEdge(CalledEDT, SignalEDT, ArgValDBInfoAA->getDataBlock());
+      insertDataBlock(CalledEDT, SignalEDT, ArgValDBInfoAA->getDataBlock());
       DependentEDTs.insert(SignalEDT);
     }
 
@@ -1049,8 +1069,13 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     InsertedEdges.clear();
   }
 
-  void insertDataEdge(EDT *From, EDT *To, EDTDataBlock *DB) {
+  void insertDataBlock(EDT *From, EDT *To, EDTDataBlock *DB) {
     auto *Edge = CARTSCache->getGraph().addDataEdge(From, To, DB);
+    InsertedEdges.insert(Edge);
+  }
+
+  void insertParameter(EDT *From, EDT *To, EDTValue *Parameter) {
+    auto *Edge = CARTSCache->getGraph().addDataEdge(From, To, Parameter);
     InsertedEdges.insert(Edge);
   }
 
@@ -1336,10 +1361,7 @@ struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
                << "\n");
 
     ChangeStatus Changed = ChangeStatus::UNCHANGED;
-    if (CtxEDT->isAsync())
-      Changed |= handleAsyncEDTs(A);
-    else
-      Changed |= handleSyncEDTs(A);
+    Changed |= (CtxEDT->isAsync()) ? handleAsyncEDTs(A) : handleSyncEDTs(A);
     Changed |= handleChildEDTs(A);
     return Changed;
   }

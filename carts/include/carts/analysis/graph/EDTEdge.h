@@ -60,18 +60,18 @@ public:
   virtual ~EDTGraphDataEdge();
   /// Add interface
   bool addDataBlock(EDTDataBlock *DB);
-  bool addEDTValue(EDTValue *V);
-  bool addEDTGuid(EDT *Guid);
+  bool addParameter(EDTValue *V);
+  bool addGuid(EDT *Guid);
 
   /// Remove interface
   bool removeDataBlock(EDTDataBlock *DB);
-  bool removeEDTValue(EDTValue *V);
-  bool removeEDTGuid(EDT *EDTGuid);
+  bool removeParameter(EDTValue *V);
+  bool removeGuid(EDT *Guid);
 
   /// Getters
   SetVector<EDTDataBlock *> getDataBlocks() { return DataBlocks; }
-  SetVector<EDTValue *> getValues() { return Values; }
-  SetVector<EDT *> getEDTGuids() { return EDTGuids; }
+  SetVector<EDTValue *> getParameters() { return Parameters; }
+  SetVector<EDT *> getGuids() { return Guids; }
 
   /// Helpers
   bool isDataEdge() const override { return true; }
@@ -81,8 +81,8 @@ public:
 
 private:
   SetVector<EDTDataBlock *> DataBlocks;
-  SetVector<EDTValue *> Values;
-  SetVector<EDT *> EDTGuids;
+  SetVector<EDTValue *> Parameters;
+  SetVector<EDT *> Guids;
 };
 
 class EDTGraphDataBlockEdge {

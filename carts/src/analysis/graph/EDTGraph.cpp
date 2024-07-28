@@ -201,20 +201,20 @@ EDTGraphEdge *EDTGraph::fetchOrCreateEdge(EDTGraphNode *From, EDTGraphNode *To,
       return ExistingEdge;
     /// The edge is a control edge with creation dep.
     /// Convert it to a data edge.
-    assert(ExistingEdge->hasCreationDep() &&
-           "The edge is not a creation edge - Can not convert to Data Edge");
+    // assert(ExistingEdge->hasCreationDep() &&
+    //        "The edge is not a creation edge - Can not convert to Data Edge");
     LLVM_DEBUG(dbgs() << "        - Converting Control edge to Data edge [\""
                       << From->getEDT()->getName() << "\" -> \""
                       << To->getEDT()->getName() << "\"]\n");
     auto *NewDataEdge = new EDTGraphDataEdge(From, To);
-    NewDataEdge->setCreationDep(true);
+    NewDataEdge->setCreationDep(ExistingEdge->hasCreationDep());
     removeEdge(ExistingEdge);
     addEdge(From, To, NewDataEdge);
     return NewDataEdge;
   }
-  /// The edge is a data edge
-  assert(IsDataEdge && "The edge is a Data edge - Can not convert to Control "
-                       "Edge");
+  // /// The edge is a data edge
+  // assert(IsDataEdge &&
+  //        "The edge is a Data edge - Can not convert to Control Edge");
   return ExistingEdge;
 }
 
@@ -235,6 +235,10 @@ EDTGraphEdge *EDTGraph::addDataEdge(EDT *From, EDT *To, EDTDataBlock *DB) {
   return addDataEdge(getNode(From), getNode(To), DB);
 }
 
+EDTGraphEdge *EDTGraph::addDataEdge(EDT *From, EDT *To, EDTValue *Parameter) {
+  return addDataEdge(getNode(From), getNode(To), Parameter);
+}
+
 EDTGraphEdge *EDTGraph::addControlEdge(EDT *From, EDT *To) {
   return addControlEdge(getNode(From), getNode(To));
 }
@@ -248,10 +252,19 @@ EDTGraphEdge *EDTGraph::addCreationEdge(EDTGraphNode *From, EDTGraphNode *To) {
 
 EDTGraphEdge *EDTGraph::addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
                                     EDTDataBlock *DB) {
-  assert(DB != nullptr && "The data block is null");
+  assert(DB != nullptr && "The DataBlock is null");
   auto *DataEdge =
       dyn_cast<EDTGraphDataEdge>(fetchOrCreateEdge(From, To, true));
   DataEdge->addDataBlock(DB);
+  return DataEdge;
+}
+
+EDTGraphEdge *EDTGraph::addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
+                                    EDTValue *Parameter) {
+  assert(Parameter != nullptr && "The Pareameter is null");
+  auto *DataEdge =
+      dyn_cast<EDTGraphDataEdge>(fetchOrCreateEdge(From, To, true));
+  DataEdge->addParameter(Parameter);
   return DataEdge;
 }
 
@@ -343,6 +356,11 @@ void EDTGraph::print(void) {
         if (DepEdge->isDataEdge()) {
           auto *DataEdge = cast<EDTGraphDataEdge>(DepEdge);
           auto DataBlocks = DataEdge->getDataBlocks();
+          LLVM_DEBUG(dbgs() << "      - Parameters:\n");
+          for (auto *P : DataEdge->getParameters()) {
+            LLVM_DEBUG(dbgs() << "        - " << *P << "\n");
+          }
+          LLVM_DEBUG(dbgs() << "      - DataBlocks:\n");
           for (auto *DB : DataBlocks) {
             LLVM_DEBUG(dbgs() << "        - " << *DB << "\n");
           }

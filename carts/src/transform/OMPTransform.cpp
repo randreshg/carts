@@ -1,9 +1,11 @@
 // Description: Main file for the Compiler for ARTS (OmpTransform) pass.
 #include <cstdint>
+#include <optional>
 
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
@@ -198,9 +200,16 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
   EDTIRBuilder IRB(EDTType::Task);
   const DataLayout &DL = CB.getModule()->getDataLayout();
   LLVMContext &Ctx = CB.getContext();
+
+  /// Get the size of the kmp_task_t struct. If no struct is found,
+  int64_t TaskDataSize = 0;
   const auto *TaskStruct = dyn_cast<StructType>(CB.getType());
-  const auto TaskDataSize = static_cast<int64_t>(
-      DL.getTypeAllocSize(TaskStruct->getTypeByName(Ctx, "struct.kmp_task_t")));
+  StructType *TaskStructTy =
+      TaskStruct->getTypeByName(Ctx, "struct.kmp_task_t");
+  if (TaskStructTy) {
+    TaskDataSize = static_cast<int64_t>(DL.getTypeAllocSize(
+        TaskStruct->getTypeByName(Ctx, "struct.kmp_task_t")));
+  }
 
   /// Analyze Task Data
   /// This analysis assumes we only have stores to the task struct
@@ -215,7 +224,7 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
       GetPointerBaseWithConstantOffset(SI->getPointerOperand(), Offset, DL);
       ValueToOffsetTD[Val] = Offset;
       /// Private variables
-      if (Offset >= TaskDataSize) {
+      if (Offset >= TaskDataSize && TaskDataSize != 0) {
         IRB.insertParam(Val);
         continue;
       }
@@ -233,11 +242,11 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
   } while ((CurI = CurI->getNextNonDebugInstruction()));
 
   /// Rewrite Task Outlined Function arguments to match the Task Data
-  auto *Fn = omp::getOutlinedFunction(&CB);
+  Function *Fn = omp::getOutlinedFunction(&CB);
   Argument *TaskDataArg = dyn_cast<Argument>(Fn->arg_begin() + 1);
   /// This assumes the 'disaggregation' happens in the first basic block
   BasicBlock &EntryBB = Fn->getEntryBlock();
-  auto *TaskDataPtr = &*(EntryBB.begin());
+  Instruction *TaskDataPtr = &*(EntryBB.begin());
   /// Get offsets and values from the Task Data - Task Outlined function
   DenseMap<int64_t, Value *> OffsetToValueOF;
   CurI = &*EntryBB.begin();
@@ -245,17 +254,24 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
     if (!isa<LoadInst>(CurI))
       continue;
 
-    auto *L = cast<LoadInst>(CurI);
-    auto *Val = L->getPointerOperand();
+    LoadInst *L = cast<LoadInst>(CurI);
+    Value *Val = L->getPointerOperand();
     // LLVM_DEBUG(dbgs() << TAG << "LoadInst: " << *L << "\n");
     int64_t Offset = -1;
-    auto *BasePointer = GetPointerBaseWithConstantOffset(Val, Offset, DL);
-
+    Value *BasePointer = GetPointerBaseWithConstantOffset(Val, Offset, DL);
+    // LLVM_DEBUG(dbgs() << TAG << "BasePointer: " << *BasePointer << "\n");
+    // LLVM_DEBUG(dbgs() << TAG << "Offset: " << Offset << "\n");
     if (Offset == -1)
       continue;
 
-    bool Cond = (Offset >= TaskDataSize && BasePointer == TaskDataArg) ||
-                (Offset < TaskDataSize && BasePointer == TaskDataPtr);
+    bool Cond = false;
+    if(TaskDataSize > 0) {
+      Cond = (Offset >= TaskDataSize && BasePointer == TaskDataArg) ||
+             (Offset < TaskDataSize && BasePointer == TaskDataPtr);
+    } else {
+      Cond = (Offset != -1) && (BasePointer == TaskDataPtr);
+    }
+
     if (!Cond)
       continue;
 
@@ -264,6 +280,12 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
       break;
   }
 
+  // for(auto &V : OffsetToValueOF) {
+  //   LLVM_DEBUG(dbgs() << TAG << "OffsetToValueOF: " << V.first << " -> " << *V.second << "\n");
+  // }
+  // for(auto &V : ValueToOffsetTD) {
+  //   LLVM_DEBUG(dbgs() << TAG << "ValueToOffsetTD: " << *V.first << " -> " << V.second << "\n");
+  // }
   assert(ValueToOffsetTD.size() == OffsetToValueOF.size() &&
          "ValueToOffsetTD and ValueToOffsetOF have different sizes");
 

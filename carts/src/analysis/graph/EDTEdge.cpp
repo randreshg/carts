@@ -44,19 +44,21 @@ bool EDTGraphDataEdge::addDataBlock(EDTDataBlock *DB) {
   return DataBlocks.insert(DB);
 }
 
-bool EDTGraphDataEdge::addEDTValue(EDTValue *V) { return Values.insert(V); }
+bool EDTGraphDataEdge::addParameter(EDTValue *V) {
+  return Parameters.insert(V);
+}
 
-bool EDTGraphDataEdge::addEDTGuid(EDT *Guid) { return EDTGuids.insert(Guid); }
+bool EDTGraphDataEdge::addGuid(EDT *Guid) { return Guids.insert(Guid); }
 
 bool EDTGraphDataEdge::removeDataBlock(EDTDataBlock *DB) {
   return DataBlocks.remove(DB);
 }
 
-bool EDTGraphDataEdge::removeEDTValue(EDTValue *V) { return Values.remove(V); }
-
-bool EDTGraphDataEdge::removeEDTGuid(EDT *EDTGuid) {
-  return EDTGuids.remove(EDTGuid);
+bool EDTGraphDataEdge::removeParameter(EDTValue *V) {
+  return Parameters.remove(V);
 }
+
+bool EDTGraphDataEdge::removeGuid(EDT *Guid) { return Guids.remove(Guid); }
 
 /// EDTGraphDataBlockEdge
 EDTGraphDataBlockEdge::EDTGraphDataBlockEdge(EDTGraphDataEdge *Parent,
