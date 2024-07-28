@@ -141,6 +141,7 @@ public:
 
   /// Helpers
   bool isAsync();
+  bool isMain();
   bool isDep(uint32_t CallArgItr);
 
 protected:
@@ -158,12 +159,14 @@ public:
   void setParent(EDT *Parent);
   void setParentSync(EDT *ParentSync, bool SetDoneSync = true);
   void setDoneSync(EDT *DoneSync);
+  // void setIsDoneSync(bool IsDoneSync);
   void setNode(uint32_t Node);
 
   EDTCallBase *getCall();
   EDT *getParent();
   EDT *getParentSync();
   EDT *getDoneSync();
+  // bool isDoneSync();
   uint32_t getNode();
 
 private:
@@ -172,6 +175,7 @@ private:
   EDT *Parent = nullptr;
   EDT *ParentSync = nullptr;
   EDT *DoneSync = nullptr;
+  // bool IsDoneSync = false;
 
   /// Information regarding the generated EDT
 public:

@@ -21,17 +21,18 @@
 #include <omp.h>
 #include <stdlib.h>
 
+/// EDT 0
 int main() {
   // Generate a random number between 10 and 10
   int shared_number = rand();
   int random_number = rand() % 10 + 10;
-  /// EDT 0
+  /// EDT 1
   #pragma omp parallel
   {
     // #pragma omp single
     
-    ///EDT 1
-    #pragma omp task firstprivate(random_number)
+    ///EDT 3
+    #pragma omp task shared(random_number)
     {
       printf("I think the number is %d/%d\n",
              shared_number, random_number);
@@ -42,6 +43,7 @@ int main() {
 
     // #taskwait
   }
+
   /// EDT 2
   printf("The final number is %d - %d.\n", shared_number, random_number);
   return 0;

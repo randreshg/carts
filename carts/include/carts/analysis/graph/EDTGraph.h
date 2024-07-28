@@ -64,10 +64,12 @@ public:
   /// Add edges with EDT
   EDTGraphEdge *addCreationEdge(EDT *From, EDT *To);
   EDTGraphEdge *addDataEdge(EDT *From, EDT *To, EDTDataBlock *DB);
+  EDTGraphEdge *addDataEdge(EDT *From, EDT *To, EDTValue *Parameter);
   EDTGraphEdge *addControlEdge(EDT *From, EDT *To);
   /// Add edges with EDTGraphNode
   EDTGraphEdge *addCreationEdge(EDTGraphNode *From, EDTGraphNode *To);
   EDTGraphEdge *addDataEdge(EDTGraphNode *From, EDTGraphNode *To, EDTDataBlock *DB);
+  EDTGraphEdge *addDataEdge(EDTGraphNode *From, EDTGraphNode *To, EDTValue *Parameter);
   EDTGraphEdge *addControlEdge(EDTGraphNode *From, EDTGraphNode *To);
 
   void removeEdge(EDTGraphEdge *Edge);
