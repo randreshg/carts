@@ -56,6 +56,7 @@ public:
   Mode getMode();
   EDT *getContextEDT();
   EDTDataBlock *getParentDB();
+  EDTDataBlockSet &getChildrenDB();
   EDTDataBlock *getDoneDB();
   EDTDataBlock *getParentDoneDB();
   int32_t getSlot();
@@ -65,11 +66,15 @@ public:
   void setDoneDB(EDTDataBlock *DoneDB);
   void setSlot(int32_t Slot);
 
+  /// Helpers
+  bool addChildDB(EDTDataBlock *ChildDB);
+
 private:
   EDTValue *V = nullptr;
   Mode M = Mode::ReadWrite;
   EDT *ContextEDT = nullptr;
   EDTDataBlock *ParentDB = nullptr;
+  EDTDataBlockSet ChildrenDB;
   EDTDataBlock *DoneDB = nullptr;
   int32_t Slot = -1;
 };
@@ -87,10 +92,6 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDTDataBlock &DB) {
     OS << "ReadWrite";
     break;
   }
-  OS << " / From slot " << DB.getSlot();
-  OS << " to "
-     << (DB.getDoneDB() ? DB.getDoneDB()->getSlot()
-                        : DB.getParentDoneDB()->getSlot());
   return OS;
 }
 
@@ -179,12 +180,14 @@ public:
   void setParentSync(EDT *ParentSync, bool SetDoneSync = true);
   void setDoneSync(EDT *DoneSync);
   void setNode(uint32_t Node);
+  void setIsDoneEDT(bool IsDoneEDT) { this->IsDoneEDT = IsDoneEDT; }
 
   EDTCallBase *getCall();
   EDT *getParent();
   EDT *getParentSync();
   EDT *getDoneSync();
   uint32_t getNode();
+  bool isDoneEDT() { return IsDoneEDT; }
 
 private:
   uint32_t Node = 0;
@@ -192,6 +195,7 @@ private:
   EDT *Parent = nullptr;
   EDT *ParentSync = nullptr;
   EDT *DoneSync = nullptr;
+  bool IsDoneEDT = false;
 
   /// Information regarding the generated EDT
 public:

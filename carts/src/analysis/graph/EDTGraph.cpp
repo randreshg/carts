@@ -1,7 +1,9 @@
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include <cassert>
+#include <cstdint>
 
 #include "carts/analysis/graph/EDTEdge.h"
 #include "carts/analysis/graph/EDTGraph.h"
@@ -290,13 +292,14 @@ void EDTGraph::print(void) {
   LLVM_DEBUG(dbgs() << TAG << "Printing the EDT Graph\n");
   /// Print the outgoing edges.
   for (auto *EDTNode : getNodes()) {
-    auto *E = EDTNode->getEDT();
-    LLVM_DEBUG(dbgs() << "- EDT #" << E->getID() << " - \"" << E->getName()
-                      << "\"\n");
-    LLVM_DEBUG(dbgs() << "  - Type: " << toString(E->getTy()) << "\n");
+    auto *EDTInfo = EDTNode->getEDT();
+    LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - \n");
+    LLVM_DEBUG(dbgs() << "- EDT #" << EDTInfo->getID() << " - \""
+                      << EDTInfo->getName() << "\"\n");
+    LLVM_DEBUG(dbgs() << "  - Type: " << toString(EDTInfo->getTy()) << "\n");
     /// Data environment
     LLVM_DEBUG(dbgs() << "  - Data Environment:\n");
-    auto &DE = E->getDataEnv();
+    auto &DE = EDTInfo->getDataEnv();
     LLVM_DEBUG(dbgs() << "    - " << "Number of ParamV = " << DE.getParamC()
                       << "\n");
     for (auto &P : DE.ParamV) {
@@ -315,8 +318,8 @@ void EDTGraph::print(void) {
     } else {
       /// Print the incoming edges.
       for (auto *DepEdge : InEdges) {
-        auto *From = DepEdge->getFrom();
-        auto *FromE = From->getEDT();
+        EDTGraphNode *From = DepEdge->getFrom();
+        EDT *FromEDT = From->getEDT();
         LLVM_DEBUG(dbgs() << "    - [");
         if (DepEdge->isDataEdge()) {
           LLVM_DEBUG(dbgs() << "data");
@@ -326,7 +329,7 @@ void EDTGraph::print(void) {
         if (DepEdge->hasCreationDep()) {
           LLVM_DEBUG(dbgs() << "/ creation");
         }
-        LLVM_DEBUG(dbgs() << "] \"EDT #" << FromE->getID() << "\"\n");
+        LLVM_DEBUG(dbgs() << "] \"EDT #" << FromEDT->getID() << "\"\n");
       }
     }
 
@@ -337,8 +340,8 @@ void EDTGraph::print(void) {
     } else {
       /// Print the outgoing edges.
       for (auto *DepEdge : OutEdges) {
-        auto *To = DepEdge->getTo();
-        auto *ToE = To->getEDT();
+        EDTGraphNode *To = DepEdge->getTo();
+        EDT *ToEDT = To->getEDT();
         LLVM_DEBUG(dbgs() << "    - [");
         if (DepEdge->isDataEdge()) {
           LLVM_DEBUG(dbgs() << "data");
@@ -348,7 +351,7 @@ void EDTGraph::print(void) {
         if (DepEdge->hasCreationDep()) {
           LLVM_DEBUG(dbgs() << "/ creation");
         }
-        LLVM_DEBUG(dbgs() << "] \"EDT #" << ToE->getID() << "\"\n");
+        LLVM_DEBUG(dbgs() << "] \"EDT #" << ToEDT->getID() << "\"\n");
         if (DepEdge->isDataEdge()) {
           /// Parameters
           auto *DataEdge = cast<EDTGraphDataEdge>(DepEdge);
@@ -359,14 +362,27 @@ void EDTGraph::print(void) {
           /// DataBlocks
           auto &DataBlocks = DataEdge->getDataBlocks();
           LLVM_DEBUG(dbgs() << "      - DataBlocks:\n");
-          for (auto &DB : DataBlocks) {
-            LLVM_DEBUG(dbgs() << "        - " << *DB << "\n");
+          for (EDTDataBlock *DB : DataBlocks) {
+            /// Parent-Child Dependency
+            if (DepEdge->hasCreationDep()) {
+              LLVM_DEBUG(dbgs() << "        - " << *DB << " / to slot "
+                                << DB->getSlot() << "\n");
+              continue;
+            }
+
+            /// Remote dependencies
+            LLVM_DEBUG(dbgs()
+                       << "        - " << *DB << " / from slot "
+                       << DB->getSlot() << " to "
+                       << (DB->getDoneDB() ? DB->getDoneDB()->getSlot()
+                                           : DB->getParentDoneDB()->getSlot())
+                       << "\n");
           }
         }
       }
     }
-    LLVM_DEBUG(dbgs() << "\n");
   }
+  LLVM_DEBUG(dbgs() << "\n");
   LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - - - -\n\n");
 }
 } // namespace arts
