@@ -30,16 +30,18 @@ int main() {
   #pragma omp parallel
   {
     // #pragma omp single
+    // if(random_number == 0) {
+      ///EDT 3
+      #pragma omp task firstprivate(random_number)
+      {
+        printf("I think the number is %d/%d\n",
+              shared_number, random_number);
+        ///EDT 2
+        // #pragma omp task shared(shared_number)
+        shared_number--;
+      }
+    // }
     
-    ///EDT 3
-    #pragma omp task shared(random_number)
-    {
-      printf("I think the number is %d/%d\n",
-             shared_number, random_number);
-      ///EDT 2
-      // #pragma omp task shared(shared_number)
-      shared_number--;
-    }
 
     // #taskwait
   }

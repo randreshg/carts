@@ -68,8 +68,10 @@ public:
   EDTGraphEdge *addControlEdge(EDT *From, EDT *To);
   /// Add edges with EDTGraphNode
   EDTGraphEdge *addCreationEdge(EDTGraphNode *From, EDTGraphNode *To);
-  EDTGraphEdge *addDataEdge(EDTGraphNode *From, EDTGraphNode *To, EDTDataBlock *DB);
-  EDTGraphEdge *addDataEdge(EDTGraphNode *From, EDTGraphNode *To, EDTValue *Parameter);
+  EDTGraphEdge *addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
+                            EDTDataBlock *DB);
+  EDTGraphEdge *addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
+                            EDTValue *Parameter);
   EDTGraphEdge *addControlEdge(EDTGraphNode *From, EDTGraphNode *To);
 
   void removeEdge(EDTGraphEdge *Edge);
@@ -78,6 +80,8 @@ public:
 
   /// Attributes
   DenseMap<Function *, EDTGraphNode *> EDTs;
+
+  /// EDTEdges
   DenseMap<EDTGraphNode *, DenseMap<EDTGraphNode *, EDTGraphEdge *>>
       IncomingEdges;
   DenseMap<EDTGraphNode *, DenseMap<EDTGraphNode *, EDTGraphEdge *>>

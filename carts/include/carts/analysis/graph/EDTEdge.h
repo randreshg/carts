@@ -1,4 +1,4 @@
-//===- EDTGraph.h - EDTGraph-Related structs --------------------*- C++ -*-===//
+//===- EDTEdge.h - EDTEdge-Related structs --------------------*- C++ -*-===//
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_EDTEDGE_H
@@ -6,6 +6,7 @@
 
 #include "carts/analysis/graph/EDTGraph.h"
 #include "carts/utils/ARTS.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
 #include <unordered_set>
 
@@ -59,19 +60,19 @@ public:
   EDTGraphDataEdge(EDTGraphNode *From, EDTGraphNode *To);
   virtual ~EDTGraphDataEdge();
   /// Add interface
-  bool addDataBlock(EDTDataBlock *DB);
+  bool addDataBlock(EDTDataBlock *DB = nullptr);
   bool addParameter(EDTValue *V);
   bool addGuid(EDT *Guid);
 
   /// Remove interface
-  bool removeDataBlock(EDTDataBlock *DB);
+  bool removeDataBlock(EDTDataBlock *DB = nullptr);
   bool removeParameter(EDTValue *V);
   bool removeGuid(EDT *Guid);
 
   /// Getters
-  SetVector<EDTDataBlock *> getDataBlocks() { return DataBlocks; }
-  SetVector<EDTValue *> getParameters() { return Parameters; }
-  SetVector<EDT *> getGuids() { return Guids; }
+  SetVector<EDTDataBlock *> &getDataBlocks() { return DataBlocks; }
+  SetVector<EDTValue *> &getParameters() { return Parameters; }
+  SetVector<EDT *> &getGuids() { return Guids; }
 
   /// Helpers
   bool isDataEdge() const override { return true; }
@@ -85,17 +86,20 @@ private:
   SetVector<EDT *> Guids;
 };
 
-class EDTGraphDataBlockEdge {
-public:
-  EDTGraphDataBlockEdge(EDTGraphDataEdge *Parent, EDTDataBlock *DB);
-  ~EDTGraphDataBlockEdge();
-  EDTGraphDataEdge *getParent() { return Parent; }
-  EDTDataBlock *getDataBlock() { return DB; }
+// class EDTGraphDataBlockEdge {
+// public:
+//   EDTGraphDataBlockEdge(EDTGraphDataEdge *Parent, EDTDataBlock *DB);
+//   ~EDTGraphDataBlockEdge();
+//   EDTGraphDataEdge *getParent() { return Parent; }
+//   EDTDataBlock *getDataBlock() { return DB; }
+//   bool insert(EDTDataBlock *DB) { return DataBlocks.insert(DB); }
+//   bool remove(EDTDataBlock *DB) { return DataBlocks.remove(DB); }
 
-private:
-  EDTGraphDataEdge *Parent;
-  EDTDataBlock *DB;
-};
+// private:
+//   EDTGraphDataEdge *Parent;
+//   SetVector<EDTDataBlock *> DataBlocks;
+//   EDTDataBlock *DB;
+// };
 
 } // namespace arts
 

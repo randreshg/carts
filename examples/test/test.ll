@@ -4,7 +4,10 @@ target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:
 target triple = "x86_64-unknown-linux-gnu"
 
 %struct.ident_t = type { i32, i32, i32, i32, ptr }
-%struct.anon = type { ptr, ptr }
+%struct.kmp_task_t_with_privates = type { %struct.kmp_task_t, %struct..kmp_privates.t }
+%struct.kmp_task_t = type { ptr, ptr, i32, %union.kmp_cmplrdata_t, %union.kmp_cmplrdata_t }
+%union.kmp_cmplrdata_t = type { ptr }
+%struct..kmp_privates.t = type { i32 }
 
 @.str = private unnamed_addr constant [29 x i8] c"I think the number is %d/%d\0A\00", align 1
 @0 = private unnamed_addr constant [23 x i8] c";unknown;unknown;0;0;;\00", align 1
@@ -40,15 +43,16 @@ declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) #1
 declare i32 @rand() local_unnamed_addr #2
 
 ; Function Attrs: alwaysinline norecurse nounwind uwtable
-define internal void @main.omp_outlined(ptr noalias nocapture noundef readonly %.global_tid., ptr noalias nocapture readnone %.bound_tid., ptr noundef nonnull align 4 dereferenceable(4) %random_number, ptr noundef nonnull align 4 dereferenceable(4) %shared_number) #3 {
+define internal void @main.omp_outlined(ptr noalias nocapture noundef readonly %.global_tid., ptr noalias nocapture readnone %.bound_tid., ptr nocapture noundef nonnull readonly align 4 dereferenceable(4) %random_number, ptr noundef nonnull align 4 dereferenceable(4) %shared_number) #3 {
 entry:
   %0 = load i32, ptr %.global_tid., align 4, !tbaa !6
-  %1 = tail call ptr @__kmpc_omp_task_alloc(ptr nonnull @1, i32 %0, i32 1, i64 40, i64 16, ptr nonnull @.omp_task_entry.)
+  %1 = tail call ptr @__kmpc_omp_task_alloc(ptr nonnull @1, i32 %0, i32 1, i64 48, i64 8, ptr nonnull @.omp_task_entry.)
   %2 = load ptr, ptr %1, align 8, !tbaa !10
-  store ptr %shared_number, ptr %2, align 8, !tbaa.struct !14
-  %agg.captured.sroa.2.0..sroa_idx = getelementptr inbounds i8, ptr %2, i64 8
-  store ptr %random_number, ptr %agg.captured.sroa.2.0..sroa_idx, align 8, !tbaa.struct !16
-  %3 = tail call i32 @__kmpc_omp_task(ptr nonnull @1, i32 %0, ptr nonnull %1)
+  store ptr %shared_number, ptr %2, align 8, !tbaa.struct !15
+  %3 = getelementptr inbounds %struct.kmp_task_t_with_privates, ptr %1, i64 0, i32 1
+  %4 = load i32, ptr %random_number, align 4, !tbaa !6
+  store i32 %4, ptr %3, align 8, !tbaa !17
+  %5 = tail call i32 @__kmpc_omp_task(ptr nonnull @1, i32 %0, ptr nonnull %1)
   ret void
 }
 
@@ -61,16 +65,15 @@ declare i32 @__gxx_personality_v0(...)
 define internal noundef i32 @.omp_task_entry.(i32 %0, ptr noalias nocapture noundef readonly %1) #5 personality ptr @__gxx_personality_v0 {
 entry:
   %2 = load ptr, ptr %1, align 8, !tbaa !10
-  tail call void @llvm.experimental.noalias.scope.decl(metadata !17)
-  %3 = load ptr, ptr %2, align 8, !tbaa !20, !alias.scope !17
-  %4 = load i32, ptr %3, align 4, !tbaa !6, !noalias !17
-  %5 = getelementptr inbounds %struct.anon, ptr %2, i64 0, i32 1
-  %6 = load ptr, ptr %5, align 8, !tbaa !22, !alias.scope !17
-  %7 = load i32, ptr %6, align 4, !tbaa !6, !noalias !17
-  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %4, i32 noundef %7), !noalias !17
-  %8 = load i32, ptr %3, align 4, !tbaa !6, !noalias !17
-  %dec.i = add nsw i32 %8, -1
-  store i32 %dec.i, ptr %3, align 4, !tbaa !6, !noalias !17
+  %3 = getelementptr inbounds %struct.kmp_task_t_with_privates, ptr %1, i64 0, i32 1
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !18)
+  %4 = load ptr, ptr %2, align 8, !tbaa !21, !alias.scope !18, !noalias !23
+  %5 = load i32, ptr %4, align 4, !tbaa !6, !noalias !18
+  %6 = load i32, ptr %3, align 4, !tbaa !6, !noalias !18
+  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %5, i32 noundef %6), !noalias !18
+  %7 = load i32, ptr %4, align 4, !tbaa !6, !noalias !18
+  %dec.i = add nsw i32 %7, -1
+  store i32 %dec.i, ptr %4, align 4, !tbaa !6, !noalias !18
   ret i32 0
 }
 
@@ -81,7 +84,7 @@ declare noalias ptr @__kmpc_omp_task_alloc(ptr, i32, i32, i64, i64, ptr) local_u
 declare i32 @__kmpc_omp_task(ptr, i32, ptr) local_unnamed_addr #6
 
 ; Function Attrs: nounwind
-declare !callback !23 void @__kmpc_fork_call(ptr, i32, ptr, ...) local_unnamed_addr #6
+declare !callback !25 void @__kmpc_fork_call(ptr, i32, ptr, ...) local_unnamed_addr #6
 
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
 declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) #1
@@ -112,17 +115,19 @@ attributes #7 = { nocallback nofree nosync nounwind willreturn memory(inaccessib
 !8 = !{!"omnipotent char", !9, i64 0}
 !9 = !{!"Simple C++ TBAA"}
 !10 = !{!11, !13, i64 0}
-!11 = !{!"_ZTS24kmp_task_t_with_privates", !12, i64 0}
+!11 = !{!"_ZTS24kmp_task_t_with_privates", !12, i64 0, !14, i64 40}
 !12 = !{!"_ZTS10kmp_task_t", !13, i64 0, !13, i64 8, !7, i64 16, !8, i64 24, !8, i64 32}
 !13 = !{!"any pointer", !8, i64 0}
-!14 = !{i64 0, i64 8, !15, i64 8, i64 8, !15}
-!15 = !{!13, !13, i64 0}
-!16 = !{i64 0, i64 8, !15}
-!17 = !{!18}
-!18 = distinct !{!18, !19, !".omp_outlined.: %__context"}
-!19 = distinct !{!19, !".omp_outlined."}
-!20 = !{!21, !13, i64 0}
-!21 = !{!"_ZTSZ4mainE3$_0", !13, i64 0, !13, i64 8}
-!22 = !{!21, !13, i64 8}
+!14 = !{!"_ZTS15.kmp_privates.t", !7, i64 0}
+!15 = !{i64 0, i64 8, !16}
+!16 = !{!13, !13, i64 0}
+!17 = !{!11, !7, i64 40}
+!18 = !{!19}
+!19 = distinct !{!19, !20, !".omp_outlined.: %__context"}
+!20 = distinct !{!20, !".omp_outlined."}
+!21 = !{!22, !13, i64 0}
+!22 = !{!"_ZTSZ4mainE3$_0", !13, i64 0}
 !23 = !{!24}
-!24 = !{i64 2, i64 -1, i64 -1, i1 true}
+!24 = distinct !{!24, !20, !".omp_outlined.: %.privates."}
+!25 = !{!26}
+!26 = !{i64 2, i64 -1, i64 -1, i1 true}

@@ -10,9 +10,9 @@ using namespace arts;
 
 /// DEBUG
 #define DEBUG_TYPE "edt-graph"
-#if !defined(NDEBUG)
-static constexpr auto TAG = "[" DEBUG_TYPE "] ";
-#endif
+// #if !defined(NDEBUG)
+// static constexpr auto TAG = "[" DEBUG_TYPE "] ";
+// #endif
 
 /// EDTGraphEdge
 
@@ -35,10 +35,7 @@ EDTGraphControlEdge::~EDTGraphControlEdge() {}
 EDTGraphDataEdge::EDTGraphDataEdge(EDTGraphNode *From, EDTGraphNode *To)
     : EDTGraphEdge(From, To) {}
 
-EDTGraphDataEdge::~EDTGraphDataEdge() {
-  // for (auto *V : Values)
-  //   delete V;
-}
+EDTGraphDataEdge::~EDTGraphDataEdge() {}
 
 bool EDTGraphDataEdge::addDataBlock(EDTDataBlock *DB) {
   return DataBlocks.insert(DB);
@@ -61,10 +58,9 @@ bool EDTGraphDataEdge::removeParameter(EDTValue *V) {
 bool EDTGraphDataEdge::removeGuid(EDT *Guid) { return Guids.remove(Guid); }
 
 /// EDTGraphDataBlockEdge
-EDTGraphDataBlockEdge::EDTGraphDataBlockEdge(EDTGraphDataEdge *Parent,
-                                             EDTDataBlock *DB)
-    : Parent(Parent), DB(DB){};
-EDTGraphDataBlockEdge::~EDTGraphDataBlockEdge() {}
+// EDTGraphDataBlockEdge::EDTGraphDataBlockEdge(EDTDataBlock *DB)
+//     : Parent(Parent), DB(DB){};
+// EDTGraphDataBlockEdge::~EDTGraphDataBlockEdge() {}
 
 /// EDTGraphNode
 EDTGraphNode::EDTGraphNode(EDT &E) : E(E) {}

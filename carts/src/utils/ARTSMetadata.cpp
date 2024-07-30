@@ -9,9 +9,9 @@
 
 /// DEBUG
 #define DEBUG_TYPE "carts-metadata"
-#if !defined(NDEBUG)
-static constexpr auto TAG = "[" DEBUG_TYPE "] ";
-#endif
+// #if !defined(NDEBUG)
+// static constexpr auto TAG = "[" DEBUG_TYPE "] ";
+// #endif
 
 /// Metadata
 using namespace arts;

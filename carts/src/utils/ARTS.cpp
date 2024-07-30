@@ -77,13 +77,28 @@ namespace arts {
 /// ------------------------------------------------------------------- ///
 ///                            EDT DATABLOCK                            ///
 /// ------------------------------------------------------------------- ///
-EDTDataBlock::EDTDataBlock(EDTValue *V) : V(V) {}
-EDTDataBlock::EDTDataBlock(EDTValue *V, Mode M) : V(V), M(M) {}
+EDTDataBlock::EDTDataBlock(EDTValue *V, Mode M, EDT *ContextEDT)
+    : V(V), M(M), ContextEDT(ContextEDT) {}
 
 /// Getters
 EDTValue *EDTDataBlock::getValue() { return V; }
 EDTDataBlock::Mode EDTDataBlock::getMode() { return M; }
-EDT *EDTDataBlock::getParent() { return Parent; }
+EDT *EDTDataBlock::getContextEDT() { return ContextEDT; }
+EDTDataBlock *EDTDataBlock::getParentDB() { return ParentDB; }
+EDTDataBlock *EDTDataBlock::getDoneDB() { return DoneDB; };
+EDTDataBlock *EDTDataBlock::getParentDoneDB() {
+  if (ParentDB)
+    return ParentDB->getDoneDB();
+  return nullptr;
+}
+int32_t EDTDataBlock::getSlot() { return Slot; }
+
+/// Setters
+void EDTDataBlock::setParentDB(EDTDataBlock *ParentDB) {
+  this->ParentDB = ParentDB;
+}
+void EDTDataBlock::setSlot(int32_t Slot) { this->Slot = Slot; }
+void EDTDataBlock::setDoneDB(EDTDataBlock *DoneDB) { this->DoneDB = DoneDB; }
 
 /// ------------------------------------------------------------------- ///
 ///                          DATA ENVIRONMENT                           ///
@@ -202,15 +217,16 @@ string EDT::getName() {
 }
 EDTTypeKind EDT::getTypeKind() const { return Kind; }
 EDTType EDT::getTy() const { return Ty; }
+uint32_t EDT::getDepSlot() const { return DepSlot; }
 
 /// Helpers
 bool EDT::isAsync() { return !isa<SyncEDT>(this); }
 bool EDT::isMain() { return isa<MainEDT>(this); }
-
 bool EDT::isDep(uint32_t CallArgItr) {
   auto *Arg = Fn->getArg(CallArgItr);
   return Env->isDepV(Arg);
 }
+uint32_t EDT::incDepSlot() { return DepSlot++; }
 
 /// What we learned after running the Attributor
 void EDT::setCall(EDTCallBase *Call) { this->Call = Call; }
@@ -221,14 +237,12 @@ void EDT::setParentSync(EDT *ParentSync, bool SetDoneSync) {
     setDoneSync(ParentSync->getDoneSync());
 }
 void EDT::setDoneSync(EDT *DoneSync) { this->DoneSync = DoneSync; }
-// void EDT::setIsDoneSync(bool IsDoneSync) { this->IsDoneSync = IsDoneSync; }
 void EDT::setNode(uint32_t Node) { this->Node = Node; }
 
 EDTCallBase *EDT::getCall() { return Call; }
 EDT *EDT::getParent() { return Parent; }
 EDT *EDT::getParentSync() { return ParentSync; }
 EDT *EDT::getDoneSync() { return DoneSync; }
-// bool EDT::isDoneSync() { return IsDoneSync; }
 uint32_t EDT::getNode() { return Node; }
 
 /// Information regarding the generated EDT

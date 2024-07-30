@@ -44,7 +44,7 @@
 //     /// Fetch NOELLE Manager
 //     auto &NM = getAnalysis<Noelle>();
 //     CARTSCache Cache(M, NM);
-//     EDTGraph EDTG(Cache);
+//     CARTSGraph EDTG(Cache);
 //     EDTG.print();
 
 //     /// Print module info
