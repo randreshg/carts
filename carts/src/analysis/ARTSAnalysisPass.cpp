@@ -631,18 +631,6 @@ struct EDTDataBlockInfoState : AbstractState {
   static EDTDataBlockInfoState getWorstState() {
     return EDTDataBlockInfoState(false);
   }
-
-  /// "Clamp" this state with \p KIS.
-  // EDTDataBlockInfoState operator^=(const EDTDataBlockInfoState &KIS) {
-  //   DependentChildEDTs ^= KIS.DependentChildEDTs;
-  //   DependentSiblingEDTs ^= KIS.DependentSiblingEDTs;
-  //   return *this;
-  // }
-
-  // EDTDataBlockInfoState operator&=(const EDTDataBlockInfoState &KIS) {
-  //   return (*this ^= KIS);
-  // }
-
   ///}
 };
 
@@ -697,7 +685,7 @@ struct AAEDTDataBlockInfo
     if (DB->getParentDB())
       DBStr += "     - ParentDBCtx: EDT #" +
                std::to_string(DB->getParentDB()->getContextEDT()->getID()) +
-               " / slot " + std::to_string(DB->getParentDB()->getSlot()) + "\n";
+               " / Slot " + std::to_string(DB->getParentDB()->getSlot()) + "\n";
     /// DoneDB
     if (DB->getDoneDB()) {
       DBStr += "     - DoneDB: EDT #" +
@@ -709,11 +697,24 @@ struct AAEDTDataBlockInfo
       LLVM_DEBUG(dbgs() << *DB->getValue());
     }
 
+    /// ChildDBs
+    auto &ChildrenDB = DB->getChildrenDB();
+    if (!ChildrenDB.empty()) {
+      DBStr +=
+          "     - ChildrenDBs: " + std::to_string(ChildrenDB.size()) + "\n";
+      for (auto *ChildDB : ChildrenDB) {
+        DBStr += "      - ChildDB: EDT #" +
+                 std::to_string(ChildDB->getContextEDT()->getID()) +
+                 " / Slot " + std::to_string(ChildDB->getSlot()) + "\n";
+      }
+    }
+
     /// Dependency info
     if (DependentSiblingEDT.get() && DependentDoneDB.get())
       DBStr += "     - DependentSiblingEDT: EDT #" +
-               std::to_string(DependentSiblingEDT.get()->getID()) + " / Slot #" +
-               std::to_string(DependentDoneDB.get()->getSlot()) + "\n";
+               std::to_string(DependentSiblingEDT.get()->getID()) +
+               " / Slot #" + std::to_string(DependentDoneDB.get()->getSlot()) +
+               "\n";
     return (DBStr + DependentChildEDTsStr() + DependentSiblingEDTsStr());
   }
 
@@ -1052,11 +1053,14 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     /// If the value is a not a dependency of the EDT, add the parameter to the
     /// graph and indicate optimistic fixpoint
     if (!EDTInfo->isDep(CallArgItr)) {
-      insertParameter(EDTInfo->getParent(), EDTInfo, ArgVal);
+      insertParameterEdge(EDTInfo->getParent(), EDTInfo, ArgVal);
       indicateOptimisticFixpoint();
     } else {
-      /// Each dependency has a slot in the EDT
+      /// Each dependency has a slot in the EDT and has to be sent from the
+      /// parent EDT to the called EDT unless it is a DoneEDT (because all its
+      /// input dependencies must be sent by the sibling SyncEDT)
       DB->setSlot(EDTInfo->incDepSlot());
+      insertDataBlockEdge(EDTInfo->getParent(), EDTInfo, DB);
     }
   }
 
@@ -1086,7 +1090,7 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     if (SignalEDT) {
       LLVM_DEBUG(dbgs() << "     - EDT #" << CalledEDT->getID()
                         << " signals to EDT #" << SignalEDT->getID() << "\n");
-      insertDataBlock(CalledEDT, SignalEDT, ArgValDBInfoAA->getDataBlock());
+      insertDataBlockEdge(CalledEDT, SignalEDT, ArgValDBInfoAA->getDataBlock());
       DependentEDTs.insert(SignalEDT);
     }
 
@@ -1094,12 +1098,12 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     return ChangeStatus::CHANGED;
   }
 
-  void insertDataBlock(EDT *From, EDT *To, EDTDataBlock *DB) {
+  void insertDataBlockEdge(EDT *From, EDT *To, EDTDataBlock *DB) {
     EDTGraphEdge *Edge = CARTSCache->getGraph().addDataEdge(From, To, DB);
     InsertedEdges.insert(Edge);
   }
 
-  void insertParameter(EDT *From, EDT *To, EDTValue *Parameter) {
+  void insertParameterEdge(EDT *From, EDT *To, EDTValue *Parameter) {
     EDTGraphEdge *Edge =
         CARTSCache->getGraph().addDataEdge(From, To, Parameter);
     InsertedEdges.insert(Edge);
@@ -1234,11 +1238,12 @@ struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
         AllChildEDTsWereFixed = false;
         continue;
       }
-
+      /// Add ChildDB
+      EDTDataBlock *ChildDB = ChildEDTAA->getDataBlock();
+      DB->addChildDB(ChildDB);
       /// If the value is signaled by any ChildEDT, or any of its descendants,
       /// we do not have to signal it. Clamp the set of SignaledChildEDTs
       if (ChildEDTAA->SignalEDT.get() == EDTDoneSync) {
-        EDTDataBlock *ChildDB = ChildEDTAA->getDataBlock();
         SignaledDBs.insert(ChildDB);
         SignaledDBsToEDTDone.insert(ChildDB);
         MustSignal = false;
@@ -1407,7 +1412,8 @@ struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
     Changed |= (ContextEDT->isAsync()) ? handleAsyncEDTs(A) : handleSyncEDTs(A);
     Changed |= handleChildEDTs(A);
 
-    if(DependentChildEDTs.isAtFixpoint() && DependentSiblingEDTs.isAtFixpoint())
+    if (DependentChildEDTs.isAtFixpoint() &&
+        DependentSiblingEDTs.isAtFixpoint())
       indicateOptimisticFixpoint();
     return Changed;
   }
@@ -1415,13 +1421,10 @@ struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
   /// See AbstractAttribute::manifest(Attributor &A).
   ChangeStatus manifest(Attributor &A) override {
     LLVM_DEBUG(dbgs() << "-------------------------------\n");
-    LLVM_DEBUG(
-        CallBase &EDTCall = cast<CallBase>(getAnchorValue());
-        dbgs() << "[AAEDTDataBlockInfoCtxAndVal::manifest] " << *DB->getValue()
-               << " from EDT #"
-               << CARTSCache->getEDT(EDTCall.getCalledFunction())->getID()
-               << "\n"
-               << getAsStr(&A) << "\n");
+    LLVM_DEBUG(dbgs() << "[AAEDTDataBlockInfoCtxAndVal::manifest] "
+                      << *DB->getValue() << " from EDT #" << ContextEDT->getID()
+                      << "\n"
+                      << getAsStr(&A) << "\n");
     return ChangeStatus::UNCHANGED;
   }
 };

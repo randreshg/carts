@@ -85,6 +85,7 @@ EDTValue *EDTDataBlock::getValue() { return V; }
 EDTDataBlock::Mode EDTDataBlock::getMode() { return M; }
 EDT *EDTDataBlock::getContextEDT() { return ContextEDT; }
 EDTDataBlock *EDTDataBlock::getParentDB() { return ParentDB; }
+EDTDataBlockSet &EDTDataBlock::getChildrenDB() { return ChildrenDB; }
 EDTDataBlock *EDTDataBlock::getDoneDB() { return DoneDB; };
 EDTDataBlock *EDTDataBlock::getParentDoneDB() {
   if (ParentDB)
@@ -100,6 +101,10 @@ void EDTDataBlock::setParentDB(EDTDataBlock *ParentDB) {
 void EDTDataBlock::setSlot(int32_t Slot) { this->Slot = Slot; }
 void EDTDataBlock::setDoneDB(EDTDataBlock *DoneDB) { this->DoneDB = DoneDB; }
 
+/// Helpers
+bool EDTDataBlock::addChildDB(EDTDataBlock *ChildDB) {
+  return ChildrenDB.insert(ChildDB);
+}
 /// ------------------------------------------------------------------- ///
 ///                          DATA ENVIRONMENT                           ///
 /// ------------------------------------------------------------------- ///
@@ -236,7 +241,11 @@ void EDT::setParentSync(EDT *ParentSync, bool SetDoneSync) {
   if (SetDoneSync)
     setDoneSync(ParentSync->getDoneSync());
 }
-void EDT::setDoneSync(EDT *DoneSync) { this->DoneSync = DoneSync; }
+void EDT::setDoneSync(EDT *DoneSync) {
+  DoneSync->setIsDoneEDT(true);
+  this->DoneSync = DoneSync;
+}
+
 void EDT::setNode(uint32_t Node) { this->Node = Node; }
 
 EDTCallBase *EDT::getCall() { return Call; }
