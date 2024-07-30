@@ -48,18 +48,30 @@ using EDTDataBlockSet = SetVector<EDTDataBlock *>;
 class EDTDataBlock {
 public:
   enum Mode { ReadOnly, WriteOnly, ReadWrite };
-  EDTDataBlock(EDTValue *V);
-  EDTDataBlock(EDTValue *V, Mode M);
+  EDTDataBlock(EDTValue *V, Mode M, EDT *ContextEDT);
   ~EDTDataBlock() = default;
 
+  /// Getters
   EDTValue *getValue();
   Mode getMode();
-  EDT *getParent();
+  EDT *getContextEDT();
+  EDTDataBlock *getParentDB();
+  EDTDataBlock *getDoneDB();
+  EDTDataBlock *getParentDoneDB();
+  int32_t getSlot();
+
+  /// Setters
+  void setParentDB(EDTDataBlock *ParentDB);
+  void setDoneDB(EDTDataBlock *DoneDB);
+  void setSlot(int32_t Slot);
 
 private:
   EDTValue *V = nullptr;
   Mode M = Mode::ReadWrite;
-  EDT *Parent = nullptr;
+  EDT *ContextEDT = nullptr;
+  EDTDataBlock *ParentDB = nullptr;
+  EDTDataBlock *DoneDB = nullptr;
+  int32_t Slot = -1;
 };
 
 inline raw_ostream &operator<<(raw_ostream &OS, EDTDataBlock &DB) {
@@ -75,6 +87,10 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDTDataBlock &DB) {
     OS << "ReadWrite";
     break;
   }
+  OS << " / From slot " << DB.getSlot();
+  OS << " to "
+     << (DB.getDoneDB() ? DB.getDoneDB()->getSlot()
+                        : DB.getParentDoneDB()->getSlot());
   return OS;
 }
 
@@ -138,11 +154,13 @@ public:
   string getName();
   EDTTypeKind getTypeKind() const;
   EDTType getTy() const;
+  uint32_t getDepSlot() const;
 
   /// Helpers
   bool isAsync();
   bool isMain();
   bool isDep(uint32_t CallArgItr);
+  uint32_t incDepSlot();
 
 protected:
   EDTFunction *Fn = nullptr;
@@ -152,6 +170,7 @@ protected:
 
 private:
   uint32_t ID;
+  uint32_t DepSlot = 0;
 
   /// What we learned after running the Attributor
 public:
@@ -159,14 +178,12 @@ public:
   void setParent(EDT *Parent);
   void setParentSync(EDT *ParentSync, bool SetDoneSync = true);
   void setDoneSync(EDT *DoneSync);
-  // void setIsDoneSync(bool IsDoneSync);
   void setNode(uint32_t Node);
 
   EDTCallBase *getCall();
   EDT *getParent();
   EDT *getParentSync();
   EDT *getDoneSync();
-  // bool isDoneSync();
   uint32_t getNode();
 
 private:
@@ -175,7 +192,6 @@ private:
   EDT *Parent = nullptr;
   EDT *ParentSync = nullptr;
   EDT *DoneSync = nullptr;
-  // bool IsDoneSync = false;
 
   /// Information regarding the generated EDT
 public:
@@ -192,6 +208,7 @@ private:
 inline raw_ostream &operator<<(raw_ostream &OS, EDT &E) {
   OS << "- EDT #" << E.getID() << ": " << E.getName() << "\n";
   OS << "Ty: " << toString(E.getTy()) << "\n";
+  OS << "Number of slots: " << E.getDepSlot() << "\n";
   OS << E.getDataEnv();
 
   return OS;
