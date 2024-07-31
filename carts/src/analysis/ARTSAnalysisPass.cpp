@@ -1060,7 +1060,8 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
       /// parent EDT to the called EDT unless it is a DoneEDT (because all its
       /// input dependencies must be sent by the sibling SyncEDT)
       DB->setSlot(EDTInfo->incDepSlot());
-      insertDataBlockEdge(EDTInfo->getParent(), EDTInfo, DB);
+      if (!EDTInfo->isDoneEDT())
+        insertDataBlockEdge(EDTInfo->getParent(), EDTInfo, DB);
     }
   }
 
