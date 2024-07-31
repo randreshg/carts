@@ -31,22 +31,39 @@ int main() {
   {
     // #pragma omp single
     // if(random_number == 0) {
-      ///EDT 3
-      #pragma omp task firstprivate(random_number)
+      /// EDT 3
       {
-        printf("I think the number is %d/%d\n",
-              shared_number, random_number);
-        ///EDT 2
-        // #pragma omp task shared(shared_number)
-        shared_number--;
+        ///EDT 5
+        #pragma omp task firstprivate(random_number)
+        {
+      
+          printf("I think the number is %d/%d\n",
+                shared_number, random_number);
+          ///EDT 7
+          // #pragma omp task shared(shared_number)
+          // shared_number--;
+        }
+
+        /// EDT 6
+        {
+        }
+      }
+    
+      // #taskwait
+      /// EDT 4
+      {
+
       }
     // }
     
 
-    // #taskwait
   }
 
   /// EDT 2
   printf("The final number is %d - %d.\n", shared_number, random_number);
   return 0;
 }
+
+
+
+///
