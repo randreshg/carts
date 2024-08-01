@@ -47,6 +47,14 @@ bool EDTGraphDataEdge::addParameter(EDTValue *V) {
 
 bool EDTGraphDataEdge::addGuid(EDT *Guid) { return Guids.insert(Guid); }
 
+bool EDTGraphDataEdge::hasDataBlock(EDTDataBlock *DB) {
+  return DataBlocks.count(DB);
+}
+
+bool EDTGraphDataEdge::hasParameter(EDTValue *V) { return Parameters.count(V); }
+
+bool EDTGraphDataEdge::hasGuid(EDT *Guid) { return Guids.count(Guid); }
+
 bool EDTGraphDataEdge::removeDataBlock(EDTDataBlock *DB) {
   return DataBlocks.remove(DB);
 }
