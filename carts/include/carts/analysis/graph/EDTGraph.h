@@ -53,7 +53,11 @@ public:
   EDTGraphNode *insertNode(EDT *E, EDTGraphNode *ParentNode,
                            Function *F = nullptr);
   EDTGraphNode *insertNode(EDT *E, Function &Fn);
-  /// Edges
+  /// Edges with EDTs
+  EDTGraphEdge *getEdge(EDT *From, EDT *To);
+  unordered_set<EDTGraphEdge *> getIncomingEdges(EDT *Node);
+  unordered_set<EDTGraphEdge *> getOutgoingEdges(EDT *Node);
+  /// Edges with EDTGraphNodes
   EDTGraphEdge *getEdge(EDTGraphNode *From, EDTGraphNode *To);
   unordered_set<EDTGraphEdge *> getIncomingEdges(EDTGraphNode *Node);
   unordered_set<EDTGraphEdge *> getOutgoingEdges(EDTGraphNode *Node);
@@ -65,6 +69,7 @@ public:
   EDTGraphEdge *addCreationEdge(EDT *From, EDT *To);
   EDTGraphEdge *addDataEdge(EDT *From, EDT *To, EDTDataBlock *DB);
   EDTGraphEdge *addDataEdge(EDT *From, EDT *To, EDTValue *Parameter);
+  EDTGraphEdge *addDataEdge(EDT *From, EDT *To, EDT *Guid);
   EDTGraphEdge *addControlEdge(EDT *From, EDT *To);
   /// Add edges with EDTGraphNode
   EDTGraphEdge *addCreationEdge(EDTGraphNode *From, EDTGraphNode *To);
@@ -72,6 +77,7 @@ public:
                             EDTDataBlock *DB);
   EDTGraphEdge *addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
                             EDTValue *Parameter);
+  EDTGraphEdge *addDataEdge(EDTGraphNode *From, EDTGraphNode *To, EDT *Guid);
   EDTGraphEdge *addControlEdge(EDTGraphNode *From, EDTGraphNode *To);
 
   void removeEdge(EDTGraphEdge *Edge);

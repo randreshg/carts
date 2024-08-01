@@ -1,5 +1,3 @@
-#include "llvm/IR/Constants.h"
-#include "llvm/IR/InstrTypes.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include <cassert>
@@ -137,6 +135,18 @@ EDTGraphNode *EDTGraph::insertNode(EDT *E, Function &Fn) {
 }
 
 /// Edges
+EDTGraphEdge *EDTGraph::getEdge(EDT *From, EDT *To) {
+  return getEdge(getNode(From), getNode(To));
+}
+
+unordered_set<EDTGraphEdge *> EDTGraph::getIncomingEdges(EDT *Node) {
+  return getIncomingEdges(getNode(Node));
+}
+
+unordered_set<EDTGraphEdge *> EDTGraph::getOutgoingEdges(EDT *Node) {
+  return getOutgoingEdges(getNode(Node));
+}
+
 EDTGraphEdge *EDTGraph::getEdge(EDTGraphNode *From, EDTGraphNode *To) {
   /// Fetch the set of edges from @from.
   if (OutgoingEdges.find(From) == OutgoingEdges.end())
@@ -237,6 +247,10 @@ EDTGraphEdge *EDTGraph::addDataEdge(EDT *From, EDT *To, EDTValue *Parameter) {
   return addDataEdge(getNode(From), getNode(To), Parameter);
 }
 
+EDTGraphEdge *EDTGraph::addDataEdge(EDT *From, EDT *To, EDT *Guid) {
+  return addDataEdge(getNode(From), getNode(To), Guid);
+}
+
 EDTGraphEdge *EDTGraph::addControlEdge(EDT *From, EDT *To) {
   return addControlEdge(getNode(From), getNode(To));
 }
@@ -263,6 +277,15 @@ EDTGraphEdge *EDTGraph::addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
   EDTGraphDataEdge *DataEdge =
       dyn_cast<EDTGraphDataEdge>(fetchOrCreateEdge(From, To, true));
   DataEdge->addParameter(Parameter);
+  return DataEdge;
+}
+
+EDTGraphEdge *EDTGraph::addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
+                                    EDT *Guid) {
+  assert(Guid != nullptr && "The Guid is null");
+  EDTGraphDataEdge *DataEdge =
+      dyn_cast<EDTGraphDataEdge>(fetchOrCreateEdge(From, To, true));
+  DataEdge->addGuid(Guid);
   return DataEdge;
 }
 
@@ -358,6 +381,11 @@ void EDTGraph::print(void) {
           LLVM_DEBUG(dbgs() << "      - Parameters:\n");
           for (auto *P : DataEdge->getParameters()) {
             LLVM_DEBUG(dbgs() << "        - " << *P << "\n");
+          }
+          /// Guids
+          LLVM_DEBUG(dbgs() << "      - Guids:\n");
+          for (auto *G : DataEdge->getGuids()) {
+            LLVM_DEBUG(dbgs() << "        - EDT #" << G->getID() << "\n");
           }
           /// DataBlocks
           auto &DataBlocks = DataEdge->getDataBlocks();

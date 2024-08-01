@@ -792,8 +792,8 @@ struct AAEDTInfoFunction : AAEDTInfo {
       /// If it is a SyncEDT, it must have a DoneEDT
       /// It is usually in the first instruction of the next BB.
       /// Start by looking at the next instruction after the EDTCall
-      auto *NextBB = EDTCall->getParent()->getNextNode();
-      auto *CB = dyn_cast<CallBase>(&NextBB->front());
+      BasicBlock *NextBB = EDTCall->getParent()->getNextNode();
+      CallBase *CB = dyn_cast<CallBase>(&NextBB->front());
       assert(CB && "Next instruction is not a CallBase!");
       DoneEDT = CARTSCache->getOrCreateEDT(CB);
       EDTInfo->setDoneSync(DoneEDT);
@@ -981,10 +981,32 @@ struct AAEDTInfoCallsite : AAEDTInfo {
     assert(EDTInfo && "EDTInfo is null!");
 
     /// Set Control dependency with DoneEDT
-    if (EDTInfo->getDoneSync())
-      CARTSCache->getGraph().addControlEdge(EDTInfo, EDTInfo->getDoneSync());
+    EDT *DoneEDT = EDTInfo->getDoneSync();
+    if (DoneEDT) {
+      CARTSCache->getGraph().addControlEdge(EDTInfo, DoneEDT);
+      /// I need to know the Guid of the DoneEDT.
+      insertGuidEdge(EDTInfo->getParent(), EDTInfo, DoneEDT);
+    }
+
+    /// My parent has to
     LLVM_DEBUG(dbgs() << "\n[AAEDTInfoCallsite::initialize] EDT #"
                       << EDTInfo->getID() << "\n");
+  }
+
+  void insertGuidEdge(EDT *From, EDT *To, EDT *Guid) {
+    /// Check if I know the Guid already
+    EDTGraphDataEdge *GuidEdge =
+        dyn_cast<EDTGraphDataEdge>(CARTSCache->getGraph().getEdge(From, To));
+    if (GuidEdge && GuidEdge->hasGuid(Guid))
+      return;
+
+    /// Check if my the Guid is a child of the EDT, it can send the Guid
+    EDT *ParentEDT = EDTInfo->getParent();
+    if (ParentEDT != From)
+      insertGuidEdge(ParentEDT, From, Guid);
+
+    /// Insert the GuidEdge
+    CARTSCache->getGraph().addDataEdge(From, To, Guid);
   }
 
   /// See AbstractAttribute::updateImpl(Attributor &A).
@@ -1100,14 +1122,11 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
   }
 
   void insertDataBlockEdge(EDT *From, EDT *To, EDTDataBlock *DB) {
-    EDTGraphEdge *Edge = CARTSCache->getGraph().addDataEdge(From, To, DB);
-    InsertedEdges.insert(Edge);
+    CARTSCache->getGraph().addDataEdge(From, To, DB);
   }
 
   void insertParameterEdge(EDT *From, EDT *To, EDTValue *Parameter) {
-    EDTGraphEdge *Edge =
-        CARTSCache->getGraph().addDataEdge(From, To, Parameter);
-    InsertedEdges.insert(Edge);
+    CARTSCache->getGraph().addDataEdge(From, To, Parameter);
   }
 
   /// See AbstractAttribute::manifest(Attributor &A).
@@ -1118,7 +1137,6 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
 private:
   /// Value to analyze
   Value *ArgVal = nullptr;
-  SmallSet<EDTGraphEdge *, 4> InsertedEdges;
 };
 
 /// ------------------------------------------------------------------- ///

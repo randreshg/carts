@@ -64,6 +64,11 @@ public:
   bool addParameter(EDTValue *V);
   bool addGuid(EDT *Guid);
 
+  /// Has interface
+  bool hasDataBlock(EDTDataBlock *DB);
+  bool hasParameter(EDTValue *V);
+  bool hasGuid(EDT *Guid);
+
   /// Remove interface
   bool removeDataBlock(EDTDataBlock *DB = nullptr);
   bool removeParameter(EDTValue *V);
@@ -86,20 +91,6 @@ private:
   SetVector<EDT *> Guids;
 };
 
-// class EDTGraphDataBlockEdge {
-// public:
-//   EDTGraphDataBlockEdge(EDTGraphDataEdge *Parent, EDTDataBlock *DB);
-//   ~EDTGraphDataBlockEdge();
-//   EDTGraphDataEdge *getParent() { return Parent; }
-//   EDTDataBlock *getDataBlock() { return DB; }
-//   bool insert(EDTDataBlock *DB) { return DataBlocks.insert(DB); }
-//   bool remove(EDTDataBlock *DB) { return DataBlocks.remove(DB); }
-
-// private:
-//   EDTGraphDataEdge *Parent;
-//   SetVector<EDTDataBlock *> DataBlocks;
-//   EDTDataBlock *DB;
-// };
 
 } // namespace arts
 

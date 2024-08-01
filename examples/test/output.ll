@@ -73,13 +73,13 @@ test_arts_ir.bc
      - ParentSyncEDT: EDT #1
         - Creating edge from "EDT #3" to "EDT #2"
           Control Edge
+        - Converting Control edge to Data edge ["edt.1.parallel" -> "edt.3.task"]
 
 [AAEDTInfoCallsite::initialize] EDT #3
 
 [AAEDTInfoCallsite::updateImpl] EDT #3
 
 [AAEDTInfoCallsiteArg::initialize] CallArg #0 from EDT #3
-        - Converting Control edge to Data edge ["edt.1.parallel" -> "edt.3.task"]
 
 [AAEDTInfoCallsiteArg::updateImpl] ptr %1 from EDT #3
 
@@ -125,13 +125,13 @@ test_arts_ir.bc
    - All ReachedEDTs are fixed for EDT #1
         - Creating edge from "EDT #1" to "EDT #2"
           Control Edge
+        - Converting Control edge to Data edge ["edt.0.main" -> "edt.1.parallel"]
 
 [AAEDTInfoCallsite::initialize] EDT #1
 
 [AAEDTInfoCallsite::updateImpl] EDT #1
 
 [AAEDTInfoCallsiteArg::initialize] CallArg #0 from EDT #1
-        - Converting Control edge to Data edge ["edt.0.main" -> "edt.1.parallel"]
 
 [AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
 
@@ -276,6 +276,39 @@ EDTDataBlock ->
 - - - - - - - - - - - - - - - - - - - - - - - -
 [edt-graph] Printing the EDT Graph
 - - - - - - - - - - - - - - - - - - 
+- EDT #0 - "edt.0.main"
+  - Type: main
+  - Data Environment:
+    - Number of ParamV = 0
+    - Number of DepV = 0
+  - Incoming Edges:
+    - The EDT has no incoming edges
+  - Outgoing Edges:
+    - [control/ creation] "EDT #2"
+    - [data/ creation] "EDT #1"
+      - Parameters:
+      - Guids:
+        - EDT #2
+      - DataBlocks:
+        -   %random_number = alloca i32, align 4 / ReadWrite / to slot 0
+        -   %shared_number = alloca i32, align 4 / ReadWrite / to slot 1
+- - - - - - - - - - - - - - - - - - 
+- EDT #3 - "edt.3.task"
+  - Type: task
+  - Data Environment:
+    - Number of ParamV = 1
+      - i32 %1
+    - Number of DepV = 1
+      - ptr %0
+  - Incoming Edges:
+    - [data/ creation] "EDT #1"
+  - Outgoing Edges:
+    - [data] "EDT #2"
+      - Parameters:
+      - Guids:
+      - DataBlocks:
+        - ptr %1 / ReadWrite / from slot 0 to 0
+- - - - - - - - - - - - - - - - - - 
 - EDT #2 - "edt.2.task"
   - Type: task
   - Data Environment:
@@ -290,21 +323,6 @@ EDTDataBlock ->
   - Outgoing Edges:
     - The EDT has no outgoing edges
 - - - - - - - - - - - - - - - - - - 
-- EDT #3 - "edt.3.task"
-  - Type: task
-  - Data Environment:
-    - Number of ParamV = 1
-      - i32 %1
-    - Number of DepV = 1
-      - ptr %0
-  - Incoming Edges:
-    - [data/ creation] "EDT #1"
-  - Outgoing Edges:
-    - [data] "EDT #2"
-      - Parameters:
-      - DataBlocks:
-        - ptr %1 / ReadWrite / from slot 0 to 0
-- - - - - - - - - - - - - - - - - - 
 - EDT #1 - "edt.1.parallel"
   - Type: parallel
   - Data Environment:
@@ -315,30 +333,18 @@ EDTDataBlock ->
   - Incoming Edges:
     - [data/ creation] "EDT #0"
   - Outgoing Edges:
+    - [data] "EDT #2"
+      - Parameters:
+      - Guids:
+      - DataBlocks:
+        -   %random_number = alloca i32, align 4 / ReadWrite / from slot 0 to 1
     - [data/ creation] "EDT #3"
       - Parameters:
         -   %2 = load i32, ptr %0, align 4, !tbaa !8
+      - Guids:
+        - EDT #2
       - DataBlocks:
         - ptr %1 / ReadWrite / to slot 0
-    - [data] "EDT #2"
-      - Parameters:
-      - DataBlocks:
-        -   %random_number = alloca i32, align 4 / ReadWrite / from slot 0 to 1
-- - - - - - - - - - - - - - - - - - 
-- EDT #0 - "edt.0.main"
-  - Type: main
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 0
-  - Incoming Edges:
-    - The EDT has no incoming edges
-  - Outgoing Edges:
-    - [data/ creation] "EDT #1"
-      - Parameters:
-      - DataBlocks:
-        -   %random_number = alloca i32, align 4 / ReadWrite / to slot 0
-        -   %shared_number = alloca i32, align 4 / ReadWrite / to slot 1
-    - [control/ creation] "EDT #2"
 
 - - - - - - - - - - - - - - - - - - - - - - - -
 
