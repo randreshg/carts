@@ -160,6 +160,7 @@ public:
   /// Helpers
   bool isAsync();
   bool isMain();
+  bool isDep(Argument *Arg);
   bool isDep(uint32_t CallArgItr);
   uint32_t incDepSlot();
 
