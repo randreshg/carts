@@ -227,10 +227,8 @@ uint32_t EDT::getDepSlot() const { return DepSlot; }
 /// Helpers
 bool EDT::isAsync() { return !isa<SyncEDT>(this); }
 bool EDT::isMain() { return isa<MainEDT>(this); }
-bool EDT::isDep(uint32_t CallArgItr) {
-  auto *Arg = Fn->getArg(CallArgItr);
-  return Env->isDepV(Arg);
-}
+bool EDT::isDep(Argument *Arg) { return Env->isDepV(Arg); }
+bool EDT::isDep(uint32_t CallArgItr) { return isDep(Fn->getArg(CallArgItr)); }
 uint32_t EDT::incDepSlot() { return DepSlot++; }
 
 /// What we learned after running the Attributor

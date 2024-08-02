@@ -12,18 +12,20 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instruction.h"
 
+#include "carts/analysis/graph/EDTGraph.h"
 #include "carts/utils/ARTS.h"
 #include "carts/utils/ARTSTypes.h"
 
 namespace arts {
 using namespace types;
+struct ARTSCache;
+
 /// An interface to create LLVM-IR for ARTS directives.
-///
 /// Each ARTS directive has a corresponding public generator method.
 class ARTSCodegen {
 public:
   /// Create a new ARTSCodegen operating on the given module \p M.
-  ARTSCodegen(Module &M);
+  ARTSCodegen(ARTSCache *Cache);
   ~ARTSCodegen();
 
   /// ---------------------------- Interface ---------------------------- ///
@@ -42,14 +44,15 @@ public:
   using InsertPointTy = IRBuilder<>::InsertPoint;
 
   /// Return the function declaration for the runtime function with \p FnID.
-  FunctionCallee getOrCreateRuntimeFunction(Module &M,
-                                            types::RuntimeFunction FnID);
+  FunctionCallee getOrCreateRuntimeFunction(types::RuntimeFunction FnID);
   Function *getOrCreateRuntimeFunctionPtr(types::RuntimeFunction FnID);
 
   /// Interface to add ARTS methods
   Function *getOrCreateEDTFunction(EDT &E);
   Value *getOrCreateEDTGuid(EDT &E);
   void initializeEDT(EDT &E);
+  /// Based on the EDT parameters and dependencies, it "unrolls" the data
+  /// structure and rewires the values to their new instances.
   void insertEDTEntry(EDT &E);
   CallInst *insertEDTCall(EDT &E);
   void signalEDTGuid(EDT &From, EDT &To, Value *Signal);
@@ -69,6 +72,8 @@ public:
   bool isEDTGuid(Value *V);
 
   /// ---------------------------- Utils ---------------------------- ///
+  void setIPInEDTEntry(EDTFunction &EDTFn);
+
   /// Make \p Source branch to \p Target.
   ///
   /// Handles two situations:
@@ -109,7 +114,9 @@ private:
   void initializeTypes();
 
   /// ---------------------------- Attributes ---------------------------- ///
-  /// The underlying LLVM-IR module
+  /// ARTS Cache Information
+  ARTSCache *Cache;
+  /// The module we are operating on.
   Module &M;
   /// The LLVM-IR Builder used to create IR.
   IRBuilder<> Builder;
