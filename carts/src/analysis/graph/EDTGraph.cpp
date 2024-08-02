@@ -401,10 +401,7 @@ void EDTGraph::print(void) {
             /// Remote dependencies
             LLVM_DEBUG(dbgs()
                        << "        - " << *DB << " / from slot "
-                       << DB->getSlot() << " to "
-                       << (DB->getDoneDB() ? DB->getDoneDB()->getSlot()
-                                           : DB->getParentDoneDB()->getSlot())
-                       << "\n");
+                       << DB->getSlot() << " to " << (DB->getToSlot()) << "\n");
           }
         }
       }

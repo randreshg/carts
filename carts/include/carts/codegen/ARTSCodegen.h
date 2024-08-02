@@ -8,9 +8,12 @@
 #ifndef LLVM_ARTS_CODEGEN_H
 #define LLVM_ARTS_CODEGEN_H
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
+#include <cstdint>
 
 #include "carts/analysis/graph/EDTGraph.h"
 #include "carts/utils/ARTS.h"
@@ -19,6 +22,33 @@
 namespace arts {
 using namespace types;
 struct ARTSCache;
+
+/// Aux struct to hold generated code for an EDT.
+class EDTCodegen {
+public:
+  EDTCodegen(EDT *E);
+  EDTCodegen(EDT *E, Function *Fn);
+  Function *getFn();
+  CallBase *getCB();
+  Value *getGuidAddress();
+  void setFn(Function *Fn);
+  void setCB(CallBase *CB);
+  void setGuidAddress(Value *V);
+  ///
+  bool hasParameter(int32_t Slot);
+  bool hasDependency(int32_t Slot);
+  void insertParameter(int32_t Slot, Value *V);
+  void insertDependency(int32_t Slot, Value *V);
+
+private:
+  EDT *E;
+  CallBase *CB = nullptr;
+  Function *Fn = nullptr;
+  Value *GuidAddress = nullptr;
+  /// Maps an integer slot to a value.
+  DenseMap<int32_t, Value *> Parameters;
+  DenseMap<int32_t, Value *> Dependencies;
+};
 
 /// An interface to create LLVM-IR for ARTS directives.
 /// Each ARTS directive has a corresponding public generator method.
@@ -54,7 +84,7 @@ public:
   /// Based on the EDT parameters and dependencies, it "unrolls" the data
   /// structure and rewires the values to their new instances.
   void insertEDTEntry(EDT &E);
-  CallInst *insertEDTCall(EDT &E);
+  void insertEDTCall(EDT &E);
   void signalEDTGuid(EDT &From, EDT &To, Value *Signal);
   void signalEDTValue(EDT &From, EDT &To, Value *Signal);
   void signalEDTDataBlock(EDT &From, EDT &To, Value *Signal);
@@ -109,6 +139,7 @@ public:
   ///}
 private:
   /// ---------------------------- Private ---------------------------- ///
+  EDTCodegen *getOrCreateEDT(EDT &E);
   /// Create all simple and struct types exposed by the runtime and remember
   /// the llvm::PointerTypes of them for easy access later.
   void initializeTypes();
@@ -121,9 +152,7 @@ private:
   /// The LLVM-IR Builder used to create IR.
   IRBuilder<> Builder;
   /// Maps the EDT to the new function
-  DenseMap<EDT *, Function *> EDTFunctions;
-  /// Set of EDTGuids
-  DenseSet<Value *> EDTGuids;
+  DenseMap<EDT *, EDTCodegen *> EDTs;
 };
 } // namespace arts
 

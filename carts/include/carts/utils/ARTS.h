@@ -60,6 +60,7 @@ public:
   EDTDataBlock *getDoneDB();
   EDTDataBlock *getParentDoneDB();
   int32_t getSlot();
+  int32_t getToSlot();
 
   /// Setters
   void setParentDB(EDTDataBlock *ParentDB);
@@ -155,14 +156,19 @@ public:
   string getName();
   EDTTypeKind getTypeKind() const;
   EDTType getTy() const;
+
+  /// Dependency Slot
+  uint32_t insertDepSlot(uint32_t CallArgItr);
+  uint32_t incDepSlot();
   uint32_t getDepSlot() const;
+  Argument *getDepArg(uint32_t DepSlot);
 
   /// Helpers
   bool isAsync();
   bool isMain();
   bool isDep(Argument *Arg);
   bool isDep(uint32_t CallArgItr);
-  uint32_t incDepSlot();
+  Argument *getArg(uint32_t DepSlot);
 
 protected:
   EDTFunction *Fn = nullptr;
@@ -173,6 +179,8 @@ protected:
 private:
   uint32_t ID;
   uint32_t DepSlot = 0;
+  /// Maps a DepSlot to a Function Argument
+  DenseMap<uint32_t, Argument *> DepSlotToArg;
 
   /// What we learned after running the Attributor
 public:
@@ -197,17 +205,6 @@ private:
   EDT *ParentSync = nullptr;
   EDT *DoneSync = nullptr;
   bool IsDoneEDT = false;
-
-  /// Information regarding the generated EDT
-public:
-  Function *getNewFn();
-  Value *getGuidAddress();
-  void setNewFn(Function *Fn);
-  void setGuidAddress(Value *V);
-
-private:
-  Function *NewFn = nullptr;
-  Value *GuidAddress = nullptr;
 };
 
 inline raw_ostream &operator<<(raw_ostream &OS, EDT &E) {
