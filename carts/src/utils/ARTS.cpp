@@ -93,6 +93,10 @@ EDTDataBlock *EDTDataBlock::getParentDoneDB() {
   return nullptr;
 }
 int32_t EDTDataBlock::getSlot() { return Slot; }
+int32_t EDTDataBlock::getToSlot() {
+  return getDoneDB() ? (getDoneDB()->getSlot())
+                     : (getParentDoneDB()->getSlot());
+}
 
 /// Setters
 void EDTDataBlock::setParentDB(EDTDataBlock *ParentDB) {
@@ -222,14 +226,27 @@ string EDT::getName() {
 }
 EDTTypeKind EDT::getTypeKind() const { return Kind; }
 EDTType EDT::getTy() const { return Ty; }
-uint32_t EDT::getDepSlot() const { return DepSlot; }
 
 /// Helpers
 bool EDT::isAsync() { return !isa<SyncEDT>(this); }
 bool EDT::isMain() { return isa<MainEDT>(this); }
 bool EDT::isDep(Argument *Arg) { return Env->isDepV(Arg); }
 bool EDT::isDep(uint32_t CallArgItr) { return isDep(Fn->getArg(CallArgItr)); }
+
+/// Dependency Slot
+uint32_t EDT::insertDepSlot(uint32_t CallArgItr) {
+  uint32_t PrevSlot = DepSlot;
+  DepSlotToArg[PrevSlot] = Fn->getArg(CallArgItr);
+  DepSlot++;
+  return PrevSlot;
+}
 uint32_t EDT::incDepSlot() { return DepSlot++; }
+uint32_t EDT::getDepSlot() const { return DepSlot; }
+Argument *EDT::getDepArg(uint32_t DepSlot) {
+  auto Itr = DepSlotToArg.find(DepSlot);
+  assert(Itr != DepSlotToArg.end() && "Dep Slot not found");
+  return Itr->second;
+}
 
 /// What we learned after running the Attributor
 void EDT::setCall(EDTCallBase *Call) { this->Call = Call; }
@@ -251,12 +268,6 @@ EDT *EDT::getParent() { return Parent; }
 EDT *EDT::getParentSync() { return ParentSync; }
 EDT *EDT::getDoneSync() { return DoneSync; }
 uint32_t EDT::getNode() { return Node; }
-
-/// Information regarding the generated EDT
-Function *EDT::getNewFn() { return NewFn; }
-Value *EDT::getGuidAddress() { return GuidAddress; }
-void EDT::setNewFn(Function *Fn) { NewFn = Fn; }
-void EDT::setGuidAddress(Value *V) { GuidAddress = V; }
 
 /// Task EDT
 TaskEDT::TaskEDT(EDTFunction *Fn) : EDT(Fn) {

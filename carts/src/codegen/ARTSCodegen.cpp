@@ -23,6 +23,8 @@
 #include "carts/utils/ARTSUtils.h"
 
 #include <cassert>
+#include <cstdint>
+#include <sys/types.h>
 
 // DEBUG
 #define DEBUG_TYPE "arts-codegen"
@@ -34,12 +36,46 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 using namespace arts;
 using namespace arts::types;
 
+/// ---------------------------- EDTCodegen ---------------------------- ///
+EDTCodegen::EDTCodegen(EDT *E) : E(E) {}
+EDTCodegen::EDTCodegen(EDT *E, Function *Fn) : E(E), Fn(Fn) {}
+Function *EDTCodegen::getFn() { return Fn; }
+CallBase *EDTCodegen::getCB() { return CB; }
+Value *EDTCodegen::getGuidAddress() { return GuidAddress; }
+void EDTCodegen::setFn(Function *Fn) { this->Fn = Fn; }
+void EDTCodegen::setCB(CallBase *CB) { this->CB = CB; }
+void EDTCodegen::setGuidAddress(Value *V) { this->GuidAddress = V; }
+
+bool EDTCodegen::hasParameter(int32_t Slot) {
+  return Parameters.find(Slot) != Parameters.end();
+}
+
+bool EDTCodegen::hasDependency(int32_t Slot) {
+  return Dependencies.find(Slot) != Dependencies.end();
+}
+
+void EDTCodegen::insertParameter(int32_t Slot, Value *V) {
+  if (hasParameter(Slot))
+    Parameters[Slot] = V;
+}
+
+void EDTCodegen::insertDependency(int32_t Slot, Value *V) {
+  if (hasDependency(Slot))
+    Dependencies[Slot] = V;
+}
+
+/// ---------------------------- ARTSCodegen ---------------------------- ///
 ARTSCodegen::ARTSCodegen(ARTSCache *Cache)
-    : Cache(Cache), M(Cache->getModule()), Builder(Cache->getModule().getContext()) {
+    : Cache(Cache), M(Cache->getModule()),
+      Builder(Cache->getModule().getContext()) {
   initialize();
 }
 
-ARTSCodegen::~ARTSCodegen() {}
+ARTSCodegen::~ARTSCodegen() {
+  for (auto &ECG : EDTs)
+    delete ECG.second;
+  EDTs.clear();
+}
 
 void ARTSCodegen::initialize() {
   LLVM_DEBUG(dbgs() << TAG << "Initializing ARTSCodegen\n");
@@ -123,8 +159,9 @@ void ARTSCodegen::handleEDT(EDT &E) {
 }
 
 Function *ARTSCodegen::getOrCreateEDTFunction(EDT &E) {
-  if (EDTFunctions.find(&E) != EDTFunctions.end())
-    return EDTFunctions[&E];
+  EDTCodegen *ECG = getOrCreateEDT(E);
+  if (ECG->getFn())
+    return ECG->getFn();
 
   LLVM_DEBUG(dbgs() << TAG << "Creating function for EDT #" << E.getID()
                     << "\n");
@@ -136,8 +173,7 @@ Function *ARTSCodegen::getOrCreateEDTFunction(EDT &E) {
   (EDTFn->arg_begin() + 1)->setName("paramv");
   (EDTFn->arg_begin() + 2)->setName("depc");
   (EDTFn->arg_begin() + 3)->setName("depv");
-  E.setNewFn(EDTFn);
-  EDTFunctions[&E] = EDTFn;
+  ECG->setFn(EDTFn);
   /// Redirect Entry BB
   BasicBlock *EntryBB = BasicBlock::Create(M.getContext(), "entry", EDTFn);
   BasicBlock *OldEntryBB = &OldFn->getEntryBlock();
@@ -166,8 +202,9 @@ void ARTSCodegen::setIPInEDTEntry(EDTFunction &EDTFn) {
 
 Value *ARTSCodegen::getOrCreateEDTGuid(EDT &E) {
   /// Check if the EDT already has a GUID
-  if (E.getGuidAddress())
-    return E.getGuidAddress();
+  EDTCodegen *ECG = getOrCreateEDT(E);
+  if (ECG->getGuidAddress())
+    return ECG->getGuidAddress();
 
   LLVM_DEBUG(dbgs() << TAG << "Reserving GUID for EDT #" << E.getID() << "\n");
   /// EDTs are allocated in the parent EDT function
@@ -199,8 +236,7 @@ Value *ARTSCodegen::getOrCreateEDTGuid(EDT &E) {
   auto *GuidAddress =
       Builder.CreateAlloca(Int32Ptr, nullptr, E.getName() + "_guid.addr");
   Builder.CreateStore(ReserveGuidCall, GuidAddress);
-  E.setGuidAddress(GuidAddress);
-  EDTGuids.insert(GuidAddress);
+  ECG->setGuidAddress(GuidAddress);
 
   /// Restore the insertion point
   Builder.restoreIP(OldInsertPoint);
@@ -209,169 +245,216 @@ Value *ARTSCodegen::getOrCreateEDTGuid(EDT &E) {
 
 void ARTSCodegen::insertEDTEntry(EDT &E) {
   // EDT &E = *EDTNode.getEDT();
-  // LLVM_DEBUG(dbgs() << TAG << "Inserting Entry for EDT #" << E.getID() << "\n");
-  // auto OldInsertPoint = Builder.saveIP();
-  // /// Set the insertion point to the entry block of the EDT function
-  // Function *EDTFn = getOrCreateEDTFunction(E);
-  // setIPInEDTEntry(*EDTFn);
+  LLVM_DEBUG(dbgs() << TAG << "Inserting Entry for EDT #" << E.getID() << "\n");
+  auto OldInsertPoint = Builder.saveIP();
+  /// Set the insertion point to the entry block of the EDT function
+  Function *EDTFn = getOrCreateEDTFunction(E);
+  setIPInEDTEntry(*EDTFn);
 
-  // /// The input parameters and Guids always come from the parent
-  // EDT *Parent = E.getParent();
-  // EDTGraphDataEdge *InputDataEdges =
-  //     dyn_cast<EDTGraphDataEdge>(Graph.getEdge(Parent, &E));
-  // if (!InputDataEdges) {
-  //   LLVM_DEBUG(dbgs() << "     EDT #" << E.getID()
-  //                     << " doesn't have input data edges from the parent\n");
-  //   return;
-  // }
+  DenseMap<Value *, Value *> RewiringMap;
+  /// Get the information we know about the Module
+  EDTGraph &Graph = Cache->getGraph();
+  EDTCodegen *ECG = getOrCreateEDT(E);
 
-  // /// Get parameters
-  // auto &InputParameters = InputDataEdges->getParameters();
-  // for (auto Param : InputParameters) {
-  //   Value *ParamValue = Param.getValue();
-  //   if (ParamValue->getType()->isPointerTy()) {
-  //     /// Load the value from the pointer
-  //     ParamValue = Builder.CreateLoad(
-  //         ParamValue->getType()->getPointerElementType(), ParamValue);
-  //   }
-  //   /// Store the value in the EDT function
-  //   auto *ParamAlloca = EDTFn->getArg(1 + Param.getIndex());
-  //   Builder.CreateStore(ParamValue, ParamAlloca);
-  // }
+  /// Parameters
+  auto handleParameters = [&]() -> void {
+    LLVM_DEBUG(dbgs() << " - Inserting ParamV\n");
+    /// The input parameters and Guids always come from the parent EDT
+    EDT *Parent = E.getParent();
+    if (!Parent) {
+      LLVM_DEBUG(dbgs() << "     EDT #" << E.getID()
+                        << " doesn't have a parent EDT\n");
+      return;
+    }
+    EDTGraphDataEdge *InputParentDataEdges =
+        dyn_cast<EDTGraphDataEdge>(Graph.getEdge(Parent, &E));
+    if (!InputParentDataEdges ||
+        InputParentDataEdges->getParameters().empty()) {
+      LLVM_DEBUG(dbgs() << "     EDT #" << E.getID()
+                        << " doesn't have input data edges from the parent\n");
+      return;
+    }
 
-  // auto InputParams
-  //     /// Get input data edges
-  //     auto DataEdges = Graph.getIncomingEdges(&E);
+    auto &InputParameters = InputParentDataEdges->getParameters();
+    auto ParamVArg = EDTFn->arg_begin() + 1;
+    for (auto Param : enumerate(InputParameters)) {
+      uint32_t Index = Param.index();
+      Value *OriginalVal = Cache->getEDTArg(&E, Param.value());
+      LLVM_DEBUG(dbgs() << "   - ParamV[" << Index << "]: " << *OriginalVal
+                        << "\n");
+      Twine ParamVName = (OriginalVal->getName() == "")
+                             ? ("paramv." + std::to_string(Index))
+                             : ("paramv." + OriginalVal->getName());
+      Value *ParamVElemPtr = Builder.CreateConstInBoundsGEP1_64(
+          Int64, ParamVArg, Index, ParamVName);
+      /// Load the value from the array
+      Value *LoadedVal = Builder.CreateLoad(Int64, ParamVElemPtr);
+      /// Cast the value to the original type
+      Value *CastedVal = LoadedVal;
+      Type *OriginalType = OriginalVal->getType();
+      switch (OriginalType->getTypeID()) {
+      /// Integer
+      case llvm::Type::IntegerTyID: {
+        LLVM_DEBUG(dbgs() << "     - Value is an Integer\n");
+        if (OriginalType != Int64)
+          CastedVal = Builder.CreateTrunc(LoadedVal, OriginalType);
+        LLVM_DEBUG(dbgs() << "     - Casted Value: " << *CastedVal << "\n");
+      } break;
+      /// Float
+      case llvm::Type::FloatTyID: {
+        llvm_unreachable("Float type not supported yet");
+      } break;
+      /// Pointer
+      case llvm::Type::PointerTyID: {
+        llvm_unreachable("Pointer type not supported yet");
+      } break;
+      default:
+        llvm_unreachable("Type not supported yet");
+        break;
+      }
 
-  // /// Parameters
-  // auto InputParams = DataEdges.getParams();
-  // ///
-  // DenseMap<Value *, Value *> RewiringMap;
-  // EDTEnvironment &EDTDataEnv = E.getDataEnv();
-  // /// Insert ParamV
-  // auto ParamVArg = EDTFn->arg_begin() + 1;
-  // LLVM_DEBUG(dbgs() << " - Inserting ParamV\n");
-  // for (auto ParamV : enumerate(EDTDataEnv.ParamV)) {
-  //   unsigned Index = ParamV.index();
-  //   Value *OriginalVal = ParamV.value();
-  //   LLVM_DEBUG(dbgs() << "   - ParamV[" << Index << "]: " << *OriginalVal
-  //                     << "\n");
-  //   Twine ParamVName = (OriginalVal->getName() == "")
-  //                          ? ("paramv." + std::to_string(Index))
-  //                          : ("paramv." + OriginalVal->getName());
-  //   Value *ParamVElemPtr =
-  //       Builder.CreateConstInBoundsGEP1_64(Int64, ParamVArg, Index, ParamVName);
-  //   /// Load the value from the array
-  //   Value *LoadedVal = Builder.CreateLoad(Int64, ParamVElemPtr);
-  //   /// Cast the value to the original type
-  //   Value *CastedVal = LoadedVal;
-  //   Type *OriginalType = OriginalVal->getType();
-  //   switch (OriginalType->getTypeID()) {
-  //   /// Integer
-  //   case llvm::Type::IntegerTyID: {
-  //     LLVM_DEBUG(dbgs() << "     - Value is an Integer\n");
-  //     if (OriginalType != Int64)
-  //       CastedVal = Builder.CreateTrunc(LoadedVal, OriginalType);
-  //     LLVM_DEBUG(dbgs() << "     - Casted Value: " << *CastedVal << "\n");
-  //   } break;
-  //   /// Float
-  //   case llvm::Type::FloatTyID: {
-  //     llvm_unreachable("Float type not supported yet");
-  //   } break;
-  //   /// Pointer
-  //   case llvm::Type::PointerTyID: {
-  //     llvm_unreachable("Pointer type not supported yet");
-  //   } break;
-  //   default:
-  //     llvm_unreachable("Type not supported yet");
-  //     break;
-  //   }
-  //   /// Add the value to the rewiring map
-  //   RewiringMap[OriginalVal] = CastedVal;
-  // }
+      /// Add the value to the rewiring map
+      RewiringMap[OriginalVal] = CastedVal;
+      ECG->insertParameter(Index, CastedVal);
+    }
+  };
 
-  // /// Insert DepV
-  // LLVM_DEBUG(dbgs() << " - Inserting DepV\n");
-  // auto DepVArg = EDTFn->arg_begin() + 3;
-  // for (auto En : enumerate(EDTDataEnv.DepV)) {
-  //   unsigned Index = En.index();
-  //   Value *OriginalVal = En.value();
-  //   auto DepVName = (OriginalVal->getName() == "")
-  //                       ? ("depv." + std::to_string(Index))
-  //                       : ("depv." + std::string(OriginalVal->getName()));
-  //   LLVM_DEBUG(dbgs() << "   - DepV[" << Index << "]: " << *OriginalVal
-  //                     << "\n");
-  //   Value *DepVArrayElemPtr =
-  //       Builder.CreateConstInBoundsGEP2_32(EdtDep, DepVArg, Index, 2, DepVName);
-  //   Value *CastedVal =
-  //       Builder.CreateBitCast(DepVArrayElemPtr, OriginalVal->getType());
-  //   /// Add the value to the rewiring map
-  //   RewiringMap[OriginalVal] = CastedVal;
-  // }
+  /// Dependencies
+  auto handleDependencies = [&]() -> void {
+    LLVM_DEBUG(dbgs() << " - Inserting DepV\n");
+    /// The input parameters and Guids always come from the parent EDT
+    auto InputEdges = Graph.getIncomingEdges(&E);
+    if (InputEdges.empty()) {
+      LLVM_DEBUG(dbgs() << "     EDT #" << E.getID()
+                        << " doesn't have input edges\n");
+      return;
+    }
 
-  // // redirectTo(EntryBB, E.getExit());
-  // utils::rewireValues(RewiringMap);
-  // Builder.restoreIP(OldInsertPoint);
+    for (auto *Edge : InputEdges) {
+      auto *DataEdge = dyn_cast<EDTGraphDataEdge>(Edge);
+      if (!DataEdge)
+        continue;
+
+      auto &DataBlocks = DataEdge->getDataBlocks();
+      auto DepVArg = EDTFn->arg_begin() + 3;
+      for (auto Dep : enumerate(DataBlocks)) {
+        EDTDataBlock *DB = Dep.value();
+        uint32_t Index = DB->getToSlot();
+        /// If the DB slot was already filled, skip it
+        if (ECG->hasDependency(Index))
+          continue;
+
+        /// Otherwise create it
+        Value *OriginalVal = E.getDepArg(Index);
+        LLVM_DEBUG(dbgs() << "   - DepV[" << Index << "]: " << *OriginalVal
+                          << "\n");
+        Twine DepVName = (OriginalVal->getName() == "")
+                             ? ("depv." + std::to_string(Index))
+                             : ("depv." + OriginalVal->getName());
+        Value *DepVElemPtr = Builder.CreateConstInBoundsGEP2_32(
+            EdtDep, DepVArg, Index, 2, DepVName);
+        Value *CastedVal =
+            Builder.CreateBitCast(DepVElemPtr, OriginalVal->getType());
+
+        /// Add the value to the rewiring map
+        RewiringMap[OriginalVal] = CastedVal;
+        ECG->insertDependency(DB->getSlot(), CastedVal);
+      }
+    }
+  };
+
+  handleParameters();
+  handleDependencies();
+  utils::rewireValues(RewiringMap);
+  Builder.restoreIP(OldInsertPoint);
 }
 
-CallInst *ARTSCodegen::insertEDTCall(EDT &E) {
+void ARTSCodegen::insertEDTCall(EDT &E) {
   LLVM_DEBUG(dbgs() << TAG << "Inserting Call for EDT #" << E.getID() << "\n");
-  // auto *EdtBody = E.getTaskBody();
-  // auto &EdtEnv = E.getEnv();
-  // const auto EdtName = E.getName();
-  // /// Guid
-  // reserveEDTGuid(E);
-  // /// ParamC
-  // AllocaInst *ParamC =
-  //     Builder.CreateAlloca(Int32, nullptr, EdtName + "_paramc");
-  // Builder.CreateStore(ConstantInt::get(Int32, EdtEnv.getParamC()), ParamC);
-  // auto *LoadedParamC = Builder.CreateLoad(Int32, ParamC);
-  // /// ParamV
-  // AllocaInst *ParamV =
-  //     Builder.CreateAlloca(Int64, LoadedParamC, EdtName + "_paramv");
-  // for (auto En : enumerate(EdtEnv.ParamV)) {
-  //   unsigned Index = En.index();
-  //   Value *Val = En.value();
-  //   auto ParamVName = (Val->getName() == "")
-  //                         ? (EdtName + "_paramv." + std::to_string(Index))
-  //                         : (EdtName + "_paramv." + Val->getName());
-  //   /// Create the GEP to store the value in the ParamV array
-  //   Value *ParamVElemPtr =
-  //       Builder.CreateConstInBoundsGEP1_64(Int64, ParamV, Index, ParamVName);
-  //   /// Cast the value to int64
-  //   Value *CastedVal = nullptr;
-  //   auto *ValType = Val->getType();
-  //   switch (ValType->getTypeID()) {
-  //   /// Integer
-  //   case llvm::Type::IntegerTyID: {
-  //     if (ValType != Int64)
-  //       CastedVal = Builder.CreateSExtOrTrunc(Val, Int64);
-  //     else
-  //       CastedVal = Val;
-  //   } break;
-  //   /// Default
-  //   default:
-  //     assert(false && "Type not supported yet");
-  //     break;
-  //   }
-  //   Builder.CreateStore(CastedVal, ParamVElemPtr);
-  // }
-  // /// Depc
-  // AllocaInst *DepC = Builder.CreateAlloca(Int32, nullptr);
-  // Builder.CreateStore(ConstantInt::get(Int32, EdtEnv.getDepC()), DepC);
-  // Value *Args[] = {Builder.CreateBitCast(EdtBody, EdtFunctionPtr),
-  //                  Builder.CreateBitCast(E.getGuidAddr(), Int32Ptr),
-  //                  LoadedParamC, ParamV,
-  //                  //  Builder.CreateBitCast(ParamV, Int64Ptr),
-  //                  Builder.CreateLoad(Int32, DepC)};
-  // Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
-  // return Builder.CreateCall(F, Args);
+  EDT *Parent = E.getParent();
+  if (!Parent) {
+    LLVM_DEBUG(dbgs() << "     EDT #" << E.getID()
+                      << " doesn't have a parent EDT\n");
+    return;
+  }
+
+  EDTGraph &Graph = Cache->getGraph();
+  EDTGraphDataEdge *InputParentDataEdges =
+      dyn_cast<EDTGraphDataEdge>(Graph.getEdge(Parent, &E));
+  if (!InputParentDataEdges) {
+    LLVM_DEBUG(dbgs() << "     EDT #" << E.getID()
+                      << " doesn't have input data edges from the parent\n");
+    return;
+  }
+
+  auto EDTName = E.getName();
+  /// Set insertion point to the EDT Call
+  auto OldInsertPoint = Builder.saveIP();
+  Builder.SetInsertPoint(E.getCall());
+
+  /// ParamC
+  uint32_t ParamSize = InputParentDataEdges->getParameters().size();
+  AllocaInst *ParamC =
+      Builder.CreateAlloca(Int32, nullptr, EDTName + "_paramc");
+  Builder.CreateStore(ConstantInt::get(Int32, ParamSize), ParamC);
+  auto *LoadedParamC = Builder.CreateLoad(Int32, ParamC);
+
+  /// ParamV
+  AllocaInst *ParamV =
+      Builder.CreateAlloca(Int64, LoadedParamC, EDTName + "_paramv");
+  auto &InputParameters = InputParentDataEdges->getParameters();
+  for (auto Param : enumerate(InputParameters)) {
+    LLVM_DEBUG(dbgs() << " - ParamV[" << Param.index() << "]: "
+                      << *Param.value() << "\n");
+    unsigned Index = Param.index();
+    Value *Val = Param.value();
+    auto ParamVName = EDTName + "_paramv." + std::to_string(Index);
+    /// Create the GEP to store the value in the ParamV array
+    Value *ParamVElemPtr =
+        Builder.CreateConstInBoundsGEP1_64(Int64, ParamV, Index, ParamVName);
+    /// Cast the value to int64
+    Value *CastedVal = nullptr;
+    auto *ValType = Val->getType();
+    switch (ValType->getTypeID()) {
+    /// Integer
+    case llvm::Type::IntegerTyID: {
+      if (ValType != Int64)
+        CastedVal = Builder.CreateSExtOrTrunc(Val, Int64);
+      else
+        CastedVal = Val;
+    } break;
+    /// Default
+    default:
+      assert(false && "Type not supported yet");
+      break;
+    }
+    Builder.CreateStore(CastedVal, ParamVElemPtr);
+  }
+
+  /// DepC
+  EDTCodegen *ECG = getOrCreateEDT(E);
+  EDTEnvironment &EDTEnv = E.getDataEnv();
+  AllocaInst *DepC = Builder.CreateAlloca(Int32, nullptr);
+  Builder.CreateStore(ConstantInt::get(Int32, EDTEnv.getDepC()), DepC);
+  Value *Args[] = {Builder.CreateBitCast(ECG->getFn(), EdtFunctionPtr),
+                   Builder.CreateBitCast(ECG->getGuidAddress(), Int32Ptr),
+                   LoadedParamC, ParamV,
+                   //  Builder.CreateBitCast(ParamV, Int64Ptr),
+                   Builder.CreateLoad(Int32, DepC)};
+
+  /// Create EDT
+  Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
+  ECG->setCB(Builder.CreateCall(F, Args));
+  utils::removeValue(E.getCall());
+
+  /// Restore the insertion point
+  Builder.restoreIP(OldInsertPoint);
 }
 
 void ARTSCodegen::signalEDTGuid(EDT &From, EDT &To, Value *Signal) {
-  Value *FromGuidInt = Builder.CreatePtrToInt(From.getGuidAddress(), Int32);
-  Value *ToGuidInt = Builder.CreatePtrToInt(To.getGuidAddress(), Int32);
-  Value *Args[] = {FromGuidInt, ToGuidInt};
+  // Value *FromGuidInt = Builder.CreatePtrToInt(From.getGuidAddress(), Int32);
+  // Value *ToGuidInt = Builder.CreatePtrToInt(To.getGuidAddress(), Int32);
+  // Value *Args[] = {FromGuidInt, ToGuidInt};
 
   // void artsSignalEdtValue(artsGuid_t edtGuid, uint32_t slot, uint64_t data);
   // void artsSignalEdtPtr(artsGuid_t edtGuid, uint32_t slot, void * ptr,
@@ -435,6 +518,17 @@ void ARTSCodegen::setInsertPoint(BasicBlock *BB) { Builder.SetInsertPoint(BB); }
 void ARTSCodegen::setInsertPoint(Instruction *I) { Builder.SetInsertPoint(I); }
 
 /// ---------------------------- Private ---------------------------- ///
+EDTCodegen *ARTSCodegen::getOrCreateEDT(EDT &E) {
+  if (EDTs.find(&E) != EDTs.end())
+    return EDTs[&E];
+
+  LLVM_DEBUG(dbgs() << TAG << "Creating codegen for EDT #" << E.getID()
+                    << "\n");
+  EDTCodegen *ECG = new EDTCodegen(&E);
+  EDTs[&E] = ECG;
+  return ECG;
+}
+
 void ARTSCodegen::initializeTypes() {
   LLVMContext &Ctx = M.getContext();
   StructType *T;

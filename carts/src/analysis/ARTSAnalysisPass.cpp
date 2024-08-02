@@ -931,7 +931,7 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
       /// Each dependency has a slot in the EDT and has to be sent from the
       /// parent EDT to the called EDT unless it is a DoneEDT (because all its
       /// input dependencies must be sent by the sibling SyncEDT)
-      DB->setSlot(EDTInfo->incDepSlot());
+      DB->setSlot(EDTInfo->insertDepSlot(CallArgItr));
       if (!EDTInfo->isDoneEDT())
         insertDataBlockEdge(EDTInfo->getParent(), EDTInfo, DB);
     }
@@ -1370,10 +1370,10 @@ public:
         AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
     AnalysisGetter AG(FAM);
     BumpPtrAllocator Allocator;
-    ARTSCache InfoCache(M, AG, Allocator, Functions);
+    ARTSCache Cache(M, AG, Allocator, Functions);
 
-    computeGraph(M, InfoCache);
-    generateCode(M, InfoCache);
+    computeGraph(M, Cache);
+    generateCode(M, Cache);
     LLVM_DEBUG(dbgs() << "\n"
                       << "-------------------------------------------------\n");
     LLVM_DEBUG(dbgs() << TAG << "Process has finished\n");
@@ -1383,10 +1383,10 @@ public:
     return PreservedAnalyses::all();
   }
 
-  void computeGraph(Module &M, ARTSCache &InfoCache) {
+  void computeGraph(Module &M, ARTSCache &Cache) {
     LLVM_DEBUG(dbgs() << "\n\n[Attributor] Initializing AAEDTInfo: \n");
     /// Create attributor
-    auto &Functions = InfoCache.getFunctions();
+    auto &Functions = Cache.getFunctions();
     CallGraphUpdater CGUpdater;
     AttributorConfig AC(CGUpdater);
     AC.DefaultInitializeLiveInternals = false;
@@ -1395,7 +1395,7 @@ public:
     AC.MaxFixpointIterations = 32;
     AC.DeleteFns = false;
     AC.PassName = DEBUG_TYPE;
-    Attributor A(Functions, InfoCache, AC);
+    Attributor A(Functions, Cache, AC);
 
     /// Register AAs
     for (Function *Fn : Functions) {
@@ -1407,137 +1407,28 @@ public:
     ChangeStatus Changed = A.run();
     LLVM_DEBUG(dbgs() << "[Attributor] Done with " << Functions.size()
                       << " functions, result: " << Changed << ".\n");
-    InfoCache.getGraph().print();
+    Cache.getGraph().print();
   }
 
-  void generateCode(Module &M, ARTSCache &InfoCache) {
-    ARTSCodegen &CG = InfoCache.getCG();
-    EDTGraph &Graph = InfoCache.getGraph();
+  void generateCode(Module &M, ARTSCache &Cache) {
+    ARTSCodegen &CG = Cache.getCG();
+    EDTGraph &Graph = Cache.getGraph();
     auto EDTNodes = Graph.getNodes();
     /// Reserve GUIDs for all EDTs
     for (EDTGraphNode *EDTNode : EDTNodes) {
       EDT &CurrentEDT = *EDTNode->getEDT();
       CG.getOrCreateEDTGuid(CurrentEDT);
     }
-    // ARTSCodegen &CG = Cache->getCG();
-    // CG.getOrCreateEDTFunction(*EDTInfo);
-    // CG.getOrCreateEDTGuid(*EDTInfo);
-    // LLVM_DEBUG(dbgs() << "\nAll EDT Guids have been reserved\n");
-    // for (EDTGraphNode *EDTNode : EDTNodes) {
-    //   EDT &CurrentEDT = *EDTNode->getEDT();
-    //   /// For now ignore sync EDTs
-    //   if (!CurrentEDT.isAsync())
-    //     continue;
-    //   /// Modify data environments based on dependencies.
-    //   /// EDTs can only signal to DoneEDTs. Check if any output data edges
-    //   auto OutEdges = Graph.getOutgoingEdges(EDTNode);
-    //   if (OutEdges.size() == 0) {
-    //     continue;
-    //   } else {
-    //     /// Print the outgoing edges.
-    //     EDT *ParentSyncEDT = CurrentEDT.getParentSync();
-    //     for (EDTGraphEdge *DepEdge : OutEdges) {
-    //       EDTGraphNode *ToNode = DepEdge->getTo();
-    //       EDT *ToEDT = ToNode->getEDT();
-    //       /// For now ignore not Data edges
-    //       if (!DepEdge->isDataEdge())
-    //         continue;
 
-    //       /// Make sure the EDT knows where to signal the value.
-    //       LLVM_DEBUG(dbgs() << "    - EDT #" << ParentSyncEDT->getID()
-    //                         << " must signal the DoneSyncEDTGuid to EDT #"
-    //                         << CurrentEDT.getID() << "\n");
-    //       Value *DoneSyncGuid = CurrentEDT.getDoneSync()->getGuidAddress();
-    //       assert(DoneSyncGuid && "DoneSyncGuid is null!");
-    //       EDTDataBlock *DoneSyncGuidDB = InfoCache.getOrCreateDataBlock(
-    //           DoneSyncGuid, EDTDataBlock::Mode::ReadOnly, ParentSyncEDT);
-    //       CurrentEDT.insertValueToEnv(DoneSyncGuid, true);
-    //       Graph.addDataEdge(ParentSyncEDT, &CurrentEDT, DoneSyncGuidDB);
-    //       /// Insert signal to the EDT in the exit block
-    //     }
-    //   }
-    //   // LLVM_DEBUG(dbgs() << "\n");
-    // }
-
-    // LLVM_DEBUG(dbgs() << "    - [");
-    // if (DepEdge->isDataEdge()) {
-    //   LLVM_DEBUG(dbgs() << "data");
-    // } else if (DepEdge->isControlEdge()) {
-    //   LLVM_DEBUG(dbgs() << "control");
-    // }
-    // if (DepEdge->hasCreationDep()) {
-    //   LLVM_DEBUG(dbgs() << "/ creation");
-    // }
-    // LLVM_DEBUG(dbgs() << "] \"EDT #" << ToE->getID() << "\"\n");
-    // if (DepEdge->isDataEdge()) {
-    //   auto *DataEdge = cast<EDTGraphDataEdge>(DepEdge);
-    //   auto Values = DataEdge->getValues();
-    //   for (auto *V : Values) {
-    //     LLVM_DEBUG(dbgs() << "        - " << *V << "\n");
-    //   }
-    // }
-    //   /// Analyze output edges. If any data dependency, check if I need to
-    //   /// signal a GUID address or not.
-    //   //
-    //   // CG.insertEDTEntry(CurrentEDT);
-
-    //   // return;
-    //   // switch (CurrentEDT.getTy()) {
-    //   // case EDTType::Task:
-    //   //   CG.generateTaskEDT(CurrentEDT);
-    //   //   break;
-    //   // case EDTType::Sync:
-    //   //   CG.generateSyncEDT(CurrentEDT);
-    //   //   break;
-    //   // case EDTType::Parallel:
-    //   //   CG.generateParallelEDT(CurrentEDT);
-    //   //   break;
-    //   // default:
-    //   //   llvm_unreachable("EDT Type not supported!");
-    //   // }
-
-    //   // LLVM_DEBUG(dbgs() << "- EDT #" << E->getID() << " - \"" <<
-    //   E->getName()
-    //   //                   << "\"\n");
-    //   // LLVM_DEBUG(dbgs() << "  - Type: " << toString(E->getTy()) << "\n");
-    //   // /// Data environment
-    //   // LLVM_DEBUG(dbgs() << "  - Data Environment:\n");
-    //   // auto &DE = E->getDataEnv();
-    //   // LLVM_DEBUG(dbgs() << "    - " << "Number of ParamV = " <<
-    //   // DE.getParamC()
-    //   //                   << "\n");
-    //   // for (auto &P : DE.ParamV) {
-    //   //   LLVM_DEBUG(dbgs() << "      - " << *P << "\n");
-    //   // }
-    //   // LLVM_DEBUG(dbgs() << "    - " << "Number of DepV = " << DE.getDepC()
-    //   //                   << "\n");
-    //   // for (auto &D : DE.DepV) {
-    //   //   LLVM_DEBUG(dbgs() << "      - " << *D << "\n");
-    //   // }
-    //   /// Dependencies
-    //   // LLVM_DEBUG(dbgs() << "  - Incoming Edges:\n");
-    //   // auto InEdges = EDTGraph.getIncomingEdges(EDTNode);
-    //   // if (InEdges.size() == 0) {
-    //   //   LLVM_DEBUG(dbgs() << "    - The EDT has no incoming edges\n");
-    //   // } else {
-    //   //   /// Print the incoming edges.
-    //   //   for (auto *DepEdge : InEdges) {
-    //   //     auto *From = DepEdge->getFrom();
-    //   //     auto *FromE = From->getEDT();
-    //   //     // LLVM_DEBUG(dbgs() << "    - [");
-    //   //     // if (DepEdge->isDataEdge()) {
-    //   //     //   LLVM_DEBUG(dbgs() << "data");
-    //   //     // } else if (DepEdge->isControlEdge()) {
-    //   //     //   LLVM_DEBUG(dbgs() << "control");
-    //   //     // }
-    //   //     // if (DepEdge->hasCreationDep()) {
-    //   //     //   LLVM_DEBUG(dbgs() << "/ creation");
-    //   //     // }
-    //   //     // LLVM_DEBUG(dbgs() << "] \"EDT #" << FromE->getID() <<
-    //   "\"\n");
-    //   //   }
-    //   // }
-    // }
+    LLVM_DEBUG(dbgs() << "\nAll EDT Guids have been reserved\n");
+    for (EDTGraphNode *EDTNode : EDTNodes) {
+      EDT &CurrentEDT = *EDTNode->getEDT();
+      LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - -\n"
+                        << "Generating Code for EDT #" << CurrentEDT.getID()
+                        << "\n");
+      CG.insertEDTEntry(CurrentEDT);
+      CG.insertEDTCall(CurrentEDT);
+    }
   }
 };
 
