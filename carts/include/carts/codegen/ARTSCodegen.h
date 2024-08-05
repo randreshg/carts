@@ -88,7 +88,9 @@ public:
 
   /// Interface to add ARTS methods
   Function *getOrCreateEDTFunction(EDT &E);
-  Value *getOrCreateEDTGuid(EDT &E);
+  Value *getOrCreateEDTGuid(EDT &E, BasicBlock *InsertionBB = nullptr);
+  Value *getOrCreateEDTGuid(string EDTName,
+                            uint32_t EDTNode);
   void initializeEDT(EDT &E);
   /// Based on the EDT parameters and dependencies, it "unrolls" the data
   /// structure and rewires the values to their new instances.
@@ -108,7 +110,7 @@ public:
   bool isEDTGuid(Value *V);
 
   /// ---------------------------- Utils ---------------------------- ///
-  void setIPInEDTEntry(EDTFunction &EDTFn);
+  void setInsertionPointAtEDTEntry(EDTFunction &EDTFn);
 
   /// Make \p Source branch to \p Target.
   ///

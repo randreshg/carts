@@ -6,7 +6,7 @@ opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/li
 # -debug-only=omp-transform,arts,carts,arts-ir-builder,arts-utils\
 llvm-dis test_arts_ir.bc
 opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so \
-		-debug-only=arts-analysis,arts,carts,arts-ir-builder,edt-graph,carts-metadata,arts-codegen,arts-utils\
+		-debug-only=arts-analysis,arts,carts,arts-ir-builder,edt-graph,carts-metadata,arts-codegen\
 		-passes="arts-analysis" test_arts_ir.bc -o test_arts_analysis.bc
 
 -------------------------------------------------
@@ -315,23 +315,6 @@ EDTDataBlock ->
       - DataBlocks:
         -   %random_number = alloca i32, align 4 / ReadWrite / from slot 0 to 1
 - - - - - - - - - - - - - - - - - - 
-- EDT #0 - "edt.0.main"
-  - Type: main
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 0
-  - Incoming Edges:
-    - The EDT has no incoming edges
-  - Outgoing Edges:
-    - [control/ creation] "EDT #2"
-    - [data/ creation] "EDT #1"
-      - Parameters:
-      - Guids:
-        - EDT #2
-      - DataBlocks:
-        -   %random_number = alloca i32, align 4 / ReadWrite / to slot 0
-        -   %shared_number = alloca i32, align 4 / ReadWrite / to slot 1
-- - - - - - - - - - - - - - - - - - 
 - EDT #2 - "edt.2.task"
   - Type: task
   - Data Environment:
@@ -345,6 +328,23 @@ EDTDataBlock ->
     - [data] "EDT #1"
   - Outgoing Edges:
     - The EDT has no outgoing edges
+- - - - - - - - - - - - - - - - - - 
+- EDT #0 - "edt.0.main"
+  - Type: main
+  - Data Environment:
+    - Number of ParamV = 0
+    - Number of DepV = 0
+  - Incoming Edges:
+    - The EDT has no incoming edges
+  - Outgoing Edges:
+    - [data/ creation] "EDT #1"
+      - Parameters:
+      - Guids:
+        - EDT #2
+      - DataBlocks:
+        -   %random_number = alloca i32, align 4 / ReadWrite / to slot 0
+        -   %shared_number = alloca i32, align 4 / ReadWrite / to slot 1
+    - [control/ creation] "EDT #2"
 
 - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -358,12 +358,12 @@ EDTDataBlock ->
 [arts-codegen] Creating codegen for EDT #0
 [arts-codegen] Creating function for EDT #0
 [arts-codegen] Found ARTS runtime function artsReserveGuidRoute with type ptr (i32, i32)
-[arts-codegen] Reserving GUID for EDT #0
-     EDT #0 doesn't have a parent EDT
 [arts-codegen] Creating codegen for EDT #2
 [arts-codegen] Creating function for EDT #2
 [arts-codegen] Reserving GUID for EDT #2
 [arts-codegen] Found ARTS runtime function artsReserveGuidRoute with type ptr (i32, i32)
+[arts-codegen] Reserving GUID for EDT #0
+     EDT #0 doesn't have a parent EDT
 
 All EDT Guids have been reserved
 
@@ -545,9 +545,19 @@ Generating Code for EDT #0
      EDT #0 doesn't have a parent EDT
  - Inserting DepV
      EDT #0 doesn't have input edges
-Rewiring new function arguments:
 [arts-codegen] Inserting Call for EDT #0
      EDT #0 doesn't have a parent EDT
+
+Generating Code for EDT #2
+[arts-codegen] Inserting Call for  for EDT #2
+ - Inserting ParamV
+     EDT #2 doesn't have input data edges from the parent
+ - Inserting DepV
+   - DepV[0]: ptr %shared_number
+   - DepV[1]: ptr %random_number
+[arts-codegen] Inserting Call for EDT #2
+ - Creating EDT
+[arts-codegen] Created ARTS runtime function artsEdtCreateWithGuid with type ptr (ptr, ptr, i32, ptr, i32)
 
 Generating Code for EDT #1
 [arts-codegen] Inserting Call for  for EDT #1
@@ -556,21 +566,10 @@ Generating Code for EDT #1
  - Inserting DepV
    - DepV[1]: ptr %1
    - DepV[0]: ptr %0
-Rewiring new function arguments:
-  - Rewiring: ptr %1 ->   %depv.1 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 1, i32 2
-  - Rewiring: ptr %0 ->   %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
 [arts-codegen] Inserting Call for EDT #1
  - ParamVGuid[0]: EDT2
  - Creating EDT
-[arts-codegen] Created ARTS runtime function artsEdtCreateWithGuid with type ptr (ptr, ptr, i32, ptr, i32)
-[arts-utils]   - Replacing uses of:   call void @carts.edt(ptr nocapture %random_number, ptr nocapture %shared_number) #7
-[arts-utils]    - Removing instruction:   call void @carts.edt(ptr nocapture %random_number, ptr nocapture %shared_number) #7
-[arts-utils]   - Replacing uses of: ; Function Attrs: nocallback nofree norecurse nosync nounwind willreturn memory(readwrite)
-declare !carts !8 internal void @carts.edt(ptr nocapture readonly, ptr nocapture readonly) #3
-
-[arts-utils]    - Removing function: ; Function Attrs: nocallback nofree norecurse nosync nounwind willreturn memory(readwrite)
-declare !carts !8 internal void @carts.edt(ptr nocapture readonly, ptr nocapture readonly) #3
-
+[arts-codegen] Found ARTS runtime function artsEdtCreateWithGuid with type ptr (ptr, ptr, i32, ptr, i32)
 
 Generating Code for EDT #3
 [arts-codegen] Inserting Call for  for EDT #3
@@ -581,51 +580,14 @@ Generating Code for EDT #3
    - ParamVGuid[1]: EDT2
  - Inserting DepV
    - DepV[0]: ptr %0
-Rewiring new function arguments:
-  - Rewiring: ptr %0 ->   %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
-  - Rewiring: i32 %1 ->   %1 = trunc i64 %0 to i32
 [arts-codegen] Inserting Call for EDT #3
  - ParamV[0]:   %3 = load i32, ptr %depv.0, align 4, !tbaa !6
  - ParamVGuid[0]: EDT2
  - Creating EDT
 [arts-codegen] Found ARTS runtime function artsEdtCreateWithGuid with type ptr (ptr, ptr, i32, ptr, i32)
-[arts-utils]   - Replacing uses of:   call void @carts.edt.1(ptr nocapture readonly %depv.1, i32 %3) #7
-[arts-utils]    - Removing instruction:   call void @carts.edt.1(ptr nocapture readonly %depv.1, i32 %3) #7
-[arts-utils]   - Replacing uses of: ; Function Attrs: nocallback nofree norecurse nosync nounwind willreturn memory(readwrite)
-declare !carts !8 internal void @carts.edt.1(ptr nocapture readonly, i32) #4
-
-[arts-utils]    - Removing function: ; Function Attrs: nocallback nofree norecurse nosync nounwind willreturn memory(readwrite)
-declare !carts !8 internal void @carts.edt.1(ptr nocapture readonly, i32) #4
-
-
-Generating Code for EDT #2
-[arts-codegen] Inserting Call for  for EDT #2
- - Inserting ParamV
-     EDT #2 doesn't have input data edges from the parent
- - Inserting DepV
-   - DepV[0]: ptr %shared_number
-   - DepV[1]: ptr %random_number
-Rewiring new function arguments:
-  - Rewiring: ptr %random_number ->   %depv.random_number = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 1, i32 2
-  - Rewiring: ptr %shared_number ->   %depv.shared_number = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
-[arts-codegen] Inserting Call for EDT #2
- - Creating EDT
-[arts-codegen] Found ARTS runtime function artsEdtCreateWithGuid with type ptr (ptr, ptr, i32, ptr, i32)
-[arts-utils]   - Replacing uses of:   call void @carts.edt.2(ptr nocapture %shared_number, ptr nocapture %random_number) #4
-[arts-utils]    - Removing instruction:   call void @carts.edt.2(ptr nocapture %shared_number, ptr nocapture %random_number) #4
-[arts-utils]   - Replacing uses of: ; Function Attrs: mustprogress norecurse nounwind uwtable
-declare !carts !10 internal void @carts.edt.2(ptr nocapture readonly, ptr nocapture readonly) #0
-
-[arts-utils]    - Removing function: ; Function Attrs: mustprogress norecurse nounwind uwtable
-declare !carts !10 internal void @carts.edt.2(ptr nocapture readonly, ptr nocapture readonly) #0
-
 [arts-codegen] Inserting Init Functions
-[arts-utils]   - Replacing uses of: ; Function Attrs: mustprogress norecurse nounwind uwtable
-declare !carts !6 dso_local noundef i32 @2() local_unnamed_addr #0
-
-[arts-utils]    - Removing function: ; Function Attrs: mustprogress norecurse nounwind uwtable
-declare !carts !6 dso_local noundef i32 @2() local_unnamed_addr #0
-
+[arts-codegen] Found ARTS runtime function artsReserveGuidRoute with type ptr (i32, i32)
+[arts-codegen] Found ARTS runtime function artsEdtCreateWithGuid with type ptr (ptr, ptr, i32, ptr, i32)
 [arts-codegen] Created ARTS runtime function artsRT with type void (i32, ptr)
 
 -------------------------------------------------
@@ -808,6 +770,23 @@ entry:
 
 define internal void @initPerWorker(i32 %nodeId, i32 %workerId, i32 %argc, ptr %argv) {
 entry:
+  %0 = icmp eq i32 %nodeId, 0
+  %1 = icmp eq i32 %workerId, 0
+  %2 = and i1 %0, %1
+  br i1 %2, label %then, label %else
+
+then:                                             ; preds = %entry
+  %3 = call ptr @artsReserveGuidRoute(i32 1, i32 0)
+  %edt.0.main_guid.addr = alloca ptr, align 8
+  store ptr %3, ptr %edt.0.main_guid.addr, align 8
+  %edt.0.main_paramc = alloca i32, align 4
+  store i32 0, ptr %edt.0.main_paramc, align 4
+  %4 = load i32, ptr %edt.0.main_paramc, align 4
+  %edt.0.main_paramv = alloca i64, i32 %4, align 8
+  %5 = call ptr @artsEdtCreateWithGuid(ptr @edt.0.main, ptr %edt.0.main_guid.addr, i32 %4, ptr %edt.0.main_paramv, i32 0)
+  ret void
+
+else:                                             ; preds = %entry
   ret void
 }
 
@@ -849,7 +828,7 @@ attributes #4 = { nocallback nofree nosync nounwind willreturn memory(inaccessib
 [edt-graph] Destroying the EDT Graph
 llvm-dis test_arts_analysis.bc
 clang++ -fopenmp test_arts_analysis.bc -O3 -march=native -o test_opt -lstdc++
-/usr/lib64/gcc/x86_64-suse-linux/7/../../../../x86_64-suse-linux/bin/ld: /tmp/test_arts_analysis-c4c146.o: in function `main':
+/usr/lib64/gcc/x86_64-suse-linux/7/../../../../x86_64-suse-linux/bin/ld: /tmp/test_arts_analysis-3f26ae.o: in function `main':
 test.cpp:(.text+0x2): undefined reference to `artsRT'
 clang++: error: linker command failed with exit code 1 (use -v to see invocation)
 make: *** [Makefile:31: test_opt] Error 1
