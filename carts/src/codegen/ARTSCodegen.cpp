@@ -195,7 +195,7 @@ Function *ARTSCodegen::getOrCreateEDTFunction(EDT &E) {
   return EDTFn;
 }
 
-void ARTSCodegen::setIPInEDTEntry(EDTFunction &EDTFn) {
+void ARTSCodegen::setInsertionPointAtEDTEntry(EDTFunction &EDTFn) {
   BasicBlock &EntryBB = EDTFn.getEntryBlock();
   Instruction *EntryBBTerm = EntryBB.getTerminator();
   if (EntryBBTerm)
@@ -204,45 +204,50 @@ void ARTSCodegen::setIPInEDTEntry(EDTFunction &EDTFn) {
     Builder.SetInsertPoint(&EntryBB);
 }
 
-Value *ARTSCodegen::getOrCreateEDTGuid(EDT &E) {
+Value *ARTSCodegen::getOrCreateEDTGuid(string EDTName, uint32_t EDTNode) {
+  /// Create the call to reserve the GUID
+  ConstantInt *ARTS_EDT_Enum =
+      ConstantInt::get(Builder.getContext(), APInt(32, 1));
+  Value *Args[] = {
+      ARTS_EDT_Enum,
+      Builder.CreateIntCast(ConstantInt::get(Int32, EDTNode), Int32, false)};
+  CallInst *ReserveGuidCall = Builder.CreateCall(
+      getOrCreateRuntimeFunctionPtr(ARTSRTL_artsReserveGuidRoute), Args);
+  /// Create allocation of the GUID
+  auto *GuidAddress =
+      Builder.CreateAlloca(Int32Ptr, nullptr, EDTName + "_guid.addr");
+  Builder.CreateStore(ReserveGuidCall, GuidAddress);
+  return GuidAddress;
+}
+
+Value *ARTSCodegen::getOrCreateEDTGuid(EDT &E, BasicBlock *InsertionBB) {
   /// Check if the EDT already has a GUID
   EDTCodegen *ECG = getOrCreateEDT(E);
   if (ECG->getGuidAddress())
     return ECG->getGuidAddress();
 
   LLVM_DEBUG(dbgs() << TAG << "Reserving GUID for EDT #" << E.getID() << "\n");
-  /// EDTs are allocated in the parent EDT function
   EDT *EDTParent = E.getParent();
-  if (!EDTParent) {
-    LLVM_DEBUG(dbgs() << "     EDT #" << E.getID()
-                      << " doesn't have a parent EDT\n");
-    return nullptr;
+  if (!InsertionBB) {
+    /// If no insertion BB provided, try to get the parent EDT
+    if (!EDTParent) {
+      LLVM_DEBUG(dbgs() << "     EDT #" << E.getID()
+                        << " doesn't have a parent EDT\n");
+      return nullptr;
+    }
+    /// If it has parent EDT set insertion BB to the parent EDT entry block
+    Function *ParentNewFn = getOrCreateEDTFunction(*EDTParent);
+    InsertionBB = &ParentNewFn->getEntryBlock();
   }
 
-  Function *ParentNewFn = getOrCreateEDTFunction(*EDTParent);
-  BasicBlock &ParentNewEntryBB = ParentNewFn->getEntryBlock();
   auto OldInsertPoint = Builder.saveIP();
-
-  if (ParentNewEntryBB.getTerminator())
-    Builder.SetInsertPoint(ParentNewEntryBB.getTerminator());
+  if (InsertionBB->getTerminator())
+    Builder.SetInsertPoint(InsertionBB->getTerminator());
   else
-    Builder.SetInsertPoint(&ParentNewEntryBB);
-
-  /// Create the call to reserve the GUID
-  ConstantInt *ARTS_EDT_Enum =
-      ConstantInt::get(Builder.getContext(), APInt(32, 1));
-  Value *Args[] = {ARTS_EDT_Enum,
-                   Builder.CreateIntCast(ConstantInt::get(Int32, E.getNode()),
-                                         Int32, false)};
-  CallInst *ReserveGuidCall = Builder.CreateCall(
-      getOrCreateRuntimeFunctionPtr(ARTSRTL_artsReserveGuidRoute), Args);
-  /// Create allocation of the GUID
-  auto *GuidAddress =
-      Builder.CreateAlloca(Int32Ptr, nullptr, E.getName() + "_guid.addr");
-  Builder.CreateStore(ReserveGuidCall, GuidAddress);
+    Builder.SetInsertPoint(InsertionBB);
+  /// Create the GUID
+  Value *GuidAddress = getOrCreateEDTGuid(E.getName(), E.getNode());
   ECG->setGuidAddress(GuidAddress);
-
-  /// Restore the insertion point
   Builder.restoreIP(OldInsertPoint);
   return GuidAddress;
 }
@@ -254,7 +259,7 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
   auto OldInsertPoint = Builder.saveIP();
   /// Set the insertion point to the entry block of the EDT function
   Function *EDTFn = getOrCreateEDTFunction(E);
-  setIPInEDTEntry(*EDTFn);
+  setInsertionPointAtEDTEntry(*EDTFn);
 
   DenseMap<Value *, Value *> RewiringMap;
   /// Get the information we know about the Module
@@ -496,6 +501,7 @@ void ARTSCodegen::insertEDTCall(EDT &E) {
       Builder.CreateStore(CastedVal, ParamVGuiElemPtr);
     }
   }
+
   /// DepC
   EDTEnvironment &EDTEnv = E.getDataEnv();
   AllocaInst *DepC = Builder.CreateAlloca(Int32, nullptr);
@@ -508,9 +514,9 @@ void ARTSCodegen::insertEDTCall(EDT &E) {
   Value *Args[] = {Builder.CreateBitCast(ECG->getFn(), EdtFunctionPtr),
                    Builder.CreateBitCast(ECG->getGuidAddress(), Int32Ptr),
                    LoadedParamC, ParamV,
-                   //  Builder.CreateBitCast(ParamV, Int64Ptr),
                    Builder.CreateLoad(Int32, DepC)};
   ECG->setCB(Builder.CreateCall(F, Args));
+
   /// We can remove both the function and the call
   utils::removeValue(E.getCall());
   utils::removeValue(E.getFn());
@@ -557,6 +563,42 @@ void ARTSCodegen::createInitPerWorkerFn() {
   /// Create the entry block
   BasicBlock *EntryBB = BasicBlock::Create(M.getContext(), "entry", Fn);
   Builder.SetInsertPoint(EntryBB);
+
+  /// if nodeId == 0 && workerId == 0
+  /// Create conditional branch
+  Value *NodeId = Fn->arg_begin();
+  Value *WorkerId = Fn->arg_begin() + 1;
+  Value *IsMainWorker = Builder.CreateAnd(
+      Builder.CreateICmpEQ(NodeId, ConstantInt::get(Int32, 0)),
+      Builder.CreateICmpEQ(WorkerId, ConstantInt::get(Int32, 0)));
+  BasicBlock *ThenBB = BasicBlock::Create(M.getContext(), "then", Fn);
+  BasicBlock *ElseBB = BasicBlock::Create(M.getContext(), "else", Fn);
+  Builder.CreateCondBr(IsMainWorker, ThenBB, ElseBB);
+
+  /// then -> Create guid for main edt
+  Builder.SetInsertPoint(ThenBB);
+  EDT *MainEDT = Cache->getGraph().getEntryNode()->getEDT();
+  auto MainEDTName = MainEDT->getName();
+  EDTCodegen *MainECG = getOrCreateEDT(*MainEDT);
+  Value *GuidAddress = getOrCreateEDTGuid(MainEDTName, MainEDT->getNode());
+  MainECG->setGuidAddress(GuidAddress);
+
+  /// Create the call to the main EDT
+  AllocaInst *ParamC =
+      Builder.CreateAlloca(Int32, nullptr, MainEDTName + "_paramc");
+  Builder.CreateStore(ConstantInt::get(Int32, 0), ParamC);
+  LoadInst *LoadedParamC = Builder.CreateLoad(Int32, ParamC);
+  AllocaInst *ParamV =
+      Builder.CreateAlloca(Int64, LoadedParamC, MainEDTName + "_paramv");
+  Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
+  Value *Args[] = {Builder.CreateBitCast(MainECG->getFn(), EdtFunctionPtr),
+                   Builder.CreateBitCast(MainECG->getGuidAddress(), Int32Ptr),
+                   LoadedParamC, ParamV, ConstantInt::get(Int32, 0)};
+  Builder.CreateCall(F, Args);
+  Builder.CreateRetVoid();
+
+  /// else -> return void
+  Builder.SetInsertPoint(ElseBB);
   Builder.CreateRetVoid();
 }
 
