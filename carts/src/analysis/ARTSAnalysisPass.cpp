@@ -1445,6 +1445,8 @@ public:
           WorkList.insert(OutEdge->getTo());
       }
     }
+    /// Insert init functions
+    CG.insertInitFunctions();
   }
 };
 
