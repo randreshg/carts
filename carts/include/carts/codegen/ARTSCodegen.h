@@ -99,13 +99,10 @@ public:
   void signalEDTDataBlock(EDT &From, EDT &To, Value *Signal);
   // Function *insertEDTFn(EDT &E);
 
-  /// Handle interface
-  // void handleEDT(EDT &E);
-  // void generateEDT(EDT &E);
-  // void generateParallelEDT(EDT &E);
-  // void generateTaskEDT(EDT &E);
-  // void generateMainEDT(EDT &E);
-  // void generateSyncEDT(EDT &E);
+  void createInitPerNodeFn();
+  void createInitPerWorkerFn();
+  void createMainFn();
+  void insertInitFunctions();
 
   /// Guid interface
   bool isEDTGuid(Value *V);
@@ -120,9 +117,7 @@ public:
   /// * \p Source is a degenerate block (no terminator because the BB is
   ///             the current head of the IR construction).
   void redirectTo(BasicBlock *Source, BasicBlock *Target);
-  // void redirectTo(Function *Source, BasicBlock *Target);
   void redirectExitsTo(Function *Source, BasicBlock *Target);
-  void redirectEntryAndExit(EDT &E, BasicBlock *OriginalEntry);
   /// Insertion Points
   void setInsertPoint(BasicBlock *BB);
   void setInsertPoint(Instruction *I);

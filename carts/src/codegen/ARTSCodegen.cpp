@@ -532,6 +532,61 @@ void ARTSCodegen::signalEDTGuid(EDT &From, EDT &To, Value *Signal) {
   // Builder.CreateCall(F, Args);
 }
 
+void ARTSCodegen::createInitPerNodeFn() {
+  auto *FnTy = FunctionType::get(Void, {Int32, Int32, Int8PtrPtr}, false);
+  auto *Fn =
+      Function::Create(FnTy, GlobalValue::InternalLinkage, "initPerNode", &M);
+  Fn->arg_begin()->setName("nodeId");
+  (Fn->arg_begin() + 1)->setName("argc");
+  (Fn->arg_begin() + 2)->setName("argv");
+  /// Create the entry block
+  BasicBlock *EntryBB = BasicBlock::Create(M.getContext(), "entry", Fn);
+  Builder.SetInsertPoint(EntryBB);
+  Builder.CreateRetVoid();
+}
+
+void ARTSCodegen::createInitPerWorkerFn() {
+  auto *FnTy =
+      FunctionType::get(Void, {Int32, Int32, Int32, Int8PtrPtr}, false);
+  auto *Fn =
+      Function::Create(FnTy, GlobalValue::InternalLinkage, "initPerWorker", &M);
+  Fn->arg_begin()->setName("nodeId");
+  (Fn->arg_begin() + 1)->setName("workerId");
+  (Fn->arg_begin() + 2)->setName("argc");
+  (Fn->arg_begin() + 3)->setName("argv");
+  /// Create the entry block
+  BasicBlock *EntryBB = BasicBlock::Create(M.getContext(), "entry", Fn);
+  Builder.SetInsertPoint(EntryBB);
+  Builder.CreateRetVoid();
+}
+
+void ARTSCodegen::createMainFn() {
+  FunctionType *MainFnTy = FunctionType::get(Int32, {Int32, Int8PtrPtr}, false);
+  Function *OldMainFn = Cache->getGraph().getEntryNode()->getEDT()->getFn();
+  Function *MainFn = Function::Create(MainFnTy, GlobalValue::ExternalLinkage,
+                                      OldMainFn->getAddressSpace(), "main", &M);
+  MainFn->arg_begin()->setName("argc");
+  (MainFn->arg_begin() + 1)->setName("argv");
+  MainFn->takeName(OldMainFn);
+  utils::removeValue(OldMainFn);
+  /// Insert the entry block
+  BasicBlock *EntryBB = BasicBlock::Create(M.getContext(), "entry", MainFn);
+  Builder.SetInsertPoint(EntryBB);
+  /// Call the artsInit function
+  FunctionCallee RTFn =
+      getOrCreateRuntimeFunction(types::RuntimeFunction::ARTSRTL_artsRT);
+  Value *RTFnArgs[] = {MainFn->arg_begin(), MainFn->arg_begin() + 1};
+  Builder.CreateCall(RTFn, RTFnArgs);
+  Builder.CreateRet(ConstantInt::get(Int32, 0));
+}
+
+void ARTSCodegen::insertInitFunctions() {
+  LLVM_DEBUG(dbgs() << TAG << "Inserting Init Functions\n");
+  createInitPerNodeFn();
+  createInitPerWorkerFn();
+  createMainFn();
+}
+
 /// ---------------------------- Utils ---------------------------- ///
 void ARTSCodegen::redirectTo(BasicBlock *Source, BasicBlock *Target) {
   if (Instruction *Term = Source->getTerminator()) {
@@ -557,30 +612,6 @@ void ARTSCodegen::redirectExitsTo(Function *Source, BasicBlock *Target) {
     redirectTo(&BB, Target);
   }
 }
-
-// void ARTSCodegen::redirectTo(Function *Source, BasicBlock *Target) {
-//   for (BasicBlock &SourceBB : *Source)
-//     redirectTo(&SourceBB, Target);
-// }
-
-void ARTSCodegen::redirectEntryAndExit(EDT &E, BasicBlock *OriginalEntry) {
-  /// Redirect Entry
-  // auto *ClonedEntry = E.getCloneOfOriginalBasicBlock(OriginalEntry);
-  // ClonedEntry->setName("edt.body");
-  // E.setBody(ClonedEntry);
-  // redirectTo(E.getEntry(), ClonedEntry);
-  // /// Redirect Exit
-  // auto OriginalParent = OriginalEntry->getParent();
-  // for (auto &BB : *OriginalParent) {
-  //   auto *Terminator = BB.getTerminator();
-  //   if (Terminator->getNumSuccessors() == 0) {
-  //     auto *ClonedBB = E.getCloneOfOriginalBasicBlock(&BB);
-  //     ClonedBB->getTerminator()->eraseFromParent();
-  //     redirectTo(ClonedBB, E.getExit());
-  //   }
-  // }
-}
-
 void ARTSCodegen::setInsertPoint(BasicBlock *BB) { Builder.SetInsertPoint(BB); }
 
 void ARTSCodegen::setInsertPoint(Instruction *I) { Builder.SetInsertPoint(I); }

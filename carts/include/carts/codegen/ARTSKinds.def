@@ -165,7 +165,7 @@ __ARTS_FUNCTION_TYPE(EdtFunction, false, Void, Int32, Int64Ptr, Int32, EdtDepPtr
 #define __ARTS_RTL(Name, IsVarArg, ReturnType, ...)                             \
   ARTS_RTL(ARTSRTL_##Name, #Name, IsVarArg, ReturnType, __VA_ARGS__)
 
-// __ARTS_RTL(artsRT, false, Void, Int32, CharPtrPtr)
+__ARTS_RTL(artsRT, false, Void, Int32, Int8PtrPtr)
 __ARTS_RTL(artsShutdown, false, Void, )
 __ARTS_RTL(artsMalloc, false, VoidPtr, SizeTy)
 __ARTS_RTL(artsMallocAlign, false, VoidPtr, SizeTy, SizeTy)
