@@ -1417,17 +1417,33 @@ public:
     /// Reserve GUIDs for all EDTs
     for (EDTGraphNode *EDTNode : EDTNodes) {
       EDT &CurrentEDT = *EDTNode->getEDT();
+      CG.getOrCreateEDTFunction(CurrentEDT);
       CG.getOrCreateEDTGuid(CurrentEDT);
     }
-
     LLVM_DEBUG(dbgs() << "\nAll EDT Guids have been reserved\n");
-    for (EDTGraphNode *EDTNode : EDTNodes) {
-      EDT &CurrentEDT = *EDTNode->getEDT();
-      LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - -\n"
+    /// Debug module
+    LLVM_DEBUG(dbgs() << "\n" << M << "\n");
+
+    /// Start generating code on the entry EDT
+    EDTGraphNode *EntryEDTNode = Graph.getEntryNode();
+    assert(EntryEDTNode && "EntryEDTNode is null!");
+    SetVector<EDTGraphNode *> WorkList;
+    WorkList.insert(EntryEDTNode);
+    while (!WorkList.empty()) {
+      EDTGraphNode *CurrentEDTNode = WorkList.pop_back_val();
+      EDT &CurrentEDT = *CurrentEDTNode->getEDT();
+      LLVM_DEBUG(dbgs() << "\n"
                         << "Generating Code for EDT #" << CurrentEDT.getID()
                         << "\n");
       CG.insertEDTEntry(CurrentEDT);
       CG.insertEDTCall(CurrentEDT);
+
+      /// Add all the children to the worklist
+      auto OutEdges = Graph.getOutgoingEdges(CurrentEDTNode);
+      for (EDTGraphEdge *OutEdge : OutEdges) {
+        if (OutEdge->hasCreationDep())
+          WorkList.insert(OutEdge->getTo());
+      }
     }
   }
 };

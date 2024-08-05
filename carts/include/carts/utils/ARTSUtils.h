@@ -32,7 +32,7 @@ void getDominatedBBs(BasicBlock *FromBB, DominatorTree &DT,
 void rewireValues(DenseMap<Value *, Value *> &RewiringMap,
                   Function *Parent = nullptr);
 
-/// Function
+/// Function and calls
 void removeFunction(Function *F);
 
 /// Remove values interface

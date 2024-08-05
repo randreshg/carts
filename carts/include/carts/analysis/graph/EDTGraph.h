@@ -35,19 +35,19 @@ public:
   EDTGraph();
   ~EDTGraph();
 
-  EDTGraphNode *getEntryNode() const;
+  EDTGraphNode *getEntryNode();
   EDTGraphNode *getNode(Function &Fn) const;
   EDTGraphNode *getNode(EDT *E) const;
-
   /// Analysis
   bool isReachable(EDTGraphNode *From, EDTGraphNode *To);
   bool isCreationReachable(EDTGraphNode *From, EDTGraphNode *To);
   bool isDataDependent(EDTGraphNode *From, EDTGraphNode *To);
   EDT *getParentSyncEDT(EDTGraphNode *Node, uint32_t Depth = 0);
-
+  bool isChild(EDTGraphNode *Parent, EDTGraphNode *Child);
+  /// Analysis with EDT
+  bool isChild(EDT *Parent, EDT *Child);
   /// Nodes
   void createNode(Function &Fn);
-
   unordered_set<EDTGraphNode *> getNodes();
   EDTGraphNode *insertNode(EDT *E);
   EDTGraphNode *insertNode(EDT *E, EDTGraphNode *ParentNode,
@@ -92,6 +92,9 @@ public:
       IncomingEdges;
   DenseMap<EDTGraphNode *, DenseMap<EDTGraphNode *, EDTGraphEdge *>>
       OutgoingEdges;
+
+  /// EntryNode
+  EDTGraphNode *EntryNode = nullptr;
 
 public:
   void print();
