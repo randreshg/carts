@@ -78,6 +78,18 @@ EDT *EDTGraph::getParentSyncEDT(EDTGraphNode *Node, uint32_t Depth) {
   return nullptr;
 }
 
+bool EDTGraph::isChild(EDTGraphNode *Parent, EDTGraphNode *Child) {
+  EDTGraphEdge *Edge = getEdge(Parent, Child);
+  if (Edge == nullptr || !Edge->hasCreationDep())
+    return false;
+  return true;
+}
+
+/// Analysis with EDT
+bool EDTGraph::isChild(EDT *Parent, EDT *Child) {
+  return isChild(getNode(Parent), getNode(Child));
+}
+
 /// Nodes
 void EDTGraph::createNode(Function &Fn) {
   if (Fn.isDeclaration() && !Fn.hasLocalLinkage())
@@ -98,11 +110,17 @@ unordered_set<EDTGraphNode *> EDTGraph::getNodes() {
   return Aux;
 }
 
-EDTGraphNode *EDTGraph::getEntryNode(void) const {
-  // const auto it =
-  //     EDTs.find(Cache.getNoelle().getFunctionsManager()->getEntryFunction());
-  // if (it != EDTs.end())
-  //   return it->second;
+EDTGraphNode *EDTGraph::getEntryNode() {
+  if (EntryNode != nullptr)
+    return EntryNode;
+  /// Fetch the entry node
+  auto EDTNodes = getNodes();
+  for (auto &EDTNode : EDTNodes) {
+    if (EDTNode->getEDT()->isMain()) {
+      EntryNode = EDTNode;
+      return EDTNode;
+    }
+  }
   return nullptr;
 }
 

@@ -13,9 +13,9 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/Value.h"
 #include <cstdint>
 
-#include "carts/analysis/graph/EDTGraph.h"
 #include "carts/utils/ARTS.h"
 #include "carts/utils/ARTSTypes.h"
 
@@ -31,14 +31,21 @@ public:
   Function *getFn();
   CallBase *getCB();
   Value *getGuidAddress();
+
   void setFn(Function *Fn);
   void setCB(CallBase *CB);
   void setGuidAddress(Value *V);
-  ///
+
   bool hasParameter(int32_t Slot);
   bool hasDependency(int32_t Slot);
+  bool hasGuid(EDT *E);
   void insertParameter(int32_t Slot, Value *V);
   void insertDependency(int32_t Slot, Value *V);
+  void insertGuid(EDT *E, Value *V);
+
+  Value *getParameter(int32_t Slot);
+  Value *getDependency(int32_t Slot);
+  Value *getGuid(EDT *E);
 
 private:
   EDT *E;
@@ -48,6 +55,8 @@ private:
   /// Maps an integer slot to a value.
   DenseMap<int32_t, Value *> Parameters;
   DenseMap<int32_t, Value *> Dependencies;
+  /// Maps of known guid values
+  DenseMap<EDT *, Value *> Guids;
 };
 
 /// An interface to create LLVM-IR for ARTS directives.
@@ -91,7 +100,7 @@ public:
   // Function *insertEDTFn(EDT &E);
 
   /// Handle interface
-  void handleEDT(EDT &E);
+  // void handleEDT(EDT &E);
   // void generateEDT(EDT &E);
   // void generateParallelEDT(EDT &E);
   // void generateTaskEDT(EDT &E);

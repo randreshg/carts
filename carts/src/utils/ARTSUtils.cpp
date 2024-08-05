@@ -70,6 +70,7 @@ void removeFunction(Function *Fn) {
   removeValue(Fn, false, false);
 }
 
+
 void removeValue(Value *V, bool RecursiveRemove, bool RecursiveUndef) {
   removeValue(V, nullptr, RecursiveRemove, RecursiveUndef);
 }
