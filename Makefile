@@ -20,8 +20,7 @@ installdeps: arts
 # ENABLE
 enable:
 	echo "export PATH=$(LLVM_INSTALL_DIR)/bin:\$$PATH" > enable
-	echo "export LD_LIBRARY_PATH=$(LLVM_INSTALL_DIR)/lib:\$$LD_LIBRARY_PATH" >> enable
-
+	echo "export LD_LIBRARY_PATH=$(LLVM_INSTALL_DIR)/lib:$(ARTS_INSTALL_DIR)/lib:\$$LD_LIBRARY_PATH" >> enable
 # LLVM
 $(LLVM_DIR):
 	mkdir -p $@
@@ -45,7 +44,7 @@ llvm: .llvm
 		-DLLVM_CCACHE_BUILD=OFF \
 		-DCLANG_ENABLE_STATIC_ANALYZER=ON  \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
-	ninja -C $</build -j32 install
+	ninja -C $</build -j install
 llvm-clean:
 	# [[ -d $(LLVM_DIR) ]] && make -C $(LLVM_DIR) uninstall
 	[[ -d $(LLVM_DIR) ]] && rm -rf $(LLVM_DIR)
@@ -61,6 +60,8 @@ arts: .arts
 	mkdir -p $</build
 	mkdir -p $(ARTS_INSTALL_DIR)
 	cmake -B $</build -S $< -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR)
+	make -C $</build all -j
+	make -C $</build install -j
 arts-clean:
 	rm -f -r $(ARTS_DIR)
 	rm -f -r $(ARTS_INSTALL_DIR)
@@ -72,10 +73,10 @@ build:
 	cmake -DCMAKE_INSTALL_PREFIX=$(CARTS_INSTALL_DIR)/carts \
 				-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
 				-S . -B $(BUILD_DIR)
-	make -C $(BUILD_DIR) all -j32
+	make -C $(BUILD_DIR) all -j
 
 install: build
-	make -C $(BUILD_DIR) install -j32
+	make -C $(BUILD_DIR) install -j
 
 uninstall:
 	-cat $(BUILD_DIR)/install_manifest.txt | xargs rm -f
@@ -86,7 +87,7 @@ fulluninstall: uninstall arts-clean
 	rm -f .arts
 
 clean:
-	make -C $(BUILD_DIR) clean -j32
+	make -C $(BUILD_DIR) clean -j
 	rm -rf $(BUILD_DIR)
 
 .PHONY: all build install postinstall uninstall fulluninstall  clean test

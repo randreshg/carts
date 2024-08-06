@@ -26,9 +26,8 @@ test_arts_analysis.bc:  test_arts_ir.bc
 	llvm-dis $@
 
 
-
 test_opt: test_arts_analysis.bc
-	clang++ -fopenmp $< -O3 -march=native -o $@ -lstdc++
+	clang++ -fopenmp $< -O3 -march=native -o $@ -lstdc++ -I/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/arts/include -L/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/arts/lib -larts -L/usr/lib64/librt.so/usr/lib64/libpthread.so/usr/lib64/lib -lrdmacm
 
 clean:
 	rm -f *.bc *.ll test_opt test_pre_prof output.prof default.* ;
