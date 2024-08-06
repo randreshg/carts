@@ -1446,15 +1446,6 @@ public:
           WorkList.insert(OutEdge->getTo());
       }
     }
-
-    /// Debug module
-    // LLVM_DEBUG(dbgs() << "\n" << M << "\n");
-    // /// Insert EDT Signals
-    // LLVM_DEBUG(dbgs() << "\nInserting EDT Signals\n");
-    // for (EDTGraphNode *EDTNode : EDTNodes) {
-    //   EDT &CurrentEDT = *EDTNode->getEDT();
-    //   CG.insertEDTSignals(CurrentEDT);
-    // }
   
     /// Insert init functions
     CG.insertInitFunctions();

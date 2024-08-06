@@ -9,40 +9,51 @@ target triple = "x86_64-unknown-linux-gnu"
 %union.kmp_cmplrdata_t = type { ptr }
 %struct..kmp_privates.t = type { i32 }
 
-@.str = private unnamed_addr constant [29 x i8] c"The initial number is %d/%d\0A\00", align 1
-@.str.1 = private unnamed_addr constant [21 x i8] c"The number is %d/%d\0A\00", align 1
+@.str = private unnamed_addr constant [36 x i8] c"EDT 0: The initial number is %d/%d\0A\00", align 1
+@.str.1 = private unnamed_addr constant [28 x i8] c"EDT 1: The number is %d/%d\0A\00", align 1
 @0 = private unnamed_addr constant [23 x i8] c";unknown;unknown;0;0;;\00", align 1
 @1 = private unnamed_addr constant %struct.ident_t { i32 0, i32 2, i32 0, i32 22, ptr @0 }, align 8
-@.str.2 = private unnamed_addr constant [30 x i8] c"The final number is %d - %d.\0A\00", align 1
+@.str.2 = private unnamed_addr constant [37 x i8] c"EDT 2: The final number is %d - %d.\0A\00", align 1
 
 ; Function Attrs: mustprogress norecurse nounwind uwtable
 define dso_local noundef i32 @main() local_unnamed_addr #0 {
 entry:
   %shared_number = alloca i32, align 4
   %random_number = alloca i32, align 4
+  %call = tail call i64 @time(ptr noundef null) #6
+  %conv = trunc i64 %call to i32
+  tail call void @srand(i32 noundef %conv) #6
   call void @llvm.lifetime.start.p0(i64 4, ptr nonnull %shared_number) #6
-  %call = tail call i32 @rand() #6
-  store i32 %call, ptr %shared_number, align 4, !tbaa !6
-  call void @llvm.lifetime.start.p0(i64 4, ptr nonnull %random_number) #6
   %call1 = tail call i32 @rand() #6
-  %rem = srem i32 %call1, 10
-  %add = add nsw i32 %rem, 10
-  store i32 %add, ptr %random_number, align 4, !tbaa !6
-  %call2 = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %call, i32 noundef %add)
+  %rem = srem i32 %call1, 100
+  %add = add nsw i32 %rem, 1
+  store i32 %add, ptr %shared_number, align 4, !tbaa !6
+  call void @llvm.lifetime.start.p0(i64 4, ptr nonnull %random_number) #6
+  %call2 = tail call i32 @rand() #6
+  %rem3 = srem i32 %call2, 10
+  %add4 = add nsw i32 %rem3, 1
+  store i32 %add4, ptr %random_number, align 4, !tbaa !6
+  %call5 = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %add, i32 noundef %add4)
   call void (ptr, i32, ptr, ...) @__kmpc_fork_call(ptr nonnull @1, i32 2, ptr nonnull @main.omp_outlined, ptr nonnull %random_number, ptr nonnull %shared_number)
   %0 = load i32, ptr %shared_number, align 4, !tbaa !6
   %1 = load i32, ptr %random_number, align 4, !tbaa !6
-  %call3 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %0, i32 noundef %1)
+  %call6 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %0, i32 noundef %1)
   call void @llvm.lifetime.end.p0(i64 4, ptr nonnull %random_number) #6
   call void @llvm.lifetime.end.p0(i64 4, ptr nonnull %shared_number) #6
   ret i32 0
 }
 
-; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
-declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) #1
+; Function Attrs: nounwind
+declare void @srand(i32 noundef) local_unnamed_addr #1
 
 ; Function Attrs: nounwind
-declare i32 @rand() local_unnamed_addr #2
+declare i64 @time(ptr noundef) local_unnamed_addr #1
+
+; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) #2
+
+; Function Attrs: nounwind
+declare i32 @rand() local_unnamed_addr #1
 
 ; Function Attrs: nofree nounwind
 declare noundef i32 @printf(ptr nocapture noundef readonly, ...) local_unnamed_addr #3
@@ -90,14 +101,14 @@ declare i32 @__kmpc_omp_task(ptr, i32, ptr) local_unnamed_addr #6
 declare !callback !25 void @__kmpc_fork_call(ptr, i32, ptr, ...) local_unnamed_addr #6
 
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
-declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) #1
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) #2
 
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(inaccessiblemem: readwrite)
 declare void @llvm.experimental.noalias.scope.decl(metadata) #7
 
 attributes #0 = { mustprogress norecurse nounwind uwtable "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
-attributes #1 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
-attributes #2 = { nounwind "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
+attributes #1 = { nounwind "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
+attributes #2 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
 attributes #3 = { nofree nounwind "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
 attributes #4 = { alwaysinline norecurse nounwind uwtable "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
 attributes #5 = { nofree norecurse nounwind uwtable "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }

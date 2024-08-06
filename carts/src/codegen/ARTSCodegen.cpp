@@ -213,9 +213,10 @@ Value *ARTSCodegen::getOrCreateEDTGuid(string EDTName, uint32_t EDTNode) {
       Builder.CreateIntCast(ConstantInt::get(Int32, EDTNode), Int32, false)};
   CallInst *ReserveGuidCall = Builder.CreateCall(
       getOrCreateRuntimeFunctionPtr(ARTSRTL_artsReserveGuidRoute), Args);
+  ReserveGuidCall->setTailCall(true);
   /// Create allocation of the GUID
-  auto *GuidAddress =
-      Builder.CreateAlloca(Int32Ptr, nullptr, EDTName + "_guid.addr");
+  AllocaInst *GuidAddress =
+      Builder.CreateAlloca(artsGuid_t, nullptr, EDTName + "_guid.addr");
   Builder.CreateStore(ReserveGuidCall, GuidAddress);
   return GuidAddress;
 }
@@ -348,12 +349,8 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
                         << Edt->getID() << "\n");
       auto ParamVName = "paramv.guid.edt_" + std::to_string(Edt->getID());
       Value *ParamVElemPtr = Builder.CreateConstInBoundsGEP1_64(
-          Int64, ParamVArg, Index, ParamVName);
-      /// Load the value from the array
-      Value *LoadedVal = Builder.CreateLoad(Int64, ParamVElemPtr);
-      /// Cast the value to the original type
-      Value *CastedVal = Builder.CreateIntToPtr(LoadedVal, Int32Ptr);
-      ECG->insertGuid(Edt, CastedVal);
+          artsGuid_t, ParamVArg, Index, ParamVName);
+      ECG->insertGuid(Edt, ParamVElemPtr);
     }
   };
 
@@ -499,10 +496,8 @@ void ARTSCodegen::insertEDTCall(EDT &E) {
       auto ParamVGuidName =
           EDTName + "_paramv_guid.edt_" + std::to_string(Edt->getID());
       Value *ParamVGuiElemPtr = Builder.CreateConstInBoundsGEP1_64(
-          Int64, ParamV, Index, ParamVGuidName);
-      /// Cast the value to int32
-      Value *CastedVal = Builder.CreatePtrToInt(GuidValue, Int32);
-      Builder.CreateStore(CastedVal, ParamVGuiElemPtr);
+          artsGuid_t, ParamV, Index, ParamVGuidName);
+      Builder.CreateStore(GuidValue, ParamVGuiElemPtr);
     }
   }
 
@@ -516,7 +511,7 @@ void ARTSCodegen::insertEDTCall(EDT &E) {
   EDTCodegen *ECG = getOrCreateEDTCodegen(E);
   Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
   Value *Args[] = {Builder.CreateBitCast(ECG->getFn(), EdtFunctionPtr),
-                   Builder.CreateBitCast(ECG->getGuidAddress(), Int32Ptr),
+                   Builder.CreateLoad(artsGuid_t, ECG->getGuidAddress()),
                    LoadedParamC, ParamV, Builder.CreateLoad(Int32, DepC)};
   ECG->setCB(Builder.CreateCall(F, Args));
 
@@ -544,7 +539,6 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
       continue;
 
     EDT *ToEDT = DataEdge->getTo()->getEDT();
-    // EDTCodegen *ToECG = getOrCreateEDTCodegen(*ToEDT);
     LLVM_DEBUG(dbgs() << " - DataEdge to EDT #" << ToEDT->getID() << "\n");
     Value *ToEDTGuid = ECG->getGuid(ToEDT);
     assert(ToEDTGuid && "ToEDTGuid is null");
@@ -570,7 +564,7 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
                                    ".slot." + std::to_string(ToEDTSlot));
       Builder.CreateStore(ConstantInt::get(Int32, ToEDTSlot), ToEDTSlotAlloca);
       /// Create Call arguments
-      Value *Args[] = {Builder.CreateBitCast(ToEDTGuid, Int32Ptr),
+      Value *Args[] = {Builder.CreateLoad(artsGuid_t, ToEDTGuid),
                        Builder.CreateLoad(Int32, ToEDTSlotAlloca),
                        Builder.CreateLoad(Int64, DBValue)};
       Builder.CreateCall(F, Args);
@@ -581,7 +575,8 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
 void ARTSCodegen::createInitPerNodeFn() {
   auto *FnTy = FunctionType::get(Void, {Int32, Int32, Int8PtrPtr}, false);
   auto *Fn =
-      Function::Create(FnTy, GlobalValue::InternalLinkage, "initPerNode", &M);
+      Function::Create(FnTy, GlobalValue::ExternalLinkage, "initPerNode", &M);
+  Fn->setDSOLocal(true);
   Fn->arg_begin()->setName("nodeId");
   (Fn->arg_begin() + 1)->setName("argc");
   (Fn->arg_begin() + 2)->setName("argv");
@@ -595,7 +590,8 @@ void ARTSCodegen::createInitPerWorkerFn() {
   auto *FnTy =
       FunctionType::get(Void, {Int32, Int32, Int32, Int8PtrPtr}, false);
   auto *Fn =
-      Function::Create(FnTy, GlobalValue::InternalLinkage, "initPerWorker", &M);
+      Function::Create(FnTy, GlobalValue::ExternalLinkage, "initPerWorker", &M);
+  Fn->setDSOLocal(true);
   Fn->arg_begin()->setName("nodeId");
   (Fn->arg_begin() + 1)->setName("workerId");
   (Fn->arg_begin() + 2)->setName("argc");
@@ -605,9 +601,9 @@ void ARTSCodegen::createInitPerWorkerFn() {
   Builder.SetInsertPoint(EntryBB);
 
   /// if nodeId == 0 && workerId == 0
-  /// Create conditional branch
   Value *NodeId = Fn->arg_begin();
   Value *WorkerId = Fn->arg_begin() + 1;
+  /// Create conditional branch
   Value *IsMainWorker = Builder.CreateAnd(
       Builder.CreateICmpEQ(NodeId, ConstantInt::get(Int32, 0)),
       Builder.CreateICmpEQ(WorkerId, ConstantInt::get(Int32, 0)));
@@ -617,6 +613,12 @@ void ARTSCodegen::createInitPerWorkerFn() {
 
   /// then -> Create guid for main edt
   Builder.SetInsertPoint(ThenBB);
+  /// Printf nodeId and workerId in the LLVM IR
+  FunctionType *PrintfTy = FunctionType::get(Int32, Int8Ptr, true);
+  FunctionCallee Printf = M.getOrInsertFunction("printf", PrintfTy);
+  Value *FormatStr = Builder.CreateGlobalStringPtr("Creating Main EDT\n");
+  Builder.CreateCall(Printf, {FormatStr});
+
   EDT *MainEDT = Cache->getGraph().getEntryNode()->getEDT();
   auto MainEDTName = MainEDT->getName();
   EDTCodegen *MainECG = getOrCreateEDTCodegen(*MainEDT);
@@ -632,8 +634,8 @@ void ARTSCodegen::createInitPerWorkerFn() {
       Builder.CreateAlloca(Int64, LoadedParamC, MainEDTName + "_paramv");
   Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
   Value *Args[] = {Builder.CreateBitCast(MainECG->getFn(), EdtFunctionPtr),
-                   Builder.CreateBitCast(MainECG->getGuidAddress(), Int32Ptr),
-                   LoadedParamC, ParamV, ConstantInt::get(Int32, 0)};
+                   Builder.CreateLoad(artsGuid_t, GuidAddress), LoadedParamC,
+                   ParamV, ConstantInt::get(Int32, 0)};
   Builder.CreateCall(F, Args);
   Builder.CreateRetVoid();
 
@@ -647,6 +649,7 @@ void ARTSCodegen::createMainFn() {
   Function *OldMainFn = Cache->getGraph().getEntryNode()->getEDT()->getFn();
   Function *MainFn = Function::Create(MainFnTy, GlobalValue::ExternalLinkage,
                                       OldMainFn->getAddressSpace(), "main", &M);
+  MainFn->setDSOLocal(true);
   MainFn->arg_begin()->setName("argc");
   (MainFn->arg_begin() + 1)->setName("argv");
   MainFn->takeName(OldMainFn);
