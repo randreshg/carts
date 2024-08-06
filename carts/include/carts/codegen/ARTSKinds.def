@@ -200,7 +200,7 @@ __ARTS_RTL(artsEdtDestroy, false, Void, artsGuid_t)
 
 __ARTS_RTL(artsSignalEdt, false, Void, artsGuid_t, Int32, artsGuid_t)
 __ARTS_RTL(artsSignalEdtValue, false, Void, artsGuid_t, Int32, Int64)
-__ARTS_RTL(artsSignalEdtPtr, false, Void, artsGuid_t, Int32, VoidPtr, Int32)
+__ARTS_RTL(artsSignalEdtPtr,   false, Void, artsGuid_t, Int32, VoidPtr, Int32)
 /// artsActiveMessageWithDb
 /// attsActiveMessageWithDbAt
 /// artsActiveMessageWithBuffer

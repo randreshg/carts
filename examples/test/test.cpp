@@ -26,37 +26,27 @@ int main() {
   // Generate a random number between 10 and 10
   int shared_number = rand();
   int random_number = rand() % 10 + 10;
+  printf("The initial number is %d/%d\n", shared_number, random_number);
+
   /// EDT 1
   #pragma omp parallel
   {
-    // #pragma omp single
-    // if(random_number == 0) {
-      /// EDT 3
-      {
-        ///EDT 5
-        #pragma omp task firstprivate(random_number)
-        {
-      
-          printf("I think the number is %d/%d\n",
-                shared_number, random_number);
-          ///EDT 7
-          // #pragma omp task shared(shared_number)
-          // shared_number--;
-        }
-
-        /// EDT 6
-        {
-        }
-      }
-    
-      // #taskwait
-      /// EDT 4
-      {
-
+    /// pragma omp single
+    /// EDT 3
+    // if(random_number%2 == 0) {
+      #pragma omp task firstprivate(random_number)
+      { 
+        shared_number++;
+        random_number++;
+        printf("The number is %d/%d\n", shared_number, random_number);
       }
     // }
     
-
+    /// EDT 4
+    // #pragma omp task firstprivate(random_number)
+    // {
+    //   printf("The number is %d\n", random_number);
+    // }
   }
 
   /// EDT 2
@@ -64,6 +54,44 @@ int main() {
   return 0;
 }
 
+// ///
+// int main() {
+//   // Generate a random number between 10 and 10
+//   int shared_number = rand();
+//   int random_number = rand() % 10 + 10;
+//   /// EDT 1
+//   #pragma omp parallel
+//   {
+//     // #pragma omp single
+//     // if(random_number == 0) {
+//       /// EDT 3
+//       {
+//         ///EDT 5
+//         #pragma omp task firstprivate(random_number)
+//         {
 
+//           printf("I think the number is %d/%d\n",
+//                 shared_number, random_number);
+//           ///EDT 7
+//           // #pragma omp task shared(shared_number)
+//           // shared_number--;
+//         }
 
-///
+//         /// EDT 6
+//         {
+//         }
+//       }
+
+//       // #taskwait
+//       /// EDT 4
+//       {
+
+//       }
+//     // }
+
+//   }
+
+//   /// EDT 2
+//   printf("The final number is %d - %d.\n", shared_number, random_number);
+//   return 0;
+// }

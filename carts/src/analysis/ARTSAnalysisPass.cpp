@@ -28,6 +28,7 @@
 #include "carts/codegen/ARTSCodegen.h"
 #include "carts/utils/ARTS.h"
 #include "carts/utils/ARTSCache.h"
+#include "carts/utils/ARTSUtils.h"
 
 using namespace llvm;
 using namespace arts;
@@ -1424,7 +1425,7 @@ public:
     /// Debug module
     LLVM_DEBUG(dbgs() << "\n" << M << "\n");
 
-    /// Start generating code on the entry EDT
+    /// Insert EDT Entry and Call
     EDTGraphNode *EntryEDTNode = Graph.getEntryNode();
     assert(EntryEDTNode && "EntryEDTNode is null!");
     SetVector<EDTGraphNode *> WorkList;
@@ -1437,16 +1438,31 @@ public:
                         << "\n");
       CG.insertEDTEntry(CurrentEDT);
       CG.insertEDTCall(CurrentEDT);
-
-      /// Add all the children to the worklist
+      CG.insertEDTSignals(CurrentEDT);
+      /// Add all the children to the WorkList
       auto OutEdges = Graph.getOutgoingEdges(CurrentEDTNode);
       for (EDTGraphEdge *OutEdge : OutEdges) {
         if (OutEdge->hasCreationDep())
           WorkList.insert(OutEdge->getTo());
       }
     }
+
+    /// Debug module
+    // LLVM_DEBUG(dbgs() << "\n" << M << "\n");
+    // /// Insert EDT Signals
+    // LLVM_DEBUG(dbgs() << "\nInserting EDT Signals\n");
+    // for (EDTGraphNode *EDTNode : EDTNodes) {
+    //   EDT &CurrentEDT = *EDTNode->getEDT();
+    //   CG.insertEDTSignals(CurrentEDT);
+    // }
+  
     /// Insert init functions
     CG.insertInitFunctions();
+    CG.insertARTSShutdownFn();
+    /// Debug Module
+    LLVM_DEBUG(dbgs() << "\n" << M << "\n");
+    /// Remove values
+    utils::removeValues();
   }
 };
 

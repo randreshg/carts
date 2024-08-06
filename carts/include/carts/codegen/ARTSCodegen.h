@@ -9,6 +9,7 @@
 #define LLVM_ARTS_CODEGEN_H
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstrTypes.h"
@@ -36,6 +37,13 @@ public:
   void setCB(CallBase *CB);
   void setGuidAddress(Value *V);
 
+  /// Entry and Exit
+  BasicBlock *getEntry();
+  BasicBlock *getExit();
+  void setEntry(BasicBlock *BB);
+  void setExit(BasicBlock *BB);
+
+  /// Parameter and Dependency Interface
   bool hasParameter(int32_t Slot);
   bool hasDependency(int32_t Slot);
   bool hasGuid(EDT *E);
@@ -52,6 +60,9 @@ private:
   CallBase *CB = nullptr;
   Function *Fn = nullptr;
   Value *GuidAddress = nullptr;
+  /// Entry and Exit
+  BasicBlock *Entry = nullptr;
+  BasicBlock *Exit = nullptr;
   /// Maps an integer slot to a value.
   DenseMap<int32_t, Value *> Parameters;
   DenseMap<int32_t, Value *> Dependencies;
@@ -89,28 +100,21 @@ public:
   /// Interface to add ARTS methods
   Function *getOrCreateEDTFunction(EDT &E);
   Value *getOrCreateEDTGuid(EDT &E, BasicBlock *InsertionBB = nullptr);
-  Value *getOrCreateEDTGuid(string EDTName,
-                            uint32_t EDTNode);
-  void initializeEDT(EDT &E);
+  Value *getOrCreateEDTGuid(string EDTName, uint32_t EDTNode);
+
   /// Based on the EDT parameters and dependencies, it "unrolls" the data
   /// structure and rewires the values to their new instances.
   void insertEDTEntry(EDT &E);
   void insertEDTCall(EDT &E);
-  void signalEDTGuid(EDT &From, EDT &To, Value *Signal);
-  void signalEDTValue(EDT &From, EDT &To, Value *Signal);
-  void signalEDTDataBlock(EDT &From, EDT &To, Value *Signal);
-  // Function *insertEDTFn(EDT &E);
-
+  void insertEDTSignals(EDT &E);
   void createInitPerNodeFn();
   void createInitPerWorkerFn();
   void createMainFn();
   void insertInitFunctions();
-
-  /// Guid interface
-  bool isEDTGuid(Value *V);
+  void insertARTSShutdownFn();
 
   /// ---------------------------- Utils ---------------------------- ///
-  void setInsertionPointAtEDTEntry(EDTFunction &EDTFn);
+  void setInsertionPointInBB(BasicBlock &InsertionBB);
 
   /// Make \p Source branch to \p Target.
   ///
@@ -123,6 +127,9 @@ public:
   /// Insertion Points
   void setInsertPoint(BasicBlock *BB);
   void setInsertPoint(Instruction *I);
+  /// Rewired Values
+  void insertRewiredValue(Value *Old, Value *New);
+  Value *getRewiredValue(Value *Old);
 
 /// ---------------------------- Types ---------------------------- ///
 /// Declarations for LLVM-IR types (simple, array, function and structure) are
@@ -145,7 +152,7 @@ public:
   ///}
 private:
   /// ---------------------------- Private ---------------------------- ///
-  EDTCodegen *getOrCreateEDT(EDT &E);
+  EDTCodegen *getOrCreateEDTCodegen(EDT &E);
   /// Create all simple and struct types exposed by the runtime and remember
   /// the llvm::PointerTypes of them for easy access later.
   void initializeTypes();
@@ -159,6 +166,8 @@ private:
   IRBuilder<> Builder;
   /// Maps the EDT to the new function
   DenseMap<EDT *, EDTCodegen *> EDTs;
+  /// Rewired values
+  DenseMap<Value *, Value *> RewiredValues;
 };
 } // namespace arts
 

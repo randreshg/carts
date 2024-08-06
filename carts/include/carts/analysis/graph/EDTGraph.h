@@ -36,6 +36,7 @@ public:
   ~EDTGraph();
 
   EDTGraphNode *getEntryNode();
+  EDTGraphNode *getExitNode();
   EDTGraphNode *getNode(Function &Fn) const;
   EDTGraphNode *getNode(EDT *E) const;
   /// Analysis
@@ -95,6 +96,8 @@ public:
 
   /// EntryNode
   EDTGraphNode *EntryNode = nullptr;
+  /// ExitNode
+  EDTGraphNode *ExitNode = nullptr;
 
 public:
   void print();
