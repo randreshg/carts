@@ -41,10 +41,13 @@ void removeValue(Value *V, bool RecursiveRemove = false,
 void removeValue(Value *V, Instruction *ExcludeInst,
                  bool RecursiveRemove = false, bool RecursiveUndef = true,
                  bool UndefineUses = true);
-void removeValues(SmallVector<Value *, 16> ValuesToRemove);
+void removeValues(SetVector<Value *> ValuesToRemove);
+void removeValues();
+void insertValueToRemove(Value *V);
+
 /// Function to replace uses of a Value with UndefValue.
 /// - Instructions can be removed if requested.
-/// - The processs can also be performed in a recursive way by replacing
+/// - The process can also be performed in a recursive way by replacing
 ///   uses of the instructions that use the value with UndefValue.
 /// - The depth of the recursion can be controlled.
 void replaceUsesWithUndef(Value *V, bool RemoveUses = false,

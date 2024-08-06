@@ -124,6 +124,26 @@ EDTGraphNode *EDTGraph::getEntryNode() {
   return nullptr;
 }
 
+EDTGraphNode *EDTGraph::getExitNode() {
+  if (ExitNode != nullptr)
+    return ExitNode;
+  /// Fetch the exit node
+  /// Get entry node
+  EDTGraphNode *Entry = getEntryNode();
+  /// Analyze creation edges of the entry node
+  for (auto *Edge : getOutgoingEdges(Entry)) {
+    /// The exit node is created by the Entry node and is a sync Done region
+    if (Edge->hasCreationDep()) {
+      EDT *ToEDT = Edge->getTo()->getEDT();
+      if (!ToEDT->isAsync()) {
+        ExitNode = getNode(ToEDT->getDoneSync());
+        return ExitNode;
+      }
+    }
+  }
+  return nullptr;
+}
+
 EDTGraphNode *EDTGraph::getNode(Function &Fn) const {
   auto it = EDTs.find(&Fn);
   if (it != EDTs.end())

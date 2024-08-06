@@ -24,6 +24,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <string>
 #include <sys/types.h>
 
 // DEBUG
@@ -45,7 +46,10 @@ Value *EDTCodegen::getGuidAddress() { return GuidAddress; }
 void EDTCodegen::setFn(Function *Fn) { this->Fn = Fn; }
 void EDTCodegen::setCB(CallBase *CB) { this->CB = CB; }
 void EDTCodegen::setGuidAddress(Value *V) { this->GuidAddress = V; }
-
+BasicBlock *EDTCodegen::getEntry() { return Entry; }
+BasicBlock *EDTCodegen::getExit() { return Exit; }
+void EDTCodegen::setEntry(BasicBlock *BB) { Entry = BB; }
+void EDTCodegen::setExit(BasicBlock *BB) { Exit = BB; }
 bool EDTCodegen::hasParameter(int32_t Slot) {
   return Parameters.find(Slot) != Parameters.end();
 }
@@ -140,14 +144,15 @@ FunctionCallee ARTSCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
 #include "carts/codegen/ARTSKinds.def"
     }
 
-    LLVM_DEBUG(dbgs() << TAG << "Created ARTS runtime function "
-                      << Fn->getName() << " with type "
-                      << *Fn->getFunctionType() << "\n");
+    // LLVM_DEBUG(dbgs() << TAG << "Created ARTS runtime function "
+    //                   << Fn->getName() << " with type "
+    //                   << *Fn->getFunctionType() << "\n");
     // addAttributes(FnID, *Fn);
 
   } else {
-    LLVM_DEBUG(dbgs() << TAG << "Found ARTS runtime function " << Fn->getName()
-                      << " with type " << *Fn->getFunctionType() << "\n");
+    // LLVM_DEBUG(dbgs() << TAG << "Found ARTS runtime function " <<
+    // Fn->getName()
+    //                   << " with type " << *Fn->getFunctionType() << "\n");
   }
 
   assert(Fn && "Failed to create ARTS runtime function");
@@ -163,7 +168,7 @@ Function *ARTSCodegen::getOrCreateRuntimeFunctionPtr(RuntimeFunction FnID) {
 }
 
 Function *ARTSCodegen::getOrCreateEDTFunction(EDT &E) {
-  EDTCodegen *ECG = getOrCreateEDT(E);
+  EDTCodegen *ECG = getOrCreateEDTCodegen(E);
   if (ECG->getFn())
     return ECG->getFn();
 
@@ -192,16 +197,11 @@ Function *ARTSCodegen::getOrCreateEDTFunction(EDT &E) {
 
   /// Splice the body of the old function right into the new function
   EDTFn->splice(++EDTFn->begin(), E.getFn());
-  return EDTFn;
-}
 
-void ARTSCodegen::setInsertionPointAtEDTEntry(EDTFunction &EDTFn) {
-  BasicBlock &EntryBB = EDTFn.getEntryBlock();
-  Instruction *EntryBBTerm = EntryBB.getTerminator();
-  if (EntryBBTerm)
-    Builder.SetInsertPoint(EntryBBTerm);
-  else
-    Builder.SetInsertPoint(&EntryBB);
+  /// Set new entry and exit blocks
+  ECG->setEntry(EntryBB);
+  ECG->setExit(ExitBB);
+  return EDTFn;
 }
 
 Value *ARTSCodegen::getOrCreateEDTGuid(string EDTName, uint32_t EDTNode) {
@@ -222,7 +222,7 @@ Value *ARTSCodegen::getOrCreateEDTGuid(string EDTName, uint32_t EDTNode) {
 
 Value *ARTSCodegen::getOrCreateEDTGuid(EDT &E, BasicBlock *InsertionBB) {
   /// Check if the EDT already has a GUID
-  EDTCodegen *ECG = getOrCreateEDT(E);
+  EDTCodegen *ECG = getOrCreateEDTCodegen(E);
   if (ECG->getGuidAddress())
     return ECG->getGuidAddress();
 
@@ -248,6 +248,13 @@ Value *ARTSCodegen::getOrCreateEDTGuid(EDT &E, BasicBlock *InsertionBB) {
   /// Create the GUID
   Value *GuidAddress = getOrCreateEDTGuid(E.getName(), E.getNode());
   ECG->setGuidAddress(GuidAddress);
+  /// If parent EDT is not null, add the ChildEDTGuid Address to the set of
+  /// known GUIDs
+  if (EDTParent) {
+    EDTCodegen *ParentECG = getOrCreateEDTCodegen(*EDTParent);
+    ParentECG->insertGuid(&E, GuidAddress);
+  }
+  /// Restore the insertion point
   Builder.restoreIP(OldInsertPoint);
   return GuidAddress;
 }
@@ -259,12 +266,12 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
   auto OldInsertPoint = Builder.saveIP();
   /// Set the insertion point to the entry block of the EDT function
   Function *EDTFn = getOrCreateEDTFunction(E);
-  setInsertionPointAtEDTEntry(*EDTFn);
+  setInsertionPointInBB(EDTFn->getEntryBlock());
 
   DenseMap<Value *, Value *> RewiringMap;
   /// Get the information we know about the Module
   EDTGraph &Graph = Cache->getGraph();
-  EDTCodegen *ECG = getOrCreateEDT(E);
+  EDTCodegen *ECG = getOrCreateEDTCodegen(E);
 
   /// Parameters
   auto handleParameters = [&]() -> void {
@@ -327,6 +334,7 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
 
       /// Add the value to the rewiring map
       RewiringMap[OriginalVal] = CastedVal;
+      insertRewiredValue(OriginalVal, CastedVal);
       ECG->insertParameter(Index, CastedVal);
     }
 
@@ -390,6 +398,7 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
 
         /// Add the value to the rewiring map
         RewiringMap[OriginalVal] = CastedVal;
+        insertRewiredValue(OriginalVal, CastedVal);
         ECG->insertDependency(Index, CastedVal);
       }
     }
@@ -464,7 +473,7 @@ void ARTSCodegen::insertEDTCall(EDT &E) {
     }
 
     /// Guids
-    EDTCodegen *ParentECG = getOrCreateEDT(*ParentEDT);
+    EDTCodegen *ParentECG = getOrCreateEDTCodegen(*ParentEDT);
     const uint32_t InitialIndex = InputParameters.size();
     auto &InputGuids = InputParentDataEdges->getGuids();
     for (auto Guid : enumerate(InputGuids)) {
@@ -475,17 +484,12 @@ void ARTSCodegen::insertEDTCall(EDT &E) {
 
       /// If the the GUID of the EDT is created in the parent EDT, get it,
       /// otherwise, check if my parent knows it.
-      Value *GuidValue = nullptr;
-      if (Graph.isChild(ParentEDT, Edt)) {
-        GuidValue = getOrCreateEDTGuid(*Edt);
-      } else {
-        GuidValue = ParentECG->getGuid(Edt);
-        if (!GuidValue) {
-          LLVM_DEBUG(dbgs() << "     Parent EDT #" << ParentEDT->getID()
-                            << " doesn't have a GUID for EDT #" << Edt->getID()
-                            << "\n");
-          llvm_unreachable("Parent EDT doesn't have a GUID for the child EDT");
-        }
+      Value *GuidValue = ParentECG->getGuid(Edt);
+      if (!GuidValue) {
+        LLVM_DEBUG(dbgs() << "     Parent EDT #" << ParentEDT->getID()
+                          << " doesn't have a GUID for EDT #" << Edt->getID()
+                          << "\n");
+        llvm_unreachable("Parent EDT doesn't have a GUID for the child EDT");
       }
       /// Assert the GuidValue is a pointer
       assert(GuidValue && "GuidValue is null");
@@ -509,33 +513,69 @@ void ARTSCodegen::insertEDTCall(EDT &E) {
 
   /// Create EDT
   LLVM_DEBUG(dbgs() << " - Creating EDT\n");
-  EDTCodegen *ECG = getOrCreateEDT(E);
+  EDTCodegen *ECG = getOrCreateEDTCodegen(E);
   Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
   Value *Args[] = {Builder.CreateBitCast(ECG->getFn(), EdtFunctionPtr),
                    Builder.CreateBitCast(ECG->getGuidAddress(), Int32Ptr),
-                   LoadedParamC, ParamV,
-                   Builder.CreateLoad(Int32, DepC)};
+                   LoadedParamC, ParamV, Builder.CreateLoad(Int32, DepC)};
   ECG->setCB(Builder.CreateCall(F, Args));
 
   /// We can remove both the function and the call
-  utils::removeValue(E.getCall());
-  utils::removeValue(E.getFn());
+  utils::insertValueToRemove(E.getCall());
+  utils::insertValueToRemove(E.getFn());
 
   /// Restore the insertion point
   Builder.restoreIP(OldInsertPoint);
 }
 
-void ARTSCodegen::signalEDTGuid(EDT &From, EDT &To, Value *Signal) {
-  // Value *FromGuidInt = Builder.CreatePtrToInt(From.getGuidAddress(), Int32);
-  // Value *ToGuidInt = Builder.CreatePtrToInt(To.getGuidAddress(), Int32);
-  // Value *Args[] = {FromGuidInt, ToGuidInt};
+void ARTSCodegen::insertEDTSignals(EDT &E) {
+  LLVM_DEBUG(dbgs() << TAG << "Inserting Signals for EDT #" << E.getID()
+                    << "\n");
+  /// Analyze all the data outgoing edges from the EDT
+  EDTCodegen *ECG = getOrCreateEDTCodegen(E);
+  EDTGraph &Graph = Cache->getGraph();
+  auto OutgoingEdges = Graph.getOutgoingEdges(&E);
+  Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsSignalEdtValue);
+  /// Set insertion point to the exit block of the EDT function
+  setInsertionPointInBB(*ECG->getExit());
+  for (auto *Edge : OutgoingEdges) {
+    auto *DataEdge = dyn_cast<EDTGraphDataEdge>(Edge);
+    if (!DataEdge)
+      continue;
 
-  // void artsSignalEdtValue(artsGuid_t edtGuid, uint32_t slot, uint64_t data);
-  // void artsSignalEdtPtr(artsGuid_t edtGuid, uint32_t slot, void * ptr,
-  // unsigned int size);
+    EDT *ToEDT = DataEdge->getTo()->getEDT();
+    // EDTCodegen *ToECG = getOrCreateEDTCodegen(*ToEDT);
+    LLVM_DEBUG(dbgs() << " - DataEdge to EDT #" << ToEDT->getID() << "\n");
+    Value *ToEDTGuid = ECG->getGuid(ToEDT);
+    assert(ToEDTGuid && "ToEDTGuid is null");
 
-  // Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsSignalEdt);
-  // Builder.CreateCall(F, Args);
+    auto &DataBlocks = DataEdge->getDataBlocks();
+    for (auto Dep : enumerate(DataBlocks)) {
+      EDTDataBlock *DB = Dep.value();
+      LLVM_DEBUG(dbgs() << " - Signal: " << *DB->getValue()
+                        << " / Slot: " << DB->getSlot() << "\n");
+      Value *DBValue = ECG->getDependency(DB->getSlot());
+      if (DBValue) {
+        if (Value *RewiredValue = getRewiredValue(DBValue))
+          DBValue = RewiredValue;
+      } else
+        DBValue = DB->getValue();
+
+      LLVM_DEBUG(dbgs() << "    - " << *DBValue << "\n");
+      /// Load ToEDTSlot in an alloca integer
+      uint32_t ToEDTSlot = DB->getToSlot();
+      AllocaInst *ToEDTSlotAlloca =
+          Builder.CreateAlloca(Int32, nullptr,
+                               "edt." + std::to_string(ToEDT->getID()) +
+                                   ".slot." + std::to_string(ToEDTSlot));
+      Builder.CreateStore(ConstantInt::get(Int32, ToEDTSlot), ToEDTSlotAlloca);
+      /// Create Call arguments
+      Value *Args[] = {Builder.CreateBitCast(ToEDTGuid, Int32Ptr),
+                       Builder.CreateLoad(Int32, ToEDTSlotAlloca),
+                       Builder.CreateLoad(Int64, DBValue)};
+      Builder.CreateCall(F, Args);
+    }
+  }
 }
 
 void ARTSCodegen::createInitPerNodeFn() {
@@ -579,7 +619,7 @@ void ARTSCodegen::createInitPerWorkerFn() {
   Builder.SetInsertPoint(ThenBB);
   EDT *MainEDT = Cache->getGraph().getEntryNode()->getEDT();
   auto MainEDTName = MainEDT->getName();
-  EDTCodegen *MainECG = getOrCreateEDT(*MainEDT);
+  EDTCodegen *MainECG = getOrCreateEDTCodegen(*MainEDT);
   Value *GuidAddress = getOrCreateEDTGuid(MainEDTName, MainEDT->getNode());
   MainECG->setGuidAddress(GuidAddress);
 
@@ -629,7 +669,27 @@ void ARTSCodegen::insertInitFunctions() {
   createMainFn();
 }
 
+void ARTSCodegen::insertARTSShutdownFn() {
+  LLVM_DEBUG(dbgs() << TAG << "Inserting ARTS Shutdown Function\n");
+  EDTGraphNode *ExitNode = Cache->getGraph().getExitNode();
+  EDT *ExitEDT = ExitNode->getEDT();
+  EDTCodegen *ExitECG = getOrCreateEDTCodegen(*ExitEDT);
+  setInsertionPointInBB(*ExitECG->getExit());
+  /// Call the artsShutdown function
+  FunctionCallee RTFn =
+      getOrCreateRuntimeFunction(types::RuntimeFunction::ARTSRTL_artsShutdown);
+  Builder.CreateCall(RTFn);
+}
+
 /// ---------------------------- Utils ---------------------------- ///
+void ARTSCodegen::setInsertionPointInBB(BasicBlock &InsertionBB) {
+  Instruction *EntryBBTerm = InsertionBB.getTerminator();
+  if (EntryBBTerm)
+    Builder.SetInsertPoint(EntryBBTerm);
+  else
+    Builder.SetInsertPoint(&InsertionBB);
+}
+
 void ARTSCodegen::redirectTo(BasicBlock *Source, BasicBlock *Target) {
   if (Instruction *Term = Source->getTerminator()) {
     auto *Br = cast<BranchInst>(Term);
@@ -658,8 +718,19 @@ void ARTSCodegen::setInsertPoint(BasicBlock *BB) { Builder.SetInsertPoint(BB); }
 
 void ARTSCodegen::setInsertPoint(Instruction *I) { Builder.SetInsertPoint(I); }
 
+void ARTSCodegen::insertRewiredValue(Value *OriginalVal, Value *CastedVal) {
+  if (!getRewiredValue(OriginalVal))
+    RewiredValues[OriginalVal] = CastedVal;
+}
+
+Value *ARTSCodegen::getRewiredValue(Value *OriginalVal) {
+  if (RewiredValues.find(OriginalVal) != RewiredValues.end())
+    return RewiredValues[OriginalVal];
+  return nullptr;
+}
+
 /// ---------------------------- Private ---------------------------- ///
-EDTCodegen *ARTSCodegen::getOrCreateEDT(EDT &E) {
+EDTCodegen *ARTSCodegen::getOrCreateEDTCodegen(EDT &E) {
   if (EDTs.find(&E) != EDTs.end())
     return EDTs[&E];
 

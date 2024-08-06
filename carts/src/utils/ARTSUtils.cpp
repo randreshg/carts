@@ -1,3 +1,4 @@
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instruction.h"
@@ -14,7 +15,7 @@
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <sys/types.h>
 
-#include "carts/utils/ARTS.h"
+// #include "carts/utils/ARTS.h"
 #include "carts/utils/ARTSUtils.h"
 
 using namespace llvm;
@@ -29,6 +30,7 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 namespace arts {
 namespace utils {
 
+SetVector<Value *> ValuesToRemove;
 /// ------------------------------------------------------------------- ///
 /// --------------------------- ARTS UTILS ---------------------------- ///
 /// ------------------------------------------------------------------- ///
@@ -69,7 +71,6 @@ void removeFunction(Function *Fn) {
   Fn->deleteBody();
   removeValue(Fn, false, false);
 }
-
 
 void removeValue(Value *V, bool RecursiveRemove, bool RecursiveUndef) {
   removeValue(V, nullptr, RecursiveRemove, RecursiveUndef);
@@ -112,12 +113,19 @@ void removeValue(Value *V, Instruction *ExcludeInst, bool RecursiveRemove,
   }
 }
 
-void removeValues(SmallVector<Value *, 16> ValuesToRemove) {
-  for (Value *V : ValuesToRemove) {
-    // LLVM_DEBUG(dbgs() << TAG << "- Removing: " << *V << "\n");
+void removeValues(SetVector<Value *> ValsToRemove) {
+  for (Value *V : ValsToRemove) {
+    LLVM_DEBUG(dbgs() << TAG << "   - Removing: " << *V << "\n");
     removeValue(V, true, true);
   }
 }
+
+void removeValues() {
+  removeValues(ValuesToRemove);
+  ValuesToRemove.clear();
+}
+
+void insertValueToRemove(Value *V) { ValuesToRemove.insert(V); }
 
 void replaceUsesWithUndef(Value *V, bool RemoveUses, bool Recursive,
                           uint32_t MaxDepth) {
@@ -190,13 +198,12 @@ void removeLifetimeMarkers(Function &Fn) {
 void removeDeadInstructions(Function &Fn) {
   LLVM_DEBUG(dbgs() << TAG << "Removing dead instructions from: "
                     << Fn.getName() << "\n");
-  SmallVector<Value *, 16> ValuesToRemove;
   for (auto &BB : Fn) {
     for (auto &I : BB) {
       /// If the instruction is trivially dead, remove it
       if (isInstructionTriviallyDead(&I)) {
         LLVM_DEBUG(dbgs() << TAG << "- Removing: " << I << "\n");
-        ValuesToRemove.push_back(&I);
+        ValuesToRemove.insert(&I);
         continue;
       }
       /// However, if the instruction is not trivially dead, check its operands
@@ -204,7 +211,7 @@ void removeDeadInstructions(Function &Fn) {
       for (auto &Op : I.operands()) {
         if (isa<UndefValue>(Op.get())) {
           LLVM_DEBUG(dbgs() << TAG << "- Removing: " << I << "\n");
-          ValuesToRemove.push_back(&I);
+          ValuesToRemove.insert(&I);
           break;
         }
       }
@@ -212,7 +219,7 @@ void removeDeadInstructions(Function &Fn) {
   }
   LLVM_DEBUG(dbgs() << TAG << "Removing " << ValuesToRemove.size()
                     << " dead instructions\n");
-  removeValues(ValuesToRemove);
+  removeValues();
   LLVM_DEBUG(dbgs() << "\n");
 }
 } // namespace utils

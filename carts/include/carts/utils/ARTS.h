@@ -284,6 +284,8 @@ public:
 
 private:
   uint32_t NumThreads = 1;
+  SetVector<Value *> Variables;
+  
 };
 
 } // end namespace arts
