@@ -114,6 +114,7 @@ public:
   void insertARTSShutdownFn();
 
   /// ---------------------------- Utils ---------------------------- ///
+  void insertPrint(string FormatStr, SmallVector<Value *, 8> &Args);
   void setInsertionPointInBB(BasicBlock &InsertionBB);
 
   /// Make \p Source branch to \p Target.

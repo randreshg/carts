@@ -52,6 +52,7 @@ void fibJoin(uint32_t paramc, uint64_t * paramv, uint32_t depc, artsEdtDep_t dep
 {
     unsigned int x = depv[0].guid;
     unsigned int y = depv[1].guid;
+    unsigned int test = (unsigned int) depv[0].ptr;
     artsSignalEdtValue(paramv[0], paramv[1], x+y);
 }
 

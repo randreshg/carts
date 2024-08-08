@@ -7,8 +7,11 @@
 ///
 //===----------------------------------------------------------------------===//
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
@@ -218,7 +221,13 @@ Value *ARTSCodegen::getOrCreateEDTGuid(string EDTName, uint32_t EDTNode) {
   AllocaInst *GuidAddress =
       Builder.CreateAlloca(artsGuid_t, nullptr, EDTName + "_guid.addr");
   Builder.CreateStore(ReserveGuidCall, GuidAddress);
-  return GuidAddress;
+  LoadInst *LoadedGuidAddress = Builder.CreateLoad(artsGuid_t, GuidAddress);
+  /// Print the new GUID
+  SmallVector<Value *, 8> PrintArgs;
+  PrintArgs = {LoadedGuidAddress};
+  string PrintMsg = "Guid for " + EDTName + ": %u\n";
+  insertPrint(PrintMsg, PrintArgs);
+  return LoadedGuidAddress;
 }
 
 Value *ARTSCodegen::getOrCreateEDTGuid(EDT &E, BasicBlock *InsertionBB) {
@@ -261,9 +270,7 @@ Value *ARTSCodegen::getOrCreateEDTGuid(EDT &E, BasicBlock *InsertionBB) {
 }
 
 void ARTSCodegen::insertEDTEntry(EDT &E) {
-  // EDT &E = *EDTNode.getEDT();
-  LLVM_DEBUG(dbgs() << TAG << "Inserting Call for  for EDT #" << E.getID()
-                    << "\n");
+  LLVM_DEBUG(dbgs() << TAG << "Inserting Entry for EDT #" << E.getID() << "\n");
   auto OldInsertPoint = Builder.saveIP();
   /// Set the insertion point to the entry block of the EDT function
   Function *EDTFn = getOrCreateEDTFunction(E);
@@ -350,7 +357,8 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
       auto ParamVName = "paramv.guid.edt_" + std::to_string(Edt->getID());
       Value *ParamVElemPtr = Builder.CreateConstInBoundsGEP1_64(
           artsGuid_t, ParamVArg, Index, ParamVName);
-      ECG->insertGuid(Edt, ParamVElemPtr);
+      LoadInst *LoadedGuid = Builder.CreateLoad(artsGuid_t, ParamVElemPtr);
+      ECG->insertGuid(Edt, LoadedGuid);
     }
   };
 
@@ -378,6 +386,9 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
         Value *OriginalVal = E.getDepArg(Index);
         LLVM_DEBUG(dbgs() << "   - DepV[" << Index << "]: " << *OriginalVal
                           << "\n");
+        if (DB->getParentDB())
+          LLVM_DEBUG(dbgs() << "     - Parent DB: "
+                            << *DB->getParentDB()->getValue() << "\n");
         /// If the DB slot was already filled, skip it
         if (ECG->hasDependency(Index)) {
           LLVM_DEBUG(dbgs() << "     - DepV[" << Index
@@ -389,14 +400,23 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
                              ? ("depv." + std::to_string(Index))
                              : ("depv." + OriginalVal->getName());
         Value *DepVElemPtr = Builder.CreateConstInBoundsGEP2_32(
-            EdtDep, DepVArg, Index, 2, DepVName);
-        Value *CastedVal =
-            Builder.CreateBitCast(DepVElemPtr, OriginalVal->getType());
-
+            EdtDep, DepVArg, Index, 0, DepVName);
+        /// Cast the value to the original type
+        // Value *CastedVal =
+        //     Builder.CreateBitCast(DepVElemPtr, OriginalVal->getType());
+        // LoadInst *LoadedVal = Builder.CreateLoad(DB->getType(),
+        //                                          CastedVal, DepVName +
+        //                                          ".load");
+        /// Create an AllocaInst to store the value
+        // AllocaInst *OriginalValAlloca =
+        // Builder.CreateAlloca(DB->getType(), nullptr, DepVName + ".alloca");
+        /// Store the value in the AllocaInst
+        // Builder.CreateStore(DepVElemPtr, OriginalValAlloca);
+        // LLVM_DEBUG(dbgs() << "     - Casted Value: " << *LoadedVal << "\n");
         /// Add the value to the rewiring map
-        RewiringMap[OriginalVal] = CastedVal;
-        insertRewiredValue(OriginalVal, CastedVal);
-        ECG->insertDependency(Index, CastedVal);
+        RewiringMap[OriginalVal] = DepVElemPtr;
+        insertRewiredValue(OriginalVal, DepVElemPtr);
+        ECG->insertDependency(Index, DepVElemPtr);
       }
     }
   };
@@ -404,6 +424,7 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
   handleParameters();
   handleDependencies();
   utils::rewireValues(RewiringMap);
+  LLVM_DEBUG(dbgs() << " - New Function: " << *EDTFn << "\n");
   Builder.restoreIP(OldInsertPoint);
 }
 
@@ -490,8 +511,6 @@ void ARTSCodegen::insertEDTCall(EDT &E) {
       }
       /// Assert the GuidValue is a pointer
       assert(GuidValue && "GuidValue is null");
-      assert(GuidValue->getType() == Int32Ptr &&
-             "GuidValue is not an Int32Ptr");
       /// Create the GEP to store the Guid value in the ParamV array
       auto ParamVGuidName =
           EDTName + "_paramv_guid.edt_" + std::to_string(Edt->getID());
@@ -507,12 +526,15 @@ void ARTSCodegen::insertEDTCall(EDT &E) {
   Builder.CreateStore(ConstantInt::get(Int32, EDTEnv.getDepC()), DepC);
 
   /// Create EDT
-  LLVM_DEBUG(dbgs() << " - Creating EDT\n");
+  LLVM_DEBUG(dbgs() << " - Inserting EDT Call\n");
+  SmallVector<Value *, 8> PrintArgs;
+  string PrintMsg = "Creating EDT #" + std::to_string(E.getID()) + "\n";
+  insertPrint(PrintMsg, {PrintArgs});
   EDTCodegen *ECG = getOrCreateEDTCodegen(E);
   Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
   Value *Args[] = {Builder.CreateBitCast(ECG->getFn(), EdtFunctionPtr),
-                   Builder.CreateLoad(artsGuid_t, ECG->getGuidAddress()),
-                   LoadedParamC, ParamV, Builder.CreateLoad(Int32, DepC)};
+                   ECG->getGuidAddress(), LoadedParamC, ParamV,
+                   Builder.CreateLoad(Int32, DepC)};
   ECG->setCB(Builder.CreateCall(F, Args));
 
   /// We can remove both the function and the call
@@ -547,7 +569,8 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
     for (auto Dep : enumerate(DataBlocks)) {
       EDTDataBlock *DB = Dep.value();
       LLVM_DEBUG(dbgs() << " - Signal: " << *DB->getValue()
-                        << " / Slot: " << DB->getSlot() << "\n");
+                        << " / Slot: " << DB->getSlot()
+                        << " / ToSlot: " << DB->getToSlot() << "\n");
       Value *DBValue = ECG->getDependency(DB->getSlot());
       if (DBValue) {
         if (Value *RewiredValue = getRewiredValue(DBValue))
@@ -564,8 +587,7 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
                                    ".slot." + std::to_string(ToEDTSlot));
       Builder.CreateStore(ConstantInt::get(Int32, ToEDTSlot), ToEDTSlotAlloca);
       /// Create Call arguments
-      Value *Args[] = {Builder.CreateLoad(artsGuid_t, ToEDTGuid),
-                       Builder.CreateLoad(Int32, ToEDTSlotAlloca),
+      Value *Args[] = {ToEDTGuid, Builder.CreateLoad(Int32, ToEDTSlotAlloca),
                        Builder.CreateLoad(Int64, DBValue)};
       Builder.CreateCall(F, Args);
     }
@@ -613,11 +635,9 @@ void ARTSCodegen::createInitPerWorkerFn() {
 
   /// then -> Create guid for main edt
   Builder.SetInsertPoint(ThenBB);
-  /// Printf nodeId and workerId in the LLVM IR
-  FunctionType *PrintfTy = FunctionType::get(Int32, Int8Ptr, true);
-  FunctionCallee Printf = M.getOrInsertFunction("printf", PrintfTy);
-  Value *FormatStr = Builder.CreateGlobalStringPtr("Creating Main EDT\n");
-  Builder.CreateCall(Printf, {FormatStr});
+  /// Debug info
+  SmallVector<Value *, 8> PrintArgs;
+  insertPrint("Creating Main EDT\n", PrintArgs);
 
   EDT *MainEDT = Cache->getGraph().getEntryNode()->getEDT();
   auto MainEDTName = MainEDT->getName();
@@ -634,8 +654,8 @@ void ARTSCodegen::createInitPerWorkerFn() {
       Builder.CreateAlloca(Int64, LoadedParamC, MainEDTName + "_paramv");
   Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
   Value *Args[] = {Builder.CreateBitCast(MainECG->getFn(), EdtFunctionPtr),
-                   Builder.CreateLoad(artsGuid_t, GuidAddress), LoadedParamC,
-                   ParamV, ConstantInt::get(Int32, 0)};
+                   GuidAddress, LoadedParamC, ParamV,
+                   ConstantInt::get(Int32, 0)};
   Builder.CreateCall(F, Args);
   Builder.CreateRetVoid();
 
@@ -685,6 +705,16 @@ void ARTSCodegen::insertARTSShutdownFn() {
 }
 
 /// ---------------------------- Utils ---------------------------- ///
+void ARTSCodegen::insertPrint(string FormatStr, SmallVector<Value *, 8> &Args) {
+  Constant *FormatStrVal = Builder.CreateGlobalStringPtr(FormatStr);
+  FunctionType *PrintfTy = FunctionType::get(Int32, Int8Ptr, true);
+  FunctionCallee Printf = M.getOrInsertFunction("printf", PrintfTy);
+  SmallVector<Value *, 8> ArgsV;
+  ArgsV.push_back(FormatStrVal);
+  ArgsV.append(Args.begin(), Args.end());
+  Builder.CreateCall(Printf, ArgsV);
+}
+
 void ARTSCodegen::setInsertionPointInBB(BasicBlock &InsertionBB) {
   Instruction *EntryBBTerm = InsertionBB.getTerminator();
   if (EntryBBTerm)
