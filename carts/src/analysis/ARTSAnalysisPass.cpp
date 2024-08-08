@@ -546,11 +546,6 @@ struct AAEDTDataBlockInfo
     if (DB->getDoneDB()) {
       DBStr += "     - DoneDB: EDT #" +
                std::to_string(DB->getDoneDB()->getContextEDT()->getID()) + "\n";
-    } else if (DB->getParentDoneDB()) {
-      DBStr += "     - DoneDB: EDT #" +
-               std::to_string(DB->getParentDoneDB()->getContextEDT()->getID()) +
-               "\n";
-      LLVM_DEBUG(dbgs() << *DB->getValue());
     }
 
     /// ChildDBs
@@ -933,8 +928,12 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
       /// parent EDT to the called EDT unless it is a DoneEDT (because all its
       /// input dependencies must be sent by the sibling SyncEDT)
       DB->setSlot(EDTInfo->insertDepSlot(CallArgItr));
-      if (!EDTInfo->isDoneEDT())
+      /// If it is not a DoneEDT, add dependency between the parent and the
+      /// called EDT
+      if (!EDTInfo->isDoneEDT()) {
         insertDataBlockEdge(EDTInfo->getParent(), EDTInfo, DB);
+        DB->setDoneDB(DB, true);
+      }
     }
   }
 
@@ -1043,7 +1042,7 @@ struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
     /// Set DoneDB
     EDTDataBlock *DoneDB =
         Cache->getOrCreateDataBlock(DependentSiblingValAndCtx[0]);
-    DB->setDoneDB(DoneDB);
+    DB->setDoneDB(DoneDB, true);
     DependentDoneDB.set(DoneDB);
     DependentDoneDB.indicateOptimisticFixpoint();
 
@@ -1138,11 +1137,13 @@ struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
     if (MustSignal)
       SignalEDT.set(ContextEDT->getDoneSync());
 
-    /// If EDT is synchronous, set ParentDB
+    /// If EDT is synchronous, set ParentDB and DoneDB
     if (!ContextEDT->isAsync()) {
+      auto *DoneDB = DB->getDoneDB();
       for (EDTDataBlock *SignaledDB : SignaledDBsToEDTDone) {
         assert(!SignaledDB->getParentDB() && "SignaledDB was set before!");
         SignaledDB->setParentDB(DB);
+        SignaledDB->setDoneDB(DoneDB);
       }
     }
 

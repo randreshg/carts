@@ -386,9 +386,6 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
         Value *OriginalVal = E.getDepArg(Index);
         LLVM_DEBUG(dbgs() << "   - DepV[" << Index << "]: " << *OriginalVal
                           << "\n");
-        if (DB->getParentDB())
-          LLVM_DEBUG(dbgs() << "     - Parent DB: "
-                            << *DB->getParentDB()->getValue() << "\n");
         /// If the DB slot was already filled, skip it
         if (ECG->hasDependency(Index)) {
           LLVM_DEBUG(dbgs() << "     - DepV[" << Index
@@ -401,18 +398,6 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
                              : ("depv." + OriginalVal->getName());
         Value *DepVElemPtr = Builder.CreateConstInBoundsGEP2_32(
             EdtDep, DepVArg, Index, 0, DepVName);
-        /// Cast the value to the original type
-        // Value *CastedVal =
-        //     Builder.CreateBitCast(DepVElemPtr, OriginalVal->getType());
-        // LoadInst *LoadedVal = Builder.CreateLoad(DB->getType(),
-        //                                          CastedVal, DepVName +
-        //                                          ".load");
-        /// Create an AllocaInst to store the value
-        // AllocaInst *OriginalValAlloca =
-        // Builder.CreateAlloca(DB->getType(), nullptr, DepVName + ".alloca");
-        /// Store the value in the AllocaInst
-        // Builder.CreateStore(DepVElemPtr, OriginalValAlloca);
-        // LLVM_DEBUG(dbgs() << "     - Casted Value: " << *LoadedVal << "\n");
         /// Add the value to the rewiring map
         RewiringMap[OriginalVal] = DepVElemPtr;
         insertRewiredValue(OriginalVal, DepVElemPtr);
@@ -561,6 +546,7 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
       continue;
 
     EDT *ToEDT = DataEdge->getTo()->getEDT();
+    // EDTCodegen *ToECG = getOrCreateEDTCodegen(*ToEDT);
     LLVM_DEBUG(dbgs() << " - DataEdge to EDT #" << ToEDT->getID() << "\n");
     Value *ToEDTGuid = ECG->getGuid(ToEDT);
     assert(ToEDTGuid && "ToEDTGuid is null");
@@ -568,19 +554,18 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
     auto &DataBlocks = DataEdge->getDataBlocks();
     for (auto Dep : enumerate(DataBlocks)) {
       EDTDataBlock *DB = Dep.value();
+      int32_t ToEDTSlot = DB->getToSlot();
       LLVM_DEBUG(dbgs() << " - Signal: " << *DB->getValue()
-                        << " / Slot: " << DB->getSlot()
-                        << " / ToSlot: " << DB->getToSlot() << "\n");
-      Value *DBValue = ECG->getDependency(DB->getSlot());
+                        << " / ToSlot: " << ToEDTSlot << "\n");
+      Value *DBValue = ECG->getDependency(ToEDTSlot);
       if (DBValue) {
         if (Value *RewiredValue = getRewiredValue(DBValue))
           DBValue = RewiredValue;
       } else
         DBValue = DB->getValue();
-
       LLVM_DEBUG(dbgs() << "    - " << *DBValue << "\n");
-      /// Load ToEDTSlot in an alloca integer
-      uint32_t ToEDTSlot = DB->getToSlot();
+
+    
       AllocaInst *ToEDTSlotAlloca =
           Builder.CreateAlloca(Int32, nullptr,
                                "edt." + std::to_string(ToEDT->getID()) +
