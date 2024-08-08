@@ -430,11 +430,11 @@ void EDTGraph::print(void) {
           LLVM_DEBUG(dbgs() << "      - DataBlocks:\n");
           for (EDTDataBlock *DB : DataBlocks) {
             /// Parent-Child Dependency
-            // if (DepEdge->hasCreationDep()) {
-            //   LLVM_DEBUG(dbgs() << "        - " << *DB << " / to slot "
-            //                     << DB->getSlot() << "\n");
-            //   continue;
-            // }
+            if (DepEdge->hasCreationDep()) {
+              LLVM_DEBUG(dbgs() << "        - " << *DB << " / to slot "
+                                << DB->getSlot() << "\n");
+              continue;
+            }
 
             /// Remote dependencies
             LLVM_DEBUG(dbgs()

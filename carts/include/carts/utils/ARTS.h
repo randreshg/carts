@@ -59,13 +59,13 @@ public:
   EDTDataBlock *getParentDB();
   EDTDataBlockSet &getChildrenDB();
   EDTDataBlock *getDoneDB();
-  // EDTDataBlock *getParentDoneDB();
+  EDTDataBlock *getParentDoneDB();
   int32_t getSlot();
   int32_t getToSlot();
 
   /// Setters
   void setParentDB(EDTDataBlock *ParentDB);
-  void setDoneDB(EDTDataBlock *DoneDB, bool Force = false);
+  void setDoneDB(EDTDataBlock *DoneDB);
   void setSlot(int32_t Slot);
 
   /// Helpers

@@ -382,7 +382,8 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
       auto DepVArg = EDTFn->arg_begin() + 3;
       for (auto Dep : enumerate(DataBlocks)) {
         EDTDataBlock *DB = Dep.value();
-        uint32_t Index = DB->getToSlot();
+        uint32_t Index =
+            DataEdge->hasCreationDep() ? DB->getSlot() : DB->getToSlot();
         Value *OriginalVal = E.getDepArg(Index);
         LLVM_DEBUG(dbgs() << "   - DepV[" << Index << "]: " << *OriginalVal
                           << "\n");
@@ -546,7 +547,6 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
       continue;
 
     EDT *ToEDT = DataEdge->getTo()->getEDT();
-    // EDTCodegen *ToECG = getOrCreateEDTCodegen(*ToEDT);
     LLVM_DEBUG(dbgs() << " - DataEdge to EDT #" << ToEDT->getID() << "\n");
     Value *ToEDTGuid = ECG->getGuid(ToEDT);
     assert(ToEDTGuid && "ToEDTGuid is null");
@@ -554,18 +554,39 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
     auto &DataBlocks = DataEdge->getDataBlocks();
     for (auto Dep : enumerate(DataBlocks)) {
       EDTDataBlock *DB = Dep.value();
-      int32_t ToEDTSlot = DB->getToSlot();
-      LLVM_DEBUG(dbgs() << " - Signal: " << *DB->getValue()
-                        << " / ToSlot: " << ToEDTSlot << "\n");
-      Value *DBValue = ECG->getDependency(ToEDTSlot);
-      if (DBValue) {
-        if (Value *RewiredValue = getRewiredValue(DBValue))
-          DBValue = RewiredValue;
-      } else
-        DBValue = DB->getValue();
-      LLVM_DEBUG(dbgs() << "    - " << *DBValue << "\n");
+      // Value *DBValue = nullptr;
+      int32_t ToEDTSlot =
+          DataEdge->hasCreationDep() ? DB->getSlot() : DB->getToSlot();
+      // if (DataEdge->hasCreationDep()) {
+      //   DBValue = E.getDepArg(DB->getSlot());
+      // } else {
+      //   DBValue = E.getDepArg(DB->getToSlot());
+      // }
+      Value *DBValue = DB->getValue();
+      LLVM_DEBUG(dbgs() << " - DBValue: " << *DBValue << "\n");
+      Value *DepVal = nullptr;
+      if (!DataEdge->hasCreationDep()) {
+        if(Value *DepVal = ECG->getDependency(DB->getSlot()))
+          DBValue = DepVal;
+      }
+      //   DepVal = ECG->getDependency(DB->getSlot());
 
-    
+      // if (DepVal) {
+      //   LLVM_DEBUG(dbgs() << " - DepVal: " << *DepVal << "\n");
+      // }
+
+      LLVM_DEBUG(dbgs() << " - Signal: " << *DBValue
+                        << " / ToSlot: " << ToEDTSlot << "\n");
+      /// The EDT that knows the dependency is the ToEDT when it has a creation
+      /// dependency, otherwise, it is the EDT
+      // Value *DBValue = DataEdge->hasCreationDep()
+      //                      ? ToECG->getDependency(ToEDTSlot)
+      //                      : ECG->getDependency(ToEDTSlot);
+
+      if (Value *RewiredValue = getRewiredValue(DBValue))
+        DBValue = RewiredValue;
+      LLVM_DEBUG(dbgs() << "    - RewiredValue" << *DBValue << "\n\n");
+
       AllocaInst *ToEDTSlotAlloca =
           Builder.CreateAlloca(Int32, nullptr,
                                "edt." + std::to_string(ToEDT->getID()) +

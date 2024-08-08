@@ -88,15 +88,15 @@ EDT *EDTDataBlock::getContextEDT() { return ContextEDT; }
 EDTDataBlock *EDTDataBlock::getParentDB() { return ParentDB; }
 EDTDataBlockSet &EDTDataBlock::getChildrenDB() { return ChildrenDB; }
 EDTDataBlock *EDTDataBlock::getDoneDB() { return DoneDB; };
-// EDTDataBlock *EDTDataBlock::getParentDoneDB() {
-//   if (ParentDB)
-//     return ParentDB->getDoneDB();
-//   return nullptr;
-// }
+EDTDataBlock *EDTDataBlock::getParentDoneDB() {
+  if (ParentDB)
+    return ParentDB->getDoneDB();
+  return nullptr;
+}
 int32_t EDTDataBlock::getSlot() { return Slot; }
 int32_t EDTDataBlock::getToSlot() {
-  assert(DoneDB && "DoneDB is null");
-  return (DoneDB->getSlot());
+  return getDoneDB() ? (getDoneDB()->getSlot())
+                     : (getParentDoneDB()->getSlot());
 }
 
 /// Setters
@@ -104,11 +104,7 @@ void EDTDataBlock::setParentDB(EDTDataBlock *ParentDB) {
   this->ParentDB = ParentDB;
 }
 void EDTDataBlock::setSlot(int32_t Slot) { this->Slot = Slot; }
-void EDTDataBlock::setDoneDB(EDTDataBlock *DoneDB, bool Force) {
-  if (DoneDB && !Force)
-    return;
-  this->DoneDB = DoneDB;
-}
+void EDTDataBlock::setDoneDB(EDTDataBlock *DoneDB) { this->DoneDB = DoneDB; }
 
 /// Helpers
 Type *EDTDataBlock::getType() {
