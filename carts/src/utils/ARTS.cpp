@@ -1,4 +1,5 @@
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/Casting.h"
@@ -106,6 +107,22 @@ void EDTDataBlock::setSlot(int32_t Slot) { this->Slot = Slot; }
 void EDTDataBlock::setDoneDB(EDTDataBlock *DoneDB) { this->DoneDB = DoneDB; }
 
 /// Helpers
+Type *EDTDataBlock::getType() {
+  if (Ty)
+    return Ty;
+  /// Get the type of the value
+
+  if (auto *Alloca = dyn_cast<AllocaInst>(V))
+    Ty = Alloca->getAllocatedType();
+  else if (auto *Load = dyn_cast<LoadInst>(V))
+    Ty = Load->getType();
+  /// If Ty is still null, return the type of the parent
+  if (!Ty && ParentDB)
+    Ty = ParentDB->getType();
+  assert(Ty && "Type is null");
+  return Ty;
+}
+
 bool EDTDataBlock::addChildDB(EDTDataBlock *ChildDB) {
   return ChildrenDB.insert(ChildDB);
 }
@@ -260,7 +277,6 @@ void EDT::setDoneSync(EDT *DoneSync) {
   DoneSync->setIsDoneEDT(true);
   this->DoneSync = DoneSync;
 }
-
 void EDT::setNode(uint32_t Node) { this->Node = Node; }
 
 EDTCallBase *EDT::getCall() { return Call; }

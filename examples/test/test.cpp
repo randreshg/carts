@@ -52,6 +52,7 @@ int main() {
   }
 
   /// EDT 2
+  shared_number++;
   printf("EDT 2: The final number is %d - %d.\n", shared_number, random_number);
   return 0;
 }

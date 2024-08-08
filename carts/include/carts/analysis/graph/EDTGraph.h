@@ -27,6 +27,7 @@ public:
   EDT *getEDT() { return &E; }
 
 private:
+  SetVector <EDTGraphEdge *> IncomingEdges;
   EDT &E;
 };
 

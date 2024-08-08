@@ -6,7 +6,7 @@ opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/li
 # -debug-only=omp-transform,arts,carts,arts-ir-builder,arts-utils\
 llvm-dis test_arts_ir.bc
 opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so \
-		-debug-only=arts-analysis,arts,carts,arts-ir-builder,edt-graph,carts-metadata,arts-codegen\
+		-debug-only=arts-analysis,arts,carts,arts-ir-builder,edt-graph,carts-metadata,arts-codegen,arts-utils\
 		-passes="arts-analysis" test_arts_ir.bc -o test_arts_analysis.bc
 
 -------------------------------------------------
@@ -306,6 +306,29 @@ EDTDataBlock ->
 - - - - - - - - - - - - - - - - - - - - - - - -
 [edt-graph] Printing the EDT Graph
 - - - - - - - - - - - - - - - - - - 
+- EDT #1 - "edt.1.parallel"
+  - Type: parallel
+  - Data Environment:
+    - Number of ParamV = 0
+    - Number of DepV = 2
+      - ptr %0
+      - ptr %1
+  - Incoming Edges:
+    - [data/ creation] "EDT #0"
+  - Outgoing Edges:
+    - [data] "EDT #2"
+      - Parameters:
+      - Guids:
+      - DataBlocks:
+        -   %random_number = alloca i32, align 4 / ReadWrite / from slot 0 to 1
+    - [data/ creation] "EDT #3"
+      - Parameters:
+        -   %2 = load i32, ptr %0, align 4, !tbaa !8
+      - Guids:
+        - EDT #2
+      - DataBlocks:
+        - ptr %1 / ReadWrite / to slot 0
+- - - - - - - - - - - - - - - - - - 
 - EDT #3 - "edt.3.task"
   - Type: task
   - Data Environment:
@@ -322,46 +345,6 @@ EDTDataBlock ->
       - DataBlocks:
         - ptr %1 / ReadWrite / from slot 0 to 0
 - - - - - - - - - - - - - - - - - - 
-- EDT #0 - "edt.0.main"
-  - Type: main
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 0
-  - Incoming Edges:
-    - The EDT has no incoming edges
-  - Outgoing Edges:
-    - [data/ creation] "EDT #1"
-      - Parameters:
-      - Guids:
-        - EDT #2
-      - DataBlocks:
-        -   %random_number = alloca i32, align 4 / ReadWrite / to slot 0
-        -   %shared_number = alloca i32, align 4 / ReadWrite / to slot 1
-    - [control/ creation] "EDT #2"
-- - - - - - - - - - - - - - - - - - 
-- EDT #1 - "edt.1.parallel"
-  - Type: parallel
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 2
-      - ptr %0
-      - ptr %1
-  - Incoming Edges:
-    - [data/ creation] "EDT #0"
-  - Outgoing Edges:
-    - [data/ creation] "EDT #3"
-      - Parameters:
-        -   %2 = load i32, ptr %0, align 4, !tbaa !8
-      - Guids:
-        - EDT #2
-      - DataBlocks:
-        - ptr %1 / ReadWrite / to slot 0
-    - [data] "EDT #2"
-      - Parameters:
-      - Guids:
-      - DataBlocks:
-        -   %random_number = alloca i32, align 4 / ReadWrite / from slot 0 to 1
-- - - - - - - - - - - - - - - - - - 
 - EDT #2 - "edt.2.task"
   - Type: task
   - Data Environment:
@@ -370,27 +353,44 @@ EDTDataBlock ->
       - ptr %shared_number
       - ptr %random_number
   - Incoming Edges:
-    - [data] "EDT #3"
     - [control/ creation] "EDT #0"
+    - [data] "EDT #3"
     - [data] "EDT #1"
   - Outgoing Edges:
     - The EDT has no outgoing edges
+- - - - - - - - - - - - - - - - - - 
+- EDT #0 - "edt.0.main"
+  - Type: main
+  - Data Environment:
+    - Number of ParamV = 0
+    - Number of DepV = 0
+  - Incoming Edges:
+    - The EDT has no incoming edges
+  - Outgoing Edges:
+    - [control/ creation] "EDT #2"
+    - [data/ creation] "EDT #1"
+      - Parameters:
+      - Guids:
+        - EDT #2
+      - DataBlocks:
+        -   %random_number = alloca i32, align 4 / ReadWrite / to slot 0
+        -   %shared_number = alloca i32, align 4 / ReadWrite / to slot 1
 
 - - - - - - - - - - - - - - - - - - - - - - - -
 
+[arts-codegen] Creating codegen for EDT #1
+[arts-codegen] Creating function for EDT #1
+[arts-codegen] Reserving GUID for EDT #1
+[arts-codegen] Creating codegen for EDT #0
+[arts-codegen] Creating function for EDT #0
 [arts-codegen] Creating codegen for EDT #3
 [arts-codegen] Creating function for EDT #3
 [arts-codegen] Reserving GUID for EDT #3
-[arts-codegen] Creating codegen for EDT #1
-[arts-codegen] Creating function for EDT #1
-[arts-codegen] Creating codegen for EDT #0
-[arts-codegen] Creating function for EDT #0
-[arts-codegen] Reserving GUID for EDT #0
-     EDT #0 doesn't have a parent EDT
-[arts-codegen] Reserving GUID for EDT #1
 [arts-codegen] Creating codegen for EDT #2
 [arts-codegen] Creating function for EDT #2
 [arts-codegen] Reserving GUID for EDT #2
+[arts-codegen] Reserving GUID for EDT #0
+     EDT #0 doesn't have a parent EDT
 
 All EDT Guids have been reserved
 
@@ -406,6 +406,9 @@ target triple = "x86_64-unknown-linux-gnu"
 @0 = private unnamed_addr constant [23 x i8] c";unknown;unknown;0;0;;\00", align 1
 @1 = private unnamed_addr constant %struct.ident_t { i32 0, i32 2, i32 0, i32 22, ptr @0 }, align 8
 @.str.2 = private unnamed_addr constant [37 x i8] c"EDT 2: The final number is %d - %d.\0A\00", align 1
+@2 = private unnamed_addr constant [29 x i8] c"Guid for edt.1.parallel: %u\0A\00", align 1
+@3 = private unnamed_addr constant [25 x i8] c"Guid for edt.3.task: %u\0A\00", align 1
+@4 = private unnamed_addr constant [25 x i8] c"Guid for edt.2.task: %u\0A\00", align 1
 
 ; Function Attrs: mustprogress norecurse nounwind uwtable
 declare !carts !6 dso_local noundef i32 @main() local_unnamed_addr #0
@@ -449,51 +452,38 @@ declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) #2
 declare void @llvm.experimental.noalias.scope.decl(metadata) #6
 
 ; Function Attrs: mustprogress norecurse nounwind uwtable
-declare !carts !14 internal void @carts.edt.2(ptr nocapture readonly, ptr nocapture readonly) #0
-
-define internal void @edt.3.task(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
-entry:
-  br label %edt.body
-
-edt.body:                                         ; preds = %entry
-  tail call void @llvm.experimental.noalias.scope.decl(metadata !15)
-  %0 = load i32, ptr %0, align 4, !tbaa !18, !noalias !15
-  %inc.i = add nsw i32 %0, 1
-  store i32 %inc.i, ptr %0, align 4, !tbaa !18, !noalias !15
-  %inc1.i = add nsw i32 %1, 1
-  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %inc.i, i32 noundef %inc1.i) #5, !noalias !15
-  br label %exit
-
-exit:                                             ; preds = %edt.body
-  ret void
-}
+declare !carts !14 internal void @carts.edt.2(ptr nocapture, ptr nocapture readonly) #0
 
 define internal void @edt.1.parallel(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
 entry:
   %0 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
   %edt.3.task_guid.addr = alloca i64, align 8
   store i64 %0, ptr %edt.3.task_guid.addr, align 8
+  %1 = load i64, ptr %edt.3.task_guid.addr, align 8
+  %2 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([25 x i8], ptr @3, i32 0, i32 0), i64 %1)
   br label %edt.body
 
 edt.body:                                         ; preds = %entry
-  %1 = load i32, ptr %0, align 4, !tbaa !18
-  call void @carts.edt.1(ptr nocapture %1, i32 %1) #7
+  %3 = load i32, ptr %0, align 4, !tbaa !15
+  call void @carts.edt.1(ptr nocapture %1, i32 %3) #7
   br label %exit
 
 exit:                                             ; preds = %edt.body
   ret void
 }
 
-declare i64 @artsReserveGuidRoute(i32, i32)
-
 define internal void @edt.0.main(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
 entry:
   %0 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
   %edt.1.parallel_guid.addr = alloca i64, align 8
   store i64 %0, ptr %edt.1.parallel_guid.addr, align 8
-  %1 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
+  %1 = load i64, ptr %edt.1.parallel_guid.addr, align 8
+  %2 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([29 x i8], ptr @2, i32 0, i32 0), i64 %1)
+  %3 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
   %edt.2.task_guid.addr = alloca i64, align 8
-  store i64 %1, ptr %edt.2.task_guid.addr, align 8
+  store i64 %3, ptr %edt.2.task_guid.addr, align 8
+  %4 = load i64, ptr %edt.2.task_guid.addr, align 8
+  %5 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([25 x i8], ptr @4, i32 0, i32 0), i64 %4)
   br label %edt.body
 
 edt.body:                                         ; preds = %entry
@@ -505,11 +495,11 @@ edt.body:                                         ; preds = %entry
   %call1 = tail call i32 @rand() #5
   %rem = srem i32 %call1, 100
   %add = add nsw i32 %rem, 1
-  store i32 %add, ptr %shared_number, align 4, !tbaa !18
+  store i32 %add, ptr %shared_number, align 4, !tbaa !15
   %call2 = tail call i32 @rand() #5
   %rem3 = srem i32 %call2, 10
   %add4 = add nsw i32 %rem3, 1
-  store i32 %add4, ptr %random_number, align 4, !tbaa !18
+  store i32 %add4, ptr %random_number, align 4, !tbaa !15
   %call5 = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %add, i32 noundef %add4) #5
   call void @carts.edt(ptr nocapture %random_number, ptr nocapture %shared_number) #8
   br label %codeRepl
@@ -525,6 +515,25 @@ exit:                                             ; preds = %entry.split.ret
   ret void
 }
 
+declare i64 @artsReserveGuidRoute(i32, i32)
+
+define internal void @edt.3.task(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
+entry:
+  br label %edt.body
+
+edt.body:                                         ; preds = %entry
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !19)
+  %0 = load i32, ptr %0, align 4, !tbaa !15, !noalias !19
+  %inc.i = add nsw i32 %0, 1
+  store i32 %inc.i, ptr %0, align 4, !tbaa !15, !noalias !19
+  %inc1.i = add nsw i32 %1, 1
+  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %inc.i, i32 noundef %inc1.i) #5, !noalias !19
+  br label %exit
+
+exit:                                             ; preds = %edt.body
+  ret void
+}
+
 define internal void @edt.2.task(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
 entry:
   br label %edt.body
@@ -533,9 +542,11 @@ edt.body:                                         ; preds = %entry
   br label %entry.split
 
 entry.split:                                      ; preds = %edt.body
-  %0 = load i32, ptr %shared_number, align 4, !tbaa !18
-  %1 = load i32, ptr %random_number, align 4, !tbaa !18
-  %call6 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %0, i32 noundef %1) #5
+  %0 = load i32, ptr %shared_number, align 4, !tbaa !15
+  %inc = add nsw i32 %0, 1
+  store i32 %inc, ptr %shared_number, align 4, !tbaa !15
+  %1 = load i32, ptr %random_number, align 4, !tbaa !15
+  %call6 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %inc, i32 noundef %1) #5
   br label %entry.split.ret.exitStub
 
 entry.split.ret.exitStub:                         ; preds = %entry.split
@@ -573,61 +584,119 @@ attributes #8 = { nounwind memory(argmem: readwrite) }
 !12 = !{!13}
 !13 = !{i64 2, i64 -1, i64 -1, i1 true}
 !14 = !{!"task", !9}
-!15 = !{!16}
-!16 = distinct !{!16, !17, !".omp_outlined.: %__context"}
-!17 = distinct !{!17, !".omp_outlined."}
-!18 = !{!19, !19, i64 0}
-!19 = !{!"int", !20, i64 0}
-!20 = !{!"omnipotent char", !21, i64 0}
-!21 = !{!"Simple C++ TBAA"}
+!15 = !{!16, !16, i64 0}
+!16 = !{!"int", !17, i64 0}
+!17 = !{!"omnipotent char", !18, i64 0}
+!18 = !{!"Simple C++ TBAA"}
+!19 = !{!20}
+!20 = distinct !{!20, !21, !".omp_outlined.: %__context"}
+!21 = distinct !{!21, !".omp_outlined."}
 
 
 Generating Code for EDT #0
-[arts-codegen] Inserting Call for  for EDT #0
+[arts-codegen] Inserting Entry for EDT #0
  - Inserting ParamV
      EDT #0 doesn't have a parent EDT
  - Inserting DepV
      EDT #0 doesn't have input edges
+Rewiring new function arguments:
+ - New Function: define internal void @edt.0.main(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
+entry:
+  %0 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
+  %edt.1.parallel_guid.addr = alloca i64, align 8
+  store i64 %0, ptr %edt.1.parallel_guid.addr, align 8
+  %1 = load i64, ptr %edt.1.parallel_guid.addr, align 8
+  %2 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([29 x i8], ptr @2, i32 0, i32 0), i64 %1)
+  %3 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
+  %edt.2.task_guid.addr = alloca i64, align 8
+  store i64 %3, ptr %edt.2.task_guid.addr, align 8
+  %4 = load i64, ptr %edt.2.task_guid.addr, align 8
+  %5 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([25 x i8], ptr @4, i32 0, i32 0), i64 %4)
+  br label %edt.body
+
+edt.body:                                         ; preds = %entry
+  %shared_number = alloca i32, align 4
+  %random_number = alloca i32, align 4
+  %call = tail call i64 @time(ptr noundef null) #5
+  %conv = trunc i64 %call to i32
+  tail call void @srand(i32 noundef %conv) #5
+  %call1 = tail call i32 @rand() #5
+  %rem = srem i32 %call1, 100
+  %add = add nsw i32 %rem, 1
+  store i32 %add, ptr %shared_number, align 4, !tbaa !15
+  %call2 = tail call i32 @rand() #5
+  %rem3 = srem i32 %call2, 10
+  %add4 = add nsw i32 %rem3, 1
+  store i32 %add4, ptr %random_number, align 4, !tbaa !15
+  %call5 = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %add, i32 noundef %add4) #5
+  call void @carts.edt(ptr nocapture %random_number, ptr nocapture %shared_number) #7
+  br label %codeRepl
+
+codeRepl:                                         ; preds = %edt.body
+  call void @carts.edt.2(ptr nocapture %shared_number, ptr nocapture %random_number) #5
+  br label %entry.split.ret
+
+entry.split.ret:                                  ; preds = %codeRepl
+  br label %exit
+
+exit:                                             ; preds = %entry.split.ret
+  ret void
+}
+
 [arts-codegen] Inserting Call for EDT #0
      EDT #0 doesn't have a parent EDT
 [arts-codegen] Inserting Signals for EDT #0
  - DataEdge to EDT #1
- - Signal:   %random_number = alloca i32, align 4 / Slot: 0
+ - Signal:   %random_number = alloca i32, align 4 / Slot: 0 / ToSlot: 1
     -   %random_number = alloca i32, align 4
- - Signal:   %shared_number = alloca i32, align 4 / Slot: 1
+ - Signal:   %shared_number = alloca i32, align 4 / Slot: 1 / ToSlot: 0
     -   %shared_number = alloca i32, align 4
 
-Generating Code for EDT #2
-[arts-codegen] Inserting Call for  for EDT #2
- - Inserting ParamV
-     EDT #2 doesn't have input data edges from the parent
- - Inserting DepV
-   - DepV[0]: ptr %shared_number
-   - DepV[1]: ptr %random_number
-[arts-codegen] Inserting Call for EDT #2
- - Creating EDT
-[arts-codegen] Inserting Signals for EDT #2
-
 Generating Code for EDT #1
-[arts-codegen] Inserting Call for  for EDT #1
+[arts-codegen] Inserting Entry for EDT #1
  - Inserting ParamV
    - ParamVGuid[0]: EDT2
  - Inserting DepV
    - DepV[1]: ptr %1
    - DepV[0]: ptr %0
+Rewiring new function arguments:
+  - Rewiring: ptr %0 ->   %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
+  - Rewiring: ptr %1 ->   %depv.1 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 1, i32 0
+ - New Function: define internal void @edt.1.parallel(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
+entry:
+  %0 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
+  %edt.3.task_guid.addr = alloca i64, align 8
+  store i64 %0, ptr %edt.3.task_guid.addr, align 8
+  %1 = load i64, ptr %edt.3.task_guid.addr, align 8
+  %2 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([25 x i8], ptr @3, i32 0, i32 0), i64 %1)
+  %paramv.guid.edt_2 = getelementptr inbounds i64, ptr %paramv, i64 0
+  %3 = load i64, ptr %paramv.guid.edt_2, align 8
+  %depv.1 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 1, i32 0
+  %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
+  br label %edt.body
+
+edt.body:                                         ; preds = %entry
+  %4 = load i32, ptr %depv.0, align 4, !tbaa !15
+  call void @carts.edt.1(ptr nocapture %depv.1, i32 %4) #7
+  br label %exit
+
+exit:                                             ; preds = %edt.body
+  ret void
+}
+
 [arts-codegen] Inserting Call for EDT #1
  - ParamVGuid[0]: EDT2
- - Creating EDT
+ - Inserting EDT Call
 [arts-codegen] Inserting Signals for EDT #1
- - DataEdge to EDT #3
- - Signal: ptr %1 / Slot: 0
-    -   %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
  - DataEdge to EDT #2
- - Signal:   %random_number = alloca i32, align 4 / Slot: 0
-    -   %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
+ - Signal:   %random_number = alloca i32, align 4 / Slot: 0 / ToSlot: 1
+    -   %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
+ - DataEdge to EDT #3
+ - Signal: ptr %1 / Slot: 0 / ToSlot: 0
+    -   %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
 
 Generating Code for EDT #3
-[arts-codegen] Inserting Call for  for EDT #3
+[arts-codegen] Inserting Entry for EDT #3
  - Inserting ParamV
    - ParamV[0]: i32 %1
      - Value is an Integer
@@ -635,15 +704,87 @@ Generating Code for EDT #3
    - ParamVGuid[1]: EDT2
  - Inserting DepV
    - DepV[0]: ptr %0
+     - Parent DB:   %shared_number = alloca i32, align 4
+Rewiring new function arguments:
+  - Rewiring: ptr %0 ->   %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
+  - Rewiring: i32 %1 ->   %1 = trunc i64 %0 to i32
+ - New Function: define internal void @edt.3.task(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
+entry:
+  %paramv.0 = getelementptr inbounds i64, ptr %paramv, i64 0
+  %0 = load i64, ptr %paramv.0, align 8
+  %1 = trunc i64 %0 to i32
+  %paramv.guid.edt_2 = getelementptr inbounds i64, ptr %paramv, i64 1
+  %2 = load i64, ptr %paramv.guid.edt_2, align 8
+  %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
+  br label %edt.body
+
+edt.body:                                         ; preds = %entry
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !19)
+  %3 = load i32, ptr %depv.0, align 4, !tbaa !15, !noalias !19
+  %inc.i = add nsw i32 %3, 1
+  store i32 %inc.i, ptr %depv.0, align 4, !tbaa !15, !noalias !19
+  %inc1.i = add nsw i32 %1, 1
+  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %inc.i, i32 noundef %inc1.i) #5, !noalias !19
+  br label %exit
+
+exit:                                             ; preds = %edt.body
+  ret void
+}
+
 [arts-codegen] Inserting Call for EDT #3
- - ParamV[0]:   %1 = load i32, ptr %depv.0, align 4, !tbaa !6
+ - ParamV[0]:   %4 = load i32, ptr %depv.0, align 4, !tbaa !6
  - ParamVGuid[0]: EDT2
- - Creating EDT
+ - Inserting EDT Call
 [arts-codegen] Inserting Signals for EDT #3
  - DataEdge to EDT #2
- - Signal: ptr %1 / Slot: 0
-    -   %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
+ - Signal: ptr %1 / Slot: 0 / ToSlot: 0
+    -   %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
+
+Generating Code for EDT #2
+[arts-codegen] Inserting Entry for EDT #2
+ - Inserting ParamV
+     EDT #2 doesn't have input data edges from the parent
+ - Inserting DepV
+   - DepV[0]: ptr %shared_number
+     - Parent DB:   %shared_number = alloca i32, align 4
+   - DepV[1]: ptr %random_number
+Rewiring new function arguments:
+  - Rewiring: ptr %random_number ->   %depv.random_number = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 1, i32 0
+  - Rewiring: ptr %shared_number ->   %depv.shared_number = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
+ - New Function: define internal void @edt.2.task(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
+entry:
+  %depv.shared_number = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
+  %depv.random_number = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 1, i32 0
+  br label %edt.body
+
+edt.body:                                         ; preds = %entry
+  br label %entry.split
+
+entry.split:                                      ; preds = %edt.body
+  %0 = load i32, ptr %depv.shared_number, align 4, !tbaa !15
+  %inc = add nsw i32 %0, 1
+  store i32 %inc, ptr %depv.shared_number, align 4, !tbaa !15
+  %1 = load i32, ptr %depv.random_number, align 4, !tbaa !15
+  %call6 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %inc, i32 noundef %1) #5
+  br label %entry.split.ret.exitStub
+
+entry.split.ret.exitStub:                         ; preds = %entry.split
+  br label %exit
+
+exit:                                             ; preds = %entry.split.ret.exitStub
+  ret void
+}
+
+[arts-codegen] Inserting Call for EDT #2
+ - Inserting EDT Call
+[arts-codegen] Inserting Signals for EDT #2
 [arts-codegen] Inserting Init Functions
+[arts-utils]   - Replacing uses of: ; Function Attrs: mustprogress norecurse nounwind uwtable
+declare !carts !6 dso_local noundef i32 @10() local_unnamed_addr #0
+
+[arts-utils]    - Removing function: ; Function Attrs: mustprogress norecurse nounwind uwtable
+declare !carts !6 dso_local noundef i32 @10() local_unnamed_addr #0
+
 [arts-codegen] Inserting ARTS Shutdown Function
 
 ; ModuleID = 'test_arts_ir.bc'
@@ -659,7 +800,14 @@ target triple = "x86_64-unknown-linux-gnu"
 @0 = private unnamed_addr constant [23 x i8] c";unknown;unknown;0;0;;\00", align 1
 @1 = private unnamed_addr constant %struct.ident_t { i32 0, i32 2, i32 0, i32 22, ptr @0 }, align 8
 @.str.2 = private unnamed_addr constant [37 x i8] c"EDT 2: The final number is %d - %d.\0A\00", align 1
-@2 = private unnamed_addr constant [19 x i8] c"Creating Main EDT\0A\00", align 1
+@2 = private unnamed_addr constant [29 x i8] c"Guid for edt.1.parallel: %u\0A\00", align 1
+@3 = private unnamed_addr constant [25 x i8] c"Guid for edt.3.task: %u\0A\00", align 1
+@4 = private unnamed_addr constant [25 x i8] c"Guid for edt.2.task: %u\0A\00", align 1
+@5 = private unnamed_addr constant [17 x i8] c"Creating EDT #1\0A\00", align 1
+@6 = private unnamed_addr constant [17 x i8] c"Creating EDT #3\0A\00", align 1
+@7 = private unnamed_addr constant [17 x i8] c"Creating EDT #2\0A\00", align 1
+@8 = private unnamed_addr constant [19 x i8] c"Creating Main EDT\0A\00", align 1
+@9 = private unnamed_addr constant [25 x i8] c"Guid for edt.0.main: %u\0A\00", align 1
 
 ; Function Attrs: nounwind
 declare void @srand(i32 noundef) local_unnamed_addr #0
@@ -700,91 +848,66 @@ declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) #1
 declare void @llvm.experimental.noalias.scope.decl(metadata) #5
 
 ; Function Attrs: mustprogress norecurse nounwind uwtable
-declare !carts !12 internal void @carts.edt.2(ptr nocapture readonly, ptr nocapture readonly) #6
-
-define internal void @edt.3.task(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
-entry:
-  %paramv.0 = getelementptr inbounds i64, ptr %paramv, i64 0
-  %0 = load i64, ptr %paramv.0, align 8
-  %1 = trunc i64 %0 to i32
-  %paramv.guid.edt_2 = getelementptr inbounds i64, ptr %paramv, i64 1
-  %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
-  br label %edt.body
-
-edt.body:                                         ; preds = %entry
-  tail call void @llvm.experimental.noalias.scope.decl(metadata !13)
-  %2 = load i32, ptr %depv.0, align 4, !tbaa !16, !noalias !13
-  %inc.i = add nsw i32 %2, 1
-  store i32 %inc.i, ptr %depv.0, align 4, !tbaa !16, !noalias !13
-  %inc1.i = add nsw i32 %1, 1
-  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %inc.i, i32 noundef %inc1.i) #4, !noalias !13
-  br label %exit
-
-exit:                                             ; preds = %edt.body
-  %edt.2.slot.0 = alloca i32, align 4
-  store i32 0, ptr %edt.2.slot.0, align 4
-  %3 = load i64, ptr %paramv.guid.edt_2, align 8
-  %4 = load i32, ptr %edt.2.slot.0, align 4
-  %5 = load i64, ptr %depv.0, align 8
-  call void @artsSignalEdtValue(i64 %3, i32 %4, i64 %5)
-  ret void
-}
+declare !carts !12 internal void @carts.edt.2(ptr nocapture, ptr nocapture readonly) #6
 
 define internal void @edt.1.parallel(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
 entry:
   %0 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
   %edt.3.task_guid.addr = alloca i64, align 8
   store i64 %0, ptr %edt.3.task_guid.addr, align 8
+  %1 = load i64, ptr %edt.3.task_guid.addr, align 8
+  %2 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([25 x i8], ptr @3, i32 0, i32 0), i64 %1)
   %paramv.guid.edt_2 = getelementptr inbounds i64, ptr %paramv, i64 0
-  %depv.1 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 1, i32 2
-  %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
+  %3 = load i64, ptr %paramv.guid.edt_2, align 8
+  %depv.1 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 1, i32 0
+  %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
   br label %edt.body
 
 edt.body:                                         ; preds = %entry
-  %1 = load i32, ptr %depv.0, align 4, !tbaa !16
+  %4 = load i32, ptr %depv.0, align 4, !tbaa !13
   %edt.3.task_paramc = alloca i32, align 4
   store i32 2, ptr %edt.3.task_paramc, align 4
-  %2 = load i32, ptr %edt.3.task_paramc, align 4
-  %edt.3.task_paramv = alloca i64, i32 %2, align 8
+  %5 = load i32, ptr %edt.3.task_paramc, align 4
+  %edt.3.task_paramv = alloca i64, i32 %5, align 8
   %edt.3.task_paramv.0 = getelementptr inbounds i64, ptr %edt.3.task_paramv, i64 0
-  %3 = sext i32 %1 to i64
-  store i64 %3, ptr %edt.3.task_paramv.0, align 8
+  %6 = sext i32 %4 to i64
+  store i64 %6, ptr %edt.3.task_paramv.0, align 8
   %edt.3.task_paramv_guid.edt_2 = getelementptr inbounds i64, ptr %edt.3.task_paramv, i64 1
-  store ptr %paramv.guid.edt_2, ptr %edt.3.task_paramv_guid.edt_2, align 8
-  %4 = alloca i32, align 4
-  store i32 1, ptr %4, align 4
-  %5 = load i64, ptr %edt.3.task_guid.addr, align 8
-  %6 = load i32, ptr %4, align 4
-  %7 = call i64 @artsEdtCreateWithGuid(ptr @edt.3.task, i64 %5, i32 %2, ptr %edt.3.task_paramv, i32 %6)
-  call void @carts.edt.1(ptr nocapture %depv.1, i32 %1) #7
+  store i64 %3, ptr %edt.3.task_paramv_guid.edt_2, align 8
+  %7 = alloca i32, align 4
+  store i32 1, ptr %7, align 4
+  %8 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([17 x i8], ptr @6, i32 0, i32 0))
+  %9 = load i32, ptr %7, align 4
+  %10 = call i64 @artsEdtCreateWithGuid(ptr @edt.3.task, i64 %1, i32 %5, ptr %edt.3.task_paramv, i32 %9)
+  call void @carts.edt.1(ptr nocapture %depv.1, i32 %4) #7
   br label %exit
 
 exit:                                             ; preds = %edt.body
-  %edt.3.slot.0 = alloca i32, align 4
-  store i32 0, ptr %edt.3.slot.0, align 4
-  %8 = load i64, ptr %edt.3.task_guid.addr, align 8
-  %9 = load i32, ptr %edt.3.slot.0, align 4
-  %10 = load i64, ptr %depv.0, align 8
-  call void @artsSignalEdtValue(i64 %8, i32 %9, i64 %10)
   %edt.2.slot.1 = alloca i32, align 4
   store i32 1, ptr %edt.2.slot.1, align 4
-  %11 = load i64, ptr %paramv.guid.edt_2, align 8
-  %12 = load i32, ptr %edt.2.slot.1, align 4
-  %13 = load i64, ptr %depv.0, align 8
-  call void @artsSignalEdtValue(i64 %11, i32 %12, i64 %13)
+  %11 = load i32, ptr %edt.2.slot.1, align 4
+  %12 = load i64, ptr %depv.0, align 8
+  call void @artsSignalEdtValue(i64 %3, i32 %11, i64 %12)
+  %edt.3.slot.0 = alloca i32, align 4
+  store i32 0, ptr %edt.3.slot.0, align 4
+  %13 = load i32, ptr %edt.3.slot.0, align 4
+  %14 = load i64, ptr %depv.0, align 8
+  call void @artsSignalEdtValue(i64 %1, i32 %13, i64 %14)
   ret void
 }
-
-declare i64 @artsReserveGuidRoute(i32, i32)
 
 define internal void @edt.0.main(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
 entry:
   %0 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
   %edt.1.parallel_guid.addr = alloca i64, align 8
   store i64 %0, ptr %edt.1.parallel_guid.addr, align 8
-  %1 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
+  %1 = load i64, ptr %edt.1.parallel_guid.addr, align 8
+  %2 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([29 x i8], ptr @2, i32 0, i32 0), i64 %1)
+  %3 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
   %edt.2.task_guid.addr = alloca i64, align 8
-  store i64 %1, ptr %edt.2.task_guid.addr, align 8
+  store i64 %3, ptr %edt.2.task_guid.addr, align 8
+  %4 = load i64, ptr %edt.2.task_guid.addr, align 8
+  %5 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([25 x i8], ptr @4, i32 0, i32 0), i64 %4)
   br label %edt.body
 
 edt.body:                                         ; preds = %entry
@@ -796,36 +919,36 @@ edt.body:                                         ; preds = %entry
   %call1 = tail call i32 @rand() #4
   %rem = srem i32 %call1, 100
   %add = add nsw i32 %rem, 1
-  store i32 %add, ptr %shared_number, align 4, !tbaa !16
+  store i32 %add, ptr %shared_number, align 4, !tbaa !13
   %call2 = tail call i32 @rand() #4
   %rem3 = srem i32 %call2, 10
   %add4 = add nsw i32 %rem3, 1
-  store i32 %add4, ptr %random_number, align 4, !tbaa !16
+  store i32 %add4, ptr %random_number, align 4, !tbaa !13
   %call5 = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %add, i32 noundef %add4) #4
   %edt.1.parallel_paramc = alloca i32, align 4
   store i32 1, ptr %edt.1.parallel_paramc, align 4
-  %2 = load i32, ptr %edt.1.parallel_paramc, align 4
-  %edt.1.parallel_paramv = alloca i64, i32 %2, align 8
+  %6 = load i32, ptr %edt.1.parallel_paramc, align 4
+  %edt.1.parallel_paramv = alloca i64, i32 %6, align 8
   %edt.1.parallel_paramv_guid.edt_2 = getelementptr inbounds i64, ptr %edt.1.parallel_paramv, i64 0
-  store ptr %edt.2.task_guid.addr, ptr %edt.1.parallel_paramv_guid.edt_2, align 8
-  %3 = alloca i32, align 4
-  store i32 2, ptr %3, align 4
-  %4 = load i64, ptr %edt.1.parallel_guid.addr, align 8
-  %5 = load i32, ptr %3, align 4
-  %6 = call i64 @artsEdtCreateWithGuid(ptr @edt.1.parallel, i64 %4, i32 %2, ptr %edt.1.parallel_paramv, i32 %5)
+  store i64 %4, ptr %edt.1.parallel_paramv_guid.edt_2, align 8
+  %7 = alloca i32, align 4
+  store i32 2, ptr %7, align 4
+  %8 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([17 x i8], ptr @5, i32 0, i32 0))
+  %9 = load i32, ptr %7, align 4
+  %10 = call i64 @artsEdtCreateWithGuid(ptr @edt.1.parallel, i64 %1, i32 %6, ptr %edt.1.parallel_paramv, i32 %9)
   call void @carts.edt(ptr nocapture %random_number, ptr nocapture %shared_number) #8
   br label %codeRepl
 
 codeRepl:                                         ; preds = %edt.body
   %edt.2.task_paramc = alloca i32, align 4
   store i32 0, ptr %edt.2.task_paramc, align 4
-  %7 = load i32, ptr %edt.2.task_paramc, align 4
-  %edt.2.task_paramv = alloca i64, i32 %7, align 8
-  %8 = alloca i32, align 4
-  store i32 2, ptr %8, align 4
-  %9 = load i64, ptr %edt.2.task_guid.addr, align 8
-  %10 = load i32, ptr %8, align 4
-  %11 = call i64 @artsEdtCreateWithGuid(ptr @edt.2.task, i64 %9, i32 %7, ptr %edt.2.task_paramv, i32 %10)
+  %11 = load i32, ptr %edt.2.task_paramc, align 4
+  %edt.2.task_paramv = alloca i64, i32 %11, align 8
+  %12 = alloca i32, align 4
+  store i32 2, ptr %12, align 4
+  %13 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([17 x i8], ptr @7, i32 0, i32 0))
+  %14 = load i32, ptr %12, align 4
+  %15 = call i64 @artsEdtCreateWithGuid(ptr @edt.2.task, i64 %4, i32 %11, ptr %edt.2.task_paramv, i32 %14)
   call void @carts.edt.2(ptr nocapture %shared_number, ptr nocapture %random_number) #4
   br label %entry.split.ret
 
@@ -835,32 +958,62 @@ entry.split.ret:                                  ; preds = %codeRepl
 exit:                                             ; preds = %entry.split.ret
   %edt.1.slot.1 = alloca i32, align 4
   store i32 1, ptr %edt.1.slot.1, align 4
-  %12 = load i64, ptr %edt.1.parallel_guid.addr, align 8
-  %13 = load i32, ptr %edt.1.slot.1, align 4
-  %14 = load i64, ptr %random_number, align 8
-  call void @artsSignalEdtValue(i64 %12, i32 %13, i64 %14)
+  %16 = load i32, ptr %edt.1.slot.1, align 4
+  %17 = load i64, ptr %random_number, align 8
+  call void @artsSignalEdtValue(i64 %1, i32 %16, i64 %17)
   %edt.1.slot.0 = alloca i32, align 4
   store i32 0, ptr %edt.1.slot.0, align 4
-  %15 = load i64, ptr %edt.1.parallel_guid.addr, align 8
-  %16 = load i32, ptr %edt.1.slot.0, align 4
-  %17 = load i64, ptr %shared_number, align 8
-  call void @artsSignalEdtValue(i64 %15, i32 %16, i64 %17)
+  %18 = load i32, ptr %edt.1.slot.0, align 4
+  %19 = load i64, ptr %shared_number, align 8
+  call void @artsSignalEdtValue(i64 %1, i32 %18, i64 %19)
+  ret void
+}
+
+declare i64 @artsReserveGuidRoute(i32, i32)
+
+define internal void @edt.3.task(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
+entry:
+  %paramv.0 = getelementptr inbounds i64, ptr %paramv, i64 0
+  %0 = load i64, ptr %paramv.0, align 8
+  %1 = trunc i64 %0 to i32
+  %paramv.guid.edt_2 = getelementptr inbounds i64, ptr %paramv, i64 1
+  %2 = load i64, ptr %paramv.guid.edt_2, align 8
+  %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
+  br label %edt.body
+
+edt.body:                                         ; preds = %entry
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !17)
+  %3 = load i32, ptr %depv.0, align 4, !tbaa !13, !noalias !17
+  %inc.i = add nsw i32 %3, 1
+  store i32 %inc.i, ptr %depv.0, align 4, !tbaa !13, !noalias !17
+  %inc1.i = add nsw i32 %1, 1
+  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %inc.i, i32 noundef %inc1.i) #4, !noalias !17
+  br label %exit
+
+exit:                                             ; preds = %edt.body
+  %edt.2.slot.0 = alloca i32, align 4
+  store i32 0, ptr %edt.2.slot.0, align 4
+  %4 = load i32, ptr %edt.2.slot.0, align 4
+  %5 = load i64, ptr %depv.0, align 8
+  call void @artsSignalEdtValue(i64 %2, i32 %4, i64 %5)
   ret void
 }
 
 define internal void @edt.2.task(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
 entry:
-  %depv.shared_number = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
-  %depv.random_number = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 1, i32 2
+  %depv.shared_number = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
+  %depv.random_number = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 1, i32 0
   br label %edt.body
 
 edt.body:                                         ; preds = %entry
   br label %entry.split
 
 entry.split:                                      ; preds = %edt.body
-  %0 = load i32, ptr %depv.shared_number, align 4, !tbaa !16
-  %1 = load i32, ptr %depv.random_number, align 4, !tbaa !16
-  %call6 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %0, i32 noundef %1) #4
+  %0 = load i32, ptr %depv.shared_number, align 4, !tbaa !13
+  %inc = add nsw i32 %0, 1
+  store i32 %inc, ptr %depv.shared_number, align 4, !tbaa !13
+  %1 = load i32, ptr %depv.random_number, align 4, !tbaa !13
+  %call6 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %inc, i32 noundef %1) #4
   br label %entry.split.ret.exitStub
 
 entry.split.ret.exitStub:                         ; preds = %entry.split
@@ -888,16 +1041,17 @@ entry:
   br i1 %2, label %then, label %else
 
 then:                                             ; preds = %entry
-  %3 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([19 x i8], ptr @2, i32 0, i32 0))
+  %3 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([19 x i8], ptr @8, i32 0, i32 0))
   %4 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
   %edt.0.main_guid.addr = alloca i64, align 8
   store i64 %4, ptr %edt.0.main_guid.addr, align 8
+  %5 = load i64, ptr %edt.0.main_guid.addr, align 8
+  %6 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([25 x i8], ptr @9, i32 0, i32 0), i64 %5)
   %edt.0.main_paramc = alloca i32, align 4
   store i32 0, ptr %edt.0.main_paramc, align 4
-  %5 = load i32, ptr %edt.0.main_paramc, align 4
-  %edt.0.main_paramv = alloca i64, i32 %5, align 8
-  %6 = load i64, ptr %edt.0.main_guid.addr, align 8
-  %7 = call i64 @artsEdtCreateWithGuid(ptr @edt.0.main, i64 %6, i32 %5, ptr %edt.0.main_paramv, i32 0)
+  %7 = load i32, ptr %edt.0.main_paramc, align 4
+  %edt.0.main_paramv = alloca i64, i32 %7, align 8
+  %8 = call i64 @artsEdtCreateWithGuid(ptr @edt.0.main, i64 %5, i32 %7, ptr %edt.0.main_paramv, i32 0)
   ret void
 
 else:                                             ; preds = %entry
@@ -940,13 +1094,49 @@ attributes #8 = { nounwind memory(argmem: readwrite) }
 !10 = !{!11}
 !11 = !{i64 2, i64 -1, i64 -1, i1 true}
 !12 = !{!"task", !7}
-!13 = !{!14}
-!14 = distinct !{!14, !15, !".omp_outlined.: %__context"}
-!15 = distinct !{!15, !".omp_outlined."}
-!16 = !{!17, !17, i64 0}
-!17 = !{!"int", !18, i64 0}
-!18 = !{!"omnipotent char", !19, i64 0}
-!19 = !{!"Simple C++ TBAA"}
+!13 = !{!14, !14, i64 0}
+!14 = !{!"int", !15, i64 0}
+!15 = !{!"omnipotent char", !16, i64 0}
+!16 = !{!"Simple C++ TBAA"}
+!17 = !{!18}
+!18 = distinct !{!18, !19, !".omp_outlined.: %__context"}
+!19 = distinct !{!19, !".omp_outlined."}
+
+[arts-utils]    - Removing:   call void @carts.edt(ptr nocapture %random_number, ptr nocapture %shared_number) #7
+[arts-utils]   - Replacing uses of:   call void @carts.edt(ptr nocapture %random_number, ptr nocapture %shared_number) #7
+[arts-utils]    - Removing instruction:   call void @carts.edt(ptr nocapture %random_number, ptr nocapture %shared_number) #7
+[arts-utils]    - Removing: ; Function Attrs: nocallback nofree norecurse nosync nounwind willreturn memory(readwrite)
+declare !carts !6 internal void @carts.edt(ptr nocapture readonly, ptr nocapture) #3
+
+[arts-utils]   - Replacing uses of: ; Function Attrs: nocallback nofree norecurse nosync nounwind willreturn memory(readwrite)
+declare !carts !6 internal void @carts.edt(ptr nocapture readonly, ptr nocapture) #3
+
+[arts-utils]    - Removing function: ; Function Attrs: nocallback nofree norecurse nosync nounwind willreturn memory(readwrite)
+declare !carts !6 internal void @carts.edt(ptr nocapture readonly, ptr nocapture) #3
+
+[arts-utils]    - Removing:   call void @carts.edt.1(ptr nocapture %depv.1, i32 %4) #7
+[arts-utils]   - Replacing uses of:   call void @carts.edt.1(ptr nocapture %depv.1, i32 %4) #7
+[arts-utils]    - Removing instruction:   call void @carts.edt.1(ptr nocapture %depv.1, i32 %4) #7
+[arts-utils]    - Removing: ; Function Attrs: nocallback nofree norecurse nosync nounwind willreturn memory(readwrite)
+declare !carts !6 internal void @carts.edt.1(ptr nocapture, i32) #3
+
+[arts-utils]   - Replacing uses of: ; Function Attrs: nocallback nofree norecurse nosync nounwind willreturn memory(readwrite)
+declare !carts !6 internal void @carts.edt.1(ptr nocapture, i32) #3
+
+[arts-utils]    - Removing function: ; Function Attrs: nocallback nofree norecurse nosync nounwind willreturn memory(readwrite)
+declare !carts !6 internal void @carts.edt.1(ptr nocapture, i32) #3
+
+[arts-utils]    - Removing:   call void @carts.edt.2(ptr nocapture %shared_number, ptr nocapture %random_number) #3
+[arts-utils]   - Replacing uses of:   call void @carts.edt.2(ptr nocapture %shared_number, ptr nocapture %random_number) #3
+[arts-utils]    - Removing instruction:   call void @carts.edt.2(ptr nocapture %shared_number, ptr nocapture %random_number) #3
+[arts-utils]    - Removing: ; Function Attrs: mustprogress norecurse nounwind uwtable
+declare !carts !8 internal void @carts.edt.2(ptr nocapture, ptr nocapture readonly) #5
+
+[arts-utils]   - Replacing uses of: ; Function Attrs: mustprogress norecurse nounwind uwtable
+declare !carts !8 internal void @carts.edt.2(ptr nocapture, ptr nocapture readonly) #5
+
+[arts-utils]    - Removing function: ; Function Attrs: mustprogress norecurse nounwind uwtable
+declare !carts !8 internal void @carts.edt.2(ptr nocapture, ptr nocapture readonly) #5
 
 
 -------------------------------------------------
@@ -965,7 +1155,14 @@ target triple = "x86_64-unknown-linux-gnu"
 @0 = private unnamed_addr constant [23 x i8] c";unknown;unknown;0;0;;\00", align 1
 @1 = private unnamed_addr constant %struct.ident_t { i32 0, i32 2, i32 0, i32 22, ptr @0 }, align 8
 @.str.2 = private unnamed_addr constant [37 x i8] c"EDT 2: The final number is %d - %d.\0A\00", align 1
-@2 = private unnamed_addr constant [19 x i8] c"Creating Main EDT\0A\00", align 1
+@2 = private unnamed_addr constant [29 x i8] c"Guid for edt.1.parallel: %u\0A\00", align 1
+@3 = private unnamed_addr constant [25 x i8] c"Guid for edt.3.task: %u\0A\00", align 1
+@4 = private unnamed_addr constant [25 x i8] c"Guid for edt.2.task: %u\0A\00", align 1
+@5 = private unnamed_addr constant [17 x i8] c"Creating EDT #1\0A\00", align 1
+@6 = private unnamed_addr constant [17 x i8] c"Creating EDT #3\0A\00", align 1
+@7 = private unnamed_addr constant [17 x i8] c"Creating EDT #2\0A\00", align 1
+@8 = private unnamed_addr constant [19 x i8] c"Creating Main EDT\0A\00", align 1
+@9 = private unnamed_addr constant [25 x i8] c"Guid for edt.0.main: %u\0A\00", align 1
 
 ; Function Attrs: nounwind
 declare void @srand(i32 noundef) local_unnamed_addr #0
@@ -999,88 +1196,63 @@ declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) #1
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(inaccessiblemem: readwrite)
 declare void @llvm.experimental.noalias.scope.decl(metadata) #4
 
-define internal void @edt.3.task(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
-entry:
-  %paramv.0 = getelementptr inbounds i64, ptr %paramv, i64 0
-  %0 = load i64, ptr %paramv.0, align 8
-  %1 = trunc i64 %0 to i32
-  %paramv.guid.edt_2 = getelementptr inbounds i64, ptr %paramv, i64 1
-  %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
-  br label %edt.body
-
-edt.body:                                         ; preds = %entry
-  tail call void @llvm.experimental.noalias.scope.decl(metadata !8)
-  %2 = load i32, ptr %depv.0, align 4, !tbaa !11, !noalias !8
-  %inc.i = add nsw i32 %2, 1
-  store i32 %inc.i, ptr %depv.0, align 4, !tbaa !11, !noalias !8
-  %inc1.i = add nsw i32 %1, 1
-  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %inc.i, i32 noundef %inc1.i) #3, !noalias !8
-  br label %exit
-
-exit:                                             ; preds = %edt.body
-  %edt.2.slot.0 = alloca i32, align 4
-  store i32 0, ptr %edt.2.slot.0, align 4
-  %3 = load i64, ptr %paramv.guid.edt_2, align 8
-  %4 = load i32, ptr %edt.2.slot.0, align 4
-  %5 = load i64, ptr %depv.0, align 8
-  call void @artsSignalEdtValue(i64 %3, i32 %4, i64 %5)
-  ret void
-}
-
 define internal void @edt.1.parallel(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
 entry:
   %0 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
   %edt.3.task_guid.addr = alloca i64, align 8
   store i64 %0, ptr %edt.3.task_guid.addr, align 8
+  %1 = load i64, ptr %edt.3.task_guid.addr, align 8
+  %2 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([25 x i8], ptr @3, i32 0, i32 0), i64 %1)
   %paramv.guid.edt_2 = getelementptr inbounds i64, ptr %paramv, i64 0
-  %depv.1 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 1, i32 2
-  %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
+  %3 = load i64, ptr %paramv.guid.edt_2, align 8
+  %depv.1 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 1, i32 0
+  %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
   br label %edt.body
 
 edt.body:                                         ; preds = %entry
-  %1 = load i32, ptr %depv.0, align 4, !tbaa !11
+  %4 = load i32, ptr %depv.0, align 4, !tbaa !8
   %edt.3.task_paramc = alloca i32, align 4
   store i32 2, ptr %edt.3.task_paramc, align 4
-  %2 = load i32, ptr %edt.3.task_paramc, align 4
-  %edt.3.task_paramv = alloca i64, i32 %2, align 8
+  %5 = load i32, ptr %edt.3.task_paramc, align 4
+  %edt.3.task_paramv = alloca i64, i32 %5, align 8
   %edt.3.task_paramv.0 = getelementptr inbounds i64, ptr %edt.3.task_paramv, i64 0
-  %3 = sext i32 %1 to i64
-  store i64 %3, ptr %edt.3.task_paramv.0, align 8
+  %6 = sext i32 %4 to i64
+  store i64 %6, ptr %edt.3.task_paramv.0, align 8
   %edt.3.task_paramv_guid.edt_2 = getelementptr inbounds i64, ptr %edt.3.task_paramv, i64 1
-  store ptr %paramv.guid.edt_2, ptr %edt.3.task_paramv_guid.edt_2, align 8
-  %4 = alloca i32, align 4
-  store i32 1, ptr %4, align 4
-  %5 = load i64, ptr %edt.3.task_guid.addr, align 8
-  %6 = load i32, ptr %4, align 4
-  %7 = call i64 @artsEdtCreateWithGuid(ptr @edt.3.task, i64 %5, i32 %2, ptr %edt.3.task_paramv, i32 %6)
+  store i64 %3, ptr %edt.3.task_paramv_guid.edt_2, align 8
+  %7 = alloca i32, align 4
+  store i32 1, ptr %7, align 4
+  %8 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([17 x i8], ptr @6, i32 0, i32 0))
+  %9 = load i32, ptr %7, align 4
+  %10 = call i64 @artsEdtCreateWithGuid(ptr @edt.3.task, i64 %1, i32 %5, ptr %edt.3.task_paramv, i32 %9)
   br label %exit
 
 exit:                                             ; preds = %edt.body
-  %edt.3.slot.0 = alloca i32, align 4
-  store i32 0, ptr %edt.3.slot.0, align 4
-  %8 = load i64, ptr %edt.3.task_guid.addr, align 8
-  %9 = load i32, ptr %edt.3.slot.0, align 4
-  %10 = load i64, ptr %depv.0, align 8
-  call void @artsSignalEdtValue(i64 %8, i32 %9, i64 %10)
   %edt.2.slot.1 = alloca i32, align 4
   store i32 1, ptr %edt.2.slot.1, align 4
-  %11 = load i64, ptr %paramv.guid.edt_2, align 8
-  %12 = load i32, ptr %edt.2.slot.1, align 4
-  %13 = load i64, ptr %depv.0, align 8
-  call void @artsSignalEdtValue(i64 %11, i32 %12, i64 %13)
+  %11 = load i32, ptr %edt.2.slot.1, align 4
+  %12 = load i64, ptr %depv.0, align 8
+  call void @artsSignalEdtValue(i64 %3, i32 %11, i64 %12)
+  %edt.3.slot.0 = alloca i32, align 4
+  store i32 0, ptr %edt.3.slot.0, align 4
+  %13 = load i32, ptr %edt.3.slot.0, align 4
+  %14 = load i64, ptr %depv.0, align 8
+  call void @artsSignalEdtValue(i64 %1, i32 %13, i64 %14)
   ret void
 }
-
-declare i64 @artsReserveGuidRoute(i32, i32)
 
 define internal void @edt.0.main(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
 entry:
   %0 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
   %edt.1.parallel_guid.addr = alloca i64, align 8
   store i64 %0, ptr %edt.1.parallel_guid.addr, align 8
-  %1 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
+  %1 = load i64, ptr %edt.1.parallel_guid.addr, align 8
+  %2 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([29 x i8], ptr @2, i32 0, i32 0), i64 %1)
+  %3 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
   %edt.2.task_guid.addr = alloca i64, align 8
-  store i64 %1, ptr %edt.2.task_guid.addr, align 8
+  store i64 %3, ptr %edt.2.task_guid.addr, align 8
+  %4 = load i64, ptr %edt.2.task_guid.addr, align 8
+  %5 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([25 x i8], ptr @4, i32 0, i32 0), i64 %4)
   br label %edt.body
 
 edt.body:                                         ; preds = %entry
@@ -1092,35 +1264,35 @@ edt.body:                                         ; preds = %entry
   %call1 = tail call i32 @rand() #3
   %rem = srem i32 %call1, 100
   %add = add nsw i32 %rem, 1
-  store i32 %add, ptr %shared_number, align 4, !tbaa !11
+  store i32 %add, ptr %shared_number, align 4, !tbaa !8
   %call2 = tail call i32 @rand() #3
   %rem3 = srem i32 %call2, 10
   %add4 = add nsw i32 %rem3, 1
-  store i32 %add4, ptr %random_number, align 4, !tbaa !11
+  store i32 %add4, ptr %random_number, align 4, !tbaa !8
   %call5 = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %add, i32 noundef %add4) #3
   %edt.1.parallel_paramc = alloca i32, align 4
   store i32 1, ptr %edt.1.parallel_paramc, align 4
-  %2 = load i32, ptr %edt.1.parallel_paramc, align 4
-  %edt.1.parallel_paramv = alloca i64, i32 %2, align 8
+  %6 = load i32, ptr %edt.1.parallel_paramc, align 4
+  %edt.1.parallel_paramv = alloca i64, i32 %6, align 8
   %edt.1.parallel_paramv_guid.edt_2 = getelementptr inbounds i64, ptr %edt.1.parallel_paramv, i64 0
-  store ptr %edt.2.task_guid.addr, ptr %edt.1.parallel_paramv_guid.edt_2, align 8
-  %3 = alloca i32, align 4
-  store i32 2, ptr %3, align 4
-  %4 = load i64, ptr %edt.1.parallel_guid.addr, align 8
-  %5 = load i32, ptr %3, align 4
-  %6 = call i64 @artsEdtCreateWithGuid(ptr @edt.1.parallel, i64 %4, i32 %2, ptr %edt.1.parallel_paramv, i32 %5)
+  store i64 %4, ptr %edt.1.parallel_paramv_guid.edt_2, align 8
+  %7 = alloca i32, align 4
+  store i32 2, ptr %7, align 4
+  %8 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([17 x i8], ptr @5, i32 0, i32 0))
+  %9 = load i32, ptr %7, align 4
+  %10 = call i64 @artsEdtCreateWithGuid(ptr @edt.1.parallel, i64 %1, i32 %6, ptr %edt.1.parallel_paramv, i32 %9)
   br label %codeRepl
 
 codeRepl:                                         ; preds = %edt.body
   %edt.2.task_paramc = alloca i32, align 4
   store i32 0, ptr %edt.2.task_paramc, align 4
-  %7 = load i32, ptr %edt.2.task_paramc, align 4
-  %edt.2.task_paramv = alloca i64, i32 %7, align 8
-  %8 = alloca i32, align 4
-  store i32 2, ptr %8, align 4
-  %9 = load i64, ptr %edt.2.task_guid.addr, align 8
-  %10 = load i32, ptr %8, align 4
-  %11 = call i64 @artsEdtCreateWithGuid(ptr @edt.2.task, i64 %9, i32 %7, ptr %edt.2.task_paramv, i32 %10)
+  %11 = load i32, ptr %edt.2.task_paramc, align 4
+  %edt.2.task_paramv = alloca i64, i32 %11, align 8
+  %12 = alloca i32, align 4
+  store i32 2, ptr %12, align 4
+  %13 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([17 x i8], ptr @7, i32 0, i32 0))
+  %14 = load i32, ptr %12, align 4
+  %15 = call i64 @artsEdtCreateWithGuid(ptr @edt.2.task, i64 %4, i32 %11, ptr %edt.2.task_paramv, i32 %14)
   br label %entry.split.ret
 
 entry.split.ret:                                  ; preds = %codeRepl
@@ -1129,32 +1301,62 @@ entry.split.ret:                                  ; preds = %codeRepl
 exit:                                             ; preds = %entry.split.ret
   %edt.1.slot.1 = alloca i32, align 4
   store i32 1, ptr %edt.1.slot.1, align 4
-  %12 = load i64, ptr %edt.1.parallel_guid.addr, align 8
-  %13 = load i32, ptr %edt.1.slot.1, align 4
-  %14 = load i64, ptr %random_number, align 8
-  call void @artsSignalEdtValue(i64 %12, i32 %13, i64 %14)
+  %16 = load i32, ptr %edt.1.slot.1, align 4
+  %17 = load i64, ptr %random_number, align 8
+  call void @artsSignalEdtValue(i64 %1, i32 %16, i64 %17)
   %edt.1.slot.0 = alloca i32, align 4
   store i32 0, ptr %edt.1.slot.0, align 4
-  %15 = load i64, ptr %edt.1.parallel_guid.addr, align 8
-  %16 = load i32, ptr %edt.1.slot.0, align 4
-  %17 = load i64, ptr %shared_number, align 8
-  call void @artsSignalEdtValue(i64 %15, i32 %16, i64 %17)
+  %18 = load i32, ptr %edt.1.slot.0, align 4
+  %19 = load i64, ptr %shared_number, align 8
+  call void @artsSignalEdtValue(i64 %1, i32 %18, i64 %19)
+  ret void
+}
+
+declare i64 @artsReserveGuidRoute(i32, i32)
+
+define internal void @edt.3.task(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
+entry:
+  %paramv.0 = getelementptr inbounds i64, ptr %paramv, i64 0
+  %0 = load i64, ptr %paramv.0, align 8
+  %1 = trunc i64 %0 to i32
+  %paramv.guid.edt_2 = getelementptr inbounds i64, ptr %paramv, i64 1
+  %2 = load i64, ptr %paramv.guid.edt_2, align 8
+  %depv.0 = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
+  br label %edt.body
+
+edt.body:                                         ; preds = %entry
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !12)
+  %3 = load i32, ptr %depv.0, align 4, !tbaa !8, !noalias !12
+  %inc.i = add nsw i32 %3, 1
+  store i32 %inc.i, ptr %depv.0, align 4, !tbaa !8, !noalias !12
+  %inc1.i = add nsw i32 %1, 1
+  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %inc.i, i32 noundef %inc1.i) #3, !noalias !12
+  br label %exit
+
+exit:                                             ; preds = %edt.body
+  %edt.2.slot.0 = alloca i32, align 4
+  store i32 0, ptr %edt.2.slot.0, align 4
+  %4 = load i32, ptr %edt.2.slot.0, align 4
+  %5 = load i64, ptr %depv.0, align 8
+  call void @artsSignalEdtValue(i64 %2, i32 %4, i64 %5)
   ret void
 }
 
 define internal void @edt.2.task(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
 entry:
-  %depv.shared_number = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
-  %depv.random_number = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 1, i32 2
+  %depv.shared_number = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
+  %depv.random_number = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 1, i32 0
   br label %edt.body
 
 edt.body:                                         ; preds = %entry
   br label %entry.split
 
 entry.split:                                      ; preds = %edt.body
-  %0 = load i32, ptr %depv.shared_number, align 4, !tbaa !11
-  %1 = load i32, ptr %depv.random_number, align 4, !tbaa !11
-  %call6 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %0, i32 noundef %1) #3
+  %0 = load i32, ptr %depv.shared_number, align 4, !tbaa !8
+  %inc = add nsw i32 %0, 1
+  store i32 %inc, ptr %depv.shared_number, align 4, !tbaa !8
+  %1 = load i32, ptr %depv.random_number, align 4, !tbaa !8
+  %call6 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %inc, i32 noundef %1) #3
   br label %entry.split.ret.exitStub
 
 entry.split.ret.exitStub:                         ; preds = %entry.split
@@ -1182,16 +1384,17 @@ entry:
   br i1 %2, label %then, label %else
 
 then:                                             ; preds = %entry
-  %3 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([19 x i8], ptr @2, i32 0, i32 0))
+  %3 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([19 x i8], ptr @8, i32 0, i32 0))
   %4 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
   %edt.0.main_guid.addr = alloca i64, align 8
   store i64 %4, ptr %edt.0.main_guid.addr, align 8
+  %5 = load i64, ptr %edt.0.main_guid.addr, align 8
+  %6 = call i32 (ptr, ...) @printf(ptr getelementptr inbounds ([25 x i8], ptr @9, i32 0, i32 0), i64 %5)
   %edt.0.main_paramc = alloca i32, align 4
   store i32 0, ptr %edt.0.main_paramc, align 4
-  %5 = load i32, ptr %edt.0.main_paramc, align 4
-  %edt.0.main_paramv = alloca i64, i32 %5, align 8
-  %6 = load i64, ptr %edt.0.main_guid.addr, align 8
-  %7 = call i64 @artsEdtCreateWithGuid(ptr @edt.0.main, i64 %6, i32 %5, ptr %edt.0.main_paramv, i32 0)
+  %7 = load i32, ptr %edt.0.main_paramc, align 4
+  %edt.0.main_paramv = alloca i64, i32 %7, align 8
+  %8 = call i64 @artsEdtCreateWithGuid(ptr @edt.0.main, i64 %5, i32 %7, ptr %edt.0.main_paramv, i32 0)
   ret void
 
 else:                                             ; preds = %entry
@@ -1225,16 +1428,18 @@ attributes #4 = { nocallback nofree nosync nounwind willreturn memory(inaccessib
 !5 = !{!"clang version 18.1.8"}
 !6 = !{!7}
 !7 = !{i64 2, i64 -1, i64 -1, i1 true}
-!8 = !{!9}
-!9 = distinct !{!9, !10, !".omp_outlined.: %__context"}
-!10 = distinct !{!10, !".omp_outlined."}
-!11 = !{!12, !12, i64 0}
-!12 = !{!"int", !13, i64 0}
-!13 = !{!"omnipotent char", !14, i64 0}
-!14 = !{!"Simple C++ TBAA"}
+!8 = !{!9, !9, i64 0}
+!9 = !{!"int", !10, i64 0}
+!10 = !{!"omnipotent char", !11, i64 0}
+!11 = !{!"Simple C++ TBAA"}
+!12 = !{!13}
+!13 = distinct !{!13, !14, !".omp_outlined.: %__context"}
+!14 = distinct !{!14, !".omp_outlined."}
 
 
 -------------------------------------------------
 [edt-graph] Destroying the EDT Graph
 llvm-dis test_arts_analysis.bc
-clang++ -fopenmp test_arts_analysis.bc -O3 -march=native -o test_opt -lstdc++ -I/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/arts/include -L/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/arts/lib -larts -L/usr/lib64/librt.so/usr/lib64/libpthread.so/usr/lib64/lib -lrdmacm
+opt -O3 test_arts_analysis.bc -o test_opt.bc
+llvm-dis test_opt.bc
+clang++ test_opt.bc -O3 -g3 -march=native -o test_opt -lstdc++ -I/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/arts/include -L/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/arts/lib -larts -L/usr/lib64/librt.so/usr/lib64/libpthread.so/usr/lib64/lib -lrdmacm

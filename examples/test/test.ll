@@ -36,8 +36,10 @@ entry:
   %call5 = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %add, i32 noundef %add4)
   call void (ptr, i32, ptr, ...) @__kmpc_fork_call(ptr nonnull @1, i32 2, ptr nonnull @main.omp_outlined, ptr nonnull %random_number, ptr nonnull %shared_number)
   %0 = load i32, ptr %shared_number, align 4, !tbaa !6
+  %inc = add nsw i32 %0, 1
+  store i32 %inc, ptr %shared_number, align 4, !tbaa !6
   %1 = load i32, ptr %random_number, align 4, !tbaa !6
-  %call6 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %0, i32 noundef %1)
+  %call6 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %inc, i32 noundef %1)
   call void @llvm.lifetime.end.p0(i64 4, ptr nonnull %random_number) #6
   call void @llvm.lifetime.end.p0(i64 4, ptr nonnull %shared_number) #6
   ret i32 0

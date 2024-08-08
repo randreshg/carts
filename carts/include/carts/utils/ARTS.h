@@ -7,6 +7,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/Type.h"
 #include <cstdint>
 #include <sys/types.h>
 
@@ -68,10 +69,12 @@ public:
   void setSlot(int32_t Slot);
 
   /// Helpers
+  Type *getType();
   bool addChildDB(EDTDataBlock *ChildDB);
 
 private:
   EDTValue *V = nullptr;
+  Type *Ty = nullptr;
   Mode M = Mode::ReadWrite;
   EDT *ContextEDT = nullptr;
   EDTDataBlock *ParentDB = nullptr;
