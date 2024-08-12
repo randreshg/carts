@@ -237,7 +237,7 @@ EDTGraphEdge *EDTGraph::fetchOrCreateEdge(EDTGraphNode *From, EDTGraphNode *To,
       NewEdge = new EDTGraphDataEdge(From, To);
       LLVM_DEBUG(dbgs() << "          Data Edge\n");
     } else {
-      NewEdge = new EDTGraphControlEdge(From, To);
+      NewEdge = new EDTGraphCreationEdge(From, To);
       LLVM_DEBUG(dbgs() << "          Control Edge\n");
     }
     /// Add the new edge.
@@ -277,7 +277,7 @@ EDTGraphEdge *EDTGraph::addCreationEdge(EDT *From, EDT *To) {
   return addCreationEdge(getNode(From), getNode(To));
 }
 
-EDTGraphEdge *EDTGraph::addDataEdge(EDT *From, EDT *To, EDTDataBlock *DB) {
+EDTGraphEdge *EDTGraph::addDataEdge(EDT *From, EDT *To, DataBlock *DB) {
   return addDataEdge(getNode(From), getNode(To), DB);
 }
 
@@ -301,7 +301,7 @@ EDTGraphEdge *EDTGraph::addCreationEdge(EDTGraphNode *From, EDTGraphNode *To) {
 }
 
 EDTGraphEdge *EDTGraph::addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
-                                    EDTDataBlock *DB) {
+                                    DataBlock *DB) {
   assert(DB != nullptr && "The DataBlock is null");
   EDTGraphDataEdge *DataEdge =
       dyn_cast<EDTGraphDataEdge>(fetchOrCreateEdge(From, To, true));
@@ -428,7 +428,7 @@ void EDTGraph::print(void) {
           /// DataBlocks
           auto &DataBlocks = DataEdge->getDataBlocks();
           LLVM_DEBUG(dbgs() << "      - DataBlocks:\n");
-          for (EDTDataBlock *DB : DataBlocks) {
+          for (DataBlock *DB : DataBlocks) {
             /// Parent-Child Dependency
             if (DepEdge->hasCreationDep()) {
               LLVM_DEBUG(dbgs() << "        - " << *DB << " / to slot "

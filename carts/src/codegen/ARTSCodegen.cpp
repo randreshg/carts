@@ -381,7 +381,7 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
       auto &DataBlocks = DataEdge->getDataBlocks();
       auto DepVArg = EDTFn->arg_begin() + 3;
       for (auto Dep : enumerate(DataBlocks)) {
-        EDTDataBlock *DB = Dep.value();
+        DataBlock *DB = Dep.value();
         uint32_t Index =
             DataEdge->hasCreationDep() ? DB->getSlot() : DB->getToSlot();
         Value *OriginalVal = E.getDepArg(Index);
@@ -553,7 +553,7 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
 
     auto &DataBlocks = DataEdge->getDataBlocks();
     for (auto Dep : enumerate(DataBlocks)) {
-      EDTDataBlock *DB = Dep.value();
+      DataBlock *DB = Dep.value();
       // Value *DBValue = nullptr;
       int32_t ToEDTSlot =
           DataEdge->hasCreationDep() ? DB->getSlot() : DB->getToSlot();

@@ -46,7 +46,7 @@ int main() {
 /// EDT 0
 #pragma omp parallel firstprivate(n)
   {
-    // #pragma omp single
+    #pragma omp single
     printf("fib(%d) = %d\n", n, fib(n));
   }
 

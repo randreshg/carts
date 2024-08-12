@@ -29,11 +29,11 @@ public:
   EDT *getOrCreateEDT(Function *F);
   EDT *getOrCreateEDT(const CallBase *CB);
 
-  /// EDTDataBlock
+  /// DataBlock
   /// Given a ValueAndContext (EDTCall and EDTValue), create a DataBlock
-  EDTDataBlock *createDataBlock(AA::ValueAndContext VAC, EDTDataBlock::Mode M,
+  DataBlock *createDataBlock(AA::ValueAndContext VAC, DataBlock::Mode M,
                                 EDT *ContextEDT);
-  EDTDataBlock *getOrCreateDataBlock(AA::ValueAndContext VAC,
+  DataBlock *getOrCreateDataBlock(AA::ValueAndContext VAC,
                                      int32_t ArgNo = -1);
 
   /// Helper Functions
@@ -66,9 +66,9 @@ private:
   EDTSet EDTs;
   DenseMap<EDTFunction *, EDT *> FunctionEDTMap;
   /// Collection of known DataBlocks in the module
-  EDTDataBlockSet DataBlocks;
+  DataBlockSet DataBlocks;
   DenseMap<AA::ValueAndContext, int32_t> ValueAndCtxToCallArgItr;
-  DenseMap<AA::ValueAndContext, EDTDataBlock *> ValueAndCtxToDataBlocks;
+  DenseMap<AA::ValueAndContext, DataBlock *> ValueAndCtxToDataBlocks;
   /// Analysis Output
   EDTGraph *Graph = nullptr;
   ARTSCodegen *CG = nullptr;

@@ -26,10 +26,10 @@ void EDTGraphEdge::print(void) {
   LLVM_DEBUG(dbgs() << "  - To: " << To->getEDT()->getName() << "\n");
 }
 
-/// EDTGraphControlEdge
-EDTGraphControlEdge::EDTGraphControlEdge(EDTGraphNode *From, EDTGraphNode *To)
+/// EDTGraphCreationEdge
+EDTGraphCreationEdge::EDTGraphCreationEdge(EDTGraphNode *From, EDTGraphNode *To)
     : EDTGraphEdge(From, To) {}
-EDTGraphControlEdge::~EDTGraphControlEdge() {}
+EDTGraphCreationEdge::~EDTGraphCreationEdge() {}
 
 /// EDTGraphDataEdge
 EDTGraphDataEdge::EDTGraphDataEdge(EDTGraphNode *From, EDTGraphNode *To)
@@ -37,7 +37,7 @@ EDTGraphDataEdge::EDTGraphDataEdge(EDTGraphNode *From, EDTGraphNode *To)
 
 EDTGraphDataEdge::~EDTGraphDataEdge() {}
 
-bool EDTGraphDataEdge::addDataBlock(EDTDataBlock *DB) {
+bool EDTGraphDataEdge::addDataBlock(DataBlock *DB) {
   return DataBlocks.insert(DB);
 }
 
@@ -47,7 +47,7 @@ bool EDTGraphDataEdge::addParameter(EDTValue *V) {
 
 bool EDTGraphDataEdge::addGuid(EDT *Guid) { return Guids.insert(Guid); }
 
-bool EDTGraphDataEdge::hasDataBlock(EDTDataBlock *DB) {
+bool EDTGraphDataEdge::hasDataBlock(DataBlock *DB) {
   return DataBlocks.count(DB);
 }
 
@@ -55,7 +55,7 @@ bool EDTGraphDataEdge::hasParameter(EDTValue *V) { return Parameters.count(V); }
 
 bool EDTGraphDataEdge::hasGuid(EDT *Guid) { return Guids.count(Guid); }
 
-bool EDTGraphDataEdge::removeDataBlock(EDTDataBlock *DB) {
+bool EDTGraphDataEdge::removeDataBlock(DataBlock *DB) {
   return DataBlocks.remove(DB);
 }
 
@@ -66,7 +66,7 @@ bool EDTGraphDataEdge::removeParameter(EDTValue *V) {
 bool EDTGraphDataEdge::removeGuid(EDT *Guid) { return Guids.remove(Guid); }
 
 /// EDTGraphDataBlockEdge
-// EDTGraphDataBlockEdge::EDTGraphDataBlockEdge(EDTDataBlock *DB)
+// EDTGraphDataBlockEdge::EDTGraphDataBlockEdge(DataBlock *DB)
 //     : Parent(Parent), DB(DB){};
 // EDTGraphDataBlockEdge::~EDTGraphDataBlockEdge() {}
 
