@@ -2,7 +2,8 @@
 #include "llvm/Support/Debug.h"
 #include <cassert>
 
-#include "carts/analysis/graph/EDTEdge.h"
+#include "carts/analysis/graph/CARTSEdge.h"
+#include "carts/analysis/graph/CARTSGraph.h"
 #include "carts/utils/ARTS.h"
 
 using namespace llvm;
@@ -14,66 +15,38 @@ using namespace arts;
 // static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 // #endif
 
-/// EDTGraphEdge
-
-EDTGraphEdge::EDTGraphEdge(EDTGraphNode *From, EDTGraphNode *To)
-    : From(From), To(To) {}
-EDTGraphEdge::~EDTGraphEdge() {}
-
-void EDTGraphEdge::print(void) {
-  LLVM_DEBUG(dbgs() << "EDT EDGE:\n");
-  LLVM_DEBUG(dbgs() << "  - From: " << From->getEDT()->getName() << "\n");
-  LLVM_DEBUG(dbgs() << "  - To: " << To->getEDT()->getName() << "\n");
-}
-
 /// CreationGraphEdge
 CreationGraphEdge::CreationGraphEdge(EDTGraphNode *From, EDTGraphNode *To)
-    : EDTGraphEdge(From, To) {}
+    : From(From), To(To) {}
 CreationGraphEdge::~CreationGraphEdge() {}
+EDTGraphNode *CreationGraphEdge::getFrom() { return From; }
+EDTGraphNode *CreationGraphEdge::getTo() { return To; }
 
-/// EDTGraphDataEdge
-EDTGraphDataEdge::EDTGraphDataEdge(EDTGraphNode *From, EDTGraphNode *To)
-    : EDTGraphEdge(From, To) {}
-
-EDTGraphDataEdge::~EDTGraphDataEdge() {}
-
-bool EDTGraphDataEdge::addDataBlock(DataBlock *DB) {
-  return DataBlocks.insert(DB);
-}
-
-bool EDTGraphDataEdge::addParameter(EDTValue *V) {
+bool CreationGraphEdge::insertParameter(EDTValue *V) {
   return Parameters.insert(V);
 }
 
-bool EDTGraphDataEdge::addGuid(EDT *Guid) { return Guids.insert(Guid); }
+bool CreationGraphEdge::insertGuid(EDT *Guid) { return Guids.insert(Guid); }
 
-bool EDTGraphDataEdge::hasDataBlock(DataBlock *DB) {
-  return DataBlocks.count(DB);
+bool CreationGraphEdge::hasParameter(EDTValue *V) {
+  return Parameters.count(V);
 }
+bool CreationGraphEdge::hasGuid(EDT *Guid) { return Guids.count(Guid); }
 
-bool EDTGraphDataEdge::hasParameter(EDTValue *V) { return Parameters.count(V); }
-
-bool EDTGraphDataEdge::hasGuid(EDT *Guid) { return Guids.count(Guid); }
-
-bool EDTGraphDataEdge::removeDataBlock(DataBlock *DB) {
-  return DataBlocks.remove(DB);
-}
-
-bool EDTGraphDataEdge::removeParameter(EDTValue *V) {
+bool CreationGraphEdge::removeParameter(EDTValue *V) {
   return Parameters.remove(V);
 }
 
-bool EDTGraphDataEdge::removeGuid(EDT *Guid) { return Guids.remove(Guid); }
+bool CreationGraphEdge::removeGuid(EDT *Guid) { return Guids.remove(Guid); }
+SetVector<EDTValue *> &CreationGraphEdge::getParameters() { return Parameters; }
+SetVector<EDT *> &CreationGraphEdge::getGuids() { return Guids; }
 
 /// DataBlockGraphEdge
-// DataBlockGraphEdge::DataBlockGraphEdge(DataBlock *DB)
-//     : Parent(Parent), DB(DB){};
-// DataBlockGraphEdge::~DataBlockGraphEdge() {}
+DataBlockGraphEdge::DataBlockGraphEdge(EDTGraphNode *From, EDTGraphSlotNode *To,
+                                       DataBlock *DB)
+    : From(From), To(To), DB(DB) {}
 
-/// EDTGraphNode
-EDTGraphNode::EDTGraphNode(EDT &E) : E(E) {}
-EDTGraphNode::~EDTGraphNode() {}
-
-void EDTGraphNode::print(void) {
-  LLVM_DEBUG(dbgs() << "EDT NODE:\n" << E << "\n");
-}
+DataBlockGraphEdge::~DataBlockGraphEdge() {}
+EDTGraphNode *DataBlockGraphEdge::getFrom() { return From; }
+EDTGraphSlotNode *DataBlockGraphEdge::getTo() { return To; }
+DataBlock *DataBlockGraphEdge::getDataBlock() { return DB; }

@@ -241,7 +241,7 @@ EDTGraphEdge *EDTGraph::fetchOrCreateEdge(EDTGraphNode *From, EDTGraphNode *To,
       LLVM_DEBUG(dbgs() << "          Control Edge\n");
     }
     /// Add the new edge.
-    addEdge(From, To, NewEdge);
+    insertEdge(From, To, NewEdge);
     return NewEdge;
   }
   assert(ExistingEdge != nullptr);
@@ -255,7 +255,7 @@ EDTGraphEdge *EDTGraph::fetchOrCreateEdge(EDTGraphNode *From, EDTGraphNode *To,
     auto *NewDataEdge = new EDTGraphDataEdge(From, To);
     NewDataEdge->setCreationDep(ExistingEdge->hasCreationDep());
     removeEdge(ExistingEdge);
-    addEdge(From, To, NewDataEdge);
+    insertEdge(From, To, NewDataEdge);
     return NewDataEdge;
   }
   // /// The edge is a data edge
@@ -264,7 +264,7 @@ EDTGraphEdge *EDTGraph::fetchOrCreateEdge(EDTGraphNode *From, EDTGraphNode *To,
   return ExistingEdge;
 }
 
-void EDTGraph::addEdge(EDTGraphNode *From, EDTGraphNode *To,
+void EDTGraph::insertEdge(EDTGraphNode *From, EDTGraphNode *To,
                        EDTGraphEdge *Edge) {
   auto &Tmp = OutgoingEdges[From];
   Tmp[To] = Edge;
@@ -277,16 +277,16 @@ EDTGraphEdge *EDTGraph::addCreationEdge(EDT *From, EDT *To) {
   return addCreationEdge(getNode(From), getNode(To));
 }
 
-EDTGraphEdge *EDTGraph::addDataEdge(EDT *From, EDT *To, DataBlock *DB) {
-  return addDataEdge(getNode(From), getNode(To), DB);
+EDTGraphEdge *EDTGraph::insertDataEdge(EDT *From, EDT *To, DataBlock *DB) {
+  return insertDataEdge(getNode(From), getNode(To), DB);
 }
 
-EDTGraphEdge *EDTGraph::addDataEdge(EDT *From, EDT *To, EDTValue *Parameter) {
-  return addDataEdge(getNode(From), getNode(To), Parameter);
+EDTGraphEdge *EDTGraph::insertDataEdge(EDT *From, EDT *To, EDTValue *Parameter) {
+  return insertDataEdge(getNode(From), getNode(To), Parameter);
 }
 
-EDTGraphEdge *EDTGraph::addDataEdge(EDT *From, EDT *To, EDT *Guid) {
-  return addDataEdge(getNode(From), getNode(To), Guid);
+EDTGraphEdge *EDTGraph::insertDataEdge(EDT *From, EDT *To, EDT *Guid) {
+  return insertDataEdge(getNode(From), getNode(To), Guid);
 }
 
 EDTGraphEdge *EDTGraph::addControlEdge(EDT *From, EDT *To) {
@@ -300,7 +300,7 @@ EDTGraphEdge *EDTGraph::addCreationEdge(EDTGraphNode *From, EDTGraphNode *To) {
   return CreationEdge;
 }
 
-EDTGraphEdge *EDTGraph::addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
+EDTGraphEdge *EDTGraph::insertDataEdge(EDTGraphNode *From, EDTGraphNode *To,
                                     DataBlock *DB) {
   assert(DB != nullptr && "The DataBlock is null");
   EDTGraphDataEdge *DataEdge =
@@ -309,7 +309,7 @@ EDTGraphEdge *EDTGraph::addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
   return DataEdge;
 }
 
-EDTGraphEdge *EDTGraph::addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
+EDTGraphEdge *EDTGraph::insertDataEdge(EDTGraphNode *From, EDTGraphNode *To,
                                     EDTValue *Parameter) {
   assert(Parameter != nullptr && "The Parameter is null");
   EDTGraphDataEdge *DataEdge =
@@ -318,7 +318,7 @@ EDTGraphEdge *EDTGraph::addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
   return DataEdge;
 }
 
-EDTGraphEdge *EDTGraph::addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
+EDTGraphEdge *EDTGraph::insertDataEdge(EDTGraphNode *From, EDTGraphNode *To,
                                     EDT *Guid) {
   assert(Guid != nullptr && "The Guid is null");
   EDTGraphDataEdge *DataEdge =
