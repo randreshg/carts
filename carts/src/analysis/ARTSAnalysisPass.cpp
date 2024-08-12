@@ -153,7 +153,7 @@ struct EDTInfoState : AbstractState {
   bool insertDependentEDT(EDT *ToEDT, DataBlock *DB) {
     bool Inserted = DependentEDTs.insert(ToEDT);
     if (Inserted) {
-      Cache->getGraph().addDataEdge(EDTInfo, ToEDT, DB);
+      Cache->getGraph().insertDataEdge(EDTInfo, ToEDT, DB);
       DependentEDTDBs[ToEDT].insert(DB);
     }
     return Inserted;
@@ -857,7 +857,7 @@ struct AAEDTInfoCallsite : AAEDTInfo {
       insertGuidEdge(ParentEDT, From, Guid);
 
     /// Insert the GuidEdge
-    Cache->getGraph().addDataEdge(From, To, Guid);
+    Cache->getGraph().insertDataEdge(From, To, Guid);
   }
 
   /// See AbstractAttribute::updateImpl(Attributor &A).
@@ -973,11 +973,11 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
   }
 
   void insertDataBlockGraphEdge(EDT *From, EDT *To, DataBlock *DB) {
-    Cache->getGraph().addDataEdge(From, To, DB);
+    Cache->getGraph().insertDataEdge(From, To, DB);
   }
 
   void insertParameterEdge(EDT *From, EDT *To, EDTValue *Parameter) {
-    Cache->getGraph().addDataEdge(From, To, Parameter);
+    Cache->getGraph().insertDataEdge(From, To, Parameter);
   }
 
   /// See AbstractAttribute::manifest(Attributor &A).

@@ -15,31 +15,26 @@
 /// The data structure used to represent dependencies between EDTs.
 /// ------------------------------------------------------------------- ///
 namespace arts {
-
 class CreationGraphEdge {
 public:
   CreationGraphEdge(EDTGraphNode *From, EDTGraphNode *To);
-  virtual ~CreationGraphEdge();
+  ~CreationGraphEdge();
   void print();
-
-  EDTGraphNode *getFrom() { return From; }
-  EDTGraphNode *getTo() { return To; }
-
-  /// Add interface
-  bool addParameter(EDTValue *V);
-  bool addGuid(EDT *Guid);
-
+  EDTGraphNode *getFrom();
+  EDTGraphNode *getTo();
+  /// Insert interface
+  bool insertParameter(EDTValue *V);
+  bool insertGuid(EDT *Guid);
   /// Has interface
   bool hasParameter(EDTValue *V);
   bool hasGuid(EDT *Guid);
-
   /// Remove interface
   bool removeParameter(EDTValue *V);
   bool removeGuid(EDT *Guid);
 
   /// Getters
-  SetVector<EDTValue *> &getParameters() { return Parameters; }
-  SetVector<EDT *> &getGuids() { return Guids; }
+  SetVector<EDTValue *> &getParameters();
+  SetVector<EDT *> &getGuids();
 
 private:
   EDTGraphNode *From = nullptr;
@@ -53,12 +48,10 @@ private:
 class DataBlockGraphEdge {
 public:
   DataBlockGraphEdge(EDTGraphNode *From, EDTGraphSlotNode *To, DataBlock *DB);
-  virtual ~DataBlockGraphEdge();
-  void print();
-
-  EDTGraphNode *getFrom() { return From; }
-  EDTGraphSlotNode *getTo() { return To; }
-  DataBlock *getDataBlock() { return DB; }
+  ~DataBlockGraphEdge();
+  EDTGraphNode *getFrom();
+  EDTGraphSlotNode *getTo();
+  DataBlock *getDataBlock();
 
 private:
   EDTGraphNode *From = nullptr;
