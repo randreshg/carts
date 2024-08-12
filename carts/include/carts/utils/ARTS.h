@@ -21,7 +21,7 @@ using namespace llvm;
 using namespace std;
 
 class EDT;
-class EDTDataBlock;
+class DataBlock;
 
 using EDTValue = Value;
 using EDTValueSet = SetVector<EDTValue *>;
@@ -29,7 +29,7 @@ using EDTCallBase = CallBase;
 using EDTFunction = Function;
 using EDTFunctionSet = SetVector<EDTFunction *>;
 using EDTSet = SetVector<EDT *>;
-using EDTDataBlockSet = SetVector<EDTDataBlock *>;
+using DataBlockSet = SetVector<DataBlock *>;
 
 /// ------------------------------------------------------------------- ///
 ///                          DATA ENVIRONMENT                           ///
@@ -46,53 +46,53 @@ using EDTDataBlockSet = SetVector<EDTDataBlock *>;
 /// IMPORTANT: Firstprivate is live-in, shared is both live-in and
 ///            live-out, lastprivate is live-out
 /// ------------------------------------------------------------------- ///
-class EDTDataBlock {
+class DataBlock {
 public:
   enum Mode { ReadOnly, WriteOnly, ReadWrite };
-  EDTDataBlock(EDTValue *V, Mode M, EDT *ContextEDT);
-  ~EDTDataBlock() = default;
+  DataBlock(EDTValue *V, Mode M, EDT *ContextEDT);
+  ~DataBlock() = default;
 
   /// Getters
   EDTValue *getValue();
   Mode getMode();
   EDT *getContextEDT();
-  EDTDataBlock *getParentDB();
-  EDTDataBlockSet &getChildrenDB();
-  EDTDataBlock *getDoneDB();
-  EDTDataBlock *getParentDoneDB();
+  DataBlock *getParentDB();
+  DataBlockSet &getChildrenDB();
+  DataBlock *getDoneDB();
+  DataBlock *getParentDoneDB();
   int32_t getSlot();
   int32_t getToSlot();
 
   /// Setters
-  void setParentDB(EDTDataBlock *ParentDB);
-  void setDoneDB(EDTDataBlock *DoneDB);
+  void setParentDB(DataBlock *ParentDB);
+  void setDoneDB(DataBlock *DoneDB);
   void setSlot(int32_t Slot);
 
   /// Helpers
   Type *getType();
-  bool addChildDB(EDTDataBlock *ChildDB);
+  bool addChildDB(DataBlock *ChildDB);
 
 private:
   EDTValue *V = nullptr;
   Type *Ty = nullptr;
   Mode M = Mode::ReadWrite;
   EDT *ContextEDT = nullptr;
-  EDTDataBlock *ParentDB = nullptr;
-  EDTDataBlockSet ChildrenDB;
-  EDTDataBlock *DoneDB = nullptr;
+  DataBlock *ParentDB = nullptr;
+  DataBlockSet ChildrenDB;
+  DataBlock *DoneDB = nullptr;
   int32_t Slot = -1;
 };
 
-inline raw_ostream &operator<<(raw_ostream &OS, EDTDataBlock &DB) {
+inline raw_ostream &operator<<(raw_ostream &OS, DataBlock &DB) {
   OS << *DB.getValue() << " / ";
   switch (DB.getMode()) {
-  case EDTDataBlock::Mode::ReadOnly:
+  case DataBlock::Mode::ReadOnly:
     OS << "ReadOnly";
     break;
-  case EDTDataBlock::Mode::WriteOnly:
+  case DataBlock::Mode::WriteOnly:
     OS << "WriteOnly";
     break;
-  case EDTDataBlock::Mode::ReadWrite:
+  case DataBlock::Mode::ReadWrite:
     OS << "ReadWrite";
     break;
   }

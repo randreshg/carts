@@ -46,18 +46,18 @@ EDT *ARTSCache::getOrCreateEDT(const CallBase *CB) {
   return getOrCreateEDT(CB->getCalledFunction());
 }
 
-/// EDTDataBlock
-EDTDataBlock *ARTSCache::createDataBlock(AA::ValueAndContext VAC,
-                                         EDTDataBlock::Mode M,
+/// DataBlock
+DataBlock *ARTSCache::createDataBlock(AA::ValueAndContext VAC,
+                                         DataBlock::Mode M,
                                          EDT *ContextEDT) {
-  EDTDataBlock *DB = new EDTDataBlock(VAC.getValue(), M, ContextEDT);
+  DataBlock *DB = new DataBlock(VAC.getValue(), M, ContextEDT);
   /// Insert the DataBlock into the map with its associated Context
   DataBlocks.insert(DB);
   ValueAndCtxToDataBlocks[VAC] = DB;
   return DB;
 }
 
-EDTDataBlock *ARTSCache::getOrCreateDataBlock(AA::ValueAndContext VAC,
+DataBlock *ARTSCache::getOrCreateDataBlock(AA::ValueAndContext VAC,
                                               int32_t ArgNo) {
   /// Assert that it is an EDTContext
   const CallBase *ContextEDTCB = cast<CallBase>(VAC.getCtxI());
@@ -70,8 +70,8 @@ EDTDataBlock *ARTSCache::getOrCreateDataBlock(AA::ValueAndContext VAC,
   /// otherwise it is ReadWrite. NOTE: Later on, check the Attributes of the
   /// value to determine the mode.
   bool ValueIsDep = ContextEDT->isDep(ArgNo);
-  EDTDataBlock::Mode DBMode =
-      ValueIsDep ? EDTDataBlock::Mode::ReadWrite : EDTDataBlock::Mode::ReadOnly;
+  DataBlock::Mode DBMode =
+      ValueIsDep ? DataBlock::Mode::ReadWrite : DataBlock::Mode::ReadOnly;
 
   /// If the ValueAndCtx are not in the map, create a new DataBlock
   auto Itr = ValueAndCtxToDataBlocks.find(VAC);
@@ -79,7 +79,7 @@ EDTDataBlock *ARTSCache::getOrCreateDataBlock(AA::ValueAndContext VAC,
     return createDataBlock(VAC, DBMode, ContextEDT);
 
   /// If the value is in the map, make sure the DataBlock is the same
-  EDTDataBlock *DB = Itr->second;
+  DataBlock *DB = Itr->second;
   if (DB->getMode() == DBMode)
     return DB;
   else

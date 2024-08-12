@@ -140,7 +140,7 @@ struct EDTInfoState : AbstractState {
   /// The EDTs we know are dependent from the associated EDT.
   BooleanStateWithPtrSetVector<EDT, /* InsertInvalidates */ false>
       DependentEDTs;
-  DenseMap<EDT *, EDTDataBlockSet> DependentEDTDBs;
+  DenseMap<EDT *, DataBlockSet> DependentEDTDBs;
 
   /// Insert
   bool insertChildEDT(EDT *ChildEDT) {
@@ -150,7 +150,7 @@ struct EDTInfoState : AbstractState {
     return Inserted;
   }
 
-  bool insertDependentEDT(EDT *ToEDT, EDTDataBlock *DB) {
+  bool insertDependentEDT(EDT *ToEDT, DataBlock *DB) {
     bool Inserted = DependentEDTs.insert(ToEDT);
     if (Inserted) {
       Cache->getGraph().addDataEdge(EDTInfo, ToEDT, DB);
@@ -347,18 +347,18 @@ struct AAEDTInfo : public StateWrapper<EDTInfoState, AbstractAttribute> {
 };
 
 /// ------------------------------------------------------------------- ///
-/// - - - - - - - - - - -  EDTDataBlockInfoState  - - - - - - - - - - - ///
+/// - - - - - - - - - - -  DataBlockInfoState  - - - - - - - - - - - ///
 /// ------------------------------------------------------------------- ///
 /// All the information we have about an EDT data block
-struct AAEDTDataBlockInfo;
+struct AADataBlockInfo;
 
-struct EDTDataBlockInfoState : AbstractState {
+struct DataBlockInfoState : AbstractState {
   /// Pointer to the ARTSCache
   ARTSCache *Cache = nullptr;
   /// Flag to track if we reached a fixpoint.
   bool IsAtFixpoint = false;
   /// DataBlock
-  EDTDataBlock *DB = nullptr;
+  DataBlock *DB = nullptr;
   /// The EDT that is associated with the context of the data block
   EDT *ContextEDT = nullptr;
 
@@ -367,14 +367,14 @@ struct EDTDataBlockInfoState : AbstractState {
 
   /// For SyncEDTs
   BooleanStatePtr<EDT> DependentSiblingEDT;
-  BooleanStatePtr<EDTDataBlock> DependentDoneDB;
+  BooleanStatePtr<DataBlock> DependentDoneDB;
 
   /// Set of ChildDBs that have signaled to the EDTDone of the associated
   /// ContextEDT of the DataBlock
-  BooleanStateWithPtrSetVector<EDTDataBlock, false> SignaledDBs;
+  BooleanStateWithPtrSetVector<DataBlock, false> SignaledDBs;
 
   /// Set of ChildDBs that have been signaled to my EDTDone
-  BooleanStateWithPtrSetVector<EDTDataBlock, false> SignaledDBsToEDTDone;
+  BooleanStateWithPtrSetVector<DataBlock, false> SignaledDBsToEDTDone;
 
   /// What we know about the DependentSiblingEDTs
   BooleanStateWithPtrSetVector<EDT, false> DependentSiblingEDTs;
@@ -394,7 +394,7 @@ struct EDTDataBlockInfoState : AbstractState {
   /// Location
 
   /// Getters
-  EDTDataBlock *getDataBlock() const { return DB; }
+  DataBlock *getDataBlock() const { return DB; }
   Value *getValue() const { return DB->getValue(); }
   // EDT *getParentEDT() const { return ParentEDT; }
   EDT *getContextEDT() const { return ContextEDT; }
@@ -420,13 +420,13 @@ struct EDTDataBlockInfoState : AbstractState {
 
   /// Abstract State interface
   ///{
-  EDTDataBlockInfoState() {}
-  EDTDataBlockInfoState(bool BestState) {
+  DataBlockInfoState() {}
+  DataBlockInfoState(bool BestState) {
     if (!BestState)
       indicatePessimisticFixpoint();
   }
 
-  ChangeStatus hasChanged(EDTDataBlockInfoState &StateBefore) {
+  ChangeStatus hasChanged(DataBlockInfoState &StateBefore) {
     return StateBefore == *this ? ChangeStatus::UNCHANGED
                                 : ChangeStatus::CHANGED;
   }
@@ -463,10 +463,10 @@ struct EDTDataBlockInfoState : AbstractState {
   }
 
   /// Return the assumed state
-  EDTDataBlockInfoState &getAssumed() { return *this; }
-  const EDTDataBlockInfoState &getAssumed() const { return *this; }
+  DataBlockInfoState &getAssumed() { return *this; }
+  const DataBlockInfoState &getAssumed() const { return *this; }
 
-  bool operator==(const EDTDataBlockInfoState &RHS) const {
+  bool operator==(const DataBlockInfoState &RHS) const {
     if (DependentChildEDTs != RHS.DependentChildEDTs)
       return false;
     if (DependentSiblingEDTs != RHS.DependentSiblingEDTs)
@@ -475,26 +475,26 @@ struct EDTDataBlockInfoState : AbstractState {
   }
 
   /// Return empty set as the best state of potential values.
-  static EDTDataBlockInfoState getBestState() {
-    return EDTDataBlockInfoState(true);
+  static DataBlockInfoState getBestState() {
+    return DataBlockInfoState(true);
   }
 
-  static EDTDataBlockInfoState getBestState(EDTDataBlockInfoState &KIS) {
+  static DataBlockInfoState getBestState(DataBlockInfoState &KIS) {
     return getBestState();
   }
 
   /// Return full set as the worst state of potential values.
-  static EDTDataBlockInfoState getWorstState() {
-    return EDTDataBlockInfoState(false);
+  static DataBlockInfoState getWorstState() {
+    return DataBlockInfoState(false);
   }
   ///}
 };
 
-/// EDTDataBlockInfo
-struct AAEDTDataBlockInfo
-    : public StateWrapper<EDTDataBlockInfoState, AbstractAttribute> {
-  using Base = StateWrapper<EDTDataBlockInfoState, AbstractAttribute>;
-  AAEDTDataBlockInfo(const IRPosition &IRP, Attributor &A) : Base(IRP) {}
+/// DataBlockInfo
+struct AADataBlockInfo
+    : public StateWrapper<DataBlockInfoState, AbstractAttribute> {
+  using Base = StateWrapper<DataBlockInfoState, AbstractAttribute>;
+  AADataBlockInfo(const IRPosition &IRP, Attributor &A) : Base(IRP) {}
 
   /// Statistics are tracked as part of manifest for now.
   void trackStatistics() const override {}
@@ -528,7 +528,7 @@ struct AAEDTDataBlockInfo
       return Str;
     };
 
-    std::string DBStr = "EDTDataBlock ->\n";
+    std::string DBStr = "DataBlock ->\n";
     assert(DB && "DataBlock is null!");
     /// Context EDT
     DBStr += "     - Context: EDT #" + std::to_string(ContextEDT->getID()) +
@@ -575,17 +575,17 @@ struct AAEDTDataBlockInfo
   }
 
   /// Create an abstract attribute biew for the position \p IRP.
-  static AAEDTDataBlockInfo &createForPosition(const IRPosition &IRP,
+  static AADataBlockInfo &createForPosition(const IRPosition &IRP,
                                                Attributor &A);
 
   /// See AbstractAttribute::getName()
-  const std::string getName() const override { return "AAEDTDataBlockInfo"; }
+  const std::string getName() const override { return "AADataBlockInfo"; }
 
   /// See AbstractAttribute::getIdAddr()
   const char *getIdAddr() const override { return &ID; }
 
   /// This function should return true if the type of the \p AA is
-  /// AAEDTDataBlockInfo
+  /// AADataBlockInfo
   static bool classof(const AbstractAttribute *AA) {
     return (AA->getIdAddr() == &ID);
   }
@@ -866,19 +866,19 @@ struct AAEDTInfoCallsite : AAEDTInfo {
                       << EDTInfo->getID() << "\n");
 
     CallBase &EDTCall = cast<CallBase>(getAnchorValue());
-    /// Run AAEDTDataBlockInfo on each argument of the call instruction
+    /// Run AADataBlockInfo on each argument of the call instruction
     bool AllDBsWereFixed = true;
     for (uint32_t CallArgItr = 0; CallArgItr < EDTCall.data_operands_size();
          ++CallArgItr) {
-      auto *ArgEDTDataBlockAA = A.getAAFor<AAEDTInfo>(
+      auto *ArgDataBlockAA = A.getAAFor<AAEDTInfo>(
           *this, IRPosition::callsite_argument(EDTCall, CallArgItr),
           DepClassTy::OPTIONAL);
-      if (!ArgEDTDataBlockAA->isAtFixpoint()) {
+      if (!ArgDataBlockAA->isAtFixpoint()) {
         AllDBsWereFixed = false;
         continue;
       }
       /// Here we clamp the set of and DependentEDTs
-      DependentEDTs ^= ArgEDTDataBlockAA->DependentEDTs;
+      DependentEDTs ^= ArgDataBlockAA->DependentEDTs;
     }
 
     if (!AllDBsWereFixed)
@@ -921,7 +921,7 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
 
     /// Create DataBlockInfo for the argument
     AA::ValueAndContext VAC(*ArgVal, EDTCall);
-    EDTDataBlock *DB = Cache->getOrCreateDataBlock(VAC, CallArgItr);
+    DataBlock *DB = Cache->getOrCreateDataBlock(VAC, CallArgItr);
 
     /// If the value is a not a dependency of the EDT, add the parameter to the
     /// graph and indicate optimistic fixpoint
@@ -944,13 +944,13 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     LLVM_DEBUG(dbgs() << "\n[AAEDTInfoCallsiteArg::updateImpl] "
                       << getAssociatedValue() << " from EDT #"
                       << CalledEDT->getID() << "\n");
-    /// Run AAEDTDataBlockInfo on the associated value
+    /// Run AADataBlockInfo on the associated value
     CallBase &EDTCall = cast<CallBase>(getAnchorValue());
-    auto *ArgValDBInfoAA = A.getAAFor<AAEDTDataBlockInfo>(
+    auto *ArgValDBInfoAA = A.getAAFor<AADataBlockInfo>(
         *this, IRPosition::callsite_argument(EDTCall, getCallSiteArgNo()),
         DepClassTy::OPTIONAL);
     if (!ArgValDBInfoAA || !ArgValDBInfoAA->getState().isValidState()) {
-      LLVM_DEBUG(dbgs() << "     - Failed to get AAEDTDataBlockInfo for value: "
+      LLVM_DEBUG(dbgs() << "     - Failed to get AADataBlockInfo for value: "
                         << *ArgVal << "\n");
       return indicatePessimisticFixpoint();
     }
@@ -972,7 +972,7 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     return ChangeStatus::CHANGED;
   }
 
-  void insertDataBlockEdge(EDT *From, EDT *To, EDTDataBlock *DB) {
+  void insertDataBlockEdge(EDT *From, EDT *To, DataBlock *DB) {
     Cache->getGraph().addDataEdge(From, To, DB);
   }
 
@@ -991,13 +991,13 @@ private:
 };
 
 /// ------------------------------------------------------------------- ///
-/// - - - - - - - - - - - - -  AAEDTDataBlockInfo - - - - - - - - - - - ///
+/// - - - - - - - - - - - - -  AADataBlockInfo - - - - - - - - - - - ///
 /// ------------------------------------------------------------------- ///
-/// The EDTDataBlock info abstract attribute, basically, what can we say
-/// about a DataBlock with regards to the EDTDataBlockInfoState.
-struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
-  AAEDTDataBlockInfoCtxAndVal(const IRPosition &IRP, Attributor &A)
-      : AAEDTDataBlockInfo(IRP, A) {}
+/// The DataBlock info abstract attribute, basically, what can we say
+/// about a DataBlock with regards to the DataBlockInfoState.
+struct AADataBlockInfoCtxAndVal : AADataBlockInfo {
+  AADataBlockInfoCtxAndVal(const IRPosition &IRP, Attributor &A)
+      : AADataBlockInfo(IRP, A) {}
 
   /// See AbstractAttribute::initialize(...).
   void initialize(Attributor &A) override {
@@ -1012,7 +1012,7 @@ struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
 
     /// Set ContextEDT
     ContextEDT = Cache->getEDT(&EDTCall);
-    LLVM_DEBUG(dbgs() << "\n[AAEDTDataBlockInfoCtxAndVal::initialize] "
+    LLVM_DEBUG(dbgs() << "\n[AADataBlockInfoCtxAndVal::initialize] "
                       << *DB->getValue() << " from EDT #"
                       << Cache->getEDT(EDTCall.getCalledFunction())->getID()
                       << "\n");
@@ -1041,7 +1041,7 @@ struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
     DependentSiblingEDT.indicateOptimisticFixpoint();
 
     /// Set DoneDB
-    EDTDataBlock *DoneDB =
+    DataBlock *DoneDB =
         Cache->getOrCreateDataBlock(DependentSiblingValAndCtx[0]);
     DB->setDoneDB(DoneDB);
     DependentDoneDB.set(DoneDB);
@@ -1098,7 +1098,7 @@ struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
     for (AA::ValueAndContext ChildVAC : DependentChildValAndCtx) {
       const CallBase &ChildCall = *cast<CallBase>(ChildVAC.getCtxI());
       auto ChildCallArg = Cache->getArgNo(ChildVAC);
-      auto *ChildEDTAA = A.getAAFor<AAEDTDataBlockInfo>(
+      auto *ChildEDTAA = A.getAAFor<AADataBlockInfo>(
           *this, IRPosition::callsite_argument(ChildCall, ChildCallArg),
           DepClassTy::OPTIONAL);
       assert(ChildEDTAA && "ChildEDTAA is null!");
@@ -1108,7 +1108,7 @@ struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
         continue;
       }
       /// Add ChildDB
-      EDTDataBlock *ChildDB = ChildEDTAA->getDataBlock();
+      DataBlock *ChildDB = ChildEDTAA->getDataBlock();
       DB->addChildDB(ChildDB);
       /// If the value is signaled by any ChildEDT, or any of its descendants,
       /// we do not have to signal it. Clamp the set of SignaledChildEDTs
@@ -1122,7 +1122,7 @@ struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
         SignaledDBs ^= ChildEDTAA->SignaledDBs;
         /// Check if any of the SignaledChildEDTs signals the value to my
         /// EDTDoneSync
-        for (EDTDataBlock *SignaledChildDB : ChildEDTAA->SignaledDBs) {
+        for (DataBlock *SignaledChildDB : ChildEDTAA->SignaledDBs) {
           EDT *SignaledContextEDT = SignaledChildDB->getContextEDT();
           if (SignaledContextEDT->getDoneSync() != EDTDoneSync)
             continue;
@@ -1140,7 +1140,7 @@ struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
 
     /// If EDT is synchronous, set ParentDB
     if (!ContextEDT->isAsync()) {
-      for (EDTDataBlock *SignaledDB : SignaledDBsToEDTDone) {
+      for (DataBlock *SignaledDB : SignaledDBsToEDTDone) {
         assert(!SignaledDB->getParentDB() && "SignaledDB was set before!");
         SignaledDB->setParentDB(DB);
       }
@@ -1269,7 +1269,7 @@ struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
   /// See AbstractAttribute::updateImpl(Attributor &A).
   ChangeStatus updateImpl(Attributor &A) override {
     LLVM_DEBUG(CallBase &EDTCall = cast<CallBase>(getAnchorValue());
-               dbgs() << "\n[AAEDTDataBlockInfoCtxAndVal::updateImpl] "
+               dbgs() << "\n[AADataBlockInfoCtxAndVal::updateImpl] "
                       << getAssociatedValue() << " from EDT #"
                       << Cache->getEDT(EDTCall.getCalledFunction())->getID()
                       << "\n");
@@ -1287,7 +1287,7 @@ struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
   /// See AbstractAttribute::manifest(Attributor &A).
   ChangeStatus manifest(Attributor &A) override {
     LLVM_DEBUG(dbgs() << "-------------------------------\n");
-    LLVM_DEBUG(dbgs() << "[AAEDTDataBlockInfoCtxAndVal::manifest] "
+    LLVM_DEBUG(dbgs() << "[AADataBlockInfoCtxAndVal::manifest] "
                       << *DB->getValue() << " from EDT #" << ContextEDT->getID()
                       << "\n"
                       << getAsStr(&A) << "\n");
@@ -1300,7 +1300,7 @@ struct AAEDTDataBlockInfoCtxAndVal : AAEDTDataBlockInfo {
 /// ------------------------------------------------------------------- ///
 /// Create for position
 const char AAEDTInfo::ID = 0;
-const char AAEDTDataBlockInfo::ID = 0;
+const char AADataBlockInfo::ID = 0;
 
 AAEDTInfo &AAEDTInfo::createForPosition(const IRPosition &IRP, Attributor &A) {
   AAEDTInfo *AA = nullptr;
@@ -1325,9 +1325,9 @@ AAEDTInfo &AAEDTInfo::createForPosition(const IRPosition &IRP, Attributor &A) {
   return *AA;
 }
 
-AAEDTDataBlockInfo &AAEDTDataBlockInfo::createForPosition(const IRPosition &IRP,
+AADataBlockInfo &AADataBlockInfo::createForPosition(const IRPosition &IRP,
                                                           Attributor &A) {
-  AAEDTDataBlockInfo *AA = nullptr;
+  AADataBlockInfo *AA = nullptr;
   switch (IRP.getPositionKind()) {
   case IRPosition::IRP_INVALID:
   case IRPosition::IRP_RETURNED:
@@ -1337,9 +1337,9 @@ AAEDTDataBlockInfo &AAEDTDataBlockInfo::createForPosition(const IRPosition &IRP,
   case IRPosition::IRP_ARGUMENT:
   case IRPosition::IRP_FLOAT:
     llvm_unreachable(
-        "EDTDataBlockInfo can only be created for floating position!");
+        "DataBlockInfo can only be created for floating position!");
   case IRPosition::IRP_CALL_SITE_ARGUMENT:
-    AA = new (A.Allocator) AAEDTDataBlockInfoCtxAndVal(IRP, A);
+    AA = new (A.Allocator) AADataBlockInfoCtxAndVal(IRP, A);
     break;
   }
 

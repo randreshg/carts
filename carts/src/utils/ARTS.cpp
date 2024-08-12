@@ -78,36 +78,36 @@ namespace arts {
 /// ------------------------------------------------------------------- ///
 ///                            EDT DATABLOCK                            ///
 /// ------------------------------------------------------------------- ///
-EDTDataBlock::EDTDataBlock(EDTValue *V, Mode M, EDT *ContextEDT)
+DataBlock::DataBlock(EDTValue *V, Mode M, EDT *ContextEDT)
     : V(V), M(M), ContextEDT(ContextEDT) {}
 
 /// Getters
-EDTValue *EDTDataBlock::getValue() { return V; }
-EDTDataBlock::Mode EDTDataBlock::getMode() { return M; }
-EDT *EDTDataBlock::getContextEDT() { return ContextEDT; }
-EDTDataBlock *EDTDataBlock::getParentDB() { return ParentDB; }
-EDTDataBlockSet &EDTDataBlock::getChildrenDB() { return ChildrenDB; }
-EDTDataBlock *EDTDataBlock::getDoneDB() { return DoneDB; };
-EDTDataBlock *EDTDataBlock::getParentDoneDB() {
+EDTValue *DataBlock::getValue() { return V; }
+DataBlock::Mode DataBlock::getMode() { return M; }
+EDT *DataBlock::getContextEDT() { return ContextEDT; }
+DataBlock *DataBlock::getParentDB() { return ParentDB; }
+DataBlockSet &DataBlock::getChildrenDB() { return ChildrenDB; }
+DataBlock *DataBlock::getDoneDB() { return DoneDB; };
+DataBlock *DataBlock::getParentDoneDB() {
   if (ParentDB)
     return ParentDB->getDoneDB();
   return nullptr;
 }
-int32_t EDTDataBlock::getSlot() { return Slot; }
-int32_t EDTDataBlock::getToSlot() {
+int32_t DataBlock::getSlot() { return Slot; }
+int32_t DataBlock::getToSlot() {
   return getDoneDB() ? (getDoneDB()->getSlot())
                      : (getParentDoneDB()->getSlot());
 }
 
 /// Setters
-void EDTDataBlock::setParentDB(EDTDataBlock *ParentDB) {
+void DataBlock::setParentDB(DataBlock *ParentDB) {
   this->ParentDB = ParentDB;
 }
-void EDTDataBlock::setSlot(int32_t Slot) { this->Slot = Slot; }
-void EDTDataBlock::setDoneDB(EDTDataBlock *DoneDB) { this->DoneDB = DoneDB; }
+void DataBlock::setSlot(int32_t Slot) { this->Slot = Slot; }
+void DataBlock::setDoneDB(DataBlock *DoneDB) { this->DoneDB = DoneDB; }
 
 /// Helpers
-Type *EDTDataBlock::getType() {
+Type *DataBlock::getType() {
   if (Ty)
     return Ty;
   /// Get the type of the value
@@ -123,7 +123,7 @@ Type *EDTDataBlock::getType() {
   return Ty;
 }
 
-bool EDTDataBlock::addChildDB(EDTDataBlock *ChildDB) {
+bool DataBlock::addChildDB(DataBlock *ChildDB) {
   return ChildrenDB.insert(ChildDB);
 }
 /// ------------------------------------------------------------------- ///
