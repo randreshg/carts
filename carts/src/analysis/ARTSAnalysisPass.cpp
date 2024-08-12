@@ -4,7 +4,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
-#include "llvm/ADT/SmallSet.h"
+// #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstrTypes.h"
@@ -23,10 +23,10 @@
 #include "llvm/Transforms/IPO/Attributor.h"
 #include "llvm/Transforms/Utils/CallGraphUpdater.h"
 
-#include "carts/analysis/graph/EDTEdge.h"
-#include "carts/analysis/graph/EDTGraph.h"
+#include "carts/analysis/graph/ARTSGraph.h"
 #include "carts/codegen/ARTSCodegen.h"
 #include "carts/utils/ARTS.h"
+
 #include "carts/utils/ARTSCache.h"
 #include "carts/utils/ARTSUtils.h"
 
@@ -146,7 +146,7 @@ struct EDTInfoState : AbstractState {
   bool insertChildEDT(EDT *ChildEDT) {
     bool Inserted = ChildEDTs.insert(ChildEDT);
     if (Inserted)
-      Cache->getGraph().addCreationEdge(EDTInfo, ChildEDT);
+      Cache->getGraph().insertCreationEdge(EDTInfo, ChildEDT);
     return Inserted;
   }
 
@@ -475,9 +475,7 @@ struct DataBlockInfoState : AbstractState {
   }
 
   /// Return empty set as the best state of potential values.
-  static DataBlockInfoState getBestState() {
-    return DataBlockInfoState(true);
-  }
+  static DataBlockInfoState getBestState() { return DataBlockInfoState(true); }
 
   static DataBlockInfoState getBestState(DataBlockInfoState &KIS) {
     return getBestState();
@@ -576,7 +574,7 @@ struct AADataBlockInfo
 
   /// Create an abstract attribute biew for the position \p IRP.
   static AADataBlockInfo &createForPosition(const IRPosition &IRP,
-                                               Attributor &A);
+                                            Attributor &A);
 
   /// See AbstractAttribute::getName()
   const std::string getName() const override { return "AADataBlockInfo"; }
@@ -964,7 +962,8 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     if (SignalEDT) {
       LLVM_DEBUG(dbgs() << "     - EDT #" << CalledEDT->getID()
                         << " signals to EDT #" << SignalEDT->getID() << "\n");
-      insertDataBlockGraphEdge(CalledEDT, SignalEDT, ArgValDBInfoAA->getDataBlock());
+      insertDataBlockGraphEdge(CalledEDT, SignalEDT,
+                               ArgValDBInfoAA->getDataBlock());
       DependentEDTs.insert(SignalEDT);
     }
 
@@ -1326,7 +1325,7 @@ AAEDTInfo &AAEDTInfo::createForPosition(const IRPosition &IRP, Attributor &A) {
 }
 
 AADataBlockInfo &AADataBlockInfo::createForPosition(const IRPosition &IRP,
-                                                          Attributor &A) {
+                                                    Attributor &A) {
   AADataBlockInfo *AA = nullptr;
   switch (IRP.getPositionKind()) {
   case IRPosition::IRP_INVALID:
@@ -1413,7 +1412,7 @@ public:
 
   void generateCode(Module &M, ARTSCache &Cache) {
     ARTSCodegen &CG = Cache.getCG();
-    EDTGraph &Graph = Cache.getGraph();
+    ARTSGraph &Graph = Cache.getGraph();
     auto EDTNodes = Graph.getNodes();
     /// Reserve GUIDs for all EDTs
     for (EDTGraphNode *EDTNode : EDTNodes) {
@@ -1446,7 +1445,7 @@ public:
           WorkList.insert(OutEdge->getTo());
       }
     }
-  
+
     /// Insert init functions
     CG.insertInitFunctions();
     CG.insertARTSShutdownFn();

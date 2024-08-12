@@ -2,15 +2,15 @@
 #include "llvm/Support/Debug.h"
 #include <cassert>
 
-#include "carts/analysis/graph/CARTSEdge.h"
-#include "carts/analysis/graph/CARTSGraph.h"
+#include "carts/analysis/graph/ARTSEdge.h"
+#include "carts/analysis/graph/ARTSGraph.h"
 #include "carts/utils/ARTS.h"
 
 using namespace llvm;
 using namespace arts;
 
 /// DEBUG
-#define DEBUG_TYPE "edt-graph"
+#define DEBUG_TYPE "arts-graph"
 // #if !defined(NDEBUG)
 // static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 // #endif

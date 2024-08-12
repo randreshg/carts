@@ -6,7 +6,7 @@ opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/li
 # -debug-only=omp-transform,arts,carts,arts-ir-builder,arts-utils\
 llvm-dis test_arts_ir.bc
 opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so \
-		-debug-only=arts-analysis,arts,carts,arts-ir-builder,edt-graph,carts-metadata,arts-codegen,arts-utils\
+		-debug-only=arts-analysis,arts,carts,arts-ir-builder,arts-graph,carts-metadata,arts-codegen,arts-utils\
 		-passes="arts-analysis" test_arts_ir.bc -o test_arts_analysis.bc
 
 -------------------------------------------------
@@ -304,7 +304,7 @@ EDTDataBlock ->
 
 [Attributor] Done with 4 functions, result: unchanged.
 - - - - - - - - - - - - - - - - - - - - - - - -
-[edt-graph] Printing the EDT Graph
+[arts-graph] Printing the EDT Graph
 - - - - - - - - - - - - - - - - - - 
 - EDT #0 - "edt.0.main"
   - Type: main
@@ -1446,7 +1446,7 @@ attributes #4 = { nocallback nofree nosync nounwind willreturn memory(inaccessib
 
 
 -------------------------------------------------
-[edt-graph] Destroying the EDT Graph
+[arts-graph] Destroying the EDT Graph
 llvm-dis test_arts_analysis.bc
 opt -O3 test_arts_analysis.bc -o test_opt.bc
 llvm-dis test_opt.bc

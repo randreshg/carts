@@ -8,7 +8,7 @@ ARTSCache::ARTSCache(Module &M, AnalysisGetter &AG, BumpPtrAllocator &Allocator,
                      SetVector<Function *> &Functions)
     : InformationCache(M, AG, Allocator, &Functions), M(M),
       Functions(Functions) {
-  Graph = new EDTGraph();
+  Graph = new ARTSGraph();
   CG = new ARTSCodegen(this);
 }
 
@@ -145,7 +145,7 @@ void ARTSCache::insertGraphNode(EDT *E) { Graph->insertNode(E); }
 Module &ARTSCache::getModule() { return M; }
 SetVector<Function *> &ARTSCache::getFunctions() const { return Functions; }
 EDTSet &ARTSCache::getEDTs() { return EDTs; }
-EDTGraph &ARTSCache::getGraph() { return *Graph; }
+ARTSGraph &ARTSCache::getGraph() { return *Graph; }
 ARTSCodegen &ARTSCache::getCG() { return *CG; }
 
 } // namespace arts
