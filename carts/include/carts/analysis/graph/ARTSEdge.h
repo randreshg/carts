@@ -1,20 +1,20 @@
-//===- EDTEdge.h - EDTEdge-Related structs --------------------*- C++ -*-===//
+//===- ARTSEdge.h - ARTSEdge-Related structs --------------------*- C++ -*-===//
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_EDTEDGE_H
-#define LLVM_EDTEDGE_H
+#ifndef LLVM_ARTSEDGE_H
+#define LLVM_ARTSEDGE_H
 
-#include "carts/analysis/graph/CARTSGraph.h"
 #include "carts/utils/ARTS.h"
-// #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
-// #include <unordered_set>
 
 /// ------------------------------------------------------------------- ///
 ///                             EDT EDGE                               ///
 /// The data structure used to represent dependencies between EDTs.
 /// ------------------------------------------------------------------- ///
 namespace arts {
+class EDTGraphNode;
+class EDTGraphSlotNode;
+
 class CreationGraphEdge {
 public:
   CreationGraphEdge(EDTGraphNode *From, EDTGraphNode *To);
@@ -61,4 +61,4 @@ private:
 
 } // namespace arts
 
-#endif // LLVM_EDTEDGE_H
+#endif // LLVM_ARTSEDGE_H

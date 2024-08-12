@@ -1,9 +1,9 @@
-//===- CARTSGraph.h - CARTSGraph-Related structs --------------------*- C++
+//===- ARTSGraph.h - ARTSGraph-Related structs --------------------*- C++
 //-*-===//
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_EDTGRAPH_H
-#define LLVM_EDTGRAPH_H
+#ifndef LLVM_ARTSGRAPH_H
+#define LLVM_ARTSGRAPH_H
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
@@ -12,22 +12,16 @@
 #include <cstdint>
 #include <unordered_set>
 
+#include "carts/analysis/graph/ARTSEdge.h"
 #include "carts/utils/ARTS.h"
 
 /// ------------------------------------------------------------------- ///
-///                              EDT GRAPH                              ///
+///                              ARTS GRAPH                              ///
 /// The data structure used to represent the EDTs and its dependencies
 /// in the program.
 /// ------------------------------------------------------------------- ///
 namespace arts {
 using namespace std;
-/// Edges
-class CARTSGraphEdge;
-class CreationGraphEdge;
-class DataBlockGraphEdge;
-/// Nodes
-class EDTGraphNode;
-class EDTGraphSlotNode;
 
 /// Classes
 class EDTGraphNode {
@@ -37,9 +31,9 @@ public:
   void print(void);
   EDT *getEDT();
   EDTGraphSlotNode *getOrCreateSlotNode(uint32_t Slot);
+  unordered_set<EDTGraphSlotNode *> getSlotNodes();
 
 private:
-  CreationGraphEdge *IncomingCreationEdge = nullptr;
   DenseMap<uint32_t, EDTGraphSlotNode *> IncomingSlotNodes;
   EDT &E;
 };
@@ -60,10 +54,10 @@ private:
   uint32_t Slot;
 };
 
-class CARTSGraph {
+class ARTSGraph {
 public:
-  CARTSGraph();
-  ~CARTSGraph();
+  ARTSGraph();
+  ~ARTSGraph();
 
   /// Analysis
   bool isCreationReachable(EDT *From, EDT *To);
@@ -101,6 +95,8 @@ private:
   unordered_set<CreationGraphEdge *>
   getOutgoingCreationEdges(EDTGraphNode *Node);
   unordered_set<DataBlockGraphEdge *>
+  getIncomingDataBlockEdges(EDTGraphNode *Node);
+  unordered_set<DataBlockGraphEdge *>
   getIncomingDataBlockEdges(EDTGraphSlotNode *Node);
   unordered_set<DataBlockGraphEdge *>
   getOutgoingDataBlockEdges(EDTGraphNode *Node);
@@ -118,9 +114,11 @@ private:
   DataBlockGraphEdge *insertDataBlockEdge(EDTGraphNode *From,
                                           EDTGraphSlotNode *To, DataBlock *DB);
 
-  void removeEdge(CreationGraphEdge *Edge);
-  void removeEdge(EDTGraphNode *From, EDTGraphNode *To);
-  void addReachableEDT(EDTGraphNode *From);
+  /// Remove edges
+  // void removeEdge(CreationGraphEdge *Edge);
+  // void removeEdge(DataBlockGraphEdge *Edge);
+  // void removeEdge(EDTGraphNode *From, EDTGraphNode *To);
+  // void removeEdge(EDTGraphNode *From, EDTGraphSlotNode *To);
 
   /// Attributes
   DenseMap<Function *, EDTGraphNode *> EDTs;
@@ -146,4 +144,4 @@ public:
 };
 } // namespace arts
 
-#endif // LLVM_EDTGRAPH_H
+#endif // LLVM_ARTSGRAPH_H

@@ -13,7 +13,7 @@
 
 // // #include "ARTSAnalyzer.h"
 // // #include "ARTSIRBuilder.h"
-// #include "EDTGraph.h"
+// #include "ARTSGraph.h"
 
 // using namespace llvm;
 // using namespace arts;
@@ -44,7 +44,7 @@
 //     /// Fetch NOELLE Manager
 //     auto &NM = getAnalysis<Noelle>();
 //     CARTSCache Cache(M, NM);
-//     CARTSGraph EDTG(Cache);
+//     ARTSGraph EDTG(Cache);
 //     EDTG.print();
 
 //     /// Print module info

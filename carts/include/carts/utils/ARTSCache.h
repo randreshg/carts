@@ -6,7 +6,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
 
-#include "carts/analysis/graph/EDTGraph.h"
+#include "carts/analysis/graph/ARTSGraph.h"
 #include "carts/codegen/ARTSCodegen.h"
 #include "carts/utils/ARTS.h"
 #include "llvm/Transforms/IPO/Attributor.h"
@@ -54,7 +54,7 @@ public:
   Module &getModule();
   SetVector<Function *> &getFunctions() const;
   EDTSet &getEDTs();
-  EDTGraph &getGraph();
+  ARTSGraph &getGraph();
   ARTSCodegen &getCG();
 
 private:
@@ -70,7 +70,7 @@ private:
   DenseMap<AA::ValueAndContext, int32_t> ValueAndCtxToCallArgItr;
   DenseMap<AA::ValueAndContext, DataBlock *> ValueAndCtxToDataBlocks;
   /// Analysis Output
-  EDTGraph *Graph = nullptr;
+  ARTSGraph *Graph = nullptr;
   ARTSCodegen *CG = nullptr;
 };
 } // namespace arts

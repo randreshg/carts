@@ -15,11 +15,9 @@
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
-// #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 
-#include "carts/analysis/graph/EDTEdge.h"
-#include "carts/analysis/graph/EDTGraph.h"
+#include "carts/analysis/graph/ARTSGraph.h"
 #include "carts/codegen/ARTSCodegen.h"
 #include "carts/utils/ARTS.h"
 #include "carts/utils/ARTSCache.h"
@@ -278,7 +276,7 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
 
   DenseMap<Value *, Value *> RewiringMap;
   /// Get the information we know about the Module
-  EDTGraph &Graph = Cache->getGraph();
+  ARTSGraph &Graph = Cache->getGraph();
   EDTCodegen *ECG = getOrCreateEDTCodegen(E);
 
   /// Parameters
@@ -423,7 +421,7 @@ void ARTSCodegen::insertEDTCall(EDT &E) {
     return;
   }
 
-  EDTGraph &Graph = Cache->getGraph();
+  ARTSGraph &Graph = Cache->getGraph();
   EDTGraphDataEdge *InputParentDataEdges =
       dyn_cast<EDTGraphDataEdge>(Graph.getEdge(ParentEDT, &E));
   auto EDTName = E.getName();
@@ -536,7 +534,7 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
                     << "\n");
   /// Analyze all the data outgoing edges from the EDT
   EDTCodegen *ECG = getOrCreateEDTCodegen(E);
-  EDTGraph &Graph = Cache->getGraph();
+  ARTSGraph &Graph = Cache->getGraph();
   auto OutgoingEdges = Graph.getOutgoingEdges(&E);
   Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsSignalEdtValue);
   /// Set insertion point to the exit block of the EDT function
@@ -566,7 +564,7 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
       LLVM_DEBUG(dbgs() << " - DBValue: " << *DBValue << "\n");
       Value *DepVal = nullptr;
       if (!DataEdge->hasCreationDep()) {
-        if(Value *DepVal = ECG->getDependency(DB->getSlot()))
+        if (Value *DepVal = ECG->getDependency(DB->getSlot()))
           DBValue = DepVal;
       }
       //   DepVal = ECG->getDependency(DB->getSlot());
