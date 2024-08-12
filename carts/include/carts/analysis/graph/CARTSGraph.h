@@ -21,9 +21,9 @@
 namespace arts {
 using namespace std;
 
-class EDTGraphCreationEdge;
+class CreationGraphEdge;
 
-class EDTGraphDataBlockEdge;
+class DataBlockGraphEdge;
 class EDTGraphNode;
 class EDTGraphSlotNode;
 
@@ -44,9 +44,11 @@ public:
   ~EDTGraphNode();
   void print(void);
   EDT *getEDT() { return &E; }
+  void insertSlotNode(uint32_t Slot);
+  EDTGraphSlotNode *getSlotNode(uint32_t Slot);
 
 private:
-  EDTGraphCreationEdge *IncomingCreationEdge = nullptr;
+  CreationGraphEdge *IncomingCreationEdge = nullptr;
   SetVector<EDTGraphSlotNode *> IncomingSlotNodes;
   EDT &E;
 };
@@ -60,7 +62,7 @@ public:
   uint32_t getSlot() { return Slot; }
 
 private:
-  SetVector<EDTGraphDataBlockEdge *> IncomingDataEdges;
+  SetVector<DataBlockGraphEdge *> IncomingDataEdges;
   EDTGraphNode *Parent = nullptr;
   uint32_t Slot;
 };
@@ -72,8 +74,8 @@ public:
 
   /// Analysis
   bool isReachable(EDTGraphNode *From, EDTGraphNode *To);
-  bool isCreationReachable(EDTGraphNode *From, EDTGraphNode *To);
-  bool isDataDependent(EDTGraphNode *From, EDTGraphNode *To);
+  // bool isCreationReachable(EDTGraphNode *From, EDTGraphNode *To);
+  // bool isDataDependent(EDTGraphNode *From, EDTGraphNode *To);
   EDT *getParentSyncEDT(EDTGraphNode *Node, uint32_t Depth = 0);
   bool isChild(EDT *Parent, EDT *Child);
   bool isChild(EDTGraphNode *Parent, EDTGraphNode *Child);
@@ -81,58 +83,67 @@ public:
   /// Getters
   EDTGraphNode *getNode(EDT *E) const;
   EDTGraphNode *getNode(Function &Fn) const;
+  unordered_set<EDTGraphNode *> getNodes();
   EDTGraphNode *getEntryNode();
   EDTGraphNode *getExitNode();
   /// Nodes
   void createNode(Function &Fn);
-  unordered_set<EDTGraphNode *> getNodes();
+
   EDTGraphNode *insertNode(EDT *E);
   EDTGraphNode *insertNode(EDT *E, EDTGraphNode *ParentNode,
                            Function *F = nullptr);
   EDTGraphNode *insertNode(EDT *E, Function &Fn);
 
   /// Edges with EDTs
-  EDTGraphCreationEdge *getEdge(EDT *From, EDT *To);
-  EDTGraphCreationEdge *getEdge(EDTGraphNode *From, EDTGraphNode *To);
-  unordered_set<EDTGraphCreationEdge *> getIncomingEdges(EDT *Node);
-  unordered_set<EDTGraphCreationEdge *> getIncomingEdges(EDTGraphNode *Node);
-  unordered_set<EDTGraphCreationEdge *> getOutgoingEdges(EDT *Node);
-  unordered_set<EDTGraphCreationEdge *> getOutgoingEdges(EDTGraphNode *Node);
+  CreationGraphEdge *getEdge(EDT *From, EDT *To);
+  DataBlockGraphEdge *getEdge(EDT *From, EDT *To, uint32_t Slot);
+  CreationGraphEdge *getEdge(EDTGraphNode *From, EDTGraphNode *To);
+  DataBlockGraphEdge *getEdge(EDTGraphNode *From, EDTGraphSlotNode *To);
+  unordered_set<CreationGraphEdge *> getIncomingCreationEdges(EDT *Node);
+  unordered_set<CreationGraphEdge *>
+  getIncomingCreationEdges(EDTGraphNode *Node);
+  unordered_set<CreationGraphEdge *> getOutgoingEdges(EDT *Node);
+  unordered_set<CreationGraphEdge *> getOutgoingEdges(EDTGraphNode *Node);
 
-
-  unordered_set<EDTGraphCreationEdge *> getEdges(EDTGraphNode *Node);
-  EDTGraphCreationEdge *fetchOrCreateEdge(EDTGraphNode *From, EDTGraphNode *To,
-                                  bool IsDataEdge);
-  void addEdge(EDTGraphNode *From, EDTGraphNode *To, EDTGraphCreationEdge *Edge);
+  unordered_set<CreationGraphEdge *> getEdges(EDTGraphNode *Node);
+  CreationGraphEdge *fetchOrCreateEdge(EDTGraphNode *From, EDTGraphNode *To,
+                                       bool IsDataEdge);
+  void addEdge(EDTGraphNode *From, EDTGraphNode *To, CreationGraphEdge *Edge);
   /// Add edges with EDT
-  EDTGraphCreationEdge *addCreationEdge(EDT *From, EDT *To);
-  EDTGraphCreationEdge *addDataEdge(EDT *From, EDT *To, EDTValue *Parameter);
-  EDTGraphCreationEdge *addDataEdge(EDT *From, EDT *To, EDT *Guid);
-  EDTGraphCreationEdge *addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
-                            EDTValue *Parameter);
-  EDTGraphCreationEdge *addDataEdge(EDTGraphNode *From, EDTGraphNode *To, EDT *Guid);
+  CreationGraphEdge *addCreationEdge(EDT *From, EDT *To);
+  CreationGraphEdge *addDataEdge(EDT *From, EDT *To, EDTValue *Parameter);
+  CreationGraphEdge *addDataEdge(EDT *From, EDT *To, EDT *Guid);
+  CreationGraphEdge *addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
+                                 EDTValue *Parameter);
+  CreationGraphEdge *addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
+                                 EDT *Guid);
 
-  EDTGraphCreationEdge *addDataEdge(EDT *From, EDT *To, DataBlock *DB);
-  EDTGraphCreationEdge *addControlEdge(EDT *From, EDT *To);
+  CreationGraphEdge *addDataEdge(EDT *From, EDT *To, DataBlock *DB);
+  CreationGraphEdge *addControlEdge(EDT *From, EDT *To);
   /// Add edges with EDTGraphNode
-  EDTGraphCreationEdge *addCreationEdge(EDTGraphNode *From, EDTGraphNode *To);
-  EDTGraphCreationEdge *addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
-                            DataBlock *DB);
+  CreationGraphEdge *addCreationEdge(EDTGraphNode *From, EDTGraphNode *To);
+  CreationGraphEdge *addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
+                                 DataBlock *DB);
 
-  EDTGraphCreationEdge *addControlEdge(EDTGraphNode *From, EDTGraphNode *To);
+  CreationGraphEdge *addControlEdge(EDTGraphNode *From, EDTGraphNode *To);
 
-  void removeEdge(EDTGraphCreationEdge *Edge);
+  void removeEdge(CreationGraphEdge *Edge);
   void removeEdge(EDTGraphNode *From, EDTGraphNode *To);
   void addReachableEDT(EDTGraphNode *From);
 
   /// Attributes
   DenseMap<Function *, EDTGraphNode *> EDTs;
 
-  /// EDTEdges
-  DenseMap<EDTGraphNode *, DenseMap<EDTGraphNode *, EDTGraphCreationEdge *>>
-      IncomingEdges;
-  DenseMap<EDTGraphNode *, DenseMap<EDTGraphNode *, EDTGraphCreationEdge *>>
-      OutgoingEdges;
+  /// EDTCreationEdges
+  DenseMap<EDTGraphNode *, DenseMap<EDTGraphNode *, CreationGraphEdge *>>
+      IncomingCreationEdges;
+  DenseMap<EDTGraphNode *, DenseMap<EDTGraphNode *, CreationGraphEdge *>>
+      OutgoingCreationEdges;
+  /// DataBlockGraphEdges
+  DenseMap<EDTGraphNode *, DenseMap<EDTGraphNode *, DataBlockGraphEdge *>>
+      IncomingDataBlockEdges;
+  DenseMap<EDTGraphNode *, DenseMap<EDTGraphNode *, DataBlockGraphEdge *>>
+      OutgoingDataBlockEdges;
 
   /// EntryNode
   EDTGraphNode *EntryNode = nullptr;

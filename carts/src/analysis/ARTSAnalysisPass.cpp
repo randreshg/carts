@@ -934,7 +934,7 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
       /// input dependencies must be sent by the sibling SyncEDT)
       DB->setSlot(EDTInfo->insertDepSlot(CallArgItr));
       if (!EDTInfo->isDoneEDT())
-        insertDataBlockEdge(EDTInfo->getParent(), EDTInfo, DB);
+        insertDataBlockGraphEdge(EDTInfo->getParent(), EDTInfo, DB);
     }
   }
 
@@ -964,7 +964,7 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     if (SignalEDT) {
       LLVM_DEBUG(dbgs() << "     - EDT #" << CalledEDT->getID()
                         << " signals to EDT #" << SignalEDT->getID() << "\n");
-      insertDataBlockEdge(CalledEDT, SignalEDT, ArgValDBInfoAA->getDataBlock());
+      insertDataBlockGraphEdge(CalledEDT, SignalEDT, ArgValDBInfoAA->getDataBlock());
       DependentEDTs.insert(SignalEDT);
     }
 
@@ -972,7 +972,7 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     return ChangeStatus::CHANGED;
   }
 
-  void insertDataBlockEdge(EDT *From, EDT *To, DataBlock *DB) {
+  void insertDataBlockGraphEdge(EDT *From, EDT *To, DataBlock *DB) {
     Cache->getGraph().addDataEdge(From, To, DB);
   }
 

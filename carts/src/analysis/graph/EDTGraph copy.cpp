@@ -60,7 +60,7 @@ bool EDTGraph::isDataDependent(EDTGraphNode *From, EDTGraphNode *To) {
 }
 
 EDT *EDTGraph::getParentSyncEDT(EDTGraphNode *Node, uint32_t Depth) {
-  for (auto *Edge : getIncomingEdges(Node)) {
+  for (auto *Edge : getIncomingCreationEdges(Node)) {
     if (!Edge->hasCreationDep())
       continue;
 
@@ -177,8 +177,8 @@ EDTGraphEdge *EDTGraph::getEdge(EDT *From, EDT *To) {
   return getEdge(getNode(From), getNode(To));
 }
 
-unordered_set<EDTGraphEdge *> EDTGraph::getIncomingEdges(EDT *Node) {
-  return getIncomingEdges(getNode(Node));
+unordered_set<EDTGraphEdge *> EDTGraph::getIncomingCreationEdges(EDT *Node) {
+  return getIncomingCreationEdges(getNode(Node));
 }
 
 unordered_set<EDTGraphEdge *> EDTGraph::getOutgoingEdges(EDT *Node) {
@@ -197,11 +197,11 @@ EDTGraphEdge *EDTGraph::getEdge(EDTGraphNode *From, EDTGraphNode *To) {
   return Tmp[To];
 }
 
-unordered_set<EDTGraphEdge *> EDTGraph::getIncomingEdges(EDTGraphNode *Node) {
+unordered_set<EDTGraphEdge *> EDTGraph::getIncomingCreationEdges(EDTGraphNode *Node) {
   unordered_set<EDTGraphEdge *> Aux;
-  if (IncomingEdges.find(Node) == IncomingEdges.end())
+  if (IncomingCreationEdges.find(Node) == IncomingCreationEdges.end())
     return Aux;
-  auto &Tmp = IncomingEdges[Node];
+  auto &Tmp = IncomingCreationEdges[Node];
   for (auto &E : Tmp)
     Aux.insert(E.second);
   return Aux;
@@ -218,10 +218,10 @@ unordered_set<EDTGraphEdge *> EDTGraph::getOutgoingEdges(EDTGraphNode *Node) {
 }
 
 unordered_set<EDTGraphEdge *> EDTGraph::getEdges(EDTGraphNode *Node) {
-  auto IncomingEdges = getIncomingEdges(Node);
+  auto IncomingCreationEdges = getIncomingCreationEdges(Node);
   auto OutgoingEdges = getOutgoingEdges(Node);
-  IncomingEdges.insert(OutgoingEdges.begin(), OutgoingEdges.end());
-  return IncomingEdges;
+  IncomingCreationEdges.insert(OutgoingEdges.begin(), OutgoingEdges.end());
+  return IncomingCreationEdges;
 }
 
 EDTGraphEdge *EDTGraph::fetchOrCreateEdge(EDTGraphNode *From, EDTGraphNode *To,
@@ -237,7 +237,7 @@ EDTGraphEdge *EDTGraph::fetchOrCreateEdge(EDTGraphNode *From, EDTGraphNode *To,
       NewEdge = new EDTGraphDataEdge(From, To);
       LLVM_DEBUG(dbgs() << "          Data Edge\n");
     } else {
-      NewEdge = new EDTGraphCreationEdge(From, To);
+      NewEdge = new CreationGraphEdge(From, To);
       LLVM_DEBUG(dbgs() << "          Control Edge\n");
     }
     /// Add the new edge.
@@ -268,7 +268,7 @@ void EDTGraph::addEdge(EDTGraphNode *From, EDTGraphNode *To,
                        EDTGraphEdge *Edge) {
   auto &Tmp = OutgoingEdges[From];
   Tmp[To] = Edge;
-  auto &Tmp2 = IncomingEdges[To];
+  auto &Tmp2 = IncomingCreationEdges[To];
   Tmp2[From] = Edge;
 }
 
@@ -335,7 +335,7 @@ void EDTGraph::removeEdge(EDTGraphEdge *Edge) {
   auto *From = Edge->getFrom();
   auto *To = Edge->getTo();
   OutgoingEdges[From].erase(To);
-  IncomingEdges[To].erase(From);
+  IncomingCreationEdges[To].erase(From);
   delete Edge;
 }
 
@@ -344,7 +344,7 @@ void EDTGraph::removeEdge(EDTGraphNode *From, EDTGraphNode *To) {
   if (Edge == nullptr)
     return;
   OutgoingEdges[From].erase(To);
-  IncomingEdges[To].erase(From);
+  IncomingCreationEdges[To].erase(From);
   delete Edge;
 }
 
@@ -373,7 +373,7 @@ void EDTGraph::print(void) {
     }
     /// Dependencies
     LLVM_DEBUG(dbgs() << "  - Incoming Edges:\n");
-    auto InEdges = getIncomingEdges(EDTNode);
+    auto InEdges = getIncomingCreationEdges(EDTNode);
     if (InEdges.size() == 0) {
       LLVM_DEBUG(dbgs() << "    - The EDT has no incoming edges\n");
     } else {
