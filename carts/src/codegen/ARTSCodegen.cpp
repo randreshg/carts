@@ -366,7 +366,7 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
   auto handleDependencies = [&]() -> void {
     LLVM_DEBUG(dbgs() << " - Inserting DepV\n");
     /// The input parameters and Guids always come from the parent EDT
-    auto InputEdges = Graph.getIncomingEdges(&E);
+    auto InputEdges = Graph.getIncomingCreationEdges(&E);
     if (InputEdges.empty()) {
       LLVM_DEBUG(dbgs() << "     EDT #" << E.getID()
                         << " doesn't have input edges\n");

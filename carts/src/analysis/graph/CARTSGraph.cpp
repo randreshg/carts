@@ -39,30 +39,27 @@ bool CARTSGraph::isReachable(EDTGraphNode *From, EDTGraphNode *To) {
   return false;
 }
 
-bool CARTSGraph::isCreationReachable(EDTGraphNode *From, EDTGraphNode *To) {
-  // for (auto *Edge : getOutgoingEdges(From)) {
-  //   if (Edge->hasCreationDep() && Edge->getTo() == To) {
-  //     return true;
-  //   } else if (isCreationReachable(Edge->getTo(), To)) {
-  //     return true;
-  //   }
-  // }
-  return false;
-}
+// bool CARTSGraph::isCreationReachable(EDTGraphNode *From, EDTGraphNode *To) {
+//   // for (auto *Edge : getOutgoingEdges(From)) {
+//   //   if (Edge->hasCreationDep() && Edge->getTo() == To) {
+//   //     return true;
+//   //   } else if (isCreationReachable(Edge->getTo(), To)) {
+//   //     return true;
+//   //   }
+//   // }
+//   return false;
+// }
 
-bool CARTSGraph::isDataDependent(EDTGraphNode *From, EDTGraphNode *To) {
-  for (auto *Edge : getOutgoingEdges(From)) {
-    if (Edge->isDataEdge() && Edge->getTo() == To)
-      return true;
-  }
-  return false;
-}
+// bool CARTSGraph::isDataDependent(EDTGraphNode *From, EDTGraphNode *To) {
+//   // for (auto *Edge : getOutgoingEdges(From)) {
+//   //   if (Edge->isDataEdge() && Edge->getTo() == To)
+//   //     return true;
+//   // }
+//   return false;
+// }
 
 EDT *CARTSGraph::getParentSyncEDT(EDTGraphNode *Node, uint32_t Depth) {
-  for (auto *Edge : getIncomingEdges(Node)) {
-    if (!Edge->hasCreationDep())
-      continue;
-
+  for (auto *Edge : getIncomingCreationEdges(Node)) {
     auto *ParentEDT = Edge->getFrom()->getEDT();
     if (ParentEDT->isAsync())
       return getParentSyncEDT(Edge->getFrom(), Depth + 1);
@@ -82,8 +79,8 @@ bool CARTSGraph::isChild(EDT *Parent, EDT *Child) {
 }
 
 bool CARTSGraph::isChild(EDTGraphNode *Parent, EDTGraphNode *Child) {
-  EDTGraphCreationEdge *Edge = getEdge(Parent, Child);
-  if (Edge == nullptr || !Edge->hasCreationDep())
+  CreationGraphEdge *Edge = getEdge(Parent, Child);
+  if (Edge == nullptr)
     return false;
   return true;
 }
@@ -100,13 +97,6 @@ void CARTSGraph::createNode(Function &Fn) {
   insertNode(E);
 }
 
-SetVector<EDTGraphNode *> CARTSGraph::getNodes() {
-  unordered_set<EDTGraphNode *> Aux;
-  for (auto Pair : EDTs)
-    Aux.insert(Pair.second);
-  return Aux;
-}
-
 EDTGraphNode *CARTSGraph::getNode(EDT *E) const { return getNode(*E->getFn()); }
 
 EDTGraphNode *CARTSGraph::getNode(Function &Fn) const {
@@ -114,6 +104,13 @@ EDTGraphNode *CARTSGraph::getNode(Function &Fn) const {
   if (it != EDTs.end())
     return it->second;
   return nullptr;
+}
+
+unordered_set<EDTGraphNode *> CARTSGraph::getNodes() {
+  unordered_set<EDTGraphNode *> Aux;
+  for (auto Pair : EDTs)
+    Aux.insert(Pair.second);
+  return Aux;
 }
 
 EDTGraphNode *CARTSGraph::getEntryNode() {
@@ -170,45 +167,65 @@ EDTGraphNode *CARTSGraph::insertNode(EDT *E, Function &Fn) {
 }
 
 /// Edges
-EDTGraphCreationEdge *CARTSGraph::getEdge(EDT *From, EDT *To) {
+CreationGraphEdge *CARTSGraph::getEdge(EDT *From, EDT *To) {
   return getEdge(getNode(From), getNode(To));
 }
 
-unordered_set<EDTGraphCreationEdge *> CARTSGraph::getIncomingEdges(EDT *Node) {
-  return getIncomingEdges(getNode(Node));
+DataBlockGraphEdge *CARTSGraph::getEdge(EDT *From, EDT *To, uint32_t Slot) {
+  EDTGraphNode *ToNode = getNode(To);
+  assert(ToNode != nullptr && "The To node is null");
+  return getEdge(getNode(From), ToNode->getSlotNode(Slot));
 }
 
-CARTSGraph::getIncomingEdges(EDTGraphNode *Node) {
-  unordered_set<EDTGraphCreationEdge *> Aux;
-  if (IncomingEdges.find(Node) == IncomingEdges.end())
-    return Aux;
-  auto &Tmp = IncomingEdges[Node];
-  for (auto &E : Tmp)
-    Aux.insert(E.second);
-  return Aux;
-}
-
-unordered_set<EDTGraphCreationEdge *> CARTSGraph::getOutgoingEdges(EDT *Node) {
-  return getOutgoingEdges(getNode(Node));
-}
-
-EDTGraphCreationEdge *CARTSGraph::getEdge(EDTGraphNode *From,
-                                          EDTGraphNode *To) {
+CreationGraphEdge *CARTSGraph::getEdge(EDTGraphNode *From, EDTGraphNode *To) {
   /// Fetch the set of edges from @from.
-  if (OutgoingEdges.find(From) == OutgoingEdges.end())
+  if (OutgoingCreationEdges.find(From) == OutgoingCreationEdges.end())
     return nullptr;
 
   /// Fetch the edge to @to
-  auto &Tmp = OutgoingEdges[From];
+  auto &Tmp = OutgoingCreationEdges[From];
   if (Tmp.find(To) == Tmp.end())
     return nullptr;
   return Tmp[To];
 }
 
+DataBlockGraphEdge *CARTSGraph::getEdge(EDTGraphNode *From,
+                                        EDTGraphSlotNode *To) {
+  /// Fetch the set of edges from @from.
+  if (OutgoingDataBlockEdges.find(From) == OutgoingDataBlockEdges.end())
+    return nullptr;
 
-unordered_set<EDTGraphCreationEdge *>
+  /// Fetch the edge to @to
+  auto &Tmp = OutgoingDataBlockEdges[From];
+  for (auto &E : Tmp) {
+    if (E.second->getTo() == To)
+      return dyn_cast<DataBlockGraphEdge>(E.second);
+  }
+  return nullptr;
+}
+
+unordered_set<CreationGraphEdge *>
+CARTSGraph::getIncomingCreationEdges(EDT *Node) {
+  return getIncomingCreationEdges(getNode(Node));
+}
+
+CARTSGraph::getIncomingCreationEdges(EDTGraphNode *Node) {
+  unordered_set<CreationGraphEdge *> Aux;
+  if (IncomingCreationEdges.find(Node) == IncomingCreationEdges.end())
+    return Aux;
+  auto &Tmp = IncomingCreationEdges[Node];
+  for (auto &E : Tmp)
+    Aux.insert(E.second);
+  return Aux;
+}
+
+unordered_set<CreationGraphEdge *> CARTSGraph::getOutgoingEdges(EDT *Node) {
+  return getOutgoingEdges(getNode(Node));
+}
+
+unordered_set<CreationGraphEdge *>
 CARTSGraph::getOutgoingEdges(EDTGraphNode *Node) {
-  unordered_set<EDTGraphCreationEdge *> Aux;
+  unordered_set<CreationGraphEdge *> Aux;
   if (OutgoingEdges.find(Node) == OutgoingEdges.end())
     return Aux;
   auto &Tmp = OutgoingEdges[Node];
@@ -217,28 +234,28 @@ CARTSGraph::getOutgoingEdges(EDTGraphNode *Node) {
   return Aux;
 }
 
-unordered_set<EDTGraphCreationEdge *> CARTSGraph::getEdges(EDTGraphNode *Node) {
-  auto IncomingEdges = getIncomingEdges(Node);
+unordered_set<CreationGraphEdge *> CARTSGraph::getEdges(EDTGraphNode *Node) {
+  auto IncomingCreationEdges = getIncomingCreationEdges(Node);
   auto OutgoingEdges = getOutgoingEdges(Node);
-  IncomingEdges.insert(OutgoingEdges.begin(), OutgoingEdges.end());
-  return IncomingEdges;
+  IncomingCreationEdges.insert(OutgoingEdges.begin(), OutgoingEdges.end());
+  return IncomingCreationEdges;
 }
 
-EDTGraphCreationEdge *CARTSGraph::fetchOrCreateEdge(EDTGraphNode *From,
-                                                    EDTGraphNode *To,
-                                                    bool IsDataEdge) {
-  EDTGraphCreationEdge *ExistingEdge = getEdge(From, To);
+CreationGraphEdge *CARTSGraph::fetchOrCreateEdge(EDTGraphNode *From,
+                                                 EDTGraphNode *To,
+                                                 bool IsDataEdge) {
+  CreationGraphEdge *ExistingEdge = getEdge(From, To);
   if (ExistingEdge == nullptr) {
     /// The edge from @fromNode to @toNode doesn't exist yet
     LLVM_DEBUG(dbgs() << "        - Creating edge from \"EDT #"
                       << From->getEDT()->getID() << "\" to \"EDT #"
                       << To->getEDT()->getID() << "\"\n");
-    EDTGraphCreationEdge *NewEdge;
+    CreationGraphEdge *NewEdge;
     if (IsDataEdge) {
       NewEdge = new EDTGraphDataEdge(From, To);
       LLVM_DEBUG(dbgs() << "          Data Edge\n");
     } else {
-      NewEdge = new EDTGraphCreationEdge(From, To);
+      NewEdge = new CreationGraphEdge(From, To);
       LLVM_DEBUG(dbgs() << "          Control Edge\n");
     }
     /// Add the new edge.
@@ -266,46 +283,45 @@ EDTGraphCreationEdge *CARTSGraph::fetchOrCreateEdge(EDTGraphNode *From,
 }
 
 void CARTSGraph::addEdge(EDTGraphNode *From, EDTGraphNode *To,
-                         EDTGraphCreationEdge *Edge) {
+                         CreationGraphEdge *Edge) {
   auto &Tmp = OutgoingEdges[From];
   Tmp[To] = Edge;
-  auto &Tmp2 = IncomingEdges[To];
+  auto &Tmp2 = IncomingCreationEdges[To];
   Tmp2[From] = Edge;
 }
 
 /// Add edges with EDT
-EDTGraphCreationEdge *CARTSGraph::addCreationEdge(EDT *From, EDT *To) {
+CreationGraphEdge *CARTSGraph::addCreationEdge(EDT *From, EDT *To) {
   return addCreationEdge(getNode(From), getNode(To));
 }
 
-EDTGraphCreationEdge *CARTSGraph::addDataEdge(EDT *From, EDT *To,
-                                              DataBlock *DB) {
+CreationGraphEdge *CARTSGraph::addDataEdge(EDT *From, EDT *To, DataBlock *DB) {
   return addDataEdge(getNode(From), getNode(To), DB);
 }
 
-EDTGraphCreationEdge *CARTSGraph::addDataEdge(EDT *From, EDT *To,
-                                              EDTValue *Parameter) {
+CreationGraphEdge *CARTSGraph::addDataEdge(EDT *From, EDT *To,
+                                           EDTValue *Parameter) {
   return addDataEdge(getNode(From), getNode(To), Parameter);
 }
 
-EDTGraphCreationEdge *CARTSGraph::addDataEdge(EDT *From, EDT *To, EDT *Guid) {
+CreationGraphEdge *CARTSGraph::addDataEdge(EDT *From, EDT *To, EDT *Guid) {
   return addDataEdge(getNode(From), getNode(To), Guid);
 }
 
-EDTGraphCreationEdge *CARTSGraph::addControlEdge(EDT *From, EDT *To) {
+CreationGraphEdge *CARTSGraph::addControlEdge(EDT *From, EDT *To) {
   return addControlEdge(getNode(From), getNode(To));
 }
 
 /// Add edges with EDTGraphNode
-EDTGraphCreationEdge *CARTSGraph::addCreationEdge(EDTGraphNode *From,
-                                                  EDTGraphNode *To) {
-  EDTGraphCreationEdge *CreationEdge = fetchOrCreateEdge(From, To, false);
+CreationGraphEdge *CARTSGraph::addCreationEdge(EDTGraphNode *From,
+                                               EDTGraphNode *To) {
+  CreationGraphEdge *CreationEdge = fetchOrCreateEdge(From, To, false);
   CreationEdge->setCreationDep(true);
   return CreationEdge;
 }
 
-EDTGraphCreationEdge *CARTSGraph::addDataEdge(EDTGraphNode *From,
-                                              EDTGraphNode *To, DataBlock *DB) {
+CreationGraphEdge *CARTSGraph::addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
+                                           DataBlock *DB) {
   assert(DB != nullptr && "The DataBlock is null");
   EDTGraphDataEdge *DataEdge =
       dyn_cast<EDTGraphDataEdge>(fetchOrCreateEdge(From, To, true));
@@ -313,9 +329,8 @@ EDTGraphCreationEdge *CARTSGraph::addDataEdge(EDTGraphNode *From,
   return DataEdge;
 }
 
-EDTGraphCreationEdge *CARTSGraph::addDataEdge(EDTGraphNode *From,
-                                              EDTGraphNode *To,
-                                              EDTValue *Parameter) {
+CreationGraphEdge *CARTSGraph::addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
+                                           EDTValue *Parameter) {
   assert(Parameter != nullptr && "The Parameter is null");
   EDTGraphDataEdge *DataEdge =
       dyn_cast<EDTGraphDataEdge>(fetchOrCreateEdge(From, To, true));
@@ -323,8 +338,8 @@ EDTGraphCreationEdge *CARTSGraph::addDataEdge(EDTGraphNode *From,
   return DataEdge;
 }
 
-EDTGraphCreationEdge *CARTSGraph::addDataEdge(EDTGraphNode *From,
-                                              EDTGraphNode *To, EDT *Guid) {
+CreationGraphEdge *CARTSGraph::addDataEdge(EDTGraphNode *From, EDTGraphNode *To,
+                                           EDT *Guid) {
   assert(Guid != nullptr && "The Guid is null");
   EDTGraphDataEdge *DataEdge =
       dyn_cast<EDTGraphDataEdge>(fetchOrCreateEdge(From, To, true));
@@ -332,16 +347,16 @@ EDTGraphCreationEdge *CARTSGraph::addDataEdge(EDTGraphNode *From,
   return DataEdge;
 }
 
-EDTGraphCreationEdge *CARTSGraph::addControlEdge(EDTGraphNode *From,
-                                                 EDTGraphNode *To) {
+CreationGraphEdge *CARTSGraph::addControlEdge(EDTGraphNode *From,
+                                              EDTGraphNode *To) {
   return fetchOrCreateEdge(From, To, false);
 }
 
-void CARTSGraph::removeEdge(EDTGraphCreationEdge *Edge) {
+void CARTSGraph::removeEdge(CreationGraphEdge *Edge) {
   auto *From = Edge->getFrom();
   auto *To = Edge->getTo();
   OutgoingEdges[From].erase(To);
-  IncomingEdges[To].erase(From);
+  IncomingCreationEdges[To].erase(From);
   delete Edge;
 }
 
@@ -350,7 +365,7 @@ void CARTSGraph::removeEdge(EDTGraphNode *From, EDTGraphNode *To) {
   if (Edge == nullptr)
     return;
   OutgoingEdges[From].erase(To);
-  IncomingEdges[To].erase(From);
+  IncomingCreationEdges[To].erase(From);
   delete Edge;
 }
 
@@ -379,7 +394,7 @@ void CARTSGraph::print(void) {
     }
     /// Dependencies
     LLVM_DEBUG(dbgs() << "  - Incoming Edges:\n");
-    auto InEdges = getIncomingEdges(EDTNode);
+    auto InEdges = getIncomingCreationEdges(EDTNode);
     if (InEdges.size() == 0) {
       LLVM_DEBUG(dbgs() << "    - The EDT has no incoming edges\n");
     } else {

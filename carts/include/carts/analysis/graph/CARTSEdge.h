@@ -16,10 +16,10 @@
 /// ------------------------------------------------------------------- ///
 namespace arts {
 
-class EDTGraphCreationEdge {
+class CreationGraphEdge {
 public:
-  EDTGraphCreationEdge(EDTGraphNode *From, EDTGraphNode *To);
-  virtual ~EDTGraphCreationEdge();
+  CreationGraphEdge(EDTGraphNode *From, EDTGraphNode *To);
+  virtual ~CreationGraphEdge();
   void print();
 
   EDTGraphNode *getFrom() { return From; }
@@ -50,11 +50,10 @@ private:
   SetVector<EDT *> Guids;
 };
 
-class EDTGraphDataBlockEdge {
+class DataBlockGraphEdge {
 public:
-  EDTGraphDataBlockEdge(EDTGraphNode *From, EDTGraphSlotNode *To,
-                        DataBlock *DB);
-  virtual ~EDTGraphDataBlockEdge();
+  DataBlockGraphEdge(EDTGraphNode *From, EDTGraphSlotNode *To, DataBlock *DB);
+  virtual ~DataBlockGraphEdge();
   void print();
 
   EDTGraphNode *getFrom() { return From; }

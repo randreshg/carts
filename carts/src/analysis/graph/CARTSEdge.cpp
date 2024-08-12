@@ -26,10 +26,10 @@ void EDTGraphEdge::print(void) {
   LLVM_DEBUG(dbgs() << "  - To: " << To->getEDT()->getName() << "\n");
 }
 
-/// EDTGraphCreationEdge
-EDTGraphCreationEdge::EDTGraphCreationEdge(EDTGraphNode *From, EDTGraphNode *To)
+/// CreationGraphEdge
+CreationGraphEdge::CreationGraphEdge(EDTGraphNode *From, EDTGraphNode *To)
     : EDTGraphEdge(From, To) {}
-EDTGraphCreationEdge::~EDTGraphCreationEdge() {}
+CreationGraphEdge::~CreationGraphEdge() {}
 
 /// EDTGraphDataEdge
 EDTGraphDataEdge::EDTGraphDataEdge(EDTGraphNode *From, EDTGraphNode *To)
@@ -65,10 +65,10 @@ bool EDTGraphDataEdge::removeParameter(EDTValue *V) {
 
 bool EDTGraphDataEdge::removeGuid(EDT *Guid) { return Guids.remove(Guid); }
 
-/// EDTGraphDataBlockEdge
-// EDTGraphDataBlockEdge::EDTGraphDataBlockEdge(DataBlock *DB)
+/// DataBlockGraphEdge
+// DataBlockGraphEdge::DataBlockGraphEdge(DataBlock *DB)
 //     : Parent(Parent), DB(DB){};
-// EDTGraphDataBlockEdge::~EDTGraphDataBlockEdge() {}
+// DataBlockGraphEdge::~DataBlockGraphEdge() {}
 
 /// EDTGraphNode
 EDTGraphNode::EDTGraphNode(EDT &E) : E(E) {}
