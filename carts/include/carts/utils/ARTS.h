@@ -32,19 +32,19 @@ using EDTSet = SetVector<EDT *>;
 using DataBlockSet = SetVector<DataBlock *>;
 
 /// ------------------------------------------------------------------- ///
-///                          DATA ENVIRONMENT                           ///
-/// Contains the list of parameters and dependencies required for the
-/// EDT to run. It contains the following information:
-/// - Paramc are the number of static parameters.
-///   It corresponds to the number of first private variables.
-/// - Depc is the number of dependencies required for the EDT to run.
-///   It corresponds to the number of shared variables.
-/// - Paramv are the static parameters that are copied into the EDT
-///   closure.It corresponds to the private variables.
-/// - Depv are the dependencies that are copied into the EDT closure.
-///   It corresponds to the shared variables.
-/// IMPORTANT: Firstprivate is live-in, shared is both live-in and
-///            live-out, lastprivate is live-out
+///                              DATA BLOCK                            ///
+/// It represents the dependencies that are required for the EDT to run.
+/// It contains the following information:
+/// - V is the value that is being passed to the EDT
+/// - M is the mode of the DataBlock (ReadOnly, WriteOnly, ReadWrite)
+/// - ContextEDT is the EDT that is using DataBlock
+/// - Parent is the parent DataBlock
+/// - ChildrenDB are the children data blocks that are using the data block
+/// - Done is the data block that is used to signal the completion of the
+///   data block
+/// - Slot is the slot number of the data block
+/// - ToSlot is the slot number of the data block that is used to signal the
+///   completion of the data block
 /// ------------------------------------------------------------------- ///
 class DataBlock {
 public:
@@ -54,22 +54,20 @@ public:
 
   /// Getters
   EDTValue *getValue();
+  Type *getType();
   Mode getMode();
   EDT *getContextEDT();
-  DataBlock *getParentDB();
-  DataBlockSet &getChildrenDB();
-  DataBlock *getDoneDB();
-  DataBlock *getParentDoneDB();
-  int32_t getSlot();
-  int32_t getToSlot();
+  uint32_t getSlot();
+  DataBlock *getParent();
+  DataBlockSet &getChildDBs();
+
+  // uint32_t getToSlot();
 
   /// Setters
-  void setParentDB(DataBlock *ParentDB);
-  void setDoneDB(DataBlock *DoneDB);
+  void setParent(DataBlock *Parent);
   void setSlot(int32_t Slot);
 
   /// Helpers
-  Type *getType();
   bool addChildDB(DataBlock *ChildDB);
 
 private:
@@ -77,10 +75,10 @@ private:
   Type *Ty = nullptr;
   Mode M = Mode::ReadWrite;
   EDT *ContextEDT = nullptr;
-  DataBlock *ParentDB = nullptr;
-  DataBlockSet ChildrenDB;
-  DataBlock *DoneDB = nullptr;
-  int32_t Slot = -1;
+  uint32_t Slot;
+  DataBlock *Parent = nullptr;
+  DataBlock *Done = nullptr;
+  DataBlockSet ChildDBs;
 };
 
 inline raw_ostream &operator<<(raw_ostream &OS, DataBlock &DB) {
@@ -99,6 +97,21 @@ inline raw_ostream &operator<<(raw_ostream &OS, DataBlock &DB) {
   return OS;
 }
 
+/// ------------------------------------------------------------------- ///
+///                           EDT ENVIRONMENT                           ///
+/// Contains the list of parameters and dependencies required for the
+/// EDT to run. It contains the following information:
+/// - Paramc are the number of static parameters.
+///   It corresponds to the number of first private variables.
+/// - Depc is the number of dependencies required for the EDT to run.
+///   It corresponds to the number of shared variables.
+/// - Paramv are the static parameters that are copied into the EDT
+///   closure.It corresponds to the private variables.
+/// - Depv are the dependencies that are copied into the EDT closure.
+///   It corresponds to the shared variables.
+/// IMPORTANT: Firstprivate is live-in, shared is both live-in and
+///            live-out, lastprivate is live-out
+/// ------------------------------------------------------------------- ///
 class EDTEnvironment {
 public:
   EDTEnvironment(EDT *E);
@@ -167,6 +180,7 @@ public:
   Argument *getDepArg(uint32_t DepSlot);
 
   /// Helpers
+  bool isSync();
   bool isAsync();
   bool isMain();
   bool isDep(Argument *Arg);
@@ -189,8 +203,8 @@ private:
 public:
   void setCall(EDTCallBase *Call);
   void setParent(EDT *Parent);
-  void setParentSync(EDT *ParentSync, bool SetDoneSync = true);
   void setDoneSync(EDT *DoneSync);
+  void setParentSync(EDT *ParentSync, bool SetDoneSync = true);
   void setNode(uint32_t Node);
   void setIsDoneEDT(bool IsDoneEDT) { this->IsDoneEDT = IsDoneEDT; }
 
@@ -288,7 +302,6 @@ public:
 private:
   uint32_t NumThreads = 1;
   SetVector<Value *> Variables;
-  
 };
 
 } // end namespace arts

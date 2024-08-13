@@ -183,8 +183,20 @@ bool ARTSGraph::insertCreationEdge(EDT *From, EDT *To) {
 }
 
 bool ARTSGraph::insertCreationEdgeGuid(EDT *From, EDT *To, EDT *Guid) {
+  /// Recursively insert the Guid from the parent to the child
   CreationGraphEdge *Edge = getEdge(getNode(From), getNode(To));
   assert(Edge != nullptr && "The edge doesn't exist");
+
+  /// If the Guid is already in the edge, return false
+  if (Edge->hasGuid(Guid))
+    return false;
+
+  /// If not, guarantee that the parent of From has the Guid
+  EDT *FromParent = From->getParent();
+  assert(!FromParent && "The parent of the EDT must exist");
+  insertCreationEdgeGuid(FromParent, From, Guid);
+
+  /// Insert the Guid in the edge
   return Edge->insertGuid(Guid);
 }
 
@@ -243,10 +255,10 @@ EDTGraphNode *ARTSGraph::getExitNode() {
   for (auto *Edge : getOutgoingCreationEdges(Entry)) {
     /// The exit node is created by the Entry node and is a sync Done region
     EDT *ToEDT = Edge->getTo()->getEDT();
-    if (!ToEDT->isAsync()) {
-      ExitNode = getNode(ToEDT->getDoneSync());
-      return ExitNode;
-    }
+    if (ToEDT->isAsync())
+      continue;
+    ExitNode = getNode(ToEDT->getDoneSync());
+    return ExitNode;
   }
   return nullptr;
 }
@@ -411,14 +423,14 @@ void ARTSGraph::print(void) {
   LLVM_DEBUG(dbgs() << TAG << "Printing the ARTS Graph\n");
   /// Print the outgoing edges.
   for (EDTGraphNode *EDTNode : getNodes()) {
-    EDT *EDTInfo = EDTNode->getEDT();
+    EDT *ContextEDT = EDTNode->getEDT();
     LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - \n");
-    LLVM_DEBUG(dbgs() << "- EDT #" << EDTInfo->getID() << " - \""
-                      << EDTInfo->getName() << "\"\n");
-    LLVM_DEBUG(dbgs() << "  - Type: " << toString(EDTInfo->getTy()) << "\n");
+    LLVM_DEBUG(dbgs() << "- EDT #" << ContextEDT->getID() << " - \""
+                      << ContextEDT->getName() << "\"\n");
+    LLVM_DEBUG(dbgs() << "  - Type: " << toString(ContextEDT->getTy()) << "\n");
     /// Data environment
     LLVM_DEBUG(dbgs() << "  - Data Environment:\n");
-    EDTEnvironment &DE = EDTInfo->getDataEnv();
+    EDTEnvironment &DE = ContextEDT->getDataEnv();
     LLVM_DEBUG(dbgs() << "    - " << "Number of ParamV = " << DE.getParamC()
                       << "\n");
     for (auto &P : DE.ParamV) {
