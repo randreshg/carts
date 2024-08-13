@@ -262,8 +262,8 @@ Number of DepV: 2
 ptr %1EDTDataBlock ->
      - Context: EDT #3 / Slot 0
      - SignalEDT: EDT #2
-     - ParentDBCtx: EDT #1 / Slot 1
-     - DoneDB: EDT #2
+     - ParentCtx: EDT #1 / Slot 1
+     - Done: EDT #2
      - #DependentChildEDTs: 0{}
      - #DependentSiblingEDTs: 0{}
 
@@ -286,7 +286,7 @@ EDTDataBlock ->
 EDTDataBlock ->
      - Context: EDT #1 / Slot 0
      - SignalEDT: EDT #2
-     - DoneDB: EDT #2
+     - Done: EDT #2
      - DependentSiblingEDT: EDT #2 / Slot #1
      - #DependentChildEDTs: 0{}
      - #DependentSiblingEDTs: 1{2}
@@ -295,7 +295,7 @@ EDTDataBlock ->
 [AAEDTDataBlockInfoCtxAndVal::manifest]   %shared_number = alloca i32, align 4 from EDT #1
 EDTDataBlock ->
      - Context: EDT #1 / Slot 1
-     - DoneDB: EDT #2
+     - Done: EDT #2
      - ChildrenDBs: 1
       - ChildDB: EDT #3 / Slot 0
      - DependentSiblingEDT: EDT #2 / Slot #0

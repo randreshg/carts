@@ -76,7 +76,7 @@ EDTArgType toEDTArgType(StringRef Str) {
 
 namespace arts {
 /// ------------------------------------------------------------------- ///
-///                            EDT DATABLOCK                            ///
+///                               DATA BLOCK                            ///
 /// ------------------------------------------------------------------- ///
 DataBlock::DataBlock(EDTValue *V, Mode M, EDT *ContextEDT)
     : V(V), M(M), ContextEDT(ContextEDT) {}
@@ -85,47 +85,48 @@ DataBlock::DataBlock(EDTValue *V, Mode M, EDT *ContextEDT)
 EDTValue *DataBlock::getValue() { return V; }
 DataBlock::Mode DataBlock::getMode() { return M; }
 EDT *DataBlock::getContextEDT() { return ContextEDT; }
-DataBlock *DataBlock::getParentDB() { return ParentDB; }
-DataBlockSet &DataBlock::getChildrenDB() { return ChildrenDB; }
-DataBlock *DataBlock::getDoneDB() { return DoneDB; };
-DataBlock *DataBlock::getParentDoneDB() {
-  if (ParentDB)
-    return ParentDB->getDoneDB();
-  return nullptr;
-}
-int32_t DataBlock::getSlot() { return Slot; }
-int32_t DataBlock::getToSlot() {
-  return getDoneDB() ? (getDoneDB()->getSlot())
-                     : (getParentDoneDB()->getSlot());
+DataBlock *DataBlock::getParent() { return Parent; }
+// DataBlock *DataBlock::getDone() { return Done; };
+uint32_t DataBlock::getSlot() { return Slot; }
+DataBlockSet &DataBlock::getChildDBs() { return ChildDBs; }
+// uint32_t DataBlock::getToSlot() {
+//   DataBlock *DoneDB = getDone();
+//   if (DoneDB)
+//     return DoneDB->getSlot();
+//   assert(Parent && "Parent is null");
+//   DataBlock *ParentDoneDB = Parent->getDone();
+//   assert(ParentDoneDB && "Parent Done is null");
+//   return ParentDoneDB->getSlot();
+// }
+/// Insert
+bool DataBlock::addChildDB(DataBlock *ChildDB) {
+  return ChildDBs.insert(ChildDB);
 }
 
 /// Setters
-void DataBlock::setParentDB(DataBlock *ParentDB) {
-  this->ParentDB = ParentDB;
-}
+void DataBlock::setParent(DataBlock *Parent) { this->Parent = Parent; }
 void DataBlock::setSlot(int32_t Slot) { this->Slot = Slot; }
-void DataBlock::setDoneDB(DataBlock *DoneDB) { this->DoneDB = DoneDB; }
+// void DataBlock::setDone(DataBlock *Done) { this->Done = Done; }
 
 /// Helpers
 Type *DataBlock::getType() {
   if (Ty)
     return Ty;
   /// Get the type of the value
-
   if (auto *Alloca = dyn_cast<AllocaInst>(V))
     Ty = Alloca->getAllocatedType();
   else if (auto *Load = dyn_cast<LoadInst>(V))
     Ty = Load->getType();
   /// If Ty is still null, return the type of the parent
-  if (!Ty && ParentDB)
-    Ty = ParentDB->getType();
+  if (!Ty && Parent)
+    Ty = Parent->getType();
   assert(Ty && "Type is null");
   return Ty;
 }
 
-bool DataBlock::addChildDB(DataBlock *ChildDB) {
-  return ChildrenDB.insert(ChildDB);
-}
+// bool DataBlock::addChildDB(DataBlock *ChildDB) {
+//   return ChildrenDB.insert(ChildDB);
+// }
 /// ------------------------------------------------------------------- ///
 ///                          DATA ENVIRONMENT                           ///
 /// ------------------------------------------------------------------- ///
@@ -245,6 +246,7 @@ EDTTypeKind EDT::getTypeKind() const { return Kind; }
 EDTType EDT::getTy() const { return Ty; }
 
 /// Helpers
+bool EDT::isSync() { return isa<SyncEDT>(this); }
 bool EDT::isAsync() { return !isa<SyncEDT>(this); }
 bool EDT::isMain() { return isa<MainEDT>(this); }
 bool EDT::isDep(Argument *Arg) { return Env->isDepV(Arg); }
