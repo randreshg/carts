@@ -511,11 +511,13 @@ void ARTSCodegen::insertEDTCall(EDT &E) {
   AllocaInst *DepC = Builder.CreateAlloca(Int32, nullptr);
   Builder.CreateStore(
       ConstantInt::get(Int32, EDTNode->getIncomingSlotNodesSize()), DepC);
+
   /// Debug info
   LLVM_DEBUG(dbgs() << " - Inserting EDT Call\n");
   SmallVector<Value *, 8> PrintArgs;
   string PrintMsg = "Creating EDT #" + std::to_string(E.getID()) + "\n";
   insertPrint(PrintMsg, PrintArgs);
+
   /// Insert EDT Call
   EDTCodegen *ECG = getOrCreateEDTCodegen(E);
   Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
