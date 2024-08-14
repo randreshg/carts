@@ -38,8 +38,19 @@ bool CreationGraphEdge::removeParameter(EDTValue *V) {
 }
 
 bool CreationGraphEdge::removeGuid(EDT *Guid) { return Guids.remove(Guid); }
-SetVector<EDTValue *> &CreationGraphEdge::getParameters() { return Parameters; }
-SetVector<EDT *> &CreationGraphEdge::getGuids() { return Guids; }
+
+uint32_t CreationGraphEdge::getParametersSize() { return Parameters.size(); }
+uint32_t CreationGraphEdge::getGuidsSize() { return Guids.size(); }
+
+void CreationGraphEdge::forEachParameter(std::function<void(EDTValue *)> F) {
+  for (Value *V : Parameters)
+    F(V);
+}
+
+void CreationGraphEdge::forEachGuid(std::function<void(EDT *)> F) {
+  for (EDT *Guid : Guids)
+    F(Guid);
+}
 
 /// DataBlockGraphEdge
 DataBlockGraphEdge::DataBlockGraphEdge(EDTGraphNode *From, EDTGraphSlotNode *To,

@@ -17,6 +17,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 
+#include "carts/analysis/graph/ARTSEdge.h"
 #include "carts/analysis/graph/ARTSGraph.h"
 #include "carts/codegen/ARTSCodegen.h"
 #include "carts/utils/ARTS.h"
@@ -264,16 +265,23 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
   Function *EDTFn = getOrCreateEDTFunction(E);
   setInsertionPointInBB(EDTFn->getEntryBlock());
 
-  // DenseMap<Value *, Value *> RewiringMap;
+  DenseMap<Value *, Value *> RewiringMap;
   // /// Get the information we know about the Module
-  // ARTSGraph &Graph = Cache->getGraph();
-  // EDTCodegen *ECG = getOrCreateEDTCodegen(E);
+  ARTSGraph &Graph = Cache->getGraph();
+  EDTCodegen *ECG = getOrCreateEDTCodegen(E);
+  EDT *Parent = E.getParent();
 
-  // /// Parameters
+  /// Parameters
+  LLVM_DEBUG(dbgs() << " - Inserting ParamV\n");
+
   // auto handleParameters = [&]() -> void {
-  //   LLVM_DEBUG(dbgs() << " - Inserting ParamV\n");
+  //   if (!Parent) {
+  //     LLVM_DEBUG(dbgs() << "     EDT #" << E.getID()
+  //                       << " doesn't have a parent EDT\n");
+  //     return;
+  //   }
   //   /// The input parameters and Guids always come from the parent EDT
-  //   EDT *Parent = E.getParent();
+  //
   //   if (!Parent) {
   //     LLVM_DEBUG(dbgs() << "     EDT #" << E.getID()
   //                       << " doesn't have a parent EDT\n");
@@ -407,118 +415,124 @@ void ARTSCodegen::insertEDTCall(EDT &E) {
   LLVM_DEBUG(dbgs() << TAG << "Inserting Call for EDT #" << E.getID() << "\n");
   EDT *ParentEDT = E.getParent();
   if (!ParentEDT) {
-    LLVM_DEBUG(dbgs() << "     EDT #" << E.getID()
-                      << " doesn't have a parent EDT\n");
+    assert(E.isMain() && "A non-main EDT should have a parent EDT");
+
     return;
   }
 
-  // ARTSGraph &Graph = Cache->getGraph();
-  // EDTGraphDataEdge *InputParentDataEdges =
-  //     dyn_cast<EDTGraphDataEdge>(Graph.getEdge(ParentEDT, &E));
-  // auto EDTName = E.getName();
-  // /// Set insertion point to the EDT Call
-  // auto OldInsertPoint = Builder.saveIP();
-  // Builder.SetInsertPoint(E.getCall());
+  ARTSGraph &Graph = Cache->getGraph();
+  EDTGraphNode *EDTNode = Graph.getOrCreateNode(&E);
+  EDTGraphNode *ParentEDTNode = Graph.getOrCreateNode(ParentEDT);
+  CreationGraphEdge *InputParentEdge = Graph.getEdge(ParentEDTNode, EDTNode);
+  assert(InputParentEdge && "Creation edge not found");
 
-  // /// ParamC
-  // uint32_t ParamSize = 0;
-  // uint32_t GuidSize = 0;
-  // if (InputParentDataEdges) {
-  //   ParamSize = InputParentDataEdges->getParameters().size();
-  //   GuidSize = InputParentDataEdges->getGuids().size();
-  // }
-  // AllocaInst *ParamC =
-  //     Builder.CreateAlloca(Int32, nullptr, EDTName + "_paramc");
-  // Builder.CreateStore(ConstantInt::get(Int32, ParamSize + GuidSize), ParamC);
-  // LoadInst *LoadedParamC = Builder.CreateLoad(Int32, ParamC);
+  /// Set insertion point to the EDT Call
+  auto OldInsertPoint = Builder.saveIP();
+  Builder.SetInsertPoint(E.getCall());
+  auto EDTName = E.getName();
 
-  // /// ParamV
-  // AllocaInst *ParamV =
-  //     Builder.CreateAlloca(Int64, LoadedParamC, EDTName + "_paramv");
-  // if (InputParentDataEdges) {
-  //   auto &InputParameters = InputParentDataEdges->getParameters();
-  //   for (auto Param : enumerate(InputParameters)) {
-  //     LLVM_DEBUG(dbgs() << " - ParamV[" << Param.index()
-  //                       << "]: " << *Param.value() << "\n");
-  //     unsigned Index = Param.index();
-  //     Value *Val = Param.value();
-  //     auto ParamVName = EDTName + "_paramv." + std::to_string(Index);
-  //     /// Create the GEP to store the value in the ParamV array
-  //     Value *ParamVElemPtr =
-  //         Builder.CreateConstInBoundsGEP1_64(Int64, ParamV, Index,
-  //         ParamVName);
-  //     /// Cast the value to int64
-  //     Value *CastedVal = nullptr;
-  //     auto *ValType = Val->getType();
-  //     switch (ValType->getTypeID()) {
-  //     /// Integer
-  //     case llvm::Type::IntegerTyID: {
-  //       if (ValType != Int64)
-  //         CastedVal = Builder.CreateSExtOrTrunc(Val, Int64);
-  //       else
-  //         CastedVal = Val;
-  //     } break;
-  //     /// Default
-  //     default:
-  //       assert(false && "Type not supported yet");
-  //       break;
-  //     }
-  //     Builder.CreateStore(CastedVal, ParamVElemPtr);
-  //   }
+  /// ParamC
+  uint32_t ParamSize = 0;
+  uint32_t GuidSize = 0;
+  AllocaInst *ParamC =
+      Builder.CreateAlloca(Int32, nullptr, EDTName + "_paramc");
+  Builder.CreateStore(ConstantInt::get(Int32, ParamSize + GuidSize), ParamC);
+  LoadInst *LoadedParamC = Builder.CreateLoad(Int32, ParamC);
 
-  //   /// Guids
-  //   EDTCodegen *ParentECG = getOrCreateEDTCodegen(*ParentEDT);
-  //   const uint32_t InitialIndex = InputParameters.size();
-  //   auto &InputGuids = InputParentDataEdges->getGuids();
-  //   for (auto Guid : enumerate(InputGuids)) {
-  //     LLVM_DEBUG(dbgs() << " - ParamVGuid[" << Guid.index() << "]: EDT"
-  //                       << Guid.value()->getID() << "\n");
-  //     unsigned Index = Guid.index() + InitialIndex;
-  //     EDT *Edt = Guid.value();
+  /// ParamV
+  AllocaInst *ParamV =
+      Builder.CreateAlloca(Int64, LoadedParamC, EDTName + "_paramv");
 
-  //     /// If the the GUID of the EDT is created in the parent EDT, get it,
-  //     /// otherwise, check if my parent knows it.
-  //     Value *GuidValue = ParentECG->getGuid(Edt);
-  //     if (!GuidValue) {
-  //       LLVM_DEBUG(dbgs() << "     Parent EDT #" << ParentEDT->getID()
-  //                         << " doesn't have a GUID for EDT #" << Edt->getID()
-  //                         << "\n");
-  //       llvm_unreachable("Parent EDT doesn't have a GUID for the child EDT");
-  //     }
-  //     /// Assert the GuidValue is a pointer
-  //     assert(GuidValue && "GuidValue is null");
-  //     /// Create the GEP to store the Guid value in the ParamV array
-  //     auto ParamVGuidName =
-  //         EDTName + "_paramv_guid.edt_" + std::to_string(Edt->getID());
-  //     Value *ParamVGuiElemPtr = Builder.CreateConstInBoundsGEP1_64(
-  //         artsGuid_t, ParamV, Index, ParamVGuidName);
-  //     Builder.CreateStore(GuidValue, ParamVGuiElemPtr);
-  //   }
-  // }
+  /// Insert the GUIDs
+  if (ParentEDT) {
+    /// ParamC
+    ParamSize = InputParentEdge->getParametersSize();
+    GuidSize = InputParentEdge->getGuidsSize();
+    AllocaInst *ParamC =
+      Builder.CreateAlloca(Int32, nullptr, EDTName + "_paramc");
+  Builder.CreateStore(ConstantInt::get(Int32, ParamSize + GuidSize), ParamC);
+  LoadInst *LoadedParamC = Builder.CreateLoad(Int32, ParamC);
 
-  // /// DepC
-  // EDTEnvironment &EDTEnv = E.getDataEnv();
-  // AllocaInst *DepC = Builder.CreateAlloca(Int32, nullptr);
-  // Builder.CreateStore(ConstantInt::get(Int32, EDTEnv.getDepC()), DepC);
+    /// Insert the parameters
+    uint32_t ParameterIndex = 0;
+    InputParentEdge->forEachParameter([&](EDTValue *ParameterValue) {
+      LLVM_DEBUG(dbgs() << " - ParamV[" << ParameterIndex
+                        << "]: " << *ParameterValue << "\n");
+      auto ParamVName = EDTName + "_paramv." + std::to_string(ParameterIndex);
+      /// Create the GEP to store the value in the ParamV array
+      Value *ParamVElemPtr = Builder.CreateConstInBoundsGEP1_64(
+          Int64, ParamV, ParameterIndex, ParamVName);
+      /// Cast the value to int64
+      Value *CastedVal = nullptr;
+      auto *ValType = ParameterValue->getType();
+      switch (ValType->getTypeID()) {
+      /// Integer
+      case llvm::Type::IntegerTyID: {
+        if (ValType != Int64)
+          CastedVal = Builder.CreateSExtOrTrunc(ParameterValue, Int64);
+        else
+          CastedVal = ParameterValue;
+      } break;
+      /// Default
+      default:
+        assert(false && "Type not supported yet");
+        break;
+      }
+      Builder.CreateStore(CastedVal, ParamVElemPtr);
+      /// Increment the parameter index
+      ParameterIndex++;
+    });
 
-  // /// Create EDT
-  // LLVM_DEBUG(dbgs() << " - Inserting EDT Call\n");
-  // SmallVector<Value *, 8> PrintArgs;
-  // string PrintMsg = "Creating EDT #" + std::to_string(E.getID()) + "\n";
-  // insertPrint(PrintMsg, {PrintArgs});
-  // EDTCodegen *ECG = getOrCreateEDTCodegen(E);
-  // Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
-  // Value *Args[] = {Builder.CreateBitCast(ECG->getFn(), EdtFunctionPtr),
-  //                  ECG->getGuidAddress(), LoadedParamC, ParamV,
-  //                  Builder.CreateLoad(Int32, DepC)};
-  // ECG->setCB(Builder.CreateCall(F, Args));
+    uint32_t GuidIndex = ParameterIndex;
+    EDTCodegen *ParentECG = getOrCreateEDTCodegen(*ParentEDT);
+    InputParentEdge->forEachGuid([&](EDT *Guid) {
+      LLVM_DEBUG(dbgs() << " - ParamVGuid[" << GuidIndex << "]: EDT"
+                        << Guid->getID() << "\n");
+      /// Get the GUID value
+      Value *GuidValue = ParentECG->getGuid(Guid);
+      if (!GuidValue) {
+        LLVM_DEBUG(dbgs() << "     Parent EDT #" << ParentEDT->getID()
+                          << " doesn't have a GUID for EDT #" << Guid->getID()
+                          << "\n");
+        llvm_unreachable("Parent EDT doesn't have a GUID for the child EDT");
+      }
+      /// Create the GEP to store the Guid value in the ParamV array
+      auto ParamVGuidName =
+          EDTName + "_paramv_guid.edt_" + std::to_string(Guid->getID());
+      Value *ParamVGuiElemPtr = Builder.CreateConstInBoundsGEP1_64(
+          artsGuid_t, ParamV, GuidIndex, ParamVGuidName);
+      Builder.CreateStore(GuidValue, ParamVGuiElemPtr);
+      /// Increment the GUID index
+      GuidIndex++;
+    });
+  }
 
-  // /// We can remove both the function and the call
-  // utils::insertValueToRemove(E.getCall());
-  // utils::insertValueToRemove(E.getFn());
+  /// Insert EDT Call
+  auto insertCall = [&]() -> void {
+    /// DepC
+    AllocaInst *DepC = Builder.CreateAlloca(Int32, nullptr);
+    Builder.CreateStore(
+        ConstantInt::get(Int32, EDTNode->getIncomingSlotNodesSize()), DepC);
+    /// Debug info
+    LLVM_DEBUG(dbgs() << " - Inserting EDT Call\n");
+    SmallVector<Value *, 8> PrintArgs;
+    string PrintMsg = "Creating EDT #" + std::to_string(E.getID()) + "\n";
+    insertPrint(PrintMsg, PrintArgs);
+    /// Create Call
+    EDTCodegen *ECG = getOrCreateEDTCodegen(E);
+    Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
+    Value *Args[] = {Builder.CreateBitCast(ECG->getFn(), EdtFunctionPtr),
+                     ECG->getGuidAddress(), LoadedParamC, ParamV,
+                     Builder.CreateLoad(Int32, DepC)};
+    ECG->setCB(Builder.CreateCall(F, Args));
+  };
+
+  /// We can remove both the function and the call
+  utils::insertValueToRemove(E.getCall());
+  utils::insertValueToRemove(E.getFn());
 
   /// Restore the insertion point
-  // Builder.restoreIP(OldInsertPoint);
+  Builder.restoreIP(OldInsertPoint);
 }
 
 void ARTSCodegen::insertEDTSignals(EDT &E) {
