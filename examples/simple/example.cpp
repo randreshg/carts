@@ -31,7 +31,7 @@ int main() {
   // }
   // parallel_function(number);
   // #pragma omp parallel firstprivate(random_number, random)
-   #pragma omp parallel
+   #pragma omp parallel shared
     {
       // for(int i = 0; i < number; i++) {
       //   int random = rand() % 10 + 10;

@@ -155,82 +155,6 @@ bool ARTSGraph::isChild(EDT *Parent, EDT *Child) {
 }
 
 /// Public Interface
-EDTGraphNode *ARTSGraph::getOrCreateNode(EDT *E) {
-  /// Check if the node already exists
-  EDTGraphNode *EDTNode = getNode(E);
-  if (EDTNode)
-    return EDTNode;
-  /// Create a new node
-  EDTNode = new EDTGraphNode(*E);
-  EDTs[E->getFn()] = EDTNode;
-  return EDTNode;
-}
-
-EDTGraphNode *ARTSGraph::getOrCreateNode(EDT *E, EDT *ParentEDT) {
-  EDTGraphNode *EDTNode = getOrCreateNode(E);
-  insertCreationEdge(getNode(ParentEDT), EDTNode);
-  return EDTNode;
-}
-
-EDTGraphSlotNode *ARTSGraph::getOrCreateSlotNode(EDT *Parent, uint32_t Slot) {
-  EDTGraphNode *ParentNode = getNode(Parent);
-  assert(ParentNode != nullptr && "The parent node is null");
-  return ParentNode->getOrCreateSlotNode(Slot);
-}
-
-bool ARTSGraph::insertCreationEdge(EDT *From, EDT *To) {
-  return insertCreationEdge(getNode(From), getNode(To));
-}
-
-bool ARTSGraph::insertCreationEdgeGuid(EDT *From, EDT *To, EDT *Guid) {
-  /// Recursively insert the Guid from the parent to the child
-  CreationGraphEdge *Edge = getEdge(getNode(From), getNode(To));
-  assert(Edge != nullptr && "The edge doesn't exist");
-
-  /// If the Guid is already in the edge, return false
-  if (Edge->hasGuid(Guid))
-    return false;
-
-  /// If not, guarantee that the parent of From has the Guid
-  EDT *FromParent = From->getParent();
-  assert(!FromParent && "The parent of the EDT must exist");
-  insertCreationEdgeGuid(FromParent, From, Guid);
-
-  /// Insert the Guid in the edge
-  return Edge->insertGuid(Guid);
-}
-
-bool ARTSGraph::insertCreationEdgeParameter(EDT *From, EDT *To,
-                                            EDTValue *Parameter) {
-  CreationGraphEdge *Edge = getEdge(getNode(From), getNode(To));
-  assert(Edge != nullptr && "The edge doesn't exist");
-  return Edge->insertParameter(Parameter);
-}
-
-bool ARTSGraph::insertDataBlockEdge(EDT *From, EDT *To, uint32_t Slot,
-                                    DataBlock *DB) {
-  EDTGraphNode *FromNode = getNode(From);
-  EDTGraphSlotNode *ToNode = getOrCreateSlotNode(To, Slot);
-  return insertDataBlockEdge(FromNode, ToNode, DB);
-}
-
-/// Private Interface
-EDTGraphNode *ARTSGraph::getNode(EDT *E) const { return getNode(*E->getFn()); }
-
-EDTGraphNode *ARTSGraph::getNode(Function &Fn) const {
-  auto it = EDTs.find(&Fn);
-  if (it != EDTs.end())
-    return it->second;
-  return nullptr;
-}
-
-unordered_set<EDTGraphNode *> ARTSGraph::getNodes() {
-  unordered_set<EDTGraphNode *> Aux;
-  for (auto Pair : EDTs)
-    Aux.insert(Pair.second);
-  return Aux;
-}
-
 EDTGraphNode *ARTSGraph::getEntryNode() {
   if (EntryNode != nullptr)
     return EntryNode;
@@ -261,6 +185,123 @@ EDTGraphNode *ARTSGraph::getExitNode() {
     return ExitNode;
   }
   return nullptr;
+}
+
+EDTGraphNode *ARTSGraph::getOrCreateNode(EDT *E) {
+  /// Check if the node already exists
+  EDTGraphNode *EDTNode = getNode(E);
+  if (EDTNode)
+    return EDTNode;
+  /// Create a new node
+  EDTNode = new EDTGraphNode(*E);
+  EDTs[E->getFn()] = EDTNode;
+  return EDTNode;
+}
+
+EDTGraphNode *ARTSGraph::getOrCreateNode(EDT *E, EDT *ParentEDT) {
+  EDTGraphNode *EDTNode = getOrCreateNode(E);
+  insertCreationEdge(getNode(ParentEDT), EDTNode);
+  return EDTNode;
+}
+
+EDTGraphSlotNode *ARTSGraph::getOrCreateSlotNode(EDT *Parent, uint32_t Slot) {
+  EDTGraphNode *ParentNode = getNode(Parent);
+  assert(ParentNode != nullptr && "The parent node is null");
+  return ParentNode->getOrCreateSlotNode(Slot);
+}
+
+bool ARTSGraph::insertCreationEdge(EDT *From, EDT *To) {
+  return insertCreationEdge(getNode(From), getNode(To));
+}
+
+bool ARTSGraph::insertCreationEdgeGuid(EDT *From, EDT *To, EDT *Done) {
+  /// Recursively insert the Guid from the parent to the child
+  CreationGraphEdge *Edge = getEdge(getNode(From), getNode(To));
+  assert(Edge != nullptr && "The edge doesn't exist");
+
+  /// If the Guid is already in the edge, return false
+  if (Edge->hasGuid(Done))
+    return false;
+
+  /// If the Done EDT is a child of the From EDT, insert the Guid in the edge
+  if (isChild(From, Done)) {
+    LLVM_DEBUG(dbgs() << "        - Inserting Guid of child \"EDT #"
+                      << Done->getID() << "\" in the edge from \"EDT #"
+                      << From->getID() << "\" to \"EDT #" << To->getID()
+                      << "\"\n");
+    return Edge->insertGuid(Done);
+  }
+
+  /// If not, guarantee that the parent of From has the Guid
+  EDT *FromParent = From->getParent();
+  assert(FromParent && "The parent of the EDT must exist");
+  insertCreationEdgeGuid(FromParent, From, Done);
+
+  /// Insert the Guid in the edge
+  LLVM_DEBUG(dbgs() << "        - Inserting Guid of \"EDT #" << Done->getID()
+                    << "\" in the  from \"EDT #" << From->getID()
+                    << "\" to \"EDT #" << To->getID() << "\"\n");
+  return Edge->insertGuid(Done);
+}
+
+bool ARTSGraph::insertCreationEdgeParameter(EDT *From, EDT *To,
+                                            EDTValue *Parameter) {
+  CreationGraphEdge *Edge = getEdge(getNode(From), getNode(To));
+  assert(Edge != nullptr && "The edge doesn't exist");
+  return Edge->insertParameter(Parameter);
+}
+
+bool ARTSGraph::insertDataBlockEdge(EDT *From, EDT *To, uint32_t Slot,
+                                    DataBlock *DB) {
+  EDTGraphNode *FromNode = getNode(From);
+  EDTGraphSlotNode *ToNode = getOrCreateSlotNode(To, Slot);
+  return insertDataBlockEdge(FromNode, ToNode, DB);
+}
+
+void ARTSGraph::forEachEDTNode(function<void(EDTGraphNode *)> Fn) {
+  for (auto Pair : EDTs)
+    Fn(Pair.second);
+}
+
+void ARTSGraph::forEachIncomingCreationEdge(
+    EDTGraphNode *Node, function<void(CreationGraphEdge *)> Fn) {
+  for (auto &E : getIncomingCreationEdges(Node))
+    Fn(E);
+}
+
+void ARTSGraph::forEachOutgoingCreationEdge(
+    EDTGraphNode *Node, function<void(CreationGraphEdge *)> Fn) {
+  for (auto &E : getOutgoingCreationEdges(Node))
+    Fn(E);
+}
+
+void ARTSGraph::forEachIncomingDataBlockEdge(
+    EDTGraphNode *Node, function<void(DataBlockGraphEdge *)> Fn) {
+  for (auto &E : getIncomingDataBlockEdges(Node))
+    Fn(E);
+}
+
+void ARTSGraph::forEachOutgoingDataBlockEdge(
+    EDTGraphNode *Node, function<void(DataBlockGraphEdge *)> Fn) {
+  for (auto &E : getOutgoingDataBlockEdges(Node))
+    Fn(E);
+}
+
+/// Private Interface
+EDTGraphNode *ARTSGraph::getNode(EDT *E) const { return getNode(*E->getFn()); }
+
+EDTGraphNode *ARTSGraph::getNode(Function &Fn) const {
+  auto it = EDTs.find(&Fn);
+  if (it != EDTs.end())
+    return it->second;
+  return nullptr;
+}
+
+unordered_set<EDTGraphNode *> ARTSGraph::getNodes() {
+  unordered_set<EDTGraphNode *> Aux;
+  for (auto Pair : EDTs)
+    Aux.insert(Pair.second);
+  return Aux;
 }
 
 /// Edges
@@ -352,7 +393,7 @@ CreationGraphEdge *ARTSGraph::fetchOrCreateEdge(EDTGraphNode *From,
     return ExistingEdge;
 
   /// The edge from @fromNode to @toNode doesn't exist yet
-  LLVM_DEBUG(dbgs() << "        - Creating CreatingEdge from \"EDT #"
+  LLVM_DEBUG(dbgs() << "        - Inserting CreationEdge from \"EDT #"
                     << From->getEDT()->getID() << "\" to \"EDT #"
                     << To->getEDT()->getID() << "\"\n");
   CreationGraphEdge *NewEdge = new CreationGraphEdge(From, To);
@@ -368,7 +409,7 @@ DataBlockGraphEdge *ARTSGraph::fetchOrCreateEdge(EDTGraphNode *From,
     return ExistingEdge;
 
   /// The edge from @fromNode to @toNode doesn't exist yet
-  LLVM_DEBUG(dbgs() << "        - Creating DataBlockEdge from \"EDT #"
+  LLVM_DEBUG(dbgs() << "        - Inserting DataBlockEdge from \"EDT #"
                     << From->getEDT()->getID() << "\" to \"EDT #"
                     << To->getParent()->getEDT()->getID() << "\" in Slot #"
                     << To->getSlot() << "\n");
@@ -446,7 +487,7 @@ void ARTSGraph::print(void) {
     LLVM_DEBUG(dbgs() << "  - Incoming Edges:\n");
     auto InEdges = getIncomingCreationEdges(EDTNode);
     if (InEdges.size() == 0) {
-      LLVM_DEBUG(dbgs() << "    - The EDT has no incoming creation edges\n");
+      LLVM_DEBUG(dbgs() << "    - The EDT has no incoming Creation edges\n");
     } else {
       /// The EDT must have only one incoming creation edge.
       assert(InEdges.size() == 1 &&
@@ -459,11 +500,12 @@ void ARTSGraph::print(void) {
     }
 
     /// Input DataBlock edges
-    auto InputSlotNodes = EDTNode->getSlotNodes();
-    if (InputSlotNodes.size() == 0) {
-      LLVM_DEBUG(dbgs() << "      - The EDT has no input DataBlock slots\n");
+    auto InSlotNodes = EDTNode->getSlotNodes();
+    if (InSlotNodes.size() == 0) {
+      LLVM_DEBUG(dbgs() << "    - The EDT has no incoming DataBlock slots\n");
     } else {
-      for (EDTGraphSlotNode *SlotNode : InputSlotNodes) {
+      LLVM_DEBUG(dbgs() << "  - Incoming DataBlock Slots:\n");
+      for (EDTGraphSlotNode *SlotNode : InSlotNodes) {
         auto InDataEdges = getIncomingDataBlockEdges(SlotNode);
         if (InDataEdges.size() == 0) {
           LLVM_DEBUG(dbgs() << "      - The EDTSlot #" << SlotNode->getSlot()
@@ -473,8 +515,13 @@ void ARTSGraph::print(void) {
                      << "      - EDTSlot #" << SlotNode->getSlot() << "\n");
           for (DataBlockGraphEdge *DataEdge : InDataEdges) {
             DataBlock *DB = DataEdge->getDataBlock();
-            LLVM_DEBUG(dbgs()
-                       << "        - [DataBlock] " << *DB->getValue() << "\n");
+            LLVM_DEBUG(dbgs() << "        - [DataBlock] " << *DB->getValue());
+            DataBlock *DBParent = DB->getParent();
+            if (DBParent) {
+              LLVM_DEBUG(dbgs() << " / " << *DBParent->getValue() << "\n");
+            } else {
+              LLVM_DEBUG(dbgs() << "\n");
+            }
           }
         }
       }
@@ -502,9 +549,13 @@ void ARTSGraph::print(void) {
       EDT *ToEDT = ToNode->getEDT();
       LLVM_DEBUG(dbgs() << "    - [DataBlock] \"EDT #" << ToEDT->getID()
                         << "\" in Slot #" << To->getSlot() << "\n");
-      LLVM_DEBUG(dbgs() << "      - "
-                        << *OutDataBlockEdge->getDataBlock()->getValue()
-                        << "\n");
+      DataBlock *DB = OutDataBlockEdge->getDataBlock();
+      LLVM_DEBUG(dbgs() << "      - " << *DB->getValue());
+      if (DataBlock *DBParent = DB->getParent()) {
+        LLVM_DEBUG(dbgs() << " / " << *DBParent->getValue() << "\n");
+      } else {
+        LLVM_DEBUG(dbgs() << "\n");
+      }
     }
   }
   LLVM_DEBUG(dbgs() << "\n");
