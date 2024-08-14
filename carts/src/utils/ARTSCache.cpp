@@ -48,8 +48,7 @@ EDT *ARTSCache::getOrCreateEDT(const CallBase *CB) {
 
 /// DataBlock
 DataBlock *ARTSCache::createDataBlock(AA::ValueAndContext VAC,
-                                         DataBlock::Mode M,
-                                         EDT *ContextEDT) {
+                                      DataBlock::Mode M, EDT *ContextEDT) {
   DataBlock *DB = new DataBlock(VAC.getValue(), M, ContextEDT);
   /// Insert the DataBlock into the map with its associated Context
   DataBlocks.insert(DB);
@@ -58,7 +57,7 @@ DataBlock *ARTSCache::createDataBlock(AA::ValueAndContext VAC,
 }
 
 DataBlock *ARTSCache::getOrCreateDataBlock(AA::ValueAndContext VAC,
-                                              int32_t ArgNo) {
+                                           int32_t ArgNo) {
   /// Assert that it is an EDTContext
   const CallBase *ContextEDTCB = cast<CallBase>(VAC.getCtxI());
   EDT *ContextEDT = getOrCreateEDT(ContextEDTCB);
@@ -139,7 +138,7 @@ EDTValue *ARTSCache::getPointerVal(Value *Val) {
   return PointerVal;
 }
 
-void ARTSCache::insertGraphNode(EDT *E) { Graph->insertNode(E); }
+void ARTSCache::insertGraphNode(EDT *E) { Graph->getOrCreateNode(E); }
 
 /// Getters
 Module &ARTSCache::getModule() { return M; }

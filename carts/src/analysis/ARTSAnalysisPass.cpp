@@ -912,31 +912,32 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
       return ChangeStatus::UNCHANGED;
 
     /// Add Dependency if any
-    if (DataBlock *SignalDB = ArgValDBInfoAA->SignalDB.get()) {
-      assert(SignalDB && "SignalDB is null!");
-      assert(CalledEDT->isSync() && "SignalDB is only for SyncEDTs!");
-
-      EDT *SignalEDT = CalledEDT->getDoneSync();
-      DataBlock *DB = ArgValDBInfoAA->getDataBlock();
-      /// If the parent signals the value, add the DBEdge
-      if (ArgValDBInfoAA->MustSignal) {
-        LLVM_DEBUG(dbgs() << "     - EDT #" << CalledEDT->getID()
-                          << " signals to EDT #" << SignalEDT->getID() << "\n");
-        insertDataBlockGraphEdge(CalledEDT, SignalEDT, SignalDB->getSlot(), DB);
-      }
-      /// Otherwise, check if the value is signaled by a child/descendent EDT
-      else {
-        for (DataBlock *SignaledDB : ArgValDBInfoAA->SignaledDBsToEDTDone) {
-          insertDataBlockGraphEdge(SignaledDB->getContextEDT(), SignalEDT,
-                                   SignaledDB->getSlot(), DB);
-        }
-      }
-
-      // DependentEDTs.insert(SignalEDT);
+    DataBlock *SignalDB = ArgValDBInfoAA->SignalDB.get();
+    if (!SignalDB) {
+      assert(CalledEDT->isAsync() && "SignalDB is null for non AsyncEDTs!");
+      return indicateOptimisticFixpoint();
     }
 
-    indicateOptimisticFixpoint();
-    return ChangeStatus::CHANGED;
+    // If we got to this point, it has to be a SyncEDT
+    assert(CalledEDT->isSync() && "SignalDB is only for SyncEDTs!");
+
+    EDT *SignalEDT = CalledEDT->getDoneSync();
+    DataBlock *DB = ArgValDBInfoAA->getDataBlock();
+    /// If the parent signals the value, add the DBEdge
+    if (ArgValDBInfoAA->MustSignal) {
+      LLVM_DEBUG(dbgs() << "     - EDT #" << CalledEDT->getID()
+                        << " signals to EDT #" << SignalEDT->getID() << "\n");
+      insertDataBlockGraphEdge(CalledEDT, SignalEDT, SignalDB->getSlot(), DB);
+      return indicateOptimisticFixpoint();
+    }
+
+    /// Otherwise, check if the value is signaled by a child/descendent EDT
+    for (DataBlock *SignaledDB : ArgValDBInfoAA->SignaledDBsToEDTDone) {
+      insertDataBlockGraphEdge(SignaledDB->getContextEDT(), SignalEDT,
+                               SignaledDB->getSlot(), SignaledDB);
+    }
+
+    return indicateOptimisticFixpoint();
   }
 
   void insertDataBlockGraphEdge(EDT *From, EDT *To, uint32_t Slot,
@@ -1388,13 +1389,12 @@ public:
   void generateCode(Module &M, ARTSCache &Cache) {
     ARTSCodegen &CG = Cache.getCG();
     ARTSGraph &Graph = Cache.getGraph();
-    auto EDTNodes = Graph.getNodes();
     /// Reserve GUIDs for all EDTs
-    for (EDTGraphNode *EDTNode : EDTNodes) {
+    Graph.forEachEDTNode([&](EDTGraphNode *EDTNode) {
       EDT &CurrentEDT = *EDTNode->getEDT();
       CG.getOrCreateEDTFunction(CurrentEDT);
       CG.getOrCreateEDTGuid(CurrentEDT);
-    }
+    });
     LLVM_DEBUG(dbgs() << "\nAll EDT Guids have been reserved\n");
     /// Debug module
     LLVM_DEBUG(dbgs() << "\n" << M << "\n");
@@ -1413,12 +1413,11 @@ public:
       CG.insertEDTEntry(CurrentEDT);
       CG.insertEDTCall(CurrentEDT);
       CG.insertEDTSignals(CurrentEDT);
+
       /// Add all the children to the WorkList
-      auto OutEdges = Graph.getOutgoingEdges(CurrentEDTNode);
-      for (EDTGraphEdge *OutEdge : OutEdges) {
-        if (OutEdge->hasCreationDep())
-          WorkList.insert(OutEdge->getTo());
-      }
+      Graph.forEachOutgoingCreationEdge(
+          CurrentEDTNode,
+          [&](CreationGraphEdge *Edge) { WorkList.insert(Edge->getTo()); });
     }
 
     /// Insert init functions

@@ -24,14 +24,21 @@ int fib(int n) {
     /// EDT 1
     {
       /// EDT 2
-      #pragma omp task shared(i)
-      i = fib(n - 1);
+      #pragma omp task shared(i) {
+        // EDT 2.1
+        {
+          i = fib(n - 1);
+        }
+        /// EDT 2.1 done
+        // print(i)
+      }
+      // i = fib(n - 1);
 
       /// EDT 3
       #pragma omp task shared(j)
             j = fib(n - 2);
     }
-
+ 
 #pragma omp taskwait
     return i + j;
   }
@@ -47,7 +54,12 @@ int main() {
 #pragma omp parallel firstprivate(n)
   {
     #pragma omp single
-    printf("fib(%d) = %d\n", n, fib(n));
+    // EDT 1
+    int m = fib(n);
+    // EDT Done region
+    {
+        printf("fib(%d) = %d\n", n, m);
+    }
   }
 
   printf("Done %d, %d\n", n, i);

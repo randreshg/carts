@@ -67,25 +67,32 @@ public:
   bool isChild(EDT *Parent, EDT *Child);
 
   /// Public interface
+  EDTGraphNode *getEntryNode();
+  EDTGraphNode *getExitNode();
   EDTGraphNode *getOrCreateNode(EDT *E);
   EDTGraphNode *getOrCreateNode(EDT *E, EDT *ParentEDT);
   EDTGraphSlotNode *getOrCreateSlotNode(EDT *Parent, uint32_t Slot);
+  
   bool insertCreationEdge(EDT *From, EDT *To);
   bool insertCreationEdgeParameter(EDT *From, EDT *To, EDTValue *Parameter);
-  bool insertCreationEdgeGuid(EDT *From, EDT *To, EDT *Guid);
+  bool insertCreationEdgeGuid(EDT *From, EDT *To, EDT *Done);
   bool insertDataBlockEdge(EDT *From, EDT *To, uint32_t Slot, DataBlock *DB);
 
-  void forEachNode(function<void(EDTGraphNode *)> Fn);
-  void forEachIncomingEdge(function<void(CreationGraphEdge *)> Fn);
-  void forEachOutgoingEdge(function<void(CreationGraphEdge *)> Fn);
+  void forEachEDTNode(function<void(EDTGraphNode *)> Fn);
+  void forEachIncomingCreationEdge(EDTGraphNode *Node,
+                                   function<void(CreationGraphEdge *)> Fn);
+  void forEachOutgoingCreationEdge(EDTGraphNode *Node,
+                                   function<void(CreationGraphEdge *)> Fn);
+  void forEachIncomingDataBlockEdge(EDTGraphNode *Node,
+                                    function<void(DataBlockGraphEdge *)> Fn);
+  void forEachOutgoingDataBlockEdge(EDTGraphNode *Node,
+                                    function<void(DataBlockGraphEdge *)> Fn);
 
 private:
   /// Nodes
   EDTGraphNode *getNode(EDT *E) const;
   EDTGraphNode *getNode(Function &Fn) const;
   unordered_set<EDTGraphNode *> getNodes();
-  EDTGraphNode *getEntryNode();
-  EDTGraphNode *getExitNode();
 
   /// Edges
   CreationGraphEdge *getEdge(EDTGraphNode *From, EDTGraphNode *To);
