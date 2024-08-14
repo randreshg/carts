@@ -6,6 +6,7 @@
 
 #include "carts/utils/ARTS.h"
 #include "llvm/ADT/SetVector.h"
+#include <sys/types.h>
 
 /// ------------------------------------------------------------------- ///
 ///                             EDT EDGE                               ///
@@ -31,10 +32,12 @@ public:
   /// Remove interface
   bool removeParameter(EDTValue *V);
   bool removeGuid(EDT *Guid);
-
-  /// Getters
-  SetVector<EDTValue *> &getParameters();
-  SetVector<EDT *> &getGuids();
+  /// Get size
+  uint32_t getParametersSize();
+  uint32_t getGuidsSize();
+  /// For each interface
+  void forEachParameter(std::function<void(EDTValue *)> F);
+  void forEachGuid(std::function<void(EDT *)> F);
 
 private:
   EDTGraphNode *From = nullptr;

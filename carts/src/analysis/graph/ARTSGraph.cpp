@@ -42,11 +42,14 @@ EDTGraphSlotNode *EDTGraphNode::getOrCreateSlotNode(uint32_t Slot) {
   return SlotNode;
 }
 
-unordered_set<EDTGraphSlotNode *> EDTGraphNode::getSlotNodes() {
-  unordered_set<EDTGraphSlotNode *> Aux;
-  for (auto Pair : IncomingSlotNodes)
-    Aux.insert(Pair.second);
-  return Aux;
+void EDTGraphNode::forEachIncomingSlotNode(
+    function<void(EDTGraphSlotNode *)> Fn) {
+  for (auto &E : IncomingSlotNodes)
+    Fn(E.second);
+}
+
+uint32_t EDTGraphNode::getIncomingSlotNodesSize() {
+  return IncomingSlotNodes.size();
 }
 
 /// EDTGraphSlotNode
@@ -355,12 +358,11 @@ ARTSGraph::getOutgoingCreationEdges(EDTGraphNode *Node) {
 unordered_set<DataBlockGraphEdge *>
 ARTSGraph::getIncomingDataBlockEdges(EDTGraphNode *Node) {
   unordered_set<DataBlockGraphEdge *> Aux;
-  auto EDTSlotNodes = Node->getSlotNodes();
-  for (auto &SlotNode : EDTSlotNodes) {
+  Node->forEachIncomingSlotNode([&](EDTGraphSlotNode *SlotNode) {
     auto IncomingDataBlocks = getIncomingDataBlockEdges(SlotNode);
     for (DataBlockGraphEdge *DataBlockEdge : IncomingDataBlocks)
       Aux.insert(DataBlockEdge);
-  }
+  });
   return Aux;
 }
 
@@ -500,22 +502,21 @@ void ARTSGraph::print(void) {
     }
 
     /// Input DataBlock edges
-    auto InSlotNodes = EDTNode->getSlotNodes();
-    if (InSlotNodes.size() == 0) {
+    if (EDTNode->getIncomingSlotNodesSize() == 0) {
       LLVM_DEBUG(dbgs() << "    - The EDT has no incoming DataBlock slots\n");
     } else {
       LLVM_DEBUG(dbgs() << "  - Incoming DataBlock Slots:\n");
-      for (EDTGraphSlotNode *SlotNode : InSlotNodes) {
+      EDTNode->forEachIncomingSlotNode([&](EDTGraphSlotNode *SlotNode) {
         auto InDataEdges = getIncomingDataBlockEdges(SlotNode);
         if (InDataEdges.size() == 0) {
-          LLVM_DEBUG(dbgs() << "      - The EDTSlot #" << SlotNode->getSlot()
+          LLVM_DEBUG(dbgs() << "    - The EDTSlot #" << SlotNode->getSlot()
                             << " has no incoming data edges\n");
         } else {
           LLVM_DEBUG(dbgs()
-                     << "      - EDTSlot #" << SlotNode->getSlot() << "\n");
+                     << "    - EDTSlot #" << SlotNode->getSlot() << "\n");
           for (DataBlockGraphEdge *DataEdge : InDataEdges) {
             DataBlock *DB = DataEdge->getDataBlock();
-            LLVM_DEBUG(dbgs() << "        - [DataBlock] " << *DB->getValue());
+            LLVM_DEBUG(dbgs() << "      - [DataBlock] " << *DB->getValue());
             DataBlock *DBParent = DB->getParent();
             if (DBParent) {
               LLVM_DEBUG(dbgs() << " / " << *DBParent->getValue() << "\n");
@@ -524,7 +525,7 @@ void ARTSGraph::print(void) {
             }
           }
         }
-      }
+      });
     }
 
     LLVM_DEBUG(dbgs() << "  - Outgoing Edges:\n");

@@ -10,6 +10,7 @@
 #include "llvm/Analysis/MemorySSA.h"
 #include "llvm/IR/Function.h"
 #include <cstdint>
+#include <sys/types.h>
 #include <unordered_set>
 
 #include "carts/analysis/graph/ARTSEdge.h"
@@ -31,7 +32,8 @@ public:
   void print(void);
   EDT *getEDT();
   EDTGraphSlotNode *getOrCreateSlotNode(uint32_t Slot);
-  unordered_set<EDTGraphSlotNode *> getSlotNodes();
+  void forEachIncomingSlotNode(function<void(EDTGraphSlotNode *)> Fn);
+  uint32_t getIncomingSlotNodesSize();
 
 private:
   DenseMap<uint32_t, EDTGraphSlotNode *> IncomingSlotNodes;
@@ -78,6 +80,9 @@ public:
   bool insertCreationEdgeGuid(EDT *From, EDT *To, EDT *Done);
   bool insertDataBlockEdge(EDT *From, EDT *To, uint32_t Slot, DataBlock *DB);
 
+  CreationGraphEdge *getEdge(EDTGraphNode *From, EDTGraphNode *To);
+  DataBlockGraphEdge *getEdge(EDTGraphNode *From, EDTGraphSlotNode *To);
+
   void forEachEDTNode(function<void(EDTGraphNode *)> Fn);
   void forEachIncomingCreationEdge(EDTGraphNode *Node,
                                    function<void(CreationGraphEdge *)> Fn);
@@ -95,8 +100,6 @@ private:
   unordered_set<EDTGraphNode *> getNodes();
 
   /// Edges
-  CreationGraphEdge *getEdge(EDTGraphNode *From, EDTGraphNode *To);
-  DataBlockGraphEdge *getEdge(EDTGraphNode *From, EDTGraphSlotNode *To);
   unordered_set<CreationGraphEdge *>
   getIncomingCreationEdges(EDTGraphNode *Node);
   unordered_set<CreationGraphEdge *>
