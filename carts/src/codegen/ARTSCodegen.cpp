@@ -412,47 +412,46 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
 }
 
 void ARTSCodegen::insertEDTCall(EDT &E) {
+  auto OldInsertPoint = Builder.saveIP();
+  string EDTName = E.getName();
+
   LLVM_DEBUG(dbgs() << TAG << "Inserting Call for EDT #" << E.getID() << "\n");
   EDT *ParentEDT = E.getParent();
-  if (!ParentEDT) {
+  if (!ParentEDT)
     assert(E.isMain() && "A non-main EDT should have a parent EDT");
 
-    return;
-  }
+  /// Parent variables in case there is parent
+  EDTGraphNode *ParentEDTNode;
+  CreationGraphEdge *InputParentEdge;
 
+  /// Get graph information
   ARTSGraph &Graph = Cache->getGraph();
   EDTGraphNode *EDTNode = Graph.getOrCreateNode(&E);
-  EDTGraphNode *ParentEDTNode = Graph.getOrCreateNode(ParentEDT);
-  CreationGraphEdge *InputParentEdge = Graph.getEdge(ParentEDTNode, EDTNode);
-  assert(InputParentEdge && "Creation edge not found");
 
   /// Set insertion point to the EDT Call
-  auto OldInsertPoint = Builder.saveIP();
   Builder.SetInsertPoint(E.getCall());
-  auto EDTName = E.getName();
 
-  /// ParamC
+  /// Insert ParamC
   uint32_t ParamSize = 0;
   uint32_t GuidSize = 0;
+  if (ParentEDT) {
+    /// Get input parent edge
+    ParentEDTNode = Graph.getOrCreateNode(ParentEDT);
+    InputParentEdge = Graph.getEdge(ParentEDTNode, EDTNode);
+    assert(InputParentEdge && "Creation edge not found");
+    ParamSize = InputParentEdge->getParametersSize();
+    GuidSize = InputParentEdge->getGuidsSize();
+  }
+
+  /// ParamC
   AllocaInst *ParamC =
       Builder.CreateAlloca(Int32, nullptr, EDTName + "_paramc");
   Builder.CreateStore(ConstantInt::get(Int32, ParamSize + GuidSize), ParamC);
   LoadInst *LoadedParamC = Builder.CreateLoad(Int32, ParamC);
-
   /// ParamV
   AllocaInst *ParamV =
       Builder.CreateAlloca(Int64, LoadedParamC, EDTName + "_paramv");
-
-  /// Insert the GUIDs
   if (ParentEDT) {
-    /// ParamC
-    ParamSize = InputParentEdge->getParametersSize();
-    GuidSize = InputParentEdge->getGuidsSize();
-    AllocaInst *ParamC =
-      Builder.CreateAlloca(Int32, nullptr, EDTName + "_paramc");
-  Builder.CreateStore(ConstantInt::get(Int32, ParamSize + GuidSize), ParamC);
-  LoadInst *LoadedParamC = Builder.CreateLoad(Int32, ParamC);
-
     /// Insert the parameters
     uint32_t ParameterIndex = 0;
     InputParentEdge->forEachParameter([&](EDTValue *ParameterValue) {
@@ -483,6 +482,7 @@ void ARTSCodegen::insertEDTCall(EDT &E) {
       ParameterIndex++;
     });
 
+    /// Insert the guids
     uint32_t GuidIndex = ParameterIndex;
     EDTCodegen *ParentECG = getOrCreateEDTCodegen(*ParentEDT);
     InputParentEdge->forEachGuid([&](EDT *Guid) {
@@ -507,25 +507,22 @@ void ARTSCodegen::insertEDTCall(EDT &E) {
     });
   }
 
+  /// DepC
+  AllocaInst *DepC = Builder.CreateAlloca(Int32, nullptr);
+  Builder.CreateStore(
+      ConstantInt::get(Int32, EDTNode->getIncomingSlotNodesSize()), DepC);
+  /// Debug info
+  LLVM_DEBUG(dbgs() << " - Inserting EDT Call\n");
+  SmallVector<Value *, 8> PrintArgs;
+  string PrintMsg = "Creating EDT #" + std::to_string(E.getID()) + "\n";
+  insertPrint(PrintMsg, PrintArgs);
   /// Insert EDT Call
-  auto insertCall = [&]() -> void {
-    /// DepC
-    AllocaInst *DepC = Builder.CreateAlloca(Int32, nullptr);
-    Builder.CreateStore(
-        ConstantInt::get(Int32, EDTNode->getIncomingSlotNodesSize()), DepC);
-    /// Debug info
-    LLVM_DEBUG(dbgs() << " - Inserting EDT Call\n");
-    SmallVector<Value *, 8> PrintArgs;
-    string PrintMsg = "Creating EDT #" + std::to_string(E.getID()) + "\n";
-    insertPrint(PrintMsg, PrintArgs);
-    /// Create Call
-    EDTCodegen *ECG = getOrCreateEDTCodegen(E);
-    Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
-    Value *Args[] = {Builder.CreateBitCast(ECG->getFn(), EdtFunctionPtr),
-                     ECG->getGuidAddress(), LoadedParamC, ParamV,
-                     Builder.CreateLoad(Int32, DepC)};
-    ECG->setCB(Builder.CreateCall(F, Args));
-  };
+  EDTCodegen *ECG = getOrCreateEDTCodegen(E);
+  Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
+  Value *Args[] = {Builder.CreateBitCast(ECG->getFn(), EdtFunctionPtr),
+                   ECG->getGuidAddress(), LoadedParamC, ParamV,
+                   Builder.CreateLoad(Int32, DepC)};
+  ECG->setCB(Builder.CreateCall(F, Args));
 
   /// We can remove both the function and the call
   utils::insertValueToRemove(E.getCall());
