@@ -274,9 +274,9 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
 
   /// Parameters
   LLVM_DEBUG(dbgs() << " - Inserting ParamV\n");
-  EDT *Parent = E.getParent();
   auto handleParameters = [&]() -> void {
     /// The input parameters and Guids always come from the parent EDT
+    EDT *Parent = E.getParent();
     if (!Parent) {
       LLVM_DEBUG(dbgs() << "     EDT #" << E.getID()
                         << " doesn't have a parent EDT\n");
@@ -556,9 +556,9 @@ void ARTSCodegen::createInitPerNodeFn() {
 }
 
 void ARTSCodegen::createInitPerWorkerFn() {
-  auto *FnTy =
+  FunctionType *FnTy =
       FunctionType::get(Void, {Int32, Int32, Int32, Int8PtrPtr}, false);
-  auto *Fn =
+  Function *Fn =
       Function::Create(FnTy, GlobalValue::ExternalLinkage, "initPerWorker", &M);
   Fn->setDSOLocal(true);
   Fn->arg_begin()->setName("nodeId");
@@ -569,69 +569,58 @@ void ARTSCodegen::createInitPerWorkerFn() {
   BasicBlock *EntryBB = BasicBlock::Create(M.getContext(), "entry", Fn);
   Builder.SetInsertPoint(EntryBB);
 
-  // /// if nodeId == 0 && workerId == 0
-  // Value *NodeId = Fn->arg_begin();
-  // Value *WorkerId = Fn->arg_begin() + 1;
-  // /// Create conditional branch
-  // Value *IsMainWorker = Builder.CreateAnd(
-  //     Builder.CreateICmpEQ(NodeId, ConstantInt::get(Int32, 0)),
-  //     Builder.CreateICmpEQ(WorkerId, ConstantInt::get(Int32, 0)));
-  // BasicBlock *ThenBB = BasicBlock::Create(M.getContext(), "then", Fn);
-  // BasicBlock *ElseBB = BasicBlock::Create(M.getContext(), "else", Fn);
-  // Builder.CreateCondBr(IsMainWorker, ThenBB, ElseBB);
+  /// if nodeId == 0 && workerId == 0
+  Value *NodeId = Fn->arg_begin();
+  Value *WorkerId = Fn->arg_begin() + 1;
+  /// Create conditional branch
+  Value *IsMainWorker = Builder.CreateAnd(
+      Builder.CreateICmpEQ(NodeId, ConstantInt::get(Int32, 0)),
+      Builder.CreateICmpEQ(WorkerId, ConstantInt::get(Int32, 0)));
 
-  // /// then -> Create guid for main edt
-  // Builder.SetInsertPoint(ThenBB);
-  // /// Debug info
-  // SmallVector<Value *, 8> PrintArgs;
-  // insertPrint("Creating Main EDT\n", PrintArgs);
-
-  // EDT *MainEDT = Cache->getGraph().getEntryNode()->getEDT();
-  // auto MainEDTName = MainEDT->getName();
-  // EDTCodegen *MainECG = getOrCreateEDTCodegen(*MainEDT);
-  // Value *GuidAddress = getOrCreateEDTGuid(MainEDTName, MainEDT->getNode());
-  // MainECG->setGuidAddress(GuidAddress);
-
-  // /// Create the call to the main EDT
-  // AllocaInst *ParamC =
-  //     Builder.CreateAlloca(Int32, nullptr, MainEDTName + "_paramc");
-  // Builder.CreateStore(ConstantInt::get(Int32, 0), ParamC);
-  // LoadInst *LoadedParamC = Builder.CreateLoad(Int32, ParamC);
-  // AllocaInst *ParamV =
-  //     Builder.CreateAlloca(Int64, LoadedParamC, MainEDTName + "_paramv");
-  // Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
-  // Value *Args[] = {Builder.CreateBitCast(MainECG->getFn(), EdtFunctionPtr),
-  //                  GuidAddress, LoadedParamC, ParamV,
-  //                  ConstantInt::get(Int32, 0)};
-  // Builder.CreateCall(F, Args);
-  // Builder.CreateRetVoid();
+  /// then -> Move the main EDT call to the main worker
+  EDT *MainEDT = Cache->getGraph().getEntryNode()->getEDT();
+  EDTCodegen *MainECG = getOrCreateEDTCodegen(*MainEDT);
+  CallBase *MainCB = MainECG->getCB();
+  assert(MainCB && "Main EDT doesn't have a call base");
+  BasicBlock *ThenBB = MainECG->getEntry();
+  ThenBB->removeFromParent();
+  ThenBB->setName("then");
+  Fn->insert(EntryBB->getIterator(), ThenBB);
+  /// Remove terminator and return void
+  Instruction *ThenBBTerm = ThenBB->getTerminator();
+  Builder.SetInsertPoint(ThenBBTerm);
+  Builder.CreateRetVoid();
+  ThenBBTerm->removeFromParent();
 
   /// else -> return void
-  // Builder.SetInsertPoint(ElseBB);
+  BasicBlock *ElseBB = BasicBlock::Create(M.getContext(), "else", Fn);
+  Builder.SetInsertPoint(ElseBB);
   Builder.CreateRetVoid();
+
+  /// Insert the conditional branch
+  Builder.SetInsertPoint(EntryBB);
+  Builder.CreateCondBr(IsMainWorker, ThenBB, ElseBB);
 }
 
 void ARTSCodegen::createMainFn() {
-  // FunctionType *MainFnTy = FunctionType::get(Int32, {Int32, Int8PtrPtr},
-  // false); Function *OldMainFn =
-  // Cache->getGraph().getEntryNode()->getEDT()->getFn(); Function *MainFn =
-  // Function::Create(MainFnTy, GlobalValue::ExternalLinkage,
-  //                                     OldMainFn->getAddressSpace(), "main",
-  //                                     &M);
-  // MainFn->setDSOLocal(true);
-  // MainFn->arg_begin()->setName("argc");
-  // (MainFn->arg_begin() + 1)->setName("argv");
-  // MainFn->takeName(OldMainFn);
-  // utils::removeValue(OldMainFn);
-  // /// Insert the entry block
-  // BasicBlock *EntryBB = BasicBlock::Create(M.getContext(), "entry", MainFn);
-  // Builder.SetInsertPoint(EntryBB);
-  // /// Call the artsInit function
-  // FunctionCallee RTFn =
-  //     getOrCreateRuntimeFunction(types::RuntimeFunction::ARTSRTL_artsRT);
-  // Value *RTFnArgs[] = {MainFn->arg_begin(), MainFn->arg_begin() + 1};
-  // Builder.CreateCall(RTFn, RTFnArgs);
-  // Builder.CreateRet(ConstantInt::get(Int32, 0));
+  FunctionType *MainFnTy = FunctionType::get(Int32, {Int32, Int8PtrPtr}, false);
+  Function *OldMainFn = Cache->getGraph().getEntryNode()->getEDT()->getFn();
+  Function *MainFn = Function::Create(MainFnTy, GlobalValue::ExternalLinkage,
+                                      OldMainFn->getAddressSpace(), "main", &M);
+  MainFn->setDSOLocal(true);
+  MainFn->arg_begin()->setName("argc");
+  (MainFn->arg_begin() + 1)->setName("argv");
+  MainFn->takeName(OldMainFn);
+  utils::removeValue(OldMainFn);
+  /// Insert the entry block
+  BasicBlock *EntryBB = BasicBlock::Create(M.getContext(), "entry", MainFn);
+  Builder.SetInsertPoint(EntryBB);
+  /// Call the artsInit function
+  FunctionCallee RTFn =
+      getOrCreateRuntimeFunction(types::RuntimeFunction::ARTSRTL_artsRT);
+  Value *RTFnArgs[] = {MainFn->arg_begin(), MainFn->arg_begin() + 1};
+  Builder.CreateCall(RTFn, RTFnArgs);
+  Builder.CreateRet(ConstantInt::get(Int32, 0));
 }
 
 void ARTSCodegen::insertInitFunctions() {
