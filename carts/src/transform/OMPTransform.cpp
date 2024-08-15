@@ -36,11 +36,9 @@ bool OMPTransform::run(ModuleAnalysisManager &AM) {
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << "Running OmpTransform on Module: \n");
   /// Get main function
-  auto &MainFn = *M.getFunction("main");
-  identifyEDTs(MainFn);
-  /// Set metadata for Main EDT
-  EDTIRBuilder IRB(EDTType::Main, &MainFn);
-  MainEDT::setMetadata(IRB);
+  Function &MainFn = *M.getFunction("main");
+  Function &MainEDTFn = *handleMain(MainFn);
+  identifyEDTs(MainEDTFn);
 
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << "Module after Identifying EDTs\n" << M << "\n");
@@ -65,7 +63,7 @@ void OMPTransform::identifyEDTs(Function &Fn) {
     /// Get first instruction of the function
     Instruction *CurrentI = &(CurrentBB->front());
     do {
-      auto *CB = dyn_cast<CallBase>(CurrentI);
+      CallBase *CB = dyn_cast<CallBase>(CurrentI);
       if (!CB)
         continue;
       /// Get the callee
@@ -95,6 +93,24 @@ void OMPTransform::identifyEDTs(Function &Fn) {
   LLVM_DEBUG(dbgs() << TAG << "Processing function: " << Fn.getName()
                     << " - Finished\n");
   LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - - - -\n");
+}
+
+Function *OMPTransform::handleMain(Function &MainFn) {
+  /// Create Main EDT
+  BlockSequence Region;
+  for (auto &BB : MainFn)
+    Region.push_back(&BB);
+
+  /// Create DoneEDT
+  CodeExtractor CE(Region);
+  CodeExtractorAnalysisCache CEAC(MainFn);
+  SetVector<Value *> Inputs, Outputs;
+  Function *MainEDTFn = CE.extractCodeRegion(CEAC, Inputs, Outputs);
+  MainEDTFn->setName("main.edt");
+  /// Insert metadata
+  EDTIRBuilder IRB(EDTType::Task, MainEDTFn);
+  MainEDT::setMetadata(IRB);
+  return MainEDTFn;
 }
 
 Instruction *OMPTransform::handleParallelRegion(CallBase &CB) {
@@ -132,9 +148,9 @@ Instruction *OMPTransform::handleParallelRegion(CallBase &CB) {
 }
 
 Instruction *OMPTransform::handleSyncDoneRegion(CallBase &CB) {
-  auto *SplitInst = CB.getNextNonDebugInstruction();
+  Instruction *SplitInst = CB.getNextNonDebugInstruction();
   /// If it is a callbase, check if its a call to a RT function
-  if (auto *SCB = dyn_cast<CallBase>(SplitInst)) {
+  if (CallBase *SCB = dyn_cast<CallBase>(SplitInst)) {
     if (isRTFunction(*SCB))
       return SplitInst;
     /// TODO: What about other callbase?
@@ -265,7 +281,7 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
       continue;
 
     bool Cond = false;
-    if(TaskDataSize > 0) {
+    if (TaskDataSize > 0) {
       Cond = (Offset >= TaskDataSize && BasePointer == TaskDataArg) ||
              (Offset < TaskDataSize && BasePointer == TaskDataPtr);
     } else {
@@ -281,10 +297,12 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
   }
 
   // for(auto &V : OffsetToValueOF) {
-  //   LLVM_DEBUG(dbgs() << TAG << "OffsetToValueOF: " << V.first << " -> " << *V.second << "\n");
+  //   LLVM_DEBUG(dbgs() << TAG << "OffsetToValueOF: " << V.first << " -> " <<
+  //   *V.second << "\n");
   // }
   // for(auto &V : ValueToOffsetTD) {
-  //   LLVM_DEBUG(dbgs() << TAG << "ValueToOffsetTD: " << *V.first << " -> " << V.second << "\n");
+  //   LLVM_DEBUG(dbgs() << TAG << "ValueToOffsetTD: " << *V.first << " -> " <<
+  //   V.second << "\n");
   // }
   assert(ValueToOffsetTD.size() == OffsetToValueOF.size() &&
          "ValueToOffsetTD and ValueToOffsetOF have different sizes");

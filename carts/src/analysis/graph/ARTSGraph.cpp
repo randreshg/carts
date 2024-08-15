@@ -261,6 +261,14 @@ bool ARTSGraph::insertDataBlockEdge(EDT *From, EDT *To, uint32_t Slot,
   return insertDataBlockEdge(FromNode, ToNode, DB);
 }
 
+CreationGraphEdge *ARTSGraph::getEdge(EDT *From, EDT *To) {
+  return getEdge(getNode(From), getNode(To));
+}
+
+DataBlockGraphEdge *ARTSGraph::getEdge(EDT *From, EDT *To, uint32_t Slot) {
+  return getEdge(getNode(From), getOrCreateSlotNode(To, Slot));
+}
+
 void ARTSGraph::forEachEDTNode(function<void(EDTGraphNode *)> Fn) {
   for (auto Pair : EDTs)
     Fn(Pair.second);

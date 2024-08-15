@@ -28,6 +28,7 @@ public:
   void identifyEDTs(Function &Fn);
 
 private:
+  Function *handleMain(Function &MainFn);
   Instruction *handleParallelRegion(CallBase &CB);
   Instruction *handleSyncDoneRegion(CallBase &CB);
   Instruction *handleTaskRegion(CallBase &CB);

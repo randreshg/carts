@@ -74,14 +74,14 @@ public:
   EDTGraphNode *getOrCreateNode(EDT *E);
   EDTGraphNode *getOrCreateNode(EDT *E, EDT *ParentEDT);
   EDTGraphSlotNode *getOrCreateSlotNode(EDT *Parent, uint32_t Slot);
-  
+
   bool insertCreationEdge(EDT *From, EDT *To);
   bool insertCreationEdgeParameter(EDT *From, EDT *To, EDTValue *Parameter);
   bool insertCreationEdgeGuid(EDT *From, EDT *To, EDT *Done);
   bool insertDataBlockEdge(EDT *From, EDT *To, uint32_t Slot, DataBlock *DB);
 
-  CreationGraphEdge *getEdge(EDTGraphNode *From, EDTGraphNode *To);
-  DataBlockGraphEdge *getEdge(EDTGraphNode *From, EDTGraphSlotNode *To);
+  CreationGraphEdge *getEdge(EDT *From, EDT *To);
+  DataBlockGraphEdge *getEdge(EDT *From, EDT *To, uint32_t Slot);
 
   void forEachEDTNode(function<void(EDTGraphNode *)> Fn);
   void forEachIncomingCreationEdge(EDTGraphNode *Node,
@@ -100,6 +100,8 @@ private:
   unordered_set<EDTGraphNode *> getNodes();
 
   /// Edges
+  CreationGraphEdge *getEdge(EDTGraphNode *From, EDTGraphNode *To);
+  DataBlockGraphEdge *getEdge(EDTGraphNode *From, EDTGraphSlotNode *To);
   unordered_set<CreationGraphEdge *>
   getIncomingCreationEdges(EDTGraphNode *Node);
   unordered_set<CreationGraphEdge *>

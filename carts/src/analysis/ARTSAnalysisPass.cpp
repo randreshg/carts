@@ -118,9 +118,6 @@ struct EDTInfoState : AbstractState {
 
   /// EDT Information
   EDT *ContextEDT = nullptr;
-  // EDTCallBase *EDTCall = nullptr;
-  // EDT *ParentEDT = nullptr;
-  // EDT *DoneEDT = nullptr;
 
   /// Flag to track if we reached a fixpoint.
   bool IsAtFixpoint = false;
@@ -145,8 +142,6 @@ struct EDTInfoState : AbstractState {
 
   /// Getters
   EDT *getEDT() const { return ContextEDT; }
-  // EDT *getDoneEDT() const { return DoneEDT; }
-  // EDT *getParentEDT() const { return ParentEDT; }
   EDT *getParentSyncEDT() const {
     if (!ParentSyncEDT.isValidState())
       return nullptr;
@@ -186,7 +181,6 @@ struct EDTInfoState : AbstractState {
     IsAtFixpoint = true;
     ChildEDTs.indicatePessimisticFixpoint();
     DescendantEDTs.indicatePessimisticFixpoint();
-    /// Sync Info
     ParentSyncEDT.indicatePessimisticFixpoint();
     return ChangeStatus::CHANGED;
   }
@@ -229,15 +223,7 @@ struct EDTInfoState : AbstractState {
     return *this;
   }
 
-  /// "Clamp" this state with \p KIS, ignoring the ChildEDTs and
-  /// DescendantEDTs.
-  // EDTInfoState operator*=(const EDTInfoState &KIS) {
-  //   DependentEDTs ^= KIS.DependentEDTs;
-  //   return *this;
-  // }
-
   EDTInfoState operator&=(const EDTInfoState &KIS) { return (*this ^= KIS); }
-
   ///}
 };
 
@@ -366,29 +352,8 @@ struct DataBlockInfoState : AbstractState {
 
   /// Getters
   DataBlock *getDataBlock() const { return DB; }
-  // DataBlock *getDataBlockTo() const { return DBTo; }
   Value *getValue() const { return DB->getValue(); }
-  // EDT *getParentEDT() const { return ParentEDT; }
   EDT *getContextEDT() const { return ContextEDT; }
-
-  /// Data Movements
-  void insertDataMovement(EDT *From, EDT *To) {
-    DataMovements[From].insert(To);
-  }
-
-  EDTSet getDataMovements(EDT *From) const {
-    auto Itr = DataMovements.find(From);
-    if (Itr == DataMovements.end())
-      return EDTSet();
-    return Itr->second;
-  }
-
-  bool isMoved(EDT *From, EDT *To) const {
-    auto Itr = DataMovements.find(From);
-    if (Itr == DataMovements.end())
-      return false;
-    return Itr->second.count(To);
-  }
 
   /// Abstract State interface
   ///{
@@ -512,20 +477,6 @@ struct AADataBlockInfo
       DBStr += "     - ParentCtx: EDT #" +
                std::to_string(DB->getParent()->getContextEDT()->getID()) +
                " / Slot " + std::to_string(DB->getParent()->getSlot()) + "\n";
-    /// Done
-    // if (DB->getDone()) {
-    //   DBStr += "     - Done: EDT #" +
-    //            std::to_string(DB->getDone()->getContextEDT()->getID()) +
-    //            "\n";
-    // }
-    // else if (DB->getParentDone()) {
-    //   DBStr += "     - Done: EDT #" +
-    //            std::to_string(DB->getParentDone()->getContextEDT()->getID())
-    //            +
-    //            "\n";
-    //   LLVM_DEBUG(dbgs() << *DB->getValue());
-    // }
-
     /// ChildDBs
     auto &ChildDBs = DB->getChildDBs();
     if (!ChildDBs.empty()) {
@@ -536,7 +487,6 @@ struct AADataBlockInfo
                  " / Slot " + std::to_string(ChildDB->getSlot()) + "\n";
       }
     }
-
     /// Dependency info
     if (DependentSiblingEDT.get() && SignalDB.get())
       DBStr += "     - DependentSiblingEDT: EDT #" +
@@ -736,10 +686,7 @@ struct AAEDTInfoFunction : AAEDTInfo {
 
     /// If not EDTCall, return optimistic fixpoint, for now.
     EDTCallBase *EDTCall = ContextEDT->getCall();
-    if (!EDTCall) {
-      assert(ContextEDT->isMain() && "EDTCall is null for non MainEDT");
-      return indicateOptimisticFixpoint();
-    }
+    assert(EDTCall && "EDTCall is null!");
 
     /// Set the ParentSyncEDT if it is not set
     if (!ParentSyncEDT.isAtFixpoint()) {
