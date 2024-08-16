@@ -1,6 +1,5 @@
-#include "llvm/ADT/StringRef.h"
+// Description: ARTS IR Builder implementation.
 #include "llvm/IR/BasicBlock.h"
-#include "llvm/IR/Constants.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
@@ -8,7 +7,6 @@
 #include "llvm/Support/Debug.h"
 
 #include "carts/utils/ARTSIRBuilder.h"
-// #include "carts/utils/ARTS.h"
 #include "carts/utils/ARTSUtils.h"
 
 // DEBUG

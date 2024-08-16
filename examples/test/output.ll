@@ -19,506 +19,72 @@ test_arts_ir.bc
 
 
 [Attributor] Initializing AAEDTInfo: 
-[arts] Function: main has CARTS Metadata
-[arts] Creating EDT #0 for function: main
-[arts] Creating Task EDT for function: main
-[arts] Creating Main EDT for function: main
-
-[AAEDTInfoFunction::initialize] EDT #0 for function "main"
-   - Failed to visit all CallSites!
-[arts] Function: carts.edt has CARTS Metadata
-[arts] Creating EDT #1 for function: carts.edt
+[arts] Function: main doesn't have CARTS Metadata
+[arts] Function: carts.edt.1 has CARTS Metadata
+[arts] Creating EDT #0 for function: carts.edt.1
    - DepV: ptr %0
    - DepV: ptr %1
-[arts] Creating Task EDT for function: carts.edt
-[arts] Creating Sync EDT for function: carts.edt
-[arts] Creating Parallel EDT for function: carts.edt
+[arts] Creating Task EDT for function: carts.edt.1
+[arts] Creating Sync EDT for function: carts.edt.1
+[arts] Creating Parallel EDT for function: carts.edt.1
 
-[AAEDTInfoFunction::initialize] EDT #1 for function "carts.edt"
-[arts] Function: carts.edt.2 has CARTS Metadata
-[arts] Creating EDT #2 for function: carts.edt.2
+[AAEDTInfoFunction::initialize] EDT #0 for function "carts.edt.1"
+[arts] Function: carts.edt has CARTS Metadata
+[arts] Creating EDT #1 for function: carts.edt
+[arts] Creating Task EDT for function: carts.edt
+[arts] Creating Main EDT for function: carts.edt
+[arts] Function: carts.edt.3 has CARTS Metadata
+[arts] Creating EDT #2 for function: carts.edt.3
    - DepV: ptr %shared_number
    - DepV: ptr %random_number
-[arts] Creating Task EDT for function: carts.edt.2
+[arts] Creating Task EDT for function: carts.edt.3
    - DoneEDT: EDT #2
-[arts] Function: carts.edt.1 has CARTS Metadata
-[arts] Creating EDT #3 for function: carts.edt.1
+[arts] Function: carts.edt.2 has CARTS Metadata
+[arts] Creating EDT #3 for function: carts.edt.2
    - DepV: ptr %0
    - ParamV: i32 %1
-[arts] Creating Task EDT for function: carts.edt.1
+[arts] Creating Task EDT for function: carts.edt.2
 
-[AAEDTInfoFunction::initialize] EDT #3 for function "carts.edt.1"
+[AAEDTInfoFunction::initialize] EDT #3 for function "carts.edt.2"
 
-[AAEDTInfoFunction::initialize] EDT #2 for function "carts.edt.2"
+[AAEDTInfoFunction::initialize] EDT #1 for function "carts.edt"
+[arts] Function: main doesn't have CARTS Metadata
+
+[AAEDTInfoFunction::initialize] EDT #2 for function "carts.edt.3"
 
 [AAEDTInfoFunction::updateImpl] EDT #0
-   - EDT #1 is a child of EDT #0
-        - Inserting CreationEdge from "EDT #0" to "EDT #1"
-   - EDT #2 is a child of EDT #0
-        - Inserting CreationEdge from "EDT #0" to "EDT #2"
-
-[AAEDTInfoFunction::updateImpl] EDT #1
-   - EDT #3 is a child of EDT #1
-        - Inserting CreationEdge from "EDT #1" to "EDT #3"
+   - EDT #3 is a child of EDT #0
+        - Inserting CreationEdge from "EDT #0" to "EDT #3"
 
 [AAEDTInfoFunction::updateImpl] EDT #3
    - All ReachedEDTs are fixed for EDT #3
    - Getting ParentSyncEDT
-     - ParentSyncEDT: EDT #1
-        - Inserting Guid of child "EDT #2" in the edge from "EDT #0" to "EDT #1"
-        - Inserting Guid of "EDT #2" in the  from "EDT #1" to "EDT #3"
-
-[AAEDTInfoCallsite::initialize] EDT #3
-
-[AAEDTInfoCallsite::updateImpl] EDT #3
-
-[AAEDTInfoCallsiteArg::initialize] CallArg #0 from EDT #3
-        - Inserting DataBlockEdge from "EDT #1" to "EDT #3" in Slot #0
-
-[AAEDTInfoCallsiteArg::updateImpl] ptr %1 from EDT #3
-
-[AADataBlockInfoCtxAndVal::initialize] ptr %1 from EDT #3
-
-[AADataBlockInfoCtxAndVal::updateImpl] ptr %1 from EDT #3
-
-[AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #3
-   - All DataBlocks were fixed for EDT #3
-
-[AAEDTInfoFunction::updateImpl] EDT #2
-   - All ReachedEDTs are fixed for EDT #2
-
-[AAEDTInfoCallsite::initialize] EDT #2
-
-[AAEDTInfoCallsite::updateImpl] EDT #2
-
-[AAEDTInfoCallsiteArg::initialize] CallArg #0 from EDT #2
-
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-
-[AADataBlockInfoCtxAndVal::initialize]   %shared_number = alloca i32, align 4 from EDT #2
-
-[AADataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #2
-
-[AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #2
-
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-
-[AADataBlockInfoCtxAndVal::initialize]   %random_number = alloca i32, align 4 from EDT #2
-
-[AADataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #2
-   - All DataBlocks were fixed for EDT #2
-
-[AAEDTInfoFunction::updateImpl] EDT #0
-   - EDT #1 is a child of EDT #0
-   - EDT #2 is a child of EDT #0
-
-[AAEDTInfoFunction::updateImpl] EDT #1
-   - EDT #3 is a child of EDT #1
-   - All ReachedEDTs are fixed for EDT #1
-
-[AAEDTInfoCallsite::initialize] EDT #1
-
-[AAEDTInfoCallsite::updateImpl] EDT #1
-
-[AAEDTInfoCallsiteArg::initialize] CallArg #0 from EDT #1
-        - Inserting DataBlockEdge from "EDT #0" to "EDT #1" in Slot #0
-
-[AAEDTInfoCallsiteArg::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-
-[AADataBlockInfoCtxAndVal::initialize]   %random_number = alloca i32, align 4 from EDT #1
-
-[AADataBlockInfoCtxAndVal::updateImpl]   %random_number = alloca i32, align 4 from EDT #1
-   - Analyzing DependentSiblingEDTs on   %random_number = alloca i32, align 4
-        - Number of DependentSiblingEDTs: 1
-   - Analyzing DependentChildEDTs on   %random_number = alloca i32, align 4 (ptr %0)
-        - Number of DependentChildEDTs: 0
-     - EDT #1 signals to EDT #2
-        - Inserting DataBlockEdge from "EDT #1" to "EDT #2" in Slot #1
-
-[AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #1
-        - Inserting DataBlockEdge from "EDT #0" to "EDT #1" in Slot #1
-
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-
-[AADataBlockInfoCtxAndVal::initialize]   %shared_number = alloca i32, align 4 from EDT #1
-
-[AADataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
-   - AAPointerInfo is not at fixpoint!
-   - Analyzing DependentChildEDTs on   %shared_number = alloca i32, align 4 (ptr %1)
-   - AAPointerInfo is not at fixpoint!
-
-[AAEDTInfoFunction::updateImpl] EDT #0
-   - EDT #1 is a child of EDT #0
-   - EDT #2 is a child of EDT #0
-   - All ReachedEDTs are fixed for EDT #0
-
-[AAEDTInfoCallsite::updateImpl] EDT #1
-
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-
-[AADataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
-   - AAPointerInfo is not at fixpoint!
-   - Analyzing DependentChildEDTs on   %shared_number = alloca i32, align 4 (ptr %1)
-   - AAPointerInfo is not at fixpoint!
-
-[AADataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
-   - AAPointerInfo is not at fixpoint!
-   - Analyzing DependentChildEDTs on   %shared_number = alloca i32, align 4 (ptr %1)
-        - Number of DependentChildEDTs: 1
-
-[AADataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
-   - AAPointerInfo is not at fixpoint!
-
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-
-[AADataBlockInfoCtxAndVal::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-   - Analyzing DependentSiblingEDTs on   %shared_number = alloca i32, align 4
-        - Number of DependentSiblingEDTs: 1
-
-[AAEDTInfoCallsiteArg::updateImpl]   %shared_number = alloca i32, align 4 from EDT #1
-        - Inserting DataBlockEdge from "EDT #3" to "EDT #2" in Slot #0
--------------------------------
-[AAEDTInfoFunction::manifest] 
-State for EDT #0 -> 
-     -ParentSyncEDT: <null>
-     #Child EDTs: 2{1, 2}
-     #Reached DescendantEDTs: 1{3}
-
-
-- EDT #0: edt.0.main
-Ty: main
-Number of slots: 0
-Data environment for EDT: 
-Number of ParamV: 0
-Number of DepV: 0
--------------------------------
-[AAEDTInfoFunction::manifest] 
-State for EDT #1 -> 
-     -ParentEDT: EDT #0
-     -ParentSyncEDT: <null>
-     #Child EDTs: 1{3}
-     #Reached DescendantEDTs: 0{}
-
-
-- EDT #1: edt.1.parallel
-Ty: parallel
-Number of slots: 2
-Data environment for EDT: 
-Number of ParamV: 0
-Number of DepV: 2
-  - ptr %0
-  - ptr %1
--------------------------------
-[AAEDTInfoFunction::manifest] 
-State for EDT #3 -> 
-     -ParentEDT: EDT #1
-     -ParentSyncEDT: EDT #1
-     #Child EDTs: 0{}
-     #Reached DescendantEDTs: 0{}
-
-
-- EDT #3: edt.3.task
-Ty: task
-Number of slots: 1
-Data environment for EDT: 
-Number of ParamV: 1
-  - i32 %1
-Number of DepV: 1
-  - ptr %0
--------------------------------
-[AAEDTInfoFunction::manifest] 
-State for EDT #2 -> 
-     -ParentEDT: EDT #0
-     -ParentSyncEDT: <null>
-     #Child EDTs: 0{}
-     #Reached DescendantEDTs: 0{}
-
-
-- EDT #2: edt.2.task
-Ty: task
-Number of slots: 2
-Data environment for EDT: 
-Number of ParamV: 0
-Number of DepV: 2
-  - ptr %shared_number
-  - ptr %random_number
--------------------------------
-[AADataBlockInfoCtxAndVal::manifest] ptr %1 from EDT #3
-DataBlock ->
-     - Context: EDT #3 / Slot 0
-     - SignalEDT: EDT #2
-     - ParentCtx: EDT #1 / Slot 1
-     - #DependentChildEDTs: 0{}
-     - #DependentSiblingEDTs: 0{}
-
--------------------------------
-[AADataBlockInfoCtxAndVal::manifest]   %shared_number = alloca i32, align 4 from EDT #2
-DataBlock ->
-     - Context: EDT #2 / Slot 0
-     - #DependentChildEDTs: 0{}
-     - #DependentSiblingEDTs: 0{}
-
--------------------------------
-[AADataBlockInfoCtxAndVal::manifest]   %random_number = alloca i32, align 4 from EDT #2
-DataBlock ->
-     - Context: EDT #2 / Slot 1
-     - #DependentChildEDTs: 0{}
-     - #DependentSiblingEDTs: 0{}
-
--------------------------------
-[AADataBlockInfoCtxAndVal::manifest]   %random_number = alloca i32, align 4 from EDT #1
-DataBlock ->
-     - Context: EDT #1 / Slot 0
-     - SignalEDT: EDT #2
-     - DependentSiblingEDT: EDT #2 / Slot #1
-     - #DependentChildEDTs: 0{}
-     - #DependentSiblingEDTs: 1{2}
-
--------------------------------
-[AADataBlockInfoCtxAndVal::manifest]   %shared_number = alloca i32, align 4 from EDT #1
-DataBlock ->
-     - Context: EDT #1 / Slot 1
-     - ChildDBss: 1
-      - ChildDB: EDT #3 / Slot 0
-     - DependentSiblingEDT: EDT #2 / Slot #0
-     - #DependentChildEDTs: 1{3}
-     - #DependentSiblingEDTs: 1{2}
-
-[Attributor] Done with 4 functions, result: unchanged.
-- - - - - - - - - - - - - - - - - - - - - - - -
-[arts-graph] Printing the ARTS Graph
-- - - - - - - - - - - - - - - - - - 
-- EDT #3 - "edt.3.task"
-  - Type: task
-  - Data Environment:
-    - Number of ParamV = 1
-      - i32 %1
-    - Number of DepV = 1
-      - ptr %0
-  - Incoming Edges:
-    - [Creation] "EDT #1"
-  - Incoming DataBlock Slots:
-      - EDTSlot #0
-        - [DataBlock] ptr %1 /   %shared_number = alloca i32, align 4
-  - Outgoing Edges:
-    - The EDT has no outgoing creation edges
-    - [DataBlock] "EDT #2" in Slot #0
-      - ptr %1 /   %shared_number = alloca i32, align 4
-- - - - - - - - - - - - - - - - - - 
-- EDT #0 - "edt.0.main"
-  - Type: main
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 0
-  - Incoming Edges:
-    - The EDT has no incoming Creation edges
-    - The EDT has no incoming DataBlock slots
-  - Outgoing Edges:
-    - [Creation] "EDT #1"
-    - [Creation] "EDT #2"
-    - [DataBlock] "EDT #1" in Slot #0
-      -   %random_number = alloca i32, align 4
-    - [DataBlock] "EDT #1" in Slot #1
-      -   %shared_number = alloca i32, align 4
-- - - - - - - - - - - - - - - - - - 
-- EDT #2 - "edt.2.task"
-  - Type: task
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 2
-      - ptr %shared_number
-      - ptr %random_number
-  - Incoming Edges:
-    - [Creation] "EDT #0"
-  - Incoming DataBlock Slots:
-      - EDTSlot #1
-        - [DataBlock]   %random_number = alloca i32, align 4
-      - EDTSlot #0
-        - [DataBlock] ptr %1 /   %shared_number = alloca i32, align 4
-  - Outgoing Edges:
-    - The EDT has no outgoing creation edges
-- - - - - - - - - - - - - - - - - - 
-- EDT #1 - "edt.1.parallel"
-  - Type: parallel
-  - Data Environment:
-    - Number of ParamV = 0
-    - Number of DepV = 2
-      - ptr %0
-      - ptr %1
-  - Incoming Edges:
-    - [Creation] "EDT #0"
-  - Incoming DataBlock Slots:
-      - EDTSlot #1
-        - [DataBlock]   %shared_number = alloca i32, align 4
-      - EDTSlot #0
-        - [DataBlock]   %random_number = alloca i32, align 4
-  - Outgoing Edges:
-    - [Creation] "EDT #3"
-    - [DataBlock] "EDT #2" in Slot #1
-      -   %random_number = alloca i32, align 4
-    - [DataBlock] "EDT #3" in Slot #0
-      - ptr %1 /   %shared_number = alloca i32, align 4
-
-- - - - - - - - - - - - - - - - - - - - - - - -
-
-
--------------------------------------------------
-[arts-analysis] Process has finished
-
-; ModuleID = 'test_arts_ir.bc'
-source_filename = "test.cpp"
-target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
-target triple = "x86_64-unknown-linux-gnu"
-
-%struct.ident_t = type { i32, i32, i32, i32, ptr }
-
-@.str = private unnamed_addr constant [36 x i8] c"EDT 0: The initial number is %d/%d\0A\00", align 1
-@.str.1 = private unnamed_addr constant [28 x i8] c"EDT 3: The number is %d/%d\0A\00", align 1
-@0 = private unnamed_addr constant [23 x i8] c";unknown;unknown;0;0;;\00", align 1
-@1 = private unnamed_addr constant %struct.ident_t { i32 0, i32 2, i32 0, i32 22, ptr @0 }, align 8
-@.str.2 = private unnamed_addr constant [37 x i8] c"EDT 2: The final number is %d - %d.\0A\00", align 1
-
-; Function Attrs: mustprogress norecurse nounwind uwtable
-define dso_local noundef i32 @main() local_unnamed_addr #0 !carts !6 {
-entry:
-  %shared_number = alloca i32, align 4
-  %random_number = alloca i32, align 4
-  %call = tail call i64 @time(ptr noundef null) #5
-  %conv = trunc i64 %call to i32
-  tail call void @srand(i32 noundef %conv) #5
-  %call1 = tail call i32 @rand() #5
-  %rem = srem i32 %call1, 100
-  %add = add nsw i32 %rem, 1
-  store i32 %add, ptr %shared_number, align 4, !tbaa !8
-  %call2 = tail call i32 @rand() #5
-  %rem3 = srem i32 %call2, 10
-  %add4 = add nsw i32 %rem3, 1
-  store i32 %add4, ptr %random_number, align 4, !tbaa !8
-  %call5 = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %add, i32 noundef %add4) #5
-  call void @carts.edt(ptr nocapture %random_number, ptr nocapture %shared_number) #7
-  br label %codeRepl
-
-codeRepl:                                         ; preds = %entry
-  call void @carts.edt.2(ptr nocapture %shared_number, ptr nocapture %random_number) #5
-  br label %entry.split.ret
-
-entry.split.ret:                                  ; preds = %codeRepl
-  ret i32 0
-}
-
-; Function Attrs: nounwind
-declare void @srand(i32 noundef) local_unnamed_addr #1
-
-; Function Attrs: nounwind
-declare i64 @time(ptr noundef) local_unnamed_addr #1
-
-; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
-declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) #2
-
-; Function Attrs: nounwind
-declare i32 @rand() local_unnamed_addr #1
-
-; Function Attrs: nofree nounwind
-declare noundef i32 @printf(ptr nocapture noundef readonly, ...) local_unnamed_addr #3
-
-; Function Attrs: nocallback nofree norecurse nosync nounwind willreturn memory(readwrite)
-define internal void @carts.edt(ptr nocapture readonly %0, ptr nocapture %1) #4 !carts !12 {
-entry:
-  %2 = load i32, ptr %0, align 4, !tbaa !8
-  call void @carts.edt.1(ptr nocapture %1, i32 %2) #8
-  ret void
-}
-
-declare i32 @__gxx_personality_v0(...)
-
-; Function Attrs: nocallback nofree norecurse nosync nounwind willreturn memory(readwrite)
-define internal void @carts.edt.1(ptr nocapture %0, i32 %1) #4 !carts !14 {
-entry:
-  tail call void @llvm.experimental.noalias.scope.decl(metadata !16)
-  %2 = load i32, ptr %0, align 4, !tbaa !8, !noalias !16
-  %inc.i = add nsw i32 %2, 1
-  store i32 %inc.i, ptr %0, align 4, !tbaa !8, !noalias !16
-  %inc1.i = add nsw i32 %1, 1
-  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %inc.i, i32 noundef %inc1.i) #5, !noalias !16
-  ret void
-}
-
-; Function Attrs: nounwind
-declare noalias ptr @__kmpc_omp_task_alloc(ptr, i32, i32, i64, i64, ptr) local_unnamed_addr #5
-
-; Function Attrs: nounwind
-declare i32 @__kmpc_omp_task(ptr, i32, ptr) local_unnamed_addr #5
-
-; Function Attrs: nounwind
-declare !callback !19 void @__kmpc_fork_call(ptr, i32, ptr, ...) local_unnamed_addr #5
-
-; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
-declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) #2
-
-; Function Attrs: nocallback nofree nosync nounwind willreturn memory(inaccessiblemem: readwrite)
-declare void @llvm.experimental.noalias.scope.decl(metadata) #6
-
-; Function Attrs: mustprogress norecurse nounwind uwtable
-define internal void @carts.edt.2(ptr nocapture %shared_number, ptr nocapture readonly %random_number) #0 !carts !21 {
-newFuncRoot:
-  br label %entry.split
-
-entry.split:                                      ; preds = %newFuncRoot
-  %0 = load i32, ptr %shared_number, align 4, !tbaa !8
-  %inc = add nsw i32 %0, 1
-  store i32 %inc, ptr %shared_number, align 4, !tbaa !8
-  %1 = load i32, ptr %random_number, align 4, !tbaa !8
-  %call6 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %inc, i32 noundef %1) #5
-  br label %entry.split.ret.exitStub
-
-entry.split.ret.exitStub:                         ; preds = %entry.split
-  ret void
-}
-
-attributes #0 = { mustprogress norecurse nounwind uwtable "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
-attributes #1 = { nounwind "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
-attributes #2 = { nocallback nofree nosync nounwind willreturn memory(argmem: readwrite) }
-attributes #3 = { nofree nounwind "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
-attributes #4 = { nocallback nofree norecurse nosync nounwind willreturn memory(readwrite) }
-attributes #5 = { nounwind }
-attributes #6 = { nocallback nofree nosync nounwind willreturn memory(inaccessiblemem: readwrite) }
-attributes #7 = { nounwind memory(argmem: readwrite) }
-attributes #8 = { nounwind memory(readwrite) }
-
-!llvm.module.flags = !{!0, !1, !2, !3, !4}
-!llvm.ident = !{!5}
-
-!0 = !{i32 1, !"wchar_size", i32 4}
-!1 = !{i32 7, !"openmp", i32 51}
-!2 = !{i32 8, !"PIC Level", i32 2}
-!3 = !{i32 7, !"PIE Level", i32 2}
-!4 = !{i32 7, !"uwtable", i32 2}
-!5 = !{!"clang version 18.1.8"}
-!6 = !{!"main", !7}
-!7 = !{}
-!8 = !{!9, !9, i64 0}
-!9 = !{!"int", !10, i64 0}
-!10 = !{!"omnipotent char", !11, i64 0}
-!11 = !{!"Simple C++ TBAA"}
-!12 = !{!"parallel", !13}
-!13 = !{!"dep", !"dep"}
-!14 = !{!"task", !15}
-!15 = !{!"dep", !"param"}
-!16 = !{!17}
-!17 = distinct !{!17, !18, !".omp_outlined.: %__context"}
-!18 = distinct !{!18, !".omp_outlined."}
-!19 = !{!20}
-!20 = !{i64 2, i64 -1, i64 -1, i1 true}
-!21 = !{!"task", !13}
-
-
--------------------------------------------------
-[arts-graph] Destroying the CARTS Graph
-llvm-dis test_arts_analysis.bc
-opt -O3 test_arts_analysis.bc -o test_opt.bc
-llvm-dis test_opt.bc
-clang++ test_opt.bc -O3 -g3 -march=native -o test_opt -lstdc++ -I/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/arts/include -L/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/arts/lib -larts -L/usr/lib64/librt.so/usr/lib64/libpthread.so/usr/lib64/lib -lrdmacm
+     - ParentSyncEDT: EDT #0
+opt: /home/rherreraguaitero/ME/ARTS-env/CARTS/carts/src/analysis/graph/ARTSGraph.cpp:223: bool arts::ARTSGraph::insertCreationEdgeGuid(EDT *, EDT *, EDT *): Assertion `Edge != nullptr && "The edge doesn't exist"' failed.
+PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/ and include the crash backtrace.
+Stack dump:
+0.	Program arguments: opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so -debug-only=arts-analysis,arts,carts,arts-ir-builder,arts-graph,carts-metadata,arts-codegen,arts-utils -passes=arts-analysis test_arts_ir.bc -o test_arts_analysis.bc
+ #0 0x00007fa299447ef8 llvm::sys::PrintStackTrace(llvm::raw_ostream&, int) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0x191ef8)
+ #1 0x00007fa299445b7e llvm::sys::RunSignalHandlers() (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0x18fb7e)
+ #2 0x00007fa2994485ad SignalHandler(int) Signals.cpp:0:0
+ #3 0x00007fa29c189910 __restore_rt (/lib64/libpthread.so.0+0x16910)
+ #4 0x00007fa298d52d2b raise (/lib64/libc.so.6+0x4ad2b)
+ #5 0x00007fa298d543e5 abort (/lib64/libc.so.6+0x4c3e5)
+ #6 0x00007fa298d4ac6a __assert_fail_base (/lib64/libc.so.6+0x42c6a)
+ #7 0x00007fa298d4acf2 (/lib64/libc.so.6+0x42cf2)
+ #8 0x00007fa2979dae24 arts::ARTSGraph::insertCreationEdgeGuid(arts::EDT*, arts::EDT*, arts::EDT*) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0x36e24)
+ #9 0x00007fa2979dabff arts::ARTSGraph::insertCreationEdgeGuid(arts::EDT*, arts::EDT*, arts::EDT*) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0x36bff)
+#10 0x00007fa2979b8491 AAEDTInfoCallsite::initialize(llvm::Attributor&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0x14491)
+#11 0x00007fa2979b8b42 AAEDTInfo const* llvm::Attributor::getOrCreateAAFor<AAEDTInfo>(llvm::IRPosition, llvm::AbstractAttribute const*, llvm::DepClassTy, bool, bool) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0x14b42)
+#12 0x00007fa2979b9d7f AAEDTInfoFunction::updateImpl(llvm::Attributor&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0x15d7f)
+#13 0x00007fa29bbba342 llvm::AbstractAttribute::update(llvm::Attributor&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMipo.so.18.1+0x87342)
+#14 0x00007fa29bbc5c31 llvm::Attributor::updateAA(llvm::AbstractAttribute&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMipo.so.18.1+0x92c31)
+#15 0x00007fa29bbc4e06 llvm::Attributor::runTillFixpoint() (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMipo.so.18.1+0x91e06)
+#16 0x00007fa29bbcb1dd llvm::Attributor::run() (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMipo.so.18.1+0x981dd)
+#17 0x00007fa2979c2a84 llvm::detail::PassModel<llvm::Module, (anonymous namespace)::ARTSAnalysisPass, llvm::PreservedAnalyses, llvm::AnalysisManager<llvm::Module>>::run(llvm::Module&, llvm::AnalysisManager<llvm::Module>&) ARTSAnalysisPass.cpp:0:0
+#18 0x00007fa29983b2a6 llvm::PassManager<llvm::Module, llvm::AnalysisManager<llvm::Module>>::run(llvm::Module&, llvm::AnalysisManager<llvm::Module>&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMCore.so.18.1+0x2c02a6)
+#19 0x0000557e6e6ec293 llvm::runPassPipeline(llvm::StringRef, llvm::Module&, llvm::TargetMachine*, llvm::TargetLibraryInfoImpl*, llvm::ToolOutputFile*, llvm::ToolOutputFile*, llvm::ToolOutputFile*, llvm::StringRef, llvm::ArrayRef<llvm::PassPlugin>, llvm::opt_tool::OutputKind, llvm::opt_tool::VerifierKind, bool, bool, bool, bool, bool, bool, bool) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x19293)
+#20 0x0000557e6e6f9aaa main (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x26aaa)
+#21 0x00007fa298d3d24d __libc_start_main (/lib64/libc.so.6+0x3524d)
+#22 0x0000557e6e6e5a3a _start /home/abuild/rpmbuild/BUILD/glibc-2.31/csu/../sysdeps/x86_64/start.S:122:0
+make: *** [Makefile:23: test_arts_analysis.bc] Aborted

@@ -49,7 +49,7 @@ void TaskEDT::setMetadata(EDTIRBuilder &Builder,
 }
 
 void MainEDT::setMetadata(EDTIRBuilder &Builder) {
-  TaskEDT::setMetadata(Builder, 0);
+  TaskEDT::setMetadata(Builder);
 }
 
 void SyncEDT::setMetadata(EDTIRBuilder &Builder,
