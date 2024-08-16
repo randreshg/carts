@@ -550,6 +550,11 @@ struct AAEDTInfoFunction : AAEDTInfo {
 
       /// Set ParentEDT - Is the EDT called from another EDT?
       EDT *ParentEDT = Cache->getOrCreateEDT(EDTCall->getCaller());
+      if(!ParentEDT) {
+        assert(ContextEDT->isMain() && "ParentEDT is null!");
+        indicateOptimisticFixpoint();
+        return true;
+      }
       assert(ParentEDT && "EDT is not called from another EDT");
       ContextEDT->setParent(ParentEDT);
 

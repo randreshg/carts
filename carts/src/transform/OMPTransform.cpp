@@ -39,7 +39,8 @@ bool OMPTransform::run(ModuleAnalysisManager &AM) {
   Function &MainFn = *M.getFunction("main");
   Function &MainEDTFn = *handleMain(MainFn);
   identifyEDTs(MainEDTFn);
-
+  /// Handle main function
+  // handleMain(MainFn);
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << "Module after Identifying EDTs\n" << M << "\n");
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
@@ -96,26 +97,37 @@ void OMPTransform::identifyEDTs(Function &Fn) {
 }
 
 Function *OMPTransform::handleMain(Function &MainFn) {
-  /// Create Main EDT
-  BlockSequence Region;
-  for (auto &BB : MainFn)
-    Region.push_back(&BB);
-
-  /// Create DoneEDT
-  CodeExtractor CE(Region);
-  CodeExtractorAnalysisCache CEAC(MainFn);
-  SetVector<Value *> Inputs, Outputs;
-  Function *MainEDTFn = CE.extractCodeRegion(CEAC, Inputs, Outputs);
-  MainEDTFn->setName("main.edt");
+  LLVM_DEBUG(dbgs() << TAG << "Processing main function\n");
+  /// Create void function for the main EDT
+  FunctionType *MainEDTFnTy = FunctionType::get(Type::getVoidTy(M.getContext()),
+                                                /*isVarArg=*/false);
+  Function *MainEDTFn = Function::Create(
+      MainEDTFnTy, GlobalValue::InternalLinkage, "carts.edt", &M);
+  /// Replace all ret instructions with a ret void
+  for (auto &BB : MainFn) {
+    if (auto *RI = dyn_cast<ReturnInst>(BB.getTerminator())) {
+      ReturnInst::Create(M.getContext(), nullptr, RI);
+      RI->eraseFromParent();
+    }
+  }
+  /// Splice the body of the main function right into the new function
+  MainEDTFn->splice(MainEDTFn->begin(), &MainFn);
+  /// Insert entry block to MainFn
+  BasicBlock *EntryBB = BasicBlock::Create(M.getContext(), "entry", &MainFn);
+  CallInst::Create(MainEDTFn, {}, "", EntryBB);
+  ReturnInst::Create(M.getContext(),
+                     ConstantInt::get(Type::getInt32Ty(M.getContext()), 0),
+                     EntryBB);
   /// Insert metadata
-  EDTIRBuilder IRB(EDTType::Task, MainEDTFn);
+  EDTIRBuilder IRB(EDTType::Main, MainEDTFn);
   MainEDT::setMetadata(IRB);
+  // LLVM_DEBUG(dbgs() << M);
   return MainEDTFn;
 }
 
 Instruction *OMPTransform::handleParallelRegion(CallBase &CB) {
   EDTIRBuilder IRB(EDTType::Parallel);
-  auto *Fn = getOutlinedFunction(&CB);
+  Function *Fn = getOutlinedFunction(&CB);
   const OMPData &RTI = getRTData(getRTFunction(CB));
   Use *CallArgItr = CB.arg_begin() + RTI.KeepCallArgsFrom;
   Argument *FnArgItr = Fn->arg_begin() + RTI.KeepFnArgsFrom;
@@ -138,22 +150,22 @@ Instruction *OMPTransform::handleParallelRegion(CallBase &CB) {
   };
 
   /// Build the EDT
-  auto *NewCB = IRB.buildEDT(&CB, Fn, fillRewiringMapFn);
+  CallBase *NewCB = IRB.buildEDT(&CB, Fn, fillRewiringMapFn);
   ParallelEDT::setMetadata(IRB, -1, -1);
   /// Identify EDTs for the new function
   identifyEDTs(*IRB.getNewFn());
   /// Handle the sync done region
-  auto *NextInst = handleSyncDoneRegion(*NewCB);
+  Instruction *NextInst = handleSyncDoneRegion(*NewCB);
   return NextInst;
 }
 
 Instruction *OMPTransform::handleSyncDoneRegion(CallBase &CB) {
   Instruction *SplitInst = CB.getNextNonDebugInstruction();
-  /// If it is a callbase, check if its a call to a RT function
+  /// If it is a CallBase, check if its a call to a RT function
   if (CallBase *SCB = dyn_cast<CallBase>(SplitInst)) {
     if (isRTFunction(*SCB))
       return SplitInst;
-    /// TODO: What about other callbase?
+    /// TODO: What about other CallBase?
   }
 
   /// Split block at Call to EDT
