@@ -21,7 +21,7 @@ test_arts_ir.bc: test.bc
 # Run the ARTS analysis pass
 test_arts_analysis.bc:  test_arts_ir.bc
 	opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so \
-			-debug-only=arts-analysis,arts,carts,arts-ir-builder,arts-graph,carts-metadata,arts-codegen,arts-utils\
+			-debug-only=arts-analysis,arts,carts,arts-ir-builder,arts-graph,carts-metadata,arts-codegen\
 			-passes="arts-analysis" $< -o $@
 	llvm-dis $@
 

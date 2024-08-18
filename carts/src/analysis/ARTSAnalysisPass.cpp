@@ -528,6 +528,8 @@ struct AAEDTInfoFunction : AAEDTInfo {
     EDTFunction *EDTFn = getAnchorScope();
     ContextEDT = Cache->getOrCreateEDT(EDTFn);
     if (!ContextEDT) {
+      LLVM_DEBUG(dbgs() << "[AAEDTInfoFunction::initialize] No context EDT "
+                           "for the function.\n");
       indicatePessimisticFixpoint();
       return;
     }
@@ -550,11 +552,14 @@ struct AAEDTInfoFunction : AAEDTInfo {
 
       /// Set ParentEDT - Is the EDT called from another EDT?
       EDT *ParentEDT = Cache->getOrCreateEDT(EDTCall->getCaller());
-      if(!ParentEDT) {
+      if (!ParentEDT) {
+        /// The only EDT without a ParentEDT is the MainEDT
         assert(ContextEDT->isMain() && "ParentEDT is null!");
-        indicateOptimisticFixpoint();
+        LLVM_DEBUG(dbgs() << "   - The ContextEDT is the MainEDT\n");
+        ParentSyncEDT.indicateOptimisticFixpoint();
         return true;
       }
+
       assert(ParentEDT && "EDT is not called from another EDT");
       ContextEDT->setParent(ParentEDT);
 
@@ -689,7 +694,7 @@ struct AAEDTInfoFunction : AAEDTInfo {
     if (!updateChildEDTs(A))
       return hasChanged(StateBefore);
 
-    /// If not EDTCall, return optimistic fixpoint, for now.
+    /// All EDTs must have an EDTCall
     EDTCallBase *EDTCall = ContextEDT->getCall();
     assert(EDTCall && "EDTCall is null!");
 
@@ -709,8 +714,9 @@ struct AAEDTInfoFunction : AAEDTInfo {
     }
 
     /// Run AAEDTInfo on the EDTCall
-    auto *EDTCallAA = A.getOrCreateAAFor<AAEDTInfo>(
-        IRPosition::callsite_function(*EDTCall), this, DepClassTy::OPTIONAL);
+    // auto *EDTCallAA =
+    A.getOrCreateAAFor<AAEDTInfo>(IRPosition::callsite_function(*EDTCall), this,
+                                  DepClassTy::OPTIONAL);
     // getState() *= EDTCallAA->getState();
     /// Continue if MaySignalEDTs is at a fixpoint
 
@@ -747,16 +753,6 @@ struct AAEDTInfoCallsite : AAEDTInfo {
     CallBase &EDTCall = cast<CallBase>(getAnchorValue());
     ContextEDT = Cache->getEDT(EDTCall.getCalledFunction());
     assert(ContextEDT && "ContextEDT is null!");
-
-    /// Set Control dependency with DoneEDT
-    EDT *DoneEDT = ContextEDT->getDoneSync();
-    if (DoneEDT) {
-      // Cache->getGraph().addControlEdge(ContextEDT, DoneEDT);
-      /// I need to know the Guid of the DoneEDT from the parent EDT
-      Cache->getGraph().insertCreationEdgeGuid(ContextEDT->getParent(),
-                                               ContextEDT, DoneEDT);
-    }
-
     LLVM_DEBUG(dbgs() << "\n[AAEDTInfoCallsite::initialize] EDT #"
                       << ContextEDT->getID() << "\n");
   }
@@ -778,8 +774,6 @@ struct AAEDTInfoCallsite : AAEDTInfo {
         AllDBsWereFixed = false;
         continue;
       }
-      /// Here we clamp the set of and DependentEDTs
-      // DependentEDTs ^= ArgDataBlockAA->DependentEDTs;
     }
 
     if (!AllDBsWereFixed)
@@ -793,6 +787,13 @@ struct AAEDTInfoCallsite : AAEDTInfo {
 
   /// See AbstractAttribute::manifest(Attributor &A).
   ChangeStatus manifest(Attributor &A) override {
+    /// Set Control dependency with DoneEDT
+    if (EDT *DoneEDT = ContextEDT->getDoneSync()) {
+      // Cache->getGraph().addControlEdge(ContextEDT, DoneEDT);
+      /// I need to know the Guid of the DoneEDT from the parent EDT
+      Cache->getGraph().insertCreationEdgeGuid(ContextEDT->getParent(),
+                                               ContextEDT, DoneEDT);
+    }
     return ChangeStatus::UNCHANGED;
   }
 };
@@ -879,6 +880,7 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     if (ArgValDBInfoAA->MustSignal) {
       LLVM_DEBUG(dbgs() << "     - EDT #" << CalledEDT->getID()
                         << " signals to EDT #" << SignalEDT->getID() << "\n");
+
       insertDataBlockGraphEdge(CalledEDT, SignalEDT, SignalDB->getSlot(), DB);
       return indicateOptimisticFixpoint();
     }
@@ -1314,7 +1316,7 @@ public:
   void computeGraph(Module &M, ARTSCache &Cache) {
     LLVM_DEBUG(dbgs() << "\n\n[Attributor] Initializing AAEDTInfo: \n");
     /// Create attributor
-    auto &Functions = Cache.getFunctions();
+    SetVector<Function *> &Functions = Cache.getFunctions();
     CallGraphUpdater CGUpdater;
     AttributorConfig AC(CGUpdater);
     AC.DefaultInitializeLiveInternals = false;
@@ -1348,10 +1350,9 @@ public:
       CG.getOrCreateEDTGuid(CurrentEDT);
     });
     LLVM_DEBUG(dbgs() << "\nAll EDT Guids have been reserved\n");
-    /// Debug module
-    LLVM_DEBUG(dbgs() << "\n" << M << "\n");
 
-    /// Insert EDT Entry and Call
+    /// Insert EDT Entry and Call iterating from parent to child EDTs to make
+    /// sure all GUIDs are in the EDTEntry of the EDT Function
     EDTGraphNode *EntryEDTNode = Graph.getEntryNode();
     assert(EntryEDTNode && "EntryEDTNode is null!");
     SetVector<EDTGraphNode *> WorkList;
@@ -1359,18 +1360,23 @@ public:
     while (!WorkList.empty()) {
       EDTGraphNode *CurrentEDTNode = WorkList.pop_back_val();
       EDT &CurrentEDT = *CurrentEDTNode->getEDT();
-      LLVM_DEBUG(dbgs() << "\n"
-                        << "Generating Code for EDT #" << CurrentEDT.getID()
+      LLVM_DEBUG(dbgs() << "\nGenerating Code for EDT #" << CurrentEDT.getID()
                         << "\n");
       CG.insertEDTEntry(CurrentEDT);
       CG.insertEDTCall(CurrentEDT);
-      CG.insertEDTSignals(CurrentEDT);
-
       /// Add all the children to the WorkList
       Graph.forEachOutgoingCreationEdge(
           CurrentEDTNode,
           [&](CreationGraphEdge *Edge) { WorkList.insert(Edge->getTo()); });
     }
+    LLVM_DEBUG(dbgs() << "\nAll EDT Entries and Calls have been inserted\n");
+
+    /// Signal EDTs
+    LLVM_DEBUG(dbgs() << "\nInserting EDT Signals\n");
+    Graph.forEachEDTNode([&](EDTGraphNode *EDTNode) {
+      EDT &CurrentEDT = *EDTNode->getEDT();
+      CG.insertEDTSignals(CurrentEDT);
+    });
 
     /// Insert init functions
     CG.insertInitFunctions();
