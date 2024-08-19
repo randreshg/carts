@@ -427,6 +427,12 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
           Builder.CreateLoad(VoidPtr, DepVPtr, DepVPtrName + ".load");
 
       LLVM_DEBUG(dbgs() << " -> " << *LoadedPtr << "\n");
+      /// DEBUG PRINT STATEMENT
+      SmallVector<Value *, 8> PrintArgs;
+      PrintArgs = {LoadedGuid, LoadedPtr};
+      string PrintMsg = "EDT#" + std::to_string(E.getID()) + " - DepV[" +
+                        std::to_string(Slot) + "]: Guid: %u, Ptr: %p\n";
+      insertPrint(PrintMsg, PrintArgs);
       /// Add the value to the rewiring map
       RewiringMap[OriginalVal] = LoadedPtr;
       insertRewiredValue(OriginalVal, LoadedPtr);
@@ -646,12 +652,13 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
     /// Debug info
 
     SmallVector<Value *, 8> PrintArgs;
+    // LoadInst *LoadedPtrVal = DBPtr;
     LoadInst *LoadedVal = Builder.CreateLoad(Int32, DBPtr);
     string PrintMsg = "Signaling " + DB->getName() +
-                      " with guid: %u and Value %d from EDT #" +
+                      " with guid: %u and Value %d, and Address %p from EDT #" +
                       std::to_string(E.getID()) + " to EDT #" +
                       std::to_string(ToEDT->getID()) + " with guid: %u\n";
-    PrintArgs = {DBGuid, LoadedVal, ECG->getGuid(ToEDT)};
+    PrintArgs = {DBGuid, LoadedVal, DBPtr, ECG->getGuid(ToEDT)};
     insertPrint(PrintMsg, PrintArgs);
 
     /// Create the Call
@@ -855,8 +862,8 @@ DBCodegen *ARTSCodegen::getOrCreateDBCodegen(DataBlock &DB) {
   string DBName = DB.getName();
 
   /// Addr
-  AllocaInst *DBPtr = Builder.CreateAlloca(VoidPtr, nullptr, DBName + ".ptr");
-  // LoadInst *LoadedDBPtr = Builder.CreateLoad(VoidPtr, DBPtr, DBName + ".ld");
+  AllocaInst *DBAddr =
+      Builder.CreateAlloca(artsPtr_t, nullptr, DBName + ".addr");
 
   /// Size
   string DBSizeName = DBName + ".size";
@@ -870,17 +877,22 @@ DBCodegen *ARTSCodegen::getOrCreateDBCodegen(DataBlock &DB) {
   ConstantInt *DBMode =
       ConstantInt::get(Builder.getContext(), APInt(32, 7)); /// ARTS_DB_READ
   CallInst *CreateDBCall =
-      Builder.CreateCall(getOrCreateRuntimeFunctionPtr(ARTSRTL_artsDbCreate),
-                         {DBPtr, LoadedDBSize, DBMode});
+      Builder.CreateCall(getOrCreateRuntimeFunctionPtr(ARTSRTL_artsDbCreatePtr),
+                         {DBAddr, LoadedDBSize, DBMode});
+  /// inttoptr
+  LoadInst *LoadedDBAddr =
+      Builder.CreateLoad(artsPtr_t, DBAddr, DBName + ".addr.ld");
+  Value *DBPtr = Builder.CreateIntToPtr(LoadedDBAddr, VoidPtr, DBName + ".ptr");
+
   DCG->setGuidAddress(CreateDBCall);
   DCG->setPtr(DBPtr);
 
   /// Debug info
-  LLVM_DEBUG(dbgs() << " - Inserting EDT Call\n");
-  SmallVector<Value *, 8> PrintArgs;
-  string PrintMsg = "Creating DB \"" + DBName + "\" - Guid: %u\n";
-  PrintArgs = {CreateDBCall};
-  insertPrint(PrintMsg, PrintArgs);
+  // LLVM_DEBUG(dbgs() << " - Inserting EDT Call\n");
+  // SmallVector<Value *, 8> PrintArgs;
+  // string PrintMsg = "Creating DB \"" + DBName + "\" - Guid: %u / Pointer: %p\n";
+  // PrintArgs = {CreateDBCall, DBPtr};
+  // insertPrint(PrintMsg, PrintArgs);
 
   /// Restore the insertion point
   Builder.restoreIP(OldInsertPoint);

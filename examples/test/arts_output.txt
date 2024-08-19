@@ -1,0 +1,19 @@
+Guid for edt_1.main: 16777217
+Creating EDT #1
+[0] Running EDT with GUID: 16777217
+Guid for edt_0.parallel: 33554433
+Guid for edt_2.task: 50331649
+[0] DB Create 1 0x7ffccf8147f0 / (nil) / 0x556352557fe8
+[0] DB Create 2 0x7ffccf8147f0 / 0x556352558028 / 0x556352557fe8
+Creating DB "db.shared_number" - Guid: 16777223
+EDT 1: The initial number is 76
+Creating EDT #0
+Creating EDT #2
+Signaling db.shared_number with guid: 16777223 and Value 1381335392, and Address 0x7ffccf8147f0 from EDT #1 to EDT #0 with guid: 33554433
+[0] Signal DBGuid: 16777223 to EDTGuid 33554433 in slot 0
+[0] SIGNAL: 33554433 16777223 0 (nil) 7
+[0] MODE: ARTS_DB_READ -> (nil)
+[0] Adding duplicate 16777223
+[0] Setting[0]: 0x556352558028 ARTS_DB_READ - 0
+[0] Running EDT with GUID: 33554433
+[0] DepV 0 16777223 0

@@ -16,6 +16,7 @@
 
 /// ------------------- ARTS typedefs -------------------
 #define artsGuid_t Int64
+#define artsPtr_t Int64
 #define artsTicket_t Int64
 #define artsType_t Int32
 
@@ -221,6 +222,7 @@ __ARTS_RTL(artsSignalEdtPtr,   false, Void, artsGuid_t, Int32, VoidPtr, Int32)
 /// artsDbCreate
 /// artsGuid_t artsDbCreate(void **addr, uint64_t size, artsType_t mode);
 __ARTS_RTL(artsDbCreate, false, artsGuid_t, VoidPtrPtr, Int64, artsType_t)
-
+/// artsGuid_t artsDbCreatePtr(artsPtr_t *addr, uint64_t size, artsType_t mode);
+__ARTS_RTL(artsDbCreatePtr, false, artsGuid_t, VoidPtr, Int64, artsType_t)
 #undef __ARTS_RTL
 #undef ARTS_RTL

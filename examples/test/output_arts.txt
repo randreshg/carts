@@ -1,0 +1,4 @@
+EDT 1: The initial number is 42/8
+EDT 0: The number is 42/8
+EDT 3: The number is 43/9
+EDT 2: The final number is 44 - 8.
