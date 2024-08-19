@@ -24,11 +24,25 @@ namespace arts {
 using namespace types;
 struct ARTSCache;
 
+class EDTSlotCodegen {
+public:
+  EDTSlotCodegen(Value *GuidAddress, Value *Ptr);
+  Value *getGuidAddress();
+  void setGuidAddress(Value *V);
+  Value *getPtr();
+  void setPtr(Value *V);
+
+private:
+  Value *GuidAddress = nullptr;
+  Value *Ptr = nullptr;
+};
+
 /// Aux struct to hold generated code for an EDT.
 class EDTCodegen {
 public:
   EDTCodegen(EDT *E);
   EDTCodegen(EDT *E, Function *Fn);
+  ~EDTCodegen();
   Function *getFn();
   CallBase *getCB();
   Value *getGuidAddress();
@@ -43,17 +57,17 @@ public:
   void setEntry(BasicBlock *BB);
   void setExit(BasicBlock *BB);
 
-  /// Parameter and Dependency Interface
-  bool hasParameter(int32_t Slot);
-  bool hasDependency(int32_t Slot);
-  bool hasGuid(EDT *E);
-  void insertParameter(int32_t Slot, Value *V);
-  void insertDependency(int32_t Slot, Value *V);
-  void insertGuid(EDT *E, Value *V);
-
-  Value *getParameter(int32_t Slot);
-  Value *getDependency(int32_t Slot);
+  /// Parameters
+  Value *getParameter(uint32_t Slot);
+  bool insertParameter(uint32_t Slot, Value *V = nullptr);
+  /// Dependencies
+  EDTSlotCodegen *getDependency(uint32_t Slot);
+  Value *getDependencyGuid(uint32_t Slot);
+  Value *getDependencyPtr(uint32_t Slot);
+  bool insertDependency(uint32_t Slot, Value *GuidAddress, Value *Ptr);
+  /// Guids
   Value *getGuid(EDT *E);
+  bool insertGuid(EDT *E, Value *V = nullptr);
 
 private:
   EDT *E;
@@ -63,11 +77,26 @@ private:
   /// Entry and Exit
   BasicBlock *Entry = nullptr;
   BasicBlock *Exit = nullptr;
-  /// Maps an integer slot to a value.
+  /// Maps of known parameter values
   DenseMap<int32_t, Value *> Parameters;
-  DenseMap<int32_t, Value *> Dependencies;
+  /// Maps of known dependency values
+  DenseMap<int32_t, EDTSlotCodegen *> Dependencies;
   /// Maps of known guid values
   DenseMap<EDT *, Value *> Guids;
+};
+
+class DBCodegen {
+public:
+  DBCodegen(DataBlock *DB);
+  Value *getGuidAddress();
+  void setGuidAddress(Value *V);
+  Value *getPtr();
+  void setPtr(Value *V);
+
+private:
+  DataBlock *DB;
+  Value *GuidAddress = nullptr;
+  Value *Ptr = nullptr;
 };
 
 /// An interface to create LLVM-IR for ARTS directives.
@@ -131,6 +160,8 @@ public:
   /// Rewired Values
   void insertRewiredValue(Value *Old, Value *New);
   Value *getRewiredValue(Value *Old);
+  Value *getValue(Value *V);
+
 
 /// ---------------------------- Types ---------------------------- ///
 /// Declarations for LLVM-IR types (simple, array, function and structure) are
@@ -154,6 +185,7 @@ public:
 private:
   /// ---------------------------- Private ---------------------------- ///
   EDTCodegen *getOrCreateEDTCodegen(EDT &E);
+  DBCodegen *getOrCreateDBCodegen(DataBlock &DB);
   /// Create all simple and struct types exposed by the runtime and remember
   /// the llvm::PointerTypes of them for easy access later.
   void initializeTypes();
@@ -167,6 +199,8 @@ private:
   IRBuilder<> Builder;
   /// Maps the EDT to the new function
   DenseMap<EDT *, EDTCodegen *> EDTs;
+  /// Maps the value to the new DataBlock
+  DenseMap<DataBlock *, DBCodegen *> DBs;
   /// Rewired values
   DenseMap<Value *, Value *> RewiredValues;
 };

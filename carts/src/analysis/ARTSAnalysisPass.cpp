@@ -22,6 +22,7 @@
 #include "llvm/Transforms/IPO/Attributor.h"
 #include "llvm/Transforms/Utils/CallGraphUpdater.h"
 
+#include "carts/analysis/graph/ARTSEdge.h"
 #include "carts/analysis/graph/ARTSGraph.h"
 #include "carts/codegen/ARTSCodegen.h"
 #include "carts/utils/ARTS.h"
@@ -1382,7 +1383,7 @@ public:
     CG.insertInitFunctions();
     CG.insertARTSShutdownFn();
     /// Debug Module
-    LLVM_DEBUG(dbgs() << "\n" << M << "\n");
+    // LLVM_DEBUG(dbgs() << "\n" << M << "\n");
     /// Remove values
     utils::removeValues();
   }

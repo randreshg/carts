@@ -218,6 +218,9 @@ __ARTS_RTL(artsSignalEdtPtr,   false, Void, artsGuid_t, Int32, VoidPtr, Int32)
 /// artsAddDependence
 /// artsAddLocalEventCallback
 
+/// artsDbCreate
+/// artsGuid_t artsDbCreate(void **addr, uint64_t size, artsType_t mode);
+__ARTS_RTL(artsDbCreate, false, artsGuid_t, VoidPtrPtr, Int64, artsType_t)
 
 #undef __ARTS_RTL
 #undef ARTS_RTL
