@@ -60,12 +60,13 @@ public:
   uint32_t getSlot();
   DataBlock *getParent();
   DataBlockSet &getChildDBs();
+  string getName();
 
   // uint32_t getToSlot();
 
   /// Setters
   void setParent(DataBlock *Parent);
-  void setSlot(int32_t Slot);
+  void setSlot(uint32_t Slot);
 
   /// Helpers
   bool addChildDB(DataBlock *ChildDB);
@@ -79,6 +80,7 @@ private:
   DataBlock *Parent = nullptr;
   DataBlock *Done = nullptr;
   DataBlockSet ChildDBs;
+  string Name;
 };
 
 inline raw_ostream &operator<<(raw_ostream &OS, DataBlock &DB) {

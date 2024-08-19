@@ -1,3 +1,4 @@
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
@@ -86,18 +87,19 @@ EDTValue *DataBlock::getValue() { return V; }
 DataBlock::Mode DataBlock::getMode() { return M; }
 EDT *DataBlock::getContextEDT() { return ContextEDT; }
 DataBlock *DataBlock::getParent() { return Parent; }
-// DataBlock *DataBlock::getDone() { return Done; };
 uint32_t DataBlock::getSlot() { return Slot; }
 DataBlockSet &DataBlock::getChildDBs() { return ChildDBs; }
-// uint32_t DataBlock::getToSlot() {
-//   DataBlock *DoneDB = getDone();
-//   if (DoneDB)
-//     return DoneDB->getSlot();
-//   assert(Parent && "Parent is null");
-//   DataBlock *ParentDoneDB = Parent->getDone();
-//   assert(ParentDoneDB && "Parent Done is null");
-//   return ParentDoneDB->getSlot();
-// }
+string DataBlock::getName() {
+  if (Name.empty()) {
+    string ValueName = V->getName().str();
+    if (!ValueName.empty())
+      Name = "db." + ValueName;
+    else
+      Name = getParent()->getName();
+    return Name;
+  }
+  return Name;
+}
 /// Insert
 bool DataBlock::addChildDB(DataBlock *ChildDB) {
   return ChildDBs.insert(ChildDB);
@@ -105,8 +107,7 @@ bool DataBlock::addChildDB(DataBlock *ChildDB) {
 
 /// Setters
 void DataBlock::setParent(DataBlock *Parent) { this->Parent = Parent; }
-void DataBlock::setSlot(int32_t Slot) { this->Slot = Slot; }
-// void DataBlock::setDone(DataBlock *Done) { this->Done = Done; }
+void DataBlock::setSlot(uint32_t Slot) { this->Slot = Slot; }
 
 /// Helpers
 Type *DataBlock::getType() {
@@ -240,7 +241,7 @@ uint32_t EDT::getID() { return ID; }
 EDTFunction *EDT::getFn() { return Fn; }
 EDTEnvironment &EDT::getDataEnv() { return *Env; }
 string EDT::getName() {
-  return ("edt." + std::to_string(ID) + "." + toString(Ty)).str();
+  return ("edt_" + std::to_string(ID) + "." + toString(Ty)).str();
 }
 EDTTypeKind EDT::getTypeKind() const { return Kind; }
 EDTType EDT::getTy() const { return Ty; }
