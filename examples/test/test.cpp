@@ -30,30 +30,20 @@ int main() {
   int random_number = rand() % 10 + 1;
   printf("EDT 1: The initial number is %d/%d\n", shared_number, random_number);
 
-/// EDT 0
-/// 0: random_number, 1: shared_number
-#pragma omp parallel
+  /// EDT 0
+  /// 0: random_number, 1: shared_number
+  #pragma omp parallel
   {
-    /// pragma omp single
-    /// EDT 3
-    // if(random_number%2 == 0) {
     printf("EDT 0: The number is %d/%d\n", shared_number, random_number);
-  
-    // 0: shared_number 
+
     /// EDT 3
-#pragma omp task firstprivate(random_number)
+    /// 0: shared_number 
+    #pragma omp task firstprivate(random_number)
     {
       shared_number++;
       random_number++;
       printf("EDT 3: The number is %d/%d\n", shared_number, random_number);
     }
-    // }
-
-    /// EDT 4
-    // #pragma omp task firstprivate(random_number)
-    // {
-    //   printf("The number is %d\n", random_number);
-    // }
   }
 
   /// EDT 2
