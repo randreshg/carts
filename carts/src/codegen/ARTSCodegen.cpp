@@ -422,12 +422,15 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
       /// Ptr
       string DepVPtrName = DepVName + ".ptr";
       Value *DepVPtr = Builder.CreateConstInBoundsGEP2_32(EdtDep, DepVArg, Slot,
-                                                          1, DepVPtrName);
-      LLVM_DEBUG(dbgs() << " -> " << *DepVPtr << "\n");
+                                                          2, DepVPtrName);
+      LoadInst *LoadedPtr =
+          Builder.CreateLoad(VoidPtr, DepVPtr, DepVPtrName + ".load");
+
+      LLVM_DEBUG(dbgs() << " -> " << *LoadedPtr << "\n");
       /// Add the value to the rewiring map
-      RewiringMap[OriginalVal] = DepVPtr;
-      insertRewiredValue(OriginalVal, DepVPtr);
-      ECG->insertDependency(Slot, LoadedGuid, DepVPtr);
+      RewiringMap[OriginalVal] = LoadedPtr;
+      insertRewiredValue(OriginalVal, LoadedPtr);
+      ECG->insertDependency(Slot, LoadedGuid, LoadedPtr);
     });
   };
 
@@ -606,11 +609,19 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
 
     /// If ToEDT is the same as the ContextEDT, the value of the DB remains the
     /// same
-    if ((ContextEDT == ToEDT) && (!DB->getParent())) {
-      LLVM_DEBUG(dbgs() << " - We created the EDT\n");
-      DBCodegen *DBCG = getOrCreateDBCodegen(*DB);
-      DBPtr = DBCG->getPtr();
-      DBGuid = DBCG->getGuidAddress();
+    if (ContextEDT == ToEDT) {
+      if (DB->getParent()) {
+        LLVM_DEBUG(dbgs() << " - We have a parent\n");
+        EDTSlotCodegen *FromSlotECG =
+            FromECG->getDependency(DB->getParent()->getSlot());
+        DBPtr = FromSlotECG->getPtr();
+        DBGuid = FromSlotECG->getGuidAddress();
+      } else {
+        LLVM_DEBUG(dbgs() << " - We created the EDT\n");
+        DBCodegen *DBCG = getOrCreateDBCodegen(*DB);
+        DBPtr = DBCG->getPtr();
+        DBGuid = DBCG->getGuidAddress();
+      }
     }
     /// If not, the value of the DB is the argument of the FromEDT
     else {
@@ -631,6 +642,17 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
     Builder.CreateStore(ConstantInt::get(Int32, ToSlot), ToEDTSlotAlloca);
     Value *Args[] = {ECG->getGuid(ToEDT),
                      Builder.CreateLoad(Int32, ToEDTSlotAlloca), DBGuid};
+
+    /// Debug info
+
+    SmallVector<Value *, 8> PrintArgs;
+    LoadInst *LoadedVal = Builder.CreateLoad(Int32, DBPtr);
+    string PrintMsg = "Signaling " + DB->getName() +
+                      " with guid: %u and Value %d from EDT #" +
+                      std::to_string(E.getID()) + " to EDT #" +
+                      std::to_string(ToEDT->getID()) + " with guid: %u\n";
+    PrintArgs = {DBGuid, LoadedVal, ECG->getGuid(ToEDT)};
+    insertPrint(PrintMsg, PrintArgs);
 
     /// Create the Call
     Builder.CreateCall(SignalFn, Args);
@@ -831,9 +853,10 @@ DBCodegen *ARTSCodegen::getOrCreateDBCodegen(DataBlock &DB) {
   setInsertionPointInBB(*ParentECG->getEntry());
 
   string DBName = DB.getName();
-  
+
   /// Addr
   AllocaInst *DBPtr = Builder.CreateAlloca(VoidPtr, nullptr, DBName + ".ptr");
+  // LoadInst *LoadedDBPtr = Builder.CreateLoad(VoidPtr, DBPtr, DBName + ".ld");
 
   /// Size
   string DBSizeName = DBName + ".size";
@@ -851,6 +874,13 @@ DBCodegen *ARTSCodegen::getOrCreateDBCodegen(DataBlock &DB) {
                          {DBPtr, LoadedDBSize, DBMode});
   DCG->setGuidAddress(CreateDBCall);
   DCG->setPtr(DBPtr);
+
+  /// Debug info
+  LLVM_DEBUG(dbgs() << " - Inserting EDT Call\n");
+  SmallVector<Value *, 8> PrintArgs;
+  string PrintMsg = "Creating DB \"" + DBName + "\" - Guid: %u\n";
+  PrintArgs = {CreateDBCall};
+  insertPrint(PrintMsg, PrintArgs);
 
   /// Restore the insertion point
   Builder.restoreIP(OldInsertPoint);

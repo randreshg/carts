@@ -10,10 +10,11 @@ target triple = "x86_64-unknown-linux-gnu"
 %struct..kmp_privates.t = type { i32 }
 
 @.str = private unnamed_addr constant [36 x i8] c"EDT 1: The initial number is %d/%d\0A\00", align 1
-@.str.1 = private unnamed_addr constant [28 x i8] c"EDT 3: The number is %d/%d\0A\00", align 1
+@.str.1 = private unnamed_addr constant [28 x i8] c"EDT 0: The number is %d/%d\0A\00", align 1
+@.str.2 = private unnamed_addr constant [28 x i8] c"EDT 3: The number is %d/%d\0A\00", align 1
 @0 = private unnamed_addr constant [23 x i8] c";unknown;unknown;0;0;;\00", align 1
 @1 = private unnamed_addr constant %struct.ident_t { i32 0, i32 2, i32 0, i32 22, ptr @0 }, align 8
-@.str.2 = private unnamed_addr constant [37 x i8] c"EDT 2: The final number is %d - %d.\0A\00", align 1
+@.str.3 = private unnamed_addr constant [37 x i8] c"EDT 2: The final number is %d - %d.\0A\00", align 1
 
 ; Function Attrs: mustprogress norecurse nounwind uwtable
 define dso_local noundef i32 @main() local_unnamed_addr #0 {
@@ -34,12 +35,12 @@ entry:
   %add4 = add nsw i32 %rem3, 1
   store i32 %add4, ptr %random_number, align 4, !tbaa !6
   %call5 = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %add, i32 noundef %add4)
-  call void (ptr, i32, ptr, ...) @__kmpc_fork_call(ptr nonnull @1, i32 2, ptr nonnull @main.omp_outlined, ptr nonnull %random_number, ptr nonnull %shared_number)
+  call void (ptr, i32, ptr, ...) @__kmpc_fork_call(ptr nonnull @1, i32 2, ptr nonnull @main.omp_outlined, ptr nonnull %shared_number, ptr nonnull %random_number)
   %0 = load i32, ptr %shared_number, align 4, !tbaa !6
   %inc = add nsw i32 %0, 1
   store i32 %inc, ptr %shared_number, align 4, !tbaa !6
   %1 = load i32, ptr %random_number, align 4, !tbaa !6
-  %call6 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %inc, i32 noundef %1)
+  %call6 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.3, i32 noundef %inc, i32 noundef %1)
   call void @llvm.lifetime.end.p0(i64 4, ptr nonnull %random_number) #6
   call void @llvm.lifetime.end.p0(i64 4, ptr nonnull %shared_number) #6
   ret i32 0
@@ -61,16 +62,19 @@ declare i32 @rand() local_unnamed_addr #1
 declare noundef i32 @printf(ptr nocapture noundef readonly, ...) local_unnamed_addr #3
 
 ; Function Attrs: alwaysinline norecurse nounwind uwtable
-define internal void @main.omp_outlined(ptr noalias nocapture noundef readonly %.global_tid., ptr noalias nocapture readnone %.bound_tid., ptr nocapture noundef nonnull readonly align 4 dereferenceable(4) %random_number, ptr noundef nonnull align 4 dereferenceable(4) %shared_number) #4 {
+define internal void @main.omp_outlined(ptr noalias nocapture noundef readonly %.global_tid., ptr noalias nocapture readnone %.bound_tid., ptr noundef nonnull align 4 dereferenceable(4) %shared_number, ptr nocapture noundef nonnull readonly align 4 dereferenceable(4) %random_number) #4 personality ptr @__gxx_personality_v0 {
 entry:
-  %0 = load i32, ptr %.global_tid., align 4, !tbaa !6
-  %1 = tail call ptr @__kmpc_omp_task_alloc(ptr nonnull @1, i32 %0, i32 1, i64 48, i64 8, ptr nonnull @.omp_task_entry.)
-  %2 = load ptr, ptr %1, align 8, !tbaa !10
-  store ptr %shared_number, ptr %2, align 8, !tbaa.struct !15
-  %3 = getelementptr inbounds %struct.kmp_task_t_with_privates, ptr %1, i64 0, i32 1
-  %4 = load i32, ptr %random_number, align 4, !tbaa !6
-  store i32 %4, ptr %3, align 8, !tbaa !17
-  %5 = tail call i32 @__kmpc_omp_task(ptr nonnull @1, i32 %0, ptr nonnull %1)
+  %0 = load i32, ptr %shared_number, align 4, !tbaa !6
+  %1 = load i32, ptr %random_number, align 4, !tbaa !6
+  %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %0, i32 noundef %1)
+  %2 = load i32, ptr %.global_tid., align 4, !tbaa !6
+  %3 = tail call ptr @__kmpc_omp_task_alloc(ptr nonnull @1, i32 %2, i32 1, i64 48, i64 8, ptr nonnull @.omp_task_entry.)
+  %4 = load ptr, ptr %3, align 8, !tbaa !10
+  store ptr %shared_number, ptr %4, align 8, !tbaa.struct !15
+  %5 = getelementptr inbounds %struct.kmp_task_t_with_privates, ptr %3, i64 0, i32 1
+  %6 = load i32, ptr %random_number, align 4, !tbaa !6
+  store i32 %6, ptr %5, align 8, !tbaa !17
+  %7 = tail call i32 @__kmpc_omp_task(ptr nonnull @1, i32 %2, ptr nonnull %3)
   ret void
 }
 
@@ -89,7 +93,7 @@ entry:
   %6 = load i32, ptr %3, align 4, !tbaa !6, !noalias !18
   %inc1.i = add nsw i32 %6, 1
   store i32 %inc1.i, ptr %3, align 4, !tbaa !6, !noalias !18
-  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %inc.i, i32 noundef %inc1.i), !noalias !18
+  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %inc.i, i32 noundef %inc1.i), !noalias !18
   ret i32 0
 }
 
