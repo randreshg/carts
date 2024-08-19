@@ -37,9 +37,10 @@ int main() {
     /// pragma omp single
     /// EDT 3
     // if(random_number%2 == 0) {
-    // printf("EDT 1: The number is %d/%d\n", shared_number, random_number);
+    printf("EDT 0: The number is %d/%d\n", shared_number, random_number);
   
     // 0: shared_number 
+    /// EDT 3
 #pragma omp task firstprivate(random_number)
     {
       shared_number++;
