@@ -240,9 +240,8 @@ void EDT::insertValueToEnv(Value *Val, bool IsDepV) {
 uint32_t EDT::getID() { return ID; }
 EDTFunction *EDT::getFn() { return Fn; }
 EDTEnvironment &EDT::getDataEnv() { return *Env; }
-string EDT::getName() {
-  return ("edt_" + std::to_string(ID) + "." + toString(Ty)).str();
-}
+string EDT::getTag() { return ("edt_" + std::to_string(ID)); }
+string EDT::getName() { return (getTag() + "." + toString(Ty)).str(); }
 EDTTypeKind EDT::getTypeKind() const { return Kind; }
 EDTType EDT::getTy() const { return Ty; }
 

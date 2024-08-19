@@ -172,6 +172,7 @@ public:
   EDTFunction *getFn();
   EDTEnvironment &getDataEnv();
   string getName();
+  string getTag();
   EDTTypeKind getTypeKind() const;
   EDTType getTy() const;
 

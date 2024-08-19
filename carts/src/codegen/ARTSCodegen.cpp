@@ -322,7 +322,7 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
   ARTSGraph &Graph = Cache->getGraph();
   EDTCodegen *ECG = getOrCreateEDTCodegen(E);
   EDTGraphNode *EDTNode = Graph.getOrCreateNode(&E);
-  string EDTTagName = "edt" + std::to_string(E.getID());
+  string EDTTagName = E.getTag();
 
   /// Parameters
   LLVM_DEBUG(dbgs() << " - Inserting ParamV\n");
@@ -385,7 +385,7 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
     InputParentEdge->forEachGuid([&](EDT *Guid) {
       LLVM_DEBUG(dbgs() << "   - ParamVGuid[" << GuidIndex << "]: EDT"
                         << Guid->getID() << "\n");
-      auto ParamVName = EDTTagName + "paramv_" + std::to_string(GuidIndex) +
+      auto ParamVName = EDTTagName + ".paramv_" + std::to_string(GuidIndex) +
                         ".guid.edt_" + std::to_string(Guid->getID());
       Value *ParamVElemPtr = Builder.CreateConstInBoundsGEP1_64(
           artsGuid_t, ParamVArg, GuidIndex, ParamVName);
@@ -412,7 +412,7 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
       Value *OriginalVal = E.getDepArg(Slot);
       LLVM_DEBUG(dbgs() << "   - DepV[" << Slot << "]: " << *OriginalVal);
 
-      const string DepVName = EDTTagName + "depv_" + std::to_string(Slot);
+      const string DepVName = EDTTagName + ".depv_" + std::to_string(Slot);
       /// Guid
       string DepVGuidName = DepVName + ".guid";
       Value *DepVGuid = Builder.CreateConstInBoundsGEP2_32(
@@ -436,17 +436,23 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
   utils::rewireValues(RewiringMap);
 
   /// Create DataBlocks
+  LLVM_DEBUG(dbgs() << " - Inserting DataBlocks\n");
   Graph.forEachOutgoingDataBlockEdge(EDTNode, [&](DataBlockGraphEdge *Edge) {
-    getOrCreateDBCodegen(*Edge->getDataBlock());
+    DataBlock *DB = Edge->getDataBlock();
+    DBCodegen *DCG = getOrCreateDBCodegen(*DB);
+    if (!DCG)
+      return;
+    Value *DBValue = DB->getValue();
+    RewiringMap[DBValue] = DCG->getPtr();
+    insertRewiredValue(DBValue, DCG->getPtr());
   });
-
-  // LLVM_DEBUG(dbgs() << " - New Function: " << *EDTFn << "\n");
+  utils::rewireValues(RewiringMap);
   Builder.restoreIP(OldInsertPoint);
 }
 
 void ARTSCodegen::insertEDTCall(EDT &E) {
   auto OldInsertPoint = Builder.saveIP();
-  string EDTTagName = "edt" + std::to_string(E.getID());
+  string EDTTagName = E.getTag();
 
   LLVM_DEBUG(dbgs() << TAG << "Inserting Call for EDT #" << E.getID() << "\n");
   EDT *ParentEDT = E.getParent();
@@ -581,16 +587,15 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
   EDTGraphNode *EDTNode = Graph.getOrCreateNode(&E);
   EDT *FromEDT = EDTNode->getEDT();
   EDTCodegen *FromECG = getOrCreateEDTCodegen(*FromEDT);
-  LLVM_DEBUG(dbgs() << *FromECG->getFn() << "\n");
+  // LLVM_DEBUG(dbgs() << *FromECG->getFn() << "\n");
   Graph.forEachOutgoingDataBlockEdge(EDTNode, [&](DataBlockGraphEdge *Edge) {
     DataBlock *DB = Edge->getDataBlock();
     EDT *ContextEDT = DB->getContextEDT();
-    EDTCodegen *ContextEDTCG = getOrCreateEDTCodegen(*ContextEDT);
+    // EDTCodegen *ContextEDTCG = getOrCreateEDTCodegen(*ContextEDT);
     getOrCreateDBCodegen(*DB);
     LLVM_DEBUG(dbgs() << "\nSignal DB " << *DB->getValue() << " from EDT #"
                       << E.getID() << " to EDT #"
                       << Edge->getTo()->getParent()->getEDT()->getID() << "\n");
-
     /// To EDT
     EDT *ToEDT = Edge->getTo()->getParent()->getEDT();
     uint32_t ToSlot = Edge->getTo()->getSlot();
@@ -601,22 +606,15 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
 
     /// If ToEDT is the same as the ContextEDT, the value of the DB remains the
     /// same
-    if (ContextEDT == ToEDT) {
-      /// If the DB is created by the parent EDT, we use the DepSlot
-      if (DB->getParent()) {
-        EDTSlotCodegen DepSlotECG = *ContextEDTCG->getDependency(DB->getSlot());
-        DBPtr = DepSlotECG.getPtr();
-        DBGuid = DepSlotECG.getGuidAddress();
-      }
-      /// If we created the DB
-      else {
-        DBCodegen *DBCG = getOrCreateDBCodegen(*DB);
-        DBPtr = DBCG->getPtr();
-        DBGuid = DBCG->getGuidAddress();
-      }
+    if ((ContextEDT == ToEDT) && (!DB->getParent())) {
+      LLVM_DEBUG(dbgs() << " - We created the EDT\n");
+      DBCodegen *DBCG = getOrCreateDBCodegen(*DB);
+      DBPtr = DBCG->getPtr();
+      DBGuid = DBCG->getGuidAddress();
     }
     /// If not, the value of the DB is the argument of the FromEDT
     else {
+      LLVM_DEBUG(dbgs() << " - Using DepSlot of FromEDT\n");
       EDTSlotCodegen *FromSlotECG = FromECG->getDependency(DB->getSlot());
       DBPtr = FromSlotECG->getPtr();
       DBGuid = FromSlotECG->getGuidAddress();
@@ -626,9 +624,10 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
 
     /// Create the Call arguments
     /// artsSignalEdt(artsGuid_t edtGuid, uint32_t slot, artsGuid_t dataGuid)
-    AllocaInst *ToEDTSlotAlloca = Builder.CreateAlloca(
-        Int32, nullptr,
-        "edt." + std::to_string(E.getID()) + ".slot." + std::to_string(ToSlot));
+    AllocaInst *ToEDTSlotAlloca =
+        Builder.CreateAlloca(Int32, nullptr,
+                             "toedt." + std::to_string(ToEDT->getID()) +
+                                 ".slot." + std::to_string(ToSlot));
     Builder.CreateStore(ConstantInt::get(Int32, ToSlot), ToEDTSlotAlloca);
     Value *Args[] = {ECG->getGuid(ToEDT),
                      Builder.CreateLoad(Int32, ToEDTSlotAlloca), DBGuid};
@@ -782,6 +781,8 @@ void ARTSCodegen::setInsertPoint(BasicBlock *BB) { Builder.SetInsertPoint(BB); }
 
 void ARTSCodegen::setInsertPoint(Instruction *I) { Builder.SetInsertPoint(I); }
 
+void ARTSCodegen::rewireValues() { utils::rewireValues(RewiredValues); }
+
 void ARTSCodegen::insertRewiredValue(Value *OriginalVal, Value *CastedVal) {
   if (!getRewiredValue(OriginalVal))
     RewiredValues[OriginalVal] = CastedVal;
@@ -824,14 +825,13 @@ DBCodegen *ARTSCodegen::getOrCreateDBCodegen(DataBlock &DB) {
   DBs[&DB] = DCG;
 
   auto OldInsertPoint = Builder.saveIP();
-  /// Set the insertion point to the entry block of the context EDT
-  // EDTGraphNode *ParentEDTNode = Cache->getGraph().getNode(*ParentFn);
+  /// Set the insertion point to the entry block of the parent context EDT
   EDTCodegen *ParentECG =
       getOrCreateEDTCodegen(*DB.getContextEDT()->getParent());
   setInsertionPointInBB(*ParentECG->getEntry());
 
-  Value *DBValue = DB.getValue();
   string DBName = DB.getName();
+  
   /// Addr
   AllocaInst *DBPtr = Builder.CreateAlloca(VoidPtr, nullptr, DBName + ".ptr");
 

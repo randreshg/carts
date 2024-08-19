@@ -158,6 +158,7 @@ public:
   void setInsertPoint(BasicBlock *BB);
   void setInsertPoint(Instruction *I);
   /// Rewired Values
+  void rewireValues();
   void insertRewiredValue(Value *Old, Value *New);
   Value *getRewiredValue(Value *Old);
   Value *getValue(Value *V);
