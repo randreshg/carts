@@ -22,15 +22,15 @@
 #include <stdlib.h>
 #include <time.h>
 
-/// EDT 0
+/// EDT 1
 int main() {
   // Generate a random number between 10 and 10
   srand(time(NULL));
   int shared_number = rand() % 100 + 1;
   int random_number = rand() % 10 + 1;
-  printf("EDT 0: The initial number is %d/%d\n", shared_number, random_number);
+  printf("EDT 1: The initial number is %d/%d\n", shared_number, random_number);
 
-/// EDT 1
+/// EDT 0
 /// 0: random_number, 1: shared_number
 #pragma omp parallel
   {

@@ -1385,6 +1385,7 @@ public:
     /// Debug Module
     // LLVM_DEBUG(dbgs() << "\n" << M << "\n");
     /// Remove values
+    CG.rewireValues();
     utils::removeValues();
   }
 };

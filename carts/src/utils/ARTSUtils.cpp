@@ -48,6 +48,8 @@ void rewireValues(DenseMap<Value *, Value *> &RewiringMap, Function *Parent) {
   for (auto &MapItr : RewiringMap) {
     Value *OldValue = MapItr.first;
     Value *NewValue = MapItr.second;
+    if(!OldValue)
+      continue;
     assert(OldValue->getType() == NewValue->getType() && "Types do not match");
     LLVM_DEBUG(dbgs() << "  - Rewiring: " << *OldValue << " -> " << *NewValue
                       << "\n");
@@ -57,6 +59,7 @@ void rewireValues(DenseMap<Value *, Value *> &RewiringMap, Function *Parent) {
     } else
       OldValue->replaceAllUsesWith(NewValue);
   }
+  RewiringMap.clear();
 }
 
 void removeFunction(Function *Fn) {
