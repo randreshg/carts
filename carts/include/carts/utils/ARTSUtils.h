@@ -11,6 +11,7 @@
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 
+#include "carts/utils/ARTS.h"
 #include "carts/utils/ARTSTypes.h"
 
 /// ------------------------------------------------------------------- ///
@@ -32,10 +33,8 @@ void getDominatedBBs(BasicBlock *FromBB, DominatorTree &DT,
 void rewireValues(DenseMap<Value *, Value *> &RewiringMap,
                   Function *Parent = nullptr);
 
-/// Function and calls
-void removeFunction(Function *F);
-
 /// Remove values interface
+void removeFunction(Function *F);
 void removeValue(Value *V, bool RecursiveRemove = false,
                  bool RecursiveUndef = true);
 void removeValue(Value *V, Instruction *ExcludeInst,
@@ -60,6 +59,9 @@ void replaceUsesWithUndef(Value *V, Instruction *ExcludeInst = nullptr,
 void removeLifetimeMarkers(Function &Fn);
 /// Removes dead instructions
 void removeDeadInstructions(Function &Fn);
+/// Replace the terminator of a function with a void return.
+void replaceTerminatorsWithVoidReturn(Function *Fn);
+void replaceTerminatorsWithVoidReturn(BasicBlock *BB, Module *M = nullptr);
 
 } // namespace utils
 } // namespace arts

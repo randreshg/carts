@@ -9,7 +9,9 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Value.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/IPO/Attributor.h"
 
@@ -83,6 +85,17 @@ void OMPTransform::identifyEDTs(Function &Fn) {
       case OMPType::TASKWAIT: {
         assert(false && "Taskwait not implemented yet");
       } break;
+      case OMPType::SINGLE: {
+        LLVM_DEBUG(dbgs() << TAG << "Single Region Found:\n" << *CB << "\n");
+        CurrentI = handleSingleRegion(*CB);
+      } break;
+      case OMPType::SINGLE_END: {
+        LLVM_DEBUG(dbgs() << TAG << "Single End Region Found:\n"
+                          << *CB << "\n");
+        Instruction *NextI = CurrentI->getPrevNonDebugInstruction();
+        removeValue(CurrentI);
+        CurrentI = NextI;
+      } break;
       case OMPType::OTHER: {
       } break;
       default:
@@ -103,13 +116,7 @@ Function *OMPTransform::handleMain(Function &MainFn) {
                                                 /*isVarArg=*/false);
   Function *MainEDTFn = Function::Create(
       MainEDTFnTy, GlobalValue::InternalLinkage, "carts.edt", &M);
-  /// Replace all ret instructions with a ret void
-  for (auto &BB : MainFn) {
-    if (auto *RI = dyn_cast<ReturnInst>(BB.getTerminator())) {
-      ReturnInst::Create(M.getContext(), nullptr, RI);
-      RI->eraseFromParent();
-    }
-  }
+  replaceTerminatorsWithVoidReturn(&MainFn);
   /// Splice the body of the main function right into the new function
   MainEDTFn->splice(MainEDTFn->begin(), &MainFn);
   /// Insert entry block to MainFn
@@ -180,7 +187,7 @@ Instruction *OMPTransform::handleSyncDoneRegion(CallBase &CB) {
   CodeExtractor CE(Region);
   CodeExtractorAnalysisCache CEAC(ParentFn);
   SetVector<Value *> Inputs, Outputs;
-  auto *DoneEDTFn = CE.extractCodeRegion(CEAC, Inputs, Outputs);
+  Function *DoneEDTFn = CE.extractCodeRegion(CEAC, Inputs, Outputs);
   DoneEDTFn->setName("carts.edt");
   CallBase *DoneCB = dyn_cast<CallBase>(DoneEDTFn->user_back());
   /// Set Metadata
@@ -341,6 +348,50 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
   return NewCB;
 }
 
+Instruction *OMPTransform::handleSingleRegion(CallBase &CB) {
+  /// Check if it safely to convert the parallel EDT to a single EDT
+  Function &ParentFn = *CB.getFunction();
+  // LLVM_DEBUG(dbgs() << TAG << "Function:\n" << ParentFn << "\n");
+  BasicBlock *SingleBB = CB.getParent();
+  BranchInst *BranchInstruction = cast<BranchInst>(SingleBB->getTerminator());
+
+  /// Start by checking the False successor. If it is a barrier, and the next
+  /// instruction is a return instruction, we can safely remove the BB
+  BasicBlock *FalseBB = BranchInstruction->getSuccessor(0);
+  Instruction *BarrierInst = &FalseBB->front();
+  assert(getRTFunction(BarrierInst) == OMPType::BARRIER &&
+         "First instruction of the False BB is not Barrier");
+  ReturnInst *RI = dyn_cast<ReturnInst>(FalseBB->getTerminator());
+  assert(RI &&
+         "FalseBB does not have a return instruction - Expected return void");
+  assert(BarrierInst->getNextNonDebugInstruction() == RI &&
+         "FalseBB has more than one instruction");
+  removeValue(BarrierInst);
+  FalseBB->setName("exit");
+
+  /// Then, analyze the True successor. Find the 'kmpc_end_single' call and
+  /// remove it
+  /// NOTE: This will happen in the identifyEDTs function
+
+  /// Get the next instruction
+  BasicBlock *TrueBB = BranchInstruction->getSuccessor(1);
+  Instruction *CurI = &TrueBB->front();
+
+  /// Remove the single BB
+  SingleBB->eraseFromParent();
+
+  /// TrueBB is now the entry block
+  TrueBB->setName("entry");
+  replaceTerminatorsWithVoidReturn(&ParentFn);
+  return CurI;
+
+  // CodeExtractor CE(Region);
+  // CodeExtractorAnalysisCache CEAC(ParentFn);
+  // SetVector<Value *> Inputs, Outputs;
+  // Function *SingleEDTFn = CE.extractCodeRegion(CEAC, Inputs, Outputs);
+  // CallBase *SingleEDTCall = dyn_cast<CallBase>(SingleEDTFn->user_back());
+}
+
 /// ------------------------------------------------------------------- ///
 /// ------------------------------ OMP -------------------------------- ///
 /// ------------------------------------------------------------------- ///
@@ -380,6 +431,12 @@ OMPType getRTFunction(Function *Fn) {
     return OMPType::SET_NUM_THREADS;
   if (CalleeName == "__kmpc_for_static_init_4")
     return OMPType::PARALLEL_FOR;
+  if (CalleeName == "__kmpc_single")
+    return OMPType::SINGLE;
+  if (CalleeName == "__kmpc_end_single")
+    return OMPType::SINGLE_END;
+  if (CalleeName == "__kmpc_barrier")
+    return OMPType::BARRIER;
   return OMPType::OTHER;
 }
 
