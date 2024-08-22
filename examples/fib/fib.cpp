@@ -57,9 +57,9 @@ int main() {
     // EDT 1
     int m = fib(n);
     // EDT Done region
-    {
-        printf("fib(%d) = %d\n", n, m);
-    }
+    // {
+    //     printf("fib(%d) = %d\n", n, m);
+    // }
   }
 
   printf("Done %d, %d\n", n, i);

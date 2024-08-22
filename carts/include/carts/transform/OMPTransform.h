@@ -32,6 +32,7 @@ private:
   Instruction *handleParallelRegion(CallBase &CB);
   Instruction *handleSyncDoneRegion(CallBase &CB);
   Instruction *handleTaskRegion(CallBase &CB);
+  Instruction *handleSingleRegion(CallBase &CB);
   ///  Attributes
   Module &M;
   AnalysisGetter &AG;
@@ -57,11 +58,14 @@ enum OMPType {
   OTHER = 0,
   PARALLEL,
   PARALLEL_FOR,
+  SINGLE,
+  SINGLE_END,
   TASKALLOC,
   TASK,
   TASKWAIT,
   TASKDEP,
-  SET_NUM_THREADS
+  SET_NUM_THREADS,
+  BARRIER
 };
 
 /// Helper Functions

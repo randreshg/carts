@@ -1,11 +1,13 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/MemorySSA.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Use.h"
 
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -48,7 +50,7 @@ void rewireValues(DenseMap<Value *, Value *> &RewiringMap, Function *Parent) {
   for (auto &MapItr : RewiringMap) {
     Value *OldValue = MapItr.first;
     Value *NewValue = MapItr.second;
-    if(!OldValue)
+    if (!OldValue)
       continue;
     assert(OldValue->getType() == NewValue->getType() && "Types do not match");
     LLVM_DEBUG(dbgs() << "  - Rewiring: " << *OldValue << " -> " << *NewValue
@@ -150,12 +152,14 @@ void replaceUsesWithUndef(Value *V, Instruction *ExcludeInst, bool RemoveUses,
       Worklist.push_back(UserInst);
   }
 
+  LLVM_DEBUG(dbgs() << TAG << "  - Worklist size: " << Worklist.size() << "\n");
   /// Replace uses with UndefValue and mark instructions for removal
   V->replaceAllUsesWith(UndefValue::get(V->getType()));
+
   auto Depth = 0u;
   while (!Worklist.empty()) {
     Instruction *Inst = Worklist.pop_back_val();
-    if (!Inst || ExcludeInst || Inst == ExcludeInst)
+    if (!Inst || (ExcludeInst && Inst == ExcludeInst))
       continue;
     LLVM_DEBUG(dbgs() << TAG << "   - Replacing: " << *Inst << "\n");
     /// Add users of this instruction to the worklist for further processing
@@ -225,5 +229,21 @@ void removeDeadInstructions(Function &Fn) {
   removeValues();
   LLVM_DEBUG(dbgs() << "\n");
 }
+
+void replaceTerminatorsWithVoidReturn(Function *Fn) {
+  Module *M = Fn->getParent();
+  for (BasicBlock &BB : *Fn)
+    replaceTerminatorsWithVoidReturn(&BB, M);
+}
+
+void replaceTerminatorsWithVoidReturn(BasicBlock *BB, Module *M) {
+  if (!M)
+    M = BB->getParent()->getParent();
+  if (ReturnInst *RI = dyn_cast<ReturnInst>(BB->getTerminator())) {
+    ReturnInst::Create(M->getContext(), nullptr, RI);
+    RI->eraseFromParent();
+  }
+}
+
 } // namespace utils
 } // namespace arts

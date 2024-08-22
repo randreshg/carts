@@ -782,7 +782,7 @@ void ARTSCodegen::setInsertionPointInBB(BasicBlock &InsertionBB) {
 
 void ARTSCodegen::redirectTo(BasicBlock *Source, BasicBlock *Target) {
   if (Instruction *Term = Source->getTerminator()) {
-    auto *Br = cast<BranchInst>(Term);
+    BranchInst *Br = cast<BranchInst>(Term);
     assert(!Br->isConditional() &&
            "BB's terminator must be an unconditional branch (or degenerate)");
     BasicBlock *Succ = Br->getSuccessor(0);
