@@ -99,8 +99,6 @@ CallBase *EDTIRBuilder::buildEDT(
   LLVM_DEBUG(dbgs() << TAG << "New callsite: " << *NewCI << "\n");
   removeValue(OldCB, true, true);
   removeFunction(OldFn);
-  // LLVM_DEBUG(dbgs() << "Current Function after undefining OldCB:\n"
-  //                   << *(NewCI->getFunction()) << "\n");
   LLVM_DEBUG(dbgs() << TAG << "New function:\n" << *NewFn << "\n");
   assert(!NewFn->isDeclaration() && "New function is a declaration");
   NewCI->setOnlyAccessesArgMemory();

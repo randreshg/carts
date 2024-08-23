@@ -8,6 +8,7 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -574,8 +575,10 @@ struct AAEDTInfoFunction : AAEDTInfo {
 
       /// If it is a SyncEDT, it must have a SiblingDoneEDT
       /// It must be the first instruction of the next BB.
-      BasicBlock *NextBB = EDTCall->getParent()->getNextNode();
-      CallBase *CB = dyn_cast<CallBase>(&NextBB->front());
+      BranchInst *BI = dyn_cast<BranchInst>(EDTCall->getParent()->getTerminator());
+      assert((BI && BI->getNumSuccessors() == 1) &&
+             "EDTCall is not a BranchInst with a single successor!");
+      CallBase *CB = dyn_cast<CallBase>(&BI->getSuccessor(0)->front());
       assert(CB && "Next instruction is not a CallBase!");
       EDT *DoneEDT = Cache->getOrCreateEDT(CB);
       assert(

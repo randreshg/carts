@@ -3,13 +3,12 @@
 #ifndef LLVM_API_CARTS_OMPTRANSFORM_H
 #define LLVM_API_CARTS_OMPTRANSFORM_H
 
+#include "llvm/IR/Function.h"
 #include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/Module.h"
 #include "llvm/Transforms/IPO/Attributor.h"
-
 
 namespace arts {
 using namespace llvm;
@@ -18,9 +17,9 @@ using namespace llvm;
 ///                           OMPTransform                              ///
 /// Description: Main file for the Compiler for ARTS (OmpTransform) pass.
 /// ------------------------------------------------------------------- ///
-class OMPTransform  {
+class OMPTransform {
 public:
-  /// Interface 
+  /// Interface
   OMPTransform(Module &M, AnalysisGetter &AG) : M(M), AG(AG) {}
   ~OMPTransform() {}
   bool run(ModuleAnalysisManager &AM);
@@ -32,6 +31,7 @@ private:
   Instruction *handleParallelRegion(CallBase &CB);
   Instruction *handleSyncDoneRegion(CallBase &CB);
   Instruction *handleTaskRegion(CallBase &CB);
+  Instruction *handleTaskWait(CallBase &CB);
   Instruction *handleSingleRegion(CallBase &CB);
   ///  Attributes
   Module &M;

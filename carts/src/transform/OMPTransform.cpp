@@ -1,4 +1,5 @@
 // Description: Main file for the Compiler for ARTS (OmpTransform) pass.
+#include <cassert>
 #include <cstdint>
 #include <optional>
 
@@ -83,9 +84,12 @@ void OMPTransform::identifyEDTs(Function &Fn) {
         CurrentI = handleTaskRegion(*CB);
       } break;
       case OMPType::TASKWAIT: {
-        assert(false && "Taskwait not implemented yet");
+        LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
+        LLVM_DEBUG(dbgs() << TAG << "Taskwait Found:\n" << *CB << "\n");
+        CurrentI = handleTaskWait(*CB);
       } break;
       case OMPType::SINGLE: {
+        LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
         LLVM_DEBUG(dbgs() << TAG << "Single Region Found:\n" << *CB << "\n");
         CurrentI = handleSingleRegion(*CB);
       } break;
@@ -128,7 +132,6 @@ Function *OMPTransform::handleMain(Function &MainFn) {
   /// Insert metadata
   EDTIRBuilder IRB(EDTType::Main, MainEDTFn);
   MainEDT::setMetadata(IRB);
-  // LLVM_DEBUG(dbgs() << M);
   return MainEDTFn;
 }
 
@@ -168,13 +171,6 @@ Instruction *OMPTransform::handleParallelRegion(CallBase &CB) {
 
 Instruction *OMPTransform::handleSyncDoneRegion(CallBase &CB) {
   Instruction *SplitInst = CB.getNextNonDebugInstruction();
-  /// If it is a CallBase, check if its a call to a RT function
-  if (CallBase *SCB = dyn_cast<CallBase>(SplitInst)) {
-    if (isRTFunction(*SCB))
-      return SplitInst;
-    /// TODO: What about other CallBase?
-  }
-
   /// Split block at Call to EDT
   Function &ParentFn = *CB.getFunction();
   LoopInfo *LI = nullptr;
@@ -183,15 +179,18 @@ Instruction *OMPTransform::handleSyncDoneRegion(CallBase &CB) {
 
   /// Create DoneEDT
   BlockSequence Region;
-  getDominatedBBs(DoneBB, *DT, Region);
+  getDominatedBBsFrom(DoneBB, *DT, Region);
   CodeExtractor CE(Region);
   CodeExtractorAnalysisCache CEAC(ParentFn);
   SetVector<Value *> Inputs, Outputs;
   Function *DoneEDTFn = CE.extractCodeRegion(CEAC, Inputs, Outputs);
+  assert(DoneEDTFn && "DoneEDTFn is nullptr");
   DoneEDTFn->setName("carts.edt");
-  CallBase *DoneCB = dyn_cast<CallBase>(DoneEDTFn->user_back());
+  LLVM_DEBUG(dbgs() << TAG << "New Function: " << *DoneEDTFn << "\n");
+
   /// Set Metadata
   EDTIRBuilder IRB(EDTType::Task, DoneEDTFn);
+  CallBase *DoneCB = dyn_cast<CallBase>(DoneEDTFn->user_back());
   for (auto &Arg : DoneCB->args()) {
     if (dyn_cast<PointerType>(Arg->getType()))
       IRB.insertDep(Arg.get());
@@ -348,6 +347,39 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
   return NewCB;
 }
 
+Instruction *OMPTransform::handleTaskWait(CallBase &CB) {
+  Instruction *CallToDoneEDT = handleSyncDoneRegion(CB);
+  Function *DoneFn = CallToDoneEDT->getFunction();
+  removeValue(&CB);
+
+  /// Create EDTSync
+  BlockSequence Region;
+  DominatorTree *DT = AG.getAnalysis<DominatorTreeAnalysis>(*DoneFn);
+  getDominatedBBsTo(CallToDoneEDT->getParent(), *DT, Region);
+
+  CodeExtractor CE(Region);
+  SetVector<Value *> Inputs, Outputs;
+  CodeExtractorAnalysisCache CEAC(*DoneFn);
+  Function *SyncEDTFn = CE.extractCodeRegion(CEAC, Inputs, Outputs);
+  assert(SyncEDTFn && "SyncEDTFn is nullptr");
+  LLVM_DEBUG(dbgs() << TAG << "SyncEDTFn: " << *SyncEDTFn << "\n");
+  SyncEDTFn->setName("carts.edt");
+  CallBase *SyncCB = dyn_cast<CallBase>(SyncEDTFn->user_back());
+  LLVM_DEBUG(dbgs() << TAG << "SyncCB: " << *SyncCB << "\n");
+  /// Set Metadata to sync EDTs that sync only childs
+  EDTIRBuilder IRB(EDTType::Sync, SyncEDTFn);
+  for (auto &Arg : SyncCB->args()) {
+    if (dyn_cast<PointerType>(Arg->getType()))
+      IRB.insertDep(Arg.get());
+    else
+      IRB.insertParam(Arg.get());
+  }
+  SetVector<EDT *> EDTInputs, EDTOutputs;
+  SyncEDT::setMetadata(IRB, EDTInputs, EDTOutputs, /*SyncChilds=*/true,
+                       /*SyncDescendants=*/false);
+  return SyncCB;
+}
+
 Instruction *OMPTransform::handleSingleRegion(CallBase &CB) {
   /// Check if it safely to convert the parallel EDT to a single EDT
   Function &ParentFn = *CB.getFunction();
@@ -382,14 +414,20 @@ Instruction *OMPTransform::handleSingleRegion(CallBase &CB) {
 
   /// TrueBB is now the entry block
   TrueBB->setName("entry");
-  replaceTerminatorsWithVoidReturn(&ParentFn);
-  return CurI;
 
-  // CodeExtractor CE(Region);
-  // CodeExtractorAnalysisCache CEAC(ParentFn);
-  // SetVector<Value *> Inputs, Outputs;
-  // Function *SingleEDTFn = CE.extractCodeRegion(CEAC, Inputs, Outputs);
-  // CallBase *SingleEDTCall = dyn_cast<CallBase>(SingleEDTFn->user_back());
+  /// Convert Parallel EDT to Single EDT
+  EDTIRBuilder IRB(EDTType::Sync, &ParentFn);
+  CallBase *ParentCall = dyn_cast<CallBase>(ParentFn.user_back());
+  for (auto &Arg : ParentCall->args()) {
+    if (dyn_cast<PointerType>(Arg->getType()))
+      IRB.insertDep(Arg.get());
+    else
+      IRB.insertParam(Arg.get());
+  }
+  SetVector<EDT *> EDTInputs, EDTOutputs;
+  SyncEDT::setMetadata(IRB, EDTInputs, EDTOutputs, /*SyncChilds=*/true,
+                       /*SyncDescendants=*/true);
+  return CurI;
 }
 
 /// ------------------------------------------------------------------- ///

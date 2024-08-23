@@ -38,12 +38,12 @@ void EDT::setMetadata(EDTIRBuilder &Builder) {
   EDTMDs.push_back(MDString::get(Ctx, EDTTyStr));
   EDTMDs.push_back(ArgNode);
   /// Set specific metadata for the function
-  /// TODO: If it is parallel, add the number of threads...
+  if (Fn->hasMetadata(CARTS_MD))
+    Fn->setMetadata(CARTS_MD, nullptr);
   Fn->setMetadata(CARTS_MD, MDNode::get(Ctx, EDTMDs));
 }
 
-void TaskEDT::setMetadata(EDTIRBuilder &Builder,
-                          int32_t ThreadNum) {
+void TaskEDT::setMetadata(EDTIRBuilder &Builder, int32_t ThreadNum) {
   EDT::setMetadata(Builder);
   /// TODO: Add the number of threads...
 }
@@ -52,16 +52,15 @@ void MainEDT::setMetadata(EDTIRBuilder &Builder) {
   TaskEDT::setMetadata(Builder);
 }
 
-void SyncEDT::setMetadata(EDTIRBuilder &Builder,
-                          SetVector<EDT *> &Inputs, SetVector<EDT *> &Outputs,
-                          bool SyncChilds, bool SyncDescendants,
-                          int32_t ThreadNum) {
+void SyncEDT::setMetadata(EDTIRBuilder &Builder, SetVector<EDT *> &Inputs,
+                          SetVector<EDT *> &Outputs, bool SyncChilds,
+                          bool SyncDescendants, int32_t ThreadNum) {
   TaskEDT::setMetadata(Builder, ThreadNum);
   /// TODO: Add the inputs and outputs, and the sync flags...
 }
 
-void ParallelEDT::setMetadata(EDTIRBuilder &Builder,
-                              int32_t ThreadNum, uint32_t NumThreads) {
+void ParallelEDT::setMetadata(EDTIRBuilder &Builder, int32_t ThreadNum,
+                              uint32_t NumThreads) {
   SetVector<EDT *> Inputs, Outputs;
   EDT::setMetadata(Builder);
   /// TODO: Add the number of threads...

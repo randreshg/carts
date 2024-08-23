@@ -14,8 +14,8 @@ all: simple_opt
 # Run OMP transform pass
 simple_arts_ir.bc: simple.bc
 	opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/OMPTransform.so \
-		-debug-only=omp-transform,arts,carts,arts-ir-builder,arts-utils\
-		-passes="omp-transform" $< -o $@
+		-debug-only=omp-transform,arts,carts,arts-ir-builder\
+		-passes="omp-transform" -O3 $< -o $@
 	# -debug-only=omp-transform,arts,carts,arts-ir-builder,arts-utils\
 	llvm-dis $@
 
