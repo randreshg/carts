@@ -23,8 +23,10 @@ namespace utils {
 using namespace llvm;
 /// It finds the BBs that are dominated by FromBB and add
 /// them to the DominatedBlocks vector.
-void getDominatedBBs(BasicBlock *FromBB, DominatorTree &DT,
-                     BlockSequence &DominatedBlocks);
+void getDominatedBBsFrom(BasicBlock *FromBB, DominatorTree &DT,
+                         BlockSequence &DominatedBlocks);
+void getDominatedBBsTo(BasicBlock *ToBB, DominatorTree &DT,
+                       BlockSequence &DominatedBlocks);
 
 /// Rewire the values in the RewiringMap.
 ///   - Key: Old Value

@@ -1,13 +1,15 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/MemorySSA.h"
+#include "llvm/Analysis/PostDominators.h"
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Use.h"
 
-#include "llvm/Support/Compiler.h"
+// #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
@@ -36,12 +38,21 @@ SetVector<Value *> ValuesToRemove;
 /// ------------------------------------------------------------------- ///
 /// --------------------------- ARTS UTILS ---------------------------- ///
 /// ------------------------------------------------------------------- ///
-void getDominatedBBs(BasicBlock *FromBB, DominatorTree &DT,
-                     BlockSequence &DominatedBlocks) {
+void getDominatedBBsFrom(BasicBlock *FromBB, DominatorTree &DT,
+                         BlockSequence &DominatedBlocks) {
   Function &Fn = *FromBB->getParent();
-  for (auto &ToBB : Fn) {
+  for (BasicBlock &ToBB : Fn) {
     if (DT.dominates(FromBB, &ToBB))
       DominatedBlocks.push_back(&ToBB);
+  }
+}
+
+void getDominatedBBsTo(BasicBlock *ToBB, DominatorTree &DT,
+                       BlockSequence &DominatedBlocks) {
+  Function &Fn = *ToBB->getParent();
+  for (BasicBlock &FromBB : Fn) {
+    if (DT.dominates(&FromBB, ToBB))
+      DominatedBlocks.push_back(&FromBB);
   }
 }
 

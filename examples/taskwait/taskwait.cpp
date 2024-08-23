@@ -25,17 +25,26 @@ int main() {
 
       /// EDT 3
       /// 0: shared_number 
-      #pragma omp task firstprivate(random_number)
+      #pragma omp task firstprivate(random_number) shared(shared_number)
       {
         shared_number++;
         random_number++;
         printf("EDT 3: The number is %d/%d\n", shared_number, random_number);
       }
+
+      #pragma omp taskwait
+
+      /// EDT 4
+      /// 0: random_number
+      #pragma omp task firstprivate(shared_number) shared(random_number)
+      {
+        shared_number++;
+        printf("EDT 4: The number is %d/%d\n", shared_number, random_number);
+      }
     }
   } 
 
   /// EDT 2
-  shared_number++;
   printf("EDT 2: The final number is %d - %d.\n", shared_number, random_number);
   return 0;
 }
