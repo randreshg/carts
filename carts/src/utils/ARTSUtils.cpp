@@ -42,6 +42,8 @@ void getDominatedBBsFrom(BasicBlock *FromBB, DominatorTree &DT,
                          BlockSequence &DominatedBlocks) {
   Function &Fn = *FromBB->getParent();
   for (BasicBlock &ToBB : Fn) {
+    if (&ToBB == FromBB)
+      continue;
     if (DT.dominates(FromBB, &ToBB))
       DominatedBlocks.push_back(&ToBB);
   }
@@ -51,6 +53,8 @@ void getDominatedBBsTo(BasicBlock *ToBB, DominatorTree &DT,
                        BlockSequence &DominatedBlocks) {
   Function &Fn = *ToBB->getParent();
   for (BasicBlock &FromBB : Fn) {
+    if (&FromBB == ToBB)
+      continue;
     if (DT.dominates(&FromBB, ToBB))
       DominatedBlocks.push_back(&FromBB);
   }
