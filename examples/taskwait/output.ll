@@ -97,6 +97,30 @@ entry:
 - - - - - - - - - - - - - - - -
 [omp-transform] Taskwait Found:
   %5 = tail call i32 @__kmpc_omp_taskwait(ptr nonnull @1, i32 undef)
+[omp-transform] Processing Taskwait
+[omp-transform] Function before: ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+define internal void @carts.edt.1(ptr %0, ptr %1) #2 !carts !6 {
+entry:
+  %2 = load i32, ptr %0, align 4, !tbaa !8
+  %3 = load i32, ptr %1, align 4, !tbaa !8
+  %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %2, i32 noundef %3)
+  %4 = load i32, ptr %1, align 4, !tbaa !8
+  call void @carts.edt.2(ptr %0, i32 %4) #8
+  %5 = tail call i32 @__kmpc_omp_taskwait(ptr nonnull @1, i32 undef)
+  %6 = tail call ptr @__kmpc_omp_task_alloc(ptr nonnull @1, i32 undef, i32 1, i64 48, i64 8, ptr nonnull @.omp_task_entry..6)
+  %7 = load ptr, ptr %6, align 8, !tbaa !12
+  store ptr %1, ptr %7, align 8, !tbaa.struct !17
+  %8 = getelementptr inbounds %struct.kmp_task_t_with_privates.1, ptr %6, i64 0, i32 1
+  %9 = load i32, ptr %0, align 4, !tbaa !8
+  store i32 %9, ptr %8, align 8, !tbaa !19
+  %10 = tail call i32 @__kmpc_omp_task(ptr nonnull @1, i32 undef, ptr nonnull %6)
+  tail call void @__kmpc_end_single(ptr nonnull @1, i32 undef)
+  br label %exit
+
+exit:                                             ; preds = %entry
+  ret void
+}
+
 [omp-transform] New Function: ; Function Attrs: nocallback nofree nounwind
 define internal void @carts.edt.3(ptr %0, ptr %1) #8 {
 newFuncRoot:
@@ -154,31 +178,61 @@ entry:
   tail call void @__kmpc_end_single(ptr nonnull @1, i32 undef)
 [omp-transform] Processing function: carts.edt.3 - Finished
 - - - - - - - - - - - - - - - - - - - - - - - -
-[omp-transform] SyncEDTFn: ; Function Attrs: nocallback nofree nounwind
-define internal void @carts.edt.1.entry.split(ptr %0, ptr %1) #7 {
-newFuncRoot:
-  br label %entry.split
+[omp-transform] Function after: ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+define internal void @carts.edt.1(ptr %0, ptr %1) #2 !carts !6 {
+entry:
+  %2 = load i32, ptr %0, align 4, !tbaa !8
+  %3 = load i32, ptr %1, align 4, !tbaa !8
+  %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %2, i32 noundef %3)
+  %4 = load i32, ptr %1, align 4, !tbaa !8
+  call void @carts.edt.2(ptr %0, i32 %4) #8
+  br label %codeRepl
 
-codeRepl:                                         ; preds = %entry.split
-  call void @carts.edt.3(ptr %0, ptr %1)
+codeRepl:                                         ; preds = %entry
+  call void @carts.edt.3(ptr %1, ptr %0)
   br label %exit.ret
 
 exit.ret:                                         ; preds = %codeRepl
-  br label %exit.ret.ret.exitStub
-
-entry.split:                                      ; preds = %newFuncRoot
-  %2 = load i32, ptr %1, align 4, !tbaa !25
-  %3 = load i32, ptr %0, align 4, !tbaa !25
-  %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %2, i32 noundef %3)
-  %4 = load i32, ptr %0, align 4, !tbaa !25
-  call void @carts.edt.2(ptr %1, i32 %4) #8
-  br label %codeRepl
-
-exit.ret.ret.exitStub:                            ; preds = %exit.ret
   ret void
 }
 
-[omp-transform] SyncCB:   call void @carts.edt.5(ptr %1, ptr %0)
+[omp-transform] Region: 1
+[omp-transform] BB: entry
+[omp-transform] SyncEDTFn: ; Function Attrs: nocallback nofree nounwind
+define internal void @carts.edt.5(ptr %0, ptr %1) #7 {
+newFuncRoot:
+  br label %entry.split
+
+entry.split:                                      ; preds = %newFuncRoot
+  %2 = load i32, ptr %0, align 4, !tbaa !25
+  %3 = load i32, ptr %1, align 4, !tbaa !25
+  %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %2, i32 noundef %3)
+  %4 = load i32, ptr %1, align 4, !tbaa !25
+  call void @carts.edt.2(ptr %0, i32 %4) #8
+  br label %codeRepl.exitStub
+
+codeRepl.exitStub:                                ; preds = %entry.split
+  ret void
+}
+
+[omp-transform] SyncCB:   call void @carts.edt.5(ptr %0, ptr %1)
+[omp-transform] SyncCBParent: ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+define internal void @carts.edt.1(ptr %0, ptr %1) #2 !carts !6 {
+entry:
+  br label %codeRepl1
+
+codeRepl1:                                        ; preds = %entry
+  call void @carts.edt.5(ptr %0, ptr %1)
+  br label %codeRepl
+
+codeRepl:                                         ; preds = %codeRepl1
+  call void @carts.edt.3(ptr %1, ptr %0)
+  br label %exit.ret
+
+exit.ret:                                         ; preds = %codeRepl
+  ret void
+}
+
 [omp-transform] Processing function: carts.edt.1 - Finished
 - - - - - - - - - - - - - - - - - - - - - - - -
 [omp-transform] New Function: define internal void @carts.edt.6(ptr %shared_number, ptr %random_number) {
@@ -255,10 +309,14 @@ entry:
   br label %codeRepl1
 
 codeRepl1:                                        ; preds = %entry
-  call void @carts.edt.5(ptr %1, ptr %0)
-  br label %exit.ret.ret
+  call void @carts.edt.5(ptr %0, ptr %1)
+  br label %codeRepl
 
-exit.ret.ret:                                     ; preds = %codeRepl1
+codeRepl:                                         ; preds = %codeRepl1
+  call void @carts.edt.3(ptr %1, ptr %0)
+  br label %exit.ret
+
+exit.ret:                                         ; preds = %codeRepl
   ret void
 }
 
@@ -372,22 +430,15 @@ define internal void @carts.edt.5(ptr %0, ptr %1) #7 !carts !6 {
 newFuncRoot:
   br label %entry.split
 
-codeRepl:                                         ; preds = %entry.split
-  call void @carts.edt.3(ptr %0, ptr %1)
-  br label %exit.ret
-
-exit.ret:                                         ; preds = %codeRepl
-  br label %exit.ret.ret.exitStub
-
 entry.split:                                      ; preds = %newFuncRoot
-  %2 = load i32, ptr %1, align 4, !tbaa !25
-  %3 = load i32, ptr %0, align 4, !tbaa !25
+  %2 = load i32, ptr %0, align 4, !tbaa !25
+  %3 = load i32, ptr %1, align 4, !tbaa !25
   %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %2, i32 noundef %3)
-  %4 = load i32, ptr %0, align 4, !tbaa !25
-  call void @carts.edt.2(ptr %1, i32 %4) #8
-  br label %codeRepl
+  %4 = load i32, ptr %1, align 4, !tbaa !25
+  call void @carts.edt.2(ptr %0, i32 %4) #8
+  br label %codeRepl.exitStub
 
-exit.ret.ret.exitStub:                            ; preds = %exit.ret
+codeRepl.exitStub:                                ; preds = %entry.split
   ret void
 }
 
@@ -508,10 +559,14 @@ entry:
   br label %codeRepl1
 
 codeRepl1:                                        ; preds = %entry
-  call void @carts.edt.5(ptr nocapture readonly %1, ptr nocapture %0) #6
-  br label %exit.ret.ret
+  call void @carts.edt.5(ptr nocapture %0, ptr nocapture readonly %1) #6
+  br label %codeRepl
 
-exit.ret.ret:                                     ; preds = %codeRepl1
+codeRepl:                                         ; preds = %codeRepl1
+  call void @carts.edt.3(ptr nocapture readonly %1, ptr nocapture %0)
+  br label %exit.ret
+
+exit.ret:                                         ; preds = %codeRepl
   ret void
 }
 
@@ -612,26 +667,19 @@ exit.ret.exitStub:                                ; preds = %exit
 }
 
 ; Function Attrs: nocallback nofree norecurse nounwind
-define internal void @carts.edt.5(ptr nocapture readonly %0, ptr nocapture %1) #10 !carts !6 {
+define internal void @carts.edt.5(ptr nocapture %0, ptr nocapture readonly %1) #10 !carts !6 {
 newFuncRoot:
   br label %entry.split
 
-codeRepl:                                         ; preds = %entry.split
-  call void @carts.edt.3(ptr nocapture readonly %0, ptr nocapture %1) #6
-  br label %exit.ret
-
-exit.ret:                                         ; preds = %codeRepl
-  br label %exit.ret.ret.exitStub
-
 entry.split:                                      ; preds = %newFuncRoot
-  %2 = load i32, ptr %1, align 4, !tbaa !13
-  %3 = load i32, ptr %0, align 4, !tbaa !13
+  %2 = load i32, ptr %0, align 4, !tbaa !13
+  %3 = load i32, ptr %1, align 4, !tbaa !13
   %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %2, i32 noundef %3) #6
-  %4 = load i32, ptr %0, align 4, !tbaa !13
-  call void @carts.edt.2(ptr nocapture %1, i32 %4) #12
-  br label %codeRepl
+  %4 = load i32, ptr %1, align 4, !tbaa !13
+  call void @carts.edt.2(ptr nocapture %0, i32 %4) #12
+  br label %codeRepl.exitStub
 
-exit.ret.ret.exitStub:                            ; preds = %exit.ret
+codeRepl.exitStub:                                ; preds = %entry.split
   ret void
 }
 
@@ -764,28 +812,63 @@ taskwait_arts_ir.bc
 [AAEDTInfoFunction::initialize] EDT #6 for function "carts.edt.3"
 
 [AAEDTInfoFunction::initialize] EDT #4 for function "carts.edt.5"
-opt: /home/rherreraguaitero/ME/ARTS-env/CARTS/carts/src/analysis/ARTSAnalysisPass.cpp:582: auto AAEDTInfoFunction::initialize(Attributor &)::(anonymous class)::operator()(AbstractCallSite) const: Assertion `CB && "Next instruction is not a CallBase!"' failed.
+   - DoneEDT: EDT #6
+
+[AAEDTInfoFunction::initialize] EDT #2 for function "carts.edt.6"
+
+[AAEDTInfoFunction::updateImpl] EDT #0
+   - EDT #4 is a child of EDT #0
+        - Inserting CreationEdge from "EDT #0" to "EDT #4"
+   - EDT #6 is a child of EDT #0
+        - Inserting CreationEdge from "EDT #0" to "EDT #6"
+
+[AAEDTInfoFunction::updateImpl] EDT #3
+   - All ReachedEDTs are fixed for EDT #3
+   - Getting ParentSyncEDT
+     - ParentSyncEDT: EDT #4
+
+[AAEDTInfoCallsite::initialize] EDT #3
+
+[AAEDTInfoCallsite::updateImpl] EDT #3
+
+[AAEDTInfoCallsiteArg::initialize] CallArg #0 from EDT #3
+        - Inserting DataBlockEdge from "EDT #4" to "EDT #3" in Slot #0
+
+[AAEDTInfoCallsiteArg::updateImpl] ptr %0 from EDT #3
+
+[AADataBlockInfoCtxAndVal::initialize] ptr %0 from EDT #3
+
+[AADataBlockInfoCtxAndVal::updateImpl] ptr %0 from EDT #3
+
+[AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #3
+opt: /home/rherreraguaitero/ME/ARTS-env/CARTS/carts/src/analysis/graph/ARTSGraph.cpp:253: bool arts::ARTSGraph::insertCreationEdgeParameter(EDT *, EDT *, EDTValue *): Assertion `Edge != nullptr && "The edge doesn't exist"' failed.
 PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/ and include the crash backtrace.
 Stack dump:
 0.	Program arguments: opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so -debug-only=arts-analysis,arts,carts,arts-ir-builder,arts-graph,carts-metadata,arts-codegen -passes=arts-analysis taskwait_arts_ir.bc -o taskwait_arts_analysis.bc
- #0 0x00007f1679f1bef8 llvm::sys::PrintStackTrace(llvm::raw_ostream&, int) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0x191ef8)
- #1 0x00007f1679f19b7e llvm::sys::RunSignalHandlers() (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0x18fb7e)
- #2 0x00007f1679f1c5ad SignalHandler(int) Signals.cpp:0:0
- #3 0x00007f167cc5d910 __restore_rt (/lib64/libpthread.so.0+0x16910)
- #4 0x00007f1679826d2b raise (/lib64/libc.so.6+0x4ad2b)
- #5 0x00007f16798283e5 abort (/lib64/libc.so.6+0x4c3e5)
- #6 0x00007f167981ec6a __assert_fail_base (/lib64/libc.so.6+0x42c6a)
- #7 0x00007f167981ecf2 (/lib64/libc.so.6+0x42cf2)
- #8 0x00007f1678487b41 (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0x16b41)
- #9 0x00007f1678487726 bool llvm::function_ref<bool (llvm::AbstractCallSite)>::callback_fn<AAEDTInfoFunction::initialize(llvm::Attributor&)::'lambda'(llvm::AbstractCallSite)>(long, llvm::AbstractCallSite) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0x16726)
-#10 0x00007f167c69592e llvm::Attributor::checkForAllCallSites(llvm::function_ref<bool (llvm::AbstractCallSite)>, llvm::Function const&, bool, llvm::AbstractAttribute const*, bool&, bool) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMipo.so.18.1+0x8e92e)
-#11 0x00007f167c6962dd llvm::Attributor::checkForAllCallSites(llvm::function_ref<bool (llvm::AbstractCallSite)>, llvm::AbstractAttribute const&, bool, bool&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMipo.so.18.1+0x8f2dd)
-#12 0x00007f1678486d07 AAEDTInfoFunction::initialize(llvm::Attributor&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0x15d07)
-#13 0x00007f16784862d2 AAEDTInfo const* llvm::Attributor::getOrCreateAAFor<AAEDTInfo>(llvm::IRPosition, llvm::AbstractAttribute const*, llvm::DepClassTy, bool, bool) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0x152d2)
-#14 0x00007f16784903ae llvm::detail::PassModel<llvm::Module, (anonymous namespace)::ARTSAnalysisPass, llvm::PreservedAnalyses, llvm::AnalysisManager<llvm::Module>>::run(llvm::Module&, llvm::AnalysisManager<llvm::Module>&) ARTSAnalysisPass.cpp:0:0
-#15 0x00007f167a30f2a6 llvm::PassManager<llvm::Module, llvm::AnalysisManager<llvm::Module>>::run(llvm::Module&, llvm::AnalysisManager<llvm::Module>&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMCore.so.18.1+0x2c02a6)
-#16 0x0000565098ae3293 llvm::runPassPipeline(llvm::StringRef, llvm::Module&, llvm::TargetMachine*, llvm::TargetLibraryInfoImpl*, llvm::ToolOutputFile*, llvm::ToolOutputFile*, llvm::ToolOutputFile*, llvm::StringRef, llvm::ArrayRef<llvm::PassPlugin>, llvm::opt_tool::OutputKind, llvm::opt_tool::VerifierKind, bool, bool, bool, bool, bool, bool, bool) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x19293)
-#17 0x0000565098af0aaa main (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x26aaa)
-#18 0x00007f167981124d __libc_start_main (/lib64/libc.so.6+0x3524d)
-#19 0x0000565098adca3a _start /home/abuild/rpmbuild/BUILD/glibc-2.31/csu/../sysdeps/x86_64/start.S:122:0
+ #0 0x00007ff25df53ef8 llvm::sys::PrintStackTrace(llvm::raw_ostream&, int) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0x191ef8)
+ #1 0x00007ff25df51b7e llvm::sys::RunSignalHandlers() (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMSupport.so.18.1+0x18fb7e)
+ #2 0x00007ff25df545ad SignalHandler(int) Signals.cpp:0:0
+ #3 0x00007ff260c95910 __restore_rt (/lib64/libpthread.so.0+0x16910)
+ #4 0x00007ff25d85ed2b raise (/lib64/libc.so.6+0x4ad2b)
+ #5 0x00007ff25d8603e5 abort (/lib64/libc.so.6+0x4c3e5)
+ #6 0x00007ff25d856c6a __assert_fail_base (/lib64/libc.so.6+0x42c6a)
+ #7 0x00007ff25d856cf2 (/lib64/libc.so.6+0x42cf2)
+ #8 0x00007ff25c4e49ec (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0x3b9ec)
+ #9 0x00007ff25c4b9078 AAEDTInfoCallsiteArg::initialize(llvm::Attributor&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0x10078)
+#10 0x00007ff25c4be2d2 AAEDTInfo const* llvm::Attributor::getOrCreateAAFor<AAEDTInfo>(llvm::IRPosition, llvm::AbstractAttribute const*, llvm::DepClassTy, bool, bool) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0x152d2)
+#11 0x00007ff25c4bdf34 AAEDTInfoCallsite::updateImpl(llvm::Attributor&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0x14f34)
+#12 0x00007ff2606c6342 llvm::AbstractAttribute::update(llvm::Attributor&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMipo.so.18.1+0x87342)
+#13 0x00007ff2606d1c31 llvm::Attributor::updateAA(llvm::AbstractAttribute&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMipo.so.18.1+0x92c31)
+#14 0x00007ff25c4be310 AAEDTInfo const* llvm::Attributor::getOrCreateAAFor<AAEDTInfo>(llvm::IRPosition, llvm::AbstractAttribute const*, llvm::DepClassTy, bool, bool) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0x15310)
+#15 0x00007ff25c4bf59f AAEDTInfoFunction::updateImpl(llvm::Attributor&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSAnalysis.so+0x1659f)
+#16 0x00007ff2606c6342 llvm::AbstractAttribute::update(llvm::Attributor&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMipo.so.18.1+0x87342)
+#17 0x00007ff2606d1c31 llvm::Attributor::updateAA(llvm::AbstractAttribute&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMipo.so.18.1+0x92c31)
+#18 0x00007ff2606d0e06 llvm::Attributor::runTillFixpoint() (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMipo.so.18.1+0x91e06)
+#19 0x00007ff2606d71dd llvm::Attributor::run() (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMipo.so.18.1+0x981dd)
+#20 0x00007ff25c4c83c4 llvm::detail::PassModel<llvm::Module, (anonymous namespace)::ARTSAnalysisPass, llvm::PreservedAnalyses, llvm::AnalysisManager<llvm::Module>>::run(llvm::Module&, llvm::AnalysisManager<llvm::Module>&) ARTSAnalysisPass.cpp:0:0
+#21 0x00007ff25e3472a6 llvm::PassManager<llvm::Module, llvm::AnalysisManager<llvm::Module>>::run(llvm::Module&, llvm::AnalysisManager<llvm::Module>&) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/lib/libLLVMCore.so.18.1+0x2c02a6)
+#22 0x00005564cf784293 llvm::runPassPipeline(llvm::StringRef, llvm::Module&, llvm::TargetMachine*, llvm::TargetLibraryInfoImpl*, llvm::ToolOutputFile*, llvm::ToolOutputFile*, llvm::ToolOutputFile*, llvm::StringRef, llvm::ArrayRef<llvm::PassPlugin>, llvm::opt_tool::OutputKind, llvm::opt_tool::VerifierKind, bool, bool, bool, bool, bool, bool, bool) (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x19293)
+#23 0x00005564cf791aaa main (/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/llvm/bin/opt+0x26aaa)
+#24 0x00007ff25d84924d __libc_start_main (/lib64/libc.so.6+0x3524d)
+#25 0x00005564cf77da3a _start /home/abuild/rpmbuild/BUILD/glibc-2.31/csu/../sysdeps/x86_64/start.S:122:0
 make: *** [Makefile:24: taskwait_arts_analysis.bc] Aborted

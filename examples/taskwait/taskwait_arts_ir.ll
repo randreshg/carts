@@ -42,10 +42,14 @@ entry:
   br label %codeRepl1
 
 codeRepl1:                                        ; preds = %entry
-  call void @carts.edt.5(ptr nocapture readonly %1, ptr nocapture %0) #6
-  br label %exit.ret.ret
+  call void @carts.edt.5(ptr nocapture %0, ptr nocapture readonly %1) #6
+  br label %codeRepl
 
-exit.ret.ret:                                     ; preds = %codeRepl1
+codeRepl:                                         ; preds = %codeRepl1
+  call void @carts.edt.3(ptr nocapture readonly %1, ptr nocapture %0)
+  br label %exit.ret
+
+exit.ret:                                         ; preds = %codeRepl
   ret void
 }
 
@@ -146,26 +150,19 @@ exit.ret.exitStub:                                ; preds = %exit
 }
 
 ; Function Attrs: nocallback nofree norecurse nounwind
-define internal void @carts.edt.5(ptr nocapture readonly %0, ptr nocapture %1) #10 !carts !6 {
+define internal void @carts.edt.5(ptr nocapture %0, ptr nocapture readonly %1) #10 !carts !6 {
 newFuncRoot:
   br label %entry.split
 
-codeRepl:                                         ; preds = %entry.split
-  call void @carts.edt.3(ptr nocapture readonly %0, ptr nocapture %1) #6
-  br label %exit.ret
-
-exit.ret:                                         ; preds = %codeRepl
-  br label %exit.ret.ret.exitStub
-
 entry.split:                                      ; preds = %newFuncRoot
-  %2 = load i32, ptr %1, align 4, !tbaa !13
-  %3 = load i32, ptr %0, align 4, !tbaa !13
+  %2 = load i32, ptr %0, align 4, !tbaa !13
+  %3 = load i32, ptr %1, align 4, !tbaa !13
   %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %2, i32 noundef %3) #6
-  %4 = load i32, ptr %0, align 4, !tbaa !13
-  call void @carts.edt.2(ptr nocapture %1, i32 %4) #12
-  br label %codeRepl
+  %4 = load i32, ptr %1, align 4, !tbaa !13
+  call void @carts.edt.2(ptr nocapture %0, i32 %4) #12
+  br label %codeRepl.exitStub
 
-exit.ret.ret.exitStub:                            ; preds = %exit.ret
+codeRepl.exitStub:                                ; preds = %entry.split
   ret void
 }
 

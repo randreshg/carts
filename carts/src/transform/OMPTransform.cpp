@@ -174,11 +174,12 @@ Instruction *OMPTransform::handleSyncDoneRegion(CallBase &CB) {
   /// Split block at Call to EDT
   Function &ParentFn = *CB.getFunction();
   LoopInfo *LI = nullptr;
-  DominatorTree *DT = AG.getAnalysis<DominatorTreeAnalysis>(*CB.getFunction());
+  /// Get Dominator Tree
+  DominatorTree *DT = AG.getAnalysis<DominatorTreeAnalysis>(ParentFn);
   BasicBlock *DoneBB = SplitBlock(CB.getParent(), SplitInst, DT, LI);
 
   /// Create DoneEDT
-  BlockSequence Region;
+  BlockSequence Region = {DoneBB};
   getDominatedBBsFrom(DoneBB, *DT, Region);
   CodeExtractor CE(Region);
   CodeExtractorAnalysisCache CEAC(ParentFn);
@@ -348,24 +349,34 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
 }
 
 Instruction *OMPTransform::handleTaskWait(CallBase &CB) {
+  LLVM_DEBUG(dbgs() << TAG << "Processing Taskwait\n");
+  LLVM_DEBUG(dbgs() << TAG << "Function before: " << *CB.getFunction() << "\n");
   Instruction *CallToDoneEDT = handleSyncDoneRegion(CB);
   Function *DoneFn = CallToDoneEDT->getFunction();
   removeValue(&CB);
 
+  LLVM_DEBUG(dbgs() << TAG << "Function after: " << *DoneFn << "\n");
   /// Create EDTSync
-  BlockSequence Region;
+  AG.invalidateAnalyses();
   DominatorTree *DT = AG.getAnalysis<DominatorTreeAnalysis>(*DoneFn);
+  BlockSequence Region;
   getDominatedBBsTo(CallToDoneEDT->getParent(), *DT, Region);
-
+  LLVM_DEBUG(dbgs() << TAG << "Region: " << Region.size() << "\n");
+  for(auto &BB : Region) {
+    LLVM_DEBUG(dbgs() << TAG << "BB: " << BB->getName() << "\n");
+  }
+  
   CodeExtractor CE(Region);
+  assert(CE.isEligible() && "Region is not eligible");
   SetVector<Value *> Inputs, Outputs;
   CodeExtractorAnalysisCache CEAC(*DoneFn);
   Function *SyncEDTFn = CE.extractCodeRegion(CEAC, Inputs, Outputs);
   assert(SyncEDTFn && "SyncEDTFn is nullptr");
-  LLVM_DEBUG(dbgs() << TAG << "SyncEDTFn: " << *SyncEDTFn << "\n");
   SyncEDTFn->setName("carts.edt");
+  LLVM_DEBUG(dbgs() << TAG << "SyncEDTFn: " << *SyncEDTFn << "\n");
   CallBase *SyncCB = dyn_cast<CallBase>(SyncEDTFn->user_back());
   LLVM_DEBUG(dbgs() << TAG << "SyncCB: " << *SyncCB << "\n");
+  LLVM_DEBUG(dbgs() << TAG << "SyncCBParent: " << *SyncCB->getFunction() << "\n");
   /// Set Metadata to sync EDTs that sync only childs
   EDTIRBuilder IRB(EDTType::Sync, SyncEDTFn);
   for (auto &Arg : SyncCB->args()) {
