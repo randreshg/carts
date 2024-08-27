@@ -1,7 +1,6 @@
 // Description: Main file for the Compiler for ARTS (OmpTransform) pass.
 #include <cassert>
 #include <cstdint>
-#include <optional>
 
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Analysis/ValueTracking.h"

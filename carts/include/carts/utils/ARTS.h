@@ -62,8 +62,6 @@ public:
   DataBlockSet &getChildDBs();
   string getName();
 
-  // uint32_t getToSlot();
-
   /// Setters
   void setParent(DataBlock *Parent);
   void setSlot(uint32_t Slot);

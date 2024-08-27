@@ -94,12 +94,16 @@ string DataBlock::getName() {
     string ValueName = V->getName().str();
     if (!ValueName.empty())
       Name = "db." + ValueName;
+    else if(Parent)
+      Name = Parent->getName();
     else
-      Name = getParent()->getName();
+      Name = "db." + std::to_string(Slot);
     return Name;
   }
   return Name;
+  // return "db." + std::to_string(Slot);
 }
+
 /// Insert
 bool DataBlock::addChildDB(DataBlock *ChildDB) {
   return ChildDBs.insert(ChildDB);
