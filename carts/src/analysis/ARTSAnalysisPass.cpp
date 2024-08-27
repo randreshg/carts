@@ -575,7 +575,8 @@ struct AAEDTInfoFunction : AAEDTInfo {
 
       /// If it is a SyncEDT, it must have a SiblingDoneEDT
       /// It must be the first instruction of the next BB.
-      BranchInst *BI = dyn_cast<BranchInst>(EDTCall->getParent()->getTerminator());
+      BranchInst *BI =
+          dyn_cast<BranchInst>(EDTCall->getParent()->getTerminator());
       assert((BI && BI->getNumSuccessors() == 1) &&
              "EDTCall is not a BranchInst with a single successor!");
       CallBase *CB = dyn_cast<CallBase>(&BI->getSuccessor(0)->front());
@@ -628,9 +629,12 @@ struct AAEDTInfoFunction : AAEDTInfo {
       insertChildEDT(CalledEDT);
 
       /// Run AAEDTInfo on the ChildEDT
-      auto *ChildEDTAA = A.getAAFor<AAEDTInfo>(
-          *this, IRPosition::function(*CalledEDT->getFn()),
-          DepClassTy::OPTIONAL);
+      auto *ChildEDTAA = A.getOrCreateAAFor<AAEDTInfo>(
+          IRPosition::function(*CalledEDT->getFn()), this, DepClassTy::OPTIONAL,
+          false, false);
+      // auto *ChildEDTAA = A.getAAFor<AAEDTInfo>(
+      //     *this, IRPosition::function(*CalledEDT->getFn()),
+      //     DepClassTy::OPTIONAL);
       assert(ChildEDTAA && "ChildEDTAA is null!");
       /// Clamp set of DescendantEDTs of the ChildEDT
       DescendantEDTs ^= ChildEDTAA->DescendantEDTs;
@@ -720,7 +724,7 @@ struct AAEDTInfoFunction : AAEDTInfo {
     /// Run AAEDTInfo on the EDTCall
     // auto *EDTCallAA =
     A.getOrCreateAAFor<AAEDTInfo>(IRPosition::callsite_function(*EDTCall), this,
-                                  DepClassTy::OPTIONAL);
+                                  DepClassTy::OPTIONAL, false, false);
     // getState() *= EDTCallAA->getState();
     /// Continue if MaySignalEDTs is at a fixpoint
 
@@ -737,10 +741,7 @@ struct AAEDTInfoFunction : AAEDTInfo {
     /// Debug output info
     LLVM_DEBUG(dbgs() << "-------------------------------\n"
                       << "[AAEDTInfoFunction::manifest] " << getAsStr(&A)
-                      << "\n\n");
-    if (!ContextEDT)
-      return ChangeStatus::UNCHANGED;
-    LLVM_DEBUG(dbgs() << *ContextEDT);
+                      << "\n");
     return ChangeStatus::UNCHANGED;
   }
 };

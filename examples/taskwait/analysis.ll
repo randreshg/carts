@@ -1,9 +1,4 @@
-
-define dso_local noundef i32 @main() local_unnamed_addr #0 {
-entry:
-  call void @carts.edt()
-  ret i32 0
-}
+; IR OUTPUT
 
 define internal void @carts.edt() #8 !carts !22 {
 entry:
