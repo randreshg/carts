@@ -59,11 +59,14 @@ public:
   EDT *getContextEDT();
   uint32_t getSlot();
   DataBlock *getParent();
+  DataBlock *getParentSync();
+  DataBlock *getMainParent();
   DataBlockSet &getChildDBs();
   string getName();
 
   /// Setters
   void setParent(DataBlock *Parent);
+  void setParentSync(DataBlock *ParentSync);
   void setSlot(uint32_t Slot);
 
   /// Helpers
@@ -76,6 +79,8 @@ private:
   EDT *ContextEDT = nullptr;
   uint32_t Slot;
   DataBlock *Parent = nullptr;
+  DataBlock *ParentSync = nullptr;
+  DataBlock *MainParent = nullptr;
   DataBlock *Done = nullptr;
   DataBlockSet ChildDBs;
   string Name;

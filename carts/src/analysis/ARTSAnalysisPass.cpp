@@ -479,12 +479,18 @@ struct AADataBlockInfo
       DBStr += "     - ParentCtx: EDT #" +
                std::to_string(DB->getParent()->getContextEDT()->getID()) +
                " / Slot " + std::to_string(DB->getParent()->getSlot()) + "\n";
+    /// ParentSync
+    if (DB->getParentSync())
+      DBStr += "     - ParentSync: EDT #" +
+               std::to_string(DB->getParentSync()->getContextEDT()->getID()) +
+               " / Slot " + std::to_string(DB->getParentSync()->getSlot()) +
+               "\n";
     /// ChildDBs
     auto &ChildDBs = DB->getChildDBs();
     if (!ChildDBs.empty()) {
       DBStr += "     - ChildDBss: " + std::to_string(ChildDBs.size()) + "\n";
       for (auto *ChildDB : ChildDBs) {
-        DBStr += "      - ChildDB: EDT #" +
+        DBStr += "      - EDT #" +
                  std::to_string(ChildDB->getContextEDT()->getID()) +
                  " / Slot " + std::to_string(ChildDB->getSlot()) + "\n";
       }
@@ -632,9 +638,6 @@ struct AAEDTInfoFunction : AAEDTInfo {
       auto *ChildEDTAA = A.getOrCreateAAFor<AAEDTInfo>(
           IRPosition::function(*CalledEDT->getFn()), this, DepClassTy::OPTIONAL,
           false, false);
-      // auto *ChildEDTAA = A.getAAFor<AAEDTInfo>(
-      //     *this, IRPosition::function(*CalledEDT->getFn()),
-      //     DepClassTy::OPTIONAL);
       assert(ChildEDTAA && "ChildEDTAA is null!");
       /// Clamp set of DescendantEDTs of the ChildEDT
       DescendantEDTs ^= ChildEDTAA->DescendantEDTs;
@@ -772,9 +775,9 @@ struct AAEDTInfoCallsite : AAEDTInfo {
     bool AllDBsWereFixed = true;
     const unsigned EDTCallArgSize = EDTCall.data_operands_size();
     for (uint32_t CallArgItr = 0; CallArgItr < EDTCallArgSize; ++CallArgItr) {
-      auto *ArgDataBlockAA = A.getAAFor<AAEDTInfo>(
-          *this, IRPosition::callsite_argument(EDTCall, CallArgItr),
-          DepClassTy::OPTIONAL);
+      auto *ArgDataBlockAA = A.getOrCreateAAFor<AAEDTInfo>(
+          IRPosition::callsite_argument(EDTCall, CallArgItr), this,
+          DepClassTy::OPTIONAL, false, false);
       if (!ArgDataBlockAA->isAtFixpoint()) {
         AllDBsWereFixed = false;
         continue;
@@ -839,12 +842,15 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
       /// Each dependency has associated a DepSlot
       uint32_t InputSlot = ContextEDT->insertDepSlot(CallArgItr);
       DB->setSlot(InputSlot);
+      LLVM_DEBUG(dbgs() << "   - Creating DepSlot #" << InputSlot
+                        << " for value: " << *ArgVal << "\n");
       /// and it has to be sent from the parent EDT to the called EDT unless it
       /// is a DoneEDT (because all its input dependencies of a Done EDT must be
       /// sent by the sibling SyncEDT)
-      if (!ContextEDT->isDoneEDT())
+      if (!ContextEDT->isDoneEDT()) {
         insertDataBlockGraphEdge(ContextEDT->getParent(), ContextEDT, InputSlot,
                                  DB);
+      }
     }
   }
 
@@ -856,9 +862,10 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
                       << CalledEDT->getID() << "\n");
     /// Run AADataBlockInfo on the associated value
     CallBase &EDTCall = cast<CallBase>(getAnchorValue());
-    auto *ArgValDBInfoAA = A.getAAFor<AADataBlockInfo>(
-        *this, IRPosition::callsite_argument(EDTCall, getCallSiteArgNo()),
-        DepClassTy::OPTIONAL);
+
+    auto *ArgValDBInfoAA = A.getOrCreateAAFor<AADataBlockInfo>(
+        IRPosition::callsite_argument(EDTCall, getCallSiteArgNo()), this,
+        DepClassTy::OPTIONAL, false, false);
     if (!ArgValDBInfoAA || !ArgValDBInfoAA->getState().isValidState()) {
       LLVM_DEBUG(dbgs() << "     - Failed to get AADataBlockInfo for value: "
                         << *ArgVal << "\n");
@@ -883,9 +890,6 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     DataBlock *DB = ArgValDBInfoAA->getDataBlock();
     /// If the parent signals the value, add the DBEdge
     if (ArgValDBInfoAA->MustSignal) {
-      LLVM_DEBUG(dbgs() << "     - EDT #" << CalledEDT->getID()
-                        << " signals to EDT #" << SignalEDT->getID() << "\n");
-
       insertDataBlockGraphEdge(CalledEDT, SignalEDT, SignalDB->getSlot(), DB);
       return indicateOptimisticFixpoint();
     }
@@ -893,7 +897,7 @@ struct AAEDTInfoCallsiteArg : AAEDTInfo {
     /// Otherwise, check if the value is signaled by a child/descendent EDT
     for (DataBlock *SignaledDB : ArgValDBInfoAA->SignaledDBsToEDTDone) {
       insertDataBlockGraphEdge(SignaledDB->getContextEDT(), SignalEDT,
-                               SignaledDB->getSlot(), SignaledDB);
+                               SignalDB->getSlot(), SignaledDB);
     }
 
     return indicateOptimisticFixpoint();
@@ -1027,8 +1031,8 @@ struct AADataBlockInfoCtxAndVal : AADataBlockInfo {
     for (AA::ValueAndContext ChildVAC : DependentChildValAndCtx) {
       const CallBase &ChildCall = *cast<CallBase>(ChildVAC.getCtxI());
       auto ChildCallArg = Cache->getArgNo(ChildVAC);
-      auto *ChildEDTAA = A.getAAFor<AADataBlockInfo>(
-          *this, IRPosition::callsite_argument(ChildCall, ChildCallArg),
+      auto *ChildEDTAA = A.lookupAAFor<AADataBlockInfo>(
+          IRPosition::callsite_argument(ChildCall, ChildCallArg), this,
           DepClassTy::OPTIONAL);
       assert(ChildEDTAA && "ChildEDTAA is null!");
 
@@ -1048,7 +1052,6 @@ struct AADataBlockInfoCtxAndVal : AADataBlockInfo {
         SignaledDBsToEDTDone.insert(ChildDB);
         MustSignal = false;
       }
-
       /// If the value is signaled by any of the descendants, analyze it
       else if (!ChildEDTAA->SignaledDBs.empty()) {
         SignaledDBs ^= ChildEDTAA->SignaledDBs;
@@ -1075,8 +1078,9 @@ struct AADataBlockInfoCtxAndVal : AADataBlockInfo {
     /// the value to the DoneEDT
     if (ContextEDT->isSync()) {
       for (DataBlock *SignaledDB : SignaledDBsToEDTDone) {
-        assert(!SignaledDB->getParent() && "SignaledDB was set before!");
-        SignaledDB->setParent(DB);
+        assert(!SignaledDB->getParentSync() &&
+               "ParentSync of SignaledDB was set before!");
+        SignaledDB->setParentSync(DB);
       }
     }
 
