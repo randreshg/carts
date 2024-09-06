@@ -13,7 +13,7 @@ int main() {
   srand(time(NULL));
   int shared_number = rand() % 100 + 1;
   int random_number = rand() % 10 + 1;
-  printf("EDT 1: The initial number is %d/%d\n", shared_number, random_number);
+  printf("** EDT 1: The initial number is %d/%d\n", shared_number, random_number);
 
   /// EDT 0 - carts.edt.1
   /// 0: shared_number, 1: random_number
@@ -24,7 +24,7 @@ int main() {
       /// EDT 4 (Taskwait) - carts.edt.5
       /// 0: shared_number, 1: random_number
       // {
-        printf("EDT 0: The number is %d/%d\n", shared_number, random_number);
+        printf("** EDT 0: The number is %d/%d\n", shared_number, random_number);
 
         /// EDT 3 - carts.edt.2
         /// 0: shared_number 
@@ -32,7 +32,7 @@ int main() {
         {
           shared_number++;
           random_number++;
-          printf("EDT 3: The number is %d/%d\n", shared_number, random_number);
+          printf("** EDT 3: The number is %d/%d\n", shared_number, random_number);
         }
       // }
       
@@ -40,13 +40,14 @@ int main() {
       #pragma omp taskwait
 
       /// EDT 6 (Taskwait Done) - carts.edt.3
+      /// 0: shared_number, 1: random_number
       // {
         /// EDT 5 - carts.edt.4
         /// 0: random_number
         #pragma omp task firstprivate(shared_number) shared(random_number)
         {
           shared_number++;
-          printf("EDT 4: The number is %d/%d\n", shared_number, random_number);
+          printf("** EDT 4: The number is %d/%d\n", shared_number, random_number);
         }
       // }
     }

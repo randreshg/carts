@@ -11,12 +11,12 @@ target triple = "x86_64-unknown-linux-gnu"
 %struct.kmp_task_t_with_privates.1 = type { %struct.kmp_task_t, %struct..kmp_privates.t.2 }
 %struct..kmp_privates.t.2 = type { i32 }
 
-@.str = private unnamed_addr constant [36 x i8] c"EDT 1: The initial number is %d/%d\0A\00", align 1
+@.str = private unnamed_addr constant [39 x i8] c"** EDT 1: The initial number is %d/%d\0A\00", align 1
 @0 = private unnamed_addr constant [23 x i8] c";unknown;unknown;0;0;;\00", align 1
 @1 = private unnamed_addr constant %struct.ident_t { i32 0, i32 2, i32 0, i32 22, ptr @0 }, align 8
-@.str.1 = private unnamed_addr constant [28 x i8] c"EDT 0: The number is %d/%d\0A\00", align 1
-@.str.2 = private unnamed_addr constant [28 x i8] c"EDT 3: The number is %d/%d\0A\00", align 1
-@.str.4 = private unnamed_addr constant [28 x i8] c"EDT 4: The number is %d/%d\0A\00", align 1
+@.str.1 = private unnamed_addr constant [31 x i8] c"** EDT 0: The number is %d/%d\0A\00", align 1
+@.str.2 = private unnamed_addr constant [31 x i8] c"** EDT 3: The number is %d/%d\0A\00", align 1
+@.str.4 = private unnamed_addr constant [31 x i8] c"** EDT 4: The number is %d/%d\0A\00", align 1
 @2 = private unnamed_addr constant %struct.ident_t { i32 0, i32 322, i32 0, i32 22, ptr @0 }, align 8
 @.str.7 = private unnamed_addr constant [37 x i8] c"EDT 2: The final number is %d - %d.\0A\00", align 1
 

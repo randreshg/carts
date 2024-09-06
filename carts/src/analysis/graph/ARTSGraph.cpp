@@ -479,6 +479,11 @@ void ARTSGraph::print(void) {
     LLVM_DEBUG(dbgs() << "- EDT #" << ContextEDT->getID() << " - \""
                       << ContextEDT->getName() << "\"\n");
     LLVM_DEBUG(dbgs() << "  - Type: " << toString(ContextEDT->getTy()) << "\n");
+    /// ParentSync
+    if(EDT *ParentSync = ContextEDT->getParentSync()) {
+      LLVM_DEBUG(dbgs() << "  - Parent Sync: \"EDT #"
+                      << ParentSync->getID() << "\"\n");
+    }
     /// Data environment
     LLVM_DEBUG(dbgs() << "  - Data Environment:\n");
     EDTEnvironment &DE = ContextEDT->getDataEnv();
@@ -494,7 +499,7 @@ void ARTSGraph::print(void) {
     }
 
     /// Dependencies
-    LLVM_DEBUG(dbgs() << "  - Incoming Edges:\n");
+    LLVM_DEBUG(dbgs() << "  - Incoming Creation Edges:\n");
     auto InEdges = getIncomingCreationEdges(EDTNode);
     if (InEdges.size() == 0) {
       LLVM_DEBUG(dbgs() << "    - The EDT has no incoming Creation edges\n");
@@ -525,11 +530,13 @@ void ARTSGraph::print(void) {
           for (DataBlockGraphEdge *DataEdge : InDataEdges) {
             DataBlock *DB = DataEdge->getDataBlock();
             LLVM_DEBUG(dbgs() << "      - [DataBlock] " << *DB->getValue());
-            DataBlock *DBParent = DB->getParent();
+            DataBlock *DBParent = DB->getMainParent();
             if (DBParent) {
-              LLVM_DEBUG(dbgs() << " / " << *DBParent->getValue() << "\n");
+              LLVM_DEBUG(dbgs()
+                         << " / " << *DBParent->getValue() << " [Parent EDT #"
+                         << DBParent->getContextEDT()->getID() << "]\n");
             } else {
-              LLVM_DEBUG(dbgs() << "\n");
+              LLVM_DEBUG(dbgs() << "/ No parent\n");
             }
           }
         }
@@ -560,7 +567,7 @@ void ARTSGraph::print(void) {
                         << "\" in Slot #" << To->getSlot() << "\n");
       DataBlock *DB = OutDataBlockEdge->getDataBlock();
       LLVM_DEBUG(dbgs() << "      - " << *DB->getValue());
-      if (DataBlock *DBParent = DB->getParent()) {
+      if (DataBlock *DBParent = DB->getMainParent()) {
         LLVM_DEBUG(dbgs() << " / " << *DBParent->getValue() << "\n");
       } else {
         LLVM_DEBUG(dbgs() << "\n");

@@ -87,6 +87,24 @@ EDTValue *DataBlock::getValue() { return V; }
 DataBlock::Mode DataBlock::getMode() { return M; }
 EDT *DataBlock::getContextEDT() { return ContextEDT; }
 DataBlock *DataBlock::getParent() { return Parent; }
+DataBlock *DataBlock::getParentSync() { return ParentSync; }
+DataBlock *DataBlock::getMainParent() {
+  if (MainParent)
+    return MainParent;
+
+  /// If I don't have a parent, return nullptr
+  if (!Parent)
+    return nullptr;
+
+  /// If I have a parent, get its main parent. If it has one,
+  /// return it
+  if (DataBlock *ParentMain = Parent->getMainParent())
+    MainParent = ParentMain;
+  /// Otherwise, return my parent
+  else
+    MainParent = Parent;
+  return MainParent;
+}
 uint32_t DataBlock::getSlot() { return Slot; }
 DataBlockSet &DataBlock::getChildDBs() { return ChildDBs; }
 string DataBlock::getName() {
@@ -94,7 +112,7 @@ string DataBlock::getName() {
     string ValueName = V->getName().str();
     if (!ValueName.empty())
       Name = "db." + ValueName;
-    else if(Parent)
+    else if (Parent)
       Name = Parent->getName();
     else
       Name = "db." + std::to_string(Slot);
@@ -106,11 +124,20 @@ string DataBlock::getName() {
 
 /// Insert
 bool DataBlock::addChildDB(DataBlock *ChildDB) {
-  return ChildDBs.insert(ChildDB);
+  bool Inserted = ChildDBs.insert(ChildDB);
+  if (Inserted) {
+    assert(!ChildDB->getParent() && "Parent was already set");
+    ChildDB->setParent(this);
+    return true;
+  }
+  return false;
 }
 
 /// Setters
 void DataBlock::setParent(DataBlock *Parent) { this->Parent = Parent; }
+void DataBlock::setParentSync(DataBlock *ParentSync) {
+  this->ParentSync = ParentSync;
+}
 void DataBlock::setSlot(uint32_t Slot) { this->Slot = Slot; }
 
 /// Helpers
@@ -118,9 +145,9 @@ Type *DataBlock::getType() {
   if (Ty)
     return Ty;
   /// Get the type of the value
-  if (auto *Alloca = dyn_cast<AllocaInst>(V))
+  if (AllocaInst *Alloca = dyn_cast<AllocaInst>(V))
     Ty = Alloca->getAllocatedType();
-  else if (auto *Load = dyn_cast<LoadInst>(V))
+  else if (LoadInst *Load = dyn_cast<LoadInst>(V))
     Ty = Load->getType();
   /// If Ty is still null, return the type of the parent
   if (!Ty && Parent)
