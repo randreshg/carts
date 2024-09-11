@@ -14,30 +14,6 @@ target triple = "x86_64-unknown-linux-gnu"
 @.str.4 = private unnamed_addr constant [31 x i8] c"** EDT 4: The number is %d/%d\0A\00", align 1
 @2 = private unnamed_addr constant %struct.ident_t { i32 0, i32 322, i32 0, i32 22, ptr @0 }, align 8
 @.str.7 = private unnamed_addr constant [37 x i8] c"EDT 2: The final number is %d - %d.\0A\00", align 1
-@3 = private unnamed_addr constant [25 x i8] c"Guid for edt_3.task: %u\0A\00", align 1
-@4 = private unnamed_addr constant [25 x i8] c"Guid for edt_5.task: %u\0A\00", align 1
-@5 = private unnamed_addr constant [25 x i8] c"Guid for edt_2.task: %u\0A\00", align 1
-@6 = private unnamed_addr constant [25 x i8] c"Guid for edt_0.sync: %u\0A\00", align 1
-@7 = private unnamed_addr constant [25 x i8] c"Guid for edt_4.sync: %u\0A\00", align 1
-@8 = private unnamed_addr constant [25 x i8] c"Guid for edt_1.main: %u\0A\00", align 1
-@9 = private unnamed_addr constant [25 x i8] c"Guid for edt_6.task: %u\0A\00", align 1
-@10 = private unnamed_addr constant [17 x i8] c"Creating EDT #1\0A\00", align 1
-@11 = private unnamed_addr constant [17 x i8] c"Creating EDT #2\0A\00", align 1
-@12 = private unnamed_addr constant [17 x i8] c"Creating EDT #0\0A\00", align 1
-@13 = private unnamed_addr constant [17 x i8] c"Creating EDT #6\0A\00", align 1
-@14 = private unnamed_addr constant [17 x i8] c"Creating EDT #5\0A\00", align 1
-@15 = private unnamed_addr constant [17 x i8] c"Creating EDT #4\0A\00", align 1
-@16 = private unnamed_addr constant [17 x i8] c"Creating EDT #3\0A\00", align 1
-@17 = private unnamed_addr constant [107 x i8] c"Signaling db.shared_number with guid: %u and Value %d, and Address %p from EDT #3 to EDT #6 with guid: %u\0A\00", align 1
-@18 = private unnamed_addr constant [107 x i8] c"Signaling db.random_number with guid: %u and Value %d, and Address %p from EDT #5 to EDT #2 with guid: %u\0A\00", align 1
-@19 = private unnamed_addr constant [107 x i8] c"Signaling db.random_number with guid: %u and Value %d, and Address %p from EDT #0 to EDT #4 with guid: %u\0A\00", align 1
-@20 = private unnamed_addr constant [107 x i8] c"Signaling db.shared_number with guid: %u and Value %d, and Address %p from EDT #0 to EDT #4 with guid: %u\0A\00", align 1
-@21 = private unnamed_addr constant [107 x i8] c"Signaling db.random_number with guid: %u and Value %d, and Address %p from EDT #4 to EDT #6 with guid: %u\0A\00", align 1
-@22 = private unnamed_addr constant [107 x i8] c"Signaling db.shared_number with guid: %u and Value %d, and Address %p from EDT #4 to EDT #3 with guid: %u\0A\00", align 1
-@23 = private unnamed_addr constant [107 x i8] c"Signaling db.random_number with guid: %u and Value %d, and Address %p from EDT #1 to EDT #0 with guid: %u\0A\00", align 1
-@24 = private unnamed_addr constant [107 x i8] c"Signaling db.shared_number with guid: %u and Value %d, and Address %p from EDT #1 to EDT #0 with guid: %u\0A\00", align 1
-@25 = private unnamed_addr constant [107 x i8] c"Signaling db.random_number with guid: %u and Value %d, and Address %p from EDT #6 to EDT #5 with guid: %u\0A\00", align 1
-@26 = private unnamed_addr constant [107 x i8] c"Signaling db.shared_number with guid: %u and Value %d, and Address %p from EDT #6 to EDT #2 with guid: %u\0A\00", align 1
 
 ; Function Attrs: nounwind
 declare void @srand(i32 noundef) local_unnamed_addr #0
@@ -109,8 +85,6 @@ exit:                                             ; preds = %edt.body
   %toedt.6.slot.1 = alloca i32, align 4
   store i32 1, ptr %toedt.6.slot.1, align 4
   %4 = load i32, ptr %toedt.6.slot.1, align 4
-  %5 = load i32, ptr %edt_3.depv_0.ptr.load, align 4
-  %6 = call i32 (ptr, ...) @printf(ptr @17, i64 %edt_3.depv_0.guid.load, i32 %5, ptr %edt_3.depv_0.ptr.load, i64 %2)
   call void @artsSignalEdt(i64 %2, i32 %4, i64 %edt_3.depv_0.guid.load)
   ret void
 }
@@ -121,9 +95,8 @@ entry:
   %edt_3.task_guid.addr = alloca i64, align 8
   store i64 %0, ptr %edt_3.task_guid.addr, align 8
   %1 = load i64, ptr %edt_3.task_guid.addr, align 8
-  %2 = call i32 (ptr, ...) @printf(ptr @3, i64 %1)
   %edt_4.paramv_0.guid.edt_6 = getelementptr inbounds i64, ptr %paramv, i64 0
-  %3 = load i64, ptr %edt_4.paramv_0.guid.edt_6, align 8
+  %2 = load i64, ptr %edt_4.paramv_0.guid.edt_6, align 8
   %edt_4.depv_0.guid = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
   %edt_4.depv_0.guid.load = load i64, ptr %edt_4.depv_0.guid, align 8
   %edt_4.depv_0.ptr = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
@@ -138,24 +111,23 @@ edt.body:                                         ; preds = %entry
   br label %entry.split
 
 entry.split:                                      ; preds = %edt.body
-  %4 = load i32, ptr %edt_4.depv_0.ptr.load, align 4, !tbaa !11
+  %3 = load i32, ptr %edt_4.depv_0.ptr.load, align 4, !tbaa !11
+  %4 = load i32, ptr %edt_4.depv_1.ptr.load, align 4, !tbaa !11
+  %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %3, i32 noundef %4) #4
   %5 = load i32, ptr %edt_4.depv_1.ptr.load, align 4, !tbaa !11
-  %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %4, i32 noundef %5) #4
-  %6 = load i32, ptr %edt_4.depv_1.ptr.load, align 4, !tbaa !11
   %edt_3_paramc = alloca i32, align 4
   store i32 2, ptr %edt_3_paramc, align 4
-  %7 = load i32, ptr %edt_3_paramc, align 4
-  %edt_3_paramv = alloca i64, i32 %7, align 8
+  %6 = load i32, ptr %edt_3_paramc, align 4
+  %edt_3_paramv = alloca i64, i32 %6, align 8
   %edt_3.paramv_0 = getelementptr inbounds i64, ptr %edt_3_paramv, i64 0
-  %8 = sext i32 %6 to i64
-  store i64 %8, ptr %edt_3.paramv_0, align 8
+  %7 = sext i32 %5 to i64
+  store i64 %7, ptr %edt_3.paramv_0, align 8
   %edt_3.paramv_1.guid.edt_6 = getelementptr inbounds i64, ptr %edt_3_paramv, i64 1
-  store i64 %3, ptr %edt_3.paramv_1.guid.edt_6, align 8
-  %9 = alloca i32, align 4
-  store i32 1, ptr %9, align 4
-  %10 = call i32 (ptr, ...) @printf(ptr @16)
-  %11 = load i32, ptr %9, align 4
-  %12 = call i64 @artsEdtCreateWithGuid(ptr @edt_3.task, i64 %1, i32 %7, ptr %edt_3_paramv, i32 %11)
+  store i64 %2, ptr %edt_3.paramv_1.guid.edt_6, align 8
+  %8 = alloca i32, align 4
+  store i32 1, ptr %8, align 4
+  %9 = load i32, ptr %8, align 4
+  %10 = call i64 @artsEdtCreateWithGuid(ptr @edt_3.task, i64 %1, i32 %6, ptr %edt_3_paramv, i32 %9)
   br label %codeRepl.exitStub
 
 codeRepl.exitStub:                                ; preds = %entry.split
@@ -164,16 +136,12 @@ codeRepl.exitStub:                                ; preds = %entry.split
 exit:                                             ; preds = %codeRepl.exitStub
   %toedt.6.slot.0 = alloca i32, align 4
   store i32 0, ptr %toedt.6.slot.0, align 4
-  %13 = load i32, ptr %toedt.6.slot.0, align 4
-  %14 = load i32, ptr %edt_4.depv_1.ptr.load, align 4
-  %15 = call i32 (ptr, ...) @printf(ptr @21, i64 %edt_4.depv_1.guid.load, i32 %14, ptr %edt_4.depv_1.ptr.load, i64 %3)
-  call void @artsSignalEdt(i64 %3, i32 %13, i64 %edt_4.depv_1.guid.load)
+  %11 = load i32, ptr %toedt.6.slot.0, align 4
+  call void @artsSignalEdt(i64 %2, i32 %11, i64 %edt_4.depv_1.guid.load)
   %toedt.3.slot.0 = alloca i32, align 4
   store i32 0, ptr %toedt.3.slot.0, align 4
-  %16 = load i32, ptr %toedt.3.slot.0, align 4
-  %17 = load i32, ptr %edt_4.depv_0.ptr.load, align 4
-  %18 = call i32 (ptr, ...) @printf(ptr @22, i64 %edt_4.depv_0.guid.load, i32 %17, ptr %edt_4.depv_0.ptr.load, i64 %1)
-  call void @artsSignalEdt(i64 %1, i32 %16, i64 %edt_4.depv_0.guid.load)
+  %12 = load i32, ptr %toedt.3.slot.0, align 4
+  call void @artsSignalEdt(i64 %1, i32 %12, i64 %edt_4.depv_0.guid.load)
   ret void
 }
 
@@ -203,8 +171,6 @@ exit:                                             ; preds = %edt.body
   %toedt.2.slot.1 = alloca i32, align 4
   store i32 1, ptr %toedt.2.slot.1, align 4
   %4 = load i32, ptr %toedt.2.slot.1, align 4
-  %5 = load i32, ptr %edt_5.depv_0.ptr.load, align 4
-  %6 = call i32 (ptr, ...) @printf(ptr @18, i64 %edt_5.depv_0.guid.load, i32 %5, ptr %edt_5.depv_0.ptr.load, i64 %2)
   call void @artsSignalEdt(i64 %2, i32 %4, i64 %edt_5.depv_0.guid.load)
   ret void
 }
@@ -215,9 +181,8 @@ entry:
   %edt_5.task_guid.addr = alloca i64, align 8
   store i64 %0, ptr %edt_5.task_guid.addr, align 8
   %1 = load i64, ptr %edt_5.task_guid.addr, align 8
-  %2 = call i32 (ptr, ...) @printf(ptr @4, i64 %1)
   %edt_6.paramv_0.guid.edt_2 = getelementptr inbounds i64, ptr %paramv, i64 0
-  %3 = load i64, ptr %edt_6.paramv_0.guid.edt_2, align 8
+  %2 = load i64, ptr %edt_6.paramv_0.guid.edt_2, align 8
   %edt_6.depv_0.guid = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
   %edt_6.depv_0.guid.load = load i64, ptr %edt_6.depv_0.guid, align 8
   %edt_6.depv_0.ptr = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
@@ -232,21 +197,20 @@ edt.body:                                         ; preds = %entry
   br label %entry.split
 
 entry.split:                                      ; preds = %edt.body
-  %4 = load i32, ptr %edt_6.depv_1.ptr.load, align 4, !tbaa !11
+  %3 = load i32, ptr %edt_6.depv_1.ptr.load, align 4, !tbaa !11
   %edt_5_paramc = alloca i32, align 4
   store i32 2, ptr %edt_5_paramc, align 4
-  %5 = load i32, ptr %edt_5_paramc, align 4
-  %edt_5_paramv = alloca i64, i32 %5, align 8
+  %4 = load i32, ptr %edt_5_paramc, align 4
+  %edt_5_paramv = alloca i64, i32 %4, align 8
   %edt_5.paramv_0 = getelementptr inbounds i64, ptr %edt_5_paramv, i64 0
-  %6 = sext i32 %4 to i64
-  store i64 %6, ptr %edt_5.paramv_0, align 8
+  %5 = sext i32 %3 to i64
+  store i64 %5, ptr %edt_5.paramv_0, align 8
   %edt_5.paramv_1.guid.edt_2 = getelementptr inbounds i64, ptr %edt_5_paramv, i64 1
-  store i64 %3, ptr %edt_5.paramv_1.guid.edt_2, align 8
-  %7 = alloca i32, align 4
-  store i32 1, ptr %7, align 4
-  %8 = call i32 (ptr, ...) @printf(ptr @14)
-  %9 = load i32, ptr %7, align 4
-  %10 = call i64 @artsEdtCreateWithGuid(ptr @edt_5.task, i64 %1, i32 %5, ptr %edt_5_paramv, i32 %9)
+  store i64 %2, ptr %edt_5.paramv_1.guid.edt_2, align 8
+  %6 = alloca i32, align 4
+  store i32 1, ptr %6, align 4
+  %7 = load i32, ptr %6, align 4
+  %8 = call i64 @artsEdtCreateWithGuid(ptr @edt_5.task, i64 %1, i32 %4, ptr %edt_5_paramv, i32 %7)
   br label %exit1
 
 exit1:                                            ; preds = %entry.split
@@ -258,16 +222,12 @@ exit.ret.exitStub:                                ; preds = %exit1
 exit:                                             ; preds = %exit.ret.exitStub
   %toedt.5.slot.0 = alloca i32, align 4
   store i32 0, ptr %toedt.5.slot.0, align 4
-  %11 = load i32, ptr %toedt.5.slot.0, align 4
-  %12 = load i32, ptr %edt_6.depv_0.ptr.load, align 4
-  %13 = call i32 (ptr, ...) @printf(ptr @25, i64 %edt_6.depv_0.guid.load, i32 %12, ptr %edt_6.depv_0.ptr.load, i64 %1)
-  call void @artsSignalEdt(i64 %1, i32 %11, i64 %edt_6.depv_0.guid.load)
+  %9 = load i32, ptr %toedt.5.slot.0, align 4
+  call void @artsSignalEdt(i64 %1, i32 %9, i64 %edt_6.depv_0.guid.load)
   %toedt.2.slot.0 = alloca i32, align 4
   store i32 0, ptr %toedt.2.slot.0, align 4
-  %14 = load i32, ptr %toedt.2.slot.0, align 4
-  %15 = load i32, ptr %edt_6.depv_1.ptr.load, align 4
-  %16 = call i32 (ptr, ...) @printf(ptr @26, i64 %edt_6.depv_1.guid.load, i32 %15, ptr %edt_6.depv_1.ptr.load, i64 %3)
-  call void @artsSignalEdt(i64 %3, i32 %14, i64 %edt_6.depv_1.guid.load)
+  %10 = load i32, ptr %toedt.2.slot.0, align 4
+  call void @artsSignalEdt(i64 %2, i32 %10, i64 %edt_6.depv_1.guid.load)
   ret void
 }
 
@@ -306,24 +266,22 @@ entry:
   %edt_2.task_guid.addr = alloca i64, align 8
   store i64 %0, ptr %edt_2.task_guid.addr, align 8
   %1 = load i64, ptr %edt_2.task_guid.addr, align 8
-  %2 = call i32 (ptr, ...) @printf(ptr @5, i64 %1)
-  %3 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
+  %2 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
   %edt_0.sync_guid.addr = alloca i64, align 8
-  store i64 %3, ptr %edt_0.sync_guid.addr, align 8
-  %4 = load i64, ptr %edt_0.sync_guid.addr, align 8
-  %5 = call i32 (ptr, ...) @printf(ptr @6, i64 %4)
+  store i64 %2, ptr %edt_0.sync_guid.addr, align 8
+  %3 = load i64, ptr %edt_0.sync_guid.addr, align 8
   %db.random_number.addr = alloca i64, align 8
   %db.random_number.size = alloca i64, align 8
   store i64 4, ptr %db.random_number.size, align 8
   %db.random_number.size.ld = load i64, ptr %db.random_number.size, align 8
-  %6 = call i64 @artsDbCreatePtr(ptr %db.random_number.addr, i64 %db.random_number.size.ld, i32 7)
+  %4 = call i64 @artsDbCreatePtr(ptr %db.random_number.addr, i64 %db.random_number.size.ld, i32 7)
   %db.random_number.addr.ld = load i64, ptr %db.random_number.addr, align 8
   %db.random_number.ptr = inttoptr i64 %db.random_number.addr.ld to ptr
   %db.shared_number.addr = alloca i64, align 8
   %db.shared_number.size = alloca i64, align 8
   store i64 4, ptr %db.shared_number.size, align 8
   %db.shared_number.size.ld = load i64, ptr %db.shared_number.size, align 8
-  %7 = call i64 @artsDbCreatePtr(ptr %db.shared_number.addr, i64 %db.shared_number.size.ld, i32 7)
+  %5 = call i64 @artsDbCreatePtr(ptr %db.shared_number.addr, i64 %db.shared_number.size.ld, i32 7)
   %db.shared_number.addr.ld = load i64, ptr %db.shared_number.addr, align 8
   %db.shared_number.ptr = inttoptr i64 %db.shared_number.addr.ld to ptr
   br label %edt.body
@@ -345,27 +303,25 @@ edt.body:                                         ; preds = %entry
   %call5 = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %add, i32 noundef %add4) #4
   %edt_0_paramc = alloca i32, align 4
   store i32 1, ptr %edt_0_paramc, align 4
-  %8 = load i32, ptr %edt_0_paramc, align 4
-  %edt_0_paramv = alloca i64, i32 %8, align 8
+  %6 = load i32, ptr %edt_0_paramc, align 4
+  %edt_0_paramv = alloca i64, i32 %6, align 8
   %edt_0.paramv_0.guid.edt_2 = getelementptr inbounds i64, ptr %edt_0_paramv, i64 0
   store i64 %1, ptr %edt_0.paramv_0.guid.edt_2, align 8
-  %9 = alloca i32, align 4
-  store i32 2, ptr %9, align 4
-  %10 = call i32 (ptr, ...) @printf(ptr @12)
-  %11 = load i32, ptr %9, align 4
-  %12 = call i64 @artsEdtCreateWithGuid(ptr @edt_0.sync, i64 %4, i32 %8, ptr %edt_0_paramv, i32 %11)
+  %7 = alloca i32, align 4
+  store i32 2, ptr %7, align 4
+  %8 = load i32, ptr %7, align 4
+  %9 = call i64 @artsEdtCreateWithGuid(ptr @edt_0.sync, i64 %3, i32 %6, ptr %edt_0_paramv, i32 %8)
   br label %codeRepl
 
 codeRepl:                                         ; preds = %edt.body
   %edt_2_paramc = alloca i32, align 4
   store i32 0, ptr %edt_2_paramc, align 4
-  %13 = load i32, ptr %edt_2_paramc, align 4
-  %edt_2_paramv = alloca i64, i32 %13, align 8
-  %14 = alloca i32, align 4
-  store i32 2, ptr %14, align 4
-  %15 = call i32 (ptr, ...) @printf(ptr @11)
-  %16 = load i32, ptr %14, align 4
-  %17 = call i64 @artsEdtCreateWithGuid(ptr @edt_2.task, i64 %1, i32 %13, ptr %edt_2_paramv, i32 %16)
+  %10 = load i32, ptr %edt_2_paramc, align 4
+  %edt_2_paramv = alloca i64, i32 %10, align 8
+  %11 = alloca i32, align 4
+  store i32 2, ptr %11, align 4
+  %12 = load i32, ptr %11, align 4
+  %13 = call i64 @artsEdtCreateWithGuid(ptr @edt_2.task, i64 %1, i32 %10, ptr %edt_2_paramv, i32 %12)
   br label %entry.split.ret
 
 entry.split.ret:                                  ; preds = %codeRepl
@@ -374,16 +330,12 @@ entry.split.ret:                                  ; preds = %codeRepl
 exit:                                             ; preds = %entry.split.ret
   %toedt.0.slot.1 = alloca i32, align 4
   store i32 1, ptr %toedt.0.slot.1, align 4
-  %18 = load i32, ptr %toedt.0.slot.1, align 4
-  %19 = load i32, ptr %db.random_number.ptr, align 4
-  %20 = call i32 (ptr, ...) @printf(ptr @23, i64 %6, i32 %19, ptr %db.random_number.ptr, i64 %4)
-  call void @artsSignalEdt(i64 %4, i32 %18, i64 %6)
+  %14 = load i32, ptr %toedt.0.slot.1, align 4
+  call void @artsSignalEdt(i64 %3, i32 %14, i64 %4)
   %toedt.0.slot.0 = alloca i32, align 4
   store i32 0, ptr %toedt.0.slot.0, align 4
-  %21 = load i32, ptr %toedt.0.slot.0, align 4
-  %22 = load i32, ptr %db.shared_number.ptr, align 4
-  %23 = call i32 (ptr, ...) @printf(ptr @24, i64 %7, i32 %22, ptr %db.shared_number.ptr, i64 %4)
-  call void @artsSignalEdt(i64 %4, i32 %21, i64 %7)
+  %15 = load i32, ptr %toedt.0.slot.0, align 4
+  call void @artsSignalEdt(i64 %3, i32 %15, i64 %5)
   ret void
 }
 
@@ -393,14 +345,12 @@ entry:
   %edt_4.sync_guid.addr = alloca i64, align 8
   store i64 %0, ptr %edt_4.sync_guid.addr, align 8
   %1 = load i64, ptr %edt_4.sync_guid.addr, align 8
-  %2 = call i32 (ptr, ...) @printf(ptr @7, i64 %1)
-  %3 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
+  %2 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
   %edt_6.task_guid.addr = alloca i64, align 8
-  store i64 %3, ptr %edt_6.task_guid.addr, align 8
-  %4 = load i64, ptr %edt_6.task_guid.addr, align 8
-  %5 = call i32 (ptr, ...) @printf(ptr @9, i64 %4)
+  store i64 %2, ptr %edt_6.task_guid.addr, align 8
+  %3 = load i64, ptr %edt_6.task_guid.addr, align 8
   %edt_0.paramv_0.guid.edt_2 = getelementptr inbounds i64, ptr %paramv, i64 0
-  %6 = load i64, ptr %edt_0.paramv_0.guid.edt_2, align 8
+  %4 = load i64, ptr %edt_0.paramv_0.guid.edt_2, align 8
   %edt_0.depv_0.guid = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
   %edt_0.depv_0.guid.load = load i64, ptr %edt_0.depv_0.guid, align 8
   %edt_0.depv_0.ptr = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
@@ -417,29 +367,27 @@ edt.body:                                         ; preds = %entry
 codeRepl1:                                        ; preds = %edt.body
   %edt_4_paramc = alloca i32, align 4
   store i32 1, ptr %edt_4_paramc, align 4
-  %7 = load i32, ptr %edt_4_paramc, align 4
-  %edt_4_paramv = alloca i64, i32 %7, align 8
+  %5 = load i32, ptr %edt_4_paramc, align 4
+  %edt_4_paramv = alloca i64, i32 %5, align 8
   %edt_4.paramv_0.guid.edt_6 = getelementptr inbounds i64, ptr %edt_4_paramv, i64 0
-  store i64 %4, ptr %edt_4.paramv_0.guid.edt_6, align 8
-  %8 = alloca i32, align 4
-  store i32 2, ptr %8, align 4
-  %9 = call i32 (ptr, ...) @printf(ptr @15)
-  %10 = load i32, ptr %8, align 4
-  %11 = call i64 @artsEdtCreateWithGuid(ptr @edt_4.sync, i64 %1, i32 %7, ptr %edt_4_paramv, i32 %10)
+  store i64 %3, ptr %edt_4.paramv_0.guid.edt_6, align 8
+  %6 = alloca i32, align 4
+  store i32 2, ptr %6, align 4
+  %7 = load i32, ptr %6, align 4
+  %8 = call i64 @artsEdtCreateWithGuid(ptr @edt_4.sync, i64 %1, i32 %5, ptr %edt_4_paramv, i32 %7)
   br label %codeRepl
 
 codeRepl:                                         ; preds = %codeRepl1
   %edt_6_paramc = alloca i32, align 4
   store i32 1, ptr %edt_6_paramc, align 4
-  %12 = load i32, ptr %edt_6_paramc, align 4
-  %edt_6_paramv = alloca i64, i32 %12, align 8
+  %9 = load i32, ptr %edt_6_paramc, align 4
+  %edt_6_paramv = alloca i64, i32 %9, align 8
   %edt_6.paramv_0.guid.edt_2 = getelementptr inbounds i64, ptr %edt_6_paramv, i64 0
-  store i64 %6, ptr %edt_6.paramv_0.guid.edt_2, align 8
-  %13 = alloca i32, align 4
-  store i32 2, ptr %13, align 4
-  %14 = call i32 (ptr, ...) @printf(ptr @13)
-  %15 = load i32, ptr %13, align 4
-  %16 = call i64 @artsEdtCreateWithGuid(ptr @edt_6.task, i64 %4, i32 %12, ptr %edt_6_paramv, i32 %15)
+  store i64 %4, ptr %edt_6.paramv_0.guid.edt_2, align 8
+  %10 = alloca i32, align 4
+  store i32 2, ptr %10, align 4
+  %11 = load i32, ptr %10, align 4
+  %12 = call i64 @artsEdtCreateWithGuid(ptr @edt_6.task, i64 %3, i32 %9, ptr %edt_6_paramv, i32 %11)
   br label %exit.ret
 
 exit.ret:                                         ; preds = %codeRepl
@@ -448,16 +396,12 @@ exit.ret:                                         ; preds = %codeRepl
 exit:                                             ; preds = %exit.ret
   %toedt.4.slot.1 = alloca i32, align 4
   store i32 1, ptr %toedt.4.slot.1, align 4
-  %17 = load i32, ptr %toedt.4.slot.1, align 4
-  %18 = load i32, ptr %edt_0.depv_1.ptr.load, align 4
-  %19 = call i32 (ptr, ...) @printf(ptr @19, i64 %edt_0.depv_1.guid.load, i32 %18, ptr %edt_0.depv_1.ptr.load, i64 %1)
-  call void @artsSignalEdt(i64 %1, i32 %17, i64 %edt_0.depv_1.guid.load)
+  %13 = load i32, ptr %toedt.4.slot.1, align 4
+  call void @artsSignalEdt(i64 %1, i32 %13, i64 %edt_0.depv_1.guid.load)
   %toedt.4.slot.0 = alloca i32, align 4
   store i32 0, ptr %toedt.4.slot.0, align 4
-  %20 = load i32, ptr %toedt.4.slot.0, align 4
-  %21 = load i32, ptr %edt_0.depv_0.ptr.load, align 4
-  %22 = call i32 (ptr, ...) @printf(ptr @20, i64 %edt_0.depv_0.guid.load, i32 %21, ptr %edt_0.depv_0.ptr.load, i64 %1)
-  call void @artsSignalEdt(i64 %1, i32 %20, i64 %edt_0.depv_0.guid.load)
+  %14 = load i32, ptr %toedt.4.slot.0, align 4
+  call void @artsSignalEdt(i64 %1, i32 %14, i64 %edt_0.depv_0.guid.load)
   ret void
 }
 
@@ -484,19 +428,17 @@ then:                                             ; preds = %entry
   %edt_1.main_guid.addr = alloca i64, align 8
   store i64 %3, ptr %edt_1.main_guid.addr, align 8
   %4 = load i64, ptr %edt_1.main_guid.addr, align 8
-  %5 = call i32 (ptr, ...) @printf(ptr @8, i64 %4)
   br label %body
 
 body:                                             ; preds = %then
   %edt_1_paramc = alloca i32, align 4
   store i32 0, ptr %edt_1_paramc, align 4
-  %6 = load i32, ptr %edt_1_paramc, align 4
-  %edt_1_paramv = alloca i64, i32 %6, align 8
-  %7 = alloca i32, align 4
-  store i32 0, ptr %7, align 4
-  %8 = call i32 (ptr, ...) @printf(ptr @10)
-  %9 = load i32, ptr %7, align 4
-  %10 = call i64 @artsEdtCreateWithGuid(ptr @edt_1.main, i64 %4, i32 %6, ptr %edt_1_paramv, i32 %9)
+  %5 = load i32, ptr %edt_1_paramc, align 4
+  %edt_1_paramv = alloca i64, i32 %5, align 8
+  %6 = alloca i32, align 4
+  store i32 0, ptr %6, align 4
+  %7 = load i32, ptr %6, align 4
+  %8 = call i64 @artsEdtCreateWithGuid(ptr @edt_1.main, i64 %4, i32 %5, ptr %edt_1_paramv, i32 %7)
   br label %exit
 
 exit:                                             ; preds = %body, %entry

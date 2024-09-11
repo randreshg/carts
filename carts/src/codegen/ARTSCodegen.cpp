@@ -250,10 +250,10 @@ Value *ARTSCodegen::createEDTGuid(string EDTName, uint32_t EDTNode) {
   Builder.CreateStore(ReserveGuidCall, GuidAddress);
   LoadInst *LoadedGuidAddress = Builder.CreateLoad(artsGuid_t, GuidAddress);
   /// Print the new GUID
-  SmallVector<Value *, 8> PrintArgs;
-  PrintArgs = {LoadedGuidAddress};
-  string PrintMsg = "Guid for " + EDTName + ": %u\n";
-  insertPrint(PrintMsg, PrintArgs);
+  // SmallVector<Value *, 8> PrintArgs;
+  // PrintArgs = {LoadedGuidAddress};
+  // string PrintMsg = "Guid for " + EDTName + ": %u\n";
+  // insertPrint(PrintMsg, PrintArgs);
   return LoadedGuidAddress;
 }
 
@@ -562,10 +562,10 @@ void ARTSCodegen::insertEDTCall(EDT &E) {
       ConstantInt::get(Int32, EDTNode->getIncomingSlotNodesSize()), DepC);
 
   /// Debug info
-  LLVM_DEBUG(dbgs() << " - Inserting EDT Call\n");
-  SmallVector<Value *, 8> PrintArgs;
-  string PrintMsg = "Creating EDT #" + std::to_string(E.getID()) + "\n";
-  insertPrint(PrintMsg, PrintArgs);
+  // LLVM_DEBUG(dbgs() << " - Inserting EDT Call\n");
+  // SmallVector<Value *, 8> PrintArgs;
+  // string PrintMsg = "Creating EDT #" + std::to_string(E.getID()) + "\n";
+  // insertPrint(PrintMsg, PrintArgs);
 
   /// Insert EDT Call
   EDTCodegen *ECG = getOrCreateEDTCodegen(E);
@@ -662,15 +662,14 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
                      Builder.CreateLoad(Int32, ToEDTSlotAlloca), DBGuid};
 
     /// Debug info
-    SmallVector<Value *, 8> PrintArgs;
-    // LoadInst *LoadedPtrVal = DBPtr;
-    LoadInst *LoadedVal = Builder.CreateLoad(Int32, DBPtr);
-    string PrintMsg = "Signaling " + DB->getName() +
-                      " with guid: %u and Value %d, and Address %p from EDT #" +
-                      std::to_string(E.getID()) + " to EDT #" +
-                      std::to_string(ToEDT->getID()) + " with guid: %u\n";
-    PrintArgs = {DBGuid, LoadedVal, DBPtr, ECG->getGuid(ToEDT)};
-    insertPrint(PrintMsg, PrintArgs);
+    // SmallVector<Value *, 8> PrintArgs;
+    // LoadInst *LoadedVal = Builder.CreateLoad(Int32, DBPtr);
+    // string PrintMsg = "Signaling " + DB->getName() +
+    //                   " with guid: %u and Value %d, and Address %p from EDT #" +
+    //                   std::to_string(E.getID()) + " to EDT #" +
+    //                   std::to_string(ToEDT->getID()) + " with guid: %u\n";
+    // PrintArgs = {DBGuid, LoadedVal, DBPtr, ECG->getGuid(ToEDT)};
+    // insertPrint(PrintMsg, PrintArgs);
 
     /// Create the Call
     Builder.CreateCall(SignalFn, Args);

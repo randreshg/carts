@@ -529,7 +529,8 @@ void ARTSGraph::print(void) {
                      << "    - EDTSlot #" << SlotNode->getSlot() << "\n");
           for (DataBlockGraphEdge *DataEdge : InDataEdges) {
             DataBlock *DB = DataEdge->getDataBlock();
-            LLVM_DEBUG(dbgs() << "      - [DataBlock] " << *DB->getValue());
+            LLVM_DEBUG(dbgs() << "      - [DataBlock] " << *DB->getValue() << " from \"EDT #"
+                              << DataEdge->getFrom()->getEDT()->getID() << "\"");
             DataBlock *DBParent = DB->getMainParent();
             if (DBParent) {
               LLVM_DEBUG(dbgs()
