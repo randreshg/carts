@@ -44,7 +44,7 @@ llvm: .llvm
 		-DLLVM_CCACHE_BUILD=OFF \
 		-DCLANG_ENABLE_STATIC_ANALYZER=ON  \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
-	ninja -C $</build -j install
+	ninja -C $</build install
 llvm-clean:
 	# [[ -d $(LLVM_DIR) ]] && make -C $(LLVM_DIR) uninstall
 	[[ -d $(LLVM_DIR) ]] && rm -rf $(LLVM_DIR)
