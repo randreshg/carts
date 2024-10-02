@@ -9,3 +9,4 @@ external/llvm/
 build/
 CMakeFiles
 core.*
+enable

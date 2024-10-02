@@ -5,6 +5,7 @@
 
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
@@ -24,7 +25,7 @@ public:
   ~OMPTransform() {}
   bool run(ModuleAnalysisManager &AM);
   bool runAttributor(Attributor &A);
-  void identifyEDTs(Function &Fn);
+  bool identifyEDTs(Function &Fn);
 
 private:
   Function *handleMain(Function &MainFn);
@@ -33,10 +34,11 @@ private:
   Instruction *handleTaskRegion(CallBase &CB);
   Instruction *handleTaskWait(CallBase &CB);
   Instruction *handleSingleRegion(CallBase &CB);
+  Instruction *handleOtherFunction(CallBase &CB);
   ///  Attributes
   Module &M;
   AnalysisGetter &AG;
-  SetVector<Function *> Functions;
+  SetVector<Function *> VisitedFunctions;
 };
 
 /// ------------------------------------------------------------------- ///

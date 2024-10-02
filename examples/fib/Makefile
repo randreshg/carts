@@ -1,6 +1,6 @@
 LIBS=
 
-all: simple_opt
+all: fib_opt
 
 # Emit LLVM IR -> TODO: Add OpenMP Metadata
 %.bc: %.cpp
@@ -12,7 +12,7 @@ all: simple_opt
 	llvm-dis $@
 
 # Run OMP transform pass
-simple_arts_ir.bc: simple.bc
+fib_arts_ir.bc: fib.bc
 	opt -load-pass-plugin=/home/randres/projects/carts/.install/carts/lib/OMPTransform.so \
 		-debug-only=omp-transform,arts,carts,arts-ir-builder\
 		-passes="omp-transform" $< -o $@
@@ -20,20 +20,20 @@ simple_arts_ir.bc: simple.bc
 	llvm-dis $@
 
 # Run the ARTS analysis pass
-simple_arts_analysis.bc:  simple_arts_ir.bc
+fib_arts_analysis.bc:  fib_arts_ir.bc
 	opt -load-pass-plugin=/home/randres/projects/carts/.install/carts/lib/ARTSAnalysis.so \
 			-debug-only=arts-analysis,arts,carts,arts-ir-builder,arts-graph,carts-metadata,arts-codegen\
 			-passes="arts-analysis" $< -o $@
 	llvm-dis $@
 
 
-simple_opt.bc: simple_arts_analysis.bc
+fib_opt.bc: fib_arts_analysis.bc
 	opt -O3 $< -o $@
 	llvm-dis $@
 
-simple_opt: simple_opt.bc
+fib_opt: fib_opt.bc
 	clang++ $< -O3 -g3 -march=native -o $@ -I/home/randres/projects/carts/carts/include -L/home/randres/projects/carts/.install/arts/lib -larts -lrdmacm
 
 
 clean:
-	rm -f *.bc *.ll simple_opt ;
+	rm -f *.bc *.ll fib_opt ;
