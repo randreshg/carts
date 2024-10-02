@@ -1,3 +1,46 @@
+clang++ -fopenmp -O3 -g0 -emit-llvm -c fib.cpp -o fib.bc -lstdc++
+clang++: warning: -Z-reserved-lib-stdc++: 'linker' input unused [-Wunused-command-line-argument]
+llvm-dis fib.bc
+opt -load-pass-plugin=/home/randres/projects/carts/.install/carts/lib/OMPTransform.so \
+	-debug-only=omp-transform,arts,carts,arts-ir-builder\
+	-passes="omp-transform" fib.bc -o fib_arts_ir.bc
+
+-------------------------------------------------
+[omp-transform] Running OmpTransformPass on Module: 
+fib.bc
+
+-------------------------------------------------
+
+-------------------------------------------------
+[omp-transform] Running OmpTransform on Module: 
+SCC: 
+SCC: __kmpc_global_thread_num 
+SCC: llvm.lifetime.start.p0 
+SCC: __kmpc_omp_task_alloc 
+SCC: __kmpc_omp_task 
+SCC: __kmpc_omp_taskwait 
+SCC: llvm.lifetime.end.p0 
+SCC: _Z3fibi 
+SCC: __gxx_personality_v0 
+SCC: llvm.experimental.noalias.scope.decl 
+SCC: .omp_task_entry. 
+SCC: .omp_task_entry..3 
+SCC: rand 
+SCC: omp_set_dynamic 
+SCC: omp_set_num_threads 
+SCC: __kmpc_fork_call 
+SCC: __kmpc_single 
+SCC: printf 
+SCC: __kmpc_end_single 
+SCC: __kmpc_barrier 
+SCC: main.omp_outlined 
+SCC: main 
+SCC: 
+[omp-transform] [Attributor] Done with 5 functions, result: changed.
+
+-------------------------------------------------
+[omp-transform] OmpTransformPass has finished
+
 ; ModuleID = 'fib.bc'
 source_filename = "fib.cpp"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
@@ -128,7 +171,7 @@ declare void @omp_set_num_threads(i32 noundef) local_unnamed_addr #6
 define internal void @main.omp_outlined(ptr noalias nocapture noundef readonly %.global_tid., ptr noalias nocapture readnone %.bound_tid., i64 noundef %n) #7 personality ptr @__gxx_personality_v0 {
 entry:
   %0 = load i32, ptr %.global_tid., align 4, !tbaa !17
-  %1 = tail call i32 @__kmpc_single(ptr nonnull @1, i32 %0)
+  %1 = tail call i32 @__kmpc_single(ptr nonnull @1, i32 %0) #3
   %.not = icmp eq i32 %1, 0
   br i1 %.not, label %omp_if.end, label %omp_if.then
 
@@ -210,3 +253,8 @@ attributes #9 = { nocallback nofree nosync nounwind willreturn memory(inaccessib
 !31 = distinct !{!31, !27, !".omp_outlined..1: %.privates."}
 !32 = !{!33}
 !33 = !{i64 2, i64 -1, i64 -1, i1 true}
+
+
+-------------------------------------------------
+# -debug-only=omp-transform,arts,carts,arts-ir-builder,arts-utils\
+llvm-dis fib_arts_ir.bc

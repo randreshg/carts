@@ -1,4 +1,4 @@
-; ModuleID = 'fib.bc'
+; ModuleID = 'fib_arts_ir.bc'
 source_filename = "fib.cpp"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
@@ -128,7 +128,7 @@ declare void @omp_set_num_threads(i32 noundef) local_unnamed_addr #6
 define internal void @main.omp_outlined(ptr noalias nocapture noundef readonly %.global_tid., ptr noalias nocapture readnone %.bound_tid., i64 noundef %n) #7 personality ptr @__gxx_personality_v0 {
 entry:
   %0 = load i32, ptr %.global_tid., align 4, !tbaa !17
-  %1 = tail call i32 @__kmpc_single(ptr nonnull @1, i32 %0)
+  %1 = tail call i32 @__kmpc_single(ptr nonnull @1, i32 %0) #3
   %.not = icmp eq i32 %1, 0
   br i1 %.not, label %omp_if.end, label %omp_if.then
 

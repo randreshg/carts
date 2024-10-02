@@ -2,7 +2,9 @@
 #include <cassert>
 #include <cstdint>
 
+#include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -37,27 +39,30 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 bool OMPTransform::run(ModuleAnalysisManager &AM) {
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << "Running OmpTransform on Module: \n");
-  /// Get main function
+  /// Handle main function
   Function &MainFn = *M.getFunction("main");
   Function &MainEDTFn = *handleMain(MainFn);
   identifyEDTs(MainEDTFn);
-  /// Handle main function
-  // handleMain(MainFn);
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << "Module after Identifying EDTs\n" << M << "\n");
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   return true;
 }
 
-void OMPTransform::identifyEDTs(Function &Fn) {
+bool OMPTransform::identifyEDTs(Function &Fn) {
   /// If the function is not analyzable, return
   if (Fn.isDeclaration() && !Fn.hasLocalLinkage())
-    return;
-  Functions.insert(&Fn);
+    return false;
+
+  /// If the function has already been processed, return
+  if(!VisitedFunctions.insert(&Fn))
+    return false;
+
   LLVM_DEBUG(dbgs() << "\n- - - - - - - - - - - - - - - - - - - - - - - -\n");
   LLVM_DEBUG(dbgs() << TAG << "Processing function: " << Fn.getName() << "\n");
   removeLifetimeMarkers(Fn);
 
+  bool EDTFound = false;
   /// Get entry block
   BasicBlock *CurrentBB = &(Fn.getEntryBlock());
   BasicBlock *NextBB = nullptr;
@@ -76,11 +81,13 @@ void OMPTransform::identifyEDTs(Function &Fn) {
         LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
         LLVM_DEBUG(dbgs() << TAG << "Parallel Region Found:\n" << *CB << "\n");
         CurrentI = handleParallelRegion(*CB);
+        EDTFound += true;
       } break;
       case OMPType::TASKALLOC: {
         LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
         LLVM_DEBUG(dbgs() << TAG << "Task Region Found:\n" << *CB << "\n");
         CurrentI = handleTaskRegion(*CB);
+        EDTFound += true;
       } break;
       case OMPType::TASKWAIT: {
         LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - -\n");
@@ -100,6 +107,8 @@ void OMPTransform::identifyEDTs(Function &Fn) {
         CurrentI = NextI;
       } break;
       case OMPType::OTHER: {
+        LLVM_DEBUG(dbgs() << TAG << "Other Function Found:\n" << *CB << "\n");
+        CurrentI = handleOtherFunction(*CB);
       } break;
       default:
         continue;
@@ -110,6 +119,7 @@ void OMPTransform::identifyEDTs(Function &Fn) {
   LLVM_DEBUG(dbgs() << TAG << "Processing function: " << Fn.getName()
                     << " - Finished\n");
   LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - - - -\n");
+  return EDTFound;
 }
 
 Function *OMPTransform::handleMain(Function &MainFn) {
@@ -361,10 +371,10 @@ Instruction *OMPTransform::handleTaskWait(CallBase &CB) {
   BlockSequence Region;
   getDominatedBBsTo(CallToDoneEDT->getParent(), *DT, Region);
   LLVM_DEBUG(dbgs() << TAG << "Region: " << Region.size() << "\n");
-  for(auto &BB : Region) {
+  for (auto &BB : Region) {
     LLVM_DEBUG(dbgs() << TAG << "BB: " << BB->getName() << "\n");
   }
-  
+
   CodeExtractor CE(Region);
   assert(CE.isEligible() && "Region is not eligible");
   SetVector<Value *> Inputs, Outputs;
@@ -375,7 +385,8 @@ Instruction *OMPTransform::handleTaskWait(CallBase &CB) {
   LLVM_DEBUG(dbgs() << TAG << "SyncEDTFn: " << *SyncEDTFn << "\n");
   CallBase *SyncCB = dyn_cast<CallBase>(SyncEDTFn->user_back());
   LLVM_DEBUG(dbgs() << TAG << "SyncCB: " << *SyncCB << "\n");
-  LLVM_DEBUG(dbgs() << TAG << "SyncCBParent: " << *SyncCB->getFunction() << "\n");
+  LLVM_DEBUG(dbgs() << TAG << "SyncCBParent: " << *SyncCB->getFunction()
+                    << "\n");
   /// Set Metadata to sync EDTs that sync only childs
   EDTIRBuilder IRB(EDTType::Sync, SyncEDTFn);
   for (auto &Arg : SyncCB->args()) {
@@ -437,6 +448,31 @@ Instruction *OMPTransform::handleSingleRegion(CallBase &CB) {
   SetVector<EDT *> EDTInputs, EDTOutputs;
   SyncEDT::setMetadata(IRB, EDTInputs, EDTOutputs, /*SyncChilds=*/true,
                        /*SyncDescendants=*/true);
+  return CurI;
+}
+
+Instruction *OMPTransform::handleOtherFunction(CallBase &CB) {
+  Instruction *CurI = &CB;
+
+  /// Identify EDTs for the current function
+  Function &Fn = *CB.getCalledFunction();
+  bool FoundEDT = identifyEDTs(Fn);
+
+  /// If no EDTs were found, return
+  if (!FoundEDT)
+    return CurI;
+
+  /// If we get to this point, it means that the function has EDTs.
+  /// Convert the function to an EDT
+  EDTIRBuilder IRB(EDTType::Task, &Fn);
+  CallBase *ParentCall = dyn_cast<CallBase>(Fn.user_back());
+  for (auto &Arg : ParentCall->args()) {
+    if (dyn_cast<PointerType>(Arg->getType()))
+      IRB.insertDep(Arg.get());
+    else
+      IRB.insertParam(Arg.get());
+  }
+  TaskEDT::setMetadata(IRB, -1);
   return CurI;
 }
 
