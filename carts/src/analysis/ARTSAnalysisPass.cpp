@@ -564,6 +564,7 @@ struct AAEDTInfoFunction : AAEDTInfo {
     assert(CalledEDT == ContextEDT &&
            "EDTCall doesn't correspond to the ContextEDT of the function!");
     ContextEDT->setCall(EDTCall);
+
     /// Set ParentEDT - Is the EDT called from another EDT?
     EDT *ParentEDT = Cache->getOrCreateEDT(EDTCall->getCaller());
     if (!ParentEDT) {
@@ -646,6 +647,10 @@ struct AAEDTInfoFunction : AAEDTInfo {
       indicatePessimisticFixpoint();
       return false;
     }
+
+    /// If we used assumed information in the check, we cannot be sure
+    if (UsedAssumedInformationInCheckCallInst)
+      return false;
 
     /// If we got to this point, we know that all children were created
     ChildEDTs.indicateOptimisticFixpoint();

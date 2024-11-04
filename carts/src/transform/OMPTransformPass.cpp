@@ -51,7 +51,6 @@ PreservedAnalyses OMPTransformPass::run(Module &M, ModuleAnalysisManager &AM) {
   for (Function &Fn : M) {
     if (Fn.isDeclaration() && !Fn.hasLocalLinkage())
       continue;
-    removeDeadInstructions(Fn);
     Functions.insert(&Fn);
   }
   /// Create attributor

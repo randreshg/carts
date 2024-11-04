@@ -1,6 +1,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <cassert>
 #include <cstdint>
 
@@ -237,7 +238,11 @@ bool ARTSGraph::insertCreationEdgeGuid(EDT *From, EDT *To, EDT *Done) {
 
   /// If not, guarantee that the parent of From has the Guid
   EDT *FromParent = From->getParent();
-  assert(FromParent && "The parent of the EDT must exist");
+  if(!FromParent) {
+    LLVM_DEBUG(dbgs() << "        - EDT #"
+                      << From->getID() << " does not have a parent\n");
+    llvm_unreachable("The parent of the EDT must exist");
+  }
   insertCreationEdgeGuid(FromParent, From, Done);
 
   /// Insert the Guid in the edge

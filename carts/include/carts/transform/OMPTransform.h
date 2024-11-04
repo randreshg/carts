@@ -67,7 +67,8 @@ enum OMPType {
   TASKWAIT,
   TASKDEP,
   SET_NUM_THREADS,
-  BARRIER
+  BARRIER,
+  GLOBAL_THREAD_NUM
 };
 
 /// Helper Functions
