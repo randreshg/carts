@@ -51,7 +51,7 @@ void EDTIRBuilder::setNewFn(Function *Fn) { NewFn = Fn; }
 CallBase *EDTIRBuilder::buildEDT(
     CallBase *OldCB, Function *OldFn,
     function<void(EDTIRBuilder *, Function *, Function *)> fillRewiringMapFn,
-    Instruction *InsertBefore) {
+    Instruction *InsertBefore, std::string EDTName) {
   LLVM_DEBUG(dbgs() << TAG << "Building EDT:\n");
   /// Collect replacement argument types and copy over existing attributes.
   SmallVector<Type *, 16> NewArgumentTypes;
@@ -66,7 +66,7 @@ CallBase *EDTIRBuilder::buildEDT(
   NewFn = Function::Create(NewFnTy, OldFn->getLinkage(),
                            OldFn->getAddressSpace(), "");
   OldFn->getParent()->getFunctionList().insert(OldFn->getIterator(), NewFn);
-  NewFn->setName("carts.edt");
+  NewFn->setName(EDTName);
   OldFn->setSubprogram(nullptr);
   LLVM_DEBUG(dbgs() << "Created new function: " << *NewFn);
   /// Splice the body of the old function right into the new function

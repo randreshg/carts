@@ -15,8 +15,6 @@
 #include "carts/utils/ARTSTypes.h"
 
 namespace arts {
-#define CARTS_MD "carts"
-
 using namespace llvm;
 using namespace std;
 

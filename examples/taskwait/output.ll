@@ -65,7 +65,7 @@ taskwait_arts_ir.bc
    - DepV: ptr %1
 [arts] Creating Task EDT for function: carts.edt.3
 
-[AAEDTInfoFunction::initialize] EDT #1 for function "carts.edt"
+[AAEDTInfoFunction::initialize] EDT #1 for function CARTS_EDT
 [arts] Function: main doesn't have CARTS Metadata
    - The ContextEDT is the MainEDT
 

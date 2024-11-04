@@ -1,15 +1,33 @@
 #include "carts/utils/ARTSCache.h"
+#include "llvm/Support/Debug.h"
 
 /// ------------------------------------------------------------------- ///
 ///                              ARTS Cache                             ///
 /// ------------------------------------------------------------------- ///
 namespace arts {
+
+/// DEBUG
+#define DEBUG_TYPE "arts-analysis"
+#if !defined(NDEBUG)
+static constexpr auto TAG = "[" DEBUG_TYPE "] ";
+#endif
+
+
 ARTSCache::ARTSCache(Module &M, AnalysisGetter &AG, BumpPtrAllocator &Allocator,
                      SetVector<Function *> &Functions)
     : InformationCache(M, AG, Allocator, &Functions), M(M),
       Functions(Functions) {
+  LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - - - - \n");
+  LLVM_DEBUG(dbgs() << TAG << "Initializing ARTS Cache\n");
   Graph = new ARTSGraph();
   CG = new ARTSCodegen(this);
+  /// Analyzing the functions
+  LLVM_DEBUG(dbgs() << " - Analyzing Functions\n");
+  for (Function *Fn : Functions) {
+    LLVM_DEBUG(dbgs() << "-- Function: " << Fn->getName() << "\n");
+    getOrCreateEDT(Fn);
+    LLVM_DEBUG(dbgs() << "\n");
+  }
 }
 
 ARTSCache::~ARTSCache() {

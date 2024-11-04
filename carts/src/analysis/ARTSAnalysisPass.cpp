@@ -547,70 +547,61 @@ struct AAEDTInfoFunction : AAEDTInfo {
                       << EDTFn->getName() << "\"\n");
     Cache->insertGraphNode(ContextEDT);
 
-    /// Callback to check all the calls to the EDT Function.
     EDTCallBase *EDTCall = nullptr;
-    auto CheckCallSite = [&](AbstractCallSite ACS) {
-      assert(!EDTCall && "Multiple calls to EDTFunction not supported yet.");
-      /// Verify it is a call to the EDT Function
-      EDTCall = cast<CallBase>(ACS.getInstruction());
-      EDT *CalledEDT = Cache->getOrCreateEDT(EDTCall);
-      assert(CalledEDT == ContextEDT &&
-             "EDTCall doesn't correspond to the ContextEDT of the function!");
-      ContextEDT->setCall(EDTCall);
 
-      /// Set ParentEDT - Is the EDT called from another EDT?
-      EDT *ParentEDT = Cache->getOrCreateEDT(EDTCall->getCaller());
-      if (!ParentEDT) {
-        /// The only EDT without a ParentEDT is the MainEDT
-        assert(ContextEDT->isMain() && "ParentEDT is null!");
-        LLVM_DEBUG(dbgs() << "   - The ContextEDT is the MainEDT\n");
-        ParentSyncEDT.indicateOptimisticFixpoint();
-        return true;
-      }
-
-      assert(ParentEDT && "EDT is not called from another EDT");
-      ContextEDT->setParent(ParentEDT);
-
-      /// AsyncEDTs do not have a SiblingDoneEDT
-      if (ContextEDT->isAsync()) {
-        /// If the parent is the MainEDT, we don't need a ParentSyncEDT
-        if (ParentEDT->isMain())
-          ParentSyncEDT.indicateOptimisticFixpoint();
-        return true;
-      }
-
-      /// If it is a SyncEDT, it must have a SiblingDoneEDT
-      /// It must be the first instruction of the next BB.
-      BranchInst *BI =
-          dyn_cast<BranchInst>(EDTCall->getParent()->getTerminator());
-      assert((BI && BI->getNumSuccessors() == 1) &&
-             "EDTCall is not a BranchInst with a single successor!");
-      CallBase *CB = dyn_cast<CallBase>(&BI->getSuccessor(0)->front());
-      assert(CB && "Next instruction is not a CallBase!");
-      EDT *DoneEDT = Cache->getOrCreateEDT(CB);
-      assert(
-          DoneEDT &&
-          "DoneEDT is null! It should have been found in the next BasicBlock!");
-      LLVM_DEBUG(dbgs() << "   - DoneEDT: EDT #" << DoneEDT->getID() << "\n");
-      ContextEDT->setDoneSync(DoneEDT);
-
-      /// Also, Sync EDTs do not have a ParentSyncEDT
-      ParentSyncEDT.indicateOptimisticFixpoint();
-      return true;
-    };
-
-    bool AllCallSitesKnown = true;
-    if (!A.checkForAllCallSites(CheckCallSite, *this,
-                                true /* RequireAllCallSites */,
-                                AllCallSitesKnown)) {
-      LLVM_DEBUG(dbgs() << "   - Failed to visit all CallSites!\n");
-      if (ContextEDT->getTy() != EDTType::Main) {
-        LLVM_DEBUG(dbgs() << "   - EDT #" << ContextEDT->getID()
-                          << " is dead. It can be safely removed\n");
-        indicatePessimisticFixpoint();
-        return;
-      }
+    /// For now, we only support EDTs with a single call
+    assert(EDTFn->hasOneUse() && "EDTFunction should have a single use!");
+    EDTCall = dyn_cast<EDTCallBase>(*EDTFn->users().begin());
+    if (!EDTCall) {
+      LLVM_DEBUG(dbgs() << "   - EDT #" << ContextEDT->getID()
+                        << " is dead. It can be safely removed\n");
+      indicatePessimisticFixpoint();
+      return;
     }
+
+    LLVM_DEBUG(dbgs() << "   - Call to EDTFunction:\n    " << *EDTCall << "\n");
+    EDT *CalledEDT = Cache->getOrCreateEDT(EDTCall);
+    assert(CalledEDT == ContextEDT &&
+           "EDTCall doesn't correspond to the ContextEDT of the function!");
+    ContextEDT->setCall(EDTCall);
+    /// Set ParentEDT - Is the EDT called from another EDT?
+    EDT *ParentEDT = Cache->getOrCreateEDT(EDTCall->getCaller());
+    if (!ParentEDT) {
+      /// The only EDT without a ParentEDT is the MainEDT
+      assert(ContextEDT->isMain() && "ParentEDT is null!");
+      LLVM_DEBUG(dbgs() << "   - The ContextEDT is the MainEDT\n");
+      ParentSyncEDT.indicateOptimisticFixpoint();
+      return;
+    }
+    /// Assumption: All the EDTs are called from another EDT
+    assert(ParentEDT && "EDT is not called from another EDT");
+    ContextEDT->setParent(ParentEDT);
+
+    /// AsyncEDTs do not have a SiblingDoneEDT
+    if (ContextEDT->isAsync()) {
+      /// If the parent is the MainEDT, we don't need a ParentSyncEDT
+      if (ParentEDT->isMain())
+        ParentSyncEDT.indicateOptimisticFixpoint();
+      return;
+    }
+
+    /// If it is a SyncEDT, it must have a SiblingDoneEDT
+    /// It must be the first instruction of the next BB.
+    BranchInst *BI =
+        dyn_cast<BranchInst>(EDTCall->getParent()->getTerminator());
+    assert((BI && BI->getNumSuccessors() == 1) &&
+           "EDTCall is not a BranchInst with a single successor!");
+    CallBase *CB = dyn_cast<CallBase>(&BI->getSuccessor(0)->front());
+    assert(CB && "Next instruction is not a CallBase!");
+    EDT *DoneEDT = Cache->getOrCreateEDT(CB);
+    assert(
+        DoneEDT &&
+        "DoneEDT is null! It should have been found in the next BasicBlock!");
+    LLVM_DEBUG(dbgs() << "   - DoneEDT: EDT #" << DoneEDT->getID() << "\n");
+    ContextEDT->setDoneSync(DoneEDT);
+
+    /// Sync EDTs do not have a ParentSyncEDT
+    ParentSyncEDT.indicateOptimisticFixpoint();
   }
 
   /// Update the ChildEDTs and DescendantEDTs of the EDT. It returns true
@@ -670,8 +661,9 @@ struct AAEDTInfoFunction : AAEDTInfo {
   /// Recursively check the ancestors of the ParentSyncEDTInfo to find the
   /// ParentSyncEDT
   EDT *getParentSyncEDTInfo(EDT *ParentSyncEDTInfo, uint32_t Depth = 0) {
-    /// The ParentSyncEDT had to eventually created me. Analyze the
-    /// ParentSyncEDTInfo and its ancestors to find the ParentSyncEDT
+    /// The ParentSyncEDT had to eventually created the current EDT.
+    /// Analyze the ParentSyncEDTInfo and its ancestors to find the
+    /// ParentSyncEDT
     if (!ParentSyncEDTInfo)
       return nullptr;
 
@@ -1323,7 +1315,9 @@ public:
   }
 
   void computeGraph(Module &M, ARTSCache &Cache) {
-    LLVM_DEBUG(dbgs() << "\n\n[Attributor] Initializing AAEDTInfo: \n");
+    LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - - - - \n");
+    LLVM_DEBUG(dbgs() << TAG << "Computing Graph\n");
+    LLVM_DEBUG(dbgs() << "[Attributor] Initializing AAEDTInfo: \n");
     /// Create attributor
     SetVector<Function *> &Functions = Cache.getFunctions();
     CallGraphUpdater CGUpdater;
@@ -1337,8 +1331,8 @@ public:
     Attributor A(Functions, Cache, AC);
 
     /// Register AAs
-    for (Function *Fn : Functions) {
-      A.getOrCreateAAFor<AAEDTInfo>(IRPosition::function(*Fn),
+    for (EDT *E : Cache.getEDTs()) {
+      A.getOrCreateAAFor<AAEDTInfo>(IRPosition::function(*E->getFn()),
                                     /* QueryingAA */ nullptr, DepClassTy::NONE,
                                     /* ForceUpdate */ false,
                                     /* UpdateAfterInit */ false);

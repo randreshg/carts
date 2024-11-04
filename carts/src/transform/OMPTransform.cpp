@@ -55,7 +55,7 @@ bool OMPTransform::identifyEDTs(Function &Fn) {
     return false;
 
   /// If the function has already been processed, return
-  if(!VisitedFunctions.insert(&Fn))
+  if (!VisitedFunctions.insert(&Fn))
     return false;
 
   LLVM_DEBUG(dbgs() << "\n- - - - - - - - - - - - - - - - - - - - - - - -\n");
@@ -128,7 +128,7 @@ Function *OMPTransform::handleMain(Function &MainFn) {
   FunctionType *MainEDTFnTy = FunctionType::get(Type::getVoidTy(M.getContext()),
                                                 /*isVarArg=*/false);
   Function *MainEDTFn = Function::Create(
-      MainEDTFnTy, GlobalValue::InternalLinkage, "carts.edt", &M);
+      MainEDTFnTy, GlobalValue::InternalLinkage, CARTS_EDT_MAIN, &M);
   replaceTerminatorsWithVoidReturn(&MainFn);
   /// Splice the body of the main function right into the new function
   MainEDTFn->splice(MainEDTFn->begin(), &MainFn);
@@ -141,6 +141,8 @@ Function *OMPTransform::handleMain(Function &MainFn) {
   /// Insert metadata
   EDTIRBuilder IRB(EDTType::Main, MainEDTFn);
   MainEDT::setMetadata(IRB);
+  /// Debug it
+  LLVM_DEBUG(dbgs() << TAG << "Main EDT Function: " << *MainEDTFn << "\n");
   return MainEDTFn;
 }
 
@@ -169,7 +171,8 @@ Instruction *OMPTransform::handleParallelRegion(CallBase &CB) {
   };
 
   /// Build the EDT
-  CallBase *NewCB = IRB.buildEDT(&CB, Fn, fillRewiringMapFn);
+  CallBase *NewCB =
+      IRB.buildEDT(&CB, Fn, fillRewiringMapFn, nullptr, CARTS_EDT_PARALLEL);
   ParallelEDT::setMetadata(IRB, -1, -1);
   /// Identify EDTs for the new function
   identifyEDTs(*IRB.getNewFn());
@@ -195,8 +198,7 @@ Instruction *OMPTransform::handleSyncDoneRegion(CallBase &CB) {
   SetVector<Value *> Inputs, Outputs;
   Function *DoneEDTFn = CE.extractCodeRegion(CEAC, Inputs, Outputs);
   assert(DoneEDTFn && "DoneEDTFn is nullptr");
-  DoneEDTFn->setName("carts.edt");
-  LLVM_DEBUG(dbgs() << TAG << "New Function: " << *DoneEDTFn << "\n");
+  DoneEDTFn->setName(CARTS_EDT_SYNC_DONE);
 
   /// Set Metadata
   EDTIRBuilder IRB(EDTType::Task, DoneEDTFn);
@@ -351,29 +353,30 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
     }
   };
   /// Build the EDT
-  auto *NewCB = IRB.buildEDT(&CB, Fn, fillRewiringMapFn, CallToOmpTask);
+  auto *NewCB =
+      IRB.buildEDT(&CB, Fn, fillRewiringMapFn, CallToOmpTask, CARTS_EDT_TASK);
   TaskEDT::setMetadata(IRB, -1);
   identifyEDTs(*IRB.getNewFn());
   return NewCB;
 }
 
 Instruction *OMPTransform::handleTaskWait(CallBase &CB) {
-  LLVM_DEBUG(dbgs() << TAG << "Processing Taskwait\n");
-  LLVM_DEBUG(dbgs() << TAG << "Function before: " << *CB.getFunction() << "\n");
+  // LLVM_DEBUG(dbgs() << TAG << "Processing Taskwait\n");
+  // LLVM_DEBUG(dbgs() << TAG << "Function before: " << *CB.getFunction() << "\n");
   Instruction *CallToDoneEDT = handleSyncDoneRegion(CB);
   Function *DoneFn = CallToDoneEDT->getFunction();
   removeValue(&CB);
 
-  LLVM_DEBUG(dbgs() << TAG << "Function after: " << *DoneFn << "\n");
+  // LLVM_DEBUG(dbgs() << TAG << "Function after: " << *DoneFn << "\n");
   /// Create EDTSync
   AG.invalidateAnalyses();
   DominatorTree *DT = AG.getAnalysis<DominatorTreeAnalysis>(*DoneFn);
   BlockSequence Region;
   getDominatedBBsTo(CallToDoneEDT->getParent(), *DT, Region);
-  LLVM_DEBUG(dbgs() << TAG << "Region: " << Region.size() << "\n");
-  for (auto &BB : Region) {
-    LLVM_DEBUG(dbgs() << TAG << "BB: " << BB->getName() << "\n");
-  }
+  // LLVM_DEBUG(dbgs() << TAG << "Region: " << Region.size() << "\n");
+  // for (auto &BB : Region) {
+  //   LLVM_DEBUG(dbgs() << TAG << "BB: " << BB->getName() << "\n");
+  // }
 
   CodeExtractor CE(Region);
   assert(CE.isEligible() && "Region is not eligible");
@@ -381,12 +384,12 @@ Instruction *OMPTransform::handleTaskWait(CallBase &CB) {
   CodeExtractorAnalysisCache CEAC(*DoneFn);
   Function *SyncEDTFn = CE.extractCodeRegion(CEAC, Inputs, Outputs);
   assert(SyncEDTFn && "SyncEDTFn is nullptr");
-  SyncEDTFn->setName("carts.edt");
-  LLVM_DEBUG(dbgs() << TAG << "SyncEDTFn: " << *SyncEDTFn << "\n");
+  SyncEDTFn->setName(CARTS_EDT_SYNC);
+  // LLVM_DEBUG(dbgs() << TAG << "SyncEDTFn: " << *SyncEDTFn << "\n");
   CallBase *SyncCB = dyn_cast<CallBase>(SyncEDTFn->user_back());
-  LLVM_DEBUG(dbgs() << TAG << "SyncCB: " << *SyncCB << "\n");
-  LLVM_DEBUG(dbgs() << TAG << "SyncCBParent: " << *SyncCB->getFunction()
-                    << "\n");
+  // LLVM_DEBUG(dbgs() << TAG << "SyncCB: " << *SyncCB << "\n");
+  // LLVM_DEBUG(dbgs() << TAG << "SyncCBParent: " << *SyncCB->getFunction()
+  //                   << "\n");
   /// Set Metadata to sync EDTs that sync only childs
   EDTIRBuilder IRB(EDTType::Sync, SyncEDTFn);
   for (auto &Arg : SyncCB->args()) {
@@ -398,6 +401,7 @@ Instruction *OMPTransform::handleTaskWait(CallBase &CB) {
   SetVector<EDT *> EDTInputs, EDTOutputs;
   SyncEDT::setMetadata(IRB, EDTInputs, EDTOutputs, /*SyncChilds=*/true,
                        /*SyncDescendants=*/false);
+  // SyncEDTFn->setName(CARTS_EDT_SYNC);
   return SyncCB;
 }
 
@@ -472,7 +476,10 @@ Instruction *OMPTransform::handleOtherFunction(CallBase &CB) {
     else
       IRB.insertParam(Arg.get());
   }
+
+  /// Build the EDT
   TaskEDT::setMetadata(IRB, -1);
+  Fn.setName(CARTS_EDT);
   return CurI;
 }
 

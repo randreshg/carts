@@ -14,7 +14,6 @@ all: simplefn_opt
 # Run OMP transform pass
 simplefn_arts_ir.bc: simplefn.bc
 	opt -load-pass-plugin=/home/randres/projects/carts/.install/carts/lib/OMPTransform.so \
-		-debug-only=omp-transform,arts,carts,arts-ir-builder\
 		-passes="omp-transform" $< -o $@
 	# -debug-only=omp-transform,arts,carts,arts-ir-builder,arts-utils\
 	llvm-dis $@
