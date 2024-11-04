@@ -2,7 +2,7 @@
 #include <cassert>
 #include <cstdint>
 
-#include "llvm/ADT/SCCIterator.h"
+// #include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -102,9 +102,12 @@ bool OMPTransform::identifyEDTs(Function &Fn) {
       case OMPType::SINGLE_END: {
         LLVM_DEBUG(dbgs() << TAG << "Single End Region Found:\n"
                           << *CB << "\n");
-        Instruction *NextI = CurrentI->getPrevNonDebugInstruction();
-        removeValue(CurrentI);
-        CurrentI = NextI;
+        insertValueToRemove(CurrentI);
+      } break;
+      case OMPType::GLOBAL_THREAD_NUM: {
+        LLVM_DEBUG(dbgs() << TAG << "Call to Global Thread Num Found:\n"
+                          << *CB << "\n");
+        insertValueToRemove(CurrentI);
       } break;
       case OMPType::OTHER: {
         LLVM_DEBUG(dbgs() << TAG << "Other Function Found:\n" << *CB << "\n");
@@ -116,6 +119,11 @@ bool OMPTransform::identifyEDTs(Function &Fn) {
       }
     } while ((CurrentI = CurrentI->getNextNonDebugInstruction()));
   } while ((CurrentBB = NextBB));
+
+  /// Remove values that are marked for removal and dead instructions
+  removeValues();
+  removeDeadInstructions(Fn);
+  /// Process has finished
   LLVM_DEBUG(dbgs() << TAG << "Processing function: " << Fn.getName()
                     << " - Finished\n");
   LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - - - - - -\n");
@@ -528,6 +536,8 @@ OMPType getRTFunction(Function *Fn) {
     return OMPType::SINGLE_END;
   if (CalleeName == "__kmpc_barrier")
     return OMPType::BARRIER;
+  if (CalleeName == "__kmpc_global_thread_num")
+    return OMPType::GLOBAL_THREAD_NUM;
   return OMPType::OTHER;
 }
 

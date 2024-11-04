@@ -9,7 +9,7 @@ target triple = "x86_64-unknown-linux-gnu"
 %union.kmp_cmplrdata_t = type { ptr }
 %struct..kmp_privates.t = type { i32 }
 
-@.str = private unnamed_addr constant [28 x i8] c"EDT 3: The number is %d/%d\0A\00", align 1
+@.str = private unnamed_addr constant [28 x i8] c"EDT 1: The number is %d/%d\0A\00", align 1
 @0 = private unnamed_addr constant [23 x i8] c";unknown;unknown;0;0;;\00", align 1
 @1 = private unnamed_addr constant %struct.ident_t { i32 0, i32 2, i32 0, i32 22, ptr @0 }, align 8
 @.str.1 = private unnamed_addr constant [36 x i8] c"EDT 1: The initial number is %d/%d\0A\00", align 1
