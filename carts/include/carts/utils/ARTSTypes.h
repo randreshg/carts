@@ -17,6 +17,16 @@ using BlockSequence = SmallVector<BasicBlock *, 0>;
 /// It contains the types used by the ARTS runtime library.
 /// ------------------------------------------------------------------- ///
 namespace types {
+/// ARTS runtime library (RTL) function names.
+#define CARTS_MD "carts"
+#define CARTS_EDT "carts.edt"
+#define CARTS_EDT_TASK "carts.edt.task"
+#define CARTS_EDT_MAIN "carts.edt.main"
+#define CARTS_EDT_SYNC "carts.edt.sync"
+#define CARTS_EDT_SYNC_DONE "carts.edt.sync.done"
+#define CARTS_EDT_PARALLEL "carts.edt.parallel"
+#define CARTS_EDT_PARALLEL_DONE "carts.edt.parallel.done"
+
 /// EDT types
 enum EDTTypeKind {
   TK_UNKNOWN = 0,
