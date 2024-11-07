@@ -32,6 +32,7 @@ private:
   Instruction *handleParallelRegion(CallBase &CB);
   Instruction *handleSyncDoneRegion(CallBase &CB);
   Instruction *handleTaskRegion(CallBase &CB);
+  Instruction *handleTaskWithDeps(CallBase &CB);
   Instruction *handleTaskWait(CallBase &CB);
   Instruction *handleSingleRegion(CallBase &CB);
   Instruction *handleOtherFunction(CallBase &CB);
@@ -77,8 +78,9 @@ OMPData getRTData(OMPType RTF);
 OMPType getRTFunction(Function *F);
 OMPType getRTFunction(CallBase &CB);
 OMPType getRTFunction(Instruction *I);
-bool isTaskFunction(Function *F);
+// bool isTaskFunction(Function *F);
 bool isTaskFunction(CallBase &CB);
+bool isTaskWithDepsFunction(CallBase &CB);
 bool isRTFunction(CallBase &CB);
 } // namespace omp
 

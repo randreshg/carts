@@ -7,6 +7,7 @@
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstrTypes.h"
@@ -121,6 +122,7 @@ bool OMPTransform::identifyEDTs(Function &Fn) {
   } while ((CurrentBB = NextBB));
 
   /// Remove values that are marked for removal and dead instructions
+  LLVM_DEBUG(dbgs() << TAG << "Removing Values and Dead Instructions\n");
   removeValues();
   removeDeadInstructions(Fn);
   /// Process has finished
@@ -271,7 +273,7 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
   CallBase *CallToOmpTask = nullptr;
   DenseMap<Value *, int64_t> ValueToOffsetTD;
   Instruction *CurI = &CB;
-  do {
+  while ((CurI = CurI->getNextNonDebugInstruction())) {
     if (auto *SI = dyn_cast<StoreInst>(CurI)) {
       int64_t Offset = -1;
       auto *Val = SI->getValueOperand();
@@ -286,17 +288,25 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
       IRB.insertDep(Val);
       continue;
     }
-    /// Break if we find a call to a task function
+
     if (auto *CI = dyn_cast<CallInst>(CurI)) {
+      /// Break if we find a call to a task function
       if (omp::isTaskFunction(*CI)) {
         CallToOmpTask = CI;
         break;
       }
+      /// Handle Task with Deps
+      if (omp::isTaskWithDepsFunction(*CI)) {
+        handleTaskWithDeps(*CI);
+        break;
+      }
     }
-  } while ((CurI = CurI->getNextNonDebugInstruction()));
+  };
 
   /// Rewrite Task Outlined Function arguments to match the Task Data
   Function *Fn = omp::getOutlinedFunction(&CB);
+  LLVM_DEBUG(dbgs() << TAG << "Task Outlined Function: " << *Fn
+                    << "\n");
   Argument *TaskDataArg = dyn_cast<Argument>(Fn->arg_begin() + 1);
   /// This assumes the 'disaggregation' happens in the first basic block
   BasicBlock &EntryBB = Fn->getEntryBlock();
@@ -304,7 +314,8 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
   /// Get offsets and values from the Task Data - Task Outlined function
   DenseMap<int64_t, Value *> OffsetToValueOF;
   CurI = &*EntryBB.begin();
-  while ((CurI = CurI->getNextNonDebugInstruction())) {
+
+  do {
     if (!isa<LoadInst>(CurI))
       continue;
 
@@ -313,8 +324,9 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
     // LLVM_DEBUG(dbgs() << TAG << "LoadInst: " << *L << "\n");
     int64_t Offset = -1;
     Value *BasePointer = GetPointerBaseWithConstantOffset(Val, Offset, DL);
-    // LLVM_DEBUG(dbgs() << TAG << "BasePointer: " << *BasePointer << "\n");
-    // LLVM_DEBUG(dbgs() << TAG << "Offset: " << Offset << "\n");
+    LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - -\n");
+    LLVM_DEBUG(dbgs() << "BasePointer: " << *BasePointer << "\n");
+    LLVM_DEBUG(dbgs() << "Offset: " << Offset << "\n");
     if (Offset == -1)
       continue;
 
@@ -332,16 +344,16 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
     OffsetToValueOF[Offset] = L;
     if (OffsetToValueOF.size() == ValueToOffsetTD.size())
       break;
-  }
+  } while ((CurI = CurI->getNextNonDebugInstruction()));
 
-  // for(auto &V : OffsetToValueOF) {
-  //   LLVM_DEBUG(dbgs() << TAG << "OffsetToValueOF: " << V.first << " -> " <<
-  //   *V.second << "\n");
-  // }
-  // for(auto &V : ValueToOffsetTD) {
-  //   LLVM_DEBUG(dbgs() << TAG << "ValueToOffsetTD: " << *V.first << " -> " <<
-  //   V.second << "\n");
-  // }
+  for(auto &V : OffsetToValueOF) {
+    LLVM_DEBUG(dbgs() << TAG << "OffsetToValueOF: " << V.first << " -> " <<
+    *V.second << "\n");
+  }
+  for(auto &V : ValueToOffsetTD) {
+    LLVM_DEBUG(dbgs() << TAG << "ValueToOffsetTD: " << *V.first << " -> " <<
+    V.second << "\n");
+  }
   assert(ValueToOffsetTD.size() == OffsetToValueOF.size() &&
          "ValueToOffsetTD and ValueToOffsetOF have different sizes");
 
@@ -368,9 +380,106 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
   return NewCB;
 }
 
+Instruction *OMPTransform::handleTaskWithDeps(CallBase &CB) {
+  /// Analyze call to __kmpc_omp_task_with_deps
+
+  /// The 2nd argument corresponds to the task data, the 3rd to the
+  /// number of dependencies, and the 4th to the list of dependencies
+
+  /// Get the 3rd argument from the call
+  LLVM_DEBUG(dbgs() << TAG << "Processing Task with Deps\n" << CB << "\n");
+  Value *NumDeps = CB.getArgOperand(3);
+  /// Convert it to an integer
+  ConstantInt *NumDepsCI = cast<ConstantInt>(NumDeps);
+  int64_t NumDepsVal = NumDepsCI->getSExtValue();
+  LLVM_DEBUG(dbgs() << TAG << "NumDeps: " << NumDepsVal << "\n");
+
+  /// Dependencies are in the 4th argument and correspond to an array of
+  /// alloca [1 x %struct.kmp_depend_info]. We need to get the values of the
+  /// fields of the struct
+  // typedef struct kmp_depend_info {
+  //   intptr_t base_addr;
+  //   size_t len;
+  //   struct {
+  //     bool in : 1;
+  //     bool out : 1;
+  //     bool mtx : 1;
+  //   } flags;
+  // } kmp_depend_info_t;
+
+  const DataLayout &DL = CB.getModule()->getDataLayout();
+  Value *DepList = CB.getArgOperand(4);
+  AllocaInst *DepListAI = cast<AllocaInst>(DepList);
+  ArrayType *DepListTy = cast<ArrayType>(DepListAI->getAllocatedType());
+  StructType *DepStructTy = cast<StructType>(DepListTy->getElementType());
+  int64_t DepStructTySize =
+      static_cast<int64_t>(DL.getTypeAllocSize(DepStructTy));
+  int64_t NumFields = DepStructTy->getNumElements();
+  /// Assuming the struct is aligned...
+  int64_t FieldSize = DepStructTySize / NumFields;
+
+  LLVM_DEBUG(dbgs() << TAG << "FieldSize: " << FieldSize << "\n");
+  /// Analyze stores to the dependencies array
+  Instruction *CurI = cast<Instruction>(CB.getArgOperand(2));
+  while ((CurI = CurI->getNextNonDebugInstruction())) {
+    /// Analyze store instructions
+    if (StoreInst *S = dyn_cast<StoreInst>(CurI)) {
+      Value *Val = S->getPointerOperand();
+      int64_t Offset = -1;
+      Value *BasePointer = GetPointerBaseWithConstantOffset(Val, Offset, DL);
+      if (Offset == -1)
+        continue;
+
+      /// We are only interested on stores to DepListAI
+      if (BasePointer != DepListAI)
+        continue;
+
+      /// Debug
+      LLVM_DEBUG(dbgs() << "- - - - - - -- - - - - - - - - - - \n");
+      // LLVM_DEBUG(dbgs() << "StoreInst: " << *S << "\n");
+      // LLVM_DEBUG(dbgs() << "BasePointer: " << *BasePointer << "\n");
+      // LLVM_DEBUG(dbgs() << "Offset: " << Offset << "\n");
+      int64_t DepItr = Offset / DepStructTySize;
+      int64_t FieldItr = (Offset % DepStructTySize) / FieldSize;
+      LLVM_DEBUG(dbgs() << "Dependency #" << DepItr << "\n");
+      LLVM_DEBUG(dbgs() << "Field #: " << FieldItr << "\n");
+      if (FieldItr == 0) {
+        PtrToIntInst *BaseAddrPtI =
+            dyn_cast<PtrToIntInst>(S->getValueOperand());
+        assert(BaseAddrPtI && "BaseAddrPtI is not a PtrToIntInst");
+
+        Value *BaseAddr = BaseAddrPtI->getPointerOperand();
+        LLVM_DEBUG(dbgs() << "BaseAddr: " << *BaseAddr << "\n");
+
+      } else if (FieldItr == 1) {
+        Value *Len = S->getValueOperand();
+        LLVM_DEBUG(dbgs() << "Len: " << *Len << "\n");
+      } else if (FieldItr == 2) {
+        ConstantInt *CI = cast<ConstantInt>(S->getValueOperand());
+        int64_t Flag = CI->getSExtValue();
+        if (Flag & 0x1) {
+          LLVM_DEBUG(dbgs() << "In ");
+        }
+        if (Flag & 0x2) {
+          LLVM_DEBUG(dbgs() << "Out ");
+        } else if (Flag & 0x4) {
+          LLVM_DEBUG(dbgs() << "Mtx ");
+        }
+        LLVM_DEBUG(dbgs() << "\n");
+      }
+    }
+
+    /// If we find a call to a task function, break
+    if (CurI == &CB)
+      break;
+    return &CB;
+  }
+}
+
 Instruction *OMPTransform::handleTaskWait(CallBase &CB) {
   // LLVM_DEBUG(dbgs() << TAG << "Processing Taskwait\n");
-  // LLVM_DEBUG(dbgs() << TAG << "Function before: " << *CB.getFunction() << "\n");
+  // LLVM_DEBUG(dbgs() << TAG << "Function before: " << *CB.getFunction() <<
+  // "\n");
   Instruction *CallToDoneEDT = handleSyncDoneRegion(CB);
   Function *DoneFn = CallToDoneEDT->getFunction();
   removeValue(&CB);
@@ -419,6 +528,8 @@ Instruction *OMPTransform::handleSingleRegion(CallBase &CB) {
   // LLVM_DEBUG(dbgs() << TAG << "Function:\n" << ParentFn << "\n");
   BasicBlock *SingleBB = CB.getParent();
   BranchInst *BranchInstruction = cast<BranchInst>(SingleBB->getTerminator());
+  assert(BranchInstruction->isConditional() &&
+         "Branch Instruction is not conditional");
 
   /// Start by checking the False successor. If it is a barrier, and the next
   /// instruction is a return instruction, we can safely remove the BB
@@ -438,15 +549,22 @@ Instruction *OMPTransform::handleSingleRegion(CallBase &CB) {
   /// remove it
   /// NOTE: This will happen in the identifyEDTs function
 
-  /// Get the next instruction
-  BasicBlock *TrueBB = BranchInstruction->getSuccessor(1);
-  Instruction *CurI = &TrueBB->front();
+  /// Single BB can not be removed, because it may contain instructions that
+  /// are used in the TrueBB. We need to remove the branch instruction and
+  /// replace it with a jump to the TrueBB
 
-  /// Remove the single BB
-  SingleBB->eraseFromParent();
+  /// Create unconditional branch to the TrueBB
+  BasicBlock *TrueBB = BranchInstruction->getSuccessor(1);
+  BranchInst *NewBI = BranchInst::Create(TrueBB);
+  NewBI->insertBefore(BranchInstruction);
+  removeValue(&CB, true, true);
+  SingleBB->setName("pre_entry");
 
   /// TrueBB is now the entry block
   TrueBB->setName("entry");
+
+  // LLVM_DEBUG(dbgs() << TAG << "SingleBB: " << *SingleBB->getParent() <<
+  // "\n");
 
   /// Convert Parallel EDT to Single EDT
   EDTIRBuilder IRB(EDTType::Sync, &ParentFn);
@@ -458,9 +576,11 @@ Instruction *OMPTransform::handleSingleRegion(CallBase &CB) {
       IRB.insertParam(Arg.get());
   }
   SetVector<EDT *> EDTInputs, EDTOutputs;
-  SyncEDT::setMetadata(IRB, EDTInputs, EDTOutputs, /*SyncChilds=*/true,
-                       /*SyncDescendants=*/true);
-  return CurI;
+  SyncEDT::setMetadata(IRB, EDTInputs, EDTOutputs,
+                       /*SyncChilds=*/true, /*SyncDescendants=*/true);
+
+  LLVM_DEBUG(dbgs() << TAG << "Function after: " << ParentFn << "\n");
+  return NewBI;
 }
 
 Instruction *OMPTransform::handleOtherFunction(CallBase &CB) {
@@ -522,7 +642,7 @@ OMPType getRTFunction(Function *Fn) {
     return OMPType::TASKALLOC;
   if (CalleeName == "__kmpc_omp_task")
     return OMPType::TASK;
-  if (CalleeName == "__kmpc_omp_task_alloc_with_deps")
+  if (CalleeName == "__kmpc_omp_task_with_deps")
     return OMPType::TASKDEP;
   if (CalleeName == "__kmpc_omp_taskwait")
     return OMPType::TASKWAIT;
@@ -553,16 +673,23 @@ OMPType getRTFunction(Instruction *I) {
   return getRTFunction(*CB);
 }
 
-bool isTaskFunction(Function *Fn) {
-  auto RT = getRTFunction(Fn);
-  if (RT == OMPType::TASK || RT == OMPType::TASKDEP || RT == OMPType::TASKWAIT)
+// bool isTaskFunction(Function *Fn) {
+//   auto RT = getRTFunction(Fn);
+//   if (RT == OMPType::TASK)
+//     return true;
+//   return false;
+// }
+
+bool isTaskFunction(CallBase &CB) {
+  auto RT = getRTFunction(CB);
+  if (RT == OMPType::TASK)
     return true;
   return false;
 }
 
-bool isTaskFunction(CallBase &CB) {
+bool isTaskWithDepsFunction(CallBase &CB) {
   auto RT = getRTFunction(CB);
-  if (RT == OMPType::TASK || RT == OMPType::TASKDEP || RT == OMPType::TASKWAIT)
+  if (RT == OMPType::TASKDEP)
     return true;
   return false;
 }
