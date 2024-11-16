@@ -277,7 +277,19 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
     if (auto *SI = dyn_cast<StoreInst>(CurI)) {
       int64_t Offset = -1;
       auto *Val = SI->getValueOperand();
-      GetPointerBaseWithConstantOffset(SI->getPointerOperand(), Offset, DL);
+      Value *BasePointer =
+          GetPointerBaseWithConstantOffset(SI->getPointerOperand(), Offset, DL);
+      /// Skip if the offset is not found
+      if (Offset == -1)
+        continue;
+
+      /// Skip if the store is not a load to a pointer of the task data
+      LoadInst *LI = dyn_cast<LoadInst>(BasePointer);
+      if (!LI || LI->getPointerOperand() != &CB)
+        continue;
+
+      // LLVM_DEBUG(dbgs() << " - BasePointer: " << *BasePointer << "\n");
+      // LLVM_DEBUG(dbgs() << " - Offset: " << Offset << "\n");
       ValueToOffsetTD[Val] = Offset;
       /// Private variables
       if (Offset >= TaskDataSize && TaskDataSize != 0) {
@@ -305,8 +317,7 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
 
   /// Rewrite Task Outlined Function arguments to match the Task Data
   Function *Fn = omp::getOutlinedFunction(&CB);
-  LLVM_DEBUG(dbgs() << TAG << "Task Outlined Function: " << *Fn
-                    << "\n");
+  LLVM_DEBUG(dbgs() << TAG << "Task Outlined Function: " << *Fn << "\n");
   Argument *TaskDataArg = dyn_cast<Argument>(Fn->arg_begin() + 1);
   /// This assumes the 'disaggregation' happens in the first basic block
   BasicBlock &EntryBB = Fn->getEntryBlock();
@@ -324,9 +335,9 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
     // LLVM_DEBUG(dbgs() << TAG << "LoadInst: " << *L << "\n");
     int64_t Offset = -1;
     Value *BasePointer = GetPointerBaseWithConstantOffset(Val, Offset, DL);
-    LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - -\n");
-    LLVM_DEBUG(dbgs() << "BasePointer: " << *BasePointer << "\n");
-    LLVM_DEBUG(dbgs() << "Offset: " << Offset << "\n");
+    // LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - -\n");
+    // LLVM_DEBUG(dbgs() << "BasePointer: " << *BasePointer << "\n");
+    // LLVM_DEBUG(dbgs() << "Offset: " << Offset << "\n");
     if (Offset == -1)
       continue;
 
@@ -346,14 +357,14 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
       break;
   } while ((CurI = CurI->getNextNonDebugInstruction()));
 
-  for(auto &V : OffsetToValueOF) {
-    LLVM_DEBUG(dbgs() << TAG << "OffsetToValueOF: " << V.first << " -> " <<
-    *V.second << "\n");
-  }
-  for(auto &V : ValueToOffsetTD) {
-    LLVM_DEBUG(dbgs() << TAG << "ValueToOffsetTD: " << *V.first << " -> " <<
-    V.second << "\n");
-  }
+  // for (auto &V : OffsetToValueOF) {
+  //   LLVM_DEBUG(dbgs() << TAG << "OffsetToValueOF: " << V.first << " -> "
+  //                     << *V.second << "\n");
+  // }
+  // for (auto &V : ValueToOffsetTD) {
+  //   LLVM_DEBUG(dbgs() << TAG << "ValueToOffsetTD: " << *V.first << " -> "
+  //                     << V.second << "\n");
+  // }
   assert(ValueToOffsetTD.size() == OffsetToValueOF.size() &&
          "ValueToOffsetTD and ValueToOffsetOF have different sizes");
 
@@ -472,8 +483,8 @@ Instruction *OMPTransform::handleTaskWithDeps(CallBase &CB) {
     /// If we find a call to a task function, break
     if (CurI == &CB)
       break;
-    return &CB;
   }
+  return &CB;
 }
 
 Instruction *OMPTransform::handleTaskWait(CallBase &CB) {

@@ -246,13 +246,16 @@ public:
   int32_t getThreadNum() { return ThreadNum; }
 
   /// Static interface
-  static void setMetadata(EDTIRBuilder &Builder, int32_t ThreadNum = -1);
+  static void setMetadata(EDTIRBuilder &Builder, SetVector<EDT *> &Inputs,
+                          SetVector<EDT *> &Outputs, int32_t ThreadNum = -1);
   static bool classof(const EDT *E) {
     return (E->getTypeKind() & EDTTypeKind::TK_TASK) == EDTTypeKind::TK_TASK;
   }
 
 private:
   int32_t ThreadNum = -1;
+  SetVector<EDT *> Inputs;
+  SetVector<EDT *> Outputs;
 };
 
 class MainEDT : public TaskEDT {

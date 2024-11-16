@@ -208,6 +208,9 @@ entry:
   %7 = load i32, ptr %6, align 4, !tbaa !6, !noalias !37
   %add.i = add nsw i32 %7, %5
   store i32 %add.i, ptr %6, align 4, !tbaa !6, !noalias !37
+  %8 = load i32, ptr %4, align 4, !tbaa !6, !noalias !37
+  %inc.i = add nsw i32 %8, 1
+  store i32 %inc.i, ptr %4, align 4, !tbaa !6, !noalias !37
   ret i32 0
 }
 

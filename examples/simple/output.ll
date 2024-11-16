@@ -96,27 +96,78 @@ omp_if.end:                                       ; preds = %omp_if.then, %entry
 - - - - - - - - - - - - - - - -
 [omp-transform] Single Region Found:
   %3 = tail call i32 @__kmpc_single(ptr nonnull @1, i32 undef)
+[omp-transform] Function after: ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+define internal void @carts.edt.parallel(ptr %0, ptr %1) #2 !carts !6 {
+pre_entry:
+  %2 = load i32, ptr undef, align 4, !tbaa !8
+  br label %entry
+
+entry:                                            ; preds = %pre_entry
+  %3 = load i32, ptr %0, align 4, !tbaa !8
+  %4 = load i32, ptr %1, align 4, !tbaa !8
+  %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %3, i32 noundef %4)
+  %5 = tail call ptr @__kmpc_omp_task_alloc(ptr nonnull @1, i32 undef, i32 1, i64 48, i64 8, ptr nonnull @.omp_task_entry.)
+  %6 = load ptr, ptr %5, align 8, !tbaa !12
+  store ptr %0, ptr %6, align 8, !tbaa.struct !17
+  %7 = getelementptr inbounds %struct.kmp_task_t_with_privates, ptr %5, i64 0, i32 1
+  %8 = load i32, ptr %1, align 4, !tbaa !8
+  store i32 %8, ptr %7, align 8, !tbaa !19
+  %9 = tail call i32 @__kmpc_omp_task(ptr nonnull @1, i32 undef, ptr nonnull %5)
+  tail call void @__kmpc_end_single(ptr nonnull @1, i32 undef)
+  br label %exit
+
+exit:                                             ; preds = %entry
+  ret void
+}
+
 [omp-transform] Other Function Found:
-  %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %2, i32 noundef %3)
+  %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %3, i32 noundef %4)
 - - - - - - - - - - - - - - - -
 [omp-transform] Task Region Found:
-  %4 = tail call ptr @__kmpc_omp_task_alloc(ptr nonnull @1, i32 undef, i32 1, i64 48, i64 8, ptr nonnull @.omp_task_entry.)
+  %5 = tail call ptr @__kmpc_omp_task_alloc(ptr nonnull @1, i32 undef, i32 1, i64 48, i64 8, ptr nonnull @.omp_task_entry.)
+ - BasePointer:   %6 = load ptr, ptr %5, align 8, !tbaa !12
+ - Offset: 0
+[omp-transform] Task Outlined Function: ; Function Attrs: nofree norecurse nounwind uwtable
+define internal noundef i32 @.omp_task_entry.(i32 %0, ptr noalias nocapture noundef %1) #5 personality ptr @__gxx_personality_v0 {
+entry:
+  %2 = load ptr, ptr %1, align 8, !tbaa !12
+  %3 = getelementptr inbounds %struct.kmp_task_t_with_privates, ptr %1, i64 0, i32 1
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !20)
+  %4 = load ptr, ptr %2, align 8, !tbaa !23, !alias.scope !20, !noalias !25
+  %5 = load i32, ptr %4, align 4, !tbaa !8, !noalias !20
+  %inc.i = add nsw i32 %5, 1
+  store i32 %inc.i, ptr %4, align 4, !tbaa !8, !noalias !20
+  %6 = load i32, ptr %3, align 4, !tbaa !8, !noalias !20
+  %inc1.i = add nsw i32 %6, 1
+  store i32 %inc1.i, ptr %3, align 4, !tbaa !8, !noalias !20
+  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %inc.i, i32 noundef %inc1.i), !noalias !20
+  ret i32 0
+}
+
+- - - - - - - - - - - - - - - - - -
+BasePointer: ptr %1
+Offset: 0
+- - - - - - - - - - - - - - - - - -
+BasePointer:   %2 = load ptr, ptr %1, align 8, !tbaa !6
+Offset: 0
+[omp-transform] OffsetToValueOF: 0 ->   %4 = load ptr, ptr %2, align 8, !tbaa !17, !alias.scope !14, !noalias !19
+[omp-transform] ValueToOffsetTD: ptr %0 -> 0
 [arts-ir-builder] Building EDT:
-Created new function: declare internal void @carts.edt.task(ptr, i32)
-[arts-ir-builder] New callsite:   call void @carts.edt.task(ptr %0, i32 %7)
+Created new function: declare internal void @carts.edt.task(ptr)
+[arts-ir-builder] New callsite:   call void @carts.edt.task(ptr %0)
 [arts-ir-builder] New function:
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
-define internal void @carts.edt.task(ptr %0, i32 %1) #2 {
+define internal void @carts.edt.task(ptr %0) #2 {
 entry:
-  %2 = load ptr, ptr undef, align 8, !tbaa !12
-  %3 = getelementptr inbounds %struct.kmp_task_t_with_privates, ptr undef, i64 0, i32 1
+  %1 = load ptr, ptr undef, align 8, !tbaa !12
+  %2 = getelementptr inbounds %struct.kmp_task_t_with_privates, ptr undef, i64 0, i32 1
   tail call void @llvm.experimental.noalias.scope.decl(metadata !17)
-  %4 = load ptr, ptr undef, align 8, !tbaa !20, !alias.scope !17, !noalias !22
-  %5 = load i32, ptr %0, align 4, !tbaa !8, !noalias !17
-  %inc.i = add nsw i32 %5, 1
+  %3 = load ptr, ptr undef, align 8, !tbaa !20, !alias.scope !17, !noalias !22
+  %4 = load i32, ptr %0, align 4, !tbaa !8, !noalias !17
+  %inc.i = add nsw i32 %4, 1
   store i32 %inc.i, ptr %0, align 4, !tbaa !8, !noalias !17
-  %6 = load i32, ptr undef, align 4, !tbaa !8, !noalias !17
-  %inc1.i = add nsw i32 %1, 1
+  %5 = load i32, ptr undef, align 4, !tbaa !8, !noalias !17
+  %inc1.i = add nsw i32 %5, 1
   store i32 %inc1.i, ptr undef, align 4, !tbaa !8, !noalias !17
   %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %inc.i, i32 noundef %inc1.i), !noalias !17
   ret void
@@ -129,16 +180,12 @@ entry:
   tail call void @llvm.experimental.noalias.scope.decl(metadata !19)
 [omp-transform] Other Function Found:
   %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %inc.i, i32 noundef %inc1.i), !noalias !16
+[omp-transform] Removing Values and Dead Instructions
 [omp-transform] Processing function: carts.edt.task - Finished
 - - - - - - - - - - - - - - - - - - - - - - - -
 [omp-transform] Single End Region Found:
   tail call void @__kmpc_end_single(ptr nonnull @1, i32 undef)
-[omp-transform] Other Function Found:
-  %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %2, i32 noundef %3)
-[omp-transform] Other Function Found:
-  call void @carts.edt.task(ptr %0, i32 %4) #7
-[omp-transform] Single End Region Found:
-  tail call void @__kmpc_end_single(ptr nonnull @1, i32 undef)
+[omp-transform] Removing Values and Dead Instructions
 [omp-transform] Processing function: carts.edt.parallel - Finished
 - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -146,8 +193,10 @@ entry:
 [omp-transform] Processing function: carts.edt.sync.done
 [omp-transform] Other Function Found:
   %call6 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.3, i32 noundef %inc, i32 noundef %1)
+[omp-transform] Removing Values and Dead Instructions
 [omp-transform] Processing function: carts.edt.sync.done - Finished
 - - - - - - - - - - - - - - - - - - - - - - - -
+[omp-transform] Removing Values and Dead Instructions
 [omp-transform] Processing function: carts.edt.main - Finished
 - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -192,12 +241,14 @@ declare noundef i32 @printf(ptr nocapture noundef readonly, ...) local_unnamed_a
 
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
 define internal void @carts.edt.parallel(ptr %0, ptr %1) #2 !carts !6 {
-entry:
+pre_entry:
+  br label %entry
+
+entry:                                            ; preds = %pre_entry
   %2 = load i32, ptr %0, align 4, !tbaa !8
   %3 = load i32, ptr %1, align 4, !tbaa !8
   %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %2, i32 noundef %3)
-  %4 = load i32, ptr %1, align 4, !tbaa !8
-  call void @carts.edt.task(ptr %0, i32 %4) #7
+  call void @carts.edt.task(ptr %0) #7
   br label %exit
 
 exit:                                             ; preds = %entry
@@ -213,14 +264,12 @@ declare void @__kmpc_end_single(ptr, i32) local_unnamed_addr #4
 declare i32 @__gxx_personality_v0(...)
 
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
-define internal void @carts.edt.task(ptr %0, i32 %1) #2 !carts !12 {
+define internal void @carts.edt.task(ptr %0) #2 !carts !12 {
 entry:
   tail call void @llvm.experimental.noalias.scope.decl(metadata !14)
-  %2 = load i32, ptr %0, align 4, !tbaa !8, !noalias !14
-  %inc.i = add nsw i32 %2, 1
+  %1 = load i32, ptr %0, align 4, !tbaa !8, !noalias !14
+  %inc.i = add nsw i32 %1, 1
   store i32 %inc.i, ptr %0, align 4, !tbaa !8, !noalias !14
-  %inc1.i = add nsw i32 %1, 1
-  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %inc.i, i32 noundef %inc1.i), !noalias !14
   ret void
 }
 
@@ -310,7 +359,7 @@ attributes #7 = { memory(argmem: readwrite) }
 !10 = !{!"omnipotent char", !11, i64 0}
 !11 = !{!"Simple C++ TBAA"}
 !12 = !{!"task", !13}
-!13 = !{!"dep", !"param"}
+!13 = !{!"dep"}
 !14 = !{!15}
 !15 = distinct !{!15, !16, !".omp_outlined.: %__context"}
 !16 = distinct !{!16, !".omp_outlined."}
@@ -366,12 +415,14 @@ declare noundef i32 @printf(ptr nocapture noundef readonly, ...) local_unnamed_a
 
 ; Function Attrs: nocallback nofree norecurse nosync nounwind willreturn memory(readwrite)
 define internal void @carts.edt.parallel(ptr nocapture %0, ptr nocapture readonly %1) #4 !carts !6 {
-entry:
+pre_entry:
+  br label %entry
+
+entry:                                            ; preds = %pre_entry
   %2 = load i32, ptr %0, align 4, !tbaa !8
   %3 = load i32, ptr %1, align 4, !tbaa !8
-  %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %2, i32 noundef %3) #6
-  %4 = load i32, ptr %1, align 4, !tbaa !8
-  call void @carts.edt.task(ptr nocapture %0, i32 %4) #9
+  %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %2, i32 noundef %3) #7
+  call void @carts.edt.task(ptr nocapture %0) #10
   br label %exit
 
 exit:                                             ; preds = %entry
@@ -386,58 +437,56 @@ declare void @__kmpc_end_single(ptr, i32) local_unnamed_addr #5
 
 declare i32 @__gxx_personality_v0(...)
 
-; Function Attrs: nocallback nofree norecurse nosync nounwind willreturn memory(readwrite)
-define internal void @carts.edt.task(ptr nocapture %0, i32 %1) #4 !carts !12 {
+; Function Attrs: nocallback nofree norecurse nosync nounwind willreturn memory(argmem: readwrite, inaccessiblemem: readwrite)
+define internal void @carts.edt.task(ptr nocapture %0) #6 !carts !12 {
 entry:
   tail call void @llvm.experimental.noalias.scope.decl(metadata !14)
-  %2 = load i32, ptr %0, align 4, !tbaa !8, !noalias !14
-  %inc.i = add nsw i32 %2, 1
+  %1 = load i32, ptr %0, align 4, !tbaa !8, !noalias !14
+  %inc.i = add nsw i32 %1, 1
   store i32 %inc.i, ptr %0, align 4, !tbaa !8, !noalias !14
-  %inc1.i = add nsw i32 %1, 1
-  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %inc.i, i32 noundef %inc1.i) #6, !noalias !14
   ret void
 }
 
 ; Function Attrs: nounwind
-declare noalias ptr @__kmpc_omp_task_alloc(ptr, i32, i32, i64, i64, ptr) local_unnamed_addr #6
+declare noalias ptr @__kmpc_omp_task_alloc(ptr, i32, i32, i64, i64, ptr) local_unnamed_addr #7
 
 ; Function Attrs: nounwind
-declare i32 @__kmpc_omp_task(ptr, i32, ptr) local_unnamed_addr #6
+declare i32 @__kmpc_omp_task(ptr, i32, ptr) local_unnamed_addr #7
 
 ; Function Attrs: convergent nounwind
 declare void @__kmpc_barrier(ptr, i32) local_unnamed_addr #5
 
 ; Function Attrs: nounwind
-declare !callback !17 void @__kmpc_fork_call(ptr, i32, ptr, ...) local_unnamed_addr #6
+declare !callback !17 void @__kmpc_fork_call(ptr, i32, ptr, ...) local_unnamed_addr #7
 
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
 declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) #2
 
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(inaccessiblemem: readwrite)
-declare void @llvm.experimental.noalias.scope.decl(metadata) #7
+declare void @llvm.experimental.noalias.scope.decl(metadata) #8
 
 ; Function Attrs: norecurse nounwind
-define internal void @carts.edt.main() #8 !carts !19 {
+define internal void @carts.edt.main() #9 !carts !19 {
 entry:
   %shared_number = alloca i32, align 4
   %random_number = alloca i32, align 4
-  %call = tail call i64 @time(ptr noundef null) #6
+  %call = tail call i64 @time(ptr noundef null) #7
   %conv = trunc i64 %call to i32
-  tail call void @srand(i32 noundef %conv) #6
-  %call1 = tail call i32 @rand() #6
+  tail call void @srand(i32 noundef %conv) #7
+  %call1 = tail call i32 @rand() #7
   %rem = srem i32 %call1, 100
   %add = add nsw i32 %rem, 1
   store i32 %add, ptr %shared_number, align 4, !tbaa !8
-  %call2 = tail call i32 @rand() #6
+  %call2 = tail call i32 @rand() #7
   %rem3 = srem i32 %call2, 10
   %add4 = add nsw i32 %rem3, 1
   store i32 %add4, ptr %random_number, align 4, !tbaa !8
-  %call5 = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %add, i32 noundef %add4) #6
-  call void @carts.edt.parallel(ptr nocapture %shared_number, ptr nocapture %random_number) #10
+  %call5 = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %add, i32 noundef %add4) #7
+  call void @carts.edt.parallel(ptr nocapture %shared_number, ptr nocapture %random_number) #11
   br label %codeRepl
 
 codeRepl:                                         ; preds = %entry
-  call void @carts.edt.sync.done(ptr nocapture %shared_number, ptr nocapture %random_number) #6
+  call void @carts.edt.sync.done(ptr nocapture %shared_number, ptr nocapture %random_number) #7
   br label %entry.split.ret
 
 entry.split.ret:                                  ; preds = %codeRepl
@@ -445,7 +494,7 @@ entry.split.ret:                                  ; preds = %codeRepl
 }
 
 ; Function Attrs: norecurse nounwind
-define internal void @carts.edt.sync.done(ptr nocapture %shared_number, ptr nocapture readonly %random_number) #8 !carts !21 {
+define internal void @carts.edt.sync.done(ptr nocapture %shared_number, ptr nocapture readonly %random_number) #9 !carts !21 {
 newFuncRoot:
   br label %entry.split
 
@@ -454,7 +503,7 @@ entry.split:                                      ; preds = %newFuncRoot
   %inc = add nsw i32 %0, 1
   store i32 %inc, ptr %shared_number, align 4, !tbaa !8
   %1 = load i32, ptr %random_number, align 4, !tbaa !8
-  %call6 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.3, i32 noundef %inc, i32 noundef %1) #6
+  %call6 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.3, i32 noundef %inc, i32 noundef %1) #7
   br label %entry.split.ret.exitStub
 
 entry.split.ret.exitStub:                         ; preds = %entry.split
@@ -467,11 +516,12 @@ attributes #2 = { nocallback nofree nosync nounwind willreturn memory(argmem: re
 attributes #3 = { nofree nounwind "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-cpu"="x86-64" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
 attributes #4 = { nocallback nofree norecurse nosync nounwind willreturn memory(readwrite) }
 attributes #5 = { convergent nounwind }
-attributes #6 = { nounwind }
-attributes #7 = { nocallback nofree nosync nounwind willreturn memory(inaccessiblemem: readwrite) }
-attributes #8 = { norecurse nounwind }
-attributes #9 = { memory(argmem: readwrite) }
-attributes #10 = { nounwind memory(readwrite) }
+attributes #6 = { nocallback nofree norecurse nosync nounwind willreturn memory(argmem: readwrite, inaccessiblemem: readwrite) }
+attributes #7 = { nounwind }
+attributes #8 = { nocallback nofree nosync nounwind willreturn memory(inaccessiblemem: readwrite) }
+attributes #9 = { norecurse nounwind }
+attributes #10 = { memory(argmem: readwrite) }
+attributes #11 = { nounwind memory(readwrite) }
 
 !llvm.module.flags = !{!0, !1, !2, !3, !4}
 !llvm.ident = !{!5}
@@ -489,7 +539,7 @@ attributes #10 = { nounwind memory(readwrite) }
 !10 = !{!"omnipotent char", !11, i64 0}
 !11 = !{!"Simple C++ TBAA"}
 !12 = !{!"task", !13}
-!13 = !{!"dep", !"param"}
+!13 = !{!"dep"}
 !14 = !{!15}
 !15 = distinct !{!15, !16, !".omp_outlined.: %__context"}
 !16 = distinct !{!16, !".omp_outlined."}
@@ -532,7 +582,6 @@ simple_arts_ir.bc
 [arts] Function: carts.edt.task has CARTS Metadata
 [arts] Creating EDT #1 for function: carts.edt.task
    - DepV: ptr %0
-   - ParamV: i32 %1
 [arts] Creating Task EDT for function: carts.edt.task
 
 -- Function: carts.edt.main
@@ -554,12 +603,12 @@ simple_arts_ir.bc
 
 [AAEDTInfoFunction::initialize] EDT #0 for function "carts.edt.parallel"
    - Call to EDTFunction:
-      call void @carts.edt.parallel(ptr nocapture %shared_number, ptr nocapture %random_number) #9
+      call void @carts.edt.parallel(ptr nocapture %shared_number, ptr nocapture %random_number) #10
    - DoneEDT: EDT #3
 
 [AAEDTInfoFunction::initialize] EDT #1 for function "carts.edt.task"
    - Call to EDTFunction:
-      call void @carts.edt.task(ptr nocapture %0, i32 %4) #9
+      call void @carts.edt.task(ptr nocapture %0) #10
 
 [AAEDTInfoFunction::initialize] EDT #2 for function "carts.edt.main"
    - Call to EDTFunction:
@@ -569,7 +618,7 @@ simple_arts_ir.bc
 
 [AAEDTInfoFunction::initialize] EDT #3 for function "carts.edt.sync.done"
    - Call to EDTFunction:
-      call void @carts.edt.sync.done(ptr nocapture %shared_number, ptr nocapture %random_number) #6
+      call void @carts.edt.sync.done(ptr nocapture %shared_number, ptr nocapture %random_number) #7
 
 [AAEDTInfoFunction::updateImpl] EDT #0
    - EDT #1 is a child of EDT #0
@@ -600,8 +649,6 @@ simple_arts_ir.bc
 [AAEDTInfoCallsiteArg::initialize] CallArg #0 from EDT #1
    - Creating DepSlot #0 for value: ptr %0
         - Inserting DataBlockEdge from "EDT #0" to "EDT #1" in Slot #0
-
-[AAEDTInfoCallsiteArg::initialize] CallArg #1 from EDT #1
 
 [AAEDTInfoCallsite::updateImpl] EDT #0
 
@@ -808,27 +855,9 @@ DataBlock ->
      - #DependentChildEDTs: 0{}
      - #DependentSiblingEDTs: 0{}
 
-[Attributor] Done with 5 functions, result: unchanged.
+[Attributor] Done with 5 functions, result: changed.
 - - - - - - - - - - - - - - - - - - - - - - - -
 [arts-graph] Printing the ARTS Graph
-- - - - - - - - - - - - - - - - - - 
-- EDT #1 - "edt_1.task"
-  - Type: task
-  - Parent Sync: "EDT #0"
-  - Data Environment:
-    - Number of ParamV = 1
-      - i32 %1
-    - Number of DepV = 1
-      - ptr %0
-  - Incoming Creation Edges:
-    - [Creation] "EDT #0"
-  - Incoming DataBlock Slots:
-    - EDTSlot #0
-      - [DataBlock] ptr %0 from "EDT #0" /   %shared_number = alloca i32, align 4 [Parent EDT #0]
-  - Outgoing Edges:
-    - The EDT has no outgoing creation edges
-    - [DataBlock] "EDT #3" in Slot #0
-      - ptr %0 /   %shared_number = alloca i32, align 4
 - - - - - - - - - - - - - - - - - - 
 - EDT #3 - "edt_3.task"
   - Type: task
@@ -847,6 +876,22 @@ DataBlock ->
   - Outgoing Edges:
     - The EDT has no outgoing creation edges
 - - - - - - - - - - - - - - - - - - 
+- EDT #2 - "edt_2.main"
+  - Type: main
+  - Data Environment:
+    - Number of ParamV = 0
+    - Number of DepV = 0
+  - Incoming Creation Edges:
+    - The EDT has no incoming Creation edges
+    - The EDT has no incoming DataBlock slots
+  - Outgoing Edges:
+    - [Creation] "EDT #0"
+    - [Creation] "EDT #3"
+    - [DataBlock] "EDT #0" in Slot #0
+      -   %shared_number = alloca i32, align 4
+    - [DataBlock] "EDT #0" in Slot #1
+      -   %random_number = alloca i32, align 4
+- - - - - - - - - - - - - - - - - - 
 - EDT #0 - "edt_0.sync"
   - Type: sync
   - Data Environment:
@@ -863,42 +908,43 @@ DataBlock ->
       - [DataBlock]   %random_number = alloca i32, align 4 from "EDT #2"/ No parent
   - Outgoing Edges:
     - [Creation] "EDT #1"
-    - [DataBlock] "EDT #1" in Slot #0
-      - ptr %0 /   %shared_number = alloca i32, align 4
     - [DataBlock] "EDT #3" in Slot #1
       -   %random_number = alloca i32, align 4
+    - [DataBlock] "EDT #1" in Slot #0
+      - ptr %0 /   %shared_number = alloca i32, align 4
 - - - - - - - - - - - - - - - - - - 
-- EDT #2 - "edt_2.main"
-  - Type: main
+- EDT #1 - "edt_1.task"
+  - Type: task
+  - Parent Sync: "EDT #0"
   - Data Environment:
     - Number of ParamV = 0
-    - Number of DepV = 0
+    - Number of DepV = 1
+      - ptr %0
   - Incoming Creation Edges:
-    - The EDT has no incoming Creation edges
-    - The EDT has no incoming DataBlock slots
-  - Outgoing Edges:
-    - [Creation] "EDT #3"
     - [Creation] "EDT #0"
-    - [DataBlock] "EDT #0" in Slot #0
-      -   %shared_number = alloca i32, align 4
-    - [DataBlock] "EDT #0" in Slot #1
-      -   %random_number = alloca i32, align 4
+  - Incoming DataBlock Slots:
+    - EDTSlot #0
+      - [DataBlock] ptr %0 from "EDT #0" /   %shared_number = alloca i32, align 4 [Parent EDT #0]
+  - Outgoing Edges:
+    - The EDT has no outgoing creation edges
+    - [DataBlock] "EDT #3" in Slot #0
+      - ptr %0 /   %shared_number = alloca i32, align 4
 
 - - - - - - - - - - - - - - - - - - - - - - - -
 
+[arts-codegen] Creating codegen for EDT #1
+[arts-codegen] Creating function for EDT #1
+[arts-codegen] Reserving GUID for EDT #1
+[arts-codegen] Creating codegen for EDT #0
+[arts-codegen] Creating function for EDT #0
 [arts-codegen] Creating codegen for EDT #2
 [arts-codegen] Creating function for EDT #2
 [arts-codegen] Reserving GUID for EDT #2
      EDT #2 doesn't have a parent EDT, using parent function
-[arts-codegen] Creating codegen for EDT #0
-[arts-codegen] Creating function for EDT #0
 [arts-codegen] Reserving GUID for EDT #0
 [arts-codegen] Creating codegen for EDT #3
 [arts-codegen] Creating function for EDT #3
 [arts-codegen] Reserving GUID for EDT #3
-[arts-codegen] Creating codegen for EDT #1
-[arts-codegen] Creating function for EDT #1
-[arts-codegen] Reserving GUID for EDT #1
 
 All EDT Guids have been reserved
 
@@ -913,6 +959,16 @@ Generating Code for EDT #2
 [arts-codegen] Creating DBCodegen   %random_number = alloca i32, align 4
 [arts-codegen] Inserting Call for EDT #2
  - EDT Call:   %5 = call i64 @artsEdtCreateWithGuid(ptr @edt_2.main, i64 %1, i32 %2, ptr %edt_2_paramv, i32 %4)
+
+Generating Code for EDT #3
+[arts-codegen] Inserting Entry for EDT #3
+ - Inserting ParamV
+ - Inserting DepV
+   - DepV[0]: ptr %shared_number ->   %edt_3.depv_0.ptr.load = load ptr, ptr %edt_3.depv_0.ptr, align 8
+   - DepV[1]: ptr %random_number ->   %edt_3.depv_1.ptr.load = load ptr, ptr %edt_3.depv_1.ptr, align 8
+ - Inserting DataBlocks
+[arts-codegen] Inserting Call for EDT #3
+ - EDT Call:   %9 = call i64 @artsEdtCreateWithGuid(ptr @edt_3.task, i64 %3, i32 %6, ptr %edt_3_paramv, i32 %8)
 
 Generating Code for EDT #0
 [arts-codegen] Inserting Entry for EDT #0
@@ -929,29 +985,23 @@ Generating Code for EDT #0
 Generating Code for EDT #1
 [arts-codegen] Inserting Entry for EDT #1
  - Inserting ParamV
-   - ParamV[0]: i32 %1 ->   %1 = trunc i64 %0 to i32
-   - ParamVGuid[1]: EDT3
+   - ParamVGuid[0]: EDT3
  - Inserting DepV
    - DepV[0]: ptr %0 ->   %edt_1.depv_0.ptr.load = load ptr, ptr %edt_1.depv_0.ptr, align 8
  - Inserting DataBlocks
 [arts-codegen] Inserting Call for EDT #1
- - ParamV[0]:   %5 = load i32, ptr %edt_0.depv_1.ptr.load, align 4, !tbaa !6
- - ParamVGuid[1]: EDT3
- - EDT Call:   %10 = call i64 @artsEdtCreateWithGuid(ptr @edt_1.task, i64 %1, i32 %6, ptr %edt_1_paramv, i32 %9)
-
-Generating Code for EDT #3
-[arts-codegen] Inserting Entry for EDT #3
- - Inserting ParamV
- - Inserting DepV
-   - DepV[0]: ptr %shared_number ->   %edt_3.depv_0.ptr.load = load ptr, ptr %edt_3.depv_0.ptr, align 8
-   - DepV[1]: ptr %random_number ->   %edt_3.depv_1.ptr.load = load ptr, ptr %edt_3.depv_1.ptr, align 8
- - Inserting DataBlocks
-[arts-codegen] Inserting Call for EDT #3
- - EDT Call:   %13 = call i64 @artsEdtCreateWithGuid(ptr @edt_3.task, i64 %3, i32 %10, ptr %edt_3_paramv, i32 %12)
+ - ParamVGuid[0]: EDT3
+ - EDT Call:   %8 = call i64 @artsEdtCreateWithGuid(ptr @edt_1.task, i64 %1, i32 %5, ptr %edt_1_paramv, i32 %7)
 
 All EDT Entries and Calls have been inserted
 
 Inserting EDT Signals
+[arts-codegen] Inserting Signals from EDT #1
+
+Signal DB ptr %0 from EDT #1 to EDT #3
+ - ContextEDT: 1
+ - Using DepSlot of FromEDT - Slot: 0 - DBPtr:   %edt_1.depv_0.ptr.load = load ptr, ptr %edt_1.depv_0.ptr, align 8
+ - DBGuid:   %edt_1.depv_0.guid.load = load i64, ptr %edt_1.depv_0.guid, align 8
 [arts-codegen] Inserting Signals from EDT #2
 
 Signal DB   %shared_number = alloca i32, align 4 from EDT #2 to EDT #0
@@ -967,23 +1017,17 @@ Signal DB   %random_number = alloca i32, align 4 from EDT #2 to EDT #0
  - DBGuid:   %5 = call i64 @artsDbCreatePtr(ptr %db.random_number.addr, i64 %db.random_number.size.ld, i32 7)
 [arts-codegen] Inserting Signals from EDT #0
 
+Signal DB   %random_number = alloca i32, align 4 from EDT #0 to EDT #3
+ - ContextEDT: 0
+ - Using DepSlot of FromEDT - Slot: 1 - DBPtr:   %edt_0.depv_1.ptr.load = load ptr, ptr %edt_0.depv_1.ptr, align 8
+ - DBGuid:   %edt_0.depv_1.guid.load = load i64, ptr %edt_0.depv_1.guid, align 8
+
 Signal DB ptr %0 from EDT #0 to EDT #1
  - ContextEDT: 1
  - We have a parent
  - DBPtr:   %edt_0.depv_0.ptr.load = load ptr, ptr %edt_0.depv_0.ptr, align 8
  - DBGuid:   %edt_0.depv_0.guid.load = load i64, ptr %edt_0.depv_0.guid, align 8
-
-Signal DB   %random_number = alloca i32, align 4 from EDT #0 to EDT #3
- - ContextEDT: 0
- - Using DepSlot of FromEDT - Slot: 1 - DBPtr:   %edt_0.depv_1.ptr.load = load ptr, ptr %edt_0.depv_1.ptr, align 8
- - DBGuid:   %edt_0.depv_1.guid.load = load i64, ptr %edt_0.depv_1.guid, align 8
 [arts-codegen] Inserting Signals from EDT #3
-[arts-codegen] Inserting Signals from EDT #1
-
-Signal DB ptr %0 from EDT #1 to EDT #3
- - ContextEDT: 1
- - Using DepSlot of FromEDT - Slot: 0 - DBPtr:   %edt_1.depv_0.ptr.load = load ptr, ptr %edt_1.depv_0.ptr, align 8
- - DBGuid:   %edt_1.depv_0.guid.load = load i64, ptr %edt_1.depv_0.guid, align 8
 [arts-codegen] Inserting Init Functions
 [arts-codegen] Inserting ARTS Shutdown Function
 
@@ -1047,6 +1091,85 @@ declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) #1
 ; Function Attrs: nocallback nofree nosync nounwind willreturn memory(inaccessiblemem: readwrite)
 declare void @llvm.experimental.noalias.scope.decl(metadata) #5
 
+define internal void @edt_1.task(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
+entry:
+  %edt_1.paramv_0.guid.edt_3 = getelementptr inbounds i64, ptr %paramv, i64 0
+  %0 = load i64, ptr %edt_1.paramv_0.guid.edt_3, align 8
+  %edt_1.depv_0.guid = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
+  %edt_1.depv_0.guid.load = load i64, ptr %edt_1.depv_0.guid, align 8
+  %edt_1.depv_0.ptr = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
+  %edt_1.depv_0.ptr.load = load ptr, ptr %edt_1.depv_0.ptr, align 8
+  br label %edt.body
+
+edt.body:                                         ; preds = %entry
+  tail call void @llvm.experimental.noalias.scope.decl(metadata !8)
+  %1 = load i32, ptr %edt_1.depv_0.ptr.load, align 4, !tbaa !11, !noalias !8
+  %inc.i = add nsw i32 %1, 1
+  store i32 %inc.i, ptr %edt_1.depv_0.ptr.load, align 4, !tbaa !11, !noalias !8
+  br label %exit
+
+exit:                                             ; preds = %edt.body
+  %toedt.3.slot.0 = alloca i32, align 4
+  store i32 0, ptr %toedt.3.slot.0, align 4
+  %2 = load i32, ptr %toedt.3.slot.0, align 4
+  call void @artsSignalEdt(i64 %0, i32 %2, i64 %edt_1.depv_0.guid.load)
+  ret void
+}
+
+define internal void @edt_0.sync(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
+entry:
+  %0 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
+  %edt_1.task_guid.addr = alloca i64, align 8
+  store i64 %0, ptr %edt_1.task_guid.addr, align 8
+  %1 = load i64, ptr %edt_1.task_guid.addr, align 8
+  %edt_0.paramv_0.guid.edt_3 = getelementptr inbounds i64, ptr %paramv, i64 0
+  %2 = load i64, ptr %edt_0.paramv_0.guid.edt_3, align 8
+  %edt_0.depv_0.guid = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
+  %edt_0.depv_0.guid.load = load i64, ptr %edt_0.depv_0.guid, align 8
+  %edt_0.depv_0.ptr = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
+  %edt_0.depv_0.ptr.load = load ptr, ptr %edt_0.depv_0.ptr, align 8
+  %edt_0.depv_1.guid = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 1, i32 0
+  %edt_0.depv_1.guid.load = load i64, ptr %edt_0.depv_1.guid, align 8
+  %edt_0.depv_1.ptr = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 1, i32 2
+  %edt_0.depv_1.ptr.load = load ptr, ptr %edt_0.depv_1.ptr, align 8
+  br label %edt.body
+
+edt.body:                                         ; preds = %entry
+  br label %entry1
+
+entry1:                                           ; preds = %edt.body
+  %3 = load i32, ptr %edt_0.depv_0.ptr.load, align 4, !tbaa !11
+  %4 = load i32, ptr %edt_0.depv_1.ptr.load, align 4, !tbaa !11
+  %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %3, i32 noundef %4) #4
+  %edt_1_paramc = alloca i32, align 4
+  store i32 1, ptr %edt_1_paramc, align 4
+  %5 = load i32, ptr %edt_1_paramc, align 4
+  %edt_1_paramv = alloca i64, i32 %5, align 8
+  %edt_1.paramv_0.guid.edt_3 = getelementptr inbounds i64, ptr %edt_1_paramv, i64 0
+  store i64 %2, ptr %edt_1.paramv_0.guid.edt_3, align 8
+  %6 = alloca i32, align 4
+  store i32 1, ptr %6, align 4
+  %7 = load i32, ptr %6, align 4
+  %8 = call i64 @artsEdtCreateWithGuid(ptr @edt_1.task, i64 %1, i32 %5, ptr %edt_1_paramv, i32 %7)
+  br label %exit2
+
+exit2:                                            ; preds = %entry1
+  br label %exit
+
+exit:                                             ; preds = %exit2
+  %toedt.3.slot.1 = alloca i32, align 4
+  store i32 1, ptr %toedt.3.slot.1, align 4
+  %9 = load i32, ptr %toedt.3.slot.1, align 4
+  call void @artsSignalEdt(i64 %2, i32 %9, i64 %edt_0.depv_1.guid.load)
+  %toedt.1.slot.0 = alloca i32, align 4
+  store i32 0, ptr %toedt.1.slot.0, align 4
+  %10 = load i32, ptr %toedt.1.slot.0, align 4
+  call void @artsSignalEdt(i64 %1, i32 %10, i64 %edt_0.depv_0.guid.load)
+  ret void
+}
+
+declare i64 @artsReserveGuidRoute(i32, i32)
+
 define internal void @edt_2.main(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
 entry:
   %0 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
@@ -1082,11 +1205,11 @@ edt.body:                                         ; preds = %entry
   %call1 = tail call i32 @rand() #4
   %rem = srem i32 %call1, 100
   %add = add nsw i32 %rem, 1
-  store i32 %add, ptr %db.shared_number.ptr, align 4, !tbaa !8
+  store i32 %add, ptr %db.shared_number.ptr, align 4, !tbaa !11
   %call2 = tail call i32 @rand() #4
   %rem3 = srem i32 %call2, 10
   %add4 = add nsw i32 %rem3, 1
-  store i32 %add4, ptr %db.random_number.ptr, align 4, !tbaa !8
+  store i32 %add4, ptr %db.random_number.ptr, align 4, !tbaa !11
   %call5 = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str, i32 noundef %add, i32 noundef %add4) #4
   %edt_0_paramc = alloca i32, align 4
   store i32 1, ptr %edt_0_paramc, align 4
@@ -1126,61 +1249,6 @@ exit:                                             ; preds = %entry.split.ret
   ret void
 }
 
-declare i64 @artsReserveGuidRoute(i32, i32)
-
-define internal void @edt_0.sync(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
-entry:
-  %0 = tail call i64 @artsReserveGuidRoute(i32 1, i32 0)
-  %edt_1.task_guid.addr = alloca i64, align 8
-  store i64 %0, ptr %edt_1.task_guid.addr, align 8
-  %1 = load i64, ptr %edt_1.task_guid.addr, align 8
-  %edt_0.paramv_0.guid.edt_3 = getelementptr inbounds i64, ptr %paramv, i64 0
-  %2 = load i64, ptr %edt_0.paramv_0.guid.edt_3, align 8
-  %edt_0.depv_0.guid = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
-  %edt_0.depv_0.guid.load = load i64, ptr %edt_0.depv_0.guid, align 8
-  %edt_0.depv_0.ptr = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
-  %edt_0.depv_0.ptr.load = load ptr, ptr %edt_0.depv_0.ptr, align 8
-  %edt_0.depv_1.guid = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 1, i32 0
-  %edt_0.depv_1.guid.load = load i64, ptr %edt_0.depv_1.guid, align 8
-  %edt_0.depv_1.ptr = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 1, i32 2
-  %edt_0.depv_1.ptr.load = load ptr, ptr %edt_0.depv_1.ptr, align 8
-  br label %edt.body
-
-edt.body:                                         ; preds = %entry
-  %3 = load i32, ptr %edt_0.depv_0.ptr.load, align 4, !tbaa !8
-  %4 = load i32, ptr %edt_0.depv_1.ptr.load, align 4, !tbaa !8
-  %call = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.1, i32 noundef %3, i32 noundef %4) #4
-  %5 = load i32, ptr %edt_0.depv_1.ptr.load, align 4, !tbaa !8
-  %edt_1_paramc = alloca i32, align 4
-  store i32 2, ptr %edt_1_paramc, align 4
-  %6 = load i32, ptr %edt_1_paramc, align 4
-  %edt_1_paramv = alloca i64, i32 %6, align 8
-  %edt_1.paramv_0 = getelementptr inbounds i64, ptr %edt_1_paramv, i64 0
-  %7 = sext i32 %5 to i64
-  store i64 %7, ptr %edt_1.paramv_0, align 8
-  %edt_1.paramv_1.guid.edt_3 = getelementptr inbounds i64, ptr %edt_1_paramv, i64 1
-  store i64 %2, ptr %edt_1.paramv_1.guid.edt_3, align 8
-  %8 = alloca i32, align 4
-  store i32 1, ptr %8, align 4
-  %9 = load i32, ptr %8, align 4
-  %10 = call i64 @artsEdtCreateWithGuid(ptr @edt_1.task, i64 %1, i32 %6, ptr %edt_1_paramv, i32 %9)
-  br label %exit1
-
-exit1:                                            ; preds = %edt.body
-  br label %exit
-
-exit:                                             ; preds = %exit1
-  %toedt.1.slot.0 = alloca i32, align 4
-  store i32 0, ptr %toedt.1.slot.0, align 4
-  %11 = load i32, ptr %toedt.1.slot.0, align 4
-  call void @artsSignalEdt(i64 %1, i32 %11, i64 %edt_0.depv_0.guid.load)
-  %toedt.3.slot.1 = alloca i32, align 4
-  store i32 1, ptr %toedt.3.slot.1, align 4
-  %12 = load i32, ptr %toedt.3.slot.1, align 4
-  call void @artsSignalEdt(i64 %2, i32 %12, i64 %edt_0.depv_1.guid.load)
-  ret void
-}
-
 define internal void @edt_3.task(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
 entry:
   %edt_3.depv_0.guid = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
@@ -1197,10 +1265,10 @@ edt.body:                                         ; preds = %entry
   br label %entry.split
 
 entry.split:                                      ; preds = %edt.body
-  %0 = load i32, ptr %edt_3.depv_0.ptr.load, align 4, !tbaa !8
+  %0 = load i32, ptr %edt_3.depv_0.ptr.load, align 4, !tbaa !11
   %inc = add nsw i32 %0, 1
-  store i32 %inc, ptr %edt_3.depv_0.ptr.load, align 4, !tbaa !8
-  %1 = load i32, ptr %edt_3.depv_1.ptr.load, align 4, !tbaa !8
+  store i32 %inc, ptr %edt_3.depv_0.ptr.load, align 4, !tbaa !11
+  %1 = load i32, ptr %edt_3.depv_1.ptr.load, align 4, !tbaa !11
   %call6 = call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.3, i32 noundef %inc, i32 noundef %1) #4
   br label %entry.split.ret.exitStub
 
@@ -1209,36 +1277,6 @@ entry.split.ret.exitStub:                         ; preds = %entry.split
 
 exit:                                             ; preds = %entry.split.ret.exitStub
   call void @artsShutdown()
-  ret void
-}
-
-define internal void @edt_1.task(i32 %paramc, ptr %paramv, i32 %depc, ptr %depv) {
-entry:
-  %edt_1.paramv_0 = getelementptr inbounds i64, ptr %paramv, i64 0
-  %0 = load i64, ptr %edt_1.paramv_0, align 8
-  %1 = trunc i64 %0 to i32
-  %edt_1.paramv_1.guid.edt_3 = getelementptr inbounds i64, ptr %paramv, i64 1
-  %2 = load i64, ptr %edt_1.paramv_1.guid.edt_3, align 8
-  %edt_1.depv_0.guid = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 0
-  %edt_1.depv_0.guid.load = load i64, ptr %edt_1.depv_0.guid, align 8
-  %edt_1.depv_0.ptr = getelementptr inbounds %struct.artsEdtDep_t, ptr %depv, i32 0, i32 2
-  %edt_1.depv_0.ptr.load = load ptr, ptr %edt_1.depv_0.ptr, align 8
-  br label %edt.body
-
-edt.body:                                         ; preds = %entry
-  tail call void @llvm.experimental.noalias.scope.decl(metadata !12)
-  %3 = load i32, ptr %edt_1.depv_0.ptr.load, align 4, !tbaa !8, !noalias !12
-  %inc.i = add nsw i32 %3, 1
-  store i32 %inc.i, ptr %edt_1.depv_0.ptr.load, align 4, !tbaa !8, !noalias !12
-  %inc1.i = add nsw i32 %1, 1
-  %call.i = tail call i32 (ptr, ...) @printf(ptr noundef nonnull dereferenceable(1) @.str.2, i32 noundef %inc.i, i32 noundef %inc1.i) #4, !noalias !12
-  br label %exit
-
-exit:                                             ; preds = %edt.body
-  %toedt.3.slot.0 = alloca i32, align 4
-  store i32 0, ptr %toedt.3.slot.0, align 4
-  %4 = load i32, ptr %toedt.3.slot.0, align 4
-  call void @artsSignalEdt(i64 %2, i32 %4, i64 %edt_1.depv_0.guid.load)
   ret void
 }
 
@@ -1310,13 +1348,13 @@ attributes #5 = { nocallback nofree nosync nounwind willreturn memory(inaccessib
 !5 = !{!"clang version 18.1.8"}
 !6 = !{!7}
 !7 = !{i64 2, i64 -1, i64 -1, i1 true}
-!8 = !{!9, !9, i64 0}
-!9 = !{!"int", !10, i64 0}
-!10 = !{!"omnipotent char", !11, i64 0}
-!11 = !{!"Simple C++ TBAA"}
-!12 = !{!13}
-!13 = distinct !{!13, !14, !".omp_outlined.: %__context"}
-!14 = distinct !{!14, !".omp_outlined."}
+!8 = !{!9}
+!9 = distinct !{!9, !10, !".omp_outlined.: %__context"}
+!10 = distinct !{!10, !".omp_outlined."}
+!11 = !{!12, !12, i64 0}
+!12 = !{!"int", !13, i64 0}
+!13 = !{!"omnipotent char", !14, i64 0}
+!14 = !{!"Simple C++ TBAA"}
 
 
 -------------------------------------------------
