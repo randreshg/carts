@@ -19,6 +19,9 @@ using namespace llvm;
 using namespace arts::types;
 
 void EDT::setMetadata(EDTIRBuilder &Builder) {
+  /// The EDT Metadata is composed of two parts:
+  /// - The EDT Type ("Task", "Main", "Sync", "Parallel")
+  /// - The EDT Arguments ("Param" or "Dep")
   Function *Fn = Builder.getNewFn();
   assert(Fn && "Function is null");
 
@@ -43,19 +46,37 @@ void EDT::setMetadata(EDTIRBuilder &Builder) {
   Fn->setMetadata(CARTS_MD, MDNode::get(Ctx, EDTMDs));
 }
 
-void TaskEDT::setMetadata(EDTIRBuilder &Builder, int32_t ThreadNum) {
+void TaskEDT::setMetadata(EDTIRBuilder &Builder, SetVector<EDT *> &Inputs,
+                          SetVector<EDT *> &Outputs, int32_t ThreadNum) {
   EDT::setMetadata(Builder);
+  MDNode *MD = Builder.getNewFn()->getMetadata(CARTS_MD);
+  assert(MD && "CARTS Metadata Node is null");
+  /// Add a new metadata node for the Task EDT
+  SmallVector<Metadata *, 16> TaskMDs;
+  TaskMDs.push_back(MD->getOperand(1).get());
+  /// Add the inputs and outputs
+  SmallVector<Metadata *, 16> InputsMDs;
+  for (EDT *E : Inputs)
+    InputsMDs.push_back(ValueAsMetadata::get(E->getEnv()->getEnvValue()));
+  SmallVector<Metadata *, 16> OutputsMDs;
+  for (EDT *E : Outputs)
+    OutputsMDs.push_back(ValueAsMetadata::get(E->getEnv()->getEnvValue()));
+  TaskMDs.push_back(MDNode::get(Builder.getNewFn()->getContext(), InputsMDs));
+  TaskMDs.push_back(MDNode::get(Builder.getNewFn()->getContext(), OutputsMDs));
+  /// Set the metadata for the Task EDT
+  Builder.getNewFn()->setMetadata(CARTS_MD, MDNode::get(Builder.getNewFn()->getContext(), TaskMDs));
   /// TODO: Add the number of threads...
 }
 
 void MainEDT::setMetadata(EDTIRBuilder &Builder) {
-  TaskEDT::setMetadata(Builder);
+  SetVector<EDT *> Inputs, Outputs;
+  TaskEDT::setMetadata(Builder, Inputs, Outputs);
 }
 
 void SyncEDT::setMetadata(EDTIRBuilder &Builder, SetVector<EDT *> &Inputs,
                           SetVector<EDT *> &Outputs, bool SyncChilds,
                           bool SyncDescendants, int32_t ThreadNum) {
-  TaskEDT::setMetadata(Builder, ThreadNum);
+  TaskEDT::setMetadata(Builder, Inputs, Outputs, ThreadNum);
   /// TODO: Add the inputs and outputs, and the sync flags...
 }
 

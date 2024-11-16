@@ -44,7 +44,10 @@ int main() {
       #pragma omp task depend(out: y) //T2
           short_computation(y);
       #pragma omp task depend(in: x)
-          res += x;
+      {
+        res += x;
+        x++;
+      }
       #pragma omp task depend(in: y)
           res += y;
       #pragma omp task depend(in: res) //T5

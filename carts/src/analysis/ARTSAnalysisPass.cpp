@@ -920,7 +920,7 @@ private:
 };
 
 /// ------------------------------------------------------------------- ///
-/// - - - - - - - - - - - - -  AADataBlockInfo - - - - - - - - - - - ///
+/// - - - - - - - - - - - - -  AADataBlockInfo  - - - - - - - - - - - - ///
 /// ------------------------------------------------------------------- ///
 /// The DataBlock info abstract attribute, basically, what can we say
 /// about a DataBlock with regards to the DataBlockInfoState.

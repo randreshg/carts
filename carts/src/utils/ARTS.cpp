@@ -226,7 +226,7 @@ EDT *EDT::get(EDTFunction *Fn) {
   /// Get the metadata node
   MDNode *MD = Fn->getMetadata(CARTS_MD);
   assert(MD && "CARTS Metadata Node is null");
-  assert(MD->getNumOperands() == 2 &&
+  assert(MD->getNumOperands() >= 2 &&
          "CARTS Metadata Node is empty or incomplete");
   /// Get the EDT Type
   auto *TyMD = dyn_cast<MDString>(MD->getOperand(0).get());
