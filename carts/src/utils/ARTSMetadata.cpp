@@ -2,7 +2,7 @@
 #include "carts/utils/ARTS.h"
 #include "carts/utils/ARTSIRBuilder.h"
 #include "llvm/IR/Function.h"
-#include "llvm/Support/Debug.h"
+// #include "llvm/Support/Debug.h"
 #include <cassert>
 #include <cstdint>
 #include <string>
@@ -24,22 +24,23 @@ void EDT::setMetadata(EDTIRBuilder &Builder) {
   /// - The EDT Arguments ("Param" or "Dep")
   Function *Fn = Builder.getNewFn();
   assert(Fn && "Function is null");
-
   LLVMContext &Ctx = Fn->getContext();
-  /// Metadata Nodes for Argument Values
+  /// Metadata Node
+  SmallVector<Metadata *, 16> EDTMDs;
+  /// EDT Type
+  string EDTTyStr = toString(Builder.getEDTType()).str();
+  EDTMDs.push_back(MDString::get(Ctx, EDTTyStr));
+  /// EDT Arguments
   SmallVector<Metadata *, 16> ArgMDs;
-  auto &CallArgs = Builder.getCallArgs();
+  SmallVector<Value *, 16> &CallArgs = Builder.getCallArgs();
   for (Value *CallArg : CallArgs) {
     EDTArgType ArgTy = Builder.getArgType(CallArg);
     string MDStr = toString(ArgTy).str();
     ArgMDs.push_back(MDString::get(Ctx, MDStr));
   }
   MDNode *ArgNode = MDNode::get(Ctx, ArgMDs);
-  /// Metadata Node for EDT
-  SmallVector<Metadata *, 16> EDTMDs;
-  string EDTTyStr = toString(Builder.getEDTType()).str();
-  EDTMDs.push_back(MDString::get(Ctx, EDTTyStr));
   EDTMDs.push_back(ArgNode);
+
   /// Set specific metadata for the function
   if (Fn->hasMetadata(CARTS_MD))
     Fn->setMetadata(CARTS_MD, nullptr);
@@ -49,22 +50,22 @@ void EDT::setMetadata(EDTIRBuilder &Builder) {
 void TaskEDT::setMetadata(EDTIRBuilder &Builder, SetVector<EDT *> &Inputs,
                           SetVector<EDT *> &Outputs, int32_t ThreadNum) {
   EDT::setMetadata(Builder);
-  MDNode *MD = Builder.getNewFn()->getMetadata(CARTS_MD);
-  assert(MD && "CARTS Metadata Node is null");
-  /// Add a new metadata node for the Task EDT
-  SmallVector<Metadata *, 16> TaskMDs;
-  TaskMDs.push_back(MD->getOperand(1).get());
-  /// Add the inputs and outputs
-  SmallVector<Metadata *, 16> InputsMDs;
-  for (EDT *E : Inputs)
-    InputsMDs.push_back(ValueAsMetadata::get(E->getEnv()->getEnvValue()));
-  SmallVector<Metadata *, 16> OutputsMDs;
-  for (EDT *E : Outputs)
-    OutputsMDs.push_back(ValueAsMetadata::get(E->getEnv()->getEnvValue()));
-  TaskMDs.push_back(MDNode::get(Builder.getNewFn()->getContext(), InputsMDs));
-  TaskMDs.push_back(MDNode::get(Builder.getNewFn()->getContext(), OutputsMDs));
+  // MDNode *MD = Builder.getNewFn()->getMetadata(CARTS_MD);
+  // assert(MD && "CARTS Metadata Node is null");
+  // /// Add a new metadata node for the Task EDT
+  // SmallVector<Metadata *, 16> TaskMDs;
+  // TaskMDs.push_back(MD->getOperand(1).get());
+  // /// Add the inputs and outputs
+  // SmallVector<Metadata *, 16> InputsMDs;
+  // for (EDT *E : Inputs)
+  //   InputsMDs.push_back(ValueAsMetadata::get(E->getEnv()->getEnvValue()));
+  // SmallVector<Metadata *, 16> OutputsMDs;
+  // for (EDT *E : Outputs)
+  //   OutputsMDs.push_back(ValueAsMetadata::get(E->getEnv()->getEnvValue()));
+  // TaskMDs.push_back(MDNode::get(Builder.getNewFn()->getContext(), InputsMDs));
+  // TaskMDs.push_back(MDNode::get(Builder.getNewFn()->getContext(), OutputsMDs));
   /// Set the metadata for the Task EDT
-  Builder.getNewFn()->setMetadata(CARTS_MD, MDNode::get(Builder.getNewFn()->getContext(), TaskMDs));
+  // Builder.getNewFn()->setMetadata(CARTS_MD, MDNode::get(Builder.getNewFn()->getContext(), TaskMDs));
   /// TODO: Add the number of threads...
 }
 

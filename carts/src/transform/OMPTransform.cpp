@@ -219,7 +219,7 @@ Instruction *OMPTransform::handleSyncDoneRegion(CallBase &CB) {
     else
       IRB.insertParam(Arg.get());
   }
-  TaskEDT::setMetadata(IRB, -1);
+  // TaskEDT::setMetadata(IRB, -1);
   /// Identify EDTs for the new function
   identifyEDTs(*DoneEDTFn);
   return DoneCB;
@@ -386,7 +386,7 @@ Instruction *OMPTransform::handleTaskRegion(CallBase &CB) {
   /// Build the EDT
   auto *NewCB =
       IRB.buildEDT(&CB, Fn, fillRewiringMapFn, CallToOmpTask, CARTS_EDT_TASK);
-  TaskEDT::setMetadata(IRB, -1);
+  // TaskEDT::setMetadata(IRB, -1);
   identifyEDTs(*IRB.getNewFn());
   return NewCB;
 }
@@ -417,7 +417,6 @@ Instruction *OMPTransform::handleTaskWithDeps(CallBase &CB) {
   //     bool mtx : 1;
   //   } flags;
   // } kmp_depend_info_t;
-
   const DataLayout &DL = CB.getModule()->getDataLayout();
   Value *DepList = CB.getArgOperand(4);
   AllocaInst *DepListAI = cast<AllocaInst>(DepList);
@@ -617,7 +616,7 @@ Instruction *OMPTransform::handleOtherFunction(CallBase &CB) {
   }
 
   /// Build the EDT
-  TaskEDT::setMetadata(IRB, -1);
+  // TaskEDT::setMetadata(IRB, -1);
   Fn.setName(CARTS_EDT);
   return CurI;
 }
