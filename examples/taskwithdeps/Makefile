@@ -11,6 +11,16 @@ all: taskwithdeps_opt
 	clang -fopenmp -O3 -g0 -emit-llvm -c $< -o $@
 	llvm-dis $@
 
+# Run OMP Visitor pass
+taskwithdeps_visitor.bc: taskwithdeps.bc
+	opt -load-pass-plugin=/home/randres/projects/carts/.install/carts/lib/OMPVisitor.so \
+		-debug-only=omp-visitor\
+		-passes="omp-visitor" -ast-file=taskwithdeps.ast $< -o $@
+
+	# opt -load ./libOpenMPParserPass.so -openmp-parser-pass -ast-file=your_ast_file.ast your_module.bc
+	# -debug-only=omp-visitor,arts,carts,arts-ir-builder,arts-utils\
+	llvm-dis $@
+
 # Run OMP transform pass
 taskwithdeps_arts_ir.bc: taskwithdeps.bc
 	opt -load-pass-plugin=/home/randres/projects/carts/.install/carts/lib/OMPTransform.so \

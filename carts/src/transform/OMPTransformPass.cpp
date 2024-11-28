@@ -28,6 +28,7 @@ using namespace arts::utils;
 static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 #endif
 
+
 /// ------------------------------------------------------------------- ///
 ///                        OMPTransformPass                             ///
 /// ------------------------------------------------------------------- ///
@@ -41,6 +42,7 @@ PreservedAnalyses OMPTransformPass::run(Module &M, ModuleAnalysisManager &AM) {
   LLVM_DEBUG(dbgs() << TAG << "Running OmpTransformPass on Module: \n"
                     << M.getName() << "\n");
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
+
   FunctionAnalysisManager &FAM =
       AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   AnalysisGetter AG(FAM);
