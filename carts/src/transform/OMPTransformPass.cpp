@@ -15,19 +15,24 @@
 #include "llvm/Support/Debug.h"
 
 #include "carts/transform/OMPTransform.h"
-#include "carts/utils/ARTSUtils.h"
 
 using namespace llvm;
 using namespace arts;
 using namespace arts::omp;
-using namespace arts::utils;
+// using namespace arts::utils;
+
+// Command-line option to specify the input AST file
+static cl::opt<std::string>
+    InputASTFilename("ast-file", cl::desc("Specify the input AST filename"),
+                     cl::value_desc("filename"),
+                     cl::init("input.ast")); // Default value if not specified
+
 
 /// DEBUG
 #define DEBUG_TYPE "omp-transform"
 #if !defined(NDEBUG)
 static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 #endif
-
 
 /// ------------------------------------------------------------------- ///
 ///                        OMPTransformPass                             ///
@@ -43,6 +48,7 @@ PreservedAnalyses OMPTransformPass::run(Module &M, ModuleAnalysisManager &AM) {
                     << M.getName() << "\n");
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
 
+  
   FunctionAnalysisManager &FAM =
       AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   AnalysisGetter AG(FAM);
