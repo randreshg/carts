@@ -4,6 +4,8 @@
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "carts/transform/visitor/OMPVisitor.h"
+
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/StmtOpenMP.h"
@@ -35,65 +37,36 @@ using namespace std;
 static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 #endif
 
-// Base class for all OpenMP directives
-class OMPDirectiveInfo {
-public:
-  OMPDirectiveInfo(StringRef Type, SourceLocation Loc)
-      : DirectiveType(Type), Location(Loc) {}
+namespace arts {
 
-  virtual ~OMPDirectiveInfo() = default;
+/// ------------------------------------------------------------------- ///
+///                          OMPDirectiveInfo                           ///
+/// ------------------------------------------------------------------- ///
+OMPDirectiveInfo::OMPDirectiveInfo(StringRef Type, SourceLocation Loc)
+    : DirectiveType(Type), Location(Loc) {}
 
-  StringRef getType() const { return DirectiveType; }
+StringRef OMPDirectiveInfo::getType() const { return DirectiveType; }
 
-  string getLocation(const SourceManager &SM) const {
-    return Location.printToString(SM);
-  }
+string OMPDirectiveInfo::getLocation(const SourceManager &SM) const {
+  return Location.printToString(SM);
+}
 
-  virtual void printInfo(raw_ostream &OS) const {
-    OS << "Directive: " << DirectiveType << "\n";
-  }
+/// Parallel directive info
+OMPParallelInfo::OMPParallelInfo(SourceLocation Loc)
+    : OMPDirectiveInfo("parallel", Loc) {}
 
-protected:
-  StringRef DirectiveType;
-  SourceLocation Location;
-};
+unsigned OMPParallelInfo::getNumThreads() const { return NumThreads; }
 
-// Parallel directive info
-class OMPParallelInfo : public OMPDirectiveInfo {
-public:
-  OMPParallelInfo(SourceLocation Loc) : OMPDirectiveInfo("parallel", Loc) {}
+/// Task directive info
+OMPTaskInfo::OMPTaskInfo(SourceLocation Loc) : OMPDirectiveInfo("task", Loc) {}
 
-  unsigned getNumThreads() const { return NumThreads; }
+bool OMPTaskInfo::hasDependencies() const {
+  return !Inputs.empty() || !Outputs.empty();
+}
 
-  void printInfo(raw_ostream &OS) const override {
-    OMPDirectiveInfo::printInfo(OS);
-    OS << "  Number of Threads: " << NumThreads << "\n";
-  }
-
-private:
-  /// Number of threads for the parallel region
-  unsigned NumThreads;
-};
-
-// Task directive info
-class OMPTaskInfo : public OMPDirectiveInfo {
-public:
-  OMPTaskInfo(SourceLocation Loc) : OMPDirectiveInfo("task", Loc) {}
-
-  bool hasDependencies() const { return !Inputs.empty() || !Outputs.empty(); }
-
-  void printInfo(raw_ostream &OS) const override {
-    OMPDirectiveInfo::printInfo(OS);
-    OS << "  Dependencies: " << (Dependencies ? "Yes" : "No") << "\n";
-  }
-
-private:
-  bool Dependencies;
-  SetVector<Instruction *> Inputs;
-  SetVector<Instruction *> Outputs;
-};
-
-/// Visitor class to traverse the AST and find OpenMP directives
+/// ------------------------------------------------------------------- ///
+///                            OpenMPVisitor                            ///
+/// ------------------------------------------------------------------- ///
 class OpenMPVisitor : public RecursiveASTVisitor<OpenMPVisitor> {
 public:
   explicit OpenMPVisitor(ASTContext &Context, SetVector<Function *> &Functions)
@@ -248,7 +221,9 @@ private:
   }
 };
 
-/// AST Consumer to handle the traversal
+/// ------------------------------------------------------------------- ///
+///                           OpenMPASTConsumer                         ///
+/// ------------------------------------------------------------------- ///
 class OpenMPASTConsumer : public ASTConsumer {
 public:
   explicit OpenMPASTConsumer(ASTContext &Context,
@@ -268,68 +243,66 @@ private:
   OpenMPVisitor Visitor;
 };
 
-class OMPVisitor {
-public:
-  OMPVisitor() = default;
-  ~OMPVisitor() {
-    if (Consumer)
-      delete Consumer;
+/// ------------------------------------------------------------------- ///
+///                              OMPVisitor                             ///
+/// ------------------------------------------------------------------- ///
+OMPVisitor::~OMPVisitor() {
+  if (Consumer)
+    delete Consumer;
+}
+
+void OMPVisitor::run(llvm::Module &M, SetVector<Function *> &Functions,
+                     string InputASTFilename) {
+  /// AST Traversal with OpenMPVisitor and Clang tooling
+  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n"
+                    << TAG << "Running OMPVisitor on Module: \n"
+                    << M.getName() << "\n"
+                    << "\n-------------------------------------------------\n");
+
+  /// Use the command-line option for the AST filename
+  string Filename = InputASTFilename;
+
+  /// Initialize DiagnosticOptions and DiagnosticIDs
+  IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts(new DiagnosticOptions());
+  IntrusiveRefCntPtr<DiagnosticIDs> DiagID(new DiagnosticIDs());
+
+  /// Create a TextDiagnosticPrinter as the DiagnosticConsumer
+  IntrusiveRefCntPtr<DiagnosticsEngine> Diags(new DiagnosticsEngine(
+      DiagID, &*DiagOpts,
+      new clang::TextDiagnosticPrinter(llvm::errs(), &*DiagOpts)));
+  assert(Diags->getClient() && "DiagnosticsEngine has no DiagnosticClient!");
+
+  /// Set up FileSystemOptions
+  clang::FileSystemOptions FileSystemOpts;
+  FileSystemOpts.WorkingDir = "."; // Set working directory as needed
+
+  /// Create PCHContainerOperations
+  shared_ptr<clang::PCHContainerOperations> PCHOps =
+      make_shared<clang::PCHContainerOperations>();
+  const clang::PCHContainerReader &PCHContainerRdr = PCHOps->getRawReader();
+  shared_ptr<clang::HeaderSearchOptions> HSOpts =
+      make_shared<clang::HeaderSearchOptions>();
+
+  // Load the AST file with the correct number of arguments
+  unique_ptr<ASTUnit> AST =
+      ASTUnit::LoadFromASTFile(Filename, PCHContainerRdr, ASTUnit::LoadASTOnly,
+                               Diags, FileSystemOpts, HSOpts);
+
+  if (!AST) {
+    LLVM_DEBUG(dbgs() << "Error: Could not load AST file '" << Filename
+                      << "'\n");
+    assert(false && "Error: Could not load AST file");
   }
 
-  void run(llvm::Module &M, SetVector<Function *> &Functions,
-           string InputASTFilename) {
-    /// AST Traversal with OpenMPVisitor and Clang tooling
-    LLVM_DEBUG(
-        dbgs() << "\n-------------------------------------------------\n"
-               << TAG << "Running OMPVisitor on Module: \n"
-               << M.getName() << "\n"
-               << "\n-------------------------------------------------\n");
+  /// Traverse the AST
+  ASTContext &Context = AST->getASTContext();
+  Consumer = new OpenMPASTConsumer(Context, Functions);
+  Consumer->HandleTranslationUnit(Context);
+}
 
-    /// Use the command-line option for the AST filename
-    string Filename = InputASTFilename;
+const OMPDirectiveInfo *
+OMPVisitor::getDirectiveForInstruction(Instruction *I) const {
+  return Consumer->getDirectiveForInstruction(I);
+}
 
-    /// Initialize DiagnosticOptions and DiagnosticIDs
-    IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts(new DiagnosticOptions());
-    IntrusiveRefCntPtr<DiagnosticIDs> DiagID(new DiagnosticIDs());
-
-    /// Create a TextDiagnosticPrinter as the DiagnosticConsumer
-    IntrusiveRefCntPtr<DiagnosticsEngine> Diags(new DiagnosticsEngine(
-        DiagID, &*DiagOpts,
-        new clang::TextDiagnosticPrinter(llvm::errs(), &*DiagOpts)));
-    assert(Diags->getClient() && "DiagnosticsEngine has no DiagnosticClient!");
-
-    /// Set up FileSystemOptions
-    clang::FileSystemOptions FileSystemOpts;
-    FileSystemOpts.WorkingDir = "."; // Set working directory as needed
-
-    /// Create PCHContainerOperations
-    shared_ptr<clang::PCHContainerOperations> PCHOps =
-        make_shared<clang::PCHContainerOperations>();
-    const clang::PCHContainerReader &PCHContainerRdr = PCHOps->getRawReader();
-    shared_ptr<clang::HeaderSearchOptions> HSOpts =
-        make_shared<clang::HeaderSearchOptions>();
-
-    // Load the AST file with the correct number of arguments
-    unique_ptr<ASTUnit> AST = ASTUnit::LoadFromASTFile(
-        Filename, PCHContainerRdr, ASTUnit::LoadASTOnly, Diags, FileSystemOpts,
-        HSOpts);
-
-    if (!AST) {
-      LLVM_DEBUG(dbgs() << "Error: Could not load AST file '" << Filename
-                        << "'\n");
-      assert(false && "Error: Could not load AST file");
-    }
-
-    /// Traverse the AST
-    ASTContext &Context = AST->getASTContext();
-    Consumer = new OpenMPASTConsumer(Context, Functions);
-    Consumer->HandleTranslationUnit(Context);
-  }
-
-  const OMPDirectiveInfo *getDirectiveForInstruction(Instruction *I) const {
-    return Consumer->getDirectiveForInstruction(I);
-  }
-
-private:
-  OpenMPASTConsumer *Consumer;
-};
+} // namespace arts
