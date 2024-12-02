@@ -1,4 +1,4 @@
-// Description: Main file for the Compiler for ARTS (OmpTransform) pass.
+/// Description: Main file for the Compiler for ARTS (OmpTransform) pass.
 
 #ifndef LLVM_API_CARTS_OMPTRANSFORM_H
 #define LLVM_API_CARTS_OMPTRANSFORM_H
