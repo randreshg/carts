@@ -15,59 +15,81 @@
 
 namespace arts {
 using namespace llvm;
-using namespace clang;
 using namespace std;
-
-
 
 /// Base class for all OpenMP directives
 class OMPDirectiveInfo {
 public:
-  OMPDirectiveInfo(StringRef Type, SourceLocation Loc);
+  OMPDirectiveInfo(StringRef Type, clang::SourceLocation Loc);
   virtual ~OMPDirectiveInfo() = default;
 
-  StringRef getType() const;
-  string getLocation(const SourceManager &SM) const;
+  void addChild(OMPDirectiveInfo *Child);
 
-  virtual void printInfo(raw_ostream &OS) const {
-    OS << "Directive: " << DirectiveType << "\n";
-  };
+  StringRef getType() const;
+  string getLocation(const clang::SourceManager &SM) const;
+  const SmallVector<OMPDirectiveInfo *, 4> &getChildren() const;
+  const OMPDirectiveInfo *getParent() const;
+  Instruction *getIRInstruction() const;
+
+  void setIRInstruction(Instruction *IRInstruction);
+
+  virtual void printInfo(raw_ostream &OS, const clang::SourceManager &SM,
+                         unsigned Depth = 0) const {
+    OS.indent(Depth * 2) << "Directive: " << DirectiveType << "\n";
+    OS.indent(Depth * 2 + 2) << "Location: " << getLocation(SM) << "\n";
+    if(IRInstruction)
+      OS.indent(Depth * 2 + 2) << "Instruction: " << *IRInstruction << "\n";
+    for (const auto &Child : Children)
+      Child->printInfo(OS, SM, Depth + 1);
+  }
 
 protected:
   StringRef DirectiveType;
-  SourceLocation Location;
+  clang::SourceLocation Location;
+  OMPDirectiveInfo *Parent;
+  Instruction *IRInstruction = nullptr;
+  SmallVector<OMPDirectiveInfo *, 4> Children;
 };
 
 /// Parallel directive info
 class OMPParallelInfo : public OMPDirectiveInfo {
 public:
-  OMPParallelInfo(SourceLocation Loc);
+  OMPParallelInfo(clang::SourceLocation Loc);
+  static OMPDirectiveInfo *handleDirective(clang::OMPExecutableDirective *Directive);
+
   unsigned getNumThreads() const;
 
-  void printInfo(raw_ostream &OS) const override {
-    OMPDirectiveInfo::printInfo(OS);
-    OS << "  Number of Threads: " << NumThreads << "\n";
+  void printInfo(raw_ostream &OS, const clang::SourceManager &SM,
+                 unsigned Depth = 0) const override {
+    OMPDirectiveInfo::printInfo(OS, SM, Depth);
+    OS.indent(Depth * 2 + 2) << "Number of Threads: " << NumThreads << "\n";
+    if (ForConstruct) {
+      OS.indent(Depth * 2 + 2) << "Parallel For: Yes\n";
+    }
   }
 
 private:
-  /// Number of threads for the parallel region
-  unsigned NumThreads;
+  unsigned NumThreads = 1;
+  bool ForConstruct = false;
 };
 
 /// Task directive info
 class OMPTaskInfo : public OMPDirectiveInfo {
 public:
-  OMPTaskInfo(SourceLocation Loc);
+  OMPTaskInfo(clang::SourceLocation Loc);
+  static OMPDirectiveInfo *handleDirective(clang::OMPExecutableDirective *Directive);
 
   bool hasDependencies() const;
 
-  void printInfo(raw_ostream &OS) const override {
-    OMPDirectiveInfo::printInfo(OS);
-    OS << "  Dependencies: " << (Dependencies ? "Yes" : "No") << "\n";
+  void printInfo(raw_ostream &OS, const clang::SourceManager &SM,
+                 unsigned Depth = 0) const override {
+    OMPDirectiveInfo::printInfo(OS, SM, Depth);
+    OS.indent(Depth * 2 + 2)
+        << "Dependencies: " << (Dependencies ? "Yes" : "No") << "\n";
   }
 
 private:
-  bool Dependencies;
+  bool Dependencies = false;
   SetVector<Instruction *> Inputs;
   SetVector<Instruction *> Outputs;
 };
@@ -76,15 +98,16 @@ class OpenMPASTConsumer;
 /// OMPVisitor class to traverse the AST and find OpenMP directives
 class OMPVisitor {
 public:
-  OMPVisitor() = default;
+  OMPVisitor(llvm::Module &M, SetVector<Function *> &Functions);
   ~OMPVisitor();
 
-  void run(llvm::Module &M, SetVector<Function *> &Functions,
-           string InputASTFilename) ;
+  void run(string InputASTFilename);
 
   const OMPDirectiveInfo *getDirectiveForInstruction(Instruction *I) const;
 
 private:
+  llvm::Module &M;
+  SetVector<Function *> &Functions;
   OpenMPASTConsumer *Consumer;
 };
 
