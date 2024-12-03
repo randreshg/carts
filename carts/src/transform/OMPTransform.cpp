@@ -19,6 +19,7 @@
 #include "llvm/Transforms/IPO/Attributor.h"
 
 #include "carts/transform/OMPTransform.h"
+
 #include "carts/utils/ARTS.h"
 #include "carts/utils/ARTSIRBuilder.h"
 #include "carts/utils/ARTSUtils.h"
@@ -37,6 +38,9 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 /// ------------------------------------------------------------------- ///
 ///                           OMPTransform                              ///
 /// ------------------------------------------------------------------- ///
+OMPTransform::OMPTransform(Module &M, AnalysisGetter &AG, OMPVisitor &OV)
+    : M(M), AG(AG), OV(OV) {}
+
 bool OMPTransform::run(ModuleAnalysisManager &AM) {
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
   LLVM_DEBUG(dbgs() << TAG << "Running OmpTransform on Module: \n");

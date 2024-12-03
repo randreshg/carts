@@ -27,9 +27,6 @@
 #include "llvm/Support/Debug.h"
 
 #include <string>
-using namespace llvm;
-using namespace clang;
-using namespace std;
 
 /// DEBUG
 #define DEBUG_TYPE "omp-visitor"
@@ -38,6 +35,9 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 #endif
 
 namespace arts {
+using namespace llvm;
+using namespace std;
+using namespace clang;
 
 /// ------------------------------------------------------------------- ///
 ///                          OMPDirectiveInfo                           ///
@@ -45,23 +45,60 @@ namespace arts {
 OMPDirectiveInfo::OMPDirectiveInfo(StringRef Type, SourceLocation Loc)
     : DirectiveType(Type), Location(Loc) {}
 
+void OMPDirectiveInfo::addChild(OMPDirectiveInfo *Child) {
+  Child->Parent = this;
+  Children.push_back(Child);
+}
+
 StringRef OMPDirectiveInfo::getType() const { return DirectiveType; }
 
 string OMPDirectiveInfo::getLocation(const SourceManager &SM) const {
   return Location.printToString(SM);
 }
 
-/// Parallel directive info
+const SmallVector<OMPDirectiveInfo *, 4> &
+OMPDirectiveInfo::getChildren() const {
+  return Children;
+}
+
+const OMPDirectiveInfo *OMPDirectiveInfo::getParent() const { return Parent; }
+
+Instruction *OMPDirectiveInfo::getIRInstruction() const {
+  return IRInstruction;
+}
+
+void OMPDirectiveInfo::setIRInstruction(Instruction *IRInstruction) {
+  this->IRInstruction = IRInstruction;
+}
+
+/// ------------------------------------------------------------------- ///
+///                        ParallelDirectiveInfo                        ///
+/// ------------------------------------------------------------------- ///
 OMPParallelInfo::OMPParallelInfo(SourceLocation Loc)
     : OMPDirectiveInfo("parallel", Loc) {}
 
 unsigned OMPParallelInfo::getNumThreads() const { return NumThreads; }
 
-/// Task directive info
+OMPDirectiveInfo *
+OMPParallelInfo::handleDirective(OMPExecutableDirective *Directive) {
+  SourceLocation Loc = Directive->getBeginLoc();
+  OMPParallelInfo *Info = new OMPParallelInfo(Loc);
+  return Info;
+}
+/// ------------------------------------------------------------------- ///
+///                          TaskDirectiveInfo                          ///
+/// ------------------------------------------------------------------- ///
 OMPTaskInfo::OMPTaskInfo(SourceLocation Loc) : OMPDirectiveInfo("task", Loc) {}
 
 bool OMPTaskInfo::hasDependencies() const {
   return !Inputs.empty() || !Outputs.empty();
+}
+
+OMPDirectiveInfo *
+OMPTaskInfo::handleDirective(OMPExecutableDirective *Directive) {
+  SourceLocation Loc = Directive->getBeginLoc();
+  OMPTaskInfo *Info = new OMPTaskInfo(Loc);
+  return Info;
 }
 
 /// ------------------------------------------------------------------- ///
@@ -70,36 +107,37 @@ bool OMPTaskInfo::hasDependencies() const {
 class OpenMPVisitor : public RecursiveASTVisitor<OpenMPVisitor> {
 public:
   explicit OpenMPVisitor(ASTContext &Context, SetVector<Function *> &Functions)
-      : Context(Context), Functions(Functions), SM(Context.getSourceManager()) {
+      : Functions(Functions), SM(Context.getSourceManager()) {}
+
+  ~OpenMPVisitor() {
+    /// Free all directive info objects
+    for (auto &Line : LineToDirective)
+      delete Line.second;
   }
 
-  bool VisitFunctionDecl(FunctionDecl *FD) {
-    if (FD->hasBody()) {
-      /// Traverse the function body given a function context
-      CurrentFn = FD;
-      TraverseStmt(FD->getBody());
-      CurrentFn = nullptr;
+  /// Traverse the AST and find OpenMP directives
+  bool TraverseStmt(Stmt *S) {
+    RecursiveASTVisitor::TraverseStmt(S);
+    if (!S)
+      return true;
+    /// Pop the directive stack if we are at the end of a directive
+    if (OMPExecutableDirective *Directive =
+            dyn_cast<OMPExecutableDirective>(S)) {
+      if (!DirectiveStack.empty())
+        DirectiveStack.pop_back();
     }
     return true;
   }
 
   bool VisitStmt(Stmt *S) {
-    OMPExecutableDirective *Directive = dyn_cast<OMPExecutableDirective>(S);
     /// We are only interested in OpenMP directives
+    OMPExecutableDirective *Directive = dyn_cast<OMPExecutableDirective>(S);
     if (!Directive)
       return true;
 
     LLVM_DEBUG(dbgs() << "Found OpenMP Directive ("
                       << Directive->getStmtClassName() << ") at "
                       << Directive->getBeginLoc().printToString(SM) << "\n");
-
-    if (!CurrentFn) {
-      LLVM_DEBUG(dbgs() << "  Error: No enclosing function context found.\n");
-      return true;
-    }
-
-    LLVM_DEBUG(dbgs() << "  Enclosing function: " << CurrentFn->getName()
-                      << "\n");
     handleDirective(Directive);
     return true;
   }
@@ -110,20 +148,18 @@ public:
     for (Function *F : Functions) {
       for (Instruction &I : instructions(F)) {
         if (DILocation *Loc = I.getDebugLoc()) {
-          unsigned Line = Loc->getLine();
-          StringRef FunctionName = F->getName();
-          auto FuncIt = LineToDirective.find(FunctionName.str());
-          if (FuncIt != LineToDirective.end()) {
-            auto LineIt = FuncIt->second.find(Line);
-            if (LineIt != FuncIt->second.end()) {
-              InstructionToDirective[&I] = LineIt->second;
-            }
+          auto LineIt = LineToDirective.find(Loc->getLine());
+          if (LineIt != LineToDirective.end()) {
+            OMPDirectiveInfo *Directive = LineIt->second;
+            Directive->setIRInstruction(&I);
+            InstructionToDirective[&I] = Directive;
           }
         }
       }
     }
   }
 
+  /// Get the directive associated with an LLVM IR instruction
   const OMPDirectiveInfo *getDirectiveForInstruction(Instruction *I) const {
     auto It = InstructionToDirective.find(I);
     if (It != InstructionToDirective.end())
@@ -131,47 +167,55 @@ public:
     return nullptr;
   }
 
+  /// Print the directive hierarchy
+  void printHierarchy() const {
+    LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - \n"
+                      << "Printing OpenMP Directive Hierarchy...\n");
+    for (const auto &Root : RootDirectives)
+      Root->printInfo(llvm::outs(), SM);
+  }
+
 private:
-  ASTContext &Context;
+  // ASTContext &Context;
   SetVector<Function *> &Functions;
   const SourceManager &SM;
-  const FunctionDecl *CurrentFn;
 
-  DenseMap<string, DenseMap<unsigned, OMPDirectiveInfo *>> LineToDirective;
+  SmallVector<OMPDirectiveInfo *, 4> DirectiveStack;
+  SmallVector<OMPDirectiveInfo *, 4> RootDirectives;
+
+  DenseMap<unsigned, OMPDirectiveInfo *> LineToDirective;
   DenseMap<Instruction *, OMPDirectiveInfo *> InstructionToDirective;
 
   void handleDirective(OMPExecutableDirective *Directive) {
-    // StringRef DirectiveName = Directive->getStmtClassName();
-    SourceLocation Loc = Directive->getBeginLoc();
+    OMPDirectiveInfo *Info = nullptr;
     switch (Directive->getDirectiveKind()) {
-    case omp::OMPD_parallel: {
-      auto *ParallelDirective = cast<OMPParallelDirective>(Directive);
-      // unsigned NumThreads = 0;
-      // for (const OMPClause *Clause : ParallelDirective->clauses()) {
-      //   if (const auto *NumThreadsClause =
-      //   dyn_cast<OMPNumThreadsClause>(Clause)) {
-      //     if (const Expr *NumThreadsExpr = NumThreadsClause->getNumThreads())
-      //     {
-      //       llvm::APSInt Result;
-      //       if (NumThreadsExpr->EvaluateAsInt(Result, Context)) {
-      //         NumThreads = Result.getLimitedValue();
-      //       }
-      //     }
-      //   }
-      // }
-      OMPParallelInfo *Info = new OMPParallelInfo(Loc);
-      storeDirective(Info, Directive);
-      // handleClauses(Directive);
-    } break;
-    case omp::OMPD_task: {
-      OMPTaskInfo *Info = new OMPTaskInfo(Loc);
-      storeDirective(Info, Directive);
-      // handleClauses(Directive);
-    } break;
+    case omp::OMPD_parallel:
+      Info = OMPParallelInfo::handleDirective(Directive);
+      break;
+    case omp::OMPD_task:
+      Info = OMPTaskInfo::handleDirective(Directive);
+      break;
     default:
       LLVM_DEBUG(dbgs() << "  (Unhandled directive type)\n");
       break;
     }
+
+    if (!Info)
+      return;
+
+    /// If the directive stack is not empty, add the directive as a child of the
+    /// top directive in the stack
+    if (!DirectiveStack.empty())
+      DirectiveStack.back()->addChild(Info);
+    /// Otherwise, add the directive to the root directives
+    else
+      RootDirectives.push_back(Info);
+
+    /// Push the new directive onto the stack
+    DirectiveStack.push_back(RootDirectives.back());
+
+    /// Store the directive in the map
+    storeDirective(Info, Directive);
   }
 
   void handleClauses(const OMPExecutableDirective *Directive) {
@@ -215,9 +259,8 @@ private:
 
   void storeDirective(OMPDirectiveInfo *Info,
                       const OMPExecutableDirective *Directive) {
-    StringRef FunctionName = CurrentFn->getName();
     unsigned Line = SM.getSpellingLineNumber(Directive->getBeginLoc());
-    LineToDirective[FunctionName.str()][Line] = Info;
+    LineToDirective[Line] = Info;
   }
 };
 
@@ -233,6 +276,7 @@ public:
   void HandleTranslationUnit(ASTContext &Context) override {
     Visitor.TraverseDecl(Context.getTranslationUnitDecl());
     Visitor.preprocessLLVMIR();
+    Visitor.printHierarchy();
   }
 
   const OMPDirectiveInfo *getDirectiveForInstruction(Instruction *I) const {
@@ -246,18 +290,17 @@ private:
 /// ------------------------------------------------------------------- ///
 ///                              OMPVisitor                             ///
 /// ------------------------------------------------------------------- ///
+OMPVisitor::OMPVisitor(llvm::Module &M, SetVector<Function *> &Functions)
+    : M(M), Functions(Functions), Consumer(nullptr) {}
+
 OMPVisitor::~OMPVisitor() {
   if (Consumer)
     delete Consumer;
 }
 
-void OMPVisitor::run(llvm::Module &M, SetVector<Function *> &Functions,
-                     string InputASTFilename) {
+void OMPVisitor::run(string InputASTFilename) {
   /// AST Traversal with OpenMPVisitor and Clang tooling
-  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n"
-                    << TAG << "Running OMPVisitor on Module: \n"
-                    << M.getName() << "\n"
-                    << "\n-------------------------------------------------\n");
+  LLVM_DEBUG(dbgs() << TAG << "Running OMPVisitor\n");
 
   /// Use the command-line option for the AST filename
   string Filename = InputASTFilename;

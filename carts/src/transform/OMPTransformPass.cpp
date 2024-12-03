@@ -15,18 +15,17 @@
 #include "llvm/Support/Debug.h"
 
 #include "carts/transform/OMPTransform.h"
+#include "carts/transform/visitor/OMPVisitor.h"
 
 using namespace llvm;
 using namespace arts;
 using namespace arts::omp;
-// using namespace arts::utils;
 
 // Command-line option to specify the input AST file
 static cl::opt<std::string>
     InputASTFilename("ast-file", cl::desc("Specify the input AST filename"),
                      cl::value_desc("filename"),
                      cl::init("input.ast")); // Default value if not specified
-
 
 /// DEBUG
 #define DEBUG_TYPE "omp-transform"
@@ -43,17 +42,15 @@ public:
 };
 
 PreservedAnalyses OMPTransformPass::run(Module &M, ModuleAnalysisManager &AM) {
-  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << TAG << "Running OmpTransformPass on Module: \n"
-                    << M.getName() << "\n");
-  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
+  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n"
+                    << TAG << "Running OmpTransformPass on Module: "
+                    << M.getName() << "\n"
+                    << "\n-------------------------------------------------\n");
 
-  
   FunctionAnalysisManager &FAM =
       AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   AnalysisGetter AG(FAM);
-  OMPTransform OT(M, AG);
-  OT.run(AM);
+
   /// Get the set of functions in the module
   SetVector<Function *> Functions;
   for (Function &Fn : M) {
@@ -61,32 +58,42 @@ PreservedAnalyses OMPTransformPass::run(Module &M, ModuleAnalysisManager &AM) {
       continue;
     Functions.insert(&Fn);
   }
-  /// Create attributor
-  CallGraphUpdater CGUpdater;
-  BumpPtrAllocator Allocator;
-  InformationCache InfoCache(M, AG, Allocator, &Functions);
-  AttributorConfig AC(CGUpdater);
-  AC.DefaultInitializeLiveInternals = false;
-  AC.IsModulePass = true;
-  AC.RewriteSignatures = false;
-  AC.MaxFixpointIterations = 32;
-  AC.DeleteFns = false;
-  AC.PassName = DEBUG_TYPE;
-  Attributor A(Functions, InfoCache, AC);
-  /// Register attributes for functions
-  for (Function *F : Functions) {
-    for (Argument &Arg : F->args())
-      A.getOrCreateAAFor<AAMemoryBehavior>(IRPosition::argument(Arg));
-  }
 
-  ChangeStatus Changed = A.run();
-  LLVM_DEBUG(dbgs() << TAG << "[Attributor] Done with " << Functions.size()
-                    << " functions, result: " << Changed << ".\n");
+  /// Run the visitor
+  OMPVisitor OV(M, Functions);
+  OV.run(InputASTFilename);
+
+  // /// Run the transform
+  // OMPTransform OT(M, AG, OV);
+  // OT.run(AM);
+
+  // /// Create attributor
+  // CallGraphUpdater CGUpdater;
+  // BumpPtrAllocator Allocator;
+  // InformationCache InfoCache(M, AG, Allocator, &Functions);
+  // AttributorConfig AC(CGUpdater);
+  // AC.DefaultInitializeLiveInternals = false;
+  // AC.IsModulePass = true;
+  // AC.RewriteSignatures = false;
+  // AC.MaxFixpointIterations = 32;
+  // AC.DeleteFns = false;
+  // AC.PassName = DEBUG_TYPE;
+  // Attributor A(Functions, InfoCache, AC);
+  // /// Register attributes for functions
+  // for (Function *F : Functions) {
+  //   for (Argument &Arg : F->args())
+  //     A.getOrCreateAAFor<AAMemoryBehavior>(IRPosition::argument(Arg));
+  // }
+
+  // ChangeStatus Changed = A.run();
+  // LLVM_DEBUG(dbgs() << TAG << "[Attributor] Done with " << Functions.size()
+  //                   << " functions, result: " << Changed << ".\n");
 
   /// Print module info
-  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
-  LLVM_DEBUG(dbgs() << TAG << "OmpTransformPass has finished\n\n" << M << "\n");
-  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
+  LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n"
+                    << TAG << "OmpTransformPass has finished\n\n"
+                    << M << "\n"
+                    << "\n-------------------------------------------------\n");
   return PreservedAnalyses::all();
 }
 

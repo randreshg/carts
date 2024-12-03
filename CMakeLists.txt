@@ -1,4 +1,4 @@
-include("./.cmake/CMakeColors.txt")
+include("./_cmake/CMakeColors.txt")
 cmake_minimum_required(VERSION 3.13)
 
 project(CARTS C CXX)
