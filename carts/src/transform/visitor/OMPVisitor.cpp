@@ -94,10 +94,62 @@ bool OMPTaskInfo::hasDependencies() const {
   return !Inputs.empty() || !Outputs.empty();
 }
 
+void OMPTaskInfo::addDependency(OpenMPDependClauseKind DepKind, Expr *DepExpr) {
+  switch (DepKind) {
+  case OMPC_DEPEND_in:
+    Inputs.push_back(DepExpr);
+    break;
+  case OMPC_DEPEND_out:
+    Outputs.push_back(DepExpr);
+    break;
+  case OMPC_DEPEND_inout:
+    Inputs.push_back(DepExpr);
+    Outputs.push_back(DepExpr);
+    break;
+  default:
+    break;
+  }
+}
+
 OMPDirectiveInfo *
 OMPTaskInfo::handleDirective(OMPExecutableDirective *Directive) {
   SourceLocation Loc = Directive->getBeginLoc();
   OMPTaskInfo *Info = new OMPTaskInfo(Loc);
+
+  OMPTaskDirective *TaskDirective = dyn_cast<OMPTaskDirective>(Directive);
+    if (!TaskDirective)
+      return nullptr;
+
+    LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - \n"
+                      << "  Processing task directive...\n");
+    /// Process clauses
+    for (const OMPClause *Clause : TaskDirective->clauses()) {
+      switch (Clause->getClauseKind()) {
+      case omp::OMPC_depend: {
+        auto *DependClause = cast<OMPDependClause>(Clause);
+        LLVM_DEBUG(
+            dbgs() << "    Dependency type: "
+                   << OpenMPDependClauseKind(DependClause->getDependencyKind())
+                   << "\n");
+        for (const Expr *DepExpr : DependClause->varlists()) {
+          LLVM_DEBUG(dbgs() << "    Dependency variable: " << DepExpr << "\n");
+        }
+      } break;
+
+      case omp::OMPC_if: {
+        auto *IfClause = cast<OMPIfClause>(Clause);
+        LLVM_DEBUG(dbgs() << "    Condition: " << IfClause->getCondition()
+                          << "\n");
+      } break;
+
+      default:
+        LLVM_DEBUG(dbgs() << "    (Unhandled clause type)\n");
+        break;
+      }
+
+    }
+    return Info;
+  /// Handle task dependencies
   return Info;
 }
 

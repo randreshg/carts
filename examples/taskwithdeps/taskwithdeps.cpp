@@ -31,27 +31,31 @@ int main() {
   #pragma omp parallel
   #pragma omp single
   {
-      // #pragma omp task depend(out: res,x,y) //T0 
-      // {
-      //     res = 0;
-      //     x = rand();
-      //     y = rand();
-      // }
+      #pragma omp task depend(out: res,x,y) //T0 
+      {
+          res = 0;
+          x = rand();
+          y = rand();
+      }
       #pragma omp task depend(out: res) //T0
           res = 0;
       #pragma omp task depend(out: x) //T1
           long_computation(x);
       #pragma omp task depend(out: y) //T2
           short_computation(y);
-      // #pragma omp task depend(in: x)
-      // {
-      //   res += x;
-      //   x++;
-      // }
-      // #pragma omp task depend(in: y)
-      //     res += y;
-      // #pragma omp task depend(in: res) //T5
-      //     printf("%d", res);
+  }
+  #pragma omp parallel
+  #pragma omp single
+  {
+      #pragma omp task depend(in: x)
+      {
+        res += x;
+        x++;
+      }
+      #pragma omp task depend(in: y)
+          res += y;
+      #pragma omp task depend(in: res) //T5
+          printf("%d", res);
   }
   return 0;
 }

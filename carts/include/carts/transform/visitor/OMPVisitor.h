@@ -2,6 +2,8 @@
 
 #ifndef LLVM_API_CARTS_OMPVISITOR_H
 #define LLVM_API_CARTS_OMPVISITOR_H
+#include "clang/AST/Expr.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/raw_ostream.h"
@@ -81,6 +83,8 @@ public:
 
   bool hasDependencies() const;
 
+void addDependency(clang::OpenMPDependClauseKind DepKind, clang::Expr *DepExpr);
+
   void printInfo(raw_ostream &OS, const clang::SourceManager &SM,
                  unsigned Depth = 0) const override {
     OMPDirectiveInfo::printInfo(OS, SM, Depth);
@@ -90,8 +94,8 @@ public:
 
 private:
   bool Dependencies = false;
-  SetVector<Instruction *> Inputs;
-  SetVector<Instruction *> Outputs;
+  SmallVector<clang::Expr *, 4> Inputs;
+  SmallVector<clang::Expr *, 4> Outputs;
 };
 
 class OpenMPASTConsumer;
