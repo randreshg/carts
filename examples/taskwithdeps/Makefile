@@ -7,8 +7,8 @@ all: $(FILENAME)_opt
 
 # Generate the ASTFile
 %.bc: %.cpp
-	clang++ -fopenmp -O3 -g3 -emit-ast -o $(FILENAME).ast $<
-	clang++ -fopenmp -O3 -g3 -emit-llvm -c $< -o $@ -lstdc++
+	clang++ -fopenmp -O1 -g3 -emit-ast -o $(FILENAME).ast $<
+	clang++ -fopenmp -O1 -g3 -emit-llvm -c $< -o $@ -lstdc++
 	llvm-dis $@
 
 %.bc: %.c
@@ -16,6 +16,7 @@ all: $(FILENAME)_opt
 	llvm-dis $@
 
 # Run OMP transform pass
+# opt -load-pass-plugin=/home/randres/projects/carts/.install/carts/lib/OMPTransform.so -debug-only=omp-visitor,omp-transform,arts,carts,arts-ir-builder -passes="omp-transform" -ast-file=taskwithdeps.ast taskwithdeps.ll -o taskwithdeps_arts_ir.bc
 $(FILENAME)_arts_ir.bc: $(FILENAME).bc
 	opt -load-pass-plugin=$(CARTS_PATH)/lib/OMPTransform.so \
 		-debug-only=omp-visitor,omp-transform,arts,carts,arts-ir-builder\
