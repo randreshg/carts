@@ -52,32 +52,28 @@ void cholesky_blocked(const int ts, double *Ah[NB][NB], int num_iter) {
     // mechanism
     for (int iter = 0; iter < num_iter; iter++) {
       START_TIMER;
-#ifdef TDG
-#pragma omp taskgraph
-#endif
       {
         for (int k = 0; k < NB; k++) {
-
-#pragma omp task depend(inout : AhDep[k][k])
-          omp_potrf(Ah[k][k], ts, ts, AhDep);
+          /// T1
+          #pragma omp task depend(inout : AhDep[k][k])
+            omp_potrf(Ah[k][k], ts, ts, AhDep);
 
           for (int i = k + 1; i < NB; i++) {
-#pragma omp task depend(in : AhDep[k][k]) depend(inout : AhDep[k][i])
-            omp_trsm(Ah[k][k], Ah[k][i], ts, ts, AhDep);
+            /// T2
+            #pragma omp task depend(in : AhDep[k][k]) depend(inout : AhDep[k][i])
+              omp_trsm(Ah[k][k], Ah[k][i], ts, ts, AhDep);
           }
 
           // Update trailing matrix
           for (int l = k + 1; l < NB; l++) {
             for (int j = k + 1; j < l; j++) {
-#pragma omp task depend(in                                                     \
-                        : AhDep[k][l]) depend(in                               \
-                                              : AhDep[k][j])                   \
-    depend(inout                                                               \
-           : AhDep[j][l])
+              /// T3
+              #pragma omp task depend(in : AhDep[k][l]) depend(in : AhDep[k][j]) depend(inout: AhDep[j][l])
               omp_gemm(Ah[k][l], Ah[k][j], Ah[j][l], ts, ts, AhDep);
             }
-#pragma omp task depend(in : AhDep[k][l]) depend(inout : AhDep[l][l])
-            omp_syrk(Ah[k][l], Ah[l][l], ts, ts, AhDep);
+            /// T4
+            #pragma omp task depend(in : AhDep[k][l]) depend(inout : AhDep[l][l])
+              omp_syrk(Ah[k][l], Ah[l][l], ts, ts, AhDep);
           }
         }
       }
