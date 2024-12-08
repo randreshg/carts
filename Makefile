@@ -79,7 +79,7 @@ install: build
 	make -C $(BUILD_DIR) install -j
 
 uninstall:
-	-cat $(BUILD_DIR)/install_manifest.txt | xargs rm -f
+	-cat $(BUILD_DIR)/install_manifest.txt | xargs rm -f -r
 	rm -f enable
 	rm -rf $(BUILD_DIR)
 

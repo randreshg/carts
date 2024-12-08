@@ -11,7 +11,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Transforms/IPO/Attributor.h"
 
-#include "carts/transform/visitor/OMPVisitor.h"
+// #include "carts/transform/visitor/OMPVisitor.h"
 namespace arts {
 using namespace llvm;
 
@@ -22,7 +22,7 @@ using namespace llvm;
 class OMPTransform {
 public:
   /// Interface
-  OMPTransform(Module &M, AnalysisGetter &AG, OMPVisitor &OV);
+  OMPTransform(Module &M, AnalysisGetter &AG);
   ~OMPTransform() = default;
   bool run(ModuleAnalysisManager &AM);
   bool runAttributor(Attributor &A);
@@ -40,7 +40,6 @@ private:
   ///  Attributes
   Module &M;
   AnalysisGetter &AG;
-  OMPVisitor &OV;
   SetVector<Function *> VisitedFunctions;
 };
 

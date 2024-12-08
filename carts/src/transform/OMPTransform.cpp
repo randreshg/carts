@@ -38,8 +38,8 @@ static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 /// ------------------------------------------------------------------- ///
 ///                           OMPTransform                              ///
 /// ------------------------------------------------------------------- ///
-OMPTransform::OMPTransform(Module &M, AnalysisGetter &AG, OMPVisitor &OV)
-    : M(M), AG(AG), OV(OV) {}
+OMPTransform::OMPTransform(Module &M, AnalysisGetter &AG)
+    : M(M), AG(AG) {}
 
 bool OMPTransform::run(ModuleAnalysisManager &AM) {
   LLVM_DEBUG(dbgs() << "\n-------------------------------------------------\n");
