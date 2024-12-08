@@ -1,0 +1,66 @@
+
+void computeA(uint32_t paramc, uint64_t *paramv, artsEdtDep_t *depv) {
+    int i = paramv[0];                  // Extract iteration index
+    artsGuid_t eventGuid = paramv[1];   // Latch event for TaskA[i]
+    artsGuid_t dbGuid = paramv[2];      // DB for A[i]
+
+    // Compute A[i]
+    double *data;
+    artsDbCreate((void **) &data, sizeof(double), ARTS_DB_WRITE);
+    data[0] = i * 1.0; // Store result in DB
+    artsDbRenameWithGuid(dbGuid, data);
+
+    // Signal completion of TaskA[i]
+    artsEventSatisfySlot(eventGuid, dbGuid, ARTS_EVENT_LATCH_DECR_SLOT);
+}
+
+void computeB(uint32_t paramc, uint64_t *paramv, artsEdtDep_t *depv) {
+    int i = paramv[0];                  // Extract iteration index
+    artsGuid_t eventGuid = paramv[1];   // Latch event for TaskB[i]
+
+    // Retrieve data dependencies
+    double a_i = *((double *) depv[0].ptr);      // A[i]
+    double a_i_minus_1 = (i > 0) ? *((double *) depv[1].ptr) : 0.0; // A[i-1]
+
+    // Compute B[i]
+    B[i] = a_i + a_i_minus_1;
+
+    // Signal completion of TaskB[i]
+    artsEventSatisfySlot(eventGuid, 0, ARTS_EVENT_LATCH_DECR_SLOT);
+}
+
+void mainTask(uint32_t paramc, uint64_t *paramv, artsEdtDep_t *depv) {
+    int N = paramv[0];  // Total iterations
+
+    artsGuid_t *eventAGuids = (artsGuid_t *) malloc(N * sizeof(artsGuid_t));
+    artsGuid_t *eventBGuids = (artsGuid_t *) malloc(N * sizeof(artsGuid_t));
+    artsGuid_t *dbGuids = (artsGuid_t *) malloc(N * sizeof(artsGuid_t));
+
+    // Allocate latch events and DBs for TaskA and TaskB
+    for (int i = 0; i < N; i++) {
+        eventAGuids[i] = artsEventCreate(0, 1); // One dependency for TaskA[i]
+        eventBGuids[i] = artsEventCreate(0, i > 0 ? 2 : 1); // TaskB[i] depends on A[i] and A[i-1]
+        dbGuids[i] = artsGuidCreate(); // DB for A[i]
+    }
+
+    for (int i = 0; i < N; i++) {
+        // Create TaskA[i]
+        uint64_t paramA[3] = {i, eventAGuids[i], dbGuids[i]};
+        artsGuid_t taskAGuid = artsEdtCreate(computeA, 0, 3, paramA, 0);
+
+        // Create TaskB[i]
+        uint64_t paramB[2] = {i, eventBGuids[i]};
+        uint32_t depc = (i > 0) ? 2 : 1;
+        artsGuid_t taskBGuid = artsEdtCreate(computeB, 0, 2, paramB, depc);
+
+        // Connect TaskB[i] to its dependencies
+        artsAddDependence(eventAGuids[i], taskBGuid, 0); // A[i] → B[i]
+        if (i > 0) {
+            artsAddDependence(eventAGuids[i - 1], taskBGuid, 1); // A[i-1] → B[i] (if i > 0)
+        }
+    }
+
+    free(eventAGuids);
+    free(eventBGuids);
+    free(dbGuids);
+}
