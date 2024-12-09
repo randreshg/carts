@@ -2,6 +2,7 @@
 
 #include "clang/Rewrite/Core/Rewriter.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "carts/frontend/openmp/OpenMPConsumer.h"
@@ -57,31 +58,26 @@ const OMPDirectiveInfo *OMPDirectiveInfo::getParent() const { return Parent; }
 
 /// Store transformation data
 void OMPDirectiveInfo::setTransformation(
-    clang::SourceRange FullRange,
-    SmallVector<std::pair<std::string, std::string>, 4> CapturedVars,
-    bool IsCompoundStmt) {
+    clang::SourceRange FullRange, clang::CapturedStmt *CapturedStatement,
+    SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &CapturedVars) {
   this->FullRange = FullRange;
   this->CapturedVars = std::move(CapturedVars);
+  this->CapturedStatement = CapturedStatement;
   this->HasTransformation = true;
-  this->IsCompoundStmt = IsCompoundStmt;
 }
 
 bool OMPDirectiveInfo::hasTransformation() const { return HasTransformation; }
 
-bool OMPDirectiveInfo::isCompoundStmt() const { return IsCompoundStmt; }
-
-// const std::string &OMPDirectiveInfo::getFnSignature() const {
-//   return FnSignature;
-// }
-
-// const std::string &OMPDirectiveInfo::getFnCall() const { return FnCall; }
-
-SmallVector<std::pair<std::string, std::string>, 4> &
+SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &
 OMPDirectiveInfo::getCapturedVars() {
   return CapturedVars;
 }
 
 SourceRange OMPDirectiveInfo::getFullRange() const { return FullRange; }
+
+CapturedStmt *OMPDirectiveInfo::getCapturedStmt() const {
+  return CapturedStatement;
+}
 
 /// ------------------------------------------------------------------- ///
 ///                        ParallelDirectiveInfo                        ///
@@ -219,47 +215,64 @@ void OpenMPVisitor::applyTransformations() {
                      SM.getFileOffset(B->getFullRange().getBegin());
             });
 
-  /// Collect all function signatures to insert at end
-  std::string AllFuncSigs;
-
+  std::string AllFuncDecls, AllFuncDefs;
   for (OMPDirectiveInfo *Info : TransformedDirectives) {
     if (!Info->hasTransformation())
       continue;
 
-    /// Build function signature
     std::string FuncName =
-        "outlined_region_" + std::to_string(++OutlinedFuncCounter);
-    std::string Annotation = "edt." + Info->getType().str();
-    std::string FnSignature = "static void __attribute__((annotate(\"" +
-                              Annotation + "\"))) " + FuncName + "(";
+        "edt_function_" + std::to_string(++OutlinedFuncCounter);
+    std::string Annotation = "omp." + Info->getType().str();
 
+    /// Build function declaration
+    std::string FuncDecl = "static void __attribute__((annotate(\"" +
+                           Annotation + "\"))) " + FuncName + "(";
     bool First = true;
-    for (const auto &[Type, Var] : Info->getCapturedVars()) {
+    for (const auto &[Type, Var, Annot] : Info->getCapturedVars()) {
       if (!First)
-        FnSignature += ", ";
-      FnSignature += Type + " " + Var;
+        FuncDecl += ", ";
+      FuncDecl += Type + " " + Var;
       First = false;
     }
-    FnSignature += ") {\n";
+
+    /// Append the function declaration
+    FuncDecl += ");\n";
+    AllFuncDecls += FuncDecl;
+
+    /// Build function definition
+    std::string FuncDef = "static void __attribute__((annotate(\"" +
+                          Annotation + "\"))) " + FuncName + "(";
+    First = true;
+    for (const auto &[Type, Var, Annot] : Info->getCapturedVars()) {
+      if (!First)
+        FuncDef += ", ";
+      std::string VarAnnotation =
+          " __attribute__((annotate(\"" + Annot + "\")))";
+      FuncDef += "\n  " + Type + " " + Var + VarAnnotation;
+      First = false;
+    }
+    FuncDef += ") {\n";
 
     /// Extract the function body from the captured range
     std::string BodyText = R.getRewrittenText(Info->getFullRange());
-    /// Strip the braces if it's a compound statement
-    /// Assuming the body is a compound statement { ... }
     std::string OutlinedBody;
-    if (Info->isCompoundStmt()) {
-      if (BodyText.size() > 2)
-        OutlinedBody = BodyText.substr(1, BodyText.size() - 2);
-      else
-        OutlinedBody = BodyText;
-    } else
-      OutlinedBody = BodyText;
-    FnSignature += OutlinedBody + "\n}\n";
+    if (BodyText.size() > 2) {
+      /// Remove the braces - Find opening and closing braces
+      size_t OpenBrace = BodyText.find('{');
+      size_t CloseBrace = BodyText.rfind('}');
+      if (OpenBrace != StringRef::npos && CloseBrace != StringRef::npos)
+        OutlinedBody =
+            BodyText.substr(OpenBrace + 1, CloseBrace - OpenBrace - 1);
+    }
+
+    /// Append the body to the function definition and list
+    FuncDef += OutlinedBody + "\n}\n\n";
+    AllFuncDefs += FuncDef;
 
     /// Build function call
     std::string FnCall = FuncName + "(";
     First = true;
-    for (const auto &[Type, Var] : Info->getCapturedVars()) {
+    for (const auto &[Type, Var, A] : Info->getCapturedVars()) {
       if (!First)
         FnCall += ", ";
       FnCall += Var;
@@ -270,18 +283,16 @@ void OpenMPVisitor::applyTransformations() {
     /// Replace the directive with the function call
     R.ReplaceText(Info->getFullRange(), FnCall);
 
-    /// Collect all function signatures
-    AllFuncSigs += "\n" + FnSignature;
-
+    /// Debug
     LLVM_DEBUG(dbgs() << "  Replaced directive at " << Info->getLocation(SM)
-                      << " with call: " << FnCall << "\n");
-    LLVM_DEBUG(dbgs() << "  Outlined function:\n" << FnSignature << "\n");
+                      << " with call: " << FnCall << "\n"
+                      << "  Outlined function declaration:\n"
+                      << FuncDecl << "  Outlined function definition:\n"
+                      << FuncDef << "\n");
   }
-  // Insert all function signatures at end
-  if (!AllFuncSigs.empty()) {
-    SourceLocation EndLoc = R.getSourceMgr().getLocForEndOfFile(MainFileID);
-    R.InsertText(EndLoc, AllFuncSigs, true, false);
-  }
+
+  /// Insert function declarations and definitions
+  insertFunctions(AllFuncDecls, AllFuncDefs);
 }
 
 void OpenMPVisitor::handleDirective(OMPExecutableDirective *Directive) {
@@ -368,22 +379,115 @@ void OpenMPVisitor::handleClauses(const OMPExecutableDirective *Directive) {
 void OpenMPVisitor::handleCaptureStmt(OMPExecutableDirective *Directive,
                                       OMPDirectiveInfo *Info) {
   /// Collect captured variables with their types
-  SmallVector<std::pair<std::string, std::string>, 4> CapturedVars;
-  CapturedStmt *CS = Directive->getInnermostCapturedStmt();
-  for (const auto &Cap : CS->captures()) {
-    const VarDecl *VD = Cap.getCapturedVar();
-    CapturedVars.emplace_back(VD->getType().getAsString(), VD->getName().str());
-  }
+  SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> CapturedVars;
+  collectCapturedVars(Directive, CapturedVars);
 
   /// Determine full range: from directive begin to captured stmt end
+  CapturedStmt *CS = Directive->getInnermostCapturedStmt();
   SourceLocation Start = Directive->getBeginLoc();
   SourceLocation End = Lexer::getLocForEndOfToken(
       CS->getCapturedStmt()->getEndLoc(), 0, SM, LangOptions());
   SourceRange FullRange(Start, End);
 
   /// Store transformation data
-  Info->setTransformation(FullRange, CapturedVars, isa<CompoundStmt>(CS));
+  Info->setTransformation(FullRange, CS, CapturedVars);
   TransformedDirectives.push_back(Info);
+}
+
+void OpenMPVisitor::collectCapturedVars(
+    OMPExecutableDirective *Directive,
+    SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &CapturedVars) {
+  /// Set to avoid duplicates
+  std::set<std::string> CapturedSet;
+  /// Handle lifetime variables from OpenMP clauses
+  for (const OMPClause *Clause : Directive->clauses()) {
+    switch (Clause->getClauseKind()) {
+    case llvm::omp::OMPC_private: {
+      const OMPPrivateClause *PrivateClause =
+          dyn_cast<OMPPrivateClause>(Clause);
+      processClause<OMPPrivateClause>(PrivateClause, "omp.private",
+                                      CapturedVars, CapturedSet);
+    } break;
+    case llvm::omp::OMPC_firstprivate: {
+      const OMPFirstprivateClause *FirstprivateClause =
+          dyn_cast<OMPFirstprivateClause>(Clause);
+      processClause<OMPFirstprivateClause>(
+          FirstprivateClause, "omp.firstprivate", CapturedVars, CapturedSet);
+    } break;
+    case llvm::omp::OMPC_lastprivate: {
+      const OMPLastprivateClause *LastprivateClause =
+          dyn_cast<OMPLastprivateClause>(Clause);
+      processClause<OMPLastprivateClause>(LastprivateClause, "omp.lastprivate",
+                                          CapturedVars, CapturedSet);
+    } break;
+    case llvm::omp::OMPC_shared: {
+      const OMPSharedClause *SharedClause = dyn_cast<OMPSharedClause>(Clause);
+      processClause<OMPSharedClause>(SharedClause, "omp.shared", CapturedVars,
+                                     CapturedSet);
+    } break;
+    default:
+      /// Ignore other clauses
+      break;
+    }
+  }
+
+  /// Start with variables captured by the directive's captured statement
+  CapturedStmt *CS = Directive->getInnermostCapturedStmt();
+  for (const auto &Cap : CS->captures()) {
+    const VarDecl *VD = Cap.getCapturedVar();
+    auto Name = VD->getName().str();
+    if (CapturedSet.insert(Name).second) {
+      CapturedVars.emplace_back(VD->getType().getAsString(), Name,
+                                "omp.default");
+    }
+  }
+}
+
+void OpenMPVisitor::insertFunctions(std::string AllFuncDecls,
+                                    std::string AllFuncDefs) {
+  // Determine insertion points
+  FileID MainFileID = SM.getMainFileID();
+  // bool IsHeader = isHeaderFile(SM, MainFileID);
+
+  std::string AllFuncDeclsWithNewlines =
+      AllFuncDecls.empty() ? "" : "\n" + AllFuncDecls + "\n";
+  std::string AllFuncDefsWithNewlines =
+      AllFuncDefs.empty() ? "" : "\n" + AllFuncDefs;
+
+  /// Insert function declarations after the last #include directive
+  /// Retrieve the buffer content as a string
+  bool Invalid = false;
+  StringRef Buffer = SM.getBufferData(MainFileID, &Invalid);
+  if (Invalid) {
+    llvm::errs() << "Error: Unable to retrieve buffer data.\n";
+    return;
+  }
+
+  /// Find the position of the last #include directive
+  size_t LastIncludePos = Buffer.rfind("#include");
+  SourceLocation InsertDeclLoc;
+
+  if (LastIncludePos != StringRef::npos) {
+    /// Find the end of the last #include line
+    size_t InsertPos = Buffer.find('\n', LastIncludePos);
+    if (InsertPos != StringRef::npos) {
+      InsertDeclLoc =
+          SM.getLocForStartOfFile(MainFileID).getLocWithOffset(InsertPos + 1);
+    } else {
+      /// If no newline found after #include, insert at the end
+      InsertDeclLoc = SM.getLocForEndOfFile(MainFileID);
+    }
+  } else {
+    /// If no #include directives, insert at the beginning
+    InsertDeclLoc = SM.getLocForStartOfFile(MainFileID);
+  }
+
+  /// Insert function declarations after the last #include or at the beginning
+  R.InsertText(InsertDeclLoc, AllFuncDeclsWithNewlines, true, false);
+
+  /// Insert function definitions at the end of the file
+  R.InsertText(SM.getLocForEndOfFile(MainFileID), AllFuncDefsWithNewlines, true,
+               false);
 }
 
 /// ------------------------------------------------------------------- ///
