@@ -1,7 +1,6 @@
 /// AST Visitor to traverse the AST and find OpenMP directives
 
 #include "clang/Rewrite/Core/Rewriter.h"
-#include "llvm/IR/Instruction.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -22,7 +21,7 @@
 #include <string>
 
 /// DEBUG
-#define DEBUG_TYPE "omp-visitor"
+#define DEBUG_TYPE "omp-plugin"
 #if !defined(NDEBUG)
 static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 #endif
@@ -56,13 +55,33 @@ OMPDirectiveInfo::getChildren() const {
 
 const OMPDirectiveInfo *OMPDirectiveInfo::getParent() const { return Parent; }
 
-Instruction *OMPDirectiveInfo::getIRInstruction() const {
-  return IRInstruction;
+/// Store transformation data
+void OMPDirectiveInfo::setTransformation(
+    clang::SourceRange FullRange,
+    SmallVector<std::pair<std::string, std::string>, 4> CapturedVars,
+    bool IsCompoundStmt) {
+  this->FullRange = FullRange;
+  this->CapturedVars = std::move(CapturedVars);
+  this->HasTransformation = true;
+  this->IsCompoundStmt = IsCompoundStmt;
 }
 
-void OMPDirectiveInfo::setIRInstruction(Instruction *IRInstruction) {
-  this->IRInstruction = IRInstruction;
+bool OMPDirectiveInfo::hasTransformation() const { return HasTransformation; }
+
+bool OMPDirectiveInfo::isCompoundStmt() const { return IsCompoundStmt; }
+
+// const std::string &OMPDirectiveInfo::getFnSignature() const {
+//   return FnSignature;
+// }
+
+// const std::string &OMPDirectiveInfo::getFnCall() const { return FnCall; }
+
+SmallVector<std::pair<std::string, std::string>, 4> &
+OMPDirectiveInfo::getCapturedVars() {
+  return CapturedVars;
 }
+
+SourceRange OMPDirectiveInfo::getFullRange() const { return FullRange; }
 
 /// ------------------------------------------------------------------- ///
 ///                        ParallelDirectiveInfo                        ///
@@ -120,7 +139,7 @@ OMPTaskInfo::handleDirective(OMPExecutableDirective *Directive) {
   for (const OMPClause *Clause : TaskDirective->clauses()) {
     switch (Clause->getClauseKind()) {
     case omp::OMPC_depend: {
-      auto *DependClause = cast<OMPDependClause>(Clause);
+      const OMPDependClause *DependClause = cast<OMPDependClause>(Clause);
       LLVM_DEBUG(
           dbgs() << "    Dependency type: "
                  << OpenMPDependClauseKind(DependClause->getDependencyKind())
@@ -131,18 +150,16 @@ OMPTaskInfo::handleDirective(OMPExecutableDirective *Directive) {
     } break;
 
     case omp::OMPC_if: {
-      auto *IfClause = cast<OMPIfClause>(Clause);
+      const OMPIfClause *IfClause = cast<OMPIfClause>(Clause);
       LLVM_DEBUG(dbgs() << "    Condition: " << IfClause->getCondition()
                         << "\n");
     } break;
 
     default:
-      LLVM_DEBUG(dbgs() << "    (Unhandled clause type)\n");
+      // LLVM_DEBUG(dbgs() << "    (Unhandled clause type)\n");
       break;
     }
   }
-  return Info;
-  /// Handle task dependencies
   return Info;
 }
 
@@ -156,9 +173,8 @@ OpenMPVisitor::OpenMPVisitor(ASTContext &Context, Rewriter &R)
 }
 
 OpenMPVisitor::~OpenMPVisitor() {
-  /// Free all directive info objects
-  for (auto &Line : LineToDirective)
-    delete Line.second;
+  for (OMPDirectiveInfo *Directive : Directives)
+    delete Directive;
 }
 
 bool OpenMPVisitor::TraverseStmt(Stmt *S) {
@@ -191,6 +207,81 @@ void OpenMPVisitor::printHierarchy() const {
                     << "Printing OpenMP Directive Hierarchy...\n");
   for (const auto &Root : RootDirectives)
     Root->printInfo(llvm::outs(), SM);
+}
+
+void OpenMPVisitor::applyTransformations() {
+  /// Sort by starting location descending so that inner directives are replaced
+  /// first
+  const SourceManager &SM = R.getSourceMgr();
+  std::sort(TransformedDirectives.begin(), TransformedDirectives.end(),
+            [&SM](OMPDirectiveInfo *A, OMPDirectiveInfo *B) {
+              return SM.getFileOffset(A->getFullRange().getBegin()) >
+                     SM.getFileOffset(B->getFullRange().getBegin());
+            });
+
+  /// Collect all function signatures to insert at end
+  std::string AllFuncSigs;
+
+  for (OMPDirectiveInfo *Info : TransformedDirectives) {
+    if (!Info->hasTransformation())
+      continue;
+
+    /// Build function signature
+    std::string FuncName =
+        "outlined_region_" + std::to_string(++OutlinedFuncCounter);
+    std::string Annotation = "edt." + Info->getType().str();
+    std::string FnSignature = "static void __attribute__((annotate(\"" +
+                              Annotation + "\"))) " + FuncName + "(";
+
+    bool First = true;
+    for (const auto &[Type, Var] : Info->getCapturedVars()) {
+      if (!First)
+        FnSignature += ", ";
+      FnSignature += Type + " " + Var;
+      First = false;
+    }
+    FnSignature += ") {\n";
+
+    /// Extract the function body from the captured range
+    std::string BodyText = R.getRewrittenText(Info->getFullRange());
+    /// Strip the braces if it's a compound statement
+    /// Assuming the body is a compound statement { ... }
+    std::string OutlinedBody;
+    if (Info->isCompoundStmt()) {
+      if (BodyText.size() > 2)
+        OutlinedBody = BodyText.substr(1, BodyText.size() - 2);
+      else
+        OutlinedBody = BodyText;
+    } else
+      OutlinedBody = BodyText;
+    FnSignature += OutlinedBody + "\n}\n";
+
+    /// Build function call
+    std::string FnCall = FuncName + "(";
+    First = true;
+    for (const auto &[Type, Var] : Info->getCapturedVars()) {
+      if (!First)
+        FnCall += ", ";
+      FnCall += Var;
+      First = false;
+    }
+    FnCall += ");\n";
+
+    /// Replace the directive with the function call
+    R.ReplaceText(Info->getFullRange(), FnCall);
+
+    /// Collect all function signatures
+    AllFuncSigs += "\n" + FnSignature;
+
+    LLVM_DEBUG(dbgs() << "  Replaced directive at " << Info->getLocation(SM)
+                      << " with call: " << FnCall << "\n");
+    LLVM_DEBUG(dbgs() << "  Outlined function:\n" << FnSignature << "\n");
+  }
+  // Insert all function signatures at end
+  if (!AllFuncSigs.empty()) {
+    SourceLocation EndLoc = R.getSourceMgr().getLocForEndOfFile(MainFileID);
+    R.InsertText(EndLoc, AllFuncSigs, true, false);
+  }
 }
 
 void OpenMPVisitor::handleDirective(OMPExecutableDirective *Directive) {
@@ -228,13 +319,11 @@ void OpenMPVisitor::handleDirective(OMPExecutableDirective *Directive) {
   DirectiveStack.push_back(RootDirectives.back());
 
   /// Store the directive in the map
-  storeDirective(Info, Directive);
-}
+  Directives.push_back(Info);
 
-void OpenMPVisitor::storeDirective(OMPDirectiveInfo *Info,
-                                   const OMPExecutableDirective *Directive) {
-  unsigned Line = SM.getSpellingLineNumber(Directive->getBeginLoc());
-  LineToDirective[Line] = Info;
+  /// Handle capture statements
+  if (Directive->hasAssociatedStmt())
+    handleCaptureStmt(Directive, Info);
 }
 
 void OpenMPVisitor::handleClauses(const OMPExecutableDirective *Directive) {
@@ -276,65 +365,25 @@ void OpenMPVisitor::handleClauses(const OMPExecutableDirective *Directive) {
   //   }
 }
 
-void OpenMPVisitor::handleCaptureStmt(OMPParallelDirective *Node,
-                                      CapturedStmt *CS) {
-  // CapturedDecl *CD = CS->getCapturedDecl();
-  string FuncName =
-      "outlined_parallel_region_" + to_string(++OutlinedFuncCounter);
-
-  // Extract body
-  SourceRange BodyRange = CS->getCapturedStmt()->getSourceRange();
-  StringRef BodyText = getSourceText(BodyRange);
-  string OutlinedBody;
-  if (isa<CompoundStmt>(CS->getCapturedStmt()) && BodyText.size() > 2) {
-    OutlinedBody = BodyText.substr(1, BodyText.size() - 2).str();
-  } else {
-    OutlinedBody = BodyText.str();
-  }
-
-  // Build function signature with captured variables
-  string FuncSig =
-      "static void __attribute__((annotate(\"parallel\"))) " + FuncName + "(";
-
-  bool first = true;
+void OpenMPVisitor::handleCaptureStmt(OMPExecutableDirective *Directive,
+                                      OMPDirectiveInfo *Info) {
+  /// Collect captured variables with their types
+  SmallVector<std::pair<std::string, std::string>, 4> CapturedVars;
+  CapturedStmt *CS = Directive->getInnermostCapturedStmt();
   for (const auto &Cap : CS->captures()) {
     const VarDecl *VD = Cap.getCapturedVar();
-    QualType QT = VD->getType();
-    if (!first)
-      FuncSig += ", ";
-    FuncSig += QT.getAsString() + " " + VD->getName().str();
-    first = false;
+    CapturedVars.emplace_back(VD->getType().getAsString(), VD->getName().str());
   }
-  FuncSig += ") {\n" + OutlinedBody + "\n}\n";
 
-  // Insert function at end of file
-  insertAtFileEnd(FuncSig);
+  /// Determine full range: from directive begin to captured stmt end
+  SourceLocation Start = Directive->getBeginLoc();
+  SourceLocation End = Lexer::getLocForEndOfToken(
+      CS->getCapturedStmt()->getEndLoc(), 0, SM, LangOptions());
+  SourceRange FullRange(Start, End);
 
-  // Build call expression
-  string CallExpr = FuncName + "(";
-  first = true;
-  for (const auto &Cap : CS->captures()) {
-    const VarDecl *VD = Cap.getCapturedVar();
-    if (!first)
-      CallExpr += ", ";
-    CallExpr += VD->getName().str();
-    first = false;
-  }
-  CallExpr += ");";
-
-  // Replace directive
-  R.ReplaceText(Node->getSourceRange(), CallExpr);
-}
-
-StringRef OpenMPVisitor::getSourceText(SourceRange SR) const {
-  const SourceManager &SM = R.getSourceMgr();
-  LangOptions LangOpts;
-  return Lexer::getSourceText(CharSourceRange::getCharRange(SR), SM, LangOpts);
-}
-
-void OpenMPVisitor::insertAtFileEnd(const string &Text) {
-  SourceLocation EndLoc = R.getSourceMgr().getLocForEndOfFile(MainFileID);
-  R.InsertText(EndLoc, "\n" + Text, true, false);
+  /// Store transformation data
+  Info->setTransformation(FullRange, CapturedVars, isa<CompoundStmt>(CS));
+  TransformedDirectives.push_back(Info);
 }
 
 /// ------------------------------------------------------------------- ///
@@ -346,6 +395,7 @@ OpenMPConsumer::OpenMPConsumer(ASTContext &Context, Rewriter &R)
 void OpenMPConsumer::HandleTranslationUnit(ASTContext &Context) {
   Visitor.TraverseDecl(Context.getTranslationUnitDecl());
   Visitor.printHierarchy();
+  Visitor.applyTransformations();
 }
 
 } // namespace arts
