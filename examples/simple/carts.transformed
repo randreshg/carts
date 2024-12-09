@@ -22,8 +22,33 @@ int main() {
 
   /// EDT 0
   /// 0: random_number, 1: shared_number
-  #pragma omp parallel
+  outlined_region_1(shared_number, random_number);
   {
+    #pragma omp single 
+    {
+      printf("EDT 0: The number is %d/%d\n", shared_number, random_number);
+
+      /// EDT 3
+      /// 0: shared_number 
+      outlined_region_2(shared_number);
+      {
+        shared_number++;
+        random_number++;
+        printf("EDT 3: The number is %d/%d\n", shared_number, random_number);
+      }
+    }
+  } 
+
+  /// EDT 2
+  shared_number++;
+  printf("EDT 2: The final number is %d - %d.\n", shared_number, random_number);
+  return 0;
+}
+
+static void __attribute__((annotate("parallel"))) outlined_region_1(int shared_number, int random_number) {
+
+    #pragma omp single 
+    {
       printf("EDT 0: The number is %d/%d\n", shared_number, random_number);
 
       /// EDT 3
@@ -34,11 +59,14 @@ int main() {
         random_number++;
         printf("EDT 3: The number is %d/%d\n", shared_number, random_number);
       }
-  
-  } 
+    }
+ 
+}
 
-  /// EDT 2
-  shared_number++;
-  printf("EDT 2: The final number is %d - %d.\n", shared_number, random_number);
-  return 0;
+static void __attribute__((annotate("parallel"))) outlined_region_2(int shared_number) {
+
+        shared_number++;
+        random_number++;
+        printf("EDT 3: The number is %d/%d\n", shared_number, random_number);
+     
 }

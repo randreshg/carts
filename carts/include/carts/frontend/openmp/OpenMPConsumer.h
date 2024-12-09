@@ -3,6 +3,7 @@
 #ifndef LLVM_API_CARTS_OMPVISITOR_H
 #define LLVM_API_CARTS_OMPVISITOR_H
 
+#include "clang/AST/StmtOpenMP.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -31,12 +32,22 @@ public:
   void addChild(OMPDirectiveInfo *Child);
 
   StringRef getType() const;
+  clang::OMPExecutableDirective *getDirective() const;
   string getLocation(const clang::SourceManager &SM) const;
   const SmallVector<OMPDirectiveInfo *, 4> &getChildren() const;
   const OMPDirectiveInfo *getParent() const;
-  Instruction *getIRInstruction() const;
 
-  void setIRInstruction(Instruction *IRInstruction);
+  /// Transformation data
+  void setTransformation(
+      clang::SourceRange FullRange,
+      SmallVector<std::pair<std::string, std::string>, 4> CapturedVars,
+      bool IsCompoundStmt = false);
+  bool hasTransformation() const;
+  bool isCompoundStmt() const;
+  // const std::string &getFnSignature() const;
+  // const std::string &getFnCall() const;
+  SmallVector<std::pair<std::string, std::string>, 4> &getCapturedVars();
+  clang::SourceRange getFullRange() const;
 
   virtual void printInfo(raw_ostream &OS, const clang::SourceManager &SM,
                          unsigned Depth = 0) const {
@@ -49,11 +60,20 @@ public:
   }
 
 protected:
-  StringRef DirectiveType;
+  StringRef DirectiveType = "omp";
   clang::SourceLocation Location;
   OMPDirectiveInfo *Parent;
   Instruction *IRInstruction = nullptr;
   SmallVector<OMPDirectiveInfo *, 4> Children;
+
+  /// Transformation details
+  clang::SourceRange FullRange;
+  SmallVector<std::pair<std::string, std::string>, 4> CapturedVars;
+  bool IsCompoundStmt = false;
+  // std::string FnSignature;
+  // std::string FnCall;
+  // std::string OutlinedBody;
+  bool HasTransformation = false;
 };
 
 /// Parallel directive info
@@ -113,16 +133,13 @@ public:
   bool TraverseStmt(clang::Stmt *S);
   bool VisitStmt(clang::Stmt *S);
   void printHierarchy() const;
+  void applyTransformations();
 
 private:
   void handleDirective(clang::OMPExecutableDirective *Directive);
-  void storeDirective(OMPDirectiveInfo *Info,
-                      const clang::OMPExecutableDirective *Directive);
   void handleClauses(const clang::OMPExecutableDirective *Directive);
-  void handleCaptureStmt(clang::OMPParallelDirective *Node,
-                         clang::CapturedStmt *CS);
-  StringRef getSourceText(clang::SourceRange SR) const;
-  void insertAtFileEnd(const std::string &Text);
+  void handleCaptureStmt(clang::OMPExecutableDirective *Directive,
+                         OMPDirectiveInfo *Info);
 
   /// Attributes
   const clang::SourceManager &SM;
@@ -131,7 +148,8 @@ private:
 
   SmallVector<OMPDirectiveInfo *, 4> DirectiveStack;
   SmallVector<OMPDirectiveInfo *, 4> RootDirectives;
-  DenseMap<unsigned, OMPDirectiveInfo *> LineToDirective;
+  SmallVector<OMPDirectiveInfo *, 4> Directives;
+  SmallVector<OMPDirectiveInfo *, 4> TransformedDirectives;
 };
 
 /// Visitor to traverse the AST and find OpenMP directives

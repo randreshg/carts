@@ -17,10 +17,11 @@ set(SOURCES
 )
 
 # Add executable
-add_executable(OpenMPTool ${SOURCES})
+# add_executable(OpenMPTool ${SOURCES})
+add_library(OpenMPPlugin SHARED ${SOURCES})
 
 # Link against LLVM and Clang libraries
-target_link_libraries(OpenMPTool
+target_link_libraries(OpenMPPlugin
     PRIVATE
     clangTooling
     clangFrontend
@@ -37,5 +38,5 @@ target_link_libraries(OpenMPTool
 )
 
 # Add include directories for Clang and LLVM
-target_include_directories(OpenMPTool PRIVATE ${CLANG_INCLUDE_DIRS})
-target_include_directories(OpenMPTool PRIVATE ${LLVM_INCLUDE_DIRS})
+target_include_directories(OpenMPPlugin PRIVATE ${CLANG_INCLUDE_DIRS})
+target_include_directories(OpenMPPlugin PRIVATE ${LLVM_INCLUDE_DIRS})
