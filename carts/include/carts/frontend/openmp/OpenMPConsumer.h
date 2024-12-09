@@ -3,6 +3,7 @@
 #ifndef LLVM_API_CARTS_OMPVISITOR_H
 #define LLVM_API_CARTS_OMPVISITOR_H
 
+#include "clang/AST/Decl.h"
 #include "clang/AST/StmtOpenMP.h"
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/SmallVector.h"
@@ -38,16 +39,24 @@ public:
   const OMPDirectiveInfo *getParent() const;
 
   /// Transformation data
-  void setTransformation(
-      clang::SourceRange FullRange,
-      SmallVector<std::pair<std::string, std::string>, 4> CapturedVars,
-      bool IsCompoundStmt = false);
+  struct CapturedVarInfo {
+    std::string Type;
+    std::string Name;
+    std::string Annotation;
+
+    CapturedVarInfo(std::string Type, std::string Name, std::string Annotation)
+        : Type(std::move(Type)), Name(std::move(Name)),
+          Annotation(std::move(Annotation)) {}
+  };
+
+  void setTransformation(clang::SourceRange FullRange,
+                         clang::CapturedStmt *CapturedStatement,
+                         SmallVector<CapturedVarInfo, 4> &CapturedVars);
   bool hasTransformation() const;
-  bool isCompoundStmt() const;
-  // const std::string &getFnSignature() const;
-  // const std::string &getFnCall() const;
-  SmallVector<std::pair<std::string, std::string>, 4> &getCapturedVars();
+
+  SmallVector<CapturedVarInfo, 4> &getCapturedVars();
   clang::SourceRange getFullRange() const;
+  clang::CapturedStmt *getCapturedStmt() const;
 
   virtual void printInfo(raw_ostream &OS, const clang::SourceManager &SM,
                          unsigned Depth = 0) const {
@@ -68,11 +77,8 @@ protected:
 
   /// Transformation details
   clang::SourceRange FullRange;
-  SmallVector<std::pair<std::string, std::string>, 4> CapturedVars;
-  bool IsCompoundStmt = false;
-  // std::string FnSignature;
-  // std::string FnCall;
-  // std::string OutlinedBody;
+  clang::CapturedStmt *CapturedStatement;
+  SmallVector<CapturedVarInfo, 4> CapturedVars;
   bool HasTransformation = false;
 };
 
@@ -140,6 +146,31 @@ private:
   void handleClauses(const clang::OMPExecutableDirective *Directive);
   void handleCaptureStmt(clang::OMPExecutableDirective *Directive,
                          OMPDirectiveInfo *Info);
+  template <typename ClauseType>
+  void
+  processClause(const ClauseType *Clause, const std::string &Annotation,
+                SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &CapturedVars,
+                std::set<std::string> &CapturedSet) {
+    /// Iterate over each DeclRefExpr in the clause's variable list
+    // Iterate over each Expr* in the clause's variable list
+    for (const clang::Expr *E : Clause->varlists()) {
+      if (const clang::DeclRefExpr *DRE =
+              clang::dyn_cast<clang::DeclRefExpr>(E)) {
+        if (const clang::VarDecl *VD =
+                clang::dyn_cast<clang::VarDecl>(DRE->getDecl())) {
+          /// Store the variable's type and name
+          std::string Name = VD->getName().str();
+          if (CapturedSet.insert(Name).second)
+            CapturedVars.emplace_back(VD->getType().getAsString(), Name,
+                                      Annotation);
+        }
+      }
+    }
+  }
+  void collectCapturedVars(
+      clang::OMPExecutableDirective *Directive,
+      SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &CapturedVars);
+  void insertFunctions(std::string AllFuncDecls, std::string AllFuncDefs);
 
   /// Attributes
   const clang::SourceManager &SM;
