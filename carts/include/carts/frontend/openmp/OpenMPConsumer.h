@@ -8,7 +8,6 @@
 #include "clang/Basic/SourceLocation.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/IR/Instruction.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -38,6 +37,8 @@ public:
   const SmallVector<OMPDirectiveInfo *, 4> &getChildren() const;
   const OMPDirectiveInfo *getParent() const;
 
+  StringRef setType(StringRef Type);
+
   /// Transformation data
   struct CapturedVarInfo {
     std::string Type;
@@ -62,17 +63,14 @@ public:
                          unsigned Depth = 0) const {
     OS.indent(Depth * 2) << "Directive: " << DirectiveType << "\n";
     OS.indent(Depth * 2 + 2) << "Location: " << getLocation(SM) << "\n";
-    if (IRInstruction)
-      OS.indent(Depth * 2 + 2) << "Instruction: " << *IRInstruction << "\n";
     for (const auto &Child : Children)
       Child->printInfo(OS, SM, Depth + 1);
   }
 
 protected:
-  StringRef DirectiveType = "omp";
+  StringRef DirectiveType;
   clang::SourceLocation Location;
   OMPDirectiveInfo *Parent;
-  Instruction *IRInstruction = nullptr;
   SmallVector<OMPDirectiveInfo *, 4> Children;
 
   /// Transformation details
