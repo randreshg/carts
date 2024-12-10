@@ -38,7 +38,8 @@ protected:
                                                  StringRef InFile) override {
     InputFileName = InFile.str();
     R.setSourceMgr(CI.getSourceManager(), CI.getLangOpts());
-    llvm::outs() << "CreateASTConsumer with file: " << InputFileName << "\n";
+    LLVM_DEBUG(dbgs() << "CreateASTConsumer with file: " << InputFileName
+                      << "\n");
     return std::make_unique<arts::OpenMPConsumer>(CI.getASTContext(), R);
   }
 
@@ -55,10 +56,10 @@ protected:
     FileID FID = R.getSourceMgr().getMainFileID();
     const RewriteBuffer *Buffer = R.getRewriteBufferFor(FID);
     if (!Buffer) {
-      llvm::errs() << "No rewrite buffer found! No changes?\n";
+      LLVM_DEBUG(dbgs() << "No rewrite buffer found! No changes?\n");
       return;
     }
-  
+
     /// Extract name without extension
     size_t LastIndex = InputFileName.find_last_of(".");
     assert(LastIndex != std::string::npos && "Invalid input file name");
@@ -67,14 +68,14 @@ protected:
     std::error_code EC;
     llvm::raw_fd_ostream OutFile(OutName, EC, llvm::sys::fs::OF_None);
     if (EC) {
-      llvm::errs() << "Error opening " << OutName << ": " << EC.message()
-                   << "\n";
+      LLVM_DEBUG(dbgs() << "Error opening " << OutName << ": " << EC.message()
+                        << "\n");
       return;
     }
 
     OutFile << std::string(Buffer->begin(), Buffer->end());
     OutFile.close();
-    llvm::outs() << "Rewritten code saved to " << OutName << "\n";
+    LLVM_DEBUG(dbgs() << "Rewritten code saved to " << OutName << "\n");
   }
 
 private:

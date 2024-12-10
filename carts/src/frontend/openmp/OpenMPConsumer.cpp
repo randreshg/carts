@@ -56,6 +56,8 @@ OMPDirectiveInfo::getChildren() const {
 
 const OMPDirectiveInfo *OMPDirectiveInfo::getParent() const { return Parent; }
 
+StringRef OMPDirectiveInfo::setType(StringRef Type) { return DirectiveType = Type; }
+
 /// Store transformation data
 void OMPDirectiveInfo::setTransformation(
     clang::SourceRange FullRange, clang::CapturedStmt *CapturedStatement,
@@ -309,6 +311,18 @@ void OpenMPVisitor::handleDirective(OMPExecutableDirective *Directive) {
                       << SM.getSpellingLineNumber(Directive->getBeginLoc())
                       << "\n");
     Info = OMPTaskInfo::handleDirective(Directive);
+    break;
+  case omp::OMPD_single: {
+    LLVM_DEBUG(dbgs() << "Single Directive found at "
+                          << SM.getSpellingLineNumber(Directive->getBeginLoc())
+                          << "\n");
+    SourceLocation Loc = Directive->getBeginLoc();
+    Info = new OMPDirectiveInfo("single", Loc);
+  } break;
+  case omp::OMPD_taskloop:
+    LLVM_DEBUG(dbgs() << "Taskloop Directive found at "
+                      << SM.getSpellingLineNumber(Directive->getBeginLoc())
+                      << "\n");
     break;
   default:
     LLVM_DEBUG(dbgs() << "  (Unhandled directive type)\n");
