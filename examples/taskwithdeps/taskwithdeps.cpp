@@ -41,11 +41,11 @@ int main() {
             y = rand();
         }
         #pragma omp task depend(out: res) //T0
-            res = 0;
+          res = 0;
         #pragma omp task depend(out: x) //T1
-            long_computation(x);
+          long_computation(x);
         #pragma omp task depend(out: y) //T2
-            short_computation(y);
+          short_computation(y);
     }
   }
 
@@ -59,9 +59,14 @@ int main() {
           x++;
         }
         #pragma omp task depend(in: y)
-            res += y;
+        {
+          res += y;
+        }
         #pragma omp task depend(in: res) //T5
-            printf("%d", res);
+        {
+          printf("%d", res);
+        }
+            
     }
   }
   return 0;
