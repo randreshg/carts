@@ -1,8 +1,10 @@
 /// AST Visitor to traverse the AST and find OpenMP directives
 
+#include "clang/Basic/OpenMPKinds.h"
 #include "clang/Rewrite/Core/Rewriter.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "carts/frontend/openmp/OpenMPConsumer.h"
@@ -56,7 +58,9 @@ OMPDirectiveInfo::getChildren() const {
 
 const OMPDirectiveInfo *OMPDirectiveInfo::getParent() const { return Parent; }
 
-StringRef OMPDirectiveInfo::setType(StringRef Type) { return DirectiveType = Type; }
+StringRef OMPDirectiveInfo::setType(StringRef Type) {
+  return DirectiveType = Type;
+}
 
 /// Store transformation data
 void OMPDirectiveInfo::setTransformation(
@@ -106,20 +110,20 @@ bool OMPTaskInfo::hasDependencies() const {
 }
 
 void OMPTaskInfo::addDependency(OpenMPDependClauseKind DepKind, Expr *DepExpr) {
-  switch (DepKind) {
-  case OMPC_DEPEND_in:
-    Inputs.push_back(DepExpr);
-    break;
-  case OMPC_DEPEND_out:
-    Outputs.push_back(DepExpr);
-    break;
-  case OMPC_DEPEND_inout:
-    Inputs.push_back(DepExpr);
-    Outputs.push_back(DepExpr);
-    break;
-  default:
-    break;
-  }
+  // switch (DepKind) {
+  // case OMPC_DEPEND_in:
+  //   Inputs.push_back(DepExpr);
+  //   break;
+  // case OMPC_DEPEND_out:
+  //   Outputs.push_back(DepExpr);
+  //   break;
+  // case OMPC_DEPEND_inout:
+  //   Inputs.push_back(DepExpr);
+  //   Outputs.push_back(DepExpr);
+  //   break;
+  // default:
+  //   break;
+  // }
 }
 
 OMPDirectiveInfo *
@@ -130,34 +134,6 @@ OMPTaskInfo::handleDirective(OMPExecutableDirective *Directive) {
   OMPTaskDirective *TaskDirective = dyn_cast<OMPTaskDirective>(Directive);
   if (!TaskDirective)
     return nullptr;
-
-  LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - \n"
-                    << "  Processing task directive...\n");
-  /// Process clauses
-  for (const OMPClause *Clause : TaskDirective->clauses()) {
-    switch (Clause->getClauseKind()) {
-    case omp::OMPC_depend: {
-      const OMPDependClause *DependClause = cast<OMPDependClause>(Clause);
-      LLVM_DEBUG(
-          dbgs() << "    Dependency type: "
-                 << OpenMPDependClauseKind(DependClause->getDependencyKind())
-                 << "\n");
-      for (const Expr *DepExpr : DependClause->varlists()) {
-        LLVM_DEBUG(dbgs() << "    Dependency variable: " << DepExpr << "\n");
-      }
-    } break;
-
-    case omp::OMPC_if: {
-      const OMPIfClause *IfClause = cast<OMPIfClause>(Clause);
-      LLVM_DEBUG(dbgs() << "    Condition: " << IfClause->getCondition()
-                        << "\n");
-    } break;
-
-    default:
-      // LLVM_DEBUG(dbgs() << "    (Unhandled clause type)\n");
-      break;
-    }
-  }
   return Info;
 }
 
@@ -258,14 +234,21 @@ void OpenMPVisitor::applyTransformations() {
     /// Extract the function body from the captured range
     std::string BodyText = R.getRewrittenText(Info->getFullRange());
     std::string OutlinedBody;
+    // LLVM_DEBUG(dbgs() << "  Extracted body text: " << BodyText << "\n");
     if (BodyText.size() > 2) {
       /// Remove the braces - Find opening and closing braces
       size_t OpenBrace = BodyText.find('{');
       size_t CloseBrace = BodyText.rfind('}');
-      if (OpenBrace != StringRef::npos && CloseBrace != StringRef::npos)
+      if (OpenBrace != StringRef::npos && CloseBrace != StringRef::npos) {
         OutlinedBody =
             BodyText.substr(OpenBrace + 1, CloseBrace - OpenBrace - 1);
+      } else {
+        /// No braces found, use the entire body without the pragma
+        size_t Start = BodyText.find('\n');
+        OutlinedBody = BodyText.substr(Start, BodyText.size() - 1);
+      }
     }
+    // LLVM_DEBUG(dbgs() << "  Outlined body: " << OutlinedBody << "\n");
 
     /// Append the body to the function definition and list
     FuncDef += OutlinedBody + "\n}\n\n";
@@ -300,30 +283,34 @@ void OpenMPVisitor::applyTransformations() {
 void OpenMPVisitor::handleDirective(OMPExecutableDirective *Directive) {
   OMPDirectiveInfo *Info = nullptr;
   switch (Directive->getDirectiveKind()) {
-  case omp::OMPD_parallel:
-    LLVM_DEBUG(dbgs() << "Parallel Directive found at "
+  case omp::OMPD_parallel: {
+    LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - \n"
+                      << "Parallel Directive found at "
                       << SM.getSpellingLineNumber(Directive->getBeginLoc())
                       << "\n");
     Info = OMPParallelInfo::handleDirective(Directive);
-    break;
-  case omp::OMPD_task:
-    LLVM_DEBUG(dbgs() << "Task Directive found at "
+  } break;
+  case omp::OMPD_task: {
+    LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - \n"
+                      << "Task Directive found at "
                       << SM.getSpellingLineNumber(Directive->getBeginLoc())
                       << "\n");
     Info = OMPTaskInfo::handleDirective(Directive);
-    break;
+  } break;
   case omp::OMPD_single: {
-    LLVM_DEBUG(dbgs() << "Single Directive found at "
-                          << SM.getSpellingLineNumber(Directive->getBeginLoc())
-                          << "\n");
+    LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - \n"
+                      << "Single Directive found at "
+                      << SM.getSpellingLineNumber(Directive->getBeginLoc())
+                      << "\n");
     SourceLocation Loc = Directive->getBeginLoc();
     Info = new OMPDirectiveInfo("single", Loc);
   } break;
-  case omp::OMPD_taskloop:
-    LLVM_DEBUG(dbgs() << "Taskloop Directive found at "
+  case omp::OMPD_taskloop: {
+    LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - \n"
+                      << "Taskloop Directive found at "
                       << SM.getSpellingLineNumber(Directive->getBeginLoc())
                       << "\n");
-    break;
+  } break;
   default:
     LLVM_DEBUG(dbgs() << "  (Unhandled directive type)\n");
     break;
@@ -411,8 +398,9 @@ void OpenMPVisitor::handleCaptureStmt(OMPExecutableDirective *Directive,
 void OpenMPVisitor::collectCapturedVars(
     OMPExecutableDirective *Directive,
     SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &CapturedVars) {
-  /// Set to avoid duplicates
-  std::set<std::string> CapturedSet;
+  std::map<std::string, OMPDirectiveInfo::CapturedVarInfo *> CapturedMap;
+  SmallVector<OMPDependClause *, 4> Dependencies;
+
   /// Handle lifetime variables from OpenMP clauses
   for (const OMPClause *Clause : Directive->clauses()) {
     switch (Clause->getClauseKind()) {
@@ -420,40 +408,112 @@ void OpenMPVisitor::collectCapturedVars(
       const OMPPrivateClause *PrivateClause =
           dyn_cast<OMPPrivateClause>(Clause);
       processClause<OMPPrivateClause>(PrivateClause, "omp.private",
-                                      CapturedVars, CapturedSet);
+                                      CapturedVars, CapturedMap);
     } break;
     case llvm::omp::OMPC_firstprivate: {
       const OMPFirstprivateClause *FirstprivateClause =
           dyn_cast<OMPFirstprivateClause>(Clause);
       processClause<OMPFirstprivateClause>(
-          FirstprivateClause, "omp.firstprivate", CapturedVars, CapturedSet);
+          FirstprivateClause, "omp.firstprivate", CapturedVars, CapturedMap);
     } break;
     case llvm::omp::OMPC_lastprivate: {
       const OMPLastprivateClause *LastprivateClause =
           dyn_cast<OMPLastprivateClause>(Clause);
       processClause<OMPLastprivateClause>(LastprivateClause, "omp.lastprivate",
-                                          CapturedVars, CapturedSet);
+                                          CapturedVars, CapturedMap);
     } break;
     case llvm::omp::OMPC_shared: {
       const OMPSharedClause *SharedClause = dyn_cast<OMPSharedClause>(Clause);
       processClause<OMPSharedClause>(SharedClause, "omp.shared", CapturedVars,
-                                     CapturedSet);
+                                     CapturedMap);
     } break;
+    case omp::OMPC_depend: {
+      const OMPDependClause *DependClause = cast<OMPDependClause>(Clause);
+      Dependencies.push_back(const_cast<OMPDependClause *>(DependClause));
+    } break;
+    case omp::OMPC_if: {
+      const OMPIfClause *IfClause = cast<OMPIfClause>(Clause);
+      LLVM_DEBUG(dbgs() << "    Condition: " << IfClause->getCondition()
+                        << "\n");
+      llvm_unreachable("Unhandled clause type");
+    } break;
+
     default:
       /// Ignore other clauses
       break;
     }
   }
 
-  /// Start with variables captured by the directive's captured statement
+  /// Handle captured variables from the captured statement
   CapturedStmt *CS = Directive->getInnermostCapturedStmt();
   for (const auto &Cap : CS->captures()) {
     const VarDecl *VD = Cap.getCapturedVar();
     auto Name = VD->getName().str();
-    if (CapturedSet.insert(Name).second) {
+    /// Only add the variable if it has not been captured already
+    if (CapturedMap.find(Name) == CapturedMap.end()) {
       CapturedVars.emplace_back(VD->getType().getAsString(), Name,
                                 "omp.default");
+      CapturedMap[Name] = &CapturedVars.back();
     }
+  }
+
+  /// Handle dependencies, if any
+  if (Dependencies.empty())
+    return;
+
+  /// Process dependencies. If the variable is already captured, update the
+  /// annotation by adding the dependency type
+  for (OMPDependClause *DependClause : Dependencies) {
+    LLVM_DEBUG(dbgs() << "    Processing dependencies...\n");
+    LLVM_DEBUG(
+        dbgs() << "    Dependency type: "
+               << OpenMPDependClauseKind(DependClause->getDependencyKind())
+               << "\n");
+    LLVM_DEBUG(dbgs() << "    Variables: ");
+
+    /// Get annotation
+    std::string Annotation;
+    OpenMPDependClauseKind DepKind = DependClause->getDependencyKind();
+    switch (DepKind) {
+    case OMPC_DEPEND_in:
+      Annotation = ".depend.in";
+      break;
+    case OMPC_DEPEND_out:
+      Annotation = ".depend.out";
+      break;
+    case OMPC_DEPEND_inout:
+      Annotation = ".depend.inout";
+      break;
+    default:
+      break;
+    }
+
+    /// Iterate over each DeclRefExpr in the clause's variable list
+    for (const Expr *DepExpr : DependClause->varlists()) {
+      const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(DepExpr);
+      if (!DRE) {
+        LLVM_DEBUG(dbgs() << "Not a DeclRefExpr\n");
+        continue;
+      }
+
+      const VarDecl *VD = cast<VarDecl>(DRE->getDecl());
+      std::string Name = VD->getName().str();
+      LLVM_DEBUG(dbgs() << Name << ", ");
+
+      /// If it is already captured, update the annotation
+      auto It = CapturedMap.find(Name);
+      if (It != CapturedMap.end()) {
+        // LLVM_DEBUG(dbgs() << "Updating annotation\n");
+        It->second->Annotation += Annotation;
+        continue;
+      }
+
+      /// Otherwise, add the variable to the captured list
+      CapturedVars.emplace_back(VD->getType().getAsString(), Name,
+                                "omp.default" + Annotation);
+      CapturedMap[Name] = &CapturedVars.back();
+    }
+    LLVM_DEBUG(dbgs() << "\n");
   }
 }
 

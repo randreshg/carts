@@ -148,7 +148,7 @@ private:
   void
   processClause(const ClauseType *Clause, const std::string &Annotation,
                 SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &CapturedVars,
-                std::set<std::string> &CapturedSet) {
+                std::map<std::string, OMPDirectiveInfo::CapturedVarInfo *> &CapturedMap) {
     /// Iterate over each DeclRefExpr in the clause's variable list
     // Iterate over each Expr* in the clause's variable list
     for (const clang::Expr *E : Clause->varlists()) {
@@ -158,9 +158,13 @@ private:
                 clang::dyn_cast<clang::VarDecl>(DRE->getDecl())) {
           /// Store the variable's type and name
           std::string Name = VD->getName().str();
-          if (CapturedSet.insert(Name).second)
+
+          /// Check if the variable has already been captured
+          if (CapturedMap.insert({Name, nullptr}).second) {
             CapturedVars.emplace_back(VD->getType().getAsString(), Name,
                                       Annotation);
+            CapturedMap[Name] = &CapturedVars.back();
+          }
         }
       }
     }
