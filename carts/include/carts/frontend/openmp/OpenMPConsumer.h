@@ -169,9 +169,10 @@ private:
       }
     }
   }
-  void collectCapturedVars(
+  void collectInfo(
       clang::OMPExecutableDirective *Directive,
-      SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &CapturedVars);
+      SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &CapturedVars,
+      std::string &Dependencies);
   void insertFunctions(std::string AllFuncDecls, std::string AllFuncDefs);
 
   /// Attributes

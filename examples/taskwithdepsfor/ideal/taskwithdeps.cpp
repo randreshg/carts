@@ -29,7 +29,7 @@ void computeB(uint32_t paramc, uint64_t *paramv, artsEdtDep_t *depv) {
     artsEventSatisfySlot(eventGuid, 0, ARTS_EVENT_LATCH_DECR_SLOT);
 }
 
-void mainTask(uint32_t paramc, uint64_t *paramv, artsEdtDep_t *depv) {
+void compute(uint32_t paramc, uint64_t *paramv, artsEdtDep_t *depv) {
     int N = paramv[0];  // Total iterations
 
     artsGuid_t *eventAGuids = (artsGuid_t *) malloc(N * sizeof(artsGuid_t));
