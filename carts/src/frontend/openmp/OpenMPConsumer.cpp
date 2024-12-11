@@ -22,6 +22,7 @@
 #include "llvm/Support/Debug.h"
 
 #include <string>
+#include <sstream>
 
 /// DEBUG
 #define DEBUG_TYPE "omp-plugin"
@@ -65,10 +66,12 @@ StringRef OMPDirectiveInfo::setType(StringRef Type) {
 /// Store transformation data
 void OMPDirectiveInfo::setTransformation(
     clang::SourceRange FullRange, clang::CapturedStmt *CapturedStatement,
-    SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &CapturedVars) {
+    SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &CapturedVars,
+    string &Dependencies) {
   this->FullRange = FullRange;
-  this->CapturedVars = std::move(CapturedVars);
   this->CapturedStatement = CapturedStatement;
+  this->Dependencies = std::move(Dependencies);
+  this->CapturedVars = std::move(CapturedVars);
   this->HasTransformation = true;
 }
 
@@ -84,6 +87,8 @@ SourceRange OMPDirectiveInfo::getFullRange() const { return FullRange; }
 CapturedStmt *OMPDirectiveInfo::getCapturedStmt() const {
   return CapturedStatement;
 }
+
+string OMPDirectiveInfo::getDependencies() const { return Dependencies; }
 
 /// ------------------------------------------------------------------- ///
 ///                        ParallelDirectiveInfo                        ///
@@ -142,7 +147,7 @@ OMPTaskInfo::handleDirective(OMPExecutableDirective *Directive) {
 /// ------------------------------------------------------------------- ///
 static unsigned OutlinedFuncCounter = 0;
 OpenMPVisitor::OpenMPVisitor(ASTContext &Context, Rewriter &R)
-    : SM(Context.getSourceManager()), R(R) {
+    : Context(Context), SM(Context.getSourceManager()), R(R) {
   MainFileID = R.getSourceMgr().getMainFileID();
 }
 
@@ -193,18 +198,19 @@ void OpenMPVisitor::applyTransformations() {
                      SM.getFileOffset(B->getFullRange().getBegin());
             });
 
-  std::string AllFuncDecls, AllFuncDefs;
+  string AllFuncDecls, AllFuncDefs;
   for (OMPDirectiveInfo *Info : TransformedDirectives) {
     if (!Info->hasTransformation())
       continue;
 
-    std::string FuncName =
-        "edt_function_" + std::to_string(++OutlinedFuncCounter);
-    std::string Annotation = "omp." + Info->getType().str();
+    string FuncName = "edt_function_" + std::to_string(++OutlinedFuncCounter);
+    string Annotation =
+        "omp." + Info->getType().str() + Info->getDependencies();
+    string FuncAnnotation = "__attribute__((annotate(\"" + Annotation + "\")))";
 
     /// Build function declaration
-    std::string FuncDecl = "static void __attribute__((annotate(\"" +
-                           Annotation + "\"))) " + FuncName + "(";
+    string FuncDecl = "static void __attribute__((annotate(\"" + Annotation +
+                      "\"))) " + FuncName + "(";
     bool First = true;
     for (const auto &[Type, Var, Annot] : Info->getCapturedVars()) {
       if (!First)
@@ -218,23 +224,21 @@ void OpenMPVisitor::applyTransformations() {
     AllFuncDecls += FuncDecl;
 
     /// Build function definition
-    std::string FuncDef = "static void __attribute__((annotate(\"" +
-                          Annotation + "\"))) " + FuncName + "(";
+    string FuncDef = "static void __attribute__((annotate(\"" + Annotation +
+                     "\"))) " + FuncName + "(";
     First = true;
     for (const auto &[Type, Var, Annot] : Info->getCapturedVars()) {
       if (!First)
         FuncDef += ", ";
-      std::string VarAnnotation =
-          " __attribute__((annotate(\"" + Annot + "\")))";
+      string VarAnnotation = " __attribute__((annotate(\"" + Annot + "\")))";
       FuncDef += "\n  " + Type + " " + Var + VarAnnotation;
       First = false;
     }
     FuncDef += ") {\n";
 
     /// Extract the function body from the captured range
-    std::string BodyText = R.getRewrittenText(Info->getFullRange());
-    std::string OutlinedBody;
-    // LLVM_DEBUG(dbgs() << "  Extracted body text: " << BodyText << "\n");
+    string BodyText = R.getRewrittenText(Info->getFullRange());
+    string OutlinedBody;
     if (BodyText.size() > 2) {
       /// Remove the braces - Find opening and closing braces
       size_t OpenBrace = BodyText.find('{');
@@ -248,14 +252,13 @@ void OpenMPVisitor::applyTransformations() {
         OutlinedBody = BodyText.substr(Start, BodyText.size() - 1);
       }
     }
-    // LLVM_DEBUG(dbgs() << "  Outlined body: " << OutlinedBody << "\n");
 
     /// Append the body to the function definition and list
     FuncDef += OutlinedBody + "\n}\n\n";
     AllFuncDefs += FuncDef;
 
     /// Build function call
-    std::string FnCall = FuncName + "(";
+    string FnCall = FuncName + "(";
     First = true;
     for (const auto &[Type, Var, A] : Info->getCapturedVars()) {
       if (!First)
@@ -379,69 +382,57 @@ void OpenMPVisitor::handleClauses(const OMPExecutableDirective *Directive) {
 
 void OpenMPVisitor::handleCaptureStmt(OMPExecutableDirective *Directive,
                                       OMPDirectiveInfo *Info) {
-  /// Collect captured variables with their types
-  SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> CapturedVars;
+  /// Collect dependencies and captured variables
   string Dependencies;
+  SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> CapturedVars;
   collectInfo(Directive, CapturedVars, Dependencies);
 
   /// Determine full range: from directive begin to captured stmt end
-  CapturedStmt *CS = Directive->getInnermostCapturedStmt();
+  CapturedStmt *CaptureStatement = Directive->getInnermostCapturedStmt();
   SourceLocation Start = Directive->getBeginLoc();
   SourceLocation End = Lexer::getLocForEndOfToken(
-      CS->getCapturedStmt()->getEndLoc(), 0, SM, LangOptions());
+      CaptureStatement->getCapturedStmt()->getEndLoc(), 0, SM, LangOptions());
   SourceRange FullRange(Start, End);
 
   /// Store transformation data
-  Info->setTransformation(FullRange, CS, CapturedVars);
+  Info->setTransformation(FullRange, CaptureStatement, CapturedVars,
+                          Dependencies);
   TransformedDirectives.push_back(Info);
 }
 
 void OpenMPVisitor::collectInfo(
     OMPExecutableDirective *Directive,
     SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &CapturedVars,
-    string Dependencies) {
-  std::map<std::string, OMPDirectiveInfo::CapturedVarInfo *> CapturedMap;
+    string &Dependencies) {
+  map<string, OMPDirectiveInfo::CapturedVarInfo *> CapturedMap;
   SmallVector<OMPDependClause *, 4> DepsVector;
 
   /// Handle lifetime variables from OpenMP clauses
   for (const OMPClause *Clause : Directive->clauses()) {
     switch (Clause->getClauseKind()) {
-    case llvm::omp::OMPC_private: {
-      const OMPPrivateClause *PrivateClause =
-          dyn_cast<OMPPrivateClause>(Clause);
-      processClause<OMPPrivateClause>(PrivateClause, "omp.private",
-                                      CapturedVars, CapturedMap);
-    } break;
-    case llvm::omp::OMPC_firstprivate: {
-      const OMPFirstprivateClause *FirstprivateClause =
-          dyn_cast<OMPFirstprivateClause>(Clause);
-      processClause<OMPFirstprivateClause>(
-          FirstprivateClause, "omp.firstprivate", CapturedVars, CapturedMap);
-    } break;
-    case llvm::omp::OMPC_lastprivate: {
-      const OMPLastprivateClause *LastprivateClause =
-          dyn_cast<OMPLastprivateClause>(Clause);
-      processClause<OMPLastprivateClause>(LastprivateClause, "omp.lastprivate",
-                                          CapturedVars, CapturedMap);
-    } break;
-    case llvm::omp::OMPC_shared: {
-      const OMPSharedClause *SharedClause = dyn_cast<OMPSharedClause>(Clause);
-      processClause<OMPSharedClause>(SharedClause, "omp.shared", CapturedVars,
-                                     CapturedMap);
-    } break;
-    case omp::OMPC_depend: {
-      const OMPDependClause *DependClause = cast<OMPDependClause>(Clause);
-      DepsVector.push_back(const_cast<OMPDependClause *>(DependClause));
-    } break;
-    case omp::OMPC_if: {
-      const OMPIfClause *IfClause = cast<OMPIfClause>(Clause);
-      LLVM_DEBUG(dbgs() << "    Condition: " << IfClause->getCondition()
-                        << "\n");
-      llvm_unreachable("Unhandled clause type");
-    } break;
-
+    case llvm::omp::OMPC_private:
+      processClause<OMPPrivateClause>(cast<OMPPrivateClause>(Clause),
+                                      "omp.private", CapturedVars, CapturedMap);
+      break;
+    case llvm::omp::OMPC_firstprivate:
+      processClause<OMPFirstprivateClause>(cast<OMPFirstprivateClause>(Clause),
+                                           "omp.firstprivate", CapturedVars,
+                                           CapturedMap);
+      break;
+    case llvm::omp::OMPC_lastprivate:
+      processClause<OMPLastprivateClause>(cast<OMPLastprivateClause>(Clause),
+                                          "omp.lastprivate", CapturedVars,
+                                          CapturedMap);
+      break;
+    case llvm::omp::OMPC_shared:
+      processClause<OMPSharedClause>(cast<OMPSharedClause>(Clause),
+                                     "omp.shared", CapturedVars, CapturedMap);
+      break;
+    case omp::OMPC_depend:
+      DepsVector.push_back(
+          const_cast<OMPDependClause *>(cast<OMPDependClause>(Clause)));
+      break;
     default:
-      /// Ignore other clauses
       break;
     }
   }
@@ -460,78 +451,59 @@ void OpenMPVisitor::collectInfo(
   }
 
   /// Handle dependencies, if any
-  if (Dependencies.empty())
+  if (DepsVector.empty())
     return;
 
-  /// Process dependencies. 
-  string Input = "deps(in: ";
-  string Output = "deps(out: ";
+  /// Process dependencies.
+  stringstream Input, Output;
+  Input << " deps(in: ";
+  Output << " deps(out: ";
+  bool HasInput = false, HasOutput = false;
+
   for (OMPDependClause *DependClause : DepsVector) {
-    LLVM_DEBUG(dbgs() << "    Processing dependencies...\n");
-    LLVM_DEBUG(
-        dbgs() << "    Dependency type: "
-               << OpenMPDependClauseKind(DependClause->getDependencyKind())
-               << "\n");
-    LLVM_DEBUG(dbgs() << "    Variables: ");
-
-    /// Get annotation
-    std::string Annotation;
     OpenMPDependClauseKind DepKind = DependClause->getDependencyKind();
-    /// Lambda function to insert dependency in variable
-    switch (DepKind) {
-    case OMPC_DEPEND_in:
-      // Annotation = ".depend.in";
-      Input += ""
-      break;
-    case OMPC_DEPEND_out:
-      Annotation = ".depend.out";
-      break;
-    case OMPC_DEPEND_inout:
-      Annotation = ".depend.inout";
-      break;
-    default:
-      break;
-    }
-
-    /// Iterate over each DeclRefExpr in the clause's variable list
     for (const Expr *DepExpr : DependClause->varlists()) {
-      const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(DepExpr);
-      if (!DRE) {
-        LLVM_DEBUG(dbgs() << "Not a DeclRefExpr\n");
-        continue;
+      string VarName;
+      llvm::raw_string_ostream OS(VarName);
+      DepExpr->printPretty(OS, nullptr, PrintingPolicy(Context.getLangOpts()));
+      OS.flush();
+
+      switch (DepKind) {
+      case OMPC_DEPEND_in:
+        Input << VarName << ", ";
+        HasInput = true;
+        break;
+      case OMPC_DEPEND_out:
+        Output << VarName << ", ";
+        HasOutput = true;
+        break;
+      case OMPC_DEPEND_inout:
+        Input << VarName << ", ";
+        Output << VarName << ", ";
+        HasInput = true;
+        HasOutput = true;
+        break;
+      default:
+        break;
       }
-
-      const VarDecl *VD = cast<VarDecl>(DRE->getDecl());
-      std::string Name = VD->getName().str();
-      LLVM_DEBUG(dbgs() << Name << ", ");
-
-      /// If it is already captured, update the annotation
-      auto It = CapturedMap.find(Name);
-      if (It != CapturedMap.end()) {
-        // LLVM_DEBUG(dbgs() << "Updating annotation\n");
-        It->second->Annotation += Annotation;
-        continue;
-      }
-
-      /// Otherwise, it means that it is not used inside the regions.
-      /// So it is a control dependency.
-      CapturedVars.emplace_back(VD->getType().getAsString(), Name,
-                                "omp.control" + Annotation);
-      CapturedMap[Name] = &CapturedVars.back();
     }
-    LLVM_DEBUG(dbgs() << "\n");
   }
+
+  if (HasInput)
+    Dependencies += Input.str().substr(0, Input.str().size() - 2) + ")";
+  if (HasOutput)
+    Dependencies += (HasInput ? " " : "") +
+                    Output.str().substr(0, Output.str().size() - 2) + ")";
 }
 
-void OpenMPVisitor::insertFunctions(std::string AllFuncDecls,
-                                    std::string AllFuncDefs) {
+void OpenMPVisitor::insertFunctions(string AllFuncDecls, string AllFuncDefs) {
   // Determine insertion points
   FileID MainFileID = SM.getMainFileID();
   // bool IsHeader = isHeaderFile(SM, MainFileID);
 
-  std::string AllFuncDeclsWithNewlines =
+  string AllFuncDeclsWithNewlines =
       AllFuncDecls.empty() ? "" : "\n" + AllFuncDecls + "\n";
-  std::string AllFuncDefsWithNewlines =
+  string AllFuncDefsWithNewlines =
       AllFuncDefs.empty() ? "" : "\n" + AllFuncDefs;
 
   /// Insert function declarations after the last #include directive

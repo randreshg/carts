@@ -32,27 +32,27 @@ int compute() {
 
   #pragma omp parallel
   {
-      #pragma omp single
+    #pragma omp single
+    {
+      // Task 1: Initializes 'a'
+      #pragma omp task shared(a) depend(out: a)
       {
-        // Task 1: Initializes 'a'
-        #pragma omp task shared(a) depend(out: a)
-        {
-            printf("Task 1: Initializing a\n");
-            a = 10;
-        }
+          printf("Task 1: Initializing a\n");
+          a = 10;
+      }
 
-        // Task 2: Depends on Task 1 (reads 'a') and modifies 'b'
-        #pragma omp task shared(a, b) depend(in: a) depend(out: b)
-        {
-            printf("Task 2: Reading a=%d and updating b\n", a);
-            b = a + 5;
-        }
+      // Task 2: Depends on Task 1 (reads 'a') and modifies 'b'
+      #pragma omp task shared(a, b) depend(in: a) depend(out: b)
+      {
+          printf("Task 2: Reading a=%d and updating b\n", a);
+          b = a + 5;
+      }
 
-        // Task 3: Depends on Task 2 (reads 'b')
-        #pragma omp task shared(b) depend(in: b)
-        {
-            printf("Task 3: Final value of b=%d\n", b);
-        }
+      // Task 3: Depends on Task 2 (reads 'b')
+      #pragma omp task shared(b) depend(in: b)
+      {
+          printf("Task 3: Final value of b=%d\n", b);
+      }
       } // End of single
   } // End of parallel
   return 0;
