@@ -3,20 +3,23 @@ ARTS_PATH=/home/randres/projects/carts/.install/arts
 CARTS_PATH=/home/randres/projects/carts/.install/carts
 FILENAME=taskwithdeps
 
-all: $(FILENAME)_opt
+all: $(FILENAME).ll
 
-# Generate the ASTFile
-%.bc: %.cpp
-	clang++ -fopenmp -O1 -g3 -emit-ast -o $(FILENAME).ast $<
-	clang++ -fopenmp -O1 -g3 -emit-llvm -c $< -o $@ -lstdc++
-	llvm-dis $@
+# Generate LLVM IR from C++ source file
+%.ll: %.cpp
+	clang++ -fopenmp $< -Xclang -plugin -Xclang omp-plugin \
+		-fplugin=$(CARTS_PATH)/lib/libOpenMPPlugin.so -mllvm \
+		-debug-only=omp-plugin -S
+	clang++ -O0 -g3 $*_transformed.cpp -S -emit-llvm -o $@
 
-%.bc: %.c
-	clang -fopenmp -O3 -g0 -emit-llvm -c $< -o $@
-	llvm-dis $@
+%.ll: %.c
+	clang -fopenmp $< -Xclang -plugin -Xclang omp-plugin \
+		-fplugin=$(CARTS_PATH)/lib/libOpenMPPlugin.so -mllvm \
+		-debug-only=omp-plugin -S
+	clang -O0 -g3 $*_transformed.cpp -S -emit-llvm -o $@
 
-# Run OMP transform pass
-# opt -load-pass-plugin=/home/randres/projects/carts/.install/carts/lib/OMPTransform.so -debug-only=omp-visitor,omp-transform,arts,carts,arts-ir-builder -passes="omp-transform" -ast-file=taskwithdeps.ast taskwithdeps.ll -o taskwithdeps_arts_ir.bc
+# Run OMP-Plugin transform pass
+
 $(FILENAME)_arts_ir.bc: $(FILENAME).bc
 	opt -load-pass-plugin=$(CARTS_PATH)/lib/OMPTransform.so \
 		-debug-only=omp-visitor,omp-transform,arts,carts,arts-ir-builder\
