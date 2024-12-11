@@ -26,48 +26,34 @@ void short_computation(int &x) {
 }
 
 /// EDT 1 - carts.edt
-
-int main() {
-  srand(time(NULL));
-  int x = rand(), y = rand(), res = 0;
-  #pragma omp parallel
-  {
-    #pragma omp single
-    {
-        #pragma omp task depend(out: res,x,y) //T0 
-        {
-            res = 0;
-            x = rand();
-            y = rand();
-        }
-        #pragma omp task depend(out: res) //T0
-          res = 0;
-        #pragma omp task depend(out: x) //T1
-          long_computation(x);
-        #pragma omp task depend(out: y) //T2
-          short_computation(y);
-    }
-  }
+int compute() {
+  int a = 0;
+  int b = 0;
 
   #pragma omp parallel
   {
-    #pragma omp single
-    {
-        #pragma omp task depend(in: x)
+      #pragma omp single
+      {
+        // Task 1: Initializes 'a'
+        #pragma omp task shared(a) depend(out: a)
         {
-          res += x;
-          x++;
+            printf("Task 1: Initializing a\n");
+            a = 10;
         }
-        #pragma omp task depend(in: y)
+
+        // Task 2: Depends on Task 1 (reads 'a') and modifies 'b'
+        #pragma omp task shared(a, b) depend(in: a) depend(out: b)
         {
-          res += y;
+            printf("Task 2: Reading a=%d and updating b\n", a);
+            b = a + 5;
         }
-        #pragma omp task depend(in: res) //T5
+
+        // Task 3: Depends on Task 2 (reads 'b')
+        #pragma omp task shared(b) depend(in: b)
         {
-          printf("%d", res);
+            printf("Task 3: Final value of b=%d\n", b);
         }
-            
-    }
-  }
+      } // End of single
+  } // End of parallel
   return 0;
 }

@@ -381,7 +381,8 @@ void OpenMPVisitor::handleCaptureStmt(OMPExecutableDirective *Directive,
                                       OMPDirectiveInfo *Info) {
   /// Collect captured variables with their types
   SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> CapturedVars;
-  collectCapturedVars(Directive, CapturedVars);
+  string Dependencies;
+  collectInfo(Directive, CapturedVars, Dependencies);
 
   /// Determine full range: from directive begin to captured stmt end
   CapturedStmt *CS = Directive->getInnermostCapturedStmt();
@@ -395,11 +396,12 @@ void OpenMPVisitor::handleCaptureStmt(OMPExecutableDirective *Directive,
   TransformedDirectives.push_back(Info);
 }
 
-void OpenMPVisitor::collectCapturedVars(
+void OpenMPVisitor::collectInfo(
     OMPExecutableDirective *Directive,
-    SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &CapturedVars) {
+    SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &CapturedVars,
+    string Dependencies) {
   std::map<std::string, OMPDirectiveInfo::CapturedVarInfo *> CapturedMap;
-  SmallVector<OMPDependClause *, 4> Dependencies;
+  SmallVector<OMPDependClause *, 4> DepsVector;
 
   /// Handle lifetime variables from OpenMP clauses
   for (const OMPClause *Clause : Directive->clauses()) {
@@ -429,7 +431,7 @@ void OpenMPVisitor::collectCapturedVars(
     } break;
     case omp::OMPC_depend: {
       const OMPDependClause *DependClause = cast<OMPDependClause>(Clause);
-      Dependencies.push_back(const_cast<OMPDependClause *>(DependClause));
+      DepsVector.push_back(const_cast<OMPDependClause *>(DependClause));
     } break;
     case omp::OMPC_if: {
       const OMPIfClause *IfClause = cast<OMPIfClause>(Clause);
@@ -461,9 +463,10 @@ void OpenMPVisitor::collectCapturedVars(
   if (Dependencies.empty())
     return;
 
-  /// Process dependencies. If the variable is already captured, update the
-  /// annotation by adding the dependency type
-  for (OMPDependClause *DependClause : Dependencies) {
+  /// Process dependencies. 
+  string Input = "deps(in: ";
+  string Output = "deps(out: ";
+  for (OMPDependClause *DependClause : DepsVector) {
     LLVM_DEBUG(dbgs() << "    Processing dependencies...\n");
     LLVM_DEBUG(
         dbgs() << "    Dependency type: "
@@ -474,9 +477,11 @@ void OpenMPVisitor::collectCapturedVars(
     /// Get annotation
     std::string Annotation;
     OpenMPDependClauseKind DepKind = DependClause->getDependencyKind();
+    /// Lambda function to insert dependency in variable
     switch (DepKind) {
     case OMPC_DEPEND_in:
-      Annotation = ".depend.in";
+      // Annotation = ".depend.in";
+      Input += ""
       break;
     case OMPC_DEPEND_out:
       Annotation = ".depend.out";
@@ -508,9 +513,10 @@ void OpenMPVisitor::collectCapturedVars(
         continue;
       }
 
-      /// Otherwise, add the variable to the captured list
+      /// Otherwise, it means that it is not used inside the regions.
+      /// So it is a control dependency.
       CapturedVars.emplace_back(VD->getType().getAsString(), Name,
-                                "omp.default" + Annotation);
+                                "omp.control" + Annotation);
       CapturedMap[Name] = &CapturedVars.back();
     }
     LLVM_DEBUG(dbgs() << "\n");

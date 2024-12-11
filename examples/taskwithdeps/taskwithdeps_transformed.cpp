@@ -7,24 +7,13 @@
 #include <stdlib.h>
 #include <time.h>
 
-static void __attribute__((annotate("omp.task"))) edt_function_1(int res);
-static void __attribute__((annotate("omp.task"))) edt_function_2(int res,
-                                                                 int y);
-static void __attribute__((annotate("omp.task"))) edt_function_3(int res,
-                                                                 int x);
-static void __attribute__((annotate("omp.single")))
-edt_function_4(int x, int res, int y);
-static void __attribute__((annotate("omp.parallel")))
-edt_function_5(int x, int res, int y);
-static void __attribute__((annotate("omp.task"))) edt_function_6(int y);
-static void __attribute__((annotate("omp.task"))) edt_function_7(int x);
-static void __attribute__((annotate("omp.task"))) edt_function_8(int res);
-static void __attribute__((annotate("omp.task"))) edt_function_9(int res, int x,
-                                                                 int y);
-static void __attribute__((annotate("omp.single")))
-edt_function_10(int res, int x, int y);
-static void __attribute__((annotate("omp.parallel")))
-edt_function_11(int res, int x, int y);
+static void __attribute__((annotate("omp.task"))) edt_function_1(int b);
+static void __attribute__((annotate("omp.task"))) edt_function_2(int a, int b);
+static void __attribute__((annotate("omp.task"))) edt_function_3(int a);
+static void __attribute__((annotate("omp.single"))) edt_function_4(int a,
+                                                                   int b);
+static void __attribute__((annotate("omp.parallel"))) edt_function_5(int a,
+                                                                     int b);
 
 /// clang++ -fopenmp -std=c++17 taskwithdeps.cpp  -Xclang -plugin  -Xclang
 /// omp-plugin
@@ -46,106 +35,53 @@ __attribute__((noinline)) void short_computation(int &x) {
 }
 
 /// EDT 1 - carts.edt
+int compute() {
+  int a = 0;
+  int b = 0;
 
-int main() {
-  srand(time(NULL));
-  int x = rand(), y = rand(), res = 0;
-  edt_function_11(res, x, y);
-
-  edt_function_5(x, res, y);
-
+  edt_function_5(a, b);
+  // End of parallel
   return 0;
 }
+static void __attribute__((annotate("omp.task")))
+edt_function_1(int b __attribute__((annotate("omp.shared.depend.in")))) {
 
-/// PARALLEL 1
-static void __attribute__((annotate("omp.parallel")))
-edt_function_11(int res __attribute__((annotate("omp.default"))),
-                int x __attribute__((annotate("omp.default"))),
-                int y __attribute__((annotate("omp.default")))) {
+  printf("Task 3: Final value of b=%d\n", b);
+}
 
-  edt_function_10(res, x, y);
+static void __attribute__((annotate("omp.task")))
+edt_function_2(int a __attribute__((annotate("omp.shared.depend.in"))),
+               int b __attribute__((annotate("omp.shared.depend.out")))) {
+
+  printf("Task 2: Reading a=%d and updating b\n", a);
+  b = a + 5;
+}
+
+static void __attribute__((annotate("omp.task")))
+edt_function_3(int a __attribute__((annotate("omp.shared.depend.out")))) {
+
+  printf("Task 1: Initializing a\n");
+  a = 10;
 }
 
 static void __attribute__((annotate("omp.single")))
-edt_function_10(int res __attribute__((annotate("omp.default"))),
-                int x __attribute__((annotate("omp.default"))),
-                int y __attribute__((annotate("omp.default")))) {
+edt_function_4(int a __attribute__((annotate("omp.default"))),
+               int b __attribute__((annotate("omp.default")))) {
 
-  edt_function_9(res, x, y);
+  // Task 1: Initializes 'a'
+  edt_function_3(a);
 
-  edt_function_8(res);
+  // Task 2: Depends on Task 1 (reads 'a') and modifies 'b'
+  edt_function_2(a, b);
 
-  edt_function_7(x);
-
-  edt_function_6(y);
+  // Task 3: Depends on Task 2 (reads 'b')
+  edt_function_1(b);
 }
 
-static void __attribute__((annotate("omp.task")))
-edt_function_9(int res __attribute__((annotate("omp.default.depend.out"))),
-               int x __attribute__((annotate("omp.default.depend.out"))),
-               int y __attribute__((annotate("omp.default.depend.out")))) {
-
-  res = 0;
-  x = rand();
-  y = rand();
-}
-
-static void __attribute__((annotate("omp.task")))
-edt_function_8(int res __attribute__((annotate("omp.default.depend.out")))) {
-
-  res = 0;
-}
-
-static void __attribute__((annotate("omp.task")))
-edt_function_7(int x __attribute__((annotate("omp.default.depend.out")))) {
-
-  long_computation(x);
-}
-
-static void __attribute__((annotate("omp.task")))
-edt_function_6(int y __attribute__((annotate("omp.default.depend.out")))) {
-
-  short_computation(y);
-}
-
-/// PARALLEL 2
 static void __attribute__((annotate("omp.parallel")))
-edt_function_5(int x __attribute__((annotate("omp.default"))),
-               int res __attribute__((annotate("omp.default"))),
-               int y __attribute__((annotate("omp.default")))) {
+edt_function_5(int a __attribute__((annotate("omp.default"))),
+               int b __attribute__((annotate("omp.default")))) {
 
-  edt_function_4(x, res, y);
-}
-
-static void __attribute__((annotate("omp.single")))
-edt_function_4(int x __attribute__((annotate("omp.default"))),
-               int res __attribute__((annotate("omp.default"))),
-               int y __attribute__((annotate("omp.default")))) {
-
-  edt_function_3(res, x);
-
-  edt_function_2(res, y);
-
-  edt_function_1(res);
-}
-
-static void __attribute__((annotate("omp.task")))
-edt_function_3(int res __attribute__((annotate("omp.default"))),
-               int x __attribute__((annotate("omp.default.depend.in")))) {
-
-  res += x;
-  x++;
-}
-
-static void __attribute__((annotate("omp.task")))
-edt_function_2(int res __attribute__((annotate("omp.default"))),
-               int y __attribute__((annotate("omp.default.depend.in")))) {
-
-  res += y;
-}
-
-static void __attribute__((annotate("omp.task")))
-edt_function_1(int res __attribute__((annotate("omp.default.depend.in")))) {
-
-  printf("%d", res);
+  edt_function_4(a, b);
+  // End of single
 }
