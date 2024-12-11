@@ -52,12 +52,14 @@ public:
 
   void setTransformation(clang::SourceRange FullRange,
                          clang::CapturedStmt *CapturedStatement,
-                         SmallVector<CapturedVarInfo, 4> &CapturedVars);
+                         SmallVector<CapturedVarInfo, 4> &CapturedVars,
+                         std::string &Dependencies);
   bool hasTransformation() const;
 
   SmallVector<CapturedVarInfo, 4> &getCapturedVars();
   clang::SourceRange getFullRange() const;
   clang::CapturedStmt *getCapturedStmt() const;
+  std::string getDependencies() const;
 
   virtual void printInfo(raw_ostream &OS, const clang::SourceManager &SM,
                          unsigned Depth = 0) const {
@@ -76,6 +78,7 @@ protected:
   /// Transformation details
   clang::SourceRange FullRange;
   clang::CapturedStmt *CapturedStatement;
+  std::string Dependencies;
   SmallVector<CapturedVarInfo, 4> CapturedVars;
   bool HasTransformation = false;
 };
@@ -176,6 +179,7 @@ private:
   void insertFunctions(std::string AllFuncDecls, std::string AllFuncDefs);
 
   /// Attributes
+  clang::ASTContext &Context;
   const clang::SourceManager &SM;
   clang::Rewriter &R;
   clang::FileID MainFileID;

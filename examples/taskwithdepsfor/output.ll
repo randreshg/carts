@@ -2,39 +2,26 @@
 Starting CARTS - OpenMPPluginAction...
 - - - - - - - - - - - - - - - - - - - 
 CreateASTConsumer with file: taskwithdeps.cpp
-Found OpenMP Directive (OMPParallelDirective) at taskwithdeps.cpp:19:3
+Found OpenMP Directive (OMPParallelDirective) at taskwithdeps.cpp:13:3
 - - - - - - - - - - - - - - - - - - - 
-Parallel Directive found at 19
-Found OpenMP Directive (OMPSingleDirective) at taskwithdeps.cpp:21:5
+Parallel Directive found at 13
+Found OpenMP Directive (OMPSingleDirective) at taskwithdeps.cpp:15:5
 - - - - - - - - - - - - - - - - - - - 
-Single Directive found at 21
-Found OpenMP Directive (OMPTaskDirective) at taskwithdeps.cpp:25:9
+Single Directive found at 15
+Found OpenMP Directive (OMPTaskDirective) at taskwithdeps.cpp:19:9
 - - - - - - - - - - - - - - - - - - - 
-Task Directive found at 25
-    Processing dependencies...
-    Dependency type: 1
-    Variables: Not a DeclRefExpr
-
-Found OpenMP Directive (OMPTaskDirective) at taskwithdeps.cpp:29:9
+Task Directive found at 19
+Found OpenMP Directive (OMPTaskDirective) at taskwithdeps.cpp:23:9
 - - - - - - - - - - - - - - - - - - - 
-Task Directive found at 29
-    Processing dependencies...
-    Dependency type: 0
-    Variables: Not a DeclRefExpr
-Not a DeclRefExpr
-
-    Processing dependencies...
-    Dependency type: 1
-    Variables: Not a DeclRefExpr
-
+Task Directive found at 23
 - - - - - - - - - - - - - - - - - - - 
 Printing OpenMP Directive Hierarchy...
-  Replaced directive at taskwithdeps.cpp:29:9 with call: edt_function_1(i, B, A);
+  Replaced directive at taskwithdeps.cpp:23:9 with call: edt_function_1(i, B, A);
 
   Outlined function declaration:
-static void __attribute__((annotate("omp.task"))) edt_function_1(int i, double * B, double * A);
+static void __attribute__((annotate("omp.task deps(in: A[i], A[i - 1])  deps(out: B[i])"))) edt_function_1(int i, double * B, double * A);
   Outlined function definition:
-static void __attribute__((annotate("omp.task"))) edt_function_1(
+static void __attribute__((annotate("omp.task deps(in: A[i], A[i - 1])  deps(out: B[i])"))) edt_function_1(
   int i __attribute__((annotate("omp.firstprivate"))), 
   double * B __attribute__((annotate("omp.default"))), 
   double * A __attribute__((annotate("omp.default")))) {
@@ -43,12 +30,12 @@ static void __attribute__((annotate("omp.task"))) edt_function_1(
 }
 
 
-  Replaced directive at taskwithdeps.cpp:25:9 with call: edt_function_2(i, A);
+  Replaced directive at taskwithdeps.cpp:19:9 with call: edt_function_2(i, A);
 
   Outlined function declaration:
-static void __attribute__((annotate("omp.task"))) edt_function_2(int i, double * A);
+static void __attribute__((annotate("omp.task deps(out: A[i])"))) edt_function_2(int i, double * A);
   Outlined function definition:
-static void __attribute__((annotate("omp.task"))) edt_function_2(
+static void __attribute__((annotate("omp.task deps(out: A[i])"))) edt_function_2(
   int i __attribute__((annotate("omp.firstprivate"))), 
   double * A __attribute__((annotate("omp.default")))) {
 
@@ -56,7 +43,7 @@ static void __attribute__((annotate("omp.task"))) edt_function_2(
 }
 
 
-  Replaced directive at taskwithdeps.cpp:21:5 with call: edt_function_3(N, A, B);
+  Replaced directive at taskwithdeps.cpp:15:5 with call: edt_function_3(N, A, B);
 
   Outlined function declaration:
 static void __attribute__((annotate("omp.single"))) edt_function_3(int N, double * A, double * B);
@@ -79,7 +66,7 @@ static void __attribute__((annotate("omp.single"))) edt_function_3(
 }
 
 
-  Replaced directive at taskwithdeps.cpp:19:3 with call: edt_function_4(N, A, B);
+  Replaced directive at taskwithdeps.cpp:13:3 with call: edt_function_4(N, A, B);
 
   Outlined function declaration:
 static void __attribute__((annotate("omp.parallel"))) edt_function_4(int N, double * A, double * B);
@@ -101,13 +88,13 @@ Finished CARTS - OpenMPPluginAction
 - - - - - - - - - - - - - - - - - -
 Rewritten code saved to taskwithdeps_transformed.cpp
 Directive: parallel
-  Location: taskwithdeps.cpp:19:3
+  Location: taskwithdeps.cpp:13:3
   Directive: single
-    Location: taskwithdeps.cpp:21:5
+    Location: taskwithdeps.cpp:15:5
   Directive: task
-    Location: taskwithdeps.cpp:25:9
+    Location: taskwithdeps.cpp:19:9
     Dependencies: No
   Directive: task
-    Location: taskwithdeps.cpp:29:9
+    Location: taskwithdeps.cpp:23:9
     Dependencies: No
   Number of Threads: 1

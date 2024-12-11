@@ -7,9 +7,12 @@
 #include <stdlib.h>
 #include <time.h>
 
-static void __attribute__((annotate("omp.task"))) edt_function_1(int b);
-static void __attribute__((annotate("omp.task"))) edt_function_2(int a, int b);
-static void __attribute__((annotate("omp.task"))) edt_function_3(int a);
+static void __attribute__((annotate("omp.task deps(in: b)")))
+edt_function_1(int b);
+static void __attribute__((annotate("omp.task deps(in: a)  deps(out: b)")))
+edt_function_2(int a, int b);
+static void __attribute__((annotate("omp.task deps(out: a)")))
+edt_function_3(int a);
 static void __attribute__((annotate("omp.single"))) edt_function_4(int a,
                                                                    int b);
 static void __attribute__((annotate("omp.parallel"))) edt_function_5(int a,
@@ -43,22 +46,22 @@ int compute() {
   // End of parallel
   return 0;
 }
-static void __attribute__((annotate("omp.task")))
-edt_function_1(int b __attribute__((annotate("omp.shared.depend.in")))) {
+static void __attribute__((annotate("omp.task deps(in: b)")))
+edt_function_1(int b __attribute__((annotate("omp.shared")))) {
 
   printf("Task 3: Final value of b=%d\n", b);
 }
 
-static void __attribute__((annotate("omp.task")))
-edt_function_2(int a __attribute__((annotate("omp.shared.depend.in"))),
-               int b __attribute__((annotate("omp.shared.depend.out")))) {
+static void __attribute__((annotate("omp.task deps(in: a)  deps(out: b)")))
+edt_function_2(int a __attribute__((annotate("omp.shared"))),
+               int b __attribute__((annotate("omp.shared")))) {
 
   printf("Task 2: Reading a=%d and updating b\n", a);
   b = a + 5;
 }
 
-static void __attribute__((annotate("omp.task")))
-edt_function_3(int a __attribute__((annotate("omp.shared.depend.out")))) {
+static void __attribute__((annotate("omp.task deps(out: a)")))
+edt_function_3(int a __attribute__((annotate("omp.shared")))) {
 
   printf("Task 1: Initializing a\n");
   a = 10;
