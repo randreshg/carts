@@ -1,96 +1,4 @@
-clang++ -fopenmp taskwithdeps.cpp -Xclang -plugin -Xclang omp-plugin \
-	-fplugin=/home/randres/projects/carts/.install/carts/lib/libOpenMPPlugin.so -mllvm \
-	-debug-only=omp-plugin -S
-- - - - - - - - - - - - - - - - - - - 
-Starting CARTS - OpenMPPluginAction...
-- - - - - - - - - - - - - - - - - - - 
-CreateASTConsumer with file: taskwithdeps.cpp
-Found OpenMP Directive (OMPParallelDirective) at taskwithdeps.cpp:33:3
-- - - - - - - - - - - - - - - - - - - 
-Parallel Directive found at 33
-Found OpenMP Directive (OMPSingleDirective) at taskwithdeps.cpp:35:5
-- - - - - - - - - - - - - - - - - - - 
-Single Directive found at 35
-Found OpenMP Directive (OMPTaskDirective) at taskwithdeps.cpp:38:7
-- - - - - - - - - - - - - - - - - - - 
-Task Directive found at 38
-Found OpenMP Directive (OMPTaskDirective) at taskwithdeps.cpp:45:7
-- - - - - - - - - - - - - - - - - - - 
-Task Directive found at 45
-Found OpenMP Directive (OMPTaskDirective) at taskwithdeps.cpp:52:7
-- - - - - - - - - - - - - - - - - - - 
-Task Directive found at 52
-- - - - - - - - - - - - - - - - - - - 
-Printing OpenMP Directive Hierarchy...
-  Replaced directive at taskwithdeps.cpp:52:7 with call: edt_function_1(b);
-
-  Replaced directive at taskwithdeps.cpp:45:7 with call: edt_function_2(a, b);
-
-  Replaced directive at taskwithdeps.cpp:38:7 with call: edt_function_3(a);
-
-  Replaced directive at taskwithdeps.cpp:35:5 with call: edt_function_4(a, b);
-
-  Replaced directive at taskwithdeps.cpp:33:3 with call: edt_function_5(a, b);
-
-
-- - - - - - - - - - - - - - - - - -
-Finished CARTS - OpenMPPluginAction
-- - - - - - - - - - - - - - - - - -
-Rewritten code saved to taskwithdeps_annotaded.cpp
-Directive: parallel
-  Location: taskwithdeps.cpp:33:3
-  Directive: single
-    Location: taskwithdeps.cpp:35:5
-  Directive: task
-    Location: taskwithdeps.cpp:38:7
-    Dependencies: No
-  Directive: task
-    Location: taskwithdeps.cpp:45:7
-    Dependencies: No
-  Directive: task
-    Location: taskwithdeps.cpp:52:7
-    Dependencies: No
-  Number of Threads: 1
-clang++ -O0 -g3 taskwithdeps_annotaded.cpp -S -emit-llvm -o taskwithdeps.ll
-opt -load-pass-plugin=/home/randres/projects/carts/.install/carts/lib/ARTSTransform.so \
-	-debug-only=arts-transform,arts,carts,arts-ir-builder\
-	-passes="arts-transform" taskwithdeps.ll -o taskwithdeps_transformed.ll
-
--------------------------------------------------
-[arts-transform] Running ARTSTransformPass on Module: taskwithdeps.ll
-
--------------------------------------------------
-[arts-transform] Found global annotations
-[5 x { ptr, ptr, ptr, i32, ptr }] [{ ptr, ptr, ptr, i32, ptr } { ptr @_ZL14edt_function_4ii, ptr @.str.6, ptr @.str.1, i32 68, ptr null }, { ptr, ptr, ptr, i32, ptr } { ptr @_ZL14edt_function_2ii, ptr @.str.7, ptr @.str.1, i32 51, ptr null }, { ptr, ptr, ptr, i32, ptr } { ptr @_ZL14edt_function_5ii, ptr @.str.8, ptr @.str.1, i32 86, ptr null }, { ptr, ptr, ptr, i32, ptr } { ptr @_ZL14edt_function_1i, ptr @.str.9, ptr @.str.1, i32 44, ptr null }, { ptr, ptr, ptr, i32, ptr } { ptr @_ZL14edt_function_3i, ptr @.str.10, ptr @.str.1, i32 60, ptr null }]
-[arts-transform] Function: _ZL14edt_function_4ii
-[arts-transform] Annotation: arts.single
-[arts-transform]   - Type: arts.single
-[arts-transform] Function: _ZL14edt_function_2ii
-[arts-transform] Annotation: arts.task deps(in: a) deps(out: b)
-[arts-transform]   - Type: arts.task
-[arts-transform]   - Annotation: deps(in: a) deps(out: b)
-[arts-transform]   - Found depend(in: a)
-[arts-transform]   - Annotation: deps(out: b)
-[arts-transform]   - Found depend(out: b)
-[arts-transform] Function: _ZL14edt_function_5ii
-[arts-transform] Annotation: arts.parallel
-[arts-transform]   - Type: arts.parallel
-[arts-transform] Function: _ZL14edt_function_1i
-[arts-transform] Annotation: arts.task deps(in: b)
-[arts-transform]   - Type: arts.task
-[arts-transform]   - Annotation: deps(in: b)
-[arts-transform]   - Found depend(in: b)
-[arts-transform]   - Annotation: 
-[arts-transform] Function: _ZL14edt_function_3i
-[arts-transform] Annotation: arts.task deps(out: a)
-[arts-transform]   - Type: arts.task
-[arts-transform]   - Annotation: deps(out: a)
-[arts-transform]   - Annotation: )
-
--------------------------------------------------
-[arts-transform] OmpTransformPass has finished
-
-; ModuleID = 'taskwithdeps.ll'
+; ModuleID = 'taskwithdeps_annotaded.cpp'
 source_filename = "taskwithdeps_annotaded.cpp"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
@@ -321,7 +229,7 @@ attributes #4 = { "frame-pointer"="all" "no-trapping-math"="true" "stack-protect
 !28 = !DIFile(filename: "/usr/lib/gcc/x86_64-linux-gnu/11/../../../../include/c++/11/bits/std_abs.h", directory: "")
 !29 = !DIImportedEntity(tag: DW_TAG_imported_declaration, scope: !22, entity: !30, file: !32, line: 127)
 !30 = !DIDerivedType(tag: DW_TAG_typedef, name: "div_t", file: !24, line: 63, baseType: !31)
-!31 = distinct !DICompositeType(tag: DW_TAG_structure_type, file: !24, line: 59, size: 64, flags: DIFlagFwdDecl, identifier: "_ZTS5div_t")
+!31 = !DICompositeType(tag: DW_TAG_structure_type, file: !24, line: 59, size: 64, flags: DIFlagFwdDecl, identifier: "_ZTS5div_t")
 !32 = !DIFile(filename: "/usr/lib/gcc/x86_64-linux-gnu/11/../../../../include/c++/11/cstdlib", directory: "")
 !33 = !DIImportedEntity(tag: DW_TAG_imported_declaration, scope: !22, entity: !34, file: !32, line: 128)
 !34 = !DIDerivedType(tag: DW_TAG_typedef, name: "ldiv_t", file: !24, line: 71, baseType: !35)
@@ -669,8 +577,3 @@ attributes #4 = { "frame-pointer"="all" "no-trapping-math"="true" "stack-protect
 !376 = !DILocation(line: 47, column: 51, scope: !373)
 !377 = !DILocation(line: 47, column: 11, scope: !373)
 !378 = !DILocation(line: 49, column: 1, scope: !373)
-
-
--------------------------------------------------
-# -debug-only=arts-transform,arts,carts,arts-ir-builder,arts-utils\
-

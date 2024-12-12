@@ -1,5 +1,4 @@
 /// Description: AST Visitor to traverse the AST and find OpenMP directives
-
 #ifndef LLVM_API_CARTS_OMPVISITOR_H
 #define LLVM_API_CARTS_OMPVISITOR_H
 
@@ -115,9 +114,6 @@ public:
 
   bool hasDependencies() const;
 
-  void addDependency(clang::OpenMPDependClauseKind DepKind,
-                     clang::Expr *DepExpr);
-
   void printInfo(raw_ostream &OS, const clang::SourceManager &SM,
                  unsigned Depth = 0) const override {
     OMPDirectiveInfo::printInfo(OS, SM, Depth);
@@ -132,10 +128,10 @@ private:
 };
 
 /// OpenMP AST Visitor
-class OpenMPVisitor : public clang::RecursiveASTVisitor<OpenMPVisitor> {
+class OMPVisitor : public clang::RecursiveASTVisitor<OMPVisitor> {
 public:
-  explicit OpenMPVisitor(clang::ASTContext &Context, clang::Rewriter &R);
-  ~OpenMPVisitor();
+  explicit OMPVisitor(clang::ASTContext &Context, clang::Rewriter &R);
+  ~OMPVisitor();
 
   bool TraverseStmt(clang::Stmt *S);
   bool VisitStmt(clang::Stmt *S);
@@ -148,10 +144,10 @@ private:
   void handleCaptureStmt(clang::OMPExecutableDirective *Directive,
                          OMPDirectiveInfo *Info);
   template <typename ClauseType>
-  void
-  processClause(const ClauseType *Clause, const std::string &Annotation,
-                SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &CapturedVars,
-                std::map<std::string, OMPDirectiveInfo::CapturedVarInfo *> &CapturedMap) {
+  void processClause(
+      const ClauseType *Clause, const std::string &Annotation,
+      SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &CapturedVars,
+      std::map<std::string, OMPDirectiveInfo::CapturedVarInfo *> &CapturedMap) {
     /// Iterate over each DeclRefExpr in the clause's variable list
     // Iterate over each Expr* in the clause's variable list
     for (const clang::Expr *E : Clause->varlists()) {
@@ -172,10 +168,10 @@ private:
       }
     }
   }
-  void collectInfo(
-      clang::OMPExecutableDirective *Directive,
-      SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &CapturedVars,
-      std::string &Dependencies);
+  void
+  collectInfo(clang::OMPExecutableDirective *Directive,
+              SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &CapturedVars,
+              std::string &Dependencies);
   void insertFunctions(std::string AllFuncDecls, std::string AllFuncDefs);
 
   /// Attributes
@@ -191,14 +187,14 @@ private:
 };
 
 /// Visitor to traverse the AST and find OpenMP directives
-class OpenMPConsumer : public clang::ASTConsumer {
+class OMPConsumer : public clang::ASTConsumer {
 public:
-  explicit OpenMPConsumer(clang::ASTContext &Context, clang::Rewriter &R);
+  explicit OMPConsumer(clang::ASTContext &Context, clang::Rewriter &R);
 
   void HandleTranslationUnit(clang::ASTContext &Context) override;
 
 private:
-  OpenMPVisitor Visitor;
+  OMPVisitor Visitor;
 };
 
 } // namespace arts

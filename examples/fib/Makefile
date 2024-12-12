@@ -13,7 +13,7 @@ all: fib_opt
 
 # Run OMP transform pass
 fib_arts_ir.bc: fib.bc
-	opt -load-pass-plugin=/home/randres/projects/carts/.install/carts/lib/OMPTransform.so \
+	opt -load-pass-plugin=/home/randres/projects/carts/.install/carts/lib/ARTSTransform.so \
 		-debug-only=omp-transform,arts,carts,arts-ir-builder\
 		-passes="omp-transform" $< -o $@
 	# -debug-only=omp-transform,arts,carts,arts-ir-builder,arts-utils\

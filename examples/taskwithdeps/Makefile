@@ -3,26 +3,27 @@ ARTS_PATH=/home/randres/projects/carts/.install/arts
 CARTS_PATH=/home/randres/projects/carts/.install/carts
 FILENAME=taskwithdeps
 
-all: $(FILENAME)_opt
+all: $(FILENAME)_transformed.ll
 
-# Generate the ASTFile
-%.bc: %.cpp
-	clang++ -fopenmp -O1 -g3 -emit-ast -o $(FILENAME).ast $<
-	clang++ -fopenmp -O1 -g3 -emit-llvm -c $< -o $@ -lstdc++
-	llvm-dis $@
+# Generate LLVM IR from C++ source file
+%.ll: %.cpp
+	clang++ -fopenmp $< -Xclang -plugin -Xclang omp-plugin \
+		-fplugin=$(CARTS_PATH)/lib/libOpenMPPlugin.so -mllvm \
+		-debug-only=omp-plugin -S
+	clang++ -O0 -g3 $*_annotaded.cpp -S -emit-llvm -o $@
 
-%.bc: %.c
-	clang -fopenmp -O3 -g0 -emit-llvm -c $< -o $@
-	llvm-dis $@
+%.ll: %.c
+	clang -fopenmp $< -Xclang -plugin -Xclang omp-plugin \
+		-fplugin=$(CARTS_PATH)/lib/libOpenMPPlugin.so -mllvm \
+		-debug-only=omp-plugin -S
+	clang -O0 -g3 $*_annotaded.c -S -emit-llvm -o $@
 
-# Run OMP transform pass
-# opt -load-pass-plugin=/home/randres/projects/carts/.install/carts/lib/OMPTransform.so -debug-only=omp-visitor,omp-transform,arts,carts,arts-ir-builder -passes="omp-transform" -ast-file=taskwithdeps.ast taskwithdeps.ll -o taskwithdeps_arts_ir.bc
-$(FILENAME)_arts_ir.bc: $(FILENAME).bc
-	opt -load-pass-plugin=$(CARTS_PATH)/lib/OMPTransform.so \
-		-debug-only=omp-visitor,omp-transform,arts,carts,arts-ir-builder\
-		-passes="omp-transform" -ast-file=$(FILENAME).ast $< -o $@
-	# -debug-only=omp-transform,arts,carts,arts-ir-builder,arts-utils\
-	llvm-dis $@
+# Run ARTS Transform pass
+$(FILENAME)_transformed.ll: $(FILENAME).ll
+	opt -load-pass-plugin=$(CARTS_PATH)/lib/ARTSTransform.so \
+		-debug-only=arts-transform,arts,carts,arts-ir-builder\
+		-passes="arts-transform" $< -o $@
+	# -debug-only=arts-transform,arts,carts,arts-ir-builder,arts-utils\
 
 # Run the ARTS analysis pass
 $(FILENAME)_arts_analysis.bc:  $(FILENAME)_arts_ir.bc
@@ -40,4 +41,4 @@ $(FILENAME)_opt: $(FILENAME)_opt.bc
 	clang++ $< -O3 -g3 -march=native -o $@ -lstdc++ -I/$(ARTS_PATH)/include -L$(CARTS_PATH)/lib -larts -L/usr/lib64/librt.so/usr/lib64/libpthread.so/usr/lib64/lib -lrdmacm
 
 clean:
-	rm -f *.bc *.ll *.ast taskwithdeps_opt ;
+	rm -f *.bc *.ll *_transformed.cpp taskwithdeps_opt ;

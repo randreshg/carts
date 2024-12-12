@@ -12,8 +12,8 @@ endif()
 
 # Add source files
 set(SOURCES
-    OpenMPConsumer.cpp
-    OpenMPFrontend.cpp
+    OMPConsumer.cpp
+    OMPFrontend.cpp
 )
 
 # Add executable

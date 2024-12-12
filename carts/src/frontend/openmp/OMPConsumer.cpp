@@ -7,7 +7,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include "carts/frontend/openmp/OpenMPConsumer.h"
+#include "carts/frontend/openmp/OMPConsumer.h"
 
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/RecursiveASTVisitor.h"
@@ -21,8 +21,8 @@
 
 #include "llvm/Support/Debug.h"
 
-#include <string>
 #include <sstream>
+#include <string>
 
 /// DEBUG
 #define DEBUG_TYPE "omp-plugin"
@@ -114,23 +114,6 @@ bool OMPTaskInfo::hasDependencies() const {
   return !Inputs.empty() || !Outputs.empty();
 }
 
-void OMPTaskInfo::addDependency(OpenMPDependClauseKind DepKind, Expr *DepExpr) {
-  // switch (DepKind) {
-  // case OMPC_DEPEND_in:
-  //   Inputs.push_back(DepExpr);
-  //   break;
-  // case OMPC_DEPEND_out:
-  //   Outputs.push_back(DepExpr);
-  //   break;
-  // case OMPC_DEPEND_inout:
-  //   Inputs.push_back(DepExpr);
-  //   Outputs.push_back(DepExpr);
-  //   break;
-  // default:
-  //   break;
-  // }
-}
-
 OMPDirectiveInfo *
 OMPTaskInfo::handleDirective(OMPExecutableDirective *Directive) {
   SourceLocation Loc = Directive->getBeginLoc();
@@ -143,20 +126,20 @@ OMPTaskInfo::handleDirective(OMPExecutableDirective *Directive) {
 }
 
 /// ------------------------------------------------------------------- ///
-///                           OpenMPVisitor                             ///
+///                            OMPVisitor                               ///
 /// ------------------------------------------------------------------- ///
 static unsigned OutlinedFuncCounter = 0;
-OpenMPVisitor::OpenMPVisitor(ASTContext &Context, Rewriter &R)
+OMPVisitor::OMPVisitor(ASTContext &Context, Rewriter &R)
     : Context(Context), SM(Context.getSourceManager()), R(R) {
   MainFileID = R.getSourceMgr().getMainFileID();
 }
 
-OpenMPVisitor::~OpenMPVisitor() {
+OMPVisitor::~OMPVisitor() {
   for (OMPDirectiveInfo *Directive : Directives)
     delete Directive;
 }
 
-bool OpenMPVisitor::TraverseStmt(Stmt *S) {
+bool OMPVisitor::TraverseStmt(Stmt *S) {
   RecursiveASTVisitor::TraverseStmt(S);
   if (!S)
     return true;
@@ -168,7 +151,7 @@ bool OpenMPVisitor::TraverseStmt(Stmt *S) {
   return true;
 }
 
-bool OpenMPVisitor::VisitStmt(Stmt *S) {
+bool OMPVisitor::VisitStmt(Stmt *S) {
   /// We are only interested in OpenMP directives
   OMPExecutableDirective *Directive = dyn_cast<OMPExecutableDirective>(S);
   if (!Directive)
@@ -181,14 +164,14 @@ bool OpenMPVisitor::VisitStmt(Stmt *S) {
   return true;
 }
 
-void OpenMPVisitor::printHierarchy() const {
+void OMPVisitor::printHierarchy() const {
   LLVM_DEBUG(dbgs() << "- - - - - - - - - - - - - - - - - - - \n"
                     << "Printing OpenMP Directive Hierarchy...\n");
   for (const auto &Root : RootDirectives)
     Root->printInfo(llvm::outs(), SM);
 }
 
-void OpenMPVisitor::applyTransformations() {
+void OMPVisitor::applyTransformations() {
   /// Sort by starting location descending so that inner directives are replaced
   /// first
   const SourceManager &SM = R.getSourceMgr();
@@ -205,7 +188,7 @@ void OpenMPVisitor::applyTransformations() {
 
     string FuncName = "edt_function_" + std::to_string(++OutlinedFuncCounter);
     string Annotation =
-        "omp." + Info->getType().str() + Info->getDependencies();
+        "arts." + Info->getType().str() + Info->getDependencies();
     string FuncAnnotation = "__attribute__((annotate(\"" + Annotation + "\")))";
 
     /// Build function declaration
@@ -273,17 +256,14 @@ void OpenMPVisitor::applyTransformations() {
 
     /// Debug
     LLVM_DEBUG(dbgs() << "  Replaced directive at " << Info->getLocation(SM)
-                      << " with call: " << FnCall << "\n"
-                      << "  Outlined function declaration:\n"
-                      << FuncDecl << "  Outlined function definition:\n"
-                      << FuncDef << "\n");
+                      << " with call: " << FnCall << "\n");
   }
 
   /// Insert function declarations and definitions
   insertFunctions(AllFuncDecls, AllFuncDefs);
 }
 
-void OpenMPVisitor::handleDirective(OMPExecutableDirective *Directive) {
+void OMPVisitor::handleDirective(OMPExecutableDirective *Directive) {
   OMPDirectiveInfo *Info = nullptr;
   switch (Directive->getDirectiveKind()) {
   case omp::OMPD_parallel: {
@@ -341,47 +321,8 @@ void OpenMPVisitor::handleDirective(OMPExecutableDirective *Directive) {
     handleCaptureStmt(Directive, Info);
 }
 
-void OpenMPVisitor::handleClauses(const OMPExecutableDirective *Directive) {
-  //   LLVM_DEBUG(dbgs() << "  Processing clauses for directive...\n");
-  //   for (const OMPClause *Clause : Directive->clauses()) {
-  //     if (!Clause)
-  //       continue;
-
-  //     LLVM_DEBUG(dbgs() << "    Clause: "
-  //                       << getOpenMPClauseName(Clause->getClauseKind())
-  //                       << "\n");
-
-  //     switch (Clause->getClauseKind()) {
-  //     case omp::OMPC_depend: {
-  //       auto *DependClause = cast<OMPDependClause>(Clause);
-  //       LLVM_DEBUG(
-  //           dbgs() << "      Dependency type: "
-  //                  <<
-  //                  OpenMPDependClauseKind(DependClause->getDependencyKind())
-  //                  << "\n");
-  //       for (const Expr *DepExpr : DependClause->varlists()) {
-  //         LLVM_DEBUG(dbgs() << "      Dependency variable: ");
-  //         PrintingPolicy Policy(Context.getLangOpts());
-  //         DepExpr->printPretty(llvm::outs(), nullptr, Policy);
-  //         LLVM_DEBUG(dbgs() << "\n");
-  //       }
-  //     } break;
-  //     case omp::OMPC_if: {
-  //       auto *IfClause = cast<OMPIfClause>(Clause);
-  //       LLVM_DEBUG(dbgs() << "      Condition: ");
-  //       PrintingPolicy Policy(Context.getLangOpts());
-  //       IfClause->getCondition()->printPretty(llvm::outs(), nullptr,
-  //       Policy); LLVM_DEBUG(dbgs() << "\n");
-  //     } break;
-  //     default:
-  //       LLVM_DEBUG(dbgs() << "      (Unhandled clause type)\n");
-  //       break;
-  //     }
-  //   }
-}
-
-void OpenMPVisitor::handleCaptureStmt(OMPExecutableDirective *Directive,
-                                      OMPDirectiveInfo *Info) {
+void OMPVisitor::handleCaptureStmt(OMPExecutableDirective *Directive,
+                                   OMPDirectiveInfo *Info) {
   /// Collect dependencies and captured variables
   string Dependencies;
   SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> CapturedVars;
@@ -400,7 +341,7 @@ void OpenMPVisitor::handleCaptureStmt(OMPExecutableDirective *Directive,
   TransformedDirectives.push_back(Info);
 }
 
-void OpenMPVisitor::collectInfo(
+void OMPVisitor::collectInfo(
     OMPExecutableDirective *Directive,
     SmallVector<OMPDirectiveInfo::CapturedVarInfo, 4> &CapturedVars,
     string &Dependencies) {
@@ -412,21 +353,22 @@ void OpenMPVisitor::collectInfo(
     switch (Clause->getClauseKind()) {
     case llvm::omp::OMPC_private:
       processClause<OMPPrivateClause>(cast<OMPPrivateClause>(Clause),
-                                      "omp.private", CapturedVars, CapturedMap);
+                                      "arts.private", CapturedVars,
+                                      CapturedMap);
       break;
     case llvm::omp::OMPC_firstprivate:
       processClause<OMPFirstprivateClause>(cast<OMPFirstprivateClause>(Clause),
-                                           "omp.firstprivate", CapturedVars,
+                                           "arts.firstprivate", CapturedVars,
                                            CapturedMap);
       break;
     case llvm::omp::OMPC_lastprivate:
       processClause<OMPLastprivateClause>(cast<OMPLastprivateClause>(Clause),
-                                          "omp.lastprivate", CapturedVars,
+                                          "arts.lastprivate", CapturedVars,
                                           CapturedMap);
       break;
     case llvm::omp::OMPC_shared:
       processClause<OMPSharedClause>(cast<OMPSharedClause>(Clause),
-                                     "omp.shared", CapturedVars, CapturedMap);
+                                     "arts.shared", CapturedVars, CapturedMap);
       break;
     case omp::OMPC_depend:
       DepsVector.push_back(
@@ -445,7 +387,7 @@ void OpenMPVisitor::collectInfo(
     /// Only add the variable if it has not been captured already
     if (CapturedMap.find(Name) == CapturedMap.end()) {
       CapturedVars.emplace_back(VD->getType().getAsString(), Name,
-                                "omp.default");
+                                "arts.default");
       CapturedMap[Name] = &CapturedVars.back();
     }
   }
@@ -492,11 +434,10 @@ void OpenMPVisitor::collectInfo(
   if (HasInput)
     Dependencies += Input.str().substr(0, Input.str().size() - 2) + ")";
   if (HasOutput)
-    Dependencies += (HasInput ? " " : "") +
-                    Output.str().substr(0, Output.str().size() - 2) + ")";
+    Dependencies += Output.str().substr(0, Output.str().size() - 2) + ")";
 }
 
-void OpenMPVisitor::insertFunctions(string AllFuncDecls, string AllFuncDefs) {
+void OMPVisitor::insertFunctions(string AllFuncDecls, string AllFuncDefs) {
   // Determine insertion points
   FileID MainFileID = SM.getMainFileID();
   // bool IsHeader = isHeaderFile(SM, MainFileID);
@@ -543,12 +484,12 @@ void OpenMPVisitor::insertFunctions(string AllFuncDecls, string AllFuncDefs) {
 }
 
 /// ------------------------------------------------------------------- ///
-///                           OpenMPASTConsumer                         ///
+///                             OMPConsumer                          ///
 /// ------------------------------------------------------------------- ///
-OpenMPConsumer::OpenMPConsumer(ASTContext &Context, Rewriter &R)
+OMPConsumer::OMPConsumer(ASTContext &Context, Rewriter &R)
     : Visitor(Context, R) {}
 
-void OpenMPConsumer::HandleTranslationUnit(ASTContext &Context) {
+void OMPConsumer::HandleTranslationUnit(ASTContext &Context) {
   Visitor.TraverseDecl(Context.getTranslationUnitDecl());
   Visitor.printHierarchy();
   Visitor.applyTransformations();
