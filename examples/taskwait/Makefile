@@ -13,7 +13,7 @@ all: taskwait_opt
 
 # Run OMP transform pass
 taskwait_arts_ir.bc: taskwait.bc
-	opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/OMPTransform.so \
+	opt -load-pass-plugin=/home/rherreraguaitero/ME/ARTS-env/CARTS/.install/carts/lib/ARTSTransform.so \
 		-passes="omp-transform" $< -o $@
 	# -debug-only=omp-transform,arts,carts,arts-ir-builder,arts-utils\
 	llvm-dis $@

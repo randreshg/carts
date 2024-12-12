@@ -3,7 +3,7 @@
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Tooling/Tooling.h"
 
-#include "carts/frontend/openmp/OpenMPConsumer.h"
+#include "carts/frontend/openmp/OMPConsumer.h"
 #include "clang/Frontend/FrontendPluginRegistry.h"
 
 #include "llvm/Support/Debug.h"
@@ -40,7 +40,7 @@ protected:
     R.setSourceMgr(CI.getSourceManager(), CI.getLangOpts());
     LLVM_DEBUG(dbgs() << "CreateASTConsumer with file: " << InputFileName
                       << "\n");
-    return std::make_unique<arts::OpenMPConsumer>(CI.getASTContext(), R);
+    return std::make_unique<arts::OMPConsumer>(CI.getASTContext(), R);
   }
 
   bool ParseArgs(const CompilerInstance &,
@@ -63,7 +63,7 @@ protected:
     /// Extract name without extension
     size_t LastIndex = InputFileName.find_last_of(".");
     assert(LastIndex != std::string::npos && "Invalid input file name");
-    std::string OutName = InputFileName.substr(0, LastIndex) + "_transformed" +
+    std::string OutName = InputFileName.substr(0, LastIndex) + "_annotaded" +
                           InputFileName.substr(LastIndex);
     std::error_code EC;
     llvm::raw_fd_ostream OutFile(OutName, EC, llvm::sys::fs::OF_None);

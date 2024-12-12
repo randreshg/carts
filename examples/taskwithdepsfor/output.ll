@@ -1,4 +1,221 @@
-; ModuleID = 'taskwithdeps_annotaded.cpp'
+clang++ -fopenmp taskwithdeps.cpp -Xclang -plugin -Xclang omp-plugin \
+	-fplugin=/home/randres/projects/carts/.install/carts/lib/libOpenMPPlugin.so -mllvm \
+	-debug-only=omp-plugin -S
+- - - - - - - - - - - - - - - - - - - 
+Starting CARTS - OpenMPPluginAction...
+- - - - - - - - - - - - - - - - - - - 
+CreateASTConsumer with file: taskwithdeps.cpp
+Found OpenMP Directive (OMPParallelDirective) at taskwithdeps.cpp:13:3
+- - - - - - - - - - - - - - - - - - - 
+Parallel Directive found at 13
+Found OpenMP Directive (OMPSingleDirective) at taskwithdeps.cpp:15:5
+- - - - - - - - - - - - - - - - - - - 
+Single Directive found at 15
+Found OpenMP Directive (OMPTaskDirective) at taskwithdeps.cpp:19:9
+- - - - - - - - - - - - - - - - - - - 
+Task Directive found at 19
+Found OpenMP Directive (OMPTaskDirective) at taskwithdeps.cpp:23:9
+- - - - - - - - - - - - - - - - - - - 
+Task Directive found at 23
+- - - - - - - - - - - - - - - - - - - 
+Printing OpenMP Directive Hierarchy...
+  Replaced directive at taskwithdeps.cpp:23:9 with call: edt_function_1(i, B, A);
+
+  Replaced directive at taskwithdeps.cpp:19:9 with call: edt_function_2(i, A);
+
+  Replaced directive at taskwithdeps.cpp:15:5 with call: edt_function_3(N, A, B);
+
+  Replaced directive at taskwithdeps.cpp:13:3 with call: edt_function_4(N, A, B);
+
+
+- - - - - - - - - - - - - - - - - -
+Finished CARTS - OpenMPPluginAction
+- - - - - - - - - - - - - - - - - -
+Rewritten code saved to taskwithdeps_annotaded.cpp
+Directive: parallel
+  Location: taskwithdeps.cpp:13:3
+  Directive: single
+    Location: taskwithdeps.cpp:15:5
+  Directive: task
+    Location: taskwithdeps.cpp:19:9
+    Dependencies: No
+  Directive: task
+    Location: taskwithdeps.cpp:23:9
+    Dependencies: No
+  Number of Threads: 1
+clang++ -O0 -g3 taskwithdeps_annotaded.cpp -S -emit-llvm -o taskwithdeps.ll
+opt -load-pass-plugin=/home/randres/projects/carts/.install/carts/lib/ARTSTransform.so \
+	-debug-only=arts-transform,arts,carts,arts-ir-builder\
+	-passes="arts-transform" taskwithdeps.ll -o taskwithdeps_transformed.ll
+
+-------------------------------------------------
+[arts-transform] Running ARTSTransformPass on Module: taskwithdeps.ll
+
+-------------------------------------------------
+[arts-transform] Found global annotations
+[4 x { ptr, ptr, ptr, i32, ptr }] [{ ptr, ptr, ptr, i32, ptr } { ptr @_ZL14edt_function_3iPdS_, ptr @.str.3, ptr @.str.1, i32 38, ptr null }, { ptr, ptr, ptr, i32, ptr } { ptr @_ZL14edt_function_1iPdS_, ptr @.str.4, ptr @.str.1, i32 23, ptr null }, { ptr, ptr, ptr, i32, ptr } { ptr @_ZL14edt_function_2iPd, ptr @.str.5, ptr @.str.1, i32 31, ptr null }, { ptr, ptr, ptr, i32, ptr } { ptr @_ZL14edt_function_4iPdS_, ptr @.str.6, ptr @.str.1, i32 55, ptr null }]
+[arts-transform] Global annotation: { ptr, ptr, ptr, i32, ptr } { ptr @_ZL14edt_function_3iPdS_, ptr @.str.3, ptr @.str.1, i32 38, ptr null }
+[arts-transform] Argument 0: ; Function Attrs: mustprogress noinline optnone uwtable
+define internal void @_ZL14edt_function_3iPdS_(i32 noundef %N, ptr noundef %A, ptr noundef %B) #0 !dbg !286 {
+entry:
+  %N.addr = alloca i32, align 4
+  %A.addr = alloca ptr, align 8
+  %B.addr = alloca ptr, align 8
+  %i = alloca i32, align 4
+  store i32 %N, ptr %N.addr, align 4
+  call void @llvm.dbg.declare(metadata ptr %N.addr, metadata !287, metadata !DIExpression()), !dbg !288
+  call void @llvm.var.annotation.p0.p0(ptr %N.addr, ptr @.str, ptr @.str.1, i32 39, ptr null)
+  store ptr %A, ptr %A.addr, align 8
+  call void @llvm.dbg.declare(metadata ptr %A.addr, metadata !289, metadata !DIExpression()), !dbg !290
+  call void @llvm.var.annotation.p0.p0(ptr %A.addr, ptr @.str, ptr @.str.1, i32 40, ptr null)
+  store ptr %B, ptr %B.addr, align 8
+  call void @llvm.dbg.declare(metadata ptr %B.addr, metadata !291, metadata !DIExpression()), !dbg !292
+  call void @llvm.var.annotation.p0.p0(ptr %B.addr, ptr @.str, ptr @.str.1, i32 41, ptr null)
+  call void @llvm.dbg.declare(metadata ptr %i, metadata !293, metadata !DIExpression()), !dbg !295
+  store i32 0, ptr %i, align 4, !dbg !295
+  br label %for.cond, !dbg !296
+
+for.cond:                                         ; preds = %for.inc, %entry
+  %0 = load i32, ptr %i, align 4, !dbg !297
+  %1 = load i32, ptr %N.addr, align 4, !dbg !299
+  %cmp = icmp slt i32 %0, %1, !dbg !300
+  br i1 %cmp, label %for.body, label %for.end, !dbg !301
+
+for.body:                                         ; preds = %for.cond
+  %2 = load i32, ptr %i, align 4, !dbg !302
+  %3 = load ptr, ptr %A.addr, align 8, !dbg !304
+  call void @_ZL14edt_function_2iPd(i32 noundef %2, ptr noundef %3), !dbg !305
+  %4 = load i32, ptr %i, align 4, !dbg !306
+  %5 = load ptr, ptr %B.addr, align 8, !dbg !307
+  %6 = load ptr, ptr %A.addr, align 8, !dbg !308
+  call void @_ZL14edt_function_1iPdS_(i32 noundef %4, ptr noundef %5, ptr noundef %6), !dbg !309
+  br label %for.inc, !dbg !310
+
+for.inc:                                          ; preds = %for.body
+  %7 = load i32, ptr %i, align 4, !dbg !311
+  %inc = add nsw i32 %7, 1, !dbg !311
+  store i32 %inc, ptr %i, align 4, !dbg !311
+  br label %for.cond, !dbg !312, !llvm.loop !313
+
+for.end:                                          ; preds = %for.cond
+  ret void, !dbg !316
+}
+
+[arts-transform] Argument 1: @.str.3 = private unnamed_addr constant [12 x i8] c"arts.single\00", section "llvm.metadata"
+[arts-transform] Argument 2: @.str.1 = private unnamed_addr constant [27 x i8] c"taskwithdeps_annotaded.cpp\00", section "llvm.metadata"
+[arts-transform] Argument 3: i32 38
+[arts-transform] Argument 4: ptr null
+[arts-transform] Global annotation: { ptr, ptr, ptr, i32, ptr } { ptr @_ZL14edt_function_1iPdS_, ptr @.str.4, ptr @.str.1, i32 23, ptr null }
+[arts-transform] Argument 0: ; Function Attrs: mustprogress noinline nounwind optnone uwtable
+define internal void @_ZL14edt_function_1iPdS_(i32 noundef %i, ptr noundef %B, ptr noundef %A) #3 !dbg !330 {
+entry:
+  %i.addr = alloca i32, align 4
+  %B.addr = alloca ptr, align 8
+  %A.addr = alloca ptr, align 8
+  store i32 %i, ptr %i.addr, align 4
+  call void @llvm.dbg.declare(metadata ptr %i.addr, metadata !331, metadata !DIExpression()), !dbg !332
+  call void @llvm.var.annotation.p0.p0(ptr %i.addr, ptr @.str.2, ptr @.str.1, i32 24, ptr null)
+  store ptr %B, ptr %B.addr, align 8
+  call void @llvm.dbg.declare(metadata ptr %B.addr, metadata !333, metadata !DIExpression()), !dbg !334
+  call void @llvm.var.annotation.p0.p0(ptr %B.addr, ptr @.str, ptr @.str.1, i32 25, ptr null)
+  store ptr %A, ptr %A.addr, align 8
+  call void @llvm.dbg.declare(metadata ptr %A.addr, metadata !335, metadata !DIExpression()), !dbg !336
+  call void @llvm.var.annotation.p0.p0(ptr %A.addr, ptr @.str, ptr @.str.1, i32 26, ptr null)
+  %0 = load ptr, ptr %A.addr, align 8, !dbg !337
+  %1 = load i32, ptr %i.addr, align 4, !dbg !338
+  %idxprom = sext i32 %1 to i64, !dbg !337
+  %arrayidx = getelementptr inbounds double, ptr %0, i64 %idxprom, !dbg !337
+  %2 = load double, ptr %arrayidx, align 8, !dbg !337
+  %3 = load i32, ptr %i.addr, align 4, !dbg !339
+  %cmp = icmp sgt i32 %3, 0, !dbg !340
+  br i1 %cmp, label %cond.true, label %cond.false, !dbg !339
+
+cond.true:                                        ; preds = %entry
+  %4 = load ptr, ptr %A.addr, align 8, !dbg !341
+  %5 = load i32, ptr %i.addr, align 4, !dbg !342
+  %sub = sub nsw i32 %5, 1, !dbg !343
+  %idxprom1 = sext i32 %sub to i64, !dbg !341
+  %arrayidx2 = getelementptr inbounds double, ptr %4, i64 %idxprom1, !dbg !341
+  %6 = load double, ptr %arrayidx2, align 8, !dbg !341
+  br label %cond.end, !dbg !339
+
+cond.false:                                       ; preds = %entry
+  br label %cond.end, !dbg !339
+
+cond.end:                                         ; preds = %cond.false, %cond.true
+  %cond = phi double [ %6, %cond.true ], [ 0.000000e+00, %cond.false ], !dbg !339
+  %add = fadd double %2, %cond, !dbg !344
+  %7 = load ptr, ptr %B.addr, align 8, !dbg !345
+  %8 = load i32, ptr %i.addr, align 4, !dbg !346
+  %idxprom3 = sext i32 %8 to i64, !dbg !345
+  %arrayidx4 = getelementptr inbounds double, ptr %7, i64 %idxprom3, !dbg !345
+  store double %add, ptr %arrayidx4, align 8, !dbg !347
+  ret void, !dbg !348
+}
+
+[arts-transform] Argument 1: @.str.4 = private unnamed_addr constant [52 x i8] c"arts.task deps(in: A[i], A[i - 1])  deps(out: B[i])\00", section "llvm.metadata"
+[arts-transform] Argument 2: @.str.1 = private unnamed_addr constant [27 x i8] c"taskwithdeps_annotaded.cpp\00", section "llvm.metadata"
+[arts-transform] Argument 3: i32 23
+[arts-transform] Argument 4: ptr null
+[arts-transform] Global annotation: { ptr, ptr, ptr, i32, ptr } { ptr @_ZL14edt_function_2iPd, ptr @.str.5, ptr @.str.1, i32 31, ptr null }
+[arts-transform] Argument 0: ; Function Attrs: mustprogress noinline nounwind optnone uwtable
+define internal void @_ZL14edt_function_2iPd(i32 noundef %i, ptr noundef %A) #3 !dbg !317 {
+entry:
+  %i.addr = alloca i32, align 4
+  %A.addr = alloca ptr, align 8
+  store i32 %i, ptr %i.addr, align 4
+  call void @llvm.dbg.declare(metadata ptr %i.addr, metadata !320, metadata !DIExpression()), !dbg !321
+  call void @llvm.var.annotation.p0.p0(ptr %i.addr, ptr @.str.2, ptr @.str.1, i32 32, ptr null)
+  store ptr %A, ptr %A.addr, align 8
+  call void @llvm.dbg.declare(metadata ptr %A.addr, metadata !322, metadata !DIExpression()), !dbg !323
+  call void @llvm.var.annotation.p0.p0(ptr %A.addr, ptr @.str, ptr @.str.1, i32 33, ptr null)
+  %0 = load i32, ptr %i.addr, align 4, !dbg !324
+  %conv = sitofp i32 %0 to double, !dbg !324
+  %mul = fmul double %conv, 1.000000e+00, !dbg !325
+  %1 = load ptr, ptr %A.addr, align 8, !dbg !326
+  %2 = load i32, ptr %i.addr, align 4, !dbg !327
+  %idxprom = sext i32 %2 to i64, !dbg !326
+  %arrayidx = getelementptr inbounds double, ptr %1, i64 %idxprom, !dbg !326
+  store double %mul, ptr %arrayidx, align 8, !dbg !328
+  ret void, !dbg !329
+}
+
+[arts-transform] Argument 1: @.str.5 = private unnamed_addr constant [26 x i8] c"arts.task deps(out: A[i])\00", section "llvm.metadata"
+[arts-transform] Argument 2: @.str.1 = private unnamed_addr constant [27 x i8] c"taskwithdeps_annotaded.cpp\00", section "llvm.metadata"
+[arts-transform] Argument 3: i32 31
+[arts-transform] Argument 4: ptr null
+[arts-transform] Global annotation: { ptr, ptr, ptr, i32, ptr } { ptr @_ZL14edt_function_4iPdS_, ptr @.str.6, ptr @.str.1, i32 55, ptr null }
+[arts-transform] Argument 0: ; Function Attrs: mustprogress noinline optnone uwtable
+define internal void @_ZL14edt_function_4iPdS_(i32 noundef %N, ptr noundef %A, ptr noundef %B) #0 !dbg !274 {
+entry:
+  %N.addr = alloca i32, align 4
+  %A.addr = alloca ptr, align 8
+  %B.addr = alloca ptr, align 8
+  store i32 %N, ptr %N.addr, align 4
+  call void @llvm.dbg.declare(metadata ptr %N.addr, metadata !275, metadata !DIExpression()), !dbg !276
+  call void @llvm.var.annotation.p0.p0(ptr %N.addr, ptr @.str, ptr @.str.1, i32 56, ptr null)
+  store ptr %A, ptr %A.addr, align 8
+  call void @llvm.dbg.declare(metadata ptr %A.addr, metadata !277, metadata !DIExpression()), !dbg !278
+  call void @llvm.var.annotation.p0.p0(ptr %A.addr, ptr @.str, ptr @.str.1, i32 57, ptr null)
+  store ptr %B, ptr %B.addr, align 8
+  call void @llvm.dbg.declare(metadata ptr %B.addr, metadata !279, metadata !DIExpression()), !dbg !280
+  call void @llvm.var.annotation.p0.p0(ptr %B.addr, ptr @.str, ptr @.str.1, i32 58, ptr null)
+  %0 = load i32, ptr %N.addr, align 4, !dbg !281
+  %1 = load ptr, ptr %A.addr, align 8, !dbg !282
+  %2 = load ptr, ptr %B.addr, align 8, !dbg !283
+  call void @_ZL14edt_function_3iPdS_(i32 noundef %0, ptr noundef %1, ptr noundef %2), !dbg !284
+  ret void, !dbg !285
+}
+
+[arts-transform] Argument 1: @.str.6 = private unnamed_addr constant [14 x i8] c"arts.parallel\00", section "llvm.metadata"
+[arts-transform] Argument 2: @.str.1 = private unnamed_addr constant [27 x i8] c"taskwithdeps_annotaded.cpp\00", section "llvm.metadata"
+[arts-transform] Argument 3: i32 55
+[arts-transform] Argument 4: ptr null
+
+-------------------------------------------------
+[arts-transform] OmpTransformPass has finished
+
+; ModuleID = 'taskwithdeps.ll'
 source_filename = "taskwithdeps_annotaded.cpp"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
@@ -196,7 +413,7 @@ attributes #3 = { mustprogress noinline nounwind optnone uwtable "frame-pointer"
 !10 = !DIFile(filename: "/usr/lib/gcc/x86_64-linux-gnu/11/../../../../include/c++/11/bits/std_abs.h", directory: "")
 !11 = !DIImportedEntity(tag: DW_TAG_imported_declaration, scope: !4, entity: !12, file: !14, line: 127)
 !12 = !DIDerivedType(tag: DW_TAG_typedef, name: "div_t", file: !6, line: 63, baseType: !13)
-!13 = !DICompositeType(tag: DW_TAG_structure_type, file: !6, line: 59, size: 64, flags: DIFlagFwdDecl, identifier: "_ZTS5div_t")
+!13 = distinct !DICompositeType(tag: DW_TAG_structure_type, file: !6, line: 59, size: 64, flags: DIFlagFwdDecl, identifier: "_ZTS5div_t")
 !14 = !DIFile(filename: "/usr/lib/gcc/x86_64-linux-gnu/11/../../../../include/c++/11/cstdlib", directory: "")
 !15 = !DIImportedEntity(tag: DW_TAG_imported_declaration, scope: !4, entity: !16, file: !14, line: 128)
 !16 = !DIDerivedType(tag: DW_TAG_typedef, name: "ldiv_t", file: !6, line: 71, baseType: !17)
@@ -532,3 +749,8 @@ attributes #3 = { mustprogress noinline nounwind optnone uwtable "frame-pointer"
 !346 = !DILocation(line: 28, column: 13, scope: !330)
 !347 = !DILocation(line: 28, column: 16, scope: !330)
 !348 = !DILocation(line: 29, column: 1, scope: !330)
+
+
+-------------------------------------------------
+# -debug-only=arts-transform,arts,carts,arts-ir-builder,arts-utils\
+
