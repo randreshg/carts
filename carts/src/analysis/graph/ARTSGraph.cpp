@@ -238,9 +238,9 @@ bool ARTSGraph::insertCreationEdgeGuid(EDT *From, EDT *To, EDT *Done) {
 
   /// If not, guarantee that the parent of From has the Guid
   EDT *FromParent = From->getParent();
-  if(!FromParent) {
-    LLVM_DEBUG(dbgs() << "        - EDT #"
-                      << From->getID() << " does not have a parent\n");
+  if (!FromParent) {
+    LLVM_DEBUG(dbgs() << "        - EDT #" << From->getID()
+                      << " does not have a parent\n");
     llvm_unreachable("The parent of the EDT must exist");
   }
   insertCreationEdgeGuid(FromParent, From, Done);
@@ -485,9 +485,9 @@ void ARTSGraph::print(void) {
                       << ContextEDT->getName() << "\"\n");
     LLVM_DEBUG(dbgs() << "  - Type: " << toString(ContextEDT->getTy()) << "\n");
     /// ParentSync
-    if(EDT *ParentSync = ContextEDT->getParentSync()) {
-      LLVM_DEBUG(dbgs() << "  - Parent Sync: \"EDT #"
-                      << ParentSync->getID() << "\"\n");
+    if (EDT *ParentSync = ContextEDT->getParentSync()) {
+      LLVM_DEBUG(dbgs() << "  - Parent Sync: \"EDT #" << ParentSync->getID()
+                        << "\"\n");
     }
     /// Data environment
     LLVM_DEBUG(dbgs() << "  - Data Environment:\n");
@@ -534,8 +534,10 @@ void ARTSGraph::print(void) {
                      << "    - EDTSlot #" << SlotNode->getSlot() << "\n");
           for (DataBlockGraphEdge *DataEdge : InDataEdges) {
             DataBlock *DB = DataEdge->getDataBlock();
-            LLVM_DEBUG(dbgs() << "      - [DataBlock] " << *DB->getValue() << " from \"EDT #"
-                              << DataEdge->getFrom()->getEDT()->getID() << "\"");
+            LLVM_DEBUG(dbgs()
+                       << "      - [DataBlock] " << *DB->getValue()
+                       << " from \"EDT #"
+                       << DataEdge->getFrom()->getEDT()->getID() << "\"");
             DataBlock *DBParent = DB->getMainParent();
             if (DBParent) {
               LLVM_DEBUG(dbgs()

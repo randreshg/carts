@@ -42,15 +42,15 @@ void EDT::setMetadata(EDTIRBuilder &Builder) {
   EDTMDs.push_back(ArgNode);
 
   /// Set specific metadata for the function
-  if (Fn->hasMetadata(CARTS_MD))
-    Fn->setMetadata(CARTS_MD, nullptr);
-  Fn->setMetadata(CARTS_MD, MDNode::get(Ctx, EDTMDs));
+  if (Fn->hasMetadata(ARTS_MD))
+    Fn->setMetadata(ARTS_MD, nullptr);
+  Fn->setMetadata(ARTS_MD, MDNode::get(Ctx, EDTMDs));
 }
 
 void TaskEDT::setMetadata(EDTIRBuilder &Builder, SetVector<EDT *> &Inputs,
                           SetVector<EDT *> &Outputs, int32_t ThreadNum) {
   EDT::setMetadata(Builder);
-  // MDNode *MD = Builder.getNewFn()->getMetadata(CARTS_MD);
+  // MDNode *MD = Builder.getNewFn()->getMetadata(ARTS_MD);
   // assert(MD && "CARTS Metadata Node is null");
   // /// Add a new metadata node for the Task EDT
   // SmallVector<Metadata *, 16> TaskMDs;
@@ -65,7 +65,7 @@ void TaskEDT::setMetadata(EDTIRBuilder &Builder, SetVector<EDT *> &Inputs,
   // TaskMDs.push_back(MDNode::get(Builder.getNewFn()->getContext(), InputsMDs));
   // TaskMDs.push_back(MDNode::get(Builder.getNewFn()->getContext(), OutputsMDs));
   /// Set the metadata for the Task EDT
-  // Builder.getNewFn()->setMetadata(CARTS_MD, MDNode::get(Builder.getNewFn()->getContext(), TaskMDs));
+  // Builder.getNewFn()->setMetadata(ARTS_MD, MDNode::get(Builder.getNewFn()->getContext(), TaskMDs));
   /// TODO: Add the number of threads...
 }
 

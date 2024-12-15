@@ -1,4 +1,4 @@
-// Description: Main file for the ARTS Analysis pass.
+/// Description: Main file for the ARTS Analysis pass.
 #include <cassert>
 #include <cstdint>
 

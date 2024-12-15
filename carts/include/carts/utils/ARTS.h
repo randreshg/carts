@@ -1,48 +1,36 @@
-//===- ARTS.h - ARTS-Related structs ----------------------------*- C++ -*-===//
-//===----------------------------------------------------------------------===//
+//============================================================================//
+//                                   ARTS.h                                   //
+//============================================================================//
 
 #ifndef LLVM_ARTS_H
 #define LLVM_ARTS_H
 
 #include "llvm/ADT/SetVector.h"
-#include "llvm/IR/BasicBlock.h"
+// #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Type.h"
 #include <cstdint>
 #include <sys/types.h>
 
-#include "carts/utils/ARTSIRBuilder.h"
+// #include "carts/utils/ARTSIRBuilder.h"
 #include "carts/utils/ARTSTypes.h"
 
 namespace arts {
-using namespace llvm;
-using namespace std;
-
-class EDT;
-class DataBlock;
-
-using EDTValue = Value;
-using EDTValueSet = SetVector<EDTValue *>;
-using EDTCallBase = CallBase;
-using EDTFunction = Function;
-using EDTFunctionSet = SetVector<EDTFunction *>;
-using EDTSet = SetVector<EDT *>;
-using DataBlockSet = SetVector<DataBlock *>;
+using namespace types;
 
 /// ------------------------------------------------------------------- ///
-///                              DATA BLOCK                            ///
-/// It represents the dependencies that are required for the EDT to run.
+///                           DATABLOCK (DB)                            ///
+/// It represents the data that are required for the EDT to run.
 /// It contains the following information:
 /// - V is the value that is being passed to the EDT
-/// - M is the mode of the DataBlock (ReadOnly, WriteOnly, ReadWrite)
+/// - M is the mode of the DB (ReadOnly, WriteOnly, ReadWrite)
 /// - ContextEDT is the EDT that is using DataBlock
-/// - Parent is the parent DataBlock
-/// - ChildrenDB are the children data blocks that are using the data block
-/// - Done is the data block that is used to signal the completion of the
-///   data block
-/// - Slot is the slot number of the data block
-/// - ToSlot is the slot number of the data block that is used to signal the
-///   completion of the data block
+/// - Parent is the parent DB
+/// - ChildrenDB are the children DBs that are using the DB
+/// - Done is the DB that is used to signal the completion of the DB
+/// - Slot is the slot number of the DB
+/// - ToSlot is the slot number of the DB that is used to signal the
+///   completion of the DB
 /// ------------------------------------------------------------------- ///
 class DataBlock {
 public:
@@ -118,14 +106,13 @@ inline raw_ostream &operator<<(raw_ostream &OS, DataBlock &DB) {
 class EDTEnvironment {
 public:
   EDTEnvironment(EDT *E);
-  // EDTEnvironment(EDT *E, SmallVector<EDTArgMetadata *, 4> &Args);
 
   /// Getters and setters
   void insertParamV(EDTValue *V);
   void insertDepV(EDTValue *V);
   uint32_t getParamC();
   uint32_t getDepC();
-  ///
+  /// Other
   bool isDepV(EDTValue *V);
 
   /// Attributes
@@ -160,8 +147,7 @@ public:
 
   /// Static interface
   static uint32_t Counter;
-  static EDT *get(EDTFunction *Fn);
-  static void setMetadata(EDTIRBuilder &Builder);
+  static EDT *get(EDTFunction *Fn, string Annotation);
   static bool classof(const EDT *E) { return true; }
 
   /// Data Environment
@@ -200,7 +186,6 @@ protected:
 private:
   uint32_t ID;
   uint32_t DepSlot = 0;
-  /// Maps a DepSlot to a Function Argument
   DenseMap<uint32_t, Argument *> DepSlotToArg;
 
   /// What we learned after running the Attributor
@@ -240,22 +225,28 @@ inline raw_ostream &operator<<(raw_ostream &OS, EDT &E) {
 class TaskEDT : public EDT {
 public:
   TaskEDT(EDTFunction *Fn);
+  TaskEDT(EDTFunction *Fn, SmallVector<StringRef, 4> Inputs, SmallVector<StringRef, 4> Outputs);
   ~TaskEDT() = default;
 
   /// Getters
   int32_t getThreadNum() { return ThreadNum; }
 
+  /// Insert
+  void insertInput(EDT *E) { Inputs.push_back(E); }
+  void insertOutput(EDT *E) { Outputs.push_back(E); }
+
   /// Static interface
-  static void setMetadata(EDTIRBuilder &Builder, SetVector<EDT *> &Inputs,
-                          SetVector<EDT *> &Outputs, int32_t ThreadNum = -1);
   static bool classof(const EDT *E) {
     return (E->getTypeKind() & EDTTypeKind::TK_TASK) == EDTTypeKind::TK_TASK;
   }
 
 private:
   int32_t ThreadNum = -1;
-  SetVector<EDT *> Inputs;
-  SetVector<EDT *> Outputs;
+  SmallVector<EDT *> Inputs;
+  SmallVector<EDT *> Outputs;
+  /// Symbolic inputs and outputs
+  SmallVector<StringRef, 4> SymInputs;
+  SmallVector<StringRef, 4> SymOutputs;
 };
 
 class MainEDT : public TaskEDT {
@@ -263,7 +254,6 @@ public:
   MainEDT(EDTFunction *Fn);
   ~MainEDT() = default;
 
-  static void setMetadata(EDTIRBuilder &Builder);
   static bool classof(const EDT *E) {
     return (E->getTypeKind() & EDTTypeKind::TK_MAIN) == EDTTypeKind::TK_MAIN;
   }
@@ -278,9 +268,6 @@ public:
   bool mustSyncChilds() const { return SyncChilds; }
   bool mustSyncDescendants() const { return SyncDescendants; }
 
-  static void setMetadata(EDTIRBuilder &Builder, SetVector<EDT *> &Inputs,
-                          SetVector<EDT *> &Outputs, bool SyncChilds = true,
-                          bool SyncDescendants = false, int32_t ThreadNum = -1);
   static bool classof(const EDT *E) {
     return (E->getTypeKind() & EDTTypeKind::TK_SYNC) == EDTTypeKind::TK_SYNC;
   }
@@ -288,8 +275,6 @@ public:
 protected:
   bool SyncChilds = true;
   bool SyncDescendants = true;
-  SetVector<EDT *> Inputs;
-  SetVector<EDT *> Outputs;
 };
 
 class ParallelEDT : public SyncEDT {
@@ -299,8 +284,6 @@ public:
 
   uint32_t getNumThreads() const { return NumThreads; }
 
-  static void setMetadata(EDTIRBuilder &Builder, int32_t ThreadNum = -1,
-                          uint32_t NumThreads = 1);
   static bool classof(const EDT *E) {
     return (E->getTypeKind() & EDTTypeKind::TK_PARALLEL) ==
            EDTTypeKind::TK_PARALLEL;

@@ -21,7 +21,7 @@ static void __attribute__((annotate("omp.single"))) edt_function_1(
   int random_number __attribute__((annotate("omp.default")))) {
 
       printf("EDT 0: The number is %d/%d\n", shared_number, random_number);
-      /// EDT 0 - @carts.edt
+      /// EDT 0 - @arts.edt
       taskFunction(shared_number, random_number);
     
 }

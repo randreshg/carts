@@ -302,13 +302,14 @@ bool ARTSTransform::identifyEDTs(Function &Fn) {
   return EDTFound;
 }
 
+
 Function *ARTSTransform::handleMain(Function &MainFn) {
   LLVM_DEBUG(dbgs() << TAG << "Processing main function\n");
   /// Create void function for the main EDT
   FunctionType *MainEDTFnTy = FunctionType::get(Type::getVoidTy(M.getContext()),
                                                 /*isVarArg=*/false);
   Function *MainEDTFn = Function::Create(
-      MainEDTFnTy, GlobalValue::InternalLinkage, CARTS_EDT_MAIN, &M);
+      MainEDTFnTy, GlobalValue::InternalLinkage, ARTS_EDT_MAIN, &M);
   replaceTerminatorsWithVoidReturn(&MainFn);
   /// Splice the body of the main function right into the new function
   MainEDTFn->splice(MainEDTFn->begin(), &MainFn);
@@ -320,7 +321,7 @@ Function *ARTSTransform::handleMain(Function &MainFn) {
                      EntryBB);
   /// Insert metadata
   EDTIRBuilder IRB(EDTType::Main, MainEDTFn);
-  MainEDT::setMetadata(IRB);
+  // MainEDT::setMetadata(IRB);
   /// Debug it
   LLVM_DEBUG(dbgs() << TAG << "Main EDT Function: " << *MainEDTFn << "\n");
   return MainEDTFn;
@@ -352,7 +353,7 @@ Instruction *ARTSTransform::handleParallel(CallBase &CB) {
 
   // /// Build the EDT
   // CallBase *NewCB =
-  //     IRB.buildEDT(&CB, Fn, fillRewiringMapFn, nullptr, CARTS_EDT_PARALLEL);
+  //     IRB.buildEDT(&CB, Fn, fillRewiringMapFn, nullptr, ARTS_EDT_PARALLEL);
   // ParallelEDT::setMetadata(IRB, -1, -1);
   // /// Identify EDTs for the new function
   // identifyEDTs(*IRB.getNewFn());
@@ -379,7 +380,7 @@ Instruction *ARTSTransform::handleSyncDoneRegion(CallBase &CB) {
   SetVector<Value *> Inputs, Outputs;
   Function *DoneEDTFn = CE.extractCodeRegion(CEAC, Inputs, Outputs);
   assert(DoneEDTFn && "DoneEDTFn is nullptr");
-  DoneEDTFn->setName(CARTS_EDT_SYNC_DONE);
+  DoneEDTFn->setName(ARTS_EDT_SYNC_DONE);
 
   /// Set Metadata
   EDTIRBuilder IRB(EDTType::Task, DoneEDTFn);
@@ -556,7 +557,7 @@ Instruction *ARTSTransform::handleTask(CallBase &CB) {
   // };
   // /// Build the EDT
   // auto *NewCB =
-  //     IRB.buildEDT(&CB, Fn, fillRewiringMapFn, CallToOmpTask, CARTS_EDT_TASK);
+  //     IRB.buildEDT(&CB, Fn, fillRewiringMapFn, CallToOmpTask, ARTS_EDT_TASK);
   // // TaskEDT::setMetadata(IRB, -1);
   // identifyEDTs(*IRB.getNewFn());
   // return NewCB;
@@ -683,7 +684,7 @@ Instruction *ARTSTransform::handleTask(CallBase &CB) {
 //   CodeExtractorAnalysisCache CEAC(*DoneFn);
 //   Function *SyncEDTFn = CE.extractCodeRegion(CEAC, Inputs, Outputs);
 //   assert(SyncEDTFn && "SyncEDTFn is nullptr");
-//   SyncEDTFn->setName(CARTS_EDT_SYNC);
+//   SyncEDTFn->setName(ARTS_EDT_SYNC);
 //   // LLVM_DEBUG(dbgs() << TAG << "SyncEDTFn: " << *SyncEDTFn << "\n");
 //   CallBase *SyncCB = dyn_cast<CallBase>(SyncEDTFn->user_back());
 //   // LLVM_DEBUG(dbgs() << TAG << "SyncCB: " << *SyncCB << "\n");
@@ -700,7 +701,7 @@ Instruction *ARTSTransform::handleTask(CallBase &CB) {
 //   SetVector<EDT *> EDTInputs, EDTOutputs;
 //   SyncEDT::setMetadata(IRB, EDTInputs, EDTOutputs, /*SyncChilds=*/true,
 //                        /*SyncDescendants=*/false);
-//   // SyncEDTFn->setName(CARTS_EDT_SYNC);
+//   // SyncEDTFn->setName(ARTS_EDT_SYNC);
 //   return SyncCB;
 // }
 
@@ -790,7 +791,7 @@ Instruction *ARTSTransform::handleOther(CallBase &CB) {
 
   /// Build the EDT
   // TaskEDT::setMetadata(IRB, -1);
-  Fn.setName(CARTS_EDT);
+  Fn.setName(ARTS_EDT);
   return CurI;
 }
 

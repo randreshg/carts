@@ -9,13 +9,15 @@ all: $(FILENAME)_transformed.ll
 %.ll: %.cpp
 	clang++ -fopenmp $< -Xclang -plugin -Xclang omp-plugin \
 		-fplugin=$(CARTS_PATH)/lib/libOpenMPPlugin.so -mllvm \
-		-debug-only=omp-plugin -S
+		-S
+		# -debug-only=omp-plugin -S
 	clang++ -O0 -g3 $*_annotaded.cpp -S -emit-llvm -o $@
 
 %.ll: %.c
 	clang -fopenmp $< -Xclang -plugin -Xclang omp-plugin \
 		-fplugin=$(CARTS_PATH)/lib/libOpenMPPlugin.so -mllvm \
 		-debug-only=omp-plugin -S
+		#-debug-only=omp-plugin -S
 	clang -O0 -g3 $*_annotaded.c -S -emit-llvm -o $@
 
 # Run ARTS Transform pass

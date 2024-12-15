@@ -64,28 +64,25 @@ opt -load-pass-plugin=/home/randres/projects/carts/.install/carts/lib/ARTSTransf
 [5 x { ptr, ptr, ptr, i32, ptr }] [{ ptr, ptr, ptr, i32, ptr } { ptr @_ZL14edt_function_4ii, ptr @.str.6, ptr @.str.1, i32 68, ptr null }, { ptr, ptr, ptr, i32, ptr } { ptr @_ZL14edt_function_2ii, ptr @.str.7, ptr @.str.1, i32 51, ptr null }, { ptr, ptr, ptr, i32, ptr } { ptr @_ZL14edt_function_5ii, ptr @.str.8, ptr @.str.1, i32 86, ptr null }, { ptr, ptr, ptr, i32, ptr } { ptr @_ZL14edt_function_1i, ptr @.str.9, ptr @.str.1, i32 44, ptr null }, { ptr, ptr, ptr, i32, ptr } { ptr @_ZL14edt_function_3i, ptr @.str.10, ptr @.str.1, i32 60, ptr null }]
 [arts-transform] Function: _ZL14edt_function_4ii
 [arts-transform] Annotation: arts.single
-[arts-transform]   - Type: arts.single
 [arts-transform] Function: _ZL14edt_function_2ii
 [arts-transform] Annotation: arts.task deps(in: a) deps(out: b)
 [arts-transform]   - Type: arts.task
-[arts-transform]   - Annotation: deps(in: a) deps(out: b)
-[arts-transform]   - Found depend(in: a)
-[arts-transform]   - Annotation: deps(out: b)
-[arts-transform]   - Found depend(out: b)
+[arts-transform]   - Input dependencies:
+[arts-transform]     - a
+[arts-transform]   - Output dependencies:
+[arts-transform]     - b
 [arts-transform] Function: _ZL14edt_function_5ii
 [arts-transform] Annotation: arts.parallel
-[arts-transform]   - Type: arts.parallel
 [arts-transform] Function: _ZL14edt_function_1i
 [arts-transform] Annotation: arts.task deps(in: b)
 [arts-transform]   - Type: arts.task
-[arts-transform]   - Annotation: deps(in: b)
-[arts-transform]   - Found depend(in: b)
-[arts-transform]   - Annotation: 
+[arts-transform]   - Input dependencies:
+[arts-transform]     - b
 [arts-transform] Function: _ZL14edt_function_3i
 [arts-transform] Annotation: arts.task deps(out: a)
 [arts-transform]   - Type: arts.task
-[arts-transform]   - Annotation: deps(out: a)
-[arts-transform]   - Annotation: )
+[arts-transform]   - Output dependencies:
+[arts-transform]     - a
 
 -------------------------------------------------
 [arts-transform] OmpTransformPass has finished

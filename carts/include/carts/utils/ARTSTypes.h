@@ -1,33 +1,64 @@
 //============================================================================//
-//                                ARTSTypes.h
-// - ARTS-Related types
+//                                ARTSTypes.h                                 //
 //============================================================================//
 
 #ifndef LLVM_ARTS_TYPES_H
 #define LLVM_ARTS_TYPES_H
 
-#include "llvm/IR/Instruction.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/IR/InstrTypes.h"
 #include <sys/types.h>
 
 namespace arts {
 using namespace llvm;
 using namespace std;
+
+/// Forward declarations
+class EDT;
+class DataBlock;
+
+/// Types
+using EDTValue = Value;
+using EDTValueSet = SetVector<EDTValue *>;
+using EDTCallBase = CallBase;
+using EDTSet = SetVector<EDT *>;
+using EDTFunction = Function;
+using EDTFunctionSet = SetVector<EDTFunction *>;
+using DataBlockSet = SetVector<DataBlock *>;
 using BlockSequence = SmallVector<BasicBlock *, 0>;
+
+/// ------------------------------------------------------------------- ///
+///                        ART Annotations                              ///
+/// It contains the types used by the ARTS runtime library.
+/// ------------------------------------------------------------------- ///
+namespace annotations {
+/// ARTS EDT Types
+#define ARTS_MD "arts"
+#define ARTS_EDT "arts.edt"
+#define ARTS_EDT_TASK "arts.edt.task"
+#define ARTS_EDT_MAIN "arts.edt.main"
+#define ARTS_EDT_SYNC "arts.edt.sync"
+#define ARTS_EDT_SYNC_DONE "arts.edt.sync.done"
+#define ARTS_EDT_PARALLEL "arts.edt.parallel"
+#define ARTS_EDT_PARALLEL_DONE "arts.edt.parallel.done"
+
+/// ARTS DB Types
+#define ARTS_DB "arts.db"
+#define ARTS_DB_READ "arts.db.read"
+#define ARTS_DB_WRITE "arts.db.write"
+#define ARTS_DB_READWRITE "arts.db.readwrite"
+#define ARTS_DB_PRIVATE "arts.db.private"
+#define ARTS_DB_FIRSTPRIVATE "arts.db.firstprivate"
+#define ARTS_DB_LASTPRIVATE "arts.db.lastprivate"
+#define ARTS_DB_SHARED "arts.db.shared"
+#define ARTS_DB_DEFAULT "arts.db.default"
+} // end namespace annotations
 
 /// ------------------------------------------------------------------- ///
 ///                            ART TYPES                                ///
 /// It contains the types used by the ARTS runtime library.
 /// ------------------------------------------------------------------- ///
 namespace types {
-/// ARTS runtime library (RTL) function names.
-#define CARTS_MD "carts"
-#define CARTS_EDT "carts.edt"
-#define CARTS_EDT_TASK "carts.edt.task"
-#define CARTS_EDT_MAIN "carts.edt.main"
-#define CARTS_EDT_SYNC "carts.edt.sync"
-#define CARTS_EDT_SYNC_DONE "carts.edt.sync.done"
-#define CARTS_EDT_PARALLEL "carts.edt.parallel"
-#define CARTS_EDT_PARALLEL_DONE "carts.edt.parallel.done"
 
 /// EDT types
 enum EDTTypeKind {

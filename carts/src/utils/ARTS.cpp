@@ -55,13 +55,13 @@ const Twine toString(EDTArgType Ty) {
 }
 
 EDTType toEDTType(StringRef Str) {
-  if (Str == "task")
+  if (Str.equals(ARTS_EDT_TASK))
     return EDTType::Task;
-  if (Str == "main")
+  if (Str.equals(ARTS_EDT_MAIN))
     return EDTType::Main;
-  if (Str == "sync")
+  if (Str.equals(ARTS_EDT_SYNC))
     return EDTType::Sync;
-  if (Str == "parallel")
+  if (Str.equals(ARTS_EDT_PARALLEL))
     return EDTType::Parallel;
   return EDTType::Unknown;
 }
@@ -180,33 +180,11 @@ EDT::EDT(EDTFunction *Fn) : Fn(Fn) {
                     << " for function: " << Fn->getName() << "\n");
   Env = new EDTEnvironment(this);
 
-  /// Fill out the EDT Data Environment
-  MDNode *MD = Fn->getMetadata(CARTS_MD);
-  auto *ArgMD = dyn_cast<MDNode>(MD->getOperand(1).get());
-  assert(ArgMD && "Arg Metadata Node is null");
-  assert(ArgMD->getNumOperands() == Fn->arg_size() &&
-         "Arg Metadata Node has invalid number of arguments");
-  auto ArgMDItr = ArgMD->op_begin();
-  for (auto &FnArg : Fn->args()) {
-    Value *V = &FnArg;
-    auto *ArgStr = dyn_cast<MDString>(ArgMDItr->get());
-    assert(ArgStr && "Arg Metadata String is null");
-    EDTArgType ArgTy = toEDTArgType(ArgStr->getString());
-    switch (ArgTy) {
-    case EDTArgType::Dep:
-      LLVM_DEBUG(dbgs() << "   - DepV: " << *V << "\n");
-      Env->insertDepV(V);
-      break;
-    case EDTArgType::Param:
-      LLVM_DEBUG(dbgs() << "   - ParamV: " << *V << "\n");
-      Env->insertParamV(V);
-      break;
-    default:
-      llvm_unreachable("Unknown EDTArgType");
-      break;
-    }
-    ArgMDItr++;
-  }
+  /// Fill out the EDT Data Environment based on the function arguments
+  // for (Argument &Arg : Fn->args()) {
+  //   /// Analyze function argument annotations
+  //   insertValueToEnv(&Arg);
+  // }
 }
 
 EDT::~EDT() {
@@ -215,27 +193,74 @@ EDT::~EDT() {
 }
 
 /// Get the EDT from the function
-EDT *EDT::get(EDTFunction *Fn) {
-  if (!Fn->hasMetadata(CARTS_MD)) {
+EDT *EDT::get(EDTFunction *Fn, string Annotation) {
+  StringRef EDTTy;
+  SmallVector<StringRef, 4> SymInputs, SymOutputs;
+
+  /// Lambda function to parse the annotation
+  auto parseAnnotation = [&](StringRef Annotation) {
+    /// Type of annotation: arts.parallel, arts.task, arts.single...
+    size_t Pos = Annotation.find(' ');
+    if (Pos == StringRef::npos)
+      return;
+
+    EDTTy = Annotation.substr(0, Pos);
+    LLVM_DEBUG(dbgs() << TAG << "  - Type: " << EDTTy << "\n");
+
+    /// Remove the type from the annotation
+    Annotation = Annotation.substr(Pos + 1);
+
+    auto SplitAnnotation = [](StringRef Annot) {
+      SmallVector<StringRef, 4> Tokens;
+      Annot.split(Tokens, ',');
+      return Tokens;
+    };
+
+    /// Parse the dependencies
+    if (Annotation.starts_with("deps(in: ")) {
+      Annotation = Annotation.substr(9);
+
+      Pos = Annotation.find(')');
+      if (Pos == StringRef::npos)
+        return;
+
+      SymInputs = SplitAnnotation(Annotation.substr(0, Pos));
+      LLVM_DEBUG(dbgs() << TAG << "  - Input dependencies:\n");
+      for (StringRef Input : SymInputs) {
+        LLVM_DEBUG(dbgs() << TAG << "    - " << Input << "\n");
+      }
+
+      /// Remove the dependencies from the annotation
+      Annotation = Annotation.substr(Pos + 2);
+    }
+
+    if (Annotation.starts_with("deps(out: ")) {
+      Annotation = Annotation.substr(10);
+
+      Pos = Annotation.find(')');
+      if (Pos == StringRef::npos)
+        return;
+
+      SymOutputs = SplitAnnotation(Annotation.substr(0, Pos));
+      LLVM_DEBUG(dbgs() << TAG << "  - Output dependencies:\n");
+      for (StringRef Output : SymOutputs) {
+        LLVM_DEBUG(dbgs() << TAG << "    - " << Output << "\n");
+      }
+    }
+  };
+
+  parseAnnotation(Annotation);
+  if (EDTTy.empty()) {
     LLVM_DEBUG(dbgs() << TAG << "Function: " << Fn->getName()
                       << " doesn't have CARTS Metadata\n");
     return nullptr;
   }
-  LLVM_DEBUG(dbgs() << TAG << "Function: " << Fn->getName()
-                    << " has CARTS Metadata\n");
-  /// Get the metadata node
-  MDNode *MD = Fn->getMetadata(CARTS_MD);
-  assert(MD && "CARTS Metadata Node is null");
-  assert(MD->getNumOperands() >= 2 &&
-         "CARTS Metadata Node is empty or incomplete");
-  /// Get the EDT Type
-  auto *TyMD = dyn_cast<MDString>(MD->getOperand(0).get());
-  assert(TyMD && "EDT Type Metadata is null");
-  EDTType Ty = toEDTType(TyMD->getString());
 
-  switch (Ty) {
+  LLVM_DEBUG(dbgs() << TAG << "Function: " << Fn->getName()
+                    << " has ARTS Metadata\n");
+  switch (toEDTType(EDTTy)) {
   case EDTType::Task:
-    return new TaskEDT(Fn);
+    return new TaskEDT(Fn, SymInputs, SymOutputs);
   case EDTType::Main:
     return new MainEDT(Fn);
   case EDTType::Sync:
@@ -243,9 +268,9 @@ EDT *EDT::get(EDTFunction *Fn) {
   case EDTType::Parallel:
     return new ParallelEDT(Fn);
   default:
-    break;
+    LLVM_DEBUG(dbgs() << TAG << "Unknown EDTType: " << EDTTy << "\n");
+    return nullptr;
   }
-  return nullptr;
 }
 
 /// Data Environment
@@ -255,8 +280,6 @@ void EDT::insertValueToEnv(Value *Val) {
     Env->insertDepV(Val);
   } else
     Env->insertParamV(Val);
-  /// TODO: Add extra info to OpenMP Frontend to have info about
-  /// Data Sharing attributes
 }
 
 void EDT::insertValueToEnv(Value *Val, bool IsDepV) {
@@ -320,6 +343,15 @@ uint32_t EDT::getNode() { return Node; }
 
 /// Task EDT
 TaskEDT::TaskEDT(EDTFunction *Fn) : EDT(Fn) {
+  LLVM_DEBUG(dbgs() << TAG << "Creating Task EDT for function: "
+                    << Fn->getName() << "\n");
+  Ty = EDTType::Task;
+  Kind = EDTTypeKind::TK_TASK;
+}
+
+TaskEDT::TaskEDT(EDTFunction *Fn, SmallVector<StringRef, 4> Inputs,
+                 SmallVector<StringRef, 4> Outputs)
+    : EDT(Fn), SymInputs(Inputs), SymOutputs(Outputs) {
   LLVM_DEBUG(dbgs() << TAG << "Creating Task EDT for function: "
                     << Fn->getName() << "\n");
   Ty = EDTType::Task;
