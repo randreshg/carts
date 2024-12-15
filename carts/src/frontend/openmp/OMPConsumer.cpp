@@ -19,6 +19,7 @@
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "llvm/IR/Instructions.h"
 
+#include "carts/utils/ARTSTypes.h"
 #include "llvm/Support/Debug.h"
 
 #include <sstream>
@@ -94,7 +95,7 @@ string OMPDirectiveInfo::getDependencies() const { return Dependencies; }
 ///                        ParallelDirectiveInfo                        ///
 /// ------------------------------------------------------------------- ///
 OMPParallelInfo::OMPParallelInfo(SourceLocation Loc)
-    : OMPDirectiveInfo("parallel", Loc) {}
+    : OMPDirectiveInfo(ARTS_EDT_PARALLEL, Loc) {}
 
 unsigned OMPParallelInfo::getNumThreads() const { return NumThreads; }
 
@@ -108,7 +109,8 @@ OMPParallelInfo::handleDirective(OMPExecutableDirective *Directive) {
 /// ------------------------------------------------------------------- ///
 ///                          TaskDirectiveInfo                          ///
 /// ------------------------------------------------------------------- ///
-OMPTaskInfo::OMPTaskInfo(SourceLocation Loc) : OMPDirectiveInfo("task", Loc) {}
+OMPTaskInfo::OMPTaskInfo(SourceLocation Loc)
+    : OMPDirectiveInfo(ARTS_EDT_TASK, Loc) {}
 
 bool OMPTaskInfo::hasDependencies() const {
   return !Inputs.empty() || !Outputs.empty();
@@ -186,7 +188,7 @@ void OMPVisitor::applyTransformations() {
     if (!Info->hasTransformation())
       continue;
 
-    string FuncName = "edt_function_" + std::to_string(++OutlinedFuncCounter);
+    string FuncName = "arts_function_" + std::to_string(++OutlinedFuncCounter);
     string Annotation =
         "arts." + Info->getType().str() + Info->getDependencies();
     string FuncAnnotation = "__attribute__((annotate(\"" + Annotation + "\")))";
@@ -353,22 +355,22 @@ void OMPVisitor::collectInfo(
     switch (Clause->getClauseKind()) {
     case llvm::omp::OMPC_private:
       processClause<OMPPrivateClause>(cast<OMPPrivateClause>(Clause),
-                                      "arts.private", CapturedVars,
+                                      ARTS_DB_PRIVATE, CapturedVars,
                                       CapturedMap);
       break;
     case llvm::omp::OMPC_firstprivate:
       processClause<OMPFirstprivateClause>(cast<OMPFirstprivateClause>(Clause),
-                                           "arts.firstprivate", CapturedVars,
+                                           ARTS_DB_FIRSTPRIVATE, CapturedVars,
                                            CapturedMap);
       break;
     case llvm::omp::OMPC_lastprivate:
       processClause<OMPLastprivateClause>(cast<OMPLastprivateClause>(Clause),
-                                          "arts.lastprivate", CapturedVars,
+                                          ARTS_DB_LASTPRIVATE, CapturedVars,
                                           CapturedMap);
       break;
     case llvm::omp::OMPC_shared:
       processClause<OMPSharedClause>(cast<OMPSharedClause>(Clause),
-                                     "arts.shared", CapturedVars, CapturedMap);
+                                     ARTS_DB_SHARED, CapturedVars, CapturedMap);
       break;
     case omp::OMPC_depend:
       DepsVector.push_back(
@@ -387,7 +389,7 @@ void OMPVisitor::collectInfo(
     /// Only add the variable if it has not been captured already
     if (CapturedMap.find(Name) == CapturedMap.end()) {
       CapturedVars.emplace_back(VD->getType().getAsString(), Name,
-                                "arts.default");
+                                ARTS_DB_DEFAULT);
       CapturedMap[Name] = &CapturedVars.back();
     }
   }

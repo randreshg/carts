@@ -29,6 +29,7 @@ public:
   bool identifyEDTs(Function &Fn);
 
 private:
+  void handleGlobalAnnotations();
   Function *handleMain(Function &MainFn);
   Instruction *handleParallel(CallBase &CB);
   Instruction *handleSyncDoneRegion(CallBase &CB);

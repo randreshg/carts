@@ -25,7 +25,7 @@ void short_computation(int &x) {
   }
 }
 
-/// EDT 1 - carts.edt
+/// EDT 1 - arts.edt
 int compute() {
   int a = 0;
   int b = 0;

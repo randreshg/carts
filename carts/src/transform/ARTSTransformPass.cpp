@@ -55,76 +55,8 @@ PreservedAnalyses ARTSTransformPass::run(Module &M, ModuleAnalysisManager &AM) {
     Functions.insert(&Fn);
   }
 
-  GlobalVariable *GA = M.getGlobalVariable("llvm.global.annotations");
-  if (!GA)
-    return PreservedAnalyses::all();
-
-  ConstantArray *CA = dyn_cast<ConstantArray>(GA->getOperand(0));
-  if (!CA)
-    return PreservedAnalyses::all();
-
-  LLVM_DEBUG(dbgs() << TAG << "Found global annotations\n" << *CA << "\n");
-  for (auto &Op : CA->operands()) {
-    ConstantStruct *CS = dyn_cast<ConstantStruct>(Op);
-    if (!CS)
-      continue;
-
-    /// Iterate over the operands of the annotation
-    /// Argument 0 is the function
-    Function *Fn = dyn_cast<Function>(CS->getOperand(0));
-    LLVM_DEBUG(dbgs() << TAG << "Function: " << Fn->getName() << "\n");
-
-    /// Argument 1 is the annotation of type private unnamed_addr constant
-    GlobalVariable *GV = dyn_cast<GlobalVariable>(CS->getOperand(1));
-    if (!GV->hasInitializer()) 
-      continue;
-
-    ConstantDataArray *CDA = dyn_cast<ConstantDataArray>(GV->getInitializer());
-    if (!CDA)
-      continue;
-
-    StringRef Annotation = CDA->getAsCString();
-    LLVM_DEBUG(dbgs() << TAG << "Annotation: " << Annotation << "\n");
-
-    /// Parse the annotation: 
-    /// - Type of annotation: arts.parallel, arts.task, arts.single...
-    size_t Pos = Annotation.find(" ");
-    StringRef AnnotationType = Annotation.substr(0, Pos);
-    LLVM_DEBUG(dbgs() << TAG << "  - Type: " << AnnotationType << "\n");
-
-    /// Remove the type from the annotation
-    if(Pos == std::string::npos)
-      continue;
-    Annotation = Annotation.substr(Pos + 1);
-    LLVM_DEBUG(dbgs() << TAG << "  - Annotation: " << Annotation << "\n");
-
-    /// Sepparate for comma or end of string
-    /// Get deps(in: )
-    if (Annotation.starts_with("deps(in: ")) {
-      Annotation = Annotation.substr(9);
-
-      Pos = Annotation.find(")");
-      StringRef Deps = Annotation.substr(0, Pos);
-      LLVM_DEBUG(dbgs() << TAG << "  - Found depend(in: " << Deps << ")\n");
-    }
-
-    Annotation = Annotation.substr(Pos + 2);
-    LLVM_DEBUG(dbgs() << TAG << "  - Annotation: " << Annotation << "\n");
-    if(Annotation.starts_with("deps(out: ")) {
-      Annotation = Annotation.substr(10);
-
-      Pos = Annotation.find(")");
-      StringRef Deps = Annotation.substr(0, Pos);
-      LLVM_DEBUG(dbgs() << TAG << "  - Found depend(out: " << Deps << ")\n");
-    }
-  }
-
-  /// Run the visitor
-  // OMPVisitor OV(M, Functions);
-  // OV.run(InputASTFilename);
-
   /// Run the transform
-  // ARTSTransform OT(M, AG);
+  ARTSTransform OT(M, AG);
   // OT.run(AM);
 
   // /// Create attributor

@@ -12,7 +12,6 @@ namespace arts {
 static constexpr auto TAG = "[" DEBUG_TYPE "] ";
 #endif
 
-
 ARTSCache::ARTSCache(Module &M, AnalysisGetter &AG, BumpPtrAllocator &Allocator,
                      SetVector<Function *> &Functions)
     : InformationCache(M, AG, Allocator, &Functions), M(M),
@@ -21,6 +20,8 @@ ARTSCache::ARTSCache(Module &M, AnalysisGetter &AG, BumpPtrAllocator &Allocator,
   LLVM_DEBUG(dbgs() << TAG << "Initializing ARTS Cache\n");
   Graph = new ARTSGraph();
   CG = new ARTSCodegen(this);
+  handleGlobalAnnotations();
+
   /// Analyzing the functions
   LLVM_DEBUG(dbgs() << " - Analyzing Functions\n");
   for (Function *Fn : Functions) {
@@ -37,8 +38,8 @@ ARTSCache::~ARTSCache() {
 
 /// EDTs
 EDT *ARTSCache::getEDT(Function *F) {
-  auto Itr = FunctionEDTMap.find(F);
-  if (Itr != FunctionEDTMap.end())
+  auto Itr = FnEDTMap.find(F);
+  if (Itr != FnEDTMap.end())
     return Itr->second;
   return nullptr;
 }
@@ -52,9 +53,16 @@ EDT *ARTSCache::getOrCreateEDT(Function *F) {
   if (E)
     return E;
 
-  if (EDT *CurrentEDT = EDT::get(F)) {
+  /// If the EDT does not exist, check if it has
+  /// an EDT Annotation
+  if (FnAnnotationMap.find(F) == FnAnnotationMap.end())
+    return nullptr;
+
+  /// If the EDT does not exist, create a new one
+  string Annotation = FnAnnotationMap[F];
+  if (EDT *CurrentEDT = EDT::get(F, Annotation)) {
     EDTs.insert(CurrentEDT);
-    FunctionEDTMap[F] = CurrentEDT;
+    FnEDTMap[F] = CurrentEDT;
     return CurrentEDT;
   }
   return nullptr;
@@ -164,5 +172,45 @@ SetVector<Function *> &ARTSCache::getFunctions() const { return Functions; }
 EDTSet &ARTSCache::getEDTs() { return EDTs; }
 ARTSGraph &ARTSCache::getGraph() { return *Graph; }
 ARTSCodegen &ARTSCache::getCG() { return *CG; }
+
+/// Global Annotations
+void ARTSCache::handleGlobalAnnotations() {
+  GlobalVariable *GA = M.getGlobalVariable("llvm.global.annotations");
+  if (!GA)
+    return;
+
+  ConstantArray *CA = dyn_cast<ConstantArray>(GA->getOperand(0));
+  if (!CA)
+    return;
+
+  for (auto &Op : CA->operands()) {
+    ConstantStruct *CS = dyn_cast<ConstantStruct>(Op);
+    if (!CS)
+      continue;
+
+    /// Argument 0 is the function
+    Function *Fn = dyn_cast<Function>(CS->getOperand(0));
+    if (!Fn)
+      continue;
+    LLVM_DEBUG(dbgs() << TAG << "Function: " << Fn->getName() << "\n");
+
+    /// Argument 1 is the annotation of type private unnamed_addr constant
+    GlobalVariable *GV = dyn_cast<GlobalVariable>(CS->getOperand(1));
+    if (!GV || !GV->hasInitializer())
+      continue;
+
+    ConstantDataArray *CDA = dyn_cast<ConstantDataArray>(GV->getInitializer());
+    if (!CDA)
+      continue;
+
+    StringRef Annotation = CDA->getAsCString();
+    LLVM_DEBUG(dbgs() << TAG << "Annotation: " << Annotation << "\n");
+
+    /// Store in map
+    FnAnnotationMap[Fn] = Annotation;
+
+    
+  }
+}
 
 } // namespace arts

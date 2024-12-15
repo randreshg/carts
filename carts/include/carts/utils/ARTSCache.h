@@ -32,9 +32,8 @@ public:
   /// DataBlock
   /// Given a ValueAndContext (EDTCall and EDTValue), create a DataBlock
   DataBlock *createDataBlock(AA::ValueAndContext VAC, DataBlock::Mode M,
-                                EDT *ContextEDT);
-  DataBlock *getOrCreateDataBlock(AA::ValueAndContext VAC,
-                                     int32_t ArgNo = -1);
+                             EDT *ContextEDT);
+  DataBlock *getOrCreateDataBlock(AA::ValueAndContext VAC, int32_t ArgNo = -1);
 
   /// Helper Functions
   /// Given an EDT, and a value (used in the EDT call), returns the EDT Function
@@ -58,13 +57,16 @@ public:
   ARTSCodegen &getCG();
 
 private:
+  void handleGlobalAnnotations();
+
   /// Module
   Module &M;
   /// Collection of IPO Functions
   SetVector<Function *> &Functions;
   /// Collection of known EDTs in the module
   EDTSet EDTs;
-  DenseMap<EDTFunction *, EDT *> FunctionEDTMap;
+  DenseMap<EDTFunction *, EDT *> FnEDTMap;
+  std::map<EDTFunction *, string> FnAnnotationMap;
   /// Collection of known DataBlocks in the module
   DataBlockSet DataBlocks;
   DenseMap<AA::ValueAndContext, int32_t> ValueAndCtxToCallArgItr;

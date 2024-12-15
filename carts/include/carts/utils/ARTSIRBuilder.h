@@ -47,7 +47,7 @@ public:
   CallBase *buildEDT(
       CallBase *OldCB, Function *OldFn,
       function<void(EDTIRBuilder *, Function *, Function *)> fillRewiringMapFn,
-      Instruction *InsertBefore = nullptr, std::string EDTName = CARTS_EDT);
+      Instruction *InsertBefore = nullptr, std::string EDTName = ARTS_EDT);
 
 private:
   EDTType Ty;
