@@ -1,11 +1,10 @@
 // Code 1
 
-#include <cstdlib>
-#include <stdio.h>
+// #include <cstdlib>
+// #include <stdlib.h>
 
-#include <omp.h>
-#include <stdlib.h>
-#include <time.h>
+/// cgeist taskwithdeps_annotaded.c -S  -I/usr/include --raise-scf-to-affine &> outputaffine.mlir
+/// polygeist-opt outputaffine.mlir --cse --affine-cfg --affine-scalrep --polygeist-mem2reg &> optimized.mlir
 
 void arts_acquire(void * ptr);
 void arts_signal(void * ptr);

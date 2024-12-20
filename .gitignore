@@ -1,8 +1,8 @@
-
 .cache
 .clangd
 .install
 .build
+.vscode
 compile_commands.json
 external
 external/llvm/

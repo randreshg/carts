@@ -1,55 +1,87 @@
-ARTS_DIR ?= external/arts
-LLVM_DIR ?= external/llvm
+# DESCRIPTION
+# - Makefile for CARTS
+# - Dependencies: ARTS, LLVM, Polygeist
+# - Required: CMake, Ninja, Clang, Clang++
 
-BUILD_DIR=.build
-HOOKS_DIR=.githooks
-CARTS_INSTALL_DIR ?= ${shell pwd}/.install
+
+# Source Directories
+CARTS_DIR = ${shell pwd}
+ARTS_DIR ?= ${CARTS_DIR}/external/arts
+POLYGEIST_DIR ?= ${CARTS_DIR}/external/Polygeist
+LLVM_DIR ?= ${POLYGEIST_DIR}/llvm-project
+
+# Install Directories
+CARTS_INSTALL_DIR ?= ${CARTS_DIR}/.install
 ARTS_INSTALL_DIR ?=$(CARTS_INSTALL_DIR)/arts
 LLVM_INSTALL_DIR ?=$(CARTS_INSTALL_DIR)/llvm
+POLYGEIST_INSTALL_DIR ?=$(CARTS_INSTALL_DIR)/polygeist
 
-NORM_RUNTIME=$(CARTS_INSTALL_DIR)/bin/CARTS-norm-runtime
-RUNTIME_BC=$(CARTS_INSTALL_DIR)/lib/CARTS.impl.bc
-DECL_BC=$(CARTS_INSTALL_DIR)/lib/CARTS.decl.bc
+# Build Directories
+CARTS_BUILD_DIR=.build
+ARTS_BUILD_DIR =$(ARTS_DIR)/build
+POLYGEIST_BUILD_DIR =$(POLYGEIST_DIR)/build
+LLVM_BUILD_DIR =$(LLVM_DIR)/build
 
+# Targets
+# all: hooks postinstall
 
-all: hooks postinstall
-
-# EXTERNAL DEPENDENCIES
 installdeps: arts
-
-# ENABLE
+	@echo "Installing dependencies"
+	@echo "Installing LLVM"
+	@make llvm
+	@echo "Installing Polygeist"
+	@make polygeist
 enable:
 	echo "export PATH=$(LLVM_INSTALL_DIR)/bin:\$$PATH" > enable
-	echo "export LD_LIBRARY_PATH=$(LLVM_INSTALL_DIR)/lib:$(ARTS_INSTALL_DIR)/lib:\$$LD_LIBRARY_PATH" >> enable
+	echo "export LD_LIBRARY_PATH=/home/randres/projects/CARTS/.install/polygeist/lib:LD_LIBRARY_PATH" >> enable
+
+activate:
+	echo "export PATH=$(POLYGEIST_INSTALL_DIR)/bin:$(LLVM_INSTALL_DIR)/bin:\$$PATH" > enable
+	echo "export LD_LIBRARY_PATH=$(POLYGEIST_INSTALL_DIR)/lib:$(LLVM_INSTALL_DIR)/lib:\$$LD_LIBRARY_PATH" >> enable
+
 # LLVM
-$(LLVM_DIR):
-	mkdir -p $@
-	[[ -z "$(shell ls -A $@)" ]] &&  git clone --depth 1 --branch carts https://github.com/randreshg/llvm-project.git $@
 llvm: .llvm
-.llvm: $(LLVM_DIR)
-	mkdir -p $</build
+.llvm:
+	mkdir -p $(LLVM_BUILD_DIR)
 	mkdir -p $(LLVM_INSTALL_DIR)
-	cmake -B $</build -S $</llvm -G Ninja \
+	cmake -B $(LLVM_BUILD_DIR) \
+		-S $(LLVM_DIR)/llvm -G Ninja \
 		-DCMAKE_INSTALL_PREFIX=$(LLVM_INSTALL_DIR) \
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_C_COMPILER=clang \
 		-DCMAKE_CXX_COMPILER=clang++ \
-		-DLLVM_ENABLE_RUNTIMES='openmp' \
-		-DLLVM_ENABLE_PROJECTS='clang;compiler-rt' \
-		-DLLVM_ENABLE_BACKTRACES=ON \
-		-DLLVM_APPEND_VC_REV=OFF \
-		-DLLVM_ENABLE_ASSERTIONS=ON \
-		-DBUILD_SHARED_LIBS=ON \
+		-DLLVM_ENABLE_PROJECTS='mlir;clang' \
 		-DLLVM_OPTIMIZED_TABLEGEN=ON \
-		-DLLVM_CCACHE_BUILD=OFF \
-		-DCLANG_ENABLE_STATIC_ANALYZER=ON  \
+		-DLLVM_TARGETS_TO_BUILD="host" \
+		-DLLVM_USE_LINKER=lld \
+		-DLLVM_ENABLE_ASSERTIONS=ON \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
-	ninja -C $</build install
+	ninja -C $(LLVM_BUILD_DIR) install
 llvm-clean:
 	# [[ -d $(LLVM_DIR) ]] && make -C $(LLVM_DIR) uninstall
 	[[ -d $(LLVM_DIR) ]] && rm -rf $(LLVM_DIR)
 	rm -f -r $(LLVM_INSTALL_DIR)
 
+# Polygeist
+polygeist-download:$(POLYGEIST_DIR)
+	mkdir -p $@
+	git clone --recursive https://github.com/llvm/Polygeist $@
+polygeist: .polygeist
+.polygeist: 
+	mkdir -p $(POLYGEIST_BUILD_DIR)
+	mkdir -p $(POLYGEIST_INSTALL_DIR)
+	cmake -B $(POLYGEIST_BUILD_DIR) \
+		-S $(POLYGEIST_DIR) -G Ninja \
+		-DCMAKE_INSTALL_PREFIX=$(POLYGEIST_INSTALL_DIR) \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_C_COMPILER=clang \
+		-DCMAKE_CXX_COMPILER=clang++ \
+		-DMLIR_DIR=$(LLVM_BUILD_DIR)/lib/cmake/mlir \
+		-DClang_DIR=$(LLVM_BUILD_DIR)/lib/cmake/clang/ \
+		-DLLVM_EXTERNAL_LIT="$(LLVM_BUILD_DIR)/bin/llvm-lit" \
+		-DLLVM_USE_LINKER=lld \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
+	ninja -C $(POLYGEIST_BUILD_DIR) install
 
 # ARTS
 $(ARTS_DIR):
@@ -59,7 +91,10 @@ arts: .arts
 .arts: $(ARTS_DIR)
 	mkdir -p $</build
 	mkdir -p $(ARTS_INSTALL_DIR)
-	cmake -B $</build -S $< -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR)
+	cmake -B $</build -S $< \
+		-DCMAKE_C_COMPILER=clang \
+		-DCMAKE_CXX_COMPILER=clang++ \
+		-DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR)
 	make -C $</build all -j
 	make -C $</build install -j
 arts-clean:
@@ -68,11 +103,12 @@ arts-clean:
 
 # CARTS
 build:
-	mkdir -p $(BUILD_DIR)
+	mkdir -p $(BUILD_DIR) -S . \
 	mkdir -p $(CARTS_INSTALL_DIR)
-	cmake -DCMAKE_INSTALL_PREFIX=$(CARTS_INSTALL_DIR)/carts \
-				-DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
-				-S . -B $(BUILD_DIR)
+	cmake -B $(BUILD_DIR)
+		-DCMAKE_C_COMPILER=clang \
+		-DCMAKE_CXX_COMPILER=clang++ \
+		-DCMAKE_INSTALL_PREFIX=$(CARTS_INSTALL_DIR)/carts
 	make -C $(BUILD_DIR) all -j
 
 install: build
