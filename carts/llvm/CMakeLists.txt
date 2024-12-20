@@ -37,4 +37,4 @@ link_directories(${LLVM_LIBRARY_DIRS})
 add_compile_options(${CARTS_CXX_FLAGS})
 
 # Add src directory
-add_subdirectory(src)
+add_subdirectory(lib)

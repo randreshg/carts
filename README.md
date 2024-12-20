@@ -1,5 +1,6 @@
 # CARTS
 
 ### Dependencies
-- LLVM 18
 - ARTS
+- LLVM 18
+- Polygeist
