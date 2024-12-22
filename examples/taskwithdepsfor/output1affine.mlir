@@ -14,30 +14,29 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i32, dense<32> : 
           %1 = arith.index_cast %arg3 : index to i32
           %2 = affine.load %arg1[%arg3] : memref<?xf64>
           affine.store %2, %alloca[] : memref<f64>
-          // omp.task   depend(taskdependout -> %alloca : memref<f64>) {
-          //   %6 = arith.sitofp %1 : i32 to f64
-          //   affine.store %6, %arg1[%arg3] : memref<?xf64>
-          //   omp.terminator
-          // }
-          // omp.taskwait
-          %3 = affine.load %arg1[%arg3] : memref<?xf64>
-          affine.store %3, %alloca_0[] : memref<f64>
+          omp.task   depend(taskdependout -> %alloca : memref<f64>) {
+            %6 = arith.sitofp %1 : i32 to f64
+            affine.store %6, %arg1[%arg3] : memref<?xf64>
+            omp.terminator
+          }
+          // %3 = affine.load %arg1[%arg3] : memref<?xf64>
+          // affine.store %3, %alloca_0[] : memref<f64>
           %4 = affine.load %arg1[%arg3 - 1] : memref<?xf64>
           affine.store %4, %alloca_1[] : memref<f64>
           %5 = affine.load %arg2[%arg3] : memref<?xf64>
           affine.store %5, %alloca_2[] : memref<f64>
-          // omp.task   depend(taskdependin -> %alloca_0 : memref<f64>, taskdependin -> %alloca_1 : memref<f64>, taskdependout -> %alloca_2 : memref<f64>) {
-          //   %6 = affine.load %arg1[%arg3] : memref<?xf64>
-          //   %7 = affine.if #set(%arg3) -> f64 {
-          //     %9 = affine.load %arg1[%arg3 - 1] : memref<?xf64>
-          //     affine.yield %9 : f64
-          //   } else {
-          //     affine.yield %cst : f64
-          //   }
-          //   %8 = arith.addf %6, %7 : f64
-          //   affine.store %8, %arg2[%arg3] : memref<?xf64>
-          //   omp.terminator
-          // }
+          omp.task   depend(taskdependin -> %alloca : memref<f64>, taskdependin -> %alloca_1 : memref<f64>, taskdependout -> %alloca_2 : memref<f64>) {
+            %6 = affine.load %arg1[%arg3] : memref<?xf64>
+            %7 = affine.if #set(%arg3) -> f64 {
+              %9 = affine.load %arg1[%arg3 - 1] : memref<?xf64>
+              affine.yield %9 : f64
+            } else {
+              affine.yield %cst : f64
+            }
+            %8 = arith.addf %6, %7 : f64
+            affine.store %8, %arg2[%arg3] : memref<?xf64>
+            omp.terminator
+          }
         }
         omp.terminator
       }
