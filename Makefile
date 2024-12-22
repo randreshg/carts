@@ -59,13 +59,13 @@ llvm: .llvm
 	ninja -C $(LLVM_BUILD_DIR) install
 llvm-clean:
 	# [[ -d $(LLVM_DIR) ]] && make -C $(LLVM_DIR) uninstall
-	[[ -d $(LLVM_DIR) ]] && rm -rf $(LLVM_DIR)
+	[[ -d $(LLVM_BUILD_DIR) ]] && rm -rf $(LLVM_BUILD_DIR)
 	rm -f -r $(LLVM_INSTALL_DIR)
 
 # Polygeist
-polygeist-download:$(POLYGEIST_DIR)
-	mkdir -p $@
-	git clone --recursive https://github.com/llvm/Polygeist $@
+polygeist-download:
+	mkdir -p $(POLYGEIST_DIR)
+	git clone --branch carts --recursive https://github.com/randreshg/Polygeist.git $(POLYGEIST_DIR) 
 polygeist: .polygeist
 .polygeist: 
 	mkdir -p $(POLYGEIST_BUILD_DIR)
@@ -86,7 +86,7 @@ polygeist: .polygeist
 # ARTS
 $(ARTS_DIR):
 	mkdir -p $@
-	git clone --depth 1 https://github.com/randreshg/ARTS.git $@
+	git clone https://github.com/randreshg/ARTS.git $@
 arts: .arts
 .arts: $(ARTS_DIR)
 	mkdir -p $</build
@@ -94,7 +94,8 @@ arts: .arts
 	cmake -B $</build -S $< \
 		-DCMAKE_C_COMPILER=clang \
 		-DCMAKE_CXX_COMPILER=clang++ \
-		-DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR)
+		-DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR) \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
 	make -C $</build all -j
 	make -C $</build install -j
 arts-clean:
