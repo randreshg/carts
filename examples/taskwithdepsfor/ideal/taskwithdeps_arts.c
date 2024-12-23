@@ -1,8 +1,6 @@
 
 
-/// clang++ taskwithdeps_arts.c -O3 -g3 -march=native -o $@
-/// -I/home/randres/projects/carts/.install/arts/include
-/// -L/home/randres/projects/carts/.install/arts/lib -larts -lrdmacm
+// clang taskwithdeps_arts.c -O3 -g0 -march=native -I/home/randres/projects/carts/.install/arts/include -o taskwithdeps_arts -L/home/randres/projects/carts/.install/arts/lib -larts -lrdmacm
 #include "arts.h"
 #include "artsRT.h"
 #include <stdint.h>
@@ -45,10 +43,26 @@ void computeB(uint32_t paramc, uint64_t *paramv, uint32_t depc,
   B_i[0] = A_i[0] + A_im1_val;
 }
 
+void printDataBlockA(uint32_t paramc, uint64_t *paramv, uint32_t depc,
+                     artsEdtDep_t depv[]) {
+  double *data = (double *)depv[0].ptr;
+  for (int i = 0; i < paramv[0]; i++) {
+    printf("A[%d]: %f\n", i, data[i]);
+  }
+}
+
+void printDataBlockB(uint32_t paramc, uint64_t *paramv, uint32_t depc,
+                     artsEdtDep_t depv[]) {
+  double *data = (double *)depv[0].ptr;
+  for (int i = 0; i < paramv[0]; i++) {
+    printf("B[%d]: %f\n", i, data[i]);
+  }
+}
+
 /// Parallel EDT
 void parallelEdt(uint32_t paramc, uint64_t *paramv, uint32_t depc,
                  artsEdtDep_t depv[]) {
-  printf("Parallel EDT\n");
+  printf("---------- Parallel EDT started ----------\n");
   /// Context
   unsigned int currentNode = artsGetCurrentNode();
   artsGuid_t epochGuid = artsGetCurrentEpochGuid();
@@ -57,47 +71,53 @@ void parallelEdt(uint32_t paramc, uint64_t *paramv, uint32_t depc,
 
   /// Parameters
   int N = paramv[0];
+  artsGatherArrayDb(A_array, printDataBlockA, 0, 1, paramv, 0);
+  artsGatherArrayDb(B_array, printDataBlockB, 0, 1, paramv, 0);
 
   // Preallocate all DataBlocks and events
   artsGuid_t *A_event = (artsGuid_t *)artsMalloc(N * sizeof(artsGuid_t));
   for (int i = 0; i < N; i++) {
     A_event[i] = artsEventCreate(currentNode, 1); // latchCount = 1
   }
-  // Create tasks for A[i] and B[i]
-  for (int i = 0; i < N; i++) {
-    // Task 1: Compute A[i]
-    uint64_t Aparams[] = {(uint64_t)i, (uint64_t)A_event[i]};
-    artsGuid_t A_edt = artsEdtCreateWithEpoch((artsEdt_t)computeA, currentNode,
-                                              2, Aparams, 1, epochGuid);
-    artsGetFromArrayDb(A_edt, 0, A_array, i);
+  // // Create tasks for A[i] and B[i]
+  // for (int i = 0; i < N; i++) {
+  //   // Task 1: Compute A[i]
+  //   uint64_t Aparams[] = {(uint64_t)i, (uint64_t)A_event[i]};
+  //   artsGuid_t A_edt = artsEdtCreateWithEpoch((artsEdt_t)computeA,
+  //   currentNode,
+  //                                             2, Aparams, 1, epochGuid);
+  //   artsGetFromArrayDb(A_edt, 0, A_array, i);
 
-    // Task 2: Compute B[i]
-    uint64_t Bparams[] = {(uint64_t)i};
-    // Dependencies: A[i], (A[i-1] if i > 0), and B[i]
-    int depCount = (i > 0) ? 3 : 2;
+  //   // Task 2: Compute B[i]
+  //   uint64_t Bparams[] = {(uint64_t)i};
+  //   // Dependencies: A[i], (A[i-1] if i > 0), and B[i]
+  //   int depCount = (i > 0) ? 3 : 2;
 
-    artsGuid_t B_edt = artsEdtCreateWithEpoch((artsEdt_t)computeB, currentNode,
-                                              2, Bparams, depCount, epochGuid);
+  //   artsGuid_t B_edt = artsEdtCreateWithEpoch((artsEdt_t)computeB,
+  //   currentNode,
+  //                                             2, Bparams, depCount,
+  //                                             epochGuid);
 
-    // Add dependencies to B[i] EDT through events
-    // Dependency: A[i]
-    artsAddDependence(A_event[i], B_edt, 0); 
-    if (i > 0) {
-      // Dependency: A[i-1]
-      artsAddDependence(A_event[i - 1], B_edt, 1); 
-    }
-    artsGetFromArrayDb(B_edt, 2, B_array, i);
-    // artsSignalEdt(B_edt, depCount - 1, B_db[i]); // Dependency: B[i] DataBlock
-  }
+  //   // Add dependencies to B[i] EDT through events
+  //   // Dependency: A[i]
+  //   artsAddDependence(A_event[i], B_edt, 0);
+  //   if (i > 0) {
+  //     // Dependency: A[i-1]
+  //     artsAddDependence(A_event[i - 1], B_edt, 1);
+  //   }
+  //   artsGetFromArrayDb(B_edt, 2, B_array, i);
+  //   // artsSignalEdt(B_edt, depCount - 1, B_db[i]); // Dependency: B[i]
+  //   // DataBlock
+  // }
 }
 
 void parallelDoneEdt(uint32_t paramc, uint64_t *paramv, uint32_t depc,
                      artsEdtDep_t depv[]) {
-  printf("Parallel Done EDT\n");
+  printf("---------- Parallel EDT finished ----------\n");
 }
 
 void computeEDT(int N, artsArrayDb_t *A_array, artsArrayDb_t *B_array) {
-  printf("Compute EDT\n");
+  printf("---------- Compute EDT ----------\n");
   // Context
   unsigned int currentNode = artsGetCurrentNode();
   artsGuid_t epochGuid = artsGetCurrentEpochGuid();
@@ -116,6 +136,12 @@ void computeEDT(int N, artsArrayDb_t *A_array, artsArrayDb_t *B_array) {
   //     parallelDoneEpochGuid);
   //   artsSignalEdt(parallelEdtGuid, 0, NULL_GUID);
   // }
+
+  /// paramv is N
+  // uint64_t paramv[1] = {(uint64_t)N};
+  // artsGatherArrayDbEpoch(A_array, printDataBlockA, 0, 1, paramv, 0, epochGuid);
+  // artsGatherArrayDbEpoch(B_array, printDataBlockB, 0, 1, paramv, 0, epochGuid);
+
   /// As of now, let's create only one instance of parallelEdt
   uint64_t parallelParams[1] = {(uint64_t)N};
   uint64_t parallelDeps = 2;
@@ -129,17 +155,21 @@ void computeEDT(int N, artsArrayDb_t *A_array, artsArrayDb_t *B_array) {
 
   /// Wait for the epoch to finish
   artsWaitOnHandle(parallelDoneEpochGuid);
+  printf("---------- Compute EDT finished ----------\n");
 }
 
 void finishMainEdt(uint32_t paramc, uint64_t *paramv, uint32_t depc,
                    artsEdtDep_t depv[]) {
+  printf("--------------------------------------\n");
   printf("The program has finished its execution\n");
+  printf("--------------------------------------\n");
   artsShutdown();
 }
 
 // Main EDT: Sets up the epoch, creates DataBlocks, events, and tasks
 void mainEdt(uint32_t paramc, uint64_t *paramv, uint32_t depc,
              artsEdtDep_t depv[]) {
+  printf("---------- Main EDT ----------\n");
   unsigned int currentNode = artsGetCurrentNode();
   // Create a finish EDT to end the epoch
   artsGuid_t finishMainEdtGuid =
@@ -168,14 +198,12 @@ void mainEdt(uint32_t paramc, uint64_t *paramv, uint32_t depc,
       artsNewLocalArrayDbWithGuid(B_guid, sizeof(double), N, (void *)B);
 
   /// We dont need the arrays anymore
-  artsFree(A);
-  artsFree(B);
+  // artsFree(A);
+  // artsFree(B);
 
-  /// Create parallel EDT
-  uint64_t parallelParams[1] = {(uint64_t)N};
-  artsGuid_t parallelEdtGuid =
-      artsEdtCreateWithEpoch((artsEdt_t)parallelEdt, currentNode, 1,
-                             parallelParams, 0, finishMainEpochGuid);
+  computeEDT(N, A_array, B_array);
+  // artsWaitOnHandle(finishMainEpochGuid);
+  printf("---------- Main EDT finished ----------\n");
 }
 
 // initPerNode: Reserved for node-specific initializations

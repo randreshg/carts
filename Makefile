@@ -32,12 +32,8 @@ installdeps: arts
 	@echo "Installing Polygeist"
 	@make polygeist
 enable:
-	echo "export PATH=$(LLVM_INSTALL_DIR)/bin:\$$PATH" > enable
-	echo "export LD_LIBRARY_PATH=/home/randres/projects/CARTS/.install/polygeist/lib:LD_LIBRARY_PATH" >> enable
-
-activate:
 	echo "export PATH=$(POLYGEIST_INSTALL_DIR)/bin:$(LLVM_INSTALL_DIR)/bin:\$$PATH" > enable
-	echo "export LD_LIBRARY_PATH=$(POLYGEIST_INSTALL_DIR)/lib:$(LLVM_INSTALL_DIR)/lib:\$$LD_LIBRARY_PATH" >> enable
+	echo "export LD_LIBRARY_PATH=$(POLYGEIST_INSTALL_DIR)/lib:$(ARTS_INSTALL_DIR)/lib:$(LLVM_INSTALL_DIR)/lib:\$$LD_LIBRARY_PATH" >> enable
 
 # LLVM
 llvm: .llvm
