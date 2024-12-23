@@ -86,7 +86,7 @@ polygeist: .polygeist
 # ARTS
 $(ARTS_DIR):
 	mkdir -p $@
-	git clone https://github.com/randreshg/ARTS.git $@
+	git clone --recursive https://github.com/randreshg/ARTS.git $@
 arts: .arts
 .arts: $(ARTS_DIR)
 	mkdir -p $</build
