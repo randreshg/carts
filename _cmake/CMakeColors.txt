@@ -28,6 +28,14 @@ function( message_blue text )
     message("${Blue}" ${text} "${ColourReset}")
 endfunction(message_blue)
 
+function( message_title text )
+    message("${BoldBlue}" ${text} "${ColourReset}")
+endfunction(message_title)
+
+function( message_info text )
+    message("${Magenta}" ${text} "${ColourReset}")
+endfunction(message_info)
+
 function( error_red text )
     message(SEND_ERROR "${Red}" ${text} "${ColourReset}")
 endfunction(error_red)

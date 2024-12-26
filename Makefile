@@ -35,9 +35,28 @@ enable:
 	echo "export PATH=$(POLYGEIST_INSTALL_DIR)/bin:$(LLVM_INSTALL_DIR)/bin:\$$PATH" > enable
 	echo "export LD_LIBRARY_PATH=$(POLYGEIST_INSTALL_DIR)/lib:$(ARTS_INSTALL_DIR)/lib:$(LLVM_INSTALL_DIR)/lib:\$$LD_LIBRARY_PATH" >> enable
 
+# Polygeist
+polygeist-download:
+	mkdir -p $(POLYGEIST_DIR)
+	git clone --branch carts --recursive https://github.com/randreshg/Polygeist.git $(POLYGEIST_DIR) 
+polygeist:
+	mkdir -p $(POLYGEIST_BUILD_DIR)
+	mkdir -p $(POLYGEIST_INSTALL_DIR)
+	cmake -B $(POLYGEIST_BUILD_DIR) \
+		-S $(POLYGEIST_DIR) -G Ninja \
+		-DCMAKE_INSTALL_PREFIX=$(POLYGEIST_INSTALL_DIR) \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_C_COMPILER=clang \
+		-DCMAKE_CXX_COMPILER=clang++ \
+		-DMLIR_DIR=$(LLVM_BUILD_DIR)/lib/cmake/mlir \
+		-DClang_DIR=$(LLVM_BUILD_DIR)/lib/cmake/clang \
+		-DLLVM_EXTERNAL_LIT="$(LLVM_BUILD_DIR)/bin/llvm-lit" \
+		-DLLVM_USE_LINKER=lld \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
+	ninja -C $(POLYGEIST_BUILD_DIR) install
+
 # LLVM
-llvm: .llvm
-.llvm:
+llvm:
 	mkdir -p $(LLVM_BUILD_DIR)
 	mkdir -p $(LLVM_INSTALL_DIR)
 	cmake -B $(LLVM_BUILD_DIR) \
@@ -54,59 +73,41 @@ llvm: .llvm
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
 	ninja -C $(LLVM_BUILD_DIR) install
 llvm-clean:
-	# [[ -d $(LLVM_DIR) ]] && make -C $(LLVM_DIR) uninstall
 	[[ -d $(LLVM_BUILD_DIR) ]] && rm -rf $(LLVM_BUILD_DIR)
 	rm -f -r $(LLVM_INSTALL_DIR)
 
-# Polygeist
-polygeist-download:
-	mkdir -p $(POLYGEIST_DIR)
-	git clone --branch carts --recursive https://github.com/randreshg/Polygeist.git $(POLYGEIST_DIR) 
-polygeist: .polygeist
-.polygeist: 
-	mkdir -p $(POLYGEIST_BUILD_DIR)
-	mkdir -p $(POLYGEIST_INSTALL_DIR)
-	cmake -B $(POLYGEIST_BUILD_DIR) \
-		-S $(POLYGEIST_DIR) -G Ninja \
-		-DCMAKE_INSTALL_PREFIX=$(POLYGEIST_INSTALL_DIR) \
-		-DCMAKE_BUILD_TYPE=Release \
-		-DCMAKE_C_COMPILER=clang \
-		-DCMAKE_CXX_COMPILER=clang++ \
-		-DMLIR_DIR=$(LLVM_BUILD_DIR)/lib/cmake/mlir \
-		-DClang_DIR=$(LLVM_BUILD_DIR)/lib/cmake/clang/ \
-		-DLLVM_EXTERNAL_LIT="$(LLVM_BUILD_DIR)/bin/llvm-lit" \
-		-DLLVM_USE_LINKER=lld \
-		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
-	ninja -C $(POLYGEIST_BUILD_DIR) install
-
 # ARTS
-$(ARTS_DIR):
-	mkdir -p $@
-	git clone --recursive https://github.com/randreshg/ARTS.git $@
-arts: .arts
-.arts: $(ARTS_DIR)
-	mkdir -p $</build
+arts-download:
+	mkdir -p $(ARTS_DIR)
+	git clone --recursive https://github.com/randreshg/ARTS.git $(ARTS_DIR)
+arts:
+	mkdir -p $(ARTS_BUILD_DIR)
 	mkdir -p $(ARTS_INSTALL_DIR)
-	cmake -B $</build -S $< \
+	cmake -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) \
 		-DCMAKE_C_COMPILER=clang \
 		-DCMAKE_CXX_COMPILER=clang++ \
 		-DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR) \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
-	make -C $</build all -j
-	make -C $</build install -j
+	make -C $(ARTS_BUILD_DIR) all -j
+	make -C $(ARTS_BUILD_DIR) -j
 arts-clean:
 	rm -f -r $(ARTS_DIR)
 	rm -f -r $(ARTS_INSTALL_DIR)
 
 # CARTS
 build:
-	mkdir -p $(BUILD_DIR) -S . \
+	mkdir -p $(CARTS_BUILD_DIR)
 	mkdir -p $(CARTS_INSTALL_DIR)
-	cmake -B $(BUILD_DIR)
+	cmake -B $(CARTS_BUILD_DIR) \
+		-S $(CARTS_DIR) -G Ninja \
+		-DCMAKE_INSTALL_PREFIX=$(CARTS_INSTALL_DIR) \
+		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_C_COMPILER=clang \
 		-DCMAKE_CXX_COMPILER=clang++ \
-		-DCMAKE_INSTALL_PREFIX=$(CARTS_INSTALL_DIR)/carts
-	make -C $(BUILD_DIR) all -j
+		-DMLIR_DIR=$(LLVM_BUILD_DIR)/lib/cmake/mlir \
+		-DClang_DIR=$(LLVM_BUILD_DIR)/lib/cmake/clang \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
+		ninja -C $(CARTS_BUILD_DIR) install
 
 install: build
 	make -C $(BUILD_DIR) install -j

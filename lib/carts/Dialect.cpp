@@ -17,11 +17,11 @@ using namespace mlir::arts;
 // Arts dialect.
 //===----------------------------------------------------------------------===//
 
-void ArtsDialect::initialize() {
+void ARTSDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
 #include "carts/ArtsOps.cpp.inc"
       >();
 }
 
-#include "polygeist/ArtsOpsDialect.cpp.inc"
+#include "carts/ArtsOpsDialect.cpp.inc"

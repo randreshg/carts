@@ -1,34 +1,30 @@
-#pragma once
+//===- Dialect.h - Arts dialect ops -----------------*- C++ -*-===//
+//
+// This file is licensed under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
 
-#include "mlir/IR/OpDefinition.h"
+#ifndef CARTS_OPS_H
+#define CARTS_OPS_H
+
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
-#include "mlir/IR/Builders.h"
-#include "mlir/IR/Region.h"
+#include "mlir/IR/Dialect.h"
+#include "mlir/IR/Matchers.h"
+#include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/IR/OpImplementation.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Interfaces/ViewLikeInterface.h"
+#include "llvm/Support/CommandLine.h"
 
-// Generated dialect and ops headers:
-#include "arts/ARTSDialect.h.inc"   // from your Dialect.td
-#include "arts/ARTSOpsEnums.h.inc"  // if you have enums in TableGen
-#include "arts/ARTSOpsAttributes.h.inc" // if you have attr defns
-#include "arts/ARTSOps.h.inc"       // from your Ops.td (auto-generated)
+#define GET_OP_CLASSES
+#include "carts/ArtsOps.h.inc"
 
-// This file typically declares any additional C++ classes or helper 
-// methods for the ARTS ops, if you choose to do custom parse/print.
 
-namespace mlir {
-namespace arts {
 
-// Forward declare operation classes if needed:
-class EpochOp;
-class SingleOp;
-class ParallelOp;
-class EdtOp;
-class DataBlockCreateOp;
-
-/// Example: Provide a build function or other utility for EdtOp.
-void buildEdtOp(OpBuilder &builder, OperationState &state,
-                ArrayAttr parameters, ArrayAttr dependencies);
-
-} // end namespace arts
-} // end namespace mlir
+#endif // CARTS_OPS_H

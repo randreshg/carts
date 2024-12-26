@@ -1,63 +1,56 @@
-# include("./_cmake/CMakeColors.txt")
-# cmake_minimum_required(VERSION 3.13)
+include("./_cmake/CMakeColors.txt")
+cmake_minimum_required(VERSION 3.13.4)
 
-# project(CARTS C CXX)
+include(CheckCXXSourceCompiles)
 
-# set(LLVM_VERSION 18.1.8)
-# set(CLANG_ID "Clang")
+project(CARTS LANGUAGES CXX C)
+set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard to conform to")
 
-# message_blue("Compiling CARTS for LLVM version ${LLVM_VERSION}")
+message_title("Project CARTS")
 
-# # Check that we are compiling with clang.
-# if (NOT CMAKE_C_COMPILER_ID STREQUAL CLANG_ID)
-#   error_red(
-#     "C compiler ID is not clang!\n"
-#     "    Found compiler id ${CMAKE_CXX_COMPILER_ID}."
-#     " Ensure that your PATH is set correctly."
-#     " If it is not installed, do so at: https://releases.llvm.org/${LLVM_VERSION}/")
-# endif()
+# Building the project against a build area.
+message_blue("Searching for MLIRConfig.cmake in: ${MLIR_DIR}")
+find_package(MLIR REQUIRED CONFIG)
 
-# if (NOT CMAKE_CXX_COMPILER_ID STREQUAL CLANG_ID)
-#   error_red(
-#     "C++ compiler ID is not clang!"
-#     "    Found compiler id ${CMAKE_CXX_COMPILER_ID}."
-#     " Ensure that your PATH is set correctly."
-#     " If it is not installed, do so at: https://releases.llvm.org/${LLVM_VERSION}/")
-# endif()
+set(Clang_DIR ${CLANG_DIR})
+message_blue("Searching for ClangConfig.cmake in: ${Clang_DIR}")
 
+if(NOT LLVM_BUILD_MAIN_SRC_DIR)
+    set(LLVM_BUILD_MAIN_SRC_DIR ${CMAKE_SOURCE_DIR}/llvm-project/llvm)
+  endif()
+set(LLVM_SOURCE_DIR ${LLVM_BUILD_MAIN_SRC_DIR} CACHE STRING "Location of LLVM source")
 
-# # Check that clang/clang++ we are using is the correct version.
-# if (NOT CMAKE_C_COMPILER_VERSION VERSION_EQUAL LLVM_VERSION)
-#   error_red(
-#     "Clang version is not ${LLVM_VERSION}!"
-#     "    Found version ${CMAKE_C_COMPILER_VERSION}."
-#     " Ensure that your PATH is set correctly."
-#     " If it is not installed, do so at: https://releases.llvm.org/${LLVM_VERSION}/")
-# endif()
+# Status
+message_info("Using MLIRConfig.cmake in: ${MLIR_DIR}")
+message_info("Using LLVMConfig.cmake in: ${LLVM_DIR}")
+message_info("Using ClangConfig.cmake in: ${CLANG_DIR}")
 
-# if (NOT CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL LLVM_VERSION)
-#   error_red(
-#     "Clang++ version is not ${LLVM_VERSION}!"
-#     "    Found version ${CMAKE_CXX_COMPILER_VERSION}"
-#     " Ensure that your PATH is set correctly."
-#     " If it is not installed, do so at: https://releases.llvm.org/${LLVM_VERSION}/")
-# endif()
+# Set up the build and install paths.
+list(APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}")
+list(APPEND CMAKE_MODULE_PATH "${LLVM_CMAKE_DIR}")
+list(APPEND CMAKE_MODULE_PATH "${CLANG_CMAKE_DIR}")
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}")
+include(TableGen)
+include(AddLLVM)
+include(AddMLIR)
+# include(AddClang)
+include(HandleLLVMOptions)
 
-# # Set up the build and install paths.
-# set(CMAKE_STAGING_PREFIX ${CMAKE_BINARY_DIR})
-# set(CMAKE_INSTALL_LIBDIR ${CMAKE_INSTALL_PREFIX}/lib)
-# set(CMAKE_INSTALL_BINDIR ${CMAKE_INSTALL_PREFIX}/bin)
-# set(CMAKE_INSTALL_INCLUDEDIR ${CMAKE_INSTALL_PREFIX}/include)
+include_directories(${LLVM_INCLUDE_DIRS})
+include_directories(${CLANG_INCLUDE_DIRS})
+include_directories(${MLIR_INCLUDE_DIRS})
+include_directories(${PROJECT_SOURCE_DIR}/include)
+include_directories(${PROJECT_BINARY_DIR}/include)
+link_directories(${LLVM_BUILD_LIBRARY_DIR})
+add_definitions(${LLVM_DEFINITIONS})
 
-# set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-# add_custom_target(
-#   CompileCommands ALL
-#   COMMAND ${CMAKE_COMMAND} -E create_symlink
-#     ${CMAKE_BINARY_DIR}/compile_commands.json
-#     ${CMAKE_SOURCE_DIR}/compile_commands.json
-# )
+# set(CARTS_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+set(CARTS_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
+set(CARTS_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/include )
+set(CARTS_TOOLS_DIR ${CMAKE_BINARY_DIR}/bin)
+set(CARTS_UTILS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/utils)
 
-# # # configure_file(.cmake/enable.in enable @ONLY)
-# message_blue("Adding CARTS subdirectory...")
-
-# add_subdirectory(carts)
+# Add the subdirectories.
+message_blue("Adding lib and include subdirectories...")
+add_subdirectory(include)
+add_subdirectory(lib)
