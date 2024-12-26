@@ -1,4 +1,4 @@
-//===- PolygeistDialect.cpp - Polygeist dialect ---------------*- C++ -*-===//
+//===- ArtsDialect.cpp - Arts dialect ---------------*- C++ -*-===//
 //
 // This file is licensed under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,22 +6,22 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "polygeist/Dialect.h"
+#include "carts/Dialect.h"
 #include "mlir/IR/DialectImplementation.h"
-#include "polygeist/Ops.h"
+#include "carts/Ops.h"
 
 using namespace mlir;
-using namespace mlir::polygeist;
+using namespace mlir::arts;
 
 //===----------------------------------------------------------------------===//
-// Polygeist dialect.
+// Arts dialect.
 //===----------------------------------------------------------------------===//
 
-void PolygeistDialect::initialize() {
+void ArtsDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
-#include "polygeist/PolygeistOps.cpp.inc"
+#include "carts/ArtsOps.cpp.inc"
       >();
 }
 
-#include "polygeist/PolygeistOpsDialect.cpp.inc"
+#include "polygeist/ArtsOpsDialect.cpp.inc"
