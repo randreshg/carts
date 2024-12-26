@@ -24,7 +24,7 @@ include "mlir/Dialect/LLVMIR/LLVMInterfaces.td"
 /////////////////////////////////////////////////////////////////////////
 // arts.edt
 /////////////////////////////////////////////////////////////////////////
-def EdtOp : ARTS_Op<"edt",
+def EdtOp : Arts_Op<"edt",
     [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
 
   let summary = "Event-Driven Task in ARTS";
@@ -52,7 +52,7 @@ def EdtOp : ARTS_Op<"edt",
 /////////////////////////////////////////////////////////////////////////
 // arts.epoch
 /////////////////////////////////////////////////////////////////////////
-def EpochOp : ARTS_Op<"epoch", 
+def EpochOp : Arts_Op<"epoch", 
     [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
   let summary = "Epoch region in ARTS";
   let description = [{
@@ -65,7 +65,7 @@ def EpochOp : ARTS_Op<"epoch",
 /////////////////////////////////////////////////////////////////////////
 // arts.parallel
 /////////////////////////////////////////////////////////////////////////
-def ParallelOp : ARTS_Op<"parallel", 
+def ParallelOp : Arts_Op<"parallel", 
     [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
   let summary = "Parallel region in ARTS";
   let description = [{
@@ -79,7 +79,7 @@ def ParallelOp : ARTS_Op<"parallel",
 /////////////////////////////////////////////////////////////////////////
 // arts.single
 /////////////////////////////////////////////////////////////////////////
-def SingleOp : ARTS_Op<"single",
+def SingleOp : Arts_Op<"single",
     [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
   let summary = "Single region in ARTS (like omp.master)";
   let description = [{
@@ -93,7 +93,7 @@ def SingleOp : ARTS_Op<"single",
 /////////////////////////////////////////////////////////////////////////
 // arts.datablock.create
 /////////////////////////////////////////////////////////////////////////
-// def ARTS_DataBlockCreateOp : ARTS_Op<"datablock.create",
+// def ARTS_DataBlockCreateOp : Arts_Op<"datablock.create",
 //     [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
 //   let summary = "Create a DataBlock in ARTS";
 //   let description = [{
@@ -112,7 +112,7 @@ def SingleOp : ARTS_Op<"single",
 /////////////////////////////////////////////////////////////////////////
 // arts.terminator
 /////////////////////////////////////////////////////////////////////////
-def YieldOp : ARTS_Op<"arts_yield", 
+def YieldOp : Arts_Op<"arts_yield", 
   [Pure, ReturnLike, Terminator, 
    ParentOneOf<["EdtOp", "EpochOp", "ParallelOp", "SingleOp"]>]> {
 
