@@ -6,7 +6,7 @@ add_mlir_dialect_library(MLIRarts
     ${PROJECT_SOURCE_DIR}/include/carts
 
   DEPENDS
-    MLIRPolygeistOpsIncGen
+    MLIRArtsOpsIncGen
 
   LINK_LIBS PUBLIC
     MLIRIR
@@ -18,5 +18,4 @@ add_mlir_dialect_library(MLIRarts
     MLIRSCFTransforms
 )
 
-add_subdirectory(Passes)
-# add_subdirectory(ExecutionEngine)
+# add_subdirectory(Passes)

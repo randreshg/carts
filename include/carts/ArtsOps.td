@@ -11,106 +11,117 @@
 #ifndef ARTS_OPS
 #define ARTS_OPS
 
-#include "mlir/IR/OpBase.td"
-#include "mlir/IR/Dialect.h.td"
-#include "mlir/Interfaces/SideEffectInterfaces.td"
+include "ArtsDialect.td"
 
-// Include the dialect definition if you have it in a separate .td file.
-// Or define the dialect in ARTSOpsDialect.td.
-#include "ARTSDialect.td"
+include "mlir/Interfaces/SideEffectInterfaces.td"
+include "mlir/Interfaces/ViewLikeInterface.td"
+include "mlir/Interfaces/ControlFlowInterfaces.td"
+include "mlir/IR/SymbolInterfaces.td"
+
+include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
+include "mlir/Dialect/LLVMIR/LLVMInterfaces.td"
 
 /////////////////////////////////////////////////////////////////////////
-// 1) arts.epoch
+// arts.edt
 /////////////////////////////////////////////////////////////////////////
+def EdtOp : ARTS_Op<"edt",
+    [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
 
-def ARTS_EpochOp : ARTS_Op<"epoch", [HasSingleBlockImplicitTerminator]> {
-  let summary = "Start a finish scope for tasks in the region.";
+  let summary = "Event-Driven Task in ARTS";
   let description = [{
-    The `arts.epoch` operation starts a region that collectively finishes
-    only when all tasks (EDTs) spawned inside have completed. 
-    It has a single region for the body.
+    Defines an ARTS event-driven task (EDT) with:
+      - Optional `parameters` that define task-specific inputs.
+      - `dependencies` that specify input/output memory dependencies.
+
+    The single-block region contains the task body. Parameters are provided
+    as SSA values, and dependencies are described as structured attributes
+    (e.g., memref, mode, indices).
   }];
 
-  let regions = (region AnyRegion:$body);
-
-  // Example custom assembly format:
-  //   arts.epoch { <region body> }
-  // If you don't define a custom parser/printer, you can rely on default.
-  let assemblyFormat = "`epoch` $body";
+  let regions = (region SizedRegion<1>:$body);
+  let arguments = (ins
+    // Task parameters as SSA values
+    Variadic<AnyType>:$parameters,
+    // Dependencies as structured attributes
+    ArrayAttr:$dependencies
+  );
+  // let assemblyFormat = 
+  //   "`edt` parameters(`$parameters`) dependencies(`$dependencies`) $body";
 }
 
 /////////////////////////////////////////////////////////////////////////
-// 2) arts.single
+// arts.epoch
 /////////////////////////////////////////////////////////////////////////
-
-def ARTS_SingleOp : ARTS_Op<"single", [HasSingleBlockImplicitTerminator]> {
-  let summary = "A region executed by exactly one worker.";
+def EpochOp : ARTS_Op<"epoch", 
+    [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
+  let summary = "Epoch region in ARTS";
   let description = [{
-    Similar to a single or master region in parallel frameworks. Only one 
-    worker enters this region. 
+    An ARTS epoch region. It can spawn multiple tasks and
+    synchronize them at the end of the epoch.
   }];
-
-  let regions = (region AnyRegion:$body);
-
-  let assemblyFormat = "`single` $body";
+  let regions = (region SizedRegion<1>:$body);
 }
 
 /////////////////////////////////////////////////////////////////////////
-// 3) arts.edt
+// arts.parallel
 /////////////////////////////////////////////////////////////////////////
-
-def ARTS_EdtOp : ARTS_Op<"edt", [HasSingleBlockImplicitTerminator]> {
-  let summary = "Define or create an ARTS Event-Driven Task (EDT)";
+def ParallelOp : ARTS_Op<"parallel", 
+    [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
+  let summary = "Parallel region in ARTS";
   let description = [{
-    Creates a new ARTS event-driven task with optional parameters 
-    and dependencies. The body region is the code executed by the task.
-    
-    * 'parameters' might be a list of captured values or static parameters.
-    * 'dependencies' might be a list of dictionary attributes specifying
-       (mode = in/out, memref/subview, index, etc.).
+    An ARTS parallel region. It can spawn multiple tasks.
+    Typically used to replicate something like `#pragma omp parallel`.
   }];
-
-  // Single region for the task body.
-  let regions = (region AnyRegion:$body);
-
-  // We’ll store the actual list of parameters/dependencies in attributes or operands.
-  // The assembly format below is just an example of DSL-like printing.
-  let assemblyFormat = [
-    "`edt`",
-    "parameters(",
-    "$parameters^",
-    ")",
-    "` dependencies(`",
-    "$dependencies^",
-    "`)`",
-    "$body"
-  ];
+  let regions = (region SizedRegion<1>:$body);
+  // let assemblyFormat = "`parallel` $body";
 }
 
 /////////////////////////////////////////////////////////////////////////
-// 4) arts.datablock.create
+// arts.single
 /////////////////////////////////////////////////////////////////////////
-
-def ARTS_DataBlockCreateOp : ARTS_Op<"datablock.create"> {
-  let summary = "Create an ARTS DataBlock with the given size or type";
+def SingleOp : ARTS_Op<"single",
+    [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
+  let summary = "Single region in ARTS (like omp.master)";
   let description = [{
-    This is an example op for allocating a DataBlock in the ARTS runtime.
-    Typically you might have attributes for size, alignment, or type.
+    A single region: only one thread/worker enters this region within a 
+    parallel edt.
   }];
+  let regions = (region SizedRegion<1>:$body);
+  // let assemblyFormat = "`single` $body";
+}
 
-  // If you want this op to produce a result representing the DataBlock GUID:
-  let results = (outs AnyType:$db);
+/////////////////////////////////////////////////////////////////////////
+// arts.datablock.create
+/////////////////////////////////////////////////////////////////////////
+// def ARTS_DataBlockCreateOp : ARTS_Op<"datablock.create",
+//     [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
+//   let summary = "Create a DataBlock in ARTS";
+//   let description = [{
+//     Allocates an ARTS DataBlock of a specified size or shape. 
+//     This might produce a guid or a memref representing the allocated block.
+//   }];
+//   // If you produce a single GUID or memref, define the result:
+//   let results = (outs AnyType:$result);
 
-  // Example attributes: we can store 'size', 'element_type', etc.
-  let assemblyFormat = [
-    "`datablock.create`",
-    "size(",
-    "$sizeAttr",
-    ")",
-    // If you have an optional alignment:
-    "` align(` $alignAttr `)`",
-    " `:` type($db)"
-  ];
+//   // If you want arguments:
+//   // e.g. size or alignment
+//   let arguments = (ins Variadic<Index>:$dims);
+//   let assemblyFormat = "`datablock.create` $dims* `:` type($result)";
+// }
+
+/////////////////////////////////////////////////////////////////////////
+// arts.terminator
+/////////////////////////////////////////////////////////////////////////
+def YieldOp : ARTS_Op<"arts_yield", 
+  [Pure, ReturnLike, Terminator, 
+   ParentOneOf<["EdtOp", "EpochOp", "ParallelOp", "SingleOp"]>]> {
+
+  let summary = "ARTS dialect yield terminator";
+  let description = [{
+    The `arts.yield` operation serves as a terminator for various ARTS operations, 
+    such as `arts.epoch`, `arts.parallel`, `arts.single`, and `arts.edt`.
+    It ensures proper control flow within the ARTS dialect by marking the end of a region.
+  }];
 }
 
 #endif // ARTS_OPS

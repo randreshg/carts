@@ -6,11 +6,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef BFV_BFVDIALECT_H
-#define BFV_BFVDIALECT_H
+#ifndef CARTS_DIALECT_H
+#define CARTS_DIALECT_H
 
 #include "mlir/IR/Dialect.h"
 
 #include "carts/ArtsOpsDialect.h.inc"
 
-#endif // BFV_BFVDIALECT_H
+#endif // CARTS_DIALECT_H
