@@ -17,7 +17,7 @@ using namespace mlir::arts;
 // Arts dialect.
 //===----------------------------------------------------------------------===//
 
-void ARTSDialect::initialize() {
+void ArtsDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
 #include "carts/ArtsOps.cpp.inc"
