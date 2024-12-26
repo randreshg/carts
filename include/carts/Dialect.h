@@ -1,4 +1,4 @@
-//===- BFVDialect.h - BFV dialect -----------------*- C++ -*-===//
+//===- Dialect.h - Arts dialect -----------------*- C++ -*-===//
 //
 // This file is licensed under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -11,6 +11,6 @@
 
 #include "mlir/IR/Dialect.h"
 
-#include "polygeist/PolygeistOpsDialect.h.inc"
+#include "carts/ArtsOpsDialect.h.inc"
 
 #endif // BFV_BFVDIALECT_H
