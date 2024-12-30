@@ -11,10 +11,11 @@ POLYGEIST_DIR ?= ${CARTS_DIR}/external/Polygeist
 LLVM_DIR ?= ${POLYGEIST_DIR}/llvm-project
 
 # Install Directories
-CARTS_INSTALL_DIR ?= ${CARTS_DIR}/.install
-ARTS_INSTALL_DIR ?=$(CARTS_INSTALL_DIR)/arts
-LLVM_INSTALL_DIR ?=$(CARTS_INSTALL_DIR)/llvm
-POLYGEIST_INSTALL_DIR ?=$(CARTS_INSTALL_DIR)/polygeist
+INSTALL_DIR ?= ${CARTS_DIR}/.install
+CARTS_INSTALL_DIR ?= ${INSTALL_DIR}/carts
+ARTS_INSTALL_DIR ?=$(INSTALL_DIR)/arts
+LLVM_INSTALL_DIR ?=$(INSTALL_DIR)/llvm
+POLYGEIST_INSTALL_DIR ?=$(INSTALL_DIR)/polygeist
 
 # Build Directories
 CARTS_BUILD_DIR=build
@@ -32,8 +33,8 @@ installdeps: arts
 	@echo "Installing Polygeist"
 	@make polygeist
 enable:
-	echo "export PATH=$(POLYGEIST_INSTALL_DIR)/bin:$(LLVM_INSTALL_DIR)/bin:\$$PATH" > enable
-	echo "export LD_LIBRARY_PATH=$(POLYGEIST_INSTALL_DIR)/lib:$(ARTS_INSTALL_DIR)/lib:$(LLVM_INSTALL_DIR)/lib:\$$LD_LIBRARY_PATH" >> enable
+	echo "export PATH=$(CARTS_INSTALL_DIR)/bin:$(POLYGEIST_INSTALL_DIR)/bin:$(LLVM_INSTALL_DIR)/bin:\$$PATH" > enable
+	echo "export LD_LIBRARY_PATH=$(CARTS_INSTALL_DIR)/lib:$(POLYGEIST_INSTALL_DIR)/lib:$(ARTS_INSTALL_DIR)/lib:$(LLVM_INSTALL_DIR)/lib:\$$LD_LIBRARY_PATH" >> enable
 
 # Polygeist
 polygeist-download:

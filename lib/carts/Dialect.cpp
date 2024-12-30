@@ -7,8 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "carts/Dialect.h"
-#include "mlir/IR/DialectImplementation.h"
 #include "carts/Ops.h"
+#include "mlir/IR/DialectImplementation.h"
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -16,7 +16,6 @@ using namespace mlir::arts;
 //===----------------------------------------------------------------------===//
 // Arts dialect.
 //===----------------------------------------------------------------------===//
-
 void ArtsDialect::initialize() {
   addOperations<
 #define GET_OP_LIST

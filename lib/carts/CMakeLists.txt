@@ -1,4 +1,4 @@
-add_mlir_dialect_library(MLIRarts
+add_mlir_dialect_library(MLIRArts
   Dialect.cpp
   Ops.cpp
 
@@ -18,4 +18,4 @@ add_mlir_dialect_library(MLIRarts
     MLIRSCFTransforms
 )
 
-# add_subdirectory(Passes)
+add_subdirectory(Passes)
