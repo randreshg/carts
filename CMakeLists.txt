@@ -70,6 +70,10 @@ set(CARTS_TOOLS_DIR ${CMAKE_BINARY_DIR}/bin)
 set(CARTS_UTILS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/utils)
 
 # Add the subdirectories.
-message_blue("Adding lib and include subdirectories...")
+message_blue("Adding subdirectories")
+message_blue(" -- Adding include")
 add_subdirectory(include)
+message_blue(" -- Adding lib")
 add_subdirectory(lib)
+message_blue(" -- Adding tools")
+add_subdirectory(tools)
