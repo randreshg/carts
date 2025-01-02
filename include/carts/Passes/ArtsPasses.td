@@ -11,6 +11,7 @@ def ConvertOpenMPToARTS : Pass<"convert-openmp-to-ARTS", "mlir::ModuleOp"> {
     "memref::MemRefDialect",
     "omp::OpenMPDialect",
     "LLVM::LLVMDialect",
+    "arts::ArtsDialect"
   ];
   let constructor = "mlir::arts::createConvertOpenMPtoARTSPass()";
 }

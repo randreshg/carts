@@ -55,6 +55,9 @@ polygeist:
 		-DLLVM_USE_LINKER=lld \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
 	ninja -C $(POLYGEIST_BUILD_DIR) install
+polygeist-clean:
+	rm -f -r $(POLYGEIST_DIR)
+	rm -f -r $(POLYGEIST_INSTALL_DIR)
 
 # LLVM
 llvm:

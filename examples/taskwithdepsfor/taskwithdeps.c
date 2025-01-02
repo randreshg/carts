@@ -9,7 +9,8 @@
 
 /// clang++ -fopenmp -std=c++17 taskwithdeps.cpp  -Xclang -plugin  -Xclang omp-plugin -fplugin=/home/randres/projects/carts/.install/carts/lib/libOpenMPPlugin.so -mllvm -debug-only=omp-plugin -S &> output.ll
 
-/// cgeist taskwithdeps.c -fopenmp -S  -I/usr/include --raise-scf-to-affine &> output1affine.mlir
+/// cgeist taskwithdeps.c -fopenmp -O3 -S -I/usr/include --raise-scf-to-affine &> taskwithdeps.mlir
+/// carts-opt taskwithdeps.mlir --convert-openmp-to-ARTS -debug-only=convert-openmp-to-arts &> taskwithdeps-arts.mlir
 /// polygeist-opt outputaffine.mlir --cse --affine-cfg --affine-scalrep --polygeist-mem2reg &> optimized.mlir
 
 void compute(int N, double *A, double *B) {
