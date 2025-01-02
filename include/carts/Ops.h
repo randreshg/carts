@@ -25,6 +25,41 @@
 #define GET_OP_CLASSES
 #include "carts/ArtsOps.h.inc"
 
+/// Copied from Polygeist/Ops.h
 
+namespace mlir::arts::utils {
+/// Collect the memory effects of the given op in 'effects'. Returns 'true' it
+/// could extract the effect information from the op, otherwise returns 'false'
+/// and conservatively populates the list with all possible effects.
+bool collectEffects(
+    mlir::Operation *op,
+    llvm::SmallVectorImpl<mlir::MemoryEffects::EffectInstance> &effects,
+    bool ignoreBarriers);
 
+/// Returns if we are non-conservative whether we have filled with all possible
+/// effects.
+bool getEffectsBefore(
+    mlir::Operation *op,
+    llvm::SmallVectorImpl<mlir::MemoryEffects::EffectInstance> &effects,
+    bool stopAtBarrier);
+
+bool getEffectsAfter(
+    mlir::Operation *op,
+    llvm::SmallVectorImpl<mlir::MemoryEffects::EffectInstance> &effects,
+    bool stopAtBarrier);
+
+bool isReadOnly(mlir::Operation *);
+bool isReadNone(mlir::Operation *);
+bool isCaptured(mlir::Value, mlir::Operation *potentialUser = nullptr,
+                bool *seenuse = nullptr);
+bool isStackAlloca(mlir::Value);
+
+bool mayReadFrom(mlir::Operation *, mlir::Value);
+// bool mayWriteTo(mlir::Operation *, mlir::Value, bool ignoreBarrier = false);
+
+bool mayAlias(mlir::MemoryEffects::EffectInstance a,
+              mlir::MemoryEffects::EffectInstance b);
+
+bool mayAlias(mlir::MemoryEffects::EffectInstance a, mlir::Value b);
+} /// namespace mlir::arts::utils
 #endif // CARTS_OPS_H

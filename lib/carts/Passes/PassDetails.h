@@ -26,14 +26,14 @@ class FunctionOpInterface;
 // Forward declaration from Dialect.h
 template <typename ConcreteDialect>
 void registerDialect(DialectRegistry &registry);
-namespace carts {
+namespace arts {
 
 class PolygeistDialect;
 
 #define GEN_PASS_CLASSES
 #include "carts/Passes/Passes.h.inc"
 
-} // namespace carts
+} // namespace arts
 } // namespace mlir
 
 #endif // DIALECT_CARTS_TRANSFORMS_PASSDETAILS_H
