@@ -19,14 +19,12 @@
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
-#include "mlir/Interfaces/ViewLikeInterface.h"
-#include "llvm/Support/CommandLine.h"
+#include "Types.h"
 
 #define GET_OP_CLASSES
 #include "carts/ArtsOps.h.inc"
 
 /// Copied from Polygeist/Ops.h
-
 namespace mlir::arts::utils {
 /// Collect the memory effects of the given op in 'effects'. Returns 'true' it
 /// could extract the effect information from the op, otherwise returns 'false'
