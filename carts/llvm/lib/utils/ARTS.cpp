@@ -11,8 +11,8 @@
 #include <cstdint>
 #include <string>
 
-#include "carts/utils/ARTS.h"
-#include "carts/utils/ARTSTypes.h"
+#include "arts/utils/ARTS.h"
+#include "arts/utils/ARTSTypes.h"
 
 using namespace llvm;
 using namespace std;

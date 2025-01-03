@@ -1,6 +1,5 @@
 add_mlir_dialect_library(MLIRArts
-  Dialect.cpp
-  Ops.cpp
+  ArtsDialect.cpp
 
   ADDITIONAL_HEADER_DIRS
     ${PROJECT_SOURCE_DIR}/include/carts

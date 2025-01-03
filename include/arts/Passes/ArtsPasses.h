@@ -1,14 +1,18 @@
 #ifndef CARTS_DIALECT_CARTS_PASSES_H
 #define CARTS_DIALECT_CARTS_PASSES_H
 
-#include "carts/Dialect.h"
+#include <memory>
+
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Conversion/LLVMCommon/LoweringOptions.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/Pass/Pass.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include <memory>
+
+
+#include "arts/ArtsDialect.h"
+
 
 namespace mlir {
 class PatternRewriter;
@@ -38,7 +42,7 @@ class LLVMDialect;
 }
 
 #define GEN_PASS_REGISTRATION
-#include "carts/Passes/Passes.h.inc"
+#include "arts/Passes/ArtsPasses.h.inc"
 
 } // end namespace mlir
 

@@ -18,11 +18,11 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/IPO/Attributor.h"
 
-#include "carts/transform/ARTSTransform.h"
+#include "arts/transform/ARTSTransform.h"
 
-#include "carts/utils/ARTS.h"
-#include "carts/utils/ARTSIRBuilder.h"
-#include "carts/utils/ARTSUtils.h"
+#include "arts/utils/ARTS.h"
+#include "arts/utils/ARTSIRBuilder.h"
+#include "arts/utils/ARTSUtils.h"
 
 using namespace llvm;
 using namespace arts;

@@ -5,9 +5,9 @@
 #include <cassert>
 #include <cstdint>
 
-#include "carts/analysis/graph/ARTSEdge.h"
-#include "carts/analysis/graph/ARTSGraph.h"
-#include "carts/utils/ARTS.h"
+#include "arts/analysis/graph/ARTSEdge.h"
+#include "arts/analysis/graph/ARTSGraph.h"
+#include "arts/utils/ARTS.h"
 
 using namespace llvm;
 using namespace arts;

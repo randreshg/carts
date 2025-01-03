@@ -7,7 +7,6 @@ set(LIBS
   MLIRArts
   MLIRArtsTransforms
   MLIRFuncAllExtensions
-  
 )
 
 add_llvm_executable(carts-opt carts-opt.cpp)

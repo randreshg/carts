@@ -7,9 +7,9 @@
 #include <stdlib.h>
 #include <time.h>
 
-/// clang++ -fopenmp -std=c++17 simple.cpp  -Xclang -add-plugin  -Xclang omp-plugin -fplugin=/home/randres/projects/carts/.install/carts/lib/libOpenMPPlugin.so -S -emit-llvm -o simple.ll
+/// clang++ -fopenmp -std=c++17 simple.cpp  -Xclang -add-plugin  -Xclang omp-plugin -fplugin=/home/randres/projects/arts/.install/arts/lib/libOpenMPPlugin.so -S -emit-llvm -o simple.ll
 
-/// clang++ -fopenmp -std=c++17 simple.cpp  -Xclang -plugin  -Xclang omp-plugin -fplugin=/home/randres/projects/carts/.install/carts/lib/libOpenMPPlugin.so -mllvm -debug-only=omp-plugin -S &> output.ll
+/// clang++ -fopenmp -std=c++17 simple.cpp  -Xclang -plugin  -Xclang omp-plugin -fplugin=/home/randres/projects/arts/.install/arts/lib/libOpenMPPlugin.so -mllvm -debug-only=omp-plugin -S &> output.ll
 
 
 /// EDT 1

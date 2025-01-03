@@ -1,4 +1,8 @@
-//===- ARTSDialect.td - ARTS Dialect ------------------------------*- tablegen -*-===//
+//===- ARTSDialect.td - ARTS Dialect -----------------------*- tablegen -*-===//
+//
+// This file defines the ARTS Dialect.
+//
+//===----------------------------------------------------------------------===//
 #ifndef ARTS_DIALECT
 #define ARTS_DIALECT
 
@@ -19,7 +23,7 @@ def ArtsDialect : Dialect {
 
 //===----------------------------------------------------------------------===//
 // ARTS operation definition.
-//===---------------------------------`-------------------------------------===//
+//===-----------------------------------------------------------------------===//
 class Arts_Op<string mnemonic, list<Trait> traits = []>
     : Op<ArtsDialect, mnemonic, traits>;
 

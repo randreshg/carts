@@ -5,10 +5,6 @@
 // (arts.parallel, arts.single, arts.edt).
 //===----------------------------------------------------------------------===//
 
-#include "PassDetails.h"
-
-// #include "mlir/Dialect/Affine/IR/AffineOps.h"
-// #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -20,12 +16,13 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/RegionUtils.h"
 
-#include "carts/Dialect.h"
-#include "carts/Ops.h"
-#include "carts/Passes/Passes.h"
-
-// #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
+
+#include "arts/ArtsDialect.h"
+#include "arts/Passes/ArtsPasses.h"
+#include "ArtsPassDetails.h"
+
+
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -45,6 +42,49 @@ struct ConvertOpenMPToARTSPass
 };
 } // namespace
 
+/// Collects parameters for any OpenMP region.
+/// Parameters are values used in the region but defined outside it.
+// static SmallVector<Value> collectParameters(Region &region) {
+//   SmallVector<Value> parameters;
+//   // Iterate through all operations in the region to collect external values
+//   region.walk([&](Operation *op) {
+//     for (Value operand : op->getOperands()) {
+//       if (auto definingOp = operand.getDefiningOp()) {
+//         // If the operand is defined outside the region, it's a parameter
+//         if (!region.isAncestor(definingOp->getParentRegion())) {
+//           if (llvm::find(parameters, operand) == parameters.end()) {
+//             parameters.push_back(operand);
+//           }
+//         }
+//       } else if (operand.isa<BlockArgument>()) {
+//         // Handle block arguments (e.g., loop-carried values)
+//         auto blockArg = operand.cast<BlockArgument>();
+//         if (!region.isAncestor(blockArg.getParentRegion())) {
+//           if (llvm::find(parameters, operand) == parameters.end()) {
+//             parameters.push_back(operand);
+//           }
+//         }
+//       }
+//     }
+//   });
+
+/// Collects parameters for the EdtOp
+static ArrayAttr collectParameters(Region &region, PatternRewriter &rewriter) {
+  SmallVector<Attribute> parameterAttrs;
+
+  // Collect all external values (parameters) used in the region
+  region.walk([&](Operation *op) {
+    for (Value operand : op->getOperands()) {
+      if (!region.isAncestor(operand.getParentRegion())) {
+        // Convert Value to Attribute using the rewriter context
+        parameterAttrs.push_back(rewriter.getIndexAttr(reinterpret_cast<int64_t>(operand.getAsOpaquePointer())));
+      }
+    }
+  });
+
+  // Create and return ArrayAttr for the parameters
+  return rewriter.getArrayAttr(parameterAttrs);
+}
 
 /// Pattern to replace `omp.parallel` with `arts.parallel`
 struct ParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
@@ -97,64 +137,31 @@ struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
 struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  // void getIndices(Value depVar, PatternRewriter &rewriter) const {
-  //   LLVM_DEBUG(dbgs() << "\n--Dependency buffer: " << depVar << "\n");
-  //   SmallVector<Attribute> indexAttrs;
-  //   for (Operation *user : depVar.getUsers()) {
-  //     /// If the user is a task, ignore it
-  //     /// Affine store
-  //     auto store = dyn_cast<affine::AffineStoreOp>(user);
-  //     if (!store)
-  //       continue;
-  //     auto storeVal = store.getValue();
-  //     if (auto load = storeVal.getDefiningOp<affine::AffineLoadOp>()) {
-  //       LLVM_DEBUG(dbgs() << "Load: " << load << "\n");
-  //       /// Memref
-  //       auto memref = load.getMemRef();
-  //       LLVM_DEBUG(dbgs() << "  - Memref: " << memref << "\n");
-  //       /// Indices
-  //       for (auto index : load.getMapOperands()) {
-  //         LLVM_DEBUG(dbgs() << "  - Index: " << index << "\n");
-  //         if (auto constantIndex = index.getDefiningOp<arith::ConstantIndexOp>()) {
-  //           indexAttrs.push_back(rewriter.getIndexAttr(constantIndex.value()));
-  //         } else {
-  //           if (auto constantIndex = index.getDefiningOp<arith::ConstantIndexOp>()) {
-  //               indexAttrs.push_back(rewriter.getIndexAttr(constantIndex.value()));
-  //           } else {
-  //               indexAttrs.push_back(rewriter.getAffineConstantExpr(index.cast<AffineExpr>()));
-  //           }
-  //         }
-
-  //       }
-  //     }
+  // ArrayAttr getDepArray(omp::TaskOp task, PatternRewriter &rewriter) const {
+  //   SmallVector<Attribute, 4> dependencies;
+  //   auto dependList = task.getDependsAttr();
+  //   for (unsigned i = 0, e = dependList.size(); i < e; ++i) {
+  //     auto depClause =
+  //         llvm::cast<mlir::omp::ClauseTaskDependAttr>(dependList[i]);
+  //     auto depType = stringifyClauseTaskDepend(depClause.getValue());
+  //     auto depVar = task.getDependVars()[i];
+  //     /// Process indices
+  //     SmallVector<Attribute> indexAttrs;
+  //     LLVM_DEBUG(dbgs() << "Depend clause: " << depType << " -> " << depVar
+  //                       << "\n");
+  //     auto dep = rewriter.create<arts::MakeDepAffineOp>(
+  //           loc, rewriter.getStringAttr(mode), memref,
+  //           rewriter.getAffineMapAttr(map), operands);
+  //     // Build a dictionary for each dependency.
+  //     // auto depDict = rewriter.getDictionaryAttr(
+  //     //     {rewriter.getNamedAttr("mode", rewriter.getStringAttr(depType)),
+  //     //      rewriter.getNamedAttr("memref", FlatSymbolRefAttr::get(subView)),
+  //     //      rewriter.getNamedAttr("indices",
+  //     //                            rewriter.getArrayAttr(indexAttrs))});
+  //     // dependencies.push_back(depDict);
   //   }
+  //   return rewriter.getArrayAttr(dependencies);
   // }
-
-  ArrayAttr getDepArray(omp::TaskOp task, PatternRewriter &rewriter) const {
-    SmallVector<Attribute, 4> dependencies;
-    auto dependList = task.getDependsAttr();
-    for (unsigned i = 0, e = dependList.size(); i < e; ++i) {
-      auto depClause =
-          llvm::cast<mlir::omp::ClauseTaskDependAttr>(dependList[i]);
-      auto depType = stringifyClauseTaskDepend(depClause.getValue());
-      auto depVar = task.getDependVars()[i];
-      /// Process indices
-      SmallVector<Attribute> indexAttrs;
-      LLVM_DEBUG(dbgs() << "Depend clause: " << depType << " -> " << depVar
-                        << "\n");
-      auto dep = rewriter.create<arts::MakeDepAffineOp>(
-            loc, rewriter.getStringAttr(mode), memref,
-            rewriter.getAffineMapAttr(map), operands);
-      // Build a dictionary for each dependency.
-      // auto depDict = rewriter.getDictionaryAttr(
-      //     {rewriter.getNamedAttr("mode", rewriter.getStringAttr(depType)),
-      //      rewriter.getNamedAttr("memref", FlatSymbolRefAttr::get(subView)),
-      //      rewriter.getNamedAttr("indices",
-      //                            rewriter.getArrayAttr(indexAttrs))});
-      // dependencies.push_back(depDict);
-    }
-    return rewriter.getArrayAttr(dependencies);
-  }
 
   LogicalResult matchAndRewrite(omp::TaskOp op,
                                 PatternRewriter &rewriter) const override {
@@ -162,8 +169,8 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
 
     /// Placeholder: build dependency and parameter arrays.
     // SmallVector<Value> params;
-    mlir::ValueRange parameters;
-    ArrayAttr dependencies = getDepArray(op, rewriter);
+    ArrayAttr parameters = collectParameters(op.getRegion(), rewriter);
+    SmallVector<Value> dependencies;
 
     /// Create a new `arts.edt` operation.
     auto edtOp = rewriter.create<arts::EdtOp>(loc, parameters, dependencies);

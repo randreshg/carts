@@ -1,18 +1,11 @@
-//===- ARTSOps.td - ARTS Dialect Operations ----------------------*- tablegen -*-===//
+//===- ARTSOps.td - ARTS Dialect Operations ----------------*- tablegen -*-===//
 //
-// This file defines multiple operations for the ARTS Dialect:
-//   1) arts.epoch
-//   2) arts.single
-//   3) arts.edt
-//   4) arts.datablock.create
+// This file defines multiple operations for the ARTS Dialect.
 //
 //===----------------------------------------------------------------------===//
 
 #ifndef ARTS_OPS
 #define ARTS_OPS
-
-include "ArtsDialect.td"
-include "ArtsTypes.td"
 
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
@@ -23,8 +16,13 @@ include "mlir/IR/SymbolInterfaces.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Dialect/LLVMIR/LLVMInterfaces.td"
 
+/// ARTS Dialect
+include "arts/ArtsDialect.td"
+include "arts/ArtsTypes.td"
 
-/// Operation to define affine dependencies
+//===----------------------------------------------------------------------===//
+// arts.make_dep_affine
+//===----------------------------------------------------------------------===//
 def MakeDepAffineOp : Arts_Op<"make_dep_affine", []> {
   let summary = "Creates an affine dependency for arts.edt";
   let description = [{
@@ -32,17 +30,13 @@ def MakeDepAffineOp : Arts_Op<"make_dep_affine", []> {
     It includes the mode, memref, affine map, and any related operands.
   }];
   
-  // Define the arguments as operands and attributes
   let arguments = (ins
     StrAttr:$mode,                      // Dependency mode (e.g., "in", "out", etc.)
     AnyMemRef:$memref,                  // Memory reference for dependency
     AffineMapAttr:$affine_map,          // Affine map for indexing
     Variadic<Index>:$affine_operands    // Variadic list of operands for affine map
   );
-
-  // The operation produces a single dependency result of type DepType
   let results = (outs DepType:$dep);
-
   let assemblyFormat = [{
     $mode `,` $memref `:` type($memref) `,` $affine_map `(` $affine_operands `)` attr-dict `:` type($dep)
   }];
@@ -54,6 +48,9 @@ def MakeDepAffineOp : Arts_Op<"make_dep_affine", []> {
   ];
 }
 
+//===----------------------------------------------------------------------===//
+// arts.edt
+//===----------------------------------------------------------------------===//
 def EdtOp : Arts_Op<"edt",
   [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
 
@@ -81,6 +78,9 @@ def EdtOp : Arts_Op<"edt",
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// arts.epoch
+//===----------------------------------------------------------------------===//
 def EpochOp : Arts_Op<"epoch", 
     [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
   let summary = "Epoch region in ARTS";
@@ -94,6 +94,9 @@ def EpochOp : Arts_Op<"epoch",
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// arts.parallel
+//===----------------------------------------------------------------------===//
 def ParallelOp : Arts_Op<"parallel", 
     [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
   let summary = "Parallel region in ARTS";
@@ -107,6 +110,9 @@ def ParallelOp : Arts_Op<"parallel",
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// arts.single
+//===----------------------------------------------------------------------===//
 def SingleOp : Arts_Op<"single",
     [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
   let summary = "Single region in ARTS (like omp.master)";
@@ -120,6 +126,9 @@ def SingleOp : Arts_Op<"single",
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// arts.yield
+//===----------------------------------------------------------------------===//
 def YieldOp : Arts_Op<"yield", 
   [Pure, ReturnLike, Terminator, 
    ParentOneOf<["EdtOp", "EpochOp", "ParallelOp", "SingleOp"]>]> {

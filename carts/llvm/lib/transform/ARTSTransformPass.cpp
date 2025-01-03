@@ -17,7 +17,7 @@
 #include <cassert>
 #include <cstddef>
 
-#include "carts/transform/ARTSTransform.h"
+#include "arts/transform/ARTSTransform.h"
 
 using namespace llvm;
 using namespace arts;

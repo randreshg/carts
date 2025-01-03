@@ -6,8 +6,8 @@
 #include "llvm/IR/Type.h"
 #include "llvm/Support/Debug.h"
 
-#include "carts/utils/ARTSIRBuilder.h"
-#include "carts/utils/ARTSUtils.h"
+#include "arts/utils/ARTSIRBuilder.h"
+#include "arts/utils/ARTSUtils.h"
 
 // DEBUG
 #define DEBUG_TYPE "arts-ir-builder"

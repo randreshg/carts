@@ -13,8 +13,8 @@
 #include <sys/types.h>
 #include <unordered_set>
 
-#include "carts/analysis/graph/ARTSEdge.h"
-#include "carts/utils/ARTS.h"
+#include "arts/analysis/graph/ARTSEdge.h"
+#include "arts/utils/ARTS.h"
 
 /// ------------------------------------------------------------------- ///
 ///                              ARTS GRAPH                              ///

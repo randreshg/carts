@@ -11,8 +11,8 @@
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 
-#include "carts/utils/ARTS.h"
-#include "carts/utils/ARTSTypes.h"
+#include "arts/utils/ARTS.h"
+#include "arts/utils/ARTSTypes.h"
 
 /// ------------------------------------------------------------------- ///
 ///                            ARTS UTILS                               ///

@@ -8,7 +8,7 @@
 #ifndef LLVM_API_CARTS_ARTSIRBUILDER_H
 #define LLVM_API_CARTS_ARTSIRBUILDER_H
 
-#include "carts/utils/ARTSTypes.h"
+#include "arts/utils/ARTSTypes.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instruction.h"

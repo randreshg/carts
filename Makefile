@@ -56,7 +56,7 @@ polygeist:
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
 	ninja -C $(POLYGEIST_BUILD_DIR) install
 polygeist-clean:
-	rm -f -r $(POLYGEIST_DIR)
+	rm -f -r $(POLYGEIST_BUILD_DIR)
 	rm -f -r $(POLYGEIST_INSTALL_DIR)
 
 # LLVM
@@ -77,7 +77,7 @@ llvm:
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
 	ninja -C $(LLVM_BUILD_DIR) install
 llvm-clean:
-	[[ -d $(LLVM_BUILD_DIR) ]] && rm -rf $(LLVM_BUILD_DIR)
+	rm -rf $(LLVM_BUILD_DIR)
 	rm -f -r $(LLVM_INSTALL_DIR)
 
 # ARTS

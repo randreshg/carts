@@ -7,7 +7,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include "carts/frontend/openmp/OMPConsumer.h"
+#include "arts/frontend/openmp/OMPConsumer.h"
 
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/RecursiveASTVisitor.h"
@@ -19,7 +19,7 @@
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "llvm/IR/Instructions.h"
 
-#include "carts/utils/ARTSTypes.h"
+#include "arts/utils/ARTSTypes.h"
 #include "llvm/Support/Debug.h"
 
 #include <sstream>

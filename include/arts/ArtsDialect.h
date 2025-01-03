@@ -1,4 +1,4 @@
-//===- Dialect.h - Arts dialect ops -----------------*- C++ -*-===//
+//===- Dialect.h - Arts dialect --------------------------------*- C++ -*-===//
 //
 // This file is licensed under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,25 +6,42 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef CARTS_OPS_H
-#define CARTS_OPS_H
+#ifndef CARTS_DIALECT_H
+#define CARTS_DIALECT_H
 
+#include "mlir/IR/Dialect.h"
+#include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
-#include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
-#include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
-#include "Types.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 
+//===----------------------------------------------------------------------===//
+// Arts Dialect
+//===----------------------------------------------------------------------===//
+#include "arts/ArtsOpsDialect.h.inc"
+
+//===----------------------------------------------------------------------===//
+// Arts Dialect Types
+//===----------------------------------------------------------------------===//
+#define GET_TYPEDEF_CLASSES
+#include "arts/ArtsOpsTypes.h.inc"
+
+//===----------------------------------------------------------------------===//
+// Arts Dialect Operations
+//===----------------------------------------------------------------------===//
 #define GET_OP_CLASSES
-#include "carts/ArtsOps.h.inc"
+#include "arts/ArtsOps.h.inc"
 
-/// Copied from Polygeist/Ops.h
+//===----------------------------------------------------------------------===//
+// Helper functions of Arts dialect transformations.
+//===----------------------------------------------------------------------===//
 namespace mlir::arts::utils {
 /// Collect the memory effects of the given op in 'effects'. Returns 'true' it
 /// could extract the effect information from the op, otherwise returns 'false'
@@ -60,4 +77,4 @@ bool mayAlias(mlir::MemoryEffects::EffectInstance a,
 
 bool mayAlias(mlir::MemoryEffects::EffectInstance a, mlir::Value b);
 } /// namespace mlir::arts::utils
-#endif // CARTS_OPS_H
+#endif // CARTS_DIALECT_H

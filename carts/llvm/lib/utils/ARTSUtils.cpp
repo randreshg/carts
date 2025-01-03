@@ -19,8 +19,8 @@
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <sys/types.h>
 
-// #include "carts/utils/ARTS.h"
-#include "carts/utils/ARTSUtils.h"
+// #include "arts/utils/ARTS.h"
+#include "arts/utils/ARTSUtils.h"
 
 using namespace llvm;
 

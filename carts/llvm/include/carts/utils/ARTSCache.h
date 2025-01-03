@@ -6,9 +6,9 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
 
-#include "carts/analysis/graph/ARTSGraph.h"
-#include "carts/codegen/ARTSCodegen.h"
-#include "carts/utils/ARTS.h"
+#include "arts/analysis/graph/ARTSGraph.h"
+#include "arts/codegen/ARTSCodegen.h"
+#include "arts/utils/ARTS.h"
 #include "llvm/Transforms/IPO/Attributor.h"
 
 /// ------------------------------------------------------------------- ///
