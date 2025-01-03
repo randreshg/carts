@@ -33,8 +33,8 @@
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "mlir/Transforms/Passes.h"
 
-#include "carts/Dialect.h"
-#include "carts/Passes/Passes.h"
+#include "arts/ArtsDialect.h"
+#include "arts/Passes/ArtsPasses.h"
 
 using namespace mlir;
 

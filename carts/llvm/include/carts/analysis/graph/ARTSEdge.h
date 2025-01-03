@@ -4,7 +4,7 @@
 #ifndef LLVM_ARTSEDGE_H
 #define LLVM_ARTSEDGE_H
 
-#include "carts/utils/ARTS.h"
+#include "arts/utils/ARTS.h"
 #include "llvm/ADT/SetVector.h"
 #include <sys/types.h>
 

@@ -23,13 +23,13 @@
 #include "llvm/Transforms/IPO/Attributor.h"
 #include "llvm/Transforms/Utils/CallGraphUpdater.h"
 
-#include "carts/analysis/graph/ARTSEdge.h"
-#include "carts/analysis/graph/ARTSGraph.h"
-#include "carts/codegen/ARTSCodegen.h"
-#include "carts/utils/ARTS.h"
+#include "arts/analysis/graph/ARTSEdge.h"
+#include "arts/analysis/graph/ARTSGraph.h"
+#include "arts/codegen/ARTSCodegen.h"
+#include "arts/utils/ARTS.h"
 
-#include "carts/utils/ARTSCache.h"
-#include "carts/utils/ARTSUtils.h"
+#include "arts/utils/ARTSCache.h"
+#include "arts/utils/ARTSUtils.h"
 
 using namespace llvm;
 using namespace arts;

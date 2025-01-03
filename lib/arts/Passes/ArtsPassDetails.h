@@ -18,8 +18,8 @@
 #define DIALECT_CARTS_TRANSFORMS_PASSDETAILS_H
 
 #include "mlir/Pass/Pass.h"
-#include "carts/Ops.h"
-#include "carts/Passes/Passes.h"
+#include "arts/ArtsDialect.h"
+#include "arts/Passes/ArtsPasses.h"
 
 namespace mlir {
 class FunctionOpInterface;
@@ -31,7 +31,7 @@ namespace arts {
 class PolygeistDialect;
 
 #define GEN_PASS_CLASSES
-#include "carts/Passes/Passes.h.inc"
+#include "arts/Passes/ArtsPasses.h.inc"
 
 } // namespace arts
 } // namespace mlir

@@ -13,12 +13,13 @@ include "ArtsDialect.td"
 //===----------------------------------------------------------------------===//
 // ARTS Types
 //===----------------------------------------------------------------------===//
-
 class Arts_Type<string name, string typeMnemonic> : TypeDef<ArtsDialect, name> {
   let mnemonic = typeMnemonic;
 }
 
-/// Dependency type in the ARTS dialect
+//===----------------------------------------------------------------------===//
+// arts.dep
+//===----------------------------------------------------------------------===//
 def DepType : Arts_Type<"Dep", "dep"> {
   let summary = "represents a dependency in the ARTS dialect";
   let description = [{
@@ -28,16 +29,20 @@ def DepType : Arts_Type<"Dep", "dep"> {
   }];
 }
 
-/// EDT token type in the ARTS dialect
-def EDTTokenType : Arts_Type<"EDTToken", "EDT_token"> {
+//===----------------------------------------------------------------------===//
+// arts.edt_token
+//===----------------------------------------------------------------------===//
+def EDTTokenType : Arts_Type<"EDTToken", "edt_token"> {
   let summary = "represents a EDT token in the ARTS dialect";
   let description = [{
-    `arts.EDT_token` represents a unique identifier for a EDT that allows
+    `arts.edt_token` represents a unique identifier for a EDT that allows
     synchronization and dependency tracking in ARTS-based EDT operations.
   }];
 }
 
-/// Event type in the ARTS dialect
+//===----------------------------------------------------------------------===//
+// arts.event
+//===----------------------------------------------------------------------===//
 def EventType : Arts_Type<"Event", "event"> {
   let summary = "represents an event in the ARTS dialect";
   let description = [{
@@ -46,15 +51,20 @@ def EventType : Arts_Type<"Event", "event"> {
   }];
 }
 
-/// Group type in the ARTS dialect
-def GroupType : Arts_Type<"Group", "group"> {
+//===----------------------------------------------------------------------===//
+// arts.edt_group
+//===----------------------------------------------------------------------===//
+def GroupType : Arts_Type<"EDTGroup", "edt_group"> {
   let summary = "represents a group of EDTs in the ARTS dialect";
   let description = [{
-    `arts.group` represents a collection of EDT tokens or events. It enables
+    `arts.edt_group` represents a collection of EDT tokens or events. It enables
     bulk operations on the group, such as waiting for all EDTs to complete.
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// Other ARTS Types
+//===----------------------------------------------------------------------===//
 /// Any value type or token type for ARTS operations
 def AnyValueOrEDTTokenType : AnyTypeOf<[EDTTokenType, DepType]>;
 

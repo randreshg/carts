@@ -1,5 +1,5 @@
 clang++ -fopenmp taskwithdeps.cpp -Xclang -plugin -Xclang omp-plugin \
-	-fplugin=/home/randres/projects/carts/.install/carts/lib/libOpenMPPlugin.so -mllvm \
+	-fplugin=/home/randres/projects/arts/.install/arts/lib/libOpenMPPlugin.so -mllvm \
 	-debug-only=omp-plugin -S
 - - - - - - - - - - - - - - - - - - - 
 Starting CARTS - OpenMPPluginAction...
@@ -52,7 +52,7 @@ Directive: parallel
     Dependencies: No
   Number of Threads: 1
 clang++ -O0 -g3 taskwithdeps_annotaded.cpp -S -emit-llvm -o taskwithdeps.ll
-opt -load-pass-plugin=/home/randres/projects/carts/.install/carts/lib/ARTSTransform.so \
+opt -load-pass-plugin=/home/randres/projects/arts/.install/arts/lib/ARTSTransform.so \
 	-debug-only=arts-transform,arts,carts,arts-ir-builder\
 	-passes="arts-transform" taskwithdeps.ll -o taskwithdeps_transformed.ll
 
@@ -289,7 +289,7 @@ attributes #4 = { "frame-pointer"="all" "no-trapping-math"="true" "stack-protect
 
 !0 = !DIGlobalVariableExpression(var: !1, expr: !DIExpression())
 !1 = distinct !DIGlobalVariable(scope: null, file: !2, line: 63, type: !3, isLocal: true, isDefinition: true)
-!2 = !DIFile(filename: "taskwithdeps_annotaded.cpp", directory: "/home/randres/projects/carts/examples/taskwithdeps", checksumkind: CSK_MD5, checksum: "dc80e86cb52fb28822a002bf876558b1")
+!2 = !DIFile(filename: "taskwithdeps_annotaded.cpp", directory: "/home/randres/projects/arts/examples/taskwithdeps", checksumkind: CSK_MD5, checksum: "dc80e86cb52fb28822a002bf876558b1")
 !3 = !DICompositeType(tag: DW_TAG_array_type, baseType: !4, size: 192, elements: !6)
 !4 = !DIDerivedType(tag: DW_TAG_const_type, baseType: !5)
 !5 = !DIBasicType(name: "char", size: 8, encoding: DW_ATE_signed_char)

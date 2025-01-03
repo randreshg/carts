@@ -3,7 +3,7 @@
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Tooling/Tooling.h"
 
-#include "carts/frontend/openmp/OMPConsumer.h"
+#include "arts/frontend/openmp/OMPConsumer.h"
 #include "clang/Frontend/FrontendPluginRegistry.h"
 
 #include "llvm/Support/Debug.h"

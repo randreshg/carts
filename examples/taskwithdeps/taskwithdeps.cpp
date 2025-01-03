@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-/// clang++ -fopenmp -std=c++17 taskwithdeps.cpp  -Xclang -plugin  -Xclang omp-plugin -fplugin=/home/randres/projects/carts/.install/carts/lib/libOpenMPPlugin.so -mllvm -debug-only=omp-plugin -S &> output.ll
+/// clang++ -fopenmp -std=c++17 taskwithdeps.cpp  -Xclang -plugin  -Xclang omp-plugin -fplugin=/home/randres/projects/arts/.install/arts/lib/libOpenMPPlugin.so -mllvm -debug-only=omp-plugin -S &> output.ll
 
 __attribute__((noinline))
 void long_computation(int &x) {

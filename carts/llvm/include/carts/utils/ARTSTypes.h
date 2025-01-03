@@ -79,12 +79,12 @@ EDTArgType toEDTArgType(const StringRef Str);
 /// IDs for all arts runtime library (RTL) functions.
 enum class RuntimeFunction {
 #define ARTS_RTL(Enum, ...) Enum,
-#include "carts/codegen/ARTSKinds.def"
+#include "arts/codegen/ARTSKinds.def"
 };
 
 #define ARTS_RTL(Enum, ...)                                                    \
   constexpr auto Enum = arts::types::RuntimeFunction::Enum;
-#include "carts/codegen/ARTSKinds.def"
+#include "arts/codegen/ARTSKinds.def"
 
 } // end namespace types
 } // end namespace arts

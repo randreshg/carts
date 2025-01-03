@@ -14,7 +14,7 @@ static void __attribute__((annotate("arts.single"))) edt_function_4(int a, int b
 static void __attribute__((annotate("arts.parallel"))) edt_function_5(int a, int b);
 
 
-/// clang++ -fopenmp -std=c++17 taskwithdeps.cpp  -Xclang -plugin  -Xclang omp-plugin -fplugin=/home/randres/projects/carts/.install/carts/lib/libOpenMPPlugin.so -mllvm -debug-only=omp-plugin -S &> output.ll
+/// clang++ -fopenmp -std=c++17 taskwithdeps.cpp  -Xclang -plugin  -Xclang omp-plugin -fplugin=/home/randres/projects/arts/.install/arts/lib/libOpenMPPlugin.so -mllvm -debug-only=omp-plugin -S &> output.ll
 
 __attribute__((noinline))
 void long_computation(int &x) {

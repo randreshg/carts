@@ -17,8 +17,8 @@
 #include "llvm/IR/Value.h"
 #include <cstdint>
 
-#include "carts/utils/ARTS.h"
-#include "carts/utils/ARTSTypes.h"
+#include "arts/utils/ARTS.h"
+#include "arts/utils/ARTSTypes.h"
 
 namespace arts {
 using namespace types;

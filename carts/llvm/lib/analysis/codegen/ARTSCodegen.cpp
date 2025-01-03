@@ -19,12 +19,12 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 
-#include "carts/analysis/graph/ARTSEdge.h"
-#include "carts/analysis/graph/ARTSGraph.h"
-#include "carts/codegen/ARTSCodegen.h"
-#include "carts/utils/ARTS.h"
-#include "carts/utils/ARTSCache.h"
-#include "carts/utils/ARTSUtils.h"
+#include "arts/analysis/graph/ARTSEdge.h"
+#include "arts/analysis/graph/ARTSGraph.h"
+#include "arts/codegen/ARTSCodegen.h"
+#include "arts/utils/ARTS.h"
+#include "arts/utils/ARTSCache.h"
+#include "arts/utils/ARTSUtils.h"
 
 #include <cassert>
 #include <cstdint>
@@ -171,7 +171,7 @@ FunctionCallee ARTSCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
                              IsVarArg);                                        \
     Fn = M.getFunction(Str);                                                   \
     break;
-#include "carts/codegen/ARTSKinds.def"
+#include "arts/codegen/ARTSKinds.def"
   }
 
   if (!Fn) {
@@ -181,7 +181,7 @@ FunctionCallee ARTSCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
   case Enum:                                                                   \
     Fn = Function::Create(FnTy, GlobalValue::ExternalLinkage, Str, M);         \
     break;
-#include "carts/codegen/ARTSKinds.def"
+#include "arts/codegen/ARTSKinds.def"
     }
   }
 
@@ -924,5 +924,5 @@ void ARTSCodegen::initializeTypes() {
     T = StructType::create(Ctx, {__VA_ARGS__}, StructName, Packed);            \
   VarName = T;                                                                 \
   VarName##Ptr = PointerType::getUnqual(T);
-#include "carts/codegen/ARTSKinds.def"
+#include "arts/codegen/ARTSKinds.def"
 }

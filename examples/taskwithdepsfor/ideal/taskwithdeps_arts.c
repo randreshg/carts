@@ -1,6 +1,6 @@
 // clang taskwithdeps_arts.c -O3 -g0 -march=native
-// -I/home/randres/projects/carts/.install/arts/include -o taskwithdeps_arts
-// -L/home/randres/projects/carts/.install/arts/lib -larts -lrdmacm
+// -I/home/randres/projects/arts/.install/arts/include -o taskwithdeps_arts
+// -L/home/randres/projects/arts/.install/arts/lib -larts -lrdmacm
 #include "arts.h"
 #include "artsRT.h"
 #include <stdint.h>
