@@ -460,21 +460,7 @@ bool mayAlias(MemoryEffects::EffectInstance a, Value v2) {
 } // namespace mlir::arts::utils
 
 /// Operation builders.
-// //
-// // 1) Example: Implementation of a build function for EdtOp
-// //
-// void arts::buildEdtOp(OpBuilder &builder, OperationState &state,
-//                       ArrayAttr parameters, ArrayAttr dependencies) {
-//   // You could store these arrays as attributes:
-//   state.addAttribute("parameters", parameters);
-//   state.addAttribute("dependencies", dependencies);
 
-//   // The op has one region for the body:
-//   Region *bodyRegion = state.addRegion();
-//   // Typically, you might create a block in that region if you want an
-//   immediate body
-//   // but often you leave it to the user or a pattern to add the block later.
-// }
 
 // //
 // // 2) ARTS_EdtOp parse/print

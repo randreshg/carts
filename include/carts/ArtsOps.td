@@ -12,7 +12,9 @@
 #define ARTS_OPS
 
 include "ArtsDialect.td"
+include "ArtsTypes.td"
 
+include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/Interfaces/ViewLikeInterface.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
@@ -21,37 +23,64 @@ include "mlir/IR/SymbolInterfaces.td"
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Dialect/LLVMIR/LLVMInterfaces.td"
 
-/////////////////////////////////////////////////////////////////////////
-// arts.edt
-/////////////////////////////////////////////////////////////////////////
+
+/// Operation to define affine dependencies
+def MakeDepAffineOp : Arts_Op<"make_dep_affine", []> {
+  let summary = "Creates an affine dependency for arts.edt";
+  let description = [{
+    This operation creates an affine dependency for the arts.edt operation.
+    It includes the mode, memref, affine map, and any related operands.
+  }];
+  
+  // Define the arguments as operands and attributes
+  let arguments = (ins
+    StrAttr:$mode,                      // Dependency mode (e.g., "in", "out", etc.)
+    AnyMemRef:$memref,                  // Memory reference for dependency
+    AffineMapAttr:$affine_map,          // Affine map for indexing
+    Variadic<Index>:$affine_operands    // Variadic list of operands for affine map
+  );
+
+  // The operation produces a single dependency result of type DepType
+  let results = (outs DepType:$dep);
+
+  let assemblyFormat = [{
+    $mode `,` $memref `:` type($memref) `,` $affine_map `(` $affine_operands `)` attr-dict `:` type($dep)
+  }];
+
+  let builders = [
+    OpBuilder<(ins "StringRef":$mode, "Value":$memref, "AffineMap":$affine_map, "ValueRange":$affine_operands), [{
+      build($_builder, $_state, $_builder.getType<arts::DepType>(), mode, memref, affine_map, affine_operands);
+    }]>
+  ];
+}
+
 def EdtOp : Arts_Op<"edt",
-    [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
+  [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
 
   let summary = "Event-Driven Task in ARTS";
   let description = [{
-    Defines an ARTS event-driven task (EDT) with:
-      - Optional `parameters` that define task-specific inputs.
-      - `dependencies` that specify input/output memory dependencies.
+  Defines an ARTS event-driven task (EDT) with:
+    - `parameters` that define task-specific inputs.
+    - `dependencies` that specify input/output memory dependencies.
 
-    The single-block region contains the task body. Parameters are provided
-    as SSA values, and dependencies are described as structured attributes
-    (e.g., memref, mode, indices).
+  The single-block region contains the task body. Parameters are provided
+  as SSA values, and dependencies are described as structured attributes
+  (e.g., memref, mode, indices).
   }];
 
-  let regions = (region SizedRegion<1>:$body);
+  let regions = (region AnyRegion:$body);
   let arguments = (ins
-    // Task parameters as SSA values
-    Variadic<AnyType>:$parameters,
-    // Dependencies as structured attributes
-    ArrayAttr:$dependencies
+    // Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$parameters,
+    ArrayAttr:$parameters,
+    Variadic<DepType>:$dependencies
   );
-  // let assemblyFormat = 
-  //   "`edt` parameters(`$parameters`) dependencies(`$dependencies`) $body";
+  let assemblyFormat = [{
+    `parameters` `(` $parameters `)` `,` 
+    `dependencies` `(` $dependencies `)`
+    attr-dict-with-keyword $body
+  }];
 }
 
-/////////////////////////////////////////////////////////////////////////
-// arts.epoch
-/////////////////////////////////////////////////////////////////////////
 def EpochOp : Arts_Op<"epoch", 
     [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
   let summary = "Epoch region in ARTS";
@@ -59,12 +88,12 @@ def EpochOp : Arts_Op<"epoch",
     An ARTS epoch region. It can spawn multiple tasks and
     synchronize them at the end of the epoch.
   }];
-  let regions = (region SizedRegion<1>:$body);
+  let regions = (region AnyRegion:$body);
+  let assemblyFormat = [{
+    attr-dict-with-keyword $body
+  }];
 }
 
-/////////////////////////////////////////////////////////////////////////
-// arts.parallel
-/////////////////////////////////////////////////////////////////////////
 def ParallelOp : Arts_Op<"parallel", 
     [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
   let summary = "Parallel region in ARTS";
@@ -72,13 +101,12 @@ def ParallelOp : Arts_Op<"parallel",
     An ARTS parallel region. It can spawn multiple tasks.
     Typically used to replicate something like `#pragma omp parallel`.
   }];
-  let regions = (region SizedRegion<1>:$body);
-  // let assemblyFormat = "`parallel` $body";
+  let regions = (region AnyRegion:$body);
+  let assemblyFormat = [{
+    attr-dict-with-keyword $body
+  }];
 }
 
-/////////////////////////////////////////////////////////////////////////
-// arts.single
-/////////////////////////////////////////////////////////////////////////
 def SingleOp : Arts_Op<"single",
     [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
   let summary = "Single region in ARTS (like omp.master)";
@@ -86,33 +114,13 @@ def SingleOp : Arts_Op<"single",
     A single region: only one thread/worker enters this region within a 
     parallel edt.
   }];
-  let regions = (region SizedRegion<1>:$body);
-  // let assemblyFormat = "`single` $body";
+  let regions = (region AnyRegion:$body);
+  let assemblyFormat = [{
+    attr-dict-with-keyword $body
+  }];
 }
 
-/////////////////////////////////////////////////////////////////////////
-// arts.datablock.create
-/////////////////////////////////////////////////////////////////////////
-// def ARTS_DataBlockCreateOp : Arts_Op<"datablock.create",
-//     [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>]> {
-//   let summary = "Create a DataBlock in ARTS";
-//   let description = [{
-//     Allocates an ARTS DataBlock of a specified size or shape. 
-//     This might produce a guid or a memref representing the allocated block.
-//   }];
-//   // If you produce a single GUID or memref, define the result:
-//   let results = (outs AnyType:$result);
-
-//   // If you want arguments:
-//   // e.g. size or alignment
-//   let arguments = (ins Variadic<Index>:$dims);
-//   let assemblyFormat = "`datablock.create` $dims* `:` type($result)";
-// }
-
-/////////////////////////////////////////////////////////////////////////
-// arts.terminator
-/////////////////////////////////////////////////////////////////////////
-def YieldOp : Arts_Op<"arts_yield", 
+def YieldOp : Arts_Op<"yield", 
   [Pure, ReturnLike, Terminator, 
    ParentOneOf<["EdtOp", "EpochOp", "ParallelOp", "SingleOp"]>]> {
 
@@ -121,6 +129,9 @@ def YieldOp : Arts_Op<"arts_yield",
     The `arts.yield` operation serves as a terminator for various ARTS operations, 
     such as `arts.epoch`, `arts.parallel`, `arts.single`, and `arts.edt`.
     It ensures proper control flow within the ARTS dialect by marking the end of a region.
+  }];
+  let assemblyFormat = [{
+    attr-dict-with-keyword
   }];
 }
 
