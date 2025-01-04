@@ -21,9 +21,23 @@ include "arts/ArtsDialect.td"
 include "arts/ArtsTypes.td"
 
 //===----------------------------------------------------------------------===//
-// arts.make_dep_affine
+// arts.undef
 //===----------------------------------------------------------------------===//
-def MakeDepAffineOp : Arts_Op<"make_dep_affine", []> {
+def UndefOp: Arts_Op<"undef", [Pure]> {
+  let summary = "More flexible undef op";
+  let skipDefaultBuilders = 1;
+  let results = (outs AnyType:$result);
+  let builders = [
+    OpBuilder<(ins "Type":$type), [{
+      $_state.types.push_back(type);
+    }]>];
+  let hasCanonicalizer = true;
+}
+
+//===----------------------------------------------------------------------===//
+// arts.make_dep
+//===----------------------------------------------------------------------===//
+def MakeDepOp : Arts_Op<"make_dep", []> {
   let summary = "Creates an affine dependency for arts.edt";
   let description = [{
     This operation creates an affine dependency for the arts.edt operation.
@@ -38,21 +52,19 @@ def MakeDepAffineOp : Arts_Op<"make_dep_affine", []> {
   );
   let results = (outs DepType:$dep);
   let assemblyFormat = [{
-    $mode `,` $memref `:` type($memref) `,` $affine_map `(` $affine_operands `)` attr-dict `:` type($dep)
+    $mode `,` $memref `:` type($memref) `,` 
+    $affine_map `(` $affine_operands `)` attr-dict `:` type($dep)
   }];
-
-  let builders = [
-    OpBuilder<(ins "StringRef":$mode, "Value":$memref, "AffineMap":$affine_map, "ValueRange":$affine_operands), [{
-      build($_builder, $_state, $_builder.getType<arts::DepType>(), mode, memref, affine_map, affine_operands);
-    }]>
-  ];
+  let skipDefaultBuilders = 1;
+  let builders = [ OpBuilder<(ins 
+    "StringRef":$mode, "Value":$memref, "AffineMap":$affine_map, "ValueRange":$affine_operands)>];
 }
 
 //===----------------------------------------------------------------------===//
 // arts.edt
 //===----------------------------------------------------------------------===//
 def EdtOp : Arts_Op<"edt",
-  [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
+  [SingleBlockImplicitTerminator<"arts::YieldOp">, AttrSizedOperandSegments]> {
 
   let summary = "Event-Driven Task in ARTS";
   let description = [{
@@ -65,17 +77,16 @@ def EdtOp : Arts_Op<"edt",
   (e.g., memref, mode, indices).
   }];
 
-  let regions = (region AnyRegion:$body);
   let arguments = (ins
-    // Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$parameters,
-    ArrayAttr:$parameters,
+    Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$parameters,
     Variadic<DepType>:$dependencies
   );
+  let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
-    `parameters` `(` $parameters `)` `,` 
-    `dependencies` `(` $dependencies `)`
+    `parameters` `(` $parameters `)` `:` type($parameters) `,` 
+    `dependencies` `(` $dependencies `)` `:` type($dependencies)
     attr-dict-with-keyword $body
-  }];
+}];
 }
 
 //===----------------------------------------------------------------------===//

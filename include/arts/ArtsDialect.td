@@ -19,6 +19,8 @@ def ArtsDialect : Dialect {
   let description = [{
     This dialect contains operations for the ARTS Runtime.
   }];
+
+  let useDefaultTypePrinterParser = 1;
 }
 
 //===----------------------------------------------------------------------===//

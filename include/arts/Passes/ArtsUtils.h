@@ -1,10 +1,28 @@
 #pragma once
 
+#include "arts/ArtsDialect.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/IntegerSet.h"
 
+/// Replace all uses of an operation's results with a single `undef` value
+void replaceWithUndef(mlir::Operation *op, mlir::PatternRewriter &rewriter) {
+  if (op->getNumResults() == 0) {
+    rewriter.eraseOp(op);
+    return;
+  }
+
+  auto savedInsertionPoint = rewriter.saveInsertionPoint();
+  rewriter.setInsertionPoint(op);
+  for (mlir::Value result : op->getResults()) {
+    auto undefOp =
+        rewriter.create<mlir::arts::UndefOp>(op->getLoc(), result.getType());
+    result.replaceAllUsesWith(undefOp.getResult());
+  }
+  rewriter.eraseOp(op);
+  rewriter.restoreInsertionPoint(savedInsertionPoint);
+}
 
 static inline mlir::scf::IfOp cloneWithResults(mlir::scf::IfOp op,
                                                mlir::OpBuilder &rewriter,
@@ -55,6 +73,7 @@ cloneWithoutResults(mlir::scf::ForOp op, mlir::PatternRewriter &rewriter,
       mapping.lookupOrDefault(op.getUpperBound()),
       mapping.lookupOrDefault(op.getStep()));
 }
+
 static inline mlir::affine::AffineForOp
 cloneWithoutResults(mlir::affine::AffineForOp op,
                     mlir::PatternRewriter &rewriter,

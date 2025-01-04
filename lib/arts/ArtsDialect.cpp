@@ -6,21 +6,16 @@
 //
 //===----------------------------------------------------------------------===//
 
-
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/Utils/Utils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/OpenMP/OpenMPDialect.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/IntegerSet.h"
-#include "llvm/ADT/SetVector.h"
 #include "mlir/Support/LLVM.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/Debug.h"
-
 
 #include "arts/ArtsDialect.h"
 
@@ -33,27 +28,62 @@ using namespace mlir::arts;
 void ArtsDialect::initialize() {
   /// Register operations
   addOperations<
-    #define GET_OP_LIST
-    #include "arts/ArtsOps.cpp.inc"
-          >();
+#define GET_OP_LIST
+#include "arts/ArtsOps.cpp.inc"
+      >();
 
   /// Register types
   addTypes<
-    #define GET_TYPEDEF_LIST
-    #include "arts/ArtsOpsTypes.cpp.inc"
+#define GET_TYPEDEF_LIST
+#include "arts/ArtsOpsTypes.cpp.inc"
       >();
 }
 
 #include "arts/ArtsOpsDialect.cpp.inc"
 
 //===----------------------------------------------------------------------===//
-// Arts Dialect Operations
+// Arts Dialect Operations - method definitions
 //===----------------------------------------------------------------------===//
 #define GET_OP_CLASSES
 #include "arts/ArtsOps.cpp.inc"
 
 //===----------------------------------------------------------------------===//
-// Arts Dialect Types
+// Arts Dialect Types - method definitions
 //===----------------------------------------------------------------------===//
 #define GET_TYPEDEF_CLASSES
 #include "arts/ArtsOpsTypes.cpp.inc"
+
+//===----------------------------------------------------------------------===//
+// MakeDepOp
+//===----------------------------------------------------------------------===//
+void MakeDepOp::build(OpBuilder &builder, OperationState &result,
+                      StringRef mode, Value memref, AffineMap affine_map,
+                      ValueRange affine_operands) {
+  result.addTypes(arts::DepType::get(builder.getContext()));
+  result.addAttribute("mode", builder.getStringAttr(mode));
+  result.addOperands({memref});
+  result.addAttribute("affine_map", AffineMapAttr::get(affine_map));
+  result.addOperands(affine_operands);
+}
+
+//===----------------------------------------------------------------------===//
+// UndefOp
+//===----------------------------------------------------------------------===//
+class UndefToLLVM final : public OpRewritePattern<UndefOp> {
+public:
+  using OpRewritePattern<UndefOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(UndefOp uop,
+                                PatternRewriter &rewriter) const override {
+    auto ty = uop.getResult().getType();
+    if (!LLVM::isCompatibleType(ty))
+      return failure();
+    rewriter.replaceOpWithNewOp<LLVM::UndefOp>(uop, ty);
+    return success();
+  }
+};
+
+void UndefOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                          MLIRContext *context) {
+  results.insert<UndefToLLVM>(context);
+}
