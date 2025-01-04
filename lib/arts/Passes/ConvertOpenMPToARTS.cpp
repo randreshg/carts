@@ -18,10 +18,10 @@
 
 #include "llvm/ADT/SmallVector.h"
 
+#include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
-#include "ArtsPassDetails.h"
-
+#include "arts/Passes/ArtsUtils.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -42,48 +42,26 @@ struct ConvertOpenMPToARTSPass
 };
 } // namespace
 
-/// Collects parameters for any OpenMP region.
-/// Parameters are values used in the region but defined outside it.
-// static SmallVector<Value> collectParameters(Region &region) {
-//   SmallVector<Value> parameters;
-//   // Iterate through all operations in the region to collect external values
-//   region.walk([&](Operation *op) {
-//     for (Value operand : op->getOperands()) {
-//       if (auto definingOp = operand.getDefiningOp()) {
-//         // If the operand is defined outside the region, it's a parameter
-//         if (!region.isAncestor(definingOp->getParentRegion())) {
-//           if (llvm::find(parameters, operand) == parameters.end()) {
-//             parameters.push_back(operand);
-//           }
-//         }
-//       } else if (operand.isa<BlockArgument>()) {
-//         // Handle block arguments (e.g., loop-carried values)
-//         auto blockArg = operand.cast<BlockArgument>();
-//         if (!region.isAncestor(blockArg.getParentRegion())) {
-//           if (llvm::find(parameters, operand) == parameters.end()) {
-//             parameters.push_back(operand);
-//           }
-//         }
-//       }
-//     }
-//   });
-
 /// Collects parameters for the EdtOp
-static ArrayAttr collectParameters(Region &region, PatternRewriter &rewriter) {
-  SmallVector<Attribute> parameterAttrs;
-
-  // Collect all external values (parameters) used in the region
+static void collectParameters(SmallVectorImpl<Value> &parameters,
+                              Region &region) {
   region.walk([&](Operation *op) {
     for (Value operand : op->getOperands()) {
       if (!region.isAncestor(operand.getParentRegion())) {
-        // Convert Value to Attribute using the rewriter context
-        parameterAttrs.push_back(rewriter.getIndexAttr(reinterpret_cast<int64_t>(operand.getAsOpaquePointer())));
+        /// Avoid duplicate entries
+        if (llvm::is_contained(parameters, operand))
+          continue;
+        /// Check if it is a valid parameter
+        if (operand.getType().isa<IntegerType>() ||
+            operand.getType().isa<IndexType>() ||
+            operand.getType().isa<FloatType>()) {
+          parameters.push_back(operand);
+        } else {
+          /// @TODO: Handle other types - They become a dependency
+        }
       }
     }
   });
-
-  // Create and return ArrayAttr for the parameters
-  return rewriter.getArrayAttr(parameterAttrs);
 }
 
 /// Pattern to replace `omp.parallel` with `arts.parallel`
@@ -108,7 +86,6 @@ struct ParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
     return success();
   }
 };
-;
 
 /// Pattern to replace `omp.master` with `arts.single`
 struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
@@ -137,40 +114,88 @@ struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
 struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  // ArrayAttr getDepArray(omp::TaskOp task, PatternRewriter &rewriter) const {
-  //   SmallVector<Attribute, 4> dependencies;
-  //   auto dependList = task.getDependsAttr();
-  //   for (unsigned i = 0, e = dependList.size(); i < e; ++i) {
-  //     auto depClause =
-  //         llvm::cast<mlir::omp::ClauseTaskDependAttr>(dependList[i]);
-  //     auto depType = stringifyClauseTaskDepend(depClause.getValue());
-  //     auto depVar = task.getDependVars()[i];
-  //     /// Process indices
-  //     SmallVector<Attribute> indexAttrs;
-  //     LLVM_DEBUG(dbgs() << "Depend clause: " << depType << " -> " << depVar
-  //                       << "\n");
-  //     auto dep = rewriter.create<arts::MakeDepAffineOp>(
-  //           loc, rewriter.getStringAttr(mode), memref,
-  //           rewriter.getAffineMapAttr(map), operands);
-  //     // Build a dictionary for each dependency.
-  //     // auto depDict = rewriter.getDictionaryAttr(
-  //     //     {rewriter.getNamedAttr("mode", rewriter.getStringAttr(depType)),
-  //     //      rewriter.getNamedAttr("memref", FlatSymbolRefAttr::get(subView)),
-  //     //      rewriter.getNamedAttr("indices",
-  //     //                            rewriter.getArrayAttr(indexAttrs))});
-  //     // dependencies.push_back(depDict);
-  //   }
-  //   return rewriter.getArrayAttr(dependencies);
-  // }
+  llvm::StringRef stringifyTaskDepend(omp::ClauseTaskDepend val) const {
+    switch (val) {
+    case omp::ClauseTaskDepend::taskdependin:
+      return "in";
+    case omp::ClauseTaskDepend::taskdependout:
+      return "out";
+    case omp::ClauseTaskDepend::taskdependinout:
+      return "inout";
+    }
+    return "";
+  }
+
+  void collectDependencies(SmallVectorImpl<Value> &dependencies,
+                           omp::TaskOp task, PatternRewriter &rewriter,
+                           Location loc) const {
+    auto dependList = task.getDependsAttr();
+    for (unsigned i = 0, e = dependList.size(); i < e; ++i) {
+      auto depClause =
+          llvm::cast<mlir::omp::ClauseTaskDependAttr>(dependList[i]);
+      auto depType = stringifyTaskDepend(depClause.getValue());
+      auto depVar = task.getDependVars()[i];
+      /// Process indices
+      SmallVector<Attribute> indexAttrs;
+      LLVM_DEBUG(dbgs() << "Depend clause: " << depType << " -> " << depVar
+                        << "\n");
+
+      /// It must be a memref.alloc operation
+      auto depAlloc = depVar.getDefiningOp<mlir::memref::AllocaOp>();
+      assert(depAlloc && "Expected a memref.alloc operation");
+
+      /// Check uses of depAlloc
+      auto usesLen =
+          std::distance(depAlloc->user_begin(), depAlloc->user_end());
+      assert(usesLen == 2 && "Expected exactly 2 users for depAlloc");
+
+      /// Check if the first user is an affine.store
+      mlir::affine::AffineStoreOp depStoreOp = nullptr;
+      for (Operation *user : depVar.getUsers()) {
+        /// ignore use in the task
+        if (user == task)
+          continue;
+        /// Check if the user is an affine.store
+        depStoreOp = dyn_cast<mlir::affine::AffineStoreOp>(user);
+        break;
+      }
+      assert(depStoreOp && "Expected an affine.store operation");
+      /// The value to store must be an affine.load
+      auto depLoadOp = dyn_cast<mlir::affine::AffineLoadOp>(
+          depStoreOp.getValueToStore().getDefiningOp());
+      assert(depLoadOp && "Expected an affine.load operation");
+
+      /// Get affine operands
+      auto memref = depLoadOp.getMemRef();
+      auto valToLoad = depLoadOp.getValue();
+      auto affineMap = depLoadOp.getAffineMap();
+      auto indices = depStoreOp.getIndices();
+      SmallVector<Value> operands(indices.begin(), indices.end());
+
+      LLVM_DEBUG(dbgs() << "    - Memref: " << memref << "\n");
+      LLVM_DEBUG(dbgs() << "    - Value: " << valToLoad << "\n");
+      LLVM_DEBUG(dbgs() << "    - AffineMap: " << AffineMapAttr::get(affineMap)
+                        << "\n");
+
+      /// Use the affineMapAttr as needed
+      auto depOp = rewriter.create<arts::MakeDepOp>(loc, depType, memref,
+                                                    affineMap, operands);
+      /// Add the created dependency to the list
+      dependencies.push_back(depOp.getResult());
+
+      /// Remove the original operations
+      replaceWithUndef(depAlloc, rewriter);
+      replaceWithUndef(depLoadOp, rewriter);
+    }
+  }
 
   LogicalResult matchAndRewrite(omp::TaskOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-
-    /// Placeholder: build dependency and parameter arrays.
     // SmallVector<Value> params;
-    ArrayAttr parameters = collectParameters(op.getRegion(), rewriter);
-    SmallVector<Value> dependencies;
+    SmallVector<Value> parameters, dependencies;
+    collectParameters(parameters, op.getRegion());
+    collectDependencies(dependencies, op, rewriter, loc);
 
     /// Create a new `arts.edt` operation.
     auto edtOp = rewriter.create<arts::EdtOp>(loc, parameters, dependencies);
@@ -200,7 +225,26 @@ struct TerminatorToARTSPattern : public OpRewritePattern<omp::TerminatorOp> {
   }
 };
 
+void recursivelyRemoveUses(mlir::Operation *op) {
+  llvm::SmallVector<mlir::Operation *, 8> toRemove;
+  /// Collect all dependent operations.
+  for (mlir::Value result : op->getResults()) {
+    for (mlir::Operation *user : result.getUsers()) {
+      toRemove.push_back(user);
+    }
+  }
+
+  /// Remove dependent operations recursively.
+  for (mlir::Operation *userOp : toRemove) {
+    recursivelyRemoveUses(userOp);
+    userOp->erase();
+  }
+}
+
 void ConvertOpenMPToARTSPass::runOnOperation() {
+  auto Module = getOperation();
+  Module->dump();
+
   LLVM_DEBUG(dbgs() << line << "ConvertOpenMPToARTSPass STARTED\n" << line);
   MLIRContext *context = &getContext();
   RewritePatternSet patterns(context);
@@ -213,9 +257,18 @@ void ConvertOpenMPToARTSPass::runOnOperation() {
     signalPassFailure();
     return;
   }
+  /// ---- Remove all UndefOps ---- ///
+  /// Traverse all operations in the module and collect UndefOps.
+  llvm::SmallVector<mlir::arts::UndefOp, 8> undefOps;
+  Module.walk(
+      [&](mlir::arts::UndefOp undefOp) { undefOps.push_back(undefOp); });
+  /// Process each UndefOp and remove its dependent operations.
+  for (auto undefOp : undefOps) {
+    recursivelyRemoveUses(undefOp);
+    undefOp.erase();
+  }
+
   LLVM_DEBUG(dbgs() << line << "ConvertOpenMPToARTSPass FINISHED\n" << line);
-  auto Module = getOperation();
-  Module->dump();
 }
 //===----------------------------------------------------------------------===//
 // Pass creation
