@@ -27,9 +27,7 @@ class FunctionOpInterface;
 template <typename ConcreteDialect>
 void registerDialect(DialectRegistry &registry);
 namespace arts {
-
-class PolygeistDialect;
-
+/// Register passes
 #define GEN_PASS_CLASSES
 #include "arts/Passes/ArtsPasses.h.inc"
 

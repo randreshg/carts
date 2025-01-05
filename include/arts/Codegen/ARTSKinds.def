@@ -28,11 +28,11 @@
 
 // Macro for integer types with a specific bit width
 #define __ARTS_INTEGER_TYPE(VarName, BitWidth)                                 \
-  ARTS_TYPE(VarName, mlir::IntegerType::get(builder.getContext(), BitWidth))
+  ARTS_TYPE(VarName, mlir::IntegerType::get(Ctx, BitWidth))
 
 // Macro for specific types (e.g., void, float, double)
 #define __ARTS_TYPE(VarName, TypeCreator)                                      \
-  ARTS_TYPE(VarName, TypeCreator(builder.getContext()))
+  ARTS_TYPE(VarName, TypeCreator(Ctx))
 
 // Macro for pointer types
 #define __ARTS_PTR_TYPE(VarName, PointeeType)                                  \
@@ -166,8 +166,7 @@ __ARTS_FUNCTION_TYPE(EdtFunction, false, Void, Int32, Int64Ptr, Int32,
 #undef ARTS_FUNCTION_TYPE
 ///}
 
-/// ------------------- Runtime library function (and their attributes)
-/// -------------------
+/// ---------- Runtime library function (and their attributes) ----------
 ///
 ///{
 #ifndef ARTS_RTL

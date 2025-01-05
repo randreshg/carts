@@ -21,6 +21,7 @@ class DominanceInfo;
 
 namespace arts {
 std::unique_ptr<Pass> createConvertOpenMPtoARTSPass();
+std::unique_ptr<Pass> createConvertARTSToFuncsPass();
 } // namespace arts
 } // namespace mlir
 
@@ -39,7 +40,11 @@ class MemRefDialect;
 
 namespace LLVM {
 class LLVMDialect;
-}
+} // end namespace LLVM
+
+namespace func {
+class FuncDialect;
+} // end namespace func
 
 #define GEN_PASS_REGISTRATION
 #include "arts/Passes/ArtsPasses.h.inc"

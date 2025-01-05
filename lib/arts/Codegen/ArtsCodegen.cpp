@@ -6,9 +6,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "arts/Codegen/ArtsCodegen.h"
-
-// #include "arts/utils/ARTSCache.h"
-// #include "arts/utils/ARTSUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/IR/Builders.h"
@@ -19,18 +16,17 @@
 #include "llvm/Support/Debug.h"
 
 #include <cassert>
-// #include <cstdint>
-// #include <string>
-// #include <sys/types.h>
 
 // DEBUG
 #define DEBUG_TYPE "arts-codegen"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
-using namespace arts;
+
+using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::LLVM;
+using namespace mlir::arts;
 
 ArtsCodegen::ArtsCodegen(ModuleOp &module, OpBuilder &builder)
     : module(module), builder(builder), dataLayout(mlir::DataLayout(module)) {
@@ -68,16 +64,21 @@ void ArtsCodegen::initializeTypes() {
 
 func::FuncOp
 ArtsCodegen::getOrCreateRuntimeFunction(types::RuntimeFunction FnID) {
-  LLVM::LLVMFunctionType fnType = nullptr;
+  FunctionType fnType = nullptr;
   func::FuncOp funcOp;
 
   /// Try to find the declaration in the module first.
   switch (FnID) {
 #define ARTS_RTL(Enum, Str, IsVarArg, ReturnType, ...)                         \
-  case Enum:                                                                   \
-    fnType = LLVM::LLVMFunctionType::get(ReturnType, {__VA_ARGS__}, IsVarArg); \
+  case Enum: {                                                                 \
+    SmallVector<Type, 4> argumentTypes{__VA_ARGS__};                           \
+    fnType = builder.getFunctionType(argumentTypes,                            \
+                                     ReturnType.isa<mlir::NoneType>()          \
+                                         ? ArrayRef<Type>{}                    \
+                                         : ArrayRef<Type>{ReturnType});        \
     funcOp = module.lookupSymbol<func::FuncOp>(Str);                           \
-    break;
+    break;                                                                     \
+  }
 #include "arts/Codegen/ARTSKinds.def"
   }
 

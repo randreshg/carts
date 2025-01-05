@@ -11,14 +11,11 @@
 #include "mlir/Analysis/DataLayoutAnalysis.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
-#include <cstdint>
-#include <string>
-#include <unordered_map>
 
+namespace mlir {
 namespace arts {
-using namespace mlir;
 using namespace mlir::LLVM;
-using namespace arts::types;
+using namespace types;
 
 class ArtsCodegen {
 public:
@@ -69,5 +66,5 @@ private:
 };
 
 } // namespace arts
-
+} // namespace mlir
 #endif // LLVM_ARTS_CODEGEN_H
