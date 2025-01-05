@@ -21,7 +21,7 @@
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
-#include "arts/Passes/ArtsUtils.h"
+#include "arts/Utils/ArtsUtils.h"
 
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -171,11 +171,10 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
       auto affineMap = depLoadOp.getAffineMap();
       auto indices = depStoreOp.getIndices();
       SmallVector<Value> operands(indices.begin(), indices.end());
-
-      LLVM_DEBUG(dbgs() << "    - Memref: " << memref << "\n");
-      LLVM_DEBUG(dbgs() << "    - Value: " << valToLoad << "\n");
-      LLVM_DEBUG(dbgs() << "    - AffineMap: " << AffineMapAttr::get(affineMap)
-                        << "\n");
+      // LLVM_DEBUG(dbgs() << "    - Memref: " << memref << "\n");
+      // LLVM_DEBUG(dbgs() << "    - Value: " << valToLoad << "\n");
+      // LLVM_DEBUG(dbgs() << "    - AffineMap: " << AffineMapAttr::get(affineMap)
+      //                   << "\n");
 
       /// Use the affineMapAttr as needed
       auto depOp = rewriter.create<arts::MakeDepOp>(loc, depType, memref,
@@ -225,25 +224,9 @@ struct TerminatorToARTSPattern : public OpRewritePattern<omp::TerminatorOp> {
   }
 };
 
-void recursivelyRemoveUses(mlir::Operation *op) {
-  llvm::SmallVector<mlir::Operation *, 8> toRemove;
-  /// Collect all dependent operations.
-  for (mlir::Value result : op->getResults()) {
-    for (mlir::Operation *user : result.getUsers()) {
-      toRemove.push_back(user);
-    }
-  }
-
-  /// Remove dependent operations recursively.
-  for (mlir::Operation *userOp : toRemove) {
-    recursivelyRemoveUses(userOp);
-    userOp->erase();
-  }
-}
-
 void ConvertOpenMPToARTSPass::runOnOperation() {
-  auto Module = getOperation();
-  Module->dump();
+  auto module = getOperation();
+  module->dump();
 
   LLVM_DEBUG(dbgs() << line << "ConvertOpenMPToARTSPass STARTED\n" << line);
   MLIRContext *context = &getContext();
@@ -257,16 +240,10 @@ void ConvertOpenMPToARTSPass::runOnOperation() {
     signalPassFailure();
     return;
   }
+
   /// ---- Remove all UndefOps ---- ///
   /// Traverse all operations in the module and collect UndefOps.
-  llvm::SmallVector<mlir::arts::UndefOp, 8> undefOps;
-  Module.walk(
-      [&](mlir::arts::UndefOp undefOp) { undefOps.push_back(undefOp); });
-  /// Process each UndefOp and remove its dependent operations.
-  for (auto undefOp : undefOps) {
-    recursivelyRemoveUses(undefOp);
-    undefOp.erase();
-  }
+  removeUndefOps(module);
 
   LLVM_DEBUG(dbgs() << line << "ConvertOpenMPToARTSPass FINISHED\n" << line);
 }
