@@ -6,8 +6,36 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/IntegerSet.h"
 
+static inline void recursivelyRemoveUses(mlir::Operation *op) {
+  llvm::SmallVector<mlir::Operation *, 8> toRemove;
+  /// Collect all dependent operations.
+  for (mlir::Value result : op->getResults()) {
+    for (mlir::Operation *user : result.getUsers()) {
+      toRemove.push_back(user);
+    }
+  }
+
+  /// Remove dependent operations recursively.
+  for (mlir::Operation *userOp : toRemove) {
+    recursivelyRemoveUses(userOp);
+    userOp->erase();
+  }
+}
+
+static inline void removeUndefOps(mlir::ModuleOp module) {
+  /// Traverse all operations in the module and collect UndefOps.
+  llvm::SmallVector<mlir::arts::UndefOp, 8> undefOps;
+  module.walk([&](mlir::arts::UndefOp undefOp) { undefOps.push_back(undefOp); });
+  /// Process each UndefOp and remove its dependent operations.
+  for (auto undefOp : undefOps) {
+    recursivelyRemoveUses(undefOp);
+    undefOp.erase();
+  }
+}
+
 /// Replace all uses of an operation's results with a single `undef` value
-void replaceWithUndef(mlir::Operation *op, mlir::PatternRewriter &rewriter) {
+static inline void replaceWithUndef(mlir::Operation *op,
+                                    mlir::PatternRewriter &rewriter) {
   if (op->getNumResults() == 0) {
     rewriter.eraseOp(op);
     return;

@@ -1,0 +1,242 @@
+//===--- ARTSKinds.def - ARTS directives, clauses, rt-calls -*- C++ -*-===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+/// This file defines the list of supported ARTS runtime
+/// calls, and other things that need to be listed in enums.
+///
+/// This file is under transition to ARTS.td with TableGen code generation.
+///
+//===----------------------------------------------------------------------===//
+
+/// ------------------- ARTS typedefs -------------------
+#define artsGuid_t Int64
+#define artsPtr_t Int64
+#define artsTicket_t Int64
+#define artsType_t Int32
+
+/// -------------------Types used in RT structs or RT functions
+/// -------------------
+///
+///{
+#ifndef ARTS_TYPE
+#define ARTS_TYPE(VarName, InitValue)
+#endif
+
+// Macro for integer types with a specific bit width
+#define __ARTS_INTEGER_TYPE(VarName, BitWidth)                                 \
+  ARTS_TYPE(VarName, mlir::IntegerType::get(builder.getContext(), BitWidth))
+
+// Macro for specific types (e.g., void, float, double)
+#define __ARTS_TYPE(VarName, TypeCreator)                                      \
+  ARTS_TYPE(VarName, TypeCreator(builder.getContext()))
+
+// Macro for pointer types
+#define __ARTS_PTR_TYPE(VarName, PointeeType)                                  \
+  ARTS_TYPE(VarName, mlir::LLVM::LLVMPointerType::get(PointeeType))
+
+// Define basic LLVM types
+__ARTS_TYPE(Void, mlir::LLVM::LLVMVoidType::get)
+__ARTS_TYPE(Float, mlir::Float32Type::get)
+__ARTS_TYPE(Double, mlir::Float64Type::get)
+
+// Define integer types
+__ARTS_INTEGER_TYPE(Int1, 1)
+__ARTS_INTEGER_TYPE(Int8, 8)
+__ARTS_INTEGER_TYPE(Int16, 16)
+__ARTS_INTEGER_TYPE(Int32, 32)
+__ARTS_INTEGER_TYPE(Int64, 64)
+
+// Define pointer types
+__ARTS_PTR_TYPE(VoidPtr, Void)
+__ARTS_PTR_TYPE(Int8Ptr, Int8)
+__ARTS_PTR_TYPE(Int16Ptr, Int16)
+__ARTS_PTR_TYPE(Int32Ptr, Int32)
+__ARTS_PTR_TYPE(Int64Ptr, Int64)
+__ARTS_PTR_TYPE(Int8PtrPtr, Int8Ptr)
+
+/// SizeTy (use data layout information from MLIR's module)
+ARTS_TYPE(SizeTy,
+          mlir::IntegerType::get(Ctx,
+                                 dataLayout.getTypeSizeInBits(
+                                     mlir::LLVM::LLVMPointerType::get(Ctx))))
+
+#undef __ARTS_INTEGER_TYPE
+#undef __ARTS_TYPE
+#undef __ARTS_PTR_TYPE
+#undef ARTS_TYPE
+///}
+
+/// ------------------- Array types -------------------
+///
+///{
+#ifndef ARTS_ARRAY_TYPE
+#define ARTS_ARRAY_TYPE(VarName, ElemTy, ArraySize)
+#endif
+
+#define __ARTS_ARRAY_TYPE(VarName, ElemTy, ArraySize)                          \
+  ARTS_ARRAY_TYPE(VarName, ElemTy, ArraySize)
+
+#undef __ARTS_ARRAY_TYPE
+#undef ARTS_ARRAY_TYPE
+///}
+
+/// ------------------- Struct types -------------------
+///
+///{
+#ifndef ARTS_STRUCT_TYPE
+#define ARTS_STRUCT_TYPE(VarName, StructName, Packed, ...)
+#endif
+
+#define __ARTS_STRUCT_TYPE(VarName, Name, Packed, ...)                         \
+  ARTS_STRUCT_TYPE(VarName, "struct." #Name, Packed, __VA_ARGS__)
+
+/*
+typedef struct {
+    artsGuid_t guid;
+    artsType_t mode;
+    void *ptr;
+} artsEdtDep_t;
+*/
+__ARTS_STRUCT_TYPE(EdtDep, artsEdtDep_t, false, artsGuid_t, artsType_t, VoidPtr)
+/*
+struct artsHeader {
+    uint8_t type:8;
+    uint64_t size:56;
+} __attribute__ ((aligned));
+*/
+__ARTS_STRUCT_TYPE(Header, artsHeader, false, Int8, Int64)
+/*
+struct artsDb {
+    struct artsHeader header;
+    artsGuid_t guid;
+    volatile unsigned int copyCount;
+    volatile unsigned int reader;
+    volatile unsigned int writer;
+    volatile unsigned int version;
+    unsigned int timeStamp;
+    void *dbList;
+} __attribute__ ((aligned));
+*/
+__ARTS_STRUCT_TYPE(Db, artsDb, false, Header, artsGuid_t, Int32, Int32, Int32,
+                   Int32, Int32, VoidPtr)
+/*
+struct artsEdt {
+    struct artsHeader header;
+    artsEdt_t funcPtr;
+    uint32_t paramc;
+    uint32_t depc;
+    artsGuid_t currentEdt;
+    artsGuid_t outputBuffer;
+    artsGuid_t epochGuid;
+    unsigned int cluster;
+    unsigned int node;
+    volatile unsigned int depcNeeded;
+    volatile unsigned int invalidateCount;
+} __attribute__ ((aligned));
+*/
+__ARTS_STRUCT_TYPE(Edt, artsEdt, false, Header, EdtPtr, Int32, Int32,
+                   artsGuid_t, artsGuid_t, artsGuid_t, Int32, Int32, Int32,
+                   Int32)
+
+#undef __ARTS_STRUCT_TYPE
+#undef ARTS_STRUCT_TYPE
+
+/// ------------------- Function types -------------------
+///
+///{
+#ifndef ARTS_FUNCTION_TYPE
+#define ARTS_FUNCTION_TYPE(VarName, IsVarArg, ReturnType, ...)
+#endif
+
+#define __ARTS_FUNCTION_TYPE(VarName, IsVarArg, ReturnType, ...)               \
+  ARTS_FUNCTION_TYPE(VarName, IsVarArg, ReturnType, __VA_ARGS__)
+
+/*
+typedef void (*artsEdt_t) (
+  uint32_t paramc, uint64_t *paramv, uint32_t depc, artsEdtDep_t depv[]);
+*/
+__ARTS_FUNCTION_TYPE(EdtFunction, false, Void, Int32, Int64Ptr, Int32,
+                     EdtDepPtr)
+
+#undef __ARTS_FUNCTION_TYPE
+#undef ARTS_FUNCTION_TYPE
+///}
+
+/// ------------------- Runtime library function (and their attributes)
+/// -------------------
+///
+///{
+#ifndef ARTS_RTL
+#define ARTS_RTL(Enum, Str, IsVarArg, ReturnType, ...)
+#endif
+
+#define __ARTS_RTL(Name, IsVarArg, ReturnType, ...)                            \
+  ARTS_RTL(ARTSRTL_##Name, #Name, IsVarArg, ReturnType, __VA_ARGS__)
+
+__ARTS_RTL(artsRT, false, Void, Int32, Int8PtrPtr)
+__ARTS_RTL(artsShutdown, false, Void, )
+__ARTS_RTL(artsMalloc, false, VoidPtr, SizeTy)
+__ARTS_RTL(artsMallocAlign, false, VoidPtr, SizeTy, SizeTy)
+__ARTS_RTL(artsCalloc, false, VoidPtr, SizeTy, )
+__ARTS_RTL(artsCallocAlign, false, VoidPtr, SizeTy, SizeTy)
+__ARTS_RTL(artsRealloc, false, VoidPtr, VoidPtr, SizeTy)
+__ARTS_RTL(artsFree, false, Void, VoidPtr)
+__ARTS_RTL(artsFreeAlign, false, Void, VoidPtr)
+
+__ARTS_RTL(artsReserveGuidRoute, false, artsGuid_t, artsType_t, Int32)
+__ARTS_RTL(artsIsGuidLocal, false, Int1, artsGuid_t)
+__ARTS_RTL(artsGuidGetRank, false, Int32, artsGuid_t)
+__ARTS_RTL(artsGuidGetType, false, artsType_t, artsGuid_t)
+__ARTS_RTL(artsGuidCast, false, artsGuid_t, artsGuid_t, artsType_t)
+/// artsNewGuidRangeNode
+/// artsGetGuid
+/// artsGuidRangeNext
+/// artsGuidRangeHasNext
+/// artsGuidRangeResetIter
+/// artsReserveGuidsRoundRobin
+// artsGuid_t artsEdtCreate(artsEdt_t funcPtr, unsigned int route, uint32_t
+// paramc, uint64_t * paramv, uint32_t depc);
+__ARTS_RTL(artsEdtCreate, false, artsGuid_t, EdtFunctionPtr, Int32, Int32,
+           Int32, Int32)
+// artsGuid_t artsEdtCreateWithGuid(artsEdt_t funcPtr, artsGuid_t guid, uint32_t
+// paramc, uint64_t * paramv, uint32_t depc);
+__ARTS_RTL(artsEdtCreateWithGuid, false, artsGuid_t, EdtFunctionPtr, artsGuid_t,
+           Int32, Int64Ptr, Int32)
+__ARTS_RTL(artsEdtCreateWithGuidAndEpoch, false, artsGuid_t, EdtFunctionPtr,
+           Int32, Int64Ptr, Int32, artsGuid_t)
+/// artsEdtCreateDep
+/// artsEdtCreateWithGuidDep
+/// artsEdtCreateWithEpochDep
+__ARTS_RTL(artsEdtDestroy, false, Void, artsGuid_t)
+
+__ARTS_RTL(artsSignalEdt, false, Void, artsGuid_t, Int32, artsGuid_t)
+// void artsSignalEdtValue( edtGuid, uint32_t slot, uint64_t data);
+__ARTS_RTL(artsSignalEdtValue, false, Void, artsGuid_t, Int32, Int64)
+__ARTS_RTL(artsSignalEdtPtr, false, Void, artsGuid_t, Int32, VoidPtr, Int32)
+/// artsActiveMessageWithDb
+/// attsActiveMessageWithDbAt
+/// artsActiveMessageWithBuffer
+/// artsAllocateLocalBuffer
+/// artsSetBuffer
+/// artsGetBuffer
+/// artsBlockForBuffer
+
+/// artsEventCreate
+/// artsEventCreateWithGuid
+/// artsIsEventFired
+/// artsEventDestroy
+/// artsEventSatisfySlot
+/// artsAddDependence
+/// artsAddLocalEventCallback
+
+/// artsDbCreate
+/// artsGuid_t artsDbCreate(void **addr, uint64_t size, artsType_t mode);
+// __ARTS_RTL(artsDbCreate, false, artsGuid_t, VoidPtrPtr, Int64, artsType_t)
+/// artsGuid_t artsDbCreatePtr(artsPtr_t *addr, uint64_t size, artsType_t mode);
+__ARTS_RTL(artsDbCreatePtr, false, artsGuid_t, VoidPtr, Int64, artsType_t)
+#undef __ARTS_RTL
+#undef ARTS_RTL

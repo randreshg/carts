@@ -75,7 +75,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i1, dense<8> : ve
     %cst = arith.constant 0.000000e+00 : f64
     %0 = arith.index_cast %arg0 : i32 to index
     arts.parallel {
-      omp.barrier
+      arts.barrier
       arts.single {
         affine.for %arg3 = 0 to %0 {
           %1 = arith.index_cast %arg3 : index to i32
@@ -100,7 +100,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i1, dense<8> : ve
           }
         }
       }
-      omp.barrier
+      arts.barrier
     }
     return
   }
