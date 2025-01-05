@@ -9,6 +9,7 @@
 #include "llvm/IR/InstrTypes.h"
 #include <sys/types.h>
 
+namespace mlir {
 namespace arts {
 // using namespace llvm;
 using namespace std;
@@ -88,4 +89,5 @@ enum class RuntimeFunction {
 
 } // end namespace types
 } // end namespace arts
+} // end namespace mlir
 #endif // LLVM_ARTS_TYPES_H

@@ -1,5 +1,7 @@
 add_mlir_dialect_library(MLIRArtsTransforms
   ConvertOpenMPToARTS.cpp
+  ConvertARTSToFuncs.cpp
+  ${CARTS_CODEGEN_SOURCE_FILES}
 
 DEPENDS
   MLIRArtsOpsIncGen

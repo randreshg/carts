@@ -54,12 +54,12 @@ int main(int argc, char **argv) {
   registry.insert<DLTIDialect>();
   registry.insert<mlir::arts::ArtsDialect>();
 
-  // Register all passes and translations.
+  /// Register all passes and translations.
   mlir::registerArtsPasses();
   // mlir::registerAllPasses();
   mlir::func::registerInlinerExtension(registry);
 
-  // Run the MlirOptMain driver with the registered dialects and passes.
+  /// Run the MlirOptMain driver with the registered dialects and passes.
   return mlir::failed(mlir::MlirOptMain(
       argc, argv, "Polygeist Modular Optimizer Driver", registry));
 }

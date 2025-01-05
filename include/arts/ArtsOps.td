@@ -155,4 +155,16 @@ def YieldOp : Arts_Op<"yield",
   }];
 }
 
+//===----------------------------------------------------------------------===//
+// arts.barrier
+//===----------------------------------------------------------------------===//
+def BarrierOp : Arts_Op<"barrier"> {
+  let summary = "Barrier synchronization in ARTS";
+  let description = [{
+    Barrier synchronization operation in ARTS. It synchronizes all previous
+    spawned EDTs of the parent region.
+  }];
+  let assemblyFormat = "attr-dict";
+}
+
 #endif // ARTS_OPS

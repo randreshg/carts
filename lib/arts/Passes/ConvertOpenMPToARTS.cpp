@@ -14,15 +14,15 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "mlir/Transforms/RegionUtils.h"
 
 #include "llvm/ADT/SmallVector.h"
 
+/// Arts
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
-
+/// Debug
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -31,16 +31,8 @@
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
-using namespace std;
 using namespace mlir;
 using namespace arts;
-
-namespace {
-struct ConvertOpenMPToARTSPass
-    : public mlir::arts::ConvertOpenMPToARTSBase<ConvertOpenMPToARTSPass> {
-  void runOnOperation() override;
-};
-} // namespace
 
 /// Collects parameters for the EdtOp
 static void collectParameters(SmallVectorImpl<Value> &parameters,
@@ -64,6 +56,9 @@ static void collectParameters(SmallVectorImpl<Value> &parameters,
   });
 }
 
+//===----------------------------------------------------------------------===//
+// Conversion Patterns
+//===----------------------------------------------------------------------===//
 /// Pattern to replace `omp.parallel` with `arts.parallel`
 struct ParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -167,13 +162,14 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
 
       /// Get affine operands
       auto memref = depLoadOp.getMemRef();
-      auto valToLoad = depLoadOp.getValue();
+      // auto valToLoad = depLoadOp.getValue();
       auto affineMap = depLoadOp.getAffineMap();
       auto indices = depStoreOp.getIndices();
       SmallVector<Value> operands(indices.begin(), indices.end());
       // LLVM_DEBUG(dbgs() << "    - Memref: " << memref << "\n");
       // LLVM_DEBUG(dbgs() << "    - Value: " << valToLoad << "\n");
-      // LLVM_DEBUG(dbgs() << "    - AffineMap: " << AffineMapAttr::get(affineMap)
+      // LLVM_DEBUG(dbgs() << "    - AffineMap: " <<
+      // AffineMapAttr::get(affineMap)
       //                   << "\n");
 
       /// Use the affineMapAttr as needed
@@ -211,7 +207,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
   }
 };
 
-/// Pattern to replace all terminators with `arts.yield`
+/// Pattern to replace `omp.terminator` with `arts.yield`
 struct TerminatorToARTSPattern : public OpRewritePattern<omp::TerminatorOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -224,6 +220,30 @@ struct TerminatorToARTSPattern : public OpRewritePattern<omp::TerminatorOp> {
   }
 };
 
+/// Pattern to replace `omp.barrier` with `arts.barrier`
+struct BarrierToARTSPattern : public OpRewritePattern<omp::BarrierOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(omp::BarrierOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    rewriter.create<arts::BarrierOp>(loc);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// Pass Implementation
+//===----------------------------------------------------------------------===//
+namespace {
+struct ConvertOpenMPToARTSPass
+    : public mlir::arts::ConvertOpenMPToARTSBase<ConvertOpenMPToARTSPass> {
+  void runOnOperation() override;
+};
+} // end namespace
+
+/// Pass to convert OpenMP operations to ARTS operations
 void ConvertOpenMPToARTSPass::runOnOperation() {
   auto module = getOperation();
   module->dump();
@@ -232,7 +252,7 @@ void ConvertOpenMPToARTSPass::runOnOperation() {
   MLIRContext *context = &getContext();
   RewritePatternSet patterns(context);
   patterns.add<ParallelToARTSPattern, MasterToARTSPattern, TaskToARTSPattern,
-               TerminatorToARTSPattern>(context);
+               TerminatorToARTSPattern, BarrierToARTSPattern>(context);
   GreedyRewriteConfig config;
   if (failed(applyPatternsAndFoldGreedily(getOperation(), std::move(patterns),
                                           config))) {
@@ -241,18 +261,18 @@ void ConvertOpenMPToARTSPass::runOnOperation() {
     return;
   }
 
-  /// ---- Remove all UndefOps ---- ///
-  /// Traverse all operations in the module and collect UndefOps.
+  /// Remove all UndefOps
   removeUndefOps(module);
 
   LLVM_DEBUG(dbgs() << line << "ConvertOpenMPToARTSPass FINISHED\n" << line);
 }
+
 //===----------------------------------------------------------------------===//
 // Pass creation
 //===----------------------------------------------------------------------===//
 namespace mlir {
 namespace arts {
-unique_ptr<Pass> createConvertOpenMPtoARTSPass() {
+std::unique_ptr<Pass> createConvertOpenMPtoARTSPass() {
   return std::make_unique<ConvertOpenMPToARTSPass>();
 }
 } // namespace arts
