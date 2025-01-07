@@ -66,6 +66,13 @@ void MakeDepOp::build(OpBuilder &builder, OperationState &result,
   result.addOperands(affine_operands);
 }
 
+void MakeDepOp::build(OpBuilder &builder, OperationState &result,
+                      StringRef mode, Value memref) {
+  result.addTypes(arts::DepType::get(builder.getContext()));
+  result.addAttribute("mode", builder.getStringAttr(mode));
+  result.addOperands({memref});
+}
+
 //===----------------------------------------------------------------------===//
 // UndefOp
 //===----------------------------------------------------------------------===//
@@ -86,4 +93,34 @@ public:
 void UndefOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                           MLIRContext *context) {
   results.insert<UndefToLLVM>(context);
+}
+
+//===----------------------------------------------------------------------===//
+// EdtOp
+//===----------------------------------------------------------------------===//
+/// Retrieve parameters.
+SmallVector<Value> EdtOp::getParametersValues() {
+  auto parameters = getParameters();
+  SmallVector<Value, 4> parametersVector(parameters.begin(), parameters.end());
+  return parametersVector;
+}
+
+/// Retrieve dependencies.
+SmallVector<Value> EdtOp::getDependenciesValues() {
+  auto dependencies = getDependencies();
+  SmallVector<Value, 4> dependenciesVector(dependencies.begin(),
+                                           dependencies.end());
+  return dependenciesVector;
+}
+
+/// Get the number of parameters.
+unsigned EdtOp::getNumParameters() {
+  auto parameters = getParameters();
+  return parameters.size();
+}
+
+/// Get the number of dependencies.
+unsigned EdtOp::getNumDependencies() {
+  auto dependencies = getDependencies();
+  return dependencies.size();
 }
