@@ -5,12 +5,16 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h" // Correct include for FuncOp
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Location.h"
+#include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 
+#include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsTypes.h"
 #include "mlir/Analysis/DataLayoutAnalysis.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
+#include <sys/types.h>
 
 namespace mlir {
 namespace arts {
@@ -32,8 +36,26 @@ public:
   func::FuncOp getOrCreateRuntimeFunction(RuntimeFunction FnID);
 
   /// Generate a call to a runtime function
-  mlir::Value createRuntimeCall(RuntimeFunction FnID,
-                                ArrayRef<mlir::Value> args, Location loc);
+  func::CallOp createRuntimeCall(RuntimeFunction FnID,
+                                 ArrayRef<mlir::Value> args, Location loc);
+
+  /// Create Edt
+  mlir::Value createEdt(mlir::Value edtGuid, mlir::Value edtPtr,
+                        mlir::Value edtSlotPtr, Location loc);
+  func::FuncOp createEdtFunction(Location loc);
+  func::CallOp insertEdtCall(arts::EdtOp edtOp, func::FuncOp edtFunc, Location loc);
+  func::CallOp createEdtCall(func::FuncOp edtFunc, mlir::Value edtGuid,
+                             SmallVector<Value> &edtParameters,
+                             unsigned edtDepNum, Location loc);
+  mlir::Value createEdtGuid(uint64_t edtNode, Location loc);
+
+  unsigned increaseEdtCounter() { return ++edtCounter; }
+
+  /// Insertion point
+  void setInsertionPoint(Operation *op) { builder.setInsertionPoint(op); }
+  void setInsertionPointAfter(Operation *op) {
+    builder.setInsertionPointAfter(op);
+  }
 
   // ---------------------------- Types ---------------------------- ///
   /// Declarations for LLVM-IR types (simple, array, function and structure) are
@@ -47,8 +69,7 @@ public:
   LLVMArrayType VarName##ArrayTy = nullptr;                                    \
   LLVMPointerType VarName##PtrTy = nullptr;
 #define ARTS_FUNCTION_TYPE(VarName, IsVarArg, ReturnType, ...)                 \
-  LLVMFunctionType VarName = nullptr;                                          \
-  LLVMPointerType VarName##Ptr = nullptr;
+  FunctionType VarName = nullptr;
 #define ARTS_STRUCT_TYPE(VarName, StructName, ...)                             \
   LLVMStructType VarName = nullptr;                                            \
   LLVMPointerType VarName##Ptr = nullptr;
@@ -62,6 +83,8 @@ private:
   ModuleOp &module;
   OpBuilder &builder;
   DataLayout dataLayout;
+  /// Function counter
+  unsigned edtCounter = 0;
   // Add more types as necessary
 };
 

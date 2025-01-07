@@ -37,27 +37,72 @@ def UndefOp: Arts_Op<"undef", [Pure]> {
 //===----------------------------------------------------------------------===//
 // arts.make_dep
 //===----------------------------------------------------------------------===//
-def MakeDepOp : Arts_Op<"make_dep", []> {
-  let summary = "Creates an affine dependency for arts.edt";
-  let description = [{
-    This operation creates an affine dependency for the arts.edt operation.
-    It includes the mode, memref, affine map, and any related operands.
-  }];
+// def MakeDepOp : Arts_Op<"make_dep", []> {
+//   let summary = "Creates an affine dependency for arts.edt";
+//   let description = [{
+//     This operation creates an affine dependency for the arts.edt operation.
+//     It includes the mode, memref, affine map, and any related operands.
+//   }];
   
-  let arguments = (ins
-    StrAttr:$mode,                      // Dependency mode (e.g., "in", "out", etc.)
-    AnyMemRef:$memref,                  // Memory reference for dependency
-    AffineMapAttr:$affine_map,          // Affine map for indexing
-    Variadic<Index>:$affine_operands    // Variadic list of operands for affine map
-  );
-  let results = (outs DepType:$dep);
-  let assemblyFormat = [{
-    $mode `,` $memref `:` type($memref) `,` 
-    $affine_map `(` $affine_operands `)` attr-dict `:` type($dep)
+//   let arguments = (ins
+//     StrAttr:$mode,                      // Dependency mode (e.g., "in", "out", "inout")
+//     AnyMemRef:$memref,                  // Memory reference for dependency
+//     AffineMapAttr:$affine_map,          // Affine map for indexing
+//     Variadic<Index>:$affine_operands    // Variadic list of operands for affine map
+//   );
+//   let results = (outs DepType:$dep);
+//   let assemblyFormat = [{
+//     $mode `,` $memref `:` type($memref) `,` 
+//     $affine_map `(` $affine_operands `)` attr-dict `:` type($dep)
+//   }];
+//   let skipDefaultBuilders = 1;
+//   let builders = [ OpBuilder<(ins 
+//     "StringRef":$mode, "Value":$memref, "AffineMap":$affine_map, "ValueRange":$affine_operands)>];
+// }
+
+def MakeDepOp : Arts_Op<"make_dep", []> {
+  let summary = "Creates a dependency for arts.edt or arts.parallel";
+  let description = [{
+    This operation creates a dependency for the arts.edt operation.
+    It can include an affine map + operands, or omit them entirely
+    when no indexing is required.
   }];
+
+  // Note the use of `OptionalAttr<AffineMapAttr>` for affine_map.
+  let arguments = (ins
+    StrAttr:$mode,                            // e.g., "in", "out", "inout"
+    AnyMemRef:$memref,                        // Memory reference for dependency
+    OptionalAttr<AffineMapAttr>:$affine_map,  // optional AffineMap attribute
+    Variadic<Index>:$affine_operands          // optional list of index operands
+  );
+
+  let results = (outs DepType:$dep);
+
+  // Example parse:
+  //   make_dep "in", %A : memref<?xf32>  // no map or operands
+  //   make_dep "out", %B : memref<?xf32>, affine_map<(d0) -> (d0)>(%i)
+  //
+   // Use brackets as anchors for the optional group
+  let assemblyFormat = [{
+    $mode `,` $memref `:` type($memref)
+    ( `(` $affine_map^ `(` $affine_operands `)` `)` )?
+    attr-dict `:` type($dep)
+  }];
+
   let skipDefaultBuilders = 1;
-  let builders = [ OpBuilder<(ins 
-    "StringRef":$mode, "Value":$memref, "AffineMap":$affine_map, "ValueRange":$affine_operands)>];
+
+  // We provide two builders:
+  //  1) one that doesn't take a map or operands,
+  //  2) one that takes the map and operands.
+  // The user can choose based on whether they need affine indexing or not.
+  let builders = [
+    // e.g. make_dep("in", %A) => no map or affine operands
+    OpBuilder<(ins "StringRef":$mode, "Value":$memref)>,
+
+    // e.g. make_dep("out", %A, affineMap, operands...)
+    OpBuilder<(ins "StringRef":$mode, "Value":$memref,
+               "AffineMap":$affine_map, "ValueRange":$affine_operands)>
+  ];
 }
 
 //===----------------------------------------------------------------------===//
@@ -71,22 +116,55 @@ def EdtOp : Arts_Op<"edt",
   Defines an ARTS event-driven task (EDT) with:
     - `parameters` that define task-specific inputs.
     - `dependencies` that specify input/output memory dependencies.
-
-  The single-block region contains the task body. Parameters are provided
-  as SSA values, and dependencies are described as structured attributes
-  (e.g., memref, mode, indices).
+  The single-block region contains the task body.
   }];
-
   let arguments = (ins
     Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$parameters,
     Variadic<DepType>:$dependencies
   );
   let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
-    `parameters` `(` $parameters `)` `:` type($parameters) `,` 
-    `dependencies` `(` $dependencies `)` `:` type($dependencies)
+    `parameters` `(` $parameters `)` `:` `(` type($parameters) `)` `,` 
+    `dependencies` `(` $dependencies `)` `:` `(` type($dependencies) `)`
     attr-dict-with-keyword $body
-}];
+  }];
+  let extraClassDeclaration = [{
+    SmallVector<Value> getParametersValues();
+    SmallVector<Value> getDependenciesValues();
+    unsigned getNumParameters();
+    unsigned getNumDependencies();
+  }];
+}
+
+//===----------------------------------------------------------------------===//
+// arts.parallel
+//===----------------------------------------------------------------------===//
+def ParallelOp : Arts_Op<"parallel", 
+    [SingleBlockImplicitTerminator<"arts::YieldOp">, AttrSizedOperandSegments]> {
+  let summary = "Parallel region in ARTS";
+  let description = [{
+    An ARTS parallel region. It can spawn multiple tasks.
+    Typically used to replicate something like `#pragma omp parallel`.
+    It has
+      - `parameters` that define task-specific inputs.
+      - `dependencies` that specify input/output memory dependencies.
+  }];
+  let arguments = (ins
+    Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$parameters,
+    Variadic<DepType>:$dependencies
+  );
+  let regions = (region AnyRegion:$body);
+  let assemblyFormat = [{
+    `parameters` `(` $parameters `)` `:` `(` type($parameters) `)` `,` 
+    `dependencies` `(` $dependencies `)` `:` `(` type($dependencies) `)`
+    attr-dict-with-keyword $body
+  }];
+  let extraClassDeclaration = [{
+    SmallVector<Value> getParametersValues();
+    SmallVector<Value> getDependenciesValues();
+    unsigned getNumParameters();
+    unsigned getNumDependencies();
+  }];
 }
 
 //===----------------------------------------------------------------------===//
@@ -105,21 +183,7 @@ def EpochOp : Arts_Op<"epoch",
   }];
 }
 
-//===----------------------------------------------------------------------===//
-// arts.parallel
-//===----------------------------------------------------------------------===//
-def ParallelOp : Arts_Op<"parallel", 
-    [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
-  let summary = "Parallel region in ARTS";
-  let description = [{
-    An ARTS parallel region. It can spawn multiple tasks.
-    Typically used to replicate something like `#pragma omp parallel`.
-  }];
-  let regions = (region AnyRegion:$body);
-  let assemblyFormat = [{
-    attr-dict-with-keyword $body
-  }];
-}
+
 
 //===----------------------------------------------------------------------===//
 // arts.single

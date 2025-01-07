@@ -46,6 +46,10 @@ namespace func {
 class FuncDialect;
 } // end namespace func
 
+namespace arith {
+class ArithDialect;
+} // end namespace arith
+
 #define GEN_PASS_REGISTRATION
 #include "arts/Passes/ArtsPasses.h.inc"
 

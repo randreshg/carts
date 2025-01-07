@@ -18,8 +18,7 @@
 #define artsTicket_t Int64
 #define artsType_t Int32
 
-/// -------------------Types used in RT structs or RT functions
-/// -------------------
+/// -----------------Types used in RT structs or RT functions -----------------
 ///
 ///{
 #ifndef ARTS_TYPE
@@ -28,15 +27,14 @@
 
 // Macro for integer types with a specific bit width
 #define __ARTS_INTEGER_TYPE(VarName, BitWidth)                                 \
-  ARTS_TYPE(VarName, mlir::IntegerType::get(Ctx, BitWidth))
+  ARTS_TYPE(VarName, mlir::IntegerType::get(ctx, BitWidth))
 
 // Macro for specific types (e.g., void, float, double)
-#define __ARTS_TYPE(VarName, TypeCreator)                                      \
-  ARTS_TYPE(VarName, TypeCreator(Ctx))
+#define __ARTS_TYPE(VarName, TypeCreator) ARTS_TYPE(VarName, TypeCreator(ctx))
 
 // Macro for pointer types
 #define __ARTS_PTR_TYPE(VarName, PointeeType)                                  \
-  ARTS_TYPE(VarName, mlir::LLVM::LLVMPointerType::get(PointeeType))
+  ARTS_TYPE(VarName, mlir::LLVM::LLVMPointerType::get(ctx))
 
 // Define basic LLVM types
 __ARTS_TYPE(Void, mlir::LLVM::LLVMVoidType::get)
@@ -53,16 +51,14 @@ __ARTS_INTEGER_TYPE(Int64, 64)
 // Define pointer types
 __ARTS_PTR_TYPE(VoidPtr, Void)
 __ARTS_PTR_TYPE(Int8Ptr, Int8)
-__ARTS_PTR_TYPE(Int16Ptr, Int16)
-__ARTS_PTR_TYPE(Int32Ptr, Int32)
+// __ARTS_PTR_TYPE(Int16Ptr, Int16)
+// __ARTS_PTR_TYPE(Int32Ptr, Int32)
 __ARTS_PTR_TYPE(Int64Ptr, Int64)
 __ARTS_PTR_TYPE(Int8PtrPtr, Int8Ptr)
 
 /// SizeTy (use data layout information from MLIR's module)
 ARTS_TYPE(SizeTy,
-          mlir::IntegerType::get(Ctx,
-                                 dataLayout.getTypeSizeInBits(
-                                     mlir::LLVM::LLVMPointerType::get(Ctx))))
+          mlir::IntegerType::get(ctx, dataLayout.getTypeSizeInBits(VoidPtr)))
 
 #undef __ARTS_INTEGER_TYPE
 #undef __ARTS_TYPE
@@ -199,14 +195,14 @@ __ARTS_RTL(artsGuidCast, false, artsGuid_t, artsGuid_t, artsType_t)
 /// artsReserveGuidsRoundRobin
 // artsGuid_t artsEdtCreate(artsEdt_t funcPtr, unsigned int route, uint32_t
 // paramc, uint64_t * paramv, uint32_t depc);
-__ARTS_RTL(artsEdtCreate, false, artsGuid_t, EdtFunctionPtr, Int32, Int32,
-           Int32, Int32)
+__ARTS_RTL(artsEdtCreate, false, artsGuid_t, EdtFunction, Int32, Int32, Int32,
+           Int32)
 // artsGuid_t artsEdtCreateWithGuid(artsEdt_t funcPtr, artsGuid_t guid, uint32_t
 // paramc, uint64_t * paramv, uint32_t depc);
-__ARTS_RTL(artsEdtCreateWithGuid, false, artsGuid_t, EdtFunctionPtr, artsGuid_t,
+__ARTS_RTL(artsEdtCreateWithGuid, false, artsGuid_t, EdtFunction, artsGuid_t,
            Int32, Int64Ptr, Int32)
-__ARTS_RTL(artsEdtCreateWithGuidAndEpoch, false, artsGuid_t, EdtFunctionPtr,
-           Int32, Int64Ptr, Int32, artsGuid_t)
+__ARTS_RTL(artsEdtCreateWithGuidAndEpoch, false, artsGuid_t, EdtFunction, Int32,
+           Int64Ptr, Int32, artsGuid_t)
 /// artsEdtCreateDep
 /// artsEdtCreateWithGuidDep
 /// artsEdtCreateWithEpochDep

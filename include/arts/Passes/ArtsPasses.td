@@ -21,7 +21,8 @@ def ConvertARTSToFuncs : Pass<"convert-arts-to-funcs", "mlir::ModuleOp"> {
     "memref::MemRefDialect",
     "LLVM::LLVMDialect",
     "func::FuncDialect",
-    "arts::ArtsDialect"
+    "arts::ArtsDialect",
+    "arith::ArithDialect"
   ];
   let constructor = "mlir::arts::createConvertARTSToFuncsPass()";
 }
