@@ -14,6 +14,7 @@
 #include "mlir/Analysis/DataLayoutAnalysis.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
+#include "llvm/ADT/SmallVector.h"
 #include <sys/types.h>
 
 namespace mlir {
@@ -23,7 +24,7 @@ using namespace types;
 
 class ArtsCodegen {
 public:
-  ArtsCodegen(ModuleOp &module, OpBuilder &builder);
+  ArtsCodegen(ModuleOp &module, OpBuilder &builder, llvm::DataLayout &dataLayout);
   ~ArtsCodegen();
 
   /// Initialize types and runtime function declarations
@@ -43,11 +44,15 @@ public:
   mlir::Value createEdt(mlir::Value edtGuid, mlir::Value edtPtr,
                         mlir::Value edtSlotPtr, Location loc);
   func::FuncOp createEdtFunction(Location loc);
-  func::CallOp insertEdtCall(arts::EdtOp edtOp, func::FuncOp edtFunc, Location loc);
+  func::CallOp insertEdtCall(arts::EdtOp edtOp, func::FuncOp edtFunc,
+                             Location loc);
   func::CallOp createEdtCall(func::FuncOp edtFunc, mlir::Value edtGuid,
                              SmallVector<Value> &edtParameters,
                              unsigned edtDepNum, Location loc);
   mlir::Value createEdtGuid(uint64_t edtNode, Location loc);
+  mlir::Value insertEdtEntry(func::FuncOp edtFunc,
+                             SmallVector<Value> &opParameters,
+                             SmallVector<Value> &opDependencies, Location loc);
 
   unsigned increaseEdtCounter() { return ++edtCounter; }
 
@@ -65,9 +70,6 @@ public:
   ///
   ///{
 #define ARTS_TYPE(VarName, InitValue) mlir::Type VarName = nullptr;
-#define ARTS_ARRAY_TYPE(VarName, ElemTy, ArraySize)                            \
-  LLVMArrayType VarName##ArrayTy = nullptr;                                    \
-  LLVMPointerType VarName##PtrTy = nullptr;
 #define ARTS_FUNCTION_TYPE(VarName, IsVarArg, ReturnType, ...)                 \
   FunctionType VarName = nullptr;
 #define ARTS_STRUCT_TYPE(VarName, StructName, ...)                             \
@@ -82,7 +84,7 @@ private:
   /// The MLIR module and builder
   ModuleOp &module;
   OpBuilder &builder;
-  DataLayout dataLayout;
+  llvm::DataLayout &dataLayout;
   /// Function counter
   unsigned edtCounter = 0;
   // Add more types as necessary

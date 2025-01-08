@@ -10,13 +10,17 @@
 // #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/Region.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Analysis/DataLayoutAnalysis.h"
 /// Arts
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
@@ -24,8 +28,10 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
 /// Debug
+#include "llvm/IR/DataLayout.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <optional>
 
 #define DEBUG_TYPE "convert-arts-to-funcs"
 #define line "-----------------------------------------\n"
@@ -35,155 +41,187 @@
 using namespace mlir;
 using namespace arts;
 
-//===----------------------------------------------------------------------===//
-// Conversion Patterns
-//===----------------------------------------------------------------------===//
-/// Conversion for `arts.make_dep`
-struct MakeDepOpLowering : public OpRewritePattern<arts::MakeDepOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  MakeDepOpLowering(ArtsCodegen &codegen, MLIRContext *ctx)
-      : OpRewritePattern<MakeDepOp>(ctx), codegen(codegen) {}
-
-  LogicalResult matchAndRewrite(arts::MakeDepOp op,
-                                PatternRewriter &rewriter) const override {
-    // Replace `arts.make_dep` with a custom operation (or function call)
-    // auto depType = op.getResult().getType();
-    // auto funcType =
-    //     rewriter.getFunctionType({op.memref().getType()}, {depType});
-    // auto funcOp =
-    //     rewriter.create<func::FuncOp>(op.getLoc(), "__make_dep_func",
-    //     funcType);
-
-    // rewriter.replaceOpWithNewOp<func::CallOp>(op, funcOp, op.getOperands());
-    return success();
-  }
-
-private:
-  ArtsCodegen &codegen;
+/*------------------------------------------------------------------------------
+ * A small struct to store info about a loop:
+ *   - whether it has a constant upper bound, and
+ *   - either that const or the dynamic Value.
+ *----------------------------------------------------------------------------*/
+struct LoopInfo {
+  bool isConstant = false;
+  int64_t constUpper = -1;
+  mlir::Value dynamicUpper = nullptr;
 };
 
-/// Conversion for `arts.edt`
-struct EdtOpLowering : public OpRewritePattern<arts::EdtOp> {
-  using OpRewritePattern::OpRewritePattern;
+/*------------------------------------------------------------------------------
+ * ArtsAnalysis: Helper class to do multi-step analysis on the module
+ *----------------------------------------------------------------------------*/
+class ArtsAnalysis {
+public:
+  explicit ArtsAnalysis(mlir::ModuleOp &module, arts::ArtsCodegen &codegen)
+      : module(module), codegen(codegen) {}
 
-  EdtOpLowering(ArtsCodegen &codegen, MLIRContext *ctx)
-      : OpRewritePattern<EdtOp>(ctx), codegen(codegen) {}
-
-  LogicalResult matchAndRewrite(arts::EdtOp op,
-                                PatternRewriter &rewriter) const override {
-    /// Replace `arts.parallel` with a function that encapsulates the parallel
-    /// region
-    auto currLoc = op.getLoc();
-    auto module = op->getParentOfType<ModuleOp>();
-    auto edtFunc = codegen.createEdtFunction(currLoc);
-    auto edtCall = codegen.insertEdtCall(op, edtFunc, currLoc);
-
-    // LLVM_DEBUG(dbgs() << "Created EDT function\n" << edtFuncOp << "\n");
-
-    /// debug module
-    // rewriter.replaceOp(op, edtCall);
-    // module.dump();
-    module.print(llvm::outs());
-    return success();
-  }
+  void start();
+  void detectAndAnalyzeLoops(mlir::ModuleOp module);
+  void collectMakeDepOps(mlir::ModuleOp module);
+  void analyzeAndProcessOp(mlir::Operation *op);
 
 private:
-  ArtsCodegen &codegen;
-};
+  /// Data structures for storing "make_dep" results
+  struct DepItem {
+    std::string mode;
+    mlir::Value memRef;
+    mlir::Location loc;
+  };
 
-/// Conversion for `arts.epoch`
-struct EpochOpLowering : public OpRewritePattern<arts::EpochOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  EpochOpLowering(ArtsCodegen &codegen, MLIRContext *ctx)
-      : OpRewritePattern<EpochOp>(ctx), codegen(codegen) {}
-
-  LogicalResult matchAndRewrite(arts::EpochOp op,
-                                PatternRewriter &rewriter) const override {
-    // Replace `arts.epoch` with a function that encapsulates the epoch region
-    // auto funcType = rewriter.getFunctionType({}, {});
-    auto funcName = "__arts_epoch";
-
-    // auto funcOp =
-    //     rewriter.create<func::FuncOp>(op.getLoc(), funcName, funcType);
-    // funcOp.getBody().takeBody(op.getBody());
-
-    // rewriter.replaceOpWithNewOp<func::CallOp>(op, funcOp.getFunctionType(),
-    //                                           funcOp.getName(),
-    //                                           ValueRange());
-    return success();
-  }
+  void processEdtOp(arts::EdtOp edt);
+  void processParallelOp(arts::ParallelOp parOp);
+  void processMakeDepOp(arts::MakeDepOp makeDepOp);
+  void processEpochOp(arts::EpochOp epochOp);
 
 private:
-  ArtsCodegen &codegen;
+  mlir::ModuleOp &module;
+  arts::ArtsCodegen &codegen;
+  llvm::SmallVector<LoopInfo, 8> loopInfos;
+  llvm::SmallVector<DepItem, 8> depsInfo;
 };
 
-/// Conversion for `arts.parallel`
-struct ParallelOpLowering : public OpRewritePattern<arts::ParallelOp> {
-  using OpRewritePattern::OpRewritePattern;
+void ArtsAnalysis::start() {
+  /// Start with parallel ops.
+  /// This is assuming that parallel ops are the top-level ops.
+  module.walk([&](arts::ParallelOp op) { processParallelOp(op); });
+}
 
-  ParallelOpLowering(ArtsCodegen &codegen, MLIRContext *ctx)
-      : OpRewritePattern<ParallelOp>(ctx), codegen(codegen) {}
+void ArtsAnalysis::detectAndAnalyzeLoops(mlir::ModuleOp module) {
+  loopInfos.clear();
+  module.walk([&](mlir::Operation *op) {
+    // scf::ForOp
+    if (auto forOp = mlir::dyn_cast<mlir::scf::ForOp>(op)) {
+      LoopInfo info;
+      // Check if upper bound is a constant Index
+      if (auto ubCstOp = forOp.getUpperBound()
+                             .getDefiningOp<mlir::arith::ConstantIndexOp>()) {
+        info.isConstant = true;
+        info.constUpper = ubCstOp.value();
+        DBGS() << "Found scf.for with constant upper bound = "
+               << info.constUpper << "\n";
+      } else {
+        info.isConstant = false;
+        info.dynamicUpper = forOp.getUpperBound();
+        DBGS() << "Found scf.for with dynamic upper bound = "
+               << info.dynamicUpper << "\n";
+      }
+      loopInfos.push_back(info);
+    }
+    // affine.for
+    else if (auto affFor = mlir::dyn_cast<affine::AffineForOp>(op)) {
+      LoopInfo info;
+      if (affFor.hasConstantUpperBound()) {
+        info.isConstant = true;
+        info.constUpper = affFor.getConstantUpperBound();
+        DBGS() << "Found affine.for with constant upper bound = "
+               << info.constUpper << "\n";
+      } else {
+        // We store a placeholder Value if we want it.
+        // It's a bit trickier for affine.for,
+        // but for demonstration, let's just store the original op as
+        // "dynamicUpper".
+        info.isConstant = false;
+        info.dynamicUpper = affFor.getOperation()->getResult(0);
+        // Not typical;
+        // a real code might glean from affFor.getUpperBoundMapOperands() ...
+        DBGS() << "Found affine.for with dynamic upper bound.\n";
+      }
+      loopInfos.push_back(info);
+    }
+  });
+  DBGS() << "Collected " << loopInfos.size() << " loops.\n";
+}
 
-  LogicalResult matchAndRewrite(arts::ParallelOp op,
-                                PatternRewriter &rewriter) const override {
-    LLVM_DEBUG(dbgs() << "Converting parallel op\n");
-    auto currLoc = op.getLoc();
-    /// If the parallel op has only 3 operands: arts.barrier->arts.single->arts.barrier
-    /// 1. Create an empty parallel done function
-    auto parallelDoneEdtFunc = codegen.createEdtFunction(currLoc);
-    // codegen.insertEdtCall(op, parallelDoneEdtFunc, currLoc);
-    /// 2. Create an epoch to sync the children edts
-    ///    artsGuid_t parallelDoneEdtGuid =
-    ///        artsEdtCreate((artsEdt_t)parallelDoneEdt, currentNode, 0, NULL, 1);
-    ///    artsGuid_t parallelDoneEpochGuid =
-    ///        artsInitializeAndStartEpoch(parallelDoneEdtGuid, 0);
-    /// 3. Analyze the code to get the parameters and dependencies
-    /// 4. Create a single instance of the code inside the single op
-    ///    uint64_t parallelParams[1] = {(uint64_t)N};
-    ///    uint64_t parallelDeps = 2 * N;
-    ///    artsGuid_t parallelEdtGuid = artsEdtCreateWithEpoch(
-    ///        (artsEdt_t)parallelEdt, currentNode, 1, parallelParams, parallelDeps,
-    ///        parallelDoneEpochGuid);
-    /// 5. Signal the known dependencies
-    ///    artsSignalDbs(A_array, parallelEdtGuid, 0, N);
-    ///    artsSignalDbs(B_array, parallelEdtGuid, N, N);
-    /// 6. Wait for the parallel epoch to finish
-    ///    artsWaitOnHandle(parallelDoneEpochGuid);
-
-
-    return success();
+void ArtsAnalysis::analyzeAndProcessOp(mlir::Operation *op) {
+  if (auto edtOp = mlir::dyn_cast<arts::EdtOp>(op)) {
+    processEdtOp(edtOp);
+  } else if (auto parOp = mlir::dyn_cast<arts::ParallelOp>(op)) {
+    processParallelOp(parOp);
+  } else if (auto makeDepOp = mlir::dyn_cast<arts::MakeDepOp>(op)) {
+    processMakeDepOp(makeDepOp);
+  } else if (auto epochOp = mlir::dyn_cast<arts::EpochOp>(op)) {
+    processEpochOp(epochOp);
   }
+}
 
-private:
-  ArtsCodegen &codegen;
-};
+void ArtsAnalysis::processEdtOp(arts::EdtOp op) {
+  auto currLoc = op.getLoc();
+  auto edtFunc = codegen.createEdtFunction(currLoc);
+  auto edtCall = codegen.insertEdtCall(op, edtFunc, currLoc);
+}
 
-/// Conversion for `arts.yield`
-struct YieldOpLowering : public OpRewritePattern<arts::YieldOp> {
-  using OpRewritePattern::OpRewritePattern;
+void ArtsAnalysis::processParallelOp(arts::ParallelOp op) {
+  auto currLoc = op.getLoc();
+  auto &region = op.getRegion();
 
-  YieldOpLowering(ArtsCodegen &codegen, MLIRContext *ctx)
-      : OpRewritePattern<YieldOp>(ctx), codegen(codegen) {}
+  /// If the parallel op has only 3 operands:
+  /// arts.barrier->arts.single->arts.barrier
+    auto &block = region.front();
+    arts::SingleOp *singleOp = nullptr;
+    unsigned numOps = 0;
 
-  LogicalResult matchAndRewrite(arts::YieldOp op,
-                                PatternRewriter &rewriter) const override {
-    // Replace `arts.yield` with a return operation
-    // rewriter.replaceOpWithNewOp<func::ReturnOp>(op, op.getOperands());
-    return success();
-  }
+    for (auto &op : block) {
+      if (auto single = dyn_cast<arts::SingleOp>(&op)) {
+        if (singleOp) {
+          llvm_unreachable("Multiple single ops in parallel op not supported");
+        }
+        singleOp = &single;
+      } else if (!isa<arts::BarrierOp>(&op)) {
+        llvm_unreachable("Unknown op in parallel op - not supported");
+      }
+      numOps++;
+    }
 
-private:
-  ArtsCodegen &codegen;
-};
+    assert((singleOp && (numOps == 3)) && "Invalid parallel op");
+
+  /// 1. Create an empty parallel done function
+  auto parallelDoneEdtFunc = codegen.createEdtFunction(currLoc);
+  ///  Get parameters and dependencies
+  auto parameters = op.getParametersValues();
+  auto dependencies = op.getDependenciesValues();
+  // codegen.insertEdtCall(op, parallelDoneEdtFunc, currLoc);
+  /// 2. Create an epoch to sync the children edts
+  ///    artsGuid_t parallelDoneEdtGuid =
+  ///        artsEdtCreate((artsEdt_t)parallelDoneEdt, currentNode, 0, NULL,
+  ///        1);
+  ///    artsGuid_t parallelDoneEpochGuid =
+  ///        artsInitializeAndStartEpoch(parallelDoneEdtGuid, 0);
+  /// 3. Analyze the code to get the parameters and dependencies
+  /// 4. Create a single instance of the code inside the single op
+  ///    uint64_t parallelParams[1] = {(uint64_t)N};
+  ///    uint64_t parallelDeps = 2 * N;
+  ///    artsGuid_t parallelEdtGuid = artsEdtCreateWithEpoch(
+  ///        (artsEdt_t)parallelEdt, currentNode, 1, parallelParams,
+  ///        parallelDeps, parallelDoneEpochGuid);
+  /// 5. Signal the known dependencies
+  ///    artsSignalDbs(A_array, parallelEdtGuid, 0, N);
+  ///    artsSignalDbs(B_array, parallelEdtGuid, N, N);
+  /// 6. Wait for the parallel epoch to finish
+  ///    artsWaitOnHandle(parallelDoneEpochGuid);
+}
+
+void ArtsAnalysis::processMakeDepOp(arts::MakeDepOp makeDepOp) {
+  DBGS() << "Processing single MakeDepOp at " << makeDepOp.getLoc() << "\n";
+  // This was mostly collected in collectMakeDepOps(...).
+  // If you want to do more direct rewriting, you can do it here as well.
+}
+
+void ArtsAnalysis::processEpochOp(arts::EpochOp epochOp) {
+  DBGS() << "Processing arts.epoch at " << epochOp.getLoc() << "\n";
+  // Could create a function that outlines the epoch region, etc.
+}
 
 //===----------------------------------------------------------------------===//
 // Pass Implementation
 //===----------------------------------------------------------------------===//
 namespace {
 struct ConvertARTSToFuncsPass
-    : public mlir::arts::ConvertARTSToFuncsBase<ConvertARTSToFuncsPass> {
+    : public arts::ConvertARTSToFuncsBase<ConvertARTSToFuncsPass> {
   void runOnOperation() override;
 };
 } // end namespace
@@ -193,30 +231,27 @@ void ConvertARTSToFuncsPass::runOnOperation() {
   ModuleOp module = getOperation();
   MLIRContext *context = &getContext();
   OpBuilder builder(context);
-  ArtsCodegen codegen(module, builder);
 
-  RewritePatternSet patterns(context);
-  // patterns.add<MakeDepOpLowering, EdtOpLowering, EpochOpLowering,
-  //              ParallelOpLowering, YieldOpLowering>(codegen, context);
-  patterns.add<EdtOpLowering>(codegen, context);
+  // Get the DataLayoutAnalysis for this module
+  // auto &dataLayoutAnalysis = getAnalysis<DataLayoutAnalysis>();
+  
+  // Obtain the data layout for the module
+  // llvm::DataLayout dataLayout = dataLayoutAnalysis.get(module);
+  
 
-  // ConversionTarget target(*context);
-  // // target.addLegalDialect<func::FuncDialect>();
-  // // target.addIllegalDialect<arts::ArtsDialect>();
-  // if (failed(applyPartialConversion(module, target,
-  //                                   std::move(patterns)))) {
-  //   LLVM_DEBUG(dbgs() << "Conversion failed\n");
-  //   signalPassFailure();
-  //   return;
-  // }
-  /// For now implement a greedy transformation
-  GreedyRewriteConfig config;
-  if (failed(
-          applyPatternsAndFoldGreedily(module, std::move(patterns), config))) {
-    LLVM_DEBUG(dbgs() << "Conversion failed\n");
-    signalPassFailure();
-    return;
+  // auto voidPtrTy = LLVM::LLVMPointerType::get(context);
+  auto dataLayoutAttr = module->getAttrOfType<mlir::StringAttr>("llvm.data_layout");
+  if (!dataLayoutAttr) {
+    module.emitError("Module does not have a data layout");
+    return signalPassFailure();
   }
+  llvm::DataLayout dataLayout(dataLayoutAttr.getValue().str());
+  
+
+  ArtsCodegen codegen(module, builder, dataLayout);
+  RewritePatternSet patterns(context);
+  /// Create our analysis object
+  // ArtsAnalysis analysis(module, codegen);
   LLVM_DEBUG(dbgs() << line << "ConvertARTSToFuncsPass FINISHED\n" << line);
 }
 

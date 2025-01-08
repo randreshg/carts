@@ -5,6 +5,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
+
 #include "arts/Codegen/ArtsCodegen.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -14,6 +15,11 @@
 #include "mlir/IR/BuiltinOps.h"
 
 #include "arts/Utils/ArtsTypes.h"
+
+#include "polygeist/Ops.h"
+#include "polygeist/Dialect.h"
+
+#include "mlir/Interfaces/DataLayoutInterfaces.h"
 
 #include "llvm/Support/Debug.h"
 
@@ -29,9 +35,11 @@ using namespace mlir::func;
 using namespace mlir::LLVM;
 using namespace mlir::arts;
 using namespace mlir::arith;
+using namespace mlir::polygeist;
 
-ArtsCodegen::ArtsCodegen(ModuleOp &module, OpBuilder &builder)
-    : module(module), builder(builder), dataLayout(mlir::DataLayout(module)) {
+ArtsCodegen::ArtsCodegen(ModuleOp &module, OpBuilder &builder,
+                         llvm::DataLayout &dataLayout)
+    : module(module), builder(builder), dataLayout(dataLayout) {
   initialize();
 }
 
@@ -49,16 +57,25 @@ void ArtsCodegen::finalize() {
 }
 
 void ArtsCodegen::initializeTypes() {
-  MLIRContext *ctx = module.getContext();
+  MLIRContext *context = module.getContext();
+  // Query the size and alignment of `void*`
+  /// get llvm pointer type
+  // unsigned sizeInBits = dataLayout.getPointerSizeInBits();
+
+  // llvm::outs() << "Size of void*: " << sizeInBits << " bits\n";
+  // llvm::outs() << "Alignment of void*: " << alignment << " bytes\n";
+
+
+
+  // __ARTS_PTR_TYPE(VoidPtr,
+  // dataLayout.getTypeSizeInBit(mlir::LLVM::LLVMVoidType::get(&context).getPointerTo()))
+  LLVM_DEBUG(dbgs() << "Initializing ARTS types\n");
 #define ARTS_TYPE(VarName, InitValue) VarName = InitValue;
-#define ARTS_ARRAY_TYPE(VarName, ElemTy, ArraySize)                            \
-  VarName##ArrayTy = LLVM::LLVMArrayType::get(ElemTy, ArraySize);              \
-  VarName##PtrTy = LLVM::LLVMPointerType::get(ctx);
-#define ARTS_FUNCTION_TYPE(VarName, IsVarArg, ReturnType, ...)                 \
-  VarName = FunctionType::get(ctx, {__VA_ARGS__}, {ReturnType});
+#define ARTS_FUNCTION_TYPE(VarName, ReturnType, ...)                           \
+  VarName = FunctionType::get(context, {__VA_ARGS__}, {ReturnType});
 #define ARTS_STRUCT_TYPE(VarName, StructName, Packed, ...)                     \
-  VarName = LLVM::LLVMStructType::getLiteral(ctx, {__VA_ARGS__}, Packed);      \
-  VarName##Ptr = LLVM::LLVMPointerType::get(ctx);
+  VarName = LLVM::LLVMStructType::getLiteral(context, {__VA_ARGS__}, Packed);  \
+  VarName##Ptr = LLVM::LLVMPointerType::get(context);
 #include "arts/Codegen/ARTSKinds.def"
 }
 
@@ -71,7 +88,7 @@ ArtsCodegen::getOrCreateRuntimeFunction(types::RuntimeFunction FnID) {
   func::FuncOp funcOp;
   /// Try to find the declaration in the module first.
   switch (FnID) {
-#define ARTS_RTL(Enum, Str, IsVarArg, ReturnType, ...)                         \
+#define ARTS_RTL(Enum, Str, ReturnType, ...)                         \
   case Enum: {                                                                 \
     SmallVector<Type, 4> argumentTypes{__VA_ARGS__};                           \
     fnType = builder.getFunctionType(argumentTypes,                            \
@@ -179,4 +196,38 @@ Value ArtsCodegen::createEdtGuid(uint64_t edtNode, Location loc) {
   auto reserveGuidCall = createRuntimeCall(ARTSRTL_artsReserveGuidRoute,
                                            {guidEdtType, guidEdtNode}, loc);
   return reserveGuidCall.getResult(0);
+}
+
+Value ArtsCodegen::insertEdtEntry(func::FuncOp edtFunc,
+                                  SmallVector<Value> &opParameters,
+                                  SmallVector<Value> &opDependencies,
+                                  Location loc) {
+  OpBuilder::InsertionGuard guard(builder);
+  // setInsertionPoint(edtFunc.getBody());
+  mlir::MemRefType::get({-1}, Int64);
+  auto &entryBlock = edtFunc.front();
+  /// Get reference to the block arguments
+  Value paramC = entryBlock.getArgument(0);
+  Value paramV = entryBlock.getArgument(1);
+  Value depC = entryBlock.getArgument(2);
+  Value depV = entryBlock.getArgument(3);
+  /// Insert the parameters
+  auto paramSize = opParameters.size();
+  for (unsigned paramIndex = 0; paramIndex < paramSize; paramIndex++) {
+    Value oldParam = opParameters[paramIndex];
+    /// Build and i64 constant for 'i'
+    auto i = builder.create<arith::ConstantOp>(
+        loc, Int64, builder.getIntegerAttr(Int64, paramIndex));
+    /// Create the GEP to load the value in the ParamV array
+    // auto paramVElemPtr = builder.create<LLVM::GEPOp>(
+    //     loc, Int64, paramV, ValueRange{i}, "paramv_" +
+    //     std::to_string(paramIndex));
+
+    // Value oldParam = opParameters[parameterIndex];
+    // auto paramVName = "paramv_" + std::to_string(paramIndex);
+    // Value paramVElemPtr = builder.create<LLVM::GEPOp>(
+    //     loc, Int64, paramV, ValueRange{paramIndex}, paramVName);
+    // builder.create<LLVM::StoreOp>(loc, param, paramVElemPtr);
+    // paramIndex++;
+  }
 }
