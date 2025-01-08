@@ -22,21 +22,51 @@
 /// polygeist-opt outputaffine.mlir --cse --affine-cfg --affine-scalrep --polygeist-mem2reg &> optimized.mlir
 
 #include <stdlib.h>
-void compute(int N, double *A, double *B) {
-  double test = rand() % 100;
+// void compute(int N, double *A, double *B) {
+//   double test = rand() % 100;
+//   #pragma omp parallel
+//   {
+//     #pragma omp single
+//     {
+//       for (int i = 0; i < N; i++) {
+//         // Task 1: Compute A[i]
+//         #pragma omp task depend(out : A[i])
+//           A[i] = i * 1.0 + test;
+
+//         // Task 2: Compute B[i] based on A[i] and A[i-1] (inter-loop dependency)
+//         #pragma omp task depend(in : A[i], A[i - 1]) depend(out : B[i])
+//           B[i] = A[i] + (i > 0 ? A[i - 1] : 0);
+
+//       }
+//     }
+//   }
+// }
+
+// Define a data structure to encapsulate arrays and metadata
+typedef struct {
+  int N;          // Size of the arrays
+  double *A;      // Array A
+  double *B;      // Array B
+  double test;    // Random value for computation
+} ComputeData;
+
+void compute(void *data1) {
+  ComputeData *data = (ComputeData *)data1;
+  // Initialize test value inside the data structure
+  data->test = rand() % 100;
+
   #pragma omp parallel
   {
     #pragma omp single
     {
-      for (int i = 0; i < N; i++) {
+      for (int i = 0; i < data->N; i++) {
         // Task 1: Compute A[i]
-        #pragma omp task depend(out : A[i])
-          A[i] = i * 1.0 + test;
+        #pragma omp task depend(out : data->A[i])
+        data->A[i] = i * 1.0 + data->test;
 
-        // Task 2: Compute B[i] based on A[i] and A[i-1] (inter-loop dependency)
-        #pragma omp task depend(in : A[i], A[i - 1]) depend(out : B[i])
-          B[i] = A[i] + (i > 0 ? A[i - 1] : 0);
-
+        // Task 2: Compute B[i] based on A[i] and A[i-1]
+        #pragma omp task depend(in : data->A[i], data->A[i - 1]) depend(out : data->B[i])
+        data->B[i] = data->A[i] + (i > 0 ? data->A[i - 1] : 0);
       }
     }
   }
