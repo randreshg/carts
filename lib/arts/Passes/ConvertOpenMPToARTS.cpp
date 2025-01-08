@@ -272,8 +272,8 @@ void ConvertOpenMPToARTSPass::runOnOperation() {
   patterns.add<ParallelToARTSPattern, MasterToARTSPattern, TaskToARTSPattern,
                TerminatorToARTSPattern, BarrierToARTSPattern>(context);
   GreedyRewriteConfig config;
-  if (failed(applyPatternsAndFoldGreedily(module, std::move(patterns),
-                                          config))) {
+  if (failed(
+          applyPatternsAndFoldGreedily(module, std::move(patterns), config))) {
     LLVM_DEBUG(dbgs() << "Conversion failed\n");
     signalPassFailure();
     return;

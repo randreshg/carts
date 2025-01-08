@@ -21,7 +21,6 @@
 /// Optimize
 /// polygeist-opt outputaffine.mlir --cse --affine-cfg --affine-scalrep --polygeist-mem2reg &> optimized.mlir
 
-#include <stdio.h>
 #include <stdlib.h>
 void compute(int N, double *A, double *B) {
   double test = rand() % 100;

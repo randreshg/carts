@@ -200,11 +200,19 @@ void ConvertARTSToFuncsPass::runOnOperation() {
   //              ParallelOpLowering, YieldOpLowering>(codegen, context);
   patterns.add<EdtOpLowering>(codegen, context);
 
-  ConversionTarget target(*context);
-  // target.addLegalDialect<func::FuncDialect>();
-  // target.addIllegalDialect<arts::ArtsDialect>();
-  if (failed(applyPartialConversion(getOperation(), target,
-                                    std::move(patterns)))) {
+  // ConversionTarget target(*context);
+  // // target.addLegalDialect<func::FuncDialect>();
+  // // target.addIllegalDialect<arts::ArtsDialect>();
+  // if (failed(applyPartialConversion(module, target,
+  //                                   std::move(patterns)))) {
+  //   LLVM_DEBUG(dbgs() << "Conversion failed\n");
+  //   signalPassFailure();
+  //   return;
+  // }
+  /// For now implement a greedy transformation
+  GreedyRewriteConfig config;
+  if (failed(
+          applyPatternsAndFoldGreedily(module, std::move(patterns), config))) {
     LLVM_DEBUG(dbgs() << "Conversion failed\n");
     signalPassFailure();
     return;
