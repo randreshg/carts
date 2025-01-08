@@ -95,6 +95,12 @@ ArtsCodegen::getOrCreateRuntimeFunction(types::RuntimeFunction FnID) {
 #include "arts/Codegen/ARTSKinds.def"
     }
   }
+  /// Set the function as private
+  funcOp.setPrivate();
+  /// Set the llvm.linkage attribute to external
+  funcOp->setAttr(
+      "llvm.linkage",
+      LLVM::LinkageAttr::get(builder.getContext(), LLVM::Linkage::External));
 
   assert(funcOp && "Failed to create ARTS runtime function");
   return funcOp;
