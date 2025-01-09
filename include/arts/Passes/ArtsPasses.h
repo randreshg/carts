@@ -8,9 +8,8 @@
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "polygeist/Dialect.h"
 #include "mlir/Pass/Pass.h"
-
-
 #include "arts/ArtsDialect.h"
 
 
@@ -49,6 +48,10 @@ class FuncDialect;
 namespace arith {
 class ArithDialect;
 } // end namespace arith
+
+namespace polygeist {
+class PolygeistDialect;
+} // end namespace polygeist
 
 #define GEN_PASS_REGISTRATION
 #include "arts/Passes/ArtsPasses.h.inc"

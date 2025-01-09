@@ -1,6 +1,9 @@
-// clang taskwithdeps_arts.c -O3 -g0 -march=native
-// -I/home/randres/projects/arts/.install/arts/include -o taskwithdeps_arts
-// -L/home/randres/projects/arts/.install/arts/lib -larts -lrdmacm
+// clang taskwithdeps_arts.c -O3 -g0 -march=native -I/home/randres/projects/arts/.install/arts/include -o taskwithdeps_arts -L/home/randres/projects/carts/.install/arts/lib -larts -lrdmacm
+
+/// cgeist taskwithdeps_arts.c -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include -I/home/randres/projects/carts/.install/arts/include --raise-scf-to-affine
+
+/// cgeist taskwithdeps_arts.c -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include -I/home/randres/projects/carts/.install/arts/include --raise-scf-to-affine -emit-llvm
+
 #include "arts.h"
 #include "artsRT.h"
 #include <stdint.h>

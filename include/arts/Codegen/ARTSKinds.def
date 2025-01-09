@@ -37,14 +37,14 @@
 
 /// Macro for pointer types
 #define __ARTS_PTR_TYPE(VarName, ElemType)                                     \
-  ARTS_TYPE(VarName, mlir::MemRefType::get({-1}, ElemType))
+  ARTS_TYPE(VarName, mlir::MemRefType::get({ShapedType::kDynamic}, ElemType))
 
 /// Define basic LLVM types
 __ARTS_TYPE(Float, mlir::Float32Type::get)
 __ARTS_TYPE(Double, mlir::Float64Type::get)
 
 /// Define integer types
-__ARTS_INTEGER_TYPE(PtrSize, dataLayout.getPointerSizeInBits())
+__ARTS_INTEGER_TYPE(PtrSize, dataLayout.getPointerSize())
 __ARTS_INTEGER_TYPE(Int1, 1)
 __ARTS_INTEGER_TYPE(Int8, 8)
 __ARTS_INTEGER_TYPE(Int16, 16)
@@ -185,10 +185,13 @@ __ARTS_RTL(artsReserveGuidRoute, artsGuid_t, artsType_t, Int32)
 // paramc, uint64_t * paramv, uint32_t depc);
 __ARTS_RTL(artsEdtCreate, artsGuid_t, EdtFunction, Int32, Int32, Int32, Int32)
 // artsGuid_t artsEdtCreateWithGuid(artsEdt_t funcPtr, artsGuid_t guid, uint32_t
-// paramc, uint64_t * paramv, uint32_t depc);
+//                                  paramc, uint64_t * paramv, uint32_t depc);
 __ARTS_RTL(artsEdtCreateWithGuid, artsGuid_t, EdtFunction, artsGuid_t, Int32,
            Int64Ptr, Int32)
-__ARTS_RTL(artsEdtCreateWithGuidAndEpoch, artsGuid_t, EdtFunction, Int32,
+// artsGuid_t artsEdtCreateWithEpoch(artsEdt_t funcPtr, unsigned int route,
+//                                   uint32_t paramc, uint64_t *paramv,
+//                                   uint32_t depc, artsGuid_t epochGuid);
+__ARTS_RTL(artsEdtCreateWithEpoch, artsGuid_t, EdtFunction, Int32, Int32,
            Int64Ptr, Int32, artsGuid_t)
 /// artsEdtCreateDep
 /// artsEdtCreateWithGuidDep

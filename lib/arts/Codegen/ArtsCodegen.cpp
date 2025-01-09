@@ -5,19 +5,21 @@
 ///
 //===----------------------------------------------------------------------===//
 
-
 #include "arts/Codegen/ArtsCodegen.h"
+#include "arts/ArtsDialect.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 
 #include "arts/Utils/ArtsTypes.h"
 
-#include "polygeist/Ops.h"
 #include "polygeist/Dialect.h"
+#include "polygeist/Ops.h"
 
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 
@@ -58,24 +60,12 @@ void ArtsCodegen::finalize() {
 
 void ArtsCodegen::initializeTypes() {
   MLIRContext *context = module.getContext();
-  // Query the size and alignment of `void*`
-  /// get llvm pointer type
-  // unsigned sizeInBits = dataLayout.getPointerSizeInBits();
-
-  // llvm::outs() << "Size of void*: " << sizeInBits << " bits\n";
-  // llvm::outs() << "Alignment of void*: " << alignment << " bytes\n";
-
-
-
-  // __ARTS_PTR_TYPE(VoidPtr,
-  // dataLayout.getTypeSizeInBit(mlir::LLVM::LLVMVoidType::get(&context).getPointerTo()))
-  LLVM_DEBUG(dbgs() << "Initializing ARTS types\n");
 #define ARTS_TYPE(VarName, InitValue) VarName = InitValue;
 #define ARTS_FUNCTION_TYPE(VarName, ReturnType, ...)                           \
   VarName = FunctionType::get(context, {__VA_ARGS__}, {ReturnType});
 #define ARTS_STRUCT_TYPE(VarName, StructName, Packed, ...)                     \
   VarName = LLVM::LLVMStructType::getLiteral(context, {__VA_ARGS__}, Packed);  \
-  VarName##Ptr = LLVM::LLVMPointerType::get(context);
+  VarName##Ptr = MemRefType::get({ShapedType::kDynamic}, VarName);
 #include "arts/Codegen/ARTSKinds.def"
 }
 
@@ -88,7 +78,7 @@ ArtsCodegen::getOrCreateRuntimeFunction(types::RuntimeFunction FnID) {
   func::FuncOp funcOp;
   /// Try to find the declaration in the module first.
   switch (FnID) {
-#define ARTS_RTL(Enum, Str, ReturnType, ...)                         \
+#define ARTS_RTL(Enum, Str, ReturnType, ...)                                   \
   case Enum: {                                                                 \
     SmallVector<Type, 4> argumentTypes{__VA_ARGS__};                           \
     fnType = builder.getFunctionType(argumentTypes,                            \
@@ -142,60 +132,54 @@ func::FuncOp ArtsCodegen::createEdtFunction(Location loc) {
   return edtFuncOp;
 }
 
-func::CallOp ArtsCodegen::insertEdtCall(arts::EdtOp edtOp, func::FuncOp edtFunc,
-                                        Location loc) {
+func::CallOp ArtsCodegen::createEdtCallWithGuid(arts::EdtOp edtOp,
+                                                func::FuncOp edtFunc,
+                                                unsigned route, Location loc) {
   OpBuilder::InsertionGuard guard(builder);
   setInsertionPoint(edtOp);
-  auto edtGuid = createEdtGuid(0, loc);
+  auto edtGuid = createEdtGuid(route, loc);
+  auto depC = createIntConstant(edtOp.getNumDependencies(), Int32, loc);
+  auto paramC = createIntConstant(edtOp.getNumParameters(), Int32, loc);
   auto edtParameters = edtOp.getParametersValues();
-  auto edtDepNum = edtOp.getNumDependencies();
-  LLVM_DEBUG(dbgs() << "EDT GUID: " << edtGuid << "\n");
-  auto edtCall =
-      createEdtCall(edtFunc, edtGuid, edtParameters, edtDepNum, edtOp.getLoc());
-  return edtCall;
-}
-
-// artsGuid_t artsEdtCreateWithGuid(artsEdt_t funcPtr, artsGuid_t guid,
-// uint32_t paramc, uint64_t * paramv, uint32_t depc);
-func::CallOp ArtsCodegen::createEdtCall(func::FuncOp edtFunc,
-                                        mlir::Value edtGuid,
-                                        SmallVector<Value> &edtParameters,
-                                        unsigned edtDepNum, Location loc) {
-  auto edtFuncPtr = builder.create<func::ConstantOp>(
-      loc, EdtFunction, SymbolRefAttr::get(edtFunc));
-
-  LLVM_DEBUG(DBGS() << "EDT function pointer: " << edtFuncPtr << "\n");
-  /// uint32_t paramc
-  auto paramc =
-      builder
-          .create<arith::ConstantOp>(
-              loc, Int32, builder.getIntegerAttr(Int32, edtParameters.size()))
-          .getResult();
-  LLVM_DEBUG(DBGS() << "EDT parameters count: " << paramc << "\n");
-  /// uint64_t * paramv
-  auto paramv =
-      builder.create<LLVM::AllocaOp>(loc, Int64Ptr, paramc).getResult();
-  LLVM_DEBUG(DBGS() << "EDT parameters: " << paramv << "\n");
-  /// uint32_t depc
-  auto depc = builder
-                  .create<arith::ConstantOp>(
-                      loc, Int32, builder.getIntegerAttr(Int32, edtDepNum))
-                  .getResult();
-  LLVM_DEBUG(DBGS() << "EDT dependencies count: " << depc << "\n");
-  /// Store the parameters
-  SmallVector<Value, 5> args = {edtFuncPtr.getResult(), edtGuid, paramc, paramv,
-                                depc};
+  auto paramV = createParamV(edtParameters, paramC, loc);
+  auto edtFuncPtr = createFunctionPointer(edtFunc, loc);
+  /// Create edt with guid
+  SmallVector<Value, 5> args = {edtFuncPtr, edtGuid, depC, paramV, depC};
   return createRuntimeCall(ARTSRTL_artsEdtCreateWithGuid, args, loc);
 }
 
-Value ArtsCodegen::createEdtGuid(uint64_t edtNode, Location loc) {
-  auto guidEdtType = builder.create<arith::ConstantOp>(
-      loc, Int32, builder.getIntegerAttr(Int32, 1));
-  auto guidEdtNode = builder.create<arith::ConstantOp>(
-      loc, Int32, builder.getIntegerAttr(Int32, edtNode));
-  auto reserveGuidCall = createRuntimeCall(ARTSRTL_artsReserveGuidRoute,
-                                           {guidEdtType, guidEdtNode}, loc);
-  return reserveGuidCall.getResult(0);
+func::CallOp ArtsCodegen::createEdtCallWithGuid(arts::ParallelOp parOp,
+                                                func::FuncOp edtFunc,
+                                                unsigned route, Location loc) {
+  OpBuilder::InsertionGuard guard(builder);
+  setInsertionPoint(parOp);
+  auto edtGuid = createEdtGuid(route, loc);
+  auto depC = createIntConstant(parOp.getNumDependencies(), Int32, loc);
+  auto paramC = createIntConstant(parOp.getNumParameters(), Int32, loc);
+  auto edtParameters = parOp.getParametersValues();
+  auto paramV = createParamV(edtParameters, paramC, loc);
+  auto edtFuncPtr = createFunctionPointer(edtFunc, loc);
+  /// Create edt with guid
+  SmallVector<Value, 5> args = {edtFuncPtr, edtGuid, depC, paramV, depC};
+  return createRuntimeCall(ARTSRTL_artsEdtCreateWithGuid, args, loc);
+}
+
+func::CallOp ArtsCodegen::createEdtCallWithEpoch(arts::EdtOp edtOp,
+                                                 func::FuncOp edtFunc,
+                                                 unsigned route, Value epoch,
+                                                 Location loc) {
+  OpBuilder::InsertionGuard guard(builder);
+  setInsertionPoint(edtOp);
+  auto routeC = createIntConstant(route, Int32, loc);
+  auto depC = createIntConstant(edtOp.getNumDependencies(), Int32, loc);
+  auto paramC = createIntConstant(edtOp.getNumParameters(), Int32, loc);
+  auto edtParameters = edtOp.getParametersValues();
+  auto paramV = createParamV(edtParameters, paramC, loc);
+  auto edtFuncPtr = createFunctionPointer(edtFunc, loc);
+  /// Create edt with epoch
+  return createRuntimeCall(ARTSRTL_artsEdtCreateWithEpoch,
+                           {edtFuncPtr, routeC, depC, paramV, depC, epoch},
+                           loc);
 }
 
 Value ArtsCodegen::insertEdtEntry(func::FuncOp edtFunc,
@@ -230,4 +214,60 @@ Value ArtsCodegen::insertEdtEntry(func::FuncOp edtFunc,
     // builder.create<LLVM::StoreOp>(loc, param, paramVElemPtr);
     // paramIndex++;
   }
+}
+
+/// Helpers
+Value ArtsCodegen::createFunctionPointer(func::FuncOp funcOp, Location loc) {
+  // ValueCategory
+  auto FT = funcOp.getFunctionType();
+  mlir::Type RT = LLVM::LLVMVoidType::get(funcOp.getContext());
+  LLVM::LLVMFunctionType LFT =
+      LLVM::LLVMFunctionType::get(RT, FT.getInputs(), false);
+  auto getFuncOp = builder.create<polygeist::GetFuncOp>(
+      loc, LLVM::LLVMPointerType::get(LFT), funcOp.getName());
+  auto funcMemRef = builder.create<polygeist::Pointer2MemrefOp>(
+      loc, MemRefType::get({-1}, FT), getFuncOp.getResult());
+  return funcMemRef.getResult();
+}
+
+Value ArtsCodegen::createParamV(SmallVector<Value> &parameters, Value paramC,
+                                Location loc) {
+  unsigned int paramSize = parameters.size();
+  for (unsigned i = 0; i < paramSize; i++) {
+    /// If the value is not an i64, cast it
+    auto param = parameters[i];
+    if (param.getType() != Int64) {
+      auto castOp = builder.create<arith::ExtUIOp>(loc, Int64, param);
+      param = castOp.getResult();
+    }
+    /// Affine store
+    auto i64Const = builder.create<arith::ConstantOp>(
+        loc, Int64, builder.getIntegerAttr(Int64, i));
+    builder.create<affine::AffineStoreOp>(loc, param, paramC,
+                                          ValueRange{i64Const});
+  }
+  /// Create array of i64
+  auto paramSizeValue = createIntConstant(paramSize, Int64, loc);
+  auto paramVArray =
+      builder
+          .create<memref::AllocaOp>(loc, MemRefType::get({paramSize}, Int64),
+                                    paramSizeValue)
+          .getResult();
+  /// memref cast to memref<-1xi64>
+  auto paramV = builder.create<memref::CastOp>(
+      loc, MemRefType::get({-1}, Int64), paramVArray);
+  return paramV.getResult();
+}
+
+Value ArtsCodegen::createIntConstant(unsigned value, Type type, Location loc) {
+  return builder.create<arith::ConstantOp>(loc, type,
+                                           builder.getIntegerAttr(type, value));
+}
+
+Value ArtsCodegen::createEdtGuid(uint64_t node, Location loc) {
+  auto guidEdtType = createIntConstant(1, Int32, loc);
+  auto guidEdtNode = createIntConstant(node, Int64, loc);
+  auto reserveGuidCall = createRuntimeCall(ARTSRTL_artsReserveGuidRoute,
+                                           {guidEdtType, guidEdtNode}, loc);
+  return reserveGuidCall.getResult(0);
 }

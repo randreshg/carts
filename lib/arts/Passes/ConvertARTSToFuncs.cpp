@@ -152,7 +152,7 @@ void ArtsAnalysis::analyzeAndProcessOp(mlir::Operation *op) {
 void ArtsAnalysis::processEdtOp(arts::EdtOp op) {
   auto currLoc = op.getLoc();
   auto edtFunc = codegen.createEdtFunction(currLoc);
-  auto edtCall = codegen.insertEdtCall(op, edtFunc, currLoc);
+  // auto edtCall = codegen.insertEdtCall(op, edtFunc, currLoc);
 }
 
 void ArtsAnalysis::processParallelOp(arts::ParallelOp op) {
@@ -184,6 +184,7 @@ void ArtsAnalysis::processParallelOp(arts::ParallelOp op) {
   ///  Get parameters and dependencies
   auto parameters = op.getParametersValues();
   auto dependencies = op.getDependenciesValues();
+  codegen.createEdtCallWithGuid(op, parallelDoneEdtFunc, 0, currLoc);
   // codegen.insertEdtCall(op, parallelDoneEdtFunc, currLoc);
   /// 2. Create an epoch to sync the children edts
   ///    artsGuid_t parallelDoneEdtGuid =
@@ -229,16 +230,9 @@ struct ConvertARTSToFuncsPass
 void ConvertARTSToFuncsPass::runOnOperation() {
   LLVM_DEBUG(dbgs() << line << "ConvertARTSToFuncsPass STARTED\n" << line);
   ModuleOp module = getOperation();
+  module->dump();
   MLIRContext *context = &getContext();
   OpBuilder builder(context);
-
-  // Get the DataLayoutAnalysis for this module
-  // auto &dataLayoutAnalysis = getAnalysis<DataLayoutAnalysis>();
-  
-  // Obtain the data layout for the module
-  // llvm::DataLayout dataLayout = dataLayoutAnalysis.get(module);
-  
-
   // auto voidPtrTy = LLVM::LLVMPointerType::get(context);
   auto dataLayoutAttr = module->getAttrOfType<mlir::StringAttr>("llvm.data_layout");
   if (!dataLayoutAttr) {
@@ -251,7 +245,7 @@ void ConvertARTSToFuncsPass::runOnOperation() {
   ArtsCodegen codegen(module, builder, dataLayout);
   RewritePatternSet patterns(context);
   /// Create our analysis object
-  // ArtsAnalysis analysis(module, codegen);
+  ArtsAnalysis analysis(module, codegen);
   LLVM_DEBUG(dbgs() << line << "ConvertARTSToFuncsPass FINISHED\n" << line);
 }
 

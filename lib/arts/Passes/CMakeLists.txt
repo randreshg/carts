@@ -2,11 +2,6 @@
 message(STATUS "POLYGEIST_INCLUDE_DIR: ${POLYGEIST_BUILD_DIR}/include")
 message(STATUS "POLYGEIST_LIBRARY_DIR: ${POLYGEIST_BUILD_DIR}/lib")
 
-include_directories(
-  ${POLYGEIST_BUILD_DIR}/include
-  ${POLYGEIST_DIR}/include
-)
-
 add_mlir_dialect_library(MLIRArtsTransforms
   ConvertOpenMPToARTS.cpp
   ConvertARTSToFuncs.cpp
@@ -59,15 +54,7 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 # Find Polygeist lib
-find_library(MLIR_POLYGEIST_LIB NAMES MLIRPolygeist PATHS ${POLYGEIST_BUILD_DIR}/lib)
-
-if(MLIR_POLYGEIST_LIB)
-  message(STATUS "Found Polygeist library: ${MLIR_POLYGEIST_LIB}")
-  target_link_libraries(MLIRArtsTransforms PRIVATE ${MLIR_POLYGEIST_LIB})
-else()
-  message(FATAL_ERROR "Polygeist library not found")
-endif()
-
+target_link_libraries(MLIRArtsTransforms PRIVATE ${MLIR_POLYGEIST_LIB})
 
 target_compile_definitions(obj.MLIRArtsTransforms
   PRIVATE

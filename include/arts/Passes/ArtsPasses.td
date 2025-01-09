@@ -10,7 +10,8 @@ def ConvertOpenMPToARTS : Pass<"convert-openmp-to-arts", "mlir::ModuleOp"> {
     "memref::MemRefDialect",
     "omp::OpenMPDialect",
     "LLVM::LLVMDialect",
-    "arts::ArtsDialect"
+    "arts::ArtsDialect",
+    "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createConvertOpenMPtoARTSPass()";
 }
@@ -22,7 +23,8 @@ def ConvertARTSToFuncs : Pass<"convert-arts-to-funcs", "mlir::ModuleOp"> {
     "LLVM::LLVMDialect",
     "func::FuncDialect",
     "arts::ArtsDialect",
-    "arith::ArithDialect"
+    "arith::ArithDialect",
+    "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createConvertARTSToFuncsPass()";
 }

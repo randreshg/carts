@@ -55,6 +55,7 @@ include(AddMLIR)
 include(AddClang)
 include(HandleLLVMOptions)
 
+# Clang and MLIR
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${CLANG_INCLUDE_DIRS})
 include_directories(${MLIR_INCLUDE_DIRS})
@@ -62,6 +63,20 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 include_directories(${PROJECT_BINARY_DIR}/include)
 link_directories(${LLVM_BUILD_LIBRARY_DIR})
 add_definitions(${LLVM_DEFINITIONS})
+
+# Polygeist
+include_directories(
+  ${POLYGEIST_BUILD_DIR}/include
+  ${POLYGEIST_DIR}/include
+)
+link_directories(${POLYGEIST_BUILD_DIR}/lib)
+
+find_library(MLIR_POLYGEIST_LIB NAMES MLIRPolygeist PATHS ${POLYGEIST_BUILD_DIR}/lib)
+if(MLIR_POLYGEIST_LIB)
+  message(STATUS "Found Polygeist library: ${MLIR_POLYGEIST_LIB}")
+else()
+  message(FATAL_ERROR "Polygeist library not found")
+endif()
 
 # set(CARTS_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(CARTS_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
