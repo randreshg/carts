@@ -32,34 +32,76 @@
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "mlir/Transforms/Passes.h"
+#include "polygeist/Dialect.h"
 
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 
+
 using namespace mlir;
 
+class MemRefInsider
+    : public mlir::MemRefElementTypeInterface::FallbackModel<MemRefInsider> {};
+
+template <typename T>
+struct PtrElementModel
+    : public mlir::LLVM::PointerElementTypeInterface::ExternalModel<
+          PtrElementModel<T>, T> {};
+
 int main(int argc, char **argv) {
-  // Create a DialectRegistry and register all required dialects.
+  /// Create a DialectRegistry and register all required dialects.
   mlir::DialectRegistry registry;
 
   registry.insert<mlir::affine::AffineDialect>();
   registry.insert<mlir::arith::ArithDialect>();
-  registry.insert<mlir::async::AsyncDialect>();
   registry.insert<mlir::func::FuncDialect>();
   registry.insert<mlir::LLVM::LLVMDialect>();
   registry.insert<mlir::omp::OpenMPDialect>();
   registry.insert<mlir::math::MathDialect>();
   registry.insert<mlir::memref::MemRefDialect>();
   registry.insert<mlir::scf::SCFDialect>();
-  registry.insert<DLTIDialect>();
+  registry.insert<mlir::cf::ControlFlowDialect>();
+  registry.insert<mlir::polygeist::PolygeistDialect>();
   registry.insert<mlir::arts::ArtsDialect>();
+  registry.insert<DLTIDialect>();
 
   /// Register all passes and translations.
   mlir::registerArtsPasses();
   // mlir::registerAllPasses();
   mlir::func::registerInlinerExtension(registry);
 
+  registry.addExtension(+[](MLIRContext *ctx, LLVM::LLVMDialect *dialect) {
+    LLVM::LLVMFunctionType::attachInterface<MemRefInsider>(*ctx);
+  });
+  registry.addExtension(+[](MLIRContext *ctx, LLVM::LLVMDialect *dialect) {
+    LLVM::LLVMArrayType::attachInterface<MemRefInsider>(*ctx);
+  });
+  registry.addExtension(+[](MLIRContext *ctx, LLVM::LLVMDialect *dialect) {
+    LLVM::LLVMPointerType::attachInterface<MemRefInsider>(*ctx);
+  });
+  registry.addExtension(+[](MLIRContext *ctx, LLVM::LLVMDialect *dialect) {
+    LLVM::LLVMStructType::attachInterface<MemRefInsider>(*ctx);
+  });
+  registry.addExtension(+[](MLIRContext *ctx, memref::MemRefDialect *dialect) {
+    MemRefType::attachInterface<PtrElementModel<MemRefType>>(*ctx);
+  });
+
+  registry.addExtension(+[](MLIRContext *ctx, LLVM::LLVMDialect *dialect) {
+    LLVM::LLVMStructType::attachInterface<
+        PtrElementModel<LLVM::LLVMStructType>>(*ctx);
+  });
+
+  registry.addExtension(+[](MLIRContext *ctx, LLVM::LLVMDialect *dialect) {
+    LLVM::LLVMPointerType::attachInterface<
+        PtrElementModel<LLVM::LLVMPointerType>>(*ctx);
+  });
+
+  registry.addExtension(+[](MLIRContext *ctx, LLVM::LLVMDialect *dialect) {
+    LLVM::LLVMArrayType::attachInterface<PtrElementModel<LLVM::LLVMArrayType>>(
+        *ctx);
+  });
+
   /// Run the MlirOptMain driver with the registered dialects and passes.
   return mlir::failed(mlir::MlirOptMain(
-      argc, argv, "Polygeist Modular Optimizer Driver", registry));
+      argc, argv, "CARTS Driver", registry));
 }

@@ -2,6 +2,7 @@
 #ifndef LLVM_ARTS_CODEGEN_H
 #define LLVM_ARTS_CODEGEN_H
 
+#include "mlir/Conversion/LLVMCommon/MemRefBuilder.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h" // Correct include for FuncOp
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -24,7 +25,8 @@ using namespace types;
 
 class ArtsCodegen {
 public:
-  ArtsCodegen(ModuleOp &module, OpBuilder &builder, llvm::DataLayout &dataLayout);
+  ArtsCodegen(ModuleOp &module, OpBuilder &builder,
+              llvm::DataLayout &dataLayout);
   ~ArtsCodegen();
 
   /// Initialize types and runtime function declarations
@@ -44,15 +46,22 @@ public:
   mlir::Value createEdt(mlir::Value edtGuid, mlir::Value edtPtr,
                         mlir::Value edtSlotPtr, Location loc);
   func::FuncOp createEdtFunction(Location loc);
-  func::CallOp insertEdtCall(arts::EdtOp edtOp, func::FuncOp edtFunc,
-                             Location loc);
-  func::CallOp createEdtCall(func::FuncOp edtFunc, mlir::Value edtGuid,
-                             SmallVector<Value> &edtParameters,
-                             unsigned edtDepNum, Location loc);
-  mlir::Value createEdtGuid(uint64_t edtNode, Location loc);
+  func::CallOp createEdtCallWithGuid(arts::ParallelOp parOp, func::FuncOp edtFunc,
+                                     unsigned route, Location loc);
+  func::CallOp createEdtCallWithGuid(arts::EdtOp edtOp, func::FuncOp edtFunc,
+                                     unsigned route, Location loc);
+  func::CallOp createEdtCallWithEpoch(arts::EdtOp edtOp, func::FuncOp edtFunc,
+                                      unsigned route, Value epoch,
+                                      Location loc);
+  mlir::Value createEdtGuid(uint64_t node, Location loc);
   mlir::Value insertEdtEntry(func::FuncOp edtFunc,
                              SmallVector<Value> &opParameters,
                              SmallVector<Value> &opDependencies, Location loc);
+  /// Helpers
+  Value createFunctionPointer(func::FuncOp funcOp, Location loc);
+  Value createParamV(SmallVector<Value> &parameters, Value paramC,
+                     Location loc);
+  Value createIntConstant(unsigned value, Type type, Location loc);
 
   unsigned increaseEdtCounter() { return ++edtCounter; }
 
@@ -74,7 +83,7 @@ public:
   FunctionType VarName = nullptr;
 #define ARTS_STRUCT_TYPE(VarName, StructName, ...)                             \
   LLVMStructType VarName = nullptr;                                            \
-  LLVMPointerType VarName##Ptr = nullptr;
+  MemRefType VarName##Ptr = nullptr;
 #include "ARTSKinds.def"
   ///}
 private:
