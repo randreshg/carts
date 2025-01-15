@@ -12,6 +12,7 @@
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/RegionUtils.h"
@@ -36,22 +37,79 @@
 using namespace mlir;
 using namespace arts;
 
-/// Collects parameters for the EdtOp
-static void collectParametersAndDependencies(SetVector<Value> &parameters,
-                                             SetVector<Value> &dependencies,
-                                             Region &region) {
-  SetVector<Value> usedValues;
-  getUsedValuesDefinedAbove(region, usedValues);
-  for (Value operand : usedValues) {
-    if (operand.getType().isIntOrIndexOrFloat()) {
-      parameters.insert(operand);
-      LLVM_DEBUG(dbgs() << "Parameter: " << operand << "\n");
-    } else {
-      dependencies.insert(operand);
-      LLVM_DEBUG(dbgs() << "Dependencies: " << operand << "\n");
+class EdtEnvManager {
+public:
+  EdtEnvManager(PatternRewriter &rewriter, Region &region)
+      : rewriter(rewriter) {
+    naiveCollection(region);
+  }
+  ~EdtEnvManager() {}
+
+  bool addParameter(Value val) { return parameters.insert(val); }
+
+  bool addDependency(Value val, StringRef mode = "inout", bool adjust = true) {
+    if (!adjust)
+      return dependencies.insert(val);
+    auto depOp = dyn_cast<arts::MakeDepOp>(val.getDefiningOp());
+    /// If the dependency is not a make_dep operation, create one
+    if (!depOp) {
+      auto valToCheck = val;
+      /// Check if it was naively collected, if so, remove it
+      /// If the value is a memref.load, get the memref
+      if (auto loadOp = dyn_cast<memref::LoadOp>(val.getDefiningOp()))
+        valToCheck = loadOp.getMemRef();
+
+      if (dependencies.contains(valToCheck)) {
+        LLVM_DEBUG(dbgs() << "Dependency already added: " << valToCheck
+                          << " - Removing it\n");
+        dependencies.remove(valToCheck);
+      }
+
+      /// Create a new make_dep operation
+      depOp = rewriter.create<arts::MakeDepOp>(val.getLoc(), mode, val);
+    }
+
+    /// If it was added as a parameter, remove it
+    auto dep = depOp.getVal();
+    if (parameters.contains(dep))
+      parameters.remove(dep);
+    return dependencies.insert(depOp);
+  }
+
+  void naiveCollection(Region &region) {
+    SetVector<Value> usedValues;
+    getUsedValuesDefinedAbove(region, usedValues);
+    for (Value operand : usedValues) {
+      if (operand.getType().isIntOrIndexOrFloat()) {
+        parameters.insert(operand);
+        LLVM_DEBUG(dbgs() << "Parameter: " << operand << "\n");
+      } else {
+        dependencies.insert(operand);
+        LLVM_DEBUG(dbgs() << "Dependencies: " << operand << "\n");
+      }
     }
   }
-}
+
+  ArrayRef<Value> getParameters() { return parameters.getArrayRef(); }
+
+  ArrayRef<Value> getDependencies(bool verify = true) {
+    if (verify) {
+      SmallVector<Value, 4> depsToProcess(dependencies.begin(),
+                                          dependencies.end());
+      for (Value dep : depsToProcess) {
+        if (!isa<arts::MakeDepOp>(dep.getDefiningOp())) {
+          addDependency(dep);
+          dependencies.remove(dep);
+        }
+      }
+    }
+    return dependencies.getArrayRef();
+  }
+
+private:
+  PatternRewriter &rewriter;
+  SetVector<Value> parameters, dependencies;
+};
 
 //===----------------------------------------------------------------------===//
 // Conversion Patterns
@@ -60,32 +118,17 @@ static void collectParametersAndDependencies(SetVector<Value> &parameters,
 struct ParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  /// Create a new `arts.make_dep` operation from a memref operation
-  SmallVector<Value>
-  createDepsFromMemRefOps(const SetVector<Value> &dependencies,
-                          PatternRewriter &rewriter, Location loc) const {
-    SmallVector<Value> deps;
-    deps.reserve(dependencies.size());
-    const auto depType = "inout";
-    for (const auto &memref : dependencies) {
-      deps.push_back(rewriter.create<arts::MakeDepOp>(loc, depType, memref));
-    }
-    return deps;
-  }
-
   LogicalResult matchAndRewrite(omp::ParallelOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     LLVM_DEBUG(dbgs() << line << "Converting omp.parallel to arts.parallel\n"
                       << line);
     /// Collect parameters and dependencies
-    SetVector<Value> parameters, dependencies;
-    collectParametersAndDependencies(parameters, dependencies, op.getRegion());
-    SmallVector<Value> deps =
-        createDepsFromMemRefOps(dependencies, rewriter, loc);
+    EdtEnvManager edtEnv(rewriter, op.getRegion());
+
     /// Create a new `arts.parallel` operation.
-    auto parOp =
-        rewriter.create<arts::ParallelOp>(loc, parameters.getArrayRef(), deps);
+    auto parOp = rewriter.create<arts::ParallelOp>(loc, edtEnv.getParameters(),
+                                                   edtEnv.getDependencies());
     parOp.getBody().emplaceBlock();
     Block &blk = parOp.getBody().front();
 
@@ -138,7 +181,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
     llvm_unreachable("Unknown ClauseTaskDepend value");
   }
 
-  void collectTaskDependencies(SetVector<Value> &dependencies, omp::TaskOp task,
+  void collectTaskDependencies(EdtEnvManager &edtEnv, omp::TaskOp task,
                                PatternRewriter &rewriter, Location loc) const {
     LLVM_DEBUG(dbgs() << "Collecting dependencies\n");
     auto dependList = task.getDependsAttr();
@@ -161,44 +204,22 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
       }
       assert(depStoreOp && "Expected an affine.store operation");
 
-      /// The value to store must be an affine.load
-      auto depLoadOp = dyn_cast<affine::AffineLoadOp>(
+      /// The valued must be loaded from a memrer through an memref.load
+      auto depLoadOp = dyn_cast<memref::LoadOp>(
           depStoreOp.getValueToStore().getDefiningOp());
-      assert(depLoadOp && "Expected an affine.load operation");
+      assert(depLoadOp && "Expected a memref.load operation");
 
       /// Get affine operands
       auto memref = depLoadOp.getMemRef();
-      auto affineMap = depLoadOp.getAffineMap();
-      SmallVector<Value> operands(depStoreOp.getIndices().begin(),
-                                  depStoreOp.getIndices().end());
+      LLVM_DEBUG(dbgs() << "  - Memref: " << memref << "\n");
 
       /// Use the affineMapAttr as needed
-      auto depOp = rewriter.create<arts::MakeDepOp>(loc, depType, memref,
-                                                    affineMap, operands);
-      LLVM_DEBUG(dbgs() << "  - Dependency: " << depOp << "\n");
+      // LLVM_DEBUG(dbgs() << "  - Dependency: " << depOp << "\n");
+      /// Add the dependency to the edt environment
+      edtEnv.addDependency(depLoadOp, depType, true);
 
-      /// Before adding it, verify if the memref is already in the list, if it
-      /// is, remove it and add the new one
-      if (dependencies.contains(memref)) {
-        LLVM_DEBUG(dbgs() << "    - Removing previous dependency: " << memref
-                          << "\n");
-        dependencies.remove(memref);
-      }
-      dependencies.insert(depOp.getResult());
-
-      /// Remove the original operations
+      /// Replace dependency array with undef
       replaceWithUndef(depAlloc, rewriter);
-      replaceWithUndef(depLoadOp, rewriter);
-    }
-
-    /// If there is any dependency that is not the result of a MakeDepOp, create
-    /// it
-    for (auto dep : dependencies) {
-      if (!isa<arts::MakeDepOp>(dep.getDefiningOp())) {
-        auto depOp = rewriter.create<arts::MakeDepOp>(loc, "inout", dep);
-        dependencies.remove(dep);
-        dependencies.insert(depOp.getResult());
-      }
     }
   }
 
@@ -208,12 +229,12 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
     LLVM_DEBUG(dbgs() << line << "Converting omp.task to arts.edt\n"
                       << line << op << "\n");
     /// Collect parameters and dependencies
-    SetVector<Value> parameters, dependencies;
-    collectParametersAndDependencies(parameters, dependencies, op.getRegion());
-    collectTaskDependencies(dependencies, op, rewriter, loc);
+    EdtEnvManager edtEnv(rewriter, op.getRegion());
+    collectTaskDependencies(edtEnv, op, rewriter, loc);
+
     /// Create a new `arts.edt` operation.
-    auto edtOp = rewriter.create<arts::EdtOp>(loc, parameters.getArrayRef(),
-                                              dependencies.getArrayRef());
+    auto edtOp = rewriter.create<arts::EdtOp>(loc, edtEnv.getParameters(),
+                                              edtEnv.getDependencies());
     edtOp.getBody().emplaceBlock();
     Block &blk = edtOp.getBody().front();
 

@@ -37,29 +37,6 @@ def UndefOp: Arts_Op<"undef", [Pure]> {
 //===----------------------------------------------------------------------===//
 // arts.make_dep
 //===----------------------------------------------------------------------===//
-// def MakeDepOp : Arts_Op<"make_dep", []> {
-//   let summary = "Creates an affine dependency for arts.edt";
-//   let description = [{
-//     This operation creates an affine dependency for the arts.edt operation.
-//     It includes the mode, memref, affine map, and any related operands.
-//   }];
-  
-//   let arguments = (ins
-//     StrAttr:$mode,                      // Dependency mode (e.g., "in", "out", "inout")
-//     AnyMemRef:$memref,                  // Memory reference for dependency
-//     AffineMapAttr:$affine_map,          // Affine map for indexing
-//     Variadic<Index>:$affine_operands    // Variadic list of operands for affine map
-//   );
-//   let results = (outs DepType:$dep);
-//   let assemblyFormat = [{
-//     $mode `,` $memref `:` type($memref) `,` 
-//     $affine_map `(` $affine_operands `)` attr-dict `:` type($dep)
-//   }];
-//   let skipDefaultBuilders = 1;
-//   let builders = [ OpBuilder<(ins 
-//     "StringRef":$mode, "Value":$memref, "AffineMap":$affine_map, "ValueRange":$affine_operands)>];
-// }
-
 def MakeDepOp : Arts_Op<"make_dep", []> {
   let summary = "Creates a dependency for arts.edt or arts.parallel";
   let description = [{
@@ -71,21 +48,14 @@ def MakeDepOp : Arts_Op<"make_dep", []> {
   // Note the use of `OptionalAttr<AffineMapAttr>` for affine_map.
   let arguments = (ins
     StrAttr:$mode,                            // e.g., "in", "out", "inout"
-    AnyMemRef:$memref,                        // Memory reference for dependency
-    OptionalAttr<AffineMapAttr>:$affine_map,  // optional AffineMap attribute
-    Variadic<Index>:$affine_operands          // optional list of index operands
+    AnyType:$val                              // dependent value
   );
 
   let results = (outs DepType:$dep);
 
-  // Example parse:
-  //   make_dep "in", %A : memref<?xf32>  // no map or operands
-  //   make_dep "out", %B : memref<?xf32>, affine_map<(d0) -> (d0)>(%i)
-  //
-   // Use brackets as anchors for the optional group
+  // Use brackets as anchors for the optional group
   let assemblyFormat = [{
-    $mode `,` $memref `:` type($memref)
-    ( `(` $affine_map^ `(` $affine_operands `)` `)` )?
+    $mode `,` $val `:` type($val)
     attr-dict `:` type($dep)
   }];
 
@@ -97,11 +67,7 @@ def MakeDepOp : Arts_Op<"make_dep", []> {
   // The user can choose based on whether they need affine indexing or not.
   let builders = [
     // e.g. make_dep("in", %A) => no map or affine operands
-    OpBuilder<(ins "StringRef":$mode, "Value":$memref)>,
-
-    // e.g. make_dep("out", %A, affineMap, operands...)
-    OpBuilder<(ins "StringRef":$mode, "Value":$memref,
-               "AffineMap":$affine_map, "ValueRange":$affine_operands)>
+    OpBuilder<(ins "StringRef":$mode, "Value":$val)>
   ];
 }
 

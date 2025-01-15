@@ -1,9 +1,13 @@
 #include <math.h>
-#include <mkl.h>
+// #include <mkl.h>
 #include <stdio.h>
+#include <assert.h>
 #include <sys/time.h>
+#include <string.h>
 #include <sys/times.h>
+#include <stdlib.h>
 
+void dpotrf_(const char *uplo, int *n, double *a, int *lda, int *info);
 void dgemm_ (const char *transa, const char *transb, int *l, int *n, int *m, double *alpha,
              const void *a, int *lda, void *b, int *ldb, double *beta, void *c, int *ldc);
 void dtrsm_ (char *side, char *uplo, char *transa, char *diag, int *m, int *n, double *alpha,
@@ -43,7 +47,7 @@ enum blas_norm_type {
 static void BLAS_error(char *rname, int err, int val, int x)
 {
 	fprintf( stderr, "%s %d %d %d\n", rname, err, val, x );
-	abort();
+	// abort();
 }
 
 static void BLAS_ge_norm(enum blas_order_type order, enum blas_norm_type norm,
@@ -70,7 +74,7 @@ static void BLAS_ge_norm(enum blas_order_type order, enum blas_norm_type norm,
 		for (int i = 0; i < m; ++i) {
 			v = 0.0f;
 			for (int j = 0; j < n; ++j) {
-				v += abs( a[i + j * lda] );
+				v += fabs( a[i + j * lda] );
 			}
 			if (v > anorm)
 				anorm = v;
@@ -161,91 +165,91 @@ float get_time()
 }
 
 // Robust Check the factorization of the matrix A2
-static int check_factorization(int N, double *A1, double *A2, int LDA, char uplo, double eps)
-{
-	char NORM = 'I', ALL = 'A', UP = 'U', LO = 'L', TR = 'T', NU = 'N', RI = 'R';
+// static int check_factorization(int N, double *A1, double *A2, int LDA, char uplo, double eps)
+// {
+// 	char NORM = 'I', ALL = 'A', UP = 'U', LO = 'L', TR = 'T', NU = 'N', RI = 'R';
 
-#ifdef VERBOSE
-	printf ("Checking result ...\n");
-#endif
+// #ifdef VERBOSE
+// 	printf ("Checking result ...\n");
+// #endif
 
-	double *Residual = (double *)malloc(N*N*sizeof(double));
-	double *L1       = (double *)malloc(N*N*sizeof(double));
-	double *L2       = (double *)malloc(N*N*sizeof(double));
-	double *work     = (double *)malloc(N*sizeof(double));
+// 	double *Residual = (double *)malloc(N*N*sizeof(double));
+// 	double *L1       = (double *)malloc(N*N*sizeof(double));
+// 	double *L2       = (double *)malloc(N*N*sizeof(double));
+// 	double *work     = (double *)malloc(N*sizeof(double));
 
-	memset((void*)L1, 0, N*N*sizeof(double));
-	memset((void*)L2, 0, N*N*sizeof(double));
+// 	memset((void*)L1, 0, N*N*sizeof(double));
+// 	memset((void*)L2, 0, N*N*sizeof(double));
 
-	double alpha= 1.0;
+// 	double alpha= 1.0;
 
-	dlacpy_(&ALL, &N, &N, A1, &LDA, Residual, &N);
+// 	dlacpy_(&ALL, &N, &N, A1, &LDA, Residual, &N);
 
-	/* Dealing with L'L or U'U  */
-	if (uplo == 'U'){
-		dlacpy_(&UP, &N, &N, A2, &LDA, L1, &N);
-		dlacpy_(&UP, &N, &N, A2, &LDA, L2, &N);
-		dtrmm_(&LO, &uplo, &TR, &NU, &N, &N, &alpha, L1, &N, L2, &N);
-	}
-	else{
-		dlacpy_(&LO, &N, &N, A2, &LDA, L1, &N);
-		dlacpy_(&LO, &N, &N, A2, &LDA, L2, &N);
-		dtrmm_(&RI, &LO, &TR, &NU, &N, &N, &alpha, L1, &N, L2, &N);
-	}
+// 	/* Dealing with L'L or U'U  */
+// 	if (uplo == 'U'){
+// 		dlacpy_(&UP, &N, &N, A2, &LDA, L1, &N);
+// 		dlacpy_(&UP, &N, &N, A2, &LDA, L2, &N);
+// 		dtrmm_(&LO, &uplo, &TR, &NU, &N, &N, &alpha, L1, &N, L2, &N);
+// 	}
+// 	else{
+// 		dlacpy_(&LO, &N, &N, A2, &LDA, L1, &N);
+// 		dlacpy_(&LO, &N, &N, A2, &LDA, L2, &N);
+// 		dtrmm_(&RI, &LO, &TR, &NU, &N, &N, &alpha, L1, &N, L2, &N);
+// 	}
 
-	/* Compute the Residual || A -L'L|| */
-	for (int i = 0; i < N; i++)
-		for (int j = 0; j < N; j++)
-			Residual[j*N+i] = L2[j*N+i] - Residual[j*N+i];
+// 	/* Compute the Residual || A -L'L|| */
+// 	for (int i = 0; i < N; i++)
+// 		for (int j = 0; j < N; j++)
+// 			Residual[j*N+i] = L2[j*N+i] - Residual[j*N+i];
 
-	double Rnorm = dlange_(&NORM, &N, &N, Residual, &N, work);
-	double Anorm = dlange_(&NORM, &N, &N, A1, &N, work);
+// 	double Rnorm = dlange_(&NORM, &N, &N, Residual, &N, work);
+// 	double Anorm = dlange_(&NORM, &N, &N, A1, &N, work);
 
-#ifdef VERBOSE
-	printf("============\n");
-	printf("Checking the Cholesky Factorization \n");
-	printf("-- ||L'L-A||_oo/(||A||_oo.N.eps) = %e \n",Rnorm/(Anorm*N*eps));
-#endif
+// #ifdef VERBOSE
+// 	printf("============\n");
+// 	printf("Checking the Cholesky Factorization \n");
+// 	printf("-- ||L'L-A||_oo/(||A||_oo.N.eps) = %e \n",Rnorm/(Anorm*N*eps));
+// #endif
 
-	const int info_factorization = isnan(Rnorm/(Anorm*N*eps)) ||
-								   isinf(Rnorm/(Anorm*N*eps)) || 
-								   (Rnorm/(Anorm*N*eps) > 60.0);
+// 	const int info_factorization = isnan(Rnorm/(Anorm*N*eps)) ||
+// 								   isinf(Rnorm/(Anorm*N*eps)) || 
+// 								   (Rnorm/(Anorm*N*eps) > 60.0);
 
-#ifdef VERBOSE
-	if ( info_factorization){
-		printf("\n-- Factorization is suspicious ! \n\n");
-	}
-	else{
-		printf("\n-- Factorization is CORRECT ! \n\n");
-	}
-#endif
+// #ifdef VERBOSE
+// 	if ( info_factorization){
+// 		printf("\n-- Factorization is suspicious ! \n\n");
+// 	}
+// 	else{
+// 		printf("\n-- Factorization is CORRECT ! \n\n");
+// 	}
+// #endif
 
-	free(Residual); free(L1); free(L2); free(work);
+// 	free(Residual); free(L1); free(L2); free(work);
 
-	return info_factorization;
-}
+// 	return info_factorization;
+// }
 
 void initialize_matrix(const int n, const int ts, double *matrix)
 {
-	int ISEED[4] = {0,0,0,1};
-	int intONE=1;
+// 	int ISEED[4] = {0,0,0,1};
+// 	int intONE=1;
 
-#ifdef VERBOSE
-	printf("Initializing matrix with random values ...\n");
-#endif
+// #ifdef VERBOSE
+// 	printf("Initializing matrix with random values ...\n");
+// #endif
 
-	for (int i = 0; i < n*n; i+=n) {
-		dlarnv_(&intONE, &ISEED[0], &n, &matrix[i]);
-	}
+// 	for (int i = 0; i < n*n; i+=n) {
+// 		dlarnv_(&intONE, &ISEED[0], &n, &matrix[i]);
+// 	}
 
-	for (int i=0; i<n; i++) {
-		for (int j=0; j<n; j++) {
-			matrix[j*n + i] = matrix[j*n + i] + matrix[i*n + j];
-			matrix[i*n + j] = matrix[j*n + i];
-		}
-	}
+// 	for (int i=0; i<n; i++) {
+// 		for (int j=0; j<n; j++) {
+// 			matrix[j*n + i] = matrix[j*n + i] + matrix[i*n + j];
+// 			matrix[i*n + j] = matrix[j*n + i];
+// 		}
+// 	}
 
-	add_to_diag(matrix, n, (double) n);
+// 	add_to_diag(matrix, n, (double) n);
 }
 
 static void gather_block(const int N, const int ts, double *Alin, double *A)
