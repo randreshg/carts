@@ -23,10 +23,16 @@ namespace arts {
 using namespace mlir::LLVM;
 using namespace types;
 
+struct DataBlockCodegen {
+  DataBlockCodegen(mlir::Value memref) : memref(memref) {}
+  mlir::Value memref = nullptr;
+  llvm::SmallVector<mlir::Value, 4> sizes;
+};
+
 class ArtsCodegen {
 public:
-  ArtsCodegen(ModuleOp &module, OpBuilder &builder,
-              llvm::DataLayout &dataLayout);
+  ArtsCodegen(ModuleOp &module, OpBuilder &builder, llvm::DataLayout &llvmDL,
+              mlir::DataLayout &mlirDL);
   ~ArtsCodegen();
 
   /// Initialize types and runtime function declarations
@@ -42,14 +48,23 @@ public:
   func::CallOp createRuntimeCall(RuntimeFunction FnID,
                                  ArrayRef<mlir::Value> args, Location loc);
 
+  /// Create Datablock
+  DataBlockCodegen *getOrCreateDatablock(mlir::Value memref);
+  mlir::Value createDatablock(arts::MakeDepOp edtDep, Location loc);
+
   /// Create Edt
   mlir::Value createEdt(mlir::Value edtGuid, mlir::Value edtPtr,
                         mlir::Value edtSlotPtr, Location loc);
   func::FuncOp createEdtFunction(Location loc);
-  func::CallOp createEdtCallWithGuid(arts::ParallelOp parOp, func::FuncOp edtFunc,
-                                     unsigned route, Location loc);
+  func::CallOp createEdtCallWithGuid(func::FuncOp edtFunc,
+                                     SmallVector<mlir::Value> parametersValues,
+                                     unsigned numDeps, unsigned route,
+                                     Location loc);
   func::CallOp createEdtCallWithGuid(arts::EdtOp edtOp, func::FuncOp edtFunc,
                                      unsigned route, Location loc);
+  func::CallOp createEdtCallWithGuid(arts::ParallelOp parOp,
+                                     func::FuncOp edtFunc, unsigned route,
+                                     Location loc);
   func::CallOp createEdtCallWithEpoch(arts::EdtOp edtOp, func::FuncOp edtFunc,
                                       unsigned route, Value epoch,
                                       Location loc);
@@ -59,9 +74,9 @@ public:
                              SmallVector<Value> &opDependencies, Location loc);
   /// Helpers
   Value createFunctionPointer(func::FuncOp funcOp, Location loc);
-  Value createParamV(SmallVector<Value> &parameters, Value paramC,
-                     Location loc);
+  Value createParamV(SmallVector<Value> &parameters, Location loc);
   Value createIntConstant(unsigned value, Type type, Location loc);
+  Value castToInt64(Value value, Location loc);
 
   unsigned increaseEdtCounter() { return ++edtCounter; }
 
@@ -80,7 +95,8 @@ public:
   ///{
 #define ARTS_TYPE(VarName, InitValue) mlir::Type VarName = nullptr;
 #define ARTS_FUNCTION_TYPE(VarName, IsVarArg, ReturnType, ...)                 \
-  FunctionType VarName = nullptr;
+  FunctionType VarName = nullptr;                                              \
+  MemRefType VarName##Ptr = nullptr;
 #define ARTS_STRUCT_TYPE(VarName, StructName, ...)                             \
   LLVMStructType VarName = nullptr;                                            \
   MemRefType VarName##Ptr = nullptr;
@@ -93,9 +109,12 @@ private:
   /// The MLIR module and builder
   ModuleOp &module;
   OpBuilder &builder;
-  llvm::DataLayout &dataLayout;
+  llvm::DataLayout &llvmDL;
+  mlir::DataLayout &mlirDL;
   /// Function counter
   unsigned edtCounter = 0;
+  /// Map of known datablocks
+  llvm::DenseMap<mlir::Value, DataBlockCodegen *> datablocks;
   // Add more types as necessary
 };
 

@@ -37,7 +37,7 @@ static inline void removeUndefOps(mlir::ModuleOp module) {
 static inline void replaceWithUndef(mlir::Operation *op,
                                     mlir::PatternRewriter &rewriter) {
   if (op->getNumResults() == 0) {
-    rewriter.eraseOp(op);
+    // rewriter.eraseOp(op);
     return;
   }
 
@@ -48,7 +48,7 @@ static inline void replaceWithUndef(mlir::Operation *op,
         rewriter.create<mlir::arts::UndefOp>(op->getLoc(), result.getType());
     result.replaceAllUsesWith(undefOp.getResult());
   }
-  rewriter.eraseOp(op);
+  // rewriter.eraseOp(op);
   rewriter.restoreInsertionPoint(savedInsertionPoint);
 }
 

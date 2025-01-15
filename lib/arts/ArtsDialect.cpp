@@ -57,20 +57,10 @@ void ArtsDialect::initialize() {
 // MakeDepOp
 //===----------------------------------------------------------------------===//
 void MakeDepOp::build(OpBuilder &builder, OperationState &result,
-                      StringRef mode, Value memref, AffineMap affine_map,
-                      ValueRange affine_operands) {
+                      StringRef mode, Value val) {
   result.addTypes(arts::DepType::get(builder.getContext()));
   result.addAttribute("mode", builder.getStringAttr(mode));
-  result.addOperands({memref});
-  result.addAttribute("affine_map", AffineMapAttr::get(affine_map));
-  result.addOperands(affine_operands);
-}
-
-void MakeDepOp::build(OpBuilder &builder, OperationState &result,
-                      StringRef mode, Value memref) {
-  result.addTypes(arts::DepType::get(builder.getContext()));
-  result.addAttribute("mode", builder.getStringAttr(mode));
-  result.addOperands({memref});
+  result.addOperands({val});
 }
 
 //===----------------------------------------------------------------------===//
@@ -123,4 +113,44 @@ unsigned EdtOp::getNumParameters() {
 unsigned EdtOp::getNumDependencies() {
   auto dependencies = getDependencies();
   return dependencies.size();
+}
+
+//===----------------------------------------------------------------------===//
+// ParallelOp
+//===----------------------------------------------------------------------===//
+/// Retrieve parameters.
+SmallVector<Value> ParallelOp::getParametersValues() {
+  auto parameters = getParameters();
+  SmallVector<Value, 4> parametersVector(parameters.begin(), parameters.end());
+  return parametersVector;
+}
+
+/// Retrieve dependencies.
+SmallVector<Value> ParallelOp::getDependenciesValues() {
+  auto dependencies = getDependencies();
+  SmallVector<Value, 4> dependenciesVector(dependencies.begin(),
+                                           dependencies.end());
+  return dependenciesVector;
+}
+
+/// Get the number of parameters.
+unsigned ParallelOp::getNumParameters() {
+  auto parameters = getParameters();
+  return parameters.size();
+}
+
+/// Get the number of dependencies.
+unsigned ParallelOp::getNumDependencies() {
+  auto dependencies = getDependencies();
+  return dependencies.size();
+}
+
+//===----------------------------------------------------------------------===//
+// Utils
+//===----------------------------------------------------------------------===//
+unsigned mlir::arts::getNumDependencies(SmallVector<Value> deps) {
+  /// Each dep value is a make_dep op.
+  /// The number of dependencies correspond to
+  ///
+  return deps.size();
 }

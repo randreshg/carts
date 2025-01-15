@@ -44,7 +44,7 @@ __ARTS_TYPE(Float, mlir::Float32Type::get)
 __ARTS_TYPE(Double, mlir::Float64Type::get)
 
 /// Define integer types
-__ARTS_INTEGER_TYPE(PtrSize, dataLayout.getPointerSize())
+__ARTS_INTEGER_TYPE(PtrSize, llvmDL.getPointerSize())
 __ARTS_INTEGER_TYPE(Int1, 1)
 __ARTS_INTEGER_TYPE(Int8, 8)
 __ARTS_INTEGER_TYPE(Int16, 16)
@@ -183,34 +183,28 @@ __ARTS_RTL(artsReserveGuidRoute, artsGuid_t, artsType_t, Int32)
 
 // artsGuid_t artsEdtCreate(artsEdt_t funcPtr, unsigned int route, uint32_t
 // paramc, uint64_t * paramv, uint32_t depc);
-__ARTS_RTL(artsEdtCreate, artsGuid_t, EdtFunction, Int32, Int32, Int32, Int32)
+__ARTS_RTL(artsEdtCreate, artsGuid_t, EdtFunctionPtr, Int32, Int32, Int32,
+           Int32)
 // artsGuid_t artsEdtCreateWithGuid(artsEdt_t funcPtr, artsGuid_t guid, uint32_t
 //                                  paramc, uint64_t * paramv, uint32_t depc);
-__ARTS_RTL(artsEdtCreateWithGuid, artsGuid_t, EdtFunction, artsGuid_t, Int32,
+__ARTS_RTL(artsEdtCreateWithGuid, artsGuid_t, EdtFunctionPtr, artsGuid_t, Int32,
            Int64Ptr, Int32)
 // artsGuid_t artsEdtCreateWithEpoch(artsEdt_t funcPtr, unsigned int route,
 //                                   uint32_t paramc, uint64_t *paramv,
 //                                   uint32_t depc, artsGuid_t epochGuid);
-__ARTS_RTL(artsEdtCreateWithEpoch, artsGuid_t, EdtFunction, Int32, Int32,
+__ARTS_RTL(artsEdtCreateWithEpoch, artsGuid_t, EdtFunctionPtr, Int32, Int32,
            Int64Ptr, Int32, artsGuid_t)
 /// artsEdtCreateDep
 /// artsEdtCreateWithGuidDep
 /// artsEdtCreateWithEpochDep
 __ARTS_RTL(artsEdtDestroy, Void, artsGuid_t)
-
+// void artsSignalEdt(artsGuid_t edtGuid, uint32_t slot, artsGuid_t dataGuid);
 __ARTS_RTL(artsSignalEdt, Void, artsGuid_t, Int32, artsGuid_t)
 // void artsSignalEdtValue( edtGuid, uint32_t slot, uint64_t data);
 __ARTS_RTL(artsSignalEdtValue, Void, artsGuid_t, Int32, Int64)
-/// void artsSignalEdtPtr(artsGuid_t edtGuid, uint32_t slot, void *ptr, unsigned
-/// int size);
+// void artsSignalEdtPtr(artsGuid_t edtGuid, uint32_t slot, void *ptr, unsigned
+// int size);
 __ARTS_RTL(artsSignalEdtPtr, Void, artsGuid_t, Int32, VoidPtr, Int32)
-/// artsActiveMessageWithDb
-/// attsActiveMessageWithDbAt
-/// artsActiveMessageWithBuffer
-/// artsAllocateLocalBuffer
-/// artsSetBuffer
-/// artsGetBuffer
-/// artsBlockForBuffer
 
 /// artsEventCreate
 /// artsEventCreateWithGuid
@@ -220,10 +214,23 @@ __ARTS_RTL(artsSignalEdtPtr, Void, artsGuid_t, Int32, VoidPtr, Int32)
 /// artsAddDependence
 /// artsAddLocalEventCallback
 
-/// artsDbCreate
-/// artsGuid_t artsDbCreate(void **addr, uint64_t size, artsType_t mode);
+// artsGuid_t artsDbCreate(void **addr, uint64_t size, artsType_t mode);
 // __ARTS_RTL(artsDbCreate, artsGuid_t, VoidPtrPtr, Int64, artsType_t)
-/// artsGuid_t artsDbCreatePtr(artsPtr_t *addr, uint64_t size, artsType_t mode);
+
+// artsGuid_t artsDbCreatePtr(artsPtr_t *addr, uint64_t size, artsType_t mode);
 __ARTS_RTL(artsDbCreatePtr, artsGuid_t, VoidPtr, Int64, artsType_t)
+
+/// epoch
+// artsGuid_t artsGetCurrentEpochGuid();
+__ARTS_RTL(artsGetCurrentEpochGuid, artsGuid_t)
+// artsGuid_t artsInitializeAndStartEpoch(artsGuid_t finishEdtGuid,
+//                                        unsigned int slot);
+__ARTS_RTL(artsInitializeAndStartEpoch, artsGuid_t, artsGuid_t, Int32)
+
+// bool artsWaitOnHandle(artsGuid_t epochGuid);
+__ARTS_RTL(artsWaitOnHandle, Int1, artsGuid_t)
+
+// void artsYield();
+__ARTS_RTL(artsYield, Void)
 #undef __ARTS_RTL
 #undef ARTS_RTL

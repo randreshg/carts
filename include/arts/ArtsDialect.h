@@ -19,6 +19,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/Value.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
@@ -42,7 +43,11 @@
 //===----------------------------------------------------------------------===//
 // Helper functions of Arts dialect transformations.
 //===----------------------------------------------------------------------===//
-namespace mlir::arts::utils {
+namespace mlir::arts {
+/// Compute the number of dependencies of the given operation.
+unsigned getNumDependencies(SmallVector<Value> deps);
+
+namespace utils {
 /// Collect the memory effects of the given op in 'effects'. Returns 'true' it
 /// could extract the effect information from the op, otherwise returns 'false'
 /// and conservatively populates the list with all possible effects.
@@ -76,5 +81,6 @@ bool mayAlias(mlir::MemoryEffects::EffectInstance a,
               mlir::MemoryEffects::EffectInstance b);
 
 bool mayAlias(mlir::MemoryEffects::EffectInstance a, mlir::Value b);
-} /// namespace mlir::arts::utils
+} /// namespace utils
+} /// namespace mlir::arts
 #endif // CARTS_DIALECT_H
