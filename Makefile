@@ -95,8 +95,8 @@ arts:
 	make -C $(ARTS_BUILD_DIR) all -j
 	make -C $(ARTS_BUILD_DIR) -j
 arts-clean:
-	rm -f -r $(ARTS_DIR)
 	rm -f -r $(ARTS_INSTALL_DIR)
+	# rm -f -r $(ARTS_DIR)
 
 # CARTS
 build:

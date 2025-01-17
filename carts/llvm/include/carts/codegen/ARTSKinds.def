@@ -188,11 +188,11 @@ __ARTS_RTL(artsGuidCast, false, artsGuid_t, artsGuid_t, artsType_t)
 /// artsGuidRangeResetIter
 /// artsReserveGuidsRoundRobin
 // artsGuid_t artsEdtCreate(artsEdt_t funcPtr, unsigned int route, uint32_t paramc, uint64_t * paramv, uint32_t depc);
-__ARTS_RTL(artsEdtCreate, false, artsGuid_t, EdtFunctionPtr, Int32, Int32, Int32, Int32)
+__ARTS_RTL(artsEdtCreate, false, artsGuid_t, EdtFnPtr, Int32, Int32, Int32, Int32)
 // artsGuid_t artsEdtCreateWithGuid(artsEdt_t funcPtr, artsGuid_t guid, uint32_t paramc, uint64_t * paramv, uint32_t depc);
-__ARTS_RTL(artsEdtCreateWithGuid, false, artsGuid_t, EdtFunctionPtr, artsGuid_t, Int32,
+__ARTS_RTL(artsEdtCreateWithGuid, false, artsGuid_t, EdtFnPtr, artsGuid_t, Int32,
            Int64Ptr, Int32)
-__ARTS_RTL(artsEdtCreateWithGuidAndEpoch, false, artsGuid_t, EdtFunctionPtr, Int32,
+__ARTS_RTL(artsEdtCreateWithGuidAndEpoch, false, artsGuid_t, EdtFnPtr, Int32,
            Int64Ptr, Int32, artsGuid_t)
 /// artsEdtCreateDep
 /// artsEdtCreateWithGuidDep

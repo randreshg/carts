@@ -47,6 +47,10 @@ void ArtsDialect::initialize() {
 #define GET_OP_CLASSES
 #include "arts/ArtsOps.cpp.inc"
 
+bool isArtsRegion(Operation *op) {
+  return isa<EdtOp>(op) || isa<ParallelOp>(op) || isa<EpochOp>(op) ||
+         isa<SingleOp>(op);
+}
 //===----------------------------------------------------------------------===//
 // Arts Dialect Types - method definitions
 //===----------------------------------------------------------------------===//

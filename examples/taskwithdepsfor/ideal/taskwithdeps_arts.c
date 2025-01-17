@@ -1,6 +1,7 @@
 // clang taskwithdeps_arts.c -O3 -g0 -march=native -I/home/randres/projects/arts/.install/arts/include -o taskwithdeps_arts -L/home/randres/projects/carts/.install/arts/lib -larts -lrdmacm
 
 /// cgeist taskwithdeps_arts.c -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include -I/home/randres/projects/carts/.install/arts/include --raise-scf-to-affine
+/// cgeist taskwithdeps_arts.c -O0 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include -I/home/randres/projects/carts/.install/arts/include --raise-scf-to-affine
 
 /// cgeist taskwithdeps_arts.c -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include -I/home/randres/projects/carts/.install/arts/include --raise-scf-to-affine -emit-llvm
 
@@ -184,8 +185,9 @@ void mainEdt(uint32_t paramc, uint64_t *paramv, uint32_t depc,
   int N = 5;
 
   // Allocate arrays for DataBlocks and events
-  double *A = (double *)artsMalloc(N * sizeof(double));
-  double *B = (double *)artsMalloc(N * sizeof(double));
+  // double *A = (double *)artsMalloc(N * sizeof(double));
+  double A[N], B[N];
+  // double *B = (double *)artsMalloc(N * sizeof(double));
   /// Initialize A with numbers from 0 to N-1
   for (int i = 0; i < N; i++) {
     A[i] = i;
@@ -203,8 +205,8 @@ void mainEdt(uint32_t paramc, uint64_t *paramv, uint32_t depc,
   // Wait for the finish EDT to end the epoch
   artsWaitOnHandle(finishMainEpochGuid);
   // We dont need the arrays anymore
-  artsFree(A);
-  artsFree(B);
+  // artsFree(A);
+  // artsFree(B);
   printf("---------- Main EDT finished ----------\n");
 }
 

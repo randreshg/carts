@@ -16,6 +16,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 #include <sys/types.h>
 
 namespace mlir {
@@ -24,9 +25,15 @@ using namespace mlir::LLVM;
 using namespace types;
 
 struct DataBlockCodegen {
-  DataBlockCodegen(mlir::Value memref) : memref(memref) {}
-  mlir::Value memref = nullptr;
-  llvm::SmallVector<mlir::Value, 4> sizes;
+  DataBlockCodegen(Value db, Value numElements)
+      : db(db), numElements(numElements) {}
+
+  Value getDb() { return db; }
+  Value getNumElements() { return numElements; }
+
+private:
+  Value db = nullptr;
+  Value numElements = nullptr;
 };
 
 class ArtsCodegen {
@@ -37,48 +44,63 @@ public:
 
   /// Initialize types and runtime function declarations
   void initialize();
-
   /// Finalize code generation, if necessary
   void finalize();
-
   /// Get or create a runtime function
   func::FuncOp getOrCreateRuntimeFunction(RuntimeFunction FnID);
-
   /// Generate a call to a runtime function
-  func::CallOp createRuntimeCall(RuntimeFunction FnID,
-                                 ArrayRef<mlir::Value> args, Location loc);
+  func::CallOp createRuntimeCall(RuntimeFunction FnID, ArrayRef<Value> args,
+                                 Location loc);
+  /// Builder
+  OpBuilder &getBuilder() { return builder; }
 
-  /// Create Datablock
-  DataBlockCodegen *getOrCreateDatablock(mlir::Value memref);
-  mlir::Value createDatablock(arts::MakeDepOp edtDep, Location loc);
+  /// Datablock
+  Value getDatablockMode(llvm::StringRef mode);
+  DataBlockCodegen *getDatablock(arts::MakeDepOp edtDep);
+  DataBlockCodegen *createDatablock(arts::MakeDepOp edtDep, Location loc);
+  DataBlockCodegen *getOrCreateDatablock(arts::MakeDepOp edtDep, Location loc);
 
-  /// Create Edt
-  mlir::Value createEdt(mlir::Value edtGuid, mlir::Value edtPtr,
-                        mlir::Value edtSlotPtr, Location loc);
+  /// Edt
+  Value createEdtGuid(Value node, Location loc);
   func::FuncOp createEdtFunction(Location loc);
-  func::CallOp createEdtCallWithGuid(func::FuncOp edtFunc,
-                                     SmallVector<mlir::Value> parametersValues,
-                                     unsigned numDeps, unsigned route,
-                                     Location loc);
-  func::CallOp createEdtCallWithGuid(arts::EdtOp edtOp, func::FuncOp edtFunc,
-                                     unsigned route, Location loc);
-  func::CallOp createEdtCallWithGuid(arts::ParallelOp parOp,
-                                     func::FuncOp edtFunc, unsigned route,
-                                     Location loc);
-  func::CallOp createEdtCallWithEpoch(arts::EdtOp edtOp, func::FuncOp edtFunc,
-                                      unsigned route, Value epoch,
-                                      Location loc);
-  mlir::Value createEdtGuid(uint64_t node, Location loc);
-  mlir::Value insertEdtEntry(func::FuncOp edtFunc,
-                             SmallVector<Value> &opParameters,
-                             SmallVector<Value> &opDependencies, Location loc);
-  /// Helpers
-  Value createFunctionPointer(func::FuncOp funcOp, Location loc);
-  Value createParamV(SmallVector<Value> &parameters, Location loc);
-  Value createIntConstant(unsigned value, Type type, Location loc);
-  Value castToInt64(Value value, Location loc);
+  Value createEdt(func::FuncOp edtFunc,
+                  SmallVector<mlir::Value> parametersValues, Value depC,
+                  Value node, Location loc);
+  Value createEdtWithEpoch(func::FuncOp edtFunc,
+                           SmallVector<Value> parametersValues, Value depC,
+                           Value node, Value epoch, Location loc);
+  func::CallOp createEdtCallWithGuid(func::FuncOp edtFunc, Value guid,
+                                     SmallVector<Value> parametersValues,
+                                     Value depC, Value node, Location loc);
+  Value insertEdtEntry(func::FuncOp edtFunc, SmallVector<Value> &params,
+                       SmallVector<Value> &deps, Location loc);
+  void outlineRegion(func::FuncOp func, Region &region,
+                     SmallVector<Value> &params, SmallVector<Value> &deps);
 
-  unsigned increaseEdtCounter() { return ++edtCounter; }
+  /// Epoch
+  Value createEpoch(Value finishEdtGuid, Value finishEdtSlot, Location loc);
+
+  /// Utils
+  Value getGuidFromDb(Value db, Location loc);
+  Value getPtrFromDb(Value db, Location loc);
+  Value getGuidFromEdtDep(Value dep, Location loc);
+  Value getPtrFromEdtDep(Value dep, Location loc);
+  Value getCurrentEpochGuid(Location loc);
+  Value getCurrentEdtGuid(Location loc);
+  Value getCurrentNode(Location loc);
+  Value getNumDeps(SmallVector<Value> &deps, Location loc);
+
+  /// Helpers
+  Value createParamV(SmallVector<Value> &parameters, Location loc);
+  Value createFunctionPtr(func::FuncOp funcOp, Location loc);
+  Value createIntConstant(unsigned value, Type type, Location loc);
+
+  /// Casting
+  Value castParameter(mlir::Type targetType, Value value, Location loc);
+  Value castToIndex(Value value, Location loc);
+  Value castToFloat(mlir::Type targetType, Value value, Location loc);
+  Value castToInt(mlir::Type targetType, Value value, Location loc);
+  Value castToPtr(Value value, Location loc);
 
   /// Insertion point
   void setInsertionPoint(Operation *op) { builder.setInsertionPoint(op); }
@@ -106,6 +128,8 @@ private:
   /// Internal helper functions
   void initializeTypes();
 
+  unsigned increaseEdtCounter() { return ++edtCounter; }
+
   /// The MLIR module and builder
   ModuleOp &module;
   OpBuilder &builder;
@@ -113,8 +137,8 @@ private:
   mlir::DataLayout &mlirDL;
   /// Function counter
   unsigned edtCounter = 0;
-  /// Map of known datablocks
-  llvm::DenseMap<mlir::Value, DataBlockCodegen *> datablocks;
+  /// Map a arts::MakeDepOp to a DataBlockCodegen
+  llvm::DenseMap<Value, DataBlockCodegen *> datablocks;
   // Add more types as necessary
 };
 

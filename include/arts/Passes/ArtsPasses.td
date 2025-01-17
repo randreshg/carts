@@ -24,6 +24,7 @@ def ConvertARTSToFuncs : Pass<"convert-arts-to-funcs", "mlir::ModuleOp"> {
     "func::FuncDialect",
     "arts::ArtsDialect",
     "arith::ArithDialect",
+    "affine::AffineDialect",
     "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createConvertARTSToFuncsPass()";

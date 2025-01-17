@@ -11,6 +11,7 @@
 
 #include "mlir/IR/Dialect.h"
 #include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/Operation.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
@@ -20,7 +21,7 @@
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
-#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/IR/Operation.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
 //===----------------------------------------------------------------------===//
@@ -28,6 +29,7 @@
 //===----------------------------------------------------------------------===//
 #include "arts/ArtsOpsDialect.h.inc"
 
+bool isArtsRegion(mlir::Operation *op);
 //===----------------------------------------------------------------------===//
 // Arts Dialect Types
 //===----------------------------------------------------------------------===//

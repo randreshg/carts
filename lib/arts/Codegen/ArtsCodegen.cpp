@@ -21,12 +21,15 @@
 
 #include "arts/Utils/ArtsTypes.h"
 
+#include "mlir/IR/Types.h"
 #include "polygeist/Dialect.h"
 #include "polygeist/Ops.h"
 
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/Error.h"
 
 #include <cassert>
 #include <cstddef>
@@ -134,157 +137,141 @@ func::CallOp ArtsCodegen::createRuntimeCall(RuntimeFunction FnID,
   return call;
 }
 
-DataBlockCodegen *ArtsCodegen::getOrCreateDatablock(mlir::Value memref) {
-  /// Try to find in the map
-  auto it = datablocks.find(memref);
-  if (it != datablocks.end()) {
-    return it->second;
-  }
-  /// If it doesnt exist, create it
-  auto datablock = new DataBlockCodegen(memref);
-  datablocks[memref] = datablock;
-  return datablock;
+/// DataBlock
+mlir::Value ArtsCodegen::getDatablockMode(llvm::StringRef mode) {
+  auto Loc = UnknownLoc::get(builder.getContext());
+  /// ARTS_DB_READ
+  if (mode == "in")
+    return createIntConstant(7, Int32, Loc);
+  /// ARTS_DB_PIN
+  if (mode == "out")
+    return createIntConstant(9, Int32, Loc);
+  return createIntConstant(9, Int32, Loc);
 }
 
-mlir::Value ArtsCodegen::createDatablock(arts::MakeDepOp edtDep, Location loc) {
-  // /// Get the data block size
-  // auto dataSize = edtDep.getDataSize();
-  // /// Get the data block alignment
-  // auto dataAlignment = edtDep.getDataAlignment();
-  // /// Get the data block type
-  // auto dataType = edtDep.getDataType();
-  // /// Get the data block pointer
-  // auto dataPtr = edtDep.getDataPtr();
-  /// Get dependency information
-  auto mode = edtDep.getMode();
-  auto memref = edtDep.getVal();
+DataBlockCodegen *ArtsCodegen::getDatablock(arts::MakeDepOp edtDep) {
+  /// Try to find in the map
+  auto it = datablocks.find(edtDep);
+  if (it != datablocks.end())
+    return it->second;
+  return nullptr;
+}
 
-  LLVM_DEBUG(dbgs() << "Creating datablock for mode: " << mode
-                    << ", memref: " << memref << "\n");
+DataBlockCodegen *ArtsCodegen::createDatablock(arts::MakeDepOp edtDep,
+                                               Location loc) {
+  assert(getDatablock(edtDep) == nullptr && "Datablock already exists");
 
-  auto db = getOrCreateDatablock(memref);
+  OpBuilder::InsertionGuard guard(builder);
+  setInsertionPoint(edtDep);
 
-  /// Memref info
-  /// Size
-  auto memrefType = memref.getType().cast<MemRefType>();
-  // int64_t offset = 0;
-  // SmallVector<int64_t, 5> strides;
-  // if (failed(getStridesAndOffset(memrefType, strides, offset))) {
-  //   LLVM_DEBUG(dbgs() << "Failed to get strides and offset\n");
-  // }
-  // else {
-  //   LLVM_DEBUG(dbgs() << "Memref offset: " << offset << "\n");
-  //   for(auto stride : strides) {
-  //     LLVM_DEBUG(dbgs() << "Memref stride: " << stride << "\n");
-  //   }
-  // }
-  LLVM_DEBUG(dbgs() << "  - Memref type: " << memrefType << "\n");
-  auto memrefElementType = memrefType.getElementType();
-  LLVM_DEBUG(dbgs() << "    - Memref element type: " << memrefElementType
-                    << "\n");
-  if (memrefType.hasStaticShape()) {
-    auto memrefSize = memrefType.getShape();
-    auto elementType = memrefType.getElementType();
-    auto memrefElementSize = mlirDL.getTypeSize(elementType);
-    for (auto dim : memrefSize) {
-      if (dim == ShapedType::kDynamic) {
-        LLVM_DEBUG(dbgs() << "    - Memref size: " << dim << "\n");
-      } else {
-        LLVM_DEBUG(dbgs() << "    - Memref size: " << dim << " * "
-                          << memrefElementSize << "\n");
-      }
-    }
-  } else {
-    LLVM_DEBUG(dbgs() << "  - Memref size: dynamic\n");
-    /// Check if the memref defining op is an alloc, if so, get the size
-    if (auto allocOp = dyn_cast<memref::AllocOp>(memref.getDefiningOp())) {
-      auto memrefSize = allocOp.getDynamicSizes();
-      auto elementType = memrefType.getElementType();
-      auto memrefElementSize = mlirDL.getTypeSize(elementType);
-      LLVM_DEBUG(dbgs() << "    - Memref size: ");
-      for (auto size : memrefSize) {
-        LLVM_DEBUG(dbgs() << size << " * " << memrefElementSize << " ");
-      }
-      LLVM_DEBUG(dbgs() << "\n");
-      LLVM_DEBUG(dbgs() << "    - Memref type: " << elementType << "\n");
-    }
+  /// If the value is a load, get the memref
+  auto dbMemref = edtDep.getVal();
+  if (auto loadOp = dyn_cast<memref::LoadOp>(dbMemref.getDefiningOp()))
+    dbMemref = loadOp.getMemref();
+
+  /// Get the memref type
+  auto memrefType = dbMemref.getType().dyn_cast<MemRefType>();
+  assert(memrefType && "Expected MemRefType");
+
+  /// Get the size of the datablocl=k
+  mlir::Value constantOne = builder.create<arith::ConstantIndexOp>(loc, 1);
+  mlir::Value numElements = constantOne;
+  for (int64_t i = 0, rank = memrefType.getRank(); i < rank; ++i) {
+    mlir::Value dimSize =
+        memrefType.isDynamicDim(i)
+            ? builder.create<memref::DimOp>(loc, dbMemref, i).getResult()
+            : builder
+                  .create<arith::ConstantIndexOp>(loc, memrefType.getDimSize(i))
+                  .getResult();
+    numElements = builder.create<arith::MulIOp>(loc, numElements, dimSize);
+  }
+  /// Create a datablock or an array of datablocks based on the size
+  if (numElements == constantOne) {
+    /// Report error - Not supported
+    assert(0 && "Not implemented yet");
   }
 
-  return NULL;
+  /// Allocate an array of Datablocks
+  auto dbArray = builder.create<memref::AllocaOp>(loc, ArtsDbPtr, numElements);
+  auto dbSize = createIntConstant(
+      mlirDL.getTypeSize(memrefType.getElementType()), Int64, loc);
+  auto dbMode = getDatablockMode(edtDep.getMode());
+
+  /// Create the datablock
+  createRuntimeCall(ARTSRTL_artsDbCreateArray,
+                    {dbArray, dbSize, dbMode,
+                     castToInt(Int32, numElements, loc),
+                     castToPtr(dbMemref, loc)},
+                    loc);
+
+  /// Create the datablock codegen object
+  datablocks[edtDep] = new DataBlockCodegen(dbArray, numElements);
+  return datablocks[edtDep];
+}
+
+DataBlockCodegen *ArtsCodegen::getOrCreateDatablock(arts::MakeDepOp edtDep,
+                                                    Location loc) {
+  /// Try to find in the map
+  if (auto db = getDatablock(edtDep))
+    return db;
+  /// If it doesnt exist, create it
+  return createDatablock(edtDep, loc);
+}
+
+/// Edt
+Value ArtsCodegen::createEdtGuid(Value node, Location loc) {
+  auto guidEdtType = createIntConstant(1, artsType_t, loc);
+  auto reserveGuidCall =
+      createRuntimeCall(ARTSRTL_artsReserveGuidRoute, {guidEdtType, node}, loc);
+  return reserveGuidCall.getResult(0);
 }
 
 func::FuncOp ArtsCodegen::createEdtFunction(Location loc) {
   auto edtFuncName = "__arts_edt_" + std::to_string(increaseEdtCounter());
-  auto edtFuncOp = builder.create<func::FuncOp>(loc, edtFuncName, EdtFunction);
+  auto edtFuncOp = builder.create<func::FuncOp>(loc, edtFuncName, EdtFn);
   edtFuncOp.setPrivate();
   module.push_back(edtFuncOp);
   return edtFuncOp;
 }
 
-func::CallOp ArtsCodegen::createEdtCallWithGuid(
-    func::FuncOp edtFunc, SmallVector<mlir::Value> parametersValues,
-    unsigned numDeps, unsigned route, Location loc) {
-  auto edtGuid = createEdtGuid(route, loc);
-  auto depC = createIntConstant(numDeps, Int32, loc);
+func::CallOp
+ArtsCodegen::createEdtCallWithGuid(func::FuncOp edtFunc, Value guid,
+                                   SmallVector<mlir::Value> parametersValues,
+                                   Value depC, Value node, Location loc) {
+  auto paramC = createIntConstant(parametersValues.size(), Int32, loc);
   auto paramV = createParamV(parametersValues, loc);
-  auto edtFuncPtr = createFunctionPointer(edtFunc, loc);
+  auto edtFuncPtr = createFunctionPtr(edtFunc, loc);
   return createRuntimeCall(ARTSRTL_artsEdtCreateWithGuid,
-                           {edtFuncPtr, edtGuid, depC, paramV, depC}, loc);
+                           {edtFuncPtr, guid, paramC, paramV, depC}, loc);
 }
 
-func::CallOp ArtsCodegen::createEdtCallWithGuid(arts::EdtOp edtOp,
-                                                func::FuncOp edtFunc,
-                                                unsigned route, Location loc) {
-  OpBuilder::InsertionGuard guard(builder);
-  setInsertionPoint(edtOp);
-  return createEdtCallWithGuid(edtFunc, edtOp.getParametersValues(),
-                               edtOp.getNumDependencies(), route, loc);
+Value ArtsCodegen::createEdt(func::FuncOp edtFunc,
+                             SmallVector<mlir::Value> parametersValues,
+                             Value depC, Value node, Location loc) {
+  auto paramC = createIntConstant(parametersValues.size(), Int32, loc);
+  auto paramV = createParamV(parametersValues, loc);
+  auto edtFuncPtr = createFunctionPtr(edtFunc, loc);
+  return createRuntimeCall(ARTSRTL_artsEdtCreate,
+                           {edtFuncPtr, node, paramC, paramV, depC}, loc)
+      .getResult(0);
 }
 
-func::CallOp ArtsCodegen::createEdtCallWithGuid(arts::ParallelOp parOp,
-                                                func::FuncOp edtFunc,
-                                                unsigned route, Location loc) {
-  OpBuilder::InsertionGuard guard(builder);
-  setInsertionPoint(parOp);
-  /// Create an empty parallel done function
-  auto parallelDoneEdtFunc = createEdtFunction(loc);
-  auto parallelDoneEdtGuid =
-      createEdtCallWithGuid(parallelDoneEdtFunc, {}, 1, route, loc)
-          .getResult(0);
-  /// Create an epoch to sync the children edts
-  auto parallelEpoch = createRuntimeCall(
-      ARTSRTL_artsInitializeAndStartEpoch,
-      {parallelDoneEdtGuid, createIntConstant(0, Int32, loc)}, loc);
-  /// Create edt with epoch
-  auto parallelEdtFunc = createEdtFunction(loc);
-  // auto parallelEdtCall =
-  //     createEdtCall(parOp.getParametersValues(), parOp.getNumDependencies());
-  // return createEdtCall(parOp.getParametersValues(),
-  // parOp.getNumDependencies());
-  return NULL;
-}
-
-func::CallOp ArtsCodegen::createEdtCallWithEpoch(arts::EdtOp edtOp,
-                                                 func::FuncOp edtFunc,
-                                                 unsigned route, Value epoch,
-                                                 Location loc) {
-  OpBuilder::InsertionGuard guard(builder);
-  setInsertionPoint(edtOp);
-  auto routeC = createIntConstant(route, Int32, loc);
-  auto depC = createIntConstant(edtOp.getNumDependencies(), Int32, loc);
-  auto edtParameters = edtOp.getParametersValues();
-  auto paramV = createParamV(edtParameters, loc);
-  auto edtFuncPtr = createFunctionPointer(edtFunc, loc);
-  /// Create edt with epoch
-  return createRuntimeCall(ARTSRTL_artsEdtCreateWithEpoch,
-                           {edtFuncPtr, routeC, depC, paramV, depC, epoch},
-                           loc);
+Value ArtsCodegen::createEdtWithEpoch(func::FuncOp edtFunc,
+                                      SmallVector<mlir::Value> parametersValues,
+                                      Value depC, Value node, Value epoch,
+                                      Location loc) {
+  auto paramC = createIntConstant(parametersValues.size(), Int32, loc);
+  auto paramV = createParamV(parametersValues, loc);
+  auto edtFuncPtr = createFunctionPtr(edtFunc, loc);
+  return createRuntimeCall(
+             types::RuntimeFunction::ARTSRTL_artsEdtCreateWithEpoch,
+             {edtFuncPtr, node, paramC, paramV, depC, epoch}, loc)
+      .getResult(0);
 }
 
 Value ArtsCodegen::insertEdtEntry(func::FuncOp edtFunc,
-                                  SmallVector<Value> &opParameters,
-                                  SmallVector<Value> &opDependencies,
-                                  Location loc) {
+                                  SmallVector<Value> &params,
+                                  SmallVector<Value> &deps, Location loc) {
   OpBuilder::InsertionGuard guard(builder);
   // setInsertionPoint(edtFunc.getBody());
   // mlir::MemRefType::get({ShapedType::kDynamic}, Int64);
@@ -295,9 +282,9 @@ Value ArtsCodegen::insertEdtEntry(func::FuncOp edtFunc,
   Value depC = entryBlock.getArgument(2);
   Value depV = entryBlock.getArgument(3);
   /// Insert the parameters
-  auto paramSize = opParameters.size();
+  auto paramSize = params.size();
   for (unsigned paramIndex = 0; paramIndex < paramSize; paramIndex++) {
-    Value oldParam = opParameters[paramIndex];
+    Value oldParam = params[paramIndex];
     /// Build and i64 constant for 'i'
     auto i = builder.create<arith::ConstantOp>(
         loc, Int64, builder.getIntegerAttr(Int64, paramIndex));
@@ -306,7 +293,7 @@ Value ArtsCodegen::insertEdtEntry(func::FuncOp edtFunc,
     //     loc, Int64, paramV, ValueRange{i}, "paramv_" +
     //     std::to_string(paramIndex));
 
-    // Value oldParam = opParameters[parameterIndex];
+    // Value oldParam = params[parameterIndex];
     // auto paramVName = "paramv_" + std::to_string(paramIndex);
     // Value paramVElemPtr = builder.create<LLVM::GEPOp>(
     //     loc, Int64, paramV, ValueRange{paramIndex}, paramVName);
@@ -315,50 +302,117 @@ Value ArtsCodegen::insertEdtEntry(func::FuncOp edtFunc,
   }
 }
 
-Value ArtsCodegen::createFunctionPointer(func::FuncOp funcOp, Location loc) {
-  auto FT = funcOp.getFunctionType();
-  auto LFT = LLVM::LLVMFunctionType::get(
-      LLVM::LLVMVoidType::get(funcOp.getContext()), FT.getInputs(), false);
-  auto getFuncOp = builder.create<polygeist::GetFuncOp>(
-      loc, LLVM::LLVMPointerType::get(LFT), funcOp.getName());
-  return builder
-      .create<polygeist::Pointer2MemrefOp>(
-          loc, MemRefType::get({ShapedType::kDynamic}, LFT), getFuncOp)
-      .getResult();
-}
+void ArtsCodegen::outlineRegion(func::FuncOp func, Region &region,
+                                SmallVector<Value> &params,
+                                SmallVector<Value> &deps) {
+  /// Create a new block for the function
+  OpBuilder::InsertionGuard guard(builder);
+  auto *entryBlock = func.addEntryBlock();
+  builder.setInsertionPointToStart(entryBlock);
 
-Value ArtsCodegen::castToInt64(Value value, Location loc) {
-  /// If it is not an i64, cast it to i64.
-  /// Handles index types, floats, and other integer types.
-  auto targetType = builder.getI64Type();
-  if (value.getType() != targetType) {
-    if (value.getType().isIndex()) {
-      // Handle index type conversion to i64
-      value = builder.create<arith::IndexCastOp>(loc, targetType, value)
-                  .getResult();
-    } else if (value.getType().isa<mlir::FloatType>()) {
-      // Handle float type conversion to i64
-      value =
-          builder.create<arith::FPToSIOp>(loc, targetType, value).getResult();
-    } else if (auto intType = value.getType().dyn_cast<mlir::IntegerType>()) {
-      // Handle other integer types (e.g., i8, i16, i32)
-      if (intType.isSignless()) {
-        value =
-            builder.create<arith::ExtSIOp>(loc, targetType, value).getResult();
-      } else {
-        value =
-            builder.create<arith::ExtUIOp>(loc, targetType, value).getResult();
-      }
-    } else {
-      // Unsupported type, emit an error or assert
-      llvm::errs() << "Unsupported type for casting to i64: " << value.getType()
-                   << "\n";
-      assert(false && "Unsupported type");
-    }
+  /// Get reference to the block arguments
+  Value paramC = entryBlock->getArgument(0);
+  Value paramV = entryBlock->getArgument(1);
+  Value depC = entryBlock->getArgument(2);
+  Value depV = entryBlock->getArgument(3);
+
+  /// Insert the parameters
+  auto loc = func.getLoc();
+  auto paramSize = params.size();
+  for (unsigned paramIndex = 0; paramIndex < paramSize; paramIndex++) {
+    auto i = builder.create<arith::ConstantIndexOp>(loc, paramIndex);
+    auto paramVElem = builder.create<memref::LoadOp>(loc, paramV, ValueRange{i});
+    /// Cast it back to the original type
+    auto oldParam = params[paramIndex];
+    LLVM_DEBUG(DBGS() << "Old param: " << oldParam << "\n");
+    auto newParam = castToInt(oldParam.getType(), paramVElem, loc);
+    oldParam.replaceUsesWithIf(newParam, [&](OpOperand &operand) {
+      return region.isAncestor(operand.getOwner()->getParentRegion());
+    });
   }
-  return value;
+
+  // /// Insert the dependencies
+  // auto depSize = deps.size();
+  // for (unsigned depIndex = 0; depIndex < depSize; depIndex++) {
+  //   /// Build and i64 constant for 'i'
+  //   auto i = builder.create<arith::ConstantIndexOp>(loc, depIndex);
+  //   /// Create the memref load to load the value in the DepV array
+  //   auto depVElem = builder.create<memref::LoadOp>(loc, depV, i);
+  //   /// Get the ptr from the dep
+  //   auto depPtr = getPtrFromEdtDep(depVElem, loc);
+  //   /// Replace the uses of the dep with the ptr
+  //   deps[depIndex].replaceUsesWithIf(depPtr, [&](OpOperand &operand) {
+  //     return region.isAncestor(operand.getOwner()->getParentRegion());
+  //   });
+  // }
+
+  /// Outline the region
+  builder.setInsertionPointToStart(entryBlock);
+  for (auto &op : llvm::make_early_inc_range(region.front())) {
+    builder.clone(op);
+    op.erase();
+  }
 }
 
+/// Epoch
+Value ArtsCodegen::createEpoch(Value finishEdtGuid, Value finishEdtSlot,
+                               Location loc) {
+  return createRuntimeCall(ARTSRTL_artsInitializeAndStartEpoch,
+                           {finishEdtGuid, finishEdtSlot}, loc)
+      .getResult(0);
+}
+
+/// Utils
+Value ArtsCodegen::getGuidFromDb(Value db, Location loc) {
+  return createRuntimeCall(ARTSRTL_artsGetGuidFromDataBlock, {db}, loc)
+      .getResult(0);
+}
+
+Value ArtsCodegen::getPtrFromDb(Value db, Location loc) {
+  return createRuntimeCall(ARTSRTL_artsGetPtrFromDataBlock, {db}, loc)
+      .getResult(0);
+}
+
+Value ArtsCodegen::getGuidFromEdtDep(Value dep, Location loc) {
+  return createRuntimeCall(ARTSRTL_artsGetGuidFromEdtDep, {dep}, loc)
+      .getResult(0);
+}
+
+Value ArtsCodegen::getPtrFromEdtDep(Value dep, Location loc) {
+  return createRuntimeCall(ARTSRTL_artsGetPtrFromEdtDep, {dep}, loc)
+      .getResult(0);
+}
+
+Value ArtsCodegen::getCurrentEpochGuid(Location loc) {
+  return createRuntimeCall(ARTSRTL_artsGetCurrentEpochGuid, {}, loc)
+      .getResult(0);
+}
+
+Value ArtsCodegen::getCurrentEdtGuid(Location loc) {
+  return createRuntimeCall(ARTSRTL_artsGetCurrentGuid, {}, loc).getResult(0);
+}
+
+Value ArtsCodegen::getCurrentNode(Location loc) {
+  return createRuntimeCall(ARTSRTL_artsGetCurrentNode, {}, loc).getResult(0);
+}
+
+Value ArtsCodegen::getNumDeps(SmallVector<Value> &deps, Location loc) {
+  /// Initialize the constant in 0
+  auto numDeps = createIntConstant(0, Int32, loc);
+  for (auto dep : deps) {
+    /// Verify the dep has already been processed
+    auto *depDb = getDatablock(cast<MakeDepOp>(dep.getDefiningOp()));
+    assert(depDb && "Datablock not found");
+    /// Num of elements in the datablock
+    auto numElements = castToInt(Int32, depDb->getNumElements(), loc);
+    /// Add the number of elements in the datablock
+    numDeps =
+        builder.create<arith::AddIOp>(loc, numDeps, numElements).getResult();
+  }
+  return numDeps;
+}
+
+/// Helpers
 Value ArtsCodegen::createParamV(SmallVector<Value> &parameters, Location loc) {
   /// Create array of i64
   unsigned int paramSize = parameters.size();
@@ -366,7 +420,7 @@ Value ArtsCodegen::createParamV(SmallVector<Value> &parameters, Location loc) {
       loc, MemRefType::get({paramSize}, Int64));
   for (unsigned i = 0; i < paramSize; i++) {
     /// If the value is not an i64, cast it
-    auto param = castToInt64(parameters[i], loc);
+    auto param = castToInt(Int64, parameters[i], loc);
     /// Affine store
     auto paramIndex = builder.create<arith::ConstantIndexOp>(loc, i);
     builder.create<affine::AffineStoreOp>(loc, param, paramVArray,
@@ -378,15 +432,96 @@ Value ArtsCodegen::createParamV(SmallVector<Value> &parameters, Location loc) {
   return paramV.getResult();
 }
 
+Value ArtsCodegen::createFunctionPtr(func::FuncOp funcOp, Location loc) {
+  auto FT = funcOp.getFunctionType();
+  auto LFT = LLVM::LLVMFunctionType::get(
+      LLVM::LLVMVoidType::get(funcOp.getContext()), FT.getInputs(), false);
+  auto getFuncOp = builder.create<polygeist::GetFuncOp>(
+      loc, LLVM::LLVMPointerType::get(LFT), funcOp.getName());
+  return builder
+      .create<polygeist::Pointer2MemrefOp>(
+          loc, MemRefType::get({ShapedType::kDynamic}, LFT), getFuncOp)
+      .getResult();
+}
+
 Value ArtsCodegen::createIntConstant(unsigned value, Type type, Location loc) {
   return builder.create<arith::ConstantOp>(loc, type,
                                            builder.getIntegerAttr(type, value));
 }
 
-Value ArtsCodegen::createEdtGuid(uint64_t node, Location loc) {
-  auto guidEdtType = createIntConstant(1, artsType_t, loc);
-  auto guidEdtNode = createIntConstant(node, Int32, loc);
-  auto reserveGuidCall = createRuntimeCall(ARTSRTL_artsReserveGuidRoute,
-                                           {guidEdtType, guidEdtNode}, loc);
-  return reserveGuidCall.getResult(0);
+/// Casting
+Value ArtsCodegen::castParameter(mlir::Type targetType, Value value, Location loc) {
+  assert(targetType.isIntOrIndexOrFloat() && "Target type should be a number");
+  if (value.getType().isIntOrIndexOrFloat())
+    return value;
+  /// If target type is an integer
+  if (targetType.isa<IntegerType>())
+    return castToInt(targetType, value, loc);
+  /// If target type is an index
+  if (targetType.isIndex())
+    return castToIndex(value, loc);
+  /// If target type is a float
+  if (targetType.isa<FloatType>())
+    return castToFloat(targetType, value, loc);
+  return value;
+}
+
+Value ArtsCodegen::castToIndex(Value value, Location loc) {
+  if (value.getType().isIndex())
+    return value;
+  /// If it is not an index, cast it to an index.
+  auto indexType = IndexType::get(value.getContext());
+  return builder.create<arith::IndexCastOp>(loc, indexType, value).getResult();
+}
+
+Value ArtsCodegen::castToFloat(mlir::Type targetType, Value value, Location loc) {
+  assert(targetType.isa<FloatType>() && "Target type should be a float");
+  if (value.getType().isa<FloatType>())
+    return value;
+  /// If it is not a float, cast it to a float.
+  return builder.create<arith::SIToFPOp>(loc, targetType, value).getResult();
+}
+
+Value ArtsCodegen::castToInt(mlir::Type targetType, Value value, Location loc) {
+  assert(targetType.isa<IntegerType>() && "Target type should be an integer");
+  /// If it is already an i64, return it.
+  if (value.getType() == targetType) 
+    return value;
+  /// If it is not an i64, cast it to i64.
+  /// Handles index types, floats, and other integer types.
+  if (value.getType().isIndex()) {
+    // Handle index type conversion to i64
+    value = builder.create<arith::IndexCastOp>(loc, targetType, value)
+                .getResult();
+  } else if (value.getType().isa<mlir::FloatType>()) {
+    // Handle float type conversion to i64
+    value =
+        builder.create<arith::FPToSIOp>(loc, targetType, value).getResult();
+  } else if (auto intType = value.getType().dyn_cast<mlir::IntegerType>()) {
+    // Handle other integer types (e.g., i8, i16, i32)
+    if (intType.isSignless()) {
+      value =
+          builder.create<arith::ExtSIOp>(loc, targetType, value).getResult();
+    } else {
+      value =
+          builder.create<arith::ExtUIOp>(loc, targetType, value).getResult();
+    }
+  } else {
+    // Unsupported type, emit an error or assert
+    llvm::errs() << "Unsupported type for casting to i64: " << value.getType()
+                  << "\n";
+    assert(false && "Unsupported type");
+  }
+  return value;
+}
+
+Value ArtsCodegen::castToPtr(Value value, Location loc) {
+  if (value.getType().isa<LLVM::LLVMPointerType>())
+    return value;
+  /// If it is not a pointer, cast it to a pointer.
+  /// Polygeist - memref2pointer
+  auto valPtr = builder.create<polygeist::Memref2PointerOp>(
+      loc, LLVM::LLVMPointerType::get(value.getType()), value);
+  /// pointer2memref
+  return builder.create<polygeist::Pointer2MemrefOp>(loc, VoidPtr, valPtr);
 }

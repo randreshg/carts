@@ -570,7 +570,7 @@ void ARTSCodegen::insertEDTCall(EDT &E) {
   /// Insert EDT Call
   EDTCodegen *ECG = getOrCreateEDTCodegen(E);
   Function *F = getOrCreateRuntimeFunctionPtr(ARTSRTL_artsEdtCreateWithGuid);
-  Value *Args[] = {Builder.CreateBitCast(ECG->getFn(), EdtFunctionPtr),
+  Value *Args[] = {Builder.CreateBitCast(ECG->getFn(), EdtFnPtr),
                    ECG->getGuidAddress(), LoadedParamC, ParamV,
                    Builder.CreateLoad(Int32, DepC)};
   ECG->setCB(Builder.CreateCall(F, Args));
