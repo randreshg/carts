@@ -6,9 +6,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
+#include "mlir/IR/BuiltinOps.h"
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -32,7 +34,7 @@
 
 #define line "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#define DBGS() (dbgs() << "\n[" DEBUG_TYPE "] ")
 
 using namespace mlir;
 using namespace arts;
@@ -40,14 +42,16 @@ using namespace arts;
 class EdtEnvManager {
 public:
   EdtEnvManager(PatternRewriter &rewriter, Region &region)
-      : rewriter(rewriter) {
-    naiveCollection(region);
+      : rewriter(rewriter), region(region) {
+    naiveCollection();
   }
   ~EdtEnvManager() {}
 
   bool addParameter(Value val) { return parameters.insert(val); }
 
   bool addDependency(Value val, StringRef mode = "inout", bool adjust = true) {
+    LLVM_DEBUG(dbgs() << "Adding dependency: " << val << " with mode: " << mode
+                      << "\n");
     if (!adjust)
       return dependencies.insert(val);
     auto depOp = dyn_cast<arts::MakeDepOp>(val.getDefiningOp());
@@ -60,8 +64,9 @@ public:
         valToCheck = loadOp.getMemRef();
 
       if (dependencies.contains(valToCheck)) {
-        LLVM_DEBUG(dbgs() << "Dependency already added: " << valToCheck
-                          << " - Removing it\n");
+        LLVM_DEBUG(
+            dbgs() << "   Dependency already added as memref - Removing it "
+                      "and creating makedep\n");
         dependencies.remove(valToCheck);
       }
 
@@ -76,16 +81,29 @@ public:
     return dependencies.insert(depOp);
   }
 
-  void naiveCollection(Region &region) {
+  bool isConstant(Value val) {
+    auto defOp = val.getDefiningOp();
+    if (!defOp)
+      return false;
+
+    if (auto constantOp = dyn_cast<arith::ConstantOp>(defOp))
+      return true;
+    return false;
+  }
+
+  void naiveCollection() {
+    LLVM_DEBUG(dbgs() << "Naive collection of parameters and dependencies: \n");
     SetVector<Value> usedValues;
     getUsedValuesDefinedAbove(region, usedValues);
     for (Value operand : usedValues) {
       if (operand.getType().isIntOrIndexOrFloat()) {
+        if (isConstant(operand))
+          continue;
+        LLVM_DEBUG(dbgs() << "  Adding parameter: " << operand << "\n");
         parameters.insert(operand);
-        LLVM_DEBUG(dbgs() << "Parameter: " << operand << "\n");
       } else {
+        LLVM_DEBUG(dbgs() << "  Adding dependency: " << operand << "\n");
         dependencies.insert(operand);
-        LLVM_DEBUG(dbgs() << "Dependencies: " << operand << "\n");
       }
     }
   }
@@ -108,6 +126,7 @@ public:
 
 private:
   PatternRewriter &rewriter;
+  Region &region;
   SetVector<Value> parameters, dependencies;
 };
 
@@ -121,8 +140,7 @@ struct ParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
   LogicalResult matchAndRewrite(omp::ParallelOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    LLVM_DEBUG(dbgs() << line << "Converting omp.parallel to arts.parallel\n"
-                      << line);
+    LLVM_DEBUG(DBGS() << "Converting omp.parallel to arts.parallel\n");
     /// Collect parameters and dependencies
     EdtEnvManager edtEnv(rewriter, op.getRegion());
 
@@ -183,7 +201,6 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
 
   void collectTaskDependencies(EdtEnvManager &edtEnv, omp::TaskOp task,
                                PatternRewriter &rewriter, Location loc) const {
-    LLVM_DEBUG(dbgs() << "Collecting dependencies\n");
     auto dependList = task.getDependsAttr();
     for (unsigned i = 0, e = dependList.size(); i < e; ++i) {
       auto depClause = llvm::cast<omp::ClauseTaskDependAttr>(dependList[i]);
@@ -209,12 +226,6 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
           depStoreOp.getValueToStore().getDefiningOp());
       assert(depLoadOp && "Expected a memref.load operation");
 
-      /// Get affine operands
-      auto memref = depLoadOp.getMemRef();
-      LLVM_DEBUG(dbgs() << "  - Memref: " << memref << "\n");
-
-      /// Use the affineMapAttr as needed
-      // LLVM_DEBUG(dbgs() << "  - Dependency: " << depOp << "\n");
       /// Add the dependency to the edt environment
       edtEnv.addDependency(depLoadOp, depType, true);
 
@@ -226,8 +237,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
   LogicalResult matchAndRewrite(omp::TaskOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    LLVM_DEBUG(dbgs() << line << "Converting omp.task to arts.edt\n"
-                      << line << op << "\n");
+    LLVM_DEBUG(DBGS() << "Converting omp.task to arts.edt\n");
     /// Collect parameters and dependencies
     EdtEnvManager edtEnv(rewriter, op.getRegion());
     collectTaskDependencies(edtEnv, op, rewriter, loc);
@@ -274,6 +284,38 @@ struct BarrierToARTSPattern : public OpRewritePattern<omp::BarrierOp> {
   }
 };
 
+/// Pattern to replace 'memref.alloc' with 'arts.alloc'
+struct AllocToARTSPattern : public OpRewritePattern<memref::AllocOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(memref::AllocOp allocOp,
+                                PatternRewriter &rewriter) const override {
+    /// Get the location of the original alloc operation.
+    Location loc = allocOp.getLoc();
+
+    /// Get the memref type from the alloc operation.
+    auto memRefType = allocOp.getType().dyn_cast<MemRefType>();
+    if (!memRefType)
+      return failure(); // Not a MemRefType, so fail the match.
+
+    /// Collect the dynamic sizes of the memref (if any).
+    SmallVector<Value, 4> dynamicSizes;
+    for (Value operand : allocOp.getDynamicSizes()) {
+      dynamicSizes.push_back(operand);
+    }
+
+    /// Create the arts.alloc operation with the same memref type and dynamic
+    /// sizes.
+    auto artsAlloc =
+        rewriter.create<arts::AllocOp>(loc, memRefType, dynamicSizes);
+
+    /// Replace all uses of the original alloc with the new arts.alloc.
+    rewriter.replaceOp(allocOp, artsAlloc.getResult());
+
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Pass Implementation
 //===----------------------------------------------------------------------===//
@@ -290,8 +332,10 @@ void ConvertOpenMPToARTSPass::runOnOperation() {
   auto module = getOperation();
   MLIRContext *context = &getContext();
   RewritePatternSet patterns(context);
-  patterns.add<ParallelToARTSPattern, MasterToARTSPattern, TaskToARTSPattern,
-               TerminatorToARTSPattern, BarrierToARTSPattern>(context);
+  patterns
+      .add<ParallelToARTSPattern, MasterToARTSPattern, TaskToARTSPattern,
+           TerminatorToARTSPattern, BarrierToARTSPattern, AllocToARTSPattern>(
+          context);
   GreedyRewriteConfig config;
   if (failed(
           applyPatternsAndFoldGreedily(module, std::move(patterns), config))) {

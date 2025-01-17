@@ -16,7 +16,7 @@
 #include "mlir/IR/Region.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
-
+/// Other dialects
 #include "mlir/Analysis/DataLayoutAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -88,10 +88,10 @@ private:
 
 void ArtsAnalysis::start() {
   LLVM_DEBUG(DBGS() << "Starting ArtsAnalysis\n");
-  /// Start with parallel ops.
+  /// Start by creating the datablocks
   module.walk([&](arts::MakeDepOp op) { processMakeDepOp(op); });
-  /// This is assuming that parallel ops are the top-level ops.
-  // module.walk([&](arts::ParallelOp op) { processParallelOp(op); });
+  /// Then analyze the parallel regions
+  module.walk([&](arts::ParallelOp op) { processParallelOp(op); });
   LLVM_DEBUG(DBGS() << "Finished ArtsAnalysis\n");
 }
 
@@ -175,7 +175,8 @@ void ArtsAnalysis::processParallelOp(arts::ParallelOp op) {
           llvm_unreachable("Multiple single ops in parallel op not supported");
         }
         singleOp = single;
-      } else if (!isa<arts::BarrierOp>(&nestedOp) && !isa<arts::YieldOp>(&nestedOp)) {
+      } else if (!isa<arts::BarrierOp>(&nestedOp) &&
+                 !isa<arts::YieldOp>(&nestedOp)) {
         llvm_unreachable("Unknown op in parallel op - not supported");
       }
     }
@@ -183,24 +184,42 @@ void ArtsAnalysis::processParallelOp(arts::ParallelOp op) {
 
   assert((singleOp && (numOps == 4)) && "Invalid parallel op");
 
-  auto parallelEdtFunc = codegen.createEdtFunction(loc);
-  /// 1. Create an empty parallel done function
+  /// Create functions
   auto parallelDoneEdtFunc = codegen.createEdtFunction(loc);
-  
-  // LLVM_DEBUG(dbgs() << "Created parallel done function: " << parallelDoneEdtFunc << "\n");
-  ///  Get parameters and dependencies
-  auto parameters = op.getParametersValues();
-  auto dependencies = op.getDependenciesValues();
-  auto parallelDoneEdtGuid = codegen.createEdtCallWithGuid(op, parallelEdtFunc, 0, loc).getResult(0);
-  /// 2. Create an epoch to sync the children edts
-  ///    artsGuid_t parallelDoneEdtGuid =
-  ///        artsEdtCreate((artsEdt_t)parallelDoneEdt, currentNode, 0, NULL,
-  ///        1);
-  ///    artsGuid_t parallelDoneEpochGuid =
-  ///        artsInitializeAndStartEpoch(parallelDoneEdtGuid, 0);
+  auto parallelEdtFunc = codegen.createEdtFunction(loc);
 
-  /// 3. Analyze the code to get the parameters and dependencies
-  /// 4. Create a single instance of the code inside the single op
+  /// Insertion point at the parallel op
+  OpBuilder::InsertionGuard guard(codegen.getBuilder());
+  codegen.setInsertionPoint(op);
+
+  /// Context
+  auto currentNode = codegen.getCurrentNode(loc);
+
+  /// 1. Create finish parallel EDT
+  SmallVector<Value> parallelDone_parameters;
+  auto parallelDone_depC = codegen.createIntConstant(1, codegen.Int32, loc);
+  auto parallelDone_edtGuid =
+      codegen.createEdt(parallelDoneEdtFunc, parallelDone_parameters,
+                        parallelDone_depC, currentNode, loc);
+
+  /// 2. Create an epoch to sync the children edts
+  auto parallelDoneSlot = codegen.createIntConstant(0, codegen.Int32, loc);
+  auto parallelEpochGuid =
+      codegen.createEpoch(parallelDone_edtGuid, parallelDoneSlot, loc);
+
+  /// 3. Create a single instance of the code inside the single op
+  auto parallelEdtParams = op.getParametersValues();
+  auto parallelEdtDeps = op.getDependenciesValues();
+  auto parallelEdtDepC = codegen.getNumDeps(parallelEdtDeps, loc);
+  auto parallelEdtGuid = codegen.createEdtWithEpoch(
+      parallelEdtFunc, parallelEdtParams, parallelEdtDepC, currentNode,
+      parallelEpochGuid, loc);
+
+  /// 4. Outline region
+  LLVM_DEBUG(DBGS() << "Parallel EDT created\n");
+  auto &singleRegion = singleOp->getRegion(0);
+  codegen.outlineRegion(parallelEdtFunc, singleRegion, parallelEdtParams,
+                        parallelEdtDeps);
   ///    uint64_t parallelParams[1] = {(uint64_t)N};
   ///    uint64_t parallelDeps = 2 * N;
   ///    artsGuid_t parallelEdtGuid = artsEdtCreateWithEpoch(
@@ -216,7 +235,7 @@ void ArtsAnalysis::processParallelOp(arts::ParallelOp op) {
 void ArtsAnalysis::processMakeDepOp(arts::MakeDepOp makeDepOp) {
   LLVM_DEBUG(DBGS() << "Processing MakeDepOp " << makeDepOp << "\n");
   auto currLoc = makeDepOp.getLoc();
-  codegen.createDatablock(makeDepOp, currLoc);
+  auto dbCodegen = codegen.getOrCreateDatablock(makeDepOp, currLoc);
 }
 
 void ArtsAnalysis::processEpochOp(arts::EpochOp epochOp) {
@@ -242,8 +261,7 @@ void ConvertARTSToFuncsPass::runOnOperation() {
   OpBuilder builder(context);
 
   /// Get LLVM data layout
-  auto llvmDLAttr =
-      module->getAttrOfType<mlir::StringAttr>("llvm.data_layout");
+  auto llvmDLAttr = module->getAttrOfType<mlir::StringAttr>("llvm.data_layout");
   if (!llvmDLAttr) {
     module.emitError("Module does not have a data layout");
     return signalPassFailure();

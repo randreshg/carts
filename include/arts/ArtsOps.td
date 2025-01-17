@@ -35,6 +35,25 @@ def UndefOp: Arts_Op<"undef", [Pure]> {
 }
 
 //===----------------------------------------------------------------------===//
+// arts.alloc
+//===----------------------------------------------------------------------===//
+def AllocOp : Arts_Op<"alloc", []> {
+  let summary = "Allocate a memref in ARTS dialect";
+  let description = [{
+    The `arts.alloc` operation allocates a memref with a given shape.
+    It mirrors `memref.alloc` but is customized for the ARTS dialect to enable
+    specific behavior during code generation and lowering.
+  }];
+
+  let arguments = (ins Variadic<Index>:$dynamicSizes);
+  let results = (outs AnyMemRef:$result);
+  let assemblyFormat = [{
+    `(` $dynamicSizes `)` attr-dict `:` type($result)
+  }];
+}
+
+
+//===----------------------------------------------------------------------===//
 // arts.make_dep
 //===----------------------------------------------------------------------===//
 def MakeDepOp : Arts_Op<"make_dep", []> {

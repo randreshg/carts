@@ -43,14 +43,7 @@ void compute(int N, double *A, double *B) {
 
         // Task 2: Compute B[i] based on A[i] and A[i-1] (inter-loop dependency)
         #pragma omp task depend(in : A[i], A[i - 1]) depend(out : B[i])
-        {
-          if (i > 0)
-            B[i] = A[i] + A[i - 1];
-          else
-            B[i] = A[i];
-        }
-          // B[i] = A[i] + (i > 0 ? A[i - 1] : 0);
-
+          B[i] = A[i] + (i > 0 ? A[i - 1] : 0);
       }
     }
   }
