@@ -86,9 +86,11 @@ public:
     if (!defOp)
       return false;
 
-    if (auto constantOp = dyn_cast<arith::ConstantOp>(defOp))
-      return true;
-    return false;
+    auto constantOp = dyn_cast<arith::ConstantOp>(defOp);
+    if (!constantOp)
+      return false;
+    constants.insert(constantOp);
+    return true;
   }
 
   void naiveCollection() {
@@ -110,6 +112,8 @@ public:
 
   ArrayRef<Value> getParameters() { return parameters.getArrayRef(); }
 
+  ArrayRef<Value> getConstants() { return constants.getArrayRef(); }
+
   ArrayRef<Value> getDependencies(bool verify = true) {
     if (verify) {
       SmallVector<Value, 4> depsToProcess(dependencies.begin(),
@@ -127,7 +131,7 @@ public:
 private:
   PatternRewriter &rewriter;
   Region &region;
-  SetVector<Value> parameters, dependencies;
+  SetVector<Value> parameters, constants, dependencies;
 };
 
 //===----------------------------------------------------------------------===//
@@ -146,6 +150,7 @@ struct ParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
 
     /// Create a new `arts.parallel` operation.
     auto parOp = rewriter.create<arts::ParallelOp>(loc, edtEnv.getParameters(),
+                                                   edtEnv.getConstants(),
                                                    edtEnv.getDependencies());
     parOp.getBody().emplaceBlock();
     Block &blk = parOp.getBody().front();
@@ -244,6 +249,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
 
     /// Create a new `arts.edt` operation.
     auto edtOp = rewriter.create<arts::EdtOp>(loc, edtEnv.getParameters(),
+                                              edtEnv.getConstants(),
                                               edtEnv.getDependencies());
     edtOp.getBody().emplaceBlock();
     Block &blk = edtOp.getBody().front();

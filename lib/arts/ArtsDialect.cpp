@@ -93,68 +93,48 @@ void UndefOp::getCanonicalizationPatterns(RewritePatternSet &results,
 // EdtOp
 //===----------------------------------------------------------------------===//
 /// Retrieve parameters.
-SmallVector<Value> EdtOp::getParametersValues() {
+SmallVector<Value> EdtOp::getParams() {
   auto parameters = getParameters();
   SmallVector<Value, 4> parametersVector(parameters.begin(), parameters.end());
   return parametersVector;
 }
 
+/// Retrieve constants.
+SmallVector<Value> EdtOp::getConsts() {
+  auto constants = getConstants();
+  SmallVector<Value, 4> constantsVector(constants.begin(), constants.end());
+  return constantsVector;
+}
+
 /// Retrieve dependencies.
-SmallVector<Value> EdtOp::getDependenciesValues() {
+SmallVector<Value> EdtOp::getDeps() {
   auto dependencies = getDependencies();
   SmallVector<Value, 4> dependenciesVector(dependencies.begin(),
                                            dependencies.end());
   return dependenciesVector;
-}
-
-/// Get the number of parameters.
-unsigned EdtOp::getNumParameters() {
-  auto parameters = getParameters();
-  return parameters.size();
-}
-
-/// Get the number of dependencies.
-unsigned EdtOp::getNumDependencies() {
-  auto dependencies = getDependencies();
-  return dependencies.size();
 }
 
 //===----------------------------------------------------------------------===//
 // ParallelOp
 //===----------------------------------------------------------------------===//
 /// Retrieve parameters.
-SmallVector<Value> ParallelOp::getParametersValues() {
+SmallVector<Value> ParallelOp::getParams() {
   auto parameters = getParameters();
   SmallVector<Value, 4> parametersVector(parameters.begin(), parameters.end());
   return parametersVector;
 }
 
+/// Retrieve constants.
+SmallVector<Value> ParallelOp::getConsts() {
+  auto constants = getConstants();
+  SmallVector<Value, 4> constantsVector(constants.begin(), constants.end());
+  return constantsVector;
+}
+
 /// Retrieve dependencies.
-SmallVector<Value> ParallelOp::getDependenciesValues() {
+SmallVector<Value> ParallelOp::getDeps() {
   auto dependencies = getDependencies();
   SmallVector<Value, 4> dependenciesVector(dependencies.begin(),
                                            dependencies.end());
   return dependenciesVector;
-}
-
-/// Get the number of parameters.
-unsigned ParallelOp::getNumParameters() {
-  auto parameters = getParameters();
-  return parameters.size();
-}
-
-/// Get the number of dependencies.
-unsigned ParallelOp::getNumDependencies() {
-  auto dependencies = getDependencies();
-  return dependencies.size();
-}
-
-//===----------------------------------------------------------------------===//
-// Utils
-//===----------------------------------------------------------------------===//
-unsigned mlir::arts::getNumDependencies(SmallVector<Value> deps) {
-  /// Each dep value is a make_dep op.
-  /// The number of dependencies correspond to
-  ///
-  return deps.size();
 }

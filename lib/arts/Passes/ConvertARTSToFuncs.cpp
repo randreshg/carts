@@ -9,6 +9,7 @@
 
 // #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Location.h"
@@ -42,211 +43,129 @@
 using namespace mlir;
 using namespace arts;
 
-/*------------------------------------------------------------------------------
- * A small struct to store info about a loop:
- *   - whether it has a constant upper bound, and
- *   - either that const or the dynamic Value.
- *----------------------------------------------------------------------------*/
-struct LoopInfo {
-  bool isConstant = false;
-  int64_t constUpper = -1;
-  mlir::Value dynamicUpper = nullptr;
-};
+namespace {
+struct EdtOpLowering : public OpConversionPattern<arts::EdtOp> {
+  using OpConversionPattern<arts::EdtOp>::OpConversionPattern;
 
-/*------------------------------------------------------------------------------
- * ArtsAnalysis: Helper class to do multi-step analysis on the module
- *----------------------------------------------------------------------------*/
-class ArtsAnalysis {
-public:
-  explicit ArtsAnalysis(mlir::ModuleOp &module, arts::ArtsCodegen &codegen)
-      : module(module), codegen(codegen) {}
+  EdtOpLowering(MLIRContext *context, ArtsCodegen &codegen)
+      : OpConversionPattern(context), codegen(codegen) {}
 
-  void start();
-  void detectAndAnalyzeLoops(mlir::ModuleOp module);
-  void collectMakeDepOps(mlir::ModuleOp module);
-  void analyzeAndProcessOp(mlir::Operation *op);
+  LogicalResult
+  matchAndRewrite(arts::EdtOp op, arts::EdtOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
 
-private:
-  /// Data structures for storing "make_dep" results
-  struct DepItem {
-    std::string mode;
-    mlir::Value memRef;
-    mlir::Location loc;
-  };
-
-  void processEdtOp(arts::EdtOp edt);
-  void processParallelOp(arts::ParallelOp parOp);
-  void processMakeDepOp(arts::MakeDepOp makeDepOp);
-  void processEpochOp(arts::EpochOp epochOp);
-
-private:
-  mlir::ModuleOp &module;
-  arts::ArtsCodegen &codegen;
-  llvm::SmallVector<LoopInfo, 8> loopInfos;
-  llvm::SmallVector<DepItem, 8> depsInfo;
-};
-
-void ArtsAnalysis::start() {
-  LLVM_DEBUG(DBGS() << "Starting ArtsAnalysis\n");
-  /// Start by creating the datablocks
-  module.walk([&](arts::MakeDepOp op) { processMakeDepOp(op); });
-  /// Then analyze the parallel regions
-  module.walk([&](arts::ParallelOp op) { processParallelOp(op); });
-  LLVM_DEBUG(DBGS() << "Finished ArtsAnalysis\n");
-}
-
-void ArtsAnalysis::detectAndAnalyzeLoops(mlir::ModuleOp module) {
-  loopInfos.clear();
-  module.walk([&](mlir::Operation *op) {
-    // scf::ForOp
-    if (auto forOp = mlir::dyn_cast<mlir::scf::ForOp>(op)) {
-      LoopInfo info;
-      // Check if upper bound is a constant Index
-      if (auto ubCstOp = forOp.getUpperBound()
-                             .getDefiningOp<mlir::arith::ConstantIndexOp>()) {
-        info.isConstant = true;
-        info.constUpper = ubCstOp.value();
-        DBGS() << "Found scf.for with constant upper bound = "
-               << info.constUpper << "\n";
-      } else {
-        info.isConstant = false;
-        info.dynamicUpper = forOp.getUpperBound();
-        DBGS() << "Found scf.for with dynamic upper bound = "
-               << info.dynamicUpper << "\n";
-      }
-      loopInfos.push_back(info);
-    }
-    // affine.for
-    else if (auto affFor = mlir::dyn_cast<affine::AffineForOp>(op)) {
-      LoopInfo info;
-      if (affFor.hasConstantUpperBound()) {
-        info.isConstant = true;
-        info.constUpper = affFor.getConstantUpperBound();
-        DBGS() << "Found affine.for with constant upper bound = "
-               << info.constUpper << "\n";
-      } else {
-        // We store a placeholder Value if we want it.
-        // It's a bit trickier for affine.for,
-        // but for demonstration, let's just store the original op as
-        // "dynamicUpper".
-        info.isConstant = false;
-        info.dynamicUpper = affFor.getOperation()->getResult(0);
-        // Not typical;
-        // a real code might glean from affFor.getUpperBoundMapOperands() ...
-        DBGS() << "Found affine.for with dynamic upper bound.\n";
-      }
-      loopInfos.push_back(info);
-    }
-  });
-  DBGS() << "Collected " << loopInfos.size() << " loops.\n";
-}
-
-void ArtsAnalysis::analyzeAndProcessOp(mlir::Operation *op) {
-  if (auto edtOp = mlir::dyn_cast<arts::EdtOp>(op)) {
-    processEdtOp(edtOp);
-  } else if (auto parOp = mlir::dyn_cast<arts::ParallelOp>(op)) {
-    processParallelOp(parOp);
-  } else if (auto makeDepOp = mlir::dyn_cast<arts::MakeDepOp>(op)) {
-    processMakeDepOp(makeDepOp);
-  } else if (auto epochOp = mlir::dyn_cast<arts::EpochOp>(op)) {
-    processEpochOp(epochOp);
+    LLVM_DEBUG(DBGS() << "Lowering arts.edt: " << op << "\n");
+    LLVM_DEBUG(DBGS() << "Processing edt op\n");
+    return success();
   }
-}
 
-void ArtsAnalysis::processEdtOp(arts::EdtOp op) {
-  auto currLoc = op.getLoc();
-  auto edtFunc = codegen.createEdtFunction(currLoc);
-  // auto edtCall = codegen.insertEdtCall(op, edtFunc, currLoc);
-}
+private:
+  ArtsCodegen &codegen;
+};
 
-void ArtsAnalysis::processParallelOp(arts::ParallelOp op) {
-  LLVM_DEBUG(DBGS() << "Processing parallel op\n");
-  Location loc = UnknownLoc::get(op.getContext());
-  arts::SingleOp singleOp = nullptr;
-  unsigned numOps = 0;
+struct ParallelOpLowering : public OpConversionPattern<arts::ParallelOp> {
+  using OpConversionPattern<arts::ParallelOp>::OpConversionPattern;
 
-  /// Access the region inside the arts.parallel
-  mlir::Region &region = op.getRegion();
-  for (mlir::Block &block : region) {
-    for (mlir::Operation &nestedOp : block) {
+  ParallelOpLowering(MLIRContext *context, ArtsCodegen &codegen)
+      : OpConversionPattern(context), codegen(codegen) {}
+
+  LogicalResult
+  matchAndRewrite(arts::ParallelOp op, arts::ParallelOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    LLVM_DEBUG(DBGS() << "Lowering arts.parallel\n" << op << "\n");
+
+    Location loc = UnknownLoc::get(op.getContext());
+    arts::SingleOp singleOp = nullptr;
+    unsigned numOps = 0;
+
+    /// Analyze the parallel region to find the singleOp
+    mlir::Region &region = op.getRegion();
+    region.walk([&](mlir::Operation *nested) {
+      /// Only consider ops directly in this region
+      if (nested->getParentRegion() != &region)
+        return;
       numOps++;
-      if (auto single = dyn_cast<arts::SingleOp>(&nestedOp)) {
+      if (auto single = dyn_cast<arts::SingleOp>(nested)) {
         if (singleOp) {
           llvm_unreachable("Multiple single ops in parallel op not supported");
         }
         singleOp = single;
-      } else if (!isa<arts::BarrierOp>(&nestedOp) &&
-                 !isa<arts::YieldOp>(&nestedOp)) {
+      } else if (!isa<arts::BarrierOp>(nested) && !isa<arts::YieldOp>(nested)) {
         llvm_unreachable("Unknown op in parallel op - not supported");
       }
+    });
+
+    assert((singleOp && (numOps == 4)) &&
+           "Invalid parallel op region structure");
+    auto &singleRegion = singleOp->getRegion(0);
+
+    /// Process dependencies (makes memrefs -> datablocks)
+    auto deps = op.getDependencies();
+    for (auto dep : deps) {
+      auto makeDepOp = dyn_cast<arts::MakeDepOp>(dep.getDefiningOp());
+      assert(makeDepOp && "Dependency is not a make_dep op");
+      codegen.getOrCreateDatablock(makeDepOp, loc);
     }
+
+    auto parDone_edtFunc = codegen.createFn(loc);
+    auto par_edtFunc = codegen.createFn(loc);
+
+    /// We set insertion to the old op for creation of epoch, etc.
+    OpBuilder::InsertionGuard guard(codegen.getBuilder());
+    codegen.setInsertionPoint(op);
+
+    auto currentNode = codegen.getCurrentNode(loc);
+
+    /// Create Parallel Epoch
+    auto parDone_depC = codegen.createIntConstant(1, codegen.Int32, loc);
+    auto parDone_params = SmallVector<Value>{};
+    auto parDone_edtGuid = codegen.create(parDone_edtFunc, parDone_params,
+                                             parDone_depC, currentNode, loc);
+    auto parDone_slot = codegen.createIntConstant(0, codegen.Int32, loc);
+    auto parEpoch_guid =
+        codegen.createEpoch(parDone_edtGuid, parDone_slot, loc);
+
+    /// Create Parallel Edt
+    auto par_params = op.getParams();
+    auto par_deps = op.getDeps();
+    auto par_depC = codegen.getNumDeps(par_deps, loc);
+    auto parallelEdtGuid = codegen.createWithEpoch(
+        par_edtFunc, par_params, par_depC, currentNode, parEpoch_guid, loc);
+
+    /// Insert Parallel Edt entry
+    auto par_consts = op.getConsts();
+    auto rewireMap = DenseMap<Value, Value>();
+    codegen.insertFnEntry(par_edtFunc, singleRegion, par_params,
+                           par_consts, par_deps, rewireMap);
+
+    /// Inline the single region into the parallel edt function
+    Region &funcRegion = par_edtFunc.getBody();
+    Block &funcEntryBlock = funcRegion.front();
+    Block &entryBlock = singleRegion.front();
+    rewriter.inlineRegionBefore(singleRegion, funcRegion, funcRegion.end());
+
+    /// Move all ops from srcBlock to the end of destBlock
+    LLVM_DEBUG(dbgs() << "\n\nMoving ops to the end of the function\n");
+    while (!entryBlock.empty()) {
+      Operation &op = entryBlock.front();
+      op.moveBefore(&funcEntryBlock, funcEntryBlock.end());
+    }
+    rewriter.eraseBlock(&entryBlock);
+    par_edtFunc.dump();
+
+    /// Finally, erase the old parallel op from the IR
+    rewriter.eraseOp(op);
+
+    return success();
   }
 
-  assert((singleOp && (numOps == 4)) && "Invalid parallel op");
-
-  /// Create functions
-  auto parallelDoneEdtFunc = codegen.createEdtFunction(loc);
-  auto parallelEdtFunc = codegen.createEdtFunction(loc);
-
-  /// Insertion point at the parallel op
-  OpBuilder::InsertionGuard guard(codegen.getBuilder());
-  codegen.setInsertionPoint(op);
-
-  /// Context
-  auto currentNode = codegen.getCurrentNode(loc);
-
-  /// 1. Create finish parallel EDT
-  SmallVector<Value> parallelDone_parameters;
-  auto parallelDone_depC = codegen.createIntConstant(1, codegen.Int32, loc);
-  auto parallelDone_edtGuid =
-      codegen.createEdt(parallelDoneEdtFunc, parallelDone_parameters,
-                        parallelDone_depC, currentNode, loc);
-
-  /// 2. Create an epoch to sync the children edts
-  auto parallelDoneSlot = codegen.createIntConstant(0, codegen.Int32, loc);
-  auto parallelEpochGuid =
-      codegen.createEpoch(parallelDone_edtGuid, parallelDoneSlot, loc);
-
-  /// 3. Create a single instance of the code inside the single op
-  auto parallelEdtParams = op.getParametersValues();
-  auto parallelEdtDeps = op.getDependenciesValues();
-  auto parallelEdtDepC = codegen.getNumDeps(parallelEdtDeps, loc);
-  auto parallelEdtGuid = codegen.createEdtWithEpoch(
-      parallelEdtFunc, parallelEdtParams, parallelEdtDepC, currentNode,
-      parallelEpochGuid, loc);
-
-  /// 4. Outline region
-  LLVM_DEBUG(DBGS() << "Parallel EDT created\n");
-  auto &singleRegion = singleOp->getRegion(0);
-  codegen.outlineRegion(parallelEdtFunc, singleRegion, parallelEdtParams,
-                        parallelEdtDeps);
-  ///    uint64_t parallelParams[1] = {(uint64_t)N};
-  ///    uint64_t parallelDeps = 2 * N;
-  ///    artsGuid_t parallelEdtGuid = artsEdtCreateWithEpoch(
-  ///        (artsEdt_t)parallelEdt, currentNode, 1, parallelParams,
-  ///        parallelDeps, parallelDoneEpochGuid);
-  /// 5. Signal the known dependencies
-  ///    artsSignalDbs(A_array, parallelEdtGuid, 0, N);
-  ///    artsSignalDbs(B_array, parallelEdtGuid, N, N);
-  /// 6. Wait for the parallel epoch to finish
-  ///    artsWaitOnHandle(parallelDoneEpochGuid);
-}
-
-void ArtsAnalysis::processMakeDepOp(arts::MakeDepOp makeDepOp) {
-  LLVM_DEBUG(DBGS() << "Processing MakeDepOp " << makeDepOp << "\n");
-  auto currLoc = makeDepOp.getLoc();
-  auto dbCodegen = codegen.getOrCreateDatablock(makeDepOp, currLoc);
-}
-
-void ArtsAnalysis::processEpochOp(arts::EpochOp epochOp) {
-  DBGS() << "Processing arts.epoch at " << epochOp.getLoc() << "\n";
-  // Could create a function that outlines the epoch region, etc.
-}
+private:
+  ArtsCodegen &codegen;
+};
 
 //===----------------------------------------------------------------------===//
 // Pass Implementation
 //===----------------------------------------------------------------------===//
-namespace {
 struct ConvertARTSToFuncsPass
     : public arts::ConvertARTSToFuncsBase<ConvertARTSToFuncsPass> {
   void runOnOperation() override;
@@ -254,29 +173,60 @@ struct ConvertARTSToFuncsPass
 } // end namespace
 
 void ConvertARTSToFuncsPass::runOnOperation() {
-  LLVM_DEBUG(dbgs() << line << "ConvertARTSToFuncsPass STARTED\n" << line);
-  ModuleOp module = getOperation();
-  module->dump();
-  MLIRContext *context = &getContext();
-  OpBuilder builder(context);
+  LLVM_DEBUG(dbgs() << "--- ConvertARTSToFuncsPass START ---\n");
 
-  /// Get LLVM data layout
-  auto llvmDLAttr = module->getAttrOfType<mlir::StringAttr>("llvm.data_layout");
+  ModuleOp module = getOperation();
+  MLIRContext *ctx = &getContext();
+
+  /// Datalayouts
+  auto llvmDLAttr = module->getAttrOfType<StringAttr>("llvm.data_layout");
   if (!llvmDLAttr) {
     module.emitError("Module does not have a data layout");
     return signalPassFailure();
   }
   llvm::DataLayout llvmDL(llvmDLAttr.getValue().str());
+  mlir::DataLayout mlirDL(module);
 
-  /// Get MLIR data layout
-  DataLayout mlirDL(module);
-
-  /// Create the codegen and analysis objects
+  // Initialize the codegen object
+  OpBuilder builder(ctx);
   ArtsCodegen codegen(module, builder, llvmDL, mlirDL);
-  ArtsAnalysis analysis(module, codegen);
-  analysis.start();
-  LLVM_DEBUG(dbgs() << line << "ConvertARTSToFuncsPass FINISHED\n" << line);
-  module->dump();
+
+  // Create a ConversionTarget that declares ARTS dialect ops illegal
+  ConversionTarget target(*ctx);
+  target.addIllegalOp<arts::ParallelOp>();
+
+  /// Mark other dialects as legal
+  target.addLegalDialect<arith::ArithDialect, cf::ControlFlowDialect,
+                         func::FuncDialect, memref::MemRefDialect,
+                         affine::AffineDialect, polygeist::PolygeistDialect,
+                         scf::SCFDialect>();
+  target.addLegalOp<ModuleOp>();
+  target.addLegalOp<arts::EdtOp>();
+  target.addLegalOp<arts::AllocaOp>();
+  target.addLegalOp<arts::MakeDepOp>();
+  target.addLegalOp<arts::YieldOp>();
+  target.addLegalOp<arts::BarrierOp>();
+
+  // (Optional) If you have custom ARTS types to convert, define a TypeConverter
+  TypeConverter typeConverter;
+
+  // Pattern list
+  RewritePatternSet patterns(ctx);
+  patterns.add<ParallelOpLowering>(ctx, codegen);
+  // patterns.add<MakeDepOpLowering>(ctx, codegen);
+  // If you have arts::EdtOp, arts::EpochOp, etc., add them:
+  // patterns.add<EdtOpLowering>(ctx, codegen);
+  // patterns.add<EpochOpLowering>(ctx, codegen);
+
+  // 6) Apply partial conversion
+  if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
+    LLVM_DEBUG(dbgs() << "Conversion failed.\n");
+    signalPassFailure();
+    return;
+  }
+
+  LLVM_DEBUG(dbgs() << "=== ConvertARTSToFuncsPass COMPLETE ===\n");
+  module.dump();
 }
 
 //===----------------------------------------------------------------------===//
