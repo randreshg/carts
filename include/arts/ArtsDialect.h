@@ -46,9 +46,6 @@ bool isArtsRegion(mlir::Operation *op);
 // Helper functions of Arts dialect transformations.
 //===----------------------------------------------------------------------===//
 namespace mlir::arts {
-/// Compute the number of dependencies of the given operation.
-unsigned getNumDependencies(SmallVector<Value> deps);
-
 namespace utils {
 /// Collect the memory effects of the given op in 'effects'. Returns 'true' it
 /// could extract the effect information from the op, otherwise returns 'false'

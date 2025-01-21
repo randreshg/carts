@@ -100,24 +100,26 @@ def EdtOp : Arts_Op<"edt",
   let description = [{
   Defines an ARTS event-driven task (EDT) with:
     - `parameters` that define task-specific inputs.
+    - `constants` that define task-specific constants.
     - `dependencies` that specify input/output memory dependencies.
   The single-block region contains the task body.
   }];
   let arguments = (ins
     Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$parameters,
+    Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$constants,
     Variadic<DepType>:$dependencies
   );
   let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
     `parameters` `(` $parameters `)` `:` `(` type($parameters) `)` `,` 
+    `constants` `(` $constants `)` `:` `(` type($constants) `)` `,`
     `dependencies` `(` $dependencies `)` `:` `(` type($dependencies) `)`
     attr-dict-with-keyword $body
   }];
   let extraClassDeclaration = [{
-    SmallVector<Value> getParametersValues();
-    SmallVector<Value> getDependenciesValues();
-    unsigned getNumParameters();
-    unsigned getNumDependencies();
+    SmallVector<Value> getParams();
+    SmallVector<Value> getConsts();
+    SmallVector<Value> getDeps();
   }];
 }
 
@@ -132,23 +134,25 @@ def ParallelOp : Arts_Op<"parallel",
     Typically used to replicate something like `#pragma omp parallel`.
     It has
       - `parameters` that define task-specific inputs.
+      - `constants` that define task-specific constants.
       - `dependencies` that specify input/output memory dependencies.
   }];
   let arguments = (ins
     Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$parameters,
+    Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$constants,
     Variadic<DepType>:$dependencies
   );
   let regions = (region AnyRegion:$body);
   let assemblyFormat = [{
-    `parameters` `(` $parameters `)` `:` `(` type($parameters) `)` `,` 
+    `parameters` `(` $parameters `)` `:` `(` type($parameters) `)` `,`
+    `constants` `(` $constants `)` `:` `(` type($constants) `)` `,`
     `dependencies` `(` $dependencies `)` `:` `(` type($dependencies) `)`
     attr-dict-with-keyword $body
   }];
   let extraClassDeclaration = [{
-    SmallVector<Value> getParametersValues();
-    SmallVector<Value> getDependenciesValues();
-    unsigned getNumParameters();
-    unsigned getNumDependencies();
+    SmallVector<Value> getParams();
+    SmallVector<Value> getConsts();
+    SmallVector<Value> getDeps();
   }];
 }
 

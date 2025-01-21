@@ -28,6 +28,7 @@
 // polygeist-opt taskwithdeps.mlir --convert-polygeist-to-llvm  &> optimized.mlir
 
 #include <stdlib.h>
+#include <stdio.h>
 void compute(int N, double *A, double *B) {
   A = (double *)malloc(N * sizeof(double));
   B = (double *)malloc(N * sizeof(double));
@@ -37,15 +38,17 @@ void compute(int N, double *A, double *B) {
     #pragma omp single
     {
       for (int i = 0; i < N; i++) {
-        // Task 1: Compute A[i]
-        #pragma omp task depend(out : A[i])
-          A[i] = i * 1.0 + test;
+        A[i] = i * 1.0 + test;
+        // // Task 1: Compute A[i]
+        // #pragma omp task depend(out : A[i])
+        //   A[i] = i * 1.0 + test;
 
-        // Task 2: Compute B[i] based on A[i] and A[i-1] (inter-loop dependency)
-        #pragma omp task depend(in : A[i], A[i - 1]) depend(out : B[i])
-          B[i] = A[i] + (i > 0 ? A[i - 1] : 0);
+        // // Task 2: Compute B[i] based on A[i] and A[i-1] (inter-loop dependency)
+        // #pragma omp task depend(in : A[i], A[i - 1]) depend(out : B[i])
+        //   B[i] = A[i] + (i > 0 ? A[i - 1] : 0);
       }
     }
   }
+  printf("A[0] = %f\n", A[0]);
 }
 
