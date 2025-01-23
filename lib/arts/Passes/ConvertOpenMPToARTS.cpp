@@ -221,7 +221,7 @@ public:
   }
 
   /// Collect parameters and dependencies
-  void naiveCollection() {
+  void naiveCollection(bool onlyConsts = false) {
     LLVM_DEBUG(dbgs() << "Naive collection of parameters and dependencies: \n");
 
     /// Checks if the value is a constant, if so, adds it to the constants set
@@ -242,11 +242,11 @@ public:
     getUsedValuesDefinedAbove(region, usedValues);
     for (Value operand : usedValues) {
       if (operand.getType().isIntOrIndexOrFloat()) {
-        if (isConstant(operand))
+        if (isConstant(operand) || onlyConsts)
           continue;
         LLVM_DEBUG(dbgs() << "  Adding parameter: " << operand << "\n");
         parameters.insert(operand);
-      } else {
+      } else if (!onlyConsts) {
         LLVM_DEBUG(dbgs() << "  Adding dependency: " << operand << "\n");
         dependencies.insert(operand);
       }
@@ -294,19 +294,23 @@ public:
   /// Getters
   ArrayRef<Value> getParameters() { return parameters.getArrayRef(); }
 
-  ArrayRef<Value> getConstants() { return constants.getArrayRef(); }
+  ArrayRef<Value> getConstants() {
+    /// Give it a second chance to collect constants
+    naiveCollection(true);
+    return constants.getArrayRef();
+  }
 
-  ArrayRef<Value> getDependencies(bool verify = true) {
-    if (verify) {
-      SmallVector<Value, 4> depsToProcess(dependencies.begin(),
-                                          dependencies.end());
-      for (Value dep : depsToProcess) {
-        if (!isa<arts::DataBlockOp>(dep.getDefiningOp())) {
-          addDependency(dep);
-          dependencies.remove(dep);
-        }
+  ArrayRef<Value> getDependencies() {
+    /// Check if there are any dependencies that are not datablock operations
+    SmallVector<Value, 4> depsToProcess(dependencies.begin(),
+                                        dependencies.end());
+    for (Value dep : depsToProcess) {
+      if (!isa<arts::DataBlockOp>(dep.getDefiningOp())) {
+        addDependency(dep);
+        dependencies.remove(dep);
       }
     }
+
     return dependencies.getArrayRef();
   }
 
@@ -414,7 +418,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
       assert(depLoadOp && "Expected a memref.load operation");
 
       /// Add the dependency to the edt environment
-      auto depOp = edtEnv.addDependency(depLoadOp, depType, true);
+      edtEnv.addDependency(depLoadOp, depType, true);
 
       /// Replace dependency array with undef
       replaceWithUndef(depAlloc, rewriter);
@@ -517,7 +521,7 @@ struct ConvertOpenMPToARTSPass
 /// Pass to convert OpenMP operations to ARTS operations
 void ConvertOpenMPToARTSPass::runOnOperation() {
   LLVM_DEBUG(dbgs() << line << "ConvertOpenMPToARTSPass STARTED\n" << line);
-  auto module = getOperation();
+  ModuleOp module = getOperation();
   MLIRContext *context = &getContext();
   RewritePatternSet patterns(context);
   patterns

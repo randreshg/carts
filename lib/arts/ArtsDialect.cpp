@@ -57,16 +57,6 @@ bool isArtsRegion(Operation *op) {
 #define GET_TYPEDEF_CLASSES
 #include "arts/ArtsOpsTypes.cpp.inc"
 
-// //===----------------------------------------------------------------------===//
-// // DataBlockOp
-// //===----------------------------------------------------------------------===//
-// void DataBlockOp::build(OpBuilder &builder, OperationState &result,
-//                       StringRef mode, Value val) {
-//   result.addTypes(arts::DepType::get(builder.getContext()));
-//   result.addAttribute("mode", builder.getStringAttr(mode));
-//   result.addOperands({val});
-// }
-
 //===----------------------------------------------------------------------===//
 // UndefOp
 //===----------------------------------------------------------------------===//

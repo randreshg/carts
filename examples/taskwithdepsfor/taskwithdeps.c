@@ -16,8 +16,8 @@
 /// cgeist taskwithdeps.c -fopenmp -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include &> taskwithdeps.mlir
 
 // Convert OpenMP to ARTS
-/// carts-opt taskwithdeps.mlir --convert-openmp-to-arts &> taskwithdeps-arts.mlir
-/// carts-opt taskwithdeps.mlir --convert-openmp-to-arts -debug-only=convert-openmp-to-arts &> taskwithdeps-arts.mlir
+/// carts-opt taskwithdeps.mlir --convert-openmp-to-arts --cse --canonicalize &> taskwithdeps-arts.mlir
+/// carts-opt taskwithdeps.mlir --convert-openmp-to-arts --cse --canonicalize -debug-only=convert-openmp-to-arts &> taskwithdeps-arts.mlir
 
 /// Convert ARTS to Funcs
 /// carts-opt taskwithdeps-arts.mlir --convert-arts-to-funcs -debug-only=convert-arts-to-funcs,arts-codegen &> taskwithdeps-func.mlir
