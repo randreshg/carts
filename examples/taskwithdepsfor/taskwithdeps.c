@@ -38,12 +38,16 @@ void compute(int N, double *A, double *B) {
     #pragma omp single
     {
       for (int i = 0; i < N; i++) {
-        A[i] = i * 1.0 + test;
-        // // Task 1: Compute A[i]
-        // #pragma omp task depend(out : A[i])
-        //   A[i] = i * 1.0 + test;
+        // A[i] = i * 1.0 + test;
+        // Task 1: Compute A[i]
+        #pragma omp task depend(out : A[i])
+        {
+          // printf("A[%d] = %f\n", i, A[i]);
+          A[i] = i * 1.0 + test;
+          // printf("A[%d] = %f\n", i, A[i]);
+        }
 
-        // // Task 2: Compute B[i] based on A[i] and A[i-1] (inter-loop dependency)
+        // Task 2: Compute B[i] based on A[i] and A[i-1] (inter-loop dependency)
         // #pragma omp task depend(in : A[i], A[i - 1]) depend(out : B[i])
         //   B[i] = A[i] + (i > 0 ? A[i - 1] : 0);
       }
@@ -51,4 +55,41 @@ void compute(int N, double *A, double *B) {
   }
   printf("A[0] = %f\n", A[0]);
 }
+
+
+// void compute_non_affine(int N, double *A, double *B, int *indices) {
+//   A = (double *)malloc(N * sizeof(double));
+//   B = (double *)malloc(N * sizeof(double));
+//   indices = (int *)malloc(N * sizeof(int));
+
+//   // Initialize the index mapping
+//   for (int i = 0; i < N; i++) {
+//     indices[i] = (i * i + 3) % N; // Non-affine mapping
+//   }
+
+//   int test = rand() % 100;
+
+//   #pragma omp parallel
+//   {
+//     #pragma omp single
+//     {
+//       for (int i = 0; i < N; i++) {
+//         // Task 1: Compute A[indices[i]]
+//         #pragma omp task depend(out : A[indices[i]])
+//           A[indices[i]] = indices[i] * 1.0 + test;
+
+//         // Task 2: Compute B[indices[i]] based on A[indices[i]] and A[indices[j]]
+//         // where j is dynamically determined (non-affine relationship)
+//         int j = (i + test) % N; // Dynamically determined dependency
+//         #pragma omp task depend(in : A[indices[i]], A[indices[j]]) depend(out : B[indices[i]])
+//           B[indices[i]] = A[indices[i]] + A[indices[j]];
+//       }
+//     }
+//   }
+//   printf("A[0] = %f\n", A[0]);
+//   free(A);
+//   free(B);
+//   free(indices);
+// }
+
 

@@ -16,7 +16,6 @@
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Support/LLVM.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include <sys/types.h>
 
@@ -25,10 +24,12 @@ namespace arts {
 using namespace mlir::LLVM;
 using namespace types;
 class ArtsCodegen;
+
+// ---------------------------- Datablocks ---------------------------- ///
 class DataBlockCodegen {
 public:
   DataBlockCodegen(ArtsCodegen &AC);
-  DataBlockCodegen(ArtsCodegen &AC, arts::MakeDepOp edtDep, Location loc);
+  DataBlockCodegen(ArtsCodegen &AC, arts::DataBlockOp edtDep, Location loc);
   /// Getters
   Value getDb() { return db; }
   Value getNumElements() { return numElements; }
@@ -40,7 +41,7 @@ public:
   void setIsArray(bool isArray) { this->isArray = isArray; }
 
   /// Interface
-  void create(arts::MakeDepOp edtDep, Location loc);
+  void create(arts::DataBlockOp edtDep, Location loc);
 
 private:
   ArtsCodegen &AC;
@@ -53,30 +54,37 @@ private:
   Value getMode(StringRef mode);
 };
 
+// ---------------------------- EDTs ---------------------------- ///
 class EdtCodegen {
 public:
   EdtCodegen(ArtsCodegen &AC);
+  EdtCodegen(ArtsCodegen &AC, ValueRange &opDeps, ValueRange &opParams,
+             Region &region, Value &epoch, Location loc);
   /// Getters
   func::FuncOp getFunc() { return func; }
   Value getGuid() { return guid; }
   Value getSlot() { return slot; }
   Value getNode() { return node; }
-  SetVector<Value> getParams() { return params; }
-  SetVector<Value> getConstants() { return constants; }
+  SmallVector<Value> &getParams() { return params; }
+  SmallVector<Value> &getConsts() { return consts; }
 
   /// Setters
   void setFunc(func::FuncOp func) { this->func = func; }
   void setGuid(Value guid) { this->guid = guid; }
   void setSlot(Value slot) { this->slot = slot; }
   void setNode(Value node) { this->node = node; }
-  void setParams(SetVector<Value> params) { this->params = params; }
-  void setConstants(SetVector<Value> constants) { this->constants = constants; }
-  void setDeps(SetVector<Value> deps) { this->deps = deps; }
+  void setParams(SmallVector<Value> params) { this->params = params; }
+  void setConsts(SmallVector<Value> consts) { this->consts = consts; }
+  void setDeps(SmallVector<Value> deps) { this->deps = deps; }
 
   /// Interface
-  void addParam(Value param) { params.insert(param); }
-  void addConstant(Value constant) { constants.insert(constant); }
-  void addDep(Value dep) { deps.insert(dep); }
+  int insertParam(Value param) {
+    params.push_back(param);
+    return params.size() - 1;
+  }
+  void addParam(Value param) { params.push_back(param); }
+  void addConst(Value constant) { consts.push_back(constant); }
+  void addDep(Value dep) { deps.push_back(dep); }
 
 private:
   ArtsCodegen &AC;
@@ -85,32 +93,30 @@ private:
   Value guid = nullptr;
   Value slot = nullptr;
   Value node = nullptr;
-  SetVector<Value> params;
-  SetVector<Value> constants;
-  SetVector<Value> deps;
+  Value epoch = nullptr;
+  Value paramC = nullptr;
+  Value paramV = nullptr;
+  Value depC = nullptr;
+  SmallVector<Value> params;
+  SmallVector<Value> consts;
+  SmallVector<Value> deps;
+  /// There are cases where we the size of a db is needed, this is stored as a
+  /// parameter, so we need to keep track of it. - Create a map, the key is
+  /// the datablock, the value is the index of the parameter
+  DenseMap<DataBlockCodegen *, unsigned> dbSizeMap;
 
   /// Utils
-  Value create(func::FuncOp edtFunc, SmallVector<mlir::Value> params,
-               Value depC, Value node, Location loc);
-  Value createWithEpoch(func::FuncOp edtFunc, SmallVector<Value> params,
-                        Value depC, Value node, Value epoch, Location loc);
-
+  void processDepsAndParams(ValueRange &deps, ValueRange &params, Location loc);
   Value createGuid(Value node, Location loc);
   func::FuncOp createFn(Location loc);
-  func::CallOp createCallWithGuid(func::FuncOp edtFunc, Value guid,
-                                  SmallVector<Value> params, Value depC,
-                                  Value node, Location loc);
-  void insertFnEntry(func::FuncOp func, Region &region,
-                     SmallVector<Value> &params, SmallVector<Value> &constants,
-                     SmallVector<Value> &deps,
-                     DenseMap<Value, Value> &rewireMap);
-  Value createParamV(SmallVector<Value> &parameters, Location loc);
+  void createEntry(Region &region, Location loc);
 
   /// Static
   static unsigned edtCounter;
   static unsigned increaseEdtCounter() { return ++EdtCodegen::edtCounter; }
 };
 
+// ---------------------------- ARTS Codegen ---------------------------- ///
 class ArtsCodegen {
 public:
   ArtsCodegen(ModuleOp &module, OpBuilder &builder, llvm::DataLayout &llvmDL,
@@ -131,10 +137,14 @@ public:
   OpBuilder &getBuilder() { return builder; }
 
   /// Datablock
-  Value getDatablockMode(llvm::StringRef mode);
-  DataBlockCodegen *getDatablock(arts::MakeDepOp edtDep);
-  DataBlockCodegen *createDatablock(arts::MakeDepOp edtDep, Location loc);
-  DataBlockCodegen *getOrCreateDatablock(arts::MakeDepOp edtDep, Location loc);
+  DataBlockCodegen *getDatablock(arts::DataBlockOp edtDep);
+  DataBlockCodegen *createDatablock(arts::DataBlockOp edtDep, Location loc);
+  DataBlockCodegen *getOrCreateDatablock(arts::DataBlockOp edtDep, Location loc);
+
+  /// Edts
+  EdtCodegen *getEdt(Region &region);
+  EdtCodegen *createEdt(ValueRange &params, ValueRange &deps, Region &region,
+                        Value &epoch, Location loc);
 
   /// Epoch
   Value createEpoch(Value finishEdtGuid, Value finishEdtSlot, Location loc);
@@ -148,6 +158,8 @@ public:
   Value getCurrentEdtGuid(Location loc);
   Value getCurrentNode(Location loc);
   Value getNumDeps(SmallVector<Value> &deps, Location loc);
+  Value createArrayFromDeps(Value numElements, Value deps,
+                            Value initialSlot, Location loc);
 
   /// Helpers
   Value createFnPtr(func::FuncOp funcOp, Location loc);
@@ -194,10 +206,10 @@ private:
   mlir::DataLayout &mlirDL;
   /// Function counter
   unsigned edtCounter = 0;
-  /// Map a arts::MakeDepOp to a DataBlockCodegen
+  /// Map a arts::DataBlockOp to a DataBlockCodegen
   llvm::DenseMap<Value, DataBlockCodegen *> datablocks;
-  /// Map a arts::EdtOp  to a EdtCodegen
-  llvm::DenseMap<Value, EdtCodegen *> edts;
+  /// Map an arts region to a EdtCodegen
+  llvm::DenseMap<Region *, EdtCodegen *> edts;
   // Add more types as necessary
 };
 

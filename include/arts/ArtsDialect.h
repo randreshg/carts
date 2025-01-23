@@ -47,39 +47,10 @@ bool isArtsRegion(mlir::Operation *op);
 //===----------------------------------------------------------------------===//
 namespace mlir::arts {
 namespace utils {
-/// Collect the memory effects of the given op in 'effects'. Returns 'true' it
-/// could extract the effect information from the op, otherwise returns 'false'
-/// and conservatively populates the list with all possible effects.
-bool collectEffects(
-    mlir::Operation *op,
-    llvm::SmallVectorImpl<mlir::MemoryEffects::EffectInstance> &effects,
-    bool ignoreBarriers);
 
-/// Returns if we are non-conservative whether we have filled with all possible
-/// effects.
-bool getEffectsBefore(
-    mlir::Operation *op,
-    llvm::SmallVectorImpl<mlir::MemoryEffects::EffectInstance> &effects,
-    bool stopAtBarrier);
+void replaceInRegion(mlir::Region &region, mlir::Value from, mlir::Value to);
+void replaceInRegion(mlir::Region &region,  DenseMap<Value, Value> &rewireMap);
 
-bool getEffectsAfter(
-    mlir::Operation *op,
-    llvm::SmallVectorImpl<mlir::MemoryEffects::EffectInstance> &effects,
-    bool stopAtBarrier);
-
-bool isReadOnly(mlir::Operation *);
-bool isReadNone(mlir::Operation *);
-bool isCaptured(mlir::Value, mlir::Operation *potentialUser = nullptr,
-                bool *seenuse = nullptr);
-bool isStackAlloca(mlir::Value);
-
-bool mayReadFrom(mlir::Operation *, mlir::Value);
-// bool mayWriteTo(mlir::Operation *, mlir::Value, bool ignoreBarrier = false);
-
-bool mayAlias(mlir::MemoryEffects::EffectInstance a,
-              mlir::MemoryEffects::EffectInstance b);
-
-bool mayAlias(mlir::MemoryEffects::EffectInstance a, mlir::Value b);
 } /// namespace utils
 } /// namespace mlir::arts
 #endif // CARTS_DIALECT_H

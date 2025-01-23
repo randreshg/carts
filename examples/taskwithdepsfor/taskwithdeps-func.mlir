@@ -86,7 +86,7 @@ Moving ops to the end of the function
     %20 = "polygeist.memref2pointer"(%9) : (memref<?xf64>) -> !llvm.ptr<memref<?xf64>>
     %21 = "polygeist.pointer2memref"(%20) : (!llvm.ptr<memref<?xf64>>) -> memref<?xi8>
     "func.call"(%16, %17, %18, %19, %21) <{callee = @artsDbCreateArray}> : (memref<?x!llvm.struct<(i64, memref<?xi8>)>>, i64, i32, i32, memref<?xi8>) -> ()
-    %22 = "arts.make_dep"(%9) <{mode = "inout"}> : (memref<?xf64>) -> !arts.dep
+    %22 = "arts.datablock"(%9) <{mode = "inout"}> : (memref<?xf64>) -> !arts.dep
     %23 = "func.call"() <{callee = @artsGetCurrentNode}> : () -> i32
     %24 = "arith.constant"() <{value = 1 : i32}> : () -> i32
     %25 = "arith.constant"() <{value = 0 : i32}> : () -> i32

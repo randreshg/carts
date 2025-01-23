@@ -22,6 +22,7 @@
 #include "arts/Utils/ArtsTypes.h"
 
 #include "mlir/IR/Types.h"
+#include "mlir/IR/ValueRange.h"
 #include "polygeist/Dialect.h"
 #include "polygeist/Ops.h"
 
@@ -33,9 +34,7 @@
 #include "llvm/Support/Error.h"
 
 #include <cassert>
-#include <cstddef>
 #include <cstdint>
-#include <optional>
 
 // DEBUG
 #define DEBUG_TYPE "arts-codegen"
@@ -53,20 +52,20 @@ using namespace mlir::polygeist;
 DataBlockCodegen::DataBlockCodegen(ArtsCodegen &AC)
     : AC(AC), builder(AC.builder) {}
 
-DataBlockCodegen::DataBlockCodegen(ArtsCodegen &AC, arts::MakeDepOp edtDep,
+DataBlockCodegen::DataBlockCodegen(ArtsCodegen &AC, arts::DataBlockOp edtDep,
                                    Location loc)
     : AC(AC), builder(AC.builder) {
   create(edtDep, loc);
 }
 
-void DataBlockCodegen::create(arts::MakeDepOp edtDep, Location loc) {
+void DataBlockCodegen::create(arts::DataBlockOp edtDep, Location loc) {
   OpBuilder::InsertionGuard guard(builder);
   AC.setInsertionPoint(edtDep);
 
-  bool isArray = false;
+  isArray = false;
 
   /// If the value is a load, it corresponds to a memref of an array
-  auto dbMemref = edtDep.getVal();
+  auto dbMemref = edtDep.getBase();
   if (auto loadOp = dyn_cast<memref::LoadOp>(dbMemref.getDefiningOp())) {
     dbMemref = loadOp.getMemref();
   } else {
@@ -79,7 +78,7 @@ void DataBlockCodegen::create(arts::MakeDepOp edtDep, Location loc) {
 
   /// Get the size of the datablock
   /// We assume in this point that the memref is an array
-  Value numElements = builder.create<arith::ConstantIndexOp>(loc, 1);
+  numElements = builder.create<arith::ConstantIndexOp>(loc, 1);
   for (int64_t i = 0, rank = memrefType.getRank(); i < rank; ++i) {
     Value dimSize =
         memrefType.isDynamicDim(i)
@@ -98,23 +97,16 @@ void DataBlockCodegen::create(arts::MakeDepOp edtDep, Location loc) {
   }
 
   /// Allocate an array of Datablocks
-  auto dbArray =
-      builder.create<memref::AllocaOp>(loc, AC.ArtsDbPtr, numElements);
+  db = builder.create<memref::AllocaOp>(loc, AC.ArtsDbPtr, numElements);
   auto dbSize = AC.createIntConstant(
       AC.mlirDL.getTypeSize(memrefType.getElementType()), AC.Int64, loc);
-  auto dbMode = getMode(edtDep.getMode());
 
   /// Create the datablock
+  numElements = AC.castToInt(AC.Int32, numElements, loc);
   AC.createRuntimeCall(ARTSRTL_artsDbCreateArray,
-                       {dbArray, dbSize, dbMode,
-                        AC.castToInt(AC.Int32, numElements, loc),
+                       {db, dbSize, getMode(edtDep.getMode()), numElements,
                         AC.castToPtr(dbMemref, loc)},
                        loc);
-
-  /// Set the values
-  db = dbArray;
-  this->numElements = numElements;
-  this->isArray = isArray;
 }
 
 Value DataBlockCodegen::getMode(llvm::StringRef mode) {
@@ -129,150 +121,60 @@ Value DataBlockCodegen::getMode(llvm::StringRef mode) {
   return AC.createIntConstant(enumValue, AC.Int32, Loc);
 }
 
-DataBlockCodegen *ArtsCodegen::getDatablock(arts::MakeDepOp edtDep) {
-  /// Try to find in the map
-  auto it = datablocks.find(edtDep);
-  if (it != datablocks.end())
-    return it->second;
-  return nullptr;
-}
-
-DataBlockCodegen *ArtsCodegen::createDatablock(arts::MakeDepOp edtDep,
-                                               Location loc) {
-  datablocks[edtDep] = new DataBlockCodegen(*this, edtDep, loc);
-  return datablocks[edtDep];
-}
-
-DataBlockCodegen *ArtsCodegen::getOrCreateDatablock(arts::MakeDepOp edtDep,
-                                                    Location loc) {
-  /// Try to find in the map
-  if (auto db = getDatablock(edtDep))
-    return db;
-  /// If it doesnt exist, create it
-  return createDatablock(edtDep, loc);
-}
-
 // ---------------------------- EDTs ---------------------------- ///
 unsigned EdtCodegen::edtCounter = 0;
 
 EdtCodegen::EdtCodegen(ArtsCodegen &AC) : AC(AC), builder(AC.builder) {}
 
-Value EdtCodegen::createGuid(Value node, Location loc) {
-  auto guidEdtType = AC.createIntConstant(1, AC.artsType_t, loc);
-  auto reserveGuidCall =
-      AC.createRuntimeCall(ARTSRTL_artsReserveGuidRoute, {guidEdtType, node}, loc);
-  return reserveGuidCall.getResult(0);
-}
-
-func::FuncOp EdtCodegen::createFn(Location loc) {
-  auto edtFuncName = "__arts_edt_" + std::to_string(increaseEdtCounter());
-  auto edtFuncOp = builder.create<func::FuncOp>(loc, edtFuncName, AC.EdtFn);
-  edtFuncOp.setPrivate();
-  AC.module.push_back(edtFuncOp);
-  return edtFuncOp;
-}
-
-func::CallOp EdtCodegen::createCallWithGuid(func::FuncOp edtFunc, Value guid,
-                                            SmallVector<Value> params,
-                                            Value depC, Value node,
-                                            Location loc) {
-  auto paramC = AC.createIntConstant(params.size(), AC.Int32, loc);
-  auto paramV = createParamV(params, loc);
-  auto edtFuncPtr = AC.createFnPtr(edtFunc, loc);
-  return AC.createRuntimeCall(ARTSRTL_artsEdtCreateWithGuid,
-                              {edtFuncPtr, guid, paramC, paramV, depC}, loc);
-}
-
-Value EdtCodegen::create(func::FuncOp edtFunc, SmallVector<Value> params,
-                         Value depC, Value node, Location loc) {
-  auto paramC = AC.createIntConstant(params.size(), AC.Int32, loc);
-  auto paramV = createParamV(params, loc);
-  auto edtFuncPtr = AC.createFnPtr(edtFunc, loc);
-  return AC
-      .createRuntimeCall(ARTSRTL_artsEdtCreate,
-                         {edtFuncPtr, node, paramC, paramV, depC}, loc)
-      .getResult(0);
-}
-
-Value EdtCodegen::createWithEpoch(func::FuncOp edtFunc,
-                                  SmallVector<Value> params, Value depC,
-                                  Value node, Value epoch, Location loc) {
-  auto paramC = AC.createIntConstant(params.size(), AC.Int32, loc);
-  auto paramV = createParamV(params, loc);
-  auto edtFuncPtr = AC.createFnPtr(edtFunc, loc);
-  return AC
-      .createRuntimeCall(types::RuntimeFunction::ARTSRTL_artsEdtCreateWithEpoch,
-                         {edtFuncPtr, node, paramC, paramV, depC, epoch}, loc)
-      .getResult(0);
-}
-
-void EdtCodegen::insertFnEntry(func::FuncOp func, Region &region,
-                               SmallVector<Value> &params,
-                               SmallVector<Value> &consts,
-                               SmallVector<Value> &deps,
-                               DenseMap<Value, Value> &rewireMap) {
+EdtCodegen::EdtCodegen(ArtsCodegen &AC, ValueRange &opDeps,
+                       ValueRange &opParams, Region &region, Value &epoch,
+                       Location loc)
+    : AC(AC), builder(AC.builder) {
   OpBuilder::InsertionGuard guard(builder);
+  func = createFn(loc);
+  node = AC.getCurrentNode(loc);
+  processDepsAndParams(opDeps, opParams, loc);
+  auto funcPtr = AC.createFnPtr(func, loc);
+  /// If not epoch is provided, create an EDT without it
+  if (!epoch) {
+    guid = AC.createRuntimeCall(ARTSRTL_artsEdtCreate,
+                                {funcPtr, node, paramC, paramV, depC}, loc)
+               .getResult(0);
+  } else {
+    guid = AC.createRuntimeCall(
+                 types::RuntimeFunction::ARTSRTL_artsEdtCreateWithEpoch,
+                 {funcPtr, node, paramC, paramV, depC, epoch}, loc)
+               .getResult(0);
+  }
+}
 
-  auto *entryBlock = func.addEntryBlock();
-  builder.setInsertionPointToStart(entryBlock);
+void EdtCodegen::processDepsAndParams(ValueRange &opDeps, ValueRange &opParams,
+                                      Location loc) {
+  /// Creates a DataBlock for each dependency
+  SmallVector<DataBlockCodegen *> dbs;
+  for (auto dep : opDeps) {
+    auto makeDepOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp());
+    assert(makeDepOp && "Dependency is not a datablock op");
+    dbs.push_back(AC.getOrCreateDatablock(makeDepOp, loc));
+  }
 
-  /// Get reference to the block arguments
-  Value paramC = entryBlock->getArgument(0);
-  Value paramV = entryBlock->getArgument(1);
-  Value depC = entryBlock->getArgument(2);
-  Value depV = entryBlock->getArgument(3);
+  /// Initialize the parameters
+  params.append(opParams.begin(), opParams.end());
 
-  auto loc = func.getLoc();
-  /// Clone constants
-  for (auto oldConst : consts) {
-    auto newConst = builder.clone(*oldConst.getDefiningOp())->getResult(0);
-    rewireMap[oldConst] = newConst;
+  /// Compute depC and update parameters
+  depC = AC.createIntConstant(0, AC.Int32, loc);
+  for (auto db : dbs) {
+    /// If the db is an array, add the number of elements as a parameter
+    if (db->getIsArray())
+      dbSizeMap[db] = insertParam(db->getNumElements());
+    /// Add the number of elements in the datablock
+    depC = builder.create<arith::AddIOp>(loc, depC, db->getNumElements())
+               .getResult();
   }
 
   /// Insert the parameters
-  auto paramSize = params.size();
-  for (unsigned paramIndex = 0; paramIndex < paramSize; paramIndex++) {
-    auto i = builder.create<arith::ConstantIndexOp>(loc, paramIndex);
-    auto paramVElem =
-        builder.create<memref::LoadOp>(loc, paramV, ValueRange{i});
-    /// Cast it back to the original type
-    auto oldParam = params[paramIndex];
-    auto newParam = AC.castParameter(oldParam.getType(), paramVElem, loc);
-    rewireMap[oldParam] = newParam;
-  }
-
-  /// Insert the dependencies
-  auto depSize = deps.size();
-  auto initialIndex = AC.createIntConstant(0, AC.Int32, loc);
-  for (unsigned depIndex = 0; depIndex < depSize; depIndex++) {
-    /// Get DataBlock
-    auto edtDep = cast<MakeDepOp>(deps[depIndex].getDefiningOp());
-    auto &db = *AC.getDatablock(edtDep);
-    /// If the datblock is an array,
-    /// Get dependency ptr
-    auto i = builder.create<arith::ConstantIndexOp>(loc, depIndex);
-    auto depVElem = builder.create<memref::LoadOp>(loc, depV, ValueRange({i}));
-    auto depPtr = AC.getPtrFromEdtDep(depVElem, loc);
-    /// Cast it back to the original type
-    auto oldDep = edtDep.getVal();
-    if (auto loadOp = dyn_cast<memref::LoadOp>(oldDep.getDefiningOp()))
-      oldDep = loadOp.getMemref();
-    /// Cast it back to the original type
-    auto newDep = AC.castDependency(oldDep.getType(), depPtr, loc);
-    rewireMap[oldDep] = depPtr;
-  }
-
-  /// Rewire the values
-  for (auto &rewire : rewireMap) {
-    rewire.first.replaceUsesWithIf(rewire.second, [&](OpOperand &operand) {
-      return region.isAncestor(operand.getOwner()->getParentRegion());
-    });
-  }
-}
-
-Value EdtCodegen::createParamV(SmallVector<Value> &params, Location loc) {
-  /// Create array of i64
   unsigned int paramSize = params.size();
+  paramC = AC.createIntConstant(paramSize, AC.Int32, loc);
   auto paramVArray = builder.create<memref::AllocaOp>(
       loc, MemRefType::get({paramSize}, AC.Int64));
   for (unsigned i = 0; i < paramSize; i++) {
@@ -284,9 +186,95 @@ Value EdtCodegen::createParamV(SmallVector<Value> &params, Location loc) {
                                           ValueRange{paramIndex});
   }
   /// memref cast to memref<-1xi64>
-  auto paramV = builder.create<memref::CastOp>(
+  paramV = builder.create<memref::CastOp>(
       loc, MemRefType::get({ShapedType::kDynamic}, AC.Int64), paramVArray);
-  return paramV.getResult();
+}
+
+void EdtCodegen::createEntry(Region &region, Location loc) {
+  OpBuilder::InsertionGuard guard(builder);
+
+  auto *entryBlock = func.addEntryBlock();
+  builder.setInsertionPointToStart(entryBlock);
+
+  auto rewireMap = DenseMap<Value, Value>();
+
+  /// Get reference to the block arguments
+  Value fnParamV = entryBlock->getArgument(1);
+  Value fnDepV = entryBlock->getArgument(3);
+
+  /// Clone constants
+  for (auto oldConst : consts) {
+    rewireMap[oldConst] =
+        builder.clone(*oldConst.getDefiningOp())->getResult(0);
+  }
+
+  /// Insert the parameters
+  auto paramSize = params.size();
+  for (unsigned paramIndex = 0; paramIndex < paramSize; paramIndex++) {
+    auto i = builder.create<arith::ConstantIndexOp>(loc, paramIndex);
+    auto paramVElem =
+        builder.create<memref::LoadOp>(loc, fnParamV, ValueRange{i});
+    /// Cast it back to the original type
+    auto oldParam = params[paramIndex];
+    auto newParam = AC.castParameter(oldParam.getType(), paramVElem, loc);
+    rewireMap[oldParam] = newParam;
+  }
+
+  /// Create a lambda function that given an index, return the new parameter
+  /// from the rewiremap
+  auto getNewParam = [&](unsigned index) {
+    auto oldParam = params[index];
+    return rewireMap[oldParam];
+  };
+
+  /// Insert the dependencies
+  auto depSize = deps.size();
+  auto initialIndex = AC.createIntConstant(0, AC.Int32, loc);
+  auto oneConst = AC.createIntConstant(1, AC.Int32, loc);
+  for (unsigned depIndex = 0; depIndex < depSize; depIndex++) {
+    /// Get DataBlock
+    auto edtDep = cast<DataBlockOp>(deps[depIndex].getDefiningOp());
+    auto oldDep = edtDep.getBase();
+    auto &db = *AC.getDatablock(edtDep);
+
+    /// Create an array of dbs
+    if (db.getIsArray()) {
+      auto numElements = getNewParam(dbSizeMap[&db]);
+      auto dbArray =
+          AC.createArrayFromDeps(numElements, fnDepV, initialIndex, loc);
+      rewireMap[oldDep] = dbArray;
+      continue;
+    }
+
+    if (auto loadOp = dyn_cast<memref::LoadOp>(oldDep.getDefiningOp())) {
+      oldDep = loadOp.getMemref();
+    }
+    /// artsDbCreateArrayFromDeps Get dependency ptr
+    auto i = builder.create<arith::ConstantIndexOp>(loc, depIndex);
+    auto depVElem =
+        builder.create<memref::LoadOp>(loc, fnDepV, ValueRange({i}));
+    auto depPtr = AC.getPtrFromEdtDep(depVElem, loc);
+    /// Cast it back to the original type
+    auto newDep = AC.castDependency(oldDep.getType(), depPtr, loc);
+    rewireMap[oldDep] = depPtr;
+  }
+
+  utils::replaceInRegion(region, rewireMap);
+}
+
+Value EdtCodegen::createGuid(Value node, Location loc) {
+  auto guidEdtType = AC.createIntConstant(1, AC.artsType_t, loc);
+  auto reserveGuidCall = AC.createRuntimeCall(ARTSRTL_artsReserveGuidRoute,
+                                              {guidEdtType, node}, loc);
+  return reserveGuidCall.getResult(0);
+}
+
+func::FuncOp EdtCodegen::createFn(Location loc) {
+  auto edtFuncName = "__arts_edt_" + std::to_string(increaseEdtCounter());
+  auto edtFuncOp = builder.create<func::FuncOp>(loc, edtFuncName, AC.EdtFn);
+  edtFuncOp.setPrivate();
+  AC.module.push_back(edtFuncOp);
+  return edtFuncOp;
 }
 
 // ---------------------------- ARTS Codegen ---------------------------- ///
@@ -367,6 +355,41 @@ func::CallOp ArtsCodegen::createRuntimeCall(RuntimeFunction FnID,
   return call;
 }
 
+/// DataBlock
+DataBlockCodegen *ArtsCodegen::getDatablock(arts::DataBlockOp edtDep) {
+  auto it = datablocks.find(edtDep);
+  return (it != datablocks.end()) ? it->second : nullptr;
+}
+
+DataBlockCodegen *ArtsCodegen::createDatablock(arts::DataBlockOp edtDep,
+                                               Location loc) {
+  auto &db = datablocks[edtDep];
+  if (!db)
+    db = new DataBlockCodegen(*this, edtDep, loc);
+  return db;
+}
+
+DataBlockCodegen *ArtsCodegen::getOrCreateDatablock(arts::DataBlockOp edtDep,
+                                                    Location loc) {
+  return createDatablock(edtDep, loc);
+}
+
+/// EDT
+EdtCodegen *ArtsCodegen::getEdt(Region &region) {
+  /// Try to find in the map
+  auto it = edts.find(&region);
+  if (it != edts.end())
+    return it->second;
+  return nullptr;
+}
+
+EdtCodegen *ArtsCodegen::createEdt(ValueRange &params, ValueRange &deps,
+                                   Region &region, Value &epoch, Location loc) {
+  assert(!getEdt(region) && "Edt already exists");
+  edts[&region] = new EdtCodegen(*this, params, deps, region, epoch, loc);
+  return edts[&region];
+}
+
 /// Epoch
 Value ArtsCodegen::createEpoch(Value finishEdtGuid, Value finishEdtSlot,
                                Location loc) {
@@ -414,7 +437,7 @@ Value ArtsCodegen::getNumDeps(SmallVector<Value> &deps, Location loc) {
   auto numDeps = createIntConstant(0, Int32, loc);
   for (auto dep : deps) {
     /// Verify the dep has already been processed
-    auto *depDb = getDatablock(cast<MakeDepOp>(dep.getDefiningOp()));
+    auto *depDb = getDatablock(cast<DataBlockOp>(dep.getDefiningOp()));
     assert(depDb && "Datablock not found");
     /// Num of elements in the datablock
     auto numElements = castToInt(Int32, depDb->getNumElements(), loc);
@@ -423,6 +446,16 @@ Value ArtsCodegen::getNumDeps(SmallVector<Value> &deps, Location loc) {
         builder.create<arith::AddIOp>(loc, numDeps, numElements).getResult();
   }
   return numDeps;
+}
+
+Value ArtsCodegen::createArrayFromDeps(Value numElements, Value deps,
+                                       Value initialSlot, Location loc) {
+  /// Allocate an array of Datablocks
+  auto dbArray = builder.create<memref::AllocaOp>(loc, ArtsDbPtr, numElements);
+  /// Set info based on the deps
+  createRuntimeCall(ARTSRTL_artsDbCreateArrayFromDeps,
+                    {dbArray, numElements, deps, initialSlot}, loc);
+  return dbArray;
 }
 
 /// Helpers
