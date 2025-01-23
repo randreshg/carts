@@ -78,80 +78,82 @@ struct ParallelOpLowering : public OpConversionPattern<arts::ParallelOp> {
     arts::SingleOp singleOp = nullptr;
     unsigned numOps = 0;
 
-    /// Analyze the parallel region to find the singleOp
-    mlir::Region &region = op.getRegion();
-    region.walk([&](mlir::Operation *nested) {
-      /// Only consider ops directly in this region
-      if (nested->getParentRegion() != &region)
-        return;
-      numOps++;
-      if (auto single = dyn_cast<arts::SingleOp>(nested)) {
-        if (singleOp) {
-          llvm_unreachable("Multiple single ops in parallel op not supported");
-        }
-        singleOp = single;
-      } else if (!isa<arts::BarrierOp>(nested) && !isa<arts::YieldOp>(nested)) {
-        llvm_unreachable("Unknown op in parallel op - not supported");
-      }
-    });
+    // // /// Analyze the parallel region to find the singleOp
+    // // mlir::Region &region = op.getRegion();
+    // // region.walk([&](mlir::Operation *nested) {
+    // //   /// Only consider ops directly in this region
+    // //   if (nested->getParentRegion() != &region)
+    // //     return;
+    // //   numOps++;
+    // //   if (auto single = dyn_cast<arts::SingleOp>(nested)) {
+    // //     if (singleOp) {
+    // //       llvm_unreachable("Multiple single ops in parallel op not supported");
+    // //     }
+    // //     singleOp = single;
+    // //   } else if (!isa<arts::BarrierOp>(nested) && !isa<arts::YieldOp>(nested)) {
+    // //     llvm_unreachable("Unknown op in parallel op - not supported");
+    // //   }
+    // // });
 
-    assert((singleOp && (numOps == 4)) &&
-           "Invalid parallel op region structure");
-    auto &singleRegion = singleOp->getRegion(0);
+    // // assert((singleOp && (numOps == 4)) &&
+    // //        "Invalid parallel op region structure");
+    // // auto &singleRegion = singleOp->getRegion(0);
 
-    /// Process dependencies (makes memrefs -> datablocks)
-    auto deps = op.getDependencies();
-    for (auto dep : deps) {
-      auto makeDepOp = dyn_cast<arts::MakeDepOp>(dep.getDefiningOp());
-      assert(makeDepOp && "Dependency is not a make_dep op");
-      codegen.getOrCreateDatablock(makeDepOp, loc);
-    }
+    // // /// Process dependencies (makes memrefs -> datablocks)
+    // // auto deps = op.getDependencies();
+    // // auto params = op.getParameters();
+    
+    // // for (auto dep : deps) {
+    // //   auto makeDepOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp());
+    // //   assert(makeDepOp && "Dependency is not a datablock op");
+    // //   codegen.getOrCreateDatablock(makeDepOp, loc);
+    // // }
 
-    auto parDone_edtFunc = codegen.createFn(loc);
-    auto par_edtFunc = codegen.createFn(loc);
+    // // auto parDone_edtFunc = codegen.createFn(loc);
+    // // auto par_edtFunc = codegen.createFn(loc);
 
-    /// We set insertion to the old op for creation of epoch, etc.
-    OpBuilder::InsertionGuard guard(codegen.getBuilder());
-    codegen.setInsertionPoint(op);
+    // // /// We set insertion to the old op for creation of epoch, etc.
+    // // OpBuilder::InsertionGuard guard(codegen.getBuilder());
+    // // codegen.setInsertionPoint(op);
 
-    auto currentNode = codegen.getCurrentNode(loc);
+    // // auto currentNode = codegen.getCurrentNode(loc);
 
-    /// Create Parallel Epoch
-    auto parDone_depC = codegen.createIntConstant(1, codegen.Int32, loc);
-    auto parDone_params = SmallVector<Value>{};
-    auto parDone_edtGuid = codegen.create(parDone_edtFunc, parDone_params,
-                                             parDone_depC, currentNode, loc);
-    auto parDone_slot = codegen.createIntConstant(0, codegen.Int32, loc);
-    auto parEpoch_guid =
-        codegen.createEpoch(parDone_edtGuid, parDone_slot, loc);
+    // // /// Create Parallel Epoch
+    // // auto parDone_depC = codegen.createIntConstant(1, codegen.Int32, loc);
+    // // auto parDone_params = SmallVector<Value>{};
+    // // auto parDone_edtGuid = codegen.create(parDone_edtFunc, parDone_params,
+    // //                                          parDone_depC, currentNode, loc);
+    // // auto parDone_slot = codegen.createIntConstant(0, codegen.Int32, loc);
+    // // auto parEpoch_guid =
+    // //     codegen.createEpoch(parDone_edtGuid, parDone_slot, loc);
 
-    /// Create Parallel Edt
-    auto par_params = op.getParams();
-    auto par_deps = op.getDeps();
-    auto par_depC = codegen.getNumDeps(par_deps, loc);
-    auto parallelEdtGuid = codegen.createWithEpoch(
-        par_edtFunc, par_params, par_depC, currentNode, parEpoch_guid, loc);
+    // // /// Create Parallel Edt
+    // // auto par_params = op.getParams();
+    // // auto par_deps = op.getDeps();
+    // // auto par_depC = codegen.getNumDeps(par_deps, loc);
+    // // auto parallelEdtGuid = codegen.createWithEpoch(
+    // //     par_edtFunc, par_params, par_depC, currentNode, parEpoch_guid, loc);
 
-    /// Insert Parallel Edt entry
-    auto par_consts = op.getConsts();
-    auto rewireMap = DenseMap<Value, Value>();
-    codegen.insertFnEntry(par_edtFunc, singleRegion, par_params,
-                           par_consts, par_deps, rewireMap);
+    // // /// Insert Parallel Edt entry
+    // // auto par_consts = op.getConsts();
+    // // auto rewireMap = DenseMap<Value, Value>();
+    // // codegen.insertFnEntry(par_edtFunc, singleRegion, par_params,
+    // //                        par_consts, par_deps, rewireMap);
 
-    /// Inline the single region into the parallel edt function
-    Region &funcRegion = par_edtFunc.getBody();
-    Block &funcEntryBlock = funcRegion.front();
-    Block &entryBlock = singleRegion.front();
-    rewriter.inlineRegionBefore(singleRegion, funcRegion, funcRegion.end());
+    // /// Inline the single region into the parallel edt function
+    // Region &funcRegion = par_edtFunc.getBody();
+    // Block &funcEntryBlock = funcRegion.front();
+    // Block &entryBlock = singleRegion.front();
+    // rewriter.inlineRegionBefore(singleRegion, funcRegion, funcRegion.end());
 
-    /// Move all ops from srcBlock to the end of destBlock
-    LLVM_DEBUG(dbgs() << "\n\nMoving ops to the end of the function\n");
-    while (!entryBlock.empty()) {
-      Operation &op = entryBlock.front();
-      op.moveBefore(&funcEntryBlock, funcEntryBlock.end());
-    }
-    rewriter.eraseBlock(&entryBlock);
-    par_edtFunc.dump();
+    // /// Move all ops from srcBlock to the end of destBlock
+    // LLVM_DEBUG(dbgs() << "\n\nMoving ops to the end of the function\n");
+    // while (!entryBlock.empty()) {
+    //   Operation &op = entryBlock.front();
+    //   op.moveBefore(&funcEntryBlock, funcEntryBlock.end());
+    // }
+    // rewriter.eraseBlock(&entryBlock);
+    // par_edtFunc.dump();
 
     /// Finally, erase the old parallel op from the IR
     rewriter.eraseOp(op);
@@ -203,7 +205,7 @@ void ConvertARTSToFuncsPass::runOnOperation() {
   target.addLegalOp<ModuleOp>();
   target.addLegalOp<arts::EdtOp>();
   target.addLegalOp<arts::AllocaOp>();
-  target.addLegalOp<arts::MakeDepOp>();
+  target.addLegalOp<arts::DataBlockOp>();
   target.addLegalOp<arts::YieldOp>();
   target.addLegalOp<arts::BarrierOp>();
 

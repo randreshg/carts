@@ -54,40 +54,22 @@ def AllocOp : Arts_Op<"alloc", []> {
 
 
 //===----------------------------------------------------------------------===//
-// arts.make_dep
+// arts.datablock
 //===----------------------------------------------------------------------===//
-def MakeDepOp : Arts_Op<"make_dep", []> {
-  let summary = "Creates a dependency for arts.edt or arts.parallel";
-  let description = [{
-    This operation creates a dependency for the arts.edt operation.
-    It can include an affine map + operands, or omit them entirely
-    when no indexing is required.
-  }];
-
-  // Note the use of `OptionalAttr<AffineMapAttr>` for affine_map.
+def DataBlockOp : Arts_Op<"datablock", [AttrSizedOperandSegments]> {
+  let summary = "Creates a subview dependency for arts.edt or arts.parallel";
   let arguments = (ins
-    StrAttr:$mode,                            // e.g., "in", "out", "inout"
-    AnyType:$val                              // dependent value
+    StrAttr:$mode,                        // Dependency mode (e.g., "in", "out")
+    AnyMemRef:$base,                      // Base memref
+    Variadic<Index>:$offsets,             // Offsets for subview
+    Variadic<Index>:$sizes,               // Sizes for subview
+    Variadic<Index>:$strides              // Strides for subview
   );
-
-  let results = (outs DepType:$dep);
-
-  // Use brackets as anchors for the optional group
+  let results = (outs AnyMemRef:$subview); // Produces a memref.subview
   let assemblyFormat = [{
-    $mode `,` $val `:` type($val)
-    attr-dict `:` type($dep)
+    $mode `,` $base `:` type($base) `[` $offsets `]` `[` $sizes `]` `[` $strides `]` 
+    attr-dict `:` type($subview)
   }];
-
-  let skipDefaultBuilders = 1;
-
-  // We provide two builders:
-  //  1) one that doesn't take a map or operands,
-  //  2) one that takes the map and operands.
-  // The user can choose based on whether they need affine indexing or not.
-  let builders = [
-    // e.g. make_dep("in", %A) => no map or affine operands
-    OpBuilder<(ins "StringRef":$mode, "Value":$val)>
-  ];
 }
 
 //===----------------------------------------------------------------------===//
@@ -107,7 +89,7 @@ def EdtOp : Arts_Op<"edt",
   let arguments = (ins
     Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$parameters,
     Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$constants,
-    Variadic<DepType>:$dependencies
+    Variadic<AnyMemRef>:$dependencies
   );
   let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
@@ -140,7 +122,7 @@ def ParallelOp : Arts_Op<"parallel",
   let arguments = (ins
     Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$parameters,
     Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$constants,
-    Variadic<DepType>:$dependencies
+    Variadic<AnyMemRef>:$dependencies
   );
   let regions = (region AnyRegion:$body);
   let assemblyFormat = [{

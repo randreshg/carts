@@ -194,6 +194,11 @@ __ARTS_RTL(artsDbCreatePtr, artsGuid_t, VoidPtr, Int64, artsType_t)
 //                        void *data);
 __ARTS_RTL(artsDbCreateArray, Void, ArtsDbPtr, Int64, artsType_t, Int32,
            VoidPtr)
+// void artsDbCreateArrayFromDeps(artsDataBlock *dbArray,
+//                                unsigned int numElements,
+//                                artsEdtDep_t *deps, unsigned int initialSlot);
+__ARTS_RTL(artsDbCreateArrayFromDeps, Void, ArtsDbPtr, Int32, ArtsEdtDepPtr,
+           Int32)
 
 /// epoch
 // artsGuid_t artsGetCurrentEpochGuid();

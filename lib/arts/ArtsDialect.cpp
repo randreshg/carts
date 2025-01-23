@@ -57,15 +57,15 @@ bool isArtsRegion(Operation *op) {
 #define GET_TYPEDEF_CLASSES
 #include "arts/ArtsOpsTypes.cpp.inc"
 
-//===----------------------------------------------------------------------===//
-// MakeDepOp
-//===----------------------------------------------------------------------===//
-void MakeDepOp::build(OpBuilder &builder, OperationState &result,
-                      StringRef mode, Value val) {
-  result.addTypes(arts::DepType::get(builder.getContext()));
-  result.addAttribute("mode", builder.getStringAttr(mode));
-  result.addOperands({val});
-}
+// //===----------------------------------------------------------------------===//
+// // DataBlockOp
+// //===----------------------------------------------------------------------===//
+// void DataBlockOp::build(OpBuilder &builder, OperationState &result,
+//                       StringRef mode, Value val) {
+//   result.addTypes(arts::DepType::get(builder.getContext()));
+//   result.addAttribute("mode", builder.getStringAttr(mode));
+//   result.addOperands({val});
+// }
 
 //===----------------------------------------------------------------------===//
 // UndefOp
@@ -138,3 +138,19 @@ SmallVector<Value> ParallelOp::getDeps() {
                                            dependencies.end());
   return dependenciesVector;
 }
+
+//===----------------------------------------------------------------------===//
+// Utils
+//===----------------------------------------------------------------------===//
+namespace mlir::arts::utils {
+void replaceInRegion(Region &region, Value from, Value to) {
+  from.replaceUsesWithIf(to, [&](OpOperand &operand) {
+    return region.isAncestor(operand.getOwner()->getParentRegion());
+  });
+}
+
+void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap) {
+  for (auto &rewire : rewireMap)
+    replaceInRegion(region, rewire.first, rewire.second);
+}
+} // namespace mlir::arts::utils

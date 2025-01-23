@@ -69,6 +69,14 @@ int main(int argc, char **argv) {
   mlir::registerArtsPasses();
   // mlir::registerAllPasses();
   mlir::func::registerInlinerExtension(registry);
+  mlir::registerCSEPass();
+  mlir::registerConvertAffineToStandardPass();
+  mlir::registerSCCPPass();
+  mlir::registerInlinerPass();
+  mlir::registerCanonicalizerPass();
+  mlir::registerSymbolDCEPass();
+  mlir::registerLoopInvariantCodeMotionPass();
+
 
   registry.addExtension(+[](MLIRContext *ctx, LLVM::LLVMDialect *dialect) {
     LLVM::LLVMFunctionType::attachInterface<MemRefInsider>(*ctx);
