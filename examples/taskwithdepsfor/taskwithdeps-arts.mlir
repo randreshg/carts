@@ -10,12 +10,14 @@ Naive collection of parameters and dependencies:
   Adding parameter: <block argument> of type 'index' at index: 0
 Adding dependency: %20 = "memref.load"(%9, %arg3) : (memref<?xf64>, index) -> f64 with mode: out
    Dependency already added as memref - Removing it and creating makedep
+Naive collection of parameters and dependencies: 
 
 [convert-openmp-to-arts] Converting omp.parallel to arts.parallel
 Naive collection of parameters and dependencies: 
   Adding parameter: <block argument> of type 'i32' at index: 0
   Adding parameter: %11 = "arith.remsi"(%10, %4) : (i32, i32) -> i32
   Adding dependency: %9 = "memref.alloc"(%8) <{operandSegmentSizes = array<i32: 1, 0>}> : (index) -> memref<?xf64>
+Naive collection of parameters and dependencies: 
 Adding dependency: %9 = "memref.alloc"(%8) <{operandSegmentSizes = array<i32: 1, 0>}> : (index) -> memref<?xf64> with mode: inout
    Dependency already added as memref - Removing it and creating makedep
 -----------------------------------------
@@ -46,7 +48,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i32, dense<32> : 
         scf.for %arg3 = %c0 to %12 step %c1 {
           %14 = arith.index_cast %arg3 : index to i32
           %15 = arts.datablock "out", %7 : memref<?xf64>[%arg3] [%c1] [%c1] : memref<1xf64>
-          arts.edt parameters(%14, %13, %arg3) : (i32, f64, index), constants() : (), dependencies(%15) : (memref<1xf64>) {
+          arts.edt parameters(%14, %13, %arg3) : (i32, f64, index), constants(%c0) : (index), dependencies(%15) : (memref<1xf64>) {
             %16 = arith.sitofp %14 : i32 to f64
             %17 = arith.addf %16, %13 : f64
             memref.store %17, %15[%c0] : memref<1xf64>
