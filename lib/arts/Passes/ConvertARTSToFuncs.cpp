@@ -44,11 +44,52 @@ using namespace mlir;
 using namespace arts;
 
 namespace {
+
+struct DatablockOpPreprocessing : public OpRewritePattern<arts::DataBlockOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  DatablockOpPreprocessing(MLIRContext *context, ArtsCodegen &AC)
+      : OpRewritePattern(context), AC(AC) {}
+
+  LogicalResult matchAndRewrite(arts::DataBlockOp op,
+                                PatternRewriter &rewriter) const override {
+    LLVM_DEBUG(DBGS() << "Handles arts.datablock: " << op << "\n");
+
+    Location loc = UnknownLoc::get(op.getContext());
+    AC.createDatablock(op, loc);
+    return success();
+  }
+
+private:
+  ArtsCodegen &AC;
+};
+
+struct DatablockOpLowering : public OpConversionPattern<arts::DataBlockOp> {
+  using OpConversionPattern<arts::DataBlockOp>::OpConversionPattern;
+
+  DatablockOpLowering(MLIRContext *context, ArtsCodegen &AC)
+      : OpConversionPattern(context), AC(AC) {}
+
+  LogicalResult
+  matchAndRewrite(arts::DataBlockOp op, arts::DataBlockOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    LLVM_DEBUG(DBGS() << "Lowering arts.datablock: " << op << "\n");
+
+    Location loc = UnknownLoc::get(op.getContext());
+    AC.createDatablock(op, loc);
+    // op.erase();
+    return success();
+  }
+
+private:
+  ArtsCodegen &AC;
+};
+
 struct EdtOpLowering : public OpConversionPattern<arts::EdtOp> {
   using OpConversionPattern<arts::EdtOp>::OpConversionPattern;
 
-  EdtOpLowering(MLIRContext *context, ArtsCodegen &codegen)
-      : OpConversionPattern(context), codegen(codegen) {}
+  EdtOpLowering(MLIRContext *context, ArtsCodegen &AC)
+      : OpConversionPattern(context), AC(AC) {}
 
   LogicalResult
   matchAndRewrite(arts::EdtOp op, arts::EdtOp::Adaptor adaptor,
@@ -56,18 +97,27 @@ struct EdtOpLowering : public OpConversionPattern<arts::EdtOp> {
 
     LLVM_DEBUG(DBGS() << "Lowering arts.edt: " << op << "\n");
     LLVM_DEBUG(DBGS() << "Processing edt op\n");
+    Location loc = UnknownLoc::get(op.getContext());
+    /// Process dependencies (makes memrefs -> datablocks)
+    auto deps = op.getDependencies();
+    for (auto dep : deps) {
+      auto dbOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp());
+      assert(dbOp && "Dependency is not a datablock op");
+      AC.getOrCreateDatablock(dbOp, loc);
+    }
+
     return success();
   }
 
 private:
-  ArtsCodegen &codegen;
+  ArtsCodegen &AC;
 };
 
 struct ParallelOpLowering : public OpConversionPattern<arts::ParallelOp> {
   using OpConversionPattern<arts::ParallelOp>::OpConversionPattern;
 
-  ParallelOpLowering(MLIRContext *context, ArtsCodegen &codegen)
-      : OpConversionPattern(context), codegen(codegen) {}
+  ParallelOpLowering(MLIRContext *context, ArtsCodegen &AC)
+      : OpConversionPattern(context), AC(AC) {}
 
   LogicalResult
   matchAndRewrite(arts::ParallelOp op, arts::ParallelOp::Adaptor adaptor,
@@ -78,82 +128,47 @@ struct ParallelOpLowering : public OpConversionPattern<arts::ParallelOp> {
     arts::SingleOp singleOp = nullptr;
     unsigned numOps = 0;
 
-    // // /// Analyze the parallel region to find the singleOp
-    // // mlir::Region &region = op.getRegion();
-    // // region.walk([&](mlir::Operation *nested) {
-    // //   /// Only consider ops directly in this region
-    // //   if (nested->getParentRegion() != &region)
-    // //     return;
-    // //   numOps++;
-    // //   if (auto single = dyn_cast<arts::SingleOp>(nested)) {
-    // //     if (singleOp) {
-    // //       llvm_unreachable("Multiple single ops in parallel op not supported");
-    // //     }
-    // //     singleOp = single;
-    // //   } else if (!isa<arts::BarrierOp>(nested) && !isa<arts::YieldOp>(nested)) {
-    // //     llvm_unreachable("Unknown op in parallel op - not supported");
-    // //   }
-    // // });
+    /// Analyze the parallel region to find the singleOp
+    mlir::Region &region = op.getRegion();
+    region.walk([&](mlir::Operation *nested) {
+      /// Only consider ops directly in this region
+      if (nested->getParentRegion() != &region)
+        return;
+      numOps++;
+      if (auto single = dyn_cast<arts::SingleOp>(nested)) {
+        if (singleOp)
+          llvm_unreachable("Multiple single ops in parallel op not supported");
 
-    // // assert((singleOp && (numOps == 4)) &&
-    // //        "Invalid parallel op region structure");
-    // // auto &singleRegion = singleOp->getRegion(0);
+        singleOp = single;
+      } else if (!isa<arts::BarrierOp>(nested) && !isa<arts::YieldOp>(nested)) {
+        llvm_unreachable("Unknown op in parallel op - not supported");
+      }
+    });
 
-    // // /// Process dependencies (makes memrefs -> datablocks)
-    // // auto deps = op.getDependencies();
-    // // auto params = op.getParameters();
-    
-    // // for (auto dep : deps) {
-    // //   auto makeDepOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp());
-    // //   assert(makeDepOp && "Dependency is not a datablock op");
-    // //   codegen.getOrCreateDatablock(makeDepOp, loc);
-    // // }
+    assert((singleOp && (numOps == 4)) &&
+           "Invalid parallel op region structure");
+    auto &singleRegion = singleOp->getRegion(0);
 
-    // // auto parDone_edtFunc = codegen.createFn(loc);
-    // // auto par_edtFunc = codegen.createFn(loc);
+    /// We set insertion to the old op for creation of epoch, etc.
+    OpBuilder::InsertionGuard guard(AC.getBuilder());
+    AC.setInsertionPoint(op);
 
-    // // /// We set insertion to the old op for creation of epoch, etc.
-    // // OpBuilder::InsertionGuard guard(codegen.getBuilder());
-    // // codegen.setInsertionPoint(op);
+    /// Epoch done
+    EdtCodegen parDoneEdt(AC);
+    parDoneEdt.setDepC(AC.createIntConstant(1, AC.Int32, loc));
+    parDoneEdt.build(loc, rewriter);
 
-    // // auto currentNode = codegen.getCurrentNode(loc);
+    /// Parallel Epoch
+    auto parDone_slot = AC.createIntConstant(0, AC.Int32, loc);
+    auto parEpoch_guid =
+        AC.createEpoch(parDoneEdt.getGuid(), parDone_slot, loc);
 
-    // // /// Create Parallel Epoch
-    // // auto parDone_depC = codegen.createIntConstant(1, codegen.Int32, loc);
-    // // auto parDone_params = SmallVector<Value>{};
-    // // auto parDone_edtGuid = codegen.create(parDone_edtFunc, parDone_params,
-    // //                                          parDone_depC, currentNode, loc);
-    // // auto parDone_slot = codegen.createIntConstant(0, codegen.Int32, loc);
-    // // auto parEpoch_guid =
-    // //     codegen.createEpoch(parDone_edtGuid, parDone_slot, loc);
-
-    // // /// Create Parallel Edt
-    // // auto par_params = op.getParams();
-    // // auto par_deps = op.getDeps();
-    // // auto par_depC = codegen.getNumDeps(par_deps, loc);
-    // // auto parallelEdtGuid = codegen.createWithEpoch(
-    // //     par_edtFunc, par_params, par_depC, currentNode, parEpoch_guid, loc);
-
-    // // /// Insert Parallel Edt entry
-    // // auto par_consts = op.getConsts();
-    // // auto rewireMap = DenseMap<Value, Value>();
-    // // codegen.insertFnEntry(par_edtFunc, singleRegion, par_params,
-    // //                        par_consts, par_deps, rewireMap);
-
-    // /// Inline the single region into the parallel edt function
-    // Region &funcRegion = par_edtFunc.getBody();
-    // Block &funcEntryBlock = funcRegion.front();
-    // Block &entryBlock = singleRegion.front();
-    // rewriter.inlineRegionBefore(singleRegion, funcRegion, funcRegion.end());
-
-    // /// Move all ops from srcBlock to the end of destBlock
-    // LLVM_DEBUG(dbgs() << "\n\nMoving ops to the end of the function\n");
-    // while (!entryBlock.empty()) {
-    //   Operation &op = entryBlock.front();
-    //   op.moveBefore(&funcEntryBlock, funcEntryBlock.end());
-    // }
-    // rewriter.eraseBlock(&entryBlock);
-    // par_edtFunc.dump();
+    /// Parallel Edt
+    auto par_params = op.getParams();
+    auto par_deps = op.getDeps();
+    auto par_consts = op.getConsts();
+    AC.createEdt(&par_deps, &par_params, &par_consts, &singleRegion,
+                 &parEpoch_guid, nullptr, true, &rewriter);
 
     /// Finally, erase the old parallel op from the IR
     rewriter.eraseOp(op);
@@ -162,7 +177,7 @@ struct ParallelOpLowering : public OpConversionPattern<arts::ParallelOp> {
   }
 
 private:
-  ArtsCodegen &codegen;
+  ArtsCodegen &AC;
 };
 
 //===----------------------------------------------------------------------===//
@@ -189,9 +204,15 @@ void ConvertARTSToFuncsPass::runOnOperation() {
   llvm::DataLayout llvmDL(llvmDLAttr.getValue().str());
   mlir::DataLayout mlirDL(module);
 
-  // Initialize the codegen object
+  // Initialize the AC object
   OpBuilder builder(ctx);
-  ArtsCodegen codegen(module, builder, llvmDL, mlirDL);
+  ArtsCodegen AC(module, builder, llvmDL, mlirDL);
+
+  /// Handle datablocks first
+  /// It analyzes the datablock ops and creates the necessary data structures
+  module->walk([&](arts::DataBlockOp dbOp) {
+    AC.createDatablock(dbOp, UnknownLoc::get(ctx));
+  });
 
   // Create a ConversionTarget that declares ARTS dialect ops illegal
   ConversionTarget target(*ctx);
@@ -203,22 +224,24 @@ void ConvertARTSToFuncsPass::runOnOperation() {
                          affine::AffineDialect, polygeist::PolygeistDialect,
                          scf::SCFDialect>();
   target.addLegalOp<ModuleOp>();
+  // target.addLegalOp<arts::ParallelOp>();
   target.addLegalOp<arts::EdtOp>();
   target.addLegalOp<arts::AllocaOp>();
   target.addLegalOp<arts::DataBlockOp>();
   target.addLegalOp<arts::YieldOp>();
   target.addLegalOp<arts::BarrierOp>();
 
-  // (Optional) If you have custom ARTS types to convert, define a TypeConverter
-  TypeConverter typeConverter;
+  // (Optional) If you have custom ARTS types to convert, define a
+  // TypeConverter TypeConverter typeConverter;
 
   // Pattern list
   RewritePatternSet patterns(ctx);
-  patterns.add<ParallelOpLowering>(ctx, codegen);
-  // patterns.add<MakeDepOpLowering>(ctx, codegen);
+  patterns.add<ParallelOpLowering>(ctx, AC);
+  // patterns.add<MakeDepOpLowering>(ctx, AC);
   // If you have arts::EdtOp, arts::EpochOp, etc., add them:
-  // patterns.add<EdtOpLowering>(ctx, codegen);
-  // patterns.add<EpochOpLowering>(ctx, codegen);
+  // patterns.add<EdtOpLowering>(ctx, AC);
+  // patterns.add<EpochOpLowering>(ctx, AC);
+  // patterns.add<DatablockOpLowering>(ctx, AC);
 
   // 6) Apply partial conversion
   if (failed(applyPartialConversion(module, target, std::move(patterns)))) {

@@ -2,21 +2,23 @@
 #ifndef LLVM_ARTS_CODEGEN_H
 #define LLVM_ARTS_CODEGEN_H
 
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
+/// Arts
+#include "arts/ArtsDialect.h"
+#include "arts/Utils/ArtsTypes.h"
+#include "mlir/Analysis/DataLayoutAnalysis.h"
+/// Other
 #include "mlir/Conversion/LLVMCommon/MemRefBuilder.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h" // Correct include for FuncOp
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/IR/Region.h"
 #include "mlir/IR/Value.h"
-
-#include "arts/ArtsDialect.h"
-#include "arts/Utils/ArtsTypes.h"
-#include "mlir/Analysis/DataLayoutAnalysis.h"
-#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Support/LLVM.h"
-#include "llvm/ADT/StringRef.h"
+#include "mlir/Transforms/DialectConversion.h"
 #include <sys/types.h>
 
 namespace mlir {
@@ -48,6 +50,7 @@ private:
   OpBuilder &builder;
   Value db = nullptr;
   Value numElements = nullptr;
+  Value size = nullptr;
   bool isArray = false;
 
   /// Utils
@@ -57,9 +60,13 @@ private:
 // ---------------------------- EDTs ---------------------------- ///
 class EdtCodegen {
 public:
-  EdtCodegen(ArtsCodegen &AC);
-  EdtCodegen(ArtsCodegen &AC, ValueRange &opDeps, ValueRange &opParams,
-             Region &region, Value &epoch, Location loc);
+  EdtCodegen(ArtsCodegen &AC, SmallVector<Value> *opDeps = nullptr,
+             SmallVector<Value> *opParams = nullptr,
+             SmallVector<Value> *opConsts = nullptr, Region *region = nullptr,
+             Value *epoch = nullptr, Location *loc = nullptr,
+             bool build = false, ConversionPatternRewriter *rewriter = nullptr);
+  void build(Location loc, ConversionPatternRewriter &rewriter);
+
   /// Getters
   func::FuncOp getFunc() { return func; }
   Value getGuid() { return guid; }
@@ -76,6 +83,7 @@ public:
   void setParams(SmallVector<Value> params) { this->params = params; }
   void setConsts(SmallVector<Value> consts) { this->consts = consts; }
   void setDeps(SmallVector<Value> deps) { this->deps = deps; }
+  void setDepC(Value depC) { this->depC = depC; }
 
   /// Interface
   int insertParam(Value param) {
@@ -89,11 +97,12 @@ public:
 private:
   ArtsCodegen &AC;
   OpBuilder &builder;
+  Region *region = nullptr;
+  Value *epoch = nullptr;
   func::FuncOp func = nullptr;
   Value guid = nullptr;
   Value slot = nullptr;
   Value node = nullptr;
-  Value epoch = nullptr;
   Value paramC = nullptr;
   Value paramV = nullptr;
   Value depC = nullptr;
@@ -106,10 +115,11 @@ private:
   DenseMap<DataBlockCodegen *, unsigned> dbSizeMap;
 
   /// Utils
-  void processDepsAndParams(ValueRange &deps, ValueRange &params, Location loc);
+  void processDepsAndParams(SmallVector<Value> *deps,
+                            SmallVector<Value> *params, Location loc);
   Value createGuid(Value node, Location loc);
   func::FuncOp createFn(Location loc);
-  void createEntry(Region &region, Location loc);
+  void createEntry(Location loc);
 
   /// Static
   static unsigned edtCounter;
@@ -137,14 +147,18 @@ public:
   OpBuilder &getBuilder() { return builder; }
 
   /// Datablock
-  DataBlockCodegen *getDatablock(arts::DataBlockOp edtDep);
-  DataBlockCodegen *createDatablock(arts::DataBlockOp edtDep, Location loc);
-  DataBlockCodegen *getOrCreateDatablock(arts::DataBlockOp edtDep, Location loc);
+  DataBlockCodegen *getDatablock(arts::DataBlockOp dbOp);
+  DataBlockCodegen *createDatablock(arts::DataBlockOp dbOp, Location loc);
+  DataBlockCodegen *getOrCreateDatablock(arts::DataBlockOp dbOp, Location loc);
 
   /// Edts
-  EdtCodegen *getEdt(Region &region);
-  EdtCodegen *createEdt(ValueRange &params, ValueRange &deps, Region &region,
-                        Value &epoch, Location loc);
+  EdtCodegen *getEdt(Region *region);
+  EdtCodegen *createEdt(SmallVector<Value> *opDeps = nullptr,
+                        SmallVector<Value> *opParams = nullptr,
+                        SmallVector<Value> *opConsts = nullptr,
+                        Region *region = nullptr, Value *epoch = nullptr,
+                        Location *loc = nullptr, bool build = false,
+                        ConversionPatternRewriter *rewriter = nullptr);
 
   /// Epoch
   Value createEpoch(Value finishEdtGuid, Value finishEdtSlot, Location loc);
@@ -158,12 +172,12 @@ public:
   Value getCurrentEdtGuid(Location loc);
   Value getCurrentNode(Location loc);
   Value getNumDeps(SmallVector<Value> &deps, Location loc);
-  Value createArrayFromDeps(Value numElements, Value deps,
-                            Value initialSlot, Location loc);
+  Value createArrayFromDeps(Value numElements, Value deps, Value initialSlot,
+                            Location loc);
 
   /// Helpers
   Value createFnPtr(func::FuncOp funcOp, Location loc);
-  Value createIntConstant(unsigned value, Type type, Location loc);
+  Value createIntConstant(int value, Type type, Location loc);
 
   /// Casting
   Value castParameter(mlir::Type targetType, Value source, Location loc);
@@ -179,7 +193,6 @@ public:
     builder.setInsertionPointAfter(op);
   }
 
-private:
   // ---------------------------- Types ---------------------------- ///
   /// Declarations for LLVM-IR types (simple, array, function and structure) are
   /// generated below. Their names are defined and used in ARTSKinds.def. Here
@@ -196,6 +209,7 @@ private:
   MemRefType VarName##Ptr = nullptr;
 #include "ARTSKinds.def"
   ///}
+private:
   void initializeTypes();
 
   // -------------------------- Other Attributes-------------------------- ///
