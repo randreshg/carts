@@ -50,13 +50,16 @@ public:
   /// Create a new datablock operation and rewires the uses
   DataBlockOp createMakeDepOp(PatternRewriter &rewriter, Location loc,
                               StringRef mode, Value inputMemRef) {
+    bool isLoad = false;
     /// If input is a memref.load, get the base
-    memref::LoadOp loadOp =
-        dyn_cast_or_null<memref::LoadOp>(inputMemRef.getDefiningOp());
-    Value baseMemRef = loadOp ? loadOp.getMemref() : inputMemRef;
+    Value baseMemRef = inputMemRef;
+    if (auto loadOp = dyn_cast<memref::LoadOp>(inputMemRef.getDefiningOp())) {
+      baseMemRef = loadOp.getMemref();
+      isLoad = true;
+    }
 
     /// memref type must be MemRefType
-    MemRefType baseType = baseMemRef.getType().dyn_cast<MemRefType>();
+    auto baseType = baseMemRef.getType().dyn_cast<MemRefType>();
     assert(baseType && "Input must be a MemRefType.");
 
     /// Rank must be > 0
@@ -65,9 +68,51 @@ public:
 
     /// Indices pinned by load if present
     SmallVector<Value> pinnedIndices;
-    if (loadOp)
-      pinnedIndices = SmallVector<Value>(loadOp.getIndices().begin(),
-                                         loadOp.getIndices().end());
+    if (auto loadOp = dyn_cast<memref::LoadOp>(inputMemRef.getDefiningOp())) {
+      pinnedIndices.assign(loadOp.getIndices().begin(),
+                           loadOp.getIndices().end());
+
+      /// Identify zeroIndices
+      SmallVector<int64_t> zeroIndices;
+      for (auto [i, index] : llvm::enumerate(pinnedIndices)) {
+        if (auto cstOp = index.getDefiningOp<arith::ConstantIndexOp>()) {
+          if (cstOp.value() == 0)
+            zeroIndices.push_back(i);
+        }
+      }
+
+      if (!zeroIndices.empty()) {
+        assert(zeroIndices.back() == rank - 1 &&
+               "Last index must be zero for now");
+
+        /// Lambda to find a matching load/store in the region
+        auto checkOp = [&](Operation *op, ValueRange opIndices) {
+          if (opIndices.size() < pinnedIndices.size()) {
+            llvm::errs() << "Error: Loading a chunk of the memref is not "
+                            "supported yet\n";
+            return;
+          }
+          if (opIndices[zeroIndices.back()] !=
+              pinnedIndices[zeroIndices.back()]) {
+            pinnedIndices.pop_back();
+            zeroIndices.pop_back();
+          }
+        };
+
+        /// Region walk
+        region.walk([&](Operation *op) {
+          if (zeroIndices.empty())
+            return;
+          if (auto load = dyn_cast<memref::LoadOp>(op)) {
+            if (load.getMemref() == baseMemRef)
+              checkOp(op, load.getIndices());
+          } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+            if (store.getMemref() == baseMemRef)
+              checkOp(op, store.getIndices());
+          }
+        });
+      }
+    }
 
     /// Prepare arrays for subview
     SmallVector<Value, 4> offsets(rank), sizes(rank), strides(rank);
@@ -81,18 +126,14 @@ public:
       if (baseType.isDynamicDim(i)) {
         dimVals[i] = rewriter.create<memref::DimOp>(loc, baseMemRef, i);
       } else {
-        int64_t staticSz = baseType.getDimSize(i);
-        dimVals[i] = rewriter.create<arith::ConstantIndexOp>(loc, staticSz);
+        dimVals[i] = rewriter.create<arith::ConstantIndexOp>(
+            loc, baseType.getDimSize(i));
       }
     }
 
     /// Compute row-major strides by multiplying subsequent dimensions
-    /// For a rank=3, if shape = [d0, d1, d2], then:
-    ///   stride0 = d1*d2, stride1 = d2, stride2 = 1
-    /// We'll build from the last dimension forward
     Value one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
     strides[rank - 1] = one;
-
     for (int64_t i = rank - 2; i >= 0; --i) {
       strides[i] =
           rewriter.create<arith::MulIOp>(loc, strides[i + 1], dimVals[i + 1]);
@@ -100,48 +141,39 @@ public:
 
     /// If dimension i is pinned => offset= pinnedIndices[i], size=1
     /// else => offset=0, size= dimVals[i]
-    /// Sub-shape: pinned dim => 1, else => keep original if static or -1 if
-    /// dynamic
     Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
     Value oneSize = rewriter.create<arith::ConstantIndexOp>(loc, 1);
-
     for (int64_t i = 0; i < rank; ++i) {
       if (i < (int64_t)pinnedIndices.size()) {
-        /// pinned dimension => offset = pinnedIndices[i], size=1
         offsets[i] = pinnedIndices[i];
         sizes[i] = oneSize;
         subShape[i] = 1;
       } else {
-        /// unpinned => offset=0, size=dim
         offsets[i] = zero;
         sizes[i] = dimVals[i];
-        /// dynamic or static
-        if (baseType.isDynamicDim(i)) {
-          subShape[i] = ShapedType::kDynamic;
-        } else {
-          subShape[i] = baseType.getDimSize(i);
-        }
+        subShape[i] = baseType.isDynamicDim(i) ? ShapedType::kDynamic
+                                               : baseType.getDimSize(i);
       }
     }
 
     /// Now build the subview memref type
-    auto elemTy = baseType.getElementType();
-    auto space = baseType.getMemorySpace();
-    auto affineMap = baseType.getLayout().getAffineMap();
-    auto subMemRefType = MemRefType::get(subShape, elemTy, affineMap, space);
+    auto subMemRefType = MemRefType::get(subShape, baseType.getElementType(),
+                                         baseType.getLayout().getAffineMap(),
+                                         baseType.getMemorySpace());
 
     /// Create the final arts.datablock operation
     auto depOp = rewriter.create<arts::DataBlockOp>(
         loc, subMemRefType, rewriter.getStringAttr(mode), baseMemRef, offsets,
         sizes, strides);
+    if(isLoad) {
+      /// Add an attribute to indicate that this is a load
+      depOp->setAttr("isLoad", rewriter.getUnitAttr());
+    }
 
     /// Rewire the values
-    if (!loadOp) {
-      /// If it was not a load, simply replace the value
+    if (!isa<memref::LoadOp>(inputMemRef.getDefiningOp())) {
       utils::replaceInRegion(region, baseMemRef, depOp.getResult());
     } else {
-      /// Analyze all the instuctions that have the same base memref and indices
-      /// and replace them with the new depOp
       rewritePinnedOps(depOp);
     }
     return depOp;
@@ -177,7 +209,6 @@ public:
       if ((int64_t)oldIdx.size() != rank)
         return false;
       for (auto dim : pinnedDims) {
-        // TODO: CSE or simplify the indices
         if (offsets[dim] != oldIdx[dim])
           return false;
       }
