@@ -1,7 +1,6 @@
-// clang taskwithdeps_arts.c -O3 -g0 -march=native -I/home/randres/projects/arts/.install/arts/include -o taskwithdeps_arts -L/home/randres/projects/carts/.install/arts/lib -larts -lrdmacm
+// clang taskwithdeps_arts.c -O3 -g0 -march=native -I/home/randres/projects/carts/.install/arts/include -o taskwithdeps_arts -L/home/randres/projects/carts/.install/arts/lib -larts -lrdmacm
 
-/// cgeist taskwithdeps_arts.c -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include -I/home/randres/projects/carts/.install/arts/include --raise-scf-to-affine
-/// cgeist taskwithdeps_arts.c -O0 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include -I/home/randres/projects/carts/.install/arts/include --raise-scf-to-affine
+/// cgeist taskwithdeps_arts.c --memref-abi --memref-fullrank -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include -I/home/randres/projects/carts/.install/arts/include 
 
 /// cgeist taskwithdeps_arts.c -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include -I/home/randres/projects/carts/.install/arts/include --raise-scf-to-affine -emit-llvm
 
@@ -18,16 +17,16 @@ void computeA(uint32_t paramc, uint64_t *paramv, uint32_t depc,
   artsGuid_t eventGuid = (artsGuid_t)paramv[1];
 
   // Access the DataBlock for A[i]
-  double *A_i = (double *)depv[0].ptr;
+  double A_i = *((double *)depv[0].ptr);
   artsGuid_t A_i_guid = depv[0].guid;
 
   // Compute A[i]
-  A_i[0] = i * 2.0;
+  A_i = i * 2.0;
 
   printf("------------------------\n"
          "--- Compute A[%u] = %f - Guid: "
          "%lu\n------------------------\n",
-         i, A_i[0], A_i_guid);
+         i, A_i, A_i_guid);
   // Signal the event associated with A[i] after computation
   artsEventSatisfySlot(eventGuid, A_i_guid, ARTS_EVENT_LATCH_DECR_SLOT);
 }
@@ -81,9 +80,25 @@ void parallelEdt(uint32_t paramc, uint64_t *paramv, uint32_t depc,
   int N = paramv[0];
 
   /// Convert from depv to DataBlocks
-  artsDataBlock A_array[N], B_array[N];
-  artsDbCreateArrayFromDeps(A_array, N, depv, 0);
-  artsDbCreateArrayFromDeps(B_array, N, depv, N);
+  float *A_data[N], *B_data[N];
+  artsGuid_t A_guid[N], B_guid[N];
+  artsDbCreatePtrAndGuidArrayFromDeps((void **)(A_data), A_guid, N, depv, 0);
+  artsDbCreatePtrAndGuidArrayFromDeps((void **)(B_data), B_guid, N, depv, N);
+
+  /// Print the values
+  for (int i = 0; i < N; i++) {
+    printf("A[%d]: %f\n", i, *A_data[i]);
+    printf("B[%d]: %f\n", i, *B_data[i]);
+  }
+
+  /// Add values
+  for (int i = 0; i < N; i++) {
+   *A_data[i] = i * 2.0;
+    *B_data[i] = i * 2.0;
+  }
+  // artsDataBlock A_array[N], B_array[N];
+  // artsDbCreateArrayFromDeps(A_array, N, depv, 0);
+  // artsDbCreateArrayFromDeps(B_array, N, depv, N);
 
   // Preallocate all DataBlocks and events
   artsGuid_t *A_event = (artsGuid_t *)artsMalloc(N * sizeof(artsGuid_t));
@@ -112,8 +127,8 @@ void parallelEdt(uint32_t paramc, uint64_t *paramv, uint32_t depc,
       artsAddDependence(A_event[i - 1], B_edt, 2);
 
     /// Signal values after dependencies are added
-    artsSignalEdt(A_edt, 0, A_array[i].guid);
-    artsSignalEdt(B_edt, 0, B_array[i].guid);
+    artsSignalEdt(A_edt, 0, A_guid[i]);
+    artsSignalEdt(B_edt, 0, A_guid[i]);
   }
 }
 

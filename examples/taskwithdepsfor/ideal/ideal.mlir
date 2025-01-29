@@ -1,5 +1,4 @@
-#set = affine_set<(d0) : (d0 - 1 >= 0)>
-module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
+module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
   llvm.mlir.global internal constant @str12("Node %u initialized.\0A\00") {addr_space = 0 : i32}
   llvm.mlir.global internal constant @str11("---------- Main EDT finished ----------\0A\00") {addr_space = 0 : i32}
   llvm.mlir.global internal constant @str10("---------- Main EDT ----------\0A\00") {addr_space = 0 : i32}
@@ -21,18 +20,13 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : 
     %1 = arith.trunci %0 : i64 to i32
     %2 = affine.load %arg1[1] : memref<?xi64>
     %3 = "polygeist.memref2pointer"(%arg3) : (memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>) -> !llvm.ptr
-    %4 = llvm.getelementptr %3[0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(i64, i32, memref<?xi8>)>
-    %5 = llvm.load %4 : !llvm.ptr -> memref<?xi8>
-    %6 = "polygeist.memref2pointer"(%5) : (memref<?xi8>) -> !llvm.ptr
-    %7 = llvm.load %3 : !llvm.ptr -> i64
-    %8 = arith.uitofp %1 : i32 to f64
-    %9 = arith.mulf %8, %cst : f64
-    llvm.store %9, %6 : f64, !llvm.ptr
-    %10 = llvm.mlir.addressof @str0 : !llvm.ptr
-    %11 = llvm.getelementptr %10[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<86 x i8>
-    %12 = llvm.load %6 : !llvm.ptr -> f64
-    %13 = llvm.call @printf(%11, %1, %12, %7) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, f64, i64) -> i32
-    call @artsEventSatisfySlot(%2, %7, %c0_i32) : (i64, i64, i32) -> ()
+    %4 = llvm.load %3 : !llvm.ptr -> i64
+    %5 = arith.uitofp %1 : i32 to f64
+    %6 = arith.mulf %5, %cst : f64
+    %7 = llvm.mlir.addressof @str0 : !llvm.ptr
+    %8 = llvm.getelementptr %7[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<86 x i8>
+    %9 = llvm.call @printf(%8, %1, %6, %4) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, f64, i64) -> i32
+    call @artsEventSatisfySlot(%2, %4, %c0_i32) : (i64, i64, i32) -> ()
     return
   }
   func.func private @artsEventSatisfySlot(i64, i64, i32) attributes {llvm.linkage = #llvm.linkage<external>}
@@ -131,10 +125,13 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : 
     return
   }
   func.func @parallelEdt(%arg0: i32, %arg1: memref<?xi64>, %arg2: i32, %arg3: memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>) attributes {llvm.linkage = #llvm.linkage<external>} {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
     %c-1_i32 = arith.constant -1 : i32
     %c8_i64 = arith.constant 8 : i64
     %c3_i32 = arith.constant 3 : i32
     %c2_i32 = arith.constant 2 : i32
+    %cst = arith.constant 2.000000e+00 : f64
     %c1_i32 = arith.constant 1 : i32
     %c0_i32 = arith.constant 0 : i32
     %alloca = memref.alloca() : memref<1xi64>
@@ -147,66 +144,87 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : 
     %5 = affine.load %arg1[0] : memref<?xi64>
     %6 = arith.trunci %5 : i64 to i32
     %7 = arith.index_cast %6 : i32 to index
-    %alloca_1 = memref.alloca(%7) : memref<?x!llvm.struct<(i64, memref<?xi8>)>>
-    %alloca_2 = memref.alloca(%7) : memref<?x!llvm.struct<(i64, memref<?xi8>)>>
-    call @artsDbCreateArrayFromDeps(%alloca_1, %6, %arg3, %c0_i32) : (memref<?x!llvm.struct<(i64, memref<?xi8>)>>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>, i32) -> ()
-    call @artsDbCreateArrayFromDeps(%alloca_2, %6, %arg3, %6) : (memref<?x!llvm.struct<(i64, memref<?xi8>)>>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>, i32) -> ()
-    %8 = arith.extsi %6 : i32 to i64
-    %9 = arith.muli %8, %c8_i64 : i64
-    %10 = call @artsMalloc(%9) : (i64) -> memref<?xi8>
-    %11 = "polygeist.memref2pointer"(%10) : (memref<?xi8>) -> !llvm.ptr
-    %12 = arith.index_cast %6 : i32 to index
-    affine.for %arg4 = 0 to %12 {
-      %21 = arith.index_cast %arg4 : index to i32
-      %22 = func.call @artsEventCreate(%3, %c1_i32) : (i32, i32) -> i64
-      %23 = llvm.getelementptr %11[%21] : (!llvm.ptr, i32) -> !llvm.ptr, i64
-      llvm.store %22, %23 : i64, !llvm.ptr
+    %alloca_1 = memref.alloca(%7) : memref<?xmemref<?xf32>>
+    %alloca_2 = memref.alloca(%7) : memref<?xmemref<?xf32>>
+    %alloca_3 = memref.alloca(%7) : memref<?xi64>
+    %alloca_4 = memref.alloca(%7) : memref<?xi64>
+    %8 = "polygeist.memref2pointer"(%alloca_1) : (memref<?xmemref<?xf32>>) -> !llvm.ptr
+    %9 = "polygeist.pointer2memref"(%8) : (!llvm.ptr) -> memref<?xmemref<?xi8>>
+    call @artsDbCreatePtrAndGuidArrayFromDeps(%9, %alloca_3, %6, %arg3, %c0_i32) : (memref<?xmemref<?xi8>>, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>, i32) -> ()
+    %10 = "polygeist.memref2pointer"(%alloca_2) : (memref<?xmemref<?xf32>>) -> !llvm.ptr
+    %11 = "polygeist.pointer2memref"(%10) : (!llvm.ptr) -> memref<?xmemref<?xi8>>
+    call @artsDbCreatePtrAndGuidArrayFromDeps(%11, %alloca_4, %6, %arg3, %6) : (memref<?xmemref<?xi8>>, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>, i32) -> ()
+    %12 = llvm.mlir.addressof @str2 : !llvm.ptr
+    %13 = llvm.getelementptr %12[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<11 x i8>
+    %14 = llvm.mlir.addressof @str3 : !llvm.ptr
+    %15 = llvm.getelementptr %14[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<11 x i8>
+    scf.for %arg4 = %c0 to %7 step %c1 {
+      %24 = arith.index_cast %arg4 : index to i32
+      %25 = memref.load %alloca_1[%arg4] : memref<?xmemref<?xf32>>
+      %26 = affine.load %25[0] : memref<?xf32>
+      %27 = arith.extf %26 : f32 to f64
+      %28 = llvm.call @printf(%13, %24, %27) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, f64) -> i32
+      %29 = memref.load %alloca_2[%arg4] : memref<?xmemref<?xf32>>
+      %30 = affine.load %29[0] : memref<?xf32>
+      %31 = arith.extf %30 : f32 to f64
+      %32 = llvm.call @printf(%15, %24, %31) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, f64) -> i32
     }
-    %13 = arith.index_cast %6 : i32 to index
-    %14 = "polygeist.get_func"() <{name = @computeA}> : () -> !llvm.ptr
+    scf.for %arg4 = %c0 to %7 step %c1 {
+      %24 = arith.index_cast %arg4 : index to i32
+      %25 = memref.load %alloca_1[%arg4] : memref<?xmemref<?xf32>>
+      %26 = arith.sitofp %24 : i32 to f64
+      %27 = arith.mulf %26, %cst : f64
+      %28 = arith.truncf %27 : f64 to f32
+      affine.store %28, %25[0] : memref<?xf32>
+      %29 = memref.load %alloca_2[%arg4] : memref<?xmemref<?xf32>>
+      affine.store %28, %29[0] : memref<?xf32>
+    }
+    %16 = arith.extsi %6 : i32 to i64
+    %17 = arith.muli %16, %c8_i64 : i64
+    %18 = call @artsMalloc(%17) : (i64) -> memref<?xi8>
+    %19 = "polygeist.memref2pointer"(%18) : (memref<?xi8>) -> !llvm.ptr
+    scf.for %arg4 = %c0 to %7 step %c1 {
+      %24 = arith.index_cast %arg4 : index to i32
+      %25 = func.call @artsEventCreate(%3, %c1_i32) : (i32, i32) -> i64
+      %26 = llvm.getelementptr %19[%24] : (!llvm.ptr, i32) -> !llvm.ptr, i64
+      llvm.store %25, %26 : i64, !llvm.ptr
+    }
+    %20 = "polygeist.get_func"() <{name = @computeA}> : () -> !llvm.ptr
     %cast = memref.cast %alloca_0 : memref<2xi64> to memref<?xi64>
-    %15 = "polygeist.pointer2memref"(%14) : (!llvm.ptr) -> memref<?x!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>)>>
-    %16 = "polygeist.get_func"() <{name = @computeB}> : () -> !llvm.ptr
-    %cast_3 = memref.cast %alloca : memref<1xi64> to memref<?xi64>
-    %17 = "polygeist.pointer2memref"(%16) : (!llvm.ptr) -> memref<?x!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>)>>
-    %18 = "polygeist.typeSize"() <{source = !llvm.struct<(i64, memref<?xi8>)>}> : () -> index
-    %19 = "polygeist.memref2pointer"(%alloca_1) : (memref<?x!llvm.struct<(i64, memref<?xi8>)>>) -> !llvm.ptr
-    %20 = "polygeist.memref2pointer"(%alloca_2) : (memref<?x!llvm.struct<(i64, memref<?xi8>)>>) -> !llvm.ptr
-    affine.for %arg4 = 0 to %13 {
-      %21 = arith.index_cast %arg4 : index to i32
-      %22 = arith.extsi %21 : i32 to i64
-      affine.store %22, %alloca_0[0] : memref<2xi64>
-      %23 = llvm.getelementptr %11[%21] : (!llvm.ptr, i32) -> !llvm.ptr, i64
-      %24 = llvm.load %23 : !llvm.ptr -> i64
-      affine.store %24, %alloca_0[1] : memref<2xi64>
-      %25 = func.call @artsEdtCreateWithEpoch(%15, %3, %c2_i32, %cast, %c1_i32, %4) : (memref<?x!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>)>>, i32, i32, memref<?xi64>, i32, i64) -> i64
-      affine.store %22, %alloca[0] : memref<1xi64>
-      %26 = arith.cmpi sgt, %21, %c0_i32 : i32
-      %27 = arith.select %26, %c3_i32, %c2_i32 : i32
-      %28 = func.call @artsEdtCreateWithEpoch(%17, %3, %c2_i32, %cast_3, %27, %4) : (memref<?x!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>)>>, i32, i32, memref<?xi64>, i32, i64) -> i64
-      %29 = llvm.getelementptr %11[%21] : (!llvm.ptr, i32) -> !llvm.ptr, i64
-      %30 = llvm.load %29 : !llvm.ptr -> i64
-      func.call @artsAddDependence(%30, %28, %c1_i32) : (i64, i64, i32) -> ()
-      affine.if #set(%arg4) {
-        %37 = arith.addi %21, %c-1_i32 : i32
-        %38 = llvm.getelementptr %11[%37] : (!llvm.ptr, i32) -> !llvm.ptr, i64
-        %39 = llvm.load %38 : !llvm.ptr -> i64
-        func.call @artsAddDependence(%39, %28, %c2_i32) : (i64, i64, i32) -> ()
+    %21 = "polygeist.pointer2memref"(%20) : (!llvm.ptr) -> memref<?x!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>)>>
+    %22 = "polygeist.get_func"() <{name = @computeB}> : () -> !llvm.ptr
+    %cast_5 = memref.cast %alloca : memref<1xi64> to memref<?xi64>
+    %23 = "polygeist.pointer2memref"(%22) : (!llvm.ptr) -> memref<?x!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>)>>
+    scf.for %arg4 = %c0 to %7 step %c1 {
+      %24 = arith.index_cast %arg4 : index to i32
+      %25 = arith.extsi %24 : i32 to i64
+      affine.store %25, %alloca_0[0] : memref<2xi64>
+      %26 = llvm.getelementptr %19[%24] : (!llvm.ptr, i32) -> !llvm.ptr, i64
+      %27 = llvm.load %26 : !llvm.ptr -> i64
+      affine.store %27, %alloca_0[1] : memref<2xi64>
+      %28 = func.call @artsEdtCreateWithEpoch(%21, %3, %c2_i32, %cast, %c1_i32, %4) : (memref<?x!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>)>>, i32, i32, memref<?xi64>, i32, i64) -> i64
+      affine.store %25, %alloca[0] : memref<1xi64>
+      %29 = arith.cmpi sgt, %24, %c0_i32 : i32
+      %30 = arith.select %29, %c3_i32, %c2_i32 : i32
+      %31 = func.call @artsEdtCreateWithEpoch(%23, %3, %c2_i32, %cast_5, %30, %4) : (memref<?x!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>)>>, i32, i32, memref<?xi64>, i32, i64) -> i64
+      %32 = llvm.load %26 : !llvm.ptr -> i64
+      func.call @artsAddDependence(%32, %31, %c1_i32) : (i64, i64, i32) -> ()
+      scf.if %29 {
+        %35 = arith.addi %24, %c-1_i32 : i32
+        %36 = llvm.getelementptr %19[%35] : (!llvm.ptr, i32) -> !llvm.ptr, i64
+        %37 = llvm.load %36 : !llvm.ptr -> i64
+        func.call @artsAddDependence(%37, %31, %c2_i32) : (i64, i64, i32) -> ()
       }
-      %31 = arith.muli %arg4, %18 : index
-      %32 = arith.index_cast %31 : index to i64
-      %33 = llvm.getelementptr %19[%32] : (!llvm.ptr, i64) -> !llvm.ptr, i8
-      %34 = llvm.load %33 : !llvm.ptr -> i64
-      func.call @artsSignalEdt(%25, %c0_i32, %34) : (i64, i32, i64) -> ()
-      %35 = llvm.getelementptr %20[%32] : (!llvm.ptr, i64) -> !llvm.ptr, i8
-      %36 = llvm.load %35 : !llvm.ptr -> i64
-      func.call @artsSignalEdt(%28, %c0_i32, %36) : (i64, i32, i64) -> ()
+      %33 = memref.load %alloca_3[%arg4] : memref<?xi64>
+      func.call @artsSignalEdt(%28, %c0_i32, %33) : (i64, i32, i64) -> ()
+      %34 = memref.load %alloca_3[%arg4] : memref<?xi64>
+      func.call @artsSignalEdt(%31, %c0_i32, %34) : (i64, i32, i64) -> ()
     }
     return
   }
   func.func private @artsGetCurrentNode() -> i32 attributes {llvm.linkage = #llvm.linkage<external>}
   func.func private @artsGetCurrentEpochGuid() -> i64 attributes {llvm.linkage = #llvm.linkage<external>}
-  func.func private @artsDbCreateArrayFromDeps(memref<?x!llvm.struct<(i64, memref<?xi8>)>>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>, i32) attributes {llvm.linkage = #llvm.linkage<external>}
+  func.func private @artsDbCreatePtrAndGuidArrayFromDeps(memref<?xmemref<?xi8>>, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>, i32) attributes {llvm.linkage = #llvm.linkage<external>}
   func.func private @artsMalloc(i64) -> memref<?xi8> attributes {llvm.linkage = #llvm.linkage<external>}
   func.func private @artsEventCreate(i32, i32) -> i64 attributes {llvm.linkage = #llvm.linkage<external>}
   func.func private @artsEdtCreateWithEpoch(memref<?x!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>)>>, i32, i32, memref<?xi64>, i32, i64) -> i64 attributes {llvm.linkage = #llvm.linkage<external>}
@@ -277,6 +295,9 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : 
   }
   func.func private @artsShutdown() attributes {llvm.linkage = #llvm.linkage<external>}
   func.func @mainEdt(%arg0: i32, %arg1: memref<?xi64>, %arg2: i32, %arg3: memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>) attributes {llvm.linkage = #llvm.linkage<external>} {
+    %c5 = arith.constant 5 : index
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
     %c8_i64 = arith.constant 8 : i64
     %c9_i32 = arith.constant 9 : i32
     %cst = arith.constant 0.000000e+00 : f64
@@ -295,11 +316,11 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : 
     %9 = call @artsInitializeAndStartEpoch(%8, %c0_i32) : (i64, i32) -> i64
     %alloca = memref.alloca() : memref<5xf64>
     %alloca_0 = memref.alloca() : memref<5xf64>
-    affine.for %arg4 = 0 to 5 {
+    scf.for %arg4 = %c0 to %c5 step %c1 {
       %18 = arith.index_cast %arg4 : index to i32
       %19 = arith.sitofp %18 : i32 to f64
-      affine.store %19, %alloca[%arg4] : memref<5xf64>
-      affine.store %cst, %alloca_0[%arg4] : memref<5xf64>
+      memref.store %19, %alloca[%arg4] : memref<5xf64>
+      memref.store %cst, %alloca_0[%arg4] : memref<5xf64>
     }
     %alloca_1 = memref.alloca() : memref<5x!llvm.struct<(i64, memref<?xi8>)>>
     %cast = memref.cast %alloca_1 : memref<5x!llvm.struct<(i64, memref<?xi8>)>> to memref<?x!llvm.struct<(i64, memref<?xi8>)>>

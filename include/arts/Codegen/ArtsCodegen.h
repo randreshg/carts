@@ -33,14 +33,10 @@ public:
   DataBlockCodegen(ArtsCodegen &AC);
   DataBlockCodegen(ArtsCodegen &AC, arts::DataBlockOp edtDep, Location loc);
   /// Getters
-  Value getDb() { return db; }
+  Value getGuid() { return guid; }
+  Value getMemref() { return memref; }
   Value getNumElements() { return numElements; }
   bool getIsArray() { return isArray; }
-
-  /// Setters
-  Value setDb(Value db) { this->db = db; }
-  Value setNumElements(Value numElements) { this->numElements = numElements; }
-  void setIsArray(bool isArray) { this->isArray = isArray; }
 
   /// Interface
   void create(arts::DataBlockOp edtDep, Location loc);
@@ -48,7 +44,8 @@ public:
 private:
   ArtsCodegen &AC;
   OpBuilder &builder;
-  Value db = nullptr;
+  Value guid = nullptr;
+  Value memref = nullptr;
   Value numElements = nullptr;
   Value size = nullptr;
   bool isArray = false;
@@ -174,18 +171,25 @@ public:
   Value getNumDeps(SmallVector<Value> &deps, Location loc);
   Value createArrayFromDeps(Value numElements, Value deps, Value initialSlot,
                             Location loc);
+  pair<Value, Value>
+  CreatePtrAndGuidArrayFromDeps(Value numElements, Type elemTy,
+                                Value deps, Value initialSlot, Location loc);
 
   /// Helpers
   Value createFnPtr(func::FuncOp funcOp, Location loc);
   Value createIntConstant(int value, Type type, Location loc);
+  Value createIndexConstant(int value, Location loc);
 
   /// Casting
   Value castParameter(mlir::Type targetType, Value source, Location loc);
-  Value castDependency(mlir::Type targetType, Value source, Location loc);
+  Value castPointer(mlir::Type targetType, Value source, Location loc);
+  Value castDependency(DataBlockCodegen *dbDep, Value source, Location loc);
+  Value castArrayDependency(DataBlockCodegen *dbDep, Value dbSize, Value source,
+                            Location loc);
   Value castToIndex(Value source, Location loc);
   Value castToFloat(mlir::Type targetType, Value source, Location loc);
   Value castToInt(mlir::Type targetType, Value source, Location loc);
-  Value castToPtr(Value source, Location loc);
+  Value castToLLVMPtr(Value source, Location loc);
 
   /// Insertion point
   void setInsertionPoint(Operation *op) { builder.setInsertionPoint(op); }

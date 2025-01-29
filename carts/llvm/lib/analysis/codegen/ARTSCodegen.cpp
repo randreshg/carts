@@ -246,9 +246,9 @@ Value *ARTSCodegen::createEDTGuid(string EDTName, uint32_t EDTNode) {
   ReserveGuidCall->setTailCall(true);
   /// Create allocation of the GUID
   AllocaInst *GuidAddress =
-      Builder.CreateAlloca(artsGuid_t, nullptr, EDTName + "_guid.addr");
+      Builder.CreateAlloca(ArtsGuid, nullptr, EDTName + "_guid.addr");
   Builder.CreateStore(ReserveGuidCall, GuidAddress);
-  LoadInst *LoadedGuidAddress = Builder.CreateLoad(artsGuid_t, GuidAddress);
+  LoadInst *LoadedGuidAddress = Builder.CreateLoad(ArtsGuid, GuidAddress);
   /// Print the new GUID
   // SmallVector<Value *, 8> PrintArgs;
   // PrintArgs = {LoadedGuidAddress};
@@ -388,8 +388,8 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
       auto ParamVName = EDTTagName + ".paramv_" + std::to_string(GuidIndex) +
                         ".guid.edt_" + std::to_string(Guid->getID());
       Value *ParamVElemPtr = Builder.CreateConstInBoundsGEP1_64(
-          artsGuid_t, ParamVArg, GuidIndex, ParamVName);
-      LoadInst *LoadedGuid = Builder.CreateLoad(artsGuid_t, ParamVElemPtr);
+          ArtsGuid, ParamVArg, GuidIndex, ParamVName);
+      LoadInst *LoadedGuid = Builder.CreateLoad(ArtsGuid, ParamVElemPtr);
       ECG->insertGuid(Guid, LoadedGuid);
       /// Increment the GUID index
       GuidIndex++;
@@ -418,7 +418,7 @@ void ARTSCodegen::insertEDTEntry(EDT &E) {
       Value *DepVGuid = Builder.CreateConstInBoundsGEP2_32(
           EdtDep, DepVArg, Slot, 0, DepVGuidName);
       LoadInst *LoadedGuid =
-          Builder.CreateLoad(artsGuid_t, DepVGuid, DepVGuidName + ".load");
+          Builder.CreateLoad(ArtsGuid, DepVGuid, DepVGuidName + ".load");
       /// Ptr
       string DepVPtrName = DepVName + ".ptr";
       Value *DepVPtr = Builder.CreateConstInBoundsGEP2_32(EdtDep, DepVArg, Slot,
@@ -549,7 +549,7 @@ void ARTSCodegen::insertEDTCall(EDT &E) {
                               std::to_string(GuidIndex) + ".guid.edt_" +
                               std::to_string(Guid->getID());
       Value *ParamVGuiElemPtr = Builder.CreateConstInBoundsGEP1_64(
-          artsGuid_t, ParamV, GuidIndex, ParamVGuidName);
+          ArtsGuid, ParamV, GuidIndex, ParamVGuidName);
       Builder.CreateStore(GuidValue, ParamVGuiElemPtr);
       /// Increment the GUID index
       GuidIndex++;
@@ -652,7 +652,7 @@ void ARTSCodegen::insertEDTSignals(EDT &E) {
       LLVM_DEBUG(dbgs() << " - DBGuid: " << *DBGuid << "\n");
 
     /// Create the Call arguments
-    /// artsSignalEdt(artsGuid_t edtGuid, uint32_t slot, artsGuid_t dataGuid)
+    /// artsSignalEdt(ArtsGuid edtGuid, uint32_t slot, ArtsGuid dataGuid)
     AllocaInst *ToEDTSlotAlloca =
         Builder.CreateAlloca(Int32, nullptr,
                              "toedt." + std::to_string(ToEDT->getID()) +
