@@ -32,9 +32,11 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include <cassert>
 #include <cstdint>
+#include <utility>
 
 // DEBUG
 #define DEBUG_TYPE "arts-codegen"
@@ -67,7 +69,7 @@ void DataBlockCodegen::create(arts::DataBlockOp dbOp, Location loc) {
     isLoad = true;
 
   /// Datablock info
-  Value dbMemref = dbOp.getBase();
+  memref = dbOp.getBase();
   auto dbMode = getMode(dbOp.getMode());
 
   /// Debug
@@ -76,13 +78,13 @@ void DataBlockCodegen::create(arts::DataBlockOp dbOp, Location loc) {
   /// Lambda function to get the size of the element type
   auto getTypeSize = [&]() {
     /// If it is a DatablockOp, get the size from the datablock
-    if (auto dbBaseOp = dyn_cast<arts::DataBlockOp>(dbMemref.getDefiningOp())) {
+    if (auto dbBaseOp = dyn_cast<arts::DataBlockOp>(memref.getDefiningOp())) {
       auto dbBase = AC.getOrCreateDatablock(dbBaseOp, dbBaseOp.getLoc());
       assert(dbBase && "Datablock not found");
       return dbBase->size;
     }
     /// If it is a memref, get the size from the memref type
-    auto baseMemTy = dbMemref.getType().cast<MemRefType>();
+    auto baseMemTy = memref.getType().cast<MemRefType>();
     auto baseTy = baseMemTy.getElementType();
     auto dbTySize =
         AC.createIntConstant(AC.mlirDL.getTypeSize(baseTy), AC.Int32, loc);
@@ -91,15 +93,14 @@ void DataBlockCodegen::create(arts::DataBlockOp dbOp, Location loc) {
 
   // LLVM_DEBUG(DBGS() << "Datablock type: " << baseTy << "\n");
   Value oneIdx = builder.create<arith::ConstantIndexOp>(loc, 1);
-  auto dbPtr = AC.castToPtr(dbMemref, loc);
+  auto dbPtr = AC.castToLLVMPtr(memref, loc);
   numElements = oneIdx;
   auto dbTySize = getTypeSize();
   if (isLoad) {
     size = dbTySize;
-    numElements = AC.castToInt(AC.Int32, numElements, loc);
-    db = AC.createRuntimeCall(ARTSRTL_artsDbCreatePtr,
-                              {dbPtr, dbTySize, dbMode}, loc)
-             ->getResult(0);
+    guid = AC.createRuntimeCall(ARTSRTL_artsDbCreatePtr,
+                                {dbPtr, dbTySize, dbMode}, loc)
+               ->getResult(0);
     return;
   }
 
@@ -112,11 +113,11 @@ void DataBlockCodegen::create(arts::DataBlockOp dbOp, Location loc) {
     numElements = builder.create<arith::MulIOp>(loc, numElements, sz);
 
   /// Create an array of Datablocks
-  db = builder.create<memref::AllocaOp>(loc, AC.ArtsDbPtr, numElements);
-  numElements = AC.castToInt(AC.Int32, numElements, loc);
-  size = builder.create<arith::MulIOp>(loc, numElements, dbTySize);
+  guid = builder.create<memref::AllocaOp>(loc, AC.ArtsDbPtr, numElements);
+  auto numElementsInt = AC.castToInt(AC.Int32, numElements, loc);
+  size = builder.create<arith::MulIOp>(loc, numElementsInt, dbTySize);
   AC.createRuntimeCall(ARTSRTL_artsDbCreateArray,
-                       {db, dbTySize, dbMode, numElements, dbPtr}, loc);
+                       {guid, dbTySize, dbMode, numElementsInt, dbPtr}, loc);
 }
 
 Value DataBlockCodegen::getMode(llvm::StringRef mode) {
@@ -179,16 +180,20 @@ void EdtCodegen::build(Location loc, ConversionPatternRewriter &rewriter) {
   rewriter.inlineRegionBefore(*region, funcRegion, funcRegion.end());
 
   /// Move all ops from srcBlock to the end of destBlock
-  // LLVM_DEBUG(dbgs() << "\n\nMoving ops to the end of the function\n");
-  LLVM_DEBUG(dbgs() << "Entry block:\n");
-  entryBlock.dump();
   while (!entryBlock.empty()) {
     Operation &op = entryBlock.front();
-    if(isa<arts::YieldOp>(&op))
-      break;
     op.moveBefore(&funcEntryBlock, funcEntryBlock.end());
   }
-  rewriter.eraseBlock(&entryBlock);
+
+  /// Replace the arts.yield with a return
+  auto yieldOp = funcEntryBlock.getTerminator();
+  AC.setInsertionPoint(yieldOp);
+  yieldOp->replaceAllUsesWith(builder.create<func::ReturnOp>(loc));
+
+  // rewriter.replaceOpWithNewOp<func::ReturnOp>(yieldOp, ValueRange{});
+
+  // auto regionParent = region->getParentOp();
+  // rewriter.eraseOp(regionParent);
 }
 
 void EdtCodegen::processDepsAndParams(SmallVector<Value> *opDeps,
@@ -199,6 +204,7 @@ void EdtCodegen::processDepsAndParams(SmallVector<Value> *opDeps,
     params.append(opParams->begin(), opParams->end());
 
   if (opDeps) {
+    deps = *opDeps;
     /// Creates a DataBlock for each dependency
     SmallVector<DataBlockCodegen *> dbs;
     for (auto dep : *opDeps) {
@@ -208,7 +214,7 @@ void EdtCodegen::processDepsAndParams(SmallVector<Value> *opDeps,
     }
 
     /// Compute depC and update parameters
-    depC = AC.createIntConstant(0, AC.Int32, loc);
+    depC = AC.createIndexConstant(0, loc);
     for (auto db : dbs) {
       /// If the db is an array, add the number of elements as a parameter
       if (db->getIsArray())
@@ -217,6 +223,7 @@ void EdtCodegen::processDepsAndParams(SmallVector<Value> *opDeps,
       depC = builder.create<arith::AddIOp>(loc, depC, db->getNumElements())
                  .getResult();
     }
+    AC.castToInt(AC.Int32, depC, loc);
   }
 
   /// Insert the parameters
@@ -228,7 +235,7 @@ void EdtCodegen::processDepsAndParams(SmallVector<Value> *opDeps,
     /// If the value is not an i64, cast it
     auto param = AC.castToInt(AC.Int64, params[i], loc);
     /// Affine store
-    auto paramIndex = builder.create<arith::ConstantIndexOp>(loc, i);
+    auto paramIndex = AC.createIndexConstant(i, loc);
     builder.create<affine::AffineStoreOp>(loc, param, paramVArray,
                                           ValueRange{paramIndex});
   }
@@ -275,34 +282,40 @@ void EdtCodegen::createEntry(Location loc) {
   };
 
   /// Insert the dependencies
-  auto depSize = deps.size();
-  auto initialIndex = AC.createIntConstant(0, AC.Int32, loc);
-  // auto oneConst = AC.createIntConstant(1, AC.Int32, loc);
-  for (unsigned depIndex = 0; depIndex < depSize; depIndex++) {
+  Value index = builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value oneIdx = builder.create<arith::ConstantIndexOp>(loc, 1);
+  for (auto &dep : deps) {
     /// Get DataBlock
-    auto edtDep = cast<DataBlockOp>(deps[depIndex].getDefiningOp());
-    auto oldDep = edtDep.getBase();
-    auto &db = *AC.getDatablock(edtDep);
-
+    auto oldDep = cast<DataBlockOp>(dep.getDefiningOp());
+    auto *db = AC.getDatablock(oldDep);
     /// Create an array of dbs
-    if (db.getIsArray()) {
-      auto numElements = getNewParam(dbSizeMap[&db]);
-      auto dbArray =
-          AC.createArrayFromDeps(numElements, fnDepV, initialIndex, loc);
-      rewireMap[oldDep] = dbArray;
+    if (db->getIsArray()) {
+      auto numElements = getNewParam(dbSizeMap[db]);
+      auto elementTy =
+          db->getMemref().getType().cast<MemRefType>().getElementType();
+      LLVM_DEBUG(dbgs() << " - Array of Datablocks: " << db->getMemref()
+                        << "\n");
+      LLVM_DEBUG(dbgs() << " - Type: " << elementTy << "\n");
+
+      auto [dbPtrArray, dbGuidArray] = AC.CreatePtrAndGuidArrayFromDeps(
+          numElements, elementTy, fnDepV, index, loc);
+      /// Cast the dbPtrArray to the original type
+      // dbPtrArray = AC.castArrayDependency(db, numElements, dbPtrArray, loc);
+      rewireMap[oldDep] = dbPtrArray;
+      /// Increment the index
+      index =
+          builder.create<arith::AddIOp>(loc, index, numElements).getResult();
       continue;
     }
 
-    if (auto loadOp = dyn_cast<memref::LoadOp>(oldDep.getDefiningOp())) {
-      oldDep = loadOp.getMemref();
-    }
     /// artsDbCreateArrayFromDeps Get dependency ptr
-    auto i = builder.create<arith::ConstantIndexOp>(loc, depIndex);
     auto depVElem =
-        builder.create<memref::LoadOp>(loc, fnDepV, ValueRange({i}));
+        builder.create<memref::LoadOp>(loc, fnDepV, ValueRange({index}));
     auto depPtr = AC.getPtrFromEdtDep(depVElem, loc);
+    /// Increment the index
+    index = builder.create<arith::AddIOp>(loc, index, oneIdx).getResult();
     /// Cast it back to the original type
-    auto newDep = AC.castDependency(oldDep.getType(), depPtr, loc);
+    // AC.castDependency(dep, depPtr, loc);
     rewireMap[oldDep] = depPtr;
   }
 
@@ -310,7 +323,7 @@ void EdtCodegen::createEntry(Location loc) {
 }
 
 Value EdtCodegen::createGuid(Value node, Location loc) {
-  auto guidEdtType = AC.createIntConstant(1, AC.artsType_t, loc);
+  auto guidEdtType = AC.createIntConstant(1, AC.ArtsType, loc);
   auto reserveGuidCall = AC.createRuntimeCall(ARTSRTL_artsReserveGuidRoute,
                                               {guidEdtType, node}, loc);
   return reserveGuidCall.getResult(0);
@@ -512,6 +525,26 @@ Value ArtsCodegen::createArrayFromDeps(Value numElements, Value deps,
   return dbArray;
 }
 
+pair<Value, Value> ArtsCodegen::CreatePtrAndGuidArrayFromDeps(Value numElements,
+                                                              Type elemTy,
+                                                              Value deps,
+                                                              Value initialSlot,
+                                                              Location loc) {
+  /// Allocate an array of pointers and guids
+  MemRefType ptrTy = MemRefType::get({ShapedType::kDynamic}, elemTy);
+  auto arrayTy = MemRefType::get({ShapedType::kDynamic}, ptrTy);
+  auto ptrArray = builder.create<memref::AllocaOp>(loc, arrayTy, numElements);
+  auto guidArray = builder.create<memref::AllocaOp>(
+      loc, MemRefType::get({ShapedType::kDynamic}, ArtsGuid), numElements);
+  auto llvmPtr = castToLLVMPtr(ptrArray, loc);
+
+  /// Set info based on the deps
+  createRuntimeCall(ARTSRTL_artsDbCreatePtrAndGuidArrayFromDeps,
+                    {guidArray, llvmPtr, numElements, deps, initialSlot}, loc);
+
+  return {ptrArray, guidArray};
+}
+
 /// Helpers
 Value ArtsCodegen::createFnPtr(func::FuncOp funcOp, Location loc) {
   auto FT = funcOp.getFunctionType();
@@ -525,6 +558,10 @@ Value ArtsCodegen::createFnPtr(func::FuncOp funcOp, Location loc) {
       .getResult();
 }
 
+Value ArtsCodegen::createIndexConstant(int value, Location loc) {
+  return builder.create<arith::ConstantIndexOp>(loc, value);
+}
+
 Value ArtsCodegen::createIntConstant(int value, Type type, Location loc) {
   assert(type.isa<IntegerType>() && "Expected integer type");
   auto v = builder.create<arith::ConstantOp>(
@@ -536,13 +573,11 @@ Value ArtsCodegen::createIntConstant(int value, Type type, Location loc) {
 Value ArtsCodegen::castParameter(mlir::Type targetType, Value source,
                                  Location loc) {
   assert(targetType.isIntOrIndexOrFloat() && "Target type should be a number");
-  if (source.getType().isIntOrIndexOrFloat())
-    return source;
   /// If target type is an integer
   if (targetType.isa<IntegerType>())
     return castToInt(targetType, source, loc);
   /// If target type is an index
-  if (targetType.isIndex())
+  if (targetType.isa<IndexType>())
     return castToIndex(source, loc);
   /// If target type is a float
   if (targetType.isa<FloatType>())
@@ -550,25 +585,64 @@ Value ArtsCodegen::castParameter(mlir::Type targetType, Value source,
   return source;
 }
 
-Value ArtsCodegen::castDependency(mlir::Type targetType, Value source,
-                                  Location loc) {
-  /// Ensure the source is a memref
-  auto sourceType = source.getType().dyn_cast<mlir::MemRefType>();
-  assert(sourceType && "Source must be a memref type");
+Value ArtsCodegen::castPointer(mlir::Type targetType, Value source,
+                               Location loc) {
+  auto srcType = source.getType().dyn_cast<MemRefType>();
+  auto dstType = targetType.dyn_cast<MemRefType>();
+  assert((srcType && dstType) && "Expected memref type");
 
-  /// Ensure the target type is also a memref
-  auto targetMemRefType = targetType.dyn_cast<mlir::MemRefType>();
-  assert(targetMemRefType && "Target type must be a memref type");
-
-  // Check compatibility of the memref cast
-  if (!mlir::memref::CastOp::areCastCompatible(sourceType, targetMemRefType)) {
-    llvm::errs() << "Cannot cast memref of type " << sourceType << " to type "
-                 << targetMemRefType << "\n";
-    return nullptr;
+  if (!memref::CastOp::areCastCompatible(srcType, dstType)) {
+    llvm::errs() << "Incompatible cast from " << srcType << " to " << dstType
+                 << "\n";
+    assert(false && "Incompatible cast");
   }
+  return builder.create<memref::CastOp>(loc, dstType, source);
+}
 
-  /// Create the memref.cast operation
-  return builder.create<memref::CastOp>(loc, targetMemRefType, source);
+Value ArtsCodegen::castDependency(DataBlockCodegen *dbDep, Value source,
+                                  Location loc) {
+  assert(dbDep->getIsArray() && "Expected a single datablock");
+  return castPointer(dbDep->getMemref().getType(), source, loc);
+}
+
+Value ArtsCodegen::castArrayDependency(DataBlockCodegen *dbDep, Value dbSize,
+                                       Value source, Location loc) {
+  assert(dbDep->getIsArray() && "Expected array datablock");
+  auto dbMemref = dbDep->getMemref();
+  auto targetType = dbMemref.getType();
+
+  /// Get source and dest types
+  auto srcType = source.getType().dyn_cast<MemRefType>();
+  auto dstType = targetType.dyn_cast<MemRefType>();
+  assert((srcType && dstType) && "Expected memref type");
+  LLVM_DEBUG(dbgs() << "Cast array dependency from " << srcType << " to "
+                    << dstType << "\n");
+
+  /// New buffer
+  auto newBuffer = builder.create<memref::AllocOp>(loc, dstType, dbSize);
+  auto elementTy = dstType.getElementType();
+  auto elementMemrefTy = MemRefType::get({ShapedType::kDynamic}, elementTy);
+
+  LLVM_DEBUG(dbgs() << "New buffer: " << newBuffer << "\n");
+  /// Create a for loop that goes through each element of the array
+  /// and cast it to the new type
+  auto c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
+  auto c1 = builder.create<arith::ConstantIndexOp>(loc, 1);
+  auto loop = builder.create<scf::ForOp>(loc, c0, dbSize, c1);
+  {
+    builder.setInsertionPointToStart(loop.getBody());
+    auto iv = loop.getInductionVar();
+    auto srcPtr = builder.create<memref::LoadOp>(loc, source, iv);
+    LLVM_DEBUG(dbgs() << "SrcPtr: " << srcPtr << "\n");
+    Value castPtr = castPointer(elementMemrefTy, srcPtr, loc);
+    LLVM_DEBUG(dbgs() << "CastPtr: " << castPtr << "\n");
+    // Value loadPtr = builder.create<memref::LoadOp>(loc, castPtr, c0);
+    // LLVM_DEBUG(dbgs() << "LoadPtr: " << loadPtr << "\n");
+
+    // builder.create<memref::StoreOp>(loc, loadPtr, newBuffer, iv);
+  }
+  builder.setInsertionPointAfter(loop);
+  return newBuffer;
 }
 
 Value ArtsCodegen::castToIndex(Value source, Location loc) {
@@ -588,47 +662,54 @@ Value ArtsCodegen::castToFloat(mlir::Type targetType, Value source,
   return builder.create<arith::SIToFPOp>(loc, targetType, source).getResult();
 }
 
-Value ArtsCodegen::castToInt(mlir::Type targetType, Value source,
-                             Location loc) {
-  assert(targetType.isa<IntegerType>() && "Target type should be an integer");
-  /// If it is already an i64, return it.
+/// Cast a value to an integer type.
+Value ArtsCodegen::castToInt(Type targetType, Value source, Location loc) {
+  assert(targetType.isa<IntegerType>() &&
+         "Target type should be an integer (e.g. i64, i32, etc.)");
+
+  /// If types match exactly, no cast is needed.
   if (source.getType() == targetType)
     return source;
-  /// If it is not an i64, cast it to i64.
-  /// Handles index types, floats, and other integer types.
+
+  /// If source is index => use IndexCastOp to target integer type
   if (source.getType().isIndex()) {
-    // Handle index type conversion to i64
-    source =
-        builder.create<arith::IndexCastOp>(loc, targetType, source).getResult();
-  } else if (source.getType().isa<mlir::FloatType>()) {
-    // Handle float type conversion to i64
-    source =
-        builder.create<arith::FPToSIOp>(loc, targetType, source).getResult();
-  } else if (auto intType = source.getType().dyn_cast<mlir::IntegerType>()) {
-    // Handle other integer types (e.g., i8, i16, i32)
-    if (intType.isSignless()) {
-      source =
-          builder.create<arith::ExtSIOp>(loc, targetType, source).getResult();
-    } else {
-      source =
-          builder.create<arith::ExtUIOp>(loc, targetType, source).getResult();
-    }
-  } else {
-    // Unsupported type, emit an error or assert
-    llvm::errs() << "Unsupported type for casting to i64: " << source.getType()
-                 << "\n";
-    assert(false && "Unsupported type");
+    return builder.create<arith::IndexCastOp>(loc, targetType, source);
   }
-  return source;
+
+  /// If source is float => use FPToSIOp (assuming signed)
+  if (source.getType().isa<FloatType>()) {
+    return builder.create<arith::FPToSIOp>(loc, targetType, source);
+  }
+
+  /// If source is integer => handle extension or truncation
+  if (auto srcIntType = source.getType().dyn_cast<IntegerType>()) {
+    auto dstIntType = targetType.cast<IntegerType>();
+    unsigned srcWidth = srcIntType.getWidth();
+    unsigned dstWidth = dstIntType.getWidth();
+
+    if (srcWidth == dstWidth)
+      return source;
+    else if (srcWidth < dstWidth)
+      return builder.create<arith::ExtSIOp>(loc, targetType, source);
+    return builder.create<arith::TruncIOp>(loc, targetType, source);
+  }
+
+  /// If none of the above matched => unsupported type
+  llvm::errs() << "Unsupported type for casting to integer: "
+               << source.getType() << "\n";
+  assert(false && "Unsupported type in castToInt");
+  return nullptr; /// unreachable
 }
 
-Value ArtsCodegen::castToPtr(Value source, Location loc) {
+Value ArtsCodegen::castToLLVMPtr(Value source, Location loc) {
   if (source.getType().isa<LLVM::LLVMPointerType>())
     return source;
   /// If it is not a pointer, cast it to a pointer.
   /// Polygeist - memref2pointer
+  auto srcTy = source.getType().cast<MemRefType>();
   auto valPtr = builder.create<polygeist::Memref2PointerOp>(
-      loc, LLVM::LLVMPointerType::get(source.getType()), source);
-  /// pointer2memref
-  return builder.create<polygeist::Pointer2MemrefOp>(loc, VoidPtr, valPtr);
+      loc, LLVM::LLVMPointerType::get(srcTy), source);
+  auto valTy = mlir::MemRefType::get(srcTy.getShape(), VoidPtr,
+                                     srcTy.getLayout(), srcTy.getMemorySpace());
+  return builder.create<polygeist::Pointer2MemrefOp>(loc, valTy, valPtr);
 }

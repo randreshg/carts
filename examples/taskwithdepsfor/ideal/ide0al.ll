@@ -10,8 +10,8 @@ CompoundStmt 0x563e00675260
 |         | `-DeclRefExpr 0x563e00674800 'uint64_t *' lvalue ParmVar 0x563e006734c8 'paramv' 'uint64_t *'
 |         `-IntegerLiteral 0x563e00674820 'int' 0
 |-DeclStmt 0x563e00674a28
-| `-VarDecl 0x563e006748f8  used eventGuid 'artsGuid_t':'long' cinit
-|   `-CStyleCastExpr 0x563e00674a00 'artsGuid_t':'long' <IntegralCast>
+| `-VarDecl 0x563e006748f8  used eventGuid 'ArtsGuid':'long' cinit
+|   `-CStyleCastExpr 0x563e00674a00 'ArtsGuid':'long' <IntegralCast>
 |     `-ImplicitCastExpr 0x563e006749e8 'uint64_t':'unsigned long' <LValueToRValue> part_of_explicit_cast
 |       `-ArraySubscriptExpr 0x563e006749b8 'uint64_t':'unsigned long' lvalue
 |         |-ImplicitCastExpr 0x563e006749a0 'uint64_t *' <LValueToRValue>
@@ -27,9 +27,9 @@ CompoundStmt 0x563e00675260
 |           | `-DeclRefExpr 0x563e00674ac0 'artsEdtDep_t *':'artsEdtDep_t *' lvalue ParmVar 0x563e00674610 'depv' 'artsEdtDep_t *':'artsEdtDep_t *'
 |           `-IntegerLiteral 0x563e00674ae0 'int' 0
 |-DeclStmt 0x563e00674d10
-| `-VarDecl 0x563e00674be8  used A_i_guid 'artsGuid_t':'long' cinit
-|   `-ImplicitCastExpr 0x563e00674cf8 'artsGuid_t':'long' <LValueToRValue>
-|     `-MemberExpr 0x563e00674cc8 'artsGuid_t':'long' lvalue .guid 0x563e0065c260
+| `-VarDecl 0x563e00674be8  used A_i_guid 'ArtsGuid':'long' cinit
+|   `-ImplicitCastExpr 0x563e00674cf8 'ArtsGuid':'long' <LValueToRValue>
+|     `-MemberExpr 0x563e00674cc8 'ArtsGuid':'long' lvalue .guid 0x563e0065c260
 |       `-ArraySubscriptExpr 0x563e00674ca8 'artsEdtDep_t':'artsEdtDep_t' lvalue
 |         |-ImplicitCastExpr 0x563e00674c90 'artsEdtDep_t *':'artsEdtDep_t *' <LValueToRValue>
 |         | `-DeclRefExpr 0x563e00674c50 'artsEdtDep_t *':'artsEdtDep_t *' lvalue ParmVar 0x563e00674610 'depv' 'artsEdtDep_t *':'artsEdtDep_t *'
@@ -57,15 +57,15 @@ CompoundStmt 0x563e00675260
 | |   |-ImplicitCastExpr 0x563e00674f80 'double *' <LValueToRValue>
 | |   | `-DeclRefExpr 0x563e00674f40 'double *' lvalue Var 0x563e00674a58 'A_i' 'double *'
 | |   `-IntegerLiteral 0x563e00674f60 'int' 0
-| `-ImplicitCastExpr 0x563e006750d0 'artsGuid_t':'long' <LValueToRValue>
-|   `-DeclRefExpr 0x563e00674fb8 'artsGuid_t':'long' lvalue Var 0x563e00674be8 'A_i_guid' 'artsGuid_t':'long'
+| `-ImplicitCastExpr 0x563e006750d0 'ArtsGuid':'long' <LValueToRValue>
+|   `-DeclRefExpr 0x563e00674fb8 'ArtsGuid':'long' lvalue Var 0x563e00674be8 'A_i_guid' 'ArtsGuid':'long'
 `-CallExpr 0x563e006751e0 'void'
-  |-ImplicitCastExpr 0x563e006751c8 'void (*)(artsGuid_t, artsGuid_t, uint32_t)' <FunctionToPointerDecay>
-  | `-DeclRefExpr 0x563e006750e8 'void (artsGuid_t, artsGuid_t, uint32_t)' Function 0x563e00668b78 'artsEventSatisfySlot' 'void (artsGuid_t, artsGuid_t, uint32_t)'
-  |-ImplicitCastExpr 0x563e00675218 'artsGuid_t':'long' <LValueToRValue>
-  | `-DeclRefExpr 0x563e00675108 'artsGuid_t':'long' lvalue Var 0x563e006748f8 'eventGuid' 'artsGuid_t':'long'
-  |-ImplicitCastExpr 0x563e00675230 'artsGuid_t':'long' <LValueToRValue>
-  | `-DeclRefExpr 0x563e00675128 'artsGuid_t':'long' lvalue Var 0x563e00674be8 'A_i_guid' 'artsGuid_t':'long'
+  |-ImplicitCastExpr 0x563e006751c8 'void (*)(ArtsGuid, ArtsGuid, uint32_t)' <FunctionToPointerDecay>
+  | `-DeclRefExpr 0x563e006750e8 'void (ArtsGuid, ArtsGuid, uint32_t)' Function 0x563e00668b78 'artsEventSatisfySlot' 'void (ArtsGuid, ArtsGuid, uint32_t)'
+  |-ImplicitCastExpr 0x563e00675218 'ArtsGuid':'long' <LValueToRValue>
+  | `-DeclRefExpr 0x563e00675108 'ArtsGuid':'long' lvalue Var 0x563e006748f8 'eventGuid' 'ArtsGuid':'long'
+  |-ImplicitCastExpr 0x563e00675230 'ArtsGuid':'long' <LValueToRValue>
+  | `-DeclRefExpr 0x563e00675128 'ArtsGuid':'long' lvalue Var 0x563e00674be8 'A_i_guid' 'ArtsGuid':'long'
   `-ImplicitCastExpr 0x563e00675248 'uint32_t':'unsigned int' <IntegralCast>
     `-DeclRefExpr 0x563e00675148 'int' EnumConstant 0x563e0065d1c0 'ARTS_EVENT_LATCH_DECR_SLOT' 'int'
 ----------------------
@@ -103,8 +103,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -164,8 +164,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -184,8 +184,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -219,19 +219,19 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .__uint64_t
 .unsigned long
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -252,8 +252,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .__uint64_t
 .__uint64_t
 .unsigned long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -271,8 +271,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -290,8 +290,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -308,19 +308,19 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .void *
 .double *
 .double
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -331,8 +331,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -431,8 +431,8 @@ CompoundStmt 0x563e00676648
       | `-DeclRefExpr 0x563e00676508 'double *' lvalue Var 0x563e00676120 'B_i' 'double *'
       `-IntegerLiteral 0x563e00676528 'int' 0
 guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -444,14 +444,14 @@ guid
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, i32, memref<?xi8>)>
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -472,29 +472,29 @@ guid
 .double
 .double
 .double
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 ----------------------
 ANALYZING FUNCTION: artsEventSatisfySlot
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 - MLIR Type: i64t
  - Parameter: eventGuid type: i64
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -511,13 +511,13 @@ Getting MLIR Type
 .void
 .void
 Creating function: (i64, i64, i32) -> ()
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -527,13 +527,13 @@ Creating function: (i64, i64, i32) -> ()
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -578,8 +578,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -639,8 +639,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -659,8 +659,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -708,8 +708,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -729,8 +729,8 @@ printDataBlockA
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -770,8 +770,8 @@ printDataBlockA
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -789,8 +789,8 @@ printDataBlockA
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -826,8 +826,8 @@ printDataBlockA
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -845,8 +845,8 @@ printDataBlockA
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -918,8 +918,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -979,8 +979,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1081,8 +1081,8 @@ CompoundStmt 0x563e00677808
           `-ImplicitCastExpr 0x563e00677690 'double *' <LValueToRValue>
             `-DeclRefExpr 0x563e00677670 'double *' lvalue Var 0x563e00677470 'data' 'double *'
 guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1137,8 +1137,8 @@ guid
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1156,8 +1156,8 @@ guid
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1217,8 +1217,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1278,8 +1278,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1298,8 +1298,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1354,8 +1354,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1384,10 +1384,10 @@ CompoundStmt 0x563e0067ac98
 |     `-ParagraphComment 0x563e00681ac0
 |       `-TextComment 0x563e00681a90 Text=" Context"
 |-DeclStmt 0x563e00678748
-| `-VarDecl 0x563e00678608  used curentEpoch 'artsGuid_t':'long' cinit
-|   `-CallExpr 0x563e00678700 'artsGuid_t':'long'
-|     `-ImplicitCastExpr 0x563e006786e8 'artsGuid_t (*)()' <FunctionToPointerDecay>
-|       `-DeclRefExpr 0x563e00678670 'artsGuid_t ()' Function 0x563e0066e098 'artsGetCurrentEpochGuid' 'artsGuid_t ()'
+| `-VarDecl 0x563e00678608  used curentEpoch 'ArtsGuid':'long' cinit
+|   `-CallExpr 0x563e00678700 'ArtsGuid':'long'
+|     `-ImplicitCastExpr 0x563e006786e8 'ArtsGuid (*)()' <FunctionToPointerDecay>
+|       `-DeclRefExpr 0x563e00678670 'ArtsGuid ()' Function 0x563e0066e098 'artsGetCurrentEpochGuid' 'ArtsGuid ()'
 |-DeclStmt 0x563e006788b8
 | `-VarDecl 0x563e00678778  used N 'int' cinit
 |   |-ImplicitCastExpr 0x563e00678870 'int' <IntegralCast>
@@ -1434,8 +1434,8 @@ CompoundStmt 0x563e0067ac98
 |   `-ImplicitCastExpr 0x563e00678f20 'int' <LValueToRValue>
 |     `-DeclRefExpr 0x563e00678e48 'int' lvalue Var 0x563e00678778 'N' 'int'
 |-DeclStmt 0x563e00679168
-| `-VarDecl 0x563e00678f68  used A_event 'artsGuid_t *' cinit
-|   `-CStyleCastExpr 0x563e00679140 'artsGuid_t *' <BitCast>
+| `-VarDecl 0x563e00678f68  used A_event 'ArtsGuid *' cinit
+|   `-CStyleCastExpr 0x563e00679140 'ArtsGuid *' <BitCast>
 |     `-CallExpr 0x563e00679100 'void *'
 |       |-ImplicitCastExpr 0x563e006790e8 'void *(*)(size_t)' <FunctionToPointerDecay>
 |       | `-DeclRefExpr 0x563e00678fd0 'void *(size_t)' Function 0x563e006615c8 'artsMalloc' 'void *(size_t)'
@@ -1443,7 +1443,7 @@ CompoundStmt 0x563e0067ac98
 |         |-ImplicitCastExpr 0x563e00679058 'unsigned long' <IntegralCast>
 |         | `-ImplicitCastExpr 0x563e00679040 'int' <LValueToRValue>
 |         |   `-DeclRefExpr 0x563e00678ff0 'int' lvalue Var 0x563e00678778 'N' 'int'
-|         `-UnaryExprOrTypeTraitExpr 0x563e00679020 'unsigned long' sizeof 'artsGuid_t':'long'
+|         `-UnaryExprOrTypeTraitExpr 0x563e00679020 'unsigned long' sizeof 'ArtsGuid':'long'
 |-ForStmt 0x563e00679510
 | |-DeclStmt 0x563e00679220
 | | `-VarDecl 0x563e00679198  used i 'int' cinit
@@ -1456,15 +1456,15 @@ CompoundStmt 0x563e0067ac98
 | |   `-DeclRefExpr 0x563e00679280 'int' lvalue Var 0x563e00678778 'N' 'int'
 | |-UnaryOperator 0x563e00679310 'int' postfix '++'
 | | `-DeclRefExpr 0x563e006792f0 'int' lvalue Var 0x563e00679198 'i' 'int'
-| `-BinaryOperator 0x563e006794f0 'artsGuid_t':'long' '='
-|   |-ArraySubscriptExpr 0x563e00679398 'artsGuid_t':'long' lvalue
-|   | |-ImplicitCastExpr 0x563e00679368 'artsGuid_t *' <LValueToRValue>
-|   | | `-DeclRefExpr 0x563e00679328 'artsGuid_t *' lvalue Var 0x563e00678f68 'A_event' 'artsGuid_t *'
+| `-BinaryOperator 0x563e006794f0 'ArtsGuid':'long' '='
+|   |-ArraySubscriptExpr 0x563e00679398 'ArtsGuid':'long' lvalue
+|   | |-ImplicitCastExpr 0x563e00679368 'ArtsGuid *' <LValueToRValue>
+|   | | `-DeclRefExpr 0x563e00679328 'ArtsGuid *' lvalue Var 0x563e00678f68 'A_event' 'ArtsGuid *'
 |   | `-ImplicitCastExpr 0x563e00679380 'int' <LValueToRValue>
 |   |   `-DeclRefExpr 0x563e00679348 'int' lvalue Var 0x563e00679198 'i' 'int'
-|   `-CallExpr 0x563e00679490 'artsGuid_t':'long'
-|     |-ImplicitCastExpr 0x563e00679478 'artsGuid_t (*)(unsigned int, unsigned int)' <FunctionToPointerDecay>
-|     | `-DeclRefExpr 0x563e006793b8 'artsGuid_t (unsigned int, unsigned int)' Function 0x563e00668388 'artsEventCreate' 'artsGuid_t (unsigned int, unsigned int)'
+|   `-CallExpr 0x563e00679490 'ArtsGuid':'long'
+|     |-ImplicitCastExpr 0x563e00679478 'ArtsGuid (*)(unsigned int, unsigned int)' <FunctionToPointerDecay>
+|     | `-DeclRefExpr 0x563e006793b8 'ArtsGuid (unsigned int, unsigned int)' Function 0x563e00668388 'artsEventCreate' 'ArtsGuid (unsigned int, unsigned int)'
 |     |-ImplicitCastExpr 0x563e006794c0 'unsigned int' <LValueToRValue>
 |     | `-DeclRefExpr 0x563e006793d8 'unsigned int' lvalue Var 0x563e006784f0 'currentNode' 'unsigned int'
 |     `-ImplicitCastExpr 0x563e006794d8 'unsigned int' <IntegralCast>
@@ -1489,17 +1489,17 @@ CompoundStmt 0x563e0067ac98
     |     | `-ImplicitCastExpr 0x563e006797e0 'int' <LValueToRValue> part_of_explicit_cast
     |     |   `-DeclRefExpr 0x563e006797b0 'int' lvalue Var 0x563e00679560 'i' 'int'
     |     `-CStyleCastExpr 0x563e006798d8 'uint64_t':'unsigned long' <IntegralCast>
-    |       `-ImplicitCastExpr 0x563e006798c0 'artsGuid_t':'long' <LValueToRValue> part_of_explicit_cast
-    |         `-ArraySubscriptExpr 0x563e00679890 'artsGuid_t':'long' lvalue
-    |           |-ImplicitCastExpr 0x563e00679860 'artsGuid_t *' <LValueToRValue>
-    |           | `-DeclRefExpr 0x563e00679820 'artsGuid_t *' lvalue Var 0x563e00678f68 'A_event' 'artsGuid_t *'
+    |       `-ImplicitCastExpr 0x563e006798c0 'ArtsGuid':'long' <LValueToRValue> part_of_explicit_cast
+    |         `-ArraySubscriptExpr 0x563e00679890 'ArtsGuid':'long' lvalue
+    |           |-ImplicitCastExpr 0x563e00679860 'ArtsGuid *' <LValueToRValue>
+    |           | `-DeclRefExpr 0x563e00679820 'ArtsGuid *' lvalue Var 0x563e00678f68 'A_event' 'ArtsGuid *'
     |           `-ImplicitCastExpr 0x563e00679878 'int' <LValueToRValue>
     |             `-DeclRefExpr 0x563e00679840 'int' lvalue Var 0x563e00679560 'i' 'int'
     |-DeclStmt 0x563e00679d68
-    | `-VarDecl 0x563e00679a60  used A_edt 'artsGuid_t':'long' cinit
-    |   `-CallExpr 0x563e00679ca0 'artsGuid_t':'long'
-    |     |-ImplicitCastExpr 0x563e00679c88 'artsGuid_t (*)(artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, artsGuid_t)' <FunctionToPointerDecay>
-    |     | `-DeclRefExpr 0x563e00679ac8 'artsGuid_t (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, artsGuid_t)' Function 0x563e00664938 'artsEdtCreateWithEpoch' 'artsGuid_t (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, artsGuid_t)'
+    | `-VarDecl 0x563e00679a60  used A_edt 'ArtsGuid':'long' cinit
+    |   `-CallExpr 0x563e00679ca0 'ArtsGuid':'long'
+    |     |-ImplicitCastExpr 0x563e00679c88 'ArtsGuid (*)(artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, ArtsGuid)' <FunctionToPointerDecay>
+    |     | `-DeclRefExpr 0x563e00679ac8 'ArtsGuid (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, ArtsGuid)' Function 0x563e00664938 'artsEdtCreateWithEpoch' 'ArtsGuid (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, ArtsGuid)'
     |     |-CStyleCastExpr 0x563e00679b60 'artsEdt_t':'void (*)(uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' <NoOp>
     |     | `-ImplicitCastExpr 0x563e00679b48 'void (*)(uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' <FunctionToPointerDecay> part_of_explicit_cast
     |     |   `-DeclRefExpr 0x563e00679ae8 'void (uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' Function 0x563e006746b8 'computeA' 'void (uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)'
@@ -1511,8 +1511,8 @@ CompoundStmt 0x563e0067ac98
     |     | `-DeclRefExpr 0x563e00679bc8 'uint64_t[2]' lvalue Var 0x563e00679748 'Aparams' 'uint64_t[2]'
     |     |-ImplicitCastExpr 0x563e00679d38 'uint32_t':'unsigned int' <IntegralCast>
     |     | `-IntegerLiteral 0x563e00679be8 'int' 1
-    |     `-ImplicitCastExpr 0x563e00679d50 'artsGuid_t':'long' <LValueToRValue>
-    |       `-DeclRefExpr 0x563e00679c08 'artsGuid_t':'long' lvalue Var 0x563e00678608 'curentEpoch' 'artsGuid_t':'long'
+    |     `-ImplicitCastExpr 0x563e00679d50 'ArtsGuid':'long' <LValueToRValue>
+    |       `-DeclRefExpr 0x563e00679c08 'ArtsGuid':'long' lvalue Var 0x563e00678608 'curentEpoch' 'ArtsGuid':'long'
     |-DeclStmt 0x563e00679f98
     | `-VarDecl 0x563e00679da0  used Bparams 'uint64_t[1]' cinit
     |   `-InitListExpr 0x563e00679ed0 'uint64_t[1]'
@@ -1530,10 +1530,10 @@ CompoundStmt 0x563e0067ac98
     |     |-IntegerLiteral 0x563e0067a0c8 'int' 3
     |     `-IntegerLiteral 0x563e0067a0e8 'int' 2
     |-DeclStmt 0x563e0067a408
-    | `-VarDecl 0x563e0067a160  used B_edt 'artsGuid_t':'long' cinit
-    |   `-CallExpr 0x563e0067a328 'artsGuid_t':'long'
-    |     |-ImplicitCastExpr 0x563e0067a310 'artsGuid_t (*)(artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, artsGuid_t)' <FunctionToPointerDecay>
-    |     | `-DeclRefExpr 0x563e0067a1c8 'artsGuid_t (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, artsGuid_t)' Function 0x563e00664938 'artsEdtCreateWithEpoch' 'artsGuid_t (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, artsGuid_t)'
+    | `-VarDecl 0x563e0067a160  used B_edt 'ArtsGuid':'long' cinit
+    |   `-CallExpr 0x563e0067a328 'ArtsGuid':'long'
+    |     |-ImplicitCastExpr 0x563e0067a310 'ArtsGuid (*)(artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, ArtsGuid)' <FunctionToPointerDecay>
+    |     | `-DeclRefExpr 0x563e0067a1c8 'ArtsGuid (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, ArtsGuid)' Function 0x563e00664938 'artsEdtCreateWithEpoch' 'ArtsGuid (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, ArtsGuid)'
     |     |-CStyleCastExpr 0x563e0067a230 'artsEdt_t':'void (*)(uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' <NoOp>
     |     | `-ImplicitCastExpr 0x563e0067a218 'void (*)(uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' <FunctionToPointerDecay> part_of_explicit_cast
     |     |   `-DeclRefExpr 0x563e0067a1e8 'void (uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' Function 0x563e006754e0 'computeB' 'void (uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)'
@@ -1546,19 +1546,19 @@ CompoundStmt 0x563e0067ac98
     |     |-ImplicitCastExpr 0x563e0067a3d8 'uint32_t':'unsigned int' <IntegralCast>
     |     | `-ImplicitCastExpr 0x563e0067a3c0 'int' <LValueToRValue>
     |     |   `-DeclRefExpr 0x563e0067a2d0 'int' lvalue Var 0x563e00679fc8 'depCount' 'int'
-    |     `-ImplicitCastExpr 0x563e0067a3f0 'artsGuid_t':'long' <LValueToRValue>
-    |       `-DeclRefExpr 0x563e0067a2f0 'artsGuid_t':'long' lvalue Var 0x563e00678608 'curentEpoch' 'artsGuid_t':'long'
+    |     `-ImplicitCastExpr 0x563e0067a3f0 'ArtsGuid':'long' <LValueToRValue>
+    |       `-DeclRefExpr 0x563e0067a2f0 'ArtsGuid':'long' lvalue Var 0x563e00678608 'curentEpoch' 'ArtsGuid':'long'
     |-CallExpr 0x563e0067a528 'void'
-    | |-ImplicitCastExpr 0x563e0067a510 'void (*)(artsGuid_t, artsGuid_t, uint32_t)' <FunctionToPointerDecay>
-    | | `-DeclRefExpr 0x563e0067a420 'void (artsGuid_t, artsGuid_t, uint32_t)' Function 0x563e00668dd8 'artsAddDependence' 'void (artsGuid_t, artsGuid_t, uint32_t)'
-    | |-ImplicitCastExpr 0x563e0067a560 'artsGuid_t':'long' <LValueToRValue>
-    | | `-ArraySubscriptExpr 0x563e0067a4b0 'artsGuid_t':'long' lvalue
-    | |   |-ImplicitCastExpr 0x563e0067a480 'artsGuid_t *' <LValueToRValue>
-    | |   | `-DeclRefExpr 0x563e0067a440 'artsGuid_t *' lvalue Var 0x563e00678f68 'A_event' 'artsGuid_t *'
+    | |-ImplicitCastExpr 0x563e0067a510 'void (*)(ArtsGuid, ArtsGuid, uint32_t)' <FunctionToPointerDecay>
+    | | `-DeclRefExpr 0x563e0067a420 'void (ArtsGuid, ArtsGuid, uint32_t)' Function 0x563e00668dd8 'artsAddDependence' 'void (ArtsGuid, ArtsGuid, uint32_t)'
+    | |-ImplicitCastExpr 0x563e0067a560 'ArtsGuid':'long' <LValueToRValue>
+    | | `-ArraySubscriptExpr 0x563e0067a4b0 'ArtsGuid':'long' lvalue
+    | |   |-ImplicitCastExpr 0x563e0067a480 'ArtsGuid *' <LValueToRValue>
+    | |   | `-DeclRefExpr 0x563e0067a440 'ArtsGuid *' lvalue Var 0x563e00678f68 'A_event' 'ArtsGuid *'
     | |   `-ImplicitCastExpr 0x563e0067a498 'int' <LValueToRValue>
     | |     `-DeclRefExpr 0x563e0067a460 'int' lvalue Var 0x563e00679560 'i' 'int'
-    | |-ImplicitCastExpr 0x563e0067a578 'artsGuid_t':'long' <LValueToRValue>
-    | | `-DeclRefExpr 0x563e0067a4d0 'artsGuid_t':'long' lvalue Var 0x563e0067a160 'B_edt' 'artsGuid_t':'long'
+    | |-ImplicitCastExpr 0x563e0067a578 'ArtsGuid':'long' <LValueToRValue>
+    | | `-DeclRefExpr 0x563e0067a4d0 'ArtsGuid':'long' lvalue Var 0x563e0067a160 'B_edt' 'ArtsGuid':'long'
     | `-ImplicitCastExpr 0x563e0067a590 'uint32_t':'unsigned int' <IntegralCast>
     |   `-IntegerLiteral 0x563e0067a4f0 'int' 1
     |-IfStmt 0x563e0067a818
@@ -1567,43 +1567,43 @@ CompoundStmt 0x563e0067ac98
     | | | `-DeclRefExpr 0x563e0067a5a8 'int' lvalue Var 0x563e00679560 'i' 'int'
     | | `-IntegerLiteral 0x563e0067a5c8 'int' 0
     | `-CallExpr 0x563e0067a768 'void'
-    |   |-ImplicitCastExpr 0x563e0067a750 'void (*)(artsGuid_t, artsGuid_t, uint32_t)' <FunctionToPointerDecay>
-    |   | `-DeclRefExpr 0x563e0067a620 'void (artsGuid_t, artsGuid_t, uint32_t)' Function 0x563e00668dd8 'artsAddDependence' 'void (artsGuid_t, artsGuid_t, uint32_t)'
-    |   |-ImplicitCastExpr 0x563e0067a7a0 'artsGuid_t':'long' <LValueToRValue>
-    |   | `-ArraySubscriptExpr 0x563e0067a6f0 'artsGuid_t':'long' lvalue
-    |   |   |-ImplicitCastExpr 0x563e0067a6d8 'artsGuid_t *' <LValueToRValue>
-    |   |   | `-DeclRefExpr 0x563e0067a640 'artsGuid_t *' lvalue Var 0x563e00678f68 'A_event' 'artsGuid_t *'
+    |   |-ImplicitCastExpr 0x563e0067a750 'void (*)(ArtsGuid, ArtsGuid, uint32_t)' <FunctionToPointerDecay>
+    |   | `-DeclRefExpr 0x563e0067a620 'void (ArtsGuid, ArtsGuid, uint32_t)' Function 0x563e00668dd8 'artsAddDependence' 'void (ArtsGuid, ArtsGuid, uint32_t)'
+    |   |-ImplicitCastExpr 0x563e0067a7a0 'ArtsGuid':'long' <LValueToRValue>
+    |   | `-ArraySubscriptExpr 0x563e0067a6f0 'ArtsGuid':'long' lvalue
+    |   |   |-ImplicitCastExpr 0x563e0067a6d8 'ArtsGuid *' <LValueToRValue>
+    |   |   | `-DeclRefExpr 0x563e0067a640 'ArtsGuid *' lvalue Var 0x563e00678f68 'A_event' 'ArtsGuid *'
     |   |   `-BinaryOperator 0x563e0067a6b8 'int' '-'
     |   |     |-ImplicitCastExpr 0x563e0067a6a0 'int' <LValueToRValue>
     |   |     | `-DeclRefExpr 0x563e0067a660 'int' lvalue Var 0x563e00679560 'i' 'int'
     |   |     `-IntegerLiteral 0x563e0067a680 'int' 1
-    |   |-ImplicitCastExpr 0x563e0067a7b8 'artsGuid_t':'long' <LValueToRValue>
-    |   | `-DeclRefExpr 0x563e0067a710 'artsGuid_t':'long' lvalue Var 0x563e0067a160 'B_edt' 'artsGuid_t':'long'
+    |   |-ImplicitCastExpr 0x563e0067a7b8 'ArtsGuid':'long' <LValueToRValue>
+    |   | `-DeclRefExpr 0x563e0067a710 'ArtsGuid':'long' lvalue Var 0x563e0067a160 'B_edt' 'ArtsGuid':'long'
     |   `-ImplicitCastExpr 0x563e0067a7d0 'uint32_t':'unsigned int' <IntegralCast>
     |     `-IntegerLiteral 0x563e0067a730 'int' 2
     |-CallExpr 0x563e0067a9d0 'void'
-    | |-ImplicitCastExpr 0x563e0067a9b8 'void (*)(artsGuid_t, uint32_t, artsGuid_t)' <FunctionToPointerDecay>
-    | | `-DeclRefExpr 0x563e0067a838 'void (artsGuid_t, uint32_t, artsGuid_t)' Function 0x563e006661d8 'artsSignalEdt' 'void (artsGuid_t, uint32_t, artsGuid_t)'
-    | |-ImplicitCastExpr 0x563e0067aa08 'artsGuid_t':'long' <LValueToRValue>
-    | | `-DeclRefExpr 0x563e0067a858 'artsGuid_t':'long' lvalue Var 0x563e00679a60 'A_edt' 'artsGuid_t':'long'
+    | |-ImplicitCastExpr 0x563e0067a9b8 'void (*)(ArtsGuid, uint32_t, ArtsGuid)' <FunctionToPointerDecay>
+    | | `-DeclRefExpr 0x563e0067a838 'void (ArtsGuid, uint32_t, ArtsGuid)' Function 0x563e006661d8 'artsSignalEdt' 'void (ArtsGuid, uint32_t, ArtsGuid)'
+    | |-ImplicitCastExpr 0x563e0067aa08 'ArtsGuid':'long' <LValueToRValue>
+    | | `-DeclRefExpr 0x563e0067a858 'ArtsGuid':'long' lvalue Var 0x563e00679a60 'A_edt' 'ArtsGuid':'long'
     | |-ImplicitCastExpr 0x563e0067aa20 'uint32_t':'unsigned int' <IntegralCast>
     | | `-IntegerLiteral 0x563e0067a878 'int' 0
-    | `-ImplicitCastExpr 0x563e0067aa38 'artsGuid_t':'long' <LValueToRValue>
-    |   `-MemberExpr 0x563e0067a928 'artsGuid_t':'long' lvalue .guid 0x563e0065c560
+    | `-ImplicitCastExpr 0x563e0067aa38 'ArtsGuid':'long' <LValueToRValue>
+    |   `-MemberExpr 0x563e0067a928 'ArtsGuid':'long' lvalue .guid 0x563e0065c560
     |     `-ArraySubscriptExpr 0x563e0067a908 'artsDataBlock':'artsDataBlock' lvalue
     |       |-ImplicitCastExpr 0x563e0067a8d8 'artsDataBlock *' <ArrayToPointerDecay>
     |       | `-DeclRefExpr 0x563e0067a898 'artsDataBlock[N]' lvalue Var 0x563e00678a18 'A_array' 'artsDataBlock[N]'
     |       `-ImplicitCastExpr 0x563e0067a8f0 'int' <LValueToRValue>
     |         `-DeclRefExpr 0x563e0067a8b8 'int' lvalue Var 0x563e00679560 'i' 'int'
     `-CallExpr 0x563e0067ab88 'void'
-      |-ImplicitCastExpr 0x563e0067ab70 'void (*)(artsGuid_t, uint32_t, artsGuid_t)' <FunctionToPointerDecay>
-      | `-DeclRefExpr 0x563e0067aa50 'void (artsGuid_t, uint32_t, artsGuid_t)' Function 0x563e006661d8 'artsSignalEdt' 'void (artsGuid_t, uint32_t, artsGuid_t)'
-      |-ImplicitCastExpr 0x563e0067abc0 'artsGuid_t':'long' <LValueToRValue>
-      | `-DeclRefExpr 0x563e0067aa70 'artsGuid_t':'long' lvalue Var 0x563e0067a160 'B_edt' 'artsGuid_t':'long'
+      |-ImplicitCastExpr 0x563e0067ab70 'void (*)(ArtsGuid, uint32_t, ArtsGuid)' <FunctionToPointerDecay>
+      | `-DeclRefExpr 0x563e0067aa50 'void (ArtsGuid, uint32_t, ArtsGuid)' Function 0x563e006661d8 'artsSignalEdt' 'void (ArtsGuid, uint32_t, ArtsGuid)'
+      |-ImplicitCastExpr 0x563e0067abc0 'ArtsGuid':'long' <LValueToRValue>
+      | `-DeclRefExpr 0x563e0067aa70 'ArtsGuid':'long' lvalue Var 0x563e0067a160 'B_edt' 'ArtsGuid':'long'
       |-ImplicitCastExpr 0x563e0067abd8 'uint32_t':'unsigned int' <IntegralCast>
       | `-IntegerLiteral 0x563e0067aa90 'int' 0
-      `-ImplicitCastExpr 0x563e0067abf0 'artsGuid_t':'long' <LValueToRValue>
-        `-MemberExpr 0x563e0067ab40 'artsGuid_t':'long' lvalue .guid 0x563e0065c560
+      `-ImplicitCastExpr 0x563e0067abf0 'ArtsGuid':'long' <LValueToRValue>
+        `-MemberExpr 0x563e0067ab40 'ArtsGuid':'long' lvalue .guid 0x563e0065c560
           `-ArraySubscriptExpr 0x563e0067ab20 'artsDataBlock':'artsDataBlock' lvalue
             |-ImplicitCastExpr 0x563e0067aaf0 'artsDataBlock *' <ArrayToPointerDecay>
             | `-DeclRefExpr 0x563e0067aab0 'artsDataBlock[N]' lvalue Var 0x563e00678b68 'B_array' 'artsDataBlock[N]'
@@ -1616,8 +1616,8 @@ CompoundStmt 0x563e0067ac98
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1677,8 +1677,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1738,8 +1738,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1758,8 +1758,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1783,37 +1783,37 @@ ANALYZING FUNCTION: artsGetCurrentNode
 .unsigned int
 Creating function: () -> i32
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 ----------------------
 ANALYZING FUNCTION: artsGetCurrentEpochGuid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 Creating function: () -> i64
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1845,8 +1845,8 @@ Creating function: () -> i64
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1860,8 +1860,8 @@ Creating function: () -> i64
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1874,8 +1874,8 @@ Creating function: () -> i64
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1889,8 +1889,8 @@ Creating function: () -> i64
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1904,8 +1904,8 @@ Creating function: () -> i64
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1919,8 +1919,8 @@ Creating function: () -> i64
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1933,8 +1933,8 @@ Creating function: () -> i64
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1948,8 +1948,8 @@ Creating function: () -> i64
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1966,8 +1966,8 @@ Getting MLIR Type
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1987,8 +1987,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2018,8 +2018,8 @@ Creating function: (memref<?x!llvm.struct<(i64, memref<?xi8>)>>, i32, memref<?x!
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2039,8 +2039,8 @@ Creating function: (memref<?x!llvm.struct<(i64, memref<?xi8>)>>, i32, memref<?x!
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2055,8 +2055,8 @@ Creating function: (memref<?x!llvm.struct<(i64, memref<?xi8>)>>, i32, memref<?x!
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2081,8 +2081,8 @@ ANALYZING FUNCTION: artsDbCreateArrayFromDeps
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2102,8 +2102,8 @@ ANALYZING FUNCTION: artsDbCreateArrayFromDeps
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2118,8 +2118,8 @@ ANALYZING FUNCTION: artsDbCreateArrayFromDeps
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2133,22 +2133,22 @@ ANALYZING FUNCTION: artsDbCreateArrayFromDeps
   - Returning LLVM struct type: !llvm.struct<(i64, i32, memref<?xi8>)>
 .unsigned int
 .void
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t *&
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *&
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2165,17 +2165,17 @@ Getting MLIR Type
 Creating function: (i64) -> memref<?xi8>
 .int
 .unsigned long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .unsigned long
 .unsigned long
 .void *
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2187,15 +2187,15 @@ Creating function: (i64) -> memref<?xi8>
 .int
 .int
 .int
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2209,13 +2209,13 @@ Getting MLIR Type
 .unsigned int
 - MLIR Type: i32t
  - Parameter: latchCount type: i32
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2225,8 +2225,8 @@ Creating function: (i32, i32) -> i64
 .unsigned int
 .unsigned int
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2280,20 +2280,20 @@ Creating function: (i32, i32) -> i64
 .__uint64_t
 .__uint64_t
 .unsigned long
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2302,19 +2302,19 @@ Creating function: (i32, i32) -> i64
 .__uint64_t
 .__uint64_t
 .unsigned long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2350,8 +2350,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2395,20 +2395,20 @@ Getting MLIR Type
 - MLIR Type: i32t
  - Parameter: depc type: i32
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 - MLIR Type: i64t
  - Parameter: epochGuid type: i64
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2428,8 +2428,8 @@ ANALYZING FUNCTION: computeA
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2462,8 +2462,8 @@ ANALYZING FUNCTION: computeA
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2492,13 +2492,13 @@ ANALYZING FUNCTION: computeA
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2549,19 +2549,19 @@ ANALYZING FUNCTION: computeA
 .int
 .int
 .int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2582,8 +2582,8 @@ ANALYZING FUNCTION: computeB
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2616,8 +2616,8 @@ ANALYZING FUNCTION: computeB
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2646,29 +2646,29 @@ ANALYZING FUNCTION: computeB
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 ----------------------
 ANALYZING FUNCTION: artsAddDependence
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 - MLIR Type: i64t
  - Parameter: source type: i64
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2687,25 +2687,25 @@ Getting MLIR Type
 CreatEmitting fn: parallelDoneEdt
 parallelDoneEdt
 ing function: (i64, i64, i32) -> ()
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2715,13 +2715,13 @@ ing function: (i64, i64, i32) -> ()
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2736,26 +2736,26 @@ ing function: (i64, i64, i32) -> ()
 .int
 ----------------------
 ANALYZING FUNCTION: artsAddDependence
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .int
 .int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2765,13 +2765,13 @@ ANALYZING FUNCTION: artsAddDependence
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2784,8 +2784,8 @@ ANALYZING FUNCTION: artsAddDependence
 ----------------------
 ANALYZING FUNCTION: artsSignalEdt
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2800,8 +2800,8 @@ Getting MLIR Type
 - MLIR Type: i32t
  - Parameter: slot type: i32
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2810,8 +2810,8 @@ Getting MLIR Type
 .void
 .void
 Creating function: (i64, i32, i64) -> ()
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2827,27 +2827,27 @@ Creating function: (i64, i32, i64) -> ()
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2856,16 +2856,16 @@ Creating function: (i64, i32, i64) -> ()
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .void
 ----------------------
 ANALYZING FUNCTION: artsSignalEdt
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2881,27 +2881,27 @@ ANALYZING FUNCTION: artsSignalEdt
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2910,8 +2910,8 @@ ANALYZING FUNCTION: artsSignalEdt
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2951,8 +2951,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3016,15 +3016,15 @@ CompoundStmt 0x563e0067dba0
 |     `-ParagraphComment 0x563e00682040
 |       `-TextComment 0x563e00682010 Text=" Context"
 |-DeclStmt 0x563e0067c038
-| `-VarDecl 0x563e0067bf48  used curentEpoch 'artsGuid_t':'long' cinit
-|   `-CallExpr 0x563e0067bfe8 'artsGuid_t':'long'
-|     `-ImplicitCastExpr 0x563e0067bfd0 'artsGuid_t (*)()' <FunctionToPointerDecay>
-|       `-DeclRefExpr 0x563e0067bfb0 'artsGuid_t ()' Function 0x563e0066e098 'artsGetCurrentEpochGuid' 'artsGuid_t ()'
+| `-VarDecl 0x563e0067bf48  used curentEpoch 'ArtsGuid':'long' cinit
+|   `-CallExpr 0x563e0067bfe8 'ArtsGuid':'long'
+|     `-ImplicitCastExpr 0x563e0067bfd0 'ArtsGuid (*)()' <FunctionToPointerDecay>
+|       `-DeclRefExpr 0x563e0067bfb0 'ArtsGuid ()' Function 0x563e0066e098 'artsGetCurrentEpochGuid' 'ArtsGuid ()'
 |-DeclStmt 0x563e0067c358
-| `-VarDecl 0x563e0067c060  used parallelDoneEdtGuid 'artsGuid_t':'long' cinit
-|   |-CallExpr 0x563e0067c2b0 'artsGuid_t':'long'
-|   | |-ImplicitCastExpr 0x563e0067c298 'artsGuid_t (*)(artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t)' <FunctionToPointerDecay>
-|   | | `-DeclRefExpr 0x563e0067c0c8 'artsGuid_t (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t)' Function 0x563e00663bd8 'artsEdtCreate' 'artsGuid_t (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t)'
+| `-VarDecl 0x563e0067c060  used parallelDoneEdtGuid 'ArtsGuid':'long' cinit
+|   |-CallExpr 0x563e0067c2b0 'ArtsGuid':'long'
+|   | |-ImplicitCastExpr 0x563e0067c298 'ArtsGuid (*)(artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t)' <FunctionToPointerDecay>
+|   | | `-DeclRefExpr 0x563e0067c0c8 'ArtsGuid (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t)' Function 0x563e00663bd8 'artsEdtCreate' 'ArtsGuid (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t)'
 |   | |-CStyleCastExpr 0x563e0067c130 'artsEdt_t':'void (*)(uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' <NoOp>
 |   | | `-ImplicitCastExpr 0x563e0067c118 'void (*)(uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' <FunctionToPointerDecay> part_of_explicit_cast
 |   | |   `-DeclRefExpr 0x563e0067c0e8 'void (uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' Function 0x563e0067af60 'parallelDoneEdt' 'void (uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)'
@@ -3042,12 +3042,12 @@ CompoundStmt 0x563e0067dba0
 |     `-ParagraphComment 0x563e00682110
 |       `-TextComment 0x563e006820e0 Text=" Create parallel EDT"
 |-DeclStmt 0x563e0067c548
-| `-VarDecl 0x563e0067c380  used parallelDoneEpochGuid 'artsGuid_t':'long' cinit
-|   `-CallExpr 0x563e0067c4c0 'artsGuid_t':'long'
-|     |-ImplicitCastExpr 0x563e0067c4a8 'artsGuid_t (*)(artsGuid_t, unsigned int)' <FunctionToPointerDecay>
-|     | `-DeclRefExpr 0x563e0067c3e8 'artsGuid_t (artsGuid_t, unsigned int)' Function 0x563e0066e4b8 'artsInitializeAndStartEpoch' 'artsGuid_t (artsGuid_t, unsigned int)'
-|     |-ImplicitCastExpr 0x563e0067c4f0 'artsGuid_t':'long' <LValueToRValue>
-|     | `-DeclRefExpr 0x563e0067c408 'artsGuid_t':'long' lvalue Var 0x563e0067c060 'parallelDoneEdtGuid' 'artsGuid_t':'long'
+| `-VarDecl 0x563e0067c380  used parallelDoneEpochGuid 'ArtsGuid':'long' cinit
+|   `-CallExpr 0x563e0067c4c0 'ArtsGuid':'long'
+|     |-ImplicitCastExpr 0x563e0067c4a8 'ArtsGuid (*)(ArtsGuid, unsigned int)' <FunctionToPointerDecay>
+|     | `-DeclRefExpr 0x563e0067c3e8 'ArtsGuid (ArtsGuid, unsigned int)' Function 0x563e0066e4b8 'artsInitializeAndStartEpoch' 'ArtsGuid (ArtsGuid, unsigned int)'
+|     |-ImplicitCastExpr 0x563e0067c4f0 'ArtsGuid':'long' <LValueToRValue>
+|     | `-DeclRefExpr 0x563e0067c408 'ArtsGuid':'long' lvalue Var 0x563e0067c060 'parallelDoneEdtGuid' 'ArtsGuid':'long'
 |     `-ImplicitCastExpr 0x563e0067c508 'unsigned int' <IntegralCast>
 |       `-IntegerLiteral 0x563e0067c428 'int' 0
 |-DeclStmt 0x563e0067c738
@@ -3067,10 +3067,10 @@ CompoundStmt 0x563e0067dba0
 |       `-ImplicitCastExpr 0x563e0067c808 'int' <LValueToRValue>
 |         `-DeclRefExpr 0x563e0067c7e8 'int' lvalue ParmVar 0x563e0067b188 'N' 'int'
 |-DeclStmt 0x563e0067cb48
-| `-VarDecl 0x563e0067c880  used parallelEdtGuid 'artsGuid_t':'long' cinit
-|   `-CallExpr 0x563e0067ca30 'artsGuid_t':'long'
-|     |-ImplicitCastExpr 0x563e0067ca18 'artsGuid_t (*)(artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, artsGuid_t)' <FunctionToPointerDecay>
-|     | `-DeclRefExpr 0x563e0067c8e8 'artsGuid_t (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, artsGuid_t)' Function 0x563e00664938 'artsEdtCreateWithEpoch' 'artsGuid_t (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, artsGuid_t)'
+| `-VarDecl 0x563e0067c880  used parallelEdtGuid 'ArtsGuid':'long' cinit
+|   `-CallExpr 0x563e0067ca30 'ArtsGuid':'long'
+|     |-ImplicitCastExpr 0x563e0067ca18 'ArtsGuid (*)(artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, ArtsGuid)' <FunctionToPointerDecay>
+|     | `-DeclRefExpr 0x563e0067c8e8 'ArtsGuid (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, ArtsGuid)' Function 0x563e00664938 'artsEdtCreateWithEpoch' 'ArtsGuid (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, ArtsGuid)'
 |     |-CStyleCastExpr 0x563e0067c950 'artsEdt_t':'void (*)(uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' <NoOp>
 |     | `-ImplicitCastExpr 0x563e0067c938 'void (*)(uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' <FunctionToPointerDecay> part_of_explicit_cast
 |     |   `-DeclRefExpr 0x563e0067c908 'void (uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' Function 0x563e006782b0 'parallelEdt' 'void (uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)'
@@ -3083,27 +3083,27 @@ CompoundStmt 0x563e0067dba0
 |     |-ImplicitCastExpr 0x563e0067cae0 'uint32_t':'unsigned int' <IntegralCast>
 |     | `-ImplicitCastExpr 0x563e0067cac8 'uint64_t':'unsigned long' <LValueToRValue>
 |     |   `-DeclRefExpr 0x563e0067c9d8 'uint64_t':'unsigned long' lvalue Var 0x563e0067c760 'parallelDeps' 'uint64_t':'unsigned long'
-|     `-ImplicitCastExpr 0x563e0067caf8 'artsGuid_t':'long' <LValueToRValue>
-|       `-DeclRefExpr 0x563e0067c9f8 'artsGuid_t':'long' lvalue Var 0x563e0067c380 'parallelDoneEpochGuid' 'artsGuid_t':'long'
+|     `-ImplicitCastExpr 0x563e0067caf8 'ArtsGuid':'long' <LValueToRValue>
+|       `-DeclRefExpr 0x563e0067c9f8 'ArtsGuid':'long' lvalue Var 0x563e0067c380 'parallelDoneEpochGuid' 'ArtsGuid':'long'
 |-CallExpr 0x563e0067cc70 'void'
-| |-ImplicitCastExpr 0x563e0067cc58 'void (*)(artsDataBlock *, artsGuid_t, unsigned int, unsigned int)' <FunctionToPointerDecay>
-| | `-DeclRefExpr 0x563e0067cb60 'void (artsDataBlock *, artsGuid_t, unsigned int, unsigned int)' Function 0x563e0066b338 'artsSignalDbs' 'void (artsDataBlock *, artsGuid_t, unsigned int, unsigned int)'
+| |-ImplicitCastExpr 0x563e0067cc58 'void (*)(artsDataBlock *, ArtsGuid, unsigned int, unsigned int)' <FunctionToPointerDecay>
+| | `-DeclRefExpr 0x563e0067cb60 'void (artsDataBlock *, ArtsGuid, unsigned int, unsigned int)' Function 0x563e0066b338 'artsSignalDbs' 'void (artsDataBlock *, ArtsGuid, unsigned int, unsigned int)'
 | |-ImplicitCastExpr 0x563e0067ccb0 'artsDataBlock *' <LValueToRValue>
 | | `-DeclRefExpr 0x563e0067cb80 'artsDataBlock *' lvalue ParmVar 0x563e0067b208 'A_array' 'artsDataBlock *'
-| |-ImplicitCastExpr 0x563e0067ccc8 'artsGuid_t':'long' <LValueToRValue>
-| | `-DeclRefExpr 0x563e0067cba0 'artsGuid_t':'long' lvalue Var 0x563e0067c880 'parallelEdtGuid' 'artsGuid_t':'long'
+| |-ImplicitCastExpr 0x563e0067ccc8 'ArtsGuid':'long' <LValueToRValue>
+| | `-DeclRefExpr 0x563e0067cba0 'ArtsGuid':'long' lvalue Var 0x563e0067c880 'parallelEdtGuid' 'ArtsGuid':'long'
 | |-ImplicitCastExpr 0x563e0067cce0 'unsigned int' <IntegralCast>
 | | `-IntegerLiteral 0x563e0067cbc0 'int' 0
 | `-ImplicitCastExpr 0x563e0067cd10 'unsigned int' <IntegralCast>
 |   `-ImplicitCastExpr 0x563e0067ccf8 'int' <LValueToRValue>
 |     `-DeclRefExpr 0x563e0067cbe0 'int' lvalue ParmVar 0x563e0067b188 'N' 'int'
 |-CallExpr 0x563e0067cde0 'void'
-| |-ImplicitCastExpr 0x563e0067cdc8 'void (*)(artsDataBlock *, artsGuid_t, unsigned int, unsigned int)' <FunctionToPointerDecay>
-| | `-DeclRefExpr 0x563e0067cd28 'void (artsDataBlock *, artsGuid_t, unsigned int, unsigned int)' Function 0x563e0066b338 'artsSignalDbs' 'void (artsDataBlock *, artsGuid_t, unsigned int, unsigned int)'
+| |-ImplicitCastExpr 0x563e0067cdc8 'void (*)(artsDataBlock *, ArtsGuid, unsigned int, unsigned int)' <FunctionToPointerDecay>
+| | `-DeclRefExpr 0x563e0067cd28 'void (artsDataBlock *, ArtsGuid, unsigned int, unsigned int)' Function 0x563e0066b338 'artsSignalDbs' 'void (artsDataBlock *, ArtsGuid, unsigned int, unsigned int)'
 | |-ImplicitCastExpr 0x563e0067ce20 'artsDataBlock *' <LValueToRValue>
 | | `-DeclRefExpr 0x563e0067cd48 'artsDataBlock *' lvalue ParmVar 0x563e0067bb10 'B_array' 'artsDataBlock *'
-| |-ImplicitCastExpr 0x563e0067ce38 'artsGuid_t':'long' <LValueToRValue>
-| | `-DeclRefExpr 0x563e0067cd68 'artsGuid_t':'long' lvalue Var 0x563e0067c880 'parallelEdtGuid' 'artsGuid_t':'long'
+| |-ImplicitCastExpr 0x563e0067ce38 'ArtsGuid':'long' <LValueToRValue>
+| | `-DeclRefExpr 0x563e0067cd68 'ArtsGuid':'long' lvalue Var 0x563e0067c880 'parallelEdtGuid' 'ArtsGuid':'long'
 | |-ImplicitCastExpr 0x563e0067ce68 'unsigned int' <IntegralCast>
 | | `-ImplicitCastExpr 0x563e0067ce50 'int' <LValueToRValue>
 | |   `-DeclRefExpr 0x563e0067cd88 'int' lvalue ParmVar 0x563e0067b188 'N' 'int'
@@ -3111,10 +3111,10 @@ CompoundStmt 0x563e0067dba0
 |   `-ImplicitCastExpr 0x563e0067ce80 'int' <LValueToRValue>
 |     `-DeclRefExpr 0x563e0067cda8 'int' lvalue ParmVar 0x563e0067b188 'N' 'int'
 |-CallExpr 0x563e0067cf90 'bool':'unsigned char'
-| |-ImplicitCastExpr 0x563e0067cf78 'bool (*)(artsGuid_t)' <FunctionToPointerDecay>
-| | `-DeclRefExpr 0x563e0067ced8 'bool (artsGuid_t)' Function 0x563e0066ea78 'artsWaitOnHandle' 'bool (artsGuid_t)'
-| `-ImplicitCastExpr 0x563e0067cfb8 'artsGuid_t':'long' <LValueToRValue>
-|   `-DeclRefExpr 0x563e0067cef8 'artsGuid_t':'long' lvalue Var 0x563e0067c380 'parallelDoneEpochGuid' 'artsGuid_t':'long'
+| |-ImplicitCastExpr 0x563e0067cf78 'bool (*)(ArtsGuid)' <FunctionToPointerDecay>
+| | `-DeclRefExpr 0x563e0067ced8 'bool (ArtsGuid)' Function 0x563e0066ea78 'artsWaitOnHandle' 'bool (ArtsGuid)'
+| `-ImplicitCastExpr 0x563e0067cfb8 'ArtsGuid':'long' <LValueToRValue>
+|   `-DeclRefExpr 0x563e0067cef8 'ArtsGuid':'long' lvalue Var 0x563e0067c380 'parallelDoneEpochGuid' 'ArtsGuid':'long'
 |-DeclStmt 0x563e0067d1f8
 | `-VarDecl 0x563e0067d058  used paramv 'uint64_t[1]' cinit
 |   |-InitListExpr 0x563e0067d188 'uint64_t[1]'
@@ -3125,10 +3125,10 @@ CompoundStmt 0x563e0067dba0
 |     `-ParagraphComment 0x563e006822b0
 |       `-TextComment 0x563e00682280 Text=" Print the arrays"
 |-DeclStmt 0x563e0067d4b0
-| `-VarDecl 0x563e0067d220  used printAEdtGuid 'artsGuid_t':'long' cinit
-|   |-CallExpr 0x563e0067d3d0 'artsGuid_t':'long'
-|   | |-ImplicitCastExpr 0x563e0067d3b8 'artsGuid_t (*)(artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, artsGuid_t)' <FunctionToPointerDecay>
-|   | | `-DeclRefExpr 0x563e0067d288 'artsGuid_t (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, artsGuid_t)' Function 0x563e00664938 'artsEdtCreateWithEpoch' 'artsGuid_t (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, artsGuid_t)'
+| `-VarDecl 0x563e0067d220  used printAEdtGuid 'ArtsGuid':'long' cinit
+|   |-CallExpr 0x563e0067d3d0 'ArtsGuid':'long'
+|   | |-ImplicitCastExpr 0x563e0067d3b8 'ArtsGuid (*)(artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, ArtsGuid)' <FunctionToPointerDecay>
+|   | | `-DeclRefExpr 0x563e0067d288 'ArtsGuid (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, ArtsGuid)' Function 0x563e00664938 'artsEdtCreateWithEpoch' 'ArtsGuid (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, ArtsGuid)'
 |   | |-CStyleCastExpr 0x563e0067d2f0 'artsEdt_t':'void (*)(uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' <NoOp>
 |   | | `-ImplicitCastExpr 0x563e0067d2d8 'void (*)(uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' <FunctionToPointerDecay> part_of_explicit_cast
 |   | |   `-DeclRefExpr 0x563e0067d2a8 'void (uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' Function 0x563e006768c8 'printDataBlockA' 'void (uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)'
@@ -3141,28 +3141,28 @@ CompoundStmt 0x563e0067dba0
 |   | |-ImplicitCastExpr 0x563e0067d480 'uint32_t':'unsigned int' <IntegralCast>
 |   | | `-ImplicitCastExpr 0x563e0067d468 'int' <LValueToRValue>
 |   | |   `-DeclRefExpr 0x563e0067d378 'int' lvalue ParmVar 0x563e0067b188 'N' 'int'
-|   | `-ImplicitCastExpr 0x563e0067d498 'artsGuid_t':'long' <LValueToRValue>
-|   |   `-DeclRefExpr 0x563e0067d398 'artsGuid_t':'long' lvalue Var 0x563e0067bf48 'curentEpoch' 'artsGuid_t':'long'
+|   | `-ImplicitCastExpr 0x563e0067d498 'ArtsGuid':'long' <LValueToRValue>
+|   |   `-DeclRefExpr 0x563e0067d398 'ArtsGuid':'long' lvalue Var 0x563e0067bf48 'curentEpoch' 'ArtsGuid':'long'
 |   `-FullComment 0x563e006ce260
 |     `-ParagraphComment 0x563e006ce230
 |       `-TextComment 0x563e006ce200 Text=" Print A"
 |-CallExpr 0x563e0067d580 'void'
-| |-ImplicitCastExpr 0x563e0067d568 'void (*)(artsDataBlock *, artsGuid_t, unsigned int, unsigned int)' <FunctionToPointerDecay>
-| | `-DeclRefExpr 0x563e0067d4c8 'void (artsDataBlock *, artsGuid_t, unsigned int, unsigned int)' Function 0x563e0066b338 'artsSignalDbs' 'void (artsDataBlock *, artsGuid_t, unsigned int, unsigned int)'
+| |-ImplicitCastExpr 0x563e0067d568 'void (*)(artsDataBlock *, ArtsGuid, unsigned int, unsigned int)' <FunctionToPointerDecay>
+| | `-DeclRefExpr 0x563e0067d4c8 'void (artsDataBlock *, ArtsGuid, unsigned int, unsigned int)' Function 0x563e0066b338 'artsSignalDbs' 'void (artsDataBlock *, ArtsGuid, unsigned int, unsigned int)'
 | |-ImplicitCastExpr 0x563e0067d5c0 'artsDataBlock *' <LValueToRValue>
 | | `-DeclRefExpr 0x563e0067d4e8 'artsDataBlock *' lvalue ParmVar 0x563e0067b208 'A_array' 'artsDataBlock *'
-| |-ImplicitCastExpr 0x563e0067d5d8 'artsGuid_t':'long' <LValueToRValue>
-| | `-DeclRefExpr 0x563e0067d508 'artsGuid_t':'long' lvalue Var 0x563e0067d220 'printAEdtGuid' 'artsGuid_t':'long'
+| |-ImplicitCastExpr 0x563e0067d5d8 'ArtsGuid':'long' <LValueToRValue>
+| | `-DeclRefExpr 0x563e0067d508 'ArtsGuid':'long' lvalue Var 0x563e0067d220 'printAEdtGuid' 'ArtsGuid':'long'
 | |-ImplicitCastExpr 0x563e0067d5f0 'unsigned int' <IntegralCast>
 | | `-IntegerLiteral 0x563e0067d528 'int' 0
 | `-ImplicitCastExpr 0x563e0067d620 'unsigned int' <IntegralCast>
 |   `-ImplicitCastExpr 0x563e0067d608 'int' <LValueToRValue>
 |     `-DeclRefExpr 0x563e0067d548 'int' lvalue ParmVar 0x563e0067b188 'N' 'int'
 |-DeclStmt 0x563e0067d908
-| `-VarDecl 0x563e0067d678  used printBEdtGuid 'artsGuid_t':'long' cinit
-|   |-CallExpr 0x563e0067d828 'artsGuid_t':'long'
-|   | |-ImplicitCastExpr 0x563e0067d810 'artsGuid_t (*)(artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, artsGuid_t)' <FunctionToPointerDecay>
-|   | | `-DeclRefExpr 0x563e0067d6e0 'artsGuid_t (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, artsGuid_t)' Function 0x563e00664938 'artsEdtCreateWithEpoch' 'artsGuid_t (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, artsGuid_t)'
+| `-VarDecl 0x563e0067d678  used printBEdtGuid 'ArtsGuid':'long' cinit
+|   |-CallExpr 0x563e0067d828 'ArtsGuid':'long'
+|   | |-ImplicitCastExpr 0x563e0067d810 'ArtsGuid (*)(artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, ArtsGuid)' <FunctionToPointerDecay>
+|   | | `-DeclRefExpr 0x563e0067d6e0 'ArtsGuid (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, ArtsGuid)' Function 0x563e00664938 'artsEdtCreateWithEpoch' 'ArtsGuid (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t, ArtsGuid)'
 |   | |-CStyleCastExpr 0x563e0067d748 'artsEdt_t':'void (*)(uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' <NoOp>
 |   | | `-ImplicitCastExpr 0x563e0067d730 'void (*)(uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' <FunctionToPointerDecay> part_of_explicit_cast
 |   | |   `-DeclRefExpr 0x563e0067d700 'void (uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' Function 0x563e006771a0 'printDataBlockB' 'void (uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)'
@@ -3175,18 +3175,18 @@ CompoundStmt 0x563e0067dba0
 |   | |-ImplicitCastExpr 0x563e0067d8d8 'uint32_t':'unsigned int' <IntegralCast>
 |   | | `-ImplicitCastExpr 0x563e0067d8c0 'int' <LValueToRValue>
 |   | |   `-DeclRefExpr 0x563e0067d7d0 'int' lvalue ParmVar 0x563e0067b188 'N' 'int'
-|   | `-ImplicitCastExpr 0x563e0067d8f0 'artsGuid_t':'long' <LValueToRValue>
-|   |   `-DeclRefExpr 0x563e0067d7f0 'artsGuid_t':'long' lvalue Var 0x563e0067bf48 'curentEpoch' 'artsGuid_t':'long'
+|   | `-ImplicitCastExpr 0x563e0067d8f0 'ArtsGuid':'long' <LValueToRValue>
+|   |   `-DeclRefExpr 0x563e0067d7f0 'ArtsGuid':'long' lvalue Var 0x563e0067bf48 'curentEpoch' 'ArtsGuid':'long'
 |   `-FullComment 0x563e006ce330
 |     `-ParagraphComment 0x563e006ce300
 |       `-TextComment 0x563e006ce2d0 Text=" Print B"
 |-CallExpr 0x563e0067d9d8 'void'
-| |-ImplicitCastExpr 0x563e0067d9c0 'void (*)(artsDataBlock *, artsGuid_t, unsigned int, unsigned int)' <FunctionToPointerDecay>
-| | `-DeclRefExpr 0x563e0067d920 'void (artsDataBlock *, artsGuid_t, unsigned int, unsigned int)' Function 0x563e0066b338 'artsSignalDbs' 'void (artsDataBlock *, artsGuid_t, unsigned int, unsigned int)'
+| |-ImplicitCastExpr 0x563e0067d9c0 'void (*)(artsDataBlock *, ArtsGuid, unsigned int, unsigned int)' <FunctionToPointerDecay>
+| | `-DeclRefExpr 0x563e0067d920 'void (artsDataBlock *, ArtsGuid, unsigned int, unsigned int)' Function 0x563e0066b338 'artsSignalDbs' 'void (artsDataBlock *, ArtsGuid, unsigned int, unsigned int)'
 | |-ImplicitCastExpr 0x563e0067da18 'artsDataBlock *' <LValueToRValue>
 | | `-DeclRefExpr 0x563e0067d940 'artsDataBlock *' lvalue ParmVar 0x563e0067bb10 'B_array' 'artsDataBlock *'
-| |-ImplicitCastExpr 0x563e0067da30 'artsGuid_t':'long' <LValueToRValue>
-| | `-DeclRefExpr 0x563e0067d960 'artsGuid_t':'long' lvalue Var 0x563e0067d678 'printBEdtGuid' 'artsGuid_t':'long'
+| |-ImplicitCastExpr 0x563e0067da30 'ArtsGuid':'long' <LValueToRValue>
+| | `-DeclRefExpr 0x563e0067d960 'ArtsGuid':'long' lvalue Var 0x563e0067d678 'printBEdtGuid' 'ArtsGuid':'long'
 | |-ImplicitCastExpr 0x563e0067da48 'unsigned int' <IntegralCast>
 | | `-IntegerLiteral 0x563e0067d980 'int' 0
 | `-ImplicitCastExpr 0x563e0067da78 'unsigned int' <IntegralCast>
@@ -3219,8 +3219,8 @@ CompoundStmt 0x563e0067dba0
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3239,8 +3239,8 @@ CompoundStmt 0x563e0067dba0
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3267,8 +3267,8 @@ Getting MLIR Type
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3284,8 +3284,8 @@ Getting MLIR Type
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3307,8 +3307,8 @@ Creating function: (i32, memref<?x!llvm.struct<(i64, memref<?xi8>)>>, memref<?x!
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3321,8 +3321,8 @@ Creating function: (i32, memref<?x!llvm.struct<(i64, memref<?xi8>)>>, memref<?x!
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3336,8 +3336,8 @@ Creating function: (i32, memref<?x!llvm.struct<(i64, memref<?xi8>)>>, memref<?x!
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3350,8 +3350,8 @@ Creating function: (i32, memref<?x!llvm.struct<(i64, memref<?xi8>)>>, memref<?x!
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3367,42 +3367,42 @@ Creating function: (i32, memref<?x!llvm.struct<(i64, memref<?xi8>)>>, memref<?x!
 ----------------------
 ANALYZING FUNCTION: artsGetCurrentNode
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 ----------------------
 ANALYZING FUNCTION: artsGetCurrentEpochGuid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3438,8 +3438,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3482,13 +3482,13 @@ Getting MLIR Type
 .unsigned int
 - MLIR Type: i32t
  - Parameter: depc type: i32
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3543,8 +3543,8 @@ ANALYZING FUNCTION: parallelDoneEdt
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3573,32 +3573,32 @@ ANALYZING FUNCTION: parallelDoneEdt
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 ----------------------
 ANALYZING FUNCTION: artsInitializeAndStartEpoch
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3608,32 +3608,32 @@ Getting MLIR Type
 .unsigned int
 - MLIR Type: i32t
  - Parameter: slot type: i32
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 Creating function: (i64, i32) -> i64
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .int
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3697,19 +3697,19 @@ Creating function: (i64, i32) -> i64
 .__uint64_t
 .__uint64_t
 .unsigned long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3734,8 +3734,8 @@ ANALYZING FUNCTION: parallelEdt
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3768,8 +3768,8 @@ ANALYZING FUNCTION: parallelEdt
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3798,13 +3798,13 @@ ANALYZING FUNCTION: parallelEdt
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3817,8 +3817,8 @@ Getting MLIR Type
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3828,8 +3828,8 @@ Getting MLIR Type
 - MLIR Type: memref<?x!llvm.struct<(i64, memref<?xi8>)>>t
  - Parameter: dbArray type: memref<?x!llvm.struct<(i64, memref<?xi8>)>>
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3852,16 +3852,16 @@ Creating function: (memref<?x!llvm.struct<(i64, memref<?xi8>)>>, i64, i32, i32) 
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3875,16 +3875,16 @@ Creating function: (memref<?x!llvm.struct<(i64, memref<?xi8>)>>, i64, i32, i32) 
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3899,16 +3899,16 @@ ANALYZING FUNCTION: artsSignalDbs
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3922,16 +3922,16 @@ ANALYZING FUNCTION: artsSignalDbs
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3941,8 +3941,8 @@ ANALYZING FUNCTION: artsSignalDbs
 ----------------------
 ANALYZING FUNCTION: artsWaitOnHandle
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3963,13 +3963,13 @@ Getting MLIR Type
 .__uint8_t
 .unsigned char
 Creating function: (i64) -> i8
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4017,19 +4017,19 @@ Creating function: (i64) -> i8
 .__uint64_t
 .__uint64_t
 .unsigned long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4050,8 +4050,8 @@ ANALYZING FUNCTION: printDataBlockA
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4084,8 +4084,8 @@ ANALYZING FUNCTION: printDataBlockA
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4114,13 +4114,13 @@ ANALYZING FUNCTION: printDataBlockA
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4132,16 +4132,16 @@ ANALYZING FUNCTION: artsSignalDbs
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4155,35 +4155,35 @@ ANALYZING FUNCTION: artsSignalDbs
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .unsigned int
 .unsigned int
 .void
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4204,8 +4204,8 @@ ANALYZING FUNCTION: printDataBlockB
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4238,8 +4238,8 @@ ANALYZING FUNCTION: printDataBlockB
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4268,13 +4268,13 @@ ANALYZING FUNCTION: printDataBlockB
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4312,16 +4312,16 @@ tsDataBlock
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4335,16 +4335,16 @@ tsDataBlock
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4388,8 +4388,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4449,8 +4449,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4469,8 +4469,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4529,8 +4529,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4567,10 +4567,10 @@ CompoundStmt 0x563e00680410
 |     `-ImplicitCastExpr 0x563e0067e720 'unsigned int (*)()' <FunctionToPointerDecay>
 |       `-DeclRefExpr 0x563e0067e700 'unsigned int ()' Function 0x563e00672860 'artsGetCurrentNode' 'unsigned int ()'
 |-DeclStmt 0x563e0067ea18
-| `-VarDecl 0x563e0067e780  used finishMainEdtGuid 'artsGuid_t':'long' cinit
-|   `-CallExpr 0x563e0067e970 'artsGuid_t':'long'
-|     |-ImplicitCastExpr 0x563e0067e958 'artsGuid_t (*)(artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t)' <FunctionToPointerDecay>
-|     | `-DeclRefExpr 0x563e0067e7e8 'artsGuid_t (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t)' Function 0x563e00663bd8 'artsEdtCreate' 'artsGuid_t (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t)'
+| `-VarDecl 0x563e0067e780  used finishMainEdtGuid 'ArtsGuid':'long' cinit
+|   `-CallExpr 0x563e0067e970 'ArtsGuid':'long'
+|     |-ImplicitCastExpr 0x563e0067e958 'ArtsGuid (*)(artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t)' <FunctionToPointerDecay>
+|     | `-DeclRefExpr 0x563e0067e7e8 'ArtsGuid (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t)' Function 0x563e00663bd8 'artsEdtCreate' 'ArtsGuid (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t)'
 |     |-CStyleCastExpr 0x563e0067e850 'artsEdt_t':'void (*)(uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' <NoOp>
 |     | `-ImplicitCastExpr 0x563e0067e838 'void (*)(uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' <FunctionToPointerDecay> part_of_explicit_cast
 |     |   `-DeclRefExpr 0x563e0067e808 'void (uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' Function 0x563e0067de70 'finishMainEdt' 'void (uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)'
@@ -4585,12 +4585,12 @@ CompoundStmt 0x563e00680410
 |     `-ImplicitCastExpr 0x563e0067ea00 'uint32_t':'unsigned int' <IntegralCast>
 |       `-IntegerLiteral 0x563e0067e938 'int' 1
 |-DeclStmt 0x563e0067efd8
-| `-VarDecl 0x563e0067ea40  used finishMainEpochGuid 'artsGuid_t':'long' cinit
-|   `-CallExpr 0x563e0067ef50 'artsGuid_t':'long'
-|     |-ImplicitCastExpr 0x563e0067eb08 'artsGuid_t (*)(artsGuid_t, unsigned int)' <FunctionToPointerDecay>
-|     | `-DeclRefExpr 0x563e0067eaa8 'artsGuid_t (artsGuid_t, unsigned int)' Function 0x563e0066e4b8 'artsInitializeAndStartEpoch' 'artsGuid_t (artsGuid_t, unsigned int)'
-|     |-ImplicitCastExpr 0x563e0067ef80 'artsGuid_t':'long' <LValueToRValue>
-|     | `-DeclRefExpr 0x563e0067eac8 'artsGuid_t':'long' lvalue Var 0x563e0067e780 'finishMainEdtGuid' 'artsGuid_t':'long'
+| `-VarDecl 0x563e0067ea40  used finishMainEpochGuid 'ArtsGuid':'long' cinit
+|   `-CallExpr 0x563e0067ef50 'ArtsGuid':'long'
+|     |-ImplicitCastExpr 0x563e0067eb08 'ArtsGuid (*)(ArtsGuid, unsigned int)' <FunctionToPointerDecay>
+|     | `-DeclRefExpr 0x563e0067eaa8 'ArtsGuid (ArtsGuid, unsigned int)' Function 0x563e0066e4b8 'artsInitializeAndStartEpoch' 'ArtsGuid (ArtsGuid, unsigned int)'
+|     |-ImplicitCastExpr 0x563e0067ef80 'ArtsGuid':'long' <LValueToRValue>
+|     | `-DeclRefExpr 0x563e0067eac8 'ArtsGuid':'long' lvalue Var 0x563e0067e780 'finishMainEdtGuid' 'ArtsGuid':'long'
 |     `-ImplicitCastExpr 0x563e0067ef98 'unsigned int' <IntegralCast>
 |       `-IntegerLiteral 0x563e0067eae8 'int' 0
 |-DeclStmt 0x563e0067f090
@@ -4695,10 +4695,10 @@ CompoundStmt 0x563e00680410
 | `-ImplicitCastExpr 0x563e006800d8 'artsDataBlock *' <ArrayToPointerDecay>
 |   `-DeclRefExpr 0x563e0067ffd8 'artsDataBlock[N]' lvalue Var 0x563e0067fa88 'B_array' 'artsDataBlock[N]'
 |-CallExpr 0x563e00680148 'bool':'unsigned char'
-| |-ImplicitCastExpr 0x563e00680130 'bool (*)(artsGuid_t)' <FunctionToPointerDecay>
-| | `-DeclRefExpr 0x563e006800f0 'bool (artsGuid_t)' Function 0x563e0066ea78 'artsWaitOnHandle' 'bool (artsGuid_t)'
-| `-ImplicitCastExpr 0x563e00680170 'artsGuid_t':'long' <LValueToRValue>
-|   `-DeclRefExpr 0x563e00680110 'artsGuid_t':'long' lvalue Var 0x563e0067ea40 'finishMainEpochGuid' 'artsGuid_t':'long'
+| |-ImplicitCastExpr 0x563e00680130 'bool (*)(ArtsGuid)' <FunctionToPointerDecay>
+| | `-DeclRefExpr 0x563e006800f0 'bool (ArtsGuid)' Function 0x563e0066ea78 'artsWaitOnHandle' 'bool (ArtsGuid)'
+| `-ImplicitCastExpr 0x563e00680170 'ArtsGuid':'long' <LValueToRValue>
+|   `-DeclRefExpr 0x563e00680110 'ArtsGuid':'long' lvalue Var 0x563e0067ea40 'finishMainEpochGuid' 'ArtsGuid':'long'
 |-CallExpr 0x563e006801e0 'void'
 | |-ImplicitCastExpr 0x563e006801c8 'void (*)(void *)' <FunctionToPointerDecay>
 | | `-DeclRefExpr 0x563e00680188 'void (void *)' Function 0x563e00661e20 'artsFree' 'void (void *)'
@@ -4753,8 +4753,8 @@ CompoundStmt 0x563e00680410
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4773,8 +4773,8 @@ CompoundStmt 0x563e00680410
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4795,19 +4795,19 @@ CompoundStmt 0x563e00680410
 ----------------------
 ANALYZING FUNCTION: artsGetCurrentNode
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4863,8 +4863,8 @@ ANALYZING FUNCTION: finishMainEdt
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4893,44 +4893,44 @@ ANALYZING FUNCTION: finishMainEdt
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 ----------------------
 ANALYZING FUNCTION: artsInitializeAndStartEpoch
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .int
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4999,8 +4999,8 @@ ANALYZING FUNCTION: artsMalloc
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -5014,8 +5014,8 @@ ANALYZING FUNCTION: artsMalloc
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -5028,8 +5028,8 @@ ANALYZING FUNCTION: artsMalloc
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -5043,8 +5043,8 @@ ANALYZING FUNCTION: artsMalloc
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -5058,8 +5058,8 @@ ANALYZING FUNCTION: artsMalloc
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -5073,8 +5073,8 @@ ANALYZING FUNCTION: artsMalloc
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -5087,8 +5087,8 @@ ANALYZING FUNCTION: artsMalloc
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -5102,8 +5102,8 @@ ANALYZING FUNCTION: artsMalloc
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -5120,8 +5120,8 @@ Getting MLIR Type
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -5174,8 +5174,8 @@ Creating function: (memref<?x!llvm.struct<(i64, memref<?xi8>)>>, i64, i32, i32, 
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -5210,8 +5210,8 @@ ANALYZING FUNCTION: artsDbCreateArray
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -5236,8 +5236,8 @@ ANALYZING FUNCTION: computeEDT
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -5250,8 +5250,8 @@ ANALYZING FUNCTION: computeEDT
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -5261,7 +5261,7 @@ ANALYZING FUNCTION: computeEDT
 .void
 ----------------------
 ANALYZING FUNCTION: artsWaitOnHandle
-.artsGuid_t
+.ArtsGuid
 .artsGuiEmitting fn: initPerNode
 initPerNode
 CompoundStmt 0x563e00680da0
@@ -5280,9 +5280,9 @@ CompoundStmt 0x563e00680da0
 |   |-DeclStmt 0x563e00680a58
 |   | `-VarDecl 0x563e006808f8  used mainparams 'uint64_t[0]' cinit
 |   |   `-InitListExpr 0x563e006809a0 'uint64_t[0]'
-|   `-CallExpr 0x563e00680b48 'artsGuid_t':'long'
-|     |-ImplicitCastExpr 0x563e00680b30 'artsGuid_t (*)(artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t)' <FunctionToPointerDecay>
-|     | `-DeclRefExpr 0x563e00680a70 'artsGuid_t (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t)' Function 0x563e00663bd8 'artsEdtCreate' 'artsGuid_t (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t)'
+|   `-CallExpr 0x563e00680b48 'ArtsGuid':'long'
+|     |-ImplicitCastExpr 0x563e00680b30 'ArtsGuid (*)(artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t)' <FunctionToPointerDecay>
+|     | `-DeclRefExpr 0x563e00680a70 'ArtsGuid (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t)' Function 0x563e00663bd8 'artsEdtCreate' 'ArtsGuid (artsEdt_t, unsigned int, uint32_t, uint64_t *, uint32_t)'
 |     |-ImplicitCastExpr 0x563e00680b90 'void (*)(uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' <FunctionToPointerDecay>
 |     | `-DeclRefExpr 0x563e00680a90 'void (uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)' Function 0x563e0067e4d8 'mainEdt' 'void (uint32_t, uint64_t *, uint32_t, artsEdtDep_t *)'
 |     |-ImplicitCastExpr 0x563e00680ba8 'unsigned int' <LValueToRValue>
@@ -5320,8 +5320,8 @@ d_t
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -5467,8 +5467,8 @@ ANALYZING FUNCTION: mainEdt
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -5497,8 +5497,8 @@ ANALYZING FUNCTION: mainEdt
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long

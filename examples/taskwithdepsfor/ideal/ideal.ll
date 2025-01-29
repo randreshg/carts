@@ -34,8 +34,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -98,8 +98,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -121,8 +121,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -158,19 +158,19 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .__uint64_t
 .unsigned long
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -191,8 +191,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .__uint64_t
 .__uint64_t
 .unsigned long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -211,8 +211,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -232,8 +232,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -250,19 +250,19 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .void *
 .double *
 .double
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -274,8 +274,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -295,8 +295,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -308,14 +308,14 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, i32, memref<?xi8>)>
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -336,29 +336,29 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .double
 .double
 .double
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 ----------------------
 ANALYZING FUNCTION: artsEventSatisfySlot
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 - MLIR Type: i64t
  - Parameter: eventGuid type: i64
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -375,13 +375,13 @@ Getting MLIR Type
 .void
 .void
 Creating function: (i64, i64, i32) -> ()
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -391,13 +391,13 @@ Creating function: (i64, i64, i32) -> ()
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -443,8 +443,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -507,8 +507,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -530,8 +530,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -582,8 +582,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -603,8 +603,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -645,8 +645,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -666,8 +666,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -704,8 +704,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -725,8 +725,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -799,8 +799,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -863,8 +863,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -886,8 +886,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -945,8 +945,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -966,8 +966,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1028,8 +1028,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1092,8 +1092,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1115,8 +1115,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1174,8 +1174,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1195,8 +1195,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1257,8 +1257,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1321,8 +1321,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1344,8 +1344,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1371,37 +1371,37 @@ ANALYZING FUNCTION: artsGetCurrentNode
 .unsigned int
 Creating function: () -> i32
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 ----------------------
 ANALYZING FUNCTION: artsGetCurrentEpochGuid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 Creating function: () -> i64
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1434,8 +1434,8 @@ Creating function: () -> i64
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1452,8 +1452,8 @@ Array Type AFTER: !llvm.struct<(i64, memref<?xi8>)>
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1469,8 +1469,8 @@ Array Type AFTER: !llvm.struct<(i64, memref<?xi8>)>
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1487,8 +1487,8 @@ Array Type AFTER: !llvm.struct<(i64, memref<?xi8>)>
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1505,8 +1505,8 @@ Array Type AFTER: !llvm.struct<(i64, memref<?xi8>)>
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1523,8 +1523,8 @@ Array Type AFTER: !llvm.struct<(i64, memref<?xi8>)>
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1540,8 +1540,8 @@ Array Type AFTER: !llvm.struct<(i64, memref<?xi8>)>
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1558,8 +1558,8 @@ Array Type AFTER: !llvm.struct<(i64, memref<?xi8>)>
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1578,8 +1578,8 @@ Getting MLIR Type
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1599,8 +1599,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1631,8 +1631,8 @@ Creating function: (memref<?x!llvm.struct<(i64, memref<?xi8>)>>, i32, memref<?x!
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1654,8 +1654,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1671,8 +1671,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1700,8 +1700,8 @@ ANALYZING FUNCTION: artsDbCreateArrayFromDeps
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1723,8 +1723,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1740,8 +1740,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1757,22 +1757,22 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
   - Returning MemRef: memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>
 .unsigned int
 .void
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t *&
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *&
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1789,17 +1789,17 @@ Getting MLIR Type
 Creating function: (i64) -> memref<?xi8>
 .int
 .unsigned long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .unsigned long
 .unsigned long
 .void *
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1811,15 +1811,15 @@ Creating function: (i64) -> memref<?xi8>
 .int
 .int
 .int
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1833,13 +1833,13 @@ Getting MLIR Type
 .unsigned int
 - MLIR Type: i32t
  - Parameter: latchCount type: i32
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1849,8 +1849,8 @@ Creating function: (i32, i32) -> i64
 .unsigned int
 .unsigned int
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1916,20 +1916,20 @@ Array Type AFTER: i64
 .__uint64_t
 .__uint64_t
 .unsigned long
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1938,19 +1938,19 @@ Array Type AFTER: i64
 .__uint64_t
 .__uint64_t
 .unsigned long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -1987,8 +1987,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2034,20 +2034,20 @@ Getting MLIR Type
 - MLIR Type: i32t
  - Parameter: depc type: i32
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 - MLIR Type: i64t
  - Parameter: epochGuid type: i64
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2067,8 +2067,8 @@ ANALYZING FUNCTION: computeA
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2102,8 +2102,8 @@ ANALYZING FUNCTION: computeA
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2134,13 +2134,13 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2203,19 +2203,19 @@ Array Type AFTER: i64
 .int
 .int
 .int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2236,8 +2236,8 @@ ANALYZING FUNCTION: computeB
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2271,8 +2271,8 @@ ANALYZING FUNCTION: computeB
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2303,29 +2303,29 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 ----------------------
 ANALYZING FUNCTION: artsAddDependence
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 - MLIR Type: i64t
  - Parameter: source type: i64
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2342,25 +2342,25 @@ Getting MLIR Type
 .void
 .void
 Creating function: (i64, i64, i32) -> ()
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2370,13 +2370,13 @@ Creating function: (i64, i64, i32) -> ()
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2391,26 +2391,26 @@ Creating function: (i64, i64, i32) -> ()
 .int
 ----------------------
 ANALYZING FUNCTION: artsAddDependence
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .int
 .int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2420,13 +2420,13 @@ ANALYZING FUNCTION: artsAddDependence
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2439,8 +2439,8 @@ ANALYZING FUNCTION: artsAddDependence
 ----------------------
 ANALYZING FUNCTION: artsSignalEdt
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2455,8 +2455,8 @@ Getting MLIR Type
 - MLIR Type: i32t
  - Parameter: slot type: i32
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2465,8 +2465,8 @@ Getting MLIR Type
 .void
 .void
 Creating function: (i64, i32, i64) -> ()
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2482,27 +2482,27 @@ Creating function: (i64, i32, i64) -> ()
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2511,16 +2511,16 @@ Creating function: (i64, i32, i64) -> ()
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .void
 ----------------------
 ANALYZING FUNCTION: artsSignalEdt
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2536,27 +2536,27 @@ ANALYZING FUNCTION: artsSignalEdt
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t *
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid *
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2565,8 +2565,8 @@ ANALYZING FUNCTION: artsSignalEdt
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2607,8 +2607,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2671,8 +2671,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2694,8 +2694,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2724,8 +2724,8 @@ Getting MLIR Type
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2741,8 +2741,8 @@ Getting MLIR Type
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2764,8 +2764,8 @@ Creating function: (i32, memref<?x!llvm.struct<(i64, memref<?xi8>)>>, memref<?x!
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2778,8 +2778,8 @@ Creating function: (i32, memref<?x!llvm.struct<(i64, memref<?xi8>)>>, memref<?x!
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2793,8 +2793,8 @@ Creating function: (i32, memref<?x!llvm.struct<(i64, memref<?xi8>)>>, memref<?x!
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2807,8 +2807,8 @@ Creating function: (i32, memref<?x!llvm.struct<(i64, memref<?xi8>)>>, memref<?x!
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2824,42 +2824,42 @@ Creating function: (i32, memref<?x!llvm.struct<(i64, memref<?xi8>)>>, memref<?x!
 ----------------------
 ANALYZING FUNCTION: artsGetCurrentNode
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 ----------------------
 ANALYZING FUNCTION: artsGetCurrentEpochGuid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2896,8 +2896,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -2942,13 +2942,13 @@ Getting MLIR Type
 .unsigned int
 - MLIR Type: i32t
  - Parameter: depc type: i32
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3004,8 +3004,8 @@ ANALYZING FUNCTION: parallelDoneEdt
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3036,32 +3036,32 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 ----------------------
 ANALYZING FUNCTION: artsInitializeAndStartEpoch
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3071,32 +3071,32 @@ Getting MLIR Type
 .unsigned int
 - MLIR Type: i32t
  - Parameter: slot type: i32
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 Creating function: (i64, i32) -> i64
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .int
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3172,19 +3172,19 @@ Array Type AFTER: i64
 .__uint64_t
 .__uint64_t
 .unsigned long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3209,8 +3209,8 @@ ANALYZING FUNCTION: parallelEdt
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3244,8 +3244,8 @@ ANALYZING FUNCTION: parallelEdt
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3276,13 +3276,13 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3295,8 +3295,8 @@ Getting MLIR Type
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3306,8 +3306,8 @@ Getting MLIR Type
 - MLIR Type: memref<?x!llvm.struct<(i64, memref<?xi8>)>>t
  - Parameter: dbArray type: memref<?x!llvm.struct<(i64, memref<?xi8>)>>
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3330,16 +3330,16 @@ Creating function: (memref<?x!llvm.struct<(i64, memref<?xi8>)>>, i64, i32, i32) 
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3353,16 +3353,16 @@ Creating function: (memref<?x!llvm.struct<(i64, memref<?xi8>)>>, i64, i32, i32) 
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3377,16 +3377,16 @@ ANALYZING FUNCTION: artsSignalDbs
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3400,16 +3400,16 @@ ANALYZING FUNCTION: artsSignalDbs
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3419,8 +3419,8 @@ ANALYZING FUNCTION: artsSignalDbs
 ----------------------
 ANALYZING FUNCTION: artsWaitOnHandle
 Getting MLIR Type
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3441,13 +3441,13 @@ Getting MLIR Type
 .__uint8_t
 .unsigned char
 Creating function: (i64) -> i8
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3507,19 +3507,19 @@ Array Type AFTER: i64
 .__uint64_t
 .__uint64_t
 .unsigned long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3540,8 +3540,8 @@ ANALYZING FUNCTION: printDataBlockA
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3575,8 +3575,8 @@ ANALYZING FUNCTION: printDataBlockA
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3607,13 +3607,13 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3625,16 +3625,16 @@ ANALYZING FUNCTION: artsSignalDbs
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3648,35 +3648,35 @@ ANALYZING FUNCTION: artsSignalDbs
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .unsigned int
 .unsigned int
 .void
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3697,8 +3697,8 @@ ANALYZING FUNCTION: printDataBlockB
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3732,8 +3732,8 @@ ANALYZING FUNCTION: printDataBlockB
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3764,13 +3764,13 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3782,16 +3782,16 @@ ANALYZING FUNCTION: artsSignalDbs
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3805,16 +3805,16 @@ ANALYZING FUNCTION: artsSignalDbs
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
     Field: ptr
 .void *
   - Returning LLVM struct type: !llvm.struct<(i64, memref<?xi8>)>
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3859,8 +3859,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3923,8 +3923,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -3946,8 +3946,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4009,8 +4009,8 @@ Getting MLIR Type
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4073,8 +4073,8 @@ Creating function: (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, me
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4096,8 +4096,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4120,19 +4120,19 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 ----------------------
 ANALYZING FUNCTION: artsGetCurrentNode
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4189,8 +4189,8 @@ ANALYZING FUNCTION: finishMainEdt
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4221,44 +4221,44 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t &
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid &
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 ----------------------
 ANALYZING FUNCTION: artsInitializeAndStartEpoch
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .int
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4328,8 +4328,8 @@ ANALYZING FUNCTION: artsMalloc
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4346,8 +4346,8 @@ Array Type AFTER: !llvm.struct<(i64, memref<?xi8>)>
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4363,8 +4363,8 @@ Array Type AFTER: !llvm.struct<(i64, memref<?xi8>)>
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4381,8 +4381,8 @@ Array Type AFTER: !llvm.struct<(i64, memref<?xi8>)>
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4399,8 +4399,8 @@ Array Type AFTER: !llvm.struct<(i64, memref<?xi8>)>
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4417,8 +4417,8 @@ Array Type AFTER: !llvm.struct<(i64, memref<?xi8>)>
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4434,8 +4434,8 @@ Array Type AFTER: !llvm.struct<(i64, memref<?xi8>)>
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4452,8 +4452,8 @@ Array Type AFTER: !llvm.struct<(i64, memref<?xi8>)>
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4472,8 +4472,8 @@ Getting MLIR Type
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4526,8 +4526,8 @@ Creating function: (memref<?x!llvm.struct<(i64, memref<?xi8>)>>, i64, i32, i32, 
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4562,8 +4562,8 @@ ANALYZING FUNCTION: artsDbCreateArray
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4588,8 +4588,8 @@ ANALYZING FUNCTION: computeEDT
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4602,8 +4602,8 @@ ANALYZING FUNCTION: computeEDT
 .struct artsDataBlock
 .artsDataBlock
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4613,13 +4613,13 @@ ANALYZING FUNCTION: computeEDT
 .void
 ----------------------
 ANALYZING FUNCTION: artsWaitOnHandle
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4778,8 +4778,8 @@ ANALYZING FUNCTION: mainEdt
 .struct artsEdtDep_t
 .artsEdtDep_t
     Field: guid
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long
@@ -4810,8 +4810,8 @@ Array Type AFTER: !llvm.struct<(i64, i32, memref<?xi8>)>
 .__uint32_t
 .__uint32_t
 .unsigned int
-.artsGuid_t
-.artsGuid_t
+.ArtsGuid
+.ArtsGuid
 .intptr_t
 .intptr_t
 .long

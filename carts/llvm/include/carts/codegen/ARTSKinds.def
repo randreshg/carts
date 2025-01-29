@@ -15,7 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 /// ------------------- ARTS typedefs -------------------
-#define artsGuid_t Int64
+#define ArtsGuid Int64
 #define artsPtr_t Int64
 #define artsTicket_t Int64
 #define artsType_t Int32
@@ -86,12 +86,12 @@ __ARTS_PTR_TYPE(Int8PtrPtrPtr)
 
 /*
 typedef struct {
-    artsGuid_t guid;
+    ArtsGuid guid;
     artsType_t mode;
     void *ptr;
 } artsEdtDep_t;
 */
-__ARTS_STRUCT_TYPE(EdtDep, artsEdtDep_t, false, artsGuid_t, artsType_t, VoidPtr)
+__ARTS_STRUCT_TYPE(EdtDep, artsEdtDep_t, false, ArtsGuid, artsType_t, VoidPtr)
 /* 
 struct artsHeader {
     uint8_t type:8;
@@ -102,7 +102,7 @@ __ARTS_STRUCT_TYPE(Header, artsHeader, false, Int8, Int64)
 /*
 struct artsDb {
     struct artsHeader header;
-    artsGuid_t guid;
+    ArtsGuid guid;
     volatile unsigned int copyCount;
     volatile unsigned int reader; 
     volatile unsigned int writer;
@@ -111,7 +111,7 @@ struct artsDb {
     void *dbList;
 } __attribute__ ((aligned));
 */
-__ARTS_STRUCT_TYPE(Db, artsDb, false, Header, artsGuid_t, Int32, Int32, Int32,
+__ARTS_STRUCT_TYPE(Db, artsDb, false, Header, ArtsGuid, Int32, Int32, Int32,
                   Int32, Int32, VoidPtr)
 /*
 struct artsEdt {
@@ -119,17 +119,17 @@ struct artsEdt {
     artsEdt_t funcPtr;
     uint32_t paramc;
     uint32_t depc;
-    artsGuid_t currentEdt;
-    artsGuid_t outputBuffer;
-    artsGuid_t epochGuid;
+    ArtsGuid currentEdt;
+    ArtsGuid outputBuffer;
+    ArtsGuid epochGuid;
     unsigned int cluster;
     unsigned int node;
     volatile unsigned int depcNeeded;
     volatile unsigned int invalidateCount;
 } __attribute__ ((aligned));
 */
-__ARTS_STRUCT_TYPE(Edt, artsEdt, false, Header, EdtPtr, Int32, Int32, artsGuid_t,
-                  artsGuid_t, artsGuid_t, Int32, Int32, Int32, Int32)
+__ARTS_STRUCT_TYPE(Edt, artsEdt, false, Header, EdtPtr, Int32, Int32, ArtsGuid,
+                  ArtsGuid, ArtsGuid, Int32, Int32, Int32, Int32)
 
 #undef __ARTS_STRUCT_TYPE
 #undef ARTS_STRUCT_TYPE
@@ -176,33 +176,33 @@ __ARTS_RTL(artsRealloc, false, VoidPtr, VoidPtr, SizeTy)
 __ARTS_RTL(artsFree, false, Void, VoidPtr)
 __ARTS_RTL(artsFreeAlign, false, Void, VoidPtr)
 
-__ARTS_RTL(artsReserveGuidRoute, false, artsGuid_t, artsType_t, Int32)
-__ARTS_RTL(artsIsGuidLocal, false, Int1, artsGuid_t)
-__ARTS_RTL(artsGuidGetRank, false, Int32, artsGuid_t)
-__ARTS_RTL(artsGuidGetType, false, artsType_t, artsGuid_t)
-__ARTS_RTL(artsGuidCast, false, artsGuid_t, artsGuid_t, artsType_t)
+__ARTS_RTL(artsReserveGuidRoute, false, ArtsGuid, artsType_t, Int32)
+__ARTS_RTL(artsIsGuidLocal, false, Int1, ArtsGuid)
+__ARTS_RTL(artsGuidGetRank, false, Int32, ArtsGuid)
+__ARTS_RTL(artsGuidGetType, false, artsType_t, ArtsGuid)
+__ARTS_RTL(artsGuidCast, false, ArtsGuid, ArtsGuid, artsType_t)
 /// artsNewGuidRangeNode
 /// artsGetGuid
 /// artsGuidRangeNext
 /// artsGuidRangeHasNext
 /// artsGuidRangeResetIter
 /// artsReserveGuidsRoundRobin
-// artsGuid_t artsEdtCreate(artsEdt_t funcPtr, unsigned int route, uint32_t paramc, uint64_t * paramv, uint32_t depc);
-__ARTS_RTL(artsEdtCreate, false, artsGuid_t, EdtFnPtr, Int32, Int32, Int32, Int32)
-// artsGuid_t artsEdtCreateWithGuid(artsEdt_t funcPtr, artsGuid_t guid, uint32_t paramc, uint64_t * paramv, uint32_t depc);
-__ARTS_RTL(artsEdtCreateWithGuid, false, artsGuid_t, EdtFnPtr, artsGuid_t, Int32,
+// ArtsGuid artsEdtCreate(artsEdt_t funcPtr, unsigned int route, uint32_t paramc, uint64_t * paramv, uint32_t depc);
+__ARTS_RTL(artsEdtCreate, false, ArtsGuid, EdtFnPtr, Int32, Int32, Int32, Int32)
+// ArtsGuid artsEdtCreateWithGuid(artsEdt_t funcPtr, ArtsGuid guid, uint32_t paramc, uint64_t * paramv, uint32_t depc);
+__ARTS_RTL(artsEdtCreateWithGuid, false, ArtsGuid, EdtFnPtr, ArtsGuid, Int32,
            Int64Ptr, Int32)
-__ARTS_RTL(artsEdtCreateWithGuidAndEpoch, false, artsGuid_t, EdtFnPtr, Int32,
-           Int64Ptr, Int32, artsGuid_t)
+__ARTS_RTL(artsEdtCreateWithGuidAndEpoch, false, ArtsGuid, EdtFnPtr, Int32,
+           Int64Ptr, Int32, ArtsGuid)
 /// artsEdtCreateDep
 /// artsEdtCreateWithGuidDep
 /// artsEdtCreateWithEpochDep
-__ARTS_RTL(artsEdtDestroy, false, Void, artsGuid_t)
+__ARTS_RTL(artsEdtDestroy, false, Void, ArtsGuid)
 
-__ARTS_RTL(artsSignalEdt, false, Void, artsGuid_t, Int32, artsGuid_t)
+__ARTS_RTL(artsSignalEdt, false, Void, ArtsGuid, Int32, ArtsGuid)
 // void artsSignalEdtValue( edtGuid, uint32_t slot, uint64_t data);
-__ARTS_RTL(artsSignalEdtValue, false, Void, artsGuid_t, Int32, Int64)
-__ARTS_RTL(artsSignalEdtPtr,   false, Void, artsGuid_t, Int32, VoidPtr, Int32)
+__ARTS_RTL(artsSignalEdtValue, false, Void, ArtsGuid, Int32, Int64)
+__ARTS_RTL(artsSignalEdtPtr,   false, Void, ArtsGuid, Int32, VoidPtr, Int32)
 /// artsActiveMessageWithDb
 /// attsActiveMessageWithDbAt
 /// artsActiveMessageWithBuffer
@@ -220,9 +220,9 @@ __ARTS_RTL(artsSignalEdtPtr,   false, Void, artsGuid_t, Int32, VoidPtr, Int32)
 /// artsAddLocalEventCallback
 
 /// artsDbCreate
-/// artsGuid_t artsDbCreate(void **addr, uint64_t size, artsType_t mode);
-__ARTS_RTL(artsDbCreate, false, artsGuid_t, VoidPtrPtr, Int64, artsType_t)
-/// artsGuid_t artsDbCreatePtr(artsPtr_t *addr, uint64_t size, artsType_t mode);
-__ARTS_RTL(artsDbCreatePtr, false, artsGuid_t, VoidPtr, Int64, artsType_t)
+/// ArtsGuid artsDbCreate(void **addr, uint64_t size, artsType_t mode);
+__ARTS_RTL(artsDbCreate, false, ArtsGuid, VoidPtrPtr, Int64, artsType_t)
+/// ArtsGuid artsDbCreatePtr(artsPtr_t *addr, uint64_t size, artsType_t mode);
+__ARTS_RTL(artsDbCreatePtr, false, ArtsGuid, VoidPtr, Int64, artsType_t)
 #undef __ARTS_RTL
 #undef ARTS_RTL

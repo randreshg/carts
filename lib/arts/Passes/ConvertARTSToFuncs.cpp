@@ -122,7 +122,7 @@ struct ParallelOpLowering : public OpConversionPattern<arts::ParallelOp> {
   LogicalResult
   matchAndRewrite(arts::ParallelOp op, arts::ParallelOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    LLVM_DEBUG(DBGS() << "Lowering arts.parallel\n" << op << "\n");
+    LLVM_DEBUG(DBGS() << "Lowering arts.parallel\n" << "\n");
 
     Location loc = UnknownLoc::get(op.getContext());
     arts::SingleOp singleOp = nullptr;
@@ -149,6 +149,14 @@ struct ParallelOpLowering : public OpConversionPattern<arts::ParallelOp> {
            "Invalid parallel op region structure");
     auto &singleRegion = singleOp->getRegion(0);
 
+    /// Process dependencies (makes memrefs -> datablocks)
+    auto deps = op.getDeps();
+    for (auto dep : deps) {
+      auto dbOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp());
+      assert(dbOp && "Dependency is not a datablock op");
+      AC.getOrCreateDatablock(dbOp, loc);
+    }
+  
     /// We set insertion to the old op for creation of epoch, etc.
     OpBuilder::InsertionGuard guard(AC.getBuilder());
     AC.setInsertionPoint(op);
@@ -169,7 +177,6 @@ struct ParallelOpLowering : public OpConversionPattern<arts::ParallelOp> {
     auto par_consts = op.getConsts();
     AC.createEdt(&par_deps, &par_params, &par_consts, &singleRegion,
                  &parEpoch_guid, nullptr, true, &rewriter);
-
     /// Finally, erase the old parallel op from the IR
     rewriter.eraseOp(op);
 
@@ -210,9 +217,9 @@ void ConvertARTSToFuncsPass::runOnOperation() {
 
   /// Handle datablocks first
   /// It analyzes the datablock ops and creates the necessary data structures
-  module->walk([&](arts::DataBlockOp dbOp) {
-    AC.createDatablock(dbOp, UnknownLoc::get(ctx));
-  });
+  // module->walk([&](arts::DataBlockOp dbOp) {
+  //   AC.createDatablock(dbOp, UnknownLoc::get(ctx));
+  // });
 
   // Create a ConversionTarget that declares ARTS dialect ops illegal
   ConversionTarget target(*ctx);
@@ -246,6 +253,7 @@ void ConvertARTSToFuncsPass::runOnOperation() {
   // 6) Apply partial conversion
   if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
     LLVM_DEBUG(dbgs() << "Conversion failed.\n");
+    module.dump();
     signalPassFailure();
     return;
   }

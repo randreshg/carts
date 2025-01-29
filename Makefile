@@ -92,8 +92,7 @@ arts:
 		-DCMAKE_CXX_COMPILER=clang++ \
 		-DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR) \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
-	make -C $(ARTS_BUILD_DIR) all -j
-	make -C $(ARTS_BUILD_DIR) -j
+	make -C $(ARTS_BUILD_DIR) install -j
 arts-clean:
 	rm -f -r $(ARTS_INSTALL_DIR)
 	# rm -f -r $(ARTS_DIR)
