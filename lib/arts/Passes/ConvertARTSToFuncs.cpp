@@ -290,7 +290,7 @@ void ConvertARTSToFuncsPass::runOnOperation() {
   /// Datablock preprocessing
   LLVM_DEBUG(dbgs() << "Preprocessing datablocks\n");
   module->walk([&](arts::DataBlockOp dbOp) { preprocessDataBlock(AC, dbOp); });
-  // module.dump();
+  module.dump();
 
   /// Create a ConversionTarget that declares ARTS dialect ops illegal
   ConversionTarget target(*ctx);

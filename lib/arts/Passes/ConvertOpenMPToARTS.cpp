@@ -278,7 +278,7 @@ public:
           continue;
         LLVM_DEBUG(dbgs() << "  Adding parameter: " << operand << "\n");
         parameters.insert(operand);
-      } else if (ignoreDeps) {
+      } else if (!ignoreDeps) {
         LLVM_DEBUG(dbgs() << "  Adding dependency: " << operand << "\n");
         dependencies.insert(operand);
       }
@@ -293,16 +293,9 @@ public:
       SmallVector<Value, 4> depsToProcess(dependencies.begin(),
                                           dependencies.end());
       for (Value dep : depsToProcess) {
-        auto dbOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp());
-        if (!dbOp) {
-          auto newDep = addDependency(dep, "inout", true);
-          dbOp = dyn_cast<arts::DataBlockOp>(newDep.getDefiningOp());
+        if (!isa<arts::DataBlockOp>(dep.getDefiningOp())) {
+          addDependency(dep, "inout", true);
           dependencies.remove(dep);
-        }
-        /// Add attributes to the datablock operation
-        if (auto baseOp = dyn_cast_or_null<arts::DataBlockOp>(
-                dbOp.getBase().getDefiningOp())) {
-          dbOp->setAttr("baseIsDb", UnitAttr::get(dbOp.getContext()));
         }
       }
     }
