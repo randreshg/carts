@@ -93,7 +93,7 @@ void DataBlockCodegen::create(arts::DataBlockOp dbOp, Location loc) {
 
   // LLVM_DEBUG(DBGS() << "Datablock type: " << baseTy << "\n");
   Value oneIdx = builder.create<arith::ConstantIndexOp>(loc, 1);
-  auto dbPtr = AC.castToLLVMPtr(memref, loc);
+  auto dbPtr = AC.castToPtr(memref, loc);
   numElements = oneIdx;
   auto dbTySize = getTypeSize();
   if (isLoad) {
@@ -184,11 +184,24 @@ void EdtCodegen::build(Location loc, ConversionPatternRewriter &rewriter) {
     Operation &op = entryBlock.front();
     op.moveBefore(&funcEntryBlock, funcEntryBlock.end());
   }
+  entryBlock.erase();
 
+  /// Iterate over all blocks of the region and replace the arts.yield with a
+  /// return
+  for (auto &block : funcRegion) {
+    if (auto yieldOp = dyn_cast<arts::YieldOp>(block.getTerminator())) {
+      AC.setInsertionPoint(yieldOp);
+      builder.create<func::ReturnOp>(loc);
+      yieldOp->erase();
+      // rewriter.setInsertionPoint(yieldOp);
+      // rewriter.replaceOpWithNewOp<func::ReturnOp>(yieldOp, ValueRange{});
+    }
+  }
   /// Replace the arts.yield with a return
-  auto yieldOp = funcEntryBlock.getTerminator();
-  AC.setInsertionPoint(yieldOp);
-  yieldOp->replaceAllUsesWith(builder.create<func::ReturnOp>(loc));
+  // auto yieldOp = funcEntryBlock.getTerminator();
+  // AC.setInsertionPoint(yieldOp);
+  // builder.create<func::ReturnOp>(loc);
+  // yieldOp->erase();
 
   // rewriter.replaceOpWithNewOp<func::ReturnOp>(yieldOp, ValueRange{});
 
@@ -223,7 +236,7 @@ void EdtCodegen::processDepsAndParams(SmallVector<Value> *opDeps,
       depC = builder.create<arith::AddIOp>(loc, depC, db->getNumElements())
                  .getResult();
     }
-    AC.castToInt(AC.Int32, depC, loc);
+    depC = AC.castToInt(AC.Int32, depC, loc);
   }
 
   /// Insert the parameters
@@ -536,11 +549,13 @@ pair<Value, Value> ArtsCodegen::CreatePtrAndGuidArrayFromDeps(Value numElements,
   auto ptrArray = builder.create<memref::AllocaOp>(loc, arrayTy, numElements);
   auto guidArray = builder.create<memref::AllocaOp>(
       loc, MemRefType::get({ShapedType::kDynamic}, ArtsGuid), numElements);
-  auto llvmPtr = castToLLVMPtr(ptrArray, loc);
-
+  auto ptr = createPtr(ptrArray, loc);
+  auto numElementsInt = castToInt(Int32, numElements, loc);
+  auto initialSlotInt = castToInt(Int32, initialSlot, loc);
   /// Set info based on the deps
   createRuntimeCall(ARTSRTL_artsDbCreatePtrAndGuidArrayFromDeps,
-                    {guidArray, llvmPtr, numElements, deps, initialSlot}, loc);
+                    {guidArray, ptr, numElementsInt, deps, initialSlotInt},
+                    loc);
 
   return {ptrArray, guidArray};
 }
@@ -567,6 +582,19 @@ Value ArtsCodegen::createIntConstant(int value, Type type, Location loc) {
   auto v = builder.create<arith::ConstantOp>(
       loc, type, builder.getIntegerAttr(type, value));
   return v;
+}
+
+Value ArtsCodegen::createPtr(Value source, Location loc) {
+  if (source.getType().isa<LLVM::LLVMPointerType>())
+    return source;
+  /// If it is not a pointer, cast it to a pointer.
+  /// Polygeist - memref2pointer
+  auto srcTy = source.getType().cast<MemRefType>();
+  auto valPtr = builder.create<polygeist::Memref2PointerOp>(
+      loc, LLVM::LLVMPointerType::get(srcTy), source);
+  auto valTy = mlir::MemRefType::get(srcTy.getShape(), VoidPtr,
+                                     srcTy.getLayout(), srcTy.getMemorySpace());
+  return builder.create<polygeist::Pointer2MemrefOp>(loc, valTy, valPtr);
 }
 
 /// Casting
@@ -701,15 +729,13 @@ Value ArtsCodegen::castToInt(Type targetType, Value source, Location loc) {
   return nullptr; /// unreachable
 }
 
-Value ArtsCodegen::castToLLVMPtr(Value source, Location loc) {
+Value ArtsCodegen::castToPtr(Value source, Location loc) {
   if (source.getType().isa<LLVM::LLVMPointerType>())
     return source;
   /// If it is not a pointer, cast it to a pointer.
   /// Polygeist - memref2pointer
-  auto srcTy = source.getType().cast<MemRefType>();
   auto valPtr = builder.create<polygeist::Memref2PointerOp>(
-      loc, LLVM::LLVMPointerType::get(srcTy), source);
-  auto valTy = mlir::MemRefType::get(srcTy.getShape(), VoidPtr,
-                                     srcTy.getLayout(), srcTy.getMemorySpace());
-  return builder.create<polygeist::Pointer2MemrefOp>(loc, valTy, valPtr);
+      loc, LLVM::LLVMPointerType::get(source.getType()), source);
+  /// pointer2memref
+  return builder.create<polygeist::Pointer2MemrefOp>(loc, VoidPtr, valPtr);
 }
