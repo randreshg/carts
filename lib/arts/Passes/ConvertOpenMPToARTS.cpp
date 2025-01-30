@@ -41,15 +41,16 @@ using namespace arts;
 
 class EdtEnvManager {
 public:
-  EdtEnvManager(PatternRewriter &rewriter, Region &region)
+  EdtEnvManager(PatternRewriter &rewriter, Region &region, bool adjust = false)
       : rewriter(rewriter), region(region) {
     naiveCollection();
+    if (adjust)
+      this->adjust();
   }
   ~EdtEnvManager() {}
 
   /// Create a new datablock operation and rewires the uses
-  DataBlockOp createMakeDepOp(PatternRewriter &rewriter, Location loc,
-                              StringRef mode, Value inputMemRef) {
+  DataBlockOp createMakeDepOp(Location loc, StringRef mode, Value inputMemRef) {
     bool isLoad = false;
     /// If input is a memref.load, get the base
     Value baseMemRef = inputMemRef;
@@ -165,7 +166,7 @@ public:
     auto depOp = rewriter.create<arts::DataBlockOp>(
         loc, subMemRefType, rewriter.getStringAttr(mode), baseMemRef, offsets,
         sizes, strides);
-    if(isLoad) {
+    if (isLoad) {
       /// Add an attribute to indicate that this is a load
       depOp->setAttr("isLoad", rewriter.getUnitAttr());
     }
@@ -252,7 +253,7 @@ public:
   }
 
   /// Collect parameters and dependencies
-  void naiveCollection(bool onlyConsts = false) {
+  void naiveCollection(bool ignoreDeps = false) {
     LLVM_DEBUG(dbgs() << "Naive collection of parameters and dependencies: \n");
 
     /// Checks if the value is a constant, if so, adds it to the constants set
@@ -273,15 +274,99 @@ public:
     getUsedValuesDefinedAbove(region, usedValues);
     for (Value operand : usedValues) {
       if (operand.getType().isIntOrIndexOrFloat()) {
-        if (isConstant(operand) || onlyConsts)
+        if (isConstant(operand))
           continue;
         LLVM_DEBUG(dbgs() << "  Adding parameter: " << operand << "\n");
         parameters.insert(operand);
-      } else if (!onlyConsts) {
+      } else if (ignoreDeps) {
         LLVM_DEBUG(dbgs() << "  Adding dependency: " << operand << "\n");
         dependencies.insert(operand);
       }
     }
+  }
+
+  /// Analyze and adjus the set of parameters, constants and dependencies
+  void adjust() {
+    /// Dependencies
+    /// Check if there are any dependencies that are not datablock operations
+    {
+      SmallVector<Value, 4> depsToProcess(dependencies.begin(),
+                                          dependencies.end());
+      for (Value dep : depsToProcess) {
+        auto dbOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp());
+        if (!dbOp) {
+          auto newDep = addDependency(dep, "inout", true);
+          dbOp = dyn_cast<arts::DataBlockOp>(newDep.getDefiningOp());
+          dependencies.remove(dep);
+        }
+        /// Add attributes to the datablock operation
+        if (auto baseOp = dyn_cast_or_null<arts::DataBlockOp>(
+                dbOp.getBase().getDefiningOp())) {
+          dbOp->setAttr("baseIsDb", UnitAttr::get(dbOp.getContext()));
+        }
+      }
+    }
+
+    /// Analyze the parameters.
+    /// Check if there is any parameter that loads a memref and indices of any
+    /// dependency
+    {
+      DenseMap<Value, SmallVector<arts::DataBlockOp>> baseToDepsMap;
+      for (auto dep : dependencies) {
+        auto depOp = cast<arts::DataBlockOp>(dep.getDefiningOp());
+        baseToDepsMap[depOp.getBase()].push_back(depOp);
+      }
+
+      SmallVector<Value> paramsToRemove;
+      for (auto param : parameters) {
+        auto defOp = param.getDefiningOp();
+        if (!defOp)
+          continue;
+
+        /// We are only interested in memref.load operations
+        auto loadOp = dyn_cast<memref::LoadOp>(defOp);
+        if (!loadOp)
+          continue;
+
+        /// If the base of the load is not a dep, continue
+        auto memref = loadOp.getMemRef();
+        auto indices = loadOp.getIndices();
+        if (!baseToDepsMap.count(memref))
+          continue;
+
+        /// Get all the dependencies that have the same base as the load
+        for (auto dep : baseToDepsMap[memref]) {
+          auto depIndices = dep.getOffsets();
+          if (indices.size() != depIndices.size())
+            continue;
+
+          /// Check if the indices match
+          if (!llvm::all_of(llvm::zip(indices, depIndices), [](auto pair) {
+                return std::get<0>(pair) == std::get<1>(pair);
+              }))
+            continue;
+
+          /// Insert a new load at the start of the region, and replace all the
+          /// uses of the parameter
+          OpBuilder::InsertionGuard guard(rewriter);
+          rewriter.setInsertionPointToStart(&region.front());
+          auto newLoad = rewriter.create<memref::LoadOp>(
+              loadOp.getLoc(), dep.getResult(), indices);
+          utils::replaceInRegion(region, loadOp.getResult(), newLoad.getResult());
+
+          /// Remove the parameter
+          paramsToRemove.push_back(param);
+        }
+      }
+
+      /// Remove the parameters
+      for (auto param : paramsToRemove)
+        parameters.remove(param);
+    }
+
+    /// Give it a second chance to collect constants in case any was added after
+    /// the naive collection
+    naiveCollection(true);
   }
 
   /// Add interface
@@ -311,7 +396,7 @@ public:
       }
 
       /// Create a new datablock operation
-      depOp = createMakeDepOp(rewriter, val.getLoc(), mode, val);
+      depOp = createMakeDepOp(val.getLoc(), mode, val);
     }
 
     /// If it was added as a parameter, remove it
@@ -324,26 +409,8 @@ public:
 
   /// Getters
   ArrayRef<Value> getParameters() { return parameters.getArrayRef(); }
-
-  ArrayRef<Value> getConstants() {
-    /// Give it a second chance to collect constants
-    naiveCollection(true);
-    return constants.getArrayRef();
-  }
-
-  ArrayRef<Value> getDependencies() {
-    /// Check if there are any dependencies that are not datablock operations
-    SmallVector<Value, 4> depsToProcess(dependencies.begin(),
-                                        dependencies.end());
-    for (Value dep : depsToProcess) {
-      if (!isa<arts::DataBlockOp>(dep.getDefiningOp())) {
-        addDependency(dep);
-        dependencies.remove(dep);
-      }
-    }
-
-    return dependencies.getArrayRef();
-  }
+  ArrayRef<Value> getConstants() { return constants.getArrayRef(); }
+  ArrayRef<Value> getDependencies() { return dependencies.getArrayRef(); }
 
 private:
   PatternRewriter &rewriter;
@@ -363,7 +430,7 @@ struct ParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
     auto loc = op.getLoc();
     LLVM_DEBUG(DBGS() << "Converting omp.parallel to arts.parallel\n");
     /// Collect parameters and dependencies
-    EdtEnvManager edtEnv(rewriter, op.getRegion());
+    EdtEnvManager edtEnv(rewriter, op.getRegion(), true);
 
     /// Create a new `arts.parallel` operation.
     auto parOp = rewriter.create<arts::ParallelOp>(loc, edtEnv.getParameters(),
@@ -423,6 +490,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
 
   void collectTaskDependencies(EdtEnvManager &edtEnv, omp::TaskOp task,
                                PatternRewriter &rewriter, Location loc) const {
+    /// Collect the task deps clause
     auto dependList = task.getDependsAttr();
     for (unsigned i = 0, e = dependList.size(); i < e; ++i) {
       auto depClause = llvm::cast<omp::ClauseTaskDependAttr>(dependList[i]);
@@ -454,6 +522,9 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
       /// Replace dependency array with undef
       replaceWithUndef(depAlloc, rewriter);
     }
+
+    /// Adjust the dependencies
+    edtEnv.adjust();
   }
 
   LogicalResult matchAndRewrite(omp::TaskOp op,

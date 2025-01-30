@@ -179,6 +179,7 @@ public:
   Value createFnPtr(func::FuncOp funcOp, Location loc);
   Value createIntConstant(int value, Type type, Location loc);
   Value createIndexConstant(int value, Location loc);
+  Value createPtr(Value source, Location loc);
 
   /// Casting
   Value castParameter(mlir::Type targetType, Value source, Location loc);
@@ -189,7 +190,7 @@ public:
   Value castToIndex(Value source, Location loc);
   Value castToFloat(mlir::Type targetType, Value source, Location loc);
   Value castToInt(mlir::Type targetType, Value source, Location loc);
-  Value castToLLVMPtr(Value source, Location loc);
+  Value castToPtr(Value source, Location loc);
 
   /// Insertion point
   void setInsertionPoint(Operation *op) { builder.setInsertionPoint(op); }

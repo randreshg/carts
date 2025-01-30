@@ -202,17 +202,17 @@ struct ParallelOpLowering : public OpConversionPattern<arts::ParallelOp> {
 
     /// Analyze the parallel region to find the singleOp
     mlir::Region &region = op.getRegion();
-    region.walk([&](mlir::Operation *nested) {
+    region.walk([&](mlir::Operation *op) {
       /// Only consider ops directly in this region
-      if (nested->getParentRegion() != &region)
+      if (op->getParentRegion() != &region)
         return;
       numOps++;
-      if (auto single = dyn_cast<arts::SingleOp>(nested)) {
+      if (auto single = dyn_cast<arts::SingleOp>(op)) {
         if (singleOp)
           llvm_unreachable("Multiple single ops in parallel op not supported");
 
         singleOp = single;
-      } else if (!isa<arts::BarrierOp>(nested) && !isa<arts::YieldOp>(nested)) {
+      } else if (!isa<arts::BarrierOp>(op) && !isa<arts::YieldOp>(op)) {
         llvm_unreachable("Unknown op in parallel op - not supported");
       }
     });
@@ -302,12 +302,12 @@ void ConvertARTSToFuncsPass::runOnOperation() {
                          affine::AffineDialect, polygeist::PolygeistDialect,
                          scf::SCFDialect>();
   target.addLegalOp<ModuleOp>();
-  // target.addLegalOp<arts::ParallelOp>();
   target.addLegalOp<arts::EdtOp>();
   target.addLegalOp<arts::AllocaOp>();
   target.addLegalOp<arts::DataBlockOp>();
   target.addLegalOp<arts::YieldOp>();
   target.addLegalOp<arts::BarrierOp>();
+  target.addLegalDialect<LLVM::LLVMDialect>();
 
   // (Optional) If you have custom ARTS types to convert, define a
   // TypeConverter TypeConverter typeConverter;
@@ -321,7 +321,7 @@ void ConvertARTSToFuncsPass::runOnOperation() {
   // patterns.add<EpochOpLowering>(ctx, AC);
   // patterns.add<DatablockOpLowering>(ctx, AC);
 
-  // 6) Apply partial conversion
+  /// Apply partial conversion
   if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
     LLVM_DEBUG(dbgs() << "Conversion failed.\n");
     module.dump();
