@@ -12,6 +12,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypeInterfaces.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Region.h"
@@ -33,6 +34,7 @@
 #include "llvm/IR/DataLayout.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
 #include <optional>
 
 #define DEBUG_TYPE "convert-arts-to-funcs"
@@ -45,24 +47,93 @@ using namespace arts;
 
 namespace {
 
-struct DatablockOpPreprocessing : public OpRewritePattern<arts::DataBlockOp> {
-  using OpRewritePattern::OpRewritePattern;
+void preprocessDataBlock(ArtsCodegen &AC, DataBlockOp op) {
+  Location loc = op.getLoc();
+  auto &builder = AC.getBuilder();
+  OpBuilder::InsertionGuard guard(builder);
+  AC.setInsertionPoint(op);
 
-  DatablockOpPreprocessing(MLIRContext *context, ArtsCodegen &AC)
-      : OpRewritePattern(context), AC(AC) {}
+  /// Convert all dimensions to dynamic
+  auto memrefTy = op.getType().cast<MemRefType>();
+  SmallVector<int64_t, 4> dynamicShape(memrefTy.getRank(),
+                                       ShapedType::kDynamic);
+  auto dynMemrefTy = MemRefType::get(dynamicShape, memrefTy.getElementType());
+  auto pointerMemrefTy = MemRefType::get({ShapedType::kDynamic}, dynMemrefTy);
 
-  LogicalResult matchAndRewrite(arts::DataBlockOp op,
-                                PatternRewriter &rewriter) const override {
-    LLVM_DEBUG(DBGS() << "Handles arts.datablock: " << op << "\n");
+  /// Create a new DataBlockOp with that pointer-based type
+  auto newDbOp = builder.create<arts::DataBlockOp>(
+      loc, pointerMemrefTy, op.getMode(), op.getBase(), op.getOffsets(),
+      op.getSizes(), op.getStrides());
+  newDbOp->setAttrs(op->getAttrs());
 
-    Location loc = UnknownLoc::get(op.getContext());
-    AC.createDatablock(op, loc);
-    return success();
+  if (auto baseOp =
+          dyn_cast_or_null<arts::DataBlockOp>(op.getBase().getDefiningOp())) {
+    newDbOp->setAttr("baseIsDb", UnitAttr::get(op.getContext()));
   }
 
-private:
-  ArtsCodegen &AC;
-};
+  /// Walk all uses of the old datablock to properly replace it with the new
+  /// pointer
+  for (auto &use : llvm::make_early_inc_range(op->getUses())) {
+    /// Set insertion point to the user
+    auto user = use.getOwner();
+    AC.setInsertionPoint(user);
+    /// LoadOp - load the pointer using the old load indices and then the value
+    /// at index 0
+    if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+      auto ptrVal = builder.create<memref::LoadOp>(
+          loc, newDbOp.getResult(), ValueRange(loadOp.getIndices()));
+      auto c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
+      auto finalVal =
+          builder.create<memref::LoadOp>(loc, ptrVal, ValueRange{c0});
+      loadOp.getResult().replaceAllUsesWith(finalVal.getResult());
+      loadOp.erase();
+    }
+    /// memref.store - load the pointer using the old store indices and then
+    /// store the value at index 0
+    else if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
+      auto ptrVal = builder.create<memref::LoadOp>(
+          loc, newDbOp.getResult(), ValueRange(storeOp.getIndices()));
+      auto c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
+      builder.create<memref::StoreOp>(loc, storeOp.getValueToStore(), ptrVal,
+                                      ValueRange{c0});
+      storeOp.erase();
+    }
+    /// DataBlockOp referencing op - replace base
+    else if (auto dbOp = dyn_cast<arts::DataBlockOp>(user)) {
+      dbOp.getBase().replaceUsesWithIf(
+          newDbOp.getResult(),
+          [&](OpOperand &operand) { return operand.getOwner() == dbOp; });
+    }
+    /// ParallelOp - fix dependencies
+    else if (auto parallelOp = dyn_cast<arts::ParallelOp>(user)) {
+      for (auto dep : parallelOp.getDeps()) {
+        if (dep == op) {
+          dep.replaceUsesWithIf(newDbOp.getResult(), [&](OpOperand &operand) {
+            return operand.getOwner() == parallelOp;
+          });
+        }
+      }
+    }
+    /// EdtOp - fix dependencies
+    else if (auto edtOp = dyn_cast<arts::EdtOp>(user)) {
+      for (auto dep : edtOp.getDependencies()) {
+        if (dep == op) {
+          dep.replaceUsesWithIf(newDbOp.getResult(), [&](OpOperand &operand) {
+            return operand.getOwner() == edtOp;
+          });
+        }
+      }
+    }
+    /// fallback
+    else {
+      LLVM_DEBUG(DBGS() << "Unknown use of datablock op: " << *user << "\n");
+      llvm_unreachable("Unknown use of datablock op");
+    }
+  }
+
+  /// Erase old op
+  op->erase();
+}
 
 struct DatablockOpLowering : public OpConversionPattern<arts::DataBlockOp> {
   using OpConversionPattern<arts::DataBlockOp>::OpConversionPattern;
@@ -122,7 +193,8 @@ struct ParallelOpLowering : public OpConversionPattern<arts::ParallelOp> {
   LogicalResult
   matchAndRewrite(arts::ParallelOp op, arts::ParallelOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    LLVM_DEBUG(DBGS() << "Lowering arts.parallel\n" << "\n");
+    LLVM_DEBUG(DBGS() << "Lowering arts.parallel\n"
+                      << "\n");
 
     Location loc = UnknownLoc::get(op.getContext());
     arts::SingleOp singleOp = nullptr;
@@ -156,7 +228,7 @@ struct ParallelOpLowering : public OpConversionPattern<arts::ParallelOp> {
       assert(dbOp && "Dependency is not a datablock op");
       AC.getOrCreateDatablock(dbOp, loc);
     }
-  
+
     /// We set insertion to the old op for creation of epoch, etc.
     OpBuilder::InsertionGuard guard(AC.getBuilder());
     AC.setInsertionPoint(op);
@@ -215,13 +287,12 @@ void ConvertARTSToFuncsPass::runOnOperation() {
   OpBuilder builder(ctx);
   ArtsCodegen AC(module, builder, llvmDL, mlirDL);
 
-  /// Handle datablocks first
-  /// It analyzes the datablock ops and creates the necessary data structures
-  // module->walk([&](arts::DataBlockOp dbOp) {
-  //   AC.createDatablock(dbOp, UnknownLoc::get(ctx));
-  // });
+  /// Datablock preprocessing
+  LLVM_DEBUG(dbgs() << "Preprocessing datablocks\n");
+  module->walk([&](arts::DataBlockOp dbOp) { preprocessDataBlock(AC, dbOp); });
+  // module.dump();
 
-  // Create a ConversionTarget that declares ARTS dialect ops illegal
+  /// Create a ConversionTarget that declares ARTS dialect ops illegal
   ConversionTarget target(*ctx);
   target.addIllegalOp<arts::ParallelOp>();
 
