@@ -1,123 +1,67 @@
 --- ConvertARTSToFuncsPass START ---
 Preprocessing datablocks
-
-//===-------------------------------------------===//
-Legalizing operation : 'builtin.module'(0x562d5eb7c690) {
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'llvm.mlir.global'(0x562d5eb55fa0) {
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'llvm.func'(0x562d5eb4fd10) {
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'func.func'(0x562d5eb48950) {
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.constant'(0x562d5eb631e0) {
-  %0 = "arith.constant"() <{value = 100 : index}> : () -> index
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.constant'(0x562d5eb63d70) {
-  %1 = "arith.constant"() <{value = 1 : index}> : () -> index
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.constant'(0x562d5eb63e40) {
-  %2 = "arith.constant"() <{value = 0 : index}> : () -> index
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.constant'(0x562d5eb64390) {
-  %3 = "arith.constant"() <{value = -1 : i32}> : () -> i32
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.constant'(0x562d5eb648e0) {
-  %4 = "arith.constant"() <{value = 0.000000e+00 : f64}> : () -> f64
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.constant'(0x562d5eb64e30) {
-  %5 = "arith.constant"() <{value = 0 : i32}> : () -> i32
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.constant'(0x562d5eb65380) {
-  %6 = "arith.constant"() <{value = 100 : i32}> : () -> i32
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'memref.alloca'(0x562d5eb2c380) {
-  %7 = "memref.alloca"() <{operandSegmentSizes = array<i32: 0, 0>}> : () -> memref<100xf64>
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'memref.alloca'(0x562d5eb2c460) {
-  %8 = "memref.alloca"() <{operandSegmentSizes = array<i32: 0, 0>}> : () -> memref<100xf64>
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'func.call'(0x562d5eb6dc50) {
-  %9 = "func.call"() <{callee = @rand}> : () -> i32
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.remsi'(0x562d5eb6dd00) {
-  %10 = "arith.remsi"(%9, %6) : (i32, i32) -> i32
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arts.datablock'(0x562d5eb72f80) {
-  %11 = "arts.datablock"(%8, %2, %0, %1) <{mode = "inout", operandSegmentSizes = array<i32: 1, 1, 1, 1>}> : (memref<100xf64>, index, index, index) -> memref<?xmemref<?xf64>>
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arts.datablock'(0x562d5eb2ec20) {
-  %12 = "arts.datablock"(%7, %2, %0, %1) <{mode = "inout", operandSegmentSizes = array<i32: 1, 1, 1, 1>}> : (memref<100xf64>, index, index, index) -> memref<?xmemref<?xf64>>
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arts.parallel'(0x562d5eb6f200) {
-  * Fold {
-  } -> FAILURE : unable to fold
-
-  * Pattern : 'arts.parallel -> ()' {
+module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
+  llvm.mlir.global internal constant @str0("A[0] = %f\0A\00") {addr_space = 0 : i32}
+  llvm.func @printf(!llvm.ptr, ...) -> i32
+  func.func @compute() attributes {llvm.linkage = #llvm.linkage<external>} {
+    %c100 = arith.constant 100 : index
+    %c1 = arith.constant 1 : index
+    %c0 = arith.constant 0 : index
+    %c-1_i32 = arith.constant -1 : i32
+    %cst = arith.constant 0.000000e+00 : f64
+    %c0_i32 = arith.constant 0 : i32
+    %c100_i32 = arith.constant 100 : i32
+    %alloca = memref.alloca() : memref<100xf64>
+    %alloca_0 = memref.alloca() : memref<100xf64>
+    %0 = call @rand() : () -> i32
+    %1 = arith.remsi %0, %c100_i32 : i32
+    %2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<?xmemref<?xf64>>
+    %3 = arts.datablock "inout", %alloca : memref<100xf64>[%c0] [%c100] [%c1] : memref<?xmemref<?xf64>>
+    arts.parallel parameters(%1) : (i32), constants(%c1, %c0, %c-1_i32, %c0_i32, %cst, %c100) : (index, index, i32, i32, f64, index), dependencies(%2, %3) : (memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>>) {
+      arts.barrier
+      arts.single {
+        %8 = arith.sitofp %1 : i32 to f64
+        scf.for %arg0 = %c0 to %c100 step %c1 {
+          %9 = arith.index_cast %arg0 : index to i32
+          %10 = arts.datablock "out", %2 : memref<?xmemref<?xf64>>[%arg0] [%c1] [%c1] {baseIsDb, isLoad} : memref<?xmemref<?xf64>>
+          arts.edt parameters(%9, %8, %arg0) : (i32, f64, index), constants(%c0) : (index), dependencies(%10) : (memref<?xmemref<?xf64>>) {
+            %16 = arith.sitofp %9 : i32 to f64
+            %17 = arith.addf %16, %8 : f64
+            %18 = memref.load %10[%c0] : memref<?xmemref<?xf64>>
+            %c0_1 = arith.constant 0 : index
+            memref.store %17, %18[%c0_1] : memref<?xf64>
+          }
+          %11 = arith.addi %9, %c-1_i32 : i32
+          %12 = arith.index_cast %11 : i32 to index
+          %13 = arts.datablock "in", %2 : memref<?xmemref<?xf64>>[%arg0] [%c1] [%c1] {baseIsDb, isLoad} : memref<?xmemref<?xf64>>
+          %14 = arts.datablock "in", %2 : memref<?xmemref<?xf64>>[%12] [%c1] [%c1] {baseIsDb, isLoad} : memref<?xmemref<?xf64>>
+          %15 = arts.datablock "out", %3 : memref<?xmemref<?xf64>>[%arg0] [%c1] [%c1] {baseIsDb, isLoad} : memref<?xmemref<?xf64>>
+          arts.edt parameters(%9, %arg0, %12) : (i32, index, index), constants(%c0_i32, %cst, %c0) : (i32, f64, index), dependencies(%13, %14, %15) : (memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>>) {
+            %16 = memref.load %13[%arg0] : memref<?xmemref<?xf64>>
+            %c0_1 = arith.constant 0 : index
+            %17 = memref.load %16[%c0_1] : memref<?xf64>
+            %18 = memref.load %14[%12] : memref<?xmemref<?xf64>>
+            %c0_2 = arith.constant 0 : index
+            %19 = memref.load %18[%c0_2] : memref<?xf64>
+            %20 = arith.cmpi sgt, %9, %c0_i32 : i32
+            %21 = arith.select %20, %19, %cst : f64
+            %22 = arith.addf %17, %21 : f64
+            %23 = memref.load %15[%c0] : memref<?xmemref<?xf64>>
+            %c0_3 = arith.constant 0 : index
+            memref.store %22, %23[%c0_3] : memref<?xf64>
+          }
+        }
+      }
+      arts.barrier
+    }
+    %4 = llvm.mlir.addressof @str0 : !llvm.ptr
+    %5 = llvm.getelementptr %4[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<11 x i8>
+    %6 = affine.load %alloca_0[0] : memref<100xf64>
+    %7 = llvm.call @printf(%5, %6) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, f64) -> i32
+    return
+  }
+  func.func private @rand() -> i32 attributes {llvm.linkage = #llvm.linkage<external>}
+}
 [convert-arts-to-funcs] Lowering arts.parallel
 
  - Datablock: %2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<?xmemref<?xf64>>
@@ -126,297 +70,8 @@ Legalizing operation : 'arts.parallel'(0x562d5eb6f200) {
  - Type: f64
  - Array of Datablocks: %7 = "memref.alloca"() <{operandSegmentSizes = array<i32: 0, 0>}> : () -> memref<100xf64>
  - Type: f64
-    ** Erase   : 'arts.parallel'(0x562d5eb6f200)
-  } -> SUCCESS : pattern applied successfully
-} -> SUCCESS
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arts.barrier'(0x562d5eb6f790) {
-  "arts.barrier"() : () -> ()
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arts.single'(0x562d5eb524b0) {
-} -> SUCCESS : operation marked 'ignored' during conversion
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.sitofp'(0x562d5eb6f8b0) {
-  %31 = "arith.sitofp"(%8) : (i32) -> f64
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'scf.for'(0x562d5eb722b0) {
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.index_cast'(0x562d5eb72410) {
-  %32 = "arith.index_cast"(%arg4) : (index) -> i32
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arts.datablock'(0x562d5eb6f0d0) {
-  %33 = "arts.datablock"(%17, %arg4, %0, %0) <{mode = "out", operandSegmentSizes = array<i32: 1, 1, 1, 1>}> {baseIsDb, isLoad} : (memref<?xmemref<?xf64>>, index, index, index) -> memref<?xmemref<?xf64>>
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arts.edt'(0x562d5eb73830) {
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.sitofp'(0x562d5eb730d0) {
-  %45 = "arith.sitofp"(%32) : (i32) -> f64
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.addf'(0x562d5eb62af0) {
-  %46 = "arith.addf"(%45, %31) <{fastmath = #arith.fastmath<none>}> : (f64, f64) -> f64
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'memref.load'(0x562d5eb62a40) {
-  %47 = "memref.load"(%33, %1) <{nontemporal = false}> : (memref<?xmemref<?xf64>>, index) -> memref<?xf64>
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.constant'(0x562d5eb8a250) {
-  %48 = "arith.constant"() <{value = 0 : index}> : () -> index
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'memref.store'(0x562d5eb8a2b0) {
-  "memref.store"(%46, %47, %48) <{nontemporal = false}> : (f64, memref<?xf64>, index) -> ()
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arts.yield'(0x562d5eb73070) {
-  "arts.yield"() : () -> ()
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'memref.load'(0x562d5eb73a50) {
-  %34 = "memref.load"(%17, %arg4) <{nontemporal = false}> : (memref<?xmemref<?xf64>>, index) -> memref<?xf64>
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.constant'(0x562d5eb8a130) {
-  %35 = "arith.constant"() <{value = 0 : index}> : () -> index
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'memref.load'(0x562d5eb8a1a0) {
-  %36 = "memref.load"(%34, %35) <{nontemporal = false}> : (memref<?xf64>, index) -> f64
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.addi'(0x562d5eb73960) {
-  %37 = "arith.addi"(%32, %2) : (i32, i32) -> i32
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.index_cast'(0x562d5eb731f0) {
-  %38 = "arith.index_cast"(%37) : (i32) -> index
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'memref.load'(0x562d5eb831e0) {
-  %39 = "memref.load"(%17, %38) <{nontemporal = false}> : (memref<?xmemref<?xf64>>, index) -> memref<?xf64>
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.constant'(0x562d5eb83290) {
-  %40 = "arith.constant"() <{value = 0 : index}> : () -> index
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'memref.load'(0x562d5eb83300) {
-  %41 = "memref.load"(%39, %40) <{nontemporal = false}> : (memref<?xf64>, index) -> f64
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arts.datablock'(0x562d5eb72db0) {
-  %42 = "arts.datablock"(%17, %arg4, %0, %0) <{mode = "in", operandSegmentSizes = array<i32: 1, 1, 1, 1>}> {baseIsDb, isLoad} : (memref<?xmemref<?xf64>>, index, index, index) -> memref<?xmemref<?xf64>>
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arts.datablock'(0x562d5eb73b60) {
-  %43 = "arts.datablock"(%17, %38, %0, %0) <{mode = "in", operandSegmentSizes = array<i32: 1, 1, 1, 1>}> {baseIsDb, isLoad} : (memref<?xmemref<?xf64>>, index, index, index) -> memref<?xmemref<?xf64>>
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arts.datablock'(0x562d5eb73cc0) {
-  %44 = "arts.datablock"(%24, %arg4, %0, %0) <{mode = "out", operandSegmentSizes = array<i32: 1, 1, 1, 1>}> {baseIsDb, isLoad} : (memref<?xmemref<?xf64>>, index, index, index) -> memref<?xmemref<?xf64>>
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arts.edt'(0x562d5eb691e0) {
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.cmpi'(0x562d5eb74070) {
-  %45 = "arith.cmpi"(%32, %3) <{predicate = 4 : i64}> : (i32, i32) -> i1
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.select'(0x562d5eb74560) {
-  %46 = "arith.select"(%45, %41, %4) : (i1, f64, f64) -> f64
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.addf'(0x562d5eb74690) {
-  %47 = "arith.addf"(%36, %46) <{fastmath = #arith.fastmath<none>}> : (f64, f64) -> f64
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'memref.load'(0x562d5eb8a380) {
-  %48 = "memref.load"(%44, %1) <{nontemporal = false}> : (memref<?xmemref<?xf64>>, index) -> memref<?xf64>
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arith.constant'(0x562d5eb8a430) {
-  %49 = "arith.constant"() <{value = 0 : index}> : () -> index
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'memref.store'(0x562d5eb73770) {
-  "memref.store"(%47, %48, %49) <{nontemporal = false}> : (f64, memref<?xf64>, index) -> ()
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arts.yield'(0x562d5eb73ff0) {
-  "arts.yield"() : () -> ()
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'scf.yield'(0x562d5eb57860) {
-  "scf.yield"() : () -> ()
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arts.yield'(0x562d5eb6f850) {
-  "arts.yield"() : () -> ()
-
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arts.barrier'(0x562d5eb723b0) {
-  "arts.barrier"() : () -> ()
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'arts.yield'(0x562d5eb6f740) {
-  "arts.yield"() : () -> ()
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'llvm.mlir.addressof'(0x562d5eb73dc0) {
-  %58 = "llvm.mlir.addressof"() <{global_name = @str0}> : () -> !llvm.ptr
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'llvm.getelementptr'(0x562d5eb74480) {
-  %59 = "llvm.getelementptr"(%58) <{elem_type = !llvm.array<11 x i8>, rawConstantIndices = array<i32: 0, 0>}> : (!llvm.ptr) -> !llvm.ptr
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'affine.load'(0x562d5eb47620) {
-  %60 = "affine.load"(%8) <{map = affine_map<() -> (0)>}> : (memref<100xf64>) -> f64
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'llvm.call'(0x562d5eb59a50) {
-  %61 = "llvm.call"(%59, %60) <{callee = @printf, callee_type = !llvm.func<i32 (ptr, ...)>, fastmathFlags = #llvm.fastmath<none>}> : (!llvm.ptr, f64) -> i32
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'func.return'(0x562d5eb73710) {
-  "func.return"() : () -> ()
-
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
-
-//===-------------------------------------------===//
-Legalizing operation : 'func.func'(0x562d5eb7c580) {
-} -> SUCCESS : operation marked legal by the target
-//===-------------------------------------------===//
 === ConvertARTSToFuncsPass COMPLETE ===
-module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
+module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
   func.func private @artsDbCreatePtrAndGuidArrayFromDeps(memref<?xi64>, memref<?xmemref<?xi8>>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>, i32) attributes {llvm.linkage = #llvm.linkage<external>}
   func.func private @artsEdtCreateWithEpoch(memref<?x!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>)>>, i32, i32, memref<?xi64>, i32, i64) -> i64 attributes {llvm.linkage = #llvm.linkage<external>}
   func.func private @artsInitializeAndStartEpoch(i64, i32) -> i64 attributes {llvm.linkage = #llvm.linkage<external>}
@@ -536,28 +191,28 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f128, dense<128> 
       %17 = arith.index_cast %arg4 : index to i32
       %18 = arts.datablock "out", %alloca : memref<?xmemref<?xf64>>[%arg4] [%c1] [%c1] {baseIsDb, isLoad} : memref<?xmemref<?xf64>>
       arts.edt parameters(%17, %16, %arg4) : (i32, f64, index), constants(%c0) : (index), dependencies(%18) : (memref<?xmemref<?xf64>>) {
-        %28 = arith.sitofp %17 : i32 to f64
-        %29 = arith.addf %28, %16 : f64
-        %30 = memref.load %18[%c0] : memref<?xmemref<?xf64>>
-        %c0_9 = arith.constant 0 : index
-        memref.store %29, %30[%c0_9] : memref<?xf64>
+        %24 = arith.sitofp %17 : i32 to f64
+        %25 = arith.addf %24, %16 : f64
+        %26 = memref.load %18[%c0] : memref<?xmemref<?xf64>>
+        %c0_7 = arith.constant 0 : index
+        memref.store %25, %26[%c0_7] : memref<?xf64>
       }
-      %19 = memref.load %alloca[%arg4] : memref<?xmemref<?xf64>>
-      %c0_7 = arith.constant 0 : index
-      %20 = memref.load %19[%c0_7] : memref<?xf64>
-      %21 = arith.addi %17, %c-1_i32 : i32
-      %22 = arith.index_cast %21 : i32 to index
-      %23 = memref.load %alloca[%22] : memref<?xmemref<?xf64>>
-      %c0_8 = arith.constant 0 : index
-      %24 = memref.load %23[%c0_8] : memref<?xf64>
-      %25 = arts.datablock "in", %alloca : memref<?xmemref<?xf64>>[%arg4] [%c1] [%c1] {baseIsDb, isLoad} : memref<?xmemref<?xf64>>
-      %26 = arts.datablock "in", %alloca : memref<?xmemref<?xf64>>[%22] [%c1] [%c1] {baseIsDb, isLoad} : memref<?xmemref<?xf64>>
-      %27 = arts.datablock "out", %alloca_5 : memref<?xmemref<?xf64>>[%arg4] [%c1] [%c1] {baseIsDb, isLoad} : memref<?xmemref<?xf64>>
-      arts.edt parameters(%17, %24, %20, %arg4) : (i32, f64, f64, index), constants(%c0_i32, %cst, %c0) : (i32, f64, index), dependencies(%25, %26, %27) : (memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>>) {
+      %19 = arith.addi %17, %c-1_i32 : i32
+      %20 = arith.index_cast %19 : i32 to index
+      %21 = arts.datablock "in", %alloca : memref<?xmemref<?xf64>>[%arg4] [%c1] [%c1] {baseIsDb, isLoad} : memref<?xmemref<?xf64>>
+      %22 = arts.datablock "in", %alloca : memref<?xmemref<?xf64>>[%20] [%c1] [%c1] {baseIsDb, isLoad} : memref<?xmemref<?xf64>>
+      %23 = arts.datablock "out", %alloca_5 : memref<?xmemref<?xf64>>[%arg4] [%c1] [%c1] {baseIsDb, isLoad} : memref<?xmemref<?xf64>>
+      arts.edt parameters(%17, %arg4, %20) : (i32, index, index), constants(%c0_i32, %cst, %c0) : (i32, f64, index), dependencies(%21, %22, %23) : (memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>>) {
+        %24 = memref.load %21[%arg4] : memref<?xmemref<?xf64>>
+        %c0_7 = arith.constant 0 : index
+        %25 = memref.load %24[%c0_7] : memref<?xf64>
+        %26 = memref.load %22[%20] : memref<?xmemref<?xf64>>
+        %c0_8 = arith.constant 0 : index
+        %27 = memref.load %26[%c0_8] : memref<?xf64>
         %28 = arith.cmpi sgt, %17, %c0_i32 : i32
-        %29 = arith.select %28, %24, %cst : f64
-        %30 = arith.addf %20, %29 : f64
-        %31 = memref.load %27[%c0] : memref<?xmemref<?xf64>>
+        %29 = arith.select %28, %27, %cst : f64
+        %30 = arith.addf %25, %29 : f64
+        %31 = memref.load %23[%c0] : memref<?xmemref<?xf64>>
         %c0_9 = arith.constant 0 : index
         memref.store %30, %31[%c0_9] : memref<?xf64>
       }
@@ -565,7 +220,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f128, dense<128> 
     return
   }
 }
-module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
+module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
   func.func private @artsDbCreatePtrAndGuidArrayFromDeps(memref<?xi64>, memref<?xmemref<?xi8>>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>, i32) attributes {llvm.linkage = #llvm.linkage<external>}
   func.func private @artsEdtCreateWithEpoch(memref<?x!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>)>>, i32, i32, memref<?xi64>, i32, i64) -> i64 attributes {llvm.linkage = #llvm.linkage<external>}
   func.func private @artsInitializeAndStartEpoch(i64, i32) -> i64 attributes {llvm.linkage = #llvm.linkage<external>}
@@ -659,25 +314,25 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f128, dense<128> 
       %14 = arith.index_cast %arg4 : index to i32
       %15 = arts.datablock "out", %alloca : memref<?xmemref<?xf64>>[%arg4] [%c1] [%c1] {baseIsDb, isLoad} : memref<?xmemref<?xf64>>
       arts.edt parameters(%14, %13, %arg4) : (i32, f64, index), constants(%c0) : (index), dependencies(%15) : (memref<?xmemref<?xf64>>) {
-        %25 = arith.sitofp %14 : i32 to f64
-        %26 = arith.addf %25, %13 : f64
-        %27 = memref.load %15[%c0] : memref<?xmemref<?xf64>>
-        memref.store %26, %27[%c0] : memref<?xf64>
+        %21 = arith.sitofp %14 : i32 to f64
+        %22 = arith.addf %21, %13 : f64
+        %23 = memref.load %15[%c0] : memref<?xmemref<?xf64>>
+        memref.store %22, %23[%c0] : memref<?xf64>
       }
-      %16 = memref.load %alloca[%arg4] : memref<?xmemref<?xf64>>
-      %17 = memref.load %16[%c0] : memref<?xf64>
-      %18 = arith.addi %14, %c-1_i32 : i32
-      %19 = arith.index_cast %18 : i32 to index
-      %20 = memref.load %alloca[%19] : memref<?xmemref<?xf64>>
-      %21 = memref.load %20[%c0] : memref<?xf64>
-      %22 = arts.datablock "in", %alloca : memref<?xmemref<?xf64>>[%arg4] [%c1] [%c1] {baseIsDb, isLoad} : memref<?xmemref<?xf64>>
-      %23 = arts.datablock "in", %alloca : memref<?xmemref<?xf64>>[%19] [%c1] [%c1] {baseIsDb, isLoad} : memref<?xmemref<?xf64>>
-      %24 = arts.datablock "out", %alloca_1 : memref<?xmemref<?xf64>>[%arg4] [%c1] [%c1] {baseIsDb, isLoad} : memref<?xmemref<?xf64>>
-      arts.edt parameters(%14, %21, %17, %arg4) : (i32, f64, f64, index), constants(%c0_i32, %cst, %c0) : (i32, f64, index), dependencies(%22, %23, %24) : (memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>>) {
+      %16 = arith.addi %14, %c-1_i32 : i32
+      %17 = arith.index_cast %16 : i32 to index
+      %18 = arts.datablock "in", %alloca : memref<?xmemref<?xf64>>[%arg4] [%c1] [%c1] {baseIsDb, isLoad} : memref<?xmemref<?xf64>>
+      %19 = arts.datablock "in", %alloca : memref<?xmemref<?xf64>>[%17] [%c1] [%c1] {baseIsDb, isLoad} : memref<?xmemref<?xf64>>
+      %20 = arts.datablock "out", %alloca_1 : memref<?xmemref<?xf64>>[%arg4] [%c1] [%c1] {baseIsDb, isLoad} : memref<?xmemref<?xf64>>
+      arts.edt parameters(%14, %arg4, %17) : (i32, index, index), constants(%c0_i32, %cst, %c0) : (i32, f64, index), dependencies(%18, %19, %20) : (memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>>, memref<?xmemref<?xf64>>) {
+        %21 = memref.load %18[%arg4] : memref<?xmemref<?xf64>>
+        %22 = memref.load %21[%c0] : memref<?xf64>
+        %23 = memref.load %19[%17] : memref<?xmemref<?xf64>>
+        %24 = memref.load %23[%c0] : memref<?xf64>
         %25 = arith.cmpi sgt, %14, %c0_i32 : i32
-        %26 = arith.select %25, %21, %cst : f64
-        %27 = arith.addf %17, %26 : f64
-        %28 = memref.load %24[%c0] : memref<?xmemref<?xf64>>
+        %26 = arith.select %25, %24, %cst : f64
+        %27 = arith.addf %22, %26 : f64
+        %28 = memref.load %20[%c0] : memref<?xmemref<?xf64>>
         memref.store %27, %28[%c0] : memref<?xf64>
       }
     }
