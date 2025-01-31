@@ -19,28 +19,30 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : 
       arts.barrier
       arts.single {
         %8 = arith.sitofp %1 : i32 to f64
+        %events = arts.event [c100] : !arts.event
         scf.for %arg0 = %c0 to %c100 step %c1 {
           %9 = arith.index_cast %arg0 : index to i32
           %10 = arts.datablock "out", %2 : memref<100xf64>[%arg0] [%c1] [%c1] {isLoad} : memref<1xf64>
-          arts.edt parameters(%9, %8, %arg0) : (i32, f64, index), dependencies(%10) : (memref<1xf64>) attributes {operandSegmentSizes = array<i32: 3, 0, 1, 0>} {
+          %event_i0 = load %events[%arg0] : !arts.event
+          arts.edt parameters(%9, %8, %arg0) : (i32, f64, index, arts.event), constants() : (), dependencies(%10) : (memref<1xf64>), events(%event_i0) : !arts.event{
             %16 = arith.sitofp %9 : i32 to f64
             %17 = arith.addf %16, %8 : f64
-            memref.store %17, %10[%c0] : memref<1xf64>
-            arts.yield
+            memref.store %17, %10[%c0] : memref<1xf64>\
           }
           %11 = arith.addi %9, %c-1_i32 : i32
           %12 = arith.index_cast %11 : i32 to index
           %13 = arts.datablock "in", %2 : memref<100xf64>[%arg0] [%c1] [%c1] {isLoad} : memref<1xf64>
           %14 = arts.datablock "in", %2 : memref<100xf64>[%12] [%c1] [%c1] {isLoad} : memref<1xf64>
           %15 = arts.datablock "out", %3 : memref<100xf64>[%arg0] [%c1] [%c1] {isLoad} : memref<1xf64>
-          arts.edt parameters(%9, %arg0, %12) : (i32, index, index), constants(%c0_i32, %cst) : (i32, f64), dependencies(%13, %14, %15) : (memref<1xf64>, memref<1xf64>, memref<1xf64>) attributes {operandSegmentSizes = array<i32: 3, 2, 3, 0>} {
+          %event_i1 = load %events[%arg0] : !arts.event
+          %event_i2 = load %events[%12] : !arts.event
+          arts.edt parameters(%9, %arg0, %12) : (i32, index, index), constants(%c0_i32, %cst) : (i32, f64), dependencies(%13, %14, %15) : (memref<1xf64>, memref<1xf64>, memref<1xf64>), events(%event_i1, event_i2, None) : !arts.event, !arts.event, !arts.event{
             %16 = memref.load %13[%c0] : memref<1xf64>
             %17 = memref.load %14[%c0] : memref<1xf64>
             %18 = arith.cmpi sgt, %9, %c0_i32 : i32
             %19 = arith.select %18, %17, %cst : f64
             %20 = arith.addf %16, %19 : f64
             memref.store %20, %15[%c0] : memref<1xf64>
-            arts.yield
           }
         }
       }

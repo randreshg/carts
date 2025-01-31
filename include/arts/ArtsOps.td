@@ -84,20 +84,35 @@ def EdtOp : Arts_Op<"edt",
     - `parameters` that define task-specific inputs.
     - `constants` that define task-specific constants.
     - `dependencies` that specify input/output memory dependencies.
+    - `events` that signal the dependencies.
   The single-block region contains the task body.
   }];
   let arguments = (ins
     Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$parameters,
     Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$constants,
-    Variadic<AnyMemRef>:$dependencies
+    Variadic<AnyMemRef>:$dependencies,
+    Variadic<EventType>:$events
   );
+
   let regions = (region SizedRegion<1>:$body);
-  let assemblyFormat = [{
-    `parameters` `(` $parameters `)` `:` `(` type($parameters) `)` `,` 
-    `constants` `(` $constants `)` `:` `(` type($constants) `)` `,`
-    `dependencies` `(` $dependencies `)` `:` `(` type($dependencies) `)`
-    attr-dict-with-keyword $body
-  }];
+  // let assemblyFormat = [{
+  //   `parameters` `(` $parameters `)` `:` `(` type($parameters) `)` `,` 
+  //   `constants` `(` $constants `)` `:` `(` type($constants) `)` `,`
+  //   `dependencies` `(` $dependencies `)` `:` `(` type($dependencies) `)`
+  //   `events` `(` $events `)` `:` `(` type($events) `)`
+  //   attr-dict-with-keyword $body
+  // }];
+
+  // let assemblyFormat = "custom<EdtOpParser, EdtOpPrinter>";
+  let hasCustomAssemblyFormat = 1;
+
+  let builders = [
+    OpBuilder<(ins
+      "ValueRange":$parameters,
+      "ValueRange":$constants,
+      "ValueRange":$dependencies)>,
+  ];
+
   let extraClassDeclaration = [{
     SmallVector<Value> getParams();
     SmallVector<Value> getConsts();
