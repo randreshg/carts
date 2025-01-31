@@ -82,6 +82,143 @@ void UndefOp::getCanonicalizationPatterns(RewritePatternSet &results,
 //===----------------------------------------------------------------------===//
 // EdtOp
 //===----------------------------------------------------------------------===//
+ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
+  // We'll parse something like:
+  //   parameters(...) : (...)
+  //   [ optional ", constants(...) : (...)" ]
+  //   [ optional ", dependencies(...) : (...)" ]
+  //   [ optional ", events(...) : (...)" ]
+  // Then parse attr-dict, then the region.
+
+  // Collect all operands in a single list, typed accordingly
+  SmallVector<OpAsmParser::UnresolvedOperand, 8> paramOps, constOps, depOps,
+      evtOps;
+  SmallVector<Type, 8> paramTypes, constTypes, depTypes, evtTypes;
+
+  auto parseGroup =
+      [&](StringRef kw,
+          SmallVectorImpl<OpAsmParser::UnresolvedOperand> &operands,
+          SmallVectorImpl<Type> &types) -> ParseResult {
+    // Expect "kw(...):(...)"
+    if (parser.parseOperandList(operands, OpAsmParser::Delimiter::Paren) ||
+        parser.parseColon() || parser.parseLParen() ||
+        parser.parseTypeList(types) || parser.parseRParen()) {
+      return failure();
+    }
+    return success();
+  };
+
+  // Optional read of "parameters(...) : (...)"
+  if (succeeded(parser.parseOptionalKeyword("parameters"))) {
+    if (parseGroup("parameters", paramOps, paramTypes))
+      return failure();
+    (void)parser.parseOptionalComma();
+  }
+
+  // Optional read of "constants(...) : (...)"
+  if (succeeded(parser.parseOptionalKeyword("constants"))) {
+    if (parseGroup("constants", constOps, constTypes))
+      return failure();
+    (void)parser.parseOptionalComma();
+  }
+
+  // Optional read of "dependencies(...) : (...)"
+  if (succeeded(parser.parseOptionalKeyword("dependencies"))) {
+    if (parseGroup("dependencies", depOps, depTypes))
+      return failure();
+    (void)parser.parseOptionalComma();
+  }
+
+  // Optional read of "events(...) : (...)"
+  if (succeeded(parser.parseOptionalKeyword("events"))) {
+    if (parseGroup("events", evtOps, evtTypes))
+      return failure();
+    (void)parser.parseOptionalComma();
+  }
+
+  // Parse attribute dictionary
+  if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
+    return failure();
+
+  // Parse region
+  Region *body = result.addRegion();
+  if (parser.parseRegion(*body))
+    return failure();
+
+  // Convert operand references -> actual Value, storing in result.operands
+  // We'll accumulate them in the order: parameters, constants, dependencies,
+  // events
+  if (parser.resolveOperands(paramOps, paramTypes, parser.getCurrentLocation(),
+                             result.operands))
+    return failure();
+  if (parser.resolveOperands(constOps, constTypes, parser.getCurrentLocation(),
+                             result.operands))
+    return failure();
+  if (parser.resolveOperands(depOps, depTypes, parser.getCurrentLocation(),
+                             result.operands))
+    return failure();
+  if (parser.resolveOperands(evtOps, evtTypes, parser.getCurrentLocation(),
+                             result.operands))
+    return failure();
+
+  return success();
+}
+
+void EdtOp::print(OpAsmPrinter &printer) {
+  bool first = true;
+
+  // Helper to print a group "kw(%v0, %v1) : (ty0, ty1)"
+  auto printGroup = [&](StringRef kw, ValueRange vals) {
+    if (vals.empty())
+      return;
+    if (!first)
+      printer << ", ";
+    else
+      first = false;
+
+    printer << kw << "(";
+    printer.printOperands(vals);
+    printer << ") : (";
+
+    // Collect each operand's type manually
+    SmallVector<Type, 4> types;
+    types.reserve(vals.size());
+    for (Value v : vals)
+      types.push_back(v.getType());
+
+    llvm::interleaveComma(types, printer);
+    printer << ")";
+  };
+
+  // Print each group if it has operands
+  printGroup(" parameters", getParams());
+  printGroup("constants", getConsts());
+  printGroup("dependencies", getDeps());
+  printGroup("events", getEvents());
+
+  // Print attributes + region
+  printer.printOptionalAttrDictWithKeyword(getOperation()->getAttrs());
+  printer << ' ';
+  printer.printRegion(getOperation()->getRegion(0),
+                      /*printEntryBlockArgs=*/false,
+                      /*printBlockTerminators=*/true);
+}
+
+/// Builder
+void EdtOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                  ValueRange parameters, ValueRange constants,
+                  ValueRange dependencies) {
+  odsState.addOperands(parameters);
+  odsState.addOperands(constants);
+  odsState.addOperands(dependencies);
+  ::llvm::copy(
+      ::llvm::ArrayRef<int32_t>({static_cast<int32_t>(parameters.size()),
+                                 static_cast<int32_t>(constants.size()),
+                                 static_cast<int32_t>(dependencies.size())}),
+      odsState.getOrAddProperties<Properties>().operandSegmentSizes.begin());
+  (void)odsState.addRegion();
+}
+
 /// Retrieve parameters.
 SmallVector<Value> EdtOp::getParams() {
   auto parameters = getParameters();
