@@ -166,40 +166,38 @@ public:
     auto depOp = rewriter.create<arts::DataBlockOp>(
         loc, subMemRefType, rewriter.getStringAttr(mode), baseMemRef, offsets,
         sizes, strides);
-    if (isLoad) {
-      /// Add an attribute to indicate that this is a load
+    if (isLoad)
       depOp->setAttr("isLoad", rewriter.getUnitAttr());
-    }
-
-    /// Rewire the values
-    if (!isa<memref::LoadOp>(inputMemRef.getDefiningOp())) {
-      utils::replaceInRegion(region, baseMemRef, depOp.getResult());
-    } else {
-      rewritePinnedOps(depOp);
-    }
     return depOp;
   }
 
   /// Rewrites any memref.load/memref.store in 'region' that references
-  /// 'baseMemRef' and matches the pinnedIndices.
-  void rewritePinnedOps(arts::DataBlockOp depOp) {
+  /// 'baseMemRef'.
+  void rewireUses(arts::DataBlockOp depOp) {
     Value newSubview = depOp.getResult();
     Value baseMemRef = depOp.getBase();
 
+    LLVM_DEBUG(dbgs() << line);
+    LLVM_DEBUG(DBGS() << "Rewiring uses of: " << depOp << "\n");
     auto offsets = depOp.getOffsets();
     auto sizes = depOp.getSizes();
-    auto subType = newSubview.getType().dyn_cast<mlir::MemRefType>();
+    auto subType = newSubview.getType().dyn_cast<MemRefType>();
     assert(subType && "Expected MemRefType");
     int64_t rank = subType.getRank();
 
     /// Collect the dimensions that are pinned
-    mlir::SetVector<int64_t> pinnedDims;
+    SetVector<int64_t> pinnedDims;
     for (int64_t i = 0; i < rank; ++i) {
-      if (auto cstOp = sizes[i].getDefiningOp<mlir::arith::ConstantIndexOp>()) {
+      if (auto cstOp = sizes[i].getDefiningOp<arith::ConstantIndexOp>()) {
         if (cstOp.value() == 1)
           pinnedDims.insert(i);
       }
     }
+
+    LLVM_DEBUG(dbgs() << " - Pinned dims: ");
+    for (auto dim : pinnedDims)
+      LLVM_DEBUG(dbgs() << dim << " ");
+    LLVM_DEBUG(dbgs() << "\n");
 
     /// Walk the region and replace the loads/stores
     auto isMatchingMemrefAndIndices = [&](auto op) {
@@ -216,16 +214,15 @@ public:
       return true;
     };
 
-    region.walk([&](mlir::Operation *op) {
+    region.walk([&](Operation *op) {
       /// Load operation
-      if (auto load = mlir::dyn_cast<mlir::memref::LoadOp>(op)) {
+      if (auto load = dyn_cast<memref::LoadOp>(op)) {
         if (!isMatchingMemrefAndIndices(load))
           return;
         rewriter.updateRootInPlace(load, [&]() {
-          mlir::SmallVector<mlir::Value> newIdx(rank);
-          mlir::Location loc = load.getLoc();
-          mlir::Value c0 =
-              rewriter.create<mlir::arith::ConstantIndexOp>(loc, 0);
+          SmallVector<Value> newIdx(rank);
+          Location loc = load.getLoc();
+          Value c0 = rewriter.create<arith::ConstantIndexOp>(loc, 0);
           for (int64_t i = 0; i < rank; ++i)
             newIdx[i] = pinnedDims.contains(i) ? c0 : load.getIndices()[i];
           /// Replace the load with the new subview
@@ -234,14 +231,13 @@ public:
         });
       }
       /// Store operation
-      else if (auto store = mlir::dyn_cast<mlir::memref::StoreOp>(op)) {
+      else if (auto store = dyn_cast<memref::StoreOp>(op)) {
         if (!isMatchingMemrefAndIndices(store))
           return;
         rewriter.updateRootInPlace(store, [&]() {
-          mlir::SmallVector<mlir::Value> newIdx(rank);
-          mlir::Location loc = store.getLoc();
-          mlir::Value c0 =
-              rewriter.create<mlir::arith::ConstantIndexOp>(loc, 0);
+          SmallVector<Value> newIdx(rank);
+          Location loc = store.getLoc();
+          Value c0 = rewriter.create<arith::ConstantIndexOp>(loc, 0);
           for (int64_t i = 0; i < rank; ++i)
             newIdx[i] = pinnedDims.contains(i) ? c0 : store.getIndices()[i];
           /// Replace the store with the new subview
@@ -250,6 +246,7 @@ public:
         });
       }
     });
+    LLVM_DEBUG(dbgs() << line);
   }
 
   /// Collect parameters and dependencies
@@ -285,7 +282,8 @@ public:
     }
   }
 
-  /// Analyze and adjus the set of parameters, constants and dependencies
+  /// Analyze and adjus the set of parameters, constants and dependencies, and
+  /// rewire them accordingly
   void adjust() {
     /// Dependencies
     /// Check if there are any dependencies that are not datablock operations
@@ -344,8 +342,9 @@ public:
           OpBuilder::InsertionGuard guard(rewriter);
           rewriter.setInsertionPointToStart(&region.front());
           auto newLoad = rewriter.create<memref::LoadOp>(
-              loadOp.getLoc(), dep.getResult(), indices);
-          utils::replaceInRegion(region, loadOp.getResult(), newLoad.getResult());
+              loadOp.getLoc(), dep.getBase(), indices);
+          utils::replaceInRegion(region, loadOp.getResult(),
+                                 newLoad.getResult());
 
           /// Remove the parameter
           paramsToRemove.push_back(param);
@@ -360,6 +359,15 @@ public:
     /// Give it a second chance to collect constants in case any was added after
     /// the naive collection
     naiveCollection(true);
+
+    /// Finally, rewire the uses of the dependencies
+    for (Value dep : dependencies) {
+      auto depOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp());
+      if (depOp->hasAttr("isLoad"))
+        rewireUses(depOp);
+      else
+        utils::replaceInRegion(region, depOp.getBase(), depOp.getResult());
+    }
   }
 
   /// Add interface
@@ -608,7 +616,7 @@ struct AllocToARTSPattern : public OpRewritePattern<memref::AllocOp> {
 //===----------------------------------------------------------------------===//
 namespace {
 struct ConvertOpenMPToARTSPass
-    : public mlir::arts::ConvertOpenMPToARTSBase<ConvertOpenMPToARTSPass> {
+    : public arts::ConvertOpenMPToARTSBase<ConvertOpenMPToARTSPass> {
   void runOnOperation() override;
 };
 } // end namespace
@@ -637,7 +645,7 @@ void ConvertOpenMPToARTSPass::runOnOperation() {
   ///
   // bool cseChanged = false;
   // DominanceInfo domInfo;
-  //     mlir::eliminateCommonSubExpressions(rewriter, domInfo, target,
+  //     eliminateCommonSubExpressions(rewriter, domInfo, target,
   //                                         &cseChanged);
   LLVM_DEBUG(dbgs() << line << "ConvertOpenMPToARTSPass FINISHED\n" << line);
 }
