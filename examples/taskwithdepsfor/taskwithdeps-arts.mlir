@@ -13,7 +13,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : 
     %alloca_0 = memref.alloca() : memref<100xf64>
     %0 = call @rand() : () -> i32
     %1 = arith.remsi %0, %c100_i32 : i32
-    %2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
+    %2 = arts.datablock "inout", er%alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
     %3 = arts.datablock "inout", %alloca : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
     arts.parallel parameters(%1) : (i32), constants(%c1, %c0, %c-1_i32, %c0_i32, %cst, %c100) : (index, index, i32, i32, f64, index), dependencies(%2, %3) : (memref<100xf64>, memref<100xf64>) {
       arts.barrier

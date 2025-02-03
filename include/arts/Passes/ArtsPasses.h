@@ -20,7 +20,8 @@ class DominanceInfo;
 
 namespace arts {
 std::unique_ptr<Pass> createConvertOpenMPtoARTSPass();
-std::unique_ptr<Pass> createConvertARTSToFuncsPass();
+std::unique_ptr<Pass> createConvertArtsToFuncsPass();
+std::unique_ptr<Pass> createArtsDatablockPass();
 } // namespace arts
 } // namespace mlir
 
