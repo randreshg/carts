@@ -1,31 +1,30 @@
-//===----------------- ConvertOpenMPToARTSHierarchical.cpp  --------------===//
+//===----------------- ConvertOpenMPToArtsHierarchical.cpp  --------------===//
 //
 // This file implements a module pass that converts OpenMP ops
 // (omp.parallel, omp.master, omp.task, etc.) into ARTS ops
 // (arts.parallel, arts.single, arts.edt).
 //===----------------------------------------------------------------------===//
 
+/// Dialects
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/IR/BuiltinOps.h"
-
+/// Arts
+#include "ArtsPassDetails.h"
+#include "arts/ArtsDialect.h"
+#include "arts/Passes/ArtsPasses.h"
+#include "arts/Utils/ArtsUtils.h"
+/// Others
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/Transforms/RegionUtils.h"
-
 #include "llvm/ADT/SmallVector.h"
-
-/// Arts
-#include "ArtsPassDetails.h"
-#include "arts/ArtsDialect.h"
-#include "arts/Passes/ArtsPasses.h"
-#include "arts/Utils/ArtsUtils.h"
 /// Debug
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -615,15 +614,15 @@ struct AllocToARTSPattern : public OpRewritePattern<memref::AllocOp> {
 // Pass Implementation
 //===----------------------------------------------------------------------===//
 namespace {
-struct ConvertOpenMPToARTSPass
-    : public arts::ConvertOpenMPToARTSBase<ConvertOpenMPToARTSPass> {
+struct ConvertOpenMPToArtsPass
+    : public arts::ConvertOpenMPToArtsBase<ConvertOpenMPToArtsPass> {
   void runOnOperation() override;
 };
 } // end namespace
 
 /// Pass to convert OpenMP operations to ARTS operations
-void ConvertOpenMPToARTSPass::runOnOperation() {
-  LLVM_DEBUG(dbgs() << line << "ConvertOpenMPToARTSPass STARTED\n" << line);
+void ConvertOpenMPToArtsPass::runOnOperation() {
+  LLVM_DEBUG(dbgs() << line << "ConvertOpenMPToArtsPass STARTED\n" << line);
   ModuleOp module = getOperation();
   MLIRContext *context = &getContext();
   RewritePatternSet patterns(context);
@@ -647,7 +646,7 @@ void ConvertOpenMPToARTSPass::runOnOperation() {
   // DominanceInfo domInfo;
   //     eliminateCommonSubExpressions(rewriter, domInfo, target,
   //                                         &cseChanged);
-  LLVM_DEBUG(dbgs() << line << "ConvertOpenMPToARTSPass FINISHED\n" << line);
+  LLVM_DEBUG(dbgs() << line << "ConvertOpenMPToArtsPass FINISHED\n" << line);
 }
 
 //===----------------------------------------------------------------------===//
@@ -656,7 +655,7 @@ void ConvertOpenMPToARTSPass::runOnOperation() {
 namespace mlir {
 namespace arts {
 std::unique_ptr<Pass> createConvertOpenMPtoARTSPass() {
-  return std::make_unique<ConvertOpenMPToARTSPass>();
+  return std::make_unique<ConvertOpenMPToArtsPass>();
 }
 } // namespace arts
 } // namespace mlir

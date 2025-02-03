@@ -83,14 +83,14 @@ void UndefOp::getCanonicalizationPatterns(RewritePatternSet &results,
 // EdtOp
 //===----------------------------------------------------------------------===//
 ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
-  // We'll parse something like:
-  //   parameters(...) : (...)
-  //   [ optional ", constants(...) : (...)" ]
-  //   [ optional ", dependencies(...) : (...)" ]
-  //   [ optional ", events(...) : (...)" ]
-  // Then parse attr-dict, then the region.
+  /// We'll parse something like:
+  ///   parameters(...) : (...)
+  ///   [ optional ", constants(...) : (...)" ]
+  ///   [ optional ", dependencies(...) : (...)" ]
+  ///   [ optional ", events(...) : (...)" ]
+  /// Then parse attr-dict, then the region.
 
-  // Collect all operands in a single list, typed accordingly
+  /// Collect all operands in a single list, typed accordingly
   SmallVector<OpAsmParser::UnresolvedOperand, 8> paramOps, constOps, depOps,
       evtOps;
   SmallVector<Type, 8> paramTypes, constTypes, depTypes, evtTypes;
@@ -99,7 +99,7 @@ ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
       [&](StringRef kw,
           SmallVectorImpl<OpAsmParser::UnresolvedOperand> &operands,
           SmallVectorImpl<Type> &types) -> ParseResult {
-    // Expect "kw(...):(...)"
+    /// Expect "kw(...):(...)"
     if (parser.parseOperandList(operands, OpAsmParser::Delimiter::Paren) ||
         parser.parseColon() || parser.parseLParen() ||
         parser.parseTypeList(types) || parser.parseRParen()) {
@@ -108,46 +108,46 @@ ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
     return success();
   };
 
-  // Optional read of "parameters(...) : (...)"
+  /// Optional read of "parameters(...) : (...)"
   if (succeeded(parser.parseOptionalKeyword("parameters"))) {
     if (parseGroup("parameters", paramOps, paramTypes))
       return failure();
     (void)parser.parseOptionalComma();
   }
 
-  // Optional read of "constants(...) : (...)"
+  /// Optional read of "constants(...) : (...)"
   if (succeeded(parser.parseOptionalKeyword("constants"))) {
     if (parseGroup("constants", constOps, constTypes))
       return failure();
     (void)parser.parseOptionalComma();
   }
 
-  // Optional read of "dependencies(...) : (...)"
+  /// Optional read of "dependencies(...) : (...)"
   if (succeeded(parser.parseOptionalKeyword("dependencies"))) {
     if (parseGroup("dependencies", depOps, depTypes))
       return failure();
     (void)parser.parseOptionalComma();
   }
 
-  // Optional read of "events(...) : (...)"
+  /// Optional read of "events(...) : (...)"
   if (succeeded(parser.parseOptionalKeyword("events"))) {
     if (parseGroup("events", evtOps, evtTypes))
       return failure();
     (void)parser.parseOptionalComma();
   }
 
-  // Parse attribute dictionary
+  /// Parse attribute dictionary
   if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
     return failure();
 
-  // Parse region
+  /// Parse region
   Region *body = result.addRegion();
   if (parser.parseRegion(*body))
     return failure();
 
-  // Convert operand references -> actual Value, storing in result.operands
-  // We'll accumulate them in the order: parameters, constants, dependencies,
-  // events
+  /// Convert operand references -> actual Value, storing in result.operands
+  /// We'll accumulate them in the order: parameters, constants, dependencies,
+  /// events
   if (parser.resolveOperands(paramOps, paramTypes, parser.getCurrentLocation(),
                              result.operands))
     return failure();

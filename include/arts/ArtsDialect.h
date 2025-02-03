@@ -9,19 +9,19 @@
 #ifndef CARTS_DIALECT_H
 #define CARTS_DIALECT_H
 
-#include "mlir/IR/Dialect.h"
-#include "mlir/IR/OpDefinition.h"
-#include "mlir/IR/Operation.h"
-#include "mlir/IR/BuiltinTypes.h"
+/// Dialects
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+/// Others
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Dialect.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/IR/OpDefinition.h"
+#include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
-#include "mlir/IR/Operation.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
 //===----------------------------------------------------------------------===//
@@ -49,8 +49,9 @@ namespace mlir::arts {
 namespace utils {
 
 void replaceInRegion(mlir::Region &region, mlir::Value from, mlir::Value to);
-void replaceInRegion(mlir::Region &region,  DenseMap<Value, Value> &rewireMap);
+void replaceInRegion(mlir::Region &region,
+                     llvm::DenseMap<Value, Value> &rewireMap);
 
-} /// namespace utils
-} /// namespace mlir::arts
+} // namespace utils
+} // namespace mlir::arts
 #endif // CARTS_DIALECT_H

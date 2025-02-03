@@ -1,4 +1,4 @@
-//===- ConvertARTSToFuncs.cpp - Convert ARTS Dialect to Func Dialect ------===//
+//===- ConvertArtsToFuncs.cpp - Convert ARTS Dialect to Func Dialect ------===//
 //
 // This file implements a pass to convert ARTS dialect operations into
 // `func` dialect operations.
@@ -9,7 +9,20 @@
 
 // #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
+/// Dialects
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
+/// Arts
+#include "ArtsPassDetails.h"
+#include "arts/ArtsDialect.h"
+#include "arts/Codegen/ArtsCodegen.h"
+#include "arts/Passes/ArtsPasses.h"
+// #include "arts/Utils/ArtsUtils.h"
+/// Others
+#include "mlir/Analysis/DataLayoutAnalysis.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypeInterfaces.h"
@@ -18,24 +31,14 @@
 #include "mlir/IR/Region.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
-/// Other dialects
-#include "mlir/Analysis/DataLayoutAnalysis.h"
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-/// Arts
-#include "ArtsPassDetails.h"
-#include "arts/ArtsDialect.h"
-#include "arts/Codegen/ArtsCodegen.h"
-#include "arts/Passes/ArtsPasses.h"
-#include "arts/Utils/ArtsUtils.h"
+
+#include <algorithm>
+#include <optional>
+
 /// Debug
 #include "llvm/IR/DataLayout.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include <algorithm>
-#include <optional>
 
 #define DEBUG_TYPE "convert-arts-to-funcs"
 #define line "-----------------------------------------\n"
@@ -262,14 +265,14 @@ private:
 //===----------------------------------------------------------------------===//
 // Pass Implementation
 //===----------------------------------------------------------------------===//
-struct ConvertARTSToFuncsPass
-    : public arts::ConvertARTSToFuncsBase<ConvertARTSToFuncsPass> {
+struct ConvertArtsToFuncsPass
+    : public arts::ConvertArtsToFuncsBase<ConvertArtsToFuncsPass> {
   void runOnOperation() override;
 };
 } // end namespace
 
-void ConvertARTSToFuncsPass::runOnOperation() {
-  LLVM_DEBUG(dbgs() << "--- ConvertARTSToFuncsPass START ---\n");
+void ConvertArtsToFuncsPass::runOnOperation() {
+  LLVM_DEBUG(dbgs() << "--- ConvertArtsToFuncsPass START ---\n");
 
   ModuleOp module = getOperation();
   MLIRContext *ctx = &getContext();
@@ -283,7 +286,7 @@ void ConvertARTSToFuncsPass::runOnOperation() {
   llvm::DataLayout llvmDL(llvmDLAttr.getValue().str());
   mlir::DataLayout mlirDL(module);
 
-  // Initialize the AC object
+  /// Initialize the AC object
   OpBuilder builder(ctx);
   ArtsCodegen AC(module, builder, llvmDL, mlirDL);
 
@@ -309,9 +312,6 @@ void ConvertARTSToFuncsPass::runOnOperation() {
   target.addLegalOp<arts::BarrierOp>();
   target.addLegalDialect<LLVM::LLVMDialect>();
 
-  // (Optional) If you have custom ARTS types to convert, define a
-  // TypeConverter TypeConverter typeConverter;
-
   // Pattern list
   RewritePatternSet patterns(ctx);
   patterns.add<ParallelOpLowering>(ctx, AC);
@@ -329,7 +329,7 @@ void ConvertARTSToFuncsPass::runOnOperation() {
     return;
   }
 
-  LLVM_DEBUG(dbgs() << "=== ConvertARTSToFuncsPass COMPLETE ===\n");
+  LLVM_DEBUG(dbgs() << "=== ConvertArtsToFuncsPass COMPLETE ===\n");
   module.dump();
 }
 
@@ -338,8 +338,8 @@ void ConvertARTSToFuncsPass::runOnOperation() {
 //===----------------------------------------------------------------------===//
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createConvertARTSToFuncsPass() {
-  return std::make_unique<ConvertARTSToFuncsPass>();
+std::unique_ptr<Pass> createConvertArtsToFuncsPass() {
+  return std::make_unique<ConvertArtsToFuncsPass>();
 }
 } // namespace arts
 } // namespace mlir
