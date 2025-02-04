@@ -30,8 +30,8 @@ def ConvertArtsToFuncs : Pass<"convert-arts-to-funcs", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createConvertArtsToFuncsPass()";
 }
 
-def ArtsDatablockPass : Pass<"datablock-pass", "mlir::ModuleOp"> {
-  let summary = "Analyzes the datablock usage in the program";
+def CreateArtsEvents : Pass<"create-events", "mlir::ModuleOp"> {
+  let summary = "Analyzes the program and creates ARTS events";
   let dependentDialects = [
     "memref::MemRefDialect",
     "LLVM::LLVMDialect",
@@ -41,6 +41,6 @@ def ArtsDatablockPass : Pass<"datablock-pass", "mlir::ModuleOp"> {
     "affine::AffineDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createArtsDatablockPass()";
+  let constructor = "mlir::arts::createCreateEventsPass()";
 }
 #endif // CARTS_PASSES

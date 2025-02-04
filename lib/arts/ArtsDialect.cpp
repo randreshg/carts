@@ -16,6 +16,7 @@
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include <cassert>
 
 #include "arts/ArtsDialect.h"
 
@@ -48,7 +49,7 @@ void ArtsDialect::initialize() {
 #include "arts/ArtsOps.cpp.inc"
 
 bool isArtsRegion(Operation *op) {
-  return isa<EdtOp>(op) || isa<ParallelOp>(op) || isa<EpochOp>(op) ||
+  return isa<EdtOp>(op) || isa<EpochOp>(op) ||
          isa<SingleOp>(op);
 }
 //===----------------------------------------------------------------------===//
@@ -166,8 +167,7 @@ ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
 
 void EdtOp::print(OpAsmPrinter &printer) {
   bool first = true;
-
-  // Helper to print a group "kw(%v0, %v1) : (ty0, ty1)"
+  /// Helper to print a group "kw(%v0, %v1) : (ty0, ty1)"
   auto printGroup = [&](StringRef kw, ValueRange vals) {
     if (vals.empty())
       return;
@@ -180,7 +180,7 @@ void EdtOp::print(OpAsmPrinter &printer) {
     printer.printOperands(vals);
     printer << ") : (";
 
-    // Collect each operand's type manually
+    /// Collect each operand's type manually
     SmallVector<Type, 4> types;
     types.reserve(vals.size());
     for (Value v : vals)
@@ -190,13 +190,13 @@ void EdtOp::print(OpAsmPrinter &printer) {
     printer << ")";
   };
 
-  // Print each group if it has operands
+  /// Print each group if it has operands
   printGroup(" parameters", getParams());
   printGroup("constants", getConsts());
   printGroup("dependencies", getDeps());
   printGroup("events", getEvents());
 
-  // Print attributes + region
+  /// Print attributes + region
   printer.printOptionalAttrDictWithKeyword(getOperation()->getAttrs());
   printer << ' ';
   printer.printRegion(getOperation()->getRegion(0),
@@ -242,28 +242,25 @@ SmallVector<Value> EdtOp::getDeps() {
 }
 
 //===----------------------------------------------------------------------===//
-// ParallelOp
+// DataBlockOp
 //===----------------------------------------------------------------------===//
-/// Retrieve parameters.
-SmallVector<Value> ParallelOp::getParams() {
-  auto parameters = getParameters();
-  SmallVector<Value, 4> parametersVector(parameters.begin(), parameters.end());
-  return parametersVector;
-}
+void DataBlockOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  auto modeAttr = getModeAttr();
+  assert(modeAttr && "mode attribute not found");
+  Value base = getBase();
+  assert(base && "base attribute not found");
 
-/// Retrieve constants.
-SmallVector<Value> ParallelOp::getConsts() {
-  auto constants = getConstants();
-  SmallVector<Value, 4> constantsVector(constants.begin(), constants.end());
-  return constantsVector;
-}
-
-/// Retrieve dependencies.
-SmallVector<Value> ParallelOp::getDeps() {
-  auto dependencies = getDependencies();
-  SmallVector<Value, 4> dependenciesVector(dependencies.begin(),
-                                           dependencies.end());
-  return dependenciesVector;
+  /// "in" => read, "out" => write, "inout" => both
+  StringRef mode = modeAttr.getValue();
+  if (mode == "in" || mode == "inout") {
+    effects.emplace_back(MemoryEffects::Read::get(), base,
+                         ::mlir::SideEffects::DefaultResource::get());
+  }
+  if (mode == "out" || mode == "inout") {
+    effects.emplace_back(MemoryEffects::Write::get(), base,
+                         ::mlir::SideEffects::DefaultResource::get());
+  }
 }
 
 //===----------------------------------------------------------------------===//

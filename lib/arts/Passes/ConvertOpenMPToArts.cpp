@@ -421,7 +421,7 @@ private:
 //===----------------------------------------------------------------------===//
 // Conversion Patterns
 //===----------------------------------------------------------------------===//
-/// Pattern to replace `omp.parallel` with `arts.parallel`
+/// Pattern to replace `omp.parallel` with `arts.edt` with `parallel` attribute
 struct ParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -432,12 +432,15 @@ struct ParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
     /// Collect parameters and dependencies
     EdtEnvManager edtEnv(rewriter, op.getRegion(), true);
 
-    /// Create a new `arts.parallel` operation.
-    auto parOp = rewriter.create<arts::ParallelOp>(loc, edtEnv.getParameters(),
-                                                   edtEnv.getConstants(),
-                                                   edtEnv.getDependencies());
+    /// Create a new `arts.edt` operation.
+    auto parOp = rewriter.create<arts::EdtOp>(loc, edtEnv.getParameters(),
+                                              edtEnv.getConstants(),
+                                              edtEnv.getDependencies());
     parOp.getBody().emplaceBlock();
     Block &blk = parOp.getBody().front();
+
+    /// Add 'parallel' attribute
+    parOp->setAttr("parallel", rewriter.getUnitAttr());
 
     /// Move the region's operations.
     Block &old = op.getRegion().front();
@@ -640,12 +643,6 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
 
   /// Remove all UndefOps
   removeUndefOps(module);
-
-  ///
-  // bool cseChanged = false;
-  // DominanceInfo domInfo;
-  //     eliminateCommonSubExpressions(rewriter, domInfo, target,
-  //                                         &cseChanged);
   LLVM_DEBUG(dbgs() << line << "ConvertOpenMPToArtsPass FINISHED\n" << line);
 }
 

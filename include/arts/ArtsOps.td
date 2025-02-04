@@ -56,7 +56,9 @@ def AllocOp : Arts_Op<"alloc", []> {
 //===----------------------------------------------------------------------===//
 // arts.datablock
 //===----------------------------------------------------------------------===//
-def DataBlockOp : Arts_Op<"datablock", [AttrSizedOperandSegments]> {
+def DataBlockOp : Arts_Op<"datablock", 
+  [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+   AttrSizedOperandSegments]> {
   let summary = "Creates a subview dependency for arts.edt or arts.parallel";
   let arguments = (ins
     StrAttr:$mode,                        // Dependency mode (e.g., "in", "out")
@@ -76,7 +78,8 @@ def DataBlockOp : Arts_Op<"datablock", [AttrSizedOperandSegments]> {
 // arts.edt
 //===----------------------------------------------------------------------===//
 def EdtOp : Arts_Op<"edt",
-  [SingleBlockImplicitTerminator<"arts::YieldOp">, AttrSizedOperandSegments]> {
+  [SingleBlockImplicitTerminator<"arts::YieldOp">,
+   AttrSizedOperandSegments]> {
 
   let summary = "Event-Driven Task in ARTS";
   let description = [{
@@ -86,7 +89,9 @@ def EdtOp : Arts_Op<"edt",
     - `dependencies` that specify input/output memory dependencies.
     - `events` that signal the dependencies.
   The single-block region contains the task body.
+  if 'parallel' attribute is set, it can spawn multiple tasks.
   }];
+
   let arguments = (ins
     Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$parameters,
     Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$constants,
@@ -95,15 +100,6 @@ def EdtOp : Arts_Op<"edt",
   );
 
   let regions = (region SizedRegion<1>:$body);
-  // let assemblyFormat = [{
-  //   `parameters` `(` $parameters `)` `:` `(` type($parameters) `)` `,` 
-  //   `constants` `(` $constants `)` `:` `(` type($constants) `)` `,`
-  //   `dependencies` `(` $dependencies `)` `:` `(` type($dependencies) `)`
-  //   `events` `(` $events `)` `:` `(` type($events) `)`
-  //   attr-dict-with-keyword $body
-  // }];
-
-  // let assemblyFormat = "custom<EdtOpParser, EdtOpPrinter>";
   let hasCustomAssemblyFormat = 1;
 
   let builders = [
@@ -113,39 +109,6 @@ def EdtOp : Arts_Op<"edt",
       "ValueRange":$dependencies)>,
   ];
 
-  let extraClassDeclaration = [{
-    SmallVector<Value> getParams();
-    SmallVector<Value> getConsts();
-    SmallVector<Value> getDeps();
-  }];
-}
-
-//===----------------------------------------------------------------------===//
-// arts.parallel
-//===----------------------------------------------------------------------===//
-def ParallelOp : Arts_Op<"parallel", 
-    [SingleBlockImplicitTerminator<"arts::YieldOp">, AttrSizedOperandSegments]> {
-  let summary = "Parallel region in ARTS";
-  let description = [{
-    An ARTS parallel region. It can spawn multiple tasks.
-    Typically used to replicate something like `#pragma omp parallel`.
-    It has
-      - `parameters` that define task-specific inputs.
-      - `constants` that define task-specific constants.
-      - `dependencies` that specify input/output memory dependencies.
-  }];
-  let arguments = (ins
-    Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$parameters,
-    Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$constants,
-    Variadic<AnyMemRef>:$dependencies
-  );
-  let regions = (region AnyRegion:$body);
-  let assemblyFormat = [{
-    `parameters` `(` $parameters `)` `:` `(` type($parameters) `)` `,`
-    `constants` `(` $constants `)` `:` `(` type($constants) `)` `,`
-    `dependencies` `(` $dependencies `)` `:` `(` type($dependencies) `)`
-    attr-dict-with-keyword $body
-  }];
   let extraClassDeclaration = [{
     SmallVector<Value> getParams();
     SmallVector<Value> getConsts();
@@ -169,8 +132,6 @@ def EpochOp : Arts_Op<"epoch",
   }];
 }
 
-
-
 //===----------------------------------------------------------------------===//
 // arts.single
 //===----------------------------------------------------------------------===//
@@ -192,7 +153,7 @@ def SingleOp : Arts_Op<"single",
 //===----------------------------------------------------------------------===//
 def YieldOp : Arts_Op<"yield", 
   [Pure, ReturnLike, Terminator, 
-   ParentOneOf<["EdtOp", "EpochOp", "ParallelOp", "SingleOp"]>]> {
+   ParentOneOf<["EdtOp", "EpochOp", "SingleOp"]>]> {
 
   let summary = "ARTS dialect yield terminator";
   let description = [{
