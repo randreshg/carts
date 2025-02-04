@@ -15,6 +15,10 @@
 /// carts-opt taskwithdeps.mlir --convert-openmp-to-arts --cse --canonicalize &> taskwithdeps-arts.mlir
 /// carts-opt taskwithdeps.mlir --convert-openmp-to-arts --cse --canonicalize -debug-only=convert-openmp-to-arts &> taskwithdeps-arts.mlir
 
+/// Create ARTS events
+/// carts-opt taskwithdeps-arts.mlir --create-events &> taskwithdeps-events.mlir
+/// carts-opt taskwithdeps-arts.mlir --create-events -debug-only=datablock-analysis,create-events &> taskwithdeps-events.mlir
+
 /// Convert ARTS to Funcs
 /// carts-opt taskwithdeps-arts.mlir --convert-arts-to-funcs --cse --canonicalize -debug-only=convert-arts-to-funcs,arts-codegen &> taskwithdeps-func.mlir
 

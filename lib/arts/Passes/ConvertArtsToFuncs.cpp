@@ -107,16 +107,6 @@ void preprocessDataBlock(ArtsCodegen &AC, DataBlockOp op) {
           newDbOp.getResult(),
           [&](OpOperand &operand) { return operand.getOwner() == dbOp; });
     }
-    /// ParallelOp - fix dependencies
-    else if (auto parallelOp = dyn_cast<arts::ParallelOp>(user)) {
-      for (auto dep : parallelOp.getDeps()) {
-        if (dep == op) {
-          dep.replaceUsesWithIf(newDbOp.getResult(), [&](OpOperand &operand) {
-            return operand.getOwner() == parallelOp;
-          });
-        }
-      }
-    }
     /// EdtOp - fix dependencies
     else if (auto edtOp = dyn_cast<arts::EdtOp>(user)) {
       for (auto dep : edtOp.getDependencies()) {
@@ -165,39 +155,9 @@ struct EdtOpLowering : public OpConversionPattern<arts::EdtOp> {
   EdtOpLowering(MLIRContext *context, ArtsCodegen &AC)
       : OpConversionPattern(context), AC(AC) {}
 
-  LogicalResult
-  matchAndRewrite(arts::EdtOp op, arts::EdtOp::Adaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-
-    LLVM_DEBUG(DBGS() << "Lowering arts.edt: " << op << "\n");
-    LLVM_DEBUG(DBGS() << "Processing edt op\n");
-    Location loc = UnknownLoc::get(op.getContext());
-    /// Process dependencies (makes memrefs -> datablocks)
-    auto deps = op.getDependencies();
-    for (auto dep : deps) {
-      auto dbOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp());
-      assert(dbOp && "Dependency is not a datablock op");
-      AC.getOrCreateDatablock(dbOp, loc);
-    }
-
-    return success();
-  }
-
-private:
-  ArtsCodegen &AC;
-};
-
-struct ParallelOpLowering : public OpConversionPattern<arts::ParallelOp> {
-  using OpConversionPattern<arts::ParallelOp>::OpConversionPattern;
-
-  ParallelOpLowering(MLIRContext *context, ArtsCodegen &AC)
-      : OpConversionPattern(context), AC(AC) {}
-
-  LogicalResult
-  matchAndRewrite(arts::ParallelOp op, arts::ParallelOp::Adaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    LLVM_DEBUG(DBGS() << "Lowering arts.parallel\n"
-                      << "\n");
+  LogicalResult handleParallel(arts::EdtOp op,
+                               ConversionPatternRewriter &rewriter) const {
+    LLVM_DEBUG(DBGS() << "Lowering arts.parallel\n\n");
 
     Location loc = UnknownLoc::get(op.getContext());
     arts::SingleOp singleOp = nullptr;
@@ -258,6 +218,29 @@ struct ParallelOpLowering : public OpConversionPattern<arts::ParallelOp> {
     return success();
   }
 
+  const LogicalResult handleSingle(arts::EdtOp &op,
+                                   ConversionPatternRewriter &rewriter) const {
+    LLVM_DEBUG(DBGS() << "Lowering arts.edt: " << op << "\n");
+    LLVM_DEBUG(DBGS() << "Processing edt op\n");
+    Location loc = UnknownLoc::get(op.getContext());
+    /// Process dependencies (makes memrefs -> datablocks)
+    auto deps = op.getDependencies();
+    for (auto dep : deps) {
+      auto dbOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp());
+      assert(dbOp && "Dependency is not a datablock op");
+      AC.getOrCreateDatablock(dbOp, loc);
+    }
+
+    return success();
+  }
+
+  LogicalResult
+  matchAndRewrite(arts::EdtOp op, arts::EdtOp::Adaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    return op->getAttr("parallel") ? handleParallel(op, rewriter)
+                                   : handleSingle(op, rewriter);
+  }
+
 private:
   ArtsCodegen &AC;
 };
@@ -297,7 +280,7 @@ void ConvertArtsToFuncsPass::runOnOperation() {
 
   /// Create a ConversionTarget that declares ARTS dialect ops illegal
   ConversionTarget target(*ctx);
-  target.addIllegalOp<arts::ParallelOp>();
+  target.addIllegalOp<arts::EdtOp>();
 
   /// Mark other dialects as legal
   target.addLegalDialect<arith::ArithDialect, cf::ControlFlowDialect,
@@ -305,7 +288,7 @@ void ConvertArtsToFuncsPass::runOnOperation() {
                          affine::AffineDialect, polygeist::PolygeistDialect,
                          scf::SCFDialect>();
   target.addLegalOp<ModuleOp>();
-  target.addLegalOp<arts::EdtOp>();
+  // target.addLegalOp<arts::EdtOp>();
   target.addLegalOp<arts::AllocaOp>();
   target.addLegalOp<arts::DataBlockOp>();
   target.addLegalOp<arts::YieldOp>();
@@ -314,10 +297,9 @@ void ConvertArtsToFuncsPass::runOnOperation() {
 
   // Pattern list
   RewritePatternSet patterns(ctx);
-  patterns.add<ParallelOpLowering>(ctx, AC);
   // patterns.add<MakeDepOpLowering>(ctx, AC);
   // If you have arts::EdtOp, arts::EpochOp, etc., add them:
-  // patterns.add<EdtOpLowering>(ctx, AC);
+  patterns.add<EdtOpLowering>(ctx, AC);
   // patterns.add<EpochOpLowering>(ctx, AC);
   // patterns.add<DatablockOpLowering>(ctx, AC);
 
