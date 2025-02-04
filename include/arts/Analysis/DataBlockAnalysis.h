@@ -45,7 +45,6 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 
-
 namespace mlir {
 
 namespace arts {
@@ -82,10 +81,14 @@ public:
     SetVector<unsigned> duplicates;
   };
 
+  enum NodeComp { Equal, BaseAlias, Different };
+
   /// Edge from a producer (writer) node to a consumer (reader) node.
   struct Edge {
     unsigned producerID;
     unsigned consumerID;
+    bool isDirect = true;
+    bool isLoopDependent = false;
   };
 
   /// The complete dependency graph.
@@ -103,19 +106,21 @@ public:
   void computeStatistics(func::FuncOp func);
   /// Get the graph for a given function, or create it if it does not exist.
   Graph &getOrCreateGraph(func::FuncOp func);
-  /// Get the nodes ids that use a given offset.
-  SetVector<unsigned> getNodesFromOffset(Value dbOffset);
+  /// Get the for op that uses a given offset.
+  SetVector<scf::ForOp> getLoopsFromOffset(Value dbOffset);
 
 private:
   /// Dependency analysis.
   bool mayOverlap(Node &A, Node &B);
-  bool mayDepend(Node &prod, Node &cons, DominanceInfo &domInfo);
+  bool mayDepend(Node &prod, Node &cons, bool &isDominated,
+                 bool &isLoopDependent, DominanceInfo &domInfo);
   bool baseMayAlias(Node &A, Node &B);
-  bool areEquivalent(Node &A, Node &B);
+  NodeComp compare(Node &A, Node &B);
   void buildAdjacency(Graph &graph, DominanceInfo &domInfo);
 
   /// Analysis
-  void analyzeLoops(Region &region, Graph &graph);
+  void analyzeLoops(Region &region,
+                    DenseMap<Value, llvm::SmallVector<scf::ForOp, 4>> &valMap);
 
   /// Node collection
   void collectNodes(Region &region, Graph &graph);
@@ -142,8 +147,8 @@ private:
   llvm::DenseMap<func::FuncOp, Graph> functionGraphMap;
   /// Map from each arts.datablock op to its corresponding Node.
   llvm::DenseMap<arts::DataBlockOp, Node> nodeMap;
-  /// Map from each datablock offset Value to the list of node IDs that use it.
-  llvm::DenseMap<Value, SetVector<unsigned>> offsetMap;
+  /// Map from each datablock offset Value to the set of loops it depends on
+  llvm::DenseMap<Value, SetVector<scf::ForOp>> offsetMap;
   /// Set of equivalent datablock nodes.
   llvm::SmallDenseSet<unsigned> equivalentNodes;
 

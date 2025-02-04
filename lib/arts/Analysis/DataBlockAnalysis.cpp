@@ -41,6 +41,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
 #include "polygeist/Ops.h"
 /// Arts
@@ -80,7 +81,6 @@ DatablockAnalysis::Graph DatablockAnalysis::analyzeFunction(func::FuncOp func) {
   Graph graph;
   DominanceInfo domInfo(func);
   collectNodes(func.getBody(), graph);
-  analyzeLoops(func.getBody(), graph);
   buildAdjacency(graph, domInfo);
   // deduplicateNodes(graph);
   return graph;
@@ -109,7 +109,7 @@ DatablockAnalysis::getOrCreateGraph(func::FuncOp func) {
   return functionGraphMap[func];
 }
 
-SetVector<unsigned> DatablockAnalysis::getNodesFromOffset(Value dbOffset) {
+SetVector<scf::ForOp> DatablockAnalysis::getLoopsFromOffset(Value dbOffset) {
   if (offsetMap.count(dbOffset))
     return offsetMap[dbOffset];
   return {};
@@ -132,39 +132,53 @@ bool DatablockAnalysis::mayOverlap(Node &A, Node &B) {
   return true;
 }
 
-bool DatablockAnalysis::mayDepend(Node &prod, Node &cons,
+bool DatablockAnalysis::mayDepend(Node &prod, Node &cons, bool &isDirect,
+                                  bool &isLoopDependent,
                                   DominanceInfo &domInfo) {
-  /// Verify if the nodes belong to the same edt
+  /// Verify if the nodes belong to the same EDT.
   if (prod.edtParent != cons.edtParent)
     return false;
 
-  /// Don't consider nodes that have the same edt user.
+  /// Exclude nodes with the same EDT user.
   if (prod.edtUser == cons.edtUser)
     return false;
 
-  /// Check if a producer is a writer and a consumer is a reader.
+  /// Only consider writer producer and reader consumer.
   if (!isWriter(prod) || !isReader(cons))
     return false;
 
-  /// Check if are equivalents or may alias.
-  if (!(areEquivalent(prod, cons) || baseMayAlias(prod, cons)))
+  /// Check if nodes are different
+  auto compResult = compare(prod, cons);
+  if (compResult == NodeComp::Different)
     return false;
 
-  /// Check if a producer node dominates a consumer node.
-  if (domInfo.dominates(prod.op.getOperation(), cons.op.getOperation()))
-    return true;
+  /// There is a direct dependency if
+  isDirect = true ? (compResult == NodeComp::Equal) : false;
 
-  /// If not dominated, but both are used in a loop, and have a common offset,
-  /// assume a dependency.
+  /// Check loop usage: if both nodes are used in loops, look for common loops.
   if (prod.usedInLoop && cons.usedInLoop) {
-    for (Value offVal : prod.op.getOffsets()) {
-      if (getNodesFromOffset(offVal).contains(cons.id))
-        return true;
+    auto prodOffs = prod.op.getOffsets();
+    auto consOffs = cons.op.getOffsets();
+
+    /// Iterate over corresponding offsets.
+    for (size_t i = 0, e = prodOffs.size(); i < e; ++i) {
+      auto prodLoops = getLoopsFromOffset(prodOffs[i]);
+      auto consLoops = getLoopsFromOffset(consOffs[i]);
+      for (auto &pLoop : prodLoops) {
+        if (consLoops.contains(pLoop)) {
+          isLoopDependent = true;
+          break;
+        }
+      }
+
+      /// No need to keep looking if a common loop is found.
+      if (isLoopDependent)
+        break;
     }
   }
 
-  /// Otherwise, it is safe to assume no dependency.
-  return false;
+  /// Finally, if producer dominates consumer, report a dependency.
+  return domInfo.dominates(prod.op.getOperation(), cons.op.getOperation());
 }
 
 bool DatablockAnalysis::baseMayAlias(Node &A, Node &B) {
@@ -177,31 +191,42 @@ bool DatablockAnalysis::baseMayAlias(Node &A, Node &B) {
   return false;
 }
 
-bool DatablockAnalysis::areEquivalent(Node &A, Node &B) {
+DatablockAnalysis::NodeComp DatablockAnalysis::compare(Node &A, Node &B) {
   /// If it is already known that the nodes are equivalent, return true.
   if (A.duplicates.contains(B.id) || B.duplicates.contains(A.id))
-    return true;
+    return NodeComp::Equal;
 
   /// Compute it, otherwise.
-  if (A.baseMemref != B.baseMemref)
-    return false;
+  if (!baseMayAlias(A, B))
+    return NodeComp::Different;
+
+  /// Compare offsets
+  auto Aoffs = A.op.getOffsets();
+  auto Boffs = B.op.getOffsets();
+  if (Aoffs.size() != Boffs.size())
+    return NodeComp::Different;
+
+  for (unsigned i = 0; i < Aoffs.size(); ++i) {
+    if (Aoffs[i] != Boffs[i])
+      return NodeComp::BaseAlias;
+  }
+
+  /// If static info is not available, assume they are equivalent.
   if (A.info.valid != B.info.valid)
-    return false;
+    return NodeComp::BaseAlias;
   if (A.info.valid) {
-    if (A.info.offsets.size() != B.info.offsets.size())
-      return false;
     for (unsigned i = 0; i < A.info.offsets.size(); ++i) {
       if (A.info.offsets[i] != B.info.offsets[i] ||
           A.info.sizes[i] != B.info.sizes[i] ||
           A.info.strides[i] != B.info.strides[i])
-        return false;
+        return NodeComp::BaseAlias;
     }
   }
 
   /// Cache the result.
   A.duplicates.insert(B.id);
   B.duplicates.insert(A.id);
-  return true;
+  return NodeComp::Equal;
 }
 
 void DatablockAnalysis::buildAdjacency(Graph &graph, DominanceInfo &domInfo) {
@@ -212,49 +237,55 @@ void DatablockAnalysis::buildAdjacency(Graph &graph, DominanceInfo &domInfo) {
         continue;
       Node &A = graph.nodes[i];
       Node &B = graph.nodes[j];
-      if (mayDepend(A, B, domInfo))
-        graph.edges.push_back({A.id, B.id});
+      bool isDirect = true, isLoopDependent = false;
+      if (mayDepend(A, B, isDirect, isLoopDependent, domInfo))
+        graph.edges.push_back({A.id, B.id, isDirect, isLoopDependent});
     }
   }
 }
 
 /// Analysis
-void DatablockAnalysis::analyzeLoops(Region &region, Graph &graph) {
+void DatablockAnalysis::analyzeLoops(
+    Region &region, DenseMap<Value, llvm::SmallVector<scf::ForOp, 4>> &valMap) {
   /// It traverses from the supplied induction variable (iv) through its uses.
-  /// For each reached value that is found in the offset map (offsetMap),
-  /// the corresponding datablock node is marked as usedInLoop.
-  auto bfsForward = [&](Value iv) {
+  auto bfsForward = [&](scf::ForOp fop) {
     DenseSet<Value> visited;
     SmallVector<Value, 8> queue;
+    Value iv = fop.getInductionVar();
     visited.insert(iv);
     queue.push_back(iv);
     while (!queue.empty()) {
       Value cur = queue.pop_back_val();
-      auto nodes = getNodesFromOffset(cur);
-      for (unsigned nodeID : nodes)
-        graph.nodes[nodeID].usedInLoop = true;
-
       for (auto &use : cur.getUses()) {
         Operation *owner = use.getOwner();
+        /// Ignore
         for (Value res : owner->getResults()) {
           if (visited.insert(res).second)
             queue.push_back(res);
         }
       }
     }
+
+    /// Insert the induction variable into the map.
+    for (auto &val : visited)
+      valMap[val].push_back(fop);
   };
 
-  /// Analyze the induction variables of all loops to mark datablocks
-  /// whose offsets depend on a loop induction variable.
+  /// Analyze the induction variables of all loops and mark the ops that depend
+  /// on them.
   llvm::SmallVector<scf::ForOp, 8> loops;
   region.walk([&](scf::ForOp fop) { loops.push_back(fop); });
   for (auto fop : loops)
-    bfsForward(fop.getInductionVar());
+    bfsForward(fop);
 }
 
 /// Node collection
 void DatablockAnalysis::collectNodes(Region &region, Graph &graph) {
   unsigned nextID = 0;
+  /// Collect loops and variables that depend on them.
+  DenseMap<Value, llvm::SmallVector<scf::ForOp, 4>> loopValsMap;
+  analyzeLoops(region, loopValsMap);
+
   /// Collect datablock nodes from the top-level region of a function.
   region.walk([&](arts::DataBlockOp dbOp) {
     /// Set node information.
@@ -289,13 +320,18 @@ void DatablockAnalysis::collectNodes(Region &region, Graph &graph) {
     if (auto parentOp = dbOp->getParentOfType<arts::EdtOp>())
       node.edtParent = parentOp;
 
+    /// Add the node to the offset map.
+    for (Value offVal : dbOp.getOffsets()) {
+      if (!loopValsMap.count(offVal))
+        continue;
+      /// Insert the loop values into the offset map.
+      node.usedInLoop = true;
+      auto &loopVals = loopValsMap[offVal];
+      offsetMap[offVal].insert(loopVals.begin(), loopVals.end());
+    }
+
     /// Add the node to the graph.
     graph.nodes.push_back(std::move(node));
-
-    /// Add the node to the offset map.
-    unsigned idx = graph.nodes.size() - 1;
-    for (Value offVal : dbOp.getOffsets())
-      offsetMap[offVal].insert(idx);
   });
 }
 
@@ -401,7 +437,9 @@ void DatablockAnalysis::printGraph(Graph &graph) {
   }
   os << "Edges:\n";
   for (auto &e : graph.edges)
-    os << "  #" << e.producerID << " -> #" << e.consumerID << "\n";
+    os << "  #" << e.producerID << " -> #" << e.consumerID << " ("
+       << (e.isDirect ? "direct" : "indirect")
+       << (e.isLoopDependent ? ", loop dependent" : "") << ")\n";
   os << "Total nodes: " << graph.nodes.size() << "\n";
   LLVM_DEBUG(dbgs() << os.str());
 }
@@ -486,7 +524,7 @@ void DatablockAnalysis::deduplicateNodes(Graph &graph) {
   llvm::SmallDenseSet<unsigned> duplicateIDs;
   for (unsigned i = 0; i < graph.nodes.size(); i++) {
     for (unsigned j = i + 1; j < graph.nodes.size(); j++) {
-      if (areEquivalent(graph.nodes[i], graph.nodes[j])) {
+      if (compare(graph.nodes[i], graph.nodes[j]) == NodeComp::Equal) {
         duplicateIDs.insert(j);
         // graph.nodes[j].op->replaceAllUsesWith(graph.nodes[i].op.getResult());
         // graph.nodes[j].op.erase();
