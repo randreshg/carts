@@ -88,7 +88,7 @@ DatablockAnalysis::Graph DatablockAnalysis::analyzeFunction(func::FuncOp func) {
 
 void DatablockAnalysis::printGraph(func::FuncOp func) {
   LLVM_DEBUG(dbgs() << line);
-  LLVM_DEBUG(DBGS() <<  "Printing graph for function: " << func.getName()
+  LLVM_DEBUG(DBGS() << "Printing graph for function: " << func.getName()
                     << "\n");
   if (functionGraphMap.count(func))
     printGraph(functionGraphMap[func]);
@@ -109,11 +109,12 @@ DatablockAnalysis::getOrCreateGraph(func::FuncOp func) {
   return functionGraphMap[func];
 }
 
-SmallVector<unsigned, 4> DatablockAnalysis::getNodes(Value dbOffset) {
+SetVector<unsigned> DatablockAnalysis::getNodesFromOffset(Value dbOffset) {
   if (offsetMap.count(dbOffset))
     return offsetMap[dbOffset];
   return {};
 }
+
 /// Dependency analysis.
 bool DatablockAnalysis::mayOverlap(Node &A, Node &B) {
   if (!A.info.valid || !B.info.valid)
@@ -133,6 +134,14 @@ bool DatablockAnalysis::mayOverlap(Node &A, Node &B) {
 
 bool DatablockAnalysis::mayDepend(Node &prod, Node &cons,
                                   DominanceInfo &domInfo) {
+  /// Verify if the nodes belong to the same edt
+  if (prod.edtParent != cons.edtParent)
+    return false;
+
+  /// Don't consider nodes that have the same edt user.
+  if (prod.edtUser == cons.edtUser)
+    return false;
+
   /// Check if a producer is a writer and a consumer is a reader.
   if (!isWriter(prod) || !isReader(cons))
     return false;
@@ -145,9 +154,14 @@ bool DatablockAnalysis::mayDepend(Node &prod, Node &cons,
   if (domInfo.dominates(prod.op.getOperation(), cons.op.getOperation()))
     return true;
 
-  /// If not dominated, but both are used in a loop, consider them dependent.
-  if (prod.usedInLoop && cons.usedInLoop)
-    return true;
+  /// If not dominated, but both are used in a loop, and have a common offset,
+  /// assume a dependency.
+  if (prod.usedInLoop && cons.usedInLoop) {
+    for (Value offVal : prod.op.getOffsets()) {
+      if (getNodesFromOffset(offVal).contains(cons.id))
+        return true;
+    }
+  }
 
   /// Otherwise, it is safe to assume no dependency.
   return false;
@@ -216,10 +230,10 @@ void DatablockAnalysis::analyzeLoops(Region &region, Graph &graph) {
     queue.push_back(iv);
     while (!queue.empty()) {
       Value cur = queue.pop_back_val();
-      if (auto it = offsetMap.find(cur); it != offsetMap.end()) {
-        for (unsigned nodeID : it->second)
-          graph.nodes[nodeID].usedInLoop = true;
-      }
+      auto nodes = getNodesFromOffset(cur);
+      for (unsigned nodeID : nodes)
+        graph.nodes[nodeID].usedInLoop = true;
+
       for (auto &use : cur.getUses()) {
         Operation *owner = use.getOwner();
         for (Value res : owner->getResults()) {
@@ -281,7 +295,7 @@ void DatablockAnalysis::collectNodes(Region &region, Graph &graph) {
     /// Add the node to the offset map.
     unsigned idx = graph.nodes.size() - 1;
     for (Value offVal : dbOp.getOffsets())
-      offsetMap[offVal].push_back(idx);
+      offsetMap[offVal].insert(idx);
   });
 }
 

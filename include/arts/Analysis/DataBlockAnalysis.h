@@ -40,6 +40,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/Support/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -103,7 +104,7 @@ public:
   /// Get the graph for a given function, or create it if it does not exist.
   Graph &getOrCreateGraph(func::FuncOp func);
   /// Get the nodes ids that use a given offset.
-  SmallVector<unsigned, 4> getNodes(Value dbOffset);
+  SetVector<unsigned> getNodesFromOffset(Value dbOffset);
 
 private:
   /// Dependency analysis.
@@ -142,7 +143,7 @@ private:
   /// Map from each arts.datablock op to its corresponding Node.
   llvm::DenseMap<arts::DataBlockOp, Node> nodeMap;
   /// Map from each datablock offset Value to the list of node IDs that use it.
-  llvm::DenseMap<Value, SmallVector<unsigned, 4>> offsetMap;
+  llvm::DenseMap<Value, SetVector<unsigned>> offsetMap;
   /// Set of equivalent datablock nodes.
   llvm::SmallDenseSet<unsigned> equivalentNodes;
 

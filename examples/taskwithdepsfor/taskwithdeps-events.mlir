@@ -26,14 +26,8 @@ Nodes:
     base=%3 = arts.datablock "inout", %alloca : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
     info=(unknown) usedInLoop=true useCount=2 usedInRegions=2
 Edges:
-  #0 -> #3
-  #0 -> #4
-  #1 -> #3
-  #1 -> #4
   #2 -> #3
   #2 -> #4
-  #5 -> #3
-  #5 -> #4
 Total nodes: 6
 -----------------------------------------
 [datablock-analysis] Printing graph for function: rand
