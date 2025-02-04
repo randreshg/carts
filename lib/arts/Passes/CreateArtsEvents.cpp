@@ -48,8 +48,19 @@ struct CreateArtsEventsPass
 
     /// Iterate over every function in the module.
     for (auto func : module.getOps<func::FuncOp>()) {
-      dbAnalysis.getOrCreateGraph(func);
+      auto graph = dbAnalysis.getOrCreateGraph(func);
       dbAnalysis.printGraph(func);
+
+      /// Analyze the graph edges
+      for (auto &edge : graph.edges) {
+        DatablockAnalysis::Node &producer = graph.nodes[edge.producerID];
+        DatablockAnalysis::Node &consumer = graph.nodes[edge.consumerID];
+        if (producer.mode == "out" || producer.mode == "inout") {
+          llvm::errs() << "Created event for datablock node #" << producer.id
+                       << "\n";
+        }
+      }
+
       // DominanceInfo domInfo(func);
       // /// Retrieve (or compute) the dependency graph for this function.
       // auto &graph = dbAnalysis.getOrCreateGraph(func);
