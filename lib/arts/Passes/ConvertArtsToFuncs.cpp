@@ -69,12 +69,6 @@ void preprocessDataBlock(ArtsCodegen &AC, DataBlockOp op) {
       op.getSizes(), op.getStrides());
   newDbOp->setAttrs(op->getAttrs());
 
-  // if (auto baseOp =
-  //         dyn_cast_or_null<arts::DataBlockOp>(op.getBase().getDefiningOp()))
-  //         {
-  //   newDbOp->setAttr("baseIsDb", UnitAttr::get(op.getContext()));
-  // }
-
   /// Walk all uses of the old datablock to properly replace it with the new
   /// pointer
   for (auto &use : llvm::make_early_inc_range(op->getUses())) {
@@ -280,37 +274,37 @@ void ConvertArtsToFuncsPass::runOnOperation() {
   module.dump();
 
   /// Create a ConversionTarget that declares ARTS dialect ops illegal
-  ConversionTarget target(*ctx);
-  target.addIllegalOp<arts::EdtOp>();
+  // ConversionTarget target(*ctx);
+  // target.addIllegalOp<arts::EdtOp>();
 
-  /// Mark other dialects as legal
-  target.addLegalDialect<arith::ArithDialect, cf::ControlFlowDialect,
-                         func::FuncDialect, memref::MemRefDialect,
-                         affine::AffineDialect, polygeist::PolygeistDialect,
-                         scf::SCFDialect>();
-  target.addLegalOp<ModuleOp>();
-  // target.addLegalOp<arts::EdtOp>();
-  target.addLegalOp<arts::AllocaOp>();
-  target.addLegalOp<arts::DataBlockOp>();
-  target.addLegalOp<arts::YieldOp>();
-  target.addLegalOp<arts::BarrierOp>();
-  target.addLegalDialect<LLVM::LLVMDialect>();
+  // /// Mark other dialects as legal
+  // target.addLegalDialect<arith::ArithDialect, cf::ControlFlowDialect,
+  //                        func::FuncDialect, memref::MemRefDialect,
+  //                        affine::AffineDialect, polygeist::PolygeistDialect,
+  //                        scf::SCFDialect>();
+  // target.addLegalOp<ModuleOp>();
+  // // target.addLegalOp<arts::EdtOp>();
+  // target.addLegalOp<arts::AllocaOp>();
+  // target.addLegalOp<arts::DataBlockOp>();
+  // target.addLegalOp<arts::YieldOp>();
+  // target.addLegalOp<arts::BarrierOp>();
+  // target.addLegalDialect<LLVM::LLVMDialect>();
 
-  // Pattern list
-  RewritePatternSet patterns(ctx);
-  // patterns.add<MakeDepOpLowering>(ctx, AC);
-  // If you have arts::EdtOp, arts::EpochOp, etc., add them:
-  patterns.add<EdtOpLowering>(ctx, AC);
-  // patterns.add<EpochOpLowering>(ctx, AC);
-  // patterns.add<DatablockOpLowering>(ctx, AC);
+  // // Pattern list
+  // RewritePatternSet patterns(ctx);
+  // // patterns.add<MakeDepOpLowering>(ctx, AC);
+  // // If you have arts::EdtOp, arts::EpochOp, etc., add them:
+  // patterns.add<EdtOpLowering>(ctx, AC);
+  // // patterns.add<EpochOpLowering>(ctx, AC);
+  // // patterns.add<DatablockOpLowering>(ctx, AC);
 
-  /// Apply partial conversion
-  if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
-    LLVM_DEBUG(dbgs() << "Conversion failed.\n");
-    module.dump();
-    signalPassFailure();
-    return;
-  }
+  // /// Apply partial conversion
+  // if (failed(applyPartialConversion(module, target, std::move(patterns)))) {
+  //   LLVM_DEBUG(dbgs() << "Conversion failed.\n");
+  //   module.dump();
+  //   signalPassFailure();
+  //   return;
+  // }
 
   LLVM_DEBUG(dbgs() << "=== ConvertArtsToFuncsPass COMPLETE ===\n");
   module.dump();

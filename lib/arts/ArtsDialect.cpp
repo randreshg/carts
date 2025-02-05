@@ -143,7 +143,8 @@ ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
   ::llvm::copy(
       ::llvm::ArrayRef<int32_t>({static_cast<int32_t>(paramOps.size()),
                                  static_cast<int32_t>(constOps.size()),
-                                 static_cast<int32_t>(depOps.size())}),
+                                 static_cast<int32_t>(depOps.size()),
+                                 static_cast<int32_t>(evtOps.size())}),
       result.getOrAddProperties<Properties>().operandSegmentSizes.begin());
 
   /// Parse region
