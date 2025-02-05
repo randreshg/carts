@@ -17,9 +17,9 @@
 ///       (The datablock op implements MemoryEffectOpInterface so that polygeist
 ///       alias analysis sees its effects.)
 ///   4. Runs a forward BFS from every scf.for induction variable (IV) to mark
-///      datablocks whose offsets depend on a loop IV as usedInLoop.
+///      datablocks whose offsets depend on a loop IV as isLoopDependent.
 ///   6. Builds a dependency graph (read-after-write edges) based on numeric
-///      i, dominance (skipped if usedInLoop is true), and
+///      i, dominance (skipped if isLoopDependent is true), and
 ///      alias information.
 ///   7. Collects usage statistics for each datablock: total use count and the
 ///      set of parent regions in which it is used, average use count and
@@ -69,16 +69,27 @@ public:
   struct Node {
     unsigned id = 0;
     arts::DataBlockOp op;
+    /// Db attributtes
     std::string mode;
     Value baseMemref;
+    SmallVector<Value, 4> offsets;
+    SmallVector<Value, 4> sizes;
+    SmallVector<Value, 4> strides;
+    bool isLoad;
+    bool baseIsDb;
+    /// Analysis results
     SubviewInfo info;
-    bool usedInLoop = false;
+    unsigned useCount;
+    bool isLoopDependent = false;
     arts::EdtOp edtUser = nullptr;
     arts::EdtOp edtParent = nullptr;
-    unsigned useCount = 0;
     llvm::SmallDenseSet<Region *> userRegions;
     SmallVector<MemoryEffects::EffectInstance, 2> effects;
+    /// A duplicated node is a node with the same mode, aliasing base memref,
+    /// and offsets.
     SetVector<unsigned> duplicates;
+    /// Set of nodes that alias this node.
+    SetVector<unsigned> aliases;
   };
 
   enum NodeComp { Equal, BaseAlias, Different };
@@ -108,6 +119,8 @@ public:
   Graph &getOrCreateGraph(func::FuncOp func);
   /// Get the for op that uses a given offset.
   SetVector<scf::ForOp> getLoopsFromOffset(Value dbOffset);
+  /// Get db node
+  Node &getNode(arts::DataBlockOp dbOp) { return nodeMap[dbOp]; }
 
 private:
   /// Dependency analysis.
@@ -126,7 +139,7 @@ private:
   void collectNodes(Region &region, Graph &graph);
   std::optional<int64_t> computeConstant(Value val);
   int64_t tryParseIndexConstant(Value val);
-  SubviewInfo parseSubviewInfo(arts::DataBlockOp dbOp);
+  void setSubviewInfo(Node &node);
 
   /// Statistics
   void computeStatistics(Graph &graph);

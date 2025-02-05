@@ -24,17 +24,19 @@ int main() {
   /// 0: random_number, 1: shared_number
   #pragma omp parallel
   {
-      printf("EDT 0: The number is %d/%d\n", shared_number, random_number);
-
-      /// EDT 3
-      /// 0: shared_number 
-      #pragma omp task firstprivate(random_number)
+      #pragma omp single
       {
-        shared_number++;
-        random_number++;
-        printf("EDT 3: The number is %d/%d\n", shared_number, random_number);
+        printf("EDT 0: The number is %d/%d\n", shared_number, random_number);
+        /// EDT 3
+        /// 0: shared_number 
+        #pragma omp task firstprivate(random_number)
+        {
+          shared_number++;
+          random_number++;
+          printf("EDT 3: The number is %d/%d\n", shared_number, random_number);
+        }
+
       }
-  
   } 
 
   /// EDT 2

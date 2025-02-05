@@ -8,6 +8,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsTypes.h"
 #include "mlir/Analysis/DataLayoutAnalysis.h"
+#include "mlir/Conversion/LLVMCommon/MemRefBuilder.h"
 /// Other
 #include "mlir/Conversion/LLVMCommon/MemRefBuilder.h"
 #include "mlir/IR/Builders.h"

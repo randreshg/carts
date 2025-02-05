@@ -69,10 +69,11 @@ void preprocessDataBlock(ArtsCodegen &AC, DataBlockOp op) {
       op.getSizes(), op.getStrides());
   newDbOp->setAttrs(op->getAttrs());
 
-  if (auto baseOp =
-          dyn_cast_or_null<arts::DataBlockOp>(op.getBase().getDefiningOp())) {
-    newDbOp->setAttr("baseIsDb", UnitAttr::get(op.getContext()));
-  }
+  // if (auto baseOp =
+  //         dyn_cast_or_null<arts::DataBlockOp>(op.getBase().getDefiningOp()))
+  //         {
+  //   newDbOp->setAttr("baseIsDb", UnitAttr::get(op.getContext()));
+  // }
 
   /// Walk all uses of the old datablock to properly replace it with the new
   /// pointer
@@ -160,7 +161,7 @@ struct EdtOpLowering : public OpConversionPattern<arts::EdtOp> {
     LLVM_DEBUG(DBGS() << "Lowering arts.parallel\n\n");
 
     Location loc = UnknownLoc::get(op.getContext());
-    arts::SingleOp singleOp = nullptr;
+    arts::EdtOp singleOp = nullptr;
     unsigned numOps = 0;
 
     /// Analyze the parallel region to find the singleOp
@@ -170,8 +171,8 @@ struct EdtOpLowering : public OpConversionPattern<arts::EdtOp> {
       if (op->getParentRegion() != &region)
         return;
       numOps++;
-      if (auto single = dyn_cast<arts::SingleOp>(op)) {
-        if (singleOp)
+      if (auto single = dyn_cast<arts::EdtOp>(op)) {
+        if (singleOp && single->hasAttr("single"))
           llvm_unreachable("Multiple single ops in parallel op not supported");
 
         singleOp = single;

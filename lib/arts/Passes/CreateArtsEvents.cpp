@@ -10,6 +10,8 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "mlir/IR/Builders.h"
+#include "mlir/Support/LLVM.h"
 #include "polygeist/Ops.h"
 /// Other
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -18,8 +20,10 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/Pass/Pass.h"
 /// Debug
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cstdint>
 #define DEBUG_TYPE "create-events"
 #define line "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
@@ -32,13 +36,53 @@ using namespace mlir::polygeist;
 using namespace mlir::arts;
 
 namespace {
-/// This pass uses the shared ArtsDataBlockAnalysis to generate events
-/// for datablock nodes that produce data (i.e. with mode "out" or "inout").
-/// The event op (arts.event) is created for each such node.
-/// In a real implementation, you might attach these events to the dependency
-/// information of EDTs so that later scheduling optimizations can be applied.
+
 struct CreateArtsEventsPass
     : public arts::CreateArtsEventsBase<CreateArtsEventsPass> {
+
+  /// Event data structure
+  struct Event {
+    bool isGrouped = false;
+    SmallVector<DatablockAnalysis::Edge> edges;
+  };
+
+  /// Inserts a new event operand
+  void insertEventsToEdt(OpBuilder &builder, EdtOp edtOp,
+                         SmallVector<Value> newEvents) {
+    OpBuilder::InsertionGuard b(builder);
+    /// Gather original operand groups
+    SmallVector<Value> parameters(edtOp.getParameters().begin(),
+                                  edtOp.getParameters().end());
+    SmallVector<Value> constants(edtOp.getConstants().begin(),
+                                 edtOp.getConstants().end());
+    SmallVector<Value> dependencies(edtOp.getDependencies().begin(),
+                                    edtOp.getDependencies().end());
+    SmallVector<Value> events(edtOp.getEvents().begin(),
+                              edtOp.getEvents().end());
+    events.append(newEvents.begin(), newEvents.end());
+    auto attrs = edtOp->getAttrs();
+
+    /// Build a new EdtOp. We set the insertion point right where the old EDT
+    builder.setInsertionPoint(edtOp);
+    auto loc = edtOp.getLoc();
+
+    /// Create a new EdtOp
+    auto newEdt = builder.create<arts::EdtOp>(loc, parameters, constants,
+                                              dependencies, events);
+    // Update operand segment sizes attribute to account for the new number of
+    // operands
+    newEdt->setAttr(
+        "operand_segment_sizes",
+        builder.getI32VectorAttr({static_cast<int32_t>(parameters.size()),
+                                  static_cast<int32_t>(constants.size()),
+                                  static_cast<int32_t>(dependencies.size()),
+                                  static_cast<int32_t>(events.size())}));
+    // newEdt->setAttrs(attrs);
+    newEdt.getBody().takeBody(edtOp.getBody());
+
+    /// Remove the old EdtOp
+    edtOp.erase();
+  }
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -47,49 +91,137 @@ struct CreateArtsEventsPass
     auto &dbAnalysis = getAnalysis<DatablockAnalysis>();
 
     /// Iterate over every function in the module.
-    for (auto func : module.getOps<func::FuncOp>()) {
-      auto graph = dbAnalysis.getOrCreateGraph(func);
+    module->walk([&](func::FuncOp func) {
+      /// Retrieve (or compute) the dependency graph for this function.
+      auto &graph = dbAnalysis.getOrCreateGraph(func);
       dbAnalysis.printGraph(func);
+
+      /// Create events based on the datablock graph.
+      SmallVector<Event, 4> events;
+      DenseMap<DatablockAnalysis::Node *, int32_t> nodeToEvent;
+
+      /// Pragma function to insert an event for a producer node.
+      /// Cache the event id for the producer node.
+      auto insertEvent = [&](DatablockAnalysis::Node &producer,
+                             DatablockAnalysis::Edge &edge,
+                             int32_t eventId = -1, bool isGrouped = false) {
+        if (eventId == -1) {
+          events.emplace_back();
+          eventId = int32_t(events.size() - 1);
+        } else {
+          assert(eventId < int32_t(events.size()));
+        }
+        auto &event = events[eventId];
+        event.isGrouped |= isGrouped;
+        event.edges.push_back(edge);
+        nodeToEvent[&producer] = eventId;
+      };
 
       /// Analyze the graph edges
       for (auto &edge : graph.edges) {
-        DatablockAnalysis::Node &producer = graph.nodes[edge.producerID];
-        DatablockAnalysis::Node &consumer = graph.nodes[edge.consumerID];
-        if (producer.mode == "out" || producer.mode == "inout") {
-          llvm::errs() << "Created event for datablock node #" << producer.id
-                       << "\n";
+        auto &producer = graph.nodes[edge.producerID];
+        /// If the event for this producer has already been created, use it.
+        auto found = nodeToEvent.find(&producer);
+        if (found != nodeToEvent.end()) {
+          insertEvent(producer, edge, found->second);
+          continue;
         }
+
+        /// If producer is loop dependent, and loads data from a parent
+        /// datablock, we group the events.
+        if (producer.isLoopDependent && producer.isLoad) {
+          int32_t eventId = -1;
+          for (auto alias : producer.aliases) {
+            auto &aliasNode = graph.nodes[alias];
+            auto aliasFound = nodeToEvent.find(&aliasNode);
+            if (aliasFound != nodeToEvent.end()) {
+              eventId = aliasFound->second;
+              insertEvent(producer, edge, eventId);
+              break;
+            }
+          }
+          /// Insert new grouped event
+          insertEvent(producer, edge, -1, true);
+          continue;
+        }
+
+        /// Create a new event for this producer.
+        /// No need to group events for now.
+        insertEvent(producer, edge, -1, false);
       }
 
-      // DominanceInfo domInfo(func);
-      // /// Retrieve (or compute) the dependency graph for this function.
-      // auto &graph = dbAnalysis.getOrCreateGraph(func);
+      /// Lambda to load an event value into the consumer's event map.
+      DenseMap<EdtOp, SmallVector<Value>> edtToEvents;
+      OpBuilder builder(func);
+      auto loadEventToMap = [&](auto &consumer, Value event, Location loc) {
+        builder.setInsertionPoint(consumer.edtUser);
+        auto eventLoad =
+            builder.create<memref::LoadOp>(loc, event, consumer.offsets);
+        edtToEvents[consumer.edtUser].push_back(eventLoad.getResult());
+        return eventLoad.getResult();
+      };
 
-      // /// Set an insertion point (here, at the end of the first block).
-      // OpBuilder builder(func);
-      // builder.setInsertionPointToEnd(&func.getBody().front());
+      /// Load events into the EDTs.
+      for (auto e : events) {
+        auto edges = e.edges;
 
-      // /// Iterate over each node in the graph.
-      // for (auto &node : graph.nodes) {
-      //   /// For each datablock that is an "out" dependency (or inout),
-      //   /// generate an event op.
-      //   if (node.mode == "out" || node.mode == "inout") {
-      //     /// For simplicity, we assume the event size is 1.
-      //     auto sizeConst =
-      //         builder.create<arith::ConstantIndexOp>(func.getLoc(), 1);
-      //     /// Create an arts.event op (assume it returns a value of type
-      //     /// !arts.event). (The exact builder signature depends on your dialect
-      //     /// definition.) auto eventOp =
-      //     /// builder.create<arts::EventOp>(func.getLoc(),
-      //     /// sizeConst.getResult());
-      //     llvm::errs() << "Created event for datablock node #" << node.id
-      //                  << "\n";
-      //     /// Optionally, you can attach the event to the node (e.g. by storing
-      //     /// it in a pass-local map or by setting an attribute on the datablock
-      //     /// op).
-      //   }
-      // }
-    }
+        if (e.isGrouped) {
+          /// Set insertion point to the beginning of the producer node's parent
+          //. region.
+          auto &producerNode = graph.nodes[e.edges[0].producerID];
+          auto loc = producerNode.op.getLoc();
+          builder.setInsertionPointToStart(
+              &producerNode.edtParent->getRegion(0).front());
+
+          /// Get the parent node.
+          assert(producerNode.isLoad && "Expected a load datablock");
+          auto dbParent =
+              cast<DataBlockOp>(producerNode.baseMemref.getDefiningOp());
+          auto &dbParentNode = dbAnalysis.getNode(dbParent);
+
+          /// Create event with computed numElements.
+          Value numElements = builder.create<arith::ConstantIndexOp>(loc, 1);
+          for (auto sz : dbParentNode.sizes)
+            numElements = builder.create<arith::MulIOp>(loc, numElements, sz);
+          auto type = MemRefType::get(dbParentNode.op.getType().getShape(),
+                                      builder.getIntegerType(64));
+          auto event =
+              builder.create<arts::EventOp>(loc, type, numElements, true);
+
+          /// Insert event load for the producer.
+          auto defEvent = loadEventToMap(producerNode, event.getResult(), loc);
+
+          /// Insert event load for each consumer in the edge list.
+          for (auto &edge : edges) {
+            auto &consumer = graph.nodes[edge.consumerID];
+            if (edge.isDirect)
+              edtToEvents[consumer.edtUser].push_back(defEvent);
+            else
+              loadEventToMap(consumer, event.getResult(), loc);
+          }
+          continue;
+        }
+
+        /// For non-grouped events, expect a single edge.
+        assert(edges.size() == 1 && "Expected a single edge");
+        auto &producerNode = graph.nodes[e.edges[0].producerID];
+        auto loc = producerNode.op.getLoc();
+        builder.setInsertionPoint(producerNode.op);
+
+        /// Create event.
+        Value numElements = builder.create<arith::ConstantIndexOp>(loc, 1);
+        auto type = producerNode.op.getResult().getType();
+        auto eventOp =
+            builder.create<arts::EventOp>(loc, type, numElements, false);
+
+        /// Insert event load for the producer.
+        loadEventToMap(producerNode, eventOp.getResult(), loc);
+      }
+
+      /// Insert events into the EDTs.
+      for (auto &pair : edtToEvents)
+        insertEventsToEdt(builder, pair.first, pair.second);
+    });
   }
 };
 

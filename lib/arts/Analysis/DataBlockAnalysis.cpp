@@ -17,9 +17,9 @@
 ///       (The datablock op implements MemoryEffectOpInterface so that polygeist
 ///       alias analysis sees its effects.)
 ///   4. Runs a forward BFS from every scf.for induction variable (IV) to mark
-///      datablocks whose offsets depend on a loop IV as usedInLoop.
+///      datablocks whose offsets depend on a loop IV as isLoopDependent.
 ///   6. Builds a dependency graph (read-after-write edges) based on numeric
-///      i, dominance (skipped if usedInLoop is true), and
+///      i, dominance (skipped if isLoopDependent is true), and
 ///      alias information.
 ///   7. Collects usage statistics for each datablock: total use count and the
 ///      set of parent regions in which it is used, average use count and
@@ -82,7 +82,6 @@ DatablockAnalysis::Graph DatablockAnalysis::analyzeFunction(func::FuncOp func) {
   DominanceInfo domInfo(func);
   collectNodes(func.getBody(), graph);
   buildAdjacency(graph, domInfo);
-  // deduplicateNodes(graph);
   return graph;
 }
 
@@ -155,15 +154,12 @@ bool DatablockAnalysis::mayDepend(Node &prod, Node &cons, bool &isDirect,
   /// There is a direct dependency if
   isDirect = true ? (compResult == NodeComp::Equal) : false;
 
-  /// Check loop usage: if both nodes are used in loops, look for common loops.
-  if (prod.usedInLoop && cons.usedInLoop) {
-    auto prodOffs = prod.op.getOffsets();
-    auto consOffs = cons.op.getOffsets();
-
+  /// Check loop usage: if both nodes are dependent on the same loop
+  if (prod.isLoopDependent && cons.isLoopDependent) {
     /// Iterate over corresponding offsets.
-    for (size_t i = 0, e = prodOffs.size(); i < e; ++i) {
-      auto prodLoops = getLoopsFromOffset(prodOffs[i]);
-      auto consLoops = getLoopsFromOffset(consOffs[i]);
+    for (size_t i = 0, e = prod.offsets.size(); i < e; ++i) {
+      auto prodLoops = getLoopsFromOffset(prod.offsets[i]);
+      auto consLoops = getLoopsFromOffset(cons.offsets[i]);
       for (auto &pLoop : prodLoops) {
         if (consLoops.contains(pLoop)) {
           isLoopDependent = true;
@@ -182,10 +178,16 @@ bool DatablockAnalysis::mayDepend(Node &prod, Node &cons, bool &isDirect,
 }
 
 bool DatablockAnalysis::baseMayAlias(Node &A, Node &B) {
+  if (A.aliases.contains(B.id))
+    return true;
+
   for (auto &eA : A.effects) {
     for (auto &eB : B.effects) {
-      if (mayAlias(eA, eB))
+      if (mayAlias(eA, eB)) {
+        A.aliases.insert(B.id);
+        B.aliases.insert(A.id);
         return true;
+      }
     }
   }
   return false;
@@ -201,15 +203,11 @@ DatablockAnalysis::NodeComp DatablockAnalysis::compare(Node &A, Node &B) {
     return NodeComp::Different;
 
   /// Compare offsets
-  auto Aoffs = A.op.getOffsets();
-  auto Boffs = B.op.getOffsets();
-  if (Aoffs.size() != Boffs.size())
+  if (A.offsets.size() != B.offsets.size())
     return NodeComp::Different;
 
-  for (unsigned i = 0; i < Aoffs.size(); ++i) {
-    if (Aoffs[i] != Boffs[i])
-      return NodeComp::BaseAlias;
-  }
+  if (!std::equal(A.offsets.begin(), A.offsets.end(), B.offsets.begin()))
+    return NodeComp::BaseAlias;
 
   /// If static info is not available, assume they are equivalent.
   if (A.info.valid != B.info.valid)
@@ -292,13 +290,30 @@ void DatablockAnalysis::collectNodes(Region &region, Graph &graph) {
     Node node;
     node.id = nextID++;
     node.op = dbOp;
-    auto modeAttr = dbOp->getAttrOfType<StringAttr>("mode");
-    assert(modeAttr && "mode attribute not found");
-    node.mode = modeAttr.str();
+    node.mode = dbOp.getMode();
     node.baseMemref = dbOp.getBase();
-    node.info = parseSubviewInfo(dbOp);
+    node.offsets = dbOp.getOffsets();
+    node.sizes = dbOp.getSizes();
+    node.strides = dbOp.getStrides();
+    setSubviewInfo(node);
+
+    /// Collect memory effects
     if (auto memEff = dyn_cast<MemoryEffectOpInterface>(dbOp.getOperation()))
       memEff.getEffects(node.effects);
+
+    /// Add base is datablock attribute.
+    if (auto baseOp = dyn_cast_or_null<arts::DataBlockOp>(
+            node.baseMemref.getDefiningOp())) {
+      dbOp->setAttr("baseIsDb", UnitAttr::get(dbOp.getContext()));
+      node.baseIsDb = true;
+    } else
+      node.baseIsDb = false;
+
+    /// Set the isLoad flag.
+    if (dbOp->hasAttr("isLoad"))
+      node.isLoad = true;
+    else
+      node.isLoad = false;
 
     /// Analyze uses of the datablock.
     unsigned numUses = 0;
@@ -317,21 +332,22 @@ void DatablockAnalysis::collectNodes(Region &region, Graph &graph) {
     node.useCount = numUses;
 
     /// Try to get the EDT parent of the datablock.
+    /// Try to get the EDT single region if any.
     if (auto parentOp = dbOp->getParentOfType<arts::EdtOp>())
       node.edtParent = parentOp;
 
-    /// Add the node to the offset map.
-    for (Value offVal : dbOp.getOffsets()) {
+    /// Insert the loop values into the offset map.
+    for (Value offVal : node.offsets) {
       if (!loopValsMap.count(offVal))
         continue;
-      /// Insert the loop values into the offset map.
-      node.usedInLoop = true;
+      node.isLoopDependent = true;
       auto &loopVals = loopValsMap[offVal];
       offsetMap[offVal].insert(loopVals.begin(), loopVals.end());
     }
 
     /// Add the node to the graph.
     graph.nodes.push_back(std::move(node));
+    nodeMap[dbOp] = graph.nodes.back();
   });
 }
 
@@ -364,32 +380,29 @@ int64_t DatablockAnalysis::tryParseIndexConstant(Value val) {
   return -1;
 }
 
-DatablockAnalysis::SubviewInfo
-DatablockAnalysis::parseSubviewInfo(arts::DataBlockOp dbOp) {
-  /// Try to parse the subview information for a datablock operation,
-  /// if it is known at compile time.
-  SubviewInfo sb;
-  auto offVals = dbOp.getOffsets();
-  auto sizVals = dbOp.getSizes();
-  auto strVals = dbOp.getStrides();
-  if (offVals.size() != sizVals.size() || sizVals.size() != strVals.size())
-    return sb;
-  unsigned rank = offVals.size();
+void DatablockAnalysis::setSubviewInfo(Node &node) {
+  /// Validate that offsets, sizes, and strides arrays have the same length.
+  if (node.offsets.size() != node.sizes.size() ||
+      node.offsets.size() != node.strides.size())
+    return;
+
+  const auto rank = node.offsets.size();
+  SubviewInfo &sb = node.info;
   sb.offsets.resize(rank);
   sb.sizes.resize(rank);
   sb.strides.resize(rank);
-  for (unsigned i = 0; i < rank; i++) {
-    int64_t o = tryParseIndexConstant(offVals[i]);
-    int64_t s = tryParseIndexConstant(sizVals[i]);
-    int64_t st = tryParseIndexConstant(strVals[i]);
+
+  for (size_t i = 0; i < rank; i++) {
+    const int64_t o = tryParseIndexConstant(node.offsets[i]);
+    const int64_t s = tryParseIndexConstant(node.sizes[i]);
+    const int64_t st = tryParseIndexConstant(node.strides[i]);
     if (o < 0 || s < 0 || st < 0)
-      return sb;
+      return;
     sb.offsets[i] = o;
     sb.sizes[i] = s;
     sb.strides[i] = st;
   }
   sb.valid = true;
-  return sb;
 }
 
 /// Statistics
@@ -417,9 +430,9 @@ void DatablockAnalysis::printGraph(Graph &graph) {
   for (auto &n : graph.nodes) {
     os << "  #" << n.id << " " << n.mode << "\n";
     os << "    " << n.op << "\n";
-    os << "    base=" << n.baseMemref << "\n";
+    os << "       base=" << n.baseMemref << "\n";
     if (n.info.valid) {
-      os << "    info=[";
+      os << "       info=[";
       for (unsigned d = 0; d < n.info.offsets.size(); d++) {
         os << n.info.offsets[d] << ".."
            << (n.info.offsets[d] + n.info.sizes[d]);
@@ -428,11 +441,13 @@ void DatablockAnalysis::printGraph(Graph &graph) {
       }
       os << "]";
     } else {
-      os << "    info=(unknown)";
+      os << "       info=(unknown)";
     }
-    os << " usedInLoop=" << (n.usedInLoop ? "true" : "false");
+    os << " isLoopDependent=" << (n.isLoopDependent ? "true" : "false");
     os << " useCount=" << n.useCount;
-    os << " usedInRegions=" << n.userRegions.size() << "\n";
+    os << " usedInRegions=" << n.userRegions.size();
+    os << " baseIsDb=" << (n.baseIsDb ? "true" : "false");
+    os << " isLoad=" << (n.isLoad ? "true" : "false");
     // os << " edtUser=" << n.edtUser << "\n";
   }
   os << "Edges:\n";

@@ -3,34 +3,26 @@
 Nodes:
   #0 inout
     %2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
-    base=%alloca_0 = memref.alloca() : memref<100xf64>
-    info=[0..100] usedInLoop=false useCount=4 usedInRegions=2
-  #1 inout
+       base=%alloca_0 = memref.alloca() : memref<100xf64>
+       info=[0..100] isLoopDependent=false useCount=4 usedInRegions=2 baseIsDb=false isLoad=false  #1 inout
     %3 = arts.datablock "inout", %alloca : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
-    base=%alloca = memref.alloca() : memref<100xf64>
-    info=[0..100] usedInLoop=false useCount=2 usedInRegions=2
-  #2 out
-    %10 = arts.datablock "out", %2 : memref<100xf64>[%arg0] [%c1] [%c1] {isLoad} : memref<1xf64>
-    base=%2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
-    info=(unknown) usedInLoop=true useCount=2 usedInRegions=2
-  #3 in
-    %13 = arts.datablock "in", %2 : memref<100xf64>[%arg0] [%c1] [%c1] {isLoad} : memref<1xf64>
-    base=%2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
-    info=(unknown) usedInLoop=true useCount=2 usedInRegions=2
-  #4 in
-    %14 = arts.datablock "in", %2 : memref<100xf64>[%12] [%c1] [%c1] {isLoad} : memref<1xf64>
-    base=%2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
-    info=(unknown) usedInLoop=true useCount=2 usedInRegions=2
-  #5 out
-    %15 = arts.datablock "out", %3 : memref<100xf64>[%arg0] [%c1] [%c1] {isLoad} : memref<1xf64>
-    base=%3 = arts.datablock "inout", %alloca : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
-    info=(unknown) usedInLoop=true useCount=2 usedInRegions=2
-Edges:
+       base=%alloca = memref.alloca() : memref<100xf64>
+       info=[0..100] isLoopDependent=false useCount=2 usedInRegions=2 baseIsDb=false isLoad=false  #2 out
+    %10 = arts.datablock "out", %2 : memref<100xf64>[%arg0] [%c1] [%c1] {baseIsDb, isLoad} : memref<1xf64>
+       base=%2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
+       info=(unknown) isLoopDependent=true useCount=2 usedInRegions=2 baseIsDb=true isLoad=true  #3 in
+    %13 = arts.datablock "in", %2 : memref<100xf64>[%arg0] [%c1] [%c1] {baseIsDb, isLoad} : memref<1xf64>
+       base=%2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
+       info=(unknown) isLoopDependent=true useCount=2 usedInRegions=2 baseIsDb=true isLoad=true  #4 in
+    %14 = arts.datablock "in", %2 : memref<100xf64>[%12] [%c1] [%c1] {baseIsDb, isLoad} : memref<1xf64>
+       base=%2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
+       info=(unknown) isLoopDependent=true useCount=2 usedInRegions=2 baseIsDb=true isLoad=true  #5 out
+    %15 = arts.datablock "out", %3 : memref<100xf64>[%arg0] [%c1] [%c1] {baseIsDb, isLoad} : memref<1xf64>
+       base=%3 = arts.datablock "inout", %alloca : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
+       info=(unknown) isLoopDependent=true useCount=2 usedInRegions=2 baseIsDb=true isLoad=trueEdges:
   #2 -> #3 (direct, loop dependent)
   #2 -> #4 (indirect, loop dependent)
 Total nodes: 6
-Created event for datablock node #2
-Created event for datablock node #2
 -----------------------------------------
 [datablock-analysis] Printing graph for function: rand
 Nodes:
@@ -53,34 +45,40 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : 
     %1 = arith.remsi %0, %c100_i32 : i32
     %2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
     %3 = arts.datablock "inout", %alloca : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
-    arts.edt parameters(%1) : (i32), constants(%c1, %c0, %c-1_i32, %c0_i32, %cst, %c100) : (index, index, i32, i32, f64, index), dependencies(%2, %3) : (memref<100xf64>, memref<100xf64>) attributes {operandSegmentSizes = array<i32: 1, 6, 2, 0>, parallel} {
+    arts.edt parameters(%1) : (i32), constants(%c1, %c0, %c-1_i32, %c0_i32, %cst, %c100) : (index, index, i32, i32, f64, index), dependencies(%2, %3) : (memref<100xf64>, memref<100xf64>) attributes {parallel} {
       arts.barrier
-      arts.single {
-        %8 = arith.sitofp %1 : i32 to f64
+      arts.edt attributes {single} {
+        %c1_1 = arith.constant 1 : index
+        %8 = arith.muli %c1_1, %c100 : index
+        %9 = arts.event %8 {grouped} : memref<100xi64>
+        %10 = arith.sitofp %1 : i32 to f64
         scf.for %arg0 = %c0 to %c100 step %c1 {
-          %9 = arith.index_cast %arg0 : index to i32
-          %10 = arts.datablock "out", %2 : memref<100xf64>[%arg0] [%c1] [%c1] {isLoad} : memref<1xf64>
-          arts.edt parameters(%9, %8, %arg0) : (i32, f64, index), dependencies(%10) : (memref<1xf64>) attributes {operandSegmentSizes = array<i32: 3, 0, 1, 0>} {
-            %16 = arith.sitofp %9 : i32 to f64
-            %17 = arith.addf %16, %8 : f64
-            memref.store %17, %10[%c0] : memref<1xf64>
+          %11 = arith.index_cast %arg0 : index to i32
+          %12 = arts.datablock "out", %2 : memref<100xf64>[%arg0] [%c1] [%c1] {baseIsDb, isLoad} : memref<1xf64>
+          %13 = memref.load %9[%arg0] : memref<100xi64>
+          arts.edt parameters(%11, %10, %arg0) : (i32, f64, index), dependencies(%12) : (memref<1xf64>), events(%13) : (i64) {
+            %20 = arith.sitofp %11 : i32 to f64
+            %21 = arith.addf %20, %10 : f64
+            memref.store %21, %12[%c0] : memref<1xf64>
             arts.yield
           }
-          %11 = arith.addi %9, %c-1_i32 : i32
-          %12 = arith.index_cast %11 : i32 to index
-          %13 = arts.datablock "in", %2 : memref<100xf64>[%arg0] [%c1] [%c1] {isLoad} : memref<1xf64>
-          %14 = arts.datablock "in", %2 : memref<100xf64>[%12] [%c1] [%c1] {isLoad} : memref<1xf64>
-          %15 = arts.datablock "out", %3 : memref<100xf64>[%arg0] [%c1] [%c1] {isLoad} : memref<1xf64>
-          arts.edt parameters(%9, %arg0, %12) : (i32, index, index), constants(%c0_i32, %cst) : (i32, f64), dependencies(%13, %14, %15) : (memref<1xf64>, memref<1xf64>, memref<1xf64>) attributes {operandSegmentSizes = array<i32: 3, 2, 3, 0>} {
-            %16 = memref.load %13[%c0] : memref<1xf64>
-            %17 = memref.load %14[%c0] : memref<1xf64>
-            %18 = arith.cmpi sgt, %9, %c0_i32 : i32
-            %19 = arith.select %18, %17, %cst : f64
-            %20 = arith.addf %16, %19 : f64
-            memref.store %20, %15[%c0] : memref<1xf64>
+          %14 = arith.addi %11, %c-1_i32 : i32
+          %15 = arith.index_cast %14 : i32 to index
+          %16 = arts.datablock "in", %2 : memref<100xf64>[%arg0] [%c1] [%c1] {baseIsDb, isLoad} : memref<1xf64>
+          %17 = arts.datablock "in", %2 : memref<100xf64>[%15] [%c1] [%c1] {baseIsDb, isLoad} : memref<1xf64>
+          %18 = arts.datablock "out", %3 : memref<100xf64>[%arg0] [%c1] [%c1] {baseIsDb, isLoad} : memref<1xf64>
+          %19 = memref.load %9[%15] : memref<100xi64>
+          arts.edt parameters(%11, %arg0, %15) : (i32, index, index), constants(%c0_i32, %cst) : (i32, f64), dependencies(%16, %17, %18) : (memref<1xf64>, memref<1xf64>, memref<1xf64>), events(%13, %19) : (i64, i64) {
+            %20 = memref.load %16[%c0] : memref<1xf64>
+            %21 = memref.load %17[%c0] : memref<1xf64>
+            %22 = arith.cmpi sgt, %11, %c0_i32 : i32
+            %23 = arith.select %22, %21, %cst : f64
+            %24 = arith.addf %20, %23 : f64
+            memref.store %24, %18[%c0] : memref<1xf64>
             arts.yield
           }
         }
+        arts.yield
       }
       arts.barrier
       arts.yield

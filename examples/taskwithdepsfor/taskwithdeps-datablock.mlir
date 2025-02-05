@@ -4,27 +4,27 @@ Analyzing function: compute
   #0 inout
     %2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
     base=%alloca_0 = memref.alloca() : memref<100xf64>
-    info=[0..100] usedInLoop=false useCount=4 usedInRegions=2 topUsers=1
+    info=[0..100] isLoopDependent=false useCount=4 usedInRegions=2 topUsers=1
   #1 inout
     %3 = arts.datablock "inout", %alloca : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
     base=%alloca = memref.alloca() : memref<100xf64>
-    info=[0..100] usedInLoop=false useCount=2 usedInRegions=2 topUsers=1
+    info=[0..100] isLoopDependent=false useCount=2 usedInRegions=2 topUsers=1
   #2 out
     %10 = arts.datablock "out", %2 : memref<100xf64>[%arg0] [%c1] [%c1] {isLoad} : memref<1xf64>
     base=%2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
-    info=(unknown) usedInLoop=true useCount=2 usedInRegions=2 topUsers=1
+    info=(unknown) isLoopDependent=true useCount=2 usedInRegions=2 topUsers=1
   #3 in
     %13 = arts.datablock "in", %2 : memref<100xf64>[%arg0] [%c1] [%c1] {isLoad} : memref<1xf64>
     base=%2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
-    info=(unknown) usedInLoop=true useCount=2 usedInRegions=2 topUsers=1
+    info=(unknown) isLoopDependent=true useCount=2 usedInRegions=2 topUsers=1
   #4 in
     %14 = arts.datablock "in", %2 : memref<100xf64>[%12] [%c1] [%c1] {isLoad} : memref<1xf64>
     base=%2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
-    info=(unknown) usedInLoop=true useCount=2 usedInRegions=2 topUsers=1
+    info=(unknown) isLoopDependent=true useCount=2 usedInRegions=2 topUsers=1
   #5 out
     %15 = arts.datablock "out", %3 : memref<100xf64>[%arg0] [%c1] [%c1] {isLoad} : memref<1xf64>
     base=%3 = arts.datablock "inout", %alloca : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
-    info=(unknown) usedInLoop=true useCount=2 usedInRegions=2 topUsers=1
+    info=(unknown) isLoopDependent=true useCount=2 usedInRegions=2 topUsers=1
 Edges:
   #0 -> #3
   #0 -> #4
