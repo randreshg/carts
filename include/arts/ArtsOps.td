@@ -52,7 +52,6 @@ def AllocOp : Arts_Op<"alloc", []> {
   }];
 }
 
-
 //===----------------------------------------------------------------------===//
 // arts.datablock
 //===----------------------------------------------------------------------===//
@@ -89,14 +88,16 @@ def EdtOp : Arts_Op<"edt",
     - `dependencies` that specify input/output memory dependencies.
     - `events` that signal the dependencies.
   The single-block region contains the task body.
-  if 'parallel' attribute is set, it can spawn multiple tasks.
+  - if 'parallel' attribute is set, it can spawn multiple tasks.
+  - if 'single' attribute is set, it is guaranteed to run in a single task, 
+    even if it is called from a parallel region.
   }];
 
   let arguments = (ins
     Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$parameters,
     Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$constants,
     Variadic<AnyMemRef>:$dependencies,
-    Variadic<EventType>:$events
+    Variadic<AnyInteger>:$events
   );
 
   let regions = (region SizedRegion<1>:$body);
@@ -117,6 +118,30 @@ def EdtOp : Arts_Op<"edt",
 }
 
 //===----------------------------------------------------------------------===//
+// arts.event
+//===----------------------------------------------------------------------===//
+def EventOp : Arts_Op<"event", []> {
+  let summary = "Create an event or array of events in ARTS";
+  let description = [{
+    The `arts.event` operation creates an event (or array of events) that can be
+    used for inter-loop or cross-task dependencies within the ARTS dialect.
+    The `size` operand is an index that determines how many individual events
+    to allocate (use 1 if creating a single event).
+  }];
+
+  let arguments = (ins Index:$size);
+  let results = (outs AnyMemRef:$event);
+  let assemblyFormat = [{
+    $size attr-dict `:` type($event)
+  }];
+  
+  let builders = [
+    OpBuilder<(ins "Type":$type, "Value":$size, "bool":$isGrouped)>, 
+  ];
+
+}
+
+//===----------------------------------------------------------------------===//
 // arts.epoch
 //===----------------------------------------------------------------------===//
 def EpochOp : Arts_Op<"epoch", 
@@ -133,27 +158,11 @@ def EpochOp : Arts_Op<"epoch",
 }
 
 //===----------------------------------------------------------------------===//
-// arts.single
-//===----------------------------------------------------------------------===//
-def SingleOp : Arts_Op<"single",
-    [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
-  let summary = "Single region in ARTS (like omp.master)";
-  let description = [{
-    A single region: only one thread/worker enters this region within a 
-    parallel edt.
-  }];
-  let regions = (region AnyRegion:$body);
-  let assemblyFormat = [{
-    attr-dict-with-keyword $body
-  }];
-}
-
-//===----------------------------------------------------------------------===//
 // arts.yield
 //===----------------------------------------------------------------------===//
 def YieldOp : Arts_Op<"yield", 
   [Pure, ReturnLike, Terminator, 
-   ParentOneOf<["EdtOp", "EpochOp", "SingleOp"]>]> {
+   ParentOneOf<["EdtOp", "EpochOp"]>]> {
 
   let summary = "ARTS dialect yield terminator";
   let description = [{
@@ -177,5 +186,6 @@ def BarrierOp : Arts_Op<"barrier"> {
   }];
   let assemblyFormat = "attr-dict";
 }
+
 
 #endif // ARTS_OPS

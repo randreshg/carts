@@ -15,14 +15,14 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : 
     %1 = arith.remsi %0, %c100_i32 : i32
     %2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
     %3 = arts.datablock "inout", %alloca : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
-    arts.edt parameters(%1) : (i32), constants(%c1, %c0, %c-1_i32, %c0_i32, %cst, %c100) : (index, index, i32, i32, f64, index), dependencies(%2, %3) : (memref<100xf64>, memref<100xf64>) attributes {operandSegmentSizes = array<i32: 1, 6, 2, 0>, parallel} {
+    arts.edt parameters(%1) : (i32), constants(%c1, %c0, %c-1_i32, %c0_i32, %cst, %c100) : (index, index, i32, i32, f64, index), dependencies(%2, %3) : (memref<100xf64>, memref<100xf64>) attributes {parallel} {
       arts.barrier
-      arts.single {
+      arts.edt attributes {single} {
         %8 = arith.sitofp %1 : i32 to f64
         scf.for %arg0 = %c0 to %c100 step %c1 {
           %9 = arith.index_cast %arg0 : index to i32
           %10 = arts.datablock "out", %2 : memref<100xf64>[%arg0] [%c1] [%c1] {isLoad} : memref<1xf64>
-          arts.edt parameters(%9, %8, %arg0) : (i32, f64, index), dependencies(%10) : (memref<1xf64>) attributes {operandSegmentSizes = array<i32: 3, 0, 1, 0>} {
+          arts.edt parameters(%9, %8, %arg0) : (i32, f64, index), dependencies(%10) : (memref<1xf64>) {
             %16 = arith.sitofp %9 : i32 to f64
             %17 = arith.addf %16, %8 : f64
             memref.store %17, %10[%c0] : memref<1xf64>
@@ -33,7 +33,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : 
           %13 = arts.datablock "in", %2 : memref<100xf64>[%arg0] [%c1] [%c1] {isLoad} : memref<1xf64>
           %14 = arts.datablock "in", %2 : memref<100xf64>[%12] [%c1] [%c1] {isLoad} : memref<1xf64>
           %15 = arts.datablock "out", %3 : memref<100xf64>[%arg0] [%c1] [%c1] {isLoad} : memref<1xf64>
-          arts.edt parameters(%9, %arg0, %12) : (i32, index, index), constants(%c0_i32, %cst) : (i32, f64), dependencies(%13, %14, %15) : (memref<1xf64>, memref<1xf64>, memref<1xf64>) attributes {operandSegmentSizes = array<i32: 3, 2, 3, 0>} {
+          arts.edt parameters(%9, %arg0, %12) : (i32, index, index), constants(%c0_i32, %cst) : (i32, f64), dependencies(%13, %14, %15) : (memref<1xf64>, memref<1xf64>, memref<1xf64>) {
             %16 = memref.load %13[%c0] : memref<1xf64>
             %17 = memref.load %14[%c0] : memref<1xf64>
             %18 = arith.cmpi sgt, %9, %c0_i32 : i32
@@ -43,6 +43,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : 
             arts.yield
           }
         }
+        arts.yield
       }
       arts.barrier
       arts.yield

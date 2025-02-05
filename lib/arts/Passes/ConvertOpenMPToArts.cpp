@@ -49,7 +49,8 @@ public:
   ~EdtEnvManager() {}
 
   /// Create a new datablock operation and rewires the uses
-  DataBlockOp createMakeDepOp(Location loc, StringRef mode, Value inputMemRef) {
+  DataBlockOp createDatablockOp(Location loc, StringRef mode,
+                                Value inputMemRef) {
     bool isLoad = false;
     /// If input is a memref.load, get the base
     Value baseMemRef = inputMemRef;
@@ -396,7 +397,7 @@ public:
       }
 
       /// Create a new datablock operation
-      depOp = createMakeDepOp(val.getLoc(), mode, val);
+      depOp = createDatablockOp(val.getLoc(), mode, val);
     }
 
     /// If it was added as a parameter, remove it
@@ -452,7 +453,7 @@ struct ParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
   }
 };
 
-/// Pattern to replace `omp.master` with `arts.single`
+/// Pattern to replace `omp.master` with `arts.edt` with `single` attribute
 struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
   using OpRewritePattern::OpRewritePattern;
 
@@ -461,12 +462,16 @@ struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
     auto loc = op.getLoc();
 
     /// Create a new `arts.single` operation.
-    auto artsSingle = rewriter.create<arts::SingleOp>(loc);
+    SmallVector<Value> params, consts, deps;
+    auto artsSingle = rewriter.create<arts::EdtOp>(loc, params, consts, deps);
     artsSingle.getBody().emplaceBlock();
-    Block &blk = artsSingle.getBody().front();
+
+    /// Set the 'single' attribute
+    artsSingle->setAttr("single", rewriter.getUnitAttr());
 
     /// Move the region's operations.
     Block &old = op.getRegion().front();
+    Block &blk = artsSingle.getBody().front();
     blk.getOperations().splice(blk.end(), old.getOperations());
 
     /// Remove the original operation.

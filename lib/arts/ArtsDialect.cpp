@@ -13,6 +13,7 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/IntegerSet.h"
+#include "mlir/IR/Types.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -48,10 +49,7 @@ void ArtsDialect::initialize() {
 #define GET_OP_CLASSES
 #include "arts/ArtsOps.cpp.inc"
 
-bool isArtsRegion(Operation *op) {
-  return isa<EdtOp>(op) || isa<EpochOp>(op) ||
-         isa<SingleOp>(op);
-}
+bool isArtsRegion(Operation *op) { return isa<EdtOp>(op) || isa<EpochOp>(op); }
 //===----------------------------------------------------------------------===//
 // Arts Dialect Types - method definitions
 //===----------------------------------------------------------------------===//
@@ -141,6 +139,13 @@ ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
   if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
     return failure();
 
+  /// Compute operans
+  ::llvm::copy(
+      ::llvm::ArrayRef<int32_t>({static_cast<int32_t>(paramOps.size()),
+                                 static_cast<int32_t>(constOps.size()),
+                                 static_cast<int32_t>(depOps.size())}),
+      result.getOrAddProperties<Properties>().operandSegmentSizes.begin());
+
   /// Parse region
   Region *body = result.addRegion();
   if (parser.parseRegion(*body))
@@ -197,7 +202,9 @@ void EdtOp::print(OpAsmPrinter &printer) {
   printGroup("events", getEvents());
 
   /// Print attributes + region
-  printer.printOptionalAttrDictWithKeyword(getOperation()->getAttrs());
+  printer.printOptionalAttrDictWithKeyword(
+      getOperation()->getAttrs(),
+      /*elidedAttrs=*/{"operandSegmentSizes"});
   printer << ' ';
   printer.printRegion(getOperation()->getRegion(0),
                       /*printEntryBlockArgs=*/false,
@@ -239,6 +246,17 @@ SmallVector<Value> EdtOp::getDeps() {
   SmallVector<Value, 4> dependenciesVector(dependencies.begin(),
                                            dependencies.end());
   return dependenciesVector;
+}
+
+//===----------------------------------------------------------------------===//
+// EventOp
+//===----------------------------------------------------------------------===//
+void EventOp::build(OpBuilder &builder, OperationState &state, Type type,
+                    Value size, bool isGrouped) {
+  state.addOperands(size);
+  state.addTypes(type);
+  if (isGrouped)
+    state.addAttribute("grouped", builder.getUnitAttr());
 }
 
 //===----------------------------------------------------------------------===//
