@@ -353,9 +353,10 @@ func::FuncOp EdtCodegen::createFn(Location loc) {
 }
 
 // ---------------------------- ARTS Codegen ---------------------------- ///
-ArtsCodegen::ArtsCodegen(ModuleOp &module, OpBuilder &builder,
-                         llvm::DataLayout &llvmDL, mlir::DataLayout &mlirDL)
-    : module(module), builder(builder), llvmDL(llvmDL), mlirDL(mlirDL) {
+ArtsCodegen::ArtsCodegen(ModuleOp &module, llvm::DataLayout &llvmDL,
+                         mlir::DataLayout &mlirDL)
+    : module(module), builder(OpBuilder(module->getContext())), llvmDL(llvmDL),
+      mlirDL(mlirDL) {
   initializeTypes();
 }
 

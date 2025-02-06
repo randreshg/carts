@@ -204,7 +204,7 @@ DatablockAnalysis::NodeComp DatablockAnalysis::compare(Node &A, Node &B) {
 
   /// Compare offsets
   if (A.offsets.size() != B.offsets.size())
-    return NodeComp::Different;
+    return NodeComp::BaseAlias;
 
   if (!std::equal(A.offsets.begin(), A.offsets.end(), B.offsets.begin()))
     return NodeComp::BaseAlias;

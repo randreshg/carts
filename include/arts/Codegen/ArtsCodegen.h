@@ -127,7 +127,7 @@ private:
 // ---------------------------- ARTS Codegen ---------------------------- ///
 class ArtsCodegen {
 public:
-  ArtsCodegen(ModuleOp &module, OpBuilder &builder, llvm::DataLayout &llvmDL,
+  ArtsCodegen(ModuleOp &module, llvm::DataLayout &llvmDL,
               mlir::DataLayout &mlirDL);
   ~ArtsCodegen();
 
@@ -221,7 +221,7 @@ private:
   // -------------------------- Other Attributes-------------------------- ///
   /// The MLIR module and builder
   ModuleOp &module;
-  OpBuilder &builder;
+  OpBuilder builder;
   llvm::DataLayout &llvmDL;
   mlir::DataLayout &mlirDL;
   /// Function counter

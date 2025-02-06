@@ -114,6 +114,9 @@ def EdtOp : Arts_Op<"edt",
     SmallVector<Value> getParams();
     SmallVector<Value> getConsts();
     SmallVector<Value> getDeps();
+    SmallVector<Value> getEvnts();
+    bool isParallel();
+    bool isSingle();
   }];
 }
 
