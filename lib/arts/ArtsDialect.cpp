@@ -139,7 +139,7 @@ ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
   if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
     return failure();
 
-  /// Compute operans
+  /// Compute operand segment sizes
   ::llvm::copy(
       ::llvm::ArrayRef<int32_t>({static_cast<int32_t>(paramOps.size()),
                                  static_cast<int32_t>(constOps.size()),
@@ -249,6 +249,17 @@ SmallVector<Value> EdtOp::getDeps() {
   return dependenciesVector;
 }
 
+/// Retrieve events.
+SmallVector<Value> EdtOp::getEvnts() {
+  auto events = getEvents();
+  SmallVector<Value, 4> eventsVector(events.begin(), events.end());
+  return eventsVector;
+}
+
+/// Others
+bool EdtOp::isParallel() { return getOperation()->hasAttr("parallel"); }
+bool EdtOp::isSingle() { return getOperation()->hasAttr("single"); }
+///
 //===----------------------------------------------------------------------===//
 // EventOp
 //===----------------------------------------------------------------------===//

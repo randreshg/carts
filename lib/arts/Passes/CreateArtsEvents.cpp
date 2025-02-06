@@ -58,7 +58,6 @@ struct CreateArtsEventsPass
     SmallVector<Value> events(edtOp.getEvents().begin(),
                               edtOp.getEvents().end());
     events.append(newEvents.begin(), newEvents.end());
-    auto attrs = edtOp->getAttrs();
 
     /// Build a new EdtOp. We set the insertion point right where the old EDT
     builder.setInsertionPoint(edtOp);
@@ -67,15 +66,23 @@ struct CreateArtsEventsPass
     /// Create a new EdtOp
     auto newEdt = builder.create<arts::EdtOp>(loc, parameters, constants,
                                               dependencies, events);
-    // Update operand segment sizes attribute to account for the new number of
-    // operands
+    /// Update operand segment sizes attribute to account for the new number of
+    /// operands
     newEdt->setAttr(
-        "operand_segment_sizes",
+        "operandSegmentSizes",
         builder.getI32VectorAttr({static_cast<int32_t>(parameters.size()),
                                   static_cast<int32_t>(constants.size()),
                                   static_cast<int32_t>(dependencies.size()),
                                   static_cast<int32_t>(events.size())}));
-    // newEdt->setAttrs(attrs);
+    /// Copy the rest of the attributes
+    for (auto attr : edtOp->getAttrs()) {
+      if (attr.getName().str() == "operandSegmentSizes")
+        continue;
+      LLVM_DEBUG(DBGS() << "Copying attribute: " << attr.getName() << "\n");
+      newEdt->setAttr(attr.getName(), attr.getValue());
+    }
+
+    /// Move the region's operations.
     newEdt.getBody().takeBody(edtOp.getBody());
 
     /// Remove the old EdtOp
