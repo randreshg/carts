@@ -71,6 +71,9 @@ def DataBlockOp : Arts_Op<"datablock",
     $mode `,` $base `:` type($base) `[` $offsets `]` `[` $sizes `]` `[` $strides `]` 
     attr-dict `:` type($subview)
   }];
+  let extraClassDeclaration = [{
+    bool isLoad();
+  }];
 }
 
 //===----------------------------------------------------------------------===//
@@ -83,8 +86,6 @@ def EdtOp : Arts_Op<"edt",
   let summary = "Event-Driven Task in ARTS";
   let description = [{
   Defines an ARTS event-driven task (EDT) with:
-    - `parameters` that define task-specific inputs.
-    - `constants` that define task-specific constants.
     - `dependencies` that specify input/output memory dependencies.
     - `events` that signal the dependencies.
   The single-block region contains the task body.
@@ -94,8 +95,6 @@ def EdtOp : Arts_Op<"edt",
   }];
 
   let arguments = (ins
-    Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$parameters,
-    Variadic<AnyTypeOf<[AnyInteger, Index, AnyFloat]>>:$constants,
     Variadic<AnyMemRef>:$dependencies,
     Variadic<AnyInteger>:$events
   );
@@ -105,14 +104,10 @@ def EdtOp : Arts_Op<"edt",
 
   let builders = [
     OpBuilder<(ins
-      "ValueRange":$parameters,
-      "ValueRange":$constants,
       "ValueRange":$dependencies)>,
   ];
 
   let extraClassDeclaration = [{
-    SmallVector<Value> getParams();
-    SmallVector<Value> getConsts();
     SmallVector<Value> getDeps();
     SmallVector<Value> getEvnts();
     bool isParallel();

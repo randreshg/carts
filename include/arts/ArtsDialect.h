@@ -42,16 +42,4 @@ bool isArtsRegion(mlir::Operation *op);
 #define GET_OP_CLASSES
 #include "arts/ArtsOps.h.inc"
 
-//===----------------------------------------------------------------------===//
-// Helper functions of Arts dialect transformations.
-//===----------------------------------------------------------------------===//
-namespace mlir::arts {
-namespace utils {
-
-void replaceInRegion(mlir::Region &region, mlir::Value from, mlir::Value to);
-void replaceInRegion(mlir::Region &region,
-                     llvm::DenseMap<Value, Value> &rewireMap);
-
-} // namespace utils
-} // namespace mlir::arts
 #endif // CARTS_DIALECT_H

@@ -84,15 +84,13 @@ void UndefOp::getCanonicalizationPatterns(RewritePatternSet &results,
 ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
   /// We'll parse something like:
   ///   parameters(...) : (...)
-  ///   [ optional ", constants(...) : (...)" ]
   ///   [ optional ", dependencies(...) : (...)" ]
   ///   [ optional ", events(...) : (...)" ]
   /// Then parse attr-dict, then the region.
 
   /// Collect all operands in a single list, typed accordingly
-  SmallVector<OpAsmParser::UnresolvedOperand, 8> paramOps, constOps, depOps,
-      evtOps;
-  SmallVector<Type, 8> paramTypes, constTypes, depTypes, evtTypes;
+  SmallVector<OpAsmParser::UnresolvedOperand, 8> depOps, evtOps;
+  SmallVector<Type, 8> depTypes, evtTypes;
 
   auto parseGroup =
       [&](StringRef kw,
@@ -106,20 +104,6 @@ ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
     }
     return success();
   };
-
-  /// Optional read of "parameters(...) : (...)"
-  if (succeeded(parser.parseOptionalKeyword("parameters"))) {
-    if (parseGroup("parameters", paramOps, paramTypes))
-      return failure();
-    (void)parser.parseOptionalComma();
-  }
-
-  /// Optional read of "constants(...) : (...)"
-  if (succeeded(parser.parseOptionalKeyword("constants"))) {
-    if (parseGroup("constants", constOps, constTypes))
-      return failure();
-    (void)parser.parseOptionalComma();
-  }
 
   /// Optional read of "dependencies(...) : (...)"
   if (succeeded(parser.parseOptionalKeyword("dependencies"))) {
@@ -141,9 +125,7 @@ ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
 
   /// Compute operand segment sizes
   ::llvm::copy(
-      ::llvm::ArrayRef<int32_t>({static_cast<int32_t>(paramOps.size()),
-                                 static_cast<int32_t>(constOps.size()),
-                                 static_cast<int32_t>(depOps.size()),
+      ::llvm::ArrayRef<int32_t>({static_cast<int32_t>(depOps.size()),
                                  static_cast<int32_t>(evtOps.size())}),
       result.getOrAddProperties<Properties>().operandSegmentSizes.begin());
 
@@ -153,14 +135,7 @@ ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
     return failure();
 
   /// Convert operand references -> actual Value, storing in result.operands
-  /// We'll accumulate them in the order: parameters, constants, dependencies,
-  /// events
-  if (parser.resolveOperands(paramOps, paramTypes, parser.getCurrentLocation(),
-                             result.operands))
-    return failure();
-  if (parser.resolveOperands(constOps, constTypes, parser.getCurrentLocation(),
-                             result.operands))
-    return failure();
+  /// We'll accumulate them in the order: dependencies, events
   if (parser.resolveOperands(depOps, depTypes, parser.getCurrentLocation(),
                              result.operands))
     return failure();
@@ -197,9 +172,7 @@ void EdtOp::print(OpAsmPrinter &printer) {
   };
 
   /// Print each group if it has operands
-  printGroup(" parameters", getParams());
-  printGroup("constants", getConsts());
-  printGroup("dependencies", getDeps());
+  printGroup(" dependencies", getDeps());
   printGroup("events", getEvents());
 
   /// Print attributes + region
@@ -214,31 +187,12 @@ void EdtOp::print(OpAsmPrinter &printer) {
 
 /// Builder
 void EdtOp::build(OpBuilder &odsBuilder, OperationState &odsState,
-                  ValueRange parameters, ValueRange constants,
                   ValueRange dependencies) {
-  odsState.addOperands(parameters);
-  odsState.addOperands(constants);
   odsState.addOperands(dependencies);
   ::llvm::copy(
-      ::llvm::ArrayRef<int32_t>({static_cast<int32_t>(parameters.size()),
-                                 static_cast<int32_t>(constants.size()),
-                                 static_cast<int32_t>(dependencies.size())}),
+      ::llvm::ArrayRef<int32_t>({static_cast<int32_t>(dependencies.size())}),
       odsState.getOrAddProperties<Properties>().operandSegmentSizes.begin());
   (void)odsState.addRegion();
-}
-
-/// Retrieve parameters.
-SmallVector<Value> EdtOp::getParams() {
-  auto parameters = getParameters();
-  SmallVector<Value, 4> parametersVector(parameters.begin(), parameters.end());
-  return parametersVector;
-}
-
-/// Retrieve constants.
-SmallVector<Value> EdtOp::getConsts() {
-  auto constants = getConstants();
-  SmallVector<Value, 4> constantsVector(constants.begin(), constants.end());
-  return constantsVector;
 }
 
 /// Retrieve dependencies.
@@ -259,7 +213,7 @@ SmallVector<Value> EdtOp::getEvnts() {
 /// Others
 bool EdtOp::isParallel() { return getOperation()->hasAttr("parallel"); }
 bool EdtOp::isSingle() { return getOperation()->hasAttr("single"); }
-///
+
 //===----------------------------------------------------------------------===//
 // EventOp
 //===----------------------------------------------------------------------===//
@@ -293,18 +247,4 @@ void DataBlockOp::getEffects(
   }
 }
 
-//===----------------------------------------------------------------------===//
-// Utils
-//===----------------------------------------------------------------------===//
-namespace mlir::arts::utils {
-void replaceInRegion(Region &region, Value from, Value to) {
-  from.replaceUsesWithIf(to, [&](OpOperand &operand) {
-    return region.isAncestor(operand.getOwner()->getParentRegion());
-  });
-}
-
-void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap) {
-  for (auto &rewire : rewireMap)
-    replaceInRegion(region, rewire.first, rewire.second);
-}
-} // namespace mlir::arts::utils
+bool DataBlockOp::isLoad() { return getOperation()->hasAttr("isLoad"); }

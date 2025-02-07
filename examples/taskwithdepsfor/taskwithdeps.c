@@ -13,7 +13,7 @@
 
 // Convert OpenMP to ARTS
 /// carts-opt taskwithdeps.mlir --convert-openmp-to-arts --cse --canonicalize &> taskwithdeps-arts.mlir
-/// carts-opt taskwithdeps.mlir --convert-openmp-to-arts --cse --canonicalize -debug-only=convert-openmp-to-arts &> taskwithdeps-arts.mlir
+/// carts-opt taskwithdeps.mlir --convert-openmp-to-arts --cse --canonicalize -debug-only=convert-openmp-to-arts,edt-analysis &> taskwithdeps-arts.mlir
 
 /// Create ARTS events
 /// carts-opt taskwithdeps-arts.mlir --create-events &> taskwithdeps-events.mlir

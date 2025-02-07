@@ -1,33 +1,3 @@
------------------------------------------
-[datablock-analysis] Printing graph for function: compute
-Nodes:
-  #0 inout
-    %2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
-       base=%alloca_0 = memref.alloca() : memref<100xf64>
-       info=[0..100] isLoopDependent=false useCount=4 usedInRegions=2 baseIsDb=false isLoad=false  #1 inout
-    %3 = arts.datablock "inout", %alloca : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
-       base=%alloca = memref.alloca() : memref<100xf64>
-       info=[0..100] isLoopDependent=false useCount=2 usedInRegions=2 baseIsDb=false isLoad=false  #2 out
-    %10 = arts.datablock "out", %2 : memref<100xf64>[%arg0] [%c1] [%c1] {baseIsDb, isLoad} : memref<1xf64>
-       base=%2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
-       info=(unknown) isLoopDependent=true useCount=2 usedInRegions=2 baseIsDb=true isLoad=true  #3 in
-    %13 = arts.datablock "in", %2 : memref<100xf64>[%arg0] [%c1] [%c1] {baseIsDb, isLoad} : memref<1xf64>
-       base=%2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
-       info=(unknown) isLoopDependent=true useCount=2 usedInRegions=2 baseIsDb=true isLoad=true  #4 in
-    %14 = arts.datablock "in", %2 : memref<100xf64>[%12] [%c1] [%c1] {baseIsDb, isLoad} : memref<1xf64>
-       base=%2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
-       info=(unknown) isLoopDependent=true useCount=2 usedInRegions=2 baseIsDb=true isLoad=true  #5 out
-    %15 = arts.datablock "out", %3 : memref<100xf64>[%arg0] [%c1] [%c1] {baseIsDb, isLoad} : memref<1xf64>
-       base=%3 = arts.datablock "inout", %alloca : memref<100xf64>[%c0] [%c100] [%c1] : memref<100xf64>
-       info=(unknown) isLoopDependent=true useCount=2 usedInRegions=2 baseIsDb=true isLoad=trueEdges:
-  #2 -> #3 (direct, loop dependent)
-  #2 -> #4 (indirect, loop dependent)
-Total nodes: 6
------------------------------------------
-[datablock-analysis] Printing graph for function: rand
-Nodes:
-Edges:
-Total nodes: 0
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
   llvm.mlir.global internal constant @str0("A[0] = %f\0A\00") {addr_space = 0 : i32}
   llvm.func @printf(!llvm.ptr, ...) -> i32

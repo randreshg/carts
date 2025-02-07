@@ -10,10 +10,8 @@
 // #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
 /// Dialects
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 /// Arts
 #include "ArtsPassDetails.h"
@@ -27,7 +25,6 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypeInterfaces.h"
 #include "mlir/IR/Location.h"
-#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Region.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -36,6 +33,7 @@
 #include <optional>
 
 /// Debug
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -64,12 +62,117 @@ struct ConvertArtsToFuncsPass
 
 private:
   void preprocessDataBlock(DataBlockOp &op);
+  void removeOps();
 
   ArtsCodegen *AC = nullptr;
+  SmallVector<Operation *> opsToErase;
 };
 } // end namespace
 
+void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
+  LLVM_DEBUG(DBGS() << "Skipping arts.datablock: " << op << "\n");
+}
+
+void ConvertArtsToFuncsPass::handleParallel(EdtOp &op) {
+  LLVM_DEBUG(DBGS() << "Lowering arts.edt parallel\n\n");
+  ///  Use a rewriter for IR modifications.
+  auto *ctx = op.getContext();
+  Location loc = UnknownLoc::get(ctx);
+
+  /// Analyze the parallel region to locate the unique single-edt op.
+  arts::EdtOp singleOp = nullptr;
+  unsigned numOps = 0;
+  mlir::Region &region = op.getRegion();
+  /// Iterate directly over the immediate operations in the region.
+  for (auto &block : region) {
+    for (auto &opInst : block) {
+      numOps++;
+      if (auto edt = dyn_cast<arts::EdtOp>(&opInst)) {
+        if (singleOp && edt.isSingle())
+          llvm_unreachable("Multiple single ops in parallel op not supported");
+        singleOp = edt;
+      } else if (!isa<arts::BarrierOp>(&opInst) &&
+                 !isa<arts::YieldOp>(&opInst)) {
+        llvm_unreachable("Unknown op in parallel op - not supported");
+      }
+    }
+  }
+  assert((singleOp && (numOps == 4)) && "Invalid parallel op region structure");
+  auto &singleRegion = singleOp->getRegion(0);
+
+  /// Process dependencies: convert memrefs to datablocks.
+  for (auto dep : op.getDeps()) {
+    auto dbOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp());
+    assert(dbOp && "Dependency is not a datablock op");
+    AC->getOrCreateDatablock(dbOp, loc);
+  }
+
+  /// Set insertion point to the current op for epoch creation.
+  {
+    OpBuilder::InsertionGuard guard(AC->getBuilder());
+    AC->setInsertionPoint(op);
+
+    /// Create a done-edt for the parallel epoch.
+    EdtCodegen parDoneEdt(*AC);
+    parDoneEdt.setDepC(AC->createIntConstant(1, AC->Int32, loc));
+    parDoneEdt.build(loc);
+
+    /// Create the parallel epoch.
+    auto parDone_slot = AC->createIntConstant(0, AC->Int32, loc);
+    auto parEpoch_guid =
+        AC->createEpoch(parDoneEdt.getGuid(), parDone_slot, loc);
+
+    /// Create the parallel EDT with the single op's region.
+    auto par_params = SmallVector<Value>();
+    auto par_deps = op.getDeps();
+    AC->createEdt(&par_deps, &par_params, &singleRegion, &parEpoch_guid,
+                  nullptr, true);
+  }
+
+  /// Erase the old parallel op.
+  opsToErase.push_back(op);
+  LLVM_DEBUG(DBGS() << "Parallel op lowered\n\n");
+}
+
+void ConvertArtsToFuncsPass::handleSingle(EdtOp &op) {
+  LLVM_DEBUG(DBGS() << "Lowering arts.edt: " << op << "\n");
+  LLVM_DEBUG(DBGS() << "Processing edt op\n");
+  Location loc = UnknownLoc::get(op.getContext());
+  /// Process dependencies (makes memrefs -> datablocks)
+  auto deps = op.getDependencies();
+  for (auto dep : deps) {
+    auto dbOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp());
+    assert(dbOp && "Dependency is not a datablock op");
+    AC->getOrCreateDatablock(dbOp, loc);
+  }
+
+  // return success();
+}
+
+void ConvertArtsToFuncsPass::iterateOps(Operation *op) {
+  for (auto &region : op->getRegions()) {
+    for (auto &block : region) {
+      for (auto &op : block) {
+        /// Datablocks
+        if (auto dbOp = dyn_cast<arts::DataBlockOp>(op)) {
+          handleDatablock(dbOp);
+          continue;
+        }
+
+        /// EDTs
+        if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
+          if (edtOp.isParallel())
+            handleParallel(edtOp);
+          else
+            handleSingle(edtOp);
+        }
+      }
+    }
+  }
+}
+
 void ConvertArtsToFuncsPass::preprocessDataBlock(DataBlockOp &op) {
+  /// Preprocess the data block operation by converting the memref to a pointer
   Location loc = op.getLoc();
   auto &builder = AC->getBuilder();
   OpBuilder::InsertionGuard guard(builder);
@@ -142,99 +245,10 @@ void ConvertArtsToFuncsPass::preprocessDataBlock(DataBlockOp &op) {
   op->erase();
 }
 
-void ConvertArtsToFuncsPass::handleParallel(EdtOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.parallel\n\n");
-  ConversionPatternRewriter rewriter(op.getContext());
-  Location loc = UnknownLoc::get(op.getContext());
-  arts::EdtOp singleOp = nullptr;
-  unsigned numOps = 0;
-
-  /// Analyze the parallel region to find the singleOp
-  mlir::Region &region = op.getRegion();
-  region.walk([&](mlir::Operation *op) {
-    /// Only consider ops directly in this region
-    if (op->getParentRegion() != &region)
-      return;
-    numOps++;
-    if (auto single = dyn_cast<arts::EdtOp>(op)) {
-      if (singleOp && single.isSingle())
-        llvm_unreachable("Multiple single ops in parallel op not supported");
-
-      singleOp = single;
-    } else if (!isa<arts::BarrierOp>(op) && !isa<arts::YieldOp>(op)) {
-      llvm_unreachable("Unknown op in parallel op - not supported");
-    }
-  });
-
-  assert((singleOp && (numOps == 4)) && "Invalid parallel op region structure");
-  auto &singleRegion = singleOp->getRegion(0);
-
-  /// Process dependencies (makes memrefs -> datablocks)
-  auto deps = op.getDeps();
-  for (auto dep : deps) {
-    auto dbOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp());
-    assert(dbOp && "Dependency is not a datablock op");
-    AC->getOrCreateDatablock(dbOp, loc);
-  }
-
-  /// We set insertion to the old op for creation of epoch, etc.
-  OpBuilder::InsertionGuard guard(AC->getBuilder());
-  AC->setInsertionPoint(op);
-
-  /// Epoch done
-  EdtCodegen parDoneEdt(*AC);
-  parDoneEdt.setDepC(AC->createIntConstant(1, AC->Int32, loc));
-  parDoneEdt.build(loc, rewriter);
-
-  /// Parallel Epoch
-  auto parDone_slot = AC->createIntConstant(0, AC->Int32, loc);
-  auto parEpoch_guid = AC->createEpoch(parDoneEdt.getGuid(), parDone_slot, loc);
-
-  /// Parallel Edt
-  auto par_params = op.getParams();
-  auto par_deps = op.getDeps();
-  auto par_consts = op.getConsts();
-  AC->createEdt(&par_deps, &par_params, &par_consts, &singleRegion,
-                &parEpoch_guid, nullptr, true, &rewriter);
-  /// Finally, erase the old parallel op from the IR
-  rewriter.eraseOp(op);
-}
-
-void ConvertArtsToFuncsPass::handleSingle(EdtOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.edt: " << op << "\n");
-  LLVM_DEBUG(DBGS() << "Processing edt op\n");
-  Location loc = UnknownLoc::get(op.getContext());
-  /// Process dependencies (makes memrefs -> datablocks)
-  auto deps = op.getDependencies();
-  for (auto dep : deps) {
-    auto dbOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp());
-    assert(dbOp && "Dependency is not a datablock op");
-    AC->getOrCreateDatablock(dbOp, loc);
-  }
-
-  // return success();
-}
-
-void ConvertArtsToFuncsPass::iterateOps(Operation *op) {
-  for (auto &region : op->getRegions()) {
-    for (auto &block : region) {
-      for (auto &op : block) {
-        /// Datablocks
-        if (auto dbOp = dyn_cast<arts::DataBlockOp>(op)) {
-          handleDatablock(dbOp);
-          continue;
-        }
-
-        /// EDTs
-        if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
-          if (edtOp.isParallel())
-            handleParallel(edtOp);
-          else
-            handleSingle(edtOp);
-        }
-      }
-    }
-  }
+void ConvertArtsToFuncsPass::removeOps() {
+  for (auto op : opsToErase)
+    op->erase();
+  opsToErase.clear();
 }
 
 void ConvertArtsToFuncsPass::runOnOperation() {
@@ -267,9 +281,9 @@ void ConvertArtsToFuncsPass::runOnOperation() {
   });
 
   /// Iterate over all functions
-  for(auto func : module.getOps<func::FuncOp>())
+  for (auto func : module.getOps<func::FuncOp>())
     iterateOps(func);
-
+  removeOps();
   // /// Create a ConversionTarget.
   // ConversionTarget target(*ctx);
   // /// Mark arts.edt as illegal so that our conversion pattern is applied.
@@ -287,7 +301,6 @@ void ConvertArtsToFuncsPass::runOnOperation() {
   module.dump();
   delete AC;
 }
-
 //===----------------------------------------------------------------------===//
 // Pass creation
 //===----------------------------------------------------------------------===//
