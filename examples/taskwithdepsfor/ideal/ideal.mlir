@@ -1,4 +1,10 @@
-module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
+taskwithdeps_arts.c:29:13: warning: format specifies type 'double' but the argument has type 'double *' [-Wformat]
+   27 |          "--- Compute A[%u] = %f - Guid: "
+      |                               ~~
+   28 |          "%lu\n------------------------\n",
+   29 |          i, A_i, A_i_guid);
+      |             ^~~
+module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
   llvm.mlir.global internal constant @str12("Node %u initialized.\0A\00") {addr_space = 0 : i32}
   llvm.mlir.global internal constant @str11("---------- Main EDT finished ----------\0A\00") {addr_space = 0 : i32}
   llvm.mlir.global internal constant @str10("---------- Main EDT ----------\0A\00") {addr_space = 0 : i32}
@@ -20,13 +26,17 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
     %1 = arith.trunci %0 : i64 to i32
     %2 = affine.load %arg1[1] : memref<?xi64>
     %3 = "polygeist.memref2pointer"(%arg3) : (memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>) -> !llvm.ptr
-    %4 = llvm.load %3 : !llvm.ptr -> i64
-    %5 = arith.uitofp %1 : i32 to f64
-    %6 = arith.mulf %5, %cst : f64
-    %7 = llvm.mlir.addressof @str0 : !llvm.ptr
-    %8 = llvm.getelementptr %7[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<86 x i8>
-    %9 = llvm.call @printf(%8, %1, %6, %4) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, f64, i64) -> i32
-    call @artsEventSatisfySlot(%2, %4, %c0_i32) : (i64, i64, i32) -> ()
+    %4 = llvm.getelementptr %3[0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(i64, i32, memref<?xi8>)>
+    %5 = llvm.load %4 : !llvm.ptr -> memref<?xi8>
+    %6 = "polygeist.memref2pointer"(%5) : (memref<?xi8>) -> !llvm.ptr
+    %7 = llvm.load %3 : !llvm.ptr -> i64
+    %8 = arith.uitofp %1 : i32 to f64
+    %9 = arith.mulf %8, %cst : f64
+    llvm.store %9, %6 : f64, !llvm.ptr
+    %10 = llvm.mlir.addressof @str0 : !llvm.ptr
+    %11 = llvm.getelementptr %10[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<86 x i8>
+    %12 = llvm.call @printf(%11, %1, %6, %7) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, !llvm.ptr, i64) -> i32
+    call @artsEventSatisfySlot(%2, %7, %c0_i32) : (i64, i64, i32) -> ()
     return
   }
   func.func private @artsEventSatisfySlot(i64, i64, i32) attributes {llvm.linkage = #llvm.linkage<external>}

@@ -13,7 +13,7 @@ namespace mlir {
 namespace arts {
 void recursivelyRemoveUses(mlir::Operation *op);
 void removeUndefOps(mlir::ModuleOp module);
-void replaceWithUndef(mlir::Operation *op, mlir::PatternRewriter &rewriter);
+void replaceWithUndef(mlir::Operation *op, OpBuilder &builder);
 void replaceInRegion(mlir::Region &region, mlir::Value from, mlir::Value to);
 void replaceInRegion(mlir::Region &region,
                      llvm::DenseMap<mlir::Value, mlir::Value> &rewireMap);

@@ -17,11 +17,11 @@ void computeA(uint32_t paramc, uint64_t *paramv, uint32_t depc,
   artsGuid_t eventGuid = (artsGuid_t)paramv[1];
 
   // Access the DataBlock for A[i]
-  double A_i = *((double *)depv[0].ptr);
+  double *A_i = ((double *)depv[0].ptr);
   artsGuid_t A_i_guid = depv[0].guid;
 
   // Compute A[i]
-  A_i = i * 2.0;
+  *A_i = i * 2.0;
 
   printf("------------------------\n"
          "--- Compute A[%u] = %f - Guid: "
@@ -45,7 +45,7 @@ void computeB(uint32_t paramc, uint64_t *paramv, uint32_t depc,
   double *B_i = (double *)depv[0].ptr;
 
   // Compute B[i]
-  B_i[0] = A_i[0] + A_im1_val;
+  *B_i = *A_i + A_im1_val;
   printf("------------------------\n"
          "--- Compute B[%u] = %f\n"
          "------------------------\n",

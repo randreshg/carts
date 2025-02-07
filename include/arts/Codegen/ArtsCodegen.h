@@ -59,9 +59,8 @@ private:
 class EdtCodegen {
 public:
   EdtCodegen(ArtsCodegen &AC, SmallVector<Value> *opDeps = nullptr,
-             SmallVector<Value> *opParams = nullptr, Region *region = nullptr,
-             Value *epoch = nullptr, Location *loc = nullptr,
-             bool build = false);
+             Region *region = nullptr, Value *epoch = nullptr,
+             Location *loc = nullptr, bool build = false);
   void build(Location loc);
 
   /// Getters
@@ -100,16 +99,16 @@ private:
   Value paramC = nullptr;
   Value paramV = nullptr;
   Value depC = nullptr;
-  SmallVector<Value> params;
   SmallVector<Value> deps;
+  SmallVector<Value> params;
+  SmallVector<Value> consts;
   /// There are cases where we the size of a db is needed, this is stored as a
   /// parameter, so we need to keep track of it. - Create a map, the key is
   /// the datablock, the value is the index of the parameter
   DenseMap<DataBlockCodegen *, unsigned> dbSizeMap;
 
   /// Utils
-  void processDepsAndParams(SmallVector<Value> *deps,
-                            SmallVector<Value> *params, Location loc);
+  void processDepsAndParams(SmallVector<Value> *deps, Location loc);
   Value createGuid(Value node, Location loc);
   func::FuncOp createFn(Location loc);
   void createEntry(Location loc);
@@ -147,7 +146,6 @@ public:
   /// Edts
   EdtCodegen *getEdt(Region *region);
   EdtCodegen *createEdt(SmallVector<Value> *opDeps = nullptr,
-                        SmallVector<Value> *opParams = nullptr,
                         Region *region = nullptr, Value *epoch = nullptr,
                         Location *loc = nullptr, bool build = false);
 

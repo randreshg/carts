@@ -250,7 +250,6 @@ static void createDatablocks(EdtEnvManager &edtEnv, PatternRewriter &rewriter) {
   edtEnv.adjust();
   edtEnv.print();
 
-  // Cache dependencies to avoid repeated calls.
   auto dependencies = edtEnv.getDependencies();
   for (Value dep : dependencies) {
     if (auto depOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp())) {

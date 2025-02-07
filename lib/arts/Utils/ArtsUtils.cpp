@@ -35,18 +35,17 @@ void removeUndefOps(mlir::ModuleOp module) {
   }
 }
 
-void replaceWithUndef(mlir::Operation *op, mlir::PatternRewriter &rewriter) {
+void replaceWithUndef(mlir::Operation *op, OpBuilder &builder) {
   if (op->getNumResults() == 0)
     return;
 
-  auto savedInsertionPoint = rewriter.saveInsertionPoint();
-  rewriter.setInsertionPoint(op);
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPoint(op);
   for (mlir::Value result : op->getResults()) {
     auto undefOp =
-        rewriter.create<mlir::arts::UndefOp>(op->getLoc(), result.getType());
+        builder.create<mlir::arts::UndefOp>(op->getLoc(), result.getType());
     result.replaceAllUsesWith(undefOp.getResult());
   }
-  rewriter.restoreInsertionPoint(savedInsertionPoint);
 }
 
 void replaceInRegion(Region &region, Value from, Value to) {
