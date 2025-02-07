@@ -47,6 +47,7 @@ void EdtEnvManager::naiveCollection(bool ignoreDeps) {
     auto constantOp = dyn_cast<arith::ConstantOp>(defOp);
     if (!constantOp)
       return false;
+    constants.insert(val);
     return true;
   };
 

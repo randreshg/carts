@@ -218,8 +218,6 @@ struct CreateArtsEventsPass
       for (auto &pair : edtToEvents)
         insertEventsToEdt(builder, pair.first, pair.second);
     });
-
-    module.dump();
   }
 };
 
