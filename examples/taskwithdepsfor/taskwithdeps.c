@@ -16,8 +16,8 @@
 /// carts-opt taskwithdeps.mlir --convert-openmp-to-arts --cse --canonicalize -debug-only=convert-openmp-to-arts,edt-analysis &> taskwithdeps-arts.mlir
 
 /// Create ARTS events
-/// carts-opt taskwithdeps-arts.mlir --create-events &> taskwithdeps-events.mlir
-/// carts-opt taskwithdeps-arts.mlir --create-events -debug-only=datablock-analysis,create-events &> taskwithdeps-events.mlir
+/// carts-opt taskwithdeps-arts.mlir --create-events --cse &> taskwithdeps-events.mlir
+/// carts-opt taskwithdeps-arts.mlir --create-events --cse -debug-only=datablock-analysis,create-events &> taskwithdeps-events.mlir
 
 /// Convert ARTS to Funcs
 /// carts-opt taskwithdeps-events.mlir --convert-arts-to-funcs --cse --canonicalize -debug-only=convert-arts-to-funcs,arts-codegen &> taskwithdeps-func.mlir

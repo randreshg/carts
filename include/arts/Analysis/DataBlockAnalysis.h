@@ -80,6 +80,7 @@ public:
     unsigned useCount;
     bool isLoopDependent = false;
     arts::EdtOp edtUser = nullptr;
+    unsigned edtDepId = 0;
     arts::EdtOp edtParent = nullptr;
     llvm::SmallDenseSet<Region *> userRegions;
     SmallVector<MemoryEffects::EffectInstance, 2> effects;
