@@ -49,10 +49,6 @@ struct CreateArtsEventsPass
                          SmallVector<Value> newEvents) {
     OpBuilder::InsertionGuard b(builder);
     /// Gather original operand groups
-    SmallVector<Value> parameters(edtOp.getParameters().begin(),
-                                  edtOp.getParameters().end());
-    SmallVector<Value> constants(edtOp.getConstants().begin(),
-                                 edtOp.getConstants().end());
     SmallVector<Value> dependencies(edtOp.getDependencies().begin(),
                                     edtOp.getDependencies().end());
     SmallVector<Value> events(edtOp.getEvents().begin(),
@@ -64,15 +60,12 @@ struct CreateArtsEventsPass
     auto loc = edtOp.getLoc();
 
     /// Create a new EdtOp
-    auto newEdt = builder.create<arts::EdtOp>(loc, parameters, constants,
-                                              dependencies, events);
+    auto newEdt = builder.create<arts::EdtOp>(loc, dependencies, events);
     /// Update operand segment sizes attribute to account for the new number of
     /// operands
     newEdt->setAttr(
         "operandSegmentSizes",
-        builder.getI32VectorAttr({static_cast<int32_t>(parameters.size()),
-                                  static_cast<int32_t>(constants.size()),
-                                  static_cast<int32_t>(dependencies.size()),
+        builder.getI32VectorAttr({static_cast<int32_t>(dependencies.size()),
                                   static_cast<int32_t>(events.size())}));
     /// Copy the rest of the attributes
     for (auto attr : edtOp->getAttrs()) {

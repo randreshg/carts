@@ -35,9 +35,7 @@
 
 #include "arts/Analysis/DataBlockAnalysis.h"
 /// Dialects
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Operation.h"
@@ -47,6 +45,7 @@
 /// Arts
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
+#include "arts/Utils/ArtsUtils.h"
 /// Other
 #include "mlir/IR/Dominance.h"
 #include "llvm/ADT/DenseMap.h"
@@ -59,8 +58,7 @@
 #define line "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
-/// Others
-#include <optional>
+
 
 using namespace mlir;
 using namespace mlir::func;
@@ -349,35 +347,6 @@ void DatablockAnalysis::collectNodes(Region &region, Graph &graph) {
     graph.nodes.push_back(std::move(node));
     nodeMap[dbOp] = graph.nodes.back();
   });
-}
-
-std::optional<int64_t> DatablockAnalysis::computeConstant(Value val) {
-  /// Compute a constant integer value from a Value.
-  if (auto cst = val.getDefiningOp<arith::ConstantIndexOp>())
-    return cst.value();
-  if (auto addOp = dyn_cast_or_null<arith::AddIOp>(val.getDefiningOp())) {
-    auto lhs = computeConstant(addOp.getOperand(0));
-    auto rhs = computeConstant(addOp.getOperand(1));
-    if (lhs && rhs)
-      return *lhs + *rhs;
-  }
-  if (auto mulOp = dyn_cast_or_null<arith::MulIOp>(val.getDefiningOp())) {
-    auto lhs = computeConstant(mulOp.getOperand(0));
-    auto rhs = computeConstant(mulOp.getOperand(1));
-    if (lhs && rhs)
-      return (*lhs) * (*rhs);
-  }
-  return std::nullopt;
-}
-
-int64_t DatablockAnalysis::tryParseIndexConstant(Value val) {
-  /// Try to parse an index constant from a Value.
-  if (auto c = computeConstant(val))
-    return *c;
-  ValueOrInt voi(val);
-  if (!voi.isValue)
-    return voi.i_val;
-  return -1;
 }
 
 void DatablockAnalysis::setSubviewInfo(Node &node) {

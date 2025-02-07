@@ -59,11 +59,10 @@ private:
 class EdtCodegen {
 public:
   EdtCodegen(ArtsCodegen &AC, SmallVector<Value> *opDeps = nullptr,
-             SmallVector<Value> *opParams = nullptr,
-             SmallVector<Value> *opConsts = nullptr, Region *region = nullptr,
+             SmallVector<Value> *opParams = nullptr, Region *region = nullptr,
              Value *epoch = nullptr, Location *loc = nullptr,
-             bool build = false, ConversionPatternRewriter *rewriter = nullptr);
-  void build(Location loc, ConversionPatternRewriter &rewriter);
+             bool build = false);
+  void build(Location loc);
 
   /// Getters
   func::FuncOp getFunc() { return func; }
@@ -71,7 +70,6 @@ public:
   Value getSlot() { return slot; }
   Value getNode() { return node; }
   SmallVector<Value> &getParams() { return params; }
-  SmallVector<Value> &getConsts() { return consts; }
 
   /// Setters
   void setFunc(func::FuncOp func) { this->func = func; }
@@ -79,7 +77,6 @@ public:
   void setSlot(Value slot) { this->slot = slot; }
   void setNode(Value node) { this->node = node; }
   void setParams(SmallVector<Value> params) { this->params = params; }
-  void setConsts(SmallVector<Value> consts) { this->consts = consts; }
   void setDeps(SmallVector<Value> deps) { this->deps = deps; }
   void setDepC(Value depC) { this->depC = depC; }
 
@@ -89,7 +86,6 @@ public:
     return params.size() - 1;
   }
   void addParam(Value param) { params.push_back(param); }
-  void addConst(Value constant) { consts.push_back(constant); }
   void addDep(Value dep) { deps.push_back(dep); }
 
 private:
@@ -105,7 +101,6 @@ private:
   Value paramV = nullptr;
   Value depC = nullptr;
   SmallVector<Value> params;
-  SmallVector<Value> consts;
   SmallVector<Value> deps;
   /// There are cases where we the size of a db is needed, this is stored as a
   /// parameter, so we need to keep track of it. - Create a map, the key is
@@ -153,10 +148,8 @@ public:
   EdtCodegen *getEdt(Region *region);
   EdtCodegen *createEdt(SmallVector<Value> *opDeps = nullptr,
                         SmallVector<Value> *opParams = nullptr,
-                        SmallVector<Value> *opConsts = nullptr,
                         Region *region = nullptr, Value *epoch = nullptr,
-                        Location *loc = nullptr, bool build = false,
-                        ConversionPatternRewriter *rewriter = nullptr);
+                        Location *loc = nullptr, bool build = false);
 
   /// Epoch
   Value createEpoch(Value finishEdtGuid, Value finishEdtSlot, Location loc);
@@ -172,9 +165,10 @@ public:
   Value getNumDeps(SmallVector<Value> &deps, Location loc);
   Value createArrayFromDeps(Value numElements, Value deps, Value initialSlot,
                             Location loc);
-  pair<Value, Value>
-  CreatePtrAndGuidArrayFromDeps(Value numElements, Type elemTy,
-                                Value deps, Value initialSlot, Location loc);
+  pair<Value, Value> CreatePtrAndGuidArrayFromDeps(Value numElements,
+                                                   Type elemTy, Value deps,
+                                                   Value initialSlot,
+                                                   Location loc);
 
   /// Helpers
   Value createFnPtr(func::FuncOp funcOp, Location loc);

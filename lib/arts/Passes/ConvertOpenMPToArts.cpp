@@ -14,6 +14,7 @@
 #include "mlir/IR/BuiltinOps.h"
 /// Arts
 #include "ArtsPassDetails.h"
+#include "arts/Analysis/EdtAnalysis.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
@@ -23,7 +24,6 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
-#include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/SmallVector.h"
 /// Debug
 #include "llvm/Support/Debug.h"
@@ -38,386 +38,229 @@
 using namespace mlir;
 using namespace arts;
 
-class EdtEnvManager {
-public:
-  EdtEnvManager(PatternRewriter &rewriter, Region &region, bool adjust = false)
-      : rewriter(rewriter), region(region) {
-    naiveCollection();
-    if (adjust)
-      this->adjust();
-  }
-  ~EdtEnvManager() {}
-
-  /// Create a new datablock operation and rewires the uses
-  DataBlockOp createDatablockOp(Location loc, StringRef mode,
-                                Value inputMemRef) {
-    bool isLoad = false;
-    /// If input is a memref.load, get the base
-    Value baseMemRef = inputMemRef;
-    if (auto loadOp = dyn_cast<memref::LoadOp>(inputMemRef.getDefiningOp())) {
-      baseMemRef = loadOp.getMemref();
-      isLoad = true;
-    }
-
-    /// memref type must be MemRefType
-    auto baseType = baseMemRef.getType().dyn_cast<MemRefType>();
-    assert(baseType && "Input must be a MemRefType.");
-
-    /// Rank must be > 0
-    int64_t rank = baseType.getRank();
-    assert(rank > 0 && "MemRef rank is 0? Unexpected.");
-
-    /// Indices pinned by load if present
-    SmallVector<Value> pinnedIndices;
-    if (auto loadOp = dyn_cast<memref::LoadOp>(inputMemRef.getDefiningOp())) {
-      pinnedIndices.assign(loadOp.getIndices().begin(),
-                           loadOp.getIndices().end());
-
-      /// Identify zeroIndices
-      SmallVector<int64_t> zeroIndices;
-      for (auto [i, index] : llvm::enumerate(pinnedIndices)) {
-        if (auto cstOp = index.getDefiningOp<arith::ConstantIndexOp>()) {
-          if (cstOp.value() == 0)
-            zeroIndices.push_back(i);
-        }
-      }
-
-      if (!zeroIndices.empty()) {
-        assert(zeroIndices.back() == rank - 1 &&
-               "Last index must be zero for now");
-
-        /// Lambda to find a matching load/store in the region
-        auto checkOp = [&](Operation *op, ValueRange opIndices) {
-          if (opIndices.size() < pinnedIndices.size()) {
-            llvm::errs() << "Error: Loading a chunk of the memref is not "
-                            "supported yet\n";
-            return;
-          }
-          if (opIndices[zeroIndices.back()] !=
-              pinnedIndices[zeroIndices.back()]) {
-            pinnedIndices.pop_back();
-            zeroIndices.pop_back();
-          }
-        };
-
-        /// Region walk
-        region.walk([&](Operation *op) {
-          if (zeroIndices.empty())
-            return;
-          if (auto load = dyn_cast<memref::LoadOp>(op)) {
-            if (load.getMemref() == baseMemRef)
-              checkOp(op, load.getIndices());
-          } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
-            if (store.getMemref() == baseMemRef)
-              checkOp(op, store.getIndices());
-          }
-        });
-      }
-    }
-
-    /// Prepare arrays for subview
-    SmallVector<Value, 4> offsets(rank), sizes(rank), strides(rank);
-    SmallVector<int64_t, 4> subShape(rank);
-
-    OpBuilder::InsertionGuard g(rewriter);
-
-    /// Compute dimension sizes for use in stride calculation
-    SmallVector<Value> dimVals(rank);
-    for (int64_t i = 0; i < rank; ++i) {
-      if (baseType.isDynamicDim(i)) {
-        dimVals[i] = rewriter.create<memref::DimOp>(loc, baseMemRef, i);
-      } else {
-        dimVals[i] = rewriter.create<arith::ConstantIndexOp>(
-            loc, baseType.getDimSize(i));
-      }
-    }
-
-    /// Compute row-major strides by multiplying subsequent dimensions
-    Value one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
-    strides[rank - 1] = one;
-    for (int64_t i = rank - 2; i >= 0; --i) {
-      strides[i] =
-          rewriter.create<arith::MulIOp>(loc, strides[i + 1], dimVals[i + 1]);
-    }
-
-    /// If dimension i is pinned => offset= pinnedIndices[i], size=1
-    /// else => offset=0, size= dimVals[i]
-    Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
-    Value oneSize = rewriter.create<arith::ConstantIndexOp>(loc, 1);
-    for (int64_t i = 0; i < rank; ++i) {
-      if (i < (int64_t)pinnedIndices.size()) {
-        offsets[i] = pinnedIndices[i];
-        sizes[i] = oneSize;
-        subShape[i] = 1;
-      } else {
-        offsets[i] = zero;
-        sizes[i] = dimVals[i];
-        subShape[i] = baseType.isDynamicDim(i) ? ShapedType::kDynamic
-                                               : baseType.getDimSize(i);
-      }
-    }
-
-    /// Now build the subview memref type
-    auto subMemRefType = MemRefType::get(subShape, baseType.getElementType(),
-                                         baseType.getLayout().getAffineMap(),
-                                         baseType.getMemorySpace());
-
-    /// Create the final arts.datablock operation
-    auto depOp = rewriter.create<arts::DataBlockOp>(
-        loc, subMemRefType, rewriter.getStringAttr(mode), baseMemRef, offsets,
-        sizes, strides);
-    if (isLoad)
-      depOp->setAttr("isLoad", rewriter.getUnitAttr());
-    return depOp;
+/// Create a new datablock operation and rewires the uses
+static DataBlockOp createDatablockOp(PatternRewriter &rewriter, Region &region,
+                                     Location loc, StringRef mode,
+                                     Value inputMemRef) {
+  bool isLoad = false;
+  /// If input is a memref.load, get the base
+  Value baseMemRef = inputMemRef;
+  if (auto loadOp = dyn_cast<memref::LoadOp>(inputMemRef.getDefiningOp())) {
+    baseMemRef = loadOp.getMemref();
+    isLoad = true;
   }
 
-  /// Rewrites any memref.load/memref.store in 'region' that references
-  /// 'baseMemRef'.
-  void rewireUses(arts::DataBlockOp depOp) {
-    Value newSubview = depOp.getResult();
-    Value baseMemRef = depOp.getBase();
+  /// memref type must be MemRefType
+  auto baseType = baseMemRef.getType().dyn_cast<MemRefType>();
+  assert(baseType && "Input must be a MemRefType.");
 
-    LLVM_DEBUG(dbgs() << line);
-    LLVM_DEBUG(DBGS() << "Rewiring uses of: " << depOp << "\n");
-    auto offsets = depOp.getOffsets();
-    auto sizes = depOp.getSizes();
-    auto subType = newSubview.getType().dyn_cast<MemRefType>();
-    assert(subType && "Expected MemRefType");
-    int64_t rank = subType.getRank();
+  /// Rank must be > 0
+  int64_t rank = baseType.getRank();
+  assert(rank > 0 && "MemRef rank is 0? Unexpected.");
 
-    /// Collect the dimensions that are pinned
-    SetVector<int64_t> pinnedDims;
-    for (int64_t i = 0; i < rank; ++i) {
-      if (auto cstOp = sizes[i].getDefiningOp<arith::ConstantIndexOp>()) {
-        if (cstOp.value() == 1)
-          pinnedDims.insert(i);
+  /// Indices pinned by load if present
+  SmallVector<Value> pinnedIndices;
+  if (auto loadOp = dyn_cast<memref::LoadOp>(inputMemRef.getDefiningOp())) {
+    pinnedIndices.assign(loadOp.getIndices().begin(),
+                         loadOp.getIndices().end());
+
+    /// Identify zeroIndices
+    SmallVector<int64_t> zeroIndices;
+    for (auto [i, index] : llvm::enumerate(pinnedIndices)) {
+      if (auto cstOp = index.getDefiningOp<arith::ConstantIndexOp>()) {
+        if (cstOp.value() == 0)
+          zeroIndices.push_back(i);
       }
     }
 
-    LLVM_DEBUG(dbgs() << " - Pinned dims: ");
-    for (auto dim : pinnedDims)
-      LLVM_DEBUG(dbgs() << dim << " ");
-    LLVM_DEBUG(dbgs() << "\n");
+    if (!zeroIndices.empty()) {
+      assert(zeroIndices.back() == rank - 1 &&
+             "Last index must be zero for now");
 
-    /// Walk the region and replace the loads/stores
-    auto isMatchingMemrefAndIndices = [&](auto op) {
-      // TODO: Alias analysis
-      if (op.getMemref() != baseMemRef)
-        return false;
-      auto oldIdx = op.getIndices();
-      if ((int64_t)oldIdx.size() != rank)
-        return false;
-      for (auto dim : pinnedDims) {
-        if (offsets[dim] != oldIdx[dim])
-          return false;
-      }
-      return true;
-    };
-
-    region.walk([&](Operation *op) {
-      /// Load operation
-      if (auto load = dyn_cast<memref::LoadOp>(op)) {
-        if (!isMatchingMemrefAndIndices(load))
+      /// Lambda to find a matching load/store in the region
+      auto checkOp = [&](Operation *op, ValueRange opIndices) {
+        if (opIndices.size() < pinnedIndices.size()) {
+          llvm::errs() << "Error: Loading a chunk of the memref is not "
+                          "supported yet\n";
           return;
-        rewriter.updateRootInPlace(load, [&]() {
-          SmallVector<Value> newIdx(rank);
-          Location loc = load.getLoc();
-          Value c0 = rewriter.create<arith::ConstantIndexOp>(loc, 0);
-          for (int64_t i = 0; i < rank; ++i)
-            newIdx[i] = pinnedDims.contains(i) ? c0 : load.getIndices()[i];
-          /// Replace the load with the new subview
-          load.getMemrefMutable().assign(newSubview);
-          load.getIndicesMutable().assign(newIdx);
-        });
-      }
-      /// Store operation
-      else if (auto store = dyn_cast<memref::StoreOp>(op)) {
-        if (!isMatchingMemrefAndIndices(store))
+        }
+        if (opIndices[zeroIndices.back()] !=
+            pinnedIndices[zeroIndices.back()]) {
+          pinnedIndices.pop_back();
+          zeroIndices.pop_back();
+        }
+      };
+
+      /// Region walk
+      region.walk([&](Operation *op) {
+        if (zeroIndices.empty())
           return;
-        rewriter.updateRootInPlace(store, [&]() {
-          SmallVector<Value> newIdx(rank);
-          Location loc = store.getLoc();
-          Value c0 = rewriter.create<arith::ConstantIndexOp>(loc, 0);
-          for (int64_t i = 0; i < rank; ++i)
-            newIdx[i] = pinnedDims.contains(i) ? c0 : store.getIndices()[i];
-          /// Replace the store with the new subview
-          store.getMemrefMutable().assign(newSubview);
-          store.getIndicesMutable().assign(newIdx);
-        });
-      }
-    });
-    LLVM_DEBUG(dbgs() << line);
-  }
-
-  /// Collect parameters and dependencies
-  void naiveCollection(bool ignoreDeps = false) {
-    LLVM_DEBUG(dbgs() << "Naive collection of parameters and dependencies: \n");
-
-    /// Checks if the value is a constant, if so, adds it to the constants set
-    auto isConstant = [&](Value val) {
-      auto defOp = val.getDefiningOp();
-      if (!defOp)
-        return false;
-
-      auto constantOp = dyn_cast<arith::ConstantOp>(defOp);
-      if (!constantOp)
-        return false;
-      constants.insert(constantOp);
-      return true;
-    };
-
-    /// Collect all the values used in the region that are defined above it
-    SetVector<Value> usedValues;
-    getUsedValuesDefinedAbove(region, usedValues);
-    for (Value operand : usedValues) {
-      if (operand.getType().isIntOrIndexOrFloat()) {
-        if (isConstant(operand))
-          continue;
-        LLVM_DEBUG(dbgs() << "  Adding parameter: " << operand << "\n");
-        parameters.insert(operand);
-      } else if (!ignoreDeps) {
-        LLVM_DEBUG(dbgs() << "  Adding dependency: " << operand << "\n");
-        dependencies.insert(operand);
-      }
+        if (auto load = dyn_cast<memref::LoadOp>(op)) {
+          if (load.getMemref() == baseMemRef)
+            checkOp(op, load.getIndices());
+        } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+          if (store.getMemref() == baseMemRef)
+            checkOp(op, store.getIndices());
+        }
+      });
     }
   }
 
-  /// Analyze and adjus the set of parameters, constants and dependencies, and
-  /// rewire them accordingly
-  void adjust() {
-    /// Dependencies
-    /// Check if there are any dependencies that are not datablock operations
-    {
-      SmallVector<Value, 4> depsToProcess(dependencies.begin(),
-                                          dependencies.end());
-      for (Value dep : depsToProcess) {
-        if (!isa<arts::DataBlockOp>(dep.getDefiningOp())) {
-          addDependency(dep, "inout", true);
-          dependencies.remove(dep);
-        }
-      }
+  /// Prepare arrays for subview
+  SmallVector<Value, 4> offsets(rank), sizes(rank), strides(rank);
+  SmallVector<int64_t, 4> subShape(rank);
+
+  OpBuilder::InsertionGuard g(rewriter);
+
+  /// Compute dimension sizes for use in stride calculation
+  SmallVector<Value> dimVals(rank);
+  for (int64_t i = 0; i < rank; ++i) {
+    if (baseType.isDynamicDim(i)) {
+      dimVals[i] = rewriter.create<memref::DimOp>(loc, baseMemRef, i);
+    } else {
+      dimVals[i] =
+          rewriter.create<arith::ConstantIndexOp>(loc, baseType.getDimSize(i));
     }
+  }
 
-    /// Analyze the parameters.
-    /// Check if there is any parameter that loads a memref and indices of any
-    /// dependency
-    {
-      DenseMap<Value, SmallVector<arts::DataBlockOp>> baseToDepsMap;
-      for (auto dep : dependencies) {
-        auto depOp = cast<arts::DataBlockOp>(dep.getDefiningOp());
-        baseToDepsMap[depOp.getBase()].push_back(depOp);
-      }
+  /// Compute row-major strides by multiplying subsequent dimensions
+  Value one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+  strides[rank - 1] = one;
+  for (int64_t i = rank - 2; i >= 0; --i) {
+    strides[i] =
+        rewriter.create<arith::MulIOp>(loc, strides[i + 1], dimVals[i + 1]);
+  }
 
-      SmallVector<Value> paramsToRemove;
-      for (auto param : parameters) {
-        auto defOp = param.getDefiningOp();
-        if (!defOp)
-          continue;
-
-        /// We are only interested in memref.load operations
-        auto loadOp = dyn_cast<memref::LoadOp>(defOp);
-        if (!loadOp)
-          continue;
-
-        /// If the base of the load is not a dep, continue
-        auto memref = loadOp.getMemRef();
-        auto indices = loadOp.getIndices();
-        if (!baseToDepsMap.count(memref))
-          continue;
-
-        /// Get all the dependencies that have the same base as the load
-        for (auto dep : baseToDepsMap[memref]) {
-          auto depIndices = dep.getOffsets();
-          if (indices.size() != depIndices.size())
-            continue;
-
-          /// Check if the indices match
-          if (!llvm::all_of(llvm::zip(indices, depIndices), [](auto pair) {
-                return std::get<0>(pair) == std::get<1>(pair);
-              }))
-            continue;
-
-          /// Insert a new load at the start of the region, and replace all the
-          /// uses of the parameter
-          OpBuilder::InsertionGuard guard(rewriter);
-          rewriter.setInsertionPointToStart(&region.front());
-          auto newLoad = rewriter.create<memref::LoadOp>(
-              loadOp.getLoc(), dep.getBase(), indices);
-          utils::replaceInRegion(region, loadOp.getResult(),
-                                 newLoad.getResult());
-
-          /// Remove the parameter
-          paramsToRemove.push_back(param);
-        }
-      }
-
-      /// Remove the parameters
-      for (auto param : paramsToRemove)
-        parameters.remove(param);
+  /// If dimension i is pinned => offset= pinnedIndices[i], size=1
+  /// else => offset=0, size= dimVals[i]
+  Value zero = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+  Value oneSize = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+  for (int64_t i = 0; i < rank; ++i) {
+    if (i < (int64_t)pinnedIndices.size()) {
+      offsets[i] = pinnedIndices[i];
+      sizes[i] = oneSize;
+      subShape[i] = 1;
+    } else {
+      offsets[i] = zero;
+      sizes[i] = dimVals[i];
+      subShape[i] = baseType.isDynamicDim(i) ? ShapedType::kDynamic
+                                             : baseType.getDimSize(i);
     }
+  }
 
-    /// Give it a second chance to collect constants in case any was added after
-    /// the naive collection
-    naiveCollection(true);
+  /// Now build the subview memref type
+  auto subMemRefType = MemRefType::get(subShape, baseType.getElementType(),
+                                       baseType.getLayout().getAffineMap(),
+                                       baseType.getMemorySpace());
 
-    /// Finally, rewire the uses of the dependencies
-    for (Value dep : dependencies) {
-      auto depOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp());
-      if (depOp->hasAttr("isLoad"))
-        rewireUses(depOp);
+  /// Create the final arts.datablock operation
+  auto depOp = rewriter.create<arts::DataBlockOp>(
+      loc, subMemRefType, rewriter.getStringAttr(mode), baseMemRef, offsets,
+      sizes, strides);
+  if (isLoad)
+    depOp->setAttr("isLoad", rewriter.getUnitAttr());
+  return depOp;
+}
+
+/// Rewrites any memref.load/memref.store in 'region' that references
+/// 'baseMemRef'. The new memref is 'newSubview'.
+static void rewireDatablockUses(PatternRewriter &rewriter, Region &region,
+                                arts::DataBlockOp depOp) {
+  Value newSubview = depOp.getResult();
+  Value baseMemRef = depOp.getBase();
+
+  // LLVM_DEBUG(dbgs() << line);
+  // LLVM_DEBUG(DBGS() << "Rewiring uses of: " << depOp << "\n");
+  auto offsets = depOp.getOffsets();
+  auto sizes = depOp.getSizes();
+  auto subType = newSubview.getType().dyn_cast<MemRefType>();
+  assert(subType && "Expected MemRefType");
+  int64_t rank = subType.getRank();
+
+  /// Collect the dimensions that are pinned
+  SetVector<int64_t> pinnedDims;
+  for (int64_t i = 0; i < rank; ++i) {
+    if (auto cstOp = sizes[i].getDefiningOp<arith::ConstantIndexOp>()) {
+      if (cstOp.value() == 1)
+        pinnedDims.insert(i);
+    }
+  }
+
+  /// Walk the region and replace the loads/stores
+  auto isMatchingMemrefAndIndices = [&](auto op) {
+    // TODO: Alias analysis
+    if (op.getMemref() != baseMemRef)
+      return false;
+    auto oldIdx = op.getIndices();
+    if ((int64_t)oldIdx.size() != rank)
+      return false;
+    for (auto dim : pinnedDims) {
+      if (offsets[dim] != oldIdx[dim])
+        return false;
+    }
+    return true;
+  };
+
+  region.walk([&](Operation *op) {
+    /// Load operation
+    if (auto load = dyn_cast<memref::LoadOp>(op)) {
+      if (!isMatchingMemrefAndIndices(load))
+        return;
+      rewriter.updateRootInPlace(load, [&]() {
+        SmallVector<Value> newIdx(rank);
+        Location loc = load.getLoc();
+        Value c0 = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+        for (int64_t i = 0; i < rank; ++i)
+          newIdx[i] = pinnedDims.contains(i) ? c0 : load.getIndices()[i];
+        /// Replace the load with the new subview
+        load.getMemrefMutable().assign(newSubview);
+        load.getIndicesMutable().assign(newIdx);
+      });
+    }
+    /// Store operation
+    else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      if (!isMatchingMemrefAndIndices(store))
+        return;
+      rewriter.updateRootInPlace(store, [&]() {
+        SmallVector<Value> newIdx(rank);
+        Location loc = store.getLoc();
+        Value c0 = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+        for (int64_t i = 0; i < rank; ++i)
+          newIdx[i] = pinnedDims.contains(i) ? c0 : store.getIndices()[i];
+        /// Replace the store with the new subview
+        store.getMemrefMutable().assign(newSubview);
+        store.getIndicesMutable().assign(newIdx);
+      });
+    }
+  });
+  // LLVM_DEBUG(dbgs() << line);
+}
+
+static void createDatablocks(EdtEnvManager &edtEnv, PatternRewriter &rewriter) {
+  auto &region = edtEnv.getRegion();
+  edtEnv.naiveCollection();
+  for (const auto &[input, depType] : edtEnv.getDepsToProcess()) {
+    LLVM_DEBUG(dbgs() << "Processing dependency: " << input << "\n");
+    auto depOp =
+        createDatablockOp(rewriter, region, input.getLoc(), depType, input);
+    edtEnv.addDependency(depOp.getResult());
+  }
+
+  edtEnv.clearDepsToProcess();
+  edtEnv.adjust();
+  edtEnv.print();
+
+  // Cache dependencies to avoid repeated calls.
+  auto dependencies = edtEnv.getDependencies();
+  for (Value dep : dependencies) {
+    if (auto depOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp())) {
+      if (depOp.isLoad())
+        rewireDatablockUses(rewriter, region, depOp);
       else
-        utils::replaceInRegion(region, depOp.getBase(), depOp.getResult());
+        replaceInRegion(region, depOp.getBase(), depOp.getResult());
     }
   }
-
-  /// Add interface
-  bool addParameter(Value val) { return parameters.insert(val); }
-
-  Value addDependency(Value val, StringRef mode = "inout", bool adjust = true) {
-    LLVM_DEBUG(dbgs() << "Adding dependency: " << val << " with mode: " << mode
-                      << "\n");
-    if (!adjust) {
-      dependencies.insert(val);
-      return val;
-    }
-    auto depOp = dyn_cast<arts::DataBlockOp>(val.getDefiningOp());
-    /// If the dependency is not a datablock operation, create one
-    if (!depOp) {
-      auto valToCheck = val;
-      /// Check if it was naively collected, if so, remove it
-      /// If the value is a memref.load, get the memref
-      if (auto loadOp = dyn_cast<memref::LoadOp>(val.getDefiningOp()))
-        valToCheck = loadOp.getMemRef();
-
-      if (dependencies.contains(valToCheck)) {
-        LLVM_DEBUG(
-            dbgs() << "   Dependency already added as memref - Removing it "
-                      "and creating makedep\n");
-        dependencies.remove(valToCheck);
-      }
-
-      /// Create a new datablock operation
-      depOp = createDatablockOp(val.getLoc(), mode, val);
-    }
-
-    /// If it was added as a parameter, remove it
-    auto dep = depOp.getBase();
-    if (parameters.contains(dep))
-      parameters.remove(dep);
-    dependencies.insert(depOp);
-    return depOp;
-  }
-
-  /// Getters
-  ArrayRef<Value> getParameters() { return parameters.getArrayRef(); }
-  ArrayRef<Value> getConstants() { return constants.getArrayRef(); }
-  ArrayRef<Value> getDependencies() { return dependencies.getArrayRef(); }
-
-private:
-  PatternRewriter &rewriter;
-  Region &region;
-  SetVector<Value> parameters, constants, dependencies;
-};
+}
 
 //===----------------------------------------------------------------------===//
 // Conversion Patterns
@@ -431,12 +274,10 @@ struct ParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
     auto loc = op.getLoc();
     LLVM_DEBUG(DBGS() << "Converting omp.parallel to arts.parallel\n");
     /// Collect parameters and dependencies
-    EdtEnvManager edtEnv(rewriter, op.getRegion(), true);
-
+    EdtEnvManager edtEnv(rewriter, op.getRegion());
+    createDatablocks(edtEnv, rewriter);
     /// Create a new `arts.edt` operation.
-    auto parOp = rewriter.create<arts::EdtOp>(loc, edtEnv.getParameters(),
-                                              edtEnv.getConstants(),
-                                              edtEnv.getDependencies());
+    auto parOp = rewriter.create<arts::EdtOp>(loc, edtEnv.getDependencies());
     parOp.getBody().emplaceBlock();
     Block &blk = parOp.getBody().front();
 
@@ -462,8 +303,8 @@ struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
     auto loc = op.getLoc();
 
     /// Create a new `arts.single` operation.
-    SmallVector<Value> params, consts, deps;
-    auto artsSingle = rewriter.create<arts::EdtOp>(loc, params, consts, deps);
+    SmallVector<Value> deps;
+    auto artsSingle = rewriter.create<arts::EdtOp>(loc, deps);
     artsSingle.getBody().emplaceBlock();
 
     /// Set the 'single' attribute
@@ -525,14 +366,14 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
       assert(depLoadOp && "Expected a memref.load operation");
 
       /// Add the dependency to the edt environment
-      edtEnv.addDependency(depLoadOp, depType, true);
+      edtEnv.addDependency(depLoadOp, depType);
 
       /// Replace dependency array with undef
       replaceWithUndef(depAlloc, rewriter);
     }
 
-    /// Adjust the dependencies
-    edtEnv.adjust();
+    /// Create datablocks
+    createDatablocks(edtEnv, rewriter);
   }
 
   LogicalResult matchAndRewrite(omp::TaskOp op,
@@ -544,9 +385,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
     collectTaskDependencies(edtEnv, op, rewriter, loc);
 
     /// Create a new `arts.edt` operation.
-    auto edtOp = rewriter.create<arts::EdtOp>(loc, edtEnv.getParameters(),
-                                              edtEnv.getConstants(),
-                                              edtEnv.getDependencies());
+    auto edtOp = rewriter.create<arts::EdtOp>(loc, edtEnv.getDependencies());
     edtOp.getBody().emplaceBlock();
     Block &blk = edtOp.getBody().front();
 

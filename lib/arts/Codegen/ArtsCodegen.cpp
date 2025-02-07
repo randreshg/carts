@@ -27,6 +27,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Utils/ArtsTypes.h"
+#include "arts/Utils/ArtsUtils.h"
 /// Debug
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
@@ -136,10 +137,8 @@ Value DataBlockCodegen::getMode(llvm::StringRef mode) {
 unsigned EdtCodegen::edtCounter = 0;
 
 EdtCodegen::EdtCodegen(ArtsCodegen &AC, SmallVector<Value> *opDeps,
-                       SmallVector<Value> *opParams,
-                       SmallVector<Value> *opConsts, Region *region,
-                       Value *epoch, Location *loc, bool build,
-                       ConversionPatternRewriter *rewriter)
+                       SmallVector<Value> *opParams, Region *region,
+                       Value *epoch, Location *loc, bool build)
     : AC(AC), builder(AC.builder), region(region), epoch(epoch) {
   OpBuilder::InsertionGuard guard(builder);
   auto curLoc = loc ? *loc : UnknownLoc::get(builder.getContext());
@@ -147,14 +146,12 @@ EdtCodegen::EdtCodegen(ArtsCodegen &AC, SmallVector<Value> *opDeps,
   func = createFn(curLoc);
   node = AC.getCurrentNode(curLoc);
   processDepsAndParams(opDeps, opParams, curLoc);
-  if (opConsts)
-    consts = *opConsts;
 
-  if (build && rewriter)
-    this->build(curLoc, *rewriter);
+  if (build)
+    this->build(curLoc);
 }
 
-void EdtCodegen::build(Location loc, ConversionPatternRewriter &rewriter) {
+void EdtCodegen::build(Location loc) {
   /// If not epoch is provided, create an EDT without it
   auto funcPtr = AC.createFnPtr(func, loc);
   if (!epoch) {
@@ -171,6 +168,10 @@ void EdtCodegen::build(Location loc, ConversionPatternRewriter &rewriter) {
   /// If no region is provided, we are done
   if (!region)
     return;
+
+  /// Create the rewriter
+  ConversionPatternRewriter rewriter(builder.getContext());
+  // rewriter.setInsertionPointToStart(&func.getBody().front());
 
   /// Create the entry block
   createEntry(loc);
@@ -270,10 +271,10 @@ void EdtCodegen::createEntry(Location loc) {
   Value fnDepV = entryBlock->getArgument(3);
 
   /// Clone constants
-  for (auto oldConst : consts) {
-    rewireMap[oldConst] =
-        builder.clone(*oldConst.getDefiningOp())->getResult(0);
-  }
+  // for (auto oldConst : consts) {
+  //   rewireMap[oldConst] =
+  //       builder.clone(*oldConst.getDefiningOp())->getResult(0);
+  // }
 
   /// Insert the parameters
   auto paramSize = params.size();
@@ -332,7 +333,7 @@ void EdtCodegen::createEntry(Location loc) {
     rewireMap[oldDep] = depPtr;
   }
 
-  utils::replaceInRegion(*region, rewireMap);
+  replaceInRegion(*region, rewireMap);
 }
 
 Value EdtCodegen::createGuid(Value node, Location loc) {
@@ -462,13 +463,11 @@ EdtCodegen *ArtsCodegen::getEdt(Region *region) {
 }
 
 EdtCodegen *ArtsCodegen::createEdt(SmallVector<Value> *opDeps,
-                                   SmallVector<Value> *opParams,
-                                   SmallVector<Value> *opConsts, Region *region,
-                                   Value *epoch, Location *loc, bool build,
-                                   ConversionPatternRewriter *rewriter) {
+                                   SmallVector<Value> *opParams, Region *region,
+                                   Value *epoch, Location *loc, bool build) {
   assert(region && !getEdt(region) && "Edt already exists");
-  edts[region] = new EdtCodegen(*this, opDeps, opParams, opConsts, region,
-                                epoch, loc, build, rewriter);
+  edts[region] =
+      new EdtCodegen(*this, opDeps, opParams, region, epoch, loc, build);
   return edts[region];
 }
 

@@ -38,7 +38,6 @@
 
 #include "arts/ArtsDialect.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
@@ -46,7 +45,6 @@
 #include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
-
 namespace arts {
 
 ///==========================================================================
@@ -137,8 +135,6 @@ private:
 
   /// Node collection
   void collectNodes(Region &region, Graph &graph);
-  std::optional<int64_t> computeConstant(Value val);
-  int64_t tryParseIndexConstant(Value val);
   void setSubviewInfo(Node &node);
 
   /// Statistics
