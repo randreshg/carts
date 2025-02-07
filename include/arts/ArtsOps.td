@@ -56,8 +56,7 @@ def AllocOp : Arts_Op<"alloc", []> {
 // arts.datablock
 //===----------------------------------------------------------------------===//
 def DataBlockOp : Arts_Op<"datablock", 
-  [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
-   AttrSizedOperandSegments]> {
+  [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, AttrSizedOperandSegments]> {
   let summary = "Creates a subview dependency for arts.edt or arts.parallel";
   let arguments = (ins
     StrAttr:$mode,                        // Dependency mode (e.g., "in", "out")
@@ -77,6 +76,22 @@ def DataBlockOp : Arts_Op<"datablock",
 }
 
 //===----------------------------------------------------------------------===//
+// arts.datablock_size
+//===----------------------------------------------------------------------===//
+def DataBlockSizeOp: Arts_Op<"datablock_size", [Pure]> {
+  let summary = "Computes the total number of elements in a datablock subview.";
+  let arguments = (ins AnyMemRef:$datablock);
+  let results = (outs Index:$size);
+  let assemblyFormat = "$datablock `:` type($datablock) `->` type($size) attr-dict";
+  let builders = [
+    OpBuilder<(ins "Value":$datablock), [{
+      $_state.addOperands(datablock);
+      $_state.addTypes(mlir::IndexType::get($_builder.getContext()));
+    }]>
+  ];
+}
+
+//===----------------------------------------------------------------------===//
 // arts.edt
 //===----------------------------------------------------------------------===//
 def EdtOp : Arts_Op<"edt",
@@ -85,13 +100,14 @@ def EdtOp : Arts_Op<"edt",
 
   let summary = "Event-Driven Task in ARTS";
   let description = [{
-  Defines an ARTS event-driven task (EDT) with:
-    - `dependencies` that specify input/output memory dependencies.
-    - `events` that signal the dependencies.
-  The single-block region contains the task body.
-  - if 'parallel' attribute is set, it can spawn multiple tasks.
-  - if 'single' attribute is set, it is guaranteed to run in a single task, 
-    even if it is called from a parallel region.
+    Defines an ARTS event-driven task (EDT) with:
+      - `dependencies` that specify input/output memory dependencies.
+      - `events` that signal the dependencies. If an event is not present,
+        `-1` is used.
+    The single-block region contains the task body.
+    - if 'parallel' attribute is set, it can spawn multiple tasks.
+    - if 'single' attribute is set, it is guaranteed to run in a single task, 
+      even if it is called from a parallel region.
   }];
 
   let arguments = (ins

@@ -59,7 +59,6 @@
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
-
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arith;
@@ -304,14 +303,12 @@ void DatablockAnalysis::collectNodes(Region &region, Graph &graph) {
             node.baseMemref.getDefiningOp())) {
       dbOp->setAttr("baseIsDb", UnitAttr::get(dbOp.getContext()));
       node.baseIsDb = true;
-    } else
+    } else {
       node.baseIsDb = false;
+    }
 
     /// Set the isLoad flag.
-    if (dbOp->hasAttr("isLoad"))
-      node.isLoad = true;
-    else
-      node.isLoad = false;
+    node.isLoad = dbOp->hasAttr("isLoad");
 
     /// Analyze uses of the datablock.
     unsigned numUses = 0;
@@ -322,6 +319,12 @@ void DatablockAnalysis::collectNodes(Region &region, Graph &graph) {
       if (userOp->getBlock() == dbOp->getBlock() && isa<arts::EdtOp>(userOp)) {
         assert(node.edtUser == nullptr && "Multiple EDT users");
         node.edtUser = cast<arts::EdtOp>(userOp);
+        unsigned edtDepId = 0;
+        for (auto dep : node.edtUser.getDependencies()) {
+          if (dep.getDefiningOp() == dbOp)
+            node.edtDepId = edtDepId;
+          ++edtDepId;
+        }
       }
       /// Set the region users of the datablock.
       if (auto *r = userOp->getParentRegion())
@@ -330,17 +333,16 @@ void DatablockAnalysis::collectNodes(Region &region, Graph &graph) {
     node.useCount = numUses;
 
     /// Try to get the EDT parent of the datablock.
-    /// Try to get the EDT single region if any.
     if (auto parentOp = dbOp->getParentOfType<arts::EdtOp>())
       node.edtParent = parentOp;
 
     /// Insert the loop values into the offset map.
-    for (Value offVal : node.offsets) {
-      if (!loopValsMap.count(offVal))
-        continue;
-      node.isLoopDependent = true;
-      auto &loopVals = loopValsMap[offVal];
-      offsetMap[offVal].insert(loopVals.begin(), loopVals.end());
+    for (auto offVal : node.offsets) {
+      if (loopValsMap.count(offVal)) {
+        node.isLoopDependent = true;
+        auto &loopVals = loopValsMap[offVal];
+        offsetMap[offVal].insert(loopVals.begin(), loopVals.end());
+      }
     }
 
     /// Add the node to the graph.
@@ -417,7 +419,7 @@ void DatablockAnalysis::printGraph(Graph &graph) {
     os << " usedInRegions=" << n.userRegions.size();
     os << " baseIsDb=" << (n.baseIsDb ? "true" : "false");
     os << " isLoad=" << (n.isLoad ? "true" : "false");
-    // os << " edtUser=" << n.edtUser << "\n";
+    os << " edtDepId=" << n.edtDepId << "\n";
   }
   os << "Edges:\n";
   for (auto &e : graph.edges)
@@ -487,21 +489,21 @@ void DatablockAnalysis::fuseAdjacentNodes(Graph &graph) {
 }
 
 void DatablockAnalysis::detectOutOnlyNodes(Graph &graph) {
-  llvm::SmallDenseSet<unsigned> outOnlyIDs;
-  for (unsigned i = 0; i < graph.nodes.size(); i++) {
-    Node &node = graph.nodes[i];
-    // if (isWriter(node) && node.topUsers.empty()) {
-    //   outOnlyIDs.insert(i);
-    //   LLVM_DEBUG(DBGS() << "No consumer from #" << i
-    //                     << " => out-only => removable\n");
-    // }
-  }
-  llvm::SmallVector<Node, 8> newNodes;
-  for (unsigned i = 0; i < graph.nodes.size(); i++) {
-    if (!outOnlyIDs.contains(i))
-      newNodes.push_back(graph.nodes[i]);
-  }
-  graph.nodes = newNodes;
+  // llvm::SmallDenseSet<unsigned> outOnlyIDs;
+  // for (unsigned i = 0; i < graph.nodes.size(); i++) {
+  //   // Node &node = graph.nodes[i];
+  //   // if (isWriter(node) && node.topUsers.empty()) {
+  //   //   outOnlyIDs.insert(i);
+  //   //   LLVM_DEBUG(DBGS() << "No consumer from #" << i
+  //   //                     << " => out-only => removable\n");
+  //   // }
+  // }
+  // llvm::SmallVector<Node, 8> newNodes;
+  // for (unsigned i = 0; i < graph.nodes.size(); i++) {
+  //   if (!outOnlyIDs.contains(i))
+  //     newNodes.push_back(graph.nodes[i]);
+  // }
+  // graph.nodes = newNodes;
 }
 
 void DatablockAnalysis::deduplicateNodes(Graph &graph) {
