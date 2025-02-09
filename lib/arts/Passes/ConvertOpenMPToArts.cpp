@@ -12,6 +12,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "polygeist/Ops.h"
 /// Arts
 #include "ArtsPassDetails.h"
 #include "arts/Analysis/EdtAnalysis.h"
@@ -107,7 +108,7 @@ static DataBlockOp createDatablockOp(PatternRewriter &rewriter, Region &region,
   }
 
   /// Prepare arrays for subview
-  SmallVector<Value, 4> offsets(rank), sizes(rank), strides(rank);
+  SmallVector<Value, 4> offsets(rank), sizes(rank);
   SmallVector<int64_t, 4> subShape(rank);
 
   OpBuilder::InsertionGuard g(rewriter);
@@ -121,14 +122,6 @@ static DataBlockOp createDatablockOp(PatternRewriter &rewriter, Region &region,
       dimVals[i] =
           rewriter.create<arith::ConstantIndexOp>(loc, baseType.getDimSize(i));
     }
-  }
-
-  /// Compute row-major strides by multiplying subsequent dimensions
-  Value one = rewriter.create<arith::ConstantIndexOp>(loc, 1);
-  strides[rank - 1] = one;
-  for (int64_t i = rank - 2; i >= 0; --i) {
-    strides[i] =
-        rewriter.create<arith::MulIOp>(loc, strides[i + 1], dimVals[i + 1]);
   }
 
   /// If dimension i is pinned => offset= pinnedIndices[i], size=1
@@ -149,14 +142,22 @@ static DataBlockOp createDatablockOp(PatternRewriter &rewriter, Region &region,
   }
 
   /// Now build the subview memref type
-  auto subMemRefType = MemRefType::get(subShape, baseType.getElementType(),
+  auto elementType = baseType.getElementType();
+  auto subMemRefType = MemRefType::get(subShape, elementType,
                                        baseType.getLayout().getAffineMap(),
                                        baseType.getMemorySpace());
 
+  /// Insert polygeist.typeSizeOp to get the size of the element type
+  auto elementTypeSize = rewriter
+                             .create<polygeist::TypeSizeOp>(
+                                 loc, rewriter.getIndexType(), elementType)
+                             .getResult();
+
   /// Create the final arts.datablock operation
+  auto modeAttr = rewriter.getStringAttr(mode);
   auto depOp = rewriter.create<arts::DataBlockOp>(
-      loc, subMemRefType, rewriter.getStringAttr(mode), baseMemRef, offsets,
-      sizes, strides);
+      loc, subMemRefType, modeAttr, baseMemRef, elementType, elementTypeSize,
+      offsets, sizes);
   if (isLoad)
     depOp->setAttr("isLoad", rewriter.getUnitAttr());
   return depOp;
@@ -169,8 +170,6 @@ static void rewireDatablockUses(PatternRewriter &rewriter, Region &region,
   Value newSubview = depOp.getResult();
   Value baseMemRef = depOp.getBase();
 
-  // LLVM_DEBUG(dbgs() << line);
-  // LLVM_DEBUG(DBGS() << "Rewiring uses of: " << depOp << "\n");
   auto offsets = depOp.getOffsets();
   auto sizes = depOp.getSizes();
   auto subType = newSubview.getType().dyn_cast<MemRefType>();
@@ -233,7 +232,6 @@ static void rewireDatablockUses(PatternRewriter &rewriter, Region &region,
       });
     }
   });
-  // LLVM_DEBUG(dbgs() << line);
 }
 
 static void createDatablocks(EdtEnvManager &edtEnv, PatternRewriter &rewriter) {
@@ -248,7 +246,7 @@ static void createDatablocks(EdtEnvManager &edtEnv, PatternRewriter &rewriter) {
 
   edtEnv.clearDepsToProcess();
   edtEnv.adjust();
-  edtEnv.print();
+  // edtEnv.print();
 
   auto dependencies = edtEnv.getDependencies();
   for (Value dep : dependencies) {

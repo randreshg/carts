@@ -10,6 +10,7 @@
 // #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
 /// Dialects
+#include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -28,8 +29,12 @@
 #include "mlir/IR/Region.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
+/// Conversion
+#include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
+#include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
+#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+#include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
-
 #include <algorithm>
 #include <optional>
 
@@ -63,19 +68,17 @@ struct ConvertArtsToFuncsPass
   void handleSingle(EdtOp &op);
   void handleEdt(EdtOp &op);
   void handleEvent(EventOp &op);
-  void removeOps();
-
-  /// Datablock operations
-  void iterateDbs(Operation *op);
   void handleDatablock(DataBlockOp &op);
+  void removeOps(mlir::ModuleOp module);
 
+private:
   ArtsCodegen *AC = nullptr;
   SetVector<Operation *> opsToErase;
 };
 } // end namespace
 
 void ConvertArtsToFuncsPass::handleParallel(EdtOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.edt parallel\n\n");
+  LLVM_DEBUG(DBGS() << "Lowering arts.edt parallel\n" << op << "\n" << line);
   auto *ctx = op.getContext();
   Location loc = UnknownLoc::get(ctx);
 
@@ -118,6 +121,7 @@ void ConvertArtsToFuncsPass::handleParallel(EdtOp &op) {
         AC->createEpoch(parDoneEdt.getGuid(), parDone_slot, loc);
 
     /// Create the parallel EDT with the single op's region.
+    LLVM_DEBUG(DBGS() << "Creating parallel EDT: " << singleOp << "\n");
     auto par_deps = op.getDeps();
     newEdt =
         AC->createEdt(&par_deps, &singleRegion, &parEpoch_guid, nullptr, true);
@@ -130,7 +134,6 @@ void ConvertArtsToFuncsPass::handleParallel(EdtOp &op) {
 
   /// Visit new function
   assert(newEdt && "New EDT not created");
-  LLVM_DEBUG(DBGS() << "New function: " << newEdt->getFunc() << "\n");
   iterateOps(newEdt->getFunc());
 }
 
@@ -164,127 +167,93 @@ void ConvertArtsToFuncsPass::handleEdt(EdtOp &op) {
   iterateOps(newEdt->getFunc());
 }
 
-void ConvertArtsToFuncsPass::handleEvent(EventOp &op) {
-  LLVM_DEBUG(DBGS() << "Skipping arts.event: " << op << "\n");
-}
-
-// void ConvertArtsToFuncsPass::iterateOps(Operation *operation) {
-//   for (auto &region : operation->getRegions()) {
-//     for (auto &block : region) {
-//       for (auto &op : block) {
-//         /// Ignore operations that are marked for removal
-//         if (opsToErase.count(&op))
-//           continue;
-
-//         /// Handle operations
-//         if (auto dbOp = dyn_cast<arts::DataBlockOp>(op)) {
-//           opsToErase.insert(&op);
-//         } else if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
-//           if (edtOp.isParallel())
-//             handleParallel(edtOp);
-//           else if (edtOp.isSingle())
-//             handleSingle(edtOp);
-//           else
-//             handleEdt(edtOp);
-//         } else if (auto eventOp = dyn_cast<arts::EventOp>(op)) {
-//           handleEvent(eventOp);
-//         } else {
-//           iterateOps(&op);
-//         }
-//       }
-//     }
-//   }
-// }
-
-void ConvertArtsToFuncsPass::iterateOps(Operation *operation) {
-  operation->walk<mlir::WalkOrder::PreOrder>(
-      [&](Operation *op) -> mlir::WalkResult {
-        /// Skip operations marked for removal.
-        if (opsToErase.count(op))
-          return mlir::WalkResult::skip();
-
-        if (auto dbOp = dyn_cast<arts::DataBlockOp>(op)) {
-          /// Don't remove it here, as it will be removed in the next pass.
-          /// Also, it is necessary to lower the datablock operation.
-          opsToErase.insert(dbOp);
-          return mlir::WalkResult::advance();
-        } else if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
-          if (edtOp.isParallel())
-            handleParallel(edtOp);
-          else if (edtOp.isSingle())
-            handleSingle(edtOp);
-          else
-            handleEdt(edtOp);
-          return mlir::WalkResult::advance();
-        } else if (auto eventOp = dyn_cast<arts::EventOp>(op)) {
-          handleEvent(eventOp);
-          return mlir::WalkResult::advance();
-        }
-        return mlir::WalkResult::advance();
-      });
-}
-
-void ConvertArtsToFuncsPass::iterateDbs(Operation *operation) {
-  operation->walk<mlir::WalkOrder::PreOrder>(
-      [&](arts::DataBlockOp dbOp) { handleDatablock(dbOp); });
-}
-
 void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
   LLVM_DEBUG(DBGS() << "Lowering arts.datablock: " << op << "\n");
-  /// Preprocess the data block operation by converting the memref to a
-  /// pointer
-  Location loc = op.getLoc();
-  auto &builder = AC->getBuilder();
-  OpBuilder::InsertionGuard guard(builder);
   AC->setInsertionPoint(op);
+  auto &builder = AC->getBuilder();
 
-  /// Convert all dimensions to dynamic
-  auto memrefTy = op.getType().cast<MemRefType>();
-  SmallVector<int64_t, 4> dynamicShape(memrefTy.getRank(),
-                                       ShapedType::kDynamic);
-  auto dynMemrefTy = MemRefType::get(dynamicShape, memrefTy.getElementType());
-  auto pointerMemrefTy = MemRefType::get({ShapedType::kDynamic}, dynMemrefTy);
+  /// Create a new DataBlockOp with an opaque pointer type
+  auto sizes = op.getSizes();
+  bool isSingleElement = sizes.size() == 1 && [&]() {
+    if (auto constOp = sizes[0].getDefiningOp<arith::ConstantIndexOp>())
+      return constOp.value() == 1;
+    return false;
+  }();
 
-  /// Create a new DataBlockOp with that pointer-based type
+  auto pointerType = isSingleElement
+                         ? AC->VoidPtr
+                         : MemRefType::get({ShapedType::kDynamic}, AC->VoidPtr);
   auto newDbOp = builder.create<arts::DataBlockOp>(
-      loc, pointerMemrefTy, op.getMode(), op.getBase(), op.getOffsets(),
-      op.getSizes(), op.getStrides());
+      op->getLoc(), pointerType, op.getMode(), op.getBase(),
+      op.getElementType(), op.getElementTypeSize(), op.getOffsets(), sizes);
   newDbOp->setAttrs(op->getAttrs());
 
+  /// Helper lambda to check if the indices represent a single constant zero.
+  auto isSingleZeroOffset = [&](ValueRange indices) -> bool {
+    if (indices.size() != 1)
+      return false;
+    if (auto constOp = indices[0].getDefiningOp<arith::ConstantIndexOp>())
+      return constOp.value() == 0;
+    return false;
+  };
+
+  /// Helper lambda to compute the pointer based on the indices.
+  auto MT = newDbOp.getType().cast<MemRefType>();
+  auto computePtr = [&](ValueRange indices, Location loc) -> Value {
+    return isSingleZeroOffset(indices)
+               ? AC->castToLLVMPtr(newDbOp, MT, loc)
+               : builder.create<LLVM::GEPOp>(loc, nullptr, newDbOp.getResult(),
+                                             indices);
+  };
+
+  /// Lambda to process load operations (for both memref::LoadOp and
+  /// affine::AffineLoadOp).
+  auto processLoad = [&](auto loadOp) {
+    auto loc = loadOp.getLoc();
+    auto newPtr = computePtr(loadOp.getIndices(), loc);
+    auto newLoad = builder
+                       .create<LLVM::LoadOp>(
+                           loc, loadOp.getMemRefType().getElementType(), newPtr)
+                       .getResult();
+    loadOp.getResult().replaceAllUsesWith(newLoad);
+    loadOp.erase();
+  };
+
+  /// Lambda to process store operations (for both memref::StoreOp and
+  /// affine::AffineStoreOp).
+  auto processStore = [&](auto storeOp) {
+    auto loc = storeOp.getLoc();
+    auto newPtr = computePtr(storeOp.getIndices(), loc);
+    builder.create<LLVM::StoreOp>(loc, storeOp.getValueToStore(), newPtr);
+    storeOp.erase();
+  };
+
   /// Walk all uses of the old datablock to properly replace it with the new
-  /// pointer
+  /// memref. Ignore uses in arts operations.
   for (auto &use : llvm::make_early_inc_range(op->getUses())) {
     /// Set insertion point to the user
     auto user = use.getOwner();
     AC->setInsertionPoint(user);
-    /// LoadOp - load the pointer using the old load indices and then the
-    /// value at index 0
+
+    /// memref.load or affine.load
     if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
-      auto ptrVal = builder.create<memref::LoadOp>(
-          loc, newDbOp.getResult(), ValueRange(loadOp.getIndices()));
-      auto c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
-      auto finalVal =
-          builder.create<memref::LoadOp>(loc, ptrVal, ValueRange{c0});
-      loadOp.getResult().replaceAllUsesWith(finalVal.getResult());
-      loadOp.erase();
+      processLoad(loadOp);
+    } else if (auto loadOp = dyn_cast<affine::AffineLoadOp>(user)) {
+      processLoad(loadOp);
     }
-    /// memref.store - load the pointer using the old store indices and then
-    /// store the value at index 0
+    /// memref.store or affine.store
     else if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
-      auto ptrVal = builder.create<memref::LoadOp>(
-          loc, newDbOp.getResult(), ValueRange(storeOp.getIndices()));
-      auto c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
-      builder.create<memref::StoreOp>(loc, storeOp.getValueToStore(), ptrVal,
-                                      ValueRange{c0});
-      storeOp.erase();
+      processStore(storeOp);
+    } else if (auto storeOp = dyn_cast<affine::AffineStoreOp>(user)) {
+      processStore(storeOp);
     }
-    /// DataBlockOp referencing op - replace base
+    /// Propagate datablock pointer for nested datablock ops.
     else if (auto dbOp = dyn_cast<arts::DataBlockOp>(user)) {
       dbOp.getBase().replaceUsesWithIf(
           newDbOp.getResult(),
           [&](OpOperand &operand) { return operand.getOwner() == dbOp; });
     }
-    /// EdtOp - fix dependencies
+    /// EdtOp - fix dependencies.
     else if (auto edtOp = dyn_cast<arts::EdtOp>(user)) {
       for (auto dep : edtOp.getDependencies()) {
         if (dep == op) {
@@ -294,7 +263,7 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
         }
       }
     }
-    /// DbSizeOp - replace the uses with the new computed size
+    /// DbSizeOp - replace the uses with the new computed size.
     else if (auto dbSizeOp = dyn_cast<arts::DataBlockSizeOp>(user)) {
       dbSizeOp.getDatablock().replaceUsesWithIf(
           newDbOp.getResult(),
@@ -307,20 +276,49 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
     }
   }
 
-  /// Create a new DataBlockCodegen object
-  AC->getOrCreateDatablock(newDbOp, loc);
-
-  /// Erase old op
+  // AC->createDatablock(op, op.getLoc());
   opsToErase.insert(op);
 }
 
-void ConvertArtsToFuncsPass::removeOps() {
+void ConvertArtsToFuncsPass::handleEvent(EventOp &op) {
+  LLVM_DEBUG(DBGS() << "Skipping arts.event: " << op << "\n");
+}
+
+void ConvertArtsToFuncsPass::iterateOps(Operation *operation) {
+  operation->walk<mlir::WalkOrder::PreOrder>(
+      [&](Operation *op) -> mlir::WalkResult {
+        /// Skip operations marked for removal.
+        if (opsToErase.count(op))
+          return mlir::WalkResult::skip();
+
+        if (auto dbOp = dyn_cast<arts::DataBlockOp>(op)) {
+          handleDatablock(dbOp);
+          return mlir::WalkResult::advance();
+        }
+        // else if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
+        //   if (edtOp.isParallel())
+        //     handleParallel(edtOp);
+        //   else if (edtOp.isSingle())
+        //     handleSingle(edtOp);
+        //   else
+        //     handleEdt(edtOp);
+        //   return mlir::WalkResult::advance();
+        // } else if (auto eventOp = dyn_cast<arts::EventOp>(op)) {
+        //   handleEvent(eventOp);
+        //   return mlir::WalkResult::advance();
+        // }
+        return mlir::WalkResult::advance();
+      });
+}
+
+void ConvertArtsToFuncsPass::removeOps(mlir::ModuleOp module) {
   for (auto op : opsToErase) {
     if (!op)
       continue;
     replaceWithUndef(op, AC->getBuilder());
-    recursivelyRemoveUses(op);
+    recursivelyRemoveOp(op);
   }
+  removeUndefOps(module);
   opsToErase.clear();
 }
 
@@ -342,15 +340,38 @@ void ConvertArtsToFuncsPass::runOnOperation() {
   AC = new ArtsCodegen(module, llvmDL, mlirDL);
 
   LLVM_DEBUG(DBGS() << "Iterate over all the functions\n");
-  /// Handle datablock operations
-  for (auto func : module.getOps<func::FuncOp>())
-    iterateDbs(func);
-  removeOps();
+
   /// Handle arts operations
   for (auto func : module.getOps<func::FuncOp>())
     iterateOps(func);
-  removeOps();
-  removeUndefOps(module);
+  removeOps(module);
+
+  /// Create a ConversionTarget.
+  // auto *ctx = &getContext();
+  // ConversionTarget target(*ctx);
+  // target.addIllegalDialect<memref::MemRefDialect>();
+  // target.addLegalDialect<LLVM::LLVMDialect, arith::ArithDialect,
+  //                        func::FuncDialect, affine::AffineDialect,
+  //                        scf::SCFDialect>();
+
+  // // Add the memref-to-LLVM conversion pass (or add its patterns manually)
+  // LowerToLLVMOptions options(module.getContext());
+  // options.useOpaquePointers = false;
+
+  // // Populate type conversions.
+  // LLVMTypeConverter converter(module.getContext(), options);
+  // RewritePatternSet patterns(ctx);
+  // populateFinalizeMemRefToLLVMConversionPatterns(converter, patterns);
+  // arith::populateArithToLLVMConversionPatterns(converter, patterns);
+  // index::populateIndexToLLVMConversionPatterns(converter, patterns);
+  // populateAffineToStdConversionPatterns(patterns);
+
+  // // Then run the conversion:
+  // if (failed(applyPartialConversion(module, target, std::move(patterns))))
+  // {
+  //   module.emitError("Conversion from memref to LLVM failed");
+  //   return signalPassFailure();
+  // }
 
   // /// Create a ConversionTarget.
   // ConversionTarget target(*ctx);

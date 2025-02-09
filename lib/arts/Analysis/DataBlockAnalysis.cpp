@@ -291,7 +291,7 @@ void DatablockAnalysis::collectNodes(Region &region, Graph &graph) {
     node.baseMemref = dbOp.getBase();
     node.offsets = dbOp.getOffsets();
     node.sizes = dbOp.getSizes();
-    node.strides = dbOp.getStrides();
+    // node.strides = dbOp.getStrides();
     setSubviewInfo(node);
 
     /// Collect memory effects
@@ -353,8 +353,7 @@ void DatablockAnalysis::collectNodes(Region &region, Graph &graph) {
 
 void DatablockAnalysis::setSubviewInfo(Node &node) {
   /// Validate that offsets, sizes, and strides arrays have the same length.
-  if (node.offsets.size() != node.sizes.size() ||
-      node.offsets.size() != node.strides.size())
+  if (node.offsets.size() != node.sizes.size())
     return;
 
   const auto rank = node.offsets.size();
@@ -366,12 +365,10 @@ void DatablockAnalysis::setSubviewInfo(Node &node) {
   for (size_t i = 0; i < rank; i++) {
     const int64_t o = tryParseIndexConstant(node.offsets[i]);
     const int64_t s = tryParseIndexConstant(node.sizes[i]);
-    const int64_t st = tryParseIndexConstant(node.strides[i]);
-    if (o < 0 || s < 0 || st < 0)
+    if (o < 0 || s < 0)
       return;
     sb.offsets[i] = o;
     sb.sizes[i] = s;
-    sb.strides[i] = st;
   }
   sb.valid = true;
 }

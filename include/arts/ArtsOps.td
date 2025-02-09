@@ -55,23 +55,28 @@ def AllocOp : Arts_Op<"alloc", []> {
 //===----------------------------------------------------------------------===//
 // arts.datablock
 //===----------------------------------------------------------------------===//
-def DataBlockOp : Arts_Op<"datablock", 
-  [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, AttrSizedOperandSegments]> {
+def DataBlockOp : Arts_Op<"datablock", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, AttrSizedOperandSegments]> {
   let summary = "Creates a subview dependency for arts.edt or arts.parallel";
   let arguments = (ins
     StrAttr:$mode,                        // Dependency mode (e.g., "in", "out")
     AnyMemRef:$base,                      // Base memref
-    Variadic<Index>:$offsets,             // Offsets for subview
-    Variadic<Index>:$sizes,               // Sizes for subview
-    Variadic<Index>:$strides              // Strides for subview
+    TypeAttr:$elementType,                // Type attribute for the subview element (or memref type)
+    Index:$elementTypeSize,               // Size associated with that type (e.g. number of elements)
+    Variadic<Index>:$offsets,             // Offsets for the subview
+    Variadic<Index>:$sizes                // Sizes for the subview
   );
   let results = (outs AnyMemRef:$subview); // Produces a memref.subview
+
   let assemblyFormat = [{
-    $mode `,` $base `:` type($base) `[` $offsets `]` `[` $sizes `]` `[` $strides `]` 
-    attr-dict `:` type($subview)
+    $mode `,` $base `:` type($base) 
+    `[` $offsets `]` `[` $sizes `]` 
+    `[` $elementType `,` $elementTypeSize `]` 
+    `->` type($subview) attr-dict
   }];
+
   let extraClassDeclaration = [{
     bool isLoad();
+    bool isBaseDb();
   }];
 }
 

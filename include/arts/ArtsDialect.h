@@ -30,6 +30,7 @@
 #include "arts/ArtsOpsDialect.h.inc"
 
 bool isArtsRegion(mlir::Operation *op);
+bool isArtsOp(mlir::Operation *op);
 //===----------------------------------------------------------------------===//
 // Arts Dialect Types
 //===----------------------------------------------------------------------===//

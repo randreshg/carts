@@ -7,7 +7,7 @@
 namespace mlir {
 namespace arts {
 
-void recursivelyRemoveUses(mlir::Operation *op) {
+void recursivelyRemoveOp(mlir::Operation *op) {
   /// Collect all dependent operations.
   llvm::SmallVector<mlir::Operation *, 8> toRemove;
   for (mlir::Value result : op->getResults()) {
@@ -17,10 +17,12 @@ void recursivelyRemoveUses(mlir::Operation *op) {
   }
 
   /// Remove dependent operations recursively.
-  for (mlir::Operation *userOp : toRemove) {
-    recursivelyRemoveUses(userOp);
-    userOp->erase();
-  }
+  for (mlir::Operation *userOp : toRemove)
+    recursivelyRemoveOp(userOp);
+
+  /// Remove the operation.
+  if (op)
+    op->erase();
 }
 
 void removeUndefOps(mlir::ModuleOp module) {
@@ -29,10 +31,8 @@ void removeUndefOps(mlir::ModuleOp module) {
   module.walk(
       [&](mlir::arts::UndefOp undefOp) { undefOps.push_back(undefOp); });
   /// Process each UndefOp and remove its dependent operations.
-  for (auto undefOp : undefOps) {
-    recursivelyRemoveUses(undefOp);
-    undefOp.erase();
-  }
+  for (auto undefOp : undefOps)
+    recursivelyRemoveOp(undefOp);
 }
 
 void replaceWithUndef(mlir::Operation *op, OpBuilder &builder) {

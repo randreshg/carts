@@ -1,8 +1,11 @@
-// clang taskwithdeps_arts.c -O3 -g0 -march=native -I/home/randres/projects/carts/.install/arts/include -o taskwithdeps_arts -L/home/randres/projects/carts/.install/arts/lib -larts -lrdmacm
+// clang taskwithdeps_arts.c -O3 -g0 -march=native
+// -I/home/randres/projects/carts/.install/arts/include -o taskwithdeps_arts
+// -L/home/randres/projects/carts/.install/arts/lib -larts -lrdmacm
 
-/// cgeist taskwithdeps_arts.c --memref-abi --memref-fullrank -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include -I/home/randres/projects/carts/.install/arts/include 
+/// cgeist taskwithdeps_arts.c --memref-abi --memref-fullrank -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include -I/home/randres/projects/carts/.install/arts/include & > taskwithdeps_arts.mlir
 
-/// cgeist taskwithdeps_arts.c -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include -I/home/randres/projects/carts/.install/arts/include --raise-scf-to-affine -emit-llvm
+/// cgeist taskwithdeps_arts.c -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include -I/home/randres/projects/carts/.install/arts/include --raise-scf-to-affine
+/// -emit-llvm
 
 #include "arts.h"
 #include "artsRT.h"
@@ -17,8 +20,8 @@ void computeA(uint32_t paramc, uint64_t *paramv, uint32_t depc,
   artsGuid_t eventGuid = (artsGuid_t)paramv[1];
 
   // Access the DataBlock for A[i]
-  double *A_i = ((double *)depv[0].ptr);
-  artsGuid_t A_i_guid = depv[0].guid;
+  double *A_i = (double *)artsGetPtrFromEdtDep(depv[0]);
+  artsGuid_t A_i_guid = artsGetGuidFromEdtDep(depv[0]);
 
   // Compute A[i]
   *A_i = i * 2.0;
@@ -26,7 +29,7 @@ void computeA(uint32_t paramc, uint64_t *paramv, uint32_t depc,
   printf("------------------------\n"
          "--- Compute A[%u] = %f - Guid: "
          "%lu\n------------------------\n",
-         i, A_i, A_i_guid);
+         i, *A_i, A_i_guid);
   // Signal the event associated with A[i] after computation
   artsEventSatisfySlot(eventGuid, A_i_guid, ARTS_EVENT_LATCH_DECR_SLOT);
 }
@@ -93,7 +96,7 @@ void parallelEdt(uint32_t paramc, uint64_t *paramv, uint32_t depc,
 
   /// Add values
   for (int i = 0; i < N; i++) {
-   *A_data[i] = i * 2.0;
+    *A_data[i] = i * 2.0;
     *B_data[i] = i * 2.0;
   }
   // artsDataBlock A_array[N], B_array[N];

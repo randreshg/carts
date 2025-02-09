@@ -50,6 +50,11 @@ void ArtsDialect::initialize() {
 #include "arts/ArtsOps.cpp.inc"
 
 bool isArtsRegion(Operation *op) { return isa<EdtOp>(op) || isa<EpochOp>(op); }
+bool isArtsOp(Operation *op) {
+  return isArtsRegion(op) || isa<DataBlockOp>(op) || isa<DataBlockSizeOp>(op) ||
+         isa<EventOp>(op);
+}
+
 //===----------------------------------------------------------------------===//
 // Arts Dialect Types - method definitions
 //===----------------------------------------------------------------------===//
@@ -248,3 +253,4 @@ void DataBlockOp::getEffects(
 }
 
 bool DataBlockOp::isLoad() { return getOperation()->hasAttr("isLoad"); }
+bool DataBlockOp::isBaseDb() { return getOperation()->hasAttr("baseIsDb"); }

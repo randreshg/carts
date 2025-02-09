@@ -9,7 +9,7 @@
 
 // Convert to LLVM IR
 /// cgeist 
-/// cgeist taskwithdeps.c -fopenmp -O3 --memref-abi --memref-fullrank -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include &> taskwithdeps.mlir
+/// cgeist taskwithdeps.c -fopenmp -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include &> taskwithdeps.mlir
 
 // Convert OpenMP to ARTS
 /// carts-opt taskwithdeps.mlir --convert-openmp-to-arts --cse --canonicalize &> taskwithdeps-arts.mlir
@@ -95,7 +95,12 @@ void compute() {
       }
     }
   }
-  printf("A[0] = %f\n", A[0]);
+
+  /// Print A and B
+  for(int i = 0; i < N; i++) {
+    printf("A[%d] = %f\n", i, A[i]);
+    printf("B[%d] = %f\n", i, B[i]);
+  }
 }
 
 
