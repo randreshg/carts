@@ -16,6 +16,7 @@
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Region.h"
+#include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Support/LLVM.h"
@@ -32,24 +33,45 @@ class ArtsCodegen;
 class DataBlockCodegen {
 public:
   DataBlockCodegen(ArtsCodegen &AC);
-  DataBlockCodegen(ArtsCodegen &AC, arts::DataBlockOp edtDep, Location loc);
+  DataBlockCodegen(ArtsCodegen &AC, arts::DataBlockOp dbOp, Location loc);
+
   /// Getters
-  Value getGuid() { return guid; }
-  Value getMemref() { return memref; }
+  Value getGuid() { return entryGuid ? entryGuid : guid; }
+  Value getMemref() { return entryMemref ? entryMemref : memref; }
   Value getNumElements() { return numElements; }
-  bool getIsArray() { return isArray; }
+  Type getElementType() { return elementType; }
+  Value getElementTypeSize() { return elementTypeSize; }
+  bool isBaseDb() { return baseIsDb; }
+  bool isArray() { return dbIsArray; }
+  Value getEntryGuid() { return entryGuid; }
+  Value getEntryMemref() { return entryMemref; }
+
+  /// Setters
+  void setEntryInfo(Value entryGuid, Value entryMemref) {
+    this->entryGuid = entryGuid;
+    this->entryMemref = entryMemref;
+  }
 
   /// Interface
-  void create(arts::DataBlockOp edtDep, Location loc);
+  void create(arts::DataBlockOp dbOp, Location loc);
+
+  /// Utils
+  void replaceUses();
 
 private:
   ArtsCodegen &AC;
   OpBuilder &builder;
+  DataBlockOp dbOp = nullptr;
   Value guid = nullptr;
   Value memref = nullptr;
   Value numElements = nullptr;
-  Value size = nullptr;
-  bool isArray = false;
+  Type elementType = nullptr;
+  Value elementTypeSize = nullptr;
+  bool baseIsDb = false;
+  bool dbIsArray = false;
+  /// Uses in entry
+  Value entryGuid = nullptr;
+  Value entryMemref = nullptr;
 
   /// Utils
   Value getMode(StringRef mode);
@@ -184,6 +206,7 @@ public:
   Value castToFloat(mlir::Type targetType, Value source, Location loc);
   Value castToInt(mlir::Type targetType, Value source, Location loc);
   Value castToPtr(Value source, Location loc);
+  Value castToLLVMPtr(Value source, MemRefType MT, Location loc);
 
   /// Insertion point
   void setInsertionPoint(Operation *op) { builder.setInsertionPoint(op); }

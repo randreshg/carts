@@ -72,7 +72,7 @@ public:
     Value baseMemref;
     SmallVector<Value, 4> offsets;
     SmallVector<Value, 4> sizes;
-    SmallVector<Value, 4> strides;
+    // SmallVector<Value, 4> strides;
     bool isLoad;
     bool baseIsDb;
     /// Analysis results

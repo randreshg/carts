@@ -11,7 +11,7 @@
 
 namespace mlir {
 namespace arts {
-void recursivelyRemoveUses(mlir::Operation *op);
+void recursivelyRemoveOp(mlir::Operation *op);
 void removeUndefOps(mlir::ModuleOp module);
 void replaceWithUndef(mlir::Operation *op, OpBuilder &builder);
 void replaceInRegion(mlir::Region &region, mlir::Value from, mlir::Value to);
