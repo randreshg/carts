@@ -7,6 +7,8 @@
 
 #include "arts/ArtsDialect.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Dominance.h"
+#include "mlir/IR/Operation.h"
 #include <optional>
 
 namespace mlir {
@@ -14,6 +16,8 @@ namespace arts {
 void recursivelyRemoveOp(mlir::Operation *op);
 void removeUndefOps(mlir::ModuleOp module);
 void replaceWithUndef(mlir::Operation *op, OpBuilder &builder);
+void replaceUses(mlir::Value from, mlir::Value to, DominanceInfo &domInfo,
+                 Operation *dominatingOp);
 void replaceInRegion(mlir::Region &region, mlir::Value from, mlir::Value to);
 void replaceInRegion(mlir::Region &region,
                      llvm::DenseMap<mlir::Value, mlir::Value> &rewireMap);

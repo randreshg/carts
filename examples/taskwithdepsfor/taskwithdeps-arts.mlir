@@ -15,15 +15,15 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
     %alloca_0 = memref.alloca() : memref<100xf64>
     %0 = call @rand() : () -> i32
     %1 = arith.remsi %0, %c100_i32 : i32
-    %2 = arts.datablock "inout", %alloca : memref<100xf64>[%c0] [%c100] [f64, %c8] -> memref<100xf64>
-    %3 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [f64, %c8] -> memref<100xf64>
+    %2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [f64, %c8] -> memref<100xf64>
+    %3 = arts.datablock "inout", %alloca : memref<100xf64>[%c0] [%c100] [f64, %c8] -> memref<100xf64>
     arts.edt dependencies(%2, %3) : (memref<100xf64>, memref<100xf64>) attributes {parallel} {
       arts.barrier
       arts.edt attributes {single} {
         %8 = arith.sitofp %1 : i32 to f64
         scf.for %arg0 = %c0 to %c100 step %c1 {
           %9 = arith.index_cast %arg0 : index to i32
-          %10 = arts.datablock "out", %3 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {isLoad}
+          %10 = arts.datablock "out", %2 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {isLoad}
           arts.edt dependencies(%10) : (memref<1xf64>) {
             %16 = arith.sitofp %9 : i32 to f64
             %17 = arith.addf %16, %8 : f64
@@ -32,16 +32,16 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
           }
           %11 = arith.addi %9, %c-1_i32 : i32
           %12 = arith.index_cast %11 : i32 to index
-          %13 = arts.datablock "in", %3 : memref<100xf64>[%12] [%c1] [f64, %c8] -> memref<1xf64> {isLoad}
-          %14 = arts.datablock "out", %2 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {isLoad}
-          %15 = arts.datablock "in", %3 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {isLoad}
+          %13 = arts.datablock "out", %3 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {isLoad}
+          %14 = arts.datablock "in", %2 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {isLoad}
+          %15 = arts.datablock "in", %2 : memref<100xf64>[%12] [%c1] [f64, %c8] -> memref<1xf64> {isLoad}
           arts.edt dependencies(%13, %14, %15) : (memref<1xf64>, memref<1xf64>, memref<1xf64>) {
-            %16 = memref.load %15[%c0] : memref<1xf64>
-            %17 = memref.load %13[%c0] : memref<1xf64>
+            %16 = memref.load %14[%c0] : memref<1xf64>
+            %17 = memref.load %15[%c0] : memref<1xf64>
             %18 = arith.cmpi sgt, %9, %c0_i32 : i32
             %19 = arith.select %18, %17, %cst : f64
             %20 = arith.addf %16, %19 : f64
-            memref.store %20, %14[%c0] : memref<1xf64>
+            memref.store %20, %13[%c0] : memref<1xf64>
             arts.yield
           }
         }
@@ -56,9 +56,9 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
     %7 = llvm.getelementptr %6[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<12 x i8>
     scf.for %arg0 = %c0 to %c100 step %c1 {
       %8 = arith.index_cast %arg0 : index to i32
-      %9 = memref.load %alloca_0[%arg0] : memref<100xf64>
+      %9 = memref.load %2[%arg0] : memref<100xf64>
       %10 = llvm.call @printf(%5, %8, %9) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, f64) -> i32
-      %11 = memref.load %alloca[%arg0] : memref<100xf64>
+      %11 = memref.load %3[%arg0] : memref<100xf64>
       %12 = llvm.call @printf(%7, %8, %11) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, f64) -> i32
     }
     return

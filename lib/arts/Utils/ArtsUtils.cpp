@@ -2,6 +2,7 @@
 /// File: ArtsUtils.cpp
 ///==========================================================================
 #include "arts/Utils/ArtsUtils.h"
+#include "mlir/Support/LLVM.h"
 #include "polygeist/Ops.h"
 
 namespace mlir {
@@ -46,6 +47,23 @@ void replaceWithUndef(mlir::Operation *op, OpBuilder &builder) {
         builder.create<mlir::arts::UndefOp>(op->getLoc(), result.getType());
     result.replaceAllUsesWith(undefOp.getResult());
   }
+}
+
+void replaceUses(mlir::Value from, mlir::Value to, DominanceInfo &domInfo,
+                 Operation *dominatingOp) {
+  /// Ensure that 'from' has a defining operation.
+  auto *definingOp = from.getDefiningOp();
+  if (!definingOp)
+    return;
+
+  /// Replace all uses of 'from' with 'to' if the user is dominated by the
+  /// defining operation of 'from'.
+  from.replaceUsesWithIf(to, [&](OpOperand &operand) {
+    if (operand.getOwner() == dominatingOp)
+      return false;
+
+    return domInfo.dominates(dominatingOp, operand.getOwner());
+  });
 }
 
 void replaceInRegion(Region &region, Value from, Value to) {
