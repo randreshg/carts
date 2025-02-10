@@ -15,17 +15,17 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
     %alloca_0 = memref.alloca() : memref<100xf64>
     %0 = call @rand() : () -> i32
     %1 = arith.remsi %0, %c100_i32 : i32
-    %2 = arts.datablock "inout", %alloca : memref<100xf64>[%c0] [%c100] [f64, %c8] -> memref<100xf64>
-    %3 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [f64, %c8] -> memref<100xf64>
+    %2 = arts.datablock "inout", %alloca_0 : memref<100xf64>[%c0] [%c100] [f64, %c8] -> memref<100xf64>
+    %3 = arts.datablock "inout", %alloca : memref<100xf64>[%c0] [%c100] [f64, %c8] -> memref<100xf64>
     arts.edt dependencies(%2, %3) : (memref<100xf64>, memref<100xf64>) attributes {parallel} {
       arts.barrier
       arts.edt attributes {single} {
-        %8 = arts.datablock_size %3 : memref<100xf64> -> index
+        %8 = arts.datablock_size %2 : memref<100xf64> -> index
         %9 = arts.event %8 {grouped} : memref<100xi64>
         %10 = arith.sitofp %1 : i32 to f64
         scf.for %arg0 = %c0 to %c100 step %c1 {
           %11 = arith.index_cast %arg0 : index to i32
-          %12 = arts.datablock "out", %3 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {baseIsDb, isLoad}
+          %12 = arts.datablock "out", %2 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {baseIsDb, isLoad}
           %13 = memref.load %9[%arg0] : memref<100xi64>
           arts.edt dependencies(%12) : (memref<1xf64>), events(%13) : (i64) {
             %20 = arith.sitofp %11 : i32 to f64
@@ -35,17 +35,17 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
           }
           %14 = arith.addi %11, %c-1_i32 : i32
           %15 = arith.index_cast %14 : i32 to index
-          %16 = arts.datablock "in", %3 : memref<100xf64>[%15] [%c1] [f64, %c8] -> memref<1xf64> {baseIsDb, isLoad}
-          %17 = arts.datablock "out", %2 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {baseIsDb, isLoad}
-          %18 = arts.datablock "in", %3 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {baseIsDb, isLoad}
+          %16 = arts.datablock "out", %3 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {baseIsDb, isLoad}
+          %17 = arts.datablock "in", %2 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {baseIsDb, isLoad}
+          %18 = arts.datablock "in", %2 : memref<100xf64>[%15] [%c1] [f64, %c8] -> memref<1xf64> {baseIsDb, isLoad}
           %19 = memref.load %9[%15] : memref<100xi64>
-          arts.edt dependencies(%16, %17, %18) : (memref<1xf64>, memref<1xf64>, memref<1xf64>), events(%19, %c-1_i32, %13) : (i64, i32, i64) {
-            %20 = memref.load %18[%c0] : memref<1xf64>
-            %21 = memref.load %16[%c0] : memref<1xf64>
+          arts.edt dependencies(%16, %17, %18) : (memref<1xf64>, memref<1xf64>, memref<1xf64>), events(%c-1_i32, %13, %19) : (i32, i64, i64) {
+            %20 = memref.load %17[%c0] : memref<1xf64>
+            %21 = memref.load %18[%c0] : memref<1xf64>
             %22 = arith.cmpi sgt, %11, %c0_i32 : i32
             %23 = arith.select %22, %21, %cst : f64
             %24 = arith.addf %20, %23 : f64
-            memref.store %24, %17[%c0] : memref<1xf64>
+            memref.store %24, %16[%c0] : memref<1xf64>
             arts.yield
           }
         }
@@ -60,9 +60,9 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
     %7 = llvm.getelementptr %6[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<12 x i8>
     scf.for %arg0 = %c0 to %c100 step %c1 {
       %8 = arith.index_cast %arg0 : index to i32
-      %9 = memref.load %alloca_0[%arg0] : memref<100xf64>
+      %9 = memref.load %2[%arg0] : memref<100xf64>
       %10 = llvm.call @printf(%5, %8, %9) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, f64) -> i32
-      %11 = memref.load %alloca[%arg0] : memref<100xf64>
+      %11 = memref.load %3[%arg0] : memref<100xf64>
       %12 = llvm.call @printf(%7, %8, %11) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, f64) -> i32
     }
     return

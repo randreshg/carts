@@ -14,6 +14,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "polygeist/Ops.h"
 /// Arts
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
@@ -26,6 +27,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypeInterfaces.h"
 #include "mlir/IR/Location.h"
+#include "mlir/IR/Operation.h"
 #include "mlir/IR/Region.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
@@ -174,12 +176,11 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
 
   /// Create a new DataBlockOp with an opaque pointer type
   auto sizes = op.getSizes();
-  bool isSingleElement = sizes.size() == 1 && [&]() {
+  bool isSingleElement = sizes.size() == 1 && [&] {
     if (auto constOp = sizes[0].getDefiningOp<arith::ConstantIndexOp>())
       return constOp.value() == 1;
     return false;
   }();
-
   auto pointerType = isSingleElement
                          ? AC->VoidPtr
                          : MemRefType::get({ShapedType::kDynamic}, AC->VoidPtr);
@@ -192,25 +193,34 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
   auto isSingleZeroOffset = [&](ValueRange indices) -> bool {
     if (indices.size() != 1)
       return false;
-    if (auto constOp = indices[0].getDefiningOp<arith::ConstantIndexOp>())
+    if (auto constOp = indices.front().getDefiningOp<arith::ConstantIndexOp>())
       return constOp.value() == 0;
     return false;
   };
 
   /// Helper lambda to compute the pointer based on the indices.
   auto MT = newDbOp.getType().cast<MemRefType>();
-  auto computePtr = [&](ValueRange indices, Location loc) -> Value {
-    return isSingleZeroOffset(indices)
-               ? AC->castToLLVMPtr(newDbOp, MT, loc)
-               : builder.create<LLVM::GEPOp>(loc, nullptr, newDbOp.getResult(),
-                                             indices);
+  auto computePtr = [&](ValueRange indices, Type elementType,
+                        Location loc) -> Value {
+    auto newPtr = AC->castToLLVMPtr(newDbOp, MT, loc);
+    if (isSingleZeroOffset(indices))
+      return newPtr;
+
+    /// Cast indices to int32
+    SmallVector<Value> newIndices;
+    newIndices.reserve(indices.size());
+    for (auto index : indices)
+      newIndices.push_back(AC->castToInt(AC->Int64, index, loc));
+    return builder
+        .create<LLVM::GEPOp>(loc, AC->llvmPtr, elementType, newPtr, newIndices)
+        .getResult();
   };
 
   /// Lambda to process load operations (for both memref::LoadOp and
   /// affine::AffineLoadOp).
   auto processLoad = [&](auto loadOp) {
     auto loc = loadOp.getLoc();
-    auto newPtr = computePtr(loadOp.getIndices(), loc);
+    auto newPtr = computePtr(loadOp.getIndices(), loadOp.getType(), loc);
     auto newLoad = builder
                        .create<LLVM::LoadOp>(
                            loc, loadOp.getMemRefType().getElementType(), newPtr)
@@ -223,7 +233,8 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
   /// affine::AffineStoreOp).
   auto processStore = [&](auto storeOp) {
     auto loc = storeOp.getLoc();
-    auto newPtr = computePtr(storeOp.getIndices(), loc);
+    auto newPtr = computePtr(storeOp.getIndices(),
+                             storeOp.getValueToStore().getType(), loc);
     builder.create<LLVM::StoreOp>(loc, storeOp.getValueToStore(), newPtr);
     storeOp.erase();
   };
@@ -237,12 +248,14 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
 
     /// memref.load or affine.load
     if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+      LLVM_DEBUG(DBGS() << "Processing memref.load: " << *loadOp << "\n");
       processLoad(loadOp);
     } else if (auto loadOp = dyn_cast<affine::AffineLoadOp>(user)) {
       processLoad(loadOp);
     }
     /// memref.store or affine.store
     else if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
+      LLVM_DEBUG(DBGS() << "Processing memref.store: " << *storeOp << "\n");
       processStore(storeOp);
     } else if (auto storeOp = dyn_cast<affine::AffineStoreOp>(user)) {
       processStore(storeOp);
@@ -256,11 +269,10 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
     /// EdtOp - fix dependencies.
     else if (auto edtOp = dyn_cast<arts::EdtOp>(user)) {
       for (auto dep : edtOp.getDependencies()) {
-        if (dep == op) {
+        if (dep == op)
           dep.replaceUsesWithIf(newDbOp.getResult(), [&](OpOperand &operand) {
             return operand.getOwner() == edtOp;
           });
-        }
       }
     }
     /// DbSizeOp - replace the uses with the new computed size.
@@ -276,7 +288,7 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
     }
   }
 
-  // AC->createDatablock(op, op.getLoc());
+  /// Mark the original datablock op for removal.
   opsToErase.insert(op);
 }
 

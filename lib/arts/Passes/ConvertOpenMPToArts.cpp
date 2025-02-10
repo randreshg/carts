@@ -246,16 +246,16 @@ static void createDatablocks(EdtEnvManager &edtEnv, PatternRewriter &rewriter) {
 
   edtEnv.clearDepsToProcess();
   edtEnv.adjust();
-  // edtEnv.print();
 
-  auto dependencies = edtEnv.getDependencies();
-  for (Value dep : dependencies) {
-    if (auto depOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp())) {
-      if (depOp.isLoad())
-        rewireDatablockUses(rewriter, region, depOp);
-      else
-        replaceInRegion(region, depOp.getBase(), depOp.getResult());
-    }
+  auto func = region.getParentOfType<func::FuncOp>();
+  DominanceInfo domInfo(func);
+  for (Value dep : edtEnv.getDependencies()) {
+    auto depOp = cast<arts::DataBlockOp>(dep.getDefiningOp());
+    LLVM_DEBUG(dbgs() << "Processing datablock: " << depOp << "\n");
+    if (depOp.isLoad())
+      rewireDatablockUses(rewriter, region, depOp);
+    else 
+      replaceUses(depOp.getBase(), depOp.getResult(), domInfo, depOp);
   }
 }
 

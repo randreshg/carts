@@ -475,6 +475,7 @@ void ArtsCodegen::initializeTypes() {
   VarName = LLVM::LLVMStructType::getLiteral(context, {__VA_ARGS__}, Packed);  \
   VarName##Ptr = MemRefType::get({ShapedType::kDynamic}, VarName);
 #include "arts/Codegen/ARTSKinds.def"
+  llvmPtr = LLVM::LLVMPointerType::get(context);
 }
 
 func::CallOp ArtsCodegen::createRuntimeCall(RuntimeFunction FnID,

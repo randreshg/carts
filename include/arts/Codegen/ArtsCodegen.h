@@ -229,6 +229,7 @@ public:
   LLVMStructType VarName = nullptr;                                            \
   MemRefType VarName##Ptr = nullptr;
 #include "ARTSKinds.def"
+  LLVMPointerType llvmPtr = nullptr;
   ///}
 private:
   void initializeTypes();
