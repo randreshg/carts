@@ -13,6 +13,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+
+void test(int N){
+
+    // Allocate arrays for DataBlocks and events
+  // double *A = (double *)artsMalloc(N * sizeof(double));
+  double A[N], B[N];
+  // double *B = (double *)artsMalloc(N * sizeof(double));
+  /// Initialize A with numbers from 0 to N-1
+  for (int i = 0; i < N; i++) {
+    A[i] = i;
+    B[i] = 0;
+  }
+}
+
 void computeA(uint32_t paramc, uint64_t *paramv, uint32_t depc,
               artsEdtDep_t depv[]) {
   // paramv[0] = i, paramv[1] = A[i] eventGuid

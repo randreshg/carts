@@ -128,13 +128,8 @@ __ARTS_FUNCTION_TYPE(EdtFn, Void, Int32, Int64Ptr, Int32, ArtsEdtDepPtr)
 
 /// int artsRT(int argc, char **argv);
 __ARTS_RTL(artsRT, Int32, Int32, Int8PtrPtr)
-/// void artsShutdown();
 __ARTS_RTL(artsShutdown, Void)
 __ARTS_RTL(artsMalloc, VoidPtr, SizeTy)
-// __ARTS_RTL(artsMallocAlign, VoidPtr, SizeTy, SizeTy)
-// __ARTS_RTL(artsCalloc, VoidPtr, SizeTy, )
-// __ARTS_RTL(artsCallocAlign, VoidPtr, SizeTy, SizeTy)
-// __ARTS_RTL(artsRealloc,  VoidPtr, VoidPtr, SizeTy)
 __ARTS_RTL(artsFree, Void, VoidPtr)
 // __ARTS_RTL(artsFreeAlign, Void, VoidPtr)
 
@@ -144,12 +139,6 @@ __ARTS_RTL(artsReserveGuidRoute, ArtsGuid, ArtsType, Int32)
 // __ARTS_RTL(artsGuidGetRank, Int32, ArtsGuid)
 // __ARTS_RTL(artsGuidGetType, ArtsType, ArtsGuid)
 // __ARTS_RTL(artsGuidCast, ArtsGuid, ArtsGuid, ArtsType)
-/// artsNewGuidRangeNode
-/// artsGetGuid
-/// artsGuidRangeNext
-/// artsGuidRangeHasNext
-/// artsGuidRangeResetIter
-/// artsReserveGuidsRoundRobin
 
 // ArtsGuid artsEdtCreate(artsEdt_t funcPtr, unsigned int route,
 ///                         uint32_t paramc, uint64_t *paramv, uint32_t depc);
@@ -187,22 +176,14 @@ __ARTS_RTL(artsSignalEdtPtr, Void, ArtsGuid, Int32, VoidPtr, Int32)
 // __ARTS_RTL(artsDbCreate, ArtsGuid, VoidPtrPtr, Int64, ArtsType)
 
 // ArtsGuid artsDbCreatePtr(ArtsPtr *addr, uint64_t size, ArtsType mode);
-__ARTS_RTL(artsDbCreatePtr, ArtsPtr, VoidPtr, Int32, ArtsType)
+// __ARTS_RTL(artsDbCreatePtr, ArtsPtr, VoidPtr, Int32, ArtsType)
 
-// void artsDbCreateArray(artsDataBlock *dbArray, uint64_t size,
-//                        ArtsType mode, unsigned int numElements,
-//                        void *data);
-__ARTS_RTL(artsDbCreateArray, Void, ArtsDbPtr, Int32, ArtsType, Int32, VoidPtr)
-// void artsDbCreateArrayFromDeps(artsDataBlock *dbArray,
-//                                unsigned int numElements,
-//                                artsEdtDep_t *deps, unsigned int initialSlot);
-__ARTS_RTL(artsDbCreateArrayFromDeps, Void, ArtsDbPtr, Int32, ArtsEdtDepPtr,
-           Int32)
-// void artsDbCreatePtrAndGuidArrayFromDeps(
-///     ArtsGuid *dbGuids, void **dbPtrs, unsigned int numElements,
-//      artsEdtDep_t *deps, unsigned int initialSlot);
-__ARTS_RTL(artsDbCreatePtrAndGuidArrayFromDeps, Void, ArtsGuidPtr, VoidPtrPtr,
-           Int32, ArtsEdtDepPtr, Int32)
+// void *artsDbCreateWithGuid(artsGuid_t guid, uint64_t size);
+__ARTS_RTL(artsDbCreateWithGuid, VoidPtr, ArtsGuid, Int64)
+
+// void *artsDbCreateWithGuidAndData(artsGuid_t guid, void *data,
+//                                   uint64_t size);
+__ARTS_RTL(artsDbCreateWithGuidAndData, VoidPtr, ArtsGuid, VoidPtr, Int64)
 
 /// epoch
 // ArtsGuid artsGetCurrentEpochGuid();
@@ -217,9 +198,9 @@ __ARTS_RTL(artsYield, Void)
 
 /// Util
 // ArtsGuid artsGetGuidFromDataBlock(artsDataBlock db);
-__ARTS_RTL(artsGetGuidFromDataBlock, ArtsGuid, ArtsDb)
+// __ARTS_RTL(artsGetGuidFromDataBlock, ArtsGuid, ArtsDb)
 // void *artsGetPtrFromDataBlock(artsDataBlock db);
-__ARTS_RTL(artsGetPtrFromDataBlock, VoidPtr, ArtsDb)
+// __ARTS_RTL(artsGetPtrFromDataBlock, VoidPtr, ArtsDb)
 // ArtsGuid artsGetGuidFromEdtDep(artsEdtDep_t dep);
 __ARTS_RTL(artsGetGuidFromEdtDep, ArtsGuid, ArtsEdtDep)
 // void *artsGetPtrFromEdtDep(artsEdtDep_t dep);
