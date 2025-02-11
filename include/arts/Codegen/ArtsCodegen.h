@@ -37,32 +37,32 @@ public:
 
   /// Getters
   Value getGuid() { return entryGuid ? entryGuid : guid; }
-  Value getMemref() { return entryMemref ? entryMemref : memref; }
+  Value getPtr() { return entryPtr ? entryPtr : memref; }
   Value getNumElements() { return numElements; }
   Type getElementType() { return elementType; }
   Value getElementTypeSize() { return elementTypeSize; }
   bool isBaseDb() { return baseIsDb; }
   bool isArray() { return dbIsArray; }
   Value getEntryGuid() { return entryGuid; }
-  Value getEntryMemref() { return entryMemref; }
+  Value getEntryPtr() { return entryPtr; }
 
   /// Setters
-  void setEntryInfo(Value entryGuid, Value entryMemref) {
+  void setEntryInfo(Value entryGuid, Value entryPtr) {
     this->entryGuid = entryGuid;
-    this->entryMemref = entryMemref;
+    this->entryPtr = entryPtr;
   }
 
   /// Interface
   void create(arts::DataBlockOp dbOp, Location loc);
 
-  /// Utils
-  void replaceUses();
-
 private:
   ArtsCodegen &AC;
   OpBuilder &builder;
   DataBlockOp dbOp = nullptr;
+  /// DataBlock info
   Value guid = nullptr;
+  Value ptr = nullptr;
+  /// Op info
   Value memref = nullptr;
   Value numElements = nullptr;
   Type elementType = nullptr;
@@ -71,9 +71,10 @@ private:
   bool dbIsArray = false;
   /// Uses in entry
   Value entryGuid = nullptr;
-  Value entryMemref = nullptr;
+  Value entryPtr = nullptr;
 
   /// Utils
+  Value createGuid(Value node, Value mode, Location loc);
   Value getMode(StringRef mode);
 };
 
@@ -199,9 +200,6 @@ public:
   /// Casting
   Value castParameter(mlir::Type targetType, Value source, Location loc);
   Value castPointer(mlir::Type targetType, Value source, Location loc);
-  Value castDependency(DataBlockCodegen *dbDep, Value source, Location loc);
-  Value castArrayDependency(DataBlockCodegen *dbDep, Value dbSize, Value source,
-                            Location loc);
   Value castToIndex(Value source, Location loc);
   Value castToFloat(mlir::Type targetType, Value source, Location loc);
   Value castToInt(mlir::Type targetType, Value source, Location loc);

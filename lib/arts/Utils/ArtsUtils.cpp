@@ -72,9 +72,19 @@ void replaceInRegion(Region &region, Value from, Value to) {
   });
 }
 
-void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap) {
+void replaceInRegion(Region &region, Value from, Value to,
+                     SetVector<Value> &ignoreSet) {
+  from.replaceUsesWithIf(to, [&](OpOperand &operand) {
+    if (ignoreSet.count(operand.get()))
+      return false;
+    return region.isAncestor(operand.getOwner()->getParentRegion());
+  });
+}
+
+void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap,
+                     SetVector<Value> &ignoreSet) {
   for (auto &rewire : rewireMap)
-    replaceInRegion(region, rewire.first, rewire.second);
+    replaceInRegion(region, rewire.first, rewire.second, ignoreSet);
 }
 
 std::optional<int64_t> computeConstant(Value val) {

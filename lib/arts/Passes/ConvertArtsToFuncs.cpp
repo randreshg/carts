@@ -290,6 +290,9 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
 
   /// Mark the original datablock op for removal.
   opsToErase.insert(op);
+
+  /// Create a new datablock codegen object.
+  AC->createDatablock(newDbOp, op->getLoc());
 }
 
 void ConvertArtsToFuncsPass::handleEvent(EventOp &op) {
@@ -307,18 +310,18 @@ void ConvertArtsToFuncsPass::iterateOps(Operation *operation) {
           handleDatablock(dbOp);
           return mlir::WalkResult::advance();
         }
-        // else if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
-        //   if (edtOp.isParallel())
-        //     handleParallel(edtOp);
-        //   else if (edtOp.isSingle())
-        //     handleSingle(edtOp);
-        //   else
-        //     handleEdt(edtOp);
-        //   return mlir::WalkResult::advance();
-        // } else if (auto eventOp = dyn_cast<arts::EventOp>(op)) {
-        //   handleEvent(eventOp);
-        //   return mlir::WalkResult::advance();
-        // }
+        else if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
+          if (edtOp.isParallel())
+            handleParallel(edtOp);
+          else if (edtOp.isSingle())
+            handleSingle(edtOp);
+          else
+            handleEdt(edtOp);
+          return mlir::WalkResult::advance();
+        } else if (auto eventOp = dyn_cast<arts::EventOp>(op)) {
+          handleEvent(eventOp);
+          return mlir::WalkResult::advance();
+        }
         return mlir::WalkResult::advance();
       });
 }

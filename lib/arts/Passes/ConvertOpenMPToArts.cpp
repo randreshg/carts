@@ -44,9 +44,11 @@ static DataBlockOp createDatablockOp(PatternRewriter &rewriter, Region &region,
                                      Location loc, StringRef mode,
                                      Value inputMemRef) {
   bool isLoad = false;
+  auto inputMemRefOp = inputMemRef.getDefiningOp();
+
   /// If input is a memref.load, get the base
   Value baseMemRef = inputMemRef;
-  if (auto loadOp = dyn_cast<memref::LoadOp>(inputMemRef.getDefiningOp())) {
+  if (auto loadOp = dyn_cast<memref::LoadOp>(inputMemRefOp)) {
     baseMemRef = loadOp.getMemref();
     isLoad = true;
   }
@@ -61,7 +63,7 @@ static DataBlockOp createDatablockOp(PatternRewriter &rewriter, Region &region,
 
   /// Indices pinned by load if present
   SmallVector<Value> pinnedIndices;
-  if (auto loadOp = dyn_cast<memref::LoadOp>(inputMemRef.getDefiningOp())) {
+  if (auto loadOp = dyn_cast<memref::LoadOp>(inputMemRefOp)) {
     pinnedIndices.assign(loadOp.getIndices().begin(),
                          loadOp.getIndices().end());
 
@@ -112,6 +114,8 @@ static DataBlockOp createDatablockOp(PatternRewriter &rewriter, Region &region,
   SmallVector<int64_t, 4> subShape(rank);
 
   OpBuilder::InsertionGuard g(rewriter);
+  if(inputMemRefOp)
+    rewriter.setInsertionPointAfter(inputMemRefOp);
 
   /// Compute dimension sizes for use in stride calculation
   SmallVector<Value> dimVals(rank);
@@ -255,7 +259,7 @@ static void createDatablocks(EdtEnvManager &edtEnv, PatternRewriter &rewriter) {
     if (depOp.isLoad())
       rewireDatablockUses(rewriter, region, depOp);
     else 
-      replaceUses(depOp.getBase(), depOp.getResult(), domInfo, depOp);
+      depOp.getBase().replaceAllUsesExcept(depOp.getResult(), depOp);
   }
 }
 

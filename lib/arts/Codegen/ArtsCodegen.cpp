@@ -87,51 +87,102 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
 
   /// Initialize numElements to 1
   numElements = builder.create<arith::ConstantIndexOp>(loc, 1);
+  auto currentNode = AC.getCurrentNode(loc);
+
+  bool isSingleSize = false;
+  /// If there is a single size, we value equal to '1', it is a single element
+  if (dbOp.getSizes().size() == 1) {
+    auto size = dbOp.getSizes().front();
+    if (auto cstOp = size.getDefiningOp<arith::ConstantIndexOp>()) {
+      if (cstOp.value() == 1)
+        isSingleSize = true;
+    }
+  }
 
   /// Handle the case of a single datablock
-  if (dbOp.isLoad()) {
+  if (dbOp.isLoad() || isSingleSize) {
     replaceNumElements(numElements);
 
-    /// If the memref is a DatablockOp, get the size from the datablock
+    /// If the base is a DB, load the value
     if (baseIsDb) {
-      auto dbBaseOp = dyn_cast<arts::DataBlockOp>(memref.getDefiningOp());
-      auto dbBase = AC.getDatablock(dbBaseOp);
-      assert(dbBase && "Datablock not found");
-      assert(dbBase->isArray() && "Datablock is not an array");
+      DataBlockCodegen *parentDb =
+          AC.getDatablock(dyn_cast<arts::DataBlockOp>(memref.getDefiningOp()));
+      assert(parentDb && "Parent datablock not found");
       guid = builder
-                 .create<memref::LoadOp>(loc, dbBase->getMemref(),
+                 .create<memref::LoadOp>(loc, parentDb->getGuid(),
                                          dbOp.getOffsets())
                  ->getResult(0);
+      ptr = builder
+                .create<memref::LoadOp>(loc, parentDb->getPtr(),
+                                        dbOp.getOffsets())
+                ->getResult(0);
       return;
     }
 
     /// If not, create a new datablock
-    guid = AC.createRuntimeCall(ARTSRTL_artsDbCreatePtr,
-                                {AC.castToPtr(memref, loc), elementTypeSize,
-                                 getMode(dbOp.getMode())},
-                                loc)
-               ->getResult(0);
+    auto modeVal = getMode(dbOp.getMode());
+    guid = createGuid(currentNode, modeVal, loc);
+    ptr =
+        AC.createRuntimeCall(
+              ARTSRTL_artsDbCreateWithGuidAndData,
+              {AC.castToPtr(memref, loc), elementTypeSize, modeVal, guid}, loc)
+            ->getResult(0);
+
     return;
   }
 
   /// If we hit this point, we are handling an array of datablocks
-  /// TODO: This not really true - We need to check if it really is an array
-  auto sizes = dbOp.getSizes();
-  assert(!sizes.empty() && "Datablock is not an array");
   dbIsArray = true;
 
   /// Multiply the sizes to get numElements.
+  auto sizes = dbOp.getSizes();
   for (Value sz : sizes)
     numElements = builder.create<arith::MulIOp>(loc, numElements, sz);
   replaceNumElements(numElements);
 
-  /// Create an array of Datablocks
-  guid = builder.create<memref::AllocaOp>(loc, AC.ArtsDbPtr, numElements);
-  AC.createRuntimeCall(ARTSRTL_artsDbCreateArray,
-                       {guid, elementTypeSize, getMode(dbOp.getMode()),
-                        AC.castToInt(AC.Int32, numElements, loc),
-                        AC.castToPtr(memref, loc)},
-                       loc);
+  /// Create an array of guids and pointers based on the sizes of the dbOp
+  auto modeVal = getMode(dbOp.getMode());
+  auto guidType = MemRefType::get(
+      std::vector<int64_t>(sizes.size(), ShapedType::kDynamic), AC.ArtsGuid);
+  guid = builder.create<memref::AllocaOp>(loc, guidType, sizes);
+  LLVM_DEBUG(dbgs() << "Created array of guids: " << guid << "\n");
+  auto ptrType = MemRefType::get(
+      std::vector<int64_t>(sizes.size(), ShapedType::kDynamic), AC.VoidPtr);
+  ptr = builder.create<memref::AllocaOp>(loc, ptrType, sizes);
+  LLVM_DEBUG(dbgs() << "Created array of datablocks\n");
+  /// Recursively create nested loops for each dimension
+  std::function<void(unsigned, SmallVector<Value, 4> &)> createNestedLoops =
+      [&](unsigned dim, SmallVector<Value, 4> &indices) {
+        if (dim == sizes.size()) {
+          auto guidVal = createGuid(currentNode, modeVal, loc);
+          auto tySize = AC.castToInt(AC.Int64, elementTypeSize, loc);
+          auto ptrVal =
+              AC.createRuntimeCall(ARTSRTL_artsDbCreateWithGuid,
+                                   {guidVal, tySize}, loc)
+                  ->getResult(0);
+          builder.create<memref::StoreOp>(loc, guidVal, guid, indices);
+          builder.create<memref::StoreOp>(loc, ptrVal, ptr, indices);
+          return;
+        }
+        /// Create loop for current dimension
+        auto lower = builder.create<arith::ConstantIndexOp>(loc, 0);
+        auto upper = sizes[dim];
+        auto step = builder.create<arith::ConstantIndexOp>(loc, 1);
+        auto loopOp = builder.create<scf::ForOp>(loc, lower, upper, step);
+        /// Set insertion point inside the loop body
+        auto &loopBlock = loopOp.getRegion().front();
+        builder.setInsertionPointToStart(&loopBlock);
+        /// Append the induction variable for the current dimension
+        indices.push_back(loopOp.getInductionVar());
+        /// Recurse to create the next level of loop
+        createNestedLoops(dim + 1, indices);
+        /// Remove the current induction variable and reset insertion point
+        indices.pop_back();
+        builder.setInsertionPointAfter(loopOp);
+      };
+
+  SmallVector<Value, 4> indices;
+  createNestedLoops(0, indices);
 }
 
 Value DataBlockCodegen::getMode(llvm::StringRef mode) {
@@ -146,54 +197,12 @@ Value DataBlockCodegen::getMode(llvm::StringRef mode) {
   return AC.createIntConstant(enumValue, AC.Int32, Loc);
 }
 
-void DataBlockCodegen::replaceUses() {
-  /// Walk all uses of the old datablock to properly replace it with the new
-  /// the new memref. Ignore uses in arts operations.
-  for (auto &use : llvm::make_early_inc_range(dbOp->getUses())) {
-    /// Set insertion point to the user
-    auto user = use.getOwner();
-    AC.setInsertionPoint(user);
-    auto loc = user->getLoc();
-
-    /// memref.load
-    if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
-      auto ptrVal = builder.create<memref::LoadOp>(
-          loadOp.getLoc(), dbOp.getResult(), ValueRange(loadOp.getIndices()));
-      auto c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
-      auto finalVal =
-          builder.create<memref::LoadOp>(loc, ptrVal, ValueRange{c0});
-      loadOp.getResult().replaceAllUsesWith(finalVal.getResult());
-      loadOp.erase();
-    }
-    /// affine.load
-    else if (auto loadOp = dyn_cast<affine::AffineLoadOp>(user)) {
-      llvm_unreachable("AffineLoadOp not supported yet");
-    }
-    /// memref.store
-    else if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
-      auto ptrVal = builder.create<memref::LoadOp>(
-          loc, dbOp.getResult(), ValueRange(storeOp.getIndices()));
-      auto c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
-      builder.create<memref::StoreOp>(loc, storeOp.getValueToStore(), ptrVal,
-                                      ValueRange{c0});
-      storeOp.erase();
-    }
-    /// affine.store
-    else if (auto storeOp = dyn_cast<affine::AffineStoreOp>(user)) {
-      llvm_unreachable("AffineStoreOp not supported yet");
-    }
-
-    /// Ignore uses in Arts operations, this will be handled later
-    else if (isArtsOp(user))
-      continue;
-
-    /// fallback
-    else {
-      LLVM_DEBUG(DBGS() << "Unknown use of datablock op: " << *user << "\n");
-      llvm_unreachable("Unknown use of datablock op");
-    }
-  }
+Value DataBlockCodegen::createGuid(Value node, Value mode, Location loc) {
+  auto reserveGuidCall =
+      AC.createRuntimeCall(ARTSRTL_artsReserveGuidRoute, {mode, node}, loc);
+  return reserveGuidCall.getResult(0);
 }
+
 // ---------------------------- EDTs ---------------------------- ///
 unsigned EdtCodegen::edtCounter = 0;
 
@@ -353,7 +362,11 @@ void EdtCodegen::createEntry(Location loc) {
   /// Insert the dependencies
   Value index = builder.create<arith::ConstantIndexOp>(loc, 0);
   Value oneIdx = builder.create<arith::ConstantIndexOp>(loc, 1);
+  SetVector<Value> ignoreSet;
   for (auto &dep : deps) {
+    /// Dont replace uses in datablock ops
+    ignoreSet.insert(dep);
+
     /// Get DataBlock
     auto oldDep = cast<DataBlockOp>(dep.getDefiningOp());
     auto *db = AC.getDatablock(oldDep);
@@ -366,9 +379,7 @@ void EdtCodegen::createEntry(Location loc) {
       auto [dbPtrArray, dbGuidArray] = AC.CreatePtrAndGuidArrayFromDeps(
           numElements, elementTy, fnDepV, index, loc);
       db->setEntryInfo(dbGuidArray, dbPtrArray);
-      /// Cast the dbPtrArray to the original type
-      // dbPtrArray = AC.castArrayDependency(db, numElements, dbPtrArray, loc);
-      // rewireMap[oldDep] = dbPtrArray;
+      rewireMap[oldDep] = dbPtrArray;
       /// Increment the index
       index =
           builder.create<arith::AddIOp>(loc, index, numElements).getResult();
@@ -383,11 +394,10 @@ void EdtCodegen::createEntry(Location loc) {
     db->setEntryInfo(entryGuid, entryMemref);
     /// Increment the index
     index = builder.create<arith::AddIOp>(loc, index, oneIdx).getResult();
-    /// Cast it back to the original type
-    // rewireMap[oldDep] = AC.castDependency(db, depPtr, loc);
+    rewireMap[oldDep] = entryMemref;
   }
 
-  replaceInRegion(*region, rewireMap);
+  replaceInRegion(*region, rewireMap, ignoreSet);
 }
 
 Value EdtCodegen::createGuid(Value node, Location loc) {
@@ -481,17 +491,15 @@ void ArtsCodegen::initializeTypes() {
 func::CallOp ArtsCodegen::createRuntimeCall(RuntimeFunction FnID,
                                             ArrayRef<Value> args,
                                             Location loc) {
-  /// Get or create the runtime function
   func::FuncOp func = getOrCreateRuntimeFunction(FnID);
   assert(func && "Runtime function should exist");
-  /// Create the call operation
-  func::CallOp call = builder.create<func::CallOp>(loc, func, args);
-  return call;
+  return builder.create<func::CallOp>(loc, func, args);
 }
 
 /// DataBlock
 DataBlockCodegen *ArtsCodegen::getDatablock(arts::DataBlockOp dbOp) {
-  assert(dbOp && "DatablockOp is null");
+  if (!dbOp)
+    return nullptr;
   auto it = datablocks.find(dbOp);
   return (it != datablocks.end()) ? it->second : nullptr;
 }
@@ -539,16 +547,6 @@ Value ArtsCodegen::createEpoch(Value finishEdtGuid, Value finishEdtSlot,
 }
 
 /// Utils
-Value ArtsCodegen::getGuidFromDb(Value db, Location loc) {
-  return createRuntimeCall(ARTSRTL_artsGetGuidFromDataBlock, {db}, loc)
-      .getResult(0);
-}
-
-Value ArtsCodegen::getPtrFromDb(Value db, Location loc) {
-  return createRuntimeCall(ARTSRTL_artsGetPtrFromDataBlock, {db}, loc)
-      .getResult(0);
-}
-
 Value ArtsCodegen::getGuidFromEdtDep(Value dep, Location loc) {
   return createRuntimeCall(ARTSRTL_artsGetGuidFromEdtDep, {dep}, loc)
       .getResult(0);
@@ -569,7 +567,10 @@ Value ArtsCodegen::getCurrentEdtGuid(Location loc) {
 }
 
 Value ArtsCodegen::getCurrentNode(Location loc) {
-  return createRuntimeCall(ARTSRTL_artsGetCurrentNode, {}, loc).getResult(0);
+  /// Add 'pure' attribute to the call
+  auto callOp = createRuntimeCall(ARTSRTL_artsGetCurrentNode, {}, loc);
+  // callOp->setAttr("llvm.sideeffect", builder.getUnitAttr());
+  return callOp.getResult(0);
 }
 
 Value ArtsCodegen::getNumDeps(SmallVector<Value> &deps, Location loc) {
@@ -584,37 +585,6 @@ Value ArtsCodegen::getNumDeps(SmallVector<Value> &deps, Location loc) {
         builder.create<arith::AddIOp>(loc, numDeps, numElements).getResult();
   }
   return numDeps;
-}
-
-Value ArtsCodegen::createArrayFromDeps(Value numElements, Value deps,
-                                       Value initialSlot, Location loc) {
-  /// Allocate an array of Datablocks
-  auto dbArray = builder.create<memref::AllocaOp>(loc, ArtsDbPtr, numElements);
-  /// Set info based on the deps
-  createRuntimeCall(ARTSRTL_artsDbCreateArrayFromDeps,
-                    {dbArray, numElements, deps, initialSlot}, loc);
-  return dbArray;
-}
-
-pair<Value, Value> ArtsCodegen::CreatePtrAndGuidArrayFromDeps(Value numElements,
-                                                              Type elemTy,
-                                                              Value deps,
-                                                              Value initialSlot,
-                                                              Location loc) {
-  /// Allocate an array of pointers and guids
-  MemRefType ptrTy = MemRefType::get({ShapedType::kDynamic}, elemTy);
-  auto arrayTy = MemRefType::get({ShapedType::kDynamic}, ptrTy);
-  auto ptrArray = builder.create<memref::AllocaOp>(loc, arrayTy, numElements);
-  auto guidArray = builder.create<memref::AllocaOp>(
-      loc, MemRefType::get({ShapedType::kDynamic}, ArtsGuid), numElements);
-  /// Set info based on the deps
-  createRuntimeCall(ARTSRTL_artsDbCreatePtrAndGuidArrayFromDeps,
-                    {guidArray, createPtr(ptrArray, loc),
-                     castToInt(Int32, numElements, loc), deps,
-                     castToInt(Int32, initialSlot, loc)},
-                    loc);
-
-  return {ptrArray, guidArray};
 }
 
 /// Helpers
@@ -684,52 +654,6 @@ Value ArtsCodegen::castPointer(mlir::Type targetType, Value source,
   auto valPtr = builder.create<polygeist::Memref2PointerOp>(
       loc, LLVM::LLVMPointerType::get(srcType), source);
   return builder.create<polygeist::Pointer2MemrefOp>(loc, targetType, valPtr);
-}
-
-Value ArtsCodegen::castDependency(DataBlockCodegen *dbDep, Value source,
-                                  Location loc) {
-  assert(!dbDep->isArray() && "Expected a single datablock");
-  return castPointer(dbDep->getMemref().getType(), source, loc);
-}
-
-Value ArtsCodegen::castArrayDependency(DataBlockCodegen *dbDep, Value dbSize,
-                                       Value source, Location loc) {
-  assert(dbDep->isArray() && "Expected array datablock");
-  auto dbMemref = dbDep->getMemref();
-  auto targetType = dbMemref.getType();
-
-  /// Get source and dest types
-  auto srcType = source.getType().dyn_cast<MemRefType>();
-  auto dstType = targetType.dyn_cast<MemRefType>();
-  assert((srcType && dstType) && "Expected memref type");
-  LLVM_DEBUG(dbgs() << "Cast array dependency from " << srcType << " to "
-                    << dstType << "\n");
-
-  /// New buffer
-  auto newBuffer = builder.create<memref::AllocOp>(loc, dstType, dbSize);
-  auto elementTy = dstType.getElementType();
-  auto elementMemrefTy = MemRefType::get({ShapedType::kDynamic}, elementTy);
-
-  LLVM_DEBUG(dbgs() << "New buffer: " << newBuffer << "\n");
-  /// Create a for loop that goes through each element of the array
-  /// and cast it to the new type
-  auto c0 = builder.create<arith::ConstantIndexOp>(loc, 0);
-  auto c1 = builder.create<arith::ConstantIndexOp>(loc, 1);
-  auto loop = builder.create<scf::ForOp>(loc, c0, dbSize, c1);
-  {
-    builder.setInsertionPointToStart(loop.getBody());
-    auto iv = loop.getInductionVar();
-    auto srcPtr = builder.create<memref::LoadOp>(loc, source, iv);
-    LLVM_DEBUG(dbgs() << "SrcPtr: " << srcPtr << "\n");
-    Value castPtr = castPointer(elementMemrefTy, srcPtr, loc);
-    LLVM_DEBUG(dbgs() << "CastPtr: " << castPtr << "\n");
-    // Value loadPtr = builder.create<memref::LoadOp>(loc, castPtr, c0);
-    // LLVM_DEBUG(dbgs() << "LoadPtr: " << loadPtr << "\n");
-
-    // builder.create<memref::StoreOp>(loc, loadPtr, newBuffer, iv);
-  }
-  builder.setInsertionPointAfter(loop);
-  return newBuffer;
 }
 
 Value ArtsCodegen::castToIndex(Value source, Location loc) {
