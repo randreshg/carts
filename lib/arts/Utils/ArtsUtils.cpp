@@ -66,25 +66,22 @@ void replaceUses(mlir::Value from, mlir::Value to, DominanceInfo &domInfo,
   });
 }
 
+void replaceUses(DenseMap<Value, Value> &rewireMap) {
+  for (auto &rewire : rewireMap)
+    rewire.first.replaceAllUsesWith(rewire.second);
+  rewireMap.clear();
+}
+
 void replaceInRegion(Region &region, Value from, Value to) {
   from.replaceUsesWithIf(to, [&](OpOperand &operand) {
     return region.isAncestor(operand.getOwner()->getParentRegion());
   });
 }
 
-void replaceInRegion(Region &region, Value from, Value to,
-                     SetVector<Value> &ignoreSet) {
-  from.replaceUsesWithIf(to, [&](OpOperand &operand) {
-    if (ignoreSet.count(operand.get()))
-      return false;
-    return region.isAncestor(operand.getOwner()->getParentRegion());
-  });
-}
-
-void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap,
-                     SetVector<Value> &ignoreSet) {
+void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap) {
   for (auto &rewire : rewireMap)
-    replaceInRegion(region, rewire.first, rewire.second, ignoreSet);
+    replaceInRegion(region, rewire.first, rewire.second);
+  rewireMap.clear();
 }
 
 std::optional<int64_t> computeConstant(Value val) {

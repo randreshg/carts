@@ -51,8 +51,7 @@ void ArtsDialect::initialize() {
 
 bool isArtsRegion(Operation *op) { return isa<EdtOp>(op) || isa<EpochOp>(op); }
 bool isArtsOp(Operation *op) {
-  return isArtsRegion(op) || isa<DataBlockOp>(op) || isa<DataBlockSizeOp>(op) ||
-         isa<EventOp>(op);
+  return isArtsRegion(op) || isa<DataBlockOp>(op) || isa<EventOp>(op);
 }
 
 //===----------------------------------------------------------------------===//
@@ -222,13 +221,13 @@ bool EdtOp::isSingle() { return getOperation()->hasAttr("single"); }
 //===----------------------------------------------------------------------===//
 // EventOp
 //===----------------------------------------------------------------------===//
-void EventOp::build(OpBuilder &builder, OperationState &state, Type type,
-                    Value size, bool isGrouped) {
-  state.addOperands(size);
-  state.addTypes(type);
-  if (isGrouped)
-    state.addAttribute("grouped", builder.getUnitAttr());
-}
+// void EventOp::build(OpBuilder &builder, OperationState &state, Type type,
+//                     Value size, bool isGrouped) {
+//   state.addOperands(size);
+//   state.addTypes(type);
+//   if (isGrouped)
+//     state.addAttribute("grouped", builder.getUnitAttr());
+// }
 
 //===----------------------------------------------------------------------===//
 // DataBlockOp
