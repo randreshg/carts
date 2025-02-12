@@ -65,6 +65,7 @@ struct ConvertArtsToFuncsPass
   void runOnOperation() override;
 
   /// Arts operations
+  void iterateDbs(ModuleOp module);
   void iterateOps(Operation *op);
   void handleParallel(EdtOp &op);
   void handleSingle(EdtOp &op);
@@ -80,7 +81,7 @@ private:
 } // end namespace
 
 void ConvertArtsToFuncsPass::handleParallel(EdtOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.edt parallel\n" << op << "\n" << line);
+  LLVM_DEBUG(DBGS() << "Lowering arts.edt parallel\n" << line);
   auto *ctx = op.getContext();
   Location loc = UnknownLoc::get(ctx);
 
@@ -123,7 +124,6 @@ void ConvertArtsToFuncsPass::handleParallel(EdtOp &op) {
         AC->createEpoch(parDoneEdt.getGuid(), parDone_slot, loc);
 
     /// Create the parallel EDT with the single op's region.
-    LLVM_DEBUG(DBGS() << "Creating parallel EDT: " << singleOp << "\n");
     auto par_deps = op.getDeps();
     newEdt =
         AC->createEdt(&par_deps, &singleRegion, &parEpoch_guid, nullptr, true);
@@ -140,14 +140,14 @@ void ConvertArtsToFuncsPass::handleParallel(EdtOp &op) {
 }
 
 void ConvertArtsToFuncsPass::handleSingle(EdtOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.edt: " << op << "\n");
+  LLVM_DEBUG(DBGS() << "Lowering arts.edt single\n");
   llvm_unreachable("Single EDTs not supported yet");
 }
 
 void ConvertArtsToFuncsPass::handleEdt(EdtOp &op) {
   auto *ctx = op.getContext();
   Location loc = UnknownLoc::get(ctx);
-  LLVM_DEBUG(DBGS() << "Lowering arts.edt: " << op << "\n");
+  LLVM_DEBUG(DBGS() << "Lowering arts.edt\n");
   EdtCodegen *newEdt = nullptr;
   {
     OpBuilder::InsertionGuard guard(AC->getBuilder());
@@ -165,12 +165,11 @@ void ConvertArtsToFuncsPass::handleEdt(EdtOp &op) {
 
   /// Visit new function
   assert(newEdt && "New EDT not created");
-  LLVM_DEBUG(DBGS() << "New function: " << newEdt->getFunc() << "\n");
   iterateOps(newEdt->getFunc());
 }
 
 void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.datablock: " << op << "\n");
+  LLVM_DEBUG(DBGS() << "Lowering arts.datablock\n");
   AC->setInsertionPoint(op);
   auto &builder = AC->getBuilder();
 
@@ -248,14 +247,12 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
 
     /// memref.load or affine.load
     if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
-      LLVM_DEBUG(DBGS() << "Processing memref.load: " << *loadOp << "\n");
       processLoad(loadOp);
     } else if (auto loadOp = dyn_cast<affine::AffineLoadOp>(user)) {
       processLoad(loadOp);
     }
     /// memref.store or affine.store
     else if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
-      LLVM_DEBUG(DBGS() << "Processing memref.store: " << *storeOp << "\n");
       processStore(storeOp);
     } else if (auto storeOp = dyn_cast<affine::AffineStoreOp>(user)) {
       processStore(storeOp);
@@ -274,25 +271,19 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
             return operand.getOwner() == edtOp;
           });
       }
-    }
-    /// DbSizeOp - replace the uses with the new computed size.
-    else if (auto dbSizeOp = dyn_cast<arts::DataBlockSizeOp>(user)) {
-      dbSizeOp.getDatablock().replaceUsesWithIf(
-          newDbOp.getResult(),
-          [&](OpOperand &operand) { return operand.getOwner() == dbSizeOp; });
-    }
-    /// fallback
-    else {
+    } else {
       LLVM_DEBUG(DBGS() << "Unknown use of datablock op: " << *user << "\n");
       llvm_unreachable("Unknown use of datablock op");
     }
   }
 
-  /// Mark the original datablock op for removal.
-  opsToErase.insert(op);
-
   /// Create a new datablock codegen object.
   AC->createDatablock(newDbOp, op->getLoc());
+
+  /// Mark dbs for removal.
+  opsToErase.insert(op);
+  opsToErase.insert(newDbOp.getBase().getDefiningOp());
+  opsToErase.insert(newDbOp);
 }
 
 void ConvertArtsToFuncsPass::handleEvent(EventOp &op) {
@@ -309,8 +300,7 @@ void ConvertArtsToFuncsPass::iterateOps(Operation *operation) {
         if (auto dbOp = dyn_cast<arts::DataBlockOp>(op)) {
           handleDatablock(dbOp);
           return mlir::WalkResult::advance();
-        }
-        else if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
+        } else if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
           if (edtOp.isParallel())
             handleParallel(edtOp);
           else if (edtOp.isSingle())
@@ -325,6 +315,33 @@ void ConvertArtsToFuncsPass::iterateOps(Operation *operation) {
         return mlir::WalkResult::advance();
       });
 }
+
+// void ConvertArtsToFuncsPass::iterateDbs(ModuleOp module) {
+//   module->walk<mlir::WalkOrder::PreOrder>(
+//       [&](Operation *op) -> mlir::WalkResult {
+//         /// Skip operations marked for removal.
+//         if (opsToErase.count(op))
+//           return mlir::WalkResult::skip();
+
+//         if (auto dbOp = dyn_cast<arts::DataBlockOp>(op)) {
+//           handleDatablock(dbOp);
+//           return mlir::WalkResult::advance();
+//         }
+//         else if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
+//           if (edtOp.isParallel())
+//             handleParallel(edtOp);
+//           else if (edtOp.isSingle())
+//             handleSingle(edtOp);
+//           else
+//             handleEdt(edtOp);
+//           return mlir::WalkResult::advance();
+//         } else if (auto eventOp = dyn_cast<arts::EventOp>(op)) {
+//           handleEvent(eventOp);
+//           return mlir::WalkResult::advance();
+//         }
+//         return mlir::WalkResult::advance();
+//       });
+// }
 
 void ConvertArtsToFuncsPass::removeOps(mlir::ModuleOp module) {
   for (auto op : opsToErase) {

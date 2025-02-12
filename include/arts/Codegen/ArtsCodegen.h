@@ -18,6 +18,7 @@
 #include "mlir/IR/Region.h"
 #include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
+#include "mlir/IR/ValueRange.h"
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -38,18 +39,24 @@ public:
   /// Getters
   Value getGuid() { return entryGuid ? entryGuid : guid; }
   Value getPtr() { return entryPtr ? entryPtr : memref; }
-  Value getNumElements() { return numElements; }
   Type getElementType() { return elementType; }
   Value getElementTypeSize() { return elementTypeSize; }
   bool isBaseDb() { return baseIsDb; }
   bool isArray() { return dbIsArray; }
   Value getEntryGuid() { return entryGuid; }
   Value getEntryPtr() { return entryPtr; }
+  DenseMap<unsigned, unsigned> &getEntrySizes() { return entrySizes; }
+  ValueRange getOffsets() { return dbOp.getOffsets(); }
+  ValueRange getSizes() { return dbOp.getSizes(); }
 
   /// Setters
   void setEntryInfo(Value entryGuid, Value entryPtr) {
     this->entryGuid = entryGuid;
     this->entryPtr = entryPtr;
+  }
+
+  void insertEntrySize(unsigned sizeIndex, unsigned paramIndex) {
+    entrySizes[sizeIndex] = paramIndex;
   }
 
   /// Interface
@@ -64,7 +71,6 @@ private:
   Value ptr = nullptr;
   /// Op info
   Value memref = nullptr;
-  Value numElements = nullptr;
   Type elementType = nullptr;
   Value elementTypeSize = nullptr;
   bool baseIsDb = false;
@@ -72,6 +78,8 @@ private:
   /// Uses in entry
   Value entryGuid = nullptr;
   Value entryPtr = nullptr;
+  /// Maps a size index to the index of the parameter in the EDT user entry
+  DenseMap<unsigned, unsigned> entrySizes;
 
   /// Utils
   Value createGuid(Value node, Value mode, Location loc);
@@ -125,10 +133,6 @@ private:
   SmallVector<Value> deps;
   SmallVector<Value> params;
   SmallVector<Value> consts;
-  /// There are cases where we the size of a db is needed, this is stored as a
-  /// parameter, so we need to keep track of it. - Create a map, the key is
-  /// the datablock, the value is the index of the parameter
-  DenseMap<DataBlockCodegen *, unsigned> dbSizeMap;
 
   /// Utils
   void processDepsAndParams(SmallVector<Value> *deps, Location loc);
@@ -183,13 +187,8 @@ public:
   Value getCurrentEpochGuid(Location loc);
   Value getCurrentEdtGuid(Location loc);
   Value getCurrentNode(Location loc);
-  Value getNumDeps(SmallVector<Value> &deps, Location loc);
   Value createArrayFromDeps(Value numElements, Value deps, Value initialSlot,
                             Location loc);
-  pair<Value, Value> CreatePtrAndGuidArrayFromDeps(Value numElements,
-                                                   Type elemTy, Value deps,
-                                                   Value initialSlot,
-                                                   Location loc);
 
   /// Helpers
   Value createFnPtr(func::FuncOp funcOp, Location loc);
@@ -244,7 +243,8 @@ private:
   llvm::DenseMap<Value, DataBlockCodegen *> datablocks;
   /// Map an arts region to a EdtCodegen
   llvm::DenseMap<Region *, EdtCodegen *> edts;
-  // Add more types as necessary
+  /// Maps an entry datablock pointer to its DataBlockCodegen object
+  DenseMap<Value, DataBlockCodegen *> rewiredDbs;
 };
 
 } // namespace arts

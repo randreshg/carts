@@ -20,32 +20,31 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
     arts.edt dependencies(%0, %1) : (memref<100xf64>, memref<100xf64>) attributes {parallel} {
       arts.barrier
       arts.edt attributes {single} {
-        %8 = arts.datablock_size %1 : memref<100xf64> -> index
-        %9 = arts.event %8 {grouped} : memref<100xi64>
-        %10 = arith.sitofp %3 : i32 to f64
+        %8 = arts.event[%c100] -> : memref<100xi64>
+        %9 = arith.sitofp %3 : i32 to f64
         scf.for %arg0 = %c0 to %c100 step %c1 {
-          %11 = arith.index_cast %arg0 : index to i32
-          %12 = arts.datablock "out", %1 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {baseIsDb, isLoad}
-          %13 = memref.load %9[%arg0] : memref<100xi64>
-          arts.edt dependencies(%12) : (memref<1xf64>), events(%13) : (i64) {
-            %20 = arith.sitofp %11 : i32 to f64
-            %21 = arith.addf %20, %10 : f64
-            memref.store %21, %12[%c0] : memref<1xf64>
+          %10 = arith.index_cast %arg0 : index to i32
+          %11 = arts.datablock "out", %1 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {baseIsDb, isLoad}
+          %12 = memref.load %8[%arg0] : memref<100xi64>
+          arts.edt dependencies(%11) : (memref<1xf64>), events(%12) : (i64) {
+            %19 = arith.sitofp %10 : i32 to f64
+            %20 = arith.addf %19, %9 : f64
+            memref.store %20, %11[%c0] : memref<1xf64>
             arts.yield
           }
-          %14 = arts.datablock "in", %1 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {baseIsDb, isLoad}
-          %15 = arith.addi %11, %c-1_i32 : i32
-          %16 = arith.index_cast %15 : i32 to index
-          %17 = arts.datablock "in", %1 : memref<100xf64>[%16] [%c1] [f64, %c8] -> memref<1xf64> {baseIsDb, isLoad}
-          %18 = arts.datablock "out", %0 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {baseIsDb, isLoad}
-          %19 = memref.load %9[%16] : memref<100xi64>
-          arts.edt dependencies(%17, %18, %14) : (memref<1xf64>, memref<1xf64>, memref<1xf64>), events(%19, %c-1_i32, %13) : (i64, i32, i64) {
-            %20 = memref.load %14[%c0] : memref<1xf64>
-            %21 = memref.load %17[%c0] : memref<1xf64>
-            %22 = arith.cmpi sgt, %11, %c0_i32 : i32
-            %23 = arith.select %22, %21, %cst : f64
-            %24 = arith.addf %20, %23 : f64
-            memref.store %24, %18[%c0] : memref<1xf64>
+          %13 = arts.datablock "in", %1 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {baseIsDb, isLoad}
+          %14 = arith.addi %10, %c-1_i32 : i32
+          %15 = arith.index_cast %14 : i32 to index
+          %16 = arts.datablock "in", %1 : memref<100xf64>[%15] [%c1] [f64, %c8] -> memref<1xf64> {baseIsDb, isLoad}
+          %17 = arts.datablock "out", %0 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {baseIsDb, isLoad}
+          %18 = memref.load %8[%15] : memref<100xi64>
+          arts.edt dependencies(%16, %17, %13) : (memref<1xf64>, memref<1xf64>, memref<1xf64>), events(%18, %c-1_i32, %12) : (i64, i32, i64) {
+            %19 = memref.load %13[%c0] : memref<1xf64>
+            %20 = memref.load %16[%c0] : memref<1xf64>
+            %21 = arith.cmpi sgt, %10, %c0_i32 : i32
+            %22 = arith.select %21, %20, %cst : f64
+            %23 = arith.addf %19, %22 : f64
+            memref.store %23, %17[%c0] : memref<1xf64>
             arts.yield
           }
         }

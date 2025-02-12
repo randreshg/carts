@@ -179,24 +179,21 @@ struct CreateArtsEventsPass
           auto dbParent =
               cast<DataBlockOp>(producerNode.baseMemref.getDefiningOp());
           auto &dbParentNode = dbAnalysis.getNode(dbParent);
-          /// Create event with computed numElements.
-          Value numElements = builder
-                                  .create<arts::DataBlockSizeOp>(
-                                      loc, dbParentNode.op.getResult())
-                                  .getResult();
+          /// Create event
           auto type = MemRefType::get(dbParentNode.op.getType().getShape(),
                                       builder.getIntegerType(64));
-          auto event =
-              builder.create<arts::EventOp>(loc, type, numElements, true);
+          auto eventOp = builder.create<arts::EventOp>(
+              loc, type, dbParentNode.op.getSizes());
           /// Insert event load for the producer.
-          auto defEvent = loadEventToMap(producerNode, event.getResult(), loc);
+          auto defEvent =
+              loadEventToMap(producerNode, eventOp.getResult(), loc);
           /// Insert event load for each consumer in the edge list.
           for (const auto &edge : edges) {
             auto &consumer = graph.nodes[edge.consumerID];
             if (edge.isDirect)
               edtToEvents[consumer.edtUser][consumer.edtDepId] = defEvent;
             else
-              loadEventToMap(consumer, event.getResult(), loc);
+              loadEventToMap(consumer, eventOp.getResult(), loc);
           }
         } else {
           /// For non-grouped events, expect a single edge.
@@ -205,10 +202,10 @@ struct CreateArtsEventsPass
           auto loc = producerNode.op.getLoc();
           builder.setInsertionPoint(producerNode.op);
           /// Create event.
-          Value numElements = builder.create<arith::ConstantIndexOp>(loc, 1);
+          // Value numElements = builder.create<arith::ConstantIndexOp>(loc, 1);
           auto type = producerNode.op.getResult().getType();
-          auto eventOp =
-              builder.create<arts::EventOp>(loc, type, numElements, false);
+          auto eventOp = builder.create<arts::EventOp>(
+              loc, type, producerNode.op.getSizes());
           /// Insert event load for the producer.
           loadEventToMap(producerNode, eventOp.getResult(), loc);
         }

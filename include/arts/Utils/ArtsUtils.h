@@ -18,12 +18,10 @@ void removeUndefOps(mlir::ModuleOp module);
 void replaceWithUndef(mlir::Operation *op, OpBuilder &builder);
 void replaceUses(mlir::Value from, mlir::Value to, DominanceInfo &domInfo,
                  Operation *dominatingOp);
+void replaceUses(llvm::DenseMap<mlir::Value, mlir::Value> &rewireMap);
 void replaceInRegion(mlir::Region &region, mlir::Value from, mlir::Value to);
-void replaceInRegion(mlir::Region &region, mlir::Value from, mlir::Value to,
-                     SetVector<Value> &ignoreSet);
 void replaceInRegion(mlir::Region &region,
-                     llvm::DenseMap<mlir::Value, mlir::Value> &rewireMap,
-                     SetVector<Value> &ignoreSet);
+                     llvm::DenseMap<mlir::Value, mlir::Value> &rewireMap);
 std::optional<int64_t> computeConstant(Value val);
 int64_t tryParseIndexConstant(Value val);
 } // namespace arts

@@ -31,8 +31,8 @@ EdtEnvManager::EdtEnvManager(PatternRewriter &rewriter, Region &region)
 EdtEnvManager::~EdtEnvManager() {}
 
 void EdtEnvManager::naiveCollection(bool ignoreDeps) {
-  LLVM_DEBUG(dbgs() << line
-                    << "Naive collection of parameters and dependencies: \n");
+  // LLVM_DEBUG(dbgs() << line
+  //                   << "Naive collection of parameters and dependencies: \n");
   /// Ignore collecting dependencies if there are already depsToProcess
   /// This is the case of omp tasks
   if (!depsToProcess.empty())
@@ -58,10 +58,10 @@ void EdtEnvManager::naiveCollection(bool ignoreDeps) {
     if (operand.getType().isIntOrIndexOrFloat()) {
       if (isConstant(operand))
         continue;
-      LLVM_DEBUG(dbgs() << "  Adding parameter: " << operand << "\n");
+      // LLVM_DEBUG(dbgs() << "  Adding parameter: " << operand << "\n");
       parameters.insert(operand);
     } else if (!ignoreDeps) {
-      LLVM_DEBUG(dbgs() << "  Adding dependency: " << operand << "\n");
+      // LLVM_DEBUG(dbgs() << "  Adding dependency: " << operand << "\n");
       depsToProcess[operand] = "inout";
     }
   }

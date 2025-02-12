@@ -55,7 +55,8 @@ def AllocOp : Arts_Op<"alloc", []> {
 //===----------------------------------------------------------------------===//
 // arts.datablock
 //===----------------------------------------------------------------------===//
-def DataBlockOp : Arts_Op<"datablock", [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, AttrSizedOperandSegments]> {
+def DataBlockOp : Arts_Op<"datablock", 
+  [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, AttrSizedOperandSegments]> {
   let summary = "Creates a subview dependency for arts.edt or arts.parallel";
   let arguments = (ins
     StrAttr:$mode,                        // Dependency mode (e.g., "in", "out")
@@ -78,22 +79,6 @@ def DataBlockOp : Arts_Op<"datablock", [DeclareOpInterfaceMethods<MemoryEffectsO
     bool isLoad();
     bool isBaseDb();
   }];
-}
-
-//===----------------------------------------------------------------------===//
-// arts.datablock_size
-//===----------------------------------------------------------------------===//
-def DataBlockSizeOp: Arts_Op<"datablock_size", [Pure]> {
-  let summary = "Computes the total number of elements in a datablock subview.";
-  let arguments = (ins AnyMemRef:$datablock);
-  let results = (outs Index:$size);
-  let assemblyFormat = "$datablock `:` type($datablock) `->` type($size) attr-dict";
-  let builders = [
-    OpBuilder<(ins "Value":$datablock), [{
-      $_state.addOperands(datablock);
-      $_state.addTypes(mlir::IndexType::get($_builder.getContext()));
-    }]>
-  ];
 }
 
 //===----------------------------------------------------------------------===//
@@ -144,19 +129,17 @@ def EventOp : Arts_Op<"event", []> {
   let description = [{
     The `arts.event` operation creates an event (or array of events) that can be
     used for inter-loop or cross-task dependencies within the ARTS dialect.
-    The `size` operand is an index that determines how many individual events
-    to allocate (use 1 if creating a single event).
   }];
 
-  let arguments = (ins Index:$size);
+  let arguments = (ins Variadic<Index>:$sizes);
   let results = (outs AnyMemRef:$event);
   let assemblyFormat = [{
-    $size attr-dict `:` type($event)
+    `[` $sizes `]` `->` attr-dict `:` type($event)
   }];
   
-  let builders = [
-    OpBuilder<(ins "Type":$type, "Value":$size, "bool":$isGrouped)>, 
-  ];
+  // let builders = [
+  //   // OpBuilder<(ins "Type":$type, "ValueRange":$sizes, "bool":$isGrouped)>, 
+  // ];
 
 }
 
