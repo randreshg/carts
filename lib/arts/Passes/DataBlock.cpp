@@ -1,4 +1,6 @@
-
+///==========================================================================
+/// File: DataBlock.cpp
+///==========================================================================
 #include "arts/Analysis/DataBlockAnalysis.h"
 
 /// Arts
@@ -34,7 +36,8 @@ using namespace mlir::polygeist;
 using namespace mlir::arts;
 
 namespace {
-// /// Keep this in mind to analyze dependencies
+
+/// Keep this in mind to analyze dependencies
 // static DataBlockOp createDatablockOp(PatternRewriter &rewriter, Region &region,
 //                                      Location loc, StringRef mode,
 //                                      Value inputMemRef) {
@@ -43,11 +46,11 @@ namespace {
 
 //   /// If the defining operation is a load op obtain the base memref and
 //   /// pinned indices.
-//   Value baseMemRef;
+//   Value basePtr;
 //   SmallVector<Value> pinnedIndices;
 //   AffineMap affineMap;
 //   if (auto loadOp = dyn_cast<memref::LoadOp>(inputMemRefOp)) {
-//     baseMemRef = loadOp.getMemref();
+//     basePtr = loadOp.getMemref();
 //     pinnedIndices.assign(loadOp.getIndices().begin(),
 //                          loadOp.getIndices().end());
 //     affineMap = AffineMap::getMultiDimIdentityMap(pinnedIndices.size(),
@@ -55,17 +58,17 @@ namespace {
 //     isLoad = true;
 //   } else if (auto affineLoadOp =
 //                  dyn_cast<affine::AffineLoadOp>(inputMemRefOp)) {
-//     baseMemRef = affineLoadOp.getMemref();
+//                   basePtr = affineLoadOp.getMemref();
 //     pinnedIndices.assign(affineLoadOp.getIndices().begin(),
 //                          affineLoadOp.getIndices().end());
 //     affineMap = affineLoadOp.getAffineMap();
 //     isLoad = true;
 //   } else {
-//     baseMemRef = inputMemRef;
+//     basePtr = inputMemRef;
 //   }
 
 //   /// Ensure the input memref is of type MemRefType.
-//   auto baseType = baseMemRef.getType().dyn_cast<MemRefType>();
+//   auto baseType = basePtr.getType().dyn_cast<MemRefType>();
 //   assert(baseType && "Input must be a MemRefType.");
 
 //   /// Compute the rank and verify it is positive.
@@ -104,8 +107,8 @@ namespace {
 
 //       /// Process all loads/stores in the region but first check if the base
 //       /// memref matches
-//       auto processOp = [&](Operation *op, Value memref, ValueRange indices) {
-//         if (memref == baseMemRef)
+//       auto processOp = [&](Operation *op, Value ptr, ValueRange indices) {
+//         if (ptr == basePtr)
 //           checkIndices(indices);
 //       };
 
@@ -159,7 +162,7 @@ namespace {
 //     // Compute the dimension value.
 //     Value dimVal =
 //         baseType.isDynamicDim(i)
-//             ? rewriter.create<memref::DimOp>(loc, baseMemRef, i).getResult()
+//             ? rewriter.create<memref::DimOp>(loc, basePtr, i).getResult()
 //             : rewriter
 //                   .create<arith::ConstantIndexOp>(loc, baseType.getDimSize(i))
 //                   .getResult();
@@ -188,8 +191,8 @@ namespace {
 //                                  loc, rewriter.getIndexType(), elementType)
 //                              .getResult();
 
-//   /// Create the final arts.datablock operation with the affine map attribute.
-//   auto modeAttr = rewriter.getStringAttr(mode);
+//   /// Create the final arts.datablock operation with the affine map
+//   attribute.auto modeAttr = rewriter.getStringAttr(mode);
 //   DataBlockOp depOp;
 //   LLVM_DEBUG(dbgs() << "Creating datablock: " << subMemRefType << " - "
 //                     << affineMap << "\n");
@@ -215,96 +218,97 @@ namespace {
 //   if (depOp.isLoad())
 //     rewireDatablockUses(rewriter, region, depOp);
 //   else
-//     depOp.getBase().replaceAllUsesExcept(depOp.getResult(), depOp);
+//     depOp.getPtr().replaceAllUsesExcept(depOp.getResult(), depOp);
 // }
 
-// /// Rewrites any memref.load/memref.store in 'region' that references
-// /// 'baseMemRef'. The new memref is 'newSubview'.
-// static void rewireDatablockUses(PatternRewriter &rewriter, Region &region,
-//                                 arts::DataBlockOp depOp) {
-//   Value newSubview = depOp.getResult();
-//   Value baseMemRef = depOp.getBase();
+/// Rewrites any memref.load/memref.store in 'region' that references
+/// 'baseMemRef'. The new memref is 'newSubview'.
+static void rewireDatablockUses(PatternRewriter &rewriter, Region &region,
+                                arts::DataBlockOp depOp) {
+  Value newSubview = depOp.getResult();
+  Value baseMemRef = depOp.getPtr();
 
-//   auto offsets = depOp.getOffsets();
-//   auto sizes = depOp.getSizes();
-//   auto subType = newSubview.getType().dyn_cast<MemRefType>();
-//   assert(subType && "Expected MemRefType");
-//   int64_t rank = subType.getRank();
+  auto offsets = depOp.getOffsets();
+  auto sizes = depOp.getSizes();
+  auto subType = newSubview.getType().dyn_cast<MemRefType>();
+  assert(subType && "Expected MemRefType");
+  int64_t rank = subType.getRank();
 
-//   /// Collect the dimensions that are pinned
-//   SetVector<int64_t> pinnedDims;
-//   for (int64_t i = 0; i < rank; ++i) {
-//     if (auto cstOp = sizes[i].getDefiningOp<arith::ConstantIndexOp>()) {
-//       if (cstOp.value() == 1)
-//         pinnedDims.insert(i);
-//     }
-//   }
+  /// Collect the dimensions that are pinned
+  SetVector<int64_t> pinnedDims;
+  for (int64_t i = 0; i < rank; ++i) {
+    if (auto cstOp = sizes[i].getDefiningOp<arith::ConstantIndexOp>()) {
+      if (cstOp.value() == 1)
+        pinnedDims.insert(i);
+    }
+  }
 
-//   /// Walk the region and replace the loads/stores
-//   auto isMatchingMemrefAndIndices = [&](auto op) {
-//     // TODO: Alias analysis
-//     if (op.getMemref() != baseMemRef)
-//       return false;
-//     auto oldIdx = op.getIndices();
-//     if ((int64_t)oldIdx.size() != rank)
-//       return false;
-//     for (auto dim : pinnedDims) {
-//       if (offsets[dim] != oldIdx[dim])
-//         return false;
-//     }
-//     // If the op is affine, also compare the affine map.
-//     if (llvm::isa<affine::AffineLoadOp>(op) ||
-//         llvm::isa<affine::AffineStoreOp>(op)) {
-//       auto expectedMap =
-//           AffineMap::getMultiDimIdentityMap(rank, op.getContext());
-//       if (llvm::isa<affine::AffineLoadOp>(op)) {
-//         auto affineLoad = cast<affine::AffineLoadOp>(op);
-//         if (affineLoad.getAffineMap() != expectedMap)
-//           return false;
-//       } else {
-//         auto affineStore = cast<affine::AffineStoreOp>(op);
-//         if (affineStore.getAffineMap() != expectedMap)
-//           return false;
-//       }
-//     }
-//     return true;
-//   };
+  /// Walk the region and replace the loads/stores
+  auto isMatchingMemrefAndIndices = [&](auto op) {
+    // TODO: Alias analysis
+    if (op.getMemref() != baseMemRef)
+      return false;
+    auto oldIdx = op.getIndices();
+    if ((int64_t)oldIdx.size() != rank)
+      return false;
+    for (auto dim : pinnedDims) {
+      if (offsets[dim] != oldIdx[dim])
+        return false;
+    }
+    // If the op is affine, also compare the affine map.
+    if (llvm::isa<affine::AffineLoadOp>(op) ||
+        llvm::isa<affine::AffineStoreOp>(op)) {
+      auto expectedMap =
+          AffineMap::getMultiDimIdentityMap(rank, op.getContext());
+      if (llvm::isa<affine::AffineLoadOp>(op)) {
+        auto affineLoad = cast<affine::AffineLoadOp>(op);
+        if (affineLoad.getAffineMap() != expectedMap)
+          return false;
+      } else {
+        auto affineStore = cast<affine::AffineStoreOp>(op);
+        if (affineStore.getAffineMap() != expectedMap)
+          return false;
+      }
+    }
+    return true;
+  };
 
-//   region.walk([&](Operation *op) {
-//     auto updateOp = [&](auto specificOp) {
-//       rewriter.updateRootInPlace(specificOp, [&]() {
-//         SmallVector<Value> newIdx(rank);
-//         Location loc = specificOp.getLoc();
-//         Value c0 = rewriter.create<arith::ConstantIndexOp>(loc, 0);
-//         for (int64_t i = 0; i < rank; ++i)
-//           newIdx[i] = pinnedDims.contains(i) ? c0 : specificOp.getIndices()[i];
-//         specificOp.getMemrefMutable().assign(newSubview);
-//         specificOp.getIndicesMutable().assign(newIdx);
-//       });
-//     };
+  region.walk([&](Operation *op) {
+    auto updateOp = [&](auto specificOp) {
+      rewriter.updateRootInPlace(specificOp, [&]() {
+        SmallVector<Value> newIdx(rank);
+        Location loc = specificOp.getLoc();
+        Value c0 = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+        for (int64_t i = 0; i < rank; ++i)
+          newIdx[i] = pinnedDims.contains(i) ? c0 : specificOp.getIndices()[i];
+        specificOp.getMemrefMutable().assign(newSubview);
+        specificOp.getIndicesMutable().assign(newIdx);
+      });
+    };
 
-//     if (auto load = dyn_cast<memref::LoadOp>(op)) {
-//       if (isMatchingMemrefAndIndices(load))
-//         updateOp(load);
-//     } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
-//       if (isMatchingMemrefAndIndices(store))
-//         updateOp(store);
-//     } else if (auto affineLoad = dyn_cast<affine::AffineLoadOp>(op)) {
-//       if (isMatchingMemrefAndIndices(affineLoad))
-//         updateOp(affineLoad);
-//     } else if (auto affineStore = dyn_cast<affine::AffineStoreOp>(op)) {
-//       if (isMatchingMemrefAndIndices(affineStore))
-//         updateOp(affineStore);
-//     }
-//   });
-// }
+    if (auto load = dyn_cast<memref::LoadOp>(op)) {
+      if (isMatchingMemrefAndIndices(load))
+        updateOp(load);
+    } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      if (isMatchingMemrefAndIndices(store))
+        updateOp(store);
+    } else if (auto affineLoad = dyn_cast<affine::AffineLoadOp>(op)) {
+      if (isMatchingMemrefAndIndices(affineLoad))
+        updateOp(affineLoad);
+    } else if (auto affineStore = dyn_cast<affine::AffineStoreOp>(op)) {
+      if (isMatchingMemrefAndIndices(affineStore))
+        updateOp(affineStore);
+    }
+  });
+}
 
-struct DataBlockPass
-    : public arts::DataBlockBase<DataBlockPass> {
+struct DataBlockPass : public arts::DataBlockBase<DataBlockPass> {
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    
+    LLVM_DEBUG(dbgs() << line << "DataBlockPass STARTED\n"
+                      << line << module << "\n"
+                      << line);
   }
 };
 

@@ -184,7 +184,7 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
                          ? AC->VoidPtr
                          : MemRefType::get({ShapedType::kDynamic}, AC->VoidPtr);
   auto newDbOp = builder.create<arts::DataBlockOp>(
-      op->getLoc(), pointerType, op.getMode(), op.getBase(),
+      op->getLoc(), pointerType, op.getMode(), op.getPtr(),
       op.getElementType(), op.getElementTypeSize(), op.getOffsets(), sizes);
   newDbOp->setAttrs(op->getAttrs());
 
@@ -259,7 +259,7 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
     }
     /// Propagate datablock pointer for nested datablock ops.
     else if (auto dbOp = dyn_cast<arts::DataBlockOp>(user)) {
-      dbOp.getBase().replaceUsesWithIf(
+      dbOp.getPtr().replaceUsesWithIf(
           newDbOp.getResult(),
           [&](OpOperand &operand) { return operand.getOwner() == dbOp; });
     }
@@ -282,7 +282,7 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
 
   /// Mark dbs for removal.
   opsToErase.insert(op);
-  opsToErase.insert(newDbOp.getBase().getDefiningOp());
+  opsToErase.insert(newDbOp.getPtr().getDefiningOp());
   opsToErase.insert(newDbOp);
 }
 

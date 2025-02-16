@@ -1,36 +1,5 @@
 ///==========================================================================
 /// File: DataBlockAnalysis.cpp
-///
-/// This pass performs a comprehensive analysis on arts.datablock operations.
-///
-/// It:
-///   1. Collects arts.datablock ops top-level region of a function.
-///   2. Parses each datablock’s (offsets, sizes, strides) to compute
-///      compile-time information dimension by dimension. It then extracts
-///      constant values when possible and recursively folds simple add/mul
-///      chains.
-///   3. Classifies each datablock as memory read or write based on its "mode"
-///      attribute:
-///         "in"   → read-only,
-///         "out"  → write-only,
-///         "inout"→ mixed read/write.
-///       (The datablock op implements MemoryEffectOpInterface so that polygeist
-///       alias analysis sees its effects.)
-///   4. Runs a forward BFS from every scf.for induction variable (IV) to mark
-///      datablocks whose offsets depend on a loop IV as isLoopDependent.
-///   6. Builds a dependency graph (read-after-write edges) based on numeric
-///      i, dominance (skipped if isLoopDependent is true), and
-///      alias information.
-///   7. Collects usage statistics for each datablock: total use count and the
-///      set of parent regions in which it is used, average use count and
-///      average region frequency.
-///   8. Deduplicates datablock nodes by comparing their mode, base memref, and
-///      numeric infoing
-///   9. Detects “out-only” datablocks (writer nodes with no consumers) and
-///      reports them as removable.
-///  10. Additionally, it detects if a datablock is used only for reads versus
-///      mixed read/write, and reports candidates for fusion (if used only in
-///      one region) or elimination (if read-only and used rarely).
 ///==========================================================================
 
 #include "arts/Analysis/DataBlockAnalysis.h"
@@ -112,22 +81,6 @@ SetVector<scf::ForOp> DatablockAnalysis::getLoopsFromOffset(Value dbOffset) {
 }
 
 /// Dependency analysis.
-bool DatablockAnalysis::mayOverlap(Node &A, Node &B) {
-  if (!A.info.valid || !B.info.valid)
-    return true;
-  if (A.info.offsets.size() != B.info.offsets.size())
-    return true;
-  for (unsigned d = 0; d < A.info.offsets.size(); d++) {
-    int64_t Astart = A.info.offsets[d];
-    int64_t Aend = Astart + A.info.sizes[d];
-    int64_t Bstart = B.info.offsets[d];
-    int64_t Bend = Bstart + B.info.sizes[d];
-    if (Aend <= Bstart || Bend <= Astart)
-      return false;
-  }
-  return true;
-}
-
 bool DatablockAnalysis::mayDepend(Node &prod, Node &cons, bool &isDirect,
                                   bool &isLoopDependent,
                                   DominanceInfo &domInfo) {
@@ -136,7 +89,7 @@ bool DatablockAnalysis::mayDepend(Node &prod, Node &cons, bool &isDirect,
     return false;
 
   /// Exclude nodes with the same EDT user.
-  if (prod.edtUser == cons.edtUser)
+  if (prod.userEdt == cons.userEdt)
     return false;
 
   /// Only consider writer producer and reader consumer.
@@ -205,18 +158,6 @@ DatablockAnalysis::NodeComp DatablockAnalysis::compare(Node &A, Node &B) {
 
   if (!std::equal(A.offsets.begin(), A.offsets.end(), B.offsets.begin()))
     return NodeComp::BaseAlias;
-
-  /// If static info is not available, assume they are equivalent.
-  if (A.info.valid != B.info.valid)
-    return NodeComp::BaseAlias;
-  if (A.info.valid) {
-    for (unsigned i = 0; i < A.info.offsets.size(); ++i) {
-      if (A.info.offsets[i] != B.info.offsets[i] ||
-          A.info.sizes[i] != B.info.sizes[i] ||
-          A.info.strides[i] != B.info.strides[i])
-        return NodeComp::BaseAlias;
-    }
-  }
 
   /// Cache the result.
   A.duplicates.insert(B.id);
@@ -288,49 +229,28 @@ void DatablockAnalysis::collectNodes(Region &region, Graph &graph) {
     node.id = nextID++;
     node.op = dbOp;
     node.mode = dbOp.getMode();
-    node.baseMemref = dbOp.getBase();
+    node.ptr = dbOp.getPtr();
     node.offsets = dbOp.getOffsets();
     node.sizes = dbOp.getSizes();
-    // node.strides = dbOp.getStrides();
-    setSubviewInfo(node);
 
     /// Collect memory effects
     if (auto memEff = dyn_cast<MemoryEffectOpInterface>(dbOp.getOperation()))
       memEff.getEffects(node.effects);
 
-    /// Add base is datablock attribute.
-    if (auto baseOp = dyn_cast_or_null<arts::DataBlockOp>(
-            node.baseMemref.getDefiningOp())) {
-      dbOp->setAttr("baseIsDb", UnitAttr::get(dbOp.getContext()));
-      node.baseIsDb = true;
+    /// Add 'ptrIsDb' attribute if the base is a datablock.
+    if (auto baseOp =
+            dyn_cast_or_null<arts::DataBlockOp>(node.ptr.getDefiningOp())) {
+      dbOp->setAttr("ptrIsDb", UnitAttr::get(dbOp.getContext()));
+      node.ptrIsDb = true;
     } else {
-      node.baseIsDb = false;
+      node.ptrIsDb = false;
     }
 
     /// Set the isLoad flag.
     node.isLoad = dbOp->hasAttr("isLoad");
 
     /// Analyze uses of the datablock.
-    unsigned numUses = 0;
-    for (auto &use : dbOp->getUses()) {
-      Operation *userOp = use.getOwner();
-      ++numUses;
-      /// Set the EDT user of the datablock.
-      if (userOp->getBlock() == dbOp->getBlock() && isa<arts::EdtOp>(userOp)) {
-        assert(node.edtUser == nullptr && "Multiple EDT users");
-        node.edtUser = cast<arts::EdtOp>(userOp);
-        unsigned edtDepId = 0;
-        for (auto dep : node.edtUser.getDependencies()) {
-          if (dep.getDefiningOp() == dbOp)
-            node.edtDepId = edtDepId;
-          ++edtDepId;
-        }
-      }
-      /// Set the region users of the datablock.
-      if (auto *r = userOp->getParentRegion())
-        node.userRegions.insert(r);
-    }
-    node.useCount = numUses;
+    collectUses(node);
 
     /// Try to get the EDT parent of the datablock.
     if (auto parentOp = dbOp->getParentOfType<arts::EdtOp>())
@@ -351,26 +271,33 @@ void DatablockAnalysis::collectNodes(Region &region, Graph &graph) {
   });
 }
 
-void DatablockAnalysis::setSubviewInfo(Node &node) {
-  /// Validate that offsets, sizes, and strides arrays have the same length.
-  if (node.offsets.size() != node.sizes.size())
-    return;
-
-  const auto rank = node.offsets.size();
-  SubviewInfo &sb = node.info;
-  sb.offsets.resize(rank);
-  sb.sizes.resize(rank);
-  sb.strides.resize(rank);
-
-  for (size_t i = 0; i < rank; i++) {
-    const int64_t o = tryParseIndexConstant(node.offsets[i]);
-    const int64_t s = tryParseIndexConstant(node.sizes[i]);
-    if (o < 0 || s < 0)
-      return;
-    sb.offsets[i] = o;
-    sb.sizes[i] = s;
+void DatablockAnalysis::collectUses(Node &node) {
+  unsigned numUses = 0;
+  auto dbOp = node.op;
+  /// If the only user is an EDT, analyze the EDT operations.
+  if (dbOp->hasOneUse() && isa<arts::EdtOp>(dbOp->use_begin()->getOwner())) {
+    node.userEdt = cast<arts::EdtOp>(dbOp->use_begin()->getOwner());
   }
-  sb.valid = true;
+
+  for (auto &use : dbOp->getUses()) {
+    Operation *userOp = use.getOwner();
+    ++numUses;
+    /// Set the EDT user of the datablock.
+    if (userOp->getBlock() == dbOp->getBlock() && isa<arts::EdtOp>(userOp)) {
+      assert(node.userEdt == nullptr && "Multiple EDT users");
+      node.userEdt = cast<arts::EdtOp>(userOp);
+      unsigned userEdtPos = 0;
+      for (auto dep : node.userEdt.getDependencies()) {
+        if (dep.getDefiningOp() == dbOp)
+          node.userEdtPos = userEdtPos;
+        ++userEdtPos;
+      }
+    }
+    /// Set the region users of the datablock.
+    // if (auto *r = userOp->getParentRegion())
+    //   node.userRegions.insert(r);
+  }
+  node.useCount = numUses;
 }
 
 /// Statistics
@@ -398,25 +325,13 @@ void DatablockAnalysis::printGraph(Graph &graph) {
   for (auto &n : graph.nodes) {
     os << "  #" << n.id << " " << n.mode << "\n";
     os << "    " << n.op << "\n";
-    os << "       base=" << n.baseMemref << "\n";
-    if (n.info.valid) {
-      os << "       info=[";
-      for (unsigned d = 0; d < n.info.offsets.size(); d++) {
-        os << n.info.offsets[d] << ".."
-           << (n.info.offsets[d] + n.info.sizes[d]);
-        if (d + 1 < n.info.offsets.size())
-          os << ", ";
-      }
-      os << "]";
-    } else {
-      os << "       info=(unknown)";
-    }
+    os << "       ptr=" << n.ptr << "\n";
     os << " isLoopDependent=" << (n.isLoopDependent ? "true" : "false");
     os << " useCount=" << n.useCount;
     os << " usedInRegions=" << n.userRegions.size();
-    os << " baseIsDb=" << (n.baseIsDb ? "true" : "false");
+    os << " ptrIsDb=" << (n.ptrIsDb ? "true" : "false");
     os << " isLoad=" << (n.isLoad ? "true" : "false");
-    os << " edtDepId=" << n.edtDepId << "\n";
+    os << " userEdtPos=" << n.userEdtPos << "\n";
   }
   os << "Edges:\n";
   for (auto &e : graph.edges)
@@ -436,45 +351,8 @@ void DatablockAnalysis::fuseAdjacentNodes(Graph &graph) {
         continue;
       Node &A = graph.nodes[i];
       Node &B = graph.nodes[j];
-      if (A.mode != B.mode || A.baseMemref != B.baseMemref)
+      if (A.mode != B.mode || A.ptr != B.ptr)
         continue;
-      if (!A.info.valid || !B.info.valid ||
-          A.info.offsets.size() != B.info.offsets.size())
-        continue;
-      bool fusible = false;
-      unsigned fuseDim = 0;
-      unsigned rank = A.info.offsets.size();
-      for (unsigned d = 0; d < rank; d++) {
-        if (A.info.offsets[d] + A.info.sizes[d] == B.info.offsets[d]) {
-          bool equalOtherDims = true;
-          for (unsigned k = 0; k < rank; k++) {
-            if (k == d)
-              continue;
-            if (A.info.offsets[k] != B.info.offsets[k] ||
-                A.info.sizes[k] != B.info.sizes[k]) {
-              equalOtherDims = false;
-              break;
-            }
-          }
-          if (equalOtherDims) {
-            fusible = true;
-            fuseDim = d;
-            break;
-          }
-        }
-      }
-      if (fusible) {
-        auto &A_mut = graph.nodes[i];
-        A_mut.info.sizes[fuseDim] += B.info.sizes[fuseDim];
-        A_mut.useCount += B.useCount;
-        for (Region *r : B.userRegions)
-          A_mut.userRegions.insert(r);
-        // for (Operation *op : B.topUsers)
-        //   A_mut.topUsers.push_back(op);
-        fusedIDs.insert(j);
-        LLVM_DEBUG(DBGS() << "Fused node #" << j << " into node #" << i
-                          << " along dimension " << fuseDim << "\n");
-      }
     }
   }
   SmallVector<Node, 8> newNodes;
@@ -486,42 +364,11 @@ void DatablockAnalysis::fuseAdjacentNodes(Graph &graph) {
 }
 
 void DatablockAnalysis::detectOutOnlyNodes(Graph &graph) {
-  // llvm::SmallDenseSet<unsigned> outOnlyIDs;
-  // for (unsigned i = 0; i < graph.nodes.size(); i++) {
-  //   // Node &node = graph.nodes[i];
-  //   // if (isWriter(node) && node.topUsers.empty()) {
-  //   //   outOnlyIDs.insert(i);
-  //   //   LLVM_DEBUG(DBGS() << "No consumer from #" << i
-  //   //                     << " => out-only => removable\n");
-  //   // }
-  // }
-  // llvm::SmallVector<Node, 8> newNodes;
-  // for (unsigned i = 0; i < graph.nodes.size(); i++) {
-  //   if (!outOnlyIDs.contains(i))
-  //     newNodes.push_back(graph.nodes[i]);
-  // }
-  // graph.nodes = newNodes;
+
 }
 
 void DatablockAnalysis::deduplicateNodes(Graph &graph) {
-  llvm::SmallDenseSet<unsigned> duplicateIDs;
-  for (unsigned i = 0; i < graph.nodes.size(); i++) {
-    for (unsigned j = i + 1; j < graph.nodes.size(); j++) {
-      if (compare(graph.nodes[i], graph.nodes[j]) == NodeComp::Equal) {
-        duplicateIDs.insert(j);
-        // graph.nodes[j].op->replaceAllUsesWith(graph.nodes[i].op.getResult());
-        // graph.nodes[j].op.erase();
-        LLVM_DEBUG(DBGS() << "Deduplicated datablock node #" << j
-                          << " (duplicate of #" << i << ")\n");
-      }
-    }
-  }
-  SmallVector<Node, 8> uniqueNodes;
-  for (unsigned i = 0; i < graph.nodes.size(); i++) {
-    if (!duplicateIDs.contains(i))
-      uniqueNodes.push_back(graph.nodes[i]);
-  }
-  graph.nodes = uniqueNodes;
+  
 }
 
 } // namespace arts

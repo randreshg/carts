@@ -111,19 +111,10 @@ int main(int argc, char *argv[]) {
 
   initialize_matrix(n, ts, matrix);
 
-  dummy = malloc(sizeof(double **) * NB);
-  for (int i = 0; i < NB; i++)
-    dummy[i] = malloc(sizeof(double *) * NB);
+  double *Ah[NB][NB];
   for (int i = 0; i < NB; i++)
     for (int j = 0; j < NB; j++)
-      dummy[i][j] = calloc(BS * BS, sizeof(double));
-
-  double *Ah[NB][NB];
-  for (int i = 0; i < NB; i++) {
-    for (int j = 0; j < NB; j++) {
-      Ah[i][j] = dummy[i][j];
-    }
-  }
+      Ah[i][j] = (double *)calloc(BS * BS, sizeof(double));
 
   memcpy(original_matrix, matrix, n * n * sizeof(double));
 

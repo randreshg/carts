@@ -5,11 +5,7 @@
 ///
 /// It:
 ///   1. Collects arts.datablock ops top-level region of a function.
-///   2. Parses each datablock’s (offsets, sizes, strides) to compute
-///      compile-time information dimension by dimension. It then extracts
-///      constant values when possible and recursively folds simple add/mul
-///      chains.
-///   3. Classifies each datablock as memory read or write based on its "mode"
+///   2. Classifies each datablock as memory read or write based on its "mode"
 ///      attribute:
 ///         "in"   → read-only,
 ///         "out"  → write-only,
@@ -18,17 +14,17 @@
 ///       alias analysis sees its effects.)
 ///   4. Runs a forward BFS from every scf.for induction variable (IV) to mark
 ///      datablocks whose offsets depend on a loop IV as isLoopDependent.
-///   6. Builds a dependency graph (read-after-write edges) based on numeric
-///      i, dominance (skipped if isLoopDependent is true), and
-///      alias information.
-///   7. Collects usage statistics for each datablock: total use count and the
+///   5. Builds a dependency graph
+///   6. Collects usage statistics for each datablock: total use count and the
 ///      set of parent regions in which it is used, average use count and
 ///      average region frequency.
-///   8. Deduplicates datablock nodes by comparing their mode, base memref, and
+///
+/// Optimizations:
+///   1. Deduplicates datablock nodes by comparing their mode, base ptr, and
 ///      numeric infoing
-///   9. Detects “out-only” datablocks (writer nodes with no consumers) and
+///   2. Detects “out-only” datablocks (writer nodes with no consumers) and
 ///      reports them as removable.
-///  10. Additionally, it detects if a datablock is used only for reads versus
+///   3. Additionally, it detects if a datablock is used only for reads versus
 ///      mixed read/write, and reports candidates for fusion (if used only in
 ///      one region) or elimination (if read-only and used rarely).
 ///==========================================================================
@@ -43,6 +39,8 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
+#include <cstdint>
 
 namespace mlir {
 namespace arts {
@@ -54,36 +52,25 @@ class DatablockAnalysis {
 public:
   explicit DatablockAnalysis(Operation *module);
 
-  /// Structure to hold numeric infoing information for a multi-dimensional
-  /// subview.
-  struct SubviewInfo {
-    bool valid = false;
-    SmallVector<int64_t, 4> offsets;
-    SmallVector<int64_t, 4> sizes;
-    SmallVector<int64_t, 4> strides;
-  };
-
   /// Node representing one arts.datablock op in the dependency graph.
   struct Node {
     unsigned id = 0;
     arts::DataBlockOp op;
     /// Db attributtes
-    std::string mode;
-    Value baseMemref;
-    SmallVector<Value, 4> offsets;
-    SmallVector<Value, 4> sizes;
-    // SmallVector<Value, 4> strides;
-    bool isLoad;
-    bool baseIsDb;
+    StringRef mode;
+    Value ptr;
+    SmallVector<Value, 4> offsets, sizes;
+    bool isLoad, ptrIsDb;
     /// Analysis results
-    SubviewInfo info;
-    unsigned useCount;
     bool isLoopDependent = false;
-    arts::EdtOp edtUser = nullptr;
-    unsigned edtDepId = 0;
-    arts::EdtOp edtParent = nullptr;
-    llvm::SmallDenseSet<Region *> userRegions;
     SmallVector<MemoryEffects::EffectInstance, 2> effects;
+    /// Uses
+    unsigned useCount;
+    SetVector<Operation *> userOps, userRegions;
+    arts::EdtOp edtParent = nullptr;
+    arts::EdtOp userEdt = nullptr;
+    uint32_t userEdtPos = 0;
+
     /// A duplicated node is a node with the same mode, aliasing base memref,
     /// and offsets.
     SetVector<unsigned> duplicates;
@@ -123,7 +110,6 @@ public:
 
 private:
   /// Dependency analysis.
-  bool mayOverlap(Node &A, Node &B);
   bool mayDepend(Node &prod, Node &cons, bool &isDominated,
                  bool &isLoopDependent, DominanceInfo &domInfo);
   bool baseMayAlias(Node &A, Node &B);
@@ -136,7 +122,9 @@ private:
 
   /// Node collection
   void collectNodes(Region &region, Graph &graph);
-  void setSubviewInfo(Node &node);
+
+  /// Uses collection
+  void collectUses(Node &node);
 
   /// Statistics
   void computeStatistics(Graph &graph);

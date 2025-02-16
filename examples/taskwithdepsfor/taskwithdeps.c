@@ -40,41 +40,55 @@
 void compute() {
   double A[N][N], B[N][N];
   int test = rand() % 100;
+  
   #pragma omp parallel
   {
     #pragma omp single
     {
+      // Compute the A matrix.
       for (int i = 0; i < N; i++) {
-        for(int j = 0; j < N; j++) {
-          // Task 1: Compute A[i][j]
-          #pragma omp task depend(out : A[i+1][j-1])
+        for (int j = 0; j < N; j++) {
+          // Each task computes one A[i][j].
+          #pragma omp task firstprivate(i, j) depend(out : A[i][j])
           {
-              A[i][j] = i * 1.0 + test;
-            
-          }
-      }
-
-        // Task 2: Compute B[i] based on A[i] and A[i-1] (inter-loop dependency)
-        #pragma omp task depend(in : A[i], A[i - 1]) depend(out : B[i])
-        {
-          for (int j = 0; j< N; j++) {
-            B[i][j] = A[i][j] + (i > 0 ? A[i - 1][j] : 0);
+            A[i][j] = i * 1.0 + test;
           }
         }
       }
+      
+      // Compute the B matrix using A.
+      // For row zero, B[0][j] only depends on A[0][j].
+      for (int j = 0; j < N; j++) {
+        #pragma omp task firstprivate(j) depend(in : A[0][j]) depend(out : B[0][j])
+        {
+          B[0][j] = A[0][j];
+        }
+      }
+      // For rows 1..N-1, B[i][j] depends on A[i][j] and the previous row A[i-1][j].
+      for (int i = 1; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+          #pragma omp task firstprivate(i, j) depend(in : A[i][j], A[i-1][j]) depend(out : B[i][j])
+          {
+            B[i][j] = A[i][j] + A[i-1][j];
+          }
+        }
+      }
+
     }
   }
-  for(int i = 0; i < N; i++) {
-    for(int j = 0; j < N; j++) {
-      B[i][j] = A[i][j] + (i > 0 ? A[i - 1][j] : 0);
+  
+  // Print the computed matrices.
+  for (int i = 0; i < N; i++) {
+    for (int j = 0; j < N; j++) {
+      printf("A[%d][%d] = %f   ", i, j, A[i][j]);
     }
+    printf("\n");
   }
-  /// print A and B
-  for(int i = 0; i < N; i++) {
-    for(int j = 0; j < N; j++) {
-      printf("A[%d][%d] = %f\n", i, j, A[i][j]);
-      printf("B[%d][%d] = %f\n", i, j, B[i][j]);
+  for (int i = 0; i < N; i++) {
+    for (int j = 0; j < N; j++) {
+      printf("B[%d][%d] = %f   ", i, j, B[i][j]);
     }
+    printf("\n");
   }
 }
 

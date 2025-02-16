@@ -84,17 +84,13 @@ void UndefOp::getCanonicalizationPatterns(RewritePatternSet &results,
 
 //===----------------------------------------------------------------------===//
 // DataBlockOp
-
-/// Custom printer for DataBlockOp.
-// build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, Type
-// subview, StringRef mode, Value base, Type elementType, Value elementTypeSize,
-// ValueRange offsets, ValueRange sizes);
+//===----------------------------------------------------------------------===//
 void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
-                        Type subview, StringRef mode, Value base,
+                        Type subview, StringRef mode, Value ptr,
                         Type elementType, Value elementTypeSize,
                         ValueRange offsets, ValueRange sizes) {
 
-  odsState.addOperands(base);
+  odsState.addOperands(ptr);
   odsState.addOperands(elementTypeSize);
   odsState.addOperands(offsets);
   odsState.addOperands(sizes);
@@ -114,76 +110,65 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
   StringAttr modeAttr;
   if (parser.parseAttribute(modeAttr, "mode", result.attributes))
     return failure();
-  if (parser.parseComma())
+
+  /// Parse " ptr[" literal.
+  if (parser.parseKeyword("ptr") || parser.parseLSquare())
     return failure();
 
-  /// Parse the base operand.
-  OpAsmParser::UnresolvedOperand baseOperand;
-  if (parser.parseOperand(baseOperand))
+  /// Parse the base ptr operand.
+  OpAsmParser::UnresolvedOperand ptrOperand;
+  if (parser.parseOperand(ptrOperand))
     return failure();
 
-  /// Parse colon and the type of the base operand.
+  /// Parse colon and the type of the ptr operand.
   if (parser.parseColon())
     return failure();
   Type baseType;
   if (parser.parseType(baseType))
     return failure();
-  result.addAttribute("baseType", TypeAttr::get(baseType));
-  if (parser.resolveOperand(baseOperand, baseType, result.operands))
+  if (parser.resolveOperand(ptrOperand, baseType, result.operands))
+    return failure();
+  if (parser.parseRSquare())
     return failure();
 
-  if (parser.parseComma())
+  /// Parse comma then "offsets[".
+  if (parser.parseComma() || parser.parseKeyword("offsets") ||
+      parser.parseLSquare())
     return failure();
-
-  /// Parse offsets list.
   SmallVector<OpAsmParser::UnresolvedOperand, 4> offsetOperands;
-  if (parser.parseLSquare())
-    return failure();
   if (parser.parseOperandList(offsetOperands))
     return failure();
   if (parser.parseRSquare())
     return failure();
 
-  if (parser.parseComma())
+  /// Parse comma then "sizes[".
+  if (parser.parseComma() || parser.parseKeyword("sizes") ||
+      parser.parseLSquare())
     return failure();
-
-  /// Parse sizes list.
   SmallVector<OpAsmParser::UnresolvedOperand, 4> sizeOperands;
-  if (parser.parseLSquare())
-    return failure();
   if (parser.parseOperandList(sizeOperands))
     return failure();
   if (parser.parseRSquare())
     return failure();
 
-  /// Optionally parse the affineOffsetMaps group.
-  if (succeeded(parser.parseOptionalComma())) {
-    if (parser.parseKeyword("affineMaps"))
-      return failure();
-    if (parser.parseEqual())
-      return failure();
-    Attribute affineMapsAttr;
-    if (parser.parseAttribute(affineMapsAttr, "affineOffsetMaps",
-                              result.attributes))
-      return failure();
-  }
-
-  /// Parse the element type and the elementTypeSize operand in square brackets.
-  if (parser.parseLSquare())
+  /// Parse comma then "type[".
+  if (parser.parseComma() || parser.parseKeyword("type") ||
+      parser.parseLSquare())
     return failure();
   Type elementType;
   if (parser.parseType(elementType))
     return failure();
-
-  /// Record the element type as an attribute.
   result.addAttribute("elementType", TypeAttr::get(elementType));
-  if (parser.parseComma())
+  if (parser.parseRSquare())
     return failure();
-  // Parse the elementTypeSize operand (as expected to be an index value).
+
+  // Parse comma then "typeSize[".
+  if (parser.parseComma() || parser.parseKeyword("typeSize") ||
+      parser.parseLSquare())
+    return failure();
   OpAsmParser::UnresolvedOperand etsOperand;
   if (parser.parseOperand(etsOperand))
     return failure();
-
   Builder &builder = parser.getBuilder();
   Type indexType = builder.getIndexType();
   if (parser.resolveOperand(etsOperand, indexType, result.operands))
@@ -191,30 +176,41 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
   if (parser.parseRSquare())
     return failure();
 
-  /// Parse the arrow and the result (subview) type.
+  /// Optionally parse comma then affineMap attribute.
+  if (succeeded(parser.parseOptionalComma())) {
+    if (parser.parseKeyword("affineMap"))
+      return failure();
+    if (parser.parseEqual())
+      return failure();
+    Attribute affineMapAttr;
+    if (parser.parseAttribute(affineMapAttr, "affineMap", result.attributes))
+      return failure();
+  }
+
+  /// Parse optional attribute dictionary.
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  /// Parse arrow and the result (subview) type.
   if (parser.parseArrow())
     return failure();
   Type subviewType;
   if (parser.parseType(subviewType))
     return failure();
-  result.addTypes({subviewType});
-
-  /// Parse an optional attribute dictionary.
-  if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
-    return failure();
+  result.addTypes(subviewType);
 
   /// Resolve the operand lists for offsets and sizes as index type.
-  SmallVector<Type, 4> expectedOffsets(offsetOperands.size(), indexType);
-  if (parser.resolveOperands(offsetOperands, expectedOffsets,
+  SmallVector<Type, 4> expectedOffsetTypes(offsetOperands.size(), indexType);
+  if (parser.resolveOperands(offsetOperands, expectedOffsetTypes,
                              parser.getCurrentLocation(), result.operands))
     return failure();
-  SmallVector<Type, 4> expectedSizes(sizeOperands.size(), indexType);
-  if (parser.resolveOperands(sizeOperands, expectedSizes,
+  SmallVector<Type, 4> expectedSizeTypes(sizeOperands.size(), indexType);
+  if (parser.resolveOperands(sizeOperands, expectedSizeTypes,
                              parser.getCurrentLocation(), result.operands))
     return failure();
 
-  // Set operand segment sizes. The expected order is:
-  // 1 for base, 1 for elementTypeSize, then offsets, then sizes.
+  /// Set operand segment sizes.
+  /// Order: ptr (1), typeSize (1), offsets, sizes.
   SmallVector<int32_t, 4> segmentSizes;
   segmentSizes.push_back(1);
   segmentSizes.push_back(1);
@@ -234,9 +230,9 @@ void DataBlockOp::print(OpAsmPrinter &printer) {
 
   /// Print the base operand and its type.
   printer << " ptr[";
-  printer.printOperand(getBase());
+  printer.printOperand(getPtr());
   printer << " : ";
-  printer.printType(getBase().getType());
+  printer.printType(getPtr().getType());
   printer << "]";
 
   /// Print offsets.
@@ -266,8 +262,9 @@ void DataBlockOp::print(OpAsmPrinter &printer) {
 
   // Print all remaining attributes except "operandSegmentSizes"
   // and those already printed ("mode", "elementType", "affineMap").
-  printer.printOptionalAttrDict(op->getAttrs(),
-                                {"mode", "elementType", "affineMap", "operandSegmentSizes"});
+  printer.printOptionalAttrDict(
+      op->getAttrs(),
+      {"mode", "elementType", "affineMap", "operandSegmentSizes"});
 
   /// Print arrow and the result type.
   printer << " -> ";
@@ -428,20 +425,20 @@ void DataBlockOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
   auto modeAttr = getModeAttr();
   assert(modeAttr && "mode attribute not found");
-  Value base = getBase();
-  assert(base && "base attribute not found");
+  Value ptr = getPtr();
+  assert(ptr && "ptr attribute not found");
 
   /// "in" => read, "out" => write, "inout" => both
   StringRef mode = modeAttr.getValue();
   if (mode == "in" || mode == "inout") {
-    effects.emplace_back(MemoryEffects::Read::get(), base,
+    effects.emplace_back(MemoryEffects::Read::get(), ptr,
                          ::mlir::SideEffects::DefaultResource::get());
   }
   if (mode == "out" || mode == "inout") {
-    effects.emplace_back(MemoryEffects::Write::get(), base,
+    effects.emplace_back(MemoryEffects::Write::get(), ptr,
                          ::mlir::SideEffects::DefaultResource::get());
   }
 }
 
 bool DataBlockOp::isLoad() { return getOperation()->hasAttr("isLoad"); }
-bool DataBlockOp::isBaseDb() { return getOperation()->hasAttr("baseIsDb"); }
+bool DataBlockOp::isBaseDb() { return getOperation()->hasAttr("ptrIsDb"); }

@@ -60,7 +60,7 @@ def DataBlockOp : Arts_Op<"datablock",
   let summary = "Creates a subview dependency for arts.edt or arts.parallel";
   let arguments = (ins
     StrAttr:$mode,                             // Dependency mode (e.g., "in", "out")
-    AnyMemRef:$base,                           // Base memref
+    AnyMemRef:$ptr,                            // Base ptr
     TypeAttr:$elementType,                     // Element type for the subview (or memref type)
     Index:$elementTypeSize,                    // Size (number of elements) associated with that type
     Variadic<Index>:$offsets,                  // Offsets for the subview
@@ -72,7 +72,7 @@ def DataBlockOp : Arts_Op<"datablock",
   
   let builders = [
     OpBuilder<(ins
-      "Type":$subview, "StringRef":$mode, "Value":$base, "Type":$elementType, "Value":$elementTypeSize,
+      "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, "Value":$elementTypeSize,
       "ValueRange":$offsets, "ValueRange":$sizes)>
   ];
   let extraClassDeclaration = [{

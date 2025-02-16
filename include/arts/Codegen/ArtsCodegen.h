@@ -41,7 +41,7 @@ public:
   Value getPtr() { return entryPtr ? entryPtr : memref; }
   Type getElementType() { return elementType; }
   Value getElementTypeSize() { return elementTypeSize; }
-  bool isBaseDb() { return baseIsDb; }
+  bool isBaseDb() { return ptrIsDb; }
   bool isArray() { return dbIsArray; }
   Value getEntryGuid() { return entryGuid; }
   Value getEntryPtr() { return entryPtr; }
@@ -73,7 +73,7 @@ private:
   Value memref = nullptr;
   Type elementType = nullptr;
   Value elementTypeSize = nullptr;
-  bool baseIsDb = false;
+  bool ptrIsDb = false;
   bool dbIsArray = false;
   /// Uses in entry
   Value entryGuid = nullptr;
