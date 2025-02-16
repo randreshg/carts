@@ -59,22 +59,22 @@ def DataBlockOp : Arts_Op<"datablock",
   [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, AttrSizedOperandSegments]> {
   let summary = "Creates a subview dependency for arts.edt or arts.parallel";
   let arguments = (ins
-    StrAttr:$mode,                        // Dependency mode (e.g., "in", "out")
-    AnyMemRef:$base,                      // Base memref
-    TypeAttr:$elementType,                // Type attribute for the subview element (or memref type)
-    Index:$elementTypeSize,               // Size associated with that type (e.g. number of elements)
-    Variadic<Index>:$offsets,             // Offsets for the subview
-    Variadic<Index>:$sizes                // Sizes for the subview
+    StrAttr:$mode,                             // Dependency mode (e.g., "in", "out")
+    AnyMemRef:$base,                           // Base memref
+    TypeAttr:$elementType,                     // Element type for the subview (or memref type)
+    Index:$elementTypeSize,                    // Size (number of elements) associated with that type
+    Variadic<Index>:$offsets,                  // Offsets for the subview
+    Variadic<Index>:$sizes,                    // Sizes for the subview
+    OptionalAttr<AffineMapAttr>:$affineMap       // Affine map for offset transformation
   );
   let results = (outs AnyMemRef:$subview); // Produces a memref.subview
-
-  let assemblyFormat = [{
-    $mode `,` $base `:` type($base) 
-    `[` $offsets `]` `[` $sizes `]` 
-    `[` $elementType `,` $elementTypeSize `]` 
-    `->` type($subview) attr-dict
-  }];
-
+  let hasCustomAssemblyFormat = 1;
+  
+  let builders = [
+    OpBuilder<(ins
+      "Type":$subview, "StringRef":$mode, "Value":$base, "Type":$elementType, "Value":$elementTypeSize,
+      "ValueRange":$offsets, "ValueRange":$sizes)>
+  ];
   let extraClassDeclaration = [{
     bool isLoad();
     bool isBaseDb();
@@ -110,7 +110,7 @@ def EdtOp : Arts_Op<"edt",
 
   let builders = [
     OpBuilder<(ins
-      "ValueRange":$dependencies)>,
+      "ValueRange":$dependencies)>
   ];
 
   let extraClassDeclaration = [{
