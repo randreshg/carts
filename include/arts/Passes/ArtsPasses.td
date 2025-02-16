@@ -43,4 +43,18 @@ def CreateArtsEvents : Pass<"create-events", "mlir::ModuleOp"> {
   ];
   let constructor = "mlir::arts::createCreateEventsPass()";
 }
+
+def DataBlock : Pass<"datablocks", "mlir::ModuleOp"> {
+  let summary = "Using the Datablock Analysis, perform changes to the DataBlock operations and optimize them if the user wants to";
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "LLVM::LLVMDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "arith::ArithDialect",
+    "affine::AffineDialect",
+    "polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::arts::createDataBlockPass()";
+}
 #endif // CARTS_PASSES

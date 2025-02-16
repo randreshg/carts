@@ -7,13 +7,17 @@
 // #include <stdlib.h>
 // #include <time.h>
 
-// Convert to LLVM IR
+// Convert to MLIR standard dialect
 /// cgeist 
-/// cgeist taskwithdeps.c -fopenmp -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include &> taskwithdeps.mlir
+/// cgeist taskwithdeps.c -fopenmp -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include  --raise-scf-to-affine  &> taskwithdeps.mlir
 
 // Convert OpenMP to ARTS
 /// carts-opt taskwithdeps.mlir --convert-openmp-to-arts --cse --canonicalize &> taskwithdeps-arts.mlir
 /// carts-opt taskwithdeps.mlir --convert-openmp-to-arts --cse --canonicalize -debug-only=convert-openmp-to-arts,edt-analysis &> taskwithdeps-arts.mlir
+
+// DataBlock pass
+/// carts-opt taskwithdeps-arts.mlir --datablock --cse &> taskwithdeps-datablock.mlir
+/// carts-opt taskwithdeps-arts.mlir --datablock --cse -debug-only=datablock,datablock-analysis &> taskwithdeps-datablock.mlir
 
 /// Create ARTS events
 /// carts-opt taskwithdeps-arts.mlir --create-events --cse &> taskwithdeps-events.mlir
@@ -27,81 +31,84 @@
 
 // polygeist-opt taskwithdeps.mlir --convert-polygeist-to-llvm  &> optimized.mlir
 
+// polygeist-opt taskwithdeps-events.mlir --affine-cfg &> optimized.mlir
+
 #include <stdlib.h>
 #include <stdio.h>
 #define N 100
 
-// void compute() {
-//   double A[N][N], B[N][N];
-//   int test = rand() % 100;
-//   #pragma omp parallel
-//   {
-//     #pragma omp single
-//     {
-//       for (int i = 0; i < N; i++) {
-//         // Task 1: Compute A[i]
-//         #pragma omp task depend(out : A[i])
-//         {
-//           for(int j = 0; j < N; j++) {
-//             A[i][j] = i * 1.0 + test;
-//           }
-//         }
-
-//         // Task 2: Compute B[i] based on A[i] and A[i-1] (inter-loop dependency)
-//         #pragma omp task depend(in : A[i], A[i - 1]) depend(out : B[i])
-//         {
-//           for (int j = 0; j< N; j++) {
-//             B[i][j] = A[i][j] + (i > 0 ? A[i - 1][j] : 0);
-//           }
-//         }
-//       }
-//     }
-//   }
-//   for(int i = 0; i < N; i++) {
-//     for(int j = 0; j < N; j++) {
-//       B[i][j] = A[i][j] + (i > 0 ? A[i - 1][j] : 0);
-//     }
-//   }
-//   /// print A and B
-//   for(int i = 0; i < N; i++) {
-//     for(int j = 0; j < N; j++) {
-//       printf("A[%d][%d] = %f\n", i, j, A[i][j]);
-//       printf("B[%d][%d] = %f\n", i, j, B[i][j]);
-//     }
-//   }
-// }
-
-
 void compute() {
-  double A[N], B[N];
+  double A[N][N], B[N][N];
   int test = rand() % 100;
   #pragma omp parallel
   {
     #pragma omp single
     {
       for (int i = 0; i < N; i++) {
-        // A[i] = i * 1.0 + test;
-        // Task 1: Compute A[i]
-        #pragma omp task depend(out : A[i])
-        {
-          // printf("A[%d] = %f\n", i, A[i]);
-          A[i] = i * 1.0 + test;
-          // printf("A[%d] = %f\n", i, A[i]);
-        }
+        for(int j = 0; j < N; j++) {
+          // Task 1: Compute A[i][j]
+          #pragma omp task depend(out : A[i+1][j-1])
+          {
+              A[i][j] = i * 1.0 + test;
+            
+          }
+      }
 
         // Task 2: Compute B[i] based on A[i] and A[i-1] (inter-loop dependency)
         #pragma omp task depend(in : A[i], A[i - 1]) depend(out : B[i])
-          B[i] = A[i] + (i > 0 ? A[i - 1] : 0);
+        {
+          for (int j = 0; j< N; j++) {
+            B[i][j] = A[i][j] + (i > 0 ? A[i - 1][j] : 0);
+          }
+        }
       }
     }
   }
-
-  /// Print A and B
   for(int i = 0; i < N; i++) {
-    printf("A[%d] = %f\n", i, A[i]);
-    printf("B[%d] = %f\n", i, B[i]);
+    for(int j = 0; j < N; j++) {
+      B[i][j] = A[i][j] + (i > 0 ? A[i - 1][j] : 0);
+    }
+  }
+  /// print A and B
+  for(int i = 0; i < N; i++) {
+    for(int j = 0; j < N; j++) {
+      printf("A[%d][%d] = %f\n", i, j, A[i][j]);
+      printf("B[%d][%d] = %f\n", i, j, B[i][j]);
+    }
   }
 }
+
+
+// void compute() {
+//   double A[N], B[N];
+//   int test = rand() % 100;
+//   #pragma omp parallel
+//   {
+//     #pragma omp single
+//     {
+//       for (int i = 0; i < N; i++) {
+//         // A[i] = i * 1.0 + test;
+//         // Task 1: Compute A[i]
+//         #pragma omp task depend(out : A[i])
+//         {
+//           // printf("A[%d] = %f\n", i, A[i]);
+//           A[i] = i * 1.0 + test;
+//           // printf("A[%d] = %f\n", i, A[i]);
+//         }
+
+//         // Task 2: Compute B[i] based on A[i] and A[i-1] (inter-loop dependency)
+//         #pragma omp task depend(in : A[i], A[i - 1]) depend(out : B[i])
+//           B[i] = A[i] + (i > 0 ? A[i - 1] : 0);
+//       }
+//     }
+//   }
+
+//   /// Print A and B
+//   for(int i = 0; i < N; i++) {
+//     printf("A[%d] = %f\n", i, A[i]);
+//     printf("B[%d] = %f\n", i, B[i]);
+//   }
+// }
 
 
 // void compute_non_affine(int N, double *A, double *B, int *indices) {

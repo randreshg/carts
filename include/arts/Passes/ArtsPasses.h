@@ -1,7 +1,7 @@
 #ifndef CARTS_DIALECT_CARTS_PASSES_H
 #define CARTS_DIALECT_CARTS_PASSES_H
 
-#include <memory>
+// #include <memory>
 
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Conversion/LLVMCommon/LoweringOptions.h"
@@ -22,6 +22,7 @@ namespace arts {
 std::unique_ptr<Pass> createConvertOpenMPtoARTSPass();
 std::unique_ptr<Pass> createConvertArtsToFuncsPass();
 std::unique_ptr<Pass> createCreateEventsPass();
+std::unique_ptr<Pass> createDataBlockPass();
 } // namespace arts
 } // namespace mlir
 

@@ -83,6 +83,198 @@ void UndefOp::getCanonicalizationPatterns(RewritePatternSet &results,
 }
 
 //===----------------------------------------------------------------------===//
+// DataBlockOp
+
+/// Custom printer for DataBlockOp.
+// build(::mlir::OpBuilder &odsBuilder, ::mlir::OperationState &odsState, Type
+// subview, StringRef mode, Value base, Type elementType, Value elementTypeSize,
+// ValueRange offsets, ValueRange sizes);
+void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                        Type subview, StringRef mode, Value base,
+                        Type elementType, Value elementTypeSize,
+                        ValueRange offsets, ValueRange sizes) {
+
+  odsState.addOperands(base);
+  odsState.addOperands(elementTypeSize);
+  odsState.addOperands(offsets);
+  odsState.addOperands(sizes);
+  ::llvm::copy(
+      ::llvm::ArrayRef<int32_t>({1, 1, static_cast<int32_t>(offsets.size()),
+                                 static_cast<int32_t>(sizes.size())}),
+      odsState.getOrAddProperties<Properties>().operandSegmentSizes.begin());
+  odsState.getOrAddProperties<Properties>().mode =
+      odsBuilder.getStringAttr(mode);
+  odsState.getOrAddProperties<Properties>().elementType =
+      TypeAttr::get(elementType);
+  odsState.addTypes(subview);
+}
+
+ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
+  /// Parse the mode attribute.
+  StringAttr modeAttr;
+  if (parser.parseAttribute(modeAttr, "mode", result.attributes))
+    return failure();
+  if (parser.parseComma())
+    return failure();
+
+  /// Parse the base operand.
+  OpAsmParser::UnresolvedOperand baseOperand;
+  if (parser.parseOperand(baseOperand))
+    return failure();
+
+  /// Parse colon and the type of the base operand.
+  if (parser.parseColon())
+    return failure();
+  Type baseType;
+  if (parser.parseType(baseType))
+    return failure();
+  result.addAttribute("baseType", TypeAttr::get(baseType));
+  if (parser.resolveOperand(baseOperand, baseType, result.operands))
+    return failure();
+
+  if (parser.parseComma())
+    return failure();
+
+  /// Parse offsets list.
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> offsetOperands;
+  if (parser.parseLSquare())
+    return failure();
+  if (parser.parseOperandList(offsetOperands))
+    return failure();
+  if (parser.parseRSquare())
+    return failure();
+
+  if (parser.parseComma())
+    return failure();
+
+  /// Parse sizes list.
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> sizeOperands;
+  if (parser.parseLSquare())
+    return failure();
+  if (parser.parseOperandList(sizeOperands))
+    return failure();
+  if (parser.parseRSquare())
+    return failure();
+
+  /// Optionally parse the affineOffsetMaps group.
+  if (succeeded(parser.parseOptionalComma())) {
+    if (parser.parseKeyword("affineMaps"))
+      return failure();
+    if (parser.parseEqual())
+      return failure();
+    Attribute affineMapsAttr;
+    if (parser.parseAttribute(affineMapsAttr, "affineOffsetMaps",
+                              result.attributes))
+      return failure();
+  }
+
+  /// Parse the element type and the elementTypeSize operand in square brackets.
+  if (parser.parseLSquare())
+    return failure();
+  Type elementType;
+  if (parser.parseType(elementType))
+    return failure();
+
+  /// Record the element type as an attribute.
+  result.addAttribute("elementType", TypeAttr::get(elementType));
+  if (parser.parseComma())
+    return failure();
+  // Parse the elementTypeSize operand (as expected to be an index value).
+  OpAsmParser::UnresolvedOperand etsOperand;
+  if (parser.parseOperand(etsOperand))
+    return failure();
+
+  Builder &builder = parser.getBuilder();
+  Type indexType = builder.getIndexType();
+  if (parser.resolveOperand(etsOperand, indexType, result.operands))
+    return failure();
+  if (parser.parseRSquare())
+    return failure();
+
+  /// Parse the arrow and the result (subview) type.
+  if (parser.parseArrow())
+    return failure();
+  Type subviewType;
+  if (parser.parseType(subviewType))
+    return failure();
+  result.addTypes({subviewType});
+
+  /// Parse an optional attribute dictionary.
+  if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
+    return failure();
+
+  /// Resolve the operand lists for offsets and sizes as index type.
+  SmallVector<Type, 4> expectedOffsets(offsetOperands.size(), indexType);
+  if (parser.resolveOperands(offsetOperands, expectedOffsets,
+                             parser.getCurrentLocation(), result.operands))
+    return failure();
+  SmallVector<Type, 4> expectedSizes(sizeOperands.size(), indexType);
+  if (parser.resolveOperands(sizeOperands, expectedSizes,
+                             parser.getCurrentLocation(), result.operands))
+    return failure();
+
+  // Set operand segment sizes. The expected order is:
+  // 1 for base, 1 for elementTypeSize, then offsets, then sizes.
+  SmallVector<int32_t, 4> segmentSizes;
+  segmentSizes.push_back(1);
+  segmentSizes.push_back(1);
+  segmentSizes.push_back(static_cast<int32_t>(offsetOperands.size()));
+  segmentSizes.push_back(static_cast<int32_t>(sizeOperands.size()));
+  std::copy(
+      segmentSizes.begin(), segmentSizes.end(),
+      result.getOrAddProperties<Properties>().operandSegmentSizes.begin());
+
+  return success();
+}
+
+void DataBlockOp::print(OpAsmPrinter &printer) {
+  auto op = getOperation();
+  /// Print the mode attribute.
+  printer << " " << getModeAttr();
+
+  /// Print the base operand and its type.
+  printer << " ptr[";
+  printer.printOperand(getBase());
+  printer << " : ";
+  printer.printType(getBase().getType());
+  printer << "]";
+
+  /// Print offsets.
+  auto offsets = getOffsets();
+  printer << ", offsets[";
+  printer.printOperands(offsets);
+  printer << "]";
+
+  /// Print sizes.
+  auto sizes = getSizes();
+  printer << ", sizes[";
+  printer.printOperands(sizes);
+  printer << "]";
+
+  /// Print the element type attribute.
+  auto typeAttr = op->getAttrOfType<TypeAttr>("elementType");
+  printer << ", type[" << typeAttr.getValue() << "]";
+
+  /// Print the elementTypeSize operand (at index 1).
+  printer << ", typeSize[";
+  printer.printOperand(getOperands()[1]);
+  printer << "]";
+
+  /// Optionally print the affineMap attribute if present.
+  if (auto affineMap = op->getAttr("affineMap"))
+    printer << ", affineMap=" << affineMap;
+
+  // Print all remaining attributes except "operandSegmentSizes"
+  // and those already printed ("mode", "elementType", "affineMap").
+  printer.printOptionalAttrDict(op->getAttrs(),
+                                {"mode", "elementType", "affineMap", "operandSegmentSizes"});
+
+  /// Print arrow and the result type.
+  printer << " -> ";
+  printer.printType(getResult().getType());
+}
+
+//===----------------------------------------------------------------------===//
 // EdtOp
 //===----------------------------------------------------------------------===//
 ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
