@@ -1,10 +1,9 @@
-#set = affine_set<(d0) : (d0 - 1 >= 0)>
-module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
-  llvm.mlir.global internal constant @str1("B[%d][%d] = %f\0A\00") {addr_space = 0 : i32}
-  llvm.mlir.global internal constant @str0("A[%d][%d] = %f\0A\00") {addr_space = 0 : i32}
+module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
+  llvm.mlir.global internal constant @str2("B[%d][%d] = %f   \00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str1("\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str0("A[%d][%d] = %f   \00") {addr_space = 0 : i32}
   llvm.func @printf(!llvm.ptr, ...) -> i32
   func.func @compute() attributes {llvm.linkage = #llvm.linkage<external>} {
-    %cst = arith.constant 0.000000e+00 : f64
     %c100_i32 = arith.constant 100 : i32
     %alloca = memref.alloca() : memref<100x100xf64>
     %alloca_0 = memref.alloca() : memref<100x100xf64>
@@ -16,39 +15,46 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr<272>, d
       %alloca_2 = memref.alloca() : memref<f64>
       %alloca_3 = memref.alloca() : memref<f64>
       %alloca_4 = memref.alloca() : memref<f64>
+      %alloca_5 = memref.alloca() : memref<f64>
+      %alloca_6 = memref.alloca() : memref<f64>
       omp.master {
-        %6 = arith.sitofp %1 : i32 to f64
+        %8 = arith.sitofp %1 : i32 to f64
         affine.for %arg0 = 0 to 100 {
-          %7 = arith.index_cast %arg0 : index to i32
-          %8 = arith.sitofp %7 : i32 to f64
-          %9 = arith.addf %8, %6 : f64
+          %9 = arith.index_cast %arg0 : index to i32
+          %10 = arith.sitofp %9 : i32 to f64
+          %11 = arith.addf %10, %8 : f64
           affine.for %arg1 = 0 to 100 {
-            %13 = affine.load %alloca_0[%arg0 + 1, %arg1 - 1] : memref<100x100xf64>
-            affine.store %13, %alloca_1[] : memref<f64>
-            omp.task   depend(taskdependout -> %alloca_1 : memref<f64>) {
-              affine.store %9, %alloca_0[%arg0, %arg1] : memref<100x100xf64>
+            %12 = affine.load %alloca_0[%arg0, %arg1] : memref<100x100xf64>
+            affine.store %12, %alloca_6[] : memref<f64>
+            omp.task   depend(taskdependout -> %alloca_6 : memref<f64>) {
+              affine.store %11, %alloca_0[%arg0, %arg1] : memref<100x100xf64>
               omp.terminator
             }
           }
-          %10 = affine.load %alloca_0[%arg0, 0] : memref<100x100xf64>
-          affine.store %10, %alloca_2[] : memref<f64>
-          %11 = affine.load %alloca_0[%arg0 - 1, 0] : memref<100x100xf64>
-          affine.store %11, %alloca_3[] : memref<f64>
-          %12 = affine.load %alloca[%arg0, 0] : memref<100x100xf64>
-          affine.store %12, %alloca_4[] : memref<f64>
-          omp.task   depend(taskdependin -> %alloca_2 : memref<f64>, taskdependin -> %alloca_3 : memref<f64>, taskdependout -> %alloca_4 : memref<f64>) {
-            affine.for %arg1 = 0 to 100 {
-              %13 = affine.load %alloca_0[%arg0, %arg1] : memref<100x100xf64>
-              %14 = affine.if #set(%arg0) -> f64 {
-                %16 = affine.load %alloca_0[%arg0 - 1, %arg1] : memref<100x100xf64>
-                affine.yield %16 : f64
-              } else {
-                affine.yield %cst : f64
-              }
-              %15 = arith.addf %13, %14 : f64
-              affine.store %15, %alloca[%arg0, %arg1] : memref<100x100xf64>
-            }
+        }
+        affine.for %arg0 = 0 to 100 {
+          %9 = affine.load %alloca_0[0, %arg0] : memref<100x100xf64>
+          affine.store %9, %alloca_4[] : memref<f64>
+          %10 = affine.load %alloca[0, %arg0] : memref<100x100xf64>
+          affine.store %10, %alloca_5[] : memref<f64>
+          omp.task   depend(taskdependin -> %alloca_4 : memref<f64>, taskdependout -> %alloca_5 : memref<f64>) {
+            affine.store %9, %alloca[0, %arg0] : memref<100x100xf64>
             omp.terminator
+          }
+        }
+        affine.for %arg0 = 1 to 100 {
+          affine.for %arg1 = 0 to 100 {
+            %9 = affine.load %alloca_0[%arg0, %arg1] : memref<100x100xf64>
+            affine.store %9, %alloca_1[] : memref<f64>
+            %10 = affine.load %alloca_0[%arg0 - 1, %arg1] : memref<100x100xf64>
+            affine.store %10, %alloca_2[] : memref<f64>
+            %11 = affine.load %alloca[%arg0, %arg1] : memref<100x100xf64>
+            affine.store %11, %alloca_3[] : memref<f64>
+            omp.task   depend(taskdependin -> %alloca_1 : memref<f64>, taskdependin -> %alloca_2 : memref<f64>, taskdependout -> %alloca_3 : memref<f64>) {
+              %12 = arith.addf %9, %10 : f64
+              affine.store %12, %alloca[%arg0, %arg1] : memref<100x100xf64>
+              omp.terminator
+            }
           }
         }
         omp.terminator
@@ -56,38 +62,29 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr<272>, d
       omp.barrier
       omp.terminator
     }
-    affine.for %arg0 = 0 to 100 {
-      affine.for %arg1 = 0 to 100 {
-        %6 = affine.load %alloca_0[%arg0, %arg1] : memref<100x100xf64>
-        %7 = affine.if #set(%arg0) -> f64 {
-          %9 = affine.load %alloca_0[%arg0 - 1, %arg1] : memref<100x100xf64>
-          affine.yield %9 : f64
-        } else {
-          affine.yield %cst : f64
-        }
-        %8 = arith.addf %6, %7 : f64
-        affine.store %8, %alloca[%arg0, %arg1] : memref<100x100xf64>
-      }
-    }
     %2 = llvm.mlir.addressof @str0 : !llvm.ptr
-    %3 = llvm.getelementptr %2[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<16 x i8>
+    %3 = llvm.getelementptr %2[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<18 x i8>
     %4 = llvm.mlir.addressof @str1 : !llvm.ptr
-    %5 = llvm.getelementptr %4[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<16 x i8>
+    %5 = llvm.getelementptr %4[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<2 x i8>
     affine.for %arg0 = 0 to 100 {
-      %6 = arith.index_cast %arg0 : index to i32
+      %8 = arith.index_cast %arg0 : index to i32
       affine.for %arg1 = 0 to 100 {
-        %7 = arith.index_cast %arg1 : index to i32
-        %8 = affine.load %alloca_0[%arg0, %arg1] : memref<100x100xf64>
-        %9 = llvm.call @printf(%3, %6, %7, %8) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32, f64) -> i32
-        %10 = affine.if #set(%arg0) -> f64 {
-          %13 = affine.load %alloca_0[%arg0 - 1, %arg1] : memref<100x100xf64>
-          affine.yield %13 : f64
-        } else {
-          affine.yield %cst : f64
-        }
-        %11 = arith.addf %8, %10 : f64
-        %12 = llvm.call @printf(%5, %6, %7, %11) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32, f64) -> i32
+        %10 = arith.index_cast %arg1 : index to i32
+        %11 = affine.load %alloca_0[%arg0, %arg1] : memref<100x100xf64>
+        %12 = llvm.call @printf(%3, %8, %10, %11) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32, f64) -> i32
       }
+      %9 = llvm.call @printf(%5) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+    }
+    %6 = llvm.mlir.addressof @str2 : !llvm.ptr
+    %7 = llvm.getelementptr %6[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<18 x i8>
+    affine.for %arg0 = 0 to 100 {
+      %8 = arith.index_cast %arg0 : index to i32
+      affine.for %arg1 = 0 to 100 {
+        %10 = arith.index_cast %arg1 : index to i32
+        %11 = affine.load %alloca[%arg0, %arg1] : memref<100x100xf64>
+        %12 = llvm.call @printf(%7, %8, %10, %11) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32, f64) -> i32
+      }
+      %9 = llvm.call @printf(%5) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
     }
     return
   }

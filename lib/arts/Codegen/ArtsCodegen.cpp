@@ -1,9 +1,6 @@
-//===- ArtsCodegen.cpp - Builder for LLVM-IR for ARTS directives ----===//
-//===----------------------------------------------------------------------===//
-/// This file implements the ArtsCodegen class, which is used as a
-/// convenient way to create LLVM instructions for ARTS directives.
-///
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: ArtsCodegen.cpp
+///==========================================================================
 
 /// Other dialects
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -67,13 +64,13 @@ DataBlockCodegen::DataBlockCodegen(ArtsCodegen &AC, arts::DataBlockOp dbOp,
 void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
   /// Datablock info
   dbOp = depOp;
-  memref = dbOp.getBase();
-  baseIsDb = dbOp.isBaseDb();
+  memref = dbOp.getPtr();
+  ptrIsDb = dbOp.isBaseDb();
   elementType = dbOp.getElementType();
   elementTypeSize = dbOp.getElementTypeSize();
 
   /// If the base is a DB, it will be handled when inserting the EDT Entry
-  if (baseIsDb) {
+  if (ptrIsDb) {
     LLVM_DEBUG(DBGS() << "Base is a datablock: " << dbOp << "\n");
     return;
   }

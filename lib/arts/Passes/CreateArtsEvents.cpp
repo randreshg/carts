@@ -118,9 +118,9 @@ struct CreateArtsEventsPass
         }
 
         /// Insert Edt user of consumer and producer.
-        assert(producer.edtUser && "Expected an EDT user");
-        edtUsers.insert(producer.edtUser);
-        edtUsers.insert(graph.nodes[edge.consumerID].edtUser);
+        assert(producer.userEdt && "Expected an EDT user");
+        edtUsers.insert(producer.userEdt);
+        edtUsers.insert(graph.nodes[edge.consumerID].userEdt);
 
         /// If the datablock is loaded and dependent on a loop, group the event.
         if (producer.isLoopDependent && producer.isLoad) {
@@ -157,10 +157,10 @@ struct CreateArtsEventsPass
       /// Lambda to load an event value into the consumer's event map.
       auto loadEventToMap = [&](DatablockAnalysis::Node &dbNode, Value event,
                                 Location loc) -> Value {
-        builder.setInsertionPoint(dbNode.edtUser);
+        builder.setInsertionPoint(dbNode.userEdt);
         auto eventLoad =
             builder.create<memref::LoadOp>(loc, event, dbNode.offsets);
-        edtToEvents[dbNode.edtUser][dbNode.edtDepId] = eventLoad.getResult();
+        edtToEvents[dbNode.userEdt][dbNode.userEdtPos] = eventLoad.getResult();
         return eventLoad.getResult();
       };
 
@@ -177,7 +177,7 @@ struct CreateArtsEventsPass
           /// Get the parent node.
           assert(producerNode.isLoad && "Expected a load datablock");
           auto dbParent =
-              cast<DataBlockOp>(producerNode.baseMemref.getDefiningOp());
+              cast<DataBlockOp>(producerNode.ptr.getDefiningOp());
           auto &dbParentNode = dbAnalysis.getNode(dbParent);
           /// Create event
           auto type = MemRefType::get(dbParentNode.op.getType().getShape(),
@@ -191,7 +191,7 @@ struct CreateArtsEventsPass
           for (const auto &edge : edges) {
             auto &consumer = graph.nodes[edge.consumerID];
             if (edge.isDirect)
-              edtToEvents[consumer.edtUser][consumer.edtDepId] = defEvent;
+              edtToEvents[consumer.userEdt][consumer.userEdtPos] = defEvent;
             else
               loadEventToMap(consumer, eventOp.getResult(), loc);
           }

@@ -44,7 +44,7 @@ def CreateArtsEvents : Pass<"create-events", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createCreateEventsPass()";
 }
 
-def DataBlock : Pass<"datablocks", "mlir::ModuleOp"> {
+def DataBlock : Pass<"datablock", "mlir::ModuleOp"> {
   let summary = "Using the Datablock Analysis, perform changes to the DataBlock operations and optimize them if the user wants to";
   let dependentDialects = [
     "memref::MemRefDialect",

@@ -32,7 +32,8 @@ EdtEnvManager::~EdtEnvManager() {}
 
 void EdtEnvManager::naiveCollection(bool ignoreDeps) {
   // LLVM_DEBUG(dbgs() << line
-  //                   << "Naive collection of parameters and dependencies: \n");
+  //                   << "Naive collection of parameters and dependencies:
+  //                   \n");
   /// Ignore collecting dependencies if there are already depsToProcess
   /// This is the case of omp tasks
   if (!depsToProcess.empty())
@@ -75,7 +76,7 @@ void EdtEnvManager::adjust() {
   DenseMap<Value, SmallVector<arts::DataBlockOp>> baseToDepsMap;
   for (auto dep : dependencies) {
     auto depOp = cast<arts::DataBlockOp>(dep.getDefiningOp());
-    auto depBase = depOp.getBase();
+    auto depBase = depOp.getPtr();
     baseToDepsMap[depBase].push_back(depOp);
     if (parameters.contains(depBase))
       parameters.remove(depBase);
@@ -92,7 +93,7 @@ void EdtEnvManager::adjust() {
     if (!loadOp)
       continue;
 
-    /// If the base of the load is not a dep, continue
+    /// If the base ptr of the load is not a dep, continue
     auto memref = loadOp.getMemRef();
     auto indices = loadOp.getIndices();
     if (!baseToDepsMap.count(memref))
@@ -115,7 +116,7 @@ void EdtEnvManager::adjust() {
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToStart(&region.front());
       auto newLoad = rewriter.create<memref::LoadOp>(loadOp.getLoc(),
-                                                     dep.getBase(), indices);
+                                                     dep.getPtr(), indices);
       replaceInRegion(region, loadOp.getResult(), newLoad.getResult());
 
       /// Remove the parameter
