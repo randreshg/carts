@@ -46,7 +46,7 @@ public:
   Value getEntryGuid() { return entryGuid; }
   Value getEntryPtr() { return entryPtr; }
   DenseMap<unsigned, unsigned> &getEntrySizes() { return entrySizes; }
-  ValueRange getOffsets() { return dbOp.getOffsets(); }
+  ValueRange getIndices() { return dbOp.getIndices(); }
   ValueRange getSizes() { return dbOp.getSizes(); }
 
   /// Setters

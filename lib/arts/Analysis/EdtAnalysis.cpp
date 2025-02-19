@@ -101,7 +101,7 @@ void EdtEnvManager::adjust() {
 
     /// Get all the dependencies that have the same base as the load
     for (auto dep : baseToDepsMap[memref]) {
-      auto depIndices = dep.getOffsets();
+      auto depIndices = dep.getIndices();
       if (indices.size() != depIndices.size())
         continue;
 

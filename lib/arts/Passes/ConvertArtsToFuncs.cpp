@@ -185,7 +185,7 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
                          : MemRefType::get({ShapedType::kDynamic}, AC->VoidPtr);
   auto newDbOp = builder.create<arts::DataBlockOp>(
       op->getLoc(), pointerType, op.getMode(), op.getPtr(),
-      op.getElementType(), op.getElementTypeSize(), op.getOffsets(), sizes);
+      op.getElementType(), op.getElementTypeSize(), op.getIndices(), sizes);
   newDbOp->setAttrs(op->getAttrs());
 
   /// Helper lambda to check if the indices represent a single constant zero.

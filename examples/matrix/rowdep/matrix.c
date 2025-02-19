@@ -7,13 +7,24 @@
 // #include <stdlib.h>
 // #include <time.h>
 
-// Convert to MLIR standard dialect
-/// cgeist 
+/// AFFINE
 /// cgeist matrix.c -fopenmp -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include  --raise-scf-to-affine  &> matrix.mlir
+/// --affine-data-copy-generate 
+
+// Convert to MLIR standard dialect
+/// cgeist matrix.c -fopenmp -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include  &> matrix.mlir
 
 // Convert OpenMP to ARTS
-/// carts-opt matrix.mlir --convert-openmp-to-arts --canonicalize &> matrix-arts.mlir
-/// carts-opt matrix.mlir --convert-openmp-to-arts --canonicalize -debug-only=convert-openmp-to-arts,edt-analysis &> matrix-arts.mlir
+/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --cse --canonicalize &> matrix-arts.mlir
+/// carts-opt matrix-std.mlir --convert-openmp-to-arts --canonicalize -debug-only=convert-openmp-to-arts,edt-analysis &> matrix-arts.mlir
+
+// DatablockIdentification pass
+/// carts-opt matrix-arts.mlir --identify-datablocks --cse &> matrix-datablock.mlir
+
+// Try to raise to affine
+/// carts-opt matrix-arts.mlir --raise-scf-to-affine --affine-cfg --affine-scalrep &> matrix-affine.mlir
+/// carts-opt matrix-affine.mlir --affine-data-copy-generate &> matrix-affine-pipeline.mlir
+
 
 // DataBlock pass
 /// carts-opt matrix-arts.mlir --datablock --cse &> matrix-datablock.mlir
@@ -40,43 +51,42 @@
 void compute() {
   double A[N][N], B[N][N];
   int test = rand() % 100;
-  
+
   #pragma omp parallel
   {
     #pragma omp single
     {
-      // Compute the A matrix.
+      // Compute each row of matrix A in a separate task.
       for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-          // Each task computes one A[i][j].
-          #pragma omp task firstprivate(i, j) depend(out : A[i][j])
-          {
+        #pragma omp task firstprivate(i, test) depend(out: A[i])
+        {
+          for (int j = 0; j < N; j++) {
             A[i][j] = i * 1.0 + test;
           }
         }
       }
-      
-      // Compute the B matrix using A.
-      // For row zero, B[0][j] only depends on A[0][j].
-      for (int j = 0; j < N; j++) {
-        #pragma omp task firstprivate(j) depend(in : A[0][j]) depend(out : B[0][j])
-        {
+
+      // Compute row 0 of B using the entire row A[0].
+      #pragma omp task depend(in: A[0]) depend(out: B[0])
+      {
+        for (int j = 0; j < N; j++) {
           B[0][j] = A[0][j];
         }
       }
-      // For rows 1..N-1, B[i][j] depends on A[i][j] and the previous row A[i-1][j].
+
+      // Compute rows 1..N-1 of B.
+      // Each B row i depends on both A row i and A row i-1.
       for (int i = 1; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-          #pragma omp task firstprivate(i, j) depend(in : A[i][j], A[i-1][j]) depend(out : B[i][j])
-          {
+        #pragma omp task firstprivate(i) depend(in: A[i], A[i-1]) depend(out: B[i])
+        {
+          for (int j = 0; j < N; j++) {
             B[i][j] = A[i][j] + A[i-1][j];
           }
         }
       }
-
     }
   }
-  
+
   // Print the computed matrices.
   for (int i = 0; i < N; i++) {
     for (int j = 0; j < N; j++) {
@@ -91,3 +101,4 @@ void compute() {
     printf("\n");
   }
 }
+
