@@ -441,7 +441,7 @@ Instruction *ARTSTransform::handleTask(CallBase &CB) {
 
   // /// Analyze Task Data
   // /// This analysis assumes we only have stores to the task struct
-  // /// Get offsets and values from the Task Data - Call to __kmpc_omp_task_alloc
+  // /// Get indices and values from the Task Data - Call to __kmpc_omp_task_alloc
   // CallBase *CallToOmpTask = nullptr;
   // DenseMap<Value *, int64_t> ValueToOffsetTD;
   // Instruction *CurI = &CB;
@@ -494,7 +494,7 @@ Instruction *ARTSTransform::handleTask(CallBase &CB) {
   // /// This assumes the 'disaggregation' happens in the first basic block
   // BasicBlock &EntryBB = Fn->getEntryBlock();
   // Instruction *TaskDataPtr = &*(EntryBB.begin());
-  // /// Get offsets and values from the Task Data - Task Outlined function
+  // /// Get indices and values from the Task Data - Task Outlined function
   // DenseMap<int64_t, Value *> OffsetToValueOF;
   // CurI = &*EntryBB.begin();
 

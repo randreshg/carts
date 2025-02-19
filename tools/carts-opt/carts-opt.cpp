@@ -14,7 +14,6 @@
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Async/IR/Async.h"
 #include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -32,6 +31,7 @@
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "mlir/Transforms/Passes.h"
 #include "polygeist/Dialect.h"
+#include "polygeist/Passes/Passes.h"
 
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
@@ -65,6 +65,7 @@ int main(int argc, char **argv) {
 
   /// Register all passes and translations.
   mlir::registerArtsPasses();
+  mlir::registerpolygeistPasses();
   mlir::func::registerInlinerExtension(registry);
   mlir::registerCSEPass();
   mlir::registerConvertAffineToStandardPass();
@@ -73,6 +74,7 @@ int main(int argc, char **argv) {
   mlir::registerCanonicalizerPass();
   mlir::registerSymbolDCEPass();
   mlir::registerLoopInvariantCodeMotionPass();
+  mlir::affine::registerAffinePasses();
 
   /// Register interfaces.
   registry.addExtension(+[](MLIRContext *ctx, LLVM::LLVMDialect *dialect) {

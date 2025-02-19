@@ -63,9 +63,9 @@ def DataBlockOp : Arts_Op<"datablock",
     AnyMemRef:$ptr,                            // Base ptr
     TypeAttr:$elementType,                     // Element type for the subview (or memref type)
     Index:$elementTypeSize,                    // Size (number of elements) associated with that type
-    Variadic<Index>:$offsets,                  // Offsets for the subview
+    Variadic<Index>:$indices,                  // Indices for the subview
     Variadic<Index>:$sizes,                    // Sizes for the subview
-    OptionalAttr<AffineMapAttr>:$affineMap       // Affine map for offset transformation
+    OptionalAttr<AffineMapAttr>:$affineMap     // Affine map for offset transformation
   );
   let results = (outs AnyMemRef:$subview); // Produces a memref.subview
   let hasCustomAssemblyFormat = 1;
@@ -73,7 +73,7 @@ def DataBlockOp : Arts_Op<"datablock",
   let builders = [
     OpBuilder<(ins
       "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, "Value":$elementTypeSize,
-      "ValueRange":$offsets, "ValueRange":$sizes)>
+      "ValueRange":$indices, "ValueRange":$sizes)>
   ];
   let extraClassDeclaration = [{
     bool isLoad();

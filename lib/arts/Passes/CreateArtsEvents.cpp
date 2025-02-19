@@ -159,7 +159,7 @@ struct CreateArtsEventsPass
                                 Location loc) -> Value {
         builder.setInsertionPoint(dbNode.userEdt);
         auto eventLoad =
-            builder.create<memref::LoadOp>(loc, event, dbNode.offsets);
+            builder.create<memref::LoadOp>(loc, event, dbNode.indices);
         edtToEvents[dbNode.userEdt][dbNode.userEdtPos] = eventLoad.getResult();
         return eventLoad.getResult();
       };

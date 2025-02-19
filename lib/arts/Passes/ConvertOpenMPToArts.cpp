@@ -1,17 +1,14 @@
-//===----------------- ConvertOpenMPToArtsHierarchical.cpp  --------------===//
+//===----------------- ConvertOpenMPToArts.cpp  --------------===//
 //
 // This file implements a module pass that converts OpenMP ops
 // (omp.parallel, omp.master, omp.task, etc.) into ARTS ops
-// (arts.parallel, arts.single, arts.edt).
 //===----------------------------------------------------------------------===//
 
 /// Dialects
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
-#include "mlir/IR/AffineMap.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "polygeist/Ops.h"
 /// Arts
@@ -47,26 +44,23 @@ static DataBlockOp createDatablockOp(PatternRewriter &rewriter, Region &region,
                                      Value inputMemRef) {
   bool isLoad = false;
   auto inputMemRefOp = inputMemRef.getDefiningOp();
+  assert(inputMemRefOp && "Input must be a defining operation.");
 
-  /// If the defining operation is a load op obtain the base memref and
-  /// pinned indices.
+  /// If the defining operation is a load op obtain the base memref and pinned
+  /// indices.
   Value baseMemRef;
   SmallVector<Value> pinnedIndices;
-  AffineMap affineMap;
-  if (auto loadOp = dyn_cast<memref::LoadOp>(inputMemRefOp)) {
+
+  /// A lambda to handle common load operations.
+  auto processLoad = [&](auto loadOp) {
     baseMemRef = loadOp.getMemref();
     pinnedIndices.assign(loadOp.getIndices().begin(),
                          loadOp.getIndices().end());
-    affineMap = AffineMap::getMultiDimIdentityMap(pinnedIndices.size(),
-                                                  loadOp.getContext());
     isLoad = true;
-  } else if (auto affineLoadOp =
-                 dyn_cast<affine::AffineLoadOp>(inputMemRefOp)) {
-    baseMemRef = affineLoadOp.getMemref();
-    pinnedIndices.assign(affineLoadOp.getIndices().begin(),
-                         affineLoadOp.getIndices().end());
-    affineMap = affineLoadOp.getAffineMap();
-    isLoad = true;
+  };
+
+  if (auto loadOp = dyn_cast<memref::LoadOp>(inputMemRefOp)) {
+    processLoad(loadOp);
   } else {
     baseMemRef = inputMemRef;
   }
@@ -80,14 +74,14 @@ static DataBlockOp createDatablockOp(PatternRewriter &rewriter, Region &region,
 
   /// Prepare arrays for subview
   const auto pinnedCount = static_cast<int64_t>(pinnedIndices.size());
-  SmallVector<Value, 4> offsets(pinnedCount), sizes(rank);
+  SmallVector<Value, 4> indices(pinnedCount), sizes(rank);
   SmallVector<int64_t, 4> subShape(rank);
 
   OpBuilder::InsertionGuard IG(rewriter);
   if (inputMemRefOp)
     rewriter.setInsertionPointAfter(inputMemRefOp);
 
-  /// Compute dimension sizes, offsets, sizes, and subshape
+  /// Compute dimension sizes, indices, sizes, and subshape
   Value oneSize = rewriter.create<arith::ConstantIndexOp>(loc, 1);
   for (int64_t i = 0; i < rank; ++i) {
     Value dimVal =
@@ -98,7 +92,7 @@ static DataBlockOp createDatablockOp(PatternRewriter &rewriter, Region &region,
                   .getResult();
 
     if (i < pinnedCount) {
-      offsets[i] = pinnedIndices[i];
+      indices[i] = pinnedIndices[i];
       sizes[i] = oneSize;
       subShape[i] = 1;
     } else {
@@ -108,33 +102,23 @@ static DataBlockOp createDatablockOp(PatternRewriter &rewriter, Region &region,
     }
   }
 
-  /// Now build the subview memref type
+  /// Build the subview memref type.
   auto elementType = baseType.getElementType();
   auto subMemRefType = MemRefType::get(subShape, elementType,
                                        baseType.getLayout().getAffineMap(),
                                        baseType.getMemorySpace());
 
-  /// Insert polygeist.typeSizeOp to get the size of the element type
+  /// Insert polygeist.typeSizeOp to get the size of the element type.
   auto elementTypeSize = rewriter
                              .create<polygeist::TypeSizeOp>(
                                  loc, rewriter.getIndexType(), elementType)
                              .getResult();
 
-  /// Create the final arts.datablock operation with the affine map attribute.
+  /// Create the final arts.datablock operation.
   auto modeAttr = rewriter.getStringAttr(mode);
-  DataBlockOp depOp;
-  LLVM_DEBUG(dbgs() << "Creating datablock: " << subMemRefType << " - "
-                    << affineMap << "\n");
-  if (!affineMap) {
-    depOp = rewriter.create<arts::DataBlockOp>(loc, subMemRefType, modeAttr,
-                                               baseMemRef, elementType,
-                                               elementTypeSize, offsets, sizes);
-  } else {
-    auto affineMapAttr = AffineMapAttr::get(affineMap);
-    depOp = rewriter.create<arts::DataBlockOp>(
-        loc, subMemRefType, modeAttr, baseMemRef, elementType, elementTypeSize,
-        offsets, sizes, affineMapAttr);
-  }
+  DataBlockOp depOp = rewriter.create<arts::DataBlockOp>(
+      loc, subMemRefType, modeAttr, baseMemRef, elementType, elementTypeSize,
+      indices, sizes);
 
   if (isLoad)
     depOp->setAttr("isLoad", rewriter.getUnitAttr());
@@ -145,7 +129,7 @@ static void createDatablocks(EdtEnvManager &edtEnv, PatternRewriter &rewriter) {
   auto &region = edtEnv.getRegion();
   edtEnv.naiveCollection();
   for (const auto &[input, depType] : edtEnv.getDepsToProcess()) {
-    LLVM_DEBUG(dbgs() << "Processing dependency: " << input << "\n");
+    LLVM_DEBUG(dbgs() << " - Processing dependency: " << input << "\n");
     auto depOp =
         createDatablockOp(rewriter, region, input.getLoc(), depType, input);
     edtEnv.addDependency(depOp.getResult());
@@ -235,38 +219,51 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
     /// Collect the task deps clause
     auto dependList = task.getDependsAttr();
     for (unsigned i = 0, e = dependList.size(); i < e; ++i) {
-      auto depClause = llvm::cast<omp::ClauseTaskDependAttr>(dependList[i]);
-      auto depType = stringifyTaskDepend(depClause.getValue());
-      auto depVar = task.getDependVars()[i];
+      /// Get dependency clause and type.
+      auto depClause = cast<omp::ClauseTaskDependAttr>(dependList[i]);
+      StringRef depType = stringifyTaskDepend(depClause.getValue());
+      Value depVar = task.getDependVars()[i];
 
-      /// It must be a memref.alloc operation
+      /// Ensure the dependency variable comes from a memref.alloc operation.
       auto depAlloc = depVar.getDefiningOp<memref::AllocaOp>();
       assert(depAlloc && "Expected a memref.alloc operation");
 
-      /// Check if the first user is an affine.store
-      affine::AffineStoreOp depStoreOp = nullptr;
+      /// Find the first user (except the task itself) that is an memref.store
+      /// op.
+      memref::StoreOp depStoreOp = nullptr;
       for (Operation *user : depVar.getUsers()) {
         if (user == task)
           continue;
-        depStoreOp = dyn_cast<affine::AffineStoreOp>(user);
-        break;
+        if ((depStoreOp = dyn_cast<memref::StoreOp>(user)))
+          break;
       }
-      assert(depStoreOp && "Expected an affine.store operation");
+      assert(depStoreOp && "Expected an memref.store operation");
 
-      /// The value must be loaded from a memref through a memref.load or
-      /// affine.load
-      auto valueDefOp = depStoreOp.getValueToStore().getDefiningOp();
-      mlir::Value depLoadVal;
+      /// Get the value that was stored; expect a memref.load
+      Operation *valueDefOp = depStoreOp.getValueToStore().getDefiningOp();
+      Value depLoadVal;
       if (auto loadOp = dyn_cast<memref::LoadOp>(valueDefOp))
         depLoadVal = loadOp.getResult();
-      else if (auto affineLoadOp = dyn_cast<affine::AffineLoadOp>(valueDefOp))
-        depLoadVal = affineLoadOp.getResult();
-      assert(depLoadVal && "Expected a memref.load or affine.load operation");
+      else
+        llvm_unreachable("Expected a memref.load operation");
 
-      /// Add the dependency to the edt environment
+      /// Clone the load operation at the beginning of the edt region.
+      {
+        auto &region = edtEnv.getRegion();
+        OpBuilder::InsertionGuard IG(rewriter);
+        rewriter.setInsertionPointToStart(&region.front());
+
+        Operation *defOp = depLoadVal.getDefiningOp();
+        auto loadOp = cast<memref::LoadOp>(defOp);
+        auto newLoad = rewriter.create<memref::LoadOp>(loc, loadOp.getMemref(),
+                                                       loadOp.getIndices());
+        replaceInRegion(region, loadOp.getResult(), newLoad.getResult());
+      }
+
+      /// Add the dependency with its type to the edt environment.
       edtEnv.addDependency(depLoadVal, depType);
 
-      /// Replace dependency array with undef
+      /// Replace the dependency allocation with an undefined value.
       replaceWithUndef(depAlloc, rewriter);
     }
 

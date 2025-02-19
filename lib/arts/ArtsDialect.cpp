@@ -88,14 +88,14 @@ void UndefOp::getCanonicalizationPatterns(RewritePatternSet &results,
 void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
                         Type subview, StringRef mode, Value ptr,
                         Type elementType, Value elementTypeSize,
-                        ValueRange offsets, ValueRange sizes) {
+                        ValueRange indices, ValueRange sizes) {
 
   odsState.addOperands(ptr);
   odsState.addOperands(elementTypeSize);
-  odsState.addOperands(offsets);
+  odsState.addOperands(indices);
   odsState.addOperands(sizes);
   ::llvm::copy(
-      ::llvm::ArrayRef<int32_t>({1, 1, static_cast<int32_t>(offsets.size()),
+      ::llvm::ArrayRef<int32_t>({1, 1, static_cast<int32_t>(indices.size()),
                                  static_cast<int32_t>(sizes.size())}),
       odsState.getOrAddProperties<Properties>().operandSegmentSizes.begin());
   odsState.getOrAddProperties<Properties>().mode =
@@ -131,8 +131,8 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
   if (parser.parseRSquare())
     return failure();
 
-  /// Parse comma then "offsets[".
-  if (parser.parseComma() || parser.parseKeyword("offsets") ||
+  /// Parse comma then "indices[".
+  if (parser.parseComma() || parser.parseKeyword("indices") ||
       parser.parseLSquare())
     return failure();
   SmallVector<OpAsmParser::UnresolvedOperand, 4> offsetOperands;
@@ -199,7 +199,7 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
     return failure();
   result.addTypes(subviewType);
 
-  /// Resolve the operand lists for offsets and sizes as index type.
+  /// Resolve the operand lists for indices and sizes as index type.
   SmallVector<Type, 4> expectedOffsetTypes(offsetOperands.size(), indexType);
   if (parser.resolveOperands(offsetOperands, expectedOffsetTypes,
                              parser.getCurrentLocation(), result.operands))
@@ -210,7 +210,7 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
     return failure();
 
   /// Set operand segment sizes.
-  /// Order: ptr (1), typeSize (1), offsets, sizes.
+  /// Order: ptr (1), typeSize (1), indices, sizes.
   SmallVector<int32_t, 4> segmentSizes;
   segmentSizes.push_back(1);
   segmentSizes.push_back(1);
@@ -235,10 +235,10 @@ void DataBlockOp::print(OpAsmPrinter &printer) {
   printer.printType(getPtr().getType());
   printer << "]";
 
-  /// Print offsets.
-  auto offsets = getOffsets();
-  printer << ", offsets[";
-  printer.printOperands(offsets);
+  /// Print indices.
+  auto indices = getIndices();
+  printer << ", indices[";
+  printer.printOperands(indices);
   printer << "]";
 
   /// Print sizes.

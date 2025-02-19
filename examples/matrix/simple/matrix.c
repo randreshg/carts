@@ -1,0 +1,163 @@
+// Code 1
+
+// #include <cstdlib>
+// #include <stdio.h>
+
+// #include <omp.h>
+// #include <stdlib.h>
+// #include <time.h>
+
+// Convert to MLIR standard dialect
+/// cgeist 
+/// cgeist taskwithdeps.c -fopenmp -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include  --raise-scf-to-affine  &> taskwithdeps.mlir
+
+// Convert OpenMP to ARTS
+/// carts-opt taskwithdeps.mlir --convert-openmp-to-arts --canonicalize &> taskwithdeps-arts.mlir
+/// carts-opt taskwithdeps.mlir --convert-openmp-to-arts --canonicalize -debug-only=convert-openmp-to-arts,edt-analysis &> taskwithdeps-arts.mlir
+
+// DataBlock pass
+/// carts-opt taskwithdeps-arts.mlir --datablock --cse &> taskwithdeps-datablock.mlir
+/// carts-opt taskwithdeps-arts.mlir --datablock --cse -debug-only=datablock,datablock-analysis &> taskwithdeps-datablock.mlir
+
+/// Create ARTS events
+/// carts-opt taskwithdeps-arts.mlir --create-events --cse &> taskwithdeps-events.mlir
+/// carts-opt taskwithdeps-arts.mlir --create-events --cse -debug-only=datablock-analysis,create-events &> taskwithdeps-events.mlir
+
+/// Convert ARTS to Funcs
+/// carts-opt taskwithdeps-events.mlir --convert-arts-to-funcs --cse --canonicalize -debug-only=convert-arts-to-funcs,arts-codegen,edt-analysis &> taskwithdeps-func.mlir
+
+/// Optimize
+/// polygeist-opt outputaffine.mlir --cse --affine-cfg --affine-scalrep --polygeist-mem2reg &> optimized.mlir
+
+// polygeist-opt taskwithdeps.mlir --convert-polygeist-to-llvm  &> optimized.mlir
+
+// polygeist-opt taskwithdeps-events.mlir --affine-cfg &> optimized.mlir
+
+#include <stdlib.h>
+#include <stdio.h>
+#define N 100
+
+void compute() {
+  double A[N][N], B[N][N];
+  int test = rand() % 100;
+  
+  #pragma omp parallel
+  {
+    #pragma omp single
+    {
+      // Compute the A matrix.
+      for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+          // Each task computes one A[i][j].
+          #pragma omp task firstprivate(i, j) depend(out : A[i][j])
+          {
+            A[i][j] = i * 1.0 + test;
+          }
+        }
+      }
+      
+      // Compute the B matrix using A.
+      // For row zero, B[0][j] only depends on A[0][j].
+      for (int j = 0; j < N; j++) {
+        #pragma omp task firstprivate(j) depend(in : A[0][j]) depend(out : B[0][j])
+        {
+          B[0][j] = A[0][j];
+        }
+      }
+      // For rows 1..N-1, B[i][j] depends on A[i][j] and the previous row A[i-1][j].
+      for (int i = 1; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+          #pragma omp task firstprivate(i, j) depend(in : A[i][j], A[i-1][j]) depend(out : B[i][j])
+          {
+            B[i][j] = A[i][j] + A[i-1][j];
+          }
+        }
+      }
+
+    }
+  }
+  
+  // Print the computed matrices.
+  for (int i = 0; i < N; i++) {
+    for (int j = 0; j < N; j++) {
+      printf("A[%d][%d] = %f   ", i, j, A[i][j]);
+    }
+    printf("\n");
+  }
+  for (int i = 0; i < N; i++) {
+    for (int j = 0; j < N; j++) {
+      printf("B[%d][%d] = %f   ", i, j, B[i][j]);
+    }
+    printf("\n");
+  }
+}
+
+
+void compute() {
+  double A[N], B[N];
+  int test = rand() % 100;
+  #pragma omp parallel
+  {
+    #pragma omp single
+    {
+      for (int i = 0; i < N; i++) {
+        // A[i] = i * 1.0 + test;
+        // Task 1: Compute A[i]
+        #pragma omp task depend(out : A[i])
+        {
+          // printf("A[%d] = %f\n", i, A[i]);
+          A[i] = i * 1.0 + test;
+          // printf("A[%d] = %f\n", i, A[i]);
+        }
+
+        // Task 2: Compute B[i] based on A[i] and A[i-1] (inter-loop dependency)
+        #pragma omp task depend(in : A[i], A[i - 1]) depend(out : B[i])
+          B[i] = A[i] + (i > 0 ? A[i - 1] : 0);
+      }
+    }
+  }
+
+  /// Print A and B
+  for(int i = 0; i < N; i++) {
+    printf("A[%d] = %f\n", i, A[i]);
+    printf("B[%d] = %f\n", i, B[i]);
+  }
+}
+
+
+// void compute_non_affine(int N, double *A, double *B, int *indices) {
+//   A = (double *)malloc(N * sizeof(double));
+//   B = (double *)malloc(N * sizeof(double));
+//   indices = (int *)malloc(N * sizeof(int));
+
+//   // Initialize the index mapping
+//   for (int i = 0; i < N; i++) {
+//     indices[i] = (i * i + 3) % N; // Non-affine mapping
+//   }
+
+//   int test = rand() % 100;
+
+//   #pragma omp parallel
+//   {
+//     #pragma omp single
+//     {
+//       for (int i = 0; i < N; i++) {
+//         // Task 1: Compute A[indices[i]]
+//         #pragma omp task depend(out : A[indices[i]])
+//           A[indices[i]] = indices[i] * 1.0 + test;
+
+//         // Task 2: Compute B[indices[i]] based on A[indices[i]] and A[indices[j]]
+//         // where j is dynamically determined (non-affine relationship)
+//         int j = (i + test) % N; // Dynamically determined dependency
+//         #pragma omp task depend(in : A[indices[i]], A[indices[j]]) depend(out : B[indices[i]])
+//           B[indices[i]] = A[indices[i]] + A[indices[j]];
+//       }
+//     }
+//   }
+//   printf("A[0] = %f\n", A[0]);
+//   free(A);
+//   free(B);
+//   free(indices);
+// }
+
+
