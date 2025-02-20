@@ -53,6 +53,8 @@ private:
   SetVector<Operation *> opsToRemove;
 };
 } // end namespace
+
+
 void EdtPass::convertParallelIntoSingle(EdtOp &op) {
   /// Analyze the parallel region to locate the unique single-edt op.
   uint32_t numOps = 0;

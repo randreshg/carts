@@ -406,6 +406,16 @@ SmallVector<Value> EdtOp::getEvnts() {
 /// Others
 bool EdtOp::isParallel() { return getOperation()->hasAttr("parallel"); }
 bool EdtOp::isSingle() { return getOperation()->hasAttr("single"); }
+bool EdtOp::isTask() { return getOperation()->hasAttr("task"); }
+void EdtOp::setIsParallelAttr() {
+  getOperation()->setAttr("parallel", UnitAttr::get(getContext()));
+}
+void EdtOp::setIsSingleAttr() {
+  getOperation()->setAttr("single", UnitAttr::get(getContext()));
+}
+void EdtOp::setIsTaskAttr() {
+  getOperation()->setAttr("task", UnitAttr::get(getContext()));
+}
 
 //===----------------------------------------------------------------------===//
 // EventOp
@@ -441,4 +451,10 @@ void DataBlockOp::getEffects(
 }
 
 bool DataBlockOp::isLoad() { return getOperation()->hasAttr("isLoad"); }
-bool DataBlockOp::isBaseDb() { return getOperation()->hasAttr("ptrIsDb"); }
+bool DataBlockOp::isPtrDb() { return getOperation()->hasAttr("isPtrDb"); }
+void DataBlockOp::setIsLoadAttr() {
+  getOperation()->setAttr("isLoad", UnitAttr::get(getContext()));
+}
+void DataBlockOp::setIsPtrDbAttr() {
+  getOperation()->setAttr("isPtrDb", UnitAttr::get(getContext()));
+}
