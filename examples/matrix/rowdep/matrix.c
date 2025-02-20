@@ -15,16 +15,16 @@
 /// cgeist matrix.c -fopenmp -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include  &> matrix.mlir
 
 // Convert OpenMP to ARTS
-/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --cse --canonicalize &> matrix-arts.mlir
-/// carts-opt matrix-std.mlir --convert-openmp-to-arts --canonicalize -debug-only=convert-openmp-to-arts,edt-analysis &> matrix-arts.mlir
+/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --cse --canonicalize &> matrix-arts.mlir
+/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --cse --canonicalize -debug-only=convert-openmp-to-arts,edt &> matrix-arts.mlir
 
 // DatablockIdentification pass
 /// carts-opt matrix-arts.mlir --identify-datablocks --cse &> matrix-datablock.mlir
+/// carts-opt matrix-arts.mlir --identify-datablocks --cse -debug-only=identify-datablocks &> matrix-datablock.mlir
 
 // Try to raise to affine
 /// carts-opt matrix-arts.mlir --raise-scf-to-affine --affine-cfg --affine-scalrep &> matrix-affine.mlir
 /// carts-opt matrix-affine.mlir --affine-data-copy-generate &> matrix-affine-pipeline.mlir
-
 
 // DataBlock pass
 /// carts-opt matrix-arts.mlir --datablock --cse &> matrix-datablock.mlir

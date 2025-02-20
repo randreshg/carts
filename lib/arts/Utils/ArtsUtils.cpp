@@ -8,6 +8,18 @@
 namespace mlir {
 namespace arts {
 
+void removeOps(mlir::ModuleOp module, OpBuilder &builder,
+               llvm::SetVector<mlir::Operation *> &opsToRemove) {
+  for (auto op : opsToRemove) {
+    if (!op)
+      continue;
+    replaceWithUndef(op, builder);
+    recursivelyRemoveOp(op);
+  }
+  removeUndefOps(module);
+  opsToRemove.clear();
+}
+
 void recursivelyRemoveOp(mlir::Operation *op) {
   /// Collect all dependent operations.
   llvm::SmallVector<mlir::Operation *, 8> toRemove;
@@ -112,6 +124,17 @@ int64_t tryParseIndexConstant(Value val) {
     return voi.i_val;
   return -1;
 }
+
+bool isValueConstant(Value val) {
+  auto defOp = val.getDefiningOp();
+  if (!defOp)
+    return false;
+
+  auto constantOp = dyn_cast<arith::ConstantOp>(defOp);
+  if (!constantOp)
+    return false;
+  return true;
+};
 
 } // namespace arts
 } // namespace mlir

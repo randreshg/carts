@@ -1,4 +1,4 @@
-//===----------------- ConvertOpenMPToArts.cpp  --------------===//
+//===---------------------- ConvertOpenMPToArts.cpp  ----------------------===//
 //
 // This file implements a module pass that converts OpenMP ops
 // (omp.parallel, omp.master, omp.task, etc.) into ARTS ops
@@ -13,7 +13,6 @@
 #include "polygeist/Ops.h"
 /// Arts
 #include "ArtsPassDetails.h"
-#include "arts/Analysis/EdtAnalysis.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
@@ -28,116 +27,13 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdint>
-
 #define DEBUG_TYPE "convert-openmp-to-arts"
-
 #define line "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "\n[" DEBUG_TYPE "] ")
 
 using namespace mlir;
 using namespace arts;
-
-/// Create a new datablock operation and rewires the uses
-static DataBlockOp createDatablockOp(PatternRewriter &rewriter, Region &region,
-                                     Location loc, StringRef mode,
-                                     Value inputMemRef) {
-  bool isLoad = false;
-  auto inputMemRefOp = inputMemRef.getDefiningOp();
-  assert(inputMemRefOp && "Input must be a defining operation.");
-
-  /// If the defining operation is a load op obtain the base memref and pinned
-  /// indices.
-  Value baseMemRef;
-  SmallVector<Value> pinnedIndices;
-
-  /// A lambda to handle common load operations.
-  auto processLoad = [&](auto loadOp) {
-    baseMemRef = loadOp.getMemref();
-    pinnedIndices.assign(loadOp.getIndices().begin(),
-                         loadOp.getIndices().end());
-    isLoad = true;
-  };
-
-  if (auto loadOp = dyn_cast<memref::LoadOp>(inputMemRefOp)) {
-    processLoad(loadOp);
-  } else {
-    baseMemRef = inputMemRef;
-  }
-
-  /// Ensure the input memref is of type MemRefType.
-  auto baseType = baseMemRef.getType().dyn_cast<MemRefType>();
-  assert(baseType && "Input must be a MemRefType.");
-
-  /// Compute the rank and verify it is positive.
-  int64_t rank = baseType.getRank();
-
-  /// Prepare arrays for subview
-  const auto pinnedCount = static_cast<int64_t>(pinnedIndices.size());
-  SmallVector<Value, 4> indices(pinnedCount), sizes(rank);
-  SmallVector<int64_t, 4> subShape(rank);
-
-  OpBuilder::InsertionGuard IG(rewriter);
-  if (inputMemRefOp)
-    rewriter.setInsertionPointAfter(inputMemRefOp);
-
-  /// Compute dimension sizes, indices, sizes, and subshape
-  Value oneSize = rewriter.create<arith::ConstantIndexOp>(loc, 1);
-  for (int64_t i = 0; i < rank; ++i) {
-    Value dimVal =
-        baseType.isDynamicDim(i)
-            ? rewriter.create<memref::DimOp>(loc, baseMemRef, i).getResult()
-            : rewriter
-                  .create<arith::ConstantIndexOp>(loc, baseType.getDimSize(i))
-                  .getResult();
-
-    if (i < pinnedCount) {
-      indices[i] = pinnedIndices[i];
-      sizes[i] = oneSize;
-      subShape[i] = 1;
-    } else {
-      sizes[i] = dimVal;
-      subShape[i] = baseType.isDynamicDim(i) ? ShapedType::kDynamic
-                                             : baseType.getDimSize(i);
-    }
-  }
-
-  /// Build the subview memref type.
-  auto elementType = baseType.getElementType();
-  auto subMemRefType = MemRefType::get(subShape, elementType,
-                                       baseType.getLayout().getAffineMap(),
-                                       baseType.getMemorySpace());
-
-  /// Insert polygeist.typeSizeOp to get the size of the element type.
-  auto elementTypeSize = rewriter
-                             .create<polygeist::TypeSizeOp>(
-                                 loc, rewriter.getIndexType(), elementType)
-                             .getResult();
-
-  /// Create the final arts.datablock operation.
-  auto modeAttr = rewriter.getStringAttr(mode);
-  DataBlockOp depOp = rewriter.create<arts::DataBlockOp>(
-      loc, subMemRefType, modeAttr, baseMemRef, elementType, elementTypeSize,
-      indices, sizes);
-
-  if (isLoad)
-    depOp->setAttr("isLoad", rewriter.getUnitAttr());
-  return depOp;
-}
-
-static void createDatablocks(EdtEnvManager &edtEnv, PatternRewriter &rewriter) {
-  auto &region = edtEnv.getRegion();
-  edtEnv.naiveCollection();
-  for (const auto &[input, depType] : edtEnv.getDepsToProcess()) {
-    LLVM_DEBUG(dbgs() << " - Processing dependency: " << input << "\n");
-    auto depOp =
-        createDatablockOp(rewriter, region, input.getLoc(), depType, input);
-    edtEnv.addDependency(depOp.getResult());
-  }
-
-  edtEnv.clearDepsToProcess();
-  edtEnv.adjust();
-}
 
 //===----------------------------------------------------------------------===//
 // Conversion Patterns
@@ -150,11 +46,10 @@ struct ParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     LLVM_DEBUG(DBGS() << "Converting omp.parallel to arts.parallel\n");
-    /// Collect parameters and dependencies
-    EdtEnvManager edtEnv(rewriter, op.getRegion());
-    createDatablocks(edtEnv, rewriter);
+
     /// Create a new `arts.edt` operation.
-    auto parOp = rewriter.create<arts::EdtOp>(loc, edtEnv.getDependencies());
+    SmallVector<Value> deps;
+    auto parOp = rewriter.create<arts::EdtOp>(loc, deps);
     parOp.getBody().emplaceBlock();
     Block &blk = parOp.getBody().front();
 
@@ -214,7 +109,93 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
     llvm_unreachable("Unknown ClauseTaskDepend value");
   }
 
-  void collectTaskDependencies(EdtEnvManager &edtEnv, omp::TaskOp task,
+  DataBlockOp createDatablockOp(PatternRewriter &rewriter, Region &region,
+                                Location loc, StringRef mode,
+                                Value inputMemRef) const {
+    bool isLoad = false;
+    auto inputMemRefOp = inputMemRef.getDefiningOp();
+    assert(inputMemRefOp && "Input must be a defining operation.");
+
+    /// If the defining operation is a load op obtain the base memref and pinned
+    /// indices.
+    Value baseMemRef;
+    SmallVector<Value> pinnedIndices;
+
+    /// A lambda to handle common load operations.
+    auto processLoad = [&](auto loadOp) {
+      baseMemRef = loadOp.getMemref();
+      pinnedIndices.assign(loadOp.getIndices().begin(),
+                           loadOp.getIndices().end());
+      isLoad = true;
+    };
+
+    if (auto loadOp = dyn_cast<memref::LoadOp>(inputMemRefOp)) {
+      processLoad(loadOp);
+    } else {
+      baseMemRef = inputMemRef;
+    }
+
+    /// Ensure the input memref is of type MemRefType.
+    auto baseType = baseMemRef.getType().dyn_cast<MemRefType>();
+    assert(baseType && "Input must be a MemRefType.");
+
+    /// Compute the rank and verify it is positive.
+    int64_t rank = baseType.getRank();
+
+    /// Prepare arrays for subview
+    const auto pinnedCount = static_cast<int64_t>(pinnedIndices.size());
+    SmallVector<Value, 4> indices(pinnedCount), sizes(rank);
+    SmallVector<int64_t, 4> subShape(rank);
+
+    OpBuilder::InsertionGuard IG(rewriter);
+    if (inputMemRefOp)
+      rewriter.setInsertionPointAfter(inputMemRefOp);
+
+    /// Compute dimension sizes, indices, sizes, and subshape
+    Value oneSize = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+    for (int64_t i = 0; i < rank; ++i) {
+      Value dimVal =
+          baseType.isDynamicDim(i)
+              ? rewriter.create<memref::DimOp>(loc, baseMemRef, i).getResult()
+              : rewriter
+                    .create<arith::ConstantIndexOp>(loc, baseType.getDimSize(i))
+                    .getResult();
+
+      if (i < pinnedCount) {
+        indices[i] = pinnedIndices[i];
+        sizes[i] = oneSize;
+        subShape[i] = 1;
+      } else {
+        sizes[i] = dimVal;
+        subShape[i] = baseType.isDynamicDim(i) ? ShapedType::kDynamic
+                                               : baseType.getDimSize(i);
+      }
+    }
+
+    /// Build the subview memref type.
+    auto elementType = baseType.getElementType();
+    auto subMemRefType = MemRefType::get(subShape, elementType,
+                                         baseType.getLayout().getAffineMap(),
+                                         baseType.getMemorySpace());
+
+    /// Insert polygeist.typeSizeOp to get the size of the element type.
+    auto elementTypeSize = rewriter
+                               .create<polygeist::TypeSizeOp>(
+                                   loc, rewriter.getIndexType(), elementType)
+                               .getResult();
+
+    /// Create the final arts.datablock operation.
+    auto modeAttr = rewriter.getStringAttr(mode);
+    DataBlockOp depOp = rewriter.create<arts::DataBlockOp>(
+        loc, subMemRefType, modeAttr, baseMemRef, elementType, elementTypeSize,
+        indices, sizes);
+
+    if (isLoad)
+      depOp->setAttr("isLoad", rewriter.getUnitAttr());
+    return depOp;
+  }
+
+  void collectTaskDependencies(SmallVector<Value> &deps, omp::TaskOp task,
                                PatternRewriter &rewriter, Location loc) const {
     /// Collect the task deps clause
     auto dependList = task.getDependsAttr();
@@ -248,8 +229,8 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
         llvm_unreachable("Expected a memref.load operation");
 
       /// Clone the load operation at the beginning of the edt region.
+      auto &region = task.getRegion();
       {
-        auto &region = edtEnv.getRegion();
         OpBuilder::InsertionGuard IG(rewriter);
         rewriter.setInsertionPointToStart(&region.front());
 
@@ -260,27 +241,25 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
         replaceInRegion(region, loadOp.getResult(), newLoad.getResult());
       }
 
-      /// Add the dependency with its type to the edt environment.
-      edtEnv.addDependency(depLoadVal, depType);
+      /// Add the dependency
+      deps.push_back(createDatablockOp(rewriter, region, depLoadVal.getLoc(),
+                                       depType, depLoadVal));
 
       /// Replace the dependency allocation with an undefined value.
       replaceWithUndef(depAlloc, rewriter);
     }
-
-    /// Create datablocks
-    createDatablocks(edtEnv, rewriter);
   }
 
   LogicalResult matchAndRewrite(omp::TaskOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     LLVM_DEBUG(DBGS() << "Converting omp.task to arts.edt\n");
-    /// Collect parameters and dependencies
-    EdtEnvManager edtEnv(rewriter, op.getRegion());
-    collectTaskDependencies(edtEnv, op, rewriter, loc);
+    /// Collect dependencies
+    SmallVector<Value> deps;
+    collectTaskDependencies(deps, op, rewriter, loc);
 
     /// Create a new `arts.edt` operation.
-    auto edtOp = rewriter.create<arts::EdtOp>(loc, edtEnv.getDependencies());
+    auto edtOp = rewriter.create<arts::EdtOp>(loc, deps);
     edtOp.getBody().emplaceBlock();
     Block &blk = edtOp.getBody().front();
 

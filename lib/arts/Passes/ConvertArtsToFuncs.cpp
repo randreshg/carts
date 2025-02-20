@@ -55,16 +55,14 @@
 using namespace mlir;
 using namespace arts;
 
-namespace {
-
 //===----------------------------------------------------------------------===//
 // Pass Implementation
 //===----------------------------------------------------------------------===//
+namespace {
 struct ConvertArtsToFuncsPass
     : public arts::ConvertArtsToFuncsBase<ConvertArtsToFuncsPass> {
   void runOnOperation() override;
 
-  /// Arts operations
   void iterateDbs(ModuleOp module);
   void iterateOps(Operation *op);
   void handleParallel(EdtOp &op);
@@ -72,11 +70,10 @@ struct ConvertArtsToFuncsPass
   void handleEdt(EdtOp &op);
   void handleEvent(EventOp &op);
   void handleDatablock(DataBlockOp &op);
-  void removeOps(mlir::ModuleOp module);
 
 private:
   ArtsCodegen *AC = nullptr;
-  SetVector<Operation *> opsToErase;
+  SetVector<Operation *> opsToRemove;
 };
 } // end namespace
 
@@ -84,28 +81,7 @@ void ConvertArtsToFuncsPass::handleParallel(EdtOp &op) {
   LLVM_DEBUG(DBGS() << "Lowering arts.edt parallel\n" << line);
   auto *ctx = op.getContext();
   Location loc = UnknownLoc::get(ctx);
-
-  /// Analyze the parallel region to locate the unique single-edt op.
-  arts::EdtOp singleOp = nullptr;
-  unsigned numOps = 0;
   mlir::Region &region = op.getRegion();
-
-  /// Iterate directly over the immediate operations in the region.
-  for (auto &block : region) {
-    for (auto &opInst : block) {
-      numOps++;
-      if (auto edt = dyn_cast<arts::EdtOp>(&opInst)) {
-        if (singleOp && edt.isSingle())
-          llvm_unreachable("Multiple single ops in parallel op not supported");
-        singleOp = edt;
-      } else if (!isa<arts::BarrierOp>(&opInst) &&
-                 !isa<arts::YieldOp>(&opInst)) {
-        llvm_unreachable("Unknown op in parallel op - not supported");
-      }
-    }
-  }
-  assert((singleOp && (numOps == 4)) && "Invalid parallel op region structure");
-  auto &singleRegion = singleOp->getRegion(0);
 
   /// Set insertion point to the current op for epoch creation.
   EdtCodegen *newEdt = nullptr;
@@ -125,13 +101,11 @@ void ConvertArtsToFuncsPass::handleParallel(EdtOp &op) {
 
     /// Create the parallel EDT with the single op's region.
     auto par_deps = op.getDeps();
-    newEdt =
-        AC->createEdt(&par_deps, &singleRegion, &parEpoch_guid, nullptr, true);
+    newEdt = AC->createEdt(&par_deps, &region, &parEpoch_guid, nullptr, true);
   }
 
   /// Erase the old parallel op.
-  opsToErase.insert(singleOp);
-  opsToErase.insert(op);
+  opsToRemove.insert(op);
   LLVM_DEBUG(DBGS() << "Parallel op lowered\n\n");
 
   /// Visit new function
@@ -161,7 +135,7 @@ void ConvertArtsToFuncsPass::handleEdt(EdtOp &op) {
   }
 
   /// Erase the old edt
-  opsToErase.insert(op);
+  opsToRemove.insert(op);
 
   /// Visit new function
   assert(newEdt && "New EDT not created");
@@ -184,8 +158,8 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
                          ? AC->VoidPtr
                          : MemRefType::get({ShapedType::kDynamic}, AC->VoidPtr);
   auto newDbOp = builder.create<arts::DataBlockOp>(
-      op->getLoc(), pointerType, op.getMode(), op.getPtr(),
-      op.getElementType(), op.getElementTypeSize(), op.getIndices(), sizes);
+      op->getLoc(), pointerType, op.getMode(), op.getPtr(), op.getElementType(),
+      op.getElementTypeSize(), op.getIndices(), sizes);
   newDbOp->setAttrs(op->getAttrs());
 
   /// Helper lambda to check if the indices represent a single constant zero.
@@ -281,9 +255,9 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
   AC->createDatablock(newDbOp, op->getLoc());
 
   /// Mark dbs for removal.
-  opsToErase.insert(op);
-  opsToErase.insert(newDbOp.getPtr().getDefiningOp());
-  opsToErase.insert(newDbOp);
+  opsToRemove.insert(op);
+  opsToRemove.insert(newDbOp.getPtr().getDefiningOp());
+  opsToRemove.insert(newDbOp);
 }
 
 void ConvertArtsToFuncsPass::handleEvent(EventOp &op) {
@@ -294,7 +268,7 @@ void ConvertArtsToFuncsPass::iterateOps(Operation *operation) {
   operation->walk<mlir::WalkOrder::PreOrder>(
       [&](Operation *op) -> mlir::WalkResult {
         /// Skip operations marked for removal.
-        if (opsToErase.count(op))
+        if (opsToRemove.count(op))
           return mlir::WalkResult::skip();
 
         if (auto dbOp = dyn_cast<arts::DataBlockOp>(op)) {
@@ -320,7 +294,7 @@ void ConvertArtsToFuncsPass::iterateOps(Operation *operation) {
 //   module->walk<mlir::WalkOrder::PreOrder>(
 //       [&](Operation *op) -> mlir::WalkResult {
 //         /// Skip operations marked for removal.
-//         if (opsToErase.count(op))
+//         if (opsToRemove.count(op))
 //           return mlir::WalkResult::skip();
 
 //         if (auto dbOp = dyn_cast<arts::DataBlockOp>(op)) {
@@ -343,19 +317,8 @@ void ConvertArtsToFuncsPass::iterateOps(Operation *operation) {
 //       });
 // }
 
-void ConvertArtsToFuncsPass::removeOps(mlir::ModuleOp module) {
-  for (auto op : opsToErase) {
-    if (!op)
-      continue;
-    replaceWithUndef(op, AC->getBuilder());
-    recursivelyRemoveOp(op);
-  }
-  removeUndefOps(module);
-  opsToErase.clear();
-}
-
 void ConvertArtsToFuncsPass::runOnOperation() {
-  LLVM_DEBUG(dbgs() << "--- ConvertArtsToFuncsPass START ---\n");
+  LLVM_DEBUG(dbgs() << "=== ConvertArtsToFuncsPass START ===\n");
 
   ModuleOp module = getOperation();
 
@@ -376,7 +339,7 @@ void ConvertArtsToFuncsPass::runOnOperation() {
   /// Handle arts operations
   for (auto func : module.getOps<func::FuncOp>())
     iterateOps(func);
-  removeOps(module);
+  removeOps(module, AC->getBuilder(), opsToRemove);
 
   /// Create a ConversionTarget.
   // auto *ctx = &getContext();
@@ -419,7 +382,7 @@ void ConvertArtsToFuncsPass::runOnOperation() {
   //                        LLVM::LLVMDialect>();
   // target.addLegalOp<ModuleOp>();
 
-  LLVM_DEBUG(dbgs() << "=== ConvertArtsToFuncsPass COMPLETE ===\n");
+  LLVM_DEBUG(dbgs() << line << "ConvertArtsToFuncsPass FINISHED \n" << line);
   module.dump();
   delete AC;
 }

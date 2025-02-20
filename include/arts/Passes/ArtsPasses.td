@@ -44,7 +44,7 @@ def CreateArtsEvents : Pass<"create-events", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createCreateEventsPass()";
 }
 
-def DataBlock : Pass<"datablock", "mlir::ModuleOp"> {
+def Datablock : Pass<"datablock", "mlir::ModuleOp"> {
   let summary = "Using the Datablock Analysis, perform changes to the DataBlock operations and optimize them if the user wants to";
   let dependentDialects = [
     "memref::MemRefDialect",
@@ -55,6 +55,33 @@ def DataBlock : Pass<"datablock", "mlir::ModuleOp"> {
     "affine::AffineDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createDataBlockPass()";
+  let constructor = "mlir::arts::createDatablockPass()";
+}
+
+def IdentifyDatablocks : Pass<"identify-datablocks", "mlir::ModuleOp"> {
+  let summary = "Identify Datablocks in the program";
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "LLVM::LLVMDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "arith::ArithDialect",
+    "polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::arts::createIdentifyDatablocksPass()";
+}
+
+def Edt : Pass<"edt", "mlir::ModuleOp"> {
+  let summary = "Using the EDT Analysis, perform changes to the EDT operations and optimize them if the user wants to";
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "LLVM::LLVMDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "arith::ArithDialect",
+    "affine::AffineDialect",
+    "polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::arts::createEdtPass()";
 }
 #endif // CARTS_PASSES
