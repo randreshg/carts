@@ -3,15 +3,14 @@
 
 // #include <memory>
 
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "arts/ArtsDialect.h"
 #include "mlir/Conversion/LLVMCommon/LoweringOptions.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
-#include "polygeist/Dialect.h"
 #include "mlir/Pass/Pass.h"
-#include "arts/ArtsDialect.h"
-
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "polygeist/Dialect.h"
 
 namespace mlir {
 class PatternRewriter;
@@ -22,7 +21,9 @@ namespace arts {
 std::unique_ptr<Pass> createConvertOpenMPtoARTSPass();
 std::unique_ptr<Pass> createConvertArtsToFuncsPass();
 std::unique_ptr<Pass> createCreateEventsPass();
-std::unique_ptr<Pass> createDataBlockPass();
+std::unique_ptr<Pass> createDatablockPass();
+std::unique_ptr<Pass> createIdentifyDatablocksPass();
+std::unique_ptr<Pass> createEdtPass();
 } // namespace arts
 } // namespace mlir
 

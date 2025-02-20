@@ -23,9 +23,11 @@
 
 namespace mlir {
 class FunctionOpInterface;
+
 // Forward declaration from Dialect.h
 template <typename ConcreteDialect>
 void registerDialect(DialectRegistry &registry);
+
 namespace arts {
 /// Register passes
 #define GEN_PASS_CLASSES

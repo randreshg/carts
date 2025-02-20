@@ -13,6 +13,8 @@
 
 namespace mlir {
 namespace arts {
+void removeOps(mlir::ModuleOp module, OpBuilder &builder,
+               llvm::SetVector<mlir::Operation *> &opsToRemove);
 void recursivelyRemoveOp(mlir::Operation *op);
 void removeUndefOps(mlir::ModuleOp module);
 void replaceWithUndef(mlir::Operation *op, OpBuilder &builder);
@@ -22,6 +24,7 @@ void replaceUses(llvm::DenseMap<mlir::Value, mlir::Value> &rewireMap);
 void replaceInRegion(mlir::Region &region, mlir::Value from, mlir::Value to);
 void replaceInRegion(mlir::Region &region,
                      llvm::DenseMap<mlir::Value, mlir::Value> &rewireMap);
+bool isValueConstant(mlir::Value val);
 std::optional<int64_t> computeConstant(Value val);
 int64_t tryParseIndexConstant(Value val);
 } // namespace arts

@@ -77,6 +77,7 @@ struct CreateArtsEventsPass
   }
 
   void runOnOperation() override {
+    LLVM_DEBUG(dbgs() << line << "CreateArtsEventsPass STARTED\n" << line);
     ModuleOp module = getOperation();
     /// Retrieve the shared analysis result.
     auto &dbAnalysis = getAnalysis<DatablockAnalysis>();
@@ -176,8 +177,7 @@ struct CreateArtsEventsPass
               &producerNode.edtParent->getRegion(0).front());
           /// Get the parent node.
           assert(producerNode.isLoad && "Expected a load datablock");
-          auto dbParent =
-              cast<DataBlockOp>(producerNode.ptr.getDefiningOp());
+          auto dbParent = cast<DataBlockOp>(producerNode.ptr.getDefiningOp());
           auto &dbParentNode = dbAnalysis.getNode(dbParent);
           /// Create event
           auto type = MemRefType::get(dbParentNode.op.getType().getShape(),
@@ -215,6 +215,8 @@ struct CreateArtsEventsPass
       for (auto &pair : edtToEvents)
         insertEventsToEdt(builder, pair.first, pair.second);
     });
+
+    LLVM_DEBUG(dbgs() << line << "CreateArtsEventsPass FINISHED\n" << line);
   }
 };
 

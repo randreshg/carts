@@ -40,8 +40,6 @@ using namespace mlir::arith;
 using namespace mlir::polygeist;
 using namespace mlir::arts;
 
-namespace {
-
 /// Returns true if any memory effect of dbOp may alias the given value.
 static bool ptrMayAlias(DataBlockOp dbOp, Value val) {
   /// Get aliasing effects.
@@ -319,44 +317,51 @@ static void rewireDatablockUses(arts::DataBlockOp &dbOp, Region &region,
   walkRegion(region);
 }
 
-struct DataBlockPass : public arts::DataBlockBase<DataBlockPass> {
-
-  void runOnOperation() override {
-    ModuleOp module = getOperation();
-    LLVM_DEBUG(dbgs() << line << "DataBlockPass STARTED\n" << line);
-    OpBuilder builder(module);
-
-    // module.walk([&](EdtOp edt) {
-    //   auto &region = edt.getRegion();
-    //   for (auto dep : edt.getDependencies()) {
-    //     auto dbOp = cast<DataBlockOp>(dep.getDefiningOp());
-    //     adjustDataBlock(dbOp, region);
-    //   }
-    // });
-
-    /// Rewire uses of datablock operations.
-    module.walk([&](func::FuncOp func) {
-      DominanceInfo domInfo(func);
-      func.walk<mlir::WalkOrder::PostOrder>([&](arts::EdtOp edt) {
-        // auto *region = dbOp->getParentRegion();
-        auto &region = edt.getRegion();
-        for (auto dep : edt.getDependencies()) {
-          auto dbOp = cast<arts::DataBlockOp>(dep.getDefiningOp());
-          rewireDatablockUses(dbOp, region, domInfo);
-          // LLVM_DEBUG(dbgs() << func << "\n");
-        }
-      });
-    });
-    module.dump();
-  }
+//===----------------------------------------------------------------------===//
+// Pass Implementation
+//===----------------------------------------------------------------------===//
+namespace {
+struct DatablockPass : public arts::DatablockBase<DatablockPass> {
+  void runOnOperation() override;
 };
-
 } // end anonymous namespace
 
+void DatablockPass::runOnOperation() {
+  ModuleOp module = getOperation();
+  LLVM_DEBUG(dbgs() << line << "DatablockPass STARTED\n" << line);
+  OpBuilder builder(module);
+
+  // module.walk([&](EdtOp edt) {
+  //   auto &region = edt.getRegion();
+  //   for (auto dep : edt.getDependencies()) {
+  //     auto dbOp = cast<DataBlockOp>(dep.getDefiningOp());
+  //     adjustDataBlock(dbOp, region);
+  //   }
+  // });
+
+  /// Rewire uses of datablock operations.
+  module.walk([&](func::FuncOp func) {
+    DominanceInfo domInfo(func);
+    func.walk<mlir::WalkOrder::PostOrder>([&](arts::EdtOp edt) {
+      // auto *region = dbOp->getParentRegion();
+      auto &region = edt.getRegion();
+      for (auto dep : edt.getDependencies()) {
+        auto dbOp = cast<arts::DataBlockOp>(dep.getDefiningOp());
+        rewireDatablockUses(dbOp, region, domInfo);
+        // LLVM_DEBUG(dbgs() << func << "\n");
+      }
+    });
+  });
+  LLVM_DEBUG(dbgs() << line << "DatablockPass FINISHED\n" << line);
+}
+
+///===----------------------------------------------------------------------===///
+/// Pass creation
+///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createDataBlockPass() {
-  return std::make_unique<DataBlockPass>();
+std::unique_ptr<Pass> createDatablockPass() {
+  return std::make_unique<DatablockPass>();
 }
 } // namespace arts
 } // namespace mlir
