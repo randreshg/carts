@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 /// Dialects
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -14,7 +15,9 @@
 /// Arts
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
+#include "arts/Codegen/ArtsIR.h"
 #include "arts/Passes/ArtsPasses.h"
+#include "arts/Utils/ArtsTypes.h"
 #include "arts/Utils/ArtsUtils.h"
 /// Others
 #include "mlir/IR/Builders.h"
@@ -48,13 +51,9 @@ struct ParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
     LLVM_DEBUG(DBGS() << "Converting omp.parallel to arts.parallel\n");
 
     /// Create a new `arts.edt` operation.
-    SmallVector<Value> deps;
-    auto parOp = rewriter.create<arts::EdtOp>(loc, deps);
+    auto parOp = createEdtOp(rewriter, loc, types::EdtType::Parallel);
     parOp.getBody().emplaceBlock();
     Block &blk = parOp.getBody().front();
-
-    /// Add 'parallel' attribute
-    parOp->setAttr("parallel", rewriter.getUnitAttr());
 
     /// Move the region's operations.
     Block &old = op.getRegion().front();
@@ -75,12 +74,8 @@ struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
     auto loc = op.getLoc();
 
     /// Create a new `arts.single` operation.
-    SmallVector<Value> deps;
-    auto artsSingle = rewriter.create<arts::EdtOp>(loc, deps);
+    auto artsSingle = createEdtOp(rewriter, loc, types::EdtType::Single);
     artsSingle.getBody().emplaceBlock();
-
-    /// Set the 'single' attribute
-    artsSingle->setAttr("single", rewriter.getUnitAttr());
 
     /// Move the region's operations.
     Block &old = op.getRegion().front();
@@ -97,102 +92,17 @@ struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
 struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  StringRef stringifyTaskDepend(omp::ClauseTaskDepend val) const {
-    switch (val) {
+  types::DatablockAccessType
+  getDatablockAccessType(omp::ClauseTaskDepend taskClause) const {
+    switch (taskClause) {
     case omp::ClauseTaskDepend::taskdependin:
-      return "in";
+      return types::DatablockAccessType::ReadOnly;
     case omp::ClauseTaskDepend::taskdependout:
-      return "out";
+      return types::DatablockAccessType::WriteOnly;
     case omp::ClauseTaskDepend::taskdependinout:
-      return "inout";
+      return types::DatablockAccessType::ReadWrite;
     }
     llvm_unreachable("Unknown ClauseTaskDepend value");
-  }
-
-  DataBlockOp createDatablockOp(PatternRewriter &rewriter, Region &region,
-                                Location loc, StringRef mode,
-                                Value inputMemRef) const {
-    bool isLoad = false;
-    auto inputMemRefOp = inputMemRef.getDefiningOp();
-    assert(inputMemRefOp && "Input must be a defining operation.");
-
-    /// If the defining operation is a load op obtain the base memref and pinned
-    /// indices.
-    Value baseMemRef;
-    SmallVector<Value> pinnedIndices;
-
-    /// A lambda to handle common load operations.
-    auto processLoad = [&](auto loadOp) {
-      baseMemRef = loadOp.getMemref();
-      pinnedIndices.assign(loadOp.getIndices().begin(),
-                           loadOp.getIndices().end());
-      isLoad = true;
-    };
-
-    if (auto loadOp = dyn_cast<memref::LoadOp>(inputMemRefOp)) {
-      processLoad(loadOp);
-    } else {
-      baseMemRef = inputMemRef;
-    }
-
-    /// Ensure the input memref is of type MemRefType.
-    auto baseType = baseMemRef.getType().dyn_cast<MemRefType>();
-    assert(baseType && "Input must be a MemRefType.");
-
-    /// Compute the rank and verify it is positive.
-    int64_t rank = baseType.getRank();
-
-    /// Prepare arrays for subview
-    const auto pinnedCount = static_cast<int64_t>(pinnedIndices.size());
-    SmallVector<Value, 4> indices(pinnedCount), sizes(rank);
-    SmallVector<int64_t, 4> subShape(rank);
-
-    OpBuilder::InsertionGuard IG(rewriter);
-    if (inputMemRefOp)
-      rewriter.setInsertionPointAfter(inputMemRefOp);
-
-    /// Compute dimension sizes, indices, sizes, and subshape
-    Value oneSize = rewriter.create<arith::ConstantIndexOp>(loc, 1);
-    for (int64_t i = 0; i < rank; ++i) {
-      Value dimVal =
-          baseType.isDynamicDim(i)
-              ? rewriter.create<memref::DimOp>(loc, baseMemRef, i).getResult()
-              : rewriter
-                    .create<arith::ConstantIndexOp>(loc, baseType.getDimSize(i))
-                    .getResult();
-
-      if (i < pinnedCount) {
-        indices[i] = pinnedIndices[i];
-        sizes[i] = oneSize;
-        subShape[i] = 1;
-      } else {
-        sizes[i] = dimVal;
-        subShape[i] = baseType.isDynamicDim(i) ? ShapedType::kDynamic
-                                               : baseType.getDimSize(i);
-      }
-    }
-
-    /// Build the subview memref type.
-    auto elementType = baseType.getElementType();
-    auto subMemRefType = MemRefType::get(subShape, elementType,
-                                         baseType.getLayout().getAffineMap(),
-                                         baseType.getMemorySpace());
-
-    /// Insert polygeist.typeSizeOp to get the size of the element type.
-    auto elementTypeSize = rewriter
-                               .create<polygeist::TypeSizeOp>(
-                                   loc, rewriter.getIndexType(), elementType)
-                               .getResult();
-
-    /// Create the final arts.datablock operation.
-    auto modeAttr = rewriter.getStringAttr(mode);
-    DataBlockOp depOp = rewriter.create<arts::DataBlockOp>(
-        loc, subMemRefType, modeAttr, baseMemRef, elementType, elementTypeSize,
-        indices, sizes);
-
-    if (isLoad)
-      depOp->setAttr("isLoad", rewriter.getUnitAttr());
-    return depOp;
   }
 
   void collectTaskDependencies(SmallVector<Value> &deps, omp::TaskOp task,
@@ -202,7 +112,6 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
     for (unsigned i = 0, e = dependList.size(); i < e; ++i) {
       /// Get dependency clause and type.
       auto depClause = cast<omp::ClauseTaskDependAttr>(dependList[i]);
-      StringRef depType = stringifyTaskDepend(depClause.getValue());
       Value depVar = task.getDependVars()[i];
 
       /// Ensure the dependency variable comes from a memref.alloc operation.
@@ -242,8 +151,13 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
       }
 
       /// Add the dependency
-      deps.push_back(createDatablockOp(rewriter, region, depLoadVal.getLoc(),
-                                       depType, depLoadVal));
+      {
+        OpBuilder::InsertionGuard IG(rewriter);
+        rewriter.setInsertionPointAfter(depLoadVal.getDefiningOp());
+        deps.push_back(createDatablockOp(
+            rewriter, depLoadVal.getLoc(),
+            getDatablockAccessType(depClause.getValue()), depLoadVal));
+      }
 
       /// Replace the dependency allocation with an undefined value.
       replaceWithUndef(depAlloc, rewriter);
@@ -259,7 +173,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
     collectTaskDependencies(deps, op, rewriter, loc);
 
     /// Create a new `arts.edt` operation.
-    auto edtOp = rewriter.create<arts::EdtOp>(loc, deps);
+    auto edtOp = createEdtOp(rewriter, loc, types::EdtType::Task, deps);
     edtOp.getBody().emplaceBlock();
     Block &blk = edtOp.getBody().front();
 

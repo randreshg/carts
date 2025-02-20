@@ -77,7 +77,9 @@ def DataBlockOp : Arts_Op<"datablock",
   ];
   let extraClassDeclaration = [{
     bool isLoad();
-    bool isBaseDb();
+    bool isPtrDb();
+    void setIsLoadAttr();
+    void setIsPtrDbAttr();
   }];
 }
 
@@ -118,6 +120,10 @@ def EdtOp : Arts_Op<"edt",
     SmallVector<Value> getEvnts();
     bool isParallel();
     bool isSingle();
+    bool isTask();
+    void setIsParallelAttr();
+    void setIsSingleAttr();
+    void setIsTaskAttr();
   }];
 }
 

@@ -1,6 +1,6 @@
 // ArtsCodegen.h
-#ifndef LLVM_ARTS_CODEGEN_H
-#define LLVM_ARTS_CODEGEN_H
+#ifndef MLIR_CODEGEN_ARTSCODEGEN_H
+#define MLIR_CODEGEN_ARTSCODEGEN_H
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
@@ -249,4 +249,4 @@ private:
 
 } // namespace arts
 } // namespace mlir
-#endif // LLVM_ARTS_CODEGEN_H
+#endif // MLIR_CODEGEN_ARTSCODEGEN_H

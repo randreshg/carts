@@ -65,7 +65,7 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
   /// Datablock info
   dbOp = depOp;
   memref = dbOp.getPtr();
-  ptrIsDb = dbOp.isBaseDb();
+  ptrIsDb = dbOp.isPtrDb();
   elementType = dbOp.getElementType();
   elementTypeSize = dbOp.getElementTypeSize();
 

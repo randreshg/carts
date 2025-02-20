@@ -2,9 +2,9 @@
 //
 // This pass analyzes EDT regions within a function to discover candidate
 // datablocks. A candidate datablock is a memref value used in an EDT region
-// that is defined outside (or remains invariant in) that region. In addition,
-// the pass classifies the candidate into one of three categories based on its
-// access pattern: read‑only, write‑only, or read–write.
+// that is defined outside that region. In addition, the pass classifies the
+// candidate into one of three categories based on its access pattern:
+// read‑only, write‑only, or read–write.
 ///===----------------------------------------------------------------------===//
 
 /// Dialects
@@ -14,12 +14,15 @@
 /// Arts
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
+#include "arts/Codegen/ArtsIR.h"
 #include "arts/Passes/ArtsPasses.h"
+#include "arts/Utils/ArtsTypes.h"
 #include "arts/Utils/ArtsUtils.h"
 /// Others
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/Location.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
@@ -34,15 +37,13 @@
 #define DEBUG_TYPE "identify-datablocks"
 #define line "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
-#define DBGS() (dbgs() << "\n[" DEBUG_TYPE "] ")
+#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arith;
 using namespace mlir::arts;
-
-/// AccessType: Classification of memref accesses.
-enum class AccessType { ReadOnly, WriteOnly, ReadWrite, Unknown };
+using namespace mlir::arts::types;
 
 /// CandidateDatablock: Structure representing a candidate datablock.
 struct CandidateDatablock {
@@ -53,28 +54,28 @@ struct CandidateDatablock {
   /// Memref value.
   Value ptr = nullptr;
   /// Pinned indices (if invariant).
-  SmallVector<Value, 4> pinnedIndices;
+  SmallVector<Value> pinnedIndices;
   /// Classification: read‑only, write‑only, or read–write.
-  AccessType access = AccessType::Unknown;
+  DatablockAccessType access = DatablockAccessType::Unknown;
 
   /// Set Access based on read and write flags.
   void setAccess(bool hasRead, bool hasWrite) {
     if (hasRead && hasWrite)
-      access = AccessType::ReadWrite;
+      access = DatablockAccessType::ReadWrite;
     else if (hasWrite)
-      access = AccessType::WriteOnly;
+      access = DatablockAccessType::WriteOnly;
     else if (hasRead)
-      access = AccessType::ReadOnly;
+      access = DatablockAccessType::ReadOnly;
     else
-      access = AccessType::Unknown;
+      access = DatablockAccessType::Unknown;
   }
 
   /// Update Access when combining different operations.
-  void updateAccess(AccessType newAccess) {
-    if (access == AccessType::Unknown)
+  void updateAccess(DatablockAccessType newAccess) {
+    if (access == DatablockAccessType::Unknown)
       access = newAccess;
     else if (access != newAccess)
-      access = AccessType::ReadWrite;
+      access = DatablockAccessType::ReadWrite;
   }
 };
 
@@ -118,14 +119,17 @@ struct IdentifyDatablocksPass
   /// Main entry of the pass.
   void runOnOperation() override;
 
-  /// Identify datablocks in a given EDT op.
-  void identifyDatablocks(arts::EdtOp edtOp);
+  /// Identify datablocks in the module and create them
+  void identifyDatablocks(ModuleOp module);
+  /// Rewrites datablock uses
+  void rewireDatablockUses(arts::DataBlockOp &dbOp, arts::EdtOp &edtOp,
+                           SmallVector<Operation *> &uses);
   /// Analyze the EDT region to collect candidate datablocks.
-  void analyzeEdtRegion(arts::EdtOp edtOp);
-  /// Analyze a memref value's uses in the region and update candidate
+  void analyzeEdtRegion(arts::EdtOp &edtOp);
+  /// Analyze a memref value's uses in the Edt and update candidate
   /// datablocks.
-  void analyzeValue(Value dbPtr, Region &region,
-                    SetVector<Value> &invariantValues, arts::EdtOp edtOp);
+  void analyzeValueInEdt(Value dbPtr, SetVector<Value> edtInvariantValues,
+                         arts::EdtOp &edtOp);
 
 private:
   /// Checks if a value is invariant in the region. A value is assummed
@@ -143,22 +147,63 @@ private:
 void IdentifyDatablocksPass::runOnOperation() {
   ModuleOp module = getOperation();
   LLVM_DEBUG(dbgs() << line << "IdentifyDatablocksPass STARTED\n" << line);
+  identifyDatablocks(module);
+  LLVM_DEBUG(dbgs() << line << "IdentifyDatablocksPass FINISHED\n" << line);
+  // module.dump();
+}
 
+void IdentifyDatablocksPass::identifyDatablocks(ModuleOp module) {
+  SmallVector<EdtOp> edtOps;
   module.walk([&](func::FuncOp func) {
-    LLVM_DEBUG(DBGS() << "Analyzing candidate datablocks in function: "
-                      << func.getName() << "\n");
-    func.walk<mlir::WalkOrder::PostOrder>(
-        [&](arts::EdtOp edt) { identifyDatablocks(edt); });
+    LLVM_DEBUG(DBGS() << "Candidate datablocks in function: " << func.getName()
+                      << "\n");
+    func.walk<mlir::WalkOrder::PostOrder>([&](arts::EdtOp edtOp) {
+      edtOps.push_back(edtOp);
+      analyzeEdtRegion(edtOp);
+    });
   });
 
-  LLVM_DEBUG(dbgs() << line << "IdentifyDatablocksPass FINISHED\n" << line);
+  /// For each candidate datablock, create a new datablock in the edt
+  /// region.
+  auto ctx = module.getContext();
+  Location loc = UnknownLoc::get(ctx);
+  OpBuilder builder(ctx);
+  for (EdtOp edtOp : edtOps) {
+    auto &dbCandidates = candidateDatablocks[edtOp];
+    SmallVector<Value> edtDeps;
+    for (auto &candidate : dbCandidates) {
+      auto &db = candidate.first;
+      auto &ops = candidate.second;
+      /// Create a new datablock operation.
+      {
+        OpBuilder::InsertionGuard IG(builder);
+        builder.setInsertionPoint(edtOp);
+        auto dbOp = createDatablockOp(builder, loc, db.access, db.ptr,
+                                      db.pinnedIndices);
+        rewireDatablockUses(dbOp, edtOp, ops);
+        edtDeps.push_back(dbOp.getResult());
+      }
+    }
+    /// Create a new EDT op with the new dependency operands.
+    {
+      OpBuilder::InsertionGuard IG(builder);
+      builder.setInsertionPoint(edtOp);
+      /// Move the region body from the old EDT op to the new one.
+      auto newEdtOp = createEdtOp(builder, loc, getEdtType(edtOp), edtDeps);
+      newEdtOp.getRegion().takeBody(edtOp.getRegion());
+      /// Erase the old EDT op and its dependencies.
+      auto oldDeps = edtOp.getDependencies();
+      edtOp.erase();
+      for (auto dep : oldDeps) {
+        auto dbOp = cast<arts::DataBlockOp>(dep.getDefiningOp());
+        dbOp.erase();
+      }
+    }
+  }
 }
 
-void IdentifyDatablocksPass::identifyDatablocks(arts::EdtOp edtOp) {
-  analyzeEdtRegion(edtOp);
-}
-
-void IdentifyDatablocksPass::analyzeEdtRegion(arts::EdtOp edtOp) {
+void IdentifyDatablocksPass::analyzeEdtRegion(arts::EdtOp &edtOp) {
+  LLVM_DEBUG(dbgs() << line);
   LLVM_DEBUG(DBGS() << "EDT region\n" << edtOp << "\n");
   /// Get the primary region of the EDT op.
   Region &region = edtOp.getRegion();
@@ -181,98 +226,18 @@ void IdentifyDatablocksPass::analyzeEdtRegion(arts::EdtOp edtOp) {
 
   /// Process each memref value within the region.
   for (Value ptr : ptrs)
-    analyzeValue(ptr, region, invariantValues, edtOp);
-}
+    analyzeValueInEdt(ptr, invariantValues, edtOp);
 
-void IdentifyDatablocksPass::analyzeValue(Value dbPtr, Region &region,
-                                          SetVector<Value> &invariantValues,
-                                          arts::EdtOp edtOp) {
-  /// Retrieve the candidate map for the given EDT op.
-  auto &candMap = candidateDatablocks[edtOp];
-
-  /// Iterate over all uses of the memref value.
-  for (OpOperand &use : dbPtr.getUses()) {
-    Operation *op = use.getOwner();
-    if (!region.isAncestor(op->getParentRegion()))
-      continue;
-
-    /// Only consider load and store operations.
-    if (!isa<memref::LoadOp>(op) && !isa<memref::StoreOp>(op))
-      continue;
-
-    CandidateDatablock db(dbPtr);
-    SmallVector<Value, 4> indices;
-    if (auto loadOp = dyn_cast<memref::LoadOp>(op))
-      indices = loadOp.getIndices();
-    else if (auto storeOp = dyn_cast<memref::StoreOp>(op))
-      indices = storeOp.getIndices();
-
-    /// Append consecutive invariant (pinned) indices.
-    for (Value idx : indices) {
-      if (!invariantValues.count(idx))
-        break;
-      db.pinnedIndices.push_back(idx);
-    }
-
-    /// Insert or update the candidate database entry.
-    candMap[db].push_back(op);
-  }
-
-  /// Identify candidate datablocks that are subsets of others.
-  SetVector<CandidateDatablock> toRemove;
-  for (const auto &entry1 : candMap) {
-    const CandidateDatablock &db1 = entry1.first;
-    for (const auto &entry2 : candMap) {
-      const CandidateDatablock &db2 = entry2.first;
-      if (db1.ptr != db2.ptr)
-        continue;
-      if (db1.pinnedIndices.size() >= db2.pinnedIndices.size())
-        continue;
-      bool isPrefix = true;
-      for (size_t i = 0, e = db1.pinnedIndices.size(); i < e; ++i) {
-        if (db1.pinnedIndices[i] != db2.pinnedIndices[i]) {
-          isPrefix = false;
-          break;
-        }
-      }
-      if (isPrefix)
-        toRemove.insert(db2);
-    }
-  }
-
-  /// Remove subset candidates.
-  for (const CandidateDatablock &db : toRemove)
-    candMap.erase(db);
-
-  /// Analyze each candidate's access type.
-  for (auto &entry : candMap) {
-    CandidateDatablock &db = const_cast<CandidateDatablock &>(entry.first);
-    for (Operation *op : entry.second) {
-      if (isa<memref::LoadOp>(op))
-        db.updateAccess(AccessType::ReadOnly);
-      else if (isa<memref::StoreOp>(op))
-        db.updateAccess(AccessType::WriteOnly);
-    }
-    /// Debug print candidate datablock.
-    LLVM_DEBUG({
+  /// Debug print the candidate datablocks.
+  LLVM_DEBUG({
+    auto &candMap = candidateDatablocks[edtOp];
+    for (auto &entry : candMap) {
+      auto &db = entry.first;
+      auto &uses = entry.second;
       dbgs() << "\n- Candidate Datablock\n";
       dbgs() << "  Memref: " << db.ptr << "\n";
-      dbgs() << "  Access Type: ";
-      switch (db.access) {
-      case AccessType::ReadOnly:
-        dbgs() << "read-only";
-        break;
-      case AccessType::WriteOnly:
-        dbgs() << "write-only";
-        break;
-      case AccessType::ReadWrite:
-        dbgs() << "read-write";
-        break;
-      default:
-        dbgs() << "unknown";
-        break;
-      }
-      dbgs() << "\n  Pinned Indices:";
+      dbgs() << "  Access Type: " << types::toString(db.access) << "\n";
+      dbgs() << "  Pinned Indices:";
       if (db.pinnedIndices.empty())
         dbgs() << " none\n";
       else {
@@ -280,7 +245,97 @@ void IdentifyDatablocksPass::analyzeValue(Value dbPtr, Region &region,
           dbgs() << "\n    - " << idx;
         dbgs() << "\n";
       }
-    });
+      dbgs() << "  Uses:\n";
+      for (Operation *op : uses)
+        dbgs() << "  - " << *op << "\n";
+    }
+  });
+}
+
+void IdentifyDatablocksPass::analyzeValueInEdt(
+    Value dbPtr, SetVector<Value> edtInvariantValues, arts::EdtOp &edtOp) {
+  /// Retrieve the candidate map for the given EDT op.
+  auto &candMap = candidateDatablocks[edtOp];
+  auto &region = edtOp.getRegion();
+
+  /// Process all uses of the memref value.
+  for (OpOperand &use : dbPtr.getUses()) {
+    Operation *op = use.getOwner();
+    if (!region.isAncestor(op->getParentRegion()))
+      continue;
+    /// Only consider load and store operations.
+    if (!(isa<memref::LoadOp>(op) || isa<memref::StoreOp>(op)))
+      continue;
+
+    CandidateDatablock db(dbPtr);
+    SmallVector<Value> indices;
+    if (auto loadOp = dyn_cast<memref::LoadOp>(op))
+      indices = loadOp.getIndices();
+    else if (auto storeOp = dyn_cast<memref::StoreOp>(op))
+      indices = storeOp.getIndices();
+
+    /// Append consecutive invariant (pinned) indices.
+    for (Value idx : indices) {
+      if (!edtInvariantValues.count(idx))
+        break;
+      db.pinnedIndices.push_back(idx);
+    }
+    candMap[db].push_back(op);
+  }
+
+  /// Group candidate datablocks by pointer
+  DenseMap<Value, SmallVector<const CandidateDatablock *, 4>> candByPtr;
+  for (const auto &entry : candMap)
+    candByPtr[entry.first.ptr].push_back(&entry.first);
+
+  /// For each group, sort candidates by the number of pinned indices.
+  for (auto &group : candByPtr) {
+    auto &vec = group.second;
+    std::sort(vec.begin(), vec.end(),
+              [](const CandidateDatablock *a, const CandidateDatablock *b) {
+                return a->pinnedIndices.size() < b->pinnedIndices.size();
+              });
+  }
+
+  /// Identify and mark for removal candidates that are supersets of
+  /// candidates with a prefix of index values.
+  SetVector<CandidateDatablock> toRemove;
+  for (auto &group : candByPtr) {
+    auto &vec = group.second;
+    /// Compare each candidate with those having more pinned indices.
+    for (size_t i = 0, n = vec.size(); i < n; ++i) {
+      for (size_t j = i + 1; j < n; ++j) {
+        const auto *prefixCand = vec[i];
+        const auto *cand = vec[j];
+        /// If db1 is a prefix of db2, mark db2 for removal.
+        if (prefixCand->pinnedIndices.size() >= cand->pinnedIndices.size())
+          continue;
+        bool isPrefix = true;
+        for (size_t k = 0, e = prefixCand->pinnedIndices.size(); k < e; ++k) {
+          if (prefixCand->pinnedIndices[k] != cand->pinnedIndices[k]) {
+            isPrefix = false;
+            break;
+          }
+        }
+        if (isPrefix)
+          toRemove.insert(*cand);
+      }
+    }
+  }
+
+  /// Remove candidates that are supersets.
+  for (const CandidateDatablock &db : toRemove)
+    candMap.erase(db);
+
+  /// Analyze each candidate's access type.
+  for (auto &entry : candMap) {
+    CandidateDatablock &db = entry.first;
+    for (Operation *op : entry.second) {
+      if (isa<memref::LoadOp>(op))
+        db.updateAccess(DatablockAccessType::ReadOnly);
+      else if (isa<memref::StoreOp>(op))
+        db.updateAccess(DatablockAccessType::WriteOnly);
+    }
   }
 }
 
@@ -301,6 +356,50 @@ bool IdentifyDatablocksPass::isInvariantInRegion(Value value, Region &region) {
         return false;
   }
   return true;
+}
+
+void IdentifyDatablocksPass::rewireDatablockUses(
+    arts::DataBlockOp &dbOp, arts::EdtOp &edtOp,
+    SmallVector<Operation *> &uses) {
+  MLIRContext *ctx = dbOp.getContext();
+  auto builder = OpBuilder(ctx);
+  LLVM_DEBUG(dbgs() << line << "Rewiring uses of:\n  " << dbOp << "\n");
+
+  const unsigned drop = dbOp.getIndices().size();
+
+  auto updateOp = [&](auto opToUpdate) {
+    OpBuilder::InsertionGuard IG(builder);
+    builder.setInsertionPoint(opToUpdate);
+    auto origIndices = opToUpdate.getIndices();
+
+    /// Create a new indices vector and remove the 'drop' leading indices
+    SmallVector<Value, 4> newIndices;
+    for (unsigned i = drop; i < origIndices.size(); ++i)
+      newIndices.push_back(origIndices[i]);
+
+    /// Update the memref operand and indices.
+    opToUpdate.getMemrefMutable().assign(dbOp.getResult());
+    opToUpdate.getIndicesMutable().assign(newIndices);
+  };
+
+  for (Operation *op : uses) {
+    /// Just rewire if the parent of type EdtOp is the same
+    if (auto parentOp = op->getParentOfType<arts::EdtOp>();
+        parentOp && parentOp != edtOp)
+      continue;
+    /// Update the operation with the new datablock.
+    if (auto loadOp = dyn_cast<memref::LoadOp>(op))
+      updateOp(loadOp);
+    else if (auto storeOp = dyn_cast<memref::StoreOp>(op))
+      updateOp(storeOp);
+  }
+
+  /// If the operation has no offsets, replace all uses of the ptr
+  /// with the new datablock except in the defining operation.
+  if (drop == 0) {
+    DominanceInfo domInfo(edtOp->getParentOfType<FuncOp>());
+    replaceUses(dbOp.getPtr(), dbOp.getResult(), domInfo, dbOp);
+  }
 }
 
 ///===----------------------------------------------------------------------===///
