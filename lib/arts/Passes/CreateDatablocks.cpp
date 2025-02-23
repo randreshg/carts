@@ -1,4 +1,4 @@
-//===---------------------- IdentifyDatablocks.cpp ------------------------===//
+//===---------------------- CreateDatablocks.cpp ------------------------===//
 //
 // This pass analyzes EDT regions within a function to discover candidate
 // datablocks. A candidate datablock is a memref value used in an EDT region
@@ -13,9 +13,9 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 /// Arts
 #include "ArtsPassDetails.h"
+#include "arts/Passes/ArtsPasses.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsIR.h"
-#include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsTypes.h"
 #include "arts/Utils/ArtsUtils.h"
 /// Others
@@ -34,7 +34,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdint>
-#define DEBUG_TYPE "identify-datablocks"
+#define DEBUG_TYPE "create-datablocks"
 #define line "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
@@ -114,8 +114,8 @@ template <> struct DenseMapInfo<CandidateDatablock> {
 /// Pass Implementation
 ///===----------------------------------------------------------------------===///
 namespace {
-struct IdentifyDatablocksPass
-    : public arts::IdentifyDatablocksBase<IdentifyDatablocksPass> {
+struct CreateDatablocksPass
+    : public arts::CreateDatablocksBase<CreateDatablocksPass> {
   /// Main entry of the pass.
   void runOnOperation() override;
 
@@ -144,15 +144,16 @@ private:
 };
 } // end namespace
 
-void IdentifyDatablocksPass::runOnOperation() {
+void CreateDatablocksPass::runOnOperation() {
   ModuleOp module = getOperation();
-  LLVM_DEBUG(dbgs() << line << "IdentifyDatablocksPass STARTED\n" << line);
+  LLVM_DEBUG(dbgs() << "\n"
+                    << line << "CreateDatablocksPass STARTED\n"
+                    << line);
   identifyDatablocks(module);
-  LLVM_DEBUG(dbgs() << line << "IdentifyDatablocksPass FINISHED\n" << line);
-  // module.dump();
+  LLVM_DEBUG(dbgs() << line << "CreateDatablocksPass FINISHED\n" << line);
 }
 
-void IdentifyDatablocksPass::identifyDatablocks(ModuleOp module) {
+void CreateDatablocksPass::identifyDatablocks(ModuleOp module) {
   SmallVector<EdtOp> edtOps;
   module.walk([&](func::FuncOp func) {
     LLVM_DEBUG(DBGS() << "Candidate datablocks in function: " << func.getName()
@@ -202,9 +203,8 @@ void IdentifyDatablocksPass::identifyDatablocks(ModuleOp module) {
   }
 }
 
-void IdentifyDatablocksPass::analyzeEdtRegion(arts::EdtOp &edtOp) {
-  LLVM_DEBUG(dbgs() << line);
-  LLVM_DEBUG(DBGS() << "EDT region\n" << edtOp << "\n");
+void CreateDatablocksPass::analyzeEdtRegion(arts::EdtOp &edtOp) {
+  LLVM_DEBUG(DBGS() << "EDT region\n");
   /// Get the primary region of the EDT op.
   Region &region = edtOp.getRegion();
   SetVector<Value> externalValues;
@@ -234,25 +234,25 @@ void IdentifyDatablocksPass::analyzeEdtRegion(arts::EdtOp &edtOp) {
     for (auto &entry : candMap) {
       auto &db = entry.first;
       auto &uses = entry.second;
-      dbgs() << "\n- Candidate Datablock\n";
-      dbgs() << "  Memref: " << db.ptr << "\n";
-      dbgs() << "  Access Type: " << types::toString(db.access) << "\n";
-      dbgs() << "  Pinned Indices:";
+      dbgs() << "  - Candidate Datablock\n";
+      dbgs() << "    Memref: " << db.ptr << "\n";
+      dbgs() << "    Access Type: " << types::toString(db.access) << "\n";
+      dbgs() << "    Pinned Indices:";
       if (db.pinnedIndices.empty())
-        dbgs() << " none\n";
+        dbgs() << "   none\n";
       else {
         for (Value idx : db.pinnedIndices)
-          dbgs() << "\n    - " << idx;
+          dbgs() << "\n      - " << idx;
         dbgs() << "\n";
       }
-      dbgs() << "  Uses:\n";
+      dbgs() << "    Uses:\n";
       for (Operation *op : uses)
-        dbgs() << "  - " << *op << "\n";
+        dbgs() << "    - " << *op << "\n";
     }
   });
 }
 
-void IdentifyDatablocksPass::analyzeValueInEdt(
+void CreateDatablocksPass::analyzeValueInEdt(
     Value dbPtr, SetVector<Value> edtInvariantValues, arts::EdtOp &edtOp) {
   /// Retrieve the candidate map for the given EDT op.
   auto &candMap = candidateDatablocks[edtOp];
@@ -339,7 +339,7 @@ void IdentifyDatablocksPass::analyzeValueInEdt(
   }
 }
 
-bool IdentifyDatablocksPass::isInvariantInRegion(Value value, Region &region) {
+bool CreateDatablocksPass::isInvariantInRegion(Value value, Region &region) {
   /// If the value is defined in the region, ignore it.
   if (region.isAncestor(value.getParentRegion()))
     return false;
@@ -358,9 +358,9 @@ bool IdentifyDatablocksPass::isInvariantInRegion(Value value, Region &region) {
   return true;
 }
 
-void IdentifyDatablocksPass::rewireDatablockUses(
-    arts::DataBlockOp &dbOp, arts::EdtOp &edtOp,
-    SmallVector<Operation *> &uses) {
+void CreateDatablocksPass::rewireDatablockUses(arts::DataBlockOp &dbOp,
+                                               arts::EdtOp &edtOp,
+                                               SmallVector<Operation *> &uses) {
   MLIRContext *ctx = dbOp.getContext();
   auto builder = OpBuilder(ctx);
   LLVM_DEBUG(dbgs() << line << "Rewiring uses of:\n  " << dbOp << "\n");
@@ -407,8 +407,8 @@ void IdentifyDatablocksPass::rewireDatablockUses(
 ///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createIdentifyDatablocksPass() {
-  return std::make_unique<IdentifyDatablocksPass>();
+std::unique_ptr<Pass> createCreateDatablocksPass() {
+  return std::make_unique<CreateDatablocksPass>();
 }
 } // namespace arts
 } // namespace mlir

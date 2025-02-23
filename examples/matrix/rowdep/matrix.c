@@ -14,17 +14,11 @@
 // Convert to MLIR standard dialect
 /// cgeist matrix.c -fopenmp -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include  &> matrix.mlir
 
-/// Full command
-/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --identify-datablocks --cse --canonicalize &> matrix-arts.mlir
-
 // -------------------------------------------------------------------------------------------------------------
 // Convert OpenMP to ARTS
-/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --cse --canonicalize &> matrix-arts.mlir
-/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --cse --canonicalize -debug-only=convert-openmp-to-arts,edt &> matrix-arts.mlir
-
-// DatablockIdentification pass
-/// carts-opt matrix-arts.mlir --identify-datablocks --cse --canonicalize &> matrix-datablock.mlir
-/// carts-opt matrix-arts.mlir --identify-datablocks --cse --canonicalize -debug-only=identify-datablocks &> matrix-datablock.mlir
+/// carts-opt matrix.mlir --lower-affine  &> matrix-arts.mlir
+/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --datablock --cse --canonicalize &> matrix-arts.mlir
+/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis &> matrix-arts.mlir
 
 // Try to raise to affine
 /// carts-opt matrix-datablock.mlir --raise-scf-to-affine --affine-cfg --affine-scalrep &> matrix-affine.mlir

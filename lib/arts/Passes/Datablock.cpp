@@ -2,11 +2,6 @@
 /// File: DataBlock.cpp
 ///==========================================================================
 
-/// Arts
-#include "ArtsPassDetails.h"
-#include "arts/Analysis/DataBlockAnalysis.h"
-#include "arts/ArtsDialect.h"
-#include "arts/Passes/ArtsPasses.h"
 /// Dialects
 #include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -18,6 +13,11 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Support/LLVM.h"
 #include "polygeist/Ops.h"
+/// Arts
+#include "ArtsPassDetails.h"
+#include "arts/Passes/ArtsPasses.h"
+#include "arts/Analysis/DataBlockAnalysis.h"
+#include "arts/ArtsDialect.h"
 /// Other
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
@@ -76,20 +76,6 @@ static void setAffineMap(Operation *op, AffineMap map) {
     dbOp->setAttr("affineMap", mapAttr);
 }
 
-template <typename OpType> static bool isZeroIndex(OpType &op) {
-  if (auto affineMap = getAffineMap(op.getOperation())) {
-    auto affineResults = affineMap->getResults();
-    if (!affineResults.empty() && affineResults.back() == 0)
-      return true;
-    else {
-      SmallVector<Value, 4> pinnedIndices = op.getIndices();
-      if (!pinnedIndices.empty() && pinnedIndices.back() != 0)
-        return true;
-    }
-  }
-  return false;
-}
-
 /// Returns true if the given operation uses the datablock.
 template <typename OpTy>
 static bool isDataBlockUsed(arts::DataBlockOp &dbOp, OpTy op) {
@@ -119,9 +105,7 @@ static bool isDataBlockUsed(arts::DataBlockOp &dbOp, OpTy op) {
   if (dbAffineMap && opAffineMap) {
     /// Compare the results of the affine maps up to the number of results of
     /// the datablock.
-    const uint32_t dbNumResults = isZeroIndex(dbOp)
-                                      ? dbAffineMap->getNumResults() - 1
-                                      : dbAffineMap->getNumResults();
+    const uint32_t dbNumResults = 0;
     for (uint32_t i = 0; i < dbNumResults; ++i) {
       if (dbAffineMap->getResult(i) != opAffineMap->getResult(i))
         return false;
@@ -153,8 +137,20 @@ struct DatablockPass : public arts::DatablockBase<DatablockPass> {
 
 void DatablockPass::runOnOperation() {
   ModuleOp module = getOperation();
-  LLVM_DEBUG(dbgs() << line << "DatablockPass STARTED\n" << line);
+  LLVM_DEBUG(dbgs() << "\n" << line << "DatablockPass STARTED\n" << line);
   OpBuilder builder(module);
+
+  /// Retrieve the shared analysis result.
+  DatablockAnalysis &dbAnalysis = getAnalysis<DatablockAnalysis>();
+
+  /// Iterate over every function in the module.
+  module->walk([&](func::FuncOp func) {
+    /// Retrieve (or compute) the dependency graph for this function.
+    auto &graph = dbAnalysis.getOrCreateGraph(func);
+    if (graph.edges.empty())
+      return;
+    dbAnalysis.printGraph(func);
+  });
 
   // module.walk([&](EdtOp edt) {
   //   auto &region = edt.getRegion();

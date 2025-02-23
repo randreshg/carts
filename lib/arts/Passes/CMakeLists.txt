@@ -4,11 +4,11 @@ message(STATUS "POLYGEIST_LIBRARY_DIR: ${POLYGEIST_BUILD_DIR}/lib")
 
 add_mlir_dialect_library(MLIRArtsTransforms
   ConvertOpenMPToArts.cpp
-  ConvertArtsToFuncs.cpp
-  CreateArtsEvents.cpp
-  Datablock.cpp
-  IdentifyDatablocks.cpp
   Edt.cpp
+  CreateDatablocks.cpp
+  Datablock.cpp
+  CreateEvents.cpp
+  ConvertArtsToFuncs.cpp
   ${CARTS_UTILS_SOURCE_FILES}
   ${CARTS_CODEGEN_SOURCE_FILES}
   ${CARTS_ANALYSIS_SOURCE_FILES}

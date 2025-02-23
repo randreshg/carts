@@ -2,11 +2,6 @@
 /// File: Edt.cpp
 ///==========================================================================
 
-/// Arts
-#include "ArtsPassDetails.h"
-#include "arts/Analysis/DataBlockAnalysis.h"
-#include "arts/ArtsDialect.h"
-#include "arts/Passes/ArtsPasses.h"
 /// Dialects
 #include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -18,6 +13,11 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Support/LLVM.h"
 #include "polygeist/Ops.h"
+/// Arts
+#include "ArtsPassDetails.h"
+#include "arts/Passes/ArtsPasses.h"
+#include "arts/Analysis/DataBlockAnalysis.h"
+#include "arts/ArtsDialect.h"
 /// Other
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
@@ -53,7 +53,6 @@ private:
   SetVector<Operation *> opsToRemove;
 };
 } // end namespace
-
 
 void EdtPass::convertParallelIntoSingle(EdtOp &op) {
   /// Analyze the parallel region to locate the unique single-edt op.
@@ -93,7 +92,7 @@ void EdtPass::convertParallelIntoSingle(EdtOp &op) {
 
 void EdtPass::runOnOperation() {
   ModuleOp module = getOperation();
-  LLVM_DEBUG(dbgs() << line << "EdtPass STARTED\n" << line);
+  LLVM_DEBUG(dbgs() << "\n" << line << "EdtPass STARTED\n" << line);
 
   SmallVector<EdtOp> parallelOps;
   module.walk([&](EdtOp edt) {
