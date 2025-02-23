@@ -18,7 +18,7 @@
 // Convert OpenMP to ARTS
 /// carts-opt matrix.mlir --lower-affine  &> matrix-arts.mlir
 /// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --datablock --cse --canonicalize &> matrix-arts.mlir
-/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis &> matrix-arts.mlir
+/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events &> matrix-arts.mlir
 
 // Try to raise to affine
 /// carts-opt matrix-datablock.mlir --raise-scf-to-affine --affine-cfg --affine-scalrep &> matrix-affine.mlir
