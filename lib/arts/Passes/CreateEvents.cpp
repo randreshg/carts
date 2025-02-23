@@ -11,9 +11,9 @@
 #include "mlir/Support/LLVM.h"
 /// Arts
 #include "ArtsPassDetails.h"
-#include "arts/Passes/ArtsPasses.h"
-#include "arts/ArtsDialect.h"
 #include "arts/Analysis/DataBlockAnalysis.h"
+#include "arts/ArtsDialect.h"
+#include "arts/Passes/ArtsPasses.h"
 /// Other
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
@@ -72,8 +72,12 @@ private:
 } // end anonymous namespace
 
 void CreateEventsPass::runOnOperation() {
-  LLVM_DEBUG(dbgs() << line << "CreateEventsPass STARTED\n" << line);
   ModuleOp module = getOperation();
+  LLVM_DEBUG({
+    dbgs() << line << "CreateEventsPass STARTED\n" << line;
+    // module.dump();
+  });
+
   dbAnalysis = &getAnalysis<DatablockAnalysis>();
 
   /// Iterate over every function in the module.
@@ -82,7 +86,6 @@ void CreateEventsPass::runOnOperation() {
     auto &graph = dbAnalysis->getOrCreateGraph(func);
     if (graph.edges.empty())
       return;
-    dbAnalysis->printGraph(func);
 
     /// Create events based on the datablock graph.
     SetVector<EdtOp> edtUsers;
@@ -92,32 +95,37 @@ void CreateEventsPass::runOnOperation() {
 
     /// Lambda to insert or update an event for a producer datablock node.
     auto insertEvent = [&](DatablockAnalysis::Node &producer,
-                           DatablockAnalysis::Edge &edge, int32_t eventId = -1,
-                           bool isGrouped = false) {
+                           DatablockAnalysis::Edge &edge,
+                           int32_t eventId = -1) {
       if (eventId == -1) {
         events.push_back(Event());
         eventId = static_cast<int32_t>(events.size() - 1);
       }
       auto &event = events[eventId];
-      event.isGrouped |= isGrouped;
       event.edges.push_back(edge);
       nodeToEvent[&producer] = eventId;
     };
 
     /// Analyze the graph edges.
+    /// Iterate over each edge in the dependency graph.
     for (auto &edge : graph.edges) {
       auto &producer = graph.nodes[edge.producerID];
+
+      /// If an event is already associated with the producer node,
+      /// reuse it and update the event with the new edge.
       if (nodeToEvent.count(&producer)) {
         insertEvent(producer, edge, nodeToEvent[&producer]);
         continue;
       }
-      /// Insert EDT users for consumer and producer.
-      assert(producer.userEdt && "Expected an EDT user");
+
+      /// Record the EDT users for both producer and consumer nodes.
+      /// It is assumed that each producer has an associated EDT.
+      assert(producer.userEdt && "Producer must have an associated EDT.");
       edtUsers.insert(producer.userEdt);
       edtUsers.insert(graph.nodes[edge.consumerID].userEdt);
 
-      /// If the datablock is loop dependent, and points to a db, group the
-      /// event.
+      /// For loop-dependent datablocks with a DB pointer,
+      /// attempt to reuse an existing event from any alias.
       if (producer.isLoopDependent && producer.ptrIsDb) {
         int32_t eventId = -1;
         for (auto alias : producer.aliases) {
@@ -128,22 +136,33 @@ void CreateEventsPass::runOnOperation() {
             break;
           }
         }
-        /// Insert new grouped event.
-        insertEvent(producer, edge, -1, true);
+        insertEvent(producer, edge, -1);
         continue;
       }
-      /// Create a new event for this producer.
-      insertEvent(producer, edge, -1, false);
+
+      /// For non-loop-dependent datablocks or those without a DB pointer,
+      /// create a new event.
+      insertEvent(producer, edge, -1);
     }
 
-    OpBuilder builder(func);
+    /// Debug events
+    LLVM_DEBUG({
+      dbgs() << "Events:\n";
+      for (auto &event : events) {
+        dbgs() << "  Event\n";
+        for (auto &edge : event.edges) {
+          dbgs() << "    Producer: " << edge.producerID
+                 << ", Consumer: " << edge.consumerID << "\n";
+        }
+      }
+    });
 
+    OpBuilder builder(func);
     builder.setInsertionPointToStart(&func.getBody().front());
     auto noneEvent =
         builder.create<arith::ConstantIntOp>(func.getLoc(), -1, 32);
 
-    /// Preallocate the events for each EDT.
-    DenseMap<EdtOp, SmallVector<Value>> edtToEvents;
+    /// Preallocate none events for each EDT.
     for (auto edt : edtUsers) {
       edtToEvents[edt] =
           SmallVector<Value>(edt.getDependencies().size(), noneEvent);
@@ -151,7 +170,7 @@ void CreateEventsPass::runOnOperation() {
 
     /// Process each event.
     for (auto &event : events) {
-      if (event.isGrouped)
+      if (event.edges.size() > 1)
         processGroupedEvent(builder, event, graph);
       else
         processNonGroupedEvent(builder, event, graph);
@@ -162,7 +181,10 @@ void CreateEventsPass::runOnOperation() {
       insertEventsToEdt(builder, pair.first, pair.second);
   });
 
-  LLVM_DEBUG(dbgs() << line << "CreateEventsPass FINISHED\n" << line);
+  LLVM_DEBUG({
+    dbgs() << line << "CreateEventsPass FINISHED\n" << line;
+    // module.dump();
+  });
 }
 
 void CreateEventsPass::insertEventsToEdt(OpBuilder &builder, EdtOp edtOp,
@@ -199,10 +221,19 @@ void CreateEventsPass::insertEventsToEdt(OpBuilder &builder, EdtOp edtOp,
 Value CreateEventsPass::loadEventToMap(OpBuilder &builder,
                                        DatablockAnalysis::Node &dbNode,
                                        Value event, Location loc) {
+  /// Set the insertion point to the EDT associated with the node.
   builder.setInsertionPoint(dbNode.userEdt);
-  auto eventLoad = builder.create<memref::LoadOp>(loc, event, dbNode.indices);
-  edtToEvents[dbNode.userEdt][dbNode.userEdtPos] = eventLoad.getResult();
-  return eventLoad.getResult();
+  auto eventDim = event.getType().cast<MemRefType>().getShape().size();
+  auto loadIndices = dbNode.indices;
+  if (loadIndices.size() != eventDim) {
+    auto zeroIndex = builder.create<arith::ConstantIntOp>(
+        loc, 0, builder.getIntegerType(64));
+    loadIndices.resize(eventDim, zeroIndex);
+  }
+  auto eventLoad =
+      builder.create<memref::LoadOp>(loc, event, loadIndices).getResult();
+  edtToEvents[dbNode.userEdt][dbNode.userEdtPos] = eventLoad;
+  return eventLoad;
 }
 
 void CreateEventsPass::processGroupedEvent(OpBuilder &builder, Event &event,
@@ -211,18 +242,41 @@ void CreateEventsPass::processGroupedEvent(OpBuilder &builder, Event &event,
   /// Assume all producers are the same for grouped events.
   auto &producerNode = graph.nodes[edges.front().producerID];
   auto loc = producerNode.op.getLoc();
+  /// Set insertion point at the beginning of the parent's region.
   builder.setInsertionPointToStart(
       &producerNode.edtParent->getRegion(0).front());
-  /// Expect a load datablock.
-  assert(producerNode.isLoad && "Expected a load datablock");
   auto dbParent = cast<DataBlockOp>(producerNode.ptr.getDefiningOp());
   auto &dbParentNode = dbAnalysis->getNode(dbParent);
-  auto type = MemRefType::get(dbParentNode.op.getType().getShape(),
-                              builder.getIntegerType(64));
-  auto eventOp =
-      builder.create<arts::EventOp>(loc, type, dbParentNode.op.getSizes());
+  LLVM_DEBUG(dbgs() << "Parent dimension: "
+                    << dbParentNode.op.getType().getShape().size() << "\n");
+
+  /// Compute the maximum number of consumer indices.
+  uint32_t maxConsumerIndices = 0;
+  for (const auto &edge : edges)
+    maxConsumerIndices = std::max(
+        maxConsumerIndices,
+        static_cast<uint32_t>(graph.nodes[edge.consumerID].indices.size()));
+
+  /// Prepare the adjusted shape using the parent's dimensions/
+  auto parentDim = dbParentNode.op.getType().getShape().size();
+  auto originalShape = dbParentNode.op.getType().getShape();
+  uint32_t fillCount =
+      std::min(maxConsumerIndices, static_cast<uint32_t>(parentDim));
+  SmallVector<int64_t> shape(fillCount);
+  for (uint32_t i = 0; i < fillCount; ++i)
+    shape[i] = originalShape[i];
+
+  /// Collect the sizes for each dimension up to maxConsumerIndices.
+  SmallVector<Value> sizes;
+  sizes.reserve(maxConsumerIndices);
+  for (uint32_t i = 0; i < maxConsumerIndices; ++i)
+    sizes.push_back(dbParentNode.op.getSizes()[i]);
+
+  auto eventType = MemRefType::get(shape, builder.getIntegerType(64));
+  auto eventOp = builder.create<arts::EventOp>(loc, eventType, sizes);
   auto defEvent =
       loadEventToMap(builder, producerNode, eventOp.getResult(), loc);
+
   /// Process each consumer.
   for (const auto &edge : edges) {
     auto &consumer = graph.nodes[edge.consumerID];
@@ -239,7 +293,8 @@ void CreateEventsPass::processNonGroupedEvent(OpBuilder &builder, Event &event,
   auto &producerNode = graph.nodes[event.edges.front().producerID];
   auto loc = UnknownLoc::get(builder.getContext());
   builder.setInsertionPoint(producerNode.op);
-  auto type = producerNode.op.getResult().getType();
+  auto type = MemRefType::get(producerNode.op.getType().getShape(),
+                              builder.getIntegerType(64));
   auto eventOp =
       builder.create<arts::EventOp>(loc, type, producerNode.op.getSizes());
   loadEventToMap(builder, producerNode, eventOp.getResult(), loc);
