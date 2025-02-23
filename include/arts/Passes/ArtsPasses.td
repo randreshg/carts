@@ -16,34 +16,6 @@ def ConvertOpenMPToArts : Pass<"convert-openmp-to-arts", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createConvertOpenMPtoARTSPass()";
 }
 
-def ConvertArtsToFuncs : Pass<"convert-arts-to-funcs", "mlir::ModuleOp"> {
-  let summary = "Convert ARTS functions to Funcs";
-  let dependentDialects = [
-    "memref::MemRefDialect",
-    "LLVM::LLVMDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "affine::AffineDialect",
-    "polygeist::PolygeistDialect"
-  ];
-  let constructor = "mlir::arts::createConvertArtsToFuncsPass()";
-}
-
-def CreateArtsEvents : Pass<"create-events", "mlir::ModuleOp"> {
-  let summary = "Analyzes the program and creates ARTS events";
-  let dependentDialects = [
-    "memref::MemRefDialect",
-    "LLVM::LLVMDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "affine::AffineDialect",
-    "polygeist::PolygeistDialect"
-  ];
-  let constructor = "mlir::arts::createCreateEventsPass()";
-}
-
 def Datablock : Pass<"datablock", "mlir::ModuleOp"> {
   let summary = "Using the Datablock Analysis, perform changes to the DataBlock operations and optimize them if the user wants to";
   let dependentDialects = [
@@ -58,7 +30,7 @@ def Datablock : Pass<"datablock", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createDatablockPass()";
 }
 
-def IdentifyDatablocks : Pass<"identify-datablocks", "mlir::ModuleOp"> {
+def CreateDatablocks : Pass<"create-datablocks", "mlir::ModuleOp"> {
   let summary = "Identify Datablocks in the program";
   let dependentDialects = [
     "memref::MemRefDialect",
@@ -68,7 +40,7 @@ def IdentifyDatablocks : Pass<"identify-datablocks", "mlir::ModuleOp"> {
     "arith::ArithDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createIdentifyDatablocksPass()";
+  let constructor = "mlir::arts::createCreateDatablocksPass()";
 }
 
 def Edt : Pass<"edt", "mlir::ModuleOp"> {
@@ -83,5 +55,33 @@ def Edt : Pass<"edt", "mlir::ModuleOp"> {
     "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createEdtPass()";
+}
+
+def CreateEvents : Pass<"create-events", "mlir::ModuleOp"> {
+  let summary = "Analyzes the program and creates ARTS events";
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "LLVM::LLVMDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "arith::ArithDialect",
+    "affine::AffineDialect",
+    "polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::arts::createCreateEventsPass()";
+}
+
+def ConvertArtsToFuncs : Pass<"convert-arts-to-funcs", "mlir::ModuleOp"> {
+  let summary = "Convert ARTS functions to Funcs";
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "LLVM::LLVMDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "arith::ArithDialect",
+    "affine::AffineDialect",
+    "polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::arts::createConvertArtsToFuncsPass()";
 }
 #endif // CARTS_PASSES

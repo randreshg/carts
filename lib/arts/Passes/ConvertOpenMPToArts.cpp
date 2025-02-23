@@ -5,7 +5,6 @@
 //===----------------------------------------------------------------------===//
 
 /// Dialects
-
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -14,9 +13,9 @@
 #include "polygeist/Ops.h"
 /// Arts
 #include "ArtsPassDetails.h"
+#include "arts/Passes/ArtsPasses.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsIR.h"
-#include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsTypes.h"
 #include "arts/Utils/ArtsUtils.h"
 /// Others
@@ -33,7 +32,7 @@
 #define DEBUG_TYPE "convert-openmp-to-arts"
 #define line "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
-#define DBGS() (dbgs() << "\n[" DEBUG_TYPE "] ")
+#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
 using namespace mlir;
 using namespace arts;
@@ -257,7 +256,9 @@ struct ConvertOpenMPToArtsPass
 
 /// Pass to convert OpenMP operations to ARTS operations
 void ConvertOpenMPToArtsPass::runOnOperation() {
-  LLVM_DEBUG(dbgs() << line << "ConvertOpenMPToArtsPass STARTED\n" << line);
+  LLVM_DEBUG(dbgs() << "\n"
+                    << line << "ConvertOpenMPToArtsPass STARTED\n"
+                    << line);
   ModuleOp module = getOperation();
   MLIRContext *context = &getContext();
   RewritePatternSet patterns(context);
