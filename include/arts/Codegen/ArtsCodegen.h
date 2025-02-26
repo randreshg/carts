@@ -37,27 +37,11 @@ public:
   DataBlockCodegen(ArtsCodegen &AC, arts::DataBlockOp dbOp, Location loc);
 
   /// Getters
-  Value getGuid() { return entryGuid ? entryGuid : guid; }
-  Value getPtr() { return entryPtr ? entryPtr : memref; }
-  Type getElementType() { return elementType; }
-  Value getElementTypeSize() { return elementTypeSize; }
-  bool isBaseDb() { return ptrIsDb; }
-  bool isArray() { return dbIsArray; }
-  Value getEntryGuid() { return entryGuid; }
-  Value getEntryPtr() { return entryPtr; }
-  DenseMap<unsigned, unsigned> &getEntrySizes() { return entrySizes; }
+  bool isBaseDb() { return isPtrDb; }
+  bool isSingleDb() { return isSingle; }
   ValueRange getIndices() { return dbOp.getIndices(); }
   ValueRange getSizes() { return dbOp.getSizes(); }
-
-  /// Setters
-  void setEntryInfo(Value entryGuid, Value entryPtr) {
-    this->entryGuid = entryGuid;
-    this->entryPtr = entryPtr;
-  }
-
-  void insertEntrySize(unsigned sizeIndex, unsigned paramIndex) {
-    entrySizes[sizeIndex] = paramIndex;
-  }
+  Value getOp() { return dbOp; }
 
   /// Interface
   void create(arts::DataBlockOp dbOp, Location loc);
@@ -70,21 +54,36 @@ private:
   Value guid = nullptr;
   Value ptr = nullptr;
   /// Op info
-  Value memref = nullptr;
+  Value opPtr = nullptr;
   Type elementType = nullptr;
   Value elementTypeSize = nullptr;
-  bool ptrIsDb = false;
-  bool dbIsArray = false;
-  /// Uses in entry
-  Value entryGuid = nullptr;
-  Value entryPtr = nullptr;
-  /// Maps a size index to the index of the parameter in the EDT user entry
-  DenseMap<unsigned, unsigned> entrySizes;
+  bool isPtrDb = false;
+  bool isSingle = false;
 
   /// Utils
   Value createGuid(Value node, Value mode, Location loc);
   Value getMode(StringRef mode);
 };
+
+// ---------------------------- Events ---------------------------- ///
+// class EventCodegen {
+// public:
+//   EventCodegen(ArtsCodegen &AC);
+//   EventCodegen(ArtsCodegen &AC, arts::EventOp eventOp, Location loc);
+
+//   /// Getters
+//   Value getGuid() { return guid; }
+
+//   /// Interface
+//   void create(arts::EventOp eventOp, Location loc);
+
+// private:
+//   ArtsCodegen &AC;
+//   OpBuilder &builder;
+//   Value guid = nullptr;
+//   SmallVector<Value> indices;
+//   bool isSingle = false;
+// };
 
 // ---------------------------- EDTs ---------------------------- ///
 class EdtCodegen {
@@ -130,12 +129,20 @@ private:
   Value paramC = nullptr;
   Value paramV = nullptr;
   Value depC = nullptr;
-  SmallVector<Value> deps;
-  SmallVector<Value> params;
-  SmallVector<Value> consts;
+  SmallVector<Value> deps, params, consts;
+  DenseMap<Value, Value> rewireMap;
+
+  /// Entry info
+  struct DatablockEntry {
+    Value guid, ptr;
+    DenseMap<unsigned, unsigned> sizeIndex;
+  };
+  DenseMap<arts::DataBlockCodegen *, DatablockEntry> entryDbs;
+  /// Entry events
+  DenseMap<Value, unsigned> entryEvents;
 
   /// Utils
-  void processDepsAndParams(SmallVector<Value> *deps, Location loc);
+  void process(Location loc);
   Value createGuid(Value node, Location loc);
   func::FuncOp createFn(Location loc);
   void createEntry(Location loc);
@@ -154,6 +161,7 @@ public:
 
   /// Friend classes
   friend class DataBlockCodegen;
+  friend class EventCodegen;
   friend class EdtCodegen;
   friend class ArtsTypes;
 
@@ -166,9 +174,15 @@ public:
   OpBuilder &getBuilder() { return builder; }
 
   /// Datablock
+  DataBlockCodegen *getDatablock(Value op);
   DataBlockCodegen *getDatablock(arts::DataBlockOp dbOp);
   DataBlockCodegen *createDatablock(arts::DataBlockOp dbOp, Location loc);
   DataBlockCodegen *getOrCreateDatablock(arts::DataBlockOp dbOp, Location loc);
+
+  /// Events
+  Value allocEvent(arts::AllocEventOp allocEventOp, Location loc);
+  // EventCodegen *getEvent(arts::EventOp eventOp);
+  // EventCodegen *getOrCreateEvent(arts::EventOp eventOp, Location loc);
 
   /// Edts
   EdtCodegen *getEdt(Region *region);
@@ -187,8 +201,7 @@ public:
   Value getCurrentEpochGuid(Location loc);
   Value getCurrentEdtGuid(Location loc);
   Value getCurrentNode(Location loc);
-  Value createArrayFromDeps(Value numElements, Value deps, Value initialSlot,
-                            Location loc);
+  void satisfyDep(Value eventGuid, Value depGuid, Location loc);
 
   /// Helpers
   Value createFnPtr(func::FuncOp funcOp, Location loc);
@@ -202,8 +215,8 @@ public:
   Value castToIndex(Value source, Location loc);
   Value castToFloat(mlir::Type targetType, Value source, Location loc);
   Value castToInt(mlir::Type targetType, Value source, Location loc);
-  Value castToPtr(Value source, Location loc);
-  Value castToLLVMPtr(Value source, MemRefType MT, Location loc);
+  Value castToVoidPtr(Value source, Location loc);
+  Value castToLLVMPtr(Value source, Location loc);
 
   /// Insertion point
   void setInsertionPoint(Operation *op) { builder.setInsertionPoint(op); }
@@ -241,10 +254,10 @@ private:
   unsigned edtCounter = 0;
   /// Map a arts::DataBlockOp to a DataBlockCodegen
   llvm::DenseMap<Value, DataBlockCodegen *> datablocks;
+  /// Map an arts::AllocEventOp to a EventCodegen
+  // llvm::DenseMap<Value, EventCodegen *> events;
   /// Map an arts region to a EdtCodegen
   llvm::DenseMap<Region *, EdtCodegen *> edts;
-  /// Maps an entry datablock pointer to its DataBlockCodegen object
-  DenseMap<Value, DataBlockCodegen *> rewiredDbs;
 };
 
 } // namespace arts

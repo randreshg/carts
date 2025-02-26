@@ -23,7 +23,8 @@ void replaceUses(mlir::Value from, mlir::Value to, DominanceInfo &domInfo,
 void replaceUses(llvm::DenseMap<mlir::Value, mlir::Value> &rewireMap);
 void replaceInRegion(mlir::Region &region, mlir::Value from, mlir::Value to);
 void replaceInRegion(mlir::Region &region,
-                     llvm::DenseMap<mlir::Value, mlir::Value> &rewireMap);
+                     llvm::DenseMap<mlir::Value, mlir::Value> &rewireMap,
+                     bool clear = true);
 bool isValueConstant(mlir::Value val);
 std::optional<int64_t> computeConstant(Value val);
 int64_t tryParseIndexConstant(Value val);

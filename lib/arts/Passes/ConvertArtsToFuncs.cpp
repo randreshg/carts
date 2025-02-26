@@ -63,12 +63,12 @@ struct ConvertArtsToFuncsPass
     : public arts::ConvertArtsToFuncsBase<ConvertArtsToFuncsPass> {
   void runOnOperation() override;
 
-  void iterateDbs(ModuleOp module);
   void iterateOps(Operation *op);
   void handleParallel(EdtOp &op);
   void handleSingle(EdtOp &op);
+  void handleSync(EdtOp &op);
   void handleEdt(EdtOp &op);
-  void handleEvent(EventOp &op);
+  void handleAllocEvent(AllocEventOp &op);
   void handleDatablock(DataBlockOp &op);
 
 private:
@@ -78,7 +78,12 @@ private:
 } // end namespace
 
 void ConvertArtsToFuncsPass::handleParallel(EdtOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.edt parallel\n" << line);
+  /// Set insertion point to the current op for epoch creation.
+  llvm_unreachable("Parallel EDTs not supported yet");
+}
+
+void ConvertArtsToFuncsPass::handleSync(EdtOp &op) {
+  LLVM_DEBUG(DBGS() << "Lowering arts.edt sync\n" << line);
   auto *ctx = op.getContext();
   Location loc = UnknownLoc::get(ctx);
   mlir::Region &region = op.getRegion();
@@ -89,19 +94,20 @@ void ConvertArtsToFuncsPass::handleParallel(EdtOp &op) {
     OpBuilder::InsertionGuard guard(AC->getBuilder());
     AC->setInsertionPoint(op);
 
-    /// Create a done-edt for the parallel epoch.
-    EdtCodegen parDoneEdt(*AC);
-    parDoneEdt.setDepC(AC->createIntConstant(1, AC->Int32, loc));
-    parDoneEdt.build(loc);
+    /// Create a done-edt for the sync Edt epoch.
+    EdtCodegen syncDoneEdt(*AC);
+    syncDoneEdt.setDepC(AC->createIntConstant(1, AC->Int32, loc));
+    syncDoneEdt.build(loc);
 
     /// Create the parallel epoch.
     auto parDone_slot = AC->createIntConstant(0, AC->Int32, loc);
     auto parEpoch_guid =
-        AC->createEpoch(parDoneEdt.getGuid(), parDone_slot, loc);
+        AC->createEpoch(syncDoneEdt.getGuid(), parDone_slot, loc);
 
     /// Create the parallel EDT with the single op's region.
-    auto par_deps = op.getDeps();
-    newEdt = AC->createEdt(&par_deps, &region, &parEpoch_guid, nullptr, true);
+    auto par_dependencies = op.getDependenciesVector();
+    newEdt = AC->createEdt(&par_dependencies, &region, &parEpoch_guid, nullptr,
+                           true);
   }
 
   /// Erase the old parallel op.
@@ -129,9 +135,9 @@ void ConvertArtsToFuncsPass::handleEdt(EdtOp &op) {
 
     /// Create the parallel EDT with the single op's region.
     auto epoch = AC->getCurrentEpochGuid(loc);
-    auto deps = op.getDeps();
+    auto dependencies = op.getDependenciesVector();
     auto &region = op.getRegion();
-    newEdt = AC->createEdt(&deps, &region, &epoch, nullptr, true);
+    newEdt = AC->createEdt(&dependencies, &region, &epoch, nullptr, true);
   }
 
   /// Erase the old edt
@@ -172,10 +178,9 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
   };
 
   /// Helper lambda to compute the pointer based on the indices.
-  auto MT = newDbOp.getType().cast<MemRefType>();
   auto computePtr = [&](ValueRange indices, Type elementType,
                         Location loc) -> Value {
-    auto newPtr = AC->castToLLVMPtr(newDbOp, MT, loc);
+    auto newPtr = AC->castToLLVMPtr(newDbOp, loc);
     if (isSingleZeroOffset(indices))
       return newPtr;
 
@@ -260,8 +265,11 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
   opsToRemove.insert(newDbOp);
 }
 
-void ConvertArtsToFuncsPass::handleEvent(EventOp &op) {
-  LLVM_DEBUG(DBGS() << "Skipping arts.event: " << op << "\n");
+void ConvertArtsToFuncsPass::handleAllocEvent(AllocEventOp &op) {
+  LLVM_DEBUG(DBGS() << "Lowering arts.alloc_event\n");
+  auto eventGuid = AC->allocEvent(op, op->getLoc());
+  op.getResult().replaceAllUsesWith(eventGuid);
+  opsToRemove.insert(op);
 }
 
 void ConvertArtsToFuncsPass::iterateOps(Operation *operation) {
@@ -277,50 +285,27 @@ void ConvertArtsToFuncsPass::iterateOps(Operation *operation) {
         } else if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
           if (edtOp.isParallel())
             handleParallel(edtOp);
+          else if (edtOp.isSync())
+            handleSync(edtOp);
           else if (edtOp.isSingle())
             handleSingle(edtOp);
           else
             handleEdt(edtOp);
           return mlir::WalkResult::advance();
-        } else if (auto eventOp = dyn_cast<arts::EventOp>(op)) {
-          handleEvent(eventOp);
+        } else if (auto allocEventOp = dyn_cast<arts::AllocEventOp>(op)) {
+          handleAllocEvent(allocEventOp);
           return mlir::WalkResult::advance();
         }
         return mlir::WalkResult::advance();
       });
 }
 
-// void ConvertArtsToFuncsPass::iterateDbs(ModuleOp module) {
-//   module->walk<mlir::WalkOrder::PreOrder>(
-//       [&](Operation *op) -> mlir::WalkResult {
-//         /// Skip operations marked for removal.
-//         if (opsToRemove.count(op))
-//           return mlir::WalkResult::skip();
-
-//         if (auto dbOp = dyn_cast<arts::DataBlockOp>(op)) {
-//           handleDatablock(dbOp);
-//           return mlir::WalkResult::advance();
-//         }
-//         else if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
-//           if (edtOp.isParallel())
-//             handleParallel(edtOp);
-//           else if (edtOp.isSingle())
-//             handleSingle(edtOp);
-//           else
-//             handleEdt(edtOp);
-//           return mlir::WalkResult::advance();
-//         } else if (auto eventOp = dyn_cast<arts::EventOp>(op)) {
-//           handleEvent(eventOp);
-//           return mlir::WalkResult::advance();
-//         }
-//         return mlir::WalkResult::advance();
-//       });
-// }
-
 void ConvertArtsToFuncsPass::runOnOperation() {
-  LLVM_DEBUG(dbgs() << "=== ConvertArtsToFuncsPass START ===\n");
-
   ModuleOp module = getOperation();
+  LLVM_DEBUG({
+    dbgs() << line << "ConvertArtsToFuncsPass START\n" << line;
+    module.dump();
+  });
 
   /// Data Layouts
   auto llvmDLAttr = module->getAttrOfType<StringAttr>("llvm.data_layout");

@@ -51,7 +51,7 @@ void ArtsDialect::initialize() {
 
 bool isArtsRegion(Operation *op) { return isa<EdtOp>(op) || isa<EpochOp>(op); }
 bool isArtsOp(Operation *op) {
-  return isArtsRegion(op) || isa<DataBlockOp>(op) || isa<EventOp>(op);
+  return isArtsRegion(op) || isa<DataBlockOp>(op) || isa<AllocEventOp>(op);
 }
 
 //===----------------------------------------------------------------------===//
@@ -89,7 +89,6 @@ void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
                         Type subview, StringRef mode, Value ptr,
                         Type elementType, Value elementTypeSize,
                         ValueRange indices, ValueRange sizes) {
-
   odsState.addOperands(ptr);
   odsState.addOperands(elementTypeSize);
   odsState.addOperands(indices);
@@ -123,10 +122,10 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
   /// Parse colon and the type of the ptr operand.
   if (parser.parseColon())
     return failure();
-  Type baseType;
-  if (parser.parseType(baseType))
+  Type ptrType;
+  if (parser.parseType(ptrType))
     return failure();
-  if (parser.resolveOperand(ptrOperand, baseType, result.operands))
+  if (parser.resolveOperand(ptrOperand, ptrType, result.operands))
     return failure();
   if (parser.parseRSquare())
     return failure();
@@ -162,19 +161,40 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
   if (parser.parseRSquare())
     return failure();
 
-  // Parse comma then "typeSize[".
+  /// Parse comma then "typeSize[".
   if (parser.parseComma() || parser.parseKeyword("typeSize") ||
       parser.parseLSquare())
     return failure();
-  OpAsmParser::UnresolvedOperand etsOperand;
-  if (parser.parseOperand(etsOperand))
+  OpAsmParser::UnresolvedOperand tsOperand;
+  if (parser.parseOperand(tsOperand))
     return failure();
   Builder &builder = parser.getBuilder();
   Type indexType = builder.getIndexType();
-  if (parser.resolveOperand(etsOperand, indexType, result.operands))
+  if (parser.resolveOperand(tsOperand, indexType, result.operands))
     return failure();
   if (parser.parseRSquare())
     return failure();
+
+  /// Optionally parse the event
+  SmallVector<OpAsmParser::UnresolvedOperand, 1> eventOperands;
+  if (succeeded(parser.parseOptionalComma())) {
+    if (parser.parseKeyword("event") || parser.parseLSquare())
+      return failure();
+    OpAsmParser::UnresolvedOperand eventOperand;
+    if (parser.parseOperand(eventOperand))
+      return failure();
+    if (parser.parseColon())
+      return failure();
+    Type eventType;
+    if (parser.parseType(eventType))
+      return failure();
+    if (parser.parseRSquare())
+      return failure();
+    /// Add event operand to the operation's operand list
+    if (parser.resolveOperand(eventOperand, eventType, result.operands))
+      return failure();
+    eventOperands.push_back(eventOperand);
+  }
 
   /// Optionally parse comma then affineMap attribute.
   if (succeeded(parser.parseOptionalComma())) {
@@ -210,12 +230,13 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
     return failure();
 
   /// Set operand segment sizes.
-  /// Order: ptr (1), typeSize (1), indices, sizes.
-  SmallVector<int32_t, 4> segmentSizes;
+  /// Order: ptr (1), typeSize (1), indices, sizes, event (0 or 1).
+  SmallVector<int32_t, 5> segmentSizes;
   segmentSizes.push_back(1);
   segmentSizes.push_back(1);
   segmentSizes.push_back(static_cast<int32_t>(offsetOperands.size()));
   segmentSizes.push_back(static_cast<int32_t>(sizeOperands.size()));
+  segmentSizes.push_back(static_cast<int32_t>(eventOperands.size()));
   std::copy(
       segmentSizes.begin(), segmentSizes.end(),
       result.getOrAddProperties<Properties>().operandSegmentSizes.begin());
@@ -256,6 +277,13 @@ void DataBlockOp::print(OpAsmPrinter &printer) {
   printer.printOperand(getOperands()[1]);
   printer << "]";
 
+  /// Optionally print the event operand if present.
+  if (auto event = getEvent()) {
+    printer << ", event[";
+    printer.printOperand(event);
+    printer << "]";
+  }
+
   /// Optionally print the affineMap attribute if present.
   if (auto affineMap = op->getAttr("affineMap"))
     printer << ", affineMap=" << affineMap;
@@ -278,11 +306,10 @@ ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
   /// We'll parse something like:
   ///   parameters(...) : (...)
   ///   [ optional ", dependencies(...) : (...)" ]
-  ///   [ optional ", events(...) : (...)" ]
   /// Then parse attr-dict, then the region.
 
   /// Collect all operands in a single list, typed accordingly
-  SmallVector<OpAsmParser::UnresolvedOperand, 8> depOps, evtOps;
+  SmallVector<OpAsmParser::UnresolvedOperand, 8> depOps;
   SmallVector<Type, 8> depTypes, evtTypes;
 
   auto parseGroup =
@@ -305,22 +332,9 @@ ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
     (void)parser.parseOptionalComma();
   }
 
-  /// Optional read of "events(...) : (...)"
-  if (succeeded(parser.parseOptionalKeyword("events"))) {
-    if (parseGroup("events", evtOps, evtTypes))
-      return failure();
-    (void)parser.parseOptionalComma();
-  }
-
   /// Parse attribute dictionary
   if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
     return failure();
-
-  /// Compute operand segment sizes
-  ::llvm::copy(
-      ::llvm::ArrayRef<int32_t>({static_cast<int32_t>(depOps.size()),
-                                 static_cast<int32_t>(evtOps.size())}),
-      result.getOrAddProperties<Properties>().operandSegmentSizes.begin());
 
   /// Parse region
   Region *body = result.addRegion();
@@ -328,11 +342,7 @@ ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
     return failure();
 
   /// Convert operand references -> actual Value, storing in result.operands
-  /// We'll accumulate them in the order: dependencies, events
   if (parser.resolveOperands(depOps, depTypes, parser.getCurrentLocation(),
-                             result.operands))
-    return failure();
-  if (parser.resolveOperands(evtOps, evtTypes, parser.getCurrentLocation(),
                              result.operands))
     return failure();
 
@@ -365,8 +375,7 @@ void EdtOp::print(OpAsmPrinter &printer) {
   };
 
   /// Print each group if it has operands
-  printGroup(" dependencies", getDeps());
-  printGroup("events", getEvents());
+  printGroup(" dependencies", getDependenciesVector());
 
   /// Print attributes + region
   printer.printOptionalAttrDictWithKeyword(
@@ -378,34 +387,18 @@ void EdtOp::print(OpAsmPrinter &printer) {
                       /*printBlockTerminators=*/true);
 }
 
-/// Builder
-void EdtOp::build(OpBuilder &odsBuilder, OperationState &odsState,
-                  ValueRange dependencies) {
-  odsState.addOperands(dependencies);
-  ::llvm::copy(
-      ::llvm::ArrayRef<int32_t>({static_cast<int32_t>(dependencies.size())}),
-      odsState.getOrAddProperties<Properties>().operandSegmentSizes.begin());
-  (void)odsState.addRegion();
-}
-
 /// Retrieve dependencies.
-SmallVector<Value> EdtOp::getDeps() {
+SmallVector<Value> EdtOp::getDependenciesVector() {
   auto dependencies = getDependencies();
   SmallVector<Value, 4> dependenciesVector(dependencies.begin(),
                                            dependencies.end());
   return dependenciesVector;
 }
 
-/// Retrieve events.
-SmallVector<Value> EdtOp::getEvnts() {
-  auto events = getEvents();
-  SmallVector<Value, 4> eventsVector(events.begin(), events.end());
-  return eventsVector;
-}
-
 /// Others
 bool EdtOp::isParallel() { return getOperation()->hasAttr("parallel"); }
 bool EdtOp::isSingle() { return getOperation()->hasAttr("single"); }
+bool EdtOp::isSync() { return getOperation()->hasAttr("sync"); }
 bool EdtOp::isTask() { return getOperation()->hasAttr("task"); }
 void EdtOp::setIsParallelAttr() {
   getOperation()->setAttr("parallel", UnitAttr::get(getContext()));
@@ -413,20 +406,16 @@ void EdtOp::setIsParallelAttr() {
 void EdtOp::setIsSingleAttr() {
   getOperation()->setAttr("single", UnitAttr::get(getContext()));
 }
+void EdtOp::setIsSyncAttr() {
+  getOperation()->setAttr("sync", UnitAttr::get(getContext()));
+}
 void EdtOp::setIsTaskAttr() {
   getOperation()->setAttr("task", UnitAttr::get(getContext()));
 }
-
-//===----------------------------------------------------------------------===//
-// EventOp
-//===----------------------------------------------------------------------===//
-// void EventOp::build(OpBuilder &builder, OperationState &state, Type type,
-//                     Value size, bool isGrouped) {
-//   state.addOperands(size);
-//   state.addTypes(type);
-//   if (isGrouped)
-//     state.addAttribute("grouped", builder.getUnitAttr());
-// }
+void EdtOp::clearIsParallelAttr() { getOperation()->removeAttr("parallel"); }
+void EdtOp::clearIsSingleAttr() { getOperation()->removeAttr("single"); }
+void EdtOp::clearIsSyncAttr() { getOperation()->removeAttr("sync"); }
+void EdtOp::clearIsTaskAttr() { getOperation()->removeAttr("task"); }
 
 //===----------------------------------------------------------------------===//
 // DataBlockOp
@@ -450,11 +439,19 @@ void DataBlockOp::getEffects(
   }
 }
 
-bool DataBlockOp::isLoad() { return getOperation()->hasAttr("isLoad"); }
 bool DataBlockOp::isPtrDb() { return getOperation()->hasAttr("isPtrDb"); }
-void DataBlockOp::setIsLoadAttr() {
-  getOperation()->setAttr("isLoad", UnitAttr::get(getContext()));
-}
+bool DataBlockOp::isSingle() { return getOperation()->hasAttr("single"); }
 void DataBlockOp::setIsPtrDbAttr() {
   getOperation()->setAttr("isPtrDb", UnitAttr::get(getContext()));
+}
+void DataBlockOp::setIsSingleAttr() {
+  getOperation()->setAttr("single", UnitAttr::get(getContext()));
+}
+
+//===----------------------------------------------------------------------===//
+// AllocEventOp
+//===----------------------------------------------------------------------===//
+bool AllocEventOp::isSingle() { return getOperation()->hasAttr("single"); }
+void AllocEventOp::setIsSingleAttr() {
+  getOperation()->setAttr("single", UnitAttr::get(getContext()));
 }

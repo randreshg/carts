@@ -90,10 +90,12 @@ void replaceInRegion(Region &region, Value from, Value to) {
   });
 }
 
-void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap) {
+void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap,
+                     bool clear) {
   for (auto &rewire : rewireMap)
     replaceInRegion(region, rewire.first, rewire.second);
-  rewireMap.clear();
+  if (clear)
+    rewireMap.clear();
 }
 
 std::optional<int64_t> computeConstant(Value val) {

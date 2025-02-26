@@ -64,13 +64,14 @@ DataBlockCodegen::DataBlockCodegen(ArtsCodegen &AC, arts::DataBlockOp dbOp,
 void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
   /// Datablock info
   dbOp = depOp;
-  memref = dbOp.getPtr();
-  ptrIsDb = dbOp.isPtrDb();
+  opPtr = dbOp.getPtr();
+  isPtrDb = dbOp.isPtrDb();
   elementType = dbOp.getElementType();
   elementTypeSize = dbOp.getElementTypeSize();
+  isSingle = dbOp.isSingle();
 
   /// If the base is a DB, it will be handled when inserting the EDT Entry
-  if (ptrIsDb) {
+  if (isPtrDb) {
     LLVM_DEBUG(DBGS() << "Base is a datablock: " << dbOp << "\n");
     return;
   }
@@ -80,47 +81,34 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
   AC.setInsertionPoint(dbOp);
 
   auto currentNode = AC.getCurrentNode(loc);
-
-  bool isSingleSize = false;
-  /// If there is a single size, we value equal to '1', it is a single element
-  auto sizes = dbOp.getSizes();
-  if (sizes.size() == 1) {
-    auto size = dbOp.getSizes().front();
-    if (auto cstOp = size.getDefiningOp<arith::ConstantIndexOp>()) {
-      if (cstOp.value() == 1)
-        isSingleSize = true;
-    }
-  }
-
   /// Handle the case of a single datablock
-  if (dbOp.isLoad() || isSingleSize) {
+  if (isSingle) {
     auto modeVal = getMode(dbOp.getMode());
     guid = createGuid(currentNode, modeVal, loc);
-    ptr =
-        AC.createRuntimeCall(
-              ARTSRTL_artsDbCreateWithGuidAndData,
-              {AC.castToPtr(memref, loc), elementTypeSize, modeVal, guid}, loc)
-            ->getResult(0);
+    ptr = AC.createRuntimeCall(
+                ARTSRTL_artsDbCreateWithGuidAndData,
+                {AC.castToVoidPtr(opPtr, loc), elementTypeSize, modeVal, guid},
+                loc)
+              ->getResult(0);
 
     return;
   }
 
-  /// If we hit this point, we are handling an array of datablocks
-  dbIsArray = true;
-
   /// Create an array of guids and pointers based on the sizes of the dbOp
+  auto sizes = dbOp.getSizes();
+  const auto dbDim = sizes.size();
   auto modeVal = getMode(dbOp.getMode());
   auto guidType = MemRefType::get(
-      std::vector<int64_t>(sizes.size(), ShapedType::kDynamic), AC.ArtsGuid);
+      std::vector<int64_t>(dbDim, ShapedType::kDynamic), AC.ArtsGuid);
   guid = builder.create<memref::AllocaOp>(loc, guidType, sizes);
   auto ptrType = MemRefType::get(
-      std::vector<int64_t>(sizes.size(), ShapedType::kDynamic), AC.VoidPtr);
+      std::vector<int64_t>(dbDim, ShapedType::kDynamic), AC.VoidPtr);
   ptr = builder.create<memref::AllocaOp>(loc, ptrType, sizes);
 
   /// Recursively create datablocks for each element
   std::function<void(unsigned, SmallVector<Value, 4> &)> createDbs =
       [&](unsigned dim, SmallVector<Value, 4> &indices) {
-        if (dim == sizes.size()) {
+        if (dim == dbDim) {
           auto guidVal = createGuid(currentNode, modeVal, loc);
           auto tySize = AC.castToInt(AC.Int64, elementTypeSize, loc);
           auto ptrVal = AC.createRuntimeCall(ARTSRTL_artsDbCreateWithGuid,
@@ -169,6 +157,73 @@ Value DataBlockCodegen::createGuid(Value node, Value mode, Location loc) {
   return reserveGuidCall.getResult(0);
 }
 
+// ---------------------------- Events ---------------------------- ///
+// EventCodegen::EventCodegen(ArtsCodegen &AC) : AC(AC), builder(AC.builder) {}
+
+// EventCodegen::EventCodegen(ArtsCodegen &AC, arts::EventOp eventOp, Location
+// loc)
+//     : AC(AC), builder(AC.builder) {
+//   create(eventOp, loc);
+// }
+
+// void EventCodegen::create(arts::EventOp eventOp, Location loc) {
+//   OpBuilder::InsertionGuard guard(builder);
+//   AC.setInsertionPoint(eventOp);
+//   isSingle = eventOp.isSingle();
+//   indices = eventOp.getIndices();
+//   /// If the event is a single event, load the guid
+//   if (isSingle) {
+//     guid = builder
+//                .create<memref::LoadOp>(loc, eventOp.getSource(),
+//                                        eventOp.getIndices())
+//                .getResult();
+//     return;
+//   }
+
+//   /// Otherwise, the guids are stored in an array.
+//   /// No need to load them here, this will be done when processing the
+//   /// EDT, since the events guids have to be loaded to be sent as
+//   /// parameters to the EDT.
+//   guid = eventOp.getSource();
+
+//   // /// Create an array of guids based on the sizes of the eventOp
+//   // auto sizes = eventOp.getSizes();
+//   // auto guidType = MemRefType::get(
+//   //     std::vector<int64_t>(sizes.size(), ShapedType::kDynamic),
+//   AC.ArtsGuid);
+//   // guid = builder.create<memref::AllocaOp>(loc, guidType, sizes);
+//   // /// Create nested loops to create the guids
+//   // std::function<void(unsigned, SmallVector<Value, 4> &)> createGuids =
+//   //     [&](unsigned dim, SmallVector<Value, 4> &indices) {
+//   //       if (dim == sizes.size()) {
+//   //         auto guidVal =
+//   //             builder.create<memref::LoadOp>(loc, eventOp.getSource(),
+//   //             indices)
+//   //                 .getResult();
+//   //         builder.create<memref::StoreOp>(loc, guidVal, guid, indices);
+//   //         return;
+//   //       }
+//   //       /// Create loop for current dimension
+//   //       auto lower = builder.create<arith::ConstantIndexOp>(loc, 0);
+//   //       auto upper = sizes[dim];
+//   //       auto step = builder.create<arith::ConstantIndexOp>(loc, 1);
+//   //       auto loopOp = builder.create<scf::ForOp>(loc, lower, upper, step);
+//   //       /// Set insertion point inside the loop body
+//   //       auto &loopBlock = loopOp.getRegion().front();
+//   //       builder.setInsertionPointToStart(&loopBlock);
+//   //       /// Append the induction variable for the current dimension
+//   //       indices.push_back(loopOp.getInductionVar());
+//   //       /// Recurse to create the next level of loop
+//   //       createGuids(dim + 1, indices);
+//   //       /// Remove the current induction variable and reset insertion
+//   point
+//   //       indices.pop_back();
+//   //       builder.setInsertionPointAfter(loopOp);
+//   //     };
+//   // SmallVector<Value, 4> indices;
+//   // createGuids(0, indices);
+// }
+
 // ---------------------------- EDTs ---------------------------- ///
 unsigned EdtCodegen::edtCounter = 0;
 
@@ -191,7 +246,9 @@ EdtCodegen::EdtCodegen(ArtsCodegen &AC, SmallVector<Value> *opDeps,
     consts.append(envManager.getConstants().begin(),
                   envManager.getConstants().end());
   }
-  processDepsAndParams(opDeps, curLoc);
+  deps = opDeps ? *opDeps : SmallVector<Value>();
+  // events = opEvents ? *opEvents : SmallVector<Value>();
+  process(curLoc);
 
   if (build)
     this->build(curLoc);
@@ -215,82 +272,208 @@ void EdtCodegen::build(Location loc) {
   if (!region)
     return;
 
-  /// Create the rewriter
+  /// Create the rewriter and inline the region into the function.
   ConversionPatternRewriter rewriter(builder.getContext());
-
-  /// Create the entry block
   createEntry(loc);
   Region &funcRegion = func.getBody();
   Block &funcEntryBlock = funcRegion.front();
   Block &entryBlock = region->front();
   rewriter.inlineRegionBefore(*region, funcRegion, funcRegion.end());
 
-  /// Move all ops from srcBlock to the end of destBlock
-  while (!entryBlock.empty()) {
-    Operation &op = entryBlock.front();
-    op.moveBefore(&funcEntryBlock, funcEntryBlock.end());
-  }
+  /// Move all operations from entryBlock to funcEntryBlock.
+  funcEntryBlock.getOperations().splice(funcEntryBlock.end(),
+                                        entryBlock.getOperations());
   entryBlock.erase();
 
-  /// Iterate over all blocks of the region and replace the arts.yield with a
-  /// return
+  /// Replace each arts.yield terminator with a return.
+  func::ReturnOp returnOp = nullptr;
   for (auto &block : funcRegion) {
     if (auto yieldOp = dyn_cast<arts::YieldOp>(block.getTerminator())) {
       AC.setInsertionPoint(yieldOp);
-      builder.create<func::ReturnOp>(loc);
+      assert(!returnOp &&
+             "Multiple yields in the same block are not supported");
+      returnOp = builder.create<func::ReturnOp>(loc);
       yieldOp->erase();
     }
   }
+
+  /// Satisfy dependencies
+  // AC.setInsertionPoint(returnOp);
+  // for (size_t i = 0, e = events.size(); i < e; ++i) {
+  //   auto event = events[i];
+  //   auto it = entryEvents.find(event);
+  //   if (it == entryEvents.end())
+  //     continue;
+  //   auto eventGuid = rewireMap[params[it->second]];
+  //   assert(eventGuid && "Event guid not found");
+  //   DataBlockCodegen *db = AC.getDatablock(deps[i]);
+  //   AC.satisfyDep(eventGuid, entryDbs[db].guid, loc);
+  // }
+
+  /// Clear rewireMap
+  rewireMap.clear();
 }
 
-void EdtCodegen::processDepsAndParams(SmallVector<Value> *opDeps,
-                                      Location loc) {
-  if (opDeps) {
-    deps = *opDeps;
+void EdtCodegen::process(Location loc) {
+  /// Process dependencies
+  if (!deps.empty()) {
     /// Initialize dependency count to zero.
-    depC = AC.createIndexConstant(0, loc);
+    depC = builder.create<memref::AllocaOp>(loc, MemRefType::get({}, AC.Int32),
+                                            ValueRange());
+    builder.create<memref::StoreOp>(loc, AC.createIndexConstant(0, loc), depC);
     /// Process each dependency and add sizes as parameters
-    for (const auto &dep : *opDeps) {
+    for (const auto &dep : deps) {
       auto dbOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp());
       assert(dbOp && "Dependency is not a datablock op");
       auto db = AC.getDatablock(dbOp);
       assert(db && "Datablock not found");
 
       int insertedSizes = 0;
-      if (db->isArray()) {
+      if (!db->isSingleDb()) {
         int sizeItr = 0;
         for (auto size : db->getSizes()) {
           auto sizeOp = size.getDefiningOp();
+          /// If the size is a constant, skip it
           if (sizeOp && isa<arith::ConstantIndexOp>(sizeOp)) {
             ++sizeItr;
             continue;
           }
-          db->insertEntrySize(sizeItr, insertParam(size));
+          /// Insert parameter and store the index where it was inserted
+          entryDbs[db].sizeIndex[sizeItr] = insertParam(size);
           ++sizeItr;
           ++insertedSizes;
         }
       }
-      depC = builder
-                 .create<arith::AddIOp>(
-                     loc, depC, AC.createIndexConstant(insertedSizes, loc))
-                 .getResult();
+      auto add = builder
+                     .create<arith::AddIOp>(
+                         loc, depC, AC.createIndexConstant(insertedSizes, loc))
+                     .getResult();
+      builder.create<memref::StoreOp>(loc, add, depC);
     }
     depC = AC.castToInt(AC.Int32, depC, loc);
   }
 
-  /// Process the parameters.
-  unsigned paramSize = params.size();
-  paramC = AC.createIntConstant(paramSize, AC.Int32, loc);
-  auto paramVArray = builder.create<memref::AllocaOp>(
-      loc, MemRefType::get({paramSize}, AC.Int64));
-  for (unsigned i = 0; i < paramSize; ++i) {
-    auto param = AC.castToInt(AC.Int64, params[i], loc);
-    auto paramIndex = AC.createIndexConstant(i, loc);
-    builder.create<affine::AffineStoreOp>(loc, param, paramVArray,
-                                          ValueRange{paramIndex});
-  }
-  paramV = builder.create<memref::CastOp>(
-      loc, MemRefType::get({ShapedType::kDynamic}, AC.Int64), paramVArray);
+  /// Process parameters.
+  // unsigned paramSize = params.size();
+  // paramC = builder.create<memref::AllocaOp>(loc, MemRefType::get({},
+  // AC.Int32),
+  //                                           ValueRange());
+  // auto totalParamSize = builder.create<arith::AddIOp>(
+  //     loc, AC.createIndexConstant(paramSize, loc),
+  //     builder.create<memref::LoadOp>(loc, eventsCount));
+  // builder.create<memref::StoreOp>(loc, totalParamSize, paramC);
+
+  // auto totalParams = builder.create<memref::LoadOp>(loc, paramC);
+  // auto paramVArray = builder.create<memref::AllocaOp>(
+  //     loc, MemRefType::get({ShapedType::kDynamic}, AC.Int64),
+  //     ValueRange{totalParams});
+  // for (unsigned i = 0; i < paramSize; ++i) {
+  //   auto param = AC.castToInt(AC.Int64, params[i], loc);
+  //   auto paramIndex = AC.createIndexConstant(i, loc);
+  //   builder.create<affine::AffineStoreOp>(loc, param, paramVArray,
+  //                                         ValueRange{paramIndex});
+  // }
+
+  // /// Process events
+  // auto eventsCount = builder.create<memref::AllocaOp>(
+  //     loc, MemRefType::get({}, AC.Int32), ValueRange());
+  // builder.create<memref::StoreOp>(loc, AC.createIndexConstant(0, loc),
+  //                                 eventsCount);
+  // if (!events.empty()) {
+  //   /// Helper to increment the event count.
+  //   auto incEventCount = [&]() {
+  //     auto newCount = builder
+  //                         .create<arith::AddIOp>(loc, eventsCount,
+  //                                                AC.createIndexConstant(1,
+  //                                                loc))
+  //                         .getResult();
+  //     builder.create<memref::StoreOp>(loc, newCount, eventsCount);
+  //   };
+
+  //   for (auto event : events) {
+  //     /// Skip if the defining op is not an arts::EventOp.
+  //     auto eventOp = dyn_cast<arts::EventOp>(event.getDefiningOp());
+  //     if (!eventOp)
+  //       continue;
+
+  //     /// If this is a single event, load its guid directly.
+  //     if (eventOp.isSingle()) {
+  //       builder.setInsertionPoint(eventOp);
+  //       auto eventGuid =
+  //           builder.create<memref::LoadOp>(loc, event, eventOp.getIndices())
+  //               .getResult();
+  //       insertParam(eventGuid);
+  //       incEventCount();
+  //       continue;
+  //     }
+
+  //     /// Otherwise, create nested loops to load the guids.
+  //     auto sizes = eventOp.getSizes();
+  //     const unsigned eventDim = sizes.size();
+
+  //     /// Recursive lambda to generate loops.
+  //     std::function<void(unsigned, SmallVector<Value, 4> &)> createEvents =
+  //         [&](unsigned dim, SmallVector<Value, 4> &indices) {
+  //           if (dim == eventDim) {
+  //             auto eventGuid =
+  //                 builder.create<memref::LoadOp>(loc, event, indices)
+  //                     .getResult();
+  //             insertParam(eventGuid);
+  //             incEventCount();
+  //             return;
+  //           }
+  //           auto lower = builder.create<arith::ConstantIndexOp>(loc, 0);
+  //           auto upper = sizes[dim];
+  //           auto step = builder.create<arith::ConstantIndexOp>(loc, 1);
+  //           auto loopOp = builder.create<scf::ForOp>(loc, lower, upper,
+  //           step); auto &loopBlock = loopOp.getRegion().front();
+  //           builder.setInsertionPointToStart(&loopBlock);
+  //           indices.push_back(loopOp.getInductionVar());
+  //           createEvents(dim + 1, indices);
+  //           indices.pop_back();
+  //           builder.setInsertionPointAfter(loopOp);
+  //         };
+
+  //     SmallVector<Value, 4> indices;
+  //     createEvents(0, indices);
+  //   }
+  // }
+
+  // /// Process parameters.
+  // unsigned paramSize = params.size();
+  // paramC = builder.create<memref::AllocaOp>(loc, MemRefType::get({},
+  // AC.Int32),
+  //                                           ValueRange());
+  // auto totalParamSize = builder.create<arith::AddIOp>(
+  //     loc, AC.createIndexConstant(paramSize, loc),
+  //     builder.create<memref::LoadOp>(loc, eventsCount));
+  // builder.create<memref::StoreOp>(loc, totalParamSize, paramC);
+
+  // auto totalParams = builder.create<memref::LoadOp>(loc, paramC);
+  // auto paramVArray = builder.create<memref::AllocaOp>(
+  //     loc, MemRefType::get({ShapedType::kDynamic}, AC.Int64),
+  //     ValueRange{totalParams});
+  // /// Create a loop from 0 to totalParams and store each parameter into
+  // /// paramVArray.
+  // auto lowerBound = builder.create<arith::ConstantIndexOp>(loc, 0);
+  // auto step = builder.create<arith::ConstantIndexOp>(loc, 1);
+  // auto forOp = builder.create<scf::ForOp>(loc, lowerBound, totalParams,
+  // step);
+  // {
+  //   /// Set the insertion point to the start of the loop body.
+  //   Block &loopBody = forOp.getRegion().front();
+  //   builder.setInsertionPointToStart(&loopBody);
+  //   Value iv = forOp.getInductionVar();
+  //   auto paramVal = builder.create<memref::LoadOp>(loc, paramsMemref, iv);
+  //   // Store the parameter into the paramVArray at position iv.
+  //   builder.create<memref::StoreOp>(loc, paramVal, paramVArray, iv);
+  //   builder.create<scf::YieldOp>(loc);
+  // }
+  // paramV = builder.create<memref::CastOp>(
+  //     loc, MemRefType::get({ShapedType::kDynamic}, AC.Int64), paramVArray);
+
+  // paramV = builder.create<memref::CastOp>(
+  //     loc, MemRefType::get({ShapedType::kDynamic}, AC.Int64), paramVArray);
 }
 
 void EdtCodegen::createEntry(Location loc) {
@@ -298,8 +481,6 @@ void EdtCodegen::createEntry(Location loc) {
 
   auto *entryBlock = func.addEntryBlock();
   builder.setInsertionPointToStart(entryBlock);
-
-  auto rewireMap = DenseMap<Value, Value>();
 
   /// Get reference to the block arguments
   Value fnParamV = entryBlock->getArgument(1);
@@ -310,7 +491,6 @@ void EdtCodegen::createEntry(Location loc) {
     rewireMap[oldConst] =
         builder.clone(*oldConst.getDefiningOp())->getResult(0);
   }
-  replaceInRegion(*region, rewireMap);
 
   /// Insert the parameters
   auto paramSize = params.size();
@@ -323,62 +503,58 @@ void EdtCodegen::createEntry(Location loc) {
     auto newParam = AC.castParameter(oldParam.getType(), paramVElem, loc);
     rewireMap[oldParam] = newParam;
   }
-  replaceInRegion(*region, rewireMap);
 
   /// Insert the dependencies
-  // Create an index variable in memory so that it dominates all uses.
   auto indexAlloc = builder.create<memref::AllocaOp>(
       loc, MemRefType::get({}, builder.getIndexType()));
   auto zero = builder.create<arith::ConstantIndexOp>(loc, 0);
   builder.create<memref::StoreOp>(loc, zero, indexAlloc);
   Value oneIdx = builder.create<arith::ConstantIndexOp>(loc, 1);
 
-  // Helper to load the current index.
+  /// Helper to load the current index.
   auto loadIndex = [&]() -> Value {
     return builder.create<memref::LoadOp>(loc, ValueRange(indexAlloc));
   };
 
   for (auto &dep : deps) {
     /// Get DataBlock
-    auto oldDep = cast<DataBlockOp>(dep.getDefiningOp());
-    auto *db = AC.getDatablock(oldDep);
+    auto *db = AC.getDatablock(dep);
     assert(db && "Datablock not found");
 
     /// If the db is not an array, get the dependency ptr
-    if (!db->isArray()) {
-      LLVM_DEBUG(DBGS() << "Rewiring single datablock: " << oldDep << "\n");
+    if (db->isSingleDb()) {
       auto curIndex = loadIndex();
       auto depVElem =
           builder.create<memref::LoadOp>(loc, fnDepV, ValueRange({curIndex}));
       auto entryGuid = AC.getGuidFromEdtDep(depVElem, loc);
       auto entryPtr = AC.getPtrFromEdtDep(depVElem, loc);
-      db->setEntryInfo(entryGuid, entryPtr);
+      entryDbs[db].guid = entryGuid;
+      entryDbs[db].ptr = entryPtr;
       /// Increment the index.
       auto newIndex =
           builder.create<arith::AddIOp>(loc, curIndex, oneIdx).getResult();
       builder.create<memref::StoreOp>(loc, newIndex, indexAlloc);
-      /// Rewire it and add it to the map.
-      rewireMap[oldDep] = entryPtr;
-      AC.rewiredDbs[entryPtr] = db;
+      /// Add it to the rewire map.
+      rewireMap[db->getOp()] = entryPtr;
       continue;
     }
 
     /// Get the entry sizes.
-    LLVM_DEBUG(DBGS() << "Rewiring array datablock: " << oldDep << "\n");
     SmallVector<Value> entrySizes;
-    auto dbSizes = db->getSizes();
+    const auto &dbSizes = db->getSizes();
     entrySizes.reserve(dbSizes.size());
-    auto &dbEntrySizes = db->getEntrySizes();
+
     for (unsigned i = 0, e = dbSizes.size(); i < e; ++i) {
-      auto it = dbEntrySizes.find(i);
-      if (it != dbEntrySizes.end()) {
-        entrySizes.push_back(rewireMap[params[it->second]]);
-        continue;
+      auto entryItr = entryDbs[db].sizeIndex.find(i);
+      if (entryItr != entryDbs[db].sizeIndex.end()) {
+        entrySizes.push_back(rewireMap[params[entryItr->second]]);
+      } else {
+        if (auto cstOp = dbSizes[i].getDefiningOp<arith::ConstantIndexOp>())
+          entrySizes.push_back(
+              builder.clone(*cstOp.getOperation())->getResult(0));
+        else
+          llvm_unreachable("Datablock size is not a constant");
       }
-      /// Constant expected, duplicate it.
-      auto cstOp = dbSizes[i].getDefiningOp<arith::ConstantIndexOp>();
-      assert(cstOp && "Datablock size is not a constant");
-      entrySizes.push_back(builder.clone(*cstOp.getOperation())->getResult(0));
     }
 
     /// If it is an array, recover the array of guids and pointers.
@@ -396,8 +572,10 @@ void EdtCodegen::createEntry(Location loc) {
         [&](unsigned dim, SmallVector<Value, 4> &indices) {
           if (dim == entrySizes.size()) {
             auto curIndex = loadIndex();
-            auto depVElem = builder.create<memref::LoadOp>(
-                loc, fnDepV, ValueRange({curIndex}));
+            auto depVElem =
+                builder
+                    .create<memref::LoadOp>(loc, fnDepV, ValueRange({curIndex}))
+                    .getResult();
             auto entryGuidElem = AC.getGuidFromEdtDep(depVElem, loc);
             auto entryPtrElem = AC.getPtrFromEdtDep(depVElem, loc);
             builder.create<memref::StoreOp>(loc, entryGuidElem, entryGuid,
@@ -429,13 +607,14 @@ void EdtCodegen::createEntry(Location loc) {
 
     SmallVector<Value, 4> indices;
     createDbs(0, indices);
-    db->setEntryInfo(entryGuid, entryPtr);
-    rewireMap[oldDep] = entryPtr;
-    AC.rewiredDbs[entryPtr] = db;
+    entryDbs[db].guid = entryGuid;
+    LLVM_DEBUG(DBGS() << "Entry guid: " << entryGuid << "\n");
+    entryDbs[db].ptr = entryPtr;
+    rewireMap[db->getOp()] = entryPtr;
   }
 
-  replaceInRegion(*region, rewireMap);
-  // replaceUses(rewireMap);
+  /// Replace all uses in the region.
+  replaceInRegion(*region, rewireMap, false);
 }
 
 Value EdtCodegen::createGuid(Value node, Location loc) {
@@ -463,7 +642,12 @@ ArtsCodegen::ArtsCodegen(ModuleOp &module, llvm::DataLayout &llvmDL,
   initializeTypes();
 }
 
-ArtsCodegen::~ArtsCodegen() {}
+ArtsCodegen::~ArtsCodegen() {
+  for (auto &db : datablocks)
+    delete db.second;
+  for (auto &edt : edts)
+    delete edt.second;
+}
 
 func::FuncOp
 ArtsCodegen::getOrCreateRuntimeFunction(types::RuntimeFunction FnID) {
@@ -511,6 +695,7 @@ ArtsCodegen::getOrCreateRuntimeFunction(types::RuntimeFunction FnID) {
 
 void ArtsCodegen::initializeTypes() {
   MLIRContext *context = module.getContext();
+  llvmPtr = LLVM::LLVMPointerType::get(context);
 #define ARTS_TYPE(VarName, InitValue) VarName = InitValue;
 #define ARTS_FUNCTION_TYPE(VarName, ReturnType, ...)                           \
   VarName = FunctionType::get(                                                 \
@@ -524,7 +709,6 @@ void ArtsCodegen::initializeTypes() {
   VarName = LLVM::LLVMStructType::getLiteral(context, {__VA_ARGS__}, Packed);  \
   VarName##Ptr = MemRefType::get({ShapedType::kDynamic}, VarName);
 #include "arts/Codegen/ARTSKinds.def"
-  llvmPtr = LLVM::LLVMPointerType::get(context);
 }
 
 func::CallOp ArtsCodegen::createRuntimeCall(RuntimeFunction FnID,
@@ -536,6 +720,10 @@ func::CallOp ArtsCodegen::createRuntimeCall(RuntimeFunction FnID,
 }
 
 /// DataBlock
+DataBlockCodegen *ArtsCodegen::getDatablock(Value op) {
+  return getDatablock(cast<DataBlockOp>(op.getDefiningOp()));
+}
+
 DataBlockCodegen *ArtsCodegen::getDatablock(arts::DataBlockOp dbOp) {
   if (!dbOp)
     return nullptr;
@@ -557,6 +745,74 @@ DataBlockCodegen *ArtsCodegen::getOrCreateDatablock(arts::DataBlockOp dbOp,
     return db;
   return createDatablock(dbOp, loc);
 }
+
+/// Events
+Value ArtsCodegen::allocEvent(arts::AllocEventOp allocEventOp, Location loc) {
+  auto createEvent = [&](Value node, Location loc) -> Value {
+    Value latchCount = createIntConstant(1, Int32, loc);
+    auto eventVal =
+        createRuntimeCall(ARTSRTL_artsEventCreate, {node, latchCount}, loc)
+            .getResult(0);
+    return eventVal;
+  };
+
+  OpBuilder::InsertionGuard guard(builder);
+  setInsertionPoint(allocEventOp);
+  auto node = getCurrentNode(loc);
+
+  /// If the event is a single event, create it and return
+  if (allocEventOp.isSingle())
+    return createEvent(node, loc);
+
+  /// Create an array of guids based on the sizes of the eventOp
+  auto sizes = allocEventOp.getSizes();
+  auto guidType = MemRefType::get(
+      std::vector<int64_t>(sizes.size(), ShapedType::kDynamic), ArtsGuid);
+  Value guid = builder.create<memref::AllocaOp>(loc, guidType, sizes);
+
+  /// Create nested loops to create the guids
+  std::function<void(unsigned, SmallVector<Value, 4> &)> createGuids =
+      [&](unsigned dim, SmallVector<Value, 4> &indices) {
+        if (dim == sizes.size()) {
+          auto guidVal = createEvent(node, loc);
+          builder.create<memref::StoreOp>(loc, guidVal, guid, indices);
+          return;
+        }
+        /// Create loop for current dimension
+        auto lower = builder.create<arith::ConstantIndexOp>(loc, 0);
+        auto upper = sizes[dim];
+        auto step = builder.create<arith::ConstantIndexOp>(loc, 1);
+        auto loopOp = builder.create<scf::ForOp>(loc, lower, upper, step);
+        /// Set insertion point inside the loop body
+        auto &loopBlock = loopOp.getRegion().front();
+        builder.setInsertionPointToStart(&loopBlock);
+        /// Append the induction variable for the current dimension
+        indices.push_back(loopOp.getInductionVar());
+        /// Recurse to create the next level of loop
+        createGuids(dim + 1, indices);
+        /// Remove the current induction variable and reset insertion point
+        indices.pop_back();
+        builder.setInsertionPointAfter(loopOp);
+      };
+  SmallVector<Value, 4> indices;
+  createGuids(0, indices);
+  return guid;
+}
+
+// EventCodegen *ArtsCodegen::getEvent(arts::EventOp eventOp) {
+//   if (!eventOp)
+//     return nullptr;
+//   auto it = events.find(eventOp);
+//   return (it != events.end()) ? it->second : nullptr;
+// }
+
+// EventCodegen *ArtsCodegen::getOrCreateEvent(arts::EventOp eventOp,
+//                                             Location loc) {
+//   auto &event = events[eventOp];
+//   if (!event)
+//     event = new EventCodegen(*this, eventOp, loc);
+//   return event;
+// }
 
 /// EDT
 EdtCodegen *ArtsCodegen::getEdt(Region *region) {
@@ -587,13 +843,15 @@ Value ArtsCodegen::createEpoch(Value finishEdtGuid, Value finishEdtSlot,
 
 /// Utils
 Value ArtsCodegen::getGuidFromEdtDep(Value dep, Location loc) {
-  return createRuntimeCall(ARTSRTL_artsGetGuidFromEdtDep, {dep}, loc)
-      .getResult(0);
+  auto guidValue = builder.create<LLVM::ExtractValueOp>(
+      loc, ArtsGuid, dep, builder.getDenseI64ArrayAttr(0));
+  return guidValue.getResult();
 }
 
 Value ArtsCodegen::getPtrFromEdtDep(Value dep, Location loc) {
-  return createRuntimeCall(ARTSRTL_artsGetPtrFromEdtDep, {dep}, loc)
-      .getResult(0);
+  auto ptrValue = builder.create<LLVM::ExtractValueOp>(
+      loc, llvmPtr, dep, builder.getDenseI64ArrayAttr(2));
+  return castToVoidPtr(ptrValue, loc);
 }
 
 Value ArtsCodegen::getCurrentEpochGuid(Location loc) {
@@ -602,7 +860,13 @@ Value ArtsCodegen::getCurrentEpochGuid(Location loc) {
 }
 
 Value ArtsCodegen::getCurrentEdtGuid(Location loc) {
-  return createRuntimeCall(ARTSRTL_artsGetCurrentGuid, {}, loc).getResult(0);
+  func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentGuid);
+  assert(func && "Runtime function should exist");
+  func->setAttr("llvm.readnone", builder.getUnitAttr());
+  ArrayRef<Value> args;
+  auto callOp = builder.create<func::CallOp>(loc, func, args);
+  return callOp.getResult(0);
+  // return createRuntimeCall(ARTSRTL_artsGetCurrentGuid, {}, loc).getResult(0);
 }
 
 Value ArtsCodegen::getCurrentNode(Location loc) {
@@ -612,6 +876,12 @@ Value ArtsCodegen::getCurrentNode(Location loc) {
   ArrayRef<Value> args;
   auto callOp = builder.create<func::CallOp>(loc, func, args);
   return callOp.getResult(0);
+}
+
+void ArtsCodegen::satisfyDep(Value eventGuid, Value dbGuid, Location loc) {
+  auto const ARTS_EVENT_LATCH_DECR_SLOT = createIntConstant(0, Int32, loc);
+  createRuntimeCall(ARTSRTL_artsEventSatisfySlot,
+                    {eventGuid, dbGuid, ARTS_EVENT_LATCH_DECR_SLOT}, loc);
 }
 
 /// Helpers
@@ -677,10 +947,9 @@ Value ArtsCodegen::castPointer(mlir::Type targetType, Value source,
   if (memref::CastOp::areCastCompatible(srcType, dstType))
     return builder.create<memref::CastOp>(loc, dstType, source);
 
-  /// Otherwise, cast with memref2pointer and pointer2memref
-  auto valPtr = builder.create<polygeist::Memref2PointerOp>(
-      loc, LLVM::LLVMPointerType::get(srcType), source);
-  return builder.create<polygeist::Pointer2MemrefOp>(loc, targetType, valPtr);
+  /// If the types are not compatible, cast to LLVM pointer and then to memref
+  return builder.create<polygeist::Pointer2MemrefOp>(loc, targetType,
+                                                     createPtr(source, loc));
 }
 
 Value ArtsCodegen::castToIndex(Value source, Location loc) {
@@ -739,20 +1008,20 @@ Value ArtsCodegen::castToInt(Type targetType, Value source, Location loc) {
   return nullptr; /// unreachable
 }
 
-Value ArtsCodegen::castToPtr(Value source, Location loc) {
+Value ArtsCodegen::castToVoidPtr(Value source, Location loc) {
   auto valPtr = source;
   if (!valPtr.getType().isa<LLVM::LLVMPointerType>()) {
-    auto memrefTy = source.getType().cast<MemRefType>();
-    valPtr = castToLLVMPtr(source, memrefTy, loc);
+    valPtr = castToLLVMPtr(source, loc);
   }
   /// polygeist - pointer2memref
   return builder.create<polygeist::Pointer2MemrefOp>(loc, VoidPtr, valPtr);
 }
 
-Value ArtsCodegen::castToLLVMPtr(Value source, MemRefType MT, Location loc) {
+Value ArtsCodegen::castToLLVMPtr(Value source, Location loc) {
   if (source.getType().isa<LLVM::LLVMPointerType>())
     return source;
   /// polygeist - memref2pointer
+  MemRefType MT = source.getType().cast<MemRefType>();
   return builder.create<polygeist::Memref2PointerOp>(
       loc,
       LLVM::LLVMPointerType::get(builder.getContext(),
