@@ -69,15 +69,15 @@ public:
     uint64_t elementTypeSize;
     MemRefType resultType;
     AffineMap affineMap;
-    bool isLoad, ptrIsDb;
+    bool isPtrDb, isSingle;
 
     /// Analysis results
     bool isLoopDependent = false;
     SmallVector<MemoryEffects::EffectInstance, 2> effects;
-  
+
     /// Uses
     unsigned useCount;
-    // SetVector<Operation *> userOps, userRegions;
+    Node *parent = nullptr;
     arts::EdtOp edtParent = nullptr;
     arts::EdtOp userEdt = nullptr;
     uint32_t userEdtPos = 0;

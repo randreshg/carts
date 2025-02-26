@@ -18,7 +18,12 @@
 // Convert OpenMP to ARTS
 /// carts-opt matrix.mlir --lower-affine  &> matrix-arts.mlir
 /// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --datablock --cse --canonicalize &> matrix-arts.mlir
-/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events &> matrix-arts.mlir
+/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events,convert-arts-to-funcs,arts-codegen &> matrix-arts.mlir
+
+/// Datablock pass
+/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --cse --canonicalize -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events,convert-arts-to-funcs,arts-codegen &> matrix-arts.mlir
+
+/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-funcs --cse --canonicalize -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events,convert-arts-to-funcs,arts-codegen &> matrix-arts.mlir
 
 // Try to raise to affine
 /// carts-opt matrix-datablock.mlir --raise-scf-to-affine --affine-cfg --affine-scalrep &> matrix-affine.mlir
@@ -46,7 +51,7 @@
 #include <stdio.h>
 #define N 100
 
-void compute() {
+int main() {
   double A[N][N], B[N][N];
   int test = rand() % 100;
 
@@ -98,5 +103,7 @@ void compute() {
     }
     printf("\n");
   }
+  
+  return 0;
 }
 

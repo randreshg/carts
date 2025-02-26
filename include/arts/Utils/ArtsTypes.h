@@ -18,7 +18,7 @@ namespace types {
 /// ------------------------------------------------------------------- ///
 
 /// EDT types
-enum class EdtType { Parallel, Single, Task };
+enum class EdtType { Parallel, Single, Sync, Task };
 enum class DatablockAccessType { ReadOnly, WriteOnly, ReadWrite, Unknown };
 
 inline llvm::StringRef toString(const EdtType Ty) {
@@ -27,6 +27,8 @@ inline llvm::StringRef toString(const EdtType Ty) {
     return "parallel";
   case EdtType::Single:
     return "single";
+  case EdtType::Sync:
+    return "sync";
   case EdtType::Task:
     return "task";
   }

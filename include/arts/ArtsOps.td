@@ -65,6 +65,7 @@ def DataBlockOp : Arts_Op<"datablock",
     Index:$elementTypeSize,                    // Size (number of elements) associated with that type
     Variadic<Index>:$indices,                  // Indices for the subview
     Variadic<Index>:$sizes,                    // Sizes for the subview
+    Optional<AnyType>:$event,                  // Event associated with the DB
     OptionalAttr<AffineMapAttr>:$affineMap     // Affine map for offset transformation
   );
   let results = (outs AnyMemRef:$subview); // Produces a memref.subview
@@ -76,10 +77,10 @@ def DataBlockOp : Arts_Op<"datablock",
       "ValueRange":$indices, "ValueRange":$sizes)>
   ];
   let extraClassDeclaration = [{
-    bool isLoad();
     bool isPtrDb();
-    void setIsLoadAttr();
     void setIsPtrDbAttr();
+    bool isSingle();
+    void setIsSingleAttr();
   }];
 }
 
@@ -87,15 +88,13 @@ def DataBlockOp : Arts_Op<"datablock",
 // arts.edt
 //===----------------------------------------------------------------------===//
 def EdtOp : Arts_Op<"edt",
-  [SingleBlockImplicitTerminator<"arts::YieldOp">,
-   AttrSizedOperandSegments]> {
+  [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
 
   let summary = "Event-Driven Task in ARTS";
   let description = [{
     Defines an ARTS event-driven task (EDT) with:
       - `dependencies` that specify input/output memory dependencies.
-      - `events` that signal the dependencies. If an event is not present,
-        `-1` is used.
+
     The single-block region contains the task body.
     - if 'parallel' attribute is set, it can spawn multiple tasks.
     - if 'single' attribute is set, it is guaranteed to run in a single task, 
@@ -103,34 +102,33 @@ def EdtOp : Arts_Op<"edt",
   }];
 
   let arguments = (ins
-    Variadic<AnyMemRef>:$dependencies,
-    Variadic<AnyInteger>:$events
+    Variadic<AnyMemRef>:$dependencies
   );
 
   let regions = (region SizedRegion<1>:$body);
   let hasCustomAssemblyFormat = 1;
 
-  let builders = [
-    OpBuilder<(ins
-      "ValueRange":$dependencies)>
-  ];
-
   let extraClassDeclaration = [{
-    SmallVector<Value> getDeps();
-    SmallVector<Value> getEvnts();
+    SmallVector<Value> getDependenciesVector();
     bool isParallel();
     bool isSingle();
+    bool isSync();
     bool isTask();
     void setIsParallelAttr();
     void setIsSingleAttr();
+    void setIsSyncAttr();
     void setIsTaskAttr();
+    void clearIsParallelAttr();
+    void clearIsSingleAttr();
+    void clearIsSyncAttr();
+    void clearIsTaskAttr();
   }];
 }
 
 //===----------------------------------------------------------------------===//
-// arts.event
+// arts.alloc_event
 //===----------------------------------------------------------------------===//
-def EventOp : Arts_Op<"event", []> {
+def AllocEventOp : Arts_Op<"alloc_event", []> {
   let summary = "Create an event or array of events in ARTS";
   let description = [{
     The `arts.event` operation creates an event (or array of events) that can be
@@ -142,12 +140,12 @@ def EventOp : Arts_Op<"event", []> {
   let assemblyFormat = [{
     `[` $sizes `]` `->` attr-dict `:` type($event)
   }];
-  
-  // let builders = [
-  //   // OpBuilder<(ins "Type":$type, "ValueRange":$sizes, "bool":$isGrouped)>, 
-  // ];
-
+  let extraClassDeclaration = [{
+    bool isSingle();
+    void setIsSingleAttr();
+  }];
 }
+
 
 //===----------------------------------------------------------------------===//
 // arts.epoch

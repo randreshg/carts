@@ -81,10 +81,10 @@ void EdtPass::convertParallelIntoSingle(EdtOp &op) {
   /// Insert the single operation before the parallel op and remove the "single"
   /// attribute.
   singleOp->moveBefore(op);
-  singleOp->removeAttr("single");
-
-  /// Set sync attribute to 1
-  // singleOp->setAttr("sync", op->getAttr("sync"));
+  singleOp.clearIsSingleAttr();
+  
+  /// Set sync attribute
+  singleOp.setIsSyncAttr();
 
   /// Mark the parallel op for removal.
   opsToRemove.insert(op);

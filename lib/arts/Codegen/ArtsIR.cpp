@@ -17,6 +17,8 @@ EdtOp createEdtOp(OpBuilder &builder, Location loc, types::EdtType type,
     edtOp.setIsParallelAttr();
   else if (type == types::EdtType::Single)
     edtOp.setIsSingleAttr();
+  else if (type == types::EdtType::Sync)
+    edtOp.setIsSyncAttr();
   else if (type == types::EdtType::Task)
     edtOp.setIsTaskAttr();
   return edtOp;
@@ -27,6 +29,8 @@ types::EdtType getEdtType(EdtOp edtOp) {
     return types::EdtType::Parallel;
   if (edtOp.isSingle())
     return types::EdtType::Single;
+  if (edtOp.isSync())
+    return types::EdtType::Sync;
   if (edtOp.isTask())
     return types::EdtType::Task;
   return types::EdtType::Task;
@@ -35,7 +39,6 @@ types::EdtType getEdtType(EdtOp edtOp) {
 DataBlockOp createDatablockOp(OpBuilder &builder, Location loc,
                               types::DatablockAccessType mode, Value ptr,
                               SmallVector<Value> pinnedIndices) {
-  bool isLoad = false;
   auto ptrOp = ptr.getDefiningOp();
   assert(ptrOp && "Input must be a defining operation.");
 
@@ -49,7 +52,6 @@ DataBlockOp createDatablockOp(OpBuilder &builder, Location loc,
     if (pinnedIndices.empty())
       pinnedIndices.assign(loadOp.getIndices().begin(),
                            loadOp.getIndices().end());
-    isLoad = true;
   };
 
   if (auto loadOp = dyn_cast<memref::LoadOp>(ptrOp)) {
@@ -102,9 +104,6 @@ DataBlockOp createDatablockOp(OpBuilder &builder, Location loc,
   DataBlockOp depOp = builder.create<arts::DataBlockOp>(
       loc, subMemRefType, modeAttr, baseMemRef, elementType, elementTypeSize,
       indices, sizes);
-
-  if (isLoad)
-    depOp.setIsLoadAttr();
   return depOp;
 }
 

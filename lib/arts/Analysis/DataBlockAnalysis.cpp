@@ -96,8 +96,8 @@ bool isReachable(Operation *source, Operation *target) {
   if (srcEdt != tgtEdt)
     return false;
 
-  /// Traverse up the parent chain simultaneously but stop once the EDT parent is
-  /// reached.
+  /// Traverse up the parent chain simultaneously but stop once the EDT parent
+  /// is reached.
   Operation *src = source;
   Operation *tgt = target;
   while (true) {
@@ -117,30 +117,30 @@ bool isReachable(Operation *source, Operation *target) {
 bool DatablockAnalysis::mayDepend(Node &prod, Node &cons, bool &isDirect,
                                   bool &isLoopDependent,
                                   DominanceInfo &domInfo) {
-  // LLVM_DEBUG(DBGS() << "Checking dependency between\n"
-  //                   << "  - " << prod.op << "\n  - " << cons.op << "\n");
+  LLVM_DEBUG(DBGS() << "Checking dependency between\n"
+                    << "  - " << prod.op << "\n  - " << cons.op << "\n");
   /// Verify if the nodes belong to the same EDT.
   if (prod.edtParent != cons.edtParent) {
-    // LLVM_DEBUG(dbgs() << "    - Different EDT parents\n");
+    LLVM_DEBUG(dbgs() << "    - Different EDT parents\n");
     return false;
   }
 
   /// Exclude nodes with the same EDT user.
   if (prod.userEdt == cons.userEdt) {
-    // LLVM_DEBUG(dbgs() << "    - Same EDT user\n");
+    LLVM_DEBUG(dbgs() << "    - Same EDT user\n");
     return false;
   }
 
   /// Only consider writer producer and reader consumer.
   if (!isWriter(prod) || !isReader(cons)) {
-    // LLVM_DEBUG(dbgs() << "    - Not a writer or reader\n");
+    LLVM_DEBUG(dbgs() << "    - Not a writer or reader\n");
     return false;
   }
 
   /// Check if nodes are different
   auto compResult = compare(prod, cons);
   if (compResult == NodeComp::Different) {
-    // LLVM_DEBUG(dbgs() << "    - Different nodes\n");
+    LLVM_DEBUG(dbgs() << "    - Different nodes\n");
     return false;
   }
 
@@ -153,7 +153,7 @@ bool DatablockAnalysis::mayDepend(Node &prod, Node &cons, bool &isDirect,
 
   /// If producer dominates consumer, report a dependency.
   if (domInfo.dominates(prod.op.getOperation(), cons.op.getOperation())) {
-    // LLVM_DEBUG(dbgs() << "    - It is a dependency because of dominance\n");
+    LLVM_DEBUG(dbgs() << "    - It is a dependency because of dominance\n");
     return true;
   }
 
@@ -161,10 +161,10 @@ bool DatablockAnalysis::mayDepend(Node &prod, Node &cons, bool &isDirect,
   /// report a dependency.
   if (isLoopDependent &&
       isReachable(prod.op.getOperation(), cons.op.getOperation())) {
-    // LLVM_DEBUG(dbgs() << "    - It is a dependency because of reachability\n");
+    LLVM_DEBUG(dbgs() << "    - It is a dependency because of reachability\n");
     return true;
   }
-  // LLVM_DEBUG(dbgs() << "    - No dependency\n");
+  LLVM_DEBUG(dbgs() << "    - No dependency\n");
   return false;
 }
 
@@ -175,6 +175,7 @@ bool DatablockAnalysis::ptrMayAlias(Node &A, Node &B) {
   for (auto &eA : A.effects) {
     for (auto &eB : B.effects) {
       if (mayAlias(eA, eB)) {
+        LLVM_DEBUG(dbgs() << "    - Datablocks may alias\n");
         A.aliases.insert(B.id);
         B.aliases.insert(A.id);
         return true;
@@ -272,7 +273,7 @@ void DatablockAnalysis::collectNodes(Region &region, Graph &graph) {
   analyzeLoops(region, loopValsMap);
 
   /// Collect datablock nodes from the top-level region of a function.
-  region.walk([&](arts::DataBlockOp dbOp) {
+  region.walk<mlir::WalkOrder::PreOrder>([&](arts::DataBlockOp dbOp) {
     /// Set node information.
     Node node;
     node.id = nextID++;
@@ -288,24 +289,37 @@ void DatablockAnalysis::collectNodes(Region &region, Graph &graph) {
             .cast<IntegerAttr>()
             .getInt();
     node.resultType = dbOp.getResult().getType();
+
+    /// If affine map is present, set it.
     if (auto affineMap = dbOp.getAffineMap())
       node.affineMap = *affineMap;
 
-    /// Collect memory effects
-    if (auto memEff = dyn_cast<MemoryEffectOpInterface>(dbOp.getOperation()))
-      memEff.getEffects(node.effects);
-
-    /// Add 'ptrIsDb' attribute if the base is a datablock.
-    if (auto baseOp =
+    /// Add 'isPtrDb' attribute if the base is a datablock.
+    if (auto parentDb =
             dyn_cast_or_null<arts::DataBlockOp>(node.ptr.getDefiningOp())) {
-      dbOp->setAttr("ptrIsDb", UnitAttr::get(dbOp.getContext()));
-      node.ptrIsDb = true;
+      dbOp.setIsPtrDbAttr();
+      node.isPtrDb = true;
+      /// Collect memory effects from the parent datablock.
+      node.parent = &nodeMap[parentDb];
+      for (auto &e : node.parent->effects)
+        node.effects.push_back(e);
     } else {
-      node.ptrIsDb = false;
+      node.isPtrDb = false;
+      /// Collect memory effects.
+      if (auto memEff = dyn_cast<MemoryEffectOpInterface>(dbOp.getOperation()))
+        memEff.getEffects(node.effects);
     }
 
-    /// Set the isLoad flag.
-    node.isLoad = dbOp->hasAttr("isLoad");
+    /// Add 'isSingle' attribute if the datablock has a single size of 1.
+    node.isSingle = false;
+    if (node.sizes.size() == 1) {
+      if (auto cstOp = node.sizes[0].getDefiningOp<arith::ConstantIndexOp>()) {
+        if (cstOp.value() == 1) {
+          dbOp.setIsSingleAttr();
+          node.isSingle = true;
+        }
+      }
+    }
 
     /// Try to get the EDT parent of the datablock.
     if (auto parentOp = dbOp->getParentOfType<arts::EdtOp>())
@@ -392,9 +406,7 @@ void DatablockAnalysis::printGraph(Graph &graph) {
     // os << "    ptr=" << n.ptr << "\n";
     os << "    isLoopDependent=" << (n.isLoopDependent ? "true" : "false");
     os << " useCount=" << n.useCount;
-    // os << " usedInRegions=" << n.userRegions.size();
-    os << " ptrIsDb=" << (n.ptrIsDb ? "true" : "false");
-    os << " isLoad=" << (n.isLoad ? "true" : "false");
+    os << " isPtrDb=" << (n.isPtrDb ? "true" : "false");
     os << " userEdtPos=" << n.userEdtPos << "\n";
   }
   os << "Edges:\n";
