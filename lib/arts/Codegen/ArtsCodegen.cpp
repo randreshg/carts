@@ -31,13 +31,11 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cassert>
 #include <cstdint>
-#include <utility>
 
 // DEBUG
 #define DEBUG_TYPE "arts-codegen"
@@ -64,31 +62,26 @@ DataBlockCodegen::DataBlockCodegen(ArtsCodegen &AC, arts::DataBlockOp dbOp,
 void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
   /// Datablock info
   dbOp = depOp;
-  opPtr = dbOp.getPtr();
-  isPtrDb = dbOp.isPtrDb();
-  elementType = dbOp.getElementType();
-  elementTypeSize = dbOp.getElementTypeSize();
-  isSingle = dbOp.isSingle();
 
   /// If the base is a DB, it will be handled when inserting the EDT Entry
-  if (isPtrDb) {
-    LLVM_DEBUG(DBGS() << "Base is a datablock: " << dbOp << "\n");
+  if (hasPtrDb())
     return;
-  }
 
   /// Set insertion point to the DatablockOp
-  OpBuilder::InsertionGuard guard(builder);
+  OpBuilder::InsertionGuard IG(builder);
   AC.setInsertionPoint(dbOp);
 
   auto currentNode = AC.getCurrentNode(loc);
+  auto elementTypeSize = dbOp.getElementTypeSize();
+
   /// Handle the case of a single datablock
-  if (isSingle) {
+  if (isSingle()) {
     auto modeVal = getMode(dbOp.getMode());
     guid = createGuid(currentNode, modeVal, loc);
-    ptr = AC.createRuntimeCall(
-                ARTSRTL_artsDbCreateWithGuidAndData,
-                {AC.castToVoidPtr(opPtr, loc), elementTypeSize, modeVal, guid},
-                loc)
+    ptr = AC.createRuntimeCall(ARTSRTL_artsDbCreateWithGuidAndData,
+                               {AC.castToVoidPtr(dbOp.getPtr(), loc),
+                                elementTypeSize, modeVal, guid},
+                               loc)
               ->getResult(0);
 
     return;
@@ -157,86 +150,19 @@ Value DataBlockCodegen::createGuid(Value node, Value mode, Location loc) {
   return reserveGuidCall.getResult(0);
 }
 
-// ---------------------------- Events ---------------------------- ///
-// EventCodegen::EventCodegen(ArtsCodegen &AC) : AC(AC), builder(AC.builder) {}
-
-// EventCodegen::EventCodegen(ArtsCodegen &AC, arts::EventOp eventOp, Location
-// loc)
-//     : AC(AC), builder(AC.builder) {
-//   create(eventOp, loc);
-// }
-
-// void EventCodegen::create(arts::EventOp eventOp, Location loc) {
-//   OpBuilder::InsertionGuard guard(builder);
-//   AC.setInsertionPoint(eventOp);
-//   isSingle = eventOp.isSingle();
-//   indices = eventOp.getIndices();
-//   /// If the event is a single event, load the guid
-//   if (isSingle) {
-//     guid = builder
-//                .create<memref::LoadOp>(loc, eventOp.getSource(),
-//                                        eventOp.getIndices())
-//                .getResult();
-//     return;
-//   }
-
-//   /// Otherwise, the guids are stored in an array.
-//   /// No need to load them here, this will be done when processing the
-//   /// EDT, since the events guids have to be loaded to be sent as
-//   /// parameters to the EDT.
-//   guid = eventOp.getSource();
-
-//   // /// Create an array of guids based on the sizes of the eventOp
-//   // auto sizes = eventOp.getSizes();
-//   // auto guidType = MemRefType::get(
-//   //     std::vector<int64_t>(sizes.size(), ShapedType::kDynamic),
-//   AC.ArtsGuid);
-//   // guid = builder.create<memref::AllocaOp>(loc, guidType, sizes);
-//   // /// Create nested loops to create the guids
-//   // std::function<void(unsigned, SmallVector<Value, 4> &)> createGuids =
-//   //     [&](unsigned dim, SmallVector<Value, 4> &indices) {
-//   //       if (dim == sizes.size()) {
-//   //         auto guidVal =
-//   //             builder.create<memref::LoadOp>(loc, eventOp.getSource(),
-//   //             indices)
-//   //                 .getResult();
-//   //         builder.create<memref::StoreOp>(loc, guidVal, guid, indices);
-//   //         return;
-//   //       }
-//   //       /// Create loop for current dimension
-//   //       auto lower = builder.create<arith::ConstantIndexOp>(loc, 0);
-//   //       auto upper = sizes[dim];
-//   //       auto step = builder.create<arith::ConstantIndexOp>(loc, 1);
-//   //       auto loopOp = builder.create<scf::ForOp>(loc, lower, upper, step);
-//   //       /// Set insertion point inside the loop body
-//   //       auto &loopBlock = loopOp.getRegion().front();
-//   //       builder.setInsertionPointToStart(&loopBlock);
-//   //       /// Append the induction variable for the current dimension
-//   //       indices.push_back(loopOp.getInductionVar());
-//   //       /// Recurse to create the next level of loop
-//   //       createGuids(dim + 1, indices);
-//   //       /// Remove the current induction variable and reset insertion
-//   point
-//   //       indices.pop_back();
-//   //       builder.setInsertionPointAfter(loopOp);
-//   //     };
-//   // SmallVector<Value, 4> indices;
-//   // createGuids(0, indices);
-// }
-
 // ---------------------------- EDTs ---------------------------- ///
 unsigned EdtCodegen::edtCounter = 0;
 
 EdtCodegen::EdtCodegen(ArtsCodegen &AC, SmallVector<Value> *opDeps,
-                       Region *region, Value *epoch, Location *loc, bool build)
+                       Region *region, Value *epoch, Location *loc)
     : AC(AC), builder(AC.builder), region(region), epoch(epoch) {
-  OpBuilder::InsertionGuard guard(builder);
+  OpBuilder::InsertionGuard IG(builder);
   auto curLoc = loc ? *loc : UnknownLoc::get(builder.getContext());
 
   func = createFn(curLoc);
   node = AC.getCurrentNode(curLoc);
 
-  /// Get opParams and opConsts
+  /// Get opParams and opConsts if region is provided
   if (region) {
     ConversionPatternRewriter rewriter(builder.getContext());
     EdtEnvManager envManager(rewriter, *region);
@@ -247,11 +173,13 @@ EdtCodegen::EdtCodegen(ArtsCodegen &AC, SmallVector<Value> *opDeps,
                   envManager.getConstants().end());
   }
   deps = opDeps ? *opDeps : SmallVector<Value>();
-  // events = opEvents ? *opEvents : SmallVector<Value>();
+
+  /// Process the EDT: Computes depc, paramc, loas params in paramv
   process(curLoc);
 
-  if (build)
-    this->build(curLoc);
+  /// Inserts call to the ARTS API to create the EDT, outline the region
+  /// into the function and record/satisfy events
+  build(curLoc);
 }
 
 void EdtCodegen::build(Location loc) {
@@ -272,392 +200,512 @@ void EdtCodegen::build(Location loc) {
   if (!region)
     return;
 
-  /// Create the rewriter and inline the region into the function.
-  ConversionPatternRewriter rewriter(builder.getContext());
-  createEntry(loc);
-  Region &funcRegion = func.getBody();
-  Block &funcEntryBlock = funcRegion.front();
-  Block &entryBlock = region->front();
-  rewriter.inlineRegionBefore(*region, funcRegion, funcRegion.end());
-
-  /// Move all operations from entryBlock to funcEntryBlock.
-  funcEntryBlock.getOperations().splice(funcEntryBlock.end(),
-                                        entryBlock.getOperations());
-  entryBlock.erase();
-
-  /// Replace each arts.yield terminator with a return.
-  func::ReturnOp returnOp = nullptr;
-  for (auto &block : funcRegion) {
-    if (auto yieldOp = dyn_cast<arts::YieldOp>(block.getTerminator())) {
-      AC.setInsertionPoint(yieldOp);
-      assert(!returnOp &&
-             "Multiple yields in the same block are not supported");
-      returnOp = builder.create<func::ReturnOp>(loc);
-      yieldOp->erase();
-    }
-  }
-
-  /// Satisfy dependencies
-  // AC.setInsertionPoint(returnOp);
-  // for (size_t i = 0, e = events.size(); i < e; ++i) {
-  //   auto event = events[i];
-  //   auto it = entryEvents.find(event);
-  //   if (it == entryEvents.end())
-  //     continue;
-  //   auto eventGuid = rewireMap[params[it->second]];
-  //   assert(eventGuid && "Event guid not found");
-  //   DataBlockCodegen *db = AC.getDatablock(deps[i]);
-  //   AC.satisfyDep(eventGuid, entryDbs[db].guid, loc);
-  // }
+  /// Create the EDT function entry, then outline the region and finalize
+  /// by processing events
+  createFnEntry(loc);
+  outlineRegion(loc);
+  processDependencies(loc);
 
   /// Clear rewireMap
   rewireMap.clear();
 }
 
 void EdtCodegen::process(Location loc) {
+  /// Allocate and initialize total events counter to zero.
+  Value totalEventsToSatisfy = builder.create<memref::AllocaOp>(
+      loc, MemRefType::get({}, AC.Int32), ValueRange());
+  builder.create<memref::StoreOp>(loc, AC.createIndexConstant(0, loc),
+                                  totalEventsToSatisfy);
+
   /// Process dependencies
   if (!deps.empty()) {
     /// Initialize dependency count to zero.
     depC = builder.create<memref::AllocaOp>(loc, MemRefType::get({}, AC.Int32),
                                             ValueRange());
     builder.create<memref::StoreOp>(loc, AC.createIndexConstant(0, loc), depC);
-    /// Process each dependency and add sizes as parameters
-    for (const auto &dep : deps) {
-      auto dbOp = dyn_cast<arts::DataBlockOp>(dep.getDefiningOp());
-      assert(dbOp && "Dependency is not a datablock op");
-      auto db = AC.getDatablock(dbOp);
-      assert(db && "Datablock not found");
 
-      int insertedSizes = 0;
-      if (!db->isSingleDb()) {
-        int sizeItr = 0;
-        for (auto size : db->getSizes()) {
-          auto sizeOp = size.getDefiningOp();
-          /// If the size is a constant, skip it
-          if (sizeOp && isa<arith::ConstantIndexOp>(sizeOp)) {
-            ++sizeItr;
-            continue;
-          }
-          /// Insert parameter and store the index where it was inserted
-          entryDbs[db].sizeIndex[sizeItr] = insertParam(size);
-          ++sizeItr;
-          ++insertedSizes;
-        }
+    /// Insert db size as parameter if not a constant.
+    auto insertSizeAsParameter = [&](DataBlockCodegen *db, Value size,
+                                     uint64_t sizeItr,
+                                     uint64_t &sizesInserted) {
+      /// If the size is a constant, skip it.
+      if (size.getDefiningOp() &&
+          isa<arith::ConstantIndexOp>(size.getDefiningOp()))
+        return;
+
+      /// Otherwise, insert parameter and store the index where it was inserted.
+      entryDbs[db].sizeIndex[sizeItr] = insertParam(size);
+      ++sizesInserted;
+    };
+
+    /// Process the event. If the db has 'out' mode, satisfy the event and
+    /// accumulate the number of events, since they will be satisfied in the EDT
+    /// and the GUID has to be sent as a parameter. If the db has 'in' mode,
+    /// record the event.
+    auto processEvent = [&](DataBlockCodegen *db, Value &dbNumElements) {
+      /// If no event, add it to depsToSignal and return.
+      if (!db->getEvent()) {
+        depsToSignal.push_back(db);
+        return;
       }
-      auto add = builder
-                     .create<arith::AddIOp>(
-                         loc, depC, AC.createIndexConstant(insertedSizes, loc))
-                     .getResult();
-      builder.create<memref::StoreOp>(loc, add, depC);
+
+      /// Record event if not out mode.
+      if (!db->isOutMode()) {
+        depsToRecord.push_back(db);
+        return;
+      }
+
+      /// If out mode, satisfy the event, and update total events.
+      depsToSatisfy.push_back(db);
+      auto currEvents =
+          builder.create<memref::LoadOp>(loc, totalEventsToSatisfy);
+      auto newEvents =
+          builder.create<arith::AddIOp>(loc, currEvents, dbNumElements)
+              .getResult();
+      builder.create<memref::StoreOp>(loc, newEvents, totalEventsToSatisfy);
+    };
+
+    /// Process each dependency to:
+    /// - Add db sizes as parameters
+    /// - Compute the dependency count (depc)
+    /// - Compute the total number of events to satisfy
+
+    for (const auto &dep : deps) {
+      auto db = AC.getDatablock(dep);
+      assert(db && "Datablock not found");
+      db->setEdtSlot(builder.create<memref::LoadOp>(loc, depC).getResult());
+      uint64_t sizesInserted = 0;
+      Value dbNumElements = nullptr;
+      if (db->isSingle()) {
+        /// For a single datablock, the number of elements is its only size.
+        dbNumElements = db->getSizes()[0];
+        insertSizeAsParameter(db, dbNumElements, 0, sizesInserted);
+      } else {
+        /// Allocate a temporary to hold the product of sizes.
+        auto tmpAlloca = builder.create<memref::AllocaOp>(
+            loc, MemRefType::get({}, AC.Int32), ValueRange());
+        builder.create<memref::StoreOp>(loc, AC.createIndexConstant(1, loc),
+                                        tmpAlloca);
+        for (auto size : db->getSizes()) {
+          insertSizeAsParameter(db, size, sizesInserted, sizesInserted);
+          auto currVal =
+              builder.create<memref::LoadOp>(loc, tmpAlloca.getResult());
+          auto prod =
+              builder.create<arith::MulIOp>(loc, currVal, size).getResult();
+          builder.create<memref::StoreOp>(loc, prod, tmpAlloca.getResult());
+        }
+        /// Load the computed number of elements.
+        dbNumElements =
+            builder.create<memref::LoadOp>(loc, tmpAlloca.getResult());
+      }
+
+      /// Update dependency count by adding dbNumElements.
+      auto currDep = builder.create<memref::LoadOp>(loc, depC);
+      auto newDep = builder.create<arith::AddIOp>(loc, currDep, dbNumElements)
+                        .getResult();
+      builder.create<memref::StoreOp>(loc, newDep, depC);
+
+      /// Process events.
+      processEvent(db, dbNumElements);
     }
+
+    /// Cast depC to int32.
     depC = AC.castToInt(AC.Int32, depC, loc);
   }
 
   /// Process parameters.
-  // unsigned paramSize = params.size();
-  // paramC = builder.create<memref::AllocaOp>(loc, MemRefType::get({},
-  // AC.Int32),
-  //                                           ValueRange());
-  // auto totalParamSize = builder.create<arith::AddIOp>(
-  //     loc, AC.createIndexConstant(paramSize, loc),
-  //     builder.create<memref::LoadOp>(loc, eventsCount));
-  // builder.create<memref::StoreOp>(loc, totalParamSize, paramC);
+  /// The total number of parameters is the sum of static elements,
+  /// the dynamic sizes of datablocks, and the number of events.
+  unsigned paramSize = params.size();
+  paramC = builder.create<memref::AllocaOp>(loc, MemRefType::get({}, AC.Int32),
+                                            ValueRange());
 
-  // auto totalParams = builder.create<memref::LoadOp>(loc, paramC);
-  // auto paramVArray = builder.create<memref::AllocaOp>(
-  //     loc, MemRefType::get({ShapedType::kDynamic}, AC.Int64),
-  //     ValueRange{totalParams});
-  // for (unsigned i = 0; i < paramSize; ++i) {
-  //   auto param = AC.castToInt(AC.Int64, params[i], loc);
-  //   auto paramIndex = AC.createIndexConstant(i, loc);
-  //   builder.create<affine::AffineStoreOp>(loc, param, paramVArray,
-  //                                         ValueRange{paramIndex});
-  // }
-
-  // /// Process events
-  // auto eventsCount = builder.create<memref::AllocaOp>(
-  //     loc, MemRefType::get({}, AC.Int32), ValueRange());
-  // builder.create<memref::StoreOp>(loc, AC.createIndexConstant(0, loc),
-  //                                 eventsCount);
-  // if (!events.empty()) {
-  //   /// Helper to increment the event count.
-  //   auto incEventCount = [&]() {
-  //     auto newCount = builder
-  //                         .create<arith::AddIOp>(loc, eventsCount,
-  //                                                AC.createIndexConstant(1,
-  //                                                loc))
-  //                         .getResult();
-  //     builder.create<memref::StoreOp>(loc, newCount, eventsCount);
-  //   };
-
-  //   for (auto event : events) {
-  //     /// Skip if the defining op is not an arts::EventOp.
-  //     auto eventOp = dyn_cast<arts::EventOp>(event.getDefiningOp());
-  //     if (!eventOp)
-  //       continue;
-
-  //     /// If this is a single event, load its guid directly.
-  //     if (eventOp.isSingle()) {
-  //       builder.setInsertionPoint(eventOp);
-  //       auto eventGuid =
-  //           builder.create<memref::LoadOp>(loc, event, eventOp.getIndices())
-  //               .getResult();
-  //       insertParam(eventGuid);
-  //       incEventCount();
-  //       continue;
-  //     }
-
-  //     /// Otherwise, create nested loops to load the guids.
-  //     auto sizes = eventOp.getSizes();
-  //     const unsigned eventDim = sizes.size();
-
-  //     /// Recursive lambda to generate loops.
-  //     std::function<void(unsigned, SmallVector<Value, 4> &)> createEvents =
-  //         [&](unsigned dim, SmallVector<Value, 4> &indices) {
-  //           if (dim == eventDim) {
-  //             auto eventGuid =
-  //                 builder.create<memref::LoadOp>(loc, event, indices)
-  //                     .getResult();
-  //             insertParam(eventGuid);
-  //             incEventCount();
-  //             return;
-  //           }
-  //           auto lower = builder.create<arith::ConstantIndexOp>(loc, 0);
-  //           auto upper = sizes[dim];
-  //           auto step = builder.create<arith::ConstantIndexOp>(loc, 1);
-  //           auto loopOp = builder.create<scf::ForOp>(loc, lower, upper,
-  //           step); auto &loopBlock = loopOp.getRegion().front();
-  //           builder.setInsertionPointToStart(&loopBlock);
-  //           indices.push_back(loopOp.getInductionVar());
-  //           createEvents(dim + 1, indices);
-  //           indices.pop_back();
-  //           builder.setInsertionPointAfter(loopOp);
-  //         };
-
-  //     SmallVector<Value, 4> indices;
-  //     createEvents(0, indices);
-  //   }
-  // }
-
-  // /// Process parameters.
-  // unsigned paramSize = params.size();
-  // paramC = builder.create<memref::AllocaOp>(loc, MemRefType::get({},
-  // AC.Int32),
-  //                                           ValueRange());
-  // auto totalParamSize = builder.create<arith::AddIOp>(
-  //     loc, AC.createIndexConstant(paramSize, loc),
-  //     builder.create<memref::LoadOp>(loc, eventsCount));
-  // builder.create<memref::StoreOp>(loc, totalParamSize, paramC);
-
-  // auto totalParams = builder.create<memref::LoadOp>(loc, paramC);
-  // auto paramVArray = builder.create<memref::AllocaOp>(
-  //     loc, MemRefType::get({ShapedType::kDynamic}, AC.Int64),
-  //     ValueRange{totalParams});
-  // /// Create a loop from 0 to totalParams and store each parameter into
-  // /// paramVArray.
-  // auto lowerBound = builder.create<arith::ConstantIndexOp>(loc, 0);
-  // auto step = builder.create<arith::ConstantIndexOp>(loc, 1);
-  // auto forOp = builder.create<scf::ForOp>(loc, lowerBound, totalParams,
-  // step);
-  // {
-  //   /// Set the insertion point to the start of the loop body.
-  //   Block &loopBody = forOp.getRegion().front();
-  //   builder.setInsertionPointToStart(&loopBody);
-  //   Value iv = forOp.getInductionVar();
-  //   auto paramVal = builder.create<memref::LoadOp>(loc, paramsMemref, iv);
-  //   // Store the parameter into the paramVArray at position iv.
-  //   builder.create<memref::StoreOp>(loc, paramVal, paramVArray, iv);
-  //   builder.create<scf::YieldOp>(loc);
-  // }
-  // paramV = builder.create<memref::CastOp>(
-  //     loc, MemRefType::get({ShapedType::kDynamic}, AC.Int64), paramVArray);
-
-  // paramV = builder.create<memref::CastOp>(
-  //     loc, MemRefType::get({ShapedType::kDynamic}, AC.Int64), paramVArray);
-}
-
-void EdtCodegen::createEntry(Location loc) {
-  OpBuilder::InsertionGuard guard(builder);
-
-  auto *entryBlock = func.addEntryBlock();
-  builder.setInsertionPointToStart(entryBlock);
-
-  /// Get reference to the block arguments
-  Value fnParamV = entryBlock->getArgument(1);
-  Value fnDepV = entryBlock->getArgument(3);
-
-  /// Clone constants
-  for (auto oldConst : consts) {
-    rewireMap[oldConst] =
-        builder.clone(*oldConst.getDefiningOp())->getResult(0);
+  /// Add the number of events if any
+  if (depsToSatisfy.empty()) {
+    auto totalParamSize = builder.create<arith::AddIOp>(
+        loc, AC.createIndexConstant(paramSize, loc),
+        builder.create<memref::LoadOp>(loc, totalEventsToSatisfy));
+    builder.create<memref::StoreOp>(loc, totalParamSize, paramC);
   }
 
-  /// Insert the parameters
-  auto paramSize = params.size();
-  for (unsigned paramIndex = 0; paramIndex < paramSize; paramIndex++) {
-    auto i = builder.create<arith::ConstantIndexOp>(loc, paramIndex);
-    auto paramVElem =
-        builder.create<memref::LoadOp>(loc, fnParamV, ValueRange{i});
-    /// Cast it back to the original type
-    auto oldParam = params[paramIndex];
-    auto newParam = AC.castParameter(oldParam.getType(), paramVElem, loc);
-    rewireMap[oldParam] = newParam;
+  /// Allocate the paramV array.
+  auto totalParams = builder.create<memref::LoadOp>(loc, paramC);
+  auto paramVArray = builder.create<memref::AllocaOp>(
+      loc, MemRefType::get({ShapedType::kDynamic}, AC.Int64),
+      ValueRange{totalParams});
+
+  /// Start by loading the parameters that have already been collected.
+  for (unsigned i = 0; i < paramSize; ++i) {
+    auto param = AC.castToInt(AC.Int64, params[i], loc);
+    auto paramIndex = AC.createIndexConstant(i, loc);
+    builder.create<affine::AffineStoreOp>(loc, param, paramVArray,
+                                          ValueRange{paramIndex});
   }
 
-  /// Insert the dependencies
-  auto indexAlloc = builder.create<memref::AllocaOp>(
-      loc, MemRefType::get({}, builder.getIndexType()));
-  auto zero = builder.create<arith::ConstantIndexOp>(loc, 0);
-  builder.create<memref::StoreOp>(loc, zero, indexAlloc);
-  Value oneIdx = builder.create<arith::ConstantIndexOp>(loc, 1);
+  /// If there are no events to satisfy, we are done.
+  if (depsToSatisfy.empty())
+    return;
 
-  /// Helper to load the current index.
-  auto loadIndex = [&]() -> Value {
-    return builder.create<memref::LoadOp>(loc, ValueRange(indexAlloc));
-  };
+  /// For each event that has to be satisfied insert the event GUIDs into
+  /// paramVArray. Initialize the parameter index to the current number of
+  /// parameters.
+  auto paramIndex = builder.create<memref::AllocaOp>(
+      loc, MemRefType::get({}, AC.Int32), ValueRange());
+  builder.create<memref::StoreOp>(loc, AC.createIndexConstant(paramSize, loc),
+                                  paramIndex);
+  for (auto db : depsToSatisfy) {
+    auto event = db->getEvent();
+    auto sizes = db->getSizes();
+    const unsigned eventDim = sizes.size();
 
-  for (auto &dep : deps) {
-    /// Get DataBlock
-    auto *db = AC.getDatablock(dep);
-    assert(db && "Datablock not found");
-
-    /// If the db is not an array, get the dependency ptr
-    if (db->isSingleDb()) {
-      auto curIndex = loadIndex();
-      auto depVElem =
-          builder.create<memref::LoadOp>(loc, fnDepV, ValueRange({curIndex}));
-      auto entryGuid = AC.getGuidFromEdtDep(depVElem, loc);
-      auto entryPtr = AC.getPtrFromEdtDep(depVElem, loc);
-      entryDbs[db].guid = entryGuid;
-      entryDbs[db].ptr = entryPtr;
-      /// Increment the index.
-      auto newIndex =
-          builder.create<arith::AddIOp>(loc, curIndex, oneIdx).getResult();
-      builder.create<memref::StoreOp>(loc, newIndex, indexAlloc);
-      /// Add it to the rewire map.
-      rewireMap[db->getOp()] = entryPtr;
-      continue;
-    }
-
-    /// Get the entry sizes.
-    SmallVector<Value> entrySizes;
-    const auto &dbSizes = db->getSizes();
-    entrySizes.reserve(dbSizes.size());
-
-    for (unsigned i = 0, e = dbSizes.size(); i < e; ++i) {
-      auto entryItr = entryDbs[db].sizeIndex.find(i);
-      if (entryItr != entryDbs[db].sizeIndex.end()) {
-        entrySizes.push_back(rewireMap[params[entryItr->second]]);
-      } else {
-        if (auto cstOp = dbSizes[i].getDefiningOp<arith::ConstantIndexOp>())
-          entrySizes.push_back(
-              builder.clone(*cstOp.getOperation())->getResult(0));
-        else
-          llvm_unreachable("Datablock size is not a constant");
-      }
-    }
-
-    /// If it is an array, recover the array of guids and pointers.
-    auto guidType = MemRefType::get(
-        std::vector<int64_t>(entrySizes.size(), ShapedType::kDynamic),
-        AC.ArtsGuid);
-    auto entryGuid =
-        builder.create<memref::AllocaOp>(loc, guidType, entrySizes);
-    auto ptrType = MemRefType::get(
-        std::vector<int64_t>(entrySizes.size(), ShapedType::kDynamic),
-        AC.VoidPtr);
-    auto entryPtr = builder.create<memref::AllocaOp>(loc, ptrType, entrySizes);
-    /// Recursively get the datablock entry info for each element.
-    std::function<void(unsigned, SmallVector<Value, 4> &)> createDbs =
+    /// Load event GUIDs into paramVArray.
+    std::function<void(unsigned, SmallVector<Value, 4> &)> createEvents =
         [&](unsigned dim, SmallVector<Value, 4> &indices) {
-          if (dim == entrySizes.size()) {
-            auto curIndex = loadIndex();
-            auto depVElem =
+          if (dim == eventDim) {
+            /// Load the event GUID at the current indices.
+            auto eventGuid =
+                builder.create<memref::LoadOp>(loc, event, indices).getResult();
+            /// Get and convert the current parameter index.
+            auto curParamIdx =
+                builder.create<memref::LoadOp>(loc, paramIndex.getResult());
+            auto curParamIdxInt64 = AC.castToInt(AC.Int64, curParamIdx, loc);
+            /// Store the event GUID into the paramVArray.
+            builder.create<affine::AffineStoreOp>(loc, eventGuid, paramVArray,
+                                                  ValueRange{curParamIdxInt64});
+            /// Increment the parameter index.
+            auto newParamIdx =
                 builder
-                    .create<memref::LoadOp>(loc, fnDepV, ValueRange({curIndex}))
+                    .create<arith::AddIOp>(loc, curParamIdx,
+                                           AC.createIndexConstant(1, loc))
                     .getResult();
-            auto entryGuidElem = AC.getGuidFromEdtDep(depVElem, loc);
-            auto entryPtrElem = AC.getPtrFromEdtDep(depVElem, loc);
-            builder.create<memref::StoreOp>(loc, entryGuidElem, entryGuid,
-                                            indices);
-            builder.create<memref::StoreOp>(loc, entryPtrElem, entryPtr,
-                                            indices);
-            /// Increment the index.
-            auto newIndex = builder.create<arith::AddIOp>(loc, curIndex, oneIdx)
-                                .getResult();
-            builder.create<memref::StoreOp>(loc, newIndex, indexAlloc);
+            builder.create<memref::StoreOp>(loc, newParamIdx, paramIndex);
             return;
           }
-          /// Create loop for current dimension.
+          /// Create a loop for the current dimension.
           auto lower = builder.create<arith::ConstantIndexOp>(loc, 0);
-          auto upper = entrySizes[dim];
+          auto upper = sizes[dim];
           auto step = builder.create<arith::ConstantIndexOp>(loc, 1);
           auto loopOp = builder.create<scf::ForOp>(loc, lower, upper, step);
-          /// Set insertion point inside the loop body.
-          auto &loopBlock = loopOp.getRegion().front();
-          builder.setInsertionPointToStart(&loopBlock);
-          /// Append the induction variable for the current dimension.
+          auto &loopBody = loopOp.getRegion().front();
+          builder.setInsertionPointToStart(&loopBody);
+          /// Append the induction variable to the current indices.
           indices.push_back(loopOp.getInductionVar());
-          /// Recurse to create the next level of loop.
-          createDbs(dim + 1, indices);
-          /// Remove the current induction variable and reset insertion point.
+          /// Recurse to process the next dimension.
+          createEvents(dim + 1, indices);
+          /// Clean up the indices and reset the insertion point.
           indices.pop_back();
           builder.setInsertionPointAfter(loopOp);
         };
 
     SmallVector<Value, 4> indices;
-    createDbs(0, indices);
-    entryDbs[db].guid = entryGuid;
-    LLVM_DEBUG(DBGS() << "Entry guid: " << entryGuid << "\n");
-    entryDbs[db].ptr = entryPtr;
-    rewireMap[db->getOp()] = entryPtr;
+    createEvents(0, indices);
+  }
+}
+
+void EdtCodegen::processDependencies(Location loc) {
+  /// Satisfy dependencies
+  for (auto db : depsToSignal) {
+    assert(db->getEvent() && "Datablock has no event");
+    assert(db->isOutMode() && "Datablock is not out mode");
   }
 
-  /// Replace all uses in the region.
-  replaceInRegion(*region, rewireMap, false);
+  /// Record dependencies
+  /// Dependencies are recorded after the EDT Call
+  builder.setInsertionPoint(guid.getDefiningOp());
+  for (auto db : depsToRecord) {
+    auto loc = db->getOp().getLoc();
+    /// Ensure the datablock has an event and is not in out mode.
+    assert(db->getEvent() && "Datablock has no event");
+    assert(!db->isOutMode() && "Datablock is out mode");
+    if (db->isSingle()) {
+      /// For a single datablock, load its event GUID and add the dependency.
+      auto eventGuid =
+          builder.create<memref::LoadOp>(loc, db->getEvent(), db->getIndices())
+              .getResult();
+      AC.addDep(eventGuid, guid, db->getEdtSlot(), loc);
+    } else {
+      auto sizes = db->getSizes();
+      const unsigned dbDim = sizes.size();
+      /// Loop to load event GUIDs.
+      std::function<void(unsigned, SmallVector<Value, 4> &)> addDependencies =
+          [&](unsigned dim, SmallVector<Value, 4> &indices) {
+            if (dim == dbDim) {
+              /// At the innermost level, load the event GUID and add the
+              /// dependency.
+              auto eventGuid =
+                  builder.create<memref::LoadOp>(loc, db->getEvent(), indices)
+                      .getResult();
+              AC.addDep(eventGuid, guid, db->getEdtSlot(), loc);
+              return;
+            }
+            auto lower = builder.create<arith::ConstantIndexOp>(loc, 0);
+            auto upper = sizes[dim];
+            auto step = builder.create<arith::ConstantIndexOp>(loc, 1);
+            auto loopOp = builder.create<scf::ForOp>(loc, lower, upper, step);
+            {
+              /// Set insertion point inside the loop body.
+              auto &loopBlock = loopOp.getRegion().front();
+              builder.setInsertionPointToStart(&loopBlock);
+              indices.push_back(loopOp.getInductionVar());
+              addDependencies(dim + 1, indices);
+              indices.pop_back();
+            }
+            /// Reset insertion point after the loop.
+            builder.setInsertionPointAfter(loopOp);
+          };
+      SmallVector<Value, 4> indices;
+      addDependencies(0, indices);
+    }
+  }
+
+  /// Signal dependencies
+  auto oneConst = AC.createIndexConstant(1, loc);
+  for (auto db : depsToSignal) {
+    auto loc = db->getOp().getLoc();
+    if (db->isSingle()) {
+      AC.signalEdt(guid, db->getEdtSlot(), db->getGuid(), loc);
+    } else {
+      auto sizes = db->getSizes();
+      const unsigned dbDim = sizes.size();
+      auto currentSlot =
+          builder.create<memref::AllocOp>(loc, MemRefType::get({}, AC.Int32));
+      builder.create<memref::StoreOp>(loc, db->getEdtSlot(), currentSlot);
+      /// Create loop to signal dependencies.
+      std::function<void(unsigned, SmallVector<Value, 4> &)>
+          signalDependencies = [&](unsigned dim,
+                                   SmallVector<Value, 4> &indices) {
+            if (dim == dbDim) {
+              auto guidVal =
+                  builder.create<memref::LoadOp>(loc, db->getGuid(), indices)
+                      .getResult();
+              /// Signal the dependency.
+              auto slot = builder.create<memref::LoadOp>(loc, currentSlot);
+              AC.signalEdt(guid, slot, guidVal, loc);
+              /// Increment the slot.
+              auto newSlot = builder.create<arith::AddIOp>(loc, slot, oneConst)
+                                 .getResult();
+              builder.create<memref::StoreOp>(loc, newSlot, currentSlot);
+              return;
+            }
+            auto lower = builder.create<arith::ConstantIndexOp>(loc, 0);
+            auto upper = sizes[dim];
+            auto step = builder.create<arith::ConstantIndexOp>(loc, 1);
+            auto loopOp = builder.create<scf::ForOp>(loc, lower, upper, step);
+            {
+              auto &loopBlock = loopOp.getRegion().front();
+              builder.setInsertionPointToStart(&loopBlock);
+              indices.push_back(loopOp.getInductionVar());
+              signalDependencies(dim + 1, indices);
+              indices.pop_back();
+            }
+            builder.setInsertionPointAfter(loopOp);
+          };
+      SmallVector<Value, 4> indices;
+      signalDependencies(0, indices);
+    }
+  }
 }
 
-Value EdtCodegen::createGuid(Value node, Location loc) {
-  auto guidEdtType = AC.createIntConstant(1, AC.ArtsType, loc);
-  auto reserveGuidCall = AC.createRuntimeCall(ARTSRTL_artsReserveGuidRoute,
-                                              {guidEdtType, node}, loc);
-  return reserveGuidCall.getResult(0);
-}
+  void EdtCodegen::outlineRegion(Location loc) {
+    ConversionPatternRewriter rewriter(builder.getContext());
+    Region &funcRegion = func.getBody();
+    Block &funcEntryBlock = funcRegion.front();
+    Block &entryBlock = region->front();
+    rewriter.inlineRegionBefore(*region, funcRegion, funcRegion.end());
 
-func::FuncOp EdtCodegen::createFn(Location loc) {
-  OpBuilder::InsertionGuard guard(builder);
-  AC.setInsertionPoint(AC.module);
-  auto edtFuncName = "__arts_edt_" + std::to_string(increaseEdtCounter());
-  auto edtFuncOp = builder.create<func::FuncOp>(loc, edtFuncName, AC.EdtFn);
-  edtFuncOp.setPrivate();
-  AC.module.push_back(edtFuncOp);
-  return edtFuncOp;
-}
+    /// Move all operations from entryBlock to funcEntryBlock.
+    funcEntryBlock.getOperations().splice(funcEntryBlock.end(),
+                                          entryBlock.getOperations());
+    entryBlock.erase();
 
-// ---------------------------- ARTS Codegen ---------------------------- ///
-ArtsCodegen::ArtsCodegen(ModuleOp &module, llvm::DataLayout &llvmDL,
-                         mlir::DataLayout &mlirDL)
-    : module(module), builder(OpBuilder(module->getContext())), llvmDL(llvmDL),
-      mlirDL(mlirDL) {
-  initializeTypes();
-}
+    /// Replace each arts.yield terminator with a return.
+    func::ReturnOp returnOp = nullptr;
+    for (auto &block : funcRegion) {
+      if (auto yieldOp = dyn_cast<arts::YieldOp>(block.getTerminator())) {
+        AC.setInsertionPoint(yieldOp);
+        assert(!returnOp &&
+               "Multiple yields in the same block are not supported");
+        returnOp = builder.create<func::ReturnOp>(loc);
+        yieldOp->erase();
+      }
+    }
+  }
 
-ArtsCodegen::~ArtsCodegen() {
-  for (auto &db : datablocks)
-    delete db.second;
-  for (auto &edt : edts)
-    delete edt.second;
-}
+  Value EdtCodegen::createGuid(Value node, Location loc) {
+    auto guidEdtType = AC.createIntConstant(1, AC.ArtsType, loc);
+    auto reserveGuidCall = AC.createRuntimeCall(ARTSRTL_artsReserveGuidRoute,
+                                                {guidEdtType, node}, loc);
+    return reserveGuidCall.getResult(0);
+  }
 
-func::FuncOp
-ArtsCodegen::getOrCreateRuntimeFunction(types::RuntimeFunction FnID) {
-  OpBuilder::InsertionGuard guard(builder);
-  builder.setInsertionPointToStart(module.getBody());
+  func::FuncOp EdtCodegen::createFn(Location loc) {
+    OpBuilder::InsertionGuard IG(builder);
+    AC.setInsertionPoint(AC.module);
+    auto edtFuncName = "__arts_edt_" + std::to_string(increaseEdtCounter());
+    auto edtFuncOp = builder.create<func::FuncOp>(loc, edtFuncName, AC.EdtFn);
+    edtFuncOp.setPrivate();
+    AC.module.push_back(edtFuncOp);
+    return edtFuncOp;
+  }
 
-  FunctionType fnType = nullptr;
-  func::FuncOp funcOp;
-  /// Try to find the declaration in the module first.
-  switch (FnID) {
+  void EdtCodegen::createFnEntry(Location loc) {
+    OpBuilder::InsertionGuard IG(builder);
+
+    /// Create an entry block and set the insertion point.
+    auto *entryBlock = func.addEntryBlock();
+    builder.setInsertionPointToStart(entryBlock);
+
+    /// Get references to the block arguments.
+    Value fnParamV = entryBlock->getArgument(1);
+    Value fnDepV = entryBlock->getArgument(3);
+
+    /// Clone constants.
+    for (auto &oldConst : consts) {
+      rewireMap[oldConst] =
+          builder.clone(*oldConst.getDefiningOp())->getResult(0);
+    }
+
+    /// Insert the parameters.
+    for (unsigned i = 0, e = params.size(); i < e; ++i) {
+      auto idx = builder.create<arith::ConstantIndexOp>(loc, i);
+      auto paramElem =
+          builder.create<memref::LoadOp>(loc, fnParamV, ValueRange{idx});
+      /// Cast it back to the original type.
+      rewireMap[params[i]] =
+          AC.castParameter(params[i].getType(), paramElem, loc);
+    }
+
+    /// Insert the dependencies.
+    auto indexAlloc = builder.create<memref::AllocaOp>(
+        loc, MemRefType::get({}, builder.getIndexType()));
+    auto constZero = builder.create<arith::ConstantIndexOp>(loc, 0);
+    builder.create<memref::StoreOp>(loc, constZero, indexAlloc);
+    auto constOne = builder.create<arith::ConstantIndexOp>(loc, 1);
+
+    /// Helper lambda to load the current index.
+    auto loadIndex = [&]() -> Value {
+      return builder.create<memref::LoadOp>(loc, indexAlloc.getResult());
+    };
+
+    /// Process each dependency.
+    for (auto &dep : deps) {
+      /// Get corresponding DataBlock.
+      auto *db = AC.getDatablock(dep);
+      assert(db && "Datablock not found");
+
+      if (db->isSingle()) {
+        auto curIndex = loadIndex();
+        auto depVElem =
+            builder.create<memref::LoadOp>(loc, fnDepV, ValueRange{curIndex});
+        auto entryGuid = AC.getGuidFromEdtDep(depVElem, loc);
+        auto entryPtr = AC.getPtrFromEdtDep(depVElem, loc);
+        entryDbs[db].guid = entryGuid;
+        entryDbs[db].ptr = entryPtr;
+        /// Increment the index.
+        auto newIndex =
+            builder.create<arith::AddIOp>(loc, curIndex, constOne).getResult();
+        builder.create<memref::StoreOp>(loc, newIndex, indexAlloc);
+        rewireMap[db->getOp()] = entryPtr;
+        continue;
+      }
+
+      /// Get the entry sizes.
+      SmallVector<Value, 4> entrySizes;
+      const auto &dbSizes = db->getSizes();
+      entrySizes.reserve(dbSizes.size());
+      for (unsigned i = 0, e = dbSizes.size(); i < e; ++i) {
+        if (entryDbs[db].sizeIndex.count(i))
+          entrySizes.push_back(rewireMap[params[entryDbs[db].sizeIndex[i]]]);
+        else if (auto cstOp =
+                     dbSizes[i].getDefiningOp<arith::ConstantIndexOp>())
+          entrySizes.push_back(builder.clone(*cstOp)->getResult(0));
+        else
+          llvm_unreachable("Datablock size is not a constant");
+      }
+
+      /// Allocate arrays for GUIDs and pointers.
+      auto guidType = MemRefType::get(
+          std::vector<int64_t>(entrySizes.size(), ShapedType::kDynamic),
+          AC.ArtsGuid);
+      auto entryGuid =
+          builder.create<memref::AllocaOp>(loc, guidType, entrySizes);
+      auto ptrType = MemRefType::get(
+          std::vector<int64_t>(entrySizes.size(), ShapedType::kDynamic),
+          AC.VoidPtr);
+      auto entryPtr =
+          builder.create<memref::AllocaOp>(loc, ptrType, entrySizes);
+
+      /// Recursively load the datablock entry info for each element.
+      std::function<void(unsigned, SmallVector<Value, 4> &)> createDbs =
+          [&](unsigned dim, SmallVector<Value, 4> &indices) {
+            if (dim == entrySizes.size()) {
+              auto curIndex = loadIndex();
+              auto depVElem =
+                  builder
+                      .create<memref::LoadOp>(loc, fnDepV, ValueRange{curIndex})
+                      .getResult();
+              auto entryGuidElem = AC.getGuidFromEdtDep(depVElem, loc);
+              auto entryPtrElem = AC.getPtrFromEdtDep(depVElem, loc);
+              builder.create<memref::StoreOp>(loc, entryGuidElem, entryGuid,
+                                              indices);
+              builder.create<memref::StoreOp>(loc, entryPtrElem, entryPtr,
+                                              indices);
+              /// Increment the index.
+              auto newIndex =
+                  builder.create<arith::AddIOp>(loc, curIndex, constOne)
+                      .getResult();
+              builder.create<memref::StoreOp>(loc, newIndex, indexAlloc);
+              return;
+            }
+
+            /// Create loop for current dimension.
+            auto lower = builder.create<arith::ConstantIndexOp>(loc, 0);
+            auto upper = entrySizes[dim];
+            auto loopOp =
+                builder.create<scf::ForOp>(loc, lower, upper, constOne);
+            auto &loopBlock = loopOp.getRegion().front();
+            builder.setInsertionPointToStart(&loopBlock);
+            indices.push_back(loopOp.getInductionVar());
+            createDbs(dim + 1, indices);
+            indices.pop_back();
+            builder.setInsertionPointAfter(loopOp);
+          };
+
+      SmallVector<Value, 4> indices;
+      createDbs(0, indices);
+      entryDbs[db].guid = entryGuid;
+      entryDbs[db].ptr = entryPtr;
+      rewireMap[db->getOp()] = entryPtr;
+    }
+
+    /// Replace all uses in the region.
+    replaceInRegion(*region, rewireMap, false);
+  }
+
+  // ---------------------------- ARTS Codegen ---------------------------- ///
+  ArtsCodegen::ArtsCodegen(ModuleOp & module, llvm::DataLayout & llvmDL,
+                           mlir::DataLayout & mlirDL)
+      : module(module), builder(OpBuilder(module->getContext())),
+        llvmDL(llvmDL), mlirDL(mlirDL) {
+    initializeTypes();
+  }
+
+  ArtsCodegen::~ArtsCodegen() {
+    for (auto &db : datablocks)
+      delete db.second;
+    for (auto &edt : edts)
+      delete edt.second;
+  }
+
+  func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(
+      types::RuntimeFunction FnID) {
+    OpBuilder::InsertionGuard IG(builder);
+    builder.setInsertionPointToStart(module.getBody());
+
+    FunctionType fnType = nullptr;
+    func::FuncOp funcOp;
+    /// Try to find the declaration in the module first.
+    switch (FnID) {
 #define ARTS_RTL(Enum, Str, ReturnType, ...)                                   \
   case Enum: {                                                                 \
     SmallVector<Type, 4> argumentTypes{__VA_ARGS__};                           \
@@ -669,33 +717,33 @@ ArtsCodegen::getOrCreateRuntimeFunction(types::RuntimeFunction FnID) {
     break;                                                                     \
   }
 #include "arts/Codegen/ARTSKinds.def"
-  }
+    }
 
-  if (!funcOp) {
-    // Create a new declaration if we need one.
-    switch (FnID) {
+    if (!funcOp) {
+      // Create a new declaration if we need one.
+      switch (FnID) {
 #define ARTS_RTL(Enum, Str, ...)                                               \
   case Enum:                                                                   \
     funcOp =                                                                   \
         builder.create<func::FuncOp>(builder.getUnknownLoc(), Str, fnType);    \
     break;
 #include "arts/Codegen/ARTSKinds.def"
+      }
     }
+    /// Set the function as private
+    funcOp.setPrivate();
+    /// Set the llvm.linkage attribute to external
+    funcOp->setAttr(
+        "llvm.linkage",
+        LLVM::LinkageAttr::get(builder.getContext(), LLVM::Linkage::External));
+
+    assert(funcOp && "Failed to create ARTS runtime function");
+    return funcOp;
   }
-  /// Set the function as private
-  funcOp.setPrivate();
-  /// Set the llvm.linkage attribute to external
-  funcOp->setAttr(
-      "llvm.linkage",
-      LLVM::LinkageAttr::get(builder.getContext(), LLVM::Linkage::External));
 
-  assert(funcOp && "Failed to create ARTS runtime function");
-  return funcOp;
-}
-
-void ArtsCodegen::initializeTypes() {
-  MLIRContext *context = module.getContext();
-  llvmPtr = LLVM::LLVMPointerType::get(context);
+  void ArtsCodegen::initializeTypes() {
+    MLIRContext *context = module.getContext();
+    llvmPtr = LLVM::LLVMPointerType::get(context);
 #define ARTS_TYPE(VarName, InitValue) VarName = InitValue;
 #define ARTS_FUNCTION_TYPE(VarName, ReturnType, ...)                           \
   VarName = FunctionType::get(                                                 \
@@ -709,322 +757,321 @@ void ArtsCodegen::initializeTypes() {
   VarName = LLVM::LLVMStructType::getLiteral(context, {__VA_ARGS__}, Packed);  \
   VarName##Ptr = MemRefType::get({ShapedType::kDynamic}, VarName);
 #include "arts/Codegen/ARTSKinds.def"
-}
+  }
 
-func::CallOp ArtsCodegen::createRuntimeCall(RuntimeFunction FnID,
-                                            ArrayRef<Value> args,
-                                            Location loc) {
-  func::FuncOp func = getOrCreateRuntimeFunction(FnID);
-  assert(func && "Runtime function should exist");
-  return builder.create<func::CallOp>(loc, func, args);
-}
+  func::CallOp ArtsCodegen::createRuntimeCall(
+      RuntimeFunction FnID, ArrayRef<Value> args, Location loc) {
+    func::FuncOp func = getOrCreateRuntimeFunction(FnID);
+    assert(func && "Runtime function should exist");
+    return builder.create<func::CallOp>(loc, func, args);
+  }
 
-/// DataBlock
-DataBlockCodegen *ArtsCodegen::getDatablock(Value op) {
-  return getDatablock(cast<DataBlockOp>(op.getDefiningOp()));
-}
+  /// DataBlock
+  DataBlockCodegen *ArtsCodegen::getDatablock(Value op) {
+    return getDatablock(cast<DataBlockOp>(op.getDefiningOp()));
+  }
 
-DataBlockCodegen *ArtsCodegen::getDatablock(arts::DataBlockOp dbOp) {
-  if (!dbOp)
-    return nullptr;
-  auto it = datablocks.find(dbOp);
-  return (it != datablocks.end()) ? it->second : nullptr;
-}
+  DataBlockCodegen *ArtsCodegen::getDatablock(arts::DataBlockOp dbOp) {
+    if (!dbOp)
+      return nullptr;
+    auto it = datablocks.find(dbOp);
+    return (it != datablocks.end()) ? it->second : nullptr;
+  }
 
-DataBlockCodegen *ArtsCodegen::createDatablock(arts::DataBlockOp dbOp,
-                                               Location loc) {
-  auto &db = datablocks[dbOp];
-  if (!db)
-    db = new DataBlockCodegen(*this, dbOp, loc);
-  return db;
-}
-
-DataBlockCodegen *ArtsCodegen::getOrCreateDatablock(arts::DataBlockOp dbOp,
-                                                    Location loc) {
-  if (auto db = getDatablock(dbOp))
+  DataBlockCodegen *ArtsCodegen::createDatablock(arts::DataBlockOp dbOp,
+                                                 Location loc) {
+    auto &db = datablocks[dbOp];
+    if (!db)
+      db = new DataBlockCodegen(*this, dbOp, loc);
     return db;
-  return createDatablock(dbOp, loc);
-}
-
-/// Events
-Value ArtsCodegen::allocEvent(arts::AllocEventOp allocEventOp, Location loc) {
-  auto createEvent = [&](Value node, Location loc) -> Value {
-    Value latchCount = createIntConstant(1, Int32, loc);
-    auto eventVal =
-        createRuntimeCall(ARTSRTL_artsEventCreate, {node, latchCount}, loc)
-            .getResult(0);
-    return eventVal;
-  };
-
-  OpBuilder::InsertionGuard guard(builder);
-  setInsertionPoint(allocEventOp);
-  auto node = getCurrentNode(loc);
-
-  /// If the event is a single event, create it and return
-  if (allocEventOp.isSingle())
-    return createEvent(node, loc);
-
-  /// Create an array of guids based on the sizes of the eventOp
-  auto sizes = allocEventOp.getSizes();
-  auto guidType = MemRefType::get(
-      std::vector<int64_t>(sizes.size(), ShapedType::kDynamic), ArtsGuid);
-  Value guid = builder.create<memref::AllocaOp>(loc, guidType, sizes);
-
-  /// Create nested loops to create the guids
-  std::function<void(unsigned, SmallVector<Value, 4> &)> createGuids =
-      [&](unsigned dim, SmallVector<Value, 4> &indices) {
-        if (dim == sizes.size()) {
-          auto guidVal = createEvent(node, loc);
-          builder.create<memref::StoreOp>(loc, guidVal, guid, indices);
-          return;
-        }
-        /// Create loop for current dimension
-        auto lower = builder.create<arith::ConstantIndexOp>(loc, 0);
-        auto upper = sizes[dim];
-        auto step = builder.create<arith::ConstantIndexOp>(loc, 1);
-        auto loopOp = builder.create<scf::ForOp>(loc, lower, upper, step);
-        /// Set insertion point inside the loop body
-        auto &loopBlock = loopOp.getRegion().front();
-        builder.setInsertionPointToStart(&loopBlock);
-        /// Append the induction variable for the current dimension
-        indices.push_back(loopOp.getInductionVar());
-        /// Recurse to create the next level of loop
-        createGuids(dim + 1, indices);
-        /// Remove the current induction variable and reset insertion point
-        indices.pop_back();
-        builder.setInsertionPointAfter(loopOp);
-      };
-  SmallVector<Value, 4> indices;
-  createGuids(0, indices);
-  return guid;
-}
-
-// EventCodegen *ArtsCodegen::getEvent(arts::EventOp eventOp) {
-//   if (!eventOp)
-//     return nullptr;
-//   auto it = events.find(eventOp);
-//   return (it != events.end()) ? it->second : nullptr;
-// }
-
-// EventCodegen *ArtsCodegen::getOrCreateEvent(arts::EventOp eventOp,
-//                                             Location loc) {
-//   auto &event = events[eventOp];
-//   if (!event)
-//     event = new EventCodegen(*this, eventOp, loc);
-//   return event;
-// }
-
-/// EDT
-EdtCodegen *ArtsCodegen::getEdt(Region *region) {
-  /// Try to find in the map
-  auto it = edts.find(region);
-  if (it != edts.end())
-    return it->second;
-  return nullptr;
-}
-
-EdtCodegen *ArtsCodegen::createEdt(SmallVector<Value> *opDeps, Region *region,
-                                   Value *epoch, Location *loc, bool build) {
-  if (!region || getEdt(region)) {
-    LLVM_DEBUG(dbgs() << "Region already has an EDT\n");
-    assert(false && "Edt already exists");
   }
-  edts[region] = new EdtCodegen(*this, opDeps, region, epoch, loc, build);
-  return edts[region];
-}
 
-/// Epoch
-Value ArtsCodegen::createEpoch(Value finishEdtGuid, Value finishEdtSlot,
-                               Location loc) {
-  return createRuntimeCall(ARTSRTL_artsInitializeAndStartEpoch,
-                           {finishEdtGuid, finishEdtSlot}, loc)
-      .getResult(0);
-}
+  DataBlockCodegen *ArtsCodegen::getOrCreateDatablock(arts::DataBlockOp dbOp,
+                                                      Location loc) {
+    if (auto db = getDatablock(dbOp))
+      return db;
+    return createDatablock(dbOp, loc);
+  }
 
-/// Utils
-Value ArtsCodegen::getGuidFromEdtDep(Value dep, Location loc) {
-  auto guidValue = builder.create<LLVM::ExtractValueOp>(
-      loc, ArtsGuid, dep, builder.getDenseI64ArrayAttr(0));
-  return guidValue.getResult();
-}
+  /// Events
+  Value ArtsCodegen::allocEvent(arts::AllocEventOp allocEventOp, Location loc) {
+    auto createEvent = [&](Value node, Location loc) -> Value {
+      Value latchCount = createIntConstant(1, Int32, loc);
+      auto eventVal =
+          createRuntimeCall(ARTSRTL_artsEventCreate, {node, latchCount}, loc)
+              .getResult(0);
+      return eventVal;
+    };
 
-Value ArtsCodegen::getPtrFromEdtDep(Value dep, Location loc) {
-  auto ptrValue = builder.create<LLVM::ExtractValueOp>(
-      loc, llvmPtr, dep, builder.getDenseI64ArrayAttr(2));
-  return castToVoidPtr(ptrValue, loc);
-}
+    OpBuilder::InsertionGuard IG(builder);
+    setInsertionPoint(allocEventOp);
+    auto node = getCurrentNode(loc);
 
-Value ArtsCodegen::getCurrentEpochGuid(Location loc) {
-  return createRuntimeCall(ARTSRTL_artsGetCurrentEpochGuid, {}, loc)
-      .getResult(0);
-}
+    /// If the event is a single event, create it and return
+    if (allocEventOp.isSingle())
+      return createEvent(node, loc);
 
-Value ArtsCodegen::getCurrentEdtGuid(Location loc) {
-  func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentGuid);
-  assert(func && "Runtime function should exist");
-  func->setAttr("llvm.readnone", builder.getUnitAttr());
-  ArrayRef<Value> args;
-  auto callOp = builder.create<func::CallOp>(loc, func, args);
-  return callOp.getResult(0);
-  // return createRuntimeCall(ARTSRTL_artsGetCurrentGuid, {}, loc).getResult(0);
-}
+    /// Create an array of guids based on the sizes of the eventOp
+    auto sizes = allocEventOp.getSizes();
+    auto guidType = MemRefType::get(
+        std::vector<int64_t>(sizes.size(), ShapedType::kDynamic), ArtsGuid);
+    Value guid = builder.create<memref::AllocaOp>(loc, guidType, sizes);
 
-Value ArtsCodegen::getCurrentNode(Location loc) {
-  func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentNode);
-  assert(func && "Runtime function should exist");
-  func->setAttr("llvm.readnone", builder.getUnitAttr());
-  ArrayRef<Value> args;
-  auto callOp = builder.create<func::CallOp>(loc, func, args);
-  return callOp.getResult(0);
-}
+    /// Create nested loops to create the guids
+    std::function<void(unsigned, SmallVector<Value, 4> &)> createGuids =
+        [&](unsigned dim, SmallVector<Value, 4> &indices) {
+          if (dim == sizes.size()) {
+            auto guidVal = createEvent(node, loc);
+            builder.create<memref::StoreOp>(loc, guidVal, guid, indices);
+            return;
+          }
+          /// Create loop for current dimension
+          auto lower = builder.create<arith::ConstantIndexOp>(loc, 0);
+          auto upper = sizes[dim];
+          auto step = builder.create<arith::ConstantIndexOp>(loc, 1);
+          auto loopOp = builder.create<scf::ForOp>(loc, lower, upper, step);
+          /// Set insertion point inside the loop body
+          auto &loopBlock = loopOp.getRegion().front();
+          builder.setInsertionPointToStart(&loopBlock);
+          /// Append the induction variable for the current dimension
+          indices.push_back(loopOp.getInductionVar());
+          /// Recurse to create the next level of loop
+          createGuids(dim + 1, indices);
+          /// Remove the current induction variable and reset insertion point
+          indices.pop_back();
+          builder.setInsertionPointAfter(loopOp);
+        };
+    SmallVector<Value, 4> indices;
+    createGuids(0, indices);
+    return guid;
+  }
 
-void ArtsCodegen::satisfyDep(Value eventGuid, Value dbGuid, Location loc) {
-  auto const ARTS_EVENT_LATCH_DECR_SLOT = createIntConstant(0, Int32, loc);
-  createRuntimeCall(ARTSRTL_artsEventSatisfySlot,
-                    {eventGuid, dbGuid, ARTS_EVENT_LATCH_DECR_SLOT}, loc);
-}
+  /// EDT
+  EdtCodegen *ArtsCodegen::getEdt(Region * region) {
+    /// Try to find in the map
+    auto it = edts.find(region);
+    if (it != edts.end())
+      return it->second;
+    return nullptr;
+  }
 
-/// Helpers
-Value ArtsCodegen::createFnPtr(func::FuncOp funcOp, Location loc) {
-  auto FT = funcOp.getFunctionType();
-  auto LFT = LLVM::LLVMFunctionType::get(
-      LLVM::LLVMVoidType::get(funcOp.getContext()), FT.getInputs(), false);
-  auto getFuncOp = builder.create<polygeist::GetFuncOp>(
-      loc, LLVM::LLVMPointerType::get(LFT), funcOp.getName());
-  return builder
-      .create<polygeist::Pointer2MemrefOp>(
-          loc, MemRefType::get({ShapedType::kDynamic}, LFT), getFuncOp)
-      .getResult();
-}
+  EdtCodegen *ArtsCodegen::createEdt(SmallVector<Value> * opDeps,
+                                     Region * region, Value * epoch,
+                                     Location * loc) {
+    if (!region || getEdt(region)) {
+      LLVM_DEBUG(dbgs() << "Region already has an EDT\n");
+      assert(false && "Edt already exists");
+    }
+    edts[region] = new EdtCodegen(*this, opDeps, region, epoch, loc);
+    return edts[region];
+  }
 
-Value ArtsCodegen::createIndexConstant(int value, Location loc) {
-  return builder.create<arith::ConstantIndexOp>(loc, value);
-}
-
-Value ArtsCodegen::createIntConstant(int value, Type type, Location loc) {
-  assert(type.isa<IntegerType>() && "Expected integer type");
-  auto v = builder.create<arith::ConstantOp>(
-      loc, type, builder.getIntegerAttr(type, value));
-  return v;
-}
-
-Value ArtsCodegen::createPtr(Value source, Location loc) {
-  if (source.getType().isa<LLVM::LLVMPointerType>())
-    return source;
-  /// If it is not a pointer, cast it to a pointer.
-  /// Polygeist - memref2pointer
-  auto srcTy = source.getType().cast<MemRefType>();
-  auto valPtr = builder.create<polygeist::Memref2PointerOp>(
-      loc, LLVM::LLVMPointerType::get(srcTy), source);
-  auto valTy = mlir::MemRefType::get(srcTy.getShape(), VoidPtr,
-                                     srcTy.getLayout(), srcTy.getMemorySpace());
-  return builder.create<polygeist::Pointer2MemrefOp>(loc, valTy, valPtr);
-}
-
-/// Casting
-Value ArtsCodegen::castParameter(mlir::Type targetType, Value source,
+  /// Epoch
+  Value ArtsCodegen::createEpoch(Value finishEdtGuid, Value finishEdtSlot,
                                  Location loc) {
-  assert(targetType.isIntOrIndexOrFloat() && "Target type should be a number");
-  /// If target type is an integer
-  if (targetType.isa<IntegerType>())
-    return castToInt(targetType, source, loc);
-  /// If target type is an index
-  if (targetType.isa<IndexType>())
-    return castToIndex(source, loc);
-  /// If target type is a float
-  if (targetType.isa<FloatType>())
-    return castToFloat(targetType, source, loc);
-  return source;
-}
-
-Value ArtsCodegen::castPointer(mlir::Type targetType, Value source,
-                               Location loc) {
-  auto srcType = source.getType().dyn_cast<MemRefType>();
-  auto dstType = targetType.dyn_cast<MemRefType>();
-  assert((srcType && dstType) && "Expected memref type");
-
-  /// Cast if the types are compatible
-  if (memref::CastOp::areCastCompatible(srcType, dstType))
-    return builder.create<memref::CastOp>(loc, dstType, source);
-
-  /// If the types are not compatible, cast to LLVM pointer and then to memref
-  return builder.create<polygeist::Pointer2MemrefOp>(loc, targetType,
-                                                     createPtr(source, loc));
-}
-
-Value ArtsCodegen::castToIndex(Value source, Location loc) {
-  if (source.getType().isIndex())
-    return source;
-  /// If it is not an index, cast it to an index.
-  auto indexType = IndexType::get(source.getContext());
-  return builder.create<arith::IndexCastOp>(loc, indexType, source).getResult();
-}
-
-Value ArtsCodegen::castToFloat(mlir::Type targetType, Value source,
-                               Location loc) {
-  assert(targetType.isa<FloatType>() && "Target type should be a float");
-  if (source.getType().isa<FloatType>())
-    return source;
-  /// If it is not a float, cast it to a float.
-  return builder.create<arith::SIToFPOp>(loc, targetType, source).getResult();
-}
-
-/// Cast a value to an integer type.
-Value ArtsCodegen::castToInt(Type targetType, Value source, Location loc) {
-  assert(targetType.isa<IntegerType>() &&
-         "Target type should be an integer (e.g. i64, i32, etc.)");
-
-  /// If types match exactly, no cast is needed.
-  if (source.getType() == targetType)
-    return source;
-
-  /// If source is index => use IndexCastOp to target integer type
-  if (source.getType().isIndex()) {
-    return builder.create<arith::IndexCastOp>(loc, targetType, source);
+    return createRuntimeCall(ARTSRTL_artsInitializeAndStartEpoch,
+                             {finishEdtGuid, finishEdtSlot}, loc)
+        .getResult(0);
   }
 
-  /// If source is float => use FPToSIOp (assuming signed)
-  if (source.getType().isa<FloatType>()) {
-    return builder.create<arith::FPToSIOp>(loc, targetType, source);
+  /// Utils
+  Value ArtsCodegen::getGuidFromEdtDep(Value dep, Location loc) {
+    auto guidValue = builder.create<LLVM::ExtractValueOp>(
+        loc, ArtsGuid, dep, builder.getDenseI64ArrayAttr(0));
+    return guidValue.getResult();
   }
 
-  /// If source is integer => handle extension or truncation
-  if (auto srcIntType = source.getType().dyn_cast<IntegerType>()) {
-    auto dstIntType = targetType.cast<IntegerType>();
-    unsigned srcWidth = srcIntType.getWidth();
-    unsigned dstWidth = dstIntType.getWidth();
+  Value ArtsCodegen::getPtrFromEdtDep(Value dep, Location loc) {
+    auto ptrValue = builder.create<LLVM::ExtractValueOp>(
+        loc, llvmPtr, dep, builder.getDenseI64ArrayAttr(2));
+    return castToVoidPtr(ptrValue, loc);
+  }
 
-    if (srcWidth == dstWidth)
+  Value ArtsCodegen::getCurrentEpochGuid(Location loc) {
+    return createRuntimeCall(ARTSRTL_artsGetCurrentEpochGuid, {}, loc)
+        .getResult(0);
+  }
+
+  Value ArtsCodegen::getCurrentEdtGuid(Location loc) {
+    func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentGuid);
+    assert(func && "Runtime function should exist");
+    func->setAttr("llvm.readnone", builder.getUnitAttr());
+    ArrayRef<Value> args;
+    auto callOp = builder.create<func::CallOp>(loc, func, args);
+    return callOp.getResult(0);
+    // return createRuntimeCall(ARTSRTL_artsGetCurrentGuid, {},
+    // loc).getResult(0);
+  }
+
+  Value ArtsCodegen::getCurrentNode(Location loc) {
+    func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentNode);
+    assert(func && "Runtime function should exist");
+    func->setAttr("llvm.readnone", builder.getUnitAttr());
+    ArrayRef<Value> args;
+    auto callOp = builder.create<func::CallOp>(loc, func, args);
+    return callOp.getResult(0);
+  }
+
+  void ArtsCodegen::satisfyDep(Value eventGuid, Value dbGuid, Location loc) {
+    auto const ARTS_EVENT_LATCH_DECR_SLOT = createIntConstant(0, Int32, loc);
+    createRuntimeCall(ARTSRTL_artsEventSatisfySlot,
+                      {eventGuid, dbGuid, ARTS_EVENT_LATCH_DECR_SLOT}, loc);
+  }
+
+  void ArtsCodegen::addDep(Value eventGuid, Value edtGuid, Value edtSlot,
+                           Location loc) {
+    createRuntimeCall(ARTSRTL_artsAddDependence,
+                      {sourceGuid, destGuid, edtSlot}, loc);
+  }
+
+  void ArtsCodegen::signalEdt(Value edtGuid, Value edtSlot, Value dbGuid,
+                              Location loc) {
+    createRuntimeCall(ARTSRTL_artsSignalEdt, {edtGuid, edtSlot, dbGuid}, loc);
+  }
+
+  /// Helpers
+  Value ArtsCodegen::createFnPtr(func::FuncOp funcOp, Location loc) {
+    auto FT = funcOp.getFunctionType();
+    auto LFT = LLVM::LLVMFunctionType::get(
+        LLVM::LLVMVoidType::get(funcOp.getContext()), FT.getInputs(), false);
+    auto getFuncOp = builder.create<polygeist::GetFuncOp>(
+        loc, LLVM::LLVMPointerType::get(LFT), funcOp.getName());
+    return builder
+        .create<polygeist::Pointer2MemrefOp>(
+            loc, MemRefType::get({ShapedType::kDynamic}, LFT), getFuncOp)
+        .getResult();
+  }
+
+  Value ArtsCodegen::createIndexConstant(int value, Location loc) {
+    return builder.create<arith::ConstantIndexOp>(loc, value);
+  }
+
+  Value ArtsCodegen::createIntConstant(int value, Type type, Location loc) {
+    assert(type.isa<IntegerType>() && "Expected integer type");
+    auto v = builder.create<arith::ConstantOp>(
+        loc, type, builder.getIntegerAttr(type, value));
+    return v;
+  }
+
+  Value ArtsCodegen::createPtr(Value source, Location loc) {
+    if (source.getType().isa<LLVM::LLVMPointerType>())
       return source;
-    else if (srcWidth < dstWidth)
-      return builder.create<arith::ExtSIOp>(loc, targetType, source);
-    return builder.create<arith::TruncIOp>(loc, targetType, source);
+    /// If it is not a pointer, cast it to a pointer.
+    /// Polygeist - memref2pointer
+    auto srcTy = source.getType().cast<MemRefType>();
+    auto valPtr = builder.create<polygeist::Memref2PointerOp>(
+        loc, LLVM::LLVMPointerType::get(srcTy), source);
+    auto valTy = mlir::MemRefType::get(
+        srcTy.getShape(), VoidPtr, srcTy.getLayout(), srcTy.getMemorySpace());
+    return builder.create<polygeist::Pointer2MemrefOp>(loc, valTy, valPtr);
   }
 
-  /// If none of the above matched => unsupported type
-  llvm::errs() << "Unsupported type for casting to integer: "
-               << source.getType() << "\n";
-  assert(false && "Unsupported type in castToInt");
-  return nullptr; /// unreachable
-}
-
-Value ArtsCodegen::castToVoidPtr(Value source, Location loc) {
-  auto valPtr = source;
-  if (!valPtr.getType().isa<LLVM::LLVMPointerType>()) {
-    valPtr = castToLLVMPtr(source, loc);
-  }
-  /// polygeist - pointer2memref
-  return builder.create<polygeist::Pointer2MemrefOp>(loc, VoidPtr, valPtr);
-}
-
-Value ArtsCodegen::castToLLVMPtr(Value source, Location loc) {
-  if (source.getType().isa<LLVM::LLVMPointerType>())
+  /// Casting
+  Value ArtsCodegen::castParameter(mlir::Type targetType, Value source,
+                                   Location loc) {
+    assert(targetType.isIntOrIndexOrFloat() &&
+           "Target type should be a number");
+    /// If target type is an integer
+    if (targetType.isa<IntegerType>())
+      return castToInt(targetType, source, loc);
+    /// If target type is an index
+    if (targetType.isa<IndexType>())
+      return castToIndex(source, loc);
+    /// If target type is a float
+    if (targetType.isa<FloatType>())
+      return castToFloat(targetType, source, loc);
     return source;
-  /// polygeist - memref2pointer
-  MemRefType MT = source.getType().cast<MemRefType>();
-  return builder.create<polygeist::Memref2PointerOp>(
-      loc,
-      LLVM::LLVMPointerType::get(builder.getContext(),
-                                 MT.getMemorySpaceAsInt()),
-      source);
-}
+  }
+
+  Value ArtsCodegen::castPointer(mlir::Type targetType, Value source,
+                                 Location loc) {
+    auto srcType = source.getType().dyn_cast<MemRefType>();
+    auto dstType = targetType.dyn_cast<MemRefType>();
+    assert((srcType && dstType) && "Expected memref type");
+
+    /// Cast if the types are compatible
+    if (memref::CastOp::areCastCompatible(srcType, dstType))
+      return builder.create<memref::CastOp>(loc, dstType, source);
+
+    /// If the types are not compatible, cast to LLVM pointer and then to memref
+    return builder.create<polygeist::Pointer2MemrefOp>(loc, targetType,
+                                                       createPtr(source, loc));
+  }
+
+  Value ArtsCodegen::castToIndex(Value source, Location loc) {
+    if (source.getType().isIndex())
+      return source;
+    /// If it is not an index, cast it to an index.
+    auto indexType = IndexType::get(source.getContext());
+    return builder.create<arith::IndexCastOp>(loc, indexType, source)
+        .getResult();
+  }
+
+  Value ArtsCodegen::castToFloat(mlir::Type targetType, Value source,
+                                 Location loc) {
+    assert(targetType.isa<FloatType>() && "Target type should be a float");
+    if (source.getType().isa<FloatType>())
+      return source;
+    /// If it is not a float, cast it to a float.
+    return builder.create<arith::SIToFPOp>(loc, targetType, source).getResult();
+  }
+
+  /// Cast a value to an integer type.
+  Value ArtsCodegen::castToInt(Type targetType, Value source, Location loc) {
+    assert(targetType.isa<IntegerType>() &&
+           "Target type should be an integer (e.g. i64, i32, etc.)");
+
+    /// If types match exactly, no cast is needed.
+    if (source.getType() == targetType)
+      return source;
+
+    /// If source is index => use IndexCastOp to target integer type
+    if (source.getType().isIndex()) {
+      return builder.create<arith::IndexCastOp>(loc, targetType, source);
+    }
+
+    /// If source is float => use FPToSIOp (assuming signed)
+    if (source.getType().isa<FloatType>()) {
+      return builder.create<arith::FPToSIOp>(loc, targetType, source);
+    }
+
+    /// If source is integer => handle extension or truncation
+    if (auto srcIntType = source.getType().dyn_cast<IntegerType>()) {
+      auto dstIntType = targetType.cast<IntegerType>();
+      unsigned srcWidth = srcIntType.getWidth();
+      unsigned dstWidth = dstIntType.getWidth();
+
+      if (srcWidth == dstWidth)
+        return source;
+      else if (srcWidth < dstWidth)
+        return builder.create<arith::ExtSIOp>(loc, targetType, source);
+      return builder.create<arith::TruncIOp>(loc, targetType, source);
+    }
+
+    /// If none of the above matched => unsupported type
+    llvm::errs() << "Unsupported type for casting to integer: "
+                 << source.getType() << "\n";
+    assert(false && "Unsupported type in castToInt");
+    return nullptr; /// unreachable
+  }
+
+  Value ArtsCodegen::castToVoidPtr(Value source, Location loc) {
+    auto valPtr = source;
+    if (!valPtr.getType().isa<LLVM::LLVMPointerType>()) {
+      valPtr = castToLLVMPtr(source, loc);
+    }
+    /// polygeist - pointer2memref
+    return builder.create<polygeist::Pointer2MemrefOp>(loc, VoidPtr, valPtr);
+  }
+
+  Value ArtsCodegen::castToLLVMPtr(Value source, Location loc) {
+    if (source.getType().isa<LLVM::LLVMPointerType>())
+      return source;
+    /// polygeist - memref2pointer
+    MemRefType MT = source.getType().cast<MemRefType>();
+    return builder.create<polygeist::Memref2PointerOp>(
+        loc,
+        LLVM::LLVMPointerType::get(builder.getContext(),
+                                   MT.getMemorySpaceAsInt()),
+        source);
+  }

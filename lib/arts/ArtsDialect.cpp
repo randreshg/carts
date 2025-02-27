@@ -104,6 +104,29 @@ void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
   odsState.addTypes(subview);
 }
 
+void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                        Type subview, StringRef mode, Value ptr,
+                        Type elementType, Value elementTypeSize,
+                        ValueRange indices, ValueRange sizes, Value event) {
+  if (!event)
+    return build(odsBuilder, odsState, subview, mode, ptr, elementType,
+                 elementTypeSize, indices, sizes);
+  odsState.addOperands(ptr);
+  odsState.addOperands(elementTypeSize);
+  odsState.addOperands(indices);
+  odsState.addOperands(sizes);
+  odsState.addOperands(event);
+  ::llvm::copy(
+      ::llvm::ArrayRef<int32_t>({1, 1, static_cast<int32_t>(indices.size()),
+                                 static_cast<int32_t>(sizes.size()), 1}),
+      odsState.getOrAddProperties<Properties>().operandSegmentSizes.begin());
+  odsState.getOrAddProperties<Properties>().mode =
+      odsBuilder.getStringAttr(mode);
+  odsState.getOrAddProperties<Properties>().elementType =
+      TypeAttr::get(elementType);
+  odsState.addTypes(subview);
+}
+
 ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
   /// Parse the mode attribute.
   StringAttr modeAttr;
@@ -403,7 +426,7 @@ bool EdtOp::isTask() { return getOperation()->hasAttr("task"); }
 void EdtOp::setIsParallelAttr() {
   getOperation()->setAttr("parallel", UnitAttr::get(getContext()));
 }
-void EdtOp::setIsSingleAttr() {
+void EdtOp::setIsSingle() {
   getOperation()->setAttr("single", UnitAttr::get(getContext()));
 }
 void EdtOp::setIsSyncAttr() {
@@ -439,12 +462,12 @@ void DataBlockOp::getEffects(
   }
 }
 
-bool DataBlockOp::isPtrDb() { return getOperation()->hasAttr("isPtrDb"); }
+bool DataBlockOp::hasPtrDb() { return getOperation()->hasAttr("hasPtrDb"); }
 bool DataBlockOp::isSingle() { return getOperation()->hasAttr("single"); }
-void DataBlockOp::setIsPtrDbAttr() {
-  getOperation()->setAttr("isPtrDb", UnitAttr::get(getContext()));
+void DataBlockOp::setHasPtrDb() {
+  getOperation()->setAttr("hasPtrDb", UnitAttr::get(getContext()));
 }
-void DataBlockOp::setIsSingleAttr() {
+void DataBlockOp::setIsSingle() {
   getOperation()->setAttr("single", UnitAttr::get(getContext()));
 }
 
@@ -452,6 +475,6 @@ void DataBlockOp::setIsSingleAttr() {
 // AllocEventOp
 //===----------------------------------------------------------------------===//
 bool AllocEventOp::isSingle() { return getOperation()->hasAttr("single"); }
-void AllocEventOp::setIsSingleAttr() {
+void AllocEventOp::setIsSingle() {
   getOperation()->setAttr("single", UnitAttr::get(getContext()));
 }

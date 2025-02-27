@@ -68,19 +68,22 @@ def DataBlockOp : Arts_Op<"datablock",
     Optional<AnyType>:$event,                  // Event associated with the DB
     OptionalAttr<AffineMapAttr>:$affineMap     // Affine map for offset transformation
   );
-  let results = (outs AnyMemRef:$subview); // Produces a memref.subview
+  let results = (outs AnyMemRef:$subview);     // Produces a memref
   let hasCustomAssemblyFormat = 1;
   
   let builders = [
     OpBuilder<(ins
       "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, "Value":$elementTypeSize,
-      "ValueRange":$indices, "ValueRange":$sizes)>
+      "ValueRange":$indices, "ValueRange":$sizes)>,
+    OpBuilder<(ins
+      "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, "Value":$elementTypeSize,
+      "ValueRange":$indices, "ValueRange":$sizes, "Value":$event)>,
   ];
   let extraClassDeclaration = [{
-    bool isPtrDb();
-    void setIsPtrDbAttr();
+    bool hasPtrDb();
+    void setHasPtrDb();
     bool isSingle();
-    void setIsSingleAttr();
+    void setIsSingle();
   }];
 }
 
@@ -115,7 +118,7 @@ def EdtOp : Arts_Op<"edt",
     bool isSync();
     bool isTask();
     void setIsParallelAttr();
-    void setIsSingleAttr();
+    void setIsSingle();
     void setIsSyncAttr();
     void setIsTaskAttr();
     void clearIsParallelAttr();
@@ -142,7 +145,7 @@ def AllocEventOp : Arts_Op<"alloc_event", []> {
   }];
   let extraClassDeclaration = [{
     bool isSingle();
-    void setIsSingleAttr();
+    void setIsSingle();
   }];
 }
 

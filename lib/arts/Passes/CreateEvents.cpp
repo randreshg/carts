@@ -121,7 +121,7 @@ void CreateEventsPass::runOnOperation() {
 
       /// For loop-dependent datablocks with a DB pointer, attempt to reuse an
       /// existing event from any alias.
-      // if (producer.isLoopDependent && producer.isPtrDb) {
+      // if (producer.isLoopDependent && producer.hasPtrDb) {
       //   int32_t eventId = -1;
       //   for (auto alias : producer.aliases) {
       //     auto &aliasNode = graph.nodes[alias];
@@ -213,7 +213,7 @@ void CreateEventsPass::processGroupedEvent(OpBuilder &builder, Event &event,
   /// Create an event type based on the parent's operation type and a 64-bit
   /// integer.
   arts::AllocEventOp eventOp = nullptr;
-  if (producerNode.isPtrDb) {
+  if (producerNode.hasPtrDb) {
     auto &dbParentOp = producerNode.parent->op;
     auto eventType = MemRefType::get(dbParentOp.getType().getShape(),
                                      builder.getIntegerType(64));
@@ -247,7 +247,7 @@ void CreateEventsPass::processNonGroupedEvent(OpBuilder &builder, Event &event,
                               builder.getIntegerType(64));
   auto eventOp =
       builder.create<arts::AllocEventOp>(loc, type, producerNode.op.getSizes());
-  eventOp.setIsSingleAttr();
+  eventOp.setIsSingle();
   insertEventToDb(builder, producerNode.op, eventOp.getResult());
 }
 
