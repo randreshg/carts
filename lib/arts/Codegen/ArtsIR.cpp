@@ -16,7 +16,7 @@ EdtOp createEdtOp(OpBuilder &builder, Location loc, types::EdtType type,
   if (type == types::EdtType::Parallel)
     edtOp.setIsParallelAttr();
   else if (type == types::EdtType::Single)
-    edtOp.setIsSingleAttr();
+    edtOp.setIsSingle();
   else if (type == types::EdtType::Sync)
     edtOp.setIsSyncAttr();
   else if (type == types::EdtType::Task)

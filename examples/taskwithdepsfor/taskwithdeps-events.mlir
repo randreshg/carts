@@ -24,7 +24,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
         %9 = arith.sitofp %3 : i32 to f64
         scf.for %arg0 = %c0 to %c100 step %c1 {
           %10 = arith.index_cast %arg0 : index to i32
-          %11 = arts.datablock "out", %1 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {isPtrDb, isLoad}
+          %11 = arts.datablock "out", %1 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {hasPtrDb, isLoad}
           %12 = memref.load %8[%arg0] : memref<100xi64>
           arts.edt dependencies(%11) : (memref<1xf64>), events(%12) : (i64) {
             %19 = arith.sitofp %10 : i32 to f64
@@ -32,11 +32,11 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
             memref.store %20, %11[%c0] : memref<1xf64>
             arts.yield
           }
-          %13 = arts.datablock "in", %1 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {isPtrDb, isLoad}
+          %13 = arts.datablock "in", %1 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {hasPtrDb, isLoad}
           %14 = arith.addi %10, %c-1_i32 : i32
           %15 = arith.index_cast %14 : i32 to index
-          %16 = arts.datablock "in", %1 : memref<100xf64>[%15] [%c1] [f64, %c8] -> memref<1xf64> {isPtrDb, isLoad}
-          %17 = arts.datablock "out", %0 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {isPtrDb, isLoad}
+          %16 = arts.datablock "in", %1 : memref<100xf64>[%15] [%c1] [f64, %c8] -> memref<1xf64> {hasPtrDb, isLoad}
+          %17 = arts.datablock "out", %0 : memref<100xf64>[%arg0] [%c1] [f64, %c8] -> memref<1xf64> {hasPtrDb, isLoad}
           %18 = memref.load %8[%15] : memref<100xi64>
           arts.edt dependencies(%16, %17, %13) : (memref<1xf64>, memref<1xf64>, memref<1xf64>), events(%18, %c-1_i32, %12) : (i64, i32, i64) {
             %19 = memref.load %13[%c0] : memref<1xf64>

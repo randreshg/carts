@@ -294,17 +294,17 @@ void DatablockAnalysis::collectNodes(Region &region, Graph &graph) {
     if (auto affineMap = dbOp.getAffineMap())
       node.affineMap = *affineMap;
 
-    /// Add 'isPtrDb' attribute if the base is a datablock.
+    /// Add 'hasPtrDb' attribute if the base is a datablock.
     if (auto parentDb =
             dyn_cast_or_null<arts::DataBlockOp>(node.ptr.getDefiningOp())) {
-      dbOp.setIsPtrDbAttr();
-      node.isPtrDb = true;
+      dbOp.setHasPtrDb();
+      node.hasPtrDb = true;
       /// Collect memory effects from the parent datablock.
       node.parent = &nodeMap[parentDb];
       for (auto &e : node.parent->effects)
         node.effects.push_back(e);
     } else {
-      node.isPtrDb = false;
+      node.hasPtrDb = false;
       /// Collect memory effects.
       if (auto memEff = dyn_cast<MemoryEffectOpInterface>(dbOp.getOperation()))
         memEff.getEffects(node.effects);
@@ -315,7 +315,7 @@ void DatablockAnalysis::collectNodes(Region &region, Graph &graph) {
     if (node.sizes.size() == 1) {
       if (auto cstOp = node.sizes[0].getDefiningOp<arith::ConstantIndexOp>()) {
         if (cstOp.value() == 1) {
-          dbOp.setIsSingleAttr();
+          dbOp.setIsSingle();
           node.isSingle = true;
         }
       }
@@ -406,7 +406,7 @@ void DatablockAnalysis::printGraph(Graph &graph) {
     // os << "    ptr=" << n.ptr << "\n";
     os << "    isLoopDependent=" << (n.isLoopDependent ? "true" : "false");
     os << " useCount=" << n.useCount;
-    os << " isPtrDb=" << (n.isPtrDb ? "true" : "false");
+    os << " hasPtrDb=" << (n.hasPtrDb ? "true" : "false");
     os << " userEdtPos=" << n.userEdtPos << "\n";
   }
   os << "Edges:\n";

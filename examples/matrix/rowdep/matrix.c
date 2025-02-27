@@ -61,6 +61,7 @@ int main() {
     {
       // Compute each row of matrix A in a separate task.
       for (int i = 0; i < N; i++) {
+        /// Load events for out dependencies
         #pragma omp task firstprivate(i, test) depend(out: A[i])
         {
           for (int j = 0; j < N; j++) {
@@ -70,6 +71,7 @@ int main() {
       }
 
       // Compute row 0 of B using the entire row A[0].
+      /// Load events for out dependencies
       #pragma omp task depend(in: A[0]) depend(out: B[0])
       {
         for (int j = 0; j < N; j++) {
@@ -77,9 +79,12 @@ int main() {
         }
       }
 
+      
+
       // Compute rows 1..N-1 of B.
       // Each B row i depends on both A row i and A row i-1.
       for (int i = 1; i < N; i++) {
+        /// Load events for out dependencies
         #pragma omp task firstprivate(i) depend(in: A[i], A[i-1]) depend(out: B[i])
         {
           for (int j = 0; j < N; j++) {

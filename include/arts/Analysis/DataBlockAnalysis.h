@@ -69,7 +69,7 @@ public:
     uint64_t elementTypeSize;
     MemRefType resultType;
     AffineMap affineMap;
-    bool isPtrDb, isSingle;
+    bool hasPtrDb, isSingle;
 
     /// Analysis results
     bool isLoopDependent = false;

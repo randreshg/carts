@@ -37,73 +37,58 @@ public:
   DataBlockCodegen(ArtsCodegen &AC, arts::DataBlockOp dbOp, Location loc);
 
   /// Getters
-  bool isBaseDb() { return isPtrDb; }
-  bool isSingleDb() { return isSingle; }
+  Value getOp() { return dbOp; }
+  Value getEdtSlot() { return edtSlot; }
+  Value getGuid() { return guid; }
+  StringRef getMode() { return dbOp.getMode(); }
+  Value getEvent() { return dbOp.getEvent(); }
+  bool hasPtrDb() { return dbOp.hasPtrDb(); }
+  bool isSingle() { return dbOp.isSingle(); }
   ValueRange getIndices() { return dbOp.getIndices(); }
   ValueRange getSizes() { return dbOp.getSizes(); }
-  Value getOp() { return dbOp; }
+
+  /// Setters
+  void setEdtSlot(Value edtSlot) { this->edtSlot = edtSlot; }
 
   /// Interface
   void create(arts::DataBlockOp dbOp, Location loc);
+  bool isOutMode() {
+    StringRef mode = dbOp.getMode();
+    return mode == "out" || mode == "inout";
+  }
 
 private:
   ArtsCodegen &AC;
   OpBuilder &builder;
   DataBlockOp dbOp = nullptr;
+  Value edtSlot = nullptr;
+
   /// DataBlock info
   Value guid = nullptr;
   Value ptr = nullptr;
-  /// Op info
-  Value opPtr = nullptr;
-  Type elementType = nullptr;
-  Value elementTypeSize = nullptr;
-  bool isPtrDb = false;
-  bool isSingle = false;
 
   /// Utils
   Value createGuid(Value node, Value mode, Location loc);
   Value getMode(StringRef mode);
 };
 
-// ---------------------------- Events ---------------------------- ///
-// class EventCodegen {
-// public:
-//   EventCodegen(ArtsCodegen &AC);
-//   EventCodegen(ArtsCodegen &AC, arts::EventOp eventOp, Location loc);
-
-//   /// Getters
-//   Value getGuid() { return guid; }
-
-//   /// Interface
-//   void create(arts::EventOp eventOp, Location loc);
-
-// private:
-//   ArtsCodegen &AC;
-//   OpBuilder &builder;
-//   Value guid = nullptr;
-//   SmallVector<Value> indices;
-//   bool isSingle = false;
-// };
-
 // ---------------------------- EDTs ---------------------------- ///
 class EdtCodegen {
 public:
   EdtCodegen(ArtsCodegen &AC, SmallVector<Value> *opDeps = nullptr,
              Region *region = nullptr, Value *epoch = nullptr,
-             Location *loc = nullptr, bool build = false);
+             Location *loc = nullptr);
   void build(Location loc);
 
   /// Getters
   func::FuncOp getFunc() { return func; }
   Value getGuid() { return guid; }
-  Value getSlot() { return slot; }
   Value getNode() { return node; }
   SmallVector<Value> &getParams() { return params; }
 
   /// Setters
   void setFunc(func::FuncOp func) { this->func = func; }
   void setGuid(Value guid) { this->guid = guid; }
-  void setSlot(Value slot) { this->slot = slot; }
   void setNode(Value node) { this->node = node; }
   void setParams(SmallVector<Value> params) { this->params = params; }
   void setDeps(SmallVector<Value> deps) { this->deps = deps; }
@@ -124,13 +109,14 @@ private:
   Value *epoch = nullptr;
   func::FuncOp func = nullptr;
   Value guid = nullptr;
-  Value slot = nullptr;
   Value node = nullptr;
   Value paramC = nullptr;
   Value paramV = nullptr;
   Value depC = nullptr;
   SmallVector<Value> deps, params, consts;
   DenseMap<Value, Value> rewireMap;
+  /// Dependencies info
+  SmallVector<DataBlockCodegen *> depsToSatisfy, depsToRecord, depsToSignal;
 
   /// Entry info
   struct DatablockEntry {
@@ -143,9 +129,11 @@ private:
 
   /// Utils
   void process(Location loc);
+  void processDependencies(Location loc);
+  void outlineRegion(Location loc);
   Value createGuid(Value node, Location loc);
   func::FuncOp createFn(Location loc);
-  void createEntry(Location loc);
+  void createFnEntry(Location loc);
 
   /// Static
   static unsigned edtCounter;
@@ -181,14 +169,12 @@ public:
 
   /// Events
   Value allocEvent(arts::AllocEventOp allocEventOp, Location loc);
-  // EventCodegen *getEvent(arts::EventOp eventOp);
-  // EventCodegen *getOrCreateEvent(arts::EventOp eventOp, Location loc);
 
   /// Edts
   EdtCodegen *getEdt(Region *region);
   EdtCodegen *createEdt(SmallVector<Value> *opDeps = nullptr,
                         Region *region = nullptr, Value *epoch = nullptr,
-                        Location *loc = nullptr, bool build = false);
+                        Location *loc = nullptr);
 
   /// Epoch
   Value createEpoch(Value finishEdtGuid, Value finishEdtSlot, Location loc);
@@ -202,6 +188,8 @@ public:
   Value getCurrentEdtGuid(Location loc);
   Value getCurrentNode(Location loc);
   void satisfyDep(Value eventGuid, Value depGuid, Location loc);
+  void addDep(Value eventGuid, Value edtGuid, Value edtSlot, Location loc);
+  void signalEdt(Value edtGuid, Value edtSlot, Value dbGuid, Location loc);
 
   /// Helpers
   Value createFnPtr(func::FuncOp funcOp, Location loc);

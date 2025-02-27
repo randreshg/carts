@@ -5,10 +5,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-// #include "mlir/Conversion/ARTSToFuncs/ARTSToFuncs.h"
-
-// #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-
 /// Dialects
 #include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -106,8 +102,7 @@ void ConvertArtsToFuncsPass::handleSync(EdtOp &op) {
 
     /// Create the parallel EDT with the single op's region.
     auto par_dependencies = op.getDependenciesVector();
-    newEdt = AC->createEdt(&par_dependencies, &region, &parEpoch_guid, nullptr,
-                           true);
+    newEdt = AC->createEdt(&par_dependencies, &region, &parEpoch_guid, nullptr);
   }
 
   /// Erase the old parallel op.
@@ -137,7 +132,7 @@ void ConvertArtsToFuncsPass::handleEdt(EdtOp &op) {
     auto epoch = AC->getCurrentEpochGuid(loc);
     auto dependencies = op.getDependenciesVector();
     auto &region = op.getRegion();
-    newEdt = AC->createEdt(&dependencies, &region, &epoch, nullptr, true);
+    newEdt = AC->createEdt(&dependencies, &region, &epoch, nullptr);
   }
 
   /// Erase the old edt
@@ -165,7 +160,7 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
                          : MemRefType::get({ShapedType::kDynamic}, AC->VoidPtr);
   auto newDbOp = builder.create<arts::DataBlockOp>(
       op->getLoc(), pointerType, op.getMode(), op.getPtr(), op.getElementType(),
-      op.getElementTypeSize(), op.getIndices(), sizes);
+      op.getElementTypeSize(), op.getIndices(), sizes, op.getEvent());
   newDbOp->setAttrs(op->getAttrs());
 
   /// Helper lambda to check if the indices represent a single constant zero.
