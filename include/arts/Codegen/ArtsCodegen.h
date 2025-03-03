@@ -77,7 +77,7 @@ class EdtCodegen {
 public:
   EdtCodegen(ArtsCodegen &AC, SmallVector<Value> *opDeps = nullptr,
              Region *region = nullptr, Value *epoch = nullptr,
-             Location *loc = nullptr);
+             Location *loc = nullptr, bool buildEdt = false);
   void build(Location loc);
 
   /// Getters
@@ -115,17 +115,23 @@ private:
   Value depC = nullptr;
   SmallVector<Value> deps, params, consts;
   DenseMap<Value, Value> rewireMap;
+  func::ReturnOp returnOp = nullptr;
+  bool built = false;
   /// Dependencies info
   SmallVector<DataBlockCodegen *> depsToSatisfy, depsToRecord, depsToSignal;
 
   /// Entry info
   struct DatablockEntry {
     Value guid, ptr;
+    SmallVector<Value> sizes;
     DenseMap<unsigned, unsigned> sizeIndex;
   };
   DenseMap<arts::DataBlockCodegen *, DatablockEntry> entryDbs;
   /// Entry events
   DenseMap<Value, unsigned> entryEvents;
+  /// Entry Function arguments
+  Value fnParamV = nullptr;
+  Value fnDepV = nullptr;
 
   /// Utils
   void process(Location loc);
@@ -138,6 +144,25 @@ private:
   /// Static
   static unsigned edtCounter;
   static unsigned increaseEdtCounter() { return ++EdtCodegen::edtCounter; }
+};
+
+// ---------------------------- Events ---------------------------- ///
+class EventCodegen {
+public:
+  EventCodegen(ArtsCodegen &AC, arts::EventOp eventOp, Location loc);
+
+  /// Getters
+  Value getGuid() { return guid; }
+  ValueRange getSizes() { return eventOp.getSizes(); }
+
+  /// Interface
+  void create(arts::EventOp eventOp, Location loc);
+
+private:
+  ArtsCodegen &AC;
+  OpBuilder &builder;
+  EventOp eventOp = nullptr;
+  Value guid = nullptr;
 };
 
 // ---------------------------- ARTS Codegen ---------------------------- ///
@@ -168,13 +193,15 @@ public:
   DataBlockCodegen *getOrCreateDatablock(arts::DataBlockOp dbOp, Location loc);
 
   /// Events
-  Value allocEvent(arts::AllocEventOp allocEventOp, Location loc);
+  // Value allocEvent(arts::EventOp allocEventOp, Location loc);
+  EventCodegen *getEvent(arts::EventOp eventOp);
+  EventCodegen *getOrCreateEvent(arts::EventOp eventOp, Location loc);
 
   /// Edts
   EdtCodegen *getEdt(Region *region);
   EdtCodegen *createEdt(SmallVector<Value> *opDeps = nullptr,
                         Region *region = nullptr, Value *epoch = nullptr,
-                        Location *loc = nullptr);
+                        Location *loc = nullptr, bool build = true);
 
   /// Epoch
   Value createEpoch(Value finishEdtGuid, Value finishEdtSlot, Location loc);
@@ -213,10 +240,10 @@ public:
   }
 
   // ---------------------------- Types ---------------------------- ///
-  /// Declarations for LLVM-IR types (simple, array, function and structure) are
-  /// generated below. Their names are defined and used in ARTSKinds.def. Here
-  /// we provide the declarations, the initializeTypes function will provide the
-  /// values.
+  /// Declarations for LLVM-IR types (simple, array, function and structure)
+  /// are generated below. Their names are defined and used in ARTSKinds.def.
+  /// Here we provide the declarations, the initializeTypes function will
+  /// provide the values.
   ///
   ///{
 #define ARTS_TYPE(VarName, InitValue) mlir::Type VarName = nullptr;
@@ -242,8 +269,8 @@ private:
   unsigned edtCounter = 0;
   /// Map a arts::DataBlockOp to a DataBlockCodegen
   llvm::DenseMap<Value, DataBlockCodegen *> datablocks;
-  /// Map an arts::AllocEventOp to a EventCodegen
-  // llvm::DenseMap<Value, EventCodegen *> events;
+  /// Map an arts::EventOp to a EventCodegen
+  llvm::DenseMap<Value, EventCodegen *> events;
   /// Map an arts region to a EdtCodegen
   llvm::DenseMap<Region *, EdtCodegen *> edts;
 };

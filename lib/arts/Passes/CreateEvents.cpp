@@ -212,17 +212,17 @@ void CreateEventsPass::processGroupedEvent(OpBuilder &builder, Event &event,
 
   /// Create an event type based on the parent's operation type and a 64-bit
   /// integer.
-  arts::AllocEventOp eventOp = nullptr;
+  arts::EventOp eventOp = nullptr;
   if (producerNode.hasPtrDb) {
     auto &dbParentOp = producerNode.parent->op;
     auto eventType = MemRefType::get(dbParentOp.getType().getShape(),
                                      builder.getIntegerType(64));
-    eventOp = builder.create<arts::AllocEventOp>(loc, eventType,
+    eventOp = builder.create<arts::EventOp>(loc, eventType,
                                                  dbParentOp.getSizes());
   } else {
     auto eventType = MemRefType::get(producerNode.op.getType().getShape(),
                                      builder.getIntegerType(64));
-    eventOp = builder.create<arts::AllocEventOp>(loc, eventType,
+    eventOp = builder.create<arts::EventOp>(loc, eventType,
                                                  producerNode.op.getSizes());
   }
 
@@ -246,7 +246,7 @@ void CreateEventsPass::processNonGroupedEvent(OpBuilder &builder, Event &event,
   auto type = MemRefType::get(producerNode.op.getType().getShape(),
                               builder.getIntegerType(64));
   auto eventOp =
-      builder.create<arts::AllocEventOp>(loc, type, producerNode.op.getSizes());
+      builder.create<arts::EventOp>(loc, type, producerNode.op.getSizes());
   eventOp.setIsSingle();
   insertEventToDb(builder, producerNode.op, eventOp.getResult());
 }

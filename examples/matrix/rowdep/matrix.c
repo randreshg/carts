@@ -18,12 +18,12 @@
 // Convert OpenMP to ARTS
 /// carts-opt matrix.mlir --lower-affine  &> matrix-arts.mlir
 /// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --datablock --cse --canonicalize &> matrix-arts.mlir
-/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events,convert-arts-to-funcs,arts-codegen &> matrix-arts.mlir
+/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events,convert-arts-to-llvm,arts-codegen &> matrix-arts.mlir
 
 /// Datablock pass
-/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --cse --canonicalize -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events,convert-arts-to-funcs,arts-codegen &> matrix-arts.mlir
+/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --cse --canonicalize -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events,convert-arts-to-llvm,arts-codegen &> matrix-arts.mlir
 
-/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-funcs --cse --canonicalize -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events,convert-arts-to-funcs,arts-codegen &> matrix-arts.mlir
+/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events,convert-arts-to-llvm,arts-codegen &> matrix-arts.mlir
 
 // Try to raise to affine
 /// carts-opt matrix-datablock.mlir --raise-scf-to-affine --affine-cfg --affine-scalrep &> matrix-affine.mlir
@@ -38,7 +38,7 @@
 /// carts-opt matrix-arts.mlir --create-events --cse -debug-only=datablock-analysis,create-events &> matrix-events.mlir
 
 /// Convert ARTS to Funcs
-/// carts-opt matrix-events.mlir --convert-arts-to-funcs --cse --canonicalize -debug-only=convert-arts-to-funcs,arts-codegen,edt-analysis &> matrix-func.mlir
+/// carts-opt matrix-events.mlir --convert-arts-to-llvm --cse --canonicalize -debug-only=convert-arts-to-llvm,arts-codegen,edt-analysis &> matrix-func.mlir
 
 /// Optimize
 /// polygeist-opt outputaffine.mlir --cse --affine-cfg --affine-scalrep --polygeist-mem2reg &> optimized.mlir
