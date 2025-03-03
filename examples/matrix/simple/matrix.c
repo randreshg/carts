@@ -24,7 +24,7 @@
 /// carts-opt taskwithdeps-arts.mlir --create-events --cse -debug-only=datablock-analysis,create-events &> taskwithdeps-events.mlir
 
 /// Convert ARTS to Funcs
-/// carts-opt taskwithdeps-events.mlir --convert-arts-to-funcs --cse --canonicalize -debug-only=convert-arts-to-funcs,arts-codegen,edt-analysis &> taskwithdeps-func.mlir
+/// carts-opt taskwithdeps-events.mlir --convert-arts-to-llvm --cse --canonicalize -debug-only=convert-arts-to-llvm,arts-codegen,edt-analysis &> taskwithdeps-func.mlir
 
 /// Optimize
 /// polygeist-opt outputaffine.mlir --cse --affine-cfg --affine-scalrep --polygeist-mem2reg &> optimized.mlir

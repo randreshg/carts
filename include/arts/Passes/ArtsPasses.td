@@ -71,8 +71,8 @@ def CreateEvents : Pass<"create-events", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createCreateEventsPass()";
 }
 
-def ConvertArtsToFuncs : Pass<"convert-arts-to-funcs", "mlir::ModuleOp"> {
-  let summary = "Convert ARTS functions to Funcs";
+def ConvertArtsToLLVM : Pass<"convert-arts-to-llvm", "mlir::ModuleOp"> {
+  let summary = "Convert ARTS Dialec to LLVM Dialect";
   let dependentDialects = [
     "memref::MemRefDialect",
     "LLVM::LLVMDialect",
@@ -82,6 +82,6 @@ def ConvertArtsToFuncs : Pass<"convert-arts-to-funcs", "mlir::ModuleOp"> {
     "affine::AffineDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createConvertArtsToFuncsPass()";
+  let constructor = "mlir::arts::createConvertArtsToLLVMPass()";
 }
 #endif // CARTS_PASSES

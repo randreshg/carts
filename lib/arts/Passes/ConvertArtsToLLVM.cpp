@@ -1,4 +1,4 @@
-//===- ConvertArtsToFuncs.cpp - Convert ARTS Dialect to Func Dialect ------===//
+//===- ConvertArtsToLLVM.cpp - Convert ARTS Dialect to Func Dialect ------===//
 //
 // This file implements a pass to convert ARTS dialect operations into
 // `func` dialect operations.
@@ -43,7 +43,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
-#define DEBUG_TYPE "convert-arts-to-funcs"
+#define DEBUG_TYPE "convert-arts-to-llvm"
 #define line "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
@@ -55,8 +55,8 @@ using namespace arts;
 // Pass Implementation
 //===----------------------------------------------------------------------===//
 namespace {
-struct ConvertArtsToFuncsPass
-    : public arts::ConvertArtsToFuncsBase<ConvertArtsToFuncsPass> {
+struct ConvertArtsToLLVMPass
+    : public arts::ConvertArtsToLLVMBase<ConvertArtsToLLVMPass> {
   void runOnOperation() override;
 
   void iterateOps(Operation *op);
@@ -64,7 +64,7 @@ struct ConvertArtsToFuncsPass
   void handleSingle(EdtOp &op);
   void handleSync(EdtOp &op);
   void handleEdt(EdtOp &op);
-  void handleAllocEvent(AllocEventOp &op);
+  void handleEvent(EventOp &op);
   void handleDatablock(DataBlockOp &op);
 
 private:
@@ -73,12 +73,12 @@ private:
 };
 } // end namespace
 
-void ConvertArtsToFuncsPass::handleParallel(EdtOp &op) {
+void ConvertArtsToLLVMPass::handleParallel(EdtOp &op) {
   /// Set insertion point to the current op for epoch creation.
   llvm_unreachable("Parallel EDTs not supported yet");
 }
 
-void ConvertArtsToFuncsPass::handleSync(EdtOp &op) {
+void ConvertArtsToLLVMPass::handleSync(EdtOp &op) {
   LLVM_DEBUG(DBGS() << "Lowering arts.edt sync\n" << line);
   auto *ctx = op.getContext();
   Location loc = UnknownLoc::get(ctx);
@@ -94,15 +94,18 @@ void ConvertArtsToFuncsPass::handleSync(EdtOp &op) {
     EdtCodegen syncDoneEdt(*AC);
     syncDoneEdt.setDepC(AC->createIntConstant(1, AC->Int32, loc));
     syncDoneEdt.build(loc);
+    LLVM_DEBUG(DBGS() << "Sync done EDT created\n");
 
     /// Create the parallel epoch.
     auto parDone_slot = AC->createIntConstant(0, AC->Int32, loc);
     auto parEpoch_guid =
         AC->createEpoch(syncDoneEdt.getGuid(), parDone_slot, loc);
+    LLVM_DEBUG(DBGS() << "Parallel epoch created\n");
 
     /// Create the parallel EDT with the single op's region.
     auto par_dependencies = op.getDependenciesVector();
     newEdt = AC->createEdt(&par_dependencies, &region, &parEpoch_guid, nullptr);
+    LLVM_DEBUG(DBGS() << "Parallel EDT created\n");
   }
 
   /// Erase the old parallel op.
@@ -114,12 +117,12 @@ void ConvertArtsToFuncsPass::handleSync(EdtOp &op) {
   iterateOps(newEdt->getFunc());
 }
 
-void ConvertArtsToFuncsPass::handleSingle(EdtOp &op) {
+void ConvertArtsToLLVMPass::handleSingle(EdtOp &op) {
   LLVM_DEBUG(DBGS() << "Lowering arts.edt single\n");
   llvm_unreachable("Single EDTs not supported yet");
 }
 
-void ConvertArtsToFuncsPass::handleEdt(EdtOp &op) {
+void ConvertArtsToLLVMPass::handleEdt(EdtOp &op) {
   auto *ctx = op.getContext();
   Location loc = UnknownLoc::get(ctx);
   LLVM_DEBUG(DBGS() << "Lowering arts.edt\n");
@@ -143,7 +146,7 @@ void ConvertArtsToFuncsPass::handleEdt(EdtOp &op) {
   iterateOps(newEdt->getFunc());
 }
 
-void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
+void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
   LLVM_DEBUG(DBGS() << "Lowering arts.datablock\n");
   AC->setInsertionPoint(op);
   auto &builder = AC->getBuilder();
@@ -260,14 +263,13 @@ void ConvertArtsToFuncsPass::handleDatablock(DataBlockOp &op) {
   opsToRemove.insert(newDbOp);
 }
 
-void ConvertArtsToFuncsPass::handleAllocEvent(AllocEventOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.alloc_event\n");
-  auto eventGuid = AC->allocEvent(op, op->getLoc());
-  op.getResult().replaceAllUsesWith(eventGuid);
+void ConvertArtsToLLVMPass::handleEvent(EventOp &op) {
+  LLVM_DEBUG(DBGS() << "Lowering arts.event\n");
+  AC->getOrCreateEvent(op, op->getLoc());
   opsToRemove.insert(op);
 }
 
-void ConvertArtsToFuncsPass::iterateOps(Operation *operation) {
+void ConvertArtsToLLVMPass::iterateOps(Operation *operation) {
   operation->walk<mlir::WalkOrder::PreOrder>(
       [&](Operation *op) -> mlir::WalkResult {
         /// Skip operations marked for removal.
@@ -287,18 +289,18 @@ void ConvertArtsToFuncsPass::iterateOps(Operation *operation) {
           else
             handleEdt(edtOp);
           return mlir::WalkResult::advance();
-        } else if (auto allocEventOp = dyn_cast<arts::AllocEventOp>(op)) {
-          handleAllocEvent(allocEventOp);
+        } else if (auto allocEventOp = dyn_cast<arts::EventOp>(op)) {
+          handleEvent(allocEventOp);
           return mlir::WalkResult::advance();
         }
         return mlir::WalkResult::advance();
       });
 }
 
-void ConvertArtsToFuncsPass::runOnOperation() {
+void ConvertArtsToLLVMPass::runOnOperation() {
   ModuleOp module = getOperation();
   LLVM_DEBUG({
-    dbgs() << line << "ConvertArtsToFuncsPass START\n" << line;
+    dbgs() << line << "ConvertArtsToLLVMPass START\n" << line;
     module.dump();
   });
 
@@ -362,7 +364,7 @@ void ConvertArtsToFuncsPass::runOnOperation() {
   //                        LLVM::LLVMDialect>();
   // target.addLegalOp<ModuleOp>();
 
-  LLVM_DEBUG(dbgs() << line << "ConvertArtsToFuncsPass FINISHED \n" << line);
+  LLVM_DEBUG(dbgs() << line << "ConvertArtsToLLVMPass FINISHED \n" << line);
   module.dump();
   delete AC;
 }
@@ -371,8 +373,8 @@ void ConvertArtsToFuncsPass::runOnOperation() {
 //===----------------------------------------------------------------------===//
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createConvertArtsToFuncsPass() {
-  return std::make_unique<ConvertArtsToFuncsPass>();
+std::unique_ptr<Pass> createConvertArtsToLLVMPass() {
+  return std::make_unique<ConvertArtsToLLVMPass>();
 }
 } // namespace arts
 } // namespace mlir

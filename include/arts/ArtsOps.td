@@ -129,9 +129,9 @@ def EdtOp : Arts_Op<"edt",
 }
 
 //===----------------------------------------------------------------------===//
-// arts.alloc_event
+// arts.event
 //===----------------------------------------------------------------------===//
-def AllocEventOp : Arts_Op<"alloc_event", []> {
+def EventOp : Arts_Op<"event", []> {
   let summary = "Create an event or array of events in ARTS";
   let description = [{
     The `arts.event` operation creates an event (or array of events) that can be

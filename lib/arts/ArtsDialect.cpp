@@ -51,7 +51,7 @@ void ArtsDialect::initialize() {
 
 bool isArtsRegion(Operation *op) { return isa<EdtOp>(op) || isa<EpochOp>(op); }
 bool isArtsOp(Operation *op) {
-  return isArtsRegion(op) || isa<DataBlockOp>(op) || isa<AllocEventOp>(op);
+  return isArtsRegion(op) || isa<DataBlockOp>(op) || isa<EventOp>(op);
 }
 
 //===----------------------------------------------------------------------===//
@@ -472,9 +472,9 @@ void DataBlockOp::setIsSingle() {
 }
 
 //===----------------------------------------------------------------------===//
-// AllocEventOp
+// EventOp
 //===----------------------------------------------------------------------===//
-bool AllocEventOp::isSingle() { return getOperation()->hasAttr("single"); }
-void AllocEventOp::setIsSingle() {
+bool EventOp::isSingle() { return getOperation()->hasAttr("single"); }
+void EventOp::setIsSingle() {
   getOperation()->setAttr("single", UnitAttr::get(getContext()));
 }

@@ -1,33 +1,33 @@
---- ConvertArtsToFuncsPass START ---
-[convert-arts-to-funcs] Iterate over all the functions
-[convert-arts-to-funcs] Lowering arts.datablock
-[convert-arts-to-funcs] Lowering arts.datablock
-[convert-arts-to-funcs] Lowering arts.edt parallel
+--- ConvertArtsToLLVMPass START ---
+[convert-arts-to-llvm] Iterate over all the functions
+[convert-arts-to-llvm] Lowering arts.datablock
+[convert-arts-to-llvm] Lowering arts.datablock
+[convert-arts-to-llvm] Lowering arts.edt parallel
 -----------------------------------------
 -----------------------------------------
 [arts-codegen] Rewiring array datablock: %15 = "arts.datablock"(%8, %1, %3, %2) <{elementType = f64, mode = "inout", operandSegmentSizes = array<i32: 1, 1, 1, 1>}> : (memref<100xf64>, index, index, index) -> memref<?xmemref<?xi8>>
 [arts-codegen] Rewiring array datablock: %24 = "arts.datablock"(%17, %1, %3, %2) <{elementType = f64, mode = "inout", operandSegmentSizes = array<i32: 1, 1, 1, 1>}> : (memref<100xf64>, index, index, index) -> memref<?xmemref<?xi8>>
-[convert-arts-to-funcs] Parallel op lowered
+[convert-arts-to-llvm] Parallel op lowered
 
-[convert-arts-to-funcs] Skipping arts.event: %2 = arts.event[%c100] -> : memref<100xi64>
-[convert-arts-to-funcs] Lowering arts.datablock
+[convert-arts-to-llvm] Skipping arts.event: %2 = arts.event[%c100] -> : memref<100xi64>
+[convert-arts-to-llvm] Lowering arts.datablock
 [arts-codegen] Base is a datablock: %5 = arts.datablock "out", %alloca_10 : memref<?xmemref<?xi8>>[%arg4] [%c1] [f64, %c8] -> memref<?xi8> {hasPtrDb, isLoad}
-[convert-arts-to-funcs] Lowering arts.edt
+[convert-arts-to-llvm] Lowering arts.edt
 -----------------------------------------
 [arts-codegen] Rewiring single datablock: %26 = "arts.datablock"(%20, %1, %arg4, %2) <{elementType = f64, mode = "out", operandSegmentSizes = array<i32: 1, 1, 1, 1>}> {hasPtrDb, isLoad} : (memref<?xmemref<?xi8>>, index, index, index) -> memref<?xi8>
-[convert-arts-to-funcs] Lowering arts.datablock
+[convert-arts-to-llvm] Lowering arts.datablock
 [arts-codegen] Base is a datablock: %45 = "arts.datablock"(%20, %1, %arg4, %2) <{elementType = f64, mode = "in", operandSegmentSizes = array<i32: 1, 1, 1, 1>}> {hasPtrDb, isLoad} : (memref<?xmemref<?xi8>>, index, index, index) -> memref<?xi8>
-[convert-arts-to-funcs] Lowering arts.datablock
+[convert-arts-to-llvm] Lowering arts.datablock
 [arts-codegen] Base is a datablock: %49 = "arts.datablock"(%20, %1, %48, %2) <{elementType = f64, mode = "in", operandSegmentSizes = array<i32: 1, 1, 1, 1>}> {hasPtrDb, isLoad} : (memref<?xmemref<?xi8>>, index, index, index) -> memref<?xi8>
-[convert-arts-to-funcs] Lowering arts.datablock
+[convert-arts-to-llvm] Lowering arts.datablock
 [arts-codegen] Base is a datablock: %51 = "arts.datablock"(%15, %1, %arg4, %2) <{elementType = f64, mode = "out", operandSegmentSizes = array<i32: 1, 1, 1, 1>}> {hasPtrDb, isLoad} : (memref<?xmemref<?xi8>>, index, index, index) -> memref<?xi8>
-[convert-arts-to-funcs] Lowering arts.edt
+[convert-arts-to-llvm] Lowering arts.edt
 -----------------------------------------
 [arts-codegen] Rewiring single datablock: %49 = "arts.datablock"(%20, %1, %48, %2) <{elementType = f64, mode = "in", operandSegmentSizes = array<i32: 1, 1, 1, 1>}> {hasPtrDb, isLoad} : (memref<?xmemref<?xi8>>, index, index, index) -> memref<?xi8>
 [arts-codegen] Rewiring single datablock: %51 = "arts.datablock"(%15, %1, %arg4, %2) <{elementType = f64, mode = "out", operandSegmentSizes = array<i32: 1, 1, 1, 1>}> {hasPtrDb, isLoad} : (memref<?xmemref<?xi8>>, index, index, index) -> memref<?xi8>
 [arts-codegen] Rewiring single datablock: %45 = "arts.datablock"(%20, %1, %arg4, %2) <{elementType = f64, mode = "in", operandSegmentSizes = array<i32: 1, 1, 1, 1>}> {hasPtrDb, isLoad} : (memref<?xmemref<?xi8>>, index, index, index) -> memref<?xi8>
-[convert-arts-to-funcs] Skipping arts.event: %23 = "arts.event"(%0) : (index) -> memref<100xi64>
-=== ConvertArtsToFuncsPass COMPLETE ===
+[convert-arts-to-llvm] Skipping arts.event: %23 = "arts.event"(%0) : (index) -> memref<100xi64>
+=== ConvertArtsToLLVMPass COMPLETE ===
 module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
   func.func private @artsGetCurrentEpochGuid() -> i64 attributes {llvm.linkage = #llvm.linkage<external>}
   func.func private @artsGetPtrFromEdtDep(!llvm.struct<(i64, i32, memref<?xi8>)>) -> memref<?xi8> attributes {llvm.linkage = #llvm.linkage<external>}
