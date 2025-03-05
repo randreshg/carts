@@ -310,9 +310,13 @@ void DatablockAnalysis::collectNodes(Region &region, Graph &graph) {
         memEff.getEffects(node.effects);
     }
 
-    /// Add 'isSingle' attribute if the datablock has a single size of 1.
+    /// Add 'isSingle' attribute if the datablock has a single size of 1 or no
+    /// size
     node.isSingle = false;
-    if (node.sizes.size() == 1) {
+    if (node.sizes.empty()) {
+      dbOp.setIsSingle();
+      node.isSingle = true;
+    } else if (node.sizes.size() == 1) {
       if (auto cstOp = node.sizes[0].getDefiningOp<arith::ConstantIndexOp>()) {
         if (cstOp.value() == 1) {
           dbOp.setIsSingle();

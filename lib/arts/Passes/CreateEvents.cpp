@@ -50,7 +50,8 @@ struct CreateEventsPass : public arts::CreateEventsBase<CreateEventsPass> {
   void runOnOperation() override;
 
   /// Inserts a new event operand into a DB
-  void insertEventToDb(OpBuilder &builder, DataBlockOp dbOp, Value newEvent);
+  void insertEventToDb(OpBuilder &builder, DataBlockOp dbOp, Value newEvent,
+                       bool isOut);
   /// Handles processing of grouped events.
   void processGroupedEvent(OpBuilder &builder, Event &event,
                            DatablockAnalysis::Graph &graph);
@@ -168,10 +169,19 @@ void CreateEventsPass::runOnOperation() {
 }
 
 void CreateEventsPass::insertEventToDb(OpBuilder &builder, DataBlockOp dbOp,
-                                       Value newEvent) {
-  assert(!dbOp.getEvent() && "DataBlock already has an event");
-  auto loc = dbOp.getLoc();
+                                       Value newEvent, bool isOut) {
+  Value inEvent = nullptr;
+  Value outEvent = nullptr;
+  if (!isOut) {
+    assert(!dbOp.getInEvent() && "DataBlock already has an Input event");
+    inEvent = newEvent;
+  } else {
+    assert(!dbOp.getOutEvent() && "DataBlock already has an Output event");
+    outEvent = newEvent;
+  }
+
   /// Set insertion point to the dbOp.
+  auto loc = dbOp.getLoc();
   OpBuilder::InsertionGuard IG(builder);
   builder.setInsertionPoint(dbOp);
 
@@ -179,7 +189,7 @@ void CreateEventsPass::insertEventToDb(OpBuilder &builder, DataBlockOp dbOp,
   auto newDbOp = builder.create<arts::DataBlockOp>(
       loc, dbOp.getType(), dbOp.getModeAttr(), dbOp.getPtr(),
       dbOp.getElementType(), dbOp.getElementTypeSize(), dbOp.getIndices(),
-      dbOp.getSizes(), newEvent, dbOp.getAffineMapAttr());
+      dbOp.getSizes(), inEvent, outEvent, dbOp.getAffineMapAttr());
 
   /// Copy remaining attributes while skipping those that are overwritten.
   for (auto attr : dbOp->getAttrs()) {
@@ -217,22 +227,22 @@ void CreateEventsPass::processGroupedEvent(OpBuilder &builder, Event &event,
     auto &dbParentOp = producerNode.parent->op;
     auto eventType = MemRefType::get(dbParentOp.getType().getShape(),
                                      builder.getIntegerType(64));
-    eventOp = builder.create<arts::EventOp>(loc, eventType,
-                                                 dbParentOp.getSizes());
+    eventOp =
+        builder.create<arts::EventOp>(loc, eventType, dbParentOp.getSizes());
   } else {
     auto eventType = MemRefType::get(producerNode.op.getType().getShape(),
                                      builder.getIntegerType(64));
     eventOp = builder.create<arts::EventOp>(loc, eventType,
-                                                 producerNode.op.getSizes());
+                                            producerNode.op.getSizes());
   }
 
   /// Set event for the producer
-  insertEventToDb(builder, producerNode.op, eventOp.getResult());
+  insertEventToDb(builder, producerNode.op, eventOp.getResult(), true);
 
   /// Process each consumer edge.
   for (const auto &edge : edges) {
     auto &consumer = graph.nodes[edge.consumerID];
-    insertEventToDb(builder, consumer.op, eventOp.getResult());
+    insertEventToDb(builder, consumer.op, eventOp.getResult(), false);
   }
 }
 
@@ -241,6 +251,7 @@ void CreateEventsPass::processNonGroupedEvent(OpBuilder &builder, Event &event,
   LLVM_DEBUG(DBGS() << "Processing non-grouped event\n");
   OpBuilder::InsertionGuard IG(builder);
   auto &producerNode = graph.nodes[event.edges.front().producerID];
+  auto &consumerNode = graph.nodes[event.edges.front().consumerID];
   auto loc = UnknownLoc::get(builder.getContext());
   builder.setInsertionPoint(producerNode.op);
   auto type = MemRefType::get(producerNode.op.getType().getShape(),
@@ -248,7 +259,8 @@ void CreateEventsPass::processNonGroupedEvent(OpBuilder &builder, Event &event,
   auto eventOp =
       builder.create<arts::EventOp>(loc, type, producerNode.op.getSizes());
   eventOp.setIsSingle();
-  insertEventToDb(builder, producerNode.op, eventOp.getResult());
+  insertEventToDb(builder, producerNode.op, eventOp.getResult(), true);
+  insertEventToDb(builder, consumerNode.op, eventOp.getResult(), false);
 }
 
 namespace mlir {

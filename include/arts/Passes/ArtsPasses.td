@@ -72,7 +72,7 @@ def CreateEvents : Pass<"create-events", "mlir::ModuleOp"> {
 }
 
 def ConvertArtsToLLVM : Pass<"convert-arts-to-llvm", "mlir::ModuleOp"> {
-  let summary = "Convert ARTS Dialec to LLVM Dialect";
+  let summary = "Convert ARTS Dialect to LLVM Dialect";
   let dependentDialects = [
     "memref::MemRefDialect",
     "LLVM::LLVMDialect",

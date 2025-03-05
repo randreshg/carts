@@ -59,13 +59,14 @@ def DataBlockOp : Arts_Op<"datablock",
   [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, AttrSizedOperandSegments]> {
   let summary = "Creates a subview dependency for arts.edt or arts.parallel";
   let arguments = (ins
-    StrAttr:$mode,                             // Dependency mode (e.g., "in", "out")
+    StrAttr:$mode,                             // Dependency mode (e.g., "in", "out", "inout")
     AnyMemRef:$ptr,                            // Base ptr
     TypeAttr:$elementType,                     // Element type for the subview (or memref type)
     Index:$elementTypeSize,                    // Size (number of elements) associated with that type
     Variadic<Index>:$indices,                  // Indices for the subview
     Variadic<Index>:$sizes,                    // Sizes for the subview
-    Optional<AnyType>:$event,                  // Event associated with the DB
+    Optional<AnyType>:$inEvent,                // Input event associated with the DB
+    Optional<AnyType>:$outEvent,               // Output event associated with the DB
     OptionalAttr<AffineMapAttr>:$affineMap     // Affine map for offset transformation
   );
   let results = (outs AnyMemRef:$subview);     // Produces a memref
@@ -77,7 +78,7 @@ def DataBlockOp : Arts_Op<"datablock",
       "ValueRange":$indices, "ValueRange":$sizes)>,
     OpBuilder<(ins
       "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, "Value":$elementTypeSize,
-      "ValueRange":$indices, "ValueRange":$sizes, "Value":$event)>,
+      "ValueRange":$indices, "ValueRange":$sizes, "Value":$inEvent, "Value":$outEvent)>,
   ];
   let extraClassDeclaration = [{
     bool hasPtrDb();

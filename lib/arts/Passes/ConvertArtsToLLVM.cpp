@@ -60,6 +60,7 @@ struct ConvertArtsToLLVMPass
   void runOnOperation() override;
 
   void iterateOps(Operation *op);
+  void iterateDataBlockOps(Operation *op);
   void handleParallel(EdtOp &op);
   void handleSingle(EdtOp &op);
   void handleSync(EdtOp &op);
@@ -163,7 +164,8 @@ void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
                          : MemRefType::get({ShapedType::kDynamic}, AC->VoidPtr);
   auto newDbOp = builder.create<arts::DataBlockOp>(
       op->getLoc(), pointerType, op.getMode(), op.getPtr(), op.getElementType(),
-      op.getElementTypeSize(), op.getIndices(), sizes, op.getEvent());
+      op.getElementTypeSize(), op.getIndices(), sizes, op.getInEvent(),
+      op.getOutEvent());
   newDbOp->setAttrs(op->getAttrs());
 
   /// Helper lambda to check if the indices represent a single constant zero.
@@ -297,6 +299,20 @@ void ConvertArtsToLLVMPass::iterateOps(Operation *operation) {
       });
 }
 
+void ConvertArtsToLLVMPass::iterateDataBlockOps(Operation *operation) {
+  operation->walk<mlir::WalkOrder::PreOrder>(
+      [&](Operation *op) -> mlir::WalkResult {
+        /// Skip operations marked for removal.
+        if (opsToRemove.count(op))
+          return mlir::WalkResult::skip();
+        if (auto dbOp = dyn_cast<arts::DataBlockOp>(op)) {
+          handleDatablock(dbOp);
+          return mlir::WalkResult::advance();
+        }
+        return mlir::WalkResult::advance();
+      });
+}
+
 void ConvertArtsToLLVMPass::runOnOperation() {
   ModuleOp module = getOperation();
   LLVM_DEBUG({
@@ -318,6 +334,9 @@ void ConvertArtsToLLVMPass::runOnOperation() {
 
   LLVM_DEBUG(DBGS() << "Iterate over all the functions\n");
 
+  /// Process DataBlockOps first
+  // for (auto func : module.getOps<func::FuncOp>())
+  //   iterateDataBlockOps(func);
   /// Handle arts operations
   for (auto func : module.getOps<func::FuncOp>())
     iterateOps(func);
