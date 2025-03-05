@@ -41,7 +41,9 @@ public:
   Value getEdtSlot() { return edtSlot; }
   Value getGuid() { return guid; }
   StringRef getMode() { return dbOp.getMode(); }
-  Value getEvent() { return dbOp.getEvent(); }
+  Value getInEvent() { return dbOp.getInEvent(); }
+  Value getOutEvent() { return dbOp.getOutEvent(); }
+  bool hasEvent() { return !dbOp.getInEvent() || !dbOp.getOutEvent(); }
   bool hasPtrDb() { return dbOp.hasPtrDb(); }
   bool isSingle() { return dbOp.isSingle(); }
   ValueRange getIndices() { return dbOp.getIndices(); }
@@ -55,6 +57,9 @@ public:
   bool isOutMode() {
     StringRef mode = dbOp.getMode();
     return mode == "out" || mode == "inout";
+  }
+  bool isInMode() {
+    return dbOp.getMode() == "in" || dbOp.getMode() == "inout";
   }
 
 private:

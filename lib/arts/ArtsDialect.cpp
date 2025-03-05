@@ -107,18 +107,23 @@ void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
 void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
                         Type subview, StringRef mode, Value ptr,
                         Type elementType, Value elementTypeSize,
-                        ValueRange indices, ValueRange sizes, Value event) {
-  if (!event)
+                        ValueRange indices, ValueRange sizes, Value inEvent,
+                        Value outEvent) {
+  if (!inEvent && !outEvent)
     return build(odsBuilder, odsState, subview, mode, ptr, elementType,
                  elementTypeSize, indices, sizes);
   odsState.addOperands(ptr);
   odsState.addOperands(elementTypeSize);
   odsState.addOperands(indices);
   odsState.addOperands(sizes);
-  odsState.addOperands(event);
+  if (inEvent)
+    odsState.addOperands(inEvent);
+  if (outEvent)
+    odsState.addOperands(outEvent);
   ::llvm::copy(
       ::llvm::ArrayRef<int32_t>({1, 1, static_cast<int32_t>(indices.size()),
-                                 static_cast<int32_t>(sizes.size()), 1}),
+                                 static_cast<int32_t>(sizes.size()),
+                                 (inEvent ? 1 : 0) + (outEvent ? 1 : 0)}),
       odsState.getOrAddProperties<Properties>().operandSegmentSizes.begin());
   odsState.getOrAddProperties<Properties>().mode =
       odsBuilder.getStringAttr(mode);
@@ -198,27 +203,36 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
   if (parser.parseRSquare())
     return failure();
 
-  /// Optionally parse the event
-  SmallVector<OpAsmParser::UnresolvedOperand, 1> eventOperands;
-  if (succeeded(parser.parseOptionalComma())) {
-    if (parser.parseKeyword("event") || parser.parseLSquare())
-      return failure();
-    OpAsmParser::UnresolvedOperand eventOperand;
-    if (parser.parseOperand(eventOperand))
-      return failure();
-    if (parser.parseColon())
-      return failure();
-    Type eventType;
-    if (parser.parseType(eventType))
-      return failure();
-    if (parser.parseRSquare())
-      return failure();
-    /// Add event operand to the operation's operand list
-    if (parser.resolveOperand(eventOperand, eventType, result.operands))
-      return failure();
-    eventOperands.push_back(eventOperand);
-  }
+  /// Optionally parse comma then "inEvent[" "outEvent[".
 
+  auto parseEventOperand =
+      [&](StringRef keyword,
+          SmallVector<OpAsmParser::UnresolvedOperand, 1> &eventOperand)
+      -> ParseResult {
+    if (succeeded(parser.parseOptionalComma())) {
+      if (parser.parseKeyword(keyword) || parser.parseLSquare())
+        return failure();
+      OpAsmParser::UnresolvedOperand eventOp;
+      if (parser.parseOperand(eventOp) || parser.parseColon())
+        return failure();
+      Type eventType;
+      if (parser.parseType(eventType) || parser.parseRSquare())
+        return failure();
+      if (parser.resolveOperand(eventOp, eventType, result.operands))
+        return failure();
+      eventOperand.push_back(eventOp);
+    }
+    return success();
+  };
+
+  SmallVector<OpAsmParser::UnresolvedOperand, 1> inEventOperand,
+      outEventOperand;
+  if (failed(parseEventOperand("inEvent", inEventOperand)))
+    return failure();
+  if (failed(parseEventOperand("outEvent", outEventOperand)))
+    return failure();
+
+  /// Optionally parse comma then affineMap attribute.
   /// Optionally parse comma then affineMap attribute.
   if (succeeded(parser.parseOptionalComma())) {
     if (parser.parseKeyword("affineMap"))
@@ -254,12 +268,13 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
 
   /// Set operand segment sizes.
   /// Order: ptr (1), typeSize (1), indices, sizes, event (0 or 1).
-  SmallVector<int32_t, 5> segmentSizes;
+  SmallVector<int32_t, 6> segmentSizes;
   segmentSizes.push_back(1);
   segmentSizes.push_back(1);
   segmentSizes.push_back(static_cast<int32_t>(offsetOperands.size()));
   segmentSizes.push_back(static_cast<int32_t>(sizeOperands.size()));
-  segmentSizes.push_back(static_cast<int32_t>(eventOperands.size()));
+  segmentSizes.push_back(static_cast<int32_t>(inEventOperand.size()));
+  segmentSizes.push_back(static_cast<int32_t>(outEventOperand.size()));
   std::copy(
       segmentSizes.begin(), segmentSizes.end(),
       result.getOrAddProperties<Properties>().operandSegmentSizes.begin());
@@ -300,10 +315,17 @@ void DataBlockOp::print(OpAsmPrinter &printer) {
   printer.printOperand(getOperands()[1]);
   printer << "]";
 
-  /// Optionally print the event operand if present.
-  if (auto event = getEvent()) {
-    printer << ", event[";
-    printer.printOperand(event);
+  /// Optionally print the inEvent operand if present.
+  if (auto inEvent = getInEvent()) {
+    printer << ", inEvent[";
+    printer.printOperand(inEvent);
+    printer << "]";
+  }
+
+  /// Optionally print the outEvent operand if present.
+  if (auto outEvent = getOutEvent()) {
+    printer << ", outEvent[";
+    printer.printOperand(outEvent);
     printer << "]";
   }
 
