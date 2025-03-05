@@ -683,26 +683,18 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : 
 -----------------------------------------
 [convert-arts-to-llvm] Sync done EDT created
 [convert-arts-to-llvm] Parallel epoch created
-Processing dependencies to record
-Processing dependencies to signal
 [convert-arts-to-llvm] Parallel EDT created
 [convert-arts-to-llvm] Parallel op lowered
 
 [convert-arts-to-llvm] Lowering arts.event
 [convert-arts-to-llvm] Lowering arts.datablock
 [convert-arts-to-llvm] Lowering arts.edt
-Processing dependencies to record
-Processing dependencies to signal
 [convert-arts-to-llvm] Lowering arts.event
 [convert-arts-to-llvm] Lowering arts.datablock
 [convert-arts-to-llvm] Lowering arts.datablock
 [convert-arts-to-llvm] Lowering arts.edt
-Processing dependencies to record
-Processing dependencies to signal
 [convert-arts-to-llvm] Lowering arts.datablock
 [convert-arts-to-llvm] Lowering arts.edt
-Processing dependencies to record
-Processing dependencies to signal
 -----------------------------------------
 ConvertArtsToLLVMPass FINISHED 
 -----------------------------------------
@@ -779,7 +771,9 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : 
     call @artsSignalEdt(%23, %15, %3) : (i64, i32, i64) -> ()
     return %c0_i32 : i32
   }
-  func.func private @__arts_edt_1(i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, ptr)>>)
+  func.func private @__arts_edt_1(%arg0: i32, %arg1: memref<?xi64>, %arg2: i32, %arg3: memref<?x!llvm.struct<(i64, i32, ptr)>>) {
+    return
+  }
   func.func private @__arts_edt_2(%arg0: i32, %arg1: memref<?xi64>, %arg2: i32, %arg3: memref<?x!llvm.struct<(i64, i32, ptr)>>) {
     %c4 = arith.constant 4 : index
     %c10_i32 = arith.constant 10 : i32
@@ -1051,7 +1045,9 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f64, dense<64> : 
     call @artsSignalEdt(%12, %c1_i32, %3) : (i64, i32, i64) -> ()
     return %c0_i32 : i32
   }
-  func.func private @__arts_edt_1(i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, ptr)>>)
+  func.func private @__arts_edt_1(%arg0: i32, %arg1: memref<?xi64>, %arg2: i32, %arg3: memref<?x!llvm.struct<(i64, i32, ptr)>>) {
+    return
+  }
   func.func private @__arts_edt_2(%arg0: i32, %arg1: memref<?xi64>, %arg2: i32, %arg3: memref<?x!llvm.struct<(i64, i32, ptr)>>) {
     %c0 = arith.constant 0 : index
     %c1_i32 = arith.constant 1 : i32
