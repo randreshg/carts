@@ -591,7 +591,6 @@ void EdtCodegen::processDependencies(Location loc) {
 
   /// Record in-mode dependencies after the EDT call.
   builder.setInsertionPointAfter(guid.getDefiningOp());
-  LLVM_DEBUG(dbgs() << "Processing dependencies to record\n");
   for (auto *db : depsToRecord) {
     /// Ensure the datablock has an event and is 'in' mode.
     auto dbEvent = db->getInEvent();
@@ -652,7 +651,6 @@ void EdtCodegen::processDependencies(Location loc) {
   }
 
   /// Signal the dependencies after they are recorded.
-  LLVM_DEBUG(dbgs() << "Processing dependencies to signal\n");
   for (auto *db : depsToSignal) {
     assert(db && "Datablock not found");
     Value dbGuidMemref = db->getGuid();
@@ -743,6 +741,10 @@ func::FuncOp EdtCodegen::createFn(Location loc) {
   auto edtFuncOp = builder.create<func::FuncOp>(loc, edtFuncName, AC.EdtFn);
   edtFuncOp.setPrivate();
   AC.module.push_back(edtFuncOp);
+  /// Add entry basic block to the function and return operation.
+  auto *entryBlock = edtFuncOp.addEntryBlock();
+  builder.setInsertionPointToStart(entryBlock);
+  builder.create<func::ReturnOp>(loc);
   return edtFuncOp;
 }
 
@@ -750,7 +752,12 @@ void EdtCodegen::createFnEntry(Location loc) {
   OpBuilder::InsertionGuard IG(builder);
 
   /// Create an entry block and set the insertion point.
-  auto *entryBlock = func.addEntryBlock();
+  auto *entryBlock = &func.getBody().front();
+
+  /// Remove previous terminator, it will be inserted later
+  entryBlock->getTerminator()->erase();
+
+  /// Set insertion point to the start of the entry block.
   builder.setInsertionPointToStart(entryBlock);
 
   /// Get references to the block arguments.
