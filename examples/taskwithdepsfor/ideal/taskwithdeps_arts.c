@@ -1,11 +1,8 @@
-// clang taskwithdeps_arts.c -O3 -g0 -march=native
-// -I/home/randres/projects/carts/.install/arts/include -o taskwithdeps_arts
-// -L/home/randres/projects/carts/.install/arts/lib -larts -lrdmacm
+// clang taskwithdeps_arts.c -O3 -g0 -march=native -I/home/randres/projects/carts/.install/arts/include -o taskwithdeps_arts -L/home/randres/projects/carts/.install/arts/lib -larts -lrdmacm
 
-/// cgeist taskwithdeps_arts.c --memref-abi --memref-fullrank -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include -I/home/randres/projects/carts/.install/arts/include & > taskwithdeps_arts.mlir
+/// cgeist taskwithdeps_arts.c --memref-abi --memref-fullrank -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include -I/home/randres/projects/carts/.install/arts/include -emit-llvm &> taskwithdeps_arts.mlir
 
-/// cgeist taskwithdeps_arts.c -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include -I/home/randres/projects/carts/.install/arts/include --raise-scf-to-affine
-/// -emit-llvm
+/// cgeist taskwithdeps_arts.c -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include -I/home/randres/projects/carts/.install/arts/include --raise-scf-to-affine -emit-llvm
 
 #include "arts.h"
 #include "artsRT.h"
@@ -13,10 +10,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+void test(int N) {
 
-void test(int N){
-
-    // Allocate arrays for DataBlocks and events
+  // Allocate arrays for DataBlocks and events
   // double *A = (double *)artsMalloc(N * sizeof(double));
   double A[N], B[N];
   // double *B = (double *)artsMalloc(N * sizeof(double));
@@ -34,8 +30,8 @@ void computeA(uint32_t paramc, uint64_t *paramv, uint32_t depc,
   artsGuid_t eventGuid = (artsGuid_t)paramv[1];
 
   // Access the DataBlock for A[i]
-  double *A_i = (double *)artsGetPtrFromEdtDep(depv[0]);
-  artsGuid_t A_i_guid = artsGetGuidFromEdtDep(depv[0]);
+  double *A_i = (double *)depv[0].ptr;
+  artsGuid_t A_i_guid = depv[0].guid;
 
   // Compute A[i]
   *A_i = i * 2.0;
@@ -244,12 +240,13 @@ void mainEdt(uint32_t paramc, uint64_t *paramv, uint32_t depc,
 
 // initPerNode: Reserved for node-specific initializations
 void initPerNode(unsigned int nodeId, int argc, char **argv) {
-  if (nodeId == 0) {
-    unsigned int currentNode = artsGetCurrentNode();
-    // Create a main EDT to set up the tasks
-    uint64_t mainparams[] = {};
-    artsEdtCreate(mainEdt, currentNode, 1, mainparams, 0);
-  }
+  if (nodeId != 0)
+    return;
+
+  /// Create a main EDT to set up the tasks
+  unsigned int currentNode = artsGetCurrentNode();
+  uint64_t mainparams[] = {};
+  artsEdtCreate(mainEdt, currentNode, 1, mainparams, 0);
 
   printf("Node %u initialized.\n", nodeId);
 }

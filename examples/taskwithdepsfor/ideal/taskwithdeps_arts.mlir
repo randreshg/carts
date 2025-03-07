@@ -1,18 +1,4 @@
-In file included from taskwithdeps_arts.c:10:
-./arts.h:529:14: warning: inline function 'artsGetPtrFromEdtDep' is not defined [-Wundefined-inline]
-  529 | inline void *artsGetPtrFromEdtDep(artsEdtDep_t dep);
-      |              ^
-taskwithdeps_arts.c:23:27: note: used here
-   23 |   double *A_i = (double *)artsGetPtrFromEdtDep(depv[0]);
-      |                           ^
-In file included from taskwithdeps_arts.c:10:
-./arts.h:526:19: warning: inline function 'artsGetGuidFromEdtDep' is not defined [-Wundefined-inline]
-  526 | inline artsGuid_t artsGetGuidFromEdtDep(artsEdtDep_t dep);
-      |                   ^
-taskwithdeps_arts.c:24:25: note: used here
-   24 |   artsGuid_t A_i_guid = artsGetGuidFromEdtDep(depv[0]);
-      |                         ^
-module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
+module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
   llvm.mlir.global internal constant @str12("Node %u initialized.\0A\00") {addr_space = 0 : i32}
   llvm.mlir.global internal constant @str11("---------- Main EDT finished ----------\0A\00") {addr_space = 0 : i32}
   llvm.mlir.global internal constant @str10("---------- Main EDT ----------\0A\00") {addr_space = 0 : i32}
@@ -27,29 +13,30 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
   llvm.mlir.global internal constant @str1("------------------------\0A--- Compute B[%u] = %f\0A------------------------\0A\00") {addr_space = 0 : i32}
   llvm.mlir.global internal constant @str0("------------------------\0A--- Compute A[%u] = %f - Guid: %lu\0A------------------------\0A\00") {addr_space = 0 : i32}
   llvm.func @printf(!llvm.ptr, ...) -> i32
+  func.func @test(%arg0: i32) attributes {llvm.linkage = #llvm.linkage<external>} {
+    return
+  }
   func.func @computeA(%arg0: i32, %arg1: memref<?xi64>, %arg2: i32, %arg3: memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>) attributes {llvm.linkage = #llvm.linkage<external>} {
     %c0_i32 = arith.constant 0 : i32
     %cst = arith.constant 2.000000e+00 : f64
     %0 = affine.load %arg1[0] : memref<?xi64>
     %1 = arith.trunci %0 : i64 to i32
     %2 = affine.load %arg1[1] : memref<?xi64>
-    %3 = affine.load %arg3[0] : memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>
-    %4 = call @artsGetPtrFromEdtDep(%3) : (!llvm.struct<(i64, i32, memref<?xi8>)>) -> memref<?xi8>
-    %5 = "polygeist.memref2pointer"(%4) : (memref<?xi8>) -> !llvm.ptr
-    %6 = affine.load %arg3[0] : memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>
-    %7 = call @artsGetGuidFromEdtDep(%6) : (!llvm.struct<(i64, i32, memref<?xi8>)>) -> i64
+    %3 = "polygeist.memref2pointer"(%arg3) : (memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>) -> !llvm.ptr
+    %4 = llvm.getelementptr %3[0, 2] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(i64, i32, memref<?xi8>)>
+    %5 = llvm.load %4 : !llvm.ptr -> memref<?xi8>
+    %6 = "polygeist.memref2pointer"(%5) : (memref<?xi8>) -> !llvm.ptr
+    %7 = llvm.load %3 : !llvm.ptr -> i64
     %8 = arith.uitofp %1 : i32 to f64
     %9 = arith.mulf %8, %cst : f64
-    llvm.store %9, %5 : f64, !llvm.ptr
+    llvm.store %9, %6 : f64, !llvm.ptr
     %10 = llvm.mlir.addressof @str0 : !llvm.ptr
     %11 = llvm.getelementptr %10[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<86 x i8>
-    %12 = llvm.load %5 : !llvm.ptr -> f64
+    %12 = llvm.load %6 : !llvm.ptr -> f64
     %13 = llvm.call @printf(%11, %1, %12, %7) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, f64, i64) -> i32
     call @artsEventSatisfySlot(%2, %7, %c0_i32) : (i64, i64, i32) -> ()
     return
   }
-  func.func private @artsGetPtrFromEdtDep(!llvm.struct<(i64, i32, memref<?xi8>)>) -> memref<?xi8> attributes {llvm.linkage = #llvm.linkage<external>}
-  func.func private @artsGetGuidFromEdtDep(!llvm.struct<(i64, i32, memref<?xi8>)>) -> i64 attributes {llvm.linkage = #llvm.linkage<external>}
   func.func private @artsEventSatisfySlot(i64, i64, i32) attributes {llvm.linkage = #llvm.linkage<external>}
   func.func @computeB(%arg0: i32, %arg1: memref<?xi64>, %arg2: i32, %arg3: memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>) attributes {llvm.linkage = #llvm.linkage<external>} {
     %c0_i32 = arith.constant 0 : i32
@@ -367,15 +354,15 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> :
     %alloca = memref.alloca() : memref<0xi64>
     %0 = arith.cmpi eq, %arg0, %c0_i32 : i32
     scf.if %0 {
-      %4 = func.call @artsGetCurrentNode() : () -> i32
-      %5 = "polygeist.get_func"() <{name = @mainEdt}> : () -> !llvm.ptr
+      %1 = func.call @artsGetCurrentNode() : () -> i32
+      %2 = "polygeist.get_func"() <{name = @mainEdt}> : () -> !llvm.ptr
       %cast = memref.cast %alloca : memref<0xi64> to memref<?xi64>
-      %6 = "polygeist.pointer2memref"(%5) : (!llvm.ptr) -> memref<?x!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>)>>
-      %7 = func.call @artsEdtCreate(%6, %4, %c1_i32, %cast, %c0_i32) : (memref<?x!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>)>>, i32, i32, memref<?xi64>, i32) -> i64
+      %3 = "polygeist.pointer2memref"(%2) : (!llvm.ptr) -> memref<?x!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>)>>
+      %4 = func.call @artsEdtCreate(%3, %1, %c1_i32, %cast, %c0_i32) : (memref<?x!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, memref<?xi8>)>>)>>, i32, i32, memref<?xi64>, i32) -> i64
+      %5 = llvm.mlir.addressof @str12 : !llvm.ptr
+      %6 = llvm.getelementptr %5[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<22 x i8>
+      %7 = llvm.call @printf(%6, %arg0) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32) -> i32
     }
-    %1 = llvm.mlir.addressof @str12 : !llvm.ptr
-    %2 = llvm.getelementptr %1[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<22 x i8>
-    %3 = llvm.call @printf(%2, %arg0) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32) -> i32
     return
   }
   func.func @initPerWorker(%arg0: i32, %arg1: i32, %arg2: i32, %arg3: memref<?xmemref<?xi8>>) attributes {llvm.linkage = #llvm.linkage<external>} {

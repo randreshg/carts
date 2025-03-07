@@ -6,11 +6,10 @@
 //===----------------------------------------------------------------------===//
 
 /// Dialects
-#include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "polygeist/Ops.h"
+// #include "polygeist/Ops.h"
 /// Arts
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
@@ -28,10 +27,14 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 /// Conversion
-#include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
-#include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
-#include "mlir/Conversion/LLVMCommon/TypeConverter.h"
-#include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
+// #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
+// #include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
+// #include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
+// #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
+// #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
+// #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
+// #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
+
 #include "mlir/Transforms/DialectConversion.h"
 #include <algorithm>
 #include <optional>
@@ -107,6 +110,10 @@ void ConvertArtsToLLVMPass::handleSync(EdtOp &op) {
     auto par_dependencies = op.getDependenciesVector();
     newEdt = AC->createEdt(&par_dependencies, &region, &parEpoch_guid, nullptr);
     LLVM_DEBUG(DBGS() << "Parallel EDT created\n");
+
+    /// Insert wait on handle after parallel EDT.
+    AC->setInsertionPointAfter(op);
+    AC->waitOnHandle(parEpoch_guid, loc);
   }
 
   /// Erase the old parallel op.
@@ -170,7 +177,10 @@ void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
 
   /// Helper lambda to check if the indices represent a single constant zero.
   auto isSingleZeroOffset = [&](ValueRange indices) -> bool {
-    if (indices.size() != 1)
+    auto indicesSize = indices.size();
+    if (indicesSize == 0)
+      return true;
+    if (indicesSize != 1)
       return false;
     if (auto constOp = indices.front().getDefiningOp<arith::ConstantIndexOp>())
       return constOp.value() == 0;
@@ -187,6 +197,7 @@ void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
     /// Cast indices to int32
     SmallVector<Value> newIndices;
     newIndices.reserve(indices.size());
+
     for (auto index : indices)
       newIndices.push_back(AC->castToInt(AC->Int64, index, loc));
     return builder
@@ -333,34 +344,33 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   AC = new ArtsCodegen(module, llvmDL, mlirDL);
 
   LLVM_DEBUG(DBGS() << "Iterate over all the functions\n");
-
-  /// Process DataBlockOps first
-  // for (auto func : module.getOps<func::FuncOp>())
-  //   iterateDataBlockOps(func);
-  /// Handle arts operations
   for (auto func : module.getOps<func::FuncOp>())
     iterateOps(func);
   removeOps(module, AC->getBuilder(), opsToRemove);
 
+  /// Initialize the runtime
+  AC->initializeRuntime(UnknownLoc::get(module.getContext()));
+
   /// Create a ConversionTarget.
-  // auto *ctx = &getContext();
-  // ConversionTarget target(*ctx);
-  // target.addIllegalDialect<memref::MemRefDialect>();
-  // target.addLegalDialect<LLVM::LLVMDialect, arith::ArithDialect,
-  //                        func::FuncDialect, affine::AffineDialect,
-  //                        scf::SCFDialect>();
+  auto *ctx = &getContext();
+  ConversionTarget target(*ctx);
+  target.addIllegalDialect<memref::MemRefDialect>();
+  target.addLegalDialect<LLVM::LLVMDialect, arith::ArithDialect,
+                         func::FuncDialect, affine::AffineDialect,
+                         scf::SCFDialect>();
 
-  // // Add the memref-to-LLVM conversion pass (or add its patterns manually)
-  // LowerToLLVMOptions options(module.getContext());
+  /// Populate type conversions.
+  // LowerToLLVMOptions options(ctx);
   // options.useOpaquePointers = false;
-
-  // // Populate type conversions.
-  // LLVMTypeConverter converter(module.getContext(), options);
+  // LLVMTypeConverter converter(ctx, options);
   // RewritePatternSet patterns(ctx);
+  // populateAffineToStdConversionPatterns(patterns);
   // populateFinalizeMemRefToLLVMConversionPatterns(converter, patterns);
   // arith::populateArithToLLVMConversionPatterns(converter, patterns);
   // index::populateIndexToLLVMConversionPatterns(converter, patterns);
-  // populateAffineToStdConversionPatterns(patterns);
+  // cf::populateControlFlowToLLVMConversionPatterns(converter, patterns);
+  // populateFuncToLLVMConversionPatterns(converter, patterns);
+
 
   // // Then run the conversion:
   // if (failed(applyPartialConversion(module, target, std::move(patterns))))
@@ -383,8 +393,10 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   //                        LLVM::LLVMDialect>();
   // target.addLegalOp<ModuleOp>();
 
-  LLVM_DEBUG(dbgs() << line << "ConvertArtsToLLVMPass FINISHED \n" << line);
-  module.dump();
+  LLVM_DEBUG({
+    dbgs() << line << "ConvertArtsToLLVMPass FINISHED \n" << line;
+    module.dump();
+  });
   delete AC;
 }
 //===----------------------------------------------------------------------===//

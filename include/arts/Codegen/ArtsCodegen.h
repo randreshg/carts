@@ -222,6 +222,11 @@ public:
   void satisfyDep(Value eventGuid, Value depGuid, Location loc);
   void addDep(Value eventGuid, Value edtGuid, Value edtSlot, Location loc);
   void signalEdt(Value edtGuid, Value edtSlot, Value dbGuid, Location loc);
+  void waitOnHandle(Value epochGuid, Location loc);
+  func::FuncOp insertInitPerWorker(Location loc);
+  func::FuncOp insertInitPerNode(Location loc, func::FuncOp callback = nullptr);
+  func::FuncOp insertMain(Location loc);
+  void initializeRuntime(Location loc);
 
   /// Helpers
   Value createFnPtr(func::FuncOp funcOp, Location loc);
@@ -245,11 +250,6 @@ public:
   }
 
   // ---------------------------- Types ---------------------------- ///
-  /// Declarations for LLVM-IR types (simple, array, function and structure)
-  /// are generated below. Their names are defined and used in ARTSKinds.def.
-  /// Here we provide the declarations, the initializeTypes function will
-  /// provide the values.
-  ///
   ///{
 #define ARTS_TYPE(VarName, InitValue) mlir::Type VarName = nullptr;
 #define ARTS_FUNCTION_TYPE(VarName, IsVarArg, ReturnType, ...)                 \
