@@ -7,6 +7,8 @@
 // Optimizations
 /// carts-opt taskwithdeps.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize --raise-scf-to-affine --affine-cfg --affine-scalrep --affine-loop-invariant-code-motion  --affine-loop-coalescing --cse  --canonicalize &> taskwithdeps-arts.mlir
 
+/// carts-opt taskwithdeps-arts.mlir --convert-polygeist-to-llvm --cse --canonicalize &> taskwithdeps-llvm.mlir
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <omp.h>
