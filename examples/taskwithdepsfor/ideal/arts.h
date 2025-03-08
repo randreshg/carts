@@ -516,12 +516,6 @@ void artsAtomicCompareAndSwapInArrayDb(artsArrayDb_t *array, unsigned int index,
                                        artsGuid_t edtGuid, unsigned int slot);
 
 /*Util*************************************************************************/
-// Returns the guid of the input ArtsDatablock
-inline artsGuid_t artsGetGuidFromDataBlock(artsDataBlock db);
-
-/// Returns the pointer to the data in the ArtsDatablock
-inline void *artsGetPtrFromDataBlock(artsDataBlock db);
-
 /// Returns the guid of the input edtDep
 inline artsGuid_t artsGetGuidFromEdtDep(artsEdtDep_t dep);
 

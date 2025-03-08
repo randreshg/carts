@@ -40,6 +40,7 @@ public:
   Value getOp() { return dbOp; }
   Value getEdtSlot() { return edtSlot; }
   Value getGuid() { return guid; }
+  Value getPtr() { return ptr; }
   StringRef getMode() { return dbOp.getMode(); }
   Value getInEvent() { return dbOp.getInEvent(); }
   Value getOutEvent() { return dbOp.getOutEvent(); }
