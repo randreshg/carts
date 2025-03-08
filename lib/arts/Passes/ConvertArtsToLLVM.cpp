@@ -26,14 +26,6 @@
 #include "mlir/IR/Region.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
-/// Conversion
-// #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
-// #include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
-// #include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
-// #include "mlir/Conversion/AffineToStandard/AffineToStandard.h"
-// #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
-// #include "mlir/Conversion/FuncToLLVM/ConvertFuncToLLVM.h"
-// #include "mlir/Conversion/LLVMCommon/TypeConverter.h"
 
 #include "mlir/Transforms/DialectConversion.h"
 #include <algorithm>
@@ -161,12 +153,7 @@ void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
 
   /// Create a new DataBlockOp with an opaque pointer type
   auto sizes = op.getSizes();
-  bool isSingleElement = sizes.size() == 1 && [&] {
-    if (auto constOp = sizes[0].getDefiningOp<arith::ConstantIndexOp>())
-      return constOp.value() == 1;
-    return false;
-  }();
-  auto pointerType = isSingleElement
+  auto pointerType = op.isSingle()
                          ? AC->VoidPtr
                          : MemRefType::get({ShapedType::kDynamic}, AC->VoidPtr);
   auto newDbOp = builder.create<arts::DataBlockOp>(
@@ -253,7 +240,7 @@ void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
           newDbOp.getResult(),
           [&](OpOperand &operand) { return operand.getOwner() == dbOp; });
     }
-    /// EdtOp - fix dependencies.
+    /// EdtOp - update dependencies.
     else if (auto edtOp = dyn_cast<arts::EdtOp>(user)) {
       for (auto dep : edtOp.getDependencies()) {
         if (dep == op)
@@ -292,7 +279,8 @@ void ConvertArtsToLLVMPass::iterateOps(Operation *operation) {
         if (auto dbOp = dyn_cast<arts::DataBlockOp>(op)) {
           handleDatablock(dbOp);
           return mlir::WalkResult::advance();
-        } else if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
+        } 
+        else if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
           if (edtOp.isParallel())
             handleParallel(edtOp);
           else if (edtOp.isSync())
@@ -352,47 +340,6 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   AC->initializeRuntime(UnknownLoc::get(module.getContext()));
 
   /// Create a ConversionTarget.
-  auto *ctx = &getContext();
-  ConversionTarget target(*ctx);
-  target.addIllegalDialect<memref::MemRefDialect>();
-  target.addLegalDialect<LLVM::LLVMDialect, arith::ArithDialect,
-                         func::FuncDialect, affine::AffineDialect,
-                         scf::SCFDialect>();
-
-  /// Populate type conversions.
-  // LowerToLLVMOptions options(ctx);
-  // options.useOpaquePointers = false;
-  // LLVMTypeConverter converter(ctx, options);
-  // RewritePatternSet patterns(ctx);
-  // populateAffineToStdConversionPatterns(patterns);
-  // populateFinalizeMemRefToLLVMConversionPatterns(converter, patterns);
-  // arith::populateArithToLLVMConversionPatterns(converter, patterns);
-  // index::populateIndexToLLVMConversionPatterns(converter, patterns);
-  // cf::populateControlFlowToLLVMConversionPatterns(converter, patterns);
-  // populateFuncToLLVMConversionPatterns(converter, patterns);
-
-
-  // // Then run the conversion:
-  // if (failed(applyPartialConversion(module, target, std::move(patterns))))
-  // {
-  //   module.emitError("Conversion from memref to LLVM failed");
-  //   return signalPassFailure();
-  // }
-
-  // /// Create a ConversionTarget.
-  // ConversionTarget target(*ctx);
-  // /// Mark arts.edt as illegal so that our conversion pattern is applied.
-  // target.addIllegalOp<arts::EdtOp>();
-  // target.addLegalOp<arts::AllocaOp, arts::DataBlockOp, arts::YieldOp,
-  //                   arts::BarrierOp>();
-  // /// Mark other ops as legal.
-  // target.addLegalDialect<arith::ArithDialect, cf::ControlFlowDialect,
-  //                        func::FuncDialect, memref::MemRefDialect,
-  //                        affine::AffineDialect,
-  //                        polygeist::PolygeistDialect, scf::SCFDialect,
-  //                        LLVM::LLVMDialect>();
-  // target.addLegalOp<ModuleOp>();
-
   LLVM_DEBUG({
     dbgs() << line << "ConvertArtsToLLVMPass FINISHED \n" << line;
     module.dump();

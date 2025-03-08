@@ -5,7 +5,13 @@
 /// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events,convert-arts-to-llvm,arts-codegen &> matrix-arts.mlir
 
 // Optimizations
-/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize --raise-scf-to-affine --affine-cfg --affine-scalrep --affine-loop-invariant-code-motion  --affine-loop-coalescing --cse  --canonicalize &> matrix-arts.mlir
+/// carts-opt matrix.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize --raise-scf-to-affine --affine-cfg --affine-scalrep  --affine-loop-coalescing --lower-affine --cse --canonicalize &> matrix-arts.mlir
+
+/// carts-opt matrix-arts.mlir --convert-polygeist-to-llvm --cse --canonicalize &> matrix-llvm.mlir
+
+/// mlir-translate --mlir-to-llvmir matrix-llvm.mlir > matrix.ll
+
+/// clang matrix.ll -O3 -g0 -march=native -o matrix -I/home/randres/projects/carts/.install/arts/include -L/home/randres/projects/carts/.install/arts/lib -larts -L/usr/lib64/librt.so/usr/lib64/libpthread.so/usr/lib64/lib -lrdmacm
 
 
 #include <stdlib.h>

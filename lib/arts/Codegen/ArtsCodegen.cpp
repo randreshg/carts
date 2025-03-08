@@ -77,16 +77,17 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
 
   auto currentNode = AC.getCurrentNode(loc);
   auto elementTypeSize = dbOp.getElementTypeSize();
+  const auto tySize = AC.castToInt(AC.Int64, elementTypeSize, loc);
 
   /// Handle the case of a single datablock
   if (isSingle()) {
     auto modeVal = getMode(dbOp.getMode());
     guid = createGuid(currentNode, modeVal, loc);
-    ptr = AC.createRuntimeCall(ARTSRTL_artsDbCreateWithGuidAndData,
-                               {AC.castToVoidPtr(dbOp.getPtr(), loc),
-                                elementTypeSize, modeVal, guid},
-                               loc)
-              ->getResult(0);
+    // Allocate a single pointer by directly assigning the runtime call result
+    ptr =
+        AC.createRuntimeCall(ARTSRTL_artsDbCreateWithGuid, {guid, tySize}, loc)
+            ->getResult(0);
+    LLVM_DEBUG(DBGS() << "Created single datablock: " << ptr << "\n");
     return;
   }
 
@@ -106,7 +107,6 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
       [&](unsigned dim, SmallVector<Value, 4> &indices) {
         if (dim == dbDim) {
           auto guidVal = createGuid(currentNode, modeVal, loc);
-          auto tySize = AC.castToInt(AC.Int64, elementTypeSize, loc);
           auto ptrVal = AC.createRuntimeCall(ARTSRTL_artsDbCreateWithGuid,
                                              {guidVal, tySize}, loc)
                             ->getResult(0);
@@ -374,11 +374,14 @@ void EdtCodegen::process(Location loc) {
             builder.create<memref::LoadOp>(loc, tmpAlloca.getResult());
       }
 
-      /// Update dependency count by adding dbNumElements.
-      auto currDep = builder.create<memref::LoadOp>(loc, depC);
-      auto newDep = builder.create<arith::AddIOp>(loc, currDep, dbNumElements)
-                        .getResult();
-      builder.create<memref::StoreOp>(loc, newDep, depC);
+      /// Update dependency count by adding dbNumElements only if is an input
+      /// datablock
+      if (db->isInMode()) {
+        auto currDep = builder.create<memref::LoadOp>(loc, depC);
+        auto newDep = builder.create<arith::AddIOp>(loc, currDep, dbNumElements)
+                          .getResult();
+        builder.create<memref::StoreOp>(loc, newDep, depC);
+      }
 
       /// Process events.
       processEvent(db, dbNumElements);
@@ -561,13 +564,18 @@ void EdtCodegen::processDependencies(Location loc) {
           auto loadedEventGuid =
               builder.create<LLVM::LoadOp>(loc, AC.ArtsGuid, eventGuid)
                   .getResult();
-          /// Load the datablock GUID from the entry using the current
-          /// indices.
-          auto dbGuid =
-              builder.create<memref::LoadOp>(loc, entryDbs[db].guid, indices)
+          /// Load the datablock GUID from the entry using the current indices.
+          auto entryDbGuidPtr = AC.castToLLVMPtr(entryDbs[db].guid, loc);
+          SmallVector<Value, 4> intIndices;
+          for (auto index : indices)
+            intIndices.push_back(AC.castToInt(AC.Int32, index, loc));
+          auto dbGuid = builder.create<LLVM::GEPOp>(
+              loc, AC.llvmPtr, AC.ArtsGuid, entryDbGuidPtr, intIndices);
+          auto loadedDbGuid =
+              builder.create<LLVM::LoadOp>(loc, AC.ArtsGuid, dbGuid)
                   .getResult();
           /// Satisfy the dependency between the event and the datablock.
-          AC.satisfyDep(loadedEventGuid, dbGuid, unknownLoc);
+          AC.satisfyDep(loadedEventGuid, loadedDbGuid, unknownLoc);
           /// Increment the current index.
           auto newIndex =
               builder
@@ -711,6 +719,16 @@ void EdtCodegen::processDependencies(Location loc) {
       signalEdtDependencies(0, currentSlot.getResult(), indices);
     }
   }
+
+  /// Iterate over the edt dependencies and replace all its uses with the
+  /// corresponding values.
+  for (auto &dep : deps) {
+    auto *db = AC.getDatablock(dep);
+    auto dbPtr = db->getPtr();
+    if(!dbPtr)
+      continue;
+    db->getOp().replaceAllUsesWith(dbPtr);
+  }
 }
 
 void EdtCodegen::outlineRegion(Location loc) {
@@ -761,17 +779,12 @@ func::FuncOp EdtCodegen::createFn(Location loc) {
 
 void EdtCodegen::createFnEntry(Location loc) {
   OpBuilder::InsertionGuard IG(builder);
-
-  /// Create an entry block and set the insertion point.
+  /// Create an entry block and remove the terminator.
   auto *entryBlock = &func.getBody().front();
-
-  /// Remove previous terminator, it will be inserted later
   entryBlock->getTerminator()->erase();
 
-  /// Set insertion point to the start of the entry block.
-  builder.setInsertionPointToStart(entryBlock);
-
   /// Get references to the block arguments.
+  builder.setInsertionPointToStart(entryBlock);
   fnParamV = entryBlock->getArgument(1);
   fnDepV = entryBlock->getArgument(3);
 
@@ -1071,7 +1084,7 @@ Value ArtsCodegen::createEpoch(Value finishEdtGuid, Value finishEdtSlot,
 /// Utils
 Value ArtsCodegen::getGuidFromEdtDep(Value dep, Location loc) {
   auto zeroInt = createIntConstant(0, Int32, loc);
-  auto guidValue = builder.create<LLVM::GEPOp>(loc, llvmPtr, dep.getType(), dep,
+  auto guidValue = builder.create<LLVM::GEPOp>(loc, llvmPtr, ArtsEdtDep, dep,
                                                ValueRange{zeroInt, zeroInt});
   auto loadGuid =
       builder.create<LLVM::LoadOp>(loc, ArtsGuid, guidValue.getResult());
@@ -1080,7 +1093,7 @@ Value ArtsCodegen::getGuidFromEdtDep(Value dep, Location loc) {
 
 Value ArtsCodegen::getPtrFromEdtDep(Value dep, Location loc) {
   auto gepOp =
-      builder.create<LLVM::GEPOp>(loc, llvmPtr, dep.getType(), dep,
+      builder.create<LLVM::GEPOp>(loc, llvmPtr, ArtsEdtDep, dep,
                                   ValueRange{createIntConstant(0, Int32, loc),
                                              createIntConstant(2, Int32, loc)});
   return castToVoidPtr(gepOp, loc);
@@ -1107,6 +1120,7 @@ Value ArtsCodegen::getCurrentNode(Location loc) {
   func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentNode);
   assert(func && "Runtime function should exist");
   func->setAttr("llvm.readnone", builder.getUnitAttr());
+  func->setAttr("llvm.nounwind", builder.getUnitAttr());
   ArrayRef<Value> args;
   auto callOp = builder.create<func::CallOp>(loc, func, args);
   return callOp.getResult(0);
@@ -1182,8 +1196,12 @@ func::FuncOp ArtsCodegen::insertInitPerNode(Location loc,
       ValueRange{newFunc.getArgument(1), newFunc.getArgument(2)}, mergeBlock,
       ValueRange{});
 
-  /// thenBlock
+  /// thenBlock - If nodeId >= 1, return
   builder.setInsertionPointToStart(thenBlock);
+  builder.create<func::ReturnOp>(loc);
+
+  /// mergeBlock - Otherwise, call the callback function and return
+  builder.setInsertionPointToStart(mergeBlock);
   if (callback) {
     /// If the callback function receives arguments, pass them to the call,
     /// otherwise, pass an empty ValueRange.
@@ -1191,10 +1209,7 @@ func::FuncOp ArtsCodegen::insertInitPerNode(Location loc,
                                                    : ValueRange{};
     builder.create<func::CallOp>(loc, callback, callArgs);
   }
-  builder.create<func::ReturnOp>(loc);
-
-  /// mergeBlock (continuation)
-  builder.setInsertionPointToStart(mergeBlock);
+  createRuntimeCall(ARTSRTL_artsShutdown, {}, loc);
   builder.create<func::ReturnOp>(loc);
   return newFunc;
 }
