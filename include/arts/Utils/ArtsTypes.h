@@ -39,7 +39,7 @@ inline llvm::StringRef toString(const DatablockAccessType Ty) {
   case DatablockAccessType::ReadOnly:
     return "in";
   case DatablockAccessType::WriteOnly:
-    return "out";
+    return "inout";
   case DatablockAccessType::ReadWrite:
     return "inout";
   case DatablockAccessType::Unknown:
