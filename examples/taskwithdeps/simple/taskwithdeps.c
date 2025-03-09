@@ -32,28 +32,21 @@ int main() {
 
   #pragma omp parallel
   {
-    // (__arts_edt_2)
     #pragma omp single
     {
       printf("Main thread: Creating tasks\n");
-      // Task 1: Initializes 'a'
-      // (__arts_edt_3)
       #pragma omp task depend(inout: a)
       {
           a = rand() % 100;
           printf("Task 1: Initializing a with value %d\n", a);
       }
 
-      // Task 2: Depends on Task 1 (reads 'a') and modifies 'b'
-      // (__arts_edt_4)
-      /// a is the 2nd one
       #pragma omp task depend(in: a) depend(inout: b)
       {
           printf("Task 2: Reading a=%d and updating b\n", a);
           b = a + 5;
       }
 
-      // Task 3: Depends on Task 2 (reads 'b')
       #pragma omp task depend(in: b)
       {
           printf("Task 3: Final value of b=%d\n", b);

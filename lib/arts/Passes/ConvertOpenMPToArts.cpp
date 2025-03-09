@@ -13,9 +13,9 @@
 #include "polygeist/Ops.h"
 /// Arts
 #include "ArtsPassDetails.h"
-#include "arts/Passes/ArtsPasses.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsIR.h"
+#include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsTypes.h"
 #include "arts/Utils/ArtsUtils.h"
 /// Others
@@ -276,7 +276,10 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
 
   /// Remove all UndefOps
   removeUndefOps(module);
-  LLVM_DEBUG(dbgs() << line << "ConvertOpenMPToArtsPass FINISHED\n" << line);
+  LLVM_DEBUG({
+    dbgs() << line << "ConvertOpenMPToArtsPass FINISHED\n" << line;
+    module.dump();
+  });
 }
 
 //===----------------------------------------------------------------------===//

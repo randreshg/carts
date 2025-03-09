@@ -117,30 +117,30 @@ bool isReachable(Operation *source, Operation *target) {
 bool DatablockAnalysis::mayDepend(Node &prod, Node &cons, bool &isDirect,
                                   bool &isLoopDependent,
                                   DominanceInfo &domInfo) {
-  LLVM_DEBUG(DBGS() << "Checking dependency between\n"
-                    << "  - " << prod.op << "\n  - " << cons.op << "\n");
+  // LLVM_DEBUG(DBGS() << "Checking dependency between\n"
+  //                   << "  - " << prod.op << "\n  - " << cons.op << "\n");
   /// Verify if the nodes belong to the same EDT.
   if (prod.edtParent != cons.edtParent) {
-    LLVM_DEBUG(dbgs() << "    - Different EDT parents\n");
+    // LLVM_DEBUG(dbgs() << "    - Different EDT parents\n");
     return false;
   }
 
   /// Exclude nodes with the same EDT user.
   if (prod.userEdt == cons.userEdt) {
-    LLVM_DEBUG(dbgs() << "    - Same EDT user\n");
+    // LLVM_DEBUG(dbgs() << "    - Same EDT user\n");
     return false;
   }
 
   /// Only consider writer producer and reader consumer.
   if (!isWriter(prod) || !isReader(cons)) {
-    LLVM_DEBUG(dbgs() << "    - Not a writer or reader\n");
+    // LLVM_DEBUG(dbgs() << "    - Not a writer or reader\n");
     return false;
   }
 
   /// Check if nodes are different
   auto compResult = compare(prod, cons);
   if (compResult == NodeComp::Different) {
-    LLVM_DEBUG(dbgs() << "    - Different nodes\n");
+    // LLVM_DEBUG(dbgs() << "    - Different nodes\n");
     return false;
   }
 
@@ -153,7 +153,7 @@ bool DatablockAnalysis::mayDepend(Node &prod, Node &cons, bool &isDirect,
 
   /// If producer dominates consumer, report a dependency.
   if (domInfo.dominates(prod.op.getOperation(), cons.op.getOperation())) {
-    LLVM_DEBUG(dbgs() << "    - It is a dependency because of dominance\n");
+    // LLVM_DEBUG(dbgs() << "    - It is a dependency because of dominance\n");
     return true;
   }
 
@@ -161,10 +161,10 @@ bool DatablockAnalysis::mayDepend(Node &prod, Node &cons, bool &isDirect,
   /// report a dependency.
   if (isLoopDependent &&
       isReachable(prod.op.getOperation(), cons.op.getOperation())) {
-    LLVM_DEBUG(dbgs() << "    - It is a dependency because of reachability\n");
+    // LLVM_DEBUG(dbgs() << "    - It is a dependency because of reachability\n");
     return true;
   }
-  LLVM_DEBUG(dbgs() << "    - No dependency\n");
+  // LLVM_DEBUG(dbgs() << "    - No dependency\n");
   return false;
 }
 
@@ -175,7 +175,7 @@ bool DatablockAnalysis::ptrMayAlias(Node &A, Node &B) {
   for (auto &eA : A.effects) {
     for (auto &eB : B.effects) {
       if (mayAlias(eA, eB)) {
-        LLVM_DEBUG(dbgs() << "    - Datablocks may alias\n");
+        // LLVM_DEBUG(dbgs() << "    - Datablocks may alias\n");
         A.aliases.insert(B.id);
         B.aliases.insert(A.id);
         return true;

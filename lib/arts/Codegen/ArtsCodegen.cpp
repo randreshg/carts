@@ -71,7 +71,7 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
   if (hasPtrDb()) {
     LLVM_DEBUG(
         DBGS() << "Creating datablock that has a pointer to another datablock\n"
-               << depOp << "\n");
+               << "    " << depOp << "\n");
     return;
   }
 
@@ -105,6 +105,7 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
   auto ptrType = MemRefType::get(
       std::vector<int64_t>(dbDim, ShapedType::kDynamic), AC.VoidPtr);
   ptr = builder.create<memref::AllocaOp>(loc, ptrType, sizes);
+  LLVM_DEBUG(DBGS() << "Created array of datablocks: " << ptr << "\n");
 
   /// Recursively create datablocks for each element
   std::function<void(unsigned, SmallVector<Value, 4> &)> createDbs =
@@ -356,13 +357,6 @@ void EdtCodegen::process(Location loc) {
         /// For a single datablock, the number of elements is 1.
         dbNumElements = AC.createIntConstant(1, AC.Int32, loc);
         insertSizeAsParameter(db, dbNumElements, 0, sizesInserted);
-        /// Compute db guid if not computed yet
-        if (!db->getGuid()) {
-          LLVM_DEBUG(dbgs()
-                     << "Datablock: " << db->getOp() << " has no GUID\n");
-          auto dbOp = dyn_cast<arts::DataBlockOp>(db->getOp().getDefiningOp());
-          LLVM_DEBUG(dbgs() << "Ptr: " << dbOp.getPtr() << "\n");
-        }
       } else {
         /// Allocate a temporary to hold the product of sizes.
         auto tmpAlloca = builder.create<memref::AllocaOp>(
@@ -688,6 +682,11 @@ void EdtCodegen::processDependencies(Location loc) {
 
     /// Signal the dependency for single datablocks.
     if (db->isSingle()) {
+      auto dbIndices = db->getIndices();
+      if (!dbIndices.empty()) {
+        dbGuid = builder.create<memref::LoadOp>(dbLoc, dbGuid, dbIndices)
+                     .getResult();
+      }
       AC.signalEdt(guid, db->getEdtSlot(), dbGuid, dbLoc);
       continue;
     }
@@ -809,7 +808,7 @@ void EdtCodegen::createFnEntry(Location loc) {
 
   /// Insert the parameters.
   for (unsigned i = 0, e = params.size(); i < e; ++i) {
-    auto idx = builder.create<arith::ConstantIndexOp>(loc, i);
+    auto idx = AC.createIndexConstant(i, loc);
     auto paramElem =
         builder.create<memref::LoadOp>(loc, fnParamV, ValueRange{idx});
     /// Cast it back to the original type.
@@ -817,16 +816,19 @@ void EdtCodegen::createFnEntry(Location loc) {
         AC.castParameter(params[i].getType(), paramElem, loc);
   }
 
+  /// Constants
+  auto constZero = AC.createIndexConstant(0, loc);
+  auto constOne = AC.createIndexConstant(1, loc);
+
   /// Insert the dependencies.
   auto indexAlloc = builder.create<memref::AllocaOp>(
       loc, MemRefType::get({}, builder.getIndexType()));
-  auto constZero = builder.create<arith::ConstantIndexOp>(loc, 0);
   builder.create<memref::StoreOp>(loc, constZero, indexAlloc);
-  auto constOne = builder.create<arith::ConstantIndexOp>(loc, 1);
 
   /// Helper lambda to load the current index.
   auto loadIndex = [&]() -> Value {
-    return builder.create<memref::LoadOp>(loc, indexAlloc.getResult());
+    return builder.create<memref::LoadOp>(loc, indexAlloc.getResult())
+        .getResult();
   };
 
   /// Process each dependency.
@@ -844,6 +846,25 @@ void EdtCodegen::createFnEntry(Location loc) {
     /// Skip datablocks that are not in mode.
     if (!db->isInMode())
       continue;
+
+    /// Iterate over uses to see if another datablock is using this one. If
+    /// so, set the guid and ptr for the other datablock.
+    auto updateUserDb = [&](Value entryGuid, Value entryPtr) {
+      for (auto *user : db->getOp().getUsers()) {
+        /// We are only concerned with datablocks in the same EDT region.
+        if (!region->isAncestor(user->getParentRegion()))
+          continue;
+        /// If not a datablock, skip.
+        auto userOp = dyn_cast<arts::DataBlockOp>(user);
+        if (!userOp)
+          continue;
+        /// Get the datablock codegen and set the entry information.
+        auto userDb = AC.getDatablock(userOp);
+        assert(userDb && "User datablock not found");
+        userDb->setGuid(entryGuid);
+        userDb->setPtr(entryPtr);
+      }
+    };
 
     /// Handle single datablock
     if (db->isSingle()) {
@@ -865,29 +886,13 @@ void EdtCodegen::createFnEntry(Location loc) {
           builder.create<arith::AddIOp>(loc, curIndex, constOne).getResult();
       builder.create<memref::StoreOp>(loc, newIndex, indexAlloc);
 
-      /// Iterate over uses to see if another datablock is using this one. If
-      /// so, set the guid and ptr for the other datablock.
-      for (auto *user : db->getOp().getUsers()) {
-        /// We are only corcerned with datablocks in the same EDT region.
-        if (!region->isAncestor(user->getParentRegion()))
-          continue;
-        /// If not a datablock, skip.
-        auto userOp = dyn_cast<arts::DataBlockOp>(user);
-        if (!userOp)
-          continue;
-        /// Get the datablock codegen and set the entry information.
-        auto userDb = AC.getDatablock(userOp);
-        assert(userDb && "User datablock not found");
-        userDb->setGuid(entryGuid);
-        userDb->setPtr(entryPtr);
-      }
       /// Rewire the datablock to the pointer.
+      updateUserDb(entryGuid, entryPtr);
       rewireMap[db->getOp()] = entryPtr;
       continue;
     }
 
     /// Handle multi-dimensional datablock
-    /// Fill out the entry size using the sizeIndex map and rewired parameters.
     const auto &dbSizes = db->getSizes();
     auto &entrySizes = entryDbs[db].sizes;
     entrySizes.reserve(dbSizes.size());
@@ -955,6 +960,9 @@ void EdtCodegen::createFnEntry(Location loc) {
     createDbs(0, indices);
     entryDbs[db].guid = entryGuid;
     entryDbs[db].ptr = entryPtr;
+
+    /// Update the datablock in the region.
+    updateUserDb(entryGuid, entryPtr);
     rewireMap[db->getOp()] = entryPtr;
   }
 
@@ -1219,17 +1227,16 @@ func::FuncOp ArtsCodegen::insertInitPerNode(Location loc,
   /// Create separate then and merge blocks in the function body.
   auto thenBlock = new Block();
   auto mergeBlock = new Block();
-  thenBlock->addArgument(newFunc.getArgument(1).getType(), loc);
-  thenBlock->addArgument(newFunc.getArgument(2).getType(), loc);
+  mergeBlock->addArgument(newFunc.getArgument(1).getType(), loc);
+  mergeBlock->addArgument(newFunc.getArgument(2).getType(), loc);
   newFunc.getBody().push_back(thenBlock);
   newFunc.getBody().push_back(mergeBlock);
 
   /// In the entry block, do a conditional branch: if cmp true, jump to
   /// thenBlock; otherwise, continue in mergeBlock.
   builder.create<cf::CondBranchOp>(
-      loc, cmp, thenBlock,
-      ValueRange{newFunc.getArgument(1), newFunc.getArgument(2)}, mergeBlock,
-      ValueRange{});
+      loc, cmp, thenBlock, ValueRange{}, mergeBlock,
+      ValueRange{newFunc.getArgument(1), newFunc.getArgument(2)});
 
   /// thenBlock - If nodeId >= 1, return
   builder.setInsertionPointToStart(thenBlock);
@@ -1240,8 +1247,10 @@ func::FuncOp ArtsCodegen::insertInitPerNode(Location loc,
   if (callback) {
     /// If the callback function receives arguments, pass them to the call,
     /// otherwise, pass an empty ValueRange.
-    auto callArgs = callback.getNumArguments() > 0 ? thenBlock->getArguments()
-                                                   : ValueRange{};
+
+    auto callArgs = ValueRange{};
+    if (callback.getNumArguments() > 0)
+      callArgs = {newFunc.getArgument(1), newFunc.getArgument(2)};
     builder.create<func::CallOp>(loc, callback, callArgs);
   }
   createRuntimeCall(ARTSRTL_artsShutdown, {}, loc);

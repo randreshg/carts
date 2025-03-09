@@ -69,6 +69,8 @@ DataBlockOp createDatablockOp(OpBuilder &builder, Location loc,
 
   /// Prepare arrays for subview
   const auto pinnedCount = static_cast<int64_t>(pinnedIndices.size());
+  assert(pinnedCount <= rank &&
+         "Pinned indices exceed the rank of the memref.");
   SmallVector<Value, 4> indices(pinnedCount), sizes(rank - pinnedCount);
   SmallVector<int64_t, 4> subShape(rank - pinnedCount);
 
