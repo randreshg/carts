@@ -52,6 +52,8 @@ public:
 
   /// Setters
   void setEdtSlot(Value edtSlot) { this->edtSlot = edtSlot; }
+  void setGuid(Value guid) { this->guid = guid; }
+  void setPtr(Value ptr) { this->ptr = ptr; }
 
   /// Interface
   void create(arts::DataBlockOp dbOp, Location loc);
@@ -222,7 +224,7 @@ public:
   Value getCurrentNode(Location loc);
   void satisfyDep(Value eventGuid, Value depGuid, Location loc);
   void addDep(Value eventGuid, Value edtGuid, Value edtSlot, Location loc);
-  void signalEdt(Value edtGuid, Value edtSlot, Value dbGuid, Location loc);
+  func::CallOp signalEdt(Value edtGuid, Value edtSlot, Value dbGuid, Location loc);
   void waitOnHandle(Value epochGuid, Location loc);
   func::FuncOp insertInitPerWorker(Location loc);
   func::FuncOp insertInitPerNode(Location loc, func::FuncOp callback = nullptr);

@@ -258,7 +258,8 @@ void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
   AC->createDatablock(newDbOp, op->getLoc());
 
   /// Mark dbs for removal.
-  opsToRemove.insert(op);
+  // opsToRemove.insert(op);
+  op.erase();
   opsToRemove.insert(newDbOp.getPtr().getDefiningOp());
   opsToRemove.insert(newDbOp);
 }
@@ -332,6 +333,8 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   AC = new ArtsCodegen(module, llvmDL, mlirDL);
 
   LLVM_DEBUG(DBGS() << "Iterate over all the functions\n");
+  for(auto func : module.getOps<func::FuncOp>())
+    iterateDataBlockOps(func);
   for (auto func : module.getOps<func::FuncOp>())
     iterateOps(func);
   removeOps(module, AC->getBuilder(), opsToRemove);

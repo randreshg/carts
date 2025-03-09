@@ -68,8 +68,12 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
   dbOp = depOp;
 
   /// If the base is a DB, it will be handled when inserting the EDT Entry
-  if (hasPtrDb())
+  if (hasPtrDb()) {
+    LLVM_DEBUG(
+        DBGS() << "Creating datablock that has a pointer to another datablock\n"
+               << depOp << "\n");
     return;
+  }
 
   /// Set insertion point to the DatablockOp
   OpBuilder::InsertionGuard IG(builder);
@@ -304,7 +308,6 @@ void EdtCodegen::process(Location loc) {
           return;
 
       /// Otherwise, insert parameter and store the index where it was inserted.
-      LLVM_DEBUG(dbgs() << "Inserting size as parameter: " << size << "\n");
       entryDbs[db].sizeIndex[sizeItr] = insertParam(size);
       ++sizesInserted;
     };
@@ -324,7 +327,6 @@ void EdtCodegen::process(Location loc) {
           depsToRecord.push_back(db);
         else
           depsToSignal.push_back(db);
-        return;
       }
 
       /// Satisfy the event and accumulate the number of events to satisfy.
@@ -351,9 +353,16 @@ void EdtCodegen::process(Location loc) {
       uint64_t sizesInserted = 0;
       Value dbNumElements = nullptr;
       if (db->isSingle()) {
-        /// For a single datablock, the number of elements is its only size.
+        /// For a single datablock, the number of elements is 1.
         dbNumElements = AC.createIntConstant(1, AC.Int32, loc);
         insertSizeAsParameter(db, dbNumElements, 0, sizesInserted);
+        /// Compute db guid if not computed yet
+        if (!db->getGuid()) {
+          LLVM_DEBUG(dbgs()
+                     << "Datablock: " << db->getOp() << " has no GUID\n");
+          auto dbOp = dyn_cast<arts::DataBlockOp>(db->getOp().getDefiningOp());
+          LLVM_DEBUG(dbgs() << "Ptr: " << dbOp.getPtr() << "\n");
+        }
       } else {
         /// Allocate a temporary to hold the product of sizes.
         auto tmpAlloca = builder.create<memref::AllocaOp>(
@@ -374,7 +383,7 @@ void EdtCodegen::process(Location loc) {
             builder.create<memref::LoadOp>(loc, tmpAlloca.getResult());
       }
 
-      /// Update dependency count by adding dbNumElements only if is an input
+      /// Dependency count by adding dbNumElements only if is an input
       /// datablock
       if (db->isInMode()) {
         auto currDep = builder.create<memref::LoadOp>(loc, depC);
@@ -399,6 +408,7 @@ void EdtCodegen::process(Location loc) {
                                             ValueRange());
   builder.create<memref::StoreOp>(
       loc, AC.createIntConstant(paramSize, AC.Int32, loc), paramC);
+
   /// Add the number of events if any
   if (!depsToSatisfy.empty()) {
     auto loadedParamC = builder.create<memref::LoadOp>(loc, paramC).getResult();
@@ -672,52 +682,55 @@ void EdtCodegen::processDependencies(Location loc) {
   /// Signal the dependencies after they are recorded.
   for (auto *db : depsToSignal) {
     assert(db && "Datablock not found");
-    Value dbGuidMemref = db->getGuid();
-    assert(dbGuidMemref && "Datablock GUID not found");
+    Value dbGuid = db->getGuid();
+    assert(dbGuid && "Datablock GUID not found");
     auto dbLoc = db->getOp().getLoc();
+
+    /// Signal the dependency for single datablocks.
     if (db->isSingle()) {
-      AC.signalEdt(guid, db->getEdtSlot(), dbGuidMemref, dbLoc);
-    } else {
-      auto sizes = db->getSizes();
-      const unsigned dbDim = sizes.size();
-      auto currentSlot =
-          builder.create<memref::AllocOp>(dbLoc, MemRefType::get({}, AC.Int32));
-      builder.create<memref::StoreOp>(dbLoc, db->getEdtSlot(), currentSlot);
-
-      std::function<void(unsigned, Value, SmallVector<Value, 4> &)>
-          signalEdtDependencies = [&](unsigned dim, Value curSlot,
-                                      SmallVector<Value, 4> &indices) {
-            if (dim == dbDim) {
-              auto loadedDbGuid =
-                  builder.create<memref::LoadOp>(dbLoc, dbGuidMemref, indices)
-                      .getResult();
-              auto edtSlot = builder.create<memref::LoadOp>(dbLoc, curSlot,
-                                                            ArrayRef<Value>{});
-              AC.signalEdt(guid, edtSlot, loadedDbGuid, dbLoc);
-              return;
-            } else {
-              auto lower = builder.create<arith::ConstantIndexOp>(dbLoc, 0);
-              auto upper = sizes[dim];
-              auto step = builder.create<arith::ConstantIndexOp>(dbLoc, 1);
-              auto loopOp = builder.create<scf::ForOp>(dbLoc, lower, upper,
-                                                       step, curSlot);
-              auto &loopBlock = loopOp.getRegion().front();
-              {
-                OpBuilder::InsertionGuard guard(builder);
-                builder.setInsertionPointToStart(&loopBlock);
-                indices.push_back(loopBlock.getArgument(0));
-                Value newSlot = loopBlock.getArgument(1);
-                signalEdtDependencies(dim + 1, newSlot, indices);
-                indices.pop_back();
-                builder.create<scf::YieldOp>(dbLoc, newSlot);
-              }
-              builder.setInsertionPointAfter(loopOp);
-            }
-          };
-
-      SmallVector<Value, 4> indices;
-      signalEdtDependencies(0, currentSlot.getResult(), indices);
+      AC.signalEdt(guid, db->getEdtSlot(), dbGuid, dbLoc);
+      continue;
     }
+
+    /// Signal the dependency for multi-dimensional datablocks.
+    auto sizes = db->getSizes();
+    const unsigned dbDim = sizes.size();
+    auto currentSlot =
+        builder.create<memref::AllocOp>(dbLoc, MemRefType::get({}, AC.Int32));
+    builder.create<memref::StoreOp>(dbLoc, db->getEdtSlot(), currentSlot);
+    std::function<void(unsigned, Value, SmallVector<Value, 4> &)>
+        signalEdtDependencies = [&](unsigned dim, Value curSlot,
+                                    SmallVector<Value, 4> &indices) {
+          if (dim == dbDim) {
+            auto loadedDbGuid =
+                builder.create<memref::LoadOp>(dbLoc, dbGuid, indices)
+                    .getResult();
+            auto edtSlot = builder.create<memref::LoadOp>(dbLoc, curSlot,
+                                                          ArrayRef<Value>{});
+            AC.signalEdt(guid, edtSlot, loadedDbGuid, dbLoc);
+            return;
+          } else {
+            auto lower = builder.create<arith::ConstantIndexOp>(dbLoc, 0);
+            auto upper = sizes[dim];
+            auto step = builder.create<arith::ConstantIndexOp>(dbLoc, 1);
+            auto loopOp =
+                builder.create<scf::ForOp>(dbLoc, lower, upper, step, curSlot);
+            auto &loopBlock = loopOp.getRegion().front();
+            {
+              OpBuilder::InsertionGuard guard(builder);
+              builder.setInsertionPointToStart(&loopBlock);
+              indices.push_back(loopBlock.getArgument(0));
+              Value newSlot = loopBlock.getArgument(1);
+              signalEdtDependencies(dim + 1, newSlot, indices);
+              indices.pop_back();
+              builder.create<scf::YieldOp>(dbLoc, newSlot);
+            }
+            builder.setInsertionPointAfter(loopOp);
+          }
+        };
+
+    SmallVector<Value, 4> indices;
+    signalEdtDependencies(0, currentSlot.getResult(), indices);
   }
 
   /// Iterate over the edt dependencies and replace all its uses with the
@@ -725,7 +738,7 @@ void EdtCodegen::processDependencies(Location loc) {
   for (auto &dep : deps) {
     auto *db = AC.getDatablock(dep);
     auto dbPtr = db->getPtr();
-    if(!dbPtr)
+    if (!dbPtr)
       continue;
     db->getOp().replaceAllUsesWith(dbPtr);
   }
@@ -828,6 +841,10 @@ void EdtCodegen::createFnEntry(Location loc) {
     auto *db = AC.getDatablock(dep);
     assert(db && "Datablock not found");
 
+    /// Skip datablocks that are not in mode.
+    if (!db->isInMode())
+      continue;
+
     /// Handle single datablock
     if (db->isSingle()) {
       auto curIndex = loadIndex();
@@ -842,10 +859,29 @@ void EdtCodegen::createFnEntry(Location loc) {
       auto entryPtr = AC.getPtrFromEdtDep(depVElem, loc);
       entryDbs[db].guid = entryGuid;
       entryDbs[db].ptr = entryPtr;
+
       /// Increment the index.
       auto newIndex =
           builder.create<arith::AddIOp>(loc, curIndex, constOne).getResult();
       builder.create<memref::StoreOp>(loc, newIndex, indexAlloc);
+
+      /// Iterate over uses to see if another datablock is using this one. If
+      /// so, set the guid and ptr for the other datablock.
+      for (auto *user : db->getOp().getUsers()) {
+        /// We are only corcerned with datablocks in the same EDT region.
+        if (!region->isAncestor(user->getParentRegion()))
+          continue;
+        /// If not a datablock, skip.
+        auto userOp = dyn_cast<arts::DataBlockOp>(user);
+        if (!userOp)
+          continue;
+        /// Get the datablock codegen and set the entry information.
+        auto userDb = AC.getDatablock(userOp);
+        assert(userDb && "User datablock not found");
+        userDb->setGuid(entryGuid);
+        userDb->setPtr(entryPtr);
+      }
+      /// Rewire the datablock to the pointer.
       rewireMap[db->getOp()] = entryPtr;
       continue;
     }
@@ -1027,10 +1063,9 @@ DataBlockCodegen *ArtsCodegen::getDatablock(arts::DataBlockOp dbOp) {
 
 DataBlockCodegen *ArtsCodegen::createDatablock(arts::DataBlockOp dbOp,
                                                Location loc) {
-  auto &db = datablocks[dbOp];
-  if (!db)
-    db = new DataBlockCodegen(*this, dbOp, loc);
-  return db;
+  assert(!getDatablock(dbOp) && "Datablock already exists");
+  datablocks[dbOp] = new DataBlockCodegen(*this, dbOp, loc);
+  return datablocks[dbOp];
 }
 
 DataBlockCodegen *ArtsCodegen::getOrCreateDatablock(arts::DataBlockOp dbOp,
@@ -1112,8 +1147,6 @@ Value ArtsCodegen::getCurrentEdtGuid(Location loc) {
   ArrayRef<Value> args;
   auto callOp = builder.create<func::CallOp>(loc, func, args);
   return callOp.getResult(0);
-  // return createRuntimeCall(ARTSRTL_artsGetCurrentGuid, {},
-  // loc).getResult(0);
 }
 
 Value ArtsCodegen::getCurrentNode(Location loc) {
@@ -1138,9 +1171,10 @@ void ArtsCodegen::addDep(Value eventGuid, Value edtGuid, Value edtSlot,
                     loc);
 }
 
-void ArtsCodegen::signalEdt(Value edtGuid, Value edtSlot, Value dbGuid,
-                            Location loc) {
-  createRuntimeCall(ARTSRTL_artsSignalEdt, {edtGuid, edtSlot, dbGuid}, loc);
+func::CallOp ArtsCodegen::signalEdt(Value edtGuid, Value edtSlot, Value dbGuid,
+                                    Location loc) {
+  return createRuntimeCall(ARTSRTL_artsSignalEdt, {edtGuid, edtSlot, dbGuid},
+                           loc);
 }
 
 void ArtsCodegen::waitOnHandle(Value epochGuid, Location loc) {
