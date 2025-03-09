@@ -852,7 +852,7 @@ void EdtCodegen::createFnEntry(Location loc) {
           AC.Int32, builder.create<arith::MulIOp>(loc, curIndex, depStructSize),
           loc);
       auto depVElem = builder
-                          .create<LLVM::GEPOp>(loc, AC.llvmPtr, AC.ArtsEdtDep,
+                          .create<LLVM::GEPOp>(loc, AC.llvmPtr, AC.PtrSize,
                                                fnDepVPtr, ValueRange{curGep})
                           .getResult();
       auto entryGuid = AC.getGuidFromEdtDep(depVElem, loc);
@@ -922,8 +922,8 @@ void EdtCodegen::createFnEntry(Location loc) {
                 loc);
             auto depVElem =
                 builder
-                    .create<LLVM::GEPOp>(loc, AC.llvmPtr, AC.ArtsEdtDep,
-                                         fnDepVPtr, ValueRange{curGep})
+                    .create<LLVM::GEPOp>(loc, AC.llvmPtr, AC.PtrSize, fnDepVPtr,
+                                         ValueRange{curGep})
                     .getResult();
             auto entryGuidElem = AC.getGuidFromEdtDep(depVElem, loc);
             auto entryPtrElem = AC.getPtrFromEdtDep(depVElem, loc);
@@ -1131,7 +1131,8 @@ Value ArtsCodegen::getPtrFromEdtDep(Value dep, Location loc) {
       builder.create<LLVM::GEPOp>(loc, llvmPtr, ArtsEdtDep, dep,
                                   ValueRange{createIntConstant(0, Int32, loc),
                                              createIntConstant(2, Int32, loc)});
-  return castToVoidPtr(gepOp, loc);
+  auto loadPtr = builder.create<LLVM::LoadOp>(loc, VoidPtr, gepOp.getResult());
+  return loadPtr.getResult();
 }
 
 Value ArtsCodegen::getCurrentEpochGuid(Location loc) {
