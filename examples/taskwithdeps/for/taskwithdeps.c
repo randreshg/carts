@@ -5,7 +5,9 @@
 /// carts-opt taskwithdeps.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events,convert-arts-to-llvm,arts-codegen &> taskwithdeps-arts.mlir
 
 // Optimizations
-/// carts-opt taskwithdeps.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize --raise-scf-to-affine --affine-cfg --affine-scalrep  --affine-loop-coalescing --lower-affine --cse --canonicalize &> taskwithdeps-arts.mlir
+/// carts-opt taskwithdeps.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize --raise-scf-to-affine --canonicalize --affine-cfg --affine-expand-index-ops --loop-invariant-code-motion --canonicalize --affine-scalrep --affine-cfg --cse --canonicalize -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events,convert-arts-to-llvm,arts-codegen &> taskwithdeps-arts.mlir
+
+/// carts-opt taskwithdeps.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize --raise-scf-to-affine --canonicalize --affine-cfg --affine-expand-index-ops --loop-invariant-code-motion --canonicalize --affine-scalrep --affine-cfg --cse --canonicalize -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events,convert-arts-to-llvm,arts-codegen &> taskwithdeps-arts.mlir
 
 /// Single command
 // carts-opt taskwithdeps.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize --raise-scf-to-affine --affine-cfg --affine-scalrep  --affine-loop-coalescing --lower-affine --cse --canonicalize --convert-polygeist-to-llvm --cse --canonicalize &> taskwithdeps-llvm.mlir
@@ -36,6 +38,7 @@ int main(int argc, char *argv[]) {
   int N = atoi(argv[1]);
   int A[N], B[N];
 
+
   srand(time(NULL));
 
   printf("-----------------\nMain function\n-----------------\n");
@@ -43,46 +46,47 @@ int main(int argc, char *argv[]) {
 
   #pragma omp parallel
   {
+    /// Edt2
     #pragma omp single
     {
       for (int i = 0; i < N; i++) {
         // For the first iteration, no inter-iteration dependency.
+        // __arts_edt_3
         #pragma omp task depend(inout: A[i])
         {
           A[i] = rand() % 100;
-          printf("Task %d: Initializing A[%d] = %d\n", i, i, A[i]);
+          printf("Task %d - 0: Initializing A[%d] = %d\n", i, i, A[i]);
         }
 
-        // if (i == 0) {
-        //   // For the first iteration, no inter-iteration dependency.
-        //   #pragma omp task firstprivate(i) depend(in: A[i]) depend(inout: B[i])
-        //   {
-        //     B[i] = A[i] + 5;
-        //     printf("Task %d: Computing B[%d] = %d\n", i, i, B[i]);
-        //   }
-        // }
-        // else {
-        //   // For subsequent iterations, create inter-iteration dependencies by depending on the previous B.
-        //   #pragma omp task firstprivate(i) depend(in: B[i-1]) depend(in: A[i]) depend(inout: B[i])
-        //   {
-        //     B[i] = A[i] + B[i-1] + 5;
-        //     printf("Task %d: Computing B[%d] = %d\n", i, i, B[i]);
-        //   }
-        // }
-
-        // // Print the final value of B[i] after the computation.
-        // #pragma omp task firstprivate(i) depend(in: B[i])
-        // {
-        //   printf("Task %d: Final B[%d] = %d\n", i, i, B[i]);
-        // }
-      
+        if (i == 0) {
+          // For the first iteration, no inter-iteration dependency.
+          #pragma omp task depend(in: A[i]) depend(inout: B[i])
+          {
+            B[i] = A[i] + 5;
+            printf("Task %d - 1: Computing B[%d] = %d\n", i, i, B[i]);
+          }
+        }
+        else {
+          // For subsequent iterations, create inter-iteration dependencies by depending on the previous B.
+          #pragma omp task depend(in: B[i-1]) depend(in: A[i]) depend(inout: B[i])
+          {
+            B[i] = A[i] + B[i-1] + 5;
+            printf("Task %d - 2: Computing B[%d] = %d\n", i, i, B[i]);
+          }
+        }
+        
+        // Print the final value of B[i] after the computation.
+        #pragma omp task depend(in: B[i])
+        {
+          printf("Task %d - 3: Final B[%d] = %d\n", i, i, B[i]);
+        }
       }
     }
   }
 
   printf("Final arrays:\n");
   for (int i = 0; i < N; i++)
-    printf("A[%d] = %d, B[%d] = %d\n", i, A[i], i, B[i]);
+    printf("A[%d] = %x, B[%d] = %x\n", i, A[i], i, B[i]);
 
   // free(A);
   // free(B);
