@@ -53,11 +53,11 @@ struct CreateEventsPass : public arts::CreateEventsBase<CreateEventsPass> {
   void insertEventToDb(OpBuilder &builder, DataBlockOp dbOp, Value newEvent,
                        bool isOut);
   /// Handles processing of grouped events.
-  void processGroupedEvent(OpBuilder &builder, Event &event,
-                           DatablockAnalysis::Graph &graph);
+  void processEvent(OpBuilder &builder, Event &event,
+                    DatablockAnalysis::Graph &graph);
   /// Handles processing of non-grouped events.
-  void processNonGroupedEvent(OpBuilder &builder, Event &event,
-                              DatablockAnalysis::Graph &graph);
+  // void processNonGroupedEvent(OpBuilder &builder, Event &event,
+  //                             DatablockAnalysis::Graph &graph);
 
 private:
   /// Retrieve the shared analysis result.
@@ -111,17 +111,23 @@ void CreateEventsPass::runOnOperation() {
     /// Analyze the graph edges.
     /// Iterate over each edge in the dependency graph.
     for (auto &edge : graph.edges) {
-      auto &producer = graph.nodes[edge.producerID];
-
       /// If an event is already associated with the producer node,
       /// reuse it and update the event with the new edge.
+      auto &producer = graph.nodes[edge.producerID];
       if (nodeToEvent.count(&producer)) {
         insertEvent(producer, edge, nodeToEvent[&producer]);
         continue;
       }
 
-      /// For loop-dependent datablocks with a DB pointer, attempt to reuse an
-      /// existing event from any alias.
+      /// If an event is already associated with the consumer node,
+      /// ignore it, it will be handled by the producer.
+      /// TODO: This might be wrong.
+      auto &consumer = graph.nodes[edge.consumerID];
+      if (nodeToEvent.count(&consumer)) {
+        continue;
+      }
+
+      /// For loop-dependent datablocks attempt to reuse an existing event
       // if (producer.isLoopDependent && producer.hasPtrDb) {
       //   int32_t eventId = -1;
       //   for (auto alias : producer.aliases) {
@@ -155,10 +161,11 @@ void CreateEventsPass::runOnOperation() {
 
     /// Process each event.
     for (auto &event : events) {
-      if (event.edges.size() > 1)
-        processGroupedEvent(builder, event, graph);
-      else
-        processNonGroupedEvent(builder, event, graph);
+      processEvent(builder, event, graph);
+      // if (event.edges.size() > 1)
+      //   processGroupedEvent(builder, event, graph);
+      // else
+      //   processNonGroupedEvent(builder, event, graph);
     }
   });
 
@@ -206,7 +213,7 @@ void CreateEventsPass::insertEventToDb(OpBuilder &builder, DataBlockOp dbOp,
   dbOp.erase();
 }
 
-void CreateEventsPass::processGroupedEvent(OpBuilder &builder, Event &event,
+void CreateEventsPass::processEvent(OpBuilder &builder, Event &event,
                                            DatablockAnalysis::Graph &graph) {
   LLVM_DEBUG(DBGS() << "Processing grouped event\n");
   const auto &edges = event.edges;
@@ -246,22 +253,24 @@ void CreateEventsPass::processGroupedEvent(OpBuilder &builder, Event &event,
   }
 }
 
-void CreateEventsPass::processNonGroupedEvent(OpBuilder &builder, Event &event,
-                                              DatablockAnalysis::Graph &graph) {
-  LLVM_DEBUG(DBGS() << "Processing non-grouped event\n");
-  OpBuilder::InsertionGuard IG(builder);
-  auto &producerNode = graph.nodes[event.edges.front().producerID];
-  auto &consumerNode = graph.nodes[event.edges.front().consumerID];
-  auto loc = UnknownLoc::get(builder.getContext());
-  builder.setInsertionPoint(producerNode.op);
-  auto type = MemRefType::get(producerNode.op.getType().getShape(),
-                              builder.getIntegerType(64));
-  auto eventOp =
-      builder.create<arts::EventOp>(loc, type, producerNode.op.getSizes());
-  eventOp.setIsSingle();
-  insertEventToDb(builder, producerNode.op, eventOp.getResult(), true);
-  insertEventToDb(builder, consumerNode.op, eventOp.getResult(), false);
-}
+// void CreateEventsPass::processNonGroupedEvent(OpBuilder &builder, Event
+// &event,
+//                                               DatablockAnalysis::Graph
+//                                               &graph) {
+//   LLVM_DEBUG(DBGS() << "Processing non-grouped event\n");
+//   OpBuilder::InsertionGuard IG(builder);
+//   auto &producerNode = graph.nodes[event.edges.front().producerID];
+//   auto &consumerNode = graph.nodes[event.edges.front().consumerID];
+//   auto loc = UnknownLoc::get(builder.getContext());
+//   builder.setInsertionPoint(producerNode.op);
+//   auto type = MemRefType::get(producerNode.op.getType().getShape(),
+//                               builder.getIntegerType(64));
+//   auto eventOp =
+//       builder.create<arts::EventOp>(loc, type, producerNode.op.getSizes());
+//   eventOp.setIsSingle();
+//   insertEventToDb(builder, producerNode.op, eventOp.getResult(), true);
+//   insertEventToDb(builder, consumerNode.op, eventOp.getResult(), false);
+// }
 
 namespace mlir {
 namespace arts {

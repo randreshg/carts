@@ -1,9 +1,9 @@
-//===- ConvertArtsToLLVM.cpp - Convert ARTS Dialect to Func Dialect ------===//
+///==========================================================================
+// File: ConvertArtsToLLVM.cpp
 //
 // This file implements a pass to convert ARTS dialect operations into
 // `func` dialect operations.
-//
-//===----------------------------------------------------------------------===//
+///==========================================================================
 
 /// Dialects
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -162,24 +162,13 @@ void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
       op.getOutEvent());
   newDbOp->setAttrs(op->getAttrs());
 
-  /// Helper lambda to check if the indices represent a single constant zero.
-  auto isSingleZeroOffset = [&](ValueRange indices) -> bool {
-    auto indicesSize = indices.size();
-    if (indicesSize == 0)
-      return true;
-    if (indicesSize != 1)
-      return false;
-    if (auto constOp = indices.front().getDefiningOp<arith::ConstantIndexOp>())
-      return constOp.value() == 0;
-    return false;
-  };
-
   /// Helper lambda to compute the pointer based on the indices.
   auto computePtr = [&](ValueRange indices, Type elementType,
                         Location loc) -> Value {
     auto newPtr = AC->castToLLVMPtr(newDbOp, loc);
-    if (isSingleZeroOffset(indices))
+    if (indices.empty())
       return newPtr;
+    // return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr, newPtr);
 
     /// Cast indices to int32
     SmallVector<Value> newIndices;
@@ -187,9 +176,11 @@ void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
 
     for (auto index : indices)
       newIndices.push_back(AC->castToInt(AC->Int64, index, loc));
-    return builder
-        .create<LLVM::GEPOp>(loc, AC->llvmPtr, elementType, newPtr, newIndices)
-        .getResult();
+    auto gepOp = builder
+                     .create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->llvmPtr, newPtr,
+                                          newIndices)
+                     .getResult();
+    return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr, gepOp);
   };
 
   /// Lambda to process load operations (for both memref::LoadOp and
@@ -242,11 +233,13 @@ void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
     }
     /// EdtOp - update dependencies.
     else if (auto edtOp = dyn_cast<arts::EdtOp>(user)) {
-      for (auto dep : edtOp.getDependencies()) {
-        if (dep == op)
-          dep.replaceUsesWithIf(newDbOp.getResult(), [&](OpOperand &operand) {
-            return operand.getOwner() == edtOp;
-          });
+      auto edtDeps = edtOp.getDependencies();
+      for (auto dep : edtDeps) {
+        if (dep != op)
+          continue;
+        dep.replaceUsesWithIf(newDbOp.getResult(), [&](OpOperand &operand) {
+          return operand.getOwner() == edtOp;
+        });
       }
     } else {
       LLVM_DEBUG(DBGS() << "Unknown use of datablock op: " << *user << "\n");
@@ -280,8 +273,7 @@ void ConvertArtsToLLVMPass::iterateOps(Operation *operation) {
         if (auto dbOp = dyn_cast<arts::DataBlockOp>(op)) {
           handleDatablock(dbOp);
           return mlir::WalkResult::advance();
-        } 
-        else if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
+        } else if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
           if (edtOp.isParallel())
             handleParallel(edtOp);
           else if (edtOp.isSync())
@@ -333,8 +325,13 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   AC = new ArtsCodegen(module, llvmDL, mlirDL);
 
   LLVM_DEBUG(DBGS() << "Iterate over all the functions\n");
-  for(auto func : module.getOps<func::FuncOp>())
+  for (auto func : module.getOps<func::FuncOp>())
     iterateDataBlockOps(func);
+  LLVM_DEBUG({
+    dbgs() << "Module after iterating Datablocks:\n";
+    module.dump();
+  });
+
   for (auto func : module.getOps<func::FuncOp>())
     iterateOps(func);
   removeOps(module, AC->getBuilder(), opsToRemove);

@@ -1,5 +1,5 @@
 // Generate standard MLIR dialect
-/// cgeist taskwithdeps.c -fopenmp -O3 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include  &> taskwithdeps.mlir
+/// cgeist taskwithdeps.c -fopenmp -O0 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include  &> taskwithdeps.mlir
 
 // Passes
 /// carts-opt taskwithdeps.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events,convert-arts-to-llvm,arts-codegen &> taskwithdeps-arts.mlir
@@ -54,6 +54,7 @@ int main() {
     } // End of single
   } // End of parallel
 
+  printf("Parallel region DONE\n");
   printf("A: %d, B: %d\n", a, b);
   printf("-----------------\nMain function DONE\n-----------------\n");
   return 0;

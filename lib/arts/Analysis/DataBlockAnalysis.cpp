@@ -157,15 +157,21 @@ bool DatablockAnalysis::mayDepend(Node &prod, Node &cons, bool &isDirect,
     return true;
   }
 
+  /// If it is not loop dependent, there is no dependency.
+  if (!isLoopDependent) {
+    // LLVM_DEBUG(dbgs() << "    - No dependency\n");
+    return false;
+  }
+
   /// Finally, if the producer is loop dependent ant it reaches the consumer,
   /// report a dependency.
-  if (isLoopDependent &&
-      isReachable(prod.op.getOperation(), cons.op.getOperation())) {
-    // LLVM_DEBUG(dbgs() << "    - It is a dependency because of reachability\n");
-    return true;
-  }
+  // if (isReachable(prod.op.getOperation(), cons.op.getOperation())) {
+  //   // LLVM_DEBUG(dbgs() << "    - It is a dependency because of
+  //   reachability\n");
+  //   // return true;
+  // }
   // LLVM_DEBUG(dbgs() << "    - No dependency\n");
-  return false;
+  return true;
 }
 
 bool DatablockAnalysis::ptrMayAlias(Node &A, Node &B) {

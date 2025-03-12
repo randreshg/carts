@@ -35,7 +35,6 @@ int main() {
           random_number++;
           printf("EDT 3: The number is %d/%d\n", shared_number, random_number);
         }
-
       }
   } 
 
