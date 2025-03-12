@@ -68,9 +68,7 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
 
   /// If the base is a DB, it will be handled when inserting the EDT Entry
   if (hasPtrDb()) {
-    LLVM_DEBUG(
-        DBGS() << "Creating datablock that has a pointer to another datablock\n"
-               << "    " << depOp << "\n");
+    LLVM_DEBUG(DBGS() << "DB has a pointer to another datablock...\n");
     return;
   }
 
@@ -622,8 +620,7 @@ void EdtCodegen::processDependencies(Location loc) {
     if (db->isSingle()) {
       auto eventGuid = eventCG->getGuid();
       auto dbIndices = db->getIndices();
-      if (!dbIndices.empty())
-        eventGuid = builder.create<memref::LoadOp>(dbLoc, eventGuid, dbIndices);
+      eventGuid = builder.create<memref::LoadOp>(dbLoc, eventGuid, dbIndices);
       AC.addDep(eventGuid, guid, db->getEdtSlot(), dbLoc);
       continue;
     }
@@ -1132,8 +1129,9 @@ Value ArtsCodegen::getPtrFromEdtDep(Value dep, Location loc) {
       builder.create<LLVM::GEPOp>(loc, llvmPtr, ArtsEdtDep, dep,
                                   ValueRange{createIntConstant(0, Int32, loc),
                                              createIntConstant(2, Int32, loc)});
-  auto loadPtr = builder.create<LLVM::LoadOp>(loc, VoidPtr, gepOp.getResult());
-  return loadPtr.getResult();
+  return builder.create<LLVM::LoadOp>(loc, VoidPtr, gepOp.getResult());
+  // return loadPtr.getResult();
+  // return castToVoidPtr(gepOp.getResult(), loc);
 }
 
 Value ArtsCodegen::getCurrentEpochGuid(Location loc) {
