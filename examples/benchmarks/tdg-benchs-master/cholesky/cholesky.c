@@ -52,16 +52,20 @@ void cholesky_blocked(const int ts, double *Ah[NB][NB], int num_iter) {
     for (int iter = 0; iter < num_iter; iter++) {
       START_TIMER;
       for (int k = 0; k < NB; k++) {
+        /// Output 0, 0
         #pragma omp task depend(inout : AhDep[k][k])
           omp_potrf(Ah[k][k], ts, ts, AhDep);
 
         for (int i = k + 1; i < NB; i++) {
+          /// Input 0, 0
+          /// Output 0, 1
           #pragma omp task depend(in : AhDep[k][k]) depend(inout : AhDep[k][i])
             omp_trsm(Ah[k][k], Ah[k][i], ts, ts, AhDep);
         }
 
         for (int l = k + 1; l < NB; l++) {
           for (int j = k + 1; j < l; j++) {
+            /// Input 0, 1 - 0,1, 
             #pragma omp task depend(in : AhDep[k][l]) depend(in : AhDep[k][j]) depend(inout: AhDep[j][l])
             omp_gemm(Ah[k][l], Ah[k][j], Ah[j][l], ts, ts, AhDep);
           }

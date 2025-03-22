@@ -251,7 +251,6 @@ void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
   AC->createDatablock(newDbOp, op->getLoc());
 
   /// Mark dbs for removal.
-  // opsToRemove.insert(op);
   op.erase();
   opsToRemove.insert(newDbOp.getPtr().getDefiningOp());
   opsToRemove.insert(newDbOp);

@@ -54,7 +54,7 @@ struct CreateEventsPass : public arts::CreateEventsBase<CreateEventsPass> {
                        bool isOut);
   /// Handles processing of grouped events.
   void processEvent(OpBuilder &builder, Event &event,
-                    DatablockAnalysis::Graph &graph);
+                    DatablockGraph &graph);
   /// Handles processing of non-grouped events.
   // void processNonGroupedEvent(OpBuilder &builder, Event &event,
   //                             DatablockAnalysis::Graph &graph);
@@ -64,8 +64,6 @@ private:
   DatablockAnalysis *dbAnalysis;
   /// Map to store the EDT events.
   DenseMap<EdtOp, SmallVector<Value>> edtToEvents;
-  /// NoneEvent constant.
-  Value noneEvent = nullptr;
 };
 } // end anonymous namespace
 
@@ -81,18 +79,17 @@ void CreateEventsPass::runOnOperation() {
   /// Iterate over every function in the module.
   module->walk([&](func::FuncOp func) {
     /// Retrieve (or compute) the dependency graph for this function.
-    auto &graph = dbAnalysis->getOrCreateGraph(func);
-    if (graph.edges.empty())
+    auto graph = dbAnalysis->getOrCreateGraph(func);
+    if(!graph || !graph->hasNodes())
       return;
 
     /// Create a new builder for the function.
     OpBuilder builder(func);
     builder.setInsertionPointToStart(&func.getBody().front());
-    noneEvent = builder.create<arith::ConstantIntOp>(func.getLoc(), -1, 32);
 
     /// Create events based on the datablock graph.
     SmallVector<Event, 4> events;
-    DenseMap<DatablockAnalysis::Node *, int32_t> nodeToEvent;
+    DenseMap<DatablockNode *, int32_t> producerToEvent, consumerToEvent;
     events.reserve(graph.edges.size());
 
     /// Lambda to insert or update an event for a producer datablock node.
@@ -105,7 +102,9 @@ void CreateEventsPass::runOnOperation() {
       }
       auto &event = events[eventId];
       event.edges.push_back(edge);
-      nodeToEvent[&producer] = eventId;
+      /// Add producer and consumer to the event.
+      producerToEvent[&producer] = eventId;
+      consumerToEvent[&graph.nodes[edge.consumerID]] = eventId;
     };
 
     /// Analyze the graph edges.
@@ -114,33 +113,15 @@ void CreateEventsPass::runOnOperation() {
       /// If an event is already associated with the producer node,
       /// reuse it and update the event with the new edge.
       auto &producer = graph.nodes[edge.producerID];
-      if (nodeToEvent.count(&producer)) {
-        insertEvent(producer, edge, nodeToEvent[&producer]);
+      if (producerToEvent.count(&producer)) {
+        /// Otherwise, update the event with the new edge.
+        insertEvent(producer, edge, producerToEvent[&producer]);
         continue;
       }
 
-      /// If an event is already associated with the consumer node,
-      /// ignore it, it will be handled by the producer.
-      /// TODO: This might be wrong.
-      auto &consumer = graph.nodes[edge.consumerID];
-      if (nodeToEvent.count(&consumer)) {
-        continue;
-      }
-
-      /// For loop-dependent datablocks attempt to reuse an existing event
-      // if (producer.isLoopDependent && producer.hasPtrDb) {
-      //   int32_t eventId = -1;
-      //   for (auto alias : producer.aliases) {
-      //     auto &aliasNode = graph.nodes[alias];
-      //     if (nodeToEvent.count(&aliasNode)) {
-      //       eventId = nodeToEvent[&aliasNode];
-      //       insertEvent(producer, edge, eventId);
-      //       break;
-      //     }
-      //   }
-      //   insertEvent(producer, edge, -1);
-      //   continue;
-      // }
+      /// If the consumer node already has an event, ignore it
+      if (consumerToEvent.count(&graph.nodes[edge.consumerID]))
+      continue;
 
       /// For non-loop-dependent datablocks or those without a DB pointer,
       /// create a new event.
@@ -160,13 +141,8 @@ void CreateEventsPass::runOnOperation() {
     });
 
     /// Process each event.
-    for (auto &event : events) {
+    for (auto &event : events)
       processEvent(builder, event, graph);
-      // if (event.edges.size() > 1)
-      //   processGroupedEvent(builder, event, graph);
-      // else
-      //   processNonGroupedEvent(builder, event, graph);
-    }
   });
 
   LLVM_DEBUG({
@@ -214,7 +190,7 @@ void CreateEventsPass::insertEventToDb(OpBuilder &builder, DataBlockOp dbOp,
 }
 
 void CreateEventsPass::processEvent(OpBuilder &builder, Event &event,
-                                           DatablockAnalysis::Graph &graph) {
+                                    DatablockAnalysis::Graph &graph) {
   LLVM_DEBUG(DBGS() << "Processing grouped event\n");
   const auto &edges = event.edges;
 
