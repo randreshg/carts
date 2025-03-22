@@ -50,49 +50,35 @@ int main(int argc, char *argv[]) {
     #pragma omp single
     {
       for (int i = 0; i < N; i++) {
-        // For the first iteration, no inter-iteration dependency.
-        // __arts_edt_3
+        // EDT 1
         #pragma omp task depend(inout: A[i])
         {
           A[i] = i;
           printf("Task %d - 0: Initializing A[%d] = %d\n", i, i, A[i]);
         }
 
-        // For the first iteration, no inter-iteration dependency.
-        #pragma omp task depend(in: A[i]) depend(inout: B[i])
-        {
-          B[i] = A[i] + 5;
-          printf("Task %d - 1: Computing B[%d] = %d\n", i, i, B[i]);
+        if (i == 0) {
+          // EDT 2
+          #pragma omp task depend(in: A[i]) depend(inout: B[i])
+          {
+            B[i] = A[i] + 5;
+            printf("Task %d - 1: Computing B[%d] = %d\n", i, i, B[i]);
+          }
         }
-        // if (i == 0) {
-        //   // For the first iteration, no inter-iteration dependency.
-        //   #pragma omp task depend(in: A[i]) depend(inout: B[i])
-        //   {
-        //     B[i] = A[i] + 5;
-        //     printf("Task %d - 1: Computing B[%d] = %d\n", i, i, B[i]);
-        //   }
-        // }
-        // else {
-        //   // For subsequent iterations, create inter-iteration dependencies by depending on the previous B.
-        //   #pragma omp task depend(in: B[i-1]) depend(in: A[i]) depend(inout: B[i])
-        //   {
-        //     B[i] = A[i] + B[i-1] + 5;
-        //     printf("Task %d - 2: Computing B[%d] = %d\n", i, i, B[i]);
-        //   }
-        // }
-        
-        // Print the final value of B[i] after the computation.
-        // #pragma omp task depend(in: B[i])
-        // {
-        //   printf("Task %d - 3: Final B[%d] = %d\n", i, i, B[i]);
-        // }
+        else {
+          // EDT 3
+          #pragma omp task depend(in: A[i]) depend(in: B[i - 1]) depend(inout: B[i])
+          {
+            B[i] = A[i] + B[i-1] + 5;
+            printf("Task %d - 2: Computing B[%d] = %d\n", i, i, B[i]);
+          }
+        }
       }
     }
   }
 
   printf("Final arrays:\n");
   /// print position 0
-  printf("A[0] = %d, B[0] = %d\n", A[0], B[0]);
   for (int i = 0; i < N; i++)
     printf("A[%d] = %d, B[%d] = %d\n", i, A[i], i, B[i]);
 

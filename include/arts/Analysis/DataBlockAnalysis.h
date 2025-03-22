@@ -2,31 +2,6 @@
 /// File: DataBlockAnalysis.h
 ///
 /// This pass performs a comprehensive analysis on arts.datablock operations.
-///
-/// It:
-///   1. Collects arts.datablock ops top-level region of a function.
-///   2. Classifies each datablock as memory read or write based on its "mode"
-///      attribute:
-///         "in"   → read-only,
-///         "out"  → write-only,
-///         "inout"→ mixed read/write.
-///       (The datablock op implements MemoryEffectOpInterface so that polygeist
-///       alias analysis sees its effects.)
-///   4. Runs a forward BFS from every scf.for induction variable (IV) to mark
-///      datablocks whose indices depend on a loop IV as isLoopDependent.
-///   5. Builds a dependency graph
-///   6. Collects usage statistics for each datablock: total use count and the
-///      set of parent regions in which it is used, average use count and
-///      average region frequency.
-///
-/// Optimizations:
-///   1. Deduplicates datablock nodes by comparing their mode, base ptr, and
-///      numeric infoing
-///   2. Detects “out-only” datablocks (writer nodes with no consumers) and
-///      reports them as removable.
-///   3. Additionally, it detects if a datablock is used only for reads versus
-///      mixed read/write, and reports candidates for fusion (if used only in
-///      one region) or elimination (if read-only and used rarely).
 ///==========================================================================
 
 #ifndef MLIR_ANALYSIS_DATABLOCKANALYSIS_H
@@ -34,6 +9,7 @@
 
 #include "arts/ArtsDialect.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Dominance.h"
@@ -45,133 +21,185 @@
 #include "llvm/ADT/StringRef.h"
 #include <cstdint>
 #include <sys/types.h>
+#include <utility>
 
 namespace mlir {
 namespace arts {
+class DatablockAnalysis;
+class DatablockNode;
+enum DatablockNodeComp { Equal, BaseAlias, Different };
+/// An Environment maps each db op to the latest Node that defines it.
+using Environment = llvm::DenseMap<arts::DataBlockOp, DatablockNode>;
 
-///==========================================================================
-/// DatablockAnalysis Class Declaration
-///==========================================================================
-class DatablockAnalysis {
+//===----------------------------------------------------------------------===//
+// DatablockNode
+// Node representing one arts.datablock op in the dependency graph.
+//===----------------------------------------------------------------------===//
+class DatablockNode {
+  friend class DatablockGraph;
+  friend class DatablockAnalysis;
+
 public:
-  explicit DatablockAnalysis(Operation *module);
+  DatablockNode(DatablockAnalysis *DA) : DA(DA) {}
 
-  /// Node representing one arts.datablock op in the dependency graph.
-  struct Node {
-    unsigned id = 0;
-    arts::DataBlockOp op;
+  /// Interface
+  bool isWriter() { return mode == "out" || mode == "inout"; }
+  bool isReader() { return mode == "in" || mode == "inout"; }
 
-    /// Db attributtes
-    StringRef mode;
-    Value ptr;
-    SmallVector<Value, 4> indices, sizes;
-    Type elementType;
-    uint64_t elementTypeSize;
-    MemRefType resultType;
-    AffineMap affineMap;
-    bool hasPtrDb, isSingle;
+  /// Uses
+  void collectUses();
 
-    /// Analysis results
-    bool isLoopDependent = false;
-    SmallVector<MemoryEffects::EffectInstance, 2> effects;
+  /// Attributes
+  unsigned id = 0;
+  arts::DataBlockOp op;
 
-    /// Uses
-    unsigned useCount;
-    Node *parent = nullptr;
-    arts::EdtOp edtParent = nullptr;
-    arts::EdtOp userEdt = nullptr;
-    uint32_t userEdtPos = 0;
+  /// Db attributtes
+  StringRef mode;
+  Value ptr;
+  SmallVector<Value, 4> indices, sizes;
+  Type elementType;
+  uint64_t elementTypeSize;
+  MemRefType resultType;
+  AffineMap affineMap;
+  bool hasPtrDb, isSingle;
 
-    /// A duplicated node is a node with the same mode, aliasing base memref,
-    /// and indices.
-    SetVector<unsigned> duplicates;
-    /// Set of nodes that alias this node.
-    SetVector<unsigned> aliases;
-  };
+  /// Analysis results
+  bool isLoopDependent = false;
+  SmallVector<MemoryEffects::EffectInstance, 2> effects;
 
-  enum NodeComp { Equal, BaseAlias, Different };
+  /// Uses
+  unsigned useCount;
+  DatablockNode *parent = nullptr;
+  arts::EdtOp edtParent = nullptr;
+  arts::EdtOp userEdt = nullptr;
+  uint32_t userEdtPos = 0;
+
+  /// A duplicated node is a node with the same mode, aliasing base memref,
+  /// and indices.
+  SetVector<unsigned> duplicates;
+  /// Set of nodes that alias this node.
+  SetVector<unsigned> aliases;
+
+  /// Context of the analysis
+  /// This is used to access the DatablockAnalysis for dependency analysis.
+  // enum Context { Entry, EDT, For, If, Func };
+  // SmallVector<Context, 4> context;
+  // Context getContext() { return context.back(); }
+  // void pushContext(Context ctx) { context.push_back(ctx); }
+  // void popContext() { context.pop_back(); }
+
+private:
+  DatablockAnalysis *DA;
+};
+
+//===----------------------------------------------------------------------===//
+// DatablockGraph
+//===----------------------------------------------------------------------===//
+class DatablockGraph {
+public:
+  explicit DatablockGraph(func::FuncOp func, DatablockAnalysis *DA);
+  friend class DatablockAnalysis;
 
   /// Edge from a producer (writer) node to a consumer (reader) node.
   struct Edge {
-    unsigned producerID;
-    unsigned consumerID;
-    bool isDirect = true;
-    bool isLoopDependent = false;
+    enum Type { Direct, Indirect };
+    unsigned producerID, consumerID;
+    Type ty;
+
+    bool isDirect() const { return ty == Direct; }
   };
 
-  /// The complete dependency graph.
-  struct Graph {
-    SmallVector<Node, 8> nodes;
-    SmallVector<Edge, 8> edges;
-  };
+  /// Interface
+  func::FuncOp getFunction() { return func; }
+  DatablockNode &getNode(arts::DataBlockOp dbOp) { return nodeMap[dbOp]; }
+  DatablockNode &getNode(unsigned id) { return nodes[id]; }
+  bool isEntryNode(unsigned id) const { return id == entryDbNode.id; }
+  bool hasNodes() const { return !nodes.empty(); }
+  SetVector<unsigned> getProducers() const;
+  llvm::SmallDenseMap<unsigned, Edge::Type, 4> getEdgesFor(unsigned producerID);
 
-  /// Run the analysis on a single function (its top-level region) and store the
-  /// graph.
-  Graph analyzeFunction(func::FuncOp func);
-  /// Print the graph for a given function.
-  void printGraph(func::FuncOp func);
-  /// Compute and print additional statistics for a given function's graph.
-  void computeStatistics(func::FuncOp func);
+  /// Add an edge from a producer node to a consumer node.
+  bool addEdge(DatablockNode &prod, DatablockNode &cons, Edge::Type ty);
+
+  void build();
+  void print();
+  void computeStatistics();
+  void collectNodes(Region &region);
+
+  /// Optimizations
+  void fuseAdjacentNodes();
+  void detectOutOnlyNodes();
+  void deduplicateNodes();
+
+private:
+  /// Attributes
+  func::FuncOp func;
+  DatablockAnalysis *DA;
+  SmallVector<DatablockNode, 8> nodes;
+  llvm::DenseMap<unsigned, llvm::SmallDenseMap<unsigned, Edge::Type, 4>> edges;
+
+  /// Map from each arts.datablock op to its corresponding Node.
+  Environment nodeMap;
+
+  /// Functions
+  /// Process a structured region, updates the DDG and returns the new
+  /// environment and whether the environment has changed.
+  std::pair<Environment, bool> processRegion(Region &region, Environment env);
+  std::pair<Environment, bool> processEdt(arts::EdtOp edtOp, Environment env);
+  std::pair<Environment, bool> processFor(scf::ForOp forOp, Environment env);
+  std::pair<Environment, bool> processIf(scf::IfOp ifOp, Environment env);
+  std::pair<Environment, bool> processCall(func::CallOp callOp,
+                                           Environment env);
+
+  /// Find datablock that define the dbNode in the given environment.
+  SmallVector<DatablockNode, 4> findDefinition(DatablockNode dbNode,
+                                               Environment env);
+
+  /// Merge two environments by taking the union of definitions for each
+  /// datablock.
+  Environment mergeEnvironments(const Environment &env1,
+                                const Environment &env2);
+
+  /// Entry node
+  DatablockNode entryDbNode;
+};
+
+//===----------------------------------------------------------------------===//
+// DatablockAnalysis
+//===----------------------------------------------------------------------===//
+class DatablockAnalysis {
+public:
+  explicit DatablockAnalysis(Operation *module);
+  ~DatablockAnalysis();
+
+  friend class DatablockGraph;
+
   /// Get the graph for a given function, or create it if it does not exist.
-  Graph &getOrCreateGraph(func::FuncOp func);
-  /// Get db node
-  Node &getNode(arts::DataBlockOp dbOp) { return nodeMap[dbOp]; }
+  DatablockGraph *getOrCreateGraph(func::FuncOp func);
 
 private:
   /// Dependency analysis.
-  bool mayDepend(Node &prod, Node &cons, bool &isDominated,
-                 bool &isLoopDependent, DominanceInfo &domInfo);
-  bool ptrMayAlias(Node &A, Node &B);
-  bool ptrMayAlias(Node &A, Value val);
-  NodeComp compare(Node &A, Node &B);
-  void buildAdjacency(Graph &graph, DominanceInfo &domInfo);
+  bool mayDepend(DatablockNode &prod, DatablockNode &cons, bool &isDirect);
+  bool ptrMayAlias(DatablockNode &A, DatablockNode &B);
+  bool ptrMayAlias(DatablockNode &A, Value val);
+  DatablockNodeComp compare(DatablockNode &A, DatablockNode &B);
 
   /// Analysis the loops of the region and collect the values that depend on
   /// them
   void analyzeLoops(Region &region,
                     DenseMap<Value, SmallVector<Operation *, 4>> &valMap);
 
-  /// Node collection
-  void collectNodes(Region &region, Graph &graph);
-
-  /// Uses
-  void collectUses(Node &node);
-
-  /// Check if an load/store operation uses a datablock
-  // bool isLoadStoreUse(Operation *op, Node &node);
-
-  /// Statistics
-  void computeStatistics(Graph &graph);
-
   /// Other
-  void printGraph(Graph &graph);
+  void printGraph(func::FuncOp func);
 
-  /// Helper functions for mode classification.
-  bool isWriter(Node &node) {
-    return node.mode == "out" || node.mode == "inout";
-  }
+  /// Returns true if `target` is reachable from `source` in the EDT CFG.
+  bool isReachable(Operation *source, Operation *target);
 
-  bool isReader(Node &node) {
-    return node.mode == "in" || node.mode == "inout";
-  }
-
-  /// Map from function to its dependency graph.
-  llvm::DenseMap<func::FuncOp, Graph> functionGraphMap;
-  /// Map from each arts.datablock op to its corresponding Node.
-  llvm::DenseMap<arts::DataBlockOp, Node> nodeMap;
   /// Set of equivalent datablock nodes.
   llvm::SmallDenseSet<unsigned> equivalentNodes;
 
-public:
-  /// Optimizations
-  void fuseAdjacentNodes(Graph &graph);
-  void detectOutOnlyNodes(Graph &graph);
-  void deduplicateNodes(Graph &graph);
-
-  /// Results
-  // DenseMap<arts::DataBlockOp, Node> replaceMap;
-  // SmallVector<Node, 4> toRewire;
-  // SmallVector<arts::DataBlockOp> unusedDbs;
+  /// Map from function to its dependency graph.
+  llvm::DenseMap<func::FuncOp, DatablockGraph *> functionGraphMap;
 };
 
 } // namespace arts

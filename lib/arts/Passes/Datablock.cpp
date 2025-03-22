@@ -62,9 +62,7 @@ void DatablockPass::runOnOperation() {
   module->walk([&](func::FuncOp func) {
     /// Retrieve (or compute) the dependency graph for this function.
     auto &graph = dbAnalysis.getOrCreateGraph(func);
-    if (graph.edges.empty())
-      return;
-    dbAnalysis.printGraph(func);
+    graph.print();
   });
 
   // module.walk([&](EdtOp edt) {
