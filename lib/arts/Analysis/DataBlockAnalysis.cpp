@@ -82,15 +82,17 @@ void DatablockNode::collectUses() {
 // DatablockGraph
 //===----------------------------------------------------------------------===//
 DatablockGraph::DatablockGraph(func::FuncOp func, DatablockAnalysis *DA)
-    : func(func), DA(DA), entryDbNode(DA) {
+    : func(func), DA(DA) {
   assert(func && "Function cannot be null");
   assert(DA && "DatablockAnalysis cannot be null");
 
   /// Create entry Node:
   {
-    entryDbNode.id = 0;
-    entryDbNode.op = nullptr;
-    entryDbNode.ptr = nullptr;
+    entryDbNode = new DatablockNode(DA);
+    entryDbNode->id = 0;
+    entryDbNode->op = nullptr;
+    entryDbNode->ptr = nullptr;
+    nodes.push_back(entryDbNode);
   }
 
   collectNodes(func.getBody());
@@ -219,7 +221,7 @@ std::pair<Environment, bool> DatablockGraph::processEdt(arts::EdtOp edtOp,
         LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                           << "    - No previous definition for DB #" << dbIn->id
                           << ", add edge from entry node\n");
-        addEdge(entryDbNode, *dbIn);
+        addEdge(*entryDbNode, *dbIn);
         continue;
       }
       LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ') << "Found "
@@ -233,7 +235,14 @@ std::pair<Environment, bool> DatablockGraph::processEdt(arts::EdtOp edtOp,
         LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                           << "Adding edge from DB #" << prodDef->id
                           << " to DB #" << dbIn->id << "\n");
-        addEdge(*prodDef, *dbIn);
+        bool res = addEdge(*prodDef, *dbIn);
+        if (res) {
+          LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                            << "Edge added successfully\n");
+        } else {
+          LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                            << "Edge already exists, skipping\n");
+        }
       }
     }
 
@@ -287,23 +296,43 @@ std::pair<Environment, bool> DatablockGraph::processFor(scf::ForOp forOp,
   LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                     << "- Processing ForOp loop\n");
   Environment loopEnv = env;
-  std::pair<Environment, bool> bodyResult;
-  bool changed = false;
-  /// Iterate until reaching a fixed-point in the loop environment.
-  do {
-    bodyResult = processRegion(forOp->getRegion(0), loopEnv);
-    auto newLoopEnv = mergeEnvironments(env, bodyResult.first);
-    changed = changed || bodyResult.second;
-    if (!bodyResult.second)
+  bool overallChanged = false;
+  size_t prevEdgeCount = edges.size();
+  unsigned iterationCount = 0;
+  constexpr unsigned maxIterations = 5;
+
+  // Iterate until a fixed-point is reached or maximum iterations are hit.
+  while (true) {
+    ++iterationCount;
+    // Process the loop body region.
+    auto bodyResult = processRegion(forOp->getRegion(0), loopEnv);
+    Environment newLoopEnv = mergeEnvironments(loopEnv, bodyResult.first);
+    overallChanged |= bodyResult.second;
+    size_t currEdgeCount = edges.size();
+
+    // Log the current iteration and edge count.
+    LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ') << "  - Iteration "
+                      << iterationCount << " completed: edges=" << currEdgeCount
+                      << "\n");
+
+    /// Break if no changes were made and the edge count is stable.
+    if (!bodyResult.second && (currEdgeCount == prevEdgeCount))
       break;
+
+    /// If maximum iterations reached without new edges, exit loop.
+    if (iterationCount >= maxIterations && (currEdgeCount == prevEdgeCount))
+      break;
+
+    // Prepare for next iteration.
+    loopEnv = std::move(newLoopEnv);
+    prevEdgeCount = currEdgeCount;
     LLVM_DEBUG(
         dbgs() << std::string(analysisDepth * 2, ' ')
                << "  - Loop environment updated, iterating fixed-point...\n");
-    loopEnv = newLoopEnv;
-  } while (true);
+  }
   LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                     << "- Finished processing ForOp loop\n");
-  return {loopEnv, changed};
+  return {loopEnv, overallChanged};
 }
 
 std::pair<Environment, bool> DatablockGraph::processIf(scf::IfOp ifOp,
@@ -385,6 +414,11 @@ void DatablockGraph::print() {
   llvm::raw_string_ostream os(info);
   os << "Nodes:\n";
   for (auto *node : nodes) {
+    /// Skip the entry node
+    if (node == entryDbNode)
+      continue;
+
+    /// Print the node information
     auto &n = *node;
     os << "  #" << n.id << " " << n.mode << "\n";
     os << "    " << n.op << "\n";
@@ -392,8 +426,7 @@ void DatablockGraph::print() {
     os << " useCount=" << n.useCount;
     os << " hasPtrDb=" << (n.hasPtrDb ? "true" : "false");
     os << " userEdtPos=" << n.userEdtPos;
-    os << (n.parent ? " parent=#" + std::to_string(n.parent->id) : "")
-       << "\n";
+    os << (n.parent ? " parent=#" + std::to_string(n.parent->id) : "") << "\n";
   }
   os << "Edges:\n";
   if (edges.empty()) {
@@ -447,7 +480,7 @@ void DatablockGraph::collectNodes(Region &region) {
     DatablockNode *dbNode = new DatablockNode(DA);
     assert(dbNode && "Failed to allocate DatablockNode");
     auto &node = *dbNode;
-    node.id = nextID++;
+    node.id = ++nextID;
     node.op = dbOp;
     node.mode = dbOp.getMode();
     node.ptr = dbOp.getPtr();
@@ -597,8 +630,8 @@ bool DatablockAnalysis::isReachable(Operation *source, Operation *target) {
 /// Dependency analysis.
 bool DatablockAnalysis::mayDepend(DatablockNode &prod, DatablockNode &cons,
                                   bool &isDirect) {
-  /// Verify if the nodes are different and belong to the same EDT parent.
-  if ((&prod == &cons) || (prod.edtParent != cons.edtParent))
+  /// Verify if they belong to the same EDT parent.
+  if (prod.edtParent != cons.edtParent)
     return false;
 
   /// Only consider writer producer and reader consumer.

@@ -56,12 +56,25 @@ private:
   DatablockAnalysis *dbAnalysis;
   /// Rewire map
   DenseMap<arts::DataBlockOp, arts::DataBlockOp> rewireMap;
+
+  /// Context to keep track of events for each EDT operation.
+  struct EdtContext {
+    /// Map to keep track of datablock operations and their corresponding
+    /// events.
+    DenseMap<int32_t, int32_t> nodeToEvent;
+    /// Each value is a vector holding events. Each event contains a vector
+    /// of dependency edges (producer-consumer).
+    SmallVector<SmallVector<DatablockGraph::Edge, 4>, 4> events;
+  };
+
+  /// Edt Entry
+  EdtOp edtEntry;
 };
 } // end anonymous namespace
 
 void CreateEventsPass::runOnOperation() {
   ModuleOp module = getOperation();
-  LLVM_DEBUG({ dbgs() << line << "CreateEventsPass STARTED\n" << line; });
+  LLVM_DEBUG(dbgs() << line << "CreateEventsPass STARTED\n" << line;);
 
   dbAnalysis = &getAnalysis<DatablockAnalysis>();
 
@@ -76,43 +89,57 @@ void CreateEventsPass::runOnOperation() {
     OpBuilder builder(func);
     builder.setInsertionPointToStart(&func.getBody().front());
 
-    /// Create events based on the datablock graph.
-    SmallVector<DatablockGraph::Edge, 4> eventEdgeBuffer;
-    DenseMap<int32_t, int32_t> nodeToEvent;
-    SmallVector<SmallVector<DatablockGraph::Edge, 4>, 4> events;
-    events.reserve(graph->getProducers().size());
+    /// Map to keep track of the events for a given EDT Context.
+    DenseMap<EdtOp, EdtContext> edtToEvents;
 
-    /// Lambda to insert or update an event for a producer datablock node.
+    /// Insert or update an event for a producer datablock node.
     auto insertEvent = [&](int32_t producerID, int32_t consumerID) {
+      /// If the producer is an entry node, use the consumer ID.
+      int32_t dbID = graph->isEntryNode(producerID) ? consumerID : producerID;
+      auto *dbNode = graph->getNode(dbID);
+      assert(dbNode && "Datablock node must exist");
+
+      auto &context =
+          edtToEvents[dbNode->edtParent ? dbNode->edtParent : edtEntry];
+      auto &nodeToEvent = context.nodeToEvent;
       int32_t eventId = -1;
-      if (graph->isEntryNode(producerID)) {
-        eventId = static_cast<int32_t>(events.size());
-        events.emplace_back(); /// Create new empty event
-        events.back().push_back({producerID, consumerID});
-        nodeToEvent.insert({consumerID, eventId});
+
+      /// Helper lambda to register the edge and associate nodes.
+      auto addEdge = [&](int32_t eId) {
+        context.events[eId].push_back({producerID, consumerID});
+        nodeToEvent.try_emplace(producerID, eId);
+        nodeToEvent.try_emplace(consumerID, eId);
+      };
+
+      if (auto it = nodeToEvent.find(dbID); it != nodeToEvent.end()) {
+        /// Datablock node already has an event; update it.
+        addEdge(it->second);
         return;
       }
 
-      auto it = nodeToEvent.find(producerID);
-      if (it != nodeToEvent.end()) {
-        eventId = it->second;
-      } else {
-        const auto &producer = *graph->getNode(producerID);
-        if (producer.hasPtrDb) {
-          auto parentIt = nodeToEvent.find(producer.parent->id);
-          if (parentIt != nodeToEvent.end()) {
-            eventId = parentIt->second;
-          }
+      if (dbNode->parent) {
+        int32_t parentID = dbNode->parent->id;
+        if (auto it = nodeToEvent.find(parentID); it != nodeToEvent.end()) {
+          /// Parent is associated with an event; update it.
+          addEdge(it->second);
+          return;
         }
-        if (eventId == -1) {
-          eventId = static_cast<int32_t>(events.size());
-          events.emplace_back();
-        }
+        /// Create a new event and associate parent.
+        eventId = static_cast<int32_t>(context.events.size());
+        context.events.emplace_back();
+        context.events.back().push_back({producerID, consumerID});
+        nodeToEvent[producerID] = eventId;
+        nodeToEvent[consumerID] = eventId;
+        nodeToEvent[parentID] = eventId;
+        return;
       }
-      events[eventId].push_back({producerID, consumerID});
+
+      /// If no event exists, create a new event.
+      eventId = static_cast<int32_t>(context.events.size());
+      context.events.emplace_back();
+      context.events.back().push_back({producerID, consumerID});
       nodeToEvent[producerID] = eventId;
-      if (graph->getNode(producerID)->hasPtrDb)
-        nodeToEvent[graph->getNode(producerID)->parent->id] = eventId;
+      nodeToEvent[consumerID] = eventId;
     };
 
     /// Analyze the graph edges.
@@ -123,83 +150,84 @@ void CreateEventsPass::runOnOperation() {
       return;
 
     /// Iterate over each edge of the graph.
-    for (const auto &producerID : producers) {
-      auto consumers = graph->getConsumers(producerID);
-      for (const auto &consumerID : consumers)
+    for (auto producerID : producers) {
+      for (auto consumerID : graph->getConsumers(producerID))
         insertEvent(producerID, consumerID);
     }
 
-    LLVM_DEBUG(DBGS() << "Processing events for function: " << func.getName()
-                      << " with " << events.size() << " events\n";);
-    int eventId = 0;
-    for (auto &eventEdges : events) {
-      LLVM_DEBUG({
-        dbgs() << "  Event #" << eventId++ << ":\n";
-        for (const auto &edge : eventEdges) {
-          dbgs() << "    Producer #" << edge.first << ", Consumer #"
-                 << edge.second << "\n";
-        }
-      });
-      processEvent(builder, eventEdges, graph);
+    /// Process the events for each EDT context.
+    auto edtCtxItr = 0;
+    for (auto &edtCtx : edtToEvents) {
+      auto &events = edtCtx.second.events;
+      LLVM_DEBUG(DBGS() << "Processing events for function: " << func.getName()
+                        << " and EDT context #" << edtCtxItr << " with "
+                        << events.size() << " events\n");
+      int eventId = 0;
+      for (auto &eventEdges : events) {
+        LLVM_DEBUG({
+          dbgs() << "  Event #" << eventId++ << ":\n";
+          for (auto &edge : eventEdges) {
+            dbgs() << "    Producer #" << edge.first << ", Consumer #"
+                   << edge.second << "\n";
+          }
+        });
+        processEvent(builder, eventEdges, graph);
+      }
+
+      LLVM_DEBUG(dbgs() << "Finished processing events for function: "
+                        << func.getName() << " and EDT context #" << edtCtxItr
+                        << "\n");
+      ++edtCtxItr;
+    };
+
+    /// Rewire the datablock operations to use the new events.
+    for (auto &pair : rewireMap) {
+      auto dbOp = pair.first;
+      auto newDbOp = pair.second;
+      assert(dbOp && newDbOp && "Invalid datablock operation");
+      dbOp.replaceAllUsesWith(newDbOp.getOperation());
+      dbOp.erase();
     }
 
-    LLVM_DEBUG(dbgs() << "Finished processing events for function: "
-                      << func.getName() << "\n");
+    LLVM_DEBUG(dbgs() << line << "CreateEventsPass FINISHED\n" << line);
   });
-
-  /// Rewire the datablock operations to use the new events.
-  for (auto &pair : rewireMap) {
-    auto dbOp = pair.first;
-    auto newDbOp = pair.second;
-    assert(dbOp && newDbOp && "Invalid datablock operation");
-    dbOp.replaceAllUsesWith(newDbOp.getOperation());
-    dbOp.erase();
-  }
-
-  LLVM_DEBUG(DBGS() << line << "CreateEventsPass FINISHED\n" << line;);
 }
+
 void CreateEventsPass::insertEventToDb(OpBuilder &builder, DataBlockOp dbOp,
                                        Value newEvent, bool isOut) {
   auto origDbOp = dbOp;
   bool alreadyExists = false;
-  /// If the dbOp is already in the rewireMap, use the newDbOp
   if (auto it = rewireMap.find(dbOp); it != rewireMap.end()) {
     dbOp = it->second;
     alreadyExists = true;
   }
 
-  /// Set input or output event accordingly.
-  Value inEvent = isOut ? dbOp.getInEvent() : newEvent;
-  Value outEvent = isOut ? newEvent : dbOp.getOutEvent();
-  if (!isOut)
-    assert(!dbOp.getInEvent() && "DataBlock already has an Input event");
-  else
-    assert(!dbOp.getOutEvent() && "DataBlock already has an Output event");
+  /// Avoid overwriting an existing event.
+  if ((isOut && dbOp.getOutEvent()) || (!isOut && dbOp.getInEvent()))
+    return;
 
-  /// Set insertion point to the dbOp.
   auto loc = dbOp.getLoc();
-  OpBuilder::InsertionGuard IG(builder);
+  OpBuilder::InsertionGuard guard(builder);
   builder.setInsertionPoint(dbOp);
 
-  /// Create a new DataBlockOp with the updated event.
+  /// Set the event operands.
+  Value inEvent = isOut ? dbOp.getInEvent() : newEvent;
+  Value outEvent = isOut ? newEvent : dbOp.getOutEvent();
+
   auto newDbOp = builder.create<arts::DataBlockOp>(
       loc, dbOp.getType(), dbOp.getModeAttr(), dbOp.getPtr(),
       dbOp.getElementType(), dbOp.getElementTypeSize(), dbOp.getIndices(),
       dbOp.getSizes(), inEvent, outEvent, dbOp.getAffineMapAttr());
 
-  /// Copy remaining attributes while skipping those that are overwritten.
+  /// Copy all attributes except "operandSegmentSizes".
   for (auto attr : dbOp->getAttrs()) {
-    if (attr.getName() == "operandSegmentSizes")
-      continue;
-    newDbOp->setAttr(attr.getName(), attr.getValue());
+    if (attr.getName() != "operandSegmentSizes")
+      newDbOp->setAttr(attr.getName(), attr.getValue());
   }
 
-  /// Update the datablock node in the rewire map.
   rewireMap[origDbOp] = newDbOp;
-  if (alreadyExists) {
-    /// Erase the old dbOp since a new one already exists.
+  if (alreadyExists)
     dbOp.erase();
-  }
 }
 
 void CreateEventsPass::processEvent(
@@ -207,17 +235,12 @@ void CreateEventsPass::processEvent(
     DatablockGraph *graph) {
   OpBuilder::InsertionGuard IG(builder);
 
-  LLVM_DEBUG(dbgs() << "Processing event: \n");
-  for (const auto &edge : eventEdges) {
-    LLVM_DEBUG(dbgs() << "    Producer #" << edge.first << ", Consumer #"
-                      << edge.second << "\n");
-  }
-
   /// Use the first consumer to determine event type and size.
   LLVM_DEBUG(dbgs() << "    Using consumer #" << eventEdges.front().second
                     << "\n";);
   auto *dbOp = graph->getNode(eventEdges.front().second);
   assert(dbOp && "Event must have a valid datablock node");
+
   /// Set insertion point to the beginning of the EDT parent's region if
   /// available,
   if (dbOp->edtParent) {

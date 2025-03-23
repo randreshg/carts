@@ -1,4 +1,7 @@
 # CARTS
+Author: Rafael Andres Herrera Guaitero
+Email: rafaelhg@udel.edu
+
 
 ### Dependencies
 - ARTS
