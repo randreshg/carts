@@ -163,13 +163,17 @@ public:
   Value getGuid() { return guid; }
   ValueRange getSizes() { return eventOp.getSizes(); }
 
+  /// Setters
+  void setDataGuid(Value dataGuid) { this->dataGuid = dataGuid; }
+
   /// Interface
-  void create(arts::EventOp eventOp, Location loc);
+  void create(Location loc);
 
 private:
   ArtsCodegen &AC;
   OpBuilder &builder;
   EventOp eventOp = nullptr;
+  Value dataGuid = nullptr;
   Value guid = nullptr;
 };
 
@@ -223,7 +227,7 @@ public:
   Value getCurrentNode(Location loc);
   void satisfyEventDependency(Value eventGuid, Value depGuid, Location loc);
   void addEventDependency(Value eventGuid, Value edtGuid, Value edtSlot,
-                          Location loc);
+                          Value dataGuid, Location loc);
   void incrementEventLatchCount(Value eventGuid, Value dataGuid, Location loc);
   void decrementEventLatchCount(Value eventGuid, Value dataGuid, Location loc);
   func::CallOp signalEdt(Value edtGuid, Value edtSlot, Value dbGuid,

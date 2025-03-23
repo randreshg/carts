@@ -35,7 +35,7 @@ int main() {
     #pragma omp single
     {
       printf("Main thread: Creating tasks\n");
-      /// EDT 1
+      /// EDT 1 - Guid 4177526785
       #pragma omp task depend(inout: a)
       {
           a = rand() % 100;
