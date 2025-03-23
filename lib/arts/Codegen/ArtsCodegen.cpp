@@ -605,6 +605,8 @@ void EdtCodegen::processDependencies(Location loc) {
       auto dbIndices = dbCG->getIndices();
       auto loadedEventGuid =
           builder.create<memref::LoadOp>(dbLoc, eventGuid, dbIndices);
+      if (!dbIndices.empty())
+        dbGuid = builder.create<memref::LoadOp>(dbLoc, dbGuid, dbIndices);
       AC.addEventDependency(loadedEventGuid, guid, dbCG->getEdtSlot(), dbGuid,
                             dbLoc);
       continue;
@@ -621,12 +623,12 @@ void EdtCodegen::processDependencies(Location loc) {
         addDependenciesRecursive = [&](unsigned dim,
                                        SmallVector<Value, 4> &indices) {
           if (dim == numEventDims) {
-            auto loadedDbGuid =
-                builder.create<memref::LoadOp>(dbLoc, dbGuid, indices);
             auto loadedEventGuid =
                 builder.create<memref::LoadOp>(dbLoc, eventGuid, indices);
             auto currentSlot =
                 builder.create<memref::LoadOp>(dbLoc, inSlotAlloc.getResult());
+            auto loadedDbGuid =
+                builder.create<memref::LoadOp>(dbLoc, dbGuid, indices);
             AC.addEventDependency(loadedEventGuid, guid, currentSlot,
                                   loadedDbGuid, dbLoc);
             /// Increment the slot for the next dependency.
@@ -676,6 +678,8 @@ void EdtCodegen::processDependencies(Location loc) {
         auto dbIndices = dbCG->getIndices();
         auto loadedEventGuid =
             builder.create<memref::LoadOp>(dbLoc, eventGuid, dbIndices);
+        if (!dbIndices.empty())
+          dbGuid = builder.create<memref::LoadOp>(dbLoc, dbGuid, dbIndices);
         AC.incrementEventLatchCount(loadedEventGuid, dbGuid, dbLoc);
         continue;
       }

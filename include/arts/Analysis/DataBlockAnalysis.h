@@ -102,7 +102,7 @@ public:
   func::FuncOp getFunction() { return func; }
   DatablockNode *getNode(arts::DataBlockOp dbOp) { return nodeMap[dbOp]; }
   DatablockNode *getNode(unsigned id) { return nodes[id]; }
-  bool isEntryNode(unsigned id) const { return id == entryDbNode.id; }
+  bool isEntryNode(unsigned id) const { return id == entryDbNode->id; }
   bool hasNodes() const { return !nodes.empty(); }
   SetVector<unsigned> getProducers() const;
   llvm::SetVector<unsigned> getConsumers(unsigned producerID);
@@ -150,7 +150,7 @@ private:
                                 const Environment &env2);
 
   /// Entry node
-  DatablockNode entryDbNode;
+  DatablockNode *entryDbNode;
 };
 
 //===----------------------------------------------------------------------===//

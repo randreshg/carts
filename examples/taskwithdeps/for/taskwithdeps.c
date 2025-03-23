@@ -37,8 +37,6 @@ int main(int argc, char *argv[]) {
   }
   int N = atoi(argv[1]);
   int A[N], B[N];
-
-
   srand(time(NULL));
 
   printf("-----------------\nMain function\n-----------------\n");
@@ -50,7 +48,6 @@ int main(int argc, char *argv[]) {
     #pragma omp single
     {
       for (int i = 0; i < N; i++) {
-        // EDT 1
         #pragma omp task depend(inout: A[i])
         {
           A[i] = i;
@@ -58,17 +55,17 @@ int main(int argc, char *argv[]) {
         }
 
         if (i == 0) {
-          // EDT 2
           #pragma omp task depend(in: A[i]) depend(inout: B[i])
           {
+            printf("Task %d - 1 -> Input: A[%d] = %d\n", i, i, A[i]);
             B[i] = A[i] + 5;
             printf("Task %d - 1: Computing B[%d] = %d\n", i, i, B[i]);
           }
         }
         else {
-          // EDT 3
           #pragma omp task depend(in: A[i]) depend(in: B[i - 1]) depend(inout: B[i])
           {
+            printf("Task %d - 2 -> Input: A[%d] = %d, B[%d] = %d\n", i, i, A[i], i-1, B[i-1]);
             B[i] = A[i] + B[i-1] + 5;
             printf("Task %d - 2: Computing B[%d] = %d\n", i, i, B[i]);
           }
