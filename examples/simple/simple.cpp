@@ -1,4 +1,3 @@
-// Code 1
 
 #include <cstdlib>
 #include <stdio.h>
@@ -7,12 +6,6 @@
 #include <stdlib.h>
 #include <time.h>
 
-/// clang++ -fopenmp -std=c++17 simple.cpp  -Xclang -add-plugin  -Xclang omp-plugin -fplugin=/home/randres/projects/arts/.install/arts/lib/libOpenMPPlugin.so -S -emit-llvm -o simple.ll
-
-/// clang++ -fopenmp -std=c++17 simple.cpp  -Xclang -plugin  -Xclang omp-plugin -fplugin=/home/randres/projects/arts/.install/arts/lib/libOpenMPPlugin.so -mllvm -debug-only=omp-plugin -S &> output.ll
-
-
-/// EDT 1
 int main() {
   // Generate a random number between 10 and 10
   srand(time(NULL));

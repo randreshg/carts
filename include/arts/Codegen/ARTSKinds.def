@@ -162,7 +162,7 @@ __ARTS_RTL(artsAddDependence, Void, ArtsGuid, ArtsGuid, Int32)
 
 // artsGuid_t artsPersistentEventCreate(
 //    unsigned int route, unsigned int latchCount, artsGuid_t dataGuid);
-__ARTS_RTL(artsPersistentEventCreate, ArtsGuid, Int32, Int32)
+__ARTS_RTL(artsPersistentEventCreate, ArtsGuid, Int32, Int32, ArtsGuid)
 
 // void artsPersistentEventSatisfy(artsGuid_t eventGuid, artsGuid_t dataGuid,
 //                                 uint32_t action);
@@ -177,8 +177,10 @@ __ARTS_RTL(artsPersistentEventIncrementLatch, Void, ArtsGuid, ArtsGuid)
 __ARTS_RTL(artsPersistentEventDecrementLatch, Void, ArtsGuid, ArtsGuid)
 
 // void artsAddDependenceToPersistentEvent(
-//    artsGuid_t eventSource, artsGuid_t edtDest, uint32_t edtSlot);
-__ARTS_RTL(artsAddDependenceToPersistentEvent, Void, ArtsGuid, ArtsGuid, Int32)
+//    artsGuid_t eventSource, artsGuid_t edtDest, uint32_t edtSlot,
+//    artsGuid dataGuid);
+__ARTS_RTL(artsAddDependenceToPersistentEvent, Void, ArtsGuid, ArtsGuid, Int32,
+           ArtsGuid)
 /// }
 
 /// ------------------------------ DataBlock ------------------------------ ///

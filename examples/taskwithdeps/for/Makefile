@@ -21,4 +21,4 @@ $(FILENAME): $(FILENAME).ll
 	clang $< -O3 -g0 -march=native -o $@ -I/$(ARTS_PATH)/include -L$(ARTS_PATH)/lib -larts -L/usr/lib64/librt.so/usr/lib64/libpthread.so/usr/lib64/lib -lrdmacm
 
 clean:
-	rm -f *.mlir *.ll ;
+	rm -f *.mlir *.ll ./$(FILENAME) ;
