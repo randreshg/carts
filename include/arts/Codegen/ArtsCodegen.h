@@ -108,7 +108,7 @@ public:
     return params.size() - 1;
   }
   void addParam(Value param) { params.push_back(param); }
-  void addDep(Value dep) { deps.push_back(dep); }
+  void addEventDependency(Value dep) { deps.push_back(dep); }
 
 private:
   ArtsCodegen &AC;
@@ -126,7 +126,7 @@ private:
   func::ReturnOp returnOp = nullptr;
   bool built = false;
   /// Dependencies info
-  SmallVector<DataBlockCodegen *> depsToSatisfy, depsToRecord, depsToSignal;
+  SmallVector<DataBlockCodegen *> depsToSatisfy, depsToRecord;
 
   /// Entry info
   struct DatablockEntry {
@@ -201,7 +201,6 @@ public:
   DataBlockCodegen *getOrCreateDatablock(arts::DataBlockOp dbOp, Location loc);
 
   /// Events
-  // Value allocEvent(arts::EventOp allocEventOp, Location loc);
   EventCodegen *getEvent(arts::EventOp eventOp);
   EventCodegen *getOrCreateEvent(arts::EventOp eventOp, Location loc);
 
@@ -222,9 +221,13 @@ public:
   Value getCurrentEpochGuid(Location loc);
   Value getCurrentEdtGuid(Location loc);
   Value getCurrentNode(Location loc);
-  void satisfyDep(Value eventGuid, Value depGuid, Location loc);
-  void addDep(Value eventGuid, Value edtGuid, Value edtSlot, Location loc);
-  func::CallOp signalEdt(Value edtGuid, Value edtSlot, Value dbGuid, Location loc);
+  void satisfyEventDependency(Value eventGuid, Value depGuid, Location loc);
+  void addEventDependency(Value eventGuid, Value edtGuid, Value edtSlot,
+                          Location loc);
+  void incrementEventLatchCount(Value eventGuid, Value dataGuid, Location loc);
+  void decrementEventLatchCount(Value eventGuid, Value dataGuid, Location loc);
+  func::CallOp signalEdt(Value edtGuid, Value edtSlot, Value dbGuid,
+                         Location loc);
   void waitOnHandle(Value epochGuid, Location loc);
   func::FuncOp insertInitPerWorker(Location loc);
   func::FuncOp insertInitPerNode(Location loc, func::FuncOp callback = nullptr);

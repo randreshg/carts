@@ -103,39 +103,50 @@ DatablockGraph::DatablockGraph(func::FuncOp func, DatablockAnalysis *DA)
 
 SetVector<unsigned> DatablockGraph::getProducers() const {
   SetVector<unsigned> producers;
-  for (const auto &entry : edges)
+  for (auto entry : edges)
     producers.insert(entry.first);
   return producers;
 }
 
-llvm::SmallDenseMap<unsigned, DatablockGraph::Edge::Type, 4>
-DatablockGraph::getEdgesFor(unsigned producerID) {
+llvm::SetVector<unsigned> DatablockGraph::getConsumers(unsigned producerID) {
   return edges[producerID];
 }
 
-bool DatablockGraph::addEdge(DatablockNode &prod, DatablockNode &cons,
-                             Edge::Type ty) {
+bool DatablockGraph::addEdge(DatablockNode &prod, DatablockNode &cons) {
   /// If an edge from prod to cons already exists, do nothing.
   auto prodIt = edges.find(prod.id);
   if (prodIt != edges.end()) {
     if (prodIt->second.count(cons.id))
       return false;
   }
-  /// Insert or update the consumer edge.
-  edges[prod.id][cons.id] = ty;
+  edges[prod.id].insert(cons.id);
   return true;
 }
 
+static int analysisDepth = 0;
+struct IndentScope {
+  IndentScope() { ++analysisDepth; }
+  ~IndentScope() { --analysisDepth; }
+};
+
 void DatablockGraph::build() {
+  LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                    << "- Building datablock graph for function: "
+                    << func.getName() << "\n");
+  /// Process the function body region with the initial environment.
   Environment env;
   processRegion(func.getBody(), env);
+  LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                    << "Finished building datablock graph for function: "
+                    << func.getName() << "\n");
 }
 
 std::pair<Environment, bool> DatablockGraph::processRegion(Region &region,
-                                                           Environment env) {
+                                                           Environment &env) {
   Environment newEnv = env;
   bool changed = false;
   for (Operation &op : region.getOps()) {
+    IndentScope scope;
     std::pair<Environment, bool> result;
     if (auto edtOp = dyn_cast<EdtOp>(&op))
       result = processEdt(edtOp, newEnv);
@@ -148,129 +159,189 @@ std::pair<Environment, bool> DatablockGraph::processRegion(Region &region,
     else
       continue;
 
-    /// Merge the new environment with the current one and check if it has
-    /// changed.
+    /// Merge the new environment with the current one.
     newEnv = mergeEnvironments(newEnv, result.first);
     changed = changed || result.second;
   }
+  LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                    << " - Finished processing region. Environment changed: "
+                    << (changed ? "true" : "false") << "\n");
   return {newEnv, changed};
 }
 
 std::pair<Environment, bool> DatablockGraph::processEdt(arts::EdtOp edtOp,
-                                                        Environment env) {
-  /// If the operation is an EDT, process its inputs and outputs.
+                                                        Environment &env) {
+  static int edtCount = 0;
+  LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                    << "- Processing EDT #" << edtCount++ << "\n");
+  /// Process the inputs and outputs of the EDT.
   auto edtDeps = edtOp.getDependencies();
   bool changed = false;
-
-  /// No dependencies, nothing to do.
-  if (edtDeps.empty())
-    return {env, false};
-
   Environment newEnv = env;
-  SmallVector<DatablockNode, 4> dbIns, dbOuts;
-  for (auto dep : edtDeps) {
-    auto db = dyn_cast<DataBlockOp>(dep.getDefiningOp());
-    assert(db && "Dependency must be a datablock");
-    /// Get the datablock node from the environment and check its mode.
-    auto &dbNode = getNode(db);
-    if (dbNode.isWriter())
-      dbOuts.push_back(dbNode);
-    else if (dbNode.isReader())
-      dbIns.push_back(dbNode);
-  }
+  /// Debug initial environment.
+  /// Handle input dependencies.
+  if (!edtDeps.empty()) {
+    LLVM_DEBUG({
+      dbgs() << std::string(analysisDepth * 2, ' ')
+             << " Initial environment: {";
+      for (auto entry : newEnv) {
+        dbgs() << "  #" << getNode(entry.first)->id << " -> #"
+               << entry.second->id << ",";
+      }
+      dbgs() << "}\n";
+    });
 
-  /// Process inputs
-  for (auto dbIn : dbIns) {
-    auto prodDefs = findDefinition(dbIn, newEnv);
-    /// No previous definition: add an edge from "entry" node.
-    if (prodDefs.empty()) {
-      addEdge(entryDbNode, dbIn, Edge::Type::Direct);
-      continue;
+    /// Reserve dbIns and dbOuts for input and output datablocks.
+    SmallVector<DatablockNode *, 4> dbIns, dbOuts;
+    dbIns.reserve(edtDeps.size());
+    dbOuts.reserve(edtDeps.size());
+
+    /// Iterate over the dependencies to fill dbIns and dbOuts.
+    for (auto dep : edtDeps) {
+      auto db = dyn_cast<DataBlockOp>(dep.getDefiningOp());
+      assert(db && "Dependency must be a datablock");
+      // Retrieve the datablock node and categorize based on mode.
+      auto *dbNode = getNode(db);
+      if (dbNode->isWriter())
+        dbOuts.push_back(dbNode);
+      if (dbNode->isReader())
+        dbIns.push_back(dbNode);
     }
 
-    /// Analyze potential dependencies for each definition.
-    for (auto &prodDef : prodDefs) {
-      /// No dependency: skip this datablock.
-      bool isDirect = false;
-      if (!DA->mayDepend(prodDef, dbIn, isDirect))
+    /// Process input datablocks.
+    LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                      << "  Processing EDT inputs\n");
+    for (auto *dbIn : dbIns) {
+      LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                        << "  - Examining DB #" << dbIn->id << " as input\n");
+      auto prodDefs = findDefinition(*dbIn, newEnv);
+      if (prodDefs.empty()) {
+        LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                          << "    - No previous definition for DB #" << dbIn->id
+                          << ", add edge from entry node\n");
+        addEdge(entryDbNode, *dbIn);
         continue;
-      /// Record dependency
-      addEdge(prodDef, dbIn,
-              isDirect ? Edge::Type::Direct : Edge::Type::Indirect);
+      }
+      LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ') << "Found "
+                        << prodDefs.size() << " definitions for DB #"
+                        << dbIn->id << "\n");
+      /// Analyze dependencies from producer definitions.
+      for (auto &prodDef : prodDefs) {
+        bool isDirect = false;
+        if (!DA->mayDepend(*prodDef, *dbIn, isDirect))
+          continue;
+        LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                          << "Adding edge from DB #" << prodDef->id
+                          << " to DB #" << dbIn->id << "\n");
+        addEdge(*prodDef, *dbIn);
+      }
     }
-  }
 
-  /// Process outputs
-  for (auto &dbOut : dbOuts) {
-    /// Create a new instance for this output.
-    auto prodDefs = findDefinition(dbOut, newEnv);
-    if (prodDefs.empty()) {
-      newEnv[dbOut.op] = dbOut;
-      changed |= true;
-      continue;
-    }
-
-    /// Analyze potential dependencies for each definition.
-    for (auto &prodDef : prodDefs) {
-      /// No dependency: skip this datablock.
-      bool isDirect = false;
-      if (!DA->mayDepend(prodDef, dbOut, isDirect))
+    /// Process output datablocks.
+    LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                      << "  Processing EDT outputs\n");
+    for (auto *dbOut : dbOuts) {
+      LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                        << "  - Examining DB #" << dbOut->id << " as output\n");
+      auto prodDefs = findDefinition(*dbOut, newEnv);
+      if (prodDefs.empty()) {
+        LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                          << "    - No previous definition for DB #"
+                          << dbOut->id
+                          << ", updating environment with new definition\n");
+        newEnv[dbOut->op] = dbOut;
+        changed |= true;
         continue;
-      /// Update the environment with the latest definition
-      newEnv[prodDef.op] = dbOut;
-      changed |= true;
+      }
+      for (auto &prodDef : prodDefs) {
+        bool isDirect = false;
+        if (!DA->mayDepend(*prodDef, *dbOut, isDirect))
+          continue;
+        LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                          << "Updating environment: DB #" << dbOut->id
+                          << " now defined from DB #" << prodDef->id << "\n");
+        newEnv[prodDef->op] = dbOut;
+        changed |= true;
+      }
     }
   }
 
+  /// Process the EDT body region.
+  LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                    << "  Processing EDT body region\n");
+  {
+    IndentScope bodyScope;
+    Environment newEdtEnv;
+    processRegion(edtOp.getBody(), newEdtEnv);
+    // TODO: Integrate parent/child environment relationships if needed.
+  }
+
+  LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                    << "Finished processing EDT. Environment changed: "
+                    << (changed ? "true" : "false") << "\n");
   return {newEnv, changed};
 }
 
 std::pair<Environment, bool> DatablockGraph::processFor(scf::ForOp forOp,
-                                                        Environment env) {
-  /// If it is an scf.for, use fixed-point iteration.
+                                                        Environment &env) {
+  LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                    << "- Processing ForOp loop\n");
   Environment loopEnv = env;
   std::pair<Environment, bool> bodyResult;
   bool changed = false;
+  /// Iterate until reaching a fixed-point in the loop environment.
   do {
     bodyResult = processRegion(forOp->getRegion(0), loopEnv);
     auto newLoopEnv = mergeEnvironments(env, bodyResult.first);
-    /// Break if the environment has not changed after processing the body.
-    changed = bodyResult.second || changed;
+    changed = changed || bodyResult.second;
     if (!bodyResult.second)
       break;
-    /// Update the loop environment for the next iteration.
+    LLVM_DEBUG(
+        dbgs() << std::string(analysisDepth * 2, ' ')
+               << "  - Loop environment updated, iterating fixed-point...\n");
     loopEnv = newLoopEnv;
   } while (true);
+  LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                    << "- Finished processing ForOp loop\n");
   return {loopEnv, changed};
 }
 
 std::pair<Environment, bool> DatablockGraph::processIf(scf::IfOp ifOp,
-                                                       Environment env) {
-  /// If it is an scf.if, process then and else regions separately, then
-  /// merge.
+                                                       Environment &env) {
+  LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                    << "- Processing IfOp with then and else regions\n");
   auto thenRes = processRegion(ifOp.getThenRegion(), env);
   auto elseRes = processRegion(ifOp.getElseRegion(), env);
   Environment merged = mergeEnvironments(thenRes.first, elseRes.first);
   bool changed = thenRes.second || elseRes.second;
+  LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                    << "  - IfOp regions merged. Environment changed: "
+                    << (changed ? "true" : "false") << "\n");
   return {merged, changed};
 }
 
 std::pair<Environment, bool> DatablockGraph::processCall(func::CallOp callOp,
-                                                         Environment env) {
-  // TODO: Handle function calls
+                                                         Environment &env) {
+  LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                    << "- Processing CallOp (ignoring for now)\n");
+  // TODO: Expand call handling logic if inter-procedural analysis is required.
   return {env, false};
 }
 
-SmallVector<DatablockNode, 4>
-DatablockGraph::findDefinition(DatablockNode dbNode, Environment env) {
-  assert(dbNode.isReader() && "DatablockNode must be a reader");
-  /// Find the definition of a datablock in the environment
-  SmallVector<DatablockNode, 4> defs;
-  for (auto &pair : env) {
-    if (!DA->ptrMayAlias(pair.second, dbNode))
+SmallVector<DatablockNode *, 4>
+DatablockGraph::findDefinition(DatablockNode &dbNode, Environment &env) {
+  IndentScope scope;
+  LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                    << "  Searching for definitions for DB #" << dbNode.id
+                    << "\n");
+  SmallVector<DatablockNode *, 4> defs;
+  for (auto pair : env) {
+    if (!DA->ptrMayAlias(*pair.second, dbNode))
       continue;
-    /// Be very pessimistic here, assuming that any aliasing means a potential
-    /// dependency.
+    LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                      << "  - Potential definition found: DB #"
+                      << pair.second->id << "\n");
+    /// Pessimistically assume alias implies potential dependency.
     defs.push_back(pair.second);
   }
   return defs;
@@ -278,17 +349,34 @@ DatablockGraph::findDefinition(DatablockNode dbNode, Environment env) {
 
 Environment DatablockGraph::mergeEnvironments(const Environment &env1,
                                               const Environment &env2) {
+  LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                    << "  Merging environments\n");
   Environment mergedEnv = env1;
   for (auto &pair : env2) {
     auto dbOp = pair.first;
     auto dbNode = pair.second;
     if (mergedEnv.count(dbOp)) {
-      LLVM_DEBUG(dbgs() << "Merging datablock " << dbOp << "\n");
+      LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                        << "  - DB already exists in merged environment: "
+                        << dbNode->id << "\n");
     } else {
-      /// Otherwise, add it to the merged environment.
+      // Add new definition into the merged environment.
+      LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                        << "  - Adding DB #" << dbNode->id
+                        << " to merged environment\n");
       mergedEnv[dbOp] = dbNode;
     }
   }
+  /// Debug final merged environment.
+  LLVM_DEBUG({
+    dbgs() << std::string(analysisDepth * 2, ' ')
+           << "  - Final merged environment: {";
+    for (auto &pair : mergedEnv) {
+      dbgs() << " #" << getNode(pair.first)->id << " -> #" << pair.second->id
+             << ",";
+    }
+    dbgs() << "}\n";
+  });
   return mergedEnv;
 }
 
@@ -296,26 +384,33 @@ void DatablockGraph::print() {
   std::string info;
   llvm::raw_string_ostream os(info);
   os << "Nodes:\n";
-  for (auto &n : nodes) {
+  for (auto *node : nodes) {
+    auto &n = *node;
     os << "  #" << n.id << " " << n.mode << "\n";
     os << "    " << n.op << "\n";
     os << "    isLoopDependent=" << (n.isLoopDependent ? "true" : "false");
     os << " useCount=" << n.useCount;
     os << " hasPtrDb=" << (n.hasPtrDb ? "true" : "false");
-    os << " userEdtPos=" << n.userEdtPos << "\n";
+    os << " userEdtPos=" << n.userEdtPos;
+    os << (n.parent ? " parent=#" + std::to_string(n.parent->id) : "")
+       << "\n";
   }
   os << "Edges:\n";
-  for (auto &e : edges) {
-    auto &prodIt = e.second;
-    for (auto &prod : prodIt) {
-      auto &consIt = edges[prod.first];
-      for (auto &cons : consIt) {
-        os << "  #" << prod.first << " -> #" << cons.first << "\n";
-      }
-    }
-    os << "Total nodes: " << nodes.size() << "\n";
+  if (edges.empty()) {
+    os << "  No edges\n";
     LLVM_DEBUG(dbgs() << os.str());
+    return;
   }
+
+  /// Print the edges for each producer node.
+  for (auto &entry : edges) {
+    unsigned producer = entry.first;
+    for (auto consumer : entry.second) {
+      os << "  #" << producer << " -> #" << consumer << "\n";
+    }
+  }
+  os << "Total nodes: " << nodes.size() << "\n";
+  LLVM_DEBUG(dbgs() << os.str());
 }
 
 void DatablockGraph::computeStatistics() {
@@ -323,8 +418,8 @@ void DatablockGraph::computeStatistics() {
     return;
   unsigned totalUses = 0;
   unsigned totalRegions = 0;
-  for (auto &node : nodes) {
-    totalUses += node.useCount;
+  for (auto *node : nodes) {
+    totalUses += node->useCount;
     // totalRegions += node.userRegions.size();
   }
   double avgUses = (double)totalUses / nodes.size();
@@ -336,16 +431,22 @@ void DatablockGraph::computeStatistics() {
 
 void DatablockGraph::collectNodes(Region &region) {
   /// Start IDs from 1 to avoid conflict with entry node (0).
-  unsigned nextID = 1;
+  unsigned nextID = 0;
 
   /// Collect loops and variables that depend on them.
   DenseMap<Value, SmallVector<Operation *, 4>> loopValsMap;
   DA->analyzeLoops(region, loopValsMap);
 
   /// Collect datablock nodes from the top-level region of a function.
+  unsigned estimatedCount = 0;
+  region.walk<mlir::WalkOrder::PreOrder>(
+      [&](arts::DataBlockOp) { ++estimatedCount; });
+  nodes.reserve(estimatedCount);
   region.walk<mlir::WalkOrder::PreOrder>([&](arts::DataBlockOp dbOp) {
     /// Set node information.
-    DatablockNode node(DA);
+    DatablockNode *dbNode = new DatablockNode(DA);
+    assert(dbNode && "Failed to allocate DatablockNode");
+    auto &node = *dbNode;
     node.id = nextID++;
     node.op = dbOp;
     node.mode = dbOp.getMode();
@@ -370,7 +471,7 @@ void DatablockGraph::collectNodes(Region &region) {
       dbOp.setHasPtrDb();
       node.hasPtrDb = true;
       /// Collect memory effects from the parent datablock.
-      node.parent = &nodeMap[parentDb];
+      node.parent = getNode(parentDb);
       for (auto &e : node.parent->effects)
         node.effects.push_back(e);
     } else {
@@ -410,8 +511,8 @@ void DatablockGraph::collectNodes(Region &region) {
     node.collectUses();
 
     /// Add the node to the graph.
-    nodes.push_back(std::move(node));
-    nodeMap[dbOp] = nodes.back();
+    nodes.push_back(dbNode);
+    nodeMap[dbOp] = dbNode;
   });
 }
 
@@ -440,7 +541,7 @@ void DatablockAnalysis::printGraph(func::FuncOp func) {
   if (functionGraphMap.count(func)) {
     LLVM_DEBUG(DBGS() << "Printing graph for function: " << func.getName()
                       << "\n");
-    functionGraphMap[func].print();
+    functionGraphMap[func]->print();
   } else
     llvm::errs() << "No graph for function: " << func.getName() << "\n";
 }

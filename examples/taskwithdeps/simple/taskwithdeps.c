@@ -35,18 +35,21 @@ int main() {
     #pragma omp single
     {
       printf("Main thread: Creating tasks\n");
+      /// EDT 1
       #pragma omp task depend(inout: a)
       {
           a = rand() % 100;
           printf("Task 1: Initializing a with value %d\n", a);
       }
 
+      /// EDT 2
       #pragma omp task depend(in: a) depend(inout: b)
       {
           printf("Task 2: Reading a=%d and updating b\n", a);
           b = a + 5;
       }
 
+      /// EDT 3
       #pragma omp task depend(in: b)
       {
           printf("Task 3: Final value of b=%d\n", b);
