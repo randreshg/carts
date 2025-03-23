@@ -15,9 +15,9 @@
 #include "polygeist/Ops.h"
 /// Arts
 #include "ArtsPassDetails.h"
-#include "arts/Passes/ArtsPasses.h"
 #include "arts/Analysis/DataBlockAnalysis.h"
 #include "arts/ArtsDialect.h"
+#include "arts/Passes/ArtsPasses.h"
 /// Other
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
@@ -40,7 +40,6 @@ using namespace mlir::arith;
 using namespace mlir::polygeist;
 using namespace mlir::arts;
 
-
 //===----------------------------------------------------------------------===//
 // Pass Implementation
 //===----------------------------------------------------------------------===//
@@ -52,7 +51,12 @@ struct DatablockPass : public arts::DatablockBase<DatablockPass> {
 
 void DatablockPass::runOnOperation() {
   ModuleOp module = getOperation();
-  LLVM_DEBUG(dbgs() << "\n" << line << "DatablockPass STARTED\n" << line);
+  LLVM_DEBUG({
+    dbgs() << "\n"
+           << line << "DatablockPass STARTED\n"
+           << line << "Module: " << module.getName() << "\n"
+           << line;
+  });
   OpBuilder builder(module);
 
   /// Retrieve the shared analysis result.
@@ -61,17 +65,13 @@ void DatablockPass::runOnOperation() {
   /// Iterate over every function in the module.
   module->walk([&](func::FuncOp func) {
     /// Retrieve (or compute) the dependency graph for this function.
-    auto &graph = dbAnalysis.getOrCreateGraph(func);
-    graph.print();
+    auto *graph = dbAnalysis.getOrCreateGraph(func);
+    if (!graph || !graph->hasNodes()) {
+      LLVM_DEBUG(dbgs() << "No graph for function: " << func.getName() << "\n");
+      return;
+    }
+    graph->print();
   });
-
-  // module.walk([&](EdtOp edt) {
-  //   auto &region = edt.getRegion();
-  //   for (auto dep : edt.getDependencies()) {
-  //     auto dbOp = cast<DataBlockOp>(dep.getDefiningOp());
-  //     adjustDataBlock(dbOp, region);
-  //   }
-  // });
 
   LLVM_DEBUG(dbgs() << line << "DatablockPass FINISHED\n" << line);
 }

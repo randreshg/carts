@@ -17,6 +17,7 @@
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include <cstdint>
@@ -29,7 +30,7 @@ class DatablockAnalysis;
 class DatablockNode;
 enum DatablockNodeComp { Equal, BaseAlias, Different };
 /// An Environment maps each db op to the latest Node that defines it.
-using Environment = llvm::DenseMap<arts::DataBlockOp, DatablockNode>;
+using Environment = llvm::DenseMap<arts::DataBlockOp, DatablockNode *>;
 
 //===----------------------------------------------------------------------===//
 // DatablockNode
@@ -80,14 +81,6 @@ public:
   /// Set of nodes that alias this node.
   SetVector<unsigned> aliases;
 
-  /// Context of the analysis
-  /// This is used to access the DatablockAnalysis for dependency analysis.
-  // enum Context { Entry, EDT, For, If, Func };
-  // SmallVector<Context, 4> context;
-  // Context getContext() { return context.back(); }
-  // void pushContext(Context ctx) { context.push_back(ctx); }
-  // void popContext() { context.pop_back(); }
-
 private:
   DatablockAnalysis *DA;
 };
@@ -98,28 +91,24 @@ private:
 class DatablockGraph {
 public:
   explicit DatablockGraph(func::FuncOp func, DatablockAnalysis *DA);
+  ~DatablockGraph() {
+    for (auto *node : nodes)
+      delete node;
+  }
   friend class DatablockAnalysis;
-
-  /// Edge from a producer (writer) node to a consumer (reader) node.
-  struct Edge {
-    enum Type { Direct, Indirect };
-    unsigned producerID, consumerID;
-    Type ty;
-
-    bool isDirect() const { return ty == Direct; }
-  };
+  using Edge = std::pair<unsigned, unsigned>; // producerID, consumerID
 
   /// Interface
   func::FuncOp getFunction() { return func; }
-  DatablockNode &getNode(arts::DataBlockOp dbOp) { return nodeMap[dbOp]; }
-  DatablockNode &getNode(unsigned id) { return nodes[id]; }
+  DatablockNode *getNode(arts::DataBlockOp dbOp) { return nodeMap[dbOp]; }
+  DatablockNode *getNode(unsigned id) { return nodes[id]; }
   bool isEntryNode(unsigned id) const { return id == entryDbNode.id; }
   bool hasNodes() const { return !nodes.empty(); }
   SetVector<unsigned> getProducers() const;
-  llvm::SmallDenseMap<unsigned, Edge::Type, 4> getEdgesFor(unsigned producerID);
+  llvm::SetVector<unsigned> getConsumers(unsigned producerID);
 
   /// Add an edge from a producer node to a consumer node.
-  bool addEdge(DatablockNode &prod, DatablockNode &cons, Edge::Type ty);
+  bool addEdge(DatablockNode &prod, DatablockNode &cons);
 
   void build();
   void print();
@@ -135,8 +124,8 @@ private:
   /// Attributes
   func::FuncOp func;
   DatablockAnalysis *DA;
-  SmallVector<DatablockNode, 8> nodes;
-  llvm::DenseMap<unsigned, llvm::SmallDenseMap<unsigned, Edge::Type, 4>> edges;
+  SmallVector<DatablockNode *, 4> nodes;
+  llvm::DenseMap<unsigned, llvm::SetVector<unsigned>> edges;
 
   /// Map from each arts.datablock op to its corresponding Node.
   Environment nodeMap;
@@ -144,16 +133,16 @@ private:
   /// Functions
   /// Process a structured region, updates the DDG and returns the new
   /// environment and whether the environment has changed.
-  std::pair<Environment, bool> processRegion(Region &region, Environment env);
-  std::pair<Environment, bool> processEdt(arts::EdtOp edtOp, Environment env);
-  std::pair<Environment, bool> processFor(scf::ForOp forOp, Environment env);
-  std::pair<Environment, bool> processIf(scf::IfOp ifOp, Environment env);
+  std::pair<Environment, bool> processRegion(Region &region, Environment &env);
+  std::pair<Environment, bool> processEdt(arts::EdtOp edtOp, Environment &env);
+  std::pair<Environment, bool> processFor(scf::ForOp forOp, Environment &env);
+  std::pair<Environment, bool> processIf(scf::IfOp ifOp, Environment &env);
   std::pair<Environment, bool> processCall(func::CallOp callOp,
-                                           Environment env);
+                                           Environment &env);
 
   /// Find datablock that define the dbNode in the given environment.
-  SmallVector<DatablockNode, 4> findDefinition(DatablockNode dbNode,
-                                               Environment env);
+  SmallVector<DatablockNode *, 4> findDefinition(DatablockNode &dbNode,
+                                               Environment &env);
 
   /// Merge two environments by taking the union of definitions for each
   /// datablock.
