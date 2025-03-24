@@ -28,6 +28,7 @@
 #include "mlir/Support/LLVM.h"
 
 #include "mlir/Transforms/DialectConversion.h"
+#include "polygeist/Ops.h"
 #include <algorithm>
 #include <optional>
 
@@ -153,73 +154,47 @@ void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
 
   /// Create a new DataBlockOp with an opaque pointer type
   auto sizes = op.getSizes();
-  auto pointerType = op.isSingle()
-                         ? AC->VoidPtr
-                         : MemRefType::get({ShapedType::kDynamic}, AC->VoidPtr);
+  auto pointerType = op.isSingle() ? AC->VoidPtr : [&]() -> Type {
+    /// Try to use the op result type.
+    if (auto memrefType = op.getResult().getType().dyn_cast<MemRefType>()) {
+      /// Use the static shape from the op result type for the outer memref.
+      return MemRefType::get(memrefType.getShape(), AC->VoidPtr);
+    } else {
+      /// Fallback: use a dynamic shape pointer.
+      return MemRefType::get({ShapedType::kDynamic}, AC->VoidPtr);
+    }
+  }();
   auto newDbOp = builder.create<arts::DataBlockOp>(
       op->getLoc(), pointerType, op.getMode(), op.getPtr(), op.getElementType(),
       op.getElementTypeSize(), op.getIndices(), sizes, op.getInEvent(),
       op.getOutEvent());
   newDbOp->setAttrs(op->getAttrs());
 
-  /// Helper lambda to compute the pointer based on the indices.
-  // auto computePtr = [&](ValueRange indices, Type elementType,
-  //                       Location loc) -> Value {
-  //   auto newPtr = AC->castToLLVMPtr(newDbOp, loc);
-  //   if (indices.empty())
-  //     return newPtr;
-
-  //   /// Cast indices to i64
-  //   SmallVector<Value> newIndices;
-  //   newIndices.reserve(indices.size());
-  //   for (auto index : indices)
-  //     newIndices.push_back(AC->castToInt(AC->Int64, index, loc));
-
-  //   // Create appropriate array type for multi-dimensional access
-  //   Type sourceElementType;
-  //   if (indices.size() > 1) {
-  //     // For 2D array access, create [? x elementPtr] type
-  //     auto arrayType =
-  //         LLVM::LLVMArrayType::get(AC->llvmPtr, ShapedType::kDynamic);
-  //     sourceElementType = arrayType;
-  //   } else {
-  //     // For 1D access, use the pointer type directly
-  //     sourceElementType = AC->llvmPtr;
-  //   }
-
-  //   auto gepOp = builder
-  //                    .create<LLVM::GEPOp>(loc, AC->llvmPtr,
-  //                    sourceElementType,
-  //                                         newPtr, newIndices)
-  //                    .getResult();
-  //   return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr, gepOp);
-  // };
-
+  ///
   auto computePtr = [&](ValueRange indices, Location loc) -> Value {
-    auto newPtr = AC->castToLLVMPtr(newDbOp, loc);
     if (indices.empty())
-      return newPtr;
-    // return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr, newPtr);
+      return AC->castToLLVMPtr(newDbOp, loc);
 
-    /// Cast indices to i64
-    SmallVector<Value> newIndices;
-    newIndices.reserve(indices.size());
-    for (auto index : indices)
-      newIndices.push_back(AC->castToInt(AC->Int64, index, loc));
+    /// Create a SubIndexOp for newPtr
+    Value subIndex = newDbOp;
+    for (auto index : indices) {
+      auto mt = subIndex.getType().cast<MemRefType>();
+      auto shape = std::vector<int64_t>(mt.getShape());
+      shape.erase(shape.begin());
+      auto mt0 = mlir::MemRefType::get(shape, mt.getElementType(),
+                                       MemRefLayoutAttrInterface(),
+                                       mt.getMemorySpace());
+      subIndex =
+          builder.create<polygeist::SubIndexOp>(loc, mt0, subIndex, index);
+    }
 
-    /// Get the pointer type
-    MemRefType MT = newDbOp.getType().cast<MemRefType>();
-    auto newPointerType = LLVM::LLVMPointerType::get(newDbOp.getElementType(),
-                                                  MT.getMemorySpaceAsInt());
-    LLVM_DEBUG(dbgs() << "Compute new pointer with elementType: " << MT
-                      << " - " << pointerType << " - " << newPointerType << "\n");
+    // Value subIndex = newDbOp;
+    // // for (auto index : indices)
+    //   subIndex = builder.create<polygeist::SubIndexOp>(loc, subIndex,
+    //   indices);
 
-    /// Create LLVM GEP for the new pointer
-    auto gepOp = builder
-                     .create<LLVM::GEPOp>(loc, AC->llvmPtr, newPointerType, newPtr,
-                                          newIndices)
-                     .getResult();
-    return builder.create<LLVM::LoadOp>(loc, pointerType, gepOp);
+    Value subIndexPtr = AC->castToLLVMPtr(subIndex, loc);
+    return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr, subIndexPtr);
   };
 
   /// Lambda to process load operations (for both memref::LoadOp and
@@ -383,6 +358,7 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   });
   delete AC;
 }
+
 //===----------------------------------------------------------------------===//
 // Pass creation
 //===----------------------------------------------------------------------===//

@@ -67,10 +67,8 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
   dbOp = depOp;
 
   /// If the base is a DB, it will be handled when inserting the EDT Entry
-  if (hasPtrDb()) {
-    LLVM_DEBUG(DBGS() << "DB has a pointer to another datablock...\n");
+  if (hasPtrDb())
     return;
-  }
 
   /// Set insertion point to the DatablockOp
   OpBuilder::InsertionGuard IG(builder);
@@ -84,11 +82,10 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
   if (isSingle()) {
     auto modeVal = getMode(dbOp.getMode());
     guid = createGuid(currentNode, modeVal, loc);
-    // Allocate a single pointer by directly assigning the runtime call result
+    /// Allocate a single pointer by directly assigning the runtime call result
     ptr =
         AC.createRuntimeCall(ARTSRTL_artsDbCreateWithGuid, {guid, tySize}, loc)
             ->getResult(0);
-    LLVM_DEBUG(DBGS() << "Created single datablock: " << ptr << "\n");
     return;
   }
 
@@ -99,10 +96,12 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
   auto guidType = MemRefType::get(
       std::vector<int64_t>(dbDim, ShapedType::kDynamic), AC.ArtsGuid);
   guid = builder.create<memref::AllocaOp>(loc, guidType, sizes);
-  auto ptrType = MemRefType::get(
-      std::vector<int64_t>(dbDim, ShapedType::kDynamic), AC.VoidPtr);
-  ptr = builder.create<memref::AllocaOp>(loc, ptrType, sizes);
-  LLVM_DEBUG(DBGS() << "Created array of datablocks: " << ptr << "\n");
+  auto ptrType = dbOp.getResult().getType().cast<MemRefType>();
+  if (ptrType.hasStaticShape()) {
+    ptr = builder.create<memref::AllocaOp>(loc, ptrType);
+  } else {
+    ptr = builder.create<memref::AllocaOp>(loc, ptrType, sizes);
+  }
 
   /// Recursively create datablocks for each element
   std::function<void(unsigned, SmallVector<Value, 4> &)> createDbs =
@@ -695,10 +694,10 @@ void EdtCodegen::processDependencies(Location loc) {
           incrementLatchRecursive = [&](unsigned dim, Value curSlot,
                                         SmallVector<Value, 4> &indices) {
             if (dim == numDims) {
-              auto loadedDbGuid =
-                  builder.create<memref::LoadOp>(dbLoc, dbGuid, indices);
               auto loadedEventGuid =
                   builder.create<memref::LoadOp>(dbLoc, eventGuid, indices);
+              auto loadedDbGuid =
+                  builder.create<memref::LoadOp>(dbLoc, dbGuid, indices);
               AC.incrementEventLatchCount(loadedEventGuid, loadedDbGuid, dbLoc);
               auto loadedSlot = builder.create<memref::LoadOp>(dbLoc, curSlot);
               auto nextSlot =
@@ -726,7 +725,7 @@ void EdtCodegen::processDependencies(Location loc) {
             }
           };
 
-      SmallVector<Value, 4> indices;
+      SmallVector<Value, 4> indices = dbCG->getIndices();
       incrementLatchRecursive(0, outSlotAlloc.getResult(), indices);
     }
   }
@@ -1397,7 +1396,6 @@ Value ArtsCodegen::castToFloat(mlir::Type targetType, Value source,
   return builder.create<arith::SIToFPOp>(loc, targetType, source).getResult();
 }
 
-/// Cast a value to an integer type.
 Value ArtsCodegen::castToInt(Type targetType, Value source, Location loc) {
   assert(targetType.isa<IntegerType>() &&
          "Target type should be an integer (e.g. i64, i32, etc.)");
