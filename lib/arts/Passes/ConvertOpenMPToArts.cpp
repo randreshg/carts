@@ -106,8 +106,11 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
 
   void collectTaskDependencies(SmallVector<Value> &deps, omp::TaskOp task,
                                PatternRewriter &rewriter, Location loc) const {
+
     /// Collect the task deps clause
     auto dependList = task.getDependsAttr();
+    if(!dependList)
+      return;
     for (unsigned i = 0, e = dependList.size(); i < e; ++i) {
       /// Get dependency clause and type.
       auto depClause = cast<omp::ClauseTaskDependAttr>(dependList[i]);
