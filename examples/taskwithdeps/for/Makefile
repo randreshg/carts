@@ -7,7 +7,10 @@ SHELL = /bin/bash
 
 all: $(FILENAME)
 
-# Generate MLIR std dialect from C file
+# Generate MLIR std dialect from C/C++ file
+%.mlir: %.cpp
+	cgeist -std=c++17 $< -fopenmp -O0 -S -I/${CLANG_INCLUDE_PATH} > $@
+
 %.mlir: %.c
 	cgeist $< -fopenmp -O0 -S -I/${CLANG_INCLUDE_PATH} > $@
 
