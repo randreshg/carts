@@ -4,21 +4,6 @@
 // Passes
 /// carts-opt taskwithdeps.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events,convert-arts-to-llvm,arts-codegen &> taskwithdeps-arts.mlir
 
-// Optimizations
-/// carts-opt taskwithdeps.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize --raise-scf-to-affine --canonicalize --affine-cfg --affine-expand-index-ops --loop-invariant-code-motion --canonicalize --affine-scalrep --affine-cfg --cse --canonicalize -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events,convert-arts-to-llvm,arts-codegen &> taskwithdeps-arts.mlir
-
-/// carts-opt taskwithdeps.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize --raise-scf-to-affine --canonicalize --affine-cfg --affine-expand-index-ops --loop-invariant-code-motion --canonicalize --affine-scalrep --affine-cfg --cse --canonicalize -debug-only=convert-openmp-to-arts,edt,create-datablocks,datablock,datablock-analysis,create-events,convert-arts-to-llvm,arts-codegen &> taskwithdeps-arts.mlir
-
-/// Single command
-// carts-opt taskwithdeps.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize --raise-scf-to-affine --affine-cfg --affine-scalrep  --affine-loop-coalescing --lower-affine --cse --canonicalize --convert-polygeist-to-llvm --cse --canonicalize &> taskwithdeps-llvm.mlir
-// mlir-translate --mlir-to-llvmir taskwithdeps-llvm.mlir > taskwithdeps.ll
-
-/// Translate to LLVM IR
-/// carts-opt taskwithdeps-arts.mlir --lower-affine --cse --canonicalize --convert-polygeist-to-llvm --cse --canonicalize &> taskwithdeps-llvm.mlir
-/// mlir-translate --mlir-to-llvmir taskwithdeps-llvm.mlir > taskwithdeps.ll
-/// clang -O3 taskwithdeps.ll -o taskwithdeps -I/home/randres/projects/carts/.install/arts/include -L/home/randres/projects/carts/.install/arts/lib -larts -L/usr/lib64/librt.so/usr/lib64/libpthread.so/usr/lib64/lib -lrdmacm
-
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <omp.h>
@@ -44,7 +29,6 @@ int main(int argc, char *argv[]) {
 
   #pragma omp parallel
   {
-    /// Edt2
     #pragma omp single
     {
       for (int i = 0; i < N; i++) {

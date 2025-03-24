@@ -163,31 +163,70 @@ void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
   newDbOp->setAttrs(op->getAttrs());
 
   /// Helper lambda to compute the pointer based on the indices.
-  auto computePtr = [&](ValueRange indices, Type elementType,
-                        Location loc) -> Value {
+  // auto computePtr = [&](ValueRange indices, Type elementType,
+  //                       Location loc) -> Value {
+  //   auto newPtr = AC->castToLLVMPtr(newDbOp, loc);
+  //   if (indices.empty())
+  //     return newPtr;
+
+  //   /// Cast indices to i64
+  //   SmallVector<Value> newIndices;
+  //   newIndices.reserve(indices.size());
+  //   for (auto index : indices)
+  //     newIndices.push_back(AC->castToInt(AC->Int64, index, loc));
+
+  //   // Create appropriate array type for multi-dimensional access
+  //   Type sourceElementType;
+  //   if (indices.size() > 1) {
+  //     // For 2D array access, create [? x elementPtr] type
+  //     auto arrayType =
+  //         LLVM::LLVMArrayType::get(AC->llvmPtr, ShapedType::kDynamic);
+  //     sourceElementType = arrayType;
+  //   } else {
+  //     // For 1D access, use the pointer type directly
+  //     sourceElementType = AC->llvmPtr;
+  //   }
+
+  //   auto gepOp = builder
+  //                    .create<LLVM::GEPOp>(loc, AC->llvmPtr,
+  //                    sourceElementType,
+  //                                         newPtr, newIndices)
+  //                    .getResult();
+  //   return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr, gepOp);
+  // };
+
+  auto computePtr = [&](ValueRange indices, Location loc) -> Value {
     auto newPtr = AC->castToLLVMPtr(newDbOp, loc);
     if (indices.empty())
       return newPtr;
     // return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr, newPtr);
 
-    /// Cast indices to int32
+    /// Cast indices to i64
     SmallVector<Value> newIndices;
     newIndices.reserve(indices.size());
-
     for (auto index : indices)
       newIndices.push_back(AC->castToInt(AC->Int64, index, loc));
+
+    /// Get the pointer type
+    MemRefType MT = newDbOp.getType().cast<MemRefType>();
+    auto newPointerType = LLVM::LLVMPointerType::get(newDbOp.getElementType(),
+                                                  MT.getMemorySpaceAsInt());
+    LLVM_DEBUG(dbgs() << "Compute new pointer with elementType: " << MT
+                      << " - " << pointerType << " - " << newPointerType << "\n");
+
+    /// Create LLVM GEP for the new pointer
     auto gepOp = builder
-                     .create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->llvmPtr, newPtr,
+                     .create<LLVM::GEPOp>(loc, AC->llvmPtr, newPointerType, newPtr,
                                           newIndices)
                      .getResult();
-    return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr, gepOp);
+    return builder.create<LLVM::LoadOp>(loc, pointerType, gepOp);
   };
 
   /// Lambda to process load operations (for both memref::LoadOp and
   /// affine::AffineLoadOp).
   auto processLoad = [&](auto loadOp) {
     auto loc = loadOp.getLoc();
-    auto newPtr = computePtr(loadOp.getIndices(), loadOp.getType(), loc);
+    auto newPtr = computePtr(loadOp.getIndices(), loc);
     auto newLoad = builder
                        .create<LLVM::LoadOp>(
                            loc, loadOp.getMemRefType().getElementType(), newPtr)
@@ -200,8 +239,7 @@ void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
   /// affine::AffineStoreOp).
   auto processStore = [&](auto storeOp) {
     auto loc = storeOp.getLoc();
-    auto newPtr = computePtr(storeOp.getIndices(),
-                             storeOp.getValueToStore().getType(), loc);
+    auto newPtr = computePtr(storeOp.getIndices(), loc);
     builder.create<LLVM::StoreOp>(loc, storeOp.getValueToStore(), newPtr);
     storeOp.erase();
   };
