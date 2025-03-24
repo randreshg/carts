@@ -56,7 +56,7 @@ struct ConvertArtsToLLVMPass
   void runOnOperation() override;
 
   void iterateOps(Operation *op);
-  void iterateDataBlockOps(Operation *op);
+  void preprocessDataBlockOps(Operation *op);
   void handleParallel(EdtOp &op);
   void handleSingle(EdtOp &op);
   void handleSync(EdtOp &op);
@@ -65,6 +65,7 @@ struct ConvertArtsToLLVMPass
   void handleDatablock(DataBlockOp &op);
 
 private:
+  ModuleOp module;
   ArtsCodegen *AC = nullptr;
   SetVector<Operation *> opsToRemove;
 };
@@ -148,125 +149,15 @@ void ConvertArtsToLLVMPass::handleEdt(EdtOp &op) {
 }
 
 void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.datablock\n");
-  AC->setInsertionPoint(op);
-  auto &builder = AC->getBuilder();
-
-  /// Create a new DataBlockOp with an opaque pointer type
-  auto sizes = op.getSizes();
-  auto pointerType = op.isSingle() ? AC->VoidPtr : [&]() -> Type {
-    /// Try to use the op result type.
-    if (auto memrefType = op.getResult().getType().dyn_cast<MemRefType>()) {
-      /// Use the static shape from the op result type for the outer memref.
-      return MemRefType::get(memrefType.getShape(), AC->VoidPtr);
-    } else {
-      /// Fallback: use a dynamic shape pointer.
-      return MemRefType::get({ShapedType::kDynamic}, AC->VoidPtr);
-    }
-  }();
-  auto newDbOp = builder.create<arts::DataBlockOp>(
-      op->getLoc(), pointerType, op.getMode(), op.getPtr(), op.getElementType(),
-      op.getElementTypeSize(), op.getIndices(), sizes, op.getInEvent(),
-      op.getOutEvent());
-  newDbOp->setAttrs(op->getAttrs());
-
-  ///
-  auto computePtr = [&](ValueRange indices, Location loc) -> Value {
-    if (indices.empty())
-      return AC->castToLLVMPtr(newDbOp, loc);
-
-    /// Create a SubIndexOp for newPtr
-    Value subIndex = newDbOp;
-    for (auto index : indices) {
-      auto mt = subIndex.getType().cast<MemRefType>();
-      auto shape = std::vector<int64_t>(mt.getShape());
-      shape.erase(shape.begin());
-      auto mt0 = mlir::MemRefType::get(shape, mt.getElementType(),
-                                       MemRefLayoutAttrInterface(),
-                                       mt.getMemorySpace());
-      subIndex =
-          builder.create<polygeist::SubIndexOp>(loc, mt0, subIndex, index);
-    }
-
-    // Value subIndex = newDbOp;
-    // // for (auto index : indices)
-    //   subIndex = builder.create<polygeist::SubIndexOp>(loc, subIndex,
-    //   indices);
-
-    Value subIndexPtr = AC->castToLLVMPtr(subIndex, loc);
-    return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr, subIndexPtr);
-  };
-
-  /// Lambda to process load operations (for both memref::LoadOp and
-  /// affine::AffineLoadOp).
-  auto processLoad = [&](auto loadOp) {
-    auto loc = loadOp.getLoc();
-    auto newPtr = computePtr(loadOp.getIndices(), loc);
-    auto newLoad = builder
-                       .create<LLVM::LoadOp>(
-                           loc, loadOp.getMemRefType().getElementType(), newPtr)
-                       .getResult();
-    loadOp.getResult().replaceAllUsesWith(newLoad);
-    loadOp.erase();
-  };
-
-  /// Lambda to process store operations (for both memref::StoreOp and
-  /// affine::AffineStoreOp).
-  auto processStore = [&](auto storeOp) {
-    auto loc = storeOp.getLoc();
-    auto newPtr = computePtr(storeOp.getIndices(), loc);
-    builder.create<LLVM::StoreOp>(loc, storeOp.getValueToStore(), newPtr);
-    storeOp.erase();
-  };
-
-  /// Walk all uses of the old datablock to properly replace it with the new
-  /// memref. Ignore uses in arts operations.
-  for (auto &use : llvm::make_early_inc_range(op->getUses())) {
-    /// Set insertion point to the user
-    auto user = use.getOwner();
-    AC->setInsertionPoint(user);
-
-    /// memref.load or affine.load
-    if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
-      processLoad(loadOp);
-    } else if (auto loadOp = dyn_cast<affine::AffineLoadOp>(user)) {
-      processLoad(loadOp);
-    }
-    /// memref.store or affine.store
-    else if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
-      processStore(storeOp);
-    } else if (auto storeOp = dyn_cast<affine::AffineStoreOp>(user)) {
-      processStore(storeOp);
-    }
-    /// Propagate datablock pointer for nested datablock ops.
-    else if (auto dbOp = dyn_cast<arts::DataBlockOp>(user)) {
-      dbOp.getPtr().replaceUsesWithIf(
-          newDbOp.getResult(),
-          [&](OpOperand &operand) { return operand.getOwner() == dbOp; });
-    }
-    /// EdtOp - update dependencies.
-    else if (auto edtOp = dyn_cast<arts::EdtOp>(user)) {
-      auto edtDeps = edtOp.getDependencies();
-      for (auto dep : edtDeps) {
-        if (dep != op)
-          continue;
-        dep.replaceUsesWithIf(newDbOp.getResult(), [&](OpOperand &operand) {
-          return operand.getOwner() == edtOp;
-        });
-      }
-    } else {
-      LLVM_DEBUG(DBGS() << "Unknown use of datablock op: " << *user << "\n");
-      llvm_unreachable("Unknown use of datablock op");
-    }
-  }
+  LLVM_DEBUG(DBGS() << "Lowering arts.datablock\n  " << op << "\n");
+  AC->setInsertionPointAfter(op);
 
   /// Create a new datablock codegen object.
-  AC->createDatablock(newDbOp, op->getLoc());
+  AC->createDatablock(op, op->getLoc());
 
-  /// Mark dbs for removal.
-  op.erase();
-  opsToRemove.insert(newDbOp.getPtr().getDefiningOp());
-  opsToRemove.insert(newDbOp);
+  /// Mark ops for removal.
+  opsToRemove.insert(op.getPtr().getDefiningOp());
+  opsToRemove.insert(op);
 }
 
 void ConvertArtsToLLVMPass::handleEvent(EventOp &op) {
@@ -282,8 +173,9 @@ void ConvertArtsToLLVMPass::iterateOps(Operation *operation) {
         if (opsToRemove.count(op))
           return mlir::WalkResult::skip();
 
+        /// Handle ARTS operations.
         if (auto dbOp = dyn_cast<arts::DataBlockOp>(op)) {
-          handleDatablock(dbOp);
+          // handleDatablock(dbOp);
           return mlir::WalkResult::advance();
         } else if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
           if (edtOp.isParallel())
@@ -303,22 +195,148 @@ void ConvertArtsToLLVMPass::iterateOps(Operation *operation) {
       });
 }
 
-void ConvertArtsToLLVMPass::iterateDataBlockOps(Operation *operation) {
+void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
+  auto &builder = AC->getBuilder();
+  /// Iterate over all DataBlockOps and create new DataBlockOps with opaque
+  /// pointers.
+  DenseMap<DataBlockOp, DataBlockOp> dbsToRewire;
   operation->walk<mlir::WalkOrder::PreOrder>(
-      [&](Operation *op) -> mlir::WalkResult {
-        /// Skip operations marked for removal.
-        if (opsToRemove.count(op))
+      [&](arts::DataBlockOp dbOp) -> mlir::WalkResult {
+        /// Skip already processed (new) datablock ops.
+        if (dbOp->hasAttr("newDbPtr"))
           return mlir::WalkResult::skip();
-        if (auto dbOp = dyn_cast<arts::DataBlockOp>(op)) {
-          handleDatablock(dbOp);
-          return mlir::WalkResult::advance();
-        }
+
+        // LLVM_DEBUG(dbgs() << "Processing datablock op:\n  " << dbOp << "\n");
+        AC->setInsertionPointAfter(dbOp);
+        /// Create a new DataBlockOp with an opaque pointer type
+        auto sizes = dbOp.getSizes();
+        auto pointerType = dbOp.isSingle() ? AC->VoidPtr : [&]() -> Type {
+          /// Try to use the op result type.
+          if (auto memrefType =
+                  dbOp.getResult().getType().dyn_cast<MemRefType>()) {
+            /// Use the static shape from the op result type for the outer
+            /// memref.
+            return MemRefType::get(memrefType.getShape(), AC->VoidPtr);
+          } else {
+            /// Fallback: use a dynamic shape pointer.
+            return MemRefType::get({ShapedType::kDynamic}, AC->VoidPtr);
+          }
+        }();
+
+        auto newDbOp = builder.create<arts::DataBlockOp>(
+            dbOp->getLoc(), pointerType, dbOp.getMode(), dbOp.getPtr(),
+            dbOp.getElementType(), dbOp.getElementTypeSize(), dbOp.getIndices(),
+            sizes, dbOp.getInEvent(), dbOp.getOutEvent());
+        newDbOp->setAttrs(dbOp->getAttrs());
+        /// Mark the new datablock so that it is not processed again.
+        newDbOp->setAttr("newDbPtr", builder.getUnitAttr());
+
+        /// Insert to rewire map
+        dbsToRewire[dbOp] = newDbOp;
+
         return mlir::WalkResult::advance();
       });
+
+  /// Return if no datablocks to rewire
+  if (dbsToRewire.empty())
+    return;
+
+  /// Rewire the datablocks
+  // LLVM_DEBUG(dbgs() << "Dbs to be rewired size: " << dbsToRewire.size()
+  //                   << "\n");
+  SmallVector<DataBlockOp, 8> dbsToHandle;
+  for (auto &rewire : dbsToRewire) {
+    auto dbFrom = rewire.first;
+    auto dbTo = rewire.second;
+    LLVM_DEBUG(dbgs() << "Rewiring datablock:\n  " << dbFrom << "\n  " << dbTo
+                      << "\n");
+
+    /// Get the new datablock pointer type
+    auto computePtr = [&](ValueRange indices, Location loc) -> Value {
+      if (indices.empty())
+        return AC->castToLLVMPtr(dbTo, loc);
+
+      /// Create a SubIndexOp for newPtr
+      Value subIndex = dbTo;
+      for (auto index : indices) {
+        auto mt = subIndex.getType().cast<MemRefType>();
+        auto shape = std::vector<int64_t>(mt.getShape());
+        shape.erase(shape.begin());
+        auto mt0 = mlir::MemRefType::get(shape, mt.getElementType(),
+                                         MemRefLayoutAttrInterface(),
+                                         mt.getMemorySpace());
+        subIndex =
+            builder.create<polygeist::SubIndexOp>(loc, mt0, subIndex, index);
+      }
+
+      Value subIndexPtr = AC->castToLLVMPtr(subIndex, loc);
+      return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr, subIndexPtr);
+    };
+
+    /// Walk all uses of the old datablock to properly replace it with the new
+    /// memref. Ignore uses in arts operations.
+    for (auto &use : llvm::make_early_inc_range(dbFrom->getUses())) {
+      /// Set insertion point to the user
+      auto user = use.getOwner();
+      AC->setInsertionPoint(user);
+
+      /// memref.load
+      if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+        auto loc = loadOp.getLoc();
+        auto newPtr = computePtr(loadOp.getIndices(), loc);
+        auto newLoad =
+            builder
+                .create<LLVM::LoadOp>(
+                    loc, loadOp.getMemRefType().getElementType(), newPtr)
+                .getResult();
+        loadOp.getResult().replaceAllUsesWith(newLoad);
+        loadOp.erase();
+      }
+      /// memref.store
+      else if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
+        auto loc = storeOp.getLoc();
+        auto newPtr = computePtr(storeOp.getIndices(), loc);
+        builder.create<LLVM::StoreOp>(loc, storeOp.getValueToStore(), newPtr);
+        storeOp.erase();
+      }
+      /// Propagate datablock pointer for nested datablock ops.
+      else if (auto dbUseOp = dyn_cast<arts::DataBlockOp>(user)) {
+        dbUseOp.getPtr().replaceUsesWithIf(
+            dbTo.getResult(),
+            [&](OpOperand &operand) { return operand.getOwner() == dbUseOp; });
+      }
+      /// EdtOp - update dependencies.
+      else if (auto edtOp = dyn_cast<arts::EdtOp>(user)) {
+        auto edtDeps = edtOp.getDependencies();
+        for (auto dep : edtDeps) {
+          if (dep != dbFrom)
+            continue;
+          dep.replaceUsesWithIf(dbTo.getResult(), [&](OpOperand &operand) {
+            return operand.getOwner() == edtOp;
+          });
+        }
+      } else {
+        LLVM_DEBUG(DBGS() << "Unknown use of datablock op: " << *user << "\n");
+        llvm_unreachable("Unknown use of datablock op");
+      }
+    }
+
+    /// Erase the old datablock op
+    opsToRemove.insert(dbFrom);
+
+    /// Add the new datablock to the list of datablocks to handle
+    dbsToHandle.push_back(dbTo);
+  }
+  removeOps(module, builder, opsToRemove);
+
+  /// Handle the new datablocks
+  LLVM_DEBUG(dbgs() << line << "Handling new datablocks\n");
+  for (auto db : dbsToHandle)
+    handleDatablock(db);
 }
 
 void ConvertArtsToLLVMPass::runOnOperation() {
-  ModuleOp module = getOperation();
+  module = getOperation();
   LLVM_DEBUG({
     dbgs() << line << "ConvertArtsToLLVMPass START\n" << line;
     module.dump();
@@ -336,14 +354,16 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   /// Initialize the AC object
   AC = new ArtsCodegen(module, llvmDL, mlirDL);
 
-  LLVM_DEBUG(DBGS() << "Iterate over all the functions\n");
+  LLVM_DEBUG(DBGS() << "Preprocess Datablocks\n");
   for (auto func : module.getOps<func::FuncOp>())
-    iterateDataBlockOps(func);
+    preprocessDataBlockOps(func);
   LLVM_DEBUG({
-    dbgs() << "Module after iterating Datablocks:\n";
+    DBGS() << "Module after iterating Datablocks:\n";
     module.dump();
+    dbgs() << line;
   });
 
+  LLVM_DEBUG(DBGS() << "Iterating ops\n");
   for (auto func : module.getOps<func::FuncOp>())
     iterateOps(func);
   removeOps(module, AC->getBuilder(), opsToRemove);
@@ -351,7 +371,6 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   /// Initialize the runtime
   AC->initializeRuntime(UnknownLoc::get(module.getContext()));
 
-  /// Create a ConversionTarget.
   LLVM_DEBUG({
     dbgs() << line << "ConvertArtsToLLVMPass FINISHED \n" << line;
     module.dump();
