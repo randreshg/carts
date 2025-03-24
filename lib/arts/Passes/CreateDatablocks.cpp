@@ -13,9 +13,9 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 /// Arts
 #include "ArtsPassDetails.h"
-#include "arts/Passes/ArtsPasses.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsIR.h"
+#include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsTypes.h"
 #include "arts/Utils/ArtsUtils.h"
 /// Others
@@ -154,51 +154,61 @@ void CreateDatablocksPass::runOnOperation() {
 }
 
 void CreateDatablocksPass::identifyDatablocks(ModuleOp module) {
-  SmallVector<EdtOp> edtOps;
+  /// Create a list of EDT ops ordered by post-order traversal.
+  SmallVector<EdtOp, 4> edtOps;
   module.walk([&](func::FuncOp func) {
     LLVM_DEBUG(DBGS() << "Candidate datablocks in function: " << func.getName()
                       << "\n");
     func.walk<mlir::WalkOrder::PostOrder>([&](arts::EdtOp edtOp) {
-      edtOps.push_back(edtOp);
       analyzeEdtRegion(edtOp);
+      edtOps.push_back(edtOp);
     });
   });
 
   /// For each candidate datablock, create a new datablock in the edt
-  /// region.
+  /// region. Do this for all EDT ops in the module in post-order.
   auto ctx = module.getContext();
   Location loc = UnknownLoc::get(ctx);
   OpBuilder builder(ctx);
-  for (EdtOp edtOp : edtOps) {
+  for (auto edtOp : edtOps) {
     auto &dbCandidates = candidateDatablocks[edtOp];
     SmallVector<Value> edtDeps;
-    for (auto &candidate : dbCandidates) {
-      auto &db = candidate.first;
-      auto &ops = candidate.second;
-      /// Create a new datablock operation.
-      {
-        OpBuilder::InsertionGuard IG(builder);
-        builder.setInsertionPoint(edtOp);
-        auto dbOp = createDatablockOp(builder, loc, db.access, db.ptr,
-                                      db.pinnedIndices);
-        rewireDatablockUses(dbOp, edtOp, ops);
-        edtDeps.push_back(dbOp.getResult());
-      }
-    }
-    /// Create a new EDT op with the new dependency operands.
-    {
-      OpBuilder::InsertionGuard IG(builder);
+    LLVM_DEBUG(DBGS() << "Creating " << dbCandidates.size()
+                      << " datablocks for EDT\n");
+
+    auto edtParent = edtOp->getParentOfType<arts::EdtOp>();
+    for (auto &candValue : dbCandidates) {
+      auto &dbCand = candValue.first;
+      auto &dbUses = candValue.second;
+      /// Set insertion point to the parent EDT op.
+      OpBuilder::InsertionGuard guard(builder);
       builder.setInsertionPoint(edtOp);
-      /// Move the region body from the old EDT op to the new one.
-      auto newEdtOp = createEdtOp(builder, loc, getEdtType(edtOp), edtDeps);
-      newEdtOp.getRegion().takeBody(edtOp.getRegion());
-      /// Erase the old EDT op and its dependencies.
-      auto oldDeps = edtOp.getDependencies();
-      edtOp.erase();
-      for (auto dep : oldDeps) {
-        auto dbOp = cast<arts::DataBlockOp>(dep.getDefiningOp());
-        dbOp.erase();
+      if (auto *defOp = dbCand.ptr.getDefiningOp()) {
+        /// Set insertion point after the allocation if it's a memref alloc and
+        /// it belongs to the same parent EDT.
+        if (isa<memref::AllocaOp>(defOp) &&
+            defOp->getParentOfType<arts::EdtOp>() == edtParent)
+          builder.setInsertionPointAfter(defOp);
       }
+      /// Create a new datablock operation.
+      auto dbOp = createDatablockOp(builder, loc, dbCand.access, dbCand.ptr,
+                                    dbCand.pinnedIndices);
+      rewireDatablockUses(dbOp, edtOp, dbUses);
+      edtDeps.push_back(dbOp.getResult());
+    }
+
+    /// Create a new EDT op with the new dependency operands.
+    OpBuilder::InsertionGuard IG(builder);
+    builder.setInsertionPoint(edtOp);
+    /// Move the region body from the old EDT op to the new one.
+    auto newEdtOp = createEdtOp(builder, loc, getEdtType(edtOp), edtDeps);
+    newEdtOp.getRegion().takeBody(edtOp.getRegion());
+    /// Erase the old EDT op and its dependencies.
+    auto oldDeps = edtOp.getDependencies();
+    edtOp.erase();
+    for (auto dep : oldDeps) {
+      auto dbOp = cast<arts::DataBlockOp>(dep.getDefiningOp());
+      dbOp.erase();
     }
   }
 }
@@ -230,19 +240,20 @@ void CreateDatablocksPass::analyzeEdtRegion(arts::EdtOp &edtOp) {
 
   /// Debug print the candidate datablocks.
   LLVM_DEBUG({
+    auto candItr = 0;
     auto &candMap = candidateDatablocks[edtOp];
     for (auto &entry : candMap) {
       auto &db = entry.first;
       auto &uses = entry.second;
-      dbgs() << "  - Candidate Datablock\n";
+      dbgs() << "  - Candidate Datablock #" << candItr++ << ":\n";
       dbgs() << "    Memref: " << db.ptr << "\n";
       dbgs() << "    Access Type: " << types::toString(db.access) << "\n";
       dbgs() << "    Pinned Indices:";
       if (db.pinnedIndices.empty())
-        dbgs() << "   none\n";
+        dbgs() << "  none\n";
       else {
         for (Value idx : db.pinnedIndices)
-          dbgs() << "\n      - " << idx;
+          dbgs() << "\n    - " << idx;
         dbgs() << "\n";
       }
       dbgs() << "    Uses:\n";
@@ -263,6 +274,7 @@ void CreateDatablocksPass::analyzeValueInEdt(
     Operation *op = use.getOwner();
     if (!region.isAncestor(op->getParentRegion()))
       continue;
+
     /// Only consider load and store operations.
     if (!(isa<memref::LoadOp>(op) || isa<memref::StoreOp>(op)))
       continue;
@@ -324,8 +336,11 @@ void CreateDatablocksPass::analyzeValueInEdt(
   }
 
   /// Remove candidates that are supersets.
-  for (const CandidateDatablock &db : toRemove)
+  for (const CandidateDatablock &db : toRemove) {
+    LLVM_DEBUG(dbgs() << "Removing candidate datablock:\n");
+    LLVM_DEBUG(dbgs() << "  Memref: " << db.ptr << "\n");
     candMap.erase(db);
+  }
 
   /// Analyze each candidate's access type.
   for (auto &entry : candMap) {
@@ -363,7 +378,7 @@ void CreateDatablocksPass::rewireDatablockUses(arts::DataBlockOp &dbOp,
                                                SmallVector<Operation *> &uses) {
   MLIRContext *ctx = dbOp.getContext();
   auto builder = OpBuilder(ctx);
-  LLVM_DEBUG(dbgs() << line << "Rewiring uses of:\n  " << dbOp << "\n");
+  LLVM_DEBUG(dbgs() << "- Rewiring uses of:\n  " << dbOp << "\n");
 
   const unsigned drop = dbOp.getIndices().size();
 
