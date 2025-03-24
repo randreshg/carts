@@ -9,7 +9,7 @@ all: $(FILENAME)
 
 # Generate MLIR std dialect from C file
 %.mlir: %.c
-	cgeist $< -fopenmp -O0 -S -I/${CLANG_INCLUDE_PATH} &> $@
+	cgeist $< -fopenmp -O0 -S -I/${CLANG_INCLUDE_PATH} > $@
 
 # Generate LLVM IR from MLIR std dialect
 %.ll: %.mlir
