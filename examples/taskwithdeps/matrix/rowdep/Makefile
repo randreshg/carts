@@ -2,15 +2,12 @@
 ARTS_PATH=/home/randres/projects/carts/.install/arts
 CARTS_PATH=/home/randres/projects/carts/.install/carts
 CLANG_INCLUDE_PATH=/usr/lib/llvm-14/lib/clang/14.0.0/include
-FILENAME=taskwithdeps
+FILENAME=matrix
 SHELL = /bin/bash
 
 all: $(FILENAME)
 
 # Generate MLIR std dialect from C file
-%.mlir: %.cpp
-	cgeist -std=c++17 $< -fopenmp -O0 -S -I/${CLANG_INCLUDE_PATH} > $@
-
 %.mlir: %.c
 	cgeist $< -fopenmp -O0 -S -I/${CLANG_INCLUDE_PATH} > $@
 
