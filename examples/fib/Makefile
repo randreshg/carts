@@ -1,5 +1,6 @@
 
 ARTS_PATH=/home/randres/projects/carts/.install/arts
+CARTS_PATH=/home/randres/projects/carts/.install/carts
 CLANG_INCLUDE_PATH=/usr/lib/llvm-14/lib/clang/14.0.0/include
 FILENAME=simple
 SHELL = /bin/bash
