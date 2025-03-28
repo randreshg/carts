@@ -592,41 +592,6 @@ DatablockGraph *DatablockAnalysis::getOrCreateGraph(func::FuncOp func) {
   return functionGraphMap[func];
 }
 
-/// Returns true if `target` is reachable from `source` in the EDT CFG.
-bool DatablockAnalysis::isReachable(Operation *source, Operation *target) {
-  /// Early exit if either pointer is null or both are the same.
-  if (!source || !target)
-    return false;
-  if (source == target)
-    return true;
-
-  /// If both operations are in the same block, check their order.
-  if (source->getBlock() == target->getBlock())
-    return source->isBeforeInBlock(target);
-
-  /// Get the EDT parent for both operations. This acts as our upper limit.
-  auto srcEdt = source->getParentOfType<EdtOp>();
-  auto tgtEdt = target->getParentOfType<EdtOp>();
-  if (srcEdt != tgtEdt)
-    return false;
-
-  /// Traverse up the parent chain simultaneously but stop once the EDT parent
-  /// is reached.
-  Operation *src = source;
-  Operation *tgt = target;
-  while (true) {
-    if (src->getBlock() == tgt->getBlock())
-      return src->isBeforeInBlock(tgt);
-    if (src == srcEdt && tgt == tgtEdt)
-      break;
-    if (src->getParentOp() != srcEdt)
-      src = src->getParentOp();
-    if (tgt->getParentOp() != tgtEdt)
-      tgt = tgt->getParentOp();
-  }
-  return false;
-}
-
 /// Dependency analysis.
 bool DatablockAnalysis::mayDepend(DatablockNode &prod, DatablockNode &cons,
                                   bool &isDirect) {

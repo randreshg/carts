@@ -8,6 +8,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   CreateDatablocks.cpp
   Datablock.cpp
   CreateEvents.cpp
+  CreateEpochs.cpp
   ConvertArtsToLLVM.cpp
   ${CARTS_UTILS_SOURCE_FILES}
   ${CARTS_CODEGEN_SOURCE_FILES}

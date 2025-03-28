@@ -8,6 +8,40 @@
 namespace mlir {
 namespace arts {
 
+bool isReachable(Operation *source, Operation *target) {
+  /// Early exit if either pointer is null or both are the same.
+  if (!source || !target)
+    return false;
+  if (source == target)
+    return true;
+
+  /// If both operations are in the same block, check their order.
+  if (source->getBlock() == target->getBlock())
+    return source->isBeforeInBlock(target);
+
+  /// Get the EDT parent for both operations. This acts as our upper limit.
+  auto srcEdt = source->getParentOfType<EdtOp>();
+  auto tgtEdt = target->getParentOfType<EdtOp>();
+  if (srcEdt != tgtEdt)
+    return false;
+
+  /// Traverse up the parent chain simultaneously but stop once the EDT parent
+  /// is reached.
+  Operation *src = source;
+  Operation *tgt = target;
+  while (true) {
+    if (src->getBlock() == tgt->getBlock())
+      return src->isBeforeInBlock(tgt);
+    if (src == srcEdt && tgt == tgtEdt)
+      break;
+    if (src->getParentOp() != srcEdt)
+      src = src->getParentOp();
+    if (tgt->getParentOp() != tgtEdt)
+      tgt = tgt->getParentOp();
+  }
+  return false;
+}
+
 void removeOps(mlir::ModuleOp module, OpBuilder &builder,
                llvm::SetVector<mlir::Operation *> &opsToRemove) {
   for (auto op : opsToRemove) {
@@ -34,8 +68,10 @@ void recursivelyRemoveOp(mlir::Operation *op) {
     recursivelyRemoveOp(userOp);
 
   /// Remove the operation.
-  if (op)
+  if (op) {
     op->erase();
+    op = nullptr;
+  }
 }
 
 void removeUndefOps(mlir::ModuleOp module) {
