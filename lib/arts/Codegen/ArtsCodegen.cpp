@@ -290,14 +290,14 @@ void EdtCodegen::process(Location loc) {
   auto indexMemRefType = MemRefType::get({}, indexType);
 
   /// Allocate and initialize counters.
-  auto zeroConstant = AC.createIndexConstant(0, loc);
+  auto zeroConst = AC.createIndexConstant(0, loc);
   auto totalEventsToSatisfy =
       builder.create<memref::AllocaOp>(loc, indexMemRefType);
-  builder.create<memref::StoreOp>(loc, zeroConstant, totalEventsToSatisfy);
+  builder.create<memref::StoreOp>(loc, zeroConst, totalEventsToSatisfy);
 
   /// Allocate dependency count (depC) and initialize to zero.
   depC = builder.create<memref::AllocaOp>(loc, indexMemRefType);
-  builder.create<memref::StoreOp>(loc, zeroConstant, depC);
+  builder.create<memref::StoreOp>(loc, zeroConst, depC);
 
   /// Insert a dynamic size as a parameter if it is non-constant.
   auto insertSizeAsParameter = [&](DataBlockCodegen *db, Value size,
@@ -468,6 +468,8 @@ void EdtCodegen::process(Location loc) {
 }
 
 void EdtCodegen::processDependencies(Location loc) {
+  LLVM_DEBUG(DBGS() << "Processing dependencies for EDT: " << func << "\n");
+
   /// Set the insertion point at the EDT function return to satisfy
   /// dependencies.
   builder.setInsertionPoint(returnOp);
@@ -735,8 +737,11 @@ void EdtCodegen::processDependencies(Location loc) {
   /// datablock pointers.
   for (auto &dep : deps) {
     auto *db = AC.getDatablock(dep);
-    if (!db || !db->getPtr())
+    assert(db && "Datablock not found");
+    if (!db->getPtr()) {
+      LLVM_DEBUG(dbgs() << "Datablock not found or pointer not set\n");
       continue;
+    }
     db->getOp().replaceAllUsesWith(db->getPtr());
   }
 }
@@ -815,13 +820,13 @@ void EdtCodegen::createFnEntry(Location loc) {
   }
 
   /// Constants
-  auto constZero = AC.createIndexConstant(0, loc);
-  auto constOne = AC.createIndexConstant(1, loc);
+  auto zeroConst = AC.createIndexConstant(0, loc);
+  auto oneConst = AC.createIndexConstant(1, loc);
 
   /// Insert the dependencies.
   auto indexAlloc = builder.create<memref::AllocaOp>(
       loc, MemRefType::get({}, builder.getIndexType()));
-  builder.create<memref::StoreOp>(loc, constZero, indexAlloc);
+  builder.create<memref::StoreOp>(loc, zeroConst, indexAlloc);
 
   /// Helper function to load the current index.
   auto loadIndex = [&]() -> Value {
@@ -879,7 +884,7 @@ void EdtCodegen::createFnEntry(Location loc) {
       entryDbs[db].ptr = entryPtr;
       /// Increment the index.
       auto newIndex =
-          builder.create<arith::AddIOp>(loc, curIndex, constOne).getResult();
+          builder.create<arith::AddIOp>(loc, curIndex, oneConst).getResult();
       builder.create<memref::StoreOp>(loc, newIndex, indexAlloc);
       /// Rewire the datablock to the pointer.
       updateUserDb(entryGuid, entryPtr);
@@ -933,7 +938,7 @@ void EdtCodegen::createFnEntry(Location loc) {
                                             indices);
             /// Increment the index.
             auto newIndex =
-                builder.create<arith::AddIOp>(loc, curIndex, constOne)
+                builder.create<arith::AddIOp>(loc, curIndex, oneConst)
                     .getResult();
             builder.create<memref::StoreOp>(loc, newIndex, indexAlloc);
             return;
@@ -942,7 +947,7 @@ void EdtCodegen::createFnEntry(Location loc) {
           /// Create loop for current dimension.
           auto lower = builder.create<arith::ConstantIndexOp>(loc, 0);
           auto upper = entrySizes[dim];
-          auto loopOp = builder.create<scf::ForOp>(loc, lower, upper, constOne);
+          auto loopOp = builder.create<scf::ForOp>(loc, lower, upper, oneConst);
           auto &loopBlock = loopOp.getRegion().front();
           builder.setInsertionPointToStart(&loopBlock);
           indices.push_back(loopOp.getInductionVar());

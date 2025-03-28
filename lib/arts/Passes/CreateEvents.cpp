@@ -275,6 +275,9 @@ void CreateEventsPass::processEvent(
   }
 }
 
+//===----------------------------------------------------------------------===//
+// Pass creation
+//===----------------------------------------------------------------------===//
 namespace mlir {
 namespace arts {
 std::unique_ptr<Pass> createCreateEventsPass() {

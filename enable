@@ -1,0 +1,3 @@
+export ARTS_PATH=/home/randres/projects/carts/.install/arts
+export PATH=/home/randres/projects/carts/.install/carts/bin:/home/randres/projects/carts/.install/polygeist/bin:/home/randres/projects/carts/.install/llvm/bin:$PATH
+export LD_LIBRARY_PATH=/home/randres/projects/carts/.install/carts/lib:/home/randres/projects/carts/.install/polygeist/lib:/home/randres/projects/carts/.install/arts/lib:/home/randres/projects/carts/.install/llvm/lib:$LD_LIBRARY_PATH

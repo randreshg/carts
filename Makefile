@@ -35,8 +35,8 @@ installdeps: arts
 
 # Enable environment
 enable:
-	echo "export ARTS_PATH=$(ARTS_INSTALL_DIR)" > enable"
-	echo "export PATH=$(CARTS_INSTALL_DIR)/bin:$(POLYGEIST_INSTALL_DIR)/bin:$(LLVM_INSTALL_DIR)/bin:\$$PATH" > enable
+	echo "export ARTS_PATH=$(ARTS_INSTALL_DIR)" > enable
+	echo "export PATH=$(CARTS_INSTALL_DIR)/bin:$(POLYGEIST_INSTALL_DIR)/bin:$(LLVM_INSTALL_DIR)/bin:\$$PATH" >> enable
 	echo "export LD_LIBRARY_PATH=$(CARTS_INSTALL_DIR)/lib:$(POLYGEIST_INSTALL_DIR)/lib:$(ARTS_INSTALL_DIR)/lib:$(LLVM_INSTALL_DIR)/lib:\$$LD_LIBRARY_PATH" >> enable
 
 # Polygeist

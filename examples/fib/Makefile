@@ -1,8 +1,7 @@
 
-ARTS_PATH=/home/randres/projects/carts/.install/arts
-CARTS_PATH=/home/randres/projects/carts/.install/carts
-CLANG_INCLUDE_PATH=/usr/lib/llvm-14/lib/clang/14.0.0/include
-FILENAME=simple
+ARTS_PATH?=home/randres/projects/carts/.install/arts
+CLANG_INCLUDE_PATH=usr/lib/llvm-14/lib/clang/14.0.0/include
+FILENAME=fib
 SHELL = /bin/bash
 
 all: $(FILENAME)
@@ -16,7 +15,7 @@ all: $(FILENAME)
 
 # Generate LLVM IR from MLIR std dialect
 %.ll: %.mlir
-	carts-opt $< --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize --raise-scf-to-affine --affine-cfg --affine-scalrep  --affine-loop-coalescing --lower-affine --cse --canonicalize --convert-polygeist-to-llvm --cse --canonicalize &> $(FILENAME)_llvm.mlir
+	carts-opt $< --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --create-epochs --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize --raise-scf-to-affine --affine-cfg --affine-scalrep  --affine-loop-coalescing --lower-affine --cse --canonicalize --convert-polygeist-to-llvm --cse --canonicalize &> $(FILENAME)_llvm.mlir
 	mlir-translate --mlir-to-llvmir $(FILENAME)_llvm.mlir &> $@
 
 # Generate binary

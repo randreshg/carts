@@ -1,8 +1,9 @@
-//===---------------------- ConvertOpenMPToArts.cpp  ----------------------===//
+///==========================================================================
+/// File: ConvertOpenMPToArts.cpp
 //
 // This file implements a module pass that converts OpenMP ops
 // (omp.parallel, omp.master, omp.task, etc.) into ARTS ops
-//===----------------------------------------------------------------------===//
+///==========================================================================
 
 /// Dialects
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -109,7 +110,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
 
     /// Collect the task deps clause
     auto dependList = task.getDependsAttr();
-    if(!dependList)
+    if (!dependList)
       return;
     for (unsigned i = 0, e = dependList.size(); i < e; ++i) {
       /// Get dependency clause and type.
@@ -215,6 +216,19 @@ struct BarrierToARTSPattern : public OpRewritePattern<omp::BarrierOp> {
   }
 };
 
+/// Pattern to replace `omp.taskwait` with `arts.barrier`
+struct TaskwaitToARTSPattern : public OpRewritePattern<omp::TaskwaitOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(omp::TaskwaitOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    rewriter.create<arts::BarrierOp>(loc);
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 /// Pattern to replace 'memref.alloc' with 'arts.alloc'
 struct AllocToARTSPattern : public OpRewritePattern<memref::AllocOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -265,10 +279,9 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   ModuleOp module = getOperation();
   MLIRContext *context = &getContext();
   RewritePatternSet patterns(context);
-  patterns
-      .add<ParallelToARTSPattern, MasterToARTSPattern, TaskToARTSPattern,
-           TerminatorToARTSPattern, BarrierToARTSPattern, AllocToARTSPattern>(
-          context);
+  patterns.add<ParallelToARTSPattern, MasterToARTSPattern, TaskToARTSPattern,
+               TerminatorToARTSPattern, BarrierToARTSPattern,
+               AllocToARTSPattern, TaskwaitToARTSPattern>(context);
   GreedyRewriteConfig config;
   if (failed(
           applyPatternsAndFoldGreedily(module, std::move(patterns), config))) {

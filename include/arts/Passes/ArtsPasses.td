@@ -57,6 +57,20 @@ def Edt : Pass<"edt", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createEdtPass()";
 }
 
+def CreateEpochs : Pass<"create-epochs", "mlir::ModuleOp"> {
+  let summary = "Analyzes the program and creates ARTS epochs";
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "LLVM::LLVMDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "arith::ArithDialect",
+    "affine::AffineDialect",
+    "polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::arts::createCreateEpochsPass()";
+}
+
 def CreateEvents : Pass<"create-events", "mlir::ModuleOp"> {
   let summary = "Analyzes the program and creates ARTS events";
   let dependentDialects = [

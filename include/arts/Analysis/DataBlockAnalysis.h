@@ -142,7 +142,7 @@ private:
 
   /// Find datablock that define the dbNode in the given environment.
   SmallVector<DatablockNode *, 4> findDefinition(DatablockNode &dbNode,
-                                               Environment &env);
+                                                 Environment &env);
 
   /// Merge two environments by taking the union of definitions for each
   /// datablock.
@@ -180,9 +180,6 @@ private:
 
   /// Other
   void printGraph(func::FuncOp func);
-
-  /// Returns true if `target` is reachable from `source` in the EDT CFG.
-  bool isReachable(Operation *source, Operation *target);
 
   /// Set of equivalent datablock nodes.
   llvm::SmallDenseSet<unsigned> equivalentNodes;

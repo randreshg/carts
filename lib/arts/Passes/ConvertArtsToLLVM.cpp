@@ -55,18 +55,18 @@ struct ConvertArtsToLLVMPass
     : public arts::ConvertArtsToLLVMBase<ConvertArtsToLLVMPass> {
   void runOnOperation() override;
 
-  void iterateOps(Operation *op);
+  void iterateOps();
   void preprocessDataBlockOps(Operation *op);
   void handleParallel(EdtOp &op);
-  void handleSingle(EdtOp &op);
-  void handleSync(EdtOp &op);
   void handleEdt(EdtOp &op);
   void handleEvent(EventOp &op);
+  void handleEpoch(EpochOp &op);
   void handleDatablock(DataBlockOp &op);
 
 private:
   ModuleOp module;
   ArtsCodegen *AC = nullptr;
+  DenseMap<EdtOp, Value> edtToEpoch;
   SetVector<Operation *> opsToRemove;
 };
 } // end namespace
@@ -76,76 +76,29 @@ void ConvertArtsToLLVMPass::handleParallel(EdtOp &op) {
   llvm_unreachable("Parallel EDTs not supported yet");
 }
 
-void ConvertArtsToLLVMPass::handleSync(EdtOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.edt sync\n" << line);
-  auto *ctx = op.getContext();
-  Location loc = UnknownLoc::get(ctx);
-  mlir::Region &region = op.getRegion();
-
-  /// Set insertion point to the current op for epoch creation.
-  EdtCodegen *newEdt = nullptr;
-  {
-    OpBuilder::InsertionGuard guard(AC->getBuilder());
-    AC->setInsertionPoint(op);
-
-    /// Create a done-edt for the sync Edt epoch.
-    EdtCodegen syncDoneEdt(*AC);
-    syncDoneEdt.setDepC(AC->createIntConstant(1, AC->Int32, loc));
-    syncDoneEdt.build(loc);
-    LLVM_DEBUG(DBGS() << "Sync done EDT created\n");
-
-    /// Create the parallel epoch.
-    auto parDone_slot = AC->createIntConstant(0, AC->Int32, loc);
-    auto parEpoch_guid =
-        AC->createEpoch(syncDoneEdt.getGuid(), parDone_slot, loc);
-    LLVM_DEBUG(DBGS() << "Parallel epoch created\n");
-
-    /// Create the parallel EDT with the single op's region.
-    auto par_dependencies = op.getDependenciesVector();
-    newEdt = AC->createEdt(&par_dependencies, &region, &parEpoch_guid, nullptr);
-    LLVM_DEBUG(DBGS() << "Parallel EDT created\n");
-
-    /// Insert wait on handle after parallel EDT.
-    AC->setInsertionPointAfter(op);
-    AC->waitOnHandle(parEpoch_guid, loc);
-  }
-
-  /// Erase the old parallel op.
-  opsToRemove.insert(op);
-  LLVM_DEBUG(DBGS() << "Parallel op lowered\n\n");
-
-  /// Visit new function
-  assert(newEdt && "New EDT not created");
-  iterateOps(newEdt->getFunc());
-}
-
-void ConvertArtsToLLVMPass::handleSingle(EdtOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.edt single\n");
-  llvm_unreachable("Single EDTs not supported yet");
-}
-
 void ConvertArtsToLLVMPass::handleEdt(EdtOp &op) {
-  auto *ctx = op.getContext();
-  Location loc = UnknownLoc::get(ctx);
   LLVM_DEBUG(DBGS() << "Lowering arts.edt\n");
-  EdtCodegen *newEdt = nullptr;
-  {
-    OpBuilder::InsertionGuard guard(AC->getBuilder());
-    AC->setInsertionPoint(op);
+  OpBuilder::InsertionGuard IG(AC->getBuilder());
+  AC->setInsertionPoint(op);
 
-    /// Create the parallel EDT with the single op's region.
-    auto epoch = AC->getCurrentEpochGuid(loc);
-    auto dependencies = op.getDependenciesVector();
-    auto &region = op.getRegion();
-    newEdt = AC->createEdt(&dependencies, &region, &epoch, nullptr);
-  }
+  /// Create unknown location
+  Location loc = UnknownLoc::get(op.getContext());
 
-  /// Erase the old edt
-  opsToRemove.insert(op);
+  /// Create the parallel EDT with the single op's region.
+  auto dependencies = op.getDependenciesVector();
+  auto &region = op.getRegion();
+
+  Value currentEpoch;
+  if (auto it = edtToEpoch.find(op); it != edtToEpoch.end())
+    currentEpoch = it->second;
+  else
+    currentEpoch = AC->getCurrentEpochGuid(loc);
+
+  auto *newEdt = AC->createEdt(&dependencies, &region, &currentEpoch, &loc);
 
   /// Visit new function
   assert(newEdt && "New EDT not created");
-  iterateOps(newEdt->getFunc());
+  opsToRemove.insert(op);
 }
 
 void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
@@ -166,33 +119,90 @@ void ConvertArtsToLLVMPass::handleEvent(EventOp &op) {
   opsToRemove.insert(op);
 }
 
-void ConvertArtsToLLVMPass::iterateOps(Operation *operation) {
-  operation->walk<mlir::WalkOrder::PreOrder>(
-      [&](Operation *op) -> mlir::WalkResult {
-        /// Skip operations marked for removal.
-        if (opsToRemove.count(op))
-          return mlir::WalkResult::skip();
+void ConvertArtsToLLVMPass::handleEpoch(EpochOp &op) {
+  LLVM_DEBUG(DBGS() << "Lowering arts.epoch: " << op << "\n");
+  Location loc = UnknownLoc::get(op.getContext());
+  OpBuilder::InsertionGuard IG(AC->getBuilder());
+  AC->setInsertionPoint(op);
+  /// Create a done-edt for the epoch.
+  EdtCodegen epochDoneEdt(*AC);
+  epochDoneEdt.setDepC(AC->createIntConstant(1, AC->Int32, loc));
+  epochDoneEdt.build(loc);
 
-        /// Handle ARTS operations.
-        if (auto dbOp = dyn_cast<arts::DataBlockOp>(op)) {
-          // handleDatablock(dbOp);
-          return mlir::WalkResult::advance();
-        } else if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
-          if (edtOp.isParallel())
-            handleParallel(edtOp);
-          else if (edtOp.isSync())
-            handleSync(edtOp);
-          else if (edtOp.isSingle())
-            handleSingle(edtOp);
-          else
-            handleEdt(edtOp);
-          return mlir::WalkResult::advance();
-        } else if (auto allocEventOp = dyn_cast<arts::EventOp>(op)) {
-          handleEvent(allocEventOp);
-          return mlir::WalkResult::advance();
-        }
-        return mlir::WalkResult::advance();
-      });
+  /// Create the epoch.
+  auto epochDoneSlot = AC->createIntConstant(0, AC->Int32, loc);
+  auto currentEpoch =
+      AC->createEpoch(epochDoneEdt.getGuid(), epochDoneSlot, loc);
+
+  /// Move epoch region operations out of the epoch op and insert them after the
+  /// current epoch.
+  Operation *currentEpochOp = currentEpoch.getDefiningOp();
+
+  /// Assume the epoch region has a single block.
+  Block *epochBlock = &op.getRegion().front();
+
+  Operation *currentOp = currentEpochOp;
+  for (Operation &childOp : llvm::make_early_inc_range(*epochBlock)) {
+    if (isa<arts::YieldOp>(childOp))
+      continue;
+    /// If the operation is an edt, add it to the map
+    if (auto edtOp = dyn_cast<arts::EdtOp>(&childOp)) {
+      edtToEpoch[edtOp] = currentEpoch;
+    }
+    /// Move the operation after the current epoch op.
+    childOp.moveAfter(currentOp);
+    currentOp = &childOp;
+  }
+  AC->setInsertionPointAfter(currentOp);
+
+  /// Insert wait on handle after epoch.
+  AC->waitOnHandle(currentEpoch, loc);
+
+  /// Remove the epoch op.
+  op->erase();
+}
+
+void ConvertArtsToLLVMPass::iterateOps() {
+  /// Iterate over the FuncOps/DataBlockOps in the module
+  for (auto func : module.getOps<func::FuncOp>())
+    preprocessDataBlockOps(func);
+  LLVM_DEBUG({
+    dbgs() << "Module after preprocessing DataBlocks:\n";
+    module.dump();
+    dbgs() << line;
+  });
+
+  /// Iterate over the EpochsOps and EventOps in the module
+  module.walk([&](arts::EpochOp epoch) { handleEpoch(epoch); });
+  module.walk([&](arts::EventOp event) { handleEvent(event); });
+  LLVM_DEBUG({
+    DBGS() << "Module after iterating DataBlocks and Events:\n";
+    module.dump();
+    dbgs() << line;
+  });
+
+  /// Iterate over the EdtOps in the module
+  module.walk<mlir::WalkOrder::PreOrder>([&](arts::EdtOp edtOp) {
+    if (opsToRemove.count(edtOp))
+      return mlir::WalkResult::skip();
+    if (edtOp.isTask())
+      handleEdt(edtOp);
+    else if (edtOp.isParallel())
+      handleParallel(edtOp);
+    else {
+      llvm_unreachable("Sync, single, and other EDTs should have been lowered. "
+                       "Did you run the 'create-epochs' pass?");
+    }
+    return mlir::WalkResult::advance();
+  });
+
+  LLVM_DEBUG({
+    DBGS() << "Module after iterating edts:\n";
+    module.dump();
+    dbgs() << line;
+  });
+
+  removeOps(module, AC->getBuilder(), opsToRemove);
 }
 
 void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
@@ -206,21 +216,18 @@ void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
         if (dbOp->hasAttr("newDbPtr"))
           return mlir::WalkResult::skip();
 
-        // LLVM_DEBUG(dbgs() << "Processing datablock op:\n  " << dbOp << "\n");
-        AC->setInsertionPointAfter(dbOp);
         /// Create a new DataBlockOp with an opaque pointer type
+        AC->setInsertionPointAfter(dbOp);
         auto sizes = dbOp.getSizes();
         auto pointerType = dbOp.isSingle() ? AC->VoidPtr : [&]() -> Type {
-          /// Try to use the op result type.
+          /// Try to use the static shape from the op result type for the outer
+          /// memref.
           if (auto memrefType =
                   dbOp.getResult().getType().dyn_cast<MemRefType>()) {
-            /// Use the static shape from the op result type for the outer
-            /// memref.
             return MemRefType::get(memrefType.getShape(), AC->VoidPtr);
-          } else {
-            /// Fallback: use a dynamic shape pointer.
-            return MemRefType::get({ShapedType::kDynamic}, AC->VoidPtr);
           }
+          /// Fallback: use a dynamic shape pointer.
+          return MemRefType::get({ShapedType::kDynamic}, AC->VoidPtr);
         }();
 
         auto newDbOp = builder.create<arts::DataBlockOp>(
@@ -242,8 +249,6 @@ void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
     return;
 
   /// Rewire the datablocks
-  // LLVM_DEBUG(dbgs() << "Dbs to be rewired size: " << dbsToRewire.size()
-  //                   << "\n");
   SmallVector<DataBlockOp, 8> dbsToHandle;
   for (auto &rewire : dbsToRewire) {
     auto dbFrom = rewire.first;
@@ -351,24 +356,9 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   llvm::DataLayout llvmDL(llvmDLAttr.getValue().str());
   mlir::DataLayout mlirDL(module);
 
-  /// Initialize the AC object
+  /// Initialize the AC object, iterate ops and initialize the runtime.
   AC = new ArtsCodegen(module, llvmDL, mlirDL);
-
-  LLVM_DEBUG(DBGS() << "Preprocess Datablocks\n");
-  for (auto func : module.getOps<func::FuncOp>())
-    preprocessDataBlockOps(func);
-  LLVM_DEBUG({
-    DBGS() << "Module after iterating Datablocks:\n";
-    module.dump();
-    dbgs() << line;
-  });
-
-  LLVM_DEBUG(DBGS() << "Iterating ops\n");
-  for (auto func : module.getOps<func::FuncOp>())
-    iterateOps(func);
-  removeOps(module, AC->getBuilder(), opsToRemove);
-
-  /// Initialize the runtime
+  iterateOps();
   AC->initializeRuntime(UnknownLoc::get(module.getContext()));
 
   LLVM_DEBUG({

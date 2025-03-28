@@ -8,4 +8,4 @@ external
 build/
 CMakeFiles
 core.*
-enable
+./enable
