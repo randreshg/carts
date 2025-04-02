@@ -9,7 +9,6 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-// #include "polygeist/Ops.h"
 /// Arts
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
@@ -180,6 +179,7 @@ void ConvertArtsToLLVMPass::iterateOps() {
     module.dump();
     dbgs() << line;
   });
+  
 
   /// Iterate over the EdtOps in the module
   module.walk<mlir::WalkOrder::PreOrder>([&](arts::EdtOp edtOp) {
@@ -195,14 +195,13 @@ void ConvertArtsToLLVMPass::iterateOps() {
     }
     return mlir::WalkResult::advance();
   });
+  removeOps(module, AC->getBuilder(), opsToRemove);
 
   LLVM_DEBUG({
     DBGS() << "Module after iterating edts:\n";
     module.dump();
     dbgs() << line;
   });
-
-  removeOps(module, AC->getBuilder(), opsToRemove);
 }
 
 void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {

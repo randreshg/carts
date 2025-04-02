@@ -16,7 +16,7 @@ all: $(FILENAME)
 
 # Generate LLVM IR from MLIR std dialect
 %.ll: %.mlir
-	carts-opt $< --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize --raise-scf-to-affine --affine-cfg --affine-scalrep  --affine-loop-coalescing --lower-affine --cse --canonicalize --convert-polygeist-to-llvm --cse --canonicalize &> $(FILENAME)_llvm.mlir
+	carts-opt $< --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --create-epochs --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize --raise-scf-to-affine --canonicalize --affine-cfg --affine-expand-index-ops --affine-scalrep --affine-cfg --loop-invariant-code-motion --cse --canonicalize --lower-affine --cse --canonicalize --convert-polygeist-to-llvm --cse --canonicalize &> $(FILENAME)_llvm.mlir
 	mlir-translate --mlir-to-llvmir $(FILENAME)_llvm.mlir &> $@
 
 # Generate binary	
