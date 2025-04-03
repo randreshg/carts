@@ -14,7 +14,7 @@ set(LIBS
 add_llvm_executable(carts-opt carts-opt.cpp)
 
 install(TARGETS carts-opt
-  EXPORT ArtsTargets
+  EXPORT CartsTargets
   RUNTIME DESTINATION ${LLVM_TOOLS_INSTALL_DIR}
   COMPONENT carts-opt)
 
