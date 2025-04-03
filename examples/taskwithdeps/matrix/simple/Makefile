@@ -25,3 +25,5 @@ $(FILENAME): $(FILENAME).ll
 
 clean:
 	rm -f *.mlir *.ll ./$(FILENAME);
+
+# -debug-only=create-datablocks,convert-arts-to-llvm,convert-polygeist-to-llvm
