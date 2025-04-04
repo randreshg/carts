@@ -41,10 +41,18 @@ def CreateDatablocks : Pass<"create-datablocks", "mlir::ModuleOp"> {
     "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createCreateDatablocksPass()";
+  let options = [
+    Option<"identifyDbs", "identify-dbs", "bool",
+           /*default=*/"true",
+           "Analyzes the module and tries to automatically identify the "
+           "datablocks. This is the default behavior. If set to false, the "
+           "user must manually annotate the datablocks using the "
+           "'depend' clause in the OpenMP Tasks region.">,
+  ];
 }
 
 def Edt : Pass<"edt", "mlir::ModuleOp"> {
-  let summary = "Using the EDT Analysis, perform changes to the EDT operations and optimize them if the user wants to";
+  let summary = "Optimize EDTs";
   let dependentDialects = [
     "memref::MemRefDialect",
     "LLVM::LLVMDialect",
