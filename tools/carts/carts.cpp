@@ -91,6 +91,7 @@ void registerDialects(DialectRegistry &registry) {
   mlir::registerAllExtensions(registry);
   mlir::registerAllFromLLVMIRTranslations(registry);
   mlir::registerBuiltinDialectTranslation(registry);
+  mlir::registerLLVMDialectTranslation(registry);
 }
 
 /// Initialize the MLIR context by loading necessary dialects and attaching
@@ -100,16 +101,18 @@ void initializeContext(MLIRContext &context) {
   context.getOrLoadDialect<affine::AffineDialect>();
   context.getOrLoadDialect<func::FuncDialect>();
   context.getOrLoadDialect<DLTIDialect>();
-  context.getOrLoadDialect<scf::SCFDialect>();
-  context.getOrLoadDialect<LLVM::LLVMDialect>();
-  context.getOrLoadDialect<omp::OpenMPDialect>();
-  context.getOrLoadDialect<math::MathDialect>();
-  context.getOrLoadDialect<memref::MemRefDialect>();
-  context.getOrLoadDialect<linalg::LinalgDialect>();
-  context.getOrLoadDialect<polygeist::PolygeistDialect>();
-  context.getOrLoadDialect<cf::ControlFlowDialect>();
-  context.getOrLoadDialect<arts::ArtsDialect>();
-  context.getOrLoadDialect<arith::ArithDialect>();
+  context.getOrLoadDialect<mlir::scf::SCFDialect>();
+  context.getOrLoadDialect<mlir::async::AsyncDialect>();
+  context.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
+  context.getOrLoadDialect<mlir::NVVM::NVVMDialect>();
+  context.getOrLoadDialect<mlir::ROCDL::ROCDLDialect>();
+  context.getOrLoadDialect<mlir::gpu::GPUDialect>();
+  context.getOrLoadDialect<mlir::omp::OpenMPDialect>();
+  context.getOrLoadDialect<mlir::math::MathDialect>();
+  context.getOrLoadDialect<mlir::memref::MemRefDialect>();
+  context.getOrLoadDialect<mlir::linalg::LinalgDialect>();
+  context.getOrLoadDialect<mlir::polygeist::PolygeistDialect>();
+  context.getOrLoadDialect<mlir::cf::ControlFlowDialect>();
 
   LLVM::LLVMFunctionType::attachInterface<MemRefInsider>(context);
   LLVM::LLVMPointerType::attachInterface<MemRefInsider>(context);
@@ -127,8 +130,10 @@ void initializeContext(MLIRContext &context) {
 
 /// Configure the pass manager with the optimization passes.
 void setupPassManager(MLIRContext &context, PassManager &pm) {
+  mlir::OpPassManager &optPM = pm.nest<mlir::func::FuncOp>();
+
   /// Basic inlining and affine lowering.
-  pm.addPass(createInlinerPass());
+  // pm.addPass(createInlinerPass());
   pm.addPass(createLowerAffinePass());
 
   /// Convert OpenMP Dialect to ARTS Dialect.
@@ -136,19 +141,14 @@ void setupPassManager(MLIRContext &context, PassManager &pm) {
 
   pm.addPass(arts::createEdtPass());
 
-  pm.addPass(arts::createCreateDatablocksPass());
+  pm.addPass(arts::createCreateDatablocksPass(IdentifyDatablocks));
   pm.addPass(createCSEPass());
   pm.addPass(createCanonicalizerPass());
+
+  pm.addPass(arts::createDatablockPass());
 
   pm.addPass(arts::createCreateEventsPass());
-  pm.addPass(createCSEPass());
-  pm.addPass(createCanonicalizerPass());
 
-  // Optionally apply ARTS-specific optimizations.
-  // if (ArtsOpt) {
-  //   pm.addPass(arts::createEdtPass());
-  //   pm.addPass(arts::createDatablockPass());
-  // }
   pm.addPass(arts::createCreateEpochsPass());
   pm.addPass(createCSEPass());
   pm.addPass(createCanonicalizerPass());
@@ -158,22 +158,25 @@ void setupPassManager(MLIRContext &context, PassManager &pm) {
 
   /// Affine optimizations.
   if (AffineOpt) {
-    pm.addPass(createCSEPass());
-    pm.addPass(createCanonicalizerPass());
-    pm.addPass(polygeist::createRaiseSCFToAffinePass());
-    pm.addPass(createCanonicalizerPass());
-    pm.addPass(polygeist::replaceAffineCFGPass());
-    pm.addPass(affine::createAffineExpandIndexOpsPass());
-    pm.addPass(affine::createAffineScalarReplacementPass());
-    pm.addPass(polygeist::createRaiseSCFToAffinePass());
-    pm.addPass(polygeist::replaceAffineCFGPass());
-    pm.addPass(createLoopInvariantCodeMotionPass());
-    pm.addPass(createCSEPass());
-    pm.addPass(createCanonicalizerPass());
+    // optPM.addPass(polygeist::createPolygeistMem2RegPass());
+    optPM.addPass(createCSEPass());
+    optPM.addPass(createCanonicalizerPass());
+    optPM.addPass(polygeist::createRaiseSCFToAffinePass());
+    optPM.addPass(createCanonicalizerPass());
+    optPM.addPass(polygeist::replaceAffineCFGPass());
+    optPM.addPass(affine::createAffineExpandIndexOpsPass());
+    optPM.addPass(affine::createAffineScalarReplacementPass());
+    // optPM.addPass(polygeist::createRaiseSCFToAffinePass());
+    optPM.addPass(polygeist::replaceAffineCFGPass());
+    optPM.addPass(createLoopInvariantCodeMotionPass());
+    optPM.addPass(createCSEPass());
+    optPM.addPass(createCanonicalizerPass());
+    optPM.addPass(createLowerAffinePass());
   }
 
   /// Convert the module to LLVM IR.
-  pm.addPass(createSymbolDCEPass());
+  pm.addPass(createCSEPass());
+  pm.addPass(createCanonicalizerPass());
   pm.addPass(polygeist::createConvertPolygeistToLLVMPass());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCSEPass());

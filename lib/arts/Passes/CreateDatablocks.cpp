@@ -1,11 +1,12 @@
-//===---------------------- CreateDatablocks.cpp ------------------------===//
+///==========================================================================
+/// File: CreateDatablocks.cpp
 //
 // This pass analyzes EDT regions within a function to discover candidate
 // datablocks. A candidate datablock is a memref value used in an EDT region
 // that is defined outside that region. In addition, the pass classifies the
 // candidate into one of three categories based on its access pattern:
 // read‑only, write‑only, or read–write.
-///===----------------------------------------------------------------------===//
+///==========================================================================
 
 /// Dialects
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -116,6 +117,10 @@ template <> struct DenseMapInfo<CandidateDatablock> {
 namespace {
 struct CreateDatablocksPass
     : public arts::CreateDatablocksBase<CreateDatablocksPass> {
+
+  /// Constructor
+  CreateDatablocksPass() = default;
+  CreateDatablocksPass(bool identifyDbs) { this->identifyDbs = identifyDbs; }
   /// Main entry of the pass.
   void runOnOperation() override;
 
@@ -424,6 +429,10 @@ namespace mlir {
 namespace arts {
 std::unique_ptr<Pass> createCreateDatablocksPass() {
   return std::make_unique<CreateDatablocksPass>();
+}
+
+std::unique_ptr<Pass> createCreateDatablocksPass(bool identifyDbs) {
+  return std::make_unique<CreateDatablocksPass>(identifyDbs);
 }
 } // namespace arts
 } // namespace mlir
