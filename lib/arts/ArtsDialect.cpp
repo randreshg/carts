@@ -51,7 +51,8 @@ void ArtsDialect::initialize() {
 
 bool isArtsRegion(Operation *op) { return isa<EdtOp>(op) || isa<EpochOp>(op); }
 bool isArtsOp(Operation *op) {
-  return isArtsRegion(op) || isa<DataBlockOp>(op) || isa<EventOp>(op);
+  return isArtsRegion(op) || isa<DataBlockOp>(op) || isa<EventOp>(op) ||
+         isa<BarrierOp>(op);
 }
 
 //===----------------------------------------------------------------------===//
@@ -344,6 +345,34 @@ void DataBlockOp::print(OpAsmPrinter &printer) {
   printer.printType(getResult().getType());
 }
 
+void DataBlockOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  auto modeAttr = getModeAttr();
+  assert(modeAttr && "mode attribute not found");
+  Value ptr = getPtr();
+  assert(ptr && "ptr attribute not found");
+
+  /// "in" => read, "out" => write, "inout" => both
+  StringRef mode = modeAttr.getValue();
+  if (mode == "in" || mode == "inout") {
+    effects.emplace_back(MemoryEffects::Read::get(), ptr,
+                         ::mlir::SideEffects::DefaultResource::get());
+  }
+  if (mode == "out" || mode == "inout") {
+    effects.emplace_back(MemoryEffects::Write::get(), ptr,
+                         ::mlir::SideEffects::DefaultResource::get());
+  }
+}
+
+bool DataBlockOp::hasPtrDb() { return getOperation()->hasAttr("hasPtrDb"); }
+bool DataBlockOp::isSingle() { return getOperation()->hasAttr("single"); }
+void DataBlockOp::setHasPtrDb() {
+  getOperation()->setAttr("hasPtrDb", UnitAttr::get(getContext()));
+}
+void DataBlockOp::setIsSingle() {
+  getOperation()->setAttr("single", UnitAttr::get(getContext()));
+}
+
 //===----------------------------------------------------------------------===//
 // EdtOp
 //===----------------------------------------------------------------------===//
@@ -461,37 +490,6 @@ void EdtOp::clearIsParallelAttr() { getOperation()->removeAttr("parallel"); }
 void EdtOp::clearIsSingleAttr() { getOperation()->removeAttr("single"); }
 void EdtOp::clearIsSyncAttr() { getOperation()->removeAttr("sync"); }
 void EdtOp::clearIsTaskAttr() { getOperation()->removeAttr("task"); }
-
-//===----------------------------------------------------------------------===//
-// DataBlockOp
-//===----------------------------------------------------------------------===//
-void DataBlockOp::getEffects(
-    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
-  auto modeAttr = getModeAttr();
-  assert(modeAttr && "mode attribute not found");
-  Value ptr = getPtr();
-  assert(ptr && "ptr attribute not found");
-
-  /// "in" => read, "out" => write, "inout" => both
-  StringRef mode = modeAttr.getValue();
-  if (mode == "in" || mode == "inout") {
-    effects.emplace_back(MemoryEffects::Read::get(), ptr,
-                         ::mlir::SideEffects::DefaultResource::get());
-  }
-  if (mode == "out" || mode == "inout") {
-    effects.emplace_back(MemoryEffects::Write::get(), ptr,
-                         ::mlir::SideEffects::DefaultResource::get());
-  }
-}
-
-bool DataBlockOp::hasPtrDb() { return getOperation()->hasAttr("hasPtrDb"); }
-bool DataBlockOp::isSingle() { return getOperation()->hasAttr("single"); }
-void DataBlockOp::setHasPtrDb() {
-  getOperation()->setAttr("hasPtrDb", UnitAttr::get(getContext()));
-}
-void DataBlockOp::setIsSingle() {
-  getOperation()->setAttr("single", UnitAttr::get(getContext()));
-}
 
 //===----------------------------------------------------------------------===//
 // EventOp

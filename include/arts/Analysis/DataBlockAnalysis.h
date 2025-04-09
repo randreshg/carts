@@ -105,7 +105,7 @@ public:
   bool isEntryNode(unsigned id) const { return id == entryDbNode->id; }
   bool hasNodes() const { return !nodes.empty(); }
   SetVector<unsigned> getProducers() const;
-  llvm::SetVector<unsigned> getConsumers(unsigned producerID);
+  SetVector<unsigned> getConsumers(unsigned producerID);
 
   /// Add an edge from a producer node to a consumer node.
   bool addEdge(DatablockNode &prod, DatablockNode &cons);

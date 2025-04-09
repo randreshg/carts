@@ -2,11 +2,52 @@
 /// File: ArtsUtils.cpp
 ///==========================================================================
 #include "arts/Utils/ArtsUtils.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Support/LLVM.h"
 #include "polygeist/Ops.h"
 
 namespace mlir {
 namespace arts {
+
+bool isInvariantInEDT(arts::EdtOp edtOp, Value value) {
+  auto &region = edtOp.getRegion();
+
+  /// Check if the value is a constant or a constant-like operation.
+  Operation *op = value.getDefiningOp();
+  if (op && op->hasTrait<OpTrait::ConstantLike>())
+    return true;
+
+  /// If defined outside the region, check if it is used in any operation with
+  /// memory effects.
+  if (!region.isProperAncestor(value.getParentRegion())) {
+    for (Operation *user : value.getUsers()) {
+      /// Consider only users inside the region.
+      if (!region.isAncestor(user->getParentRegion()))
+        continue;
+
+      /// Check that is not used in any operation with memory effects.
+      if (!mlir::isMemoryEffectFree(user)) {
+        /// If it is used in a memref load consider it invariant
+        if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+          if (llvm::is_contained(loadOp.getIndices(), value))
+            return true;
+        }
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /// An operation defined inside the region is consider invariant if all of its
+  /// operands are invariant.
+  for (Value operand : op->getOperands()) {
+    if (!isInvariantInEDT(edtOp, operand))
+      return false;
+  }
+
+  /// If we hit this point, the value is invariant in the EDT region.
+  return true;
+}
 
 bool isReachable(Operation *source, Operation *target) {
   /// Early exit if either pointer is null or both are the same.

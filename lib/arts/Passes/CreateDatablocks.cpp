@@ -20,6 +20,7 @@
 #include "arts/Utils/ArtsTypes.h"
 #include "arts/Utils/ArtsUtils.h"
 /// Others
+#include "arts/Analysis/StringAnalysis.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
@@ -28,6 +29,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/RegionUtils.h"
+#include "polygeist/Ops.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 /// Debug
@@ -37,6 +39,7 @@
 #include <cstdint>
 #define DEBUG_TYPE "create-datablocks"
 #define line "-----------------------------------------\n"
+#define smallline "------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
@@ -50,7 +53,8 @@ using namespace mlir::arts::types;
 struct CandidateDatablock {
   /// Constructors.
   CandidateDatablock() = default;
-  CandidateDatablock(Value ptr) : ptr(ptr) {}
+  CandidateDatablock(Value ptr, bool isString = false)
+      : ptr(ptr), isString(isString) {}
 
   /// Memref value.
   Value ptr = nullptr;
@@ -58,6 +62,8 @@ struct CandidateDatablock {
   SmallVector<Value> pinnedIndices;
   /// Classification: read‑only, write‑only, or read–write.
   DatablockAccessType access = DatablockAccessType::Unknown;
+  /// Indicates if the datablock is a string, which is a special case.
+  bool isString = false;
 
   /// Set Access based on read and write flags.
   void setAccess(bool hasRead, bool hasWrite) {
@@ -121,6 +127,7 @@ struct CreateDatablocksPass
   /// Constructor
   CreateDatablocksPass() = default;
   CreateDatablocksPass(bool identifyDbs) { this->identifyDbs = identifyDbs; }
+
   /// Main entry of the pass.
   void runOnOperation() override;
 
@@ -146,21 +153,28 @@ private:
   /// Map to store candidate datablocks
   DenseMap<arts::EdtOp, DenseMap<CandidateDatablock, SmallVector<Operation *>>>
       candidateDatablocks;
+
+  /// List of EDT ops in post-order traversal.
+  SmallVector<EdtOp, 4> edtOps;
+
+  /// String analysis
+  StringAnalysis *strAnalysis;
 };
 } // end namespace
 
 void CreateDatablocksPass::runOnOperation() {
   ModuleOp module = getOperation();
-  LLVM_DEBUG(dbgs() << "\n"
-                    << line << "CreateDatablocksPass STARTED\n"
-                    << line);
+  strAnalysis = &getAnalysis<StringAnalysis>();
+  LLVM_DEBUG({
+    dbgs() << "\n" << line << "CreateDatablocksPass STARTED\n" << line;
+    module.dump();
+  });
   identifyDatablocks(module);
   LLVM_DEBUG(dbgs() << line << "CreateDatablocksPass FINISHED\n" << line);
 }
 
 void CreateDatablocksPass::identifyDatablocks(ModuleOp module) {
   /// Create a list of EDT ops ordered by post-order traversal.
-  SmallVector<EdtOp, 4> edtOps;
   module.walk([&](func::FuncOp func) {
     LLVM_DEBUG(DBGS() << "Candidate datablocks in function: " << func.getName()
                       << "\n");
@@ -170,56 +184,73 @@ void CreateDatablocksPass::identifyDatablocks(ModuleOp module) {
     });
   });
 
-  /// For each candidate datablock, create a new datablock in the edt
-  /// region. Do this for all EDT ops in the module in post-order.
+  /// For each candidate datablock, create new datablocks in the EDT region.
   auto ctx = module.getContext();
   Location loc = UnknownLoc::get(ctx);
   OpBuilder builder(ctx);
+  uint32_t edtItr = 0;
+  llvm::SetVector<Operation *> opsToRemove;
   for (auto edtOp : edtOps) {
     auto &dbCandidates = candidateDatablocks[edtOp];
     SmallVector<Value> edtDeps;
-    LLVM_DEBUG(DBGS() << "Creating " << dbCandidates.size()
-                      << " datablocks for EDT\n");
+    LLVM_DEBUG({
+      dbgs() << line;
+      DBGS() << "Creating " << dbCandidates.size() << " datablocks for EDT #"
+             << edtItr << "\n";
+    });
 
     auto edtParent = edtOp->getParentOfType<arts::EdtOp>();
-    for (auto &candValue : dbCandidates) {
-      auto &dbCand = candValue.first;
-      auto &dbUses = candValue.second;
-      /// Set insertion point to the parent EDT op.
-      OpBuilder::InsertionGuard guard(builder);
-      builder.setInsertionPoint(edtOp);
-      if (auto *defOp = dbCand.ptr.getDefiningOp()) {
-        /// Set insertion point after the allocation if it's a memref alloc and
-        /// it belongs to the same parent EDT.
-        if (isa<memref::AllocaOp>(defOp) &&
-            defOp->getParentOfType<arts::EdtOp>() == edtParent)
-          builder.setInsertionPointAfter(defOp);
+    for (auto &candEntry : dbCandidates) {
+      auto &dbCand = candEntry.first;
+      auto &dbUses = candEntry.second;
+      {
+        /// Set insertion point to the current EDT op.
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPoint(edtOp);
+        if (auto *defOp = dbCand.ptr.getDefiningOp()) {
+          /// If the memref allocation is within the same parent EDT, insert
+          /// after it.
+          if (isa<memref::AllocaOp>(defOp) &&
+              defOp->getParentOfType<arts::EdtOp>() == edtParent)
+            builder.setInsertionPointAfter(defOp);
+        }
+        /// Create a new datablock operation.
+        auto dbOp = createDatablockOp(builder, loc, dbCand.access, dbCand.ptr,
+                                      dbCand.pinnedIndices, dbCand.isString);
+        rewireDatablockUses(dbOp, edtOp, dbUses);
+        edtDeps.push_back(dbOp.getResult());
       }
-      /// Create a new datablock operation.
-      auto dbOp = createDatablockOp(builder, loc, dbCand.access, dbCand.ptr,
-                                    dbCand.pinnedIndices);
-      rewireDatablockUses(dbOp, edtOp, dbUses);
-      edtDeps.push_back(dbOp.getResult());
     }
 
     /// Create a new EDT op with the new dependency operands.
-    OpBuilder::InsertionGuard IG(builder);
-    builder.setInsertionPoint(edtOp);
-    /// Move the region body from the old EDT op to the new one.
-    auto newEdtOp = createEdtOp(builder, loc, getEdtType(edtOp), edtDeps);
-    newEdtOp.getRegion().takeBody(edtOp.getRegion());
-    /// Erase the old EDT op and its dependencies.
-    auto oldDeps = edtOp.getDependencies();
-    edtOp.erase();
-    for (auto dep : oldDeps) {
-      auto dbOp = cast<arts::DataBlockOp>(dep.getDefiningOp());
-      dbOp.erase();
+    {
+      OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPoint(edtOp);
+      /// Move the region body from the old EDT op to the new one.
+      auto newEdtOp = createEdtOp(builder, loc, getEdtType(edtOp), edtDeps);
+      newEdtOp.getRegion().takeBody(edtOp.getRegion());
     }
+
+    /// Collect old dependencies to remove them later.
+    for (auto oldDep : edtOp.getDependencies()) {
+      opsToRemove.insert(cast<DataBlockOp>(oldDep.getDefiningOp()));
+    }
+    opsToRemove.insert(edtOp);
+
+    /// Increment the EDT op counter.
+    LLVM_DEBUG(DBGS() << "Created EDT #" << edtItr++ << "\n");
   }
+
+  /// Remove the old ops.
+  LLVM_DEBUG(dbgs() << "Removing old datablocks\n");
+  removeOps(module, builder, opsToRemove);
 }
 
 void CreateDatablocksPass::analyzeEdtRegion(arts::EdtOp &edtOp) {
-  LLVM_DEBUG(DBGS() << "EDT region\n");
+  LLVM_DEBUG({
+    dbgs() << smallline;
+    DBGS() << "EDT region #" << edtOps.size() << ":\n";
+  });
   /// Get the primary region of the EDT op.
   Region &region = edtOp.getRegion();
   SetVector<Value> externalValues;
@@ -234,6 +265,7 @@ void CreateDatablocksPass::analyzeEdtRegion(arts::EdtOp &edtOp) {
       ptrs.push_back(v);
       continue;
     }
+
     /// If the value is constant or invariant, add to invariantValues.
     if (isValueConstant(v) || isInvariantInRegion(v, region))
       invariantValues.insert(v);
@@ -252,18 +284,19 @@ void CreateDatablocksPass::analyzeEdtRegion(arts::EdtOp &edtOp) {
       auto &uses = entry.second;
       dbgs() << "  - Candidate Datablock #" << candItr++ << ":\n";
       dbgs() << "    Memref: " << db.ptr << "\n";
+      dbgs() << "    IsString: " << (db.isString ? "true" : "false") << "\n";
       dbgs() << "    Access Type: " << types::toString(db.access) << "\n";
       dbgs() << "    Pinned Indices:";
       if (db.pinnedIndices.empty())
         dbgs() << "  none\n";
       else {
         for (Value idx : db.pinnedIndices)
-          dbgs() << "\n    - " << idx;
+          dbgs() << "\n      - " << idx;
         dbgs() << "\n";
       }
       dbgs() << "    Uses:\n";
       for (Operation *op : uses)
-        dbgs() << "    - " << *op << "\n";
+        dbgs() << "      - " << *op << "\n";
     }
   });
 }
@@ -281,10 +314,11 @@ void CreateDatablocksPass::analyzeValueInEdt(
       continue;
 
     /// Only consider load and store operations.
-    if (!(isa<memref::LoadOp>(op) || isa<memref::StoreOp>(op)))
+    if (!(isa<memref::LoadOp>(op) || isa<memref::StoreOp>(op))) {
       continue;
+    }
 
-    CandidateDatablock db(dbPtr);
+    CandidateDatablock db(dbPtr, strAnalysis->isStringMemRef(dbPtr));
     SmallVector<Value> indices;
     if (auto loadOp = dyn_cast<memref::LoadOp>(op))
       indices = loadOp.getIndices();
@@ -320,15 +354,15 @@ void CreateDatablocksPass::analyzeValueInEdt(
   for (auto &group : candByPtr) {
     auto &vec = group.second;
     /// Compare each candidate with those having more pinned indices.
-    for (size_t i = 0, n = vec.size(); i < n; ++i) {
-      for (size_t j = i + 1; j < n; ++j) {
+    for (uint32_t i = 0, n = vec.size(); i < n; ++i) {
+      for (uint32_t j = i + 1; j < n; ++j) {
         const auto *prefixCand = vec[i];
         const auto *cand = vec[j];
         /// If db1 is a prefix of db2, mark db2 for removal.
         if (prefixCand->pinnedIndices.size() >= cand->pinnedIndices.size())
           continue;
         bool isPrefix = true;
-        for (size_t k = 0, e = prefixCand->pinnedIndices.size(); k < e; ++k) {
+        for (uint32_t k = 0, e = prefixCand->pinnedIndices.size(); k < e; ++k) {
           if (prefixCand->pinnedIndices[k] != cand->pinnedIndices[k]) {
             isPrefix = false;
             break;
@@ -420,6 +454,7 @@ void CreateDatablocksPass::rewireDatablockUses(arts::DataBlockOp &dbOp,
     DominanceInfo domInfo(edtOp->getParentOfType<FuncOp>());
     replaceUses(dbOp.getPtr(), dbOp.getResult(), domInfo, dbOp);
   }
+  LLVM_DEBUG(dbgs() << "  - OK\n");
 }
 
 ///===----------------------------------------------------------------------===///

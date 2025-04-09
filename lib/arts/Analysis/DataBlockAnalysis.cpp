@@ -110,7 +110,7 @@ SetVector<unsigned> DatablockGraph::getProducers() const {
   return producers;
 }
 
-llvm::SetVector<unsigned> DatablockGraph::getConsumers(unsigned producerID) {
+SetVector<unsigned> DatablockGraph::getConsumers(unsigned producerID) {
   return edges[producerID];
 }
 
@@ -476,6 +476,7 @@ void DatablockGraph::collectNodes(Region &region) {
       [&](arts::DataBlockOp) { ++estimatedCount; });
   nodes.reserve(estimatedCount);
   region.walk<mlir::WalkOrder::PreOrder>([&](arts::DataBlockOp dbOp) {
+    LLVM_DEBUG(dbgs() << "Datablock node #" << nextID << ": " << dbOp << "\n");
     /// Set node information.
     DatablockNode *dbNode = new DatablockNode(DA);
     assert(dbNode && "Failed to allocate DatablockNode");
