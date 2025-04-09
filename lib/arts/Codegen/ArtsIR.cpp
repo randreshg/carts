@@ -38,15 +38,14 @@ types::EdtType getEdtType(EdtOp edtOp) {
 
 DataBlockOp createDatablockOp(OpBuilder &builder, Location loc,
                               types::DatablockAccessType mode, Value ptr,
-                              SmallVector<Value> pinnedIndices) {
+                              SmallVector<Value> pinnedIndices,
+                              bool singleSize) {
   auto ptrOp = ptr.getDefiningOp();
   assert(ptrOp && "Input must be a defining operation.");
 
-  /// If the defining operation is a load op obtain the base memref and pinned
+  /// If the defining op is a load op, obtain the base memref and pinned
   /// indices.
   Value baseMemRef;
-
-  /// A lambda to handle common load operations.
   auto processLoad = [&](auto loadOp) {
     baseMemRef = loadOp.getMemref();
     if (pinnedIndices.empty())
@@ -54,29 +53,24 @@ DataBlockOp createDatablockOp(OpBuilder &builder, Location loc,
                            loadOp.getIndices().end());
   };
 
-  if (auto loadOp = dyn_cast<memref::LoadOp>(ptrOp)) {
+  if (auto loadOp = dyn_cast<memref::LoadOp>(ptrOp))
     processLoad(loadOp);
-  } else {
+  else
     baseMemRef = ptr;
-  }
 
-  /// Ensure the input memref is of type MemRefType.
+  /// Ensure the base memref type.
   auto baseType = baseMemRef.getType().dyn_cast<MemRefType>();
   assert(baseType && "Input must be a MemRefType.");
 
-  /// Compute the rank and verify it is positive.
   int64_t rank = baseType.getRank();
-
-  /// Prepare arrays for subview
   const auto pinnedCount = static_cast<int64_t>(pinnedIndices.size());
   assert(pinnedCount <= rank &&
          "Pinned indices exceed the rank of the memref.");
-  SmallVector<Value, 4> indices(pinnedCount), sizes(rank - pinnedCount);
-  SmallVector<int64_t, 4> subShape(rank - pinnedCount);
 
-  /// Compute dimension sizes, indices, sizes, and subshape
-  // Value oneSize = builder.create<arith::ConstantIndexOp>(loc, 1);
-  for (int64_t i = 0; i < rank; ++i) {
+  /// Compute sizes and subshape.
+  SmallVector<Value, 4> indices(pinnedCount), sizes(rank - pinnedCount);
+  SmallVector<int64_t, 4> subShape;
+  for (int64_t i = 0, j = 0; i < rank; ++i) {
     if (i < pinnedCount) {
       indices[i] = pinnedIndices[i];
     } else {
@@ -86,27 +80,44 @@ DataBlockOp createDatablockOp(OpBuilder &builder, Location loc,
           isDyn ? builder.create<memref::DimOp>(loc, baseMemRef, i).getResult()
                 : builder.create<arith::ConstantIndexOp>(loc, dimSize)
                       .getResult();
-      sizes[i - pinnedCount] = dimVal;
-      subShape[i - pinnedCount] = isDyn ? ShapedType::kDynamic : dimSize;
+      sizes[j] = dimVal;
+      /// For the normal subview type, preserve the static dim if available.
+      subShape.push_back(isDyn ? ShapedType::kDynamic : dimSize);
+      j++;
     }
   }
 
-  /// Build the subview memref type.
+  /// Compute the element type size.
   auto elementType = baseType.getElementType();
-  auto subMemRefType = MemRefType::get(subShape, elementType);
-
-  /// Insert polygeist.typeSizeOp to get the size of the element type.
   auto elementTypeSize = builder
                              .create<polygeist::TypeSizeOp>(
                                  loc, builder.getIndexType(), elementType)
                              .getResult();
 
-  /// Create the final arts.datablock operation.
   auto modeAttr = builder.getStringAttr(types::toString(mode));
-  DataBlockOp depOp = builder.create<arts::DataBlockOp>(
-      loc, subMemRefType, modeAttr, baseMemRef, elementType, elementTypeSize,
-      indices, sizes);
-  return depOp;
+
+  if (singleSize) {
+    auto newSubMemRefType =
+        MemRefType::get(subShape, baseType.getElementType());
+
+    /// Multiply typesize by each size to compute the overall type size.
+    auto overallTypeSize = elementTypeSize;
+    for (auto size : sizes) {
+      overallTypeSize =
+          builder.create<arith::MulIOp>(loc, overallTypeSize, size).getResult();
+    }
+    SmallVector<Value, 4> newSizes;
+    return builder.create<arts::DataBlockOp>(
+        loc, newSubMemRefType, modeAttr, baseMemRef, newSubMemRefType,
+        overallTypeSize, indices, newSizes);
+  } else {
+    /// Normal datablock creation: use the subview memref type and the computed
+    /// sizes.
+    auto subMemRefType = MemRefType::get(subShape, baseType.getElementType());
+    return builder.create<arts::DataBlockOp>(
+        loc, subMemRefType, modeAttr, baseMemRef, baseType.getElementType(),
+        elementTypeSize, indices, sizes);
+  }
 }
 
 } // namespace arts

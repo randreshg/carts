@@ -10,6 +10,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   CreateEvents.cpp
   CreateEpochs.cpp
   ConvertArtsToLLVM.cpp
+  HoistInvariantOps.cpp
   ${CARTS_UTILS_SOURCE_FILES}
   ${CARTS_CODEGEN_SOURCE_FILES}
   ${CARTS_ANALYSIS_SOURCE_FILES}

@@ -13,6 +13,9 @@
 
 namespace mlir {
 namespace arts {
+/// Analyzes the EDT region and checks if the value is invariant in the EDT.
+bool isInvariantInEDT(arts::EdtOp op, Value value);
+
 /// Returns true if `target` is reachable from `source` in the EDT CFG.
 bool isReachable(Operation *source, Operation *target);
 

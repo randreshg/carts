@@ -18,7 +18,7 @@ types::EdtType getEdtType(EdtOp edtOp);
 
 DataBlockOp createDatablockOp(OpBuilder &builder, Location loc,
                               types::DatablockAccessType mode, Value ptr,
-                              SmallVector<Value> pinnedIndices = {});
+                              SmallVector<Value> pinnedIndices = {}, bool singleSize = false);
 } // namespace arts
 } // namespace mlir
 

@@ -133,14 +133,17 @@ void setupPassManager(MLIRContext &context, PassManager &pm) {
   mlir::OpPassManager &optPM = pm.nest<mlir::func::FuncOp>();
 
   /// Basic inlining and affine lowering.
-  // pm.addPass(createInlinerPass());
+  pm.addPass(createInlinerPass());
   pm.addPass(createLowerAffinePass());
+  pm.addPass(createCSEPass());
+  pm.addPass(createCanonicalizerPass());
 
   /// Convert OpenMP Dialect to ARTS Dialect.
   pm.addPass(arts::createConvertOpenMPtoARTSPass());
 
   pm.addPass(arts::createEdtPass());
 
+  pm.addPass(arts::createHoistInvariantOpsPass());
   pm.addPass(arts::createCreateDatablocksPass(IdentifyDatablocks));
   pm.addPass(createCSEPass());
   pm.addPass(createCanonicalizerPass());

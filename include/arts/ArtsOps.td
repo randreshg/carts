@@ -187,6 +187,7 @@ def YieldOp : Arts_Op<"yield",
 //===----------------------------------------------------------------------===//
 // arts.barrier
 //===----------------------------------------------------------------------===//
+/// TODO: Add memory effects
 def BarrierOp : Arts_Op<"barrier"> {
   let summary = "Barrier synchronization in ARTS";
   let description = [{

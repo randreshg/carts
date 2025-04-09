@@ -17,7 +17,8 @@ def ConvertOpenMPToArts : Pass<"convert-openmp-to-arts", "mlir::ModuleOp"> {
 }
 
 def Datablock : Pass<"datablock", "mlir::ModuleOp"> {
-  let summary = "Using the Datablock Analysis, perform changes to the DataBlock operations and optimize them if the user wants to";
+  let summary = "Using the Datablock Analysis, perform changes to the DataBlock"
+                "operations and optimize them if the user wants to";
   let dependentDialects = [
     "memref::MemRefDialect",
     "LLVM::LLVMDialect",
@@ -42,8 +43,7 @@ def CreateDatablocks : Pass<"create-datablocks", "mlir::ModuleOp"> {
   ];
   let constructor = "mlir::arts::createCreateDatablocksPass()";
   let options = [
-    Option<"identifyDbs", "identify-dbs", "bool",
-           /*default=*/"true",
+    Option<"identifyDbs", "identify-dbs", "bool", /*default=*/"true",
            "Analyzes the module and tries to automatically identify the "
            "datablocks. This is the default behavior. If set to false, the "
            "user must manually annotate the datablocks using the "
@@ -105,5 +105,17 @@ def ConvertArtsToLLVM : Pass<"convert-arts-to-llvm", "mlir::ModuleOp"> {
     "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createConvertArtsToLLVMPass()";
+}
+
+def HoistInvariantOps : Pass<"hoist-invariant", "mlir::ModuleOp"> {
+  let summary = "Hoist invariant operations from arts edt regions";
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "omp::OpenMPDialect",
+    "LLVM::LLVMDialect",
+    "arts::ArtsDialect",
+    "polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::arts::createHoistInvariantOpsPass()";
 }
 #endif // CARTS_PASSES

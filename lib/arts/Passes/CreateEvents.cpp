@@ -54,6 +54,7 @@ struct CreateEventsPass : public arts::CreateEventsBase<CreateEventsPass> {
 private:
   /// Retrieve the shared analysis result.
   DatablockAnalysis *dbAnalysis;
+
   /// Rewire map
   DenseMap<arts::DataBlockOp, arts::DataBlockOp> rewireMap;
 
