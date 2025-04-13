@@ -179,7 +179,6 @@ void ConvertArtsToLLVMPass::iterateOps() {
     module.dump();
     dbgs() << line;
   });
-  
 
   /// Iterate over the EdtOps in the module
   module.walk<mlir::WalkOrder::PreOrder>([&](arts::EdtOp edtOp) {
@@ -208,38 +207,52 @@ void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
   auto &builder = AC->getBuilder();
   /// Iterate over all DataBlockOps and create new DataBlockOps with opaque
   /// pointers.
+  SmallVector<DataBlockOp, 8> dbOps;
   DenseMap<DataBlockOp, DataBlockOp> dbsToRewire;
   operation->walk<mlir::WalkOrder::PreOrder>(
       [&](arts::DataBlockOp dbOp) -> mlir::WalkResult {
-        /// Skip already processed (new) datablock ops.
-        if (dbOp->hasAttr("newDbPtr"))
+        // Skip already processed new datablock ops.
+        if (dbOp->hasAttr("newDb"))
           return mlir::WalkResult::skip();
 
-        /// Create a new DataBlockOp with an opaque pointer type
         AC->setInsertionPointAfter(dbOp);
         auto sizes = dbOp.getSizes();
-        auto pointerType = dbOp.isSingle() ? AC->VoidPtr : [&]() -> Type {
-          /// Try to use the static shape from the op result type for the outer
-          /// memref.
-          if (auto memrefType =
-                  dbOp.getResult().getType().dyn_cast<MemRefType>()) {
+
+        auto getOpaqueElementType = [&]() -> Type {
+          auto elementType = dbOp.getElementType();
+          /// Coarse-grained datablocks are always void pointers.
+          if (dbOp.hasSingleSize())
+            return MemRefType::get({ShapedType::kDynamic}, AC->VoidPtr);
+
+          /// Fine-grained datablocks copy the shape of the original memref.
+          if (auto memrefType = elementType.dyn_cast<MemRefType>())
             return MemRefType::get(memrefType.getShape(), AC->VoidPtr);
-          }
-          /// Fallback: use a dynamic shape pointer.
-          return MemRefType::get({ShapedType::kDynamic}, AC->VoidPtr);
-        }();
+
+          /// If the element type is not a memref, it is a pointer type.
+          return AC->VoidPtr;
+        };
+
+        auto getPointerType = [&](Type inputType, Type elementType) -> Type {
+          if (auto memrefType = inputType.dyn_cast<MemRefType>())
+            return MemRefType::get(memrefType.getShape(), elementType);
+          return MemRefType::get({ShapedType::kDynamic}, elementType);
+        };
+
+        auto elementType = getOpaqueElementType();
+        auto elementPtrType =
+            dbOp.hasSingleSize()
+                ? elementType
+                : getPointerType(dbOp.getResult().getType(), elementType);
 
         auto newDbOp = builder.create<arts::DataBlockOp>(
-            dbOp->getLoc(), pointerType, dbOp.getMode(), dbOp.getPtr(),
+            dbOp->getLoc(), elementPtrType, dbOp.getMode(), dbOp.getPtr(),
             dbOp.getElementType(), dbOp.getElementTypeSize(), dbOp.getIndices(),
             sizes, dbOp.getInEvent(), dbOp.getOutEvent());
         newDbOp->setAttrs(dbOp->getAttrs());
-        /// Mark the new datablock so that it is not processed again.
-        newDbOp->setAttr("newDbPtr", builder.getUnitAttr());
+        newDbOp->setAttr("newDb", builder.getUnitAttr());
 
-        /// Insert to rewire map
+        dbOps.push_back(dbOp);
         dbsToRewire[dbOp] = newDbOp;
-
         return mlir::WalkResult::advance();
       });
 
@@ -249,16 +262,16 @@ void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
 
   /// Rewire the datablocks
   SmallVector<DataBlockOp, 8> dbsToHandle;
-  for (auto &rewire : dbsToRewire) {
-    auto dbFrom = rewire.first;
-    auto dbTo = rewire.second;
+  for (auto dbFrom : dbOps) {
+    auto dbTo = dbsToRewire[dbFrom];
     LLVM_DEBUG(dbgs() << "Rewiring datablock:\n  " << dbFrom << "\n  " << dbTo
                       << "\n");
 
     /// Get the new datablock pointer type
     auto computePtr = [&](ValueRange indices, Location loc) -> Value {
       if (indices.empty())
-        return AC->castToLLVMPtr(dbTo, loc);
+        return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr,
+                                            AC->castToLLVMPtr(dbTo, loc));
 
       /// Create a SubIndexOp for newPtr
       Value subIndex = dbTo;
@@ -277,59 +290,125 @@ void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
       return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr, subIndexPtr);
     };
 
-    /// Walk all uses of the old datablock to properly replace it with the new
-    /// memref. Ignore uses in arts operations.
-    for (auto &use : llvm::make_early_inc_range(dbFrom->getUses())) {
-      /// Set insertion point to the user
-      auto user = use.getOwner();
-      AC->setInsertionPoint(user);
+    if (dbFrom.hasSingleSize() && !dbFrom.hasPtrDb()) {
+      /// If the datablock has a single size, we can directly replace the old op
+      /// with the new one.
+      auto loc = dbTo.getLoc();
 
-      /// memref.load
-      if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
-        auto loc = loadOp.getLoc();
-        auto newPtr = computePtr(loadOp.getIndices(), loc);
-        auto newLoad =
-            builder
-                .create<LLVM::LoadOp>(
-                    loc, loadOp.getMemRefType().getElementType(), newPtr)
-                .getResult();
-        loadOp.getResult().replaceAllUsesWith(newLoad);
-        loadOp.erase();
-      }
-      /// memref.store
-      else if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
-        auto loc = storeOp.getLoc();
-        auto newPtr = computePtr(storeOp.getIndices(), loc);
-        builder.create<LLVM::StoreOp>(loc, storeOp.getValueToStore(), newPtr);
-        storeOp.erase();
-      }
-      /// Propagate datablock pointer for nested datablock ops.
-      else if (auto dbUseOp = dyn_cast<arts::DataBlockOp>(user)) {
-        dbUseOp.getPtr().replaceUsesWithIf(
-            dbTo.getResult(),
-            [&](OpOperand &operand) { return operand.getOwner() == dbUseOp; });
-      }
-      /// EdtOp - update dependencies.
-      else if (auto edtOp = dyn_cast<arts::EdtOp>(user)) {
-        auto edtDeps = edtOp.getDependencies();
-        for (auto dep : edtDeps) {
-          if (dep != dbFrom)
-            continue;
-          dep.replaceUsesWithIf(dbTo.getResult(), [&](OpOperand &operand) {
-            return operand.getOwner() == edtOp;
-          });
+      /// Replace uses in EDT
+      dbFrom.getResult().replaceUsesWithIf(dbTo, [&](OpOperand &operand) {
+        if (auto edtUser = dyn_cast<arts::EdtOp>(operand.getOwner())) {
+          /// Inside of the EDT user insert a load op
+          AC->setInsertionPoint(&*edtUser.getRegion().front().begin());
+          auto newPtr = builder
+                            .create<LLVM::LoadOp>(loc, dbTo.getElementType(),
+                                                  AC->castToLLVMPtr(dbTo, loc))
+                            .getResult();
+          replaceInRegion(edtUser.getRegion(), dbFrom.getResult(), newPtr);
+          return true;
         }
-      } else {
-        LLVM_DEBUG(DBGS() << "Unknown use of datablock op: " << *user << "\n");
-        llvm_unreachable("Unknown use of datablock op");
+        return false;
+      });
+
+      /// Create load for uses outside of EDTUser
+      AC->setInsertionPointAfter(dbTo);
+      auto newPtr = builder
+                        .create<LLVM::LoadOp>(loc, dbTo.getElementType(),
+                                              AC->castToLLVMPtr(dbTo, loc))
+                        .getResult();
+      LLVM_DEBUG(dbgs() << "Replacing single size datablock op: " << *dbFrom
+                        << "\n");
+      LLVM_DEBUG(dbgs() << "  - new ptr: " << newPtr << "\n");
+
+      dbFrom.getResult().replaceAllUsesWith(newPtr);
+    } else if (dbFrom.hasSingleSize() && dbFrom.hasPtrDb() &&
+               !dbFrom.hasGuid()) {
+      llvm::errs()
+          << "Datablock with pointer datablock must have a GUID associated\n";
+      assert(dbFrom.hasGuid() &&
+             "Datablock with pointer datablock must have "
+             "a GUID associated - Opposite case not handled yet");
+    }
+    else {
+      /// If not, load the appropriate pointer type and replace the old op with
+      /// the new one.
+      for (auto &use : llvm::make_early_inc_range(dbFrom->getUses())) {
+        /// Set insertion point to the user
+        auto user = use.getOwner();
+        AC->setInsertionPoint(user);
+
+        /// memref.load
+        if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+          auto loc = loadOp.getLoc();
+          auto newPtr = computePtr(loadOp.getIndices(), loc);
+          auto newLoad =
+              builder
+                  .create<LLVM::LoadOp>(
+                      loc, loadOp.getMemRefType().getElementType(), newPtr)
+                  .getResult();
+          loadOp.getResult().replaceAllUsesWith(newLoad);
+          loadOp.erase();
+        }
+        /// memref.store
+        else if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
+          auto loc = storeOp.getLoc();
+          auto newPtr = computePtr(storeOp.getIndices(), loc);
+          builder.create<LLVM::StoreOp>(loc, storeOp.getValueToStore(), newPtr);
+          storeOp.erase();
+        }
+        /// Propagate datablock pointer for nested datablock ops.
+        else if (auto dbUseOp = dyn_cast<arts::DataBlockOp>(user)) {
+          dbUseOp.getPtr().replaceUsesWithIf(
+              dbTo.getResult(), [&](OpOperand &operand) {
+                return operand.getOwner() == dbUseOp;
+              });
+        }
+        /// EdtOp - update dependencies.
+        else if (auto edtOp = dyn_cast<arts::EdtOp>(user)) {
+          auto edtDeps = edtOp.getDependencies();
+          for (auto dep : edtDeps) {
+            if (dep != dbFrom)
+              continue;
+            dep.replaceUsesWithIf(dbTo.getResult(), [&](OpOperand &operand) {
+              return operand.getOwner() == edtOp;
+            });
+          }
+        }
+        /// Memref2PointerOp - update the pointer type.
+        // else if (auto memref2PtrOp =
+        //              dyn_cast<polygeist::Memref2PointerOp>(user)) {
+        //   // auto loc = memref2PtrOp.getLoc();
+        //   auto newPtr = computePtr({}, memref2PtrOp.getLoc());
+        //   // LLVM_DEBUG(dbgs() << "Replacing memref2ptr op: " <<
+        //   *memref2PtrOp
+        //   //                   << "\n");
+        //   // auto newMemref2PtrOp =
+        //   builder.create<polygeist::Memref2PointerOp>(
+        //   //     loc, dbTo.getResult().getType(), newPtr);
+        //   memref2PtrOp.replaceAllUsesWith(newPtr);
+        //   memref2PtrOp.erase();
+        // }
+        else {
+          LLVM_DEBUG(DBGS()
+                     << "Unknown use of datablock op: " << *user << "\n");
+          llvm_unreachable("Unknown use of datablock op");
+        }
       }
     }
 
     /// Erase the old datablock op
-    opsToRemove.insert(dbFrom);
+    dbFrom->erase();
+    // opsToRemove.insert(dbFrom);
 
     /// Add the new datablock to the list of datablocks to handle
     dbsToHandle.push_back(dbTo);
+
+    /// print module
+    LLVM_DEBUG({
+      dbgs() << "Module after replacing datablock:\n";
+      module.dump();
+      dbgs() << line;
+    });
   }
   removeOps(module, builder, opsToRemove);
 

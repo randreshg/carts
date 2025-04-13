@@ -65,9 +65,9 @@ void DatablockNode::collectUses() {
       if (userOp->getBlock() != dbBlock)
         continue;
       if (auto edtOp = dyn_cast<arts::EdtOp>(userOp)) {
-        assert(!userEdt && "Multiple EDT users");
-        userEdt = edtOp;
-        auto deps = userEdt.getDependencies();
+        assert(!edtUser && "Multiple EDT users");
+        edtUser = edtOp;
+        auto deps = edtUser.getDependencies();
         auto it = std::find_if(deps.begin(), deps.end(), [this](auto dep) {
           return dep.getDefiningOp() == op;
         });
@@ -496,38 +496,46 @@ void DatablockGraph::collectNodes(Region &region) {
     node.resultType = dbOp.getResult().getType();
 
     /// If affine map is present, set it.
-    if (auto affineMap = dbOp.getAffineMap())
-      node.affineMap = *affineMap;
+    // if (auto affineMap = dbOp.getAffineMap())
+    //   node.affineMap = *affineMap;
+
+    /// Add 'hasSingleSize' attribute if the datablock has a single size of 1 or
+    /// no size
+    node.hasSingleSize = false;
+    if (node.sizes.empty()) {
+      dbOp.setHasSingleSize();
+      node.hasSingleSize = true;
+    } else if (node.sizes.size() == 1) {
+      if (auto cstOp = node.sizes[0].getDefiningOp<arith::ConstantIndexOp>()) {
+        if (cstOp.value() == 1) {
+          dbOp.setHasSingleSize();
+          node.hasSingleSize = true;
+        }
+      }
+    }
 
     /// Add 'hasPtrDb' attribute if the base is a datablock.
     if (auto parentDb =
             dyn_cast_or_null<arts::DataBlockOp>(node.ptr.getDefiningOp())) {
       dbOp.setHasPtrDb();
       node.hasPtrDb = true;
-      /// Collect memory effects from the parent datablock.
       node.parent = getNode(parentDb);
       for (auto &e : node.parent->effects)
         node.effects.push_back(e);
+
+      /// Add 'hasGuid' attribute if the parent datablock doesn't have single
+      /// size.
+      if (!node.parent->hasSingleSize) {
+        dbOp.setHasGuid();
+        node.hasGuid = true;
+      } else {
+        node.hasGuid = false;
+      }
     } else {
       node.hasPtrDb = false;
-      /// Collect memory effects.
+      /// Collect memory effects if the parent is not a datablock.
       if (auto memEff = dyn_cast<MemoryEffectOpInterface>(dbOp.getOperation()))
         memEff.getEffects(node.effects);
-    }
-
-    /// Add 'isSingle' attribute if the datablock has a single size of 1 or no
-    /// size
-    node.isSingle = false;
-    if (node.sizes.empty()) {
-      dbOp.setIsSingle();
-      node.isSingle = true;
-    } else if (node.sizes.size() == 1) {
-      if (auto cstOp = node.sizes[0].getDefiningOp<arith::ConstantIndexOp>()) {
-        if (cstOp.value() == 1) {
-          dbOp.setIsSingle();
-          node.isSingle = true;
-        }
-      }
     }
 
     /// Try to get the EDT parent of the datablock.
@@ -555,6 +563,18 @@ void DatablockGraph::fuseAdjacentNodes() {}
 void DatablockGraph::detectOutOnlyNodes() {}
 
 void DatablockGraph::deduplicateNodes() {}
+
+bool DatablockGraph::isOnlyDependentOnEntry(DatablockNode &node) {
+  for (auto &entry : edges) {
+    if (entry.first == entryDbNode->id)
+      continue;
+    if (entry.first == node.id)
+      continue;
+    if (entry.second.count(node.id))
+      return false;
+  }
+  return true;
+}
 
 //===----------------------------------------------------------------------===//
 // DatablockAnalysis

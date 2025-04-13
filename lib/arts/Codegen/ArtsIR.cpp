@@ -16,7 +16,7 @@ EdtOp createEdtOp(OpBuilder &builder, Location loc, types::EdtType type,
   if (type == types::EdtType::Parallel)
     edtOp.setIsParallelAttr();
   else if (type == types::EdtType::Single)
-    edtOp.setIsSingle();
+    edtOp.setIsSingleAttr();
   else if (type == types::EdtType::Sync)
     edtOp.setIsSyncAttr();
   else if (type == types::EdtType::Task)
@@ -39,7 +39,7 @@ types::EdtType getEdtType(EdtOp edtOp) {
 DataBlockOp createDatablockOp(OpBuilder &builder, Location loc,
                               types::DatablockAccessType mode, Value ptr,
                               SmallVector<Value> pinnedIndices,
-                              bool singleSize) {
+                              bool coarseGrained) {
   auto ptrOp = ptr.getDefiningOp();
   assert(ptrOp && "Input must be a defining operation.");
 
@@ -95,28 +95,21 @@ DataBlockOp createDatablockOp(OpBuilder &builder, Location loc,
                              .getResult();
 
   auto modeAttr = builder.getStringAttr(types::toString(mode));
-
-  if (singleSize) {
-    auto newSubMemRefType =
-        MemRefType::get(subShape, baseType.getElementType());
-
-    /// Multiply typesize by each size to compute the overall type size.
-    auto overallTypeSize = elementTypeSize;
+  auto resultType = MemRefType::get(subShape, elementType);
+  if (coarseGrained && indices.empty()) {
+    auto elementTySize = elementTypeSize;
     for (auto size : sizes) {
-      overallTypeSize =
-          builder.create<arith::MulIOp>(loc, overallTypeSize, size).getResult();
+      elementTySize =
+          builder.create<arith::MulIOp>(loc, elementTySize, size).getResult();
     }
     SmallVector<Value, 4> newSizes;
-    return builder.create<arts::DataBlockOp>(
-        loc, newSubMemRefType, modeAttr, baseMemRef, newSubMemRefType,
-        overallTypeSize, indices, newSizes);
+    return builder.create<arts::DataBlockOp>(loc, resultType, modeAttr,
+                                             baseMemRef, resultType,
+                                             elementTySize, indices, newSizes);
   } else {
-    /// Normal datablock creation: use the subview memref type and the computed
-    /// sizes.
-    auto subMemRefType = MemRefType::get(subShape, baseType.getElementType());
-    return builder.create<arts::DataBlockOp>(
-        loc, subMemRefType, modeAttr, baseMemRef, baseType.getElementType(),
-        elementTypeSize, indices, sizes);
+    return builder.create<arts::DataBlockOp>(loc, resultType, modeAttr,
+                                             baseMemRef, elementType,
+                                             elementTypeSize, indices, sizes);
   }
 }
 

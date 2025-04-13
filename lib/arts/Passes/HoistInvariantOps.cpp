@@ -15,6 +15,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/OpDefinition.h"
+// #include "mlir/IR/LLVMTypes.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
@@ -31,6 +32,7 @@
 #include "llvm/ADT/SmallVector.h"
 
 /// LLVM support
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -88,16 +90,25 @@ void HoistInvariantOpsPass::runOnOperation() {
     /// Walk only over operations directly in the region.
     for (Operation &rawOp : region.getOps()) {
       Operation *op = &rawOp;
-      /// Skip terminators and inner EDTs.
-      if (op->hasTrait<OpTrait::IsTerminator>() || isArtsOp(op))
-        continue;
 
       /// Skip operations that are already in the set
       if (invariantOps.contains(op))
         continue;
 
-      /// Check if an operation is invariant.
+      /// Check if an internal operation is invariant.
       auto isInvariant = [&](Operation *opToCheck) -> bool {
+        /// Skip terminators and inner EDTs.
+        if (!mlir::isMemoryEffectFree(opToCheck))
+          return false;
+
+        if (opToCheck->hasTrait<OpTrait::IsTerminator>() || isArtsOp(opToCheck))
+          return false;
+        for (Value result : opToCheck->getResults()) {
+          if (result.getType().isa<MemRefType>() ||
+              result.getType().isa<LLVM::LLVMPointerType>())
+            return false;
+        }
+
         for (Value operand : opToCheck->getOperands()) {
           if (!invariantValues.contains(operand))
             return false;
@@ -117,13 +128,8 @@ void HoistInvariantOpsPass::runOnOperation() {
         options.filter = [&](Operation *sliceOp) -> bool {
           return isInvariant(sliceOp);
         };
+        LLVM_DEBUG(dbgs() << "    - Invariant op found: " << *op << "\n");
         getForwardSlice(op, &forwardSlice, options);
-
-        LLVM_DEBUG({
-          dbgs() << "    - Invariant op found: " << *op << "\n";
-          for (Operation *sliceOp : forwardSlice)
-            dbgs() << "      - " << *sliceOp << "\n";
-        });
       }
     }
 
@@ -133,11 +139,6 @@ void HoistInvariantOpsPass::runOnOperation() {
                            "skipping hoisting.\n";);
       return;
     }
-    LLVM_DEBUG({
-      dbgs() << "Invariant operations found in EDT region:\n";
-      for (Operation *op : invariantOps)
-        dbgs() << "  - " << *op << "\n";
-    });
 
     /// Hoist invariant operations to the edtOp
     OpBuilder builder(edtOp);
@@ -145,6 +146,19 @@ void HoistInvariantOpsPass::runOnOperation() {
       builder.setInsertionPoint(edtOp);
       op->moveBefore(edtOp);
     }
+
+    LLVM_DEBUG({
+      dbgs() << "\n"
+             << line << "HoistInvariantOpsPass after hoisting\n"
+             << line;
+      module.dump();
+      dbgs() << line;
+    });
+  });
+
+  LLVM_DEBUG({
+    dbgs() << "\n" << line << "HoistInvariantOpsPass FINISHED\n" << line;
+    module.dump();
   });
 }
 
