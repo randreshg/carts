@@ -139,7 +139,6 @@ static void processBarrierOp(arts::BarrierOp barrier) {
 ///==========================================================================
 // Pass Implementation
 ///==========================================================================
-
 namespace {
 struct CreateEpochsPass : public arts::CreateEpochsBase<CreateEpochsPass> {
   void runOnOperation() override;

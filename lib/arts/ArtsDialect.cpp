@@ -205,7 +205,6 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
     return failure();
 
   /// Optionally parse comma then "inEvent[" "outEvent[".
-
   auto parseEventOperand =
       [&](StringRef keyword,
           SmallVector<OpAsmParser::UnresolvedOperand, 1> &eventOperand)
@@ -364,14 +363,25 @@ void DataBlockOp::getEffects(
   }
 }
 
-bool DataBlockOp::hasPtrDb() { return getOperation()->hasAttr("hasPtrDb"); }
-bool DataBlockOp::isSingle() { return getOperation()->hasAttr("single"); }
+bool DataBlockOp::hasPtrDb() { return getOperation()->hasAttr("ptrDb"); }
+bool DataBlockOp::hasSingleSize() {
+  return getOperation()->hasAttr("singleSize");
+}
+
+bool DataBlockOp::hasGuid() {
+  return getOperation()->hasAttr("hasGuid");
+}
+
 void DataBlockOp::setHasPtrDb() {
-  getOperation()->setAttr("hasPtrDb", UnitAttr::get(getContext()));
+  getOperation()->setAttr("ptrDb", UnitAttr::get(getContext()));
 }
-void DataBlockOp::setIsSingle() {
-  getOperation()->setAttr("single", UnitAttr::get(getContext()));
+void DataBlockOp::setHasSingleSize() {
+  getOperation()->setAttr("singleSize", UnitAttr::get(getContext()));
 }
+void DataBlockOp::setHasGuid() {
+  getOperation()->setAttr("hasGuid", UnitAttr::get(getContext()));
+}
+
 
 //===----------------------------------------------------------------------===//
 // EdtOp
@@ -425,7 +435,6 @@ ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
 
 void EdtOp::print(OpAsmPrinter &printer) {
   bool first = true;
-  /// Helper to print a group "kw(%v0, %v1) : (ty0, ty1)"
   auto printGroup = [&](StringRef kw, ValueRange vals) {
     if (vals.empty())
       return;
@@ -477,7 +486,7 @@ bool EdtOp::isTask() { return getOperation()->hasAttr("task"); }
 void EdtOp::setIsParallelAttr() {
   getOperation()->setAttr("parallel", UnitAttr::get(getContext()));
 }
-void EdtOp::setIsSingle() {
+void EdtOp::setIsSingleAttr() {
   getOperation()->setAttr("single", UnitAttr::get(getContext()));
 }
 void EdtOp::setIsSyncAttr() {
@@ -494,7 +503,7 @@ void EdtOp::clearIsTaskAttr() { getOperation()->removeAttr("task"); }
 //===----------------------------------------------------------------------===//
 // EventOp
 //===----------------------------------------------------------------------===//
-bool EventOp::isSingle() { return getOperation()->hasAttr("single"); }
-void EventOp::setIsSingle() {
-  getOperation()->setAttr("single", UnitAttr::get(getContext()));
+bool EventOp::hasSingleSize() { return getOperation()->hasAttr("singleSize"); }
+void EventOp::setHasSingleSize() {
+  getOperation()->setAttr("singleSize", UnitAttr::get(getContext()));
 }

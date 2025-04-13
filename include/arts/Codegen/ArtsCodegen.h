@@ -46,7 +46,7 @@ public:
   Value getOutEvent() { return dbOp.getOutEvent(); }
   bool hasEvent() { return !dbOp.getInEvent() || !dbOp.getOutEvent(); }
   bool hasPtrDb() { return dbOp.hasPtrDb(); }
-  bool isSingle() { return dbOp.isSingle(); }
+  bool hasSingleSize() { return dbOp.hasSingleSize(); }
   ValueRange getIndices() { return dbOp.getIndices(); }
   ValueRange getSizes() { return dbOp.getSizes(); }
 

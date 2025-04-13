@@ -79,7 +79,7 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
   const auto tySize = AC.castToInt(AC.Int64, elementTypeSize, loc);
 
   /// Handle the case of a single datablock
-  if (isSingle()) {
+  if (hasSingleSize()) {
     auto modeVal = getMode(dbOp.getMode());
     guid = createGuid(currentNode, modeVal, loc);
     /// Allocate a single pointer by directly assigning the runtime call result
@@ -178,7 +178,7 @@ void EventCodegen::create(Location loc) {
   auto node = AC.getCurrentNode(loc);
 
   /// If the event is a single event, create it and return
-  if (eventOp.isSingle()) {
+  if (eventOp.hasSingleSize()) {
     guid = createEvent(node, loc);
     return;
   }
@@ -341,7 +341,7 @@ void EdtCodegen::process(Location loc) {
       uint64_t sizesInserted = 0;
       Value dbNumElements = nullptr;
 
-      if (db->isSingle()) {
+      if (db->hasSingleSize()) {
         dbNumElements = AC.createIndexConstant(1, loc);
         insertSizeAsParameter(db, dbNumElements, 0, sizesInserted);
       } else {
@@ -418,7 +418,7 @@ void EdtCodegen::process(Location loc) {
     auto eventCG = AC.getEvent(eventOp);
     assert(eventCG && "Event not found");
 
-    if (eventOp.isSingle()) {
+    if (eventOp.hasSingleSize()) {
       auto curParamIdx =
           builder.create<memref::LoadOp>(loc, paramIndex.getResult());
       builder.create<memref::StoreOp>(loc, eventCG->getGuid(), paramV,
@@ -492,7 +492,7 @@ void EdtCodegen::processDependencies(Location loc) {
       assert(dbCG->getOutEvent() && "Datablock missing out event");
 
       /// For single-dimension datablocks, satisfy dependency directly.
-      if (dbCG->isSingle()) {
+      if (dbCG->hasSingleSize()) {
         auto currentSlot =
             builder.create<memref::LoadOp>(loc, slotAlloc.getResult());
         auto slotAsInt = AC.castToInt(AC.Int32, currentSlot, loc);
@@ -602,7 +602,7 @@ void EdtCodegen::processDependencies(Location loc) {
     auto dbLoc = dbCG->getOp().getLoc();
 
     /// For single-dimension datablocks, add the dependency directly.
-    if (dbCG->isSingle()) {
+    if (dbCG->hasSingleSize()) {
       auto dbIndices = dbCG->getIndices();
       auto loadedEventGuid =
           builder.create<memref::LoadOp>(dbLoc, eventGuid, dbIndices);
@@ -675,7 +675,7 @@ void EdtCodegen::processDependencies(Location loc) {
       auto dbLoc = dbCG->getOp().getLoc();
 
       /// For single-dimension datablocks.
-      if (dbCG->isSingle()) {
+      if (dbCG->hasSingleSize()) {
         auto dbIndices = dbCG->getIndices();
         auto loadedEventGuid =
             builder.create<memref::LoadOp>(dbLoc, eventGuid, dbIndices);
@@ -869,7 +869,7 @@ void EdtCodegen::createFnEntry(Location loc) {
     };
 
     /// Handle single datablock
-    if (db->isSingle()) {
+    if (db->hasSingleSize()) {
       auto curIndex = loadIndex();
       auto curGep = AC.castToInt(
           AC.Int32, builder.create<arith::MulIOp>(loc, curIndex, depStructSize),

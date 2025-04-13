@@ -83,8 +83,10 @@ def DataBlockOp : Arts_Op<"datablock",
   let extraClassDeclaration = [{
     bool hasPtrDb();
     void setHasPtrDb();
-    bool isSingle();
-    void setIsSingle();
+    bool hasGuid();
+    void setHasGuid();
+    bool hasSingleSize();
+    void setHasSingleSize();
   }];
 }
 
@@ -119,7 +121,7 @@ def EdtOp : Arts_Op<"edt",
     bool isSync();
     bool isTask();
     void setIsParallelAttr();
-    void setIsSingle();
+    void setIsSingleAttr();
     void setIsSyncAttr();
     void setIsTaskAttr();
     void clearIsParallelAttr();
@@ -145,8 +147,8 @@ def EventOp : Arts_Op<"event", []> {
     `[` $sizes `]` `->` attr-dict `:` type($event)
   }];
   let extraClassDeclaration = [{
-    bool isSingle();
-    void setIsSingle();
+    bool hasSingleSize();
+    void setHasSingleSize();
   }];
 }
 

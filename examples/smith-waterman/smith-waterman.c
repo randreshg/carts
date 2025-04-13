@@ -7,63 +7,18 @@
 #define MISMATCH_PENALTY -1
 #define GAP_PENALTY -2
 
-// Parallel task-based Smith-Waterman
-void smith_waterman_omp(char *seq1, char *seq2, int len1, int len2,
-                        int **score) {
-#pragma omp parallel
-#pragma omp single
-  {
-    for (int i = 1; i <= len1; i++) {
-      for (int j = 1; j <= len2; j++) {
-#pragma omp task depend(in : score[i - 1][j], score[i][j - 1],                 \
-                            score[i - 1][j - 1]) depend(out : score[i][j])
-        {
-          int match =
-              score[i - 1][j - 1] +
-              ((seq1[i - 1] == seq2[j - 1]) ? MATCH_SCORE : MISMATCH_PENALTY);
-          int del = score[i - 1][j] + GAP_PENALTY;
-          int ins = score[i][j - 1] + GAP_PENALTY;
-          score[i][j] = (match > del) ? ((match > ins) ? match : ins)
-                                      : ((del > ins) ? del : ins);
-          if (score[i][j] < 0)
-            score[i][j] = 0;
-        }
-      }
-    }
-  }
-}
+/*
+cgeist smith-waterman.c -fopenmp -O0 -S -I//usr/lib/llvm-14/lib/clang/14.0.0/include > smith-waterman.mlir
 
-// Sequential Smith-Waterman for verification
-void smith_waterman_sequential(char *seq1, char *seq2, int len1, int len2,
-                               int **score) {
-  for (int i = 1; i <= len1; i++) {
-    for (int j = 1; j <= len2; j++) {
-      int match =
-          score[i - 1][j - 1] +
-          ((seq1[i - 1] == seq2[j - 1]) ? MATCH_SCORE : MISMATCH_PENALTY);
-      int del = score[i - 1][j] + GAP_PENALTY;
-      int ins = score[i][j - 1] + GAP_PENALTY;
-      score[i][j] = (match > del) ? ((match > ins) ? match : ins)
-                                  : ((del > ins) ? del : ins);
-      if (score[i][j] < 0)
-        score[i][j] = 0;
-    }
-  }
-}
+carts-opt smith-waterman.mlir --lower-affine --convert-openmp-to-arts --edt --hoist-invariant --create-datablocks --canonicalize --datablock --create-events --create-epochs --canonicalize  -debug-only=hoist-invariant,create-datablocks,datablock &> smith-waterman_arts.mlir
 
-// Verify if parallel and sequential results match
-int verify_results(int **parallel, int **sequential, int len1, int len2) {
-  for (int i = 0; i <= len1; i++) {
-    for (int j = 0; j <= len2; j++) {
-      if (parallel[i][j] != sequential[i][j]) {
-        printf("Mismatch at (%d, %d): Parallel=%d, Sequential=%d\n", i, j,
-               parallel[i][j], sequential[i][j]);
-        return 0;
-      }
-    }
-  }
-  return 1;
-}
+carts-opt smith-waterman.mlir --lower-affine --convert-openmp-to-arts --edt --hoist-invariant --create-datablocks --canonicalize --datablock --create-events --create-epochs --canonicalize --convert-arts-to-llvm  -debug-only=hoist-invariant,create-datablocks,convert-arts-to-llvm &> smith-waterman_arts.mlir
+
+carts-opt smith-waterman.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --create-epochs --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize -debug-only=convert-arts-to-llvm &> smith-waterman_arts.mlir
+
+carts-opt smith-waterman.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --create-epochs --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize --raise-scf-to-affine --canonicalize --affine-cfg --affine-expand-index-ops --affine-scalrep --affine-cfg --loop-invariant-code-motion --cse --canonicalize --lower-affine --cse --canonicalize --convert-polygeist-to-llvm --cse --canonicalize -debug-only=create-datablocks,convert-arts-to-llvm,convert-polygeist-to-llvm &> smith-waterman.ll
+*/
+ 
 
 int main() {
   char seq1[] = "AGTACGCA";
@@ -71,32 +26,74 @@ int main() {
   int len1 = strlen(seq1);
   int len2 = strlen(seq2);
 
-  // Allocate parallel and sequential score matrices
-  int **score_parallel = (int **)calloc(len1 + 1, sizeof(int *));
-  int **score_sequential = (int **)calloc(len1 + 1, sizeof(int *));
+  int score_parallel[len1 + 1][len2 + 1];
+  int score_sequential[len1 + 1][len2 + 1];
+
+  // Initialize matrices to 0
   for (int i = 0; i <= len1; i++) {
-    score_parallel[i] = (int *)calloc(len2 + 1, sizeof(int));
-    score_sequential[i] = (int *)calloc(len2 + 1, sizeof(int));
+    for (int j = 0; j <= len2; j++) {
+      score_parallel[i][j] = 0;
+      score_sequential[i][j] = 0;
+    }
   }
 
-  // Run parallel and sequential versions
-  smith_waterman_omp(seq1, seq2, len1, len2, score_parallel);
-  smith_waterman_sequential(seq1, seq2, len1, len2, score_sequential);
+  // Parallel Smith-Waterman inline
+  #pragma omp parallel
+  #pragma omp single
+  {
+    /// Print sequences
+    printf("seq1: %s\n", seq1);
+    printf("seq2: %s\n", seq2);
+    for (int i = 1; i <= len1; i++) {
+      for (int j = 1; j <= len2; j++) {
+        // #pragma omp task depend(in : score_parallel[i - 1][j], \
+        //                              score_parallel[i][j - 1], \
+        //                              score_parallel[i - 1][j - 1]) \
+        //                  depend(out : score_parallel[i][j])
+        #pragma omp task
+        {
+          int match = score_parallel[i - 1][j - 1] +
+                      ((seq1[i - 1] == seq2[j - 1]) ? MATCH_SCORE : MISMATCH_PENALTY);
+          int del = score_parallel[i - 1][j] + GAP_PENALTY;
+          int ins = score_parallel[i][j - 1] + GAP_PENALTY;
+          score_parallel[i][j] = (match > del) ? ((match > ins) ? match : ins)
+                                               : ((del > ins) ? del : ins);
+          if (score_parallel[i][j] < 0)
+            score_parallel[i][j] = 0;
+        }
+      }
+    }
+  }
 
-  // Verify results
-  if (verify_results(score_parallel, score_sequential, len1, len2)) {
+  // Sequential Smith-Waterman inline
+  for (int i = 1; i <= len1; i++) {
+    for (int j = 1; j <= len2; j++) {
+      int match = score_sequential[i - 1][j - 1] +
+                  ((seq1[i - 1] == seq2[j - 1]) ? MATCH_SCORE : MISMATCH_PENALTY);
+      int del = score_sequential[i - 1][j] + GAP_PENALTY;
+      int ins = score_sequential[i][j - 1] + GAP_PENALTY;
+      score_sequential[i][j] = (match > del) ? ((match > ins) ? match : ins)
+                                             : ((del > ins) ? del : ins);
+      if (score_sequential[i][j] < 0)
+        score_sequential[i][j] = 0;
+    }
+  }
+
+  // Verify the results inline
+  int ok = 1;
+  for (int i = 0; i <= len1; i++) {
+    for (int j = 0; j <= len2; j++) {
+      if (score_parallel[i][j] != score_sequential[i][j]) {
+        printf("Mismatch at (%d, %d): Parallel=%d, Sequential=%d\n", i, j,
+               score_parallel[i][j], score_sequential[i][j]);
+        ok = 0;
+      }
+    }
+  }
+  if (ok)
     printf("Results match!\n");
-  } else {
+  else
     printf("Results DO NOT match!\n");
-  }
-
-  // Free memory
-  for (int i = 0; i <= len1; i++) {
-    free(score_parallel[i]);
-    free(score_sequential[i]);
-  }
-  free(score_parallel);
-  free(score_sequential);
 
   return 0;
 }

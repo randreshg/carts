@@ -16,7 +16,7 @@ void cholesky_omp_task(double *A, int n) {
       int kb = (k + BLOCK_SIZE > n) ? n - k : BLOCK_SIZE;
 
       // POTRF: Factor diagonal block
-      #pragma omp task depend(inout : A[k * n + k])
+      #pragma omp task depend(inout : A[k * n])
       {
         for (int i = k; i < k + kb; i++) {
           for (int j = k; j < i; j++) {

@@ -46,6 +46,8 @@ public:
   /// Interface
   bool isWriter() { return mode == "out" || mode == "inout"; }
   bool isReader() { return mode == "in" || mode == "inout"; }
+  bool isOnlyReader() { return mode == "in"; }
+  bool isOnlyWriter() { return mode == "out"; }
 
   /// Uses
   void collectUses();
@@ -62,7 +64,7 @@ public:
   uint64_t elementTypeSize;
   MemRefType resultType;
   AffineMap affineMap;
-  bool hasPtrDb, isSingle;
+  bool hasPtrDb, hasSingleSize, hasGuid;
 
   /// Analysis results
   bool isLoopDependent = false;
@@ -72,7 +74,7 @@ public:
   unsigned useCount;
   DatablockNode *parent = nullptr;
   arts::EdtOp edtParent = nullptr;
-  arts::EdtOp userEdt = nullptr;
+  arts::EdtOp edtUser = nullptr;
   uint32_t userEdtPos = 0;
 
   /// A duplicated node is a node with the same mode, aliasing base memref,
@@ -100,6 +102,7 @@ public:
 
   /// Interface
   func::FuncOp getFunction() { return func; }
+  SmallVector<DatablockNode *, 4> &getNodes() { return nodes; }
   DatablockNode *getNode(arts::DataBlockOp dbOp) { return nodeMap[dbOp]; }
   DatablockNode *getNode(unsigned id) { return nodes[id]; }
   bool isEntryNode(unsigned id) const { return id == entryDbNode->id; }
@@ -120,12 +123,16 @@ public:
   void detectOutOnlyNodes();
   void deduplicateNodes();
 
+  /// Analyzes the edges of the graph and returns true if the node only depends
+  /// on the entry node.
+  bool isOnlyDependentOnEntry(DatablockNode &node);
+
 private:
   /// Attributes
   func::FuncOp func;
   DatablockAnalysis *DA;
   SmallVector<DatablockNode *, 4> nodes;
-  llvm::DenseMap<unsigned, llvm::SetVector<unsigned>> edges;
+  DenseMap<unsigned, SetVector<unsigned>> edges;
 
   /// Map from each arts.datablock op to its corresponding Node.
   Environment nodeMap;
@@ -185,7 +192,7 @@ private:
   llvm::SmallDenseSet<unsigned> equivalentNodes;
 
   /// Map from function to its dependency graph.
-  llvm::DenseMap<func::FuncOp, DatablockGraph *> functionGraphMap;
+  DenseMap<func::FuncOp, DatablockGraph *> functionGraphMap;
 };
 
 } // namespace arts

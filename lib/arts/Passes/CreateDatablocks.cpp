@@ -417,7 +417,6 @@ void CreateDatablocksPass::rewireDatablockUses(arts::DataBlockOp &dbOp,
                                                SmallVector<Operation *> &uses) {
   MLIRContext *ctx = dbOp.getContext();
   auto builder = OpBuilder(ctx);
-  LLVM_DEBUG(dbgs() << "- Rewiring uses of:\n  " << dbOp << "\n");
 
   const unsigned drop = dbOp.getIndices().size();
 
@@ -454,7 +453,6 @@ void CreateDatablocksPass::rewireDatablockUses(arts::DataBlockOp &dbOp,
     DominanceInfo domInfo(edtOp->getParentOfType<FuncOp>());
     replaceUses(dbOp.getPtr(), dbOp.getResult(), domInfo, dbOp);
   }
-  LLVM_DEBUG(dbgs() << "  - OK\n");
 }
 
 ///===----------------------------------------------------------------------===///
