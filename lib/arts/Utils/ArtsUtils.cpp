@@ -2,6 +2,7 @@
 /// File: ArtsUtils.cpp
 ///==========================================================================
 #include "arts/Utils/ArtsUtils.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Support/LLVM.h"
 #include "polygeist/Ops.h"
@@ -17,23 +18,31 @@ bool isInvariantInEDT(arts::EdtOp edtOp, Value value) {
   if (op && op->hasTrait<OpTrait::ConstantLike>())
     return true;
 
-  /// If defined outside the region, check if it is used in any operation with
-  /// memory effects.
+  /// If not defined inside the region, check all users
   if (!region.isProperAncestor(value.getParentRegion())) {
     for (Operation *user : value.getUsers()) {
-      /// Consider only users inside the region.
       if (!region.isAncestor(user->getParentRegion()))
         continue;
 
-      /// Check that is not used in any operation with memory effects.
-      if (!mlir::isMemoryEffectFree(user)) {
-        /// If it is used in a memref load consider it invariant
-        if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
-          if (llvm::is_contained(loadOp.getIndices(), value))
-            return true;
-        }
-        return false;
+      if (mlir::isMemoryEffectFree(user))
+        continue;
+
+      /// Check specific memory operations where value is used as an index
+      if (auto memOp = dyn_cast<memref::LoadOp>(user)) {
+        if (llvm::is_contained(memOp.getIndices(), value))
+          return true;
+      } else if (auto memOp = dyn_cast<memref::StoreOp>(user)) {
+        if (llvm::is_contained(memOp.getIndices(), value))
+          return true;
+        /// Check printf calls
+      } else if (auto callOp = dyn_cast<func::CallOp>(user)) {
+        if (callOp.getCallee() == "printf")
+          return true;
+      } else if (auto llvmCallOp = dyn_cast<LLVM::CallOp>(user)) {
+        if (llvmCallOp.getCallee() == "printf")
+          return true;
       }
+      return false;
     }
     return true;
   }

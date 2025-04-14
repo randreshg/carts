@@ -75,7 +75,7 @@ void HoistInvariantOpsPass::runOnOperation() {
 
     /// Collect invariant external values
     SetVector<Value> invariantExternals;
-    LLVM_DEBUG(dbgs() << "Identifying invariant external values:\n";);
+    LLVM_DEBUG(dbgs() << "Invariant external values:\n";);
     for (Value v : externalValues) {
       if (!isInvariantInEDT(edtOp, v))
         continue;
@@ -103,6 +103,7 @@ void HoistInvariantOpsPass::runOnOperation() {
 
         if (opToCheck->hasTrait<OpTrait::IsTerminator>() || isArtsOp(opToCheck))
           return false;
+
         for (Value result : opToCheck->getResults()) {
           if (result.getType().isa<MemRefType>() ||
               result.getType().isa<LLVM::LLVMPointerType>())
