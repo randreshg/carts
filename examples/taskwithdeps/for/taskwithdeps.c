@@ -26,14 +26,16 @@ int main(int argc, char *argv[]) {
     #pragma omp single
     {
       for (int i = 0; i < N; i++) {
-        #pragma omp task depend(inout: A[i])
+        // #pragma omp task depend(inout: A[i])
+        #pragma omp task
         {
           A[i] = i;
           printf("Task %d - 0: Initializing A[%d] = %d\n", i, i, A[i]);
         }
 
         if (i == 0) {
-          #pragma omp task depend(in: A[i]) depend(inout: B[i])
+          // #pragma omp task depend(in: A[i]) depend(inout: B[i])
+          #pragma omp task
           {
             printf("Task %d - 1 -> Input: A[%d] = %d\n", i, i, A[i]);
             B[i] = A[i] + 5;
@@ -41,7 +43,8 @@ int main(int argc, char *argv[]) {
           }
         }
         else {
-          #pragma omp task depend(in: A[i]) depend(in: B[i - 1]) depend(inout: B[i])
+          // #pragma omp task depend(in: A[i]) depend(in: B[i - 1]) depend(inout: B[i])
+          #pragma omp task
           {
             printf("Task %d - 2 -> Input: A[%d] = %d, B[%d] = %d\n", i, i, A[i], i-1, B[i-1]);
             B[i] = A[i] + B[i-1] + 5;

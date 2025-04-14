@@ -169,7 +169,6 @@ void setupPassManager(MLIRContext &context, PassManager &pm) {
     optPM.addPass(polygeist::replaceAffineCFGPass());
     optPM.addPass(affine::createAffineExpandIndexOpsPass());
     optPM.addPass(affine::createAffineScalarReplacementPass());
-    // optPM.addPass(polygeist::createRaiseSCFToAffinePass());
     optPM.addPass(polygeist::replaceAffineCFGPass());
     optPM.addPass(createLoopInvariantCodeMotionPass());
     optPM.addPass(createCSEPass());
