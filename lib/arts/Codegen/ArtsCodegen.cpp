@@ -468,7 +468,7 @@ void EdtCodegen::process(Location loc) {
 }
 
 void EdtCodegen::processDependencies(Location loc) {
-  LLVM_DEBUG(DBGS() << "Processing dependencies for EDT: " << func << "\n");
+  LLVM_DEBUG(DBGS() << "Processing dependencies for EDT\n" << func << "\n");
 
   /// Set the insertion point at the EDT function return to satisfy
   /// dependencies.
@@ -477,11 +477,14 @@ void EdtCodegen::processDependencies(Location loc) {
   const auto indexType = IndexType::get(builder.getContext());
   const auto indexMemRefType = MemRefType::get({}, indexType);
 
-  /// ------------------- Satisfy Out-Mode Dependencies ------------------- ///
+  /// ---------------------------------------------------------------------
+  /// Satisfy Out-Mode Dependencies
   /// Decrement the event latch counts for all out-mode (write) datablock
   /// dependencies. This is done in the EDT Function, so we need to use the
   /// datablock GUIDs from the entryDbs map to access the correct datablock
   /// pointers and sizes.
+  /// ---------------------------------------------------------------------
+  LLVM_DEBUG(dbgs() << "- Satisfying out-mode dependencies\n");
   if (!depsToSatisfy.empty()) {
     auto slotAlloc = builder.create<memref::AllocaOp>(loc, indexMemRefType);
     auto initialSlot = AC.createIndexConstant(params.size(), loc);
@@ -584,9 +587,12 @@ void EdtCodegen::processDependencies(Location loc) {
     }
   }
 
-  /// ------------------ Record In-Mode Dependencies ------------------ ///
+  /// ---------------------------------------------------------------------
+  /// Record In-Mode Dependencies
   /// After the EDT is created, add dependencies for all in-mode (read)
   /// datablocks.
+  /// ---------------------------------------------------------------------
+  LLVM_DEBUG(dbgs() << "- Recording in-mode dependencies\n");
   builder.setInsertionPointAfter(guid.getDefiningOp());
   for (auto *dbCG : depsToRecord) {
     /// Ensure the datablock has a valid in-event and retrieve the event
@@ -658,7 +664,10 @@ void EdtCodegen::processDependencies(Location loc) {
     addDependenciesRecursive(initIndices.size(), initIndices);
   }
 
-  /// --------- Increment Latch Counts for Out-Mode Dependencies ----------- ///
+  /// ---------------------------------------------------------------------
+  /// Increment Latch Counts for Out-Mode Dependencies
+  /// ---------------------------------------------------------------------
+  LLVM_DEBUG(dbgs() << "- Incrementing latch count for out-mode dependencies\n");
   if (!depsToSatisfy.empty()) {
     for (auto *dbCG : depsToSatisfy) {
       /// Retrieve the associated event
@@ -732,9 +741,12 @@ void EdtCodegen::processDependencies(Location loc) {
     }
   }
 
-  /// ------------------- Replace EDT Dependency Uses ------------------- ///
+  /// ---------------------------------------------------------------------
+  /// Replace EDT Dependency Uses
   /// Replace all remaining uses of EDT dependencies with the corresponding
   /// datablock pointers.
+  /// ---------------------------------------------------------------------
+  LLVM_DEBUG(dbgs() << "- Replacing EDT dependency uses\n");
   for (auto &dep : deps) {
     auto *db = AC.getDatablock(dep);
     assert(db && "Datablock not found");
