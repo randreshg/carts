@@ -175,7 +175,7 @@ void ConvertArtsToLLVMPass::iterateOps() {
   module.walk([&](arts::EpochOp epoch) { handleEpoch(epoch); });
   module.walk([&](arts::EventOp event) { handleEvent(event); });
   LLVM_DEBUG({
-    DBGS() << "Module after iterating DataBlocks and Events:\n";
+    DBGS() << "Module after iterating Epochs and Events:\n";
     module.dump();
     dbgs() << line;
   });
@@ -211,7 +211,7 @@ void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
   DenseMap<DataBlockOp, DataBlockOp> dbsToRewire;
   operation->walk<mlir::WalkOrder::PreOrder>(
       [&](arts::DataBlockOp dbOp) -> mlir::WalkResult {
-        // Skip already processed new datablock ops.
+        /// Skip already processed new datablock ops.
         if (dbOp->hasAttr("newDb"))
           return mlir::WalkResult::skip();
 
@@ -219,12 +219,12 @@ void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
         auto sizes = dbOp.getSizes();
 
         auto getOpaqueElementType = [&]() -> Type {
-          auto elementType = dbOp.getElementType();
           /// Coarse-grained datablocks are always void pointers.
           if (dbOp.hasSingleSize())
             return MemRefType::get({ShapedType::kDynamic}, AC->VoidPtr);
 
           /// Fine-grained datablocks copy the shape of the original memref.
+          auto elementType = dbOp.getElementType();
           if (auto memrefType = elementType.dyn_cast<MemRefType>())
             return MemRefType::get(memrefType.getShape(), AC->VoidPtr);
 
@@ -269,9 +269,13 @@ void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
 
     /// Get the new datablock pointer type
     auto computePtr = [&](ValueRange indices, Location loc) -> Value {
-      if (indices.empty())
-        return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr,
-                                            AC->castToLLVMPtr(dbTo, loc));
+      if (indices.empty()) {
+        auto llvmCast = AC->castToLLVMPtr(dbTo, loc);
+        if (dbTo.hasSingleSize())
+          return llvmCast;
+
+        return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr, llvmCast);
+      }
 
       /// Create a SubIndexOp for newPtr
       Value subIndex = dbTo;
@@ -287,128 +291,145 @@ void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
       }
 
       Value subIndexPtr = AC->castToLLVMPtr(subIndex, loc);
+      if(dbTo.hasSingleSize())
+        return subIndexPtr;
       return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr, subIndexPtr);
     };
 
-    if (dbFrom.hasSingleSize() && !dbFrom.hasPtrDb()) {
-      /// If the datablock has a single size, we can directly replace the old op
-      /// with the new one.
-      auto loc = dbTo.getLoc();
+    // if (dbFrom.hasSingleSize() && !dbFrom.hasPtrDb()) {
+    //   /// If the datablock has a single size, we can directly replace the old
+    //   op
+    //   /// with the new one.
+    //   auto loc = dbTo.getLoc();
 
-      /// Replace uses in EDT
-      dbFrom.getResult().replaceUsesWithIf(dbTo, [&](OpOperand &operand) {
-        if (auto edtUser = dyn_cast<arts::EdtOp>(operand.getOwner())) {
-          /// Inside of the EDT user insert a load op
-          AC->setInsertionPoint(&*edtUser.getRegion().front().begin());
-          auto newPtr = builder
-                            .create<LLVM::LoadOp>(loc, dbTo.getElementType(),
-                                                  AC->castToLLVMPtr(dbTo, loc))
-                            .getResult();
-          replaceInRegion(edtUser.getRegion(), dbFrom.getResult(), newPtr);
-          return true;
-        }
-        return false;
-      });
+    //   /// Replace uses in EDT
+    //   EdtOp edtUser = nullptr;
+    //   dbFrom.getResult().replaceUsesWithIf(dbTo, [&](OpOperand &operand) {
+    //     if (!isa<arts::EdtOp>(operand.getOwner()))
+    //       return false;
 
-      /// Create load for uses outside of EDTUser
-      AC->setInsertionPointAfter(dbTo);
-      auto newPtr = builder
-                        .create<LLVM::LoadOp>(loc, dbTo.getElementType(),
-                                              AC->castToLLVMPtr(dbTo, loc))
-                        .getResult();
-      LLVM_DEBUG(dbgs() << "Replacing single size datablock op: " << *dbFrom
-                        << "\n");
-      LLVM_DEBUG(dbgs() << "  - new ptr: " << newPtr << "\n");
+    //     /// Inside of the EDT user, insert a load op.
+    //     edtUser = cast<arts::EdtOp>(operand.getOwner());
+    //     AC->setInsertionPoint(&*edtUser.getRegion().front().begin());
+    //     auto newPtr =
+    //         builder
+    //             .create<LLVM::LoadOp>(loc, dbFrom.getResult().getType(),
+    //                                   AC->castToLLVMPtr(dbTo, loc))
+    //             .getResult();
 
-      dbFrom.getResult().replaceAllUsesWith(newPtr);
-    } else if (dbFrom.hasSingleSize() && dbFrom.hasPtrDb() &&
-               !dbFrom.hasGuid()) {
-      llvm::errs()
-          << "Datablock with pointer datablock must have a GUID associated\n";
-      assert(dbFrom.hasGuid() &&
-             "Datablock with pointer datablock must have "
-             "a GUID associated - Opposite case not handled yet");
-    }
-    else {
-      /// If not, load the appropriate pointer type and replace the old op with
-      /// the new one.
-      for (auto &use : llvm::make_early_inc_range(dbFrom->getUses())) {
-        /// Set insertion point to the user
-        auto user = use.getOwner();
-        AC->setInsertionPoint(user);
+    //     /// Replace uses in the EDT user except for datablock ops.
+    //     auto &region = edtUser.getRegion();
+    //     dbFrom.getResult().replaceUsesWithIf(newPtr, [&](OpOperand &op) {
+    //       return region.isAncestor(op.getOwner()->getParentRegion()) &&
+    //              !isa<arts::DataBlockOp>(op.getOwner());
+    //     });
+    //     return true;
+    //   });
 
-        /// memref.load
-        if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
-          auto loc = loadOp.getLoc();
-          auto newPtr = computePtr(loadOp.getIndices(), loc);
-          auto newLoad =
-              builder
-                  .create<LLVM::LoadOp>(
-                      loc, loadOp.getMemRefType().getElementType(), newPtr)
-                  .getResult();
-          loadOp.getResult().replaceAllUsesWith(newLoad);
-          loadOp.erase();
+    //   /// Replace uses of Datablock in EDT
+    //   assert(edtUser && "Datablock not used in EDT");
+    //   auto &region = edtUser.getRegion();
+    //   dbFrom.getResult().replaceUsesWithIf(dbTo, [&](OpOperand &op) {
+    //     return region.isAncestor(op.getOwner()->getParentRegion()) &&
+    //            isa<arts::DataBlockOp>(op.getOwner());
+    //   });
+
+    //   /// Create load for uses outside of EDTUser.
+    //   AC->setInsertionPointAfter(dbTo);
+    //   auto newPtr = builder
+    //                     .create<LLVM::LoadOp>(loc,
+    //                     dbFrom.getResult().getType(),
+    //                                           AC->castToLLVMPtr(dbTo, loc))
+    //                     .getResult();
+    //   dbFrom.getResult().replaceAllUsesWith(newPtr);
+
+    // } else if (dbFrom.hasSingleSize() && dbFrom.hasPtrDb() &&
+    //            !dbFrom.hasGuid()) {
+    //   llvm::errs()
+    //       << "Datablock with pointer datablock must have a GUID
+    //       associated\n";
+    //   assert(dbFrom.hasGuid() &&
+    //          "Datablock with pointer datablock must have "
+    //          "a GUID associated - Opposite case not handled yet");
+    // } else {
+
+    // }
+
+    /// If not, load the appropriate pointer type and replace the old op with
+    /// the new one.
+    for (auto &use : llvm::make_early_inc_range(dbFrom->getUses())) {
+      /// Set insertion point to the user
+      auto user = use.getOwner();
+      AC->setInsertionPoint(user);
+
+      /// memref.load
+      if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+        auto loc = loadOp.getLoc();
+        auto newPtr = computePtr(loadOp.getIndices(), loc);
+        auto newLoad =
+            builder
+                .create<LLVM::LoadOp>(
+                    loc, loadOp.getMemRefType().getElementType(), newPtr)
+                .getResult();
+        loadOp.getResult().replaceAllUsesWith(newLoad);
+        loadOp.erase();
+      }
+      /// memref.store
+      else if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
+        auto loc = storeOp.getLoc();
+        auto newPtr = computePtr(storeOp.getIndices(), loc);
+        builder.create<LLVM::StoreOp>(loc, storeOp.getValueToStore(), newPtr);
+        storeOp.erase();
+      }
+      /// Propagate datablock pointer for nested datablock ops.
+      else if (auto dbUseOp = dyn_cast<arts::DataBlockOp>(user)) {
+        dbUseOp.getPtr().replaceUsesWithIf(
+            dbTo.getResult(),
+            [&](OpOperand &operand) { return operand.getOwner() == dbUseOp; });
+      }
+      /// EdtOp - update dependencies.
+      else if (auto edtOp = dyn_cast<arts::EdtOp>(user)) {
+        auto edtDeps = edtOp.getDependencies();
+        for (auto dep : edtDeps) {
+          if (dep != dbFrom)
+            continue;
+          dep.replaceUsesWithIf(dbTo.getResult(), [&](OpOperand &operand) {
+            return operand.getOwner() == edtOp;
+          });
         }
-        /// memref.store
-        else if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
-          auto loc = storeOp.getLoc();
-          auto newPtr = computePtr(storeOp.getIndices(), loc);
-          builder.create<LLVM::StoreOp>(loc, storeOp.getValueToStore(), newPtr);
-          storeOp.erase();
-        }
-        /// Propagate datablock pointer for nested datablock ops.
-        else if (auto dbUseOp = dyn_cast<arts::DataBlockOp>(user)) {
-          dbUseOp.getPtr().replaceUsesWithIf(
-              dbTo.getResult(), [&](OpOperand &operand) {
-                return operand.getOwner() == dbUseOp;
-              });
-        }
-        /// EdtOp - update dependencies.
-        else if (auto edtOp = dyn_cast<arts::EdtOp>(user)) {
-          auto edtDeps = edtOp.getDependencies();
-          for (auto dep : edtDeps) {
-            if (dep != dbFrom)
-              continue;
-            dep.replaceUsesWithIf(dbTo.getResult(), [&](OpOperand &operand) {
-              return operand.getOwner() == edtOp;
-            });
-          }
-        }
-        /// Memref2PointerOp - update the pointer type.
-        // else if (auto memref2PtrOp =
-        //              dyn_cast<polygeist::Memref2PointerOp>(user)) {
-        //   // auto loc = memref2PtrOp.getLoc();
-        //   auto newPtr = computePtr({}, memref2PtrOp.getLoc());
-        //   // LLVM_DEBUG(dbgs() << "Replacing memref2ptr op: " <<
-        //   *memref2PtrOp
-        //   //                   << "\n");
-        //   // auto newMemref2PtrOp =
-        //   builder.create<polygeist::Memref2PointerOp>(
-        //   //     loc, dbTo.getResult().getType(), newPtr);
-        //   memref2PtrOp.replaceAllUsesWith(newPtr);
-        //   memref2PtrOp.erase();
-        // }
-        else {
-          LLVM_DEBUG(DBGS()
-                     << "Unknown use of datablock op: " << *user << "\n");
-          llvm_unreachable("Unknown use of datablock op");
-        }
+      }
+      /// Memref2PointerOp - update the pointer type.
+      // else if (auto memref2PtrOp =
+      //              dyn_cast<polygeist::Memref2PointerOp>(user)) {
+      //   // auto loc = memref2PtrOp.getLoc();
+      //   auto newPtr = computePtr({}, memref2PtrOp.getLoc());
+      //   // LLVM_DEBUG(dbgs() << "Replacing memref2ptr op: " <<
+      //   *memref2PtrOp
+      //   //                   << "\n");
+      //   // auto newMemref2PtrOp =
+      //   builder.create<polygeist::Memref2PointerOp>(
+      //   //     loc, dbTo.getResult().getType(), newPtr);
+      //   memref2PtrOp.replaceAllUsesWith(newPtr);
+      //   memref2PtrOp.erase();
+      // }
+      else {
+        LLVM_DEBUG(DBGS() << "Unknown use of datablock op: " << *user << "\n");
+        llvm_unreachable("Unknown use of datablock op");
       }
     }
 
+    /// Print module for debugging
+    // LLVM_DEBUG({
+    //   dbgs() << "Module after rewire:\n";
+    //   module.dump();
+    //   dbgs() << line;
+    // });
+
     /// Erase the old datablock op
     dbFrom->erase();
-    // opsToRemove.insert(dbFrom);
 
     /// Add the new datablock to the list of datablocks to handle
     dbsToHandle.push_back(dbTo);
-
-    /// print module
-    LLVM_DEBUG({
-      dbgs() << "Module after replacing datablock:\n";
-      module.dump();
-      dbgs() << line;
-    });
   }
   removeOps(module, builder, opsToRemove);
 

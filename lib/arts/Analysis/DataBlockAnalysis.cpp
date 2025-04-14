@@ -523,14 +523,9 @@ void DatablockGraph::collectNodes(Region &region) {
       for (auto &e : node.parent->effects)
         node.effects.push_back(e);
 
-      /// Add 'hasGuid' attribute if the parent datablock doesn't have single
-      /// size.
-      if (!node.parent->hasSingleSize) {
+      node.hasGuid = (!node.parent->hasSingleSize || node.indices.empty());
+      if (node.hasGuid)
         dbOp.setHasGuid();
-        node.hasGuid = true;
-      } else {
-        node.hasGuid = false;
-      }
     } else {
       node.hasPtrDb = false;
       /// Collect memory effects if the parent is not a datablock.
