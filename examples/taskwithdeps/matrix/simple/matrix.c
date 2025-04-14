@@ -22,7 +22,8 @@ int main(int argc, char *argv[]) {
       for (int i = 0; i < N; i++) {
         for (int j = 0; j < N; j++) {
           /// Each task computes one A[i][j].
-          #pragma omp task firstprivate(i, j) depend(out : A[i][j])
+          // #pragma omp task firstprivate(i, j) depend(out : A[i][j])
+          #pragma omp task firstprivate(i, j)
           {
             A[i][j] = i * 1.0 + random;
             printf("Task 0: Initializing A[%d][%d] = %.2f\n", i, j, A[i][j]);
@@ -33,7 +34,8 @@ int main(int argc, char *argv[]) {
       /// Compute the B matrix using A.
       /// For row zero, B[0][j] only depends on A[0][j]
       for (int j = 0; j < N; j++) {
-        #pragma omp task firstprivate(j) depend(in : A[0][j]) depend(out : B[0][j])
+        // #pragma omp task firstprivate(j) depend(in : A[0][j]) depend(out : B[0][j])
+        #pragma omp task firstprivate(j)
         {
           B[0][j] = A[0][j];
           printf("Task 1: Computing B[0][%d] = %.2f\n", j, B[0][j]);
@@ -44,7 +46,8 @@ int main(int argc, char *argv[]) {
       for (int i = 1; i < N; i++) {
         for (int j = 0; j < N; j++) {
           // __arts_edt_5
-          #pragma omp task firstprivate(i, j) depend(in : A[i][j], A[i-1][j]) depend(out : B[i][j])
+          // #pragma omp task firstprivate(i, j) depend(in : A[i][j], A[i-1][j]) depend(out : B[i][j])
+          #pragma omp task firstprivate(i, j)
           {
             B[i][j] = A[i][j] + A[i-1][j];
             printf("Task 2: Computing B[%d][%d] = %.2f\n", i, j, B[i][j]);
