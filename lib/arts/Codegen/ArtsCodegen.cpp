@@ -1314,17 +1314,12 @@ void ArtsCodegen::initializeRuntime(Location loc) {
   if (!mainFunc)
     return;
 
-  /// Duplicate main function and change its name to "mainBody"
-  auto mainBodyFunc = mainFunc.clone();
-  mainBodyFunc.setName("mainBody");
-  module.push_back(mainBodyFunc);
-
-  /// Remove the original main function
-  mainFunc.erase();
+  /// Rename main function to "mainBody"
+  mainFunc.setName("mainBody");
 
   /// Insert init functions
-  insertInitPerWorker(loc);
-  insertInitPerNode(loc, mainBodyFunc);
+  insertInitPerWorker(loc);  
+  insertInitPerNode(loc, mainFunc);
   insertMain(loc);
 }
 

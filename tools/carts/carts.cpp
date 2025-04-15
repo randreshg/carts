@@ -97,7 +97,7 @@ void registerDialects(DialectRegistry &registry) {
 /// Initialize the MLIR context by loading necessary dialects and attaching
 /// type interfaces.
 void initializeContext(MLIRContext &context) {
-  context.disableMultithreading();
+  context.disableMultithreading(true);
   context.getOrLoadDialect<affine::AffineDialect>();
   context.getOrLoadDialect<func::FuncDialect>();
   context.getOrLoadDialect<DLTIDialect>();
@@ -130,13 +130,10 @@ void initializeContext(MLIRContext &context) {
 
 /// Configure the pass manager with the optimization passes.
 void setupPassManager(MLIRContext &context, PassManager &pm) {
-  mlir::OpPassManager &optPM = pm.nest<mlir::func::FuncOp>();
 
   /// Basic inlining and affine lowering.
   pm.addPass(createInlinerPass());
   pm.addPass(createLowerAffinePass());
-  pm.addPass(createCSEPass());
-  pm.addPass(createCanonicalizerPass());
 
   /// Convert OpenMP Dialect to ARTS Dialect.
   pm.addPass(arts::createConvertOpenMPtoARTSPass());
@@ -145,7 +142,6 @@ void setupPassManager(MLIRContext &context, PassManager &pm) {
 
   pm.addPass(arts::createHoistInvariantOpsPass());
   pm.addPass(arts::createCreateDatablocksPass(IdentifyDatablocks));
-  pm.addPass(createCSEPass());
   pm.addPass(createCanonicalizerPass());
 
   pm.addPass(arts::createDatablockPass());
@@ -153,7 +149,6 @@ void setupPassManager(MLIRContext &context, PassManager &pm) {
   pm.addPass(arts::createCreateEventsPass());
 
   pm.addPass(arts::createCreateEpochsPass());
-  pm.addPass(createCSEPass());
   pm.addPass(createCanonicalizerPass());
 
   /// Convert ARTS constructs to LLVM Dialect.
@@ -161,7 +156,7 @@ void setupPassManager(MLIRContext &context, PassManager &pm) {
 
   /// Affine optimizations.
   if (AffineOpt) {
-    // optPM.addPass(polygeist::createPolygeistMem2RegPass());
+    mlir::OpPassManager &optPM = pm.nest<mlir::func::FuncOp>();
     optPM.addPass(createCSEPass());
     optPM.addPass(createCanonicalizerPass());
     optPM.addPass(polygeist::createRaiseSCFToAffinePass());
