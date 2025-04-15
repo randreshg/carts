@@ -7,19 +7,6 @@
 #define MISMATCH_PENALTY -1
 #define GAP_PENALTY -2
 
-/*
-cgeist smith-waterman.c -fopenmp -O0 -S -I//usr/lib/llvm-14/lib/clang/14.0.0/include > smith-waterman.mlir
-
-carts-opt smith-waterman.mlir --lower-affine --convert-openmp-to-arts --edt --hoist-invariant --create-datablocks --canonicalize --datablock --create-events --create-epochs --canonicalize  -debug-only=hoist-invariant,create-datablocks,datablock &> smith-waterman_arts.mlir
-
-carts-opt smith-waterman.mlir --lower-affine --convert-openmp-to-arts --edt --hoist-invariant --create-datablocks --canonicalize --datablock --create-events --create-epochs --canonicalize --convert-arts-to-llvm  -debug-only=hoist-invariant,create-datablocks,convert-arts-to-llvm &> smith-waterman_arts.mlir
-
-carts-opt smith-waterman.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --create-epochs --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize -debug-only=convert-arts-to-llvm &> smith-waterman_arts.mlir
-
-carts-opt smith-waterman.mlir --lower-affine --convert-openmp-to-arts --edt --create-datablocks --cse --canonicalize --datablock --create-events --create-epochs --cse --canonicalize --convert-arts-to-llvm --cse --canonicalize --raise-scf-to-affine --canonicalize --affine-cfg --affine-expand-index-ops --affine-scalrep --affine-cfg --loop-invariant-code-motion --cse --canonicalize --lower-affine --cse --canonicalize --convert-polygeist-to-llvm --cse --canonicalize -debug-only=create-datablocks,convert-arts-to-llvm,convert-polygeist-to-llvm &> smith-waterman.ll
-*/
- 
-
 int main() {
   char seq1[] = "AGTACGCA";
   char seq2[] = "TATGCGC";
@@ -52,6 +39,7 @@ int main() {
         //                  depend(out : score_parallel[i][j])
         #pragma omp task
         {
+          printf("Running task for i=%d, j=%d\n", i, j);
           int match = score_parallel[i - 1][j - 1] +
                       ((seq1[i - 1] == seq2[j - 1]) ? MATCH_SCORE : MISMATCH_PENALTY);
           int del = score_parallel[i - 1][j] + GAP_PENALTY;
@@ -63,6 +51,17 @@ int main() {
         }
       }
     }
+  }
+
+  printf("Process has finished\n");
+
+  // Print the parallel score matrix
+  printf("Parallel Score Matrix:\n");
+  for (int i = 0; i <= len1; i++) {
+    for (int j = 0; j <= len2; j++) {
+      printf("%d ", score_parallel[i][j]);
+    }
+    printf("\n");
   }
 
   // Sequential Smith-Waterman inline
@@ -77,6 +76,15 @@ int main() {
       if (score_sequential[i][j] < 0)
         score_sequential[i][j] = 0;
     }
+  }
+
+  // Print the sequential score matrix
+  printf("Sequential Score Matrix:\n");
+  for (int i = 0; i <= len1; i++) {
+    for (int j = 0; j <= len2; j++) {
+      printf("%d ", score_sequential[i][j]);
+    }
+    printf("\n");
   }
 
   // Verify the results inline

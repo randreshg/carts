@@ -260,6 +260,7 @@ void CreateDatablocksPass::analyzeEdtRegion(arts::EdtOp &edtOp) {
   SmallVector<Value, 4> ptrs;
   SetVector<Value> invariantValues;
   for (Value v : externalValues) {
+    LLVM_DEBUG(dbgs() << "  - Found value: " << v << "\n");
     /// If the value is a memref, add it.
     if (v.getType().isa<MemRefType>()) {
       ptrs.push_back(v);
@@ -313,10 +314,10 @@ void CreateDatablocksPass::analyzeValueInEdt(
     if (!region.isAncestor(op->getParentRegion()))
       continue;
 
-    /// Only consider load and store operations.
-    if (!(isa<memref::LoadOp>(op) || isa<memref::StoreOp>(op))) {
-      continue;
-    }
+    /// Only consider load, store and polygeist memref2pointer ops.
+    // if (!(isa<memref::LoadOp>(op) || isa<memref::StoreOp>(op))) {
+    //   continue;
+    // }
 
     CandidateDatablock db(dbPtr, strAnalysis->isStringMemRef(dbPtr));
     SmallVector<Value> indices;
@@ -389,6 +390,8 @@ void CreateDatablocksPass::analyzeValueInEdt(
         db.updateAccess(DatablockAccessType::ReadOnly);
       else if (isa<memref::StoreOp>(op))
         db.updateAccess(DatablockAccessType::WriteOnly);
+      else
+        db.updateAccess(DatablockAccessType::ReadWrite);
     }
   }
 }

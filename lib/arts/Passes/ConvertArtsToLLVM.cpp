@@ -291,7 +291,7 @@ void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
       }
 
       Value subIndexPtr = AC->castToLLVMPtr(subIndex, loc);
-      if(dbTo.hasSingleSize())
+      if (dbTo.hasSingleSize())
         return subIndexPtr;
       return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr, subIndexPtr);
     };
@@ -399,20 +399,15 @@ void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
         }
       }
       /// Memref2PointerOp - update the pointer type.
-      // else if (auto memref2PtrOp =
-      //              dyn_cast<polygeist::Memref2PointerOp>(user)) {
-      //   // auto loc = memref2PtrOp.getLoc();
-      //   auto newPtr = computePtr({}, memref2PtrOp.getLoc());
-      //   // LLVM_DEBUG(dbgs() << "Replacing memref2ptr op: " <<
-      //   *memref2PtrOp
-      //   //                   << "\n");
-      //   // auto newMemref2PtrOp =
-      //   builder.create<polygeist::Memref2PointerOp>(
-      //   //     loc, dbTo.getResult().getType(), newPtr);
-      //   memref2PtrOp.replaceAllUsesWith(newPtr);
-      //   memref2PtrOp.erase();
-      // }
-      else {
+      else if (auto memref2PtrOp =
+                   dyn_cast<polygeist::Memref2PointerOp>(user)) {
+        auto loc = memref2PtrOp.getLoc();
+        auto newMemref2PtrOp = builder.create<polygeist::Memref2PointerOp>(
+            loc, memref2PtrOp.getResult().getType(), dbTo.getResult());
+        memref2PtrOp.getResult().replaceAllUsesWith(
+            newMemref2PtrOp.getResult());
+        memref2PtrOp.erase();
+      } else {
         LLVM_DEBUG(DBGS() << "Unknown use of datablock op: " << *user << "\n");
         llvm_unreachable("Unknown use of datablock op");
       }

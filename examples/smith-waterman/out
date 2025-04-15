@@ -1,0 +1,225 @@
+Length of seq1: 2
+Length of seq2: 3
+Initializing smith waterman with: AG and TAT
+[0] Creating EDT with guid 3808428033 in epoch 0 and 1 deps
+[0] Creating EDT with guid 3774873601 in epoch 3791650817 and 14 deps
+[0] Add Dependence from persistent event 4211081219 to EDT 3774873601 at 0
+[0] Updating event 4211081219 - Latch count: 0
+[0] Firing persistent event 4211081219
+[0] Signal DBGuid: 4009754633 to EDTGuid 3774873601 in slot 0
+[0] EDT 3774873601 signaled - Current DepCount 13 
+[0] Add Dependence from persistent event 4194304003 to EDT 3774873601 at 1
+[0] Updating event 4194304003 - Latch count: 0
+[0] Firing persistent event 4194304003
+[0] Signal DBGuid: 3992977417 to EDTGuid 3774873601 in slot 1
+[0] EDT 3774873601 signaled - Current DepCount 12 
+[0] Add Dependence from persistent event 4177526787 to EDT 3774873601 at 2
+[0] Updating event 4177526787 - Latch count: 0
+[0] Firing persistent event 4177526787
+[0] Signal DBGuid: 3976200201 to EDTGuid 3774873601 in slot 2
+[0] EDT 3774873601 signaled - Current DepCount 11 
+[0] Add Dependence from persistent event 4160749571 to EDT 3774873601 at 3
+[0] Updating event 4160749571 - Latch count: 0
+[0] Firing persistent event 4160749571
+[0] Signal DBGuid: 3959422985 to EDTGuid 3774873601 in slot 3
+[0] EDT 3774873601 signaled - Current DepCount 10 
+[0] Add Dependence from persistent event 4143972355 to EDT 3774873601 at 4
+[0] Updating event 4143972355 - Latch count: 0
+[0] Firing persistent event 4143972355
+[0] Signal DBGuid: 3942645769 to EDTGuid 3774873601 in slot 4
+[0] EDT 3774873601 signaled - Current DepCount 9 
+[0] Add Dependence from persistent event 4127195139 to EDT 3774873601 at 5
+[0] Updating event 4127195139 - Latch count: 0
+[0] Firing persistent event 4127195139
+[0] Signal DBGuid: 3925868553 to EDTGuid 3774873601 in slot 5
+[0] EDT 3774873601 signaled - Current DepCount 8 
+[0] Add Dependence from persistent event 4110417923 to EDT 3774873601 at 6
+[0] Updating event 4110417923 - Latch count: 0
+[0] Firing persistent event 4110417923
+[0] Signal DBGuid: 3909091337 to EDTGuid 3774873601 in slot 6
+[0] EDT 3774873601 signaled - Current DepCount 7 
+[0] Add Dependence from persistent event 4093640707 to EDT 3774873601 at 7
+[0] Updating event 4093640707 - Latch count: 0
+[0] Firing persistent event 4093640707
+[0] Signal DBGuid: 3892314121 to EDTGuid 3774873601 in slot 7
+[0] EDT 3774873601 signaled - Current DepCount 6 
+[0] Add Dependence from persistent event 4076863491 to EDT 3774873601 at 8
+[0] Updating event 4076863491 - Latch count: 0
+[0] Firing persistent event 4076863491
+[0] Signal DBGuid: 3875536905 to EDTGuid 3774873601 in slot 8
+[0] EDT 3774873601 signaled - Current DepCount 5 
+[0] Add Dependence from persistent event 4060086275 to EDT 3774873601 at 9
+[0] Updating event 4060086275 - Latch count: 0
+[0] Firing persistent event 4060086275
+[0] Signal DBGuid: 3858759689 to EDTGuid 3774873601 in slot 9
+[0] EDT 3774873601 signaled - Current DepCount 4 
+[0] Add Dependence from persistent event 4043309059 to EDT 3774873601 at 10
+[0] Updating event 4043309059 - Latch count: 0
+[0] Firing persistent event 4043309059
+[0] Signal DBGuid: 3841982473 to EDTGuid 3774873601 in slot 10
+[0] EDT 3774873601 signaled - Current DepCount 3 
+[0] Add Dependence from persistent event 4026531843 to EDT 3774873601 at 11
+[0] Updating event 4026531843 - Latch count: 0
+[0] Firing persistent event 4026531843
+[0] Signal DBGuid: 3825205257 to EDTGuid 3774873601 in slot 11
+[0] EDT 3774873601 signaled - Current DepCount 2 
+[0] Add Dependence from persistent event 4278190083 to EDT 3774873601 at 12
+[0] Updating event 4278190083 - Latch count: 0
+[0] Firing persistent event 4278190083
+[0] Signal DBGuid: 4261412873 to EDTGuid 3774873601 in slot 12
+[0] EDT 3774873601 signaled - Current DepCount 1 
+[0] Add Dependence from persistent event 4244635651 to EDT 3774873601 at 13
+[0] Updating event 4244635651 - Latch count: 0
+[0] Firing persistent event 4244635651
+[0] Signal DBGuid: 4227858441 to EDTGuid 3774873601 in slot 13
+[0] EDT 3774873601 signaled - Current DepCount 0 
+[0] Running EDT with GUID: 3774873601
+seq1: AG
+seq2: TAT
+- Creating task for (1, 1)
+[0] Creating EDT with guid 3556769793 in epoch 3791650817 and 4 deps
+/// SLOT 0 score_parallel[1][0] i,j-1
+[0] Add Dependence from persistent event 3690987523 to EDT 3556769793 at 0
+[0] Updating event 3690987523 - Latch count: 0
+[0] Firing persistent event 3690987523
+[0] Signal DBGuid: 3942645769 to EDTGuid 3556769793 in slot 0
+[0] EDT 3556769793 signaled - Current DepCount 3 
+/// SLOT 1 score_parallel[1][1] i,j
+[0] Add Dependence from persistent event 3674210307 to EDT 3556769793 at 1
+[0] Updating event 3674210307 - Latch count: 0
+[0] Firing persistent event 3674210307
+[0] Signal DBGuid: 3925868553 to EDTGuid 3556769793 in slot 1
+[0] EDT 3556769793 signaled - Current DepCount 2 
+/// SLOT 2 score_parallel[0][0] i-1,j-1
+[0] Add Dependence from persistent event 3758096387 to EDT 3556769793 at 2
+[0] Updating event 3758096387 - Latch count: 0
+[0] Firing persistent event 3758096387
+[0] Signal DBGuid: 4009754633 to EDTGuid 3556769793 in slot 2
+[0] EDT 3556769793 signaled - Current DepCount 1 
+/// SLOT 3 score_parallel[0][1] i-1,j
+[0] Add Dependence from persistent event 3741319171 to EDT 3556769793 at 3
+[0] Updating event 3741319171 - Latch count: 0
+[0] Firing persistent event 3741319171
+[0] Signal DBGuid: 3992977417 to EDTGuid 3556769793 in slot 3
+[0] EDT 3556769793 signaled - Current DepCount 0 
+/// Adding dependency to score_parallel[1][1]
+[0] Incrementing latch count for event 3674210307 - Latch count: 1
+
+--------------------------------------------------------------------------
+- Creating task for (1, 2)
+[0] Creating EDT with guid 3539992577 in epoch 3791650817 and 4 deps
+/// SLOT 0 score_parallel[1][1] i,j-1
+[0] Add Dependence from persistent event 3674210307 to EDT 3539992577 at 0
+/// SLOT 1 score_parallel[1][2] i,j
+[0] Add Dependence from persistent event 3657433091 to EDT 3539992577 at 1
+[0] Updating event 3657433091 - Latch count: 0
+[0] Firing persistent event 3657433091
+[0] Signal DBGuid: 3909091337 to EDTGuid 3539992577 in slot 1
+[0] EDT 3539992577 signaled - Current DepCount 3 
+/// SLOT 2 score_parallel[0][1] i-1,j-1
+[0] Add Dependence from persistent event 3741319171 to EDT 3539992577 at 2
+[0] Updating event 3741319171 - Latch count: 0
+[0] Firing persistent event 3741319171
+[0] Signal DBGuid: 3992977417 to EDTGuid 3556769793 in slot 2
+[0] EDT 3556769793 signaled - Current DepCount 4294967295
+/// SLOT 3 score_parallel[0][2] i-1,j
+[0] Add Dependence from persistent event 3724541955 to EDT 3539992577 at 3
+[0] Updating event 3724541955 - Latch count: 0
+[0] Firing persistent event 3724541955
+[0] Signal DBGuid: 3976200201 to EDTGuid 3556769793 in slot 3
+[0] EDT 3556769793 signaled - Current DepCount 4294967295
+
+[0] Add Dependence from persistent event 3741319171 to EDT 3539992577 at 2
+[0] Updating event 3741319171 - Latch count: 0
+[0] Firing persistent event 3741319171
+[0] Signal DBGuid: 3992977417 to EDTGuid 3556769793 in slot 3
+[0] EDT 3556769793 signaled - Current DepCount 4294967295 
+[0] Signal DBGuid: 3992977417 to EDTGuid 3539992577 in slot 2
+[0] EDT 3539992577 signaled - Current DepCount 2 
+/// S:PT 3
+[0] Add Dependence from persistent event 3724541955 to EDT 3539992577 at 3
+[0] Updating event 3724541955 - Latch count: 0
+[0] Firing persistent event 3724541955
+[0] Signal DBGuid: 3976200201 to EDTGuid 3539992577 in slot 3
+[0] EDT 3539992577 signaled - Current DepCount 1 
+[0] Incrementing latch count for event 3657433091 - Latch count: 1
+- Creating task for (1, 3)
+[0] Creating EDT with guid 3523215361 in epoch 3791650817 and 4 deps
+[0] Add Dependence from persistent event 3657433091 to EDT 3523215361 at 0
+[0] Add Dependence from persistent event 3640655875 to EDT 3523215361 at 1
+[0] Updating event 3640655875 - Latch count: 0
+[0] Firing persistent event 3640655875
+[0] Signal DBGuid: 3892314121 to EDTGuid 3523215361 in slot 1
+[0] EDT 3523215361 signaled - Current DepCount 3 
+[0] Add Dependence from persistent event 3724541955 to EDT 3523215361 at 2
+[0] Updating event 3724541955 - Latch count: 0
+[0] Firing persistent event 3724541955
+[0] Signal DBGuid: 3976200201 to EDTGuid 3539992577 in slot 3
+[0] EDT 3539992577 signaled - Current DepCount 0 
+[0] Signal DBGuid: 3976200201 to EDTGuid 3523215361 in slot 2
+[0] EDT 3523215361 signaled - Current DepCount 2 
+[0] Add Dependence from persistent event 3707764739 to EDT 3523215361 at 3
+[0] Updating event 3707764739 - Latch count: 0
+[0] Firing persistent event 3707764739
+[0] Signal DBGuid: 3959422985 to EDTGuid 3523215361 in slot 3
+[0] EDT 3523215361 signaled - Current DepCount 1 
+[0] Incrementing latch count for event 3640655875 - Latch count: 1
+- Creating task for (2, 1)
+[0] Creating EDT with guid 3506438145 in epoch 3791650817 and 4 deps
+[0] Add Dependence from persistent event 3623878659 to EDT 3506438145 at 0
+[0] Updating event 3623878659 - Latch count: 0
+[0] Firing persistent event 3623878659
+[0] Signal DBGuid: 3875536905 to EDTGuid 3506438145 in slot 0
+[0] EDT 3506438145 signaled - Current DepCount 3 
+[0] Add Dependence from persistent event 3607101443 to EDT 3506438145 at 1
+[0] Updating event 3607101443 - Latch count: 0
+[0] Firing persistent event 3607101443
+[0] Signal DBGuid: 3858759689 to EDTGuid 3506438145 in slot 1
+[0] EDT 3506438145 signaled - Current DepCount 2 
+[0] Add Dependence from persistent event 3690987523 to EDT 3506438145 at 2
+[0] Updating event 3690987523 - Latch count: 0
+[0] Firing persistent event 3690987523
+[0] Signal DBGuid: 3942645769 to EDTGuid 3556769793 in slot 0
+[0] EDT 3556769793 signaled - Current DepCount 4294967294 
+[0] Signal DBGuid: 3942645769 to EDTGuid 3506438145 in slot 2
+[0] EDT 3506438145 signaled - Current DepCount 1 
+[0] Add Dependence from persistent event 3674210307 to EDT 3506438145 at 3
+[0] Incrementing latch count for event 3607101443 - Latch count: 1
+- Creating task for (2, 2)
+[0] Creating EDT with guid 3489660929 in epoch 3791650817 and 4 deps
+[0] Add Dependence from persistent event 3607101443 to EDT 3489660929 at 0
+[0] Add Dependence from persistent event 3590324227 to EDT 3489660929 at 1
+[0] Updating event 3590324227 - Latch count: 0
+[0] Firing persistent event 3590324227
+[0] Signal DBGuid: 3841982473 to EDTGuid 3489660929 in slot 1
+[0] EDT 3489660929 signaled - Current DepCount 3 
+[0] Add Dependence from persistent event 3674210307 to EDT 3489660929 at 2
+[0] Add Dependence from persistent event 3657433091 to EDT 3489660929 at 3
+[0] Incrementing latch count for event 3590324227 - Latch count: 1
+- Creating task for (2, 3)
+[0] Creating EDT with guid 3472883713 in epoch 3791650817 and 4 deps
+[0] Add Dependence from persistent event 3590324227 to EDT 3472883713 at 0
+[0] Add Dependence from persistent event 3573547011 to EDT 3472883713 at 1
+[0] Updating event 3573547011 - Latch count: 0
+[0] Firing persistent event 3573547011
+[0] Signal DBGuid: 3825205257 to EDTGuid 3472883713 in slot 1
+[0] EDT 3472883713 signaled - Current DepCount 3 
+[0] Add Dependence from persistent event 3657433091 to EDT 3472883713 at 2
+[0] Add Dependence from persistent event 3640655875 to EDT 3472883713 at 3
+[0] Incrementing latch count for event 3573547011 - Latch count: 1
+[0] EDT 3774873601 Finished
+[0] Releasing 4009754633[0]  - is ARTS_DB_PIN: Skipping...
+[0] Releasing 3992977417[0]  - is ARTS_DB_PIN: Skipping...
+[0] Releasing 3976200201[0]  - is ARTS_DB_PIN: Skipping...
+[0] Releasing 3959422985[0]  - is ARTS_DB_PIN: Skipping...
+[0] Releasing 3942645769[0]  - is ARTS_DB_PIN: Skipping...
+[0] Releasing 3925868553[0]  - is ARTS_DB_PIN: Skipping...
+[0] Releasing 3909091337[0]  - is ARTS_DB_PIN: Skipping...
+[0] Releasing 3892314121[0]  - is ARTS_DB_PIN: Skipping...
+[0] Releasing 3875536905[0]  - is ARTS_DB_PIN: Skipping...
+[0] Releasing 3858759689[0]  - is ARTS_DB_PIN: Skipping...
+[0] Releasing 3841982473[0]  - is ARTS_DB_PIN: Skipping...
+[0] Releasing 3825205257[0]  - is ARTS_DB_PIN: Skipping...
+[0] Releasing 4261412873[0]  - is ARTS_DB_PIN: Skipping...
+[0] Releasing 4227858441[0]  - is ARTS_DB_PIN: Skipping...
+[0] Running EDT with GUID: 3539992577
