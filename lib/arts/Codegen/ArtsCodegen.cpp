@@ -498,14 +498,10 @@ void EdtCodegen::processDependencies(Location loc) {
       if (dbCG->hasSingleSize()) {
         auto currentSlot =
             builder.create<memref::LoadOp>(loc, slotAlloc.getResult());
-        auto slotAsInt = AC.castToInt(AC.Int32, currentSlot, loc);
-        auto eventGuidPtr =
-            builder
-                .create<LLVM::GEPOp>(loc, AC.llvmPtr, AC.ArtsGuid, fnParamVPtr,
-                                     ValueRange{slotAsInt})
-                ->getResult(0);
+        auto eventGuidAtSlot = builder.create<polygeist::SubIndexOp>(
+            loc, MemRefType::get({}, AC.ArtsGuid), fnParamV, currentSlot);
         auto loadedEventGuid =
-            builder.create<LLVM::LoadOp>(loc, AC.ArtsGuid, eventGuidPtr)
+            builder.create<memref::LoadOp>(loc, eventGuidAtSlot.getResult())
                 .getResult();
         AC.decrementEventLatchCount(loadedEventGuid, entryDbs[dbCG].guid,
                                     unknownLoc);
@@ -540,18 +536,19 @@ void EdtCodegen::processDependencies(Location loc) {
                   .getResult();
 
           /// Load the datablock GUID from the entry using the current indices.
-          auto entryDbGuidPtr = AC.castToLLVMPtr(entryDbs[dbCG].guid, loc);
-          SmallVector<Value, 4> intIndices;
-          for (auto idx : indices)
-            intIndices.push_back(AC.castToInt(AC.Int32, idx, loc));
-          auto dbGuidPtr =
-              builder
-                  .create<LLVM::GEPOp>(loc, AC.llvmPtr, AC.ArtsGuid,
-                                       entryDbGuidPtr, intIndices)
-                  .getResult();
-          auto loadedDbGuid =
-              builder.create<LLVM::LoadOp>(loc, AC.ArtsGuid, dbGuidPtr)
-                  .getResult();
+          auto loadedDbGuid = entryDbs[dbCG].guid;
+          for (auto idx : indices) {
+            auto mt = loadedDbGuid.getType().cast<MemRefType>();
+            auto shape = std::vector<int64_t>(mt.getShape());
+            shape.erase(shape.begin());
+            auto mt0 = mlir::MemRefType::get(shape, mt.getElementType(),
+                                             MemRefLayoutAttrInterface(),
+                                             mt.getMemorySpace());
+            loadedDbGuid = builder.create<polygeist::SubIndexOp>(
+                loc, mt0, loadedDbGuid, idx);
+          }
+          loadedDbGuid =
+              builder.create<memref::LoadOp>(loc, loadedDbGuid).getResult();
 
           /// Satisfy the event dependency by decrementing the latch count.
           AC.decrementEventLatchCount(loadedEventGuid, loadedDbGuid, loc);
@@ -667,7 +664,8 @@ void EdtCodegen::processDependencies(Location loc) {
   /// ---------------------------------------------------------------------
   /// Increment Latch Counts for Out-Mode Dependencies
   /// ---------------------------------------------------------------------
-  LLVM_DEBUG(dbgs() << "- Incrementing latch count for out-mode dependencies\n");
+  LLVM_DEBUG(
+      dbgs() << "- Incrementing latch count for out-mode dependencies\n");
   if (!depsToSatisfy.empty()) {
     for (auto *dbCG : depsToSatisfy) {
       /// Retrieve the associated event
@@ -1318,7 +1316,7 @@ void ArtsCodegen::initializeRuntime(Location loc) {
   mainFunc.setName("mainBody");
 
   /// Insert init functions
-  insertInitPerWorker(loc);  
+  insertInitPerWorker(loc);
   insertInitPerNode(loc, mainFunc);
   insertMain(loc);
 }
