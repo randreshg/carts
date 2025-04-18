@@ -3,8 +3,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define N 4
-#define BS 2
+#define N 10
+#define BS 5
 #define TOLERANCE 1e-6
 
 int main() {
@@ -24,25 +24,18 @@ int main() {
   #pragma omp parallel
   #pragma omp single
   {
-    printf("Starting single computation...\n");
     for (int i = 0; i < N; i += BS) {
       for (int j = 0; j < N; j += BS) {
         for (int k = 0; k < N; k += BS) {
           // #pragma omp task depend(in : A[i : BS][k : BS], B[k : BS][j : BS])             \
           //     depend(inout : C_parallel[i : BS][j : BS])
-          printf("Creating task for C[%d:%d][%d:%d] += A[%d:%d][%d:%d] * B[%d:%d][%d:%d]\n",
-                 i, i + BS, j, j + BS, i, i + BS, k, k + BS, k, k + BS, j,
-                 j + BS);
           #pragma omp task
           {
             for (int ii = i; ii < i + BS; ii++)
               for (int jj = j; jj < j + BS; jj++)
                 for (int kk = k; kk < k + BS; kk++) {
                   C_parallel[ii][jj] += A[ii][kk] * B[kk][jj];
-                  printf("Computing C[%d][%d] += A[%d][%d] * B[%d][%d]\n", ii, jj, ii, kk,
-                         kk, jj);
               }
-                  
           }
         }
       }

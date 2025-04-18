@@ -138,13 +138,12 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
 
 Value DataBlockCodegen::getMode(llvm::StringRef mode) {
   auto Loc = UnknownLoc::get(builder.getContext());
-  auto enumValue = 9;
+  /// ARTS_DB_PIN
+  auto enumValue = 10;
   /// ARTS_DB_READ
   if (mode == "in")
-    enumValue = 7;
-  /// ARTS_DB_PIN
-  else if (mode == "out")
-    enumValue = 9;
+    enumValue = 8;
+
   return AC.createIntConstant(enumValue, AC.Int32, Loc);
 }
 

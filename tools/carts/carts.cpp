@@ -142,12 +142,14 @@ void setupPassManager(MLIRContext &context, PassManager &pm) {
 
   pm.addPass(arts::createHoistInvariantOpsPass());
   pm.addPass(arts::createCreateDatablocksPass(IdentifyDatablocks));
+
   pm.addPass(createCanonicalizerPass());
 
   pm.addPass(arts::createDatablockPass());
 
   pm.addPass(arts::createCreateEventsPass());
 
+  
   pm.addPass(arts::createCreateEpochsPass());
   pm.addPass(createCanonicalizerPass());
 
