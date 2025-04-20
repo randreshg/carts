@@ -50,6 +50,8 @@ struct DatablockPass : public arts::DatablockBase<DatablockPass> {
   /// Datablocks with single size, and result type different to a memref, can
   /// be converted into parameter.
   void convertToParameters(DatablockGraph *graph);
+  /// Canonicalize memref.dim ops of datablocks.
+  void canonicalizeDimOps(DatablockGraph *graph);
 
 private:
   ModuleOp module;
@@ -58,7 +60,10 @@ private:
 
 void DatablockPass::runOnOperation() {
   module = getOperation();
-  LLVM_DEBUG(dbgs() << "\n" << line << "DatablockPass STARTED\n" << line);
+  LLVM_DEBUG({
+    dbgs() << "\n" << line << "DatablockPass STARTED\n" << line;
+    module.dump();
+  });
   OpBuilder builder(module);
 
   /// Retrieve the shared analysis result.
@@ -73,6 +78,7 @@ void DatablockPass::runOnOperation() {
     }
     graph->print();
     convertToParameters(graph);
+    canonicalizeDimOps(graph);
   });
 
   LLVM_DEBUG({
@@ -90,6 +96,9 @@ void DatablockPass::convertToParameters(DatablockGraph *graph) {
   LLVM_DEBUG(dbgs() << "Converting datablocks to parameters - Analyzing "
                     << dbNodes.size() << " datablocks\n");
   for (auto *dbNode : dbNodes) {
+    if (!dbNode->op)
+      continue;
+
     if (!dbNode->hasSingleSize || isa<MemRefType>(dbNode->elementType) ||
         !dbNode->isOnlyReader() || !graph->isOnlyDependentOnEntry(*dbNode))
       continue;
@@ -102,6 +111,7 @@ void DatablockPass::convertToParameters(DatablockGraph *graph) {
     builder.setInsertionPoint(dbNode->op);
     auto newLoadOp = builder.create<memref::LoadOp>(
         dbNode->op.getLoc(), dbNode->ptr, dbNode->indices);
+    LLVM_DEBUG(dbgs() << "  - New load op: " << *newLoadOp << "\n");
 
     /// Replace all load operations with the new load op.
     for (auto &use :
@@ -113,6 +123,8 @@ void DatablockPass::convertToParameters(DatablockGraph *graph) {
       loadOp.erase();
     }
   }
+  LLVM_DEBUG(dbgs() << "Datablock conversion - Found " << dbNodesToRemove.size()
+                    << " datablocks to convert\n");
 
   /// Update EDT dependencies and remove replaced datablock ops.
   for (auto &entry : dbNodesToRemove) {
@@ -143,6 +155,33 @@ void DatablockPass::convertToParameters(DatablockGraph *graph) {
   removeOps(module, builder, opsToRemove);
 }
 
+void DatablockPass::canonicalizeDimOps(DatablockGraph *graph) {
+  auto &dbNodes = graph->getNodes();
+  OpBuilder builder(module);
+
+  LLVM_DEBUG(dbgs() << "Canonicalizing dim ops - Analyzing " << dbNodes.size()
+                    << " datablocks\n");
+  for (auto *dbNode : dbNodes) {
+    if (!dbNode->op)
+      continue;
+
+    /// Analyze uses of the datablock.
+    for (auto *op : dbNode->op->getUsers()) {
+      auto dimOp = dyn_cast<memref::DimOp>(op);
+      if (!dimOp)
+        continue;
+
+      LLVM_DEBUG(dbgs() << "- Canonicalizing dim op: " << *dimOp << "\n");
+      auto dim = dimOp.getConstantIndex();
+      assert(dim && "Dim op must have a constant index");
+
+      /// Replace the dim op result with the size of the datablock.
+      auto size = dbNode->sizes[*dim];
+      dimOp.replaceAllUsesWith(size);
+      dimOp.erase();
+    }
+  }
+}
 ///===----------------------------------------------------------------------===///
 /// Pass creation
 ///===----------------------------------------------------------------------===///

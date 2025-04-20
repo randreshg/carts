@@ -170,7 +170,10 @@ void CreateDatablocksPass::runOnOperation() {
     module.dump();
   });
   identifyDatablocks(module);
-  LLVM_DEBUG(dbgs() << line << "CreateDatablocksPass FINISHED\n" << line);
+  LLVM_DEBUG({
+    dbgs() << "\n" << line << "CreateDatablocksPass FINISHED\n" << line;
+    module.dump();
+  });
 }
 
 void CreateDatablocksPass::identifyDatablocks(ModuleOp module) {
