@@ -483,7 +483,8 @@ void EdtCodegen::processDependencies(Location loc) {
   /// datablock GUIDs from the entryDbs map to access the correct datablock
   /// pointers and sizes.
   /// ---------------------------------------------------------------------
-  LLVM_DEBUG(dbgs() << "- Satisfying out-mode dependencies\n");
+  LLVM_DEBUG(dbgs() << "- Satisfying out-mode dependencies: "
+                    << depsToSatisfy.size() << "\n");
   if (!depsToSatisfy.empty()) {
     auto slotAlloc = builder.create<memref::AllocaOp>(loc, indexMemRefType);
     auto initialSlot = AC.createIndexConstant(params.size(), loc);
@@ -588,7 +589,8 @@ void EdtCodegen::processDependencies(Location loc) {
   /// After the EDT is created, add dependencies for all in-mode (read)
   /// datablocks.
   /// ---------------------------------------------------------------------
-  LLVM_DEBUG(dbgs() << "- Recording in-mode dependencies\n");
+  LLVM_DEBUG(dbgs() << "- Recording in-mode dependencies: "
+                    << depsToRecord.size() << "\n");
   builder.setInsertionPointAfter(guid.getDefiningOp());
   for (auto *dbCG : depsToRecord) {
     /// Ensure the datablock has a valid in-event and retrieve the event
@@ -663,8 +665,8 @@ void EdtCodegen::processDependencies(Location loc) {
   /// ---------------------------------------------------------------------
   /// Increment Latch Counts for Out-Mode Dependencies
   /// ---------------------------------------------------------------------
-  LLVM_DEBUG(
-      dbgs() << "- Incrementing latch count for out-mode dependencies\n");
+  LLVM_DEBUG(dbgs() << "- Incrementing latch counts for out-mode dependencies: "
+                    << depsToSatisfy.size() << "\n");
   if (!depsToSatisfy.empty()) {
     for (auto *dbCG : depsToSatisfy) {
       /// Retrieve the associated event

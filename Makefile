@@ -97,6 +97,7 @@ arts:
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
 	make -C $(ARTS_BUILD_DIR) install -j
 arts-clean:
+	rm -f -r $(ARTS_BUILD_DIR)
 	rm -f -r $(ARTS_INSTALL_DIR)
 	# rm -f -r $(ARTS_DIR)
 

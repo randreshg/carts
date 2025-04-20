@@ -149,7 +149,6 @@ void setupPassManager(MLIRContext &context, PassManager &pm) {
 
   pm.addPass(arts::createCreateEventsPass());
 
-  
   pm.addPass(arts::createCreateEpochsPass());
   pm.addPass(createCanonicalizerPass());
 
@@ -171,9 +170,14 @@ void setupPassManager(MLIRContext &context, PassManager &pm) {
     optPM.addPass(createCSEPass());
     optPM.addPass(createCanonicalizerPass());
     optPM.addPass(createLowerAffinePass());
+    optPM.addPass(createCSEPass());
+    optPM.addPass(createCanonicalizerPass());
   }
 
   /// Convert the module to LLVM IR.
+  if (!EmitLLVM)
+    return;
+
   pm.addPass(createCSEPass());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(polygeist::createConvertPolygeistToLLVMPass());
