@@ -388,6 +388,14 @@ Environment DatablockGraph::mergeEnvironments(const Environment &env1,
       LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                         << "  - DB already exists in merged environment: "
                         << dbNode->id << "\n");
+      auto node = getNode(dbOp);
+      /// If they belong to the same parent
+      if (dbNode->edtParent == node->edtParent) {
+        LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                          << "    - Same EDT parent, "
+                          << "updating definition\n");
+        mergedEnv[dbOp] = dbNode;
+      }
     } else {
       // Add new definition into the merged environment.
       LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
