@@ -130,29 +130,34 @@ void initializeContext(MLIRContext &context) {
 
 /// Configure the pass manager with the optimization passes.
 void setupPassManager(MLIRContext &context, PassManager &pm) {
-
   /// Basic inlining and affine lowering.
   pm.addPass(createInlinerPass());
   pm.addPass(createLowerAffinePass());
 
   /// Convert OpenMP Dialect to ARTS Dialect.
   pm.addPass(arts::createConvertOpenMPtoARTSPass());
-
   pm.addPass(arts::createEdtPass());
-
   pm.addPass(arts::createHoistInvariantOpsPass());
   pm.addPass(arts::createCreateDatablocksPass(IdentifyDatablocks));
-
   pm.addPass(createCanonicalizerPass());
+
+  /// Raise to affine for better datablock analysis.
+  if (AffineOpt) {
+    mlir::OpPassManager &optPM = pm.nest<mlir::func::FuncOp>();
+    optPM.addPass(polygeist::createRaiseSCFToAffinePass());
+    optPM.addPass(polygeist::replaceAffineCFGPass());
+  }
 
   pm.addPass(arts::createDatablockPass());
-
   pm.addPass(arts::createCreateEventsPass());
-
   pm.addPass(arts::createCreateEpochsPass());
-  pm.addPass(createCanonicalizerPass());
 
-  /// Convert ARTS constructs to LLVM Dialect.
+  /// Lowering to LLVM dialect - createConvertArtsToLLVMPass requires
+  /// the affine dialect to be lowered.
+  if (AffineOpt) {
+    pm.addPass(createLowerAffinePass());
+    pm.addPass(createCanonicalizerPass());
+  }
   pm.addPass(arts::createConvertArtsToLLVMPass());
 
   /// Affine optimizations.

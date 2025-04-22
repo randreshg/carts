@@ -1,8 +1,7 @@
-//===- ARTSDialect.td - ARTS Dialect -----------------------*- tablegen -*-===//
-//
-// This file defines the ARTS Dialect.
-//
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: ArtsDialects.td
+/// This file defines the ARTS Dialect.
+///==========================================================================
 #ifndef ARTS_DIALECT
 #define ARTS_DIALECT
 

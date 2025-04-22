@@ -11,7 +11,6 @@
 
 /// Dialects
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 /// Others
@@ -31,11 +30,18 @@
 
 bool isArtsRegion(mlir::Operation *op);
 bool isArtsOp(mlir::Operation *op);
+
 //===----------------------------------------------------------------------===//
 // Arts Dialect Types
 //===----------------------------------------------------------------------===//
 #define GET_TYPEDEF_CLASSES
 #include "arts/ArtsOpsTypes.h.inc"
+
+//===----------------------------------------------------------------------===//
+// Arts Dialect Attributes
+//===----------------------------------------------------------------------===//
+#define GET_ATTRDEF_CLASSES
+#include "arts/ArtsOpsAttributes.h.inc"
 
 //===----------------------------------------------------------------------===//
 // Arts Dialect Operations

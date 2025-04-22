@@ -1,8 +1,7 @@
-//===- ARTSOps.td - ARTS Dialect Operations ----------------*- tablegen -*-===//
-//
-// This file defines multiple operations for the ARTS Dialect.
-//
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: ArtsOps.td
+/// This file defines multiple operations for the ARTS Dialect.
+///==========================================================================
 
 #ifndef ARTS_OPS
 #define ARTS_OPS
@@ -18,6 +17,7 @@ include "mlir/Dialect/LLVMIR/LLVMInterfaces.td"
 
 /// ARTS Dialect
 include "arts/ArtsDialect.td"
+include "arts/ArtsAttributes.td"
 include "arts/ArtsTypes.td"
 
 //===----------------------------------------------------------------------===//
@@ -67,11 +67,13 @@ def DataBlockOp : Arts_Op<"datablock",
     Variadic<Index>:$sizes,                    // Sizes for the subview
     Optional<AnyType>:$inEvent,                // Input event associated with the DB
     Optional<AnyType>:$outEvent,               // Output event associated with the DB
-    OptionalAttr<AffineMapAttr>:$affineMap     // Affine map for offset transformation
+    OptionalAttr<DomainAttr>:$domain           // Domain attribute
   );
+
   let results = (outs AnyMemRef:$subview);     // Produces a memref
   let hasCustomAssemblyFormat = 1;
-  
+
+  let skipDefaultBuilders = 1;
   let builders = [
     OpBuilder<(ins
       "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, "Value":$elementTypeSize,
@@ -79,7 +81,12 @@ def DataBlockOp : Arts_Op<"datablock",
     OpBuilder<(ins
       "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, "Value":$elementTypeSize,
       "ValueRange":$indices, "ValueRange":$sizes, "Value":$inEvent, "Value":$outEvent)>,
+    OpBuilder<(ins
+      "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, "Value":$elementTypeSize,
+      "ValueRange":$indices, "ValueRange":$sizes, "Value":$inEvent, "Value":$outEvent,
+      "DomainAttr":$domain)>
   ];
+
   let extraClassDeclaration = [{
     bool hasPtrDb();
     void setHasPtrDb();

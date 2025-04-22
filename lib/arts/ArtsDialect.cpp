@@ -39,6 +39,12 @@ void ArtsDialect::initialize() {
 #define GET_TYPEDEF_LIST
 #include "arts/ArtsOpsTypes.cpp.inc"
       >();
+
+  /// Register attributes
+  addAttributes<
+#define GET_ATTRDEF_LIST
+#include "arts/ArtsOpsAttributes.cpp.inc"
+      >();
 }
 
 #include "arts/ArtsOpsDialect.cpp.inc"
@@ -60,6 +66,14 @@ bool isArtsOp(Operation *op) {
 //===----------------------------------------------------------------------===//
 #define GET_TYPEDEF_CLASSES
 #include "arts/ArtsOpsTypes.cpp.inc"
+
+
+//===----------------------------------------------------------------------===//
+// Arts Dialect Attributes - method definitions
+//===----------------------------------------------------------------------===//
+#define GET_ATTRDEF_CLASSES
+#include "arts/ArtsOpsAttributes.cpp.inc"
+
 
 //===----------------------------------------------------------------------===//
 // UndefOp
@@ -131,6 +145,17 @@ void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
   odsState.getOrAddProperties<Properties>().elementType =
       TypeAttr::get(elementType);
   odsState.addTypes(subview);
+}
+
+void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                        Type subview, StringRef mode, Value ptr,
+                        Type elementType, Value elementTypeSize,
+                        ValueRange indices, ValueRange sizes,
+                        Value inEvent, Value outEvent,
+                        DomainAttr domain) {
+  build(odsBuilder, odsState, subview, mode, ptr, elementType,
+        elementTypeSize, indices, sizes, inEvent, outEvent);
+  odsState.addAttribute("domain", domain);
 }
 
 ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
@@ -232,15 +257,14 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
   if (failed(parseEventOperand("outEvent", outEventOperand)))
     return failure();
 
-  /// Optionally parse comma then affineMap attribute.
-  /// Optionally parse comma then affineMap attribute.
+  /// Optionally parse comma then domain attribute.
   if (succeeded(parser.parseOptionalComma())) {
-    if (parser.parseKeyword("affineMap"))
+    if (parser.parseKeyword("domain"))
       return failure();
     if (parser.parseEqual())
       return failure();
-    Attribute affineMapAttr;
-    if (parser.parseAttribute(affineMapAttr, "affineMap", result.attributes))
+    DomainAttr domainAttr;
+    if (parser.parseAttribute(domainAttr, "domain", result.attributes))
       return failure();
   }
 
@@ -330,14 +354,14 @@ void DataBlockOp::print(OpAsmPrinter &printer) {
   }
 
   /// Optionally print the affineMap attribute if present.
-  if (auto affineMap = op->getAttr("affineMap"))
-    printer << ", affineMap=" << affineMap;
+  if (auto domainAttr = op->getAttr("domainAttr"))
+    printer << ", domainAttr=" << domainAttr;
 
   // Print all remaining attributes except "operandSegmentSizes"
-  // and those already printed ("mode", "elementType", "affineMap").
+  // and those already printed ("mode", "elementType", "domainAttr").
   printer.printOptionalAttrDict(
       op->getAttrs(),
-      {"mode", "elementType", "affineMap", "operandSegmentSizes"});
+      {"mode", "elementType", "domainAttr", "operandSegmentSizes"});
 
   /// Print arrow and the result type.
   printer << " -> ";

@@ -49,9 +49,9 @@ struct DatablockPass : public arts::DatablockBase<DatablockPass> {
   void runOnOperation() override;
   /// Datablocks with single size, and result type different to a memref, can
   /// be converted into parameter.
-  void convertToParameters(DatablockGraph *graph);
+  bool convertToParameters(DatablockGraph *graph);
   /// Canonicalize memref.dim ops of datablocks.
-  void canonicalizeDimOps(DatablockGraph *graph);
+  bool canonicalizeDimOps(DatablockGraph *graph);
 
 private:
   ModuleOp module;
@@ -59,6 +59,7 @@ private:
 } // end anonymous namespace
 
 void DatablockPass::runOnOperation() {
+  bool changed = false;
   module = getOperation();
   LLVM_DEBUG({
     dbgs() << "\n" << line << "DatablockPass STARTED\n" << line;
@@ -77,17 +78,23 @@ void DatablockPass::runOnOperation() {
       return;
     }
     graph->print();
-    convertToParameters(graph);
-    canonicalizeDimOps(graph);
+    changed |= convertToParameters(graph);
+    changed |= canonicalizeDimOps(graph);
   });
 
+  /// Preserve analysis results if no changes were made.
+  if(!changed)
+    markAnalysesPreserved<DatablockAnalysis>();
+
+  
   LLVM_DEBUG({
     dbgs() << line << "DatablockPass FINISHED\n" << line;
     module.dump();
   });
 }
 
-void DatablockPass::convertToParameters(DatablockGraph *graph) {
+bool DatablockPass::convertToParameters(DatablockGraph *graph) {
+  bool changed = false;
   auto &dbNodes = graph->getNodes();
   DenseMap<EdtOp, SetVector<DataBlockOp>> dbNodesToRemove;
   SetVector<Operation *> opsToRemove;
@@ -106,7 +113,7 @@ void DatablockPass::convertToParameters(DatablockGraph *graph) {
     LLVM_DEBUG(dbgs() << "- Converting datablock to parameter: " << *dbNode->op
                       << "\n");
     dbNodesToRemove[dbNode->edtUser].insert(dbNode->op);
-
+    changed = true;
     /// Create a new load op for the datablock.
     builder.setInsertionPoint(dbNode->op);
     auto newLoadOp = builder.create<memref::LoadOp>(
@@ -122,6 +129,12 @@ void DatablockPass::convertToParameters(DatablockGraph *graph) {
       loadOp.replaceAllUsesWith(newLoadOp.getResult());
       loadOp.erase();
     }
+  }
+
+  /// If no datablocks were converted, return.
+  if (!changed) {
+    LLVM_DEBUG(dbgs() << "No datablocks to convert\n");
+    return false;
   }
   LLVM_DEBUG(dbgs() << "Datablock conversion - Found " << dbNodesToRemove.size()
                     << " datablocks to convert\n");
@@ -153,9 +166,10 @@ void DatablockPass::convertToParameters(DatablockGraph *graph) {
 
   LLVM_DEBUG(dbgs() << "Removing datablocks " << opsToRemove.size() << "\n");
   removeOps(module, builder, opsToRemove);
+  return true;
 }
 
-void DatablockPass::canonicalizeDimOps(DatablockGraph *graph) {
+bool DatablockPass::canonicalizeDimOps(DatablockGraph *graph) {
   auto &dbNodes = graph->getNodes();
   OpBuilder builder(module);
 
@@ -181,6 +195,7 @@ void DatablockPass::canonicalizeDimOps(DatablockGraph *graph) {
       dimOp.erase();
     }
   }
+  return false;
 }
 ///===----------------------------------------------------------------------===///
 /// Pass creation
