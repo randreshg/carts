@@ -4,8 +4,8 @@
 /// This pass performs a comprehensive analysis on arts.datablock operations.
 ///==========================================================================
 
-#ifndef MLIR_ANALYSIS_DATABLOCKANALYSIS_H
-#define MLIR_ANALYSIS_DATABLOCKANALYSIS_H
+#ifndef CARTS_ANALYSIS_DATABLOCKANALYSIS_H
+#define CARTS_ANALYSIS_DATABLOCKANALYSIS_H
 
 #include "arts/ArtsDialect.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -14,21 +14,25 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Types.h"
+#include "mlir/Pass/AnalysisManager.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/IR/PassManager.h"
 #include <cstdint>
 #include <sys/types.h>
 #include <utility>
 
 namespace mlir {
 namespace arts {
+
 class DatablockAnalysis;
 class DatablockNode;
 enum DatablockNodeComp { Equal, BaseAlias, Different };
+
 /// An Environment maps each db op to the latest Node that defines it.
 using Environment = llvm::DenseMap<arts::DataBlockOp, DatablockNode *>;
 
@@ -162,8 +166,12 @@ private:
 
 //===----------------------------------------------------------------------===//
 // DatablockAnalysis
+// This is a pass that performs a comprehensive analysis on arts.datablock
+// operations.It builds a dependency graph for each function in the module
+// and provides methods to query the graph.
 //===----------------------------------------------------------------------===//
 class DatablockAnalysis {
+
 public:
   explicit DatablockAnalysis(Operation *module);
   ~DatablockAnalysis();
@@ -172,6 +180,9 @@ public:
 
   /// Get the graph for a given function, or create it if it does not exist.
   DatablockGraph *getOrCreateGraph(func::FuncOp func);
+  bool isInvalidated(const AnalysisManager::PreservedAnalyses &pa) {
+    return !pa.isPreserved<arts::DatablockAnalysis>();
+  }
 
 private:
   /// Dependency analysis.
@@ -188,14 +199,10 @@ private:
   /// Other
   void printGraph(func::FuncOp func);
 
-  /// Set of equivalent datablock nodes.
-  llvm::SmallDenseSet<unsigned> equivalentNodes;
-
   /// Map from function to its dependency graph.
   DenseMap<func::FuncOp, DatablockGraph *> functionGraphMap;
 };
-
 } // namespace arts
 } // namespace mlir
 
-#endif // MLIR_ANALYSIS_DATABLOCKANALYSIS_H
+#endif // CARTS_ANALYSIS_DATABLOCKANALYSIS_H

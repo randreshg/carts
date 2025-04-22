@@ -180,7 +180,7 @@ std::pair<Environment, bool> DatablockGraph::processEdt(arts::EdtOp edtOp,
   auto edtDeps = edtOp.getDependencies();
   bool changed = false;
   Environment newEnv = env;
-  /// Debug initial environment.
+
   /// Handle input dependencies.
   if (!edtDeps.empty()) {
     LLVM_DEBUG({
@@ -353,7 +353,7 @@ std::pair<Environment, bool> DatablockGraph::processCall(func::CallOp callOp,
                                                          Environment &env) {
   LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                     << "- Processing CallOp (ignoring for now)\n");
-  // TODO: Expand call handling logic if inter-procedural analysis is required.
+  // TODO: Expand call handling logic for inter-procedural analysis
   return {env, false};
 }
 
