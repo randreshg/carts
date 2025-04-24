@@ -6,8 +6,8 @@
 /// parameters, and constants.
 ///==========================================================================
 
-#ifndef MLIR_ANALYSIS_EDTANALYSIS_H
-#define MLIR_ANALYSIS_EDTANALYSIS_H
+#ifndef CARTS_ANALYSIS_EDTANALYSIS_H
+#define CARTS_ANALYSIS_EDTANALYSIS_H
 
 #include "arts/ArtsDialect.h"
 
@@ -77,4 +77,4 @@ private:
 } // namespace arts
 } // namespace mlir
 
-#endif // MLIR_ANALYSIS_EDTANALYSIS_H
+#endif // CARTS_ANALYSIS_EDTANALYSIS_H

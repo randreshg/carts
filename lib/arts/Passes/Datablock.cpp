@@ -83,10 +83,11 @@ void DatablockPass::runOnOperation() {
   });
 
   /// Preserve analysis results if no changes were made.
-  if(!changed)
+  if (!changed) {
+    LLVM_DEBUG(DBGS() << "No changes made to the module\n");
     markAnalysesPreserved<DatablockAnalysis>();
+  }
 
-  
   LLVM_DEBUG({
     dbgs() << line << "DatablockPass FINISHED\n" << line;
     module.dump();
@@ -133,11 +134,11 @@ bool DatablockPass::convertToParameters(DatablockGraph *graph) {
 
   /// If no datablocks were converted, return.
   if (!changed) {
-    LLVM_DEBUG(dbgs() << "No datablocks to convert\n");
+    LLVM_DEBUG(dbgs() << " - No datablocks to convert\n");
     return false;
   }
-  LLVM_DEBUG(dbgs() << "Datablock conversion - Found " << dbNodesToRemove.size()
-                    << " datablocks to convert\n");
+  LLVM_DEBUG(dbgs() << " - Datablock conversion - Found "
+                    << dbNodesToRemove.size() << " datablocks to convert\n");
 
   /// Update EDT dependencies and remove replaced datablock ops.
   for (auto &entry : dbNodesToRemove) {

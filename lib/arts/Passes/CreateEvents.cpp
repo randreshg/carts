@@ -190,7 +190,10 @@ void CreateEventsPass::runOnOperation() {
       dbOp.erase();
     }
 
-    LLVM_DEBUG(dbgs() << line << "CreateEventsPass FINISHED\n" << line);
+    LLVM_DEBUG({
+      dbgs() << line << "CreateEventsPass FINISHED\n" << line;
+      module.dump();
+    });
   });
 }
 
@@ -218,7 +221,8 @@ void CreateEventsPass::insertEventToDb(OpBuilder &builder, DataBlockOp dbOp,
   auto newDbOp = builder.create<arts::DataBlockOp>(
       loc, dbOp.getType(), dbOp.getModeAttr(), dbOp.getPtr(),
       dbOp.getElementType(), dbOp.getElementTypeSize(), dbOp.getIndices(),
-      dbOp.getSizes(), inEvent, outEvent, dbOp.getDomainAttr());
+      dbOp.getSizes(), inEvent, outEvent);
+  // , dbOp.getDomainAttr()
 
   /// Copy all attributes except "operandSegmentSizes".
   for (auto attr : dbOp->getAttrs()) {

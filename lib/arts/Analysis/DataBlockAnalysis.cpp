@@ -4,6 +4,10 @@
 
 #include "arts/Analysis/DataBlockAnalysis.h"
 /// Dialects
+#include "arts/Analysis/LoopAnalysis.h"
+#include "mlir/Dialect/Affine/Analysis/AffineStructures.h"
+#include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
+#include "mlir/Dialect/Affine/Analysis/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -12,6 +16,7 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
+#include "mlir/Transforms/DialectConversion.h"
 #include "polygeist/Ops.h"
 /// Arts
 #include "arts/ArtsDialect.h"
@@ -24,7 +29,9 @@
 #include "llvm/ADT/SmallVector.h"
 /// Debug
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
+#include <csignal>
 #include <utility>
 #define DEBUG_TYPE "datablock-analysis"
 #define line "-----------------------------------------\n"
@@ -37,17 +44,78 @@ using namespace mlir::arith;
 using namespace mlir::polygeist;
 using namespace mlir::scf;
 using namespace mlir::affine;
-
-namespace mlir {
-namespace arts {
+using namespace mlir::arts;
 
 //===----------------------------------------------------------------------===//
 // DatablockNode
 //===----------------------------------------------------------------------===//
+DatablockNode::DatablockNode(DatablockGraph *DG, arts::DataBlockOp dbOp)
+    : op(dbOp), DG(DG), DA(DG->DA) {
+  if (!op)
+    return;
+  collectInfo();
+}
+
+void DatablockNode::collectInfo() {
+  id = DG->nodes.size();
+  mode = op.getMode();
+  ptr = op.getPtr();
+  indices = op.getIndices();
+  sizes = op.getSizes();
+  elementType = op.getElementType();
+  elementTypeSize = op.getElementTypeSize();
+  resultType = op.getResult().getType();
+
+  /// Add 'hasSingleSize' attribute if the datablock has a single size of 1 or
+  /// no size
+  hasSingleSize = false;
+  if (sizes.empty()) {
+    op.setHasSingleSize();
+    hasSingleSize = true;
+  } else if (sizes.size() == 1) {
+    if (auto cstOp = sizes[0].getDefiningOp<arith::ConstantIndexOp>()) {
+      if (cstOp.value() == 1) {
+        op.setHasSingleSize();
+        hasSingleSize = true;
+      }
+    }
+  }
+
+  /// Add 'hasPtrDb' attribute if the base is a datablock.
+  if (auto parentDb =
+          dyn_cast_or_null<arts::DataBlockOp>(ptr.getDefiningOp())) {
+    op.setHasPtrDb();
+    hasPtrDb = true;
+    parent = DG->getNode(parentDb);
+    for (auto &eff : parent->effects)
+      effects.push_back(eff);
+
+    hasGuid = (!parent->hasSingleSize || indices.empty());
+    if (hasGuid)
+      op.setHasGuid();
+  } else {
+    hasPtrDb = false;
+    /// Collect memory effects if the parent is not a datablock.
+    if (auto memEff = dyn_cast<MemoryEffectOpInterface>(op.getOperation()))
+      memEff.getEffects(effects);
+  }
+
+  /// Try to get the EDT parent of the datablock.
+  if (auto parentOp = op->getParentOfType<arts::EdtOp>())
+    edtParent = parentOp;
+
+  /// Collect and analyze uses of the datablock.
+  collectUses();
+
+  /// Compute the region of the datablock.
+  // computeRegion();
+}
+
 void DatablockNode::collectUses() {
   unsigned numUses = 0;
   /// If the only user is an EDT, it is because the datablock hasn't been
   /// rewired yet.
+  auto opResult = op.getResult();
   if (op->hasOneUse() && isa<arts::EdtOp>(op->use_begin()->getOwner())) {
     llvm::errs() << "Datablock " << op << " hasn't been rewired yet\n";
     assert(false && "Datablock not rewired");
@@ -55,27 +123,185 @@ void DatablockNode::collectUses() {
   }
 
   /// Analyze uses
-  {
-    auto *dbBlock = op->getBlock();
-    for (auto &use : op->getUses()) {
-      ++numUses;
+  auto *dbBlock = op->getBlock();
+  for (auto &use : opResult.getUses()) {
+    ++numUses;
 
-      /// Set EDT user and position.
-      Operation *userOp = use.getOwner();
-      if (userOp->getBlock() != dbBlock)
-        continue;
-      if (auto edtOp = dyn_cast<arts::EdtOp>(userOp)) {
-        assert(!edtUser && "Multiple EDT users");
-        edtUser = edtOp;
-        auto deps = edtUser.getDependencies();
-        auto it = std::find_if(deps.begin(), deps.end(), [this](auto dep) {
-          return dep.getDefiningOp() == op;
-        });
-        userEdtPos = (it != deps.end()) ? std::distance(deps.begin(), it) : 0;
+    /// Set EDT user and position.
+    Operation *userOp = use.getOwner();
+    if (userOp->getBlock() != dbBlock)
+      continue;
+    if (auto edtOp = dyn_cast<arts::EdtOp>(userOp)) {
+      assert(!edtUser && "Multiple EDT users");
+      edtUser = edtOp;
+      auto deps = edtUser.getDependencies();
+      auto it = std::find_if(deps.begin(), deps.end(), [this](auto dep) {
+        return dep.getDefiningOp() == op;
+      });
+      userEdtPos = (it != deps.end()) ? std::distance(deps.begin(), it) : 0;
+    }
+
+    /// Collect loads/stores
+    if (isa<memref::LoadOp, memref::StoreOp, AffineReadOpInterface,
+            AffineWriteOpInterface>(userOp))
+      loadsAndStores.push_back(userOp);
+  }
+  useCount = numUses;
+}
+
+bool DatablockNode::computeRegion() {
+  auto computeRegionInner = [&](Operation *useOp,
+                                FlatLinearValueConstraints &cst) {
+    /// Gather loops
+    SmallVector<LoopInfo *, 4> loops;
+    DA->loopAnalysis->collectEnclosingLoops(useOp, loops);
+    unsigned depth = loops.size();
+
+    /// Affine load/store
+    if (isa<AffineReadOpInterface, AffineWriteOpInterface>(useOp)) {
+      MemRefRegion region(useOp->getLoc());
+      if (succeeded(region.compute(useOp, depth, nullptr, true))) {
+        cst = region.cst;
+        return true;
+      }
+      return false;
+    }
+
+    /// Generic memref load/store fallback
+    Value ptr;
+    if (auto ld = dyn_cast<memref::LoadOp>(useOp))
+      ptr = ld.getMemRef();
+    else if (auto st = dyn_cast<memref::StoreOp>(useOp))
+      ptr = st.getMemRef();
+    else
+      return false;
+
+    auto mt = ptr.getType().cast<MemRefType>();
+    unsigned rank = mt.getRank();
+
+    /// Start with no symbols/locals
+    cst = FlatLinearValueConstraints(rank, /*numSymbols=*/0, /*numLocals=*/0);
+
+    /// Append dimension variables matching memref rank
+    SmallVector<Value> noVals;
+    for (unsigned d = 0; d < rank; d++)
+      cst.appendDimVar(noVals);
+
+    /// static & dynamic bounds
+    for (unsigned d = 0; d < rank; ++d) {
+      /// 0 <= dim
+      cst.addBound(presburger::BoundType::LB, d, 0);
+      if (!mt.isDynamicDim(d)) {
+        /// dim <= size-1
+        cst.addBound(presburger::BoundType::UB, d, mt.getDimSize(d) - 1);
+      } else {
+        /// dynamic: use memref.dim to bound
+        unsigned sym = cst.appendSymbolVar({sizes[d]});
+        /// var <= sym-1  <=>  sym - var >= 1
+        SmallVector<int64_t, 8> coeffs(cst.getNumCols(), 0);
+        coeffs[sym] = 1;
+        coeffs[d] = -1;
+        coeffs[cst.getNumCols() - 1] = 1; // constant term
+        cst.addInequality(coeffs);
       }
     }
-    useCount = numUses;
+    return true;
+  };
+
+  /// 1. For affine operations uses exact region analysis
+  /// 2. For regular memref operations: Uses a union bounding box approach to
+  ///    approximate the access regions
+  FlatAffineValueConstraints aggCst;
+  bool haveRegion = false;
+  // auto builder = OpBuilder(op);
+
+  for (Operation *user : loadsAndStores) {
+    FlatAffineValueConstraints cst;
+    if (computeRegionInner(user, cst)) {
+      if (!haveRegion) {
+        aggCst = std::move(cst);
+        haveRegion = true;
+      } else {
+        if (!succeeded(aggCst.unionBoundingBox(cst)))
+          llvm_unreachable("unionBoundingBox failed");
+      }
+    }
+    LLVM_DEBUG(dbgs() << "DatablockNode::computeRegion: user: " << *user
+                      << " region: ");
+    LLVM_DEBUG(aggCst.print(dbgs()));
+    if (!haveRegion)
+      continue;
+
+    /// Build `bounds` and `symbols`
+    // SmallVector<Attribute> boundsArr, symArr;
+    // SmallVector<Value> values;
+    // aggCst.getValues(0, aggCst.getNumSymbolVars(), &values);
+    // for (Value sym : values)
+    //   symArr.push_back(SymbolRefAttr::get(sym.getDefiningOp()));
+    // for (unsigned d = 0; d < aggCst.getNumDimVars(); ++d) {
+    //   auto lb = aggCst.getConstantBound(presburger::BoundType::LB, d);
+    //   auto ub = aggCst.getConstantBound(presburger::BoundType::UB, d);
+    //   Attribute lbA =
+    //       lb ? builder.getIntegerAttr(builder.getIndexType(), *lb) :
+    //       symArr.front();
+    //   Attribute ubA =
+    //       ub ? IntegerAttr::get(builder.getIndexType(), *ub) :
+    //       symArr.front();
+    //   boundsArr.push_back(builder.getArrayAttr({lbA, ubA}));
+    // }
+
+    // // Per‐loop info
+    // SmallVector<Attribute> loopInfoArr;
+    // bool anyReduction = false;
+    // SmallVector<LoopInfo, 4> loops;
+    // collectEnclosingLoops(db, loops);
+
+    // for (auto &info : loops) {
+    //   bool parallel = false;
+    //   std::optional<int64_t> trip;
+    //   bool invariant = true;
+    //   bool strided = false;
+
+    //   // Invariance: if any access depends on this loop's IV, mark false
+    //   for (Operation *user : users) {
+    //     if (!isa<AffineReadOpInterface, AffineWriteOpInterface>(user))
+    //       continue;
+    //     if (info.isAffine && !affine::isInvariantAccess(info.affine, user))
+    //       invariant = false;
+    //   }
+
+    //   // Build loop dict
+    //   // SmallVector<NamedAttribute> fields;
+    //   // fields.push_back(
+    //   //     builder.getNamedAttr("depth",
+    //   //     builder.getI64IntegerAttr(info.depth)));
+    //   // fields.push_back(
+    //   //     builder.getNamedAttr("parallel",
+    //   builder.getBoolAttr(parallel)));
+    //   // fields.push_back(
+    //   //     builder.getNamedAttr("invariant",
+    //   builder.getBoolAttr(invariant)));
+    //   // fields.push_back(
+    //   //     builder.getNamedAttr("strided", builder.getBoolAttr(strided)));
+    //   // if (trip)
+    //   //   fields.push_back(builder.getNamedAttr(
+    //   //       "trip_count", builder.getI64IntegerAttr(*trip)));
+    //   // else
+    //   //   fields.push_back(
+    //   //       builder.getNamedAttr("trip_count",
+    //   builder.getStringAttr("?")));
+
+    //   // loopInfoArr.push_back(builder.getDictionaryAttr(fields));
+    // }
+
+    // Attach DomainAttr (version=2, kind="exact")
+    // auto domain = arts::DomainAttr::get(
+    //     builder.getArrayAttr(boundsArr), builder.getArrayAttr(symArr),
+    //     builder.getArrayAttr(loopInfoArr), builder.getBoolAttr(anyReduction),
+    //     builder.getStringAttr("exact"), builder.getI64IntegerAttr(2));
+    // db->setAttr("arts.domain", domain);
   }
+  return true;
 }
 
 //===----------------------------------------------------------------------===//
@@ -88,9 +314,8 @@ DatablockGraph::DatablockGraph(func::FuncOp func, DatablockAnalysis *DA)
 
   /// Create entry Node:
   {
-    entryDbNode = new DatablockNode(DA);
+    entryDbNode = new DatablockNode(this, nullptr);
     entryDbNode->id = 0;
-    entryDbNode->op = nullptr;
     entryDbNode->ptr = nullptr;
     nodes.push_back(entryDbNode);
   }
@@ -430,7 +655,6 @@ void DatablockGraph::print() {
     auto &n = *node;
     os << "  #" << n.id << " " << n.mode << "\n";
     os << "    " << n.op << "\n";
-    os << "    isLoopDependent=" << (n.isLoopDependent ? "true" : "false");
     os << " useCount=" << n.useCount;
     os << " hasPtrDb=" << (n.hasPtrDb ? "true" : "false");
     os << " userEdtPos=" << n.userEdtPos;
@@ -471,91 +695,17 @@ void DatablockGraph::computeStatistics() {
 }
 
 void DatablockGraph::collectNodes(Region &region) {
-  /// Start IDs from 1 to avoid conflict with entry node (0).
-  unsigned nextID = 0;
-
-  /// Collect loops and variables that depend on them.
-  DenseMap<Value, SmallVector<Operation *, 4>> loopValsMap;
-  DA->analyzeLoops(region, loopValsMap);
-
   /// Collect datablock nodes from the top-level region of a function.
   unsigned estimatedCount = 0;
   region.walk<mlir::WalkOrder::PreOrder>(
       [&](arts::DataBlockOp) { ++estimatedCount; });
   nodes.reserve(estimatedCount);
   region.walk<mlir::WalkOrder::PreOrder>([&](arts::DataBlockOp dbOp) {
-    LLVM_DEBUG(dbgs() << "Datablock node #" << nextID << ": " << dbOp << "\n");
-    /// Set node information.
-    DatablockNode *dbNode = new DatablockNode(DA);
-    assert(dbNode && "Failed to allocate DatablockNode");
-    auto &node = *dbNode;
-    node.id = ++nextID;
-    node.op = dbOp;
-    node.mode = dbOp.getMode();
-    node.ptr = dbOp.getPtr();
-    node.indices = dbOp.getIndices();
-    node.sizes = dbOp.getSizes();
-    node.elementType = dbOp.getElementType();
-    node.elementTypeSize =
-        cast<arith::ConstantIndexOp>(dbOp.getElementTypeSize().getDefiningOp())
-            .getValue()
-            .cast<IntegerAttr>()
-            .getInt();
-    node.resultType = dbOp.getResult().getType();
-
-    /// If affine map is present, set it.
-    // if (auto affineMap = dbOp.getAffineMap())
-    //   node.affineMap = *affineMap;
-
-    /// Add 'hasSingleSize' attribute if the datablock has a single size of 1 or
-    /// no size
-    node.hasSingleSize = false;
-    if (node.sizes.empty()) {
-      dbOp.setHasSingleSize();
-      node.hasSingleSize = true;
-    } else if (node.sizes.size() == 1) {
-      if (auto cstOp = node.sizes[0].getDefiningOp<arith::ConstantIndexOp>()) {
-        if (cstOp.value() == 1) {
-          dbOp.setHasSingleSize();
-          node.hasSingleSize = true;
-        }
-      }
-    }
-
-    /// Add 'hasPtrDb' attribute if the base is a datablock.
-    if (auto parentDb =
-            dyn_cast_or_null<arts::DataBlockOp>(node.ptr.getDefiningOp())) {
-      dbOp.setHasPtrDb();
-      node.hasPtrDb = true;
-      node.parent = getNode(parentDb);
-      for (auto &e : node.parent->effects)
-        node.effects.push_back(e);
-
-      node.hasGuid = (!node.parent->hasSingleSize || node.indices.empty());
-      if (node.hasGuid)
-        dbOp.setHasGuid();
-    } else {
-      node.hasPtrDb = false;
-      /// Collect memory effects if the parent is not a datablock.
-      if (auto memEff = dyn_cast<MemoryEffectOpInterface>(dbOp.getOperation()))
-        memEff.getEffects(node.effects);
-    }
-
-    /// Try to get the EDT parent of the datablock.
-    if (auto parentOp = dbOp->getParentOfType<arts::EdtOp>())
-      node.edtParent = parentOp;
-
-    /// Mark the node as loop dependent if any of its indices depend on a
-    /// loop.
-    for (auto offVal : node.indices) {
-      if (loopValsMap.count(offVal))
-        node.isLoopDependent = true;
-    }
-
-    /// Collect and analyze uses of the datablock.
-    node.collectUses();
-
+    LLVM_DEBUG(dbgs() << "Datablock node #" << nodes.size() << ": " << dbOp
+                      << "\n");
     /// Add the node to the graph.
+    DatablockNode *dbNode = new DatablockNode(this, dbOp);
+    assert(dbNode && "Failed to allocate DatablockNode");
     nodes.push_back(dbNode);
     nodeMap[dbOp] = dbNode;
   });
@@ -584,12 +734,16 @@ bool DatablockGraph::isOnlyDependentOnEntry(DatablockNode &node) {
 //===----------------------------------------------------------------------===//
 DatablockAnalysis::DatablockAnalysis(Operation *module) {
   ModuleOp mod = cast<ModuleOp>(module);
+  loopAnalysis = new LoopAnalysis(mod);
   mod->walk([&](func::FuncOp func) { getOrCreateGraph(func); });
 }
 
 DatablockAnalysis::~DatablockAnalysis() {
+  // LLVM_DEBUG(DBGS() << "Deleting DatablockAnalysis\n");
   for (auto &pair : functionGraphMap)
     delete pair.second;
+  functionGraphMap.clear();
+  delete loopAnalysis;
 }
 
 /// Public interface
@@ -690,39 +844,3 @@ DatablockNodeComp DatablockAnalysis::compare(DatablockNode &A,
 }
 
 /// Analysis
-void DatablockAnalysis::analyzeLoops(
-    Region &region, DenseMap<Value, SmallVector<Operation *, 4>> &valMap) {
-  auto loopBfs = [&](Operation *loopOp, Value iv) {
-    DenseSet<Value> visited;
-    SmallVector<Value, 8> queue;
-    visited.insert(iv);
-    queue.push_back(iv);
-    while (!queue.empty()) {
-      Value cur = queue.pop_back_val();
-      for (auto &use : cur.getUses()) {
-        Operation *owner = use.getOwner();
-        for (Value res : owner->getResults()) {
-          if (visited.insert(res).second)
-            queue.push_back(res);
-        }
-      }
-    }
-    for (auto &val : visited)
-      valMap[val].push_back(loopOp);
-  };
-
-  /// Analyze scf::ForOp loops.
-  SmallVector<scf::ForOp, 8> scfLoops;
-  region.walk([&](scf::ForOp fop) { scfLoops.push_back(fop); });
-  for (auto fop : scfLoops)
-    loopBfs(fop, fop.getInductionVar());
-
-  /// Analyze affine::AffineForOp loops.
-  SmallVector<affine::AffineForOp, 8> affineLoops;
-  region.walk([&](affine::AffineForOp aop) { affineLoops.push_back(aop); });
-  for (auto aop : affineLoops)
-    loopBfs(aop, aop.getInductionVar());
-}
-
-} // namespace arts
-} // namespace mlir
