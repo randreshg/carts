@@ -67,13 +67,11 @@ bool isArtsOp(Operation *op) {
 #define GET_TYPEDEF_CLASSES
 #include "arts/ArtsOpsTypes.cpp.inc"
 
-
 //===----------------------------------------------------------------------===//
 // Arts Dialect Attributes - method definitions
 //===----------------------------------------------------------------------===//
 #define GET_ATTRDEF_CLASSES
 #include "arts/ArtsOpsAttributes.cpp.inc"
-
 
 //===----------------------------------------------------------------------===//
 // UndefOp
@@ -138,7 +136,7 @@ void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
   ::llvm::copy(
       ::llvm::ArrayRef<int32_t>({1, 1, static_cast<int32_t>(indices.size()),
                                  static_cast<int32_t>(sizes.size()),
-                                 (inEvent ? 1 : 0) + (outEvent ? 1 : 0)}),
+                                 (inEvent ? 1 : 0), (outEvent ? 1 : 0)}),
       odsState.getOrAddProperties<Properties>().operandSegmentSizes.begin());
   odsState.getOrAddProperties<Properties>().mode =
       odsBuilder.getStringAttr(mode);
@@ -150,11 +148,10 @@ void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
 void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
                         Type subview, StringRef mode, Value ptr,
                         Type elementType, Value elementTypeSize,
-                        ValueRange indices, ValueRange sizes,
-                        Value inEvent, Value outEvent,
-                        DomainAttr domain) {
-  build(odsBuilder, odsState, subview, mode, ptr, elementType,
-        elementTypeSize, indices, sizes, inEvent, outEvent);
+                        ValueRange indices, ValueRange sizes, Value inEvent,
+                        Value outEvent, DomainAttr domain) {
+  build(odsBuilder, odsState, subview, mode, ptr, elementType, elementTypeSize,
+        indices, sizes, inEvent, outEvent);
   odsState.addAttribute("domain", domain);
 }
 
@@ -299,6 +296,7 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
   segmentSizes.push_back(static_cast<int32_t>(sizeOperands.size()));
   segmentSizes.push_back(static_cast<int32_t>(inEventOperand.size()));
   segmentSizes.push_back(static_cast<int32_t>(outEventOperand.size()));
+
   std::copy(
       segmentSizes.begin(), segmentSizes.end(),
       result.getOrAddProperties<Properties>().operandSegmentSizes.begin());
@@ -354,14 +352,13 @@ void DataBlockOp::print(OpAsmPrinter &printer) {
   }
 
   /// Optionally print the affineMap attribute if present.
-  if (auto domainAttr = op->getAttr("domainAttr"))
-    printer << ", domainAttr=" << domainAttr;
+  if (auto domainAttr = op->getAttr("domain"))
+    printer << ", domain=" << domainAttr;
 
   // Print all remaining attributes except "operandSegmentSizes"
-  // and those already printed ("mode", "elementType", "domainAttr").
+  // and those already printed ("mode", "elementType", "domain").
   printer.printOptionalAttrDict(
-      op->getAttrs(),
-      {"mode", "elementType", "domainAttr", "operandSegmentSizes"});
+      op->getAttrs(), {"mode", "elementType", "domain", "operandSegmentSizes"});
 
   /// Print arrow and the result type.
   printer << " -> ";
@@ -392,9 +389,7 @@ bool DataBlockOp::hasSingleSize() {
   return getOperation()->hasAttr("singleSize");
 }
 
-bool DataBlockOp::hasGuid() {
-  return getOperation()->hasAttr("hasGuid");
-}
+bool DataBlockOp::hasGuid() { return getOperation()->hasAttr("hasGuid"); }
 
 void DataBlockOp::setHasPtrDb() {
   getOperation()->setAttr("ptrDb", UnitAttr::get(getContext()));
@@ -405,7 +400,6 @@ void DataBlockOp::setHasSingleSize() {
 void DataBlockOp::setHasGuid() {
   getOperation()->setAttr("hasGuid", UnitAttr::get(getContext()));
 }
-
 
 //===----------------------------------------------------------------------===//
 // EdtOp

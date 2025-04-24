@@ -158,6 +158,7 @@ void setupPassManager(MLIRContext &context, PassManager &pm) {
     pm.addPass(createLowerAffinePass());
     pm.addPass(createCanonicalizerPass());
   }
+  
   pm.addPass(arts::createConvertArtsToLLVMPass());
 
   /// Affine optimizations.

@@ -7,7 +7,9 @@
 #ifndef CARTS_ANALYSIS_DATABLOCKANALYSIS_H
 #define CARTS_ANALYSIS_DATABLOCKANALYSIS_H
 
+#include "arts/Analysis/LoopAnalysis.h"
 #include "arts/ArtsDialect.h"
+#include "mlir/Analysis/FlatLinearValueConstraints.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/AffineMap.h"
@@ -31,6 +33,7 @@ namespace arts {
 
 class DatablockAnalysis;
 class DatablockNode;
+class DatablockGraph;
 enum DatablockNodeComp { Equal, BaseAlias, Different };
 
 /// An Environment maps each db op to the latest Node that defines it.
@@ -45,16 +48,13 @@ class DatablockNode {
   friend class DatablockAnalysis;
 
 public:
-  DatablockNode(DatablockAnalysis *DA) : DA(DA) {}
+  DatablockNode(DatablockGraph *DG, arts::DataBlockOp dbOp);
 
   /// Interface
   bool isWriter() { return mode == "out" || mode == "inout"; }
   bool isReader() { return mode == "in" || mode == "inout"; }
   bool isOnlyReader() { return mode == "in"; }
   bool isOnlyWriter() { return mode == "out"; }
-
-  /// Uses
-  void collectUses();
 
   /// Attributes
   unsigned id = 0;
@@ -65,13 +65,12 @@ public:
   Value ptr;
   SmallVector<Value, 4> indices, sizes;
   Type elementType;
-  uint64_t elementTypeSize;
+  Value elementTypeSize;
   MemRefType resultType;
-  AffineMap affineMap;
+  DomainAttr domain;
   bool hasPtrDb, hasSingleSize, hasGuid;
 
   /// Analysis results
-  bool isLoopDependent = false;
   SmallVector<MemoryEffects::EffectInstance, 2> effects;
 
   /// Uses
@@ -86,9 +85,19 @@ public:
   SetVector<unsigned> duplicates;
   /// Set of nodes that alias this node.
   SetVector<unsigned> aliases;
+  /// List of stores and loads that access the same db.
+  SmallVector<Operation *, 4> loadsAndStores;
 
 private:
+  DatablockGraph *DG;
   DatablockAnalysis *DA;
+
+  /// Uses
+  void collectInfo();
+  void collectUses();
+
+  /// Compute region for affine ops or fallback for memref ops.
+  bool computeRegion();
 };
 
 //===----------------------------------------------------------------------===//
@@ -102,6 +111,7 @@ public:
       delete node;
   }
   friend class DatablockAnalysis;
+  friend class DatablockNode;
   using Edge = std::pair<unsigned, unsigned>; // producerID, consumerID
 
   /// Interface
@@ -175,12 +185,13 @@ class DatablockAnalysis {
 public:
   explicit DatablockAnalysis(Operation *module);
   ~DatablockAnalysis();
-
   friend class DatablockGraph;
+  friend class DatablockNode;
 
   /// Get the graph for a given function, or create it if it does not exist.
   DatablockGraph *getOrCreateGraph(func::FuncOp func);
   bool isInvalidated(const AnalysisManager::PreservedAnalyses &pa) {
+    printf("DatablockAnalysis::isInvalidated\n");
     return !pa.isPreserved<arts::DatablockAnalysis>();
   }
 
@@ -191,16 +202,14 @@ private:
   bool ptrMayAlias(DatablockNode &A, Value val);
   DatablockNodeComp compare(DatablockNode &A, DatablockNode &B);
 
-  /// Analysis the loops of the region and collect the values that depend on
-  /// them
-  void analyzeLoops(Region &region,
-                    DenseMap<Value, SmallVector<Operation *, 4>> &valMap);
-
   /// Other
   void printGraph(func::FuncOp func);
 
   /// Map from function to its dependency graph.
   DenseMap<func::FuncOp, DatablockGraph *> functionGraphMap;
+
+  /// Loop analysis.
+  LoopAnalysis *loopAnalysis;
 };
 } // namespace arts
 } // namespace mlir

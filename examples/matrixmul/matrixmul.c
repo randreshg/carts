@@ -40,7 +40,7 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < N; i += BS) {
       for (int j = 0; j < N; j += BS) {
         for (int k = 0; k < N; k += BS) {
-#pragma omp task
+          #pragma omp task
           {
             for (int ii = i; ii < i + BS; ii++)
               for (int jj = j; jj < j + BS; jj++)

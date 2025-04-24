@@ -1,11 +1,11 @@
 ///==========================================================================
 /// File: StringAnalysis.h
 ///
-/// This pass analyzes the module and itentifies the set of string memref.
+/// This class analyzes the module and itentifies the set of string memref.
 ///==========================================================================
 
-#ifndef MLIR_ANALYSIS_STRINGANALYSIS_H
-#define MLIR_ANALYSIS_STRINGANALYSIS_H
+#ifndef CARTS_ANALYSIS_STRINGANALYSIS_H
+#define CARTS_ANALYSIS_STRINGANALYSIS_H
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -64,4 +64,4 @@ private:
 } // namespace arts
 } // namespace mlir
 
-#endif // MLIR_ANALYSIS_STRINGANALYSIS_H
+#endif // CARTS_ANALYSIS_STRINGANALYSIS_H
