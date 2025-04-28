@@ -96,8 +96,27 @@ private:
   void collectInfo();
   void collectUses();
 
-  /// Compute region for affine ops or fallback for memref ops.
+  /// Implements the logic to analyze the memory access patterns (loads and
+  /// stores) associated with a DatablockNode. The goal is to determine the
+  /// accessed sub-region within the datablock's memory. This region is
+  /// represented by minimum and maximum constant bounds for each dimension,
+  /// supplemented by symbolic bounds when constant bounds cannot be determined
+  /// statically.
   bool computeRegion();
+
+  /// Analyzes a single index value used in a memory access to determine its
+  /// potential range. It updates the minimum/maximum constant bounds
+  /// (`dimMin`, `dimMax`) and collects any symbolic parts of the index
+  /// expression (`symbolicBounds`).
+  void analyzeIndexValue(Value indexVal, Operation *contextOp,
+                         std::optional<int64_t> &dimMin,
+                         std::optional<int64_t> &dimMax,
+                         SmallVector<Value> &symbolicBounds);
+
+  /// Creates a symbolic value representing the sum of a base symbolic value and
+  /// a constant offset.
+  Value createOffsetSymbolicValue(Value sym, int64_t offset,
+                                  Operation *contextOp);
 };
 
 //===----------------------------------------------------------------------===//
@@ -191,7 +210,6 @@ public:
   /// Get the graph for a given function, or create it if it does not exist.
   DatablockGraph *getOrCreateGraph(func::FuncOp func);
   bool isInvalidated(const AnalysisManager::PreservedAnalyses &pa) {
-    printf("DatablockAnalysis::isInvalidated\n");
     return !pa.isPreserved<arts::DatablockAnalysis>();
   }
 

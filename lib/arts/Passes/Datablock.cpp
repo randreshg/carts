@@ -11,8 +11,8 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LLVM.h"
-
 /// Arts
 #include "ArtsPassDetails.h"
 #include "arts/Analysis/DataBlockAnalysis.h"
@@ -24,6 +24,8 @@
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/CSE.h"
+#include "mlir/Transforms/DialectConversion.h"
 /// Debug
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
@@ -72,14 +74,22 @@ void DatablockPass::runOnOperation() {
 
   /// Iterate over every function in the module.
   module->walk([&](func::FuncOp func) {
+    // ConversionPatternRewriter rewriter(builder.getContext());
+    // DominanceInfo domInfo(func);
+    // bool hasChanged = false;
+    // eliminateCommonSubExpressions(rewriter, domInfo, func, &hasChanged);
+    // if(hasChanged) {
+    //   LLVM_DEBUG(dbgs() << "CSE changed function: " << func.getName() <<
+    //   "\n"); func->dump();
+    // }
     auto *graph = dbAnalysis.getOrCreateGraph(func);
     if (!graph || !graph->hasNodes()) {
       LLVM_DEBUG(dbgs() << "No graph for function: " << func.getName() << "\n");
       return;
     }
     graph->print();
+    canonicalizeDimOps(graph);
     changed |= convertToParameters(graph);
-    changed |= canonicalizeDimOps(graph);
   });
 
   /// Preserve analysis results if no changes were made.
