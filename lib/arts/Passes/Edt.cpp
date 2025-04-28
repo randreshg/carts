@@ -12,12 +12,14 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Support/LLVM.h"
+#include "mlir/Transforms/RegionUtils.h"
+#include "polygeist/Dialect.h"
 #include "polygeist/Ops.h"
 /// Arts
 #include "ArtsPassDetails.h"
-#include "arts/Passes/ArtsPasses.h"
 #include "arts/Analysis/DataBlockAnalysis.h"
 #include "arts/ArtsDialect.h"
+#include "arts/Passes/ArtsPasses.h"
 /// Other
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
@@ -82,7 +84,7 @@ void EdtPass::convertParallelIntoSingle(EdtOp &op) {
   /// attribute.
   singleOp->moveBefore(op);
   singleOp.clearIsSingleAttr();
-  
+
   /// Set sync attribute
   singleOp.setIsSyncAttr();
 
@@ -94,6 +96,7 @@ void EdtPass::runOnOperation() {
   ModuleOp module = getOperation();
   LLVM_DEBUG(dbgs() << "\n" << line << "EdtPass STARTED\n" << line);
 
+  /// Convert parallel EDTs into single EDTs.
   SmallVector<EdtOp> parallelOps;
   module.walk([&](EdtOp edt) {
     if (edt.isParallel())
@@ -102,6 +105,69 @@ void EdtPass::runOnOperation() {
 
   for (auto op : parallelOps)
     convertParallelIntoSingle(op);
+
+  /// Analyzes the EDT environment to check if there is any parameter that loads
+  /// a memref and indices of any dependency. If so, it creates a new load
+  /// operation at the start of the region and replaces all the uses of the
+  /// parameter.
+  module.walk([&](EdtOp edt) {
+    SetVector<Value> usedValues;
+    auto &edtRegion = edt.getRegion();
+    getUsedValuesDefinedAbove(edtRegion, usedValues);
+
+    // Helper function to recursively clone operations and their pointer
+    // dependencies
+    std::function<Value(Value, OpBuilder &, DenseMap<Value, Value> &)>
+        cloneWithDeps = [&](Value val, OpBuilder &builder,
+                            DenseMap<Value, Value> &valueMap) -> Value {
+      /// If already cloned, return the mapped value
+      if (valueMap.count(val))
+        return valueMap[val];
+
+      /// Return if the value is not an LLVM pointer type
+      if (!val.getDefiningOp() || val.getType().isIntOrIndexOrFloat() ||
+          val.getType().isa<MemRefType>())
+        return val;
+
+      /// First clone dependencies
+      SmallVector<Value, 4> newOperands;
+      for (Value operand : val.getDefiningOp()->getOperands()) {
+        if (operand.getDefiningOp() &&
+            operand.getType().isa<LLVM::LLVMPointerType>()) {
+          newOperands.push_back(cloneWithDeps(operand, builder, valueMap));
+        } else {
+          newOperands.push_back(operand);
+        }
+      }
+      /// Clone the operation itself
+      auto clonedOp = val.getDefiningOp()->clone();
+      // Update operands with the cloned versions
+      for (auto [idx, newOp] : llvm::enumerate(newOperands)) {
+        clonedOp->setOperand(idx, newOp);
+      }
+      builder.insert(clonedOp);
+
+      /// Store the mapping
+      valueMap[val] = clonedOp->getResult(0);
+      return clonedOp->getResult(0);
+    };
+
+    DenseMap<Value, Value> valueMap;
+    for (Value operand : usedValues) {
+      /// Skip non-pointer types
+      if (!operand.getType().isa<LLVM::LLVMPointerType>())
+        continue;
+
+      OpBuilder builder(edtRegion.getContext());
+      builder.setInsertionPointToStart(&edtRegion.front());
+
+      // Clone operation and its dependencies recursively
+      Value newVal = cloneWithDeps(operand, builder, valueMap);
+      if (newVal != operand) {
+        replaceInRegion(edtRegion, operand, newVal);
+      }
+    }
+  });
 
   /// Remove all the operations marked for removal.
   OpBuilder builder(module.getContext());

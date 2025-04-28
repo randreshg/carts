@@ -488,6 +488,28 @@ void EdtOp::print(OpAsmPrinter &printer) {
                       /*printBlockTerminators=*/true);
 }
 
+void EdtOp::getEffects(
+    SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
+  /// Collect all effects from the dependencies
+  auto dependencies = getDependencies();
+
+  /// If no dependencies, assume it has effects on all the memrefs
+  /// and add read/write effects
+  if (dependencies.empty()) {
+    effects.emplace_back(MemoryEffects::Read::get(),
+                         ::mlir::SideEffects::DefaultResource::get());
+    effects.emplace_back(MemoryEffects::Write::get(),
+                         ::mlir::SideEffects::DefaultResource::get());
+    return;
+  }
+
+  /// Otherwise, collect effects from each dependency
+  for (auto dep : dependencies) {
+    if (auto dbOp = dep.getDefiningOp<DataBlockOp>())
+      dbOp.getEffects(effects);
+  }
+}
+
 /// Retrieve dependencies.
 SmallVector<Value> EdtOp::getDependenciesVector() {
   auto dependencies = getDependencies();

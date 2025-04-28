@@ -296,65 +296,6 @@ void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
       return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr, subIndexPtr);
     };
 
-    // if (dbFrom.hasSingleSize() && !dbFrom.hasPtrDb()) {
-    //   /// If the datablock has a single size, we can directly replace the old
-    //   op
-    //   /// with the new one.
-    //   auto loc = dbTo.getLoc();
-
-    //   /// Replace uses in EDT
-    //   EdtOp edtUser = nullptr;
-    //   dbFrom.getResult().replaceUsesWithIf(dbTo, [&](OpOperand &operand) {
-    //     if (!isa<arts::EdtOp>(operand.getOwner()))
-    //       return false;
-
-    //     /// Inside of the EDT user, insert a load op.
-    //     edtUser = cast<arts::EdtOp>(operand.getOwner());
-    //     AC->setInsertionPoint(&*edtUser.getRegion().front().begin());
-    //     auto newPtr =
-    //         builder
-    //             .create<LLVM::LoadOp>(loc, dbFrom.getResult().getType(),
-    //                                   AC->castToLLVMPtr(dbTo, loc))
-    //             .getResult();
-
-    //     /// Replace uses in the EDT user except for datablock ops.
-    //     auto &region = edtUser.getRegion();
-    //     dbFrom.getResult().replaceUsesWithIf(newPtr, [&](OpOperand &op) {
-    //       return region.isAncestor(op.getOwner()->getParentRegion()) &&
-    //              !isa<arts::DataBlockOp>(op.getOwner());
-    //     });
-    //     return true;
-    //   });
-
-    //   /// Replace uses of Datablock in EDT
-    //   assert(edtUser && "Datablock not used in EDT");
-    //   auto &region = edtUser.getRegion();
-    //   dbFrom.getResult().replaceUsesWithIf(dbTo, [&](OpOperand &op) {
-    //     return region.isAncestor(op.getOwner()->getParentRegion()) &&
-    //            isa<arts::DataBlockOp>(op.getOwner());
-    //   });
-
-    //   /// Create load for uses outside of EDTUser.
-    //   AC->setInsertionPointAfter(dbTo);
-    //   auto newPtr = builder
-    //                     .create<LLVM::LoadOp>(loc,
-    //                     dbFrom.getResult().getType(),
-    //                                           AC->castToLLVMPtr(dbTo, loc))
-    //                     .getResult();
-    //   dbFrom.getResult().replaceAllUsesWith(newPtr);
-
-    // } else if (dbFrom.hasSingleSize() && dbFrom.hasPtrDb() &&
-    //            !dbFrom.hasGuid()) {
-    //   llvm::errs()
-    //       << "Datablock with pointer datablock must have a GUID
-    //       associated\n";
-    //   assert(dbFrom.hasGuid() &&
-    //          "Datablock with pointer datablock must have "
-    //          "a GUID associated - Opposite case not handled yet");
-    // } else {
-
-    // }
-
     /// If not, load the appropriate pointer type and replace the old op with
     /// the new one.
     for (auto &use : llvm::make_early_inc_range(dbFrom->getUses())) {

@@ -13,7 +13,7 @@ all: $(FILENAME)
 
 # Generate LLVM IR from MLIR std dialect
 %.ll: %.mlir
-	carts $< -affine-opt -emit-llvm -o $@
+	carts $< -O3 -emit-llvm -o $@
 
 # Generate binary	
 $(FILENAME): $(FILENAME).ll

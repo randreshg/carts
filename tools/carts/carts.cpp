@@ -63,9 +63,8 @@ static cl::opt<std::string> OutputFilename("o", cl::desc("Output filename"),
 static cl::opt<bool> ArtsOpt("arts-opt", cl::desc("Apply ARTS Optimizations"),
                              cl::init(false));
 
-static cl::opt<bool> AffineOpt("affine-opt",
-                               cl::desc("Apply Affine Optimizations"),
-                               cl::init(false));
+static cl::opt<bool> Opt("O3", cl::desc("Apply Optimizations"),
+                         cl::init(false));
 
 static cl::opt<bool> EmitLLVM("emit-llvm", cl::desc("Emit LLVM IR output"),
                               cl::init(false));
@@ -129,66 +128,98 @@ void initializeContext(MLIRContext &context) {
 }
 
 /// Configure the pass manager with the optimization passes.
-void setupPassManager(MLIRContext &context, PassManager &pm) {
-  /// Basic inlining and affine lowering.
-  pm.addPass(createInlinerPass());
-  pm.addPass(createLowerAffinePass());
+void setupPassManager(mlir::ModuleOp module, MLIRContext &context) {
 
-  /// Convert OpenMP Dialect to ARTS Dialect.
+  /// Initial cleanup and simplification
+  {
+    PassManager pm(&context);
+    mlir::OpPassManager &optPM = pm.nest<mlir::func::FuncOp>();
+    optPM.addPass(createLowerAffinePass());
+    optPM.addPass(polygeist::createCanonicalizeForPass());
+
+    if (Opt) {
+      optPM.addPass(createCSEPass());
+      optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+      optPM.addPass(polygeist::createRaiseSCFToAffinePass());
+      optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+      optPM.addPass(polygeist::replaceAffineCFGPass());
+      optPM.addPass(affine::createAffineExpandIndexOpsPass());
+      optPM.addPass(affine::createAffineScalarReplacementPass());
+      optPM.addPass(polygeist::replaceAffineCFGPass());
+      optPM.addPass(createLoopInvariantCodeMotionPass());
+      optPM.addPass(createCSEPass());
+      optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+      optPM.addPass(createLowerAffinePass());
+    }
+
+    optPM.addPass(createCSEPass());
+    optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+
+    if (mlir::failed(pm.run(module))) {
+      llvm::errs() << "Error simplyfing the IR";
+      module->dump();
+      return;
+    }
+  }
+
+  /// ARTS dialect conversion and optimization
+  PassManager pm(&context);
   pm.addPass(arts::createConvertOpenMPtoARTSPass());
   pm.addPass(arts::createEdtPass());
   pm.addPass(arts::createHoistInvariantOpsPass());
   pm.addPass(arts::createCreateDatablocksPass(IdentifyDatablocks));
-  pm.addPass(createCanonicalizerPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(polygeist::createCanonicalizeForPass());
 
-  /// Raise to affine for better datablock analysis.
-  if (AffineOpt) {
-    mlir::OpPassManager &optPM = pm.nest<mlir::func::FuncOp>();
-    optPM.addPass(polygeist::createRaiseSCFToAffinePass());
-    optPM.addPass(polygeist::replaceAffineCFGPass());
-  }
-
+  /// Datablock pass to identify and optimize data dependencies
   pm.addPass(arts::createDatablockPass());
   pm.addPass(arts::createCreateEventsPass());
   pm.addPass(arts::createCreateEpochsPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
 
-  /// Lowering to LLVM dialect - createConvertArtsToLLVMPass requires
-  /// the affine dialect to be lowered.
-  if (AffineOpt) {
-    pm.addPass(createLowerAffinePass());
-    pm.addPass(createCanonicalizerPass());
-  }
-  
+  /// Convert ARTS to LLVM
   pm.addPass(arts::createConvertArtsToLLVMPass());
+  if (mlir::failed(pm.run(module))) {
+    llvm::errs() << "Error when running ARTS Passes";
+    module->dump();
+    return;
+  }
 
-  /// Affine optimizations.
-  if (AffineOpt) {
-    mlir::OpPassManager &optPM = pm.nest<mlir::func::FuncOp>();
+  /// Otimizations (if enabled)
+  if (Opt) {
+    PassManager pm2(&context);
+    mlir::OpPassManager &optPM = pm2.nest<mlir::func::FuncOp>();
     optPM.addPass(createCSEPass());
-    optPM.addPass(createCanonicalizerPass());
-    optPM.addPass(polygeist::createRaiseSCFToAffinePass());
-    optPM.addPass(createCanonicalizerPass());
-    optPM.addPass(polygeist::replaceAffineCFGPass());
-    optPM.addPass(affine::createAffineExpandIndexOpsPass());
-    optPM.addPass(affine::createAffineScalarReplacementPass());
-    optPM.addPass(polygeist::replaceAffineCFGPass());
+    optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+    optPM.addPass(createMem2Reg());
+    optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+    optPM.addPass(createControlFlowSinkPass());
+    optPM.addPass(polygeist::createPolygeistCanonicalizePass());
     optPM.addPass(createLoopInvariantCodeMotionPass());
     optPM.addPass(createCSEPass());
-    optPM.addPass(createCanonicalizerPass());
-    optPM.addPass(createLowerAffinePass());
-    optPM.addPass(createCSEPass());
-    optPM.addPass(createCanonicalizerPass());
+    optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+
+    if (mlir::failed(pm2.run(module))) {
+      llvm::errs() << "Error when running optimizations";
+      module->dump();
+      return;
+    }
   }
 
-  /// Convert the module to LLVM IR.
-  if (!EmitLLVM)
-    return;
-
-  pm.addPass(createCSEPass());
-  pm.addPass(createCanonicalizerPass());
-  pm.addPass(polygeist::createConvertPolygeistToLLVMPass());
-  pm.addPass(createCanonicalizerPass());
-  pm.addPass(createCSEPass());
+  /// LLVM IR conversion (if enabled)
+  if (EmitLLVM) {
+    PassManager pm3(&context);
+    pm3.addPass(createCSEPass());
+    pm3.addPass(polygeist::createPolygeistCanonicalizePass());
+    pm3.addPass(polygeist::createConvertPolygeistToLLVMPass());
+    pm3.addPass(polygeist::createPolygeistCanonicalizePass());
+    pm3.addPass(createCSEPass());
+    if (mlir::failed(pm3.run(module))) {
+      llvm::errs() << "Error when emitting LLVM IR";
+      module->dump();
+      return;
+    }
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -221,14 +252,7 @@ int main(int argc, char **argv) {
 
   /// Iteratively run the pass pipeline to drive IR to a fixpoint.
   for (unsigned i = 0; i < OptIterations; ++i) {
-    PassManager pm(&context);
-    (void)applyPassManagerCLOptions(pm);
-    setupPassManager(context, pm);
-    if (failed(pm.run(*module))) {
-      llvm::errs() << "Error: Failed to apply passes on iteration " << i
-                   << "\n";
-      return 1;
-    }
+    setupPassManager(module.get(), context);
   }
 
   /// Translate the optimized module to LLVM IR and write output.

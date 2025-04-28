@@ -101,7 +101,8 @@ def DataBlockOp : Arts_Op<"datablock",
 // arts.edt
 //===----------------------------------------------------------------------===//
 def EdtOp : Arts_Op<"edt",
-  [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
+  [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, 
+   SingleBlockImplicitTerminator<"arts::YieldOp">]> {
 
   let summary = "Event-Driven Task in ARTS";
   let description = [{
