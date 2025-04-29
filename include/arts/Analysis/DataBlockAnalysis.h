@@ -18,6 +18,7 @@
 #include "mlir/IR/Types.h"
 #include "mlir/Pass/AnalysisManager.h"
 #include "mlir/Support/LLVM.h"
+#include "polygeist/Ops.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SetVector.h"
@@ -63,11 +64,11 @@ public:
   /// Db attributtes
   StringRef mode;
   Value ptr;
-  SmallVector<Value, 4> indices, sizes;
+  SmallVector<Value, 4> indices, offsets, sizes;
+  SmallVector<ValueOrInt> dimMin, dimMax;
   Type elementType;
   Value elementTypeSize;
   MemRefType resultType;
-  DomainAttr domain;
   bool hasPtrDb, hasSingleSize, hasGuid;
 
   /// Analysis results
@@ -105,18 +106,10 @@ private:
   bool computeRegion();
 
   /// Analyzes a single index value used in a memory access to determine its
-  /// potential range. It updates the minimum/maximum constant bounds
-  /// (`dimMin`, `dimMax`) and collects any symbolic parts of the index
-  /// expression (`symbolicBounds`).
-  void analyzeIndexValue(Value indexVal, Operation *contextOp,
-                         std::optional<int64_t> &dimMin,
-                         std::optional<int64_t> &dimMax,
-                         SmallVector<Value> &symbolicBounds);
-
-  /// Creates a symbolic value representing the sum of a base symbolic value and
-  /// a constant offset.
-  Value createOffsetSymbolicValue(Value sym, int64_t offset,
-                                  Operation *contextOp);
+  /// potential range. It updates the minimum/maximum constant or symbolic
+  /// bounds (dimMin, dimMax).
+  void analyzeIndexValue(Value indexVal, SetVector<ValueOrInt> &dimMin,
+                         SetVector<ValueOrInt> &dimMax);
 };
 
 //===----------------------------------------------------------------------===//
@@ -209,6 +202,7 @@ public:
 
   /// Get the graph for a given function, or create it if it does not exist.
   DatablockGraph *getOrCreateGraph(func::FuncOp func);
+  bool invalidateGraph(func::FuncOp func);
   bool isInvalidated(const AnalysisManager::PreservedAnalyses &pa) {
     return !pa.isPreserved<arts::DatablockAnalysis>();
   }

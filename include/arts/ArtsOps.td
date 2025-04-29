@@ -62,12 +62,12 @@ def DataBlockOp : Arts_Op<"datablock",
     StrAttr:$mode,                             // Dependency mode (e.g., "in", "out", "inout")
     AnyMemRef:$ptr,                            // Base ptr
     TypeAttr:$elementType,                     // Element type for the subview (or memref type)
-    Index:$elementTypeSize,                    // Size (number of elements) associated with that type
+    Index:$elementTypeSize,                    // Size associated with that type
+    Variadic<Index>:$offsets,                  // Offsets for the subview
     Variadic<Index>:$indices,                  // Indices for the subview
     Variadic<Index>:$sizes,                    // Sizes for the subview
     Optional<AnyType>:$inEvent,                // Input event associated with the DB
-    Optional<AnyType>:$outEvent,               // Output event associated with the DB
-    OptionalAttr<DomainAttr>:$domain           // Domain attribute
+    Optional<AnyType>:$outEvent                // Output event associated with the DB
   );
 
   let results = (outs AnyMemRef:$subview);     // Produces a memref
@@ -76,15 +76,24 @@ def DataBlockOp : Arts_Op<"datablock",
   let skipDefaultBuilders = 1;
   let builders = [
     OpBuilder<(ins
-      "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, "Value":$elementTypeSize,
-      "ValueRange":$indices, "ValueRange":$sizes)>,
+      "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType,
+      "Value":$elementTypeSize, "ValueRange":$indices, "ValueRange":$sizes)>,
     OpBuilder<(ins
-      "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, "Value":$elementTypeSize,
-      "ValueRange":$indices, "ValueRange":$sizes, "Value":$inEvent, "Value":$outEvent)>,
+      "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType,
+      "Value":$elementTypeSize, "ValueRange":$indices, "ValueRange":$sizes,
+      "Value":$inEvent, "Value":$outEvent)>,
     OpBuilder<(ins
-      "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, "Value":$elementTypeSize,
-      "ValueRange":$indices, "ValueRange":$sizes, "Value":$inEvent, "Value":$outEvent,
-      "DomainAttr":$domain)>
+      "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, 
+      "Value":$elementTypeSize, "ValueRange":$indices, "ValueRange":$offsets, 
+      "ValueRange":$sizes)>,
+    OpBuilder<(ins
+      "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, 
+      "Value":$elementTypeSize, "ValueRange":$indices, "ValueRange":$offsets, 
+      "ValueRange":$sizes, "Value":$inEvent, "Value":$outEvent)>,
+    OpBuilder<(ins
+      "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, 
+      "Value":$elementTypeSize, "ValueRange":$indices, "ValueRange":$offsets, 
+      "ValueRange":$sizes, "Value":$inEvent, "Value":$outEvent)>
   ];
 
   let extraClassDeclaration = [{
@@ -145,8 +154,9 @@ def EdtOp : Arts_Op<"edt",
 def EventOp : Arts_Op<"event", []> {
   let summary = "Create an event or array of events in ARTS";
   let description = [{
-    The `arts.event` operation creates an event (or array of events) that can be
-    used for inter-loop or cross-task dependencies within the ARTS dialect.
+    The `arts.event` operation creates an event (or array of events) that 
+    can be used for inter-loop or cross-task dependencies within the 
+    ARTS dialect.
   }];
 
   let arguments = (ins Variadic<Index>:$sizes);
@@ -185,9 +195,10 @@ def YieldOp : Arts_Op<"yield",
 
   let summary = "ARTS dialect yield terminator";
   let description = [{
-    The `arts.yield` operation serves as a terminator for various ARTS operations, 
-    such as `arts.epoch`, `arts.parallel`, `arts.single`, and `arts.edt`.
-    It ensures proper control flow within the ARTS dialect by marking the end of a region.
+    The `arts.yield` operation serves as a terminator for various 
+    ARTS operations, such as `arts.epoch`, `arts.parallel`, `arts.single`, 
+    and `arts.edt`. It ensures proper control flow within the ARTS dialect 
+    by marking the end of a region.
   }];
   let assemblyFormat = [{
     attr-dict-with-keyword
