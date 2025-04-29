@@ -49,48 +49,41 @@ using namespace mlir::arts;
 namespace {
 struct DatablockPass : public arts::DatablockBase<DatablockPass> {
   void runOnOperation() override;
+
+  /// Canonicalize memref.dim ops of datablocks.
+  bool canonicalizeDimOps();
+
   /// Datablocks with single size, and result type different to a memref, can
   /// be converted into parameter.
-  bool convertToParameters(DatablockGraph *graph);
-  /// Canonicalize memref.dim ops of datablocks.
-  bool canonicalizeDimOps(DatablockGraph *graph);
+  bool convertToParameters();
+
+  /// Analyze the datablock iteration space and shrink the datablock
+  /// to the minimum size required.
+  bool shrinkDatablock();
 
 private:
   ModuleOp module;
+  DatablockAnalysis *dbAnalysis;
 };
 } // end anonymous namespace
 
 void DatablockPass::runOnOperation() {
   bool changed = false;
   module = getOperation();
+  /// Canonicalize dim ops of datablocks.
+  canonicalizeDimOps();
+
+  /// Print the module before the pass.
   LLVM_DEBUG({
     dbgs() << "\n" << line << "DatablockPass STARTED\n" << line;
     module.dump();
   });
-  OpBuilder builder(module);
 
   /// Retrieve the shared analysis result.
-  DatablockAnalysis &dbAnalysis = getAnalysis<DatablockAnalysis>();
+  dbAnalysis = &getAnalysis<DatablockAnalysis>();
 
-  /// Iterate over every function in the module.
-  module->walk([&](func::FuncOp func) {
-    // ConversionPatternRewriter rewriter(builder.getContext());
-    // DominanceInfo domInfo(func);
-    // bool hasChanged = false;
-    // eliminateCommonSubExpressions(rewriter, domInfo, func, &hasChanged);
-    // if(hasChanged) {
-    //   LLVM_DEBUG(dbgs() << "CSE changed function: " << func.getName() <<
-    //   "\n"); func->dump();
-    // }
-    auto *graph = dbAnalysis.getOrCreateGraph(func);
-    if (!graph || !graph->hasNodes()) {
-      LLVM_DEBUG(dbgs() << "No graph for function: " << func.getName() << "\n");
-      return;
-    }
-    graph->print();
-    canonicalizeDimOps(graph);
-    changed |= convertToParameters(graph);
-  });
+  changed |= convertToParameters();
+  changed |= shrinkDatablock();
 
   /// Preserve analysis results if no changes were made.
   if (!changed) {
@@ -104,94 +97,138 @@ void DatablockPass::runOnOperation() {
   });
 }
 
-bool DatablockPass::convertToParameters(DatablockGraph *graph) {
-  bool changed = false;
-  auto &dbNodes = graph->getNodes();
-  DenseMap<EdtOp, SetVector<DataBlockOp>> dbNodesToRemove;
-  SetVector<Operation *> opsToRemove;
-  OpBuilder builder(module);
+bool DatablockPass::convertToParameters() {
+  auto convertDbToParam = [&](DatablockGraph *graph) -> bool {
+    bool changed = false;
+    auto &dbNodes = graph->getNodes();
+    DenseMap<EdtOp, SetVector<DataBlockOp>> dbNodesToRemove;
+    SetVector<Operation *> opsToRemove;
+    OpBuilder builder(module);
 
-  LLVM_DEBUG(dbgs() << "Converting datablocks to parameters - Analyzing "
-                    << dbNodes.size() << " datablocks\n");
-  for (auto *dbNode : dbNodes) {
-    if (!dbNode->op)
-      continue;
-
-    if (!dbNode->hasSingleSize || isa<MemRefType>(dbNode->elementType) ||
-        !dbNode->isOnlyReader() || !graph->isOnlyDependentOnEntry(*dbNode))
-      continue;
-
-    LLVM_DEBUG(dbgs() << "- Converting datablock to parameter: " << *dbNode->op
-                      << "\n");
-    dbNodesToRemove[dbNode->edtUser].insert(dbNode->op);
-    changed = true;
-    /// Create a new load op for the datablock.
-    builder.setInsertionPoint(dbNode->op);
-    auto newLoadOp = builder.create<memref::LoadOp>(
-        dbNode->op.getLoc(), dbNode->ptr, dbNode->indices);
-    LLVM_DEBUG(dbgs() << "  - New load op: " << *newLoadOp << "\n");
-
-    /// Replace all load operations with the new load op.
-    for (auto &use :
-         llvm::make_early_inc_range(dbNode->op.getResult().getUses())) {
-      if (isa<arts::EdtOp>(use.getOwner()))
+    LLVM_DEBUG(dbgs() << "Converting datablocks to parameters - Analyzing "
+                      << dbNodes.size() << " datablocks\n");
+    for (auto *dbNode : dbNodes) {
+      if (!dbNode->op)
         continue;
-      auto loadOp = cast<memref::LoadOp>(use.getOwner());
-      loadOp.replaceAllUsesWith(newLoadOp.getResult());
-      loadOp.erase();
-    }
-  }
 
-  /// If no datablocks were converted, return.
-  if (!changed) {
-    LLVM_DEBUG(dbgs() << " - No datablocks to convert\n");
-    return false;
-  }
-  LLVM_DEBUG(dbgs() << " - Datablock conversion - Found "
-                    << dbNodesToRemove.size() << " datablocks to convert\n");
-
-  /// Update EDT dependencies and remove replaced datablock ops.
-  for (auto &entry : dbNodesToRemove) {
-    auto edtOp = entry.first;
-    const auto &dbSet = entry.second;
-    SmallVector<Value> newDeps;
-    newDeps.reserve(dbSet.size());
-    auto edtDeps = edtOp.getDependencies();
-    LLVM_DEBUG(dbgs() << "Analyzing edt deps - Size: " << edtDeps.size()
-                      << "\n");
-    for (auto dep : edtDeps) {
-      auto db = cast<DataBlockOp>(dep.getDefiningOp());
-      if (dbSet.contains(db)) {
-        opsToRemove.insert(db);
+      if (!dbNode->hasSingleSize || isa<MemRefType>(dbNode->elementType) ||
+          !dbNode->isOnlyReader() || !graph->isOnlyDependentOnEntry(*dbNode))
         continue;
+
+      LLVM_DEBUG(dbgs() << "- Converting datablock to parameter: "
+                        << *dbNode->op << "\n");
+      dbNodesToRemove[dbNode->edtUser].insert(dbNode->op);
+      changed = true;
+      /// Create a new load op for the datablock.
+      builder.setInsertionPoint(dbNode->op);
+      auto newLoadOp = builder.create<memref::LoadOp>(
+          dbNode->op.getLoc(), dbNode->ptr, dbNode->indices);
+      LLVM_DEBUG(dbgs() << "  - New load op: " << *newLoadOp << "\n");
+
+      /// Replace all load operations with the new load op.
+      for (auto &use :
+           llvm::make_early_inc_range(dbNode->op.getResult().getUses())) {
+        if (isa<arts::EdtOp>(use.getOwner()))
+          continue;
+        auto loadOp = cast<memref::LoadOp>(use.getOwner());
+        loadOp.replaceAllUsesWith(newLoadOp.getResult());
+        loadOp.erase();
       }
-      newDeps.push_back(dep);
     }
 
-    builder.setInsertionPoint(edtOp);
-    auto newEdtOp =
-        createEdtOp(builder, edtOp.getLoc(), getEdtType(edtOp), newDeps);
-    newEdtOp.getRegion().takeBody(edtOp.getRegion());
-    opsToRemove.insert(edtOp);
-  }
+    /// If no datablocks were converted, return.
+    if (!changed) {
+      LLVM_DEBUG(dbgs() << " - No datablocks to convert\n");
+      return false;
+    }
+    LLVM_DEBUG(dbgs() << " - Datablock conversion - Found "
+                      << dbNodesToRemove.size() << " datablocks to convert\n");
 
-  LLVM_DEBUG(dbgs() << "Removing datablocks " << opsToRemove.size() << "\n");
-  removeOps(module, builder, opsToRemove);
-  return true;
+    /// Update EDT dependencies and remove replaced datablock ops.
+    for (auto &entry : dbNodesToRemove) {
+      auto edtOp = entry.first;
+      const auto &dbSet = entry.second;
+      SmallVector<Value> newDeps;
+      newDeps.reserve(dbSet.size());
+      auto edtDeps = edtOp.getDependencies();
+      LLVM_DEBUG(dbgs() << "Analyzing edt deps - Size: " << edtDeps.size()
+                        << "\n");
+      for (auto dep : edtDeps) {
+        auto db = cast<DataBlockOp>(dep.getDefiningOp());
+        if (dbSet.contains(db)) {
+          opsToRemove.insert(db);
+          continue;
+        }
+        newDeps.push_back(dep);
+      }
+
+      builder.setInsertionPoint(edtOp);
+      auto newEdtOp =
+          createEdtOp(builder, edtOp.getLoc(), getEdtType(edtOp), newDeps);
+      newEdtOp.getRegion().takeBody(edtOp.getRegion());
+      opsToRemove.insert(edtOp);
+    }
+
+    LLVM_DEBUG(dbgs() << "Removing datablocks " << opsToRemove.size() << "\n");
+    removeOps(module, builder, opsToRemove);
+
+    return changed;
+  };
+
+  bool changed = false;
+  module->walk([&](func::FuncOp func) {
+    auto *graph = dbAnalysis->getOrCreateGraph(func);
+    if (!graph || !graph->hasNodes())
+      return;
+    if (convertDbToParam(graph)) {
+      changed = true;
+      dbAnalysis->invalidateGraph(func);
+    }
+  });
+  return changed;
 }
 
-bool DatablockPass::canonicalizeDimOps(DatablockGraph *graph) {
-  auto &dbNodes = graph->getNodes();
-  OpBuilder builder(module);
+bool DatablockPass::shrinkDatablock() {
+  auto shrinkDb = [&](DatablockGraph *graph) -> bool {
+    bool changed = false;
+    auto &dbNodes = graph->getNodes();
+    OpBuilder builder(module);
 
-  LLVM_DEBUG(dbgs() << "Canonicalizing dim ops - Analyzing " << dbNodes.size()
-                    << " datablocks\n");
-  for (auto *dbNode : dbNodes) {
-    if (!dbNode->op)
-      continue;
+    LLVM_DEBUG(dbgs() << "Shrinking datablocks - Analyzing "
+                      << dbNodes.size() << " datablocks\n");
+    for (auto *dbNode : dbNodes) {
+      if (!dbNode->op)
+        continue;
 
+      if (!dbNode->hasSingleSize || !dbNode->isOnlyReader())
+        continue;
+
+      LLVM_DEBUG(dbgs() << "- Shrinking datablock: " << *dbNode->op << "\n");
+      // dbNode->shrinkDatablock(builder);
+      changed = true;
+    }
+    return changed;
+  };
+
+  bool changed = false;
+  module->walk([&](func::FuncOp func) {
+    auto *graph = dbAnalysis->getOrCreateGraph(func);
+    if (!graph || !graph->hasNodes())
+      return;
+    graph->print();
+    // if (shrinkDb(graph)) {
+    //   changed = true;
+    //   dbAnalysis->invalidateGraph(func);
+    // }
+  });
+  return changed;
+}
+
+bool DatablockPass::canonicalizeDimOps() {
+  LLVM_DEBUG(dbgs() << line << "Canonicalizing dim ops\n");
+  module->walk([&](arts::DataBlockOp dbOp) {
     /// Analyze uses of the datablock.
-    for (auto *op : dbNode->op->getUsers()) {
+    for (auto *op : dbOp->getUsers()) {
       auto dimOp = dyn_cast<memref::DimOp>(op);
       if (!dimOp)
         continue;
@@ -201,11 +238,11 @@ bool DatablockPass::canonicalizeDimOps(DatablockGraph *graph) {
       assert(dim && "Dim op must have a constant index");
 
       /// Replace the dim op result with the size of the datablock.
-      auto size = dbNode->sizes[*dim];
-      dimOp.replaceAllUsesWith(size);
+      dimOp.replaceAllUsesWith(dbOp.getSizes()[*dim]);
       dimOp.erase();
     }
-  }
+  });
+  LLVM_DEBUG(dbgs() << line);
   return false;
 }
 ///===----------------------------------------------------------------------===///

@@ -102,12 +102,38 @@ void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
                         Type subview, StringRef mode, Value ptr,
                         Type elementType, Value elementTypeSize,
                         ValueRange indices, ValueRange sizes) {
+  SmallVector<Value> offsets;
+  offsets.resize(indices.size(), odsBuilder.create<arith::ConstantIndexOp>(
+                                     odsState.location, 0));
+  build(odsBuilder, odsState, subview, mode, ptr, elementType, elementTypeSize,
+        indices, offsets, sizes);
+}
+
+void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                        Type subview, StringRef mode, Value ptr,
+                        Type elementType, Value elementTypeSize,
+                        ValueRange indices, ValueRange sizes, Value inEvent,
+                        Value outEvent) {
+  SmallVector<Value> offsets;
+  offsets.resize(indices.size(), odsBuilder.create<arith::ConstantIndexOp>(
+                                     odsState.location, 0));
+  build(odsBuilder, odsState, subview, mode, ptr, elementType, elementTypeSize,
+        indices, offsets, sizes);
+}
+
+void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                        Type subview, StringRef mode, Value ptr,
+                        Type elementType, Value elementTypeSize,
+                        ValueRange indices, ValueRange offsets,
+                        ValueRange sizes) {
   odsState.addOperands(ptr);
   odsState.addOperands(elementTypeSize);
   odsState.addOperands(indices);
+  odsState.addOperands(offsets);
   odsState.addOperands(sizes);
   ::llvm::copy(
       ::llvm::ArrayRef<int32_t>({1, 1, static_cast<int32_t>(indices.size()),
+                                 static_cast<int32_t>(offsets.size()),
                                  static_cast<int32_t>(sizes.size())}),
       odsState.getOrAddProperties<Properties>().operandSegmentSizes.begin());
   odsState.getOrAddProperties<Properties>().mode =
@@ -120,14 +146,15 @@ void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
 void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
                         Type subview, StringRef mode, Value ptr,
                         Type elementType, Value elementTypeSize,
-                        ValueRange indices, ValueRange sizes, Value inEvent,
-                        Value outEvent) {
+                        ValueRange indices, ValueRange offsets,
+                        ValueRange sizes, Value inEvent, Value outEvent) {
   if (!inEvent && !outEvent)
     return build(odsBuilder, odsState, subview, mode, ptr, elementType,
-                 elementTypeSize, indices, sizes);
+                 elementTypeSize, indices, offsets, sizes);
   odsState.addOperands(ptr);
   odsState.addOperands(elementTypeSize);
   odsState.addOperands(indices);
+  odsState.addOperands(offsets);
   odsState.addOperands(sizes);
   if (inEvent)
     odsState.addOperands(inEvent);
@@ -135,6 +162,7 @@ void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
     odsState.addOperands(outEvent);
   ::llvm::copy(
       ::llvm::ArrayRef<int32_t>({1, 1, static_cast<int32_t>(indices.size()),
+                                 static_cast<int32_t>(offsets.size()),
                                  static_cast<int32_t>(sizes.size()),
                                  (inEvent ? 1 : 0), (outEvent ? 1 : 0)}),
       odsState.getOrAddProperties<Properties>().operandSegmentSizes.begin());
@@ -143,16 +171,6 @@ void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
   odsState.getOrAddProperties<Properties>().elementType =
       TypeAttr::get(elementType);
   odsState.addTypes(subview);
-}
-
-void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
-                        Type subview, StringRef mode, Value ptr,
-                        Type elementType, Value elementTypeSize,
-                        ValueRange indices, ValueRange sizes, Value inEvent,
-                        Value outEvent, DomainAttr domain) {
-  build(odsBuilder, odsState, subview, mode, ptr, elementType, elementTypeSize,
-        indices, sizes, inEvent, outEvent);
-  odsState.addAttribute("domain", domain);
 }
 
 ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
@@ -183,6 +201,16 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
 
   /// Parse comma then "indices[".
   if (parser.parseComma() || parser.parseKeyword("indices") ||
+      parser.parseLSquare())
+    return failure();
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> indicesOperands;
+  if (parser.parseOperandList(indicesOperands))
+    return failure();
+  if (parser.parseRSquare())
+    return failure();
+
+  /// Parse comma then "offsets[".
+  if (parser.parseComma() || parser.parseKeyword("offsets") ||
       parser.parseLSquare())
     return failure();
   SmallVector<OpAsmParser::UnresolvedOperand, 4> offsetOperands;
@@ -254,17 +282,6 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
   if (failed(parseEventOperand("outEvent", outEventOperand)))
     return failure();
 
-  /// Optionally parse comma then domain attribute.
-  if (succeeded(parser.parseOptionalComma())) {
-    if (parser.parseKeyword("domain"))
-      return failure();
-    if (parser.parseEqual())
-      return failure();
-    DomainAttr domainAttr;
-    if (parser.parseAttribute(domainAttr, "domain", result.attributes))
-      return failure();
-  }
-
   /// Parse optional attribute dictionary.
   if (parser.parseOptionalAttrDict(result.attributes))
     return failure();
@@ -277,7 +294,11 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
     return failure();
   result.addTypes(subviewType);
 
-  /// Resolve the operand lists for indices and sizes as index type.
+  /// Resolve the operand lists for indices, offsets and sizes as index type.
+  SmallVector<Type, 4> expectedIndexTypes(indicesOperands.size(), indexType);
+  if (parser.resolveOperands(indicesOperands, expectedIndexTypes,
+                             parser.getCurrentLocation(), result.operands))
+    return failure();
   SmallVector<Type, 4> expectedOffsetTypes(offsetOperands.size(), indexType);
   if (parser.resolveOperands(offsetOperands, expectedOffsetTypes,
                              parser.getCurrentLocation(), result.operands))
@@ -288,10 +309,11 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
     return failure();
 
   /// Set operand segment sizes.
-  /// Order: ptr (1), typeSize (1), indices, sizes, event (0 or 1).
+  /// Order: ptr (1), typeSize (1), indices, offsets, sizes, event (0 or 1).
   SmallVector<int32_t, 6> segmentSizes;
   segmentSizes.push_back(1);
   segmentSizes.push_back(1);
+  segmentSizes.push_back(static_cast<int32_t>(indicesOperands.size()));
   segmentSizes.push_back(static_cast<int32_t>(offsetOperands.size()));
   segmentSizes.push_back(static_cast<int32_t>(sizeOperands.size()));
   segmentSizes.push_back(static_cast<int32_t>(inEventOperand.size()));
@@ -320,6 +342,12 @@ void DataBlockOp::print(OpAsmPrinter &printer) {
   auto indices = getIndices();
   printer << ", indices[";
   printer.printOperands(indices);
+  printer << "]";
+
+  /// Print offsets.
+  auto offsets = getOffsets();
+  printer << ", offsets[";
+  printer.printOperands(offsets);
   printer << "]";
 
   /// Print sizes.
@@ -351,14 +379,10 @@ void DataBlockOp::print(OpAsmPrinter &printer) {
     printer << "]";
   }
 
-  /// Optionally print the affineMap attribute if present.
-  if (auto domainAttr = op->getAttr("domain"))
-    printer << ", domain=" << domainAttr;
-
   // Print all remaining attributes except "operandSegmentSizes"
-  // and those already printed ("mode", "elementType", "domain").
-  printer.printOptionalAttrDict(
-      op->getAttrs(), {"mode", "elementType", "domain", "operandSegmentSizes"});
+  // and those already printed ("mode", "elementType").
+  printer.printOptionalAttrDict(op->getAttrs(),
+                                {"mode", "elementType", "operandSegmentSizes"});
 
   /// Print arrow and the result type.
   printer << " -> ";

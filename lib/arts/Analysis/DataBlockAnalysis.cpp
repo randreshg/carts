@@ -24,6 +24,7 @@
 /// Other
 #include "mlir/IR/Dominance.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 /// Debug
@@ -45,6 +46,35 @@ using namespace mlir::scf;
 using namespace mlir::affine;
 using namespace mlir::arts;
 
+///===----------------------------------------------------------------------===///
+/// Implementation of DenseMap for ValueOrInt.
+///===----------------------------------------------------------------------===///
+
+namespace llvm {
+template <> struct DenseMapInfo<ValueOrInt> {
+  static ValueOrInt getEmptyKey() {
+    return ValueOrInt(llvm::DenseMapInfo<int64_t>::getEmptyKey());
+  }
+  static ValueOrInt getTombstoneKey() {
+    return ValueOrInt(llvm::DenseMapInfo<int64_t>::getTombstoneKey());
+  }
+  static unsigned getHashValue(const ValueOrInt &vai) {
+    if (vai.isValue) {
+      return llvm::DenseMapInfo<mlir::Value>::getHashValue(vai.v_val);
+    } else {
+      return llvm::hash_value(vai.i_val);
+    }
+  }
+  static bool isEqual(const ValueOrInt &L, const ValueOrInt &R) {
+    if (L.isValue != R.isValue)
+      return false;
+    if (L.isValue)
+      return llvm::DenseMapInfo<mlir::Value>::isEqual(L.v_val, R.v_val);
+    return L.i_val == R.i_val;
+  }
+};
+} // namespace llvm
+
 //===----------------------------------------------------------------------===//
 // DatablockNode
 //===----------------------------------------------------------------------===//
@@ -65,8 +95,17 @@ void DatablockNode::collectInfo() {
   elementTypeSize = op.getElementTypeSize();
   resultType = op.getResult().getType();
 
-  /// Add 'hasSingleSize' attribute if the datablock has a single size of 1 or
-  /// no size
+  /// Set min and max dim
+  const size_t numSizes = sizes.size();
+  dimMin.reserve(numSizes);
+  dimMax.reserve(numSizes);
+  for (Value size : sizes) {
+    dimMin.emplace_back(0);
+    dimMax.emplace_back(size);
+  }
+
+  /// Add 'hasSingleSize' attribute if the datablock has a single size of 1
+  /// or no size
   hasSingleSize = false;
   if (sizes.empty()) {
     op.setHasSingleSize();
@@ -107,7 +146,7 @@ void DatablockNode::collectInfo() {
   collectUses();
 
   /// Compute the region of the datablock.
-  // computeRegion();
+  computeRegion();
 }
 
 void DatablockNode::collectUses() {
@@ -153,309 +192,234 @@ void DatablockNode::collectUses() {
   useCount = numUses;
 }
 
-Value DatablockNode::createOffsetSymbolicValue(Value sym, int64_t offset,
-                                               Operation *contextOp) {
-  // OpBuilder builder(contextOp);
-  // auto offsetConst = builder.create<arith::ConstantIndexOp>(
-  //     contextOp->getLoc(), builder.getIndexAttr(offset));
-  // return builder.create<arith::AddIOp>(contextOp->getLoc(), sym, offsetConst);
-  return nullptr; // Placeholder for actual implementation.
-}
-
-void DatablockNode::analyzeIndexValue(Value indexVal, Operation *contextOp,
-                              std::optional<int64_t> &dimMin,
-                              std::optional<int64_t> &dimMax,
-                              SmallVector<Value> &symbolicBounds) {
-  /// Ignore null values if they somehow appear.
+void DatablockNode::analyzeIndexValue(Value indexVal,
+                                      SetVector<ValueOrInt> &dimMin,
+                                      SetVector<ValueOrInt> &dimMax) {
   if (!indexVal)
     return;
 
-  /// Case 1: Constant index.
-  if (auto constOp = indexVal.getDefiningOp<arith::ConstantOp>()) {
-    if (auto intAttr = constOp.getValue().dyn_cast<IntegerAttr>()) {
-      if (constOp.getType().isa<IndexType>() ||
-          intAttr.getType().isSignlessInteger()) {
-        int64_t c = intAttr.getInt();
-        /// Update min bound: take the minimum of current min and c.
-        dimMin = dimMin.has_value() ? std::min(dimMin.value(), c) : c;
-        /// Update max bound: take the maximum of current max and c+1 (exclusive
-        /// bound).
-        dimMax = dimMax.has_value() ? std::max(dimMax.value(), c + 1) : c + 1;
-      }
-      // else: Non-integer constant, treat as symbolic? For now, ignore.
-    }
-    return; // Handled constant case.
-  }
-
-  /// Case 2: Loop induction variable (BlockArgument of a loop).
-  if (auto blockArg = indexVal.dyn_cast<BlockArgument>()) {
-    if (auto forOp =
-            dyn_cast_or_null<scf::ForOp>(blockArg.getOwner()->getParentOp())) {
-      /// If the index is the induction variable of an scf.for loop,
-      /// analyze the loop bounds.
-      if (blockArg == forOp.getInductionVar()) {
-        auto processLoopBound = [&](Value bound, bool isLower) {
-          if (auto boundConst = bound.getDefiningOp<arith::ConstantIndexOp>()) {
-            int64_t val = boundConst.value();
-            if (isLower) {
-              dimMin = dimMin.has_value() ? std::min(dimMin.value(), val) : val;
-            } else {
-              /// Upper bound in scf.for is exclusive.
-              dimMax = dimMax.has_value() ? std::max(dimMax.value(), val) : val;
-            }
-          } else {
-            /// If bound is not constant, add it as a symbolic bound.
-            symbolicBounds.push_back(bound);
-          }
-        };
-
-        processLoopBound(forOp.getLowerBound(), /*isLower=*/true);
-        processLoopBound(forOp.getUpperBound(), /*isLower=*/false);
-        /// Note: Step is ignored for basic range analysis.
-        return; // Handled loop IV case.
-      }
-    }
-    /// Fallthrough: Other block arguments (e.g., function args, region args)
-    /// are treated as symbolic.
-    symbolicBounds.push_back(indexVal);
+  /// Constant index.
+  if (auto cst = indexVal.getDefiningOp<arith::ConstantIndexOp>()) {
+    dimMin.insert(cst.value());
+    dimMax.insert(cst.value() + 1);
     return;
   }
 
-  /// Case 3: Index Cast operation. Analyze the source of the cast.
-  if (auto castOp = indexVal.getDefiningOp<arith::IndexCastOp>()) {
-    /// Recursively analyze the source value before the cast.
-    analyzeIndexValue(castOp.getIn(), contextOp, dimMin, dimMax,
-                      symbolicBounds);
-    return; // Handled cast case.
+  /// Other integer constants
+  if (auto cst = indexVal.getDefiningOp<arith::ConstantOp>()) {
+    if (auto i = cst.getValue().dyn_cast<IntegerAttr>()) {
+      dimMin.insert(i.getInt());
+      dimMax.insert(i.getInt() + 1);
+    }
+    dimMin.insert(indexVal);
+    dimMax.insert(indexVal);
+    return;
   }
 
-  /// Case 4: Add operation (potentially `base + constant_offset`).
-  if (auto addOp = indexVal.getDefiningOp<arith::AddIOp>()) {
-    Value baseVal;
-    std::optional<int64_t> offsetOpt;
+  /// Loop Induction Variable (scf.for).
+  if (auto bbArg = indexVal.dyn_cast<BlockArgument>()) {
+    /// Check if it's an IV of an scf.for loop
+    Operation *parentOp = bbArg.getOwner()->getParentOp();
+    if (auto forOp = dyn_cast_or_null<scf::ForOp>(parentOp)) {
+      if (bbArg == forOp.getInductionVar()) {
+        /// Lower bound
+        Value lb = forOp.getLowerBound();
+        if (auto c = lb.getDefiningOp<arith::ConstantIndexOp>())
+          dimMin.insert(c.value());
+        else
+          dimMin.insert(lb);
 
-    /// Helper to extract a constant integer value.
-    auto getConstantValue = [](Value v) -> std::optional<int64_t> {
-      if (auto constOp = v.getDefiningOp<arith::ConstantIndexOp>())
-        return constOp.value();
-      return std::nullopt;
-    };
-
-    /// Check if one operand is a constant offset.
-    if (auto lhsConst = getConstantValue(addOp.getLhs())) {
-      offsetOpt = lhsConst;
-      baseVal = addOp.getRhs();
-    } else if (auto rhsConst = getConstantValue(addOp.getRhs())) {
-      offsetOpt = rhsConst;
-      baseVal = addOp.getLhs();
+        /// Upper bound
+        Value ub = forOp.getUpperBound();
+        if (auto c = ub.getDefiningOp<arith::ConstantIndexOp>())
+          dimMax.insert(c.value());
+        else
+          dimMax.insert(ub);
+        return;
+      }
     }
 
-    /// If we found `base + offset` structure:
-    if (baseVal && offsetOpt.has_value()) {
-      int64_t offset = offsetOpt.value();
-      /// Recursively analyze the base value.
-      std::optional<int64_t> baseMin, baseMax;
-      SmallVector<Value> baseSymbolic;
-      analyzeIndexValue(baseVal, contextOp, baseMin, baseMax, baseSymbolic);
-
-      /// Apply the offset to the constant bounds found for the base.
-      if (baseMin) {
-        int64_t adjustedMin = baseMin.value() + offset;
-        dimMin = dimMin.has_value() ? std::min(dimMin.value(), adjustedMin)
-                                    : adjustedMin;
-      }
-      if (baseMax) {
-        int64_t adjustedMax = baseMax.value() + offset;
-        dimMax = dimMax.has_value() ? std::max(dimMax.value(), adjustedMax)
-                                    : adjustedMax;
-      }
-
-      /// Apply the offset to the symbolic bounds found for the base.
-      for (Value sym : baseSymbolic) {
-        symbolicBounds.push_back(
-            offset != 0 ? createOffsetSymbolicValue(sym, offset, contextOp)
-                        : sym);
-      }
-      return; // Handled AddI case.
-    }
-    /// Fallthrough: If AddI is not `base + constant`, treat result as symbolic.
+    /// If it's a block argument but not a recognized loop IV, treat as symbolic
+    /// value.
+    dimMin.insert(indexVal);
+    dimMax.insert(indexVal);
+    return;
   }
 
-  /// Default Case: Treat any other operation/value as symbolic.
-  /// This includes function calls, complex arithmetic, affine applies, etc.
-  symbolicBounds.push_back(indexVal);
+  /// Casts (e.g., arith.index_cast) - Recurse on the operand.
+  if (auto cast = indexVal.getDefiningOp<arith::IndexCastOp>()) {
+    analyzeIndexValue(cast.getIn(), dimMin, dimMax);
+    return;
+  }
+
+  /// Result of an operation (AddI, SubI, MulI, etc.) or unknown value.
+  dimMin.insert(indexVal);
+  dimMax.insert(indexVal);
 }
 
 bool DatablockNode::computeRegion() {
-  /// If there are no known loads or stores, we cannot determine a region.
+  /// If there are no memory accesses, there's no region to compute.
   if (loadsAndStores.empty()) {
-    LLVM_DEBUG(DBGS() << "No loads/stores found for DB #" << id
-                      << ", cannot compute access region.\n");
+    LLVM_DEBUG(
+        dbgs() << "DB #" << id << " (" << op.getLoc()
+               << "): No loads/stores found, skipping region computation.\n");
     return false;
   }
 
-  /// Initialize analysis structures based on the datablock's rank (number of
-  /// dimensions).
-  auto rank = sizes.size(); /// Assuming sizes corresponds to rank.
-  /// Optional constant bounds [min, max) for each dimension.
-  SmallVector<std::optional<int64_t>> dimMins(rank, std::nullopt);
-  SmallVector<std::optional<int64_t>> dimMaxs(rank, std::nullopt);
-  /// Symbolic bounds for each dimension. Using SetVector to avoid duplicates.
-  SmallVector<SetVector<Value>> symbolicBoundsPerDim(rank);
+  /// Handle 0-rank (scalar access). Treat as success but no region bounds.
+  auto rank = sizes.size();
+  if (rank == 0) {
+    LLVM_DEBUG(
+        dbgs() << "DB #" << id << " (" << op.getLoc()
+               << "): Detected 0-rank access (scalar), region is trivial.\n");
+    return true;
+  }
 
-  LLVM_DEBUG(DBGS() << "Computing access region for DB #" << id
-                    << " (rank=" << rank << ") with " << loadsAndStores.size()
-                    << " loads/stores.\n");
+  /// Initialize storage for min/max bounds and symbolic values for each
+  /// dimension.
+  auto size = loadsAndStores.size();
+  SmallVector<SetVector<ValueOrInt>> dimMins(size);
+  SmallVector<SetVector<ValueOrInt>> dimMaxs(size);
 
-  /// Analyze indices for all load and store operations using this datablock.
-  for (Operation *op : loadsAndStores) {
+  LLVM_DEBUG(dbgs() << "DB #" << id
+                    << " - Computing access region (rank=" << rank << ").\n");
+
+  /// Iterate over all load/store users to collect bounds information.
+  /// We collect all potential min/max bounds for each dimension across all
+  /// users.
+  SmallVector<SetVector<ValueOrInt>> allDimMins(rank);
+  SmallVector<SetVector<ValueOrInt>> allDimMaxs(rank);
+
+  for (Operation *user : loadsAndStores) {
     ValueRange indices;
-    if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
-      indices = loadOp.getIndices();
-    } else if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
-      indices = storeOp.getIndices();
-    } else {
-      LLVM_DEBUG(DBGS() << "Warning: Unexpected operation type in "
-                           "loadsAndStores for DB #"
-                        << id << ": " << *op << "\n");
-      continue;
-    }
+    if (auto ld = dyn_cast<memref::LoadOp>(user))
+      indices = ld.getIndices();
+    else if (auto st = cast<memref::StoreOp>(user))
+      indices = st.getIndices();
 
-    /// Verify that the number of indices matches the expected rank.
-    if (indices.size() != rank) {
-      LLVM_DEBUG(DBGS() << "Warning: Mismatched rank in memory operation at "
-                        << op->getLoc() << ". Expected " << rank << ", got "
-                        << indices.size() << " indices. Op: " << *op << "\n");
-      /// Skip this operation or attempt partial analysis? Skipping for now.
-      continue;
-    }
+    assert(indices.size() == rank &&
+           "Number of indices must match the rank of the datablock");
 
-    /// Analyze each index dimension for this memory operation.
-    for (unsigned dim = 0; dim < rank; ++dim) {
-      LLVM_DEBUG(DBGS() << "  Analyzing dim " << dim
-                        << ", index: " << indices[dim] << "\n");
-      SmallVector<Value> currentSymbolicBounds;
-      /// analyzeIndexValue updates dimMins[dim], dimMaxs[dim] and fills
-      /// currentSymbolicBounds
-      analyzeIndexValue(indices[dim], op, dimMins[dim], dimMaxs[dim],
-                        currentSymbolicBounds);
-      /// Add unique symbolic bounds found for this access to the dimension's
-      /// set.
-      for (Value sym : currentSymbolicBounds) {
-        symbolicBoundsPerDim[dim].insert(sym);
+    LLVM_DEBUG(dbgs() << "  Processing user: " << *user << "\n");
+    /// Analyze each index of the current access.
+    for (unsigned d = 0; d < rank; ++d)
+      analyzeIndexValue(indices[d], allDimMins[d], allDimMaxs[d]);
+  }
+
+  /// Debug print the final computed region bounds.
+  LLVM_DEBUG({
+    auto &os = dbgs();
+    os << "DB #" << id << ":\n";
+    for (unsigned d = 0; d < rank; ++d) {
+      os << "  Dim " << d << ":\n";
+      // Print all minimum bounds
+      os << "    mins:\n";
+      for (unsigned i = 0, e = allDimMins[d].size(); i < e; ++i) {
+        const auto &voi = allDimMins[d][i];
+        if (voi.isValue) {
+          os << "     " << voi.v_val << ">\n";
+        } else {
+          os << "     " << voi.i_val << "\n";
+        }
       }
+      // Print all maximum bounds
+      os << "    maxs:\n";
+      for (unsigned i = 0, e = allDimMaxs[d].size(); i < e; ++i) {
+        const auto &voi = allDimMaxs[d][i];
+        if (voi.isValue) {
+          os << "     " << voi.v_val << ">\n";
+        } else {
+          os << "     " << voi.i_val << "\n";
+        }
+      }
+    }
+    os << line;
+  });
+
+  /// Compute the final min/max bounds for each dimension based on accesses.
+
+  /// Iterate through each dimension to refine bounds based on constant
+  /// accesses.
+  for (unsigned d = 0; d < rank; ++d) {
+    auto &minSet = allDimMins[d];
+    auto &maxSet = allDimMaxs[d];
+    bool minHasSymbolic = false, maxHasSymbolic = false;
+
+    bool minSingle = minSet.size() == 1;
+    bool maxSingle = maxSet.size() == 1;
+    if (minSingle)
+      dimMin[d] = minSet[0];
+
+    if (maxSingle)
+      dimMax[d] = maxSet[0];
+
+    /// If both min and max bounds are single values, we can skip further
+    /// analysis.
+    if (minSingle && maxSingle)
+      continue;
+
+    /// Check if minimum bounds contain any symbolic values.
+    for (const auto &voi : minSet) {
+      if (voi.isValue) {
+        minHasSymbolic = true;
+        break;
+      }
+    }
+
+    /// Check if maximum bounds contain any symbolic values.
+    for (const auto &voi : maxSet) {
+      if (voi.isValue) {
+        maxHasSymbolic = true;
+        break;
+      }
+    }
+
+    /// If both min and max bounds involve symbolic values for this dimension,
+    /// we cannot determine a constant range from accesses alone.
+    if (minHasSymbolic && maxHasSymbolic) {
+      LLVM_DEBUG(dbgs() << "DB #" << id
+                        << " - Skipping region refinement for dim " << d
+                        << " (symbolic bounds for both min and max).\n");
+      /// TODO: Implement more sophisticated analysis for symbolic bounds.
+      continue;
+    }
+
+    /// Refine Minimum Bound if no symbolic values were encountered.
+    if (!minHasSymbolic) {
+      std::optional<int64_t> currentMinConst;
+      for (const auto &voi : minSet) {
+        assert(!voi.isValue && "Expected constant integer for minSet");
+        if (!currentMinConst.has_value()) {
+          currentMinConst = voi.i_val;
+        } else {
+          currentMinConst = std::min(currentMinConst.value(), voi.i_val);
+        }
+      }
+
+      /// Update the node's minimum bound if a constant minimum was found.
+      if (currentMinConst.has_value())
+        this->dimMin[d] = currentMinConst.value();
+    }
+
+    /// Refine Maximum Bound if no symbolic values were encountered.
+    if (!maxHasSymbolic) {
+      std::optional<int64_t> currentMaxConst;
+      for (const auto &voi : maxSet) {
+        assert(!voi.isValue && "Expected constant integer for maxSet");
+        if (!currentMaxConst.has_value()) {
+          currentMaxConst = voi.i_val;
+        } else {
+          currentMaxConst = std::max(currentMaxConst.value(), voi.i_val);
+        }
+      }
+
+      /// Update the node's maximum bound if a constant maximum was found.
+      if (currentMaxConst.has_value())
+        this->dimMax[d] = currentMaxConst.value();
     }
   }
 
-  // /// Store the computed bounds in the node's members.
-  // accessRegionMins = std::move(dimMins);
-  // accessRegionMaxs = std::move(dimMaxs);
-  // /// Convert SetVectors to SmallVectors for storage.
-  // accessRegionSymbols.resize(rank);
-  // for (unsigned dim = 0; dim < rank; ++dim) {
-  //   accessRegionSymbols[dim].assign(symbolicBoundsPerDim[dim].begin(),
-  //                                   symbolicBoundsPerDim[dim].end());
-  // }
-
-  // LLVM_DEBUG({
-  //   DBGS() << "Finished computing access region analysis for DB #" << id
-  //          << ":\n";
-  //   for (unsigned dim = 0; dim < rank; ++dim) {
-  //     dbgs() << "  Dim " << dim << ": Min=";
-  //     if (accessRegionMins[dim])
-  //       dbgs() << *accessRegionMins[dim];
-  //     else
-  //       dbgs() << "N/A";
-  //     dbgs() << ", Max="; // Max is exclusive
-  //     if (accessRegionMaxs[dim])
-  //       dbgs() << *accessRegionMaxs[dim];
-  //     else
-  //       dbgs() << "N/A";
-  //     dbgs() << ", Symbolic=[";
-  //     llvm::interleaveComma(accessRegionSymbols[dim], dbgs());
-  //     dbgs() << "]\n";
-  //   }
-  // });
-
-  // /// Create attribute representation of the bounds.
-  // MLIRContext *context = op->getContext();
-  // SmallVector<Attribute, 4> computedDomains;
-  // computedDomains.reserve(rank);
-
-  // for (unsigned dim = 0; dim < rank; ++dim) {
-  //   SmallVector<NamedAttribute> dimAttrs;
-
-  //   /// --- Constant Lower Bound ---
-  //   /// Store the minimum constant value observed for this dimension's index.
-  //   if (accessRegionMins[dim].has_value()) {
-  //     dimAttrs.push_back(
-  //         NamedAttribute(StringAttr::get(context, "min_const"),
-  //                        IntegerAttr::get(IndexType::get(context),
-  //                                         accessRegionMins[dim].value())));
-  //   }
-  //   /// If no constant lower bound is found, we don't add the attribute.
-  //   /// A consumer of this attribute should handle its absence (e.g., assume 0
-  //   /// or unbounded).
-
-  //   /// --- Constant Upper Bound (Exclusive) ---
-  //   /// Store the maximum constant value observed + 1 for this dimension's
-  //   /// index.
-  //   if (accessRegionMaxs[dim].has_value()) {
-  //     dimAttrs.push_back(
-  //         NamedAttribute(StringAttr::get(context, "max_exclusive_const"),
-  //                        IntegerAttr::get(IndexType::get(context),
-  //                                         accessRegionMaxs[dim].value())));
-  //   }
-  //   /// If no constant upper bound is found, we don't add the attribute.
-  //   /// A consumer should handle its absence (e.g., assume unbounded or use
-  //   /// datablock size).
-
-  //   /// --- Symbolic Bounds ---
-  //   /// This analysis collects all symbolic values (non-constants, complex
-  //   /// expressions) that influence the index calculation for this dimension
-  //   /// across all accesses. It does not currently perform advanced symbolic
-  //   /// simplification or determine precise symbolic min/max expressions (e.g.,
-  //   /// using affine analysis). It simply lists the contributing symbolic
-  //   /// factors.
-  //   if (!accessRegionSymbols[dim].empty()) {
-  //     SmallVector<Attribute> symAttrs;
-  //     symAttrs.reserve(accessRegionSymbols[dim].size());
-  //     for (Value symVal : accessRegionSymbols[dim]) {
-  //       /// Representing the Value itself directly in an attribute is not
-  //       /// standard. Using its string representation provides debuggability but
-  //       /// limited machine processability.
-  //       std::string symStr;
-  //       llvm::raw_string_ostream ss(symStr);
-  //       ss << symVal; /// Includes type, potentially defining op location.
-  //       symAttrs.push_back(StringAttr::get(context, ss.str()));
-  //       /// Future Work: Could attempt to use FlatSymbolRefAttr if the Value
-  //       /// corresponds to a named entity.
-  //       /// Future Work: Integrate affine analysis to store AffineExprAttr or
-  //       /// AffineMapAttr for more precise symbolic bounds derived from loops
-  //       /// etc.
-  //     }
-  //     dimAttrs.push_back(
-  //         NamedAttribute(StringAttr::get(context, "symbolic_influences"),
-  //                        ArrayAttr::get(context, symAttrs)));
-  //   }
-
-  //   /// Create dictionary {min_const: ..., max_exclusive_const: ...,
-  //   /// symbolic_influences: [...]} for this dimension.
-  //   computedDomains.push_back(DictionaryAttr::get(context, dimAttrs));
-  // }
-
-  // /// Store the computed domain attributes array in the node.
-  // /// Assumes `accessRegionDomainAttrs` is a member of DatablockNode of type
-  // /// ArrayAttr.
-  // accessRegionDomainAttrs = ArrayAttr::get(context, computedDomains);
-
-  // LLVM_DEBUG({
-  //   DBGS() << "Stored access region domain attributes for DB #" << id << ": "
-  //          << accessRegionDomainAttrs << "\n";
-  // });
-
-  // return true; /// Indicate analysis was performed and results (potentially
-  //              /// partial) are available.
+  return true;
 }
 
 //===----------------------------------------------------------------------===//
@@ -809,10 +773,25 @@ void DatablockGraph::print() {
     auto &n = *node;
     os << "  #" << n.id << " " << n.mode << "\n";
     os << "    " << n.op << "\n";
-    os << " useCount=" << n.useCount;
+    os << "     useCount=" << n.useCount;
     os << " hasPtrDb=" << (n.hasPtrDb ? "true" : "false");
     os << " userEdtPos=" << n.userEdtPos;
     os << (n.parent ? " parent=#" + std::to_string(n.parent->id) : "") << "\n";
+
+    /// Print min/max dimensions
+    for (unsigned i = 0; i < n.dimMin.size(); ++i) {
+      os << "    Dim #" << i << ": ";
+      if (n.dimMin[i].isValue)
+        os << n.dimMin[i].v_val;
+      else
+        os << n.dimMin[i].i_val;
+      os << " -> ";
+      if (n.dimMax[i].isValue)
+        os << n.dimMax[i].v_val;
+      else
+        os << n.dimMax[i].i_val;
+      os << "\n";
+    }
   }
   os << "Edges:\n";
   if (edges.empty()) {
@@ -922,6 +901,16 @@ DatablockGraph *DatablockAnalysis::getOrCreateGraph(func::FuncOp func) {
   /// Create a new graph for the function and store it in the map.
   functionGraphMap[func] = new DatablockGraph(func, this);
   return functionGraphMap[func];
+}
+
+bool DatablockAnalysis::invalidateGraph(func::FuncOp func) {
+  auto it = functionGraphMap.find(func);
+  if (it != functionGraphMap.end()) {
+    delete it->second;
+    functionGraphMap.erase(it);
+    return true;
+  }
+  return false;
 }
 
 /// Dependency analysis.
