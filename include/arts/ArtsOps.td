@@ -59,18 +59,18 @@ def DataBlockOp : Arts_Op<"datablock",
   [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, AttrSizedOperandSegments]> {
   let summary = "Creates a subview dependency for arts.edt or arts.parallel";
   let arguments = (ins
-    StrAttr:$mode,                             // Dependency mode (e.g., "in", "out", "inout")
-    AnyMemRef:$ptr,                            // Base ptr
-    TypeAttr:$elementType,                     // Element type for the subview (or memref type)
-    Index:$elementTypeSize,                    // Size associated with that type
-    Variadic<Index>:$offsets,                  // Offsets for the subview
-    Variadic<Index>:$indices,                  // Indices for the subview
-    Variadic<Index>:$sizes,                    // Sizes for the subview
-    Optional<AnyType>:$inEvent,                // Input event associated with the DB
-    Optional<AnyType>:$outEvent                // Output event associated with the DB
+    StrAttr:$mode,                           // Dependency mode (e.g., "in", "out", "inout")
+    AnyMemRef:$ptr,                          // Base ptr
+    TypeAttr:$elementType,                   // Element type for the subview (or memref type)
+    Index:$elementTypeSize,                  // Size associated with that type
+    Variadic<Index>:$indices,                // Indices for the subview
+    Variadic<Index>:$offsets,                // Offsets for the subview
+    Variadic<Index>:$sizes,                  // Sizes for the subview
+    Optional<AnyType>:$inEvent,              // Input event associated with the DB
+    Optional<AnyType>:$outEvent              // Output event associated with the DB
   );
 
-  let results = (outs AnyMemRef:$subview);     // Produces a memref
+  let results = (outs AnyMemRef:$subview);   // Produces a memref
   let hasCustomAssemblyFormat = 1;
 
   let skipDefaultBuilders = 1;
@@ -86,10 +86,6 @@ def DataBlockOp : Arts_Op<"datablock",
       "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, 
       "Value":$elementTypeSize, "ValueRange":$indices, "ValueRange":$offsets, 
       "ValueRange":$sizes)>,
-    OpBuilder<(ins
-      "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, 
-      "Value":$elementTypeSize, "ValueRange":$indices, "ValueRange":$offsets, 
-      "ValueRange":$sizes, "Value":$inEvent, "Value":$outEvent)>,
     OpBuilder<(ins
       "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, 
       "Value":$elementTypeSize, "ValueRange":$indices, "ValueRange":$offsets, 
@@ -120,8 +116,8 @@ def EdtOp : Arts_Op<"edt",
 
     The single-block region contains the task body.
     - if 'parallel' attribute is set, it can spawn multiple tasks.
-    - if 'single' attribute is set, it is guaranteed to run in a single task, 
-      even if it is called from a parallel region.
+    - if 'single' attribute is set, it is guaranteed to run in a single
+      task, even if it is called from a parallel region.
   }];
 
   let arguments = (ins

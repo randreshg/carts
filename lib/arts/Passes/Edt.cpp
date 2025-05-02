@@ -115,8 +115,8 @@ void EdtPass::runOnOperation() {
     auto &edtRegion = edt.getRegion();
     getUsedValuesDefinedAbove(edtRegion, usedValues);
 
-    // Helper function to recursively clone operations and their pointer
-    // dependencies
+    /// Helper function to recursively clone operations and their pointer
+    /// dependencies
     std::function<Value(Value, OpBuilder &, DenseMap<Value, Value> &)>
         cloneWithDeps = [&](Value val, OpBuilder &builder,
                             DenseMap<Value, Value> &valueMap) -> Value {
@@ -139,12 +139,10 @@ void EdtPass::runOnOperation() {
           newOperands.push_back(operand);
         }
       }
-      /// Clone the operation itself
+      /// Update operands with the cloned versions
       auto clonedOp = val.getDefiningOp()->clone();
-      // Update operands with the cloned versions
-      for (auto [idx, newOp] : llvm::enumerate(newOperands)) {
+      for (auto [idx, newOp] : llvm::enumerate(newOperands))
         clonedOp->setOperand(idx, newOp);
-      }
       builder.insert(clonedOp);
 
       /// Store the mapping
@@ -158,10 +156,9 @@ void EdtPass::runOnOperation() {
       if (!operand.getType().isa<LLVM::LLVMPointerType>())
         continue;
 
+      /// Clone operation and its dependencies recursively
       OpBuilder builder(edtRegion.getContext());
       builder.setInsertionPointToStart(&edtRegion.front());
-
-      // Clone operation and its dependencies recursively
       Value newVal = cloneWithDeps(operand, builder, valueMap);
       if (newVal != operand) {
         replaceInRegion(edtRegion, operand, newVal);

@@ -118,7 +118,7 @@ void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
   offsets.resize(indices.size(), odsBuilder.create<arith::ConstantIndexOp>(
                                      odsState.location, 0));
   build(odsBuilder, odsState, subview, mode, ptr, elementType, elementTypeSize,
-        indices, offsets, sizes);
+        indices, offsets, sizes, inEvent, outEvent);
 }
 
 void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
@@ -134,7 +134,7 @@ void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
   ::llvm::copy(
       ::llvm::ArrayRef<int32_t>({1, 1, static_cast<int32_t>(indices.size()),
                                  static_cast<int32_t>(offsets.size()),
-                                 static_cast<int32_t>(sizes.size())}),
+                                 static_cast<int32_t>(sizes.size()), 0, 0}),
       odsState.getOrAddProperties<Properties>().operandSegmentSizes.begin());
   odsState.getOrAddProperties<Properties>().mode =
       odsBuilder.getStringAttr(mode);
@@ -310,7 +310,7 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
 
   /// Set operand segment sizes.
   /// Order: ptr (1), typeSize (1), indices, offsets, sizes, event (0 or 1).
-  SmallVector<int32_t, 6> segmentSizes;
+  SmallVector<int32_t, 7> segmentSizes;
   segmentSizes.push_back(1);
   segmentSizes.push_back(1);
   segmentSizes.push_back(static_cast<int32_t>(indicesOperands.size()));

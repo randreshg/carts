@@ -247,7 +247,7 @@ void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
         auto newDbOp = builder.create<arts::DataBlockOp>(
             dbOp->getLoc(), elementPtrType, dbOp.getMode(), dbOp.getPtr(),
             dbOp.getElementType(), dbOp.getElementTypeSize(), dbOp.getIndices(),
-            sizes, dbOp.getInEvent(), dbOp.getOutEvent());
+            dbOp.getOffsets(), sizes, dbOp.getInEvent(), dbOp.getOutEvent());
         newDbOp->setAttrs(dbOp->getAttrs());
         newDbOp->setAttr("newDb", builder.getUnitAttr());
 
