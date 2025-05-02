@@ -26,6 +26,7 @@
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/CSE.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "polygeist/Ops.h"
 /// Debug
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
@@ -57,8 +58,10 @@ struct DatablockPass : public arts::DatablockBase<DatablockPass> {
   /// be converted into parameter.
   bool convertToParameters();
 
-  /// Analyze the datablock iteration space and shrink the datablock
-  /// to the minimum size required.
+  /// Analyze datablock usage and resize it to the minimum
+  /// required based on the min/max access indices found by the analysis.
+  /// It also adjusts the indices in load/store operations to account for
+  /// the new base offset if the minimum access index was greater than 0.
   bool shrinkDatablock();
 
 private:
@@ -189,39 +192,169 @@ bool DatablockPass::convertToParameters() {
 }
 
 bool DatablockPass::shrinkDatablock() {
-  auto shrinkDb = [&](DatablockGraph *graph) -> bool {
-    bool changed = false;
+  /// Helper lambda to get an MLIR Value from ValueOrInt.
+  auto getValue = [&](ValueOrInt val, Operation *contextOp,
+                      OpBuilder &builder) -> Value {
+    if (val.isValue)
+      return val.v_val;
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPoint(contextOp);
+    /// Create a constant index op at the location of the context operation.
+    auto iVal =
+        builder.create<arith::ConstantIndexOp>(contextOp->getLoc(), val.i_val);
+    return iVal.getResult();
+  };
+
+  /// Process a single datablock graph (typically associated with a function).
+  auto shrinkDbInGraph = [&](DatablockGraph *graph) -> bool {
+    bool graphChanged = false;
     auto &dbNodes = graph->getNodes();
     OpBuilder builder(module);
-
-    LLVM_DEBUG(dbgs() << "Shrinking datablocks - Analyzing "
-                      << dbNodes.size() << " datablocks\n");
+    /// Keep track of operations to remove after modifications.
+    SetVector<Operation *> opsToRemove;
+    LLVM_DEBUG(dbgs() << "Analyzing " << dbNodes.size() << " datablocks\n");
+    /// Iterate through all datablock nodes identified by the analysis.
     for (auto *dbNode : dbNodes) {
       if (!dbNode->op)
         continue;
 
-      if (!dbNode->hasSingleSize || !dbNode->isOnlyReader())
+      DataBlockOp dbOp = dbNode->op;
+      Location loc = dbOp.getLoc();
+      auto rank = dbNode->dimMax.size();
+      assert(dbNode->sizes.size() == rank &&
+             "Datablock sizes and dimMax must have the same rank");
+
+      /// Determine which dimensions need shrinking and calculate offsets/new
+      /// sizes.
+      SmallVector<unsigned> dimsToShrink;
+      SmallVector<Value> offsets(rank);
+      SmallVector<Value> newSizes(rank);
+      bool needsShrinking = false;
+
+      /// Set the insertion point before the datablock op for creating
+      /// constants.
+      builder.setInsertionPoint(dbOp);
+
+      LLVM_DEBUG(dbgs() << "Analyzing datablock: " << *dbOp << "\n");
+      for (unsigned i = 0; i < rank; ++i) {
+        ValueOrInt minDim = dbNode->dimMin[i];
+        ValueOrInt maxDim = dbNode->dimMax[i];
+        Value originalSize = dbOp.getSizes()[i];
+
+        /// Get Value representations for min/max dimensions.
+        Value minDimValue = getValue(minDim, dbOp, builder);
+        Value maxDimValue = getValue(maxDim, dbOp, builder);
+
+        /// Check if shrinking is needed for this dimension.
+        /// Shrinking is needed if min bound > 0 or max bound < original size.
+        bool shrinkThisDim = (minDim > 0) || (maxDimValue != originalSize);
+        // (!valueCmp(Cmp::EQ, originalSize, maxDim))
+
+        if (shrinkThisDim) {
+          needsShrinking = true;
+          dimsToShrink.push_back(i);
+          /// Calculate the new size: maxDim - minDim
+          offsets[i] = minDimValue;
+          newSizes[i] =
+              builder.create<arith::SubIOp>(loc, maxDimValue, minDimValue);
+        } else {
+          /// If not shrinking, the offset is 0 and size remains the same.
+          offsets[i] = minDimValue;
+          newSizes[i] = originalSize;
+        }
+      }
+
+      /// If no dimensions require shrinking, continue to the next datablock.
+      if (!needsShrinking)
         continue;
 
-      LLVM_DEBUG(dbgs() << "- Shrinking datablock: " << *dbNode->op << "\n");
-      // dbNode->shrinkDatablock(builder);
-      changed = true;
+      LLVM_DEBUG(dbgs() << "- Shrinking datablock \n");
+      graphChanged = true;
+
+      /// Create the new DataBlockOp with adjusted sizes and offsets.
+      auto newDbOp = builder.create<arts::DataBlockOp>(
+          loc, dbOp.getType(), dbOp.getMode(), dbOp.getPtr(),
+          dbOp.getElementType(), dbOp.getElementTypeSize(), dbOp.getIndices(),
+          offsets, newSizes);
+      /// Copy all attributes except "operandSegmentSizes".
+      for (auto attr : dbOp->getAttrs()) {
+        if (attr.getName() != "operandSegmentSizes")
+          newDbOp->setAttr(attr.getName(), attr.getValue());
+      }
+
+      /// Update users (loads/stores) to use the new datablock and adjusted
+      /// indices.
+      SmallVector<Operation *> usersToUpdate(dbNode->loadsAndStores.begin(),
+                                             dbNode->loadsAndStores.end());
+      for (Operation *user : usersToUpdate) {
+        builder.setInsertionPoint(user);
+        Location userLoc = user->getLoc();
+
+        /// Adjust indices for load operations.
+        if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+          SmallVector<Value> oldIndices = loadOp.getIndices();
+          SmallVector<Value> newIndices = oldIndices;
+          /// Subtract offset for dimensions that were shrunk from non-zero min.
+          for (unsigned i = 0; i < rank; ++i) {
+            if (offsets[i]) {
+              newIndices[i] = builder.create<arith::SubIOp>(
+                  userLoc, oldIndices[i], offsets[i]);
+            }
+          }
+          /// Create the new load using the new datablock and adjusted indices.
+          auto newLoad = builder.create<memref::LoadOp>(
+              userLoc, newDbOp.getResult(), newIndices);
+          loadOp.replaceAllUsesWith(newLoad.getResult());
+          opsToRemove.insert(loadOp);
+        }
+        /// Adjust indices for store operations.
+        else if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
+          SmallVector<Value> oldIndices = storeOp.getIndices();
+          SmallVector<Value> newIndices = oldIndices;
+          /// Subtract offset for dimensions that were shrunk from non-zero min.
+          for (unsigned i = 0; i < rank; ++i) {
+            if (offsets[i]) {
+              newIndices[i] = builder.create<arith::SubIOp>(
+                  userLoc, oldIndices[i], offsets[i]);
+            }
+          }
+          /// Create the new store using the new datablock and adjusted indices.
+          builder.create<memref::StoreOp>(userLoc, storeOp.getValue(),
+                                          newDbOp.getResult(), newIndices);
+          opsToRemove.insert(storeOp);
+        }
+      }
+
+      /// Replace all remaining uses of the old datablock with the new one.
+      dbOp.getResult().replaceAllUsesWith(newDbOp.getResult());
+
+      /// Mark the original DataBlockOp for removal.
+      opsToRemove.insert(dbOp);
     }
-    return changed;
+
+    removeOps(module, builder, opsToRemove);
+    return graphChanged;
   };
 
-  bool changed = false;
+  bool changedOverall = false;
+  /// Iterate through all functions in the module.
   module->walk([&](func::FuncOp func) {
+    /// Get the datablock analysis results for the current function.
     auto *graph = dbAnalysis->getOrCreateGraph(func);
     if (!graph || !graph->hasNodes())
       return;
-    graph->print();
-    // if (shrinkDb(graph)) {
-    //   changed = true;
-    //   dbAnalysis->invalidateGraph(func);
-    // }
+
+    /// Attempt to shrink datablocks within this function's graph.
+    LLVM_DEBUG({
+      DBGS() << "Shrinking datablocks in function: " << func.getName() << "\n";
+      graph->print();
+    });
+    if (shrinkDbInGraph(graph)) {
+      changedOverall = true;
+      dbAnalysis->invalidateGraph(func);
+    }
   });
-  return changed;
+  return changedOverall;
 }
 
 bool DatablockPass::canonicalizeDimOps() {
