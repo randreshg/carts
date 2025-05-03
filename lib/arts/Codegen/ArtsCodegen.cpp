@@ -90,17 +90,17 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
   }
 
   /// Create an array of guids and pointers based on the sizes of the dbOp
-  auto sizes = dbOp.getSizes();
-  const auto dbDim = sizes.size();
+  auto dbSizes = dbOp.getSizes();
+  const auto dbDim = dbSizes.size();
   auto modeVal = getMode(dbOp.getMode());
   auto guidType = MemRefType::get(
       std::vector<int64_t>(dbDim, ShapedType::kDynamic), AC.ArtsGuid);
-  guid = builder.create<memref::AllocaOp>(loc, guidType, sizes);
+  guid = builder.create<memref::AllocaOp>(loc, guidType, dbSizes);
   auto ptrType = dbOp.getResult().getType().cast<MemRefType>();
   if (ptrType.hasStaticShape()) {
     ptr = builder.create<memref::AllocaOp>(loc, ptrType);
   } else {
-    ptr = builder.create<memref::AllocaOp>(loc, ptrType, sizes);
+    ptr = builder.create<memref::AllocaOp>(loc, ptrType, dbSizes);
   }
 
   /// Recursively create datablocks for each element
@@ -116,10 +116,11 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
           return;
         }
         /// Create loop for current dimension
-        auto lower = builder.create<arith::ConstantIndexOp>(loc, 0);
-        auto upper = sizes[dim];
-        auto step = builder.create<arith::ConstantIndexOp>(loc, 1);
-        auto loopOp = builder.create<scf::ForOp>(loc, lower, upper, step);
+        auto lowerBound = AC.createIndexConstant(0, loc);
+        auto upperBound = dbSizes[dim];
+        auto step = AC.createIndexConstant(1, loc);
+        auto loopOp =
+            builder.create<scf::ForOp>(loc, lowerBound, upperBound, step);
         /// Set insertion point inside the loop body
         auto &loopBlock = loopOp.getRegion().front();
         builder.setInsertionPointToStart(&loopBlock);
@@ -197,10 +198,11 @@ void EventCodegen::create(Location loc) {
           return;
         }
         /// Create loop for current dimension
-        auto lower = builder.create<arith::ConstantIndexOp>(loc, 0);
-        auto upper = sizes[dim];
-        auto step = builder.create<arith::ConstantIndexOp>(loc, 1);
-        auto loopOp = builder.create<scf::ForOp>(loc, lower, upper, step);
+        auto lowerBound = AC.createIndexConstant(0, loc);
+        auto upperBound = sizes[dim];
+        auto step = AC.createIndexConstant(1, loc);
+        auto loopOp =
+            builder.create<scf::ForOp>(loc, lowerBound, upperBound, step);
         /// Set insertion point inside the loop body
         auto &loopBlock = loopOp.getRegion().front();
         builder.setInsertionPointToStart(&loopBlock);
@@ -282,7 +284,6 @@ void EdtCodegen::build(Location loc) {
 }
 
 void EdtCodegen::process(Location loc) {
-  /// Save insertion point.
   OpBuilder::InsertionGuard guard(builder);
   auto context = builder.getContext();
   auto indexType = IndexType::get(context);
@@ -300,24 +301,31 @@ void EdtCodegen::process(Location loc) {
 
   /// Insert a dynamic size as a parameter if it is non-constant.
   auto insertSizeAsParameter = [&](DataBlockCodegen *db, Value size,
-                                   uint64_t sizeIdx, uint64_t &sizesInserted) {
-    if (auto *defOp = size.getDefiningOp())
-      if (isa<arith::ConstantIndexOp>(defOp) ||
-          (isa<arith::ConstantOp>(defOp) &&
-           cast<arith::ConstantOp>(defOp).getValue().isa<IntegerAttr>()))
-        return;
-    /// TODO: Reuse parameter if size was previously inserted.
-    entryDbs[db].sizeIndex[sizeIdx] = insertParam(size);
-    ++sizesInserted;
+                                   uint64_t sizeIdx) {
+    if (isValueConstant(size))
+      return;
+    auto paramPair = insertParam(size);
+    entryDbs[db].sizeIndex[sizeIdx] = paramPair.second;
   };
 
-  /// Process a datablock event dependency; record for input and satisfy for
-  /// output.
+  /// Insert a dynamic offset as a parameter if it is non-constant.
+  auto insertOffsetAsParameter = [&](DataBlockCodegen *db, Value offset,
+                                     uint64_t offsetIdx) {
+    if (isValueConstant(offset))
+      return;
+    auto paramPair = insertParam(offset);
+    entryDbs[db].offsetIndex[offsetIdx] = paramPair.second;
+    ;
+  };
+
+  /// Process a datablock event dependency
   auto processEvent = [&](DataBlockCodegen *db, Value &dbNumElements) {
+    /// Datablocks with 'in' events will be recorded
     if (db->isInMode()) {
       assert(db->getInEvent() && "Datablock missing 'in' event");
       depsToRecord.push_back(db);
     }
+    /// Datablocks with 'out' events will be satisfied
     if (db->getOutEvent() && db->isOutMode()) {
       depsToSatisfy.push_back(db);
       auto currEvents =
@@ -335,31 +343,41 @@ void EdtCodegen::process(Location loc) {
       auto db = AC.getDatablock(dep);
       assert(db && "Datablock not found");
 
-      /// Set the EDT slot for the datablock.
+      /// Set the EDT slot for the DB - We do so, by computing the number of
+      /// elements of each DB and storing it in the depC. The EDTSlot will be
+      /// used in processDependencies when recording the dependencies.
       db->setEdtSlot(builder.create<memref::LoadOp>(loc, depC).getResult());
-      uint64_t sizesInserted = 0;
       Value dbNumElements = nullptr;
 
       if (db->hasSingleSize()) {
+        /// For single-dimensional DBs, use the size directly.
         dbNumElements = AC.createIndexConstant(1, loc);
-        insertSizeAsParameter(db, dbNumElements, 0, sizesInserted);
+        insertSizeAsParameter(db, dbNumElements, 0);
+        insertOffsetAsParameter(db, db->getOffsets()[0], 0);
       } else {
+        /// For multi-dimensional DBs, compute the product of sizes.
         Value product = AC.createIndexConstant(1, loc);
-        for (auto size : db->getSizes()) {
-          insertSizeAsParameter(db, size, sizesInserted, sizesInserted);
-          product =
-              builder.create<arith::MulIOp>(loc, product, size).getResult();
+        auto sizes = db->getSizes();
+        auto offsets = db->getOffsets();
+        auto rank = sizes.size();
+        for (uint64_t rankItr = 0; rankItr < rank; ++rankItr) {
+          insertSizeAsParameter(db, sizes[rankItr], rankItr);
+          insertOffsetAsParameter(db, offsets[rankItr], rankItr);
+          product = builder.create<arith::MulIOp>(loc, product, sizes[rankItr])
+                        .getResult();
         }
         dbNumElements = product;
       }
 
-      /// For input datablocks, accumulate dependency count.
+      /// For input DBs, accumulate dependency count.
       if (db->isInMode()) {
         auto currDep = builder.create<memref::LoadOp>(loc, depC);
         auto newDep = builder.create<arith::AddIOp>(loc, currDep, dbNumElements)
                           .getResult();
         builder.create<memref::StoreOp>(loc, newDep, depC);
       }
+
+      /// Process events for the given DB
       processEvent(db, dbNumElements);
     }
   }
@@ -429,8 +447,8 @@ void EdtCodegen::process(Location loc) {
               .getResult();
       builder.create<memref::StoreOp>(loc, newParamIdx, paramIndex);
     } else {
-      unsigned eventDim = eventOp.getSizes().size();
       /// Recursive function to insert all GUIDs for multi-dimensional events.
+      const auto eventDim = eventOp.getSizes().size();
       std::function<void(unsigned, SmallVector<Value, 4> &)> createEvents =
           [&](unsigned dim, SmallVector<Value, 4> &indices) {
             if (dim == eventDim) {
@@ -448,10 +466,12 @@ void EdtCodegen::process(Location loc) {
               builder.create<memref::StoreOp>(loc, newParamIdx, paramIndex);
               return;
             }
-            auto lower = builder.create<arith::ConstantIndexOp>(loc, 0);
-            auto upper = eventOp.getSizes()[dim];
-            auto step = builder.create<arith::ConstantIndexOp>(loc, 1);
-            auto loopOp = builder.create<scf::ForOp>(loc, lower, upper, step);
+            auto lowerBound = db->getOffsets()[dim];
+            auto upperBound = builder.create<arith::AddIOp>(
+                loc, lowerBound, db->getSizes()[dim]);
+            auto step = AC.createIndexConstant(1, loc);
+            auto loopOp =
+                builder.create<scf::ForOp>(loc, lowerBound, upperBound, step);
             auto &loopBody = loopOp.getRegion().front();
             builder.setInsertionPointToStart(&loopBody);
             indices.push_back(loopOp.getInductionVar());
@@ -486,9 +506,10 @@ void EdtCodegen::processDependencies(Location loc) {
   LLVM_DEBUG(dbgs() << "- Satisfying out-mode dependencies: "
                     << depsToSatisfy.size() << "\n");
   if (!depsToSatisfy.empty()) {
-    auto slotAlloc = builder.create<memref::AllocaOp>(loc, indexMemRefType);
-    auto initialSlot = AC.createIndexConstant(params.size(), loc);
-    builder.create<memref::StoreOp>(loc, initialSlot, slotAlloc);
+    auto eventSlotAlloc =
+        builder.create<memref::AllocaOp>(loc, indexMemRefType);
+    const auto initialEventSlot = AC.createIndexConstant(params.size(), loc);
+    builder.create<memref::StoreOp>(loc, initialEventSlot, eventSlotAlloc);
     auto fnParamVPtr = AC.castToLLVMPtr(fnParamV, loc);
 
     for (auto *dbCG : depsToSatisfy) {
@@ -497,7 +518,7 @@ void EdtCodegen::processDependencies(Location loc) {
       /// For single-dimension datablocks, satisfy dependency directly.
       if (dbCG->hasSingleSize()) {
         auto currentSlot =
-            builder.create<memref::LoadOp>(loc, slotAlloc.getResult());
+            builder.create<memref::LoadOp>(loc, eventSlotAlloc.getResult());
         auto eventGuidAtSlot = builder.create<polygeist::SubIndexOp>(
             loc, MemRefType::get({}, AC.ArtsGuid), fnParamV, currentSlot);
         auto loadedEventGuid =
@@ -511,19 +532,20 @@ void EdtCodegen::processDependencies(Location loc) {
                            .create<arith::AddIOp>(
                                loc, currentSlot, AC.createIndexConstant(1, loc))
                            .getResult();
-        builder.create<memref::StoreOp>(loc, newSlot, slotAlloc);
+        builder.create<memref::StoreOp>(loc, newSlot, eventSlotAlloc);
         continue;
       }
 
       /// For multidimensional datablocks, satisfy dependencies recursively for
       /// each element.
-      const auto &dims = entryDbs[dbCG].sizes;
-      const unsigned numDims = dims.size();
+      const auto &dbSizes = entryDbs[dbCG].sizes;
+      // const auto &dbOffsets = entryDbs[dbCG].offsets;
+      const unsigned numDbSizes = dbSizes.size();
 
       std::function<Value(unsigned, SmallVector<Value, 4> &, Value)>
           satisfyRecursive = [&](unsigned dim, SmallVector<Value, 4> &indices,
                                  Value curSlot) -> Value {
-        if (dim == numDims) {
+        if (dim == numDbSizes) {
           auto loadedSlot = builder.create<memref::LoadOp>(loc, curSlot);
           auto slotInt = AC.castToInt(AC.Int32, loadedSlot, loc);
           auto eventGuidPtr =
@@ -563,9 +585,9 @@ void EdtCodegen::processDependencies(Location loc) {
           return curSlot;
         }
 
-        auto lowerBound = builder.create<arith::ConstantIndexOp>(loc, 0);
-        auto upperBound = dims[dim];
-        auto step = builder.create<arith::ConstantIndexOp>(loc, 1);
+        auto lowerBound = AC.createIndexConstant(0, loc);
+        auto upperBound = dbSizes[dim];
+        auto step = AC.createIndexConstant(1, loc);
         auto loopOp = builder.create<scf::ForOp>(loc, lowerBound, upperBound,
                                                  step, curSlot);
         auto &loopBlock = loopOp.getRegion().front();
@@ -580,7 +602,7 @@ void EdtCodegen::processDependencies(Location loc) {
       };
 
       SmallVector<Value, 4> indices;
-      satisfyRecursive(0, indices, slotAlloc);
+      satisfyRecursive(0, indices, eventSlotAlloc);
     }
   }
 
@@ -594,7 +616,7 @@ void EdtCodegen::processDependencies(Location loc) {
   builder.setInsertionPointAfter(guid.getDefiningOp());
   for (auto *dbCG : depsToRecord) {
     /// Ensure the datablock has a valid in-event and retrieve the event
-    auto inEvent = dbCG->getInEvent();
+    const auto inEvent = dbCG->getInEvent();
     assert(inEvent && "Datablock missing in event");
     EventCodegen *eventCG =
         AC.getEvent(dyn_cast<arts::EventOp>(inEvent.getDefiningOp()));
@@ -617,9 +639,9 @@ void EdtCodegen::processDependencies(Location loc) {
       continue;
     }
 
-    /// For multidimensional datablocks, add dependencies recursively for each
-    /// element.
-    SmallVector<Value, 4> eventSizes = eventCG->getSizes();
+    /// For multidimensional datablocks, add dependencies for each element.
+    const auto eventSizes = dbCG->getSizes();
+    const auto eventOffsets = dbCG->getOffsets();
     const unsigned numEventDims = eventSizes.size();
     auto inSlotAlloc = builder.create<memref::AllocOp>(dbLoc, indexMemRefType);
     builder.create<memref::StoreOp>(dbLoc, dbCG->getEdtSlot(), inSlotAlloc);
@@ -645,8 +667,9 @@ void EdtCodegen::processDependencies(Location loc) {
             builder.create<memref::StoreOp>(dbLoc, nextSlot, inSlotAlloc);
             return;
           }
-          auto lowerBound = builder.create<arith::ConstantIndexOp>(dbLoc, 0);
-          auto upperBound = eventSizes[dim];
+          auto lowerBound = eventOffsets[dim];
+          auto upperBound =
+              builder.create<arith::AddIOp>(dbLoc, lowerBound, eventSizes[dim]);
           auto step = builder.create<arith::ConstantIndexOp>(dbLoc, 1);
           auto loopOp =
               builder.create<scf::ForOp>(dbLoc, lowerBound, upperBound, step);
@@ -694,8 +717,9 @@ void EdtCodegen::processDependencies(Location loc) {
       }
 
       /// For multidimensional datablocks, increment latch counts recursively.
-      SmallVector<Value, 4> dims = dbCG->getSizes();
-      const unsigned numDims = dims.size();
+      const auto dbSizes = dbCG->getSizes();
+      const auto dbOffsets = dbCG->getOffsets();
+      const unsigned numDbDims = dbSizes.size();
       auto outSlotAlloc =
           builder.create<memref::AllocOp>(dbLoc, indexMemRefType);
       builder.create<memref::StoreOp>(dbLoc, dbCG->getEdtSlot(), outSlotAlloc);
@@ -703,7 +727,7 @@ void EdtCodegen::processDependencies(Location loc) {
       std::function<void(unsigned, Value, SmallVector<Value, 4> &)>
           incrementLatchRecursive = [&](unsigned dim, Value curSlot,
                                         SmallVector<Value, 4> &indices) {
-            if (dim == numDims) {
+            if (dim == numDbDims) {
               auto loadedEventGuid =
                   builder.create<memref::LoadOp>(dbLoc, eventGuid, indices);
               auto loadedDbGuid =
@@ -718,10 +742,10 @@ void EdtCodegen::processDependencies(Location loc) {
               builder.create<memref::StoreOp>(dbLoc, nextSlot, curSlot);
               return;
             } else {
-              auto lowerBound =
-                  builder.create<arith::ConstantIndexOp>(dbLoc, 0);
-              auto upperBound = dims[dim];
-              auto step = builder.create<arith::ConstantIndexOp>(dbLoc, 1);
+              auto lowerBound = dbOffsets[dim];
+              auto upperBound = builder.create<arith::AddIOp>(dbLoc, lowerBound,
+                                                              dbSizes[dim]);
+              auto step = AC.createIndexConstant(1, dbLoc);
               auto loopOp = builder.create<scf::ForOp>(
                   dbLoc, lowerBound, upperBound, step, curSlot);
               auto &loopBlock = loopOp.getRegion().front();
@@ -852,16 +876,16 @@ void EdtCodegen::createFnEntry(Location loc) {
   auto fnDepVPtr = AC.castToLLVMPtr(fnDepV, loc);
 
   for (auto &dep : deps) {
-    /// Get corresponding DataBlock.
+    /// Get corresponding DB.
     auto *db = AC.getDatablock(dep);
     assert(db && "Datablock not found");
 
-    /// Skip datablocks that are not in mode.
+    /// Skip DBs that are not in mode.
     if (!db->isInMode())
       continue;
 
-    /// Iterate over uses to see if another datablock is using this one. If
-    /// so, set the guid and ptr for the other datablock.
+    /// Iterate over uses to see if another DB is using this one. If
+    /// so, set the guid and ptr for the other DB.
     auto updateUserDb = [&](Value entryGuid, Value entryPtr) {
       for (auto *user : db->getOp().getUsers()) {
         /// We are only concerned with datablocks in the same EDT region.
@@ -879,7 +903,7 @@ void EdtCodegen::createFnEntry(Location loc) {
       }
     };
 
-    /// Handle single datablock
+    /// Handle single DB
     if (db->hasSingleSize()) {
       auto curIndex = loadIndex();
       auto curGep = AC.castToInt(
@@ -897,29 +921,45 @@ void EdtCodegen::createFnEntry(Location loc) {
       auto newIndex =
           builder.create<arith::AddIOp>(loc, curIndex, oneConst).getResult();
       builder.create<memref::StoreOp>(loc, newIndex, indexAlloc);
-      /// Rewire the datablock to the pointer.
+      /// Rewire the DB to the pointer.
       updateUserDb(entryGuid, entryPtr);
       rewireMap[db->getOp()] = entryPtr;
       continue;
     }
 
-    /// Handle multi-dimensional datablock
+    /// Handle multi-dimensional DB
     const auto &dbSizes = db->getSizes();
+    const auto &dbOffsets = db->getOffsets();
+    const auto dbRank = dbSizes.size();
     auto &entrySizes = entryDbs[db].sizes;
-    entrySizes.reserve(dbSizes.size());
-    for (unsigned i = 0, e = dbSizes.size(); i < e; ++i) {
+    auto &entryOffsets = entryDbs[db].offsets;
+    entrySizes.reserve(dbRank);
+    entryOffsets.reserve(dbRank);
+    for (unsigned i = 0; i < dbRank; ++i) {
+      /// Sizes
       if (entryDbs[db].sizeIndex.count(i))
         entrySizes.push_back(rewireMap[params[entryDbs[db].sizeIndex[i]]]);
       else if (auto cstOp = dbSizes[i].getDefiningOp<arith::ConstantIndexOp>())
         entrySizes.push_back(builder.clone(*cstOp)->getResult(0));
       else
         llvm_unreachable("Datablock size is not a constant");
+
+      /// Offsets
+      if (entryDbs[db].offsetIndex.count(i))
+        entryOffsets.push_back(rewireMap[params[entryDbs[db].offsetIndex[i]]]);
+      else if (auto cstOp =
+                   dbOffsets[i].getDefiningOp<arith::ConstantIndexOp>())
+        entryOffsets.push_back(builder.clone(*cstOp)->getResult(0));
+      else
+        llvm_unreachable("Datablock offset is not a constant");
     }
 
     /// Allocate arrays for GUIDs and pointers.
     auto guidType = MemRefType::get(
         std::vector<int64_t>(entrySizes.size(), ShapedType::kDynamic),
         AC.ArtsGuid);
+    /// TODO: We might need to allocate dynamic memory for the entryGuid and
+    /// entryPtr
     auto entryGuid =
         builder.create<memref::AllocaOp>(loc, guidType, entrySizes);
     auto ptrType = MemRefType::get(
@@ -927,7 +967,7 @@ void EdtCodegen::createFnEntry(Location loc) {
         AC.VoidPtr);
     auto entryPtr = builder.create<memref::AllocaOp>(loc, ptrType, entrySizes);
 
-    /// Recursively load the datablock entry info for each element.
+    /// Load the DB entry info for each element.
     std::function<void(unsigned, SmallVector<Value, 4> &)> createDbs =
         [&](unsigned dim, SmallVector<Value, 4> &indices) {
           if (dim == entrySizes.size()) {
@@ -956,9 +996,10 @@ void EdtCodegen::createFnEntry(Location loc) {
           }
 
           /// Create loop for current dimension.
-          auto lower = builder.create<arith::ConstantIndexOp>(loc, 0);
-          auto upper = entrySizes[dim];
-          auto loopOp = builder.create<scf::ForOp>(loc, lower, upper, oneConst);
+          auto lowerBound = AC.createIndexConstant(0, loc);
+          auto upperBound = entrySizes[dim];
+          auto loopOp =
+              builder.create<scf::ForOp>(loc, lowerBound, upperBound, oneConst);
           auto &loopBlock = loopOp.getRegion().front();
           builder.setInsertionPointToStart(&loopBlock);
           indices.push_back(loopOp.getInductionVar());

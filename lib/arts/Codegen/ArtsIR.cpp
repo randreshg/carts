@@ -4,6 +4,7 @@
 #include "arts/Codegen/ArtsIR.h"
 #include "arts/ArtsDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Support/LLVM.h"
 #include "polygeist/Ops.h"
 
 namespace mlir {
@@ -69,6 +70,8 @@ DataBlockOp createDatablockOp(OpBuilder &builder, Location loc,
 
   /// Compute sizes and subshape.
   SmallVector<Value, 4> indices(pinnedCount), sizes(rank - pinnedCount);
+  SmallVector<Value, 4> offsets(rank - pinnedCount,
+                                builder.create<arith::ConstantIndexOp>(loc, 0));
   SmallVector<int64_t, 4> subShape;
   for (int64_t i = 0, j = 0; i < rank; ++i) {
     if (i < pinnedCount) {
@@ -103,13 +106,13 @@ DataBlockOp createDatablockOp(OpBuilder &builder, Location loc,
           builder.create<arith::MulIOp>(loc, elementTySize, size).getResult();
     }
     SmallVector<Value, 4> newSizes;
-    return builder.create<arts::DataBlockOp>(loc, resultType, modeAttr,
-                                             baseMemRef, resultType,
-                                             elementTySize, indices, newSizes);
+    return builder.create<arts::DataBlockOp>(
+        loc, resultType, modeAttr, baseMemRef, resultType, elementTySize,
+        indices, offsets, newSizes);
   } else {
-    return builder.create<arts::DataBlockOp>(loc, resultType, modeAttr,
-                                             baseMemRef, elementType,
-                                             elementTypeSize, indices, sizes);
+    return builder.create<arts::DataBlockOp>(
+        loc, resultType, modeAttr, baseMemRef, elementType, elementTypeSize,
+        indices, offsets, sizes);
   }
 }
 
