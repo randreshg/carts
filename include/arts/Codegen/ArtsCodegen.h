@@ -48,6 +48,7 @@ public:
   bool hasPtrDb() { return dbOp.hasPtrDb(); }
   bool hasSingleSize() { return dbOp.hasSingleSize(); }
   ValueRange getIndices() { return dbOp.getIndices(); }
+  ValueRange getOffsets() { return dbOp.getOffsets(); }
   ValueRange getSizes() { return dbOp.getSizes(); }
 
   /// Setters
@@ -103,9 +104,22 @@ public:
   void setDepC(Value depC) { this->depC = depC; }
 
   /// Interface
-  int insertParam(Value param) {
-    params.push_back(param);
-    return params.size() - 1;
+  std::pair<bool, int> insertParam(Value param) {
+    /// Check if the size value is already in the params vector using llvm::find
+    auto it = llvm::find(params, param);
+    unsigned paramIndex;
+
+    /// If the size was not found in the existing parameters, add it
+    bool inserted = false;
+    if (it == params.end()) {
+      paramIndex = params.size();
+      params.push_back(param);
+      inserted = true;
+    } else {
+      /// Found the existing parameter index
+      paramIndex = std::distance(params.begin(), it);
+    }
+    return {inserted, paramIndex};
   }
   void addParam(Value param) { params.push_back(param); }
   void addEventDependency(Value dep) { deps.push_back(dep); }
@@ -131,8 +145,9 @@ private:
   /// Entry info
   struct DatablockEntry {
     Value guid, ptr;
-    SmallVector<Value> sizes;
+    SmallVector<Value> sizes, offsets;
     DenseMap<unsigned, unsigned> sizeIndex;
+    DenseMap<unsigned, unsigned> offsetIndex;
   };
   DenseMap<arts::DataBlockCodegen *, DatablockEntry> entryDbs;
   /// Entry events

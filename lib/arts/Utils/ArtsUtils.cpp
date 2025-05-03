@@ -218,10 +218,9 @@ bool isValueConstant(Value val) {
   if (!defOp)
     return false;
 
-  auto constantOp = dyn_cast<arith::ConstantOp>(defOp);
-  if (!constantOp)
-    return false;
-  return true;
+  if (isa<arith::ConstantIndexOp>(defOp) || isa<arith::ConstantOp>(defOp))
+    return true;
+  return false;
 };
 
 } // namespace arts
