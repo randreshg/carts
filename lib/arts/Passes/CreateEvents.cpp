@@ -247,13 +247,11 @@ void CreateEventsPass::processEvent(
 
   /// Set insertion point to the beginning of the EDT parent's region if
   /// available,
-  if (dbOp->edtParent) {
+  if (dbOp->edtParent)
     builder.setInsertionPointToStart(&dbOp->edtParent->getRegion(0).front());
-  }
   /// Otherwise, set the insertion point to the dbOp.
-  else {
+  else
     builder.setInsertionPoint(dbOp->op);
-  }
 
   if (dbOp->parent) {
     assert(dbOp->parent && "Grouped event must have a parent datablock");

@@ -1,9 +1,9 @@
-//============================================================================//
-//                                ARTSTypes.h                                 //
-//============================================================================//
+///==========================================================================
+/// File: ArtsTypes.h
+///==========================================================================
 
-#ifndef LLVM_ARTS_TYPES_H
-#define LLVM_ARTS_TYPES_H
+#ifndef CARTS_UTILS_ARTSTYPES_H
+#define CARTS_UTILS_ARTSTYPES_H
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/InstrTypes.h"
@@ -12,11 +12,6 @@
 namespace mlir {
 namespace arts {
 namespace types {
-/// ------------------------------------------------------------------- ///
-///                            ART TYPES                                ///
-/// It contains the types used by the ARTS runtime library.
-/// ------------------------------------------------------------------- ///
-
 /// EDT types
 enum class EdtType { Parallel, Single, Sync, Task };
 enum class DatablockAccessType { ReadOnly, WriteOnly, ReadWrite, Unknown };
@@ -64,4 +59,4 @@ enum class RuntimeFunction {
 } // end namespace types
 } // end namespace arts
 } // end namespace mlir
-#endif // LLVM_ARTS_TYPES_H
+#endif // CARTS_UTILS_ARTSTYPES_H

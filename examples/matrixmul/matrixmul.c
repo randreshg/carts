@@ -5,6 +5,18 @@
 
 // #define N 10
 // #define BS 5
+
+/*
+cgeist matrixmul.c -fopenmp -O0 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include > matrixmul.mlir
+
+carts-opt matrixmul.mlir --lower-affine --cse --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --hoist-invariant --create-datablocks --canonicalize-polygeist --datablock --cse --canonicalize-scf-for --canonicalize-polygeist --polygeist-mem2reg --create-events --create-epochs  -debug-only=datablock,datablock-analysis &> matrixmul-arts.mlir
+
+carts-opt matrixmul.mlir --lower-affine --cse --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --hoist-invariant --create-datablocks --canonicalize-polygeist --datablock --cse --canonicalize-scf-for --canonicalize-polygeist --polygeist-mem2reg --create-events --create-epochs --canonicalize-polygeist --convert-arts-to-llvm --canonicalize-polygeist --cse --convert-polygeist-to-llvm --cse -debug-only=convert-arts-to-llvm &> matrixmul-arts.mlir
+
+mlir-translate --mlir-to-llvmir matrixmul-arts.mlir &> matrixmul-arts.ll
+
+clang matrixmul-arts.ll -O3 -g0 -march=native -o matrixmul -I/home/randres/projects/carts/.install/arts/include -L/home/randres/projects/carts/.install/arts/lib -larts -L/usr/lib64/librt.so/usr/lib64/libpthread.so/usr/lib64/lib -lrdmacm
+*/
 #define TOLERANCE 1e-6
 
 int main(int argc, char *argv[]) {
@@ -40,8 +52,12 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < N; i += BS) {
       for (int j = 0; j < N; j += BS) {
         for (int k = 0; k < N; k += BS) {
+          printf("Processing block (%d, %d, %d) to (%d, %d, %d)\n", 
+                 i, j, k, i + BS, j + BS, k + BS);
           #pragma omp task
           {
+            printf("Executing task for block (%d, %d, %d) to (%d, %d, %d)\n",\
+                   i, j, k, i + BS, j + BS, k + BS);
             for (int ii = i; ii < i + BS; ii++)
               for (int jj = j; jj < j + BS; jj++)
                 for (int kk = k; kk < k + BS; kk++) {

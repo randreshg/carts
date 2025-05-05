@@ -317,11 +317,6 @@ void CreateDatablocksPass::analyzeValueInEdt(
     if (!region.isAncestor(op->getParentRegion()))
       continue;
 
-    /// Only consider load, store and polygeist memref2pointer ops.
-    // if (!(isa<memref::LoadOp>(op) || isa<memref::StoreOp>(op))) {
-    //   continue;
-    // }
-
     CandidateDatablock db(dbPtr, strAnalysis->isStringMemRef(dbPtr));
     SmallVector<Value> indices;
     if (auto loadOp = dyn_cast<memref::LoadOp>(op))
@@ -360,8 +355,8 @@ void CreateDatablocksPass::analyzeValueInEdt(
     /// Compare each candidate with those having more pinned indices.
     for (uint32_t i = 0, n = vec.size(); i < n; ++i) {
       for (uint32_t j = i + 1; j < n; ++j) {
-        const auto *prefixCand = vec[i];
-        const auto *cand = vec[j];
+        const CandidateDatablock *prefixCand = vec[i];
+        const CandidateDatablock *cand = vec[j];
         /// If db1 is a prefix of db2, mark db2 for removal.
         if (prefixCand->pinnedIndices.size() >= cand->pinnedIndices.size())
           continue;

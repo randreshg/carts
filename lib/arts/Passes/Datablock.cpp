@@ -195,8 +195,21 @@ bool DatablockPass::shrinkDatablock() {
   /// Helper lambda to get an MLIR Value from ValueOrInt.
   auto getValue = [&](ValueOrInt val, Operation *contextOp,
                       OpBuilder &builder) -> Value {
-    if (val.isValue)
-      return val.v_val;
+    if (val.isValue) {
+      /// Cast the Value to an Index type if needed.
+      Value v = val.v_val;
+      if (v.getType().isIndex()) {
+        return v;
+      } else {
+        OpBuilder::InsertionGuard guard(builder);
+        LLVM_DEBUG(dbgs() << "Converting to index: " << v << "\n");
+        auto op = v.getDefiningOp();
+        assert(op && "Value must have a defining operation");
+        builder.setInsertionPoint(op);
+        return builder.create<arith::IndexCastOp>(contextOp->getLoc(),
+                                                  builder.getIndexType(), v);
+      }
+    }
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPoint(contextOp);
     /// Create a constant index op at the location of the context operation.

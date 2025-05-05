@@ -11,12 +11,21 @@ namespace mlir {
 namespace arts {
 
 bool isInvariantInEDT(arts::EdtOp edtOp, Value value) {
-  auto &region = edtOp.getRegion();
+  if (Operation *op = value.getDefiningOp()) {
+    /// If the value is a constant, it is invariant.
+    if (op->hasTrait<OpTrait::ConstantLike>())
+      return true;
 
-  /// Check if the value is a constant or a constant-like operation.
-  Operation *op = value.getDefiningOp();
-  if (op && op->hasTrait<OpTrait::ConstantLike>())
-    return true;
+    /// If the value is an arts operation or a terminator, it is not invariant.
+    if (op->hasTrait<OpTrait::IsTerminator>() || isArtsOp(op))
+      return false;
+
+    /// If it is memory effect free and speculatable, it is invariant.
+    if (mlir::isPure(op))
+      return true;
+  }
+
+  auto &region = edtOp.getRegion();
 
   /// If not defined inside the region, check all users
   if (!region.isProperAncestor(value.getParentRegion())) {
@@ -24,7 +33,7 @@ bool isInvariantInEDT(arts::EdtOp edtOp, Value value) {
       if (!region.isAncestor(user->getParentRegion()))
         continue;
 
-      if (mlir::isMemoryEffectFree(user))
+      if (mlir::isMemoryEffectFree(user) && isSpeculatable(op))
         continue;
 
       /// Check specific memory operations where value is used as an index
@@ -34,8 +43,9 @@ bool isInvariantInEDT(arts::EdtOp edtOp, Value value) {
       } else if (auto memOp = dyn_cast<memref::StoreOp>(user)) {
         if (llvm::is_contained(memOp.getIndices(), value))
           return true;
-        /// Check printf calls
-      } else if (auto callOp = dyn_cast<func::CallOp>(user)) {
+      }
+      /// Check printf calls
+      else if (auto callOp = dyn_cast<func::CallOp>(user)) {
         if (callOp.getCallee() == "printf")
           return true;
       } else if (auto llvmCallOp = dyn_cast<LLVM::CallOp>(user)) {
@@ -184,39 +194,13 @@ void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap,
     rewireMap.clear();
 }
 
-std::optional<int64_t> computeConstant(Value val) {
-  /// Compute a constant integer value from a Value.
-  if (auto cst = val.getDefiningOp<arith::ConstantIndexOp>())
-    return cst.value();
-  if (auto addOp = dyn_cast_or_null<arith::AddIOp>(val.getDefiningOp())) {
-    auto lhs = computeConstant(addOp.getOperand(0));
-    auto rhs = computeConstant(addOp.getOperand(1));
-    if (lhs && rhs)
-      return *lhs + *rhs;
-  }
-  if (auto mulOp = dyn_cast_or_null<arith::MulIOp>(val.getDefiningOp())) {
-    auto lhs = computeConstant(mulOp.getOperand(0));
-    auto rhs = computeConstant(mulOp.getOperand(1));
-    if (lhs && rhs)
-      return (*lhs) * (*rhs);
-  }
-  return std::nullopt;
-}
-
-int64_t tryParseIndexConstant(Value val) {
-  /// Try to parse an index constant from a Value.
-  if (auto c = computeConstant(val))
-    return *c;
-  ValueOrInt voi(val);
-  if (!voi.isValue)
-    return voi.i_val;
-  return -1;
-}
-
 bool isValueConstant(Value val) {
-  auto defOp = val.getDefiningOp();
+  Operation *defOp = val.getDefiningOp();
   if (!defOp)
     return false;
+
+  if (defOp->hasTrait<OpTrait::ConstantLike>())
+    return true;
 
   if (isa<arith::ConstantIndexOp>(defOp) || isa<arith::ConstantOp>(defOp))
     return true;

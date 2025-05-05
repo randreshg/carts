@@ -1,3 +1,17 @@
+/*
+cgeist -std=c++17 convolution.cpp -fopenmp -O0 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include > convolution.mlir
+
+carts-opt convolution.mlir --lower-affine --cse --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --hoist-invariant --create-datablocks --canonicalize-polygeist --datablock --cse --canonicalize-scf-for --canonicalize-polygeist --polygeist-mem2reg --create-events --create-epochs  -debug-only=datablock,datablock-analysis &> convolution-arts.mlir
+
+carts-opt convolution.mlir --lower-affine --cse --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --hoist-invariant --create-datablocks --canonicalize-polygeist --datablock --cse --canonicalize-scf-for --canonicalize-polygeist --polygeist-mem2reg --create-events --create-epochs --canonicalize-polygeist --convert-arts-to-llvm --canonicalize-polygeist --cse --convert-polygeist-to-llvm --cse -debug-only=convert-arts-to-llvm &> convolution-arts.mlir
+
+carts-opt convolution.mlir --lower-affine --cse --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --hoist-invariant --create-datablocks --canonicalize-polygeist --datablock --cse --canonicalize-scf-for --canonicalize-polygeist --polygeist-mem2reg --create-events --create-epochs --canonicalize-polygeist --convert-arts-to-llvm --canonicalize-polygeist --cse --convert-polygeist-to-llvm --cse -debug-only=convert-arts-to-llvm &> convolution-arts.mlir
+
+mlir-translate --mlir-to-llvmir convolution-arts.mlir &> convolution-arts.ll
+
+clang convolution-arts.ll -O3 -g0 -march=native -o convolution -I/home/randres/projects/carts/.install/arts/include -L/home/randres/projects/carts/.install/arts/lib -larts -L/usr/lib64/librt.so/usr/lib64/libpthread.so/usr/lib64/lib -lrdmacm
+*/
+
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -40,7 +54,7 @@ int main(int argc, char **argv) {
         #pragma omp task firstprivate(start_row, task_id)
         {
           printf("Task %d running\n", task_id + 1);
-          for (int i = start_row; i < start_row + BLOCK_SIZE && i < output_size;
+          for (int i = start_row; (i < start_row + BLOCK_SIZE) && (i < output_size);
                ++i) {
             for (int j = 0; j < output_size; ++j) {
               double tmp = 0.0;
@@ -92,7 +106,7 @@ int main(int argc, char **argv) {
   }
 
   // Print results
-  printf("Matrix A:\n");
+  printf("convolution A:\n");
   for (int i = 0; i < A_size; ++i) {
     for (int j = 0; j < A_size; ++j) {
       printf("%4.1f ", A[i][j]);
@@ -101,7 +115,7 @@ int main(int argc, char **argv) {
   }
   printf("\n");
 
-  printf("Matrix Kernel:\n");
+  printf("convolution Kernel:\n");
   for (int i = 0; i < KERNEL_SIZE; ++i) {
     for (int j = 0; j < KERNEL_SIZE; ++j) {
       printf("%4.1f ", Kernel[i][j]);
@@ -110,7 +124,7 @@ int main(int argc, char **argv) {
   }
   printf("\n");
 
-  printf("Matrix C_parallel:\n");
+  printf("convolution C_parallel:\n");
   for (int i = 0; i < output_size; ++i) {
     for (int j = 0; j < output_size; ++j) {
       printf("%4.1f ", C_parallel[i][j]);
@@ -119,7 +133,7 @@ int main(int argc, char **argv) {
   }
   printf("\n");
 
-  printf("Matrix C_serial:\n");
+  printf("convolution C_serial:\n");
   for (int i = 0; i < output_size; ++i) {
     for (int j = 0; j < output_size; ++j) {
       printf("%4.1f ", C_serial[i][j]);

@@ -353,7 +353,6 @@ void EdtCodegen::process(Location loc) {
         /// For single-dimensional DBs, use the size directly.
         dbNumElements = AC.createIndexConstant(1, loc);
         insertSizeAsParameter(db, dbNumElements, 0);
-        insertOffsetAsParameter(db, db->getOffsets()[0], 0);
       } else {
         /// For multi-dimensional DBs, compute the product of sizes.
         Value product = AC.createIndexConstant(1, loc);
@@ -430,6 +429,7 @@ void EdtCodegen::process(Location loc) {
       loc, AC.createIndexConstant(staticParamCount, loc), paramIndex);
 
   /// Insert event GUIDs into paramV.
+  LLVM_DEBUG(dbgs() << "Inserting event GUIDs into paramV\n");
   for (auto db : depsToSatisfy) {
     auto eventOp = dyn_cast<arts::EventOp>(db->getOutEvent().getDefiningOp());
     auto eventCG = AC.getEvent(eventOp);
@@ -448,10 +448,12 @@ void EdtCodegen::process(Location loc) {
       builder.create<memref::StoreOp>(loc, newParamIdx, paramIndex);
     } else {
       /// Recursive function to insert all GUIDs for multi-dimensional events.
-      const auto eventDim = eventOp.getSizes().size();
+      const auto dbSizes = db->getSizes();
+      const auto dbOffsets = db->getOffsets();
+      const auto dbRank = dbSizes.size();
       std::function<void(unsigned, SmallVector<Value, 4> &)> createEvents =
           [&](unsigned dim, SmallVector<Value, 4> &indices) {
-            if (dim == eventDim) {
+            if (dim == dbRank) {
               auto eventGuid = builder.create<memref::LoadOp>(
                   loc, eventCG->getGuid(), indices);
               auto curParamIdx =
@@ -466,9 +468,9 @@ void EdtCodegen::process(Location loc) {
               builder.create<memref::StoreOp>(loc, newParamIdx, paramIndex);
               return;
             }
-            auto lowerBound = db->getOffsets()[dim];
-            auto upperBound = builder.create<arith::AddIOp>(
-                loc, lowerBound, db->getSizes()[dim]);
+            auto lowerBound = dbOffsets[dim];
+            auto upperBound =
+                builder.create<arith::AddIOp>(loc, lowerBound, dbSizes[dim]);
             auto step = AC.createIndexConstant(1, loc);
             auto loopOp =
                 builder.create<scf::ForOp>(loc, lowerBound, upperBound, step);
@@ -481,9 +483,10 @@ void EdtCodegen::process(Location loc) {
           };
 
       SmallVector<Value, 4> indices = db->getIndices();
-      createEvents(indices.size(), indices);
+      createEvents(0, indices);
     }
   }
+  LLVM_DEBUG(dbgs() << "Inserted event GUIDs into paramV\n");
 }
 
 void EdtCodegen::processDependencies(Location loc) {
@@ -539,13 +542,12 @@ void EdtCodegen::processDependencies(Location loc) {
       /// For multidimensional datablocks, satisfy dependencies recursively for
       /// each element.
       const auto &dbSizes = entryDbs[dbCG].sizes;
-      // const auto &dbOffsets = entryDbs[dbCG].offsets;
-      const unsigned numDbSizes = dbSizes.size();
+      const unsigned dbRank = dbSizes.size();
 
       std::function<Value(unsigned, SmallVector<Value, 4> &, Value)>
           satisfyRecursive = [&](unsigned dim, SmallVector<Value, 4> &indices,
                                  Value curSlot) -> Value {
-        if (dim == numDbSizes) {
+        if (dim == dbRank) {
           auto loadedSlot = builder.create<memref::LoadOp>(loc, curSlot);
           auto slotInt = AC.castToInt(AC.Int32, loadedSlot, loc);
           auto eventGuidPtr =
@@ -640,22 +642,25 @@ void EdtCodegen::processDependencies(Location loc) {
     }
 
     /// For multidimensional datablocks, add dependencies for each element.
-    const auto eventSizes = dbCG->getSizes();
-    const auto eventOffsets = dbCG->getOffsets();
-    const unsigned numEventDims = eventSizes.size();
+    const auto dbSizes = dbCG->getSizes();
+    const auto dbOffsets = dbCG->getOffsets();
+    const auto dbIndices = dbCG->getIndices();
+    const unsigned dbRank = dbSizes.size();
     auto inSlotAlloc = builder.create<memref::AllocOp>(dbLoc, indexMemRefType);
     builder.create<memref::StoreOp>(dbLoc, dbCG->getEdtSlot(), inSlotAlloc);
 
     std::function<void(unsigned, SmallVector<Value, 4> &)>
         addDependenciesRecursive = [&](unsigned dim,
                                        SmallVector<Value, 4> &indices) {
-          if (dim == numEventDims) {
+          if (dim == dbRank) {
             auto loadedEventGuid =
                 builder.create<memref::LoadOp>(dbLoc, eventGuid, indices);
             auto currentSlot =
                 builder.create<memref::LoadOp>(dbLoc, inSlotAlloc.getResult());
+            SmallVector<Value> loadedDbIndices(dbIndices);
+            loadedDbIndices.append(indices.begin(), indices.end());
             auto loadedDbGuid =
-                builder.create<memref::LoadOp>(dbLoc, dbGuid, indices);
+                builder.create<memref::LoadOp>(dbLoc, dbGuid, loadedDbIndices);
             AC.addEventDependency(loadedEventGuid, guid, currentSlot,
                                   loadedDbGuid, dbLoc);
             /// Increment the slot for the next dependency.
@@ -667,9 +672,9 @@ void EdtCodegen::processDependencies(Location loc) {
             builder.create<memref::StoreOp>(dbLoc, nextSlot, inSlotAlloc);
             return;
           }
-          auto lowerBound = eventOffsets[dim];
+          auto lowerBound = dbOffsets[dim];
           auto upperBound =
-              builder.create<arith::AddIOp>(dbLoc, lowerBound, eventSizes[dim]);
+              builder.create<arith::AddIOp>(dbLoc, lowerBound, dbSizes[dim]);
           auto step = builder.create<arith::ConstantIndexOp>(dbLoc, 1);
           auto loopOp =
               builder.create<scf::ForOp>(dbLoc, lowerBound, upperBound, step);
@@ -681,8 +686,8 @@ void EdtCodegen::processDependencies(Location loc) {
           builder.setInsertionPointAfter(loopOp);
         };
 
-    SmallVector<Value, 4> initIndices = dbCG->getIndices();
-    addDependenciesRecursive(initIndices.size(), initIndices);
+    SmallVector<Value, 4> initIndices;
+    addDependenciesRecursive(0, initIndices);
   }
 
   /// ---------------------------------------------------------------------
@@ -719,7 +724,8 @@ void EdtCodegen::processDependencies(Location loc) {
       /// For multidimensional datablocks, increment latch counts recursively.
       const auto dbSizes = dbCG->getSizes();
       const auto dbOffsets = dbCG->getOffsets();
-      const unsigned numDbDims = dbSizes.size();
+      const auto dbIndices = dbCG->getIndices();
+      const unsigned dbRank = dbSizes.size();
       auto outSlotAlloc =
           builder.create<memref::AllocOp>(dbLoc, indexMemRefType);
       builder.create<memref::StoreOp>(dbLoc, dbCG->getEdtSlot(), outSlotAlloc);
@@ -727,11 +733,13 @@ void EdtCodegen::processDependencies(Location loc) {
       std::function<void(unsigned, Value, SmallVector<Value, 4> &)>
           incrementLatchRecursive = [&](unsigned dim, Value curSlot,
                                         SmallVector<Value, 4> &indices) {
-            if (dim == numDbDims) {
+            if (dim == dbRank) {
               auto loadedEventGuid =
                   builder.create<memref::LoadOp>(dbLoc, eventGuid, indices);
-              auto loadedDbGuid =
-                  builder.create<memref::LoadOp>(dbLoc, dbGuid, indices);
+              SmallVector<Value> loadedDbIndices(dbIndices);
+              loadedDbIndices.append(indices.begin(), indices.end());
+              auto loadedDbGuid = builder.create<memref::LoadOp>(
+                  dbLoc, dbGuid, loadedDbIndices);
               AC.incrementEventLatchCount(loadedEventGuid, loadedDbGuid, dbLoc);
               auto loadedSlot = builder.create<memref::LoadOp>(dbLoc, curSlot);
               auto nextSlot =
@@ -759,7 +767,7 @@ void EdtCodegen::processDependencies(Location loc) {
             }
           };
 
-      SmallVector<Value, 4> indices = dbCG->getIndices();
+      SmallVector<Value, 4> indices;
       incrementLatchRecursive(0, outSlotAlloc.getResult(), indices);
     }
   }
