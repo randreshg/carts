@@ -107,7 +107,7 @@ def ConvertArtsToLLVM : Pass<"convert-arts-to-llvm", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createConvertArtsToLLVMPass()";
 }
 
-def HoistInvariantOps : Pass<"hoist-invariant", "mlir::ModuleOp"> {
+def EdtInvariantCodeMotion : Pass<"eicm", "mlir::ModuleOp"> {
   let summary = "Hoist invariant operations from arts edt regions";
   let dependentDialects = [
     "memref::MemRefDialect",
@@ -116,6 +116,6 @@ def HoistInvariantOps : Pass<"hoist-invariant", "mlir::ModuleOp"> {
     "arts::ArtsDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createHoistInvariantOpsPass()";
+  let constructor = "mlir::arts::createEdtInvariantCodeMotionPass()";
 }
 #endif // CARTS_PASSES

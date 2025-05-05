@@ -1,6 +1,8 @@
-// ArtsCodegen.h
-#ifndef MLIR_CODEGEN_ARTSCODEGEN_H
-#define MLIR_CODEGEN_ARTSCODEGEN_H
+///==========================================================================
+/// File: ArtsCodegen.h
+///==========================================================================
+#ifndef CARTS_CODEGEN_ARTSCODEGEN_H
+#define CARTS_CODEGEN_ARTSCODEGEN_H
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
@@ -307,4 +309,4 @@ private:
 
 } // namespace arts
 } // namespace mlir
-#endif // MLIR_CODEGEN_ARTSCODEGEN_H
+#endif // CARTS_CODEGEN_ARTSCODEGEN_H

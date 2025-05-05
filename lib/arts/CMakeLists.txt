@@ -17,6 +17,7 @@ add_mlir_dialect_library(MLIRArts
     MLIRSCFTransforms
 )
 add_subdirectory(Utils)
+add_subdirectory(Transforms)
 add_subdirectory(Analysis)
 add_subdirectory(Codegen)
 add_subdirectory(Passes)

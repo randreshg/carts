@@ -199,44 +199,30 @@ void DatablockNode::analyzeIndexValue(Value indexVal,
     return;
 
   /// Constant index.
-  if (auto cst = indexVal.getDefiningOp<arith::ConstantIndexOp>()) {
-    dimMin.insert(cst.value());
-    dimMax.insert(cst.value() + 1);
-    return;
-  }
-
-  /// Other integer constants
-  if (auto cst = indexVal.getDefiningOp<arith::ConstantOp>()) {
-    if (auto i = cst.getValue().dyn_cast<IntegerAttr>()) {
-      dimMin.insert(i.getInt());
-      dimMax.insert(i.getInt() + 1);
-    }
+  if(isValueConstant(indexVal)) {
     dimMin.insert(indexVal);
     dimMax.insert(indexVal);
-    return;
   }
 
   /// Loop Induction Variable (scf.for).
   if (auto bbArg = indexVal.dyn_cast<BlockArgument>()) {
-    /// Check if it's an IV of an scf.for loop
     Operation *parentOp = bbArg.getOwner()->getParentOp();
+    /// Check if it's an IV of an scf.for loop
     if (auto forOp = dyn_cast_or_null<scf::ForOp>(parentOp)) {
       if (bbArg == forOp.getInductionVar()) {
-        /// Lower bound
-        Value lb = forOp.getLowerBound();
-        if (auto c = lb.getDefiningOp<arith::ConstantIndexOp>())
-          dimMin.insert(c.value());
-        else
-          dimMin.insert(lb);
-
-        /// Upper bound
-        Value ub = forOp.getUpperBound();
-        if (auto c = ub.getDefiningOp<arith::ConstantIndexOp>())
-          dimMax.insert(c.value());
-        else
-          dimMax.insert(ub);
+        dimMin.insert(forOp.getLowerBound());
+        dimMax.insert(forOp.getUpperBound());
         return;
       }
+    }
+    /// Check if it's a loop-carried variable of an scf.while loop
+    else if (auto whileOp = dyn_cast_or_null<scf::WhileOp>(parentOp)) {
+      // Determining precise bounds for scf.while loop variables is complex.
+      // Treat it as a symbolic value for now.
+      // TODO: Add more sophisticated analysis for scf.while bounds if needed.
+      dimMin.insert(indexVal);
+      dimMax.insert(indexVal);
+      return;
     }
 
     /// If it's a block argument but not a recognized loop IV, treat as symbolic

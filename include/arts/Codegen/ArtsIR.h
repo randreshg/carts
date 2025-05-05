@@ -2,8 +2,8 @@
 /// File: ArtsIR.h
 ///==========================================================================
 
-#ifndef MLIR_CODEGEN_ARTSIR_H
-#define MLIR_CODEGEN_ARTSIR_H
+#ifndef CARTS_CODEGEN_ARTSIR_H
+#define CARTS_CODEGEN_ARTSIR_H
 
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
@@ -22,4 +22,4 @@ DataBlockOp createDatablockOp(OpBuilder &builder, Location loc,
 } // namespace arts
 } // namespace mlir
 
-#endif // MLIR_CODEGEN_ARTSIR_H
+#endif // CARTS_CODEGEN_ARTSIR_H

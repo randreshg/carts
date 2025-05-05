@@ -1,0 +1,4 @@
+cgeist matrix.c -fopenmp -O0 -S -I//usr/lib/llvm-14/lib/clang/14.0.0/include > matrix.mlir
+carts matrix.mlir -O3 -emit-llvm -o matrix.ll
+clang matrix.ll -O3 -g0 -march=native -o matrix -I//home/randres/projects/carts/.install/arts/include -L/home/randres/projects/carts/.install/arts/lib -larts -L/usr/lib64/librt.so/usr/lib64/libpthread.so/usr/lib64/lib -lrdmacm
+rm matrix.mlir

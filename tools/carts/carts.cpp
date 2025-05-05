@@ -140,12 +140,18 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context) {
     if (Opt) {
       optPM.addPass(createCSEPass());
       optPM.addPass(polygeist::createPolygeistCanonicalizePass());
-      optPM.addPass(polygeist::createRaiseSCFToAffinePass());
+      optPM.addPass(createMem2Reg());
       optPM.addPass(polygeist::createPolygeistCanonicalizePass());
       optPM.addPass(polygeist::replaceAffineCFGPass());
-      optPM.addPass(affine::createAffineExpandIndexOpsPass());
       optPM.addPass(affine::createAffineScalarReplacementPass());
       optPM.addPass(polygeist::replaceAffineCFGPass());
+
+      // optPM.addPass(polygeist::createRaiseSCFToAffinePass());
+      // optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+      // optPM.addPass(polygeist::replaceAffineCFGPass());
+      // optPM.addPass(affine::createAffineExpandIndexOpsPass());
+      // optPM.addPass(affine::createAffineScalarReplacementPass());
+      // optPM.addPass(polygeist::replaceAffineCFGPass());
       optPM.addPass(createLoopInvariantCodeMotionPass());
       optPM.addPass(createCSEPass());
       optPM.addPass(polygeist::createPolygeistCanonicalizePass());
@@ -166,7 +172,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context) {
   PassManager pm(&context);
   pm.addPass(arts::createConvertOpenMPtoARTSPass());
   pm.addPass(arts::createEdtPass());
-  pm.addPass(arts::createHoistInvariantOpsPass());
+  pm.addPass(arts::createEDTInvariantCodeMotion());
   pm.addPass(arts::createCreateDatablocksPass(IdentifyDatablocks));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(polygeist::createCanonicalizeForPass());

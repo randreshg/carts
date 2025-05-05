@@ -1,4 +1,3 @@
-// This program computes two matrices A and B of size N x N.
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
