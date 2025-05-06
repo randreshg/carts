@@ -3,11 +3,21 @@
 #include <omp.h>
 #include <time.h>
 
+/*
+cgeist taskwithdeps.c -fopenmp -O0 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include > taskwithdeps.mlir
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <omp.h>
-#include <time.h>
+carts-opt taskwithdeps.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize-polygeist --create-datablocks --canonicalize-polygeist --datablock --cse -debug-only=edt-invariant-code-motion,datablock,create-datablocks &> taskwithdeps-arts.mlir
+
+carts-opt taskwithdeps.mlir --lower-affine --cse --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --create-datablocks --canonicalize-polygeist --datablock --cse --canonicalize-scf-for --canonicalize-polygeist --polygeist-mem2reg --create-events --create-epochs  -debug-only=datablock,datablock-analysis &> taskwithdeps-arts.mlir
+
+carts-opt taskwithdeps.mlir --lower-affine --cse --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --create-datablocks --canonicalize-polygeist --datablock --cse --canonicalize-scf-for --canonicalize-polygeist --polygeist-mem2reg --create-events --create-epochs --canonicalize-polygeist --convert-arts-to-llvm --canonicalize-polygeist --cse --convert-polygeist-to-llvm --cse -debug-only=convert-arts-to-llvm &> taskwithdeps-arts.mlir
+
+carts-opt taskwithdeps.mlir --lower-affine --cse --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --create-datablocks --canonicalize-polygeist --datablock --cse --canonicalize-scf-for --canonicalize-polygeist --polygeist-mem2reg --create-events --create-epochs --canonicalize-polygeist --convert-arts-to-llvm --canonicalize-polygeist --cse --convert-polygeist-to-llvm --cse -debug-only=convert-arts-to-llvm &> taskwithdeps-arts.mlir
+
+mlir-translate --mlir-to-llvmir taskwithdeps-arts.mlir &> taskwithdeps-arts.ll
+
+clang taskwithdeps-arts.ll -O3 -g0 -march=native -o taskwithdeps -I/home/randres/projects/carts/.install/arts/include -L/home/randres/projects/carts/.install/arts/lib -larts -L/usr/lib64/librt.so/usr/lib64/libpthread.so/usr/lib64/lib -lrdmacm
+*/
 
 int main(int argc, char *argv[]) {
   if (argc < 2) {

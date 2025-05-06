@@ -12,6 +12,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
 /// Arts
 #include "ArtsPassDetails.h"
@@ -252,7 +253,7 @@ bool DatablockPass::shrinkDatablock() {
       for (unsigned i = 0; i < rank; ++i) {
         ValueOrInt minDim = dbNode->dimMin[i];
         ValueOrInt maxDim = dbNode->dimMax[i];
-        Value originalSize = dbOp.getSizes()[i];
+        ValueOrInt originalSize(dbNode->sizes[i]);
 
         /// Get Value representations for min/max dimensions.
         Value minDimValue = getValue(minDim, dbOp, builder);
@@ -260,8 +261,15 @@ bool DatablockPass::shrinkDatablock() {
 
         /// Check if shrinking is needed for this dimension.
         /// Shrinking is needed if min bound > 0 or max bound < original size.
-        bool shrinkThisDim = (minDim > 0) || (maxDimValue != originalSize);
-        // (!valueCmp(Cmp::EQ, originalSize, maxDim))
+        bool shrinkMin = (minDim > 0);
+        /// Check if maxDim is semantically equal to originalSize using valueCmp.
+        bool shrinkMax = false;
+        if(!originalSize.isValue && !maxDim.isValue) {
+          shrinkMax = (maxDim.i_val < originalSize.i_val);
+        } else if(originalSize.isValue && maxDim.isValue) {
+          shrinkMax = (maxDim.v_val != originalSize.v_val);
+        }
+        bool shrinkThisDim = shrinkMin || shrinkMax;
 
         if (shrinkThisDim) {
           needsShrinking = true;
@@ -273,7 +281,7 @@ bool DatablockPass::shrinkDatablock() {
         } else {
           /// If not shrinking, the offset is 0 and size remains the same.
           offsets[i] = minDimValue;
-          newSizes[i] = originalSize;
+          newSizes[i] = dbNode->sizes[i];
         }
       }
 

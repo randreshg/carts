@@ -1,10 +1,9 @@
 ///===========================================================================
-/// EDTInvariantCodeMotion Pass
+/// File: EdtInvariantCodeMotion.h
 ///
 /// Problem - When operations within EDT regions are invariant (depend only on
 /// external values), keeping them inside the EDT:
 /// - Creates unnecessary computation in potentially distributed contexts
-/// - Prevents common subexpression elimination across EDTs
 /// - May duplicate work across multiple EDTs using the same values
 ///
 /// Solution - This pass:
@@ -34,12 +33,10 @@
 ///   %val = memref.load %base[%sum]
 /// }
 /// ```
-///
-/// Benefits:
-/// - Reduces redundant computation in distributed contexts
-/// - Enables better optimization of invariant operations
-/// - Preserves correct semantics while improving performance
-/// - Allows CSE to work across EDT boundaries
+/// This pass is also important when running the CreateDatablocks pass, since
+/// it will create datablocks for all values used in the EDT region. If the
+/// invariant code is not moved out, the datablock will be created for the
+/// invariant code, which is not the intended behavior.
 ///===========================================================================
 
 #ifndef CARTS_TRANSFORMS_EDTINVARIANTCODEMOTION_H
@@ -59,11 +56,11 @@ class EdtOp;
 /// - the op and none of its contained operations depend on values defined
 ///   inside the region (by means of calling definedOutside).
 /// - the op is not a terminator.
-bool canBeHoistedFromEdt(Operation *op);
+bool canBeHoistedFromEdt(Region &edtRegion, Operation *op);
 
 /// Move side-effect free EDT invariant code out of an EDT op.
 /// Returns the number of operations moved.
-uint64_t moveEDTInvariantCode(arts::EdtOp edtOp);
+uint64_t moveEdtInvariantCode(EdtOp edtOp);
 } // namespace arts
 } // end namespace mlir
 
