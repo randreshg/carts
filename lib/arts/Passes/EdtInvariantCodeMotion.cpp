@@ -3,6 +3,7 @@
 ///==========================================================================
 
 /// Dialects
+#include "ArtsPassDetails.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/Pass/Pass.h"
@@ -11,14 +12,13 @@
 #include "arts/ArtsDialect.h"
 
 /// Others
-#include "arts/Transforms/EDTInvariantCodeMotion.h"
+#include "arts/Transforms/EdtInvariantCodeMotion.h"
 
 /// LLVM support
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-
-#define DEBUG_TYPE "hoist-invariant"
+#define DEBUG_TYPE "edt-invariant-code-motion"
 #define line "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
@@ -28,7 +28,7 @@ using namespace mlir::arts;
 
 namespace {
 struct EdtInvariantCodeMotionPass
-    : public EdtInvariantCodeMotionBase<EdtInvariantCodeMotionPass> {
+    : public arts::EdtInvariantCodeMotionBase<EdtInvariantCodeMotionPass> {
   void runOnOperation() override;
 };
 } // end anonymous namespace
@@ -43,7 +43,7 @@ void EdtInvariantCodeMotionPass::runOnOperation() {
   bool changed = false;
   /// Walk through all EdtOp instances in the module.
   module.walk([&](arts::EdtOp edtOp) {
-    LLVM_DEBUG(DBGS() << "Processing EDT:\n" << edtOp << "\n";);
+    LLVM_DEBUG(dbgs() << line; DBGS() << "Processing EDT:\n" << edtOp << "\n";);
 
     /// Use the new function to move invariant code out of this EDT.
     auto movedCount = moveEdtInvariantCode(edtOp);
@@ -75,7 +75,7 @@ void EdtInvariantCodeMotionPass::runOnOperation() {
 namespace mlir {
 namespace arts {
 std::unique_ptr<Pass> createEdtInvariantCodeMotionPass() {
-  return std::make_unique<EDTInvariantCodeMotionPass>();
+  return std::make_unique<EdtInvariantCodeMotionPass>();
 }
 
 } // namespace arts

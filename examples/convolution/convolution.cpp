@@ -1,11 +1,11 @@
 /*
 cgeist -std=c++17 convolution.cpp -fopenmp -O0 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include > convolution.mlir
 
-carts-opt convolution.mlir --lower-affine --cse --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --hoist-invariant --create-datablocks --canonicalize-polygeist --datablock --cse --canonicalize-scf-for --canonicalize-polygeist --polygeist-mem2reg --create-events --create-epochs  -debug-only=datablock,datablock-analysis &> convolution-arts.mlir
+carts-opt convolution.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize-polygeist --create-datablocks --canonicalize-polygeist --datablock --cse -debug-only=datablock,datablock-analysis,create-datablocks &> convolution-arts.mlir
 
-carts-opt convolution.mlir --lower-affine --cse --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --hoist-invariant --create-datablocks --canonicalize-polygeist --datablock --cse --canonicalize-scf-for --canonicalize-polygeist --polygeist-mem2reg --create-events --create-epochs --canonicalize-polygeist --convert-arts-to-llvm --canonicalize-polygeist --cse --convert-polygeist-to-llvm --cse -debug-only=convert-arts-to-llvm &> convolution-arts.mlir
+carts-opt convolution.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize-polygeist --create-datablocks --canonicalize-polygeist --datablock --cse -debug-only=edt-invariant-code-motion,datablock,create-datablocks &> convolution-arts.mlir
 
-carts-opt convolution.mlir --lower-affine --cse --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --hoist-invariant --create-datablocks --canonicalize-polygeist --datablock --cse --canonicalize-scf-for --canonicalize-polygeist --polygeist-mem2reg --create-events --create-epochs --canonicalize-polygeist --convert-arts-to-llvm --canonicalize-polygeist --cse --convert-polygeist-to-llvm --cse -debug-only=convert-arts-to-llvm &> convolution-arts.mlir
+carts-opt convolution.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize-polygeist --create-datablocks --cse --polygeist-mem2reg --canonicalize-polygeist --datablock --cse --canonicalize-scf-for --canonicalize-polygeist --polygeist-mem2reg --edt-pointer-rematerialization --create-events --create-epochs --canonicalize-polygeist --convert-arts-to-llvm --canonicalize-polygeist --cse --convert-polygeist-to-llvm --cse -debug-only=convert-arts-to-llvm &> convolution-arts.mlir
 
 mlir-translate --mlir-to-llvmir convolution-arts.mlir &> convolution-arts.ll
 
@@ -31,7 +31,7 @@ int main(int argc, char **argv) {
   double C_parallel[output_size][output_size];
   double C_serial[output_size][output_size];
 
-  // Initialize matrices
+  /// Initialize matrices
   for (int i = 0; i < TOTAL_SIZE_PER_ROW; ++i) {
     for (int j = 0; j < TOTAL_SIZE_PER_ROW; ++j) {
       A[i][j] = 1.0;
@@ -75,7 +75,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  // Serial computation for verification
+  /// Serial computation for verification
   for (int i = 0; i < output_size; ++i) {
     for (int j = 0; j < output_size; ++j) {
       double tmp = 0.0;
@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  // Verification
+  /// Verification
   int errors = 0;
   const double tolerance = 1e-6;
   for (int i = 0; i < output_size; ++i) {
@@ -105,7 +105,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  // Print results
+  /// Print results
   printf("convolution A:\n");
   for (int i = 0; i < A_size; ++i) {
     for (int j = 0; j < A_size; ++j) {

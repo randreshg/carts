@@ -199,7 +199,7 @@ void DatablockNode::analyzeIndexValue(Value indexVal,
     return;
 
   /// Constant index.
-  if(isValueConstant(indexVal)) {
+  if (isValueConstant(indexVal)) {
     dimMin.insert(indexVal);
     dimMax.insert(indexVal);
   }
@@ -210,25 +210,20 @@ void DatablockNode::analyzeIndexValue(Value indexVal,
     /// Check if it's an IV of an scf.for loop
     if (auto forOp = dyn_cast_or_null<scf::ForOp>(parentOp)) {
       if (bbArg == forOp.getInductionVar()) {
-        dimMin.insert(forOp.getLowerBound());
-        dimMax.insert(forOp.getUpperBound());
+        auto lowerBound = forOp.getLowerBound();
+        if (isInvariantInEdt(edtUser.getRegion(), lowerBound)) {
+          dimMin.insert(lowerBound);
+        }
+
+        auto upperBound = forOp.getUpperBound();
+        if (isInvariantInEdt(edtUser.getRegion(), upperBound)) {
+          dimMax.insert(upperBound);
+        }
         return;
       }
     }
-    /// Check if it's a loop-carried variable of an scf.while loop
-    else if (auto whileOp = dyn_cast_or_null<scf::WhileOp>(parentOp)) {
-      // Determining precise bounds for scf.while loop variables is complex.
-      // Treat it as a symbolic value for now.
-      // TODO: Add more sophisticated analysis for scf.while bounds if needed.
-      dimMin.insert(indexVal);
-      dimMax.insert(indexVal);
-      return;
-    }
 
-    /// If it's a block argument but not a recognized loop IV, treat as symbolic
-    /// value.
-    dimMin.insert(indexVal);
-    dimMax.insert(indexVal);
+    /// If it's a block argument but not a recognized loop IV - be conservative.
     return;
   }
 
@@ -239,8 +234,8 @@ void DatablockNode::analyzeIndexValue(Value indexVal,
   }
 
   /// Result of an operation (AddI, SubI, MulI, etc.) or unknown value.
-  dimMin.insert(indexVal);
-  dimMax.insert(indexVal);
+  // dimMin.insert(indexVal);
+  // dimMax.insert(indexVal);
 }
 
 bool DatablockNode::computeRegion() {

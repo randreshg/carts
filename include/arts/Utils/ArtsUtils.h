@@ -12,8 +12,13 @@
 
 namespace mlir {
 namespace arts {
-/// Analyzes the EDT region and checks if the value is invariant in the EDT.
-bool isInvariantInEDT(arts::EdtOp op, Value value);
+
+/// Checks if a Value is invariant within a given EDT region.
+/// A value is considered invariant if it's defined outside the region
+/// and not modified by any operation inside the region. Constants are
+/// always considered invariant.
+/// This assummes the EdtInvariantCodeMotion pass has been run.
+bool isInvariantInEdt(Region &edtRegion, Value value);
 
 /// Returns true if `target` is reachable from `source` in the EDT CFG.
 bool isReachable(Operation *source, Operation *target);

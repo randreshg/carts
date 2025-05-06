@@ -16,7 +16,7 @@ int main() {
   int score_parallel[len1 + 1][len2 + 1];
   int score_sequential[len1 + 1][len2 + 1];
 
-  // Initialize matrices to 0
+  /// Initialize matrices to 0
   for (int i = 0; i <= len1; i++) {
     for (int j = 0; j <= len2; j++) {
       score_parallel[i][j] = 0;
@@ -24,7 +24,7 @@ int main() {
     }
   }
 
-  // Parallel Smith-Waterman inline
+  /// Parallel Smith-Waterman inline
   #pragma omp parallel
   #pragma omp single
   {
@@ -55,7 +55,7 @@ int main() {
 
   printf("Process has finished\n");
 
-  // Print the parallel score matrix
+  /// Print the parallel score matrix
   printf("Parallel Score Matrix:\n");
   for (int i = 0; i <= len1; i++) {
     for (int j = 0; j <= len2; j++) {
@@ -64,7 +64,7 @@ int main() {
     printf("\n");
   }
 
-  // Sequential Smith-Waterman inline
+  /// Sequential Smith-Waterman inline
   for (int i = 1; i <= len1; i++) {
     for (int j = 1; j <= len2; j++) {
       int match = score_sequential[i - 1][j - 1] +
@@ -87,7 +87,7 @@ int main() {
     printf("\n");
   }
 
-  // Verify the results inline
+  /// Verify the results inline
   int ok = 1;
   for (int i = 0; i <= len1; i++) {
     for (int j = 0; j <= len2; j++) {

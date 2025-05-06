@@ -144,12 +144,6 @@ struct CreateDatablocksPass
                          arts::EdtOp &edtOp);
 
 private:
-  /// Checks if a value is invariant in the region. A value is assummed
-  /// invariant if it is defined outside the region and is never written to
-  /// within the region, or if defined inside, its definition dominates all uses
-  /// in the region.
-  bool isInvariantInRegion(Value value, Region &region);
-
   /// Map to store candidate datablocks
   DenseMap<arts::EdtOp, DenseMap<CandidateDatablock, SmallVector<Operation *>>>
       candidateDatablocks;
@@ -270,8 +264,8 @@ void CreateDatablocksPass::analyzeEdtRegion(arts::EdtOp &edtOp) {
       continue;
     }
 
-    /// If the value is constant or invariant, add to invariantValues.
-    if (isValueConstant(v) || isInvariantInRegion(v, region))
+    /// Check if the value is invariant in the EDT region.
+    if (isInvariantInEdt(region, v))
       invariantValues.insert(v);
   }
 
@@ -392,25 +386,6 @@ void CreateDatablocksPass::analyzeValueInEdt(
         db.updateAccess(DatablockAccessType::ReadWrite);
     }
   }
-}
-
-bool CreateDatablocksPass::isInvariantInRegion(Value value, Region &region) {
-  /// If the value is defined in the region, ignore it.
-  if (region.isAncestor(value.getParentRegion()))
-    return false;
-
-  /// Iterate over each user of the value.
-  for (Operation *user : value.getUsers()) {
-    /// Consider only users inside the region.
-    if (!region.isAncestor(user->getParentRegion()))
-      continue;
-    /// If the user is a store op writing to the memref, the value is not
-    /// invariant.
-    if (auto storeOp = dyn_cast<memref::StoreOp>(user))
-      if (storeOp.getMemRef() == value)
-        return false;
-  }
-  return true;
 }
 
 void CreateDatablocksPass::rewireDatablockUses(arts::DataBlockOp &dbOp,

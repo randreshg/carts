@@ -4,67 +4,74 @@
 #include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LLVM.h"
 #include "polygeist/Ops.h"
+#include <cassert>
 
 namespace mlir {
 namespace arts {
 
-bool isInvariantInEDT(arts::EdtOp edtOp, Value value) {
-  if (Operation *op = value.getDefiningOp()) {
-    /// If the value is a constant, it is invariant.
-    if (op->hasTrait<OpTrait::ConstantLike>())
-      return true;
-
-    /// If the value is an arts operation or a terminator, it is not invariant.
-    if (op->hasTrait<OpTrait::IsTerminator>() || isArtsOp(op))
-      return false;
-
-    /// If it is memory effect free and speculatable, it is invariant.
-    if (mlir::isPure(op))
-      return true;
-  }
-
-  auto &region = edtOp.getRegion();
-
-  /// If not defined inside the region, check all users
-  if (!region.isProperAncestor(value.getParentRegion())) {
-    for (Operation *user : value.getUsers()) {
-      if (!region.isAncestor(user->getParentRegion()))
-        continue;
-
-      if (mlir::isMemoryEffectFree(user) && isSpeculatable(op))
-        continue;
-
-      /// Check specific memory operations where value is used as an index
-      if (auto memOp = dyn_cast<memref::LoadOp>(user)) {
-        if (llvm::is_contained(memOp.getIndices(), value))
-          return true;
-      } else if (auto memOp = dyn_cast<memref::StoreOp>(user)) {
-        if (llvm::is_contained(memOp.getIndices(), value))
-          return true;
-      }
-      /// Check printf calls
-      else if (auto callOp = dyn_cast<func::CallOp>(user)) {
-        if (callOp.getCallee() == "printf")
-          return true;
-      } else if (auto llvmCallOp = dyn_cast<LLVM::CallOp>(user)) {
-        if (llvmCallOp.getCallee() == "printf")
-          return true;
-      }
-      return false;
-    }
+bool isInvariantInEdt(Region &edtRegion, Value value) {
+  /// Case 1: Value is a constant. Constants are always invariant.
+  if (isValueConstant(value))
     return true;
+
+  Operation *definingOp = value.getDefiningOp();
+  bool definedInside = false;
+
+  if (definingOp) {
+    if (edtRegion.isAncestor(definingOp->getParentRegion()))
+      definedInside = true;
+  } else if (auto blockArg = value.dyn_cast<BlockArgument>()) {
+    /// A block arguments is considered defined inside if it's an argument of
+    /// a nested block within the EDT region, but not an argument of the EDT
+    /// region's entry block itself.
+    if (blockArg.getOwner()->getParent() != &edtRegion &&
+        edtRegion.isAncestor(blockArg.getOwner()->getParent())) {
+      definedInside = true;
+    }
+    /// Otherwise, it's an argument to the EDT region itself or defined outside,
+    /// treat it as potentially invariant but check for writes below.
+  } else {
+    /// This case should ideally not happen in well-formed IR.
+    /// A value should either be a result of an operation or a block argument.
+    /// Assert or return conservatively.
+    assert(false && "Value is neither defined by an op nor a block argument");
+    return false;
   }
 
-  /// An operation defined inside the region is consider invariant if all of its
-  /// operands are invariant.
-  for (Value operand : op->getOperands()) {
-    if (!isInvariantInEDT(edtOp, operand))
-      return false;
+  /// Case 2: Value is defined inside the region (and not a constant).
+  /// Such values are generally not invariant with respect to the region.
+  if (definedInside)
+    return false;
+
+  /// Case 3: Value is defined outside the region (or is an argument to the
+  /// region's entry block). Check if it is written to by any operation
+  /// inside the region.
+  for (Operation *user : value.getUsers()) {
+    /// Only consider users that are located within the EDT region.
+    if (edtRegion.isAncestor(user->getParentRegion())) {
+      /// Check for known memory write operations where 'value' is the
+      /// destination buffer/pointer.
+      if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
+        if (storeOp.getMemRef() == value) {
+          /// Found a store to 'value' inside the region. Not invariant.
+          return false;
+        }
+      }
+    } else if (auto atomicOp = dyn_cast<memref::AtomicRMWOp>(user)) {
+      /// Found an atomic op on 'value' inside the region. Not invariant.
+      if (atomicOp.getMemref() == value) {
+        return false;
+      }
+    }
+
+    /// TODO: Check for function calls where 'value' might be modified.
   }
 
-  /// If we hit this point, the value is invariant in the EDT region.
+  /// If the value is defined outside and no writes/modifications were found
+  /// inside the region, it is considered invariant with respect to this region.
   return true;
 }
 

@@ -1,5 +1,5 @@
 ///==========================================================================
-/// File: PointerRematerialization.h
+/// File: EdtPointerRematerialization.h
 ///
 /// Problem - When EDTs run on different nodes, pointer values passed as
 /// parameters may be invalid since:
@@ -31,6 +31,13 @@
 #ifndef CARTS_TRANSFORMS_EDTPOINTERREMATERIALIZATION_H
 #define CARTS_TRANSFORMS_EDTPOINTERREMATERIALIZATION_H
 
+namespace mlir {
+namespace arts {
+class EdtOp;
 
+void rematerializePointersInEdt(EdtOp edtOp);
+
+} // namespace arts
+} // namespace mlir
 
 #endif // CARTS_TRANSFORMS_EDTPOINTERREMATERIALIZATION_H

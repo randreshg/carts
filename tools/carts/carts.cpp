@@ -172,20 +172,18 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context) {
   PassManager pm(&context);
   pm.addPass(arts::createConvertOpenMPtoARTSPass());
   pm.addPass(arts::createEdtPass());
-  pm.addPass(arts::createEDTInvariantCodeMotion());
+  pm.addPass(arts::createEdtInvariantCodeMotionPass());
   pm.addPass(arts::createCreateDatablocksPass(IdentifyDatablocks));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(polygeist::createCanonicalizeForPass());
 
   /// Datablock pass to identify and optimize data dependencies
   pm.addPass(arts::createDatablockPass());
   pm.addPass(createCSEPass());
   pm.addPass(createMem2Reg());
-  pm.addPass(polygeist::createCanonicalizeForPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
 
   /// Create events and epochs
-  pm.addPass(arts::createEdtPass());
+  pm.addPass(arts::createEdtPointerRematerializationPass());
   pm.addPass(arts::createCreateEventsPass());
   pm.addPass(arts::createCreateEpochsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
