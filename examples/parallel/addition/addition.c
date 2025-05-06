@@ -15,23 +15,39 @@ mlir-translate --mlir-to-llvmir matrixmul-arts.mlir &> matrixmul-arts.ll
 clang matrixmul-arts.ll -O3 -g0 -march=native -o matrixmul -I/home/randres/projects/carts/.install/arts/include -L/home/randres/projects/carts/.install/arts/lib -larts -L/usr/lib64/librt.so/usr/lib64/libpthread.so/usr/lib64/lib -lrdmacm
 */
 
+#include <omp.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define N 1000
+
 int main() {
-  int priv1 = 0, priv2 = 0;
-  int shared = 123123;
-  int test = 0;
-#pragma omp parallel num_threads(4) shared(shared) private(test)
-  {
-    int x = omp_get_thread_num();
-    priv1 = x;
-    char *msg = NULL;
-    if (x % 2 == 0) {
-      printf("Hello from thread %d ----> EVEN\n", x);
-    }
-    if (x % 2 == 1) {
-      printf("Hello from thread %d ----> ODD\n", x);
-    }
-    shared++;
+  int a[N], b[N], c[N];
+  int i;
+
+  /// Initialize arrays
+  for (i = 0; i < N; i++) {
+    a[i] = i;
+    b[i] = i * 2;
   }
-  printf("priv: %d\n", priv1);
+
+  printf("Performing parallel array addition...\n");
+
+  /// Parallel loop for array addition
+  #pragma omp parallel for
+  for (i = 0; i < N; i++) {
+    c[i] = a[i] + b[i];
+  }
+
+  printf("Parallel addition finished.\n");
+  /// Verify results
+  for (i = 0; i < N; i++) {
+    if (c[i] != a[i] + b[i]) {
+      printf("Error at index %d: expected %d, got %d\n", i, a[i] + b[i], c[i]);
+      return 1;
+    }
+  }
+
+
   return 0;
 }
