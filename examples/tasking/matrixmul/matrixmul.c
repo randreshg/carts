@@ -9,11 +9,13 @@
 /*
 cgeist matrixmul.c -fopenmp -O0 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include > matrixmul.mlir
 
-carts-opt matrixmul.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize-polygeist --create-datablocks --canonicalize-polygeist --datablock --cse -debug-only=datablock,datablock-analysis,create-datablocks &> matrixmul-arts.mlir
+carts-opt matrixmul.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --symbol-dce -debug-only=convert-openmp-to-arts &> matrixmul-arts.mlir
+
+carts-opt matrixmul.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --symbol-dce &> matrixmul-arts.mlir
 
 carts-opt matrixmul.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize-polygeist --create-datablocks --canonicalize-polygeist --datablock --cse -debug-only=edt-invariant-code-motion,datablock,create-datablocks &> matrixmul-arts.mlir
 
-carts-opt matrixmul.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize-polygeist --create-datablocks --cse --polygeist-mem2reg --canonicalize-polygeist --datablock --cse --canonicalize-scf-for --canonicalize-polygeist --polygeist-mem2reg --edt-pointer-rematerialization --create-events --create-epochs --canonicalize-polygeist --convert-arts-to-llvm --canonicalize-polygeist --cse --convert-polygeist-to-llvm --cse -debug-only=convert-arts-to-llvm &> matrixmul-arts.mlir
+carts-opt matrixmul.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize-polygeist --create-datablocks --canonicalize-polygeist --datablock --cse --canonicalize-scf-for --canonicalize-polygeist --polygeist-mem2reg --edt-pointer-rematerialization --create-events --create-epochs --canonicalize-polygeist --convert-arts-to-llvm --canonicalize-polygeist --cse --convert-polygeist-to-llvm --cse -debug-only=convert-arts-to-llvm &> matrixmul-arts.mlir
 
 mlir-translate --mlir-to-llvmir matrixmul-arts.mlir &> matrixmul-arts.ll
 
@@ -54,12 +56,12 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < N; i += BS) {
       for (int j = 0; j < N; j += BS) {
         for (int k = 0; k < N; k += BS) {
-          printf("Processing block (%d, %d, %d) to (%d, %d, %d)\n", 
-                 i, j, k, i + BS, j + BS, k + BS);
+          // printf("Processing block (%d, %d, %d) to (%d, %d, %d)\n", 
+          //        i, j, k, i + BS, j + BS, k + BS);
           #pragma omp task
           {
-            printf("Executing task for block (%d, %d, %d) to (%d, %d, %d)\n",\
-                   i, j, k, i + BS, j + BS, k + BS);
+            // printf("Executing task for block (%d, %d, %d) to (%d, %d, %d)\n",\
+            //        i, j, k, i + BS, j + BS, k + BS);
             for (int ii = i; ii < i + BS; ii++)
               for (int jj = j; jj < j + BS; jj++)
                 for (int kk = k; kk < k + BS; kk++) {
@@ -95,38 +97,38 @@ int main(int argc, char *argv[]) {
   }
 
   // Print matrices
-  printf("Matrix A:\n");
-  for (int i = 0; i < N; i++) {
-    for (int j = 0; j < N; j++) {
-      printf("%6.2f ", A[i][j]);
-    }
-    printf("\n");
-  }
+  // printf("Matrix A:\n");
+  // for (int i = 0; i < N; i++) {
+  //   for (int j = 0; j < N; j++) {
+  //     printf("%6.2f ", A[i][j]);
+  //   }
+  //   printf("\n");
+  // }
 
-  printf("\nMatrix B:\n");
-  for (int i = 0; i < N; i++) {
-    for (int j = 0; j < N; j++) {
-      printf("%6.2f ", B[i][j]);
-    }
-    printf("\n");
-  }
+  // printf("\nMatrix B:\n");
+  // for (int i = 0; i < N; i++) {
+  //   for (int j = 0; j < N; j++) {
+  //     printf("%6.2f ", B[i][j]);
+  //   }
+  //   printf("\n");
+  // }
 
-  printf("\nMatrix C (Parallel):\n");
-  for (int i = 0; i < N; i++) {
-    for (int j = 0; j < N; j++) {
-      printf("%6.2f ", C_parallel[i][j]);
-    }
-    printf("\n");
-  }
+  // printf("\nMatrix C (Parallel):\n");
+  // for (int i = 0; i < N; i++) {
+  //   for (int j = 0; j < N; j++) {
+  //     printf("%6.2f ", C_parallel[i][j]);
+  //   }
+  //   printf("\n");
+  // }
 
-  printf("\nMatrix C (Sequential):\n");
-  for (int i = 0; i < N; i++) {
-    for (int j = 0; j < N; j++) {
-      printf("%6.2f ", C_sequential[i][j]);
-    }
-    printf("\n");
-  }
-  printf("\n");
+  // printf("\nMatrix C (Sequential):\n");
+  // for (int i = 0; i < N; i++) {
+  //   for (int j = 0; j < N; j++) {
+  //     printf("%6.2f ", C_sequential[i][j]);
+  //   }
+  //   printf("\n");
+  // }
+  // printf("\n");
 
   printf("----------------------\n");
   printf("%s\n", verified ? "Verification PASSED" : "Verification FAILED");

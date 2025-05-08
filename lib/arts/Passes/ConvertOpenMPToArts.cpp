@@ -10,6 +10,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "polygeist/Ops.h"
 /// Arts
@@ -25,6 +26,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 /// Debug
 #include "llvm/Support/Debug.h"
@@ -42,7 +44,7 @@ using namespace arts;
 // Conversion Patterns
 //===----------------------------------------------------------------------===//
 /// Pattern to replace `omp.parallel` with `arts.edt` with `parallel` attribute
-struct ParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
+struct OMPParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(omp::ParallelOp op,
@@ -61,6 +63,62 @@ struct ParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
 
     /// Remove the original operation.
     rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Pattern to replace 'scf.parallel' with an 'scf.for' loop that creates an
+/// 'arts.edt' operation and embodies the operation in an 'arts.epoch'
+/// operation.
+struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(scf::ParallelOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    LLVM_DEBUG(DBGS() << "Converting scf.parallel to arts.parallel\n");
+    rewriter.setInsertionPoint(op);
+
+    /// Create an `arts.epoch` operation and add a region to it.
+    auto syncEdtOp = createEdtOp(rewriter, loc, types::EdtType::Sync);
+    Block &syncEdtBlock = syncEdtOp.getBody().emplaceBlock();
+
+    /// Create the for loop inside the epoch
+    rewriter.setInsertionPointToStart(&syncEdtBlock);
+    Value lb = op.getLowerBound().front();
+    Value ub = op.getUpperBound().front();
+    Value st = op.getStep().front();
+    auto forOp = rewriter.create<scf::ForOp>(loc, lb, ub, st);
+    Block *forBody = forOp.getBody();
+    Value inductionVar = forOp.getInductionVar();
+
+    /// Create a new EDT operation inside the for loop body
+    rewriter.setInsertionPointToStart(forBody);
+    auto edtOp = createEdtOp(rewriter, loc, types::EdtType::Task);
+    Block &edtBlock = edtOp.getBody().emplaceBlock();
+    rewriter.setInsertionPointToStart(&edtBlock);
+
+    /// Map the original parallel loop induction variable to our new for loop
+    /// induction variable
+    IRMapping mapper;
+    if (!op.getInductionVars().empty())
+      mapper.map(op.getInductionVars().front(), inductionVar);
+
+    /// Clone the original parallel loop body operations into the EDT body
+    Block &srcBlock = op.getRegion().front();
+    for (Operation &srcOp : srcBlock.without_terminator())
+      rewriter.clone(srcOp, mapper);
+
+    /// Add the yield operation to the EDT body
+    rewriter.create<arts::YieldOp>(loc);
+
+    /// Add the yield operation to the epoch block
+    rewriter.setInsertionPointToEnd(&syncEdtBlock);
+    rewriter.create<arts::YieldOp>(loc);
+
+    /// Remove the original operation
+    rewriter.eraseOp(op);
+
     return success();
   }
 };
@@ -298,10 +356,10 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   ModuleOp module = getOperation();
   MLIRContext *context = &getContext();
   RewritePatternSet patterns(context);
-  patterns.add<ParallelToARTSPattern, MasterToARTSPattern, TaskToARTSPattern,
-               TerminatorToARTSPattern, BarrierToARTSPattern,
-               AllocToARTSPattern, TaskwaitToARTSPattern, CallToARTSPattern>(
-      context);
+  patterns.add<OMPParallelToARTSPattern, SCFParallelToArtsPattern,
+               MasterToARTSPattern, TaskToARTSPattern, TerminatorToARTSPattern,
+               BarrierToARTSPattern, AllocToARTSPattern, TaskwaitToARTSPattern,
+               CallToARTSPattern>(context);
   GreedyRewriteConfig config;
   (void)applyPatternsAndFoldGreedily(module, std::move(patterns), config);
   removeUndefOps(module);

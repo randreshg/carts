@@ -47,19 +47,12 @@ static void processSyncEdtOp(arts::EdtOp op) {
   auto loc = op.getLoc();
   OpBuilder builder(op);
   auto epochOp = builder.create<arts::EpochOp>(loc);
-
-  /// Ensure the epochOp has a block to host the moved EDT op.
-  auto &region = epochOp.getRegion();
-  if (region.empty())
-    region.push_back(new Block());
-  Block *newBlock = &region.front();
+  auto &epochBlock = epochOp.getBody().emplaceBlock();
+  builder.setInsertionPointToEnd(&epochBlock);
+  builder.create<arts::YieldOp>(loc);
 
   /// Move the EDT op to the end of the new block.
-  op->moveBefore(newBlock, newBlock->end());
-
-  /// Insert a yield op immediately after the relocated EDT op.
-  builder.setInsertionPointAfter(op);
-  builder.create<arts::YieldOp>(loc);
+  op->moveBefore(&epochBlock, --epochBlock.end());
 
   /// Remove the sync attribute and mark the op as a task.
   op.clearIsSyncAttr();

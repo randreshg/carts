@@ -1,7 +1,7 @@
 
 ARTS_PATH?=/home/randres/projects/carts/.install/arts
 CLANG_INCLUDE_PATH=/usr/lib/llvm-14/lib/clang/14.0.0/include
-FILENAME=simple
+FILENAME=addition
 SHELL = /bin/bash
 
 all: $(FILENAME)
