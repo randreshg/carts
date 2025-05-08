@@ -92,6 +92,9 @@ __ARTS_STRUCT_TYPE(ArtsEdtDep, artsEdtDep_t, false, ArtsGuid, ArtsType, llvmPtr)
 //                           artsEdtDep_t depv[]);
 __ARTS_FUNCTION_TYPE(EdtFn, Void, Int32, Int64Ptr, Int32, ArtsEdtDepPtr)
 
+// void mainEdt(int argc, char **argv)
+__ARTS_FUNCTION_TYPE(ArtsMainFn, Void, Int32, Int8PtrPtr)
+
 // void initPerNode(unsigned int nodeId, int argc, char **argv)
 __ARTS_FUNCTION_TYPE(InitPerNodeFn, Void, Int32, Int32, Int8PtrPtr)
 
@@ -213,6 +216,10 @@ __ARTS_RTL(artsGetCurrentGuid, ArtsGuid)
 __ARTS_RTL(artsGetCurrentNode, Int32)
 // unsigned int artsGetTotalNodes();
 __ARTS_RTL(artsGetTotalNodes, Int32)
+// unsigned int artsGetCurrentWorker();
+__ARTS_RTL(artsGetCurrentWorker, Int32)
+// unsigned int artsGetTotalWorkers();
+__ARTS_RTL(artsGetTotalWorkers, Int32)
 /// }
 
 #undef __ARTS_RTL

@@ -241,6 +241,9 @@ public:
   Value getPtrFromEdtDep(Value dep, Location loc);
   Value getCurrentEpochGuid(Location loc);
   Value getCurrentEdtGuid(Location loc);
+  Value getTotalWorkers(Location loc);
+  Value getTotalNodes(Location loc);
+  Value getCurrentWorker(Location loc);
   Value getCurrentNode(Location loc);
   void satisfyEventDependency(Value eventGuid, Value depGuid, Location loc);
   void addEventDependency(Value eventGuid, Value edtGuid, Value edtSlot,
@@ -252,7 +255,8 @@ public:
   void waitOnHandle(Value epochGuid, Location loc);
   func::FuncOp insertInitPerWorker(Location loc);
   func::FuncOp insertInitPerNode(Location loc, func::FuncOp callback = nullptr);
-  func::FuncOp insertMain(Location loc);
+  func::FuncOp insertArtsMainFn(Location loc, func::FuncOp callback);
+  func::FuncOp insertMainFn(Location loc);
   void initializeRuntime(Location loc);
 
   /// Helpers

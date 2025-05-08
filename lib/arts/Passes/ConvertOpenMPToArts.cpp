@@ -241,13 +241,12 @@ struct AllocToARTSPattern : public OpRewritePattern<memref::AllocOp> {
     /// Get the memref type from the alloc operation.
     auto memRefType = allocOp.getType().dyn_cast<MemRefType>();
     if (!memRefType)
-      return failure(); // Not a MemRefType, so fail the match.
+      return failure();
 
     /// Collect the dynamic sizes of the memref (if any).
     SmallVector<Value, 4> dynamicSizes;
-    for (Value operand : allocOp.getDynamicSizes()) {
+    for (Value operand : allocOp.getDynamicSizes())
       dynamicSizes.push_back(operand);
-    }
 
     /// Create the arts.alloc operation with the same memref type and dynamic
     /// sizes.
@@ -258,6 +257,26 @@ struct AllocToARTSPattern : public OpRewritePattern<memref::AllocOp> {
     rewriter.replaceOp(allocOp, artsAlloc.getResult());
 
     return success();
+  }
+};
+
+/// Pattern to replace 'func.call' with an equivalent 'arts' call if exists.
+struct CallToARTSPattern : public OpRewritePattern<func::CallOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(func::CallOp callOp,
+                                PatternRewriter &rewriter) const override {
+    auto callee = callOp.getCallee();
+    if (callee == "omp_get_thread_num") {
+      rewriter.replaceOpWithNewOp<arts::GetCurrentWorkerOp>(callOp);
+      return success();
+    }
+    if (callee == "omp_get_num_threads" || callee == "omp_get_max_threads") {
+      rewriter.replaceOpWithNewOp<arts::GetTotalWorkersOp>(callOp);
+      return success();
+    }
+    /// nothing to do, leave the op as-is
+    return failure();
   }
 };
 
@@ -281,16 +300,10 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   RewritePatternSet patterns(context);
   patterns.add<ParallelToARTSPattern, MasterToARTSPattern, TaskToARTSPattern,
                TerminatorToARTSPattern, BarrierToARTSPattern,
-               AllocToARTSPattern, TaskwaitToARTSPattern>(context);
+               AllocToARTSPattern, TaskwaitToARTSPattern, CallToARTSPattern>(
+      context);
   GreedyRewriteConfig config;
-  if (failed(
-          applyPatternsAndFoldGreedily(module, std::move(patterns), config))) {
-    LLVM_DEBUG(dbgs() << "Conversion failed\n");
-    signalPassFailure();
-    return;
-  }
-
-  /// Remove all UndefOps
+  (void)applyPatternsAndFoldGreedily(module, std::move(patterns), config);
   removeUndefOps(module);
   LLVM_DEBUG({
     dbgs() << line << "ConvertOpenMPToArtsPass FINISHED\n" << line;
@@ -309,17 +322,17 @@ std::unique_ptr<Pass> createConvertOpenMPtoARTSPass() {
 } // namespace arts
 } // namespace mlir
 
-
 /*
+#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/InliningUtils.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 
 using namespace mlir;
 
 namespace {
-struct AlwaysInlinePass : public PassWrapper<AlwaysInlinePass, OperationPass<ModuleOp>> {
+struct AlwaysInlinePass : public PassWrapper<AlwaysInlinePass,
+OperationPass<ModuleOp>> {
   MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(AlwaysInlinePass)
 
   void runOnOperation() override {
@@ -330,7 +343,7 @@ struct AlwaysInlinePass : public PassWrapper<AlwaysInlinePass, OperationPass<Mod
     bool changed;
     do {
       changed = false;
-      
+
       // Collect all call ops in the module
       SmallVector<func::CallOp> calls;
       module.walk([&](func::CallOp call) {
@@ -346,15 +359,16 @@ struct AlwaysInlinePass : public PassWrapper<AlwaysInlinePass, OperationPass<Mod
         auto callable = call.getCallableForCallee();
         CallableOpInterface callableOp;
         if (SymbolRefAttr symRef = callable.dyn_cast<SymbolRefAttr>()) {
-          callableOp = dyn_cast<CallableOpInterface>(module.lookupSymbol(symRef));
-        } else if (auto func = callable.dyn_cast<Value>()) {
-          callableOp = dyn_cast<CallableOpInterface>(func.getDefiningOp());
+          callableOp =
+dyn_cast<CallableOpInterface>(module.lookupSymbol(symRef)); } else if (auto func
+= callable.dyn_cast<Value>()) { callableOp =
+dyn_cast<CallableOpInterface>(func.getDefiningOp());
         }
 
         if (!callableOp || !callableOp.getCallableRegion()) continue;
 
         // Attempt to inline the call
-        if (succeeded(mlir::inlineCall(inliner, call, callableOp, 
+        if (succeeded(mlir::inlineCall(inliner, call, callableOp,
                                       callableOp.getCallableRegion(), true))) {
           call.erase();
           changed = true;
