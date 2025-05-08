@@ -178,7 +178,8 @@ def EpochOp : Arts_Op<"epoch",
     An ARTS epoch region. It can spawn multiple tasks and
     synchronize them at the end of the epoch.
   }];
-  let regions = (region AnyRegion:$body);
+  let regions = (region SizedRegion<1>:$body);
+
   let assemblyFormat = [{
     attr-dict-with-keyword $body
   }];
