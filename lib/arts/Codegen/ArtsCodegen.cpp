@@ -1216,6 +1216,36 @@ Value ArtsCodegen::getCurrentEdtGuid(Location loc) {
   return callOp.getResult(0);
 }
 
+Value ArtsCodegen::getTotalWorkers(Location loc) {
+  func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetTotalWorkers);
+  assert(func && "Runtime function should exist");
+  func->setAttr("llvm.readnone", builder.getUnitAttr());
+  func->setAttr("llvm.nounwind", builder.getUnitAttr());
+  auto callOp = builder.create<func::CallOp>(loc, func);
+
+  return callOp.getResult(0);
+}
+
+Value ArtsCodegen::getTotalNodes(Location loc) {
+  func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetTotalNodes);
+  assert(func && "Runtime function should exist");
+  func->setAttr("llvm.readnone", builder.getUnitAttr());
+  func->setAttr("llvm.nounwind", builder.getUnitAttr());
+  auto callOp = builder.create<func::CallOp>(loc, func);
+
+  return callOp.getResult(0);
+}
+
+Value ArtsCodegen::getCurrentWorker(Location loc) {
+  func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentWorker);
+  assert(func && "Runtime function should exist");
+  func->setAttr("llvm.readnone", builder.getUnitAttr());
+  func->setAttr("llvm.nounwind", builder.getUnitAttr());
+  auto callOp = builder.create<func::CallOp>(loc, func);
+
+  return callOp.getResult(0);
+}
+
 Value ArtsCodegen::getCurrentNode(Location loc) {
   func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentNode);
   assert(func && "Runtime function should exist");
@@ -1321,7 +1351,6 @@ func::FuncOp ArtsCodegen::insertInitPerNode(Location loc,
   if (callback) {
     /// If the callback function receives arguments, pass them to the call,
     /// otherwise, pass an empty ValueRange.
-
     auto callArgs = ValueRange{};
     if (callback.getNumArguments() > 0)
       callArgs = {newFunc.getArgument(1), newFunc.getArgument(2)};
@@ -1332,7 +1361,33 @@ func::FuncOp ArtsCodegen::insertInitPerNode(Location loc,
   return newFunc;
 }
 
-func::FuncOp ArtsCodegen::insertMain(Location loc) {
+func::FuncOp ArtsCodegen::insertArtsMainFn(Location loc, func::FuncOp callback) {
+  OpBuilder::InsertionGuard IG(builder);
+  setInsertionPoint(module);
+
+  /// Create the function using the "MainEdt" type.
+  auto newFunc = builder.create<func::FuncOp>(loc, "artsMain", ArtsMainFn);
+  newFunc.setPublic();
+  module.push_back(newFunc);
+
+  /// Create the entry block.
+  auto *entryBlock = newFunc.addEntryBlock();
+  builder.setInsertionPointToStart(entryBlock);
+  
+
+  /// Insert call to 'artsRT' function
+  auto callArgs = ValueRange{};
+  if (callback.getNumArguments() > 0)
+    callArgs = {newFunc.getArgument(0), newFunc.getArgument(1)};
+  builder.create<func::CallOp>(loc, callback, callArgs);
+
+  /// Return
+  createRuntimeCall(ARTSRTL_artsShutdown, {}, loc);
+  builder.create<func::ReturnOp>(loc);
+  return newFunc;
+}
+
+func::FuncOp ArtsCodegen::insertMainFn(Location loc) {
   /// Save the current insertion point.
   OpBuilder::InsertionGuard IG(builder);
   setInsertionPoint(module);
@@ -1366,9 +1421,8 @@ void ArtsCodegen::initializeRuntime(Location loc) {
   mainFunc.setName("mainBody");
 
   /// Insert init functions
-  insertInitPerWorker(loc);
-  insertInitPerNode(loc, mainFunc);
-  insertMain(loc);
+  insertArtsMainFn(loc, mainFunc);
+  insertMainFn(loc);
 }
 
 /// Helpers

@@ -56,11 +56,14 @@ struct ConvertArtsToLLVMPass
 
   void iterateOps();
   void preprocessDataBlockOps(Operation *op);
-  void handleParallel(EdtOp &op);
   void handleEdt(EdtOp &op);
   void handleEvent(EventOp &op);
   void handleEpoch(EpochOp &op);
   void handleDatablock(DataBlockOp &op);
+  void handleGetTotalWorkers(GetTotalWorkersOp &op);
+  void handleGetTotalNodes(GetTotalNodesOp &op);
+  void handleGetCurrentWorker(GetCurrentWorkerOp &op);
+  void handleGetCurrentNode(GetCurrentNodeOp &op);
 
 private:
   ModuleOp module;
@@ -69,11 +72,6 @@ private:
   SetVector<Operation *> opsToRemove;
 };
 } // end namespace
-
-void ConvertArtsToLLVMPass::handleParallel(EdtOp &op) {
-  /// Set insertion point to the current op for epoch creation.
-  llvm_unreachable("Parallel EDTs not supported yet");
-}
 
 void ConvertArtsToLLVMPass::handleEdt(EdtOp &op) {
   LLVM_DEBUG(DBGS() << "Lowering arts.edt\n");
@@ -100,18 +98,6 @@ void ConvertArtsToLLVMPass::handleEdt(EdtOp &op) {
   opsToRemove.insert(op);
 }
 
-void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.datablock\n  " << op << "\n");
-  AC->setInsertionPointAfter(op);
-
-  /// Create a new datablock codegen object.
-  AC->createDatablock(op, op->getLoc());
-
-  /// Mark ops for removal.
-  opsToRemove.insert(op.getPtr().getDefiningOp());
-  opsToRemove.insert(op);
-}
-
 void ConvertArtsToLLVMPass::handleEvent(EventOp &op) {
   LLVM_DEBUG(DBGS() << "Lowering arts.event\n");
   AC->getOrCreateEvent(op, op->getLoc());
@@ -133,22 +119,23 @@ void ConvertArtsToLLVMPass::handleEpoch(EpochOp &op) {
   auto currentEpoch =
       AC->createEpoch(epochDoneEdt.getGuid(), epochDoneSlot, loc);
 
+  /// Find all the EDTs that are inside the Epoch region, which ParentOfType
+  /// Epoch is the current epoch and don't have a parent EdtOp.
+  op.walk([&](arts::EdtOp childOp) {
+    auto parentEdt = childOp->getParentOfType<EdtOp>();
+    if (parentEdt || childOp->getParentOfType<EpochOp>() != op)
+      return;
+    edtToEpoch[childOp] = currentEpoch;
+  });
+
   /// Move epoch region operations out of the epoch op and insert them after the
   /// current epoch.
   Operation *currentEpochOp = currentEpoch.getDefiningOp();
-
-  /// Assume the epoch region has a single block.
   Block *epochBlock = &op.getRegion().front();
-
   Operation *currentOp = currentEpochOp;
   for (Operation &childOp : llvm::make_early_inc_range(*epochBlock)) {
     if (isa<arts::YieldOp>(childOp))
       continue;
-    /// If the operation is an edt, add it to the map
-    if (auto edtOp = dyn_cast<arts::EdtOp>(&childOp)) {
-      edtToEpoch[edtOp] = currentEpoch;
-    }
-    /// Move the operation after the current epoch op.
     childOp.moveAfter(currentOp);
     currentOp = &childOp;
   }
@@ -161,6 +148,52 @@ void ConvertArtsToLLVMPass::handleEpoch(EpochOp &op) {
   op->erase();
 }
 
+void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
+  LLVM_DEBUG(DBGS() << "Lowering arts.datablock\n  " << op << "\n");
+  AC->setInsertionPointAfter(op);
+
+  /// Create a new datablock codegen object.
+  AC->createDatablock(op, op->getLoc());
+
+  /// Mark ops for removal.
+  opsToRemove.insert(op.getPtr().getDefiningOp());
+  opsToRemove.insert(op);
+}
+
+void ConvertArtsToLLVMPass::handleGetTotalWorkers(GetTotalWorkersOp &op) {
+  LLVM_DEBUG(DBGS() << "Lowering arts.getTotalWorkers\n");
+  OpBuilder::InsertionGuard IG(AC->getBuilder());
+  AC->setInsertionPoint(op);
+  auto totalWorkers = AC->getTotalWorkers(op.getLoc());
+  op.replaceAllUsesWith(totalWorkers);
+  opsToRemove.insert(op);
+}
+
+void ConvertArtsToLLVMPass::handleGetTotalNodes(GetTotalNodesOp &op) {
+  LLVM_DEBUG(DBGS() << "Lowering arts.getTotalNodes\n");
+  OpBuilder::InsertionGuard IG(AC->getBuilder());
+  AC->setInsertionPoint(op);
+  auto totalNodes = AC->getTotalNodes(op.getLoc());
+  op.replaceAllUsesWith(totalNodes);
+  opsToRemove.insert(op);
+}
+
+void ConvertArtsToLLVMPass::handleGetCurrentWorker(GetCurrentWorkerOp &op) {
+  LLVM_DEBUG(DBGS() << "Lowering arts.getCurrentWorker\n");
+  OpBuilder::InsertionGuard IG(AC->getBuilder());
+  AC->setInsertionPoint(op);
+  auto currentWorker = AC->getCurrentWorker(op.getLoc());
+  op.replaceAllUsesWith(currentWorker);
+  opsToRemove.insert(op);
+}
+
+void ConvertArtsToLLVMPass::handleGetCurrentNode(GetCurrentNodeOp &op) {
+  LLVM_DEBUG(DBGS() << "Lowering arts.getCurrentNode\n");
+  auto currentNode = AC->getCurrentNode(op.getLoc());
+  op.replaceAllUsesWith(currentNode);
+  opsToRemove.insert(op);
+}
+
 void ConvertArtsToLLVMPass::iterateOps() {
   /// Iterate over the FuncOps/DataBlockOps in the module
   for (auto func : module.getOps<func::FuncOp>())
@@ -171,7 +204,14 @@ void ConvertArtsToLLVMPass::iterateOps() {
     dbgs() << line;
   });
 
-  /// Iterate over the EpochsOps and EventOps in the module
+  /// Lower all get-* ops in one pass
+  module->walk([&](arts::GetTotalWorkersOp op) { handleGetTotalWorkers(op); });
+  module->walk([&](arts::GetTotalNodesOp op) { handleGetTotalNodes(op); });
+  module->walk(
+      [&](arts::GetCurrentWorkerOp op) { handleGetCurrentWorker(op); });
+  module->walk([&](arts::GetCurrentNodeOp op) { handleGetCurrentNode(op); });
+
+  //  Iterate over the EpochsOps and EventOps in the module
   module.walk([&](arts::EpochOp epoch) { handleEpoch(epoch); });
   module.walk([&](arts::EventOp event) { handleEvent(event); });
   LLVM_DEBUG({
@@ -186,11 +226,10 @@ void ConvertArtsToLLVMPass::iterateOps() {
       return mlir::WalkResult::skip();
     if (edtOp.isTask())
       handleEdt(edtOp);
-    else if (edtOp.isParallel())
-      handleParallel(edtOp);
     else {
-      llvm_unreachable("Sync, single, and other EDTs should have been lowered. "
-                       "Did you run the 'create-epochs' pass?");
+      llvm_unreachable(
+          "Sync, Parallel, and single, EDTs should have been lowered. "
+          "Did you run the 'create-epochs' pass?");
     }
     return mlir::WalkResult::advance();
   });

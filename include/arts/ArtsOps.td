@@ -56,8 +56,9 @@ def AllocOp : Arts_Op<"alloc", []> {
 // arts.datablock
 //===----------------------------------------------------------------------===//
 def DataBlockOp : Arts_Op<"datablock", 
-  [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, AttrSizedOperandSegments]> {
-  let summary = "Creates a subview dependency for arts.edt or arts.parallel";
+  [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, 
+   RecursiveMemoryEffects, AttrSizedOperandSegments]> {
+  let summary = "Creates a subview dependency for arts.edt";
   let arguments = (ins
     StrAttr:$mode,                           // Dependency mode (e.g., "in", "out", "inout")
     AnyMemRef:$ptr,                          // Base ptr
@@ -107,7 +108,7 @@ def DataBlockOp : Arts_Op<"datablock",
 //===----------------------------------------------------------------------===//
 def EdtOp : Arts_Op<"edt",
   [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, 
-   SingleBlockImplicitTerminator<"arts::YieldOp">]> {
+   SingleBlockImplicitTerminator<"arts::YieldOp">, RecursiveMemoryEffects]> {
 
   let summary = "Event-Driven Task in ARTS";
   let description = [{
@@ -170,7 +171,8 @@ def EventOp : Arts_Op<"event", []> {
 // arts.epoch
 //===----------------------------------------------------------------------===//
 def EpochOp : Arts_Op<"epoch", 
-    [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
+  [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
+
   let summary = "Epoch region in ARTS";
   let description = [{
     An ARTS epoch region. It can spawn multiple tasks and
@@ -214,5 +216,84 @@ def BarrierOp : Arts_Op<"barrier"> {
   let assemblyFormat = "attr-dict";
 }
 
+//===----------------------------------------------------------------------===//
+// arts.get_total_workers
+//===----------------------------------------------------------------------===//
+def GetTotalWorkersOp : Arts_Op<"get_total_workers", 
+  [MemoryEffects<[MemWrite]>, RecursiveMemoryEffects]> {
+  let summary = "Get the total number of workers in ARTS";
+  let description = [{
+    The `arts.get_total_workers` operation retrieves the total number of 
+    workers available in the ARTS runtime environment.
+  }];
+  let results = (outs I32:$result);
+  let assemblyFormat = "attr-dict `->` type($result)";
+  let skipDefaultBuilders = 1;
+  let builders = [
+    OpBuilder<(ins), [{
+      $_state.addTypes(IntegerType::get($_builder.getContext(), 32));
+    }]>
+  ];
+}
+
+//===----------------------------------------------------------------------===//
+// arts.get_total_nodes
+//===----------------------------------------------------------------------===//
+def GetTotalNodesOp : Arts_Op<"get_total_nodes",
+  [MemoryEffects<[MemWrite]>, RecursiveMemoryEffects]> {
+  let summary = "Get the total number of nodes in ARTS";
+  let description = [{
+    The `arts.get_total_nodes` operation retrieves the total number of 
+    nodes available in the ARTS runtime environment.
+  }];
+  let results = (outs I32:$result);
+  let assemblyFormat = "attr-dict `->` type($result)";
+  let skipDefaultBuilders = 1;
+  let builders = [
+    OpBuilder<(ins), [{
+      $_state.addTypes(IntegerType::get($_builder.getContext(), 32));
+    }]>
+  ];
+}
+
+//===----------------------------------------------------------------------===//
+// arts.get_current_worker
+//===----------------------------------------------------------------------===//
+def GetCurrentWorkerOp : Arts_Op<"get_current_worker",
+  [MemoryEffects<[MemWrite]>, RecursiveMemoryEffects]> {
+  let summary = "Get the current worker ID in ARTS";
+  let description = [{
+    The `arts.get_current_worker` operation retrieves the ID of the 
+    current worker executing the operation in the ARTS runtime environment.
+  }];
+  let results = (outs I32:$result);
+  let assemblyFormat = "attr-dict `->` type($result)";
+  let skipDefaultBuilders = 1;
+  let builders = [
+    OpBuilder<(ins), [{
+      $_state.addTypes(IntegerType::get($_builder.getContext(), 32));
+    }]>
+  ];
+}
+
+//===----------------------------------------------------------------------===//
+// arts.get_current_node
+//===----------------------------------------------------------------------===//
+def GetCurrentNodeOp : Arts_Op<"get_current_node", 
+  [MemoryEffects<[MemWrite]>, RecursiveMemoryEffects]> {
+  let summary = "Get the current node ID in ARTS";
+  let description = [{
+    The `arts.get_current_node` operation retrieves the ID of the 
+    current node executing the operation in the ARTS runtime environment.
+  }];
+  let results = (outs I32:$result);
+  let assemblyFormat = "attr-dict `->` type($result)";
+  let skipDefaultBuilders = 1;
+  let builders = [
+    OpBuilder<(ins), [{
+      $_state.addTypes(IntegerType::get($_builder.getContext(), 32));
+    }]>
+  ];
+}
 
 #endif // ARTS_OPS
