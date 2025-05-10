@@ -20,6 +20,16 @@ carts-opt matrixmul.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize
 mlir-translate --mlir-to-llvmir matrixmul-arts.mlir &> matrixmul-arts.ll
 
 clang matrixmul-arts.ll -O3 -g0 -march=native -o matrixmul -I/home/randres/projects/carts/.install/arts/include -L/home/randres/projects/carts/.install/arts/lib -larts -L/usr/lib64/librt.so/usr/lib64/libpthread.so/usr/lib64/lib -lrdmacm
+
+python3 run_comparison.py \
+  --problem_sizes "10 5" \
+  --iterations_per_size 5 \
+  --target_examples matrixmul \
+  --example_base_dirs "tasking" \
+  --output_file matrixmul_results.json \
+  --csv_output_file matrixmul_benchmark.csv \
+  --graph_output_file matrixmul_graph.png \
+  --md_output_file matrixmul_summary.md
 */
 #define TOLERANCE 1e-6
 
@@ -49,19 +59,27 @@ int main(int argc, char *argv[]) {
     }
   }
 
+  /*
+  0.17/0.005 = 34
+  */
+
   // Parallel computation
-#pragma omp parallel
-#pragma omp single
+  double t_start = omp_get_wtime();
+  #pragma omp parallel
+  #pragma omp single
   {
     for (int i = 0; i < N; i += BS) {
       for (int j = 0; j < N; j += BS) {
         for (int k = 0; k < N; k += BS) {
           // printf("Processing block (%d, %d, %d) to (%d, %d, %d)\n", 
           //        i, j, k, i + BS, j + BS, k + BS);
-          #pragma omp task
+          #pragma omp task depend(in : A[i][k], B[k][j]) depend(inout : C_parallel[i][j])
+          // #pragma omp task
           {
             // printf("Executing task for block (%d, %d, %d) to (%d, %d, %d)\n",\
             //        i, j, k, i + BS, j + BS, k + BS);
+            printf("Thread %d is working on block (%d, %d, %d) to (%d, %d, %d)\n",
+                   omp_get_thread_num(), i, j, k, i + BS, j + BS, k + BS);
             for (int ii = i; ii < i + BS; ii++)
               for (int jj = j; jj < j + BS; jj++)
                 for (int kk = k; kk < k + BS; kk++) {
@@ -72,6 +90,8 @@ int main(int argc, char *argv[]) {
       }
     }
   }
+  double t_end = omp_get_wtime();
+  printf("Parallel matrix multiplication finished in %f seconds.\n", t_end - t_start);
 
   // Sequential computation
   for (int i = 0; i < N; i++) {
@@ -96,43 +116,12 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  // Print matrices
-  // printf("Matrix A:\n");
-  // for (int i = 0; i < N; i++) {
-  //   for (int j = 0; j < N; j++) {
-  //     printf("%6.2f ", A[i][j]);
-  //   }
-  //   printf("\n");
-  // }
-
-  // printf("\nMatrix B:\n");
-  // for (int i = 0; i < N; i++) {
-  //   for (int j = 0; j < N; j++) {
-  //     printf("%6.2f ", B[i][j]);
-  //   }
-  //   printf("\n");
-  // }
-
-  // printf("\nMatrix C (Parallel):\n");
-  // for (int i = 0; i < N; i++) {
-  //   for (int j = 0; j < N; j++) {
-  //     printf("%6.2f ", C_parallel[i][j]);
-  //   }
-  //   printf("\n");
-  // }
-
-  // printf("\nMatrix C (Sequential):\n");
-  // for (int i = 0; i < N; i++) {
-  //   for (int j = 0; j < N; j++) {
-  //     printf("%6.2f ", C_sequential[i][j]);
-  //   }
-  //   printf("\n");
-  // }
-  // printf("\n");
-
-  printf("----------------------\n");
-  printf("%s\n", verified ? "Verification PASSED" : "Verification FAILED");
-  printf("----------------------\n");
+  if (verified) {
+    printf("Result: CORRECT\n");
+  } else {
+    printf("Result: INCORRECT\n");
+  }
+  fflush(stdout);
 
   return 0;
 }

@@ -17,8 +17,8 @@ clang convolution-arts.ll -O3 -g0 -march=native -o convolution -I/home/randres/p
 #include <cstdlib>
 #include <omp.h>
 
-#define BLOCK_SIZE 4
-#define KERNEL_SIZE 2
+#define BLOCK_SIZE 50
+#define KERNEL_SIZE 5
 #define TASK 4
 #define TOTAL_SIZE_PER_ROW (BLOCK_SIZE * TASK)
 
@@ -44,16 +44,17 @@ int main(int argc, char **argv) {
     }
   }
 
+  double t_start = omp_get_wtime();
   #pragma omp parallel
   {
     #pragma omp single
     {
       for (int task_id = 0; task_id < TASK; ++task_id) {
         const int start_row = task_id * BLOCK_SIZE;
-        printf("Task %d starting at row %d\n", task_id + 1, start_row);
+        // printf("Task %d starting at row %d\n", task_id + 1, start_row);
         #pragma omp task firstprivate(start_row, task_id)
         {
-          printf("Task %d running\n", task_id + 1);
+          // printf("Task %d running\n", task_id + 1);
           for (int i = start_row; (i < start_row + BLOCK_SIZE) && (i < output_size);
                ++i) {
             for (int j = 0; j < output_size; ++j) {
@@ -74,6 +75,8 @@ int main(int argc, char **argv) {
       }
     }
   }
+  double t_end = omp_get_wtime();
+  printf("Parallel matrix multiplication finished in %f seconds.\n", t_end - t_start);
 
   /// Serial computation for verification
   for (int i = 0; i < output_size; ++i) {
@@ -106,41 +109,41 @@ int main(int argc, char **argv) {
   }
 
   /// Print results
-  printf("convolution A:\n");
-  for (int i = 0; i < A_size; ++i) {
-    for (int j = 0; j < A_size; ++j) {
-      printf("%4.1f ", A[i][j]);
-    }
-    printf("\n");
-  }
-  printf("\n");
+  // printf("convolution A:\n");
+  // for (int i = 0; i < A_size; ++i) {
+  //   for (int j = 0; j < A_size; ++j) {
+  //     printf("%4.1f ", A[i][j]);
+  //   }
+  //   printf("\n");
+  // }
+  // printf("\n");
 
-  printf("convolution Kernel:\n");
-  for (int i = 0; i < KERNEL_SIZE; ++i) {
-    for (int j = 0; j < KERNEL_SIZE; ++j) {
-      printf("%4.1f ", Kernel[i][j]);
-    }
-    printf("\n");
-  }
-  printf("\n");
+  // printf("convolution Kernel:\n");
+  // for (int i = 0; i < KERNEL_SIZE; ++i) {
+  //   for (int j = 0; j < KERNEL_SIZE; ++j) {
+  //     printf("%4.1f ", Kernel[i][j]);
+  //   }
+  //   printf("\n");
+  // }
+  // printf("\n");
 
-  printf("convolution C_parallel:\n");
-  for (int i = 0; i < output_size; ++i) {
-    for (int j = 0; j < output_size; ++j) {
-      printf("%4.1f ", C_parallel[i][j]);
-    }
-    printf("\n");
-  }
-  printf("\n");
+  // printf("convolution C_parallel:\n");
+  // for (int i = 0; i < output_size; ++i) {
+  //   for (int j = 0; j < output_size; ++j) {
+  //     printf("%4.1f ", C_parallel[i][j]);
+  //   }
+  //   printf("\n");
+  // }
+  // printf("\n");
 
-  printf("convolution C_serial:\n");
-  for (int i = 0; i < output_size; ++i) {
-    for (int j = 0; j < output_size; ++j) {
-      printf("%4.1f ", C_serial[i][j]);
-    }
-    printf("\n");
-  }
-  printf("\n");
+  // printf("convolution C_serial:\n");
+  // for (int i = 0; i < output_size; ++i) {
+  //   for (int j = 0; j < output_size; ++j) {
+  //     printf("%4.1f ", C_serial[i][j]);
+  //   }
+  //   printf("\n");
+  // }
+  // printf("\n");
 
   printf("Verification: %d errors\n", errors);
   // printf("Parallel time: %.6f sec\n", end_parallel - start_parallel);
