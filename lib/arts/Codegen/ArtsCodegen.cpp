@@ -2,6 +2,8 @@
 /// File: ArtsCodegen.cpp
 ///==========================================================================
 
+#include "arts/Codegen/ArtsCodegen.h"
+
 /// Other dialects
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -25,7 +27,6 @@
 /// Arts
 #include "arts/Analysis/EdtAnalysis.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Utils/ArtsTypes.h"
 #include "arts/Utils/ArtsUtils.h"
 /// Debug
@@ -43,6 +44,7 @@
 #define DEBUG_TYPE "arts-codegen"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#define METADATA "-----------------------------------------\n[artsCodegen] "
 
 using namespace mlir;
 using namespace mlir::func;
@@ -80,6 +82,7 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
 
   /// Handle the case of a single datablock
   if (hasSingleSize()) {
+    AC.createPrintfCall(loc, METADATA "Creating single DB\n", {});
     auto modeVal = getMode(dbOp.getMode());
     guid = createGuid(currentNode, modeVal, loc);
     /// Allocate a single pointer by directly assigning the runtime call result
@@ -90,6 +93,7 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
   }
 
   /// Create an array of guids and pointers based on the sizes of the dbOp
+  AC.createPrintfCall(loc, METADATA "Creating array of DBs\n", {});
   auto dbSizes = dbOp.getSizes();
   const auto dbDim = dbSizes.size();
   auto modeVal = getMode(dbOp.getMode());
@@ -179,6 +183,7 @@ void EventCodegen::create(Location loc) {
 
   /// If the event is a single event, create it and return
   if (eventOp.hasSingleSize()) {
+    AC.createPrintfCall(loc, METADATA "Creating single event\n", {});
     guid = createEvent(node, loc);
     return;
   }
@@ -188,6 +193,7 @@ void EventCodegen::create(Location loc) {
   auto guidType = MemRefType::get(
       std::vector<int64_t>(sizes.size(), ShapedType::kDynamic), AC.ArtsGuid);
   guid = builder.create<memref::AllocaOp>(loc, guidType, sizes);
+  AC.createPrintfCall(loc, METADATA "Creating array of events\n", {});
 
   /// Create nested loops to create the guids
   std::function<void(unsigned, SmallVector<Value, 4> &)> createGuids =
@@ -258,6 +264,7 @@ void EdtCodegen::build(Location loc) {
 
   /// If not epoch is provided, create an EDT without it
   auto funcPtr = AC.createFnPtr(func, loc);
+  AC.createPrintfCall(loc, METADATA "Creating EDT\n", {});
   if (!epoch) {
     guid = AC.createRuntimeCall(ARTSRTL_artsEdtCreate,
                                 {funcPtr, node, paramC, paramV, depC}, loc)
@@ -482,7 +489,7 @@ void EdtCodegen::process(Location loc) {
             builder.setInsertionPointAfter(loopOp);
           };
 
-      SmallVector<Value, 4> indices = db->getIndices();
+      SmallVector<Value, 4> indices;
       createEvents(0, indices);
     }
   }
@@ -490,8 +497,6 @@ void EdtCodegen::process(Location loc) {
 }
 
 void EdtCodegen::processDependencies(Location loc) {
-  LLVM_DEBUG(DBGS() << "Processing dependencies for EDT\n" << func << "\n");
-
   /// Set the insertion point at the EDT function return to satisfy
   /// dependencies.
   builder.setInsertionPoint(returnOp);
@@ -506,8 +511,6 @@ void EdtCodegen::processDependencies(Location loc) {
   /// datablock GUIDs from the entryDbs map to access the correct datablock
   /// pointers and sizes.
   /// ---------------------------------------------------------------------
-  LLVM_DEBUG(dbgs() << "- Satisfying out-mode dependencies: "
-                    << depsToSatisfy.size() << "\n");
   if (!depsToSatisfy.empty()) {
     auto eventSlotAlloc =
         builder.create<memref::AllocaOp>(loc, indexMemRefType);
@@ -610,91 +613,88 @@ void EdtCodegen::processDependencies(Location loc) {
 
   /// ---------------------------------------------------------------------
   /// Record In-Mode Dependencies
-  /// After the EDT is created, add dependencies for all in-mode (read)
-  /// datablocks.
   /// ---------------------------------------------------------------------
-  LLVM_DEBUG(dbgs() << "- Recording in-mode dependencies: "
-                    << depsToRecord.size() << "\n");
-  builder.setInsertionPointAfter(guid.getDefiningOp());
-  for (auto *dbCG : depsToRecord) {
-    /// Ensure the datablock has a valid in-event and retrieve the event
-    const auto inEvent = dbCG->getInEvent();
-    assert(inEvent && "Datablock missing in event");
-    EventCodegen *eventCG =
-        AC.getEvent(dyn_cast<arts::EventOp>(inEvent.getDefiningOp()));
-    assert(eventCG && "Event not found");
-    auto eventGuid = eventCG->getGuid();
+  if (!depsToRecord.empty()) {
+    builder.setInsertionPointAfter(guid.getDefiningOp());
+    for (auto *dbCG : depsToRecord) {
+      /// Ensure the datablock has a valid in-event and retrieve the event
+      const auto inEvent = dbCG->getInEvent();
+      assert(inEvent && "Datablock missing in event");
+      EventCodegen *eventCG =
+          AC.getEvent(dyn_cast<arts::EventOp>(inEvent.getDefiningOp()));
+      assert(eventCG && "Event not found");
+      auto eventGuid = eventCG->getGuid();
 
-    /// Retrieve the datablock GUID and location.
-    auto dbGuid = dbCG->getGuid();
-    auto dbLoc = dbCG->getOp().getLoc();
+      /// Retrieve the datablock GUID and location.
+      auto dbGuid = dbCG->getGuid();
+      auto dbLoc = dbCG->getOp().getLoc();
 
-    /// For single-dimension datablocks, add the dependency directly.
-    if (dbCG->hasSingleSize()) {
-      auto dbIndices = dbCG->getIndices();
-      auto loadedEventGuid =
-          builder.create<memref::LoadOp>(dbLoc, eventGuid, dbIndices);
-      if (!dbIndices.empty())
-        dbGuid = builder.create<memref::LoadOp>(dbLoc, dbGuid, dbIndices);
-      AC.addEventDependency(loadedEventGuid, guid, dbCG->getEdtSlot(), dbGuid,
-                            dbLoc);
-      continue;
+      /// For single-dimension datablocks, add the dependency directly.
+      if (dbCG->hasSingleSize()) {
+        auto dbIndices = dbCG->getIndices();
+        auto loadedEventGuid =
+            builder.create<memref::LoadOp>(dbLoc, eventGuid, dbIndices);
+        if (!dbIndices.empty())
+          dbGuid = builder.create<memref::LoadOp>(dbLoc, dbGuid, dbIndices);
+        AC.addEventDependency(loadedEventGuid, guid, dbCG->getEdtSlot(), dbGuid,
+                              dbLoc);
+        continue;
+      }
+
+      /// For multidimensional datablocks, add dependencies for each element.
+      const auto dbSizes = dbCG->getSizes();
+      const auto dbOffsets = dbCG->getOffsets();
+      const auto dbIndices = dbCG->getIndices();
+      const unsigned dbRank = dbSizes.size();
+      auto inSlotAlloc =
+          builder.create<memref::AllocOp>(dbLoc, indexMemRefType);
+      builder.create<memref::StoreOp>(dbLoc, dbCG->getEdtSlot(), inSlotAlloc);
+
+      std::function<void(unsigned, SmallVector<Value, 4> &)>
+          addDependenciesRecursive = [&](unsigned dim,
+                                         SmallVector<Value, 4> &indices) {
+            if (dim == dbRank) {
+              auto loadedEventGuid =
+                  builder.create<memref::LoadOp>(dbLoc, eventGuid, indices);
+              auto currentSlot = builder.create<memref::LoadOp>(
+                  dbLoc, inSlotAlloc.getResult());
+              SmallVector<Value> loadedDbIndices(dbIndices);
+              loadedDbIndices.append(indices.begin(), indices.end());
+              auto loadedDbGuid = builder.create<memref::LoadOp>(
+                  dbLoc, dbGuid, loadedDbIndices);
+              AC.addEventDependency(loadedEventGuid, guid, currentSlot,
+                                    loadedDbGuid, dbLoc);
+              /// Increment the slot for the next dependency.
+              auto nextSlot =
+                  builder
+                      .create<arith::AddIOp>(dbLoc, currentSlot,
+                                             AC.createIndexConstant(1, dbLoc))
+                      .getResult();
+              builder.create<memref::StoreOp>(dbLoc, nextSlot, inSlotAlloc);
+              return;
+            }
+            auto lowerBound = dbOffsets[dim];
+            auto upperBound =
+                builder.create<arith::AddIOp>(dbLoc, lowerBound, dbSizes[dim]);
+            auto step = builder.create<arith::ConstantIndexOp>(dbLoc, 1);
+            auto loopOp =
+                builder.create<scf::ForOp>(dbLoc, lowerBound, upperBound, step);
+            auto &loopBlock = loopOp.getRegion().front();
+            builder.setInsertionPointToStart(&loopBlock);
+            indices.push_back(loopOp.getInductionVar());
+            addDependenciesRecursive(dim + 1, indices);
+            indices.pop_back();
+            builder.setInsertionPointAfter(loopOp);
+          };
+
+      SmallVector<Value, 4> initIndices;
+      addDependenciesRecursive(0, initIndices);
     }
-
-    /// For multidimensional datablocks, add dependencies for each element.
-    const auto dbSizes = dbCG->getSizes();
-    const auto dbOffsets = dbCG->getOffsets();
-    const auto dbIndices = dbCG->getIndices();
-    const unsigned dbRank = dbSizes.size();
-    auto inSlotAlloc = builder.create<memref::AllocOp>(dbLoc, indexMemRefType);
-    builder.create<memref::StoreOp>(dbLoc, dbCG->getEdtSlot(), inSlotAlloc);
-
-    std::function<void(unsigned, SmallVector<Value, 4> &)>
-        addDependenciesRecursive = [&](unsigned dim,
-                                       SmallVector<Value, 4> &indices) {
-          if (dim == dbRank) {
-            auto loadedEventGuid =
-                builder.create<memref::LoadOp>(dbLoc, eventGuid, indices);
-            auto currentSlot =
-                builder.create<memref::LoadOp>(dbLoc, inSlotAlloc.getResult());
-            SmallVector<Value> loadedDbIndices(dbIndices);
-            loadedDbIndices.append(indices.begin(), indices.end());
-            auto loadedDbGuid =
-                builder.create<memref::LoadOp>(dbLoc, dbGuid, loadedDbIndices);
-            AC.addEventDependency(loadedEventGuid, guid, currentSlot,
-                                  loadedDbGuid, dbLoc);
-            /// Increment the slot for the next dependency.
-            auto nextSlot =
-                builder
-                    .create<arith::AddIOp>(dbLoc, currentSlot,
-                                           AC.createIndexConstant(1, loc))
-                    .getResult();
-            builder.create<memref::StoreOp>(dbLoc, nextSlot, inSlotAlloc);
-            return;
-          }
-          auto lowerBound = dbOffsets[dim];
-          auto upperBound =
-              builder.create<arith::AddIOp>(dbLoc, lowerBound, dbSizes[dim]);
-          auto step = builder.create<arith::ConstantIndexOp>(dbLoc, 1);
-          auto loopOp =
-              builder.create<scf::ForOp>(dbLoc, lowerBound, upperBound, step);
-          auto &loopBlock = loopOp.getRegion().front();
-          builder.setInsertionPointToStart(&loopBlock);
-          indices.push_back(loopOp.getInductionVar());
-          addDependenciesRecursive(dim + 1, indices);
-          indices.pop_back();
-          builder.setInsertionPointAfter(loopOp);
-        };
-
-    SmallVector<Value, 4> initIndices;
-    addDependenciesRecursive(0, initIndices);
   }
 
   /// ---------------------------------------------------------------------
   /// Increment Latch Counts for Out-Mode Dependencies
   /// ---------------------------------------------------------------------
-  LLVM_DEBUG(dbgs() << "- Incrementing latch counts for out-mode dependencies: "
-                    << depsToSatisfy.size() << "\n");
   if (!depsToSatisfy.empty()) {
     for (auto *dbCG : depsToSatisfy) {
       /// Retrieve the associated event
@@ -846,6 +846,8 @@ void EdtCodegen::createFnEntry(Location loc) {
   fnParamV = entryBlock->getArgument(1);
   fnDepV = entryBlock->getArgument(3);
 
+  AC.createPrintfCall(loc, METADATA "Executing EDT with guid %u\n",
+                      AC.getCurrentEdtGuid(loc));
   /// Clone constants.
   for (auto &oldConst : consts) {
     rewireMap[oldConst] =
@@ -1036,6 +1038,7 @@ ArtsCodegen::ArtsCodegen(ModuleOp &module, llvm::DataLayout &llvmDL,
     : module(module), builder(OpBuilder(module->getContext())), llvmDL(llvmDL),
       mlirDL(mlirDL) {
   initializeTypes();
+  collectGlobalLLVMStrings();
 }
 
 ArtsCodegen::~ArtsCodegen() {
@@ -1361,7 +1364,8 @@ func::FuncOp ArtsCodegen::insertInitPerNode(Location loc,
   return newFunc;
 }
 
-func::FuncOp ArtsCodegen::insertArtsMainFn(Location loc, func::FuncOp callback) {
+func::FuncOp ArtsCodegen::insertArtsMainFn(Location loc,
+                                           func::FuncOp callback) {
   OpBuilder::InsertionGuard IG(builder);
   setInsertionPoint(module);
 
@@ -1373,7 +1377,6 @@ func::FuncOp ArtsCodegen::insertArtsMainFn(Location loc, func::FuncOp callback) 
   /// Create the entry block.
   auto *entryBlock = newFunc.addEntryBlock();
   builder.setInsertionPointToStart(entryBlock);
-  
 
   /// Insert call to 'artsRT' function
   auto callArgs = ValueRange{};
@@ -1566,4 +1569,62 @@ Value ArtsCodegen::castToLLVMPtr(Value source, Location loc) {
       LLVM::LLVMPointerType::get(builder.getContext(),
                                  MT.getMemorySpaceAsInt()),
       source);
+}
+
+void ArtsCodegen::collectGlobalLLVMStrings() {
+  for (auto &op : module.getOps()) {
+    if (auto global = dyn_cast<LLVM::GlobalOp>(op)) {
+      llvmStringGlobals[global.getName().str()] = global;
+    }
+  }
+}
+
+Value ArtsCodegen::getOrCreateGlobalLLVMString(Location loc, StringRef value) {
+  /// Check if we already have this string cached. If so, return the cached
+  /// global.
+  if (llvmStringGlobals.find(value.str()) == llvmStringGlobals.end()) {
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(module.getBody());
+    auto type = LLVM::LLVMArrayType::get(builder.getI8Type(), value.size() + 1);
+
+    /// Create a unique name for the global
+    std::string globalName = "str_" + std::to_string(llvmStringGlobals.size());
+    llvmStringGlobals[value.str()] = builder.create<LLVM::GlobalOp>(
+        loc, type, true, LLVM::Linkage::Internal, globalName,
+        builder.getStringAttr(value.str() + '\0'));
+  }
+
+  LLVM::GlobalOp global = llvmStringGlobals[value.str()];
+  return builder.create<LLVM::AddressOfOp>(loc, global);
+}
+
+void ArtsCodegen::createPrintfCall(Location loc, llvm::StringRef format,
+                                   ValueRange args) {
+  /// Create the printf function declaration if it doesn't exist
+  auto printfFunc = module.lookupSymbol<LLVM::LLVMFuncOp>("printf");
+  if (!printfFunc) {
+    /// Create proper printf function type with varargs
+    auto i32Type = builder.getI32Type();
+    auto i8PtrType = LLVM::LLVMPointerType::get(builder.getContext());
+    auto printfType = LLVM::LLVMFunctionType::get(i32Type, {i8PtrType}, true);
+
+    printfFunc = builder.create<LLVM::LLVMFuncOp>(loc, "printf", printfType);
+    printfFunc.setLinkage(LLVM::Linkage::External);
+  }
+  assert(printfFunc && "printf function not found");
+
+  // Get or create the format string global and cast it to a generic pointer
+  auto formatStrPtr = getOrCreateGlobalLLVMString(loc, format);
+  auto castedFormatPtr =
+      builder.create<LLVM::BitcastOp>(loc, llvmPtr, formatStrPtr);
+
+  /// Create the printf call with all arguments
+  SmallVector<Value> callArgs;
+  callArgs.push_back(castedFormatPtr);
+  callArgs.append(args.begin(), args.end());
+
+  // Create the call operation with a symbol reference
+  builder.create<LLVM::CallOp>(
+      loc, TypeRange{builder.getI32Type()},
+      SymbolRefAttr::get(builder.getContext(), printfFunc.getName()), callArgs);
 }

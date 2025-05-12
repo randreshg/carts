@@ -259,6 +259,11 @@ public:
   func::FuncOp insertMainFn(Location loc);
   void initializeRuntime(Location loc);
 
+  /// Debug
+  void collectGlobalLLVMStrings();
+  Value getOrCreateGlobalLLVMString(Location loc, StringRef value);
+  void createPrintfCall(Location loc, StringRef format, ValueRange args);
+
   /// Helpers
   Value createFnPtr(func::FuncOp funcOp, Location loc);
   Value createIntConstant(int value, Type type, Location loc);
@@ -309,6 +314,8 @@ private:
   llvm::DenseMap<Value, EventCodegen *> events;
   /// Map an arts region to a EdtCodegen
   llvm::DenseMap<Region *, EdtCodegen *> edts;
+  /// Cache for format strings to avoid creating duplicate globals
+  llvm::StringMap<LLVM::GlobalOp> llvmStringGlobals;
 };
 
 } // namespace arts
