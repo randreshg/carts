@@ -198,7 +198,7 @@ private:
 class ArtsCodegen {
 public:
   ArtsCodegen(ModuleOp &module, llvm::DataLayout &llvmDL,
-              mlir::DataLayout &mlirDL);
+              mlir::DataLayout &mlirDL, bool debug = false);
   ~ArtsCodegen();
 
   /// Friend classes
@@ -245,7 +245,6 @@ public:
   Value getTotalNodes(Location loc);
   Value getCurrentWorker(Location loc);
   Value getCurrentNode(Location loc);
-  void satisfyEventDependency(Value eventGuid, Value depGuid, Location loc);
   void addEventDependency(Value eventGuid, Value edtGuid, Value edtSlot,
                           Value dataGuid, Location loc);
   void incrementEventLatchCount(Value eventGuid, Value dataGuid, Location loc);
@@ -316,6 +315,8 @@ private:
   llvm::DenseMap<Region *, EdtCodegen *> edts;
   /// Cache for format strings to avoid creating duplicate globals
   llvm::StringMap<LLVM::GlobalOp> llvmStringGlobals;
+  /// Debug
+  bool debug = false;
 };
 
 } // namespace arts

@@ -1,7 +1,7 @@
 
-ARTS_PATH=/home/randres/projects/carts/.install/arts
-CARTS_PATH=/home/randres/projects/carts/.install/carts
-CLANG_INCLUDE_PATH=/usr/lib/llvm-14/lib/clang/14.0.0/include
+ARTS_PATH=home/randres/projects/carts/.install/arts
+CARTS_PATH=home/randres/projects/carts/.install/carts
+CLANG_INCLUDE_PATH=usr/lib/llvm-14/lib/clang/14.0.0/include
 FILENAME=matrixmul
 SHELL = /bin/bash
 
@@ -20,7 +20,7 @@ all: $(FILENAME) $(FILENAME)_omp
 
 # Generate binary (CARTS version)
 $(FILENAME): $(FILENAME).ll
-	clang $< -O3 -g0 -fopenmp -march=native -o $@ -I/$(ARTS_PATH)/include -L$(ARTS_PATH)/lib -larts  -lrt -lpthread -lrdmacm 
+	clang $< -O3 -g0 -fopenmp -march=native -o $@ -I/$(ARTS_PATH)/include -L/$(ARTS_PATH)/lib -larts  -lrt -lpthread -lrdmacm 
 
 # Generate binary (OpenMP version)
 %_omp: %.cpp

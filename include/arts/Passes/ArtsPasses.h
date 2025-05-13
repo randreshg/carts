@@ -26,6 +26,7 @@ std::unique_ptr<Pass> createDatablockPass();
 std::unique_ptr<Pass> createCreateEventsPass();
 std::unique_ptr<Pass> createCreateEpochsPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass();
+std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug);
 std::unique_ptr<Pass> createEdtInvariantCodeMotionPass();
 std::unique_ptr<Pass> createEdtPointerRematerializationPass();
 } // namespace arts

@@ -4,16 +4,13 @@
 #include <stdbool.h>
 
 /* 
-python3 run_comparison.py \
+python3 carts_test.py \
   --problem_sizes 100 150 200 \
   --iterations_per_size 5 5 5 \
   --target_examples addition \
   --timeout_seconds 10 \
   --example_base_dirs "parallel" \
-  --output_file multi_size_results.json \
-  --csv_output_file multi_size_benchmark.csv \
-  --graph_output_file multi_size_graph.png \
-  --md_output_file multi_size_summary.md
+  --output_prefix report 
 */
 
 int main(int argc, char **argv) {
@@ -34,8 +31,6 @@ int main(int argc, char **argv) {
     a[i] = i;
     b[i] = i * 2;
   }
-
-  printf("Performing parallel array addition...\n");
 
   // Start timer
   double t_start = omp_get_wtime();
@@ -63,18 +58,18 @@ int main(int argc, char **argv) {
   }
   // Output correctness in a script-parseable format
   if (success) {
-    printf("Result: CORRECT\\n");
+    printf("Result: CORRECT\n");
   } else {
-    printf("Result: INCORRECT\\n");
+    printf("Result: INCORRECT\n");
   }
   fflush(stdout); // Ensure output is flushed
 
   // Print C
-  printf("C array: ");
-  for (int i = 0; i < N; i++) {
-    printf("%d ", c[i]);
-  }
-  printf("\n");
+  // printf("C array: ");
+  // for (int i = 0; i < N; i++) {
+  //   printf("%d ", c[i]);
+  // }
+  // printf("\n");
 
   return 0;
 }

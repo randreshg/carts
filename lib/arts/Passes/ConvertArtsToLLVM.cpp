@@ -52,6 +52,9 @@ using namespace arts;
 namespace {
 struct ConvertArtsToLLVMPass
     : public arts::ConvertArtsToLLVMBase<ConvertArtsToLLVMPass> {
+
+  ConvertArtsToLLVMPass(bool debug = false) : debug(debug) {}
+
   void runOnOperation() override;
 
   void iterateOps();
@@ -70,6 +73,7 @@ private:
   ArtsCodegen *AC = nullptr;
   DenseMap<EdtOp, Value> edtToEpoch;
   SetVector<Operation *> opsToRemove;
+  bool debug = false;
 };
 } // end namespace
 
@@ -431,7 +435,7 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   mlir::DataLayout mlirDL(module);
 
   /// Initialize the AC object, iterate ops and initialize the runtime.
-  AC = new ArtsCodegen(module, llvmDL, mlirDL);
+  AC = new ArtsCodegen(module, llvmDL, mlirDL, debug);
   iterateOps();
   AC->initializeRuntime(UnknownLoc::get(module.getContext()));
 
@@ -450,5 +454,10 @@ namespace arts {
 std::unique_ptr<Pass> createConvertArtsToLLVMPass() {
   return std::make_unique<ConvertArtsToLLVMPass>();
 }
+
+std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug) {
+  return std::make_unique<ConvertArtsToLLVMPass>(debug);
+}
+
 } // namespace arts
 } // namespace mlir
