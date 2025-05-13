@@ -1034,9 +1034,9 @@ void EdtCodegen::createFnEntry(Location loc) {
 
 /// ---------------------------- ARTS Codegen ---------------------------- ///
 ArtsCodegen::ArtsCodegen(ModuleOp &module, llvm::DataLayout &llvmDL,
-                         mlir::DataLayout &mlirDL)
+                         mlir::DataLayout &mlirDL, bool debug)
     : module(module), builder(OpBuilder(module->getContext())), llvmDL(llvmDL),
-      mlirDL(mlirDL) {
+      mlirDL(mlirDL), debug(debug) {
   initializeTypes();
   collectGlobalLLVMStrings();
 }
@@ -1257,13 +1257,6 @@ Value ArtsCodegen::getCurrentNode(Location loc) {
   // ArrayRef<Value> args;
   auto callOp = builder.create<func::CallOp>(loc, func);
   return callOp.getResult(0);
-}
-
-void ArtsCodegen::satisfyEventDependency(Value eventGuid, Value dbGuid,
-                                         Location loc) {
-  auto const ARTS_EVENT_LATCH_DECR_SLOT = createIntConstant(0, Int32, loc);
-  createRuntimeCall(ARTSRTL_artsEventSatisfySlot,
-                    {eventGuid, dbGuid, ARTS_EVENT_LATCH_DECR_SLOT}, loc);
 }
 
 void ArtsCodegen::addEventDependency(Value eventGuid, Value edtGuid,
@@ -1600,6 +1593,9 @@ Value ArtsCodegen::getOrCreateGlobalLLVMString(Location loc, StringRef value) {
 
 void ArtsCodegen::createPrintfCall(Location loc, llvm::StringRef format,
                                    ValueRange args) {
+  if (!debug)
+    return;
+
   /// Create the printf function declaration if it doesn't exist
   auto printfFunc = module.lookupSymbol<LLVM::LLVMFuncOp>("printf");
   if (!printfFunc) {

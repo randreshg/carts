@@ -76,6 +76,9 @@ static cl::opt<unsigned>
     OptIterations("iterations", cl::desc("Number of optimization iterations"),
                   cl::init(1));
 
+static cl::opt<bool> Debug("g", cl::desc("Enable debug mode"),
+                          cl::init(false));
+
 //===----------------------------------------------------------------------===//
 // Helper Functions for Initialization and Pass Setup
 //===----------------------------------------------------------------------===//
@@ -190,7 +193,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
 
   /// Convert ARTS to LLVM
-  pm.addPass(arts::createConvertArtsToLLVMPass());
+  pm.addPass(arts::createConvertArtsToLLVMPass(Debug));
   if (mlir::failed(pm.run(module))) {
     llvm::errs() << "Error when running ARTS Passes";
     module->dump();

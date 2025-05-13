@@ -45,9 +45,7 @@ def CreateDatablocks : Pass<"create-datablocks", "mlir::ModuleOp"> {
   let options = [
     Option<"identifyDbs", "identify-dbs", "bool", /*default=*/"true",
            "Analyzes the module and tries to automatically identify the "
-           "datablocks. This is the default behavior. If set to false, the "
-           "user must manually annotate the datablocks using the "
-           "'depend' clause in the OpenMP Tasks region.">,
+           "datablocks.">,
   ];
 }
 
@@ -105,6 +103,10 @@ def ConvertArtsToLLVM : Pass<"convert-arts-to-llvm", "mlir::ModuleOp"> {
     "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createConvertArtsToLLVMPass()";
+  let options = [
+    Option<"debug", "debug", "bool", /*default=*/"false",
+           "Enable debug mode.">,
+  ];
 }
 
 def EdtInvariantCodeMotion : Pass<"edt-invariant-code-motion", "mlir::ModuleOp"> {
