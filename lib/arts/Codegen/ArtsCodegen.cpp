@@ -158,72 +158,6 @@ Value DataBlockCodegen::createGuid(Value node, Value mode, Location loc) {
   return reserveGuidCall.getResult(0);
 }
 
-// ---------------------------- Events ---------------------------- ///
-EventCodegen::EventCodegen(ArtsCodegen &AC, arts::EventOp eventOp, Location loc)
-    : AC(AC), builder(AC.builder), eventOp(eventOp) {
-  assert(eventOp && "EventOp must be provided");
-  /// Create the event
-  create(loc);
-}
-
-void EventCodegen::create(Location loc) {
-  /// Create a single persistent event with latchCount = 0
-  auto createEvent = [&](Value node, Location loc) -> Value {
-    Value latchCount = AC.createIntConstant(0, AC.Int32, loc);
-    dataGuid = AC.createIntConstant(0, AC.Int64, loc);
-    return AC
-        .createRuntimeCall(ARTSRTL_artsPersistentEventCreate,
-                           {node, latchCount, dataGuid}, loc)
-        .getResult(0);
-  };
-
-  OpBuilder::InsertionGuard IG(builder);
-  AC.setInsertionPoint(eventOp);
-  auto node = AC.getCurrentNode(loc);
-
-  /// If the event is a single event, create it and return
-  if (eventOp.hasSingleSize()) {
-    AC.createPrintfCall(loc, METADATA "Creating single event\n", {});
-    guid = createEvent(node, loc);
-    return;
-  }
-
-  /// Create an array of guids based on the sizes of the eventOp
-  auto sizes = eventOp.getSizes();
-  auto guidType = MemRefType::get(
-      std::vector<int64_t>(sizes.size(), ShapedType::kDynamic), AC.ArtsGuid);
-  guid = builder.create<memref::AllocaOp>(loc, guidType, sizes);
-  AC.createPrintfCall(loc, METADATA "Creating array of events\n", {});
-
-  /// Create nested loops to create the guids
-  std::function<void(unsigned, SmallVector<Value, 4> &)> createGuids =
-      [&](unsigned dim, SmallVector<Value, 4> &indices) {
-        if (dim == sizes.size()) {
-          auto guidVal = createEvent(node, loc);
-          builder.create<memref::StoreOp>(loc, guidVal, guid, indices);
-          return;
-        }
-        /// Create loop for current dimension
-        auto lowerBound = AC.createIndexConstant(0, loc);
-        auto upperBound = sizes[dim];
-        auto step = AC.createIndexConstant(1, loc);
-        auto loopOp =
-            builder.create<scf::ForOp>(loc, lowerBound, upperBound, step);
-        /// Set insertion point inside the loop body
-        auto &loopBlock = loopOp.getRegion().front();
-        builder.setInsertionPointToStart(&loopBlock);
-        /// Append the induction variable for the current dimension
-        indices.push_back(loopOp.getInductionVar());
-        /// Recurse to create the next level of loop
-        createGuids(dim + 1, indices);
-        /// Remove the current induction variable and reset insertion point
-        indices.pop_back();
-        builder.setInsertionPointAfter(loopOp);
-      };
-  SmallVector<Value, 4> indices;
-  createGuids(0, indices);
-}
-
 // ---------------------------- EDTs ---------------------------- ///
 unsigned EdtCodegen::edtCounter = 0;
 
@@ -298,9 +232,6 @@ void EdtCodegen::process(Location loc) {
 
   /// Allocate and initialize counters.
   auto zeroConst = AC.createIndexConstant(0, loc);
-  auto totalEventsToSatisfy =
-      builder.create<memref::AllocaOp>(loc, indexMemRefType);
-  builder.create<memref::StoreOp>(loc, zeroConst, totalEventsToSatisfy);
 
   /// Allocate dependency count (depC) and initialize to zero.
   depC = builder.create<memref::AllocaOp>(loc, indexMemRefType);
@@ -323,25 +254,6 @@ void EdtCodegen::process(Location loc) {
     auto paramPair = insertParam(offset);
     entryDbs[db].offsetIndex[offsetIdx] = paramPair.second;
     ;
-  };
-
-  /// Process a datablock event dependency
-  auto processEvent = [&](DataBlockCodegen *db, Value &dbNumElements) {
-    /// Datablocks with 'in' events will be recorded
-    if (db->isInMode()) {
-      assert(db->getInEvent() && "Datablock missing 'in' event");
-      depsToRecord.push_back(db);
-    }
-    /// Datablocks with 'out' events will be satisfied
-    if (db->getOutEvent() && db->isOutMode()) {
-      depsToSatisfy.push_back(db);
-      auto currEvents =
-          builder.create<memref::LoadOp>(loc, totalEventsToSatisfy.getResult());
-      auto newEvents =
-          builder.create<arith::AddIOp>(loc, currEvents, dbNumElements)
-              .getResult();
-      builder.create<memref::StoreOp>(loc, newEvents, totalEventsToSatisfy);
-    }
   };
 
   /// Process each dependency.
@@ -375,16 +287,18 @@ void EdtCodegen::process(Location loc) {
         dbNumElements = product;
       }
 
-      /// For input DBs, accumulate dependency count.
+      /// Input DBs are recorded, accumulate dependency count.
       if (db->isInMode()) {
         auto currDep = builder.create<memref::LoadOp>(loc, depC);
         auto newDep = builder.create<arith::AddIOp>(loc, currDep, dbNumElements)
                           .getResult();
         builder.create<memref::StoreOp>(loc, newDep, depC);
+        depsToRecord.push_back(db);
       }
 
-      /// Process events for the given DB
-      processEvent(db, dbNumElements);
+      /// Output DBs are satisfied
+      if (db->isOutMode())
+        depsToSatisfy.push_back(db);
     }
   }
 
@@ -397,17 +311,6 @@ void EdtCodegen::process(Location loc) {
   paramC = builder.create<memref::AllocaOp>(loc, indexMemRefType);
   builder.create<memref::StoreOp>(
       loc, AC.createIndexConstant(staticParamCount, loc), paramC);
-
-  /// If events exist, add their count to the parameter count.
-  if (!depsToSatisfy.empty()) {
-    auto loadedParamC = builder.create<memref::LoadOp>(loc, paramC);
-    auto totalEventsVal =
-        builder.create<memref::LoadOp>(loc, totalEventsToSatisfy.getResult());
-    auto totalParamC =
-        builder.create<arith::AddIOp>(loc, loadedParamC, totalEventsVal)
-            .getResult();
-    builder.create<memref::StoreOp>(loc, totalParamC, paramC);
-  }
 
   /// Cast the updated parameter count to int32.
   auto loadedParamC = builder.create<memref::LoadOp>(loc, paramC);
@@ -424,76 +327,6 @@ void EdtCodegen::process(Location loc) {
     auto param = AC.castToInt(AC.Int64, params[i], loc);
     builder.create<memref::StoreOp>(loc, param, paramV, ValueRange{paramIndex});
   }
-
-  /// If no events need to be satisfied, we are done.
-  if (depsToSatisfy.empty())
-    return;
-
-  /// Allocate a running index for event parameters starting from the static
-  /// count.
-  auto paramIndex = builder.create<memref::AllocaOp>(loc, indexMemRefType);
-  builder.create<memref::StoreOp>(
-      loc, AC.createIndexConstant(staticParamCount, loc), paramIndex);
-
-  /// Insert event GUIDs into paramV.
-  LLVM_DEBUG(dbgs() << "Inserting event GUIDs into paramV\n");
-  for (auto db : depsToSatisfy) {
-    auto eventOp = dyn_cast<arts::EventOp>(db->getOutEvent().getDefiningOp());
-    auto eventCG = AC.getEvent(eventOp);
-    assert(eventCG && "Event not found");
-
-    if (eventOp.hasSingleSize()) {
-      auto curParamIdx =
-          builder.create<memref::LoadOp>(loc, paramIndex.getResult());
-      builder.create<memref::StoreOp>(loc, eventCG->getGuid(), paramV,
-                                      ValueRange{curParamIdx});
-      auto newParamIdx =
-          builder
-              .create<arith::AddIOp>(loc, curParamIdx,
-                                     AC.createIndexConstant(1, loc))
-              .getResult();
-      builder.create<memref::StoreOp>(loc, newParamIdx, paramIndex);
-    } else {
-      /// Recursive function to insert all GUIDs for multi-dimensional events.
-      const auto dbSizes = db->getSizes();
-      const auto dbOffsets = db->getOffsets();
-      const auto dbRank = dbSizes.size();
-      std::function<void(unsigned, SmallVector<Value, 4> &)> createEvents =
-          [&](unsigned dim, SmallVector<Value, 4> &indices) {
-            if (dim == dbRank) {
-              auto eventGuid = builder.create<memref::LoadOp>(
-                  loc, eventCG->getGuid(), indices);
-              auto curParamIdx =
-                  builder.create<memref::LoadOp>(loc, paramIndex.getResult());
-              builder.create<memref::StoreOp>(loc, eventGuid, paramV,
-                                              ValueRange{curParamIdx});
-              auto newParamIdx =
-                  builder
-                      .create<arith::AddIOp>(loc, curParamIdx,
-                                             AC.createIndexConstant(1, loc))
-                      .getResult();
-              builder.create<memref::StoreOp>(loc, newParamIdx, paramIndex);
-              return;
-            }
-            auto lowerBound = dbOffsets[dim];
-            auto upperBound =
-                builder.create<arith::AddIOp>(loc, lowerBound, dbSizes[dim]);
-            auto step = AC.createIndexConstant(1, loc);
-            auto loopOp =
-                builder.create<scf::ForOp>(loc, lowerBound, upperBound, step);
-            auto &loopBody = loopOp.getRegion().front();
-            builder.setInsertionPointToStart(&loopBody);
-            indices.push_back(loopOp.getInductionVar());
-            createEvents(dim + 1, indices);
-            indices.pop_back();
-            builder.setInsertionPointAfter(loopOp);
-          };
-
-      SmallVector<Value, 4> indices;
-      createEvents(0, indices);
-    }
-  }
-  LLVM_DEBUG(dbgs() << "Inserted event GUIDs into paramV\n");
 }
 
 void EdtCodegen::processDependencies(Location loc) {
@@ -512,33 +345,12 @@ void EdtCodegen::processDependencies(Location loc) {
   /// pointers and sizes.
   /// ---------------------------------------------------------------------
   if (!depsToSatisfy.empty()) {
-    auto eventSlotAlloc =
-        builder.create<memref::AllocaOp>(loc, indexMemRefType);
-    const auto initialEventSlot = AC.createIndexConstant(params.size(), loc);
-    builder.create<memref::StoreOp>(loc, initialEventSlot, eventSlotAlloc);
-    auto fnParamVPtr = AC.castToLLVMPtr(fnParamV, loc);
-
+    LLVM_DEBUG(dbgs() << "- Satisfying out-mode dependencies\n");
     for (auto *dbCG : depsToSatisfy) {
-      assert(dbCG->getOutEvent() && "Datablock missing out event");
-
+      LLVM_DEBUG(dbgs() << "- " << dbCG->getOp() << "\n");
       /// For single-dimension datablocks, satisfy dependency directly.
       if (dbCG->hasSingleSize()) {
-        auto currentSlot =
-            builder.create<memref::LoadOp>(loc, eventSlotAlloc.getResult());
-        auto eventGuidAtSlot = builder.create<polygeist::SubIndexOp>(
-            loc, MemRefType::get({}, AC.ArtsGuid), fnParamV, currentSlot);
-        auto loadedEventGuid =
-            builder.create<memref::LoadOp>(loc, eventGuidAtSlot.getResult())
-                .getResult();
-        AC.decrementEventLatchCount(loadedEventGuid, entryDbs[dbCG].guid,
-                                    unknownLoc);
-
-        /// Increment the parameter slot.
-        auto newSlot = builder
-                           .create<arith::AddIOp>(
-                               loc, currentSlot, AC.createIndexConstant(1, loc))
-                           .getResult();
-        builder.create<memref::StoreOp>(loc, newSlot, eventSlotAlloc);
+        AC.decrementDbLatchCount(entryDbs[dbCG].guid, unknownLoc);
         continue;
       }
 
@@ -546,22 +358,9 @@ void EdtCodegen::processDependencies(Location loc) {
       /// each element.
       const auto &dbSizes = entryDbs[dbCG].sizes;
       const unsigned dbRank = dbSizes.size();
-
-      std::function<Value(unsigned, SmallVector<Value, 4> &, Value)>
-          satisfyRecursive = [&](unsigned dim, SmallVector<Value, 4> &indices,
-                                 Value curSlot) -> Value {
+      std::function<void(unsigned, SmallVector<Value, 4> &)> satisfyRecursive =
+          [&](unsigned dim, SmallVector<Value, 4> &indices) -> void {
         if (dim == dbRank) {
-          auto loadedSlot = builder.create<memref::LoadOp>(loc, curSlot);
-          auto slotInt = AC.castToInt(AC.Int32, loadedSlot, loc);
-          auto eventGuidPtr =
-              builder
-                  .create<LLVM::GEPOp>(loc, AC.llvmPtr, AC.ArtsGuid,
-                                       fnParamVPtr, ValueRange{slotInt})
-                  ->getResult(0);
-          auto loadedEventGuid =
-              builder.create<LLVM::LoadOp>(loc, AC.ArtsGuid, eventGuidPtr)
-                  .getResult();
-
           /// Load the datablock GUID from the entry using the current indices.
           auto loadedDbGuid = entryDbs[dbCG].guid;
           for (auto idx : indices) {
@@ -578,36 +377,25 @@ void EdtCodegen::processDependencies(Location loc) {
               builder.create<memref::LoadOp>(loc, loadedDbGuid).getResult();
 
           /// Satisfy the event dependency by decrementing the latch count.
-          AC.decrementEventLatchCount(loadedEventGuid, loadedDbGuid, loc);
-
-          /// Increment the slot value.
-          auto newSlot =
-              builder
-                  .create<arith::AddIOp>(loc, loadedSlot,
-                                         AC.createIndexConstant(1, loc))
-                  .getResult();
-          builder.create<memref::StoreOp>(loc, newSlot, curSlot);
-          return curSlot;
+          AC.decrementDbLatchCount(loadedDbGuid, loc);
+          return;
         }
 
         auto lowerBound = AC.createIndexConstant(0, loc);
         auto upperBound = dbSizes[dim];
         auto step = AC.createIndexConstant(1, loc);
-        auto loopOp = builder.create<scf::ForOp>(loc, lowerBound, upperBound,
-                                                 step, curSlot);
+        auto loopOp =
+            builder.create<scf::ForOp>(loc, lowerBound, upperBound, step);
         auto &loopBlock = loopOp.getRegion().front();
         builder.setInsertionPointToStart(&loopBlock);
         indices.push_back(loopBlock.getArgument(0));
-        Value newSlot =
-            satisfyRecursive(dim + 1, indices, loopBlock.getArgument(1));
+        satisfyRecursive(dim + 1, indices);
         indices.pop_back();
-        builder.create<scf::YieldOp>(loc, newSlot);
         builder.setInsertionPointAfter(loopOp);
-        return loopOp.getResult(0);
       };
 
       SmallVector<Value, 4> indices;
-      satisfyRecursive(0, indices, eventSlotAlloc);
+      satisfyRecursive(0, indices);
     }
   }
 
@@ -615,16 +403,9 @@ void EdtCodegen::processDependencies(Location loc) {
   /// Record In-Mode Dependencies
   /// ---------------------------------------------------------------------
   if (!depsToRecord.empty()) {
+    LLVM_DEBUG(dbgs() << "- Recording in-mode dependencies\n");
     builder.setInsertionPointAfter(guid.getDefiningOp());
     for (auto *dbCG : depsToRecord) {
-      /// Ensure the datablock has a valid in-event and retrieve the event
-      const auto inEvent = dbCG->getInEvent();
-      assert(inEvent && "Datablock missing in event");
-      EventCodegen *eventCG =
-          AC.getEvent(dyn_cast<arts::EventOp>(inEvent.getDefiningOp()));
-      assert(eventCG && "Event not found");
-      auto eventGuid = eventCG->getGuid();
-
       /// Retrieve the datablock GUID and location.
       auto dbGuid = dbCG->getGuid();
       auto dbLoc = dbCG->getOp().getLoc();
@@ -632,12 +413,9 @@ void EdtCodegen::processDependencies(Location loc) {
       /// For single-dimension datablocks, add the dependency directly.
       if (dbCG->hasSingleSize()) {
         auto dbIndices = dbCG->getIndices();
-        auto loadedEventGuid =
-            builder.create<memref::LoadOp>(dbLoc, eventGuid, dbIndices);
         if (!dbIndices.empty())
           dbGuid = builder.create<memref::LoadOp>(dbLoc, dbGuid, dbIndices);
-        AC.addEventDependency(loadedEventGuid, guid, dbCG->getEdtSlot(), dbGuid,
-                              dbLoc);
+        AC.addDbDependency(dbGuid, guid, dbCG->getEdtSlot(), dbLoc);
         continue;
       }
 
@@ -654,16 +432,13 @@ void EdtCodegen::processDependencies(Location loc) {
           addDependenciesRecursive = [&](unsigned dim,
                                          SmallVector<Value, 4> &indices) {
             if (dim == dbRank) {
-              auto loadedEventGuid =
-                  builder.create<memref::LoadOp>(dbLoc, eventGuid, indices);
               auto currentSlot = builder.create<memref::LoadOp>(
                   dbLoc, inSlotAlloc.getResult());
               SmallVector<Value> loadedDbIndices(dbIndices);
               loadedDbIndices.append(indices.begin(), indices.end());
               auto loadedDbGuid = builder.create<memref::LoadOp>(
                   dbLoc, dbGuid, loadedDbIndices);
-              AC.addEventDependency(loadedEventGuid, guid, currentSlot,
-                                    loadedDbGuid, dbLoc);
+              AC.addDbDependency(loadedDbGuid, guid, currentSlot, dbLoc);
               /// Increment the slot for the next dependency.
               auto nextSlot =
                   builder
@@ -696,16 +471,9 @@ void EdtCodegen::processDependencies(Location loc) {
   /// Increment Latch Counts for Out-Mode Dependencies
   /// ---------------------------------------------------------------------
   if (!depsToSatisfy.empty()) {
+    LLVM_DEBUG(
+        dbgs() << "- Incrementing latch counts for out-mode dependencies\n");
     for (auto *dbCG : depsToSatisfy) {
-      /// Retrieve the associated event
-      Value dbEvent = dbCG->getOutEvent();
-      assert(dbEvent && "Datablock missing out event");
-      EventCodegen *eventCG =
-          AC.getEvent(dyn_cast<arts::EventOp>(dbEvent.getDefiningOp()));
-      assert(eventCG && "Event not found");
-      auto eventGuid = eventCG->getGuid();
-
-      /// Retrieve the datablock GUID
       auto dbGuid = dbCG->getGuid();
       assert(dbGuid && "Datablock GUID not found");
       auto dbLoc = dbCG->getOp().getLoc();
@@ -713,11 +481,9 @@ void EdtCodegen::processDependencies(Location loc) {
       /// For single-dimension datablocks.
       if (dbCG->hasSingleSize()) {
         auto dbIndices = dbCG->getIndices();
-        auto loadedEventGuid =
-            builder.create<memref::LoadOp>(dbLoc, eventGuid, dbIndices);
         if (!dbIndices.empty())
           dbGuid = builder.create<memref::LoadOp>(dbLoc, dbGuid, dbIndices);
-        AC.incrementEventLatchCount(loadedEventGuid, dbGuid, dbLoc);
+        AC.incrementDbLatchCount(dbGuid, dbLoc);
         continue;
       }
 
@@ -734,13 +500,11 @@ void EdtCodegen::processDependencies(Location loc) {
           incrementLatchRecursive = [&](unsigned dim, Value curSlot,
                                         SmallVector<Value, 4> &indices) {
             if (dim == dbRank) {
-              auto loadedEventGuid =
-                  builder.create<memref::LoadOp>(dbLoc, eventGuid, indices);
               SmallVector<Value> loadedDbIndices(dbIndices);
               loadedDbIndices.append(indices.begin(), indices.end());
               auto loadedDbGuid = builder.create<memref::LoadOp>(
                   dbLoc, dbGuid, loadedDbIndices);
-              AC.incrementEventLatchCount(loadedEventGuid, loadedDbGuid, dbLoc);
+              AC.incrementDbLatchCount(loadedDbGuid, dbLoc);
               auto loadedSlot = builder.create<memref::LoadOp>(dbLoc, curSlot);
               auto nextSlot =
                   builder
@@ -1044,8 +808,6 @@ ArtsCodegen::ArtsCodegen(ModuleOp &module, llvm::DataLayout &llvmDL,
 ArtsCodegen::~ArtsCodegen() {
   for (auto &db : datablocks)
     delete db.second;
-  for (auto &event : events)
-    delete event.second;
   for (auto &edt : edts)
     delete edt.second;
 }
@@ -1146,18 +908,19 @@ DataBlockCodegen *ArtsCodegen::getOrCreateDatablock(arts::DataBlockOp dbOp,
   return createDatablock(dbOp, loc);
 }
 
-/// Events
-EventCodegen *ArtsCodegen::getEvent(arts::EventOp eventOp) {
-  auto it = events.find(eventOp);
-  return (it != events.end()) ? it->second : nullptr;
+void ArtsCodegen::addDbDependency(Value dbGuid, Value edtGuid, Value edtSlot,
+                                  Location loc) {
+  auto edtSlotInt = castToInt(Int32, edtSlot, loc);
+  createRuntimeCall(ARTSRTL_artsDbAddDependence, {dbGuid, edtGuid, edtSlotInt},
+                    loc);
 }
 
-EventCodegen *ArtsCodegen::getOrCreateEvent(arts::EventOp eventOp,
-                                            Location loc) {
-  if (auto event = getEvent(eventOp))
-    return event;
-  events[eventOp] = new EventCodegen(*this, eventOp, loc);
-  return events[eventOp];
+void ArtsCodegen::incrementDbLatchCount(Value dbGuid, Location loc) {
+  createRuntimeCall(ARTSRTL_artsDbIncrementLatch, {dbGuid}, loc);
+}
+
+void ArtsCodegen::decrementDbLatchCount(Value dbGuid, Location loc) {
+  createRuntimeCall(ARTSRTL_artsDbDecrementLatch, {dbGuid}, loc);
 }
 
 /// EDT
@@ -1257,26 +1020,6 @@ Value ArtsCodegen::getCurrentNode(Location loc) {
   // ArrayRef<Value> args;
   auto callOp = builder.create<func::CallOp>(loc, func);
   return callOp.getResult(0);
-}
-
-void ArtsCodegen::addEventDependency(Value eventGuid, Value edtGuid,
-                                     Value edtSlot, Value dataGuid,
-                                     Location loc) {
-  auto edtSlotInt = castToInt(Int32, edtSlot, loc);
-  createRuntimeCall(ARTSRTL_artsAddDependenceToPersistentEvent,
-                    {eventGuid, edtGuid, edtSlotInt, dataGuid}, loc);
-}
-
-void ArtsCodegen::incrementEventLatchCount(Value eventGuid, Value dataGuid,
-                                           Location loc) {
-  createRuntimeCall(ARTSRTL_artsPersistentEventIncrementLatch,
-                    {eventGuid, dataGuid}, loc);
-}
-
-void ArtsCodegen::decrementEventLatchCount(Value eventGuid, Value dataGuid,
-                                           Location loc) {
-  createRuntimeCall(ARTSRTL_artsPersistentEventDecrementLatch,
-                    {eventGuid, dataGuid}, loc);
 }
 
 func::CallOp ArtsCodegen::signalEdt(Value edtGuid, Value edtSlot, Value dbGuid,

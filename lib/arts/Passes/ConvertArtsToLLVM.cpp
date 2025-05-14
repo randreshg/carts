@@ -60,7 +60,7 @@ struct ConvertArtsToLLVMPass
   void iterateOps();
   void preprocessDataBlockOps(Operation *op);
   void handleEdt(EdtOp &op);
-  void handleEvent(EventOp &op);
+  // void handleEvent(EventOp &op);
   void handleEpoch(EpochOp &op);
   void handleDatablock(DataBlockOp &op);
   void handleGetTotalWorkers(GetTotalWorkersOp &op);
@@ -99,12 +99,6 @@ void ConvertArtsToLLVMPass::handleEdt(EdtOp &op) {
 
   /// Visit new function
   assert(newEdt && "New EDT not created");
-  opsToRemove.insert(op);
-}
-
-void ConvertArtsToLLVMPass::handleEvent(EventOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.event\n");
-  AC->getOrCreateEvent(op, op->getLoc());
   opsToRemove.insert(op);
 }
 
@@ -217,7 +211,6 @@ void ConvertArtsToLLVMPass::iterateOps() {
 
   //  Iterate over the EpochsOps and EventOps in the module
   module.walk([&](arts::EpochOp epoch) { handleEpoch(epoch); });
-  module.walk([&](arts::EventOp event) { handleEvent(event); });
   LLVM_DEBUG({
     DBGS() << "Module after iterating Epochs and Events:\n";
     module.dump();
@@ -396,13 +389,6 @@ void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
         llvm_unreachable("Unknown use of datablock op");
       }
     }
-
-    /// Print module for debugging
-    // LLVM_DEBUG({
-    //   dbgs() << "Module after rewire:\n";
-    //   module.dump();
-    //   dbgs() << line;
-    // });
 
     /// Erase the old datablock op
     dbFrom->erase();

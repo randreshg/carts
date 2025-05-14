@@ -188,7 +188,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context) {
 
   /// Create events and epochs
   pm.addPass(arts::createEdtPointerRematerializationPass());
-  pm.addPass(arts::createCreateEventsPass());
+  // pm.addPass(arts::createCreateEventsPass());
   pm.addPass(arts::createCreateEpochsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
 

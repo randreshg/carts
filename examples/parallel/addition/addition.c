@@ -1,21 +1,11 @@
 #include <omp.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
-
-/* 
-python3 carts_test.py \
-  --problem_sizes 100 150 200 \
-  --iterations_per_size 5 5 5 \
-  --target_examples addition \
-  --timeout_seconds 10 \
-  --example_base_dirs "parallel" \
-  --output_prefix report 
-*/
 
 int main(int argc, char **argv) {
   if (argc < 2) {
-    printf("Usage: %s <num_threads>\n", argv[0]);
+    printf("Usage: %s <size>\n", argv[0]);
     return 1;
   }
   const int N = atoi(argv[1]);
@@ -35,14 +25,10 @@ int main(int argc, char **argv) {
   // Start timer
   double t_start = omp_get_wtime();
 
-  // Parallel loop for array addition
-  #pragma omp parallel for
-  for (int i = 0; i < N; i++) {
-    // optional per-iteration debug
-    // printf("Thread %d is working on iteration %d\n",
-    //        omp_get_thread_num(), i);
+// Parallel loop for array addition
+#pragma omp parallel for
+  for (int i = 0; i < N; i++)
     c[i] = a[i] + b[i];
-  }
 
   // Stop timer
   double t_end = omp_get_wtime();
@@ -62,15 +48,6 @@ int main(int argc, char **argv) {
   } else {
     printf("Result: INCORRECT\n");
   }
-  fflush(stdout); // Ensure output is flushed
-
-  // Print C
-  // printf("C array: ");
-  // for (int i = 0; i < N; i++) {
-  //   printf("%d ", c[i]);
-  // }
-  // printf("\n");
-
+  fflush(stdout);
   return 0;
 }
-

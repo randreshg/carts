@@ -171,29 +171,6 @@ private:
   static unsigned increaseEdtCounter() { return ++EdtCodegen::edtCounter; }
 };
 
-// ---------------------------- Events ---------------------------- ///
-class EventCodegen {
-public:
-  EventCodegen(ArtsCodegen &AC, arts::EventOp eventOp, Location loc);
-
-  /// Getters
-  Value getGuid() { return guid; }
-  ValueRange getSizes() { return eventOp.getSizes(); }
-
-  /// Setters
-  void setDataGuid(Value dataGuid) { this->dataGuid = dataGuid; }
-
-  /// Interface
-  void create(Location loc);
-
-private:
-  ArtsCodegen &AC;
-  OpBuilder &builder;
-  EventOp eventOp = nullptr;
-  Value dataGuid = nullptr;
-  Value guid = nullptr;
-};
-
 // ---------------------------- ARTS Codegen ---------------------------- ///
 class ArtsCodegen {
 public:
@@ -203,13 +180,11 @@ public:
 
   /// Friend classes
   friend class DataBlockCodegen;
-  friend class EventCodegen;
   friend class EdtCodegen;
   friend class ArtsTypes;
 
   /// Get or create a runtime function
   func::FuncOp getOrCreateRuntimeFunction(RuntimeFunction FnID);
-  /// Generate a call to a runtime function
   func::CallOp createRuntimeCall(RuntimeFunction FnID, ArrayRef<Value> args,
                                  Location loc);
   /// Builder
@@ -220,10 +195,10 @@ public:
   DataBlockCodegen *getDatablock(arts::DataBlockOp dbOp);
   DataBlockCodegen *createDatablock(arts::DataBlockOp dbOp, Location loc);
   DataBlockCodegen *getOrCreateDatablock(arts::DataBlockOp dbOp, Location loc);
-
-  /// Events
-  EventCodegen *getEvent(arts::EventOp eventOp);
-  EventCodegen *getOrCreateEvent(arts::EventOp eventOp, Location loc);
+  void addDbDependency(Value dbGuid, Value edtGuid, Value edtSlot,
+                       Location loc);
+  void incrementDbLatchCount(Value dbGuid, Location loc);
+  void decrementDbLatchCount(Value dbGuid, Location loc);
 
   /// Edts
   EdtCodegen *getEdt(Region *region);
@@ -245,10 +220,6 @@ public:
   Value getTotalNodes(Location loc);
   Value getCurrentWorker(Location loc);
   Value getCurrentNode(Location loc);
-  void addEventDependency(Value eventGuid, Value edtGuid, Value edtSlot,
-                          Value dataGuid, Location loc);
-  void incrementEventLatchCount(Value eventGuid, Value dataGuid, Location loc);
-  void decrementEventLatchCount(Value eventGuid, Value dataGuid, Location loc);
   func::CallOp signalEdt(Value edtGuid, Value edtSlot, Value dbGuid,
                          Location loc);
   void waitOnHandle(Value epochGuid, Location loc);
@@ -300,22 +271,14 @@ private:
   void initializeTypes();
 
   // -------------------------- Other Attributes-------------------------- ///
-  /// The MLIR module and builder
   ModuleOp &module;
   OpBuilder builder;
   llvm::DataLayout &llvmDL;
   mlir::DataLayout &mlirDL;
-  /// Function counter
   unsigned edtCounter = 0;
-  /// Map a arts::DataBlockOp to a DataBlockCodegen
   llvm::DenseMap<Value, DataBlockCodegen *> datablocks;
-  /// Map an arts::EventOp to a EventCodegen
-  llvm::DenseMap<Value, EventCodegen *> events;
-  /// Map an arts region to a EdtCodegen
   llvm::DenseMap<Region *, EdtCodegen *> edts;
-  /// Cache for format strings to avoid creating duplicate globals
   llvm::StringMap<LLVM::GlobalOp> llvmStringGlobals;
-  /// Debug
   bool debug = false;
 };
 

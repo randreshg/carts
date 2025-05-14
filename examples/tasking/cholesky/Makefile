@@ -2,7 +2,7 @@
 ARTS_PATH=/home/randres/projects/carts/.install/arts
 CARTS_PATH=/home/randres/projects/carts/.install/carts
 CLANG_INCLUDE_PATH=/usr/lib/llvm-14/lib/clang/14.0.0/include
-FILENAME=addition
+FILENAME=cholesky
 SHELL = /bin/bash
 
 all: $(FILENAME) $(FILENAME)_omp
@@ -20,14 +20,14 @@ all: $(FILENAME) $(FILENAME)_omp
 
 # Generate binary (CARTS version)
 $(FILENAME): $(FILENAME).ll
-	clang $< -O3 -g0 -fopenmp -march=native -o $@ -I/$(ARTS_PATH)/include/arts -L$(ARTS_PATH)/lib -larts  -lrt -lpthread -lrdmacm 
+	clang $< -O3 -g0 -fopenmp -march=native -o $@ -I/$(ARTS_PATH)/include/arts -L$(ARTS_PATH)/lib -larts -lrt -lpthread -lrdmacm -lm
 
 # Generate binary (OpenMP version)
 %_omp: %.cpp
-	clang++ $< -O3 -fopenmp -g0 -march=native -o $@
+	clang++ $< -O3 -fopenmp -lm -g0 -march=native -o $@
 
 %_omp: %.c
-	clang $< -O3 -fopenmp -g0 -march=native -o $@
+	clang $< -O3 -fopenmp -lm -g0 -march=native -o $@
 
 clean:
 	rm -f *.mlir *.ll ./$(FILENAME) ./$(FILENAME)_omp  ;

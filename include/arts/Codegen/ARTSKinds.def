@@ -152,17 +152,8 @@ __ARTS_RTL(artsSignalEdtValue, Void, ArtsGuid, Int32, Int64)
 __ARTS_RTL(artsSignalEdtPtr, Void, ArtsGuid, Int32, VoidPtr, Int32)
 /// }
 
-/// ------------------------------ Events ------------------------------ ///
+/// ------------------------- Persistent Events -------------------------- ///
 /// {
-// artsGuid_t artsEventCreate(unsigned int route, unsigned int latchCount);
-__ARTS_RTL(artsEventCreate, ArtsGuid, Int32, Int32)
-// void artsEventSatisfySlot(artsGuid_t eventGuid, artsGuid_t dataGuid,
-//                           uint32_t slot);
-__ARTS_RTL(artsEventSatisfySlot, Void, ArtsGuid, ArtsGuid, Int32)
-// void artsAddDependence(artsGuid_t source, artsGuid_t destination,
-//                        uint32_t slot);
-__ARTS_RTL(artsAddDependence, Void, ArtsGuid, ArtsGuid, Int32)
-
 // artsGuid_t artsPersistentEventCreate(
 //    unsigned int route, unsigned int latchCount, artsGuid_t dataGuid);
 __ARTS_RTL(artsPersistentEventCreate, ArtsGuid, Int32, Int32, ArtsGuid)
@@ -190,9 +181,21 @@ __ARTS_RTL(artsAddDependenceToPersistentEvent, Void, ArtsGuid, ArtsGuid, Int32,
 /// {
 // void *artsDbCreateWithGuid(artsGuid_t guid, uint64_t size);
 __ARTS_RTL(artsDbCreateWithGuid, VoidPtr, ArtsGuid, Int64)
+
 // void *artsDbCreateWithGuidAndData(artsGuid_t guid, void *data,
 //                                   uint64_t size);
 __ARTS_RTL(artsDbCreateWithGuidAndData, VoidPtr, ArtsGuid, VoidPtr, Int64)
+
+// void artsDbIncrementLatch(artsGuid_t guid);
+__ARTS_RTL(artsDbIncrementLatch, Void, ArtsGuid)
+
+// void artsDbDecrementLatch(artsGuid_t guid);
+__ARTS_RTL(artsDbDecrementLatch, Void, ArtsGuid)
+
+// void artsDbAddDependence(artsGuid_t dbSrc, artsGuid_t edtDest,
+//                         uint32_t edtSlot);
+__ARTS_RTL(artsDbAddDependence, Void, ArtsGuid, ArtsGuid, Int32)
+
 /// }
 
 /// ------------------------------ Epoch ------------------------------ ///
