@@ -1,8 +1,7 @@
+#include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <omp.h>
 #include <time.h>
-
 
 int main() {
   printf("-----------------\nMain function\n-----------------\n");
@@ -10,27 +9,24 @@ int main() {
   int b = 0;
   srand(time(NULL));
 
-  #pragma omp parallel
+#pragma omp parallel
   {
-    #pragma omp single
+#pragma omp single
     {
       printf("Main thread: Creating tasks\n");
-      // #pragma omp task depend(inout: a)
-      #pragma omp task
+#pragma omp task
       {
         a = rand() % 100;
         printf("Task 1: Initializing a with value %d\n", a);
       }
 
-      // #pragma omp task depend(in: a) depend(inout: b)
-      #pragma omp task
+#pragma omp task depend(in: a) depend(inout: b)
       {
         printf("Task 2: Reading a=%d and updating b\n", a);
         b = a + 5;
       }
 
-      // #pragma omp task depend(in: b)
-      #pragma omp task
+#pragma omp task depend(in: b)
       {
         printf("Task 3: Final value of b=%d\n", b);
       }
