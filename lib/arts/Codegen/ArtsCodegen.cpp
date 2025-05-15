@@ -216,7 +216,7 @@ void EdtCodegen::build(Location loc) {
 
   /// Create the EDT function entry, then outline the region and finalize
   /// by processing events
-  createFnEntry(loc);
+  createEntry(loc);
   outlineRegion(loc);
   processDependencies(loc);
 
@@ -275,8 +275,8 @@ void EdtCodegen::process(Location loc) {
       } else {
         /// For multi-dimensional DBs, compute the product of sizes.
         Value product = AC.createIndexConstant(1, loc);
-        auto sizes = db->getSizes();
-        auto offsets = db->getOffsets();
+        const auto sizes = db->getSizes();
+        const auto offsets = db->getOffsets();
         auto rank = sizes.size();
         for (uint64_t rankItr = 0; rankItr < rank; ++rankItr) {
           insertSizeAsParameter(db, sizes[rankItr], rankItr);
@@ -599,7 +599,7 @@ func::FuncOp EdtCodegen::createFn(Location loc) {
   return edtFuncOp;
 }
 
-void EdtCodegen::createFnEntry(Location loc) {
+void EdtCodegen::createEntry(Location loc) {
   OpBuilder::InsertionGuard IG(builder);
   /// Create an entry block and remove the terminator.
   auto *entryBlock = &func.getBody().front();
@@ -1017,7 +1017,6 @@ Value ArtsCodegen::getCurrentNode(Location loc) {
   assert(func && "Runtime function should exist");
   func->setAttr("llvm.readnone", builder.getUnitAttr());
   func->setAttr("llvm.nounwind", builder.getUnitAttr());
-  // ArrayRef<Value> args;
   auto callOp = builder.create<func::CallOp>(loc, func);
   return callOp.getResult(0);
 }
