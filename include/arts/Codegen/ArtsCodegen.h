@@ -164,7 +164,7 @@ private:
   void outlineRegion(Location loc);
   Value createGuid(Value node, Location loc);
   func::FuncOp createFn(Location loc);
-  void createFnEntry(Location loc);
+  void createEntry(Location loc);
 
   /// Static
   static unsigned edtCounter;
