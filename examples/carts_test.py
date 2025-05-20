@@ -16,9 +16,34 @@ import seaborn as sns
 import sys
 import shutil
 import pandas as pd
+import math
 matplotlib.use('Agg')
 sns.set_theme(style="whitegrid")
 CUSTOM_COLORS = ["#1f77b4", "#ff7f0e"]  # blue, orange
+
+# --- Perf event groups ---
+EVENT_GROUPS = {
+    "Cache1": [
+        "L1-dcache-loads:u", "L1-dcache-load-misses:u", 
+        "L1-dcache-stores:u", "L1-icache-load-misses:u",
+        "cache-references:u", "cache-misses:u",
+    ],
+    "Cache2": [
+        "L2-dcache-loads:u", "L2-dcache-load-misses:u", 
+        "l2_rqsts.all_code_rd:u", "l2_rqsts.code_rd_hit:u", 
+        "l2_rqsts.code_rd_miss:u", "l2_rqsts.miss:u",
+    ],
+    "Cache3": [
+       "L3-dcache-loads:u", "L3-dcache-load-misses:u", 
+       "mem_inst_retired.all_loads:u", "mem_inst_retired.all_stores:u",
+    ],
+    "Clocks/Frequency": ["cycles:u", "cpu-clock:u", "task-clock:u"],
+    "Stalls": ["stalled-cycles-frontend:u", "stalled-cycles-backend:u", 
+               "cycle_activity.stalls_total:u", "cycle_activity.stalls_mem_any:u", 
+               "resource_stalls.sb:u", "resource_stalls.scoreboard:u"],
+    "TLB": ["dTLB-load-misses:u", "iTLB-load-misses:u", "dTLB-store-misses:u"],
+    "Instructions": ["instructions:u"],
+}
 
 # Helper for safe float formatting (avoids TypeError on None)
 def safe_fmt(val, fmt=".2f", na="N/A"):
@@ -50,18 +75,30 @@ BASE_EVENTS = [
 DEFAULT_PERF_EVENTS = [e + ":u" for e in BASE_EVENTS]
 
 # Perf events selection logic (moved to top-level)
-def get_perf_events(yaml_profiling_section, args=None):
-    # Always include default events, plus any extras from YAML or CLI (no duplicates)
+def get_grouped_perf_events(yaml_profiling_section, args=None, event_groups=EVENT_GROUPS):
+    """
+    Returns a list of event groups (each a list of events) to be run separately.
+    """
     extra_events = set()
     if args and hasattr(args, 'perf_events') and args.perf_events:
         extra_events.update(args.perf_events)
     if yaml_profiling_section and 'perf_events' in yaml_profiling_section:
         extra_events.update(yaml_profiling_section['perf_events'])
-    # Ensure all extra events also have ':u' unless already specified
     def ensure_user_mode(ev):
         return ev if ev.endswith(":u") or ev.endswith(":k") else ev+":u"
     all_events = list(dict.fromkeys(DEFAULT_PERF_EVENTS + [ensure_user_mode(e) for e in extra_events]))
-    return all_events
+    grouped = []
+    used = set()
+    for group_name, group_events in event_groups.items():
+        group = [ev for ev in group_events if ev in all_events]
+        if group:
+            grouped.append(group)
+            used.update(group)
+    # Any events not in a group go in their own group
+    other_events = [ev for ev in all_events if ev not in used]
+    if other_events:
+        grouped.append(other_events)
+    return grouped
 
 def get_system_info():
     """Gathers system hardware and software information."""
@@ -155,8 +192,8 @@ def find_example_directories_with_config(base_example_paths):
     example_dirs = []
     for base_path in base_example_paths:
         if not os.path.isdir(base_path):
-            print(f"Warning: Base example path '{base_path}' not found.")
-            continue
+            continue  # Silently ignore non-existent base paths
+        found_any = False
         for item in os.listdir(base_path):
             full_item_path = os.path.join(base_path, item)
             if os.path.isdir(full_item_path):
@@ -166,6 +203,8 @@ def find_example_directories_with_config(base_example_paths):
                 config_path = os.path.join(full_item_path, 'test_config.yaml')
                 if os.path.isfile(config_path):
                     example_dirs.append(full_item_path)
+                    found_any = True
+        # If no subdir with yaml, just skip (no warning)
     return example_dirs
 
 
@@ -183,25 +222,20 @@ def load_test_config(example_dir):
 
 
 def run_program_instance(executable_path, program_args_str, num_iterations, example_name, version_name, timeout_seconds):
-    """Runs a program instance, collects times, and correctness status."""
+    """Runs a program instance, collects times, and correctness status. Only stores raw timing data."""
     times = []
     correctness_status = "UNKNOWN"
     timeout_occurred_in_any_iteration = False
     base_return = {
         "times_seconds": [],
-        "min_seconds": None, "max_seconds": None, "avg_seconds": None,
-        "median_seconds": None, "stdev_seconds": None,
         "iterations_ran": 0, "iterations_requested": num_iterations,
         "correctness_status": "NOT_RUN (Executable Missing)"
     }
-
     if not os.path.exists(executable_path):
         print(f"Error: Executable {executable_path} not found. Skipping.")
         return base_return
-
     base_return["correctness_status"] = "UNKNOWN"
     program_arg_list = program_args_str.split()
-
     print(
         f"Running {version_name} ('{executable_path}') for '{example_name}', args=[{program_args_str}], iters={num_iterations}...")
     for i in range(num_iterations):
@@ -211,8 +245,6 @@ def run_program_instance(executable_path, program_args_str, num_iterations, exam
                 timeout=timeout_seconds
             )
             output = process.stdout
-
-            # Refined regex: looks for "Finished in", captures float, then "seconds", case insensitive
             time_match = re.search(
                 r"Finished in\s+([0-9]*\.?[0-9]+)\s*seconds?", output, re.IGNORECASE)
             if time_match:
@@ -224,12 +256,10 @@ def run_program_instance(executable_path, program_args_str, num_iterations, exam
                 print(
                     f"  Iter {i+1}: Time not parsed. Output snippet: {output_snippet}...")
                 times.append(None)
-
             correctness_match = re.search(
                 r"Result: (CORRECT|INCORRECT)", output)
             if correctness_match:
                 correctness_status = correctness_match.group(1)
-
         except subprocess.TimeoutExpired:
             print(
                 f"  Iter {i+1}: TIMEOUT after {timeout_seconds}s for {executable_path}.")
@@ -238,33 +268,15 @@ def run_program_instance(executable_path, program_args_str, num_iterations, exam
         except subprocess.CalledProcessError as e:
             print(f"Error running {executable_path} (iter {i+1}): {e.stderr}")
             times.append(None)
-        except FileNotFoundError:  # Should be caught by the check above, but as a safeguard
+        except FileNotFoundError:
             print(
                 f"Error: Executable {executable_path} not found during run iteration.")
             base_return["correctness_status"] = "NOT_RUN (Executable Missing During Iteration)"
             return base_return
-
-    valid_times = [
-        t for t in times if t is not None and isinstance(t, (float, int))]
+    valid_times = [t for t in times if t is not None and isinstance(t, (float, int))]
     base_return["iterations_ran"] = len(valid_times)
     base_return["correctness_status"] = correctness_status
-
-    if not valid_times:
-        print(f"No valid execution times collected for {executable_path}.")
-        if timeout_occurred_in_any_iteration:
-            base_return["correctness_status"] = "TIMEOUT"
-        elif base_return["correctness_status"] == "UNKNOWN":
-            base_return["correctness_status"] = "NO_VALID_TIMES"
-        return base_return
-
-    base_return.update({
-        "times_seconds": valid_times,
-        "min_seconds": min(valid_times),
-        "max_seconds": max(valid_times),
-        "avg_seconds": statistics.mean(valid_times),
-        "median_seconds": statistics.median(valid_times),
-        "stdev_seconds": statistics.stdev(valid_times) if len(valid_times) > 1 else 0.0,
-    })
+    base_return["times_seconds"] = valid_times
     return base_return
 
 
@@ -366,61 +378,6 @@ def compute_aggregate_statistics(results_data):
         "speedups": speedups
     }
 
-
-def generate_comparison_graph(results_data, output_image_file, output_pdf_file, threads=None):
-    """Generates a bar chart with error bars and best result annotation, saves as PNG and PDF."""
-    if not results_data:
-        print("No data to generate graph.")
-        return
-    x_tick_labels = [
-        f"{r['example_name']}\n(Size: {r['problem_size']})" for r in results_data]
-    carts_avg_times = np.array([r.get('carts', {}).get('avg_seconds') or 0 for r in results_data])
-    omp_avg_times = np.array([r.get('omp', {}).get('avg_seconds') or 0 for r in results_data])
-    carts_std = np.array([r.get('carts', {}).get('stdev_seconds') or 0 for r in results_data])
-    omp_std = np.array([r.get('omp', {}).get('stdev_seconds') or 0 for r in results_data])
-    x = np.arange(len(x_tick_labels))
-    width = 0.35
-    fig, ax = plt.subplots(figsize=(max(12, len(x_tick_labels) * 1.5), 10))
-    ax.bar(x - width/2, carts_avg_times, width, yerr=carts_std, label='CARTS', color=CUSTOM_COLORS[0], capsize=5, alpha=0.9)
-    ax.bar(x + width/2, omp_avg_times, width, yerr=omp_std, label='OpenMP', color=CUSTOM_COLORS[1], capsize=5, alpha=0.9)
-    ax.set_ylabel('Execution Time (s)', fontsize=16)
-    ax.set_xlabel('Example & Problem Size', fontsize=16)
-    title = 'Performance Comparison: CARTS vs OpenMP'
-    if threads is not None:
-        title += f' (Threads: {threads})'
-    ax.set_title(title, fontsize=18)
-    ax.set_xticks(x)
-    ax.set_xticklabels(x_tick_labels, rotation=45, ha="right", fontsize=12)
-    ax.legend(title="Version", fontsize=14, title_fontsize=15, loc='upper right')
-    ax.grid(axis='y', linestyle='--', alpha=0.7)
-    for i, (c, o) in enumerate(zip(carts_avg_times, omp_avg_times)):
-        if c and (not o or c < o):
-            ax.annotate("★", xy=(x[i] - width/2, c), xytext=(0, -20), textcoords="offset points", ha='center', va='bottom', fontsize=18, color='gold')
-        elif o:
-            ax.annotate("★", xy=(x[i] + width/2, o), xytext=(0, -20), textcoords="offset points", ha='center', va='bottom', fontsize=18, color='gold')
-    plt.tight_layout(rect=[0, 0.05, 1, 1])
-    save_figure(fig, output_image_file, output_pdf_file)
-
-
-def generate_speedup_distribution_plot(speedups, output_image_file):
-    if not speedups:
-        print("No speedup data for distribution plot.")
-        return
-    fig, ax = plt.subplots(figsize=(8, 6))
-    sns.histplot(speedups, bins=10, kde=True, ax=ax, color=sns.color_palette()[2])
-    ax.set_title('Distribution of Speedups (OMP/CARTS)', fontsize=16)
-    ax.set_xlabel('Speedup (OMP Time / CARTS Time)', fontsize=14)
-    ax.set_ylabel('Count', fontsize=14)
-    plt.tight_layout()
-    try:
-        plt.savefig(output_image_file, bbox_inches='tight', dpi=300)
-        plt.savefig(output_image_file.replace('.png', '.pdf'), bbox_inches='tight')
-        # print(f"Speedup distribution plot saved to {output_image_file} and PDF.")
-    except Exception as e:
-        print(f"Error saving speedup distribution plot: {e}")
-    plt.close(fig)
-
-
 def collect_failure_table(results_data):
     failures = []
     for r in results_data:
@@ -478,10 +435,22 @@ def get_dependency_versions():
     return versions
 
 
+def get_next_available_dir(base_dir):
+    """Finds the next available directory name by appending _1, _2, etc. if needed."""
+    if not os.path.exists(base_dir) or (os.path.isdir(base_dir) and not os.listdir(base_dir)):
+        return base_dir
+    i = 1
+    while True:
+        candidate = f"{base_dir}_{i}"
+        if not os.path.exists(candidate):
+            return candidate
+        i += 1
+
+
 def run_all_benchmarks(example_directories, args, system_info):
     run_counter = 1
-    all_run_results_data = []
-    all_profiling_results_data = []
+    all_benchmark_results = []  # Only timing/correctness (no_profile)
+    all_profiling_results = []  # Only event_stats and timing from perf (profile)
     for example_dir in example_directories:
         example_name = os.path.basename(example_dir)
         print(f"\nProcessing example: {example_name} in {example_dir}")
@@ -494,7 +463,6 @@ def run_all_benchmarks(example_directories, args, system_info):
         bench_cfg = test_config.get('benchmark', {})
         profiling_cfg = test_config.get('profiling', {})
         profiling_enabled = profiling_cfg.get('profiling_enabled', False)
-        # Use benchmark config for all run parameters
         problem_sizes = bench_cfg.get("problem_sizes", [])
         iterations_list = bench_cfg.get("iterations", [])
         args_list = bench_cfg.get("args", [""] * len(problem_sizes))
@@ -503,7 +471,7 @@ def run_all_benchmarks(example_directories, args, system_info):
             print(f"Invalid or missing problem_sizes/iterations in test_config.yaml for {example_name}, skipping.")
             continue
         run_plan = list(zip(problem_sizes, iterations_list, args_list))
-        perf_events = get_perf_events(profiling_cfg, args) if profiling_enabled else None
+        perf_event_groups = get_grouped_perf_events(profiling_cfg, args) if profiling_enabled else None
         for threads in threads_list:
             update_arts_cfg_threads(arts_cfg_path, threads)
             if not run_make_command("clean", example_dir):
@@ -513,61 +481,53 @@ def run_all_benchmarks(example_directories, args, system_info):
                 print(f"'make all' failed for {example_name} (threads={threads}). Skipping all problem sizes for this example.")
                 continue
             for problem_config_str, num_iterations_for_size, arg_str in run_plan:
-                print(f"\n  Running {example_name} with problem configuration: '{problem_config_str}' for {num_iterations_for_size} iterations, threads={threads}")
-                current_run_result = {
-                    "run_id": run_counter,
-                    "example_name": example_name,
-                    "problem_size": problem_config_str,
-                    "iterations_for_this_size": num_iterations_for_size,
-                    "carts_config": current_arts_config,
-                    "carts": None,
-                    "omp": None,
-                    "status": "build successful, run pending",
-                    "speedup_carts_vs_omp": None,
-                    "threads": threads
-                }
-                # --- Unified run: perf if profiling_enabled, else normal ---
-                if profiling_enabled:
-                    # Run both under perf
-                    carts_exe_path = os.path.join(example_dir, example_name)
-                    current_run_result["carts"] = run_perf_instance(
-                        carts_exe_path, problem_config_str + (f" {arg_str}" if arg_str else ""), num_iterations_for_size, example_name,
-                        "CARTS", args.timeout_seconds, perf_events)
-                    omp_exe_path = os.path.join(example_dir, f"{example_name}_omp")
-                    orig_env = os.environ.copy()
-                    os.environ["OMP_NUM_THREADS"] = str(threads)
-                    current_run_result["omp"] = run_perf_instance(
-                        omp_exe_path, problem_config_str + (f" {arg_str}" if arg_str else ""), num_iterations_for_size, example_name,
-                        "C", args.timeout_seconds, perf_events)
-                    os.environ.clear()
-                    os.environ.update(orig_env)
-                else:
-                    # Run as usual (timing/correctness only)
-                    carts_exe_path = os.path.join(example_dir, example_name)
-                    current_run_result["carts"] = run_program_instance(
-                        carts_exe_path, problem_config_str + (f" {arg_str}" if arg_str else ""), num_iterations_for_size, example_name,
-                        "CARTS", args.timeout_seconds)
-                    omp_exe_path = os.path.join(example_dir, f"{example_name}_omp")
-                    orig_env = os.environ.copy()
-                    os.environ["OMP_NUM_THREADS"] = str(threads)
-                    current_run_result["omp"] = run_program_instance(
-                        omp_exe_path, problem_config_str + (f" {arg_str}" if arg_str else ""), num_iterations_for_size, example_name,
-                        "C", args.timeout_seconds)
-                    os.environ.clear()
-                    os.environ.update(orig_env)
-                # Speedup calculation
-                carts_perf = current_run_result["carts"]
-                omp_perf = current_run_result["omp"]
-                if carts_perf.get("avg_seconds") and omp_perf.get("avg_seconds") and carts_perf["avg_seconds"] > 1e-12:
-                    speedup = omp_perf["avg_seconds"] / carts_perf["avg_seconds"]
-                    current_run_result["speedup_carts_vs_omp"] = speedup
-                current_run_result["status"] = "run completed"
-                all_run_results_data.append(current_run_result)
-                run_counter += 1
-    # If profiling was enabled for any example, set profiling_results = all_run_results_data
-    any_profiling = any(test_config.get('profiling', {}).get('profiling_enabled', False) for example_dir in example_directories for test_config in [load_test_config(example_dir)] if test_config)
-    all_profiling_results_data = all_run_results_data if any_profiling else []
-    return all_run_results_data, all_profiling_results_data
+                for version, exe_name in [("CARTS", example_name), ("OMP", f"{example_name}_omp")]:
+                    # 1. Run without profiling (benchmark)
+                    no_profile = run_program_instance(
+                        os.path.join(example_dir, exe_name),
+                        problem_config_str + (f" {arg_str}" if arg_str else ""),
+                        num_iterations_for_size, example_name, version, args.timeout_seconds)
+                    result_no_profile = {
+                        "run_id": run_counter,
+                        "example_name": example_name,
+                        "problem_size": problem_config_str,
+                        "iterations_for_this_size": num_iterations_for_size,
+                        "carts_config": current_arts_config,
+                        "threads": threads,
+                        "version": version,
+                        "run_type": "no_profile",
+                        "times_seconds": no_profile.get("times_seconds"),
+                        "iterations_ran": no_profile.get("iterations_ran"),
+                        "iterations_requested": no_profile.get("iterations_requested"),
+                        "correctness_status": no_profile.get("correctness_status"),
+                        # No event_stats in benchmark results
+                    }
+                    all_benchmark_results.append(result_no_profile)
+                    run_counter += 1
+                    # 2. Run with profiling (perf)
+                    if profiling_enabled and perf_event_groups:
+                        profile = run_perf_instance(
+                            os.path.join(example_dir, exe_name),
+                            problem_config_str + (f" {arg_str}" if arg_str else ""),
+                            num_iterations_for_size, example_name, version, args.timeout_seconds, perf_event_groups)
+                        result_profile = {
+                            "run_id": run_counter,
+                            "example_name": example_name,
+                            "problem_size": problem_config_str,
+                            "iterations_for_this_size": num_iterations_for_size,
+                            "carts_config": current_arts_config,
+                            "threads": threads,
+                            "version": version,
+                            "run_type": "profile",
+                            "times_seconds": profile.get("times_seconds"),  # timing as measured by perf
+                            "iterations_ran": profile.get("iterations_ran"),
+                            "iterations_requested": profile.get("iterations_requested"),
+                            "correctness_status": profile.get("correctness_status"),
+                            "event_stats": profile.get("event_stats"),  # Only event_stats in profiling results
+                        }
+                        all_profiling_results.append(result_profile)
+                        run_counter += 1
+    return all_benchmark_results, all_profiling_results
 
 
 def update_arts_cfg_threads(cfg_path, threads):
@@ -588,111 +548,184 @@ def update_arts_cfg_threads(cfg_path, threads):
         f.writelines(lines)
 
 
-def run_perf_instance(executable_path, program_args_str, num_iterations, example_name, version_name, timeout_seconds, perf_events):
-    """Runs a program instance under perf, collects hardware counters and timing."""
-    perf_data = {event: [] for event in perf_events}
+def run_perf_instance(executable_path, program_args_str, num_iterations, example_name, version_name, timeout_seconds, perf_event_groups):
+    """Runs a program instance under perf, collects hardware counters and timing. Only stores raw event/timing data."""
+    perf_data = {}
     times = []
     correctness_status = "UNKNOWN"
     base_return = {
-        "perf_events": perf_events,
         "event_stats": {},
         "iterations_ran": 0,
         "iterations_requested": num_iterations,
         "correctness_status": "NOT_RUN (Executable Missing)",
-        "times_seconds": [],
-        "min_seconds": None,
-        "max_seconds": None,
-        "avg_seconds": None,
-        "median_seconds": None,
-        "stdev_seconds": None
+        "times_seconds": []
     }
     if not os.path.exists(executable_path):
         print(f"Error: Executable {executable_path} not found. Skipping perf run.")
         return base_return
     program_arg_list = program_args_str.split()
     for i in range(num_iterations):
-        try:
-            perf_cmd = [
-                "perf", "stat", "-x", ",", "-e", ','.join(perf_events), "--", executable_path
-            ] + program_arg_list
-            process = subprocess.run(
-                perf_cmd, capture_output=True, text=True, check=True, cwd=os.path.dirname(executable_path),
-                timeout=timeout_seconds
-            )
-            output = process.stdout + process.stderr
-            # Print the raw perf output for debugging
-            print(f"==== RAW PERF OUTPUT (iter {i+1}) ====")
-            print(output)
-            print("=========================")
-            # Parse timing from output
-            time_match = re.search(r"Finished in\s+([0-9]*\.?[0-9]+)\s*seconds?", output, re.IGNORECASE)
-            if time_match:
-                current_time = float(time_match.group(1))
-                times.append(current_time)
-                print(f"  Iter {i+1}: {current_time:.6f}s (from perf)")
-            else:
-                output_snippet = output[:200].replace('\n', ' ')
-                print(f"  Iter {i+1}: Time not parsed. Output snippet: {output_snippet}...")
-                times.append(None)
-            # Parse correctness if present
-            correctness_match = re.search(r"Result: (CORRECT|INCORRECT)", output)
-            if correctness_match:
-                correctness_status = correctness_match.group(1)
-            # Parse perf output (CSV format: value,event,...)
-            for line in output.splitlines():
-                parts = line.strip().split(",")
-                if len(parts) >= 3:
-                    try:
-                        val = float(parts[0].replace(',', '').replace('<not supported>', 'nan').replace('<not counted>', 'nan'))
-                    except Exception:
-                        val = float('nan')
-                    # Remove any :u, :k, or similar suffix from event name to match YAML keys
-                    event = parts[2].strip().split(":")[0] + (":" + parts[2].strip().split(":")[1] if ":" in parts[2] else "")
-                    if event in perf_data:
+        for group_events in perf_event_groups:
+            if not group_events:
+                continue
+            try:
+                perf_cmd = [
+                    "perf", "stat", "-a", "-x", ",", "-e", ','.join(group_events), "--", executable_path
+                ] + program_arg_list
+                process = subprocess.run(
+                    perf_cmd, capture_output=True, text=True, check=True, cwd=os.path.dirname(executable_path),
+                    timeout=timeout_seconds
+                )
+                output = process.stdout + process.stderr
+                print("=========================")
+                print(f"[iter {i+1}, events {group_events}]")
+                print(output)
+                print("=========================")
+                # Parse timing from output (only once per iteration)
+                if group_events == perf_event_groups[0]:
+                    time_match = re.search(r"Finished in\s+([0-9]*\.?[0-9]+)\s*seconds?", output, re.IGNORECASE)
+                    if time_match:
+                        current_time = float(time_match.group(1))
+                        times.append(current_time)
+                        print(f"  Iter {i+1}: {current_time:.6f}s (from perf)")
+                    else:
+                        output_snippet = output[:200].replace('\n', ' ')
+                        print(f"  Iter {i+1}: Time not parsed. Output snippet: {output_snippet}...")
+                        times.append(None)
+                # Parse correctness if present (only once per iteration)
+                if group_events == perf_event_groups[0]:
+                    correctness_match = re.search(r"Result: (CORRECT|INCORRECT)", output)
+                    if correctness_match:
+                        correctness_status = correctness_match.group(1)
+                # Parse perf output (CSV format: value,event,...)
+                for line in output.splitlines():
+                    parts = line.strip().split(",")
+                    if len(parts) >= 3:
+                        try:
+                            val = float(parts[0].replace(',', '').replace('<not supported>', 'nan').replace('<not counted>', 'nan'))
+                        except Exception:
+                            val = float('nan')
+                        event = parts[2].strip().split(":")[0] + (":" + parts[2].strip().split(":")[1] if ":" in parts[2] else "")
+                        if event not in perf_data:
+                            perf_data[event] = []
                         perf_data[event].append(val)
-                        # Debug print for first iteration
                         if i == 0:
-                            print(f"[perf-parse] Iter {i+1}: Event '{event}' Value {val}")
-        except subprocess.TimeoutExpired:
-            print(f"  Perf Iter {i+1}: TIMEOUT after {timeout_seconds}s for {executable_path}.")
-            for event in perf_events:
-                perf_data[event].append(float('nan'))
-            times.append(None)
-        except subprocess.CalledProcessError as e:
-            print(f"Perf error running {executable_path} (iter {i+1}): {e.stderr}")
-            for event in perf_events:
-                perf_data[event].append(float('nan'))
-            times.append(None)
-        except FileNotFoundError:
-            print(f"Perf: Executable {executable_path} not found during run iteration.")
-            base_return["correctness_status"] = "NOT_RUN (Executable Missing During Iteration)"
-            return base_return
-    # Compute timing stats
+                            print(f"[perf-parse] Iter {i+1} (events {group_events}): Event '{event}' Value {val}")
+            except subprocess.TimeoutExpired:
+                print(f"  Perf Iter {i+1} (events {group_events}): TIMEOUT after {timeout_seconds}s for {executable_path}.")
+                for event in group_events:
+                    if event not in perf_data:
+                        perf_data[event] = []
+                    perf_data[event].append(float('nan'))
+                if group_events == perf_event_groups[0]:
+                    times.append(None)
+            except subprocess.CalledProcessError as e:
+                print(f"Perf error running {executable_path} (iter {i+1}, events {group_events}): {e.stderr}")
+                for event in group_events:
+                    if event not in perf_data:
+                        perf_data[event] = []
+                    perf_data[event].append(float('nan'))
+                if group_events == perf_event_groups[0]:
+                    times.append(None)
+            except FileNotFoundError:
+                print(f"Perf: Executable {executable_path} not found during run iteration.")
+                base_return["correctness_status"] = "NOT_RUN (Executable Missing During Iteration)"
+                return base_return
     valid_times = [t for t in times if t is not None and isinstance(t, (float, int))]
     base_return["iterations_ran"] = len(valid_times)
     base_return["correctness_status"] = correctness_status
     base_return["times_seconds"] = valid_times
-    if valid_times:
-        base_return["min_seconds"] = min(valid_times)
-        base_return["max_seconds"] = max(valid_times)
-        base_return["avg_seconds"] = statistics.mean(valid_times)
-        base_return["median_seconds"] = statistics.median(valid_times)
-        base_return["stdev_seconds"] = statistics.stdev(valid_times) if len(valid_times) > 1 else 0.0
-    # Compute stats for each event
-    for event in perf_events:
+    # Only store raw event values per event
+    for event in perf_data:
         vals = [v for v in perf_data[event] if isinstance(v, (float, int)) and not np.isnan(v)]
-        if vals:
-            base_return["event_stats"][event] = {
-                "min": float(np.min(vals)),
-                "max": float(np.max(vals)),
-                "avg": float(np.mean(vals)),
-                "median": float(np.median(vals)),
-                "stdev": float(np.std(vals) if len(vals) > 1 else 0.0),
-                "all": vals
-            }
-        else:
-            base_return["event_stats"][event] = {"min": None, "max": None, "avg": None, "median": None, "stdev": None, "all": []}
+        base_return["event_stats"][event] = {"all": vals}
     return base_return
+
+
+def aggregate_results_for_csv(benchmark_results, profiling_results):
+    """
+    Groups results by (example_name, problem_size, threads), computes statistics for each version, and calculates speedup.
+    Also includes profiling event stats if available.
+    Returns a list of dicts ready for CSV output.
+    """
+    from collections import defaultdict
+    def compute_stats(times):
+        if not times:
+            return {k: None for k in ["min", "max", "avg", "median", "stdev"]}
+        return {
+            "min": min(times),
+            "max": max(times),
+            "avg": statistics.mean(times),
+            "median": statistics.median(times),
+            "stdev": statistics.stdev(times) if len(times) > 1 else 0.0,
+        }
+    # Group by (example_name, problem_size, threads)
+    grouped = defaultdict(lambda: {"carts": None, "omp": None, "carts_profile": None, "omp_profile": None})
+    all_events = set()
+    for r in benchmark_results:
+        key = (r["example_name"], r["problem_size"], r.get("threads", 1))
+        if r["version"].upper() == "CARTS":
+            grouped[key]["carts"] = r
+        elif r["version"].upper() == "OMP":
+            grouped[key]["omp"] = r
+    for r in profiling_results:
+        key = (r["example_name"], r["problem_size"], r.get("threads", 1))
+        if r["version"].upper() == "CARTS":
+            grouped[key]["carts_profile"] = r
+        elif r["version"].upper() == "OMP":
+            grouped[key]["omp_profile"] = r
+        # Collect all event names
+        event_stats = r.get("event_stats", {})
+        all_events.update(event_stats.keys())
+    all_events = sorted(all_events)
+    # Build output rows
+    output_rows = []
+    for (example_name, problem_size, threads), versions in grouped.items():
+        row = {
+            "Example Name": example_name,
+            "Problem Size": problem_size,
+            "Threads": threads,
+        }
+        # For each version, compute stats
+        for vkey, label in [("carts", "CARTS"), ("omp", "OpenMP")]:
+            v = versions[vkey]
+            if v:
+                times = v.get("times_seconds", [])
+                stats = compute_stats(times)
+                row[f"{label} Min Time (s)"] = safe_fmt(stats["min"])
+                row[f"{label} Max Time (s)"] = safe_fmt(stats["max"])
+                row[f"{label} Avg Time (s)"] = safe_fmt(stats["avg"])
+                row[f"{label} Median Time (s)"] = safe_fmt(stats["median"])
+                row[f"{label} StdDev Time (s)"] = safe_fmt(stats["stdev"])
+                row[f"{label} Times (s)"] = ", ".join([safe_fmt(t) for t in times])
+                row[f"{label} Correctness Status"] = v.get("correctness_status", "UNKNOWN")
+                row[f"{label} Iterations Ran"] = v.get("iterations_ran", 0)
+                row[f"{label} Iterations Requested"] = v.get("iterations_requested", 0)
+            else:
+                for stat in ["Min", "Max", "Avg", "Median", "StdDev", "Times", "Correctness Status", "Iterations Ran", "Iterations Requested"]:
+                    row[f"{label} {stat} (s)"] = "N/A"
+        # For each profiling version, add event stats
+        for vkey, label in [("carts_profile", "CARTS"), ("omp_profile", "OpenMP")]:
+            v = versions[vkey]
+            event_stats = v.get("event_stats", {}) if v else {}
+            for event in all_events:
+                vals = event_stats.get(event, {}).get("all", [])
+                stats = compute_stats(vals)
+                for stat in ["min", "max", "avg", "median", "stdev"]:
+                    row[f"{label} {event} {stat}"] = safe_fmt(stats[stat])
+        # Speedup (OMP/CARTS)
+        try:
+            carts_median = float(row["CARTS Median Time (s)"])
+            omp_median = float(row["OpenMP Median Time (s)"])
+            if carts_median > 0 and omp_median > 0:
+                speedup = omp_median / carts_median
+                row["Speedup (OMP/CARTS)"] = f"{speedup:.2f}x"
+            else:
+                row["Speedup (OMP/CARTS)"] = "N/A"
+        except Exception:
+            row["Speedup (OMP/CARTS)"] = "N/A"
+        output_rows.append(row)
+    return output_rows
 
 
 def main():
@@ -709,17 +742,21 @@ def main():
                         default=["examples/parallel", "examples/tasking"], help="Base directories for examples.")
     parser.add_argument("--target_examples", type=str, nargs='+', default=None,
                         help="Optional: List of specific example names to run (e.g., addition dotproduct). If not provided, all found examples are run.")
-    parser.add_argument('--clear_output', type=bool, default=True,
+    parser.add_argument('--clear_output', type=bool, default=False,
                        help='Clear the output directory before running (default: True). Set to False to keep previous results.')
     parser.add_argument('--perf_events', nargs='+', default=None,
                        help='List of perf events to collect (overrides YAML and default).')
     args = parser.parse_args()
     system_info = get_system_info()
     original_cwd = os.getcwd()
-    output_dir = os.path.join(original_cwd, "output")
-    os.makedirs(output_dir, exist_ok=True)
+    base_output_dir = os.path.join(original_cwd, "output")
     if args.clear_output:
+        output_dir = base_output_dir
+        os.makedirs(output_dir, exist_ok=True)
         clear_output_dir(output_dir)
+    else:
+        output_dir = get_next_available_dir(base_output_dir)
+        os.makedirs(output_dir, exist_ok=True)
     print(f"Output will be saved to directory: {output_dir}")
     output_json_path = os.path.join(output_dir, f"{args.output_prefix}_results.json")
     csv_file_path = os.path.join(output_dir, f"{args.output_prefix}_report.csv")
@@ -746,18 +783,18 @@ def main():
         print(f"Filtered to run only the specified examples: {args.target_examples} -> Found: {[os.path.basename(d) for d in example_directories]}")
     else:
         print("No specific target examples provided, running all found examples.")
-    all_run_results_data, all_profiling_results_data = run_all_benchmarks(example_directories, args, system_info)
-    aggregate_stats = compute_aggregate_statistics(all_run_results_data)
+    all_benchmark_results, all_profiling_results = run_all_benchmarks(example_directories, args, system_info)
+    aggregate_stats = compute_aggregate_statistics(all_benchmark_results + all_profiling_results)
     dep_versions = get_dependency_versions()
     reproducibility = get_reproducibility_info()
-    failures = collect_failure_table(all_run_results_data)
+    failures = collect_failure_table(all_benchmark_results + all_profiling_results)
     # Generate all reports/plots as before
     with open(output_json_path, "w") as f:
         # Compose the new JSON structure
         final_json_output = {
             "system_information": system_info,
-            "benchmark_results": all_run_results_data,
-            "profiling_results": all_profiling_results_data,
+            "benchmark_results": all_benchmark_results,  # Only timing/correctness
+            "profiling_results": all_profiling_results,  # Only event_stats and perf timing
             "aggregate_statistics": aggregate_stats,
             "dependency_versions": dep_versions,
             "reproducibility": reproducibility,
@@ -765,83 +802,19 @@ def main():
         }
         json.dump(final_json_output, f, indent=2)
 
-    # --- Consolidated CSV output ---
-    import csv
-    # Gather all perf event names (if any profiling)
-    all_events = set()
-    for run in all_run_results_data:
-        for version in ["carts", "omp"]:
-            stats = run.get(version, {}).get("event_stats", {})
-            all_events.update(stats.keys())
-    all_events = sorted(all_events)
-    # Build CSV fieldnames
-    base_fields = [
-        "Run ID", "Example Name", "Problem Size", "Threads", "Version", "Iterations Requested", "Iterations Ran",
-        "Correctness Status", "Min Time (s)", "Max Time (s)", "Average Time (s)",
-        "Median Time (s)", "StdDev Time (s)", "Speedup (OMP/CARTS)",
-        "Individual Times (s)", "CARTS Threads", "CARTS Nodes", "Overall Example Status"
-    ]
-    # For each event, add columns for min, max, avg, median, stdev
-    event_fields = []
-    for event in all_events:
-        for stat in ["min", "max", "avg", "median", "stdev"]:
-            event_fields.append(f"{event}__{stat}")
-    fieldnames = base_fields + event_fields
-    with open(csv_file_path, 'w', newline='') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        for r_item in all_run_results_data:
-            run_id = r_item.get("run_id", "")
-            example_name = r_item.get("example_name", "N/A")
-            problem_size = r_item.get("problem_size", "N/A")
-            threads_val = r_item.get("threads", "")
-            overall_example_status = r_item.get("status", "processed")
-            carts_config = r_item.get("carts_config", {})
-            carts_threads_val = carts_config.get("threads", "")
-            carts_nodes_val = carts_config.get("nodeCount", "")
-            speedup_val = r_item.get("speedup_carts_vs_omp")
-            if isinstance(speedup_val, float):
-                speedup_str = f"{speedup_val:.2f}x"
-            elif speedup_val is not None and speedup_val != "":
-                speedup_str = str(speedup_val)
-            else:
-                speedup_str = "N/A"
-            versions_to_process = [
-                ("carts", "CARTS"), ("omp", "OpenMP")]
-            for version_key, version_label in versions_to_process:
-                perf_data = r_item.get(version_key, {})
-                row_data = {
-                    "Run ID": run_id,
-                    "Example Name": example_name,
-                    "Problem Size": problem_size,
-                    "Threads": threads_val,
-                    "Version": version_label,
-                    "Iterations Requested": perf_data.get('iterations_requested', r_item.get('iterations_for_this_size', "N/A")),
-                    "Iterations Ran": perf_data.get('iterations_ran', 0),
-                    "Correctness Status": perf_data.get('correctness_status', "UNKNOWN"),
-                    "Min Time (s)": safe_fmt(perf_data.get('min_seconds')),
-                    "Max Time (s)": safe_fmt(perf_data.get('max_seconds')),
-                    "Average Time (s)": safe_fmt(perf_data.get('avg_seconds')),
-                    "Median Time (s)": safe_fmt(perf_data.get('median_seconds')),
-                    "StdDev Time (s)": safe_fmt(perf_data.get('stdev_seconds')),
-                    "Individual Times (s)": ", ".join([safe_fmt(t) for t in perf_data.get("times_seconds", [])]),
-                    "Speedup (OMP/CARTS)": speedup_str if version_key == "carts" else "",
-                    "CARTS Threads": carts_threads_val if version_key == "carts" else "",
-                    "CARTS Nodes": carts_nodes_val if version_key == "carts" else "",
-                    "Overall Example Status": overall_example_status if perf_data.get("times_seconds") else r_item.get(f"{version_key}_status", "run failed or no data")
-                }
-                # Add event stats if present
-                stats = perf_data.get("event_stats", {})
-                for event in all_events:
-                    ev_stats = stats.get(event, {})
-                    for stat in ["min", "max", "avg", "median", "stdev"]:
-                        row_data[f"{event}__{stat}"] = ev_stats.get(stat)
-                writer.writerow(row_data)
-    print(f"Consolidated CSV report saved to {csv_file_path}")
+    # --- Aggregated CSV output ---
+    csv_rows = aggregate_results_for_csv(all_benchmark_results, all_profiling_results)
+    if csv_rows:
+        fieldnames = list(csv_rows[0].keys())
+        with open(csv_file_path, 'w', newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            for row in csv_rows:
+                writer.writerow(row)
+        print(f"Aggregated CSV report saved to {csv_file_path}")
+    else:
+        print("No data to write to CSV.")
 
-    generate_comparison_graph(all_run_results_data, graph_file_path, graph_file_path.replace('.png', '.pdf'))
-    speedup_dist_file = graph_file_path.replace('_comparison.png', '_speedup_dist.png')
-    generate_speedup_distribution_plot(aggregate_stats['speedups'], speedup_dist_file)
     print("\nDumping Comparison Results (JSON)")
     json.dumps(final_json_output, indent=2)
     print("Script finished.")
