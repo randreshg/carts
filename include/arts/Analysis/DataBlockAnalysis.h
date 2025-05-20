@@ -38,7 +38,7 @@ class DatablockGraph;
 enum DatablockNodeComp { Equal, BaseAlias, Different };
 
 /// An Environment maps each db op to the latest Node that defines it.
-using Environment = llvm::DenseMap<arts::DataBlockOp, DatablockNode *>;
+using Environment = llvm::DenseMap<arts::DbControlOp, DatablockNode *>;
 
 //===----------------------------------------------------------------------===//
 // DatablockNode
@@ -49,7 +49,7 @@ class DatablockNode {
   friend class DatablockAnalysis;
 
 public:
-  DatablockNode(DatablockGraph *DG, arts::DataBlockOp dbOp);
+  DatablockNode(DatablockGraph *DG, arts::DbControlOp dbOp);
 
   /// Interface
   bool isWriter() { return mode == "out" || mode == "inout"; }
@@ -59,7 +59,7 @@ public:
 
   /// Attributes
   unsigned id = 0;
-  arts::DataBlockOp op;
+  arts::DbControlOp op;
 
   /// Db attributtes
   StringRef mode;
@@ -129,7 +129,7 @@ public:
   /// Interface
   func::FuncOp getFunction() { return func; }
   SmallVector<DatablockNode *, 4> &getNodes() { return nodes; }
-  DatablockNode *getNode(arts::DataBlockOp dbOp) { return nodeMap[dbOp]; }
+  DatablockNode *getNode(arts::DbControlOp dbOp) { return nodeMap[dbOp]; }
   DatablockNode *getNode(unsigned id) { return nodes[id]; }
   bool isEntryNode(unsigned id) const { return id == entryDbNode->id; }
   bool hasNodes() const { return !nodes.empty(); }

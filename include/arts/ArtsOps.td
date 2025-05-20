@@ -55,20 +55,51 @@ def AllocOp : Arts_Op<"alloc", []> {
 //===----------------------------------------------------------------------===//
 // arts.datablock
 //===----------------------------------------------------------------------===//
-def DataBlockOp : Arts_Op<"datablock", 
+def DbCreateOp : Arts_Op<"db_create", [
+    AttrSizedOperandSegments, MemoryEffects<[MemAlloc]>]> {
+  let summary = "Allocate an ARTS DataBlock and get its pointer and GUID.";
+  let description = [{
+    This operation corresponds to the `artsDbCreate` runtime function.
+    It allocates a DataBlock and returns its pointer and GUID.
+    - mode: "in", "out", "inout"
+    - ptr: address that will be copied to the DataBlock
+    - sizes: sizes of the DataBlock
+  }];
+  let arguments = (ins
+    StrAttr:$mode,
+    Optional<AnyMemRef>:$address,
+    Variadic<Index>:$sizes
+  );
+
+  let results = (outs AnyMemRef:$ptr, I64:$guid);
+  let assemblyFormat = [{
+    $mode $address `:` type($address) `[` $sizes `]` `->` attr-dict `:` type($ptr) `,` type($guid)
+  }];   
+}
+
+def DbControlOp : Arts_Op<"db_control", 
   [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, 
    RecursiveMemoryEffects, AttrSizedOperandSegments]> {
-  let summary = "Creates a subview dependency for arts.edt";
+  let summary = "Creates a control dependency for arts.edt";
+  let description = [{
+    This operation creates a control dependency for the `arts.edt` operation.
+    It is used to ensure that the DataBlock is ready before the EDT is executed.
+    - mode: "in", "out", "inout"
+    - ptr: base address of the DataBlock
+    - elementType: type of the DataBlock
+    - elementTypeSize: size of the element type
+    - indices: indices for the subview
+    - offsets: offsets for the subview
+    - sizes: sizes for the subview
+  }];
   let arguments = (ins
-    StrAttr:$mode,                           // Dependency mode (e.g., "in", "out", "inout")
-    AnyMemRef:$ptr,                          // Base ptr
-    TypeAttr:$elementType,                   // Element type for the subview (or memref type)
-    Index:$elementTypeSize,                  // Size associated with that type
-    Variadic<Index>:$indices,                // Indices for the subview
-    Variadic<Index>:$offsets,                // Offsets for the subview
-    Variadic<Index>:$sizes,                  // Sizes for the subview
-    Optional<AnyType>:$inEvent,              // Input event associated with the DB
-    Optional<AnyType>:$outEvent              // Output event associated with the DB
+    StrAttr:$mode,
+    AnyMemRef:$ptr,
+    TypeAttr:$elementType,
+    Index:$elementTypeSize,
+    Variadic<Index>:$indices,
+    Variadic<Index>:$offsets,
+    Variadic<Index>:$sizes
   );
 
   let results = (outs AnyMemRef:$subview);   // Produces a memref
@@ -80,17 +111,9 @@ def DataBlockOp : Arts_Op<"datablock",
       "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType,
       "Value":$elementTypeSize, "ValueRange":$indices, "ValueRange":$sizes)>,
     OpBuilder<(ins
-      "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType,
-      "Value":$elementTypeSize, "ValueRange":$indices, "ValueRange":$sizes,
-      "Value":$inEvent, "Value":$outEvent)>,
-    OpBuilder<(ins
       "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, 
       "Value":$elementTypeSize, "ValueRange":$indices, "ValueRange":$offsets, 
-      "ValueRange":$sizes)>,
-    OpBuilder<(ins
-      "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, 
-      "Value":$elementTypeSize, "ValueRange":$indices, "ValueRange":$offsets, 
-      "ValueRange":$sizes, "Value":$inEvent, "Value":$outEvent)>
+      "ValueRange":$sizes)>
   ];
 
   let extraClassDeclaration = [{

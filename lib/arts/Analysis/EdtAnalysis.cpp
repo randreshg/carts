@@ -73,9 +73,9 @@ void EdtEnvManager::adjust() {
   /// Analyze the parameters.
   /// Check if there is any parameter that loads a memref and indices of any
   /// dependency
-  DenseMap<Value, SmallVector<arts::DataBlockOp>> baseToDepsMap;
+  DenseMap<Value, SmallVector<arts::DbControlOp>> baseToDepsMap;
   for (auto dep : dependencies) {
-    auto depOp = cast<arts::DataBlockOp>(dep.getDefiningOp());
+    auto depOp = cast<arts::DbControlOp>(dep.getDefiningOp());
     auto depBase = depOp.getPtr();
     baseToDepsMap[depBase].push_back(depOp);
     if (parameters.contains(depBase))
@@ -133,7 +133,7 @@ bool EdtEnvManager::addParameter(Value val) { return parameters.insert(val); }
 
 void EdtEnvManager::addDependency(Value val, StringRef mode) {
   /// If the dependency is not a datablock operation, add it to depsToProcess
-  auto depOp = dyn_cast<arts::DataBlockOp>(val.getDefiningOp());
+  auto depOp = dyn_cast<arts::DbControlOp>(val.getDefiningOp());
   if (!depOp) {
     depsToProcess[val] = mode;
     return;

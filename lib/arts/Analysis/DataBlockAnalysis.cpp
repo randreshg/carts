@@ -78,7 +78,7 @@ template <> struct DenseMapInfo<ValueOrInt> {
 //===----------------------------------------------------------------------===//
 // DatablockNode
 //===----------------------------------------------------------------------===//
-DatablockNode::DatablockNode(DatablockGraph *DG, arts::DataBlockOp dbOp)
+DatablockNode::DatablockNode(DatablockGraph *DG, arts::DbControlOp dbOp)
     : op(dbOp), DG(DG), DA(DG->DA) {
   if (!op)
     return;
@@ -121,7 +121,7 @@ void DatablockNode::collectInfo() {
 
   /// Add 'hasPtrDb' attribute if the base is a datablock.
   if (auto parentDb =
-          dyn_cast_or_null<arts::DataBlockOp>(ptr.getDefiningOp())) {
+          dyn_cast_or_null<arts::DbControlOp>(ptr.getDefiningOp())) {
     op.setHasPtrDb();
     hasPtrDb = true;
     parent = DG->getNode(parentDb);
@@ -524,7 +524,7 @@ std::pair<Environment, bool> DatablockGraph::processEdt(arts::EdtOp edtOp,
 
     /// Iterate over the dependencies to fill dbIns and dbOuts.
     for (auto dep : edtDeps) {
-      auto db = dyn_cast<DataBlockOp>(dep.getDefiningOp());
+      auto db = dyn_cast<DbControlOp>(dep.getDefiningOp());
       assert(db && "Dependency must be a datablock");
       // Retrieve the datablock node and categorize based on mode.
       auto *dbNode = getNode(db);
@@ -812,9 +812,9 @@ void DatablockGraph::collectNodes(Region &region) {
   /// Collect datablock nodes from the top-level region of a function.
   unsigned estimatedCount = 0;
   region.walk<mlir::WalkOrder::PreOrder>(
-      [&](arts::DataBlockOp) { ++estimatedCount; });
+      [&](arts::DbControlOp) { ++estimatedCount; });
   nodes.reserve(estimatedCount);
-  region.walk<mlir::WalkOrder::PreOrder>([&](arts::DataBlockOp dbOp) {
+  region.walk<mlir::WalkOrder::PreOrder>([&](arts::DbControlOp dbOp) {
     LLVM_DEBUG(dbgs() << "Datablock node #" << nodes.size() << ": " << dbOp
                       << "\n");
     /// Add the node to the graph.
