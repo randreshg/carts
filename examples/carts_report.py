@@ -1090,30 +1090,6 @@ def profiling_event_bar_chart(df, event, version):
         fig = default_plot_template.apply(fig, plot_title=f'{event} (avg) - {version.upper()}')
     return fig
 
-def profiling_event_heatmap(df, event, version):
-    # Heatmap: Example vs Threads, colored by avg value
-    dff = df[(df['Event'] == event) & (df['Version'] == version.upper())]
-    if dff.empty:
-        fig = go.Figure()
-        fig.add_annotation(text="No data for this event/version.", xref="paper", yref="paper", showarrow=False)
-        return default_plot_template.apply(fig)
-    pivot = dff.pivot_table(index='Example', columns='Threads', values='Avg', aggfunc='mean')
-    fig = px.imshow(
-        pivot,
-        labels=dict(x="Threads", y="Example", color=event),
-        title=f"{event} (avg) Heatmap - {version.upper()}"
-    )
-    fig.update_traces(
-        hovertemplate='<b>Example: %{y}</b><br>Threads: %{x}<br>Avg: %{z:,.4f}<extra></extra>'
-    )
-    fig = default_plot_template.apply(
-        fig,
-        xaxis_title='Threads',
-        yaxis_title='Example',
-        plot_title=f'{event} (avg) Heatmap - {version.upper()}'
-    )
-    return fig
-
 def format_number(val, ndigits=4):
     if val is None or (isinstance(val, float) and (np.isnan(val) or np.isinf(val))):
         return "-"
