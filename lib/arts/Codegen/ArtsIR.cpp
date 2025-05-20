@@ -38,7 +38,7 @@ types::EdtType getEdtType(EdtOp edtOp) {
 }
 
 
-DataBlockOp createDatablockOp(OpBuilder &builder, Location loc,
+DbControlOp createDbControlOp(OpBuilder &builder, Location loc,
                               types::DatablockAccessType mode, Value ptr,
                               SmallVector<Value> pinnedIndices,
                               bool coarseGrained) {
@@ -107,11 +107,11 @@ DataBlockOp createDatablockOp(OpBuilder &builder, Location loc,
           builder.create<arith::MulIOp>(loc, elementTySize, size).getResult();
     }
     SmallVector<Value, 4> newSizes;
-    return builder.create<arts::DataBlockOp>(
+    return builder.create<arts::DbControlOp>(
         loc, resultType, modeAttr, baseMemRef, resultType, elementTySize,
         indices, offsets, newSizes);
   } else {
-    return builder.create<arts::DataBlockOp>(
+    return builder.create<arts::DbControlOp>(
         loc, resultType, modeAttr, baseMemRef, elementType, elementTypeSize,
         indices, offsets, sizes);
   }

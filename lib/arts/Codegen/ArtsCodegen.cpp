@@ -58,13 +58,13 @@ using namespace mlir::cf;
 DataBlockCodegen::DataBlockCodegen(ArtsCodegen &AC)
     : AC(AC), builder(AC.builder) {}
 
-DataBlockCodegen::DataBlockCodegen(ArtsCodegen &AC, arts::DataBlockOp dbOp,
+DataBlockCodegen::DataBlockCodegen(ArtsCodegen &AC, arts::DbControlOp dbOp,
                                    Location loc)
     : AC(AC), builder(AC.builder) {
   create(dbOp, loc);
 }
 
-void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
+void DataBlockCodegen::create(arts::DbControlOp depOp, Location loc) {
   /// Datablock info
   dbOp = depOp;
 
@@ -72,7 +72,7 @@ void DataBlockCodegen::create(arts::DataBlockOp depOp, Location loc) {
   if (hasPtrDb())
     return;
 
-  /// Set insertion point to the DatablockOp
+  /// Set insertion point to the DbControlOp
   OpBuilder::InsertionGuard IG(builder);
   AC.setInsertionPoint(dbOp);
 
@@ -330,74 +330,8 @@ void EdtCodegen::process(Location loc) {
 }
 
 void EdtCodegen::processDependencies(Location loc) {
-  /// Set the insertion point at the EDT function return to satisfy
-  /// dependencies.
-  builder.setInsertionPoint(returnOp);
-  auto unknownLoc = UnknownLoc::get(builder.getContext());
   const auto indexType = IndexType::get(builder.getContext());
   const auto indexMemRefType = MemRefType::get({}, indexType);
-
-  /// ---------------------------------------------------------------------
-  /// Satisfy Out-Mode Dependencies
-  /// Decrement the event latch counts for all out-mode (write) datablock
-  /// dependencies. This is done in the EDT Function, so we need to use the
-  /// datablock GUIDs from the entryDbs map to access the correct datablock
-  /// pointers and sizes.
-  /// ---------------------------------------------------------------------
-  if (!depsToSatisfy.empty()) {
-    LLVM_DEBUG(dbgs() << "- Satisfying out-mode dependencies\n");
-    for (auto *dbCG : depsToSatisfy) {
-      LLVM_DEBUG(dbgs() << "- " << dbCG->getOp() << "\n");
-      /// For single-dimension datablocks, satisfy dependency directly.
-      if (dbCG->hasSingleSize()) {
-        AC.decrementDbLatchCount(entryDbs[dbCG].guid, unknownLoc);
-        continue;
-      }
-
-      /// For multidimensional datablocks, satisfy dependencies recursively for
-      /// each element.
-      const auto &dbSizes = entryDbs[dbCG].sizes;
-      const unsigned dbRank = dbSizes.size();
-      std::function<void(unsigned, SmallVector<Value, 4> &)> satisfyRecursive =
-          [&](unsigned dim, SmallVector<Value, 4> &indices) -> void {
-        if (dim == dbRank) {
-          /// Load the datablock GUID from the entry using the current indices.
-          auto loadedDbGuid = entryDbs[dbCG].guid;
-          for (auto idx : indices) {
-            auto mt = loadedDbGuid.getType().cast<MemRefType>();
-            auto shape = std::vector<int64_t>(mt.getShape());
-            shape.erase(shape.begin());
-            auto mt0 = mlir::MemRefType::get(shape, mt.getElementType(),
-                                             MemRefLayoutAttrInterface(),
-                                             mt.getMemorySpace());
-            loadedDbGuid = builder.create<polygeist::SubIndexOp>(
-                loc, mt0, loadedDbGuid, idx);
-          }
-          loadedDbGuid =
-              builder.create<memref::LoadOp>(loc, loadedDbGuid).getResult();
-
-          /// Satisfy the event dependency by decrementing the latch count.
-          AC.decrementDbLatchCount(loadedDbGuid, loc);
-          return;
-        }
-
-        auto lowerBound = AC.createIndexConstant(0, loc);
-        auto upperBound = dbSizes[dim];
-        auto step = AC.createIndexConstant(1, loc);
-        auto loopOp =
-            builder.create<scf::ForOp>(loc, lowerBound, upperBound, step);
-        auto &loopBlock = loopOp.getRegion().front();
-        builder.setInsertionPointToStart(&loopBlock);
-        indices.push_back(loopBlock.getArgument(0));
-        satisfyRecursive(dim + 1, indices);
-        indices.pop_back();
-        builder.setInsertionPointAfter(loopOp);
-      };
-
-      SmallVector<Value, 4> indices;
-      satisfyRecursive(0, indices);
-    }
-  }
 
   /// ---------------------------------------------------------------------
   /// Record In-Mode Dependencies
@@ -666,7 +600,7 @@ void EdtCodegen::createEntry(Location loc) {
         if (!region->isAncestor(user->getParentRegion()))
           continue;
         /// If not a datablock, skip.
-        auto userOp = dyn_cast<arts::DataBlockOp>(user);
+        auto userOp = dyn_cast<arts::DbControlOp>(user);
         if (!userOp)
           continue;
         /// Get the datablock codegen and set the entry information.
@@ -884,24 +818,24 @@ func::CallOp ArtsCodegen::createRuntimeCall(RuntimeFunction FnID,
 
 /// DataBlock
 DataBlockCodegen *ArtsCodegen::getDatablock(Value op) {
-  return getDatablock(cast<DataBlockOp>(op.getDefiningOp()));
+  return getDatablock(cast<DbControlOp>(op.getDefiningOp()));
 }
 
-DataBlockCodegen *ArtsCodegen::getDatablock(arts::DataBlockOp dbOp) {
+DataBlockCodegen *ArtsCodegen::getDatablock(arts::DbControlOp dbOp) {
   if (!dbOp)
     return nullptr;
   auto it = datablocks.find(dbOp);
   return (it != datablocks.end()) ? it->second : nullptr;
 }
 
-DataBlockCodegen *ArtsCodegen::createDatablock(arts::DataBlockOp dbOp,
+DataBlockCodegen *ArtsCodegen::createDatablock(arts::DbControlOp dbOp,
                                                Location loc) {
   assert(!getDatablock(dbOp) && "Datablock already exists");
   datablocks[dbOp] = new DataBlockCodegen(*this, dbOp, loc);
   return datablocks[dbOp];
 }
 
-DataBlockCodegen *ArtsCodegen::getOrCreateDatablock(arts::DataBlockOp dbOp,
+DataBlockCodegen *ArtsCodegen::getOrCreateDatablock(arts::DbControlOp dbOp,
                                                     Location loc) {
   if (auto db = getDatablock(dbOp))
     return db;

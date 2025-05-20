@@ -57,8 +57,8 @@ void ArtsDialect::initialize() {
 
 bool isArtsRegion(Operation *op) { return isa<EdtOp>(op) || isa<EpochOp>(op); }
 bool isArtsOp(Operation *op) {
-  return isArtsRegion(op) || isa<DataBlockOp>(op) || isa<EventOp>(op) ||
-         isa<BarrierOp>(op);
+  return isArtsRegion(op) || isa<DbControlOp>(op) ||
+         isa<DbCreateOp>(op) || isa<EventOp>(op) || isa<BarrierOp>(op);
 }
 
 //===----------------------------------------------------------------------===//
@@ -96,12 +96,12 @@ void UndefOp::getCanonicalizationPatterns(RewritePatternSet &results,
 }
 
 //===----------------------------------------------------------------------===//
-// DataBlockOp
+// DbControlOp
 //===----------------------------------------------------------------------===//
-void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
-                        Type subview, StringRef mode, Value ptr,
-                        Type elementType, Value elementTypeSize,
-                        ValueRange indices, ValueRange sizes) {
+void DbControlOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                               Type subview, StringRef mode, Value ptr,
+                               Type elementType, Value elementTypeSize,
+                               ValueRange indices, ValueRange sizes) {
   SmallVector<Value> offsets;
   offsets.resize(indices.size(), odsBuilder.create<arith::ConstantIndexOp>(
                                      odsState.location, 0));
@@ -109,23 +109,11 @@ void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
         indices, offsets, sizes);
 }
 
-void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
-                        Type subview, StringRef mode, Value ptr,
-                        Type elementType, Value elementTypeSize,
-                        ValueRange indices, ValueRange sizes, Value inEvent,
-                        Value outEvent) {
-  SmallVector<Value> offsets;
-  offsets.resize(indices.size(), odsBuilder.create<arith::ConstantIndexOp>(
-                                     odsState.location, 0));
-  build(odsBuilder, odsState, subview, mode, ptr, elementType, elementTypeSize,
-        indices, offsets, sizes, inEvent, outEvent);
-}
-
-void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
-                        Type subview, StringRef mode, Value ptr,
-                        Type elementType, Value elementTypeSize,
-                        ValueRange indices, ValueRange offsets,
-                        ValueRange sizes) {
+void DbControlOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                               Type subview, StringRef mode, Value ptr,
+                               Type elementType, Value elementTypeSize,
+                               ValueRange indices, ValueRange offsets,
+                               ValueRange sizes) {
   odsState.addOperands(ptr);
   odsState.addOperands(elementTypeSize);
   odsState.addOperands(indices);
@@ -134,7 +122,7 @@ void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
   ::llvm::copy(
       ::llvm::ArrayRef<int32_t>({1, 1, static_cast<int32_t>(indices.size()),
                                  static_cast<int32_t>(offsets.size()),
-                                 static_cast<int32_t>(sizes.size()), 0, 0}),
+                                 static_cast<int32_t>(sizes.size())}),
       odsState.getOrAddProperties<Properties>().operandSegmentSizes.begin());
   odsState.getOrAddProperties<Properties>().mode =
       odsBuilder.getStringAttr(mode);
@@ -143,37 +131,8 @@ void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
   odsState.addTypes(subview);
 }
 
-void DataBlockOp::build(OpBuilder &odsBuilder, OperationState &odsState,
-                        Type subview, StringRef mode, Value ptr,
-                        Type elementType, Value elementTypeSize,
-                        ValueRange indices, ValueRange offsets,
-                        ValueRange sizes, Value inEvent, Value outEvent) {
-  if (!inEvent && !outEvent)
-    return build(odsBuilder, odsState, subview, mode, ptr, elementType,
-                 elementTypeSize, indices, offsets, sizes);
-  odsState.addOperands(ptr);
-  odsState.addOperands(elementTypeSize);
-  odsState.addOperands(indices);
-  odsState.addOperands(offsets);
-  odsState.addOperands(sizes);
-  if (inEvent)
-    odsState.addOperands(inEvent);
-  if (outEvent)
-    odsState.addOperands(outEvent);
-  ::llvm::copy(
-      ::llvm::ArrayRef<int32_t>({1, 1, static_cast<int32_t>(indices.size()),
-                                 static_cast<int32_t>(offsets.size()),
-                                 static_cast<int32_t>(sizes.size()),
-                                 (inEvent ? 1 : 0), (outEvent ? 1 : 0)}),
-      odsState.getOrAddProperties<Properties>().operandSegmentSizes.begin());
-  odsState.getOrAddProperties<Properties>().mode =
-      odsBuilder.getStringAttr(mode);
-  odsState.getOrAddProperties<Properties>().elementType =
-      TypeAttr::get(elementType);
-  odsState.addTypes(subview);
-}
-
-ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
+ParseResult DbControlOp::parse(OpAsmParser &parser,
+                                      OperationState &result) {
   /// Parse the mode attribute.
   StringAttr modeAttr;
   if (parser.parseAttribute(modeAttr, "mode", result.attributes))
@@ -254,34 +213,6 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
   if (parser.parseRSquare())
     return failure();
 
-  /// Optionally parse comma then "inEvent[" "outEvent[".
-  auto parseEventOperand =
-      [&](StringRef keyword,
-          SmallVector<OpAsmParser::UnresolvedOperand, 1> &eventOperand)
-      -> ParseResult {
-    if (succeeded(parser.parseOptionalComma())) {
-      if (parser.parseKeyword(keyword) || parser.parseLSquare())
-        return failure();
-      OpAsmParser::UnresolvedOperand eventOp;
-      if (parser.parseOperand(eventOp) || parser.parseColon())
-        return failure();
-      Type eventType;
-      if (parser.parseType(eventType) || parser.parseRSquare())
-        return failure();
-      if (parser.resolveOperand(eventOp, eventType, result.operands))
-        return failure();
-      eventOperand.push_back(eventOp);
-    }
-    return success();
-  };
-
-  SmallVector<OpAsmParser::UnresolvedOperand, 1> inEventOperand,
-      outEventOperand;
-  if (failed(parseEventOperand("inEvent", inEventOperand)))
-    return failure();
-  if (failed(parseEventOperand("outEvent", outEventOperand)))
-    return failure();
-
   /// Parse optional attribute dictionary.
   if (parser.parseOptionalAttrDict(result.attributes))
     return failure();
@@ -309,16 +240,13 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
     return failure();
 
   /// Set operand segment sizes.
-  /// Order: ptr (1), typeSize (1), indices, offsets, sizes, event (0 or 1).
-  SmallVector<int32_t, 7> segmentSizes;
+  /// Order: ptr (1), typeSize (1), indices, offsets, sizes.
+  SmallVector<int32_t, 5> segmentSizes;
   segmentSizes.push_back(1);
   segmentSizes.push_back(1);
   segmentSizes.push_back(static_cast<int32_t>(indicesOperands.size()));
   segmentSizes.push_back(static_cast<int32_t>(offsetOperands.size()));
   segmentSizes.push_back(static_cast<int32_t>(sizeOperands.size()));
-  segmentSizes.push_back(static_cast<int32_t>(inEventOperand.size()));
-  segmentSizes.push_back(static_cast<int32_t>(outEventOperand.size()));
-
   std::copy(
       segmentSizes.begin(), segmentSizes.end(),
       result.getOrAddProperties<Properties>().operandSegmentSizes.begin());
@@ -326,7 +254,7 @@ ParseResult DataBlockOp::parse(OpAsmParser &parser, OperationState &result) {
   return success();
 }
 
-void DataBlockOp::print(OpAsmPrinter &printer) {
+void DbControlOp::print(OpAsmPrinter &printer) {
   auto op = getOperation();
   /// Print the mode attribute.
   printer << " " << getModeAttr();
@@ -365,20 +293,6 @@ void DataBlockOp::print(OpAsmPrinter &printer) {
   printer.printOperand(getOperands()[1]);
   printer << "]";
 
-  /// Optionally print the inEvent operand if present.
-  if (auto inEvent = getInEvent()) {
-    printer << ", inEvent[";
-    printer.printOperand(inEvent);
-    printer << "]";
-  }
-
-  /// Optionally print the outEvent operand if present.
-  if (auto outEvent = getOutEvent()) {
-    printer << ", outEvent[";
-    printer.printOperand(outEvent);
-    printer << "]";
-  }
-
   // Print all remaining attributes except "operandSegmentSizes"
   // and those already printed ("mode", "elementType").
   printer.printOptionalAttrDict(op->getAttrs(),
@@ -389,7 +303,7 @@ void DataBlockOp::print(OpAsmPrinter &printer) {
   printer.printType(getResult().getType());
 }
 
-void DataBlockOp::getEffects(
+void DbControlOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
   auto modeAttr = getModeAttr();
   assert(modeAttr && "mode attribute not found");
@@ -408,20 +322,22 @@ void DataBlockOp::getEffects(
   }
 }
 
-bool DataBlockOp::hasPtrDb() { return getOperation()->hasAttr("ptrDb"); }
-bool DataBlockOp::hasSingleSize() {
+bool DbControlOp::hasPtrDb() { return getOperation()->hasAttr("ptrDb"); }
+bool DbControlOp::hasSingleSize() {
   return getOperation()->hasAttr("singleSize");
 }
 
-bool DataBlockOp::hasGuid() { return getOperation()->hasAttr("hasGuid"); }
+bool DbControlOp::hasGuid() {
+  return getOperation()->hasAttr("hasGuid");
+}
 
-void DataBlockOp::setHasPtrDb() {
+void DbControlOp::setHasPtrDb() {
   getOperation()->setAttr("ptrDb", UnitAttr::get(getContext()));
 }
-void DataBlockOp::setHasSingleSize() {
+void DbControlOp::setHasSingleSize() {
   getOperation()->setAttr("singleSize", UnitAttr::get(getContext()));
 }
-void DataBlockOp::setHasGuid() {
+void DbControlOp::setHasGuid() {
   getOperation()->setAttr("hasGuid", UnitAttr::get(getContext()));
 }
 
@@ -529,7 +445,7 @@ void EdtOp::getEffects(
 
   /// Otherwise, collect effects from each dependency
   for (auto dep : dependencies) {
-    if (auto dbOp = dep.getDefiningOp<DataBlockOp>())
+    if (auto dbOp = dep.getDefiningOp<DbControlOp>())
       dbOp.getEffects(effects);
   }
 }
