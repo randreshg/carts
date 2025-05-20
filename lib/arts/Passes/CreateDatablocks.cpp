@@ -122,7 +122,7 @@ template <> struct DenseMapInfo<CandidateDatablock> {
 ///===----------------------------------------------------------------------===///
 namespace {
 struct CreateDatablocksPass
-    : public arts::CreateDatablocksBase<CreateDatablocksPass> {
+    : public CreateDatablocksBase<CreateDatablocksPass> {
 
   /// Constructor
   CreateDatablocksPass() = default;
@@ -134,18 +134,18 @@ struct CreateDatablocksPass
   /// Identify datablocks in the module and create them
   void identifyDatablocks(ModuleOp module);
   /// Rewrites datablock uses
-  void rewireDatablockUses(arts::DataBlockOp &dbOp, arts::EdtOp &edtOp,
+  void rewireDatablockUses(DbControlOp &dbOp, EdtOp &edtOp,
                            SmallVector<Operation *> &uses);
   /// Analyze the EDT region to collect candidate datablocks.
-  void analyzeEdtRegion(arts::EdtOp &edtOp);
+  void analyzeEdtRegion(EdtOp &edtOp);
   /// Analyze a memref value's uses in the Edt and update candidate
   /// datablocks.
   void analyzeValueInEdt(Value dbPtr, SetVector<Value> edtInvariantValues,
-                         arts::EdtOp &edtOp);
+                         EdtOp &edtOp);
 
 private:
   /// Map to store candidate datablocks
-  DenseMap<arts::EdtOp, DenseMap<CandidateDatablock, SmallVector<Operation *>>>
+  DenseMap<EdtOp, DenseMap<CandidateDatablock, SmallVector<Operation *>>>
       candidateDatablocks;
 
   /// List of EDT ops in post-order traversal.
@@ -175,7 +175,7 @@ void CreateDatablocksPass::identifyDatablocks(ModuleOp module) {
   module.walk([&](func::FuncOp func) {
     LLVM_DEBUG(DBGS() << "Candidate datablocks in function: " << func.getName()
                       << "\n");
-    func.walk<mlir::WalkOrder::PostOrder>([&](arts::EdtOp edtOp) {
+    func.walk<mlir::WalkOrder::PostOrder>([&](EdtOp edtOp) {
       analyzeEdtRegion(edtOp);
       edtOps.push_back(edtOp);
     });
@@ -196,7 +196,7 @@ void CreateDatablocksPass::identifyDatablocks(ModuleOp module) {
              << edtItr << "\n";
     });
 
-    auto edtParent = edtOp->getParentOfType<arts::EdtOp>();
+    auto edtParent = edtOp->getParentOfType<EdtOp>();
     for (auto &candEntry : dbCandidates) {
       auto &dbCand = candEntry.first;
       auto &dbUses = candEntry.second;
@@ -208,11 +208,11 @@ void CreateDatablocksPass::identifyDatablocks(ModuleOp module) {
           /// If the memref allocation is within the same parent EDT, insert
           /// after it.
           if (isa<memref::AllocaOp>(defOp) &&
-              defOp->getParentOfType<arts::EdtOp>() == edtParent)
+              defOp->getParentOfType<EdtOp>() == edtParent)
             builder.setInsertionPointAfter(defOp);
         }
         /// Create a new datablock operation.
-        auto dbOp = createDatablockOp(builder, loc, dbCand.access, dbCand.ptr,
+        auto dbOp = createDbControlOp(builder, loc, dbCand.access, dbCand.ptr,
                                       dbCand.pinnedIndices, dbCand.isString);
         rewireDatablockUses(dbOp, edtOp, dbUses);
         edtDeps.push_back(dbOp.getResult());
@@ -230,7 +230,7 @@ void CreateDatablocksPass::identifyDatablocks(ModuleOp module) {
 
     /// Collect old dependencies to remove them later.
     for (auto oldDep : edtOp.getDependencies()) {
-      opsToRemove.insert(cast<DataBlockOp>(oldDep.getDefiningOp()));
+      opsToRemove.insert(cast<DbControlOp>(oldDep.getDefiningOp()));
     }
     opsToRemove.insert(edtOp);
 
@@ -243,7 +243,7 @@ void CreateDatablocksPass::identifyDatablocks(ModuleOp module) {
   removeOps(module, builder, opsToRemove);
 }
 
-void CreateDatablocksPass::analyzeEdtRegion(arts::EdtOp &edtOp) {
+void CreateDatablocksPass::analyzeEdtRegion(EdtOp &edtOp) {
   LLVM_DEBUG({
     dbgs() << smallline;
     DBGS() << "EDT region #" << edtOps.size() << ":\n";
@@ -300,7 +300,7 @@ void CreateDatablocksPass::analyzeEdtRegion(arts::EdtOp &edtOp) {
 }
 
 void CreateDatablocksPass::analyzeValueInEdt(
-    Value dbPtr, SetVector<Value> edtInvariantValues, arts::EdtOp &edtOp) {
+    Value dbPtr, SetVector<Value> edtInvariantValues, EdtOp &edtOp) {
   /// Retrieve the candidate map for the given EDT op.
   auto &candMap = candidateDatablocks[edtOp];
   auto &region = edtOp.getRegion();
@@ -388,8 +388,8 @@ void CreateDatablocksPass::analyzeValueInEdt(
   }
 }
 
-void CreateDatablocksPass::rewireDatablockUses(arts::DataBlockOp &dbOp,
-                                               arts::EdtOp &edtOp,
+void CreateDatablocksPass::rewireDatablockUses(DbControlOp &dbOp,
+                                               EdtOp &edtOp,
                                                SmallVector<Operation *> &uses) {
   MLIRContext *ctx = dbOp.getContext();
   auto builder = OpBuilder(ctx);
@@ -413,7 +413,7 @@ void CreateDatablocksPass::rewireDatablockUses(arts::DataBlockOp &dbOp,
 
   for (Operation *op : uses) {
     /// Just rewire if the parent of type EdtOp is the same
-    if (auto parentOp = op->getParentOfType<arts::EdtOp>();
+    if (auto parentOp = op->getParentOfType<EdtOp>();
         parentOp && parentOp != edtOp)
       continue;
     /// Update the operation with the new datablock.

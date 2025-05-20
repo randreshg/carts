@@ -54,8 +54,12 @@ struct EdtPass : public arts::EdtBase<EdtPass> {
   bool lowerSingle(EdtOp &op);
   bool convertParallelIntoSingle(EdtOp &op);
 
+  bool processParallelEdts();
+  bool processSyncTaskEdts();
+
 private:
   SetVector<Operation *> opsToRemove;
+  ModuleOp module;
 };
 } // end namespace
 
@@ -98,7 +102,8 @@ bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
   singleOp->moveBefore(op);
   singleOp.clearIsSingleAttr();
 
-  /// Set sync attribute
+  /// Set task-sync attribute
+  singleOp.setIsTaskAttr();
   singleOp.setIsSyncAttr();
 
   /// Mark the parallel op for removal.
@@ -148,10 +153,7 @@ bool EdtPass::lowerSingle(EdtOp &op) {
   return false;
 }
 
-void EdtPass::runOnOperation() {
-  ModuleOp module = getOperation();
-  LLVM_DEBUG(dbgs() << "\n" << line << "EdtPass STARTED\n" << line);
-
+bool EdtPass::processParallelEdts() {
   /// Gather all parallel-EDT ops in the module.
   SmallVector<EdtOp, 8> parallelOps;
   module.walk([&](EdtOp edt) {
@@ -159,7 +161,6 @@ void EdtPass::runOnOperation() {
       parallelOps.push_back(edt);
   });
 
-  /// Process each parallel EDT op:
   /// - Try to convert it into a single-EDT if it contains exactly one child.
   /// - Otherwise, lower it into a worker-loop enclosed in an EpochOp.
   for (EdtOp op : parallelOps) {
@@ -167,13 +168,75 @@ void EdtPass::runOnOperation() {
     if (!convertParallelIntoSingle(op))
       lowerParallel(op);
   }
+  return true;
+}
+
+bool EdtPass::processSyncTaskEdts() {
+  /// If the given single EdtOp is not nested within another EdtOp (i.e., is
+  /// top-level), and is marked as sync, embed its region's contents in an
+  /// arts::EpochOp. This effectively assigns the work to the master thread,
+  /// avoiding unnecessary signal/sync overhead. The EdtOp itself is erased
+  /// after its body is moved.
+  auto convertToEpoch = [](EdtOp &op) -> bool {
+    OpBuilder builder(op);
+    /// If the op is not top-level, return false.
+    if (op->getParentOfType<EdtOp>())
+      return false;
+
+    /// Create an arts::EpochOp and its block
+    auto loc = op.getLoc();
+    auto epochOp = builder.create<arts::EpochOp>(loc);
+    auto &epochBlock = epochOp.getRegion().emplaceBlock();
+    builder.setInsertionPointToEnd(&epochBlock);
+    builder.create<arts::YieldOp>(loc);
+
+    /// Move all operations except the terminator from the EdtOp's region to the
+    /// epoch block
+    Block *edtBody = &op.getRegion().front();
+    for (Operation &childOp :
+         llvm::make_early_inc_range(edtBody->without_terminator())) {
+      childOp.moveBefore(epochBlock.getTerminator());
+    }
+
+    /// Erase the now-empty EdtOp
+    op.erase();
+
+    builder.setInsertionPointAfter(epochOp);
+    return true;
+  };
+
+  /// Collect all single-EDT ops in the module.
+  SmallVector<EdtOp, 8> syncTaskOps;
+  module.walk([&](EdtOp edt) {
+    if (edt.isTask() && edt.isSync())
+      syncTaskOps.push_back(edt);
+  });
+
+  /// Try to convert each sync task-EDT to an EpochOp.
+  for (EdtOp op : syncTaskOps)
+    convertToEpoch(op);
+  return true;
+}
+
+void EdtPass::runOnOperation() {
+  module = getOperation();
+  LLVM_DEBUG({
+    dbgs() << "\n" << line << "EdtPass STARTED\n" << line;
+    module->dump();
+  });
+
+  processParallelEdts();
+  // processSyncTaskEdts();
 
   /// Remove all operations that were marked for deletion during conversion or
   /// lowering
   OpBuilder builder(module.getContext());
   removeOps(module, builder, opsToRemove);
 
-  LLVM_DEBUG(dbgs() << line << "EdtPass FINISHED\n" << line);
+  LLVM_DEBUG({
+    dbgs() << line << "EdtPass FINISHED\n" << line;
+    module->dump();
+  });
 }
 
 ///===----------------------------------------------------------------------===///

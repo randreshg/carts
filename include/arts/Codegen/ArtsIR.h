@@ -16,7 +16,7 @@ EdtOp createEdtOp(OpBuilder &builder, Location loc, types::EdtType type,
                   SmallVector<Value> deps = {});
 types::EdtType getEdtType(EdtOp edtOp);
 
-DataBlockOp createDatablockOp(OpBuilder &builder, Location loc,
+DbControlOp createDbControlOp(OpBuilder &builder, Location loc,
                               types::DatablockAccessType mode, Value ptr,
                               SmallVector<Value> pinnedIndices = {}, bool coarseGrained = false);
 } // namespace arts

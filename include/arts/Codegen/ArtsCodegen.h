@@ -36,7 +36,7 @@ class ArtsCodegen;
 class DataBlockCodegen {
 public:
   DataBlockCodegen(ArtsCodegen &AC);
-  DataBlockCodegen(ArtsCodegen &AC, arts::DataBlockOp dbOp, Location loc);
+  DataBlockCodegen(ArtsCodegen &AC, arts::DbControlOp dbOp, Location loc);
 
   /// Getters
   Value getOp() { return dbOp; }
@@ -44,9 +44,6 @@ public:
   Value getGuid() { return guid; }
   Value getPtr() { return ptr; }
   StringRef getMode() { return dbOp.getMode(); }
-  Value getInEvent() { return dbOp.getInEvent(); }
-  Value getOutEvent() { return dbOp.getOutEvent(); }
-  bool hasEvent() { return !dbOp.getInEvent() || !dbOp.getOutEvent(); }
   bool hasPtrDb() { return dbOp.hasPtrDb(); }
   bool hasSingleSize() { return dbOp.hasSingleSize(); }
   ValueRange getIndices() { return dbOp.getIndices(); }
@@ -59,7 +56,7 @@ public:
   void setPtr(Value ptr) { this->ptr = ptr; }
 
   /// Interface
-  void create(arts::DataBlockOp dbOp, Location loc);
+  void create(arts::DbControlOp dbOp, Location loc);
   bool isOutMode() {
     StringRef mode = dbOp.getMode();
     return mode == "out" || mode == "inout";
@@ -71,7 +68,7 @@ public:
 private:
   ArtsCodegen &AC;
   OpBuilder &builder;
-  DataBlockOp dbOp = nullptr;
+  DbControlOp dbOp = nullptr;
   Value edtSlot = nullptr;
 
   /// DataBlock info
@@ -192,9 +189,9 @@ public:
 
   /// Datablock
   DataBlockCodegen *getDatablock(Value op);
-  DataBlockCodegen *getDatablock(arts::DataBlockOp dbOp);
-  DataBlockCodegen *createDatablock(arts::DataBlockOp dbOp, Location loc);
-  DataBlockCodegen *getOrCreateDatablock(arts::DataBlockOp dbOp, Location loc);
+  DataBlockCodegen *getDatablock(arts::DbControlOp dbOp);
+  DataBlockCodegen *createDatablock(arts::DbControlOp dbOp, Location loc);
+  DataBlockCodegen *getOrCreateDatablock(arts::DbControlOp dbOp, Location loc);
   void addDbDependency(Value dbGuid, Value edtGuid, Value edtSlot,
                        Location loc);
   void incrementDbLatchCount(Value dbGuid, Location loc);

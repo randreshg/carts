@@ -215,7 +215,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
       {
         OpBuilder::InsertionGuard IG(rewriter);
         rewriter.setInsertionPointAfter(depLoadVal.getDefiningOp());
-        deps.push_back(createDatablockOp(
+        deps.push_back(createDbControlOp(
             rewriter, depLoadVal.getLoc(),
             getDatablockAccessType(depClause.getValue()), depLoadVal));
       }

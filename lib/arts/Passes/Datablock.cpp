@@ -105,7 +105,7 @@ bool DatablockPass::convertToParameters() {
   auto convertDbToParam = [&](DatablockGraph *graph) -> bool {
     bool changed = false;
     auto &dbNodes = graph->getNodes();
-    DenseMap<EdtOp, SetVector<DataBlockOp>> dbNodesToRemove;
+    DenseMap<EdtOp, SetVector<DbControlOp>> dbNodesToRemove;
     SetVector<Operation *> opsToRemove;
     OpBuilder builder(module);
 
@@ -158,7 +158,7 @@ bool DatablockPass::convertToParameters() {
       LLVM_DEBUG(dbgs() << "Analyzing edt deps - Size: " << edtDeps.size()
                         << "\n");
       for (auto dep : edtDeps) {
-        auto db = cast<DataBlockOp>(dep.getDefiningOp());
+        auto db = cast<DbControlOp>(dep.getDefiningOp());
         if (dbSet.contains(db)) {
           opsToRemove.insert(db);
           continue;
@@ -232,7 +232,7 @@ bool DatablockPass::shrinkDatablock() {
       if (!dbNode->op)
         continue;
 
-      DataBlockOp dbOp = dbNode->op;
+      DbControlOp dbOp = dbNode->op;
       Location loc = dbOp.getLoc();
       auto rank = dbNode->dimMax.size();
       assert(dbNode->sizes.size() == rank &&
@@ -292,8 +292,8 @@ bool DatablockPass::shrinkDatablock() {
       LLVM_DEBUG(dbgs() << "- Shrinking datablock \n");
       graphChanged = true;
 
-      /// Create the new DataBlockOp with adjusted sizes and offsets.
-      auto newDbOp = builder.create<arts::DataBlockOp>(
+      /// Create the new DbControlOp with adjusted sizes and offsets.
+      auto newDbOp = builder.create<arts::DbControlOp>(
           loc, dbOp.getType(), dbOp.getMode(), dbOp.getPtr(),
           dbOp.getElementType(), dbOp.getElementTypeSize(), dbOp.getIndices(),
           offsets, newSizes);
@@ -349,7 +349,7 @@ bool DatablockPass::shrinkDatablock() {
       /// Replace all remaining uses of the old datablock with the new one.
       dbOp.getResult().replaceAllUsesWith(newDbOp.getResult());
 
-      /// Mark the original DataBlockOp for removal.
+      /// Mark the original DbControlOp for removal.
       opsToRemove.insert(dbOp);
     }
 
@@ -380,7 +380,7 @@ bool DatablockPass::shrinkDatablock() {
 
 bool DatablockPass::canonicalizeDimOps() {
   LLVM_DEBUG(dbgs() << line << "Canonicalizing dim ops\n");
-  module->walk([&](arts::DataBlockOp dbOp) {
+  module->walk([&](arts::DbControlOp dbOp) {
     /// Analyze uses of the datablock.
     for (auto *op : dbOp->getUsers()) {
       auto dimOp = dyn_cast<memref::DimOp>(op);

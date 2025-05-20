@@ -58,11 +58,11 @@ struct ConvertArtsToLLVMPass
   void runOnOperation() override;
 
   void iterateOps();
-  void preprocessDataBlockOps(Operation *op);
+  void preprocessDbControlOps(Operation *op);
   void handleEdt(EdtOp &op);
   // void handleEvent(EventOp &op);
   void handleEpoch(EpochOp &op);
-  void handleDatablock(DataBlockOp &op);
+  void handleDatablock(DbControlOp &op);
   void handleGetTotalWorkers(GetTotalWorkersOp &op);
   void handleGetTotalNodes(GetTotalNodesOp &op);
   void handleGetCurrentWorker(GetCurrentWorkerOp &op);
@@ -146,7 +146,7 @@ void ConvertArtsToLLVMPass::handleEpoch(EpochOp &op) {
   op->erase();
 }
 
-void ConvertArtsToLLVMPass::handleDatablock(DataBlockOp &op) {
+void ConvertArtsToLLVMPass::handleDatablock(DbControlOp &op) {
   LLVM_DEBUG(DBGS() << "Lowering arts.datablock\n  " << op << "\n");
   AC->setInsertionPointAfter(op);
 
@@ -193,9 +193,9 @@ void ConvertArtsToLLVMPass::handleGetCurrentNode(GetCurrentNodeOp &op) {
 }
 
 void ConvertArtsToLLVMPass::iterateOps() {
-  /// Iterate over the FuncOps/DataBlockOps in the module
+  /// Iterate over the FuncOps/DbControlOps in the module
   for (auto func : module.getOps<func::FuncOp>())
-    preprocessDataBlockOps(func);
+    preprocessDbControlOps(func);
   LLVM_DEBUG({
     dbgs() << "Module after preprocessing DataBlocks:\n";
     module.dump();
@@ -239,14 +239,14 @@ void ConvertArtsToLLVMPass::iterateOps() {
   });
 }
 
-void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
+void ConvertArtsToLLVMPass::preprocessDbControlOps(Operation *operation) {
   auto &builder = AC->getBuilder();
-  /// Iterate over all DataBlockOps and create new DataBlockOps with opaque
+  /// Iterate over all DbControlOps and create new DbControlOps with opaque
   /// pointers.
-  SmallVector<DataBlockOp, 8> dbOps;
-  DenseMap<DataBlockOp, DataBlockOp> dbsToRewire;
+  SmallVector<DbControlOp, 8> dbOps;
+  DenseMap<DbControlOp, DbControlOp> dbsToRewire;
   operation->walk<mlir::WalkOrder::PreOrder>(
-      [&](arts::DataBlockOp dbOp) -> mlir::WalkResult {
+      [&](arts::DbControlOp dbOp) -> mlir::WalkResult {
         /// Skip already processed new datablock ops.
         if (dbOp->hasAttr("newDb"))
           return mlir::WalkResult::skip();
@@ -280,10 +280,10 @@ void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
                 ? elementType
                 : getPointerType(dbOp.getResult().getType(), elementType);
 
-        auto newDbOp = builder.create<arts::DataBlockOp>(
+        auto newDbOp = builder.create<arts::DbControlOp>(
             dbOp->getLoc(), elementPtrType, dbOp.getMode(), dbOp.getPtr(),
             dbOp.getElementType(), dbOp.getElementTypeSize(), dbOp.getIndices(),
-            dbOp.getOffsets(), sizes, dbOp.getInEvent(), dbOp.getOutEvent());
+            dbOp.getOffsets(), sizes);
         newDbOp->setAttrs(dbOp->getAttrs());
         newDbOp->setAttr("newDb", builder.getUnitAttr());
 
@@ -297,7 +297,7 @@ void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
     return;
 
   /// Rewire the datablocks
-  SmallVector<DataBlockOp, 8> dbsToHandle;
+  SmallVector<DbControlOp, 8> dbsToHandle;
   for (auto dbFrom : dbOps) {
     auto dbTo = dbsToRewire[dbFrom];
     LLVM_DEBUG(dbgs() << "Rewiring datablock:\n  " << dbFrom << "\n  " << dbTo
@@ -359,7 +359,7 @@ void ConvertArtsToLLVMPass::preprocessDataBlockOps(Operation *operation) {
         storeOp.erase();
       }
       /// Propagate datablock pointer for nested datablock ops.
-      else if (auto dbUseOp = dyn_cast<arts::DataBlockOp>(user)) {
+      else if (auto dbUseOp = dyn_cast<arts::DbControlOp>(user)) {
         dbUseOp.getPtr().replaceUsesWithIf(
             dbTo.getResult(),
             [&](OpOperand &operand) { return operand.getOwner() == dbUseOp; });
