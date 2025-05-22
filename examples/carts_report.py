@@ -3,45 +3,120 @@ import json
 import pandas as pd
 import dash_bootstrap_components as dbc
 import dash
-from dash import dcc, html, dash_table, Input, Output, State, ctx, MATCH, ALL, ALLSMALLER, callback_context
+from dash import dcc, html, dash_table, Input, Output, State, ctx, MATCH, ALL, callback_context
 import plotly.express as px
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
-import shutil
 import datetime
 import numpy as np
 from dash.exceptions import PreventUpdate
-import io
-import base64
 import re
-import traceback
-import ast
-from dash.dependencies import ALL
-
+from collections import defaultdict
+import base64 # For dcc.Upload
+import io # For dcc.Upload
 
 # --- File Paths ---
-DEFAULT_RESULTS_PATH = os.path.join(os.path.dirname(__file__) if '__file__' in locals() else '.', 'output/performance_results.json')
+# Default path to the JSON results file
+DEFAULT_RESULTS_PATH = os.path.join(os.path.dirname(__file__) if '__file__' in locals() else '.', 'output_benchmarks/performance_results_full_data.json')
 
 # --- Styling Constants ---
-PRIMARY_COLOR = '#1f77b4'
-ACCENT_COLOR = '#ff7f0e'
-NEUTRAL_COLOR = '#505f79'
-MAIN_BG_COLOR = '#f5f9fc'
+PRIMARY_COLOR = '#1f77b4' 
+ACCENT_COLOR = '#ff7f0e'  
+NEUTRAL_COLOR = '#505f79' 
+MAIN_BG_COLOR = '#f0f2f5' 
 CARD_BG_COLOR = '#ffffff'
-SUCCESS_COLOR = '#36b37e'
-WARNING_COLOR = '#ffab00'
-PLOT_BG_COLOR = 'rgb(229, 236, 246)'
-GRID_COLOR = '#cccccc'
-MARKER_OUTLINE_COLOR = 'black'
+SUCCESS_COLOR = '#28a745' 
+WARNING_COLOR = '#ffc107' 
+ERROR_COLOR = '#dc3545'   
+PLOT_BG_COLOR = 'rgba(229, 236, 246, 0.3)' 
+GRID_COLOR = '#d1d9e6'
+MARKER_OUTLINE_COLOR = 'rgba(0,0,0,0.7)'
+TEXT_MUTED_COLOR = '#6c757d' 
+
+# --- PlotHelpTextManager Class ---
+class PlotHelpTextManager:
+    """Manages help text descriptions for plots."""
+    def __init__(self):
+        self.help_texts = {
+            "scaling": """
+**Execution Time Scaling**
+
+This plot shows the mean execution time (log scale) against the number of threads for different examples and problem sizes.
+- **CARTS** version is shown with a solid blue line.
+- **OMP** version is shown with a dashed orange line.
+- Each line represents a unique combination of example, version, and problem size based on the aggregated average times.
+            """,
+            "efficiency": """
+**Parallel Efficiency (Strong Scaling)**
+
+This plot illustrates how well the parallel versions (CARTS and OMP) utilize additional threads compared to their single-threaded performance.
+- Efficiency is calculated as: `Average Time(1 thread) / (Average Time(N threads) * N threads)`.
+- An ideal efficiency is 1.0 (dashed grey line).
+- Values closer to 1.0 indicate better scalability.
+            """,
+            "speedup": """
+**OMP vs CARTS Speedup (OMP Avg Time / CARTS Avg Time)**
+
+This plot shows the speedup of CARTS relative to OMP, using their respective average execution times.
+- Calculated as: `Mean OMP Time / Mean CARTS Time` for the same example, problem size, and thread count.
+- Values > 1 (green shaded area) indicate CARTS is faster.
+- Values < 1 (red shaded area) indicate OMP is faster.
+- A value of 1 (dashed grey line) means equal performance.
+            """,
+            "slowdown": """
+**CARTS vs OMP Slowdown (CARTS Avg Time / OMP Avg Time)**
+
+This plot shows the slowdown of CARTS relative to OMP (inverse of the speedup plot).
+- Calculated as: `Mean CARTS Time / Mean OMP Time`.
+- Values > 1 (red shaded area) indicate CARTS is slower.
+- Values < 1 (green shaded area) indicate CARTS is faster.
+- A value of 1 (dashed grey line) means equal performance.
+            """,
+            "variability_base": """
+**Execution Time Variability**
+
+These box plots show the distribution of individual execution times (log scale) from raw benchmark runs for each combination of example, problem size, version, and thread count.
+- Each box represents the interquartile range (IQR), with the median as a line.
+- Whiskers extend to 1.5x IQR. Points beyond are outliers.
+- Useful for observing consistency of runtimes across multiple iterations.
+            """,
+            "cache_perf": """
+**Cache Performance Analysis**
+
+- If 'Cache Miss Rate' is available (derived from `cache-misses` / `cache-references`), it's shown as a percentage.
+- Otherwise, raw counts for a primary cache event (e.g., `cache-misses:u`) are plotted on a log scale.
+            """,
+            "ipc_perf": """
+**Instructions Per Cycle (IPC) Analysis**
+
+- Shows IPC, derived from average `instructions:u` / average `cycles:u`.
+- Higher IPC generally indicates better CPU utilization.
+            """,
+            "stalls_perf": """
+**CPU Stalls Analysis**
+
+- Shows data for a primary stall counter (e.g., `cycle_activity.stalls_total:u`).
+- May be displayed as raw counts (log scale) or as a percentage of total cycles if applicable and `cycles:u` data is available.
+            """,
+            "generic_profiling": """
+**Generic Profiling Event Analysis**
+
+- Shows the average value for the most prominent event within the selected 'Other' category.
+- The y-axis may be linear or log scale depending on the data range.
+            """
+        }
+
+    def get_help_text(self, plot_key, specific_event_info=""):
+        base_text = self.help_texts.get(plot_key, "Help text not available for this plot.")
+        if specific_event_info:
+            separator = "\n" if base_text and not base_text.endswith("\n") else ""
+            return base_text + separator + specific_event_info
+        return base_text
 
 # --- PlotTemplate class ---
 class PlotTemplate:
-    """
-    A template class to apply consistent styling and layout to Plotly figures.
-    It defines default visual properties for plots, which can be overridden.
-    """
     def __init__(self,
-                 legend_orientation='h', legend_y=-0.25, legend_x=0.5, # Legend at bottom-center
+                 legend_orientation='h', legend_y=-0.25, legend_x=0.5,
                  height=600, margin=None, bargap=0.18,
                  grid_color=GRID_COLOR, axis_color='#666666', plot_bgcolor=PLOT_BG_COLOR, paper_bgcolor='white',
                  bar_line_width=1.5, bar_width=0.4, line_width=2, marker_line_width=1,
@@ -62,7 +137,7 @@ class PlotTemplate:
         self.bar_line_width = bar_line_width
         self.bar_width = bar_width
         self.line_width = line_width
-        self.marker_line_width = marker_line_width # Default for marker outlines
+        self.marker_line_width = marker_line_width
         self.font_family = font_family
         self.font_size = font_size
         self.xaxis_title_size = font_size + 1
@@ -73,18 +148,13 @@ class PlotTemplate:
         self.legend_title = legend_title
 
     def apply(self, fig, xaxis_title=None, yaxis_title=None, plot_title=None, legend_title=None, height=None):
-        """
-        Applies the predefined styles and layout options to a given Plotly figure.
-        Allows overriding of titles, height, etc., on a per-plot basis.
-        """
         fig_height = height if height is not None else self.height
         current_margin = self.margin.copy()
-
         title_text_val = plot_title if plot_title is not None else self.plot_title
         legend_title_val = legend_title if legend_title is not None else self.legend_title
 
         if self.legend_orientation == 'h' and self.legend_y < 0:
-            current_margin['b'] = max(current_margin.get('b', 120), 120 + abs(self.legend_y * 200)) # Increased bottom margin for legend
+            current_margin['b'] = max(current_margin.get('b', 120), 120 + abs(self.legend_y * 200))
         else:
             current_margin['b'] = max(60, current_margin.get('b', 100) - 40)
 
@@ -112,11 +182,10 @@ class PlotTemplate:
                 tickfont=dict(size=self.font_size - 2), gridcolor=self.grid_color, showgrid=True,
                 showline=True, linecolor=self.axis_color, ticks='outside', automargin=True,
             ),
-            hoverlabel=dict(bgcolor="white", font_size=self.font_size -1, font_family=self.font_family, bordercolor="#cccccc")
+            hoverlabel=dict(bgcolor="white", font_size=self.font_size -1, font_family=self.font_family, bordercolor="#cccccc", font_color="black")
         )
-        # Apply styles to annotations (e.g., subplot titles)
         if fig.layout.annotations:
-            fig.update_annotations(font_size=self.font_size) # Adjust as needed for subplot title size
+            fig.update_annotations(font_size=self.font_size)
 
         for trace in fig.data:
             if trace.type == 'bar':
@@ -125,562 +194,1175 @@ class PlotTemplate:
                 if not hasattr(trace.marker, 'line') or not hasattr(trace.marker.line, 'width') or trace.marker.line.width is None:
                     trace.marker.line.width = self.bar_line_width
                 if not hasattr(trace.marker.line, 'color') or trace.marker.line.color is None:
-                    trace.marker.line.color = trace.marker.color # Outline same as fill by default
+                    trace.marker.line.color = trace.marker.color if trace.marker.color else MARKER_OUTLINE_COLOR 
             elif trace.type == 'scatter':
                 if hasattr(trace, 'line') and (not hasattr(trace.line, 'width') or trace.line.width is None):
                     trace.line.width = self.line_width
-
                 if hasattr(trace, 'mode') and 'markers' in trace.mode:
                     if not hasattr(trace.marker, 'size') or trace.marker.size is None:
-                        trace.marker.size = 8 # Default marker size
+                        trace.marker.size = 8
                     if not hasattr(trace.marker, 'line') or trace.marker.line is None:
-                        trace.marker.line = go.scatter.marker.Line() # Ensure line object exists
+                        trace.marker.line = go.scatter.marker.Line()
                     if not hasattr(trace.marker.line, 'width') or trace.marker.line.width is None:
                         trace.marker.line.width = self.marker_line_width
                     if not hasattr(trace.marker.line, 'color') or trace.marker.line.color is None:
-                        trace.marker.line.color = MARKER_OUTLINE_COLOR # Default marker outline color
-                    # trace.marker.color (fill) should be set by plotting functions
+                        trace.marker.line.color = MARKER_OUTLINE_COLOR
         return fig
 
-    def profiling_x_label(self, row):
-        """Generates a consistent x-axis label for profiling plots (Threads | Size)."""
-        if hasattr(row, 'to_dict'): row = row.to_dict()
-        threads = row.get('threads', row.get('Threads', None))
-        problem_size = row.get('problem_size', row.get('Problem Size', None))
-        if problem_size is not None and pd.notnull(problem_size) and str(problem_size).lower() != 'default' and str(problem_size).lower() != 'n/a':
-            return f"T={threads} | S={problem_size}"
-        return f"T={threads}"
-
-# --- Instantiate a default template --- #
 default_plot_template = PlotTemplate(
     yaxis_title='Value',
     legend_title='Version'
 )
+plot_help_manager = PlotHelpTextManager()
 
-# --- StyleManager Class (remains largely the same, ensure font family matches template) ---
-class StyleManager:
+# --- StyleManager Class ---
+class StyleManager: 
     MAIN_DIV_STYLE = {
-        'background': 'linear-gradient(135deg, #f5f9fc 0%, #ffffff 100%)', 'minHeight': '100vh',
+        'background': MAIN_BG_COLOR, 'minHeight': '100vh',
         'fontFamily': default_plot_template.font_family, 'color': NEUTRAL_COLOR,
     }
     CARD_STYLE = {
-        'backgroundColor': CARD_BG_COLOR, 'borderRadius': '16px', 'boxShadow': '0 8px 24px rgba(0,0,0,0.08)',
-        'padding': '24px', 'margin': '24px auto', 'maxWidth': '1400px', 'border': '1px solid #f0f0f0',
+        'backgroundColor': CARD_BG_COLOR, 'borderRadius': '12px', 'boxShadow': '0 6px 18px rgba(0,0,0,0.07)',
+        'padding': '24px', 'margin': '20px auto', 'maxWidth': '1400px', 'border': f'1px solid {GRID_COLOR}',
     }
     HEADER_STYLE = {
-        'color': PRIMARY_COLOR, 'fontWeight': '600', 'fontSize': '2.4rem', 'marginBottom': '10px',
-        'textAlign': 'center', 'letterSpacing': '0.5px', 'padding': '20px 0 15px 0',
-        'borderBottom': f'2px solid {PRIMARY_COLOR}', 'background': 'transparent', 'position': 'relative',
+        'color': PRIMARY_COLOR, 'fontWeight': '600', 'fontSize': '2.2rem', 'marginBottom': '8px',
+        'textAlign': 'center', 'letterSpacing': '0.3px', 'padding': '20px 0 10px 0',
+        'borderBottom': f'2px solid {PRIMARY_COLOR}', 'background': 'transparent',
     }
     SUBTITLE_STYLE = {
-        'color': NEUTRAL_COLOR, 'fontSize': '1.2rem', 'textAlign': 'center', 'marginBottom': '24px',
+        'color': TEXT_MUTED_COLOR, 'fontSize': '1.1rem', 'textAlign': 'center', 'marginBottom': '24px',
         'fontWeight': '400', 'maxWidth': '900px', 'margin': '0 auto 24px auto',
     }
     LABEL_STYLE = {
         'fontWeight': '600', 'color': PRIMARY_COLOR, 'marginTop': '14px',
         'fontSize': '1.05rem', 'letterSpacing': '0.2px',
     }
-    FILTER_MODAL_CLOSE_STYLE = {
-        'position': 'absolute', 'top': '10px', 'right': '18px', 'background': 'none',
-        'border': 'none', 'outline': 'none', 'padding': '0 12px', 'marginLeft': 'auto', 'cursor': 'pointer',
+    FILTER_MODAL_CLOSE_STYLE = { 
+        'fontSize': '1.5rem', 'fontWeight': 'bold', 'lineHeight': '1',
+        'color': '#000', 'textShadow': '0 1px 0 #fff', 'opacity': '0.5',
+        'position': 'absolute', 'top': '10px', 'right': '15px',
+        'background': 'transparent', 'border': '0'
     }
-    FILTER_MODAL_CONTENT_STYLE = {
-        'backgroundColor': '#fff', 'borderRadius': '14px', 'boxShadow': '0 8px 32px rgba(31,119,180,0.18)',
-        'padding': '14px 8px 14px 8px', 'fontFamily': default_plot_template.font_family, 'fontSize': '1.00rem',
-        'width': '100%', 'maxWidth': '420px', 'marginLeft': '0', 'marginRight': '0', 'border': '1.2px solid #d0e3f7',
+    STAT_BOX_STYLE = {
+        'backgroundColor': CARD_BG_COLOR, 
+        'padding': '15px',
+        'borderRadius': '8px',
+        'boxShadow': '0 3px 8px rgba(0,0,0,0.06)',
+        'textAlign': 'center',
+        'marginBottom': '15px', 
+        'border': f'1px solid {GRID_COLOR}'
     }
-    FILTER_MODAL_OVERLAY_STYLE = {
-        'position': 'fixed', 'top': 0, 'left': 0, 'width': '100vw', 'height': '100vh',
-        'background': 'rgba(0,0,0,0.18)', 'zIndex': 1000, 'display': 'flex',
-        'alignItems': 'center', 'justifyContent': 'center',
-    }
-    SUMMARY_CARD_STYLE = {
-        'backgroundColor': '#e6f0fa', 'padding': '15px', 'borderRadius': '10px',
-        'marginBottom': '20px', 'boxShadow': '0 2px 4px rgba(0,0,0,0.05)'
-    }
-    SUMMARY_ITEM_STYLE = {'fontSize': '0.95rem', 'marginBottom': '5px', 'color': NEUTRAL_COLOR}
-    SUMMARY_LABEL_STYLE = {'fontWeight': 'bold', 'color': PRIMARY_COLOR, 'marginRight': '5px'}
+    STAT_BOX_LABEL_STYLE = {'fontSize': '0.9rem', 'color': TEXT_MUTED_COLOR, 'marginBottom': '5px', 'display': 'block', 'fontWeight': '500'}
+    STAT_BOX_VALUE_STYLE = {'fontSize': '1.6rem', 'fontWeight': 'bold', 'color': PRIMARY_COLOR, 'display': 'block', 'lineHeight': '1.2'}
+    STAT_BOX_SUB_VALUE_STYLE = {'fontSize': '0.8rem', 'color': NEUTRAL_COLOR, 'marginTop': '4px', 'display': 'block', 'wordWrap': 'break-word', 'maxWidth': '100%', 'minHeight': '30px'}
 
     TABLE_HEADER_STYLE = {
-        'backgroundColor': '#e6f0fa', 'fontWeight': 'bold', 'fontSize': '1.09rem',
-        'color': PRIMARY_COLOR, 'borderBottom': f'2px solid {PRIMARY_COLOR}',
-        'fontFamily': default_plot_template.font_family
+        'backgroundColor': PRIMARY_COLOR, 'fontWeight': 'bold', 'fontSize': '1.05rem',
+        'color': 'white', 'borderBottom': f'2px solid {PRIMARY_COLOR}',
+        'fontFamily': default_plot_template.font_family, 'padding': '10px 8px'
     }
     TABLE_CELL_STYLE = {
-        'fontSize': '1.08rem', 'padding': '8px 4px', 'minWidth': '60px',
-        'fontFamily': default_plot_template.font_family
+        'fontSize': '1rem', 'padding': '8px', 'minWidth': '70px',
+        'fontFamily': default_plot_template.font_family, 'border': f'1px solid {GRID_COLOR}'
     }
-    HELP_MODAL_STYLE = {
-        'position': 'fixed', 'zIndex': 1050, 'left': 0, 'top': 0, 'width': '100%', 'height': '100%',
-        'overflow': 'auto', 'backgroundColor': 'rgba(0,0,0,0.4)'
+    UPLOAD_STYLE = {
+        'width': '100%', 'height': '60px', 'lineHeight': '60px',
+        'borderWidth': '2px', 'borderStyle': 'dashed', 'borderRadius': '8px',
+        'textAlign': 'center', 'margin': '0px', 'borderColor': PRIMARY_COLOR, # No top/bottom margin for tighter layout
+        'cursor': 'pointer', 'transition': 'border-color .15s ease-in-out, box-shadow .15s ease-in-out',
+        'fontSize': '0.95rem', 'color': PRIMARY_COLOR
     }
-    HELP_MODAL_CONTENT_STYLE = {
-        'backgroundColor': '#fefefe',
-        'margin': '15% auto',
-        'padding': '20px',
-        'border': '1px solid #888',
-        'width': '60%',
-        'maxWidth': '600px',
-        'borderRadius': '10px',
-        'boxShadow': '0 4px 8px 0 rgba(0,0,0,0.2),0 6px 20px 0 rgba(0,0,0,0.19)',
-        'fontFamily': default_plot_template.font_family,  # Ensures font family consistency
-        'fontSize': '1.08rem',  # Match your main UI font size
-    }
-    HELP_MODAL_CLOSE_BUTTON_STYLE = {
-        'color': '#aaa', 'float': 'right', 'fontSize': '28px', 'fontWeight': 'bold', 'cursor': 'pointer'
+    UPLOAD_CONTAINER_STYLE = {
+        'padding': '10px',
+        'border': f'1px solid {GRID_COLOR}',
+        'borderRadius': '8px',
+        'backgroundColor': '#f8f9fa'
     }
 
-
-# --- Utility Functions (load_results, flatten_lists_in_df, format_number) ---
-def load_results(path):
+# --- Utility Functions ---
+def load_full_json_data(path):
     if not os.path.exists(path):
         return None, f"Results file not found: {path}"
     try:
-        with open(path) as f:
+        with open(path, 'r') as f:
             data = json.load(f)
-        
-        raw_results = []
-        if 'benchmark_results' in data and isinstance(data['benchmark_results'], list):
-            raw_results.extend(data['benchmark_results'])
-        if 'profiling_results' in data and isinstance(data['profiling_results'], list):
-            raw_results.extend(data['profiling_results'])
-
-        if not raw_results:
-            return None, "No results found in JSON."
-
-        # Ensure event_stats column exists for all records
-        processed_results = []
-        for r in raw_results:
-            # Ensure 'event_stats' is a dict for profiling, None otherwise
-            if r.get('run_type', '').lower() == 'profile':
-                if 'event_stats' not in r or not isinstance(r['event_stats'], dict):
-                    r['event_stats'] = {} # Ensure it's a dict if it's a profile run but missing/malformed
-            else:
-                r['event_stats'] = None # Set to None for non-profile runs or if missing
-            processed_results.append(r)
-            
-        df = pd.DataFrame(processed_results) # Use pd.DataFrame directly
-        return df, None
+        required_top_level_keys = [
+            "detailed_aggregated_results", "raw_benchmark_runs", "raw_profiling_runs",
+            "overall_statistics", "system_information"
+        ]
+        for key in required_top_level_keys:
+            if key not in data:
+                print(f"Warning: Key '{key}' missing in JSON data from {path}.")
+        return data, None
+    except json.JSONDecodeError as e:
+        return None, f"Error decoding JSON from {path}: {e}"
     except Exception as e:
-        return None, f"Error loading file: {e}"
+        return None, f"Error loading file {path}: {e}"
 
-
-def flatten_lists_in_df(df):
-    for col in df.columns:
-        if df[col].apply(type).eq(list).any():
-            df[col] = df[col].apply(lambda x: ', '.join(map(str, x)) if isinstance(x, list) else x)
-    return df
-
-def format_number(val, ndigits=4):
-    if val is None or (isinstance(val, float) and (np.isnan(val) or np.isinf(val))): return "-"
+def format_number(val, ndigits=4, na_val="-"):
+    if val is None or (isinstance(val, float) and (np.isnan(val) or np.isinf(val))): return na_val
     if isinstance(val, (int, np.integer)): return f"{val:,}"
     try:
         float_val = float(val)
+        if ndigits == 0: 
+             return f"{float_val:,.0f}"
         return f"{float_val:,.{ndigits}f}"
     except (ValueError, TypeError): return str(val)
 
-
 # --- DataManager Class ---
 class DataManager:
-    def __init__(self, data_records=None):
-        self.raw_df = pd.DataFrame()
-        if data_records:
-            self.raw_df = pd.DataFrame(data_records)
-            if not self.raw_df.empty:
-                self.raw_df = self._flatten_df_internal(self.raw_df)
-                self._convert_column_types()
+    def __init__(self, full_json_data=None):
+        self.df_aggregated = pd.DataFrame()
+        self.df_raw_benchmark = pd.DataFrame()
+        self.df_raw_profiling = pd.DataFrame()
+        self.system_info = {}
+        self.overall_stats_json = {}
+        self.reproducibility_info = {}
+        self.command_line_args = {}
+        self.failure_summary = []
 
-    def _flatten_df_internal(self, df):
-        for col in df.columns:
-            # Only flatten if the column actually contains lists and is not 'event_stats'
-            if col != 'event_stats' and df[col].apply(type).eq(list).any():
-                df[col] = df[col].apply(lambda x: ', '.join(map(str, x)) if isinstance(x, list) else x)
-        return df
+        if full_json_data and isinstance(full_json_data, dict):
+            self.df_aggregated = pd.DataFrame(full_json_data.get("detailed_aggregated_results", []))
+            self.df_raw_benchmark = pd.DataFrame(full_json_data.get("raw_benchmark_runs", []))
+            self.df_raw_profiling = pd.DataFrame(full_json_data.get("raw_profiling_runs", []))
+            
+            self.system_info = full_json_data.get("system_information", {})
+            self.overall_stats_json = full_json_data.get("overall_statistics", {})
+            self.reproducibility_info = full_json_data.get("reproducibility_info", {})
+            self.command_line_args = full_json_data.get("command_line_args", {})
+            self.failure_summary = full_json_data.get("failure_summary", [])
 
-    def _convert_column_types(self):
-        if 'threads' in self.raw_df.columns:
-            self.raw_df['threads'] = pd.to_numeric(self.raw_df['threads'], errors='coerce')
-        if 'problem_size' in self.raw_df.columns:
-            self.raw_df['problem_size'] = self.raw_df['problem_size'].astype(str)
+            self._convert_df_types()
 
-    def _apply_filters(self, df, filters):
+    def _convert_df_types(self):
+        if not self.df_aggregated.empty:
+            if 'Threads' in self.df_aggregated.columns:
+                self.df_aggregated['Threads'] = pd.to_numeric(self.df_aggregated['Threads'], errors='coerce')
+            if 'Problem Size' in self.df_aggregated.columns:
+                 self.df_aggregated['Problem Size'] = self.df_aggregated['Problem Size'].astype(str)
+            for col in self.df_aggregated.columns:
+                if 'Time (s)' in col or 'Speedup' in col or 'Event' in col: 
+                    if 'Correctness' not in col and 'Config' not in col and 'Name' not in col and 'Size' not in col: 
+                         self.df_aggregated[col] = pd.to_numeric(self.df_aggregated[col], errors='coerce')
+        
+        for df_raw in [self.df_raw_benchmark, self.df_raw_profiling]:
+            if not df_raw.empty:
+                if 'threads' in df_raw.columns:
+                    df_raw['threads'] = pd.to_numeric(df_raw['threads'], errors='coerce')
+                if 'problem_size' in df_raw.columns:
+                    df_raw['problem_size'] = df_raw['problem_size'].astype(str)
+                if 'times_seconds' in df_raw.columns: 
+                    def process_times(times_entry):
+                        if isinstance(times_entry, list):
+                            return [float(t) for t in times_entry if isinstance(t, (int, float, str)) and str(t).replace('.', '', 1).isdigit()]
+                        if isinstance(times_entry, str):
+                            try: return [float(t.strip()) for t in times_entry.split(',') if t.strip().replace('.', '', 1).isdigit()]
+                            except ValueError: return []
+                        return []
+                    df_raw['times_seconds'] = df_raw['times_seconds'].apply(process_times)
+
+    def _apply_filters(self, df, filters, is_aggregated_df=False):
         dff = df.copy()
-        if not filters: return dff
+        if not filters or df.empty: return dff
+        
+        ex_col = 'Example Name' if is_aggregated_df else 'example_name'
+        th_col = 'Threads' if is_aggregated_df else 'threads'
+        ps_col = 'Problem Size' if is_aggregated_df else 'problem_size'
         
         example_filter_values = filters.get('examples')
-        if example_filter_values and 'example_name' in dff.columns:
-            dff = dff[dff['example_name'].isin(example_filter_values)]
+        if example_filter_values and ex_col in dff.columns:
+            dff = dff[dff[ex_col].isin(example_filter_values)]
 
         thread_filter_values = filters.get('threads')
-        if thread_filter_values and 'threads' in dff.columns:
+        if thread_filter_values and th_col in dff.columns:
             filter_threads_numeric = [pd.to_numeric(t, errors='coerce') for t in thread_filter_values]
             filter_threads_numeric = [t for t in filter_threads_numeric if pd.notna(t)]
-            if filter_threads_numeric: dff = dff[dff['threads'].isin(filter_threads_numeric)]
+            if filter_threads_numeric: dff = dff[dff[th_col].isin(filter_threads_numeric)]
 
         size_filter_values = filters.get('sizes')
-        if size_filter_values and 'problem_size' in dff.columns:
-            dff = dff[dff['problem_size'].isin([str(s) for s in size_filter_values])]
+        if size_filter_values and ps_col in dff.columns:
+            dff = dff[dff[ps_col].isin([str(s) for s in size_filter_values])]
         
-        if filters.get('correctness') and filters['correctness'] != 'ALL' and 'correctness_status' in dff.columns:
-            dff = dff[dff['correctness_status'].astype(str).str.upper() == filters['correctness']]
+        correctness_filter = filters.get('correctness')
+        if correctness_filter and correctness_filter != 'ALL':
+            if is_aggregated_df:
+                if 'CARTS Correctness' in dff.columns and 'OMP Correctness' in dff.columns:
+                     dff = dff[
+                        (dff['CARTS Correctness'].astype(str).str.upper() == correctness_filter) |
+                        (dff['OMP Correctness'].astype(str).str.upper() == correctness_filter)
+                    ]
+            elif 'correctness_status' in dff.columns: 
+                dff = dff[dff['correctness_status'].astype(str).str.upper() == correctness_filter]
         return dff
 
-    def get_filtered_data(self, filters=None):
-        if self.raw_df.empty: return pd.DataFrame()
-        return self._apply_filters(self.raw_df, filters)
+    def get_filtered_aggregated_data(self, filters=None):
+        if self.df_aggregated.empty: return pd.DataFrame()
+        return self._apply_filters(self.df_aggregated, filters, is_aggregated_df=True)
 
-    def get_benchmark_summary(self, filters=None):
-        if self.raw_df.empty: return pd.DataFrame()
-        dff = self.get_filtered_data(filters)
-        return self._generate_benchmark_metrics_from_df(dff)
+    def get_filtered_raw_benchmark_data(self, filters=None):
+        if self.df_raw_benchmark.empty: return pd.DataFrame()
+        return self._apply_filters(self.df_raw_benchmark, filters, is_aggregated_df=False)
+        
+    def get_benchmark_display_data(self, filters=None):
+        filtered_agg_df = self.get_filtered_aggregated_data(filters)
+        if filtered_agg_df.empty: return pd.DataFrame()
+        
+        t1_avg_times_map = {}
+        if not self.df_aggregated.empty:
+            t1_df = self.df_aggregated[self.df_aggregated['Threads'] == 1].copy()
+            for tc in ['CARTS Avg Time (s)', 'OMP Avg Time (s)']:
+                if tc in t1_df.columns:
+                    t1_df[tc] = pd.to_numeric(t1_df[tc], errors='coerce')
 
-    def _generate_benchmark_metrics_from_df(self, df_input):
-        if df_input.empty: return pd.DataFrame()
-        temp_df = df_input.copy()
-        if 'run_type' not in temp_df.columns: temp_df['run_type_temp'] = 'no_profile'
-        else: temp_df['run_type_temp'] = temp_df['run_type']
-        baseline_df = temp_df[temp_df['run_type_temp'].astype(str).str.lower() == 'no_profile'].copy()
-        if 'run_type_temp' in temp_df.columns and 'run_type' not in temp_df.columns :
-            baseline_df = baseline_df.drop(columns=['run_type_temp'])
-        if baseline_df.empty: return pd.DataFrame()
+            for _, row in t1_df.iterrows():
+                key = (row['Example Name'], row['Problem Size'])
+                t1_avg_times_map[key] = {
+                    'CARTS': row.get('CARTS Avg Time (s)'),
+                    'OMP': row.get('OMP Avg Time (s)')
+                }
+        
+        results_with_efficiency = []
+        for _, row_series in filtered_agg_df.iterrows():
+            row = row_series.to_dict()
+            key = (row['Example Name'], row['Problem Size'])
+            threads_N = row['Threads']
 
-        def process_times_robust(times_entry):
-            if isinstance(times_entry, str):
-                try: return [float(t.strip()) for t in times_entry.split(',') if t.strip()]
-                except ValueError: return []
-            elif isinstance(times_entry, list):
-                return [float(t) for t in times_entry if isinstance(t, (int, float))]
-            elif isinstance(times_entry, (int, float)): return [float(times_entry)]
-            return []
+            for version_prefix in ["CARTS", "OMP"]:
+                t1_avg_time_specific = t1_avg_times_map.get(key, {}).get(version_prefix)
+                tn_avg_time_specific_val = row.get(f'{version_prefix} Avg Time (s)')
+                tn_avg_time_specific = pd.to_numeric(tn_avg_time_specific_val, errors='coerce')
+                
+                efficiency = None
+                if pd.notna(threads_N) and threads_N > 1 and pd.notna(t1_avg_time_specific) and pd.notna(tn_avg_time_specific) and tn_avg_time_specific > 0:
+                    efficiency = t1_avg_time_specific / (tn_avg_time_specific * threads_N)
+                row[f'{version_prefix} Parallel Efficiency'] = efficiency
+            results_with_efficiency.append(row)
+        
+        return pd.DataFrame(results_with_efficiency) if results_with_efficiency else pd.DataFrame()
 
-        results = []
-        required_cols = ['example_name', 'problem_size', 'threads', 'version', 'times_seconds']
-        for col in required_cols:
-            if col not in baseline_df.columns:
-                if col == 'problem_size': baseline_df[col] = 'N/A'
-                elif col == 'times_seconds': baseline_df[col] = pd.Series([[] for _ in range(len(baseline_df))])
-                else: return pd.DataFrame()
+    def get_profiling_display_data(self, filters=None):
+        filtered_agg_df = self.get_filtered_aggregated_data(filters)
+        if filtered_agg_df.empty: return pd.DataFrame()
 
-        for (example, problem_size, threads, version), group in baseline_df.groupby(['example_name', 'problem_size', 'threads', 'version']):
-            all_times_flat = [item for sublist in group['times_seconds'].apply(process_times_robust) for item in sublist]
-            if not all_times_flat: continue
-            times_arr = np.array(all_times_flat)
-            results.append({
-                'example_name': example, 'problem_size': problem_size, 'threads': threads, 'version': version,
-                'mean_time': np.mean(times_arr), 'median_time': np.median(times_arr),
-                'min_time': np.min(times_arr), 'max_time': np.max(times_arr),
-                'stdev_time': np.std(times_arr) if len(times_arr) > 1 else 0,
-                'iterations': len(times_arr),
-                'correctness': group['correctness_status'].iloc[0] if 'correctness_status' in group.columns and not group['correctness_status'].empty else 'UNKNOWN'
-            })
-        summary_df = pd.DataFrame(results)
-        if summary_df.empty: return summary_df
+        melted_event_data = []
+        event_col_pattern = re.compile(r"(CARTS|OMP) Event (.+?)(?::u|:k)? (Avg|Median|Min|Max|Stdev)")
 
-        final_summary_list = []
-        for (example, problem_size), group_ex_ps in summary_df.groupby(['example_name', 'problem_size']):
-            t1_carts = group_ex_ps[(group_ex_ps['threads'] == 1) & (group_ex_ps['version'] == 'CARTS')]['mean_time'].values
-            t1_omp = group_ex_ps[(group_ex_ps['threads'] == 1) & (group_ex_ps['version'] == 'OMP')]['mean_time'].values
-            t1_carts_val = t1_carts[0] if len(t1_carts) > 0 else None
-            t1_omp_val = t1_omp[0] if len(t1_omp) > 0 else None
+        for _, row_series in filtered_agg_df.iterrows():
+            row_dict = row_series.to_dict()
+            common_data = {
+                'Example Name': row_dict.get('Example Name'),
+                'Problem Size': row_dict.get('Problem Size'),
+                'Threads': row_dict.get('Threads'),
+            }
+            for col_name, value in row_dict.items():
+                match = event_col_pattern.match(col_name)
+                if match and pd.notna(value):
+                    version, event_base_name, statistic = match.groups()
+                    prefix_len = len(version) + len(" Event ")
+                    suffix_len = len(statistic) +1 
+                    full_event_name_in_col = col_name[prefix_len:-suffix_len]
 
-            for _, row_series in group_ex_ps.iterrows():
-                row_dict = row_series.to_dict()
-                if row_dict['version'] == 'CARTS':
-                    omp_time_series = group_ex_ps[(group_ex_ps['threads'] == row_dict['threads']) & (group_ex_ps['version'] == 'OMP')]['mean_time']
-                    if len(omp_time_series) > 0 and omp_time_series.iloc[0] is not None and row_dict['mean_time'] > 0:
-                        row_dict['speedup_vs_other'] = omp_time_series.iloc[0] / row_dict['mean_time']
-                        row_dict['omp_time_for_comparison'] = omp_time_series.iloc[0]
-                elif row_dict['version'] == 'OMP':
-                    carts_time_series = group_ex_ps[(group_ex_ps['threads'] == row_dict['threads']) & (group_ex_ps['version'] == 'CARTS')]['mean_time']
-                    if len(carts_time_series) > 0 and carts_time_series.iloc[0] is not None:
-                        row_dict['carts_time_for_comparison'] = carts_time_series.iloc[0]
-                if row_dict['threads'] > 1:
-                    t1_baseline = t1_carts_val if row_dict['version'] == 'CARTS' else t1_omp_val
-                    if t1_baseline is not None and row_dict['mean_time'] > 0:
-                        row_dict['parallel_efficiency'] = t1_baseline / (row_dict['threads'] * row_dict['mean_time'])
-                final_summary_list.append(row_dict)
-        return pd.DataFrame(final_summary_list) if final_summary_list else pd.DataFrame()
+                    melted_event_data.append({
+                        **common_data,
+                        'Version': version,
+                        'Event Name': full_event_name_in_col.strip(), 
+                        'Statistic': statistic,
+                        'Value': pd.to_numeric(value, errors='coerce')
+                    })
+        
+        if not melted_event_data: return pd.DataFrame()
+        
+        events_df_long = pd.DataFrame(melted_event_data)
+        events_df_long.dropna(subset=['Value'], inplace=True)
+        
+        categorized_df = self._categorize_profiling_events(events_df_long)
+        
+        derived_metrics_list = []
+        grouped_for_derived = categorized_df.groupby(
+            ['Example Name', 'Problem Size', 'Threads', 'Version']
+        )
 
+        for group_key, group_df in grouped_for_derived:
+            instr_series = group_df[
+                (group_df['Event Name'].str.contains("instructions", case=False)) & 
+                (group_df['Statistic'] == 'Avg')
+            ]['Value']
+            cycles_series = group_df[
+                (group_df['Event Name'].str.contains("cycles", case=False)) & 
+                (~group_df['Event Name'].str.contains("stall", case=False)) &
+                (group_df['Statistic'] == 'Avg')
+            ]['Value']
 
-    def get_profiling_data(self, filters=None):
-        if self.raw_df.empty: return pd.DataFrame()
-        dff = self.get_filtered_data(filters)
-        if 'event_stats' not in dff.columns: return pd.DataFrame()
-        processed_profile_df = self._process_raw_profiling_data(dff)
-        if processed_profile_df.empty: return pd.DataFrame()
-        categorized_df = self._categorize_profiling_events(processed_profile_df)
+            if not instr_series.empty and not cycles_series.empty and cycles_series.iloc[0] > 0:
+                ipc = instr_series.iloc[0] / cycles_series.iloc[0]
+                derived_metrics_list.append({
+                    'Example Name': group_key[0], 'Problem Size': group_key[1], 
+                    'Threads': group_key[2], 'Version': group_key[3],
+                    'Event Name': 'IPC', 'Statistic': 'Mean', 
+                    'Value': ipc, 'category': 'CPU' 
+                })
+
+            misses_series = group_df[
+                (group_df['Event Name'].str.contains("cache-misses", case=False)) & 
+                (group_df['Statistic'] == 'Avg')
+            ]['Value']
+            refs_series = group_df[
+                (group_df['Event Name'].str.contains("cache-references", case=False)) &
+                (group_df['Statistic'] == 'Avg')
+            ]['Value']
+            
+            if not misses_series.empty and not refs_series.empty and refs_series.iloc[0] > 0:
+                miss_rate = misses_series.iloc[0] / refs_series.iloc[0]
+                derived_metrics_list.append({
+                    'Example Name': group_key[0], 'Problem Size': group_key[1], 
+                    'Threads': group_key[2], 'Version': group_key[3],
+                    'Event Name': 'Cache Miss Rate', 'Statistic': 'Mean',
+                    'Value': miss_rate, 'category': 'Cache'
+                })
+        
+        if derived_metrics_list:
+            derived_df = pd.DataFrame(derived_metrics_list)
+            final_profiling_df = pd.concat([categorized_df, derived_df], ignore_index=True)
+            return final_profiling_df
+        
         return categorized_df
 
-    def _process_raw_profiling_data(self, df_input):
-        if df_input.empty: return pd.DataFrame()
-        if 'event_stats' not in df_input.columns: return pd.DataFrame()
+    def _categorize_profiling_events(self, events_df_long):
+        if events_df_long.empty: return events_df_long
+        
+        if 'Event Name' not in events_df_long.columns:
+            print("Warning: 'Event Name' column not found for categorization.")
+            events_df_long['category'] = 'Other'
+            return events_df_long
 
-        temp_df = df_input.copy()
-        if 'run_type' not in temp_df.columns: temp_df['run_type_temp'] = 'profile'
-        else: temp_df['run_type_temp'] = temp_df['run_type']
-
-        profile_df = temp_df[(temp_df['run_type_temp'].astype(str).str.lower() == 'profile') & temp_df['event_stats'].notna()].copy()
-
-        if 'run_type_temp' in temp_df.columns and 'run_type' not in temp_df.columns:
-            profile_df = profile_df.drop(columns=['run_type_temp'])
-        if profile_df.empty: return pd.DataFrame()
-
-        results = []
-        for _, row_series in profile_df.iterrows():
-            row = row_series.to_dict()
-            event_stats_dict = row.get('event_stats')
-            if not isinstance(event_stats_dict, dict): continue
-
-            for event_name_raw, event_data_container in event_stats_dict.items():
-                event_name = event_name_raw.replace(":u", "")
-                values_list_or_str = None
-                if isinstance(event_data_container, dict):
-                    values_list_or_str = event_data_container.get('all')
-
-                current_values = []
-                if isinstance(values_list_or_str, str):
-                    try: current_values = [float(v.strip()) for v in values_list_or_str.split(',') if v.strip()]
-                    except ValueError: pass
-                elif isinstance(values_list_or_str, list):
-                    current_values = [float(v) for v in values_list_or_str if isinstance(v, (int, float))]
-
-                if not current_values: continue
-
-                value_array = np.array(current_values)
-                mean_val = np.mean(value_array)
-                results.append({
-                    'example_name': row.get('example_name'), 'problem_size': row.get('problem_size'),
-                    'threads': row.get('threads'), 'version': row.get('version'), 'event': event_name,
-                    'mean': mean_val, 'median': np.median(value_array), 'min': np.min(value_array),
-                    'max': np.max(value_array), 'stdev': np.std(value_array) if len(value_array) > 1 else 0,
-                    'cov': (np.std(value_array) / mean_val) if mean_val != 0 and len(value_array) > 1 else 0
-                })
-        return pd.DataFrame(results)
-
-    def _categorize_profiling_events(self, processed_profile_df):
-        if processed_profile_df.empty: return processed_profile_df
-        result_df = processed_profile_df.copy()
+        result_df = events_df_long.copy()
         categories = {
-            'Cache': ['cache-references', 'cache-misses', 'L1-dcache', 'L1-icache', 'l2_rqsts', 'LLC-loads', 'LLC-load-misses', 'LLC-stores', 'LLC-store-misses'],
-            'Memory': ['mem_inst_retired', 'mem-loads', 'mem-stores', 'cycle_activity.stalls_mem'],
-            'CPU': ['cycles', 'instructions', 'cpu-clock', 'task-clock', 'branch-instructions', 'branch-misses'],
-            'TLB': ['dTLB', 'iTLB', 'dTLB-load-misses', 'iTLB-load-misses'],
-            'Stalls': ['stalls', 'resource_stalls', 'cycle_activity.stalls_total', 'cycle_activity.stalls_l1d_miss', 'cycle_activity.stalls_l2_miss', 'cycle_activity.stalls_l3_miss']
+            'Cache': ['cache', 'L1-d', 'L1-i', 'L2', 'L3', 'LLC', 'l2_rqsts', 'l3_rqsts'],
+            'Memory': ['mem_', 'memory', 'bus-cycle', 'remote_access', 'frontend_mem', 'membound'], 
+            'CPU': ['cycle', 'instruction', 'branch', 'cpu-clock', 'task-clock', 'uops_issued', 'uops_retired', 'slots', 'int_misc', 'fp_assist'], 
+            'TLB': ['tlb', 'dTLB', 'iTLB'],
+            'Stalls': ['stall', 'resource_stall', 'cycle_activity.stall', 'lock'], 
+            'Branch': ['branch'], 
+            'Power': ['power/energy'],
         }
+        
         result_df['category'] = 'Other'
-        for category, patterns in categories.items():
-            for pattern in patterns:
-                result_df.loc[result_df['event'].astype(str).str.contains(pattern, case=False, na=False), 'category'] = category
-
-        derived_metrics = []
-        if not result_df.empty and all(col in result_df.columns for col in ['example_name', 'problem_size', 'threads', 'version', 'event', 'mean']):
-            for (ex, ps, th, ver), group in result_df.groupby(['example_name', 'problem_size', 'threads', 'version']):
-                refs_series = group[group['event'] == 'cache-references']['mean']
-                misses_series = group[group['event'] == 'cache-misses']['mean']
-                if not refs_series.empty and not misses_series.empty and refs_series.iloc[0] > 0:
-                    miss_rate = misses_series.iloc[0] / refs_series.iloc[0]
-                    derived_metrics.append({'example_name': ex, 'problem_size': ps, 'threads': th, 'version': ver, 'event': 'cache-miss-rate', 'mean': miss_rate, 'category': 'Cache'})
-
-                instr_series = group[group['event'] == 'instructions']['mean']
-                cycles_series = group[group['event'] == 'cycles']['mean']
-                if not instr_series.empty and not cycles_series.empty and cycles_series.iloc[0] > 0:
-                    ipc = instr_series.iloc[0] / cycles_series.iloc[0]
-                    derived_metrics.append({'example_name': ex, 'problem_size': ps, 'threads': th, 'version': ver, 'event': 'IPC', 'mean': ipc, 'category': 'CPU'})
-            if derived_metrics:
-                result_df = pd.concat([result_df, pd.DataFrame(derived_metrics)], ignore_index=True)
+        
+        result_df.loc[result_df['Event Name'].str.contains('stall|lock_contention', case=False, na=False), 'category'] = 'Stalls'
+        for pattern in categories['TLB']:
+            result_df.loc[result_df['Event Name'].str.contains(pattern, case=False, na=False), 'category'] = 'TLB'
+        for pattern in categories['Cache']:
+            result_df.loc[(result_df['category'].isin(['Other', 'CPU', 'Memory'])) & result_df['Event Name'].str.contains(pattern, case=False, na=False), 'category'] = 'Cache'
+        for pattern in categories['Memory']:
+             result_df.loc[(result_df['category'].isin(['Other', 'CPU'])) & result_df['Event Name'].str.contains(pattern, case=False, na=False), 'category'] = 'Memory'
+        for pattern in categories['Branch']:
+            result_df.loc[(result_df['category'].isin(['Other', 'CPU'])) & result_df['Event Name'].str.contains(pattern, case=False, na=False), 'category'] = 'Branch'
+        
+        cpu_core_events = ['cycles:u', 'cpu-clock:u', 'task-clock:u', 'instructions:u', 'uops_issued.any:u', 'uops_retired.all:u']
+        for cce in cpu_core_events:
+            result_df.loc[result_df['Event Name'].str.contains(cce, case=False, na=False) & (result_df['category'] == 'Other'), 'category'] = 'CPU'
+        
+        for pattern in categories['CPU']:
+            result_df.loc[(result_df['category'] == 'Other') & result_df['Event Name'].str.contains(pattern, case=False, na=False), 'category'] = 'CPU'
+        for pattern in categories['Power']:
+            result_df.loc[(result_df['category'] == 'Other') & result_df['Event Name'].str.contains(pattern, case=False, na=False), 'category'] = 'Power'
+            
         return result_df
 
     def get_system_info(self):
-        if self.raw_df.empty or 'system_information' not in self.raw_df.columns:
-            return None
-        for info in self.raw_df['system_information']:
-            if isinstance(info, dict): return info
-        return None
+        return self.system_info
 
     def get_overall_summary_stats(self, filters=None):
-        if self.raw_df.empty:
-            return {"total_examples": 0, "total_problem_sizes": 0, "total_threads": 0,
-                    "correctness_counts": {}, "carts_wins": 0, "omp_wins": 0, "ties": 0}
+        summary = self.overall_stats_json.copy()
+        summary_key_prefix = "Global" 
 
-        dff = self.get_filtered_data(filters)
-        if dff.empty:
-            return {"total_examples": 0, "total_problem_sizes": 0, "total_threads": 0,
-                    "correctness_counts": {}, "carts_wins": 0, "omp_wins": 0, "ties": 0}
+        filters_active = False
+        if filters:
+            available_opts = self.get_available_filter_options()
+            if filters.get('examples') and len(filters['examples']) < len(available_opts.get('examples',[])):
+                filters_active = True
+            if filters.get('threads') and len(filters['threads']) < len(available_opts.get('threads',[])):
+                filters_active = True
+            if filters.get('sizes') and len(filters['sizes']) < len(available_opts.get('sizes',[])):
+                filters_active = True
+            if filters.get('correctness') and filters['correctness'] != 'ALL':
+                filters_active = True
+        
+        if filters_active:
+            summary_key_prefix = "Filtered" 
+            filtered_agg_df = self.get_filtered_aggregated_data(filters)
+            if not filtered_agg_df.empty:
+                summary[f'{summary_key_prefix} Configs Compared'] = len(filtered_agg_df)
+                
+                if 'Speedup (OMP/CARTS)' in filtered_agg_df.columns:
+                    speedups = pd.to_numeric(filtered_agg_df['Speedup (OMP/CARTS)'], errors='coerce').dropna()
+                    if not speedups.empty:
+                        summary[f'{summary_key_prefix} CARTS Faster Configs'] = (speedups > 1.05).sum()
+                        summary[f'{summary_key_prefix} OMP Faster Configs'] = (speedups < 0.95).sum()
+                        summary[f'{summary_key_prefix} Tied Configs'] = ((speedups >= 0.95) & (speedups <= 1.05)).sum()
+                        
+                        valid_speedups_gt_zero = speedups[speedups > 0]
+                        if not valid_speedups_gt_zero.empty:
+                            summary[f'{summary_key_prefix} Geo. Mean Speedup (OMP/CARTS)'] = np.exp(np.mean(np.log(valid_speedups_gt_zero)))
+                        else:
+                            summary[f'{summary_key_prefix} Geo. Mean Speedup (OMP/CARTS)'] = None
+                        
+                        max_s_filt_val = speedups.max()
+                        min_s_filt_val = speedups.min()
+                        max_s_filt_row = filtered_agg_df.loc[speedups.idxmax()] if pd.notna(max_s_filt_val) and not speedups.empty else None
+                        min_s_filt_row = filtered_agg_df.loc[speedups.idxmin()] if pd.notna(min_s_filt_val) and not speedups.empty else None
+                        
+                        summary[f'{summary_key_prefix} Max Speedup'] = {
+                            "value": max_s_filt_val if not speedups.empty else None,
+                            "example_config": f"{max_s_filt_row['Example Name']} (S: {max_s_filt_row['Problem Size']}, T: {max_s_filt_row['Threads']})" if max_s_filt_row is not None else "N/A"
+                        }
+                        summary[f'{summary_key_prefix} Min Speedup'] = {
+                            "value": min_s_filt_val if not speedups.empty else None,
+                            "example_config": f"{min_s_filt_row['Example Name']} (S: {min_s_filt_row['Problem Size']}, T: {min_s_filt_row['Threads']})" if min_s_filt_row is not None else "N/A"
+                        }
+                    else: 
+                        for stat in ['CARTS Faster Configs', 'OMP Faster Configs', 'Tied Configs', 'Geo. Mean Speedup (OMP/CARTS)']:
+                            summary[f'{summary_key_prefix} {stat}'] = 0 if 'Configs' in stat else None
+                        summary[f'{summary_key_prefix} Max Speedup'] = {"value": None, "example_config": "N/A"}
+                        summary[f'{summary_key_prefix} Min Speedup'] = {"value": None, "example_config": "N/A"}
+            else: 
+                summary[f'{summary_key_prefix} Configs Compared'] = 0
+                for stat in ['CARTS Faster Configs', 'OMP Faster Configs', 'Tied Configs', 'Geo. Mean Speedup (OMP/CARTS)']:
+                     summary[f'{summary_key_prefix} {stat}'] = 0 if 'Configs' in stat else None
+                summary[f'{summary_key_prefix} Max Speedup'] = {"value": None, "example_config": "N/A"}
+                summary[f'{summary_key_prefix} Min Speedup'] = {"value": None, "example_config": "N/A"}
 
-        summary_stats = {
-            "total_examples": dff['example_name'].nunique() if 'example_name' in dff.columns else 0,
-            "total_problem_sizes": dff['problem_size'].nunique() if 'problem_size' in dff.columns else 0,
-            "total_threads": dff['threads'].nunique() if 'threads' in dff.columns else 0,
-            "correctness_counts": dff['correctness_status'].value_counts().to_dict() if 'correctness_status' in dff.columns else {},
-            "carts_wins": 0, "omp_wins": 0, "ties": 0
+        if filters_active:
+            original_keys = list(self.overall_stats_json.keys()) 
+            for k_original in original_keys: 
+                if not k_original.startswith("Global") and not k_original.startswith("Filtered"): 
+                    summary[f"Global {k_original.replace('_', ' ').title()}"] = summary.pop(k_original) 
+        else: 
+            original_keys = list(self.overall_stats_json.keys())
+            for k_original in original_keys:
+                 if not k_original.startswith("Global") and not k_original.startswith("Filtered"):
+                    summary[f"Global {k_original.replace('_', ' ').title()}"] = summary.pop(k_original)
+        return summary
+
+    def get_available_filter_options(self):
+        options = {
+            'examples': [], 'threads': [], 'sizes': [],
+            'correctness': [
+                {'label': 'All', 'value': 'ALL'},
+                {'label': 'Correct', 'value': 'CORRECT'},
+                {'label': 'Incorrect', 'value': 'INCORRECT'},
+                {'label': 'Timeout', 'value': 'TIMEOUT'},
+                {'label': 'Error Runtime', 'value': 'ERROR_RUNTIME'},
+                {'label': 'Unknown', 'value': 'UNKNOWN'},
+            ]
         }
-
-        benchmark_summary_df = self._generate_benchmark_metrics_from_df(dff)
-        if not benchmark_summary_df.empty and 'mean_time' in benchmark_summary_df.columns:
-            for _, group in benchmark_summary_df.groupby(['example_name', 'problem_size', 'threads']):
-                carts_run = group[group['version'] == 'CARTS']
-                omp_run = group[group['version'] == 'OMP']
-                if not carts_run.empty and not omp_run.empty:
-                    carts_time = carts_run['mean_time'].iloc[0]
-                    omp_time = omp_run['mean_time'].iloc[0]
-                    if pd.notna(carts_time) and pd.notna(omp_time):
-                        if carts_time < omp_time: summary_stats["carts_wins"] += 1
-                        elif omp_time < carts_time: summary_stats["omp_wins"] += 1
-                        else: summary_stats["ties"] += 1
-        return summary_stats
-
+        if not self.df_aggregated.empty:
+            if 'Example Name' in self.df_aggregated.columns:
+                options['examples'] = [{'label': str(ex), 'value': ex} for ex in sorted(self.df_aggregated['Example Name'].unique())]
+            if 'Threads' in self.df_aggregated.columns:
+                unique_threads = pd.to_numeric(self.df_aggregated['Threads'], errors='coerce').dropna().unique()
+                options['threads'] = [{'label': str(int(t)), 'value': int(t)} for t in sorted(unique_threads)]
+            if 'Problem Size' in self.df_aggregated.columns:
+                options['sizes'] = [{'label': str(s), 'value': s} for s in sorted(self.df_aggregated['Problem Size'].dropna().unique())]
+        
+        return options
 
 # --- PlotManager Class ---
 class PlotManager:
-    def __init__(self, plot_template, data_manager):
+    def __init__(self, plot_template, data_manager, help_manager):
         self.template = plot_template
-        self.dm = data_manager
-
-    # get_average_per_example_plot method removed
+        self.dm = data_manager 
+        self.help_manager = help_manager
 
     def get_scaling_plot(self, filters=None):
-        summary_df = self.dm.get_benchmark_summary(filters)
-        return create_scaling_plot(summary_df, self.template)
+        benchmark_data = self.dm.get_benchmark_display_data(filters)
+        return create_scaling_plot(benchmark_data, self.template)
 
     def get_efficiency_plot(self, filters=None):
-        summary_df = self.dm.get_benchmark_summary(filters)
-        return create_parallel_efficiency_plot(summary_df, self.template)
+        benchmark_data = self.dm.get_benchmark_display_data(filters)
+        return create_parallel_efficiency_plot(benchmark_data, self.template)
 
     def get_speedup_plot(self, filters=None):
-        summary_df = self.dm.get_benchmark_summary(filters)
-        return create_speedup_comparison_plot(summary_df, self.template)
+        benchmark_data = self.dm.get_benchmark_display_data(filters)
+        return create_speedup_comparison_plot(benchmark_data, self.template)
 
     def get_slowdown_plot(self, filters=None):
-        summary_df = self.dm.get_benchmark_summary(filters)
-        return create_slowdown_comparison_plot(summary_df, self.template)
+        benchmark_data = self.dm.get_benchmark_display_data(filters)
+        return create_slowdown_comparison_plot(benchmark_data, self.template)
 
-    def get_variability_plot_components(self, filters=None): # Renamed
-        dff_for_variability = self.dm.get_filtered_data(filters)
-        return create_execution_time_variability_plot_components(dff_for_variability, self.template)
+    def get_variability_plot_components(self, filters=None):
+        raw_benchmark_df = self.dm.get_filtered_raw_benchmark_data(filters)
+        return create_execution_time_variability_plot_components(raw_benchmark_df, self.template, self.help_manager)
 
     def get_cache_plot(self, filters=None):
-        profiling_df = self.dm.get_profiling_data(filters)
-        return create_cache_performance_comparison(profiling_df, self.template)
+        profiling_data = self.dm.get_profiling_display_data(filters)
+        return create_cache_performance_comparison(profiling_data, self.template)
 
     def get_ipc_plot(self, filters=None):
-        profiling_df = self.dm.get_profiling_data(filters)
-        return create_ipc_comparison_plot(profiling_df, self.template)
+        profiling_data = self.dm.get_profiling_display_data(filters)
+        return create_ipc_comparison_plot(profiling_data, self.template)
 
     def get_stalls_plot(self, filters=None):
-        profiling_df = self.dm.get_profiling_data(filters)
-        return create_stalls_analysis_plot(profiling_df, self.template)
+        profiling_data = self.dm.get_profiling_display_data(filters)
+        return create_stalls_analysis_plot(profiling_data, self.template)
 
     def get_generic_profiling_plot(self, category, filters=None):
-        profiling_df_categorized = self.dm.get_profiling_data(filters)
-        category_df = profiling_df_categorized[profiling_df_categorized['category'] == category]
+        profiling_data = self.dm.get_profiling_display_data(filters)
+        category_df = profiling_data[profiling_data['category'] == category]
+        
         if category_df.empty:
             fig = go.Figure().add_annotation(text=f"No data for profiling category: {category}", x=0.5, y=0.5, showarrow=False)
-            return self.template.apply(fig, plot_title=f"{category} Analysis", height=500)
+            return self.template.apply(fig, plot_title=f"{category} Analysis", height=500), "" 
 
-        if not category_df['event'].empty:
-            event_counts = category_df['event'].value_counts()
-            first_event = event_counts.index[0] if not event_counts.empty else category_df['event'].unique()[0]
+        first_event = "N/A"
+        if not category_df['Event Name'].empty:
+            event_counts = category_df['Event Name'].value_counts()
+            preferred_events = {
+                "Memory": ["mem_inst_retired.all_loads:u", "mem_inst_retired.all_stores:u"],
+                "Branch": ["branch-instructions:u", "branch-misses:u"]
+            }
+            
+            if category in preferred_events:
+                for pe in preferred_events[category]:
+                    if pe in event_counts.index:
+                        first_event = pe
+                        break
+            if first_event == "N/A": 
+                 first_event = event_counts.index[0] if not event_counts.empty else category_df['Event Name'].unique()[0]
+            
+            plot_df = category_df[
+                (category_df['Event Name'] == first_event) & 
+                (category_df['Statistic'].isin(['Avg', 'Mean']))
+            ]
 
             fig = go.Figure()
-            for (example, version, p_size), group_data in category_df[category_df['event']==first_event].groupby(['example_name', 'version', 'problem_size']):
-                group_data = group_data.sort_values('threads')
-                if 'threads' in group_data and 'mean' in group_data and not group_data['mean'].isnull().all():
-                    current_color = PRIMARY_COLOR if version == 'CARTS' else ACCENT_COLOR
-                    current_dash = 'solid' if version == 'CARTS' else 'dash'
-                    fig.add_trace(go.Scatter(
-                        x=group_data['threads'], y=group_data['mean'], name=f"{example} (S:{p_size}) - {version}",
-                        mode='lines+markers',
-                        line=dict(color=current_color, width=2, dash=current_dash),
-                        marker=dict(size=8, color=current_color, line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
-                        hovertemplate=f"<b>{example} - {version} (S:{p_size})</b><br>Event: {first_event}<br>Threads: %{{x}}<br>Mean: %{{y:,.2f}}<extra></extra>"
-                    ))
+            if not plot_df.empty:
+                for (example, version, p_size), group_data in plot_df.groupby(['Example Name', 'Version', 'Problem Size']):
+                    group_data = group_data.sort_values('Threads')
+                    if 'Threads' in group_data and 'Value' in group_data and not group_data['Value'].isnull().all():
+                        current_color = PRIMARY_COLOR if version == 'CARTS' else ACCENT_COLOR
+                        current_dash = 'solid' if version == 'CARTS' else 'dash'
+                        fig.add_trace(go.Scatter(
+                            x=group_data['Threads'], y=group_data['Value'], name=f"{example} (S:{p_size}) - {version}",
+                            mode='lines+markers',
+                            line=dict(color=current_color, width=2, dash=current_dash),
+                            marker=dict(size=8, color=current_color, line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
+                            hovertemplate=f"<b>{example} - {version} (S:{p_size})</b><br>Event: {first_event.split(':')[0]}<br>Threads: %{{x}}<br>Value: %{{y:,.2f}}<extra></extra>"
+                        ))
             if not fig.data:
                 fig.add_annotation(text=f"No plottable data for event: {first_event} in {category}", x=0.5, y=0.5, showarrow=False)
-            return self.template.apply(fig, plot_title=f"{category} Analysis: {first_event}",
-                                         xaxis_title="Threads", yaxis_title="Mean Value", height=550, legend_title="Ex (Size) - Ver")
+            
+            yaxis_type = 'linear'
+            if not plot_df.empty and 'Value' in plot_df.columns:
+                valid_values = plot_df['Value'].dropna()
+                if not valid_values.empty:
+                    min_val_pos = valid_values[valid_values > 0].min()
+                    max_val = valid_values.max()
+                    if pd.notna(min_val_pos) and pd.notna(max_val) and max_val / min_val_pos > 100:
+                        yaxis_type = 'log'
+            
+            specific_event_help = f"- Shows mean/average value for event: `{first_event.split(':')[0]}`."
+            
+            return self.template.apply(fig, plot_title=f"{category} Analysis: {first_event.split(':')[0]}",
+                                         xaxis_title="Threads", yaxis_title=f"Value ({yaxis_type})", height=550, legend_title="Ex (Size) - Ver").update_yaxes(type=yaxis_type), specific_event_help
         else:
             fig = go.Figure().add_annotation(text=f"No specific events found for category: {category}", x=0.5, y=0.5, showarrow=False)
-            return self.template.apply(fig, plot_title=f"{category} Analysis", height=500)
-
+            return self.template.apply(fig, plot_title=f"{category} Analysis", height=500), ""
 
 # --- TableManager Class ---
 class TableManager:
     def __init__(self, font_family):
         self.font_family = font_family
 
-    def create_benchmark_summary_table(self, summary_df):
-        if summary_df.empty:
+    def create_benchmark_summary_table(self, benchmark_display_df):
+        if benchmark_display_df.empty:
             return html.Div("No benchmarking data to display after filtering.", style={'color': ACCENT_COLOR, 'fontWeight': 'bold', 'padding': '12px'})
+        
+        cols_to_display = [
+            "Example Name", "Problem Size", "Threads",
+            "CARTS Avg Time (s)", "OMP Avg Time (s)",
+            "Speedup (OMP/CARTS)",
+            "CARTS Parallel Efficiency", "OMP Parallel Efficiency",
+            "CARTS Correctness", "OMP Correctness",
+            "CARTS Config Threads", "CARTS Config Nodes" 
+        ]
+        display_df_filtered_cols = benchmark_display_df[[col for col in cols_to_display if col in benchmark_display_df.columns]].copy()
 
-        formatted_data = []
-        for _, row in summary_df.iterrows():
-            formatted_data.append({
-                'Example': row['example_name'], 'Size': format_number(row['problem_size']),
-                'Threads': format_number(row['threads']), 'Version': row['version'],
-                'Mean (s)': format_number(row['mean_time']), 'Median (s)': format_number(row['median_time']),
-                'Min (s)': format_number(row['min_time']), 'Max (s)': format_number(row['max_time']),
-                'Stdev (s)': format_number(row['stdev_time']), 'Iterations': format_number(row['iterations']),
-                'Correctness': str(row.get('correctness','UNKNOWN')).upper(),
-                'Speedup': format_number(row.get('speedup_vs_other', None)),
-                'Efficiency': format_number(row.get('parallel_efficiency', None))
-            })
+        for col in display_df_filtered_cols.columns:
+            if "Time (s)" in col or "Speedup" in col or "Efficiency" in col :
+                display_df_filtered_cols[col] = display_df_filtered_cols[col].apply(lambda x: format_number(x, 4))
+            elif "Threads" == col or "Config Threads" in col or "Config Nodes" in col:
+                 display_df_filtered_cols[col] = display_df_filtered_cols[col].apply(lambda x: format_number(x, 0))
 
-        columns = [{"name": col_name, "id": col_name} for col_name in formatted_data[0].keys()] if formatted_data else []
+        data_for_table = display_df_filtered_cols.to_dict('records')
+        columns_for_table = [{"name": col_name, "id": col_name} for col_name in display_df_filtered_cols.columns]
 
         return dash_table.DataTable(
-            data=formatted_data, columns=columns, page_size=10,
-            style_table={'overflowX': 'auto', 'borderRadius': '10px', 'boxShadow': '0 2px 8px rgba(44,111,187,0.10)'},
-            style_cell={**StyleManager.TABLE_CELL_STYLE, 'fontFamily': self.font_family},
-            style_header={**StyleManager.TABLE_HEADER_STYLE, 'fontFamily': self.font_family},
+            data=data_for_table, columns=columns_for_table, page_size=10,
+            style_table={'overflowX': 'auto', 'borderRadius': '8px', 'boxShadow': '0 2px 8px rgba(0,0,0,0.07)'},
+            style_cell={**StyleManager.TABLE_CELL_STYLE},
+            style_header={**StyleManager.TABLE_HEADER_STYLE},
             style_cell_conditional=[
-                {'if': {'column_id': c}, 'textAlign': 'right'} for c in ['Size', 'Threads', 'Mean (s)', 'Median (s)', 'Min (s)', 'Max (s)', 'Stdev (s)', 'Iterations', 'Speedup', 'Efficiency']
+                {'if': {'column_id': c}, 'textAlign': 'right'} for c in display_df_filtered_cols.columns if 'Time' in c or 'Speedup' in c or 'Efficiency' in c or 'Threads' in c or 'Nodes' in c
             ] + [
-                {'if': {'column_id': c}, 'textAlign': 'center'} for c in ['Example', 'Version', 'Correctness']
+                {'if': {'column_id': c}, 'textAlign': 'left'} for c in ["Example Name", "Problem Size"]
+            ] + [
+                {'if': {'column_id': c}, 'textAlign': 'center'} for c in display_df_filtered_cols.columns if 'Correctness' in c
             ],
             style_data_conditional=[
-                {'if': {'column_id': 'Correctness', 'filter_query': '{Correctness} = CORRECT'}, 'backgroundColor': '#e6fae6', 'color': '#1a7f37'},
-                {'if': {'column_id': 'Correctness', 'filter_query': '{Correctness} != CORRECT'}, 'backgroundColor': '#fff3e6', 'color': '#b26a00'},
-                {'if': {'column_id': 'Speedup', 'filter_query': '{Speedup} > 1'}, 'backgroundColor': '#e6fae6', 'color': '#1a7f37'},
-                {'if': {'column_id': 'Speedup', 'filter_query': '{Speedup} < 1'}, 'backgroundColor': '#fff3e6', 'color': '#b26a00'},
-                {'if': {'column_id': 'Efficiency', 'filter_query': '{Efficiency} > 0.8'}, 'backgroundColor': '#e6fae6', 'color': '#1a7f37'},
-                {'if': {'column_id': 'Efficiency', 'filter_query': '{Efficiency} < 0.5'}, 'backgroundColor': '#fff3e6', 'color': '#b26a00'},
+                {'if': {'column_id': col, 'filter_query': f'{{{col}}} = CORRECT'}, 'backgroundColor': '#d4edda', 'color': '#155724'} for col in ['CARTS Correctness', 'OMP Correctness'] 
+            ] + [
+                {'if': {'column_id': col, 'filter_query': f'{{{col}}} != CORRECT && {{{col}}} != "N/A" && {{{col}}} != "-"'}, 'backgroundColor': '#f8d7da', 'color': '#721c24'} for col in ['CARTS Correctness', 'OMP Correctness'] 
+            ] + [
+                {'if': {'column_id': 'Speedup (OMP/CARTS)', 'filter_query': '{Speedup (OMP/CARTS)} > 1.05'}, 'color': SUCCESS_COLOR, 'fontWeight': 'bold'},
+                {'if': {'column_id': 'Speedup (OMP/CARTS)', 'filter_query': '{Speedup (OMP/CARTS)} < 0.95'}, 'color': ERROR_COLOR, 'fontWeight': 'bold'},
             ],
             sort_action='native', filter_action='native', style_as_list_view=True,
         )
 
-    def create_profiling_summary_table(self, profiling_stats_df):
-        if profiling_stats_df.empty:
+    def create_profiling_summary_table(self, profiling_display_df):
+        if profiling_display_df.empty:
             return html.Div("No profiling statistics to display after filtering or processing.", style={'padding': '10px', 'color': WARNING_COLOR})
 
-        formatted_data = []
-        for _, row in profiling_stats_df.iterrows():
-            formatted_data.append({
-                'Example': row.get('example_name', 'N/A'),
-                'Size': format_number(row.get('problem_size', None)),
-                'Threads': format_number(row.get('threads', None)),
-                'Version': row.get('version', 'N/A'),
-                'Event': row.get('event', 'N/A'),
-                'Mean': format_number(row.get('mean', None)),
-                'Median': format_number(row.get('median', None)),
-                'Min': format_number(row.get('min', None)),
-                'Max': format_number(row.get('max', None)),
-                'Stdev': format_number(row.get('stdev', None)),
-            })
+        cols_to_show = ['Example Name', 'Problem Size', 'Threads', 'Version', 'Event Name', 'Statistic', 'Value', 'category']
+        table_df = profiling_display_df[[col for col in cols_to_show if col in profiling_display_df.columns]].copy()
+        
+        if 'Value' in table_df.columns:
+            table_df['Value_Formatted'] = table_df['Value'].apply(lambda x: format_number(x, 4)) 
+            is_rate_ipc = table_df['Event Name'].str.contains("Rate|IPC", case=False, na=False)
+            table_df.loc[is_rate_ipc, 'Value_Formatted'] = table_df.loc[is_rate_ipc, 'Value'].apply(lambda x: format_number(x, 3))
+            is_large_count = table_df['Value'] > 1000 
+            table_df.loc[is_large_count & ~is_rate_ipc, 'Value_Formatted'] = table_df.loc[is_large_count & ~is_rate_ipc, 'Value'].apply(lambda x: format_number(x, 0))
+            table_df['Value'] = table_df['Value_Formatted']
+            table_df.drop(columns=['Value_Formatted'], inplace=True)
 
-        columns = [{"name": col_name, "id": col_name} for col_name in formatted_data[0].keys()] if formatted_data else []
+        data_for_table = table_df.to_dict('records')
+        columns_for_table = [{"name": col_name, "id": col_name} for col_name in table_df.columns]
 
         return dash_table.DataTable(
-            data=formatted_data, columns=columns, page_size=10,
-            style_table={'overflowX': 'auto', 'borderRadius': '10px', 'boxShadow': '0 2px 8px rgba(44,111,187,0.10)'},
-            style_cell={**StyleManager.TABLE_CELL_STYLE, 'fontFamily': self.font_family},
-            style_header={**StyleManager.TABLE_HEADER_STYLE, 'fontFamily': self.font_family},
-            style_cell_conditional=[{'if': {'column_id': c}, 'textAlign': 'right'} for c in ['Size', 'Threads', 'Mean', 'Median', 'Min', 'Max', 'Stdev']] +
-                                    [{'if': {'column_id': c}, 'textAlign': 'center'} for c in ['Example', 'Version', 'Event']],
-            style_data_conditional=[
-                {'if': {'column_id': 'Stdev', 'filter_query': '{Stdev} >= 0.1'}, 'backgroundColor': '#fff3e6', 'color': '#b26a00'},
-                {'if': {'column_id': 'Stdev', 'filter_query': '{Stdev} < 0.1'}, 'backgroundColor': '#e6fae6', 'color': '#1a7f37'},
-            ], style_as_list_view=True, sort_action='native', filter_action='native',
+            data=data_for_table, columns=columns_for_table, page_size=15,
+            style_table={'overflowX': 'auto', 'borderRadius': '8px', 'boxShadow': '0 2px 8px rgba(0,0,0,0.07)'},
+            style_cell={**StyleManager.TABLE_CELL_STYLE, 'minWidth': '80px', 'maxWidth': '200px', 'overflow': 'hidden', 'textOverflow': 'ellipsis'},
+            style_header={**StyleManager.TABLE_HEADER_STYLE},
+            style_cell_conditional=[
+                {'if': {'column_id': c}, 'textAlign': 'right'} for c in ['Threads', 'Value']
+            ] + [
+                {'if': {'column_id': c}, 'textAlign': 'left'} for c in ['Example Name', 'Problem Size', 'Event Name', 'category']
+            ] + [
+                 {'if': {'column_id': c}, 'textAlign': 'center'} for c in ['Version', 'Statistic']
+            ],
+            sort_action='native', filter_action='native', style_as_list_view=True,
+            tooltip_data=[
+                {column: {'value': str(value), 'type': 'markdown'} for column, value in row.items()}
+                for row in data_for_table
+            ],
+            tooltip_duration=None
         )
+
+# --- Plotting functions ---
+def create_scaling_plot(benchmark_display_df, template):
+    if benchmark_display_df.empty:
+        fig = go.Figure().add_annotation(text="No scaling data available", x=0.5, y=0.5, showarrow=False)
+        return template.apply(fig, plot_title="Execution Time Scaling", height=400)
+
+    examples = sorted(benchmark_display_df['Example Name'].unique())
+    num_examples = len(examples)
+    if num_examples == 0:
+        fig = go.Figure().add_annotation(text="No examples for scaling plot", x=0.5, y=0.5, showarrow=False)
+        return template.apply(fig, plot_title="Execution Time Scaling", height=400)
+    
+    cols = min(3, num_examples); rows = (num_examples + cols - 1) // cols
+    fig = make_subplots(rows=rows, cols=cols, subplot_titles=[f"Ex: {ex}" for ex in examples],
+                        shared_xaxes=True, shared_yaxes=False, vertical_spacing=0.22, horizontal_spacing=0.08)
+    legend_added = set()
+
+    for i, example in enumerate(examples):
+        row_idx, col_idx = i // cols + 1, i % cols + 1
+        example_data = benchmark_display_df[benchmark_display_df['Example Name'] == example]
+        problem_sizes = sorted(example_data['Problem Size'].unique())
+
+        for ps_idx, problem_size in enumerate(problem_sizes):
+            size_group = example_data[example_data['Problem Size'] == problem_size]
+            if size_group.empty: continue
+
+            for version_prefix, time_col, line_dash, color in [
+                ("CARTS", "CARTS Avg Time (s)", "solid", PRIMARY_COLOR),
+                ("OMP", "OMP Avg Time (s)", "dash", ACCENT_COLOR)
+            ]:
+                if time_col not in size_group.columns: continue
+                ver_group = size_group[['Threads', time_col]].copy()
+                ver_group['Threads'] = pd.to_numeric(ver_group['Threads'], errors='coerce')
+                ver_group[time_col] = pd.to_numeric(ver_group[time_col], errors='coerce')
+                ver_group.dropna(subset=['Threads', time_col], inplace=True)
+                ver_group.sort_values('Threads', inplace=True)
+
+                if ver_group.empty: continue
+                
+                legend_name = f"{version_prefix} (S: {problem_size})"
+                show_legend_trace = legend_name not in legend_added
+                if show_legend_trace: legend_added.add(legend_name)
+
+                fig.add_trace(go.Scatter(
+                    x=ver_group['Threads'], y=ver_group[time_col], mode='lines+markers', name=legend_name,
+                    line=dict(color=color, width=2, dash=line_dash),
+                    marker=dict(size=8, color=color, line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
+                    legendgroup=legend_name, showlegend=show_legend_trace,
+                    hovertemplate=f"<b>{example} - {version_prefix}</b><br>Size: {problem_size}<br>Threads: %{{x}}<br>Time: %{{y:.4f}} s<extra></extra>"
+                ), row=row_idx, col=col_idx)
+        
+        fig.update_xaxes(title_text="Threads", type='category', row=row_idx, col=col_idx, title_standoff=5)
+        fig.update_yaxes(title_text="Avg Time (s)", type='log', row=row_idx, col=col_idx, title_standoff=5)
+
+    calculated_height = max(500, 300 * rows)
+    fig = template.apply(fig, plot_title="Execution Time Scaling by Example",
+                        height=calculated_height, legend_title="Version (Size)",
+                        xaxis_title="Threads", yaxis_title="Avg Time (s)")
+    # Ensure all subplots have consistent style
+    for i in range(1, rows * cols + 1):
+        xaxis_name = f'xaxis{i}' if i > 1 else 'xaxis'
+        yaxis_name = f'yaxis{i}' if i > 1 else 'yaxis'
+        fig.layout[xaxis_name].update(
+            title_font=dict(size=template.xaxis_title_size, color=NEUTRAL_COLOR, family=template.font_family),
+            tickfont=dict(size=template.font_size - 2, family=template.font_family, color=NEUTRAL_COLOR),
+            gridcolor=template.grid_color, showgrid=True,
+            showline=True, linecolor=template.axis_color, ticks='outside', automargin=True
+        )
+        fig.layout[yaxis_name].update(
+            title_font=dict(size=template.xaxis_title_size, color=NEUTRAL_COLOR, family=template.font_family),
+            tickfont=dict(size=template.font_size - 2, family=template.font_family, color=NEUTRAL_COLOR),
+            gridcolor=template.grid_color, showgrid=True,
+            showline=True, linecolor=template.axis_color, ticks='outside', automargin=True
+        )
+    return fig
+
+def create_speedup_comparison_plot(benchmark_display_df, template):
+    speedup_col = 'Speedup (OMP/CARTS)'
+    if benchmark_display_df.empty or speedup_col not in benchmark_display_df.columns:
+        fig = go.Figure().add_annotation(text="No speedup data available", x=0.5, y=0.5, showarrow=False)
+        return template.apply(fig, plot_title="OMP vs CARTS Speedup", height=500)
+
+    df_to_plot = benchmark_display_df.copy()
+    df_to_plot[speedup_col] = pd.to_numeric(df_to_plot[speedup_col], errors='coerce')
+    df_to_plot.dropna(subset=[speedup_col], inplace=True)
+
+    if df_to_plot.empty:
+        fig = go.Figure().add_annotation(text="No valid speedup values to plot", x=0.5, y=0.5, showarrow=False)
+        return template.apply(fig, plot_title="OMP vs CARTS Speedup", height=500)
+
+    fig = go.Figure()
+    fig.add_shape(type="line", x0=0, y0=1, x1=1, y1=1, line=dict(color="gray", width=1, dash="dash"), xref="paper", yref="y")
+
+    for (example, problem_size), group in df_to_plot.groupby(['Example Name', 'Problem Size']):
+        group = group.sort_values('Threads')
+        if group.empty: continue
+
+        carts_time_series = pd.to_numeric(group.get('CARTS Avg Time (s)'), errors='coerce').apply(lambda x: format_number(x,4))
+        omp_time_series = pd.to_numeric(group.get('OMP Avg Time (s)'), errors='coerce').apply(lambda x: format_number(x,4))
+        
+        customdata_stack = np.stack((
+            group['Problem Size'].astype(str),
+            omp_time_series,
+            carts_time_series
+        ), axis=-1)
+
+        fig.add_trace(go.Scatter(
+            x=group['Threads'], y=group[speedup_col],
+            mode='lines+markers', name=f"{example} (S: {problem_size})",
+            line=dict(color=PRIMARY_COLOR, width=2),
+            marker=dict(size=8, color=PRIMARY_COLOR, line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
+            customdata=customdata_stack,
+            hovertemplate=(
+                f"<b>{example}</b> (Size: %{{customdata[0]}})<br>" +
+                "Threads: %{x}<br>" +
+                "OMP/CARTS Speedup: %{y:.2f}x<br>" +
+                "OMP Avg Time: %{customdata[1]}s<br>" +
+                "CARTS Avg Time: %{customdata[2]}s<extra></extra>"
+            )
+        ))
+    
+    y_max_data = df_to_plot[speedup_col].max()
+    y_min_data = df_to_plot[speedup_col].min()
+    y_upper_plot_limit = max(1.5, y_max_data * 1.1) if pd.notna(y_max_data) else 1.5
+    y_lower_plot_limit = min(0.5, y_min_data * 0.9) if pd.notna(y_min_data) else 0.5
+
+    fig.update_layout(
+        shapes=[dict(type="rect", xref="paper", yref="y", x0=0,y0=y_lower_plot_limit,x1=1,y1=1,fillcolor="rgba(255,0,0,0.05)",layer="below",line_width=0), 
+                dict(type="rect", xref="paper", yref="y", x0=0,y0=1,x1=1,y1=y_upper_plot_limit,fillcolor="rgba(0,255,0,0.05)",layer="below",line_width=0)], 
+        annotations=[dict(x=0.95,y=min(0.8, y_min_data*1.1 if pd.notna(y_min_data) and y_min_data < 1 else 0.8),xref="paper",yref="y",text="CARTS Slower",showarrow=False,font=dict(size=12,color=ERROR_COLOR)),
+                     dict(x=0.95,y=max(1.2, y_max_data*0.9 if pd.notna(y_max_data) and y_max_data > 1 else 1.2),xref="paper",yref="y",text="CARTS Faster",showarrow=False,font=dict(size=12,color=SUCCESS_COLOR))],
+        xaxis=dict(type='category'),
+        yaxis_range=[y_lower_plot_limit, y_upper_plot_limit]
+    )
+    return template.apply(fig, plot_title="OMP vs CARTS Performance (OMP Avg Time / CARTS Avg Time)",
+                          xaxis_title="Threads", yaxis_title="Speedup (OMP/CARTS)",
+                          height=550, legend_title="Example (Size)")
+
+def create_slowdown_comparison_plot(benchmark_display_df, template):
+    speedup_col = 'Speedup (OMP/CARTS)'
+    if benchmark_display_df.empty or speedup_col not in benchmark_display_df.columns:
+        fig = go.Figure().add_annotation(text="No data for slowdown comparison", x=0.5, y=0.5, showarrow=False)
+        return template.apply(fig, plot_title="CARTS vs OMP Slowdown", height=500)
+
+    df_to_plot = benchmark_display_df.copy()
+    df_to_plot[speedup_col] = pd.to_numeric(df_to_plot[speedup_col], errors='coerce')
+    df_to_plot.dropna(subset=[speedup_col], inplace=True)
+    df_to_plot['Slowdown (CARTS/OMP)'] = df_to_plot[speedup_col].apply(lambda x: 1/x if x != 0 else np.nan)
+    df_to_plot.replace([np.inf, -np.inf], np.nan, inplace=True)
+    df_to_plot.dropna(subset=['Slowdown (CARTS/OMP)'], inplace=True)
+
+    if df_to_plot.empty:
+        fig = go.Figure().add_annotation(text="No valid slowdown values to plot", x=0.5, y=0.5, showarrow=False)
+        return template.apply(fig, plot_title="CARTS vs OMP Slowdown", height=500)
+
+    fig = go.Figure()
+    fig.add_shape(type="line", x0=0, y0=1, x1=1, y1=1, line=dict(color="gray", width=1, dash="dash"), xref="paper", yref="y")
+
+    for (example, problem_size), group in df_to_plot.groupby(['Example Name', 'Problem Size']):
+        group = group.sort_values('Threads')
+        if group.empty: continue
+        
+        carts_time_series = pd.to_numeric(group.get('CARTS Avg Time (s)'), errors='coerce').apply(lambda x: format_number(x,4))
+        omp_time_series = pd.to_numeric(group.get('OMP Avg Time (s)'), errors='coerce').apply(lambda x: format_number(x,4))
+
+        customdata_stack = np.stack((
+            group['Problem Size'].astype(str),
+            carts_time_series,
+            omp_time_series
+        ), axis=-1)
+
+        fig.add_trace(go.Scatter(
+            x=group['Threads'], y=group['Slowdown (CARTS/OMP)'],
+            mode='lines+markers', name=f"{example} (S: {problem_size})",
+            line=dict(color=ACCENT_COLOR, width=2, dash='dash'), 
+            marker=dict(size=8, color=ACCENT_COLOR, line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
+            customdata=customdata_stack,
+            hovertemplate=(
+                f"<b>{example}</b> (Size: %{{customdata[0]}})<br>" +
+                "Threads: %{x}<br>" +
+                "CARTS/OMP Slowdown: %{y:.2f}x<br>" + 
+                "CARTS Avg Time: %{customdata[1]}s<br>" +
+                "OMP Avg Time: %{customdata[2]}s<extra></extra>"
+            )
+        ))
+    
+    y_max_data = df_to_plot['Slowdown (CARTS/OMP)'].max()
+    y_min_data = df_to_plot['Slowdown (CARTS/OMP)'].min()
+    y_upper_plot_limit = max(1.5, y_max_data * 1.1) if pd.notna(y_max_data) else 1.5
+    y_lower_plot_limit = min(0.5, y_min_data * 0.9) if pd.notna(y_min_data) else 0.5
+
+    fig.update_layout(
+        shapes=[dict(type="rect", xref="paper", yref="y", x0=0,y0=y_lower_plot_limit,x1=1,y1=1,fillcolor="rgba(0,255,0,0.05)",layer="below",line_width=0), 
+                dict(type="rect", xref="paper", yref="y", x0=0,y0=1,x1=1,y1=y_upper_plot_limit,fillcolor="rgba(255,0,0,0.05)",layer="below",line_width=0)], 
+        annotations=[dict(x=0.95,y=min(0.8, y_min_data*1.1 if pd.notna(y_min_data) and y_min_data < 1 else 0.8),xref="paper",yref="y",text="CARTS Faster",showarrow=False,font=dict(size=12,color=SUCCESS_COLOR)),
+                     dict(x=0.95,y=max(1.2, y_max_data*0.9 if pd.notna(y_max_data) and y_max_data > 1 else 1.2),xref="paper",yref="y",text="CARTS Slower",showarrow=False,font=dict(size=12,color=ERROR_COLOR))],
+        xaxis=dict(type='category'),
+        yaxis_range=[y_lower_plot_limit, y_upper_plot_limit]
+    )
+    return template.apply(fig, plot_title="CARTS vs OMP Performance (CARTS Avg Time / OMP Avg Time)",
+                          xaxis_title="Threads", yaxis_title="Slowdown (CARTS/OMP)",
+                          height=550, legend_title="Example (Size)")
+
+def create_parallel_efficiency_plot(benchmark_display_df, template):
+    if benchmark_display_df.empty:
+        fig = go.Figure().add_annotation(text="No parallel efficiency data", x=0.5, y=0.5, showarrow=False)
+        return template.apply(fig, plot_title="Parallel Efficiency", height=500)
+
+    df_plot = benchmark_display_df.copy()
+    df_plot['Threads'] = pd.to_numeric(df_plot['Threads'], errors='coerce')
+    df_plot = df_plot[df_plot['Threads'] > 1]
+    
+    if df_plot.empty:
+        fig = go.Figure().add_annotation(text="No multi-threaded data for efficiency plot", x=0.5, y=0.5, showarrow=False)
+        return template.apply(fig, plot_title="Parallel Efficiency", height=500)
+
+    fig = go.Figure()
+    max_threads_val = df_plot['Threads'].max()
+    if pd.notna(max_threads_val) and max_threads_val >= 2:
+        thread_ticks = sorted(df_plot['Threads'].unique())
+        if thread_ticks:
+            fig.add_trace(go.Scatter(x=thread_ticks, y=[1.0]*len(thread_ticks),
+                                 mode='lines', name='Ideal Scaling', line=dict(color='grey', dash='dash', width=1.5)))
+
+    for (example, problem_size), group_ex_ps in df_plot.groupby(['Example Name', 'Problem Size']):
+        for version_prefix, eff_col, line_dash, color in [
+            ("CARTS", "CARTS Parallel Efficiency", "solid", PRIMARY_COLOR),
+            ("OMP", "OMP Parallel Efficiency", "dash", ACCENT_COLOR)
+        ]:
+            if eff_col not in group_ex_ps.columns: continue
+            
+            group_ver = group_ex_ps[['Threads', eff_col]].copy()
+            group_ver[eff_col] = pd.to_numeric(group_ver[eff_col], errors='coerce')
+            group_ver.dropna(subset=['Threads', eff_col], inplace=True)
+            group_ver.sort_values('Threads', inplace=True)
+
+            if group_ver.empty: continue
+
+            fig.add_trace(go.Scatter(
+                x=group_ver['Threads'], y=group_ver[eff_col], mode='lines+markers',
+                name=f"{example} - {version_prefix} (S: {problem_size})",
+                line=dict(color=color, width=2, dash=line_dash),
+                marker=dict(size=8, color=color, line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
+                hovertemplate=f"<b>{example} - {version_prefix}</b> (S: {problem_size})<br>Threads: %{{x}}<br>Efficiency: %{{y:.3f}}<extra></extra>"
+            ))
+    
+    all_eff_values = pd.concat([
+        pd.to_numeric(df_plot['CARTS Parallel Efficiency'], errors='coerce').dropna() if 'CARTS Parallel Efficiency' in df_plot else pd.Series(dtype=float),
+        pd.to_numeric(df_plot['OMP Parallel Efficiency'], errors='coerce').dropna() if 'OMP Parallel Efficiency' in df_plot else pd.Series(dtype=float)
+    ])
+    max_eff = all_eff_values.max() if not all_eff_values.empty else 1.1
+    
+    fig.update_layout(yaxis_range=[0, max(1.1, max_eff * 1.05 if pd.notna(max_eff) else 1.1)], xaxis=dict(type='category'))
+    return template.apply(fig, plot_title="Parallel Efficiency (Strong Scaling)", xaxis_title="Threads",
+                          yaxis_title="Efficiency", height=550, legend_title="Ex - Ver (Size)")
+
+def create_execution_time_variability_plot_components(raw_benchmark_df, template, help_manager):
+    if raw_benchmark_df.empty or 'times_seconds' not in raw_benchmark_df.columns:
+        return [html.Div("No raw benchmark data for variability plots.", style={'padding':'10px', 'textAlign':'center', 'color': WARNING_COLOR})], None
+
+    records = []
+    for _, row_series in raw_benchmark_df.iterrows():
+        row = row_series.to_dict()
+        current_times = row.get('times_seconds', []) 
+        if not isinstance(current_times, list): current_times = [] 
+
+        for t_val in current_times:
+            records.append({
+                'example_name': row.get('example_name', 'Unknown Example'),
+                'problem_size': str(row.get('problem_size', 'N/A')),
+                'threads': row.get('threads', 1), 
+                'version': row.get('version', 'Unknown Version'),
+                'time': t_val 
+            })
+    
+    flat_df_for_variability = pd.DataFrame(records)
+    if flat_df_for_variability.empty:
+        return [html.Div("No timing data points to plot variability.", style={'padding': '10px', 'textAlign': 'center', 'color': WARNING_COLOR})], None
+
+    flat_df_for_variability['threads'] = pd.to_numeric(flat_df_for_variability['threads'], errors='coerce').fillna(0).astype(int)
+    unique_examples = sorted(flat_df_for_variability['example_name'].unique())
+
+    if not unique_examples:
+        return [html.Div("No examples available for variability plots.", style={'padding':'10px', 'textAlign':'center', 'color': WARNING_COLOR})], None
+
+    sub_tabs_children = []
+    base_variability_help = help_manager.get_help_text("variability_base")
+
+    for example_name in unique_examples:
+        example_specific_df = flat_df_for_variability[flat_df_for_variability['example_name'] == example_name]
+        fig_content = None
+        sanitized_example_name = re.sub(r'\W+', '_', example_name)
+
+        if example_specific_df.empty or 'time' not in example_specific_df.columns or example_specific_df['time'].isnull().all():
+            fig_content = html.Div(f"No plottable variability data for example: {example_name}", style={'padding':'10px', 'textAlign':'center'})
+        else:
+            fig = px.box(example_specific_df, x='threads', y='time', color='version',
+                         facet_col='problem_size', facet_col_wrap=2, 
+                         boxmode='group',
+                         labels={'time': 'Execution Time (s)', 'threads': 'Threads', 'version': 'Version', 'problem_size': 'Problem Size'},
+                         category_orders={'threads': sorted(example_specific_df['threads'].unique())},
+                         color_discrete_map={'CARTS': PRIMARY_COLOR, 'OMP': ACCENT_COLOR}
+                        )
+            fig.update_yaxes(type='log', matches=None, title_standoff=10) 
+            fig.update_xaxes(matches=None, type='category', title_standoff=10) 
+            
+            num_problem_sizes = example_specific_df['problem_size'].nunique()
+            plot_height = max(450, 250 * ((num_problem_sizes + 1) // 2) ) 
+
+            fig = template.apply(fig, plot_title=f"Variability: {example_name}",
+                                 height=plot_height, legend_title="Version",
+                                 xaxis_title="Threads", yaxis_title="Execution Time (s)") 
+            fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1])) 
+            fig.update_layout(margin=dict(t=60, b=120 if template.legend_y < 0 else 80))
+
+            graph_component = dcc.Graph(
+                id=f'variability-graph-{sanitized_example_name}',
+                figure=fig,
+                className='resizable-variability-plot', 
+                style=graph_style 
+            )
+            fig_content = create_plot_with_help(graph_component, base_variability_help, f"variability-{sanitized_example_name}")
+        
+        sub_tabs_children.append(dcc.Tab(label=example_name, value=sanitized_example_name, children=[fig_content]))
+
+    if not sub_tabs_children:
+        return [html.Div("No variability data to display after filtering.", style={'padding':'10px', 'textAlign':'center', 'color': WARNING_COLOR})], None
+
+    default_active_sub_tab = re.sub(r'\W+', '_', unique_examples[0]) if unique_examples else None
+    return sub_tabs_children, default_active_sub_tab
+
+def create_cache_performance_comparison(profiling_display_df, template):
+    if profiling_display_df.empty:
+        fig = go.Figure().add_annotation(text="No cache profiling data", x=0.5, y=0.5, showarrow=False)
+        return template.apply(fig, plot_title="Cache Performance", height=500), "" 
+
+    cache_miss_rate_df = profiling_display_df[
+        (profiling_display_df['Event Name'] == 'Cache Miss Rate') &
+        (profiling_display_df['Statistic'] == 'Mean') 
+    ].copy()
+
+    specific_help = ""
+    if not cache_miss_rate_df.empty:
+        fig = go.Figure()
+        for (example, problem_size), group_data in cache_miss_rate_df.groupby(['Example Name', 'Problem Size']):
+            for version in ['CARTS', 'OMP']:
+                ver_data = group_data[group_data['Version'] == version].sort_values('Threads')
+                if ver_data.empty or ver_data['Value'].isnull().all(): continue
+                current_color = PRIMARY_COLOR if version == 'CARTS' else ACCENT_COLOR
+                fig.add_trace(go.Bar(
+                    x=ver_data['Threads'], y=ver_data['Value'] * 100, name=f"{example} (S:{problem_size}) - {version}",
+                    marker_color=current_color, opacity=0.85,
+                    marker_line_width=template.bar_line_width, marker_line_color=current_color,
+                    hovertemplate=f"<b>{example} (S:{problem_size}) - {version}</b><br>Threads: %{{x}}<br>Cache Miss Rate: %{{y:.2f}}%<extra></extra>"
+                ))
+        fig.update_layout(barmode='group', xaxis_type='category')
+        specific_help = "- Shows L1/L2 cache miss rate (derived from `cache-misses` / `cache-references`)."
+        return template.apply(fig, plot_title="Cache Miss Rate Comparison", xaxis_title="Threads",
+                              yaxis_title="Cache Miss Rate (%)", height=550, legend_title="Ex (Size) - Ver"), specific_help
+    else: 
+        fallback_event = 'cache-misses:u' 
+        df_cache_fallback = profiling_display_df[
+            (profiling_display_df['Event Name'].str.contains(fallback_event, case=False)) &
+            (profiling_display_df['Statistic'] == 'Avg') 
+        ].copy()
+
+        if df_cache_fallback.empty:
+            fig = template.apply(go.Figure().add_annotation(text="No specific cache data (miss rate or raw counts)", x=0.5,y=0.5,showarrow=False), plot_title="Cache Performance", height=500)
+            return fig, "- No specific cache data (miss rate or raw counts like 'cache-misses:u') found."
+        
+        event_to_plot_name = df_cache_fallback['Event Name'].unique()[0] 
+        fig = go.Figure()
+        for (example, problem_size, version), group_data in df_cache_fallback.groupby(['Example Name', 'Problem Size', 'Version']):
+            group_data = group_data.sort_values('Threads')
+            if group_data.empty or group_data['Value'].isnull().all(): continue
+            current_color = PRIMARY_COLOR if version == 'CARTS' else ACCENT_COLOR
+            current_dash = 'solid' if version == 'CARTS' else 'dash'
+            fig.add_trace(go.Scatter(
+                x=group_data['Threads'], y=group_data['Value'], name=f"{example} (S:{problem_size}) - {version}",
+                mode='lines+markers',
+                line=dict(color=current_color, dash=current_dash, width=2),
+                marker=dict(color=current_color, size=8, line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
+                hovertemplate=f"<b>{example} ({version})</b><br>Threads: %{{x}}<br>{event_to_plot_name.split(':')[0]}: %{{y:,.0f}}<extra></extra>"
+            ))
+        fig.update_layout(xaxis_type='category', yaxis_type='log')
+        specific_help = f"- Shows raw counts for event: `{event_to_plot_name.split(':')[0]}` (log scale) as 'Cache Miss Rate' was not available."
+        return template.apply(fig, plot_title=f"{event_to_plot_name.split(':')[0]} Comparison", xaxis_title="Threads",
+                              yaxis_title="Count (log)", height=550, legend_title="Ex (Size) - Ver"), specific_help
+
+def create_ipc_comparison_plot(profiling_display_df, template):
+    if profiling_display_df.empty:
+        fig = go.Figure().add_annotation(text="No IPC data", x=0.5, y=0.5, showarrow=False)
+        return template.apply(fig, plot_title="IPC Comparison", height=500)
+
+    df_ipc = profiling_display_df[
+        (profiling_display_df['Event Name'] == 'IPC') &
+        (profiling_display_df['Statistic'] == 'Mean') 
+    ].copy()
+
+    if df_ipc.empty:
+        fig = go.Figure().add_annotation(text="No IPC data points to plot", x=0.5, y=0.5, showarrow=False)
+        return template.apply(fig, plot_title="IPC Comparison", height=500)
+
+    fig = go.Figure()
+    for (example, problem_size, version), group in df_ipc.groupby(['Example Name', 'Problem Size', 'Version']):
+        group = group.sort_values('Threads')
+        if group.empty or group['Value'].isnull().all(): continue
+        current_color = PRIMARY_COLOR if version == 'CARTS' else ACCENT_COLOR
+        current_dash = 'solid' if version == 'CARTS' else 'dash'
+        fig.add_trace(go.Scatter(
+            x=group['Threads'], y=group['Value'], mode='lines+markers', name=f"{example} (S:{problem_size}) - {version}",
+            line=dict(color=current_color, width=2, dash=current_dash),
+            marker=dict(size=8, color=current_color, line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
+            hovertemplate=f"<b>{example} ({version})</b><br>Size: {problem_size}<br>Threads: %{{x}}<br>IPC: %{{y:.3f}}<extra></extra>"
+        ))
+    fig.add_shape(type="line", x0=0,y0=1.0,x1=1,y1=1.0,line=dict(color="grey",width=1,dash="dash"),xref="paper",yref="y") 
+    fig.update_layout(xaxis_type='category')
+    return template.apply(fig, plot_title="Instructions Per Cycle (IPC) Comparison", xaxis_title="Threads",
+                          yaxis_title="IPC", height=550, legend_title="Ex (Size) - Ver")
+
+def create_stalls_analysis_plot(profiling_display_df, template):
+    if profiling_display_df.empty:
+        fig = go.Figure().add_annotation(text="No stalls data", x=0.5, y=0.5, showarrow=False)
+        return template.apply(fig, plot_title="CPU Stalls Analysis", height=500), ""
+
+    df_stalls_raw = profiling_display_df[
+        (profiling_display_df['category'] == 'Stalls') & 
+        (profiling_display_df['Statistic'] == 'Avg') 
+    ].copy()
+
+    if df_stalls_raw.empty:
+        fig = go.Figure().add_annotation(text="No stall-related events found", x=0.5, y=0.5, showarrow=False)
+        return template.apply(fig, plot_title="CPU Stalls Analysis", height=500), "- No stall-related events found."
+
+    priority_stalls = ['cycle_activity.stalls_total:u', 'stalled-cycles-backend:u', 'stalled-cycles-frontend:u', 'resource_stalls.any:u', 'lock_contention:u']
+    event_to_plot = None
+    for p_event in priority_stalls:
+        if p_event in df_stalls_raw['Event Name'].unique():
+            event_to_plot = p_event
+            break
+    if not event_to_plot and not df_stalls_raw.empty: 
+        event_to_plot = df_stalls_raw['Event Name'].unique()[0]
+
+    if not event_to_plot: 
+         fig = go.Figure().add_annotation(text="Could not determine stall event to plot.", x=0.5,y=0.5,showarrow=False)
+         return template.apply(fig, plot_title="CPU Stalls Analysis", height=500), "- Could not determine stall event to plot."
+
+    df_stalls_event = df_stalls_raw[df_stalls_raw['Event Name'] == event_to_plot].copy()
+    if df_stalls_event.empty:
+        fig = go.Figure().add_annotation(text=f"No data for event: {event_to_plot}", x=0.5,y=0.5,showarrow=False)
+        return template.apply(fig, plot_title=f"CPU Stalls: {event_to_plot.split(':')[0]}", height=500), f"- No data found for event: {event_to_plot.split(':')[0]}"
+
+    fig = go.Figure(); plot_as_percentage = False; specific_help = ""
+    
+    if 'cycle_activity' in event_to_plot:
+        cycles_df = profiling_display_df[
+            (profiling_display_df['Event Name'].str.contains('cycles:u', case=False)) & 
+            (~profiling_display_df['Event Name'].str.contains('stall', case=False)) & 
+            (profiling_display_df['Statistic'] == 'Avg')
+        ]
+        if not cycles_df.empty:
+            df_stalls_event = pd.merge(
+                df_stalls_event, 
+                cycles_df[['Example Name', 'Problem Size', 'Threads', 'Version', 'Value']],
+                on=['Example Name', 'Problem Size', 'Threads', 'Version'], 
+                suffixes=('', '_cycles_total'), how='left'
+            )
+            if 'Value_cycles_total' in df_stalls_event.columns and df_stalls_event['Value_cycles_total'].notna().any():
+                df_stalls_event['stall_percentage'] = np.where(
+                    df_stalls_event['Value_cycles_total'] > 0,
+                    (df_stalls_event['Value'] / df_stalls_event['Value_cycles_total']) * 100,
+                    np.nan 
+                )
+                plot_as_percentage = True
+                specific_help = f"- Shows data for `{event_to_plot.split(':')[0]}` as a percentage of total cycles (`cycles:u`)."
+
+    y_col = 'stall_percentage' if plot_as_percentage else 'Value'
+    y_title = f"{event_to_plot.split(':')[0]} (% of Cycles)" if plot_as_percentage else f"{event_to_plot.split(':')[0]} (Count, log)"
+    y_type = 'linear' if plot_as_percentage else 'log' 
+    if not specific_help: 
+        specific_help = f"- Shows raw counts for event: `{event_to_plot.split(':')[0]}` (log scale)."
+
+    for (ex, ps, ver), group in df_stalls_event.groupby(['Example Name', 'Problem Size', 'Version']):
+        group = group.sort_values('Threads')
+        if group.empty or y_col not in group.columns or group[y_col].isnull().all(): continue
+        
+        current_color = PRIMARY_COLOR if ver == 'CARTS' else ACCENT_COLOR
+        current_dash = 'solid' if ver == 'CARTS' else 'dash'
+        
+        ht_val_format = ":.2f}%" if plot_as_percentage else ":,.0f"
+        ht = f"<b>{ex} ({ver})</b><br>Size: {ps}<br>Threads: %{{x}}<br>"
+        ht += f"{event_to_plot.split(':')[0]}: %{{y{ht_val_format}}}" 
+        ht += "<extra></extra>"
+        
+        fig.add_trace(go.Scatter(
+            x=group['Threads'], y=group[y_col], mode='lines+markers', name=f"{ex} (S:{ps}) - {ver}",
+            line=dict(color=current_color, width=2, dash=current_dash),
+            marker=dict(size=8, color=current_color, line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
+            hovertemplate=ht
+        ))
+    fig.update_layout(xaxis_type='category', yaxis_type=y_type)
+    return template.apply(fig, plot_title=f"CPU Stalls: {event_to_plot.split(':')[0]}", xaxis_title="Threads",
+                          yaxis_title=y_title, height=550, legend_title="Ex (Size) - Ver"), specific_help
 
 # --- Helper function for plot wrappers ---
 def create_plot_with_help(graph_component, help_text_md, plot_id_base):
@@ -695,6 +1377,7 @@ def create_plot_with_help(graph_component, help_text_md, plot_id_base):
                 "ⓘ",
                 id=help_icon_id,
                 n_clicks=0,
+                className="plot-help-icon",
                 style={
                     'fontSize': '1.2em', 'cursor': 'pointer', 'marginLeft': '10px',
                     'color': PRIMARY_COLOR, 'position': 'absolute', 'top': '10px', 'right': '10px',
@@ -706,1061 +1389,695 @@ def create_plot_with_help(graph_component, help_text_md, plot_id_base):
             id=modal_id,
             is_open=False,
             children=[
-                html.Div([
-                    dcc.Markdown(help_text_md, style={'marginBottom': '20px'}),
-                    html.Button("Close", id=close_button_id, n_clicks=0,
-                                style={'backgroundColor': PRIMARY_COLOR, 'color': 'white', 'border': 'none',
-                                       'borderRadius': '5px', 'padding': '8px 15px', 'cursor': 'pointer'})
-                ], style=StyleManager.HELP_MODAL_CONTENT_STYLE)
+                dbc.ModalHeader(dbc.ModalTitle(f"About: {plot_id_base.replace('-', ' ').title()}")),
+                dbc.ModalBody(dcc.Markdown(help_text_md)),
+                dbc.ModalFooter(
+                    dbc.Button("Close", id=close_button_id, className="ms-auto", n_clicks=0, color="secondary")
+                )
             ],
-            style=StyleManager.HELP_MODAL_STYLE,
-            centered=True
+            centered=True,
+            scrollable=True,
+            size="lg" 
         )
     ])
 
-# --- Dash App Layout Definition --- #
+# --- Dash App Layout Definition ---
 app = dash.Dash(__name__, suppress_callback_exceptions=True,
-                external_stylesheets=['https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css'])
+                external_stylesheets=[dbc.themes.BOOTSTRAP, 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css'])
 
-# Common style for graphs within tabs
-graph_style = {'width': '100%', 'height': '550px'} # Define a common height
+graph_style = {'width': '100%', 'height': '550px'} 
 
-app.layout = html.Div([
-    dcc.Store(id='modal-store', data={'open': False, 'card': None}),
-    dcc.Store(id='filters-store', data={'examples': [], 'threads': []}), # Default to empty, meaning "all"
-    dcc.Store(id='filter-modal-store'),
-    dcc.Store(id='results-type-store', data='both'),
-    dcc.Store(id='results-store'),
-    html.Div(id='dummy-output-for-resize', children=None), # Dummy div for clientside callback output, using 'children'
+app.layout = dbc.Container(fluid=True, style=StyleManager.MAIN_DIV_STYLE, children=[
+    dcc.Store(id='full-results-store'), 
+    dcc.Store(id='filters-store', data={'examples': [], 'threads': [], 'sizes': [], 'correctness': 'ALL'}),
+    dcc.Store(id='filter-modal-store'), 
+    html.Div(id='dummy-output-for-resize', style={'display': 'none'}),
 
-    html.Div([ # Main card content
-        html.Div([ # Header section
-            html.H1([
-                html.Span("CARTS", style={'color': PRIMARY_COLOR, 'fontWeight': '700'}),
-                " Performance Dashboard"
-            ], style=StyleManager.HEADER_STYLE),
-            html.Div("Benchmark Comparison between CARTS and OpenMP Implementations", style=StyleManager.SUBTITLE_STYLE),
-        ], style={'marginBottom': '12px', 'paddingBottom': '4px'}),
+    dbc.Row(dbc.Col(html.Div([
+        html.H1([
+            html.Span("CARTS", style={'color': PRIMARY_COLOR, 'fontWeight': '700'}),
+            " Performance Dashboard"
+        ], style=StyleManager.HEADER_STYLE),
+        html.P("Benchmark Comparison between CARTS and OpenMP Implementations", style=StyleManager.SUBTITLE_STYLE),
+    ]), width=12), className="mb-4 mt-3"),
+    
+    # File Upload Section
+    dbc.Row([
+        dbc.Col(html.Div([
+            dbc.Row([
+                dbc.Col(dcc.Upload(
+                    id='upload-results-data',
+                    children=html.Div([
+                        html.I(className="fas fa-upload me-2"),
+                        'Drag and Drop or ',
+                        html.A('Select JSON Results File', className="fw-bold", style={'color': ACCENT_COLOR})
+                    ]),
+                    style=StyleManager.UPLOAD_STYLE,
+                    multiple=False 
+                ), md=8),
+                dbc.Col(dbc.Checkbox(
+                    id='use-default-path-checkbox',
+                    label="Use Default Results Path",
+                    value=True,
+                    className="mt-2 pt-1"
+                ), md=4, className="d-flex align-items-center")
+            ]),
+            html.Div(id='output-data-upload-status', className="text-center mt-2 small") 
+        ], style=StyleManager.UPLOAD_CONTAINER_STYLE), width={"size": 8, "offset": 2})
+    ], className="mb-4"),
+    
+    dbc.Row(dbc.Col(html.Div(id='data-load-status-message', className="text-center fw-bold mb-3", style={'color': ACCENT_COLOR}), width=12)),
 
-        # Results path input
-        html.Div([
-            html.Label([
-                html.I(className="fas fa-file-alt", style={'marginRight': '8px'}), "Results file:",
-                html.Span(" ⓘ", title="Path to the results JSON file (e.g., output/performance_results.json)", style={'cursor': 'help', 'color': ACCENT_COLOR, 'marginLeft': '4px'})
-            ], style={**StyleManager.LABEL_STYLE, 'width': 'auto', 'textAlign': 'right', 'marginRight': '15px', 'marginBottom': '0', 'alignSelf': 'center', 'minWidth': '120px'}),
-            dcc.Input(id='results-path', type='text', value=DEFAULT_RESULTS_PATH, style={
-                'width': '60%', 'marginRight': '12px', 'marginBottom': '0', 'textAlign': 'left', 'height': '42px',
-                'lineHeight': '42px', 'padding': '0 15px', 'borderRadius': '8px', 'border': '1px solid #e0e0e0',
-                'boxShadow': '0 2px 8px rgba(0,0,0,0.05)', 'fontSize': '1.05rem', 'alignSelf': 'center'
-            }),
-        ], style={'marginBottom': '16px', 'marginTop': '12px', 'display': 'flex', 'alignItems': 'center', 'justifyContent': 'center', 'gap': '0'}),
-        html.Div(id='data-status-message', style={'color': ACCENT_COLOR, 'fontWeight': '600', 'marginBottom': '16px', 'textAlign': 'center'}),
+    dbc.Row(dbc.Col(dbc.Button([html.I(className="fas fa-filter me-2"), "Filter Results"],
+                    id='open-filter-modal-button', n_clicks=0, color="primary", size="lg", className="d-block mx-auto shadow-sm", style={'backgroundColor': ACCENT_COLOR, 'borderColor': ACCENT_COLOR}),
+    width={"size": 6, "offset": 3}), className="mb-4"),
 
-        # Key Summary Statistics section removed
-
-        # Filter button
-        html.Div([
-            html.Button([html.I(className="fas fa-filter", style={'marginRight': '8px'}), "Filter Results"],
-                        id='open-filter-modal-btn', n_clicks=0, style={
-                            'backgroundColor': PRIMARY_COLOR, 'color': 'white', 'border': 'none', 'borderRadius': '8px',
-                            'padding': '12px 36px', 'fontWeight': '600', 'margin': '0 auto', 'display': 'block',
-                            'boxShadow': '0 4px 12px rgba(44,111,187,0.15)', 'cursor': 'pointer', 'fontSize': '1.05rem'}),
-        ], style={'display': 'flex', 'justifyContent': 'center', 'alignItems': 'center', 'marginBottom': '28px', 'marginTop': '12px'}),
-
-        # Average per example plot (outside tabs) - REMOVED
-        # html.Div(id='average-per-example-bar-section'),
-
-        # Benchmark Results Section (Tabs and Table)
-        html.Div([
-            html.H2("Benchmark Results", style={'color': PRIMARY_COLOR, 'fontWeight': 'bold', 'marginTop': '8px', 'marginBottom': '12px'}),
-            dcc.Tabs(id='main-plot-tabs', value='scaling', children=[
-                dcc.Tab(label="Scaling", value='scaling', children=[html.Div(id='scaling-plot-wrapper')]),
-                dcc.Tab(label="Parallel Efficiency", value='efficiency', children=[html.Div(id='efficiency-plot-wrapper')]),
-                dcc.Tab(label="Speedup (OMP/CARTS)", value='speedup', children=[html.Div(id='speedup-plot-wrapper')]),
-                dcc.Tab(label="Slowdown (CARTS/OMP)", value='slowdown', children=[html.Div(id='slowdown-plot-wrapper')]),
-                dcc.Tab(label="Variability", value='variability', children=[
-                    html.Div(id='variability-content-area', children=[ # This Div will hold the sub-tabs
-                        dcc.Tabs(id='variability-sub-tabs', value=None, children=[], style={'fontSize': '0.9em', 'marginTop': '10px'})
-                    ], style={'display': 'none'}) # Initially hidden
+    dbc.Card(className="mb-4 shadow-sm", children=[
+        dbc.CardHeader(html.H2("Benchmark Performance Analysis", className="mb-0", style={'color': PRIMARY_COLOR, 'fontSize': '1.5rem'})),
+        dbc.CardBody([
+            dcc.Tabs(id='benchmark-plot-tabs', value='scaling', className="custom-tabs", children=[
+                dcc.Tab(label="Scaling", value='scaling', children=[html.Div(id='scaling-plot-div', className="mt-3")]),
+                dcc.Tab(label="Parallel Efficiency", value='efficiency', children=[html.Div(id='efficiency-plot-div', className="mt-3")]),
+                dcc.Tab(label="Speedup (OMP/CARTS)", value='speedup', children=[html.Div(id='speedup-plot-div', className="mt-3")]),
+                dcc.Tab(label="Slowdown (CARTS/OMP)", value='slowdown', children=[html.Div(id='slowdown-plot-div', className="mt-3")]),
+                dcc.Tab(label="Runtime Variability", value='variability', children=[
+                    html.Div(id='variability-plot-area', children=[
+                        dcc.Tabs(id='variability-sub-tabs-nav', value=None, children=[], className="custom-sub-tabs mt-2")
+                    ], style={'display': 'none'}, className="mt-3") 
                 ]),
-            ], style={'backgroundColor': '#f7fbff', 'borderRadius': '8px', 'padding': '8px 8px',
-                       'boxShadow': '0 2px 8px rgba(31,119,180,0.07)', 'marginBottom': '18px', 'fontSize': '1.01em'}),
-            html.Hr(style={'border': 'none', 'borderTop': '2px solid #d0e3f7', 'margin': '18px 0'}),
-            html.H2("Summary Table", style={'color': PRIMARY_COLOR, 'fontWeight': 'bold', 'marginTop': '24px', 'marginBottom': '12px'}),
-            html.Button("Download Benchmark Summary CSV", id="download-benchmark-btn", n_clicks=0, style={
-                'backgroundColor': ACCENT_COLOR, 'color': 'white', 'border': 'none', 'borderRadius': '7px',
-                'padding': '8px 18px', 'fontWeight': 'bold', 'fontSize': '1.01rem', 'marginBottom': '10px'}),
-            dcc.Download(id="download-benchmark-csv"),
-            html.Div(id='results-table-section'),
-        ], style={'backgroundColor': '#fff', 'borderRadius': '14px', 'boxShadow': '0 4px 16px rgba(44,111,187,0.08)',
-                  'padding': '18px 18px 10px 18px', 'marginBottom': '24px', 'border': '1.5px solid #e0e0e0'}),
+            ]),
+            html.Hr(className="my-4"),
+            html.H3("Benchmark Summary Table", style={'color': PRIMARY_COLOR, 'fontSize': '1.3rem'}, className="mb-3"),
+            dbc.Button([html.I(className="fas fa-download me-2"),"Download Benchmark CSV"], id="download-benchmark-csv-button", n_clicks=0, color="secondary", outline=True, size="sm", className="mb-3 shadow-sm"),
+            dcc.Download(id="download-benchmark-data"),
+            html.Div(id='benchmark-summary-table-div'),
+        ])
+    ]),
 
-        html.Div(id='filter-modal'),
-        html.Hr(style={'border': 'none', 'borderTop': '2px solid #d0e3f7', 'margin': '18px 0'}),
+    html.Div(id='filter-modal-div'), 
+    
+    dbc.Card(className="mb-4 shadow-sm", children=[
+        dbc.CardHeader(html.H2("Hardware Profiling Analysis", className="mb-0", style={'color': PRIMARY_COLOR, 'fontSize': '1.5rem'})),
+        dbc.CardBody([
+            dcc.Dropdown(id='profiling-category-dropdown', options=[], placeholder="Select Profiling Category...", clearable=False,
+                         className="mb-3", style={'fontSize': '1rem'}),
+            html.Div(id='profiling-plot-div', className="mt-3"), 
+            html.Hr(className="my-4"),
+            html.H3("Profiling Data Table", style={'color': PRIMARY_COLOR, 'fontSize': '1.3rem'}, className="mb-3"),
+            dbc.Button([html.I(className="fas fa-download me-2"),"Download Profiling CSV"], id="download-profiling-csv-button", n_clicks=0, color="secondary", outline=True, size="sm", className="mb-3 shadow-sm"),
+            dcc.Download(id="download-profiling-data"),
+            html.Div(id='profiling-summary-table-div'),
+        ])
+    ]),
+    
+    dbc.Card(id='system-info-display-card', className="shadow-sm"),
 
-        # Profiling Analysis Section
-        html.Div([
-            html.H2("Profiling Analysis", style={'color': PRIMARY_COLOR, 'fontWeight': 'bold', 'marginTop': '8px', 'marginBottom': '12px'}),
-            dcc.Dropdown(id='profiling-group-dropdown', options=[], value='Cache', clearable=False,
-                         style={'width': '260px', 'display': 'inline-block', 'marginBottom': '10px', 'fontSize': '1.08em'}),
-            html.Div(id='perf-event-analysis-section'), # Wrapper for profiling plot
-            html.Hr(style={'border': 'none', 'borderTop': '2px solid #d0e3f7', 'margin': '25px 0'}),
-            html.Button("Download Profiling Summary CSV", id="download-profiling-btn", n_clicks=0, style={
-                'backgroundColor': ACCENT_COLOR, 'color': 'white', 'border': 'none', 'borderRadius': '7px',
-                'padding': '8px 18px', 'fontWeight': 'bold', 'fontSize': '1.01rem', 'marginBottom': '10px'}),
-            dcc.Download(id="download-profiling-csv"),
-            html.Div(id='profiling-summary-section'),
-        ], style={'backgroundColor': '#fff', 'borderRadius': '14px', 'boxShadow': '0 4px 16px rgba(44,111,187,0.08)',
-                  'padding': '18px 18px 10px 18px', 'marginBottom': '24px', 'border': '1.5px solid #e0e0e0'}),
-
-        html.Hr(style={'border': 'none', 'borderTop': '2px solid #d0e3f7', 'margin': '18px 0'}),
-        html.Div(id='system-info-card'),
-
-        html.Div(id='summary-modal', style={'display':'none'}),
-        dcc.Dropdown(id='perf-event-dropdown', style={'display': 'none'}),
-
-    ], style=StyleManager.CARD_STYLE),
-
-    # Footer
-    html.Div([
+    html.Footer(dbc.Row(dbc.Col(html.P([
         html.Span("CARTS Benchmarking Report | "),
         html.A("GitHub", href="https://github.com/ARTS-Lab/carts", target="_blank", style={'color': PRIMARY_COLOR, 'textDecoration': 'none', 'fontWeight': 'bold'}),
-        html.Span(" | For scientific reproducibility. "),
-        html.Span(f"© {datetime.datetime.now().year}")
-    ], style={'textAlign': 'center', 'color': NEUTRAL_COLOR, 'marginTop': '40px', 'fontSize': '1.05rem',
-              'paddingBottom': '20px', 'borderTop': '1px solid #e0e0e0', 'paddingTop': '20px',
-              'maxWidth': '1400px', 'margin': '40px auto 0 auto'}),
-], style=StyleManager.MAIN_DIV_STYLE)
+        html.Span(f" | © {datetime.datetime.now().year}")
+    ], className="text-center text-muted small"), width=12)), className="mt-5 mb-3 pt-3 border-top")
+])
 
-# --- Callbacks --- #
 
+# --- Callbacks ---
 @app.callback(
-    Output('results-store', 'data'),
-    [Input('results-path', 'value')]
+    [Output('full-results-store', 'data'),
+     Output('data-load-status-message', 'children'),
+     Output('output-data-upload-status', 'children')],
+    [Input('upload-results-data', 'contents'),
+     Input('use-default-path-checkbox', 'value')],
+    [State('upload-results-data', 'filename'),
+     State('full-results-store', 'data')] 
 )
-def load_results_to_store(path):
-    if not path: return None
-    df, error = load_results(path)
-    if error or df is None or df.empty: return None
-    return df.to_dict('records')
+def update_output_on_upload_or_default(uploaded_contents, use_default_path, 
+                                       uploaded_filename, existing_data):
+    ctx_triggered_id = ctx.triggered_id
+    
+    # Prioritize checkbox if it was the one that changed state to True
+    if ctx_triggered_id == 'use-default-path-checkbox' and use_default_path:
+        if os.path.exists(DEFAULT_RESULTS_PATH):
+            full_data, error_msg = load_full_json_data(DEFAULT_RESULTS_PATH)
+            if error_msg:
+                status_msg = dbc.Alert(f"Error loading default file: {error_msg}", color="danger", dismissable=True)
+                return None, status_msg, dash.no_update 
+            if full_data and "detailed_aggregated_results" in full_data:
+                status_msg = dbc.Alert(f"Successfully loaded default data from {os.path.basename(DEFAULT_RESULTS_PATH)}.", color="success", dismissable=True, duration=5000)
+                return full_data, dash.no_update, status_msg
+            # File exists but invalid
+            else:
+                status_msg = dbc.Alert("Default results file is invalid or empty.", color="danger", dismissable=True)
+                return None, status_msg, dash.no_update
+        # Default path does not exist
+        else:
+            status_msg = dbc.Alert(f"Default results file not found at: {DEFAULT_RESULTS_PATH}", color="warning", dismissable=True)
+            return None, status_msg, dash.no_update
 
-@app.callback(
-    Output('data-status-message', 'children'),
-    [Input('results-store', 'data'), Input('results-path', 'value')],
-    prevent_initial_call=True
-)
-def update_data_status(data_records, path):
-    if not path: return "Please provide a results file path."
-    if data_records is None:
-        _, error_msg = load_results(path)
-        return error_msg if error_msg else "Failed to load data or data is empty."
-    if not data_records: return "No results found in the loaded file."
-    return f"Data loaded successfully from {path}"
+    # If checkbox is not checked, or it was not the trigger, try uploaded file
+    if not use_default_path and uploaded_contents is not None:
+        content_type, content_string = uploaded_contents.split(',')
+        decoded = base64.b64decode(content_string)
+        try:
+            if uploaded_filename and 'json' in uploaded_filename.lower():
+                data_str = decoded.decode('utf-8')
+                full_data = json.loads(data_str)
+                if "detailed_aggregated_results" not in full_data or not isinstance(full_data["detailed_aggregated_results"], list):
+                    status_msg = dbc.Alert(f"Uploaded file '{uploaded_filename}' is missing key data or has incorrect format.", color="danger", dismissable=True)
+                    return existing_data, dash.no_update, status_msg 
+                status_msg = dbc.Alert(f"Successfully loaded data from: {uploaded_filename}", color="success", dismissable=True, duration=5000)
+                return full_data, dash.no_update, status_msg 
+            else:
+                status_msg = dbc.Alert(f"File '{uploaded_filename}' is not a JSON file.", color="warning", dismissable=True)
+                return existing_data, dash.no_update, status_msg
+        except Exception as e:
+            print(f"Error processing uploaded file: {e}")
+            status_msg = dbc.Alert(f"Error processing file '{uploaded_filename}': {str(e)}", color="danger", dismissable=True)
+            return existing_data, dash.no_update, status_msg
+            
+    # If checkbox is checked but it wasn't the trigger (e.g. initial load and checkbox is already True)
+    if use_default_path and existing_data is None: # And no data loaded yet
+         if os.path.exists(DEFAULT_RESULTS_PATH):
+            full_data, error_msg = load_full_json_data(DEFAULT_RESULTS_PATH)
+            if error_msg:
+                status_msg = dbc.Alert(f"Error loading default file: {error_msg}", color="danger", dismissable=True)
+                return None, status_msg, dash.no_update
+            if full_data and "detailed_aggregated_results" in full_data:
+                status_msg = dbc.Alert(f"Initial load: Using default data from {os.path.basename(DEFAULT_RESULTS_PATH)}.", color="info", dismissable=True, duration=5000)
+                return full_data, dash.no_update, status_msg
+            else:
+                status_msg = dbc.Alert("Default results file is invalid or empty.", color="danger", dismissable=True)
+                return None, status_msg, dash.no_update
+         else:
+            status_msg = dbc.Alert(f"Default results file not found at: {DEFAULT_RESULTS_PATH}. Please upload a file or ensure the default path is correct.", color="warning", dismissable=True)
+            return None, status_msg, dash.no_update
 
-# Key Summary Stats callback removed
+    # Fallback: if no action taken (e.g. initial load, checkbox false, no upload) or if checkbox is unchecked and no file uploaded
+    if existing_data is None and not use_default_path:
+         return None, "Please upload a JSON results file or select 'Use Default Path'.", dash.no_update
+    
+    # If data already exists and no new action, keep existing data
+    return existing_data, dash.no_update, dash.no_update
 
-# Clientside callback to resize plots in tabs
+
 app.clientside_callback(
     """
     function(main_tab_value, variability_sub_tab_value, profiling_category_value) {
-        setTimeout(function() {
-            var graph_ids_to_resize = [];
+        // Debounce function
+        let timeoutId;
+        function debounceResize(graph_ids) {
+            clearTimeout(timeoutId);
+            timeoutId = setTimeout(() => {
+                graph_ids.forEach(function(graph_id_obj) {
+                    let graph_id = typeof graph_id_obj === 'string' ? graph_id_obj : graph_id_obj.id;
+                    if (!graph_id) return;
 
-            // Static graphs outside variability tab
-            var static_graph_ids = [
-                'scaling-graph', 'efficiency-graph', 'speedup-graph', 
-                'slowdown-graph', 
-                // 'average-per-example-graph', // Removed
-                'perf-event-graph'
-            ];
-            static_graph_ids.forEach(function(graph_id) {
-                var graphElement = document.getElementById(graph_id); 
-                if (graphElement && graphElement.offsetParent !== null) {
-                    var plotlyDiv = graphElement.querySelector('.js-plotly-plot');
-                    if (plotlyDiv) { // Resize the inner plotly div
-                        Plotly.Plots.resize(plotlyDiv);
-                    } else { // Fallback if structure is different
-                         try { Plotly.Plots.resize(graphElement); } catch(e) { /* console.error('Error resizing static plot (fallback):', graph_id, e); */ }
+                    var graphElement = document.getElementById(graph_id);
+                    if (graphElement && graphElement.offsetParent !== null && typeof Plotly !== 'undefined') {
+                        try {
+                            Plotly.Plots.resize(graphElement);
+                        } catch (e) {
+                            // console.warn('Error resizing plot:', graph_id, e);
+                        }
                     }
-                }
-            });
+                });
+            }, 150); 
+        }
 
-            // If variability tab is active, find the graph in the active sub-tab
-            if (main_tab_value === 'variability' && variability_sub_tab_value) {
-                var sanitized_sub_tab_value = variability_sub_tab_value.replace(/\\W+/g, '_');
-                var active_variability_graph_id = 'variability-graph-' + sanitized_sub_tab_value;
-                 var graphElement = document.getElementById(active_variability_graph_id);
-                 if (graphElement && graphElement.offsetParent !== null) {
-                    var plotlyDiv = graphElement.querySelector('.js-plotly-plot');
-                    if (plotlyDiv) {
-                        Plotly.Plots.resize(plotlyDiv);
-                    } else {
-                        try { Plotly.Plots.resize(graphElement); } catch(e) { /* console.error('Error resizing dynamic plot (fallback):', active_variability_graph_id, e); */ }
-                    }
-                 }
+        var base_graph_ids = [
+            'scaling-graph-id', 'efficiency-graph-id', 'speedup-graph-id', 
+            'slowdown-graph-id', 'profiling-event-graph-id'
+        ];
+        
+        var all_ids_to_check = [...base_graph_ids];
+
+        if (main_tab_value === 'variability' && variability_sub_tab_value) {
+            let sanitized_sub_tab_id = String(variability_sub_tab_value).replace(/[^a-zA-Z0-9_]/g, '_');
+            if (sanitized_sub_tab_id) {
+                 all_ids_to_check.push('variability-graph-' + sanitized_sub_tab_id);
             }
-            
-        }, 250); 
+        }
+        debounceResize(all_ids_to_check);
         return window.dash_clientside.no_update;
     }
     """,
-    Output('dummy-output-for-resize', 'children'),
-    [Input('main-plot-tabs', 'value'),
-     Input('variability-sub-tabs', 'value'), 
-     Input('profiling-group-dropdown', 'value')]
+    Output('dummy-output-for-resize', 'children'), 
+    [Input('benchmark-plot-tabs', 'value'),
+     Input('variability-sub-tabs-nav', 'value'), 
+     Input('profiling-category-dropdown', 'value')]
 )
 
 @app.callback(
-    [Output('scaling-plot-wrapper', 'children'),
-     Output('efficiency-plot-wrapper', 'children'),
-     Output('speedup-plot-wrapper', 'children'),
-     Output('slowdown-plot-wrapper', 'children')],
+    [Output('scaling-plot-div', 'children'),
+     Output('efficiency-plot-div', 'children'),
+     Output('speedup-plot-div', 'children'),
+     Output('slowdown-plot-div', 'children')],
     [Input('filters-store', 'data'),
-     Input('results-store', 'data')]
+     Input('full-results-store', 'data')]
 )
-def update_benchmark_graphs(filters, data_records):
-    if not data_records:
-        empty_fig = default_plot_template.apply(go.Figure().add_annotation(text="No data to display.", xref="paper", yref="paper", showarrow=False))
-        empty_plot_component = create_plot_with_help(dcc.Graph(figure=empty_fig, style=graph_style, id="empty-graph"), "No data available for this plot.", "empty")
+def update_main_benchmark_graphs(filters, full_json_data):
+    if not full_json_data:
+        empty_fig = default_plot_template.apply(
+            go.Figure().add_annotation(text="No data loaded.", xref="paper", yref="paper", showarrow=False))
+        empty_plot_component = create_plot_with_help(
+            dcc.Graph(figure=empty_fig, style=graph_style, id="empty-main-graph"), "Load data to view plots.", "empty-main")
         return [empty_plot_component] * 4
 
-    data_manager = DataManager(data_records)
-    plot_manager = PlotManager(default_plot_template, data_manager)
+    data_manager = DataManager(full_json_data)
+    plot_manager = PlotManager(default_plot_template, data_manager, plot_help_manager)
 
     scaling_fig = plot_manager.get_scaling_plot(filters)
-    scaling_help = """
-**Execution Time Scaling**
-
-This plot shows the mean execution time (log scale) against the number of threads for different examples and problem sizes.
-- **CARTS** version is shown with a solid blue line.
-- **OMP** version is shown with a dashed orange line.
-- Each line represents a unique combination of example, version, and problem size.
-    """
-    scaling_plot_component = create_plot_with_help(dcc.Graph(id='scaling-graph', figure=scaling_fig, style=graph_style), scaling_help, "scaling")
+    scaling_plot_component = create_plot_with_help(
+        dcc.Graph(id='scaling-graph-id', figure=scaling_fig, style=graph_style), 
+                  plot_help_manager.get_help_text("scaling"), "scaling")
 
     efficiency_fig = plot_manager.get_efficiency_plot(filters)
-    efficiency_help = """
-**Parallel Efficiency (Strong Scaling)**
-
-This plot illustrates how well the parallel versions (CARTS and OMP) utilize additional threads compared to their single-threaded performance.
-- Efficiency is calculated as: `Time(1 thread) / (Time(N threads) * N threads)`.
-- An ideal efficiency is 1.0 (dashed grey line).
-- Values closer to 1.0 indicate better scalability.
-    """
-    efficiency_plot_component = create_plot_with_help(dcc.Graph(id='efficiency-graph', figure=efficiency_fig, style=graph_style), efficiency_help, "efficiency")
+    efficiency_plot_component = create_plot_with_help(
+        dcc.Graph(id='efficiency-graph-id', figure=efficiency_fig, style=graph_style), 
+                  plot_help_manager.get_help_text("efficiency"), "efficiency")
 
     speedup_fig = plot_manager.get_speedup_plot(filters)
-    speedup_help = """
-**OMP vs CARTS Performance (OMP Time / CARTS Time)**
-
-This plot shows the speedup of CARTS relative to OMP.
-- Calculated as: `Mean OMP Time / Mean CARTS Time` for the same example, problem size, and thread count.
-- Values > 1 (green shaded area) indicate CARTS is faster.
-- Values < 1 (red shaded area) indicate OMP is faster.
-- A value of 1 (dashed grey line) means equal performance.
-    """
-    speedup_plot_component = create_plot_with_help(dcc.Graph(id='speedup-graph', figure=speedup_fig, style=graph_style), speedup_help, "speedup")
+    speedup_plot_component = create_plot_with_help(
+        dcc.Graph(id='speedup-graph-id', figure=speedup_fig, style=graph_style), 
+                  plot_help_manager.get_help_text("speedup"), "speedup")
     
     slowdown_fig = plot_manager.get_slowdown_plot(filters)
-    slowdown_help = """
-**CARTS vs OMP Performance (CARTS Time / OMP Time)**
-
-This plot shows the slowdown of CARTS relative to OMP (inverse of the speedup plot).
-- Calculated as: `Mean CARTS Time / Mean OMP Time` for the same example, problem size, and thread count.
-- Values > 1 (red shaded area) indicate CARTS is slower.
-- Values < 1 (green shaded area) indicate CARTS is faster.
-- A value of 1 (dashed grey line) means equal performance.
-    """
-    slowdown_plot_component = create_plot_with_help(dcc.Graph(id='slowdown-graph', figure=slowdown_fig, style=graph_style), slowdown_help, "slowdown")
-    
+    slowdown_plot_component = create_plot_with_help(
+        dcc.Graph(id='slowdown-graph-id', figure=slowdown_fig, style=graph_style), 
+                  plot_help_manager.get_help_text("slowdown"), "slowdown")
     return scaling_plot_component, efficiency_plot_component, speedup_plot_component, slowdown_plot_component
 
 @app.callback(
-    [Output('variability-sub-tabs', 'children'),
-     Output('variability-sub-tabs', 'value'),
-     Output('variability-content-area', 'style')], 
+    [Output('variability-sub-tabs-nav', 'children'),
+     Output('variability-sub-tabs-nav', 'value'),
+     Output('variability-plot-area', 'style')], 
     [Input('filters-store', 'data'), 
-     Input('results-store', 'data'),
-     Input('main-plot-tabs', 'value')] 
+     Input('full-results-store', 'data'),
+     Input('benchmark-plot-tabs', 'value')] 
 )
-def update_variability_plots_section(filters, data_records, active_main_tab):
-    if active_main_tab != 'variability' or not data_records:
+def update_variability_plots_area(filters, full_json_data, active_main_tab):
+    if active_main_tab != 'variability' or not full_json_data:
         return [], None, {'display': 'none'} 
 
-    data_manager = DataManager(data_records)
-    df_full_filtered = data_manager.get_filtered_data(filters)
-
-    if df_full_filtered.empty or 'example_name' not in df_full_filtered.columns:
-        return [html.Div("No examples found for variability plots after filtering.", style={'padding':'10px', 'textAlign':'center', 'color': WARNING_COLOR})], None, {'display': 'block'}
-
-    df_bench = df_full_filtered[df_full_filtered.get('run_type', pd.Series(dtype=str)).astype(str).str.lower() == 'no_profile'].copy()
-    if df_bench.empty:
-        return [html.Div("No benchmark runs data for variability plot.", style={'padding': '10px', 'textAlign': 'center', 'color': WARNING_COLOR})], None, {'display': 'block'}
-
-    records = []
-    for _, row_series in df_bench.iterrows():
-        row = row_series.to_dict()
-        times_raw = row.get('times_seconds')
-        current_times = []
-        if isinstance(times_raw, str):
-            try: current_times = [float(t.strip()) for t in times_raw.split(',') if t.strip()]
-            except ValueError: pass
-        elif isinstance(times_raw, list):
-            current_times = [float(t) for t in times_raw if isinstance(t, (int, float))]
-        elif isinstance(times_raw, (int, float)):
-            current_times = [float(times_raw)]
-        
-        for t_val in current_times:
-            records.append({
-                'example_name': row.get('example_name', 'Unknown Example'),
-                'problem_size': str(row.get('problem_size', 'N/A')),
-                'threads': row.get('threads', 1),
-                'version': row.get('version', 'Unknown Version'),
-                'time': t_val
-            })
+    data_manager = DataManager(full_json_data)
+    plot_manager = PlotManager(default_plot_template, data_manager, plot_help_manager)
+    sub_tabs_children, default_active_sub_tab = plot_manager.get_variability_plot_components(filters)
     
-    flat_df_for_variability = pd.DataFrame(records)
-    if flat_df_for_variability.empty:
-        return [html.Div("No timing data points to plot variability.", style={'padding': '10px', 'textAlign': 'center', 'color': WARNING_COLOR})], None, {'display': 'block'}
+    if not sub_tabs_children: 
+         return [
+            html.Div("No variability data to display after filtering.", 
+                     style={'padding':'10px', 'textAlign':'center', 'color': WARNING_COLOR})], None, {'display': 'block'}
 
-    flat_df_for_variability['threads_numeric'] = pd.to_numeric(flat_df_for_variability['threads'], errors='coerce')
-    flat_df_for_variability.dropna(subset=['threads_numeric'], inplace=True)
-    flat_df_for_variability['threads'] = flat_df_for_variability['threads_numeric'].astype(int)
-
-    unique_examples = sorted(flat_df_for_variability['example_name'].unique())
-    if not unique_examples:
-        return [html.Div("No examples available for variability plots.", style={'padding':'10px', 'textAlign':'center', 'color': WARNING_COLOR})], None, {'display': 'block'}
-
-    sub_tabs_children = []
-    variability_help = """
-**Execution Time Variability**
-
-These box plots show the distribution of execution times (log scale) for each combination of example, problem size, version, and thread count.
-- Each box represents the interquartile range (IQR), with the median as a line.
-- Whiskers extend to 1.5x IQR. Points beyond are outliers.
-- Useful for observing consistency of runtimes.
-    """
-    for example_name in unique_examples:
-        example_specific_df = flat_df_for_variability[flat_df_for_variability['example_name'] == example_name]
-        if example_specific_df.empty or 'time' not in example_specific_df.columns: 
-            fig_content = html.Div(f"No plottable variability data for example: {example_name}", style={'padding':'10px', 'textAlign':'center'})
-        else:
-            fig = create_single_example_variability_plot(example_specific_df, example_name, default_plot_template)
-            sanitized_example_name = re.sub(r'\W+', '_', example_name)
-            graph_component = dcc.Graph(
-                id=f'variability-graph-{sanitized_example_name}',
-                figure=fig,
-                className='resizable-variability-plot', # For JS resize
-                style=graph_style
-            )
-            fig_content = create_plot_with_help(graph_component, variability_help, f"variability-{sanitized_example_name}")
-        
-        sub_tabs_children.append(dcc.Tab(label=example_name, value=sanitized_example_name, children=[fig_content]))
-
-    if not sub_tabs_children:
-        return [html.Div("No variability data to display after filtering.", style={'padding':'10px', 'textAlign':'center', 'color': WARNING_COLOR})], None, {'display': 'block'}
-
-    default_active_sub_tab = re.sub(r'\W+', '_', unique_examples[0]) if unique_examples else None
-    
     return sub_tabs_children, default_active_sub_tab, {'display': 'block'}
 
-
 @app.callback(
-    Output('results-table-section', 'children'),
+    Output('benchmark-summary-table-div', 'children'),
     [Input('filters-store', 'data'),
-     Input('results-store', 'data')]
+     Input('full-results-store', 'data')]
 )
-def update_benchmark_table(filters, data_records):
-    if not data_records:
+def update_benchmark_summary_table_display(filters, full_json_data):
+    if not full_json_data:
         return html.Div("No data loaded to display table.", style={'color': ACCENT_COLOR, 'fontWeight': 'bold', 'padding': '12px'})
 
-    data_manager = DataManager(data_records)
+    data_manager = DataManager(full_json_data)
     table_manager = TableManager(font_family=default_plot_template.font_family)
-    summary_df_for_table = data_manager.get_benchmark_summary(filters)
-    return table_manager.create_benchmark_summary_table(summary_df_for_table)
-
-
-# Average per example section and callback removed
+    
+    benchmark_data_for_table = data_manager.get_benchmark_display_data(filters)
+    return table_manager.create_benchmark_summary_table(benchmark_data_for_table)
 
 @app.callback(
-    Output('perf-event-analysis-section', 'children'),
-    [Input('profiling-group-dropdown', 'value'),
+    Output('profiling-plot-div', 'children'),
+    [Input('profiling-category-dropdown', 'value'),
      Input('filters-store', 'data'),
-     Input('results-store', 'data')]
+     Input('full-results-store', 'data')]
 )
-def update_perf_event_analysis_figure(selected_category, filters, data_records):
-    if not data_records:
-        empty_fig = default_plot_template.apply(go.Figure().add_annotation(text="Load data to see profiling analysis.", xref="paper", yref="paper", showarrow=False))
-        return create_plot_with_help(dcc.Graph(id='perf-event-graph', figure=empty_fig, style=graph_style), "No profiling data loaded.", "perf-event-empty")
+def update_profiling_event_plot(selected_category, filters, full_json_data):
+    if not full_json_data:
+        empty_fig = default_plot_template.apply(
+            go.Figure().add_annotation(text="Load data to see profiling analysis.", xref="paper", yref="paper", showarrow=False))
+        return create_plot_with_help(
+            dcc.Graph(id='profiling-event-graph-id', figure=empty_fig, style=graph_style), "No profiling data loaded.", "prof-empty")
 
     if not selected_category:
-        empty_fig = default_plot_template.apply(go.Figure().add_annotation(text="Select a profiling category.", xref="paper", yref="paper", showarrow=False))
-        return create_plot_with_help(dcc.Graph(id='perf-event-graph', figure=empty_fig, style=graph_style), "Please select a profiling category from the dropdown.", "perf-event-select")
+        empty_fig = default_plot_template.apply(
+            go.Figure().add_annotation(text="Select a profiling category.", xref="paper", yref="paper", showarrow=False))
+        return create_plot_with_help(
+            dcc.Graph(id='profiling-event-graph-id', figure=empty_fig, style=graph_style), "Please select a category.", "prof-select")
 
-
-    data_manager = DataManager(data_records)
-    plot_manager = PlotManager(default_plot_template, data_manager)
+    data_manager = DataManager(full_json_data)
+    plot_manager = PlotManager(default_plot_template, data_manager, plot_help_manager)
     
-    help_text = f"**{selected_category} Analysis**\n\nThis plot shows performance counter data related to {selected_category.lower()}.\n"
-    fig = go.Figure() # Default empty figure
+    fig = go.Figure()
+    specific_event_help_info = "" 
 
     if selected_category == 'Cache':
-        fig = plot_manager.get_cache_plot(filters)
-        # Determine which events were actually plotted for more specific help text
-        profiling_df = data_manager.get_profiling_data(filters)
-        if not profiling_df[profiling_df['event'] == 'cache-miss-rate'].empty:
-            help_text += "- Shows L1/L2 cache miss rate (cache-misses / cache-references).\n- Calculated as the mean of `cache-misses` divided by the mean of `cache-references` for each group.\n- Events used: `cache-references`, `cache-misses`."
-        else:
-            cache_events_fallback = ['cache-misses', 'L1-dcache-load-misses', 'LLC-load-misses']
-            plotted_event = [e for e in cache_events_fallback if not profiling_df[profiling_df['event'] == e].empty]
-            if plotted_event:
-                help_text += f"- Shows mean count of '{plotted_event[0]}'.\n- Event used: `{plotted_event[0]}` (as 'cache-miss-rate' was not available or had no data)."
-            else:
-                help_text += "- No specific cache event data found to plot."
-
+        fig, specific_event_help_info = plot_manager.get_cache_plot(filters)
+        help_text = plot_help_manager.get_help_text("cache_perf", specific_event_help_info)
     elif selected_category == 'CPU':
-        fig = plot_manager.get_ipc_plot(filters)
-        help_text += "- Shows Instructions Per Cycle (IPC).\n- Calculated as: mean `instructions` / mean `cycles` for each group.\n- Events used: `instructions`, `cycles`."
+        fig = plot_manager.get_ipc_plot(filters) 
+        help_text = plot_help_manager.get_help_text("ipc_perf")
     elif selected_category == 'Stalls':
-        fig = plot_manager.get_stalls_plot(filters)
-        # Determine which stall event was plotted
-        profiling_df = data_manager.get_profiling_data(filters)
-        stall_events_present = [e for e in profiling_df['event'].unique() if 'stall' in e.lower() or 'resource_stalls' in e.lower()]
-        event_to_plot = None; priority_stalls = ['cycle_activity.stalls_total', 'stalls_total', 'resource_stalls.any']
-        for p_event in priority_stalls:
-            if p_event in stall_events_present: event_to_plot = p_event; break
-        if not event_to_plot and stall_events_present: event_to_plot = stall_events_present[0]
-        
-        if event_to_plot:
-            help_text += f"- Shows data for event: `{event_to_plot}`.\n"
-            if 'cycle_activity' in event_to_plot and not profiling_df[profiling_df['event'] == 'cycles'].empty:
-                 help_text += "- Displayed as a percentage of total cycles (mean `{event_to_plot}` / mean `cycles`). Events used: `{event_to_plot}`, `cycles`."
-            else:
-                 help_text += f"- Displayed as raw mean count (log scale). Event used: `{event_to_plot}`."
-        else:
-            help_text += "- No specific stall event data found to plot."
-
-    else: # Generic plot
-        fig = plot_manager.get_generic_profiling_plot(selected_category, filters)
-        # Try to get the specific event plotted by the generic function
-        profiling_df_cat = data_manager.get_profiling_data(filters)
-        category_df_generic = profiling_df_cat[profiling_df_cat['category'] == selected_category]
-        if not category_df_generic.empty and not category_df_generic['event'].empty:
-            event_counts_generic = category_df_generic['event'].value_counts()
-            first_event_generic = event_counts_generic.index[0] if not event_counts_generic.empty else category_df_generic['event'].unique()[0]
-            help_text += f"- Shows mean value for event: `{first_event_generic}`."
-        else:
-            help_text += "- No specific event data found for this category."
-
-    return create_plot_with_help(dcc.Graph(id='perf-event-graph', figure=fig, style=graph_style), help_text, "perf-event")
+        fig, specific_event_help_info = plot_manager.get_stalls_plot(filters)
+        help_text = plot_help_manager.get_help_text("stalls_perf", specific_event_help_info)
+    else: 
+        fig, specific_event_help_info = plot_manager.get_generic_profiling_plot(selected_category, filters)
+        help_text = plot_help_manager.get_help_text("generic_profiling", specific_event_help_info)
+    
+    return create_plot_with_help(dcc.Graph(id='profiling-event-graph-id', figure=fig, style=graph_style), help_text, f"prof-{selected_category.lower().replace(' ', '-')}")
 
 @app.callback(
-    Output('profiling-summary-section', 'children'),
-    [Input('filters-store', 'data'), Input('results-store', 'data')]
+    Output('profiling-summary-table-div', 'children'),
+    [Input('filters-store', 'data'), Input('full-results-store', 'data')]
 )
-def update_profiling_summary_table(filters, data_records):
-    if not data_records:
+def update_profiling_summary_table_display(filters, full_json_data):
+    if not full_json_data:
         return html.Div("Load data to see profiling summary table.", style={'padding':'10px', 'textAlign':'center'})
 
-    data_manager = DataManager(data_records)
+    data_manager = DataManager(full_json_data)
     table_manager = TableManager(font_family=default_plot_template.font_family)
-    profiling_df = data_manager.get_profiling_data(filters)
-    return table_manager.create_profiling_summary_table(profiling_df)
-
+    
+    profiling_data_for_table = data_manager.get_profiling_display_data(filters)
+    return table_manager.create_profiling_summary_table(profiling_data_for_table)
 
 @app.callback(
-    Output('profiling-group-dropdown', 'options'),
-    [Input('results-store', 'data')]
+    Output('profiling-category-dropdown', 'options'),
+    [Input('full-results-store', 'data')]
 )
-def update_profiling_dropdown_options(data_records):
-    if not data_records:
+def update_profiling_category_dropdown_options(full_json_data):
+    if not full_json_data: return []
+    
+    data_manager = DataManager(full_json_data)
+    profiling_df_for_categories = data_manager.get_profiling_display_data() 
+    
+    if profiling_df_for_categories.empty or 'category' not in profiling_df_for_categories.columns:
         return []
-    data_manager = DataManager(data_records)
-    profiling_df = data_manager.get_profiling_data() # Get all profiling data to find categories
-    if profiling_df.empty or 'category' not in profiling_df.columns:
-        return []
-    categories = sorted(profiling_df['category'].unique())
+    
+    categories = sorted(profiling_df_for_categories['category'].unique())
+    if 'Other' in categories:
+        categories.remove('Other')
+        return [{'label': cat, 'value': cat} for cat in categories] + [{'label': 'Other', 'value': 'Other'}]
     return [{'label': cat, 'value': cat} for cat in categories]
 
-
 # --- Filter Modal Callbacks & Rendering ---
-def render_filter_modal(modal_state, example_opts, thread_opts, size_opts=None, sysinfo=None):
-    ex_val = modal_state.get('examples', [opt['value'] for opt in example_opts] if example_opts else [])
-    th_val = modal_state.get('threads', [opt['value'] for opt in thread_opts] if thread_opts else [])
-    sz_val = modal_state.get('sizes', [opt['value'] for opt in size_opts] if size_opts else [])
+def render_filter_modal_layout(modal_state, filter_options):
+    ex_opts = filter_options.get('examples', [])
+    th_opts = filter_options.get('threads', [])
+    sz_opts = filter_options.get('sizes', [])
+    corr_opts = filter_options.get('correctness', [])
 
-    select_all_style = {'color': ACCENT_COLOR, 'fontWeight': 'bold', 'cursor': 'pointer', 'fontSize': '0.98em', 'marginLeft': '8px', 'textDecoration': 'underline'}
-    divider_style = {'height': '1px', 'background': '#e6f0fa', 'margin': '20px 0 14px 0', 'border': 'none'}
+    ex_val = modal_state.get('examples', [opt['value'] for opt in ex_opts])
+    th_val = modal_state.get('threads', [opt['value'] for opt in th_opts])
+    sz_val = modal_state.get('sizes', [opt['value'] for opt in sz_opts])
+    corr_val = modal_state.get('correctness', 'ALL')
+
+    select_all_style = {'color': ACCENT_COLOR, 'fontWeight': 'bold', 'cursor': 'pointer', 'fontSize': '0.9em', 'marginLeft': '10px', 'textDecoration': 'underline'}
     checklist_card_style = {
-        'background': '#f7fbff', 'borderRadius': '10px', 'boxShadow': '0 2px 8px rgba(31,119,180,0.07)',
-        'padding': '10px 10px', 'marginBottom': '16px', 'width': '95%', 'maxHeight': '120px', 'overflowY': 'auto',
-        'border': '1.2px solid #d0e3f7', 'fontSize': '1.00rem',
-        'fontFamily': default_plot_template.font_family, 'wordBreak': 'break-word', 'overflowX': 'hidden',
+        'background': '#f8f9fa', 'borderRadius': '6px', 
+        'padding': '10px', 'marginBottom': '10px', 'width': '100%', 'maxHeight': '120px', 'overflowY': 'auto', 
+        'border': f'1px solid {GRID_COLOR}', 'fontSize': '0.95rem',
     }
     accent_bar_style = {
-        'height': '7px', 'width': '100%', 'background': f'linear-gradient(90deg, {PRIMARY_COLOR} 0%, {ACCENT_COLOR} 100%)',
-        'borderTopLeftRadius': '14px', 'borderTopRightRadius': '14px', 'marginBottom': '10px',
+        'height': '5px', 'width': '100%', 'background': f'linear-gradient(90deg, {PRIMARY_COLOR} 0%, {ACCENT_COLOR} 100%)',
+        'borderTopLeftRadius': '12px', 'borderTopRightRadius': '12px', 'marginBottom': '15px',
     }
-    section_header_style = {'fontWeight': 'bold', 'fontSize': '1.08rem', 'color': PRIMARY_COLOR, 'marginTop': '12px', 'marginBottom': '6px', 'letterSpacing': '0.2px'}
+    section_header_style = {'fontWeight': '600', 'fontSize': '1rem', 'color': PRIMARY_COLOR, 'marginBottom': '4px'}
 
-    if not example_opts and not thread_opts and (not size_opts or not any(size_opts)):
-        return html.Div([
-            html.Div([
-                html.Div(style=accent_bar_style),
-                html.Button('×', id={'type': 'close-filter-modal-btn', 'index': 0}, n_clicks=0, style={**StyleManager.FILTER_MODAL_CLOSE_STYLE, 'fontSize': '2.2em'}),
-                html.H3('Filter Results', style={'color': PRIMARY_COLOR, 'marginBottom': '14px', 'textAlign': 'center', 'fontSize': '1.3rem', 'fontWeight': 'bold'}),
-                html.Div('No data loaded or no filterable options available.', style={'color': ACCENT_COLOR, 'fontWeight': 'bold', 'textAlign': 'center', 'margin': '24px 0', 'fontSize': '1.01rem'})
-            ], style={**StyleManager.FILTER_MODAL_CONTENT_STYLE, 'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center', 'justifyContent': 'center', 'minHeight': '220px', 'maxHeight': '70vh', 'overflowY': 'auto', 'boxShadow': '0 8px 32px rgba(31,119,180,0.18)'}),
-        ], style={**StyleManager.FILTER_MODAL_OVERLAY_STYLE, 'backdropFilter': 'blur(2px)'})
+    if not ex_opts and not th_opts and not sz_opts:
+        return dbc.Modal([
+            dbc.ModalHeader(dbc.ModalTitle("Filter Results")),
+            dbc.ModalBody("No data loaded or no filterable options available.")
+        ], id="filter-modal-actual", is_open=True, centered=True)
 
-    return html.Div([
-        html.Div([
-            html.Div(style=accent_bar_style),
-            html.Div([
-                html.H3('Filter Results', style={'color': PRIMARY_COLOR, 'marginBottom': '14px', 'textAlign': 'center', 'fontSize': '1.3rem', 'fontWeight': 'bold', 'flex': 1, 'letterSpacing': '0.2px'}),
-                html.Button('×', id={'type': 'close-filter-modal-btn', 'index': 0}, n_clicks=0, style={**StyleManager.FILTER_MODAL_CLOSE_STYLE, 'fontSize': '2.2em'}),
-            ], style={'display': 'flex', 'alignItems': 'center', 'justifyContent': 'space-between', 'width': '100%', 'marginBottom': '8px', 'paddingRight': '10px'}),
+    modal_content = dbc.Container(fluid=True, children=[
+        html.Div(style=accent_bar_style),
+        dbc.Row([
+            dbc.Col(html.H3('Filter Results', className="mb-3", style={'color': PRIMARY_COLOR, 'textAlign': 'center', 'fontSize': '1.5rem', 'fontWeight': '600'}), width=11),
+            dbc.Col(
+                html.Button('×', id={'type': 'close-filter-modal-button-action', 'index': 0}, className="btn-close", 
+                            style=StyleManager.FILTER_MODAL_CLOSE_STYLE), width=1, className="text-end")
+        ], className="align-items-center mb-3"),
 
-            html.Div([
-                html.Label('Examples:', style=section_header_style),
-                html.Span('Select All', id='select-all-examples', n_clicks=0, style=select_all_style),
-                html.Span(' / ', style={'color': '#aaa', 'margin': '0 2px'}),
-                html.Span('Clear All', id='clear-all-examples', n_clicks=0, style=select_all_style),
-                dcc.Checklist(id='filter-example-checklist', options=example_opts or [], value=ex_val, inline=False, style=checklist_card_style, inputStyle={"marginRight":"5px"}),
-            ], style={'width': '100%', 'paddingLeft': '18px', 'paddingRight': '18px'}),
-            html.Hr(style=divider_style),
+        dbc.Row([
+            dbc.Col([
+                html.Div([
+                    html.Label('Examples:', style=section_header_style),
+                    html.Span([
+                        html.A('Select All', id='select-all-examples-filter', n_clicks=0, href="#", style=select_all_style),
+                        " / ",
+                        html.A('Clear All', id='clear-all-examples-filter', n_clicks=0, href="#", style=select_all_style),
+                    ], className="float-end")
+                ], className="clearfix mb-1"),
+                dcc.Checklist(id='modal-filter-example-checklist', options=ex_opts, value=ex_val, style=checklist_card_style, inputClassName="me-1"),
+            ], md=6),
+            dbc.Col([
+                html.Div([
+                    html.Label('Threads:', style=section_header_style),
+                     html.Span([
+                        html.A('Select All', id='select-all-threads-filter', n_clicks=0, href="#", style=select_all_style),
+                        " / ",
+                        html.A('Clear All', id='clear-all-threads-filter', n_clicks=0, href="#", style=select_all_style),
+                    ], className="float-end")
+                ], className="clearfix mb-1"),
+                dcc.Checklist(id='modal-filter-thread-checklist', options=th_opts, value=th_val, style=checklist_card_style, inputClassName="me-1"),
+            ], md=6)
+        ], className="mb-2"),
 
-            html.Div([
-                html.Label('Threads:', style=section_header_style),
-                html.Span('Select All', id='select-all-threads', n_clicks=0, style=select_all_style),
-                html.Span(' / ', style={'color': '#aaa', 'margin': '0 2px'}),
-                html.Span('Clear All', id='clear-all-threads', n_clicks=0, style=select_all_style),
-                dcc.Checklist(id='filter-thread-checklist', options=thread_opts or [], value=th_val, inline=False, style=checklist_card_style, inputStyle={"marginRight":"5px"}),
-            ], style={'width': '100%', 'paddingLeft': '18px', 'paddingRight': '18px'}),
-            html.Hr(style=divider_style),
+        dbc.Row([
+            dbc.Col([
+                html.Div([
+                    html.Label('Problem Sizes:', style=section_header_style),
+                    html.Span([
+                        html.A('Select All', id='select-all-sizes-filter', n_clicks=0, href="#", style=select_all_style),
+                        " / ",
+                        html.A('Clear All', id='clear-all-sizes-filter', n_clicks=0, href="#", style=select_all_style),
+                    ], className="float-end")
+                ], className="clearfix mb-1"),
+                dcc.Checklist(id='modal-filter-size-checklist', options=sz_opts, value=sz_val, style=checklist_card_style, inputClassName="me-1"),
+            ], md=6),
+            dbc.Col([
+                html.Label('Correctness Status:', style=section_header_style, className="d-block mb-1"),
+                dcc.Dropdown(id='modal-filter-correctness-dropdown', options=corr_opts, value=corr_val, clearable=False, style={'width': '100%', 'fontSize': '0.95rem'})
+            ], md=6, className="mt-md-0 mt-3") 
+        ], className="mb-3"),
+        
+        dbc.Row(dbc.Col([
+            dbc.Button('Reset to Defaults', id={'type': 'reset-filters-button-action', 'index': 0}, color="secondary", outline=True, className="me-2 shadow-sm"),
+            dbc.Button('Apply Filters', id={'type': 'apply-filters-button-action', 'index': 0}, color="primary", className="shadow-sm", style={'backgroundColor': ACCENT_COLOR, 'borderColor': ACCENT_COLOR}),
+        ], width=12, className="text-center mt-3 pt-3 border-top"),
+        )
+    ])
+    
+    return dbc.Modal([
+        dbc.ModalBody(modal_content)
+    ], 
+    id="filter-modal-actual", 
+    is_open=True, 
+    centered=True, 
+    size="lg", 
+    scrollable=True,
+    backdrop="static", 
+    keyboard=False, 
+    style={'zIndex': 1055} 
+    )
 
-            html.Div([
-                html.Label('Size:', style=section_header_style),
-                html.Span('Select All', id='select-all-sizes', n_clicks=0, style=select_all_style),
-                html.Span(' / ', style={'color': '#aaa', 'margin': '0 2px'}),
-                html.Span('Clear All', id='clear-all-sizes', n_clicks=0, style=select_all_style),
-                dcc.Checklist(id='filter-size-checklist', options=size_opts or [], value=sz_val, inline=False, style=checklist_card_style, inputStyle={"marginRight":"5px"}),
-            ], style={'width': '100%', 'paddingLeft': '18px', 'paddingRight': '18px'}) if size_opts and any(size_opts) else html.Div(),
-
-            html.Hr(style=divider_style) if size_opts and any(size_opts) else html.Div(),
-
-            html.Div([
-                html.Button('Clear All Filters', id={'type': 'reset-filters-btn', 'index': 0}, n_clicks=0, style={'backgroundColor': PRIMARY_COLOR, 'color': 'white', 'border': 'none', 'borderRadius': '7px', 'padding': '10px 22px', 'marginRight': '18px', 'fontWeight': 'bold', 'fontSize': '1.01rem', 'boxShadow': '0 2px 8px rgba(31,119,180,0.07)', 'transition': 'background 0.2s, box-shadow 0.2s', 'marginTop': '8px', 'cursor':'pointer'}),
-                html.Button('Apply Filters', id={'type': 'apply-filters-btn', 'index': 0}, n_clicks=0, style={'backgroundColor': ACCENT_COLOR, 'color': 'white', 'border': 'none', 'borderRadius': '7px', 'padding': '10px 22px', 'fontWeight': 'bold', 'fontSize': '1.01rem', 'boxShadow': '0 2px 8px rgba(255,127,14,0.13)', 'transition': 'background 0.2s, box-shadow 0.2s', 'marginTop': '8px', 'cursor':'pointer'}),
-            ], style={'marginTop': '16px', 'marginBottom': '4px', 'display': 'flex', 'justifyContent': 'center', 'gap': '12px'}),
-        ], style={**StyleManager.FILTER_MODAL_CONTENT_STYLE, 'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center', 'maxHeight': '80vh', 'overflowY': 'auto'}),
-    ], style={**StyleManager.FILTER_MODAL_OVERLAY_STYLE, 'backdropFilter': 'blur(2px)'})
-
-@app.callback( Output('filter-example-checklist', 'value'),
-    [Input('select-all-examples', 'n_clicks'), Input('clear-all-examples', 'n_clicks')],
-    [State('filter-example-checklist', 'options')], prevent_initial_call=True )
-def toggle_examples_select_all(select_all, clear_all, options):
-    ctx = callback_context
-    if not ctx.triggered or not options: raise PreventUpdate
-    btn_id = ctx.triggered[0]['prop_id'].split('.')[0]
-    if btn_id == 'select-all-examples': return [opt['value'] for opt in options]
-    elif btn_id == 'clear-all-examples': return []
+@app.callback( Output('modal-filter-example-checklist', 'value'),
+    [Input('select-all-examples-filter', 'n_clicks'), Input('clear-all-examples-filter', 'n_clicks')],
+    [State('modal-filter-example-checklist', 'options')], prevent_initial_call=True )
+def toggle_modal_examples_select(select_all_n, clear_all_n, options):
+    triggered_id = callback_context.triggered_id
+    if not options: raise PreventUpdate
+    if triggered_id == 'select-all-examples-filter': return [opt['value'] for opt in options]
+    if triggered_id == 'clear-all-examples-filter': return []
     raise PreventUpdate
 
-@app.callback( Output('filter-thread-checklist', 'value'),
-    [Input('select-all-threads', 'n_clicks'), Input('clear-all-threads', 'n_clicks')],
-    [State('filter-thread-checklist', 'options')], prevent_initial_call=True )
-def toggle_threads_select_all(select_all, clear_all, options):
-    ctx = callback_context
-    if not ctx.triggered or not options: raise PreventUpdate
-    btn_id = ctx.triggered[0]['prop_id'].split('.')[0]
-    if btn_id == 'select-all-threads': return [opt['value'] for opt in options]
-    elif btn_id == 'clear-all-threads': return []
+@app.callback( Output('modal-filter-thread-checklist', 'value'),
+    [Input('select-all-threads-filter', 'n_clicks'), Input('clear-all-threads-filter', 'n_clicks')],
+    [State('modal-filter-thread-checklist', 'options')], prevent_initial_call=True )
+def toggle_modal_threads_select(select_all_n, clear_all_n, options):
+    triggered_id = callback_context.triggered_id
+    if not options: raise PreventUpdate
+    if triggered_id == 'select-all-threads-filter': return [opt['value'] for opt in options]
+    if triggered_id == 'clear-all-threads-filter': return []
     raise PreventUpdate
 
-@app.callback( Output('filter-size-checklist', 'value'),
-    [Input('select-all-sizes', 'n_clicks'), Input('clear-all-sizes', 'n_clicks')],
-    [State('filter-size-checklist', 'options')], prevent_initial_call=True)
-def toggle_sizes_select_all(select_all, clear_all, options):
-    ctx = callback_context
-    if not ctx.triggered or not options: raise PreventUpdate
-    btn_id = ctx.triggered[0]['prop_id'].split('.')[0]
-    if btn_id == 'select-all-sizes': return [opt['value'] for opt in options]
-    elif btn_id == 'clear-all-sizes': return []
+@app.callback( Output('modal-filter-size-checklist', 'value'),
+    [Input('select-all-sizes-filter', 'n_clicks'), Input('clear-all-sizes-filter', 'n_clicks')],
+    [State('modal-filter-size-checklist', 'options')], prevent_initial_call=True)
+def toggle_modal_sizes_select(select_all, clear_all, options):
+    triggered_id = callback_context.triggered_id
+    if not options: raise PreventUpdate
+    if triggered_id == 'select-all-sizes-filter': return [opt['value'] for opt in options]
+    if triggered_id == 'clear-all-sizes-filter': return []
     raise PreventUpdate
 
 @app.callback(
-    [Output('filter-modal', 'children'), Output('filter-modal-store', 'data', allow_duplicate=True)],
-    [Input('open-filter-modal-btn', 'n_clicks'),
-     Input({'type': 'close-filter-modal-btn', 'index': ALL}, 'n_clicks'),
-     Input({'type': 'reset-filters-btn', 'index': ALL}, 'n_clicks')],
-    [State('filters-store', 'data'), State('results-store', 'data'), State('filter-modal-store', 'data')],
+    [Output('filter-modal-div', 'children'), 
+     Output('filter-modal-store', 'data', allow_duplicate=True)], 
+    [Input('open-filter-modal-button', 'n_clicks'),
+     Input({'type': 'close-filter-modal-button-action', 'index': ALL}, 'n_clicks'),
+     Input({'type': 'reset-filters-button-action', 'index': ALL}, 'n_clicks')],
+    [State('filters-store', 'data'),      
+     State('full-results-store', 'data'), 
+     State('filter-modal-store', 'data')], 
     prevent_initial_call=True
 )
-def filter_modal_open_close_reset(open_n, close_n_list, reset_n_list, active_filters, results_data_records, modal_selection_state):
-    ctx = callback_context
-    if not ctx.triggered: raise PreventUpdate
-
-    triggered_id_obj = ctx.triggered[0]
-    triggered_id = triggered_id_obj['prop_id'].split('.')[0]
-    if triggered_id.startswith('{'):
+def manage_filter_modal_visibility_and_state(open_n, close_n_list, reset_n_list, 
+                                             active_dashboard_filters, full_json_data, 
+                                             current_modal_selections_state):
+    triggered_id_obj = callback_context.triggered[0]
+    triggered_id_str = triggered_id_obj['prop_id'].split('.')[0]
+    
+    action_type = None
+    if triggered_id_str == 'open-filter-modal-button':
+        action_type = 'open'
+    elif triggered_id_str.startswith('{'): 
         try:
-            triggered_id_dict = json.loads(triggered_id.replace("'", "\""))
-            triggered_id_type = triggered_id_dict.get('type')
-        except: triggered_id_type = None
-    else: triggered_id_type = triggered_id
+            id_dict = json.loads(triggered_id_str.replace("'", "\""))
+            action_type = id_dict.get('type') 
+        except:
+            pass 
 
-    data_manager = DataManager(results_data_records)
-    example_opts, thread_opts, size_opts, sysinfo = [], [], [], None
-    if not data_manager.raw_df.empty:
-        if 'example_name' in data_manager.raw_df.columns: example_opts = [{'label': str(ex), 'value': ex} for ex in sorted(data_manager.raw_df['example_name'].unique())]
-        if 'threads' in data_manager.raw_df.columns: thread_opts = [{'label': str(t), 'value': t} for t in sorted(data_manager.raw_df['threads'].dropna().unique().astype(int))]
-        if 'problem_size' in data_manager.raw_df.columns: size_opts = [{'label': str(s), 'value': s} for s in sorted(data_manager.raw_df['problem_size'].dropna().unique())]
-        sysinfo = data_manager.get_system_info()
+    if not action_type: raise PreventUpdate
 
-    default_modal_selections = {
-        'examples': [opt['value'] for opt in example_opts],
-        'threads': [opt['value'] for opt in thread_opts],
-        'sizes': [opt['value'] for opt in size_opts],
+    dm = DataManager(full_json_data)
+    available_options = dm.get_available_filter_options()
+    
+    default_selections = { 
+        'examples': [opt['value'] for opt in available_options.get('examples', [])],
+        'threads': [opt['value'] for opt in available_options.get('threads', [])],
+        'sizes': [opt['value'] for opt in available_options.get('sizes', [])],
         'correctness': 'ALL'
     }
 
-    if triggered_id_type == 'open-filter-modal-btn':
-        current_selections = modal_selection_state if modal_selection_state and isinstance(modal_selection_state, dict) else active_filters if active_filters and any(active_filters.values()) else default_modal_selections
-        for key, default_val in default_modal_selections.items():
-            if key not in current_selections or not current_selections[key]: # Ensure all keys are present
-                current_selections[key] = default_val
-        return render_filter_modal(current_selections, example_opts, thread_opts, size_opts, sysinfo), current_selections
+    if action_type == 'open':
+        selections_to_render = default_selections.copy()
+        source_for_selections = active_dashboard_filters
+        # Corrected condition: Iterate over items() to have both key (k_iter) and value (v_iter)
+        if not (source_for_selections and any(
+            v_iter is not None and (v_iter != [] if isinstance(v_iter, list) else True)
+            for k_iter, v_iter in source_for_selections.items() 
+            if k_iter != 'correctness' or v_iter != 'ALL' 
+        )):
+            source_for_selections = current_modal_selections_state
 
-    elif triggered_id_type == 'close-filter-modal-btn' and any(c for c in close_n_list if c is not None):
-        return None, modal_selection_state
+        if source_for_selections and any(
+            v_iter is not None and (v_iter != [] if isinstance(v_iter, list) else True)
+            for k_iter, v_iter in source_for_selections.items()
+            if k_iter != 'correctness' or v_iter != 'ALL'
+        ):
+            for key_filter in default_selections:
+                if key_filter in source_for_selections and source_for_selections[key_filter] is not None:
+                    if isinstance(source_for_selections[key_filter], list) or source_for_selections[key_filter] == 'ALL':
+                         selections_to_render[key_filter] = source_for_selections[key_filter]
+        
+        return render_filter_modal_layout(selections_to_render, available_options), selections_to_render
 
-    elif triggered_id_type == 'reset-filters-btn' and any(r for r in reset_n_list if r is not None):
-        return render_filter_modal(default_modal_selections, example_opts, thread_opts, size_opts, sysinfo), default_modal_selections
+    elif action_type == 'close-filter-modal-button-action':
+        return None, current_modal_selections_state 
 
-    return dash.no_update, modal_selection_state
+    elif action_type == 'reset-filters-button-action':
+        return render_filter_modal_layout(default_selections, available_options), default_selections
 
+    return dash.no_update, dash.no_update
 
 @app.callback(
-    [Output('filters-store', 'data'), Output('filter-modal-store', 'data', allow_duplicate=True), Output('filter-modal', 'children', allow_duplicate=True)],
-    [Input({'type': 'apply-filters-btn', 'index': ALL}, 'n_clicks')],
-    [State('filter-example-checklist', 'value'), State('filter-thread-checklist', 'value'),
-     State('filter-size-checklist', 'value'), State('filter-modal-store', 'data')],
+    [Output('filters-store', 'data'), 
+     Output('filter-modal-store', 'data', allow_duplicate=True), 
+     Output('filter-modal-div', 'children', allow_duplicate=True)], 
+    [Input({'type': 'apply-filters-button-action', 'index': ALL}, 'n_clicks')],
+    [State('modal-filter-example-checklist', 'value'), 
+     State('modal-filter-thread-checklist', 'value'),
+     State('modal-filter-size-checklist', 'value'),
+     State('modal-filter-correctness-dropdown', 'value')],
     prevent_initial_call=True
 )
-def apply_filters_callback(apply_n_list, example_val, thread_val, size_val, modal_selection_state):
-    ctx = callback_context
-    if not ctx.triggered or not any(n for n in apply_n_list if n is not None):
+def apply_modal_filters_to_dashboard(apply_n_list, modal_ex_val, modal_th_val, modal_sz_val, modal_corr_val):
+    if not any(n for n in apply_n_list if n is not None): 
         raise PreventUpdate
-    new_filters = {
-        'examples': example_val if example_val is not None else [],
-        'threads': thread_val if thread_val is not None else [],
-        'sizes': size_val if size_val is not None else [],
-        'correctness': modal_selection_state.get('correctness', 'ALL') if modal_selection_state else 'ALL'
+    
+    new_dashboard_filters = {
+        'examples': modal_ex_val if modal_ex_val is not None else [],
+        'threads': modal_th_val if modal_th_val is not None else [],
+        'sizes': modal_sz_val if modal_sz_val is not None else [],
+        'correctness': modal_corr_val if modal_corr_val is not None else 'ALL'
     }
-    updated_modal_selection_state = new_filters.copy()
-    return new_filters, updated_modal_selection_state, None
-
+    return new_dashboard_filters, new_dashboard_filters, None 
 
 @app.callback(
-    Output('system-info-card', 'children'),
-    [Input('results-store', 'data')]
+    Output('system-info-display-card', 'children'),
+    [Input('full-results-store', 'data')]
 )
-def update_system_info_card(results_data_records):
-    if not results_data_records: return None
-    data_manager = DataManager(results_data_records)
+def update_system_info_display(full_json_data):
+    if not full_json_data: return None
+    
+    data_manager = DataManager(full_json_data)
     sysinfo = data_manager.get_system_info()
-    return render_system_info(sysinfo)
-
-def render_system_info(sysinfo):
+    
     if not sysinfo or not isinstance(sysinfo, dict):
-        return html.Div("System information not available.", style={'padding': '10px', 'color': NEUTRAL_COLOR})
+        return dbc.CardBody(html.P("System information not available.", className="text-muted"))
+    
     items = []
-    sys_map = {'os_platform': 'System', 'cpu_model': 'CPU', 'cpu_cores': 'Cores',
-               'memory_total_mb': 'RAM', 'clang_version': 'Clang', 'timestamp': 'Timestamp'}
-    for key, label in sys_map.items():
-        if sysinfo.get(key):
+    sys_map = {
+        'timestamp': ('Timestamp', None),
+        'cpu_model': ('CPU Model', None), 
+        'cpu_cores': ('CPU Cores', 0),
+        'memory_total_mb': ('Total Memory', 0), 
+        'os_platform': ('OS Platform', None),
+        'clang_version': ('Clang Version', None),
+    }
+    for key, (label, ndigits) in sys_map.items():
+        if key in sysinfo and sysinfo[key] is not None:
             value = sysinfo[key]
-            if key == 'memory_total_mb' and isinstance(value, (int, float)): value = f"{value:,.0f} MB"
-            items.append(html.Div([html.B(f"{label}: "), html.Span(str(value))], style={'marginBottom': '5px'}))
-    if not items: return html.Div("No detailed system information found.", style={'padding': '10px', 'color': NEUTRAL_COLOR})
-    return html.Div([
-        html.H3("System Information", style={'color': PRIMARY_COLOR, 'fontWeight': 'bold', 'marginTop': '24px', 'marginBottom': '12px'}),
-        html.Div(items, style={'marginTop': '10px', 'fontSize': '0.98rem', 'color': NEUTRAL_COLOR, 'backgroundColor': '#f7fbff',
-                                'borderRadius': '8px', 'padding': '12px 18px', 'boxShadow': '0 2px 8px rgba(31,119,180,0.07)'})
-    ], style={'marginBottom': '18px'})
-
-
-# average_per_example_figure function removed
-
-def create_scaling_plot(summary_df, template):
-    if summary_df.empty or 'mean_time' not in summary_df.columns:
-        fig = go.Figure().add_annotation(text="No scaling data available", x=0.5, y=0.5, showarrow=False)
-        return template.apply(fig, plot_title="Execution Time Scaling", height=400, xaxis_title="", yaxis_title="")
-
-    examples = sorted(summary_df['example_name'].unique())
-    num_examples = len(examples)
-    if num_examples == 0:
-        fig = go.Figure().add_annotation(text="No examples for scaling plot", x=0.5, y=0.5, showarrow=False)
-        return template.apply(fig, plot_title="Execution Time Scaling", height=400, xaxis_title="", yaxis_title="")
-
-    cols = min(3, num_examples); rows = (num_examples + cols - 1) // cols
-    fig = make_subplots(rows=rows, cols=cols, subplot_titles=[f"Ex: {ex}" for ex in examples],
-                        shared_xaxes=True, shared_yaxes=False, vertical_spacing=0.22, horizontal_spacing=0.08)
-    legend_added = set()
-    for i, example in enumerate(examples):
-        row_idx, col_idx = i // cols + 1, i % cols + 1
-        example_data = summary_df[summary_df['example_name'] == example]
-        problem_sizes = sorted(example_data['problem_size'].unique())
-        for ps_idx, problem_size in enumerate(problem_sizes):
-            size_group = example_data[example_data['problem_size'] == problem_size]
-            for version in ['CARTS', 'OMP']:
-                ver_group = size_group[size_group['version'] == version].sort_values('threads')
-                if ver_group.empty: continue
-
-                current_color = PRIMARY_COLOR if version == 'CARTS' else ACCENT_COLOR
-                current_dash = 'solid' if version == 'CARTS' else 'dash'
-                legend_name = f"{version} (S: {problem_size})"
-                show_legend_trace = legend_name not in legend_added
-                if show_legend_trace: legend_added.add(legend_name)
-
-                fig.add_trace(go.Scatter(
-                    x=ver_group['threads'], y=ver_group['mean_time'], mode='lines+markers', name=legend_name,
-                    line=dict(color=current_color, width=2, dash=current_dash),
-                    marker=dict(size=8, color=current_color, line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
-                    legendgroup=legend_name, showlegend=show_legend_trace,
-                    hovertemplate=f"<b>{example} - {version}</b><br>Size: {problem_size}<br>Threads: %{{x}}<br>Time: %{{y:.4f}} s<extra></extra>"
-                ), row=row_idx, col=col_idx)
-        fig.update_xaxes(title_text="Threads", type='category', row=row_idx, col=col_idx, title_standoff=5)
-        fig.update_yaxes(title_text="Time (s)", type='log', row=row_idx, col=col_idx, title_standoff=5)
-
-    calculated_height = max(500, 300 * rows)
-    return template.apply(fig, plot_title="Execution Time Scaling by Example",
-                          height=calculated_height, legend_title="Version (Size)",
-                          xaxis_title="", yaxis_title="") # Explicitly clear global axis titles for subplots
-
-
-def create_speedup_comparison_plot(summary_df, template):
-    if summary_df.empty or 'speedup_vs_other' not in summary_df.columns:
-        fig = go.Figure().add_annotation(text="No speedup data available", x=0.5, y=0.5, showarrow=False)
-        return template.apply(fig, plot_title="OMP vs CARTS Speedup", height=500)
-
-    df_carts = summary_df[summary_df['version'] == 'CARTS'].copy()
-    df_carts.dropna(subset=['speedup_vs_other'], inplace=True)
-    if df_carts.empty:
-        fig = go.Figure().add_annotation(text="No CARTS data with speedup to compare", x=0.5, y=0.5, showarrow=False)
-        return template.apply(fig, plot_title="OMP vs CARTS Speedup", height=500)
-
-    fig = go.Figure()
-    fig.add_shape(type="line", x0=0, y0=1, x1=1, y1=1, line=dict(color="gray", width=1, dash="dash"), xref="paper", yref="y")
-
-    for (example, problem_size), group in df_carts.groupby(['example_name', 'problem_size']):
-        group = group.sort_values('threads')
-        if group.empty: continue
-
-        omp_time_data = group.get('omp_time_for_comparison', pd.Series([pd.NA] * len(group)))
-        customdata_stack = np.stack((
-            group['problem_size'].astype(str),
-            omp_time_data.apply(lambda x: format_number(x, 4) if pd.notna(x) else "N/A"),
-            group['mean_time'].apply(lambda x: format_number(x, 4) if pd.notna(x) else "N/A")
-        ), axis=-1)
-
-        fig.add_trace(go.Scatter(
-            x=group['threads'], y=group['speedup_vs_other'],
-            mode='lines+markers', name=f"{example} (S: {problem_size})",
-            line=dict(color=PRIMARY_COLOR, width=2),
-            marker=dict(size=8, color=PRIMARY_COLOR, line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
-            customdata=customdata_stack,
-            hovertemplate=(
-                f"<b>{example}</b> (Size: %{{customdata[0]}})<br>" +
-                "Threads: %{x}<br>" +
-                "OMP/CARTS Speedup: %{y:.2f}x<br>" +
-                "OMP Time: %{customdata[1]}s<br>" +
-                "CARTS Time: %{customdata[2]}s<extra></extra>"
-            )
-        ))
-
-    y_max_data = df_carts['speedup_vs_other'].max() if not df_carts.empty and df_carts['speedup_vs_other'].notna().any() else 2
-    y_min_data = df_carts['speedup_vs_other'].min() if not df_carts.empty and df_carts['speedup_vs_other'].notna().any() else 0.5
-
-    fig.update_layout(
-        shapes=[dict(type="rect", xref="paper", yref="y", x0=0,y0=0,x1=1,y1=1,fillcolor="rgba(255,0,0,0.05)",layer="below",line_width=0),
-                dict(type="rect", xref="paper", yref="y", x0=0,y0=1,x1=1,y1=max(2, y_max_data*1.1),fillcolor="rgba(0,255,0,0.05)",layer="below",line_width=0)],
-        annotations=[dict(x=0.95,y=min(0.8, y_min_data*1.1 if y_min_data < 1 else 0.8),xref="paper",yref="y",text="CARTS Slower",showarrow=False,font=dict(size=12,color="darkred")),
-                     dict(x=0.95,y=max(1.2, y_max_data*0.9 if y_max_data > 1 else 1.2),xref="paper",yref="y",text="CARTS Faster",showarrow=False,font=dict(size=12,color="darkgreen"))],
-        xaxis=dict(type='category'))
-    return template.apply(fig, plot_title="OMP vs CARTS Performance (OMP Time / CARTS Time)",
-                          xaxis_title="Threads", yaxis_title="Speedup (OMP/CARTS)",
-                          height=550, legend_title="Example (Size)")
-
-def create_slowdown_comparison_plot(summary_df, template):
-    if summary_df.empty:
-        fig = go.Figure().add_annotation(text="No data for slowdown comparison", x=0.5, y=0.5, showarrow=False)
-        return template.apply(fig, plot_title="CARTS vs OMP Slowdown", height=500)
-
-    df_omp = summary_df[summary_df['version'] == 'OMP'].copy()
-
-    if 'carts_time_for_comparison' in df_omp.columns and 'mean_time' in df_omp.columns:
-        df_omp['carts_time_numeric'] = pd.to_numeric(df_omp['carts_time_for_comparison'], errors='coerce')
-        df_omp['slowdown_of_carts'] = df_omp['carts_time_numeric'] / df_omp['mean_time'].replace(0, np.nan)
-        df_omp.dropna(subset=['slowdown_of_carts'], inplace=True)
-    else:
-        fig = go.Figure().add_annotation(text="Required time columns for slowdown missing", x=0.5, y=0.5, showarrow=False)
-        return template.apply(fig, plot_title="CARTS vs OMP Slowdown", height=500)
-
-    if df_omp.empty:
-        fig = go.Figure().add_annotation(text="No data to calculate CARTS/OMP slowdown", x=0.5, y=0.5, showarrow=False)
-        return template.apply(fig, plot_title="CARTS vs OMP Slowdown", height=500)
-
-    fig = go.Figure()
-    fig.add_shape(type="line", x0=0, y0=1, x1=1, y1=1, line=dict(color="gray", width=1, dash="dash"), xref="paper", yref="y")
-
-    for (example, problem_size), group in df_omp.groupby(['example_name', 'problem_size']):
-        group = group.sort_values('threads')
-        if group.empty: continue
-
-        customdata_stack = np.stack((
-            group['problem_size'].astype(str),
-            group.get('carts_time_numeric', pd.Series([pd.NA] * len(group))).apply(lambda x: format_number(x, 4) if pd.notna(x) else "N/A"),
-            group['mean_time'].apply(lambda x: format_number(x, 4) if pd.notna(x) else "N/A")
-        ), axis=-1)
-
-        fig.add_trace(go.Scatter(
-            x=group['threads'], y=group['slowdown_of_carts'],
-            mode='lines+markers', name=f"{example} (S: {problem_size})",
-            line=dict(color=ACCENT_COLOR, width=2, dash='dash'),
-            marker=dict(size=8, color=ACCENT_COLOR, line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
-            customdata=customdata_stack,
-            hovertemplate=(
-                f"<b>{example}</b> (Size: %{{customdata[0]}})<br>" +
-                "Threads: %{x}<br>" +
-                "CARTS/OMP Slowdown: %{y:.2f}x<br>" +
-                "CARTS Time: %{customdata[1]}s<br>" +
-                "OMP Time: %{customdata[2]}s<extra></extra>"
-            )
-        ))
-
-    y_max_data = df_omp['slowdown_of_carts'].max() if not df_omp.empty and df_omp['slowdown_of_carts'].notna().any() else 2
-    y_min_data = df_omp['slowdown_of_carts'].min() if not df_omp.empty and df_omp['slowdown_of_carts'].notna().any() else 0.5
-
-    fig.update_layout(
-        shapes=[dict(type="rect", xref="paper", yref="y", x0=0,y0=0,x1=1,y1=1,fillcolor="rgba(0,255,0,0.05)",layer="below",line_width=0),
-                dict(type="rect", xref="paper", yref="y", x0=0,y0=1,x1=1,y1=max(2, y_max_data*1.1),fillcolor="rgba(255,0,0,0.05)",layer="below",line_width=0)],
-        annotations=[dict(x=0.95,y=min(0.8, y_min_data*1.1 if y_min_data < 1 else 0.8),xref="paper",yref="y",text="CARTS Faster",showarrow=False,font=dict(size=12,color="darkgreen")),
-                     dict(x=0.95,y=max(1.2, y_max_data*0.9 if y_max_data > 1 else 1.2),xref="paper",yref="y",text="CARTS Slower",showarrow=False,font=dict(size=12,color="darkred"))],
-        xaxis=dict(type='category'))
-    return template.apply(fig, plot_title="CARTS vs OMP Performance (CARTS Time / OMP Time)",
-                          xaxis_title="Threads", yaxis_title="Slowdown (CARTS/OMP)",
-                          height=550, legend_title="Example (Size)")
-
-
-def create_parallel_efficiency_plot(summary_df, template):
-    if summary_df.empty or 'parallel_efficiency' not in summary_df.columns:
-        fig = go.Figure().add_annotation(text="No parallel efficiency data", x=0.5, y=0.5, showarrow=False)
-        return template.apply(fig, plot_title="Parallel Efficiency", height=500)
-
-    df_filtered = summary_df[summary_df['threads'] > 1].copy()
-    df_filtered.dropna(subset=['parallel_efficiency'], inplace=True)
-    if df_filtered.empty:
-        fig = go.Figure().add_annotation(text="No data for multi-threaded efficiency", x=0.5, y=0.5, showarrow=False)
-        return template.apply(fig, plot_title="Parallel Efficiency", height=500)
-
-    fig = go.Figure()
-    max_threads_val = df_filtered['threads'].max() if not df_filtered.empty else 0
-    if pd.notna(max_threads_val) and max_threads_val >= 2:
-        fig.add_trace(go.Scatter(x=list(range(2, int(max_threads_val) + 1)), y=[1.0]*(int(max_threads_val)-1),
-                                 mode='lines', name='Ideal Scaling', line=dict(color='grey', dash='dash', width=1.5)))
-    for (example, problem_size, version), group in df_filtered.groupby(['example_name', 'problem_size', 'version']):
-        group = group.sort_values('threads')
-        if group.empty: continue
-        current_color = PRIMARY_COLOR if version == 'CARTS' else ACCENT_COLOR
-        current_dash = 'solid' if version == 'CARTS' else 'dash'
-        fig.add_trace(go.Scatter(x=group['threads'], y=group['parallel_efficiency'], mode='lines+markers',
-                                 name=f"{example} - {version} (S: {problem_size})",
-                                 line=dict(color=current_color, width=2, dash=current_dash),
-                                 marker=dict(size=8, color=current_color, line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
-                                 hovertemplate=f"<b>{example} - {version}</b> (S: {problem_size})<br>Threads: %{{x}}<br>Efficiency: %{{y:.3f}}<extra></extra>"))
-    max_eff = df_filtered['parallel_efficiency'].max() if not df_filtered.empty and df_filtered['parallel_efficiency'].notna().any() else 1.1
-    fig.update_layout(yaxis_range=[0, max(1.1, max_eff * 1.05)], xaxis=dict(type='category'))
-    return template.apply(fig, plot_title="Parallel Efficiency (Strong Scaling)", xaxis_title="Threads",
-                          yaxis_title="Efficiency (T1 / (Tn * N))", height=550, legend_title="Ex - Ver (Size)")
-
-def create_single_example_variability_plot(example_df_with_time_col, example_name, template):
-    """
-    Generates a single box plot for a specific example, faceted by problem size.
-    Assumes example_df_with_time_col already contains the 'time' column.
-    """
-    if example_df_with_time_col.empty or 'time' not in example_df_with_time_col.columns:
-        fig = go.Figure().add_annotation(text=f"No plottable variability data for {example_name}.", xref="paper", yref="paper", showarrow=False)
-        return template.apply(fig, plot_title=f"Variability: {example_name}", height=450, xaxis_title="Threads", yaxis_title="Execution Time (s)")
-
-    fig = px.box(example_df_with_time_col, x='threads', y='time', color='version',
-                 facet_col='problem_size', facet_col_wrap=2, # Adjust wrap as needed
-                 boxmode='group',
-                 labels={'time': 'Execution Time (s)', 'threads': 'Threads', 'version': 'Version', 'problem_size': 'Problem Size'},
-                 category_orders={'threads': sorted(example_df_with_time_col['threads'].unique())},
-                 color_discrete_map={'CARTS': PRIMARY_COLOR, 'OMP': ACCENT_COLOR}
-                )
+            if key == 'memory_total_mb' and isinstance(value, (int, float)): 
+                value_str = f"{format_number(value, 0)} MB"
+            elif ndigits is not None:
+                value_str = format_number(value, ndigits)
+            else:
+                value_str = str(value)
+            items.append(html.Div([html.Strong(f"{label}: "), html.Span(value_str)], className="mb-1"))
     
-    fig.update_yaxes(type='log', matches=None, title_standoff=10)
-    fig.update_xaxes(matches=None, type='category', title_standoff=10)
+    if not items: return dbc.CardBody(html.P("No detailed system information found.", className="text-muted"))
     
-    num_problem_sizes = example_df_with_time_col['problem_size'].nunique()
-    plot_height = max(450, 250 * ((num_problem_sizes +1 )//2) )
-
-    # Pass empty strings for global axis titles to template.apply, so subplot titles from px.box are used
-    fig = template.apply(fig, plot_title=f"Execution Time Variability: {example_name}",
-                         height=plot_height, legend_title="Version",
-                         xaxis_title="", yaxis_title="") # Ensure px.box labels are used
-    
-    fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1])) # Clean facet titles
-    fig.update_layout(margin=dict(t=60, b=120 if template.legend_y < 0 else 80))
-    return fig
-
-
-def create_cache_performance_comparison(profiling_df, template):
-    if profiling_df.empty:
-        fig = go.Figure().add_annotation(text="No cache profiling data", x=0.5, y=0.5, showarrow=False)
-        return template.apply(fig, plot_title="Cache Performance", height=500)
-
-    cache_miss_rate_df = profiling_df[profiling_df['event'] == 'cache-miss-rate'].copy()
-    if not cache_miss_rate_df.empty:
-        fig = go.Figure()
-        for (example, problem_size), group_data in cache_miss_rate_df.groupby(['example_name', 'problem_size']):
-            for version in ['CARTS', 'OMP']:
-                ver_data = group_data[group_data['version'] == version].sort_values('threads')
-                if ver_data.empty: continue
-                current_color = PRIMARY_COLOR if version == 'CARTS' else ACCENT_COLOR
-                fig.add_trace(go.Bar(
-                    x=ver_data['threads'], y=ver_data['mean'] * 100, name=f"{example} (S:{problem_size}) - {version}",
-                    marker_color=current_color, opacity=0.85,
-                    marker_line_width=template.bar_line_width, marker_line_color=current_color,
-                    hovertemplate=f"<b>{example} (S:{problem_size}) - {version}</b><br>Threads: %{{x}}<br>Cache Miss Rate: %{{y:.2f}}%<extra></extra>"
-                ))
-        fig.update_layout(barmode='group', xaxis_type='category')
-        return template.apply(fig, plot_title="Cache Miss Rate Comparison", xaxis_title="Threads",
-                              yaxis_title="Cache Miss Rate (%)", height=550, legend_title="Ex (Size) - Ver")
-    else:
-        cache_events_fallback = ['cache-misses', 'L1-dcache-load-misses', 'LLC-load-misses']
-        df_cache_fallback = profiling_df[profiling_df['event'].isin(cache_events_fallback)].copy()
-        if df_cache_fallback.empty:
-            return template.apply(go.Figure().add_annotation(text="No specific cache data", x=0.5,y=0.5,showarrow=False), plot_title="Cache Performance", height=500)
-        event_to_plot = df_cache_fallback['event'].unique()[0]
-        df_to_plot = df_cache_fallback[df_cache_fallback['event'] == event_to_plot]
-        fig = go.Figure()
-        for (example, problem_size, version), group_data in df_to_plot.groupby(['example_name', 'problem_size', 'version']):
-            group_data = group_data.sort_values('threads')
-            current_color = PRIMARY_COLOR if version == 'CARTS' else ACCENT_COLOR
-            current_dash = 'solid' if version == 'CARTS' else 'dash'
-            fig.add_trace(go.Scatter(
-                x=group_data['threads'], y=group_data['mean'], name=f"{example} (S:{problem_size}) - {version}",
-                mode='lines+markers',
-                line=dict(color=current_color, dash=current_dash, width=2),
-                marker=dict(color=current_color, size=8, line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
-                hovertemplate=f"<b>{example} ({version})</b><br>Threads: %{{x}}<br>{event_to_plot}: %{{y:,.0f}}<extra></extra>"
-            ))
-        fig.update_layout(xaxis_type='category', yaxis_type='log')
-        return template.apply(fig, plot_title=f"{event_to_plot} Comparison", xaxis_title="Threads",
-                              yaxis_title="Count (log)", height=550, legend_title="Ex (Size) - Ver")
-
-
-def create_ipc_comparison_plot(profiling_df, template):
-    if profiling_df.empty or 'IPC' not in profiling_df['event'].unique():
-        fig = go.Figure().add_annotation(text="No IPC data", x=0.5, y=0.5, showarrow=False)
-        return template.apply(fig, plot_title="IPC Comparison", height=500)
-
-    df_ipc = profiling_df[profiling_df['event'] == 'IPC'].copy()
-    if df_ipc.empty:
-        fig = go.Figure().add_annotation(text="No IPC data points", x=0.5, y=0.5, showarrow=False)
-        return template.apply(fig, plot_title="IPC Comparison", height=500)
-
-    fig = go.Figure()
-    for (example, problem_size, version), group in df_ipc.groupby(['example_name', 'problem_size', 'version']):
-        group = group.sort_values('threads')
-        if group.empty: continue
-        current_color = PRIMARY_COLOR if version == 'CARTS' else ACCENT_COLOR
-        current_dash = 'solid' if version == 'CARTS' else 'dash'
-        fig.add_trace(go.Scatter(
-            x=group['threads'], y=group['mean'], mode='lines+markers', name=f"{example} (S:{problem_size}) - {version}",
-            line=dict(color=current_color, width=2, dash=current_dash),
-            marker=dict(size=8, color=current_color, line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
-            hovertemplate=f"<b>{example} ({version})</b><br>Size: {problem_size}<br>Threads: %{{x}}<br>IPC: %{{y:.3f}}<extra></extra>"
-        ))
-    fig.add_shape(type="line", x0=0,y0=1.0,x1=1,y1=1.0,line=dict(color="grey",width=1,dash="dash"),xref="paper",yref="y")
-    fig.update_layout(xaxis_type='category')
-    return template.apply(fig, plot_title="Instructions Per Cycle (IPC) Comparison", xaxis_title="Threads",
-                          yaxis_title="IPC", height=550, legend_title="Ex (Size) - Ver")
-
-
-def create_stalls_analysis_plot(profiling_df, template):
-    if profiling_df.empty:
-        fig = go.Figure().add_annotation(text="No stalls data", x=0.5, y=0.5, showarrow=False)
-        return template.apply(fig, plot_title="CPU Stalls Analysis", height=500)
-
-    stall_events_present = [e for e in profiling_df['event'].unique() if 'stall' in e.lower() or 'resource_stalls' in e.lower()]
-    if not stall_events_present:
-        fig = go.Figure().add_annotation(text="No stall-related events found", x=0.5, y=0.5, showarrow=False)
-        return template.apply(fig, plot_title="CPU Stalls Analysis", height=500)
-
-    event_to_plot = None; priority_stalls = ['cycle_activity.stalls_total', 'stalls_total', 'resource_stalls.any']
-    for p_event in priority_stalls:
-        if p_event in stall_events_present: event_to_plot = p_event; break
-    if not event_to_plot: event_to_plot = stall_events_present[0]
-
-    df_stalls_event = profiling_df[profiling_df['event'] == event_to_plot].copy()
-    if df_stalls_event.empty:
-        fig = go.Figure().add_annotation(text=f"No data for event: {event_to_plot}", x=0.5,y=0.5,showarrow=False)
-        return template.apply(fig, plot_title=f"CPU Stalls: {event_to_plot}", height=500)
-
-    fig = go.Figure(); plot_as_percentage = False
-    cycles_df = profiling_df[profiling_df['event'] == 'cycles']
-    if not cycles_df.empty:
-        df_stalls_event = pd.merge(df_stalls_event, cycles_df[['example_name', 'problem_size', 'threads', 'version', 'mean']],
-                                   on=['example_name', 'problem_size', 'threads', 'version'], suffixes=('', '_cycles'), how='left')
-        if 'mean_cycles' in df_stalls_event.columns and df_stalls_event['mean_cycles'].notna().any() and (df_stalls_event['mean_cycles'] > 0).any():
-            df_stalls_event['stall_percentage'] = (df_stalls_event['mean'] / df_stalls_event['mean_cycles'].replace(0, np.nan)) * 100
-            plot_as_percentage = True
-
-    y_col = 'stall_percentage' if plot_as_percentage else 'mean'
-    y_title = "Stall Percentage (%)" if plot_as_percentage else f"{event_to_plot} (Count, log)"
-    y_type = 'linear' if plot_as_percentage else 'log'
-
-    for (ex, ps, ver), group in df_stalls_event.groupby(['example_name', 'problem_size', 'version']):
-        group = group.sort_values('threads')
-        if group.empty or y_col not in group.columns or group[y_col].isnull().all(): continue
-        current_color = PRIMARY_COLOR if ver == 'CARTS' else ACCENT_COLOR
-        current_dash = 'solid' if ver == 'CARTS' else 'dash'
-        ht = f"<b>{ex} ({ver})</b><br>Size: {ps}<br>Threads: %{{x}}<br>"
-        ht += "Stall %: %{y:.2f}%" if plot_as_percentage else f"{event_to_plot}: %{{y:,.0f}}"
-        ht += "<extra></extra>"
-        fig.add_trace(go.Scatter(x=group['threads'], y=group[y_col], mode='lines+markers', name=f"{ex} (S:{ps}) - {ver}",
-                                 line=dict(color=current_color, width=2, dash=current_dash),
-                                 marker=dict(size=8, color=current_color, line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
-                                 hovertemplate=ht))
-    fig.update_layout(xaxis_type='category', yaxis_type=y_type)
-    return template.apply(fig, plot_title=f"CPU Stalls: {event_to_plot}", xaxis_title="Threads",
-                          yaxis_title=y_title, height=550, legend_title="Ex (Size) - Ver")
-
+    return [
+        dbc.CardHeader(html.H3("System Information", className="mb-0", style={'fontSize': '1.3rem'})),
+        dbc.CardBody(items)
+    ]
 
 # --- Download CSV Callbacks ---
-@app.callback(Output("download-benchmark-csv", "data"), Input("download-benchmark-btn", "n_clicks"),
-    [State('filters-store', 'data'), State('results-store', 'data')], prevent_initial_call=True)
-def download_benchmark_summary(n_clicks, filters, data_records):
-    if not data_records: raise PreventUpdate
-    data_manager = DataManager(data_records)
-    summary_df = data_manager.get_benchmark_summary(filters)
-    if summary_df.empty: raise PreventUpdate
-    return dcc.send_data_frame(summary_df.to_csv, "benchmark_summary.csv", index=False)
+@app.callback(
+    Output("download-benchmark-data", "data"), 
+    Input("download-benchmark-csv-button", "n_clicks"),
+    [State('filters-store', 'data'), State('full-results-store', 'data')], 
+    prevent_initial_call=True
+)
+def download_benchmark_summary_csv(n_clicks, filters, full_json_data):
+    if not full_json_data: raise PreventUpdate
+    
+    data_manager = DataManager(full_json_data)
+    benchmark_df = data_manager.get_benchmark_display_data(filters) 
+    
+    if benchmark_df.empty: 
+        print("No benchmark data to download after filtering.")
+        raise PreventUpdate
+        
+    return dcc.send_data_frame(benchmark_df.to_csv, "benchmark_summary_report.csv", index=False)
 
-@app.callback(Output("download-profiling-csv", "data"), Input("download-profiling-btn", "n_clicks"),
-    [State('filters-store', 'data'), State('results-store', 'data')], prevent_initial_call=True)
-def download_profiling_summary(n_clicks, filters, data_records):
-    if not data_records: raise PreventUpdate
-    data_manager = DataManager(data_records)
-    # Use get_profiling_data to get categorized and derived metrics
-    summary_df = data_manager.get_profiling_data(filters)
-    if summary_df.empty: raise PreventUpdate("No profiling data to download after filtering.")
-    return dcc.send_data_frame(summary_df.to_csv, "profiling_summary.csv", index=False)
+@app.callback(
+    Output("download-profiling-data", "data"), 
+    Input("download-profiling-csv-button", "n_clicks"),
+    [State('filters-store', 'data'), State('full-results-store', 'data')], 
+    prevent_initial_call=True
+)
+def download_profiling_summary_csv(n_clicks, filters, full_json_data):
+    if not full_json_data: raise PreventUpdate
+        
+    data_manager = DataManager(full_json_data)
+    profiling_df = data_manager.get_profiling_display_data(filters) 
+    
+    if profiling_df.empty: 
+        print("No profiling data to download after filtering.")
+        raise PreventUpdate
+        
+    return dcc.send_data_frame(profiling_df.to_csv, "profiling_summary_report.csv", index=False)
 
 # --- Help Modal Callbacks ---
 @app.callback(
@@ -1770,21 +2087,15 @@ def download_profiling_summary(n_clicks, filters, data_records):
     [State({'type': 'help-modal', 'index': MATCH}, 'is_open')],
     prevent_initial_call=True
 )
-def toggle_help_modal(open_clicks, close_clicks, is_open):
-    # This callback handles multiple modals using pattern matching.
-    # It determines which button (open or close) was clicked for which modal.
-    triggered_id = ctx.triggered_id
-    if not triggered_id:
+def toggle_plot_help_modal(open_clicks, close_clicks, is_open):
+    triggered_id = callback_context.triggered_id
+    if not triggered_id: raise PreventUpdate 
+    
+    if open_clicks is None and close_clicks is None and not is_open: 
         raise PreventUpdate
-
-    # If any of the n_clicks properties are None, it means they haven't been clicked yet.
-    # We only care about actual click events.
-    if open_clicks is None and close_clicks is None:
-        raise PreventUpdate
-        
-    # If an open or close button was clicked, toggle the modal's state.
-    return not is_open
-
+    if (open_clicks and open_clicks > 0) or (close_clicks and close_clicks > 0) :
+        return not is_open
+    return is_open 
 
 if __name__ == "__main__":
     app.run(debug=True)

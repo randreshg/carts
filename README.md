@@ -43,5 +43,3 @@ python3 examples/interactive_report.py
 - Use the Profiling Results tab to filter by example, threads, problem size, args, and to view advanced metrics (MPKI, CPI, IPC, bandwidth, miss rates, stalls/instr, etc).
 
 ---
-
-For more details, see the comments in `examples/carts_test.py` and `examples/interactive_report.py`.

@@ -99,6 +99,17 @@ arts:
 		-DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR) \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
 	make -C $(ARTS_BUILD_DIR) install -j
+arts-debug:
+	mkdir -p $(ARTS_BUILD_DIR)
+	mkdir -p $(ARTS_INSTALL_DIR)
+	cmake -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) \
+		-DCMAKE_C_COMPILER=clang \
+		-DCMAKE_CXX_COMPILER=clang++ \
+		-DCMAKE_BUILD_TYPE=Debug \
+		-DSMART_DB=ON \
+		-DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR) \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
+	make -C $(ARTS_BUILD_DIR) install -j
 arts-clean:
 	rm -f -r $(ARTS_BUILD_DIR)
 	rm -f -r $(ARTS_INSTALL_DIR)
