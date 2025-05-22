@@ -64,6 +64,17 @@ include_directories(${PROJECT_BINARY_DIR}/include)
 link_directories(${LLVM_BUILD_LIBRARY_DIR})
 add_definitions(${LLVM_DEFINITIONS})
 
+# ARTS introspection options
+option(ENABLE_ARTS_INTROSPECTION "Enable ARTS introspection and counter system" OFF)
+if(ENABLE_ARTS_INTROSPECTION)
+  message(STATUS "ARTS introspection enabled - will collect performance data")
+  add_definitions(-DINSPECTOR)
+else()
+  message(STATUS "ARTS introspection disabled - zero runtime overhead")
+endif()
+
+
+
 # Polygeist
 include_directories(
   ${POLYGEIST_BUILD_DIR}/include
