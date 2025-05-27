@@ -11,26 +11,26 @@ import datetime
 import numpy as np
 from dash.exceptions import PreventUpdate
 import re
-from collections import defaultdict
-import base64 
-import io 
+# from collections import defaultdict # Unused import
+import base64
+import io
 
 # --- File Paths ---
 DEFAULT_RESULTS_PATH = os.path.join(os.path.dirname(__file__) if '__file__' in locals() else '.', 'output_benchmarks/performance_results_full_data.json')
 
 # --- Styling Constants ---
-PRIMARY_COLOR = '#1f77b4' 
-ACCENT_COLOR = '#ff7f0e'  
-NEUTRAL_COLOR = '#505f79' 
-MAIN_BG_COLOR = '#f0f2f5' 
+PRIMARY_COLOR = '#1f77b4'
+ACCENT_COLOR = '#ff7f0e'
+NEUTRAL_COLOR = '#505f79'
+MAIN_BG_COLOR = '#f0f2f5'
 CARD_BG_COLOR = '#ffffff'
-SUCCESS_COLOR = '#28a745' 
-WARNING_COLOR = '#ffc107' 
-ERROR_COLOR = '#dc3545'   
-PLOT_BG_COLOR = 'rgba(229, 236, 246, 0.3)' 
+SUCCESS_COLOR = '#28a745'
+WARNING_COLOR = '#ffc107'
+ERROR_COLOR = '#dc3545'
+PLOT_BG_COLOR = 'rgba(229, 236, 246, 0.3)'
 GRID_COLOR = '#d1d9e6'
 MARKER_OUTLINE_COLOR = 'rgba(0,0,0,0.7)'
-TEXT_MUTED_COLOR = '#6c757d' 
+TEXT_MUTED_COLOR = '#6c757d'
 
 # --- PlotHelpTextManager Class ---
 class PlotHelpTextManager:
@@ -256,9 +256,9 @@ class PlotTemplate:
         for trace in fig.data:
             if trace.type == 'bar':
                 if not hasattr(trace.marker, 'color') or trace.marker.color is None:
-                    trace.marker.color = PRIMARY_COLOR 
+                    trace.marker.color = PRIMARY_COLOR
                 if not hasattr(trace.marker, 'line') or not hasattr(trace.marker.line, 'width') or trace.marker.line.width is None:
-                    if not hasattr(trace.marker, 'line'): 
+                    if not hasattr(trace.marker, 'line'):
                         trace.marker.line = go.bar.marker.Line()
                     trace.marker.line.width = self.bar_line_width
                 is_line_color_set = hasattr(trace.marker, 'line') and hasattr(trace.marker.line, 'color') and trace.marker.line.color is not None
@@ -280,8 +280,8 @@ class PlotTemplate:
 default_plot_template = PlotTemplate(yaxis_title='Value', legend_title='Version')
 plot_help_manager = PlotHelpTextManager()
 
-# --- StyleManager Class (keep as is) ---
-class StyleManager: 
+# --- StyleManager Class ---
+class StyleManager:
     MAIN_DIV_STYLE = {'background': MAIN_BG_COLOR, 'minHeight': '100vh', 'fontFamily': default_plot_template.font_family, 'color': NEUTRAL_COLOR}
     CARD_STYLE = {'backgroundColor': CARD_BG_COLOR, 'borderRadius': '12px', 'boxShadow': '0 6px 18px rgba(0,0,0,0.07)', 'padding': '24px', 'margin': '20px auto', 'maxWidth': '1400px', 'border': f'1px solid {GRID_COLOR}'}
     HEADER_STYLE = {'color': PRIMARY_COLOR, 'fontWeight': '600', 'fontSize': '2.2rem', 'marginBottom': '8px', 'textAlign': 'center', 'letterSpacing': '0.3px', 'padding': '20px 0 10px 0', 'borderBottom': f'2px solid {PRIMARY_COLOR}', 'background': 'transparent'}
@@ -297,7 +297,7 @@ class StyleManager:
     UPLOAD_STYLE = {'width': '100%', 'height': '60px', 'lineHeight': '60px', 'borderWidth': '2px', 'borderStyle': 'dashed', 'borderRadius': '8px', 'textAlign': 'center', 'margin': '0px', 'borderColor': PRIMARY_COLOR, 'cursor': 'pointer', 'transition': 'border-color .15s ease-in-out, box-shadow .15s ease-in-out', 'fontSize': '0.95rem', 'color': PRIMARY_COLOR}
     UPLOAD_CONTAINER_STYLE = {'padding': '10px', 'border': f'1px solid {GRID_COLOR}', 'borderRadius': '8px', 'backgroundColor': '#f8f9fa'}
 
-# --- Utility Functions (keep as is) ---
+# --- Utility Functions ---
 def load_full_json_data(path):
     if not os.path.exists(path): return None, f"Results file not found: {path}"
     try:
@@ -324,7 +324,7 @@ class DataManager:
         self.df_aggregated = pd.DataFrame()
         self.df_raw_benchmark = pd.DataFrame()
         self.df_raw_profiling = pd.DataFrame()
-        self.df_arts_introspection_aggregated = pd.DataFrame() 
+        self.df_arts_introspection_aggregated = pd.DataFrame()
         self.df_arts_introspection_raw = pd.DataFrame()
         self.df_arts_introspection_categorized = pd.DataFrame() # New for categorized introspection data
         self.df_aligned_data = pd.DataFrame() # New for combined data
@@ -358,13 +358,13 @@ class DataManager:
             if not isinstance(intro_run, dict): continue
             common_info = {'Example Name': intro_run.get('example_name'), 'Problem Size': str(intro_run.get('problem_size')), 'Threads': intro_run.get('threads')}
             for agg_counter in intro_run.get('aggregated_counters', []):
-                if not isinstance(agg_counter, dict) or agg_counter.get('name') == 'totalCounter': continue 
+                if not isinstance(agg_counter, dict) or agg_counter.get('name') == 'totalCounter': continue
                 aggregated_records.append({**common_info, 'Counter Name': agg_counter.get('name'), 'Aggregated Count': agg_counter.get('aggregated_count'), 'Aggregated TotalTime': agg_counter.get('aggregated_total_time')})
             for file_detail in intro_run.get('raw_file_details', []):
                 if not isinstance(file_detail, dict): continue
                 file_name = file_detail.get('file_name')
                 for raw_entry in file_detail.get('raw_entries', []):
-                    if not isinstance(raw_entry, dict) or raw_entry.get('name') == 'totalCounter': continue 
+                    if not isinstance(raw_entry, dict) or raw_entry.get('name') == 'totalCounter': continue
                     raw_records.append({**common_info, 'File Name': file_name, 'Counter Name': raw_entry.get('name'), 'NodeId': raw_entry.get('nodeId'), 'ThreadId': raw_entry.get('threadId'), 'Count': raw_entry.get('count'), 'TotalTime': raw_entry.get('totalTime')})
         self.df_arts_introspection_aggregated = pd.DataFrame(aggregated_records)
         self.df_arts_introspection_raw = pd.DataFrame(raw_records)
@@ -373,7 +373,7 @@ class DataManager:
                 if col in self.df_arts_introspection_aggregated.columns: self.df_arts_introspection_aggregated[col] = pd.to_numeric(self.df_arts_introspection_aggregated[col], errors='coerce')
         if not self.df_arts_introspection_raw.empty:
             for col in ['NodeId', 'ThreadId', 'Count', 'TotalTime', 'Threads']:
-                 if col in self.df_arts_introspection_raw.columns: self.df_arts_introspection_raw[col] = pd.to_numeric(self.df_arts_introspection_raw[col], errors='coerce')
+                if col in self.df_arts_introspection_raw.columns: self.df_arts_introspection_raw[col] = pd.to_numeric(self.df_arts_introspection_raw[col], errors='coerce')
 
     def _categorize_introspection_counters(self):
         """Categorizes ARTS introspection counters."""
@@ -382,38 +382,32 @@ class DataManager:
             return
 
         df = self.df_arts_introspection_aggregated.copy()
-        
-        # Define categories and associated counter name patterns (case-insensitive)
-        # Using your suggestions: task=edt, memory=db, sync=persistent events
-        categories_map = {
-            'Tasking': ['edtCounter', 'edtCreateCounter', 'signalEdtCounter'], # Includes *On variants implicitly by prefix
-            'Memory/DB': ['dbCreateCounter', 'getDbCounter', 'putDbCounter', 'smartDbCreateCounter', 'mallocMemory', 'callocMemory', 'freeMemory'],
-            'Synchronization': ['signalEventCounter', 'signalPersistentEventCounter', 'persistentEventCreateCounter', 'eventCreateCounter'], # 'eventCreate' might be general
-            'GUID Management': ['guidAllocCounter', 'guidLookupCounter'],
-            'Runtime Internals': ['contextSwitch', 'yield', 'sleepCounter'] 
-        }
 
-        df['Category'] = 'Other Introspection' # Default category
+        categories_map = {
+            'Tasking': ['edtCounter', 'edtCreateCounter', 'signalEdtCounter'],
+            'Memory/DB': ['dbCreateCounter', 'getDbCounter', 'putDbCounter', 'smartDbCreateCounter', 'mallocMemory', 'callocMemory', 'freeMemory'],
+            'Synchronization': ['signalEventCounter', 'signalPersistentEventCounter', 'persistentEventCreateCounter', 'eventCreateCounter'],
+            'GUID Management': ['guidAllocCounter', 'guidLookupCounter'],
+            'Runtime Internals': ['contextSwitch', 'yield', 'sleepCounter']
+        }
+        df['Category'] = 'Other Introspection'
         for category, patterns in categories_map.items():
             for pattern in patterns:
-                # Match if counter name *starts with* the pattern
                 df.loc[df['Counter Name'].str.contains(f'^{pattern}', case=False, na=False, regex=True), 'Category'] = category
-        
         self.df_arts_introspection_categorized = df
 
-
-    def _convert_df_types(self): 
+    def _convert_df_types(self):
         if not self.df_aggregated.empty:
             if 'Threads' in self.df_aggregated.columns: self.df_aggregated['Threads'] = pd.to_numeric(self.df_aggregated['Threads'], errors='coerce')
             if 'Problem Size' in self.df_aggregated.columns: self.df_aggregated['Problem Size'] = self.df_aggregated['Problem Size'].astype(str)
             for col in self.df_aggregated.columns:
-                if 'Time (s)' in col or 'Speedup' in col or 'Event' in col: 
+                if 'Time (s)' in col or 'Speedup' in col or 'Event' in col:
                     if 'Correctness' not in col and 'Config' not in col and 'Name' not in col and 'Size' not in col: self.df_aggregated[col] = pd.to_numeric(self.df_aggregated[col], errors='coerce')
         for df_raw in [self.df_raw_benchmark, self.df_raw_profiling]:
             if not df_raw.empty:
                 if 'threads' in df_raw.columns: df_raw['threads'] = pd.to_numeric(df_raw['threads'], errors='coerce')
                 if 'problem_size' in df_raw.columns: df_raw['problem_size'] = df_raw['problem_size'].astype(str)
-                if 'times_seconds' in df_raw.columns: 
+                if 'times_seconds' in df_raw.columns:
                     def process_times(entry): return [float(t) for t in entry if isinstance(t, (int, float, str)) and str(t).replace('.', '', 1).isdigit()] if isinstance(entry, list) else ([float(t.strip()) for t in entry.split(',') if t.strip().replace('.', '', 1).isdigit()] if isinstance(entry, str) else [])
                     df_raw['times_seconds'] = df_raw['times_seconds'].apply(process_times)
 
@@ -439,7 +433,7 @@ class DataManager:
     def get_filtered_raw_benchmark_data(self, filters=None):
         if self.df_raw_benchmark.empty: return pd.DataFrame()
         return self._apply_filters(self.df_raw_benchmark, filters, is_aggregated_df=False)
-    def get_benchmark_display_data(self, filters=None): 
+    def get_benchmark_display_data(self, filters=None):
         filtered_agg_df = self.get_filtered_aggregated_data(filters)
         if filtered_agg_df.empty: return pd.DataFrame()
         t1_map = {}
@@ -457,8 +451,8 @@ class DataManager:
             res_eff.append(r)
         return pd.DataFrame(res_eff) if res_eff else pd.DataFrame()
 
-    def get_profiling_display_data(self, filters=None): 
-        filtered_agg_df = self.get_filtered_aggregated_data(filters) 
+    def get_profiling_display_data(self, filters=None):
+        filtered_agg_df = self.get_filtered_aggregated_data(filters)
         if filtered_agg_df.empty: return pd.DataFrame()
         melted_event_data = []
         event_col_pattern = re.compile(r"(CARTS|OMP) Event (.+?)(?::u|:k)? (Avg|Median|Min|Max|Stdev)")
@@ -489,7 +483,7 @@ class DataManager:
             return pd.concat([categorized_df, pd.DataFrame(derived_metrics_list)], ignore_index=True)
         return categorized_df
 
-    def _categorize_profiling_events(self, events_df_long): 
+    def _categorize_profiling_events(self, events_df_long):
         if events_df_long.empty: return events_df_long
         if 'Event Name' not in events_df_long.columns:
             events_df_long['category'] = 'Other'; return events_df_long
@@ -498,30 +492,30 @@ class DataManager:
         result_df['category'] = 'Other'
         result_df.loc[result_df['Event Name'].str.contains('stall|lock_contention', case=False, na=False), 'category'] = 'Stalls'
         for cat_key, patterns in categories.items():
-            if cat_key == 'Stalls': continue 
+            if cat_key == 'Stalls': continue
             for pattern in patterns:
                 result_df.loc[(result_df['category'].isin(['Other'] + (['CPU', 'Memory'] if cat_key == 'Cache' else ['CPU'] if cat_key == 'Memory' else []))) & result_df['Event Name'].str.contains(pattern, case=False, na=False), 'category'] = cat_key
         cpu_core_events = ['cycles:u', 'cpu-clock:u', 'task-clock:u', 'instructions:u', 'uops_issued.any:u', 'uops_retired.all:u']
         for cce in cpu_core_events: result_df.loc[result_df['Event Name'].str.contains(cce, case=False, na=False) & (result_df['category'] == 'Other'), 'category'] = 'CPU'
         return result_df
 
-    def get_filtered_introspection_aggregated_data(self, filters=None): 
+    def get_filtered_introspection_aggregated_data(self, filters=None):
         if self.df_arts_introspection_aggregated.empty: return pd.DataFrame()
         return self._apply_filters(self.df_arts_introspection_aggregated, filters, is_introspection_df=True)
 
-    def get_filtered_introspection_raw_data(self, filters=None): 
+    def get_filtered_introspection_raw_data(self, filters=None):
         if self.df_arts_introspection_raw.empty: return pd.DataFrame()
         return self._apply_filters(self.df_arts_introspection_raw, filters, is_introspection_df=True)
-    
+
     def get_filtered_introspection_categorized_data(self, filters=None): # New
         if self.df_arts_introspection_categorized.empty: return pd.DataFrame()
         # Apply filters to the categorized data
         return self._apply_filters(self.df_arts_introspection_categorized, filters, is_introspection_df=True)
 
 
-    def get_introspection_data_for_cost_plot(self, filters=None): 
+    def get_introspection_data_for_cost_plot(self, filters=None):
         df_intro_agg = self.get_filtered_introspection_aggregated_data(filters)
-        df_bench_agg = self.get_filtered_aggregated_data(filters) 
+        df_bench_agg = self.get_filtered_aggregated_data(filters)
         if df_intro_agg.empty or df_bench_agg.empty: return pd.DataFrame()
         df_carts_bench_median = df_bench_agg[['Example Name', 'Problem Size', 'Threads', 'CARTS Median Time (s)']].copy()
         df_carts_bench_median.rename(columns={'CARTS Median Time (s)': 'Benchmark Median Time'}, inplace=True)
@@ -539,7 +533,7 @@ class DataManager:
         df_bench_agg = self.get_filtered_aggregated_data(filters)
         if df_bench_agg.empty or 'CARTS Median Time (s)' not in df_bench_agg.columns:
             return pd.DataFrame()
-        
+
         df_carts_times = df_bench_agg[
             ['Example Name', 'Problem Size', 'Threads', 'CARTS Median Time (s)']
         ].copy()
@@ -569,14 +563,14 @@ class DataManager:
         # If a benchmark run has no introspection data at all for a category, it will be NaN here.
         # For plotting, we might want to treat these NaNs as 0 for that category's contribution if the benchmark ran.
         df_aligned['Aggregated TotalTime (s)'] = df_aligned['Aggregated TotalTime (s)'].fillna(0)
-        
+
         return df_aligned
 
 
     def get_system_info(self): return self.system_info
     def get_overall_summary_stats(self, filters=None): # Keep as is
         summary = self.overall_stats_json.copy()
-        summary_key_prefix = "Global" 
+        summary_key_prefix = "Global"
         filters_active = False
         if filters:
             available_opts = self.get_available_filter_options()
@@ -585,7 +579,7 @@ class DataManager:
             if filters.get('sizes') and len(filters['sizes']) < len(available_opts.get('sizes',[])): filters_active = True
             if filters.get('correctness') and filters['correctness'] != 'ALL': filters_active = True
         if filters_active:
-            summary_key_prefix = "Filtered" 
+            summary_key_prefix = "Filtered"
             filtered_agg_df = self.get_filtered_aggregated_data(filters)
             if not filtered_agg_df.empty:
                 summary[f'{summary_key_prefix} Configs Compared'] = len(filtered_agg_df)
@@ -602,22 +596,22 @@ class DataManager:
                         min_s_row = filtered_agg_df.loc[speedups.idxmin()] if pd.notna(min_s_val) and not speedups.empty else None
                         summary[f'{summary_key_prefix} Max Speedup'] = {"value": max_s_val if not speedups.empty else None, "example_config": f"{max_s_row['Example Name']} (S: {max_s_row['Problem Size']}, T: {max_s_row['Threads']})" if max_s_row is not None else "N/A"}
                         summary[f'{summary_key_prefix} Min Speedup'] = {"value": min_s_val if not speedups.empty else None, "example_config": f"{min_s_row['Example Name']} (S: {min_s_row['Problem Size']}, T: {min_s_row['Threads']})" if min_s_row is not None else "N/A"}
-                    else: 
+                    else:
                         for stat in ['CARTS Faster Configs', 'OMP Faster Configs', 'Tied Configs', 'Geo. Mean Speedup (OMP/CARTS)']: summary[f'{summary_key_prefix} {stat}'] = 0 if 'Configs' in stat else None
                         summary[f'{summary_key_prefix} Max Speedup'], summary[f'{summary_key_prefix} Min Speedup'] = {"value": None, "example_config": "N/A"}, {"value": None, "example_config": "N/A"}
-            else: 
+            else:
                 summary[f'{summary_key_prefix} Configs Compared'] = 0
                 for stat in ['CARTS Faster Configs', 'OMP Faster Configs', 'Tied Configs', 'Geo. Mean Speedup (OMP/CARTS)']: summary[f'{summary_key_prefix} {stat}'] = 0 if 'Configs' in stat else None
                 summary[f'{summary_key_prefix} Max Speedup'], summary[f'{summary_key_prefix} Min Speedup'] = {"value": None, "example_config": "N/A"}, {"value": None, "example_config": "N/A"}
         if filters_active:
-            for k_orig in list(self.overall_stats_json.keys()): 
-                if not k_orig.startswith("Global") and not k_orig.startswith("Filtered"): summary[f"Global {k_orig.replace('_', ' ').title()}"] = summary.pop(k_orig) 
-        else: 
             for k_orig in list(self.overall_stats_json.keys()):
-                 if not k_orig.startswith("Global") and not k_orig.startswith("Filtered"): summary[f"Global {k_orig.replace('_', ' ').title()}"] = summary.pop(k_orig)
+                if not k_orig.startswith("Global") and not k_orig.startswith("Filtered"): summary[f"Global {k_orig.replace('_', ' ').title()}"] = summary.pop(k_orig)
+        else:
+            for k_orig in list(self.overall_stats_json.keys()):
+                if not k_orig.startswith("Global") and not k_orig.startswith("Filtered"): summary[f"Global {k_orig.replace('_', ' ').title()}"] = summary.pop(k_orig)
         return summary
 
-    def get_available_filter_options(self, include_introspection_counters=False): 
+    def get_available_filter_options(self, include_introspection_counters=False):
         options = {'examples': [], 'threads': [], 'sizes': [], 'correctness': [{'label': 'All', 'value': 'ALL'}, {'label': 'Correct', 'value': 'CORRECT'}, {'label': 'Incorrect', 'value': 'INCORRECT'}, {'label': 'Timeout', 'value': 'TIMEOUT'}, {'label': 'Error Runtime', 'value': 'ERROR_RUNTIME'}, {'label': 'Unknown', 'value': 'UNKNOWN'}], 'introspection_counters': [] }
         source_df_for_dims = self.df_aggregated
         if source_df_for_dims.empty and not self.df_arts_introspection_aggregated.empty: source_df_for_dims = self.df_arts_introspection_aggregated # Fallback
@@ -627,7 +621,7 @@ class DataManager:
                 unique_threads = pd.to_numeric(source_df_for_dims['Threads'], errors='coerce').dropna().unique()
                 options['threads'] = [{'label': str(int(t)), 'value': int(t)} for t in sorted(unique_threads)]
             if 'Problem Size' in source_df_for_dims.columns: options['sizes'] = [{'label': str(s), 'value': s} for s in sorted(source_df_for_dims['Problem Size'].dropna().unique())]
-        if include_introspection_counters and not self.df_arts_introspection_aggregated.empty and 'Counter Name' in self.df_arts_introspection_aggregated.columns: 
+        if include_introspection_counters and not self.df_arts_introspection_aggregated.empty and 'Counter Name' in self.df_arts_introspection_aggregated.columns:
             options['introspection_counters'] = [{'label': str(c), 'value': c} for c in sorted(self.df_arts_introspection_aggregated['Counter Name'].unique())]
         return options
 
@@ -635,39 +629,49 @@ class DataManager:
 class PlotManager:
     def __init__(self, plot_template, data_manager, help_manager):
         self.template = plot_template
-        self.dm = data_manager 
+        self.dm = data_manager
         self.help_manager = help_manager
 
     def get_scaling_plot(self, filters=None):
         benchmark_data = self.dm.get_benchmark_display_data(filters)
         return create_scaling_plot(benchmark_data, self.template)
+
     def get_efficiency_plot(self, filters=None):
         benchmark_data = self.dm.get_benchmark_display_data(filters)
         return create_parallel_efficiency_plot(benchmark_data, self.template)
+
     def get_speedup_plot(self, filters=None):
         benchmark_data = self.dm.get_benchmark_display_data(filters)
         return create_speedup_comparison_plot(benchmark_data, self.template)
+
     def get_slowdown_plot(self, filters=None):
         benchmark_data = self.dm.get_benchmark_display_data(filters)
         return create_slowdown_comparison_plot(benchmark_data, self.template)
+
     def get_variability_plot_components(self, filters=None):
         raw_benchmark_df = self.dm.get_filtered_raw_benchmark_data(filters)
-        return create_execution_time_variability_plot_components(raw_benchmark_df, self.template, self.help_manager)
+        # Pass graph_style to the creation function if it needs it, or apply it within
+        return create_execution_time_variability_plot_components(raw_benchmark_df, self.template, self.help_manager, graph_style)
+
+
     def get_cache_plot(self, filters=None):
         profiling_data = self.dm.get_profiling_display_data(filters)
         return create_cache_performance_comparison(profiling_data, self.template)
+
     def get_ipc_plot(self, filters=None):
         profiling_data = self.dm.get_profiling_display_data(filters)
         return create_ipc_comparison_plot(profiling_data, self.template)
+
     def get_stalls_plot(self, filters=None):
         profiling_data = self.dm.get_profiling_display_data(filters)
         return create_stalls_analysis_plot(profiling_data, self.template)
+
     def get_generic_profiling_plot(self, category, filters=None):
         profiling_data = self.dm.get_profiling_display_data(filters)
         category_df = profiling_data[profiling_data['category'] == category]
         if category_df.empty:
             fig = go.Figure().add_annotation(text=f"No data for profiling category: {category}", x=0.5, y=0.5, showarrow=False)
-            return self.template.apply(fig, plot_title=f"{category} Analysis", height=500), "" 
+            return self.template.apply(fig, plot_title=f"{category} Analysis", height=500), ""
         first_event = "N/A"
         if not category_df['Event Name'].empty:
             event_counts = category_df['Event Name'].value_counts()
@@ -714,8 +718,14 @@ class PlotManager:
             return self.template.apply(fig, plot_title="Introspection Overview", xaxis_title="Metric Value", yaxis_title="Counter Name", height=500)
         plot_df.sort_values(by=sort_by, ascending=False, inplace=True); plot_df = plot_df.head(top_n)
         fig_title = f"Top {top_n} Introspection Counters by {sort_by.replace('_', ' ')}<br>Ex: {target_config['Example Name']}, Size: {target_config['Problem Size']}, Threads: {target_config['Threads']}"
-        fig = px.bar(plot_df, y='Counter Name', x=sort_by, orientation='h', color=sort_by, color_continuous_scale=px.colors.sequential.Blues, labels={sort_by: sort_by.replace('_', ' '), 'Counter Name': 'Counter Name'})
-        fig.update_layout(yaxis={'categoryorder':'total ascending'}) 
+        fig = px.bar(
+            plot_df, y='Counter Name', x=sort_by, orientation='h', color=sort_by,
+            color_continuous_scale=px.colors.sequential.Blues,
+            labels={sort_by: sort_by.replace('_', ' '), 'Counter Name': 'Counter Name'}
+            # Removed template=None, as px.bar doesn't take a Plotly template object directly.
+            # Styling is applied by self.template.apply() later.
+        )
+        fig.update_layout(yaxis={'categoryorder':'total ascending'})
         return self.template.apply(fig, plot_title=fig_title, xaxis_title=sort_by.replace('_', ' '), yaxis_title="Counter Name", height=max(400, top_n * 30))
 
     def get_introspection_scaling_plot(self, filters=None, selected_counter_name=None, value_to_plot='Aggregated TotalTime'):
@@ -779,22 +789,22 @@ class PlotManager:
         if not unique_configs:
              fig = go.Figure().add_annotation(text="No specific config found for cost analysis.", x=0.5, y=0.5, showarrow=False)
              return self.template.apply(fig, plot_title="Introspection Cost vs Benchmark Time", xaxis_title="Counter Name", yaxis_title="% of Benchmark Median Time", height=500)
-        target_config = unique_configs[0] 
+        target_config = unique_configs[0]
         plot_df = df_cost_data[(df_cost_data['Example Name'] == target_config['Example Name']) & (df_cost_data['Problem Size'] == target_config['Problem Size']) & (df_cost_data['Threads'] == target_config['Threads'])].copy()
         if plot_df.empty or 'Benchmark Median Time' not in plot_df.columns or plot_df['Benchmark Median Time'].iloc[0] <= 0:
             fig = go.Figure().add_annotation(text=f"No valid benchmark time for cost plot at {target_config}", x=0.5,y=0.5,showarrow=False)
             return self.template.apply(fig, plot_title="Introspection Cost vs Benchmark Time", xaxis_title="Counter Name", yaxis_title="% of Benchmark Median Time", height=500)
         plot_df.sort_values(by='Aggregated TotalTime', ascending=False, inplace=True)
         plot_df_top_n = plot_df.head(top_n)
-        benchmark_time_ns = plot_df_top_n['Benchmark Median Time'].iloc[0] * 1e9 
+        benchmark_time_ns = plot_df_top_n['Benchmark Median Time'].iloc[0] * 1e9
         sum_top_n_intro_time = plot_df_top_n['Aggregated TotalTime'].sum()
         other_time = benchmark_time_ns - sum_top_n_intro_time
         plot_data_for_bar = plot_df_top_n[['Counter Name', 'Aggregated TotalTime']].copy()
         if other_time > 0:
-             plot_data_for_bar = pd.concat([plot_data_for_bar, pd.DataFrame([{'Counter Name': 'Other (Benchmark - Top N Intro)', 'Aggregated TotalTime': other_time}])], ignore_index=True)
+            plot_data_for_bar = pd.concat([plot_data_for_bar, pd.DataFrame([{'Counter Name': 'Other (Benchmark - Top N Intro)', 'Aggregated TotalTime': other_time}])], ignore_index=True)
         plot_data_for_bar['Percentage'] = (plot_data_for_bar['Aggregated TotalTime'] / benchmark_time_ns) * 100
         fig_title = f"Introspection Counter Time vs Benchmark Time (Top {top_n})<br>Ex: {target_config['Example Name']}, Size: {target_config['Problem Size']}, Threads: {target_config['Threads']}<br>Benchmark Median Time: {format_number(plot_df_top_n['Benchmark Median Time'].iloc[0], 4)}s"
-        fig = px.bar(plot_data_for_bar, x='Counter Name', y='Percentage', color='Counter Name', text='Percentage', labels={'Percentage': '% of Benchmark Median Time (ns)'})
+        fig = px.bar(plot_df_for_bar, x='Counter Name', y='Percentage', color='Counter Name', text='Percentage', labels={'Percentage': '% of Benchmark Median Time (ns)'})
         fig.update_traces(texttemplate='%{text:.2f}%', textposition='outside')
         fig.update_layout(uniformtext_minsize=8, uniformtext_mode='hide', showlegend=True)
         return self.template.apply(fig, plot_title=fig_title, xaxis_title="Counter Name", yaxis_title="% of Benchmark Median Time", height=600, legend_title="Counter")
@@ -811,7 +821,7 @@ class PlotManager:
             group_sorted = group.sort_values(by=metric, ascending=False)
             top_n_counters = group_sorted.head(top_n)
             total_metric_for_config = group[metric].sum()
-            if total_metric_for_config == 0: continue 
+            if total_metric_for_config == 0: continue
             for _, row in top_n_counters.iterrows():
                 results.append({'Config': config_id, 'Counter Name': row['Counter Name'], 'Percentage': (row[metric] / total_metric_for_config) * 100, 'Value': row[metric]})
             other_metric_sum = group_sorted.iloc[top_n:][metric].sum()
@@ -829,144 +839,309 @@ class PlotManager:
 
     # --- New Plotting Functions for "Advanced Analysis & Correlations" ---
     def get_task_creation_overhead_plot(self, filters=None, metric='Aggregated TotalTime'):
-        # Uses categorized introspection data
         df_intro_cat = self.dm.get_filtered_introspection_categorized_data(filters)
         if df_intro_cat.empty:
-            return self.template.apply(go.Figure().add_annotation(text="No data for Task Creation Overhead.", x=0.5,y=0.5,showarrow=False), 
-                                       plot_title="Task Creation Overhead", xaxis_title="Threads", yaxis_title=metric.replace('_', ' '))
-        
-        task_creation_counters = ['edtCreateCounter', 'edtCreateCounterOn'] # Add more if needed
+            return self.template.apply(go.Figure().add_annotation(text="No data for Task Creation Overhead.", x=0.5,y=0.5,showarrow=False),
+                                         plot_title="Task Creation Overhead", xaxis_title="Threads", yaxis_title=metric.replace('_', ' '))
+        task_creation_counters = ['edtCreateCounter', 'edtCreateCounterOn']
         plot_df = df_intro_cat[df_intro_cat['Counter Name'].isin(task_creation_counters)].copy()
-
         if plot_df.empty:
-            return self.template.apply(go.Figure().add_annotation(text="No specific task creation counter data found.", x=0.5,y=0.5,showarrow=False), 
-                                       plot_title="Task Creation Overhead", xaxis_title="Threads", yaxis_title=metric.replace('_', ' '))
+            return self.template.apply(go.Figure().add_annotation(text="No specific task creation counter data found.", x=0.5,y=0.5,showarrow=False),
+                                         plot_title="Task Creation Overhead", xaxis_title="Threads", yaxis_title=metric.replace('_', ' '))
+        # Subplot logic identical to create_scaling_plot
+        examples = sorted(plot_df['Example Name'].unique())
+        num_examples = len(examples)
+        if num_examples == 0:
+            fig = go.Figure().add_annotation(text="No examples for task creation overhead plot", x=0.5, y=0.5, showarrow=False)
+            return self.template.apply(fig, plot_title="Task Creation Overhead", height=400)
+        cols = min(3, num_examples)
+        rows = (num_examples + cols - 1) // cols
+        fig = make_subplots(rows=rows, cols=cols, subplot_titles=[f"Ex: {ex}" for ex in examples], shared_xaxes=True, shared_yaxes=True, vertical_spacing=0.22, horizontal_spacing=0.08)
+        color_map = {task_creation_counters[0]: PRIMARY_COLOR, task_creation_counters[1]: ACCENT_COLOR}
+        legend_added = set()
+        for i, example in enumerate(examples):
+            row_idx, col_idx = i // cols + 1, i % cols + 1
+            example_data = plot_df[plot_df['Example Name'] == example]
+            problem_sizes = sorted(example_data['Problem Size'].unique())
+            for ps_idx, problem_size in enumerate(problem_sizes):
+                size_group = example_data[example_data['Problem Size'] == problem_size]
+                if size_group.empty: continue
+                for counter_name in task_creation_counters:
+                    counter_group = size_group[size_group['Counter Name'] == counter_name]
+                    if counter_group.empty: continue
+                    counter_group = counter_group.sort_values('Threads')
+                    legend_name = f"{counter_name} (S: {problem_size})"
+                    show_legend_trace = legend_name not in legend_added
+                    if show_legend_trace: legend_added.add(legend_name)
+                    fig.add_trace(
+                        go.Scatter(
+                            x=counter_group['Threads'],
+                            y=counter_group[metric],
+                            mode='lines+markers',
+                            name=legend_name,
+                            line=dict(color=color_map.get(counter_name, PRIMARY_COLOR), width=2, dash='solid'),
+                            marker=dict(size=8, color=color_map.get(counter_name, PRIMARY_COLOR), line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
+                            legendgroup=legend_name,
+                            showlegend=show_legend_trace,
+                            hovertemplate=f"<b>{example} - {counter_name}</b><br>Size: {problem_size}<br>Threads: %{{x}}<br>{metric}: %{{y:,.0f}}<extra></extra>"
+                        ),
+                        row=row_idx, col=col_idx
+                    )
+            fig.update_xaxes(title_text="Threads", type='category', row=row_idx, col=col_idx, title_standoff=5)
+            fig.update_yaxes(title_text=metric.replace('_', ' '), type='log', row=row_idx, col=col_idx, title_standoff=5)
+        calculated_height = max(500, 300 * rows)
+        fig = self.template.apply(fig, plot_title="Task Creation Overhead vs. Threads by Example", height=calculated_height, legend_title="Counter (Size)", xaxis_title="Threads", yaxis_title=metric.replace('_', ' '))
+        for i in range(1, rows * cols + 1):
+            xaxis_name = f'xaxis{i}' if i > 1 else 'xaxis'; yaxis_name = f'yaxis{i}' if i > 1 else 'yaxis'
+            fig.layout[xaxis_name].update(title_font=dict(size=self.template.xaxis_title_size, color=NEUTRAL_COLOR, family=self.template.font_family), tickfont=dict(size=self.template.font_size - 2, family=self.template.font_family, color=NEUTRAL_COLOR), gridcolor=self.template.grid_color, showgrid=True, showline=True, linecolor=self.template.axis_color, ticks='outside', automargin=True)
+            fig.layout[yaxis_name].update(title_font=dict(size=self.template.xaxis_title_size, color=NEUTRAL_COLOR, family=self.template.font_family), tickfont=dict(size=self.template.font_size - 2, family=self.template.font_family, color=NEUTRAL_COLOR), gridcolor=self.template.grid_color, showgrid=True, showline=True, linecolor=self.template.axis_color, ticks='outside', automargin=True)
+        return fig
 
-        fig = px.line(plot_df, x='Threads', y=metric, color='Counter Name',
-                      facet_col='Example Name', facet_row='Problem Size',
-                      labels={'Threads': 'Number of Threads', metric: metric.replace('_', ' ')},
-                      category_orders={"Threads": sorted(plot_df['Threads'].unique())},
-                      markers=True)
-        fig.update_xaxes(type='category')
-        return self.template.apply(fig, plot_title="Task Creation Overhead vs. Threads", 
-                                     xaxis_title="Number of Threads", yaxis_title=metric.replace('_', ' '), 
-                                     height=max(500, 250 * plot_df['Problem Size'].nunique()), legend_title="Counter")
-
-    def get_db_operation_costs_plot(self, filters=None, metric='Aggregated TotalTime'):
+    def get_db_operation_costs_plot(self, filters=None, metric='Aggregated TotalTime', total_only=False):
         df_intro_cat = self.dm.get_filtered_introspection_categorized_data(filters)
         if df_intro_cat.empty:
-            return self.template.apply(go.Figure().add_annotation(text="No data for DB Operation Costs.", x=0.5,y=0.5,showarrow=False), 
-                                       plot_title="DB Operation Costs", xaxis_title="Threads", yaxis_title=metric.replace('_', ' '))
-
+            return self.template.apply(go.Figure().add_annotation(text="No data for DB Operation Costs.", x=0.5,y=0.5,showarrow=False),
+                                         plot_title="DB Operation Costs", xaxis_title="Threads", yaxis_title=metric.replace('_', ' '))
         db_counters = ['dbCreateCounter', 'dbCreateCounterOn', 'getDbCounter', 'getDbCounterOn', 'putDbCounter', 'putDbCounterOn']
         plot_df = df_intro_cat[df_intro_cat['Counter Name'].isin(db_counters)].copy()
-
         if plot_df.empty:
-            return self.template.apply(go.Figure().add_annotation(text="No specific DB operation counter data found.", x=0.5,y=0.5,showarrow=False), 
-                                       plot_title="DB Operation Costs", xaxis_title="Threads", yaxis_title=metric.replace('_', ' '))
-        
-        fig = px.line(plot_df, x='Threads', y=metric, color='Counter Name',
-                      facet_col='Example Name', facet_row='Problem Size',
-                      labels={'Threads': 'Number of Threads', metric: metric.replace('_', ' ')},
-                      category_orders={"Threads": sorted(plot_df['Threads'].unique())},
-                      markers=True)
-        fig.update_xaxes(type='category')
-        return self.template.apply(fig, plot_title="DB Operation Costs vs. Threads", 
-                                     xaxis_title="Number of Threads", yaxis_title=metric.replace('_', ' '),
-                                     height=max(500, 250 * plot_df['Problem Size'].nunique()), legend_title="DB Counter")
+            return self.template.apply(go.Figure().add_annotation(text="No specific DB operation counter data found.", x=0.5,y=0.5,showarrow=False),
+                                         plot_title="DB Operation Costs", xaxis_title="Threads", yaxis_title=metric.replace('_', ' '))
+        examples = sorted(plot_df['Example Name'].unique())
+        num_examples = len(examples)
+        if num_examples == 0:
+            fig = go.Figure().add_annotation(text="No examples for DB operation cost plot", x=0.5, y=0.5, showarrow=False)
+            return self.template.apply(fig, plot_title="DB Operation Costs", height=400)
+        cols = min(3, num_examples)
+        rows = (num_examples + cols - 1) // cols
+        fig = make_subplots(rows=rows, cols=cols, subplot_titles=[f"Ex: {ex}" for ex in examples], shared_xaxes=True, shared_yaxes=True, vertical_spacing=0.22, horizontal_spacing=0.08)
+        if total_only:
+            # Sum all DB counters for each Example, Problem Size, Threads
+            total_df = plot_df.groupby(['Example Name', 'Problem Size', 'Threads'])[metric].sum().reset_index()
+            for i, example in enumerate(examples):
+                row_idx, col_idx = i // cols + 1, i % cols + 1
+                example_data = total_df[total_df['Example Name'] == example]
+                problem_sizes = sorted(example_data['Problem Size'].unique())
+                for ps_idx, problem_size in enumerate(problem_sizes):
+                    size_group = example_data[example_data['Problem Size'] == problem_size]
+                    if size_group.empty: continue
+                    size_group = size_group.sort_values('Threads')
+                    legend_name = f"Total DB Cost (S: {problem_size})"
+                    fig.add_trace(
+                        go.Scatter(
+                            x=size_group['Threads'],
+                            y=size_group[metric],
+                            mode='lines+markers',
+                            name=legend_name,
+                            line=dict(color=PRIMARY_COLOR, width=2, dash='solid'),
+                            marker=dict(size=8, color=PRIMARY_COLOR, line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
+                            legendgroup=legend_name,
+                            showlegend=True,
+                            hovertemplate=f"<b>{example}</b><br>Size: {problem_size}<br>Threads: %{{x}}<br>Total DB Cost: %{{y:,.0f}}<extra></extra>"
+                        ),
+                        row=row_idx, col=col_idx
+                    )
+                fig.update_xaxes(title_text="Threads", type='category', row=row_idx, col=col_idx, title_standoff=5)
+                fig.update_yaxes(title_text=metric.replace('_', ' '), type='log', row=row_idx, col=col_idx, title_standoff=5)
+            calculated_height = max(500, 300 * rows)
+            fig = self.template.apply(fig, plot_title="Total DB Operation Cost vs. Threads by Example", height=calculated_height, legend_title="Total DB Cost (Size)", xaxis_title="Threads", yaxis_title=metric.replace('_', ' '))
+            for i in range(1, rows * cols + 1):
+                xaxis_name = f'xaxis{i}' if i > 1 else 'xaxis'; yaxis_name = f'yaxis{i}' if i > 1 else 'yaxis'
+                fig.layout[xaxis_name].update(title_font=dict(size=self.template.xaxis_title_size, color=NEUTRAL_COLOR, family=self.template.font_family), tickfont=dict(size=self.template.font_size - 2, family=self.template.font_family, color=NEUTRAL_COLOR), gridcolor=self.template.grid_color, showgrid=True, showline=True, linecolor=self.template.axis_color, ticks='outside', automargin=True)
+                fig.layout[yaxis_name].update(title_font=dict(size=self.template.xaxis_title_size, color=NEUTRAL_COLOR, family=self.template.font_family), tickfont=dict(size=self.template.font_size - 2, family=self.template.font_family, color=NEUTRAL_COLOR), gridcolor=self.template.grid_color, showgrid=True, showline=True, linecolor=self.template.axis_color, ticks='outside', automargin=True)
+            return fig
+        # ... existing multiplot logic for per-counter lines ...
+        color_palette = [PRIMARY_COLOR, ACCENT_COLOR, '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+        counter_colors = {c: color_palette[i % len(color_palette)] for i, c in enumerate(db_counters)}
+        legend_added = set()
+        for i, example in enumerate(examples):
+            row_idx, col_idx = i // cols + 1, i % cols + 1
+            example_data = plot_df[plot_df['Example Name'] == example]
+            problem_sizes = sorted(example_data['Problem Size'].unique())
+            for ps_idx, problem_size in enumerate(problem_sizes):
+                size_group = example_data[example_data['Problem Size'] == problem_size]
+                if size_group.empty: continue
+                for counter_name in db_counters:
+                    counter_group = size_group[size_group['Counter Name'] == counter_name]
+                    if counter_group.empty: continue
+                    counter_group = counter_group.sort_values('Threads')
+                    legend_name = f"{counter_name} (S: {problem_size})"
+                    show_legend_trace = legend_name not in legend_added
+                    if show_legend_trace: legend_added.add(legend_name)
+                    fig.add_trace(
+                        go.Scatter(
+                            x=counter_group['Threads'],
+                            y=counter_group[metric],
+                            mode='lines+markers',
+                            name=legend_name,
+                            line=dict(color=counter_colors.get(counter_name, PRIMARY_COLOR), width=2, dash='solid'),
+                            marker=dict(size=8, color=counter_colors.get(counter_name, PRIMARY_COLOR), line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
+                            legendgroup=legend_name,
+                            showlegend=show_legend_trace,
+                            hovertemplate=f"<b>{example} - {counter_name}</b><br>Size: {problem_size}<br>Threads: %{{x}}<br>{metric}: %{{y:,.0f}}<extra></extra>"
+                        ),
+                        row=row_idx, col=col_idx
+                    )
+            fig.update_xaxes(title_text="Threads", type='category', row=row_idx, col=col_idx, title_standoff=5)
+            fig.update_yaxes(title_text=metric.replace('_', ' '), type='log', row=row_idx, col=col_idx, title_standoff=5)
+        calculated_height = max(500, 300 * rows)
+        fig = self.template.apply(fig, plot_title="DB Operation Costs vs. Threads by Example", height=calculated_height, legend_title="DB Counter (Size)", xaxis_title="Threads", yaxis_title=metric.replace('_', ' '))
+        for i in range(1, rows * cols + 1):
+            xaxis_name = f'xaxis{i}' if i > 1 else 'xaxis'; yaxis_name = f'yaxis{i}' if i > 1 else 'yaxis'
+            fig.layout[xaxis_name].update(title_font=dict(size=self.template.xaxis_title_size, color=NEUTRAL_COLOR, family=self.template.font_family), tickfont=dict(size=self.template.font_size - 2, family=self.template.font_family, color=NEUTRAL_COLOR), gridcolor=self.template.grid_color, showgrid=True, showline=True, linecolor=self.template.axis_color, ticks='outside', automargin=True)
+            fig.layout[yaxis_name].update(title_font=dict(size=self.template.xaxis_title_size, color=NEUTRAL_COLOR, family=self.template.font_family), tickfont=dict(size=self.template.font_size - 2, family=self.template.font_family, color=NEUTRAL_COLOR), gridcolor=self.template.grid_color, showgrid=True, showline=True, linecolor=self.template.axis_color, ticks='outside', automargin=True)
+        return fig
+
+    def get_synchronization_overhead_plot(self, filters=None, metric='Aggregated TotalTime', total_only=False):
+        df_intro_cat = self.dm.get_filtered_introspection_categorized_data(filters)
+        if df_intro_cat.empty:
+            return self.template.apply(go.Figure().add_annotation(text="No data for Synchronization Overhead.", x=0.5,y=0.5,showarrow=False),
+                                         plot_title="Synchronization Overhead", xaxis_title="Threads", yaxis_title=metric.replace('_', ' '))
+        sync_counters = ['signalEventCounter', 'signalEventCounterOn', 'signalPersistentEventCounter', 'signalPersistentEventCounterOn', 'persistentEventCreateCounter', 'persistentEventCreateCounterOn', 'eventCreateCounter', 'eventCreateCounterOn']
+        plot_df = df_intro_cat[df_intro_cat['Counter Name'].isin(sync_counters)].copy()
+        if plot_df.empty:
+            return self.template.apply(go.Figure().add_annotation(text="No specific synchronization counter data found.", x=0.5,y=0.5,showarrow=False),
+                                         plot_title="Synchronization Overhead", xaxis_title="Threads", yaxis_title=metric.replace('_', ' '))
+        examples = sorted(plot_df['Example Name'].unique())
+        num_examples = len(examples)
+        if num_examples == 0:
+            fig = go.Figure().add_annotation(text="No examples for synchronization overhead plot", x=0.5, y=0.5, showarrow=False)
+            return self.template.apply(fig, plot_title="Synchronization Overhead", height=400)
+        cols = min(3, num_examples)
+        rows = (num_examples + cols - 1) // cols
+        fig = make_subplots(rows=rows, cols=cols, subplot_titles=[f"Ex: {ex}" for ex in examples], shared_xaxes=True, shared_yaxes=True, vertical_spacing=0.22, horizontal_spacing=0.08)
+        if total_only:
+            # Sum all sync counters for each Example, Problem Size, Threads
+            total_df = plot_df.groupby(['Example Name', 'Problem Size', 'Threads'])[metric].sum().reset_index()
+            for i, example in enumerate(examples):
+                row_idx, col_idx = i // cols + 1, i % cols + 1
+                example_data = total_df[total_df['Example Name'] == example]
+                problem_sizes = sorted(example_data['Problem Size'].unique())
+                for ps_idx, problem_size in enumerate(problem_sizes):
+                    size_group = example_data[example_data['Problem Size'] == problem_size]
+                    if size_group.empty: continue
+                    size_group = size_group.sort_values('Threads')
+                    legend_name = f"Total Sync Overhead (S: {problem_size})"
+                    fig.add_trace(
+                        go.Scatter(
+                            x=size_group['Threads'],
+                            y=size_group[metric],
+                            mode='lines+markers',
+                            name=legend_name,
+                            line=dict(color=PRIMARY_COLOR, width=2, dash='solid'),
+                            marker=dict(size=8, color=PRIMARY_COLOR, line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
+                            legendgroup=legend_name,
+                            showlegend=True,
+                            hovertemplate=f"<b>{example}</b><br>Size: {problem_size}<br>Threads: %{{x}}<br>Total Sync Overhead: %{{y:,.0f}}<extra></extra>"
+                        ),
+                        row=row_idx, col=col_idx
+                    )
+                fig.update_xaxes(title_text="Threads", type='category', row=row_idx, col=col_idx, title_standoff=5)
+                fig.update_yaxes(title_text=metric.replace('_', ' '), type='log', row=row_idx, col=col_idx, title_standoff=5)
+            calculated_height = max(500, 300 * rows)
+            fig = self.template.apply(fig, plot_title="Total Sync Overhead vs. Threads by Example", height=calculated_height, legend_title="Total Sync Overhead (Size)", xaxis_title="Threads", yaxis_title=metric.replace('_', ' '))
+            for i in range(1, rows * cols + 1):
+                xaxis_name = f'xaxis{i}' if i > 1 else 'xaxis'; yaxis_name = f'yaxis{i}' if i > 1 else 'yaxis'
+                fig.layout[xaxis_name].update(title_font=dict(size=self.template.xaxis_title_size, color=NEUTRAL_COLOR, family=self.template.font_family), tickfont=dict(size=self.template.font_size - 2, family=self.template.font_family, color=NEUTRAL_COLOR), gridcolor=self.template.grid_color, showgrid=True, showline=True, linecolor=self.template.axis_color, ticks='outside', automargin=True)
+                fig.layout[yaxis_name].update(title_font=dict(size=self.template.xaxis_title_size, color=NEUTRAL_COLOR, family=self.template.font_family), tickfont=dict(size=self.template.font_size - 2, family=self.template.font_family, color=NEUTRAL_COLOR), gridcolor=self.template.grid_color, showgrid=True, showline=True, linecolor=self.template.axis_color, ticks='outside', automargin=True)
+            return fig
+        # ... existing multiplot logic for per-counter lines ...
+        color_palette = [PRIMARY_COLOR, ACCENT_COLOR, '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
+        counter_colors = {c: color_palette[i % len(color_palette)] for i, c in enumerate(sync_counters)}
+        legend_added = set()
+        for i, example in enumerate(examples):
+            row_idx, col_idx = i // cols + 1, i % cols + 1
+            example_data = plot_df[plot_df['Example Name'] == example]
+            problem_sizes = sorted(example_data['Problem Size'].unique())
+            for ps_idx, problem_size in enumerate(problem_sizes):
+                size_group = example_data[example_data['Problem Size'] == problem_size]
+                if size_group.empty: continue
+                for counter_name in sync_counters:
+                    counter_group = size_group[size_group['Counter Name'] == counter_name]
+                    if counter_group.empty: continue
+                    counter_group = counter_group.sort_values('Threads')
+                    legend_name = f"{counter_name} (S: {problem_size})"
+                    show_legend_trace = legend_name not in legend_added
+                    if show_legend_trace: legend_added.add(legend_name)
+                    fig.add_trace(
+                        go.Scatter(
+                            x=counter_group['Threads'],
+                            y=counter_group[metric],
+                            mode='lines+markers',
+                            name=legend_name,
+                            line=dict(color=counter_colors.get(counter_name, PRIMARY_COLOR), width=2, dash='solid'),
+                            marker=dict(size=8, color=counter_colors.get(counter_name, PRIMARY_COLOR), line=dict(width=1, color=MARKER_OUTLINE_COLOR)),
+                            legendgroup=legend_name,
+                            showlegend=show_legend_trace,
+                            hovertemplate=f"<b>{example} - {counter_name}</b><br>Size: {problem_size}<br>Threads: %{{x}}<br>{metric}: %{{y:,.0f}}<extra></extra>"
+                        ),
+                        row=row_idx, col=col_idx
+                    )
+            fig.update_xaxes(title_text="Threads", type='category', row=row_idx, col=col_idx, title_standoff=5)
+            fig.update_yaxes(title_text=metric.replace('_', ' '), type='log', row=row_idx, col=col_idx, title_standoff=5)
+        calculated_height = max(500, 300 * rows)
+        fig = self.template.apply(fig, plot_title="Synchronization Overhead vs. Threads by Example", height=calculated_height, legend_title="Sync Counter (Size)", xaxis_title="Threads", yaxis_title=metric.replace('_', ' '))
+        for i in range(1, rows * cols + 1):
+            xaxis_name = f'xaxis{i}' if i > 1 else 'xaxis'; yaxis_name = f'yaxis{i}' if i > 1 else 'yaxis'
+            fig.layout[xaxis_name].update(title_font=dict(size=self.template.xaxis_title_size, color=NEUTRAL_COLOR, family=self.template.font_family), tickfont=dict(size=self.template.font_size - 2, family=self.template.font_family, color=NEUTRAL_COLOR), gridcolor=self.template.grid_color, showgrid=True, showline=True, linecolor=self.template.axis_color, ticks='outside', automargin=True)
+            fig.layout[yaxis_name].update(title_font=dict(size=self.template.xaxis_title_size, color=NEUTRAL_COLOR, family=self.template.font_family), tickfont=dict(size=self.template.font_size - 2, family=self.template.font_family, color=NEUTRAL_COLOR), gridcolor=self.template.grid_color, showgrid=True, showline=True, linecolor=self.template.axis_color, ticks='outside', automargin=True)
+        return fig
+
 
     def get_arts_runtime_breakdown_plot(self, filters=None, top_n_categories=5):
         aligned_df = self.dm.get_aligned_data_for_breakdown(filters)
         if aligned_df.empty or 'Benchmark Median Time (s)' not in aligned_df.columns:
-            return self.template.apply(go.Figure().add_annotation(text="Not enough data for runtime breakdown.", x=0.5,y=0.5,showarrow=False), 
-                                       plot_title="ARTS Runtime Breakdown", xaxis_title="Configuration", yaxis_title="% of Execution Time")
+            return self.template.apply(go.Figure().add_annotation(text="Not enough data for runtime breakdown.", x=0.5,y=0.5,showarrow=False),
+                                         plot_title="ARTS Runtime Breakdown", xaxis_title="Configuration", yaxis_title="% of Execution Time")
 
-        # Ensure 'Category' column exists
-        if 'Category' not in aligned_df.columns:
-            # This implies categorization might not have happened or merged correctly.
-            # For now, let's try to proceed assuming it might be an issue in get_aligned_data_for_breakdown or _categorize_introspection_counters
-            # If self.df_arts_introspection_categorized is available, use it.
-            if not self.dm.df_arts_introspection_categorized.empty:
-                 # This re-merge is a fallback, ideally get_aligned_data_for_breakdown handles it.
-                temp_cat_df = self.dm.get_filtered_introspection_categorized_data(filters)
-                if not temp_cat_df.empty:
-                    temp_summed = temp_cat_df.groupby(['Example Name', 'Problem Size', 'Threads', 'Category'])['Aggregated TotalTime'].sum().reset_index()
-                    temp_summed['Aggregated TotalTime (s)'] = temp_summed['Aggregated TotalTime'] / 1e9
-                    
-                    # Re-align with benchmark times
-                    df_bench_times = self.dm.get_filtered_aggregated_data(filters)[['Example Name', 'Problem Size', 'Threads', 'CARTS Median Time (s)']].rename(columns={'CARTS Median Time (s)': 'Benchmark Median Time (s)'}).dropna()
-                    
-                    aligned_df = pd.merge(df_bench_times, temp_summed, on=['Example Name', 'Problem Size', 'Threads'], how='left').fillna(0)
+        if 'Category' not in aligned_df.columns or 'Aggregated TotalTime (s)' not in aligned_df.columns:
+             return self.template.apply(go.Figure().add_annotation(text="Categorized introspection data missing for breakdown.", x=0.5,y=0.5,showarrow=False),
+                                         plot_title="ARTS Runtime Breakdown", xaxis_title="Configuration", yaxis_title="% of Execution Time")
 
-
-        if aligned_df.empty or 'Category' not in aligned_df.columns or 'Aggregated TotalTime (s)' not in aligned_df.columns:
-             return self.template.apply(go.Figure().add_annotation(text="Categorized introspection data missing for breakdown.", x=0.5,y=0.5,showarrow=False), 
-                                       plot_title="ARTS Runtime Breakdown", xaxis_title="Configuration", yaxis_title="% of Execution Time")
-
-
-        # Calculate percentage of benchmark time for each category
         aligned_df['Percentage of Benchmark Time'] = np.where(
             aligned_df['Benchmark Median Time (s)'] > 0,
             (aligned_df['Aggregated TotalTime (s)'] / aligned_df['Benchmark Median Time (s)']) * 100,
             0
         )
-        
-        # Identify top N categories based on their total time across all shown configs
         category_totals = aligned_df.groupby('Category')['Aggregated TotalTime (s)'].sum().nlargest(top_n_categories)
         top_categories = category_totals.index.tolist()
-
-        # Consolidate non-top categories into 'Other Introspection Components'
         aligned_df['Display Category'] = aligned_df['Category'].apply(lambda x: x if x in top_categories else 'Other Introspection Components')
-        
-        # Sum percentages for the new 'Display Category'
         plot_df_summed = aligned_df.groupby(
             ['Example Name', 'Problem Size', 'Threads', 'Display Category', 'Benchmark Median Time (s)']
         )['Percentage of Benchmark Time'].sum().reset_index()
-
-        # Calculate 'Unaccounted / Application Time'
         accounted_percentage = plot_df_summed.groupby(
             ['Example Name', 'Problem Size', 'Threads']
         )['Percentage of Benchmark Time'].sum().reset_index().rename(columns={'Percentage of Benchmark Time': 'Total Accounted %'})
-        
         plot_df_final = pd.merge(plot_df_summed, accounted_percentage, on=['Example Name', 'Problem Size', 'Threads'])
         plot_df_final['Unaccounted / Application Time %'] = 100 - plot_df_final['Total Accounted %']
-        
-        # Add the 'Unaccounted' part as separate rows for stacking
         unaccounted_df = plot_df_final[['Example Name', 'Problem Size', 'Threads', 'Unaccounted / Application Time %']].drop_duplicates()
         unaccounted_df.rename(columns={'Unaccounted / Application Time %': 'Percentage of Benchmark Time'}, inplace=True)
         unaccounted_df['Display Category'] = 'Unaccounted / Application'
-        
         plot_df_for_fig = pd.concat([
             plot_df_final[['Example Name', 'Problem Size', 'Threads', 'Display Category', 'Percentage of Benchmark Time']],
             unaccounted_df
         ], ignore_index=True)
-        
-        # Ensure 'Unaccounted / Application' is positive; clamp at 0 if negative (due to sum of intro > bench)
         plot_df_for_fig['Percentage of Benchmark Time'] = plot_df_for_fig['Percentage of Benchmark Time'].clip(lower=0)
-
-
         plot_df_for_fig['Config'] = plot_df_for_fig['Example Name'] + " - S:" + plot_df_for_fig['Problem Size'].astype(str) + " - T:" + plot_df_for_fig['Threads'].astype(str)
 
         fig = px.bar(plot_df_for_fig, x='Config', y='Percentage of Benchmark Time', color='Display Category',
-                     title="Execution Time Breakdown by ARTS Component Category",
-                     labels={'Percentage of Benchmark Time': '% of CARTS Median Execution Time', 'Config': 'Configuration'},
-                     text='Percentage of Benchmark Time'
-                     )
+                       title="Execution Time Breakdown by ARTS Component Category",
+                       labels={'Percentage of Benchmark Time': '% of CARTS Median Execution Time', 'Config': 'Configuration'},
+                       text='Percentage of Benchmark Time'
+                       )
         fig.update_traces(texttemplate='%{text:.1f}%', textposition='inside', insidetextanchor='middle')
         fig.update_layout(xaxis={'categoryorder':'total descending'}, barmode='stack')
-        
-        return self.template.apply(fig, plot_title="ARTS Runtime Breakdown vs Benchmark Time", 
-                                     xaxis_title="Configuration (Example - Size - Threads)", 
-                                     yaxis_title="% of CARTS Median Execution Time", 
-                                     height=700, legend_title="Component Category")
-
+        return self.template.apply(fig, plot_title="ARTS Runtime Breakdown vs Benchmark Time",
+                                      xaxis_title="Configuration (Example - Size - Threads)",
+                                      yaxis_title="% of CARTS Median Execution Time",
+                                      height=700, legend_title="Component Category")
 
 # --- TableManager Class ---
 class TableManager:
     def __init__(self, font_family):
         self.font_family = font_family
 
-    def create_benchmark_summary_table(self, benchmark_display_df): 
+    def create_benchmark_summary_table(self, benchmark_display_df):
         if benchmark_display_df.empty:
             return html.Div("No benchmarking data to display after filtering.", style={'color': ACCENT_COLOR, 'fontWeight': 'bold', 'padding': '12px'})
         cols_to_display = ["Example Name", "Problem Size", "Threads", "CARTS Avg Time (s)", "OMP Avg Time (s)", "Speedup (OMP/CARTS)", "CARTS Parallel Efficiency", "OMP Parallel Efficiency", "CARTS Correctness", "OMP Correctness", "CARTS Config Threads", "CARTS Config Nodes" ]
@@ -981,15 +1156,15 @@ class TableManager:
             style_data_conditional=[{'if': {'column_id': col, 'filter_query': f'{{{col}}} = CORRECT'}, 'backgroundColor': '#d4edda', 'color': '#155724'} for col in ['CARTS Correctness', 'OMP Correctness']] + [{'if': {'column_id': col, 'filter_query': f'{{{col}}} != CORRECT && {{{col}}} != "N/A" && {{{col}}} != "-"'}, 'backgroundColor': '#f8d7da', 'color': '#721c24'} for col in ['CARTS Correctness', 'OMP Correctness']] + [{'if': {'column_id': 'Speedup (OMP/CARTS)', 'filter_query': '{Speedup (OMP/CARTS)} > 1.05'}, 'color': SUCCESS_COLOR, 'fontWeight': 'bold'}, {'if': {'column_id': 'Speedup (OMP/CARTS)', 'filter_query': '{Speedup (OMP/CARTS)} < 0.95'}, 'color': ERROR_COLOR, 'fontWeight': 'bold'}],
             sort_action='native', filter_action='native', style_as_list_view=True)
 
-    def create_profiling_summary_table(self, profiling_display_df): 
+    def create_profiling_summary_table(self, profiling_display_df):
         if profiling_display_df.empty: return html.Div("No profiling statistics to display after filtering or processing.", style={'padding': '10px', 'color': WARNING_COLOR})
         cols_to_show = ['Example Name', 'Problem Size', 'Threads', 'Version', 'Event Name', 'Statistic', 'Value', 'category']
         table_df = profiling_display_df[[col for col in cols_to_show if col in profiling_display_df.columns]].copy()
         if 'Value' in table_df.columns:
-            table_df['Value_Formatted'] = table_df['Value'].apply(lambda x: format_number(x, 4)) 
+            table_df['Value_Formatted'] = table_df['Value'].apply(lambda x: format_number(x, 4))
             is_rate_ipc = table_df['Event Name'].str.contains("Rate|IPC", case=False, na=False)
             table_df.loc[is_rate_ipc, 'Value_Formatted'] = table_df.loc[is_rate_ipc, 'Value'].apply(lambda x: format_number(x, 3))
-            is_large_count = table_df['Value'] > 1000 
+            is_large_count = table_df['Value'] > 1000
             table_df.loc[is_large_count & ~is_rate_ipc, 'Value_Formatted'] = table_df.loc[is_large_count & ~is_rate_ipc, 'Value'].apply(lambda x: format_number(x, 0))
             table_df['Value'] = table_df['Value_Formatted']; table_df.drop(columns=['Value_Formatted'], inplace=True)
         data_for_table = table_df.to_dict('records')
@@ -998,7 +1173,7 @@ class TableManager:
             style_cell_conditional=[{'if': {'column_id': c}, 'textAlign': 'right'} for c in ['Threads', 'Value']] + [{'if': {'column_id': c}, 'textAlign': 'left'} for c in ['Example Name', 'Problem Size', 'Event Name', 'category']] + [{'if': {'column_id': c}, 'textAlign': 'center'} for c in ['Version', 'Statistic']],
             sort_action='native', filter_action='native', style_as_list_view=True, tooltip_data=[{column: {'value': str(value), 'type': 'markdown'} for column, value in row.items()} for row in data_for_table], tooltip_duration=None)
 
-    def create_introspection_aggregated_table(self, df_intro_agg): 
+    def create_introspection_aggregated_table(self, df_intro_agg):
         if df_intro_agg.empty: return html.Div("No ARTS introspection data to display.", style={'padding': '10px', 'color': WARNING_COLOR})
         cols_to_display = ['Example Name', 'Problem Size', 'Threads', 'Counter Name', 'Aggregated Count', 'Aggregated TotalTime']
         table_df = df_intro_agg[[col for col in cols_to_display if col in df_intro_agg.columns]].copy()
@@ -1011,8 +1186,7 @@ class TableManager:
             style_cell_conditional=[{'if': {'column_id': c}, 'textAlign': 'right'} for c in ['Threads', 'Aggregated Count', 'Aggregated TotalTime']] + [{'if': {'column_id': c}, 'textAlign': 'left'} for c in ['Example Name', 'Problem Size', 'Counter Name']],
             sort_action='native', filter_action='native', style_as_list_view=True)
 
-# --- Plotting functions (keep existing ones, add new for introspection) ---
-# ... (All existing plotting functions from previous version) ...
+# --- Plotting functions ---
 def create_scaling_plot(benchmark_display_df, template):
     if benchmark_display_df.empty:
         fig = go.Figure().add_annotation(text="No scaling data available", x=0.5, y=0.5, showarrow=False)
@@ -1122,13 +1296,13 @@ def create_parallel_efficiency_plot(benchmark_display_df, template):
     fig.update_layout(yaxis_range=[0, max(1.1, max_eff * 1.05 if pd.notna(max_eff) else 1.1)], xaxis=dict(type='category'))
     return template.apply(fig, plot_title="Parallel Efficiency (Strong Scaling)", xaxis_title="Threads", yaxis_title="Efficiency", height=550, legend_title="Ex - Ver (Size)")
 
-def create_execution_time_variability_plot_components(raw_benchmark_df, template, help_manager):
+def create_execution_time_variability_plot_components(raw_benchmark_df, template, help_manager, graph_style_dict): # Added graph_style_dict
     if raw_benchmark_df.empty or 'times_seconds' not in raw_benchmark_df.columns:
         return [html.Div("No raw benchmark data for variability plots.", style={'padding':'10px', 'textAlign':'center', 'color': WARNING_COLOR})], None
     records = []
     for _, row_series in raw_benchmark_df.iterrows():
-        row = row_series.to_dict(); current_times = row.get('times_seconds', []) 
-        if not isinstance(current_times, list): current_times = [] 
+        row = row_series.to_dict(); current_times = row.get('times_seconds', [])
+        if not isinstance(current_times, list): current_times = []
         for t_val in current_times: records.append({'example_name': row.get('example_name', 'Unknown Example'), 'problem_size': str(row.get('problem_size', 'N/A')), 'threads': row.get('threads', 1), 'version': row.get('version', 'Unknown Version'), 'time': t_val })
     flat_df_for_variability = pd.DataFrame(records)
     if flat_df_for_variability.empty: return [html.Div("No timing data points to plot variability.", style={'padding': '10px', 'textAlign': 'center', 'color': WARNING_COLOR})], None
@@ -1139,25 +1313,29 @@ def create_execution_time_variability_plot_components(raw_benchmark_df, template
     for example_name in unique_examples:
         example_specific_df = flat_df_for_variability[flat_df_for_variability['example_name'] == example_name]
         fig_content = None; sanitized_example_name = re.sub(r'\W+', '_', example_name)
+        plot_id_base = f"variability-{sanitized_example_name}" # Define plot_id_base here
+        graph_html_id = f'{plot_id_base}-graph-id' # Consistent graph ID
+
         if example_specific_df.empty or 'time' not in example_specific_df.columns or example_specific_df['time'].isnull().all():
             fig_content = html.Div(f"No plottable variability data for example: {example_name}", style={'padding':'10px', 'textAlign':'center'})
         else:
             fig = px.box(example_specific_df, x='threads', y='time', color='version', facet_col='problem_size', facet_col_wrap=2, boxmode='group', labels={'time': 'Execution Time (s)', 'threads': 'Threads', 'version': 'Version', 'problem_size': 'Problem Size'}, category_orders={'threads': sorted(example_specific_df['threads'].unique())}, color_discrete_map={'CARTS': PRIMARY_COLOR, 'OMP': ACCENT_COLOR})
-            fig.update_yaxes(type='log', matches=None, title_standoff=10); fig.update_xaxes(matches=None, type='category', title_standoff=10) 
-            num_problem_sizes = example_specific_df['problem_size'].nunique(); plot_height = max(450, 250 * ((num_problem_sizes + 1) // 2) ) 
-            fig = template.apply(fig, plot_title=f"Variability: {example_name}", height=plot_height, legend_title="Version", xaxis_title="Threads", yaxis_title="Execution Time (s)") 
+            fig.update_yaxes(type='log', matches=None, title_standoff=10); fig.update_xaxes(matches=None, type='category', title_standoff=10)
+            num_problem_sizes = example_specific_df['problem_size'].nunique(); plot_height = max(450, 250 * ((num_problem_sizes + 1) // 2) )
+            fig = template.apply(fig, plot_title=f"Variability: {example_name}", height=plot_height, legend_title="Version", xaxis_title="Threads", yaxis_title="Execution Time (s)")
             fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1])); fig.update_layout(margin=dict(t=60, b=120 if template.legend_y < 0 else 80))
-            graph_component = dcc.Graph(id=f'variability-graph-{sanitized_example_name}', figure=fig, className='resizable-variability-plot', style=graph_style)
-            fig_content = create_plot_with_help(graph_component, base_variability_help, f"variability-{sanitized_example_name}")
-        sub_tabs_children.append(dcc.Tab(label=example_name, value=sanitized_example_name, children=[fig_content]))
+            graph_component = dcc.Graph(id=graph_html_id, figure=fig, className='resizable-variability-plot', style=graph_style_dict) # Use graph_style_dict
+            fig_content = create_plot_with_help(graph_component, base_variability_help, plot_id_base) # Pass plot_id_base
+        sub_tabs_children.append(dcc.Tab(label=example_name, value=sanitized_example_name, children=[fig_content])) # Use sanitized_example_name for tab value
     if not sub_tabs_children: return [html.Div("No variability data to display after filtering.", style={'padding':'10px', 'textAlign':'center', 'color': WARNING_COLOR})], None
     default_active_sub_tab = re.sub(r'\W+', '_', unique_examples[0]) if unique_examples else None
     return sub_tabs_children, default_active_sub_tab
 
+
 def create_cache_performance_comparison(profiling_display_df, template):
     if profiling_display_df.empty:
         fig = go.Figure().add_annotation(text="No cache profiling data", x=0.5, y=0.5, showarrow=False)
-        return template.apply(fig, plot_title="Cache Performance", height=500), "" 
+        return template.apply(fig, plot_title="Cache Performance", height=500), ""
     cache_miss_rate_df = profiling_display_df[(profiling_display_df['Event Name'] == 'Cache Miss Rate') & (profiling_display_df['Statistic'] == 'Mean')].copy()
     specific_help = ""
     if not cache_miss_rate_df.empty:
@@ -1171,7 +1349,7 @@ def create_cache_performance_comparison(profiling_display_df, template):
         fig.update_layout(barmode='group', xaxis_type='category')
         specific_help = "- Shows L1/L2 cache miss rate (derived from `cache-misses` / `cache-references`)."
         return template.apply(fig, plot_title="Cache Miss Rate Comparison", xaxis_title="Threads", yaxis_title="Cache Miss Rate (%)", height=550, legend_title="Ex (Size) - Ver"), specific_help
-    else: 
+    else:
         fallback_event = 'cache-misses:u'; df_cache_fallback = profiling_display_df[(profiling_display_df['Event Name'].str.contains(fallback_event, case=False)) & (profiling_display_df['Statistic'] == 'Avg')].copy()
         if df_cache_fallback.empty:
             fig = template.apply(go.Figure().add_annotation(text="No specific cache data (miss rate or raw counts)", x=0.5,y=0.5,showarrow=False), plot_title="Cache Performance", height=500)
@@ -1216,9 +1394,9 @@ def create_stalls_analysis_plot(profiling_display_df, template):
     for p_event in priority_stalls:
         if p_event in df_stalls_raw['Event Name'].unique(): event_to_plot = p_event; break
     if not event_to_plot and not df_stalls_raw.empty: event_to_plot = df_stalls_raw['Event Name'].unique()[0]
-    if not event_to_plot: 
-         fig = go.Figure().add_annotation(text="Could not determine stall event to plot.", x=0.5,y=0.5,showarrow=False)
-         return template.apply(fig, plot_title="CPU Stalls Analysis", height=500), "- Could not determine stall event to plot."
+    if not event_to_plot:
+       fig = go.Figure().add_annotation(text="Could not determine stall event to plot.", x=0.5,y=0.5,showarrow=False)
+       return template.apply(fig, plot_title="CPU Stalls Analysis", height=500), "- Could not determine stall event to plot."
     df_stalls_event = df_stalls_raw[df_stalls_raw['Event Name'] == event_to_plot].copy()
     if df_stalls_event.empty:
         fig = go.Figure().add_annotation(text=f"No data for event: {event_to_plot}", x=0.5,y=0.5,showarrow=False)
@@ -1231,7 +1409,7 @@ def create_stalls_analysis_plot(profiling_display_df, template):
             if 'Value_cycles_total' in df_stalls_event.columns and df_stalls_event['Value_cycles_total'].notna().any():
                 df_stalls_event['stall_percentage'] = np.where(df_stalls_event['Value_cycles_total'] > 0, (df_stalls_event['Value'] / df_stalls_event['Value_cycles_total']) * 100, np.nan )
                 plot_as_percentage = True; specific_help = f"- Shows data for `{event_to_plot.split(':')[0]}` as a percentage of total cycles (`cycles:u`)."
-    y_col = 'stall_percentage' if plot_as_percentage else 'Value'; y_title = f"{event_to_plot.split(':')[0]} (% of Cycles)" if plot_as_percentage else f"{event_to_plot.split(':')[0]} (Count, log)"; y_type = 'linear' if plot_as_percentage else 'log' 
+    y_col = 'stall_percentage' if plot_as_percentage else 'Value'; y_title = f"{event_to_plot.split(':')[0]} (% of Cycles)" if plot_as_percentage else f"{event_to_plot.split(':')[0]} (Count, log)"; y_type = 'linear' if plot_as_percentage else 'log'
     if not specific_help: specific_help = f"- Shows raw counts for event: `{event_to_plot.split(':')[0]}` (log scale)."
     for (ex, ps, ver), group in df_stalls_event.groupby(['Example Name', 'Problem Size', 'Version']):
         group = group.sort_values('Threads')
@@ -1242,36 +1420,173 @@ def create_stalls_analysis_plot(profiling_display_df, template):
     fig.update_layout(xaxis_type='category', yaxis_type=y_type)
     return template.apply(fig, plot_title=f"CPU Stalls: {event_to_plot.split(':')[0]}", xaxis_title="Threads", yaxis_title=y_title, height=550, legend_title="Ex (Size) - Ver"), specific_help
 
-# --- Helper function for plot wrappers (keep as is) ---
+# --- Helper function for plot wrappers ---
 def create_plot_with_help(graph_component, help_text_md, plot_id_base):
     help_icon_id = {'type': 'help-icon-btn', 'index': plot_id_base}
     modal_id = {'type': 'help-modal', 'index': plot_id_base}
     close_button_id = {'type': 'close-help-modal-btn', 'index': plot_id_base}
-    return html.Div([html.Div([graph_component, html.Button("ⓘ", id=help_icon_id, n_clicks=0, className="plot-help-icon", style={'fontSize': '1.2em', 'cursor': 'pointer', 'marginLeft': '10px', 'color': PRIMARY_COLOR, 'position': 'absolute', 'top': '10px', 'right': '10px', 'zIndex': '10', 'background': 'none', 'border': 'none', 'padding': '0'})], style={'position': 'relative', 'paddingTop': '30px'}),
-        dbc.Modal(id=modal_id, is_open=False, children=[dbc.ModalHeader(dbc.ModalTitle(f"About: {plot_id_base.replace('-', ' ').title()}")), dbc.ModalBody(dcc.Markdown(help_text_md)), dbc.ModalFooter(dbc.Button("Close", id=close_button_id, className="ms-auto", n_clicks=0, color="secondary"))], centered=True, scrollable=True, size="lg")])
+
+    # Add download buttons for SVG, PDF, and PNG
+    download_svg_id = {'type': 'download-svg-btn', 'index': plot_id_base}
+    download_pdf_id = {'type': 'download-pdf-btn', 'index': plot_id_base} # Not used in current clientside JS
+    download_png_id = {'type': 'download-png-btn', 'index': plot_id_base}
+
+    download_buttons = html.Div([
+        dbc.Button([
+            html.I(className="fas fa-file-image me-1"), "SVG"
+        ], id=download_svg_id, color="secondary", outline=True, size="sm", className="me-1", n_clicks=0),
+        dbc.Button([
+            html.I(className="fas fa-file-image me-1"), "PNG"
+        ], id=download_png_id, color="secondary", outline=True, size="sm", n_clicks=0),
+    ], style={'position': 'absolute', 'top': '10px', 'right': '50px', 'zIndex': '10'}) # Adjusted right for help icon
+
+    return html.Div([
+        html.Div([
+            graph_component, # This is the dcc.Graph component
+            download_buttons,
+            html.Button("ⓘ", id=help_icon_id, n_clicks=0, className="plot-help-icon",
+                        style={'fontSize': '1.2em', 'cursor': 'pointer', 'marginLeft': '10px',
+                               'color': PRIMARY_COLOR, 'position': 'absolute', 'top': '10px',
+                               'right': '10px', 'zIndex': '10', 'background': 'none',
+                               'border': 'none', 'padding': '0'})
+        ], style={'position': 'relative', 'paddingTop': '40px'}), # Increased paddingTop for buttons
+        dbc.Modal(id=modal_id, is_open=False, children=[
+            dbc.ModalHeader(dbc.ModalTitle(f"About: {plot_id_base.replace('-', ' ').title()}")),
+            dbc.ModalBody(dcc.Markdown(help_text_md)),
+            dbc.ModalFooter(dbc.Button("Close", id=close_button_id, className="ms-auto", n_clicks=0, color="secondary"))
+        ], centered=True, scrollable=True, size="lg")
+    ])
+
 
 # --- Dash App Layout Definition ---
 app = dash.Dash(__name__, suppress_callback_exceptions=True, external_stylesheets=[dbc.themes.BOOTSTRAP, 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.3/css/all.min.css'])
-graph_style = {'width': '100%', 'height': '550px'} 
-# --- App Layout (Modified to include Introspection Section) ---
+server = app.server # For deployment
+graph_style = {'width': '100%', 'height': '550px'}
+
+# --- Clientside callback for SVG/PNG plot download ---
+app.clientside_callback(
+    """
+    function(n_svg, n_png, ids_svg, ids_png) {
+        var ctx = window.dash_clientside.callback_context;
+        if (!ctx || !ctx.triggered || ctx.triggered.length === 0) {
+            return window.dash_clientside.no_update;
+        }
+        var trig = ctx.triggered[0];
+        var id_str = trig.prop_id.split('.')[0];
+        var id_obj = null;
+        try {
+            id_obj = JSON.parse(id_str.replace(/'/g, '"'));
+        } catch (e) {
+            console.error('Failed to parse id_str:', id_str, e);
+            return window.dash_clientside.no_update;
+        }
+        if (!id_obj || typeof id_obj.index === 'undefined') {
+            console.error('No id_obj or index found in id_obj:', id_obj);
+            return window.dash_clientside.no_update;
+        }
+        
+        var n_clicks_array = null;
+        var ids_array = null;
+        var format = null;
+        if (id_obj.type === 'download-svg-btn') {
+            n_clicks_array = n_svg;
+            ids_array = ids_svg;
+            format = 'svg';
+        } else if (id_obj.type === 'download-png-btn') {
+            n_clicks_array = n_png;
+            ids_array = ids_png;
+            format = 'png';
+        } else {
+            return window.dash_clientside.no_update;
+        }
+        var idx = -1;
+        if (ids_array) {
+            idx = ids_array.findIndex(x => x.type === id_obj.type && x.index === id_obj.index);
+        }
+        if (idx === -1 || !n_clicks_array || n_clicks_array[idx] < 1) {
+            return window.dash_clientside.no_update;
+        }
+        var graph_id_to_download = id_obj.index + '-graph-id';
+        var graphContainer = document.getElementById(graph_id_to_download);
+        if (!graphContainer) {
+            console.error('Graph container not found:', graph_id_to_download);
+            return window.dash_clientside.no_update;
+        }
+        
+        var plotlyPlot = graphContainer.querySelector('.js-plotly-plot');
+        if (!plotlyPlot) { 
+            if (graphContainer.classList.contains('js-plotly-plot')) {
+                plotlyPlot = graphContainer;
+            } else {
+                console.error('Plotly plot element .js-plotly-plot not found in:', graph_id_to_download);
+                return window.dash_clientside.no_update;
+            }
+        }
+        if (plotlyPlot.offsetParent === null) { 
+            console.warn('Plotly plot is not visible, download might be empty:', graph_id_to_download);
+        }
+        if (typeof Plotly !== 'undefined') {
+            try {
+                Plotly.Plots.resize(plotlyPlot); 
+            } catch (e) {
+                console.warn('Error resizing plot before download (continuing):', graph_id_to_download, e);
+            }
+            var filename = id_obj.index.replace(/[^a-zA-Z0-9_]/g, '_') + '_plot';
+            var layout = plotlyPlot.layout || {};
+            var image_height = layout.height || 550;
+            var image_width = layout.width || 700;
+            // Increase scale factor for PNG for better resolution
+            var scale_factor = (format === 'png') ? 2 : 1; 
+            var format_opts = {
+                format: format,
+                filename: filename,
+                height: image_height,
+                width: image_width,
+                scale: scale_factor 
+            };
+            Plotly.downloadImage(plotlyPlot, format_opts).then(function(filename){
+                console.log('Download initiated for:', filename);
+            }).catch(function(err){
+                console.error('Plotly.downloadImage error:', err);
+            });
+        } else {
+            console.error('Plotly is not defined.');
+        }
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output('dummy-output-for-resize', 'children', allow_duplicate=True), # Dummy output
+    [
+        Input({'type': 'download-svg-btn', 'index': ALL}, 'n_clicks'),
+        Input({'type': 'download-png-btn', 'index': ALL}, 'n_clicks'),
+    ],
+    [   
+        State({'type': 'download-svg-btn', 'index': ALL}, 'id'),
+        State({'type': 'download-png-btn', 'index': ALL}, 'id'),
+    ],
+    prevent_initial_call=True
+)
+
+
+# --- App Layout ---
 app.layout = dbc.Container(fluid=True, style=StyleManager.MAIN_DIV_STYLE, children=[
     dcc.Store(id='full-results-store'), dcc.Store(id='filters-store', data={'examples': [], 'threads': [], 'sizes': [], 'correctness': 'ALL'}), dcc.Store(id='filter-modal-store'), html.Div(id='dummy-output-for-resize', style={'display': 'none'}),
-    
-    # Corrected Header Row
+
     dbc.Row(
         dbc.Col(
             html.Div([
-                html.H1([html.Span("CARTS", style={'color': PRIMARY_COLOR, 'fontWeight': '700'}), " Performance Dashboard"], style=StyleManager.HEADER_STYLE), 
+                html.H1([html.Span("CARTS", style={'color': PRIMARY_COLOR, 'fontWeight': '700'}), " Performance Dashboard"], style=StyleManager.HEADER_STYLE),
                 html.P("Benchmark, Profiling, and ARTS Introspection Analysis", style=StyleManager.SUBTITLE_STYLE)
-            ]), 
-            width=12 # Moved width to dbc.Col
-        ), 
-        className="mb-4 mt-3" # className for the Row
+            ]),
+            width=12
+        ),
+        className="mb-4 mt-3"
     ),
 
     dbc.Row([dbc.Col(html.Div([dbc.Row([dbc.Col(dcc.Upload(id='upload-results-data', children=html.Div(['Drag and Drop or ', html.A('Select JSON Results File')]), style=StyleManager.UPLOAD_STYLE), md=8), dbc.Col(dbc.Checkbox(id='use-default-path-checkbox', label="Use Default Results Path", value=True, className="mt-2 pt-1"), md=4, className="d-flex align-items-center")]), html.Div(id='output-data-upload-status', className="text-center mt-2 small")], style=StyleManager.UPLOAD_CONTAINER_STYLE), width={"size": 8, "offset": 2})], className="mb-4"),
     dbc.Row(dbc.Col(html.Div(id='data-load-status-message', className="text-center fw-bold mb-3", style={'color': ACCENT_COLOR}), width=12)),
     dbc.Row(dbc.Col(dbc.Button([html.I(className="fas fa-filter me-2"), "Filter Results"], id='open-filter-modal-button', n_clicks=0, color="primary", size="lg", className="d-block mx-auto shadow-sm", style={'backgroundColor': ACCENT_COLOR, 'borderColor': ACCENT_COLOR}), width={"size": 6, "offset": 3}), className="mb-4"),
+    
     dbc.Card(className="mb-4 shadow-sm", children=[dbc.CardHeader(html.H2("Benchmark Performance Analysis", className="mb-0", style={'color': PRIMARY_COLOR, 'fontSize': '1.5rem'})), dbc.CardBody([
         dcc.Tabs(id='benchmark-plot-tabs', value='scaling', className="custom-tabs", children=[
             dcc.Tab(label="Scaling", value='scaling', children=[html.Div(id='scaling-plot-div', className="mt-3")]),
@@ -1282,32 +1597,34 @@ app.layout = dbc.Container(fluid=True, style=StyleManager.MAIN_DIV_STYLE, childr
         html.Hr(className="my-4"), html.H3("Benchmark Summary Table", style={'color': PRIMARY_COLOR, 'fontSize': '1.3rem'}, className="mb-3"),
         dbc.Button([html.I(className="fas fa-download me-2"),"Download Benchmark CSV"], id="download-benchmark-csv-button", n_clicks=0, color="secondary", outline=True, size="sm", className="mb-3 shadow-sm"),
         dcc.Download(id="download-benchmark-data"), html.Div(id='benchmark-summary-table-div')])]),
-    html.Div(id='filter-modal-div'), 
+    
+    html.Div(id='filter-modal-div'),
+    
     dbc.Card(className="mb-4 shadow-sm", children=[dbc.CardHeader(html.H2("Hardware Profiling Analysis", className="mb-0", style={'color': PRIMARY_COLOR, 'fontSize': '1.5rem'})), dbc.CardBody([
         dcc.Dropdown(id='profiling-category-dropdown', options=[], placeholder="Select Profiling Category...", clearable=False, className="mb-3", style={'fontSize': '1rem'}),
         html.Div(id='profiling-plot-div', className="mt-3"), html.Hr(className="my-4"), html.H3("Profiling Data Table", style={'color': PRIMARY_COLOR, 'fontSize': '1.3rem'}, className="mb-3"),
         dbc.Button([html.I(className="fas fa-download me-2"),"Download Profiling CSV"], id="download-profiling-csv-button", n_clicks=0, color="secondary", outline=True, size="sm", className="mb-3 shadow-sm"),
         dcc.Download(id="download-profiling-data"), html.Div(id='profiling-summary-table-div')])]),
+    
     dbc.Card(className="mb-4 shadow-sm", children=[dbc.CardHeader(html.H2("ARTS Introspection Analysis", className="mb-0", style={'color': PRIMARY_COLOR, 'fontSize': '1.5rem'})), dbc.CardBody([
-        dbc.Row([dbc.Col(dcc.Dropdown(id='introspection-plot-type-dropdown', 
-                                      options=[
-                                          {'label': 'Counters Overview (Bar Chart)', 'value': 'overview'}, 
-                                          {'label': 'Counter Scaling (Line Chart)', 'value': 'scaling'}, 
-                                          {'label': 'Raw Counter Distribution (Box Plot)', 'value': 'raw_distribution'}, 
-                                          {'label': 'Counter Cost vs Benchmark Time', 'value': 'cost_vs_benchmark'},
-                                          {'label': 'Internal Overhead Profile', 'value': 'arts_overhead_profile'} 
-                                      ], 
-                                      value='overview', placeholder="Select Introspection Plot Type...", clearable=False, className="mb-2", style={'fontSize': '1rem'}), md=6),
+        dbc.Row([dbc.Col(dcc.Dropdown(id='introspection-plot-type-dropdown',
+                                     options=[
+                                         {'label': 'Counters Overview (Bar Chart)', 'value': 'overview'},
+                                         {'label': 'Counter Scaling (Line Chart)', 'value': 'scaling'},
+                                         {'label': 'Raw Counter Distribution (Box Plot)', 'value': 'raw_distribution'},
+                                         {'label': 'Counter Cost vs Benchmark Time', 'value': 'cost_vs_benchmark'},
+                                         {'label': 'Internal Overhead Profile', 'value': 'arts_overhead_profile'}
+                                     ],
+                                     value='overview', placeholder="Select Introspection Plot Type...", clearable=False, className="mb-2", style={'fontSize': '1rem'}), md=6),
                  dbc.Col(dcc.Dropdown(id='introspection-counter-name-dropdown', placeholder="Select Counter Name (for specific plots)...", className="mb-2", style={'fontSize': '1rem'}), md=6)]),
         dbc.Row([dbc.Col(dcc.Dropdown(id='introspection-overview-sort-by-dropdown', options=[{'label': 'Sort by Aggregated Total Time', 'value': 'Aggregated TotalTime'}, {'label': 'Sort by Aggregated Count', 'value': 'Aggregated Count'}], value='Aggregated TotalTime', className="mb-2", style={'fontSize': '0.9rem', 'display': 'none'}), md=4),
-                 dbc.Col(dcc.Input(id='introspection-overview-top-n-input', type='number', value=15, min=3, max=50, step=1, className="mb-2 form-control form-control-sm", style={'fontSize': '0.9rem', 'display': 'none'}), md=2), 
+                 dbc.Col(dcc.Input(id='introspection-overview-top-n-input', type='number', value=15, min=3, max=50, step=1, className="mb-2 form-control form-control-sm", style={'fontSize': '0.9rem', 'display': 'none'}), md=2),
                  dbc.Col(dcc.Dropdown(id='introspection-value-to-plot-dropdown', options=[{'label': 'Plot Aggregated Total Time', 'value': 'Aggregated TotalTime'}, {'label': 'Plot Aggregated Count', 'value': 'Aggregated Count'}], value='Aggregated TotalTime', className="mb-2", style={'fontSize': '0.9rem', 'display': 'none'}), md=6)]),
-        html.Div(id='introspection-plot-div', className="mt-3", style={'minHeight': graph_style.get('height', '550px')}), 
+        html.Div(id='introspection-plot-div', className="mt-3", style={'minHeight': graph_style.get('height', '550px')}),
         html.Hr(className="my-4"), html.H3("Aggregated Introspection Counters Table", style={'color': PRIMARY_COLOR, 'fontSize': '1.3rem'}, className="mb-3"),
         dbc.Row([dbc.Col(dbc.Button([html.I(className="fas fa-download me-2"),"Download Aggregated Introspection CSV"], id="download-introspection-agg-csv-button", n_clicks=0, color="info", outline=True, size="sm", className="mb-2 shadow-sm"), width="auto"), dbc.Col(dbc.Button([html.I(className="fas fa-download me-2"),"Download Raw Introspection CSV"], id="download-introspection-raw-csv-button", n_clicks=0, color="info", outline=True, size="sm", className="mb-2 shadow-sm"), width="auto")], className="mb-3"),
         dcc.Download(id="download-introspection-agg-data"), dcc.Download(id="download-introspection-raw-data"), html.Div(id='introspection-summary-table-div')])]),
-    
-    # New Advanced Analysis Card
+
     dbc.Card(className="mb-4 shadow-sm", children=[
         dbc.CardHeader(html.H2("Advanced Analysis & Correlations", className="mb-0", style={'color': PRIMARY_COLOR, 'fontSize': '1.5rem'})),
         dbc.CardBody([
@@ -1318,20 +1635,21 @@ app.layout = dbc.Container(fluid=True, style=StyleManager.MAIN_DIV_STYLE, childr
                         {'label': 'Runtime Breakdown by ARTS Component', 'value': 'runtime_breakdown'},
                         {'label': 'Task Creation Overhead', 'value': 'task_creation_overhead'},
                         {'label': 'DB Operation Costs', 'value': 'db_operation_costs'},
+                        {'label': 'Total DB Operation Cost', 'value': 'total_db_operation_cost'},
                         {'label': 'Synchronization Overhead', 'value': 'sync_overhead'},
-                        # Add more as they are implemented
+                        {'label': 'Total Sync Overhead', 'value': 'total_sync_overhead'},
                     ],
                     value='runtime_breakdown', placeholder="Select Advanced Plot Type...", clearable=False,
                     className="mb-2", style={'fontSize': '1rem'}
                 ), md=6),
                 dbc.Col(dcc.Dropdown(
-                    id='advanced-plot-metric-dropdown', # For plots that can use Count or Time
-                    options=[{'label': 'Use Aggregated Total Time', 'value': 'Aggregated TotalTime'}, 
+                    id='advanced-plot-metric-dropdown', 
+                    options=[{'label': 'Use Aggregated Total Time', 'value': 'Aggregated TotalTime'},
                              {'label': 'Use Aggregated Count', 'value': 'Aggregated Count'}],
-                    value='Aggregated TotalTime', className="mb-2", style={'fontSize': '0.9rem', 'display': 'none'} # Initially hidden
+                    value='Aggregated TotalTime', className="mb-2", style={'fontSize': '0.9rem', 'display': 'none'} 
                 ), md=6)
             ]),
-            html.Div(id='advanced-plot-div', className="mt-3", style={'minHeight': graph_style.get('height', '600px')}), # Larger default height
+            html.Div(id='advanced-plot-div', className="mt-3", style={'minHeight': graph_style.get('height', '600px')}), 
         ])
     ]),
 
@@ -1348,7 +1666,7 @@ def update_output_on_upload_or_default(uploaded_contents, use_default_path, uplo
     if ctx_triggered_id == 'use-default-path-checkbox' and use_default_path:
         if os.path.exists(DEFAULT_RESULTS_PATH):
             full_data, error_msg = load_full_json_data(DEFAULT_RESULTS_PATH)
-            if error_msg: return None, dbc.Alert(f"Error loading default file: {error_msg}", color="danger", dismissable=True), dash.no_update 
+            if error_msg: return None, dbc.Alert(f"Error loading default file: {error_msg}", color="danger", dismissable=True), dash.no_update
             if full_data and "detailed_aggregated_results" in full_data: return full_data, dash.no_update, dbc.Alert(f"Successfully loaded default data from {os.path.basename(DEFAULT_RESULTS_PATH)}.", color="success", dismissable=True, duration=5000)
             else: return None, dbc.Alert("Default results file is invalid or empty.", color="danger", dismissable=True), dash.no_update
         else: return None, dbc.Alert(f"Default results file not found at: {DEFAULT_RESULTS_PATH}", color="warning", dismissable=True), dash.no_update
@@ -1357,47 +1675,74 @@ def update_output_on_upload_or_default(uploaded_contents, use_default_path, uplo
         try:
             if uploaded_filename and 'json' in uploaded_filename.lower():
                 full_data = json.loads(decoded.decode('utf-8'))
-                if "detailed_aggregated_results" not in full_data or not isinstance(full_data["detailed_aggregated_results"], list): return existing_data, dash.no_update, dbc.Alert(f"Uploaded file '{uploaded_filename}' is missing key data or has incorrect format.", color="danger", dismissable=True) 
-                return full_data, dash.no_update, dbc.Alert(f"Successfully loaded data from: {uploaded_filename}", color="success", dismissable=True, duration=5000) 
+                if "detailed_aggregated_results" not in full_data or not isinstance(full_data["detailed_aggregated_results"], list): return existing_data, dash.no_update, dbc.Alert(f"Uploaded file '{uploaded_filename}' is missing key data or has incorrect format.", color="danger", dismissable=True)
+                return full_data, dash.no_update, dbc.Alert(f"Successfully loaded data from: {uploaded_filename}", color="success", dismissable=True, duration=5000)
             else: return existing_data, dash.no_update, dbc.Alert(f"File '{uploaded_filename}' is not a JSON file.", color="warning", dismissable=True)
         except Exception as e: return existing_data, dash.no_update, dbc.Alert(f"Error processing file '{uploaded_filename}': {str(e)}", color="danger", dismissable=True)
-    if use_default_path and existing_data is None: 
-         if os.path.exists(DEFAULT_RESULTS_PATH):
+    if use_default_path and existing_data is None: # Initial load with default path checked
+        if os.path.exists(DEFAULT_RESULTS_PATH):
             full_data, error_msg = load_full_json_data(DEFAULT_RESULTS_PATH)
             if error_msg: return None, dbc.Alert(f"Error loading default file: {error_msg}", color="danger", dismissable=True), dash.no_update
             if full_data and "detailed_aggregated_results" in full_data: return full_data, dash.no_update, dbc.Alert(f"Initial load: Using default data from {os.path.basename(DEFAULT_RESULTS_PATH)}.", color="info", dismissable=True, duration=5000)
             else: return None, dbc.Alert("Default results file is invalid or empty.", color="danger", dismissable=True), dash.no_update
-         else: return None, dbc.Alert(f"Default results file not found at: {DEFAULT_RESULTS_PATH}. Please upload a file or ensure the default path is correct.", color="warning", dismissable=True), dash.no_update
+        else: return None, dbc.Alert(f"Default results file not found at: {DEFAULT_RESULTS_PATH}. Please upload a file or ensure the default path is correct.", color="warning", dismissable=True), dash.no_update
     if existing_data is None and not use_default_path: return None, "Please upload a JSON results file or select 'Use Default Path'.", dash.no_update
     return existing_data, dash.no_update, dash.no_update
 
 app.clientside_callback(
-    """function(main_tab_value, variability_sub_tab_value, profiling_category_value, intro_plot_type_value, advanced_plot_type_value) { // Added advanced_plot_type_value
+    """function(main_tab_value, variability_sub_tab_value, profiling_category_value, intro_plot_type_value, advanced_plot_type_value) { 
         let timeoutId;
-        function debounceResize(graph_ids) {
+        function debounceResize(graph_ids_to_check) { 
             clearTimeout(timeoutId);
             timeoutId = setTimeout(() => {
-                graph_ids.forEach(function(graph_id_obj) {
-                    let graph_id = typeof graph_id_obj === 'string' ? graph_id_obj : graph_id_obj.id;
-                    if (!graph_id) return;
-                    var graphElement = document.getElementById(graph_id);
+                graph_ids_to_check.forEach(function(graph_html_id) { 
+                    if (!graph_html_id) return; 
+                    var graphElement = document.getElementById(graph_html_id);
                     if (graphElement && graphElement.offsetParent !== null && typeof Plotly !== 'undefined') {
-                        try { Plotly.Plots.resize(graphElement); } catch (e) { /* console.warn('Error resizing plot:', graph_id, e); */ }
+                        try {
+                            Plotly.Plots.resize(graphElement);
+                        } catch (e) {
+                            // console.warn('Error resizing plot:', graph_html_id, e);
+                        }
                     }
                 });
-            }, 150); 
+            }, 150);
         }
-        var base_graph_ids = ['scaling-graph-id', 'efficiency-graph-id', 'speedup-graph-id', 'slowdown-graph-id', 'profiling-event-graph-id', 'introspection-graph-id', 'advanced-plot-graph-id']; // Added advanced
-        var all_ids_to_check = [...base_graph_ids];
+        
+        var base_graph_ids = [
+            'scaling-graph-id', 'efficiency-graph-id', 'speedup-graph-id', 'slowdown-graph-id',
+            'prof-cache-graph-id', 'prof-cpu-graph-id', 'prof-stalls-graph-id', 
+            'intro-overview-graph-id', 'intro-scaling-graph-id', 'intro-raw_distribution-graph-id',
+            'intro-cost_vs_benchmark-graph-id', 'intro-arts_overhead_profile-graph-id',
+            'adv-runtime_breakdown-graph-id', 'adv-task_creation_overhead-graph-id',
+            'adv-db_operation_costs-graph-id', 'adv-total_db_operation_cost-graph-id',
+            'adv-sync_overhead-graph-id', 'adv-total_sync_overhead-graph-id'
+        ];
+
+        if (profiling_category_value && !['Cache', 'CPU', 'Stalls'].includes(profiling_category_value)) {
+            base_graph_ids.push('prof-' + profiling_category_value.toLowerCase().replace(/[^a-z0-9_\\-]/g, '') + '-graph-id');
+        }
+        
+        var all_ids_to_check_for_resize = [...base_graph_ids];
+
         if (main_tab_value === 'variability' && variability_sub_tab_value) {
-            let sanitized_sub_tab_id = String(variability_sub_tab_value).replace(/[^a-zA-Z0-9_]/g, '_');
-            if (sanitized_sub_tab_id) { all_ids_to_check.push('variability-graph-' + sanitized_sub_tab_id); }
+            let sanitized_sub_tab_id_for_graph = String(variability_sub_tab_value).replace(/\\W+/g, '_');
+            if (sanitized_sub_tab_id_for_graph) {
+                 all_ids_to_check_for_resize.push('variability-' + sanitized_sub_tab_id_for_graph + '-graph-id');
+            }
         }
-        debounceResize(all_ids_to_check);
+        debounceResize(all_ids_to_check_for_resize);
         return window.dash_clientside.no_update;
     }""",
-    Output('dummy-output-for-resize', 'children'), 
-    [Input('benchmark-plot-tabs', 'value'), Input('variability-sub-tabs-nav', 'value'), Input('profiling-category-dropdown', 'value'), Input('introspection-plot-type-dropdown', 'value'), Input('advanced-plot-type-dropdown', 'value')]) # Added advanced
+    Output('dummy-output-for-resize', 'children', allow_duplicate=True),
+    [Input('benchmark-plot-tabs', 'value'),
+     Input('variability-sub-tabs-nav', 'value'), 
+     Input('profiling-category-dropdown', 'value'),
+     Input('introspection-plot-type-dropdown', 'value'),
+     Input('advanced-plot-type-dropdown', 'value')],
+    prevent_initial_call=True
+)
+
 
 @app.callback(
     [Output('scaling-plot-div', 'children'), Output('efficiency-plot-div', 'children'), Output('speedup-plot-div', 'children'), Output('slowdown-plot-div', 'children')],
@@ -1405,8 +1750,12 @@ app.clientside_callback(
 def update_main_benchmark_graphs(filters, full_json_data):
     if not full_json_data:
         empty_fig = default_plot_template.apply(go.Figure().add_annotation(text="No data loaded.", xref="paper", yref="paper", showarrow=False))
-        empty_plot_component = create_plot_with_help(dcc.Graph(figure=empty_fig, style=graph_style, id="empty-main-graph"), "Load data to view plots.", "empty-main")
-        return [empty_plot_component] * 4
+        empty_plot_component_scaling = create_plot_with_help(dcc.Graph(figure=empty_fig, style=graph_style, id="scaling-graph-id"), "Load data to view plots.", "scaling")
+        empty_plot_component_efficiency = create_plot_with_help(dcc.Graph(figure=empty_fig, style=graph_style, id="efficiency-graph-id"), "Load data to view plots.", "efficiency")
+        empty_plot_component_speedup = create_plot_with_help(dcc.Graph(figure=empty_fig, style=graph_style, id="speedup-graph-id"), "Load data to view plots.", "speedup")
+        empty_plot_component_slowdown = create_plot_with_help(dcc.Graph(figure=empty_fig, style=graph_style, id="slowdown-graph-id"), "Load data to view plots.", "slowdown")
+        return empty_plot_component_scaling, empty_plot_component_efficiency, empty_plot_component_speedup, empty_plot_component_slowdown
+
     data_manager = DataManager(full_json_data); plot_manager = PlotManager(default_plot_template, data_manager, plot_help_manager)
     scaling_fig = plot_manager.get_scaling_plot(filters); scaling_plot_component = create_plot_with_help(dcc.Graph(id='scaling-graph-id', figure=scaling_fig, style=graph_style), plot_help_manager.get_help_text("scaling"), "scaling")
     efficiency_fig = plot_manager.get_efficiency_plot(filters); efficiency_plot_component = create_plot_with_help(dcc.Graph(id='efficiency-graph-id', figure=efficiency_fig, style=graph_style), plot_help_manager.get_help_text("efficiency"), "efficiency")
@@ -1415,14 +1764,15 @@ def update_main_benchmark_graphs(filters, full_json_data):
     return scaling_plot_component, efficiency_plot_component, speedup_plot_component, slowdown_plot_component
 
 @app.callback(
-    [Output('variability-sub-tabs-nav', 'children'), Output('variability-sub-tabs-nav', 'value'), Output('variability-plot-area', 'style')], 
+    [Output('variability-sub-tabs-nav', 'children'), Output('variability-sub-tabs-nav', 'value'), Output('variability-plot-area', 'style')],
     [Input('filters-store', 'data'), Input('full-results-store', 'data'), Input('benchmark-plot-tabs', 'value')])
 def update_variability_plots_area(filters, full_json_data, active_main_tab):
-    if active_main_tab != 'variability' or not full_json_data: return [], None, {'display': 'none'} 
+    if active_main_tab != 'variability' or not full_json_data: return [], None, {'display': 'none'}
     data_manager = DataManager(full_json_data); plot_manager = PlotManager(default_plot_template, data_manager, plot_help_manager)
-    sub_tabs_children, default_active_sub_tab = plot_manager.get_variability_plot_components(filters)
+    sub_tabs_children, default_active_sub_tab = plot_manager.get_variability_plot_components(filters) 
     if not sub_tabs_children: return [html.Div("No variability data to display after filtering.", style={'padding':'10px', 'textAlign':'center', 'color': WARNING_COLOR})], None, {'display': 'block'}
     return sub_tabs_children, default_active_sub_tab, {'display': 'block'}
+
 
 @app.callback( Output('benchmark-summary-table-div', 'children'), [Input('filters-store', 'data'), Input('full-results-store', 'data')] )
 def update_benchmark_summary_table_display(filters, full_json_data):
@@ -1433,19 +1783,25 @@ def update_benchmark_summary_table_display(filters, full_json_data):
 
 @app.callback( Output('profiling-plot-div', 'children'), [Input('profiling-category-dropdown', 'value'), Input('filters-store', 'data'), Input('full-results-store', 'data')] )
 def update_profiling_event_plot(selected_category, filters, full_json_data):
+    plot_id_base = "prof-empty" 
     if not full_json_data:
         empty_fig = default_plot_template.apply(go.Figure().add_annotation(text="Load data to see profiling analysis.", xref="paper", yref="paper", showarrow=False))
-        return create_plot_with_help(dcc.Graph(id='profiling-event-graph-id', figure=empty_fig, style=graph_style), "No profiling data loaded.", "prof-empty")
+        return create_plot_with_help(dcc.Graph(id=f'{plot_id_base}-graph-id', figure=empty_fig, style=graph_style), "No profiling data loaded.", plot_id_base)
     if not selected_category:
+        plot_id_base = "prof-select"
         empty_fig = default_plot_template.apply(go.Figure().add_annotation(text="Select a profiling category.", xref="paper", yref="paper", showarrow=False))
-        return create_plot_with_help(dcc.Graph(id='profiling-event-graph-id', figure=empty_fig, style=graph_style), "Please select a category.", "prof-select")
+        return create_plot_with_help(dcc.Graph(id=f'{plot_id_base}-graph-id', figure=empty_fig, style=graph_style), "Please select a category.", plot_id_base)
+
     data_manager = DataManager(full_json_data); plot_manager = PlotManager(default_plot_template, data_manager, plot_help_manager)
-    fig = go.Figure(); specific_event_help_info = "" 
+    fig = go.Figure(); specific_event_help_info = ""
+    plot_id_base = f"prof-{selected_category.lower().replace(' ', '-').replace('/', '_').replace(':', '-')}" # Sanitize ID
+
     if selected_category == 'Cache': fig, specific_event_help_info = plot_manager.get_cache_plot(filters); help_text = plot_help_manager.get_help_text("cache_perf", specific_event_help_info)
     elif selected_category == 'CPU': fig = plot_manager.get_ipc_plot(filters); help_text = plot_help_manager.get_help_text("ipc_perf")
     elif selected_category == 'Stalls': fig, specific_event_help_info = plot_manager.get_stalls_plot(filters); help_text = plot_help_manager.get_help_text("stalls_perf", specific_event_help_info)
     else: fig, specific_event_help_info = plot_manager.get_generic_profiling_plot(selected_category, filters); help_text = plot_help_manager.get_help_text("generic_profiling", specific_event_help_info)
-    return create_plot_with_help(dcc.Graph(id='profiling-event-graph-id', figure=fig, style=graph_style), help_text, f"prof-{selected_category.lower().replace(' ', '-')}")
+
+    return create_plot_with_help(dcc.Graph(id=f'{plot_id_base}-graph-id', figure=fig, style=graph_style), help_text, plot_id_base)
 
 @app.callback( Output('profiling-summary-table-div', 'children'), [Input('filters-store', 'data'), Input('full-results-store', 'data')] )
 def update_profiling_summary_table_display(filters, full_json_data):
@@ -1457,13 +1813,13 @@ def update_profiling_summary_table_display(filters, full_json_data):
 @app.callback( Output('profiling-category-dropdown', 'options'), [Input('full-results-store', 'data')] )
 def update_profiling_category_dropdown_options(full_json_data):
     if not full_json_data: return []
-    data_manager = DataManager(full_json_data); profiling_df_for_categories = data_manager.get_profiling_display_data() 
+    data_manager = DataManager(full_json_data); profiling_df_for_categories = data_manager.get_profiling_display_data()
     if profiling_df_for_categories.empty or 'category' not in profiling_df_for_categories.columns: return []
     categories = sorted(profiling_df_for_categories['category'].unique())
     if 'Other' in categories: categories.remove('Other'); return [{'label': cat, 'value': cat} for cat in categories] + [{'label': 'Other', 'value': 'Other'}]
     return [{'label': cat, 'value': cat} for cat in categories]
 
-# --- Filter Modal Callbacks (Keep as is) ---
+# --- Filter Modal Callbacks ---
 def render_filter_modal_layout(modal_state, filter_options):
     ex_opts, th_opts, sz_opts, corr_opts = filter_options.get('examples', []), filter_options.get('threads', []), filter_options.get('sizes', []), filter_options.get('correctness', [])
     ex_val, th_val, sz_val, corr_val = modal_state.get('examples', [o['value'] for o in ex_opts]), modal_state.get('threads', [o['value'] for o in th_opts]), modal_state.get('sizes', [o['value'] for o in sz_opts]), modal_state.get('correctness', 'ALL')
@@ -1502,18 +1858,18 @@ def toggle_modal_sizes_select(select_all, clear_all, options):
     if triggered_id == 'clear-all-sizes-filter': return []
     raise PreventUpdate
 @app.callback(
-    [Output('filter-modal-div', 'children'), Output('filter-modal-store', 'data', allow_duplicate=True)], 
+    [Output('filter-modal-div', 'children'), Output('filter-modal-store', 'data', allow_duplicate=True)],
     [Input('open-filter-modal-button', 'n_clicks'), Input({'type': 'close-filter-modal-button-action', 'index': ALL}, 'n_clicks'), Input({'type': 'reset-filters-button-action', 'index': ALL}, 'n_clicks')],
     [State('filters-store', 'data'), State('full-results-store', 'data'), State('filter-modal-store', 'data')], prevent_initial_call=True)
 def manage_filter_modal_visibility_and_state(open_n, close_n_list, reset_n_list, active_dashboard_filters, full_json_data, current_modal_selections_state):
     triggered_id_obj = callback_context.triggered[0]; triggered_id_str = triggered_id_obj['prop_id'].split('.')[0]
     action_type = None
     if triggered_id_str == 'open-filter-modal-button': action_type = 'open'
-    elif triggered_id_str.startswith('{'): 
-        try: id_dict = json.loads(triggered_id_str.replace("'", "\"")); action_type = id_dict.get('type') 
-        except: pass 
+    elif triggered_id_str.startswith('{'):
+        try: id_dict = json.loads(triggered_id_str.replace("'", "\"")); action_type = id_dict.get('type')
+        except: pass
     if not action_type: raise PreventUpdate
-    dm = DataManager(full_json_data); available_options = dm.get_available_filter_options() 
+    dm = DataManager(full_json_data); available_options = dm.get_available_filter_options()
     default_selections = {'examples': [o['value'] for o in available_options.get('examples', [])], 'threads': [o['value'] for o in available_options.get('threads', [])], 'sizes': [o['value'] for o in available_options.get('sizes', [])], 'correctness': 'ALL'}
     if action_type == 'open':
         selections_to_render = default_selections.copy(); source_for_selections = active_dashboard_filters
@@ -1523,18 +1879,18 @@ def manage_filter_modal_visibility_and_state(open_n, close_n_list, reset_n_list,
                 if key_filter in source_for_selections and source_for_selections[key_filter] is not None:
                     if isinstance(source_for_selections[key_filter], list) or source_for_selections[key_filter] == 'ALL': selections_to_render[key_filter] = source_for_selections[key_filter]
         return render_filter_modal_layout(selections_to_render, available_options), selections_to_render
-    elif action_type == 'close-filter-modal-button-action': return None, current_modal_selections_state 
+    elif action_type == 'close-filter-modal-button-action': return None, current_modal_selections_state
     elif action_type == 'reset-filters-button-action': return render_filter_modal_layout(default_selections, available_options), default_selections
     return dash.no_update, dash.no_update
 
 @app.callback(
-    [Output('filters-store', 'data'), Output('filter-modal-store', 'data', allow_duplicate=True), Output('filter-modal-div', 'children', allow_duplicate=True)], 
+    [Output('filters-store', 'data'), Output('filter-modal-store', 'data', allow_duplicate=True), Output('filter-modal-div', 'children', allow_duplicate=True)],
     [Input({'type': 'apply-filters-button-action', 'index': ALL}, 'n_clicks')],
     [State('modal-filter-example-checklist', 'value'), State('modal-filter-thread-checklist', 'value'), State('modal-filter-size-checklist', 'value'), State('modal-filter-correctness-dropdown', 'value')], prevent_initial_call=True)
 def apply_modal_filters_to_dashboard(apply_n_list, modal_ex_val, modal_th_val, modal_sz_val, modal_corr_val):
     if not any(n for n in apply_n_list if n is not None): raise PreventUpdate
     new_dashboard_filters = {'examples': modal_ex_val if modal_ex_val is not None else [], 'threads': modal_th_val if modal_th_val is not None else [], 'sizes': modal_sz_val if modal_sz_val is not None else [], 'correctness': modal_corr_val if modal_corr_val is not None else 'ALL'}
-    return new_dashboard_filters, new_dashboard_filters, None 
+    return new_dashboard_filters, new_dashboard_filters, None
 
 @app.callback( Output('system-info-display-card', 'children'), [Input('full-results-store', 'data')] )
 def update_system_info_display(full_json_data):
@@ -1549,30 +1905,31 @@ def update_system_info_display(full_json_data):
     if not items: return dbc.CardBody(html.P("No detailed system information found.", className="text-muted"))
     return [dbc.CardHeader(html.H3("System Information", className="mb-0", style={'fontSize': '1.3rem'})), dbc.CardBody(items)]
 
-# --- Download CSV Callbacks (Keep as is) ---
+# --- Download CSV Callbacks ---
 @app.callback(Output("download-benchmark-data", "data"), Input("download-benchmark-csv-button", "n_clicks"), [State('filters-store', 'data'), State('full-results-store', 'data')], prevent_initial_call=True )
 def download_benchmark_summary_csv(n_clicks, filters, full_json_data):
     if not full_json_data: raise PreventUpdate
-    data_manager = DataManager(full_json_data); benchmark_df = data_manager.get_benchmark_display_data(filters) 
+    data_manager = DataManager(full_json_data); benchmark_df = data_manager.get_benchmark_display_data(filters)
     if benchmark_df.empty: raise PreventUpdate
     return dcc.send_data_frame(benchmark_df.to_csv, "benchmark_summary_report.csv", index=False)
+
 @app.callback(Output("download-profiling-data", "data"), Input("download-profiling-csv-button", "n_clicks"), [State('filters-store', 'data'), State('full-results-store', 'data')], prevent_initial_call=True )
 def download_profiling_summary_csv(n_clicks, filters, full_json_data):
     if not full_json_data: raise PreventUpdate
-    data_manager = DataManager(full_json_data); profiling_df = data_manager.get_profiling_display_data(filters) 
+    data_manager = DataManager(full_json_data); profiling_df = data_manager.get_profiling_display_data(filters)
     if profiling_df.empty: raise PreventUpdate
     return dcc.send_data_frame(profiling_df.to_csv, "profiling_summary_report.csv", index=False)
 
-# --- Help Modal Callbacks (Keep as is) ---
+# --- Help Modal Callbacks ---
 @app.callback(Output({'type': 'help-modal', 'index': MATCH}, 'is_open'), [Input({'type': 'help-icon-btn', 'index': MATCH}, 'n_clicks'), Input({'type': 'close-help-modal-btn', 'index': MATCH}, 'n_clicks')], [State({'type': 'help-modal', 'index': MATCH}, 'is_open')], prevent_initial_call=True )
 def toggle_plot_help_modal(open_clicks, close_clicks, is_open):
     triggered_id = callback_context.triggered_id
-    if not triggered_id: raise PreventUpdate 
-    if open_clicks is None and close_clicks is None and not is_open: raise PreventUpdate
+    if not triggered_id: raise PreventUpdate
+    if open_clicks is None and close_clicks is None and not is_open: raise PreventUpdate # Should not happen with prevent_initial_call
     if (open_clicks and open_clicks > 0) or (close_clicks and close_clicks > 0) : return not is_open
-    return is_open 
+    return is_open
 
-# --- New Callbacks for ARTS Introspection Section ---
+# --- Callbacks for ARTS Introspection Section ---
 @app.callback(Output('introspection-counter-name-dropdown', 'options'), [Input('full-results-store', 'data')])
 def update_introspection_counter_name_dropdown(full_json_data):
     if not full_json_data: return []
@@ -1583,23 +1940,25 @@ def update_introspection_counter_name_dropdown(full_json_data):
     [Output('introspection-overview-sort-by-dropdown', 'style'), Output('introspection-overview-top-n-input', 'style'), Output('introspection-counter-name-dropdown', 'style'), Output('introspection-value-to-plot-dropdown', 'style')],
     [Input('introspection-plot-type-dropdown', 'value')])
 def toggle_introspection_plot_controls(plot_type):
-    hide = {'display': 'none'}; show_md_4 = {'display': 'block', 'width': '100%'}; show_md_2 = {'display': 'block', 'width': '100%'}; show_md_6 = {'display': 'block', 'width': '100%'}
-    if plot_type == 'overview': return show_md_4, show_md_2, hide, hide
-    elif plot_type == 'scaling': return hide, hide, show_md_6, show_md_6 
-    elif plot_type == 'raw_distribution': return hide, hide, show_md_6, show_md_6 
-    elif plot_type == 'cost_vs_benchmark': return hide, show_md_2, hide, hide 
-    elif plot_type == 'arts_overhead_profile': return hide, show_md_2, hide, show_md_6 
-    return hide, hide, hide, hide 
+    hide = {'display': 'none'}; show_block = {'display': 'block', 'width': '100%'} 
+    if plot_type == 'overview': return show_block, show_block, hide, hide
+    elif plot_type == 'scaling': return hide, hide, show_block, show_block
+    elif plot_type == 'raw_distribution': return hide, hide, show_block, show_block # Uses counter name and value_to_plot (Count/TotalTime)
+    elif plot_type == 'cost_vs_benchmark': return hide, show_block, hide, hide # top_n input for cost plot
+    elif plot_type == 'arts_overhead_profile': return hide, show_block, hide, show_block # top_n and metric for overhead
+    return hide, hide, hide, hide
 
 @app.callback(Output('introspection-plot-div', 'children'),
     [Input('introspection-plot-type-dropdown', 'value'), Input('introspection-counter-name-dropdown', 'value'), Input('introspection-overview-sort-by-dropdown', 'value'), Input('introspection-overview-top-n-input', 'value'), Input('introspection-value-to-plot-dropdown', 'value'), Input('filters-store', 'data'), Input('full-results-store', 'data')])
 def update_introspection_plot(plot_type, counter_name, sort_by, top_n, value_to_plot, filters, full_json_data):
+    plot_id_base = f"intro-{plot_type if plot_type else 'empty'}" 
     if not full_json_data:
         empty_fig = default_plot_template.apply(go.Figure().add_annotation(text="Load data for introspection plots.", xref="paper", yref="paper", showarrow=False))
-        return create_plot_with_help(dcc.Graph(id='introspection-graph-id', figure=empty_fig, style=graph_style), "No data loaded.", "intro-empty")
+        return create_plot_with_help(dcc.Graph(id=f'{plot_id_base}-graph-id', figure=empty_fig, style=graph_style), "No data loaded.", plot_id_base)
+
     dm = DataManager(full_json_data); pm = PlotManager(default_plot_template, dm, plot_help_manager)
-    fig = go.Figure(); help_key = "introspection_overview" 
-    current_top_n = top_n if isinstance(top_n, int) and top_n > 0 else 15 
+    fig = go.Figure(); help_key = "introspection_overview"
+    current_top_n = top_n if isinstance(top_n, int) and top_n > 0 else 15
     current_sort_by = sort_by if sort_by else 'Aggregated TotalTime'
     current_value_to_plot = value_to_plot if value_to_plot else 'Aggregated TotalTime'
 
@@ -1612,13 +1971,19 @@ def update_introspection_plot(plot_type, counter_name, sort_by, top_n, value_to_
     elif plot_type == 'raw_distribution':
         help_key = "introspection_raw_distribution"
         if not counter_name: fig.add_annotation(text="Please select a Counter Name for raw distribution plot.", showarrow=False)
-        else: raw_value_metric = 'Count' if current_value_to_plot == 'Aggregated Count' else 'TotalTime'; fig = pm.get_raw_introspection_distribution_plot(filters, selected_counter_name=counter_name, value_to_plot=raw_value_metric)
+        else: 
+            # For raw distribution, value_to_plot should be 'Count' or 'TotalTime' (from raw data columns)
+            # The dropdown 'introspection-value-to-plot-dropdown' offers 'Aggregated TotalTime' or 'Aggregated Count'
+            # We map these to the raw column names.
+            raw_metric_to_plot = 'Count' if current_value_to_plot == 'Aggregated Count' else 'TotalTime'
+            fig = pm.get_raw_introspection_distribution_plot(filters, selected_counter_name=counter_name, value_to_plot=raw_metric_to_plot)
     elif plot_type == 'cost_vs_benchmark':
         help_key = "introspection_cost_vs_benchmark"; fig = pm.get_introspection_cost_plot(filters, top_n=current_top_n)
     elif plot_type == 'arts_overhead_profile':
         help_key = "arts_overhead_profile"; fig = pm.get_arts_overhead_profile_plot(filters, top_n=current_top_n, metric=current_value_to_plot)
-    else: fig.add_annotation(text="Select a plot type.", showarrow=False)
-    return create_plot_with_help(dcc.Graph(id='introspection-graph-id', figure=fig, style=graph_style), plot_help_manager.get_help_text(help_key), f"intro-{plot_type}")
+    else: fig.add_annotation(text="Select a plot type.", showarrow=False); help_key = "unknown_intro"
+
+    return create_plot_with_help(dcc.Graph(id=f'{plot_id_base}-graph-id', figure=fig, style=graph_style), plot_help_manager.get_help_text(help_key), plot_id_base)
 
 @app.callback(Output('introspection-summary-table-div', 'children'), [Input('filters-store', 'data'), Input('full-results-store', 'data')])
 def update_introspection_summary_table(filters, full_json_data):
@@ -1637,7 +2002,7 @@ def download_introspection_aggregated_csv(n_clicks, filters, full_json_data):
 @app.callback(Output("download-introspection-raw-data", "data"), Input("download-introspection-raw-csv-button", "n_clicks"), [State('filters-store', 'data'), State('full-results-store', 'data')], prevent_initial_call=True)
 def download_introspection_raw_csv(n_clicks, filters, full_json_data):
     if not full_json_data: raise PreventUpdate
-    dm = DataManager(full_json_data); df = dm.get_filtered_introspection_raw_data(filters) 
+    dm = DataManager(full_json_data); df = dm.get_filtered_introspection_raw_data(filters)
     if df.empty: raise PreventUpdate
     return dcc.send_data_frame(df.to_csv, "arts_introspection_raw_details.csv", index=False)
 
@@ -1647,47 +2012,53 @@ def download_introspection_raw_csv(n_clicks, filters, full_json_data):
     [Input('advanced-plot-type-dropdown', 'value')]
 )
 def toggle_advanced_plot_metric_control(plot_type):
-    # Show metric dropdown for plots that can use Count or Time
-    if plot_type in ['task_creation_overhead', 'db_operation_costs', 'sync_overhead']:
+    if plot_type in ['task_creation_overhead', 'db_operation_costs', 'total_db_operation_cost', 'sync_overhead', 'total_sync_overhead']:
         return {'display': 'block', 'width': '100%'}
     return {'display': 'none'}
 
 @app.callback(
     Output('advanced-plot-div', 'children'),
     [Input('advanced-plot-type-dropdown', 'value'),
-     Input('advanced-plot-metric-dropdown', 'value'), # For plots that use it
+     Input('advanced-plot-metric-dropdown', 'value'),
      Input('filters-store', 'data'),
      Input('full-results-store', 'data')]
 )
 def update_advanced_analysis_plot(plot_type, selected_metric, filters, full_json_data):
+    plot_id_base = f"adv-{plot_type if plot_type else 'empty'}" 
     if not full_json_data:
         empty_fig = default_plot_template.apply(go.Figure().add_annotation(text="Load data for advanced plots.", xref="paper", yref="paper", showarrow=False))
-        return create_plot_with_help(dcc.Graph(id='advanced-plot-graph-id', figure=empty_fig, style=graph_style), "No data loaded.", "advanced-empty")
+        return create_plot_with_help(dcc.Graph(id=f'{plot_id_base}-graph-id', figure=empty_fig, style=graph_style), "No data loaded.", plot_id_base)
 
     dm = DataManager(full_json_data)
     pm = PlotManager(default_plot_template, dm, plot_help_manager)
     fig = go.Figure()
-    help_key = "" # Will be set based on plot_type
+    help_key = "" 
 
     current_metric = selected_metric if selected_metric else 'Aggregated TotalTime'
 
     if plot_type == 'runtime_breakdown':
         help_key = "runtime_breakdown"
-        fig = pm.get_arts_runtime_breakdown_plot(filters) # top_n can be a fixed default or another control
+        fig = pm.get_arts_runtime_breakdown_plot(filters)
     elif plot_type == 'task_creation_overhead':
         help_key = "task_creation_overhead"
         fig = pm.get_task_creation_overhead_plot(filters, metric=current_metric)
     elif plot_type == 'db_operation_costs':
         help_key = "db_operation_costs"
-        fig = pm.get_db_operation_costs_plot(filters, metric=current_metric)
+        fig = pm.get_db_operation_costs_plot(filters, metric=current_metric, total_only=False)
+    elif plot_type == 'total_db_operation_cost': 
+        help_key = "db_operation_costs"
+        fig = pm.get_db_operation_costs_plot(filters, metric=current_metric, total_only=True)
     elif plot_type == 'sync_overhead':
         help_key = "synchronization_overhead"
-        fig = pm.get_synchronization_overhead_plot(filters, metric=current_metric)
+        fig = pm.get_synchronization_overhead_plot(filters, metric=current_metric, total_only=False)
+    elif plot_type == 'total_sync_overhead': 
+        help_key = "synchronization_overhead"
+        fig = pm.get_synchronization_overhead_plot(filters, metric=current_metric, total_only=True)
     else:
         fig.add_annotation(text="Select an advanced plot type.", showarrow=False)
-        help_key="advanced-empty" # Placeholder
+        help_key="unknown_adv" 
 
-    return create_plot_with_help(dcc.Graph(id='advanced-plot-graph-id', figure=fig, style=graph_style), plot_help_manager.get_help_text(help_key), f"adv-{plot_type}")
+    return create_plot_with_help(dcc.Graph(id=f'{plot_id_base}-graph-id', figure=fig, style=graph_style), plot_help_manager.get_help_text(help_key), plot_id_base)
 
 
 if __name__ == "__main__":
