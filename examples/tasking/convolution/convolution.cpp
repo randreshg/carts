@@ -76,7 +76,7 @@ int main(int argc, char **argv) {
     }
   }
   double t_end = omp_get_wtime();
-  printf("Parallel matrix multiplication finished in %f seconds.\n", t_end - t_start);
+  printf("Finished in %f seconds\n", t_end - t_start);
 
   /// Serial computation for verification
   for (int i = 0; i < output_size; ++i) {
@@ -145,7 +145,11 @@ int main(int argc, char **argv) {
   // }
   // printf("\n");
 
-  printf("Verification: %d errors\n", errors);
+  if (errors == 0) {
+    printf("Result: CORRECT\n");
+  } else {
+    printf("Result: INCORRECT\n");
+  }
   // printf("Parallel time: %.6f sec\n", end_parallel - start_parallel);
   // printf("Serial time: %.6f sec\n", end_serial - start_serial);
 

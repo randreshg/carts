@@ -1,5 +1,5 @@
 
-ARTS_PATH?=/home/randres/projects/carts/.install/arts
+ARTS_PATH?=home/randres/projects/carts/.install/arts
 CLANG_INCLUDE_PATH=/usr/lib/llvm-14/lib/clang/14.0.0/include
 FILENAME=simple
 SHELL = /bin/bash
@@ -20,6 +20,7 @@ all: $(FILENAME)
 # Generate binary
 $(FILENAME): $(FILENAME).ll
 	clang $< -O3 -g0 -march=native -o $@ -I/$(ARTS_PATH)/include/arts -L$(ARTS_PATH)/lib -larts -L/usr/lib64/librt.so/usr/lib64/libpthread.so/usr/lib64/lib -lrdmacm
+	clang $< -O3 -g0 -fopenmp -march=native -o $@_inspector -I/$(ARTS_PATH)/include/arts -L$(ARTS_PATH)/lib -lartsinspector -lrt -lpthread -lrdmacm
 
 clean:
-	rm -f *.mlir *.ll ./$(FILENAME);
+	rm -r -f *.mlir *.ll ./$(FILENAME) ./$(FILENAME)_omp ./$(FILENAME)_inspector ./counters/;  

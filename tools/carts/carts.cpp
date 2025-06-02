@@ -173,6 +173,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context) {
 
   /// ARTS dialect conversion and optimization
   PassManager pm(&context);
+  pm.addPass(arts::createAlwaysInlinePass());
   pm.addPass(arts::createConvertOpenMPtoARTSPass());
   pm.addPass(createSymbolDCEPass());
   pm.addPass(arts::createEdtPass());

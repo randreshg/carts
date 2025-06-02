@@ -13,9 +13,9 @@ carts-opt matrixmul.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize
 
 carts-opt matrixmul.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --symbol-dce &> matrixmul-arts.mlir
 
-carts-opt matrixmul.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize-polygeist --create-datablocks --canonicalize-polygeist --datablock --cse -debug-only=edt-invariant-code-motion,datablock,create-datablocks &> matrixmul-arts.mlir
+carts-opt matrixmul.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize-polygeist --create-datablocks --canonicalize-polygeist --datablock --cse -debug-only=datablock,create-datablocks &> matrixmul-arts.mlir
 
-carts-opt matrixmul.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize-polygeist --create-datablocks --canonicalize-polygeist --datablock --cse --canonicalize-scf-for --canonicalize-polygeist --polygeist-mem2reg --edt-pointer-rematerialization --create-events --create-epochs --canonicalize-polygeist --convert-arts-to-llvm --canonicalize-polygeist --cse --convert-polygeist-to-llvm --cse -debug-only=convert-arts-to-llvm &> matrixmul-arts.mlir
+carts-opt matrixmul.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize-polygeist --create-datablocks --canonicalize-polygeist --datablock --cse --canonicalize-scf-for --canonicalize-polygeist --polygeist-mem2reg --edt-pointer-rematerialization --create-epochs --canonicalize-polygeist --convert-arts-to-llvm --canonicalize-polygeist --cse --convert-polygeist-to-llvm --cse -debug-only=convert-arts-to-llvm &> matrixmul-arts.mlir
 
 mlir-translate --mlir-to-llvmir matrixmul-arts.mlir &> matrixmul-arts.ll
 
@@ -59,10 +59,6 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  /*
-  0.17/0.005 = 34
-  */
-
   // Parallel computation
   double t_start = omp_get_wtime();
   #pragma omp parallel
@@ -86,7 +82,7 @@ int main(int argc, char *argv[]) {
     }
   }
   double t_end = omp_get_wtime();
-  printf("Parallel matrix multiplication finished in %f seconds.\n", t_end - t_start);
+  printf("Finished in %f seconds\n", t_end - t_start);
 
   // Sequential computation
   for (int i = 0; i < N; i++) {

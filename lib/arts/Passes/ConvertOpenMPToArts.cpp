@@ -221,7 +221,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
       }
 
       /// Replace the dependency allocation with an undefined value.
-      replaceWithUndef(depAlloc, rewriter);
+      replaceWithUndef(depAlloc.getOperation(), rewriter);
     }
   }
 
@@ -379,67 +379,3 @@ std::unique_ptr<Pass> createConvertOpenMPtoARTSPass() {
 }
 } // namespace arts
 } // namespace mlir
-
-/*
-#include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Pass/Pass.h"
-#include "mlir/Transforms/InliningUtils.h"
-
-using namespace mlir;
-
-namespace {
-struct AlwaysInlinePass : public PassWrapper<AlwaysInlinePass,
-OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(AlwaysInlinePass)
-
-  void runOnOperation() override {
-    ModuleOp module = getOperation();
-    InlinerInterface inliner(&getContext());
-
-    // Use a worklist to handle newly created calls during inlining
-    bool changed;
-    do {
-      changed = false;
-
-      // Collect all call ops in the module
-      SmallVector<func::CallOp> calls;
-      module.walk([&](func::CallOp call) {
-        calls.push_back(call);
-      });
-
-      // Process each call operation
-      for (func::CallOp call : calls) {
-        // Skip already erased operations
-        if (call->getParentOp() == nullptr) continue;
-
-        // Resolve the callable operation
-        auto callable = call.getCallableForCallee();
-        CallableOpInterface callableOp;
-        if (SymbolRefAttr symRef = callable.dyn_cast<SymbolRefAttr>()) {
-          callableOp =
-dyn_cast<CallableOpInterface>(module.lookupSymbol(symRef)); } else if (auto func
-= callable.dyn_cast<Value>()) { callableOp =
-dyn_cast<CallableOpInterface>(func.getDefiningOp());
-        }
-
-        if (!callableOp || !callableOp.getCallableRegion()) continue;
-
-        // Attempt to inline the call
-        if (succeeded(mlir::inlineCall(inliner, call, callableOp,
-                                      callableOp.getCallableRegion(), true))) {
-          call.erase();
-          changed = true;
-        }
-      }
-    } while (changed);
-  }
-};
-} // namespace
-
-/// Registration
-std::unique_ptr<Pass> mlir::createAlwaysInlinePass() {
-  return std::make_unique<AlwaysInlinePass>();
-}
-
-*/
