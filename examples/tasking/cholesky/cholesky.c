@@ -151,6 +151,7 @@ int main() {
     } // End k_block loop
   } // End OpenMP single / parallel region
   double parallel_time = omp_get_wtime() - start_time;
+  printf("Finished in %f seconds\n", parallel_time);
 
   // Sequential Cholesky Decomposition
   start_time = omp_get_wtime();
@@ -226,6 +227,12 @@ int main() {
   if (sequential_time > 1e-9 &&
       parallel_time > 1e-9) { // Avoid division by zero for speedup
     printf("Speedup: %.2fx\n", sequential_time / parallel_time);
+  }
+
+  if (parallel_correct) {
+    printf("Result: CORRECT\n");
+  } else {
+    printf("Result: INCORRECT\n");
   }
 
   return 0;

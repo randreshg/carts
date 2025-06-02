@@ -158,6 +158,7 @@ private:
   /// Utils
   void process(Location loc);
   void processDependencies(Location loc);
+  void processSubviewDependency(Value subview, Location loc);
   void outlineRegion(Location loc);
   Value createGuid(Value node, Location loc);
   func::FuncOp createFn(Location loc);
@@ -196,6 +197,7 @@ public:
                        Location loc);
   void incrementDbLatchCount(Value dbGuid, Location loc);
   void decrementDbLatchCount(Value dbGuid, Location loc);
+  Value getDbMode(StringRef mode, Location loc);
 
   /// Edts
   EdtCodegen *getEdt(Region *region);

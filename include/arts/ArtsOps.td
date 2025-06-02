@@ -230,12 +230,12 @@ def YieldOp : Arts_Op<"yield",
 //===----------------------------------------------------------------------===//
 // arts.barrier
 //===----------------------------------------------------------------------===//
-/// TODO: Add memory effects
-def BarrierOp : Arts_Op<"barrier"> {
+def BarrierOp : Arts_Op<"barrier", [MemoryEffects<[MemWrite]>]> {
   let summary = "Barrier synchronization in ARTS";
   let description = [{
     Barrier synchronization operation in ARTS. It synchronizes all previous
-    spawned EDTs of the parent region.
+    spawned EDTs of the parent region. This operation has memory write effects
+    as it affects the synchronization state of the runtime system.
   }];
   let assemblyFormat = "attr-dict";
 }
