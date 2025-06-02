@@ -32,7 +32,7 @@ int main(int argc, char **argv) {
 
   // Stop timer
   double t_end = omp_get_wtime();
-  printf("Parallel addition finished in %f seconds.\n", t_end - t_start);
+  printf("Finished in %f seconds\n", t_end - t_start);
 
   // Verify results
   bool success = true;

@@ -1,17 +1,17 @@
-problem_sizes:
-  - "64"
-  - "128"
-  - "256"
-iterations:
-  - 3
-  - 3
-  - 2
-args:
-  - ""
-  - ""
-  - ""
-threads:
-  - 1
-  - 2
-  - 4
-  - 8 
+benchmark:
+  problem_sizes:
+    - "256 32"
+  iterations:
+    - 10
+  args:
+    - ""
+  threads:
+    - 1
+    - 2
+    - 4
+    - 8
+    - 16
+profiling:
+  profiling_enabled: true
+  counter_enabled: true
+  introspection_enabled: true

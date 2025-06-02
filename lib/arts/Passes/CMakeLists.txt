@@ -3,11 +3,11 @@ message(STATUS "POLYGEIST_INCLUDE_DIR: ${POLYGEIST_BUILD_DIR}/include")
 message(STATUS "POLYGEIST_LIBRARY_DIR: ${POLYGEIST_BUILD_DIR}/lib")
 
 add_mlir_dialect_library(MLIRArtsTransforms
+  AlwaysInliner.cpp
   ConvertOpenMPToArts.cpp
   Edt.cpp
   CreateDatablocks.cpp
   Datablock.cpp
-  CreateEvents.cpp
   CreateEpochs.cpp
   ConvertArtsToLLVM.cpp
   EdtInvariantCodeMotion.cpp

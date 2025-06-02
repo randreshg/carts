@@ -25,6 +25,7 @@ LLVM_BUILD_DIR =$(LLVM_DIR)/build
 
 # Targets
 # all: hooks postinstall
+all: build
 
 installdeps: arts
 	@echo "Installing dependencies"

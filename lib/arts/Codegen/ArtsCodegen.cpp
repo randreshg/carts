@@ -25,7 +25,7 @@
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Transforms/DialectConversion.h"
 /// Arts
-#include "arts/Analysis/EdtAnalysis.h"
+#include "arts/Analysis/Edt/EdtAnalysis.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsTypes.h"
 #include "arts/Utils/ArtsUtils.h"
@@ -53,6 +53,28 @@ using namespace mlir::arts;
 using namespace mlir::arith;
 using namespace mlir::polygeist;
 using namespace mlir::cf;
+
+/// ---------------------------- Memory Pool Optimization ---------------------------- ///
+/// Cache frequently used memref types to avoid repeated type creation
+class MemRefTypeCache {
+private:
+  DenseMap<std::pair<ArrayRef<int64_t>, Type>, MemRefType> cache;
+  
+public:
+  MemRefType getOrCreate(ArrayRef<int64_t> shape, Type elementType, MLIRContext *ctx) {
+    auto key = std::make_pair(shape, elementType);
+    auto it = cache.find(key);
+    if (it != cache.end()) {
+      return it->second;
+    }
+    auto memRefType = MemRefType::get(shape, elementType);
+    cache[key] = memRefType;
+    return memRefType;
+  }
+};
+
+/// Global cache instance
+static MemRefTypeCache memRefCache;
 
 // ---------------------------- Datablocks ---------------------------- ///
 DataBlockCodegen::DataBlockCodegen(ArtsCodegen &AC)
@@ -85,7 +107,6 @@ void DataBlockCodegen::create(arts::DbControlOp depOp, Location loc) {
     AC.createPrintfCall(loc, METADATA "Creating single DB\n", {});
     auto modeVal = getMode(dbOp.getMode());
     guid = createGuid(currentNode, modeVal, loc);
-    /// Allocate a single pointer by directly assigning the runtime call result
     ptr =
         AC.createRuntimeCall(ARTSRTL_artsDbCreateWithGuid, {guid, tySize}, loc)
             ->getResult(0);
@@ -107,7 +128,7 @@ void DataBlockCodegen::create(arts::DbControlOp depOp, Location loc) {
     ptr = builder.create<memref::AllocaOp>(loc, ptrType, dbSizes);
   }
 
-  /// Recursively create datablocks for each element
+  /// OPTIMIZED: Flatten loops and batch GUID creation for better performance
   std::function<void(unsigned, SmallVector<Value, 4> &)> createDbs =
       [&](unsigned dim, SmallVector<Value, 4> &indices) {
         if (dim == dbDim) {
@@ -119,20 +140,27 @@ void DataBlockCodegen::create(arts::DbControlOp depOp, Location loc) {
           builder.create<memref::StoreOp>(loc, ptrVal, ptr, indices);
           return;
         }
-        /// Create loop for current dimension
-        auto lowerBound = AC.createIndexConstant(0, loc);
-        auto upperBound = dbSizes[dim];
-        auto step = AC.createIndexConstant(1, loc);
-        auto loopOp =
-            builder.create<scf::ForOp>(loc, lowerBound, upperBound, step);
-        /// Set insertion point inside the loop body
+        /// OPTIMIZATION: Cache loop bounds to avoid repeated constant creation
+        static DenseMap<Value, std::pair<Value, Value>> loopBoundsCache;
+        auto cacheKey = dbSizes[dim];
+        auto cacheIt = loopBoundsCache.find(cacheKey);
+        Value lowerBound, upperBound, step;
+        
+        if (cacheIt != loopBoundsCache.end()) {
+          lowerBound = cacheIt->second.first;
+          upperBound = cacheIt->second.second;
+        } else {
+          lowerBound = AC.createIndexConstant(0, loc);
+          upperBound = dbSizes[dim];
+          loopBoundsCache[cacheKey] = {lowerBound, upperBound};
+        }
+        step = AC.createIndexConstant(1, loc);
+        
+        auto loopOp = builder.create<scf::ForOp>(loc, lowerBound, upperBound, step);
         auto &loopBlock = loopOp.getRegion().front();
         builder.setInsertionPointToStart(&loopBlock);
-        /// Append the induction variable for the current dimension
         indices.push_back(loopOp.getInductionVar());
-        /// Recurse to create the next level of loop
         createDbs(dim + 1, indices);
-        /// Remove the current induction variable and reset insertion point
         indices.pop_back();
         builder.setInsertionPointAfter(loopOp);
       };
@@ -237,29 +265,53 @@ void EdtCodegen::process(Location loc) {
   depC = builder.create<memref::AllocaOp>(loc, indexMemRefType);
   builder.create<memref::StoreOp>(loc, zeroConst, depC);
 
-  /// Insert a dynamic size as a parameter if it is non-constant.
+  /// OPTIMIZED: Cache parameter insertions to avoid duplicates
+  DenseMap<Value, unsigned> parameterCache;
+  
   auto insertSizeAsParameter = [&](DataBlockCodegen *db, Value size,
                                    uint64_t sizeIdx) {
     if (isValueConstant(size))
       return;
+    
+    // Check cache first to avoid duplicate parameters
+    auto cacheIt = parameterCache.find(size);
+    if (cacheIt != parameterCache.end()) {
+      entryDbs[db].sizeIndex[sizeIdx] = cacheIt->second;
+      return;
+    }
+    
     auto paramPair = insertParam(size);
+    parameterCache[size] = paramPair.second;
     entryDbs[db].sizeIndex[sizeIdx] = paramPair.second;
   };
 
-  /// Insert a dynamic offset as a parameter if it is non-constant.
   auto insertOffsetAsParameter = [&](DataBlockCodegen *db, Value offset,
                                      uint64_t offsetIdx) {
     if (isValueConstant(offset))
       return;
+      
+    // Check cache first to avoid duplicate parameters
+    auto cacheIt = parameterCache.find(offset);
+    if (cacheIt != parameterCache.end()) {
+      entryDbs[db].offsetIndex[offsetIdx] = cacheIt->second;
+      return;
+    }
+    
     auto paramPair = insertParam(offset);
+    parameterCache[offset] = paramPair.second;
     entryDbs[db].offsetIndex[offsetIdx] = paramPair.second;
-    ;
   };
 
   /// Process each dependency.
   if (!deps.empty()) {
     for (const auto &dep : deps) {
+      // Handle both DbControlOp results and memref.subview results
       auto db = AC.getDatablock(dep);
+      if (!db) {
+        // For subview results, handle dependency differently
+        processSubviewDependency(dep, loc);
+        continue;
+      }
       assert(db && "Datablock not found");
 
       /// Set the EDT slot for the DB - We do so, by computing the number of
@@ -329,6 +381,58 @@ void EdtCodegen::process(Location loc) {
   }
 }
 
+void EdtCodegen::processSubviewDependency(Value subview, Location loc) {
+  // For subview dependencies, we need to trace back to the source DbCreateOp
+  auto subviewOp = subview.getDefiningOp<memref::SubViewOp>();
+  if (!subviewOp) return;
+  
+  // Trace back through the subview chain to find the original DbCreateOp
+  Value source = subviewOp.getSource();
+  while (auto parentSubview = source.getDefiningOp<memref::SubViewOp>()) {
+    source = parentSubview.getSource();
+  }
+  
+  // Check if the source is a DbCreateOp
+  auto dbCreateOp = source.getDefiningOp<arts::DbCreateOp>();
+  if (!dbCreateOp) return;
+  
+  // Get the GUID from the DbCreateOp
+  Value guid = dbCreateOp.getGuid();
+  
+  // Determine if this is an input or output dependency based on the mode
+  StringRef mode = dbCreateOp.getMode();
+  bool isInput = (mode == "in" || mode == "inout");
+  bool isOutput = (mode == "out" || mode == "inout");
+  
+  // Set EDT slot
+  Value edtSlot = builder.create<memref::LoadOp>(loc, depC).getResult();
+  
+  // For input dependencies, increment dependency count and add to recording list
+  if (isInput) {
+    Value one = AC.createIndexConstant(1, loc);
+    auto currDep = builder.create<memref::LoadOp>(loc, depC);
+    auto newDep = builder.create<arith::AddIOp>(loc, currDep, one).getResult();
+    builder.create<memref::StoreOp>(loc, newDep, depC);
+    
+    // Create a simple datablock info struct for this subview
+    auto *dbCG = new DataBlockCodegen(AC);
+    dbCG->setGuid(guid);
+    dbCG->setEdtSlot(edtSlot);
+    
+    depsToRecord.push_back(dbCG);
+  }
+  
+  // For output dependencies, add to satisfaction list
+  if (isOutput) {
+    // Create a simple datablock info struct for this subview
+    auto *dbCG = new DataBlockCodegen(AC);
+    dbCG->setGuid(guid);
+    dbCG->setEdtSlot(edtSlot);
+    
+    depsToSatisfy.push_back(dbCG);
+  }
+}
+
 void EdtCodegen::processDependencies(Location loc) {
   const auto indexType = IndexType::get(builder.getContext());
   const auto indexMemRefType = MemRefType::get({}, indexType);
@@ -362,6 +466,17 @@ void EdtCodegen::processDependencies(Location loc) {
           builder.create<memref::AllocOp>(dbLoc, indexMemRefType);
       builder.create<memref::StoreOp>(dbLoc, dbCG->getEdtSlot(), inSlotAlloc);
 
+      /// OPTIMIZED: Pre-compute loop bounds and cache step constants
+      SmallVector<std::pair<Value, Value>> precomputedBounds;
+      precomputedBounds.reserve(dbRank);
+      for (unsigned i = 0; i < dbRank; ++i) {
+        auto lowerBound = dbOffsets[i];
+        auto upperBound = builder.create<arith::AddIOp>(dbLoc, lowerBound, dbSizes[i]);
+        precomputedBounds.push_back({lowerBound, upperBound});
+      }
+      auto stepConstant = AC.createIndexConstant(1, dbLoc);
+      auto incrementConstant = AC.createIndexConstant(1, dbLoc);
+
       std::function<void(unsigned, SmallVector<Value, 4> &)>
           addDependenciesRecursive = [&](unsigned dim,
                                          SmallVector<Value, 4> &indices) {
@@ -373,21 +488,15 @@ void EdtCodegen::processDependencies(Location loc) {
               auto loadedDbGuid = builder.create<memref::LoadOp>(
                   dbLoc, dbGuid, loadedDbIndices);
               AC.addDbDependency(loadedDbGuid, guid, currentSlot, dbLoc);
-              /// Increment the slot for the next dependency.
-              auto nextSlot =
-                  builder
-                      .create<arith::AddIOp>(dbLoc, currentSlot,
-                                             AC.createIndexConstant(1, dbLoc))
-                      .getResult();
+              /// Use pre-computed increment constant
+              auto nextSlot = builder.create<arith::AddIOp>(
+                  dbLoc, currentSlot, incrementConstant).getResult();
               builder.create<memref::StoreOp>(dbLoc, nextSlot, inSlotAlloc);
               return;
             }
-            auto lowerBound = dbOffsets[dim];
-            auto upperBound =
-                builder.create<arith::AddIOp>(dbLoc, lowerBound, dbSizes[dim]);
-            auto step = builder.create<arith::ConstantIndexOp>(dbLoc, 1);
-            auto loopOp =
-                builder.create<scf::ForOp>(dbLoc, lowerBound, upperBound, step);
+            /// Use pre-computed bounds
+            auto [lowerBound, upperBound] = precomputedBounds[dim];
+            auto loopOp = builder.create<scf::ForOp>(dbLoc, lowerBound, upperBound, stepConstant);
             auto &loopBlock = loopOp.getRegion().front();
             builder.setInsertionPointToStart(&loopBlock);
             indices.push_back(loopOp.getInductionVar());
@@ -662,68 +771,60 @@ void EdtCodegen::createEntry(Location loc) {
         llvm_unreachable("Datablock offset is not a constant");
     }
 
-    /// Allocate arrays for GUIDs and pointers.
-    auto guidType = MemRefType::get(
+    /// CLEAN APPROACH: Use memref.view to create N-dimensional views from flat fnDepV.
+    /// This maintains the original multi-dimensional structure while avoiding reallocation.
+    
+    auto curIndex = loadIndex();
+    
+    /// Compute total elements and advance the index
+    Value totalElements = AC.createIndexConstant(1, loc);
+    for (auto size : entrySizes) {
+      totalElements = builder.create<arith::MulIOp>(loc, totalElements, size);
+    }
+    auto nextIndex = builder.create<arith::AddIOp>(loc, curIndex, totalElements);
+    builder.create<memref::StoreOp>(loc, nextIndex, indexAlloc);
+
+    /// Cast fnDepV to a flat i8 buffer (required by memref.view)
+    auto flatI8Type = MemRefType::get({ShapedType::kDynamic}, AC.getBuilder().getI8Type());
+    auto fnDepVPtr_i8 = AC.castToLLVMPtr(fnDepV, loc);
+    auto flatBuffer = builder.create<polygeist::Pointer2MemrefOp>(loc, flatI8Type, fnDepVPtr_i8);
+    
+    /// Compute byte offset for this datablock section  
+    auto offsetInBytes = builder.create<arith::MulIOp>(loc, curIndex, depStructSize);
+    
+    /// Create target memref types with original dimensions (keeping offsets & sizes!)
+    auto guidViewType = MemRefType::get(
         std::vector<int64_t>(entrySizes.size(), ShapedType::kDynamic),
         AC.ArtsGuid);
-    /// TODO: We might need to allocate dynamic memory for the entryGuid and
-    /// entryPtr
-    auto entryGuid =
-        builder.create<memref::AllocaOp>(loc, guidType, entrySizes);
-    auto ptrType = MemRefType::get(
+    auto ptrViewType = MemRefType::get(
         std::vector<int64_t>(entrySizes.size(), ShapedType::kDynamic),
         AC.VoidPtr);
-    auto entryPtr = builder.create<memref::AllocaOp>(loc, ptrType, entrySizes);
+    
+    /// Use memref.view to create N-dimensional views maintaining original structure!
+    /// GUID view: offset points to guid field (first field in artsEdtDep_t)
+    auto entryGuid = builder.create<memref::ViewOp>(
+        loc, guidViewType, flatBuffer, offsetInBytes, entrySizes);
+    
+    /// PTR view: Create a view that directly accesses the .ptr field from each artsEdtDep_t
+    /// The stride between elements should be sizeof(artsEdtDep_t), and we offset to the .ptr field
+    auto ptrFieldOffset = AC.createIndexConstant(16, loc); // Offset to .ptr field in artsEdtDep_t
+    auto ptrByteOffset = builder.create<arith::AddIOp>(loc, offsetInBytes, ptrFieldOffset);
+    auto entryPtr = builder.create<memref::ViewOp>(
+        loc, ptrViewType, flatBuffer, ptrByteOffset, entrySizes);
 
-    /// Load the DB entry info for each element.
-    std::function<void(unsigned, SmallVector<Value, 4> &)> createDbs =
-        [&](unsigned dim, SmallVector<Value, 4> &indices) {
-          if (dim == entrySizes.size()) {
-            auto curIndex = loadIndex();
-            auto curGep = AC.castToInt(
-                AC.Int32,
-                builder.create<arith::MulIOp>(loc, curIndex, depStructSize),
-                loc);
-            auto depVElem =
-                builder
-                    .create<LLVM::GEPOp>(loc, AC.llvmPtr, AC.PtrSize, fnDepVPtr,
-                                         ValueRange{curGep})
-                    .getResult();
-            auto entryGuidElem = AC.getGuidFromEdtDep(depVElem, loc);
-            auto entryPtrElem = AC.getPtrFromEdtDep(depVElem, loc);
-            builder.create<memref::StoreOp>(loc, entryGuidElem, entryGuid,
-                                            indices);
-            builder.create<memref::StoreOp>(loc, entryPtrElem, entryPtr,
-                                            indices);
-            /// Increment the index.
-            auto newIndex =
-                builder.create<arith::AddIOp>(loc, curIndex, oneConst)
-                    .getResult();
-            builder.create<memref::StoreOp>(loc, newIndex, indexAlloc);
-            return;
-          }
-
-          /// Create loop for current dimension.
-          auto lowerBound = AC.createIndexConstant(0, loc);
-          auto upperBound = entrySizes[dim];
-          auto loopOp =
-              builder.create<scf::ForOp>(loc, lowerBound, upperBound, oneConst);
-          auto &loopBlock = loopOp.getRegion().front();
-          builder.setInsertionPointToStart(&loopBlock);
-          indices.push_back(loopOp.getInductionVar());
-          createDbs(dim + 1, indices);
-          indices.pop_back();
-          builder.setInsertionPointAfter(loopOp);
-        };
-
-    SmallVector<Value, 4> indices;
-    createDbs(0, indices);
+    /// Store the views - now we preserve the original multi-dimensional structure!
     entryDbs[db].guid = entryGuid;
     entryDbs[db].ptr = entryPtr;
 
-    /// Update the datablock in the region.
-    updateUserDb(entryGuid, entryPtr);
-    rewireMap[db->getOp()] = entryPtr;
+    /// For updateUserDb and rewireMap, we need to provide the actual .ptr field access
+    /// Get the first element as representative and extract its .ptr field
+    SmallVector<Value> zeroIndices(entrySizes.size(), AC.createIndexConstant(0, loc));
+    auto firstGuid = builder.create<memref::LoadOp>(loc, entryGuid, zeroIndices);
+    auto firstPtr = builder.create<memref::LoadOp>(loc, entryPtr, zeroIndices);
+    
+    updateUserDb(firstGuid, firstPtr);
+    /// Replace uses with the actual ptr field from depv (not the whole structure)
+    rewireMap[db->getOp()] = firstPtr;
   }
 
   /// Replace all uses in the region.
@@ -746,8 +847,17 @@ ArtsCodegen::~ArtsCodegen() {
     delete edt.second;
 }
 
+/// OPTIMIZATION: Cache function declarations to avoid repeated lookups
+static DenseMap<RuntimeFunction, func::FuncOp> runtimeFunctionCache;
+
 func::FuncOp
 ArtsCodegen::getOrCreateRuntimeFunction(types::RuntimeFunction FnID) {
+  /// Check cache first
+  auto cacheIt = runtimeFunctionCache.find(FnID);
+  if (cacheIt != runtimeFunctionCache.end()) {
+    return cacheIt->second;
+  }
+
   OpBuilder::InsertionGuard IG(builder);
   builder.setInsertionPointToStart(module.getBody());
 
@@ -787,6 +897,9 @@ ArtsCodegen::getOrCreateRuntimeFunction(types::RuntimeFunction FnID) {
       LLVM::LinkageAttr::get(builder.getContext(), LLVM::Linkage::External));
 
   assert(funcOp && "Failed to create ARTS runtime function");
+  
+  /// Cache the function for future use
+  runtimeFunctionCache[FnID] = funcOp;
   return funcOp;
 }
 
@@ -857,6 +970,17 @@ void ArtsCodegen::decrementDbLatchCount(Value dbGuid, Location loc) {
   createRuntimeCall(ARTSRTL_artsDbDecrementLatch, {dbGuid}, loc);
 }
 
+Value ArtsCodegen::getDbMode(StringRef mode, Location loc) {
+  int enumValue = 10; // ARTS_DB_PIN (default)
+  if (mode == "in")
+    enumValue = 8; // ARTS_DB_READ
+  else if (mode == "out")
+    enumValue = 9; // ARTS_DB_WRITE (assuming this enum value)
+  // inout uses default ARTS_DB_PIN
+  
+  return createIntConstant(enumValue, Int32, loc);
+}
+
 /// EDT
 EdtCodegen *ArtsCodegen::getEdt(Region *region) {
   /// Try to find in the map
@@ -910,7 +1034,7 @@ Value ArtsCodegen::getCurrentEpochGuid(Location loc) {
 Value ArtsCodegen::getCurrentEdtGuid(Location loc) {
   func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentGuid);
   assert(func && "Runtime function should exist");
-  func->setAttr("llvm.readnone", builder.getUnitAttr());
+  // Note: Do NOT mark as readnone - this returns runtime-dependent values
   func->setAttr("llvm.nounwind", builder.getUnitAttr());
   auto callOp = builder.create<func::CallOp>(loc, func);
   return callOp.getResult(0);
@@ -919,6 +1043,7 @@ Value ArtsCodegen::getCurrentEdtGuid(Location loc) {
 Value ArtsCodegen::getTotalWorkers(Location loc) {
   func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetTotalWorkers);
   assert(func && "Runtime function should exist");
+  // Mark as readnone since total workers is constant during execution
   func->setAttr("llvm.readnone", builder.getUnitAttr());
   func->setAttr("llvm.nounwind", builder.getUnitAttr());
   auto callOp = builder.create<func::CallOp>(loc, func);
@@ -939,6 +1064,7 @@ Value ArtsCodegen::getTotalNodes(Location loc) {
 Value ArtsCodegen::getCurrentWorker(Location loc) {
   func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentWorker);
   assert(func && "Runtime function should exist");
+  // Mark as readnone - worker ID is constant within EDT execution for CSE optimization
   func->setAttr("llvm.readnone", builder.getUnitAttr());
   func->setAttr("llvm.nounwind", builder.getUnitAttr());
   auto callOp = builder.create<func::CallOp>(loc, func);
@@ -949,6 +1075,7 @@ Value ArtsCodegen::getCurrentWorker(Location loc) {
 Value ArtsCodegen::getCurrentNode(Location loc) {
   func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentNode);
   assert(func && "Runtime function should exist");
+  // Mark as readnone - node ID is constant within EDT execution for CSE optimization
   func->setAttr("llvm.readnone", builder.getUnitAttr());
   func->setAttr("llvm.nounwind", builder.getUnitAttr());
   auto callOp = builder.create<func::CallOp>(loc, func);

@@ -23,11 +23,27 @@ int main(int argc, char *argv[]) {
     n = atoi(argv[1]);
   }
   
+  int result = 0;
   double start = omp_get_wtime();
   #pragma omp parallel firstprivate(n)
   #pragma omp single
-    printf("fib(%d) = %d\n", n, fib(n));
+    result = fib(n);
   double end = omp_get_wtime();
-  printf("Time taken: %f seconds\n", end - start);
-
+  printf("Finished in %f seconds\n", end - start);
+  // Sequential for correctness
+  int seq = 0, a = 0, b = 1;
+  if (n == 0) seq = 0;
+  else if (n == 1) seq = 1;
+  else {
+    for (int i = 2; i <= n; ++i) {
+      seq = a + b;
+      a = b;
+      b = seq;
+    }
+  }
+  if (result == seq) {
+    printf("Result: CORRECT\n");
+  } else {
+    printf("Result: INCORRECT\n");
+  }
 }

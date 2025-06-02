@@ -48,7 +48,9 @@ namespace mlir {
 class Operation;
 class Region;
 class Value;
+} // namespace mlir
 
+namespace mlir {
 namespace arts {
 class EdtOp;
 

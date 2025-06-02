@@ -62,11 +62,15 @@ struct ConvertArtsToLLVMPass
   void handleEdt(EdtOp &op);
   // void handleEvent(EventOp &op);
   void handleEpoch(EpochOp &op);
+  void handleDbCreate(DbCreateOp &op);
   void handleDatablock(DbControlOp &op);
   void handleGetTotalWorkers(GetTotalWorkersOp &op);
   void handleGetTotalNodes(GetTotalNodesOp &op);
   void handleGetCurrentWorker(GetCurrentWorkerOp &op);
   void handleGetCurrentNode(GetCurrentNodeOp &op);
+
+private:
+  Value computeDatablockSize(DbCreateOp &op, Location loc);
 
 private:
   ModuleOp module;
@@ -146,6 +150,48 @@ void ConvertArtsToLLVMPass::handleEpoch(EpochOp &op) {
   op->erase();
 }
 
+void ConvertArtsToLLVMPass::handleDbCreate(DbCreateOp &op) {
+  LLVM_DEBUG(DBGS() << "Lowering arts.db_create\n");
+  OpBuilder::InsertionGuard IG(AC->getBuilder());
+  AC->setInsertionPoint(op);
+  
+  Location loc = op->getLoc();
+  
+  // Convert mode string to ARTS mode enum
+  StringRef mode = op.getMode();
+  Value modeVal = AC->getDbMode(mode, loc);
+  
+  // Get current node for GUID creation
+  Value currentNode = AC->getCurrentNode(loc);
+  
+  // Create GUID using ARTS runtime
+  Value guid = AC->createRuntimeCall(ARTSRTL_artsReserveGuidRoute, {modeVal, currentNode}, loc)->getResult(0);
+  
+  // Compute datablock size
+  Value size = computeDatablockSize(op, loc);
+  
+  // Create the datablock
+  Value ptr;
+  if (op.getAddress()) {
+    // Use address if provided
+    Value address = AC->castToVoidPtr(op.getAddress(), loc);
+    ptr = AC->createRuntimeCall(ARTSRTL_artsDbCreateWithGuidAndData, {guid, address, size}, loc)->getResult(0);
+  } else {
+    // Create empty datablock
+    ptr = AC->createRuntimeCall(ARTSRTL_artsDbCreateWithGuid, {guid, size}, loc)->getResult(0);
+  }
+  
+  // Cast pointer back to the expected type
+  Value typedPtr = AC->castToVoidPtr(ptr, loc);
+  
+  // Replace the results
+  op.getPtr().replaceAllUsesWith(typedPtr);
+  op.getGuid().replaceAllUsesWith(guid);
+  
+  // Mark for removal
+  opsToRemove.insert(op);
+}
+
 void ConvertArtsToLLVMPass::handleDatablock(DbControlOp &op) {
   LLVM_DEBUG(DBGS() << "Lowering arts.datablock\n  " << op << "\n");
   AC->setInsertionPointAfter(op);
@@ -192,6 +238,48 @@ void ConvertArtsToLLVMPass::handleGetCurrentNode(GetCurrentNodeOp &op) {
   opsToRemove.insert(op);
 }
 
+
+
+Value ConvertArtsToLLVMPass::computeDatablockSize(DbCreateOp &op, Location loc) {
+  // Compute the total size based on the sizes operands
+  auto sizes = op.getSizes();
+  if (sizes.empty()) {
+    // If no sizes provided, use the size of the address memref
+    if (op.getAddress()) {
+      auto memrefType = op.getAddress().getType().cast<MemRefType>();
+      // For memref types, compute size as product of dimensions times element size
+      auto elementType = memrefType.getElementType();
+      
+      // Get element size in bytes
+      Value elementSize = AC->getBuilder().create<polygeist::TypeSizeOp>(
+          loc, AC->getBuilder().getIndexType(), elementType);
+      Value elementSizeInt64 = AC->castToInt(AC->Int64, elementSize, loc);
+      
+      // Multiply by total number of elements
+      Value totalElements = AC->createIntConstant(1, AC->Int64, loc);
+      for (int64_t dimSize : memrefType.getShape()) {
+        if (dimSize != ShapedType::kDynamic) {
+          Value dim = AC->createIntConstant(dimSize, AC->Int64, loc);
+          totalElements = AC->getBuilder().create<arith::MulIOp>(loc, totalElements, dim);
+        }
+      }
+      
+      return AC->getBuilder().create<arith::MulIOp>(loc, totalElements, elementSizeInt64);
+    }
+    // Default size if nothing else
+    return AC->createIntConstant(1, AC->Int64, loc);
+  }
+  
+  // Multiply all sizes together
+  Value totalSize = AC->createIntConstant(1, AC->Int64, loc);
+  for (Value size : sizes) {
+    Value sizeAsInt64 = AC->castToInt(AC->Int64, size, loc);
+    totalSize = AC->getBuilder().create<arith::MulIOp>(loc, totalSize, sizeAsInt64);
+  }
+  
+  return totalSize;
+}
+
 void ConvertArtsToLLVMPass::iterateOps() {
   /// Iterate over the FuncOps/DbControlOps in the module
   for (auto func : module.getOps<func::FuncOp>())
@@ -216,6 +304,9 @@ void ConvertArtsToLLVMPass::iterateOps() {
     module.dump();
     dbgs() << line;
   });
+
+  /// Iterate over the DbCreateOps in the module
+  module.walk([&](arts::DbCreateOp op) { handleDbCreate(op); });
 
   /// Iterate over the EdtOps in the module
   module.walk<mlir::WalkOrder::PreOrder>([&](arts::EdtOp edtOp) {
