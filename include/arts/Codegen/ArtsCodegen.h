@@ -32,7 +32,7 @@ using namespace mlir::LLVM;
 using namespace types;
 class ArtsCodegen;
 
-// ---------------------------- Datablocks ---------------------------- ///
+// ---------------------------- Dbs ---------------------------- ///
 class DataBlockCodegen {
 public:
   DataBlockCodegen(ArtsCodegen &AC);
@@ -142,13 +142,13 @@ private:
   SmallVector<DataBlockCodegen *> depsToSatisfy, depsToRecord;
 
   /// Entry info
-  struct DatablockEntry {
+  struct DbEntry {
     Value guid, ptr;
     SmallVector<Value> sizes, offsets;
     DenseMap<unsigned, unsigned> sizeIndex;
     DenseMap<unsigned, unsigned> offsetIndex;
   };
-  DenseMap<arts::DataBlockCodegen *, DatablockEntry> entryDbs;
+  DenseMap<arts::DataBlockCodegen *, DbEntry> entryDbs;
   /// Entry events
   DenseMap<Value, unsigned> entryEvents;
   /// Entry Function arguments
@@ -188,11 +188,11 @@ public:
   /// Builder
   OpBuilder &getBuilder() { return builder; }
 
-  /// Datablock
-  DataBlockCodegen *getDatablock(Value op);
-  DataBlockCodegen *getDatablock(arts::DbControlOp dbOp);
-  DataBlockCodegen *createDatablock(arts::DbControlOp dbOp, Location loc);
-  DataBlockCodegen *getOrCreateDatablock(arts::DbControlOp dbOp, Location loc);
+  /// Db
+  DataBlockCodegen *getDb(Value op);
+  DataBlockCodegen *getDb(arts::DbControlOp dbOp);
+  DataBlockCodegen *createDb(arts::DbControlOp dbOp, Location loc);
+  DataBlockCodegen *getOrCreateDb(arts::DbControlOp dbOp, Location loc);
   void addDbDependency(Value dbGuid, Value edtGuid, Value edtSlot,
                        Location loc);
   void incrementDbLatchCount(Value dbGuid, Location loc);

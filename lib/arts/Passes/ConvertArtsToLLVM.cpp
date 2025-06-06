@@ -63,14 +63,14 @@ struct ConvertArtsToLLVMPass
   // void handleEvent(EventOp &op);
   void handleEpoch(EpochOp &op);
   void handleDbCreate(DbCreateOp &op);
-  void handleDatablock(DbControlOp &op);
+  void handleDb(DbControlOp &op);
   void handleGetTotalWorkers(GetTotalWorkersOp &op);
   void handleGetTotalNodes(GetTotalNodesOp &op);
   void handleGetCurrentWorker(GetCurrentWorkerOp &op);
   void handleGetCurrentNode(GetCurrentNodeOp &op);
 
 private:
-  Value computeDatablockSize(DbCreateOp &op, Location loc);
+  Value computeDbSize(DbCreateOp &op, Location loc);
 
 private:
   ModuleOp module;
@@ -167,17 +167,17 @@ void ConvertArtsToLLVMPass::handleDbCreate(DbCreateOp &op) {
   // Create GUID using ARTS runtime
   Value guid = AC->createRuntimeCall(ARTSRTL_artsReserveGuidRoute, {modeVal, currentNode}, loc)->getResult(0);
   
-  // Compute datablock size
-  Value size = computeDatablockSize(op, loc);
+  // Compute db size
+  Value size = computeDbSize(op, loc);
   
-  // Create the datablock
+  // Create the db
   Value ptr;
   if (op.getAddress()) {
     // Use address if provided
     Value address = AC->castToVoidPtr(op.getAddress(), loc);
     ptr = AC->createRuntimeCall(ARTSRTL_artsDbCreateWithGuidAndData, {guid, address, size}, loc)->getResult(0);
   } else {
-    // Create empty datablock
+    // Create empty db
     ptr = AC->createRuntimeCall(ARTSRTL_artsDbCreateWithGuid, {guid, size}, loc)->getResult(0);
   }
   
@@ -192,12 +192,12 @@ void ConvertArtsToLLVMPass::handleDbCreate(DbCreateOp &op) {
   opsToRemove.insert(op);
 }
 
-void ConvertArtsToLLVMPass::handleDatablock(DbControlOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.datablock\n  " << op << "\n");
+void ConvertArtsToLLVMPass::handleDb(DbControlOp &op) {
+  LLVM_DEBUG(DBGS() << "Lowering arts.db\n  " << op << "\n");
   AC->setInsertionPointAfter(op);
 
-  /// Create a new datablock codegen object.
-  AC->createDatablock(op, op->getLoc());
+  /// Create a new db codegen object.
+  AC->createDb(op, op->getLoc());
 
   /// Mark ops for removal.
   opsToRemove.insert(op.getPtr().getDefiningOp());
@@ -240,7 +240,7 @@ void ConvertArtsToLLVMPass::handleGetCurrentNode(GetCurrentNodeOp &op) {
 
 
 
-Value ConvertArtsToLLVMPass::computeDatablockSize(DbCreateOp &op, Location loc) {
+Value ConvertArtsToLLVMPass::computeDbSize(DbCreateOp &op, Location loc) {
   // Compute the total size based on the sizes operands
   auto sizes = op.getSizes();
   if (sizes.empty()) {
@@ -338,7 +338,7 @@ void ConvertArtsToLLVMPass::preprocessDbControlOps(Operation *operation) {
   DenseMap<DbControlOp, DbControlOp> dbsToRewire;
   operation->walk<mlir::WalkOrder::PreOrder>(
       [&](arts::DbControlOp dbOp) -> mlir::WalkResult {
-        /// Skip already processed new datablock ops.
+        /// Skip already processed new db ops.
         if (dbOp->hasAttr("newDb"))
           return mlir::WalkResult::skip();
 
@@ -391,10 +391,10 @@ void ConvertArtsToLLVMPass::preprocessDbControlOps(Operation *operation) {
   SmallVector<DbControlOp, 8> dbsToHandle;
   for (auto dbFrom : dbOps) {
     auto dbTo = dbsToRewire[dbFrom];
-    LLVM_DEBUG(dbgs() << "Rewiring datablock:\n  " << dbFrom << "\n  " << dbTo
+    LLVM_DEBUG(dbgs() << "Rewiring db:\n  " << dbFrom << "\n  " << dbTo
                       << "\n");
 
-    /// Get the new datablock pointer type
+    /// Get the new db pointer type
     auto computePtr = [&](ValueRange indices, Location loc) -> Value {
       if (indices.empty()) {
         auto llvmCast = AC->castToLLVMPtr(dbTo, loc);
@@ -408,7 +408,7 @@ void ConvertArtsToLLVMPass::preprocessDbControlOps(Operation *operation) {
       Value subIndex = dbTo;
       for (auto index : indices) {
         auto mt = subIndex.getType().cast<MemRefType>();
-        auto shape = std::vector<int64_t>(mt.getShape());
+        auto shape = SmallVector<int64_t>(mt.getShape());
         shape.erase(shape.begin());
         auto mt0 = mlir::MemRefType::get(shape, mt.getElementType(),
                                          MemRefLayoutAttrInterface(),
@@ -449,7 +449,7 @@ void ConvertArtsToLLVMPass::preprocessDbControlOps(Operation *operation) {
         builder.create<LLVM::StoreOp>(loc, storeOp.getValueToStore(), newPtr);
         storeOp.erase();
       }
-      /// Propagate datablock pointer for nested datablock ops.
+      /// Propagate db pointer for nested db ops.
       else if (auto dbUseOp = dyn_cast<arts::DbControlOp>(user)) {
         dbUseOp.getPtr().replaceUsesWithIf(
             dbTo.getResult(),
@@ -476,15 +476,15 @@ void ConvertArtsToLLVMPass::preprocessDbControlOps(Operation *operation) {
             newMemref2PtrOp.getResult());
         memref2PtrOp.erase();
       } else {
-        LLVM_DEBUG(DBGS() << "Unknown use of datablock op: " << *user << "\n");
-        llvm_unreachable("Unknown use of datablock op");
+        LLVM_DEBUG(DBGS() << "Unknown use of db op: " << *user << "\n");
+        llvm_unreachable("Unknown use of db op");
       }
     }
 
-    /// Erase the old datablock op
+    /// Erase the old db op
     dbFrom->erase();
 
-    /// Add the new datablock to the list of datablocks to handle
+    /// Add the new db to the list of datablocks to handle
     dbsToHandle.push_back(dbTo);
   }
   removeOps(module, builder, opsToRemove);
@@ -492,7 +492,7 @@ void ConvertArtsToLLVMPass::preprocessDbControlOps(Operation *operation) {
   /// Handle the new datablocks
   LLVM_DEBUG(dbgs() << line << "Handling new datablocks\n");
   for (auto db : dbsToHandle)
-    handleDatablock(db);
+    handleDb(db);
 }
 
 void ConvertArtsToLLVMPass::runOnOperation() {

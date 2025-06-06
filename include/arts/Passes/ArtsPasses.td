@@ -4,6 +4,19 @@
 include "mlir/Pass/PassBase.td"
 include "mlir/Rewrite/PassUtil.td"
 
+def InlinerPass : Pass<"inliner", "mlir::ModuleOp"> {
+  let summary = "Inline functions in the program";
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "LLVM::LLVMDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::arts::createInlinerPass()";
+}
+
+
 def ConvertOpenMPToArts : Pass<"convert-openmp-to-arts", "mlir::ModuleOp"> {
   let summary = "Convert OpenMP functions to ARTS";
   let dependentDialects = [
@@ -16,7 +29,7 @@ def ConvertOpenMPToArts : Pass<"convert-openmp-to-arts", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createConvertOpenMPtoARTSPass()";
 }
 
-def Datablock : Pass<"datablock", "mlir::ModuleOp"> {
+def Db : Pass<"db", "mlir::ModuleOp"> {
   let summary = "Using the Datablock Analysis, perform changes to the DataBlock"
                 "operations and optimize them if the user wants to";
   let dependentDialects = [
@@ -28,11 +41,11 @@ def Datablock : Pass<"datablock", "mlir::ModuleOp"> {
     "affine::AffineDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createDatablockPass()";
+  let constructor = "mlir::arts::createDbPass()";
 }
 
-def CreateDatablocks : Pass<"create-datablocks", "mlir::ModuleOp"> {
-  let summary = "Identify Datablocks in the program";
+def CreateDbs : Pass<"create-datablocks", "mlir::ModuleOp"> {
+  let summary = "Identify Dbs in the program";
   let dependentDialects = [
     "memref::MemRefDialect",
     "LLVM::LLVMDialect",
@@ -41,7 +54,7 @@ def CreateDatablocks : Pass<"create-datablocks", "mlir::ModuleOp"> {
     "arith::ArithDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createCreateDatablocksPass()";
+  let constructor = "mlir::arts::createCreateDbsPass()";
   let options = [
     Option<"identifyDbs", "identify-dbs", "bool", /*default=*/"true",
            "Analyzes the module and tries to automatically identify the "

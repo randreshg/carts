@@ -14,7 +14,7 @@ namespace arts {
 namespace types {
 /// EDT types
 enum class EdtType { Parallel, Single, Sync, Task };
-enum class DatablockAccessType { ReadOnly, WriteOnly, ReadWrite, Unknown };
+enum class DbAccessType { ReadOnly, WriteOnly, ReadWrite, Unknown };
 
 inline llvm::StringRef toString(const EdtType Ty) {
   switch (Ty) {
@@ -29,22 +29,18 @@ inline llvm::StringRef toString(const EdtType Ty) {
   }
 }
 
-inline llvm::StringRef toString(const DatablockAccessType Ty) {
+inline llvm::StringRef toString(const DbAccessType Ty) {
   switch (Ty) {
-  case DatablockAccessType::ReadOnly:
+  case DbAccessType::ReadOnly:
     return "in";
-  case DatablockAccessType::WriteOnly:
+  case DbAccessType::WriteOnly:
     return "inout";
-  case DatablockAccessType::ReadWrite:
+  case DbAccessType::ReadWrite:
     return "inout";
-  case DatablockAccessType::Unknown:
+  case DbAccessType::Unknown:
     return "unknown";
   }
 }
-// const llvm::Twine toString(const EDTType Ty);
-// const llvm::Twine toString(const EDTArgType Ty);
-// EDTType toEDTType(const llvm::StringRef Str);
-// EDTArgType toEDTArgType(const llvm::StringRef Str);
 
 /// IDs for all arts runtime library (RTL) functions.
 enum class RuntimeFunction {

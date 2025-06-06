@@ -76,7 +76,7 @@ public:
 /// Global cache instance
 static MemRefTypeCache memRefCache;
 
-// ---------------------------- Datablocks ---------------------------- ///
+// ---------------------------- Dbs ---------------------------- ///
 DataBlockCodegen::DataBlockCodegen(ArtsCodegen &AC)
     : AC(AC), builder(AC.builder) {}
 
@@ -87,7 +87,7 @@ DataBlockCodegen::DataBlockCodegen(ArtsCodegen &AC, arts::DbControlOp dbOp,
 }
 
 void DataBlockCodegen::create(arts::DbControlOp depOp, Location loc) {
-  /// Datablock info
+  /// Db info
   dbOp = depOp;
 
   /// If the base is a DB, it will be handled when inserting the EDT Entry
@@ -102,7 +102,7 @@ void DataBlockCodegen::create(arts::DbControlOp depOp, Location loc) {
   auto elementTypeSize = dbOp.getElementTypeSize();
   const auto tySize = AC.castToInt(AC.Int64, elementTypeSize, loc);
 
-  /// Handle the case of a single datablock
+  /// Handle the case of a single db
   if (hasSingleSize()) {
     AC.createPrintfCall(loc, METADATA "Creating single DB\n", {});
     auto modeVal = getMode(dbOp.getMode());
@@ -119,7 +119,7 @@ void DataBlockCodegen::create(arts::DbControlOp depOp, Location loc) {
   const auto dbDim = dbSizes.size();
   auto modeVal = getMode(dbOp.getMode());
   auto guidType = MemRefType::get(
-      std::vector<int64_t>(dbDim, ShapedType::kDynamic), AC.ArtsGuid);
+      SmallVector<int64_t>(dbDim, ShapedType::kDynamic), AC.ArtsGuid);
   guid = builder.create<memref::AllocaOp>(loc, guidType, dbSizes);
   auto ptrType = dbOp.getResult().getType().cast<MemRefType>();
   if (ptrType.hasStaticShape()) {
@@ -306,13 +306,13 @@ void EdtCodegen::process(Location loc) {
   if (!deps.empty()) {
     for (const auto &dep : deps) {
       // Handle both DbControlOp results and memref.subview results
-      auto db = AC.getDatablock(dep);
+      auto db = AC.getDb(dep);
       if (!db) {
         // For subview results, handle dependency differently
         processSubviewDependency(dep, loc);
         continue;
       }
-      assert(db && "Datablock not found");
+      assert(db && "Db not found");
 
       /// Set the EDT slot for the DB - We do so, by computing the number of
       /// elements of each DB and storing it in the depC. The EDTSlot will be
@@ -414,7 +414,7 @@ void EdtCodegen::processSubviewDependency(Value subview, Location loc) {
     auto newDep = builder.create<arith::AddIOp>(loc, currDep, one).getResult();
     builder.create<memref::StoreOp>(loc, newDep, depC);
     
-    // Create a simple datablock info struct for this subview
+    // Create a simple db info struct for this subview
     auto *dbCG = new DataBlockCodegen(AC);
     dbCG->setGuid(guid);
     dbCG->setEdtSlot(edtSlot);
@@ -424,7 +424,7 @@ void EdtCodegen::processSubviewDependency(Value subview, Location loc) {
   
   // For output dependencies, add to satisfaction list
   if (isOutput) {
-    // Create a simple datablock info struct for this subview
+    // Create a simple db info struct for this subview
     auto *dbCG = new DataBlockCodegen(AC);
     dbCG->setGuid(guid);
     dbCG->setEdtSlot(edtSlot);
@@ -444,7 +444,7 @@ void EdtCodegen::processDependencies(Location loc) {
     LLVM_DEBUG(dbgs() << "- Recording in-mode dependencies\n");
     builder.setInsertionPointAfter(guid.getDefiningOp());
     for (auto *dbCG : depsToRecord) {
-      /// Retrieve the datablock GUID and location.
+      /// Retrieve the db GUID and location.
       auto dbGuid = dbCG->getGuid();
       auto dbLoc = dbCG->getOp().getLoc();
 
@@ -518,7 +518,7 @@ void EdtCodegen::processDependencies(Location loc) {
         dbgs() << "- Incrementing latch counts for out-mode dependencies\n");
     for (auto *dbCG : depsToSatisfy) {
       auto dbGuid = dbCG->getGuid();
-      assert(dbGuid && "Datablock GUID not found");
+      assert(dbGuid && "Db GUID not found");
       auto dbLoc = dbCG->getOp().getLoc();
 
       /// For single-dimension datablocks.
@@ -582,14 +582,14 @@ void EdtCodegen::processDependencies(Location loc) {
   /// ---------------------------------------------------------------------
   /// Replace EDT Dependency Uses
   /// Replace all remaining uses of EDT dependencies with the corresponding
-  /// datablock pointers.
+  /// db pointers.
   /// ---------------------------------------------------------------------
   LLVM_DEBUG(dbgs() << "- Replacing EDT dependency uses\n");
   for (auto &dep : deps) {
-    auto *db = AC.getDatablock(dep);
-    assert(db && "Datablock not found");
+    auto *db = AC.getDb(dep);
+    assert(db && "Db not found");
     if (!db->getPtr()) {
-      LLVM_DEBUG(dbgs() << "Datablock not found or pointer not set\n");
+      LLVM_DEBUG(dbgs() << "Db not found or pointer not set\n");
       continue;
     }
     db->getOp().replaceAllUsesWith(db->getPtr());
@@ -694,8 +694,8 @@ void EdtCodegen::createEntry(Location loc) {
 
   for (auto &dep : deps) {
     /// Get corresponding DB.
-    auto *db = AC.getDatablock(dep);
-    assert(db && "Datablock not found");
+    auto *db = AC.getDb(dep);
+    assert(db && "Db not found");
 
     /// Skip DBs that are not in mode.
     if (!db->isInMode())
@@ -708,13 +708,13 @@ void EdtCodegen::createEntry(Location loc) {
         /// We are only concerned with datablocks in the same EDT region.
         if (!region->isAncestor(user->getParentRegion()))
           continue;
-        /// If not a datablock, skip.
+        /// If not a db, skip.
         auto userOp = dyn_cast<arts::DbControlOp>(user);
         if (!userOp)
           continue;
-        /// Get the datablock codegen and set the entry information.
-        auto userDb = AC.getDatablock(userOp);
-        assert(userDb && "User datablock not found");
+        /// Get the db codegen and set the entry information.
+        auto userDb = AC.getDb(userOp);
+        assert(userDb && "User db not found");
         userDb->setGuid(entryGuid);
         userDb->setPtr(entryPtr);
       }
@@ -759,7 +759,7 @@ void EdtCodegen::createEntry(Location loc) {
       else if (auto cstOp = dbSizes[i].getDefiningOp<arith::ConstantIndexOp>())
         entrySizes.push_back(builder.clone(*cstOp)->getResult(0));
       else
-        llvm_unreachable("Datablock size is not a constant");
+        llvm_unreachable("Db size is not a constant");
 
       /// Offsets
       if (entryDbs[db].offsetIndex.count(i))
@@ -768,7 +768,7 @@ void EdtCodegen::createEntry(Location loc) {
                    dbOffsets[i].getDefiningOp<arith::ConstantIndexOp>())
         entryOffsets.push_back(builder.clone(*cstOp)->getResult(0));
       else
-        llvm_unreachable("Datablock offset is not a constant");
+        llvm_unreachable("Db offset is not a constant");
     }
 
     /// CLEAN APPROACH: Use memref.view to create N-dimensional views from flat fnDepV.
@@ -789,15 +789,15 @@ void EdtCodegen::createEntry(Location loc) {
     auto fnDepVPtr_i8 = AC.castToLLVMPtr(fnDepV, loc);
     auto flatBuffer = builder.create<polygeist::Pointer2MemrefOp>(loc, flatI8Type, fnDepVPtr_i8);
     
-    /// Compute byte offset for this datablock section  
+    /// Compute byte offset for this db section  
     auto offsetInBytes = builder.create<arith::MulIOp>(loc, curIndex, depStructSize);
     
     /// Create target memref types with original dimensions (keeping offsets & sizes!)
     auto guidViewType = MemRefType::get(
-        std::vector<int64_t>(entrySizes.size(), ShapedType::kDynamic),
+        SmallVector<int64_t>(entrySizes.size(), ShapedType::kDynamic),
         AC.ArtsGuid);
     auto ptrViewType = MemRefType::get(
-        std::vector<int64_t>(entrySizes.size(), ShapedType::kDynamic),
+        SmallVector<int64_t>(entrySizes.size(), ShapedType::kDynamic),
         AC.VoidPtr);
     
     /// Use memref.view to create N-dimensional views maintaining original structure!
@@ -930,29 +930,29 @@ func::CallOp ArtsCodegen::createRuntimeCall(RuntimeFunction FnID,
 }
 
 /// DataBlock
-DataBlockCodegen *ArtsCodegen::getDatablock(Value op) {
-  return getDatablock(cast<DbControlOp>(op.getDefiningOp()));
+DataBlockCodegen *ArtsCodegen::getDb(Value op) {
+  return getDb(cast<DbControlOp>(op.getDefiningOp()));
 }
 
-DataBlockCodegen *ArtsCodegen::getDatablock(arts::DbControlOp dbOp) {
+DataBlockCodegen *ArtsCodegen::getDb(arts::DbControlOp dbOp) {
   if (!dbOp)
     return nullptr;
   auto it = datablocks.find(dbOp);
   return (it != datablocks.end()) ? it->second : nullptr;
 }
 
-DataBlockCodegen *ArtsCodegen::createDatablock(arts::DbControlOp dbOp,
+DataBlockCodegen *ArtsCodegen::createDb(arts::DbControlOp dbOp,
                                                Location loc) {
-  assert(!getDatablock(dbOp) && "Datablock already exists");
+  assert(!getDb(dbOp) && "Db already exists");
   datablocks[dbOp] = new DataBlockCodegen(*this, dbOp, loc);
   return datablocks[dbOp];
 }
 
-DataBlockCodegen *ArtsCodegen::getOrCreateDatablock(arts::DbControlOp dbOp,
+DataBlockCodegen *ArtsCodegen::getOrCreateDb(arts::DbControlOp dbOp,
                                                     Location loc) {
-  if (auto db = getDatablock(dbOp))
+  if (auto db = getDb(dbOp))
     return db;
-  return createDatablock(dbOp, loc);
+  return createDb(dbOp, loc);
 }
 
 void ArtsCodegen::addDbDependency(Value dbGuid, Value edtGuid, Value edtSlot,

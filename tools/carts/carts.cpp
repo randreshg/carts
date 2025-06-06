@@ -69,7 +69,7 @@ static cl::opt<bool> Opt("O3", cl::desc("Apply Optimizations"),
 static cl::opt<bool> EmitLLVM("emit-llvm", cl::desc("Emit LLVM IR output"),
                               cl::init(false));
 
-static cl::opt<bool> IdentifyDatablocks(
+static cl::opt<bool> IdentifyDbs(
     "identify-dbs", cl::desc("Number of optimization iterations"), cl::init(1));
 
 static cl::opt<unsigned>
@@ -173,16 +173,16 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context) {
 
   /// ARTS dialect conversion and optimization
   PassManager pm(&context);
-  pm.addPass(arts::createAlwaysInlinePass());
+  pm.addPass(arts::createInlinerPass());
   pm.addPass(arts::createConvertOpenMPtoARTSPass());
   pm.addPass(createSymbolDCEPass());
   pm.addPass(arts::createEdtPass());
   pm.addPass(arts::createEdtInvariantCodeMotionPass());
-  pm.addPass(arts::createCreateDatablocksPass(IdentifyDatablocks));
+  pm.addPass(arts::createCreateDbsPass(IdentifyDbs));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
 
-  /// Datablock pass to identify and optimize data dependencies
-  pm.addPass(arts::createDatablockPass());
+  /// Db pass to identify and optimize data dependencies
+  pm.addPass(arts::createDbPass());
   pm.addPass(createCSEPass());
   pm.addPass(createMem2Reg());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());

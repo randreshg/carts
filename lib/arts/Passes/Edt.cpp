@@ -17,7 +17,7 @@
 #include "polygeist/Ops.h"
 /// Arts
 #include "ArtsPassDetails.h"
-#include "arts/Analysis/DataBlockAnalysis.h"
+#include "arts/Analysis/DbAnalysis.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 /// Other

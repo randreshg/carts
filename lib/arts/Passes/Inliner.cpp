@@ -8,17 +8,17 @@
 #include "mlir/Transforms/InliningUtils.h"
 #include "llvm/Support/Debug.h"
 
-#define DEBUG_TYPE "always-inline"
+#define DEBUG_TYPE "inliner"
 #define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "] ")
 
 using namespace mlir;
 
 namespace {
-struct AlwaysInlinerInterface : public mlir::InlinerInterface {
-  using InlinerInterface::InlinerInterface;
+struct InlinerInterface : public mlir::InlinerInterface {
+  using mlir::InlinerInterface::InlinerInterface;
 
   //===--------------------------------------------------------------------===//
-  // Analysis Hooks
+  /// Analysis Hooks
   //===--------------------------------------------------------------------===//
 
   /// All call operations within standard ops can be inlined.
@@ -40,18 +40,18 @@ struct AlwaysInlinerInterface : public mlir::InlinerInterface {
   }
 
   //===--------------------------------------------------------------------===//
-  // Transformation Hooks
+  /// Transformation Hooks
   //===--------------------------------------------------------------------===//
 
   /// Handle the given inlined terminator by replacing it with a new operation
   /// as necessary.
   void handleTerminator(mlir::Operation *op, mlir::Block *newDest) const final {
-    // Only "std.return" needs to be handled here.
+    /// Only "std.return" needs to be handled here.
     auto returnOp = mlir::dyn_cast<mlir::func::ReturnOp>(op);
     if (!returnOp)
       return;
 
-    // Replace the return with a branch to the dest.
+    /// Replace the return with a branch to the dest.
     mlir::OpBuilder builder(op);
     builder.create<mlir::cf::BranchOp>(op->getLoc(), newDest,
                                        returnOp.getOperands());
@@ -62,19 +62,19 @@ struct AlwaysInlinerInterface : public mlir::InlinerInterface {
   /// as necessary.
   void handleTerminator(mlir::Operation *op,
                         mlir::ArrayRef<mlir::Value> valuesToRepl) const final {
-    // Only "std.return" needs to be handled here.
+    /// Only "std.return" needs to be handled here.
     auto returnOp = mlir::cast<mlir::func::ReturnOp>(op);
 
-    // Replace the values directly with the return operands.
+    /// Replace the values directly with the return operands.
     assert(returnOp.getNumOperands() == valuesToRepl.size());
     for (const auto &it : llvm::enumerate(returnOp.getOperands()))
       valuesToRepl[it.index()].replaceAllUsesWith(it.value());
   }
 };
 
-[[maybe_unused]] static void alwaysInlineCall(mlir::func::CallOp caller) {
-  // Build the inliner interface.
-  AlwaysInlinerInterface interface(caller.getContext());
+[[maybe_unused]] static void inlineCall(mlir::func::CallOp caller) {
+  /// Build the inliner interface.
+  InlinerInterface interface(caller.getContext());
 
   auto callable = caller.getCallableForCallee();
   mlir::CallableOpInterface callableOp;
@@ -98,13 +98,12 @@ struct AlwaysInlinerInterface : public mlir::InlinerInterface {
   }
 };
 
-struct AlwaysInlinePass
-    : public PassWrapper<AlwaysInlinePass, OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(AlwaysInlinePass)
+struct InlinerPass : public PassWrapper<InlinerPass, OperationPass<ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(InlinerPass)
 
-  StringRef getArgument() const final { return "always-inline"; }
+  StringRef getArgument() const final { return "inliner"; }
   StringRef getDescription() const final {
-    return "Aggressively inline all function calls";
+    return "Inline functions in the program";
   }
 
   void runOnOperation() override {
@@ -112,10 +111,10 @@ struct AlwaysInlinePass
 
     LLVM_DEBUG(DBGS() << "Starting aggressive inlining pass\n");
 
-    // Build the inliner interface
-    AlwaysInlinerInterface inliner(&getContext());
+    /// Build the inliner interface
+    InlinerInterface inliner(&getContext());
 
-    // Use a worklist approach to handle newly created calls during inlining
+    /// Use a worklist approach to handle newly created calls during inlining
     bool changed;
     unsigned iteration = 0;
     do {
@@ -124,21 +123,21 @@ struct AlwaysInlinePass
 
       LLVM_DEBUG(DBGS() << "Inlining iteration " << iteration << "\n");
 
-      // Collect all call ops in the module
+      /// Collect all call ops in the module
       SmallVector<func::CallOp> calls;
       module.walk([&](func::CallOp call) { calls.push_back(call); });
 
       LLVM_DEBUG(DBGS() << "Found " << calls.size() << " call operations\n");
 
-      // Process each call operation
+      /// Process each call operation
       for (func::CallOp call : calls) {
-        // Skip already erased operations
+        /// Skip already erased operations
         if (call->getParentOp() == nullptr) {
           LLVM_DEBUG(DBGS() << "Skipping erased call\n");
           continue;
         }
 
-        // Resolve the callable operation
+        /// Resolve the callable operation
         auto callable = call.getCallableForCallee();
         CallableOpInterface callableOp;
         if (SymbolRefAttr symRef = callable.dyn_cast<SymbolRefAttr>()) {
@@ -153,13 +152,13 @@ struct AlwaysInlinePass
           continue;
         }
 
-        // Skip if the callable region is empty
+        /// Skip if the callable region is empty
         if (callableOp.getCallableRegion()->empty()) {
           LLVM_DEBUG(DBGS() << "Skipping call to empty function\n");
           continue;
         }
 
-        // Check if this is a recursive call (basic check)
+        /// Check if this is a recursive call (basic check)
         if (auto funcOp = dyn_cast<func::FuncOp>(callableOp.getOperation())) {
           auto enclosingFunc = call->getParentOfType<func::FuncOp>();
           if (enclosingFunc &&
@@ -172,7 +171,7 @@ struct AlwaysInlinePass
 
         LLVM_DEBUG(DBGS() << "Attempting to inline call\n");
 
-        // Attempt to inline the call
+        /// Attempt to inline the call
         if (succeeded(mlir::inlineCall(inliner, call, callableOp,
                                        callableOp.getCallableRegion(), true))) {
           LLVM_DEBUG(DBGS() << "Successfully inlined call\n");
@@ -182,17 +181,16 @@ struct AlwaysInlinePass
           LLVM_DEBUG(DBGS() << "Failed to inline call\n");
         }
       }
-    } while (changed &&
-             iteration < 100); // Limit iterations to prevent infinite loops
+      /// Limit iterations to prevent infinite loops
+    } while (changed && iteration < 100);
 
-    if (iteration >= 100) {
+    if (iteration >= 100)
       LLVM_DEBUG(DBGS() << "Warning: Hit maximum iteration limit\n");
-    }
 
     LLVM_DEBUG(DBGS() << "Completed aggressive inlining after " << iteration
                       << " iterations\n");
 
-    // Clean up unused functions
+    /// Clean up unused functions
     cleanupUnusedFunctions(module);
   }
 
@@ -200,11 +198,11 @@ private:
   void cleanupUnusedFunctions(ModuleOp module) {
     LLVM_DEBUG(DBGS() << "Cleaning up unused functions\n");
 
-    // Collect all function operations
+    /// Collect all function operations
     SmallVector<func::FuncOp> functions;
     module.walk([&](func::FuncOp func) { functions.push_back(func); });
 
-    // Remove functions that are no longer used
+    /// Remove functions that are no longer used
     for (func::FuncOp func : functions) {
       if (func.isPrivate() && func.getSymbolUses(module)->empty()) {
         LLVM_DEBUG(DBGS() << "Removing unused function: " << func.getSymName()
@@ -219,8 +217,8 @@ private:
 
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createAlwaysInlinePass() {
-  return std::make_unique<AlwaysInlinePass>();
+std::unique_ptr<Pass> createInlinerPass() {
+  return std::make_unique<InlinerPass>();
 }
 } // namespace arts
 } // namespace mlir

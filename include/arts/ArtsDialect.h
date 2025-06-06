@@ -10,8 +10,8 @@
 #define CARTS_DIALECT_H
 
 /// Dialects
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 /// Others
 #include "mlir/IR/BuiltinTypes.h"
@@ -27,6 +27,7 @@
 // Arts Dialect
 //===----------------------------------------------------------------------===//
 #include "arts/ArtsOpsDialect.h.inc"
+using DbAccessOp = mlir::memref::SubViewOp;
 
 bool isArtsRegion(mlir::Operation *op);
 bool isArtsOp(mlir::Operation *op);

@@ -21,7 +21,7 @@ DbCreateOp createDbCreateOp(OpBuilder &builder, Location loc,
                             SmallVector<Value> sizes = {});
 
 DbControlOp createDbControlOp(OpBuilder &builder, Location loc,
-                              types::DatablockAccessType mode, Value ptr,
+                              types::DbAccessType mode, Value ptr,
                               SmallVector<Value> pinnedIndices = {}, bool coarseGrained = false);
 } // namespace arts
 } // namespace mlir
