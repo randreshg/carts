@@ -11,7 +11,7 @@
 #include "mlir/Support/LLVM.h"
 /// Arts
 #include "ArtsPassDetails.h"
-#include "arts/Analysis/Datablock/DatablockAnalysis.h"
+#include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"

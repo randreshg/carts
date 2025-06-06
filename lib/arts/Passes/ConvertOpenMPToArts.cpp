@@ -150,15 +150,15 @@ struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
 struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  types::DatablockAccessType
-  getDatablockAccessType(omp::ClauseTaskDepend taskClause) const {
+  types::DbAccessType
+  getDbAccessType(omp::ClauseTaskDepend taskClause) const {
     switch (taskClause) {
     case omp::ClauseTaskDepend::taskdependin:
-      return types::DatablockAccessType::ReadOnly;
+      return types::DbAccessType::ReadOnly;
     case omp::ClauseTaskDepend::taskdependout:
-      return types::DatablockAccessType::WriteOnly;
+      return types::DbAccessType::WriteOnly;
     case omp::ClauseTaskDepend::taskdependinout:
-      return types::DatablockAccessType::ReadWrite;
+      return types::DbAccessType::ReadWrite;
     }
     llvm_unreachable("Unknown ClauseTaskDepend value");
   }
@@ -217,7 +217,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
         rewriter.setInsertionPointAfter(depLoadVal.getDefiningOp());
         deps.push_back(createDbControlOp(
             rewriter, depLoadVal.getLoc(),
-            getDatablockAccessType(depClause.getValue()), depLoadVal));
+            getDbAccessType(depClause.getValue()), depLoadVal));
       }
 
       /// Replace the dependency allocation with an undefined value.

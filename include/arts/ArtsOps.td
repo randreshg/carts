@@ -53,7 +53,7 @@ def AllocOp : Arts_Op<"alloc", []> {
 }
 
 //===----------------------------------------------------------------------===//
-// arts.datablock
+// arts.db
 //===----------------------------------------------------------------------===//
 def DbCreateOp : Arts_Op<"db_create", [
     AttrSizedOperandSegments, MemoryEffects<[MemAlloc]>]> {
@@ -74,7 +74,7 @@ def DbCreateOp : Arts_Op<"db_create", [
   let results = (outs AnyMemRef:$ptr, I64:$guid);
   let assemblyFormat = [{
     $mode $address `:` type($address) `[` $sizes `]` `->` attr-dict `:` type($ptr) `,` type($guid)
-  }];   
+  }];
 }
 
 def DbControlOp : Arts_Op<"db_control", 
