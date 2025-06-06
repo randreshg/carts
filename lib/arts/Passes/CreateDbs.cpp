@@ -1,8 +1,8 @@
 ///==========================================================================
-/// File: CreateDatablocks.cpp
+/// File: CreateDbs.cpp
 //
 // This pass analyzes EDT regions within a function to discover candidate
-// datablocks. A candidate datablock is a memref value used in an EDT region
+// datablocks. A candidate db is a memref value used in an EDT region
 // that is defined outside that region. In addition, the pass classifies the
 // candidate into one of three categories based on its access pattern:
 // read‑only, write‑only, or read–write.
@@ -49,11 +49,11 @@ using namespace mlir::arith;
 using namespace mlir::arts;
 using namespace mlir::arts::types;
 
-/// CandidateDatablock: Structure representing a candidate datablock.
-struct CandidateDatablock {
+///  DbCandidate: Structure representing a candidate db.
+struct DbCandidate {
   /// Constructors.
-  CandidateDatablock() = default;
-  CandidateDatablock(Value ptr, bool isString = false)
+  DbCandidate() = default;
+  DbCandidate(Value ptr, bool isString = false)
       : ptr(ptr), isString(isString) {}
 
   /// Memref value.
@@ -61,41 +61,41 @@ struct CandidateDatablock {
   /// Pinned indices (if invariant).
   SmallVector<Value> pinnedIndices;
   /// Classification: read‑only, write‑only, or read–write.
-  DatablockAccessType access = DatablockAccessType::Unknown;
-  /// Indicates if the datablock is a string, which is a special case.
+  DbAccessType access = DbAccessType::Unknown;
+  /// Indicates if the db is a string, which is a special case.
   bool isString = false;
 
   /// Set Access based on read and write flags.
   void setAccess(bool hasRead, bool hasWrite) {
     if (hasRead && hasWrite)
-      access = DatablockAccessType::ReadWrite;
+      access = DbAccessType::ReadWrite;
     else if (hasWrite)
-      access = DatablockAccessType::WriteOnly;
+      access = DbAccessType::WriteOnly;
     else if (hasRead)
-      access = DatablockAccessType::ReadOnly;
+      access = DbAccessType::ReadOnly;
     else
-      access = DatablockAccessType::Unknown;
+      access = DbAccessType::Unknown;
   }
 
   /// Update Access when combining different operations.
-  void updateAccess(DatablockAccessType newAccess) {
-    if (access == DatablockAccessType::Unknown)
+  void updateAccess(DbAccessType newAccess) {
+    if (access == DbAccessType::Unknown)
       access = newAccess;
     else if (access != newAccess)
-      access = DatablockAccessType::ReadWrite;
+      access = DbAccessType::ReadWrite;
   }
 };
 
 ///===----------------------------------------------------------------------===///
-/// Implementation of DenseMap for CandidateDatablock.
+/// Implementation of DenseMap for  DbCandidate.
 ///===----------------------------------------------------------------------===///
 namespace llvm {
-template <> struct DenseMapInfo<CandidateDatablock> {
-  static CandidateDatablock getEmptyKey() { return {}; }
+template <> struct DenseMapInfo<DbCandidate> {
+  static DbCandidate getEmptyKey() { return {}; }
 
-  static CandidateDatablock getTombstoneKey() { return {nullptr}; }
+  static DbCandidate getTombstoneKey() { return {nullptr}; }
 
-  static unsigned getHashValue(const CandidateDatablock &cand) {
+  static unsigned getHashValue(const DbCandidate &cand) {
     std::size_t hash =
         llvm::hash_value(static_cast<const void *>(cand.ptr.getImpl()));
     for (auto idx : cand.pinnedIndices)
@@ -103,8 +103,7 @@ template <> struct DenseMapInfo<CandidateDatablock> {
     return static_cast<unsigned>(hash);
   }
 
-  static bool isEqual(const CandidateDatablock &lhs,
-                      const CandidateDatablock &rhs) {
+  static bool isEqual(const DbCandidate &lhs, const DbCandidate &rhs) {
     if (lhs.ptr != rhs.ptr)
       return false;
     if (lhs.pinnedIndices.size() != rhs.pinnedIndices.size())
@@ -121,29 +120,27 @@ template <> struct DenseMapInfo<CandidateDatablock> {
 /// Pass Implementation
 ///===----------------------------------------------------------------------===///
 namespace {
-struct CreateDatablocksPass
-    : public CreateDatablocksBase<CreateDatablocksPass> {
+struct CreateDbsPass : public CreateDbsBase<CreateDbsPass> {
 
   /// Constructor
-  CreateDatablocksPass() = default;
-  CreateDatablocksPass(bool identifyDbs) { this->identifyDbs = identifyDbs; }
+  CreateDbsPass() = default;
+  CreateDbsPass(bool identifyDbs) { this->identifyDbs = identifyDbs; }
 
   /// Main entry of the pass.
   void runOnOperation() override;
 
   /// Identify datablocks in the module and create them
-  void identifyDatablocks(ModuleOp module);
-  /// Create a DbCreateOp for a base datablock
-  DbCreateOp createDatablockAllocation(OpBuilder &builder, Location loc,
-                                       Value basePtr,
-                                       DatablockAccessType access);
-  /// Create a memref.subview into a created datablock
-  memref::SubViewOp createDatablockSubview(OpBuilder &builder, Location loc,
-                                           DbCreateOp dbCreateOp,
-                                           SmallVector<Value> pinnedIndices);
-  /// Rewrites datablock uses for memref.subview
-  void rewireDatablockUses(memref::SubViewOp &subviewOp, EdtOp &edtOp,
-                           SmallVector<Operation *> &uses);
+  void identifyDbs(ModuleOp module);
+  /// Create a DbCreateOp for a base db
+  DbCreateOp createDbAlloc(OpBuilder &builder, Location loc, Value basePtr,
+                                DbAccessType access);
+  /// Create a memref.subview into a created db
+  memref::SubViewOp createDbSubview(OpBuilder &builder, Location loc,
+                                    DbCreateOp dbCreateOp,
+                                    SmallVector<Value> pinnedIndices);
+  /// Rewrites db uses for memref.subview
+  void rewireDbUses(memref::SubViewOp &subviewOp, EdtOp &edtOp,
+                    SmallVector<Operation *> &uses);
   /// Analyze the EDT region to collect candidate datablocks.
   void analyzeEdtRegion(EdtOp &edtOp);
   /// Analyze a memref value's uses in the Edt and update candidate
@@ -153,11 +150,10 @@ struct CreateDatablocksPass
 
 private:
   /// Map to store candidate datablocks
-  DenseMap<EdtOp, DenseMap<CandidateDatablock, SmallVector<Operation *>>>
-      candidateDatablocks;
+  DenseMap<EdtOp, DenseMap<DbCandidate, SmallVector<Operation *>>> DbCandidates;
 
   /// Map to store created datablocks for reuse (by base pointer)
-  DenseMap<Value, DbCreateOp> createdDatablocks;
+  DenseMap<Value, DbCreateOp> createdDbs;
 
   /// List of EDT ops in post-order traversal.
   SmallVector<EdtOp, 4> edtOps;
@@ -167,21 +163,21 @@ private:
 };
 } // end namespace
 
-void CreateDatablocksPass::runOnOperation() {
+void CreateDbsPass::runOnOperation() {
   ModuleOp module = getOperation();
   strAnalysis = &getAnalysis<StringAnalysis>();
   LLVM_DEBUG({
-    dbgs() << "\n" << line << "CreateDatablocksPass STARTED\n" << line;
+    dbgs() << "\n" << line << "CreateDbsPass STARTED\n" << line;
     module.dump();
   });
-  identifyDatablocks(module);
+  identifyDbs(module);
   LLVM_DEBUG({
-    dbgs() << "\n" << line << "CreateDatablocksPass FINISHED\n" << line;
+    dbgs() << "\n" << line << "CreateDbsPass FINISHED\n" << line;
     module.dump();
   });
 }
 
-void CreateDatablocksPass::identifyDatablocks(ModuleOp module) {
+void CreateDbsPass::identifyDbs(ModuleOp module) {
   /// Create a list of EDT ops ordered by post-order traversal.
   module.walk([&](func::FuncOp func) {
     LLVM_DEBUG(DBGS() << "Candidate datablocks in function: " << func.getName()
@@ -192,7 +188,7 @@ void CreateDatablocksPass::identifyDatablocks(ModuleOp module) {
     });
   });
 
-  /// For each candidate datablock, create new datablocks in the EDT region.
+  /// For each candidate db, create new datablocks in the EDT region.
   auto ctx = module.getContext();
   Location loc = UnknownLoc::get(ctx);
   OpBuilder builder(ctx);
@@ -200,7 +196,7 @@ void CreateDatablocksPass::identifyDatablocks(ModuleOp module) {
   llvm::SetVector<Operation *> opsToRemove;
 
   for (auto edtOp : edtOps) {
-    auto &dbCandidates = candidateDatablocks[edtOp];
+    auto &dbCandidates = DbCandidates[edtOp];
     SmallVector<Value> edtDeps;
     LLVM_DEBUG({
       dbgs() << line;
@@ -211,9 +207,8 @@ void CreateDatablocksPass::identifyDatablocks(ModuleOp module) {
     auto edtParent = edtOp->getParentOfType<EdtOp>();
 
     /// Group candidates by base pointer to avoid creating duplicate datablocks
-    DenseMap<
-        Value,
-        SmallVector<std::pair<CandidateDatablock, SmallVector<Operation *> *>>>
+    DenseMap<Value,
+             SmallVector<std::pair<DbCandidate, SmallVector<Operation *> *>>>
         candidatesByPtr;
     for (auto &candEntry : dbCandidates) {
       candidatesByPtr[candEntry.first.ptr].push_back(
@@ -235,31 +230,29 @@ void CreateDatablocksPass::identifyDatablocks(ModuleOp module) {
           builder.setInsertionPointAfter(defOp);
       }
 
-      /// Create or reuse a datablock allocation for this base pointer
+      /// Create or reuse a db allocation for this base pointer
       DbCreateOp dbCreateOp = nullptr;
-      if (auto it = createdDatablocks.find(basePtr);
-          it != createdDatablocks.end()) {
+      if (auto it = createdDbs.find(basePtr); it != createdDbs.end()) {
         dbCreateOp = it->second;
       } else {
         /// Determine the most permissive access type for this base pointer
-        DatablockAccessType combinedAccess = DatablockAccessType::Unknown;
+        DbAccessType combinedAccess = DbAccessType::Unknown;
         for (auto &[cand, uses] : candidates) {
-          if (combinedAccess == DatablockAccessType::Unknown)
+          if (combinedAccess == DbAccessType::Unknown)
             combinedAccess = cand.access;
           else if (combinedAccess != cand.access)
-            combinedAccess = DatablockAccessType::ReadWrite;
+            combinedAccess = DbAccessType::ReadWrite;
         }
 
-        dbCreateOp =
-            createDatablockAllocation(builder, loc, basePtr, combinedAccess);
-        createdDatablocks[basePtr] = dbCreateOp;
+        dbCreateOp = createDbAlloc(builder, loc, basePtr, combinedAccess);
+        createdDbs[basePtr] = dbCreateOp;
       }
 
       /// Create subview operations for each candidate
       for (auto &[dbCand, dbUses] : candidates) {
-        auto subviewOp = createDatablockSubview(builder, loc, dbCreateOp,
-                                                dbCand.pinnedIndices);
-        rewireDatablockUses(subviewOp, edtOp, *dbUses);
+        auto subviewOp =
+            createDbSubview(builder, loc, dbCreateOp, dbCand.pinnedIndices);
+        rewireDbUses(subviewOp, edtOp, *dbUses);
         edtDeps.push_back(subviewOp.getResult());
       }
     }
@@ -289,10 +282,9 @@ void CreateDatablocksPass::identifyDatablocks(ModuleOp module) {
   removeOps(module, builder, opsToRemove);
 }
 
-DbCreateOp
-CreateDatablocksPass::createDatablockAllocation(OpBuilder &builder,
-                                                Location loc, Value basePtr,
-                                                DatablockAccessType access) {
+DbCreateOp CreateDbsPass::createDbAlloc(OpBuilder &builder, Location loc,
+                                             Value basePtr,
+                                             DbAccessType access) {
   /// Determine the mode string
   StringRef modeStr = types::toString(access);
 
@@ -301,11 +293,11 @@ CreateDatablocksPass::createDatablockAllocation(OpBuilder &builder,
 }
 
 memref::SubViewOp
-CreateDatablocksPass::createDatablockSubview(OpBuilder &builder, Location loc,
-                                             DbCreateOp dbCreateOp,
-                                             SmallVector<Value> pinnedIndices) {
+CreateDbsPass::createDbSubview(OpBuilder &builder, Location loc,
+                               DbCreateOp dbCreateOp,
+                               SmallVector<Value> pinnedIndices) {
   Value dbPtr =
-      dbCreateOp.getPtr(); // Get the pointer from the created datablock
+      dbCreateOp.getPtr(); // Get the pointer from the created db
   auto dbPtrType = dbPtr.getType().cast<MemRefType>();
 
   int64_t rank = dbPtrType.getRank();
@@ -337,9 +329,8 @@ CreateDatablocksPass::createDatablockSubview(OpBuilder &builder, Location loc,
   return builder.create<memref::SubViewOp>(loc, dbPtr, offsets, sizes, strides);
 }
 
-void CreateDatablocksPass::rewireDatablockUses(memref::SubViewOp &subviewOp,
-                                               EdtOp &edtOp,
-                                               SmallVector<Operation *> &uses) {
+void CreateDbsPass::rewireDbUses(memref::SubViewOp &subviewOp, EdtOp &edtOp,
+                                 SmallVector<Operation *> &uses) {
   MLIRContext *ctx = subviewOp.getContext();
   auto builder = OpBuilder(ctx);
 
@@ -365,7 +356,7 @@ void CreateDatablocksPass::rewireDatablockUses(memref::SubViewOp &subviewOp,
     if (auto parentOp = op->getParentOfType<EdtOp>();
         parentOp && parentOp != edtOp)
       continue;
-    /// Update the operation with the new datablock.
+    /// Update the operation with the new db.
     if (auto loadOp = dyn_cast<memref::LoadOp>(op))
       updateOp(loadOp);
     else if (auto storeOp = dyn_cast<memref::StoreOp>(op))
@@ -374,11 +365,11 @@ void CreateDatablocksPass::rewireDatablockUses(memref::SubViewOp &subviewOp,
 
   /// Replace all uses of the original ptr with the subview result
   DominanceInfo domInfo(edtOp->getParentOfType<FuncOp>());
-  // We would need to be more careful about replacing uses here
-  // but for now, the updateOp lambda handles the main cases
+  /// We would need to be more careful about replacing uses here
+  /// but for now, the updateOp lambda handles the main cases
 }
 
-void CreateDatablocksPass::analyzeEdtRegion(EdtOp &edtOp) {
+void CreateDbsPass::analyzeEdtRegion(EdtOp &edtOp) {
   LLVM_DEBUG({
     dbgs() << smallline;
     DBGS() << "EDT region #" << edtOps.size() << ":\n";
@@ -411,11 +402,11 @@ void CreateDatablocksPass::analyzeEdtRegion(EdtOp &edtOp) {
   /// Debug print the candidate datablocks.
   LLVM_DEBUG({
     auto candItr = 0;
-    auto &candMap = candidateDatablocks[edtOp];
+    auto &candMap = DbCandidates[edtOp];
     for (auto &entry : candMap) {
       auto &db = entry.first;
       auto &uses = entry.second;
-      dbgs() << "  - Candidate Datablock #" << candItr++ << ":\n";
+      dbgs() << "  - Candidate Db #" << candItr++ << ":\n";
       dbgs() << "    Memref: " << db.ptr << "\n";
       dbgs() << "    IsString: " << (db.isString ? "true" : "false") << "\n";
       dbgs() << "    Access Type: " << types::toString(db.access) << "\n";
@@ -434,10 +425,11 @@ void CreateDatablocksPass::analyzeEdtRegion(EdtOp &edtOp) {
   });
 }
 
-void CreateDatablocksPass::analyzeValueInEdt(
-    Value dbPtr, SetVector<Value> edtInvariantValues, EdtOp &edtOp) {
+void CreateDbsPass::analyzeValueInEdt(Value dbPtr,
+                                      SetVector<Value> edtInvariantValues,
+                                      EdtOp &edtOp) {
   /// Retrieve the candidate map for the given EDT op.
-  auto &candMap = candidateDatablocks[edtOp];
+  auto &candMap = DbCandidates[edtOp];
   auto &region = edtOp.getRegion();
 
   /// Process all uses of the memref value.
@@ -446,7 +438,7 @@ void CreateDatablocksPass::analyzeValueInEdt(
     if (!region.isAncestor(op->getParentRegion()))
       continue;
 
-    CandidateDatablock db(dbPtr, strAnalysis->isStringMemRef(dbPtr));
+    DbCandidate db(dbPtr, strAnalysis->isStringMemRef(dbPtr));
     SmallVector<Value> indices;
     if (auto loadOp = dyn_cast<memref::LoadOp>(op))
       indices = loadOp.getIndices();
@@ -463,7 +455,7 @@ void CreateDatablocksPass::analyzeValueInEdt(
   }
 
   /// Group candidate datablocks by pointer
-  DenseMap<Value, SmallVector<const CandidateDatablock *, 4>> candByPtr;
+  DenseMap<Value, SmallVector<const DbCandidate *, 4>> candByPtr;
   for (const auto &entry : candMap)
     candByPtr[entry.first.ptr].push_back(&entry.first);
 
@@ -471,21 +463,21 @@ void CreateDatablocksPass::analyzeValueInEdt(
   for (auto &group : candByPtr) {
     auto &vec = group.second;
     std::sort(vec.begin(), vec.end(),
-              [](const CandidateDatablock *a, const CandidateDatablock *b) {
+              [](const DbCandidate *a, const DbCandidate *b) {
                 return a->pinnedIndices.size() < b->pinnedIndices.size();
               });
   }
 
   /// Identify and mark for removal candidates that are supersets of
   /// candidates with a prefix of index values.
-  SetVector<CandidateDatablock> toRemove;
+  SetVector<DbCandidate> toRemove;
   for (auto &group : candByPtr) {
     auto &vec = group.second;
     /// Compare each candidate with those having more pinned indices.
     for (uint32_t i = 0, n = vec.size(); i < n; ++i) {
       for (uint32_t j = i + 1; j < n; ++j) {
-        const CandidateDatablock *prefixCand = vec[i];
-        const CandidateDatablock *cand = vec[j];
+        const DbCandidate *prefixCand = vec[i];
+        const DbCandidate *cand = vec[j];
         /// If db1 is a prefix of db2, mark db2 for removal.
         if (prefixCand->pinnedIndices.size() >= cand->pinnedIndices.size())
           continue;
@@ -503,22 +495,22 @@ void CreateDatablocksPass::analyzeValueInEdt(
   }
 
   /// Remove candidates that are supersets.
-  for (const CandidateDatablock &db : toRemove) {
-    LLVM_DEBUG(dbgs() << "Removing candidate datablock:\n");
+  for (const DbCandidate &db : toRemove) {
+    LLVM_DEBUG(dbgs() << "Removing candidate db:\n");
     LLVM_DEBUG(dbgs() << "  Memref: " << db.ptr << "\n");
     candMap.erase(db);
   }
 
   /// Analyze each candidate's access type.
   for (auto &entry : candMap) {
-    CandidateDatablock &db = entry.first;
+    DbCandidate &db = entry.first;
     for (Operation *op : entry.second) {
       if (isa<memref::LoadOp>(op))
-        db.updateAccess(DatablockAccessType::ReadOnly);
+        db.updateAccess(DbAccessType::ReadOnly);
       else if (isa<memref::StoreOp>(op))
-        db.updateAccess(DatablockAccessType::WriteOnly);
+        db.updateAccess(DbAccessType::WriteOnly);
       else
-        db.updateAccess(DatablockAccessType::ReadWrite);
+        db.updateAccess(DbAccessType::ReadWrite);
     }
   }
 }
@@ -528,12 +520,12 @@ void CreateDatablocksPass::analyzeValueInEdt(
 ///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createCreateDatablocksPass() {
-  return std::make_unique<CreateDatablocksPass>();
+std::unique_ptr<Pass> createCreateDbsPass() {
+  return std::make_unique<CreateDbsPass>();
 }
 
-std::unique_ptr<Pass> createCreateDatablocksPass(bool identifyDbs) {
-  return std::make_unique<CreateDatablocksPass>(identifyDbs);
+std::unique_ptr<Pass> createCreateDbsPass(bool identifyDbs) {
+  return std::make_unique<CreateDbsPass>(identifyDbs);
 }
 } // namespace arts
 } // namespace mlir

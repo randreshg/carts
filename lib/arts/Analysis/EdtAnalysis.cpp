@@ -132,7 +132,7 @@ void EdtEnvManager::adjust() {
 bool EdtEnvManager::addParameter(Value val) { return parameters.insert(val); }
 
 void EdtEnvManager::addDependency(Value val, StringRef mode) {
-  /// If the dependency is not a datablock operation, add it to depsToProcess
+  /// If the dependency is not a db operation, add it to depsToProcess
   auto depOp = dyn_cast<arts::DbControlOp>(val.getDefiningOp());
   if (!depOp) {
     depsToProcess[val] = mode;

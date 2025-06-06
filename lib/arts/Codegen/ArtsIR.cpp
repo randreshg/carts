@@ -10,28 +10,29 @@
 namespace mlir {
 namespace arts {
 
-DbCreateOp createDbCreateOp(OpBuilder &builder, Location loc,
-                            StringRef mode, Value address, 
-                            SmallVector<Value> sizes) {
+DbCreateOp createDbCreateOp(OpBuilder &builder, Location loc, StringRef mode,
+                            Value address, SmallVector<Value> sizes) {
   auto addressType = address.getType().cast<MemRefType>();
-  
+
   /// If sizes are not provided, extract them from the address memref
   if (sizes.empty()) {
     for (int64_t i = 0; i < addressType.getRank(); ++i) {
       if (addressType.isDynamicDim(i)) {
         sizes.push_back(builder.create<memref::DimOp>(loc, address, i));
       } else {
-        sizes.push_back(builder.create<arith::ConstantIndexOp>(loc, addressType.getDimSize(i)));
+        sizes.push_back(builder.create<arith::ConstantIndexOp>(
+            loc, addressType.getDimSize(i)));
       }
     }
   }
-  
+
   /// Create result types
-  auto ptrType = MemRefType::get(addressType.getShape(), addressType.getElementType());
+  auto ptrType =
+      MemRefType::get(addressType.getShape(), addressType.getElementType());
   auto guidType = builder.getI64Type();
-  
-  return builder.create<DbCreateOp>(loc, ptrType, guidType, 
-                                   builder.getStringAttr(mode), address, sizes);
+
+  return builder.create<DbCreateOp>(
+      loc, ptrType, guidType, builder.getStringAttr(mode), address, sizes);
 }
 
 EdtOp createEdtOp(OpBuilder &builder, Location loc, types::EdtType type,
@@ -61,9 +62,8 @@ types::EdtType getEdtType(EdtOp edtOp) {
   return types::EdtType::Task;
 }
 
-
 DbControlOp createDbControlOp(OpBuilder &builder, Location loc,
-                              types::DatablockAccessType mode, Value ptr,
+                              types::DbAccessType mode, Value ptr,
                               SmallVector<Value> pinnedIndices,
                               bool coarseGrained) {
   auto ptrOp = ptr.getDefiningOp();

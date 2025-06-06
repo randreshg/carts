@@ -29,7 +29,7 @@ class Arts_Attr<string attrName, string attrMnemonic, list<Trait> traits = []>
 def DomainAttr : Arts_Attr<"Domain", "domain"> {
   let summary = "Attribute encoding a memref's spatial domain";
   let description = [{
-    The `arts.domain` attribute attaches to an `arts.datablock` op and
+    The `arts.domain` attribute attaches to an `arts.db` op and
     encodes the exact spatial domain of the underlying memref. Fields:
       - `bounds`: ArrayAttr<[lower, upper]> per dimension, where
             each of `lower` and `upper` is either an `IntegerAttr`

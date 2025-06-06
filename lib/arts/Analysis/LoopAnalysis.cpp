@@ -796,7 +796,7 @@ SmallVector<Value, 4> LoopAnalysis::collectDependentValues(Value root) {
 // LoopAnalysisInfo Methods
 //===----------------------------------------------------------------------===//
 
-// DataLifetime methods moved to DatablockTypes.cpp
+// DataLifetime methods moved to DbTypes.cpp
 
 ControlFlowType LoopAnalysisInfo::classifyControlPattern() const {
   if (depth == 0) {
@@ -865,7 +865,7 @@ StringRef toString(ControlFlowType type) {
   llvm_unreachable("Unknown ControlFlowType");
 }
 
-// toString(DataLifetime) moved to DatablockTypes.cpp where it belongs
+// toString(DataLifetime) moved to DbTypes.cpp where it belongs
 
 bool isRegularLoopPattern(const LoopPatternInfo &pattern) {
   return pattern.isSequential || pattern.isStrided;
