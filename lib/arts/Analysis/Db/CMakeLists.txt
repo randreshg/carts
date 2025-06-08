@@ -1,15 +1,14 @@
-# Add source files for db analysis
-file(GLOB CARTS_DB_SOURCE_FILES "*.cpp")
-
-# Add the new data flow analysis files
-set(CARTS_DB_SOURCE_FILES
-    ${CARTS_DB_SOURCE_FILES}
-    DbInfo.cpp
-    DbDataFlowAnalysis.cpp
-)
-
-# Add graph subdirectory
-add_subdirectory(Graph)
+# Add all db source files
+file(GLOB CARTS_DB_ANALYSIS_SOURCE_FILES "*.cpp")
 
 # Set the source files for parent scope
-set(CARTS_DB_SOURCE_FILES ${CARTS_DB_SOURCE_FILES} PARENT_SCOPE)
+set(CARTS_DB_ANALYSIS_SOURCE_FILES ${CARTS_DB_ANALYSIS_SOURCE_FILES} PARENT_SCOPE)
+
+# Add the Graph subdirectory source files
+add_subdirectory(Graph)
+
+# Combine all db analysis source files
+list(APPEND CARTS_DB_ANALYSIS_SOURCE_FILES ${CARTS_DB_ANALYSIS_GRAPH_SOURCE_FILES})
+
+# Set the source files for parent scope
+set(CARTS_DB_ANALYSIS_SOURCE_FILES ${CARTS_DB_ANALYSIS_SOURCE_FILES} PARENT_SCOPE)
