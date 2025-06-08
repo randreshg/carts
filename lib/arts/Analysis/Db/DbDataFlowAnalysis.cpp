@@ -1,7 +1,7 @@
 ///==========================================================================
 /// File: DbDataFlowAnalysis.cpp
 ///
-/// Implementation of data flow analysis for DbGraph.
+/// Implementation of dataflow analysis for DbGraph.
 /// Handles the analysis of data dependencies between DbNodes.
 ///==========================================================================
 
@@ -21,35 +21,9 @@
 #define dbgs() llvm::dbgs()
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
-namespace llvm {
-template <> struct DenseMapInfo<ValueOrInt> {
-  static ValueOrInt getEmptyKey() {
-    return ValueOrInt(llvm::DenseMapInfo<int64_t>::getEmptyKey());
-  }
-  static ValueOrInt getTombstoneKey() {
-    return ValueOrInt(llvm::DenseMapInfo<int64_t>::getTombstoneKey());
-  }
-  static unsigned getHashValue(const ValueOrInt &vai) {
-    if (vai.isValue) {
-      return llvm::DenseMapInfo<mlir::Value>::getHashValue(vai.v_val);
-    } else {
-      return llvm::hash_value(vai.i_val);
-    }
-  }
-  static bool isEqual(const ValueOrInt &L, const ValueOrInt &R) {
-    if (L.isValue != R.isValue)
-      return false;
-    if (L.isValue)
-      return llvm::DenseMapInfo<mlir::Value>::isEqual(L.v_val, R.v_val);
-    return L.i_val == R.i_val;
-  }
-};
-} // namespace llvm
-
 using namespace mlir;
 using namespace mlir::arts;
 
-// Initialize static member
 int DbDataFlowAnalysis::analysisDepth = 0;
 
 void DbDataFlowAnalysis::analyze() {
@@ -57,8 +31,8 @@ void DbDataFlowAnalysis::analyze() {
                     << "- Starting data flow analysis for function: "
                     << graph->getFunction().getName() << "\n");
 
-  // Initialize environment and process the function body
-  Environment env;
+  /// Initialize environment and process the function body
+  DbEnvironment env;
   processRegion(graph->getFunction().getBody(), env);
 
   LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
@@ -66,25 +40,27 @@ void DbDataFlowAnalysis::analyze() {
                     << graph->getFunction().getName() << "\n");
 }
 
-std::pair<Environment, bool>
-DbDataFlowAnalysis::processRegion(Region &region, Environment &env) {
-  Environment newEnv = env;
+std::pair<DbEnvironment, bool>
+DbDataFlowAnalysis::processRegion(Region &region, DbEnvironment &env) {
+  DbEnvironment newEnv = env;
   bool changed = false;
   for (Operation &op : region.getOps()) {
     IndentScope scope;
-    std::pair<Environment, bool> result;
+    std::pair<DbEnvironment, bool> result;
     if (auto edtOp = dyn_cast<EdtOp>(&op))
       result = processEdt(edtOp, newEnv);
     else if (auto ifOp = dyn_cast<scf::IfOp>(&op))
       result = processIf(ifOp, newEnv);
     else if (auto forOp = dyn_cast<scf::ForOp>(&op))
       result = processFor(forOp, newEnv);
+    else if (auto whileOp = dyn_cast<scf::WhileOp>(&op))
+      result = processWhile(whileOp, newEnv);
     else if (auto callOp = dyn_cast<func::CallOp>(&op))
       result = processCall(callOp, newEnv);
     else
       continue;
 
-    // Merge the new environment with the current one
+    /// Merge the new environment with the current one
     newEnv = mergeEnvironments(newEnv, result.first);
     changed = changed || result.second;
   }
@@ -94,20 +70,18 @@ DbDataFlowAnalysis::processRegion(Region &region, Environment &env) {
   return {newEnv, changed};
 }
 
-std::pair<Environment, bool> DbDataFlowAnalysis::processEdt(EdtOp edtOp,
-                                                            Environment &env) {
+std::pair<DbEnvironment, bool>
+DbDataFlowAnalysis::processEdt(EdtOp edtOp, DbEnvironment &env) {
   static int edtCount = 0;
   LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                     << "- Processing EDT #" << edtCount++ << "\n");
 
-  // Process the inputs and outputs of the EDT
+  /// Process the inputs and outputs of the EDT
   auto edtDeps = edtOp.getDependencies();
   bool changed = false;
-  Environment newEnv = env;
-  DbGraph *graph =
-      analysis->getOrCreateGraph(edtOp->getParentOfType<func::FuncOp>());
+  DbEnvironment newEnv = env;
 
-  // Handle input dependencies
+  /// Handle input dependencies
   if (!edtDeps.empty()) {
     LLVM_DEBUG({
       dbgs() << std::string(analysisDepth * 2, ' ')
@@ -121,26 +95,25 @@ std::pair<Environment, bool> DbDataFlowAnalysis::processEdt(EdtOp edtOp,
       dbgs() << "}\n";
     });
 
-    // Reserve dbIns and dbOuts for input and output datablocks
+    /// Reserve dbIns and dbOuts for input and output datablocks
     SmallVector<DbAccessNode *, 4> dbIns, dbOuts;
     dbIns.reserve(edtDeps.size());
     dbOuts.reserve(edtDeps.size());
 
-    // Iterate over the dependencies to fill dbIns and dbOuts
+    /// Iterate over the dependencies to fill dbIns and dbOuts
     for (auto dep : edtDeps) {
-      auto db = dyn_cast<DbControlOp>(dep.getDefiningOp());
+      auto db = dyn_cast<DbAccessOp>(dep.getDefiningOp());
       assert(db && "Dependency must be a db");
-      // Retrieve the db node and categorize based on mode
-      auto *dbInfo = graph->getNode(db);
-      if (auto *dbAccessNode = dyn_cast<DbAccessNode>(dbInfo)) {
-        if (dbAccessNode->isWriter())
-          dbOuts.push_back(dbAccessNode);
-        if (dbAccessNode->isReader())
-          dbIns.push_back(dbAccessNode);
-      }
+      /// Retrieve the db node and categorize based on mode
+      auto *dbAccessNode = graph->getAccessNode(db);
+      assert(dbAccessNode && "Dependency must be a db access op");
+      if (dbAccessNode->isWriter())
+        dbOuts.push_back(dbAccessNode);
+      if (dbAccessNode->isReader())
+        dbIns.push_back(dbAccessNode);
     }
 
-    // Process input datablocks
+    /// Process input datablocks
     LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                       << "  Processing EDT inputs\n");
     for (auto *dbIn : dbIns) {
@@ -153,36 +126,34 @@ std::pair<Environment, bool> DbDataFlowAnalysis::processEdt(EdtOp edtOp,
                           << "    - No previous definition for DB #"
                           << dbIn->getHierId()
                           << ", add edge from entry node\n");
-        // if (auto *entryNode = graph->getEntryNode()) {
-        //   graph->addEdge(*entryNode, *dbIn);
-        // }
         continue;
       }
       LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ') << "Found "
                         << prodDefs.size() << " definitions for DB #"
                         << dbIn->getHierId() << "\n");
-      // Analyze dependencies from producer definitions
+      /// Analyze dependencies from producer definitions
       for (auto &prodDef : prodDefs) {
-        bool isDirect = false;
-        if (!analysis->mayDepend(*prodDef, *dbIn, isDirect))
-          continue;
-        LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
-                          << "Adding edge from DB #" << prodDef->getHierId()
-                          << " to DB #" << dbIn->getHierId() << "\n");
-        bool res = graph->addEdge(dyn_cast<DbAccessOp>(prodDef->getOp()),
-                                  dyn_cast<DbAccessOp>(dbIn->getOp()),
-                                  DbDepType::ReadWrite);
-        if (res) {
+        if (mayDepend(*prodDef, *dbIn)) {
           LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
-                            << "Edge added successfully\n");
-        } else {
-          LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
-                            << "Edge already exists, skipping\n");
+                            << "Adding edge from DB #" << prodDef->getHierId()
+                            << " to DB #" << dbIn->getHierId() << "\n");
+          bool res = graph->addEdge(dyn_cast<DbAccessOp>(prodDef->getOp()),
+                                    dyn_cast<DbAccessOp>(dbIn->getOp()),
+                                    DbDepType::ReadWrite);
+          LLVM_DEBUG({
+            if (res) {
+              dbgs() << std::string(analysisDepth * 2, ' ')
+                     << "Edge added successfully\n";
+            } else {
+              dbgs() << std::string(analysisDepth * 2, ' ')
+                     << "Edge already exists, skipping\n";
+            }
+          });
         }
       }
     }
 
-    // Process output datablocks
+    /// Process output datablocks
     LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                       << "  Processing EDT outputs\n");
     for (auto *dbOut : dbOuts) {
@@ -200,8 +171,7 @@ std::pair<Environment, bool> DbDataFlowAnalysis::processEdt(EdtOp edtOp,
         continue;
       }
       for (auto &prodDef : prodDefs) {
-        bool isDirect = false;
-        if (!analysis->mayDepend(*prodDef, *dbOut, isDirect))
+        if (mayDepend(*prodDef, *dbOut))
           continue;
         LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                           << "Updating environment: DB #" << dbOut->getHierId()
@@ -218,9 +188,9 @@ std::pair<Environment, bool> DbDataFlowAnalysis::processEdt(EdtOp edtOp,
                     << "  Processing EDT body region\n");
   {
     IndentScope bodyScope;
-    Environment newEdtEnv;
+    DbEnvironment newEdtEnv;
     processRegion(edtOp.getBody(), newEdtEnv);
-    // TODO: Integrate parent/child environment relationships if needed
+    /// TODO: Integrate parent/child environment relationships if needed
   }
 
   LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
@@ -229,39 +199,38 @@ std::pair<Environment, bool> DbDataFlowAnalysis::processEdt(EdtOp edtOp,
   return {newEnv, changed};
 }
 
-std::pair<Environment, bool> DbDataFlowAnalysis::processFor(scf::ForOp forOp,
-                                                            Environment &env) {
+std::pair<DbEnvironment, bool>
+DbDataFlowAnalysis::processFor(scf::ForOp forOp, DbEnvironment &env) {
   LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                     << "- Processing ForOp loop\n");
-  Environment loopEnv = env;
+  DbEnvironment loopEnv = env;
   bool overallChanged = false;
   size_t prevEdgeCount = graph->getNumEdges();
   unsigned iterationCount = 0;
   constexpr unsigned maxIterations = 5;
 
-  // Iterate until a fixed-point is reached or maximum iterations are hit
+  /// Iterate until a fixed-point is reached or maximum iterations are hit
   while (true) {
     ++iterationCount;
-    // Process the loop body region
+    /// Process the loop body region
     auto bodyResult = processRegion(forOp->getRegion(0), loopEnv);
-    Environment newLoopEnv = mergeEnvironments(loopEnv, bodyResult.first);
+    DbEnvironment newLoopEnv = mergeEnvironments(loopEnv, bodyResult.first);
     overallChanged |= bodyResult.second;
     size_t currEdgeCount = graph->getNumEdges();
 
-    // Log the current iteration and edge count
     LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ') << "  - Iteration "
                       << iterationCount << " completed: edges=" << currEdgeCount
                       << "\n");
 
-    // Break if no changes were made and the edge count is stable
+    /// Break if no changes were made and the edge count is stable
     if (!bodyResult.second && (currEdgeCount == prevEdgeCount))
       break;
 
-    // If maximum iterations reached without new edges, exit loop
+    /// If maximum iterations reached without new edges, exit loop
     if (iterationCount >= maxIterations && (currEdgeCount == prevEdgeCount))
       break;
 
-    // Prepare for next iteration
+    /// Prepare for next iteration
     loopEnv = std::move(newLoopEnv);
     prevEdgeCount = currEdgeCount;
     LLVM_DEBUG(
@@ -273,13 +242,59 @@ std::pair<Environment, bool> DbDataFlowAnalysis::processFor(scf::ForOp forOp,
   return {loopEnv, overallChanged};
 }
 
-std::pair<Environment, bool> DbDataFlowAnalysis::processIf(scf::IfOp ifOp,
-                                                           Environment &env) {
+std::pair<DbEnvironment, bool>
+DbDataFlowAnalysis::processWhile(scf::WhileOp whileOp, DbEnvironment &env) {
+  LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                    << "- Processing WhileOp loop\n");
+  DbEnvironment loopEnv = env;
+  bool overallChanged = false;
+  size_t prevEdgeCount = graph->getNumEdges();
+  unsigned iterationCount = 0;
+  constexpr unsigned maxIterations = 5;
+
+  /// Iterate until a fixed-point is reached or maximum iterations are hit
+  while (true) {
+    ++iterationCount;
+
+    auto beforeResult = processRegion(whileOp.getBefore(), loopEnv);
+    auto afterResult = processRegion(whileOp.getAfter(), beforeResult.first);
+
+    DbEnvironment newLoopEnv = mergeEnvironments(loopEnv, afterResult.first);
+    bool changedInIteration = beforeResult.second || afterResult.second;
+    overallChanged |= changedInIteration;
+    size_t currEdgeCount = graph->getNumEdges();
+
+    LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ') << "  - Iteration "
+                      << iterationCount << " completed: edges=" << currEdgeCount
+                      << "\n");
+
+    /// Break if no changes were made and the edge count is stable
+    if (!changedInIteration && (currEdgeCount == prevEdgeCount))
+      break;
+
+    /// If maximum iterations reached without new edges, exit loop
+    if (iterationCount >= maxIterations && (currEdgeCount == prevEdgeCount))
+      break;
+
+    /// Prepare for next iteration
+    loopEnv = std::move(newLoopEnv);
+    prevEdgeCount = currEdgeCount;
+    LLVM_DEBUG(
+        dbgs() << std::string(analysisDepth * 2, ' ')
+               << "  - Loop environment updated, iterating fixed-point...\n");
+  }
+  LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                    << "- Finished processing WhileOp loop\n");
+  return {loopEnv, overallChanged};
+}
+
+std::pair<DbEnvironment, bool>
+DbDataFlowAnalysis::processIf(scf::IfOp ifOp, DbEnvironment &env) {
   LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                     << "- Processing IfOp with then and else regions\n");
   auto thenRes = processRegion(ifOp.getThenRegion(), env);
   auto elseRes = processRegion(ifOp.getElseRegion(), env);
-  Environment merged = mergeEnvironments(thenRes.first, elseRes.first);
+  DbEnvironment merged = mergeEnvironments(thenRes.first, elseRes.first);
   bool changed = thenRes.second || elseRes.second;
   LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                     << "  - IfOp regions merged. Environment changed: "
@@ -287,19 +302,24 @@ std::pair<Environment, bool> DbDataFlowAnalysis::processIf(scf::IfOp ifOp,
   return {merged, changed};
 }
 
-std::pair<Environment, bool>
-DbDataFlowAnalysis::processCall(func::CallOp callOp, Environment &env) {
+std::pair<DbEnvironment, bool>
+DbDataFlowAnalysis::processCall(func::CallOp callOp, DbEnvironment &env) {
   LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                     << "- Processing CallOp (ignoring for now)\n");
-  // TODO: Expand call handling logic for inter-procedural analysis
+  /// TODO: Implement inter-procedural analysis. This would involve:
+  /// 1. Finding the callee function.
+  /// 2. Mapping the DbAccessOp operands of the call to the arguments of the
+  ///    callee's entry block.
+  /// 3. Running dataflow analysis on the callee with an initial environment
+  ///    that reflects the state of the passed-in datablocks.
+  /// 4. Propagating the dataflow information from the callee's return to the
+  ///    caller's environment.
   return {env, false};
 }
 
 SmallVector<DbAccessNode *, 4>
-DbDataFlowAnalysis::findDefinition(DbAccessNode &dbNode, Environment &env) {
+DbDataFlowAnalysis::findDefinition(DbAccessNode &dbNode, DbEnvironment &env) {
   IndentScope scope;
-  DbGraph *graph = analysis->getOrCreateGraph(
-      dbNode.getOp()->getParentOfType<func::FuncOp>());
   LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                     << "  Searching for definitions for DB #"
                     << dbNode.getHierId() << "\n");
@@ -310,25 +330,17 @@ DbDataFlowAnalysis::findDefinition(DbAccessNode &dbNode, Environment &env) {
     LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                       << "  - Potential definition found: DB #"
                       << pair.second->getHierId() << "\n");
-    // Pessimistically assume alias implies potential dependency
+    /// Pessimistically assume alias implies potential dependency
     defs.push_back(pair.second);
   }
   return defs;
 }
 
-Environment DbDataFlowAnalysis::mergeEnvironments(const Environment &env1,
-                                                  const Environment &env2) {
+DbEnvironment DbDataFlowAnalysis::mergeEnvironments(const DbEnvironment &env1,
+                                                    const DbEnvironment &env2) {
   LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                     << "  Merging environments\n");
-  Environment mergedEnv = env1;
-  DbGraph *graph = nullptr;
-  if (!env1.empty())
-    graph = analysis->getOrCreateGraph(
-        env1.begin()->first->getParentOfType<func::FuncOp>());
-  else if (!env2.empty())
-    graph = analysis->getOrCreateGraph(
-        env2.begin()->first->getParentOfType<func::FuncOp>());
-
+  DbEnvironment mergedEnv = env1;
   for (auto &pair : env2) {
     auto dbOp = pair.first;
     auto dbNode = pair.second;
@@ -336,33 +348,30 @@ Environment DbDataFlowAnalysis::mergeEnvironments(const Environment &env1,
       LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                         << "  - DB already exists in merged environment: "
                         << dbNode->getHierId() << "\n");
-      auto *node =
-          dyn_cast<DbAccessNode>(graph ? graph->getNode(dbOp) : nullptr);
-      // If they belong to the same parent
-      if (node && (dbNode->getParent() == node->getParent())) {
+      auto *node = graph->getAccessNode(dbOp);
+      /// If they belong to the same parent
+      if (node && (dbNode->getEdtParent() == node->getEdtParent())) {
         LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                           << "    - Same parent, "
                           << "updating definition\n");
         mergedEnv[dbOp] = dbNode;
       }
     } else {
-      // Add new definition into the merged environment
+      /// Add new definition into the merged environment
       LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                         << "  - Adding DB #" << dbNode->getHierId()
                         << " to merged environment\n");
       mergedEnv[dbOp] = dbNode;
     }
   }
-  // Debug final merged environment
+  /// Debug final merged environment
   LLVM_DEBUG({
     dbgs() << std::string(analysisDepth * 2, ' ')
            << "  - Final merged environment: {";
     for (auto &pair : mergedEnv) {
-      if (graph) {
-        if (auto *dbInfo = graph->getNode(pair.first)) {
-          dbgs() << " #" << dbInfo->getHierId() << " -> #"
-                 << pair.second->getHierId() << ",";
-        }
+      if (auto *dbInfo = graph->getAccessNode(pair.first)) {
+        dbgs() << " #" << dbInfo->getHierId() << " -> #"
+               << pair.second->getHierId() << ",";
       }
     }
     dbgs() << "}\n";
@@ -370,51 +379,16 @@ Environment DbDataFlowAnalysis::mergeEnvironments(const Environment &env1,
   return mergedEnv;
 }
 
-
 /// Dependency analysis.
-bool DbDataFlowAnalysis::mayDepend(DatablockNode &prod, DatablockNode &cons,
-                                  bool &isDirect) {
+bool DbDataFlowAnalysis::mayDepend(DbAccessNode &prod, DbAccessNode &cons) {
   /// Verify if they belong to the same EDT parent.
-  if (prod.edtParent != cons.edtParent)
+  if (prod.getEdtParent() != cons.getEdtParent())
     return false;
 
   /// Only consider writer producer and reader consumer.
   if (!prod.isWriter() || !cons.isReader())
     return false;
 
-  /// Check if nodes are different
-  auto compResult = compare(prod, cons);
-  if (compResult == DatablockNodeComp::Different)
-    return false;
-
-  /// There is a direct dependency if
-  isDirect = true ? (compResult == DatablockNodeComp::Equal) : false;
-
-  /// TODO: We can make a more complex analysis here, such as checking an
-  /// affine iteration space, and verifying if the producer and consumer are
-  /// in the same iteration space.
-  return true;
-}
-
-DatablockNodeComp DatablockAnalysis::compare(DatablockNode &A,
-                                             DatablockNode &B) {
-  /// If it is already known that the nodes are equivalent, return true.
-  if (A.duplicates.contains(B.id) || B.duplicates.contains(A.id))
-    return DatablockNodeComp::Equal;
-
-  /// Compute it, otherwise.
-  if (!ptrMayAlias(A, B))
-    return DatablockNodeComp::Different;
-
-  /// Compare indices
-  if (A.indices.size() != B.indices.size())
-    return DatablockNodeComp::BaseAlias;
-
-  if (!std::equal(A.indices.begin(), A.indices.end(), B.indices.begin()))
-    return DatablockNodeComp::BaseAlias;
-
-  /// Cache the result.
-  A.duplicates.insert(B.id);
-  B.duplicates.insert(A.id);
-  return DatablockNodeComp::Equal;
+  /// Check if nodes may alias.
+  return analysis->dbAliasAnalysis->mayAlias(prod, cons);
 }

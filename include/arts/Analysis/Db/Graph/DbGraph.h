@@ -38,10 +38,10 @@ public:
   DbDepEdge *getDependenceEdge(DbAccessOp from, DbAccessOp to);
   DbAllocEdge *getAllocEdge(DbCreateOp from, DbCreateOp to);
 
-  DenseSet<DbDepEdge *> getInDepEdges(DbAccessNode *node);
-  DenseSet<DbDepEdge *> getOutDepEdges(DbAccessNode *node);
-  DenseSet<DbAllocEdge *> getInAllocEdges(DbAllocNode *node);
-  DenseSet<DbAllocEdge *> getOutAllocEdges(DbAllocNode *node);
+  const DenseSet<DbDepEdge *> &getInDepEdges(DbAccessNode *node);
+  const DenseSet<DbDepEdge *> &getOutDepEdges(DbAccessNode *node);
+  const DenseSet<DbAllocEdge *> &getInAllocEdges(DbAllocNode *node);
+  const DenseSet<DbAllocEdge *> &getOutAllocEdges(DbAllocNode *node);
 
   void forEachAllocNode(const function<void(DbAllocNode *)> &fn);
   void forEachAccessNode(const function<void(DbAccessNode *)> &fn);
@@ -51,6 +51,7 @@ public:
 
   void print(llvm::raw_ostream &os);
   void printStatistics(llvm::raw_ostream &os);
+  void exportToDot(llvm::raw_ostream &os);
 
   func::FuncOp getFunction() const { return func; }
   DbInfo *getNode(Operation *op);
@@ -75,9 +76,6 @@ private:
 
   void collectNodes();
   void buildDependencies();
-  void analyzePatternsAndCharacterize();
-  bool detectCycleUtil(DbAccessNode *node, DenseSet<DbAccessNode *> &visited,
-                       DenseSet<DbAccessNode *> &recursionStack);
 };
 
 } // namespace arts

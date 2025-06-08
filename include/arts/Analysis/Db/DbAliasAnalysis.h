@@ -24,14 +24,40 @@ public:
 
   /// Main alias analysis methods
   bool mayAlias(DbInfo &A, DbInfo &B);
+  bool mayAlias(SmallVector<MemoryEffects::EffectInstance, 4> &effectsA,
+                SmallVector<MemoryEffects::EffectInstance, 4> &effectsB);
 
 private:
   DbAnalysis *analysis;
   DenseMap<std::pair<Value, Value>, bool> aliasCache;
 
-  /// Helper methods
-  bool areFromSameAllocation(Value A, Value B);
-  Operation *findRootAllocation(Value val);
+  /// Enhanced memory region overlap analysis
+  bool analyzeMemoryRegionOverlap(DbInfo &A, DbInfo &B);
+  
+  /// Dimension-wise overlap analysis
+  bool analyzeDimensionOverlap(const DimensionAnalysis &dimA,
+                              const DimensionAnalysis &dimB,
+                              int64_t sizeA, int64_t sizeB,
+                              size_t dimIndex);
+  
+  /// Pattern-specific overlap analysis methods
+  bool analyzeConstantOverlap(const ComplexExpr &exprA,
+                             const ComplexExpr &exprB);
+  
+  bool analyzeSequentialOverlap(const ComplexExpr &exprA,
+                               const ComplexExpr &exprB,
+                               int64_t sizeA, int64_t sizeB);
+  
+  bool analyzeStridedOverlap(const ComplexExpr &exprA,
+                            const ComplexExpr &exprB,
+                            int64_t sizeA, int64_t sizeB);
+  
+  bool analyzeBlockedOverlap(const ComplexExpr &exprA,
+                            const ComplexExpr &exprB,
+                            int64_t sizeA, int64_t sizeB);
+  
+  bool analyzeBoundsOverlap(const ComplexExpr &exprA,
+                           const ComplexExpr &exprB);
 
   /// Utility for cache key generation
   std::pair<Value, Value> makeOrderedPair(Value A, Value B) {
