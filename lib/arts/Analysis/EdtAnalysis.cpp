@@ -2,7 +2,7 @@
 /// File: EdtAnalysis.cpp
 ///==========================================================================
 
-#include "arts/Analysis/EdtAnalysis.h"
+#include "arts/Analysis/Edt/EdtAnalysis.h"
 #include "arts/Utils/ArtsUtils.h"
 /// Dialects
 #include "mlir/Dialect/Func/IR/FuncOps.h"
