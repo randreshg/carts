@@ -277,6 +277,7 @@ private:
   unsigned edtCounter = 0;
   llvm::DenseMap<Value, DataBlockCodegen *> datablocks;
   llvm::DenseMap<Region *, EdtCodegen *> edts;
+  llvm::DenseMap<types::RuntimeFunction, func::FuncOp> runtimeFunctionCache;
   llvm::StringMap<LLVM::GlobalOp> llvmStringGlobals;
   bool debug = false;
 };

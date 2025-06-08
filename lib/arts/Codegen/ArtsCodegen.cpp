@@ -847,9 +847,6 @@ ArtsCodegen::~ArtsCodegen() {
     delete edt.second;
 }
 
-/// OPTIMIZATION: Cache function declarations to avoid repeated lookups
-static DenseMap<RuntimeFunction, func::FuncOp> runtimeFunctionCache;
-
 func::FuncOp
 ArtsCodegen::getOrCreateRuntimeFunction(types::RuntimeFunction FnID) {
   /// Check cache first

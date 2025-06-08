@@ -24,6 +24,10 @@ public:
 
   void print(raw_ostream &os) const override;
 
+  static bool classof(const DbInfo *info) {
+    return info->isAlloc();
+  }
+
   /// Get or create an access node for an access operation
   DbAccessNode *getOrCreateAccessNode(DbAccessOp accessOp);
   DbAccessNode *findAccessNode(DbAccessOp accessOp) const;
@@ -51,6 +55,10 @@ public:
                DbAnalysis *analysis);
 
   void print(llvm::raw_ostream &os) const override;
+
+  static bool classof(const DbInfo *info) {
+    return info->isAccess();
+  }
 
   /// Edge management
   void addInDepEdge(DbDepEdge *edge);

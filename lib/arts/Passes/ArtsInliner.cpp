@@ -1,4 +1,10 @@
 
+///==========================================================================
+/// File: ArtsInliner.cpp
+///==========================================================================
+
+#include "ArtsPassDetails.h"
+#include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "mlir/Analysis/CallGraph.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -14,7 +20,7 @@
 using namespace mlir;
 
 namespace {
-struct InlinerInterface : public mlir::InlinerInterface {
+struct ArtsInlinerInterface : public mlir::InlinerInterface {
   using mlir::InlinerInterface::InlinerInterface;
 
   //===--------------------------------------------------------------------===//
@@ -98,13 +104,7 @@ struct InlinerInterface : public mlir::InlinerInterface {
   }
 };
 
-struct InlinerPass : public PassWrapper<InlinerPass, OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(InlinerPass)
-
-  StringRef getArgument() const final { return "inliner"; }
-  StringRef getDescription() const final {
-    return "Inline functions in the program";
-  }
+struct ArtsInlinerPass : public arts::ArtsInlinerBase<ArtsInlinerPass> {
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -217,8 +217,8 @@ private:
 
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createInlinerPass() {
-  return std::make_unique<InlinerPass>();
+std::unique_ptr<Pass> createArtsInlinerPass() {
+  return std::make_unique<ArtsInlinerPass>();
 }
 } // namespace arts
 } // namespace mlir

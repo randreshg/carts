@@ -7,6 +7,7 @@
 
 #include "arts/Analysis/Db/DbInfo.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
+#include "arts/Analysis/Db/Graph/DbNode.h"
 #include "arts/ArtsDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -181,8 +182,7 @@ void DbInfo::analyze() {
   setMemoryLayout();
 
   if (isAllocFlag) {
-    auto createOp = cast<DbCreateOp>(op);
-    if (auto memEff = dyn_cast<MemoryEffectOpInterface>(createOp))
+    if (auto memEff = dyn_cast<MemoryEffectOpInterface>(op))
       memEff.getEffects(effects);
   } else {
     computeRegion();
@@ -627,7 +627,7 @@ ComplexExpr ComplexExpr::analyze(Value index) {
     result.offsetExpr = SymbolicExpr(off);
     result.isMonotonic = (mul > 0);
     /// Heuristic for spatial locality
-    result.hasSpatialReuse = (abs(mul) <= 4);
+    result.hasSpatialReuse = (std::abs(mul) <= 4);
 
     /// Try to infer bounds for strided access
     if (auto bbArg = base.dyn_cast<BlockArgument>()) {
