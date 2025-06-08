@@ -37,7 +37,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdint>
-#define DEBUG_TYPE "create-datablocks"
+#define DEBUG_TYPE "create-dbs"
 #define line "-----------------------------------------\n"
 #define smallline "------------------\n"
 #define dbgs() (llvm::dbgs())
@@ -130,7 +130,7 @@ struct CreateDbsPass : public CreateDbsBase<CreateDbsPass> {
   void runOnOperation() override;
 
   /// Identify datablocks in the module and create them
-  void identifyDbs(ModuleOp module);
+  void identifyDbsInModule(ModuleOp module);
   /// Create a DbCreateOp for a base db
   DbCreateOp createDbAlloc(OpBuilder &builder, Location loc, Value basePtr,
                                 DbAccessType access);
@@ -170,14 +170,14 @@ void CreateDbsPass::runOnOperation() {
     dbgs() << "\n" << line << "CreateDbsPass STARTED\n" << line;
     module.dump();
   });
-  identifyDbs(module);
+  identifyDbsInModule(module);
   LLVM_DEBUG({
     dbgs() << "\n" << line << "CreateDbsPass FINISHED\n" << line;
     module.dump();
   });
 }
 
-void CreateDbsPass::identifyDbs(ModuleOp module) {
+void CreateDbsPass::identifyDbsInModule(ModuleOp module) {
   /// Create a list of EDT ops ordered by post-order traversal.
   module.walk([&](func::FuncOp func) {
     LLVM_DEBUG(DBGS() << "Candidate datablocks in function: " << func.getName()

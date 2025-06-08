@@ -24,8 +24,6 @@ using namespace mlir::arts;
 /// DbInfo Implementation
 ///===----------------------------------------------------------------------===///
 
-unsigned DbInfo::nextGlobalId = 0;
-
 static std::string toString(DbInfo::AccessType type) {
   switch (type) {
   case DbInfo::AccessType::Read:
