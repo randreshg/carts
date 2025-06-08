@@ -4,7 +4,7 @@
 include "mlir/Pass/PassBase.td"
 include "mlir/Rewrite/PassUtil.td"
 
-def InlinerPass : Pass<"inliner", "mlir::ModuleOp"> {
+def ArtsInliner : Pass<"arts-inliner", "mlir::ModuleOp"> {
   let summary = "Inline functions in the program";
   let dependentDialects = [
     "memref::MemRefDialect",
@@ -13,7 +13,7 @@ def InlinerPass : Pass<"inliner", "mlir::ModuleOp"> {
     "arts::ArtsDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createInlinerPass()";
+  let constructor = "mlir::arts::createArtsInlinerPass()";
 }
 
 
@@ -38,13 +38,12 @@ def Db : Pass<"db", "mlir::ModuleOp"> {
     "func::FuncDialect",
     "arts::ArtsDialect",
     "arith::ArithDialect",
-    "affine::AffineDialect",
     "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createDbPass()";
 }
 
-def CreateDbs : Pass<"create-datablocks", "mlir::ModuleOp"> {
+def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
   let summary = "Identify Dbs in the program";
   let dependentDialects = [
     "memref::MemRefDialect",
@@ -70,7 +69,6 @@ def Edt : Pass<"edt", "mlir::ModuleOp"> {
     "func::FuncDialect",
     "arts::ArtsDialect",
     "arith::ArithDialect",
-    "affine::AffineDialect",
     "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createEdtPass()";
@@ -84,7 +82,6 @@ def CreateEpochs : Pass<"create-epochs", "mlir::ModuleOp"> {
     "func::FuncDialect",
     "arts::ArtsDialect",
     "arith::ArithDialect",
-    "affine::AffineDialect",
     "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createCreateEpochsPass()";
@@ -98,7 +95,6 @@ def ConvertArtsToLLVM : Pass<"convert-arts-to-llvm", "mlir::ModuleOp"> {
     "func::FuncDialect",
     "arts::ArtsDialect",
     "arith::ArithDialect",
-    "affine::AffineDialect",
     "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createConvertArtsToLLVMPass()";

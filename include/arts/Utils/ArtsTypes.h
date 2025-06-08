@@ -5,6 +5,7 @@
 #ifndef CARTS_UTILS_ARTSTYPES_H
 #define CARTS_UTILS_ARTSTYPES_H
 
+#include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/InstrTypes.h"
 #include <sys/types.h>
@@ -55,4 +56,27 @@ enum class RuntimeFunction {
 } // end namespace types
 } // end namespace arts
 } // end namespace mlir
+
+/// Specialization of DenseMapInfo for RuntimeFunction enum
+namespace llvm {
+template <> struct DenseMapInfo<mlir::arts::types::RuntimeFunction> {
+  static mlir::arts::types::RuntimeFunction getEmptyKey() {
+    return static_cast<mlir::arts::types::RuntimeFunction>(~0U);
+  }
+
+  static mlir::arts::types::RuntimeFunction getTombstoneKey() {
+    return static_cast<mlir::arts::types::RuntimeFunction>(~0U - 1);
+  }
+
+  static unsigned getHashValue(mlir::arts::types::RuntimeFunction val) {
+    return static_cast<unsigned>(val);
+  }
+
+  static bool isEqual(mlir::arts::types::RuntimeFunction lhs,
+                      mlir::arts::types::RuntimeFunction rhs) {
+    return lhs == rhs;
+  }
+};
+} // namespace llvm
+
 #endif // CARTS_UTILS_ARTSTYPES_H

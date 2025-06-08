@@ -8,13 +8,13 @@
 /*
 cgeist simple.cpp  -std=c++17 -fopenmp -O0 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include > simple.mlir
 
-carts-opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --symbol-dce -debug-only=convert-openmp-to-arts &> simple-arts.mlir
+carts-opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --arts-inliner --convert-openmp-to-arts --symbol-dce -debug-only=convert-openmp-to-arts &> simple-arts.mlir
 
-carts-opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --symbol-dce &> simple-arts.mlir
+carts-opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --symbol-dce &> simple-arts.mlir
 
-carts-opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize-polygeist --create-datablocks --canonicalize-polygeist --db --cse -debug-only=db,create-datablocks &> simple-arts.mlir
+carts-opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize-polygeist --create-dbs --canonicalize-polygeist --db --cse -debug-only=db,create-dbs &> simple-arts.mlir
 
-carts-opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize-polygeist --create-datablocks --canonicalize-polygeist --db --cse --canonicalize-scf-for --canonicalize-polygeist --polygeist-mem2reg --edt-pointer-rematerialization --create-epochs --canonicalize-polygeist --convert-arts-to-llvm --canonicalize-polygeist --cse --convert-polygeist-to-llvm --cse -debug-only=convert-arts-to-llvm &> simple-arts.mlir
+carts-opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize-polygeist --loop-invariant-code-motion --canonicalize-polygeist --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize-polygeist --create-dbs --canonicalize-polygeist --db --cse --canonicalize-scf-for --canonicalize-polygeist --polygeist-mem2reg --edt-pointer-rematerialization --create-epochs --canonicalize-polygeist --convert-arts-to-llvm --canonicalize-polygeist --cse --convert-polygeist-to-llvm --cse -debug-only=convert-arts-to-llvm &> simple-arts.mlir
 
 mlir-translate --mlir-to-llvmir simple-arts.mlir &> simple-arts.ll
 
@@ -30,6 +30,7 @@ python3 run_comparison.py \
   --graph_output_file matrixmul_graph.png \
   --md_output_file matrixmul_summary.md
 */
+
 
 int main() {
   srand(time(NULL));

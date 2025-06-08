@@ -18,7 +18,7 @@ class RewritePatternSet;
 class DominanceInfo;
 
 namespace arts {
-std::unique_ptr<Pass> createAlwaysInlinePass();
+std::unique_ptr<Pass> createArtsInlinerPass();
 std::unique_ptr<Pass> createConvertOpenMPtoARTSPass();
 std::unique_ptr<Pass> createEdtPass();
 std::unique_ptr<Pass> createCreateDbsPass();
