@@ -25,7 +25,7 @@ class DbAccessNode;
 
 /// Environment represents the current state of data block definitions
 /// at a particular point in the program.
-using Environment = DenseMap<DbAccessOp, DbAccessNode *>;
+using DbEnvironment = DenseMap<DbAccessOp, DbAccessNode *>;
 
 class DbDataFlowAnalysis {
 public:
@@ -39,27 +39,33 @@ public:
   void analyze();
 
   /// Process a region and return the resulting environment
-  std::pair<Environment, bool> processRegion(Region &region, Environment &env);
+  std::pair<DbEnvironment, bool> processRegion(Region &region,
+                                               DbEnvironment &env);
 
   /// Process different types of operations
-  std::pair<Environment, bool> processEdt(EdtOp edtOp, Environment &env);
-  std::pair<Environment, bool> processFor(scf::ForOp forOp, Environment &env);
-  std::pair<Environment, bool> processIf(scf::IfOp ifOp, Environment &env);
-  std::pair<Environment, bool> processCall(func::CallOp callOp,
-                                           Environment &env);
+  std::pair<DbEnvironment, bool> processEdt(EdtOp edtOp, DbEnvironment &env);
+  std::pair<DbEnvironment, bool> processFor(scf::ForOp forOp,
+                                            DbEnvironment &env);
+  std::pair<DbEnvironment, bool> processWhile(scf::WhileOp whileOp,
+                                              DbEnvironment &env);
+  std::pair<DbEnvironment, bool> processIf(scf::IfOp ifOp, DbEnvironment &env);
+  std::pair<DbEnvironment, bool> processCall(func::CallOp callOp,
+                                             DbEnvironment &env);
 
   /// Helper methods
   SmallVector<DbAccessNode *, 4> findDefinition(DbAccessNode &dbNode,
-                                                Environment &env);
-  Environment mergeEnvironments(const Environment &env1,
-                                const Environment &env2);
+                                                DbEnvironment &env);
+  DbEnvironment mergeEnvironments(const DbEnvironment &env1,
+                                  const DbEnvironment &env2);
+
+  /// Dependency analysis.
+  bool mayDepend(DbAccessNode &prod, DbAccessNode &cons);
 
 private:
   DbAnalysis *analysis;
-  std::unique_ptr<DbGraph> graph;
+  DbGraph *graph;
   static int analysisDepth;
 
-  
   /// Helper struct for managing debug indentation
   struct IndentScope {
     IndentScope() { ++analysisDepth; }

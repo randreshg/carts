@@ -9,8 +9,6 @@
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Db/DbInfo.h"
 #include "arts/ArtsDialect.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -34,6 +32,14 @@ static std::string generateAllocId(unsigned id) {
     n = (n - 1) / 26;
   }
   return s;
+}
+
+/// Helper to generate sanitized DOT identifiers.
+static std::string sanitizeForDot(StringRef s) {
+  std::string id = s.str();
+  std::replace(id.begin(), id.end(), '.', '_');
+  std::replace(id.begin(), id.end(), '-', '_');
+  return id;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -170,31 +176,34 @@ bool DbGraph::insertDepEdge(DbAccessOp from, DbAccessOp to, DbDepType type) {
     return false;
 
   auto key = std::make_pair(fromNode, toNode);
-  if (depEdges.find(key) != depEdges.end())
+  if (depEdges.count(key))
     return false;
 
   auto edge = std::make_unique<DbDepEdge>(fromNode, toNode, type);
+  fromNode->addOutDepEdge(edge.get());
+  toNode->addInDepEdge(edge.get());
   depEdges[key] = std::move(edge);
   return true;
 }
 
 bool DbGraph::insertAllocEdge(DbCreateOp from, DbCreateOp to) {
-  DbAllocNode *fromNode = getAllocNode(from);
-  DbAllocNode *toNode = getAllocNode(to);
+  DbAllocNode *fromNode = getOrCreateAllocNode(from);
+  DbAllocNode *toNode = getOrCreateAllocNode(to);
   if (!fromNode || !toNode)
     return false;
 
   auto key = std::make_pair(fromNode, toNode);
-  if (allocEdges.find(key) != allocEdges.end())
+  if (allocEdges.count(key))
     return false;
 
   auto edge = std::make_unique<DbAllocEdge>(fromNode, toNode);
+  fromNode->addOutAllocEdge(edge.get());
+  toNode->addInAllocEdge(edge.get());
   allocEdges[key] = std::move(edge);
   return true;
 }
 
-DbDepEdge *DbGraph::getDependenceEdge(memref::SubViewOp from,
-                                      memref::SubViewOp to) {
+DbDepEdge *DbGraph::getDependenceEdge(DbAccessOp from, DbAccessOp to) {
   DbAccessNode *fromNode = getAccessNode(from);
   DbAccessNode *toNode = getAccessNode(to);
   if (!fromNode || !toNode)
@@ -220,40 +229,20 @@ DbAllocEdge *DbGraph::getAllocEdge(DbCreateOp from, DbCreateOp to) {
 /// Edge Iteration
 ///===----------------------------------------------------------------------===///
 
-DenseSet<DbDepEdge *> DbGraph::getInDepEdges(DbAccessNode *node) {
-  DenseSet<DbDepEdge *> result;
-  for (auto &pair : depEdges) {
-    if (pair.second->getTo() == node)
-      result.insert(pair.second.get());
-  }
-  return result;
+const DenseSet<DbDepEdge *> &DbGraph::getInDepEdges(DbAccessNode *node) {
+  return node->getInDepEdges();
 }
 
-DenseSet<DbDepEdge *> DbGraph::getOutDepEdges(DbAccessNode *node) {
-  DenseSet<DbDepEdge *> result;
-  for (auto &pair : depEdges) {
-    if (pair.second->getFrom() == node)
-      result.insert(pair.second.get());
-  }
-  return result;
+const DenseSet<DbDepEdge *> &DbGraph::getOutDepEdges(DbAccessNode *node) {
+  return node->getOutDepEdges();
 }
 
-DenseSet<DbAllocEdge *> DbGraph::getInAllocEdges(DbAllocNode *node) {
-  DenseSet<DbAllocEdge *> result;
-  for (auto &pair : allocEdges) {
-    if (pair.second->getTo() == node)
-      result.insert(pair.second.get());
-  }
-  return result;
+const DenseSet<DbAllocEdge *> &DbGraph::getInAllocEdges(DbAllocNode *node) {
+  return node->getInAllocEdges();
 }
 
-DenseSet<DbAllocEdge *> DbGraph::getOutAllocEdges(DbAllocNode *node) {
-  DenseSet<DbAllocEdge *> result;
-  for (auto &pair : allocEdges) {
-    if (pair.second->getFrom() == node)
-      result.insert(pair.second.get());
-  }
-  return result;
+const DenseSet<DbAllocEdge *> &DbGraph::getOutAllocEdges(DbAllocNode *node) {
+  return node->getOutAllocEdges();
 }
 
 ///===----------------------------------------------------------------------===///
@@ -281,12 +270,8 @@ void DbGraph::build() {
   LLVM_DEBUG(DBGS() << "Building simplified db graph\n");
   invalidate();
 
-  /// Phase 1: Find all db operations and create nodes
   collectNodes();
-  /// Phase 2: Build dependence relationships
   buildDependencies();
-  /// Phase 3: Analyze patterns and characterize
-  analyzePatternsAndCharacterize();
 
   isBuilt = true;
   needsRebuild = false;
@@ -322,12 +307,95 @@ void DbGraph::print(llvm::raw_ostream &os) {
   });
 }
 
+void DbGraph::exportToDot(llvm::raw_ostream &os) {
+  os << "digraph DbGraph {\n";
+  os << "  compound=true;\n";
+  os << "  node [shape=box];\n";
+  os << "  graph [label=\"" << func.getName()
+     << "\", labelloc=t, fontsize=20];\n\n";
+
+  /// Define subgraphs for each allocation
+  forEachAllocNode([&](DbAllocNode *allocNode) {
+    os << "  subgraph cluster_" << sanitizeForDot(allocNode->getHierId())
+       << " {\n";
+    os << "    label = \"Alloc: " << allocNode->getHierId() << "\";\n";
+    os << "    style=filled;\n";
+    os << "    color=lightgrey;\n\n";
+
+    bool hasAccessNodes = false;
+    allocNode->forEachAccessNode([&](DbAccessNode *accessNode) {
+      hasAccessNodes = true;
+      os << "    " << sanitizeForDot(accessNode->getHierId()) << " [label=\""
+         << accessNode->getHierId() << "\"];\n";
+    });
+
+    if (!hasAccessNodes) {
+      os << "    " << sanitizeForDot(allocNode->getHierId()) << " [label=\""
+         << allocNode->getHierId() << "\", style=invisible];\n";
+    }
+
+    os << "  }\n\n";
+  });
+
+  /// Define dependency edges
+  os << "  // Dependency Edges\n";
+  forEachAccessNode([&](DbAccessNode *accessNode) {
+    for (auto *edge : accessNode->getOutDepEdges()) {
+      DbAccessNode *toNode = edge->getTo();
+      os << "  " << sanitizeForDot(accessNode->getHierId()) << " -> "
+         << sanitizeForDot(toNode->getHierId()) << ";\n";
+    }
+  });
+  os << "\n";
+
+  /// Define allocation edges
+  os << "  // Allocation Edges\n";
+  forEachAllocNode([&](DbAllocNode *allocNode) {
+    for (auto *edge : allocNode->getOutAllocEdges()) {
+      DbAllocNode *toNode = edge->getTo();
+
+      /// Find representative node for 'from'
+      std::string fromRep;
+      bool fromHasAccess = false;
+      allocNode->forEachAccessNode([&](DbAccessNode *n) {
+        if (!fromHasAccess) {
+          fromRep = sanitizeForDot(n->getHierId());
+          fromHasAccess = true;
+        }
+      });
+      if (!fromHasAccess) {
+        fromRep = sanitizeForDot(allocNode->getHierId());
+      }
+
+      /// Find representative node for 'to'
+      std::string toRep;
+      bool toHasAccess = false;
+      toNode->forEachAccessNode([&](DbAccessNode *n) {
+        if (!toHasAccess) {
+          toRep = sanitizeForDot(n->getHierId());
+          toHasAccess = true;
+        }
+      });
+      if (!toHasAccess) {
+        toRep = sanitizeForDot(toNode->getHierId());
+      }
+
+      os << "  " << fromRep << " -> " << toRep << " [lhead=cluster_"
+         << sanitizeForDot(toNode->getHierId()) << ", ltail=cluster_"
+         << sanitizeForDot(allocNode->getHierId())
+         << ", style=dashed, color=blue];\n";
+    }
+  });
+
+  os << "}\n";
+}
+
 ///===----------------------------------------------------------------------===///
 /// Private Construction Phases
 ///===----------------------------------------------------------------------===///
 
 void DbGraph::collectNodes() {
-  LLVM_DEBUG(DBGS() << "Phase 1: Collecting nodes\n");
+  LLVM_DEBUG(DBGS() << "Phase 1 - Collecting nodes\n");
 
   /// Collect allocations and their accesses in one pass
   func.walk([&](DbCreateOp allocOp) {
@@ -342,54 +410,21 @@ void DbGraph::collectNodes() {
     }
   });
 
-  LLVM_DEBUG(dbgs() << "Collected " << allocNodes.size() << " allocations and "
-                    << accessNodeMap.size() << " accesses\n");
+  LLVM_DEBUG(DBGS() << "Phase 1 - Collected " << allocNodes.size()
+                    << " allocations and " << accessNodeMap.size()
+                    << " accesses\n");
 }
 
 void DbGraph::buildDependencies() {
-  LLVM_DEBUG(DBGS() << "Phase 2: Building dependencies\n");
+  LLVM_DEBUG(DBGS() << "Phase 2 - Building dependencies\n");
   dataFlowAnalysis->analyze();
 
-  LLVM_DEBUG(DBGS() << "Phase 2 complete: Data flow analysis finished\n");
-}
-
-void DbGraph::analyzePatternsAndCharacterize() {
-  LLVM_DEBUG(DBGS() << "Phase 3: Analyzing patterns and characterizing\n");
-
-  // Analyze access patterns for each access node
-  forEachAccessNode([](DbAccessNode *node) { node->analyze(); });
-
-  // Characterize each allocation based on its access patterns
-  forEachAllocNode([](DbAllocNode *node) { node->analyze(); });
+  LLVM_DEBUG(DBGS() << "Phase 2 - Data flow analysis finished\n");
 }
 
 ///===----------------------------------------------------------------------===///
 /// Helper Methods
 ///===----------------------------------------------------------------------===///
-
-bool DbGraph::detectCycleUtil(DbAccessNode *node,
-                              DenseSet<DbAccessNode *> &visited,
-                              DenseSet<DbAccessNode *> &recursionStack) {
-  visited.insert(node);
-  recursionStack.insert(node);
-
-  for (auto *edge : getOutDepEdges(node)) {
-    auto *nextNode = edge->getTo();
-
-    if (recursionStack.find(nextNode) != recursionStack.end()) {
-      return true; // Found cycle
-    }
-
-    if (visited.find(nextNode) == visited.end()) {
-      if (detectCycleUtil(nextNode, visited, recursionStack)) {
-        return true;
-      }
-    }
-  }
-
-  recursionStack.erase(node);
-  return false;
-}
 
 DbInfo *DbGraph::getNode(Operation *op) {
   if (!op)
@@ -410,7 +445,6 @@ DbInfo *DbGraph::getNode(DbControlOp dbOp) {
 }
 
 DbInfo *DbGraph::getEntryNode() {
-  /// For simplicity, return the first allocation node as the entry node
   if (!allocNodes.empty())
     return allocNodes.begin()->second.get();
 
