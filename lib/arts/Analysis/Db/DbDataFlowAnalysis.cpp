@@ -17,7 +17,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#define DEBUG_TYPE "dataflow-analysis"
+#define DEBUG_TYPE "db-dataflow-analysis"
 #define dbgs() llvm::dbgs()
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
@@ -27,16 +27,16 @@ using namespace mlir::arts;
 int DbDataFlowAnalysis::analysisDepth = 0;
 
 void DbDataFlowAnalysis::analyze() {
-  LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
-                    << "- Starting data flow analysis for function: "
+  LLVM_DEBUG(DBGS() << std::string(analysisDepth * 2, ' ')
+                    << "- Starting Dataflow analysis for function: "
                     << graph->getFunction().getName() << "\n");
 
   /// Initialize environment and process the function body
   DbEnvironment env;
   processRegion(graph->getFunction().getBody(), env);
 
-  LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
-                    << "Finished data flow analysis for function: "
+  LLVM_DEBUG(DBGS() << std::string(analysisDepth * 2, ' ')
+                    << "Finished Dataflow analysis for function: "
                     << graph->getFunction().getName() << "\n");
 }
 
@@ -87,7 +87,7 @@ DbDataFlowAnalysis::processEdt(EdtOp edtOp, DbEnvironment &env) {
       dbgs() << std::string(analysisDepth * 2, ' ')
              << " Initial environment: {";
       for (auto entry : newEnv) {
-        if (auto *dbInfo = graph->getNode(entry.first)) {
+        if (auto *dbInfo = graph->getNode(entry.first.getOperation())) {
           dbgs() << "  #" << dbInfo->getHierId() << " -> #"
                  << entry.second->getHierId() << ",";
         }
@@ -102,8 +102,14 @@ DbDataFlowAnalysis::processEdt(EdtOp edtOp, DbEnvironment &env) {
 
     /// Iterate over the dependencies to fill dbIns and dbOuts
     for (auto dep : edtDeps) {
-      auto db = dyn_cast<DbAccessOp>(dep.getDefiningOp());
-      assert(db && "Dependency must be a db");
+      mlir::Operation *defOp = dep.getDefiningOp();
+      if (!defOp || (!isa<memref::SubViewOp>(defOp) && !isa<memref::CastOp>(defOp))) {
+        LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                          << "Warning: Dependency is not a supported db access op, skipping\n");
+        continue;
+      }
+      
+      auto db = getDbAccessOp(defOp);
       /// Retrieve the db node and categorize based on mode
       auto *dbAccessNode = graph->getAccessNode(db);
       assert(dbAccessNode && "Dependency must be a db access op");
@@ -137,8 +143,8 @@ DbDataFlowAnalysis::processEdt(EdtOp edtOp, DbEnvironment &env) {
           LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                             << "Adding edge from DB #" << prodDef->getHierId()
                             << " to DB #" << dbIn->getHierId() << "\n");
-          bool res = graph->addEdge(dyn_cast<DbAccessOp>(prodDef->getOp()),
-                                    dyn_cast<DbAccessOp>(dbIn->getOp()),
+          bool res = graph->addEdge(getDbAccessOp(prodDef->getOp()),
+                                    getDbAccessOp(dbIn->getOp()),
                                     DbDepType::ReadWrite);
           LLVM_DEBUG({
             if (res) {
@@ -166,7 +172,7 @@ DbDataFlowAnalysis::processEdt(EdtOp edtOp, DbEnvironment &env) {
                           << "    - No previous definition for DB #"
                           << dbOut->getHierId()
                           << ", updating environment with new definition\n");
-        newEnv[dyn_cast<DbAccessOp>(dbOut->getOp())] = dbOut;
+        newEnv[getDbAccessOp(dbOut->getOp())] = dbOut;
         changed |= true;
         continue;
       }
@@ -177,7 +183,7 @@ DbDataFlowAnalysis::processEdt(EdtOp edtOp, DbEnvironment &env) {
                           << "Updating environment: DB #" << dbOut->getHierId()
                           << " now defined from DB #" << prodDef->getHierId()
                           << "\n");
-        newEnv[dyn_cast<DbAccessOp>(prodDef->getOp())] = dbOut;
+        newEnv[getDbAccessOp(prodDef->getOp())] = dbOut;
         changed |= true;
       }
     }

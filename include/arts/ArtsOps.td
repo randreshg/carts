@@ -71,9 +71,9 @@ def DbCreateOp : Arts_Op<"db_create", [
     Variadic<Index>:$sizes
   );
 
-  let results = (outs AnyMemRef:$ptr, I64:$guid);
+  let results = (outs AnyMemRef:$ptr);
   let assemblyFormat = [{
-    $mode $address `:` type($address) `[` $sizes `]` `->` attr-dict `:` type($ptr) `,` type($guid)
+    $mode `(` $address `:` type($address) `)` `[` $sizes `]` `->` attr-dict `:` type($ptr)
   }];
 }
 

@@ -18,7 +18,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#define DEBUG_TYPE "db-analysis"
+#define DEBUG_TYPE "db-info"
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -265,12 +265,9 @@ bool DbInfo::computeRegion() {
   }
 
   auto rank = sizes.size();
-  if (rank == 0) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "DB #" << hierId << " (" << op->getLoc()
-               << "): Detected 0-rank access (scalar), region is trivial.\n");
+  /// Trivial case, no analysis needed
+  if (rank == 0)
     return true;
-  }
 
   /// Initialize enhanced per-dimension analysis
   dimensionAnalysis.assign(rank, DimensionAnalysis());

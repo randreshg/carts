@@ -186,7 +186,6 @@ void ConvertArtsToLLVMPass::handleDbCreate(DbCreateOp &op) {
   
   // Replace the results
   op.getPtr().replaceAllUsesWith(typedPtr);
-  op.getGuid().replaceAllUsesWith(guid);
   
   // Mark for removal
   opsToRemove.insert(op);

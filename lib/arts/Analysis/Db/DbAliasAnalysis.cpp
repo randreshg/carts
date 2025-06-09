@@ -6,10 +6,6 @@
 #include "arts/Analysis/Db/DbAliasAnalysis.h"
 #include "arts/Analysis/Db/DbInfo.h"
 #include "arts/Analysis/Db/Graph/DbNode.h"
-#include "arts/ArtsDialect.h"
-#include "mlir/Analysis/AliasAnalysis.h"
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "llvm/Support/Debug.h"
 #include <algorithm>
 #include <numeric>

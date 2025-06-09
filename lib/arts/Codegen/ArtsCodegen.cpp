@@ -273,7 +273,7 @@ void EdtCodegen::process(Location loc) {
     if (isValueConstant(size))
       return;
     
-    // Check cache first to avoid duplicate parameters
+    /// Check cache first to avoid duplicate parameters
     auto cacheIt = parameterCache.find(size);
     if (cacheIt != parameterCache.end()) {
       entryDbs[db].sizeIndex[sizeIdx] = cacheIt->second;
@@ -290,7 +290,7 @@ void EdtCodegen::process(Location loc) {
     if (isValueConstant(offset))
       return;
       
-    // Check cache first to avoid duplicate parameters
+    /// Check cache first to avoid duplicate parameters
     auto cacheIt = parameterCache.find(offset);
     if (cacheIt != parameterCache.end()) {
       entryDbs[db].offsetIndex[offsetIdx] = cacheIt->second;
@@ -305,10 +305,10 @@ void EdtCodegen::process(Location loc) {
   /// Process each dependency.
   if (!deps.empty()) {
     for (const auto &dep : deps) {
-      // Handle both DbControlOp results and memref.subview results
+      /// Handle both DbControlOp results and memref.subview results
       auto db = AC.getDb(dep);
       if (!db) {
-        // For subview results, handle dependency differently
+        /// For subview results, handle dependency differently
         processSubviewDependency(dep, loc);
         continue;
       }
@@ -382,39 +382,36 @@ void EdtCodegen::process(Location loc) {
 }
 
 void EdtCodegen::processSubviewDependency(Value subview, Location loc) {
-  // For subview dependencies, we need to trace back to the source DbCreateOp
+  /// For subview dependencies, we need to trace back to the source DbCreateOp
   auto subviewOp = subview.getDefiningOp<memref::SubViewOp>();
   if (!subviewOp) return;
   
-  // Trace back through the subview chain to find the original DbCreateOp
+  /// Trace back through the subview chain to find the original DbCreateOp
   Value source = subviewOp.getSource();
   while (auto parentSubview = source.getDefiningOp<memref::SubViewOp>()) {
     source = parentSubview.getSource();
   }
   
-  // Check if the source is a DbCreateOp
+  /// Check if the source is a DbCreateOp
   auto dbCreateOp = source.getDefiningOp<arts::DbCreateOp>();
   if (!dbCreateOp) return;
-  
-  // Get the GUID from the DbCreateOp
-  Value guid = dbCreateOp.getGuid();
-  
-  // Determine if this is an input or output dependency based on the mode
+
+  /// Determine if this is an input or output dependency based on the mode
   StringRef mode = dbCreateOp.getMode();
   bool isInput = (mode == "in" || mode == "inout");
   bool isOutput = (mode == "out" || mode == "inout");
   
-  // Set EDT slot
+  /// Set EDT slot
   Value edtSlot = builder.create<memref::LoadOp>(loc, depC).getResult();
   
-  // For input dependencies, increment dependency count and add to recording list
+  /// For input dependencies, increment dependency count and add to recording list
   if (isInput) {
     Value one = AC.createIndexConstant(1, loc);
     auto currDep = builder.create<memref::LoadOp>(loc, depC);
     auto newDep = builder.create<arith::AddIOp>(loc, currDep, one).getResult();
     builder.create<memref::StoreOp>(loc, newDep, depC);
     
-    // Create a simple db info struct for this subview
+    /// Create a simple db info struct for this subview
     auto *dbCG = new DataBlockCodegen(AC);
     dbCG->setGuid(guid);
     dbCG->setEdtSlot(edtSlot);
@@ -422,9 +419,9 @@ void EdtCodegen::processSubviewDependency(Value subview, Location loc) {
     depsToRecord.push_back(dbCG);
   }
   
-  // For output dependencies, add to satisfaction list
+  /// For output dependencies, add to satisfaction list
   if (isOutput) {
-    // Create a simple db info struct for this subview
+    /// Create a simple db info struct for this subview
     auto *dbCG = new DataBlockCodegen(AC);
     dbCG->setGuid(guid);
     dbCG->setEdtSlot(edtSlot);
@@ -807,7 +804,7 @@ void EdtCodegen::createEntry(Location loc) {
     
     /// PTR view: Create a view that directly accesses the .ptr field from each artsEdtDep_t
     /// The stride between elements should be sizeof(artsEdtDep_t), and we offset to the .ptr field
-    auto ptrFieldOffset = AC.createIndexConstant(16, loc); // Offset to .ptr field in artsEdtDep_t
+    auto ptrFieldOffset = AC.createIndexConstant(16, loc); /// Offset to .ptr field in artsEdtDep_t
     auto ptrByteOffset = builder.create<arith::AddIOp>(loc, offsetInBytes, ptrFieldOffset);
     auto entryPtr = builder.create<memref::ViewOp>(
         loc, ptrViewType, flatBuffer, ptrByteOffset, entrySizes);
@@ -876,7 +873,7 @@ ArtsCodegen::getOrCreateRuntimeFunction(types::RuntimeFunction FnID) {
   }
 
   if (!funcOp) {
-    // Create a new declaration if we need one.
+    /// Create a new declaration if we need one.
     switch (FnID) {
 #define ARTS_RTL(Enum, Str, ...)                                               \
   case Enum:                                                                   \
@@ -968,12 +965,12 @@ void ArtsCodegen::decrementDbLatchCount(Value dbGuid, Location loc) {
 }
 
 Value ArtsCodegen::getDbMode(StringRef mode, Location loc) {
-  int enumValue = 10; // ARTS_DB_PIN (default)
+  int enumValue = 10; /// ARTS_DB_PIN (default)
   if (mode == "in")
-    enumValue = 8; // ARTS_DB_READ
+    enumValue = 8; /// ARTS_DB_READ
   else if (mode == "out")
-    enumValue = 9; // ARTS_DB_WRITE (assuming this enum value)
-  // inout uses default ARTS_DB_PIN
+    enumValue = 9; /// ARTS_DB_WRITE (assuming this enum value)
+  /// inout uses default ARTS_DB_PIN
   
   return createIntConstant(enumValue, Int32, loc);
 }
@@ -1031,7 +1028,7 @@ Value ArtsCodegen::getCurrentEpochGuid(Location loc) {
 Value ArtsCodegen::getCurrentEdtGuid(Location loc) {
   func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentGuid);
   assert(func && "Runtime function should exist");
-  // Note: Do NOT mark as readnone - this returns runtime-dependent values
+  /// Note: Do NOT mark as readnone - this returns runtime-dependent values
   func->setAttr("llvm.nounwind", builder.getUnitAttr());
   auto callOp = builder.create<func::CallOp>(loc, func);
   return callOp.getResult(0);
@@ -1040,7 +1037,7 @@ Value ArtsCodegen::getCurrentEdtGuid(Location loc) {
 Value ArtsCodegen::getTotalWorkers(Location loc) {
   func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetTotalWorkers);
   assert(func && "Runtime function should exist");
-  // Mark as readnone since total workers is constant during execution
+  /// Mark as readnone since total workers is constant during execution
   func->setAttr("llvm.readnone", builder.getUnitAttr());
   func->setAttr("llvm.nounwind", builder.getUnitAttr());
   auto callOp = builder.create<func::CallOp>(loc, func);
@@ -1061,7 +1058,7 @@ Value ArtsCodegen::getTotalNodes(Location loc) {
 Value ArtsCodegen::getCurrentWorker(Location loc) {
   func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentWorker);
   assert(func && "Runtime function should exist");
-  // Mark as readnone - worker ID is constant within EDT execution for CSE optimization
+  /// Mark as readnone - worker ID is constant within EDT execution for CSE optimization
   func->setAttr("llvm.readnone", builder.getUnitAttr());
   func->setAttr("llvm.nounwind", builder.getUnitAttr());
   auto callOp = builder.create<func::CallOp>(loc, func);
@@ -1072,7 +1069,7 @@ Value ArtsCodegen::getCurrentWorker(Location loc) {
 Value ArtsCodegen::getCurrentNode(Location loc) {
   func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentNode);
   assert(func && "Runtime function should exist");
-  // Mark as readnone - node ID is constant within EDT execution for CSE optimization
+  /// Mark as readnone - node ID is constant within EDT execution for CSE optimization
   func->setAttr("llvm.readnone", builder.getUnitAttr());
   func->setAttr("llvm.nounwind", builder.getUnitAttr());
   auto callOp = builder.create<func::CallOp>(loc, func);
@@ -1409,7 +1406,7 @@ void ArtsCodegen::createPrintfCall(Location loc, llvm::StringRef format,
   }
   assert(printfFunc && "printf function not found");
 
-  // Get or create the format string global and cast it to a generic pointer
+  /// Get or create the format string global and cast it to a generic pointer
   auto formatStrPtr = getOrCreateGlobalLLVMString(loc, format);
   auto castedFormatPtr =
       builder.create<LLVM::BitcastOp>(loc, llvmPtr, formatStrPtr);
@@ -1419,7 +1416,7 @@ void ArtsCodegen::createPrintfCall(Location loc, llvm::StringRef format,
   callArgs.push_back(castedFormatPtr);
   callArgs.append(args.begin(), args.end());
 
-  // Create the call operation with a symbol reference
+  /// Create the call operation with a symbol reference
   builder.create<LLVM::CallOp>(
       loc, TypeRange{builder.getI32Type()},
       SymbolRefAttr::get(builder.getContext(), printfFunc.getName()), callArgs);

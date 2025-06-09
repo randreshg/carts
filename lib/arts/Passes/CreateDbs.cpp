@@ -2,7 +2,7 @@
 /// File: CreateDbs.cpp
 //
 // This pass analyzes EDT regions within a function to discover candidate
-// datablocks. A candidate db is a memref value used in an EDT region
+// datablocks. A candidate DB is a memref value used in an EDT region
 // that is defined outside that region. In addition, the pass classifies the
 // candidate into one of three categories based on its access pattern:
 // read‑only, write‑only, or read–write.
@@ -133,14 +133,11 @@ struct CreateDbsPass : public CreateDbsBase<CreateDbsPass> {
   void identifyDbsInModule(ModuleOp module);
   /// Create a DbCreateOp for a base db
   DbCreateOp createDbAlloc(OpBuilder &builder, Location loc, Value basePtr,
-                                DbAccessType access);
-  /// Create a memref.subview into a created db
-  memref::SubViewOp createDbSubview(OpBuilder &builder, Location loc,
-                                    DbCreateOp dbCreateOp,
-                                    SmallVector<Value> pinnedIndices);
-  /// Rewrites db uses for memref.subview
-  void rewireDbUses(memref::SubViewOp &subviewOp, EdtOp &edtOp,
-                    SmallVector<Operation *> &uses);
+                           DbAccessType access);
+  /// Create a DbAccessOp into a created db
+  DbAccessOp createDbAccess(OpBuilder &builder, Location loc,
+                            DbCreateOp dbCreateOp,
+                            SmallVector<Value> pinnedIndices);
   /// Analyze the EDT region to collect candidate datablocks.
   void analyzeEdtRegion(EdtOp &edtOp);
   /// Analyze a memref value's uses in the Edt and update candidate
@@ -189,7 +186,7 @@ void CreateDbsPass::identifyDbsInModule(ModuleOp module) {
   });
 
   /// For each candidate db, create new datablocks in the EDT region.
-  auto ctx = module.getContext();
+  const auto ctx = module.getContext();
   Location loc = UnknownLoc::get(ctx);
   OpBuilder builder(ctx);
   uint32_t edtItr = 0;
@@ -204,7 +201,11 @@ void CreateDbsPass::identifyDbsInModule(ModuleOp module) {
              << edtItr << "\n";
     });
 
-    auto edtParent = edtOp->getParentOfType<EdtOp>();
+    struct DepInfo {
+      SmallVector<Operation *> uses;
+      unsigned indicesToDrop;
+    };
+    SmallVector<DepInfo> depInfos;
 
     /// Group candidates by base pointer to avoid creating duplicate datablocks
     DenseMap<Value,
@@ -219,22 +220,19 @@ void CreateDbsPass::identifyDbsInModule(ModuleOp module) {
       Value basePtr = ptrGroup.first;
       auto &candidates = ptrGroup.second;
 
-      /// Set insertion point to the current EDT op.
-      OpBuilder::InsertionGuard guard(builder);
-      builder.setInsertionPoint(edtOp);
-      if (auto *defOp = basePtr.getDefiningOp()) {
-        /// If the memref allocation is within the same parent EDT, insert after
-        /// it.
-        if (isa<memref::AllocaOp>(defOp) &&
-            defOp->getParentOfType<EdtOp>() == edtParent)
-          builder.setInsertionPointAfter(defOp);
-      }
-
       /// Create or reuse a db allocation for this base pointer
       DbCreateOp dbCreateOp = nullptr;
       if (auto it = createdDbs.find(basePtr); it != createdDbs.end()) {
         dbCreateOp = it->second;
       } else {
+        OpBuilder::InsertionGuard IG(builder);
+        if (auto *defOp = basePtr.getDefiningOp())
+          builder.setInsertionPointAfter(defOp);
+        else if (auto arg = basePtr.dyn_cast<BlockArgument>())
+          builder.setInsertionPointToStart(arg.getOwner());
+        else
+          llvm_unreachable("Support for global variables is not implemented");
+
         /// Determine the most permissive access type for this base pointer
         DbAccessType combinedAccess = DbAccessType::Unknown;
         for (auto &[cand, uses] : candidates) {
@@ -248,22 +246,61 @@ void CreateDbsPass::identifyDbsInModule(ModuleOp module) {
         createdDbs[basePtr] = dbCreateOp;
       }
 
-      /// Create subview operations for each candidate
+      /// Create DbAccessOps for each candidate
+      OpBuilder::InsertionGuard IG(builder);
+      builder.setInsertionPoint(edtOp);
       for (auto &[dbCand, dbUses] : candidates) {
-        auto subviewOp =
-            createDbSubview(builder, loc, dbCreateOp, dbCand.pinnedIndices);
-        rewireDbUses(subviewOp, edtOp, *dbUses);
-        edtDeps.push_back(subviewOp.getResult());
+        auto dbAccessOp =
+            createDbAccess(builder, loc, dbCreateOp, dbCand.pinnedIndices);
+        depInfos.push_back({*dbUses, (unsigned)dbCand.pinnedIndices.size()});
+        edtDeps.push_back(dbAccessOp.getResult());
       }
     }
 
     /// Create a new EDT op with the new dependency operands.
     {
-      OpBuilder::InsertionGuard guard(builder);
+      OpBuilder::InsertionGuard IG(builder);
       builder.setInsertionPoint(edtOp);
       /// Move the region body from the old EDT op to the new one.
       auto newEdtOp = createEdtOp(builder, loc, getEdtType(edtOp), edtDeps);
-      newEdtOp.getRegion().takeBody(edtOp.getRegion());
+      Region &newRegion = newEdtOp.getRegion();
+
+      // The new EdtOp might be created with a region with one or more blocks.
+      // We are going to erase them before moving the body of the old op.
+      newRegion.getBlocks().clear();
+
+      /// Move the body from the old EDT.
+      newRegion.takeBody(edtOp.getRegion());
+
+      /// Rewire uses of the old datablocks directly with the DbAccessOp
+      /// results.
+      LLVM_DEBUG(DBGS() << "New EDT has " << edtDeps.size() << " dependencies, "
+                        << depInfos.size() << " depInfos\n");
+
+      for (unsigned i = 0; i < depInfos.size() && i < edtDeps.size(); ++i) {
+        auto &info = depInfos[i];
+        Value dbAccessResult = edtDeps[i];
+
+        auto updateOp = [&](auto opToUpdate, unsigned drop) {
+          OpBuilder::InsertionGuard IG(builder);
+          builder.setInsertionPoint(opToUpdate);
+          auto origIndices = opToUpdate.getIndices();
+
+          SmallVector<Value, 4> newIndices;
+          for (unsigned j = drop; j < origIndices.size(); ++j)
+            newIndices.push_back(origIndices[j]);
+
+          opToUpdate.getMemrefMutable().assign(dbAccessResult);
+          opToUpdate.getIndicesMutable().assign(newIndices);
+        };
+
+        for (Operation *op : info.uses) {
+          if (auto loadOp = dyn_cast<memref::LoadOp>(op))
+            updateOp(loadOp, info.indicesToDrop);
+          else if (auto storeOp = dyn_cast<memref::StoreOp>(op))
+            updateOp(storeOp, info.indicesToDrop);
+        }
+      }
     }
 
     /// Collect old dependencies to remove them later.
@@ -280,11 +317,18 @@ void CreateDbsPass::identifyDbsInModule(ModuleOp module) {
   /// Remove the old ops.
   LLVM_DEBUG(dbgs() << "Removing old datablocks\n");
   removeOps(module, builder, opsToRemove);
+
+  for (auto &entry : createdDbs) {
+    Value basePtr = entry.first;
+    DbCreateOp dbCreateOp = entry.second;
+    basePtr.replaceUsesWithIf(dbCreateOp.getPtr(), [&](OpOperand &use) {
+      return use.getOwner() != dbCreateOp;
+    });
+  }
 }
 
 DbCreateOp CreateDbsPass::createDbAlloc(OpBuilder &builder, Location loc,
-                                             Value basePtr,
-                                             DbAccessType access) {
+                                        Value basePtr, DbAccessType access) {
   /// Determine the mode string
   StringRef modeStr = types::toString(access);
 
@@ -292,12 +336,11 @@ DbCreateOp CreateDbsPass::createDbAlloc(OpBuilder &builder, Location loc,
   return arts::createDbCreateOp(builder, loc, modeStr, basePtr, {});
 }
 
-memref::SubViewOp
-CreateDbsPass::createDbSubview(OpBuilder &builder, Location loc,
-                               DbCreateOp dbCreateOp,
-                               SmallVector<Value> pinnedIndices) {
-  Value dbPtr =
-      dbCreateOp.getPtr(); // Get the pointer from the created db
+DbAccessOp CreateDbsPass::createDbAccess(OpBuilder &builder, Location loc,
+                                         DbCreateOp dbCreateOp,
+                                         SmallVector<Value> pinnedIndices) {
+  /// Get the pointer from the created db
+  Value dbPtr = dbCreateOp.getPtr();
   auto dbPtrType = dbPtr.getType().cast<MemRefType>();
 
   int64_t rank = dbPtrType.getRank();
@@ -310,11 +353,12 @@ CreateDbsPass::createDbSubview(OpBuilder &builder, Location loc,
 
   for (int64_t i = 0; i < rank; ++i) {
     if (i < pinnedCount) {
-      // For pinned dimensions, use the pinned index as offset and size 1
+      /// For pinned dimensions, use the pinned index as offset and size 1
       offsets.push_back(pinnedIndices[i]);
       sizes.push_back(builder.getIndexAttr(1));
     } else {
-      // For non-pinned dimensions, start from 0 and use the full dimension size
+      /// For non-pinned dimensions, start from 0 and use the full dimension
+      /// size
       offsets.push_back(builder.getIndexAttr(0));
       if (dbPtrType.isDynamicDim(i)) {
         sizes.push_back(
@@ -326,47 +370,8 @@ CreateDbsPass::createDbSubview(OpBuilder &builder, Location loc,
     strides.push_back(builder.getIndexAttr(1));
   }
 
-  return builder.create<memref::SubViewOp>(loc, dbPtr, offsets, sizes, strides);
-}
-
-void CreateDbsPass::rewireDbUses(memref::SubViewOp &subviewOp, EdtOp &edtOp,
-                                 SmallVector<Operation *> &uses) {
-  MLIRContext *ctx = subviewOp.getContext();
-  auto builder = OpBuilder(ctx);
-
-  const unsigned drop = 0; // We don't drop indices for subviews
-
-  auto updateOp = [&](auto opToUpdate) {
-    OpBuilder::InsertionGuard IG(builder);
-    builder.setInsertionPoint(opToUpdate);
-    auto origIndices = opToUpdate.getIndices();
-
-    /// Create a new indices vector and remove the 'drop' leading indices
-    SmallVector<Value, 4> newIndices;
-    for (unsigned i = drop; i < origIndices.size(); ++i)
-      newIndices.push_back(origIndices[i]);
-
-    /// Update the memref operand and indices.
-    opToUpdate.getMemrefMutable().assign(subviewOp.getResult());
-    opToUpdate.getIndicesMutable().assign(newIndices);
-  };
-
-  for (Operation *op : uses) {
-    /// Just rewire if the parent of type EdtOp is the same
-    if (auto parentOp = op->getParentOfType<EdtOp>();
-        parentOp && parentOp != edtOp)
-      continue;
-    /// Update the operation with the new db.
-    if (auto loadOp = dyn_cast<memref::LoadOp>(op))
-      updateOp(loadOp);
-    else if (auto storeOp = dyn_cast<memref::StoreOp>(op))
-      updateOp(storeOp);
-  }
-
-  /// Replace all uses of the original ptr with the subview result
-  DominanceInfo domInfo(edtOp->getParentOfType<FuncOp>());
-  /// We would need to be more careful about replacing uses here
-  /// but for now, the updateOp lambda handles the main cases
+  auto subviewOp = builder.create<memref::SubViewOp>(loc, dbPtr, offsets, sizes, strides);
+  return DbAccessOp(subviewOp);
 }
 
 void CreateDbsPass::analyzeEdtRegion(EdtOp &edtOp) {
@@ -406,11 +411,11 @@ void CreateDbsPass::analyzeEdtRegion(EdtOp &edtOp) {
     for (auto &entry : candMap) {
       auto &db = entry.first;
       auto &uses = entry.second;
-      dbgs() << "  - Candidate Db #" << candItr++ << ":\n";
-      dbgs() << "    Memref: " << db.ptr << "\n";
-      dbgs() << "    IsString: " << (db.isString ? "true" : "false") << "\n";
-      dbgs() << "    Access Type: " << types::toString(db.access) << "\n";
-      dbgs() << "    Pinned Indices:";
+      dbgs() << "  - Candidate Db #" << candItr++ << ":\n"
+             << "    Memref: " << db.ptr << "\n"
+             << "    IsString: " << (db.isString ? "true" : "false") << "\n"
+             << "    Access Type: " << types::toString(db.access) << "\n"
+             << "    Pinned Indices:";
       if (db.pinnedIndices.empty())
         dbgs() << "  none\n";
       else {
@@ -437,6 +442,10 @@ void CreateDbsPass::analyzeValueInEdt(Value dbPtr,
     Operation *op = use.getOwner();
     if (!region.isAncestor(op->getParentRegion()))
       continue;
+
+    if (auto userEdt = op->getParentOfType<EdtOp>())
+      if (userEdt != edtOp)
+        continue;
 
     DbCandidate db(dbPtr, strAnalysis->isStringMemRef(dbPtr));
     SmallVector<Value> indices;
@@ -478,7 +487,7 @@ void CreateDbsPass::analyzeValueInEdt(Value dbPtr,
       for (uint32_t j = i + 1; j < n; ++j) {
         const DbCandidate *prefixCand = vec[i];
         const DbCandidate *cand = vec[j];
-        /// If db1 is a prefix of db2, mark db2 for removal.
+        /// If DB1 is a prefix of DB2, mark DB2 for removal.
         if (prefixCand->pinnedIndices.size() >= cand->pinnedIndices.size())
           continue;
         bool isPrefix = true;
@@ -496,8 +505,8 @@ void CreateDbsPass::analyzeValueInEdt(Value dbPtr,
 
   /// Remove candidates that are supersets.
   for (const DbCandidate &db : toRemove) {
-    LLVM_DEBUG(dbgs() << "Removing candidate db:\n");
-    LLVM_DEBUG(dbgs() << "  Memref: " << db.ptr << "\n");
+    LLVM_DEBUG(dbgs() << "Removing candidate db:\n"
+                      << "  Memref: " << db.ptr << "\n");
     candMap.erase(db);
   }
 

@@ -87,7 +87,19 @@ void DbPass::runOnOperation() {
   /// Retrieve the shared analysis result.
   auto &dbAnalysis = getAnalysis<DbAnalysis>();
   module.walk([&](func::FuncOp func) {
-    dbAnalysis.getOrCreateGraph(func);
+    auto graph = dbAnalysis.getOrCreateGraph(func);
+    LLVM_DEBUG(graph->print(dbgs()));
+    
+    /// Export dot graph to a file
+    std::string filename = "DbGraph_" + func.getName().str() + ".dot";
+    std::error_code EC;
+    llvm::raw_fd_ostream dotFile(filename, EC);
+    if (!EC) {
+      graph->exportToDot(dotFile);
+      LLVM_DEBUG(DBGS() << "Exported dot graph to: " << filename << "\n");
+    } else {
+      LLVM_DEBUG(DBGS() << "Failed to create dot file: " << filename << "\n");
+    }
   });
   // mlir::arts::DbGraph graph(module, nullptr);
   // graph.build();
