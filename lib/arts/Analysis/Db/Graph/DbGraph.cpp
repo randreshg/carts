@@ -288,23 +288,125 @@ void DbGraph::invalidate() {
 }
 
 void DbGraph::print(llvm::raw_ostream &os) {
+  os << "===============================================\n";
   os << "DbGraph for function: " << func.getName() << "\n";
-  os << "  Allocs: " << allocNodes.size() << "\n";
-  os << "  Accesses: " << accessNodeMap.size() << "\n";
+  os << "===============================================\n";
+  os << "Summary:\n";
+  os << "  Allocations: " << allocNodes.size() << "\n";
+  os << "  Access nodes: " << accessNodeMap.size() << "\n";
   os << "  Dependence edges: " << depEdges.size() << "\n";
-  os << "  Alloc edges: " << allocEdges.size() << "\n";
+  os << "  Allocation edges: " << allocEdges.size() << "\n";
+  os << "\n";
 
-  os << "\nAlloc nodes:\n";
-  forEachAllocNode([&](DbAllocNode *node) {
-    node->print(os);
+  // Print allocation hierarchy with their access nodes and dependencies
+  os << "Allocation Hierarchy:\n";
+  os << "=====================\n";
+  forEachAllocNode([&](DbAllocNode *allocNode) {
+    os << "Allocation [" << allocNode->getHierId() << "]: ";
+    allocNode->print(os);
+    os << "\n";
+
+    // Count and list access nodes for this allocation
+    std::vector<DbAccessNode *> accessNodes;
+    allocNode->forEachAccessNode(
+        [&](DbAccessNode *accessNode) { accessNodes.push_back(accessNode); });
+
+    if (accessNodes.empty()) {
+      os << "   └── (no access nodes)\n";
+    } else {
+      os << "   └── Access nodes (" << accessNodes.size() << "):\n";
+
+      for (size_t i = 0; i < accessNodes.size(); ++i) {
+        DbAccessNode *accessNode = accessNodes[i];
+        bool isLast = (i == accessNodes.size() - 1);
+        os << "       " << (isLast ? "└──" : "├──") << " ["
+           << accessNode->getHierId() << "]: ";
+        accessNode->print(os);
+        os << "\n";
+
+        // Show outgoing dependencies for this access node
+        auto outEdges = getOutDepEdges(accessNode);
+        if (!outEdges.empty()) {
+          os << "       " << (isLast ? "   " : "│  ") << "    Dependencies:\n";
+          for (auto *edge : outEdges) {
+            os << "       " << (isLast ? "   " : "│  ") << "      → ["
+               << edge->getTo()->getHierId() << "] (";
+            switch (edge->getType()) {
+            case DbDepType::Read:
+              os << "Read";
+              break;
+            case DbDepType::Write:
+              os << "Write";
+              break;
+            case DbDepType::ReadWrite:
+              os << "ReadWrite";
+              break;
+            }
+            os << ")\n";
+          }
+        }
+      }
+    }
+
+    // Show outgoing allocation edges
+    auto outAllocEdges = getOutAllocEdges(allocNode);
+    if (!outAllocEdges.empty()) {
+      os << "   └── Allocation dependencies:\n";
+      for (auto *edge : outAllocEdges) {
+        os << "       → Allocation [" << edge->getTo()->getHierId() << "]\n";
+      }
+    }
     os << "\n";
   });
 
-  os << "\nAccess nodes:\n";
-  forEachAccessNode([&](DbAccessNode *node) {
-    node->print(os);
+  // Print dependency summary
+  if (!depEdges.empty()) {
+    os << "Dependency Summary:\n";
+    os << "==================\n";
+
+    // Count dependencies by type
+    size_t readCount = 0, writeCount = 0, readWriteCount = 0;
+    for (auto &pair : depEdges) {
+      switch (pair.second->getType()) {
+      case DbDepType::Read:
+        readCount++;
+        break;
+      case DbDepType::Write:
+        writeCount++;
+        break;
+      case DbDepType::ReadWrite:
+        readWriteCount++;
+        break;
+      }
+    }
+
+    os << "  Read dependencies: " << readCount << "\n";
+    os << "  Write dependencies: " << writeCount << "\n";
+    os << "  ReadWrite dependencies: " << readWriteCount << "\n";
     os << "\n";
-  });
+
+    // List all dependencies in order
+    os << "All Dependencies:\n";
+    for (auto &pair : depEdges) {
+      auto *edge = pair.second.get();
+      os << "  [" << edge->getFrom()->getHierId() << "] → ["
+         << edge->getTo()->getHierId() << "] (";
+      switch (edge->getType()) {
+      case DbDepType::Read:
+        os << "Read";
+        break;
+      case DbDepType::Write:
+        os << "Write";
+        break;
+      case DbDepType::ReadWrite:
+        os << "ReadWrite";
+        break;
+      }
+      os << ")\n";
+    }
+  }
+
+  os << "===============================================\n";
 }
 
 void DbGraph::exportToDot(llvm::raw_ostream &os) {
@@ -401,9 +503,10 @@ void DbGraph::collectNodes() {
   func.walk([&](DbCreateOp allocOp) {
     auto *allocNode = getOrCreateAllocNode(allocOp);
 
-    /// Find all subviews that use this allocation
+    /// Find all subviews and casts that use this allocation
     for (auto *user : allocOp.getPtr().getUsers()) {
-      if (auto accessOp = dyn_cast<DbAccessOp>(user)) {
+      if (isa<memref::SubViewOp>(user) || isa<memref::CastOp>(user)) {
+        auto accessOp = getDbAccessOp(user);
         auto *accessNode = allocNode->getOrCreateAccessNode(accessOp);
         accessNodeMap[accessOp] = accessNode;
       }
@@ -432,8 +535,10 @@ DbInfo *DbGraph::getNode(Operation *op) {
 
   if (auto allocOp = dyn_cast<DbCreateOp>(op))
     return getAllocNode(allocOp);
-  if (auto accessOp = dyn_cast<DbAccessOp>(op))
+  if (isa<memref::SubViewOp>(op) || isa<memref::CastOp>(op)) {
+    auto accessOp = getDbAccessOp(op);
     return getAccessNode(accessOp);
+  }
 
   return nullptr;
 }
