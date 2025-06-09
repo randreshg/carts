@@ -29,10 +29,9 @@ DbCreateOp createDbCreateOp(OpBuilder &builder, Location loc, StringRef mode,
   /// Create result types
   auto ptrType =
       MemRefType::get(addressType.getShape(), addressType.getElementType());
-  auto guidType = builder.getI64Type();
 
-  return builder.create<DbCreateOp>(
-      loc, ptrType, guidType, builder.getStringAttr(mode), address, sizes);
+  return builder.create<DbCreateOp>(loc, ptrType, builder.getStringAttr(mode),
+                                    address, sizes);
 }
 
 EdtOp createEdtOp(OpBuilder &builder, Location loc, types::EdtType type,

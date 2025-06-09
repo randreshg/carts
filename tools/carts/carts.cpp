@@ -69,15 +69,15 @@ static cl::opt<bool> Opt("O3", cl::desc("Apply Optimizations"),
 static cl::opt<bool> EmitLLVM("emit-llvm", cl::desc("Emit LLVM IR output"),
                               cl::init(false));
 
-static cl::opt<bool> IdentifyDbs(
-    "identify-dbs", cl::desc("Number of optimization iterations"), cl::init(1));
+static cl::opt<bool> IdentifyDbs("identify-dbs",
+                                 cl::desc("Number of optimization iterations"),
+                                 cl::init(1));
 
 static cl::opt<unsigned>
     OptIterations("iterations", cl::desc("Number of optimization iterations"),
                   cl::init(1));
 
-static cl::opt<bool> Debug("g", cl::desc("Enable debug mode"),
-                          cl::init(false));
+static cl::opt<bool> Debug("g", cl::desc("Enable debug mode"), cl::init(false));
 
 //===----------------------------------------------------------------------===//
 // Helper Functions for Initialization and Pass Setup
@@ -178,19 +178,17 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context) {
   pm.addPass(createSymbolDCEPass());
   pm.addPass(arts::createEdtPass());
   pm.addPass(arts::createEdtInvariantCodeMotionPass());
-  pm.addPass(arts::createCreateDbsPass(IdentifyDbs));
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCanonicalizerPass());
 
   /// Db pass to identify and optimize data dependencies
+  pm.addPass(arts::createCreateDbsPass(IdentifyDbs));
   pm.addPass(arts::createDbPass());
   pm.addPass(createCSEPass());
   pm.addPass(createMem2Reg());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
 
   /// Create epochs
   pm.addPass(arts::createEdtPointerRematerializationPass());
   pm.addPass(arts::createCreateEpochsPass());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
 
   /// Convert ARTS to LLVM
   pm.addPass(arts::createConvertArtsToLLVMPass(Debug));
