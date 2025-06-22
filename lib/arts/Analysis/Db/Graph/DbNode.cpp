@@ -50,11 +50,18 @@ DbDepNode *DbAllocNode::getOrCreateDepNode(DbDepOp depOp) {
   if (it != depNodeMap.end())
     return it->second;
 
-  // Create new dep node
+  /// Create new dep node
   unsigned childId = nextChildId++;
-  auto depNode =
-      std::make_unique<DbDepNode>(depOp, false, this, analysis);
+  auto depNode = std::make_unique<DbDepNode>(depOp, false, this, analysis);
   DbDepNode *ptr = depNode.get();
+
+  /// Set hierarchical ID: ParentAllocId.ChildNumber (e.g., A.1, A.2, B.1, etc.)
+  std::string depHierId = getHierId() + "." + std::to_string(childId);
+  ptr->setHierId(depHierId);
+
+  LLVM_DEBUG(DBGS() << "Created DbDepNode with hierarchy ID: " << depHierId
+                    << "\n");
+
   depNodes.push_back(std::move(depNode));
   depNodeMap[depOp] = ptr;
   return ptr;
@@ -100,10 +107,12 @@ const DenseSet<DbAllocEdge *> &DbAllocNode::getOutAllocEdges() const {
 /// DbDepNode Implementation
 ///===----------------------------------------------------------------------===///
 
-DbDepNode::DbDepNode(DbDepOp depOp, bool isAllocFlag,
-                           DbAllocNode *parent, DbAnalysis *analysis)
-    : DbInfo(depOp.getOperation(), isAllocFlag, analysis),
-      dbDepOp(depOp) {}
+DbDepNode::DbDepNode(DbDepOp depOp, bool isAllocFlag, DbAllocNode *parent,
+                     DbAnalysis *analysis)
+    : DbInfo(depOp.getOperation(), isAllocFlag, analysis), dbDepOp(depOp) {
+  if (parent)
+    this->parent = parent;
+}
 
 void DbDepNode::print(llvm::raw_ostream &os) const {
   os << "DbDepNode " << id << " (" << getHierId() << ")\n";

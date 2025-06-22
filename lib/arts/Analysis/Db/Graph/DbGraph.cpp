@@ -499,22 +499,58 @@ void DbGraph::exportToDot(llvm::raw_ostream &os) {
 void DbGraph::collectNodes() {
   LLVM_DEBUG(DBGS() << "Phase 1 - Collecting nodes\n");
 
-  /// Collect allocations and their depes in one pass
+  /// Step 1: Collect all DbAllocOp operations and create their nodes
   func.walk([&](DbAllocOp allocOp) {
-    auto *allocNode = getOrCreateAllocNode(allocOp);
+    getOrCreateAllocNode(allocOp);
+  });
 
-    /// Find all depes that use this allocation
-    for (auto *user : allocOp.getPtr().getUsers()) {
-      if (auto depOp = dyn_cast<DbDepOp>(user)) {
-        auto *depNode = allocNode->getOrCreateDepNode(depOp);
-        depNodeMap[depOp] = depNode;
-      }
+  /// Step 2: Collect all DbDepOp operations and associate them with their root DbAllocOp
+  func.walk([&](DbDepOp depOp) {
+    /// Find the root DbAllocOp for this DbDepOp (may be through a chain)
+    DbAllocOp rootAlloc = findRootAllocOp(depOp);
+    if (rootAlloc) {
+      auto *allocNode = getOrCreateAllocNode(rootAlloc);
+      auto *depNode = allocNode->getOrCreateDepNode(depOp);
+      depNodeMap[depOp] = depNode;
+      
+      LLVM_DEBUG(DBGS() << "Collected DbDepOp " << depOp 
+                        << " under root allocation " << rootAlloc << "\n");
+    } else {
+      LLVM_DEBUG(DBGS() << "WARNING: Could not find root DbAllocOp for " 
+                        << depOp << "\n");
     }
   });
 
   LLVM_DEBUG(DBGS() << "Phase 1 - Collected " << allocNodes.size()
                     << " allocations and " << depNodeMap.size()
                     << " depes\n");
+}
+
+DbAllocOp DbGraph::findRootAllocOp(DbDepOp depOp) {
+  Value source = depOp.getSource();
+  const int maxChainDepth = 10;
+  int depth = 0;
+  
+  while (depth < maxChainDepth) {
+    if (auto allocOp = source.getDefiningOp<DbAllocOp>())
+      return allocOp;
+    
+    if (auto chainedDepOp = source.getDefiningOp<DbDepOp>()) {
+      source = chainedDepOp.getSource();
+      depth++;
+      continue;
+    }
+    
+    /// If we reach here, the source is neither DbAllocOp nor DbDepOp
+    break;
+  }
+  
+  if (depth >= maxChainDepth) {
+    LLVM_DEBUG(DBGS() << "WARNING: Maximum chain depth exceeded for " 
+                      << depOp << "\n");
+  }
+  
+  return nullptr;
 }
 
 void DbGraph::buildDependencies() {

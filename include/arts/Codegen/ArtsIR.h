@@ -20,7 +20,7 @@ types::EdtType getEdtType(EdtOp edtOp);
 
 /// DB creation functions
 DbAllocOp createDbAllocOp(OpBuilder &builder, Location loc,
-                            StringRef mode, Value address, 
+                            StringRef mode, Value address = nullptr, 
                             SmallVector<Value> sizes = {});
 
 DbDepOp createDbDepOp(OpBuilder &builder, Location loc,
