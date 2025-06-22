@@ -61,26 +61,36 @@ types::EdtType getEdtType(EdtOp edtOp) {
 
 DbAllocOp createDbAllocOp(OpBuilder &builder, Location loc, StringRef mode,
                           Value address, SmallVector<Value> sizes) {
-  auto addressType = address.getType().cast<MemRefType>();
+  MemRefType ptrType;
+  
+  if (address) {
+    auto addressType = address.getType().cast<MemRefType>();
 
-  /// If sizes are not provided, extract them from the address memref
-  if (sizes.empty()) {
-    for (int64_t i = 0; i < addressType.getRank(); ++i) {
-      if (addressType.isDynamicDim(i)) {
-        sizes.push_back(builder.create<memref::DimOp>(loc, address, i));
-      } else {
-        sizes.push_back(builder.create<arith::ConstantIndexOp>(
-            loc, addressType.getDimSize(i)));
+    /// If sizes are not provided, extract them from the address memref
+    if (sizes.empty()) {
+      for (int64_t i = 0; i < addressType.getRank(); ++i) {
+        if (addressType.isDynamicDim(i)) {
+          sizes.push_back(builder.create<memref::DimOp>(loc, address, i));
+        } else {
+          sizes.push_back(builder.create<arith::ConstantIndexOp>(
+              loc, addressType.getDimSize(i)));
+        }
       }
     }
+
+    /// Create result types
+    ptrType = MemRefType::get(addressType.getShape(), addressType.getElementType());
+  } else {
+    /// If no address is provided, we need to infer the type from sizes or use a default
+    /// For now, create a basic i32 memref type - this should be refined based on usage
+    SmallVector<int64_t> shape;
+    for (auto size : sizes) {
+      shape.push_back(ShapedType::kDynamic); // Dynamic dimensions
+    }
+    ptrType = MemRefType::get(shape, builder.getI32Type());
   }
 
-  /// Create result types
-  auto ptrType =
-      MemRefType::get(addressType.getShape(), addressType.getElementType());
-
-  /// Create the DbAllocOp with optional allocType parameter (nullptr for
-  /// default)
+  /// Create the DbAllocOp with optional allocType parameter (nullptr for default)
   return builder.create<DbAllocOp>(loc, ptrType, builder.getStringAttr(mode),
                                    address, sizes, nullptr);
 }

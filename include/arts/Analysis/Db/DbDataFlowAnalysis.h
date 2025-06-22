@@ -61,6 +61,9 @@ public:
   /// Dependency analysis.
   bool mayDepend(DbDepNode &prod, DbDepNode &cons);
 
+  /// Static accessor for analysis depth (needed by helper functions)
+  static int getAnalysisDepth() { return analysisDepth; }
+
 private:
   DbAnalysis *analysis;
   DbGraph *graph;

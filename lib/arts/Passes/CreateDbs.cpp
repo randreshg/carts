@@ -36,7 +36,10 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
 #include <cstdint>
+#include <unordered_set>
+
 #define DEBUG_TYPE "create-dbs"
 #define line "-----------------------------------------\n"
 #define smallline "------------------\n"
@@ -84,6 +87,15 @@ struct DbCandidate {
     else if (dep != newDep)
       dep = DbDepType::ReadWrite;
   }
+
+  /// Validate the candidate
+  bool isValid() const {
+    if (!ptr || !ptr.getType().isa<MemRefType>())
+      return false;
+
+    auto memrefType = ptr.getType().cast<MemRefType>();
+    return pinnedIndices.size() <= static_cast<size_t>(memrefType.getRank());
+  }
 };
 
 ///===----------------------------------------------------------------------===///
@@ -129,232 +141,523 @@ struct CreateDbsPass : public CreateDbsBase<CreateDbsPass> {
   /// Main entry of the pass.
   void runOnOperation() override;
 
-  /// Identify datablocks in the module and create them
-  void identifyDbsInModule(ModuleOp module);
-
-  /// Create a DbDepOp into a created db
-  DbDepOp createDbDep(OpBuilder &builder, Location loc, DbAllocOp dbAllocOp,
-                      SmallVector<Value> pinnedIndices,
-                      types::DbDepType depType);
-
-  /// Create a DbAllocOp for a given base pointer
-  DbAllocOp createDbAlloc(OpBuilder &builder, Location loc, Value basePtr,
-                          types::DbDepType dep);
-
-  /// Analyze the EDT region to collect candidate datablocks.
-  void analyzeEdtRegion(EdtOp &edtOp);
-
-  /// Analyze a memref value's uses in the Edt and update candidate
-  /// datablocks.
-  void analyzeValueInEdt(Value dbPtr, SetVector<Value> edtInvariantValues,
-                         EdtOp &edtOp);
-
 private:
-  /// Map to store candidate datablocks
-  DenseMap<EdtOp, DenseMap<DbCandidate, SmallVector<Operation *>>> DbCandidates;
+  /// Main analysis and processing methods
+  void processModule(ModuleOp module);
+  void collectEdtOps(ModuleOp module);
+  void processAllEdtOps(ModuleOp module);
 
-  /// Map to store created datablocks for reuse (by base pointer)
+  /// Analysis methods
+  void analyzeEdtRegion(EdtOp &edtOp);
+  void analyzeMemRefUsage(Value dbPtr,
+                          const SetVector<Value> &edtInvariantValues,
+                          EdtOp &edtOp);
+  SetVector<Value> getEdtInvariantValues(EdtOp &edtOp);
+  void optimizeCandidates(EdtOp &edtOp);
+
+  /// Validation methods
+  bool isValidMemRef(Value ptr) const;
+  bool isValidCandidate(const DbCandidate &candidate) const;
+  bool isMemRefAccessValid(Value ptr, EdtOp edtOp);
+
+  /// Datablock creation methods
+  void createDbs(EdtOp edtOp, OpBuilder &builder, Location loc);
+  DbAllocOp getOrCreateDbAlloc(Value basePtr, DbDepType depType,
+                               OpBuilder &builder, Location loc);
+  SmallVector<Value> createDbDeps(EdtOp edtOp, OpBuilder &builder,
+                                  Location loc);
+  DbDepOp createDbDep(OpBuilder &builder, Location loc, DbAllocOp dbAllocOp,
+                      const SmallVector<Value> &pinnedIndices,
+                      DbDepType depType);
+  DbAllocOp createDbAlloc(OpBuilder &builder, Location loc, Value basePtr,
+                          DbDepType dep);
+
+  /// EDT operation methods
+  EdtOp createNewEdtOp(EdtOp oldEdtOp, const SmallVector<Value> &edtDeps,
+                       OpBuilder &builder, Location loc);
+  void updateOpsInNewEdt(EdtOp oldEdtOp, EdtOp newEdtOp,
+                         const SmallVector<Value> &edtDeps);
+  void replaceMemRefOps(const SmallVector<Operation *> &operations,
+                        Value newMemRef, unsigned indicesToDrop);
+
+  /// Cleanup methods
+  void cleanupOldOps(ModuleOp module, OpBuilder &builder);
+  void pruneUnusedDbAllocs(OpBuilder &builder);
+  void collectOpsToRemove(EdtOp edtOp, SetVector<Operation *> &opsToRemove);
+
+  /// Helper methods
+  using OpsPerCandidate = std::pair<DbCandidate, SmallVector<Operation *> *>;
+  DbDepType combineDepTypes(const SmallVector<OpsPerCandidate> &candidates);
+  void logCandidateInfo(EdtOp edtOp) const;
+  void logDbCreation(EdtOp edtOp, size_t dbCount) const;
+
+  /// Data members
+  using CandidateMap = DenseMap<DbCandidate, SmallVector<Operation *>>;
+  DenseMap<EdtOp, CandidateMap> DbCandidates;
   DenseMap<Value, DbAllocOp> createdDbs;
-
-  /// List of EDT ops in post-order traversal.
   SmallVector<EdtOp, 4> edtOps;
+  SetVector<Operation *> opsToRemove;
+  StringAnalysis *strAnalysis = nullptr;
 
-  /// String analysis
-  StringAnalysis *strAnalysis;
+  /// Caching for performance
+  DenseMap<Value, bool> memrefValidityCache;
+  DenseMap<EdtOp, SetVector<Value>> edtInvariantCache;
 };
-} // end namespace
+} // namespace
 
 void CreateDbsPass::runOnOperation() {
   ModuleOp module = getOperation();
   strAnalysis = &getAnalysis<StringAnalysis>();
+
   LLVM_DEBUG({
     dbgs() << "\n" << line << "CreateDbsPass STARTED\n" << line;
     module.dump();
   });
-  identifyDbsInModule(module);
+
+  processModule(module);
+
   LLVM_DEBUG({
     dbgs() << "\n" << line << "CreateDbsPass FINISHED\n" << line;
     module.dump();
   });
 }
 
-void CreateDbsPass::identifyDbsInModule(ModuleOp module) {
-  /// Create a list of EDT ops ordered by post-order traversal.
+void CreateDbsPass::processModule(ModuleOp module) {
+  /// Step 1: Collect all EDT operations in post-order
+  collectEdtOps(module);
+
+  /// Step 2: Analyze each EDT region to identify datablock candidates
+  for (auto edtOp : edtOps) {
+    analyzeEdtRegion(edtOp);
+  }
+
+  /// Step 3: Process all EDT operations to create datablocks
+  processAllEdtOps(module);
+
+  /// Step 4: Cleanup old operations
+  OpBuilder builder(module.getContext());
+  cleanupOldOps(module, builder);
+  pruneUnusedDbAllocs(builder);
+}
+
+void CreateDbsPass::collectEdtOps(ModuleOp module) {
+  edtOps.clear();
   module.walk([&](func::FuncOp func) {
-    LLVM_DEBUG(DBGS() << "Candidate datablocks in function: " << func.getName()
-                      << "\n");
-    func.walk<mlir::WalkOrder::PostOrder>([&](EdtOp edtOp) {
-      analyzeEdtRegion(edtOp);
-      edtOps.push_back(edtOp);
-    });
+    LLVM_DEBUG(DBGS() << "Processing function: " << func.getName() << "\n");
+    func.walk<mlir::WalkOrder::PostOrder>(
+        [&](EdtOp edtOp) { edtOps.push_back(edtOp); });
   });
 
-  /// For each candidate db, create new datablocks in the EDT region.
+  LLVM_DEBUG(DBGS() << "Found " << edtOps.size() << " EDT operations\n");
+}
+
+void CreateDbsPass::processAllEdtOps(ModuleOp module) {
   const auto ctx = module.getContext();
   Location loc = UnknownLoc::get(ctx);
   OpBuilder builder(ctx);
-  uint32_t edtItr = 0;
-  llvm::SetVector<Operation *> opsToRemove;
 
+  uint32_t edtCounter = 0;
   for (auto edtOp : edtOps) {
-    auto &dbCandidates = DbCandidates[edtOp];
-    SmallVector<Value> edtDeps;
-    LLVM_DEBUG({
-      dbgs() << line;
-      DBGS() << "Creating " << dbCandidates.size() << " datablocks for EDT #"
-             << edtItr << "\n";
-    });
+    logDbCreation(edtOp, DbCandidates[edtOp].size());
+    createDbs(edtOp, builder, loc);
+    LLVM_DEBUG(DBGS() << "Processed EDT #" << edtCounter++ << "\n");
+  }
+}
 
-    struct DepInfo {
-      SmallVector<Operation *> uses;
-      unsigned indicesToDrop;
-    };
-    SmallVector<DepInfo> depInfos;
+bool CreateDbsPass::isValidMemRef(Value ptr) const {
+  if (!ptr || !ptr.getType().isa<MemRefType>()) {
+    return false;
+  }
 
-    /// Group candidates by base pointer to avoid creating duplicate datablocks
-    DenseMap<Value,
-             SmallVector<std::pair<DbCandidate, SmallVector<Operation *> *>>>
-        candidatesByPtr;
-    for (auto &candEntry : dbCandidates) {
-      candidatesByPtr[candEntry.first.ptr].push_back(
-          {candEntry.first, &candEntry.second});
+  auto memrefType = ptr.getType().cast<MemRefType>();
+  /// Skip complex-typed memrefs as they're not supported
+  if (memrefType.getElementType().isa<mlir::ComplexType>()) {
+    LLVM_DEBUG(DBGS() << "Skipping complex-typed memref: " << ptr << "\n");
+    return false;
+  }
+
+  return true;
+}
+
+bool CreateDbsPass::isValidCandidate(const DbCandidate &candidate) const {
+  return candidate.isValid() && isValidMemRef(candidate.ptr);
+}
+
+bool CreateDbsPass::isMemRefAccessValid(Value ptr, EdtOp edtOp) {
+  /// Cache validation results for performance
+  if (auto it = memrefValidityCache.find(ptr);
+      it != memrefValidityCache.end()) {
+    return it->second;
+  }
+
+  bool isValid = isValidMemRef(ptr);
+  memrefValidityCache[ptr] = isValid;
+  return isValid;
+}
+
+SetVector<Value> CreateDbsPass::getEdtInvariantValues(EdtOp &edtOp) {
+  /// Check cache first
+  if (auto it = edtInvariantCache.find(edtOp); it != edtInvariantCache.end())
+    return it->second;
+
+  SetVector<Value> externalValues;
+  Region &region = edtOp.getRegion();
+  getUsedValuesDefinedAbove(region, externalValues);
+
+  /// Filter to keep only memrefs and invariant values
+  SetVector<Value> result;
+  for (Value v : externalValues) {
+    if (v.getType().isa<MemRefType>() || isInvariantInEdt(region, v)) {
+      result.insert(v);
+    }
+  }
+
+  /// Cache the result
+  edtInvariantCache[edtOp] = result;
+  return result;
+}
+
+void CreateDbsPass::analyzeEdtRegion(EdtOp &edtOp) {
+  LLVM_DEBUG({
+    dbgs() << smallline;
+    DBGS() << "Analyzing EDT region #" << edtOps.size() << "\n";
+  });
+
+  SetVector<Value> externalValues = getEdtInvariantValues(edtOp);
+
+  /// Separate memref pointers and invariant values
+  SmallVector<Value, 4> memrefPtrs;
+  SetVector<Value> invariantValues;
+
+  for (Value v : externalValues) {
+    if (v.getType().isa<MemRefType>()) {
+      if (isMemRefAccessValid(v, edtOp))
+        memrefPtrs.push_back(v);
+    } else {
+      invariantValues.insert(v);
+    }
+  }
+
+  /// Analyze each memref for datablock candidacy
+  for (Value ptr : memrefPtrs)
+    analyzeMemRefUsage(ptr, invariantValues, edtOp);
+
+  /// Optimize candidates by removing redundant ones
+  optimizeCandidates(edtOp);
+
+  /// Log the results
+  logCandidateInfo(edtOp);
+}
+
+void CreateDbsPass::analyzeMemRefUsage(
+    Value dbPtr, const SetVector<Value> &edtInvariantValues, EdtOp &edtOp) {
+  if (!isValidMemRef(dbPtr)) {
+    LLVM_DEBUG(DBGS() << "Invalid memref value in analyzeMemRefUsage\n");
+    return;
+  }
+
+  auto &candMap = DbCandidates[edtOp];
+  auto &region = edtOp.getRegion();
+
+  /// Process all uses of the memref value
+  for (OpOperand &use : dbPtr.getUses()) {
+    Operation *op = use.getOwner();
+
+    /// Skip operations not in this EDT region
+    if (!region.isAncestor(op->getParentRegion()))
+      continue;
+
+    /// Skip operations in nested EDT regions
+    if (auto userEdt = op->getParentOfType<EdtOp>(); userEdt != edtOp)
+      continue;
+
+    /// Create candidate with string detection
+    DbCandidate candidate(dbPtr, strAnalysis->isStringMemRef(dbPtr));
+    SmallVector<Value> indices;
+
+    /// Extract indices from load/store operations
+    if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
+      indices = loadOp.getIndices();
+      candidate.updateDep(DbDepType::ReadOnly);
+    } else if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
+      indices = storeOp.getIndices();
+      candidate.updateDep(DbDepType::WriteOnly);
+    } else {
+      candidate.updateDep(DbDepType::ReadWrite);
     }
 
-    for (auto &ptrGroup : candidatesByPtr) {
-      Value basePtr = ptrGroup.first;
-      auto &candidates = ptrGroup.second;
+    /// Find consecutive invariant (pinned) indices
+    for (Value idx : indices) {
+      if (!edtInvariantValues.count(idx))
+        break;
+      candidate.pinnedIndices.push_back(idx);
+    }
 
-      /// Create or reuse a db allocation for this base pointer
-      DbAllocOp dbAllocOp = nullptr;
-      if (auto it = createdDbs.find(basePtr); it != createdDbs.end()) {
-        dbAllocOp = it->second;
-      } else {
-        OpBuilder::InsertionGuard IG(builder);
-        if (auto *defOp = basePtr.getDefiningOp())
-          builder.setInsertionPointAfter(defOp);
-        else if (auto arg = basePtr.dyn_cast<BlockArgument>())
-          builder.setInsertionPointToStart(arg.getOwner());
-        else
-          llvm_unreachable("Support for global variables is not implemented");
+    /// Add operation to candidate's usage list
+    candMap[candidate].push_back(op);
+  }
+}
 
-        /// Determine the dep type for this base pointer
-        DbDepType combinedDep = DbDepType::Unknown;
-        for (auto &[cand, uses] : candidates) {
-          if (combinedDep == DbDepType::Unknown)
-            combinedDep = cand.dep;
-          else if (combinedDep != cand.dep)
-            combinedDep = DbDepType::ReadWrite;
+void CreateDbsPass::optimizeCandidates(EdtOp &edtOp) {
+  auto &candMap = DbCandidates[edtOp];
+
+  /// Group candidates by base pointer
+  DenseMap<Value, SmallVector<const DbCandidate *, 4>> candidatesByPtr;
+  for (const auto &entry : candMap)
+    candidatesByPtr[entry.first.ptr].push_back(&entry.first);
+
+  /// Sort candidates by number of pinned indices
+  for (auto &group : candidatesByPtr) {
+    auto &candidates = group.second;
+    std::sort(candidates.begin(), candidates.end(),
+              [](const DbCandidate *a, const DbCandidate *b) {
+                return a->pinnedIndices.size() < b->pinnedIndices.size();
+              });
+  }
+
+  /// Remove candidates that are supersets of others
+  SetVector<DbCandidate> candidatesToRemove;
+  for (auto &group : candidatesByPtr) {
+    auto &candidates = group.second;
+
+    for (size_t i = 0; i < candidates.size(); ++i) {
+      for (size_t j = i + 1; j < candidates.size(); ++j) {
+        const DbCandidate *prefix = candidates[i];
+        const DbCandidate *superset = candidates[j];
+
+        /// Check if prefix is actually a prefix of superset
+        if (prefix->pinnedIndices.size() >= superset->pinnedIndices.size())
+          continue;
+
+        bool isPrefix = true;
+        for (size_t k = 0; k < prefix->pinnedIndices.size(); ++k) {
+          if (prefix->pinnedIndices[k] != superset->pinnedIndices[k]) {
+            isPrefix = false;
+            break;
+          }
         }
 
-        dbAllocOp = createDbAlloc(builder, loc, basePtr, combinedDep);
-        createdDbs[basePtr] = dbAllocOp;
+        if (isPrefix) {
+          candidatesToRemove.insert(*superset);
+          LLVM_DEBUG(DBGS()
+                     << "Removing superset candidate with "
+                     << superset->pinnedIndices.size() << " pinned indices\n");
+        }
       }
+    }
+  }
 
-      /// Create DbDepOps for each candidate
-      OpBuilder::InsertionGuard IG(builder);
-      builder.setInsertionPoint(edtOp);
-      for (auto &[dbCand, dbUses] : candidates) {
-        auto dbDepOp = createDbDep(builder, loc, dbAllocOp,
-                                   dbCand.pinnedIndices, dbCand.dep);
-        depInfos.push_back({*dbUses, (unsigned)dbCand.pinnedIndices.size()});
+  /// Remove the superset candidates
+  for (const DbCandidate &candidate : candidatesToRemove)
+    candMap.erase(candidate);
+}
+
+void CreateDbsPass::createDbs(EdtOp edtOp, OpBuilder &builder, Location loc) {
+  auto &candidateMap = DbCandidates[edtOp];
+  if (candidateMap.empty()) {
+    return;
+  }
+
+  /// Create dependencies for this EDT
+  SmallVector<Value> edtDeps = createDbDeps(edtOp, builder, loc);
+
+  if (!edtDeps.empty()) {
+    /// Create new EDT operation with dependencies
+    EdtOp newEdtOp = createNewEdtOp(edtOp, edtDeps, builder, loc);
+
+    /// Update operations in the new EDT
+    updateOpsInNewEdt(edtOp, newEdtOp, edtDeps);
+
+    /// Mark old EDT for removal
+    collectOpsToRemove(edtOp, opsToRemove);
+  }
+}
+
+SmallVector<Value> CreateDbsPass::createDbDeps(EdtOp edtOp, OpBuilder &builder,
+                                               Location loc) {
+  auto &candidateMap = DbCandidates[edtOp];
+  SmallVector<Value> edtDeps;
+
+  /// Group candidates by base pointer to avoid duplicates
+  DenseMap<Value, SmallVector<OpsPerCandidate>> candidatesByPtr;
+
+  for (auto &entry : candidateMap) {
+    if (!isValidCandidate(entry.first)) {
+      LLVM_DEBUG(DBGS() << "Skipping invalid candidate\n");
+      continue;
+    }
+    candidatesByPtr[entry.first.ptr].push_back({entry.first, &entry.second});
+  }
+
+  /// Create dependencies for each base pointer
+  for (auto &ptrGroup : candidatesByPtr) {
+    Value basePtr = ptrGroup.first;
+    auto &candidates = ptrGroup.second;
+
+    /// Get or create DbAlloc for this base pointer
+    DbDepType combinedDep = combineDepTypes(candidates);
+    DbAllocOp dbAllocOp =
+        getOrCreateDbAlloc(basePtr, combinedDep, builder, loc);
+
+    if (!dbAllocOp) {
+      LLVM_DEBUG(DBGS() << "Failed to create DbAllocOp for " << basePtr
+                        << "\n");
+      continue;
+    }
+
+    /// Create DbDep operations for each candidate
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPoint(edtOp);
+
+    for (auto &[candidate, operations] : candidates) {
+      auto dbDepOp = createDbDep(builder, loc, dbAllocOp,
+                                 candidate.pinnedIndices, candidate.dep);
+      if (dbDepOp) {
         edtDeps.push_back(dbDepOp.getResult());
       }
     }
-
-    /// Create a new EDT op with the new dependency operands.
-    {
-      OpBuilder::InsertionGuard IG(builder);
-      builder.setInsertionPoint(edtOp);
-      /// Move the region body from the old EDT op to the new one.
-      auto newEdtOp = createEdtOp(builder, loc, getEdtType(edtOp), edtDeps);
-      Region &newRegion = newEdtOp.getRegion();
-
-      /// The new EdtOp might be created with a region with one or more blocks.
-      /// We are going to erase them before moving the body of the old op.
-      newRegion.getBlocks().clear();
-
-      /// Move the body from the old EDT.
-      newRegion.takeBody(edtOp.getRegion());
-
-      /// Rewire uses of the old datablocks directly with the DbDepOp
-      /// results.
-      LLVM_DEBUG(DBGS() << "New EDT has " << edtDeps.size() << " dependencies, "
-                        << depInfos.size() << " depInfos\n");
-
-      for (unsigned i = 0; i < depInfos.size() && i < edtDeps.size(); ++i) {
-        auto &info = depInfos[i];
-        Value dbDepResult = edtDeps[i];
-
-        auto updateOp = [&](auto opToUpdate, unsigned drop) {
-          OpBuilder::InsertionGuard IG(builder);
-          builder.setInsertionPoint(opToUpdate);
-          auto origIndices = opToUpdate.getIndices();
-
-          SmallVector<Value, 4> newIndices;
-          for (unsigned j = drop; j < origIndices.size(); ++j)
-            newIndices.push_back(origIndices[j]);
-
-          opToUpdate.getMemrefMutable().assign(dbDepResult);
-          opToUpdate.getIndicesMutable().assign(newIndices);
-        };
-
-        for (Operation *op : info.uses) {
-          if (auto loadOp = dyn_cast<memref::LoadOp>(op))
-            updateOp(loadOp, info.indicesToDrop);
-          else if (auto storeOp = dyn_cast<memref::StoreOp>(op))
-            updateOp(storeOp, info.indicesToDrop);
-        }
-      }
-    }
-
-    /// Collect old dependencies to remove them later.
-    for (auto oldDep : edtOp.getDependencies()) {
-      if (auto dbOp = oldDep.getDefiningOp<DbDepOp>())
-        opsToRemove.insert(dbOp);
-    }
-    opsToRemove.insert(edtOp);
-
-    /// Increment the EDT op counter.
-    LLVM_DEBUG(DBGS() << "Created EDT #" << edtItr++ << "\n");
   }
 
-  /// Remove the old ops.
-  LLVM_DEBUG(dbgs() << "Removing old datablocks\n");
-  removeOps(module, builder, opsToRemove);
+  return edtDeps;
+}
 
-  for (auto &entry : createdDbs) {
-    Value basePtr = entry.first;
-    DbAllocOp dbAllocOp = entry.second;
-    basePtr.replaceUsesWithIf(dbAllocOp.getPtr(), [&](OpOperand &use) {
-      return use.getOwner() != dbAllocOp;
-    });
+DbDepType
+CreateDbsPass::combineDepTypes(const SmallVector<OpsPerCandidate> &candidates) {
+  DbDepType combinedDep = DbDepType::Unknown;
+
+  for (auto &[candidate, operations] : candidates) {
+    if (combinedDep == DbDepType::Unknown) {
+      combinedDep = candidate.dep;
+    } else if (combinedDep != candidate.dep) {
+      combinedDep = DbDepType::ReadWrite;
+      /// No need to continue once we know it's ReadWrite
+      break;
+    }
+  }
+
+  return combinedDep;
+}
+
+DbAllocOp CreateDbsPass::getOrCreateDbAlloc(Value basePtr, DbDepType depType,
+                                            OpBuilder &builder, Location loc) {
+  /// Check if we already created a DbAlloc for this pointer
+  if (auto it = createdDbs.find(basePtr); it != createdDbs.end()) {
+    return it->second;
+  }
+
+  /// Set insertion point
+  OpBuilder::InsertionGuard guard(builder);
+  if (auto *defOp = basePtr.getDefiningOp()) {
+    builder.setInsertionPointAfter(defOp);
+  } else if (auto arg = basePtr.dyn_cast<BlockArgument>()) {
+    builder.setInsertionPointToStart(arg.getOwner());
+  } else {
+    LLVM_DEBUG(DBGS() << "Unsupported base pointer type\n");
+    return nullptr;
+  }
+
+  /// Create the DbAlloc operation
+  DbAllocOp dbAllocOp = createDbAlloc(builder, loc, basePtr, depType);
+  if (dbAllocOp) {
+    createdDbs[basePtr] = dbAllocOp;
+  }
+
+  return dbAllocOp;
+}
+
+EdtOp CreateDbsPass::createNewEdtOp(EdtOp oldEdtOp,
+                                    const SmallVector<Value> &edtDeps,
+                                    OpBuilder &builder, Location loc) {
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPoint(oldEdtOp);
+
+  /// Create new EDT with dependencies
+  auto newEdtOp = createEdtOp(builder, loc, getEdtType(oldEdtOp), edtDeps);
+
+  /// Move the region body from old to new EDT
+  Region &newRegion = newEdtOp.getRegion();
+  newRegion.getBlocks().clear();
+  newRegion.takeBody(oldEdtOp.getRegion());
+
+  return newEdtOp;
+}
+
+void CreateDbsPass::updateOpsInNewEdt(EdtOp oldEdtOp, EdtOp newEdtOp,
+                                      const SmallVector<Value> &edtDeps) {
+  auto &candidateMap = DbCandidates[oldEdtOp];
+  Region &newRegion = newEdtOp.getRegion();
+
+  size_t depIndex = 0;
+
+  /// Group candidates by base pointer for processing
+  DenseMap<Value, SmallVector<OpsPerCandidate>> candidatesByPtr;
+  for (auto &entry : candidateMap) {
+    if (isValidCandidate(entry.first)) {
+      candidatesByPtr[entry.first.ptr].push_back({entry.first, &entry.second});
+    }
+  }
+
+  /// Update operations for each dependency
+  for (auto &ptrGroup : candidatesByPtr) {
+    for (auto &[candidate, operations] : ptrGroup.second) {
+      if (depIndex < edtDeps.size()) {
+        Value dbDepResult = edtDeps[depIndex];
+        unsigned indicesToDrop = candidate.pinnedIndices.size();
+
+        /// Replace memref operations
+        replaceMemRefOps(*operations, dbDepResult, indicesToDrop);
+
+        /// Update nested db_dep operations
+        Value originalSource = dbDepResult.getDefiningOp<DbDepOp>().getSource();
+        newRegion.walk([&](DbDepOp dbDepOp) {
+          if (dbDepOp.getSource() == originalSource) {
+            dbDepOp.getSourceMutable().assign(dbDepResult);
+          }
+        });
+
+        depIndex++;
+      }
+    }
+  }
+}
+
+void CreateDbsPass::replaceMemRefOps(const SmallVector<Operation *> &operations,
+                                     Value newMemRef, unsigned indicesToDrop) {
+  for (Operation *op : operations) {
+    if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
+      auto indices = loadOp.getIndices();
+      loadOp.getMemrefMutable().assign(newMemRef);
+      loadOp.getIndicesMutable().assign(indices.drop_front(indicesToDrop));
+    } else if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
+      auto indices = storeOp.getIndices();
+      storeOp.getMemrefMutable().assign(newMemRef);
+      storeOp.getIndicesMutable().assign(indices.drop_front(indicesToDrop));
+    }
   }
 }
 
 DbDepOp CreateDbsPass::createDbDep(OpBuilder &builder, Location loc,
                                    DbAllocOp dbAllocOp,
-                                   SmallVector<Value> pinnedIndices,
-                                   types::DbDepType depType) {
-  /// Get the pointer from the created db
+                                   const SmallVector<Value> &pinnedIndices,
+                                   DbDepType depType) {
   Value dbPtr = dbAllocOp.getPtr();
   auto dbPtrType = dbPtr.getType().cast<MemRefType>();
 
   int64_t rank = dbPtrType.getRank();
-  const auto pinnedCount = static_cast<int64_t>(pinnedIndices.size());
-  assert(pinnedCount <= rank &&
-         "Pinned indices exceed the rank of the memref.");
+  int64_t pinnedCount = static_cast<int64_t>(pinnedIndices.size());
+
+  assert(pinnedCount <= rank && "Pinned indices exceed memref rank");
 
   /// Compute offsets and sizes
   SmallVector<Value> offsetValues, sizeValues;
 
   for (int64_t i = 0; i < rank; ++i) {
     if (i < pinnedCount) {
-      /// For pinned dimensions, use the pinned index as offset and size 1
+      /// Pinned dimension: use pinned index as offset, size = 1
       offsetValues.push_back(pinnedIndices[i]);
       sizeValues.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
     } else {
-      /// For non-pinned dimensions, start from 0 and use the full dimension
-      /// size
+      /// Non-pinned dimension: offset = 0, size = full dimension
       offsetValues.push_back(builder.create<arith::ConstantIndexOp>(loc, 0));
       if (dbPtrType.isDynamicDim(i)) {
         sizeValues.push_back(
@@ -373,12 +676,9 @@ DbDepOp CreateDbsPass::createDbDep(OpBuilder &builder, Location loc,
 }
 
 DbAllocOp CreateDbsPass::createDbAlloc(OpBuilder &builder, Location loc,
-                                       Value basePtr, types::DbDepType dep) {
-  /// Create the DbAllocOp using the existing function to ensure sizes are
-  /// filled out
+                                       Value basePtr, DbDepType dep) {
+  /// Create the DbAllocOp
   auto dbAllocOp = createDbAllocOp(builder, loc, types::toString(dep), basePtr);
-
-  /// Set the allocation type attribute using the helper function
   auto allocType = arts::getAllocType(basePtr);
   setDbAllocType(dbAllocOp, allocType, builder);
 
@@ -387,154 +687,122 @@ DbAllocOp CreateDbsPass::createDbAlloc(OpBuilder &builder, Location loc,
   return dbAllocOp;
 }
 
-void CreateDbsPass::analyzeEdtRegion(EdtOp &edtOp) {
-  LLVM_DEBUG({
-    dbgs() << smallline;
-    DBGS() << "EDT region #" << edtOps.size() << ":\n";
-  });
-  /// Get the primary region of the EDT op.
-  Region &region = edtOp.getRegion();
-  SetVector<Value> externalValues;
-  getUsedValuesDefinedAbove(region, externalValues);
+void CreateDbsPass::collectOpsToRemove(EdtOp edtOp,
+                                       SetVector<Operation *> &opsToRemove) {
+  /// Add old dependencies to removal list
+  for (auto oldDep : edtOp.getDependencies()) {
+    if (auto dbOp = oldDep.getDefiningOp<DbDepOp>()) {
+      opsToRemove.insert(dbOp);
+    }
+  }
 
-  /// Separate memref pointers and invariant values.
-  SmallVector<Value, 4> ptrs;
-  SetVector<Value> invariantValues;
-  for (Value v : externalValues) {
-    LLVM_DEBUG(dbgs() << "  - Found value: " << v << "\n");
-    /// If the value is a memref, add it to the list of pointers.
-    if (v.getType().isa<MemRefType>()) {
-      ptrs.push_back(v);
+  /// Add the old EDT operation
+  opsToRemove.insert(edtOp);
+}
+
+void CreateDbsPass::cleanupOldOps(ModuleOp module, OpBuilder &builder) {
+  LLVM_DEBUG(DBGS() << "Removing " << opsToRemove.size()
+                    << " old operations\n");
+  removeOps(module, builder, opsToRemove);
+  opsToRemove.clear();
+}
+
+void CreateDbsPass::pruneUnusedDbAllocs(OpBuilder &builder) {
+  LLVM_DEBUG(DBGS() << "Pruning unused DbAlloc operations\n");
+
+  SmallVector<Value> toErase;
+
+  for (auto &entry : createdDbs) {
+    Value basePtr = entry.first;
+    DbAllocOp dbAllocOp = entry.second;
+
+    if (!dbAllocOp || !basePtr) {
+      toErase.push_back(basePtr);
       continue;
     }
 
-    /// Check if the value is invariant in the EDT region.
-    if (isInvariantInEdt(region, v))
-      invariantValues.insert(v);
+    /// Replace uses of base pointer with db pointer (except in the DbAlloc
+    /// itself)
+    basePtr.replaceUsesWithIf(dbAllocOp.getPtr(), [&](OpOperand &use) {
+      return use.getOwner() != dbAllocOp;
+    });
+
+    /// Check if base pointer has any remaining uses outside the DbAlloc
+    bool hasRemainingUses = false;
+    for (auto &use : basePtr.getUses()) {
+      if (use.getOwner() != dbAllocOp.getOperation()) {
+        hasRemainingUses = true;
+        break;
+      }
+    }
+
+    /// If no remaining uses, remove the source operand from DbAlloc
+    if (!hasRemainingUses && dbAllocOp.getAddress() == basePtr) {
+      LLVM_DEBUG(DBGS() << "Removing unused source operand from DbAllocOp\n");
+
+      OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPoint(dbAllocOp);
+
+      auto sizes = dbAllocOp.getSizes();
+      auto allocType = getDbAllocType(dbAllocOp);
+      auto newDbAllocOp = createDbAllocOp(
+          builder, dbAllocOp.getLoc(), dbAllocOp.getMode(), nullptr,
+          SmallVector<Value>(sizes.begin(), sizes.end()));
+
+      if (newDbAllocOp) {
+        setDbAllocType(newDbAllocOp, allocType, builder);
+        dbAllocOp.getResult().replaceAllUsesWith(newDbAllocOp.getResult());
+        dbAllocOp.erase();
+        entry.second = newDbAllocOp;
+      }
+    }
   }
 
-  /// Process each memref value within the region.
-  for (Value ptr : ptrs)
-    analyzeValueInEdt(ptr, invariantValues, edtOp);
+  /// Clean up invalid entries
+  for (Value ptr : toErase)
+    createdDbs.erase(ptr);
+}
 
-  /// Debug print the candidate datablocks.
+void CreateDbsPass::logCandidateInfo(EdtOp edtOp) const {
   LLVM_DEBUG({
-    auto candItr = 0;
-    auto &candMap = DbCandidates[edtOp];
+    auto &candMap = DbCandidates.find(edtOp)->second;
+    size_t candidateIndex = 0;
+
     for (auto &entry : candMap) {
-      auto &db = entry.first;
+      auto &candidate = entry.first;
       auto &uses = entry.second;
-      dbgs() << "  - Candidate Db #" << candItr++ << ":\n"
-             << "    Memref: " << db.ptr << "\n"
-             << "    IsString: " << (db.isString ? "true" : "false") << "\n"
-             << "    Dep Type: " << types::toString(db.dep) << "\n"
+
+      dbgs() << "  - Candidate Db #" << candidateIndex++ << ":\n"
+             << "    Memref: " << candidate.ptr << "\n"
+             << "    IsString: " << (candidate.isString ? "true" : "false")
+             << "\n"
+             << "    Dep Type: " << types::toString(candidate.dep) << "\n"
              << "    Pinned Indices:";
-      if (db.pinnedIndices.empty())
-        dbgs() << "  none\n";
-      else {
-        for (Value idx : db.pinnedIndices)
+
+      if (candidate.pinnedIndices.empty()) {
+        dbgs() << " none\n";
+      } else {
+        for (Value idx : candidate.pinnedIndices) {
           dbgs() << "\n      - " << idx;
+        }
         dbgs() << "\n";
       }
+
       dbgs() << "    Uses:\n";
-      for (Operation *op : uses)
+      for (Operation *op : uses) {
         dbgs() << "      - " << *op << "\n";
+      }
     }
   });
 }
 
-void CreateDbsPass::analyzeValueInEdt(Value dbPtr,
-                                      SetVector<Value> edtInvariantValues,
-                                      EdtOp &edtOp) {
-  /// Retrieve the candidate map for the given EDT op.
-  auto &candMap = DbCandidates[edtOp];
-  auto &region = edtOp.getRegion();
-
-  /// Process all uses of the memref value.
-  for (OpOperand &use : dbPtr.getUses()) {
-    Operation *op = use.getOwner();
-    if (!region.isAncestor(op->getParentRegion()))
-      continue;
-
-    if (auto userEdt = op->getParentOfType<EdtOp>())
-      if (userEdt != edtOp)
-        continue;
-
-    DbCandidate db(dbPtr, strAnalysis->isStringMemRef(dbPtr));
-    SmallVector<Value> indices;
-    if (auto loadOp = dyn_cast<memref::LoadOp>(op))
-      indices = loadOp.getIndices();
-    else if (auto storeOp = dyn_cast<memref::StoreOp>(op))
-      indices = storeOp.getIndices();
-
-    /// Append consecutive invariant (pinned) indices.
-    for (Value idx : indices) {
-      if (!edtInvariantValues.count(idx))
-        break;
-      db.pinnedIndices.push_back(idx);
-    }
-    candMap[db].push_back(op);
-  }
-
-  /// Group candidate datablocks by pointer
-  DenseMap<Value, SmallVector<const DbCandidate *, 4>> candByPtr;
-  for (const auto &entry : candMap)
-    candByPtr[entry.first.ptr].push_back(&entry.first);
-
-  /// For each group, sort candidates by the number of pinned indices.
-  for (auto &group : candByPtr) {
-    auto &vec = group.second;
-    std::sort(vec.begin(), vec.end(),
-              [](const DbCandidate *a, const DbCandidate *b) {
-                return a->pinnedIndices.size() < b->pinnedIndices.size();
-              });
-  }
-
-  /// Identify and mark for removal candidates that are supersets of
-  /// candidates with a prefix of index values.
-  SetVector<DbCandidate> toRemove;
-  for (auto &group : candByPtr) {
-    auto &vec = group.second;
-    /// Compare each candidate with those having more pinned indices.
-    for (uint32_t i = 0, n = vec.size(); i < n; ++i) {
-      for (uint32_t j = i + 1; j < n; ++j) {
-        const DbCandidate *prefixCand = vec[i];
-        const DbCandidate *cand = vec[j];
-        /// If DB1 is a prefix of DB2, mark DB2 for removal.
-        if (prefixCand->pinnedIndices.size() >= cand->pinnedIndices.size())
-          continue;
-        bool isPrefix = true;
-        for (uint32_t k = 0, e = prefixCand->pinnedIndices.size(); k < e; ++k) {
-          if (prefixCand->pinnedIndices[k] != cand->pinnedIndices[k]) {
-            isPrefix = false;
-            break;
-          }
-        }
-        if (isPrefix)
-          toRemove.insert(*cand);
-      }
-    }
-  }
-
-  /// Remove candidates that are supersets.
-  for (const DbCandidate &db : toRemove) {
-    LLVM_DEBUG(dbgs() << "Removing candidate db:\n"
-                      << "  Memref: " << db.ptr << "\n");
-    candMap.erase(db);
-  }
-
-  /// Analyze each candidate's dep type.
-  for (auto &entry : candMap) {
-    DbCandidate &db = entry.first;
-    for (Operation *op : entry.second) {
-      if (isa<memref::LoadOp>(op))
-        db.updateDep(DbDepType::ReadOnly);
-      else if (isa<memref::StoreOp>(op))
-        db.updateDep(DbDepType::WriteOnly);
-      else
-        db.updateDep(DbDepType::ReadWrite);
-    }
-  }
+void CreateDbsPass::logDbCreation(EdtOp edtOp, size_t dbCount) const {
+  LLVM_DEBUG({
+    static uint32_t edtCounter = 0;
+    dbgs() << line;
+    DBGS() << "Creating " << dbCount << " datablocks for EDT #" << edtCounter++
+           << "\n";
+  });
 }
 
 ///===----------------------------------------------------------------------===///
