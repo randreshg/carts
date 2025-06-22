@@ -21,22 +21,22 @@ using namespace std;
 class DbGraph {
 public:
   DbGraph(func::FuncOp func, DbAnalysis *analysis);
-  bool isAllocReachable(DbCreateOp from, DbCreateOp to);
+  bool isAllocReachable(DbAllocOp from, DbAllocOp to);
   bool isAccessReachable(DbAccessOp from, DbAccessOp to);
   bool hasDataDep(DbAccessOp from, DbAccessOp to);
-  DbCreateOp getParentAlloc(DbAccessOp access);
-  bool mayAlias(DbCreateOp alloc1, DbCreateOp alloc2);
+  DbAllocOp getParentAlloc(DbAccessOp access);
+  bool mayAlias(DbAllocOp alloc1, DbAllocOp alloc2);
   bool mayAlias(DbAccessOp access1, DbAccessOp access2);
 
-  DbAllocNode *getOrCreateAllocNode(DbCreateOp dbCreateOp);
-  DbAllocNode *getAllocNode(DbCreateOp dbCreateOp);
-  DbAccessNode *getOrCreateAccessNode(DbCreateOp allocation, DbAccessOp access);
+  DbAllocNode *getOrCreateAllocNode(DbAllocOp dbAllocOp);
+  DbAllocNode *getAllocNode(DbAllocOp dbAllocOp);
+  DbAccessNode *getOrCreateAccessNode(DbAllocOp allocation, DbAccessOp access);
   DbAccessNode *getAccessNode(DbAccessOp access);
 
   bool insertDepEdge(DbAccessOp from, DbAccessOp to, DbDepType type);
-  bool insertAllocEdge(DbCreateOp from, DbCreateOp to);
+  bool insertAllocEdge(DbAllocOp from, DbAllocOp to);
   DbDepEdge *getDependenceEdge(DbAccessOp from, DbAccessOp to);
-  DbAllocEdge *getAllocEdge(DbCreateOp from, DbCreateOp to);
+  DbAllocEdge *getAllocEdge(DbAllocOp from, DbAllocOp to);
 
   const DenseSet<DbDepEdge *> &getInDepEdges(DbAccessNode *node);
   const DenseSet<DbDepEdge *> &getOutDepEdges(DbAccessNode *node);
@@ -53,12 +53,15 @@ public:
   void printStatistics(llvm::raw_ostream &os);
   void exportToDot(llvm::raw_ostream &os);
 
+  bool hasNodes() const { return !allocNodes.empty(); }
+  bool hasEdges() const { return !depEdges.empty(); }
+
   func::FuncOp getFunction() const { return func; }
   DbInfo *getNode(Operation *op);
   DbInfo *getNode(DbControlOp dbOp);
   DbInfo *getEntryNode();
   bool addEdge(DbAccessOp from, DbAccessOp to, DbDepType type);
-  bool addEdge(DbCreateOp from, DbCreateOp to);
+  bool addEdge(DbAllocOp from, DbAllocOp to);
   size_t getNumEdges() const;
 
 private:
@@ -69,7 +72,7 @@ private:
   bool needsRebuild = true;
   unsigned nextAllocId;
 
-  DenseMap<DbCreateOp, unique_ptr<DbAllocNode>> allocNodes;
+  DenseMap<DbAllocOp, unique_ptr<DbAllocNode>> allocNodes;
   DenseMap<DbAccessOp, DbAccessNode *> accessNodeMap;
   DenseMap<pair<DbAccessNode *, DbAccessNode *>, unique_ptr<DbDepEdge>> depEdges;
   DenseMap<pair<DbAllocNode *, DbAllocNode *>, unique_ptr<DbAllocEdge>> allocEdges;

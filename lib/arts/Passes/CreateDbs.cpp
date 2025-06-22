@@ -131,15 +131,19 @@ struct CreateDbsPass : public CreateDbsBase<CreateDbsPass> {
 
   /// Identify datablocks in the module and create them
   void identifyDbsInModule(ModuleOp module);
-  /// Create a DbCreateOp for a base db
-  DbCreateOp createDbAlloc(OpBuilder &builder, Location loc, Value basePtr,
-                           DbAccessType access);
+
   /// Create a DbAccessOp into a created db
   DbAccessOp createDbAccess(OpBuilder &builder, Location loc,
-                            DbCreateOp dbCreateOp,
+                            DbAllocOp dbAllocOp,
                             SmallVector<Value> pinnedIndices);
+
+  /// Create a DbAllocOp for a given base pointer
+  DbAllocOp createDbAlloc(OpBuilder &builder, Location loc, Value basePtr,
+                          types::DbAccessType access);
+
   /// Analyze the EDT region to collect candidate datablocks.
   void analyzeEdtRegion(EdtOp &edtOp);
+
   /// Analyze a memref value's uses in the Edt and update candidate
   /// datablocks.
   void analyzeValueInEdt(Value dbPtr, SetVector<Value> edtInvariantValues,
@@ -150,7 +154,7 @@ private:
   DenseMap<EdtOp, DenseMap<DbCandidate, SmallVector<Operation *>>> DbCandidates;
 
   /// Map to store created datablocks for reuse (by base pointer)
-  DenseMap<Value, DbCreateOp> createdDbs;
+  DenseMap<Value, DbAllocOp> createdDbs;
 
   /// List of EDT ops in post-order traversal.
   SmallVector<EdtOp, 4> edtOps;
@@ -221,9 +225,9 @@ void CreateDbsPass::identifyDbsInModule(ModuleOp module) {
       auto &candidates = ptrGroup.second;
 
       /// Create or reuse a db allocation for this base pointer
-      DbCreateOp dbCreateOp = nullptr;
+      DbAllocOp dbAllocOp = nullptr;
       if (auto it = createdDbs.find(basePtr); it != createdDbs.end()) {
-        dbCreateOp = it->second;
+        dbAllocOp = it->second;
       } else {
         OpBuilder::InsertionGuard IG(builder);
         if (auto *defOp = basePtr.getDefiningOp())
@@ -233,7 +237,7 @@ void CreateDbsPass::identifyDbsInModule(ModuleOp module) {
         else
           llvm_unreachable("Support for global variables is not implemented");
 
-        /// Determine the most permissive access type for this base pointer
+        /// Determine the access type for this base pointer
         DbAccessType combinedAccess = DbAccessType::Unknown;
         for (auto &[cand, uses] : candidates) {
           if (combinedAccess == DbAccessType::Unknown)
@@ -242,8 +246,8 @@ void CreateDbsPass::identifyDbsInModule(ModuleOp module) {
             combinedAccess = DbAccessType::ReadWrite;
         }
 
-        dbCreateOp = createDbAlloc(builder, loc, basePtr, combinedAccess);
-        createdDbs[basePtr] = dbCreateOp;
+        dbAllocOp = createDbAlloc(builder, loc, basePtr, combinedAccess);
+        createdDbs[basePtr] = dbAllocOp;
       }
 
       /// Create DbAccessOps for each candidate
@@ -251,7 +255,7 @@ void CreateDbsPass::identifyDbsInModule(ModuleOp module) {
       builder.setInsertionPoint(edtOp);
       for (auto &[dbCand, dbUses] : candidates) {
         auto dbAccessOp =
-            createDbAccess(builder, loc, dbCreateOp, dbCand.pinnedIndices);
+            createDbAccess(builder, loc, dbAllocOp, dbCand.pinnedIndices);
         depInfos.push_back({*dbUses, (unsigned)dbCand.pinnedIndices.size()});
         edtDeps.push_back(dbAccessOp.getResult());
       }
@@ -265,8 +269,8 @@ void CreateDbsPass::identifyDbsInModule(ModuleOp module) {
       auto newEdtOp = createEdtOp(builder, loc, getEdtType(edtOp), edtDeps);
       Region &newRegion = newEdtOp.getRegion();
 
-      // The new EdtOp might be created with a region with one or more blocks.
-      // We are going to erase them before moving the body of the old op.
+      /// The new EdtOp might be created with a region with one or more blocks.
+      /// We are going to erase them before moving the body of the old op.
       newRegion.getBlocks().clear();
 
       /// Move the body from the old EDT.
@@ -320,27 +324,18 @@ void CreateDbsPass::identifyDbsInModule(ModuleOp module) {
 
   for (auto &entry : createdDbs) {
     Value basePtr = entry.first;
-    DbCreateOp dbCreateOp = entry.second;
-    basePtr.replaceUsesWithIf(dbCreateOp.getPtr(), [&](OpOperand &use) {
-      return use.getOwner() != dbCreateOp;
+    DbAllocOp dbAllocOp = entry.second;
+    basePtr.replaceUsesWithIf(dbAllocOp.getPtr(), [&](OpOperand &use) {
+      return use.getOwner() != dbAllocOp;
     });
   }
 }
 
-DbCreateOp CreateDbsPass::createDbAlloc(OpBuilder &builder, Location loc,
-                                        Value basePtr, DbAccessType access) {
-  /// Determine the mode string
-  StringRef modeStr = types::toString(access);
-
-  /// Use the utility function to create the DbCreateOp with empty sizes
-  return arts::createDbCreateOp(builder, loc, modeStr, basePtr, {});
-}
-
 DbAccessOp CreateDbsPass::createDbAccess(OpBuilder &builder, Location loc,
-                                         DbCreateOp dbCreateOp,
+                                         DbAllocOp dbAllocOp,
                                          SmallVector<Value> pinnedIndices) {
   /// Get the pointer from the created db
-  Value dbPtr = dbCreateOp.getPtr();
+  Value dbPtr = dbAllocOp.getPtr();
   auto dbPtrType = dbPtr.getType().cast<MemRefType>();
 
   int64_t rank = dbPtrType.getRank();
@@ -370,8 +365,26 @@ DbAccessOp CreateDbsPass::createDbAccess(OpBuilder &builder, Location loc,
     strides.push_back(builder.getIndexAttr(1));
   }
 
-  auto subviewOp = builder.create<memref::SubViewOp>(loc, dbPtr, offsets, sizes, strides);
+  auto subviewOp =
+      builder.create<memref::SubViewOp>(loc, dbPtr, offsets, sizes, strides);
   return DbAccessOp(subviewOp);
+}
+
+DbAllocOp CreateDbsPass::createDbAlloc(OpBuilder &builder, Location loc,
+                                       Value basePtr,
+                                       types::DbAccessType access) {
+  /// Create the DbAllocOp using the existing function to ensure sizes are
+  /// filled out
+  auto dbAllocOp =
+      createDbAllocOp(builder, loc, types::toString(access), basePtr);
+
+  /// Set the allocation type attribute using the helper function
+  auto allocType = arts::getAllocType(basePtr);
+  setDbAllocType(dbAllocOp, allocType, builder);
+
+  LLVM_DEBUG(DBGS() << "Created DbAllocOp with allocation type: "
+                    << types::toString(allocType) << "\n");
+  return dbAllocOp;
 }
 
 void CreateDbsPass::analyzeEdtRegion(EdtOp &edtOp) {
@@ -389,7 +402,7 @@ void CreateDbsPass::analyzeEdtRegion(EdtOp &edtOp) {
   SetVector<Value> invariantValues;
   for (Value v : externalValues) {
     LLVM_DEBUG(dbgs() << "  - Found value: " << v << "\n");
-    /// If the value is a memref, add it.
+    /// If the value is a memref, add it to the list of pointers.
     if (v.getType().isa<MemRefType>()) {
       ptrs.push_back(v);
       continue;

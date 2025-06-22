@@ -29,6 +29,7 @@ std::unique_ptr<Pass> createConvertArtsToLLVMPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug);
 std::unique_ptr<Pass> createEdtInvariantCodeMotionPass();
 std::unique_ptr<Pass> createEdtPointerRematerializationPass();
+std::unique_ptr<Pass> createPreprocessDbsPass();
 } // namespace arts
 } // namespace mlir
 

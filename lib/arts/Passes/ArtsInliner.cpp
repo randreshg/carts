@@ -160,9 +160,9 @@ struct ArtsInlinerPass : public arts::ArtsInlinerBase<ArtsInlinerPass> {
 
         /// Check if this is a recursive call (basic check)
         if (auto funcOp = dyn_cast<func::FuncOp>(callableOp.getOperation())) {
-          auto enclosingFunc = call->getParentOfType<func::FuncOp>();
-          if (enclosingFunc &&
-              enclosingFunc.getSymName() == funcOp.getSymName()) {
+          auto enclosingFn = call->getParentOfType<func::FuncOp>();
+          if (enclosingFn &&
+              enclosingFn.getSymName() == funcOp.getSymName()) {
             LLVM_DEBUG(DBGS() << "Skipping recursive call to "
                               << funcOp.getSymName() << "\n");
             continue;

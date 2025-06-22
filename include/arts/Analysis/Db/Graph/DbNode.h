@@ -20,7 +20,7 @@ class DbAllocEdge;
 /// DbAllocNode
 class DbAllocNode : public DbInfo {
 public:
-  DbAllocNode(DbCreateOp createOp, mlir::arts::DbAnalysis *analysis);
+  DbAllocNode(DbAllocOp createOp, mlir::arts::DbAnalysis *analysis);
 
   void print(raw_ostream &os) const override;
 
@@ -40,7 +40,7 @@ public:
   const DenseSet<DbAllocEdge *> &getOutAllocEdges() const;
 
 private:
-  DbCreateOp dbCreateOp;
+  DbAllocOp dbAllocOp;
   SmallVector<std::unique_ptr<DbAccessNode>> accessNodes;
   DenseMap<DbAccessOp, DbAccessNode *> accessNodeMap;
   unsigned nextChildId = 1;

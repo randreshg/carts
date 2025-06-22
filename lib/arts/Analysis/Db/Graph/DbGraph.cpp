@@ -55,7 +55,7 @@ DbGraph::DbGraph(func::FuncOp func, DbAnalysis *analysis)
                     << func.getName().str() << "\n");
 }
 
-bool DbGraph::isAllocReachable(DbCreateOp from, DbCreateOp to) {
+bool DbGraph::isAllocReachable(DbAllocOp from, DbAllocOp to) {
   if (!from || !to)
     return false;
 
@@ -97,14 +97,14 @@ bool DbGraph::hasDataDep(DbAccessOp from, DbAccessOp to) {
   return false;
 }
 
-DbCreateOp DbGraph::getParentAlloc(DbAccessOp access) {
+DbAllocOp DbGraph::getParentAlloc(DbAccessOp access) {
   DbAccessNode *accessNode = getAccessNode(access);
   if (!accessNode)
     return nullptr;
-  return dyn_cast<DbCreateOp>(accessNode->getParentAlloc()->getOp());
+  return dyn_cast<DbAllocOp>(accessNode->getParentAlloc()->getOp());
 }
 
-bool DbGraph::mayAlias(DbCreateOp alloc1, DbCreateOp alloc2) {
+bool DbGraph::mayAlias(DbAllocOp alloc1, DbAllocOp alloc2) {
   DbAllocNode *node1 = getAllocNode(alloc1);
   DbAllocNode *node2 = getAllocNode(alloc2);
   if (!node1 || !node2)
@@ -123,7 +123,7 @@ bool DbGraph::mayAlias(DbAccessOp access1, DbAccessOp access2) {
 ///===----------------------------------------------------------------------===///
 /// Node Management
 ///===----------------------------------------------------------------------===///
-DbAllocNode *DbGraph::getOrCreateAllocNode(DbCreateOp allocOp) {
+DbAllocNode *DbGraph::getOrCreateAllocNode(DbAllocOp allocOp) {
   auto it = allocNodes.find(allocOp);
   if (it != allocNodes.end())
     return it->second.get();
@@ -138,12 +138,12 @@ DbAllocNode *DbGraph::getOrCreateAllocNode(DbCreateOp allocOp) {
   return nodePtr;
 }
 
-DbAllocNode *DbGraph::getAllocNode(DbCreateOp allocOp) {
+DbAllocNode *DbGraph::getAllocNode(DbAllocOp allocOp) {
   auto it = allocNodes.find(allocOp);
   return it != allocNodes.end() ? it->second.get() : nullptr;
 }
 
-DbAccessNode *DbGraph::getOrCreateAccessNode(DbCreateOp allocOp,
+DbAccessNode *DbGraph::getOrCreateAccessNode(DbAllocOp allocOp,
                                              DbAccessOp accessOp) {
   DbAllocNode *allocNode = getOrCreateAllocNode(allocOp);
   auto *accessNode = allocNode->getOrCreateAccessNode(accessOp);
@@ -186,7 +186,7 @@ bool DbGraph::insertDepEdge(DbAccessOp from, DbAccessOp to, DbDepType type) {
   return true;
 }
 
-bool DbGraph::insertAllocEdge(DbCreateOp from, DbCreateOp to) {
+bool DbGraph::insertAllocEdge(DbAllocOp from, DbAllocOp to) {
   DbAllocNode *fromNode = getOrCreateAllocNode(from);
   DbAllocNode *toNode = getOrCreateAllocNode(to);
   if (!fromNode || !toNode)
@@ -214,7 +214,7 @@ DbDepEdge *DbGraph::getDependenceEdge(DbAccessOp from, DbAccessOp to) {
   return it != depEdges.end() ? it->second.get() : nullptr;
 }
 
-DbAllocEdge *DbGraph::getAllocEdge(DbCreateOp from, DbCreateOp to) {
+DbAllocEdge *DbGraph::getAllocEdge(DbAllocOp from, DbAllocOp to) {
   DbAllocNode *fromNode = getAllocNode(from);
   DbAllocNode *toNode = getAllocNode(to);
   if (!fromNode || !toNode)
@@ -500,7 +500,7 @@ void DbGraph::collectNodes() {
   LLVM_DEBUG(DBGS() << "Phase 1 - Collecting nodes\n");
 
   /// Collect allocations and their accesses in one pass
-  func.walk([&](DbCreateOp allocOp) {
+  func.walk([&](DbAllocOp allocOp) {
     auto *allocNode = getOrCreateAllocNode(allocOp);
 
     /// Find all subviews and casts that use this allocation
@@ -533,7 +533,7 @@ DbInfo *DbGraph::getNode(Operation *op) {
   if (!op)
     return nullptr;
 
-  if (auto allocOp = dyn_cast<DbCreateOp>(op))
+  if (auto allocOp = dyn_cast<DbAllocOp>(op))
     return getAllocNode(allocOp);
   if (isa<memref::SubViewOp>(op) || isa<memref::CastOp>(op)) {
     auto accessOp = getDbAccessOp(op);
@@ -560,7 +560,7 @@ bool DbGraph::addEdge(DbAccessOp from, DbAccessOp to, DbDepType type) {
   return insertDepEdge(from, to, type);
 }
 
-bool DbGraph::addEdge(DbCreateOp from, DbCreateOp to) {
+bool DbGraph::addEdge(DbAllocOp from, DbAllocOp to) {
   return insertAllocEdge(from, to);
 }
 
