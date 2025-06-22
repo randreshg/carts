@@ -88,8 +88,9 @@ void DbPass::runOnOperation() {
   auto &dbAnalysis = getAnalysis<DbAnalysis>();
   module.walk([&](func::FuncOp func) {
     auto graph = dbAnalysis.getOrCreateGraph(func);
-    LLVM_DEBUG(graph->print(dbgs()));
-    
+    if (!graph->hasNodes())
+      return;
+
     /// Export dot graph to a file
     std::string filename = "DbGraph_" + func.getName().str() + ".dot";
     std::error_code EC;
@@ -140,7 +141,7 @@ bool DbPass::convertToParameters() {
   //       return;
 
   //     LLVM_DEBUG(dbgs() << "- Converting db to parameter: "
-  //                       << allocNode->getDbCreateOp() << "\n");
+  //                       << allocNode->getDbAllocOp() << "\n");
   //     allocNode->forEachAccessNode([&](mlir::arts::DbAccessNode *accessNode) {
   //       auto *op = accessNode->subviewOp.getOperation();
   //       if (isa<arts::EdtOp>(op))
@@ -211,7 +212,7 @@ bool DbPass::shrinkDb() {
   //     if (allocNode->getMode().empty())
   //       return;
 
-  //     DbCreateOp dbOp = allocNode->getDbCreateOp();
+  //     DbAllocOp dbOp = allocNode->getDbAllocOp();
   //     Location loc = dbOp.getLoc();
   //     auto rank = allocNode->getSizes().size();
   //     assert(allocNode->getSizes().size() == rank &&
@@ -273,7 +274,7 @@ bool DbPass::shrinkDb() {
   //     graphChanged = true;
 
   //     /// Create the new DbControlOp with adjusted sizes and offsets.
-  //     auto newDbOp = builder.create<arts::DbCreateOp>(
+  //     auto newDbOp = builder.create<arts::DbAllocOp>(
   //         loc,
   //         builder.getStringAttr(allocNode->getMode()),
   //         allocNode->getPtr(),

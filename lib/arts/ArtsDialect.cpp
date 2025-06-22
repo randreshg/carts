@@ -6,8 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/Dialect/Arith/Utils/Utils.h"
+#include "arts/Utils/ArtsTypes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/Dominance.h"
@@ -57,8 +56,8 @@ void ArtsDialect::initialize() {
 
 bool isArtsRegion(Operation *op) { return isa<EdtOp>(op) || isa<EpochOp>(op); }
 bool isArtsOp(Operation *op) {
-  return isArtsRegion(op) || isa<DbControlOp>(op) ||
-         isa<DbCreateOp>(op) || isa<EventOp>(op) || isa<BarrierOp>(op);
+  return isArtsRegion(op) || isa<DbControlOp>(op) || isa<DbAllocOp>(op) ||
+         isa<EventOp>(op) || isa<BarrierOp>(op);
 }
 
 //===----------------------------------------------------------------------===//
@@ -99,9 +98,9 @@ void UndefOp::getCanonicalizationPatterns(RewritePatternSet &results,
 // DbControlOp
 //===----------------------------------------------------------------------===//
 void DbControlOp::build(OpBuilder &odsBuilder, OperationState &odsState,
-                               Type subview, StringRef mode, Value ptr,
-                               Type elementType, Value elementTypeSize,
-                               ValueRange indices, ValueRange sizes) {
+                        Type subview, StringRef mode, Value ptr,
+                        Type elementType, Value elementTypeSize,
+                        ValueRange indices, ValueRange sizes) {
   SmallVector<Value> offsets;
   offsets.resize(indices.size(), odsBuilder.create<arith::ConstantIndexOp>(
                                      odsState.location, 0));
@@ -110,10 +109,10 @@ void DbControlOp::build(OpBuilder &odsBuilder, OperationState &odsState,
 }
 
 void DbControlOp::build(OpBuilder &odsBuilder, OperationState &odsState,
-                               Type subview, StringRef mode, Value ptr,
-                               Type elementType, Value elementTypeSize,
-                               ValueRange indices, ValueRange offsets,
-                               ValueRange sizes) {
+                        Type subview, StringRef mode, Value ptr,
+                        Type elementType, Value elementTypeSize,
+                        ValueRange indices, ValueRange offsets,
+                        ValueRange sizes) {
   odsState.addOperands(ptr);
   odsState.addOperands(elementTypeSize);
   odsState.addOperands(indices);
@@ -131,8 +130,7 @@ void DbControlOp::build(OpBuilder &odsBuilder, OperationState &odsState,
   odsState.addTypes(subview);
 }
 
-ParseResult DbControlOp::parse(OpAsmParser &parser,
-                                      OperationState &result) {
+ParseResult DbControlOp::parse(OpAsmParser &parser, OperationState &result) {
   /// Parse the mode attribute.
   StringAttr modeAttr;
   if (parser.parseAttribute(modeAttr, "mode", result.attributes))
@@ -327,9 +325,7 @@ bool DbControlOp::hasSingleSize() {
   return getOperation()->hasAttr("singleSize");
 }
 
-bool DbControlOp::hasGuid() {
-  return getOperation()->hasAttr("hasGuid");
-}
+bool DbControlOp::hasGuid() { return getOperation()->hasAttr("hasGuid"); }
 
 void DbControlOp::setHasPtrDb() {
   getOperation()->setAttr("ptrDb", UnitAttr::get(getContext()));
@@ -459,15 +455,25 @@ SmallVector<Value> EdtOp::getDependenciesVector() {
 }
 
 /// Others
-bool EdtOp::isParallel() { return getOperation()->hasAttr("parallel"); }
-bool EdtOp::isSingle() { return getOperation()->hasAttr("single"); }
-bool EdtOp::isSync() { return getOperation()->hasAttr("sync"); }
-bool EdtOp::isTask() { return getOperation()->hasAttr("task"); }
+bool EdtOp::isParallel() {
+  return getOperation()->hasAttr(types::toString(types::EdtType::Parallel));
+}
+bool EdtOp::isSingle() {
+  return getOperation()->hasAttr(types::toString(types::EdtType::Single));
+}
+bool EdtOp::isSync() {
+  return getOperation()->hasAttr(types::toString(types::EdtType::Sync));
+}
+bool EdtOp::isTask() {
+  return getOperation()->hasAttr(types::toString(types::EdtType::Task));
+}
 void EdtOp::setIsParallelAttr() {
-  getOperation()->setAttr("parallel", UnitAttr::get(getContext()));
+  getOperation()->setAttr(types::toString(types::EdtType::Parallel),
+                          UnitAttr::get(getContext()));
 }
 void EdtOp::setIsSingleAttr() {
-  getOperation()->setAttr("single", UnitAttr::get(getContext()));
+  getOperation()->setAttr(types::toString(types::EdtType::Single),
+                          UnitAttr::get(getContext()));
 }
 void EdtOp::setIsSyncAttr() {
   getOperation()->setAttr("sync", UnitAttr::get(getContext()));
@@ -475,10 +481,18 @@ void EdtOp::setIsSyncAttr() {
 void EdtOp::setIsTaskAttr() {
   getOperation()->setAttr("task", UnitAttr::get(getContext()));
 }
-void EdtOp::clearIsParallelAttr() { getOperation()->removeAttr("parallel"); }
-void EdtOp::clearIsSingleAttr() { getOperation()->removeAttr("single"); }
-void EdtOp::clearIsSyncAttr() { getOperation()->removeAttr("sync"); }
-void EdtOp::clearIsTaskAttr() { getOperation()->removeAttr("task"); }
+void EdtOp::clearIsParallelAttr() {
+  getOperation()->removeAttr(types::toString(types::EdtType::Parallel));
+}
+void EdtOp::clearIsSingleAttr() {
+  getOperation()->removeAttr(types::toString(types::EdtType::Single));
+}
+void EdtOp::clearIsSyncAttr() {
+  getOperation()->removeAttr(types::toString(types::EdtType::Sync));
+}
+void EdtOp::clearIsTaskAttr() {
+  getOperation()->removeAttr(types::toString(types::EdtType::Task));
+}
 
 //===----------------------------------------------------------------------===//
 // EventOp

@@ -12,10 +12,15 @@
 
 namespace mlir {
 namespace arts {
+
+// Forward declarations
+class DbAllocOp;
+
 namespace types {
 /// EDT types
 enum class EdtType { Parallel, Single, Sync, Task };
 enum class DbAccessType { ReadOnly, WriteOnly, ReadWrite, Unknown };
+enum class DbAllocType { Stack, Heap, Global, Parameter, Dynamic, Unknown };
 
 inline llvm::StringRef toString(const EdtType Ty) {
   switch (Ty) {
@@ -41,6 +46,37 @@ inline llvm::StringRef toString(const DbAccessType Ty) {
   case DbAccessType::Unknown:
     return "unknown";
   }
+}
+
+inline llvm::StringRef toString(const DbAllocType Ty) {
+  switch (Ty) {
+  case DbAllocType::Stack:
+    return "stack";
+  case DbAllocType::Heap:
+    return "heap";
+  case DbAllocType::Global:
+    return "global";
+  case DbAllocType::Parameter:
+    return "parameter";
+  case DbAllocType::Dynamic:
+    return "dynamic";
+  case DbAllocType::Unknown:
+    return "unknown";
+  }
+}
+
+inline DbAllocType getDbAllocType(llvm::StringRef str) {
+  if (str == "stack")
+    return DbAllocType::Stack;
+  if (str == "heap")
+    return DbAllocType::Heap;
+  if (str == "global")
+    return DbAllocType::Global;
+  if (str == "parameter")
+    return DbAllocType::Parameter;
+  if (str == "dynamic")
+    return DbAllocType::Dynamic;
+  return DbAllocType::Unknown;
 }
 
 /// IDs for all arts runtime library (RTL) functions.
@@ -74,6 +110,26 @@ template <> struct DenseMapInfo<mlir::arts::types::RuntimeFunction> {
 
   static bool isEqual(mlir::arts::types::RuntimeFunction lhs,
                       mlir::arts::types::RuntimeFunction rhs) {
+    return lhs == rhs;
+  }
+};
+
+/// Specialization of DenseMapInfo for DbAllocType enum
+template <> struct DenseMapInfo<mlir::arts::types::DbAllocType> {
+  static mlir::arts::types::DbAllocType getEmptyKey() {
+    return static_cast<mlir::arts::types::DbAllocType>(~0U);
+  }
+
+  static mlir::arts::types::DbAllocType getTombstoneKey() {
+    return static_cast<mlir::arts::types::DbAllocType>(~0U - 1);
+  }
+
+  static unsigned getHashValue(mlir::arts::types::DbAllocType val) {
+    return static_cast<unsigned>(val);
+  }
+
+  static bool isEqual(mlir::arts::types::DbAllocType lhs,
+                      mlir::arts::types::DbAllocType rhs) {
     return lhs == rhs;
   }
 };

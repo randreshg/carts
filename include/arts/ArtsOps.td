@@ -53,9 +53,9 @@ def AllocOp : Arts_Op<"alloc", []> {
 }
 
 //===----------------------------------------------------------------------===//
-// arts.db
+// Arts DB Operations
 //===----------------------------------------------------------------------===//
-def DbCreateOp : Arts_Op<"db_create", [
+def DbAllocOp : Arts_Op<"db_alloc", [
     AttrSizedOperandSegments, MemoryEffects<[MemAlloc]>]> {
   let summary = "Allocate an ARTS DataBlock and get its pointer and GUID.";
   let description = [{
@@ -64,16 +64,19 @@ def DbCreateOp : Arts_Op<"db_create", [
     - mode: "in", "out", "inout"
     - ptr: address that will be copied to the DataBlock
     - sizes: sizes of the DataBlock
+    - allocType: "stack", "heap", "global", "unknown" - tracks original allocation type
   }];
   let arguments = (ins
     StrAttr:$mode,
     Optional<AnyMemRef>:$address,
-    Variadic<Index>:$sizes
+    Variadic<Index>:$sizes,
+    OptionalAttr<StrAttr>:$allocType
   );
 
   let results = (outs AnyMemRef:$ptr);
   let assemblyFormat = [{
-    $mode `(` $address `:` type($address) `)` `[` $sizes `]` `->` attr-dict `:` type($ptr)
+    $mode `(` $address `:` type($address) `)` `[` $sizes `]` 
+    (`alloc_type` `=` $allocType^)? `->` attr-dict `:` type($ptr)
   }];
 }
 

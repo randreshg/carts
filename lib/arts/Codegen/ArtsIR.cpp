@@ -1,38 +1,32 @@
 ///==========================================================================
 /// File: ArtsIR.cpp
+///
+/// This file provides utility functions for creating and manipulating ARTS IR
+/// operations. It is organized into logical sections for EDT operations,
+/// DataBlock operations, and helper functions.
 ///==========================================================================
+
 #include "arts/Codegen/ArtsIR.h"
 #include "arts/ArtsDialect.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Support/LLVM.h"
 #include "polygeist/Ops.h"
 
+/// Debug
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
+
+#define DEBUG_TYPE "arts-ir"
+#define dbgs() (llvm::dbgs())
+#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+
 namespace mlir {
 namespace arts {
 
-DbCreateOp createDbCreateOp(OpBuilder &builder, Location loc, StringRef mode,
-                            Value address, SmallVector<Value> sizes) {
-  auto addressType = address.getType().cast<MemRefType>();
-
-  /// If sizes are not provided, extract them from the address memref
-  if (sizes.empty()) {
-    for (int64_t i = 0; i < addressType.getRank(); ++i) {
-      if (addressType.isDynamicDim(i)) {
-        sizes.push_back(builder.create<memref::DimOp>(loc, address, i));
-      } else {
-        sizes.push_back(builder.create<arith::ConstantIndexOp>(
-            loc, addressType.getDimSize(i)));
-      }
-    }
-  }
-
-  /// Create result types
-  auto ptrType =
-      MemRefType::get(addressType.getShape(), addressType.getElementType());
-
-  return builder.create<DbCreateOp>(loc, ptrType, builder.getStringAttr(mode),
-                                    address, sizes);
-}
+//===----------------------------------------------------------------------===//
+// EDT Creation and Manipulation Functions
+//===----------------------------------------------------------------------===//
 
 EdtOp createEdtOp(OpBuilder &builder, Location loc, types::EdtType type,
                   SmallVector<Value> deps) {
@@ -59,6 +53,36 @@ types::EdtType getEdtType(EdtOp edtOp) {
   if (edtOp.isTask())
     return types::EdtType::Task;
   return types::EdtType::Task;
+}
+
+//===----------------------------------------------------------------------===//
+// DataBlock Creation Functions
+//===----------------------------------------------------------------------===//
+
+DbAllocOp createDbAllocOp(OpBuilder &builder, Location loc, StringRef mode,
+                          Value address, SmallVector<Value> sizes) {
+  auto addressType = address.getType().cast<MemRefType>();
+
+  /// If sizes are not provided, extract them from the address memref
+  if (sizes.empty()) {
+    for (int64_t i = 0; i < addressType.getRank(); ++i) {
+      if (addressType.isDynamicDim(i)) {
+        sizes.push_back(builder.create<memref::DimOp>(loc, address, i));
+      } else {
+        sizes.push_back(builder.create<arith::ConstantIndexOp>(
+            loc, addressType.getDimSize(i)));
+      }
+    }
+  }
+
+  /// Create result types
+  auto ptrType =
+      MemRefType::get(addressType.getShape(), addressType.getElementType());
+
+  /// Create the DbAllocOp with optional allocType parameter (nullptr for
+  /// default)
+  return builder.create<DbAllocOp>(loc, ptrType, builder.getStringAttr(mode),
+                                   address, sizes, nullptr);
 }
 
 DbControlOp createDbControlOp(OpBuilder &builder, Location loc,
@@ -138,6 +162,78 @@ DbControlOp createDbControlOp(OpBuilder &builder, Location loc,
         loc, resultType, modeAttr, baseMemRef, elementType, elementTypeSize,
         indices, offsets, sizes);
   }
+}
+
+//===----------------------------------------------------------------------===//
+// DataBlock Helper Functions
+//===----------------------------------------------------------------------===//
+
+bool isDbAllocOp(Operation *op) { return isa<DbAllocOp>(op); }
+
+bool isDbAccessOp(Operation *op) {
+  return isa<memref::SubViewOp>(op) || isa<memref::CastOp>(op);
+}
+
+bool isDbControlOp(Operation *op) { return isa<DbControlOp>(op); }
+
+//===----------------------------------------------------------------------===//
+// DataBlock Attribute Management
+//===----------------------------------------------------------------------===//
+
+types::DbAllocType getDbAllocType(DbAllocOp dbAllocOp) {
+  if (auto allocTypeAttr = dbAllocOp->getAttrOfType<StringAttr>("allocType"))
+    return types::getDbAllocType(allocTypeAttr.getValue());
+  return types::DbAllocType::Unknown;
+}
+
+void setDbAllocType(DbAllocOp dbAllocOp, types::DbAllocType type,
+                    OpBuilder &builder) {
+  dbAllocOp->setAttr("allocType", builder.getStringAttr(types::toString(type)));
+}
+
+//===----------------------------------------------------------------------===//
+// Allocation Type Analysis and Classification
+//===----------------------------------------------------------------------===//
+
+types::DbAllocType getAllocType(Value ptr) {
+  if (!ptr)
+    return types::DbAllocType::Unknown;
+
+  Operation *definingOp = ptr.getDefiningOp();
+  if (!definingOp)
+    return types::DbAllocType::Parameter;
+
+  if (isa<memref::AllocaOp>(definingOp))
+    return types::DbAllocType::Stack;
+  if (isa<memref::AllocOp>(definingOp))
+    return types::DbAllocType::Heap;
+  if (isa<memref::GetGlobalOp>(definingOp))
+    return types::DbAllocType::Global;
+  if (auto callOp = dyn_cast<func::CallOp>(definingOp))
+    return types::DbAllocType::Dynamic;
+  if (isa<memref::SubViewOp>(definingOp))
+    return getAllocType(cast<memref::SubViewOp>(definingOp).getSource());
+  if (isa<memref::CastOp>(definingOp))
+    return getAllocType(cast<memref::CastOp>(definingOp).getSource());
+
+  return types::DbAllocType::Unknown;
+}
+
+bool isStackAlloc(DbAllocOp dbAllocOp) {
+  auto allocType = getDbAllocType(dbAllocOp);
+  return allocType == types::DbAllocType::Stack ||
+         allocType == types::DbAllocType::Parameter;
+}
+
+bool isDynamicAlloc(DbAllocOp dbAllocOp) {
+  auto allocType = getDbAllocType(dbAllocOp);
+  return allocType == types::DbAllocType::Heap ||
+         allocType == types::DbAllocType::Dynamic;
+}
+
+bool isGlobalAlloc(DbAllocOp dbAllocOp) {
+  auto allocType = getDbAllocType(dbAllocOp);
+  return allocType == types::DbAllocType::Global;
 }
 
 } // namespace arts

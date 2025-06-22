@@ -42,8 +42,8 @@ static std::string toString(DbInfo::AccessType type) {
 /// DbAllocNode Implementation
 ///===----------------------------------------------------------------------===///
 
-DbAllocNode::DbAllocNode(DbCreateOp createOp, DbAnalysis *analysis)
-    : DbInfo(createOp.getOperation(), true, analysis), dbCreateOp(createOp) {}
+DbAllocNode::DbAllocNode(DbAllocOp createOp, DbAnalysis *analysis)
+    : DbInfo(createOp.getOperation(), true, analysis), dbAllocOp(createOp) {}
 
 DbAccessNode *DbAllocNode::getOrCreateAccessNode(DbAccessOp accessOp) {
   if (auto *existingNode = findAccessNode(accessOp))
