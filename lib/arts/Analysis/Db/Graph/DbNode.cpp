@@ -24,15 +24,15 @@ using namespace mlir::arts;
 /// DbInfo Implementation
 ///===----------------------------------------------------------------------===///
 
-static std::string toString(DbInfo::AccessType type) {
+static std::string toString(DbInfo::DepType type) {
   switch (type) {
-  case DbInfo::AccessType::Read:
+  case DbInfo::DepType::Read:
     return "Read";
-  case DbInfo::AccessType::Write:
+  case DbInfo::DepType::Write:
     return "Write";
-  case DbInfo::AccessType::ReadWrite:
+  case DbInfo::DepType::ReadWrite:
     return "ReadWrite";
-  case DbInfo::AccessType::Unknown:
+  case DbInfo::DepType::Unknown:
     return "Unknown";
   }
   return "Unknown";
@@ -45,38 +45,37 @@ static std::string toString(DbInfo::AccessType type) {
 DbAllocNode::DbAllocNode(DbAllocOp createOp, DbAnalysis *analysis)
     : DbInfo(createOp.getOperation(), true, analysis), dbAllocOp(createOp) {}
 
-DbAccessNode *DbAllocNode::getOrCreateAccessNode(DbAccessOp accessOp) {
-  if (auto *existingNode = findAccessNode(accessOp))
-    return existingNode;
+DbDepNode *DbAllocNode::getOrCreateDepNode(DbDepOp depOp) {
+  auto it = depNodeMap.find(depOp);
+  if (it != depNodeMap.end())
+    return it->second;
 
-  /// Create a new access node
-  auto newNode =
-      std::make_unique<DbAccessNode>(accessOp, false, this, analysis);
-  DbAccessNode *nodePtr = newNode.get();
-
-  nodePtr->setHierId(getHierId() + "." + std::to_string(nextChildId++));
-
-  accessNodes.push_back(std::move(newNode));
-  accessNodeMap[accessOp] = nodePtr;
-  return nodePtr;
+  // Create new dep node
+  unsigned childId = nextChildId++;
+  auto depNode =
+      std::make_unique<DbDepNode>(depOp, false, this, analysis);
+  DbDepNode *ptr = depNode.get();
+  depNodes.push_back(std::move(depNode));
+  depNodeMap[depOp] = ptr;
+  return ptr;
 }
 
-DbAccessNode *DbAllocNode::findAccessNode(DbAccessOp accessOp) const {
-  auto it = accessNodeMap.find(accessOp);
-  return it != accessNodeMap.end() ? it->second : nullptr;
+DbDepNode *DbAllocNode::findDepNode(DbDepOp depOp) const {
+  auto it = depNodeMap.find(depOp);
+  return (it != depNodeMap.end()) ? it->second : nullptr;
 }
 
-void DbAllocNode::forEachAccessNode(
-    const std::function<void(DbAccessNode *)> &fn) const {
-  for (const auto &node : accessNodes) {
+void DbAllocNode::forEachDepNode(
+    const std::function<void(DbDepNode *)> &fn) const {
+  for (const auto &node : depNodes) {
     fn(node.get());
   }
 }
 
 void DbAllocNode::print(llvm::raw_ostream &os) const {
   os << "DbAllocNode " << id << " (" << getHierId() << ")\n";
-  os << "  Access type: " << ::toString(accessType) << "\n";
-  os << "  Access nodes: " << accessNodes.size() << "\n";
+  os << "  Dep type: " << ::toString(depType) << "\n";
+  os << "  Dep nodes: " << depNodes.size() << "\n";
   os << "  In alloc edges: " << inAllocEdges.size() << "\n";
   os << "  Out alloc edges: " << outAllocEdges.size() << "\n";
 }
@@ -98,29 +97,29 @@ const DenseSet<DbAllocEdge *> &DbAllocNode::getOutAllocEdges() const {
 }
 
 ///===----------------------------------------------------------------------===///
-/// DbAccessNode Implementation
+/// DbDepNode Implementation
 ///===----------------------------------------------------------------------===///
 
-DbAccessNode::DbAccessNode(DbAccessOp accessOp, bool isAllocFlag,
+DbDepNode::DbDepNode(DbDepOp depOp, bool isAllocFlag,
                            DbAllocNode *parent, DbAnalysis *analysis)
-    : DbInfo(accessOp.getOperation(), isAllocFlag, analysis),
-      dbAccessOp(accessOp) {}
+    : DbInfo(depOp.getOperation(), isAllocFlag, analysis),
+      dbDepOp(depOp) {}
 
-void DbAccessNode::print(llvm::raw_ostream &os) const {
-  os << "DbAccessNode " << id << " (" << getHierId() << ")\n";
-  os << "  Access type: " << ::toString(accessType) << "\n";
+void DbDepNode::print(llvm::raw_ostream &os) const {
+  os << "DbDepNode " << id << " (" << getHierId() << ")\n";
+  os << "  Dep type: " << ::toString(depType) << "\n";
   os << "  In dep edges: " << inDepEdges.size() << "\n";
   os << "  Out dep edges: " << outDepEdges.size() << "\n";
 }
 
-void DbAccessNode::addInDepEdge(DbDepEdge *edge) { inDepEdges.insert(edge); }
+void DbDepNode::addInDepEdge(DbDepEdge *edge) { inDepEdges.insert(edge); }
 
-void DbAccessNode::addOutDepEdge(DbDepEdge *edge) { outDepEdges.insert(edge); }
+void DbDepNode::addOutDepEdge(DbDepEdge *edge) { outDepEdges.insert(edge); }
 
-const DenseSet<DbDepEdge *> &DbAccessNode::getInDepEdges() const {
+const DenseSet<DbDepEdge *> &DbDepNode::getInDepEdges() const {
   return inDepEdges;
 }
 
-const DenseSet<DbDepEdge *> &DbAccessNode::getOutDepEdges() const {
+const DenseSet<DbDepEdge *> &DbDepNode::getOutDepEdges() const {
   return outDepEdges;
 }

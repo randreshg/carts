@@ -31,7 +31,7 @@ StringRef toString(DbDepType type) {
 //===----------------------------------------------------------------------===//
 // DbDepEdge Implementation
 //===----------------------------------------------------------------------===//
-DbDepEdge::DbDepEdge(DbAccessNode *from, DbAccessNode *to, DbDepType type)
+DbDepEdge::DbDepEdge(DbDepNode *from, DbDepNode *to, DbDepType type)
     : from(from), to(to), type(type) {
   assert(from && "Source node cannot be null");
   assert(to && "Destination node cannot be null");
@@ -40,7 +40,7 @@ DbDepEdge::DbDepEdge(DbAccessNode *from, DbAccessNode *to, DbDepType type)
 void DbDepEdge::print() {
   LLVM_DEBUG({
     dbgs() << "DB DEPENDENCE EDGE:\n"
-           << "  - From: Access #" << from->getHierId() << "  - To: Access #"
+           << "  - From: Dep #" << from->getHierId() << "  - To: Dep #"
            << to->getHierId() << "  - Type: " << toString(type) << "\n";
   });
 }

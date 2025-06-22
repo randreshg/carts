@@ -22,29 +22,29 @@ class DbGraph {
 public:
   DbGraph(func::FuncOp func, DbAnalysis *analysis);
   bool isAllocReachable(DbAllocOp from, DbAllocOp to);
-  bool isAccessReachable(DbAccessOp from, DbAccessOp to);
-  bool hasDataDep(DbAccessOp from, DbAccessOp to);
-  DbAllocOp getParentAlloc(DbAccessOp access);
+  bool isDepReachable(DbDepOp from, DbDepOp to);
+  bool hasDataDep(DbDepOp from, DbDepOp to);
+  DbAllocOp getParentAlloc(DbDepOp dep);
   bool mayAlias(DbAllocOp alloc1, DbAllocOp alloc2);
-  bool mayAlias(DbAccessOp access1, DbAccessOp access2);
+  bool mayAlias(DbDepOp dep1, DbDepOp dep2);
 
   DbAllocNode *getOrCreateAllocNode(DbAllocOp dbAllocOp);
   DbAllocNode *getAllocNode(DbAllocOp dbAllocOp);
-  DbAccessNode *getOrCreateAccessNode(DbAllocOp allocation, DbAccessOp access);
-  DbAccessNode *getAccessNode(DbAccessOp access);
+  DbDepNode *getOrCreateDepNode(DbAllocOp allocation, DbDepOp dep);
+  DbDepNode *getDepNode(DbDepOp dep);
 
-  bool insertDepEdge(DbAccessOp from, DbAccessOp to, DbDepType type);
+  bool insertDepEdge(DbDepOp from, DbDepOp to, DbDepType type);
   bool insertAllocEdge(DbAllocOp from, DbAllocOp to);
-  DbDepEdge *getDependenceEdge(DbAccessOp from, DbAccessOp to);
+  DbDepEdge *getDependenceEdge(DbDepOp from, DbDepOp to);
   DbAllocEdge *getAllocEdge(DbAllocOp from, DbAllocOp to);
 
-  const DenseSet<DbDepEdge *> &getInDepEdges(DbAccessNode *node);
-  const DenseSet<DbDepEdge *> &getOutDepEdges(DbAccessNode *node);
+  const DenseSet<DbDepEdge *> &getInDepEdges(DbDepNode *node);
+  const DenseSet<DbDepEdge *> &getOutDepEdges(DbDepNode *node);
   const DenseSet<DbAllocEdge *> &getInAllocEdges(DbAllocNode *node);
   const DenseSet<DbAllocEdge *> &getOutAllocEdges(DbAllocNode *node);
 
   void forEachAllocNode(const function<void(DbAllocNode *)> &fn);
-  void forEachAccessNode(const function<void(DbAccessNode *)> &fn);
+  void forEachDepNode(const function<void(DbDepNode *)> &fn);
 
   void build();
   void invalidate();
@@ -58,9 +58,9 @@ public:
 
   func::FuncOp getFunction() const { return func; }
   DbInfo *getNode(Operation *op);
-  DbInfo *getNode(DbControlOp dbOp);
+  DbInfo *getNode(DbDepOp dbOp);
   DbInfo *getEntryNode();
-  bool addEdge(DbAccessOp from, DbAccessOp to, DbDepType type);
+  bool addEdge(DbDepOp from, DbDepOp to, DbDepType type);
   bool addEdge(DbAllocOp from, DbAllocOp to);
   size_t getNumEdges() const;
 
@@ -73,8 +73,8 @@ private:
   unsigned nextAllocId;
 
   DenseMap<DbAllocOp, unique_ptr<DbAllocNode>> allocNodes;
-  DenseMap<DbAccessOp, DbAccessNode *> accessNodeMap;
-  DenseMap<pair<DbAccessNode *, DbAccessNode *>, unique_ptr<DbDepEdge>> depEdges;
+  DenseMap<DbDepOp, DbDepNode *> depNodeMap;
+  DenseMap<pair<DbDepNode *, DbDepNode *>, unique_ptr<DbDepEdge>> depEdges;
   DenseMap<pair<DbAllocNode *, DbAllocNode *>, unique_ptr<DbAllocEdge>> allocEdges;
 
   void collectNodes();

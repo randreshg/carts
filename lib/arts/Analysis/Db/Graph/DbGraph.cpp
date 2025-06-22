@@ -2,7 +2,7 @@
 /// File: DbGraph.cpp
 ///
 /// Simplified implementation of db dependency graph for analyzing
-/// memory access patterns and dependencies.
+/// memory dep patterns and dependencies.
 ///==========================================================================
 
 #include "arts/Analysis/Db/Graph/DbGraph.h"
@@ -71,9 +71,9 @@ bool DbGraph::isAllocReachable(DbAllocOp from, DbAllocOp to) {
   return false;
 }
 
-bool DbGraph::isAccessReachable(DbAccessOp from, DbAccessOp to) {
-  DbAccessNode *fromNode = getAccessNode(from);
-  DbAccessNode *toNode = getAccessNode(to);
+bool DbGraph::isDepReachable(DbDepOp from, DbDepOp to) {
+  DbDepNode *fromNode = getDepNode(from);
+  DbDepNode *toNode = getDepNode(to);
   if (!fromNode || !toNode)
     return false;
 
@@ -84,9 +84,9 @@ bool DbGraph::isAccessReachable(DbAccessOp from, DbAccessOp to) {
   return false;
 }
 
-bool DbGraph::hasDataDep(DbAccessOp from, DbAccessOp to) {
-  DbAccessNode *fromNode = getAccessNode(from);
-  DbAccessNode *toNode = getAccessNode(to);
+bool DbGraph::hasDataDep(DbDepOp from, DbDepOp to) {
+  DbDepNode *fromNode = getDepNode(from);
+  DbDepNode *toNode = getDepNode(to);
   if (!fromNode || !toNode)
     return false;
 
@@ -97,11 +97,11 @@ bool DbGraph::hasDataDep(DbAccessOp from, DbAccessOp to) {
   return false;
 }
 
-DbAllocOp DbGraph::getParentAlloc(DbAccessOp access) {
-  DbAccessNode *accessNode = getAccessNode(access);
-  if (!accessNode)
+DbAllocOp DbGraph::getParentAlloc(DbDepOp dep) {
+  DbDepNode *depNode = getDepNode(dep);
+  if (!depNode)
     return nullptr;
-  return dyn_cast<DbAllocOp>(accessNode->getParentAlloc()->getOp());
+  return dyn_cast<DbAllocOp>(depNode->getParentAlloc()->getOp());
 }
 
 bool DbGraph::mayAlias(DbAllocOp alloc1, DbAllocOp alloc2) {
@@ -112,9 +112,9 @@ bool DbGraph::mayAlias(DbAllocOp alloc1, DbAllocOp alloc2) {
   return analysis->dbAliasAnalysis->mayAlias(*node1, *node2);
 }
 
-bool DbGraph::mayAlias(DbAccessOp access1, DbAccessOp access2) {
-  DbAccessNode *node1 = getAccessNode(access1);
-  DbAccessNode *node2 = getAccessNode(access2);
+bool DbGraph::mayAlias(DbDepOp dep1, DbDepOp dep2) {
+  DbDepNode *node1 = getDepNode(dep1);
+  DbDepNode *node2 = getDepNode(dep2);
   if (!node1 || !node2)
     return false;
   return analysis->dbAliasAnalysis->mayAlias(*node1, *node2);
@@ -143,23 +143,23 @@ DbAllocNode *DbGraph::getAllocNode(DbAllocOp allocOp) {
   return it != allocNodes.end() ? it->second.get() : nullptr;
 }
 
-DbAccessNode *DbGraph::getOrCreateAccessNode(DbAllocOp allocOp,
-                                             DbAccessOp accessOp) {
+DbDepNode *DbGraph::getOrCreateDepNode(DbAllocOp allocOp,
+                                             DbDepOp depOp) {
   DbAllocNode *allocNode = getOrCreateAllocNode(allocOp);
-  auto *accessNode = allocNode->getOrCreateAccessNode(accessOp);
-  accessNodeMap[accessOp] = accessNode;
-  return accessNode;
+  auto *depNode = allocNode->getOrCreateDepNode(depOp);
+  depNodeMap[depOp] = depNode;
+  return depNode;
 }
 
-DbAccessNode *DbGraph::getAccessNode(DbAccessOp accessOp) {
-  auto it = accessNodeMap.find(accessOp);
-  if (it != accessNodeMap.end())
+DbDepNode *DbGraph::getDepNode(DbDepOp depOp) {
+  auto it = depNodeMap.find(depOp);
+  if (it != depNodeMap.end())
     return it->second;
 
   for (auto &pair : allocNodes) {
-    if (auto *accessNode = pair.second->findAccessNode(accessOp)) {
-      accessNodeMap[accessOp] = accessNode;
-      return accessNode;
+    if (auto *depNode = pair.second->findDepNode(depOp)) {
+      depNodeMap[depOp] = depNode;
+      return depNode;
     }
   }
   return nullptr;
@@ -169,9 +169,9 @@ DbAccessNode *DbGraph::getAccessNode(DbAccessOp accessOp) {
 /// Edge Management
 ///===----------------------------------------------------------------------===///
 
-bool DbGraph::insertDepEdge(DbAccessOp from, DbAccessOp to, DbDepType type) {
-  DbAccessNode *fromNode = getAccessNode(from);
-  DbAccessNode *toNode = getAccessNode(to);
+bool DbGraph::insertDepEdge(DbDepOp from, DbDepOp to, DbDepType type) {
+  DbDepNode *fromNode = getDepNode(from);
+  DbDepNode *toNode = getDepNode(to);
   if (!fromNode || !toNode)
     return false;
 
@@ -203,9 +203,9 @@ bool DbGraph::insertAllocEdge(DbAllocOp from, DbAllocOp to) {
   return true;
 }
 
-DbDepEdge *DbGraph::getDependenceEdge(DbAccessOp from, DbAccessOp to) {
-  DbAccessNode *fromNode = getAccessNode(from);
-  DbAccessNode *toNode = getAccessNode(to);
+DbDepEdge *DbGraph::getDependenceEdge(DbDepOp from, DbDepOp to) {
+  DbDepNode *fromNode = getDepNode(from);
+  DbDepNode *toNode = getDepNode(to);
   if (!fromNode || !toNode)
     return nullptr;
 
@@ -229,11 +229,11 @@ DbAllocEdge *DbGraph::getAllocEdge(DbAllocOp from, DbAllocOp to) {
 /// Edge Iteration
 ///===----------------------------------------------------------------------===///
 
-const DenseSet<DbDepEdge *> &DbGraph::getInDepEdges(DbAccessNode *node) {
+const DenseSet<DbDepEdge *> &DbGraph::getInDepEdges(DbDepNode *node) {
   return node->getInDepEdges();
 }
 
-const DenseSet<DbDepEdge *> &DbGraph::getOutDepEdges(DbAccessNode *node) {
+const DenseSet<DbDepEdge *> &DbGraph::getOutDepEdges(DbDepNode *node) {
   return node->getOutDepEdges();
 }
 
@@ -254,8 +254,8 @@ void DbGraph::forEachAllocNode(const std::function<void(DbAllocNode *)> &fn) {
     fn(pair.second.get());
 }
 
-void DbGraph::forEachAccessNode(const std::function<void(DbAccessNode *)> &fn) {
-  for (auto &pair : accessNodeMap)
+void DbGraph::forEachDepNode(const std::function<void(DbDepNode *)> &fn) {
+  for (auto &pair : depNodeMap)
     fn(pair.second);
 }
 
@@ -279,7 +279,7 @@ void DbGraph::build() {
 
 void DbGraph::invalidate() {
   allocNodes.clear();
-  accessNodeMap.clear();
+  depNodeMap.clear();
   depEdges.clear();
   allocEdges.clear();
   nextAllocId = 1;
@@ -293,12 +293,12 @@ void DbGraph::print(llvm::raw_ostream &os) {
   os << "===============================================\n";
   os << "Summary:\n";
   os << "  Allocations: " << allocNodes.size() << "\n";
-  os << "  Access nodes: " << accessNodeMap.size() << "\n";
+  os << "  Dep nodes: " << depNodeMap.size() << "\n";
   os << "  Dependence edges: " << depEdges.size() << "\n";
   os << "  Allocation edges: " << allocEdges.size() << "\n";
   os << "\n";
 
-  // Print allocation hierarchy with their access nodes and dependencies
+  // Print allocation hierarchy with their dep nodes and dependencies
   os << "Allocation Hierarchy:\n";
   os << "=====================\n";
   forEachAllocNode([&](DbAllocNode *allocNode) {
@@ -306,26 +306,26 @@ void DbGraph::print(llvm::raw_ostream &os) {
     allocNode->print(os);
     os << "\n";
 
-    // Count and list access nodes for this allocation
-    std::vector<DbAccessNode *> accessNodes;
-    allocNode->forEachAccessNode(
-        [&](DbAccessNode *accessNode) { accessNodes.push_back(accessNode); });
+    // Count and list dep nodes for this allocation
+    std::vector<DbDepNode *> depNodes;
+    allocNode->forEachDepNode(
+        [&](DbDepNode *depNode) { depNodes.push_back(depNode); });
 
-    if (accessNodes.empty()) {
-      os << "   └── (no access nodes)\n";
+    if (depNodes.empty()) {
+      os << "   └── (no dep nodes)\n";
     } else {
-      os << "   └── Access nodes (" << accessNodes.size() << "):\n";
+      os << "   └── Dep nodes (" << depNodes.size() << "):\n";
 
-      for (size_t i = 0; i < accessNodes.size(); ++i) {
-        DbAccessNode *accessNode = accessNodes[i];
-        bool isLast = (i == accessNodes.size() - 1);
+      for (size_t i = 0; i < depNodes.size(); ++i) {
+        DbDepNode *depNode = depNodes[i];
+        bool isLast = (i == depNodes.size() - 1);
         os << "       " << (isLast ? "└──" : "├──") << " ["
-           << accessNode->getHierId() << "]: ";
-        accessNode->print(os);
+           << depNode->getHierId() << "]: ";
+        depNode->print(os);
         os << "\n";
 
-        // Show outgoing dependencies for this access node
-        auto outEdges = getOutDepEdges(accessNode);
+        // Show outgoing dependencies for this dep node
+        auto outEdges = getOutDepEdges(depNode);
         if (!outEdges.empty()) {
           os << "       " << (isLast ? "   " : "│  ") << "    Dependencies:\n";
           for (auto *edge : outEdges) {
@@ -424,14 +424,14 @@ void DbGraph::exportToDot(llvm::raw_ostream &os) {
     os << "    style=filled;\n";
     os << "    color=lightgrey;\n\n";
 
-    bool hasAccessNodes = false;
-    allocNode->forEachAccessNode([&](DbAccessNode *accessNode) {
-      hasAccessNodes = true;
-      os << "    " << sanitizeForDot(accessNode->getHierId()) << " [label=\""
-         << accessNode->getHierId() << "\"];\n";
+    bool hasDepNodes = false;
+    allocNode->forEachDepNode([&](DbDepNode *depNode) {
+      hasDepNodes = true;
+      os << "    " << sanitizeForDot(depNode->getHierId()) << " [label=\""
+         << depNode->getHierId() << "\"];\n";
     });
 
-    if (!hasAccessNodes) {
+    if (!hasDepNodes) {
       os << "    " << sanitizeForDot(allocNode->getHierId()) << " [label=\""
          << allocNode->getHierId() << "\", style=invisible];\n";
     }
@@ -441,10 +441,10 @@ void DbGraph::exportToDot(llvm::raw_ostream &os) {
 
   /// Define dependency edges
   os << "  // Dependency Edges\n";
-  forEachAccessNode([&](DbAccessNode *accessNode) {
-    for (auto *edge : accessNode->getOutDepEdges()) {
-      DbAccessNode *toNode = edge->getTo();
-      os << "  " << sanitizeForDot(accessNode->getHierId()) << " -> "
+  forEachDepNode([&](DbDepNode *depNode) {
+    for (auto *edge : depNode->getOutDepEdges()) {
+      DbDepNode *toNode = edge->getTo();
+      os << "  " << sanitizeForDot(depNode->getHierId()) << " -> "
          << sanitizeForDot(toNode->getHierId()) << ";\n";
     }
   });
@@ -458,27 +458,27 @@ void DbGraph::exportToDot(llvm::raw_ostream &os) {
 
       /// Find representative node for 'from'
       std::string fromRep;
-      bool fromHasAccess = false;
-      allocNode->forEachAccessNode([&](DbAccessNode *n) {
-        if (!fromHasAccess) {
+      bool fromHasDep = false;
+      allocNode->forEachDepNode([&](DbDepNode *n) {
+        if (!fromHasDep) {
           fromRep = sanitizeForDot(n->getHierId());
-          fromHasAccess = true;
+          fromHasDep = true;
         }
       });
-      if (!fromHasAccess) {
+      if (!fromHasDep) {
         fromRep = sanitizeForDot(allocNode->getHierId());
       }
 
       /// Find representative node for 'to'
       std::string toRep;
-      bool toHasAccess = false;
-      toNode->forEachAccessNode([&](DbAccessNode *n) {
-        if (!toHasAccess) {
+      bool toHasDep = false;
+      toNode->forEachDepNode([&](DbDepNode *n) {
+        if (!toHasDep) {
           toRep = sanitizeForDot(n->getHierId());
-          toHasAccess = true;
+          toHasDep = true;
         }
       });
-      if (!toHasAccess) {
+      if (!toHasDep) {
         toRep = sanitizeForDot(toNode->getHierId());
       }
 
@@ -499,23 +499,22 @@ void DbGraph::exportToDot(llvm::raw_ostream &os) {
 void DbGraph::collectNodes() {
   LLVM_DEBUG(DBGS() << "Phase 1 - Collecting nodes\n");
 
-  /// Collect allocations and their accesses in one pass
+  /// Collect allocations and their depes in one pass
   func.walk([&](DbAllocOp allocOp) {
     auto *allocNode = getOrCreateAllocNode(allocOp);
 
-    /// Find all subviews and casts that use this allocation
+    /// Find all depes that use this allocation
     for (auto *user : allocOp.getPtr().getUsers()) {
-      if (isa<memref::SubViewOp>(user) || isa<memref::CastOp>(user)) {
-        auto accessOp = getDbAccessOp(user);
-        auto *accessNode = allocNode->getOrCreateAccessNode(accessOp);
-        accessNodeMap[accessOp] = accessNode;
+      if (auto depOp = dyn_cast<DbDepOp>(user)) {
+        auto *depNode = allocNode->getOrCreateDepNode(depOp);
+        depNodeMap[depOp] = depNode;
       }
     }
   });
 
   LLVM_DEBUG(DBGS() << "Phase 1 - Collected " << allocNodes.size()
-                    << " allocations and " << accessNodeMap.size()
-                    << " accesses\n");
+                    << " allocations and " << depNodeMap.size()
+                    << " depes\n");
 }
 
 void DbGraph::buildDependencies() {
@@ -535,15 +534,13 @@ DbInfo *DbGraph::getNode(Operation *op) {
 
   if (auto allocOp = dyn_cast<DbAllocOp>(op))
     return getAllocNode(allocOp);
-  if (isa<memref::SubViewOp>(op) || isa<memref::CastOp>(op)) {
-    auto accessOp = getDbAccessOp(op);
-    return getAccessNode(accessOp);
-  }
+  if (auto depOp = dyn_cast<DbDepOp>(op))
+    return getDepNode(depOp);
 
   return nullptr;
 }
 
-DbInfo *DbGraph::getNode(DbControlOp dbOp) {
+DbInfo *DbGraph::getNode(DbDepOp dbOp) {
   if (!dbOp)
     return nullptr;
   return getNode(dbOp.getOperation());
@@ -556,7 +553,7 @@ DbInfo *DbGraph::getEntryNode() {
   return nullptr;
 }
 
-bool DbGraph::addEdge(DbAccessOp from, DbAccessOp to, DbDepType type) {
+bool DbGraph::addEdge(DbDepOp from, DbDepOp to, DbDepType type) {
   return insertDepEdge(from, to, type);
 }
 

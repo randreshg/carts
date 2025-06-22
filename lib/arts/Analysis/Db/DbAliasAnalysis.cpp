@@ -61,8 +61,8 @@ bool DbAliasAnalysis::mayAlias(DbInfo &A, DbInfo &B) {
   if (A.isAlloc() && B.isAlloc()) {
     LLVM_DEBUG(dbgs() << "  -> Both are allocations. Checking effects.\n");
     result = mayAlias(A.getEffects(), B.getEffects());
-  } else if (A.isAccess() && B.isAccess()) {
-    LLVM_DEBUG(dbgs() << "  -> Both are accesses.\n");
+  } else if (A.isDep() && B.isDep()) {
+    LLVM_DEBUG(dbgs() << "  -> Both are depes.\n");
     auto *parentA = A.getParent();
     auto *parentB = B.getParent();
 
@@ -83,17 +83,17 @@ bool DbAliasAnalysis::mayAlias(DbInfo &A, DbInfo &B) {
     }
   } else {
     DbInfo &alloc = A.isAlloc() ? A : B;
-    DbInfo &access = A.isAccess() ? A : B;
+    DbInfo &dep = A.isDep() ? A : B;
     LLVM_DEBUG(dbgs() << "  -> Mixed alloc #" << alloc.getId()
-                      << " and access #" << access.getId() << ".\n");
+                      << " and dep #" << dep.getId() << ".\n");
 
-    auto *accessParent = access.getParent();
-    if (accessParent) {
-      LLVM_DEBUG(dbgs() << "    -> Access has parent #" << accessParent->getId()
+    auto *depParent = dep.getParent();
+    if (depParent) {
+      LLVM_DEBUG(dbgs() << "    -> Dep has parent #" << depParent->getId()
                         << ". Comparing with alloc.\n");
-      result = mayAlias(alloc, *accessParent);
+      result = mayAlias(alloc, *depParent);
     } else {
-      LLVM_DEBUG(dbgs() << "    -> Access has no parent. "
+      LLVM_DEBUG(dbgs() << "    -> Dep has no parent. "
                         << "Falling back to effects.\n");
       result = mayAlias(A.getEffects(), B.getEffects());
     }

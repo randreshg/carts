@@ -21,11 +21,11 @@ namespace arts {
 
 class DbAnalysis;
 class DbGraph;
-class DbAccessNode;
+class DbDepNode;
 
-/// Environment represents the current state of data block definitions
+/// Environment represents the current state of DB definitions
 /// at a particular point in the program.
-using DbEnvironment = DenseMap<DbAccessOp, DbAccessNode *>;
+using DbEnvironment = DenseMap<DbDepOp, DbDepNode *>;
 
 class DbDataFlowAnalysis {
 public:
@@ -53,13 +53,13 @@ public:
                                              DbEnvironment &env);
 
   /// Helper methods
-  SmallVector<DbAccessNode *, 4> findDefinition(DbAccessNode &dbNode,
+  SmallVector<DbDepNode *, 4> findDefinition(DbDepNode &dbNode,
                                                 DbEnvironment &env);
   DbEnvironment mergeEnvironments(const DbEnvironment &env1,
                                   const DbEnvironment &env2);
 
   /// Dependency analysis.
-  bool mayDepend(DbAccessNode &prod, DbAccessNode &cons);
+  bool mayDepend(DbDepNode &prod, DbDepNode &cons);
 
 private:
   DbAnalysis *analysis;
