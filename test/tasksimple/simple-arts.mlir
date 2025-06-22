@@ -1,7 +1,8 @@
+
 -----------------------------------------
-ConvertArtsToLLVMPass START
+DbPass STARTED
 -----------------------------------------
-module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
+module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
   llvm.mlir.global internal constant @str4("EDT 3: The final number is %d - %d.\0A\00") {addr_space = 0 : i32}
   llvm.mlir.global internal constant @str3("EDT 2: The number is %d/%d\0A\00") {addr_space = 0 : i32}
   llvm.mlir.global internal constant @str2("EDT 1: The number is %d/%d\0A\00") {addr_space = 0 : i32}
@@ -15,7 +16,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
     %c100_i32 = arith.constant 100 : i32
     %0 = llvm.mlir.undef : i32
     %alloca = memref.alloca() : memref<i32>
-    %1 = arts.db_create "inout"(%alloca : memref<i32>) [] -> : memref<i32>
+    %1 = arts.db_alloc "inout"(%alloca : memref<i32>) [] -> : memref<i32>
     memref.store %0, %1[] : memref<i32>
     %2 = llvm.mlir.zero : !llvm.ptr
     %3 = "polygeist.pointer2memref"(%2) : (!llvm.ptr) -> memref<?xi64>
@@ -36,31 +37,30 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
     %16 = llvm.getelementptr %15[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<36 x i8>
     %17 = llvm.call @printf(%16, %11, %14) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
     %subview = memref.subview %1[] [] [] : memref<i32> to memref<i32, strided<[]>>
-    arts.epoch {
-      arts.edt dependencies(%subview) : (memref<i32, strided<[]>>) attributes {task} {
-        %alloca_0 = memref.alloca() : memref<i32>
-        %23 = arts.db_create "inout"(%alloca_0 : memref<i32>) [] -> : memref<i32>
-        memref.store %0, %23[] : memref<i32>
-        %24 = llvm.mlir.addressof @str2 : !llvm.ptr
-        %25 = llvm.getelementptr %24[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<28 x i8>
-        %26 = memref.load %subview[] : memref<i32, strided<[]>>
-        %27 = llvm.call @printf(%25, %26, %14) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
-        memref.store %14, %23[] : memref<i32>
-        %subview_1 = memref.subview %23[] [] [] : memref<i32> to memref<i32, strided<[]>>
-        arts.edt dependencies(%subview_1, %subview) : (memref<i32, strided<[]>>, memref<i32, strided<[]>>) attributes {task} {
-          %28 = memref.load %subview[] : memref<i32, strided<[]>>
-          %29 = arith.addi %28, %c1_i32 : i32
-          memref.store %29, %subview[] : memref<i32, strided<[]>>
-          %30 = memref.load %subview_1[] : memref<i32, strided<[]>>
-          %31 = arith.addi %30, %c1_i32 : i32
-          memref.store %31, %subview_1[] : memref<i32, strided<[]>>
-          %32 = llvm.mlir.addressof @str3 : !llvm.ptr
-          %33 = llvm.getelementptr %32[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<28 x i8>
-          %34 = llvm.call @printf(%33, %29, %31) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
-          arts.yield
-        }
+    arts.edt dependencies(%subview) : (memref<i32, strided<[]>>) attributes {sync} {
+      %alloca_0 = memref.alloca() : memref<i32>
+      %23 = arts.db_alloc "inout"(%alloca_0 : memref<i32>) [] -> : memref<i32>
+      memref.store %0, %23[] : memref<i32>
+      %24 = llvm.mlir.addressof @str2 : !llvm.ptr
+      %25 = llvm.getelementptr %24[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<28 x i8>
+      %26 = memref.load %subview[] : memref<i32, strided<[]>>
+      %27 = llvm.call @printf(%25, %26, %14) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
+      memref.store %14, %23[] : memref<i32>
+      %subview_1 = memref.subview %23[] [] [] : memref<i32> to memref<i32, strided<[]>>
+      %subview_2 = memref.subview %1[] [] [] : memref<i32> to memref<i32, strided<[]>>
+      arts.edt dependencies(%subview_1, %subview_2) : (memref<i32, strided<[]>>, memref<i32, strided<[]>>) attributes {task} {
+        %28 = memref.load %subview_2[] : memref<i32, strided<[]>>
+        %29 = arith.addi %28, %c1_i32 : i32
+        memref.store %29, %subview_2[] : memref<i32, strided<[]>>
+        %30 = memref.load %subview_1[] : memref<i32, strided<[]>>
+        %31 = arith.addi %30, %c1_i32 : i32
+        memref.store %31, %subview_1[] : memref<i32, strided<[]>>
+        %32 = llvm.mlir.addressof @str3 : !llvm.ptr
+        %33 = llvm.getelementptr %32[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<28 x i8>
+        %34 = llvm.call @printf(%33, %29, %31) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
         arts.yield
       }
+      arts.yield
     }
     %18 = memref.load %1[] : memref<i32>
     %19 = arith.addi %18, %c1_i32 : i32
@@ -74,8 +74,169 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
   func.func private @time(memref<?xi64>) -> i64 attributes {llvm.linkage = #llvm.linkage<external>}
   func.func private @rand() -> i32 attributes {llvm.linkage = #llvm.linkage<external>}
 }
-Module after preprocessing DataBlocks:
-module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
+[db-analysis] Initializing DbAnalysis for module
+Getting or creating DbGraph for function: main
+Creating new DbGraph for function: main
+[db-dataflow-analysis] - Starting Dataflow analysis for function: main
+  - Processing CallOp (ignoring for now)
+    Merging environments
+    - Final merged environment: {}
+  - Processing CallOp (ignoring for now)
+    Merging environments
+    - Final merged environment: {}
+  - Processing CallOp (ignoring for now)
+    Merging environments
+    - Final merged environment: {}
+  - Processing CallOp (ignoring for now)
+    Merging environments
+    - Final merged environment: {}
+  - Processing EDT #0
+   Initial environment: {}
+    Processing EDT inputs
+    - Examining DB #A.1 as input
+      Searching for definitions for DB #A.1
+      - No previous definition for DB #A.1, add edge from entry node
+    Processing EDT outputs
+    Processing EDT body region
+      - Processing EDT #1
+       Initial environment: {}
+        Processing EDT inputs
+        - Examining DB #B.1 as input
+          Searching for definitions for DB #B.1
+          - No previous definition for DB #B.1, add edge from entry node
+        - Examining DB #A.2 as input
+          Searching for definitions for DB #A.2
+          - No previous definition for DB #A.2, add edge from entry node
+        Processing EDT outputs
+        - Examining DB #B.1 as output
+          Searching for definitions for DB #B.1
+          - No previous definition for DB #B.1, updating environment with new definition
+        - Examining DB #A.2 as output
+          Searching for definitions for DB #A.2
+[db-alias-analysis] Analyzing alias between DB #4 and DB #2
+  -> Both are depes.
+    -> Could not determine parents. Falling back to effects.
+[db-alias-analysis] Analyzing memory effects overlap
+  Effects A: 0, Effects B: 0
+  -> No overlapping effects found -> no alias
+  -> Final result: no alias
+          - No previous definition for DB #A.2, updating environment with new definition
+        Processing EDT body region
+         - Finished processing region. Environment changed: false
+      Finished processing EDT. Environment changed: true
+        Merging environments
+        - Adding DB #A.2 to merged environment
+        - Adding DB #B.1 to merged environment
+        - Final merged environment: { #A.2 -> #A.2, #B.1 -> #B.1,}
+     - Finished processing region. Environment changed: true
+  Finished processing EDT. Environment changed: false
+    Merging environments
+    - Final merged environment: {}
+ - Finished processing region. Environment changed: false
+[db-dataflow-analysis] Finished Dataflow analysis for function: main
+===============================================
+DbGraph for function: main
+===============================================
+Summary:
+  Allocations: 2
+  Dep nodes: 3
+  Dependence edges: 0
+  Allocation edges: 0
+
+Allocation Hierarchy:
+=====================
+Allocation [A]: DbAllocNode 0 (A)
+  Dep type: ReadWrite
+  Dep nodes: 2
+  In alloc edges: 0
+  Out alloc edges: 0
+
+   └── Dep nodes (2):
+       ├── [A.1]: DbDepNode 1 (A.1)
+  Dep type: Read
+  In dep edges: 0
+  Out dep edges: 0
+
+       └── [A.2]: DbDepNode 2 (A.2)
+  Dep type: ReadWrite
+  In dep edges: 0
+  Out dep edges: 0
+
+
+Allocation [B]: DbAllocNode 3 (B)
+  Dep type: Write
+  Dep nodes: 1
+  In alloc edges: 0
+  Out alloc edges: 0
+
+   └── Dep nodes (1):
+       └── [B.1]: DbDepNode 4 (B.1)
+  Dep type: ReadWrite
+  In dep edges: 0
+  Out dep edges: 0
+
+
+===============================================
+[db] Exported dot graph to: DbGraph_main.dot
+Getting or creating DbGraph for function: srand
+Creating new DbGraph for function: srand
+[db-dataflow-analysis] - Starting Dataflow analysis for function: srand
+ - Finished processing region. Environment changed: false
+[db-dataflow-analysis] Finished Dataflow analysis for function: srand
+===============================================
+DbGraph for function: srand
+===============================================
+Summary:
+  Allocations: 0
+  Dep nodes: 0
+  Dependence edges: 0
+  Allocation edges: 0
+
+Allocation Hierarchy:
+=====================
+===============================================
+[db] Exported dot graph to: DbGraph_srand.dot
+Getting or creating DbGraph for function: time
+Creating new DbGraph for function: time
+[db-dataflow-analysis] - Starting Dataflow analysis for function: time
+ - Finished processing region. Environment changed: false
+[db-dataflow-analysis] Finished Dataflow analysis for function: time
+===============================================
+DbGraph for function: time
+===============================================
+Summary:
+  Allocations: 0
+  Dep nodes: 0
+  Dependence edges: 0
+  Allocation edges: 0
+
+Allocation Hierarchy:
+=====================
+===============================================
+[db] Exported dot graph to: DbGraph_time.dot
+Getting or creating DbGraph for function: rand
+Creating new DbGraph for function: rand
+[db-dataflow-analysis] - Starting Dataflow analysis for function: rand
+ - Finished processing region. Environment changed: false
+[db-dataflow-analysis] Finished Dataflow analysis for function: rand
+===============================================
+DbGraph for function: rand
+===============================================
+Summary:
+  Allocations: 0
+  Dep nodes: 0
+  Dependence edges: 0
+  Allocation edges: 0
+
+Allocation Hierarchy:
+=====================
+===============================================
+[db] Exported dot graph to: DbGraph_rand.dot
+[db] No changes made to the module
+-----------------------------------------
+DbPass FINISHED
+-----------------------------------------
+module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
   llvm.mlir.global internal constant @str4("EDT 3: The final number is %d - %d.\0A\00") {addr_space = 0 : i32}
   llvm.mlir.global internal constant @str3("EDT 2: The number is %d/%d\0A\00") {addr_space = 0 : i32}
   llvm.mlir.global internal constant @str2("EDT 1: The number is %d/%d\0A\00") {addr_space = 0 : i32}
@@ -89,7 +250,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
     %c100_i32 = arith.constant 100 : i32
     %0 = llvm.mlir.undef : i32
     %alloca = memref.alloca() : memref<i32>
-    %1 = arts.db_create "inout"(%alloca : memref<i32>) [] -> : memref<i32>
+    %1 = arts.db_alloc "inout"(%alloca : memref<i32>) [] -> : memref<i32>
     memref.store %0, %1[] : memref<i32>
     %2 = llvm.mlir.zero : !llvm.ptr
     %3 = "polygeist.pointer2memref"(%2) : (!llvm.ptr) -> memref<?xi64>
@@ -110,31 +271,30 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
     %16 = llvm.getelementptr %15[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<36 x i8>
     %17 = llvm.call @printf(%16, %11, %14) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
     %subview = memref.subview %1[] [] [] : memref<i32> to memref<i32, strided<[]>>
-    arts.epoch {
-      arts.edt dependencies(%subview) : (memref<i32, strided<[]>>) attributes {task} {
-        %alloca_0 = memref.alloca() : memref<i32>
-        %23 = arts.db_create "inout"(%alloca_0 : memref<i32>) [] -> : memref<i32>
-        memref.store %0, %23[] : memref<i32>
-        %24 = llvm.mlir.addressof @str2 : !llvm.ptr
-        %25 = llvm.getelementptr %24[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<28 x i8>
-        %26 = memref.load %subview[] : memref<i32, strided<[]>>
-        %27 = llvm.call @printf(%25, %26, %14) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
-        memref.store %14, %23[] : memref<i32>
-        %subview_1 = memref.subview %23[] [] [] : memref<i32> to memref<i32, strided<[]>>
-        arts.edt dependencies(%subview_1, %subview) : (memref<i32, strided<[]>>, memref<i32, strided<[]>>) attributes {task} {
-          %28 = memref.load %subview[] : memref<i32, strided<[]>>
-          %29 = arith.addi %28, %c1_i32 : i32
-          memref.store %29, %subview[] : memref<i32, strided<[]>>
-          %30 = memref.load %subview_1[] : memref<i32, strided<[]>>
-          %31 = arith.addi %30, %c1_i32 : i32
-          memref.store %31, %subview_1[] : memref<i32, strided<[]>>
-          %32 = llvm.mlir.addressof @str3 : !llvm.ptr
-          %33 = llvm.getelementptr %32[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<28 x i8>
-          %34 = llvm.call @printf(%33, %29, %31) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
-          arts.yield
-        }
+    arts.edt dependencies(%subview) : (memref<i32, strided<[]>>) attributes {sync} {
+      %alloca_0 = memref.alloca() : memref<i32>
+      %23 = arts.db_alloc "inout"(%alloca_0 : memref<i32>) [] -> : memref<i32>
+      memref.store %0, %23[] : memref<i32>
+      %24 = llvm.mlir.addressof @str2 : !llvm.ptr
+      %25 = llvm.getelementptr %24[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<28 x i8>
+      %26 = memref.load %subview[] : memref<i32, strided<[]>>
+      %27 = llvm.call @printf(%25, %26, %14) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
+      memref.store %14, %23[] : memref<i32>
+      %subview_1 = memref.subview %23[] [] [] : memref<i32> to memref<i32, strided<[]>>
+      %subview_2 = memref.subview %1[] [] [] : memref<i32> to memref<i32, strided<[]>>
+      arts.edt dependencies(%subview_1, %subview_2) : (memref<i32, strided<[]>>, memref<i32, strided<[]>>) attributes {task} {
+        %28 = memref.load %subview_2[] : memref<i32, strided<[]>>
+        %29 = arith.addi %28, %c1_i32 : i32
+        memref.store %29, %subview_2[] : memref<i32, strided<[]>>
+        %30 = memref.load %subview_1[] : memref<i32, strided<[]>>
+        %31 = arith.addi %30, %c1_i32 : i32
+        memref.store %31, %subview_1[] : memref<i32, strided<[]>>
+        %32 = llvm.mlir.addressof @str3 : !llvm.ptr
+        %33 = llvm.getelementptr %32[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<28 x i8>
+        %34 = llvm.call @printf(%33, %29, %31) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
         arts.yield
       }
+      arts.yield
     }
     %18 = memref.load %1[] : memref<i32>
     %19 = arith.addi %18, %c1_i32 : i32
@@ -148,39 +308,8 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
   func.func private @time(memref<?xi64>) -> i64 attributes {llvm.linkage = #llvm.linkage<external>}
   func.func private @rand() -> i32 attributes {llvm.linkage = #llvm.linkage<external>}
 }
------------------------------------------
-[convert-arts-to-llvm] Lowering arts.epoch: arts.epoch {
-  arts.edt dependencies(%subview) : (memref<i32, strided<[]>>) attributes {task} {
-    %alloca_0 = memref.alloca() : memref<i32>
-    %23 = arts.db_create "inout"(%alloca_0 : memref<i32>) [] -> : memref<i32>
-    memref.store %0, %23[] : memref<i32>
-    %24 = llvm.mlir.addressof @str2 : !llvm.ptr
-    %25 = llvm.getelementptr %24[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<28 x i8>
-    %26 = memref.load %subview[] : memref<i32, strided<[]>>
-    %27 = llvm.call @printf(%25, %26, %14) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
-    memref.store %14, %23[] : memref<i32>
-    %subview_1 = memref.subview %23[] [] [] : memref<i32> to memref<i32, strided<[]>>
-    arts.edt dependencies(%subview_1, %subview) : (memref<i32, strided<[]>>, memref<i32, strided<[]>>) attributes {task} {
-      %28 = memref.load %subview[] : memref<i32, strided<[]>>
-      %29 = arith.addi %28, %c1_i32 : i32
-      memref.store %29, %subview[] : memref<i32, strided<[]>>
-      %30 = memref.load %subview_1[] : memref<i32, strided<[]>>
-      %31 = arith.addi %30, %c1_i32 : i32
-      memref.store %31, %subview_1[] : memref<i32, strided<[]>>
-      %32 = llvm.mlir.addressof @str3 : !llvm.ptr
-      %33 = llvm.getelementptr %32[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<28 x i8>
-      %34 = llvm.call @printf(%33, %29, %31) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
-      arts.yield
-    }
-    arts.yield
-  }
-}
-[convert-arts-to-llvm] Module after iterating Epochs and Events:
-module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
-  func.func private @artsWaitOnHandle(i64) -> i1 attributes {llvm.linkage = #llvm.linkage<external>}
-  func.func private @artsInitializeAndStartEpoch(i64, i32) -> i64 attributes {llvm.linkage = #llvm.linkage<external>}
-  func.func private @artsEdtCreate(memref<?x!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, ptr)>>)>>, i32, i32, memref<?xi64>, i32) -> i64 attributes {llvm.linkage = #llvm.linkage<external>}
-  func.func private @artsGetCurrentNode() -> i32 attributes {llvm.linkage = #llvm.linkage<external>, llvm.nounwind, llvm.readnone}
+[db-analysis] Destroying DbAnalysis
+module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<f80, dense<128> : vector<2xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr<271>, dense<32> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<272>, dense<64> : vector<4xi32>>, #dlti.dl_entry<!llvm.ptr<270>, dense<32> : vector<4xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<"dlti.endianness", "little">, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>>, llvm.data_layout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128", llvm.target_triple = "x86_64-unknown-linux-gnu", "polygeist.target-cpu" = "x86-64", "polygeist.target-features" = "+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87", "polygeist.tune-cpu" = "generic"} {
   llvm.mlir.global internal constant @str4("EDT 3: The final number is %d - %d.\0A\00") {addr_space = 0 : i32}
   llvm.mlir.global internal constant @str3("EDT 2: The number is %d/%d\0A\00") {addr_space = 0 : i32}
   llvm.mlir.global internal constant @str2("EDT 1: The number is %d/%d\0A\00") {addr_space = 0 : i32}
@@ -194,7 +323,7 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
     %c100_i32 = arith.constant 100 : i32
     %0 = llvm.mlir.undef : i32
     %alloca = memref.alloca() : memref<i32>
-    %1 = arts.db_create "inout"(%alloca : memref<i32>) [] -> : memref<i32>
+    %1 = arts.db_alloc "inout"(%alloca : memref<i32>) [] -> : memref<i32>
     memref.store %0, %1[] : memref<i32>
     %2 = llvm.mlir.zero : !llvm.ptr
     %3 = "polygeist.pointer2memref"(%2) : (!llvm.ptr) -> memref<?xi64>
@@ -215,99 +344,40 @@ module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<!llvm.ptr, dense<
     %16 = llvm.getelementptr %15[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<36 x i8>
     %17 = llvm.call @printf(%16, %11, %14) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
     %subview = memref.subview %1[] [] [] : memref<i32> to memref<i32, strided<[]>>
-    %18 = call @artsGetCurrentNode() : () -> i32
-    %c0 = arith.constant 0 : index
-    %alloca_0 = memref.alloca() : memref<index>
-    memref.store %c0, %alloca_0[] : memref<index>
-    %19 = memref.load %alloca_0[] : memref<index>
-    %20 = arith.index_cast %19 : index to i32
-    %alloca_1 = memref.alloca() : memref<index>
-    %c0_2 = arith.constant 0 : index
-    memref.store %c0_2, %alloca_1[] : memref<index>
-    %21 = memref.load %alloca_1[] : memref<index>
-    %22 = arith.index_cast %21 : index to i32
-    %alloca_3 = memref.alloca(%21) : memref<?xi64>
-    %c1_i32_4 = arith.constant 1 : i32
-    %23 = "polygeist.get_func"() <{name = @__arts_edt_1}> : () -> !llvm.ptr<!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, ptr)>>)>>
-    %24 = "polygeist.pointer2memref"(%23) : (!llvm.ptr<!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, ptr)>>)>>) -> memref<?x!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, ptr)>>)>>
-    %25 = call @artsEdtCreate(%24, %18, %22, %alloca_3, %c1_i32_4) : (memref<?x!llvm.func<void (i32, memref<?xi64>, i32, memref<?x!llvm.struct<(i64, i32, ptr)>>)>>, i32, i32, memref<?xi64>, i32) -> i64
-    %c0_i32_5 = arith.constant 0 : i32
-    %26 = call @artsInitializeAndStartEpoch(%25, %c0_i32_5) : (i64, i32) -> i64
-    arts.edt dependencies(%subview) : (memref<i32, strided<[]>>) attributes {task} {
-      %alloca_6 = memref.alloca() : memref<i32>
-      %33 = arts.db_create "inout"(%alloca_6 : memref<i32>) [] -> : memref<i32>
-      memref.store %0, %33[] : memref<i32>
-      %34 = llvm.mlir.addressof @str2 : !llvm.ptr
-      %35 = llvm.getelementptr %34[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<28 x i8>
-      %36 = memref.load %subview[] : memref<i32, strided<[]>>
-      %37 = llvm.call @printf(%35, %36, %14) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
-      memref.store %14, %33[] : memref<i32>
-      %subview_7 = memref.subview %33[] [] [] : memref<i32> to memref<i32, strided<[]>>
-      arts.edt dependencies(%subview_7, %subview) : (memref<i32, strided<[]>>, memref<i32, strided<[]>>) attributes {task} {
-        %38 = memref.load %subview[] : memref<i32, strided<[]>>
-        %39 = arith.addi %38, %c1_i32 : i32
-        memref.store %39, %subview[] : memref<i32, strided<[]>>
-        %40 = memref.load %subview_7[] : memref<i32, strided<[]>>
-        %41 = arith.addi %40, %c1_i32 : i32
-        memref.store %41, %subview_7[] : memref<i32, strided<[]>>
-        %42 = llvm.mlir.addressof @str3 : !llvm.ptr
-        %43 = llvm.getelementptr %42[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<28 x i8>
-        %44 = llvm.call @printf(%43, %39, %41) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
+    arts.edt dependencies(%subview) : (memref<i32, strided<[]>>) attributes {sync} {
+      %alloca_0 = memref.alloca() : memref<i32>
+      %23 = arts.db_alloc "inout"(%alloca_0 : memref<i32>) [] -> : memref<i32>
+      memref.store %0, %23[] : memref<i32>
+      %24 = llvm.mlir.addressof @str2 : !llvm.ptr
+      %25 = llvm.getelementptr %24[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<28 x i8>
+      %26 = memref.load %subview[] : memref<i32, strided<[]>>
+      %27 = llvm.call @printf(%25, %26, %14) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
+      memref.store %14, %23[] : memref<i32>
+      %subview_1 = memref.subview %23[] [] [] : memref<i32> to memref<i32, strided<[]>>
+      arts.edt dependencies(%subview_1, %subview) : (memref<i32, strided<[]>>, memref<i32, strided<[]>>) attributes {task} {
+        %28 = memref.load %subview[] : memref<i32, strided<[]>>
+        %29 = arith.addi %28, %c1_i32 : i32
+        memref.store %29, %subview[] : memref<i32, strided<[]>>
+        %30 = memref.load %subview_1[] : memref<i32, strided<[]>>
+        %31 = arith.addi %30, %c1_i32 : i32
+        memref.store %31, %subview_1[] : memref<i32, strided<[]>>
+        %32 = llvm.mlir.addressof @str3 : !llvm.ptr
+        %33 = llvm.getelementptr %32[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<28 x i8>
+        %34 = llvm.call @printf(%33, %29, %31) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
         arts.yield
       }
       arts.yield
     }
-    %27 = call @artsWaitOnHandle(%26) : (i64) -> i1
-    %28 = memref.load %1[] : memref<i32>
-    %29 = arith.addi %28, %c1_i32 : i32
-    memref.store %29, %1[] : memref<i32>
-    %30 = llvm.mlir.addressof @str4 : !llvm.ptr
-    %31 = llvm.getelementptr %30[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<37 x i8>
-    %32 = llvm.call @printf(%31, %29, %14) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
+    %18 = memref.load %1[] : memref<i32>
+    %19 = arith.addi %18, %c1_i32 : i32
+    memref.store %19, %1[] : memref<i32>
+    %20 = llvm.mlir.addressof @str4 : !llvm.ptr
+    %21 = llvm.getelementptr %20[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<37 x i8>
+    %22 = llvm.call @printf(%21, %19, %14) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32) -> i32
     return %c0_i32 : i32
   }
   func.func private @srand(i32) attributes {llvm.linkage = #llvm.linkage<external>}
   func.func private @time(memref<?xi64>) -> i64 attributes {llvm.linkage = #llvm.linkage<external>}
   func.func private @rand() -> i32 attributes {llvm.linkage = #llvm.linkage<external>}
-  func.func private @__arts_edt_1(%arg0: i32, %arg1: memref<?xi64>, %arg2: i32, %arg3: memref<?x!llvm.struct<(i64, i32, ptr)>>) {
-    return
-  }
 }
------------------------------------------
-[convert-arts-to-llvm] Lowering arts.db_create
-[convert-arts-to-llvm] Lowering arts.db_create
-[convert-arts-to-llvm] Lowering arts.edt
-carts-opt: /home/randres/projects/carts/external/Polygeist/llvm-project/llvm/include/llvm/Support/Casting.h:578: decltype(auto) llvm::cast(From *) [To = mlir::arts::DbControlOp, From = mlir::Operation]: Assertion `isa<To>(Val) && "cast<Ty>() argument of incompatible type!"' failed.
-PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/ and include the crash backtrace.
-Stack dump:
-0.	Program arguments: carts-opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize --create-dbs --db --cse --polygeist-mem2reg --edt-pointer-rematerialization --create-epochs --convert-arts-to-llvm --cse -debug-only=convert-arts-to-llvm,arts-codegen
- #0 0x00005624e36827a7 llvm::sys::PrintStackTrace(llvm::raw_ostream&, int) (/home/randres/projects/carts/.install/carts/bin/carts-opt+0x11d87a7)
- #1 0x00005624e368037e llvm::sys::RunSignalHandlers() (/home/randres/projects/carts/.install/carts/bin/carts-opt+0x11d637e)
- #2 0x00005624e3682e5a SignalHandler(int) Signals.cpp:0:0
- #3 0x00007f2f0931c520 (/lib/x86_64-linux-gnu/libc.so.6+0x42520)
- #4 0x00007f2f093709fc pthread_kill (/lib/x86_64-linux-gnu/libc.so.6+0x969fc)
- #5 0x00007f2f0931c476 gsignal (/lib/x86_64-linux-gnu/libc.so.6+0x42476)
- #6 0x00007f2f093027f3 abort (/lib/x86_64-linux-gnu/libc.so.6+0x287f3)
- #7 0x00007f2f0930271b (/lib/x86_64-linux-gnu/libc.so.6+0x2871b)
- #8 0x00007f2f09313e96 (/lib/x86_64-linux-gnu/libc.so.6+0x39e96)
- #9 0x00005624e2ccf050 mlir::arts::EdtCodegen::processSubviewDependency(mlir::Value, mlir::Location) (/home/randres/projects/carts/.install/carts/bin/carts-opt+0x825050)
-#10 0x00005624e2cca3a7 mlir::arts::EdtCodegen::process(mlir::Location) (/home/randres/projects/carts/.install/carts/bin/carts-opt+0x8203a7)
-#11 0x00005624e2cc9e92 mlir::arts::EdtCodegen::EdtCodegen(mlir::arts::ArtsCodegen&, llvm::SmallVector<mlir::Value, 6u>*, mlir::Region*, mlir::Value*, mlir::Location*, bool) (/home/randres/projects/carts/.install/carts/bin/carts-opt+0x81fe92)
-#12 0x00005624e2cd7542 mlir::arts::ArtsCodegen::createEdt(llvm::SmallVector<mlir::Value, 6u>*, mlir::Region*, mlir::Value*, mlir::Location*, bool) (/home/randres/projects/carts/.install/carts/bin/carts-opt+0x82d542)
-#13 0x00005624e2cc40e6 mlir::WalkResult llvm::function_ref<mlir::WalkResult (mlir::Operation*)>::callback_fn<std::enable_if<!llvm::is_one_of<mlir::arts::EdtOp, mlir::Operation*, mlir::Region*, mlir::Block*>::value && std::is_same<mlir::WalkResult, mlir::WalkResult>::value, mlir::WalkResult>::type mlir::detail::walk<(mlir::WalkOrder)0, mlir::ForwardIterator, (anonymous namespace)::ConvertArtsToLLVMPass::iterateOps()::$_7, mlir::arts::EdtOp, mlir::WalkResult>(mlir::Operation*, (anonymous namespace)::ConvertArtsToLLVMPass::iterateOps()::$_7&&)::'lambda'(mlir::Operation*)>(long, mlir::Operation*) ConvertArtsToLLVM.cpp:0:0
-#14 0x00005624e2664db8 mlir::WalkResult mlir::detail::walk<mlir::ForwardIterator>(mlir::Operation*, llvm::function_ref<mlir::WalkResult (mlir::Operation*)>, mlir::WalkOrder) (/home/randres/projects/carts/.install/carts/bin/carts-opt+0x1badb8)
-#15 0x00005624e2664d67 mlir::WalkResult mlir::detail::walk<mlir::ForwardIterator>(mlir::Operation*, llvm::function_ref<mlir::WalkResult (mlir::Operation*)>, mlir::WalkOrder) (/home/randres/projects/carts/.install/carts/bin/carts-opt+0x1bad67)
-#16 0x00005624e2664d67 mlir::WalkResult mlir::detail::walk<mlir::ForwardIterator>(mlir::Operation*, llvm::function_ref<mlir::WalkResult (mlir::Operation*)>, mlir::WalkOrder) (/home/randres/projects/carts/.install/carts/bin/carts-opt+0x1bad67)
-#17 0x00005624e2cbf91c (anonymous namespace)::ConvertArtsToLLVMPass::runOnOperation() ConvertArtsToLLVM.cpp:0:0
-#18 0x00005624e34b6ea4 mlir::detail::OpToOpPassAdaptor::run(mlir::Pass*, mlir::Operation*, mlir::AnalysisManager, bool, unsigned int) (/home/randres/projects/carts/.install/carts/bin/carts-opt+0x100cea4)
-#19 0x00005624e34b74d1 mlir::detail::OpToOpPassAdaptor::runPipeline(mlir::OpPassManager&, mlir::Operation*, mlir::AnalysisManager, bool, unsigned int, mlir::PassInstrumentor*, mlir::PassInstrumentation::PipelineParentInfo const*) (/home/randres/projects/carts/.install/carts/bin/carts-opt+0x100d4d1)
-#20 0x00005624e34b9982 mlir::PassManager::run(mlir::Operation*) (/home/randres/projects/carts/.install/carts/bin/carts-opt+0x100f982)
-#21 0x00005624e2d10d64 performActions(llvm::raw_ostream&, std::shared_ptr<llvm::SourceMgr> const&, mlir::MLIRContext*, mlir::MlirOptMainConfig const&) MlirOptMain.cpp:0:0
-#22 0x00005624e2d0ffd4 mlir::LogicalResult llvm::function_ref<mlir::LogicalResult (std::unique_ptr<llvm::MemoryBuffer, std::default_delete<llvm::MemoryBuffer>>, llvm::raw_ostream&)>::callback_fn<mlir::MlirOptMain(llvm::raw_ostream&, std::unique_ptr<llvm::MemoryBuffer, std::default_delete<llvm::MemoryBuffer>>, mlir::DialectRegistry&, mlir::MlirOptMainConfig const&)::$_2>(long, std::unique_ptr<llvm::MemoryBuffer, std::default_delete<llvm::MemoryBuffer>>, llvm::raw_ostream&) MlirOptMain.cpp:0:0
-#23 0x00005624e3617e88 mlir::splitAndProcessBuffer(std::unique_ptr<llvm::MemoryBuffer, std::default_delete<llvm::MemoryBuffer>>, llvm::function_ref<mlir::LogicalResult (std::unique_ptr<llvm::MemoryBuffer, std::default_delete<llvm::MemoryBuffer>>, llvm::raw_ostream&)>, llvm::raw_ostream&, bool, bool) (/home/randres/projects/carts/.install/carts/bin/carts-opt+0x116de88)
-#24 0x00005624e2d0a5da mlir::MlirOptMain(llvm::raw_ostream&, std::unique_ptr<llvm::MemoryBuffer, std::default_delete<llvm::MemoryBuffer>>, mlir::DialectRegistry&, mlir::MlirOptMainConfig const&) (/home/randres/projects/carts/.install/carts/bin/carts-opt+0x8605da)
-#25 0x00005624e2d0aaa4 mlir::MlirOptMain(int, char**, llvm::StringRef, mlir::DialectRegistry&) (/home/randres/projects/carts/.install/carts/bin/carts-opt+0x860aa4)
-#26 0x00005624e25eb086 main (/home/randres/projects/carts/.install/carts/bin/carts-opt+0x141086)
-#27 0x00007f2f09303d90 (/lib/x86_64-linux-gnu/libc.so.6+0x29d90)
-#28 0x00007f2f09303e40 __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x29e40)
-#29 0x00005624e25ea785 _start (/home/randres/projects/carts/.install/carts/bin/carts-opt+0x140785)
+

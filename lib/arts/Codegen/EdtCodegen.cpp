@@ -145,7 +145,7 @@ void EdtCodegen::process(Location loc) {
   /// Process each dependency.
   if (!deps.empty()) {
     for (const auto &dep : deps) {
-      /// Handle both DbAccessOp results and memref.subview results
+      /// Handle both DbDepOp results and memref.subview results
       auto db = AC.getDb(dep);
       if (!db) {
         /// For subview results, handle dependency differently
@@ -554,7 +554,7 @@ void EdtCodegen::createEntry(Location loc) {
         if (!region->isAncestor(user->getParentRegion()))
           continue;
         /// If not a db, skip.
-        if (!arts::isDbAccessOp(user))
+        if (!arts::isDbDepOp(user))
           continue;
         /// Get the db codegen and set the entry information.
         /// TODO: Implement this
@@ -657,7 +657,7 @@ void EdtCodegen::createEntry(Location loc) {
     auto entryGuid = builder.create<memref::ViewOp>(
         loc, guidViewType, flatBuffer, offsetInBytes, entrySizes);
 
-    /// PTR view: Create a view that directly accesses the .ptr field from each
+    /// PTR view: Create a view that directly depes the .ptr field from each
     /// artsEdtDep_t The stride between elements should be sizeof(artsEdtDep_t),
     /// and we offset to the .ptr field
     auto ptrFieldOffset = AC.createIndexConstant(
@@ -673,7 +673,7 @@ void EdtCodegen::createEntry(Location loc) {
     entryDbs[db].ptr = entryPtr;
 
     /// For updateUserDb and rewireMap, we need to provide the actual .ptr field
-    /// access Get the first element as representative and extract its .ptr
+    /// dep Get the first element as representative and extract its .ptr
     /// field
     SmallVector<Value> zeroIndices(entrySizes.size(),
                                    AC.createIndexConstant(0, loc));

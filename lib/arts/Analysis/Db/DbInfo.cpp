@@ -2,7 +2,7 @@
 /// File: DbInfo.cpp
 ///
 /// Base implementation of DbInfo class providing common functionality
-/// for datablock allocation and access nodes.
+/// for datablock allocation and dep nodes.
 ///==========================================================================
 
 #include "arts/Analysis/Db/DbInfo.h"
@@ -178,7 +178,7 @@ void DbInfo::analyze() {
     edtParent = parentOp;
 
   collectUses();
-  setAccessType();
+  setDepType();
   setMemoryLayout();
 
   if (isAllocFlag) {
@@ -201,16 +201,16 @@ DbAllocNode *DbInfo::getParentAlloc() {
   return dyn_cast<DbAllocNode>(getParent());
 }
 
-DbAccessNode *DbInfo::getParentAccess() {
-  return dyn_cast<DbAccessNode>(getParent());
+DbDepNode *DbInfo::getParentDep() {
+  return dyn_cast<DbDepNode>(getParent());
 }
 
 bool DbInfo::isWriter() {
-  return accessType == AccessType::Write || accessType == AccessType::ReadWrite;
+  return depType == DepType::Write || depType == DepType::ReadWrite;
 }
 
 bool DbInfo::isReader() {
-  return accessType == AccessType::Read || accessType == AccessType::ReadWrite;
+  return depType == DepType::Read || depType == DepType::ReadWrite;
 }
 
 bool DbInfo::isOnlyReader() { return isReader() && !isWriter(); }
@@ -292,7 +292,7 @@ bool DbInfo::computeRegion() {
     for (unsigned d = 0; d < rank; ++d) {
       /// Analyze each index expression using enhanced pattern analysis
       ComplexExpr expr = ComplexExpr::analyze(indices[d]);
-      dimensionAnalysis[d].numAccesses++;
+      dimensionAnalysis[d].numDepes++;
 
       /// Store for pattern combination analysis (simplified for now)
       if (dimensionAnalysis[d].overallPattern.pattern ==
@@ -408,18 +408,18 @@ void DbInfo::collectUses() {
   }
 }
 
-void DbInfo::setAccessType() {
+void DbInfo::setDepType() {
   bool hasReads = !loads.empty();
   bool hasWrites = !stores.empty();
 
   if (hasReads && hasWrites)
-    accessType = AccessType::ReadWrite;
+    depType = DepType::ReadWrite;
   else if (hasReads)
-    accessType = AccessType::Read;
+    depType = DepType::Read;
   else if (hasWrites)
-    accessType = AccessType::Write;
+    depType = DepType::Write;
   else
-    accessType = AccessType::Unknown;
+    depType = DepType::Unknown;
 }
 
 void DbInfo::setMemoryLayout() {
@@ -441,7 +441,7 @@ void DbInfo::setMemoryLayout() {
     return;
   }
 
-  /// For access nodes, extract layout from the operation
+  /// For dep nodes, extract layout from the operation
   if (auto subviewOp = dyn_cast<memref::SubViewOp>(op)) {
     auto getConstant = [&](Value v) -> std::optional<int64_t> {
       if (auto c = v.getDefiningOp<arith::ConstantOp>()) {
@@ -510,7 +510,7 @@ void DbInfo::print(llvm::raw_ostream &os) const {
   if (isAllocFlag) {
     os << " [Allocation]";
   } else {
-    os << " [Access]";
+    os << " [Dep]";
   }
   os << "\n";
 
@@ -524,12 +524,12 @@ void DbInfo::print(llvm::raw_ostream &os) const {
     if (computedDimSizes[i] != -1) {
       os << "  Computed Size[" << i << "]: " << computedDimSizes[i] << "\n";
     } else {
-      /// Print enhanced access pattern analysis
+      /// Print enhanced dep pattern analysis
       if (i < dimensionAnalysis.size()) {
         const auto &analysis = dimensionAnalysis[i];
         os << "  Pattern[" << i << "]: " << analysis.overallPattern.toString()
            << " (confidence: " << analysis.patternConfidence
-           << ", accesses: " << analysis.numAccesses << ")\n";
+           << ", depes: " << analysis.numDepes << ")\n";
       }
     }
   }
@@ -626,12 +626,12 @@ ComplexExpr ComplexExpr::analyze(Value index) {
     /// Heuristic for spatial locality
     result.hasSpatialReuse = (std::abs(mul) <= 4);
 
-    /// Try to infer bounds for strided access
+    /// Try to infer bounds for strided dep
     if (auto bbArg = base.dyn_cast<BlockArgument>()) {
       if (auto forOp = dyn_cast<scf::ForOp>(bbArg.getOwner()->getParentOp())) {
         if (bbArg == forOp.getInductionVar()) {
           result.hasValidBounds = true;
-          /// Conservative bounds for strided access
+          /// Conservative bounds for strided dep
         }
       }
     }

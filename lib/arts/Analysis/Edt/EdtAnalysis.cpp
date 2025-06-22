@@ -73,10 +73,10 @@ void EdtEnvManager::adjust() {
   /// Analyze the parameters.
   /// Check if there is any parameter that loads a memref and indices of any
   /// dependency
-  DenseMap<Value, SmallVector<arts::DbControlOp>> baseToDepsMap;
+  DenseMap<Value, SmallVector<arts::DbDepOp>> baseToDepsMap;
   for (auto dep : dependencies) {
-    auto depOp = cast<arts::DbControlOp>(dep.getDefiningOp());
-    auto depBase = depOp.getPtr();
+    auto depOp = cast<arts::DbDepOp>(dep.getDefiningOp());
+    auto depBase = depOp.getSource();
     baseToDepsMap[depBase].push_back(depOp);
     if (parameters.contains(depBase))
       parameters.remove(depBase);
@@ -116,7 +116,7 @@ void EdtEnvManager::adjust() {
       OpBuilder::InsertionGuard guard(rewriter);
       rewriter.setInsertionPointToStart(&region.front());
       auto newLoad = rewriter.create<memref::LoadOp>(loadOp.getLoc(),
-                                                     dep.getPtr(), indices);
+                                                     dep.getResult(), indices);
       replaceInRegion(region, loadOp.getResult(), newLoad.getResult());
 
       /// Remove the parameter
@@ -133,7 +133,7 @@ bool EdtEnvManager::addParameter(Value val) { return parameters.insert(val); }
 
 void EdtEnvManager::addDependency(Value val, StringRef mode) {
   /// If the dependency is not a db operation, add it to depsToProcess
-  auto depOp = dyn_cast<arts::DbControlOp>(val.getDefiningOp());
+  auto depOp = dyn_cast<arts::DbDepOp>(val.getDefiningOp());
   if (!depOp) {
     depsToProcess[val] = mode;
     return;

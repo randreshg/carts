@@ -150,15 +150,14 @@ struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
 struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  types::DbAccessType
-  getDbAccessType(omp::ClauseTaskDepend taskClause) const {
+  types::DbDepType getDbDepType(omp::ClauseTaskDepend taskClause) const {
     switch (taskClause) {
     case omp::ClauseTaskDepend::taskdependin:
-      return types::DbAccessType::ReadOnly;
+      return types::DbDepType::ReadOnly;
     case omp::ClauseTaskDepend::taskdependout:
-      return types::DbAccessType::WriteOnly;
+      return types::DbDepType::WriteOnly;
     case omp::ClauseTaskDepend::taskdependinout:
-      return types::DbAccessType::ReadWrite;
+      return types::DbDepType::ReadWrite;
     }
     llvm_unreachable("Unknown ClauseTaskDepend value");
   }
@@ -215,9 +214,10 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
       {
         OpBuilder::InsertionGuard IG(rewriter);
         rewriter.setInsertionPointAfter(depLoadVal.getDefiningOp());
-        deps.push_back(createDbControlOp(
-            rewriter, depLoadVal.getLoc(),
-            getDbAccessType(depClause.getValue()), depLoadVal));
+        SmallVector<Value> emptyIndices, emptyOffsets, emptySizes;
+        deps.push_back(createDbDepOp(
+            rewriter, depLoadVal.getLoc(), getDbDepType(depClause.getValue()),
+            depLoadVal, emptyIndices, emptyOffsets, emptySizes));
       }
 
       /// Replace the dependency allocation with an undefined value.

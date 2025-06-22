@@ -80,52 +80,34 @@ def DbAllocOp : Arts_Op<"db_alloc", [
   }];
 }
 
-def DbControlOp : Arts_Op<"db_control", 
-  [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, 
-   RecursiveMemoryEffects, AttrSizedOperandSegments]> {
-  let summary = "Creates a control dependency for arts.edt";
+def DbDepOp : Arts_Op<"db_dep", 
+  [AttrSizedOperandSegments]> {
+  let summary = "Creates a datablock dependency for arts.edt";
   let description = [{
-    This operation creates a control dependency for the `arts.edt` operation.
-    It is used to ensure that the DataBlock is ready before the EDT is executed.
+    This operation creates a datablock dependency for the `arts.edt` operation.
+    It represents deping a portion of a datablock with specific indices, offsets and sizes.
     - mode: "in", "out", "inout"
-    - ptr: base address of the DataBlock
-    - elementType: type of the DataBlock
-    - elementTypeSize: size of the element type
-    - indices: indices for the subview
-    - offsets: offsets for the subview
-    - sizes: sizes for the subview
+    - source: DbAllocOp that this dependency is based on
+    - indices: indices for the dependency
+    - offsets: offsets for the dependency
+    - sizes: sizes for the dependency
   }];
   let arguments = (ins
     StrAttr:$mode,
-    AnyMemRef:$ptr,
-    TypeAttr:$elementType,
-    Index:$elementTypeSize,
+    AnyMemRef:$source,
     Variadic<Index>:$indices,
     Variadic<Index>:$offsets,
     Variadic<Index>:$sizes
   );
 
-  let results = (outs AnyMemRef:$subview);   // Produces a memref
-  let hasCustomAssemblyFormat = 1;
-
-  let skipDefaultBuilders = 1;
-  let builders = [
-    OpBuilder<(ins
-      "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType,
-      "Value":$elementTypeSize, "ValueRange":$indices, "ValueRange":$sizes)>,
-    OpBuilder<(ins
-      "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, 
-      "Value":$elementTypeSize, "ValueRange":$indices, "ValueRange":$offsets, 
-      "ValueRange":$sizes)>
-  ];
-
-  let extraClassDeclaration = [{
-    bool hasPtrDb();
-    void setHasPtrDb();
-    bool hasGuid();
-    void setHasGuid();
-    bool hasSingleSize();
-    void setHasSingleSize();
+  let results = (outs AnyMemRef:$result);   // Produces a memref
+  
+  let assemblyFormat = [{
+    $mode `(` $source `:` type($source) `)` 
+    `indices` `[` $indices `]` 
+    `offsets` `[` $offsets `]` 
+    `sizes` `[` $sizes `]` 
+    attr-dict `:` type($result)
   }];
 }
 

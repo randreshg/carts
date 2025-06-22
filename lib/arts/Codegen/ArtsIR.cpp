@@ -85,83 +85,16 @@ DbAllocOp createDbAllocOp(OpBuilder &builder, Location loc, StringRef mode,
                                    address, sizes, nullptr);
 }
 
-DbControlOp createDbControlOp(OpBuilder &builder, Location loc,
-                              types::DbAccessType mode, Value ptr,
-                              SmallVector<Value> pinnedIndices,
-                              bool coarseGrained) {
-  auto ptrOp = ptr.getDefiningOp();
-  assert(ptrOp && "Input must be a defining operation.");
-
-  /// If the defining op is a load op, obtain the base memref and pinned
-  /// indices.
-  Value baseMemRef;
-  auto processLoad = [&](auto loadOp) {
-    baseMemRef = loadOp.getMemref();
-    if (pinnedIndices.empty())
-      pinnedIndices.assign(loadOp.getIndices().begin(),
-                           loadOp.getIndices().end());
-  };
-
-  if (auto loadOp = dyn_cast<memref::LoadOp>(ptrOp))
-    processLoad(loadOp);
-  else
-    baseMemRef = ptr;
-
-  /// Ensure the base memref type.
-  auto baseType = baseMemRef.getType().dyn_cast<MemRefType>();
-  assert(baseType && "Input must be a MemRefType.");
-
-  int64_t rank = baseType.getRank();
-  const auto pinnedCount = static_cast<int64_t>(pinnedIndices.size());
-  assert(pinnedCount <= rank &&
-         "Pinned indices exceed the rank of the memref.");
-
-  /// Compute sizes and subshape.
-  SmallVector<Value, 4> indices(pinnedCount), sizes(rank - pinnedCount);
-  SmallVector<Value, 4> offsets(rank - pinnedCount,
-                                builder.create<arith::ConstantIndexOp>(loc, 0));
-  SmallVector<int64_t, 4> subShape;
-  for (int64_t i = 0, j = 0; i < rank; ++i) {
-    if (i < pinnedCount) {
-      indices[i] = pinnedIndices[i];
-    } else {
-      bool isDyn = baseType.isDynamicDim(i);
-      int64_t dimSize = baseType.getDimSize(i);
-      Value dimVal =
-          isDyn ? builder.create<memref::DimOp>(loc, baseMemRef, i).getResult()
-                : builder.create<arith::ConstantIndexOp>(loc, dimSize)
-                      .getResult();
-      sizes[j] = dimVal;
-      /// For the normal subview type, preserve the static dim if available.
-      subShape.push_back(isDyn ? ShapedType::kDynamic : dimSize);
-      j++;
-    }
-  }
-
-  /// Compute the element type size.
-  auto elementType = baseType.getElementType();
-  auto elementTypeSize = builder
-                             .create<polygeist::TypeSizeOp>(
-                                 loc, builder.getIndexType(), elementType)
-                             .getResult();
-
+DbDepOp createDbDepOp(OpBuilder &builder, Location loc,
+                  types::DbDepType mode, Value source,
+                  SmallVector<Value> pinnedIndices,
+                  SmallVector<Value> offsets,
+                  SmallVector<Value> sizes) {
   auto modeAttr = builder.getStringAttr(types::toString(mode));
-  auto resultType = MemRefType::get(subShape, elementType);
-  if (coarseGrained && indices.empty()) {
-    auto elementTySize = elementTypeSize;
-    for (auto size : sizes) {
-      elementTySize =
-          builder.create<arith::MulIOp>(loc, elementTySize, size).getResult();
-    }
-    SmallVector<Value, 4> newSizes;
-    return builder.create<arts::DbControlOp>(
-        loc, resultType, modeAttr, baseMemRef, resultType, elementTySize,
-        indices, offsets, newSizes);
-  } else {
-    return builder.create<arts::DbControlOp>(
-        loc, resultType, modeAttr, baseMemRef, elementType, elementTypeSize,
-        indices, offsets, sizes);
-  }
+  auto resultType = source.getType();
+  
+  return builder.create<arts::DbDepOp>(
+      loc, resultType, modeAttr, source, pinnedIndices, offsets, sizes);
 }
 
 //===----------------------------------------------------------------------===//
@@ -170,11 +103,9 @@ DbControlOp createDbControlOp(OpBuilder &builder, Location loc,
 
 bool isDbAllocOp(Operation *op) { return isa<DbAllocOp>(op); }
 
-bool isDbAccessOp(Operation *op) {
-  return isa<memref::SubViewOp>(op) || isa<memref::CastOp>(op);
+bool isDbDepOp(Operation *op) {
+  return isa<DbDepOp>(op);
 }
-
-bool isDbControlOp(Operation *op) { return isa<DbControlOp>(op); }
 
 //===----------------------------------------------------------------------===//
 // DataBlock Attribute Management

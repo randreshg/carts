@@ -96,27 +96,39 @@ DbDataFlowAnalysis::processEdt(EdtOp edtOp, DbEnvironment &env) {
     });
 
     /// Reserve dbIns and dbOuts for input and output datablocks
-    SmallVector<DbAccessNode *, 4> dbIns, dbOuts;
+    SmallVector<DbDepNode *, 4> dbIns, dbOuts;
     dbIns.reserve(edtDeps.size());
     dbOuts.reserve(edtDeps.size());
 
     /// Iterate over the dependencies to fill dbIns and dbOuts
     for (auto dep : edtDeps) {
       mlir::Operation *defOp = dep.getDefiningOp();
-      if (!defOp || (!isa<memref::SubViewOp>(defOp) && !isa<memref::CastOp>(defOp))) {
+      if (!defOp) {
         LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
-                          << "Warning: Dependency is not a supported db access op, skipping\n");
+                          << "Warning: Dependency has no defining operation, skipping\n");
         continue;
       }
       
-      auto db = getDbAccessOp(defOp);
+      // All dependencies should now be DbDepOp operations
+      auto db = dyn_cast<DbDepOp>(defOp);
+      if (!db) {
+        LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                          << "Warning: Expected DbDepOp but got " << defOp->getName() << ", skipping\n");
+        continue;
+      }
+      
       /// Retrieve the db node and categorize based on mode
-      auto *dbAccessNode = graph->getAccessNode(db);
-      assert(dbAccessNode && "Dependency must be a db access op");
-      if (dbAccessNode->isWriter())
-        dbOuts.push_back(dbAccessNode);
-      if (dbAccessNode->isReader())
-        dbIns.push_back(dbAccessNode);
+      auto *dbDepNode = graph->getDepNode(db);
+      if (!dbDepNode) {
+        LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
+                          << "Warning: Could not find DbDepNode for DbDepOp, skipping\n");
+        continue;
+      }
+      
+      if (dbDepNode->isWriter())
+        dbOuts.push_back(dbDepNode);
+      if (dbDepNode->isReader())
+        dbIns.push_back(dbDepNode);
     }
 
     /// Process input datablocks
@@ -143,8 +155,8 @@ DbDataFlowAnalysis::processEdt(EdtOp edtOp, DbEnvironment &env) {
           LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                             << "Adding edge from DB #" << prodDef->getHierId()
                             << " to DB #" << dbIn->getHierId() << "\n");
-          bool res = graph->addEdge(getDbAccessOp(prodDef->getOp()),
-                                    getDbAccessOp(dbIn->getOp()),
+          bool res = graph->addEdge(dyn_cast<DbDepOp>(prodDef->getOp()),
+                                    dyn_cast<DbDepOp>(dbIn->getOp()),
                                     DbDepType::ReadWrite);
           LLVM_DEBUG({
             if (res) {
@@ -172,7 +184,7 @@ DbDataFlowAnalysis::processEdt(EdtOp edtOp, DbEnvironment &env) {
                           << "    - No previous definition for DB #"
                           << dbOut->getHierId()
                           << ", updating environment with new definition\n");
-        newEnv[getDbAccessOp(dbOut->getOp())] = dbOut;
+        newEnv[dyn_cast<DbDepOp>(dbOut->getOp())] = dbOut;
         changed |= true;
         continue;
       }
@@ -183,7 +195,7 @@ DbDataFlowAnalysis::processEdt(EdtOp edtOp, DbEnvironment &env) {
                           << "Updating environment: DB #" << dbOut->getHierId()
                           << " now defined from DB #" << prodDef->getHierId()
                           << "\n");
-        newEnv[getDbAccessOp(prodDef->getOp())] = dbOut;
+        newEnv[dyn_cast<DbDepOp>(prodDef->getOp())] = dbOut;
         changed |= true;
       }
     }
@@ -314,7 +326,7 @@ DbDataFlowAnalysis::processCall(func::CallOp callOp, DbEnvironment &env) {
                     << "- Processing CallOp (ignoring for now)\n");
   /// TODO: Implement inter-procedural analysis. This would involve:
   /// 1. Finding the callee function.
-  /// 2. Mapping the DbAccessOp operands of the call to the arguments of the
+  /// 2. Mapping the DbDepOp operands of the call to the arguments of the
   ///    callee's entry block.
   /// 3. Running dataflow analysis on the callee with an initial environment
   ///    that reflects the state of the passed-in datablocks.
@@ -323,13 +335,13 @@ DbDataFlowAnalysis::processCall(func::CallOp callOp, DbEnvironment &env) {
   return {env, false};
 }
 
-SmallVector<DbAccessNode *, 4>
-DbDataFlowAnalysis::findDefinition(DbAccessNode &dbNode, DbEnvironment &env) {
+SmallVector<DbDepNode *, 4>
+DbDataFlowAnalysis::findDefinition(DbDepNode &dbNode, DbEnvironment &env) {
   IndentScope scope;
   LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                     << "  Searching for definitions for DB #"
                     << dbNode.getHierId() << "\n");
-  SmallVector<DbAccessNode *, 4> defs;
+  SmallVector<DbDepNode *, 4> defs;
   for (auto pair : env) {
     if (!analysis->dbAliasAnalysis->mayAlias(*pair.second, dbNode))
       continue;
@@ -354,7 +366,7 @@ DbEnvironment DbDataFlowAnalysis::mergeEnvironments(const DbEnvironment &env1,
       LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
                         << "  - DB already exists in merged environment: "
                         << dbNode->getHierId() << "\n");
-      auto *node = graph->getAccessNode(dbOp);
+      auto *node = graph->getDepNode(dbOp);
       /// If they belong to the same parent
       if (node && (dbNode->getEdtParent() == node->getEdtParent())) {
         LLVM_DEBUG(dbgs() << std::string(analysisDepth * 2, ' ')
@@ -375,7 +387,7 @@ DbEnvironment DbDataFlowAnalysis::mergeEnvironments(const DbEnvironment &env1,
     dbgs() << std::string(analysisDepth * 2, ' ')
            << "  - Final merged environment: {";
     for (auto &pair : mergedEnv) {
-      if (auto *dbInfo = graph->getAccessNode(pair.first)) {
+      if (auto *dbInfo = graph->getDepNode(pair.first)) {
         dbgs() << " #" << dbInfo->getHierId() << " -> #"
                << pair.second->getHierId() << ",";
       }
@@ -386,7 +398,7 @@ DbEnvironment DbDataFlowAnalysis::mergeEnvironments(const DbEnvironment &env1,
 }
 
 /// Dependency analysis.
-bool DbDataFlowAnalysis::mayDepend(DbAccessNode &prod, DbAccessNode &cons) {
+bool DbDataFlowAnalysis::mayDepend(DbDepNode &prod, DbDepNode &cons) {
   /// Verify if they belong to the same EDT parent.
   if (prod.getEdtParent() != cons.getEdtParent())
     return false;

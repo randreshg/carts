@@ -1,7 +1,7 @@
 ///==========================================================================
 /// File: DbInfo.h
 ///
-/// This class provides comprehensive analysis of memory access
+/// This class provides comprehensive analysis of memory dep
 /// patterns.
 ///==========================================================================
 
@@ -22,13 +22,13 @@ namespace mlir {
 namespace arts {
 
 class DbAnalysis;
-class DbAccessNode;
+class DbDepNode;
 class DbAllocNode;
 
 ///===----------------------------------------------------------------------===///
 /// SymbolicExpr
 ///
-/// Represents memory access expressions in canonical form for analysis that
+/// Represents memory dep expressions in canonical form for analysis that
 /// - Normalizes equivalent expressions (e.g., i+5 vs 5+i)
 /// - Enables systematic pattern recognition
 /// - Supports both exact (Constant) and approximate (Affine/Unknown) analysis
@@ -67,22 +67,22 @@ struct SymbolicExpr {
 
 ///===----------------------------------------------------------------------===///
 /// ComplexExpr
-/// Classifies and analyzes memory access patterns for optimization guidance.
+/// Classifies and analyzes memory dep patterns for optimization guidance.
 ///===----------------------------------------------------------------------===///
 struct ComplexExpr {
   enum class Pattern {
     Constant,   /// Fixed offset: a[5]
     Sequential, /// Unit stride: a[i], a[i+1]
     Strided,    /// Fixed stride: a[2*i]
-    Blocked,    /// Block access: a[block*64 + local_i]
+    Blocked,    /// Block dep: a[block*64 + local_i]
     Indirect,   /// Indirect: a[index_array[i]]
     Complex     /// Unanalyzable
   } pattern;
 
   /// Core symbolic components
   SymbolicExpr baseExpr;   /// Base address expression
-  SymbolicExpr strideExpr; /// For strided/sequential access
-  SymbolicExpr blockSize;  /// For blocked access
+  SymbolicExpr strideExpr; /// For strided/sequential dep
+  SymbolicExpr blockSize;  /// For blocked dep
   SymbolicExpr offsetExpr; /// Additional offset
 
   /// Conservative bounds
@@ -94,12 +94,12 @@ struct ComplexExpr {
   SymbolicExpr conservativeMin, conservativeMax;
   bool hasValidBounds;
 
-  /// Access properties - guide optimization strategy selection
+  /// Dep properties - guide optimization strategy selection
   /// Does index always increase/decrease?
   bool isMonotonic;
-  /// Adjacent elements accessed?
+  /// Adjacent elements deped?
   bool hasSpatialReuse;
-  /// Same elements re-accessed?
+  /// Same elements re-deped?
   bool hasTemporalReuse;
   /// Conservative estimate of the range size
   int64_t estimatedRangeSize;
@@ -131,37 +131,37 @@ struct ComplexExpr {
 
 ///===----------------------------------------------------------------------===///
 /// DimensionAnalysis
-/// Aggregates access pattern analysis results for a single array dimension.
+/// Aggregates dep pattern analysis results for a single array dimension.
 ///
-/// Multi-dimensional arrays often exhibit different access patterns in
+/// Multi-dimensional arrays often exhibit different dep patterns in
 /// different dimensions. For example, in a 2D matrix:
-/// - Dimension 0 (rows): Sequential access for row-major traversal
-/// - Dimension 1 (cols): Strided access for column operations
+/// - Dimension 0 (rows): Sequential dep for row-major traversal
+/// - Dimension 1 (cols): Strided dep for column operations
 ///===----------------------------------------------------------------------===///
 struct DimensionAnalysis {
-  /// Dominant access pattern for this dimension
+  /// Dominant dep pattern for this dimension
   ComplexExpr overallPattern;
 
   /// Summary statistics
-  /// Total accesses observed
-  size_t numAccesses;
-  /// All accesses follow same pattern?
+  /// Total depes observed
+  size_t numDepes;
+  /// All depes follow same pattern?
   bool isUniformPattern;
   /// How confident we are (0.0-1.0)
   double patternConfidence;
 
   /// Constructor
   DimensionAnalysis()
-      : numAccesses(0), isUniformPattern(false), patternConfidence(0.0) {}
+      : numDepes(0), isUniformPattern(false), patternConfidence(0.0) {}
 };
 
 ///===----------------------------------------------------------------------===///
 /// DbInfo
-/// Comprehensive analysis of datablock allocation and access patterns.
+/// Comprehensive analysis of datablock allocation and dep patterns.
 ///===----------------------------------------------------------------------===///
 class DbInfo {
 public:
-  enum class AccessType { Read, Write, ReadWrite, Unknown };
+  enum class DepType { Read, Write, ReadWrite, Unknown };
 
 protected:
   /// Core identification and relationships
@@ -176,7 +176,7 @@ protected:
   std::optional<EdtOp> edtParent;
   Type elementType;
 
-  AccessType accessType;
+  DepType depType;
   SmallVector<memref::LoadOp, 4> loads;
   SmallVector<memref::StoreOp, 4> stores;
 
@@ -202,14 +202,14 @@ public:
   void setHierId(const std::string &newId) { hierId = newId; }
 
   bool isAlloc() const { return isAllocFlag; }
-  virtual bool isAccess() const { return !isAllocFlag; }
+  virtual bool isDep() const { return !isAllocFlag; }
   Type getElementType() const { return elementType; }
   uint64_t getElementTypeSize() const;
 
   DbInfo *getParent() const;
   EdtOp getEdtParent() const;
   DbAllocNode *getParentAlloc();
-  DbAccessNode *getParentAccess();
+  DbDepNode *getParentDep();
 
   Operation *getOp() const { return op; }
   template <typename T> T getOp() const { return cast<T>(op); }
@@ -237,7 +237,7 @@ public:
 protected:
   void analyze();
   void collectUses();
-  void setAccessType();
+  void setDepType();
   void setMemoryLayout();
 
   bool computeRegion();

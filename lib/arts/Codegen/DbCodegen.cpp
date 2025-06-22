@@ -139,30 +139,30 @@ Value DbAllocCodegen::createGuid(Value node, Value mode, Location loc) {
   return reserveGuidCall.getResult(0);
 }
 
-// DbAccessCodegen implementation
-DbAccessCodegen::DbAccessCodegen(ArtsCodegen &AC, arts::DbControlOp dbOp,
+// DbDepCodegen implementation
+DbDepCodegen::DbDepCodegen(ArtsCodegen &AC, arts::DbDepOp dbOp,
                                  Location loc)
-    : DbCodegen(Kind::Access), AC(AC), builder(AC.getBuilder()), dbOp(dbOp) {}
+    : DbCodegen(Kind::Dep), AC(AC), builder(AC.getBuilder()), dbOp(dbOp) {}
 
-Value DbAccessCodegen::getOp() { return dbOp.getResult(); }
-Value DbAccessCodegen::getEdtSlot() { return edtSlot; }
-Value DbAccessCodegen::getGuid() { return guid; }
-Value DbAccessCodegen::getPtr() { return ptr; }
+Value DbDepCodegen::getOp() { return dbOp.getResult(); }
+Value DbDepCodegen::getEdtSlot() { return edtSlot; }
+Value DbDepCodegen::getGuid() { return guid; }
+Value DbDepCodegen::getPtr() { return ptr; }
 
-bool DbAccessCodegen::hasSingleSize() { return dbOp.getSizes().size() <= 1; }
-ValueRange DbAccessCodegen::getSizes() { return dbOp.getSizes(); }
-ValueRange DbAccessCodegen::getOffsets() { return dbOp.getOffsets(); }
-ValueRange DbAccessCodegen::getIndices() { return dbOp.getIndices(); }
-void DbAccessCodegen::setEdtSlot(Value v) { edtSlot = v; }
-void DbAccessCodegen::setGuid(Value v) { guid = v; }
-void DbAccessCodegen::setPtr(Value v) { ptr = v; }
+bool DbDepCodegen::hasSingleSize() { return dbOp.getSizes().size() <= 1; }
+ValueRange DbDepCodegen::getSizes() { return dbOp.getSizes(); }
+ValueRange DbDepCodegen::getOffsets() { return dbOp.getOffsets(); }
+ValueRange DbDepCodegen::getIndices() { return dbOp.getIndices(); }
+void DbDepCodegen::setEdtSlot(Value v) { edtSlot = v; }
+void DbDepCodegen::setGuid(Value v) { guid = v; }
+void DbDepCodegen::setPtr(Value v) { ptr = v; }
 
-bool DbAccessCodegen::isOutMode() {
+bool DbDepCodegen::isOutMode() {
   StringRef mode = dbOp.getModeAttr().getValue();
   return (mode == "out" || mode == "inout");
 }
 
-bool DbAccessCodegen::isInMode() {
+bool DbDepCodegen::isInMode() {
   StringRef mode = dbOp.getModeAttr().getValue();
   return (mode == "in" || mode == "inout");
 }
