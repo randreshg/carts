@@ -106,6 +106,109 @@ void UndefOp::getCanonicalizationPatterns(RewritePatternSet &results,
 }
 
 //===----------------------------------------------------------------------===//
+// DbAllocOp
+//===----------------------------------------------------------------------===//
+ParseResult DbAllocOp::parse(OpAsmParser &parser, OperationState &result) {
+  StringAttr modeAttr;
+  OpAsmParser::UnresolvedOperand addressOperand;
+  Type addressType;
+  bool hasAddress = false;
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> sizeOperands;
+  SmallVector<Type, 4> sizeTypes;
+  Type resultType;
+  StringAttr allocTypeAttr;
+
+  // Parse mode string
+  if (parser.parseAttribute(modeAttr, "mode", result.attributes))
+    return failure();
+
+  // Optionally parse address
+  if (succeeded(parser.parseOptionalLParen())) {
+    if (parser.parseOperand(addressOperand) ||
+        parser.parseColon() ||
+        parser.parseType(addressType) ||
+        parser.parseRParen())
+      return failure();
+    hasAddress = true;
+  }
+
+  // Parse sizes
+  if (parser.parseLSquare() ||
+      parser.parseOperandList(sizeOperands, OpAsmParser::Delimiter::None) ||
+      parser.parseRSquare())
+    return failure();
+
+  // Optionally parse alloc_type
+  if (succeeded(parser.parseOptionalKeyword("alloc_type"))) {
+    if (parser.parseEqual() ||
+        parser.parseAttribute(allocTypeAttr, "allocType", result.attributes))
+      return failure();
+  }
+
+  // Parse result type
+  if (parser.parseArrow() ||
+      parser.parseOptionalAttrDictWithKeyword(result.attributes) ||
+      parser.parseColon() ||
+      parser.parseType(resultType))
+    return failure();
+
+  // Build operand segment sizes
+  result.addAttribute("operandSegmentSizes",
+                      parser.getBuilder().getDenseI32ArrayAttr({
+                          hasAddress ? 1 : 0,  // address
+                          static_cast<int32_t>(sizeOperands.size())  // sizes
+                      }));
+
+  // Resolve operands
+  if (hasAddress) {
+    if (parser.resolveOperand(addressOperand, addressType, result.operands))
+      return failure();
+  }
+
+  for (auto sizeOperand : sizeOperands) {
+    sizeTypes.push_back(parser.getBuilder().getIndexType());
+  }
+  if (parser.resolveOperands(sizeOperands, sizeTypes,
+                             parser.getCurrentLocation(), result.operands))
+    return failure();
+
+  result.addTypes(resultType);
+  return success();
+}
+
+void DbAllocOp::print(OpAsmPrinter &printer) {
+  printer << " ";
+  printer.printAttributeWithoutType(getModeAttr());
+
+  // Print address if present
+  if (getAddress()) {
+    printer << " (";
+    printer.printOperand(getAddress());
+    printer << " : ";
+    printer.printType(getAddress().getType());
+    printer << ")";
+  }
+
+  // Print sizes
+  printer << " [";
+  printer.printOperands(getSizes());
+  printer << "]";
+
+  // Print alloc_type if present
+  if (auto allocType = getAllocTypeAttr()) {
+    printer << " alloc_type = ";
+    printer.printAttributeWithoutType(allocType);
+  }
+
+  printer << " -> ";
+  printer.printOptionalAttrDictWithKeyword(
+      getOperation()->getAttrs(),
+      /*elidedAttrs=*/{"mode", "allocType", "operandSegmentSizes"});
+  printer << " : ";
+  printer.printType(getPtr().getType());
+}
+
+//===----------------------------------------------------------------------===//
 // EdtOp
 //===----------------------------------------------------------------------===//
 ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {

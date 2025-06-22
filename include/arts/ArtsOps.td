@@ -74,10 +74,7 @@ def DbAllocOp : Arts_Op<"db_alloc", [
   );
 
   let results = (outs AnyMemRef:$ptr);
-  let assemblyFormat = [{
-    $mode `(` $address `:` type($address) `)` `[` $sizes `]` 
-    (`alloc_type` `=` $allocType^)? `->` attr-dict `:` type($ptr)
-  }];
+  let hasCustomAssemblyFormat = 1;
 }
 
 def DbDepOp : Arts_Op<"db_dep", 
@@ -100,7 +97,7 @@ def DbDepOp : Arts_Op<"db_dep",
     Variadic<Index>:$sizes
   );
 
-  let results = (outs AnyMemRef:$result);   // Produces a memref
+  let results = (outs AnyMemRef:$result);
   
   let assemblyFormat = [{
     $mode `(` $source `:` type($source) `)` 

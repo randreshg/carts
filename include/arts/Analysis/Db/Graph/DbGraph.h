@@ -79,6 +79,10 @@ private:
 
   void collectNodes();
   void buildDependencies();
+  
+  /// Helper method to find the root DbAllocOp for a given DbDepOp
+  /// Handles chained dependencies: DbDepOp -> DbDepOp -> ... -> DbAllocOp
+  DbAllocOp findRootAllocOp(DbDepOp depOp);
 };
 
 } // namespace arts

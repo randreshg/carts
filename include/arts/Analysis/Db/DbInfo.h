@@ -211,6 +211,8 @@ public:
   DbAllocNode *getParentAlloc();
   DbDepNode *getParentDep();
 
+  void setParent(DbInfo *newParent) { parent = newParent; }
+
   Operation *getOp() const { return op; }
   template <typename T> T getOp() const { return cast<T>(op); }
   Value getResult() const { return op->getResult(0); }
