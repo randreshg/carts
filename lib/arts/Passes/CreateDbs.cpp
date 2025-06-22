@@ -4,7 +4,7 @@
 // This pass analyzes EDT regions within a function to discover candidate
 // datablocks. A candidate DB is a memref value used in an EDT region
 // that is defined outside that region. In addition, the pass classifies the
-// candidate into one of three categories based on its access pattern:
+// candidate into one of three categories based on its dep pattern:
 // read‑only, write‑only, or read–write.
 ///==========================================================================
 
@@ -61,28 +61,28 @@ struct DbCandidate {
   /// Pinned indices (if invariant).
   SmallVector<Value> pinnedIndices;
   /// Classification: read‑only, write‑only, or read–write.
-  DbAccessType access = DbAccessType::Unknown;
+  DbDepType dep = DbDepType::Unknown;
   /// Indicates if the db is a string, which is a special case.
   bool isString = false;
 
-  /// Set Access based on read and write flags.
-  void setAccess(bool hasRead, bool hasWrite) {
+  /// Set Dep based on read and write flags.
+  void setDep(bool hasRead, bool hasWrite) {
     if (hasRead && hasWrite)
-      access = DbAccessType::ReadWrite;
+      dep = DbDepType::ReadWrite;
     else if (hasWrite)
-      access = DbAccessType::WriteOnly;
+      dep = DbDepType::WriteOnly;
     else if (hasRead)
-      access = DbAccessType::ReadOnly;
+      dep = DbDepType::ReadOnly;
     else
-      access = DbAccessType::Unknown;
+      dep = DbDepType::Unknown;
   }
 
-  /// Update Access when combining different operations.
-  void updateAccess(DbAccessType newAccess) {
-    if (access == DbAccessType::Unknown)
-      access = newAccess;
-    else if (access != newAccess)
-      access = DbAccessType::ReadWrite;
+  /// Update Dep when combining different operations.
+  void updateDep(DbDepType newDep) {
+    if (dep == DbDepType::Unknown)
+      dep = newDep;
+    else if (dep != newDep)
+      dep = DbDepType::ReadWrite;
   }
 };
 
@@ -132,14 +132,14 @@ struct CreateDbsPass : public CreateDbsBase<CreateDbsPass> {
   /// Identify datablocks in the module and create them
   void identifyDbsInModule(ModuleOp module);
 
-  /// Create a DbAccessOp into a created db
-  DbAccessOp createDbAccess(OpBuilder &builder, Location loc,
-                            DbAllocOp dbAllocOp,
-                            SmallVector<Value> pinnedIndices);
+  /// Create a DbDepOp into a created db
+  DbDepOp createDbDep(OpBuilder &builder, Location loc, DbAllocOp dbAllocOp,
+                      SmallVector<Value> pinnedIndices,
+                      types::DbDepType depType);
 
   /// Create a DbAllocOp for a given base pointer
   DbAllocOp createDbAlloc(OpBuilder &builder, Location loc, Value basePtr,
-                          types::DbAccessType access);
+                          types::DbDepType dep);
 
   /// Analyze the EDT region to collect candidate datablocks.
   void analyzeEdtRegion(EdtOp &edtOp);
@@ -237,27 +237,27 @@ void CreateDbsPass::identifyDbsInModule(ModuleOp module) {
         else
           llvm_unreachable("Support for global variables is not implemented");
 
-        /// Determine the access type for this base pointer
-        DbAccessType combinedAccess = DbAccessType::Unknown;
+        /// Determine the dep type for this base pointer
+        DbDepType combinedDep = DbDepType::Unknown;
         for (auto &[cand, uses] : candidates) {
-          if (combinedAccess == DbAccessType::Unknown)
-            combinedAccess = cand.access;
-          else if (combinedAccess != cand.access)
-            combinedAccess = DbAccessType::ReadWrite;
+          if (combinedDep == DbDepType::Unknown)
+            combinedDep = cand.dep;
+          else if (combinedDep != cand.dep)
+            combinedDep = DbDepType::ReadWrite;
         }
 
-        dbAllocOp = createDbAlloc(builder, loc, basePtr, combinedAccess);
+        dbAllocOp = createDbAlloc(builder, loc, basePtr, combinedDep);
         createdDbs[basePtr] = dbAllocOp;
       }
 
-      /// Create DbAccessOps for each candidate
+      /// Create DbDepOps for each candidate
       OpBuilder::InsertionGuard IG(builder);
       builder.setInsertionPoint(edtOp);
       for (auto &[dbCand, dbUses] : candidates) {
-        auto dbAccessOp =
-            createDbAccess(builder, loc, dbAllocOp, dbCand.pinnedIndices);
+        auto dbDepOp = createDbDep(builder, loc, dbAllocOp,
+                                   dbCand.pinnedIndices, dbCand.dep);
         depInfos.push_back({*dbUses, (unsigned)dbCand.pinnedIndices.size()});
-        edtDeps.push_back(dbAccessOp.getResult());
+        edtDeps.push_back(dbDepOp.getResult());
       }
     }
 
@@ -276,14 +276,14 @@ void CreateDbsPass::identifyDbsInModule(ModuleOp module) {
       /// Move the body from the old EDT.
       newRegion.takeBody(edtOp.getRegion());
 
-      /// Rewire uses of the old datablocks directly with the DbAccessOp
+      /// Rewire uses of the old datablocks directly with the DbDepOp
       /// results.
       LLVM_DEBUG(DBGS() << "New EDT has " << edtDeps.size() << " dependencies, "
                         << depInfos.size() << " depInfos\n");
 
       for (unsigned i = 0; i < depInfos.size() && i < edtDeps.size(); ++i) {
         auto &info = depInfos[i];
-        Value dbAccessResult = edtDeps[i];
+        Value dbDepResult = edtDeps[i];
 
         auto updateOp = [&](auto opToUpdate, unsigned drop) {
           OpBuilder::InsertionGuard IG(builder);
@@ -294,7 +294,7 @@ void CreateDbsPass::identifyDbsInModule(ModuleOp module) {
           for (unsigned j = drop; j < origIndices.size(); ++j)
             newIndices.push_back(origIndices[j]);
 
-          opToUpdate.getMemrefMutable().assign(dbAccessResult);
+          opToUpdate.getMemrefMutable().assign(dbDepResult);
           opToUpdate.getIndicesMutable().assign(newIndices);
         };
 
@@ -309,7 +309,7 @@ void CreateDbsPass::identifyDbsInModule(ModuleOp module) {
 
     /// Collect old dependencies to remove them later.
     for (auto oldDep : edtOp.getDependencies()) {
-      if (auto dbOp = oldDep.getDefiningOp<DbControlOp>())
+      if (auto dbOp = oldDep.getDefiningOp<DbDepOp>())
         opsToRemove.insert(dbOp);
     }
     opsToRemove.insert(edtOp);
@@ -331,9 +331,10 @@ void CreateDbsPass::identifyDbsInModule(ModuleOp module) {
   }
 }
 
-DbAccessOp CreateDbsPass::createDbAccess(OpBuilder &builder, Location loc,
-                                         DbAllocOp dbAllocOp,
-                                         SmallVector<Value> pinnedIndices) {
+DbDepOp CreateDbsPass::createDbDep(OpBuilder &builder, Location loc,
+                                   DbAllocOp dbAllocOp,
+                                   SmallVector<Value> pinnedIndices,
+                                   types::DbDepType depType) {
   /// Get the pointer from the created db
   Value dbPtr = dbAllocOp.getPtr();
   auto dbPtrType = dbPtr.getType().cast<MemRefType>();
@@ -343,40 +344,39 @@ DbAccessOp CreateDbsPass::createDbAccess(OpBuilder &builder, Location loc,
   assert(pinnedCount <= rank &&
          "Pinned indices exceed the rank of the memref.");
 
-  /// Compute offsets, sizes, and strides for the subview
-  SmallVector<OpFoldResult> offsets, sizes, strides;
+  /// Compute offsets and sizes
+  SmallVector<Value> offsetValues, sizeValues;
 
   for (int64_t i = 0; i < rank; ++i) {
     if (i < pinnedCount) {
       /// For pinned dimensions, use the pinned index as offset and size 1
-      offsets.push_back(pinnedIndices[i]);
-      sizes.push_back(builder.getIndexAttr(1));
+      offsetValues.push_back(pinnedIndices[i]);
+      sizeValues.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
     } else {
       /// For non-pinned dimensions, start from 0 and use the full dimension
       /// size
-      offsets.push_back(builder.getIndexAttr(0));
+      offsetValues.push_back(builder.create<arith::ConstantIndexOp>(loc, 0));
       if (dbPtrType.isDynamicDim(i)) {
-        sizes.push_back(
+        sizeValues.push_back(
             builder.create<memref::DimOp>(loc, dbPtr, i).getResult());
       } else {
-        sizes.push_back(builder.getIndexAttr(dbPtrType.getDimSize(i)));
+        sizeValues.push_back(builder.create<arith::ConstantIndexOp>(
+            loc, dbPtrType.getDimSize(i)));
       }
     }
-    strides.push_back(builder.getIndexAttr(1));
   }
 
-  auto subviewOp =
-      builder.create<memref::SubViewOp>(loc, dbPtr, offsets, sizes, strides);
-  return DbAccessOp(subviewOp);
+  return builder.create<DbDepOp>(
+      loc, dbAllocOp.getResult().getType(),
+      builder.getStringAttr(types::toString(depType)), dbAllocOp.getResult(),
+      pinnedIndices, offsetValues, sizeValues);
 }
 
 DbAllocOp CreateDbsPass::createDbAlloc(OpBuilder &builder, Location loc,
-                                       Value basePtr,
-                                       types::DbAccessType access) {
+                                       Value basePtr, types::DbDepType dep) {
   /// Create the DbAllocOp using the existing function to ensure sizes are
   /// filled out
-  auto dbAllocOp =
-      createDbAllocOp(builder, loc, types::toString(access), basePtr);
+  auto dbAllocOp = createDbAllocOp(builder, loc, types::toString(dep), basePtr);
 
   /// Set the allocation type attribute using the helper function
   auto allocType = arts::getAllocType(basePtr);
@@ -427,7 +427,7 @@ void CreateDbsPass::analyzeEdtRegion(EdtOp &edtOp) {
       dbgs() << "  - Candidate Db #" << candItr++ << ":\n"
              << "    Memref: " << db.ptr << "\n"
              << "    IsString: " << (db.isString ? "true" : "false") << "\n"
-             << "    Access Type: " << types::toString(db.access) << "\n"
+             << "    Dep Type: " << types::toString(db.dep) << "\n"
              << "    Pinned Indices:";
       if (db.pinnedIndices.empty())
         dbgs() << "  none\n";
@@ -523,16 +523,16 @@ void CreateDbsPass::analyzeValueInEdt(Value dbPtr,
     candMap.erase(db);
   }
 
-  /// Analyze each candidate's access type.
+  /// Analyze each candidate's dep type.
   for (auto &entry : candMap) {
     DbCandidate &db = entry.first;
     for (Operation *op : entry.second) {
       if (isa<memref::LoadOp>(op))
-        db.updateAccess(DbAccessType::ReadOnly);
+        db.updateDep(DbDepType::ReadOnly);
       else if (isa<memref::StoreOp>(op))
-        db.updateAccess(DbAccessType::WriteOnly);
+        db.updateDep(DbDepType::WriteOnly);
       else
-        db.updateAccess(DbAccessType::ReadWrite);
+        db.updateDep(DbDepType::ReadWrite);
     }
   }
 }

@@ -19,7 +19,7 @@ class DbAllocOp;
 namespace types {
 /// EDT types
 enum class EdtType { Parallel, Single, Sync, Task };
-enum class DbAccessType { ReadOnly, WriteOnly, ReadWrite, Unknown };
+enum class DbDepType { ReadOnly, WriteOnly, ReadWrite, Unknown };
 enum class DbAllocType { Stack, Heap, Global, Parameter, Dynamic, Unknown };
 
 inline llvm::StringRef toString(const EdtType Ty) {
@@ -35,15 +35,15 @@ inline llvm::StringRef toString(const EdtType Ty) {
   }
 }
 
-inline llvm::StringRef toString(const DbAccessType Ty) {
+inline llvm::StringRef toString(const DbDepType Ty) {
   switch (Ty) {
-  case DbAccessType::ReadOnly:
+  case DbDepType::ReadOnly:
     return "in";
-  case DbAccessType::WriteOnly:
+  case DbDepType::WriteOnly:
     return "inout";
-  case DbAccessType::ReadWrite:
+  case DbDepType::ReadWrite:
     return "inout";
-  case DbAccessType::Unknown:
+  case DbDepType::Unknown:
     return "unknown";
   }
 }

@@ -48,7 +48,7 @@ public:
   /// DB management
   DbCodegen *getDb(Value op);
   DbCodegen *getDb(DbAllocOp dbOp);
-  DbCodegen *getDb(DbControlOp dbOp);
+  DbCodegen *getDb(DbDepOp dbOp);
   DbCodegen *createDb(DbAllocOp dbOp, Location loc);
   DbCodegen *getOrCreateDb(Value op, Location loc);
   void addDbDependency(Value dbGuid, Value edtGuid, Value edtSlot,

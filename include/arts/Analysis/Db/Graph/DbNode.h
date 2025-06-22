@@ -13,7 +13,7 @@ namespace arts {
 
 class DbAnalysis;
 class DbAllocNode;
-class DbAccessNode;
+class DbDepNode;
 class DbDepEdge;
 class DbAllocEdge;
 
@@ -28,10 +28,10 @@ public:
     return info->isAlloc();
   }
 
-  /// Get or create an access node for an access operation
-  DbAccessNode *getOrCreateAccessNode(DbAccessOp accessOp);
-  DbAccessNode *findAccessNode(DbAccessOp accessOp) const;
-  void forEachAccessNode(const std::function<void(DbAccessNode *)> &fn) const;
+  /// Get or create an dep node for an dep operation
+  DbDepNode *getOrCreateDepNode(DbDepOp depOp);
+  DbDepNode *findDepNode(DbDepOp depOp) const;
+  void forEachDepNode(const std::function<void(DbDepNode *)> &fn) const;
 
   /// Edge management
   void addInAllocEdge(DbAllocEdge *edge);
@@ -41,23 +41,23 @@ public:
 
 private:
   DbAllocOp dbAllocOp;
-  SmallVector<std::unique_ptr<DbAccessNode>> accessNodes;
-  DenseMap<DbAccessOp, DbAccessNode *> accessNodeMap;
+  SmallVector<std::unique_ptr<DbDepNode>> depNodes;
+  DenseMap<DbDepOp, DbDepNode *> depNodeMap;
   unsigned nextChildId = 1;
   DenseSet<DbAllocEdge *> inAllocEdges;
   DenseSet<DbAllocEdge *> outAllocEdges;
 };
 
-/// DbAccessNode
-class DbAccessNode : public DbInfo {
+/// DbDepNode
+class DbDepNode : public DbInfo {
 public:
-  DbAccessNode(DbAccessOp accessOp, bool isAllocFlag, DbAllocNode *parent,
+  DbDepNode(DbDepOp depOp, bool isAllocFlag, DbAllocNode *parent,
                DbAnalysis *analysis);
 
   void print(llvm::raw_ostream &os) const override;
 
   static bool classof(const DbInfo *info) {
-    return info->isAccess();
+    return info->isDep();
   }
 
   /// Edge management
@@ -67,7 +67,7 @@ public:
   const DenseSet<DbDepEdge *> &getOutDepEdges() const;
 
 private:
-  DbAccessOp dbAccessOp;
+  DbDepOp dbDepOp;
   DenseSet<DbDepEdge *> inDepEdges;
   DenseSet<DbDepEdge *> outDepEdges;
 };

@@ -23,14 +23,15 @@ DbAllocOp createDbAllocOp(OpBuilder &builder, Location loc,
                             StringRef mode, Value address, 
                             SmallVector<Value> sizes = {});
 
-DbControlOp createDbControlOp(OpBuilder &builder, Location loc,
-                              types::DbAccessType mode, Value ptr,
-                              SmallVector<Value> pinnedIndices = {}, bool coarseGrained = false);
+DbDepOp createDbDepOp(OpBuilder &builder, Location loc,
+                   types::DbDepType mode, Value source,
+                   SmallVector<Value> pinnedIndices,
+                   SmallVector<Value> offsets,
+                   SmallVector<Value> sizes);
 
 /// DB helper functions
 bool isDbAllocOp(Operation *op);
-bool isDbAccessOp(Operation *op);
-bool isDbControlOp(Operation *op);
+bool isDbDepOp(Operation *op);
 bool isStackAlloc(DbAllocOp dbAllocOp);
 bool isDynamicAlloc(DbAllocOp dbAllocOp);
 bool isGlobalAlloc(DbAllocOp dbAllocOp);

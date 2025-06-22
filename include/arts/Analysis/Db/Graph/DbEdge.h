@@ -13,7 +13,7 @@ namespace mlir {
 namespace arts {
 
 /// Forward declarations
-class DbAccessNode;
+class DbDepNode;
 class DbAllocNode;
 enum class DbDepType { Read, Write, ReadWrite };
 StringRef toString(DbDepType type);
@@ -21,15 +21,15 @@ StringRef toString(DbDepType type);
 /// DbDepEdge
 class DbDepEdge {
 public:
-  DbDepEdge(DbAccessNode *from, DbAccessNode *to, DbDepType type);
+  DbDepEdge(DbDepNode *from, DbDepNode *to, DbDepType type);
   void print();
 
-  DbAccessNode *getFrom() const { return from; }
-  DbAccessNode *getTo() const { return to; }
+  DbDepNode *getFrom() const { return from; }
+  DbDepNode *getTo() const { return to; }
   DbDepType getType() const { return type; }
 
-  DbAccessNode *from;
-  DbAccessNode *to;
+  DbDepNode *from;
+  DbDepNode *to;
   DbDepType type;
 };
 

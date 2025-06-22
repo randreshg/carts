@@ -62,9 +62,9 @@ struct DbPass : public arts::DbBase<DbPass> {
   bool convertToParameters();
 
   /// Analyze db usage and resize it to the minimum
-  /// required based on the min/max access indices found by the analysis.
+  /// required based on the min/max dep indices found by the analysis.
   /// It also adjusts the indices in load/store operations to account for
-  /// the new base offset if the minimum access index was greater than 0.
+  /// the new base offset if the minimum dep index was greater than 0.
   bool shrinkDb();
 
 private:
@@ -142,8 +142,8 @@ bool DbPass::convertToParameters() {
 
   //     LLVM_DEBUG(dbgs() << "- Converting db to parameter: "
   //                       << allocNode->getDbAllocOp() << "\n");
-  //     allocNode->forEachAccessNode([&](mlir::arts::DbAccessNode *accessNode) {
-  //       auto *op = accessNode->subviewOp.getOperation();
+  //     allocNode->forEachDepNode([&](mlir::arts::DbDepNode *depNode) {
+  //       auto *op = depNode->subviewOp.getOperation();
   //       if (isa<arts::EdtOp>(op))
   //         return;
   //       auto loadOp = dyn_cast<memref::LoadOp>(op);
@@ -273,7 +273,7 @@ bool DbPass::shrinkDb() {
   //     LLVM_DEBUG(dbgs() << "- Shrinking db \n");
   //     graphChanged = true;
 
-  //     /// Create the new DbControlOp with adjusted sizes and offsets.
+  //     /// Create the new DbDepOp with adjusted sizes and offsets.
   //     auto newDbOp = builder.create<arts::DbAllocOp>(
   //         loc,
   //         builder.getStringAttr(allocNode->getMode()),
@@ -288,34 +288,34 @@ bool DbPass::shrinkDb() {
 
   //     /// Update users (loads/stores) to use the new db and adjusted
   //     /// indices.
-  //     allocNode->forEachAccessNode([&](mlir::arts::DbAccessNode *accessNode) {
-  //       if (auto loadOp = dyn_cast<memref::LoadOp>(accessNode->subviewOp.getOperation())) {
+  //     allocNode->forEachDepNode([&](mlir::arts::DbDepNode *depNode) {
+  //       if (auto loadOp = dyn_cast<memref::LoadOp>(depNode->subviewOp.getOperation())) {
   //         SmallVector<Value> oldIndices = loadOp.getIndices();
   //         SmallVector<Value> newIndices = oldIndices;
   //         /// Subtract offset for dimensions that were shrunk from non-zero min.
   //         for (unsigned j = 0; j < rank; ++j) {
   //           if (offsets[j]) {
   //             newIndices[j] = builder.create<arith::SubIOp>(
-  //                 accessNode->subviewOp.getLoc(), oldIndices[j], offsets[j]);
+  //                 depNode->subviewOp.getLoc(), oldIndices[j], offsets[j]);
   //           }
   //         }
   //         /// Create the new load using the new db and adjusted indices.
   //         auto newLoad = builder.create<memref::LoadOp>(
-  //             accessNode->subviewOp.getLoc(), newDbOp.getResult(0), ValueRange(newIndices));
+  //             depNode->subviewOp.getLoc(), newDbOp.getResult(0), ValueRange(newIndices));
   //         loadOp.getResult().replaceAllUsesWith(newLoad.getResult());
   //       }
-  //       else if (auto storeOp = dyn_cast<memref::StoreOp>(accessNode->subviewOp.getOperation())) {
+  //       else if (auto storeOp = dyn_cast<memref::StoreOp>(depNode->subviewOp.getOperation())) {
   //         SmallVector<Value> oldIndices = storeOp.getIndices();
   //         SmallVector<Value> newIndices = oldIndices;
   //         /// Subtract offset for dimensions that were shrunk from non-zero min.
   //         for (unsigned j = 0; j < rank; ++j) {
   //           if (offsets[j]) {
   //             newIndices[j] = builder.create<arith::SubIOp>(
-  //                 accessNode->subviewOp.getLoc(), oldIndices[j], offsets[j]);
+  //                 depNode->subviewOp.getLoc(), oldIndices[j], offsets[j]);
   //           }
   //         }
   //         /// Create the new store using the new db and adjusted indices.
-  //         builder.create<memref::StoreOp>(accessNode->subviewOp.getLoc(), storeOp.getValueToStore(),
+  //         builder.create<memref::StoreOp>(depNode->subviewOp.getLoc(), storeOp.getValueToStore(),
   //                                         newDbOp.getResult(0), ValueRange(newIndices));
   //       }
   //     });
@@ -352,7 +352,7 @@ bool DbPass::shrinkDb() {
 
 bool DbPass::canonicalizeDimOps() {
   // LLVM_DEBUG(dbgs() << line << "Canonicalizing dim ops\n");
-  // module->walk([&](arts::DbControlOp dbOp) {
+  // module->walk([&](arts::DbDepOp dbOp) {
   //   /// Analyze uses of the db.
   //   for (auto *op : dbOp->getUsers()) {
   //     auto dimOp = dyn_cast<memref::DimOp>(op);

@@ -8,6 +8,7 @@
 
 /// Dialects
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 /// Arts
 #include "ArtsPassDetails.h"
@@ -41,11 +42,11 @@ using namespace arts;
 // Helper Functions
 //===----------------------------------------------------------------------===//
 DbAllocOp createDbAlloc(OpBuilder &builder, Location loc, Value basePtr,
-                        types::DbAccessType access) {
+                        types::DbDepType dep) {
   /// Create the DbAllocOp using the existing function to ensure sizes are
   /// filled out
   auto dbAllocOp =
-      createDbAllocOp(builder, loc, types::toString(access), basePtr);
+      createDbAllocOp(builder, loc, types::toString(dep), basePtr);
 
   /// Set the allocation type attribute using the helper function
   auto allocType = arts::getAllocType(basePtr);
@@ -66,7 +67,7 @@ struct PreprocessDbsPass : public arts::PreprocessDbsBase<PreprocessDbsPass> {
 private:
   void preprocessDbsInFunction(func::FuncOp func);
   void processDbAlloc(DbAllocOp dbAllocOp);
-  bool processDbAccessUser(DbAccessOp dbAccessOp, DbAllocOp newDbAllocOp,
+  bool processDbDepUser(DbDepOp dbDepOp, DbAllocOp newDbAllocOp,
                            OpBuilder &builder, Location loc);
   Value computePtr(DbAllocOp dbAllocOp, Value basePtr, OpBuilder &builder,
                    Location loc);
@@ -145,16 +146,9 @@ void PreprocessDbsPass::processDbAlloc(DbAllocOp dbAllocOp) {
   for (auto [useOperand, owner] : usesToProcess) {
     builder.setInsertionPoint(owner);
 
-    if (auto subViewOp = dyn_cast<memref::SubViewOp>(owner)) {
-      DbAccessOp dbAccessOp(subViewOp);
-      if (!processDbAccessUser(dbAccessOp, newDbAllocOp, builder, loc)) {
-        subViewOp.emitError("Failed to process DbAccessOp (subview) user");
-        continue;
-      }
-    } else if (auto castOp = dyn_cast<memref::CastOp>(owner)) {
-      DbAccessOp dbAccessOp(castOp);
-      if (!processDbAccessUser(dbAccessOp, newDbAllocOp, builder, loc)) {
-        castOp.emitError("Failed to process DbAccessOp (cast) user");
+    if (auto dbDepOp = dyn_cast<DbDepOp>(owner)) {
+      if (!processDbDepUser(dbDepOp, newDbAllocOp, builder, loc)) {
+        dbDepOp.emitError("Failed to process DbDepOp user");
         continue;
       }
     } else if (auto edtOp = dyn_cast<EdtOp>(owner)) {
@@ -168,39 +162,28 @@ void PreprocessDbsPass::processDbAlloc(DbAllocOp dbAllocOp) {
   opsToRemove.insert(dbAllocOp);
 }
 
-bool PreprocessDbsPass::processDbAccessUser(DbAccessOp dbAccessOp,
+bool PreprocessDbsPass::processDbDepUser(DbDepOp dbDepOp,
                                             DbAllocOp newDbAllocOp,
                                             OpBuilder &builder, Location loc) {
-  /// Create new DbAccessOp based on the type
-  Value newDbAccessResult;
-  if (dbAccessOp.isSubView()) {
-    auto subViewOp = dbAccessOp.getAsSubView();
-    auto newSubViewOp = builder.create<memref::SubViewOp>(
-        subViewOp.getLoc(), newDbAllocOp.getResult(), subViewOp.getOffsets(),
-        subViewOp.getSizes(), subViewOp.getStrides());
-    newDbAccessResult = newSubViewOp.getResult();
-  } else if (dbAccessOp.isCast()) {
-    auto castOp = dbAccessOp.getAsCast();
-    auto newCastOp = builder.create<memref::CastOp>(
-        castOp.getLoc(), newDbAllocOp.getResult().getType(),
-        newDbAllocOp.getResult());
-    newDbAccessResult = newCastOp.getResult();
-  } else {
-    return false;
-  }
+  /// Create new DbDepOp that references the preprocessed DbAllocOp
+  auto newDbDepOp = builder.create<DbDepOp>(
+      dbDepOp.getLoc(), dbDepOp.getResult().getType(),
+      dbDepOp.getModeAttr(), newDbAllocOp.getResult(),
+      dbDepOp.getIndices(), dbDepOp.getOffsets(), dbDepOp.getSizes());
 
-  auto oldDbAccessResult = dbAccessOp.getResult();
+  auto oldDbDepResult = dbDepOp.getResult();
+  auto newDbDepResult = newDbDepOp.getResult();
 
-  /// Process all users of the DbAccessOp
-  SmallVector<std::pair<OpOperand *, Operation *>> accessUsesToProcess;
-  for (auto &use : oldDbAccessResult.getUses())
-    accessUsesToProcess.push_back({&use, use.getOwner()});
+  /// Process all users of the old DbDepOp
+  SmallVector<std::pair<OpOperand *, Operation *>> depUsesToProcess;
+  for (auto &use : oldDbDepResult.getUses())
+    depUsesToProcess.push_back({&use, use.getOwner()});
 
-  for (auto [useOperand, userOp] : accessUsesToProcess) {
+  for (auto [useOperand, userOp] : depUsesToProcess) {
     builder.setInsertionPoint(userOp);
 
     if (auto loadOp = dyn_cast<memref::LoadOp>(userOp)) {
-      auto ptr = computePtr(newDbAllocOp, newDbAccessResult, builder, loc);
+      auto ptr = computePtr(newDbAllocOp, newDbDepResult, builder, loc);
       if (!ptr)
         continue;
 
@@ -210,7 +193,7 @@ bool PreprocessDbsPass::processDbAccessUser(DbAccessOp dbAccessOp,
       opsToRemove.insert(loadOp);
 
     } else if (auto storeOp = dyn_cast<memref::StoreOp>(userOp)) {
-      auto ptr = computePtr(newDbAllocOp, newDbAccessResult, builder, loc);
+      auto ptr = computePtr(newDbAllocOp, newDbDepResult, builder, loc);
       if (!ptr)
         continue;
 
@@ -219,17 +202,17 @@ bool PreprocessDbsPass::processDbAccessUser(DbAccessOp dbAccessOp,
       opsToRemove.insert(storeOp);
 
     } else if (auto edtOp = dyn_cast<EdtOp>(userOp)) {
-      /// EDT dependency - replace with new DbAccessOp result
-      useOperand->set(newDbAccessResult);
+      /// EDT dependency - replace with new DbDepOp result
+      useOperand->set(newDbDepResult);
 
     } else {
-      userOp->emitError("Unsupported user of DbAccessOp: ")
+      userOp->emitError("Unsupported user of DbDepOp: ")
           << userOp->getName();
       return false;
     }
   }
 
-  opsToRemove.insert(dbAccessOp.getOperation());
+  opsToRemove.insert(dbDepOp.getOperation());
   return true;
 }
 

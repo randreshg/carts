@@ -153,10 +153,9 @@ DbCodegen *ArtsCodegen::getDb(Value op) {
     return nullptr;
   if (auto dbAllocOp = op.getDefiningOp<DbAllocOp>())
     return getDb(dbAllocOp);
-  if (auto dbControlOp = op.getDefiningOp<DbControlOp>())
-    return getDb(dbControlOp);
-  if (auto subviewOp = op.getDefiningOp<memref::SubViewOp>())
-    return getDb(subviewOp.getSource());
+  if (auto dbDepOp = op.getDefiningOp<DbDepOp>())
+    return getDb(dbDepOp);
+
   return nullptr;
 }
 
@@ -167,7 +166,7 @@ DbCodegen *ArtsCodegen::getDb(DbAllocOp dbOp) {
   return (it != dbs.end()) ? it->second : nullptr;
 }
 
-DbCodegen *ArtsCodegen::getDb(DbControlOp dbOp) {
+DbCodegen *ArtsCodegen::getDb(DbDepOp dbOp) {
   if (!dbOp)
     return nullptr;
   auto it = dbs.find(dbOp.getResult());
@@ -195,9 +194,9 @@ DbCodegen *ArtsCodegen::getOrCreateDb(Value op, Location loc) {
     dbs[op] = cg;
     return cg;
   }
-  /// DbControlOp
-  if (auto dbCtrlOp = op.getDefiningOp<DbControlOp>()) {
-    auto *cg = new DbAccessCodegen(*this, dbCtrlOp, loc);
+  /// DbDepOp
+  if (auto dbDepOp = op.getDefiningOp<DbDepOp>()) {
+    auto *cg = new DbDepCodegen(*this, dbDepOp, loc);
     dbs[op] = cg;
     return cg;
   }

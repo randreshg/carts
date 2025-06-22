@@ -18,7 +18,7 @@ class ArtsCodegen;
 
 class DbCodegen {
 public:
-  enum class Kind { Alloc, Access };
+  enum class Kind { Alloc, Dep };
   DbCodegen(Kind kind) : kind(kind) {}
   virtual ~DbCodegen() = default;
   Kind getKind() const { return kind; }
@@ -67,9 +67,9 @@ private:
   Value getMode();
 };
 
-class DbAccessCodegen : public DbCodegen {
+class DbDepCodegen : public DbCodegen {
 public:
-  DbAccessCodegen(ArtsCodegen &AC, arts::DbControlOp dbOp, Location loc);
+  DbDepCodegen(ArtsCodegen &AC, arts::DbDepOp dbOp, Location loc);
   Value getOp() override;
   Value getEdtSlot() override;
   Value getGuid() override;
@@ -86,7 +86,7 @@ public:
 private:
   ArtsCodegen &AC;
   OpBuilder &builder;
-  arts::DbControlOp dbOp;
+  arts::DbDepOp dbOp;
 };
 
 } // namespace arts
