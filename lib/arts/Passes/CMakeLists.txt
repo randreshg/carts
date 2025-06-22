@@ -8,6 +8,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   Edt.cpp
   CreateDbs.cpp
   Db.cpp
+  PreprocessDbs.cpp
   CreateEpochs.cpp
   ConvertArtsToLLVM.cpp
   EdtInvariantCodeMotion.cpp

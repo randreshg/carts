@@ -4,213 +4,67 @@
 #ifndef CARTS_CODEGEN_ARTSCODEGEN_H
 #define CARTS_CODEGEN_ARTSCODEGEN_H
 
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/LLVMIR/LLVMTypes.h"
-/// Arts
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsTypes.h"
-#include "mlir/Analysis/DataLayoutAnalysis.h"
-#include "mlir/Conversion/LLVMCommon/MemRefBuilder.h"
-/// Other
-#include "mlir/Conversion/LLVMCommon/MemRefBuilder.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Location.h"
-#include "mlir/IR/Operation.h"
-#include "mlir/IR/Region.h"
 #include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
-#include "mlir/IR/ValueRange.h"
-#include "mlir/Interfaces/DataLayoutInterfaces.h"
-#include "mlir/Support/LLVM.h"
-#include "mlir/Transforms/DialectConversion.h"
-#include <sys/types.h>
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/StringMap.h"
+#include "llvm/Support/DataTypes.h"
+#include <map>
+#include <memory>
 
 namespace mlir {
 namespace arts {
-using namespace mlir::LLVM;
 using namespace types;
-class ArtsCodegen;
 
-// ---------------------------- Dbs ---------------------------- ///
-class DataBlockCodegen {
-public:
-  DataBlockCodegen(ArtsCodegen &AC);
-  DataBlockCodegen(ArtsCodegen &AC, arts::DbControlOp dbOp, Location loc);
+/// Forward declarations
+class DbCodegen;
+class EdtCodegen;
 
-  /// Getters
-  Value getOp() { return dbOp; }
-  Value getEdtSlot() { return edtSlot; }
-  Value getGuid() { return guid; }
-  Value getPtr() { return ptr; }
-  StringRef getMode() { return dbOp.getMode(); }
-  bool hasPtrDb() { return dbOp.hasPtrDb(); }
-  bool hasSingleSize() { return dbOp.hasSingleSize(); }
-  ValueRange getIndices() { return dbOp.getIndices(); }
-  ValueRange getOffsets() { return dbOp.getOffsets(); }
-  ValueRange getSizes() { return dbOp.getSizes(); }
-
-  /// Setters
-  void setEdtSlot(Value edtSlot) { this->edtSlot = edtSlot; }
-  void setGuid(Value guid) { this->guid = guid; }
-  void setPtr(Value ptr) { this->ptr = ptr; }
-
-  /// Interface
-  void create(arts::DbControlOp dbOp, Location loc);
-  bool isOutMode() {
-    StringRef mode = dbOp.getMode();
-    return mode == "out" || mode == "inout";
-  }
-  bool isInMode() {
-    return dbOp.getMode() == "in" || dbOp.getMode() == "inout";
-  }
-
-private:
-  ArtsCodegen &AC;
-  OpBuilder &builder;
-  DbControlOp dbOp = nullptr;
-  Value edtSlot = nullptr;
-
-  /// DataBlock info
-  Value guid = nullptr;
-  Value ptr = nullptr;
-
-  /// Utils
-  Value createGuid(Value node, Value mode, Location loc);
-  Value getMode(StringRef mode);
-};
-
-// ---------------------------- EDTs ---------------------------- ///
-class EdtCodegen {
-public:
-  EdtCodegen(ArtsCodegen &AC, SmallVector<Value> *opDeps = nullptr,
-             Region *region = nullptr, Value *epoch = nullptr,
-             Location *loc = nullptr, bool buildEdt = false);
-  void build(Location loc);
-
-  /// Getters
-  func::FuncOp getFunc() { return func; }
-  Value getGuid() { return guid; }
-  Value getNode() { return node; }
-  SmallVector<Value> &getParams() { return params; }
-
-  /// Setters
-  void setFunc(func::FuncOp func) { this->func = func; }
-  void setGuid(Value guid) { this->guid = guid; }
-  void setNode(Value node) { this->node = node; }
-  void setParams(SmallVector<Value> params) { this->params = params; }
-  void setDeps(SmallVector<Value> deps) { this->deps = deps; }
-  void setDepC(Value depC) { this->depC = depC; }
-
-  /// Interface
-  std::pair<bool, int> insertParam(Value param) {
-    /// Check if the size value is already in the params vector using llvm::find
-    auto it = llvm::find(params, param);
-    unsigned paramIndex;
-
-    /// If the size was not found in the existing parameters, add it
-    bool inserted = false;
-    if (it == params.end()) {
-      paramIndex = params.size();
-      params.push_back(param);
-      inserted = true;
-    } else {
-      /// Found the existing parameter index
-      paramIndex = std::distance(params.begin(), it);
-    }
-    return {inserted, paramIndex};
-  }
-  void addParam(Value param) { params.push_back(param); }
-  void addEventDependency(Value dep) { deps.push_back(dep); }
-
-private:
-  ArtsCodegen &AC;
-  OpBuilder &builder;
-  Region *region = nullptr;
-  Value *epoch = nullptr;
-  func::FuncOp func = nullptr;
-  Value guid = nullptr;
-  Value node = nullptr;
-  Value paramC = nullptr;
-  Value paramV = nullptr;
-  Value depC = nullptr;
-  SmallVector<Value> deps, params, consts;
-  DenseMap<Value, Value> rewireMap;
-  func::ReturnOp returnOp = nullptr;
-  bool built = false;
-  /// Dependencies info
-  SmallVector<DataBlockCodegen *> depsToSatisfy, depsToRecord;
-
-  /// Entry info
-  struct DbEntry {
-    Value guid, ptr;
-    SmallVector<Value> sizes, offsets;
-    DenseMap<unsigned, unsigned> sizeIndex;
-    DenseMap<unsigned, unsigned> offsetIndex;
-  };
-  DenseMap<arts::DataBlockCodegen *, DbEntry> entryDbs;
-  /// Entry events
-  DenseMap<Value, unsigned> entryEvents;
-  /// Entry Function arguments
-  Value fnParamV = nullptr;
-  Value fnDepV = nullptr;
-
-  /// Utils
-  void process(Location loc);
-  void processDependencies(Location loc);
-  void processSubviewDependency(Value subview, Location loc);
-  void outlineRegion(Location loc);
-  Value createGuid(Value node, Location loc);
-  func::FuncOp createFn(Location loc);
-  void createEntry(Location loc);
-
-  /// Static
-  static unsigned edtCounter;
-  static unsigned increaseEdtCounter() { return ++EdtCodegen::edtCounter; }
-};
-
-// ---------------------------- ARTS Codegen ---------------------------- ///
 class ArtsCodegen {
 public:
   ArtsCodegen(ModuleOp &module, llvm::DataLayout &llvmDL,
               mlir::DataLayout &mlirDL, bool debug = false);
   ~ArtsCodegen();
 
-  /// Friend classes
-  friend class DataBlockCodegen;
-  friend class EdtCodegen;
-  friend class ArtsTypes;
+  /// Getters
+  OpBuilder &getBuilder() { return builder; }
+  ModuleOp &getModule() { return module; }
+  llvm::DataLayout &getLLVMDataLayout() { return llvmDL; }
+  mlir::DataLayout &getMLIRDataLayout() { return mlirDL; }
+  bool isDebug() const { return debug; }
 
-  /// Get or create a runtime function
+  /// Runtime function management
   func::FuncOp getOrCreateRuntimeFunction(RuntimeFunction FnID);
   func::CallOp createRuntimeCall(RuntimeFunction FnID, ArrayRef<Value> args,
                                  Location loc);
-  /// Builder
-  OpBuilder &getBuilder() { return builder; }
 
-  /// Db
-  DataBlockCodegen *getDb(Value op);
-  DataBlockCodegen *getDb(arts::DbControlOp dbOp);
-  DataBlockCodegen *createDb(arts::DbControlOp dbOp, Location loc);
-  DataBlockCodegen *getOrCreateDb(arts::DbControlOp dbOp, Location loc);
+  /// DB management
+  DbCodegen *getDb(Value op);
+  DbCodegen *getDb(DbAllocOp dbOp);
+  DbCodegen *getDb(DbControlOp dbOp);
+  DbCodegen *createDb(DbAllocOp dbOp, Location loc);
+  DbCodegen *getOrCreateDb(Value op, Location loc);
   void addDbDependency(Value dbGuid, Value edtGuid, Value edtSlot,
                        Location loc);
   void incrementDbLatchCount(Value dbGuid, Location loc);
   void decrementDbLatchCount(Value dbGuid, Location loc);
-  Value getDbMode(StringRef mode, Location loc);
 
-  /// Edts
+  /// EDT management
   EdtCodegen *getEdt(Region *region);
-  EdtCodegen *createEdt(SmallVector<Value> *opDeps = nullptr,
-                        Region *region = nullptr, Value *epoch = nullptr,
-                        Location *loc = nullptr, bool build = true);
+  EdtCodegen *createEdt(SmallVector<Value> *opDeps, Region *region,
+                        Value *epoch, Location *loc, bool build = false);
 
-  /// Epoch
+  /// Epoch management
   Value createEpoch(Value finishEdtGuid, Value finishEdtSlot, Location loc);
 
-  /// Utils
-  Value getGuidFromDb(Value db, Location loc);
-  Value getPtrFromDb(Value db, Location loc);
+  /// Utility functions
   Value getGuidFromEdtDep(Value dep, Location loc);
   Value getPtrFromEdtDep(Value dep, Location loc);
   Value getCurrentEpochGuid(Location loc);
@@ -222,66 +76,69 @@ public:
   func::CallOp signalEdt(Value edtGuid, Value edtSlot, Value dbGuid,
                          Location loc);
   void waitOnHandle(Value epochGuid, Location loc);
+
+  /// Function creation
   func::FuncOp insertInitPerWorker(Location loc);
-  func::FuncOp insertInitPerNode(Location loc, func::FuncOp callback = nullptr);
+  func::FuncOp insertInitPerNode(Location loc, func::FuncOp callback);
   func::FuncOp insertArtsMainFn(Location loc, func::FuncOp callback);
   func::FuncOp insertMainFn(Location loc);
-  void initializeRuntime(Location loc);
+  void initRT(Location loc);
+
+  /// Helper functions
+  Value createFnPtr(func::FuncOp funcOp, Location loc);
+  Value createIndexConstant(int value, Location loc);
+  Value createIntConstant(int value, Type type, Location loc);
+  Value createPtr(Value source, Location loc);
+  Value castParameter(Type targetType, Value source, Location loc);
+  Value castPtr(Type targetType, Value source, Location loc);
+  Value castToIndex(Value source, Location loc);
+  Value castToFloat(Type targetType, Value source, Location loc);
+  Value castToInt(Type targetType, Value source, Location loc);
+  Value castToVoidPtr(Value source, Location loc);
+  Value castToLLVMPtr(Value source, Location loc);
 
   /// Debug
   void collectGlobalLLVMStrings();
   Value getOrCreateGlobalLLVMString(Location loc, StringRef value);
   void createPrintfCall(Location loc, StringRef format, ValueRange args);
 
-  /// Helpers
-  Value createFnPtr(func::FuncOp funcOp, Location loc);
-  Value createIntConstant(int value, Type type, Location loc);
-  Value createIndexConstant(int value, Location loc);
-  Value createPtr(Value source, Location loc);
+  /// Insertion point management
+  void setInsertionPoint(Operation *op);
+  void setInsertionPointAfter(Operation *op);
+  void setInsertionPoint(ModuleOp &module);
 
-  /// Casting
-  Value castParameter(mlir::Type targetType, Value source, Location loc);
-  Value castPointer(mlir::Type targetType, Value source, Location loc);
-  Value castToIndex(Value source, Location loc);
-  Value castToFloat(mlir::Type targetType, Value source, Location loc);
-  Value castToInt(mlir::Type targetType, Value source, Location loc);
-  Value castToVoidPtr(Value source, Location loc);
-  Value castToLLVMPtr(Value source, Location loc);
-
-  /// Insertion point
-  void setInsertionPoint(Operation *op) { builder.setInsertionPoint(op); }
-  void setInsertionPointAfter(Operation *op) {
-    builder.setInsertionPointAfter(op);
-  }
-
-  // ---------------------------- Types ---------------------------- ///
-  ///{
-#define ARTS_TYPE(VarName, InitValue) mlir::Type VarName = nullptr;
+/// Types
+///{
+#define ARTS_TYPE(VarName, InitValue) Type VarName = nullptr;
 #define ARTS_FUNCTION_TYPE(VarName, IsVarArg, ReturnType, ...)                 \
   FunctionType VarName = nullptr;                                              \
   MemRefType VarName##Ptr = nullptr;
 #define ARTS_STRUCT_TYPE(VarName, StructName, ...)                             \
-  LLVMStructType VarName = nullptr;                                            \
+  LLVM::LLVMStructType VarName = nullptr;                                      \
   MemRefType VarName##Ptr = nullptr;
-#include "ARTSKinds.def"
-  LLVMPointerType llvmPtr = nullptr;
+#include "arts/Codegen/ARTSKinds.def"
+  LLVM::LLVMPointerType llvmPtr = nullptr;
   ///}
-private:
-  void initializeTypes();
 
-  // -------------------------- Other Attributes-------------------------- ///
+private:
   ModuleOp &module;
   OpBuilder builder;
   llvm::DataLayout &llvmDL;
   mlir::DataLayout &mlirDL;
+
+  /// Other Attributes
   unsigned edtCounter = 0;
-  llvm::DenseMap<Value, DataBlockCodegen *> datablocks;
+  llvm::DenseMap<Value, DbCodegen *> dbs;
   llvm::DenseMap<Region *, EdtCodegen *> edts;
-  llvm::DenseMap<types::RuntimeFunction, func::FuncOp> runtimeFunctionCache;
+  llvm::DenseMap<RuntimeFunction, func::FuncOp> runtimeFunctionCache;
   llvm::StringMap<LLVM::GlobalOp> llvmStringGlobals;
   bool debug = false;
+
+  /// Helper functions
+  void initializeTypes();
 };
 
 } // namespace arts
 } // namespace mlir
+
 #endif // CARTS_CODEGEN_ARTSCODEGEN_H

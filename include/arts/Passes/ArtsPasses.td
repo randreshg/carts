@@ -61,6 +61,24 @@ def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
   ];
 }
 
+def PreprocessDbs : Pass<"preprocess-dbs", "mlir::ModuleOp"> {
+  let summary = "Preprocess ARTS DataBlocks for runtime compatibility";
+  let description = [{
+    This pass converts ARTS DataBlocks from typed memrefs to opaque pointer types
+    suitable for the ARTS runtime. The preprocessing logic differs based on the
+    original allocation type (stack vs dynamic).
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "LLVM::LLVMDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "arith::ArithDialect",
+    "polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::arts::createPreprocessDbsPass()";
+}
+
 def Edt : Pass<"edt", "mlir::ModuleOp"> {
   let summary = "Optimize EDTs";
   let dependentDialects = [

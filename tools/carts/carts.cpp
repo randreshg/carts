@@ -191,6 +191,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context) {
   pm.addPass(arts::createCreateEpochsPass());
 
   /// Convert ARTS to LLVM
+  pm.addPass(arts::createPreprocessDbsPass());
   pm.addPass(arts::createConvertArtsToLLVMPass(Debug));
   if (mlir::failed(pm.run(module))) {
     llvm::errs() << "Error when running ARTS Passes";
@@ -198,7 +199,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context) {
     return;
   }
 
-  /// Otimizations (if enabled)
+  /// Optimizations (if enabled)
   if (Opt) {
     PassManager pm2(&context);
     mlir::OpPassManager &optPM = pm2.nest<mlir::func::FuncOp>();
@@ -264,9 +265,8 @@ int main(int argc, char **argv) {
   }
 
   /// Iteratively run the pass pipeline to drive IR to a fixpoint.
-  for (unsigned i = 0; i < OptIterations; ++i) {
+  for (unsigned i = 0; i < OptIterations; ++i)
     setupPassManager(module.get(), context);
-  }
 
   /// Translate the optimized module to LLVM IR and write output.
   if (EmitLLVM) {
