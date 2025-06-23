@@ -114,10 +114,10 @@ struct ComplexExpr {
         rawExpr(nullptr) {}
 
   ComplexExpr(int64_t constant)
-      : pattern(Pattern::Constant), baseExpr(constant), conservativeMin(constant),
-        conservativeMax(constant), hasValidBounds(true), isMonotonic(true),
-        hasSpatialReuse(false), hasTemporalReuse(true), estimatedRangeSize(1),
-        rawExpr(nullptr) {}
+      : pattern(Pattern::Constant), baseExpr(constant),
+        conservativeMin(constant), conservativeMax(constant),
+        hasValidBounds(true), isMonotonic(true), hasSpatialReuse(false),
+        hasTemporalReuse(true), estimatedRangeSize(1), rawExpr(nullptr) {}
 
   /// Analyze and classify a raw index expression
   static ComplexExpr analyze(Value index);
