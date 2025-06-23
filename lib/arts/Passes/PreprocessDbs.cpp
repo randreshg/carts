@@ -4,6 +4,8 @@
 /// This pass preprocesses ARTS DataBlocks to convert them from typed memrefs
 /// to opaque pointer types suitable for the ARTS runtime. The preprocessing
 /// logic differs based on the original allocation type (stack vs dynamic).
+/// This passs should run before the ConvertToLLVM pass, as it lowers the
+/// load and store operations to LLVM IR.
 ///==========================================================================
 
 /// Dialects
@@ -45,8 +47,7 @@ DbAllocOp createDbAlloc(OpBuilder &builder, Location loc, Value basePtr,
                         types::DbDepType dep) {
   /// Create the DbAllocOp using the existing function to ensure sizes are
   /// filled out
-  auto dbAllocOp =
-      createDbAllocOp(builder, loc, types::toString(dep), basePtr);
+  auto dbAllocOp = createDbAllocOp(builder, loc, types::toString(dep), basePtr);
 
   /// Set the allocation type attribute using the helper function
   auto allocType = arts::getAllocType(basePtr);
@@ -65,12 +66,9 @@ struct PreprocessDbsPass : public arts::PreprocessDbsBase<PreprocessDbsPass> {
   void runOnOperation() override;
 
 private:
-  void preprocessDbsInFunction(func::FuncOp func);
-  void processDbAlloc(DbAllocOp dbAllocOp);
-  bool processDbDepUser(DbDepOp dbDepOp, DbAllocOp newDbAllocOp,
-                           OpBuilder &builder, Location loc);
-  Value computePtr(DbAllocOp dbAllocOp, Value basePtr, OpBuilder &builder,
-                   Location loc);
+  void preprocessDbAllocOps(ModuleOp module);
+  void preprocessDbDepOps(ModuleOp module);
+  void processDbOpUsers(Operation *dbFrom, Operation *dbTo, OpBuilder &builder);
 
 private:
   ArtsCodegen *AC = nullptr;
@@ -96,9 +94,9 @@ void PreprocessDbsPass::runOnOperation() {
   mlir::DataLayout mlirDL(module);
   AC = new ArtsCodegen(module, llvmDL, mlirDL, false);
 
-  /// Process each function
-  for (auto func : module.getOps<func::FuncOp>())
-    preprocessDbsInFunction(func);
+  /// Process DbAlloc and DbDep operations
+  preprocessDbAllocOps(module);
+  preprocessDbDepOps(module);
 
   /// Remove old operations
   removeOps(module, AC->getBuilder(), opsToRemove);
@@ -108,133 +106,150 @@ void PreprocessDbsPass::runOnOperation() {
     module.dump();
   });
 
+  /// Clean up ArtsCodegen
   delete AC;
+  AC = nullptr;
 }
 
-void PreprocessDbsPass::preprocessDbsInFunction(func::FuncOp func) {
-  LLVM_DEBUG(DBGS() << "Preprocessing DBs in function: " << func.getName()
-                    << "\n");
-
-  SmallVector<DbAllocOp, 4> dbAllocs;
-  func.walk([&](DbAllocOp op) { dbAllocs.push_back(op); });
-
-  for (auto dbAllocOp : dbAllocs)
-    processDbAlloc(dbAllocOp);
-}
-
-void PreprocessDbsPass::processDbAlloc(DbAllocOp dbAllocOp) {
+void PreprocessDbsPass::preprocessDbAllocOps(ModuleOp module) {
   auto &builder = AC->getBuilder();
-  OpBuilder::InsertionGuard IG(builder);
-  builder.setInsertionPoint(dbAllocOp);
 
-  auto loc = dbAllocOp.getLoc();
-  auto oldResult = dbAllocOp.getResult();
+  /// Collect all DbAllocOps and create new ones with opaque pointers
+  SmallVector<DbAllocOp, 8> dbAllocOps;
+  DenseMap<DbAllocOp, DbAllocOp> dbsToRewire;
 
-  LLVM_DEBUG(DBGS() << "Processing DbAllocOp\n");
-  /// Create new DbAllocOp with opaque pointer type
-  auto newType = MemRefType::get({ShapedType::kDynamic}, AC->VoidPtr);
-  auto newDbAllocOp = builder.create<DbAllocOp>(
-      loc, newType, dbAllocOp.getMode(), dbAllocOp.getAddress(),
-      dbAllocOp.getSizes(), nullptr);
-  setDbAllocType(newDbAllocOp, getDbAllocType(dbAllocOp), builder);
+  module.walk<mlir::WalkOrder::PreOrder>(
+      [&](arts::DbAllocOp dbAllocOp) -> mlir::WalkResult {
+        /// Skip already processed new db ops
+        if (dbAllocOp->hasAttr("newDb"))
+          return mlir::WalkResult::skip();
 
-  /// Process all users of the old DbAllocOp
-  SmallVector<std::pair<OpOperand *, Operation *>> usesToProcess;
-  for (auto &use : oldResult.getUses())
-    usesToProcess.push_back({&use, use.getOwner()});
+        AC->setInsertionPointAfter(dbAllocOp);
 
-  for (auto [useOperand, owner] : usesToProcess) {
-    builder.setInsertionPoint(owner);
+        /// Create new DbAllocOp with opaque pointer type
+        auto oldType = dbAllocOp.getResult().getType().cast<MemRefType>();
+        auto newType = MemRefType::get(oldType.getShape(), AC->VoidPtr);
 
-    if (auto dbDepOp = dyn_cast<DbDepOp>(owner)) {
-      if (!processDbDepUser(dbDepOp, newDbAllocOp, builder, loc)) {
-        dbDepOp.emitError("Failed to process DbDepOp user");
-        continue;
-      }
-    } else if (auto edtOp = dyn_cast<EdtOp>(owner)) {
-      useOperand->set(newDbAllocOp.getResult());
-    } else {
-      owner->emitError("Unsupported user of DbAllocOp: ") << owner->getName();
-      continue;
-    }
+        auto newDbAllocOp = builder.create<DbAllocOp>(
+            dbAllocOp.getLoc(), newType, dbAllocOp.getMode(),
+            dbAllocOp.getAddress(), dbAllocOp.getSizes(), nullptr);
+
+        /// Copy attributes and mark as processed
+        newDbAllocOp->setAttrs(dbAllocOp->getAttrs());
+        newDbAllocOp->setAttr("newDb", builder.getUnitAttr());
+        setDbAllocType(newDbAllocOp, getDbAllocType(dbAllocOp), builder);
+
+        dbAllocOps.push_back(dbAllocOp);
+        dbsToRewire[dbAllocOp] = newDbAllocOp;
+        return mlir::WalkResult::advance();
+      });
+
+  /// Return if no datablocks to rewire
+  if (dbsToRewire.empty())
+    return;
+
+  /// Rewire the DbAllocOps
+  for (auto dbFrom : dbAllocOps) {
+    auto dbTo = dbsToRewire[dbFrom];
+    LLVM_DEBUG(DBGS() << "Rewiring DbAllocOp:\n  " << dbFrom << "\n  " << dbTo
+                      << "\n");
+
+    /// Process all users of the old DbAllocOp
+    processDbOpUsers(dbFrom.getOperation(), dbTo.getOperation(), builder);
+    opsToRemove.insert(dbFrom);
   }
-
-  opsToRemove.insert(dbAllocOp);
 }
 
-bool PreprocessDbsPass::processDbDepUser(DbDepOp dbDepOp,
-                                            DbAllocOp newDbAllocOp,
-                                            OpBuilder &builder, Location loc) {
-  /// Create new DbDepOp that references the preprocessed DbAllocOp
-  auto newDbDepOp = builder.create<DbDepOp>(
-      dbDepOp.getLoc(), dbDepOp.getResult().getType(),
-      dbDepOp.getModeAttr(), newDbAllocOp.getResult(),
-      dbDepOp.getIndices(), dbDepOp.getOffsets(), dbDepOp.getSizes());
+void PreprocessDbsPass::preprocessDbDepOps(ModuleOp module) {
+  auto &builder = AC->getBuilder();
 
-  auto oldDbDepResult = dbDepOp.getResult();
-  auto newDbDepResult = newDbDepOp.getResult();
+  /// Collect all DbDepOps and create new ones with opaque pointers
+  SmallVector<DbDepOp, 8> dbDepOps;
+  DenseMap<DbDepOp, DbDepOp> dbsToRewire;
 
-  /// Process all users of the old DbDepOp
-  SmallVector<std::pair<OpOperand *, Operation *>> depUsesToProcess;
-  for (auto &use : oldDbDepResult.getUses())
-    depUsesToProcess.push_back({&use, use.getOwner()});
+  module.walk<mlir::WalkOrder::PreOrder>(
+      [&](arts::DbDepOp dbDepOp) -> mlir::WalkResult {
+        /// Skip already processed new db ops
+        if (dbDepOp->hasAttr("newDb"))
+          return mlir::WalkResult::skip();
 
-  for (auto [useOperand, userOp] : depUsesToProcess) {
-    builder.setInsertionPoint(userOp);
+        AC->setInsertionPointAfter(dbDepOp);
 
-    if (auto loadOp = dyn_cast<memref::LoadOp>(userOp)) {
-      auto ptr = computePtr(newDbAllocOp, newDbDepResult, builder, loc);
-      if (!ptr)
-        continue;
+        /// Create new DbDepOp with opaque pointer type
+        auto oldType = dbDepOp.getResult().getType().cast<MemRefType>();
+        auto newType = MemRefType::get(oldType.getShape(), AC->VoidPtr);
 
+        auto newDbDepOp = builder.create<DbDepOp>(
+            dbDepOp.getLoc(), newType, dbDepOp.getModeAttr(),
+            dbDepOp.getOperand(0), dbDepOp.getIndices(), dbDepOp.getOffsets(),
+            dbDepOp.getSizes());
+
+        /// Copy attributes and mark as processed
+        newDbDepOp->setAttrs(dbDepOp->getAttrs());
+        newDbDepOp->setAttr("newDb", builder.getUnitAttr());
+
+        dbDepOps.push_back(dbDepOp);
+        dbsToRewire[dbDepOp] = newDbDepOp;
+        return mlir::WalkResult::advance();
+      });
+
+  /// Return if no datablocks to rewire
+  if (dbsToRewire.empty())
+    return;
+
+  /// Rewire the DbDepOps
+  for (auto dbFrom : dbDepOps) {
+    auto dbTo = dbsToRewire[dbFrom];
+    LLVM_DEBUG(DBGS() << "Rewiring DbDepOp:\n  " << dbFrom << "\n  " << dbTo
+                      << "\n");
+
+    /// Process all users of the old DbDepOp
+    processDbOpUsers(dbFrom.getOperation(), dbTo.getOperation(), builder);
+
+    /// Erase the old DbDepOp
+    opsToRemove.insert(dbFrom);
+  }
+}
+
+void PreprocessDbsPass::processDbOpUsers(Operation *dbFrom, Operation *dbTo,
+                                         OpBuilder &builder) {
+  auto computePtr = [&](Location loc) -> Value {
+    auto llvmCast = AC->castToLLVMPtr(dbTo->getResult(0), loc);
+    if (auto dbAllocOp = dyn_cast<DbAllocOp>(dbTo)) {
+      if (arts::isStackAlloc(dbAllocOp)) {
+        return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr, llvmCast);
+      }
+    }
+    return llvmCast;
+  };
+
+  /// Process all users of the old DbOp
+  for (auto &use : llvm::make_early_inc_range(dbFrom->getUses())) {
+    auto user = use.getOwner();
+    AC->setInsertionPoint(user);
+
+    if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+      auto loc = loadOp.getLoc();
+      auto newPtr = computePtr(loc);
       auto newLoad = builder.create<LLVM::LoadOp>(
-          loadOp.getLoc(), loadOp.getResult().getType(), ptr);
+          loc, loadOp.getResult().getType(), newPtr);
       loadOp.getResult().replaceAllUsesWith(newLoad.getResult());
       opsToRemove.insert(loadOp);
-
-    } else if (auto storeOp = dyn_cast<memref::StoreOp>(userOp)) {
-      auto ptr = computePtr(newDbAllocOp, newDbDepResult, builder, loc);
-      if (!ptr)
-        continue;
-
-      builder.create<LLVM::StoreOp>(storeOp.getLoc(), storeOp.getValueToStore(),
-                                    ptr);
+    } else if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
+      auto loc = storeOp.getLoc();
+      auto newPtr = computePtr(loc);
+      builder.create<LLVM::StoreOp>(loc, storeOp.getValueToStore(), newPtr);
       opsToRemove.insert(storeOp);
-
-    } else if (auto edtOp = dyn_cast<EdtOp>(userOp)) {
-      /// EDT dependency - replace with new DbDepOp result
-      useOperand->set(newDbDepResult);
-
+    } else if (auto dbDepOp = dyn_cast<DbDepOp>(user)) {
+      /// DbDep dependency - replace with new DbOp result
+      use.set(dbTo->getResult(0));
+    } else if (auto edtOp = dyn_cast<EdtOp>(user)) {
+      /// EDT dependency - replace with new DbOp result
+      use.set(dbTo->getResult(0));
     } else {
-      userOp->emitError("Unsupported user of DbDepOp: ")
-          << userOp->getName();
-      return false;
+      LLVM_DEBUG(DBGS() << "Unknown use of DbOp: " << *user << "\n");
+      user->emitError("Unsupported user of DbOp: ") << user->getName();
     }
-  }
-
-  opsToRemove.insert(dbDepOp.getOperation());
-  return true;
-}
-
-Value PreprocessDbsPass::computePtr(DbAllocOp dbAllocOp, Value basePtr,
-                                    OpBuilder &builder, Location loc) {
-  /// Stack/parameter allocations need pointer loading
-  if (arts::isStackAlloc(dbAllocOp)) {
-    LLVM_DEBUG(DBGS() << "Computing pointer for stack/parameter allocation\n");
-    auto llvmCast = AC->castToLLVMPtr(basePtr, loc);
-    return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr, llvmCast);
-  }
-  /// Dynamic allocations already have pointer indirection
-  else if (arts::isDynamicAlloc(dbAllocOp)) {
-    LLVM_DEBUG(DBGS() << "Computing pointer for heap/dynamic allocation\n");
-    return AC->castToLLVMPtr(basePtr, loc);
-  }
-  /// Global allocations need address-of operation
-  else if (arts::isGlobalAlloc(dbAllocOp)) {
-    LLVM_DEBUG(DBGS() << "Computing pointer for global allocation\n");
-    return AC->castToLLVMPtr(basePtr, loc);
-  } else {
-    llvm_unreachable("Unknown allocation type");
   }
 }
 
