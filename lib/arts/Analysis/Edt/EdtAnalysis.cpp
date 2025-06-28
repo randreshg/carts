@@ -15,7 +15,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "edt-analysis"
-#define line "-----------------------------------------\n"
+#define LINE "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
@@ -31,7 +31,7 @@ EdtEnvManager::EdtEnvManager(PatternRewriter &rewriter, Region &region)
 EdtEnvManager::~EdtEnvManager() {}
 
 void EdtEnvManager::naiveCollection(bool ignoreDeps) {
-  // LLVM_DEBUG(dbgs() << line
+  // LLVM_DEBUG(dbgs() << LINE
   //                   << "Naive collection of parameters and dependencies:
   //                   \n");
   /// Ignore collecting dependencies if there are already depsToProcess
@@ -66,7 +66,7 @@ void EdtEnvManager::naiveCollection(bool ignoreDeps) {
       depsToProcess[operand] = "inout";
     }
   }
-  LLVM_DEBUG(dbgs() << line);
+  LLVM_DEBUG(dbgs() << LINE);
 }
 
 void EdtEnvManager::adjust() {
@@ -144,7 +144,7 @@ void EdtEnvManager::addDependency(Value val, StringRef mode) {
 void EdtEnvManager::print() {
   std::string debugInfo;
   llvm::raw_string_ostream debugStream(debugInfo);
-  debugStream << line << "EDT Environment:\n";
+  debugStream << LINE << "EDT Environment:\n";
   debugStream << "- Parameters:\n";
   for (auto param : parameters)
     debugStream << "   " << param << "\n";
@@ -158,7 +158,7 @@ void EdtEnvManager::print() {
   debugStream << "- Dependencies:\n";
   for (auto dep : dependencies)
     debugStream << "   " << dep << "\n";
-  debugStream << line;
+  debugStream << LINE;
 
   LLVM_DEBUG(dbgs() << debugStream.str());
 }

@@ -16,77 +16,92 @@ namespace arts {
 
 class ArtsCodegen;
 
-class DbCodegen {
-public:
-  enum class Kind { Alloc, Dep };
-  DbCodegen(Kind kind) : kind(kind) {}
-  virtual ~DbCodegen() = default;
-  Kind getKind() const { return kind; }
-  virtual Value getOp() = 0;
-  virtual Value getEdtSlot() = 0;
-  virtual Value getGuid() = 0;
-  virtual Value getPtr() = 0;
-  virtual bool hasSingleSize() = 0;
-  virtual ValueRange getSizes() = 0;
-  virtual ValueRange getOffsets() = 0;
-  virtual ValueRange getIndices() = 0;
-  virtual void setEdtSlot(Value) = 0;
-  virtual void setGuid(Value) = 0;
-  virtual void setPtr(Value) = 0;
-  virtual bool isOutMode() = 0;
-  virtual bool isInMode() = 0;
-protected:
-  Kind kind;
-  Value edtSlot = nullptr;
-  Value guid = nullptr;
-  Value ptr = nullptr;
-};
-
-class DbAllocCodegen : public DbCodegen {
+/// DbAllocCodegen - Handles datablock allocation (local creation)
+/// No EDT context needed - when used in EDT context, consumer sees it as DbDepOp
+class DbAllocCodegen {
 public:
   DbAllocCodegen(ArtsCodegen &AC, arts::DbAllocOp dbOp, Location loc);
-  Value getOp() override;
-  Value getEdtSlot() override;
-  Value getGuid() override;
-  Value getPtr() override;
-  bool hasSingleSize() override;
-  ValueRange getSizes() override;
-  ValueRange getOffsets() override;
-  ValueRange getIndices() override;
-  void setEdtSlot(Value v) override;
-  void setGuid(Value v) override;
-  void setPtr(Value v) override;
-  bool isOutMode() override;
-  bool isInMode() override;
+  
+  Value getOp();
+  Value getEdtSlot();
+  Value getGuid();
+  Value getPtr();
+  bool hasSingleSize();
+  ValueRange getSizes();
+  void setEdtSlot(Value v);
+  void setGuid(Value v);
+  void setPtr(Value v);
+  bool isOutMode();
+  bool isInMode();
   void create(arts::DbAllocOp dbOp, Location loc);
+
 private:
   ArtsCodegen &AC;
   OpBuilder &builder;
   arts::DbAllocOp dbOp;
+  Value edtSlot = nullptr;
+  Value guid = nullptr;
+  Value ptr = nullptr;
+  
   Value createGuid(Value node, Value mode, Location loc);
   Value getMode();
 };
 
-class DbDepCodegen : public DbCodegen {
+/// DbDepCodegen - Handles datablock dependencies (accessing existing DBs from depv)
+/// 
+/// EDT Context Semantics:
+/// - "InEdt" means in the EDT that USES/CONSUMES the datablock, not the EDT that creates it
+/// - When a DbAllocOp is used in an EDT context, it's ALWAYS accessed through a DbDepOp  
+/// - The consumer EDT sees it as a DbDepOp, not a DbAllocOp
+/// - This class contains all EDT context information for accessing datablocks from depv parameters
+class DbDepCodegen {
 public:
   DbDepCodegen(ArtsCodegen &AC, arts::DbDepOp dbOp, Location loc);
-  Value getOp() override;
-  Value getEdtSlot() override;
-  Value getGuid() override;
-  Value getPtr() override;
-  bool hasSingleSize() override;
-  ValueRange getSizes() override;
-  ValueRange getOffsets() override;
-  ValueRange getIndices() override;
-  void setEdtSlot(Value v) override;
-  void setGuid(Value v) override;
-  void setPtr(Value v) override;
-  bool isOutMode() override;
-  bool isInMode() override;
+  
+  Value getOp();
+  Value getEdtSlot();
+  Value getGuid();
+  Value getPtr();
+  void setEdtSlot(Value v);
+  void setGuid(Value v);
+  void setPtr(Value v);
+  bool isOutMode();
+  bool isInMode();
+  bool hasSingleSize();
+  ValueRange getSizes();
+  ValueRange getOffsets();
+  ValueRange getIndices();
+  void create(arts::DbDepOp dbOp, Location loc);
+
+  /// EDT context values (set once during EDT entry construction)
+  Value getGuidInEdt() { return guidInEdt; }
+  Value getPtrInEdt() { return ptrInEdt; }
+  void setGuidInEdt(Value v) { guidInEdt = v; }
+  void setPtrInEdt(Value v) { ptrInEdt = v; }
+
+  /// EDT context information for accessing existing DBs from depv
+  llvm::SmallVector<Value> &getSizesInEdt() { return sizesInEdt; }
+  llvm::SmallVector<Value> &getOffsetsInEdt() { return offsetsInEdt; }
+  llvm::DenseMap<unsigned, unsigned> &getSizeIndexInEdt() { return sizeIndexInEdt; }
+  llvm::DenseMap<unsigned, unsigned> &getOffsetIndexInEdt() { return offsetIndexInEdt; }
+
 private:
   ArtsCodegen &AC;
   OpBuilder &builder;
   arts::DbDepOp dbOp;
+  Value edtSlot = nullptr;
+  Value guid = nullptr;
+  Value ptr = nullptr;
+  
+  /// EDT context values - for accessing existing datablocks from depv parameters
+  Value guidInEdt = nullptr;  // GUID in EDT consumer context
+  Value ptrInEdt = nullptr;   // Pointer in EDT consumer context
+
+  /// EDT context data for multi-dimensional access from depv parameters
+  llvm::SmallVector<Value> sizesInEdt;
+  llvm::SmallVector<Value> offsetsInEdt;
+  llvm::DenseMap<unsigned, unsigned> sizeIndexInEdt;
+  llvm::DenseMap<unsigned, unsigned> offsetIndexInEdt;
 };
 
 } // namespace arts

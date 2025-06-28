@@ -55,20 +55,12 @@ void ArtsDialect::initialize() {
 #include "arts/ArtsOps.cpp.inc"
 
 bool isArtsRegion(Operation *op) { return isa<EdtOp>(op) || isa<EpochOp>(op); }
-bool isArtsOp(Operation *op) {
-  return isArtsRegion(op) || isa<DbDepOp>(op) || isa<DbAllocOp>(op) ||
-         isa<EventOp>(op) || isa<BarrierOp>(op);
-}
-
-//===----------------------------------------------------------------------===//
-// Helper functions
-//===----------------------------------------------------------------------===//
-
-DbDepOp getDbDepOp(mlir::Operation *op) {
-  if (auto dbDepOp = dyn_cast<DbDepOp>(op)) {
-    return dbDepOp;
-  }
-  return nullptr;
+bool isArtsOp(Operation *op){
+    return isArtsRegion(op) ||
+           isa<arts::EdtOp, arts::EpochOp, arts::BarrierOp, arts::AllocOp,
+               arts::DbAllocOp, arts::DbDepOp, arts::GetTotalWorkersOp,
+               arts::GetTotalNodesOp, arts::GetCurrentWorkerOp,
+               arts::GetCurrentNodeOp>(op);
 }
 
 //===----------------------------------------------------------------------===//
@@ -124,10 +116,8 @@ ParseResult DbAllocOp::parse(OpAsmParser &parser, OperationState &result) {
 
   // Optionally parse address
   if (succeeded(parser.parseOptionalLParen())) {
-    if (parser.parseOperand(addressOperand) ||
-        parser.parseColon() ||
-        parser.parseType(addressType) ||
-        parser.parseRParen())
+    if (parser.parseOperand(addressOperand) || parser.parseColon() ||
+        parser.parseType(addressType) || parser.parseRParen())
       return failure();
     hasAddress = true;
   }
@@ -148,15 +138,14 @@ ParseResult DbAllocOp::parse(OpAsmParser &parser, OperationState &result) {
   // Parse result type
   if (parser.parseArrow() ||
       parser.parseOptionalAttrDictWithKeyword(result.attributes) ||
-      parser.parseColon() ||
-      parser.parseType(resultType))
+      parser.parseColon() || parser.parseType(resultType))
     return failure();
 
   // Build operand segment sizes
   result.addAttribute("operandSegmentSizes",
                       parser.getBuilder().getDenseI32ArrayAttr({
-                          hasAddress ? 1 : 0,  // address
-                          static_cast<int32_t>(sizeOperands.size())  // sizes
+                          hasAddress ? 1 : 0,                       // address
+                          static_cast<int32_t>(sizeOperands.size()) // sizes
                       }));
 
   // Resolve operands
@@ -165,9 +154,9 @@ ParseResult DbAllocOp::parse(OpAsmParser &parser, OperationState &result) {
       return failure();
   }
 
-  for (auto sizeOperand : sizeOperands) {
+  for (auto sizeOperand : sizeOperands)
     sizeTypes.push_back(parser.getBuilder().getIndexType());
-  }
+
   if (parser.resolveOperands(sizeOperands, sizeTypes,
                              parser.getCurrentLocation(), result.operands))
     return failure();

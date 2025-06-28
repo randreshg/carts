@@ -8,7 +8,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "db-graph"
-#define line "-----------------------------------------\n"
+#define LINE "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 

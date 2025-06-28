@@ -41,7 +41,7 @@
 #include <unordered_set>
 
 #define DEBUG_TYPE "create-dbs"
-#define line "-----------------------------------------\n"
+#define LINE "-----------------------------------------\n"
 #define smallline "------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
@@ -210,14 +210,14 @@ void CreateDbsPass::runOnOperation() {
   strAnalysis = &getAnalysis<StringAnalysis>();
 
   LLVM_DEBUG({
-    dbgs() << "\n" << line << "CreateDbsPass STARTED\n" << line;
+    dbgs() << "\n" << LINE << "CreateDbsPass STARTED\n" << LINE;
     module.dump();
   });
 
   processModule(module);
 
   LLVM_DEBUG({
-    dbgs() << "\n" << line << "CreateDbsPass FINISHED\n" << line;
+    dbgs() << "\n" << LINE << "CreateDbsPass FINISHED\n" << LINE;
     module.dump();
   });
 }
@@ -799,7 +799,7 @@ void CreateDbsPass::logCandidateInfo(EdtOp edtOp) const {
 void CreateDbsPass::logDbCreation(EdtOp edtOp, size_t dbCount) const {
   LLVM_DEBUG({
     static uint32_t edtCounter = 0;
-    dbgs() << line;
+    dbgs() << LINE;
     DBGS() << "Creating " << dbCount << " datablocks for EDT #" << edtCounter++
            << "\n";
   });

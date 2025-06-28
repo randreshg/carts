@@ -17,6 +17,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Codegen/ArtsIR.h"
+#include "arts/Codegen/DbCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
 /// Others
@@ -33,6 +34,7 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "polygeist/Ops.h"
 #include <algorithm>
+#include <memory>
 #include <optional>
 
 /// Debug
@@ -43,12 +45,24 @@
 #include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "convert-arts-to-llvm"
-#define line "-----------------------------------------\n"
+#define LINE "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
 using namespace mlir;
 using namespace arts;
+
+//===----------------------------------------------------------------------===//
+// Constants and Configuration
+//===----------------------------------------------------------------------===//
+namespace {
+/// Configuration constants
+constexpr int DEFAULT_EDT_SLOT = 0;
+constexpr int DEFAULT_DEP_COUNT = 1;
+
+/// Helper type aliases
+using ValueMap = DenseMap<Operation *, Value>;
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // Pass Implementation
@@ -57,405 +71,478 @@ namespace {
 struct ConvertArtsToLLVMPass
     : public arts::ConvertArtsToLLVMBase<ConvertArtsToLLVMPass> {
 
-  ConvertArtsToLLVMPass(bool debug = false) : debug(debug) {}
+  explicit ConvertArtsToLLVMPass(bool debug = false) : debugMode(debug) {}
+
+  ~ConvertArtsToLLVMPass() { delete AC; }
 
   void runOnOperation() override;
 
-  /// ARTS Operation Handlers
-  void handleEdt(EdtOp &op);
-  void handleEpoch(EpochOp &op);
-  void handleEvent(EventOp &op);
-  void handleBarrier(BarrierOp &op);
-  void handleAlloc(AllocOp &op);
-  void handleUndef(UndefOp &op);
-
-  /// Runtime Information Operations
-  void handleGetTotalWorkers(GetTotalWorkersOp &op);
-  void handleGetTotalNodes(GetTotalNodesOp &op);
-  void handleGetCurrentWorker(GetCurrentWorkerOp &op);
-  void handleGetCurrentNode(GetCurrentNodeOp &op);
-
-  /// Helper Methods
-  void iterateOps();
-  void cleanupUnusedOperations();
-  void reportConversionStats();
-
 private:
+  LogicalResult initializeCodegen();
+  LogicalResult processOperations();
+  void finalizeConversion();
+
+  /// Operation ha
+  template <typename OpType> LogicalResult handleRuntimeInfoOp(OpType op);
+  LogicalResult handleEdt(EdtOp op);
+  LogicalResult handleEpoch(EpochOp op);
+  LogicalResult handleBarrier(BarrierOp op);
+  LogicalResult handleAlloc(AllocOp op);
+  LogicalResult handleDbAlloc(DbAllocOp op);
+  LogicalResult handleDbDep(DbDepOp op);
+
+  /// Utility methods
+  bool hasArtsOperations() const;
+  void cleanupOperations();
+  void applyReplacements();
+  void reportStatistics() const;
+  Location getUnknownLoc() { return UnknownLoc::get(module.getContext()); }
+
+  /// Error handling
+  LogicalResult emitOpError(Operation *op, const Twine &message) const;
+
+  /// Helper for walk results
+  WalkResult handleWalkResult(LogicalResult result) const {
+    return succeeded(result) ? WalkResult::advance() : WalkResult::interrupt();
+  }
+
+  /// Member variables
   ModuleOp module;
   ArtsCodegen *AC = nullptr;
-  DenseMap<EdtOp, Value> edtToEpoch;
+  ValueMap edtToEpoch;
   SetVector<Operation *> opsToRemove;
-  bool debug = false;
+  /// Map to store value replacements (original value -> replacement value)
+  DenseMap<Value, Value> replacementMap;
+  bool debugMode = false;
 
-  /// Statistics and Tracking
-  struct ConversionStats {
+  /// Statistics tracking (using a struct for better organization)
+  struct ConversionStatistics {
     unsigned edtOps = 0;
     unsigned epochOps = 0;
-    unsigned eventOps = 0;
     unsigned barrierOps = 0;
     unsigned allocOps = 0;
-    unsigned undefOps = 0;
-    unsigned getTotalWorkersOps = 0;
-    unsigned getTotalNodesOps = 0;
-    unsigned getCurrentWorkerOps = 0;
-    unsigned getCurrentNodeOps = 0;
-  } stats;
+    unsigned dbAllocOps = 0;
+    unsigned dbDepOps = 0;
+    unsigned runtimeInfoOps = 0;
+
+    void reset() { *this = ConversionStatistics{}; }
+  } statistics;
 };
-} // end namespace
+} // namespace
 
 //===----------------------------------------------------------------------===//
-// ARTS Operation Handlers
-//===----------------------------------------------------------------------===//
-
-void ConvertArtsToLLVMPass::handleEdt(EdtOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.edt\n");
-  stats.edtOps++;
-
-  OpBuilder::InsertionGuard IG(AC->getBuilder());
-  AC->setInsertionPoint(op);
-
-  /// Create unknown location
-  Location loc = UnknownLoc::get(op.getContext());
-
-  /// Create the parallel EDT with the single op's region.
-  auto dependencies = op.getDependenciesVector();
-  auto &region = op.getRegion();
-
-  Value currentEpoch;
-  if (auto it = edtToEpoch.find(op); it != edtToEpoch.end())
-    currentEpoch = it->second;
-  else
-    currentEpoch = AC->getCurrentEpochGuid(loc);
-
-  auto *newEdt = AC->createEdt(&dependencies, &region, &currentEpoch, &loc);
-
-  /// Visit new function
-  assert(newEdt && "New EDT not created");
-  opsToRemove.insert(op);
-}
-
-void ConvertArtsToLLVMPass::handleEpoch(EpochOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.epoch: " << op << "\n");
-  stats.epochOps++;
-
-  Location loc = UnknownLoc::get(op.getContext());
-  OpBuilder::InsertionGuard IG(AC->getBuilder());
-  AC->setInsertionPoint(op);
-
-  /// Create a done-edt for the epoch.
-  EdtCodegen epochDoneEdt(*AC);
-  epochDoneEdt.setDepC(AC->createIntConstant(1, AC->Int32, loc));
-  epochDoneEdt.build(loc);
-
-  /// Create the epoch.
-  auto epochDoneSlot = AC->createIntConstant(0, AC->Int32, loc);
-  auto currentEpoch =
-      AC->createEpoch(epochDoneEdt.getGuid(), epochDoneSlot, loc);
-
-  /// Find all the EDTs that are inside the Epoch region, which ParentOfType
-  /// Epoch is the current epoch and don't have a parent EdtOp.
-  op.walk([&](arts::EdtOp childOp) {
-    auto parentEdt = childOp->getParentOfType<EdtOp>();
-    if (parentEdt || childOp->getParentOfType<EpochOp>() != op)
-      return;
-    edtToEpoch[childOp] = currentEpoch;
-  });
-
-  /// Move epoch region operations out of the epoch op and insert them after the
-  /// current epoch.
-  Operation *currentEpochOp = currentEpoch.getDefiningOp();
-  Block *epochBlock = &op.getRegion().front();
-  Operation *currentOp = currentEpochOp;
-  for (Operation &childOp : llvm::make_early_inc_range(*epochBlock)) {
-    if (isa<arts::YieldOp>(childOp))
-      continue;
-    childOp.moveAfter(currentOp);
-    currentOp = &childOp;
-  }
-  AC->setInsertionPointAfter(currentOp);
-
-  /// Insert wait on handle after epoch.
-  AC->waitOnHandle(currentEpoch, loc);
-
-  /// Remove the epoch op.
-  op->erase();
-}
-
-void ConvertArtsToLLVMPass::handleEvent(EventOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.event\n");
-  stats.eventOps++;
-
-  OpBuilder::InsertionGuard IG(AC->getBuilder());
-  AC->setInsertionPoint(op);
-
-  Location loc = op.getLoc();
-  auto sizes = op.getSizes();
-
-  /// Create runtime call to create persistent event(s)
-  Value eventGuid;
-  if (sizes.empty()) {
-    /// Single event - create with latch count 1
-    auto route = AC->createIntConstant(0, AC->Int32, loc); // Default route
-    auto latchCount = AC->createIntConstant(1, AC->Int32, loc);
-    auto dataGuid =
-        AC->createIntConstant(0, AC->Int64, loc); // No data initially
-    eventGuid = AC->createRuntimeCall(types::ARTSRTL_artsPersistentEventCreate,
-                                      {route, latchCount, dataGuid}, loc)
-                    .getResult(0);
-  } else {
-    /// Array of events - compute total size and create with appropriate latch
-    /// count
-    Value totalSize = AC->createIntConstant(1, AC->Int64, loc);
-    for (Value size : sizes) {
-      Value sizeAsInt64 = AC->castToInt(AC->Int64, size, loc);
-      totalSize =
-          AC->getBuilder().create<arith::MulIOp>(loc, totalSize, sizeAsInt64);
-    }
-
-    auto route = AC->createIntConstant(0, AC->Int32, loc); // Default route
-    auto latchCount = AC->castToInt(AC->Int32, totalSize, loc);
-    auto dataGuid =
-        AC->createIntConstant(0, AC->Int64, loc); // No data initially
-    eventGuid = AC->createRuntimeCall(types::ARTSRTL_artsPersistentEventCreate,
-                                      {route, latchCount, dataGuid}, loc)
-                    .getResult(0);
-  }
-
-  /// Replace the event operation with the GUID
-  op.replaceAllUsesWith(eventGuid);
-  opsToRemove.insert(op);
-}
-
-void ConvertArtsToLLVMPass::handleBarrier(BarrierOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.barrier\n");
-  stats.barrierOps++;
-
-  OpBuilder::InsertionGuard IG(AC->getBuilder());
-  AC->setInsertionPoint(op);
-  Location loc = op.getLoc();
-  /// For barrier synchronization, we can use artsYield() to yield control and
-  /// allow other EDTs to make progress
-  AC->createRuntimeCall(types::ARTSRTL_artsYield, {}, loc);
-
-  /// Remove the barrier operation
-  opsToRemove.insert(op);
-}
-
-void ConvertArtsToLLVMPass::handleAlloc(AllocOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.alloc\n");
-  stats.allocOps++;
-
-  OpBuilder::InsertionGuard IG(AC->getBuilder());
-  AC->setInsertionPoint(op);
-
-  Location loc = op.getLoc();
-  auto dynamicSizes = op.getDynamicSizes();
-  auto resultType = op.getResult().getType().cast<MemRefType>();
-
-  /// Convert to memref.alloc operation
-  auto memrefAlloc =
-      AC->getBuilder().create<memref::AllocOp>(loc, resultType, dynamicSizes);
-
-  /// Replace the arts.alloc with memref.alloc
-  op.replaceAllUsesWith(memrefAlloc.getResult());
-  opsToRemove.insert(op);
-}
-
-void ConvertArtsToLLVMPass::handleUndef(UndefOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.undef\n");
-  stats.undefOps++;
-
-  OpBuilder::InsertionGuard IG(AC->getBuilder());
-  AC->setInsertionPoint(op);
-
-  Location loc = op.getLoc();
-  auto resultType = op.getResult().getType();
-
-  /// Convert to LLVM undef if compatible, otherwise use a default value
-  Value undefValue;
-  if (LLVM::isCompatibleType(resultType)) {
-    undefValue = AC->getBuilder().create<LLVM::UndefOp>(loc, resultType);
-  } else if (auto intType = resultType.dyn_cast<IntegerType>()) {
-    undefValue = AC->createIntConstant(0, intType, loc);
-  } else if (auto floatType = resultType.dyn_cast<FloatType>()) {
-    undefValue = AC->getBuilder().create<arith::ConstantFloatOp>(
-        loc, APFloat::getZero(floatType.getFloatSemantics()), floatType);
-  } else {
-    op.emitError("Unsupported type for arts.undef conversion");
-    return;
-  }
-
-  /// Replace the undef operation
-  op.replaceAllUsesWith(undefValue);
-  opsToRemove.insert(op);
-}
-
-//===----------------------------------------------------------------------===//
-// Runtime Information Operations
-//===----------------------------------------------------------------------===//
-
-void ConvertArtsToLLVMPass::handleGetTotalWorkers(GetTotalWorkersOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.getTotalWorkers\n");
-  stats.getTotalWorkersOps++;
-
-  OpBuilder::InsertionGuard IG(AC->getBuilder());
-  AC->setInsertionPoint(op);
-  auto totalWorkers = AC->getTotalWorkers(op.getLoc());
-  op.replaceAllUsesWith(totalWorkers);
-  opsToRemove.insert(op);
-}
-
-void ConvertArtsToLLVMPass::handleGetTotalNodes(GetTotalNodesOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.getTotalNodes\n");
-  stats.getTotalNodesOps++;
-
-  OpBuilder::InsertionGuard IG(AC->getBuilder());
-  AC->setInsertionPoint(op);
-  auto totalNodes = AC->getTotalNodes(op.getLoc());
-  op.replaceAllUsesWith(totalNodes);
-  opsToRemove.insert(op);
-}
-
-void ConvertArtsToLLVMPass::handleGetCurrentWorker(GetCurrentWorkerOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.getCurrentWorker\n");
-  stats.getCurrentWorkerOps++;
-
-  OpBuilder::InsertionGuard IG(AC->getBuilder());
-  AC->setInsertionPoint(op);
-  auto currentWorker = AC->getCurrentWorker(op.getLoc());
-  op.replaceAllUsesWith(currentWorker);
-  opsToRemove.insert(op);
-}
-
-void ConvertArtsToLLVMPass::handleGetCurrentNode(GetCurrentNodeOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering arts.getCurrentNode\n");
-  stats.getCurrentNodeOps++;
-
-  auto currentNode = AC->getCurrentNode(op.getLoc());
-  op.replaceAllUsesWith(currentNode);
-  opsToRemove.insert(op);
-}
-
-//===----------------------------------------------------------------------===//
-// Helper Methods
-//===----------------------------------------------------------------------===//
-
-void ConvertArtsToLLVMPass::cleanupUnusedOperations() {
-  LLVM_DEBUG(DBGS() << "Cleaning up unused operations\n");
-
-  /// Remove all collected operations
-  for (Operation *op : opsToRemove) {
-    if (op && op->getParentOp()) {
-      op->erase();
-    }
-  }
-  opsToRemove.clear();
-}
-
-void ConvertArtsToLLVMPass::reportConversionStats() {
-  LLVM_DEBUG({
-    dbgs() << "\n" << line << "ARTS to LLVM Conversion Statistics\n" << line;
-    dbgs() << "EDT operations: " << stats.edtOps << "\n";
-    dbgs() << "Epoch operations: " << stats.epochOps << "\n";
-    dbgs() << "Event operations: " << stats.eventOps << "\n";
-    dbgs() << "Barrier operations: " << stats.barrierOps << "\n";
-    dbgs() << "Alloc operations: " << stats.allocOps << "\n";
-    dbgs() << "Undef operations: " << stats.undefOps << "\n";
-    dbgs() << "GetTotalWorkers operations: " << stats.getTotalWorkersOps
-           << "\n";
-    dbgs() << "GetTotalNodes operations: " << stats.getTotalNodesOps << "\n";
-    dbgs() << "GetCurrentWorker operations: " << stats.getCurrentWorkerOps
-           << "\n";
-    dbgs() << "GetCurrentNode operations: " << stats.getCurrentNodeOps << "\n";
-    dbgs() << line;
-  });
-}
-
-void ConvertArtsToLLVMPass::iterateOps() {
-  LLVM_DEBUG(DBGS() << "Starting ARTS operation iteration\n");
-
-  /// Process runtime information operations first
-  module->walk([&](arts::GetTotalWorkersOp op) { handleGetTotalWorkers(op); });
-  module->walk([&](arts::GetTotalNodesOp op) { handleGetTotalNodes(op); });
-  module->walk(
-      [&](arts::GetCurrentWorkerOp op) { handleGetCurrentWorker(op); });
-  module->walk([&](arts::GetCurrentNodeOp op) { handleGetCurrentNode(op); });
-
-  /// Process control flow operations
-  module.walk([&](arts::EpochOp epoch) { handleEpoch(epoch); });
-  LLVM_DEBUG({
-    DBGS() << "Module after processing epochs:\n";
-    module.dump();
-    dbgs() << line;
-  });
-
-  /// Process EDT operations
-  module.walk<mlir::WalkOrder::PreOrder>([&](arts::EdtOp edtOp) {
-    if (opsToRemove.count(edtOp))
-      return mlir::WalkResult::skip();
-    if (edtOp.isTask())
-      handleEdt(edtOp);
-    else {
-      llvm_unreachable(
-          "Sync, Parallel, and single EDTs should have been lowered. "
-          "Did you run the 'create-epochs' pass?");
-    }
-    return mlir::WalkResult::advance();
-  });
-
-  /// Process other ARTS operations
-  // module.walk([&](arts::EventOp op) { handleEvent(op); });
-  module.walk([&](arts::BarrierOp op) { handleBarrier(op); });
-  module.walk([&](arts::AllocOp op) { handleAlloc(op); });
-  // module.walk([&](arts::UndefOp op) { handleUndef(op); });
-
-  /// Clean up removed operations
-  cleanupUnusedOperations();
-
-  LLVM_DEBUG({
-    DBGS() << "Module after processing all ARTS operations:\n";
-    module.dump();
-    dbgs() << line;
-  });
-}
-
-//===----------------------------------------------------------------------===//
-// Main Pass Implementation
+// Core Pass Implementation
 //===----------------------------------------------------------------------===//
 
 void ConvertArtsToLLVMPass::runOnOperation() {
   module = getOperation();
+
   LLVM_DEBUG({
-    dbgs() << line << "ConvertArtsToLLVMPass START\n" << line;
+    dbgs() << LINE << "ConvertArtsToLLVMPass START\n" << LINE;
     module.dump();
   });
 
-  /// Data Layouts
-  auto llvmDLAttr = module->getAttrOfType<StringAttr>("llvm.data_layout");
-  if (!llvmDLAttr) {
-    module.emitError("Module does not have a data layout");
-    return signalPassFailure();
+  /// Early exit if no ARTS operations
+  if (!hasArtsOperations()) {
+    LLVM_DEBUG(DBGS() << "No ARTS operations found, skipping conversion\n");
+    return;
   }
+
+  /// Initialize codegen infrastructure
+  if (failed(initializeCodegen()))
+    return signalPassFailure();
+
+  /// Process operations
+  if (failed(processOperations()))
+    return signalPassFailure();
+
+  /// Finalize conversion and cleanup
+  finalizeConversion();
+
+  LLVM_DEBUG({
+    dbgs() << LINE << "ConvertArtsToLLVMPass COMPLETED\n" << LINE;
+    module.dump();
+  });
+}
+
+LogicalResult ConvertArtsToLLVMPass::initializeCodegen() {
+  /// Validate data layout
+  auto llvmDLAttr = module->getAttrOfType<StringAttr>("llvm.data_layout");
+  if (!llvmDLAttr)
+    return emitOpError(module, "Module missing required LLVM data layout");
+
   llvm::DataLayout llvmDL(llvmDLAttr.getValue().str());
   mlir::DataLayout mlirDL(module);
+  AC = new ArtsCodegen(module, llvmDL, mlirDL, debugMode);
 
-  /// Initialize the AC object, iterate ops and initialize the runtime.
-  AC = new ArtsCodegen(module, llvmDL, mlirDL, debug);
-  iterateOps();
-  AC->initRT(UnknownLoc::get(module.getContext()));
+  LLVM_DEBUG(DBGS() << "ArtsCodegen initialized successfully\n");
+  return success();
+}
 
-  /// Report conversion statistics
-  reportConversionStats();
-
-  LLVM_DEBUG({
-    dbgs() << line << "ConvertArtsToLLVMPass FINISHED \n" << line;
-    module.dump();
+bool ConvertArtsToLLVMPass::hasArtsOperations() const {
+  /// Quick check to see if we have any ARTS operations to convert
+  bool hasOps = false;
+  module->walk([&](Operation *op) {
+    if (isArtsOp(op)) {
+      hasOps = true;
+      return WalkResult::interrupt();
+    }
+    return WalkResult::advance();
   });
-  delete AC;
+  return hasOps;
+}
+
+LogicalResult ConvertArtsToLLVMPass::processOperations() {
+  LLVM_DEBUG(DBGS() << "Starting optimized operation processing\n");
+
+  /// Single-pass operation processing with ordered handling
+  auto result = module->walk([&](Operation *op) -> WalkResult {
+    if (opsToRemove.contains(op))
+      return WalkResult::advance();
+
+    /// Handle runtime information operations first (no dependencies)
+    if (auto runtimeOp = dyn_cast<arts::GetTotalWorkersOp>(op))
+      return handleWalkResult(handleRuntimeInfoOp(runtimeOp));
+
+    if (auto runtimeOp = dyn_cast<arts::GetTotalNodesOp>(op))
+      return handleWalkResult(handleRuntimeInfoOp(runtimeOp));
+
+    if (auto runtimeOp = dyn_cast<arts::GetCurrentWorkerOp>(op))
+      return handleWalkResult(handleRuntimeInfoOp(runtimeOp));
+
+    if (auto runtimeOp = dyn_cast<arts::GetCurrentNodeOp>(op))
+      return handleWalkResult(handleRuntimeInfoOp(runtimeOp));
+
+    /// Handle allocation operations
+    if (auto allocOp = dyn_cast<arts::AllocOp>(op))
+      return handleWalkResult(handleAlloc(allocOp));
+
+    return WalkResult::advance();
+  });
+
+  if (result.wasInterrupted())
+    return failure();
+
+  /// Second pass for operations that need dependencies resolved
+  result = module->walk<WalkOrder::PreOrder>([&](Operation *op) -> WalkResult {
+    if (opsToRemove.contains(op))
+      return WalkResult::skip();
+
+    /// Handle epochs first
+    if (auto epochOp = dyn_cast<arts::EpochOp>(op))
+      return handleWalkResult(handleEpoch(epochOp));
+
+    /// Handle top-level DB operations
+    if (!op->getParentOfType<arts::EdtOp>()) {
+      if (auto dbAllocOp = dyn_cast<arts::DbAllocOp>(op))
+        return handleWalkResult(handleDbAlloc(dbAllocOp));
+
+      if (auto dbDepOp = dyn_cast<arts::DbDepOp>(op))
+        return handleWalkResult(handleDbDep(dbDepOp));
+    }
+
+    // /// Handle EDTs (they process their own DB operations)
+    // if (auto edtOp = dyn_cast<arts::EdtOp>(op)) {
+    //   if (edtOp.isTask()) {
+    //     return handleWalkResult(handleEdt(edtOp));
+    //   } else {
+    //     emitOpError(edtOp, "Non-task EDTs should have been lowered by "
+    //                        "the 'create-epochs' pass");
+    //     return WalkResult::interrupt();
+    //   }
+    // }
+
+    /// Handle barriers
+    if (auto barrierOp = dyn_cast<arts::BarrierOp>(op))
+      return handleWalkResult(handleBarrier(barrierOp));
+
+    return WalkResult::advance();
+  });
+
+  if (result.wasInterrupted())
+    return failure();
+
+  LLVM_DEBUG(DBGS() << "Operation processing completed successfully\n");
+  return success();
+}
+
+void ConvertArtsToLLVMPass::finalizeConversion() {
+  /// Apply all delayed replacements before cleanup
+  applyReplacements();
+  
+  /// Clean up operations marked for removal
+  cleanupOperations();
+  
+  /// Initialize runtime and report statistics
+  AC->initRT(getUnknownLoc());
+  reportStatistics();
 }
 
 //===----------------------------------------------------------------------===//
-// Pass creation
+// Operation Handlers
+//===----------------------------------------------------------------------===//
+
+template <typename OpType>
+LogicalResult ConvertArtsToLLVMPass::handleRuntimeInfoOp(OpType op) {
+  LLVM_DEBUG(DBGS() << "Processing runtime info operation: " << op << "\n");
+  statistics.runtimeInfoOps++;
+
+  OpBuilder::InsertionGuard IG(AC->getBuilder());
+  AC->setInsertionPoint(op);
+
+  Value result;
+  if constexpr (std::is_same_v<OpType, arts::GetTotalWorkersOp>)
+    result = AC->getTotalWorkers(op.getLoc());
+  else if constexpr (std::is_same_v<OpType, arts::GetTotalNodesOp>)
+    result = AC->getTotalNodes(op.getLoc());
+  else if constexpr (std::is_same_v<OpType, arts::GetCurrentWorkerOp>)
+    result = AC->getCurrentWorker(op.getLoc());
+  else if constexpr (std::is_same_v<OpType, arts::GetCurrentNodeOp>)
+    result = AC->getCurrentNode(op.getLoc());
+  else
+    return emitOpError(op, "Unsupported runtime info operation");
+
+  replacementMap[op.getResult()] = result;
+  opsToRemove.insert(op);
+  return success();
+}
+
+LogicalResult ConvertArtsToLLVMPass::handleEdt(EdtOp op) {
+  LLVM_DEBUG(DBGS() << "Processing EDT: " << op << "\n");
+  statistics.edtOps++;
+
+  OpBuilder::InsertionGuard IG(AC->getBuilder());
+  AC->setInsertionPoint(op);
+
+  /// Process DB operations within this EDT region before outlining
+  auto isDirectChildOfCurrentEdt = [&](Operation *operation) -> bool {
+    return !opsToRemove.contains(operation) &&
+           operation->getParentOfType<arts::EdtOp>() == op;
+  };
+
+  /// Process DbAlloc operations first, then DbDep (maintaining dependency
+  /// order)
+  op.walk([&](arts::DbAllocOp dbAllocOp) {
+    if (isDirectChildOfCurrentEdt(dbAllocOp)) {
+      auto *dbAlloc = AC->getOrCreateDbAlloc(dbAllocOp, dbAllocOp.getLoc());
+      if (!dbAlloc) {
+        (void)emitOpError(dbAllocOp, "Failed to create DbAlloc");
+        return;
+      }
+    }
+  });
+
+  op.walk([&](arts::DbDepOp dbDepOp) {
+    if (isDirectChildOfCurrentEdt(dbDepOp)) {
+      auto *dbDep = AC->getOrCreateDbDep(dbDepOp, dbDepOp.getLoc());
+      if (!dbDep) {
+        (void)emitOpError(dbDepOp, "Failed to create DbDep");
+        return;
+      }
+    }
+  });
+
+  /// Create the parallel EDT
+  auto dependencies = op.getDependenciesVector();
+  auto &region = op.getRegion();
+  auto loc = op.getLoc();
+
+  Value currentEpoch = edtToEpoch.lookup(op);
+  if (!currentEpoch)
+    currentEpoch = AC->getCurrentEpochGuid(getUnknownLoc());
+
+  auto *newEdt = AC->createEdt(&dependencies, &region, &currentEpoch, &loc);
+  if (!newEdt)
+    return emitOpError(op, "Failed to create EDT");
+
+  opsToRemove.insert(op);
+  return success();
+}
+
+LogicalResult ConvertArtsToLLVMPass::handleEpoch(EpochOp op) {
+  LLVM_DEBUG(DBGS() << "Processing Epoch: " << op << "\n");
+  statistics.epochOps++;
+
+  OpBuilder::InsertionGuard IG(AC->getBuilder());
+  AC->setInsertionPoint(op);
+
+  /// Create a done-edt for the epoch
+  EdtCodegen epochDoneEdt(*AC);
+  epochDoneEdt.setDepC(
+      AC->createIntConstant(DEFAULT_DEP_COUNT, AC->Int32, op.getLoc()));
+  epochDoneEdt.build(op.getLoc());
+
+  auto guid = epochDoneEdt.getGuid();
+  if (!guid)
+    return emitOpError(op, "Failed to create epoch done EDT");
+
+  /// Create the epoch
+  auto epochDoneSlot =
+      AC->createIntConstant(DEFAULT_EDT_SLOT, AC->Int32, op.getLoc());
+  auto currentEpoch = AC->createEpoch(guid, epochDoneSlot, op.getLoc());
+
+  /// Map child EDTs to this epoch
+  SmallVector<arts::EdtOp> childEdts;
+  op.walk([&](arts::EdtOp childOp) {
+    if (!childOp->getParentOfType<EdtOp>() &&
+        childOp->getParentOfType<EpochOp>() == op) {
+      childEdts.push_back(childOp);
+      edtToEpoch[childOp] = currentEpoch;
+    }
+  });
+
+  LLVM_DEBUG(DBGS() << "Mapped " << childEdts.size()
+                    << " child EDTs to epoch\n");
+
+  /// Set insertion point after epoch creation and add wait
+  AC->setInsertionPointAfter(currentEpoch.getDefiningOp());
+  AC->waitOnHandle(currentEpoch, op.getLoc());
+
+  opsToRemove.insert(op);
+  return success();
+}
+
+LogicalResult ConvertArtsToLLVMPass::handleBarrier(BarrierOp op) {
+  LLVM_DEBUG(DBGS() << "Processing Barrier: " << op << "\n");
+  statistics.barrierOps++;
+
+  OpBuilder::InsertionGuard IG(AC->getBuilder());
+  AC->setInsertionPoint(op);
+  AC->createRuntimeCall(types::ARTSRTL_artsYield, {}, op.getLoc());
+
+  opsToRemove.insert(op);
+  return success();
+}
+
+LogicalResult ConvertArtsToLLVMPass::handleAlloc(AllocOp op) {
+  LLVM_DEBUG(DBGS() << "Processing Alloc: " << op << "\n");
+  statistics.allocOps++;
+
+  OpBuilder::InsertionGuard IG(AC->getBuilder());
+  AC->setInsertionPoint(op);
+
+  auto resultType = op.getResult().getType().cast<MemRefType>();
+  auto elementType = resultType.getElementType();
+
+  /// Calculate total allocation size
+  auto elementSize = AC->getMLIRDataLayout().getTypeSizeInBits(elementType) / 8;
+  auto elementSizeValue =
+      AC->createIntConstant(elementSize, AC->Int64, op.getLoc());
+  Value totalSize = elementSizeValue;
+
+  /// Handle dynamic sizes
+  auto dynamicSizes = op.getDynamicSizes();
+  if (!dynamicSizes.empty()) {
+    for (auto size : dynamicSizes) {
+      auto sizeValue = AC->castToInt(AC->Int64, size, op.getLoc());
+      totalSize = AC->getBuilder().create<arith::MulIOp>(op.getLoc(), totalSize,
+                                                         sizeValue);
+    }
+  } else {
+    /// Handle static shape
+    auto shape = resultType.getShape();
+    for (auto dim : shape) {
+      if (dim != ShapedType::kDynamic) {
+        auto dimValue = AC->createIntConstant(dim, AC->Int64, op.getLoc());
+        totalSize = AC->getBuilder().create<arith::MulIOp>(op.getLoc(),
+                                                           totalSize, dimValue);
+      }
+    }
+  }
+
+  /// Call ARTS runtime allocation
+  auto artsAllocCall = AC->createRuntimeCall(types::ARTSRTL_artsMalloc,
+                                             {totalSize}, op.getLoc());
+  auto allocPtr = artsAllocCall.getResult(0);
+  auto castPtr = AC->castPtr(resultType, allocPtr, op.getLoc());
+
+  replacementMap[op.getResult()] = castPtr;
+  opsToRemove.insert(op);
+  return success();
+}
+
+LogicalResult ConvertArtsToLLVMPass::handleDbAlloc(DbAllocOp op) {
+  LLVM_DEBUG(DBGS() << "Processing top-level DbAlloc: " << op << "\n");
+  statistics.dbAllocOps++;
+
+  OpBuilder::InsertionGuard IG(AC->getBuilder());
+  AC->setInsertionPoint(op);
+
+  auto *dbCodegen = AC->getOrCreateDbAlloc(op, op.getLoc());
+  if (!dbCodegen)
+    return emitOpError(op, "Failed to create DbAllocCodegen");
+  
+  replacementMap[op.getResult()] = dbCodegen->getPtr();
+  opsToRemove.insert(op);
+  LLVM_DEBUG(DBGS() << "DbAlloc processing completed successfully\n");
+
+  return success();
+}
+
+LogicalResult ConvertArtsToLLVMPass::handleDbDep(DbDepOp op) {
+  LLVM_DEBUG(DBGS() << "Processing top-level DbDep: " << op << "\n");
+  statistics.dbDepOps++;
+
+  OpBuilder::InsertionGuard IG(AC->getBuilder());
+  AC->setInsertionPoint(op);
+
+  auto *dbCodegen = AC->getOrCreateDbDep(op, op.getLoc());
+  if (!dbCodegen)
+    return emitOpError(op, "Failed to create DbDepCodegen");
+  
+  replacementMap[op.getResult()] = dbCodegen->getPtr();
+  opsToRemove.insert(op);
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// Utility Methods
+//===----------------------------------------------------------------------===//
+
+void ConvertArtsToLLVMPass::applyReplacements() {
+  LLVM_DEBUG(DBGS() << "Applying " << replacementMap.size() << " delayed replacements\n");
+
+  for (auto &replacement : replacementMap) {
+    Value original = replacement.first;
+    Value newValue = replacement.second;
+    
+    LLVM_DEBUG(DBGS() << "Replacing " << original << " with " << newValue << "\n");
+    original.replaceAllUsesWith(newValue);
+  }
+  replacementMap.clear();
+}
+
+void ConvertArtsToLLVMPass::cleanupOperations() {
+  LLVM_DEBUG(DBGS() << "Cleaning up " << opsToRemove.size() << " operations\n");
+
+  for (Operation *op : opsToRemove) {
+    if (op && op->getParentOp())
+      op->erase();
+  }
+  opsToRemove.clear();
+}
+
+void ConvertArtsToLLVMPass::reportStatistics() const {
+  LLVM_DEBUG({
+    dbgs() << "\n" << LINE << "ARTS to LLVM Conversion Statistics\n" << LINE;
+    dbgs() << "EDT operations: " << statistics.edtOps << "\n";
+    dbgs() << "Epoch operations: " << statistics.epochOps << "\n";
+    dbgs() << "Barrier operations: " << statistics.barrierOps << "\n";
+    dbgs() << "Alloc operations: " << statistics.allocOps << "\n";
+    dbgs() << "DbAlloc operations: " << statistics.dbAllocOps << "\n";
+    dbgs() << "DbDep operations: " << statistics.dbDepOps << "\n";
+    dbgs() << "Runtime Info operations: " << statistics.runtimeInfoOps << "\n";
+    dbgs() << LINE;
+  });
+}
+
+LogicalResult ConvertArtsToLLVMPass::emitOpError(Operation *op,
+                                                 const Twine &message) const {
+  return op->emitError() << message;
+}
+
+//===----------------------------------------------------------------------===//
+// Pass Functions
 //===----------------------------------------------------------------------===//
 namespace mlir {
 namespace arts {
@@ -466,6 +553,5 @@ std::unique_ptr<Pass> createConvertArtsToLLVMPass() {
 std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug) {
   return std::make_unique<ConvertArtsToLLVMPass>(debug);
 }
-
 } // namespace arts
 } // namespace mlir
