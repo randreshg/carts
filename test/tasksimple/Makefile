@@ -23,4 +23,4 @@ $(FILENAME): $(FILENAME).ll
 	clang $< -O3 -g0 -fopenmp -march=native -o $@_inspector -I/$(ARTS_PATH)/include/arts -L$(ARTS_PATH)/lib -lartsinspector -lrt -lpthread -lrdmacm
 
 clean:
-	rm -r -f *.mlir *.ll ./$(FILENAME) ./$(FILENAME)_omp ./$(FILENAME)_inspector ./counters/;  
+	rm -r -f *.mlir *.ll *.dot ./$(FILENAME) ./$(FILENAME)_omp ./$(FILENAME)_inspector ./counters/;  

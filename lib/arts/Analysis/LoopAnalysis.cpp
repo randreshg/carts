@@ -16,7 +16,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "loop-analysis"
-#define line "-----------------------------------------\n"
+#define LINE "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
@@ -25,7 +25,7 @@ using namespace arts;
 using namespace affine;
 
 void LoopAnalysis::run() {
-  LLVM_DEBUG(dbgs() << line << "LoopAnalysis STARTED\n" << line);
+  LLVM_DEBUG(dbgs() << LINE << "LoopAnalysis STARTED\n" << LINE);
 
   /// Analyze scf::ForOp loops.
   module.walk([&](Operation *op) {
@@ -40,7 +40,7 @@ void LoopAnalysis::run() {
 
   /// Analyze induction variables.
   analyzeLoopIV();
-  LLVM_DEBUG(dbgs() << line << "LoopAnalysis FINISHED\n" << line);
+  LLVM_DEBUG(dbgs() << LINE << "LoopAnalysis FINISHED\n" << LINE);
 }
 
 LoopInfo *LoopAnalysis::getLoopInfo(Operation *op) {

@@ -16,7 +16,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "string-analysis"
-#define line "-----------------------------------------\n"
+#define LINE "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
@@ -24,7 +24,7 @@ using namespace mlir;
 using namespace arts;
 
 void StringAnalysis::run() {
-  LLVM_DEBUG(dbgs() << line << "StringAnalysis STARTED\n" << line);
+  LLVM_DEBUG(dbgs() << LINE << "StringAnalysis STARTED\n" << LINE);
   trackGlobalUsers();
   trackMemrefInitializations();
   trackCallOps();
@@ -33,7 +33,7 @@ void StringAnalysis::run() {
     for (auto value : stringMemRefs)
       dbgs() << "  " << value << "\n";
   });
-  LLVM_DEBUG(dbgs() << line << "StringAnalysis FINISHED\n" << line);
+  LLVM_DEBUG(dbgs() << LINE << "StringAnalysis FINISHED\n" << LINE);
 }
 
 bool StringAnalysis::isStringGlobal(LLVM::GlobalOp globalOp) {

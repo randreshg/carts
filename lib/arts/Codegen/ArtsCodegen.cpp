@@ -65,7 +65,9 @@ ArtsCodegen::ArtsCodegen(ModuleOp &module, llvm::DataLayout &llvmDL,
 }
 
 ArtsCodegen::~ArtsCodegen() {
-  for (auto &db : dbs)
+  for (auto &db : dbAllocs)
+    delete db.second;
+  for (auto &db : dbDeps)
     delete db.second;
   for (auto &edt : edts)
     delete edt.second;
@@ -148,60 +150,56 @@ func::CallOp ArtsCodegen::createRuntimeCall(RuntimeFunction FnID,
 }
 
 /// DataBlock
-DbCodegen *ArtsCodegen::getDb(Value op) {
+DbAllocCodegen *ArtsCodegen::getDbAlloc(Value op) {
   if (!op)
     return nullptr;
-  if (auto dbAllocOp = op.getDefiningOp<DbAllocOp>())
-    return getDb(dbAllocOp);
-  if (auto dbDepOp = op.getDefiningOp<DbDepOp>())
-    return getDb(dbDepOp);
-
-  return nullptr;
+  auto it = dbAllocs.find(op);
+  return (it != dbAllocs.end()) ? it->second : nullptr;
 }
 
-DbCodegen *ArtsCodegen::getDb(DbAllocOp dbOp) {
+DbAllocCodegen *ArtsCodegen::getDbAlloc(DbAllocOp dbOp) {
   if (!dbOp)
     return nullptr;
-  auto it = dbs.find(dbOp.getResult());
-  return (it != dbs.end()) ? it->second : nullptr;
+  auto it = dbAllocs.find(dbOp.getResult());
+  return (it != dbAllocs.end()) ? it->second : nullptr;
 }
 
-DbCodegen *ArtsCodegen::getDb(DbDepOp dbOp) {
-  if (!dbOp)
-    return nullptr;
-  auto it = dbs.find(dbOp.getResult());
-  return (it != dbs.end()) ? it->second : nullptr;
-}
-
-DbCodegen *ArtsCodegen::createDb(DbAllocOp dbOp, Location loc) {
-  assert(!getDb(dbOp) && "Db already exists");
-  dbs[dbOp.getResult()] = new DbAllocCodegen(*this, dbOp, loc);
-  return dbs[dbOp.getResult()];
-}
-
-/// Factory method for DbCodegen
-DbCodegen *ArtsCodegen::getOrCreateDb(Value op, Location loc) {
+DbDepCodegen *ArtsCodegen::getDbDep(Value op) {
   if (!op)
     return nullptr;
-  /// If already created, return it
-  auto it = dbs.find(op);
-  if (it != dbs.end())
-    return it->second;
+  auto it = dbDeps.find(op);
+  return (it != dbDeps.end()) ? it->second : nullptr;
+}
 
-  /// DbAllocOp
-  if (auto dbAllocOp = op.getDefiningOp<DbAllocOp>()) {
-    auto *cg = new DbAllocCodegen(*this, dbAllocOp, loc);
-    dbs[op] = cg;
-    return cg;
-  }
-  /// DbDepOp
-  if (auto dbDepOp = op.getDefiningOp<DbDepOp>()) {
-    auto *cg = new DbDepCodegen(*this, dbDepOp, loc);
-    dbs[op] = cg;
-    return cg;
-  }
-  /// Not a recognized datablock op
-  return nullptr;
+DbDepCodegen *ArtsCodegen::getDbDep(DbDepOp dbOp) {
+  if (!dbOp)
+    return nullptr;
+  auto it = dbDeps.find(dbOp.getResult());
+  return (it != dbDeps.end()) ? it->second : nullptr;
+}
+
+DbAllocCodegen *ArtsCodegen::createDbAlloc(DbAllocOp dbOp, Location loc) {
+  assert(!getDbAlloc(dbOp) && "DbAlloc already exists");
+  dbAllocs[dbOp.getResult()] = new DbAllocCodegen(*this, dbOp, loc);
+  return dbAllocs[dbOp.getResult()];
+}
+
+DbDepCodegen *ArtsCodegen::createDbDep(DbDepOp dbOp, Location loc) {
+  assert(!getDbDep(dbOp) && "DbDep already exists");
+  dbDeps[dbOp.getResult()] = new DbDepCodegen(*this, dbOp, loc);
+  return dbDeps[dbOp.getResult()];
+}
+
+DbAllocCodegen *ArtsCodegen::getOrCreateDbAlloc(DbAllocOp dbOp, Location loc) {
+  if (auto existing = getDbAlloc(dbOp))
+    return existing;
+  return createDbAlloc(dbOp, loc);
+}
+
+DbDepCodegen *ArtsCodegen::getOrCreateDbDep(DbDepOp dbOp, Location loc) {
+  if (auto existing = getDbDep(dbOp))
+    return existing;
+  return createDbDep(dbOp, loc);
 }
 
 void ArtsCodegen::addDbDependency(Value dbGuid, Value edtGuid, Value edtSlot,
@@ -217,6 +215,27 @@ void ArtsCodegen::incrementDbLatchCount(Value dbGuid, Location loc) {
 
 void ArtsCodegen::decrementDbLatchCount(Value dbGuid, Location loc) {
   createRuntimeCall(ARTSRTL_artsDbDecrementLatch, {dbGuid}, loc);
+}
+
+/// Simple EDT DB access using attributes
+Value ArtsCodegen::getDbPtrInEdt(Value dbOp) {
+  // Try as DbDep first (most common in EDT context)
+  if (auto dbDepOp = dbOp.getDefiningOp<DbDepOp>()) {
+    if (auto *dbDep = getDbDep(dbDepOp)) {
+      return dbDep->getPtrInEdt();
+    }
+  }
+  return Value{};
+}
+
+Value ArtsCodegen::getDbGuidInEdt(Value dbOp) {
+  // Try as DbDep first (most common in EDT context)
+  if (auto dbDepOp = dbOp.getDefiningOp<DbDepOp>()) {
+    if (auto *dbDep = getDbDep(dbDepOp)) {
+      return dbDep->getGuidInEdt();
+    }
+  }
+  return Value{};
 }
 
 /// EDT
@@ -384,7 +403,6 @@ func::FuncOp ArtsCodegen::insertArtsMainFn(Location loc,
   /// Create the function using the "MainEdt" type.
   auto newFn = builder.create<func::FuncOp>(loc, "artsMain", ArtsMainFn);
   newFn.setPublic();
-  module.push_back(newFn);
 
   /// Create the entry block.
   auto *entryBlock = newFn.addEntryBlock();
@@ -409,7 +427,6 @@ func::FuncOp ArtsCodegen::insertMainFn(Location loc) {
   /// Create the function using the "MainFn" type.
   auto newFn = builder.create<func::FuncOp>(loc, "main", MainFn);
   newFn.setPublic();
-  module.push_back(newFn);
 
   /// Create the entry block.
   auto *entryBlock = newFn.addEntryBlock();

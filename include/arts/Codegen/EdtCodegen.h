@@ -19,7 +19,8 @@ namespace mlir {
 namespace arts {
 
 class ArtsCodegen;
-class DbCodegen;
+class DbAllocCodegen;
+class DbDepCodegen;
 
 class EdtCodegen {
 public:
@@ -39,6 +40,8 @@ public:
   void setDepC(Value depC);
   std::pair<bool, int> insertParam(Value param);
 
+
+
 private:
   ArtsCodegen &AC;
   OpBuilder &builder;
@@ -54,24 +57,17 @@ private:
   llvm::DenseMap<Value, Value> rewireMap;
   func::ReturnOp returnOp = nullptr;
   bool built = false;
-  llvm::SmallVector<DbCodegen *> depsToSatisfy, depsToRecord;
-  struct DbEntry {
-    Value guid, ptr;
-    llvm::SmallVector<Value> sizes, offsets;
-    llvm::DenseMap<unsigned, unsigned> sizeIndex;
-    llvm::DenseMap<unsigned, unsigned> offsetIndex;
-  };
-  llvm::DenseMap<DbCodegen *, DbEntry> entryDbs;
+  llvm::SmallVector<DbDepCodegen *> depsToSatisfy, depsToRecord;
   llvm::DenseMap<Value, unsigned> entryEvents;
   Value fnParamV = nullptr;
   Value fnDepV = nullptr;
   void process(Location loc);
   void processDependencies(Location loc);
-  void processSubviewDependency(Value subview, Location loc);
   void outlineRegion(Location loc);
   Value createGuid(Value node, Location loc);
   func::FuncOp createFn(Location loc);
   void createEntry(Location loc);
+  void rewireAllDbsInRegion();
   static unsigned edtCounter;
   static unsigned increaseEdtCounter() { return ++EdtCodegen::edtCounter; }
 };

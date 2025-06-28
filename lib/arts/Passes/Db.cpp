@@ -37,7 +37,7 @@
 #include "arts/Analysis/Db/Graph/DbNode.h"
 
 #define DEBUG_TYPE "db"
-#define line "-----------------------------------------\n"
+#define LINE "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
@@ -80,7 +80,7 @@ void DbPass::runOnOperation() {
 
   /// Print the module before the pass.
   LLVM_DEBUG({
-    dbgs() << "\n" << line << "DbPass STARTED\n" << line;
+    dbgs() << "\n" << LINE << "DbPass STARTED\n" << LINE;
     module.dump();
   });
 
@@ -115,7 +115,7 @@ void DbPass::runOnOperation() {
   }
 
   LLVM_DEBUG({
-    dbgs() << line << "DbPass FINISHED\n" << line;
+    dbgs() << LINE << "DbPass FINISHED\n" << LINE;
     module.dump();
   });
 }
@@ -351,7 +351,7 @@ bool DbPass::shrinkDb() {
 }
 
 bool DbPass::canonicalizeDimOps() {
-  // LLVM_DEBUG(dbgs() << line << "Canonicalizing dim ops\n");
+  // LLVM_DEBUG(dbgs() << LINE << "Canonicalizing dim ops\n");
   // module->walk([&](arts::DbDepOp dbOp) {
   //   /// Analyze uses of the db.
   //   for (auto *op : dbOp->getUsers()) {
@@ -368,7 +368,7 @@ bool DbPass::canonicalizeDimOps() {
   //     dimOp.erase();
   //   }
   // });
-  // LLVM_DEBUG(dbgs() << line);
+  // LLVM_DEBUG(dbgs() << LINE);
   return false;
 }
 ///===----------------------------------------------------------------------===///
