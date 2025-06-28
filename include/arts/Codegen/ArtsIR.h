@@ -19,15 +19,13 @@ EdtOp createEdtOp(OpBuilder &builder, Location loc, types::EdtType type,
 types::EdtType getEdtType(EdtOp edtOp);
 
 /// DB creation functions
-DbAllocOp createDbAllocOp(OpBuilder &builder, Location loc,
-                            StringRef mode, Value address = nullptr, 
-                            SmallVector<Value> sizes = {});
+DbAllocOp createDbAllocOp(OpBuilder &builder, Location loc, StringRef mode,
+                          Value address = nullptr,
+                          SmallVector<Value> sizes = {});
 
-DbDepOp createDbDepOp(OpBuilder &builder, Location loc,
-                   types::DbDepType mode, Value source,
-                   SmallVector<Value> pinnedIndices,
-                   SmallVector<Value> offsets,
-                   SmallVector<Value> sizes);
+DbDepOp createDbDepOp(OpBuilder &builder, Location loc, types::DbDepType mode,
+                      Value source, SmallVector<Value> pinnedIndices,
+                      SmallVector<Value> offsets, SmallVector<Value> sizes);
 
 /// DB helper functions
 bool isDbAllocOp(Operation *op);
@@ -38,7 +36,8 @@ bool isGlobalAlloc(DbAllocOp dbAllocOp);
 
 /// DB attribute helpers
 types::DbAllocType getDbAllocType(DbAllocOp dbAllocOp);
-void setDbAllocType(DbAllocOp dbAllocOp, types::DbAllocType type, OpBuilder &builder);
+void setDbAllocType(DbAllocOp dbAllocOp, types::DbAllocType type,
+                    OpBuilder &builder);
 
 /// Allocation type analysis
 types::DbAllocType getAllocType(Value ptr);

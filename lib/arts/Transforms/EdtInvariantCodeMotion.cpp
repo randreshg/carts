@@ -24,7 +24,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "edt-invariant-code-motion"
-#define line "-----------------------------------------\n"
+#define LINE "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 

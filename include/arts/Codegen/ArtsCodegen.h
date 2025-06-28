@@ -24,7 +24,8 @@ namespace arts {
 using namespace types;
 
 /// Forward declarations
-class DbCodegen;
+class DbAllocCodegen;
+class DbDepCodegen;
 class EdtCodegen;
 
 class ArtsCodegen {
@@ -45,16 +46,24 @@ public:
   func::CallOp createRuntimeCall(RuntimeFunction FnID, ArrayRef<Value> args,
                                  Location loc);
 
-  /// DB management
-  DbCodegen *getDb(Value op);
-  DbCodegen *getDb(DbAllocOp dbOp);
-  DbCodegen *getDb(DbDepOp dbOp);
-  DbCodegen *createDb(DbAllocOp dbOp, Location loc);
-  DbCodegen *getOrCreateDb(Value op, Location loc);
+  /// DB management - separate maps for different purposes
+  DbAllocCodegen *getDbAlloc(Value op);
+  DbAllocCodegen *getDbAlloc(DbAllocOp dbOp);
+  DbDepCodegen *getDbDep(Value op);
+  DbDepCodegen *getDbDep(DbDepOp dbOp);
+  DbAllocCodegen *createDbAlloc(DbAllocOp dbOp, Location loc);
+  DbDepCodegen *createDbDep(DbDepOp dbOp, Location loc);
+  DbAllocCodegen *getOrCreateDbAlloc(DbAllocOp dbOp, Location loc);
+  DbDepCodegen *getOrCreateDbDep(DbDepOp dbOp, Location loc);
+
   void addDbDependency(Value dbGuid, Value edtGuid, Value edtSlot,
                        Location loc);
   void incrementDbLatchCount(Value dbGuid, Location loc);
   void decrementDbLatchCount(Value dbGuid, Location loc);
+
+  /// Simple EDT DB access using attributes
+  Value getDbPtrInEdt(Value dbOp);
+  Value getDbGuidInEdt(Value dbOp);
 
   /// EDT management
   EdtCodegen *getEdt(Region *region);
@@ -128,7 +137,8 @@ private:
 
   /// Other Attributes
   unsigned edtCounter = 0;
-  llvm::DenseMap<Value, DbCodegen *> dbs;
+  llvm::DenseMap<Value, DbAllocCodegen *> dbAllocs;
+  llvm::DenseMap<Value, DbDepCodegen *> dbDeps;
   llvm::DenseMap<Region *, EdtCodegen *> edts;
   llvm::DenseMap<RuntimeFunction, func::FuncOp> runtimeFunctionCache;
   llvm::StringMap<LLVM::GlobalOp> llvmStringGlobals;

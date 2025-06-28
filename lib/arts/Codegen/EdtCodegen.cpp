@@ -3,23 +3,23 @@
 ///==========================================================================
 
 #include "arts/Codegen/EdtCodegen.h"
-#include "arts/Codegen/ArtsCodegen.h"
-#include "arts/Codegen/DbCodegen.h"
-#include "arts/Codegen/ArtsIR.h"
-#include "arts/ArtsDialect.h"
 #include "arts/Analysis/Edt/EdtAnalysis.h"
+#include "arts/ArtsDialect.h"
+#include "arts/Codegen/ArtsCodegen.h"
+#include "arts/Codegen/ArtsIR.h"
+#include "arts/Codegen/DbCodegen.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/Location.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "polygeist/Dialect.h"
 #include "polygeist/Ops.h"
-#include "llvm/Support/Debug.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "edt-codegen"
 #define dbgs() (llvm::dbgs())
@@ -112,85 +112,91 @@ void EdtCodegen::process(Location loc) {
   /// Cache parameter insertions to avoid duplicates
   DenseMap<Value, unsigned> parameterCache;
 
-  auto insertSizeAsParameter = [&](DbCodegen *db, Value size,
+  auto insertSizeAsParameter = [&](DbDepCodegen *dbDep, Value size,
                                    uint64_t sizeIdx) {
     if (isValueConstant(size))
       return;
     auto cacheIt = parameterCache.find(size);
     if (cacheIt != parameterCache.end()) {
-      entryDbs[db].sizeIndex[sizeIdx] = cacheIt->second;
+      dbDep->getSizeIndexInEdt()[sizeIdx] = cacheIt->second;
       return;
     }
 
     auto paramPair = insertParam(size);
     parameterCache[size] = paramPair.second;
-    entryDbs[db].sizeIndex[sizeIdx] = paramPair.second;
+    dbDep->getSizeIndexInEdt()[sizeIdx] = paramPair.second;
   };
 
-  auto insertOffsetAsParameter = [&](DbCodegen *db, Value offset,
+  auto insertOffsetAsParameter = [&](DbDepCodegen *dbDep, Value offset,
                                      uint64_t offsetIdx) {
     if (isValueConstant(offset))
       return;
     auto cacheIt = parameterCache.find(offset);
     if (cacheIt != parameterCache.end()) {
-      entryDbs[db].offsetIndex[offsetIdx] = cacheIt->second;
+      dbDep->getOffsetIndexInEdt()[offsetIdx] = cacheIt->second;
       return;
     }
 
     auto paramPair = insertParam(offset);
     parameterCache[offset] = paramPair.second;
-    entryDbs[db].offsetIndex[offsetIdx] = paramPair.second;
+    dbDep->getOffsetIndexInEdt()[offsetIdx] = paramPair.second;
   };
 
   /// Process each dependency.
   if (!deps.empty()) {
     for (const auto &dep : deps) {
-      /// Handle both DbDepOp results and memref.subview results
-      auto db = AC.getDb(dep);
-      if (!db) {
-        /// For subview results, handle dependency differently
-        processSubviewDependency(dep, loc);
-        continue;
-      }
-      assert(db && "Db not found");
+      /// Check if this is a DbDepOp (which we need for EDT context)
+      if (auto dbDepOp = dep.getDefiningOp<arts::DbDepOp>()) {
+        auto *dbDep = AC.getOrCreateDbDep(dbDepOp, loc);
+        assert(dbDep && "DbDep not found");
 
-      /// Set the EDT slot for the DB - We do so, by computing the number of
-      /// elements of each DB and storing it in the depC. The EDTSlot will be
-      /// used in processDependencies when recording the dependencies.
-      db->setEdtSlot(builder.create<memref::LoadOp>(loc, depC).getResult());
-      Value dbNumElements = nullptr;
+        /// Set the EDT slot for the DB
+        dbDep->setEdtSlot(
+            builder.create<memref::LoadOp>(loc, depC).getResult());
+        Value dbNumElements = nullptr;
 
-      if (db->hasSingleSize()) {
         /// For single-dimensional DBs, use the size directly.
         dbNumElements = AC.createIndexConstant(1, loc);
-        insertSizeAsParameter(db, dbNumElements, 0);
-      } else {
-        /// For multi-dimensional DBs, compute the product of sizes.
-        Value product = AC.createIndexConstant(1, loc);
-        const auto sizes = db->getSizes();
-        const auto offsets = db->getOffsets();
+        auto sizes = dbDepOp.getSizes();
+        auto offsets = dbDepOp.getOffsets();
         auto rank = sizes.size();
-        for (uint64_t rankItr = 0; rankItr < rank; ++rankItr) {
-          insertSizeAsParameter(db, sizes[rankItr], rankItr);
-          insertOffsetAsParameter(db, offsets[rankItr], rankItr);
-          product = builder.create<arith::MulIOp>(loc, product, sizes[rankItr])
-                        .getResult();
+
+        if (rank <= 1) {
+          insertSizeAsParameter(dbDep, dbNumElements, 0);
+        } else {
+          /// For multi-dimensional DBs, compute the product of sizes.
+          Value product = AC.createIndexConstant(1, loc);
+          for (uint64_t rankItr = 0; rankItr < rank; ++rankItr) {
+            insertSizeAsParameter(dbDep, sizes[rankItr], rankItr);
+            insertOffsetAsParameter(dbDep, offsets[rankItr], rankItr);
+            product =
+                builder.create<arith::MulIOp>(loc, product, sizes[rankItr])
+                    .getResult();
+          }
+          dbNumElements = product;
         }
-        dbNumElements = product;
-      }
 
-      /// Input DBs are recorded, accumulate dependency count.
-      if (db->isInMode()) {
-        auto currDep = builder.create<memref::LoadOp>(loc, depC);
-        auto newDep = builder.create<arith::AddIOp>(loc, currDep, dbNumElements)
-                          .getResult();
-        builder.create<memref::StoreOp>(loc, newDep, depC);
-        depsToRecord.push_back(db);
-      }
+        /// Input DBs are recorded, accumulate dependency count.
+        if (dbDep->isInMode()) {
+          auto currDep = builder.create<memref::LoadOp>(loc, depC);
+          auto newDep =
+              builder.create<arith::AddIOp>(loc, currDep, dbNumElements)
+                  .getResult();
+          builder.create<memref::StoreOp>(loc, newDep, depC);
+          depsToRecord.push_back(dbDep);
+        }
 
-      /// Output DBs are satisfied
-      if (db->isOutMode())
-        depsToSatisfy.push_back(db);
+        /// Output DBs are satisfied
+        if (dbDep->isOutMode())
+          depsToSatisfy.push_back(dbDep);
+      }
+      /// Handle DbAllocOp if needed (though they typically don't need EDT
+      /// processing)
+      else if (auto dbAllocOp = dep.getDefiningOp<arts::DbAllocOp>()) {
+        auto *dbAlloc = AC.getOrCreateDbAlloc(dbAllocOp, loc);
+        // DbAlloc ops don't typically need EDT context processing
+        // They are handled directly when used
+      }
     }
   }
 
@@ -218,58 +224,6 @@ void EdtCodegen::process(Location loc) {
     auto idx = AC.createIndexConstant(i, loc);
     auto param = AC.castToInt(AC.Int64, params[i], loc);
     builder.create<memref::StoreOp>(loc, param, paramV, ValueRange{idx});
-  }
-}
-
-void EdtCodegen::processSubviewDependency(Value subview, Location loc) {
-  /// For subview dependencies, we need to trace back to the source DbAllocOp
-  auto subviewOp = subview.getDefiningOp<memref::SubViewOp>();
-  if (!subviewOp)
-    return;
-
-  /// Trace back through the subview chain to find the original DbAllocOp
-  Value source = subviewOp.getSource();
-  while (auto parentSubview = source.getDefiningOp<memref::SubViewOp>()) {
-    source = parentSubview.getSource();
-  }
-
-  /// Check if the source is a DbAllocOp
-  auto dbAllocOp = source.getDefiningOp<arts::DbAllocOp>();
-  if (!dbAllocOp)
-    return;
-
-  /// Determine if this is an input or output dependency based on the mode
-  StringRef mode = dbAllocOp.getMode();
-  bool isInput = (mode == "in" || mode == "inout");
-  bool isOutput = (mode == "out" || mode == "inout");
-
-  /// Set EDT slot
-  Value edtSlot = builder.create<memref::LoadOp>(loc, depC).getResult();
-
-  /// For input dependencies, increment dependency count and add to recording
-  /// list
-  if (isInput) {
-    Value one = AC.createIndexConstant(1, loc);
-    auto currDep = builder.create<memref::LoadOp>(loc, depC);
-    auto newDep = builder.create<arith::AddIOp>(loc, currDep, one).getResult();
-    builder.create<memref::StoreOp>(loc, newDep, depC);
-
-    /// Create a simple db info struct for this subview with proper offsets, sizes, strides
-    auto *dbCG = new DbAllocCodegen(AC, dbAllocOp, loc);
-    dbCG->setGuid(guid);
-    dbCG->setEdtSlot(edtSlot);
-
-    depsToRecord.push_back(dbCG);
-  }
-
-  /// For output dependencies, add to satisfaction list
-  if (isOutput) {
-    /// Create a simple db info struct for this subview with proper offsets, sizes, strides
-    auto *dbCG = new DbAllocCodegen(AC, dbAllocOp, loc);
-    dbCG->setGuid(guid);
-    dbCG->setEdtSlot(edtSlot);
-
-    depsToSatisfy.push_back(dbCG);
   }
 }
 
@@ -306,7 +260,7 @@ void EdtCodegen::processDependencies(Location loc) {
           builder.create<memref::AllocOp>(dbLoc, indexMemRefType);
       builder.create<memref::StoreOp>(dbLoc, dbCG->getEdtSlot(), inSlotAlloc);
 
-      /// OPTIMIZED: Pre-compute loop bounds and cache step constants
+      /// Pre-compute loop bounds and cache step constants
       SmallVector<std::pair<Value, Value>> precomputedBounds;
       precomputedBounds.reserve(dbRank);
       for (unsigned i = 0; i < dbRank; ++i) {
@@ -430,14 +384,22 @@ void EdtCodegen::processDependencies(Location loc) {
   /// ---------------------------------------------------------------------
   LLVM_DEBUG(dbgs() << "- Replacing EDT dependency uses\n");
   for (auto &dep : deps) {
-    auto *db = AC.getDb(dep);
-    assert(db && "Db not found");
-    if (!db->getPtr()) {
-      LLVM_DEBUG(dbgs() << "Db not found or pointer not set\n");
-      continue;
+    auto *dbAlloc = AC.getDbAlloc(dep);
+    auto *dbDep = AC.getDbDep(dep);
+
+    if (dbAlloc) {
+      if (!dbAlloc->getPtr()) {
+        LLVM_DEBUG(dbgs() << "DbAlloc not found or pointer not set\n");
+        continue;
+      }
+      dbAlloc->getOp().replaceAllUsesWith(dbAlloc->getPtr());
+    } else if (dbDep) {
+      if (!dbDep->getPtr()) {
+        LLVM_DEBUG(dbgs() << "DbDep not found or pointer not set\n");
+        continue;
+      }
+      dbDep->getOp().replaceAllUsesWith(dbDep->getPtr());
     }
-    db->getOp().replaceAllUsesWith(db->getPtr());
-    // db->getOp().getDefiningOp()->replaceAllUsesWith(db->getPtr());
   }
 }
 
@@ -468,8 +430,8 @@ void EdtCodegen::outlineRegion(Location loc) {
 
 Value EdtCodegen::createGuid(Value node, Location loc) {
   auto guidEdtType = AC.createIntConstant(1, AC.ArtsType, loc);
-  auto reserveGuidCall = AC.createRuntimeCall(types::ARTSRTL_artsReserveGuidRoute,
-                                              {guidEdtType, node}, loc);
+  auto reserveGuidCall = AC.createRuntimeCall(
+      types::ARTSRTL_artsReserveGuidRoute, {guidEdtType, node}, loc);
   return reserveGuidCall.getResult(0);
 }
 
@@ -479,7 +441,7 @@ func::FuncOp EdtCodegen::createFn(Location loc) {
   auto edtFuncName = "__arts_edt_" + std::to_string(increaseEdtCounter());
   auto edtFuncOp = builder.create<func::FuncOp>(loc, edtFuncName, AC.EdtFn);
   edtFuncOp.setPrivate();
-  AC.getModule().push_back(edtFuncOp);
+  /// Don't manually push_back - builder.create already adds it to the module
   /// Add entry basic block to the function and return operation.
   auto *entryBlock = edtFuncOp.addEntryBlock();
   builder.setInsertionPointToStart(entryBlock);
@@ -539,7 +501,7 @@ void EdtCodegen::createEntry(Location loc) {
 
   for (auto &dep : deps) {
     /// Get corresponding DB.
-    auto *db = AC.getDb(dep);
+    auto *db = AC.getDbDep(dep);
     assert(db && "Db not found");
 
     /// Skip DBs that are not in mode.
@@ -557,11 +519,15 @@ void EdtCodegen::createEntry(Location loc) {
         if (!arts::isDbDepOp(user))
           continue;
         /// Get the db codegen and set the entry information.
-        /// TODO: Implement this
-        // auto userDb = AC.getOrCreateDb(userOp.getOp(), userOp.getLoc());
-        // assert(userDb && "User db not found");
-        // userDb->setGuid(entryGuid);
-        // userDb->setPtr(entryPtr);
+        if (auto userDbDepOp = dyn_cast<arts::DbDepOp>(user)) {
+          auto *userDb = AC.getOrCreateDbDep(userDbDepOp, userDbDepOp.getLoc());
+          if (userDb) {
+            LLVM_DEBUG(dbgs() << "Setting dependent DB attributes from depv: "
+                              << userDbDepOp << "\n");
+            userDb->setGuidInEdt(entryGuid);
+            userDb->setPtrInEdt(entryPtr);
+          }
+        }
       }
     };
 
@@ -577,8 +543,11 @@ void EdtCodegen::createEntry(Location loc) {
                           .getResult();
       auto entryGuid = AC.getGuidFromEdtDep(depVElem, loc);
       auto entryPtr = AC.getPtrFromEdtDep(depVElem, loc);
-      entryDbs[db].guid = entryGuid;
-      entryDbs[db].ptr = entryPtr;
+
+      /// Set EDT context attributes once!
+      db->setGuidInEdt(entryGuid);
+      db->setPtrInEdt(entryPtr);
+
       /// Increment the index.
       auto newIndex =
           builder.create<arith::AddIOp>(loc, curIndex, oneConst).getResult();
@@ -593,22 +562,23 @@ void EdtCodegen::createEntry(Location loc) {
     const auto &dbSizes = db->getSizes();
     const auto &dbOffsets = db->getOffsets();
     const auto dbRank = dbSizes.size();
-    auto &entrySizes = entryDbs[db].sizes;
-    auto &entryOffsets = entryDbs[db].offsets;
+    auto *dbDep = static_cast<DbDepCodegen *>(db);
+    auto &entrySizes = dbDep->getSizesInEdt();
+    auto &entryOffsets = dbDep->getOffsetsInEdt();
     entrySizes.reserve(dbRank);
     entryOffsets.reserve(dbRank);
     for (unsigned i = 0; i < dbRank; ++i) {
       /// Sizes
-      if (entryDbs[db].sizeIndex.count(i))
-        entrySizes.push_back(rewireMap[params[entryDbs[db].sizeIndex[i]]]);
+      if (db->getSizeIndexInEdt().count(i))
+        entrySizes.push_back(rewireMap[params[db->getSizeIndexInEdt()[i]]]);
       else if (auto cstOp = dbSizes[i].getDefiningOp<arith::ConstantIndexOp>())
         entrySizes.push_back(builder.clone(*cstOp)->getResult(0));
       else
         llvm_unreachable("Db size is not a constant");
 
       /// Offsets
-      if (entryDbs[db].offsetIndex.count(i))
-        entryOffsets.push_back(rewireMap[params[entryDbs[db].offsetIndex[i]]]);
+      if (db->getOffsetIndexInEdt().count(i))
+        entryOffsets.push_back(rewireMap[params[db->getOffsetIndexInEdt()[i]]]);
       else if (auto cstOp =
                    dbOffsets[i].getDefiningOp<arith::ConstantIndexOp>())
         entryOffsets.push_back(builder.clone(*cstOp)->getResult(0));
@@ -669,8 +639,8 @@ void EdtCodegen::createEntry(Location loc) {
 
     /// Store the views - now we preserve the original multi-dimensional
     /// structure!
-    entryDbs[db].guid = entryGuid;
-    entryDbs[db].ptr = entryPtr;
+    db->setGuidInEdt(entryGuid);
+    db->setPtrInEdt(entryPtr);
 
     /// For updateUserDb and rewireMap, we need to provide the actual .ptr field
     /// dep Get the first element as representative and extract its .ptr
@@ -681,11 +651,79 @@ void EdtCodegen::createEntry(Location loc) {
         builder.create<memref::LoadOp>(loc, entryGuid, zeroIndices);
     auto firstPtr = builder.create<memref::LoadOp>(loc, entryPtr, zeroIndices);
 
+    /// Set EDT context attributes once!
+    db->setGuidInEdt(firstGuid);
+    db->setPtrInEdt(firstPtr);
+
     updateUserDb(firstGuid, firstPtr);
     /// Replace uses with the actual ptr field from depv (not the whole
     /// structure)
     rewireMap[db->getOp()] = firstPtr;
   }
+
+  /// Ensure all DB operations within the EDT region are properly rewired
+  /// This includes dependent DbDepOps that might not be direct dependencies
+  rewireAllDbsInRegion();
+
+  /// Replace all uses in the region.
+  replaceInRegion(*region, rewireMap, false);
+}
+
+void EdtCodegen::rewireAllDbsInRegion() {
+  if (!region)
+    return;
+
+  LLVM_DEBUG(dbgs() << "Rewiring all DB operations in EDT region\n");
+
+  /// Walk through all operations in the region to find DB operations
+  region->walk([&](Operation *op) {
+    /// Handle DbAllocOp
+    if (auto dbAllocOp = dyn_cast<arts::DbAllocOp>(op)) {
+      Value dbResult = dbAllocOp.getResult();
+
+      /// Check if this DB is already in rewireMap (as a dependency)
+      if (rewireMap.find(dbResult) == rewireMap.end()) {
+        /// This DB is not a direct dependency, but we still need to handle it
+        /// Look for it in the deps list to see if it's there indirectly
+        for (auto &dep : deps) {
+          auto *dbAlloc = AC.getDbAlloc(dep);
+          if (dbAlloc && dbAlloc->getOp() == dbResult) {
+            LLVM_DEBUG(dbgs()
+                       << "Found DbAlloc in deps, should be rewired already\n");
+            break;
+          }
+        }
+      }
+    }
+
+    /// Handle DbDepOp
+    else if (auto dbDepOp = dyn_cast<arts::DbDepOp>(op)) {
+      Value dbResult = dbDepOp.getResult();
+
+      /// Check if this DB is already in rewireMap
+      if (rewireMap.find(dbResult) == rewireMap.end()) {
+        /// This DbDep is not directly rewired yet
+        /// Check if its source has EDT context attributes set
+        Value source = dbDepOp.getSource();
+        auto *sourceDb = AC.getDbDep(source);
+
+        if (sourceDb && sourceDb->getPtrInEdt()) {
+          /// Source has EDT context values, use them for dependent DB
+          LLVM_DEBUG(dbgs() << "Rewiring dependent DbDep using attributes: "
+                            << dbDepOp << "\n");
+          auto *depDb = AC.getDbDep(dbResult);
+          if (depDb) {
+            depDb->setGuidInEdt(sourceDb->getGuidInEdt());
+            depDb->setPtrInEdt(sourceDb->getPtrInEdt());
+            rewireMap[dbResult] = sourceDb->getPtrInEdt();
+          }
+        } else {
+          LLVM_DEBUG(dbgs() << "ERROR: DbDep source has no EDT context: "
+                            << dbDepOp << "\n");
+        }
+      }
+    }
+  });
 
   /// Replace all uses in the region.
   replaceInRegion(*region, rewireMap, false);

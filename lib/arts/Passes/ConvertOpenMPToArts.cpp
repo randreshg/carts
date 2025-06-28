@@ -33,7 +33,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <cstdint>
 #define DEBUG_TYPE "convert-openmp-to-arts"
-#define line "-----------------------------------------\n"
+#define LINE "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
@@ -351,8 +351,8 @@ struct ConvertOpenMPToArtsPass
 /// Pass to convert OpenMP operations to ARTS operations
 void ConvertOpenMPToArtsPass::runOnOperation() {
   LLVM_DEBUG(dbgs() << "\n"
-                    << line << "ConvertOpenMPToArtsPass STARTED\n"
-                    << line);
+                    << LINE << "ConvertOpenMPToArtsPass STARTED\n"
+                    << LINE);
   ModuleOp module = getOperation();
   MLIRContext *context = &getContext();
   RewritePatternSet patterns(context);
@@ -364,7 +364,7 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   (void)applyPatternsAndFoldGreedily(module, std::move(patterns), config);
   removeUndefOps(module);
   LLVM_DEBUG({
-    dbgs() << line << "ConvertOpenMPToArtsPass FINISHED\n" << line;
+    dbgs() << LINE << "ConvertOpenMPToArtsPass FINISHED\n" << LINE;
     module.dump();
   });
 }

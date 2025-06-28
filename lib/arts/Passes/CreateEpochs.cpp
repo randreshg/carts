@@ -29,7 +29,7 @@
 #include <cstdint>
 
 #define DEBUG_TYPE "create-epochs"
-#define line "-----------------------------------------\n"
+#define LINE "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
@@ -142,7 +142,7 @@ struct CreateEpochsPass : public arts::CreateEpochsBase<CreateEpochsPass> {
 void CreateEpochsPass::runOnOperation() {
   ModuleOp module = getOperation();
   LLVM_DEBUG({
-    dbgs() << line << "CreateEpochPass STARTED\n" << line;
+    dbgs() << LINE << "CreateEpochPass STARTED\n" << LINE;
     module.dump();
   });
 
@@ -155,7 +155,7 @@ void CreateEpochsPass::runOnOperation() {
   module.walk([&](arts::BarrierOp barrier) { processBarrierOp(barrier); });
 
   LLVM_DEBUG({
-    dbgs() << line << "CreateEpochPass FINISHED\n" << line;
+    dbgs() << LINE << "CreateEpochPass FINISHED\n" << LINE;
     module.dump();
   });
 }

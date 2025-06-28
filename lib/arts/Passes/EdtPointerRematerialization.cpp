@@ -19,7 +19,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "edt-pointer-rematerialization"
-#define line "-----------------------------------------\n"
+#define LINE "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
@@ -38,8 +38,8 @@ void EdtPointerRematerializationPass::runOnOperation() {
   ModuleOp module = getOperation();
   LLVM_DEBUG({
     dbgs() << "\n"
-           << line << "EdtPointerRematerializationPass STARTED\n"
-           << line;
+           << LINE << "EdtPointerRematerializationPass STARTED\n"
+           << LINE;
     module.dump();
   });
 
@@ -48,8 +48,8 @@ void EdtPointerRematerializationPass::runOnOperation() {
 
   LLVM_DEBUG({
     dbgs() << "\n"
-           << line << "EdtPointerRematerializationPass FINISHED\n"
-           << line;
+           << LINE << "EdtPointerRematerializationPass FINISHED\n"
+           << LINE;
     module.dump();
   });
 }

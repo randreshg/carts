@@ -33,7 +33,7 @@
 #include <cstdint>
 
 #define DEBUG_TYPE "edt"
-#define line "-----------------------------------------\n"
+#define LINE "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
@@ -221,7 +221,7 @@ bool EdtPass::processSyncTaskEdts() {
 void EdtPass::runOnOperation() {
   module = getOperation();
   LLVM_DEBUG({
-    dbgs() << "\n" << line << "EdtPass STARTED\n" << line;
+    dbgs() << "\n" << LINE << "EdtPass STARTED\n" << LINE;
     module->dump();
   });
 
@@ -234,7 +234,7 @@ void EdtPass::runOnOperation() {
   removeOps(module, builder, opsToRemove);
 
   LLVM_DEBUG({
-    dbgs() << line << "EdtPass FINISHED\n" << line;
+    dbgs() << LINE << "EdtPass FINISHED\n" << LINE;
     module->dump();
   });
 }

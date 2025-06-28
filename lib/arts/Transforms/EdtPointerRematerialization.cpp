@@ -18,7 +18,7 @@
 
 /// LLVM support
 #define DEBUG_TYPE "edt-pointer-rematerialization"
-#define line "-----------------------------------------\n"
+#define LINE "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 

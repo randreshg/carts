@@ -33,7 +33,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "preprocess-dbs"
-#define line "-----------------------------------------\n"
+#define LINE "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
@@ -80,7 +80,7 @@ void PreprocessDbsPass::runOnOperation() {
   ModuleOp module = getOperation();
 
   LLVM_DEBUG({
-    dbgs() << line << "PreprocessDbsPass START\n" << line;
+    dbgs() << LINE << "PreprocessDbsPass START\n" << LINE;
     module.dump();
   });
 
@@ -102,7 +102,7 @@ void PreprocessDbsPass::runOnOperation() {
   removeOps(module, AC->getBuilder(), opsToRemove);
 
   LLVM_DEBUG({
-    dbgs() << line << "PreprocessDbsPass FINISHED\n" << line;
+    dbgs() << LINE << "PreprocessDbsPass FINISHED\n" << LINE;
     module.dump();
   });
 
