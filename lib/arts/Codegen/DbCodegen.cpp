@@ -59,18 +59,7 @@ void DbAllocCodegen::create(arts::DbAllocOp depOp, Location loc) {
   AC.setInsertionPoint(dbOp);
 
   auto currentNode = AC.getCurrentNode(loc);
-
-  /// Calculate the element type size
-  /// For arts.db_alloc operations, the result type is memref<memref<?xi8>>
-  /// We need to get the element type from the inner memref type
-  auto resultType = dbOp.getResult().getType().cast<MemRefType>();
-  auto innerMemrefType = resultType.getElementType().cast<MemRefType>();
-  auto elementType = innerMemrefType.getElementType();
-  auto elementSizeInBits =
-      AC.getMLIRDataLayout().getTypeSizeInBits(elementType);
-  auto elementSizeValue =
-      AC.createIntConstant(elementSizeInBits / 8, AC.Int64, loc);
-  const auto tySize = elementSizeValue;
+  const auto tySize = calculateElementSize(loc);
 
   /// Handle the case of a single db
   if (hasSingleSize()) {
@@ -127,15 +116,26 @@ void DbAllocCodegen::create(arts::DbAllocOp depOp, Location loc) {
   createDbs(0, indices);
 }
 
+Value DbAllocCodegen::calculateElementSize(Location loc) {
+  /// Calculate the element type size
+  /// For arts.db_alloc operations, the result type is memref<memref<?xi8>>
+  /// We need to get the element type from the inner memref type
+  auto resultType = dbOp.getResult().getType().cast<MemRefType>();
+  auto innerMemrefType = resultType.getElementType().cast<MemRefType>();
+  auto elementType = innerMemrefType.getElementType();
+  auto elementSizeInBits =
+      AC.getMLIRDataLayout().getTypeSizeInBits(elementType);
+  return AC.createIntConstant(elementSizeInBits / 8, AC.Int64, loc);
+}
+
 Value DbAllocCodegen::getMode() {
-  auto Loc = UnknownLoc::get(builder.getContext());
   /// Values from Arts.h
   /// ARTS_DB_PIN = 10
   auto enumValue = 10;
   /// ARTS_DB_READ = 8
   if (isInMode())
     enumValue = 8;
-  return AC.createIntConstant(enumValue, AC.Int32, Loc);
+  return AC.createIntConstant(enumValue, AC.Int32, AC.getUnknownLoc());
 }
 
 Value DbAllocCodegen::createGuid(Value node, Value mode, Location loc) {
@@ -144,10 +144,9 @@ Value DbAllocCodegen::createGuid(Value node, Value mode, Location loc) {
   return reserveGuidCall.getResult(0);
 }
 
-// DbDepCodegen implementation
 DbDepCodegen::DbDepCodegen(ArtsCodegen &AC, arts::DbDepOp dbOp, Location loc)
     : AC(AC), builder(AC.getBuilder()), dbOp(dbOp) {
-  create(dbOp, loc);
+  create(loc);
 }
 
 Value DbDepCodegen::getOp() { return dbOp.getResult(); }
@@ -173,64 +172,41 @@ bool DbDepCodegen::isInMode() {
   return (mode == "in" || mode == "inout");
 }
 
-void DbDepCodegen::create(arts::DbDepOp depOp, Location loc) {
-  OpBuilder::InsertionGuard IG(builder);
-  AC.setInsertionPoint(dbOp);
-
-  /// Check if GUID and pointer are already set (e.g., from depv processing in
-  /// EdtCodegen)
-  if (guid && ptr) {
-    LLVM_DEBUG(
-        DBGS() << "DbDep already has GUID/ptr from depv - skipping creation\n");
-    return;
-  }
-
-  /// For DbDep operations, we need to extract the GUID and pointer
-  /// from the source datablock (which should be a DbAllocOp or another DbDepOp)
+void DbDepCodegen::create(Location loc) {
+  /// For DbDep operations, we need to extract the GUID from the source
+  /// datablock
+  auto dbParentEdt = dbOp->getParentOfType<EdtOp>();
   Value source = dbOp.getSource();
   DbAllocCodegen *sourceDbAlloc = nullptr;
   DbDepCodegen *sourceDbDep = nullptr;
   if (auto sourceDbAllocOp = source.getDefiningOp<arts::DbAllocOp>()) {
     sourceDbAlloc = AC.getDbAlloc(sourceDbAllocOp);
     assert(sourceDbAlloc && "Source DbAlloc not found");
+    /// If the source db is in a different EDT, we need to create a new db
+    if (dbParentEdt == sourceDbAllocOp->getParentOfType<EdtOp>()) {
+      /// If the source db is in the same EDT, we can use the existing db
+      guid = sourceDbAlloc->getGuid();
+      ptr = sourceDbAlloc->getPtr();
+    } else {
+      llvm_unreachable("Source DbAlloc is in a different EDT");
+    }
   } else if (auto sourceDbDepOp = source.getDefiningOp<arts::DbDepOp>()) {
     sourceDbDep = AC.getDbDep(sourceDbDepOp);
     assert(sourceDbDep && "Source DbDep not found");
-  }
-  else
-    llvm_unreachable("Source is not a DbAllocOp or DbDepOp");
-
-  /// Set GUID from the source datablock if not already set
-  if (!guid)
-    guid = sourceDbAlloc ? sourceDbAlloc->getGuid() : sourceDbDep->getGuid();
-
-  /// For dependencies, we may need to create a subview of the source
-  if (!ptr) {
-    auto resultType = dbOp.getResult().getType().cast<MemRefType>();
-    auto sourceType = source.getType().cast<MemRefType>();
-    Value sourcePtr =
-        sourceDbAlloc ? sourceDbAlloc->getPtr() : sourceDbDep->getPtr();
-
-    /// If the types match exactly, just use the source pointer
-    if (resultType == sourceType) {
-      ptr = sourcePtr;
+    if (dbParentEdt == sourceDbDepOp->getParentOfType<EdtOp>()) {
+      /// If the source db is in the same EDT, we can use the existing db
+      guid = sourceDbDep->getGuid();
+      ptr = sourceDbDep->getPtr();
     } else {
-      /// Create a subview with the provided offsets and sizes
-      auto offsets = dbOp.getOffsets();
-      auto sizes = dbOp.getSizes();
-      if (!offsets.empty() && !sizes.empty()) {
-        SmallVector<Value> strides;
-        for (size_t i = 0; i < sizes.size(); ++i)
-          strides.push_back(AC.createIndexConstant(1, loc));
-
-        ptr = builder.create<memref::SubViewOp>(loc, resultType, sourcePtr,
-                                                offsets, sizes, strides);
-      } else {
-        /// Fallback to cast
-        ptr = builder.create<memref::CastOp>(loc, resultType, sourcePtr);
-      }
+      /// If the source db is in a different EDT, we get the guid and ptr from
+      /// the EDT
+      guid = sourceDbDep->getGuidInEdt();
+      ptr = sourceDbDep->getPtrInEdt();
     }
+  } else {
+    LLVM_DEBUG(DBGS() << "Source is not a DbAllocOp or DbDepOp: " << source
+                      << "\n" << dbOp);
+    llvm_unreachable("Source is not a DbAllocOp or DbDepOp");
   }
-
   AC.createPrintfCall(loc, METADATA "Created DbDep dependency\n", {});
 }

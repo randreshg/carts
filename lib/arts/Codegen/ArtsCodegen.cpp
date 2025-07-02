@@ -103,8 +103,7 @@ func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
     switch (FnID) {
 #define ARTS_RTL(Enum, Str, ...)                                               \
   case Enum:                                                                   \
-    funcOp =                                                                   \
-        builder.create<func::FuncOp>(builder.getUnknownLoc(), Str, fnType);    \
+    funcOp = builder.create<func::FuncOp>(getUnknownLoc(), Str, fnType);       \
     break;
 #include "arts/Codegen/ARTSKinds.def"
     }
@@ -204,6 +203,9 @@ DbDepCodegen *ArtsCodegen::getOrCreateDbDep(DbDepOp dbOp, Location loc) {
 
 void ArtsCodegen::addDbDependency(Value dbGuid, Value edtGuid, Value edtSlot,
                                   Location loc) {
+  assert(dbGuid && "Db guid should not be null");
+  assert(edtGuid && "Edt guid should not be null");
+  assert(edtSlot && "Edt slot should not be null");
   auto edtSlotInt = castToInt(Int32, edtSlot, loc);
   createRuntimeCall(ARTSRTL_artsDbAddDependence, {dbGuid, edtGuid, edtSlotInt},
                     loc);
@@ -215,27 +217,6 @@ void ArtsCodegen::incrementDbLatchCount(Value dbGuid, Location loc) {
 
 void ArtsCodegen::decrementDbLatchCount(Value dbGuid, Location loc) {
   createRuntimeCall(ARTSRTL_artsDbDecrementLatch, {dbGuid}, loc);
-}
-
-/// Simple EDT DB access using attributes
-Value ArtsCodegen::getDbPtrInEdt(Value dbOp) {
-  // Try as DbDep first (most common in EDT context)
-  if (auto dbDepOp = dbOp.getDefiningOp<DbDepOp>()) {
-    if (auto *dbDep = getDbDep(dbDepOp)) {
-      return dbDep->getPtrInEdt();
-    }
-  }
-  return Value{};
-}
-
-Value ArtsCodegen::getDbGuidInEdt(Value dbOp) {
-  // Try as DbDep first (most common in EDT context)
-  if (auto dbDepOp = dbOp.getDefiningOp<DbDepOp>()) {
-    if (auto *dbDep = getDbDep(dbDepOp)) {
-      return dbDep->getGuidInEdt();
-    }
-  }
-  return Value{};
 }
 
 /// EDT
@@ -267,17 +248,15 @@ Value ArtsCodegen::createEpoch(Value finishEdtGuid, Value finishEdtSlot,
 
 /// Utils
 Value ArtsCodegen::getGuidFromEdtDep(Value dep, Location loc) {
-  auto zeroInt = createIntConstant(0, Int32, loc);
+  const auto zeroInt = createIntConstant(0, Int32, loc);
   auto guidValue = builder.create<LLVM::GEPOp>(loc, llvmPtr, ArtsEdtDep, dep,
                                                ValueRange{zeroInt, zeroInt});
-  auto loadGuid =
-      builder.create<LLVM::LoadOp>(loc, ArtsGuid, guidValue.getResult());
-  return loadGuid.getResult();
+  return builder.create<LLVM::LoadOp>(loc, ArtsGuid, guidValue.getResult());
 }
 
 Value ArtsCodegen::getPtrFromEdtDep(Value dep, Location loc) {
-  auto zeroInt = createIntConstant(0, Int32, loc);
-  auto twoInt = createIntConstant(2, Int32, loc);
+  const auto zeroInt = createIntConstant(0, Int32, loc);
+  const auto twoInt = createIntConstant(2, Int32, loc);
   auto gepOp = builder.create<LLVM::GEPOp>(loc, llvmPtr, ArtsEdtDep, dep,
                                            ValueRange{zeroInt, twoInt});
   return builder.create<LLVM::LoadOp>(loc, VoidPtr, gepOp.getResult());
@@ -662,4 +641,27 @@ void ArtsCodegen::setInsertionPointAfter(Operation *op) {
 
 void ArtsCodegen::setInsertionPoint(ModuleOp &module) {
   builder.setInsertionPointToStart(module.getBody());
+}
+
+void ArtsCodegen::addReplacement(Value original, Value newValue,
+                                 Region *region) {
+  replacementMap[region ? region : &emptyRegion][original] = newValue;
+}
+
+void ArtsCodegen::applyReplacements(Region *region) {
+  assert(region && "Region must be provided");
+  replaceInRegion(*region, replacementMap[region]);
+}
+
+void ArtsCodegen::applyReplacements() {
+  LLVM_DEBUG(DBGS() << "Applying " << replacementMap.size()
+                    << " delayed replacements\n");
+
+  for (auto &region : replacementMap) {
+    if (region.first == &emptyRegion)
+      replaceUses(region.second);
+    else
+      replaceInRegion(*region.first, region.second);
+  }
+  replacementMap.clear();
 }
