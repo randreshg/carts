@@ -45,6 +45,7 @@ private:
   
   Value createGuid(Value node, Value mode, Location loc);
   Value getMode();
+  Value calculateElementSize(Location loc);
 };
 
 /// DbDepCodegen - Handles datablock dependencies (accessing existing DBs from depv)
@@ -71,7 +72,7 @@ public:
   ValueRange getSizes();
   ValueRange getOffsets();
   ValueRange getIndices();
-  void create(arts::DbDepOp dbOp, Location loc);
+  void create(Location loc);
 
   /// EDT context values (set once during EDT entry construction)
   Value getGuidInEdt() { return guidInEdt; }

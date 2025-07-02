@@ -16,8 +16,6 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/DataTypes.h"
-#include <map>
-#include <memory>
 
 namespace mlir {
 namespace arts {
@@ -40,13 +38,14 @@ public:
   llvm::DataLayout &getLLVMDataLayout() { return llvmDL; }
   mlir::DataLayout &getMLIRDataLayout() { return mlirDL; }
   bool isDebug() const { return debug; }
+  Location getUnknownLoc() { return UnknownLoc::get(module.getContext()); }
 
   /// Runtime function management
   func::FuncOp getOrCreateRuntimeFunction(RuntimeFunction FnID);
   func::CallOp createRuntimeCall(RuntimeFunction FnID, ArrayRef<Value> args,
                                  Location loc);
 
-  /// DB management - separate maps for different purposes
+  /// DB management
   DbAllocCodegen *getDbAlloc(Value op);
   DbAllocCodegen *getDbAlloc(DbAllocOp dbOp);
   DbDepCodegen *getDbDep(Value op);
@@ -61,14 +60,10 @@ public:
   void incrementDbLatchCount(Value dbGuid, Location loc);
   void decrementDbLatchCount(Value dbGuid, Location loc);
 
-  /// Simple EDT DB access using attributes
-  Value getDbPtrInEdt(Value dbOp);
-  Value getDbGuidInEdt(Value dbOp);
-
   /// EDT management
   EdtCodegen *getEdt(Region *region);
   EdtCodegen *createEdt(SmallVector<Value> *opDeps, Region *region,
-                        Value *epoch, Location *loc, bool build = false);
+                        Value *epoch, Location *loc, bool build = true);
 
   /// Epoch management
   Value createEpoch(Value finishEdtGuid, Value finishEdtSlot, Location loc);
@@ -116,6 +111,11 @@ public:
   void setInsertionPointAfter(Operation *op);
   void setInsertionPoint(ModuleOp &module);
 
+  /// Replacement map
+  void addReplacement(Value original, Value newValue, Region *region = nullptr);
+  void applyReplacements(Region *region);
+  void applyReplacements();
+
 /// Types
 ///{
 #define ARTS_TYPE(VarName, InitValue) Type VarName = nullptr;
@@ -136,16 +136,20 @@ private:
   mlir::DataLayout &mlirDL;
 
   /// Other Attributes
-  unsigned edtCounter = 0;
+  // unsigned edtCounter = 0;
   llvm::DenseMap<Value, DbAllocCodegen *> dbAllocs;
   llvm::DenseMap<Value, DbDepCodegen *> dbDeps;
   llvm::DenseMap<Region *, EdtCodegen *> edts;
   llvm::DenseMap<RuntimeFunction, func::FuncOp> runtimeFunctionCache;
   llvm::StringMap<LLVM::GlobalOp> llvmStringGlobals;
+  llvm::DenseMap<Region *, llvm::DenseMap<Value, Value>> replacementMap;
   bool debug = false;
 
   /// Helper functions
   void initializeTypes();
+
+  /// Aux
+  Region emptyRegion;
 };
 
 } // namespace arts

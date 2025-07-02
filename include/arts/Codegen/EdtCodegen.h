@@ -13,6 +13,7 @@
 #include "mlir/IR/Value.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include <functional>
 #include <vector>
 
 namespace mlir {
@@ -24,25 +25,35 @@ class DbDepCodegen;
 
 class EdtCodegen {
 public:
+  //===--------------------------------------------------------------------===//
+  // Public Interface
+  //===--------------------------------------------------------------------===//
+
   EdtCodegen(ArtsCodegen &AC, SmallVector<Value> *opDeps = nullptr,
              Region *region = nullptr, Value *epoch = nullptr,
              Location *loc = nullptr, bool buildEdt = false);
+
   void build(Location loc);
+
+  /// Getters
   func::FuncOp getFunc();
   Value getGuid();
   Value getNode();
   SmallVector<Value> &getParams();
+
+  /// Setters
   void setFunc(func::FuncOp func);
   void setGuid(Value guid);
   void setNode(Value node);
   void setParams(SmallVector<Value> params);
   void setDeps(SmallVector<Value> deps);
   void setDepC(Value depC);
+
+  /// Parameter management
   std::pair<bool, int> insertParam(Value param);
 
-
-
 private:
+  /// Member Variables
   ArtsCodegen &AC;
   OpBuilder &builder;
   Region *region = nullptr;
@@ -61,13 +72,64 @@ private:
   llvm::DenseMap<Value, unsigned> entryEvents;
   Value fnParamV = nullptr;
   Value fnDepV = nullptr;
+
+  /// Cache parameter insertions to avoid duplicates across multiple calls
+  llvm::DenseMap<Value, unsigned> parameterCache;
+
+  /// Core Processing
   void process(Location loc);
-  void processDependencies(Location loc);
-  void outlineRegion(Location loc);
-  Value createGuid(Value node, Location loc);
+  void analyzeDependencies(Location loc);
+  void setupParameters(Location loc);
+  void satisfyDependencies(Location loc);
+
+  /// Function Creation and Outlining
   func::FuncOp createFn(Location loc);
+  Value createGuid(Value node, Location loc);
   void createEntry(Location loc);
+  void outlineRegion(Location loc);
   void rewireAllDbsInRegion();
+
+  /// Entry Creation Helpers
+  void handleSingleDimensionDep(DbDepCodegen *db, Value dep,
+                                       Value indexAlloc,
+                                       const Value &depStructSize,
+                                       const Value &fnDepVPtr, Location loc);
+  void handleMultiDimensionDep(DbDepCodegen *db, Value dep,
+                                      Value indexAlloc,
+                                      const Value &depStructSize,
+                                      const Value &fnDepVPtr, Location loc);
+
+  /// Parameter Insertion Helpers
+  void insertValueAsParameter(Value value, uint64_t index,
+                              const std::function<void(unsigned)> &setIndex);
+  void insertSizeParameter(DbDepCodegen *dbDep, Value size, uint64_t sizeIdx);
+  void insertOffsetParameter(DbDepCodegen *dbDep, Value offset,
+                             uint64_t offsetIdx);
+
+  /// Dependency Processing Helpers
+  void recordInModeDependencies(Location loc);
+  void incrementOutModeLatchCounts(Location loc);
+  void replaceEdtDependencyUses(Location loc);
+
+  /// Datablock Processing Helpers
+  void processSingleDimensionInMode(DbDepCodegen *dbCG, Location loc);
+  void processMultiDimensionInMode(DbDepCodegen *dbCG, Location loc);
+  void processSingleDimensionOutMode(DbDepCodegen *dbCG, Location loc);
+  void processMultiDimensionOutMode(DbDepCodegen *dbCG, Location loc);
+
+  /// Recursive Datablock Processing
+  void addDependenciesForMultiDimDb(Value dbGuid, Value guid, Value inSlotAlloc,
+                                    const SmallVector<Value> &dbSizes,
+                                    const SmallVector<Value> &dbOffsets,
+                                    const SmallVector<Value> &dbIndices,
+                                    Location loc);
+  void incrementLatchCountsForMultiDimDb(Value dbGuid, Value outSlotAlloc,
+                                         const SmallVector<Value> &dbSizes,
+                                         const SmallVector<Value> &dbOffsets,
+                                         const SmallVector<Value> &dbIndices,
+                                         Location loc);
+
+  /// Static Members
   static unsigned edtCounter;
   static unsigned increaseEdtCounter() { return ++EdtCodegen::edtCounter; }
 };
