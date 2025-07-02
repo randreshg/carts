@@ -41,7 +41,7 @@ python3 run_comparison.py \
 int main() {
   srand(time(NULL));
   printf("Main EDT: Starting...\n");
-
+  
   int shared_number = rand() % 100 + 1;
   int random_number = rand() % 10 + 1;
   printf("EDT 0: The initial number is %d/%d\n", shared_number, random_number);
