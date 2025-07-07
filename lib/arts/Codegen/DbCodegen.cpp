@@ -22,12 +22,29 @@
 using namespace mlir;
 using namespace mlir::arts;
 
+// ARTS DB Mode Constants
+namespace {
+/// Taken from arts.h
+constexpr int ARTS_DB_PIN = 10; // Pin mode for write access
+constexpr int ARTS_DB_READ = 8; // Read-only mode
+} // namespace
+
 class ArtsCodegen;
 
 /// DbAllocCodegen
 DbAllocCodegen::DbAllocCodegen(ArtsCodegen &AC, arts::DbAllocOp dbOp,
                                Location loc)
     : AC(AC), builder(AC.getBuilder()), dbOp(dbOp) {
+  LLVM_DEBUG(dbgs() << "DbAllocCodegen Constructor\n");
+  /// Set parent Op to child op
+  for (auto *op : dbOp->getUsers()) {
+    if (auto dbDepOp = dyn_cast<arts::DbDepOp>(op)) {
+      LLVM_DEBUG(dbgs() << " - DbDepOp: " << dbDepOp << "\n");
+      auto dbDep = AC.getOrCreateDbDep(dbDepOp, dbOp);
+      assert(dbDep && "DbDep could not be created");
+      break;
+    }
+  }
   create(dbOp, loc);
 }
 
@@ -129,12 +146,9 @@ Value DbAllocCodegen::calculateElementSize(Location loc) {
 }
 
 Value DbAllocCodegen::getMode() {
-  /// Values from Arts.h
-  /// ARTS_DB_PIN = 10
-  auto enumValue = 10;
-  /// ARTS_DB_READ = 8
+  auto enumValue = ARTS_DB_PIN;
   if (isInMode())
-    enumValue = 8;
+    enumValue = ARTS_DB_READ;
   return AC.createIntConstant(enumValue, AC.Int32, AC.getUnknownLoc());
 }
 
@@ -144,9 +158,23 @@ Value DbAllocCodegen::createGuid(Value node, Value mode, Location loc) {
   return reserveGuidCall.getResult(0);
 }
 
-DbDepCodegen::DbDepCodegen(ArtsCodegen &AC, arts::DbDepOp dbOp, Location loc)
-    : AC(AC), builder(AC.getBuilder()), dbOp(dbOp) {
-  create(loc);
+DbDepCodegen::DbDepCodegen(ArtsCodegen &AC, arts::DbDepOp dbOp,
+                           Operation *parentOp)
+    : AC(AC), builder(AC.getBuilder()), dbOp(dbOp), parentOp(parentOp) {
+  auto edtParent = dbOp->getParentOfType<EdtOp>();
+  if (parentOp->getParentOfType<EdtOp>() != edtParent)
+    parentOpIsInSameEdt = false;
+  assert(parentOp && "Parent op not found");
+  LLVM_DEBUG(dbgs() << "  - DbDepCodegen Constructor\n");
+  /// Propagate the parent op to the child op
+  for (auto *op : dbOp->getUsers()) {
+    if (auto dbDepOp = dyn_cast<arts::DbDepOp>(op)) {
+      LLVM_DEBUG(dbgs() << "   - DbDepOp: " << dbDepOp << "\n");
+      auto dbDep = AC.getOrCreateDbDep(dbDepOp, dbOp);
+      assert(dbDep && "DbDep could not be created");
+      break;
+    }
+  }
 }
 
 Value DbDepCodegen::getOp() { return dbOp.getResult(); }
@@ -172,41 +200,51 @@ bool DbDepCodegen::isInMode() {
   return (mode == "in" || mode == "inout");
 }
 
-void DbDepCodegen::create(Location loc) {
-  /// For DbDep operations, we need to extract the GUID from the source
-  /// datablock
-  auto dbParentEdt = dbOp->getParentOfType<EdtOp>();
-  Value source = dbOp.getSource();
+void DbDepCodegen::init(Location loc) {
+  LLVM_DEBUG(dbgs() << "DbDepCodegen::init() - initializing DbDep for "
+                    << dbOp);
+  /// The init function sets the guid and ptr for the DbDep.
+  if (guid || ptr)
+    return;
+
+  /// For DbDep operations, we need to extract the GUID from the source Db
   DbAllocCodegen *sourceDbAlloc = nullptr;
   DbDepCodegen *sourceDbDep = nullptr;
-  if (auto sourceDbAllocOp = source.getDefiningOp<arts::DbAllocOp>()) {
+  if (auto sourceDbAllocOp = dyn_cast<arts::DbAllocOp>(parentOp)) {
     sourceDbAlloc = AC.getDbAlloc(sourceDbAllocOp);
     assert(sourceDbAlloc && "Source DbAlloc not found");
-    /// If the source db is in a different EDT, we need to create a new db
-    if (dbParentEdt == sourceDbAllocOp->getParentOfType<EdtOp>()) {
-      /// If the source db is in the same EDT, we can use the existing db
+    /// If the source Db is in the same EDT, we can use the existing Db
+    if (parentOpIsInSameEdt) {
       guid = sourceDbAlloc->getGuid();
       ptr = sourceDbAlloc->getPtr();
     } else {
       llvm_unreachable("Source DbAlloc is in a different EDT");
     }
-  } else if (auto sourceDbDepOp = source.getDefiningOp<arts::DbDepOp>()) {
+  } else if (auto sourceDbDepOp = dyn_cast<arts::DbDepOp>(parentOp)) {
     sourceDbDep = AC.getDbDep(sourceDbDepOp);
     assert(sourceDbDep && "Source DbDep not found");
-    if (dbParentEdt == sourceDbDepOp->getParentOfType<EdtOp>()) {
-      /// If the source db is in the same EDT, we can use the existing db
+    /// If the source Db is in the same EDT, we can use the existing Db
+    if (parentOpIsInSameEdt) {
       guid = sourceDbDep->getGuid();
       ptr = sourceDbDep->getPtr();
-    } else {
-      /// If the source db is in a different EDT, we get the guid and ptr from
-      /// the EDT
+    }
+    /// If the source Db is in a different EDT, we get the guid and ptr from
+    /// the EDT context.
+    else {
       guid = sourceDbDep->getGuidInEdt();
       ptr = sourceDbDep->getPtrInEdt();
+      assert(guid && ptr &&
+             "EDT context values not available yet for source "
+             "DbDep");
     }
   } else {
-    LLVM_DEBUG(DBGS() << "Source is not a DbAllocOp or DbDepOp: " << source
-                      << "\n" << dbOp);
+    LLVM_DEBUG(DBGS() << "Source is not a DbAllocOp or DbDepOp: " << parentOp
+                      << "\n"
+                      << dbOp);
     llvm_unreachable("Source is not a DbAllocOp or DbDepOp");
   }
+  /// Debug
+  OpBuilder::InsertionGuard IG(builder);
+  AC.setInsertionPoint(dbOp);
   AC.createPrintfCall(loc, METADATA "Created DbDep dependency\n", {});
 }

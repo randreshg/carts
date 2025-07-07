@@ -136,6 +136,7 @@ void ConvertArtsToLLVMPass::runOnOperation() {
 
   LLVM_DEBUG({
     dbgs() << LINE << "ConvertArtsToLLVMPass START\n" << LINE;
+    dbgs() << "Input module:\n";
     module.dump();
   });
 
@@ -154,11 +155,17 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   if (failed(processOperations(mainFunc)))
     return signalPassFailure();
 
+  LLVM_DEBUG({
+    dbgs() << LINE << "Module after processing operations (before finalization):\n";
+    module.dump();
+  });
+
   /// Finalize conversion and cleanup
   finalizeConversion();
 
   LLVM_DEBUG({
     dbgs() << LINE << "ConvertArtsToLLVMPass COMPLETED\n" << LINE;
+    dbgs() << "Final module:\n";
     module.dump();
     dbgs() << LINE << LINE;
   });
@@ -220,6 +227,10 @@ LogicalResult ConvertArtsToLLVMPass::processOperations(func::FuncOp func) {
     /// Handle DB alloc operations
     if (auto dbAllocOp = dyn_cast<arts::DbAllocOp>(op))
       return handleWalkResult(handleDbAlloc(dbAllocOp));
+
+    /// Handle DbDep operations - they are managed by DbDepCodegen but need to be removed
+    if (auto dbDepOp = dyn_cast<arts::DbDepOp>(op))
+      return handleWalkResult(handleDbDep(dbDepOp));
 
     return WalkResult::advance();
   });
@@ -470,18 +481,15 @@ LogicalResult ConvertArtsToLLVMPass::handleDbAlloc(DbAllocOp op) {
 }
 
 LogicalResult ConvertArtsToLLVMPass::handleDbDep(DbDepOp op) {
-  LLVM_DEBUG(DBGS() << "Processing top-level DbDep: " << op << "\n");
+  LLVM_DEBUG(DBGS() << "Processing DbDep: " << op << "\n");
   statistics.dbDepOps++;
 
-  OpBuilder::InsertionGuard IG(AC->getBuilder());
-  AC->setInsertionPoint(op);
-
-  auto *dbCodegen = AC->getOrCreateDbDep(op, op.getLoc());
-  if (!dbCodegen)
-    return emitOpError(op, "Failed to create DbDepCodegen");
-
-  AC->addReplacement(op.getResult(), dbCodegen->getPtr());
+  /// DbDep operations are processed through DbDepCodegen objects
+  /// when their source DbAlloc operations are handled. Mark them for removal
+  /// since their replacements will be set up by the DbDepCodegen infrastructure.
   opsToRemove.insert(op);
+  LLVM_DEBUG(DBGS() << "DbDep marked for removal: " << op << "\n");
+
   return success();
 }
 
