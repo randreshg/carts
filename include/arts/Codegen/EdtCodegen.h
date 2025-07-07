@@ -87,14 +87,13 @@ private:
   Value createGuid(Value node, Location loc);
   void createEntry(Location loc);
   void outlineRegion(Location loc);
-  void rewireAllDbsInRegion();
 
   /// Entry Creation Helpers
-  void handleSingleDimensionDep(DbDepCodegen *db, Value dep,
+  void handleSingleDep(DbDepCodegen *db, Value dep,
                                        Value indexAlloc,
                                        const Value &depStructSize,
                                        const Value &fnDepVPtr, Location loc);
-  void handleMultiDimensionDep(DbDepCodegen *db, Value dep,
+  void handleMultiDep(DbDepCodegen *db, Value dep,
                                       Value indexAlloc,
                                       const Value &depStructSize,
                                       const Value &fnDepVPtr, Location loc);
@@ -107,23 +106,23 @@ private:
                              uint64_t offsetIdx);
 
   /// Dependency Processing Helpers
-  void recordInModeDependencies(Location loc);
-  void incrementOutModeLatchCounts(Location loc);
-  void replaceEdtDependencyUses(Location loc);
+  void recordInDeps(Location loc);
+  void incrementOutLatchCounts(Location loc);
+  void replaceEdtDepUses(Location loc);
 
   /// Datablock Processing Helpers
-  void processSingleDimensionInMode(DbDepCodegen *dbCG, Location loc);
-  void processMultiDimensionInMode(DbDepCodegen *dbCG, Location loc);
-  void processSingleDimensionOutMode(DbDepCodegen *dbCG, Location loc);
-  void processMultiDimensionOutMode(DbDepCodegen *dbCG, Location loc);
+  void recordSingleInDep(DbDepCodegen *dbCG, Location loc);
+  void recordMultiInDep(DbDepCodegen *dbCG, Location loc);
+  void incrementSingleOutDep(DbDepCodegen *dbCG, Location loc);
+  void incrementMultiOutDep(DbDepCodegen *dbCG, Location loc);
 
   /// Recursive Datablock Processing
-  void addDependenciesForMultiDimDb(Value dbGuid, Value guid, Value inSlotAlloc,
+  void addDepsForMultiDb(Value dbGuid, Value guid, Value inSlotAlloc,
                                     const SmallVector<Value> &dbSizes,
                                     const SmallVector<Value> &dbOffsets,
                                     const SmallVector<Value> &dbIndices,
                                     Location loc);
-  void incrementLatchCountsForMultiDimDb(Value dbGuid, Value outSlotAlloc,
+  void incrementLatchCountsForMultiDb(Value dbGuid, Value outSlotAlloc,
                                          const SmallVector<Value> &dbSizes,
                                          const SmallVector<Value> &dbOffsets,
                                          const SmallVector<Value> &dbIndices,

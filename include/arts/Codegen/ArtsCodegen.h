@@ -51,12 +51,11 @@ public:
   DbDepCodegen *getDbDep(Value op);
   DbDepCodegen *getDbDep(DbDepOp dbOp);
   DbAllocCodegen *createDbAlloc(DbAllocOp dbOp, Location loc);
-  DbDepCodegen *createDbDep(DbDepOp dbOp, Location loc);
+  DbDepCodegen *createDbDep(DbDepOp dbOp, Operation *parentOp = nullptr);
   DbAllocCodegen *getOrCreateDbAlloc(DbAllocOp dbOp, Location loc);
-  DbDepCodegen *getOrCreateDbDep(DbDepOp dbOp, Location loc);
+  DbDepCodegen *getOrCreateDbDep(DbDepOp dbOp, Operation *parentOp = nullptr);
 
-  void addDbDependency(Value dbGuid, Value edtGuid, Value edtSlot,
-                       Location loc);
+  void addDbDep(Value dbGuid, Value edtGuid, Value edtSlot, Location loc);
   void incrementDbLatchCount(Value dbGuid, Location loc);
   void decrementDbLatchCount(Value dbGuid, Location loc);
 

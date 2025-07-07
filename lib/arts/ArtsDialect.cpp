@@ -300,11 +300,11 @@ void EdtOp::getEffects(
   }
 
   /// Otherwise, collect effects from each dependency
-  for (auto dep : dependencies) {
+  // for (auto dep : dependencies) {
     // TODO: Implement getEffects for DbDepOp
     // if (auto dbOp = dep.getDefiningOp<DbDepOp>())
     //   dbOp.getEffects(effects);
-  }
+  // }
 }
 
 /// Retrieve dependencies.

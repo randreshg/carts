@@ -114,7 +114,7 @@ void EdtCodegen::analyzeDependencies(Location loc) {
     auto dbDepOp = dep.getDefiningOp<arts::DbDepOp>();
     assert(dbDepOp && "Dependency is not a DbDepOp");
 
-    auto *dbDep = AC.getOrCreateDbDep(dbDepOp, loc);
+    auto *dbDep = AC.getDbDep(dbDepOp);
     assert(dbDep && "DbDep not found");
 
     /// Set the EDT slot for the DB
@@ -190,9 +190,9 @@ void EdtCodegen::setupParameters(Location loc) {
 }
 
 void EdtCodegen::satisfyDependencies(Location loc) {
-  recordInModeDependencies(loc);
-  incrementOutModeLatchCounts(loc);
-  replaceEdtDependencyUses(loc);
+  recordInDeps(loc);
+  incrementOutLatchCounts(loc);
+  replaceEdtDepUses(loc);
 }
 
 func::FuncOp EdtCodegen::createFn(Location loc) {
@@ -201,8 +201,6 @@ func::FuncOp EdtCodegen::createFn(Location loc) {
   auto edtFuncName = "__arts_edt_" + std::to_string(increaseEdtCounter());
   auto edtFuncOp = builder.create<func::FuncOp>(loc, edtFuncName, AC.EdtFn);
   edtFuncOp.setPrivate();
-  /// Don't manually push_back - builder.create already adds it to the module
-  /// Add entry basic block to the function and return operation.
   auto *entryBlock = edtFuncOp.addEntryBlock();
   builder.setInsertionPointToStart(entryBlock);
   builder.create<func::ReturnOp>(loc);
@@ -243,7 +241,7 @@ void EdtCodegen::createEntry(Location loc) {
         AC.castParameter(params[i].getType(), paramElem, loc);
   }
 
-  /// Process dependencies
+  /// Process dependencies by computing the EDT context values
   auto zeroConst = AC.createIndexConstant(0, loc);
   auto indexAlloc = builder.create<memref::AllocaOp>(
       loc, MemRefType::get({}, builder.getIndexType()));
@@ -262,23 +260,22 @@ void EdtCodegen::createEntry(Location loc) {
       continue;
 
     if (db->hasSingleSize()) {
-      handleSingleDimensionDep(db, dep, indexAlloc.getResult(), depStructSize,
-                               fnDepVPtr, loc);
+      handleSingleDep(db, dep, indexAlloc.getResult(), depStructSize, fnDepVPtr,
+                      loc);
     } else {
-      handleMultiDimensionDep(db, dep, indexAlloc.getResult(), depStructSize,
-                              fnDepVPtr, loc);
+      handleMultiDep(db, dep, indexAlloc.getResult(), depStructSize, fnDepVPtr,
+                     loc);
     }
+    ///
+    db->init(loc);
   }
 
-  rewireAllDbsInRegion();
   replaceInRegion(*region, rewireMap, false);
 }
 
-void EdtCodegen::handleSingleDimensionDep(DbDepCodegen *db, Value dep,
-                                          Value indexAlloc,
-                                          const Value &depStructSize,
-                                          const Value &fnDepVPtr,
-                                          Location loc) {
+void EdtCodegen::handleSingleDep(DbDepCodegen *db, Value dep, Value indexAlloc,
+                                 const Value &depStructSize,
+                                 const Value &fnDepVPtr, Location loc) {
   auto oneConst = AC.createIndexConstant(1, loc);
   auto curIndex = builder.create<memref::LoadOp>(loc, indexAlloc);
 
@@ -296,8 +293,7 @@ void EdtCodegen::handleSingleDimensionDep(DbDepCodegen *db, Value dep,
   /// Set EDT context attributes and rewire
   db->setGuidInEdt(entryGuid);
   db->setPtrInEdt(entryPtr);
-  AC.addReplacement(dep, entryPtr, region);
-  // rewireMap[db->getOp()] = entryPtr;
+  rewireMap[db->getOp()] = entryPtr;
 
   /// Increment the index for next dependency
   auto newIndex =
@@ -305,10 +301,9 @@ void EdtCodegen::handleSingleDimensionDep(DbDepCodegen *db, Value dep,
   builder.create<memref::StoreOp>(loc, newIndex, indexAlloc);
 }
 
-void EdtCodegen::handleMultiDimensionDep(DbDepCodegen *db, Value dep,
-                                         Value indexAlloc,
-                                         const Value &depStructSize,
-                                         const Value &fnDepVPtr, Location loc) {
+void EdtCodegen::handleMultiDep(DbDepCodegen *db, Value dep, Value indexAlloc,
+                                const Value &depStructSize,
+                                const Value &fnDepVPtr, Location loc) {
   /// Prepare dimension information
   const auto &dbSizes = db->getSizes();
   const auto &dbOffsets = db->getOffsets();
@@ -379,8 +374,7 @@ void EdtCodegen::handleMultiDimensionDep(DbDepCodegen *db, Value dep,
 
   db->setGuidInEdt(entryGuid);
   db->setPtrInEdt(entryPtr);
-  AC.addReplacement(dep, entryPtr, region);
-  // rewireMap[db->getOp()] = entryPtr;
+  rewireMap[db->getOp()] = entryPtr;
 }
 
 void EdtCodegen::outlineRegion(Location loc) {
@@ -406,63 +400,6 @@ void EdtCodegen::outlineRegion(Location loc) {
       yieldOp->erase();
     }
   }
-}
-
-void EdtCodegen::rewireAllDbsInRegion() {
-  // if (!region)
-  //   return;
-
-  // LLVM_DEBUG(dbgs() << "Rewiring all DB operations in EDT region\n");
-
-  // /// Walk through all operations in the region to find DB operations
-  // region->walk([&](Operation *op) {
-  //   /// Handle DbAllocOp
-  //   if (auto dbAllocOp = dyn_cast<arts::DbAllocOp>(op)) {
-  //     Value dbResult = dbAllocOp.getResult();
-
-  //     /// Check if this DB is already in rewireMap (as a dependency)
-  //     if (rewireMap.find(dbResult) == rewireMap.end()) {
-  //       /// This DB is not a direct dependency, but we still need to handle
-  //       it
-  //       /// Look for it in the deps list to see if it's there indirectly
-  //       for (auto &dep : deps) {
-  //         auto *dbAlloc = AC.getDbAlloc(dep);
-  //         if (dbAlloc && dbAlloc->getOp() == dbResult) {
-  //           LLVM_DEBUG(dbgs()
-  //                      << "Found DbAlloc in deps, should be rewired
-  //                      already\n");
-  //           break;
-  //         }
-  //       }
-  //     }
-  //   }
-
-  //   /// Handle DbDepOp
-  //   else if (auto dbDepOp = dyn_cast<arts::DbDepOp>(op)) {
-  //     Value dbResult = dbDepOp.getResult();
-
-  //     /// Check if this DB is already in rewireMap
-  //     if (rewireMap.find(dbResult) == rewireMap.end()) {
-  //       /// This DbDep is not directly rewired yet
-  //       /// Check if its source has EDT context attributes set
-  //       Value source = dbDepOp.getSource();
-  //       auto *sourceDb = AC.getDbDep(source);
-
-  //       if (sourceDb && sourceDb->getPtrInEdt()) {
-  //         /// Source has EDT context values, use them for dependent DB
-  //         LLVM_DEBUG(dbgs() << "Rewiring dependent DbDep using attributes: "
-  //                           << dbDepOp << "\n");
-  //         auto *depDb = AC.getOrCreateDbDep(dbDepOp, dbDepOp.getLoc());
-  //         depDb->setGuidInEdt(sourceDb->getGuidInEdt());
-  //         depDb->setPtrInEdt(sourceDb->getPtrInEdt());
-  //         rewireMap[dbResult] = sourceDb->getPtrInEdt();
-  //       }
-  //     }
-  //   }
-  // });
-
-  // /// Replace all uses in the region.
-  // replaceInRegion(*region, rewireMap, false);
 }
 
 void EdtCodegen::insertValueAsParameter(
@@ -503,7 +440,8 @@ void EdtCodegen::insertOffsetParameter(DbDepCodegen *dbDep, Value offset,
 // Dependency Processing
 //===----------------------------------------------------------------------===//
 
-void EdtCodegen::recordInModeDependencies(Location loc) {
+void EdtCodegen::recordInDeps(Location loc) {
+  /// Dependencies are recorded outside the EDT context
   if (depsToRecord.empty())
     return;
 
@@ -512,13 +450,14 @@ void EdtCodegen::recordInModeDependencies(Location loc) {
   LLVM_DEBUG(dbgs() << "- Recording in-mode dependencies\n");
   for (auto *dbCG : depsToRecord) {
     if (dbCG->hasSingleSize())
-      processSingleDimensionInMode(dbCG, loc);
+      recordSingleInDep(dbCG, loc);
     else
-      processMultiDimensionInMode(dbCG, loc);
+      recordMultiInDep(dbCG, loc);
   }
 }
 
-void EdtCodegen::incrementOutModeLatchCounts(Location loc) {
+void EdtCodegen::incrementOutLatchCounts(Location loc) {
+  /// Latch counts are incremented outside the EDT context
   if (depsToSatisfy.empty())
     return;
 
@@ -526,19 +465,20 @@ void EdtCodegen::incrementOutModeLatchCounts(Location loc) {
       dbgs() << "- Incrementing latch counts for out-mode dependencies\n");
   for (auto *dbCG : depsToSatisfy) {
     if (dbCG->hasSingleSize())
-      processSingleDimensionOutMode(dbCG, loc);
+      incrementSingleOutDep(dbCG, loc);
     else
-      processMultiDimensionOutMode(dbCG, loc);
+      incrementMultiOutDep(dbCG, loc);
   }
 }
 
-void EdtCodegen::replaceEdtDependencyUses(Location loc) {
+void EdtCodegen::replaceEdtDepUses(Location loc) {
+  /// Replace all remaining uses of Edt deps with the corresponding Db pointers
   LLVM_DEBUG(dbgs() << "- Replacing EDT dependency uses\n");
 
   for (auto &dep : deps) {
     auto *dbDep = AC.getDbDep(dep);
     assert(dbDep && "DbDep not found");
-    AC.addReplacement(dep, dbDep->getPtr());
+    dbDep->getOp().replaceAllUsesWith(dbDep->getPtr());
   }
 }
 
@@ -546,49 +486,55 @@ void EdtCodegen::replaceEdtDependencyUses(Location loc) {
 // Datablock Processing
 //===----------------------------------------------------------------------===//
 
-void EdtCodegen::processSingleDimensionInMode(DbDepCodegen *dbCG,
-                                              Location loc) {
+void EdtCodegen::recordSingleInDep(DbDepCodegen *dbCG, Location loc) {
   auto dbGuid = dbCG->getGuid();
+  assert(dbGuid && "GUID not available for DbDep");
   auto dbIndices = dbCG->getIndices();
   if (!dbIndices.empty())
     dbGuid = builder.create<memref::LoadOp>(loc, dbGuid, dbIndices);
-  AC.addDbDependency(dbGuid, guid, dbCG->getEdtSlot(), loc);
+  AC.addDbDep(dbGuid, guid, dbCG->getEdtSlot(), loc);
 }
 
-void EdtCodegen::processMultiDimensionInMode(DbDepCodegen *dbCG, Location loc) {
+void EdtCodegen::recordMultiInDep(DbDepCodegen *dbCG, Location loc) {
+  auto dbGuid = dbCG->getGuid();
+  assert(dbGuid && "GUID not available for DbDep");
+
   auto indexMemRefType =
       MemRefType::get({}, IndexType::get(builder.getContext()));
   auto inSlotAlloc = builder.create<memref::AllocOp>(loc, indexMemRefType);
   builder.create<memref::StoreOp>(loc, dbCG->getEdtSlot(), inSlotAlloc);
-  addDependenciesForMultiDimDb(dbCG->getGuid(), guid, inSlotAlloc.getResult(),
-                               dbCG->getSizes(), dbCG->getOffsets(),
-                               dbCG->getIndices(), loc);
+  addDepsForMultiDb(dbGuid, guid, inSlotAlloc.getResult(), dbCG->getSizes(),
+                    dbCG->getOffsets(), dbCG->getIndices(), loc);
 }
 
-void EdtCodegen::processSingleDimensionOutMode(DbDepCodegen *dbCG,
-                                               Location loc) {
+void EdtCodegen::incrementSingleOutDep(DbDepCodegen *dbCG, Location loc) {
   auto dbGuid = dbCG->getGuid();
+  assert(dbGuid && "GUID not available for DbDep");
+
   auto dbIndices = dbCG->getIndices();
   if (!dbIndices.empty())
     dbGuid = builder.create<memref::LoadOp>(loc, dbGuid, dbIndices);
   AC.incrementDbLatchCount(dbGuid, loc);
 }
 
-void EdtCodegen::processMultiDimensionOutMode(DbDepCodegen *dbCG,
-                                              Location loc) {
+void EdtCodegen::incrementMultiOutDep(DbDepCodegen *dbCG, Location loc) {
+  auto dbGuid = dbCG->getGuid();
+  assert(dbGuid && "GUID not available for DbDep");
+
   auto indexMemRefType =
       MemRefType::get({}, IndexType::get(builder.getContext()));
   auto outSlotAlloc = builder.create<memref::AllocOp>(loc, indexMemRefType);
   builder.create<memref::StoreOp>(loc, dbCG->getEdtSlot(), outSlotAlloc);
-  incrementLatchCountsForMultiDimDb(dbCG->getGuid(), outSlotAlloc.getResult(),
-                                    dbCG->getSizes(), dbCG->getOffsets(),
-                                    dbCG->getIndices(), loc);
+  incrementLatchCountsForMultiDb(dbGuid, outSlotAlloc.getResult(),
+                                 dbCG->getSizes(), dbCG->getOffsets(),
+                                 dbCG->getIndices(), loc);
 }
 
-void EdtCodegen::addDependenciesForMultiDimDb(
-    Value dbGuid, Value guid, Value inSlotAlloc,
-    const SmallVector<Value> &dbSizes, const SmallVector<Value> &dbOffsets,
-    const SmallVector<Value> &dbIndices, Location loc) {
+void EdtCodegen::addDepsForMultiDb(Value dbGuid, Value guid, Value inSlotAlloc,
+                                   const SmallVector<Value> &dbSizes,
+                                   const SmallVector<Value> &dbOffsets,
+                                   const SmallVector<Value> &dbIndices,
+                                   Location loc) {
   const unsigned dbRank = dbSizes.size();
 
   /// Pre-compute loop bounds and cache step constants
@@ -612,7 +558,7 @@ void EdtCodegen::addDependenciesForMultiDimDb(
           loadedDbIndices.append(indices.begin(), indices.end());
           auto loadedDbGuid =
               builder.create<memref::LoadOp>(loc, dbGuid, loadedDbIndices);
-          AC.addDbDependency(loadedDbGuid, guid, currentSlot, loc);
+          AC.addDbDep(loadedDbGuid, guid, currentSlot, loc);
           auto nextSlot = builder.create<arith::AddIOp>(loc, currentSlot,
                                                         incrementConstant);
           builder.create<memref::StoreOp>(loc, nextSlot, inSlotAlloc);
@@ -634,7 +580,7 @@ void EdtCodegen::addDependenciesForMultiDimDb(
   addDependenciesRecursive(0, initIndices);
 }
 
-void EdtCodegen::incrementLatchCountsForMultiDimDb(
+void EdtCodegen::incrementLatchCountsForMultiDb(
     Value dbGuid, Value outSlotAlloc, const SmallVector<Value> &dbSizes,
     const SmallVector<Value> &dbOffsets, const SmallVector<Value> &dbIndices,
     Location loc) {

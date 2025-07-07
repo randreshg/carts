@@ -183,9 +183,9 @@ DbAllocCodegen *ArtsCodegen::createDbAlloc(DbAllocOp dbOp, Location loc) {
   return dbAllocs[dbOp.getResult()];
 }
 
-DbDepCodegen *ArtsCodegen::createDbDep(DbDepOp dbOp, Location loc) {
+DbDepCodegen *ArtsCodegen::createDbDep(DbDepOp dbOp, Operation *parentOp) {
   assert(!getDbDep(dbOp) && "DbDep already exists");
-  dbDeps[dbOp.getResult()] = new DbDepCodegen(*this, dbOp, loc);
+  dbDeps[dbOp.getResult()] = new DbDepCodegen(*this, dbOp, parentOp);
   return dbDeps[dbOp.getResult()];
 }
 
@@ -195,17 +195,14 @@ DbAllocCodegen *ArtsCodegen::getOrCreateDbAlloc(DbAllocOp dbOp, Location loc) {
   return createDbAlloc(dbOp, loc);
 }
 
-DbDepCodegen *ArtsCodegen::getOrCreateDbDep(DbDepOp dbOp, Location loc) {
+DbDepCodegen *ArtsCodegen::getOrCreateDbDep(DbDepOp dbOp, Operation *parentOp) {
   if (auto existing = getDbDep(dbOp))
     return existing;
-  return createDbDep(dbOp, loc);
+  return createDbDep(dbOp, parentOp);
 }
 
-void ArtsCodegen::addDbDependency(Value dbGuid, Value edtGuid, Value edtSlot,
-                                  Location loc) {
-  assert(dbGuid && "Db guid should not be null");
-  assert(edtGuid && "Edt guid should not be null");
-  assert(edtSlot && "Edt slot should not be null");
+void ArtsCodegen::addDbDep(Value dbGuid, Value edtGuid, Value edtSlot,
+                           Location loc) {
   auto edtSlotInt = castToInt(Int32, edtSlot, loc);
   createRuntimeCall(ARTSRTL_artsDbAddDependence, {dbGuid, edtGuid, edtSlotInt},
                     loc);
