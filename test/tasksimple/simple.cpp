@@ -6,25 +6,24 @@
 #include <stdlib.h>
 #include <time.h>
 /*
-cgeist simple.cpp  -std=c++17 -fopenmp -O0 -S -I/usr/lib/llvm-14/lib/clang/14.0.0/include > simple.mlir
+carts cgeist simple.cpp -std=c++17 -fopenmp -O0 -S > simple.mlir
 
-carts-opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --symbol-dce -debug-only=convert-openmp-to-arts &> simple-arts.mlir
+carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --symbol-dce -debug-only=convert-openmp-to-arts &> simple-arts.mlir
 
-carts-opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --symbol-dce &> simple-arts.mlir
+carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --symbol-dce &> simple-arts.mlir
 
-carts-opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize --create-dbs --cse -debug-only=create-dbs &> simple-arts.mlir
+carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize --create-dbs --cse -debug-only=create-dbs &> simple-arts.mlir
 
-carts-opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize --create-dbs  --canonicalize --db --canonicalize --cse -debug-only=db,db-analysis,db-alias-analysis,db-dataflow-analysis,db-info &> simple-arts.mlir
+carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize --create-dbs  --canonicalize --db --canonicalize --cse -debug-only=db,db-analysis,db-alias-analysis,db-dataflow-analysis,db-info &> simple-arts.mlir
 
-carts-opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize --create-dbs --db --canonicalize --cse --polygeist-mem2reg --edt-pointer-rematerialization --create-epochs --canonicalize --preprocess-dbs --cse -debug-only=convert-arts-to-llvm,arts-codegen,preprocess-dbs &> simple-arts.mlir
+carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize --create-dbs --db --canonicalize --cse --polygeist-mem2reg --edt-pointer-rematerialization --create-epochs --canonicalize --preprocess-dbs --cse -debug-only=convert-arts-to-llvm,arts-codegen,preprocess-dbs &> simple-arts.mlir
 
-carts-opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize --create-dbs --db --canonicalize --cse --polygeist-mem2reg --edt-pointer-rematerialization --create-epochs --canonicalize --preprocess-dbs --convert-arts-to-llvm --cse -debug-only=convert-arts-to-llvm,arts-codegen,edt-codegen,db-codegen &> simple-arts.mlir
+carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize --create-dbs --db --canonicalize --cse --polygeist-mem2reg --edt-pointer-rematerialization --create-epochs --canonicalize --preprocess-dbs --convert-arts-to-llvm --cse -debug-only=convert-arts-to-llvm,arts-codegen,edt-codegen,db-codegen &> simple-arts.mlir
 
-carts-opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize --create-dbs --db --cse --polygeist-mem2reg --edt-pointer-rematerialization --create-epochs --convert-arts-to-llvm --canonicalize --cse --convert-polygeist-to-llvm --cse -debug-only=convert-arts-to-llvm &> simple-arts.mlir
 
-mlir-translate --mlir-to-llvmir simple-arts.mlir &> simple-arts.ll
+carts mlir-translate --mlir-to-llvmir simple-arts.mlir &> simple-arts.ll
 
-clang simple-arts.ll -O3 -g0 -march=native -o simple -I/home/randres/projects/carts/.install/arts/include -L/home/randres/projects/carts/.install/arts/lib -larts -L/usr/lib64/librt.so/usr/lib64/libpthread.so/usr/lib64/lib -lrdmacm
+carts compile simple-arts.ll -O3 -g0 -march=native -o simple
 
 python3 run_comparison.py \
   --problem_sizes "10 5" \

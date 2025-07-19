@@ -34,12 +34,6 @@ installdeps: arts
 	@echo "Installing Polygeist"
 	@make polygeist
 
-# Enable environment
-enable:
-	echo "export ARTS_PATH=$(ARTS_INSTALL_DIR)" > enable
-	echo "export PATH=$(CARTS_INSTALL_DIR)/bin:$(POLYGEIST_INSTALL_DIR)/bin:$(LLVM_INSTALL_DIR)/bin:\$$PATH" >> enable
-	echo "export LD_LIBRARY_PATH=$(CARTS_INSTALL_DIR)/lib:$(POLYGEIST_INSTALL_DIR)/lib:$(ARTS_INSTALL_DIR)/lib:$(LLVM_INSTALL_DIR)/lib:\$$LD_LIBRARY_PATH" >> enable
-
 # Polygeist
 polygeist-download:
 	mkdir -p $(POLYGEIST_DIR)
@@ -56,7 +50,6 @@ polygeist:
 		-DMLIR_DIR=$(LLVM_BUILD_DIR)/lib/cmake/mlir \
 		-DClang_DIR=$(LLVM_BUILD_DIR)/lib/cmake/clang \
 		-DLLVM_EXTERNAL_LIT="$(LLVM_BUILD_DIR)/bin/llvm-lit" \
-		-DLLVM_USE_LINKER=lld \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
 	ninja -C $(POLYGEIST_BUILD_DIR) install
 polygeist-clean:
@@ -73,12 +66,16 @@ llvm:
 		-DCMAKE_BUILD_TYPE=Release \
 		-DCMAKE_C_COMPILER=clang \
 		-DCMAKE_CXX_COMPILER=clang++ \
-		-DLLVM_ENABLE_PROJECTS='mlir;clang' \
-		-DLLVM_ENABLE_RUNTIMES='openmp' \
+		-DLLVM_ENABLE_PROJECTS='mlir;clang;lld' \
+		-DLLVM_ENABLE_RUNTIMES='libcxx;libcxxabi;libunwind' \
 		-DLLVM_OPTIMIZED_TABLEGEN=ON \
-		-DLLVM_TARGETS_TO_BUILD="host" \
-		-DLLVM_USE_LINKER=lld \
 		-DLLVM_ENABLE_ASSERTIONS=ON \
+		-DLLVM_BUILD_TOOLS=ON \
+		-DLLVM_INCLUDE_TOOLS=ON \
+		-DLLVM_INCLUDE_EXAMPLES=OFF \
+		-DLLVM_INCLUDE_TESTS=OFF \
+		-DLLVM_INCLUDE_BENCHMARKS=OFF \
+		-DLLVM_INCLUDE_UTILS=ON \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
 	ninja -C $(LLVM_BUILD_DIR) install
 llvm-clean:
@@ -138,7 +135,7 @@ install: build
 
 uninstall:
 	-cat $(BUILD_DIR)/install_manifest.txt | xargs rm -f -r
-	rm -f enable
+	rm -f setup_env.sh
 	rm -rf $(BUILD_DIR)
 
 fulluninstall: uninstall arts-clean
@@ -148,4 +145,4 @@ clean:
 	make -C $(BUILD_DIR) clean -j
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all build install postinstall uninstall fulluninstall  clean test
+.PHONY: all build install postinstall uninstall fulluninstall clean test llvm-runtimes
