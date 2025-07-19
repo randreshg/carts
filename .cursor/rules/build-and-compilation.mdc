@@ -1,0 +1,107 @@
+---
+description: When you need to understand how to run or build the project
+alwaysApply: false
+---
+# Build and Compilation Process
+
+## Build System
+The project uses a [Makefile](mdc:Makefile) to manage the complete build process.
+
+### Quick Start
+```bash
+# Build everything
+make build
+
+# Setup environment
+make enable
+source enable
+```
+
+### Build Structure
+- **CARTS**: Main compiler framework
+- **ARTS**: Runtime system in [./external/arts/](mdc:external/arts/)
+- **Polygeist**: C++ to MLIR compiler in `./external/Polygeist/`
+- **LLVM**: LLVM 18 with MLIR in `./external/Polygeist/llvm-project/`
+
+### Install Directories
+- `CARTS_INSTALL_DIR`: `./.install/carts`
+- `ARTS_INSTALL_DIR`: `./.install/arts`
+- `LLVM_INSTALL_DIR`: `./.install/llvm`
+- `POLYGEIST_INSTALL_DIR`: `./.install/polygeist`
+
+## Step-by-Step Compilation Pipeline
+
+### 1. C++ to MLIR (Polygeist)
+```bash
+cgeist simple.cpp -std=c++17 -fopenmp -O0 -S \
+  -I/usr/lib/llvm-14/lib/clang/14.0.0/include > simple.mlir
+```
+
+### 2. OpenMP to ARTS Conversion
+```bash
+carts-opt simple.mlir \
+  --lower-affine --cse --polygeist-mem2reg --canonicalize \
+  --loop-invariant-code-motion --canonicalize \
+  --arts-inliner --convert-openmp-to-arts --symbol-dce \
+  -debug-only=convert-openmp-to-arts &> simple-arts.mlir
+```
+
+### 3. EDT Optimization
+```bash
+carts-opt simple.mlir \
+  --arts-inliner --convert-openmp-to-arts \
+  --edt --edt-invariant-code-motion --symbol-dce &> simple-arts.mlir
+```
+
+### 4. DataBlock Processing
+```bash
+carts-opt simple.mlir \
+  --create-dbs --canonicalize --db --canonicalize --cse \
+  -debug-only=db,db-analysis &> simple-arts.mlir
+```
+
+### 5. Final LLVM Conversion
+```bash
+carts-opt simple.mlir \
+  --edt-pointer-rematerialization --create-epochs \
+  --convert-arts-to-llvm --canonicalize --cse \
+  --convert-polygeist-to-llvm --cse &> simple-arts.mlir
+```
+
+### 6. LLVM IR Generation
+```bash
+mlir-translate --mlir-to-llvmir simple-arts.mlir &> simple-arts.ll
+```
+
+### 7. Final Compilation
+```bash
+clang simple-arts.ll -O3 -g0 -march=native -o simple \
+  -I${ARTS_INSTALL_DIR}/include \
+  -L${ARTS_INSTALL_DIR}/lib -larts
+```
+
+## Debug Options
+- `-debug-only=convert-openmp-to-arts`: OpenMP conversion
+- `-debug-only=create-dbs`: DataBlock creation
+- `-debug-only=db,db-analysis`: DataBlock analysis
+- `-debug-only=convert-arts-to-llvm`: ARTS to LLVM conversion
+
+## Pass Pipeline Control
+You can modify the pipeline by:
+- Adding/removing passes from the command line
+- Changing pass ordering
+- Enabling/disabling debug output
+- Adjusting optimization levels
+
+## Performance Benchmarking
+```bash
+python3 run_comparison.py \
+  --problem_sizes "10 5" \
+  --iterations_per_size 5 \
+  --target_examples matrixmul \
+  --example_base_dirs "tasking"
+```
+description:
+globs:
+alwaysApply: false
+---

@@ -16,23 +16,25 @@ set( LLVM_LINK_COMPONENTS
   Vectorize
 )
 
-add_clang_executable(carts
-  carts.cpp
+add_clang_executable(carts-run
+  carts-run.cpp
 )
 
 install(
-  TARGETS carts
+  TARGETS carts-run
   EXPORT CartsTargets
   RUNTIME DESTINATION ${LLVM_TOOLS_INSTALL_DIR}
   COMPONENT carts
 )
 
-target_include_directories(carts PRIVATE
+
+
+target_include_directories(carts-run PRIVATE
   "${LLVM_SOURCE_DIR}/../clang/include"
   "${CMAKE_BINARY_DIR}/tools/clang/include"
 )
 
-target_compile_definitions(carts PUBLIC -DLLVM_OBJ_ROOT="${LLVM_BINARY_DIR}")
+target_compile_definitions(carts-run PUBLIC -DLLVM_OBJ_ROOT="${LLVM_BINARY_DIR}")
 
 set(LIBS
   ${dialect_libs}
@@ -83,5 +85,5 @@ set(LIBS
   MLIRBuiltinToLLVMIRTranslation
 )
 
-target_link_libraries(carts PRIVATE ${LIBS})
-add_dependencies(carts MLIRArtsOpsIncGen MLIRArtsPassIncGen)
+target_link_libraries(carts-run PRIVATE ${LIBS})
+add_dependencies(carts-run MLIRArtsOpsIncGen MLIRArtsPassIncGen)
