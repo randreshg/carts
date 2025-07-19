@@ -23,7 +23,19 @@ CARTS is an LLVM/MLIR-based compiler framework that implements the ARTS (Asynchr
 The project transforms OpenMP-based parallel code through MLIR-based transformations into the ARTS dialect, optimizing for memory-disaggregated systems where memory is physically separated from compute.
 
 ## Build System
-- Main build command: `make build`
+- **Primary interface**: `carts` wrapper script for all operations
+- Main build command: `carts build` (or `make build`)
 - Build system: CMake + Ninja
 - Dependencies: LLVM 18, MLIR, Polygeist, ARTS runtime
 - Install directory: `./.install/`
+
+## Command Interface
+All CARTS operations should use the `carts` wrapper script:
+```bash
+carts build          # Build project
+carts cgeist         # C++ to MLIR
+carts opt            # MLIR optimizations  
+carts run            # ARTS transformations
+carts compile        # Final compilation
+carts setup          # Environment setup
+```
