@@ -37,21 +37,51 @@ carts build --llvm
 
 ### 3. Use CARTS
 
+#### CARTS Compilation Pipeline
+
+The CARTS compilation process follows this pipeline:
+
+```
+C++ Source (.cpp)
+        ↓
+carts cgeist → MLIR (.mlir)
+        ↓
+carts run → LLVM IR (.ll)
+        ↓
+carts compile → Executable (binary)
+```
+
+#### Step-by-Step Usage
+
 ```bash
-# Compile C++ with OpenMP to MLIR
+# Step 1: Convert C++ to MLIR
 carts cgeist simple.cpp -std=c++17 -fopenmp -O0 -S > simple.mlir
 
-# Run CARTS optimization passes
-carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg
+# Step 2: Apply ARTS transformations and convert to LLVM IR
+carts run simple.mlir --O3 --arts-opt --emit-llvm > simple-arts.ll
 
-# Compile with ARTS runtime
+# Step 3: Compile to executable with ARTS runtime
 carts compile simple-arts.ll -o simple
+
+# Alternative: Run the complete pipeline automatically
+carts execute simple.cpp -o simple    # Automatically detects C++ and uses -std=c++17
+carts execute simple.c -o simple      # Automatically detects C and uses -std=c17
+```
+
+#### Individual Commands
+
+```bash
+# Run individual optimization passes
+carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg
 
 # Run benchmarks
 carts benchmark --target_examples matrixmul
 
 # Generate interactive reports
 carts report
+
+# Clean generated files
+carts clean
 ```
 
 > **Important**: Project build uses **system clang**, while ARTS operations use **installed LLVM**
@@ -83,10 +113,12 @@ If you prefer manual setup, see [tools/README.md](tools/README.md) for detailed 
 The main interface for all CARTS operations:
 
 - `carts build` - Build CARTS project (uses system clang)
-- `carts cgeist` - Compile C++ to MLIR (uses installed LLVM)
-- `carts opt` - Run optimization passes (uses installed LLVM)
-- `carts run` - Run the CARTS C++ executable
-- `carts compile` - Compile with ARTS runtime
+- `carts cgeist` - Convert C++ to MLIR (uses installed LLVM)
+- `carts opt` - Run individual optimization passes (uses installed LLVM)
+- `carts run` - Apply ARTS transformations and convert to LLVM IR (uses installed LLVM)
+- `carts compile` - Compile LLVM IR to executable with ARTS runtime (uses installed LLVM)
+- `carts execute` - Run complete pipeline: C++ → MLIR → LLVM IR → Executable
+- `carts clean` - Clean generated files (.ll, .mlir, executables)
 - `carts benchmark` - Run performance tests
 - `carts report` - Generate reports
 - `carts setup` - Automated setup

@@ -29,62 +29,99 @@ source enable
 - `LLVM_INSTALL_DIR`: `./.install/llvm`
 - `POLYGEIST_INSTALL_DIR`: `./.install/polygeist`
 
-## Step-by-Step Compilation Pipeline
+## CARTS Wrapper Script - Primary Interface
 
-### 1. C++ to MLIR (Polygeist)
+**IMPORTANT**: Always use the `carts` wrapper script for all CARTS operations. This ensures proper path resolution, library linking, and environment setup.
+
+### Available Commands
 ```bash
-cgeist simple.cpp -std=c++17 -fopenmp -O0 -S \
-  -I/usr/lib/llvm-14/lib/clang/14.0.0/include > simple.mlir
+carts build                    # Build CARTS project
+carts cgeist <file> [opts]     # Convert C++ to MLIR
+carts opt <file> [opts]        # Run MLIR optimizations (single pass)
+carts run [opts]               # Run ARTS transformations
+carts mlir-translate <file>    # Convert MLIR to LLVM IR
+carts compile <file> [opts]    # Compile LLVM IR to executable
+carts execute <file> [opts]    # Complete pipeline: C++ → executable
+carts benchmark [opts]         # Run benchmarks
+carts report [opts]            # Generate reports
+carts setup [opts]             # Setup environment
+carts clean                    # Clean generated files
 ```
 
-### 2. OpenMP to ARTS Conversion
-```bash
-carts-opt simple.mlir \
-  --lower-affine --cse --polygeist-mem2reg --canonicalize \
-  --loop-invariant-code-motion --canonicalize \
-  --arts-inliner --convert-openmp-to-arts --symbol-dce \
-  -debug-only=convert-openmp-to-arts &> simple-arts.mlir
+## Complete Compilation Pipeline
+
+### Pipeline Overview
+```
+C++ Source (.cpp)
+    ↓
+carts cgeist → MLIR (.mlir)
+    ↓
+carts run → LLVM IR (.ll)
+    ↓
+carts compile → Executable (binary)
 ```
 
-### 3. EDT Optimization
+### Step-by-Step Compilation Pipeline (Using carts script)
+
+#### 1. C++ to MLIR (Polygeist)
 ```bash
-carts-opt simple.mlir \
-  --arts-inliner --convert-openmp-to-arts \
-  --edt --edt-invariant-code-motion --symbol-dce &> simple-arts.mlir
+carts cgeist simple.cpp -std=c++17 -fopenmp -O0 -S > simple.mlir
 ```
 
-### 4. DataBlock Processing
+#### 2. MLIR Optimization and ARTS Conversion
 ```bash
-carts-opt simple.mlir \
+carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg \
+  --canonicalize --loop-invariant-code-motion --arts-inliner \
+  --convert-openmp-to-arts --symbol-dce > simple-arts.mlir
+```
+
+#### 3. EDT and DataBlock Processing
+```bash
+carts opt simple-arts.mlir --edt --edt-invariant-code-motion \
   --create-dbs --canonicalize --db --canonicalize --cse \
-  -debug-only=db,db-analysis &> simple-arts.mlir
-```
-
-### 5. Final LLVM Conversion
-```bash
-carts-opt simple.mlir \
   --edt-pointer-rematerialization --create-epochs \
   --convert-arts-to-llvm --canonicalize --cse \
-  --convert-polygeist-to-llvm --cse &> simple-arts.mlir
+  --convert-polygeist-to-llvm --cse > simple-final.mlir
 ```
 
-### 6. LLVM IR Generation
+#### 4. LLVM IR Generation
 ```bash
-mlir-translate --mlir-to-llvmir simple-arts.mlir &> simple-arts.ll
+carts mlir-translate --mlir-to-llvmir simple-final.mlir > simple-arts.ll
 ```
 
-### 7. Final Compilation
+#### 5. Final Compilation
 ```bash
-clang simple-arts.ll -O3 -g0 -march=native -o simple \
-  -I${ARTS_INSTALL_DIR}/include \
-  -L${ARTS_INSTALL_DIR}/lib -larts
+carts compile simple-arts.ll -o simple
 ```
+
+## Alternative: Complete Pipeline with carts run
+
+For a complete transformation pipeline in one command:
+```bash
+carts run simple.mlir --O3 --arts-opt --emit-llvm > simple-arts.ll
+carts compile simple-arts.ll -o simple
+```
+
+## One-Command Execution: carts execute
+
+For complete end-to-end compilation from C++ source to executable:
+```bash
+carts execute simple.cpp -o simple
+```
+
+This automatically runs the entire pipeline:
+1. `carts cgeist` - Convert C++ to MLIR
+2. `carts run` - Apply ARTS transformations and convert to LLVM IR
+3. `carts compile` - Compile to executable with ARTS runtime
 
 ## Debug Options
-- `-debug-only=convert-openmp-to-arts`: OpenMP conversion
-- `-debug-only=create-dbs`: DataBlock creation
-- `-debug-only=db,db-analysis`: DataBlock analysis
-- `-debug-only=convert-arts-to-llvm`: ARTS to LLVM conversion
+```bash
+# Debug specific passes
+carts opt simple.mlir --convert-openmp-to-arts -debug-only=convert-openmp-to-arts
+carts opt simple.mlir --create-dbs -debug-only=create-dbs
+carts opt simple.mlir --db -debug-only=db,db-analysis
+carts opt simple.mlir --convert-arts-to-llvm -debug-only=convert-arts-to-llvm
+```
 
 ## Pass Pipeline Control
 You can modify the pipeline by:
@@ -93,13 +130,19 @@ You can modify the pipeline by:
 - Enabling/disabling debug output
 - Adjusting optimization levels
 
+## Environment Variables
+```bash
+CARTS_VERBOSE=1 carts <command>  # Enable verbose output
+CARTS_INSTALL_DIR=/path/to/install  # Override install directory
+```
+
 ## Performance Benchmarking
 ```bash
-python3 run_comparison.py \
-  --problem_sizes "10 5" \
-  --iterations_per_size 5 \
-  --target_examples matrixmul \
-  --example_base_dirs "tasking"
+# Run benchmarks using carts script
+carts benchmark --target_examples matrixmul --problem_sizes "10 5" --iterations_per_size 5
+
+# Generate performance reports
+carts report --help
 ```
 description:
 globs:
