@@ -95,8 +95,9 @@ void DbAllocCodegen::create(arts::DbAllocOp depOp, Location loc) {
   auto guidType = MemRefType::get(
       SmallVector<int64_t>(dbDim, ShapedType::kDynamic), AC.ArtsGuid);
   guid = builder.create<memref::AllocaOp>(loc, guidType, dbSizes);
-  auto ptrType = dbOp.getResult().getType().cast<MemRefType>();
-  if (ptrType.hasStaticShape())
+  auto ptrType = dbOp.getResult().getType().dyn_cast<MemRefType>();
+  assert(ptrType && "Expected a MemRefType");
+  if (ptrType && ptrType.hasStaticShape())
     ptr = builder.create<memref::AllocaOp>(loc, ptrType);
   else
     ptr = builder.create<memref::AllocaOp>(loc, ptrType, dbSizes);
@@ -137,8 +138,18 @@ Value DbAllocCodegen::calculateElementSize(Location loc) {
   /// Calculate the element type size
   /// For arts.db_alloc operations, the result type is memref<memref<?xi8>>
   /// We need to get the element type from the inner memref type
-  auto resultType = dbOp.getResult().getType().cast<MemRefType>();
-  auto innerMemrefType = resultType.getElementType().cast<MemRefType>();
+  auto resultType = dbOp.getResult().getType().dyn_cast<MemRefType>();
+  if (!resultType) {
+    // Handle non-MemRef types gracefully - return default element size
+    return AC.createIntConstant(4, AC.Int64, loc); // Default to 4 bytes (i32)
+  }
+  auto innerMemrefType = resultType.getElementType().dyn_cast<MemRefType>();
+  if (!innerMemrefType) {
+    // If inner type is not a memref, use the element type directly
+    auto elementSizeInBits =
+        AC.getMLIRDataLayout().getTypeSizeInBits(resultType.getElementType());
+    return AC.createIntConstant(elementSizeInBits / 8, AC.Int64, loc);
+  }
   auto elementType = innerMemrefType.getElementType();
   auto elementSizeInBits =
       AC.getMLIRDataLayout().getTypeSizeInBits(elementType);

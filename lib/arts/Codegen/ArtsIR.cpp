@@ -62,9 +62,10 @@ types::EdtType getEdtType(EdtOp edtOp) {
 DbAllocOp createDbAllocOp(OpBuilder &builder, Location loc, StringRef mode,
                           Value address, SmallVector<Value> sizes) {
   MemRefType ptrType;
-  
+
   if (address) {
-    auto addressType = address.getType().cast<MemRefType>();
+    auto addressType = address.getType().dyn_cast<MemRefType>();
+    assert(addressType && "Expected a MemRefType");
 
     /// If sizes are not provided, extract them from the address memref
     if (sizes.empty()) {
@@ -79,32 +80,98 @@ DbAllocOp createDbAllocOp(OpBuilder &builder, Location loc, StringRef mode,
     }
 
     /// Create result types
-    ptrType = MemRefType::get(addressType.getShape(), addressType.getElementType());
+    ptrType =
+        MemRefType::get(addressType.getShape(), addressType.getElementType());
   } else {
-    /// If no address is provided, we need to infer the type from sizes or use a default
-    /// For now, create a basic i32 memref type - this should be refined based on usage
+    /// If no address is provided, we need to infer the type from sizes or use a
+    /// default For now, create a basic i32 memref type - this should be refined
+    /// based on usage
     SmallVector<int64_t> shape;
-    for (auto size : sizes) {
-      shape.push_back(ShapedType::kDynamic); // Dynamic dimensions
-    }
+    for (auto _ : sizes)
+      shape.push_back(ShapedType::kDynamic);
     ptrType = MemRefType::get(shape, builder.getI32Type());
   }
 
-  /// Create the DbAllocOp with optional allocType parameter (nullptr for default)
+  /// Create the DbAllocOp with optional allocType parameter (nullptr for
+  /// default)
   return builder.create<DbAllocOp>(loc, ptrType, builder.getStringAttr(mode),
                                    address, sizes, nullptr);
 }
 
-DbDepOp createDbDepOp(OpBuilder &builder, Location loc,
-                  types::DbDepType mode, Value source,
-                  SmallVector<Value> pinnedIndices,
-                  SmallVector<Value> offsets,
-                  SmallVector<Value> sizes) {
+DbDepOp createDbDepOp(OpBuilder &builder, Location loc, types::DbDepType mode,
+                      Value source, SmallVector<Value> pinnedIndices,
+                      SmallVector<Value> offsets, SmallVector<Value> sizes) {
   auto modeAttr = builder.getStringAttr(types::toString(mode));
   auto resultType = source.getType();
-  
-  return builder.create<arts::DbDepOp>(
-      loc, resultType, modeAttr, source, pinnedIndices, offsets, sizes);
+
+  return builder.create<arts::DbDepOp>(loc, resultType, modeAttr, source,
+                                       pinnedIndices, offsets, sizes);
+}
+
+DbControlOp createDbControlOp(OpBuilder &builder, Location loc,
+                              types::DbDepType mode, Value ptr,
+                              SmallVector<Value> pinnedIndices) {
+  auto ptrOp = ptr.getDefiningOp();
+  assert(ptrOp && "Input must be a defining operation.");
+
+  /// If the defining op is a load op, obtain the base memref and pinned
+  /// indices.
+  Value baseMemRef;
+  auto processLoad = [&](auto loadOp) {
+    baseMemRef = loadOp.getMemref();
+    if (pinnedIndices.empty())
+      pinnedIndices.assign(loadOp.getIndices().begin(),
+                           loadOp.getIndices().end());
+  };
+
+  if (auto loadOp = dyn_cast<memref::LoadOp>(ptrOp))
+    processLoad(loadOp);
+  else
+    baseMemRef = ptr;
+
+  /// Ensure the base memref type.
+  auto baseType = baseMemRef.getType().dyn_cast<MemRefType>();
+  assert(baseType && "Input must be a MemRefType.");
+
+  int64_t rank = baseType.getRank();
+  const auto pinnedCount = static_cast<int64_t>(pinnedIndices.size());
+  assert(pinnedCount <= rank &&
+         "Pinned indices exceed the rank of the memref.");
+
+  /// Compute sizes and subshape.
+  SmallVector<Value, 4> indices(pinnedCount), sizes(rank - pinnedCount);
+  SmallVector<Value, 4> offsets(rank - pinnedCount,
+                                builder.create<arith::ConstantIndexOp>(loc, 0));
+  SmallVector<int64_t, 4> subShape;
+  for (int64_t i = 0, j = 0; i < rank; ++i) {
+    if (i < pinnedCount) {
+      indices[i] = pinnedIndices[i];
+    } else {
+      bool isDyn = baseType.isDynamicDim(i);
+      int64_t dimSize = baseType.getDimSize(i);
+      Value dimVal =
+          isDyn ? builder.create<memref::DimOp>(loc, baseMemRef, i).getResult()
+                : builder.create<arith::ConstantIndexOp>(loc, dimSize)
+                      .getResult();
+      sizes[j] = dimVal;
+      /// For the normal subview type, preserve the static dim if available.
+      subShape.push_back(isDyn ? ShapedType::kDynamic : dimSize);
+      j++;
+    }
+  }
+
+  /// Compute the element type size.
+  auto elementType = baseType.getElementType();
+  auto elementTypeSize = builder
+                             .create<polygeist::TypeSizeOp>(
+                                 loc, builder.getIndexType(), elementType)
+                             .getResult();
+
+  auto modeAttr = builder.getStringAttr(types::toString(mode));
+  auto resultType = MemRefType::get(subShape, elementType);
+  return builder.create<arts::DbControlOp>(
+      loc, resultType, modeAttr, baseMemRef, elementType, elementTypeSize,
+      indices, offsets, sizes);
 }
 
 //===----------------------------------------------------------------------===//
@@ -113,9 +180,7 @@ DbDepOp createDbDepOp(OpBuilder &builder, Location loc,
 
 bool isDbAllocOp(Operation *op) { return isa<DbAllocOp>(op); }
 
-bool isDbDepOp(Operation *op) {
-  return isa<DbDepOp>(op);
-}
+bool isDbDepOp(Operation *op) { return isa<DbDepOp>(op); }
 
 //===----------------------------------------------------------------------===//
 // DataBlock Attribute Management

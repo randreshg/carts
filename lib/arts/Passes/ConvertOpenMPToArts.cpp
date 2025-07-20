@@ -167,11 +167,16 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
 
     /// Collect the task deps clause
     auto dependList = task.getDependsAttr();
-    if (!dependList)
+    if (!dependList) {
+      LLVM_DEBUG(DBGS() << "No dependencies found for task\n");
       return;
+    }
+    LLVM_DEBUG(DBGS() << "Processing " << dependList.size()
+                      << " dependencies\n");
     for (unsigned i = 0, e = dependList.size(); i < e; ++i) {
       /// Get dependency clause and type.
-      auto depClause = cast<omp::ClauseTaskDependAttr>(dependList[i]);
+      auto depClause = dyn_cast<omp::ClauseTaskDependAttr>(dependList[i]);
+      assert(depClause && "Expected a ClauseTaskDependAttr");
       Value depVar = task.getDependVars()[i];
 
       /// Ensure the dependency variable comes from a memref.alloc operation.
@@ -210,14 +215,16 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
         replaceInRegion(region, loadOp.getResult(), newLoad.getResult());
       }
 
-      /// Add the dependency
+      /// Create the control dependency (will be removed in CreateDbs pass)
       {
         OpBuilder::InsertionGuard IG(rewriter);
         rewriter.setInsertionPointAfter(depLoadVal.getDefiningOp());
-        SmallVector<Value> emptyIndices, emptyOffsets, emptySizes;
-        deps.push_back(createDbDepOp(
-            rewriter, depLoadVal.getLoc(), getDbDepType(depClause.getValue()),
-            depLoadVal, emptyIndices, emptyOffsets, emptySizes));
+        SmallVector<Value> emptyIndices;
+        /// This should be added as dependency to the EDT operation and later on
+        /// removed in CreateDbs pass.
+        createDbControlOp(rewriter, depLoadVal.getLoc(),
+                          getDbDepType(depClause.getValue()), depLoadVal,
+                          emptyIndices);
       }
 
       /// Replace the dependency allocation with an undefined value.

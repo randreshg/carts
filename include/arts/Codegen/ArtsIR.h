@@ -27,6 +27,10 @@ DbDepOp createDbDepOp(OpBuilder &builder, Location loc, types::DbDepType mode,
                       Value source, SmallVector<Value> pinnedIndices,
                       SmallVector<Value> offsets, SmallVector<Value> sizes);
 
+DbControlOp createDbControlOp(OpBuilder &builder, Location loc,
+                              types::DbDepType mode, Value ptr,
+                              SmallVector<Value> pinnedIndices);
+
 /// DB helper functions
 bool isDbAllocOp(Operation *op);
 bool isDbDepOp(Operation *op);

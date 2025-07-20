@@ -93,7 +93,8 @@ struct DbCandidate {
     if (!ptr || !ptr.getType().isa<MemRefType>())
       return false;
 
-    auto memrefType = ptr.getType().cast<MemRefType>();
+    auto memrefType = ptr.getType().dyn_cast<MemRefType>();
+    assert(memrefType && "Expected a MemRefType");
     return pinnedIndices.size() <= static_cast<size_t>(memrefType.getRank());
   }
 };
@@ -184,12 +185,12 @@ private:
   void cleanupOldOps(ModuleOp module, OpBuilder &builder);
   void pruneUnusedDbAllocs(OpBuilder &builder);
   void collectOpsToRemove(EdtOp edtOp, SetVector<Operation *> &opsToRemove);
+  void collectDbControlOpsForRemoval(ModuleOp module);
 
   /// Helper methods
   using OpsPerCandidate = std::pair<DbCandidate, SmallVector<Operation *> *>;
   DbDepType combineDepTypes(const SmallVector<OpsPerCandidate> &candidates);
   void logCandidateInfo(EdtOp edtOp) const;
-  void logDbCreation(EdtOp edtOp, size_t dbCount) const;
 
   /// Data members
   using CandidateMap = DenseMap<DbCandidate, SmallVector<Operation *>>;
@@ -234,10 +235,14 @@ void CreateDbsPass::processModule(ModuleOp module) {
   /// Step 3: Process all EDT operations to create datablocks
   processAllEdtOps(module);
 
-  /// Step 4: Cleanup old operations
+  /// Step 4: Collect all DbControlOp operations for removal
+  collectDbControlOpsForRemoval(module);
+
+  /// Step 5: Cleanup old operations
   OpBuilder builder(module.getContext());
   cleanupOldOps(module, builder);
-  pruneUnusedDbAllocs(builder);
+  /// Temporarily disable pruning to avoid crashes
+  /// pruneUnusedDbAllocs(builder);
 }
 
 void CreateDbsPass::collectEdtOps(ModuleOp module) {
@@ -258,7 +263,12 @@ void CreateDbsPass::processAllEdtOps(ModuleOp module) {
 
   uint32_t edtCounter = 0;
   for (auto edtOp : edtOps) {
-    logDbCreation(edtOp, DbCandidates[edtOp].size());
+    LLVM_DEBUG({
+      static uint32_t edtCounter = 0;
+      dbgs() << LINE;
+      DBGS() << "Creating " << DbCandidates[edtOp].size()
+             << " datablocks for EDT #" << edtCounter++ << "\n";
+    });
     createDbs(edtOp, builder, loc);
     LLVM_DEBUG(DBGS() << "Processed EDT #" << edtCounter++ << "\n");
   }
@@ -269,7 +279,10 @@ bool CreateDbsPass::isValidMemRef(Value ptr) const {
     return false;
   }
 
-  auto memrefType = ptr.getType().cast<MemRefType>();
+  auto memrefType = ptr.getType().dyn_cast<MemRefType>();
+  if (!memrefType) {
+    return false;
+  }
   /// Skip complex-typed memrefs as they're not supported
   if (memrefType.getElementType().isa<mlir::ComplexType>()) {
     LLVM_DEBUG(DBGS() << "Skipping complex-typed memref: " << ptr << "\n");
@@ -356,6 +369,10 @@ void CreateDbsPass::analyzeMemRefUsage(
     return;
   }
 
+  /// Note: Control dependencies (DbControlOp) are used to guarantee OpenMP execution
+  /// constraints but are ignored in this pass for now. They represent task dependencies
+  /// that ensure proper ordering without creating actual datablocks.
+
   auto &candMap = DbCandidates[edtOp];
   auto &region = edtOp.getRegion();
 
@@ -370,6 +387,12 @@ void CreateDbsPass::analyzeMemRefUsage(
     /// Skip operations in nested EDT regions
     if (auto userEdt = op->getParentOfType<EdtOp>(); userEdt != edtOp)
       continue;
+
+    /// Delete DbControlOp operations - these are control dependencies that should be removed
+    if (isa<DbControlOp>(op)) {
+      opsToRemove.insert(op);
+      continue;
+    }
 
     /// Create candidate with string detection
     DbCandidate candidate(dbPtr, strAnalysis->isStringMemRef(dbPtr));
@@ -641,7 +664,15 @@ DbDepOp CreateDbsPass::createDbDep(OpBuilder &builder, Location loc,
                                    const SmallVector<Value> &pinnedIndices,
                                    DbDepType depType) {
   Value dbPtr = dbAllocOp.getPtr();
-  auto dbPtrType = dbPtr.getType().cast<MemRefType>();
+  auto dbPtrType = dbPtr.getType().dyn_cast<MemRefType>();
+  if (!dbPtrType) {
+    // Handle non-MemRef types gracefully - create a simple dependency
+    return builder.create<DbDepOp>(
+        loc, dbPtr.getType(),
+        builder.getStringAttr(types::toString(depType)), 
+        dbAllocOp.getResult(),
+        pinnedIndices, SmallVector<Value>{}, SmallVector<Value>{});
+  }
 
   int64_t rank = dbPtrType.getRank();
   int64_t pinnedCount = static_cast<int64_t>(pinnedIndices.size());
@@ -679,7 +710,9 @@ DbAllocOp CreateDbsPass::createDbAlloc(OpBuilder &builder, Location loc,
                                        Value basePtr, DbDepType dep) {
   /// Create the DbAllocOp
   auto dbAllocOp = createDbAllocOp(builder, loc, types::toString(dep), basePtr);
-  auto allocType = arts::getAllocType(basePtr);
+  // auto allocType = arts::getAllocType(basePtr);
+  
+  auto allocType = types::DbAllocType::Dynamic;
   setDbAllocType(dbAllocOp, allocType, builder);
 
   LLVM_DEBUG(DBGS() << "Created DbAllocOp with allocation type: "
@@ -698,6 +731,14 @@ void CreateDbsPass::collectOpsToRemove(EdtOp edtOp,
 
   /// Add the old EDT operation
   opsToRemove.insert(edtOp);
+}
+
+void CreateDbsPass::collectDbControlOpsForRemoval(ModuleOp module) {
+  /// Walk the entire module to find and collect all DbControlOp operations
+  module.walk([&](DbControlOp dbControlOp) {
+    LLVM_DEBUG(DBGS() << "Found DbControlOp for removal: " << dbControlOp << "\n");
+    opsToRemove.insert(dbControlOp);
+  });
 }
 
 void CreateDbsPass::cleanupOldOps(ModuleOp module, OpBuilder &builder) {
@@ -796,14 +837,6 @@ void CreateDbsPass::logCandidateInfo(EdtOp edtOp) const {
   });
 }
 
-void CreateDbsPass::logDbCreation(EdtOp edtOp, size_t dbCount) const {
-  LLVM_DEBUG({
-    static uint32_t edtCounter = 0;
-    dbgs() << LINE;
-    DBGS() << "Creating " << dbCount << " datablocks for EDT #" << edtCounter++
-           << "\n";
-  });
-}
 
 ///===----------------------------------------------------------------------===///
 /// Pass creation
