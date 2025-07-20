@@ -174,7 +174,9 @@ DbDepCodegen *ArtsCodegen::getDbDep(DbDepOp dbOp) {
   if (!dbOp)
     return nullptr;
   auto it = dbDeps.find(dbOp.getResult());
-  return (it != dbDeps.end()) ? it->second : nullptr;
+  if (it != dbDeps.end())
+    return it->second;
+  return nullptr;
 }
 
 DbAllocCodegen *ArtsCodegen::createDbAlloc(DbAllocOp dbOp, Location loc) {

@@ -55,12 +55,12 @@ void ArtsDialect::initialize() {
 #include "arts/ArtsOps.cpp.inc"
 
 bool isArtsRegion(Operation *op) { return isa<EdtOp>(op) || isa<EpochOp>(op); }
-bool isArtsOp(Operation *op){
-    return isArtsRegion(op) ||
-           isa<arts::EdtOp, arts::EpochOp, arts::BarrierOp, arts::AllocOp,
-               arts::DbAllocOp, arts::DbDepOp, arts::GetTotalWorkersOp,
-               arts::GetTotalNodesOp, arts::GetCurrentWorkerOp,
-               arts::GetCurrentNodeOp>(op);
+bool isArtsOp(Operation *op) {
+  return isArtsRegion(op) ||
+         isa<arts::EdtOp, arts::EpochOp, arts::BarrierOp, arts::AllocOp,
+             arts::DbAllocOp, arts::DbDepOp, arts::GetTotalWorkersOp,
+             arts::GetTotalNodesOp, arts::GetCurrentWorkerOp,
+             arts::GetCurrentNodeOp>(op);
 }
 
 //===----------------------------------------------------------------------===//
@@ -198,6 +198,214 @@ void DbAllocOp::print(OpAsmPrinter &printer) {
 }
 
 //===----------------------------------------------------------------------===//
+// DbControlOp
+//===----------------------------------------------------------------------===//
+void DbControlOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                        Type subview, StringRef mode, Value ptr,
+                        Type elementType, Value elementTypeSize,
+                        ValueRange indices, ValueRange sizes) {
+  SmallVector<Value> offsets;
+  offsets.resize(indices.size(), odsBuilder.create<arith::ConstantIndexOp>(
+                                     odsState.location, 0));
+  build(odsBuilder, odsState, subview, mode, ptr, elementType, elementTypeSize,
+        indices, offsets, sizes);
+}
+
+void DbControlOp::build(OpBuilder &odsBuilder, OperationState &odsState,
+                        Type subview, StringRef mode, Value ptr,
+                        Type elementType, Value elementTypeSize,
+                        ValueRange indices, ValueRange offsets,
+                        ValueRange sizes) {
+  odsState.addOperands(ptr);
+  odsState.addOperands(elementTypeSize);
+  odsState.addOperands(indices);
+  odsState.addOperands(offsets);
+  odsState.addOperands(sizes);
+  ::llvm::copy(
+      ::llvm::ArrayRef<int32_t>({1, 1, static_cast<int32_t>(indices.size()),
+                                 static_cast<int32_t>(offsets.size()),
+                                 static_cast<int32_t>(sizes.size())}),
+      odsState.getOrAddProperties<Properties>().operandSegmentSizes.begin());
+  odsState.getOrAddProperties<Properties>().mode =
+      odsBuilder.getStringAttr(mode);
+  odsState.getOrAddProperties<Properties>().elementType =
+      TypeAttr::get(elementType);
+  odsState.addTypes(subview);
+}
+
+ParseResult DbControlOp::parse(OpAsmParser &parser, OperationState &result) {
+  /// Parse the mode attribute.
+  StringAttr modeAttr;
+  if (parser.parseAttribute(modeAttr, "mode", result.attributes))
+    return failure();
+
+  /// Parse " ptr[" literal.
+  if (parser.parseKeyword("ptr") || parser.parseLSquare())
+    return failure();
+
+  /// Parse the base ptr operand.
+  OpAsmParser::UnresolvedOperand ptrOperand;
+  if (parser.parseOperand(ptrOperand))
+    return failure();
+
+  /// Parse colon and the type of the ptr operand.
+  if (parser.parseColon())
+    return failure();
+  Type ptrType;
+  if (parser.parseType(ptrType))
+    return failure();
+  if (parser.resolveOperand(ptrOperand, ptrType, result.operands))
+    return failure();
+  if (parser.parseRSquare())
+    return failure();
+
+  /// Parse comma then "indices[".
+  if (parser.parseComma() || parser.parseKeyword("indices") ||
+      parser.parseLSquare())
+    return failure();
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> indicesOperands;
+  if (parser.parseOperandList(indicesOperands))
+    return failure();
+  if (parser.parseRSquare())
+    return failure();
+
+  /// Parse comma then "offsets[".
+  if (parser.parseComma() || parser.parseKeyword("offsets") ||
+      parser.parseLSquare())
+    return failure();
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> offsetOperands;
+  if (parser.parseOperandList(offsetOperands))
+    return failure();
+  if (parser.parseRSquare())
+    return failure();
+
+  /// Parse comma then "sizes[".
+  if (parser.parseComma() || parser.parseKeyword("sizes") ||
+      parser.parseLSquare())
+    return failure();
+  SmallVector<OpAsmParser::UnresolvedOperand, 4> sizeOperands;
+  if (parser.parseOperandList(sizeOperands))
+    return failure();
+  if (parser.parseRSquare())
+    return failure();
+
+  /// Parse comma then "type[".
+  if (parser.parseComma() || parser.parseKeyword("type") ||
+      parser.parseLSquare())
+    return failure();
+  Type elementType;
+  if (parser.parseType(elementType))
+    return failure();
+  result.addAttribute("elementType", TypeAttr::get(elementType));
+  if (parser.parseRSquare())
+    return failure();
+
+  /// Parse comma then "typeSize[".
+  if (parser.parseComma() || parser.parseKeyword("typeSize") ||
+      parser.parseLSquare())
+    return failure();
+  OpAsmParser::UnresolvedOperand tsOperand;
+  if (parser.parseOperand(tsOperand))
+    return failure();
+  Builder &builder = parser.getBuilder();
+  Type indexType = builder.getIndexType();
+  if (parser.resolveOperand(tsOperand, indexType, result.operands))
+    return failure();
+  if (parser.parseRSquare())
+    return failure();
+
+  /// Parse optional attribute dictionary.
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  /// Parse arrow and the result (subview) type.
+  if (parser.parseArrow())
+    return failure();
+  Type subviewType;
+  if (parser.parseType(subviewType))
+    return failure();
+  result.addTypes(subviewType);
+
+  /// Resolve the operand lists for indices, offsets and sizes as index type.
+  SmallVector<Type, 4> expectedIndexTypes(indicesOperands.size(), indexType);
+  if (parser.resolveOperands(indicesOperands, expectedIndexTypes,
+                             parser.getCurrentLocation(), result.operands))
+    return failure();
+  SmallVector<Type, 4> expectedOffsetTypes(offsetOperands.size(), indexType);
+  if (parser.resolveOperands(offsetOperands, expectedOffsetTypes,
+                             parser.getCurrentLocation(), result.operands))
+    return failure();
+  SmallVector<Type, 4> expectedSizeTypes(sizeOperands.size(), indexType);
+  if (parser.resolveOperands(sizeOperands, expectedSizeTypes,
+                             parser.getCurrentLocation(), result.operands))
+    return failure();
+
+  /// Set operand segment sizes.
+  /// Order: ptr (1), typeSize (1), indices, offsets, sizes.
+  SmallVector<int32_t, 5> segmentSizes;
+  segmentSizes.push_back(1);
+  segmentSizes.push_back(1);
+  segmentSizes.push_back(static_cast<int32_t>(indicesOperands.size()));
+  segmentSizes.push_back(static_cast<int32_t>(offsetOperands.size()));
+  segmentSizes.push_back(static_cast<int32_t>(sizeOperands.size()));
+  std::copy(
+      segmentSizes.begin(), segmentSizes.end(),
+      result.getOrAddProperties<Properties>().operandSegmentSizes.begin());
+
+  return success();
+}
+
+void DbControlOp::print(OpAsmPrinter &printer) {
+  auto op = getOperation();
+  /// Print the mode attribute.
+  printer << " " << getModeAttr();
+
+  /// Print the base operand and its type.
+  printer << " ptr[";
+  printer.printOperand(getPtr());
+  printer << " : ";
+  printer.printType(getPtr().getType());
+  printer << "]";
+
+  /// Print indices.
+  auto indices = getIndices();
+  printer << ", indices[";
+  printer.printOperands(indices);
+  printer << "]";
+
+  /// Print offsets.
+  auto offsets = getOffsets();
+  printer << ", offsets[";
+  printer.printOperands(offsets);
+  printer << "]";
+
+  /// Print sizes.
+  auto sizes = getSizes();
+  printer << ", sizes[";
+  printer.printOperands(sizes);
+  printer << "]";
+
+  /// Print the element type attribute.
+  auto typeAttr = op->getAttrOfType<TypeAttr>("elementType");
+  printer << ", type[" << typeAttr.getValue() << "]";
+
+  /// Print the elementTypeSize operand (at index 1).
+  printer << ", typeSize[";
+  printer.printOperand(getOperands()[1]);
+  printer << "]";
+
+  // Print all remaining attributes except "operandSegmentSizes"
+  // and those already printed ("mode", "elementType").
+  printer.printOptionalAttrDict(op->getAttrs(),
+                                {"mode", "elementType", "operandSegmentSizes"});
+
+  /// Print arrow and the result type.
+  printer << " -> ";
+  printer.printType(getResult().getType());
+}
+
+
+//===----------------------------------------------------------------------===//
 // EdtOp
 //===----------------------------------------------------------------------===//
 ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
@@ -301,9 +509,9 @@ void EdtOp::getEffects(
 
   /// Otherwise, collect effects from each dependency
   // for (auto dep : dependencies) {
-    // TODO: Implement getEffects for DbDepOp
-    // if (auto dbOp = dep.getDefiningOp<DbDepOp>())
-    //   dbOp.getEffects(effects);
+  // TODO: Implement getEffects for DbDepOp
+  // if (auto dbOp = dep.getDefiningOp<DbDepOp>())
+  //   dbOp.getEffects(effects);
   // }
 }
 
