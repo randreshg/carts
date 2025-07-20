@@ -108,10 +108,8 @@ def DbDepOp : Arts_Op<"db_dep",
   }];
 }
 
-
 def DbControlOp : Arts_Op<"db_control", 
-  [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, 
-   RecursiveMemoryEffects, AttrSizedOperandSegments]> {
+  [AttrSizedOperandSegments]> {
   let summary = "Creates a control dependency for arts.edt";
   let description = [{
     This operation creates a control dependency for the `arts.edt` operation.
@@ -134,7 +132,7 @@ def DbControlOp : Arts_Op<"db_control",
     Variadic<Index>:$sizes
   );
 
-  let results = (outs AnyMemRef:$subview);   // Produces a memref
+  let results = (outs AnyMemRef:$subview);
   let hasCustomAssemblyFormat = 1;
 
   let skipDefaultBuilders = 1;
