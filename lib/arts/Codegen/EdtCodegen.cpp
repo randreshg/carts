@@ -269,8 +269,6 @@ void EdtCodegen::createEntry(Location loc) {
     ///
     db->init(loc);
   }
-
-  replaceInRegion(*region, rewireMap, false);
 }
 
 void EdtCodegen::handleSingleDep(DbDepCodegen *db, Value dep, Value indexAlloc,
@@ -378,26 +376,29 @@ void EdtCodegen::handleMultiDep(DbDepCodegen *db, Value dep, Value indexAlloc,
 }
 
 void EdtCodegen::outlineRegion(Location loc) {
-  ConversionPatternRewriter rewriter(builder.getContext());
-  Region &funcRegion = func.getBody();
-  Block &funcEntryBlock = funcRegion.front();
+  Block &funcEntryBlock = func.getBody().front();
   Block &entryBlock = region->front();
-  rewriter.inlineRegionBefore(*region, funcRegion, funcRegion.end());
 
-  /// Move all operations from entryBlock to funcEntryBlock.
-  funcEntryBlock.getOperations().splice(funcEntryBlock.end(),
-                                        entryBlock.getOperations());
-  entryBlock.erase();
+  // Apply rewireMap to the original region
+  replaceInRegion(*region, rewireMap, false);
 
-  /// Replace each arts.yield terminator with a return.
+  // Move all operations from entryBlock to funcEntryBlock, except the
+  // terminator
+  auto &entryOps = entryBlock.getOperations();
+  size_t numOpsToMove = entryOps.size() > 0 ? entryOps.size() - 1 : 0;
+
+  if (numOpsToMove > 0) {
+    funcEntryBlock.getOperations().splice(funcEntryBlock.end(), entryOps,
+                                          entryOps.begin(),
+                                          std::prev(entryOps.end()));
+  }
+
+  // Replace the arts.yield with return
   returnOp = nullptr;
-  for (auto &block : funcRegion) {
-    if (auto yieldOp = dyn_cast<arts::YieldOp>(block.getTerminator())) {
-      AC.setInsertionPoint(yieldOp);
-      assert(!returnOp &&
-             "Multiple yields in the same block are not supported");
+  if (!entryBlock.empty()) {
+    if (auto yieldOp = dyn_cast<arts::YieldOp>(entryBlock.back())) {
+      builder.setInsertionPointToEnd(&funcEntryBlock);
       returnOp = builder.create<func::ReturnOp>(loc);
-      yieldOp->erase();
     }
   }
 }
