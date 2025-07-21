@@ -42,7 +42,6 @@ DbAllocCodegen::DbAllocCodegen(ArtsCodegen &AC, arts::DbAllocOp dbOp,
       LLVM_DEBUG(dbgs() << " - DbDepOp: " << dbDepOp << "\n");
       auto dbDep = AC.getOrCreateDbDep(dbDepOp, dbOp);
       assert(dbDep && "DbDep could not be created");
-      break;
     }
   }
   create(dbOp, loc);
@@ -183,7 +182,6 @@ DbDepCodegen::DbDepCodegen(ArtsCodegen &AC, arts::DbDepOp dbOp,
       LLVM_DEBUG(dbgs() << "   - DbDepOp: " << dbDepOp << "\n");
       auto dbDep = AC.getOrCreateDbDep(dbDepOp, dbOp);
       assert(dbDep && "DbDep could not be created");
-      break;
     }
   }
 }

@@ -7,12 +7,15 @@
 //===----------------------------------------------------------------------===//
 
 #include "arts/Utils/ArtsTypes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/IR/Types.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -58,9 +61,9 @@ bool isArtsRegion(Operation *op) { return isa<EdtOp>(op) || isa<EpochOp>(op); }
 bool isArtsOp(Operation *op) {
   return isArtsRegion(op) ||
          isa<arts::EdtOp, arts::EpochOp, arts::BarrierOp, arts::AllocOp,
-             arts::DbAllocOp, arts::DbDepOp, arts::GetTotalWorkersOp,
-             arts::GetTotalNodesOp, arts::GetCurrentWorkerOp,
-             arts::GetCurrentNodeOp>(op);
+             arts::DbAllocOp, arts::DbAcquireOp, arts::DbReleaseOp,
+             arts::DbControlOp, arts::GetTotalWorkersOp, arts::GetTotalNodesOp,
+             arts::GetCurrentWorkerOp, arts::GetCurrentNodeOp>(op);
 }
 
 //===----------------------------------------------------------------------===//
@@ -197,300 +200,36 @@ void DbAllocOp::print(OpAsmPrinter &printer) {
   printer.printType(getPtr().getType());
 }
 
-//===----------------------------------------------------------------------===//
-// DbControlOp
-//===----------------------------------------------------------------------===//
-void DbControlOp::build(OpBuilder &odsBuilder, OperationState &odsState,
-                        Type subview, StringRef mode, Value ptr,
-                        Type elementType, Value elementTypeSize,
-                        ValueRange indices, ValueRange sizes) {
-  SmallVector<Value> offsets;
-  offsets.resize(indices.size(), odsBuilder.create<arith::ConstantIndexOp>(
-                                     odsState.location, 0));
-  build(odsBuilder, odsState, subview, mode, ptr, elementType, elementTypeSize,
-        indices, offsets, sizes);
-}
-
-void DbControlOp::build(OpBuilder &odsBuilder, OperationState &odsState,
-                        Type subview, StringRef mode, Value ptr,
-                        Type elementType, Value elementTypeSize,
-                        ValueRange indices, ValueRange offsets,
-                        ValueRange sizes) {
-  odsState.addOperands(ptr);
-  odsState.addOperands(elementTypeSize);
-  odsState.addOperands(indices);
-  odsState.addOperands(offsets);
-  odsState.addOperands(sizes);
-  ::llvm::copy(
-      ::llvm::ArrayRef<int32_t>({1, 1, static_cast<int32_t>(indices.size()),
-                                 static_cast<int32_t>(offsets.size()),
-                                 static_cast<int32_t>(sizes.size())}),
-      odsState.getOrAddProperties<Properties>().operandSegmentSizes.begin());
-  odsState.getOrAddProperties<Properties>().mode =
-      odsBuilder.getStringAttr(mode);
-  odsState.getOrAddProperties<Properties>().elementType =
-      TypeAttr::get(elementType);
-  odsState.addTypes(subview);
-}
-
-ParseResult DbControlOp::parse(OpAsmParser &parser, OperationState &result) {
-  /// Parse the mode attribute.
-  StringAttr modeAttr;
-  if (parser.parseAttribute(modeAttr, "mode", result.attributes))
-    return failure();
-
-  /// Parse " ptr[" literal.
-  if (parser.parseKeyword("ptr") || parser.parseLSquare())
-    return failure();
-
-  /// Parse the base ptr operand.
-  OpAsmParser::UnresolvedOperand ptrOperand;
-  if (parser.parseOperand(ptrOperand))
-    return failure();
-
-  /// Parse colon and the type of the ptr operand.
-  if (parser.parseColon())
-    return failure();
-  Type ptrType;
-  if (parser.parseType(ptrType))
-    return failure();
-  if (parser.resolveOperand(ptrOperand, ptrType, result.operands))
-    return failure();
-  if (parser.parseRSquare())
-    return failure();
-
-  /// Parse comma then "indices[".
-  if (parser.parseComma() || parser.parseKeyword("indices") ||
-      parser.parseLSquare())
-    return failure();
-  SmallVector<OpAsmParser::UnresolvedOperand, 4> indicesOperands;
-  if (parser.parseOperandList(indicesOperands))
-    return failure();
-  if (parser.parseRSquare())
-    return failure();
-
-  /// Parse comma then "offsets[".
-  if (parser.parseComma() || parser.parseKeyword("offsets") ||
-      parser.parseLSquare())
-    return failure();
-  SmallVector<OpAsmParser::UnresolvedOperand, 4> offsetOperands;
-  if (parser.parseOperandList(offsetOperands))
-    return failure();
-  if (parser.parseRSquare())
-    return failure();
-
-  /// Parse comma then "sizes[".
-  if (parser.parseComma() || parser.parseKeyword("sizes") ||
-      parser.parseLSquare())
-    return failure();
-  SmallVector<OpAsmParser::UnresolvedOperand, 4> sizeOperands;
-  if (parser.parseOperandList(sizeOperands))
-    return failure();
-  if (parser.parseRSquare())
-    return failure();
-
-  /// Parse comma then "type[".
-  if (parser.parseComma() || parser.parseKeyword("type") ||
-      parser.parseLSquare())
-    return failure();
-  Type elementType;
-  if (parser.parseType(elementType))
-    return failure();
-  result.addAttribute("elementType", TypeAttr::get(elementType));
-  if (parser.parseRSquare())
-    return failure();
-
-  /// Parse comma then "typeSize[".
-  if (parser.parseComma() || parser.parseKeyword("typeSize") ||
-      parser.parseLSquare())
-    return failure();
-  OpAsmParser::UnresolvedOperand tsOperand;
-  if (parser.parseOperand(tsOperand))
-    return failure();
-  Builder &builder = parser.getBuilder();
-  Type indexType = builder.getIndexType();
-  if (parser.resolveOperand(tsOperand, indexType, result.operands))
-    return failure();
-  if (parser.parseRSquare())
-    return failure();
-
-  /// Parse optional attribute dictionary.
-  if (parser.parseOptionalAttrDict(result.attributes))
-    return failure();
-
-  /// Parse arrow and the result (subview) type.
-  if (parser.parseArrow())
-    return failure();
-  Type subviewType;
-  if (parser.parseType(subviewType))
-    return failure();
-  result.addTypes(subviewType);
-
-  /// Resolve the operand lists for indices, offsets and sizes as index type.
-  SmallVector<Type, 4> expectedIndexTypes(indicesOperands.size(), indexType);
-  if (parser.resolveOperands(indicesOperands, expectedIndexTypes,
-                             parser.getCurrentLocation(), result.operands))
-    return failure();
-  SmallVector<Type, 4> expectedOffsetTypes(offsetOperands.size(), indexType);
-  if (parser.resolveOperands(offsetOperands, expectedOffsetTypes,
-                             parser.getCurrentLocation(), result.operands))
-    return failure();
-  SmallVector<Type, 4> expectedSizeTypes(sizeOperands.size(), indexType);
-  if (parser.resolveOperands(sizeOperands, expectedSizeTypes,
-                             parser.getCurrentLocation(), result.operands))
-    return failure();
-
-  /// Set operand segment sizes.
-  /// Order: ptr (1), typeSize (1), indices, offsets, sizes.
-  SmallVector<int32_t, 5> segmentSizes;
-  segmentSizes.push_back(1);
-  segmentSizes.push_back(1);
-  segmentSizes.push_back(static_cast<int32_t>(indicesOperands.size()));
-  segmentSizes.push_back(static_cast<int32_t>(offsetOperands.size()));
-  segmentSizes.push_back(static_cast<int32_t>(sizeOperands.size()));
-  std::copy(
-      segmentSizes.begin(), segmentSizes.end(),
-      result.getOrAddProperties<Properties>().operandSegmentSizes.begin());
-
-  return success();
-}
-
-void DbControlOp::print(OpAsmPrinter &printer) {
-  auto op = getOperation();
-  /// Print the mode attribute.
-  printer << " " << getModeAttr();
-
-  /// Print the base operand and its type.
-  printer << " ptr[";
-  printer.printOperand(getPtr());
-  printer << " : ";
-  printer.printType(getPtr().getType());
-  printer << "]";
-
-  /// Print indices.
-  auto indices = getIndices();
-  printer << ", indices[";
-  printer.printOperands(indices);
-  printer << "]";
-
-  /// Print offsets.
-  auto offsets = getOffsets();
-  printer << ", offsets[";
-  printer.printOperands(offsets);
-  printer << "]";
-
-  /// Print sizes.
-  auto sizes = getSizes();
-  printer << ", sizes[";
-  printer.printOperands(sizes);
-  printer << "]";
-
-  /// Print the element type attribute.
-  auto typeAttr = op->getAttrOfType<TypeAttr>("elementType");
-  printer << ", type[" << typeAttr.getValue() << "]";
-
-  /// Print the elementTypeSize operand (at index 1).
-  printer << ", typeSize[";
-  printer.printOperand(getOperands()[1]);
-  printer << "]";
-
-  // Print all remaining attributes except "operandSegmentSizes"
-  // and those already printed ("mode", "elementType").
-  printer.printOptionalAttrDict(op->getAttrs(),
-                                {"mode", "elementType", "operandSegmentSizes"});
-
-  /// Print arrow and the result type.
-  printer << " -> ";
-  printer.printType(getResult().getType());
-}
-
+// TODO: Fix inferReturnTypes method signature
+// LogicalResult
+// DbAllocOp::inferReturnTypes(MLIRContext *context,
+//                             std::optional<Location> location,
+//                             ValueShapeRange operands, DictionaryAttr attributes,
+//                             OpaqueProperties properties, RegionRange regions,
+//                             SmallVectorImpl<Type> &inferredReturnTypes) {
+//   // Extract sizes from operands
+//   SmallVector<int64_t> shape;
+//   for (Value operand : operands) {
+//     if (auto constOp = operand.getDefiningOp<arith::ConstantIndexOp>()) {
+//       shape.push_back(constOp.value());
+//     } else {
+//       shape.push_back(ShapedType::kDynamic);
+//     }
+//   }
+//   
+//   // Get element type from attributes or default to f32
+//   Type elementType = FloatType::getF32(context);
+//   if (auto elementTypeAttr = attributes.getAs<TypeAttr>("elementType")) {
+//     elementType = elementTypeAttr.getValue();
+//   }
+//   
+//   inferredReturnTypes.push_back(MemRefType::get(shape, elementType));
+//   return success();
+// }
 
 //===----------------------------------------------------------------------===//
 // EdtOp
 //===----------------------------------------------------------------------===//
-ParseResult EdtOp::parse(OpAsmParser &parser, OperationState &result) {
-  /// We'll parse something like:
-  ///   parameters(...) : (...)
-  ///   [ optional ", dependencies(...) : (...)" ]
-  /// Then parse attr-dict, then the region.
-
-  /// Collect all operands in a single list, typed accordingly
-  SmallVector<OpAsmParser::UnresolvedOperand, 8> depOps;
-  SmallVector<Type, 8> depTypes, evtTypes;
-
-  auto parseGroup =
-      [&](StringRef kw,
-          SmallVectorImpl<OpAsmParser::UnresolvedOperand> &operands,
-          SmallVectorImpl<Type> &types) -> ParseResult {
-    /// Expect "kw(...):(...)"
-    if (parser.parseOperandList(operands, OpAsmParser::Delimiter::Paren) ||
-        parser.parseColon() || parser.parseLParen() ||
-        parser.parseTypeList(types) || parser.parseRParen()) {
-      return failure();
-    }
-    return success();
-  };
-
-  /// Optional read of "dependencies(...) : (...)"
-  if (succeeded(parser.parseOptionalKeyword("dependencies"))) {
-    if (parseGroup("dependencies", depOps, depTypes))
-      return failure();
-    (void)parser.parseOptionalComma();
-  }
-
-  /// Parse attribute dictionary
-  if (parser.parseOptionalAttrDictWithKeyword(result.attributes))
-    return failure();
-
-  /// Parse region
-  Region *body = result.addRegion();
-  if (parser.parseRegion(*body))
-    return failure();
-
-  /// Convert operand references -> actual Value, storing in result.operands
-  if (parser.resolveOperands(depOps, depTypes, parser.getCurrentLocation(),
-                             result.operands))
-    return failure();
-
-  return success();
-}
-
-void EdtOp::print(OpAsmPrinter &printer) {
-  bool first = true;
-  auto printGroup = [&](StringRef kw, ValueRange vals) {
-    if (vals.empty())
-      return;
-    if (!first)
-      printer << ", ";
-    else
-      first = false;
-
-    printer << kw << "(";
-    printer.printOperands(vals);
-    printer << ") : (";
-
-    /// Collect each operand's type manually
-    SmallVector<Type, 4> types;
-    types.reserve(vals.size());
-    for (Value v : vals)
-      types.push_back(v.getType());
-
-    llvm::interleaveComma(types, printer);
-    printer << ")";
-  };
-
-  /// Print each group if it has operands
-  printGroup(" dependencies", getDependenciesVector());
-
-  /// Print attributes + region
-  printer.printOptionalAttrDictWithKeyword(
-      getOperation()->getAttrs(),
-      /*elidedAttrs=*/{"operandSegmentSizes"});
-  printer << ' ';
-  printer.printRegion(getOperation()->getRegion(0),
-                      /*printEntryBlockArgs=*/false,
-                      /*printBlockTerminators=*/true);
-}
 
 void EdtOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
@@ -523,46 +262,6 @@ SmallVector<Value> EdtOp::getDependenciesVector() {
   return dependenciesVector;
 }
 
-/// Others
-bool EdtOp::isParallel() {
-  return getOperation()->hasAttr(types::toString(types::EdtType::Parallel));
-}
-bool EdtOp::isSingle() {
-  return getOperation()->hasAttr(types::toString(types::EdtType::Single));
-}
-bool EdtOp::isSync() {
-  return getOperation()->hasAttr(types::toString(types::EdtType::Sync));
-}
-bool EdtOp::isTask() {
-  return getOperation()->hasAttr(types::toString(types::EdtType::Task));
-}
-void EdtOp::setIsParallelAttr() {
-  getOperation()->setAttr(types::toString(types::EdtType::Parallel),
-                          UnitAttr::get(getContext()));
-}
-void EdtOp::setIsSingleAttr() {
-  getOperation()->setAttr(types::toString(types::EdtType::Single),
-                          UnitAttr::get(getContext()));
-}
-void EdtOp::setIsSyncAttr() {
-  getOperation()->setAttr("sync", UnitAttr::get(getContext()));
-}
-void EdtOp::setIsTaskAttr() {
-  getOperation()->setAttr("task", UnitAttr::get(getContext()));
-}
-void EdtOp::clearIsParallelAttr() {
-  getOperation()->removeAttr(types::toString(types::EdtType::Parallel));
-}
-void EdtOp::clearIsSingleAttr() {
-  getOperation()->removeAttr(types::toString(types::EdtType::Single));
-}
-void EdtOp::clearIsSyncAttr() {
-  getOperation()->removeAttr(types::toString(types::EdtType::Sync));
-}
-void EdtOp::clearIsTaskAttr() {
-  getOperation()->removeAttr(types::toString(types::EdtType::Task));
-}
-
 //===----------------------------------------------------------------------===//
 // EventOp
 //===----------------------------------------------------------------------===//
@@ -570,3 +269,21 @@ bool EventOp::hasSingleSize() { return getOperation()->hasAttr("singleSize"); }
 void EventOp::setHasSingleSize() {
   getOperation()->setAttr("singleSize", UnitAttr::get(getContext()));
 }
+
+// TODO: Fix inferReturnTypes method signature
+// LogicalResult DbAcquireOp::inferReturnTypes(
+//     MLIRContext *context, std::optional<Location> location,
+//     ValueShapeRange operands, DictionaryAttr attributes,
+//     OpaqueProperties properties, RegionRange regions,
+//     SmallVectorImpl<Type> &inferredReturnTypes) {
+//   // Infer from source type and subregion params
+//   auto sourceType = dyn_cast<MemRefType>(getSource().getType());
+//   if (!sourceType)
+//     return failure();
+//   ArrayRef<int64_t> shapeRef = sourceType.getShape();
+//   SmallVector<int64_t> shape(shapeRef.begin(), shapeRef.end());
+//   // Adjust shape based on sizes/offsets (simplified)
+//   inferredReturnTypes.push_back(
+//       MemRefType::get(shape, sourceType.getElementType()));
+//   return success();
+// }

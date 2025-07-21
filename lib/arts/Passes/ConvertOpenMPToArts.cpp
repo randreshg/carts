@@ -53,7 +53,7 @@ struct OMPParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
     LLVM_DEBUG(DBGS() << "Converting omp.parallel to arts.parallel\n");
 
     /// Create a new `arts.edt` operation.
-    auto parOp = createEdtOp(rewriter, loc, types::EdtType::Parallel);
+    auto parOp = rewriter.create<EdtOp>(loc, EdtType::parallel);
     parOp.getBody().emplaceBlock();
     Block &blk = parOp.getBody().front();
 
@@ -80,7 +80,7 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
     rewriter.setInsertionPoint(op);
 
     /// Create an `arts.epoch` operation and add a region to it.
-    auto syncEdtOp = createEdtOp(rewriter, loc, types::EdtType::Sync);
+    auto syncEdtOp = rewriter.create<EdtOp>(loc, EdtType::sync);
     Block &syncEdtBlock = syncEdtOp.getBody().emplaceBlock();
 
     /// Create the for loop inside the epoch
@@ -94,7 +94,7 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
 
     /// Create a new EDT operation inside the for loop body
     rewriter.setInsertionPointToStart(forBody);
-    auto edtOp = createEdtOp(rewriter, loc, types::EdtType::Task);
+    auto edtOp = rewriter.create<EdtOp>(loc, EdtType::task);
     Block &edtBlock = edtOp.getBody().emplaceBlock();
     rewriter.setInsertionPointToStart(&edtBlock);
 
@@ -132,7 +132,7 @@ struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
     auto loc = op.getLoc();
 
     /// Create a new `arts.single` operation.
-    auto artsSingle = createEdtOp(rewriter, loc, types::EdtType::Single);
+    auto artsSingle = rewriter.create<EdtOp>(loc, EdtType::single);
     artsSingle.getBody().emplaceBlock();
 
     /// Move the region's operations.
@@ -150,14 +150,14 @@ struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
 struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
   using OpRewritePattern::OpRewritePattern;
 
-  types::DbDepType getDbDepType(omp::ClauseTaskDepend taskClause) const {
+  ArtsMode getDbMode(omp::ClauseTaskDepend taskClause) const {
     switch (taskClause) {
     case omp::ClauseTaskDepend::taskdependin:
-      return types::DbDepType::ReadOnly;
+      return ArtsMode::in;
     case omp::ClauseTaskDepend::taskdependout:
-      return types::DbDepType::WriteOnly;
+      return ArtsMode::out;
     case omp::ClauseTaskDepend::taskdependinout:
-      return types::DbDepType::ReadWrite;
+      return ArtsMode::inout;
     }
     llvm_unreachable("Unknown ClauseTaskDepend value");
   }
@@ -220,11 +220,11 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
         OpBuilder::InsertionGuard IG(rewriter);
         rewriter.setInsertionPointAfter(depLoadVal.getDefiningOp());
         SmallVector<Value> emptyIndices;
-        /// This should be added as dependency to the EDT operation and later on
-        /// removed in CreateDbs pass.
-        createDbControlOp(rewriter, depLoadVal.getLoc(),
-                          getDbDepType(depClause.getValue()), depLoadVal,
-                          emptyIndices);
+        /// Create db_control and add to deps
+        Value dbControl = createDbControlOp(rewriter, depLoadVal.getLoc(),
+                                            getDbMode(depClause.getValue()),
+                                            depLoadVal, emptyIndices);
+        deps.push_back(dbControl);
       }
 
       /// Replace the dependency allocation with an undefined value.
@@ -241,7 +241,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
     collectTaskDependencies(deps, op, rewriter, loc);
 
     /// Create a new `arts.edt` operation.
-    auto edtOp = createEdtOp(rewriter, loc, types::EdtType::Task, deps);
+    auto edtOp = rewriter.create<EdtOp>(loc, EdtType::task, deps);
     edtOp.getBody().emplaceBlock();
     Block &blk = edtOp.getBody().front();
 

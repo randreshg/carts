@@ -1,11 +1,13 @@
-///==========================================================================
-/// File: DbAliasAnalysis.cpp
-/// Datablock alias analysis with memory region overlap detection.
-///==========================================================================
+//===----------------------------------------------------------------------===//
+// Db/DbAliasAnalysis.cpp - Implementation of DbAliasAnalysis
+//===----------------------------------------------------------------------===//
 
 #include "arts/Analysis/Db/DbAliasAnalysis.h"
-#include "arts/Analysis/Db/DbInfo.h"
-#include "arts/Analysis/Db/Graph/DbNode.h"
+#include "arts/Analysis/Db/DbAnalysis.h"
+#include "mlir/Analysis/AliasAnalysis/LocalAliasAnalysis.h"
+#include "mlir/IR/OpImplementation.h"
+#include "mlir/IR/Types.h"
+#include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "llvm/Support/Debug.h"
 #include <algorithm>
 #include <numeric>
@@ -19,38 +21,50 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
-static std::optional<int64_t> getConstantAsInt(const SymbolicExpr &expr) {
+std::optional<int64_t> getConstantAsInt(const SymbolicExpr &expr) {
   if (expr.kind == SymbolicExpr::Kind::Constant) {
     return expr.constant;
   }
   return std::nullopt;
 }
+
+std::pair<Value, Value> makeOrderedPair(Value a, Value b) {
+  // Use pointer comparison for ordering
+  return a.getAsOpaquePointer() < b.getAsOpaquePointer() ? std::make_pair(a, b)
+                                                         : std::make_pair(b, a);
+}
+
+SmallVector<MemoryEffects::EffectInstance, 4> getEffects(Operation *op) {
+  SmallVector<MemoryEffects::EffectInstance, 4> effects;
+  if (auto effectOp = dyn_cast<MemoryEffectOpInterface>(op)) {
+    effectOp.getEffects(effects);
+  }
+  return effects;
+}
 } // namespace
 
-///===----------------------------------------------------------------------===///
-/// DbAliasAnalysis Implementation
-///===----------------------------------------------------------------------===///
-
-DbAliasAnalysis::DbAliasAnalysis(DbAnalysis *analysis) : analysis(analysis) {
+DbAliasAnalysis::DbAliasAnalysis(DbAnalysis *analysis)
+    : analysis(analysis) {
   assert(analysis && "Analysis cannot be null");
 }
 
-bool DbAliasAnalysis::mayAlias(DbInfo &A, DbInfo &B,
+bool DbAliasAnalysis::mayAlias(const NodeBase &a, const NodeBase &b,
                                const std::string &indent) {
-  auto APtr = A.isAlloc() ? A.getResult() : A.getPtr();
-  auto BPtr = B.isAlloc() ? B.getResult() : B.getPtr();
+  Value ptrA = getUnderlyingValue(a);
+  Value ptrB = getUnderlyingValue(b);
 
-  LLVM_DEBUG(DBGS_INDENT(indent) << "Analyzing alias between DB #" << A.getId()
-                                 << " and DB #" << B.getId() << "\n");
+  LLVM_DEBUG(DBGS_INDENT(indent)
+             << "Analyzing alias between node " << a.getHierId() << " and node "
+             << b.getHierId() << "\n");
 
-  /// Same value alias with itself
-  if (APtr == BPtr) {
+  // Same value aliases with itself
+  if (ptrA == ptrB) {
     LLVM_DEBUG(dbgs() << indent << "  -> Same pointer, must alias\n");
     return true;
   }
 
-  /// Check cache
-  auto key = makeOrderedPair(APtr, BPtr);
+  // Check cache
+  auto key = makeOrderedPair(ptrA, ptrB);
   auto it = aliasCache.find(key);
   if (it != aliasCache.end()) {
     LLVM_DEBUG(dbgs() << indent << "  -> Cache hit: "
@@ -58,18 +72,44 @@ bool DbAliasAnalysis::mayAlias(DbInfo &A, DbInfo &B,
     return it->second;
   }
 
+  // Quick check with MLIR AA
+  // TODO: Fix AliasAnalysis initialization
+  // AliasResult mlirResult = mlirAA.alias(ptrA, ptrB);
+  // if (mlirResult == AliasResult::NoAlias) {
+  //   LLVM_DEBUG(dbgs() << indent << "  -> MLIR AA says no alias\n");
+  //   aliasCache[key] = false;
+  //   return false;
+  // } else if (mlirResult == AliasResult::MustAlias) {
+  //   LLVM_DEBUG(dbgs() << indent << "  -> MLIR AA says must alias\n");
+  //   aliasCache[key] = true;
+  //   return true;
+  // }
+
   bool result;
 
-  if (A.isAlloc() && B.isAlloc()) {
+  if (isa<DbAllocNode>(&a) && isa<DbAllocNode>(&b)) {
+    LLVM_DEBUG(
+        dbgs() << indent
+               << "  -> Both are allocations. Checking effects and regions.\n");
+    SmallVector<MemoryEffects::EffectInstance, 4> effectsA;
+    effectsA = getEffects(a.getOp());
+    SmallVector<MemoryEffects::EffectInstance, 4> effectsB;
+    effectsB = getEffects(b.getOp());
+    if (!mayAliasEffects(effectsA, effectsB, indent + "    ")) {
+      result = false;
+    } else {
+      result = analyzeMemoryRegionOverlap(a, b, indent + "    ");
+    }
+  } else if ((isa<DbAcquireNode>(&a) || isa<DbReleaseNode>(&a)) &&
+             (isa<DbAcquireNode>(&b) || isa<DbReleaseNode>(&b))) {
     LLVM_DEBUG(dbgs() << indent
-                      << "  -> Both are allocations. Checking effects.\n");
-    SmallVector<MemoryEffects::EffectInstance, 4> effectsA = A.getEffects();
-    SmallVector<MemoryEffects::EffectInstance, 4> effectsB = B.getEffects();
-    result = mayAlias(effectsA, effectsB, indent + "    ");
-  } else if (A.isDep() && B.isDep()) {
-    LLVM_DEBUG(dbgs() << indent << "  -> Both are depes.\n");
-    auto *parentA = A.getParent();
-    auto *parentB = B.getParent();
+                      << "  -> Both are access ops (acquire/release).\n");
+    auto parentA = isa<DbAcquireNode>(&a)
+                       ? dyn_cast<DbAcquireNode>(&a)->getParent()
+                       : dyn_cast<DbReleaseNode>(&a)->getParent();
+    auto parentB = isa<DbAcquireNode>(&b)
+                       ? dyn_cast<DbAcquireNode>(&b)->getParent()
+                       : dyn_cast<DbReleaseNode>(&b)->getParent();
 
     if (parentA && parentB) {
       if (!mayAlias(*parentA, *parentB, indent + "    ")) {
@@ -81,60 +121,104 @@ bool DbAliasAnalysis::mayAlias(DbInfo &A, DbInfo &B,
         LLVM_DEBUG(
             dbgs() << indent
                    << "    -> Same parent allocation. Checking regions.\n");
-        result = analyzeMemoryRegionOverlap(A, B, indent + "    ");
+        result = analyzeMemoryRegionOverlap(a, b, indent + "    ");
       }
     } else {
-      LLVM_DEBUG(dbgs() << indent << "    -> Could not determine parents. "
-                        << "Falling back to effects.\n");
-      SmallVector<MemoryEffects::EffectInstance, 4> effectsA = A.getEffects();
-      SmallVector<MemoryEffects::EffectInstance, 4> effectsB = B.getEffects();
-      result = mayAlias(effectsA, effectsB, indent + "    ");
+      LLVM_DEBUG(
+          dbgs()
+          << indent
+          << "    -> Could not determine parents. Falling back to effects.\n");
+      SmallVector<MemoryEffects::EffectInstance, 4> effectsA =
+          getEffects(a.getOp());
+      SmallVector<MemoryEffects::EffectInstance, 4> effectsB =
+          getEffects(b.getOp());
+      result = mayAliasEffects(effectsA, effectsB, indent + "    ");
     }
   } else {
-    DbInfo &alloc = A.isAlloc() ? A : B;
-    DbInfo &dep = A.isDep() ? A : B;
-    LLVM_DEBUG(dbgs() << indent << "  -> Mixed alloc #" << alloc.getId()
-                      << " and dep #" << dep.getId() << ".\n");
+    const NodeBase &alloc = isa<DbAllocNode>(&a) ? a : b;
+    const NodeBase &access = isa<DbAllocNode>(&a) ? b : a;
+    LLVM_DEBUG(dbgs() << indent
+                      << "  -> Mixed alloc and access (acquire/release).\n");
 
-    auto *depParent = dep.getParent();
-    if (depParent) {
-      LLVM_DEBUG(dbgs() << indent << "    -> Dep has parent #"
-                        << depParent->getId() << ". Comparing with alloc.\n");
-      result = mayAlias(alloc, *depParent, indent + "    ");
+    auto accessParent = isa<DbAcquireNode>(&access)
+                            ? dyn_cast<DbAcquireNode>(&access)->getParent()
+                            : dyn_cast<DbReleaseNode>(&access)->getParent();
+    if (accessParent) {
+      LLVM_DEBUG(
+          dbgs()
+          << indent
+          << "    -> Access has parent alloc. Comparing with given alloc.\n");
+      result = mayAlias(alloc, *accessParent, indent + "    ");
     } else {
-      LLVM_DEBUG(dbgs() << indent << "    -> Dep has no parent. "
-                        << "Falling back to effects.\n");
-      SmallVector<MemoryEffects::EffectInstance, 4> effectsA = A.getEffects();
-      SmallVector<MemoryEffects::EffectInstance, 4> effectsB = B.getEffects();
-      result = mayAlias(effectsA, effectsB, indent + "    ");
+      LLVM_DEBUG(
+          dbgs() << indent
+                 << "    -> Access has no parent. Falling back to effects.\n");
+      SmallVector<MemoryEffects::EffectInstance, 4> effectsAlloc =
+          getEffects(alloc.getOp());
+      SmallVector<MemoryEffects::EffectInstance, 4> effectsAccess =
+          getEffects(access.getOp());
+      result = mayAliasEffects(effectsAlloc, effectsAccess, indent + "    ");
     }
   }
 
-  /// Cache and return the result
   aliasCache[key] = result;
   LLVM_DEBUG(dbgs() << indent << "  -> Final result: "
                     << (result ? "may alias" : "no alias") << "\n");
   return result;
 }
 
-bool DbAliasAnalysis::analyzeMemoryRegionOverlap(DbInfo &A, DbInfo &B,
+Value DbAliasAnalysis::getUnderlyingValue(const NodeBase &node) {
+  Operation *op = node.getOp();
+  if (isa<DbAllocOp>(op)) {
+    return op->getResult(0);
+  } else if (isa<DbAcquireOp>(op)) {
+    return cast<DbAcquireOp>(op).getSource();
+  } else if (isa<DbReleaseOp>(op)) {
+    return cast<DbReleaseOp>(op).getSources()[0];
+  }
+  llvm_unreachable("Invalid DB node type");
+}
+
+SmallVector<int64_t> DbAliasAnalysis::computeDimSizes(const NodeBase &node) {
+  SmallVector<int64_t> sizes = analysis->getComputedDimSizes(node);
+  Operation *op = node.getOp();
+
+  if (auto inferOp = dyn_cast<InferTypeOpInterface>(op)) {
+    SmallVector<Type> inferredTypes;
+    if (succeeded(inferOp.inferReturnTypes(
+            op->getContext(), op->getLoc(), op->getOperands(),
+            op->getAttrDictionary(), op->getPropertiesStorage(),
+            op->getRegions(), inferredTypes))) {
+      for (Type ty : inferredTypes) {
+        if (auto memrefTy = dyn_cast<MemRefType>(ty)) {
+          ArrayRef<int64_t> shape = memrefTy.getShape();
+          sizes.assign(shape.begin(), shape.end());
+          break; // Assume first result
+        }
+      }
+    }
+  }
+
+  return sizes;
+}
+
+bool DbAliasAnalysis::analyzeMemoryRegionOverlap(const NodeBase &a,
+                                                 const NodeBase &b,
                                                  const std::string &indent) {
   LLVM_DEBUG(DBGS_INDENT(indent) << "Analyzing memory region overlap\n");
 
-  /// Get dimension analysis for both datablocks
-  const auto &dimAnalysisA = A.getDimensionAnalysis();
-  const auto &dimAnalysisB = B.getDimensionAnalysis();
-  const auto &dimSizesA = A.getComputedDimSizes();
-  const auto &dimSizesB = B.getComputedDimSizes();
+  const auto &dimAnalysisA = analysis->getDimensionAnalysis(a);
+  const auto &dimAnalysisB = analysis->getDimensionAnalysis(b);
+  SmallVector<int64_t> dimSizesA =
+      computeDimSizes(a); // Enhanced with inference
+  SmallVector<int64_t> dimSizesB = computeDimSizes(b);
 
-  /// If dimensions don't match, they could still overlap if one is a subset
   size_t minDims = std::min(dimAnalysisA.size(), dimAnalysisB.size());
 
   LLVM_DEBUG(dbgs() << indent << "  Dimensions: A=" << dimAnalysisA.size()
                     << ", B=" << dimAnalysisB.size() << ", analyzing first "
                     << minDims << "\n");
 
-  /// Check each dimension for potential overlap
   for (size_t dim = 0; dim < minDims; ++dim) {
     if (!analyzeDimensionOverlap(dimAnalysisA[dim], dimAnalysisB[dim],
                                  dimSizesA.size() > dim ? dimSizesA[dim] : -1,
@@ -157,54 +241,42 @@ bool DbAliasAnalysis::analyzeDimensionOverlap(const DimensionAnalysis &dimA,
                                               const std::string &indent) {
   LLVM_DEBUG(DBGS_INDENT(indent)
              << "Analyzing dimension " << dimIndex << " overlap\n");
-  LLVM_DEBUG(dbgs() << indent
-                    << "  Pattern A: " << dimA.overallPattern.getPatternName()
-                    << ", Pattern B: " << dimB.overallPattern.getPatternName()
-                    << "\n");
+  LLVM_DEBUG(dbgs() << indent << "  Pattern A: " << dimA.overallPattern.pattern
+                    << ", Pattern B: " << dimB.overallPattern.pattern << "\n");
 
   const auto &patternA = dimA.overallPattern;
   const auto &patternB = dimB.overallPattern;
 
-  /// Handle constant patterns - most precise analysis
-  if (patternA.pattern == ComplexExpr::Pattern::Constant &&
-      patternB.pattern == ComplexExpr::Pattern::Constant) {
-    LLVM_DEBUG(dbgs() << indent << "  -> Using constant overlap analysis\n");
+  if (patternA.pattern == ComplexExpr::Constant &&
+      patternB.pattern == ComplexExpr::Constant) {
     return analyzeConstantOverlap(patternA, patternB, indent + "  ");
   }
 
-  /// Handle sequential patterns
-  if (patternA.pattern == ComplexExpr::Pattern::Sequential ||
-      patternB.pattern == ComplexExpr::Pattern::Sequential) {
-    LLVM_DEBUG(dbgs() << indent << "  -> Using sequential overlap analysis\n");
+  if (patternA.pattern == ComplexExpr::Sequential ||
+      patternB.pattern == ComplexExpr::Sequential) {
     return analyzeSequentialOverlap(patternA, patternB, sizeA, sizeB,
                                     indent + "  ");
   }
 
-  /// Handle strided patterns
-  if (patternA.pattern == ComplexExpr::Pattern::Strided ||
-      patternB.pattern == ComplexExpr::Pattern::Strided) {
-    LLVM_DEBUG(dbgs() << indent << "  -> Using strided overlap analysis\n");
+  if (patternA.pattern == ComplexExpr::Strided ||
+      patternB.pattern == ComplexExpr::Strided) {
     return analyzeStridedOverlap(patternA, patternB, sizeA, sizeB,
                                  indent + "  ");
   }
 
-  /// Handle blocked patterns
-  if (patternA.pattern == ComplexExpr::Pattern::Blocked ||
-      patternB.pattern == ComplexExpr::Pattern::Blocked) {
-    LLVM_DEBUG(dbgs() << indent << "  -> Using blocked overlap analysis\n");
+  if (patternA.pattern == ComplexExpr::Blocked ||
+      patternB.pattern == ComplexExpr::Blocked) {
     return analyzeBlockedOverlap(patternA, patternB, sizeA, sizeB,
                                  indent + "  ");
   }
 
-  /// For complex or indirect patterns, use conservative bounds analysis
   if (patternA.hasValidBounds && patternB.hasValidBounds) {
-    LLVM_DEBUG(dbgs() << indent << "  -> Using bounds overlap analysis\n");
     return analyzeBoundsOverlap(patternA, patternB, indent + "  ");
   }
 
-  LLVM_DEBUG(dbgs() << indent << "  -> Complex patterns without bounds - "
-                    << "assuming overlap\n");
-  /// Conservative: assume overlap for complex patterns without bounds
+  LLVM_DEBUG(
+      dbgs() << indent
+             << "  -> Complex patterns without bounds - assuming overlap\n");
   return true;
 }
 
@@ -213,18 +285,18 @@ bool DbAliasAnalysis::analyzeConstantOverlap(const ComplexExpr &exprA,
                                              const std::string &indent) {
   LLVM_DEBUG(DBGS_INDENT(indent) << "Constant overlap analysis\n");
 
-  if (exprA.baseExpr.kind == SymbolicExpr::Kind::Constant &&
-      exprB.baseExpr.kind == SymbolicExpr::Kind::Constant) {
-    bool overlap = (exprA.baseExpr.constant == exprB.baseExpr.constant);
-    LLVM_DEBUG(dbgs() << indent << "  Constants " << exprA.baseExpr.constant
-                      << " vs " << exprB.baseExpr.constant << " -> "
-                      << (overlap ? "overlap" : "no overlap") << "\n");
+  auto baseA = getConstantAsInt(exprA.baseExpr);
+  auto baseB = getConstantAsInt(exprB.baseExpr);
+  if (baseA && baseB) {
+    bool overlap = *baseA == *baseB;
+    LLVM_DEBUG(dbgs() << indent << "  Constants " << *baseA << " vs " << *baseB
+                      << " -> " << (overlap ? "overlap" : "no overlap")
+                      << "\n");
     return overlap;
   }
 
   LLVM_DEBUG(dbgs() << indent
                     << "  Not both constant - conservative overlap\n");
-  /// Conservative if not both constant
   return true;
 }
 
@@ -235,14 +307,11 @@ bool DbAliasAnalysis::analyzeSequentialOverlap(const ComplexExpr &exprA,
   LLVM_DEBUG(DBGS_INDENT(indent) << "Sequential overlap analysis\n");
 
   if (exprA.hasValidBounds && exprB.hasValidBounds) {
-    LLVM_DEBUG(dbgs() << indent << "  Both have valid bounds, delegating to "
-                      << "bounds analysis\n");
     return analyzeBoundsOverlap(exprA, exprB, indent + "  ");
   }
 
-  LLVM_DEBUG(dbgs() << indent << "  Insufficient bound information - "
-                    << "assuming overlap\n");
-  /// Conservative if bounds are not constant
+  LLVM_DEBUG(dbgs() << indent
+                    << "  Insufficient bound information - assuming overlap\n");
   return true;
 }
 
@@ -252,57 +321,28 @@ bool DbAliasAnalysis::analyzeStridedOverlap(const ComplexExpr &exprA,
                                             const std::string &indent) {
   LLVM_DEBUG(DBGS_INDENT(indent) << "Strided overlap analysis\n");
 
-  const auto &baseA = exprA.baseExpr;
-  const auto &baseB = exprB.baseExpr;
-  const auto &strideA_expr = exprA.strideExpr;
-  const auto &strideB_expr = exprB.strideExpr;
-
-  if (strideA_expr.kind != SymbolicExpr::Kind::Constant ||
-      strideB_expr.kind != SymbolicExpr::Kind::Constant) {
+  auto strideA = getConstantAsInt(exprA.strideExpr);
+  auto strideB = getConstantAsInt(exprB.strideExpr);
+  if (!strideA || !strideB) {
     LLVM_DEBUG(dbgs() << indent
                       << "  Non-constant stride - assuming overlap\n");
     return true;
   }
 
-  int64_t strideA = strideA_expr.constant;
-  int64_t strideB = strideB_expr.constant;
-  int64_t gcdStrides = std::gcd(std::abs(strideA), std::abs(strideB));
+  int64_t gcdStrides = std::gcd(std::abs(*strideA), std::abs(*strideB));
 
-  LLVM_DEBUG(dbgs() << indent << "  Stride A: " << strideA << ", Stride B: "
-                    << strideB << ", GCD: " << gcdStrides << "\n");
-
-  if (gcdStrides == 0) {
-    LLVM_DEBUG(dbgs() << indent
-                      << "  Zero stride detected - assuming overlap\n");
-    return true;
-  }
-
-  if (baseA.kind == SymbolicExpr::Kind::Constant &&
-      baseB.kind == SymbolicExpr::Kind::Constant) {
-    int64_t diff = baseB.constant - baseA.constant;
+  auto baseA = getConstantAsInt(exprA.baseExpr);
+  auto baseB = getConstantAsInt(exprB.baseExpr);
+  if (baseA && baseB) {
+    int64_t diff = *baseB - *baseA;
     bool overlap = (diff % gcdStrides == 0);
-    LLVM_DEBUG(dbgs() << indent << "  Constant bases: A=" << baseA.constant
-                      << ", B=" << baseB.constant << ", diff=" << diff << " -> "
+    LLVM_DEBUG(dbgs() << indent << "  Constant bases diff=" << diff
+                      << " gcd=" << gcdStrides << " -> "
                       << (overlap ? "overlap" : "no overlap") << "\n");
     return overlap;
   }
 
-  if (baseA.kind == SymbolicExpr::Kind::Affine &&
-      baseB.kind == SymbolicExpr::Kind::Affine && baseA.base == baseB.base &&
-      baseA.multiplier == 1 && baseB.multiplier == 1) {
-    int64_t diff = baseB.offset - baseA.offset;
-    bool overlap = (diff % gcdStrides == 0);
-    LLVM_DEBUG(dbgs() << indent << "  Symbolic bases with same base value: "
-                      << "offsetA=" << baseA.offset
-                      << ", offsetB=" << baseB.offset << ", diff=" << diff
-                      << ", gcd=" << gcdStrides << " -> "
-                      << (overlap ? "overlap" : "no overlap") << "\n");
-    return overlap;
-  }
-
-  LLVM_DEBUG(dbgs() << indent << "  Complex or different symbolic bases - "
-                    << "assuming overlap\n");
-  /// Conservative for non-constant strides
+  LLVM_DEBUG(dbgs() << indent << "  Complex bases - assuming overlap\n");
   return true;
 }
 
@@ -312,53 +352,27 @@ bool DbAliasAnalysis::analyzeBlockedOverlap(const ComplexExpr &exprA,
                                             const std::string &indent) {
   LLVM_DEBUG(DBGS_INDENT(indent) << "Blocked overlap analysis\n");
 
-  const auto &baseA = exprA.baseExpr;
-  const auto &baseB = exprB.baseExpr;
-  const auto &blockSizeA_expr = exprA.blockSize;
-  const auto &blockSizeB_expr = exprB.blockSize;
-
-  if (blockSizeA_expr.kind != SymbolicExpr::Kind::Constant ||
-      blockSizeB_expr.kind != SymbolicExpr::Kind::Constant) {
-    LLVM_DEBUG(dbgs() << indent << "  Non-constant block size - "
-                      << "assuming overlap\n");
+  auto blockSizeA = getConstantAsInt(exprA.blockSize);
+  auto blockSizeB = getConstantAsInt(exprB.blockSize);
+  if (!blockSizeA || !blockSizeB) {
+    LLVM_DEBUG(dbgs() << indent
+                      << "  Non-constant block size - assuming overlap\n");
     return true;
   }
 
-  int64_t blockSizeA = blockSizeA_expr.constant;
-  int64_t blockSizeB = blockSizeB_expr.constant;
-
-  LLVM_DEBUG(dbgs() << indent << "  Block sizes: A=" << blockSizeA
-                    << ", B=" << blockSizeB << "\n");
-
-  if (baseA.kind == SymbolicExpr::Kind::Constant &&
-      baseB.kind == SymbolicExpr::Kind::Constant) {
-    int64_t bA = baseA.constant;
-    int64_t bB = baseB.constant;
-    bool overlap = !(bA + blockSizeA <= bB || bB + blockSizeB <= bA);
-    LLVM_DEBUG(dbgs() << indent << "  Constant blocks: A[" << bA << ", "
-                      << (bA + blockSizeA) << "), B[" << bB << ", "
-                      << (bB + blockSizeB) << ") -> "
-                      << (overlap ? "overlap" : "no overlap") << "\n");
-    return overlap;
-  }
-
-  if (baseA.kind == SymbolicExpr::Kind::Affine &&
-      baseB.kind == SymbolicExpr::Kind::Affine && baseA.base == baseB.base &&
-      baseA.multiplier == 1 && baseB.multiplier == 1) {
-    int64_t offsetA = baseA.offset;
-    int64_t offsetB = baseB.offset;
+  auto baseA = getConstantAsInt(exprA.baseExpr);
+  auto baseB = getConstantAsInt(exprB.baseExpr);
+  if (baseA && baseB) {
     bool overlap =
-        !(offsetA + blockSizeA <= offsetB || offsetB + blockSizeB <= offsetA);
-    LLVM_DEBUG(dbgs() << indent << "  Symbolic blocks with same base: "
-                      << "A[base+" << offsetA << ", base+"
-                      << (offsetA + blockSizeA) << "), B[base+" << offsetB
-                      << ", base+" << (offsetB + blockSizeB) << ") -> "
+        !(*baseA + *blockSizeA <= *baseB || *baseB + *blockSizeB <= *baseA);
+    LLVM_DEBUG(dbgs() << indent << "  Blocks A[" << *baseA << "-"
+                      << (*baseA + *blockSizeA) << "] B[" << *baseB << "-"
+                      << (*baseB + *blockSizeB) << "] -> "
                       << (overlap ? "overlap" : "no overlap") << "\n");
     return overlap;
   }
 
-  LLVM_DEBUG(dbgs() << indent << "  Non-constant or different symbolic base "
-                    << "for block - assuming overlap\n");
+  LLVM_DEBUG(dbgs() << indent << "  Non-constant bases - assuming overlap\n");
   return true;
 }
 
@@ -367,76 +381,43 @@ bool DbAliasAnalysis::analyzeBoundsOverlap(const ComplexExpr &exprA,
                                            const std::string &indent) {
   LLVM_DEBUG(DBGS_INDENT(indent) << "Bounds overlap analysis\n");
 
-  const auto &minA_expr = exprA.conservativeMin;
-  const auto &maxA_expr = exprA.conservativeMax;
-  const auto &minB_expr = exprB.conservativeMin;
-  const auto &maxB_expr = exprB.conservativeMax;
+  auto minA = getConstantAsInt(exprA.conservativeMin);
+  auto maxA = getConstantAsInt(exprA.conservativeMax);
+  auto minB = getConstantAsInt(exprB.conservativeMin);
+  auto maxB = getConstantAsInt(exprB.conservativeMax);
 
-  auto minA_c = getConstantAsInt(minA_expr);
-  auto maxA_c = getConstantAsInt(maxA_expr);
-  auto minB_c = getConstantAsInt(minB_expr);
-  auto maxB_c = getConstantAsInt(maxB_expr);
-
-  if (minA_c && maxA_c && minB_c && maxB_c) {
-    bool overlap = !(*maxA_c < *minB_c || *maxB_c < *minA_c);
-    LLVM_DEBUG(dbgs() << indent << "  Constant bounds: A[" << *minA_c << ", "
-                      << *maxA_c << "], B[" << *minB_c << ", " << *maxB_c
-                      << "] -> " << (overlap ? "overlap" : "no overlap")
-                      << "\n");
+  if (minA && maxA && minB && maxB) {
+    bool overlap = !(*maxA < *minB || *maxB < *minA);
+    LLVM_DEBUG(dbgs() << indent << "  Bounds A[" << *minA << "-" << *maxA
+                      << "] B[" << *minB << "-" << *maxB << "] -> "
+                      << (overlap ? "overlap" : "no overlap") << "\n");
     return overlap;
   }
 
-  if (minA_expr.kind == SymbolicExpr::Kind::Affine &&
-      maxA_expr.kind == SymbolicExpr::Kind::Affine &&
-      minB_expr.kind == SymbolicExpr::Kind::Affine &&
-      maxB_expr.kind == SymbolicExpr::Kind::Affine && minA_expr.base &&
-      minA_expr.base == minB_expr.base && minA_expr.base == maxA_expr.base &&
-      minA_expr.base == maxB_expr.base && minA_expr.multiplier == 1 &&
-      maxA_expr.multiplier == 1 && minB_expr.multiplier == 1 &&
-      maxB_expr.multiplier == 1) {
-    int64_t lowA = minA_expr.offset;
-    int64_t highA = maxA_expr.offset;
-    int64_t lowB = minB_expr.offset;
-    int64_t highB = maxB_expr.offset;
-
-    if (highA < lowB || highB < lowA) {
-      LLVM_DEBUG(dbgs() << indent << "  Symbolic disjoint bounds for base "
-                        << minA_expr.base << ": A[base+" << lowA << ", base+"
-                        << highA << "], B[base+" << lowB << ", base+" << highB
-                        << "] -> no overlap\n");
-      return false;
-    } else {
-      LLVM_DEBUG(dbgs() << indent << "  Symbolic overlapping bounds for base "
-                        << minA_expr.base << ": A[base+" << lowA << ", base+"
-                        << highA << "], B[base+" << lowB << ", base+" << highB
-                        << "] -> overlap\n");
-      return true;
-    }
-  }
-
-  LLVM_DEBUG(dbgs() << indent << "  Symbolic or unhandled bounds - "
-                    << "assuming overlap\n");
-  /// Conservative for symbolic bounds
+  LLVM_DEBUG(dbgs() << indent << "  Non-constant bounds - assuming overlap\n");
   return true;
 }
 
-bool DbAliasAnalysis::mayAlias(
-    SmallVector<MemoryEffects::EffectInstance, 4> &effectsA,
-    SmallVector<MemoryEffects::EffectInstance, 4> &effectsB,
+bool DbAliasAnalysis::mayAliasEffects(
+    const SmallVector<MemoryEffects::EffectInstance, 4> &effectsA,
+    const SmallVector<MemoryEffects::EffectInstance, 4> &effectsB,
     const std::string &indent) {
   LLVM_DEBUG(DBGS_INDENT(indent) << "Analyzing memory effects overlap\n");
   LLVM_DEBUG(dbgs() << indent << "  Effects A: " << effectsA.size()
                     << ", Effects B: " << effectsB.size() << "\n");
 
-  for (auto &eA : effectsA) {
-    for (auto &eB : effectsB) {
-      if (::mayAlias(eA, eB)) {
-        LLVM_DEBUG(dbgs() << indent
-                          << "  -> Found overlapping effects -> may alias\n");
-        return true;
+      for (auto &eA : effectsA) {
+      for (auto &eB : effectsB) {
+        // TODO: Fix AliasAnalysis initialization
+        // if (mlirAA.alias(eA.getValue(), eB.getValue()) != AliasResult::NoAlias) {
+        //   LLVM_DEBUG(
+        //       dbgs()
+        //       << indent
+        //       << "  -> Found potential overlapping effects -> may alias\n");
+        //   return true;
+        // }
       }
     }
-  }
 
   LLVM_DEBUG(dbgs() << indent
                     << "  -> No overlapping effects found -> no alias\n");

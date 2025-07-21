@@ -61,7 +61,7 @@ def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
   ];
 }
 
-def PreprocessDbs : Pass<"preprocess-dbs", "mlir::ModuleOp"> {
+def ConvertDbToOpaquePtr : Pass<"convert-db-to-opaque-ptr", "mlir::ModuleOp"> {
   let summary = "Preprocess ARTS DataBlocks for runtime compatibility";
   let description = [{
     This pass converts ARTS DataBlocks from typed memrefs to opaque pointer types
@@ -76,7 +76,7 @@ def PreprocessDbs : Pass<"preprocess-dbs", "mlir::ModuleOp"> {
     "arith::ArithDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createPreprocessDbsPass()";
+  let constructor = "mlir::arts::createConvertDbToOpaquePtrPass()";
 }
 
 def Edt : Pass<"edt", "mlir::ModuleOp"> {
@@ -137,4 +137,18 @@ def EdtPointerRematerialization : Pass<"edt-pointer-rematerialization", "mlir::M
   ];
   let constructor = "mlir::arts::createEdtPointerRematerializationPass()";
 }
+
+def EdtLowering : Pass<"edt-lowering", "mlir::ModuleOp"> {
+  let summary = "Lower ARTS EDTs to LLVM";
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "LLVM::LLVMDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "arith::ArithDialect",
+    "polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::arts::createEdtLoweringPass()";
+}
+
 #endif // CARTS_PASSES

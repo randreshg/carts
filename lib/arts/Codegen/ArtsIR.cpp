@@ -3,11 +3,13 @@
 ///
 /// This file provides utility functions for creating and manipulating ARTS IR
 /// operations. It is organized into logical sections for EDT operations,
-/// DataBlock operations, and helper functions.
+/// DataBlock operations, Event operations, Runtime query operations,
+/// and helper functions.
 ///==========================================================================
 
 #include "arts/Codegen/ArtsIR.h"
 #include "arts/ArtsDialect.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Support/LLVM.h"
@@ -25,41 +27,23 @@ namespace mlir {
 namespace arts {
 
 //===----------------------------------------------------------------------===//
-// EDT Creation and Manipulation Functions
+// Event Operations
 //===----------------------------------------------------------------------===//
 
-EdtOp createEdtOp(OpBuilder &builder, Location loc, types::EdtType type,
-                  SmallVector<Value> deps) {
-  /// Create an arts.edt operation.
-  auto edtOp = builder.create<EdtOp>(loc, deps);
-  if (type == types::EdtType::Parallel)
-    edtOp.setIsParallelAttr();
-  else if (type == types::EdtType::Single)
-    edtOp.setIsSingleAttr();
-  else if (type == types::EdtType::Sync)
-    edtOp.setIsSyncAttr();
-  else if (type == types::EdtType::Task)
-    edtOp.setIsTaskAttr();
-  return edtOp;
-}
-
-types::EdtType getEdtType(EdtOp edtOp) {
-  if (edtOp.isParallel())
-    return types::EdtType::Parallel;
-  if (edtOp.isSingle())
-    return types::EdtType::Single;
-  if (edtOp.isSync())
-    return types::EdtType::Sync;
-  if (edtOp.isTask())
-    return types::EdtType::Task;
-  return types::EdtType::Task;
+EventOp createEventOp(OpBuilder &builder, Location loc, ArrayRef<Value> sizes) {
+  SmallVector<Value> eventSizes(sizes.begin(), sizes.end());
+  // Assuming event type is memref<?x...xi8> or similar; adjust if needed
+  // For now, use unranked or based on sizes
+  SmallVector<int64_t> shape(sizes.size(), ShapedType::kDynamic);
+  MemRefType eventType = MemRefType::get(shape, builder.getI8Type());
+  return builder.create<EventOp>(loc, eventType, eventSizes);
 }
 
 //===----------------------------------------------------------------------===//
 // DataBlock Creation Functions
 //===----------------------------------------------------------------------===//
 
-DbAllocOp createDbAllocOp(OpBuilder &builder, Location loc, StringRef mode,
+DbAllocOp createDbAllocOp(OpBuilder &builder, Location loc, ArtsMode mode,
                           Value address, SmallVector<Value> sizes) {
   MemRefType ptrType;
 
@@ -94,23 +78,37 @@ DbAllocOp createDbAllocOp(OpBuilder &builder, Location loc, StringRef mode,
 
   /// Create the DbAllocOp with optional allocType parameter (nullptr for
   /// default)
-  return builder.create<DbAllocOp>(loc, ptrType, builder.getStringAttr(mode),
-                                   address, sizes, nullptr);
+  return builder.create<DbAllocOp>(loc, ptrType, mode, address, sizes, nullptr);
 }
 
-DbDepOp createDbDepOp(OpBuilder &builder, Location loc, types::DbDepType mode,
-                      Value source, SmallVector<Value> pinnedIndices,
-                      SmallVector<Value> offsets, SmallVector<Value> sizes) {
-  auto modeAttr = builder.getStringAttr(types::toString(mode));
-  auto resultType = source.getType();
+DbAcquireOp createDbAcquireOp(OpBuilder &builder, Location loc, ArtsMode mode,
+                              Value source, SmallVector<Value> pinnedIndices,
+                              SmallVector<Value> offsets,
+                              SmallVector<Value> sizes) {
+  auto resultType = source.getType().dyn_cast<MemRefType>();
+  assert(resultType && "Source must be a MemRefType");
 
-  return builder.create<arts::DbDepOp>(loc, resultType, modeAttr, source,
-                                       pinnedIndices, offsets, sizes);
+  // Adjust result type if pinned indices reduce rank
+  int64_t originalRank = resultType.getRank();
+  int64_t pinnedCount = pinnedIndices.size();
+  if (pinnedCount > 0) {
+    SmallVector<int64_t> newShape;
+    for (int64_t i = pinnedCount; i < originalRank; ++i)
+      newShape.push_back(resultType.getDimSize(i));
+    resultType = MemRefType::get(newShape, resultType.getElementType());
+  }
+
+  return builder.create<DbAcquireOp>(loc, resultType, mode, source,
+                                     pinnedIndices, offsets, sizes);
 }
 
-DbControlOp createDbControlOp(OpBuilder &builder, Location loc,
-                              types::DbDepType mode, Value ptr,
-                              SmallVector<Value> pinnedIndices) {
+DbReleaseOp createDbReleaseOp(OpBuilder &builder, Location loc,
+                              Value source) {
+  return builder.create<DbReleaseOp>(loc, source);
+}
+
+DbControlOp createDbControlOp(OpBuilder &builder, Location loc, ArtsMode mode,
+                              Value ptr, SmallVector<Value> pinnedIndices) {
   auto ptrOp = ptr.getDefiningOp();
   assert(ptrOp && "Input must be a defining operation.");
 
@@ -167,80 +165,44 @@ DbControlOp createDbControlOp(OpBuilder &builder, Location loc,
                                  loc, builder.getIndexType(), elementType)
                              .getResult();
 
-  auto modeAttr = builder.getStringAttr(types::toString(mode));
   auto resultType = MemRefType::get(subShape, elementType);
-  return builder.create<arts::DbControlOp>(
-      loc, resultType, modeAttr, baseMemRef, elementType, elementTypeSize,
-      indices, offsets, sizes);
+  return builder.create<DbControlOp>(loc, resultType, mode, baseMemRef,
+                                     elementType, elementTypeSize, indices,
+                                     offsets, sizes);
 }
 
-//===----------------------------------------------------------------------===//
-// DataBlock Helper Functions
-//===----------------------------------------------------------------------===//
-
-bool isDbAllocOp(Operation *op) { return isa<DbAllocOp>(op); }
-
-bool isDbDepOp(Operation *op) { return isa<DbDepOp>(op); }
-
-//===----------------------------------------------------------------------===//
-// DataBlock Attribute Management
-//===----------------------------------------------------------------------===//
-
-types::DbAllocType getDbAllocType(DbAllocOp dbAllocOp) {
-  if (auto allocTypeAttr = dbAllocOp->getAttrOfType<StringAttr>("allocType"))
-    return types::getDbAllocType(allocTypeAttr.getValue());
-  return types::DbAllocType::Unknown;
-}
-
-void setDbAllocType(DbAllocOp dbAllocOp, types::DbAllocType type,
-                    OpBuilder &builder) {
-  dbAllocOp->setAttr("allocType", builder.getStringAttr(types::toString(type)));
-}
 
 //===----------------------------------------------------------------------===//
 // Allocation Type Analysis and Classification
 //===----------------------------------------------------------------------===//
 
-types::DbAllocType getAllocType(Value ptr) {
-  if (!ptr)
-    return types::DbAllocType::Unknown;
+// DbAllocType getAllocType(Value value) {
+//   if (!value)
+//     return DbAllocType::unknown;
 
-  Operation *definingOp = ptr.getDefiningOp();
-  if (!definingOp)
-    return types::DbAllocType::Parameter;
+//   Operation *definingOp = value.getDefiningOp();
+//   if (!definingOp)
+//     return DbAllocType::parameter;
 
-  if (isa<memref::AllocaOp>(definingOp))
-    return types::DbAllocType::Stack;
-  if (isa<memref::AllocOp>(definingOp))
-    return types::DbAllocType::Heap;
-  if (isa<memref::GetGlobalOp>(definingOp))
-    return types::DbAllocType::Global;
-  if (auto callOp = dyn_cast<func::CallOp>(definingOp))
-    return types::DbAllocType::Dynamic;
-  if (isa<memref::SubViewOp>(definingOp))
-    return getAllocType(cast<memref::SubViewOp>(definingOp).getSource());
-  if (isa<memref::CastOp>(definingOp))
-    return getAllocType(cast<memref::CastOp>(definingOp).getSource());
+//   if (isa<memref::AllocaOp>(definingOp))
+//     return DbAllocType::stack;
+//   if (isa<memref::AllocOp>(definingOp) || isa<AllocOp>(definingOp))
+//     return DbAllocType::heap;
+//   if (isa<memref::GetGlobalOp>(definingOp))
+//     return DbAllocType::global;
+//   if (auto callOp = dyn_cast<func::CallOp>(definingOp))
+//     return DbAllocType::dynamic;
+//   if (isa<memref::SubViewOp>(definingOp))
+//     return getAllocType(cast<memref::SubViewOp>(definingOp).getSource());
+//   if (isa<memref::CastOp>(definingOp))
+//     return getAllocType(cast<memref::CastOp>(definingOp).getSource());
 
-  return types::DbAllocType::Unknown;
-}
+//   if (isa<DbAcquireOp>(definingOp))
+//     return getAllocType(cast<DbAcquireOp>(definingOp).getSource());
 
-bool isStackAlloc(DbAllocOp dbAllocOp) {
-  auto allocType = getDbAllocType(dbAllocOp);
-  return allocType == types::DbAllocType::Stack ||
-         allocType == types::DbAllocType::Parameter;
-}
+//   return DbAllocType::unknown;
+// }
 
-bool isDynamicAlloc(DbAllocOp dbAllocOp) {
-  auto allocType = getDbAllocType(dbAllocOp);
-  return allocType == types::DbAllocType::Heap ||
-         allocType == types::DbAllocType::Dynamic;
-}
-
-bool isGlobalAlloc(DbAllocOp dbAllocOp) {
-  auto allocType = getDbAllocType(dbAllocOp);
-  return allocType == types::DbAllocType::Global;
-}
 
 } // namespace arts
 } // namespace mlir

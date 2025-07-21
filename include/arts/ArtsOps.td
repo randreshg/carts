@@ -11,6 +11,7 @@ include "mlir/Interfaces/SideEffectInterfaces.td"
 include "mlir/Interfaces/ViewLikeInterface.td"
 include "mlir/Interfaces/ControlFlowInterfaces.td"
 include "mlir/IR/SymbolInterfaces.td"
+include "mlir/Interfaces/InferTypeOpInterface.td"
 
 include "mlir/Dialect/LLVMIR/LLVMOpBase.td"
 include "mlir/Dialect/LLVMIR/LLVMInterfaces.td"
@@ -19,6 +20,16 @@ include "mlir/Dialect/LLVMIR/LLVMInterfaces.td"
 include "arts/ArtsDialect.td"
 include "arts/ArtsAttributes.td"
 include "arts/ArtsTypes.td"
+
+//===----------------------------------------------------------------------===//
+// Custom Traits for ARTS
+//===----------------------------------------------------------------------===//
+
+class Arts_InferShapedTypeOpAdaptor<string mnemonic, list<Trait> traits = []>
+    : Arts_Op<mnemonic, !listconcat(traits, [InferShapedTypeOpAdaptor, Pure])> {
+  let assemblyFormat =
+      "operands attr-dict `:` functional-type(operands, results)";
+}
 
 //===----------------------------------------------------------------------===//
 // arts.undef
@@ -56,55 +67,68 @@ def AllocOp : Arts_Op<"alloc", []> {
 // Arts DB Operations
 //===----------------------------------------------------------------------===//
 def DbAllocOp : Arts_Op<"db_alloc", [
-    AttrSizedOperandSegments, MemoryEffects<[MemAlloc]>]> {
+    AttrSizedOperandSegments, MemoryEffects<[MemAlloc]>, DeclareOpInterfaceMethods<InferTypeOpInterface, ["inferReturnTypes"]>
+    ]> {
   let summary = "Allocate an ARTS DataBlock and get its pointer and GUID.";
   let description = [{
     This operation corresponds to the `artsDbCreate` runtime function.
     It allocates a DataBlock and returns its pointer and GUID.
-    - mode: "in", "out", "inout"
+    - mode: enum for "in", "out", "inout"
     - ptr: address that will be copied to the DataBlock
     - sizes: sizes of the DataBlock
     - allocType: "stack", "heap", "global", "unknown" - tracks original allocation type
   }];
   let arguments = (ins
-    StrAttr:$mode,
+    ArtsModeAttr:$mode,
     Optional<AnyMemRef>:$address,
     Variadic<Index>:$sizes,
-    OptionalAttr<StrAttr>:$allocType
+    OptionalAttr<DbAllocTypeAttr>:$allocType
   );
 
   let results = (outs AnyMemRef:$ptr);
   let hasCustomAssemblyFormat = 1;
 }
 
-def DbDepOp : Arts_Op<"db_dep", 
-  [AttrSizedOperandSegments]> {
-  let summary = "Creates a datablock dependency for arts.edt";
+def DbAcquireOp : Arts_Op<"db_acquire", 
+  [AttrSizedOperandSegments, DeclareOpInterfaceMethods<ViewLikeOpInterface>, DeclareOpInterfaceMethods<InferTypeOpInterface, ["inferReturnTypes"]>
+  ]> {
+  let summary = "Acquires access to an ARTS DataBlock.";
   let description = [{
-    This operation creates a datablock dependency for the `arts.edt` operation.
-    It represents deping a portion of a datablock with specific indices, offsets and sizes.
-    - mode: "in", "out", "inout"
-    - source: DbAllocOp that this dependency is based on
-    - indices: indices for the dependency
-    - offsets: offsets for the dependency
-    - sizes: sizes for the dependency
+    This operation acquires a local view of the DataBlock for safe access within EDTs.
+    It subsumes dependency creation with mode and subregion support.
+    - mode: enum for "in", "out", "inout"
+    - source: DbAllocOp or previous acquire
+    - indices: indices for subregion
+    - offsets: offsets for subregion
+    - sizes: sizes for subregion
   }];
   let arguments = (ins
-    StrAttr:$mode,
+    ArtsModeAttr:$mode,
     AnyMemRef:$source,
     Variadic<Index>:$indices,
     Variadic<Index>:$offsets,
     Variadic<Index>:$sizes
   );
 
-  let results = (outs AnyMemRef:$result);
+  let results = (outs AnyMemRef:$view);
   
   let assemblyFormat = [{
     $mode `(` $source `:` type($source) `)` 
     `indices` `[` $indices `]` 
     `offsets` `[` $offsets `]` 
     `sizes` `[` $sizes `]` 
-    attr-dict `:` type($result)
+    attr-dict `:` type($view)
+  }];
+}
+
+def DbReleaseOp : Arts_Op<"db_release", []> {
+  let summary = "Releases access to an ARTS DataBlock source.";
+  let description = [{
+    This operation releases the acquired source, signaling completion to the runtime.
+  }];
+  let arguments = (ins Variadic<AnyMemRef>:$sources);
+  let assemblyFormat = [{
+    $sources `:` type($sources) attr-dict
   }];
 }
 
@@ -121,9 +145,10 @@ def DbControlOp : Arts_Op<"db_control",
     - indices: indices for the subview
     - offsets: offsets for the subview
     - sizes: sizes for the subview
+    Note: Currently ignored for execution, but retained for future correctness enforcement.
   }];
   let arguments = (ins
-    StrAttr:$mode,
+    ArtsModeAttr:$mode,
     AnyMemRef:$ptr,
     TypeAttr:$elementType,
     Index:$elementTypeSize,
@@ -133,19 +158,15 @@ def DbControlOp : Arts_Op<"db_control",
   );
 
   let results = (outs AnyMemRef:$subview);
-  let hasCustomAssemblyFormat = 1;
-
-  let skipDefaultBuilders = 1;
-  let builders = [
-    OpBuilder<(ins
-      "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType,
-      "Value":$elementTypeSize, "ValueRange":$indices, "ValueRange":$sizes)>,
-    OpBuilder<(ins
-      "Type":$subview, "StringRef":$mode, "Value":$ptr, "Type":$elementType, 
-      "Value":$elementTypeSize, "ValueRange":$indices, "ValueRange":$offsets, 
-      "ValueRange":$sizes)>
-  ];
-
+  let assemblyFormat = [{
+    $mode `(` $ptr `:` type($ptr) `)` 
+    `elementType` `(` $elementType `)` 
+    `elementTypeSize` `(` $elementTypeSize `:` type($elementTypeSize) `)` 
+    `indices` `[` $indices `]` 
+    `offsets` `[` $offsets `]` 
+    `sizes` `[` $sizes `]` 
+    attr-dict `:` type($subview)
+  }];
 }
 
 //===----------------------------------------------------------------------===//
@@ -153,12 +174,13 @@ def DbControlOp : Arts_Op<"db_control",
 //===----------------------------------------------------------------------===//
 def EdtOp : Arts_Op<"edt",
   [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, 
-   SingleBlockImplicitTerminator<"arts::YieldOp">, RecursiveMemoryEffects]> {
+   SingleBlockImplicitTerminator<"arts::YieldOp">, 
+   RecursiveMemoryEffects]> {
 
   let summary = "Event-Driven Task in ARTS";
   let description = [{
     Defines an ARTS event-driven task (EDT) with:
-      - `dependencies` that specify input/output memory dependencies.
+      - `dependencies` that specify input/output memory dependencies (acquired views).
 
     The single-block region contains the task body.
     - if 'parallel' attribute is set, it can spawn multiple tasks.
@@ -167,26 +189,18 @@ def EdtOp : Arts_Op<"edt",
   }];
 
   let arguments = (ins
+    EdtTypeAttr:$type,
     Variadic<AnyMemRef>:$dependencies
   );
 
   let regions = (region SizedRegion<1>:$body);
-  let hasCustomAssemblyFormat = 1;
+  let assemblyFormat = [{
+    $type $dependencies attr-dict `:` type($dependencies)
+    $body
+  }];
 
   let extraClassDeclaration = [{
     SmallVector<Value> getDependenciesVector();
-    bool isParallel();
-    bool isSingle();
-    bool isSync();
-    bool isTask();
-    void setIsParallelAttr();
-    void setIsSingleAttr();
-    void setIsSyncAttr();
-    void setIsTaskAttr();
-    void clearIsParallelAttr();
-    void clearIsSingleAttr();
-    void clearIsSyncAttr();
-    void clearIsTaskAttr();
   }];
 }
 
@@ -340,6 +354,78 @@ def GetCurrentNodeOp : Arts_Op<"get_current_node",
       $_state.addTypes(IntegerType::get($_builder.getContext(), 32));
     }]>
   ];
+}
+
+
+//===----------------------------------------------------------------------===//
+// EDT Lowering Operations
+//===----------------------------------------------------------------------===//
+
+def EdtOutlineFnOp : Arts_Op<"edt_outline_fn", [NoSideEffect]> {
+  let summary = "Outlined EDT call with packed arrays.";
+  let description = [{
+    Intermediate op for calling outlined EDT function with param/dep arrays. 
+    Returns EDT guid.
+  }];
+  let arguments = (ins MemRefType:$param_memref, MemRefType:$dep_memref);
+  let results = (outs I64Type:$guid);
+  let attributes = (attr StringAttr:$outlined_func);
+  let assemblyFormat = "$param_memref, $dep_memref attr-dict";
+}
+
+def EdtParamPackOp : Arts_Op<"edt_param_pack", [NoSideEffect]> {
+  let summary = "Pack parameters into memref<?xi64>.";
+  let description = [{
+    Packs multiple parameters (cast to i64) into a memref for ARTS paramv.
+  }];
+  let arguments = (ins Variadic<AnyType>:$params);
+  let results = (outs
+    MemRefType:$memref { let type = MemRefType::get({ShapedType::kDynamic}, I64Type); }
+  );
+  let assemblyFormat = "$params : type($params) -> $memref";
+}
+
+def EdtParamUnpackOp : Arts_Op<"edt_param_unpack", [NoSideEffect]> {
+  let summary = "Unpack parameters from memref<?xi64>.";
+  let description = [{
+    Unpacks memref to multiple original types (load i64, cast back).
+  }];
+  let arguments = (ins MemRefType:$memref);
+  let results = (variadic AnyType:$unpacked);
+  let assemblyFormat = "$memref -> type($unpacked)";
+}
+
+def EdtDepUnpackOp : Arts_Op<"edt_dep_unpack", [NoSideEffect]> {
+  let summary = "Unpack dependencies from memref<?xi64>.";
+  let description = [{
+    Unpacks depv guids, calls artsGetFromDb for DB ptrs, casts others.
+  }];
+  let arguments = (ins MemRefType:$memref);
+  let results = (variadic AnyType:$unpacked);
+  let assemblyFormat = "$memref -> type($unpacked)";
+}
+
+def RecordInDepOp : Arts_Op<"record_in_dep", [NoSideEffect]> {
+  let summary = "Record in-dependency for EDT.";
+  let description = [{
+    Records an in-dep (e.g., DB acquire) for the EDT at a slot.
+  }];
+  let arguments = (ins I64Type:$edt_guid, I64Type:$dep);
+  let attributes = (attr
+    I32Attr:$slot,
+    StringAttr:$mode {default_value = "in"}
+  );
+  let assemblyFormat = "$edt_guid, $dep attr-dict";
+}
+
+def IncrementOutLatchOp : Arts_Op<"increment_out_latch", [NoSideEffect]> {
+  let summary = "Increment out-latch for dependency.";
+  let description = [{
+    Increments latch count for out-dep (e.g., DB release).
+  }];
+  let arguments = (ins I64Type:$dep);
+  let attributes = (attr StringAttr:$mode {default_value = "out"});
+  let assemblyFormat = "$dep attr-dict";
 }
 
 #endif // ARTS_OPS

@@ -8,7 +8,7 @@
 
 /// Arts
 #include "arts/ArtsDialect.h"
-#include "arts/Transforms/EdtPointerRematerialization.h"
+#include "arts/Transforms/EdtPtrRematerialization.h"
 #include "arts/Utils/ArtsUtils.h"
 
 /// Others
@@ -17,7 +17,7 @@
 #include "llvm/ADT/SmallVector.h"
 
 /// LLVM support
-#define DEBUG_TYPE "edt-pointer-rematerialization"
+#define DEBUG_TYPE "edt-ptr-rematerialization"
 #define LINE "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
@@ -25,7 +25,7 @@
 namespace mlir {
 namespace arts {
 
-void rematerializePointersInEdt(EdtOp edt) {
+void rematerializePtrsInEdt(EdtOp edt) {
   /// Analyzes the EDT environment to check if there is any parameter that
   /// loads a memref and indices of any dependency. If so, it creates a new
   /// load operation at the start of the region and replaces all the uses of

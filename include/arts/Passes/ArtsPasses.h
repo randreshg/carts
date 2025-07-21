@@ -28,8 +28,9 @@ std::unique_ptr<Pass> createCreateEpochsPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug);
 std::unique_ptr<Pass> createEdtInvariantCodeMotionPass();
-std::unique_ptr<Pass> createEdtPointerRematerializationPass();
-std::unique_ptr<Pass> createPreprocessDbsPass();
+std::unique_ptr<Pass> createEdtPtrRematerializationPass();
+std::unique_ptr<Pass> createConvertDbToOpaquePtrPass();
+std::unique_ptr<Pass> createEdtLoweringPass();
 } // namespace arts
 } // namespace mlir
 

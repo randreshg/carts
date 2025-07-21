@@ -1,6 +1,6 @@
-///==========================================================================
-/// File: DataBlock.cpp
-///==========================================================================
+//===----------------------------------------------------------------------===//
+// Db/DbPass.cpp - Pass for DB optimizations
+//===----------------------------------------------------------------------===//
 
 /// Dialects
 #include "arts/Codegen/ArtsIR.h"
@@ -10,7 +10,6 @@
 #include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
@@ -57,15 +56,26 @@ struct DbPass : public arts::DbBase<DbPass> {
   /// Canonicalize memref.dim ops of datablocks.
   bool canonicalizeDimOps();
 
-  /// Dbs with single size, and result type different to a memref, can
-  /// be converted into parameter.
+  /// DBs with single size, and "in" mode, can be converted into parameters.
   bool convertToParameters();
 
-  /// Analyze db usage and resize it to the minimum
-  /// required based on the min/max dep indices found by the analysis.
-  /// It also adjusts the indices in load/store operations to account for
-  /// the new base offset if the minimum dep index was greater than 0.
+  /// Analyze DB usage and resize it to the minimum required based on min/max indices from acquires/releases.
   bool shrinkDb();
+
+  /// Remove unused DB allocations.
+  bool deadDbElimination();
+
+  /// Reuse buffers for non-overlapping DB lifetimes.
+  bool bufferReuse();
+
+  /// Hoist allocations out of loops if invariant.
+  bool hoistAllocs();
+
+  /// Fuse consecutive acquires/releases on the same alloc if no intervening ops.
+  bool fuseAccesses();
+
+  /// Inline small DB allocs into acquires if single-use.
+  bool inlineAllocs();
 
 private:
   ModuleOp module;
@@ -75,23 +85,18 @@ private:
 void DbPass::runOnOperation() {
   bool changed = false;
   module = getOperation();
-  /// Canonicalize dim ops of datablocks.
-  canonicalizeDimOps();
+  changed |= canonicalizeDimOps();
 
-  /// Print the module before the pass.
   LLVM_DEBUG({
     dbgs() << "\n" << LINE << "DbPass STARTED\n" << LINE;
     module.dump();
   });
 
-  /// Retrieve the shared analysis result.
   auto &dbAnalysis = getAnalysis<DbAnalysis>();
   module.walk([&](func::FuncOp func) {
     auto graph = dbAnalysis.getOrCreateGraph(func);
-    if (!graph->hasNodes())
-      return;
+    if (graph->getNumNodes() == 0) return;
 
-    /// Export dot graph to a file
     std::string filename = "DbGraph_" + func.getName().str() + ".dot";
     std::error_code EC;
     llvm::raw_fd_ostream dotFile(filename, EC);
@@ -102,13 +107,15 @@ void DbPass::runOnOperation() {
       LLVM_DEBUG(DBGS() << "Failed to create dot file: " << filename << "\n");
     }
   });
-  // mlir::arts::DbGraph graph(module, nullptr);
-  // graph.build();
 
-  // changed |= convertToParameters();
-  // changed |= shrinkDb();
+  changed |= deadDbElimination();
+  changed |= convertToParameters();
+  changed |= shrinkDb();
+  changed |= bufferReuse();
+  changed |= hoistAllocs();
+  changed |= fuseAccesses();
+  changed |= inlineAllocs();
 
-  /// Preserve analysis results if no changes were made.
   if (!changed) {
     LLVM_DEBUG(DBGS() << "No changes made to the module\n");
     markAnalysesPreserved<DbAnalysis>();
@@ -120,257 +127,272 @@ void DbPass::runOnOperation() {
   });
 }
 
+bool DbPass::canonicalizeDimOps() {
+  bool changed = false;
+  module.walk([&](Operation *op) {
+    if (auto dimOp = dyn_cast<memref::DimOp>(op)) {
+      Value source = dimOp.getSource();
+      if (auto dbOp = source.getDefiningOp<DbAllocOp>()) {
+        if (auto constIndex = dimOp.getConstantIndex()) {
+          Value size = dbOp.getSizes()[*constIndex];
+          dimOp.replaceAllUsesWith(size);
+          dimOp.erase();
+          changed = true;
+        }
+      } else if (auto acquireOp = source.getDefiningOp<DbAcquireOp>()) {
+        DbAllocOp parent = dbAnalysis.getParentAlloc(acquireOp);
+        if (parent && auto constIndex = dimOp.getConstantIndex()) {
+          Value size = parent.getSizes()[*constIndex];
+          dimOp.replaceAllUsesWith(size);
+          dimOp.erase();
+          changed = true;
+        }
+      } else if (auto releaseOp = source.getDefiningOp<DbReleaseOp>()) {
+        DbAllocOp parent = dbAnalysis.getParentAlloc(releaseOp);
+        if (parent && auto constIndex = dimOp.getConstantIndex()) {
+          Value size = parent.getSizes()[*constIndex];
+          dimOp.replaceAllUsesWith(size);
+          dimOp.erase();
+          changed = true;
+        }
+      }
+    }
+  });
+  return changed;
+}
+
 bool DbPass::convertToParameters() {
-  // auto convertDbToParam = [&](DbGraph *graph) -> bool {
-  //   bool changed = false;
-  //   graph->forEachAllocNode([&](mlir::arts::DbAllocNode *allocNode) {
-  //     if (allocNode->getMode().empty())
-  //       return;
+  bool changed = false;
+  module.walk([&](func::FuncOp func) {
+    auto graph = dbAnalysis.getOrCreateGraph(func);
+    graph->forEachAllocNode([&](DbAllocNode *allocNode) {
+      bool hasSingleSize = (allocNode->getSizes().size() == 1);
+      bool isOnlyReader = (allocNode->getAcquireNodesSize() > 0 && allocNode->getReleaseNodesSize() == 0);
 
-  //     // Check for single size
-  //     bool hasSingleSize = (allocNode->getSizes().size() == 1 /* TODO: check value == 1 if possible */);
-  //     // Only reader
-  //     bool isOnlyReader = (allocNode->getMode() == "in");
-  //     // Only writer
-  //     bool isOnlyWriter = (allocNode->getMode() == "out");
-  //     // Inout
-  //     bool isInOut = (allocNode->getMode() == "inout");
+      if (!hasSingleSize || !isOnlyReader) return;
 
-  //     // Remove elementType and isOnlyDependentOnEntry checks for now
-  //     if (!hasSingleSize || !isOnlyReader)
-  //       return;
-
-  //     LLVM_DEBUG(dbgs() << "- Converting db to parameter: "
-  //                       << allocNode->getDbAllocOp() << "\n");
-  //     allocNode->forEachDepNode([&](mlir::arts::DbDepNode *depNode) {
-  //       auto *op = depNode->subviewOp.getOperation();
-  //       if (isa<arts::EdtOp>(op))
-  //         return;
-  //       auto loadOp = dyn_cast<memref::LoadOp>(op);
-  //       if (loadOp) {
-  //         loadOp.replaceAllUsesWith(allocNode->getPtr());
-  //         loadOp.erase();
-  //       }
-  //     });
-  //     changed = true;
-  //   });
-
-  //   /// If no datablocks were converted, return.
-  //   if (!changed) {
-  //     LLVM_DEBUG(dbgs() << " - No datablocks to convert\n");
-  //     return false;
-  //   }
-  //   LLVM_DEBUG(dbgs() << " - Db conversion - Found "
-  //                     << " datablocks to convert\n");
-
-  //   return changed;
-  // };
-
-  // bool changed = false;
-  // module->walk([&](func::FuncOp func) {
-  //   mlir::arts::DbGraph graph(func, nullptr);
-  //   graph.build();
-  //   if (convertDbToParam(&graph)) {
-  //     changed = true;
-  //   }
-  // });
-  // return changed;
-  return false;
+      LLVM_DEBUG(dbgs() << "- Converting DB to parameter: " << allocNode->getDbAllocOp() << "\n");
+      allocNode->forEachChildNode([&](NodeBase *child) {
+        if (auto acquireNode = dyn_cast<DbAcquireNode>(child)) {
+          Operation *acquireOp = acquireNode->getOp();
+          acquireOp->getResult(0).replaceAllUsesWith(allocNode->getPtr());
+          acquireOp->erase();
+        }
+      });
+      if (allocNode->getDbAllocOp().use_empty()) {
+        allocNode->getDbAllocOp().erase();
+      }
+      changed = true;
+    });
+  });
+  return changed;
 }
 
 bool DbPass::shrinkDb() {
-  // /// Helper lambda to get an MLIR Value from ValueOrInt.
-  // auto getValue = [&](ValueOrInt val, Operation *contextOp,
-  //                     OpBuilder &builder) -> Value {
-  //   if (val.isValue) {
-  //     /// Cast the Value to an Index type if needed.
-  //     Value v = val.v_val;
-  //     if (v.getType().isIndex()) {
-  //       return v;
-  //     } else {
-  //       OpBuilder::InsertionGuard guard(builder);
-  //       LLVM_DEBUG(dbgs() << "Converting to index: " << v << "\n");
-  //       auto op = v.getDefiningOp();
-  //       assert(op && "Value must have a defining operation");
-  //       builder.setInsertionPoint(op);
-  //       return builder.create<arith::IndexCastOp>(contextOp->getLoc(),
-  //                                                 builder.getIndexType(), v);
-  //     }
-  //   }
-  //   OpBuilder::InsertionGuard guard(builder);
-  //   builder.setInsertionPoint(contextOp);
-  //   /// Create a constant index op at the location of the context operation.
-  //   auto iVal =
-  //       builder.create<arith::ConstantIndexOp>(contextOp->getLoc(), val.i_val);
-  //   return iVal.getResult();
-  // };
+  bool changed = false;
+  module.walk([&](func::FuncOp func) {
+    auto graph = dbAnalysis.getOrCreateGraph(func);
+    graph->forEachAllocNode([&](DbAllocNode *allocNode) {
+      DbAllocOp dbOp = allocNode->getDbAllocOp();
+      Location loc = dbOp.getLoc();
+      auto rank = dbOp.getSizes().size();
 
-  // /// Process a single db graph (typically associated with a function).
-  // auto shrinkDbInGraph = [&](DbGraph *graph) -> bool {
-  //   bool graphChanged = false;
-  //   graph->forEachAllocNode([&](mlir::arts::DbAllocNode *allocNode) {
-  //     if (allocNode->getMode().empty())
-  //       return;
+      SmallVector<unsigned> dimsToShrink;
+      SmallVector<Value> offsets(rank);
+      SmallVector<Value> newSizes(rank);
+      bool needsShrinking = false;
 
-  //     DbAllocOp dbOp = allocNode->getDbAllocOp();
-  //     Location loc = dbOp.getLoc();
-  //     auto rank = allocNode->getSizes().size();
-  //     assert(allocNode->getSizes().size() == rank &&
-  //            "Db sizes and dimMax must have the same rank");
+      OpBuilder builder(dbOp);
+      builder.setInsertionPoint(dbOp);
 
-  //     /// Determine which dimensions need shrinking and calculate offsets/new
-  //     /// sizes.
-  //     SmallVector<unsigned> dimsToShrink;
-  //     SmallVector<Value> offsets(rank);
-  //     SmallVector<Value> newSizes(rank);
-  //     bool needsShrinking = false;
+      LLVM_DEBUG(dbgs() << "Analyzing DB: " << dbOp << "\n");
+      for (unsigned i = 0; i < rank; ++i) {
+        auto dimAnalysis = dbAnalysis.getDimensionAnalysis(*allocNode);
+        int64_t minDim = dimAnalysis[i].overallPattern.conservativeMin.constant;
+        int64_t maxDim = dimAnalysis[i].overallPattern.conservativeMax.constant;
+        int64_t originalSize = dbOp.getSizes()[i].getDefiningOp<ConstantIndexOp>() ? dbOp.getSizes()[i].getDefiningOp<ConstantIndexOp>().value() : -1;
 
-  //     /// Set the insertion point before the db op for creating
-  //     /// constants.
-  //     OpBuilder builder(module);
-  //     builder.setInsertionPoint(dbOp);
+        bool shrinkMin = (minDim > 0);
+        bool shrinkMax = (maxDim < originalSize && originalSize != -1);
+        bool shrinkThisDim = shrinkMin || shrinkMax;
 
-  //     LLVM_DEBUG(dbgs() << "Analyzing db: " << *dbOp << "\n");
-  //     for (unsigned i = 0; i < rank; ++i) {
-  //       ValueOrInt minDim = allocNode->getIndices()[i];
-  //       ValueOrInt maxDim = allocNode->getSizes()[i];
-  //       ValueOrInt originalSize(allocNode->getSizes()[i]);
+        if (shrinkThisDim) {
+          needsShrinking = true;
+          dimsToShrink.push_back(i);
+          offsets[i] = builder.create<arith::ConstantIndexOp>(loc, minDim);
+          newSizes[i] = builder.create<arith::SubIOp>(loc, builder.create<arith::ConstantIndexOp>(loc, maxDim), offsets[i]);
+        } else {
+          offsets[i] = builder.create<arith::ConstantIndexOp>(loc, 0);
+          newSizes[i] = dbOp.getSizes()[i];
+        }
+      }
 
-  //       /// Get Value representations for min/max dimensions.
-  //       Value minDimValue = getValue(minDim, dbOp, builder);
-  //       Value maxDimValue = getValue(maxDim, dbOp, builder);
+      if (!needsShrinking) return;
 
-  //       /// Check if shrinking is needed for this dimension.
-  //       /// Shrinking is needed if min bound > 0 or max bound < original size.
-  //       bool shrinkMin = (!minDim.isValue && minDim.i_val > 0);
-  //       /// Check if maxDim is semantically equal to originalSize using valueCmp.
-  //       bool shrinkMax = false;
-  //       if(!originalSize.isValue && !maxDim.isValue) {
-  //         shrinkMax = (maxDim.i_val < originalSize.i_val);
-  //       } else if(originalSize.isValue && maxDim.isValue) {
-  //         shrinkMax = (maxDim.v_val != originalSize.v_val);
-  //       }
-  //       bool shrinkThisDim = shrinkMin || shrinkMax;
+      LLVM_DEBUG(dbgs() << "- Shrinking DB\n");
+      changed = true;
 
-  //       if (shrinkThisDim) {
-  //         needsShrinking = true;
-  //         dimsToShrink.push_back(i);
-  //         /// Calculate the new size: maxDim - minDim
-  //         offsets[i] = minDimValue;
-  //         newSizes[i] =
-  //             builder.create<arith::SubIOp>(loc, maxDimValue, minDimValue);
-  //       } else {
-  //         /// If not shrinking, the offset is 0 and size remains the same.
-  //         offsets[i] = minDimValue;
-  //         newSizes[i] = allocNode->getSizes()[i];
-  //       }
-  //     }
+      auto newDbOp = builder.create<DbAllocOp>(loc, dbOp.getMode(), dbOp.getPtr(), newSizes);
+      for (auto attr : dbOp->getAttrs()) {
+        if (attr.getName() != "operandSegmentSizes") {
+          newDbOp->setAttr(attr.getName(), attr.getValue());
+        }
+      }
 
-  //     /// If no dimensions require shrinking, continue to the next db.
-  //     if (!needsShrinking)
-  //       return;
+      allocNode->forEachChildNode([&](NodeBase *child) {
+        Operation *accessOp = child->getOp();
+        SmallVector<Value> oldIndices;
+        if (auto acquireOp = dyn_cast<DbAcquireOp>(accessOp)) {
+          oldIndices = acquireOp.getIndices();
+        } else if (auto releaseOp = dyn_cast<DbReleaseOp>(accessOp)) {
+          oldIndices = releaseOp.getIndices();
+        }
+        SmallVector<Value> newIndices = oldIndices;
+        for (unsigned j = 0; j < rank; ++j) {
+          if (offsets[j]) {
+            newIndices[j] = builder.create<arith::SubIOp>(loc, oldIndices[j], offsets[j]);
+          }
+        }
+        if (auto acquireOp = dyn_cast<DbAcquireOp>(accessOp)) {
+          auto newAcquire = builder.create<DbAcquireOp>(loc, newDbOp.getResult(0), newIndices);
+          acquireOp.replaceAllUsesWith(newAcquire.getResult());
+          acquireOp.erase();
+        } else if (auto releaseOp = dyn_cast<DbReleaseOp>(accessOp)) {
+          auto newRelease = builder.create<DbReleaseOp>(loc, newDbOp.getResult(0), newIndices);
+          releaseOp.replaceAllUsesWith(newRelease.getResult());
+          releaseOp.erase();
+        }
+      });
 
-  //     LLVM_DEBUG(dbgs() << "- Shrinking db \n");
-  //     graphChanged = true;
-
-  //     /// Create the new DbDepOp with adjusted sizes and offsets.
-  //     auto newDbOp = builder.create<arts::DbAllocOp>(
-  //         loc,
-  //         builder.getStringAttr(allocNode->getMode()),
-  //         allocNode->getPtr(),
-  //         newSizes
-  //     );
-  //     /// Copy all attributes except "operandSegmentSizes".
-  //     for (auto attr : dbOp->getAttrs()) {
-  //       if (attr.getName() != "operandSegmentSizes")
-  //         newDbOp->setAttr(attr.getName(), attr.getValue());
-  //     }
-
-  //     /// Update users (loads/stores) to use the new db and adjusted
-  //     /// indices.
-  //     allocNode->forEachDepNode([&](mlir::arts::DbDepNode *depNode) {
-  //       if (auto loadOp = dyn_cast<memref::LoadOp>(depNode->subviewOp.getOperation())) {
-  //         SmallVector<Value> oldIndices = loadOp.getIndices();
-  //         SmallVector<Value> newIndices = oldIndices;
-  //         /// Subtract offset for dimensions that were shrunk from non-zero min.
-  //         for (unsigned j = 0; j < rank; ++j) {
-  //           if (offsets[j]) {
-  //             newIndices[j] = builder.create<arith::SubIOp>(
-  //                 depNode->subviewOp.getLoc(), oldIndices[j], offsets[j]);
-  //           }
-  //         }
-  //         /// Create the new load using the new db and adjusted indices.
-  //         auto newLoad = builder.create<memref::LoadOp>(
-  //             depNode->subviewOp.getLoc(), newDbOp.getResult(0), ValueRange(newIndices));
-  //         loadOp.getResult().replaceAllUsesWith(newLoad.getResult());
-  //       }
-  //       else if (auto storeOp = dyn_cast<memref::StoreOp>(depNode->subviewOp.getOperation())) {
-  //         SmallVector<Value> oldIndices = storeOp.getIndices();
-  //         SmallVector<Value> newIndices = oldIndices;
-  //         /// Subtract offset for dimensions that were shrunk from non-zero min.
-  //         for (unsigned j = 0; j < rank; ++j) {
-  //           if (offsets[j]) {
-  //             newIndices[j] = builder.create<arith::SubIOp>(
-  //                 depNode->subviewOp.getLoc(), oldIndices[j], offsets[j]);
-  //           }
-  //         }
-  //         /// Create the new store using the new db and adjusted indices.
-  //         builder.create<memref::StoreOp>(depNode->subviewOp.getLoc(), storeOp.getValueToStore(),
-  //                                         newDbOp.getResult(0), ValueRange(newIndices));
-  //       }
-  //     });
-
-  //     /// Replace all remaining uses of the old db with the new one.
-  //     dbOp.getResult(0).replaceAllUsesWith(newDbOp.getResult(0));
-  //     dbOp.getResult(1).replaceAllUsesWith(newDbOp.getResult(1));
-  //   });
-
-  //   return graphChanged;
-  // };
-
-  // bool changedOverall = false;
-  // /// Iterate through all functions in the module.
-  // module->walk([&](func::FuncOp func) {
-  //   /// Get the db analysis results for the current function.
-  //   mlir::arts::DbGraph graph(func, nullptr);
-  //   graph.build();
-
-  //   /// Attempt to shrink datablocks within this function's graph.
-  //   LLVM_DEBUG({
-  //     DBGS() << "Shrinking datablocks in function: " << func.getName() << "\n";
-  //     std::ostringstream os;
-  //     graph.print(os);
-  //     llvm::errs() << os.str();
-  //   });
-  //   if (shrinkDbInGraph(&graph)) {
-  //     changedOverall = true;
-  //   }
-  // });
-  // return changedOverall;
-  return false;
+      dbOp.replaceAllUsesWith(newDbOp.getResults());
+      dbOp.erase();
+    });
+  });
+  return changed;
 }
 
-bool DbPass::canonicalizeDimOps() {
-  // LLVM_DEBUG(dbgs() << LINE << "Canonicalizing dim ops\n");
-  // module->walk([&](arts::DbDepOp dbOp) {
-  //   /// Analyze uses of the db.
-  //   for (auto *op : dbOp->getUsers()) {
-  //     auto dimOp = dyn_cast<memref::DimOp>(op);
-  //     if (!dimOp)
-  //       continue;
-
-  //     LLVM_DEBUG(dbgs() << "- Canonicalizing dim op: " << *dimOp << "\n");
-  //     auto dim = dimOp.getConstantIndex();
-  //     assert(dim && "Dim op must have a constant index");
-
-  //     /// Replace the dim op result with the size of the db.
-  //     dimOp.replaceAllUsesWith(dbOp.getSizes()[*dim]);
-  //     dimOp.erase();
-  //   }
-  // });
-  // LLVM_DEBUG(dbgs() << LINE);
-  return false;
+bool DbPass::deadDbElimination() {
+  bool changed = false;
+  module.walk([&](func::FuncOp func) {
+    auto graph = dbAnalysis.getOrCreateGraph(func);
+    SmallVector<DbAllocNode *> deadAllocs;
+    graph->forEachAllocNode([&](DbAllocNode *allocNode) {
+      if (allocNode->getAcquireNodesSize() == 0 && allocNode->getReleaseNodesSize() == 0) {
+        deadAllocs.push_back(allocNode);
+      }
+    });
+    for (auto *allocNode : deadAllocs) {
+      allocNode->getDbAllocOp().erase();
+      changed = true;
+    }
+  });
+  return changed;
 }
+
+bool DbPass::bufferReuse() {
+  bool changed = false;
+  module.walk([&](func::FuncOp func) {
+    auto graph = dbAnalysis.getOrCreateGraph(func);
+    SmallVector<std::pair<DbAllocNode *, DbAllocNode *>> reusePairs;
+    graph->forEachAllocNode([&](DbAllocNode *alloc1) {
+      graph->forEachAllocNode([&](DbAllocNode *alloc2) {
+        if (alloc1 != alloc2 && !graph->isAllocReachable(alloc1->getDbAllocOp(), alloc2->getDbAllocOp()) &&
+            !graph->isAllocReachable(alloc2->getDbAllocOp(), alloc1->getDbAllocOp()) &&
+            dbAnalysis.getAliasAnalysis()->mayAlias(alloc1->getDbAllocOp(), alloc2->getDbAllocOp())) {
+          reusePairs.push_back({alloc1, alloc2});
+        }
+      });
+    });
+    for (auto &[alloc1, alloc2] : reusePairs) {
+      alloc2->forEachChildNode([&](NodeBase *child) {
+        if (auto acquire = dyn_cast<DbAcquireNode>(child)) {
+          acquire->getOp()->setOperand(0, alloc1->getDbAllocOp().getResult(0));
+        } else if (auto release = dyn_cast<DbReleaseNode>(child)) {
+          release->getOp()->setOperand(0, alloc1->getDbAllocOp().getResult(0));
+        }
+      });
+      alloc2->getDbAllocOp().erase();
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+bool DbPass::hoistAllocs() {
+  bool changed = false;
+  module.walk([&](func::FuncOp func) {
+    auto graph = dbAnalysis.getOrCreateGraph(func);
+    auto *loopAnalysis = dbAnalysis.getLoopAnalysis();
+    graph->forEachAllocNode([&](DbAllocNode *allocNode) {
+      Operation *allocOp = allocNode->getOp();
+      if (auto enclosingLoop = loopAnalysis->getEnclosingLoop(allocOp)) {
+        if (loopAnalysis->isLoopInvariant(allocOp, enclosingLoop)) {
+          allocOp->moveBefore(enclosingLoop);
+          changed = true;
+        }
+      }
+    });
+  });
+  return changed;
+}
+
+bool DbPass::fuseAccesses() {
+  bool changed = false;
+  module.walk([&](func::FuncOp func) {
+    auto graph = dbAnalysis.getOrCreateGraph(func);
+    graph->forEachAllocNode([&](DbAllocNode *allocNode) {
+      SmallVector<DbAcquireNode *> acquires;
+      SmallVector<DbReleaseNode *> releases;
+      allocNode->forEachChildNode([&](NodeBase *child) {
+        if (auto acquire = dyn_cast<DbAcquireNode>(child)) acquires.push_back(acquire);
+        if (auto release = dyn_cast<DbReleaseNode>(child)) releases.push_back(release);
+      });
+
+      // Fuse consecutive acquires if no intervening ops
+      for (size_t i = 0; i < acquires.size() - 1; ++i) {
+        Operation *acq1 = acquires[i]->getOp();
+        Operation *acq2 = acquires[i + 1]->getOp();
+        if (acq1->getNextNode() == acq2 && dbAnalysis.getAliasAnalysis()->mayAlias(*acquires[i], *acquires[i + 1])) {
+          acq2->replaceAllUsesWith(acq1->getResults());
+          acq2->erase();
+          changed = true;
+        }
+      }
+
+      // Similar for releases
+      for (size_t i = 0; i < releases.size() - 1; ++i) {
+        Operation *rel1 = releases[i]->getOp();
+        Operation *rel2 = releases[i + 1]->getOp();
+        if (rel1->getNextNode() == rel2 && dbAnalysis.getAliasAnalysis()->mayAlias(*releases[i], *releases[i + 1])) {
+          rel2->erase();  // Fuse by removing redundant release
+          changed = true;
+        }
+      }
+    });
+  });
+  return changed;
+}
+
+bool DbPass::inlineAllocs() {
+  bool changed = false;
+  module.walk([&](func::FuncOp func) {
+    auto graph = dbAnalysis.getOrCreateGraph(func);
+    graph->forEachAllocNode([&](DbAllocNode *allocNode) {
+      if (allocNode->getAcquireNodesSize() + allocNode->getReleaseNodesSize() == 1) {
+        NodeBase *child = nullptr;
+        allocNode->forEachChildNode([&](NodeBase *c) { child = c; });
+        if (child) {
+          Operation *childOp = child->getOp();
+          childOp->setOperand(0, allocNode->getPtr());  // Inline ptr directly
+          allocNode->getDbAllocOp().erase();
+          changed = true;
+        }
+      }
+    });
+  });
+  return changed;
+}
+
 ///===----------------------------------------------------------------------===///
 /// Pass creation
 ///===----------------------------------------------------------------------===///
