@@ -1,73 +1,72 @@
-///==========================================================================
-/// File: DbAliasAnalysis.h
-///
-/// This class performs alias analysis for datablocks.
-///==========================================================================
+//===----------------------------------------------------------------------===//
+// Db/DbDataFlowAnalysis.h - Data flow analysis for DB operations
+//===----------------------------------------------------------------------===//
 
-#ifndef CARTS_ANALYSIS_DBALIAS_ANALYSIS_H
-#define CARTS_ANALYSIS_DBALIAS_ANALYSIS_H
+#ifndef ARTS_ANALYSIS_DB_DBDATAFLOWANALYSIS_H
+#define ARTS_ANALYSIS_DB_DBDATAFLOWANALYSIS_H
 
-#include "arts/Analysis/Db/DbInfo.h"
-#include "mlir/Analysis/AliasAnalysis.h"
+#include "arts/Analysis/Db/DbAnalysis.h"
+#include "arts/Analysis/Db/DbAliasAnalysis.h"
+#include "arts/Analysis/Graphs/Db/DbGraph.h"
+#include "arts/ArtsDialect.h"
+#include "mlir/Analysis/DataFlow/DenseAnalysis.h"
+#include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
+#include "mlir/Analysis/DataFlow/SparseConstantPropagation.h"
 #include "mlir/IR/Operation.h"
-#include "mlir/IR/Value.h"
+#include "mlir/IR/OpImplementation.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace mlir {
 namespace arts {
 
-/// DbAliasAnalysis
-class DbAliasAnalysis {
-public:
-  explicit DbAliasAnalysis(DbAnalysis *analysis);
-  ~DbAliasAnalysis() = default;
+// Lattice element for DB state: tracks live allocations, active acquires, releases.
+struct DbState : public dataflow::AbstractDenseLattice {
+  DbState() : AbstractDenseLattice() {}
+  ChangeResult join(const AbstractDenseLattice &rhs) override;
+  void print(llvm::raw_ostream &os) const override;
 
-  /// Main alias analysis methods with optional indentation for debug output
-  bool mayAlias(DbInfo &A, DbInfo &B, const std::string &indent = "");
-  bool mayAlias(SmallVector<MemoryEffects::EffectInstance, 4> &effectsA,
-                SmallVector<MemoryEffects::EffectInstance, 4> &effectsB,
-                const std::string &indent = "");
+  DenseSet<DbAllocOp> liveAllocs;
+  DenseMap<DbAllocOp, DenseSet<DbAcquireOp>> activeAcquires;
+  DenseMap<DbAllocOp, DenseSet<DbReleaseOp>> pendingReleases;
+};
+
+// DbDataFlowAnalysis: Dense forward data flow analysis for DB lifetime and dependencies.
+// Enhancements:
+// - Leverages MLIR's DenseForwardDataFlowAnalysis for state propagation.
+// - Tracks live allocs, acquires, releases to detect mismatches and create graph edges.
+// - Integrates DbAliasAnalysis for precise dependency detection.
+// - Builds lifetime edges in DbGraph (e.g., acquire -> release if matching).
+// Potential problems: Over-conservatism in aliases leads to extra edges; state explosion in large functions.
+// Improvements: Combine with sparse analysis for scalability; add backward pass for def-use.
+// TODO: Support inter-procedural analysis by propagating states across calls.
+// TODO: Detect and diagnose errors like unmatched acquire/release or access after release.
+// TODO: Incorporate shape inference to refine size-based overlaps in state tracking.
+// TODO: Extend to multi-threaded models for concurrency-aware flow (e.g., per-thread states).
+class DbDataFlowAnalysis : public dataflow::DenseForwardDataFlowAnalysis<DbState> {
+public:
+  DbDataFlowAnalysis(DataFlowSolver &solver, DbGraph *graph, DbAnalysis *analysis);
+
+  void visitOperation(Operation *op, const DbState &before, DbState *after) override;
+
+  // Run the analysis and populate the graph with dependencies.
+  void analyze();
 
 private:
+  // Create lifetime edge if acquire and release match (via alias).
+  void createLifetimeEdge(DbAcquireNode *acquire, DbReleaseNode *release);
+
+  // Get side effects for DB ops.
+  SmallVector<MemoryEffects::EffectInstance> getDbEffects(Operation *op);
+
+  DbGraph *graph;
   DbAnalysis *analysis;
-  DenseMap<std::pair<Value, Value>, bool> aliasCache;
-
-  /// Enhanced memory region overlap analysis
-  bool analyzeMemoryRegionOverlap(DbInfo &A, DbInfo &B, const std::string &indent);
-  
-  /// Dimension-wise overlap analysis
-  bool analyzeDimensionOverlap(const DimensionAnalysis &dimA,
-                              const DimensionAnalysis &dimB,
-                              int64_t sizeA, int64_t sizeB,
-                              size_t dimIndex, const std::string &indent);
-  
-  /// Pattern-specific overlap analysis methods
-  bool analyzeConstantOverlap(const ComplexExpr &exprA,
-                             const ComplexExpr &exprB, const std::string &indent);
-  
-  bool analyzeSequentialOverlap(const ComplexExpr &exprA,
-                               const ComplexExpr &exprB,
-                               int64_t sizeA, int64_t sizeB, const std::string &indent);
-  
-  bool analyzeStridedOverlap(const ComplexExpr &exprA,
-                            const ComplexExpr &exprB,
-                            int64_t sizeA, int64_t sizeB, const std::string &indent);
-  
-  bool analyzeBlockedOverlap(const ComplexExpr &exprA,
-                            const ComplexExpr &exprB,
-                            int64_t sizeA, int64_t sizeB, const std::string &indent);
-  
-  bool analyzeBoundsOverlap(const ComplexExpr &exprA,
-                           const ComplexExpr &exprB, const std::string &indent);
-
-  /// Utility for cache key generation
-  std::pair<Value, Value> makeOrderedPair(Value A, Value B) {
-    return A.getImpl() < B.getImpl() ? std::make_pair(A, B)
-                                     : std::make_pair(B, A);
-  }
+  DbAliasAnalysis aliasAA;
 };
 
 } // namespace arts
 } // namespace mlir
 
-#endif // CARTS_ANALYSIS_DBALIAS_ANALYSIS_H
+#endif // ARTS_ANALYSIS_DB_DBDATAFLOWANALYSIS_H

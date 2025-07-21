@@ -1,16 +1,13 @@
-///==========================================================================
-/// File: DbAnalysis.cpp
-///
-/// Implementation of the DbAnalysis class, serving as the central hub for
-/// data block analysis across an MLIR module. It manages DbGraph instances
-/// for each function and integrates with alias and loop analyses.
-///==========================================================================
+//===----------------------------------------------------------------------===//
+// Db/DbAnalysis.cpp - Implementation of the DbAnalysis class
+//===----------------------------------------------------------------------===//
 
 #include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Db/Graph/DbGraph.h"
-#include "arts/Analysis/Db/Graph/DbNode.h"
-#include "arts/Analysis/LoopAnalysis.h"
+#include "arts/Analysis/Db/DbDataFlowAnalysis.h"
+#include "arts/Analysis/Graphs/Db/DbGraph.h"
+#include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/InferTypeOpInterface.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "db-analysis"
@@ -20,10 +17,14 @@
 using namespace mlir;
 using namespace mlir::arts;
 
-DbAnalysis::DbAnalysis(Operation *module) : module(module) {
+DbAnalysis::DbAnalysis(Operation *module) : module(module), solver() {
   LLVM_DEBUG(DBGS() << "Initializing DbAnalysis for module\n");
   loopAnalysis = std::make_unique<LoopAnalysis>(module);
   dbAliasAnalysis = std::make_unique<DbAliasAnalysis>(this);
+
+  // Add data flow analyses to solver
+  solver.load<dataflow::DeadCodeAnalysis>();
+  solver.load<dataflow::SparseConstantPropagation>();
 }
 
 DbAnalysis::~DbAnalysis() { LLVM_DEBUG(DBGS() << "Destroying DbAnalysis\n"); }
@@ -40,7 +41,10 @@ DbGraph *DbAnalysis::getOrCreateGraph(func::FuncOp func) {
   LLVM_DEBUG(dbgs() << "Creating new DbGraph for function: " << func.getName()
                     << "\n");
   auto newGraph = std::make_unique<DbGraph>(func, this);
-  newGraph->build();
+
+  // Run data flow analysis to populate the graph
+  DbDataFlowAnalysis dataFlow(solver, newGraph.get(), this);
+  dataFlow.analyze();
 
   DbGraph *graphPtr = newGraph.get();
   functionGraphMap[func] = std::move(newGraph);
@@ -65,10 +69,71 @@ void DbAnalysis::print(func::FuncOp func) {
                     << "\n");
   DbGraph *graph = getOrCreateGraph(func);
   if (graph) {
-    LLVM_DEBUG(dbgs() << "Graph created successfully for " << func.getName()
-                      << "\n");
+    graph->print(dbgs());
   } else {
     LLVM_DEBUG(dbgs() << "Error: Could not get or create DbGraph for printing "
                       << "function " << func.getName() << "\n");
   }
+}
+
+SmallVector<int64_t> DbAnalysis::getComputedDimSizes(const NodeBase &node) {
+  Operation *op = node.getOp();
+  SmallVector<int64_t> sizes;
+
+  // Base case for alloc: Assume DbAllocOp has ShapedType
+  if (auto shapedType = dyn_cast<ShapedType>(op->getResult(0).getType())) {
+    sizes = SmallVector<int64_t>(shapedType.getShape().begin(), shapedType.getShape().end());
+  }
+
+  // For acquire/release, inherit from parent alloc
+  if (isa<DbAcquireNode>(node) || isa<DbReleaseNode>(node)) {
+    auto parent = isa<DbAcquireNode>(node) ? dyn_cast<DbAcquireNode>(&node)->getParent() : dyn_cast<DbReleaseNode>(&node)->getParent();
+    if (parent) {
+      return getComputedDimSizes(*parent);
+    }
+  }
+
+  // Infer if dynamic
+  if (auto inferOp = dyn_cast<InferShapedTypeOpInterface>(op)) {
+    SmallVector<ShapedTypeComponents> inferredShapes;
+    if (succeeded(inferOp.inferReturnTypeComponents(op->getContext(), op->getLoc(), op->getOperands(),
+                                                    op->getAttrDictionary(), op->getPropertiesStorage(),
+                                                    op->getRegions(), inferredShapes))) {
+      if (!inferredShapes.empty()) {
+        sizes = inferredShapes[0].getDims();
+      }
+    }
+  }
+
+  // If still unknown, use -1 for dynamic
+  if (sizes.empty()) {
+    sizes.assign(1, -1);  // Default to unknown
+  }
+
+  return sizes;
+}
+
+SmallVector<DimensionAnalysis> DbAnalysis::getDimensionAnalysis(const NodeBase &node) {
+  SmallVector<DimensionAnalysis> analysis;
+
+  // Placeholder logic: Analyze patterns based on op attributes or nested ops
+  // Assume ops have "pattern" attr or derive from loops
+  Operation *op = node.getOp();
+  SmallVector<int64_t> sizes = getComputedDimSizes(node);
+
+  for (size_t i = 0; i < sizes.size(); ++i) {
+    DimensionAnalysis dim;
+    dim.overallPattern.pattern = ComplexExpr::Constant;  // Default
+    // TODO: Analyze nested loops or attrs for sequential/strided/blocked patterns.
+    analysis.push_back(dim);
+  }
+
+  // For acquire/release, add access-specific patterns (e.g., read/write)
+  if (isa<DbAcquireNode>(node)) {
+    // e.g., set read pattern
+  } else if (isa<DbReleaseNode>(node)) {
+    // e.g., set write pattern
+  }
+
+  return analysis;
 }

@@ -13,38 +13,21 @@
 namespace mlir {
 namespace arts {
 
-/// EDT creation and manipulation functions
-EdtOp createEdtOp(OpBuilder &builder, Location loc, types::EdtType type,
-                  SmallVector<Value> deps = {});
-types::EdtType getEdtType(EdtOp edtOp);
+/// Event Operations
+EventOp createEventOp(OpBuilder &builder, Location loc, ArrayRef<Value> sizes);
 
-/// DB creation functions
-DbAllocOp createDbAllocOp(OpBuilder &builder, Location loc, StringRef mode,
+/// DataBlock Operations
+DbAllocOp createDbAllocOp(OpBuilder &builder, Location loc, ArtsMode mode,
                           Value address = nullptr,
                           SmallVector<Value> sizes = {});
-
-DbDepOp createDbDepOp(OpBuilder &builder, Location loc, types::DbDepType mode,
-                      Value source, SmallVector<Value> pinnedIndices,
-                      SmallVector<Value> offsets, SmallVector<Value> sizes);
-
-DbControlOp createDbControlOp(OpBuilder &builder, Location loc,
-                              types::DbDepType mode, Value ptr,
-                              SmallVector<Value> pinnedIndices);
-
-/// DB helper functions
-bool isDbAllocOp(Operation *op);
-bool isDbDepOp(Operation *op);
-bool isStackAlloc(DbAllocOp dbAllocOp);
-bool isDynamicAlloc(DbAllocOp dbAllocOp);
-bool isGlobalAlloc(DbAllocOp dbAllocOp);
-
-/// DB attribute helpers
-types::DbAllocType getDbAllocType(DbAllocOp dbAllocOp);
-void setDbAllocType(DbAllocOp dbAllocOp, types::DbAllocType type,
-                    OpBuilder &builder);
-
-/// Allocation type analysis
-types::DbAllocType getAllocType(Value ptr);
+DbAcquireOp createDbAcquireOp(OpBuilder &builder, Location loc, ArtsMode mode,
+                              Value source, SmallVector<Value> pinnedIndices,
+                              SmallVector<Value> offsets = {},
+                              SmallVector<Value> sizes = {});
+DbReleaseOp createDbReleaseOp(OpBuilder &builder, Location loc,
+                              Value source);
+DbControlOp createDbControlOp(OpBuilder &builder, Location loc, ArtsMode mode,
+                              Value ptr, SmallVector<Value> pinnedIndices = {});
 
 } // namespace arts
 } // namespace mlir
