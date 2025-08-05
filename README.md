@@ -14,7 +14,7 @@ python3 tools/setup/carts-setup.py
 source setup_env.sh
 ```
 
-For detailed setup instructions, see [tools/README.md](tools/README.md).
+To make the `carts` command available, you can either source the `setup_env.sh` script in your current session or add it to your shell's configuration file for permanent access.
 
 ### 2. Build CARTS Project
 

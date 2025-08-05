@@ -7,7 +7,6 @@ Automatically installs all dependencies and sets up the CARTS environment.
 import os
 import sys
 import subprocess
-import platform
 import argparse
 from pathlib import Path
 
@@ -34,60 +33,12 @@ def check_command_exists(cmd):
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
 
-def install_dependencies():
-    """Install system dependencies needed for building."""
-    system = platform.system().lower()
-    
-    if system == "darwin":  # macOS
-        print("Detected macOS. Installing build dependencies...")
-        
-        # Check if Homebrew is installed
-        if not check_command_exists('brew'):
-            print("Installing Homebrew...")
-            install_script = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
-            if not run_command(install_script):
-                print("Failed to install Homebrew. Please install it manually.")
-                return False
-        
-        # Install build tools (LLVM/MLIR will be built locally)
-        packages = ['cmake', 'ninja', 'libomp']
-        for package in packages:
-            print(f"Installing {package}...")
-            if not run_command(f"brew install {package}"):
-                print(f"Failed to install {package}")
-                return False
-                
-    elif system == "linux":
-        print("Detected Linux. Installing build dependencies...")
-        
-        # Try to detect package manager
-        if check_command_exists('apt'):
-            packages = ['cmake', 'ninja-build', 'clang', 'libomp-dev', 'build-essential']
-            for package in packages:
-                if not run_command(f"sudo apt update && sudo apt install -y {package}"):
-                    print(f"Failed to install {package}")
-                    return False
-        elif check_command_exists('yum'):
-            packages = ['cmake', 'ninja-build', 'clang', 'libomp-devel', 'gcc-c++']
-            for package in packages:
-                if not run_command(f"sudo yum install -y {package}"):
-                    print(f"Failed to install {package}")
-                    return False
-        else:
-            print("Unsupported Linux distribution. Please install cmake, ninja, clang, and libomp manually.")
-            return False
-    
-    else:
-        print(f"Unsupported operating system: {system}")
-        return False
-    
-    return True
-
 def setup_project():
     """Set up the CARTS project."""
-    project_root = Path(__file__).parent.parent
+    project_root = Path(__file__).resolve().parent.parent.parent
     
     print("Setting up CARTS project...")
+    print(f"Project root: {project_root}")
     
     # Create necessary directories
     dirs_to_create = ['.install', 'build', 'external']
@@ -103,38 +54,36 @@ def setup_project():
         if not run_command(f"git clone --recursive https://github.com/randreshg/ARTS.git {arts_dir}"):
             print("Failed to download ARTS runtime")
             return False
+    else:
+        print("ARTS runtime already exists. Skipping download.")
     
     if not polygeist_dir.exists():
         print("Downloading Polygeist...")
         if not run_command(f"git clone --branch carts --recursive https://github.com/randreshg/Polygeist.git {polygeist_dir}"):
             print("Failed to download Polygeist")
             return False
+    else:
+        print("Polygeist already exists. Skipping download.")
     
     return True
 
 def build_project():
-    """Build the CARTS project with local dependencies."""
-    project_root = Path(__file__).parent.parent
+    """Build and install the CARTS project using the Makefile."""
+    project_root = Path(__file__).resolve().parent.parent.parent
     
-    print("Building CARTS project...")
+    print("Building and installing CARTS project...")
     
-    # Build and install dependencies locally (LLVM, Polygeist, ARTS)
-    print("Installing LLVM, Polygeist, and ARTS locally...")
-    if not run_command("make installdeps", cwd=project_root):
-        print("Failed to build dependencies")
-        return False
-    
-    # Build main project
-    print("Building CARTS compiler...")
-    if not run_command("make build", cwd=project_root):
-        print("Failed to build main project")
+    # This assumes the main Makefile has an 'install' target that handles
+    # all necessary dependencies and build steps.
+    if not run_command("make all", cwd=project_root):
+        print("Failed to build and install project")
         return False
     
     return True
 
 def create_environment_script():
     """Create an environment setup script."""
-    project_root = Path(__file__).parent.parent
+    project_root = Path(__file__).resolve().parent.parent.parent
     env_script = project_root / 'setup_env.sh'
     
     install_dir = project_root / '.install'
@@ -168,7 +117,7 @@ echo "export PATH=\\"{install_dir}/carts/bin:$PATH\\""
 
 def add_to_path():
     """Add CARTS to the user's PATH."""
-    project_root = Path(__file__).parent.parent.parent
+    project_root = Path(__file__).resolve().parent.parent.parent
     install_dir = project_root / '.install'
     carts_bin = install_dir / 'carts' / 'bin'
     
@@ -216,9 +165,7 @@ def add_to_path():
 
 def main():
     parser = argparse.ArgumentParser(description="CARTS Setup Script")
-    parser.add_argument("--skip-deps", action="store_true", help="Skip dependency installation")
     parser.add_argument("--skip-build", action="store_true", help="Skip project building")
-    parser.add_argument("--deps-only", action="store_true", help="Only install dependencies")
     parser.add_argument("--add-to-path", action="store_true", help="Add CARTS to PATH (no dependency installation)")
     
     args = parser.parse_args()
@@ -231,16 +178,6 @@ def main():
             print("CARTS added to PATH successfully!")
         else:
             sys.exit(1)
-        return
-    
-    if not args.skip_deps and not args.deps_only:
-        print("Installing system build tools...")
-        if not install_dependencies():
-            print("Failed to install dependencies")
-            sys.exit(1)
-    
-    if args.deps_only:
-        print("Dependencies installed successfully!")
         return
     
     if not args.skip_build:
@@ -260,7 +197,7 @@ def main():
     print("2. Use the carts wrapper: carts --help")
     print("3. Run benchmarks: carts-benchmark --help")
     print("4. Generate reports: carts-report --help")
-    print("5. Add to PATH: python3 tools/setup/setup.py --add-to-path")
+    print(f"5. Add to PATH: python3 tools/setup/{Path(__file__).name} --add-to-path")
 
 if __name__ == "__main__":
     main() 

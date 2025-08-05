@@ -10,6 +10,9 @@ add_mlir_dialect_library(MLIRArtsTransforms
   Db.cpp
   CreateEpochs.cpp
   ConvertArtsToLLVM.cpp
+  ConvertDbToOpaquePtr.cpp
+  EdtLowering.cpp
+  EdtPtrRematerialization.cpp
   EdtInvariantCodeMotion.cpp
   EdtPtrRematerialization.cpp
   ConvertDbToOpaquePtr.cpp
