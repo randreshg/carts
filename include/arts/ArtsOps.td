@@ -361,70 +361,62 @@ def GetCurrentNodeOp : Arts_Op<"get_current_node",
 // EDT Lowering Operations
 //===----------------------------------------------------------------------===//
 
-def EdtOutlineFnOp : Arts_Op<"edt_outline_fn", [NoSideEffect]> {
+def EdtOutlineFnOp : Arts_Op<"edt_outline_fn", [Pure]> {
   let summary = "Outlined EDT call with packed arrays.";
   let description = [{
     Intermediate op for calling outlined EDT function with param/dep arrays. 
     Returns EDT guid.
   }];
-  let arguments = (ins MemRefType:$param_memref, MemRefType:$dep_memref);
-  let results = (outs I64Type:$guid);
-  let attributes = (attr StringAttr:$outlined_func);
-  let assemblyFormat = "$param_memref, $dep_memref attr-dict";
+  let arguments = (ins AnyMemRef:$param_memref, AnyMemRef:$dep_memref);
+  let results = (outs I64:$guid);
+  let assemblyFormat = "$param_memref `:` type($param_memref) $dep_memref `:` type($dep_memref) attr-dict";
 }
 
-def EdtParamPackOp : Arts_Op<"edt_param_pack", [NoSideEffect]> {
+def EdtParamPackOp : Arts_Op<"edt_param_pack", [Pure]> {
   let summary = "Pack parameters into memref<?xi64>.";
   let description = [{
     Packs multiple parameters (cast to i64) into a memref for ARTS paramv.
   }];
   let arguments = (ins Variadic<AnyType>:$params);
-  let results = (outs
-    MemRefType:$memref { let type = MemRefType::get({ShapedType::kDynamic}, I64Type); }
-  );
-  let assemblyFormat = "$params : type($params) -> $memref";
+  let results = (outs AnyMemRef:$memref);
+  let assemblyFormat = "$params attr-dict `:` type($params) `:` type($memref)";
 }
 
-def EdtParamUnpackOp : Arts_Op<"edt_param_unpack", [NoSideEffect]> {
+def EdtParamUnpackOp : Arts_Op<"edt_param_unpack", [Pure]> {
   let summary = "Unpack parameters from memref<?xi64>.";
   let description = [{
     Unpacks memref to multiple original types (load i64, cast back).
   }];
-  let arguments = (ins MemRefType:$memref);
-  let results = (variadic AnyType:$unpacked);
-  let assemblyFormat = "$memref -> type($unpacked)";
+  let arguments = (ins AnyMemRef:$memref);
+  let results = (outs Variadic<AnyType>:$unpacked);
+  let assemblyFormat = "$memref `:` type($memref) attr-dict `:` type($unpacked)";
 }
 
-def EdtDepUnpackOp : Arts_Op<"edt_dep_unpack", [NoSideEffect]> {
+def EdtDepUnpackOp : Arts_Op<"edt_dep_unpack", [Pure]> {
   let summary = "Unpack dependencies from memref<?xi64>.";
   let description = [{
     Unpacks depv guids, calls artsGetFromDb for DB ptrs, casts others.
   }];
-  let arguments = (ins MemRefType:$memref);
-  let results = (variadic AnyType:$unpacked);
-  let assemblyFormat = "$memref -> type($unpacked)";
+  let arguments = (ins AnyMemRef:$memref);
+  let results = (outs Variadic<AnyType>:$unpacked);
+  let assemblyFormat = "$memref `:` type($memref) attr-dict `:` type($unpacked)";
 }
 
-def RecordInDepOp : Arts_Op<"record_in_dep", [NoSideEffect]> {
+def RecordInDepOp : Arts_Op<"record_in_dep", [Pure]> {
   let summary = "Record in-dependency for EDT.";
   let description = [{
     Records an in-dep (e.g., DB acquire) for the EDT at a slot.
   }];
-  let arguments = (ins I64Type:$edt_guid, I64Type:$dep);
-  let attributes = (attr
-    I32Attr:$slot,
-    StringAttr:$mode {default_value = "in"}
-  );
-  let assemblyFormat = "$edt_guid, $dep attr-dict";
+  let arguments = (ins I64:$edt_guid, I64:$dep);
+  let assemblyFormat = "$edt_guid $dep attr-dict";
 }
 
-def IncrementOutLatchOp : Arts_Op<"increment_out_latch", [NoSideEffect]> {
+def IncrementOutLatchOp : Arts_Op<"increment_out_latch", [Pure]> {
   let summary = "Increment out-latch for dependency.";
   let description = [{
     Increments latch count for out-dep (e.g., DB release).
   }];
-  let arguments = (ins I64Type:$dep);
-  let attributes = (attr StringAttr:$mode {default_value = "out"});
+  let arguments = (ins I64:$dep);
   let assemblyFormat = "$dep attr-dict";
 }
 

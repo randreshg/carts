@@ -60,6 +60,7 @@ private:
 /// - The consumer EDT sees it as a DbDepOp, not a DbAllocOp
 /// - This class contains all EDT context information for accessing datablocks
 /// from depv parameters
+/*
 class DbDepCodegen {
 public:
   DbDepCodegen(ArtsCodegen &AC, arts::DbDepOp dbOp,
@@ -122,6 +123,7 @@ private:
   llvm::DenseMap<unsigned, unsigned> sizeIndexInEdt;
   llvm::DenseMap<unsigned, unsigned> offsetIndexInEdt;
 };
+*/
 
 } // namespace arts
 } // namespace mlir
