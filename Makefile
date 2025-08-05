@@ -24,60 +24,63 @@ POLYGEIST_BUILD_DIR =$(POLYGEIST_DIR)/build
 LLVM_BUILD_DIR =$(LLVM_DIR)/build
 
 # Targets
-# all: hooks postinstall
-all: build
-
-installdeps: arts
-	@echo "Installing dependencies"
-	@echo "Installing LLVM"
-	@make llvm
-	@echo "Installing Polygeist"
-	@make polygeist
+all: install
 
 # Polygeist
 polygeist-download:
 	mkdir -p $(POLYGEIST_DIR)
 	git clone --branch carts --recursive https://github.com/randreshg/Polygeist.git $(POLYGEIST_DIR) 
 polygeist:
-	mkdir -p $(POLYGEIST_BUILD_DIR)
-	mkdir -p $(POLYGEIST_INSTALL_DIR)
-	cmake -B $(POLYGEIST_BUILD_DIR) \
-		-S $(POLYGEIST_DIR) -G Ninja \
-		-DCMAKE_INSTALL_PREFIX=$(POLYGEIST_INSTALL_DIR) \
-		-DCMAKE_BUILD_TYPE=Release \
-		-DCMAKE_C_COMPILER=clang \
-		-DCMAKE_CXX_COMPILER=clang++ \
-		-DMLIR_DIR=$(LLVM_BUILD_DIR)/lib/cmake/mlir \
-		-DClang_DIR=$(LLVM_BUILD_DIR)/lib/cmake/clang \
-		-DLLVM_EXTERNAL_LIT="$(LLVM_BUILD_DIR)/bin/llvm-lit" \
-		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
-	ninja -C $(POLYGEIST_BUILD_DIR) install
+	@if [ -f "$(POLYGEIST_INSTALL_DIR)/bin/cgeist" ]; then \
+		echo "Polygeist already installed. Skipping build."; \
+	else \
+		echo "Building Polygeist..."; \
+		mkdir -p $(POLYGEIST_BUILD_DIR); \
+		mkdir -p $(POLYGEIST_INSTALL_DIR); \
+		cmake -B $(POLYGEIST_BUILD_DIR) \
+			-S $(POLYGEIST_DIR) -G Ninja \
+			-DCMAKE_INSTALL_PREFIX=$(POLYGEIST_INSTALL_DIR) \
+			-DCMAKE_BUILD_TYPE=Release \
+			-DCMAKE_C_COMPILER=clang \
+			-DCMAKE_CXX_COMPILER=clang++ \
+			-DMLIR_DIR=$(LLVM_BUILD_DIR)/lib/cmake/mlir \
+			-DClang_DIR=$(LLVM_BUILD_DIR)/lib/cmake/clang \
+			-DLLVM_EXTERNAL_LIT="$(LLVM_BUILD_DIR)/bin/llvm-lit" \
+			-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
+		ninja -C $(POLYGEIST_BUILD_DIR) install; \
+	fi
 polygeist-clean:
 	rm -f -r $(POLYGEIST_BUILD_DIR)
 	rm -f -r $(POLYGEIST_INSTALL_DIR)
 
 # LLVM
 llvm:
-	mkdir -p $(LLVM_BUILD_DIR)
-	mkdir -p $(LLVM_INSTALL_DIR)
-	cmake -B $(LLVM_BUILD_DIR) \
-		-S $(LLVM_DIR)/llvm -G Ninja \
-		-DCMAKE_INSTALL_PREFIX=$(LLVM_INSTALL_DIR) \
-		-DCMAKE_BUILD_TYPE=Release \
-		-DCMAKE_C_COMPILER=clang \
-		-DCMAKE_CXX_COMPILER=clang++ \
-		-DLLVM_ENABLE_PROJECTS='mlir;clang;lld' \
-		-DLLVM_ENABLE_RUNTIMES='libcxx;libcxxabi;libunwind' \
-		-DLLVM_OPTIMIZED_TABLEGEN=ON \
-		-DLLVM_ENABLE_ASSERTIONS=ON \
-		-DLLVM_BUILD_TOOLS=ON \
-		-DLLVM_INCLUDE_TOOLS=ON \
-		-DLLVM_INCLUDE_EXAMPLES=OFF \
-		-DLLVM_INCLUDE_TESTS=OFF \
-		-DLLVM_INCLUDE_BENCHMARKS=OFF \
-		-DLLVM_INCLUDE_UTILS=ON \
-		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
-	ninja -C $(LLVM_BUILD_DIR) install
+	@if [ -f "$(LLVM_INSTALL_DIR)/bin/clang" ]; then \
+		echo "LLVM already installed. Skipping build."; \
+	else \
+		echo "Building LLVM..."; \
+		mkdir -p $(LLVM_BUILD_DIR); \
+		mkdir -p $(LLVM_INSTALL_DIR); \
+		cmake -B $(LLVM_BUILD_DIR) \
+			-S $(LLVM_DIR)/llvm -G Ninja \
+			-DCMAKE_INSTALL_PREFIX=$(LLVM_INSTALL_DIR) \
+			-DCMAKE_BUILD_TYPE=Release \
+			-DCMAKE_C_COMPILER=clang \
+			-DCMAKE_CXX_COMPILER=clang++ \
+			-DLLVM_ENABLE_PROJECTS='mlir;clang;lld;openmp' \
+			-DLLVM_ENABLE_RUNTIMES='libcxx;libcxxabi;libunwind' \
+			-DLLVM_TARGETS_TO_BUILD='host' \
+			-DLLVM_OPTIMIZED_TABLEGEN=ON \
+			-DLLVM_ENABLE_ASSERTIONS=ON \
+			-DLLVM_BUILD_TOOLS=ON \
+			-DLLVM_INCLUDE_TOOLS=ON \
+			-DLLVM_INCLUDE_EXAMPLES=OFF \
+			-DLLVM_INCLUDE_TESTS=OFF \
+			-DLLVM_INCLUDE_BENCHMARKS=OFF \
+			-DLLVM_INCLUDE_UTILS=ON \
+			-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
+		ninja -C $(LLVM_BUILD_DIR) install; \
+	fi
 llvm-clean:
 	rm -rf $(LLVM_BUILD_DIR)
 	rm -f -r $(LLVM_INSTALL_DIR)
@@ -87,16 +90,21 @@ arts-download:
 	mkdir -p $(ARTS_DIR)
 	git clone --recursive https://github.com/randreshg/ARTS.git $(ARTS_DIR)
 arts:
-	mkdir -p $(ARTS_BUILD_DIR)
-	mkdir -p $(ARTS_INSTALL_DIR)
-	cmake -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) \
-		-DCMAKE_C_COMPILER=clang \
-		-DCMAKE_CXX_COMPILER=clang++ \
-		-DCMAKE_BUILD_TYPE=Release \
-		-DSMART_DB=ON \
-		-DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR) \
-		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
-	make -C $(ARTS_BUILD_DIR) install -j
+	@if [ -f "$(ARTS_INSTALL_DIR)/lib/libarts-api.so" ]; then \
+		echo "ARTS already installed. Skipping build."; \
+	else \
+		echo "Building ARTS..."; \
+		mkdir -p $(ARTS_BUILD_DIR); \
+		mkdir -p $(ARTS_INSTALL_DIR); \
+		cmake -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) \
+			-DCMAKE_C_COMPILER=clang \
+			-DCMAKE_CXX_COMPILER=clang++ \
+			-DCMAKE_BUILD_TYPE=Release \
+			-DSMART_DB=ON \
+			-DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR) \
+			-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
+		make -C $(ARTS_BUILD_DIR) install -j; \
+	fi
 arts-debug:
 	mkdir -p $(ARTS_BUILD_DIR)
 	mkdir -p $(ARTS_INSTALL_DIR)
@@ -130,8 +138,7 @@ build:
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
 		ninja -C $(CARTS_BUILD_DIR) install
 
-install: build
-	make -C $(BUILD_DIR) install -j
+install: llvm arts polygeist build
 
 uninstall:
 	-cat $(BUILD_DIR)/install_manifest.txt | xargs rm -f -r
