@@ -130,12 +130,12 @@ def EdtInvariantCodeMotion : Pass<"edt-invariant-code-motion", "mlir::ModuleOp">
   let constructor = "mlir::arts::createEdtInvariantCodeMotionPass()";
 }
 
-def EdtPointerRematerialization : Pass<"edt-pointer-rematerialization", "mlir::ModuleOp"> {
-  let summary = "Rematerialize pointer values in arts edt regions";
-  let dependentDialects = [
-    "arts::ArtsDialect"
-  ];
-  let constructor = "mlir::arts::createEdtPointerRematerializationPass()";
+def EdtPtrRematerialization : Pass<"edt-ptr-rematerialization", "mlir::ModuleOp"> {
+  let summary = "Rematerialize pointer dependencies in EDTs.";
+  let description = [{
+    This pass rematerializes pointer dependencies in event-driven tasks (EDTs) to optimize memory usage and data movement.
+  }];
+  let constructor = "mlir::arts::createEdtPtrRematerializationPass()";
 }
 
 def EdtLowering : Pass<"edt-lowering", "mlir::ModuleOp"> {

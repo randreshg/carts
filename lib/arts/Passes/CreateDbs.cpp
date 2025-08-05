@@ -286,7 +286,7 @@ void CreateDbsPass::adjustAccesses(OpBuilder &builder, Region &region,
       auto constOp = idx.getDefiningOp<arith::ConstantIndexOp>();
       assert(constOp &&
              constOp.getValue() ==
-                 pinned[i].cast<arith::ConstantIndexOp>().getValue());
+                 pinned[i].getDefiningOp<arith::ConstantIndexOp>().getValue());
     }
 
     SmallVector<Value> newIndices;
@@ -380,9 +380,11 @@ void CreateDbsPass::runOnOperation() {
             builder.create<arith::ConstantIndexOp>(loc, type.getDimSize(i)));
       }
     }
+    /*
     DbAllocOp dbAlloc =
         builder.create<DbAllocOp>(loc, type, ArtsMode::inout, alloc, sizes);
     allocToDbAlloc[alloc] = dbAlloc;
+    */
   }
 
   /// Process each EDT

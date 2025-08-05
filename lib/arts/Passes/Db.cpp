@@ -31,7 +31,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdint>
-#include "arts/Analysis/Db/DbAnalysis.h"
+// #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Db/Graph/DbGraph.h"
 #include "arts/Analysis/Db/Graph/DbNode.h"
 
@@ -92,21 +92,21 @@ void DbPass::runOnOperation() {
     module.dump();
   });
 
-  auto &dbAnalysis = getAnalysis<DbAnalysis>();
-  module.walk([&](func::FuncOp func) {
-    auto graph = dbAnalysis.getOrCreateGraph(func);
-    if (graph->getNumNodes() == 0) return;
+  // auto &dbAnalysis = getAnalysis<DbAnalysis>();
+  // module.walk([&](func::FuncOp func) {
+  //   auto graph = dbAnalysis.getOrCreateGraph(func);
+  //   if (graph->getNumNodes() == 0) return;
 
-    std::string filename = "DbGraph_" + func.getName().str() + ".dot";
-    std::error_code EC;
-    llvm::raw_fd_ostream dotFile(filename, EC);
-    if (!EC) {
-      graph->exportToDot(dotFile);
-      LLVM_DEBUG(DBGS() << "Exported dot graph to: " << filename << "\n");
-    } else {
-      LLVM_DEBUG(DBGS() << "Failed to create dot file: " << filename << "\n");
-    }
-  });
+  //   std::string filename = "DbGraph_" + func.getName().str() + ".dot";
+  //   std::error_code EC;
+  //   llvm::raw_fd_ostream dotFile(filename, EC);
+  //   if (EC) {
+  //     dbgs() << "Error opening file: " << EC.message() << "\n";
+  //     return;
+  //   }
+  //   graph->printDot(dotFile);
+  //   dotFile.close();
+  // });
 
   changed |= deadDbElimination();
   changed |= convertToParameters();

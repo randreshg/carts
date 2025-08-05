@@ -16,8 +16,6 @@ carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --
 
 carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize --create-dbs  --canonicalize --db --canonicalize --cse -debug-only=db,db-analysis,db-alias-analysis,db-dataflow-analysis,db-info &> simple-arts.mlir
 
-carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize --create-dbs --db --canonicalize --cse --polygeist-mem2reg --edt-pointer-rematerialization --create-epochs --canonicalize --preprocess-dbs --cse -debug-only=convert-arts-to-llvm,arts-codegen,preprocess-dbs &> simple-arts.mlir
-
 carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize --create-dbs --db --canonicalize --cse --polygeist-mem2reg --edt-pointer-rematerialization --create-epochs --canonicalize --preprocess-dbs --convert-arts-to-llvm --cse -debug-only=convert-arts-to-llvm,arts-codegen,edt-codegen,db-codegen &> simple-arts.mlir
 
 

@@ -95,7 +95,7 @@ bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
     for (auto &inst : block) {
       ++numOps;
       if (auto edt = dyn_cast<arts::EdtOp>(&inst)) {
-        if (edt.isSingle()) {
+        if (edt.getType() == arts::EdtType::single) {
           if (singleOp)
             llvm_unreachable(
                 "Multiple single ops in parallel op not supported");
@@ -119,11 +119,10 @@ bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
   /// Insert the single operation before the parallel op and remove the "single"
   /// attribute.
   singleOp->moveBefore(op);
-  singleOp.clearIsSingleAttr();
+  singleOp.setType(arts::EdtType::task);
 
   /// Set task-sync attribute
-  singleOp.setIsTaskAttr();
-  singleOp.setIsSyncAttr();
+  // Already set type to task above
 
   /// Collect unique dependencies from all inner EDTs
   SetVector<Value> allDeps;
@@ -178,9 +177,7 @@ bool EdtPass::lowerParallel(EdtOp &op) {
 
   /// Move Edt op into the loop body.
   op->moveBefore(forOp.getBody(), forOp.getBody()->begin());
-  op.clearIsParallelAttr();
-  op.setIsTaskAttr();
-  op.setIsSyncAttr(); // Enhanced: Set sync for consistency with converted cases
+  op.setType(arts::EdtType::task);  // Set to task type instead
 
   /// Optionally propagate dependencies (similar to convert)
   SetVector<Value> allDeps;
@@ -203,9 +200,7 @@ bool EdtPass::lowerParallel(EdtOp &op) {
 /// top-level. Can be enhanced later for more complex single handling.
 bool EdtPass::lowerSingle(EdtOp &op) {
   LLVM_DEBUG(DBGS() << "Lowering single EDT\n");
-  op.clearIsSingleAttr();
-  op.setIsTaskAttr();
-  op.setIsSyncAttr();
+  op.setType(arts::EdtType::sync);
 
   /// Propagate inner dependencies similar to parallel handling
   SetVector<Value> allDeps;
@@ -241,7 +236,7 @@ bool EdtPass::processParallelEdts() {
   /// Gather all parallel-EDT ops in the module.
   SmallVector<EdtOp, 8> parallelOps;
   module.walk([&](EdtOp edt) {
-    if (edt.isParallel())
+    if (edt.getType() == arts::EdtType::parallel)
       parallelOps.push_back(edt);
   });
 
@@ -256,6 +251,8 @@ bool EdtPass::processParallelEdts() {
 }
 
 bool EdtPass::processSyncTaskEdts() {
+  LLVM_DEBUG(dbgs() << "Processing sync task EDTs\n");
+
   /// If the given single EdtOp is not nested within another EdtOp (i.e., is
   /// top-level), and is marked as sync, embed its region's contents in an
   /// arts::EpochOp. This effectively assigns the work to the master thread,
@@ -289,17 +286,21 @@ bool EdtPass::processSyncTaskEdts() {
     return true;
   };
 
-  /// Collect all single-EDT ops in the module. Enhanced: Collect sync-task
-  /// regardless of single attr.
+  /// Collect all sync task EDTs
   SmallVector<EdtOp, 8> syncTaskOps;
   module.walk([&](EdtOp edt) {
-    if (edt.isTask() && edt.isSync())
+    if (edt.getType() == arts::EdtType::task && edt.getType() == arts::EdtType::sync)
       syncTaskOps.push_back(edt);
   });
 
+  if (syncTaskOps.empty())
+    return false;
+
   /// Try to convert each sync task-EDT to an EpochOp.
-  for (EdtOp op : syncTaskOps)
+  for (EdtOp op : syncTaskOps) {
+    op.setType(arts::EdtType::task);
     convertToEpoch(op);
+  }
   return true;
 }
 
@@ -311,8 +312,8 @@ void EdtPass::runOnOperation() {
   });
 
   processParallelEdts();
-  removeBarriers();      // New: Remove barriers after processing parallels
-  processSyncTaskEdts(); // Uncommented and enhanced
+  removeBarriers();
+  processSyncTaskEdts();
 
   /// Remove all operations that were marked for deletion during conversion or
   /// lowering

@@ -6,7 +6,7 @@
 #define ARTS_ANALYSIS_DB_DBANALYSIS_H
 
 #include "mlir/IR/Operation.h"
-#include "mlir/IR/Module.h"
+// #include "mlir/IR/Module.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
