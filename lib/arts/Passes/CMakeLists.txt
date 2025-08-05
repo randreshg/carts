@@ -8,11 +8,12 @@ add_mlir_dialect_library(MLIRArtsTransforms
   Edt.cpp
   CreateDbs.cpp
   Db.cpp
-  PreprocessDbs.cpp
   CreateEpochs.cpp
   ConvertArtsToLLVM.cpp
   EdtInvariantCodeMotion.cpp
-  EdtPointerRematerialization.cpp
+  EdtPtrRematerialization.cpp
+  ConvertDbToOpaquePtr.cpp
+  EdtLowering.cpp
   ${CARTS_TRANSFORMS_SOURCE_FILES}
   ${CARTS_UTILS_SOURCE_FILES}
   ${CARTS_CODEGEN_SOURCE_FILES}
@@ -29,10 +30,6 @@ LINK_LIBS PUBLIC
   MLIRAffineUtils
   MLIRFuncDialect
   MLIRFuncTransforms
-  MLIRGPUToGPURuntimeTransforms
-  MLIRGPUTransforms
-  MLIRGPUToNVVMTransforms
-  MLIRIR
   MLIRLLVMDialect
   MLIRMathDialect
   MLIRMathToLLVM
@@ -44,7 +41,6 @@ LINK_LIBS PUBLIC
   MLIRSCFToControlFlow
   MLIRTargetLLVMIRImport
   MLIRTransformUtils
-  MLIRGPUToROCDLTransforms
   MLIRControlFlowToLLVM
   MLIRMemRefToLLVM
   MLIRFuncToLLVM

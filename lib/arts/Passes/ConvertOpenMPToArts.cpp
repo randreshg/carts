@@ -53,7 +53,7 @@ struct OMPParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
     LLVM_DEBUG(DBGS() << "Converting omp.parallel to arts.parallel\n");
 
     /// Create a new `arts.edt` operation.
-    auto parOp = rewriter.create<EdtOp>(loc, EdtType::parallel);
+    auto parOp = rewriter.create<EdtOp>(loc, EdtType::parallel, ValueRange{});
     parOp.getBody().emplaceBlock();
     Block &blk = parOp.getBody().front();
 
@@ -80,7 +80,7 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
     rewriter.setInsertionPoint(op);
 
     /// Create an `arts.epoch` operation and add a region to it.
-    auto syncEdtOp = rewriter.create<EdtOp>(loc, EdtType::sync);
+    auto syncEdtOp = rewriter.create<EdtOp>(loc, EdtType::sync, ValueRange{});
     Block &syncEdtBlock = syncEdtOp.getBody().emplaceBlock();
 
     /// Create the for loop inside the epoch
@@ -94,7 +94,7 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
 
     /// Create a new EDT operation inside the for loop body
     rewriter.setInsertionPointToStart(forBody);
-    auto edtOp = rewriter.create<EdtOp>(loc, EdtType::task);
+    auto edtOp = rewriter.create<EdtOp>(loc, EdtType::task, ValueRange{});
     Block &edtBlock = edtOp.getBody().emplaceBlock();
     rewriter.setInsertionPointToStart(&edtBlock);
 
@@ -132,7 +132,7 @@ struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
     auto loc = op.getLoc();
 
     /// Create a new `arts.single` operation.
-    auto artsSingle = rewriter.create<EdtOp>(loc, EdtType::single);
+    auto artsSingle = rewriter.create<EdtOp>(loc, EdtType::single, ValueRange{});
     artsSingle.getBody().emplaceBlock();
 
     /// Move the region's operations.

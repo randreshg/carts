@@ -31,10 +31,15 @@ class DbAllocEdge;
 class DbLifetimeEdge;
 class DbDataFlowAnalysis;
 
+// Forward declarations
+// class DbAnalysis;
+class DbNode;
+class DbEdge;
+
 // DbGraph: Specialized graph for data blocks, acquires, and releases.
 class DbGraph : public GraphBase {
 public:
-  DbGraph(func::FuncOp func, DbAnalysis *analysis);
+  DbGraph(func::FuncOp func); // , DbAnalysis *analysis);
 
   void build() override;
   void invalidate() override;
@@ -62,7 +67,7 @@ public:
 
 private:
   func::FuncOp func;
-  DbAnalysis *analysis;
+  // DbAnalysis *analysis;
   std::unique_ptr<DbDataFlowAnalysis> dataFlowAnalysis;
 
   /// Node maps

@@ -90,7 +90,7 @@ private:
   LogicalResult handleBarrier(BarrierOp op);
   LogicalResult handleAlloc(AllocOp op);
   LogicalResult handleDbAlloc(DbAllocOp op);
-  LogicalResult handleDbDep(DbDepOp op);
+  // LogicalResult handleDbDep(DbDepOp op);
 
   /// Utility methods
   bool hasArtsOperations() const;
@@ -229,8 +229,10 @@ LogicalResult ConvertArtsToLLVMPass::processOperations(func::FuncOp func) {
       return handleWalkResult(handleDbAlloc(dbAllocOp));
 
     /// Handle DbDep operations - they are managed by DbDepCodegen but need to be removed
+    /*
     if (auto dbDepOp = dyn_cast<arts::DbDepOp>(op))
       return handleWalkResult(handleDbDep(dbDepOp));
+    */
 
     return WalkResult::advance();
   });
@@ -480,6 +482,7 @@ LogicalResult ConvertArtsToLLVMPass::handleDbAlloc(DbAllocOp op) {
   return success();
 }
 
+/*
 LogicalResult ConvertArtsToLLVMPass::handleDbDep(DbDepOp op) {
   LLVM_DEBUG(DBGS() << "Processing DbDep: " << op << "\n");
   statistics.dbDepOps++;
@@ -492,6 +495,7 @@ LogicalResult ConvertArtsToLLVMPass::handleDbDep(DbDepOp op) {
 
   return success();
 }
+*/
 
 //===----------------------------------------------------------------------===//
 // Utility Methods
