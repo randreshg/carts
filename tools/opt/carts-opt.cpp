@@ -2,6 +2,7 @@
 /// File: carts-opt.cpp
 ///==========================================================================
 
+#include "mlir/Pass/Pass.h"
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
