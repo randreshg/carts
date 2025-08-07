@@ -2,6 +2,16 @@
 
 CARTS is an LLVM/MLIR-based compiler framework that implements the ARTS (Asynchronous Runtime System) dialect for distributed programming.
 
+## Documentation
+
+For a comprehensive understanding of the project, including its architecture, dependencies, and build process, please refer to the documentation in the `docs/` directory.
+
+*   **[Project Overview](docs/project_overview.md)**
+*   **[Dependencies](docs/dependencies.md)**
+*   **[Build and Run](docs/build_and_run.md)**
+*   **[Project Structure](docs/project_structure.md)**
+*   **[Next Steps](docs/next_steps.md)**
+
 ## Quick Start
 
 ### 1. Automated Setup (Recommended)
@@ -41,14 +51,11 @@ carts build --llvm
 
 The CARTS compilation process follows this pipeline:
 
-```
-C++ Source (.cpp)
-        ↓
-carts cgeist → MLIR (.mlir)
-        ↓
-carts run → LLVM IR (.ll)
-        ↓
-carts compile → Executable (binary)
+```mermaid
+flowchart TD
+    A["C++ Source (.cpp)"] -- "carts cgeist" --> B["MLIR (.mlir)"];
+    B -- "carts run" --> C["LLVM IR (.ll)"];
+    C -- "carts compile" --> D["Executable"];
 ```
 
 #### Step-by-Step Usage
@@ -85,6 +92,100 @@ carts clean
 ```
 
 > **Important**: Project build uses **system clang**, while ARTS operations use **installed LLVM**
+
+## Core Transformation Passes
+
+The CARTS compilation pipeline includes several key transformation passes. Here are a few of the most important ones:
+
+### `--convert-openmp-to-arts`
+
+This pass converts OpenMP parallel constructs into the ARTS dialect.
+
+**Before:**
+
+```mlir
+func.func @example(%arg0: memref<100xf32>) {
+  omp.parallel {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c100 = arith.constant 100 : index
+    scf.for %i = %c0 to %c100 step %c1 {
+      %v = memref.load %arg0[%i] : memref<100xf32>
+      %a = arith.addf %v, %v : f32
+      memref.store %a, %arg0[%i] : memref<100xf32>
+    }
+    omp.terminator
+  }
+  return
+}
+```
+
+**After:**
+
+```mlir
+func.func @example(%arg0: memref<100xf32>) {
+  arts.parallel {
+    %c0 = arith.constant 0 : index
+    %c1 = arith.constant 1 : index
+    %c100 = arith.constant 100 : index
+    scf.for %i = %c0 to %c100 step %c1 {
+      %v = memref.load %arg0[%i] : memref<100xf32>
+      %a = arith.addf %v, %v : f32
+      memref.store %a, %arg0[%i] : memref<100xf32>
+    }
+  }
+  return
+}
+```
+
+### `--create-dbs`
+
+This pass identifies data blocks (DBs) that can be managed by the ARTS runtime.
+
+**Before:**
+
+```mlir
+func.func @example() -> memref<100xf32> {
+  %0 = memref.alloc() : memref<100xf32>
+  return %0 : memref<100xf32>
+}
+```
+
+**After:**
+
+```mlir
+func.func @example() -> memref<100xf32> {
+  %0 = arts.db_alloc() : memref<100xf32>
+  return %0 : memref<100xf32>
+}
+```
+
+### `--convert-arts-to-llvm`
+
+This pass converts the ARTS dialect to the LLVM IR dialect.
+
+**Before:**
+
+```mlir
+func.func @example() {
+  arts.parallel {
+    // ...
+  }
+  return
+}
+```
+
+**After:**
+
+```mlir
+func.func @example() {
+  // This will be lowered to a series of function calls to the ARTS runtime
+  // library, such as artsEdtCreate, artsSignalEdt, etc.
+  llvm.call @artsEdtCreate(...) : (...) -> i64
+  // ...
+  return
+}
+```
 
 ## Project Structure
 
@@ -132,11 +233,6 @@ The main interface for all CARTS operations:
 ## Examples
 
 See `examples/` directory for sample programs and `test/` for test cases.
-
-## Documentation
-
-- [Tools Documentation](tools/README.md)
-- [Configuration Guide](docs/configuration.md)
 
 ---
 
