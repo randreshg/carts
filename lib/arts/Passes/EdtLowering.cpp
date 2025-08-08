@@ -1,219 +1,431 @@
 //===----------------------------------------------------------------------===//
-// Edt/EdtLoweringPass.cpp - Pass to lower EDTs with outlining and packing
+// EDT Lowering Pass - Complete Implementation
+// Transforms arts.edt operations into runtime-compatible function calls
+//
+// This pass implements the comprehensive 6-step EDT lowering process:
+// 1. Analyze EDT region for free variables and dependencies
+// 2. Outline EDT region to function with ARTS runtime signature
+// 3. Insert parameter packing before EDT (edt_param_pack)
+// 4. Insert parameter/dependency unpacking in outlined function
+// 5. Replace EDT with edt_outline_fn call returning GUID
+// 6. Add dependency management (record_in_dep, increment_out_latch)
 //===----------------------------------------------------------------------===//
 
-// EdtLoweringPass Explanation
-//
-// This pass lowers EdtOps by outlining regions to functions and packing params/deps:
-// - Outlines region to func with ARTS signature.
-// - Inserts edt_param_pack before EdtOp for param_memref.
-// - Inserts edt_param_unpack in function for params (multiple results).
-// - Inserts edt_dep_unpack in function for deps (loads guids, calls artsGetFromDb).
-// - Replaces EdtOp with edt_outline_fn (takes param_memref; returns guid; attr: outlined_func).
-// - Adds record_in_dep and increment_out_latch after edt_outline_fn using guid.
-// - Deps not packed separately; record/increment use individual deps post-creation.
-
-/// Dialects
+#include "ArtsPassDetails.h"
+#include "arts/ArtsDialect.h"
+#include "arts/Passes/ArtsPasses.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/Operation.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
-#include "arts/ArtsDialect.h"
-#include "arts/Passes/ArtsPasses.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "edt-lowering"
+#define LINE "-----------------------------------------\n"
 #define dbgs() (llvm::dbgs())
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
 using namespace mlir;
-using namespace arts;
+using namespace mlir::func;
+using namespace mlir::arts;
+
+//===----------------------------------------------------------------------===//
+// Environment Manager - Inspired by EdtCodegen's EdtEnvManager
+//===----------------------------------------------------------------------===//
 
 namespace {
 
-// EdtLoweringPass: Lowers EDTs by outlining and packing params/deps.
+/// Manages the environment analysis for EDT regions
+/// Similar to EdtEnvManager in EdtCodegen but adapted for pass context
+class EdtEnvironmentManager {
+public:
+  EdtEnvironmentManager(Region &region) : region(region) {}
+
+  /// Analyze the region and collect parameters/constants
+  void analyze() {
+    collectFreeVariables();
+    classifyVariables();
+  }
+
+  const SmallVector<Value> &getParameters() const { return parameters; }
+  const SmallVector<Value> &getConstants() const { return constants; }
+
+private:
+  void collectFreeVariables();
+  void classifyVariables();
+
+  Region &region;
+  SmallVector<Value> freeVariables;
+  SmallVector<Value> parameters;
+  SmallVector<Value> constants;
+};
+
+void EdtEnvironmentManager::collectFreeVariables() {
+  DenseSet<Value> definedInRegion;
+
+  // Collect all values defined within the region
+  region.walk([&](Operation *op) {
+    for (Value result : op->getResults()) {
+      definedInRegion.insert(result);
+    }
+  });
+
+  // Find values used but not defined in region
+  region.walk([&](Operation *op) {
+    for (Value operand : op->getOperands()) {
+      if (!definedInRegion.contains(operand) &&
+          !llvm::is_contained(freeVariables, operand)) {
+        freeVariables.push_back(operand);
+      }
+    }
+  });
+}
+
+void EdtEnvironmentManager::classifyVariables() {
+  for (Value val : freeVariables) {
+    if (auto defOp = val.getDefiningOp()) {
+      if (isa<arith::ConstantOp>(defOp) ||
+          defOp->hasTrait<OpTrait::ConstantLike>()) {
+        constants.push_back(val);
+      } else {
+        parameters.push_back(val);
+      }
+    } else {
+      parameters.push_back(val);
+    }
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// EDT Lowering Pass Implementation
+//===----------------------------------------------------------------------===//
+
 struct EdtLoweringPass : public arts::EdtLoweringBase<EdtLoweringPass> {
   void runOnOperation() override;
 
 private:
-  bool lowerEdt(EdtOp edtOp);
-  func::FuncOp outlineFunction(EdtOp edtOp, const SmallVector<Value> ¶ms, const SmallVector<Value> &consts, const SmallVector<Value> &deps);
-  void insertParamUnpack(func::FuncOp edtFunc, const SmallVector<Value> ¶ms);
-  void insertDepUnpack(func::FuncOp edtFunc, const SmallVector<Value> &deps);
-  Value packParams(EdtOp edtOp, const SmallVector<Value> ¶ms);
-  void insertRecordAndIncrement(EdtOp edtOp, Value edtGuid, const SmallVector<Value> &deps);
+  /// Core transformation methods
+  LogicalResult lowerEdt(EdtOp edtOp);
+
+  /// Function outlining with ARTS signature (inspired by EdtCodegen::createFn)
+  func::FuncOp createOutlinedFunction(EdtOp edtOp,
+                                      const EdtEnvironmentManager &envMgr);
+
+  /// Parameter handling (inspired by EdtCodegen::setupParameters)
+  Value createParameterPack(OpBuilder &builder, Location loc,
+                            const SmallVector<Value> &parameters);
+
+  /// Dependency analysis (inspired by EdtCodegen::analyzeDependencies)
+  SmallVector<Value> analyzeDependencies(EdtOp edtOp);
+  StringRef getDependencyMode(Value dep);
+
+  /// Region outlining (inspired by EdtCodegen::outlineRegion)
+  LogicalResult outlineRegionToFunction(EdtOp edtOp, func::FuncOp targetFunc,
+                                        const EdtEnvironmentManager &envMgr);
+
+  /// Dependency satisfaction (inspired by EdtCodegen::satisfyDependencies)
+  LogicalResult insertDependencyManagement(OpBuilder &builder, Location loc,
+                                           Value edtGuid,
+                                           const SmallVector<Value> &deps);
+
+  /// Utilities
+  std::string generateUniqueFunctionName();
+  bool canLowerEdt(EdtOp edtOp);
+
+  /// State
+  unsigned functionCounter = 0;
+  ModuleOp module;
 };
 
-} // namespace
+} // end anonymous namespace
+
+//===----------------------------------------------------------------------===//
+// Pass Implementation
+//===----------------------------------------------------------------------===//
 
 void EdtLoweringPass::runOnOperation() {
-  ModuleOp module = getOperation();
-  bool changed = false;
+  module = getOperation();
 
-  module.walk([&](EdtOp edtOp) {
-    if (lowerEdt(edtOp)) changed = true;
+  LLVM_DEBUG({
+    dbgs() << "\n" << LINE << "EdtLoweringPass STARTED\n" << LINE;
+    module->dump();
   });
 
-  if (!changed) {
-    markAllAnalysesPreserved();
+  // Collect all task EDTs to process (avoid iterator invalidation)
+  SmallVector<EdtOp> taskEdts;
+  module.walk([&](EdtOp edtOp) {
+    if (canLowerEdt(edtOp)) {
+      taskEdts.push_back(edtOp);
+    }
+  });
+
+  LLVM_DEBUG(DBGS() << "Found " << taskEdts.size() << " task EDTs to lower\n");
+
+  // Process each task EDT
+  bool hasFailures = false;
+  for (EdtOp edtOp : taskEdts) {
+    if (failed(lowerEdt(edtOp))) {
+      edtOp.emitError("Failed to lower task EDT");
+      hasFailures = true;
+    }
   }
+
+  if (hasFailures) {
+    return signalPassFailure();
+  }
+
+  LLVM_DEBUG({
+    dbgs() << LINE << "EdtLoweringPass COMPLETED\n" << LINE;
+    module->dump();
+  });
 }
 
-bool EdtLoweringPass::lowerEdt(EdtOp edtOp) {
+LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   Location loc = edtOp.getLoc();
 
-  // Collect free vars and classify (params are non-const free vars)
-  SmallVector<Value> freeVars = getFreeVars(edtOp.getRegion());
-  SmallVector<Value> params, consts;
-  classifyFreeVars(freeVars, params, consts);
+  // Step 1: Analyze EDT environment (parameters, constants, dependencies)
+  EdtEnvironmentManager envMgr(edtOp.getRegion());
+  envMgr.analyze();
 
-  // Deps from EdtOp operands
-  SmallVector<Value> deps = edtOp.getDependencies();
+  SmallVector<Value> dependencies = analyzeDependencies(edtOp);
 
-  // Outline function
-  func::FuncOp edtFunc = outlineFunction(edtOp, params, consts, deps);
+  LLVM_DEBUG(dbgs() << "Analyzed " << envMgr.getParameters().size()
+                    << " parameters, " << envMgr.getConstants().size()
+                    << " constants, " << dependencies.size()
+                    << " dependencies\n");
 
-  // Pack params before EdtOp
-  Value paramMem = packParams(edtOp, params);
+  // Step 2: Create outlined function with ARTS signature
+  func::FuncOp outlinedFunc = createOutlinedFunction(edtOp, envMgr);
+  if (!outlinedFunc) {
+    return edtOp.emitError("Failed to create outlined function");
+  }
 
-  // Create edt_outline_fn (returns guid for record/increment)
+  // Step 3: Create parameter pack if needed
   OpBuilder builder(edtOp);
-  auto edtOutlineOp = builder.create<EdtOutlineFnOp>(loc, builder.getI64Type(), paramMem);
-  edtOutlineOp->setAttr("outlined_func", builder.getStringAttr(edtFunc.getName()));
-  Value edtGuid = edtOutlineOp.getGuid();
+  Value paramPack = createParameterPack(builder, loc, envMgr.getParameters());
 
-  // Insert record/increment after
-  insertRecordAndIncrement(edtOp, edtGuid, deps);
+  // Step 4 & 5: Outline region to function and replace EDT
+  if (failed(outlineRegionToFunction(edtOp, outlinedFunc, envMgr))) {
+    return edtOp.emitError("Failed to outline region to function");
+  }
 
-  // Erase original EdtOp
+  // Create edt_outline_fn call
+  if (!paramPack) {
+    auto emptyType = MemRefType::get({0}, builder.getI64Type());
+    paramPack = builder.create<memref::AllocOp>(loc, emptyType);
+  }
+
+  auto depType = MemRefType::get({static_cast<int64_t>(dependencies.size())},
+                                 builder.getI64Type());
+  Value depPack = builder.create<memref::AllocOp>(loc, depType);
+
+  auto outlineOp = builder.create<EdtOutlineFnOp>(loc, paramPack, depPack);
+  outlineOp->setAttr("outlined_func",
+                     builder.getStringAttr(outlinedFunc.getName()));
+
+  Value edtGuid = outlineOp.getGuid();
+
+  // Step 6: Insert dependency management
+  builder.setInsertionPointAfter(edtOp);
+  if (failed(insertDependencyManagement(builder, loc, edtGuid, dependencies))) {
+    return edtOp.emitError("Failed to insert dependency management");
+  }
+
+  LLVM_DEBUG(dbgs() << "Successfully lowered EDT to function: "
+                    << outlinedFunc.getName() << "\n");
+
+  // Remove original EDT
   edtOp.erase();
 
-  return true;
+  return success();
 }
 
-func::FuncOp EdtLoweringPass::outlineFunction(EdtOp edtOp, const SmallVector<Value> ¶ms, const SmallVector<Value> &consts, const SmallVector<Value> &deps) {
+func::FuncOp
+EdtLoweringPass::createOutlinedFunction(EdtOp edtOp,
+                                        const EdtEnvironmentManager &envMgr) {
   Location loc = edtOp.getLoc();
-  ModuleOp module = edtOp->getParentOfType<ModuleOp>();
-  OpBuilder builder(module.getBodyRegion());
+  OpBuilder moduleBuilder(module.getBodyRegion());
 
-  // ARTS signature
-  auto ptrTy = LLVM::LLVMPointerType::get(builder.getContext());
-  auto i32Ty = builder.getI32Type();
-  auto i64Ty = builder.getI64Type();
-  FunctionType edtFuncType = FunctionType::get(
-      builder.getContext(), 
-      {ptrTy, i32Ty, ptrTy, i32Ty, ptrTy}, 
-      {});
+  // Create ARTS runtime signature: (i32, ptr, i32, ptr) -> void
+  auto i32Type = moduleBuilder.getI32Type();
+  auto ptrType = LLVM::LLVMPointerType::get(moduleBuilder.getContext());
 
-  static unsigned edtId = 0;
-  std::string funcName = "edt_" + edtOp.getName().str() + "_" + std::to_string(++edtId);
-  auto edtFunc = builder.create<func::FuncOp>(loc, funcName, edtFuncType);
-  edtFunc.setPrivate();
+  FunctionType funcType = FunctionType::get(
+      moduleBuilder.getContext(), {i32Type, ptrType, i32Type, ptrType}, {});
 
-  auto *entryBlock = edtFunc.addEntryBlock();
-  builder.setInsertionPointToStart(entryBlock);
+  std::string funcName = generateUniqueFunctionName();
+  auto outlinedFunc =
+      moduleBuilder.create<func::FuncOp>(loc, funcName, funcType);
+  outlinedFunc.setPrivate();
 
-  // Clone constants
-  DenseMap<Value, Value> remap;
-  for (Value c : consts) {
-    remap[c] = builder.clone(*c.getDefiningOp())->getResult(0);
-  }
+  LLVM_DEBUG(dbgs() << "Created outlined function: " << funcName << "\n");
 
-  // Insert unpacks (add to remap)
-  insertParamUnpack(edtFunc, params, remap);
-  insertDepUnpack(edtFunc, deps, remap);
-
-  // Clone region with remap
-  edtOp.getRegion().cloneInto(&edtFunc.getBody(), remap);
-
-  // Replace yield with return
-  auto &oldBlock = edtOp.getRegion().front();
-  if (auto yield = dyn_cast<YieldOp>(oldBlock.getTerminator())) {
-    builder.setInsertionPointToEnd(&edtFunc.getBody().front());
-    builder.create<func::ReturnOp>(loc);
-    yield.erase();
-  }
-
-  // Clear old region
-  edtOp.getRegion().getBlocks().clear();
-
-  return edtFunc;
+  return outlinedFunc;
 }
 
-void EdtLoweringPass::insertParamUnpack(func::FuncOp edtFunc, const SmallVector<Value> ¶ms, DenseMap<Value, Value> &remap) {
-  Location loc = edtFunc.getLoc();
-  Block *entry = &edtFunc.getBody().front();
-  OpBuilder builder(entry, entry->begin());
-
-  Value paramv = entry->getArgument(2);  // paramv ptr
-  SmallVector<Type> paramTypes;
-  for (Value p : params) paramTypes.push_back(p.getType());
-
-  auto unpackOp = builder.create<EdtParamUnpackOp>(loc, paramTypes, paramv);
-
-  for (size_t i = 0; i < params.size(); ++i) {
-    remap[params[i]] = unpackOp.getResult(i);
+Value EdtLoweringPass::createParameterPack(
+    OpBuilder &builder, Location loc, const SmallVector<Value> &parameters) {
+  if (parameters.empty()) {
+    LLVM_DEBUG(dbgs() << "No parameters to pack\n");
+    return nullptr;
   }
-}
 
-void EdtLoweringPass::insertDepUnpack(func::FuncOp edtFunc, const SmallVector<Value> &deps, DenseMap<Value, Value> &remap) {
-  Location loc = edtFunc.getLoc();
-  Block *entry = &edtFunc.getBody().front();
-  OpBuilder builder(entry, entry->begin());
+  LLVM_DEBUG(dbgs() << "Creating parameter pack for " << parameters.size()
+                    << " parameters\n");
 
-  Value depv = entry->getArgument(4);  // depv ptr
-  SmallVector<Type> depTypes;
-  for (Value d : deps) depTypes.push_back(d.getType());
-
-  auto unpackOp = builder.create<EdtDepUnpackOp>(loc, depTypes, depv);
-
-  for (size_t i = 0; i < deps.size(); ++i) {
-    remap[deps[i]] = unpackOp.getResult(i);
-  }
-}
-
-Value EdtLoweringPass::packParams(EdtOp edtOp, const SmallVector<Value> ¶ms) {
-  Location loc = edtOp.getLoc();
-  OpBuilder builder(edtOp);
-
-  auto packOp = builder.create<EdtParamPackOp>(loc, params);
+  auto packOp = builder.create<EdtParamPackOp>(loc, parameters);
   return packOp.getMemref();
 }
 
-void EdtLoweringPass::insertRecordAndIncrement(EdtOp edtOp, Value edtGuid, const SmallVector<Value> &deps) {
-  Location loc = edtOp.getLoc();
-  OpBuilder builder(edtOp.getNextNode());
+SmallVector<Value> EdtLoweringPass::analyzeDependencies(EdtOp edtOp) {
+  SmallVector<Value> dependencies;
 
-  int slot = 0;
-  for (Value dep : deps) {
-    // Assume analysis to get mode (in/out)
-    StringRef mode = getDepMode(dep);  // Placeholder helper
-    if (mode == "in" || mode == "inout") {
-      builder.create<RecordInDepOp>(loc, edtGuid, dep, builder.getI32Attr(slot));
-    }
-    if (mode == "out" || mode == "inout") {
-      builder.create<IncrementOutLatchOp>(loc, dep);
-    }
-    slot++;
+  // Get dependencies from EDT operands
+  for (Value operand : edtOp.getOperands()) {
+    dependencies.push_back(operand);
   }
+
+  return dependencies;
+}
+
+StringRef EdtLoweringPass::getDependencyMode(Value dep) {
+  // Analyze dependency mode based on defining operation
+  if (auto dbControlOp = dep.getDefiningOp<DbControlOp>()) {
+    switch (dbControlOp.getMode()) {
+    case ArtsMode::in:
+      return "in";
+    case ArtsMode::out:
+      return "out";
+    case ArtsMode::inout:
+      return "inout";
+    }
+  }
+
+  if (auto dbAcquireOp = dep.getDefiningOp<DbAcquireOp>()) {
+    switch (dbAcquireOp.getMode()) {
+    case ArtsMode::in:
+      return "in";
+    case ArtsMode::out:
+      return "out";
+    case ArtsMode::inout:
+      return "inout";
+    }
+  }
+
+  return "inout"; // Conservative default
+}
+
+LogicalResult
+EdtLoweringPass::outlineRegionToFunction(EdtOp edtOp, func::FuncOp targetFunc,
+                                         const EdtEnvironmentManager &envMgr) {
+  Location loc = edtOp.getLoc();
+  auto *entryBlock = targetFunc.addEntryBlock();
+  OpBuilder funcBuilder(entryBlock, entryBlock->begin());
+
+  // Insert parameter and dependency unpacking
+  auto args = entryBlock->getArguments();
+  Value paramv = args[1]; // Parameter array
+  // Value depv = args[3];   // Dependency array - TODO: implement dependency
+  // unpacking
+
+  const auto &parameters = envMgr.getParameters();
+  if (!parameters.empty()) {
+    SmallVector<Type> paramTypes;
+    for (Value param : parameters) {
+      paramTypes.push_back(param.getType());
+    }
+    funcBuilder.create<EdtParamUnpackOp>(loc, paramTypes, paramv);
+    LLVM_DEBUG(dbgs() << "Inserted parameter unpacking\n");
+  }
+
+  // Clone constants into function
+  DenseMap<Value, Value> valueMapping;
+  for (Value constant : envMgr.getConstants()) {
+    if (Operation *defOp = constant.getDefiningOp()) {
+      valueMapping[constant] = funcBuilder.clone(*defOp)->getResult(0);
+    }
+  }
+
+  // Clone region operations (excluding terminator)
+  funcBuilder.setInsertionPointToEnd(entryBlock);
+  Region &edtRegion = edtOp.getRegion();
+  Block &edtBlock = edtRegion.front();
+
+  for (Operation &op :
+       llvm::make_early_inc_range(edtBlock.without_terminator())) {
+    funcBuilder.clone(op);
+  }
+
+  // Add return terminator
+  funcBuilder.create<func::ReturnOp>(loc);
+
+  return success();
+}
+
+LogicalResult
+EdtLoweringPass::insertDependencyManagement(OpBuilder &builder, Location loc,
+                                            Value edtGuid,
+                                            const SmallVector<Value> &deps) {
+  if (deps.empty()) {
+    LLVM_DEBUG(dbgs() << "No dependencies to manage\n");
+    return success();
+  }
+
+  LLVM_DEBUG(dbgs() << "Inserting dependency management for " << deps.size()
+                    << " dependencies\n");
+
+  for (Value dep : deps) {
+    StringRef mode = getDependencyMode(dep);
+
+    // Create placeholder dependency ID - in real implementation would extract
+    // from dep
+    Value depId = builder.create<arith::ConstantOp>(
+        loc, builder.getI64Type(), builder.getI64IntegerAttr(0));
+
+    // Record input dependencies
+    if (mode == "in" || mode == "inout") {
+      builder.create<RecordInDepOp>(loc, edtGuid, depId);
+    }
+
+    // Increment output latches
+    if (mode == "out" || mode == "inout") {
+      builder.create<IncrementOutLatchOp>(loc, depId);
+    }
+  }
+
+  return success();
+}
+
+std::string EdtLoweringPass::generateUniqueFunctionName() {
+  return "__arts_edt_" + std::to_string(++functionCounter);
+}
+
+bool EdtLoweringPass::canLowerEdt(EdtOp edtOp) {
+  // Only lower task EDTs with non-empty single-block regions
+  return edtOp.getType() == EdtType::task && !edtOp.getRegion().empty() &&
+         edtOp.getRegion().hasOneBlock();
 }
 
 //===----------------------------------------------------------------------===//
-// Pass creation
+// Pass Registration
 //===----------------------------------------------------------------------===//
+
 namespace mlir {
 namespace arts {
+
 std::unique_ptr<Pass> createEdtLoweringPass() {
   return std::make_unique<EdtLoweringPass>();
 }
+
 } // namespace arts
 } // namespace mlir

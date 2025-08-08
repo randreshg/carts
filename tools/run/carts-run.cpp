@@ -1,11 +1,9 @@
 //==========================================================================
 /// File: carts.cpp
 //==========================================================================
-#include "mlir/Pass/Pass.h"
-#include "mlir/Conversion/Passes.h"
+#include "mlir/Conversion/Passes.h" // removed if unused
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/Passes.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -107,9 +105,6 @@ void initializeContext(MLIRContext &context) {
   context.getOrLoadDialect<mlir::scf::SCFDialect>();
   context.getOrLoadDialect<mlir::async::AsyncDialect>();
   context.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
-  context.getOrLoadDialect<mlir::NVVM::NVVMDialect>();
-  context.getOrLoadDialect<mlir::ROCDL::ROCDLDialect>();
-  context.getOrLoadDialect<mlir::gpu::GPUDialect>();
   context.getOrLoadDialect<mlir::omp::OpenMPDialect>();
   context.getOrLoadDialect<mlir::math::MathDialect>();
   context.getOrLoadDialect<mlir::memref::MemRefDialect>();
@@ -165,7 +160,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context) {
     optPM.addPass(createCSEPass());
     optPM.addPass(polygeist::createPolygeistCanonicalizePass());
 
-    if (mlir::failed(runPipeline(pm, module))) {
+    if (mlir::failed(pm.run(module))) {
       llvm::errs() << "Error simplyfing the IR";
       module->dump();
       return;
@@ -188,13 +183,14 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context) {
   pm.addPass(createMem2Reg());
 
   /// Create epochs
-  pm.addPass(arts::createEdtPointerRematerializationPass());
+  pm.addPass(arts::createEdtPtrRematerializationPass());
   pm.addPass(arts::createCreateEpochsPass());
 
   /// Convert ARTS to LLVM
-  pm.addPass(arts::createPreprocessDbsPass());
+  pm.addPass(arts::createConvertDbToOpaquePtrPass());
+  pm.addPass(arts::createEdtLoweringPass());
   pm.addPass(arts::createConvertArtsToLLVMPass(Debug));
-  if (mlir::failed(runPipeline(pm, module))) {
+  if (mlir::failed(pm.run(module))) {
     llvm::errs() << "Error when running ARTS Passes";
     module->dump();
     return;
@@ -214,7 +210,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context) {
     optPM.addPass(createCSEPass());
     optPM.addPass(polygeist::createPolygeistCanonicalizePass());
 
-    if (mlir::failed(runPipeline(pm2, module))) {
+    if (mlir::failed(pm2.run(module))) {
       llvm::errs() << "Error when running optimizations";
       module->dump();
       return;
@@ -229,7 +225,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context) {
     pm3.addPass(polygeist::createConvertPolygeistToLLVMPass());
     pm3.addPass(polygeist::createPolygeistCanonicalizePass());
     pm3.addPass(createCSEPass());
-    if (mlir::failed(runPipeline(pm3, module))) {
+    if (mlir::failed(pm3.run(module))) {
       llvm::errs() << "Error when emitting LLVM IR";
       module->dump();
       return;

@@ -77,6 +77,62 @@ else()
   message(STATUS "ARTS introspection disabled - zero runtime overhead")
 endif()
 
+# CARTS testing options
+option(CARTS_ENABLE_TESTS "Enable CARTS test suite" ON)
+if(CARTS_ENABLE_TESTS)
+  message(STATUS "CARTS tests enabled")
+  set(LLVM_LIT_TOOLS_DIR ${CMAKE_SOURCE_DIR}/.install/llvm/bin)
+  set(CARTS_TOOLS_DIR ${CMAKE_SOURCE_DIR}/.install/carts/bin)
+  
+  # Check if required tools exist
+  set(REQUIRED_TEST_TOOLS llvm-lit FileCheck)
+  set(MISSING_TOOLS "")
+  
+  foreach(TOOL ${REQUIRED_TEST_TOOLS})
+    if(NOT EXISTS ${LLVM_LIT_TOOLS_DIR}/${TOOL})
+      list(APPEND MISSING_TOOLS ${TOOL})
+    endif()
+  endforeach()
+  
+  if(NOT EXISTS ${CMAKE_SOURCE_DIR}/tools/carts)
+    list(APPEND MISSING_TOOLS "carts wrapper script")
+  endif()
+  
+  if(MISSING_TOOLS)
+    message(WARNING "Missing required test tools: ${MISSING_TOOLS}")
+    message(WARNING "Please run 'carts build' to install all required tools before running tests")
+  else()
+    message(STATUS "All required test tools found")
+  endif()
+  
+  # Create test targets with proper dependencies
+  add_custom_target(check
+    COMMAND ${CMAKE_SOURCE_DIR}/tools/carts check
+    COMMENT "Running CARTS test suite"
+    USES_TERMINAL
+    VERBATIM
+  )
+  
+  # Add convenience target for ARTS tests specifically  
+  add_custom_target(check-arts
+    COMMAND ${CMAKE_SOURCE_DIR}/tools/carts check --suite arts
+    COMMENT "Running CARTS ARTS test suite"
+    USES_TERMINAL
+    VERBATIM
+  )
+  
+  # Add verbose test targets
+  add_custom_target(check-verbose
+    COMMAND ${CMAKE_SOURCE_DIR}/tools/carts check -v
+    COMMENT "Running CARTS test suite (verbose)"
+    USES_TERMINAL
+    VERBATIM
+  )
+  
+else()
+  message(STATUS "CARTS tests disabled")
+endif()
+
 
 
 # Polygeist
