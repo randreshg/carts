@@ -13,6 +13,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "arts/Analysis/Db/DbAliasAnalysis.h"
 #include "arts/Analysis/Db/DbDataFlowAnalysis.h"
+#include "arts/Analysis/Db/DbValueDataFlowAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/LoopAnalysis.h"  // Assuming this exists for loop integration
 
