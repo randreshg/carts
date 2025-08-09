@@ -6,7 +6,7 @@
 #include "arts/Analysis/Graphs/Db/DbEdge.h"
 #include "llvm/Support/Debug.h"
 
-#define DEBUG_TYPE "db-dataflow-analysis"
+#define DEBUG_TYPE "db-dataflow"
 #define dbgs() llvm::dbgs()
 #define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
 
@@ -74,16 +74,16 @@ void DbDataFlowAnalysis::visitOperation(Operation *op, const DbState &before,
 
   if (auto allocOp = dyn_cast<DbAllocOp>(op)) {
     after->liveAllocs.insert(allocOp);
-    LLVM_DEBUG(DBGS() << "Alloc: Added live alloc " << allocOp << "\n");
+    LLVM_DEBUG(DBGS() << "facts: alloc live " << allocOp << "\n");
   } else if (auto acquireOp = dyn_cast<DbAcquireOp>(op)) {
     DbAllocOp parentAlloc = graph->findRootAllocOp(acquireOp.getOperation());
     if (parentAlloc && before.liveAllocs.contains(parentAlloc)) {
       after->activeAcquires[parentAlloc].insert(acquireOp);
-      LLVM_DEBUG(DBGS() << "Acquire: Added active acquire for alloc "
-                        << parentAlloc << "\n");
+      LLVM_DEBUG(DBGS() << "facts: acquire active parent " << parentAlloc
+                        << "\n");
     } else {
       op->emitWarning("Acquire without live allocation");
-      LLVM_DEBUG(DBGS() << "Acquire: No live alloc found for " << acquireOp
+      LLVM_DEBUG(DBGS() << "facts: acquire missing-parent for " << acquireOp
                         << "\n");
     }
   } else if (auto releaseOp = dyn_cast<DbReleaseOp>(op)) {
@@ -100,11 +100,11 @@ void DbDataFlowAnalysis::visitOperation(Operation *op, const DbState &before,
         }
       }
       after->activeAcquires[parentAlloc].clear();
-      LLVM_DEBUG(DBGS() << "Release: Processed release for alloc "
-                        << parentAlloc << "\n");
+      LLVM_DEBUG(DBGS() << "facts: release processed parent " << parentAlloc
+                        << "\n");
     } else {
       op->emitWarning("Release without active acquire");
-      LLVM_DEBUG(DBGS() << "Release: No active acquire found for " << releaseOp
+      LLVM_DEBUG(DBGS() << "facts: release missing-acquire for " << releaseOp
                         << "\n");
     }
   }

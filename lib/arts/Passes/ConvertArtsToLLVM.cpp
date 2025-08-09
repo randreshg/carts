@@ -86,6 +86,10 @@ private:
   /// Operation ha
   template <typename OpType> LogicalResult handleRuntimeInfoOp(OpType op);
   LogicalResult handleEdt(EdtOp op);
+  LogicalResult handleEdtParamPack(EdtParamPackOp op);
+  LogicalResult handleEdtOutline(EdtOutlineFnOp op);
+  LogicalResult handleRecordInDep(RecordInDepOp op);
+  LogicalResult handleIncrementOutLatch(IncrementOutLatchOp op);
   LogicalResult handleEpoch(EpochOp op);
   LogicalResult handleBarrier(BarrierOp op);
   LogicalResult handleAlloc(AllocOp op);
@@ -109,6 +113,7 @@ private:
   ModuleOp module;
   ArtsCodegen *AC = nullptr;
   ValueMap edtToEpoch;
+  DenseMap<Operation *, unsigned> edtSlotCounter;
   SetVector<Operation *> opsToRemove;
   bool debugMode = false;
 
@@ -204,6 +209,17 @@ LogicalResult ConvertArtsToLLVMPass::processOperations(func::FuncOp func) {
   /// Single-pass operation processing with ordered handling
   LLVM_DEBUG(dbgs() << LINE << "1st pass - Runtime info operations\n");
   auto result = func->walk([&](Operation *op) -> WalkResult {
+    if (auto opx = dyn_cast<arts::EdtParamPackOp>(op))
+      return handleWalkResult(handleEdtParamPack(opx));
+
+    if (auto opx = dyn_cast<arts::EdtOutlineFnOp>(op))
+      return handleWalkResult(handleEdtOutline(opx));
+
+    if (auto opx = dyn_cast<arts::RecordInDepOp>(op))
+      return handleWalkResult(handleRecordInDep(opx));
+
+    if (auto opx = dyn_cast<arts::IncrementOutLatchOp>(op))
+      return handleWalkResult(handleIncrementOutLatch(opx));
     if (opsToRemove.contains(op))
       return WalkResult::advance();
 
@@ -352,6 +368,72 @@ LogicalResult ConvertArtsToLLVMPass::handleEdt(EdtOp op) {
 
   /// Handle child EDTs
   return processEdtOperations(newEdt->getFunc());
+}
+
+LogicalResult ConvertArtsToLLVMPass::handleEdtParamPack(EdtParamPackOp op) {
+  LLVM_DEBUG(DBGS() << "Processing EdtParamPack: " << op << "\n");
+  // No codegen required here; we only need paramc later. If needed, attach an
+  // i32 constant count using the operands size.
+  // For now, keep the value; replacement happens when lowering the outline call.
+  return success();
+}
+
+LogicalResult ConvertArtsToLLVMPass::handleEdtOutline(EdtOutlineFnOp op) {
+  LLVM_DEBUG(DBGS() << "Processing EdtOutlineFn: " << op << "\n");
+  statistics.edtOps++;
+
+  OpBuilder::InsertionGuard IG(AC->getBuilder());
+  AC->setInsertionPoint(op);
+
+  // Resolve outlined function
+  auto funcNameAttr = op->getAttrOfType<StringAttr>("outlined_func");
+  if (!funcNameAttr)
+    return emitOpError(op, "Missing outlined_func attribute");
+  auto outlined = module.lookupSymbol<func::FuncOp>(funcNameAttr.getValue());
+  if (!outlined)
+    return emitOpError(op, "Outlined function not found");
+
+  // Build arguments for artsEdtCreate
+  auto funcPtr = AC->createFnPtr(outlined, op.getLoc());
+  auto route = AC->getCurrentNode(op.getLoc());
+
+  // Compute paramc and depc conservatively to zero for now; paramv/depv are
+  // packed before this op by EdtLowering; we use their memrefs as pointers.
+  // Param pack is op.getParamv(); dep pack is op.getDepv();
+  auto paramv = op.getParamMemref();
+  (void)op.getDepMemref();
+
+  auto zeroI32 = AC->createIntConstant(0, AC->Int32, op.getLoc());
+  // If memref has dynamic length we skip computing exact count here; future
+  // enhancement can derive sizes from memref type or attach attributes.
+  auto paramc = zeroI32;
+  auto depc = zeroI32;
+
+  auto call = AC->createRuntimeCall(types::ARTSRTL_artsEdtCreate,
+                                    {funcPtr, route, paramc, paramv, depc},
+                                    op.getLoc());
+  AC->addReplacement(op.getGuid(), call.getResult(0));
+  opsToRemove.insert(op);
+  return success();
+}
+
+LogicalResult ConvertArtsToLLVMPass::handleRecordInDep(RecordInDepOp op) {
+  LLVM_DEBUG(DBGS() << "Processing RecordInDep: " << op << "\n");
+  auto edt = op.getEdtGuid().getDefiningOp();
+  unsigned &slot = edtSlotCounter[edt];
+  auto slotVal = AC->createIntConstant(slot, AC->Int32, op.getLoc());
+  slot++;
+  AC->addDbDep(op.getDep(), op.getEdtGuid(), slotVal, op.getLoc());
+  opsToRemove.insert(op);
+  return success();
+}
+
+LogicalResult
+ConvertArtsToLLVMPass::handleIncrementOutLatch(IncrementOutLatchOp op) {
+  LLVM_DEBUG(DBGS() << "Processing IncrementOutLatch: " << op << "\n");
+  AC->incrementDbLatchCount(op.getDep(), op.getLoc());
+  opsToRemove.insert(op);
+  return success();
 }
 
 LogicalResult ConvertArtsToLLVMPass::handleEpoch(EpochOp op) {
