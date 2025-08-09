@@ -7,7 +7,7 @@
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/InferTypeOpInterface.h"
+#include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "db-analysis"
@@ -22,7 +22,7 @@ DbAnalysis::DbAnalysis(Operation *module) : module(module), solver() {
   loopAnalysis = std::make_unique<LoopAnalysis>(module);
   dbAliasAnalysis = std::make_unique<DbAliasAnalysis>(this);
 
-  // Add data flow analyses to solver
+  // Add baseline data flow analyses to solver
   solver.load<dataflow::DeadCodeAnalysis>();
   solver.load<dataflow::SparseConstantPropagation>();
 }
@@ -42,9 +42,14 @@ DbGraph *DbAnalysis::getOrCreateGraph(func::FuncOp func) {
                     << "\n");
   auto newGraph = std::make_unique<DbGraph>(func, this);
 
-  // Run data flow analysis to populate the graph
-  DbDataFlowAnalysis dataFlow(solver, newGraph.get(), this);
-  dataFlow.analyze();
+  // Run value-anchored sparse data flow (lightweight facts)
+  auto *valueDf = solver.load<DbValueDataFlowAnalysis>();
+  (void)valueDf;
+  (void)solver.initializeAndRun(func);
+
+  // Run dense pass that constructs lifetime edges in the graph
+  DbDataFlowAnalysis denseDf(solver, newGraph.get(), this);
+  denseDf.analyze();
 
   DbGraph *graphPtr = newGraph.get();
   functionGraphMap[func] = std::move(newGraph);
