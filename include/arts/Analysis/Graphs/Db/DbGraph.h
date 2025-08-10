@@ -5,24 +5,23 @@
 #ifndef ARTS_ANALYSIS_GRAPHS_DB_DBGRAPH_H
 #define ARTS_ANALYSIS_GRAPHS_DB_DBGRAPH_H
 
-#include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Graphs/Base/EdgeBase.h"
 #include "arts/Analysis/Graphs/Base/GraphBase.h"
 #include "arts/Analysis/Graphs/Base/GraphTrait.h"
 #include "arts/Analysis/Graphs/Base/NodeBase.h"
 #include "arts/ArtsDialect.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/GraphTraits.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/raw_ostream.h"
 #include <memory>
-
-#define DEBUG_TYPE "db-graph"
 
 namespace mlir {
 namespace arts {
+
+// Forward declarations
+class DbAnalysis;
 
 class DbAllocNode;
 class DbAcquireNode;

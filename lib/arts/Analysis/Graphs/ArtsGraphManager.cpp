@@ -11,18 +11,17 @@
 using namespace mlir;
 using namespace mlir::arts;
 
-#define DEBUG_TYPE "arts-graph-manager"
-#define dbgs() llvm::dbgs()
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(arts_graph_manager);
 
 ArtsGraphManager::ArtsGraphManager(std::unique_ptr<DbGraph> dbGraph,
                                    std::unique_ptr<EdtGraph> edtGraph)
     : dbGraph(std::move(dbGraph)), edtGraph(std::move(edtGraph)) {
-  LLVM_DEBUG(DBGS() << "Creating ArtsGraphManager\n");
+  ARTS_INFO("Creating ArtsGraphManager");
 }
 
 void ArtsGraphManager::build() {
-  LLVM_DEBUG(DBGS() << "Building graphs via ArtsGraphManager\n");
+  ARTS_INFO("Building graphs via ArtsGraphManager");
   dbGraph->build();
   edtGraph->build();
 }

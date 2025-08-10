@@ -31,7 +31,6 @@
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
-#include "arts/Codegen/ArtsIR.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
 /// Others
@@ -44,13 +43,8 @@
 #include "polygeist/Ops.h"
 
 /// Debug
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/raw_ostream.h"
-
-#define DEBUG_TYPE "preprocess-dbs"
-#define LINE "-----------------------------------------\n"
-#define dbgs() (llvm::dbgs())
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(preprocess_dbs);
 
 using namespace mlir;
 using namespace arts;
@@ -58,18 +52,47 @@ using namespace arts;
 //===----------------------------------------------------------------------===//
 // Helper Functions
 //===----------------------------------------------------------------------===//
+
+// Determine allocation type based on basePtr characteristics
+static DbAllocType inferAllocType(Value basePtr) {
+  if (!basePtr) {
+    return DbAllocType::heap; // Default to heap for null pointers
+  }
+
+  // Check if basePtr comes from a stack-like allocation
+  if (auto definingOp = basePtr.getDefiningOp()) {
+    if (isa<memref::AllocaOp>(definingOp)) {
+      return DbAllocType::stack;
+    }
+    if (isa<memref::AllocOp>(definingOp)) {
+      return DbAllocType::heap;
+    }
+    // Check for global memrefs
+    if (isa<memref::GetGlobalOp>(definingOp)) {
+      return DbAllocType::global;
+    }
+  }
+
+  return DbAllocType::unknown;
+}
+
 DbAllocOp createDbAlloc(OpBuilder &builder, Location loc, Value basePtr,
-                        StringRef mode) {
-  /// Create the DbAllocOp with opaque type
+                        ArtsMode mode) {
+  /// Create the DbAllocOp with proper signature
   auto opaqueType = MemRefType::get({-1}, builder.getI8Type()); // Opaque buffer
-  auto dbAllocOp = builder.create<DbAllocOp>(loc, mode, basePtr);
 
-  /// Set allocation type (stack/dynamic) based on basePtr
-  auto allocType = getAllocType(basePtr);
-  setDbAllocType(dbAllocOp, allocType, builder);
+  /// Infer allocation type from basePtr
+  auto allocType = inferAllocType(basePtr);
+  auto allocTypeAttr = DbAllocTypeAttr::get(builder.getContext(), allocType);
 
-  LLVM_DEBUG(DBGS() << "Created DbAllocOp with allocation type: "
-                    << toString(allocType) << "\n");
+  /// Create DbAllocOp
+  SmallVector<Value> emptySize;
+  auto dbAllocOp = builder.create<DbAllocOp>(
+      loc, opaqueType, ArtsModeAttr::get(builder.getContext(), mode), basePtr,
+      emptySize, allocTypeAttr);
+
+  ARTS_INFO("Created DbAllocOp with allocation type: "
+            << stringifyDbAllocType(allocType));
   return dbAllocOp;
 }
 
@@ -77,7 +100,8 @@ DbAllocOp createDbAlloc(OpBuilder &builder, Location loc, Value basePtr,
 // Pass Implementation
 //===----------------------------------------------------------------------===//
 namespace {
-struct ConvertDbToOpaquePtrPass : public arts::ConvertDbToOpaquePtrBase<ConvertDbToOpaquePtrPass> {
+struct ConvertDbToOpaquePtrPass
+    : public arts::ConvertDbToOpaquePtrBase<ConvertDbToOpaquePtrPass> {
   void runOnOperation() override;
 
 private:
@@ -94,10 +118,8 @@ private:
 void ConvertDbToOpaquePtrPass::runOnOperation() {
   ModuleOp module = getOperation();
 
-  LLVM_DEBUG({
-    dbgs() << LINE << "ConvertDbToOpaquePtrPass START\n" << LINE;
-    module.dump();
-  });
+  ARTS_DEBUG_HEADER(ConvertDbToOpaquePtrPass);
+  ARTS_DEBUG(module.dump());
 
   /// Initialize ArtsCodegen for helper functions
   auto llvmDLAttr = module->getAttrOfType<StringAttr>("llvm.data_layout");
@@ -116,14 +138,8 @@ void ConvertDbToOpaquePtrPass::runOnOperation() {
   /// Remove old operations
   removeOps(module, AC->getBuilder(), opsToRemove);
 
-  LLVM_DEBUG({
-    dbgs() << LINE << "ConvertDbToOpaquePtrPass FINISHED\n" << LINE;
-    module.dump();
-  });
-
-  /// Clean up ArtsCodegen
-  delete AC;
-  AC = nullptr;
+  ARTS_DEBUG_FOOTER(ConvertDbToOpaquePtrPass);
+  ARTS_DEBUG(module.dump());
 }
 
 void ConvertDbToOpaquePtrPass::preprocessDbAllocOps(ModuleOp module) {
@@ -142,16 +158,20 @@ void ConvertDbToOpaquePtrPass::preprocessDbAllocOps(ModuleOp module) {
         AC->setInsertionPointAfter(dbAllocOp);
 
         /// Create new DbAllocOp with opaque pointer type
-        auto oldType = dbAllocOp.getResult(0).getType().cast<MemRefType>();
+        auto oldType = dbAllocOp.getResult().getType().cast<MemRefType>();
         auto newType = MemRefType::get(oldType.getShape(), builder.getI8Type());
 
         auto newDbAllocOp = builder.create<DbAllocOp>(
-            dbAllocOp.getLoc(), dbAllocOp.getMode(), dbAllocOp.getAddress());
+            dbAllocOp.getLoc(), newType, dbAllocOp.getMode(),
+            dbAllocOp.getAddress(), ValueRange{}, dbAllocOp.getAllocTypeAttr());
 
         /// Copy attributes and mark as processed
         newDbAllocOp->setAttrs(dbAllocOp->getAttrs());
         newDbAllocOp->setAttr("newDb", builder.getUnitAttr());
-        setDbAllocType(newDbAllocOp, getDbAllocType(dbAllocOp), builder);
+        // Copy allocType from original DbAllocOp
+        if (auto allocTypeAttr = dbAllocOp.getAllocTypeAttr()) {
+          newDbAllocOp.setAllocTypeAttr(allocTypeAttr);
+        }
 
         dbAllocOps.push_back(dbAllocOp);
         dbsToRewire[dbAllocOp] = newDbAllocOp;
@@ -165,8 +185,7 @@ void ConvertDbToOpaquePtrPass::preprocessDbAllocOps(ModuleOp module) {
   /// Rewire the DbAllocOps
   for (auto dbFrom : dbAllocOps) {
     auto dbTo = dbsToRewire[dbFrom];
-    LLVM_DEBUG(DBGS() << "Rewiring DbAllocOp:\n  " << dbFrom << "\n  " << dbTo
-                      << "\n");
+    ARTS_INFO("Rewiring DbAllocOp:\n  " << dbFrom << "\n  " << dbTo);
 
     /// Process all users of the old DbAllocOp
     processDbOpUsers(dbFrom.getOperation(), dbTo.getOperation(), builder);
@@ -181,40 +200,41 @@ void ConvertDbToOpaquePtrPass::preprocessDbAccessOps(ModuleOp module) {
   SmallVector<Operation *, 8> dbAccessOps;
   DenseMap<Operation *, Operation *> accessesToRewire;
 
-  module.walk<mlir::WalkOrder::PreOrder>([&](Operation *op)
-                                             -> mlir::WalkResult {
-    if (op->hasAttr("newDb"))
-      return mlir::WalkResult::skip();
+  module.walk<mlir::WalkOrder::PreOrder>(
+      [&](Operation *op) -> mlir::WalkResult {
+        if (op->hasAttr("newDb"))
+          return mlir::WalkResult::skip();
 
-    if (auto acquireOp = dyn_cast<DbAcquireOp>(op)) {
-      AC->setInsertionPointAfter(acquireOp);
+        if (auto acquireOp = dyn_cast<DbAcquireOp>(op)) {
+          AC->setInsertionPointAfter(acquireOp);
 
-      auto oldType = acquireOp.getResult().getType().cast<MemRefType>();
-      auto newType = MemRefType::get(oldType.getShape(), builder.getI8Type());
+          auto oldType = acquireOp.getResult().getType().cast<MemRefType>();
+          auto newType =
+              MemRefType::get(oldType.getShape(), builder.getI8Type());
 
-      auto newAcquireOp = builder.create<DbAcquireOp>(
-          acquireOp.getLoc(), newType, acquireOp.getSource(),
-          acquireOp.getIndices());
+          auto newAcquireOp = builder.create<DbAcquireOp>(
+              acquireOp.getLoc(), newType, acquireOp.getMode(),
+              acquireOp.getSource(), acquireOp.getIndices());
 
-      newAcquireOp->setAttrs(acquireOp->getAttrs());
-      newAcquireOp->setAttr("newDb", builder.getUnitAttr());
+          newAcquireOp->setAttrs(acquireOp->getAttrs());
+          newAcquireOp->setAttr("newDb", builder.getUnitAttr());
 
-      dbAccessOps.push_back(acquireOp);
-      accessesToRewire[acquireOp] = newAcquireOp;
-    } else if (auto releaseOp = dyn_cast<DbReleaseOp>(op)) {
-      AC->setInsertionPointAfter(releaseOp);
+          dbAccessOps.push_back(acquireOp);
+          accessesToRewire[acquireOp] = newAcquireOp;
+        } else if (auto releaseOp = dyn_cast<DbReleaseOp>(op)) {
+          AC->setInsertionPointAfter(releaseOp);
 
-      auto newReleaseOp = builder.create<DbReleaseOp>(
-          releaseOp.getLoc(), releaseOp.getSource(), releaseOp.getIndices());
+          auto newReleaseOp = builder.create<DbReleaseOp>(
+              releaseOp.getLoc(), releaseOp.getSources());
 
-      newReleaseOp->setAttrs(releaseOp->getAttrs());
-      newReleaseOp->setAttr("newDb", builder.getUnitAttr());
+          newReleaseOp->setAttrs(releaseOp->getAttrs());
+          newReleaseOp->setAttr("newDb", builder.getUnitAttr());
 
-      dbAccessOps.push_back(releaseOp);
-      accessesToRewire[releaseOp] = newReleaseOp;
-    }
-    return mlir::WalkResult::advance();
-  });
+          dbAccessOps.push_back(releaseOp);
+          accessesToRewire[releaseOp] = newReleaseOp;
+        }
+        return mlir::WalkResult::advance();
+      });
 
   /// Return if no accesses to rewire
   if (accessesToRewire.empty())
@@ -223,8 +243,8 @@ void ConvertDbToOpaquePtrPass::preprocessDbAccessOps(ModuleOp module) {
   /// Rewire the accesses
   for (auto accessFrom : dbAccessOps) {
     auto accessTo = accessesToRewire[accessFrom];
-    LLVM_DEBUG(DBGS() << "Rewiring DB Access:\n  " << *accessFrom << "\n  "
-                      << *accessTo << "\n");
+    ARTS_DEBUG_TYPE("Rewiring DB Access:\n  " << *accessFrom << "\n  "
+                                              << *accessTo << "\n");
 
     /// Process all users of the old access op
     processDbOpUsers(accessFrom, accessTo, builder);
@@ -233,12 +253,14 @@ void ConvertDbToOpaquePtrPass::preprocessDbAccessOps(ModuleOp module) {
   }
 }
 
-void ConvertDbToOpaquePtrPass::processDbOpUsers(Operation *dbFrom, Operation *dbTo,
-                                         OpBuilder &builder) {
+void ConvertDbToOpaquePtrPass::processDbOpUsers(Operation *dbFrom,
+                                                Operation *dbTo,
+                                                OpBuilder &builder) {
   auto computePtr = [&](Location loc) -> Value {
     auto llvmCast = AC->castToLLVMPtr(dbTo->getResult(0), loc);
     if (auto dbAllocOp = dyn_cast<DbAllocOp>(dbTo)) {
-      if (isStackAlloc(dbAllocOp)) {
+      if (auto allocType = dbAllocOp.getAllocType();
+          allocType && *allocType == DbAllocType::stack) {
         return builder.create<LLVM::LoadOp>(loc, AC->llvmPtr, llvmCast);
       }
     }
@@ -269,7 +291,7 @@ void ConvertDbToOpaquePtrPass::processDbOpUsers(Operation *dbFrom, Operation *db
     } else if (auto edtOp = dyn_cast<EdtOp>(user)) {
       use.set(dbTo->getResult(0));
     } else {
-      LLVM_DEBUG(DBGS() << "Unknown use of DB op: " << *user << "\n");
+      ARTS_ERROR("Unknown use of DB op: " << *user);
       user->emitError("Unsupported user of DB op");
     }
   }

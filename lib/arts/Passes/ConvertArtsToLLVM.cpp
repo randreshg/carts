@@ -7,7 +7,6 @@
 ///==========================================================================
 
 /// Dialects
-#include "arts/Codegen/EdtCodegen.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -16,8 +15,8 @@
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
-#include "arts/Codegen/ArtsIR.h"
 #include "arts/Codegen/DbCodegen.h"
+#include "arts/Codegen/EdtCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
 /// Others
@@ -44,10 +43,8 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
-#define DEBUG_TYPE "convert-arts-to-llvm"
-#define LINE "-----------------------------------------\n"
-#define dbgs() (llvm::dbgs())
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(convert_arts_to_llvm);
 
 using namespace mlir;
 using namespace arts;
@@ -73,7 +70,8 @@ struct ConvertArtsToLLVMPass
 
   explicit ConvertArtsToLLVMPass(bool debug = false) : debugMode(debug) {}
 
-  ~ConvertArtsToLLVMPass() { delete AC; }
+  // DISABLED: Complex codegen functionality
+  // ~ConvertArtsToLLVMPass() { delete AC; }
 
   void runOnOperation() override;
 
@@ -83,7 +81,7 @@ private:
   LogicalResult processEdtOperations(func::FuncOp func);
   void finalizeConversion();
 
-  /// Operation ha
+  /// Operation handlers
   template <typename OpType> LogicalResult handleRuntimeInfoOp(OpType op);
   LogicalResult handleEdt(EdtOp op);
   LogicalResult handleEdtParamPack(EdtParamPackOp op);
@@ -139,41 +137,36 @@ private:
 void ConvertArtsToLLVMPass::runOnOperation() {
   module = getOperation();
 
-  LLVM_DEBUG({
-    dbgs() << LINE << "ConvertArtsToLLVMPass START\n" << LINE;
-    dbgs() << "Input module:\n";
-    module.dump();
-  });
+  ARTS_DEBUG_HEADER(ConvertArtsToLLVMPass);
+  ARTS_DEBUG(module.dump());
 
   /// Early exit if no ARTS operations
   if (!hasArtsOperations()) {
-    LLVM_DEBUG(DBGS() << "No ARTS operations found, skipping conversion\n");
+    ARTS_INFO("No ARTS operations found, skipping conversion");
     return;
   }
 
   /// Initialize codegen infrastructure
-  if (failed(initializeCodegen()))
+  if (failed(initializeCodegen())) {
+    ARTS_ERROR("Failed to initialize ArtsCodegen");
     return signalPassFailure();
+  }
 
   /// Process operations
   auto mainFunc = module.lookupSymbol<func::FuncOp>("main");
-  if (failed(processOperations(mainFunc)))
+  if (failed(processOperations(mainFunc))) {
+    ARTS_ERROR("Processing operations failed");
     return signalPassFailure();
+  }
 
-  LLVM_DEBUG({
-    dbgs() << LINE << "Module after processing operations (before finalization):\n";
-    module.dump();
-  });
+  ARTS_INFO("Module after processing operations (before finalization):");
+  ARTS_DEBUG(module.dump());
 
   /// Finalize conversion and cleanup
   finalizeConversion();
 
-  LLVM_DEBUG({
-    dbgs() << LINE << "ConvertArtsToLLVMPass COMPLETED\n" << LINE;
-    dbgs() << "Final module:\n";
-    module.dump();
-    dbgs() << LINE << LINE;
-  });
+  ARTS_DEBUG_FOOTER(ConvertArtsToLLVMPass);
+  ARTS_DEBUG(module.dump());
 }
 
 LogicalResult ConvertArtsToLLVMPass::initializeCodegen() {
@@ -186,7 +179,7 @@ LogicalResult ConvertArtsToLLVMPass::initializeCodegen() {
   mlir::DataLayout mlirDL(module);
   AC = new ArtsCodegen(module, llvmDL, mlirDL, debugMode);
 
-  LLVM_DEBUG(DBGS() << "ArtsCodegen initialized successfully\n");
+  ARTS_DEBUG_TYPE("ArtsCodegen initialized successfully");
   return success();
 }
 
@@ -204,10 +197,10 @@ bool ConvertArtsToLLVMPass::hasArtsOperations() const {
 }
 
 LogicalResult ConvertArtsToLLVMPass::processOperations(func::FuncOp func) {
-  LLVM_DEBUG(DBGS() << "Starting operation processing\n");
+  ARTS_DEBUG_TYPE("Starting operation processing");
 
   /// Single-pass operation processing with ordered handling
-  LLVM_DEBUG(dbgs() << LINE << "1st pass - Runtime info operations\n");
+  ARTS_INFO("1st pass - Runtime info operations");
   auto result = func->walk([&](Operation *op) -> WalkResult {
     if (auto opx = dyn_cast<arts::EdtParamPackOp>(op))
       return handleWalkResult(handleEdtParamPack(opx));
@@ -244,7 +237,8 @@ LogicalResult ConvertArtsToLLVMPass::processOperations(func::FuncOp func) {
     if (auto dbAllocOp = dyn_cast<arts::DbAllocOp>(op))
       return handleWalkResult(handleDbAlloc(dbAllocOp));
 
-    /// Handle DbDep operations - they are managed by DbDepCodegen but need to be removed
+    /// Handle DbDep operations - they are managed by DbDepCodegen but need to
+    /// be removed
     /*
     if (auto dbDepOp = dyn_cast<arts::DbDepOp>(op))
       return handleWalkResult(handleDbDep(dbDepOp));
@@ -257,7 +251,7 @@ LogicalResult ConvertArtsToLLVMPass::processOperations(func::FuncOp func) {
     return failure();
 
   /// Second pass for sync operations
-  LLVM_DEBUG(dbgs() << LINE << "2nd pass - Sync operations\n");
+  ARTS_INFO("2nd pass - Sync operations");
   result = func->walk<WalkOrder::PreOrder>([&](Operation *op) -> WalkResult {
     if (opsToRemove.contains(op))
       return WalkResult::skip();
@@ -277,10 +271,10 @@ LogicalResult ConvertArtsToLLVMPass::processOperations(func::FuncOp func) {
     return failure();
 
   /// Third pass for EDTs
-  LLVM_DEBUG(dbgs() << LINE << "3rd pass - EDT operations\n");
+  ARTS_INFO("3rd pass - EDT operations");
   result = handleWalkResult(processEdtOperations(func));
 
-  LLVM_DEBUG(dbgs() << LINE << "Operation processing completed successfully\n");
+  ARTS_INFO("Operation processing completed successfully");
   return success();
 }
 
@@ -321,7 +315,7 @@ void ConvertArtsToLLVMPass::finalizeConversion() {
 
 template <typename OpType>
 LogicalResult ConvertArtsToLLVMPass::handleRuntimeInfoOp(OpType op) {
-  LLVM_DEBUG(DBGS() << "Processing runtime info operation: " << op << "\n");
+  ARTS_DEBUG_TYPE("Processing runtime info operation: " << op);
   statistics.runtimeInfoOps++;
 
   OpBuilder::InsertionGuard IG(AC->getBuilder());
@@ -345,7 +339,7 @@ LogicalResult ConvertArtsToLLVMPass::handleRuntimeInfoOp(OpType op) {
 }
 
 LogicalResult ConvertArtsToLLVMPass::handleEdt(EdtOp op) {
-  LLVM_DEBUG(DBGS() << "Processing EDT: " << op << "\n");
+  ARTS_DEBUG_TYPE("Processing EDT: " << op);
   statistics.edtOps++;
 
   OpBuilder::InsertionGuard IG(AC->getBuilder());
@@ -371,15 +365,16 @@ LogicalResult ConvertArtsToLLVMPass::handleEdt(EdtOp op) {
 }
 
 LogicalResult ConvertArtsToLLVMPass::handleEdtParamPack(EdtParamPackOp op) {
-  LLVM_DEBUG(DBGS() << "Processing EdtParamPack: " << op << "\n");
+  ARTS_DEBUG_TYPE("Processing EdtParamPack: " << op);
   // No codegen required here; we only need paramc later. If needed, attach an
   // i32 constant count using the operands size.
-  // For now, keep the value; replacement happens when lowering the outline call.
+  // For now, keep the value; replacement happens when lowering the outline
+  // call.
   return success();
 }
 
 LogicalResult ConvertArtsToLLVMPass::handleEdtOutline(EdtOutlineFnOp op) {
-  LLVM_DEBUG(DBGS() << "Processing EdtOutlineFn: " << op << "\n");
+  ARTS_DEBUG_TYPE("Processing EdtOutlineFn: " << op);
   statistics.edtOps++;
 
   OpBuilder::InsertionGuard IG(AC->getBuilder());
@@ -418,7 +413,7 @@ LogicalResult ConvertArtsToLLVMPass::handleEdtOutline(EdtOutlineFnOp op) {
 }
 
 LogicalResult ConvertArtsToLLVMPass::handleRecordInDep(RecordInDepOp op) {
-  LLVM_DEBUG(DBGS() << "Processing RecordInDep: " << op << "\n");
+  ARTS_DEBUG_TYPE("Processing RecordInDep: " << op);
   auto edt = op.getEdtGuid().getDefiningOp();
   unsigned &slot = edtSlotCounter[edt];
   auto slotVal = AC->createIntConstant(slot, AC->Int32, op.getLoc());
@@ -430,14 +425,14 @@ LogicalResult ConvertArtsToLLVMPass::handleRecordInDep(RecordInDepOp op) {
 
 LogicalResult
 ConvertArtsToLLVMPass::handleIncrementOutLatch(IncrementOutLatchOp op) {
-  LLVM_DEBUG(DBGS() << "Processing IncrementOutLatch: " << op << "\n");
+  ARTS_DEBUG_TYPE("Processing IncrementOutLatch: " << op);
   AC->incrementDbLatchCount(op.getDep(), op.getLoc());
   opsToRemove.insert(op);
   return success();
 }
 
 LogicalResult ConvertArtsToLLVMPass::handleEpoch(EpochOp op) {
-  LLVM_DEBUG(DBGS() << "Processing Epoch: " << op << "\n");
+  ARTS_DEBUG_TYPE("Processing Epoch: " << op);
   statistics.epochOps++;
 
   OpBuilder::InsertionGuard IG(AC->getBuilder());
@@ -476,8 +471,7 @@ LogicalResult ConvertArtsToLLVMPass::handleEpoch(EpochOp op) {
     }
   }
 
-  LLVM_DEBUG(DBGS() << "Mapped " << childEdts.size()
-                    << " child EDTs to epoch\n");
+  ARTS_DEBUG_TYPE("Mapped " << childEdts.size() << " child EDTs to epoch");
 
   /// Set insertion point after epoch creation and add wait
   AC->setInsertionPointAfter(currentEpoch.getDefiningOp());
@@ -488,7 +482,7 @@ LogicalResult ConvertArtsToLLVMPass::handleEpoch(EpochOp op) {
 }
 
 LogicalResult ConvertArtsToLLVMPass::handleBarrier(BarrierOp op) {
-  LLVM_DEBUG(DBGS() << "Processing Barrier: " << op << "\n");
+  ARTS_DEBUG_TYPE("Processing Barrier: " << op);
   statistics.barrierOps++;
 
   OpBuilder::InsertionGuard IG(AC->getBuilder());
@@ -500,7 +494,7 @@ LogicalResult ConvertArtsToLLVMPass::handleBarrier(BarrierOp op) {
 }
 
 LogicalResult ConvertArtsToLLVMPass::handleAlloc(AllocOp op) {
-  LLVM_DEBUG(DBGS() << "Processing Alloc: " << op << "\n");
+  ARTS_DEBUG_TYPE("Processing Alloc: " << op);
   statistics.allocOps++;
 
   OpBuilder::InsertionGuard IG(AC->getBuilder());
@@ -547,7 +541,7 @@ LogicalResult ConvertArtsToLLVMPass::handleAlloc(AllocOp op) {
 }
 
 LogicalResult ConvertArtsToLLVMPass::handleDbAlloc(DbAllocOp op) {
-  LLVM_DEBUG(DBGS() << "Processing top-level DbAlloc: " << op << "\n");
+  ARTS_DEBUG_TYPE("Processing top-level DbAlloc: " << op);
   statistics.dbAllocOps++;
 
   OpBuilder::InsertionGuard IG(AC->getBuilder());
@@ -559,7 +553,7 @@ LogicalResult ConvertArtsToLLVMPass::handleDbAlloc(DbAllocOp op) {
 
   AC->addReplacement(op.getResult(), dbCodegen->getPtr());
   opsToRemove.insert(op);
-  LLVM_DEBUG(DBGS() << "DbAlloc processing completed successfully\n");
+  ARTS_DEBUG_TYPE("DbAlloc processing completed successfully");
 
   return success();
 }
@@ -571,9 +565,9 @@ LogicalResult ConvertArtsToLLVMPass::handleDbDep(DbDepOp op) {
 
   /// DbDep operations are processed through DbDepCodegen objects
   /// when their source DbAlloc operations are handled. Mark them for removal
-  /// since their replacements will be set up by the DbDepCodegen infrastructure.
-  opsToRemove.insert(op);
-  LLVM_DEBUG(DBGS() << "DbDep marked for removal: " << op << "\n");
+  /// since their replacements will be set up by the DbDepCodegen
+infrastructure. opsToRemove.insert(op); LLVM_DEBUG(DBGS() << "DbDep marked for
+removal: " << op << "\n");
 
   return success();
 }
@@ -584,7 +578,7 @@ LogicalResult ConvertArtsToLLVMPass::handleDbDep(DbDepOp op) {
 //===----------------------------------------------------------------------===//
 
 void ConvertArtsToLLVMPass::cleanupOperations() {
-  LLVM_DEBUG(DBGS() << "Cleaning up " << opsToRemove.size() << " operations\n");
+  ARTS_DEBUG_TYPE("Cleaning up " << opsToRemove.size() << " operations");
 
   for (Operation *op : opsToRemove) {
     if (op && op->getParentOp())
@@ -594,17 +588,19 @@ void ConvertArtsToLLVMPass::cleanupOperations() {
 }
 
 void ConvertArtsToLLVMPass::reportStatistics() const {
-  LLVM_DEBUG({
-    dbgs() << "\n" << LINE << "ARTS to LLVM Conversion Statistics\n" << LINE;
-    dbgs() << "EDT operations: " << statistics.edtOps << "\n";
-    dbgs() << "Epoch operations: " << statistics.epochOps << "\n";
-    dbgs() << "Barrier operations: " << statistics.barrierOps << "\n";
-    dbgs() << "Alloc operations: " << statistics.allocOps << "\n";
-    dbgs() << "DbAlloc operations: " << statistics.dbAllocOps << "\n";
-    dbgs() << "DbDep operations: " << statistics.dbDepOps << "\n";
-    dbgs() << "Runtime Info operations: " << statistics.runtimeInfoOps << "\n";
-    dbgs() << LINE;
-  });
+  ARTS_DEBUG_REGION(
+      ARTS_DBGS() << "\n"
+                  << LINE << "ARTS to LLVM Conversion Statistics\n"
+                  << LINE;
+      ARTS_DBGS() << "EDT operations: " << statistics.edtOps << "\n";
+      ARTS_DBGS() << "Epoch operations: " << statistics.epochOps << "\n";
+      ARTS_DBGS() << "Barrier operations: " << statistics.barrierOps << "\n";
+      ARTS_DBGS() << "Alloc operations: " << statistics.allocOps << "\n";
+      ARTS_DBGS() << "DbAlloc operations: " << statistics.dbAllocOps << "\n";
+      ARTS_DBGS() << "DbDep operations: " << statistics.dbDepOps << "\n";
+      ARTS_DBGS() << "Runtime Info operations: " << statistics.runtimeInfoOps
+                  << "\n";
+      ARTS_DBGS() << LINE;);
 }
 
 LogicalResult ConvertArtsToLLVMPass::emitOpError(Operation *op,

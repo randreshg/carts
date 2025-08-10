@@ -49,7 +49,8 @@ using EdtLattice = dataflow::Lattice<EdtFactsValue>;
 /// Sparse forward analysis computing minimal dependency facts for values
 /// crossing EDT boundaries. Primarily tracks `arts.db_dep` mode usage and
 /// basic read/write summary for downstream passes.
-class EdtDataFlowAnalysis : public dataflow::SparseForwardDataFlowAnalysis<EdtLattice> {
+class EdtDataFlowAnalysis
+    : public dataflow::SparseForwardDataFlowAnalysis<EdtLattice> {
 public:
   explicit EdtDataFlowAnalysis(DataFlowSolver &solver)
       : dataflow::SparseForwardDataFlowAnalysis<EdtLattice>(solver) {}
@@ -64,5 +65,3 @@ public:
 } // namespace mlir
 
 #endif // ARTS_ANALYSIS_EDT_EDTDATAFLOWANALYSIS_H
-
-

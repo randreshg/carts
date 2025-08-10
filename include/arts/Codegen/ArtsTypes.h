@@ -1,9 +1,9 @@
 ///==========================================================================
-/// File: ArtsTypes.h
+/// File: ArtsTypes.h - ARTS Runtime Type Definitions
 ///==========================================================================
 
-#ifndef CARTS_UTILS_ARTSTYPES_H
-#define CARTS_UTILS_ARTSTYPES_H
+#ifndef CARTS_CODEGEN_ARTSRTTYPES_H
+#define CARTS_CODEGEN_ARTSRTTYPES_H
 
 #include "llvm/ADT/DenseMapInfo.h"
 #include "llvm/ADT/StringRef.h"
@@ -23,12 +23,12 @@ namespace types {
 /// IDs for all arts runtime library (RTL) functions.
 enum class RuntimeFunction {
 #define ARTS_RTL(Enum, ...) Enum,
-#include "arts/Codegen/ARTSKinds.def"
+#include "arts/Codegen/ArtsKinds.def"
 };
 
 #define ARTS_RTL(Enum, ...)                                                    \
   constexpr auto Enum = arts::types::RuntimeFunction::Enum;
-#include "arts/Codegen/ARTSKinds.def"
+#include "arts/Codegen/ArtsKinds.def"
 
 } // end namespace types
 } // end namespace arts
@@ -57,4 +57,4 @@ template <> struct DenseMapInfo<mlir::arts::types::RuntimeFunction> {
 
 } // namespace llvm
 
-#endif // CARTS_UTILS_ARTSTYPES_H
+#endif // CARTS_CODEGEN_ARTSRTTYPES_H

@@ -6,22 +6,20 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "arts/Utils/ArtsTypes.h"
+// Removed: ArtsTypes.h not needed in dialect implementation
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/DialectImplementation.h"
-#include "mlir/IR/Dominance.h"
-#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/IntegerSet.h"
-#include "mlir/IR/Types.h"
 #include "mlir/IR/TypeUtilities.h"
+#include "mlir/IR/Types.h"
 #include "mlir/Support/LLVM.h"
-#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include <cassert>
 
 #include "arts/ArtsDialect.h"
+#include "polygeist/Ops.h"
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -157,7 +155,7 @@ ParseResult DbAllocOp::parse(OpAsmParser &parser, OperationState &result) {
       return failure();
   }
 
-  for (auto sizeOperand : sizeOperands)
+  for (auto _ : sizeOperands)
     sizeTypes.push_back(parser.getBuilder().getIndexType());
 
   if (parser.resolveOperands(sizeOperands, sizeTypes,
@@ -204,9 +202,10 @@ void DbAllocOp::print(OpAsmPrinter &printer) {
 // LogicalResult
 // DbAllocOp::inferReturnTypes(MLIRContext *context,
 //                             std::optional<Location> location,
-//                             ValueShapeRange operands, DictionaryAttr attributes,
-//                             OpaqueProperties properties, RegionRange regions,
-//                             SmallVectorImpl<Type> &inferredReturnTypes) {
+//                             ValueShapeRange operands, DictionaryAttr
+//                             attributes, OpaqueProperties properties,
+//                             RegionRange regions, SmallVectorImpl<Type>
+//                             &inferredReturnTypes) {
 //   // Extract sizes from operands
 //   SmallVector<int64_t> shape;
 //   for (Value operand : operands) {
@@ -216,13 +215,13 @@ void DbAllocOp::print(OpAsmPrinter &printer) {
 //       shape.push_back(ShapedType::kDynamic);
 //     }
 //   }
-//   
+//
 //   // Get element type from attributes or default to f32
 //   Type elementType = FloatType::getF32(context);
 //   if (auto elementTypeAttr = attributes.getAs<TypeAttr>("elementType")) {
 //     elementType = elementTypeAttr.getValue();
 //   }
-//   
+//
 //   inferredReturnTypes.push_back(MemRefType::get(shape, elementType));
 //   return success();
 // }
@@ -260,6 +259,190 @@ SmallVector<Value> EdtOp::getDependenciesVector() {
   SmallVector<Value, 4> dependenciesVector(dependencies.begin(),
                                            dependencies.end());
   return dependenciesVector;
+}
+
+//===----------------------------------------------------------------------===//
+// ARTS Operation Builders
+//===----------------------------------------------------------------------===//
+
+void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
+                      SmallVector<Value> sizes, Value address) {
+  state.addAttribute("mode", ArtsModeAttr::get(builder.getContext(), mode));
+  if (address) {
+    state.addOperands(address);
+  }
+  state.addOperands(sizes);
+
+  // Build operand segment sizes
+  state.addAttribute(
+      "operandSegmentSizes",
+      builder.getDenseI32ArrayAttr(
+          {address ? 1 : 0, static_cast<int32_t>(sizes.size())}));
+
+  // Infer result type
+  MemRefType ptrType;
+  if (address) {
+    auto addressType = address.getType().dyn_cast<MemRefType>();
+    assert(addressType && "Expected a MemRefType");
+
+    // If sizes are not provided, extract them from the address memref
+    if (sizes.empty()) {
+      for (int64_t i = 0; i < addressType.getRank(); ++i) {
+        if (addressType.isDynamicDim(i)) {
+          sizes.push_back(
+              builder.create<memref::DimOp>(state.location, address, i));
+        } else {
+          sizes.push_back(builder.create<arith::ConstantIndexOp>(
+              state.location, addressType.getDimSize(i)));
+        }
+      }
+    }
+
+    ptrType =
+        MemRefType::get(addressType.getShape(), addressType.getElementType());
+  } else {
+    // If no address is provided, create a basic i32 memref type
+    SmallVector<int64_t> shape;
+    for (auto _ : sizes)
+      shape.push_back(ShapedType::kDynamic);
+    ptrType = MemRefType::get(shape, builder.getI32Type());
+  }
+
+  state.addTypes(ptrType);
+}
+
+void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
+                        ArtsMode mode, Value source,
+                        SmallVector<Value> pinnedIndices,
+                        SmallVector<Value> offsets, SmallVector<Value> sizes) {
+  state.addAttribute("mode", ArtsModeAttr::get(builder.getContext(), mode));
+  state.addOperands(source);
+  state.addOperands(pinnedIndices);
+  state.addOperands(offsets);
+  state.addOperands(sizes);
+
+  // Build operand segment sizes
+  state.addAttribute(
+      "operandSegmentSizes",
+      builder.getDenseI32ArrayAttr({1, // source
+                                    static_cast<int32_t>(pinnedIndices.size()),
+                                    static_cast<int32_t>(offsets.size()),
+                                    static_cast<int32_t>(sizes.size())}));
+
+  // Infer result type
+  auto resultType = source.getType().dyn_cast<MemRefType>();
+  assert(resultType && "Source must be a MemRefType");
+
+  // Adjust result type if pinned indices reduce rank
+  int64_t originalRank = resultType.getRank();
+  int64_t pinnedCount = pinnedIndices.size();
+  if (pinnedCount > 0) {
+    SmallVector<int64_t> newShape;
+    for (int64_t i = pinnedCount; i < originalRank; ++i)
+      newShape.push_back(resultType.getDimSize(i));
+    resultType = MemRefType::get(newShape, resultType.getElementType());
+  }
+
+  state.addTypes(resultType);
+}
+
+void DbReleaseOp::build(OpBuilder &builder, OperationState &state,
+                        Value source) {
+  state.addOperands(source);
+}
+
+void DbControlOp::build(OpBuilder &builder, OperationState &state,
+                        ArtsMode mode, Value ptr,
+                        SmallVector<Value> pinnedIndices) {
+  auto ptrOp = ptr.getDefiningOp();
+  assert(ptrOp && "Input must be a defining operation.");
+
+  // If the defining op is a load op, obtain the base memref and pinned indices.
+  Value baseMemRef;
+  auto processLoad = [&](auto loadOp) {
+    baseMemRef = loadOp.getMemref();
+    if (pinnedIndices.empty())
+      pinnedIndices.assign(loadOp.getIndices().begin(),
+                           loadOp.getIndices().end());
+  };
+
+  if (auto loadOp = dyn_cast<memref::LoadOp>(ptrOp))
+    processLoad(loadOp);
+  else
+    baseMemRef = ptr;
+
+  // Ensure the base memref type.
+  auto baseType = baseMemRef.getType().dyn_cast<MemRefType>();
+  assert(baseType && "Input must be a MemRefType.");
+
+  int64_t rank = baseType.getRank();
+  const auto pinnedCount = static_cast<int64_t>(pinnedIndices.size());
+  assert(pinnedCount <= rank &&
+         "Pinned indices exceed the rank of the memref.");
+
+  // Compute sizes and subshape.
+  SmallVector<Value, 4> indices(pinnedCount), sizes(rank - pinnedCount);
+  SmallVector<Value, 4> offsets(
+      rank - pinnedCount,
+      builder.create<arith::ConstantIndexOp>(state.location, 0));
+  SmallVector<int64_t, 4> subShape;
+  for (int64_t i = 0, j = 0; i < rank; ++i) {
+    if (i < pinnedCount) {
+      indices[i] = pinnedIndices[i];
+    } else {
+      bool isDyn = baseType.isDynamicDim(i);
+      int64_t dimSize = baseType.getDimSize(i);
+      Value dimVal =
+          isDyn
+              ? builder.create<memref::DimOp>(state.location, baseMemRef, i)
+                    .getResult()
+              : builder.create<arith::ConstantIndexOp>(state.location, dimSize)
+                    .getResult();
+      sizes[j] = dimVal;
+      // For the normal subview type, preserve the static dim if available.
+      subShape.push_back(isDyn ? ShapedType::kDynamic : dimSize);
+      j++;
+    }
+  }
+
+  // Compute the element type size.
+  auto elementType = baseType.getElementType();
+  auto elementTypeSize =
+      builder
+          .create<polygeist::TypeSizeOp>(state.location, builder.getIndexType(),
+                                         elementType)
+          .getResult();
+
+  state.addAttribute("mode", ArtsModeAttr::get(builder.getContext(), mode));
+  state.addOperands(baseMemRef);
+  state.addAttribute("elementType", TypeAttr::get(elementType));
+  state.addOperands(elementTypeSize);
+  state.addOperands(indices);
+  state.addOperands(offsets);
+  state.addOperands(sizes);
+
+  // Build operand segment sizes
+  state.addAttribute(
+      "operandSegmentSizes",
+      builder.getDenseI32ArrayAttr({1, // ptr
+                                    1, // elementTypeSize
+                                    static_cast<int32_t>(indices.size()),
+                                    static_cast<int32_t>(offsets.size()),
+                                    static_cast<int32_t>(sizes.size())}));
+
+  auto resultType = MemRefType::get(subShape, elementType);
+  state.addTypes(resultType);
+}
+
+void EventOp::build(OpBuilder &builder, OperationState &state,
+                    ArrayRef<Value> sizes) {
+  SmallVector<Value> eventSizes(sizes.begin(), sizes.end());
+  // Assuming event type is memref<?x...xi8> or similar; adjust if needed
+  SmallVector<int64_t> shape(sizes.size(), ShapedType::kDynamic);
+  MemRefType eventType = MemRefType::get(shape, builder.getI8Type());
+
+  state.addOperands(eventSizes);
+  state.addTypes(eventType);
 }
 
 //===----------------------------------------------------------------------===//
