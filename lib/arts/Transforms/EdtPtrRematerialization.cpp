@@ -17,10 +17,8 @@
 #include "llvm/ADT/SmallVector.h"
 
 /// LLVM support
-#define DEBUG_TYPE "edt-ptr-rematerialization"
-#define LINE "-----------------------------------------\n"
-#define dbgs() (llvm::dbgs())
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(edt_ptr_rematerialization);
 
 namespace mlir {
 namespace arts {

@@ -19,5 +19,6 @@ add_mlir_dialect_library(MLIRArts
 add_subdirectory(Utils)
 add_subdirectory(Transforms)
 add_subdirectory(Analysis)
+# Re-enabled: Only ArtsIR utilities, not complex codegen classes
 add_subdirectory(Codegen)
 add_subdirectory(Passes)

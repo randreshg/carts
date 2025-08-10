@@ -7,9 +7,6 @@
 #ifndef CARTS_ANALYSIS_LOOPANALYSIS_H
 #define CARTS_ANALYSIS_LOOPANALYSIS_H
 
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinAttributes.h"
 /// Dialects
 #include "mlir/Dialect/Affine/IR/AffineOps.h"

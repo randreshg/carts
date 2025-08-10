@@ -18,10 +18,8 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#define DEBUG_TYPE "edt-invariant-code-motion"
-#define LINE "-----------------------------------------\n"
-#define dbgs() (llvm::dbgs())
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(edt-invariant-code-motion);
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -35,15 +33,13 @@ struct EdtInvariantCodeMotionPass
 
 void EdtInvariantCodeMotionPass::runOnOperation() {
   ModuleOp module = getOperation();
-  LLVM_DEBUG({
-    dbgs() << "\n" << LINE << "EdtInvariantCodeMotionPass STARTED\n" << LINE;
-    module.dump();
-  });
+  ARTS_DEBUG_HEADER(EdtInvariantCodeMotionPass);
+  ARTS_DEBUG(module.dump());
 
   bool changed = false;
   /// Walk through all EdtOp instances in the module.
   module.walk([&](arts::EdtOp edtOp) {
-    LLVM_DEBUG(dbgs() << LINE; DBGS() << "Processing EDT:\n" << edtOp << "\n";);
+    ARTS_DEBUG_TYPE("Processing EDT:\n" << edtOp);
 
     /// Use the new function to move invariant code out of this EDT.
     auto movedCount = moveEdtInvariantCode(edtOp);
@@ -51,8 +47,7 @@ void EdtInvariantCodeMotionPass::runOnOperation() {
       changed = true;
     }
 
-    LLVM_DEBUG(dbgs() << "Moved " << movedCount
-                      << " operations out of EDT.\n";);
+    ARTS_INFO("Moved " << movedCount << " operations out of EDT.");
   });
 
   // Optionally, mark analysis as preserved or invalidated if needed,
@@ -60,13 +55,8 @@ void EdtInvariantCodeMotionPass::runOnOperation() {
   // if (!changed)
   //  markAllAnalysesPreserved();
 
-  LLVM_DEBUG({
-    dbgs() << "\n"
-           << LINE << "EdtInvariantCodeMotionPass FINISHED (changed=" << changed
-           << ")\n"
-           << LINE;
-    module.dump();
-  });
+  ARTS_DEBUG_FOOTER(EdtInvariantCodeMotionPass);
+  ARTS_DEBUG(module.dump());
 }
 
 ///===----------------------------------------------------------------------===///

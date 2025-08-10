@@ -45,7 +45,7 @@
 #include "ArtsPassDetails.h"
 #include "arts/Analysis/StringAnalysis.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Codegen/ArtsIR.h"
+
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -60,10 +60,8 @@
 #include "polygeist/Ops.h"
 #include "llvm/ADT/SmallVector.h"
 
-#define DEBUG_TYPE "create-dbs"
-#define LINE "-----------------------------------------\n"
-#define dbgs() (llvm::dbgs())
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(create_dbs);
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -319,10 +317,8 @@ void CreateDbsPass::adjustAccesses(OpBuilder &builder, Region &region,
 
 void CreateDbsPass::runOnOperation() {
   module = getOperation();
-  LLVM_DEBUG({
-    dbgs() << "\n" << LINE << "CreateDbsPass STARTED\n" << LINE;
-    module->dump();
-  });
+  ARTS_DEBUG_HEADER(CreateDbsPass);
+  ARTS_DEBUG(module.dump());
 
   OpBuilder builder(module.getContext());
 
@@ -445,10 +441,8 @@ void CreateDbsPass::runOnOperation() {
     }
   });
 
-  LLVM_DEBUG({
-    dbgs() << LINE << "CreateDbsPass FINISHED\n" << LINE;
-    module->dump();
-  });
+  ARTS_DEBUG_FOOTER(CreateDbsPass);
+  ARTS_DEBUG(module.dump());
 }
 
 //===----------------------------------------------------------------------===//

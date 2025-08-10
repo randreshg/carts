@@ -5,9 +5,8 @@
 #include "arts/Analysis/Db/DbValueDataFlowAnalysis.h"
 #include "llvm/Support/Debug.h"
 
-#define DEBUG_TYPE "db-dataflow"
-#define dbgs() llvm::dbgs()
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(db-dataflow)
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -28,7 +27,7 @@ void DbValueDataFlowAnalysis::visitOperation(
 
   if (auto alloc = dyn_cast<arts::DbAllocOp>(op)) {
     agg.isAlloc = true;
-    LLVM_DEBUG(DBGS() << "facts: db_alloc value alloc=1\n");
+    ARTS_INFO("facts: db_alloc value alloc=1");
   }
   if (auto dep = dyn_cast<arts::DbDepOp>(op)) {
     auto modeAttr = dep.getModeAttr();
@@ -40,7 +39,7 @@ void DbValueDataFlowAnalysis::visitOperation(
         agg.outCount += 1;
       else
         agg.inCount += 1, agg.outCount += 1;
-      LLVM_DEBUG(DBGS() << "facts: db_dep mode=" << mode << "\n");
+       ARTS_INFO("facts: db_dep mode=" << mode);
     }
   }
 
@@ -48,9 +47,9 @@ void DbValueDataFlowAnalysis::visitOperation(
     if (!res)
       continue;
     (void)res->join(agg);
-    LLVM_DEBUG(DBGS() << "facts: result in=" << agg.inCount
-                      << " out=" << agg.outCount << " alloc=" << agg.isAlloc
-                      << "\n");
+    ARTS_INFO("facts: result in=" << agg.inCount
+                                   << " out=" << agg.outCount
+                                   << " alloc=" << agg.isAlloc);
   }
 }
 

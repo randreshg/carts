@@ -7,6 +7,7 @@
 #define DIALECT_CARTS_TRANSFORMS_PASSDETAILS_H
 
 #include "mlir/Pass/Pass.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 

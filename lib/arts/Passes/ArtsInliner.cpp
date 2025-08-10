@@ -14,10 +14,11 @@
 #include "mlir/Transforms/InliningUtils.h"
 #include "llvm/Support/Debug.h"
 
-#define DEBUG_TYPE "inliner"
-#define DBGS() (llvm::dbgs() << "[" DEBUG_TYPE "] ")
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(inliner);
 
 using namespace mlir;
+using namespace arts;
 
 namespace {
 struct ArtsInlinerInterface : public mlir::InlinerInterface {
@@ -108,8 +109,7 @@ struct ArtsInlinerPass : public arts::ArtsInlinerBase<ArtsInlinerPass> {
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-
-    LLVM_DEBUG(DBGS() << "Starting aggressive inlining pass\n");
+    ARTS_DEBUG_HEADER(ArtsInlinerPass);
 
     /// Build the inliner interface
     InlinerInterface inliner(&getContext());
@@ -121,19 +121,19 @@ struct ArtsInlinerPass : public arts::ArtsInlinerBase<ArtsInlinerPass> {
       changed = false;
       iteration++;
 
-      LLVM_DEBUG(DBGS() << "Inlining iteration " << iteration << "\n");
+      ARTS_INFO("Inlining iteration " << iteration);
 
       /// Collect all call ops in the module
       SmallVector<func::CallOp> calls;
       module.walk([&](func::CallOp call) { calls.push_back(call); });
 
-      LLVM_DEBUG(DBGS() << "Found " << calls.size() << " call operations\n");
+      ARTS_INFO("Found " << calls.size() << " call operations");
 
       /// Process each call operation
       for (func::CallOp call : calls) {
         /// Skip already erased operations
         if (call->getParentOp() == nullptr) {
-          LLVM_DEBUG(DBGS() << "Skipping erased call\n");
+          ARTS_WARN("Skipping erased call");
           continue;
         }
 
@@ -148,13 +148,13 @@ struct ArtsInlinerPass : public arts::ArtsInlinerBase<ArtsInlinerPass> {
         }
 
         if (!callableOp || !callableOp.getCallableRegion()) {
-          LLVM_DEBUG(DBGS() << "Cannot resolve callable for call\n");
+          ARTS_WARN("Cannot resolve callable for call");
           continue;
         }
 
         /// Skip if the callable region is empty
         if (callableOp.getCallableRegion()->empty()) {
-          LLVM_DEBUG(DBGS() << "Skipping call to empty function\n");
+          ARTS_INFO("Skipping call to empty function");
           continue;
         }
 
@@ -163,40 +163,42 @@ struct ArtsInlinerPass : public arts::ArtsInlinerBase<ArtsInlinerPass> {
           auto enclosingFn = call->getParentOfType<func::FuncOp>();
           if (enclosingFn &&
               enclosingFn.getSymName() == funcOp.getSymName()) {
-            LLVM_DEBUG(DBGS() << "Skipping recursive call to "
-                              << funcOp.getSymName() << "\n");
+            ARTS_INFO("Skipping recursive call to " << funcOp.getSymName());
             continue;
           }
         }
 
-        LLVM_DEBUG(DBGS() << "Attempting to inline call\n");
+        ARTS_INFO("Attempting to inline call");
 
         /// Attempt to inline the call
         if (succeeded(mlir::inlineCall(inliner, call, callableOp,
                                        callableOp.getCallableRegion(), true))) {
-          LLVM_DEBUG(DBGS() << "Successfully inlined call\n");
+          ARTS_INFO("Successfully inlined call");
           call.erase();
           changed = true;
         } else {
-          LLVM_DEBUG(DBGS() << "Failed to inline call\n");
+          ARTS_WARN("Failed to inline call");
         }
       }
       /// Limit iterations to prevent infinite loops
     } while (changed && iteration < 100);
 
     if (iteration >= 100)
-      LLVM_DEBUG(DBGS() << "Warning: Hit maximum iteration limit\n");
+      ARTS_WARN("Hit maximum iteration limit");
 
-    LLVM_DEBUG(DBGS() << "Completed aggressive inlining after " << iteration
-                      << " iterations\n");
+    ARTS_INFO("Completed aggressive inlining after " << iteration
+                     << " iterations");
 
     /// Clean up unused functions
     cleanupUnusedFunctions(module);
+
+    ARTS_DEBUG_FOOTER(ArtsInlinerPass);
+    ARTS_DEBUG(module.dump());
   }
 
 private:
   void cleanupUnusedFunctions(ModuleOp module) {
-    LLVM_DEBUG(DBGS() << "Cleaning up unused functions\n");
+    ARTS_INFO("Cleaning up unused functions");
 
     /// Collect all function operations
     SmallVector<func::FuncOp> functions;
@@ -205,8 +207,7 @@ private:
     /// Remove functions that are no longer used
     for (func::FuncOp func : functions) {
       if (func.isPrivate() && func.getSymbolUses(module)->empty()) {
-        LLVM_DEBUG(DBGS() << "Removing unused function: " << func.getSymName()
-                          << "\n");
+        ARTS_INFO("Removing unused function: " << func.getSymName());
         func.erase();
       }
     }

@@ -41,7 +41,7 @@ void artsYield();
 ```
 
 ## Runtime Function Declarations
-Runtime functions are declared in [include/arts/Codegen/ARTSKinds.def](mdc:include/arts/Codegen/ARTSKinds.def) using:
+Runtime functions are declared in [include/arts/Codegen/ArtsKinds.def](mdc:include/arts/Codegen/ArtsKinds.def) using:
 ```cpp
 __ARTS_RTL(artsMalloc, VoidPtr, SizeTy)
 __ARTS_RTL(artsEdtCreate, ArtsGuid, EdtFnPtr, Int32, Int32, Int64Ptr, Int32)

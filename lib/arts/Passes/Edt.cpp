@@ -44,16 +44,8 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/Pass/Pass.h"
 /// Debug
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/raw_ostream.h"
-#include <cstdint>
-
-#define DEBUG_TYPE "edt"
-#define LINE "-----------------------------------------\n"
-#define dbgs() (llvm::dbgs())
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(edt);
 
 using namespace mlir;
 using namespace mlir::func;
@@ -115,7 +107,7 @@ bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
       numOps < 3) // Account for at least edt, yield, and possibly barrier
     return false;
 
-  LLVM_DEBUG(DBGS() << "Converting parallel EDT into single EDT\n");
+  ARTS_INFO("Converting parallel EDT into single EDT");
   /// Insert the single operation before the parallel op and remove the "single"
   /// attribute.
   singleOp->moveBefore(op);
@@ -149,7 +141,7 @@ bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
 /// workers. Enhanced to set sync-task attrs and propagate dependencies if
 /// applicable.
 bool EdtPass::lowerParallel(EdtOp &op) {
-  LLVM_DEBUG(dbgs() << "Lowering parallel EDT\n");
+  ARTS_INFO("Lowering parallel EDT");
   auto loc = op.getLoc();
   OpBuilder builder(op);
 
@@ -177,7 +169,7 @@ bool EdtPass::lowerParallel(EdtOp &op) {
 
   /// Move Edt op into the loop body.
   op->moveBefore(forOp.getBody(), forOp.getBody()->begin());
-  op.setType(arts::EdtType::task);  // Set to task type instead
+  op.setType(arts::EdtType::task); // Set to task type instead
 
   /// Optionally propagate dependencies (similar to convert)
   SetVector<Value> allDeps;
@@ -199,7 +191,7 @@ bool EdtPass::lowerParallel(EdtOp &op) {
 /// Lower a single EDT: For now, clear single attr and set to sync-task if
 /// top-level. Can be enhanced later for more complex single handling.
 bool EdtPass::lowerSingle(EdtOp &op) {
-  LLVM_DEBUG(DBGS() << "Lowering single EDT\n");
+  ARTS_INFO("Lowering single EDT");
   op.setType(arts::EdtType::sync);
 
   /// Propagate inner dependencies similar to parallel handling
@@ -226,7 +218,7 @@ bool EdtPass::removeBarriers() {
   module.walk([&](BarrierOp barrier) { barriers.push_back(barrier); });
 
   for (BarrierOp barrier : barriers) {
-    LLVM_DEBUG(DBGS() << "Removing barrier\n");
+    ARTS_INFO("Removing barrier");
     barrier.erase();
   }
   return true;
@@ -243,7 +235,7 @@ bool EdtPass::processParallelEdts() {
   /// - Try to convert it into a single-EDT if it contains exactly one child.
   /// - Otherwise, lower it into a worker-loop enclosed in an EpochOp.
   for (EdtOp op : parallelOps) {
-    LLVM_DEBUG(DBGS() << "Processing parallel EDT\n");
+    ARTS_INFO("Processing parallel EDT");
     if (!convertParallelIntoSingle(op))
       lowerParallel(op);
   }
@@ -251,7 +243,7 @@ bool EdtPass::processParallelEdts() {
 }
 
 bool EdtPass::processSyncTaskEdts() {
-  LLVM_DEBUG(dbgs() << "Processing sync task EDTs\n");
+  ARTS_INFO("Processing sync task EDTs");
 
   /// If the given single EdtOp is not nested within another EdtOp (i.e., is
   /// top-level), and is marked as sync, embed its region's contents in an
@@ -289,7 +281,8 @@ bool EdtPass::processSyncTaskEdts() {
   /// Collect all sync task EDTs
   SmallVector<EdtOp, 8> syncTaskOps;
   module.walk([&](EdtOp edt) {
-    if (edt.getType() == arts::EdtType::task && edt.getType() == arts::EdtType::sync)
+    if (edt.getType() == arts::EdtType::task &&
+        edt.getType() == arts::EdtType::sync)
       syncTaskOps.push_back(edt);
   });
 
@@ -306,10 +299,8 @@ bool EdtPass::processSyncTaskEdts() {
 
 void EdtPass::runOnOperation() {
   module = getOperation();
-  LLVM_DEBUG({
-    dbgs() << "\n" << LINE << "EdtPass STARTED\n" << LINE;
-    module->dump();
-  });
+  ARTS_DEBUG_HEADER(EdtPass);
+  ARTS_DEBUG(module->dump());
 
   processParallelEdts();
   removeBarriers();
@@ -320,10 +311,8 @@ void EdtPass::runOnOperation() {
   OpBuilder builder(module.getContext());
   removeOps(module, builder, opsToRemove);
 
-  LLVM_DEBUG({
-    dbgs() << LINE << "EdtPass FINISHED\n" << LINE;
-    module->dump();
-  });
+  ARTS_DEBUG_FOOTER(EdtPass);
+  ARTS_DEBUG(module->dump());
 }
 
 ///===----------------------------------------------------------------------===///

@@ -19,8 +19,6 @@
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
 
-#define DEBUG_TYPE "edt-graph"
-
 namespace mlir {
 namespace arts {
 

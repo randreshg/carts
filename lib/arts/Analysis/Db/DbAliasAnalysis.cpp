@@ -4,16 +4,10 @@
 
 #include "arts/Analysis/Db/DbAliasAnalysis.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "llvm/Support/Debug.h"
-
-#undef DEBUG_TYPE
-#define DEBUG_TYPE "db-alias-analysis"
-#define dbgs() llvm::dbgs()
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
-#define DBGS_INDENT(indent) (dbgs() << indent << "[" DEBUG_TYPE "] ")
+#include "arts/Analysis/Graphs/Db/DbNode.h"
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(db_alias_analysis);
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -26,8 +20,7 @@ std::pair<Value, Value> makeOrderedPair(Value a, Value b) {
 }
 } // namespace
 
-DbAliasAnalysis::DbAliasAnalysis(DbAnalysis *analysis)
-    : analysis(analysis) {
+DbAliasAnalysis::DbAliasAnalysis(DbAnalysis *analysis) : analysis(analysis) {
   assert(analysis && "Analysis cannot be null");
 }
 
@@ -36,13 +29,12 @@ bool DbAliasAnalysis::mayAlias(const NodeBase &a, const NodeBase &b,
   Value ptrA = getUnderlyingValue(a);
   Value ptrB = getUnderlyingValue(b);
 
-  LLVM_DEBUG(DBGS_INDENT(indent)
-             << "Analyzing alias between node " << a.getHierId() << " and node "
-             << b.getHierId() << "\n");
+  ARTS_INFO("Analyzing alias between node " << a.getHierId() << " and node "
+                                            << b.getHierId());
 
   // Same value aliases with itself
   if (ptrA == ptrB) {
-    LLVM_DEBUG(dbgs() << indent << "  -> Same pointer, must alias\n");
+    ARTS_INFO("  -> Same pointer, must alias");
     return true;
   }
 
@@ -50,8 +42,7 @@ bool DbAliasAnalysis::mayAlias(const NodeBase &a, const NodeBase &b,
   auto key = makeOrderedPair(ptrA, ptrB);
   auto it = aliasCache.find(key);
   if (it != aliasCache.end()) {
-    LLVM_DEBUG(dbgs() << indent << "  -> Cache hit: "
-                      << (it->second ? "may alias" : "no alias") << "\n");
+    ARTS_INFO("  -> Cache hit: " << (it->second ? "may alias" : "no alias"));
     return it->second;
   }
 
@@ -87,8 +78,7 @@ bool DbAliasAnalysis::mayAlias(const NodeBase &a, const NodeBase &b,
   }
 
   aliasCache[key] = result;
-  LLVM_DEBUG(dbgs() << indent << "  -> Final result: "
-                    << (result ? "may alias" : "no alias") << "\n");
+  ARTS_INFO("  -> Final result: " << (result ? "may alias" : "no alias"));
   return result;
 }
 

@@ -30,10 +30,8 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#define DEBUG_TYPE "edt-lowering"
-#define LINE "-----------------------------------------\n"
-#define dbgs() (llvm::dbgs())
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(edt_lowering);
 
 using namespace mlir;
 using namespace mlir::func;
@@ -156,10 +154,8 @@ private:
 void EdtLoweringPass::runOnOperation() {
   module = getOperation();
 
-  LLVM_DEBUG({
-    dbgs() << "\n" << LINE << "EdtLoweringPass STARTED\n" << LINE;
-    module->dump();
-  });
+  ARTS_DEBUG_HEADER(EdtLoweringPass);
+  ARTS_DEBUG(module->dump());
 
   // Collect all task EDTs to process (avoid iterator invalidation)
   SmallVector<EdtOp> taskEdts;
@@ -169,7 +165,7 @@ void EdtLoweringPass::runOnOperation() {
     }
   });
 
-  LLVM_DEBUG(DBGS() << "Found " << taskEdts.size() << " task EDTs to lower\n");
+  ARTS_INFO("Found " << taskEdts.size() << " task EDTs to lower");
 
   // Process each task EDT
   bool hasFailures = false;
@@ -184,10 +180,8 @@ void EdtLoweringPass::runOnOperation() {
     return signalPassFailure();
   }
 
-  LLVM_DEBUG({
-    dbgs() << LINE << "EdtLoweringPass COMPLETED\n" << LINE;
-    module->dump();
-  });
+  ARTS_DEBUG_FOOTER(EdtLoweringPass);
+  ARTS_DEBUG(module->dump());
 }
 
 LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
@@ -199,10 +193,9 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
 
   SmallVector<Value> dependencies = analyzeDependencies(edtOp);
 
-  LLVM_DEBUG(dbgs() << "Analyzed " << envMgr.getParameters().size()
-                    << " parameters, " << envMgr.getConstants().size()
-                    << " constants, " << dependencies.size()
-                    << " dependencies\n");
+  ARTS_INFO("Analyzed " << envMgr.getParameters().size() << " parameters, "
+                        << envMgr.getConstants().size() << " constants, "
+                        << dependencies.size() << " dependencies");
 
   // Step 2: Create outlined function with ARTS signature
   func::FuncOp outlinedFunc = createOutlinedFunction(edtOp, envMgr);
@@ -241,8 +234,7 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
     return edtOp.emitError("Failed to insert dependency management");
   }
 
-  LLVM_DEBUG(dbgs() << "Successfully lowered EDT to function: "
-                    << outlinedFunc.getName() << "\n");
+  ARTS_INFO("Successfully lowered EDT to function: " << outlinedFunc.getName());
 
   // Remove original EDT
   edtOp.erase();
@@ -268,7 +260,7 @@ EdtLoweringPass::createOutlinedFunction(EdtOp edtOp,
       moduleBuilder.create<func::FuncOp>(loc, funcName, funcType);
   outlinedFunc.setPrivate();
 
-  LLVM_DEBUG(dbgs() << "Created outlined function: " << funcName << "\n");
+  ARTS_INFO("Created outlined function: " << funcName);
 
   return outlinedFunc;
 }
@@ -276,14 +268,16 @@ EdtLoweringPass::createOutlinedFunction(EdtOp edtOp,
 Value EdtLoweringPass::createParameterPack(
     OpBuilder &builder, Location loc, const SmallVector<Value> &parameters) {
   if (parameters.empty()) {
-    LLVM_DEBUG(dbgs() << "No parameters to pack\n");
+    ARTS_INFO("No parameters to pack");
     return nullptr;
   }
 
-  LLVM_DEBUG(dbgs() << "Creating parameter pack for " << parameters.size()
-                    << " parameters\n");
+  ARTS_INFO("Creating parameter pack for " << parameters.size()
+                                          << " parameters");
 
-  auto packOp = builder.create<EdtParamPackOp>(loc, parameters);
+  // Create memref type for parameter pack - opaque i8 buffer
+  auto memrefType = MemRefType::get({-1}, builder.getI8Type());
+  auto packOp = builder.create<EdtParamPackOp>(loc, memrefType, parameters);
   return packOp.getMemref();
 }
 
@@ -345,7 +339,7 @@ EdtLoweringPass::outlineRegionToFunction(EdtOp edtOp, func::FuncOp targetFunc,
       paramTypes.push_back(param.getType());
     }
     funcBuilder.create<EdtParamUnpackOp>(loc, paramTypes, paramv);
-    LLVM_DEBUG(dbgs() << "Inserted parameter unpacking\n");
+    ARTS_INFO("Inserted parameter unpacking");
   }
 
   // Clone constants into function
@@ -377,12 +371,12 @@ EdtLoweringPass::insertDependencyManagement(OpBuilder &builder, Location loc,
                                             Value edtGuid,
                                             const SmallVector<Value> &deps) {
   if (deps.empty()) {
-    LLVM_DEBUG(dbgs() << "No dependencies to manage\n");
+    ARTS_INFO("No dependencies to manage");
     return success();
   }
 
-  LLVM_DEBUG(dbgs() << "Inserting dependency management for " << deps.size()
-                    << " dependencies\n");
+  ARTS_INFO("Inserting dependency management for " << deps.size()
+                                                  << " dependencies");
 
   for (Value dep : deps) {
     StringRef mode = getDependencyMode(dep);

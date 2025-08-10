@@ -24,13 +24,13 @@ namespace arts {
 // Manages per-function DbGraphs, alias analysis, data flow, and loop analysis.
 // Enhancements:
 // - Integrates DbDataFlowAnalysis to populate graph edges during build.
-// - Provides dimension and size queries, enhanced with shape inference.
+// - Basic size queries (shape inference and dimension analysis disabled).
 // - Supports new DB ops (alloc, acquire, release) without DbDep.
 // Potential problems: Module-wide analysis may be memory-heavy; per-function graphs mitigate.
 // Improvements: Lazy graph creation; cache invalidation on IR changes.
 // TODO: Add inter-procedural analysis by propagating across func calls.
 // TODO: Integrate with MLIR's pass manager for automatic invalidation.
-// TODO: Enhance dimension analysis with symbolic affine maps for precision.
+// TODO: Re-enable dimension analysis and shape inference for advanced optimizations.
 class DbAnalysis {
 public:
   DbAnalysis(Operation *module);
@@ -46,11 +46,11 @@ public:
   // Print analysis for a function.
   void print(func::FuncOp func);
 
-  // Compute dimension sizes for a node (uses shape inference).
-  SmallVector<int64_t> getComputedDimSizes(const NodeBase &node);
+  // Compute dimension sizes for a node (DISABLED - shape inference removed).
+  // SmallVector<int64_t> getComputedDimSizes(const NodeBase &node);
 
-  // Get dimension pattern analysis for a node.
-  SmallVector<DimensionAnalysis> getDimensionAnalysis(const NodeBase &node);
+  // Get dimension pattern analysis for a node (DISABLED).
+  // SmallVector<DimensionAnalysis> getDimensionAnalysis(const NodeBase &node);
 
   // Access alias analysis.
   DbAliasAnalysis *getAliasAnalysis() { return dbAliasAnalysis.get(); }

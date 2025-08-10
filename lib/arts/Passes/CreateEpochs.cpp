@@ -23,27 +23,36 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
-/// Debug
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/raw_ostream.h"
-#include <cstdint>
 
-#define DEBUG_TYPE "create-epochs"
-#define LINE "-----------------------------------------\n"
-#define dbgs() (llvm::dbgs())
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(create_epochs);
 
 using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arith;
 using namespace mlir::arts;
 
+// Helper functions for EdtOp attribute management
+static bool isSync(EdtOp op) {
+  auto typeAttr = op.getTypeAttr();
+  return typeAttr && typeAttr.getValue() == EdtType::sync;
+}
+
+static void clearIsSyncAttr(EdtOp op) {
+  // Remove sync type - set to single as default
+  auto newTypeAttr = EdtTypeAttr::get(op.getContext(), EdtType::single);
+  op.setTypeAttr(newTypeAttr);
+}
+
+static void setIsTaskAttr(EdtOp op) {
+  auto newTypeAttr = EdtTypeAttr::get(op.getContext(), EdtType::task);
+  op.setTypeAttr(newTypeAttr);
+}
+
 /// Helper function to process synchronous EDT ops.
 static void processSyncEdtOp(arts::EdtOp op) {
   /// Only process EDT ops with sync attribute.
-  if (!op.isSync())
+  if (!isSync(op))
     return;
 
   auto loc = op.getLoc();
@@ -57,13 +66,13 @@ static void processSyncEdtOp(arts::EdtOp op) {
   op->moveBefore(&epochBlock, --epochBlock.end());
 
   /// Remove the sync attribute and mark the op as a task.
-  op.clearIsSyncAttr();
-  op.setIsTaskAttr();
+  clearIsSyncAttr(op);
+  setIsTaskAttr(op);
 }
 
 /// Helper function to process barrier ops
 static void processBarrierOp(arts::BarrierOp barrier) {
-  LLVM_DEBUG(dbgs() << "Processing BarrierOp\n");
+  ARTS_DEBUG_TYPE("Processing BarrierOp");
   auto loc = barrier.getLoc();
 
   bool hasParentEdt = true;
@@ -119,7 +128,7 @@ static void processBarrierOp(arts::BarrierOp barrier) {
 
   /// Move collected operations into the new epoch block.
   for (Operation *op : opsToMove) {
-    LLVM_DEBUG(dbgs() << "Moving operation: " << *op << "\n");
+    ARTS_INFO("Moving operation: " << *op);
     op->moveBefore(newBlock, newBlock->end());
   }
 
@@ -140,13 +149,10 @@ struct CreateEpochsPass : public arts::CreateEpochsBase<CreateEpochsPass> {
 };
 } // end namespace
 
-
 void CreateEpochsPass::runOnOperation() {
   ModuleOp module = getOperation();
-  LLVM_DEBUG({
-    dbgs() << LINE << "CreateEpochPass STARTED\n" << LINE;
-    module.dump();
-  });
+  ARTS_DEBUG_HEADER(CreateEpochsPass);
+  ARTS_DEBUG(module.dump());
 
   /// Process Sync EDT Ops: for each EDT op that is sync, create an epoch op
   /// and move the EDT op inside the epoch op.
@@ -156,10 +162,8 @@ void CreateEpochsPass::runOnOperation() {
   /// by the barrier and embed them in a new epoch op.
   module.walk([&](arts::BarrierOp barrier) { processBarrierOp(barrier); });
 
-  LLVM_DEBUG({
-    dbgs() << LINE << "CreateEpochPass FINISHED\n" << LINE;
-    module.dump();
-  });
+  ARTS_DEBUG_FOOTER(CreateEpochsPass);
+  ARTS_DEBUG(module.dump());
 }
 
 //==========================================================================

@@ -14,7 +14,7 @@
 
 namespace llvm {
 
-// Base traits for all ARTS graphs.
+/// Base traits for all ARTS graphs.
 template <typename GraphTy> struct BaseGraphTraits {
   using NodeRef = ::mlir::arts::NodeBase *;
   using ChildIteratorType = mapped_iterator<
@@ -45,12 +45,12 @@ template <typename GraphTy> struct BaseGraphTraits {
   }
 };
 
-// Specialization for GraphBase*
+/// Specialization for GraphBase*
 template <>
 struct GraphTraits<::mlir::arts::GraphBase *>
     : public BaseGraphTraits<::mlir::arts::GraphBase> {};
 
-// DOTGraphTraits for visualization
+/// DOTGraphTraits for visualization
 template <typename GraphTy>
 struct DOTGraphTraits<BaseGraphTraits<GraphTy>> : public DefaultDOTGraphTraits {
   DOTGraphTraits(bool simple = false) : DefaultDOTGraphTraits(simple) {}

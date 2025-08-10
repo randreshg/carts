@@ -5,9 +5,8 @@
 #include "arts/Analysis/Edt/EdtDataFlowAnalysis.h"
 #include "llvm/Support/Debug.h"
 
-#define DEBUG_TYPE "edt-dataflow"
-#define dbgs() llvm::dbgs()
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(edt-dataflow)
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -40,7 +39,7 @@ void EdtDataFlowAnalysis::visitOperation(Operation *op,
         agg.outCount += 1, agg.writes = true;
       else // inout / unknown
         agg.inCount += 1, agg.outCount += 1, agg.reads = true, agg.writes = true;
-      LLVM_DEBUG(DBGS() << "facts: db_dep mode=" << mode << "\n");
+      ARTS_INFO("facts: db_dep mode=" << mode);
     }
   }
 
@@ -60,9 +59,9 @@ void EdtDataFlowAnalysis::visitOperation(Operation *op,
     if (!res)
       continue;
     (void)res->join(agg);
-    LLVM_DEBUG(DBGS() << "facts: result " << *op << " in=" << agg.inCount
-                      << " out=" << agg.outCount << " R=" << agg.reads
-                      << " W=" << agg.writes << "\n");
+    ARTS_INFO("facts: result " << *op << " in=" << agg.inCount
+                                << " out=" << agg.outCount << " R="
+                                << agg.reads << " W=" << agg.writes);
   }
 }
 

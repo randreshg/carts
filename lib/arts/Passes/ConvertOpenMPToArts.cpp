@@ -16,9 +16,7 @@
 /// Arts
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Codegen/ArtsIR.h"
 #include "arts/Passes/ArtsPasses.h"
-#include "arts/Utils/ArtsTypes.h"
 #include "arts/Utils/ArtsUtils.h"
 /// Others
 #include "mlir/IR/Builders.h"
@@ -29,13 +27,8 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 /// Debug
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/raw_ostream.h"
-#include <cstdint>
-#define DEBUG_TYPE "convert-openmp-to-arts"
-#define LINE "-----------------------------------------\n"
-#define dbgs() (llvm::dbgs())
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(convert - openmp - to - arts);
 
 using namespace mlir;
 using namespace arts;
@@ -50,7 +43,7 @@ struct OMPParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
   LogicalResult matchAndRewrite(omp::ParallelOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    LLVM_DEBUG(DBGS() << "Converting omp.parallel to arts.parallel\n");
+    ARTS_DEBUG_TYPE("Converting omp.parallel to arts.parallel");
 
     /// Create a new `arts.edt` operation.
     auto parOp = rewriter.create<EdtOp>(loc, EdtType::parallel, ValueRange{});
@@ -76,7 +69,7 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
   LogicalResult matchAndRewrite(scf::ParallelOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    LLVM_DEBUG(DBGS() << "Converting scf.parallel to arts.parallel\n");
+    ARTS_DEBUG_TYPE("Converting scf.parallel to arts.parallel");
     rewriter.setInsertionPoint(op);
 
     /// Create an `arts.epoch` operation and add a region to it.
@@ -132,7 +125,8 @@ struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
     auto loc = op.getLoc();
 
     /// Create a new `arts.single` operation.
-    auto artsSingle = rewriter.create<EdtOp>(loc, EdtType::single, ValueRange{});
+    auto artsSingle =
+        rewriter.create<EdtOp>(loc, EdtType::single, ValueRange{});
     artsSingle.getBody().emplaceBlock();
 
     /// Move the region's operations.
@@ -162,26 +156,33 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
     llvm_unreachable("Unknown ClauseTaskDepend value");
   }
 
-  void collectTaskDependencies(SmallVector<Value> &deps, omp::TaskOp task,
-                               PatternRewriter &rewriter, Location loc) const {
+  LogicalResult collectTaskDependencies(SmallVector<Value> &deps,
+                                        omp::TaskOp task,
+                                        PatternRewriter &rewriter,
+                                        Location loc) const {
 
     /// Collect the task deps clause
     auto dependList = task.getDependsAttr();
     if (!dependList) {
-      LLVM_DEBUG(DBGS() << "No dependencies found for task\n");
-      return;
+      ARTS_INFO("No dependencies found for task");
+      return success();
     }
-    LLVM_DEBUG(DBGS() << "Processing " << dependList.size()
-                      << " dependencies\n");
+    ARTS_INFO("Processing " << dependList.size() << " dependencies");
     for (unsigned i = 0, e = dependList.size(); i < e; ++i) {
       /// Get dependency clause and type.
       auto depClause = dyn_cast<omp::ClauseTaskDependAttr>(dependList[i]);
-      assert(depClause && "Expected a ClauseTaskDependAttr");
+      if (!depClause) {
+        ARTS_ERROR("Missing ClauseTaskDependAttr for dependency " << i);
+        return failure();
+      }
       Value depVar = task.getDependVars()[i];
 
       /// Ensure the dependency variable comes from a memref.alloc operation.
       auto depAlloc = depVar.getDefiningOp<memref::AllocaOp>();
-      assert(depAlloc && "Expected a memref.alloc operation");
+      if (!depAlloc) {
+        ARTS_ERROR("Dependency variable does not originate from memref.alloc");
+        return failure();
+      }
 
       /// Find the first user (except the task itself) that is an memref.store
       /// op.
@@ -192,15 +193,20 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
         if ((depStoreOp = dyn_cast<memref::StoreOp>(user)))
           break;
       }
-      assert(depStoreOp && "Expected an memref.store operation");
+      if (!depStoreOp) {
+        ARTS_ERROR("Expected a memref.store operation for dependency var");
+        return failure();
+      }
 
       /// Get the value that was stored; expect a memref.load
       Operation *valueDefOp = depStoreOp.getValueToStore().getDefiningOp();
       Value depLoadVal;
       if (auto loadOp = dyn_cast<memref::LoadOp>(valueDefOp))
         depLoadVal = loadOp.getResult();
-      else
-        llvm_unreachable("Expected a memref.load operation");
+      else {
+        ARTS_ERROR("Expected a memref.load operation feeding dep store");
+        return failure();
+      }
 
       /// Clone the load operation at the beginning of the edt region.
       auto &region = task.getRegion();
@@ -221,24 +227,28 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
         rewriter.setInsertionPointAfter(depLoadVal.getDefiningOp());
         SmallVector<Value> emptyIndices;
         /// Create db_control and add to deps
-        Value dbControl = createDbControlOp(rewriter, depLoadVal.getLoc(),
-                                            getDbMode(depClause.getValue()),
-                                            depLoadVal, emptyIndices);
+        Value dbControl = rewriter.create<DbControlOp>(
+            depLoadVal.getLoc(), getDbMode(depClause.getValue()), depLoadVal,
+            emptyIndices);
         deps.push_back(dbControl);
       }
 
       /// Replace the dependency allocation with an undefined value.
       replaceWithUndef(depAlloc.getOperation(), rewriter);
     }
+    return success();
   }
 
   LogicalResult matchAndRewrite(omp::TaskOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    LLVM_DEBUG(DBGS() << "Converting omp.task to arts.edt\n");
+    ARTS_INFO("Converting omp.task to arts.edt");
     /// Collect dependencies
     SmallVector<Value> deps;
-    collectTaskDependencies(deps, op, rewriter, loc);
+    if (failed(collectTaskDependencies(deps, op, rewriter, loc))) {
+      ARTS_ERROR("Failed to collect task dependencies");
+      return failure();
+    }
 
     /// Create a new `arts.edt` operation.
     auto edtOp = rewriter.create<EdtOp>(loc, EdtType::task, deps);
@@ -357,9 +367,7 @@ struct ConvertOpenMPToArtsPass
 
 /// Pass to convert OpenMP operations to ARTS operations
 void ConvertOpenMPToArtsPass::runOnOperation() {
-  LLVM_DEBUG(dbgs() << "\n"
-                    << LINE << "ConvertOpenMPToArtsPass STARTED\n"
-                    << LINE);
+  ARTS_DEBUG_HEADER(ConvertOpenMPToArtsPass);
   ModuleOp module = getOperation();
   MLIRContext *context = &getContext();
   RewritePatternSet patterns(context);
@@ -370,10 +378,8 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   GreedyRewriteConfig config;
   (void)applyPatternsAndFoldGreedily(module, std::move(patterns), config);
   removeUndefOps(module);
-  LLVM_DEBUG({
-    dbgs() << LINE << "ConvertOpenMPToArtsPass FINISHED\n" << LINE;
-    module.dump();
-  });
+  ARTS_DEBUG_FOOTER(ConvertOpenMPToArtsPass);
+  ARTS_DEBUG(module.dump());
 }
 
 //===----------------------------------------------------------------------===//

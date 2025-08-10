@@ -19,6 +19,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   EdtLowering.cpp
   ${CARTS_TRANSFORMS_SOURCE_FILES}
   ${CARTS_UTILS_SOURCE_FILES}
+  # Re-enabled: Only ArtsIR utilities, not complex codegen classes
   ${CARTS_CODEGEN_SOURCE_FILES}
   ${CARTS_ANALYSIS_SOURCE_FILES}
 

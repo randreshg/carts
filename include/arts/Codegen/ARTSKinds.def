@@ -1,4 +1,4 @@
-//===--- ARTSKinds.def - ARTS directives, clauses, rt-calls -*- C++ -*-===//
+//===--- ArtsKinds.def - ARTS directives, clauses, rt-calls -*- C++ -*-===//
 /// This file defines the list of supported ARTS runtime
 /// calls, and other things that need to be listed in enums.
 ///
