@@ -6,7 +6,7 @@
 #include "arts/Analysis/Edt/EdtAnalysis.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
-#include "arts/Codegen/ArtsIR.h"
+
 #include "arts/Codegen/DbCodegen.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -21,9 +21,8 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/Debug.h"
 
-#define DEBUG_TYPE "edt-codegen"
-#define dbgs() (llvm::dbgs())
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(edt-codegen);
 #define METADATA "-----------------------------------------\n[artsCodegen] "
 
 using namespace mlir;
@@ -448,7 +447,7 @@ void EdtCodegen::recordInDeps(Location loc) {
 
   builder.setInsertionPointAfter(guid.getDefiningOp());
 
-  LLVM_DEBUG(dbgs() << "- Recording in-mode dependencies\n");
+  ARTS_DEBUG_MSG("- Recording in-mode dependencies");
   for (auto *dbCG : depsToRecord) {
     if (dbCG->hasSingleSize())
       recordSingleInDep(dbCG, loc);
@@ -462,8 +461,7 @@ void EdtCodegen::incrementOutLatchCounts(Location loc) {
   if (depsToSatisfy.empty())
     return;
 
-  LLVM_DEBUG(
-      dbgs() << "- Incrementing latch counts for out-mode dependencies\n");
+  ARTS_DEBUG_MSG("- Incrementing latch counts for out-mode dependencies");
   for (auto *dbCG : depsToSatisfy) {
     if (dbCG->hasSingleSize())
       incrementSingleOutDep(dbCG, loc);
@@ -474,7 +472,7 @@ void EdtCodegen::incrementOutLatchCounts(Location loc) {
 
 void EdtCodegen::replaceEdtDepUses(Location loc) {
   /// Replace all remaining uses of Edt deps with the corresponding Db pointers
-  LLVM_DEBUG(dbgs() << "- Replacing EDT dependency uses\n");
+  ARTS_DEBUG_MSG("- Replacing EDT dependency uses");
 
   for (auto &dep : deps) {
     auto *dbDep = AC.getDbDep(dep);

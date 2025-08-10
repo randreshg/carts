@@ -9,7 +9,6 @@
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
-#include <vector>
 
 namespace mlir {
 namespace arts {
@@ -60,70 +59,70 @@ private:
 /// - The consumer EDT sees it as a DbDepOp, not a DbAllocOp
 /// - This class contains all EDT context information for accessing datablocks
 /// from depv parameters
-/*
-class DbDepCodegen {
-public:
-  DbDepCodegen(ArtsCodegen &AC, arts::DbDepOp dbOp,
-               Operation *parentOp = nullptr);
 
-  Value getOp();
-  Value getEdtSlot();
-  Value getGuid();
-  Value getPtr();
-  void setEdtSlot(Value v);
-  void setGuid(Value v);
-  void setPtr(Value v);
-  bool isOutMode();
-  bool isInMode();
-  bool hasSingleSize();
-  ValueRange getSizes();
-  ValueRange getOffsets();
-  ValueRange getIndices();
-  void init(Location loc);
+// class DbDepCodegen {
+// public:
+//   DbDepCodegen(ArtsCodegen &AC, arts::DbDepOp dbOp,
+//                Operation *parentOp = nullptr);
 
-  /// Parent op
-  bool isParentOpInSameEdt();
+//   Value getOp();
+//   Value getEdtSlot();
+//   Value getGuid();
+//   Value getPtr();
+//   void setEdtSlot(Value v);
+//   void setGuid(Value v);
+//   void setPtr(Value v);
+//   bool isOutMode();
+//   bool isInMode();
+//   bool hasSingleSize();
+//   ValueRange getSizes();
+//   ValueRange getOffsets();
+//   ValueRange getIndices();
+//   void init(Location loc);
 
-  /// EDT context values (set once during EDT entry construction)
-  Value getGuidInEdt() { return guidInEdt; }
-  Value getPtrInEdt() { return ptrInEdt; }
-  void setGuidInEdt(Value v) { guidInEdt = v; }
-  void setPtrInEdt(Value v) { ptrInEdt = v; }
+//   /// Parent op
+//   bool isParentOpInSameEdt();
 
-  /// EDT context information for accessing existing DBs from depv
-  llvm::SmallVector<Value> &getSizesInEdt() { return sizesInEdt; }
-  llvm::SmallVector<Value> &getOffsetsInEdt() { return offsetsInEdt; }
-  llvm::DenseMap<unsigned, unsigned> &getSizeIndexInEdt() {
-    return sizeIndexInEdt;
-  }
-  llvm::DenseMap<unsigned, unsigned> &getOffsetIndexInEdt() {
-    return offsetIndexInEdt;
-  }
+//   /// EDT context values (set once during EDT entry construction)
+//   Value getGuidInEdt() { return guidInEdt; }
+//   Value getPtrInEdt() { return ptrInEdt; }
+//   void setGuidInEdt(Value v) { guidInEdt = v; }
+//   void setPtrInEdt(Value v) { ptrInEdt = v; }
 
-private:
-  ArtsCodegen &AC;
-  OpBuilder &builder;
-  arts::DbDepOp dbOp;
-  Value edtSlot = nullptr;
-  Value guid = nullptr;
-  Value ptr = nullptr;
+//   /// EDT context information for accessing existing DBs from depv
+//   llvm::SmallVector<Value> &getSizesInEdt() { return sizesInEdt; }
+//   llvm::SmallVector<Value> &getOffsetsInEdt() { return offsetsInEdt; }
+//   llvm::DenseMap<unsigned, unsigned> &getSizeIndexInEdt() {
+//     return sizeIndexInEdt;
+//   }
+//   llvm::DenseMap<unsigned, unsigned> &getOffsetIndexInEdt() {
+//     return offsetIndexInEdt;
+//   }
 
-  /// Parent op
-  Operation *parentOp = nullptr;
-  bool parentOpIsInSameEdt = true;
+// private:
+//   ArtsCodegen &AC;
+//   OpBuilder &builder;
+//   arts::DbDepOp dbOp;
+//   Value edtSlot = nullptr;
+//   Value guid = nullptr;
+//   Value ptr = nullptr;
 
-  /// EDT context values - for accessing existing datablocks from depv
-  /// parameters
-  Value guidInEdt = nullptr; // GUID in EDT consumer context
-  Value ptrInEdt = nullptr;  // Pointer in EDT consumer context
+//   /// Parent op
+//   Operation *parentOp = nullptr;
+//   bool parentOpIsInSameEdt = true;
 
-  /// EDT context data for multi-dimensional access from depv parameters
-  llvm::SmallVector<Value> sizesInEdt;
-  llvm::SmallVector<Value> offsetsInEdt;
-  llvm::DenseMap<unsigned, unsigned> sizeIndexInEdt;
-  llvm::DenseMap<unsigned, unsigned> offsetIndexInEdt;
-};
-*/
+//   /// EDT context values - for accessing existing datablocks from depv
+//   /// parameters
+//   Value guidInEdt = nullptr; // GUID in EDT consumer context
+//   Value ptrInEdt = nullptr;  // Pointer in EDT consumer context
+
+//   /// EDT context data for multi-dimensional access from depv parameters
+//   llvm::SmallVector<Value> sizesInEdt;
+//   llvm::SmallVector<Value> offsetsInEdt;
+//   llvm::DenseMap<unsigned, unsigned> sizeIndexInEdt;
+//   llvm::DenseMap<unsigned, unsigned> offsetIndexInEdt;
+// };
+
 
 } // namespace arts
 } // namespace mlir

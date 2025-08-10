@@ -13,8 +13,8 @@
 using namespace mlir;
 using namespace mlir::arts;
 
-#define dbgs() llvm::dbgs()
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(edt_graph);
 
 std::string EdtGraph::sanitizeForDot(StringRef s) const {
   std::string id = s.str();
@@ -25,14 +25,13 @@ std::string EdtGraph::sanitizeForDot(StringRef s) const {
 
 EdtGraph::EdtGraph(func::FuncOp func, DbGraph *dbGraph)
     : func(func), dbGraph(dbGraph) {
-  LLVM_DEBUG(DBGS() << "Creating EDT graph for function: "
-                    << func.getName().str() << "\n");
+  ARTS_INFO("Creating EDT graph for function: " << func.getName().str());
 }
 
 void EdtGraph::build() {
   if (isBuilt && !needsRebuild)
     return;
-  LLVM_DEBUG(DBGS() << "Building EDT graph\n");
+  ARTS_INFO("Building EDT graph");
   invalidate();
   collectNodes();
   buildDependencies();
@@ -177,15 +176,15 @@ void EdtGraph::exportToDot(llvm::raw_ostream &os) const {
 }
 
 void EdtGraph::collectNodes() {
-  LLVM_DEBUG(DBGS() << "Phase 1 - Collecting EDT nodes\n");
+  ARTS_INFO("Phase 1 - Collecting EDT nodes");
 
   func.walk([&](EdtOp edtOp) { getOrCreateNode(edtOp.getOperation()); });
 
-  LLVM_DEBUG(DBGS() << "Collected " << taskNodes.size() << " tasks\n");
+  ARTS_INFO("Collected " << taskNodes.size() << " tasks");
 }
 
 void EdtGraph::buildDependencies() {
-  LLVM_DEBUG(DBGS() << "Phase 2 - Building EDT dependencies\n");
+  ARTS_INFO("Phase 2 - Building EDT dependencies");
 
   for (auto &fromPair : taskNodes) {
     EdtOp fromOp = fromPair.first;
@@ -224,6 +223,5 @@ void EdtGraph::buildDependencies() {
     });
   }
 
-  LLVM_DEBUG(DBGS() << "Phase 2 - Built " << edges.size()
-                    << " EDT dependencies\n");
+  ARTS_INFO("Phase 2 - Built " << edges.size() << " EDT dependencies");
 }

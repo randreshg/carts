@@ -6,9 +6,8 @@
 #include "arts/Analysis/Graphs/Db/DbEdge.h"
 #include "llvm/Support/Debug.h"
 
-#define DEBUG_TYPE "db-dataflow"
-#define dbgs() llvm::dbgs()
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(db_dataflow);
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -74,17 +73,15 @@ void DbDataFlowAnalysis::visitOperation(Operation *op, const DbState &before,
 
   if (auto allocOp = dyn_cast<DbAllocOp>(op)) {
     after->liveAllocs.insert(allocOp);
-    LLVM_DEBUG(DBGS() << "facts: alloc live " << allocOp << "\n");
+    ARTS_INFO("facts: alloc live " << allocOp);
   } else if (auto acquireOp = dyn_cast<DbAcquireOp>(op)) {
     DbAllocOp parentAlloc = graph->findRootAllocOp(acquireOp.getOperation());
     if (parentAlloc && before.liveAllocs.contains(parentAlloc)) {
       after->activeAcquires[parentAlloc].insert(acquireOp);
-      LLVM_DEBUG(DBGS() << "facts: acquire active parent " << parentAlloc
-                        << "\n");
+      ARTS_INFO("facts: acquire active parent " << parentAlloc);
     } else {
       op->emitWarning("Acquire without live allocation");
-      LLVM_DEBUG(DBGS() << "facts: acquire missing-parent for " << acquireOp
-                        << "\n");
+      ARTS_WARN("Acquire without live allocation for " << acquireOp);
     }
   } else if (auto releaseOp = dyn_cast<DbReleaseOp>(op)) {
     DbAllocOp parentAlloc = graph->findRootAllocOp(releaseOp.getOperation());
@@ -100,23 +97,21 @@ void DbDataFlowAnalysis::visitOperation(Operation *op, const DbState &before,
         }
       }
       after->activeAcquires[parentAlloc].clear();
-      LLVM_DEBUG(DBGS() << "facts: release processed parent " << parentAlloc
-                        << "\n");
+      ARTS_INFO("facts: release processed parent " << parentAlloc);
     } else {
       op->emitWarning("Release without active acquire");
-      LLVM_DEBUG(DBGS() << "facts: release missing-acquire for " << releaseOp
-                        << "\n");
+      ARTS_WARN("Release without active acquire for " << releaseOp);
     }
   }
 
   auto effects = getDbEffects(op);
   if (!effects.empty()) {
-    LLVM_DEBUG(DBGS() << "Op " << *op << " has effects; state propagated\n");
+    ARTS_INFO("Op has effects; state propagated: " << *op);
   }
 }
 
 void DbDataFlowAnalysis::analyze() {
-  LLVM_DEBUG(DBGS() << "Running DB data flow analysis\n");
+  ARTS_INFO("Running DB data flow analysis");
 
   auto *funcOp = graph->getFunction();
   initializeAndRun(funcOp);
@@ -141,7 +136,7 @@ void DbDataFlowAnalysis::analyze() {
     }
   }
 
-  LLVM_DEBUG(DBGS() << "DB data flow analysis completed\n");
+  ARTS_INFO("DB data flow analysis completed");
 }
 
 void DbDataFlowAnalysis::createLifetimeEdge(DbAcquireNode *acquire,
@@ -152,9 +147,9 @@ void DbDataFlowAnalysis::createLifetimeEdge(DbAcquireNode *acquire,
   auto edge = std::make_unique<DbLifetimeEdge>(acquire, release, "Lifetime");
   graph->addEdge(acquire, release, edge.get());
   edge.release();
-  LLVM_DEBUG(DBGS() << "Created lifetime edge from acquire "
-                    << acquire->getHierId() << " to release "
-                    << release->getHierId() << "\n");
+
+  ARTS_INFO("Created lifetime edge from acquire "
+            << acquire->getHierId() << " to release " << release->getHierId());
 }
 
 SmallVector<MemoryEffects::EffectInstance>

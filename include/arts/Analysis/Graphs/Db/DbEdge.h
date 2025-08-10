@@ -7,9 +7,7 @@
 
 #include "arts/Analysis/Graphs/Base/EdgeBase.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
-#include <string>
 
 namespace mlir {
 namespace arts {

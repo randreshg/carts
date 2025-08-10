@@ -5,7 +5,7 @@
 #define CARTS_CODEGEN_ARTSCODEGEN_H
 
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/ArtsTypes.h"
+#include "arts/Codegen/ArtsTypes.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Builders.h"
@@ -13,9 +13,6 @@
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/StringMap.h"
-#include "llvm/Support/DataTypes.h"
 
 namespace mlir {
 namespace arts {
@@ -23,9 +20,9 @@ using namespace types;
 
 /// Forward declarations
 class DbAllocCodegen;
-class DbDepCodegen;
+// class DbDepCodegen;
 class EdtCodegen;
-class DbDepOp;
+// class DbDepOp;
 
 class ArtsCodegen {
 public:
@@ -49,12 +46,12 @@ public:
   /// DB management
   DbAllocCodegen *getDbAlloc(Value op);
   DbAllocCodegen *getDbAlloc(DbAllocOp dbOp);
-  DbDepCodegen *getDbDep(Value op);
-  DbDepCodegen *getDbDep(DbDepOp dbOp);
+  // DbDepCodegen *getDbDep(Value op);
+  // DbDepCodegen *getDbDep(DbDepOp dbOp);
   DbAllocCodegen *createDbAlloc(DbAllocOp dbOp, Location loc);
-  DbDepCodegen *createDbDep(DbDepOp dbOp, Operation *parentOp = nullptr);
+  // DbDepCodegen *createDbDep(DbDepOp dbOp, Operation *parentOp = nullptr);
   DbAllocCodegen *getOrCreateDbAlloc(DbAllocOp dbOp, Location loc);
-  DbDepCodegen *getOrCreateDbDep(DbDepOp dbOp, Operation *parentOp = nullptr);
+  // DbDepCodegen *getOrCreateDbDep(DbDepOp dbOp, Operation *parentOp = nullptr);
 
   void addDbDep(Value dbGuid, Value edtGuid, Value edtSlot, Location loc);
   void incrementDbLatchCount(Value dbGuid, Location loc);
@@ -125,7 +122,7 @@ public:
 #define ARTS_STRUCT_TYPE(VarName, StructName, ...)                             \
   LLVM::LLVMStructType VarName = nullptr;                                      \
   MemRefType VarName##Ptr = nullptr;
-#include "arts/Codegen/ARTSKinds.def"
+#include "arts/Codegen/ArtsKinds.def"
   LLVM::LLVMPointerType llvmPtr = nullptr;
   ///}
 
@@ -138,7 +135,7 @@ private:
   /// Other Attributes
   // unsigned edtCounter = 0;
   llvm::DenseMap<Value, DbAllocCodegen *> dbAllocs;
-  llvm::DenseMap<Value, DbDepCodegen *> dbDeps;
+  // llvm::DenseMap<Value, DbDepCodegen *> dbDeps;
   llvm::DenseMap<Region *, EdtCodegen *> edts;
   llvm::DenseMap<RuntimeFunction, func::FuncOp> runtimeFunctionCache;
   llvm::StringMap<LLVM::GlobalOp> llvmStringGlobals;

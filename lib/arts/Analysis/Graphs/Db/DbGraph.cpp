@@ -10,8 +10,8 @@
 
 using namespace mlir::arts;
 
-#define dbgs() llvm::dbgs()
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(db_graph);
 
 std::string DbGraph::generateAllocId(unsigned id) {
   std::string s;
@@ -41,14 +41,13 @@ DbGraph::DbGraph(func::FuncOp func, DbAnalysis *analysis)
     : func(func), analysis(analysis) {
   /// TODO: Add data flow analysis
   // dataFlowAnalysis = std::make_unique<DbDataFlowAnalysis>(analysis, this);
-  LLVM_DEBUG(DBGS() << "Creating db graph for function: "
-                    << func.getName().str() << "\n");
+  ARTS_INFO("Creating db graph for function: " << func.getName().str());
 }
 
 void DbGraph::build() {
   if (isBuilt && !needsRebuild)
     return;
-  LLVM_DEBUG(DBGS() << "Building db graph\n");
+  ARTS_INFO("Building db graph");
   invalidate();
   collectNodes();
   buildDependencies();
@@ -244,7 +243,7 @@ void DbGraph::exportToDot(llvm::raw_ostream &os) const {
 }
 
 void DbGraph::collectNodes() {
-  LLVM_DEBUG(DBGS() << "Phase 1 - Collecting nodes\n");
+  ARTS_INFO("Phase 1 - Collecting nodes");
 
   func.walk([&](Operation *op) {
     if (isa<DbAllocOp, DbAcquireOp, DbReleaseOp>(op)) {
@@ -252,9 +251,9 @@ void DbGraph::collectNodes() {
     }
   });
 
-  LLVM_DEBUG(DBGS() << "Collected " << allocNodes.size() << " allocations, "
-                    << acquireNodeMap.size() << " acquires, "
-                    << releaseNodeMap.size() << " releases\n");
+  ARTS_INFO("Collected " << allocNodes.size() << " allocations, "
+                          << acquireNodeMap.size() << " acquires, "
+                          << releaseNodeMap.size() << " releases");
 }
 
 DbAllocOp DbGraph::findRootAllocOp(Operation *op) {
@@ -284,9 +283,9 @@ DbAllocOp DbGraph::findRootAllocOp(Operation *op) {
 }
 
 void DbGraph::buildDependencies() {
-  LLVM_DEBUG(DBGS() << "Phase 2 - Building dependencies\n");
+  ARTS_INFO("Phase 2 - Building dependencies");
   // dataFlowAnalysis->analyze();
-  LLVM_DEBUG(DBGS() << "Phase 2 - Data flow analysis finished\n");
+  ARTS_INFO("Phase 2 - Data flow analysis finished");
 }
 
 GraphBase::ChildIterator DbGraph::childBegin(NodeBase *node) {

@@ -5,9 +5,9 @@
 #ifndef ARTS_ANALYSIS_DB_DBDATAFLOWANALYSIS_H
 #define ARTS_ANALYSIS_DB_DBDATAFLOWANALYSIS_H
 
-#include "arts/ArtsDialect.h"
 #include "arts/Analysis/Db/DbAliasAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
+#include "arts/ArtsDialect.h"
 #include "mlir/Analysis/DataFlow/DenseAnalysis.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 
@@ -15,7 +15,7 @@ namespace mlir {
 namespace arts {
 
 struct DbState : public dataflow::AbstractDenseLattice {
-  DbState() : AbstractDenseLattice() {}
+  using AbstractDenseLattice::AbstractDenseLattice;
   ChangeResult join(const AbstractDenseLattice &rhs) override;
   void print(llvm::raw_ostream &os) const override;
 
@@ -26,11 +26,17 @@ struct DbState : public dataflow::AbstractDenseLattice {
 
 class DbAnalysis;
 
-class DbDataFlowAnalysis : public dataflow::DenseForwardDataFlowAnalysis<DbState> {
+class DbDataFlowAnalysis
+    : public dataflow::DenseForwardDataFlowAnalysis<DbState> {
 public:
-  DbDataFlowAnalysis(DataFlowSolver &solver, DbGraph *graph, DbAnalysis *analysis);
+  DbDataFlowAnalysis(DataFlowSolver &solver, DbGraph *graph,
+                     DbAnalysis *analysis);
 
-  void visitOperation(Operation *op, const DbState &before, DbState *after) override;
+  void visitOperation(Operation *op, const DbState &before,
+                      DbState *after) override;
+
+  // Required by DenseForwardDataFlowAnalysis interface
+  void setToEntryState(DbState *lattice) override;
 
   void analyze();
 

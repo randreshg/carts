@@ -18,40 +18,29 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-#define DEBUG_TYPE "edt-ptr-rematerialization"
-#define LINE "-----------------------------------------\n"
-#define dbgs() (llvm::dbgs())
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(edt_ptr_rematerialization);
 
 using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
 struct EdtPtrRematerializationPass
-    : public arts::EdtPtrRematerializationBase<
-          EdtPtrRematerializationPass> {
+    : public arts::EdtPtrRematerializationBase<EdtPtrRematerializationPass> {
   void runOnOperation() override;
 };
 } // end anonymous namespace
 
 void EdtPtrRematerializationPass::runOnOperation() {
   ModuleOp module = getOperation();
-  LLVM_DEBUG({
-    dbgs() << "\n"
-           << LINE << "EdtPtrRematerializationPass STARTED\n"
-           << LINE;
-    module.dump();
-  });
+  ARTS_DEBUG_HEADER(EdtPtrRematerializationPass);
+  ARTS_DEBUG(module.dump());
 
   /// Walk through all EdtOp instances in the module.
   module.walk([&](arts::EdtOp edtOp) { rematerializePointersInEdt(edtOp); });
 
-  LLVM_DEBUG({
-    dbgs() << "\n"
-           << LINE << "EdtPtrRematerializationPass FINISHED\n"
-           << LINE;
-    module.dump();
-  });
+  ARTS_DEBUG_FOOTER(EdtPtrRematerializationPass);
+  ARTS_DEBUG(module.dump());
 }
 
 ///===----------------------------------------------------------------------===///

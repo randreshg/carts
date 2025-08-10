@@ -87,6 +87,12 @@ def DbAllocOp : Arts_Op<"db_alloc", [
 
   let results = (outs AnyMemRef:$ptr);
   let hasCustomAssemblyFormat = 1;
+  
+  let builders = [
+    OpBuilder<(ins "ArtsMode":$mode,
+                   "SmallVector<Value>":$sizes,
+                   CArg<"Value", "nullptr">:$address)>
+  ];
 }
 
 def DbAcquireOp : Arts_Op<"db_acquire", 
@@ -119,6 +125,14 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     `sizes` `[` $sizes `]` 
     attr-dict `:` type($view)
   }];
+  
+  let builders = [
+    OpBuilder<(ins "ArtsMode":$mode,
+                   "Value":$source,
+                   "SmallVector<Value>":$pinnedIndices,
+                   CArg<"SmallVector<Value>", "{}">:$offsets,
+                   CArg<"SmallVector<Value>", "{}">:$sizes)>
+  ];
 }
 
 def DbReleaseOp : Arts_Op<"db_release", []> {
@@ -130,6 +144,10 @@ def DbReleaseOp : Arts_Op<"db_release", []> {
   let assemblyFormat = [{
     $sources `:` type($sources) attr-dict
   }];
+  
+  let builders = [
+    OpBuilder<(ins "Value":$source)>
+  ];
 }
 
 def DbControlOp : Arts_Op<"db_control", 
@@ -167,6 +185,12 @@ def DbControlOp : Arts_Op<"db_control",
     `sizes` `[` $sizes `]` 
     attr-dict `:` type($subview)
   }];
+  
+  let builders = [
+    OpBuilder<(ins "ArtsMode":$mode,
+                   "Value":$ptr,
+                   CArg<"SmallVector<Value>", "{}">:$pinnedIndices)>
+  ];
 }
 
 //===----------------------------------------------------------------------===//
@@ -220,6 +244,11 @@ def EventOp : Arts_Op<"event", []> {
   let assemblyFormat = [{
     `[` $sizes `]` `->` attr-dict `:` type($event)
   }];
+  
+  let builders = [
+    OpBuilder<(ins "ArrayRef<Value>":$sizes)>
+  ];
+  
   let extraClassDeclaration = [{
     bool hasSingleSize();
     void setHasSingleSize();

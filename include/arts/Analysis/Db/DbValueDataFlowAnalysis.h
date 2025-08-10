@@ -14,9 +14,9 @@ namespace mlir {
 namespace arts {
 
 struct DbFactsValue {
-  bool isAlloc = false;    // this value is a DB allocation
-  unsigned inCount = 0;    // number of times used as "in"
-  unsigned outCount = 0;   // number of times used as "out"
+  bool isAlloc = false;  // this value is a DB allocation
+  unsigned inCount = 0;  // number of times used as "in"
+  unsigned outCount = 0; // number of times used as "out"
 
   static DbFactsValue join(const DbFactsValue &lhs, const DbFactsValue &rhs) {
     DbFactsValue out;
@@ -39,7 +39,8 @@ struct DbFactsValue {
 
 using DbLattice = dataflow::Lattice<DbFactsValue>;
 
-class DbValueDataFlowAnalysis : public dataflow::SparseForwardDataFlowAnalysis<DbLattice> {
+class DbValueDataFlowAnalysis
+    : public dataflow::SparseForwardDataFlowAnalysis<DbLattice> {
 public:
   explicit DbValueDataFlowAnalysis(DataFlowSolver &solver)
       : dataflow::SparseForwardDataFlowAnalysis<DbLattice>(solver) {}
@@ -54,5 +55,3 @@ public:
 } // namespace mlir
 
 #endif // ARTS_ANALYSIS_DB_DBVALUEDATAFLOWANALYSIS_H
-
-

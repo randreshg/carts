@@ -28,7 +28,8 @@
 #include "mlir/Transforms/DialectConversion.h"
 /// Arts
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/ArtsTypes.h"
+// DISABLED: Complex codegen functionality
+// #include "arts/Codegen/ArtsTypes.h"
 #include "arts/Utils/ArtsUtils.h"
 /// Debug
 #include "llvm/ADT/SmallVector.h"
@@ -42,10 +43,8 @@
 #include <functional>
 
 /// DEBUG
-#define DEBUG_TYPE "arts-codegen"
-#define dbgs() (llvm::dbgs())
-#define DBGS() (dbgs() << "[" DEBUG_TYPE "] ")
-#define METADATA "-----------------------------------------\n[artsCodegen] "
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(arts-codegen);
 
 using namespace mlir;
 using namespace mlir::func;
@@ -65,12 +64,12 @@ ArtsCodegen::ArtsCodegen(ModuleOp &module, llvm::DataLayout &llvmDL,
 }
 
 ArtsCodegen::~ArtsCodegen() {
-  for (auto &db : dbAllocs)
-    delete db.second;
-  for (auto &db : dbDeps)
-    delete db.second;
-  for (auto &edt : edts)
-    delete edt.second;
+  // for (auto &db : dbAllocs)
+  //   delete db.second;
+  // // for (auto &db : dbDeps)
+  // //   delete db.second;
+  // for (auto &edt : edts)
+  //   delete edt.second;
 }
 
 func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
@@ -95,7 +94,7 @@ func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
     funcOp = module.lookupSymbol<func::FuncOp>(Str);                           \
     break;                                                                     \
   }
-#include "arts/Codegen/ARTSKinds.def"
+#include "arts/Codegen/ArtsKinds.def"
   }
 
   if (!funcOp) {
@@ -105,7 +104,7 @@ func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
   case Enum:                                                                   \
     funcOp = builder.create<func::FuncOp>(getUnknownLoc(), Str, fnType);       \
     break;
-#include "arts/Codegen/ARTSKinds.def"
+#include "arts/Codegen/ArtsKinds.def"
     }
   }
 
@@ -137,7 +136,7 @@ void ArtsCodegen::initializeTypes() {
 #define ARTS_STRUCT_TYPE(VarName, StructName, Packed, ...)                     \
   VarName = LLVM::LLVMStructType::getLiteral(context, {__VA_ARGS__}, Packed);  \
   VarName##Ptr = MemRefType::get({ShapedType::kDynamic}, VarName);
-#include "arts/Codegen/ARTSKinds.def"
+#include "arts/Codegen/ArtsKinds.def"
 }
 
 func::CallOp ArtsCodegen::createRuntimeCall(RuntimeFunction FnID,
@@ -163,21 +162,21 @@ DbAllocCodegen *ArtsCodegen::getDbAlloc(DbAllocOp dbOp) {
   return (it != dbAllocs.end()) ? it->second : nullptr;
 }
 
-DbDepCodegen *ArtsCodegen::getDbDep(Value op) {
-  if (!op)
-    return nullptr;
-  auto it = dbDeps.find(op);
-  return (it != dbDeps.end()) ? it->second : nullptr;
-}
+// DbDepCodegen *ArtsCodegen::getDbDep(Value op) {
+//   if (!op)
+//     return nullptr;
+//   auto it = dbDeps.find(op);
+//   return (it != dbDeps.end()) ? it->second : nullptr;
+// }
 
-DbDepCodegen *ArtsCodegen::getDbDep(DbDepOp dbOp) {
-  if (!dbOp)
-    return nullptr;
-  auto it = dbDeps.find(dbOp.getResult());
-  if (it != dbDeps.end())
-    return it->second;
-  return nullptr;
-}
+// DbDepCodegen *ArtsCodegen::getDbDep(DbDepOp dbOp) {
+//   if (!dbOp)
+//     return nullptr;
+//   auto it = dbDeps.find(dbOp.getResult());
+//   if (it != dbDeps.end())
+//     return it->second;
+//   return nullptr;
+// }
 
 DbAllocCodegen *ArtsCodegen::createDbAlloc(DbAllocOp dbOp, Location loc) {
   assert(!getDbAlloc(dbOp) && "DbAlloc already exists");
@@ -185,11 +184,11 @@ DbAllocCodegen *ArtsCodegen::createDbAlloc(DbAllocOp dbOp, Location loc) {
   return dbAllocs[dbOp.getResult()];
 }
 
-DbDepCodegen *ArtsCodegen::createDbDep(DbDepOp dbOp, Operation *parentOp) {
-  assert(!getDbDep(dbOp) && "DbDep already exists");
-  dbDeps[dbOp.getResult()] = new DbDepCodegen(*this, dbOp, parentOp);
-  return dbDeps[dbOp.getResult()];
-}
+// DbDepCodegen *ArtsCodegen::createDbDep(DbDepOp dbOp, Operation *parentOp) {
+//   assert(!getDbDep(dbOp) && "DbDep already exists");
+//   dbDeps[dbOp.getResult()] = new DbDepCodegen(*this, dbOp, parentOp);
+//   return dbDeps[dbOp.getResult()];
+// }
 
 DbAllocCodegen *ArtsCodegen::getOrCreateDbAlloc(DbAllocOp dbOp, Location loc) {
   if (auto existing = getDbAlloc(dbOp))
@@ -197,11 +196,11 @@ DbAllocCodegen *ArtsCodegen::getOrCreateDbAlloc(DbAllocOp dbOp, Location loc) {
   return createDbAlloc(dbOp, loc);
 }
 
-DbDepCodegen *ArtsCodegen::getOrCreateDbDep(DbDepOp dbOp, Operation *parentOp) {
-  if (auto existing = getDbDep(dbOp))
-    return existing;
-  return createDbDep(dbOp, parentOp);
-}
+// DbDepCodegen *ArtsCodegen::getOrCreateDbDep(DbDepOp dbOp, Operation *parentOp) {
+//   if (auto existing = getDbDep(dbOp))
+//     return existing;
+//   return createDbDep(dbOp, parentOp);
+// }
 
 void ArtsCodegen::addDbDep(Value dbGuid, Value edtGuid, Value edtSlot,
                            Location loc) {
@@ -229,7 +228,7 @@ EdtCodegen *ArtsCodegen::getEdt(Region *region) {
 EdtCodegen *ArtsCodegen::createEdt(SmallVector<Value> *opDeps, Region *region,
                                    Value *epoch, Location *loc, bool build) {
   if (!region || getEdt(region)) {
-    LLVM_DEBUG(dbgs() << "Region already has an EDT\n");
+  ARTS_WARN("Region already has an EDT");
     assert(false && "Edt already exists");
   }
   edts[region] = new EdtCodegen(*this, opDeps, region, epoch, loc, build);
@@ -653,8 +652,7 @@ void ArtsCodegen::applyReplacements(Region *region) {
 }
 
 void ArtsCodegen::applyReplacements() {
-  LLVM_DEBUG(DBGS() << "Applying " << replacementMap.size()
-                    << " delayed replacements\n");
+  ARTS_INFO("Applying " << replacementMap.size() << " delayed replacements");
 
   for (auto &region : replacementMap) {
     if (region.first == &emptyRegion)
