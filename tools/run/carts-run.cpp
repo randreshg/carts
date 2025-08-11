@@ -1,9 +1,11 @@
 //==========================================================================
 /// File: carts.cpp
 //==========================================================================
-#include "mlir/Conversion/Passes.h" // removed if unused
+#include "mlir/Pass/Pass.h"
+#include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/Passes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -105,6 +107,9 @@ void initializeContext(MLIRContext &context) {
   context.getOrLoadDialect<mlir::scf::SCFDialect>();
   context.getOrLoadDialect<mlir::async::AsyncDialect>();
   context.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
+  context.getOrLoadDialect<mlir::NVVM::NVVMDialect>();
+  context.getOrLoadDialect<mlir::ROCDL::ROCDLDialect>();
+  context.getOrLoadDialect<mlir::gpu::GPUDialect>();
   context.getOrLoadDialect<mlir::omp::OpenMPDialect>();
   context.getOrLoadDialect<mlir::math::MathDialect>();
   context.getOrLoadDialect<mlir::memref::MemRefDialect>();
