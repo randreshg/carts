@@ -119,7 +119,7 @@ void ConvertDbToOpaquePtrPass::runOnOperation() {
   ModuleOp module = getOperation();
 
   ARTS_DEBUG_HEADER(ConvertDbToOpaquePtrPass);
-  ARTS_DEBUG(module.dump());
+  ARTS_DEBUG_REGION(module.dump(););
 
   /// Initialize ArtsCodegen for helper functions
   auto llvmDLAttr = module->getAttrOfType<StringAttr>("llvm.data_layout");
@@ -139,7 +139,7 @@ void ConvertDbToOpaquePtrPass::runOnOperation() {
   removeOps(module, AC->getBuilder(), opsToRemove);
 
   ARTS_DEBUG_FOOTER(ConvertDbToOpaquePtrPass);
-  ARTS_DEBUG(module.dump());
+  ARTS_DEBUG_REGION(module.dump(););
 }
 
 void ConvertDbToOpaquePtrPass::preprocessDbAllocOps(ModuleOp module) {
@@ -214,7 +214,8 @@ void ConvertDbToOpaquePtrPass::preprocessDbAccessOps(ModuleOp module) {
 
           auto newAcquireOp = builder.create<DbAcquireOp>(
               acquireOp.getLoc(), newType, acquireOp.getMode(),
-              acquireOp.getSource(), acquireOp.getIndices());
+              acquireOp.getSource(), acquireOp.getIndices(),
+              acquireOp.getOffsets(), acquireOp.getSizes());
 
           newAcquireOp->setAttrs(acquireOp->getAttrs());
           newAcquireOp->setAttr("newDb", builder.getUnitAttr());

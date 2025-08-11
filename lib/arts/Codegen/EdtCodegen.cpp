@@ -109,53 +109,53 @@ void EdtCodegen::analyzeDependencies(Location loc) {
   if (deps.empty())
     return;
 
-  for (const auto &dep : deps) {
-    auto dbDepOp = dep.getDefiningOp<arts::DbDepOp>();
-    assert(dbDepOp && "Dependency is not a DbDepOp");
+  // for (const auto &dep : deps) {
+  //   auto dbDepOp = dep.getDefiningOp<arts::DbDepOp>();
+  //   assert(dbDepOp && "Dependency is not a DbDepOp");
 
-    auto *dbDep = AC.getDbDep(dbDepOp);
-    assert(dbDep && "DbDep not found");
+  //   auto *dbDep = AC.getDbDep(dbDepOp);
+  //   assert(dbDep && "DbDep not found");
 
-    /// Set the EDT slot for the DB
-    dbDep->setEdtSlot(builder.create<memref::LoadOp>(loc, depC).getResult());
+  //   /// Set the EDT slot for the DB
+  //   dbDep->setEdtSlot(builder.create<memref::LoadOp>(loc, depC).getResult());
 
-    auto sizes = dbDepOp.getSizes();
-    auto offsets = dbDepOp.getOffsets();
-    auto rank = sizes.size();
+  //   auto sizes = dbDepOp.getSizes();
+  //   auto offsets = dbDepOp.getOffsets();
+  //   auto rank = sizes.size();
 
-    Value dbNumElements;
-    if (rank <= 1) {
-      /// For single-dimensional DBs, use size 1
-      dbNumElements = AC.createIndexConstant(1, loc);
-      insertSizeParameter(dbDep, dbNumElements, 0);
-    } else {
-      /// For multi-dimensional DBs, process each dimension and compute total
-      /// elements
-      Value product = AC.createIndexConstant(1, loc);
-      for (uint64_t rankItr = 0; rankItr < rank; ++rankItr) {
-        insertSizeParameter(dbDep, sizes[rankItr], rankItr);
-        insertOffsetParameter(dbDep, offsets[rankItr], rankItr);
-        product = builder.create<arith::MulIOp>(loc, product, sizes[rankItr])
-                      .getResult();
-      }
-      dbNumElements = product;
-    }
+  //   Value dbNumElements;
+  //   if (rank <= 1) {
+  //     /// For single-dimensional DBs, use size 1
+  //     dbNumElements = AC.createIndexConstant(1, loc);
+  //     insertSizeParameter(dbDep, dbNumElements, 0);
+  //   } else {
+  //     /// For multi-dimensional DBs, process each dimension and compute total
+  //     /// elements
+  //     Value product = AC.createIndexConstant(1, loc);
+  //     for (uint64_t rankItr = 0; rankItr < rank; ++rankItr) {
+  //       insertSizeParameter(dbDep, sizes[rankItr], rankItr);
+  //       insertOffsetParameter(dbDep, offsets[rankItr], rankItr);
+  //       product = builder.create<arith::MulIOp>(loc, product, sizes[rankItr])
+  //                     .getResult();
+  //     }
+  //     dbNumElements = product;
+  //   }
 
-    /// Categorize dependencies for later processing
-    if (dbDep->isInMode()) {
-      /// Input DBs: accumulate dependency count
-      auto currDep = builder.create<memref::LoadOp>(loc, depC);
-      auto newDep = builder.create<arith::AddIOp>(loc, currDep, dbNumElements)
-                        .getResult();
-      builder.create<memref::StoreOp>(loc, newDep, depC);
-      depsToRecord.push_back(dbDep);
-    }
+  //   /// Categorize dependencies for later processing
+  //   if (dbDep->isInMode()) {
+  //     /// Input DBs: accumulate dependency count
+  //     auto currDep = builder.create<memref::LoadOp>(loc, depC);
+  //     auto newDep = builder.create<arith::AddIOp>(loc, currDep, dbNumElements)
+  //                       .getResult();
+  //     builder.create<memref::StoreOp>(loc, newDep, depC);
+  //     depsToRecord.push_back(dbDep);
+  //   }
 
-    if (dbDep->isOutMode()) {
-      /// Output DBs: will need satisfaction
-      depsToSatisfy.push_back(dbDep);
-    }
-  }
+  //   if (dbDep->isOutMode()) {
+  //     /// Output DBs: will need satisfaction
+  //     depsToSatisfy.push_back(dbDep);
+  //   }
+  // }
 }
 
 void EdtCodegen::setupParameters(Location loc) {
@@ -252,22 +252,22 @@ void EdtCodegen::createEntry(Location loc) {
                      loc);
   auto fnDepVPtr = AC.castToLLVMPtr(fnDepV, loc);
 
-  for (auto &dep : deps) {
-    auto *db = AC.getDbDep(dep);
-    assert(db && "Db not found");
-    if (!db->isInMode())
-      continue;
+  // for (auto &dep : deps) {
+  //   auto *db = AC.getDbDep(dep);
+  //   assert(db && "Db not found");
+  //   if (!db->isInMode())
+  //     continue;
 
-    if (db->hasSingleSize()) {
-      handleSingleDep(db, dep, indexAlloc.getResult(), depStructSize, fnDepVPtr,
-                      loc);
-    } else {
-      handleMultiDep(db, dep, indexAlloc.getResult(), depStructSize, fnDepVPtr,
-                     loc);
-    }
-    ///
-    db->init(loc);
-  }
+  //   if (db->hasSingleSize()) {
+  //     handleSingleDep(db, dep, indexAlloc.getResult(), depStructSize, fnDepVPtr,
+  //                     loc);
+  //   } else {
+  //     handleMultiDep(db, dep, indexAlloc.getResult(), depStructSize, fnDepVPtr,
+  //                    loc);
+  //   }
+  //   ///
+  //   db->init(loc);
+  // }
 }
 
 void EdtCodegen::handleSingleDep(DbDepCodegen *db, Value dep, Value indexAlloc,
@@ -288,9 +288,9 @@ void EdtCodegen::handleSingleDep(DbDepCodegen *db, Value dep, Value indexAlloc,
   auto entryPtr = AC.getPtrFromEdtDep(depVElem, loc);
 
   /// Set EDT context attributes and rewire
-  db->setGuidInEdt(entryGuid);
-  db->setPtrInEdt(entryPtr);
-  rewireMap[db->getOp()] = entryPtr;
+  // db->setGuidInEdt(entryGuid);
+  // db->setPtrInEdt(entryPtr);
+  // rewireMap[db->getOp()] = entryPtr;
 
   /// Increment the index for next dependency
   auto newIndex =
@@ -302,76 +302,76 @@ void EdtCodegen::handleMultiDep(DbDepCodegen *db, Value dep, Value indexAlloc,
                                 const Value &depStructSize,
                                 const Value &fnDepVPtr, Location loc) {
   /// Prepare dimension information
-  const auto &dbSizes = db->getSizes();
-  const auto &dbOffsets = db->getOffsets();
-  const auto dbRank = dbSizes.size();
-  auto &entrySizes = db->getSizesInEdt();
-  auto &entryOffsets = db->getOffsetsInEdt();
+  // const auto &dbSizes = db->getSizes();
+  // const auto &dbOffsets = db->getOffsets();
+  // const auto dbRank = dbSizes.size();
+  // auto &entrySizes = db->getSizesInEdt();
+  // auto &entryOffsets = db->getOffsetsInEdt();
 
-  entrySizes.reserve(dbRank);
-  entryOffsets.reserve(dbRank);
+  // entrySizes.reserve(dbRank);
+  // entryOffsets.reserve(dbRank);
 
-  /// Build actual sizes and offsets from parameters or constants
-  for (unsigned i = 0; i < dbRank; ++i) {
-    /// Sizes
-    if (db->getSizeIndexInEdt().count(i))
-      entrySizes.push_back(rewireMap[params[db->getSizeIndexInEdt()[i]]]);
-    else if (auto cstOp = dbSizes[i].getDefiningOp<arith::ConstantIndexOp>())
-      entrySizes.push_back(builder.clone(*cstOp)->getResult(0));
-    else
-      llvm_unreachable("Db size is not a constant");
+  // /// Build actual sizes and offsets from parameters or constants
+  // for (unsigned i = 0; i < dbRank; ++i) {
+  //   /// Sizes
+  //   if (db->getSizeIndexInEdt().count(i))
+  //     entrySizes.push_back(rewireMap[params[db->getSizeIndexInEdt()[i]]]);
+  //   else if (auto cstOp = dbSizes[i].getDefiningOp<arith::ConstantIndexOp>())
+  //     entrySizes.push_back(builder.clone(*cstOp)->getResult(0));
+  //   else
+  //     llvm_unreachable("Db size is not a constant");
 
-    /// Offsets
-    if (db->getOffsetIndexInEdt().count(i))
-      entryOffsets.push_back(rewireMap[params[db->getOffsetIndexInEdt()[i]]]);
-    else if (auto cstOp = dbOffsets[i].getDefiningOp<arith::ConstantIndexOp>())
-      entryOffsets.push_back(builder.clone(*cstOp)->getResult(0));
-    else
-      llvm_unreachable("Db offset is not a constant");
-  }
+  //   /// Offsets
+  //   if (db->getOffsetIndexInEdt().count(i))
+  //     entryOffsets.push_back(rewireMap[params[db->getOffsetIndexInEdt()[i]]]);
+  //   else if (auto cstOp = dbOffsets[i].getDefiningOp<arith::ConstantIndexOp>())
+  //     entryOffsets.push_back(builder.clone(*cstOp)->getResult(0));
+  //   else
+  //     llvm_unreachable("Db offset is not a constant");
+  // }
 
   /// Get current index and compute total elements
-  auto curIndex = builder.create<memref::LoadOp>(loc, indexAlloc);
-  Value totalElements = AC.createIndexConstant(1, loc);
-  for (auto size : entrySizes)
-    totalElements = builder.create<arith::MulIOp>(loc, totalElements, size);
+  // auto curIndex = builder.create<memref::LoadOp>(loc, indexAlloc);
+  // Value totalElements = AC.createIndexConstant(1, loc);
+  // for (auto size : entrySizes)
+  //   totalElements = builder.create<arith::MulIOp>(loc, totalElements, size);
 
-  /// Advance index for next dependency
-  auto nextIndex = builder.create<arith::AddIOp>(loc, curIndex, totalElements);
-  builder.create<memref::StoreOp>(loc, nextIndex, indexAlloc);
+  // /// Advance index for next dependency
+  // auto nextIndex = builder.create<arith::AddIOp>(loc, curIndex, totalElements);
+  // builder.create<memref::StoreOp>(loc, nextIndex, indexAlloc);
 
-  /// Create memref views for multi-dimensional access
-  auto flatI8Type =
-      MemRefType::get({ShapedType::kDynamic}, AC.getBuilder().getI8Type());
-  auto fnDepVPtr_i8 = AC.castToLLVMPtr(fnDepV, loc);
-  auto flatBuffer = builder.create<polygeist::Pointer2MemrefOp>(loc, flatI8Type,
-                                                                fnDepVPtr_i8);
+  // /// Create memref views for multi-dimensional access
+  // auto flatI8Type =
+  //     MemRefType::get({ShapedType::kDynamic}, AC.getBuilder().getI8Type());
+  // auto fnDepVPtr_i8 = AC.castToLLVMPtr(fnDepV, loc);
+  // auto flatBuffer = builder.create<polygeist::Pointer2MemrefOp>(loc, flatI8Type,
+  //                                                               fnDepVPtr_i8);
 
-  /// Compute byte offset for this db section
-  auto offsetInBytes =
-      builder.create<arith::MulIOp>(loc, curIndex, depStructSize);
+  // /// Compute byte offset for this db section
+  // auto offsetInBytes =
+  //     builder.create<arith::MulIOp>(loc, curIndex, depStructSize);
 
-  /// Create target memref types with original dimensions
-  auto guidViewType = MemRefType::get(
-      SmallVector<int64_t>(entrySizes.size(), ShapedType::kDynamic),
-      AC.ArtsGuid);
-  auto ptrViewType = MemRefType::get(
-      SmallVector<int64_t>(entrySizes.size(), ShapedType::kDynamic),
-      AC.VoidPtr);
+  // /// Create target memref types with original dimensions
+  // auto guidViewType = MemRefType::get(
+  //     SmallVector<int64_t>(entrySizes.size(), ShapedType::kDynamic),
+  //     AC.ArtsGuid);
+  // auto ptrViewType = MemRefType::get(
+  //     SmallVector<int64_t>(entrySizes.size(), ShapedType::kDynamic),
+  //     AC.VoidPtr);
 
-  /// Create N-dimensional views
-  auto entryGuid = builder.create<memref::ViewOp>(loc, guidViewType, flatBuffer,
-                                                  offsetInBytes, entrySizes);
+  // /// Create N-dimensional views
+  // auto entryGuid = builder.create<memref::ViewOp>(loc, guidViewType, flatBuffer,
+  //                                                 offsetInBytes, entrySizes);
 
-  auto ptrFieldOffset = AC.createIndexConstant(16, loc);
-  auto ptrByteOffset =
-      builder.create<arith::AddIOp>(loc, offsetInBytes, ptrFieldOffset);
-  auto entryPtr = builder.create<memref::ViewOp>(loc, ptrViewType, flatBuffer,
-                                                 ptrByteOffset, entrySizes);
+  // auto ptrFieldOffset = AC.createIndexConstant(16, loc);
+  // auto ptrByteOffset =
+  //     builder.create<arith::AddIOp>(loc, offsetInBytes, ptrFieldOffset);
+  // auto entryPtr = builder.create<memref::ViewOp>(loc, ptrViewType, flatBuffer,
+  //                                                ptrByteOffset, entrySizes);
 
-  db->setGuidInEdt(entryGuid);
-  db->setPtrInEdt(entryPtr);
-  rewireMap[db->getOp()] = entryPtr;
+  // db->setGuidInEdt(entryGuid);
+  // db->setPtrInEdt(entryPtr);
+  // rewireMap[db->getOp()] = entryPtr;
 }
 
 void EdtCodegen::outlineRegion(Location loc) {
@@ -424,16 +424,16 @@ void EdtCodegen::insertValueAsParameter(
 
 void EdtCodegen::insertSizeParameter(DbDepCodegen *dbDep, Value size,
                                      uint64_t sizeIdx) {
-  insertValueAsParameter(size, sizeIdx, [&](unsigned paramIdx) {
-    dbDep->getSizeIndexInEdt()[sizeIdx] = paramIdx;
-  });
+  // insertValueAsParameter(size, sizeIdx, [&](unsigned paramIdx) {
+  //   dbDep->getSizeIndexInEdt()[sizeIdx] = paramIdx;
+  // });
 }
 
 void EdtCodegen::insertOffsetParameter(DbDepCodegen *dbDep, Value offset,
                                        uint64_t offsetIdx) {
-  insertValueAsParameter(offset, offsetIdx, [&](unsigned paramIdx) {
-    dbDep->getOffsetIndexInEdt()[offsetIdx] = paramIdx;
-  });
+  // insertValueAsParameter(offset, offsetIdx, [&](unsigned paramIdx) {
+//     dbDep->getOffsetIndexInEdt()[offsetIdx] = paramIdx;
+//   });
 }
 
 //===----------------------------------------------------------------------===//
@@ -448,12 +448,12 @@ void EdtCodegen::recordInDeps(Location loc) {
   builder.setInsertionPointAfter(guid.getDefiningOp());
 
   ARTS_DEBUG_MSG("- Recording in-mode dependencies");
-  for (auto *dbCG : depsToRecord) {
-    if (dbCG->hasSingleSize())
-      recordSingleInDep(dbCG, loc);
-    else
-      recordMultiInDep(dbCG, loc);
-  }
+  // for (auto *dbCG : depsToRecord) {
+  //   if (dbCG->hasSingleSize())
+  //     recordSingleInDep(dbCG, loc);
+  //   else
+  //     recordMultiInDep(dbCG, loc);
+  // }
 }
 
 void EdtCodegen::incrementOutLatchCounts(Location loc) {
@@ -462,23 +462,23 @@ void EdtCodegen::incrementOutLatchCounts(Location loc) {
     return;
 
   ARTS_DEBUG_MSG("- Incrementing latch counts for out-mode dependencies");
-  for (auto *dbCG : depsToSatisfy) {
-    if (dbCG->hasSingleSize())
-      incrementSingleOutDep(dbCG, loc);
-    else
-      incrementMultiOutDep(dbCG, loc);
-  }
+  // for (auto *dbCG : depsToSatisfy) {
+  //   if (dbCG->hasSingleSize())
+  //     incrementSingleOutDep(dbCG, loc);
+  //   else
+  //     incrementMultiOutDep(dbCG, loc);
+  // }
 }
 
 void EdtCodegen::replaceEdtDepUses(Location loc) {
   /// Replace all remaining uses of Edt deps with the corresponding Db pointers
   ARTS_DEBUG_MSG("- Replacing EDT dependency uses");
 
-  for (auto &dep : deps) {
-    auto *dbDep = AC.getDbDep(dep);
-    assert(dbDep && "DbDep not found");
-    dbDep->getOp().replaceAllUsesWith(dbDep->getPtr());
-  }
+  // for (auto &dep : deps) {
+  //   auto *dbDep = AC.getDbDep(dep);
+  //   assert(dbDep && "DbDep not found");
+  //   dbDep->getOp().replaceAllUsesWith(dbDep->getPtr());
+  // }
 }
 
 //===----------------------------------------------------------------------===//
@@ -486,47 +486,47 @@ void EdtCodegen::replaceEdtDepUses(Location loc) {
 //===----------------------------------------------------------------------===//
 
 void EdtCodegen::recordSingleInDep(DbDepCodegen *dbCG, Location loc) {
-  auto dbGuid = dbCG->getGuid();
-  assert(dbGuid && "GUID not available for DbDep");
-  auto dbIndices = dbCG->getIndices();
-  if (!dbIndices.empty())
-    dbGuid = builder.create<memref::LoadOp>(loc, dbGuid, dbIndices);
-  AC.addDbDep(dbGuid, guid, dbCG->getEdtSlot(), loc);
+  // auto dbGuid = dbCG->getGuid();
+  // assert(dbGuid && "GUID not available for DbDep");
+  // auto dbIndices = dbCG->getIndices();
+  // if (!dbIndices.empty())
+  //   dbGuid = builder.create<memref::LoadOp>(loc, dbGuid, dbIndices);
+  // AC.addDbDep(dbGuid, guid, dbCG->getEdtSlot(), loc);
 }
 
 void EdtCodegen::recordMultiInDep(DbDepCodegen *dbCG, Location loc) {
-  auto dbGuid = dbCG->getGuid();
-  assert(dbGuid && "GUID not available for DbDep");
+  // auto dbGuid = dbCG->getGuid();
+  // assert(dbGuid && "GUID not available for DbDep");
 
-  auto indexMemRefType =
-      MemRefType::get({}, IndexType::get(builder.getContext()));
-  auto inSlotAlloc = builder.create<memref::AllocOp>(loc, indexMemRefType);
-  builder.create<memref::StoreOp>(loc, dbCG->getEdtSlot(), inSlotAlloc);
-  addDepsForMultiDb(dbGuid, guid, inSlotAlloc.getResult(), dbCG->getSizes(),
-                    dbCG->getOffsets(), dbCG->getIndices(), loc);
+  // auto indexMemRefType =
+  //     MemRefType::get({}, IndexType::get(builder.getContext()));
+  // auto inSlotAlloc = builder.create<memref::AllocOp>(loc, indexMemRefType);
+  // builder.create<memref::StoreOp>(loc, dbCG->getEdtSlot(), inSlotAlloc);
+  // addDepsForMultiDb(dbGuid, guid, inSlotAlloc.getResult(), dbCG->getSizes(),
+  //                   dbCG->getOffsets(), dbCG->getIndices(), loc);
 }
 
 void EdtCodegen::incrementSingleOutDep(DbDepCodegen *dbCG, Location loc) {
-  auto dbGuid = dbCG->getGuid();
-  assert(dbGuid && "GUID not available for DbDep");
+  // auto dbGuid = dbCG->getGuid();
+  // assert(dbGuid && "GUID not available for DbDep");
 
-  auto dbIndices = dbCG->getIndices();
-  if (!dbIndices.empty())
-    dbGuid = builder.create<memref::LoadOp>(loc, dbGuid, dbIndices);
-  AC.incrementDbLatchCount(dbGuid, loc);
+  // auto dbIndices = dbCG->getIndices();
+  // if (!dbIndices.empty())
+  //   dbGuid = builder.create<memref::LoadOp>(loc, dbGuid, dbIndices);
+  // AC.incrementDbLatchCount(dbGuid, loc);
 }
 
 void EdtCodegen::incrementMultiOutDep(DbDepCodegen *dbCG, Location loc) {
-  auto dbGuid = dbCG->getGuid();
-  assert(dbGuid && "GUID not available for DbDep");
+  // auto dbGuid = dbCG->getGuid();
+  // assert(dbGuid && "GUID not available for DbDep");
 
-  auto indexMemRefType =
-      MemRefType::get({}, IndexType::get(builder.getContext()));
-  auto outSlotAlloc = builder.create<memref::AllocOp>(loc, indexMemRefType);
-  builder.create<memref::StoreOp>(loc, dbCG->getEdtSlot(), outSlotAlloc);
-  incrementLatchCountsForMultiDb(dbGuid, outSlotAlloc.getResult(),
-                                 dbCG->getSizes(), dbCG->getOffsets(),
-                                 dbCG->getIndices(), loc);
+  // auto indexMemRefType =
+  //     MemRefType::get({}, IndexType::get(builder.getContext()));
+  // auto outSlotAlloc = builder.create<memref::AllocOp>(loc, indexMemRefType);
+  // builder.create<memref::StoreOp>(loc, dbCG->getEdtSlot(), outSlotAlloc);
+  // incrementLatchCountsForMultiDb(dbGuid, outSlotAlloc.getResult(),
+  //                                dbCG->getSizes(), dbCG->getOffsets(),
+  //                                dbCG->getIndices(), loc);
 }
 
 void EdtCodegen::addDepsForMultiDb(Value dbGuid, Value guid, Value inSlotAlloc,

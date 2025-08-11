@@ -81,26 +81,47 @@ endif()
 option(CARTS_ENABLE_TESTS "Enable CARTS test suite" ON)
 if(CARTS_ENABLE_TESTS)
   message(STATUS "CARTS tests enabled")
-  set(LLVM_LIT_TOOLS_DIR ${CMAKE_SOURCE_DIR}/.install/llvm/bin)
   set(CARTS_TOOLS_DIR ${CMAKE_SOURCE_DIR}/.install/carts/bin)
-  
-  # Check if required tools exist
-  set(REQUIRED_TEST_TOOLS llvm-lit FileCheck)
+
+  # Locate LLVM test tools (llvm-lit and FileCheck) from common LLVM build/install dirs
+  set(_LLVM_TOOL_HINT_DIRS
+      ${LLVM_TOOLS_BINARY_DIR}
+      ${LLVM_RUNTIME_OUTPUT_INTDIR}
+      ${LLVM_BINARY_DIR}
+      ${LLVM_DIR}/../../bin
+      ${LLVM_DIR}/../bin
+      ${POLYGEIST_DIR}/llvm-project/build/bin
+      ${POLYGEIST_DIR}/llvm-project/build/NATIVE/bin
+      ${CMAKE_SOURCE_DIR}/.install/llvm/bin)
+
+  find_program(LLVM_LIT_EXECUTABLE NAMES llvm-lit lit.py
+               HINTS ${_LLVM_TOOL_HINT_DIRS}
+               DOC "Path to llvm-lit test runner")
+  find_program(FILECHECK_EXECUTABLE NAMES FileCheck
+               HINTS ${_LLVM_TOOL_HINT_DIRS}
+               DOC "Path to FileCheck tool")
+
+  # Export a conventional var for downstream use if needed
+  if(LLVM_LIT_EXECUTABLE)
+    get_filename_component(LLVM_LIT_TOOLS_DIR ${LLVM_LIT_EXECUTABLE} DIRECTORY)
+  else()
+    set(LLVM_LIT_TOOLS_DIR "")
+  endif()
+
   set(MISSING_TOOLS "")
-  
-  foreach(TOOL ${REQUIRED_TEST_TOOLS})
-    if(NOT EXISTS ${LLVM_LIT_TOOLS_DIR}/${TOOL})
-      list(APPEND MISSING_TOOLS ${TOOL})
-    endif()
-  endforeach()
-  
+  if(NOT LLVM_LIT_EXECUTABLE)
+    list(APPEND MISSING_TOOLS llvm-lit)
+  endif()
+  if(NOT FILECHECK_EXECUTABLE)
+    list(APPEND MISSING_TOOLS FileCheck)
+  endif()
   if(NOT EXISTS ${CMAKE_SOURCE_DIR}/tools/carts)
     list(APPEND MISSING_TOOLS "carts wrapper script")
   endif()
-  
+
   if(MISSING_TOOLS)
     message(WARNING "Missing required test tools: ${MISSING_TOOLS}")
-    message(WARNING "Please run 'carts build' to install all required tools before running tests")
+    message(WARNING "Please ensure your LLVM build includes testing tools (llvm-lit, FileCheck) or install them via your LLVM build.")
   else()
     message(STATUS "All required test tools found")
   endif()

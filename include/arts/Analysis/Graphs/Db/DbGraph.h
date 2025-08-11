@@ -38,7 +38,8 @@ class DbEdge;
 // DbGraph: Specialized graph for data blocks, acquires, and releases.
 class DbGraph : public GraphBase {
 public:
-  DbGraph(func::FuncOp func); // , DbAnalysis *analysis);
+  DbGraph(func::FuncOp func, DbAnalysis *analysis);
+  ~DbGraph();
 
   void build() override;
   void invalidate() override;
@@ -66,7 +67,7 @@ public:
 
 private:
   func::FuncOp func;
-  // DbAnalysis *analysis;
+  DbAnalysis *analysis;
   std::unique_ptr<DbDataFlowAnalysis> dataFlowAnalysis;
 
   /// Node maps
@@ -74,7 +75,7 @@ private:
   DenseMap<DbAcquireOp, DbAcquireNode *> acquireNodeMap;
   DenseMap<DbReleaseOp, DbReleaseNode *> releaseNodeMap;
 
-  /// All nodes
+  /// All nodes (non-owning for iteration)
   std::vector<NodeBase *> nodes;
 
   unsigned nextAllocId = 1;

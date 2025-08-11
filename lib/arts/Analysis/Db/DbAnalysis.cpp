@@ -22,8 +22,8 @@ DbAnalysis::DbAnalysis(Operation *module) : module(module), solver() {
   dbAliasAnalysis = std::make_unique<DbAliasAnalysis>(this);
 
   // Add baseline data flow analyses to solver
-  solver.load<dataflow::DeadCodeAnalysis>();
-  solver.load<dataflow::SparseConstantPropagation>();
+  // solver.load<dataflow::DeadCodeAnalysis>();
+  // solver.load<dataflow::SparseConstantPropagation>();
 }
 
 DbAnalysis::~DbAnalysis() { ARTS_INFO("Destroying DbAnalysis"); }
@@ -37,20 +37,21 @@ DbGraph *DbAnalysis::getOrCreateGraph(func::FuncOp func) {
   }
 
   ARTS_INFO("Creating new DbGraph for function: " << func.getName());
-  auto newGraph = std::make_unique<DbGraph>(func, this);
+  // auto newGraph = std::make_unique<DbGraph>(func, this);
 
   // Run value-anchored sparse data flow (lightweight facts)
-  auto *valueDf = solver.load<DbValueDataFlowAnalysis>();
-  (void)valueDf;
-  (void)solver.initializeAndRun(func);
+  // auto *valueDf = solver.load<DbValueDataFlowAnalysis>();
+  // (void)valueDf;
+  // (void)solver.initializeAndRun(func);
 
-  // Run dense pass that constructs lifetime edges in the graph
-  DbDataFlowAnalysis denseDf(solver, newGraph.get(), this);
-  denseDf.analyze();
+  // // Run dense pass that constructs lifetime edges in the graph
+  // DbDataFlowAnalysis denseDf(solver, newGraph.get(), this);
+  // denseDf.analyze();
 
-  DbGraph *graphPtr = newGraph.get();
-  functionGraphMap[func] = std::move(newGraph);
-  return graphPtr;
+  // DbGraph *graphPtr = newGraph.get();
+  // functionGraphMap[func] = std::move(newGraph);
+  // return graphPtr;
+  return nullptr;
 }
 
 bool DbAnalysis::invalidateGraph(func::FuncOp func) {

@@ -17,9 +17,8 @@ void DbAllocEdge::print(llvm::raw_ostream &os) const {
      << "  - To: " << to->getHierId() << "\n";
 }
 
-DbLifetimeEdge::DbLifetimeEdge(NodeBase *from, NodeBase *to,
-                               StringRef lifetimeType)
-    : from(from), to(to), lifetimeTypeStr(lifetimeType.str()) {
+DbLifetimeEdge::DbLifetimeEdge(NodeBase *from, NodeBase *to)
+    : from(from), to(to) {
   assert(from && "Source node cannot be null");
   assert(to && "Destination node cannot be null");
 }

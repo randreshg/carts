@@ -155,7 +155,7 @@ void EdtLoweringPass::runOnOperation() {
   module = getOperation();
 
   ARTS_DEBUG_HEADER(EdtLoweringPass);
-  ARTS_DEBUG(module->dump());
+  ARTS_DEBUG_REGION(module->dump(););
 
   // Collect all task EDTs to process (avoid iterator invalidation)
   SmallVector<EdtOp> taskEdts;
@@ -181,7 +181,7 @@ void EdtLoweringPass::runOnOperation() {
   }
 
   ARTS_DEBUG_FOOTER(EdtLoweringPass);
-  ARTS_DEBUG(module->dump());
+  ARTS_DEBUG_REGION(module->dump(););
 }
 
 LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {

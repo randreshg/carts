@@ -193,7 +193,7 @@ struct ArtsInlinerPass : public arts::ArtsInlinerBase<ArtsInlinerPass> {
     cleanupUnusedFunctions(module);
 
     ARTS_DEBUG_FOOTER(ArtsInlinerPass);
-    ARTS_DEBUG(module.dump());
+    ARTS_DEBUG_REGION(module.dump(););
   }
 
 private:

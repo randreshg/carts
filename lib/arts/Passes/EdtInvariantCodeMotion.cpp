@@ -34,7 +34,7 @@ struct EdtInvariantCodeMotionPass
 void EdtInvariantCodeMotionPass::runOnOperation() {
   ModuleOp module = getOperation();
   ARTS_DEBUG_HEADER(EdtInvariantCodeMotionPass);
-  ARTS_DEBUG(module.dump());
+  ARTS_DEBUG_REGION(module.dump(););
 
   bool changed = false;
   /// Walk through all EdtOp instances in the module.
@@ -56,7 +56,7 @@ void EdtInvariantCodeMotionPass::runOnOperation() {
   //  markAllAnalysesPreserved();
 
   ARTS_DEBUG_FOOTER(EdtInvariantCodeMotionPass);
-  ARTS_DEBUG(module.dump());
+  ARTS_DEBUG_REGION(module.dump(););
 }
 
 ///===----------------------------------------------------------------------===///

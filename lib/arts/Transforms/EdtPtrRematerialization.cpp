@@ -17,13 +17,13 @@
 #include "llvm/ADT/SmallVector.h"
 
 /// LLVM support
-#include "arts/Utils/ArtsDebug.h"
-ARTS_DEBUG_SETUP(edt_ptr_rematerialization);
+// #include "arts/Utils/ArtsDebug.h"
+// ARTS_DEBUG_SETUP(edt_ptr_rematerialization);
 
 namespace mlir {
 namespace arts {
 
-void rematerializePtrsInEdt(EdtOp edt) {
+void rematerializePointersInEdt(EdtOp edt) {
   /// Analyzes the EDT environment to check if there is any parameter that
   /// loads a memref and indices of any dependency. If so, it creates a new
   /// load operation at the start of the region and replaces all the uses of

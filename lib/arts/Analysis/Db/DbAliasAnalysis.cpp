@@ -49,33 +49,33 @@ bool DbAliasAnalysis::mayAlias(const NodeBase &a, const NodeBase &b,
   // Initial implementation: simple structural checks, otherwise conservative.
   bool result = true;
 
-  if (isa<DbAllocNode>(&a) && isa<DbAllocNode>(&b)) {
-    // Different allocations do not alias; same op aliases.
-    result = a.getOp() == b.getOp();
-  } else if ((isa<DbAcquireNode>(&a) || isa<DbReleaseNode>(&a)) &&
-             (isa<DbAcquireNode>(&b) || isa<DbReleaseNode>(&b))) {
-    auto parentA = isa<DbAcquireNode>(&a)
-                       ? dyn_cast<DbAcquireNode>(&a)->getParent()
-                       : dyn_cast<DbReleaseNode>(&a)->getParent();
-    auto parentB = isa<DbAcquireNode>(&b)
-                       ? dyn_cast<DbAcquireNode>(&b)->getParent()
-                       : dyn_cast<DbReleaseNode>(&b)->getParent();
-    if (parentA && parentB)
-      result = parentA->getOp() == parentB->getOp();
-    else
-      result = true; // conservative
-  } else {
-    // Mixed alloc and access: alias if access refers to the alloc
-    const NodeBase &alloc = isa<DbAllocNode>(&a) ? a : b;
-    const NodeBase &access = isa<DbAllocNode>(&a) ? b : a;
-    auto accessParent = isa<DbAcquireNode>(&access)
-                            ? dyn_cast<DbAcquireNode>(&access)->getParent()
-                            : dyn_cast<DbReleaseNode>(&access)->getParent();
-    if (accessParent)
-      result = accessParent->getOp() == alloc.getOp();
-    else
-      result = true; // conservative
-  }
+  // if (isa<DbAllocNode>(&a) && isa<DbAllocNode>(&b)) {
+  //   // Different allocations do not alias; same op aliases.
+  //   result = a.getOp() == b.getOp();
+  // } else if ((isa<DbAcquireNode>(&a) || isa<DbReleaseNode>(&a)) &&
+  //            (isa<DbAcquireNode>(&b) || isa<DbReleaseNode>(&b))) {
+  //   auto parentA = isa<DbAcquireNode>(&a)
+  //                      ? dyn_cast<DbAcquireNode>(&a)->getParent()
+  //                      : dyn_cast<DbReleaseNode>(&a)->getParent();
+  //   auto parentB = isa<DbAcquireNode>(&b)
+  //                      ? dyn_cast<DbAcquireNode>(&b)->getParent()
+  //                      : dyn_cast<DbReleaseNode>(&b)->getParent();
+  //   if (parentA && parentB)
+  //     result = parentA->getOp() == parentB->getOp();
+  //   else
+  //     result = true; // conservative
+  // } else {
+  //   // Mixed alloc and access: alias if access refers to the alloc
+  //   const NodeBase &alloc = isa<DbAllocNode>(&a) ? a : b;
+  //   const NodeBase &access = isa<DbAllocNode>(&a) ? b : a;
+  //   auto accessParent = isa<DbAcquireNode>(&access)
+  //                           ? dyn_cast<DbAcquireNode>(&access)->getParent()
+  //                           : dyn_cast<DbReleaseNode>(&access)->getParent();
+  //   if (accessParent)
+  //     result = accessParent->getOp() == alloc.getOp();
+  //   else
+  //     result = true; // conservative
+  // }
 
   aliasCache[key] = result;
   ARTS_INFO("  -> Final result: " << (result ? "may alias" : "no alias"));

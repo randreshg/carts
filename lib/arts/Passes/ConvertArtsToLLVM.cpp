@@ -138,7 +138,7 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   module = getOperation();
 
   ARTS_DEBUG_HEADER(ConvertArtsToLLVMPass);
-  ARTS_DEBUG(module.dump());
+  ARTS_DEBUG_REGION(module.dump(););
 
   /// Early exit if no ARTS operations
   if (!hasArtsOperations()) {
@@ -160,13 +160,13 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   }
 
   ARTS_INFO("Module after processing operations (before finalization):");
-  ARTS_DEBUG(module.dump());
+  ARTS_DEBUG_REGION(module.dump(););
 
   /// Finalize conversion and cleanup
   finalizeConversion();
 
   ARTS_DEBUG_FOOTER(ConvertArtsToLLVMPass);
-  ARTS_DEBUG(module.dump());
+  ARTS_DEBUG_REGION(module.dump(););
 }
 
 LogicalResult ConvertArtsToLLVMPass::initializeCodegen() {
@@ -590,8 +590,8 @@ void ConvertArtsToLLVMPass::cleanupOperations() {
 void ConvertArtsToLLVMPass::reportStatistics() const {
   ARTS_DEBUG_REGION(
       ARTS_DBGS() << "\n"
-                  << LINE << "ARTS to LLVM Conversion Statistics\n"
-                  << LINE;
+                  << ARTS_LINE << "ARTS to LLVM Conversion Statistics\n"
+                  << ARTS_LINE;
       ARTS_DBGS() << "EDT operations: " << statistics.edtOps << "\n";
       ARTS_DBGS() << "Epoch operations: " << statistics.epochOps << "\n";
       ARTS_DBGS() << "Barrier operations: " << statistics.barrierOps << "\n";
@@ -600,7 +600,7 @@ void ConvertArtsToLLVMPass::reportStatistics() const {
       ARTS_DBGS() << "DbDep operations: " << statistics.dbDepOps << "\n";
       ARTS_DBGS() << "Runtime Info operations: " << statistics.runtimeInfoOps
                   << "\n";
-      ARTS_DBGS() << LINE;);
+      ARTS_DBGS() << ARTS_LINE;);
 }
 
 LogicalResult ConvertArtsToLLVMPass::emitOpError(Operation *op,

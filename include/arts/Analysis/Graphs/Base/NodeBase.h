@@ -20,6 +20,13 @@ class NodeBase {
 public:
   virtual ~NodeBase() = default;
 
+  enum class NodeKind {
+    DbAlloc,
+    DbAcquire,
+    DbRelease,
+    EdtTask
+  };
+
   /// Get the hierarchical ID (e.g., "A.1" for deps).
   virtual StringRef getHierId() const = 0;
 
@@ -28,6 +35,9 @@ public:
 
   /// Get the underlying MLIR operation.
   virtual Operation *getOp() const = 0;
+
+  /// LLVM-style RTTI support
+  virtual NodeKind getKind() const = 0;
 
   /// Add incoming/outgoing edges.
   virtual void addInEdge(EdgeBase *edge) = 0;
