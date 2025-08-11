@@ -31,59 +31,50 @@ polygeist-download:
 	mkdir -p $(POLYGEIST_DIR)
 	git clone --branch carts --recursive https://github.com/randreshg/Polygeist.git $(POLYGEIST_DIR) 
 polygeist:
-	@if [ -f "$(POLYGEIST_INSTALL_DIR)/bin/cgeist" ]; then \
-		echo "Polygeist already installed. Skipping build."; \
-	else \
-		echo "Building Polygeist..."; \
-		mkdir -p $(POLYGEIST_BUILD_DIR); \
-		mkdir -p $(POLYGEIST_INSTALL_DIR); \
-		cmake -B $(POLYGEIST_BUILD_DIR) \
-			-S $(POLYGEIST_DIR) -G Ninja \
-			-DCMAKE_INSTALL_PREFIX=$(POLYGEIST_INSTALL_DIR) \
-			-DCMAKE_BUILD_TYPE=Release \
-			-DCMAKE_C_COMPILER=clang \
-			-DCMAKE_CXX_COMPILER=clang++ \
-			-DMLIR_DIR=$(LLVM_BUILD_DIR)/lib/cmake/mlir \
-			-DClang_DIR=$(LLVM_BUILD_DIR)/lib/cmake/clang \
-			-DLLVM_EXTERNAL_LIT="$(LLVM_BUILD_DIR)/bin/llvm-lit" \
-			-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
-		ninja -C $(POLYGEIST_BUILD_DIR) install; \
-	fi
+	echo "Building Polygeist..."; \
+	mkdir -p $(POLYGEIST_BUILD_DIR); \
+	mkdir -p $(POLYGEIST_INSTALL_DIR); \
+	cmake -B $(POLYGEIST_BUILD_DIR) \
+		-S $(POLYGEIST_DIR) -G Ninja \
+		-DCMAKE_INSTALL_PREFIX=$(POLYGEIST_INSTALL_DIR) \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_C_COMPILER=clang \
+		-DCMAKE_CXX_COMPILER=clang++ \
+		-DMLIR_DIR=$(LLVM_BUILD_DIR)/lib/cmake/mlir \
+		-DClang_DIR=$(LLVM_BUILD_DIR)/lib/cmake/clang \
+		-DLLVM_EXTERNAL_LIT="$(LLVM_BUILD_DIR)/bin/llvm-lit" \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
+	ninja -C $(POLYGEIST_BUILD_DIR) install;
 polygeist-clean:
 	rm -f -r $(POLYGEIST_BUILD_DIR)
 	rm -f -r $(POLYGEIST_INSTALL_DIR)
 
 # LLVM
 llvm:
-	@if [ -f "$(LLVM_INSTALL_DIR)/bin/clang" ]; then \
-		echo "LLVM already installed. Skipping build."; \
-	else \
-		echo "Building LLVM..."; \
-		mkdir -p $(LLVM_BUILD_DIR); \
-		mkdir -p $(LLVM_INSTALL_DIR); \
-		cmake -B $(LLVM_BUILD_DIR) \
-			-S $(LLVM_DIR)/llvm -G Ninja \
-			-DCMAKE_INSTALL_PREFIX=$(LLVM_INSTALL_DIR) \
-			-DCMAKE_BUILD_TYPE=Release \
-			-DCMAKE_C_COMPILER=clang \
-			-DCMAKE_CXX_COMPILER=clang++ \
-			-DLLVM_ENABLE_PROJECTS='mlir;clang;lld;openmp' \
-			-DLLVM_ENABLE_RUNTIMES='libcxx;libcxxabi;libunwind' \
-			-DLLVM_TARGETS_TO_BUILD='host' \
-			-DLLVM_OPTIMIZED_TABLEGEN=ON \
-			-DLLVM_ENABLE_ASSERTIONS=ON \
-			-DLLVM_BUILD_TOOLS=ON \
-			-DLLVM_INCLUDE_TOOLS=ON \
-			-DLLVM_INCLUDE_EXAMPLES=OFF \
-			-DLLVM_INCLUDE_TESTS=OFF \
-			-DLLVM_BUILD_TESTS=OFF \
-			-DLLVM_INSTALL_UTILS=ON \
-			-DLLVM_INCLUDE_BENCHMARKS=OFF \
-			-DLLVM_INCLUDE_UTILS=ON \
-			-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
-		ninja -C $(LLVM_BUILD_DIR) install; \
-		python3 -m pip install --upgrade --no-input --prefix=$(LLVM_INSTALL_DIR) $(LLVM_DIR)/llvm/utils/lit; \
-	fi
+	echo "Building LLVM..."; \
+	mkdir -p $(LLVM_BUILD_DIR); \
+	mkdir -p $(LLVM_INSTALL_DIR); \
+	cmake -B $(LLVM_BUILD_DIR) \
+		-S $(LLVM_DIR)/llvm -G Ninja \
+		-DCMAKE_INSTALL_PREFIX=$(LLVM_INSTALL_DIR) \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_C_COMPILER=clang \
+		-DCMAKE_CXX_COMPILER=clang++ \
+		-DLLVM_ENABLE_PROJECTS='mlir;clang;lld;openmp' \
+		-DLLVM_ENABLE_RUNTIMES='libcxx;libcxxabi;libunwind' \
+		-DLLVM_TARGETS_TO_BUILD='host' \
+		-DLLVM_OPTIMIZED_TABLEGEN=ON \
+		-DLLVM_ENABLE_ASSERTIONS=ON \
+		-DLLVM_BUILD_TOOLS=ON \
+		-DLLVM_INCLUDE_TOOLS=ON \
+		-DLLVM_INCLUDE_EXAMPLES=OFF \
+		-DLLVM_INCLUDE_TESTS=OFF \
+		-DLLVM_BUILD_TESTS=OFF \
+		-DLLVM_INSTALL_UTILS=ON \
+		-DLLVM_INCLUDE_BENCHMARKS=OFF \
+		-DLLVM_INCLUDE_UTILS=ON \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
+	ninja -C $(LLVM_BUILD_DIR) install; 
 llvm-clean:
 	rm -rf $(LLVM_BUILD_DIR)
 	rm -f -r $(LLVM_INSTALL_DIR)
