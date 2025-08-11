@@ -20,7 +20,7 @@ public:
   StringRef getHierId() const override { return hierId; }
   void setHierId(std::string id) { hierId = id; }
   void print(llvm::raw_ostream &os) const override;
-  Operation *getOp() override { return edtOp.getOperation(); }
+  Operation *getOp() const override { return opPtr; }
 
   void addInEdge(EdgeBase *edge) override { inEdges.insert(edge); }
   void addOutEdge(EdgeBase *edge) override { outEdges.insert(edge); }
@@ -29,8 +29,14 @@ public:
 
   EdtOp getEdtOp() const { return edtOp; }
 
+  NodeKind getKind() const override { return NodeKind::EdtTask; }
+  static bool classof(const NodeBase *N) {
+    return N->getKind() == NodeKind::EdtTask;
+  }
+
 private:
   EdtOp edtOp;
+  Operation *opPtr = nullptr;
   std::string hierId;
 };
 

@@ -40,6 +40,11 @@ public:
   size_t getReleaseNodesSize() const { return releaseNodes.size(); }
   DbAllocOp getDbAllocOp() const { return dbAllocOp; }
 
+  NodeKind getKind() const override { return NodeKind::DbAlloc; }
+  static bool classof(const NodeBase *N) {
+    return N->getKind() == NodeKind::DbAlloc;
+  }
+
 private:
   DbAllocOp dbAllocOp;
   Operation *op;
@@ -69,6 +74,11 @@ public:
 
   DbAllocNode *getParent() const { return parent; }
 
+  NodeKind getKind() const override { return NodeKind::DbAcquire; }
+  static bool classof(const NodeBase *N) {
+    return N->getKind() == NodeKind::DbAcquire;
+  }
+
 private:
   DbAcquireOp dbAcquireOp;
   Operation *op;
@@ -92,6 +102,11 @@ public:
   const DenseSet<EdgeBase *> &getOutEdges() const override { return outEdges; }
 
   DbAllocNode *getParent() const { return parent; }
+
+  NodeKind getKind() const override { return NodeKind::DbRelease; }
+  static bool classof(const NodeBase *N) {
+    return N->getKind() == NodeKind::DbRelease;
+  }
 
 private:
   DbReleaseOp dbReleaseOp;

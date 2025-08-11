@@ -300,7 +300,7 @@ bool EdtPass::processSyncTaskEdts() {
 void EdtPass::runOnOperation() {
   module = getOperation();
   ARTS_DEBUG_HEADER(EdtPass);
-  ARTS_DEBUG(module->dump());
+  ARTS_DEBUG_REGION(module->dump(););
 
   processParallelEdts();
   removeBarriers();
@@ -312,7 +312,7 @@ void EdtPass::runOnOperation() {
   removeOps(module, builder, opsToRemove);
 
   ARTS_DEBUG_FOOTER(EdtPass);
-  ARTS_DEBUG(module->dump());
+  ARTS_DEBUG_REGION(module->dump(););
 }
 
 ///===----------------------------------------------------------------------===///

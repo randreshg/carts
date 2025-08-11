@@ -18,11 +18,20 @@ class EdgeBase {
 public:
   virtual ~EdgeBase() = default;
 
+  enum class EdgeKind {
+    Alloc,
+    Lifetime,
+    Dep
+  };
+
   /// Get source and destination nodes.
   virtual NodeBase *getFrom() const = 0;
   virtual NodeBase *getTo() const = 0;
 
-  /// Get the edge type (e.g., "Read", "Write", or custom).
+  /// Strongly-typed edge kind for internal logic.
+  virtual EdgeKind getKind() const = 0;
+
+  /// Human-readable label for debugging/printing only (derived from kind).
   virtual llvm::StringRef getType() const = 0;
 
   /// Print edge details.

@@ -77,6 +77,11 @@ bool isArtsOp(Operation *op) {
 #include "arts/ArtsOpsAttributes.cpp.inc"
 
 //===----------------------------------------------------------------------===//
+// Arts Dialect Enums - method definitions
+//===----------------------------------------------------------------------===//
+#include "arts/ArtsOpsEnums.cpp.inc"
+
+//===----------------------------------------------------------------------===//
 // UndefOp
 //===----------------------------------------------------------------------===//
 class UndefToLLVM final : public OpRewritePattern<UndefOp> {

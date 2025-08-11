@@ -6,7 +6,7 @@
 
 using namespace mlir::arts;
 
-EdtTaskNode::EdtTaskNode(EdtOp op) : edtOp(op) {}
+EdtTaskNode::EdtTaskNode(EdtOp op) : edtOp(op), opPtr(op.getOperation()) {}
 
 void EdtTaskNode::print(llvm::raw_ostream &os) const {
   os << "EdtTaskNode (" << getHierId() << ")\n";

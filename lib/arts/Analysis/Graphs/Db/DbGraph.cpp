@@ -2,6 +2,7 @@
 // Db/DbGraph.cpp - Implementation of DbGraph
 //===----------------------------------------------------------------------===//
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
+#include "arts/Analysis/Db/DbDataFlowAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbEdge.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "llvm/Support/Debug.h"
@@ -43,6 +44,8 @@ DbGraph::DbGraph(func::FuncOp func, DbAnalysis *analysis)
   // dataFlowAnalysis = std::make_unique<DbDataFlowAnalysis>(analysis, this);
   ARTS_INFO("Creating db graph for function: " << func.getName().str());
 }
+
+DbGraph::~DbGraph() = default;
 
 void DbGraph::build() {
   if (isBuilt && !needsRebuild)
@@ -147,13 +150,15 @@ bool DbGraph::isAllocReachable(DbAllocOp fromOp, DbAllocOp toOp) {
   if (!from || !to)
     return false;
   for (auto *edge : from->getOutEdges()) {
-    if (edge->getTo() == to && isa<DbAllocEdge>(edge))
+    if (edge->getTo() == to && edge->getKind() == EdgeBase::EdgeKind::Alloc)
       return true;
   }
   return false;
 }
 
 DbAllocOp DbGraph::getParentAlloc(Operation *op) {
+  if (auto allocOp = dyn_cast<DbAllocOp>(op))
+    return allocOp;
   if (auto acquireOp = dyn_cast<DbAcquireOp>(op)) {
     DbAcquireNode *node = static_cast<DbAcquireNode *>(getNode(op));
     if (!node)
@@ -252,8 +257,8 @@ void DbGraph::collectNodes() {
   });
 
   ARTS_INFO("Collected " << allocNodes.size() << " allocations, "
-                          << acquireNodeMap.size() << " acquires, "
-                          << releaseNodeMap.size() << " releases");
+                         << acquireNodeMap.size() << " acquires, "
+                         << releaseNodeMap.size() << " releases");
 }
 
 DbAllocOp DbGraph::findRootAllocOp(Operation *op) {

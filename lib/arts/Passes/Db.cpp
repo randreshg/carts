@@ -88,7 +88,7 @@ void DbPass::runOnOperation() {
   changed |= canonicalizeDimOps();
 
   ARTS_DEBUG_HEADER(DbPass);
-  ARTS_DEBUG(module.dump());
+  ARTS_DEBUG_REGION(module.dump(););
 
   // auto &dbAnalysis = getAnalysis<DbAnalysis>();
   // module.walk([&](func::FuncOp func) {
@@ -116,11 +116,11 @@ void DbPass::runOnOperation() {
 
   if (!changed) {
     ARTS_INFO("No changes made to the module");
-    markAnalysesPreserved<DbAnalysis>();
+    // markAnalysesPreserved<DbAnalysis>();
   }
 
   ARTS_DEBUG_FOOTER(DbPass);
-  ARTS_DEBUG(module.dump());
+  ARTS_DEBUG_REGION(module.dump(););
 }
 
 bool DbPass::canonicalizeDimOps() {

@@ -18,8 +18,8 @@ include "ArtsDialect.td"
 
 class Arts_I32Enum<string name, string description, list<I32EnumAttrCase> cases>
     : I32EnumAttr<name, description, cases> {
-  let genSpecializedAttr = 0;
   let cppNamespace = "::mlir::arts";
+  let genSpecializedAttr = 0;
 }
 class Arts_I32EnumAttr<string mnemonic, Arts_I32Enum enumInfo> :
     EnumAttr<ArtsDialect, enumInfo, mnemonic> {

@@ -18,8 +18,13 @@ public:
 
   NodeBase *getFrom() const override { return from; }
   NodeBase *getTo() const override { return to; }
+  EdgeKind getKind() const override { return EdgeKind::Alloc; }
   StringRef getType() const override { return "Alloc"; }
   void print(llvm::raw_ostream &os) const override;
+
+  static bool classof(const EdgeBase *E) {
+    return E->getKind() == EdgeKind::Alloc;
+  }
 
 private:
   NodeBase *from;
@@ -28,17 +33,22 @@ private:
 
 class DbLifetimeEdge : public EdgeBase {
 public:
-  DbLifetimeEdge(NodeBase *from, NodeBase *to, StringRef lifetimeType);
+  enum class LifetimeType { Lifetime };
+  DbLifetimeEdge(NodeBase *from, NodeBase *to);
 
   NodeBase *getFrom() const override { return from; }
   NodeBase *getTo() const override { return to; }
-  StringRef getType() const override { return lifetimeTypeStr; }
+  EdgeKind getKind() const override { return EdgeKind::Lifetime; }
+  StringRef getType() const override { return "Lifetime"; }
   void print(llvm::raw_ostream &os) const override;
+
+  static bool classof(const EdgeBase *E) {
+    return E->getKind() == EdgeKind::Lifetime;
+  }
 
 private:
   NodeBase *from;
   NodeBase *to;
-  std::string lifetimeTypeStr;
 };
 
 } // namespace arts

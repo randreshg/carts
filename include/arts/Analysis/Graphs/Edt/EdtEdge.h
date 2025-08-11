@@ -18,13 +18,19 @@ public:
 
   NodeBase *getFrom() const override { return from; }
   NodeBase *getTo() const override { return to; }
+  EdgeKind getKind() const override { return EdgeKind::Dep; }
   StringRef getType() const override { return dbNode->getHierId(); }
   void print(llvm::raw_ostream &os) const override;
+
+  static bool classof(const EdgeBase *E) {
+    return E->getKind() == EdgeKind::Dep;
+  }
 
 private:
   NodeBase *from;
   NodeBase *to;
-  NodeBase *dbNode;  // DbGraph node causing dependency
+  // DbGraph node causing dependency
+  NodeBase *dbNode;
 };
 
 } // namespace arts
