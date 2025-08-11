@@ -379,7 +379,7 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   (void)applyPatternsAndFoldGreedily(module, std::move(patterns), config);
   removeUndefOps(module);
   ARTS_DEBUG_FOOTER(ConvertOpenMPToArtsPass);
-  ARTS_DEBUG(module.dump());
+  ARTS_DEBUG_REGION(module.dump(););
 }
 
 //===----------------------------------------------------------------------===//

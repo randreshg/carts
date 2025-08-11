@@ -318,7 +318,7 @@ void CreateDbsPass::adjustAccesses(OpBuilder &builder, Region &region,
 void CreateDbsPass::runOnOperation() {
   module = getOperation();
   ARTS_DEBUG_HEADER(CreateDbsPass);
-  ARTS_DEBUG(module.dump());
+  ARTS_DEBUG_REGION(module.dump(););
 
   OpBuilder builder(module.getContext());
 
@@ -442,7 +442,7 @@ void CreateDbsPass::runOnOperation() {
   });
 
   ARTS_DEBUG_FOOTER(CreateDbsPass);
-  ARTS_DEBUG(module.dump());
+  ARTS_DEBUG_REGION(module.dump(););
 }
 
 //===----------------------------------------------------------------------===//

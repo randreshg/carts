@@ -152,7 +152,7 @@ struct CreateEpochsPass : public arts::CreateEpochsBase<CreateEpochsPass> {
 void CreateEpochsPass::runOnOperation() {
   ModuleOp module = getOperation();
   ARTS_DEBUG_HEADER(CreateEpochsPass);
-  ARTS_DEBUG(module.dump());
+  ARTS_DEBUG_REGION(module.dump(););
 
   /// Process Sync EDT Ops: for each EDT op that is sync, create an epoch op
   /// and move the EDT op inside the epoch op.
@@ -163,7 +163,7 @@ void CreateEpochsPass::runOnOperation() {
   module.walk([&](arts::BarrierOp barrier) { processBarrierOp(barrier); });
 
   ARTS_DEBUG_FOOTER(CreateEpochsPass);
-  ARTS_DEBUG(module.dump());
+  ARTS_DEBUG_REGION(module.dump(););
 }
 
 //==========================================================================

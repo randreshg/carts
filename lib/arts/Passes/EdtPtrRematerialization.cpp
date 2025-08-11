@@ -34,13 +34,13 @@ struct EdtPtrRematerializationPass
 void EdtPtrRematerializationPass::runOnOperation() {
   ModuleOp module = getOperation();
   ARTS_DEBUG_HEADER(EdtPtrRematerializationPass);
-  ARTS_DEBUG(module.dump());
+  ARTS_DEBUG_REGION(module.dump(););
 
   /// Walk through all EdtOp instances in the module.
   module.walk([&](arts::EdtOp edtOp) { rematerializePointersInEdt(edtOp); });
 
   ARTS_DEBUG_FOOTER(EdtPtrRematerializationPass);
-  ARTS_DEBUG(module.dump());
+  ARTS_DEBUG_REGION(module.dump(););
 }
 
 ///===----------------------------------------------------------------------===///

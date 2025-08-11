@@ -67,7 +67,7 @@ def AllocOp : Arts_Op<"alloc", []> {
 // Arts DB Operations
 //===----------------------------------------------------------------------===//
 def DbAllocOp : Arts_Op<"db_alloc", [
-    AttrSizedOperandSegments, MemoryEffects<[MemAlloc]>, DeclareOpInterfaceMethods<InferTypeOpInterface, ["inferReturnTypes"]>
+    AttrSizedOperandSegments, MemoryEffects<[MemAlloc]>
     ]> {
   let summary = "Allocate an ARTS DataBlock and get its pointer and GUID.";
   let description = [{
@@ -96,8 +96,8 @@ def DbAllocOp : Arts_Op<"db_alloc", [
 }
 
 def DbAcquireOp : Arts_Op<"db_acquire", 
-  [AttrSizedOperandSegments, DeclareOpInterfaceMethods<ViewLikeOpInterface>, DeclareOpInterfaceMethods<InferTypeOpInterface, ["inferReturnTypes"]>
-  ]> {
+  [AttrSizedOperandSegments]
+  > {
   let summary = "Acquires access to an ARTS DataBlock.";
   let description = [{
     This operation acquires a local view of the DataBlock for safe access within EDTs.

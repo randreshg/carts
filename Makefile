@@ -76,10 +76,13 @@ llvm:
 			-DLLVM_INCLUDE_TOOLS=ON \
 			-DLLVM_INCLUDE_EXAMPLES=OFF \
 			-DLLVM_INCLUDE_TESTS=OFF \
+			-DLLVM_BUILD_TESTS=OFF \
+			-DLLVM_INSTALL_UTILS=ON \
 			-DLLVM_INCLUDE_BENCHMARKS=OFF \
 			-DLLVM_INCLUDE_UTILS=ON \
 			-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
 		ninja -C $(LLVM_BUILD_DIR) install; \
+		python3 -m pip install --upgrade --no-input --prefix=$(LLVM_INSTALL_DIR) $(LLVM_DIR)/llvm/utils/lit; \
 	fi
 llvm-clean:
 	rm -rf $(LLVM_BUILD_DIR)
