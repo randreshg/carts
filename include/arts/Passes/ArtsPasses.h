@@ -21,6 +21,7 @@ namespace arts {
 std::unique_ptr<Pass> createArtsInlinerPass();
 std::unique_ptr<Pass> createConvertOpenMPtoARTSPass();
 std::unique_ptr<Pass> createEdtPass();
+std::unique_ptr<Pass> createEdtConcurrencyPass();
 std::unique_ptr<Pass> createCreateDbsPass();
 std::unique_ptr<Pass> createCreateDbsPass(bool identifyDbs);
 std::unique_ptr<Pass> createDbPass();

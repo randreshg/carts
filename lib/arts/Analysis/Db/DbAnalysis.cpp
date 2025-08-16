@@ -7,6 +7,7 @@
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "llvm/Support/Debug.h"
 
@@ -20,6 +21,8 @@ DbAnalysis::DbAnalysis(Operation *module) : module(module), solver() {
   ARTS_INFO("Initializing DbAnalysis for module");
   loopAnalysis = std::make_unique<LoopAnalysis>(module);
   dbAliasAnalysis = std::make_unique<DbAliasAnalysis>(this);
+  // Preload our DB dense analysis so solver knows about it
+  (void)solver.load<DbDataFlowAnalysis>();
 
   // Add baseline data flow analyses to solver
   // solver.load<dataflow::DeadCodeAnalysis>();
@@ -37,21 +40,70 @@ DbGraph *DbAnalysis::getOrCreateGraph(func::FuncOp func) {
   }
 
   ARTS_INFO("Creating new DbGraph for function: " << func.getName());
-  // auto newGraph = std::make_unique<DbGraph>(func, this);
+  auto newGraph = std::make_unique<DbGraph>(func, this);
+  // Build nodes and dependencies (runs dataflow internally)
+  newGraph->build();
 
-  // Run value-anchored sparse data flow (lightweight facts)
-  // auto *valueDf = solver.load<DbValueDataFlowAnalysis>();
-  // (void)valueDf;
-  // (void)solver.initializeAndRun(func);
+  DbGraph *graphPtr = newGraph.get();
+  functionGraphMap[func] = std::move(newGraph);
+  return graphPtr;
+}
 
-  // // Run dense pass that constructs lifetime edges in the graph
-  // DbDataFlowAnalysis denseDf(solver, newGraph.get(), this);
-  // denseDf.analyze();
+// ---- Future/placeholder: slice info and overlap (constants only) ----
+DbAnalysis::SliceInfo DbAnalysis::computeSliceInfo(arts::DbAcquireOp acquire) {
+  SliceInfo info;
+  auto sizes = acquire.getSizes();
+  auto offsets = acquire.getOffsets();
+  info.sizes.reserve(sizes.size());
+  info.offsets.reserve(offsets.size());
+  bool hasUnknown = false;
+  for (Value v : offsets) {
+    if (auto c = v.getDefiningOp<mlir::arith::ConstantIndexOp>())
+      info.offsets.push_back(c.value());
+    else { info.offsets.push_back(INT64_MIN); hasUnknown = true; }
+  }
+  uint64_t totalElems = 1;
+  for (Value v : sizes) {
+    if (auto c = v.getDefiningOp<mlir::arith::ConstantIndexOp>()) {
+      info.sizes.push_back(c.value());
+      totalElems *= (uint64_t)std::max<int64_t>(c.value(), 1);
+    } else { info.sizes.push_back(INT64_MIN); hasUnknown = true; }
+  }
+  if (!hasUnknown) {
+    // Try element type size from result memref
+    if (auto memTy = dyn_cast<MemRefType>(acquire.getView().getType())) {
+      if (auto intTy = dyn_cast<IntegerType>(memTy.getElementType()))
+        info.estimatedBytes = (intTy.getWidth() / 8u) * totalElems;
+      else if (auto fTy = dyn_cast<FloatType>(memTy.getElementType()))
+        info.estimatedBytes = (fTy.getWidth() / 8u) * totalElems;
+    }
+  }
+  return info;
+}
 
-  // DbGraph *graphPtr = newGraph.get();
-  // functionGraphMap[func] = std::move(newGraph);
-  // return graphPtr;
-  return nullptr;
+DbAnalysis::OverlapKind DbAnalysis::estimateOverlap(arts::DbAcquireOp a,
+                                                    arts::DbAcquireOp b) {
+  SliceInfo sa = computeSliceInfo(a);
+  SliceInfo sb = computeSliceInfo(b);
+  size_t r = std::min(sa.sizes.size(), sb.sizes.size());
+  bool anyUnknown = false;
+  bool disjoint = false;
+  bool equal = (sa.sizes == sb.sizes) && (sa.offsets == sb.offsets);
+  for (size_t i = 0; i < r; ++i) {
+    int64_t ao = sa.offsets[i], asz = sa.sizes[i];
+    int64_t bo = sb.offsets[i], bsz = sb.sizes[i];
+    if (ao == INT64_MIN || asz == INT64_MIN || bo == INT64_MIN || bsz == INT64_MIN) {
+      anyUnknown = true; continue;
+    }
+    int64_t a0 = ao, a1 = ao + asz;
+    int64_t b0 = bo, b1 = bo + bsz;
+    bool overlap = !(a1 <= b0 || b1 <= a0);
+    if (!overlap) { disjoint = true; break; }
+  }
+  if (disjoint) return OverlapKind::Disjoint;
+  if (equal) return OverlapKind::Full;
+  if (anyUnknown) return OverlapKind::Unknown;
+  return OverlapKind::Partial;
 }
 
 bool DbAnalysis::invalidateGraph(func::FuncOp func) {

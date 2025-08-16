@@ -92,6 +92,15 @@ def Edt : Pass<"edt", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createEdtPass()";
 }
 
+def EdtConcurrency : Pass<"edt-concurrency", "mlir::ModuleOp"> {
+  let summary = "Build EDT concurrency graph and apply concurrency-driven cleanups";
+  let dependentDialects = [
+    "func::FuncDialect",
+    "arts::ArtsDialect"
+  ];
+  let constructor = "mlir::arts::createEdtConcurrencyPass()";
+}
+
 def CreateEpochs : Pass<"create-epochs", "mlir::ModuleOp"> {
   let summary = "Analyzes the program and creates ARTS epochs";
   let dependentDialects = [

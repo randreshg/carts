@@ -1,0 +1,101 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>ARTS Visualizer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      html, body, #cy { height: 100%; margin: 0; padding: 0; }
+      #toolbar { position: absolute; top: 10px; left: 10px; background: #fff; padding: 8px; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.15); z-index: 10; }
+      #panels { position: absolute; right: 10px; top: 10px; bottom: 10px; width: 320px; overflow: auto; background: #fff; padding: 8px; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.15); z-index: 10; }
+      #panels h3 { margin-top: 0; }
+      .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 12px; background: #eee; margin-right: 6px; }
+    </style>
+    <script src="https://unpkg.com/cytoscape@3.27.0/dist/cytoscape.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-cola@2.5.1/cytoscape-cola.js"></script>
+  </head>
+  <body>
+    <div id="toolbar">
+      <input id="jsonFile" type="file" accept="application/json" />
+      <select id="view">
+        <option value="edt">EDT Graph</option>
+        <option value="db">DB Graph</option>
+        <option value="concurrency">Concurrency</option>
+      </select>
+      <button id="fit">Fit</button>
+      <button id="layout">Layout</button>
+    </div>
+    <div id="panels">
+      <h3>Details</h3>
+      <div id="details">Select a node or edge</div>
+    </div>
+    <div id="cy"></div>
+    <script>
+      const cy = cytoscape({ container: document.getElementById('cy'), elements: [], style: [
+        { selector: 'node', style: { 'label': 'data(label)', 'font-size': 10, 'text-valign': 'center', 'text-halign': 'center' } },
+        { selector: 'edge', style: { 'curve-style': 'bezier', 'target-arrow-shape': 'triangle', 'label': 'data(label)', 'font-size': 9 } },
+        { selector: '.db', style: { 'background-color': '#4caf50' } },
+        { selector: '.edt', style: { 'background-color': '#2196f3' } }
+      ]});
+
+      function toElements(data, view) {
+        const nodes = new Map();
+        const els = [];
+        const g = data[view];
+        if (!g) return els;
+        (g.nodes || []).forEach(n => {
+          nodes.set(n.id, true);
+          els.push({ data: { id: n.id, label: n.id }, classes: n.kind || view });
+        });
+        (g.edges || []).forEach(e => {
+          if (!nodes.has(e.from)) {
+            nodes.set(e.from, true);
+            els.push({ data: { id: e.from, label: e.from }, classes: view });
+          }
+          if (!nodes.has(e.to)) {
+            nodes.set(e.to, true);
+            els.push({ data: { id: e.to, label: e.to }, classes: view });
+          }
+          els.push({ data: { id: `${e.from}->${e.to}-${e.type||e.kind||''}`, source: e.from, target: e.to, label: e.type || e.kind || '' } });
+        });
+        return els;
+      }
+
+      function relayout() {
+        cy.layout({ name: 'cola', animate: true, maxSimulationTime: 1500 }).run();
+      }
+
+      function updateDetails(ele) {
+        const d = document.getElementById('details');
+        d.innerText = JSON.stringify(ele.data(), null, 2);
+      }
+
+      document.getElementById('fit').onclick = () => cy.fit();
+      document.getElementById('layout').onclick = relayout;
+
+      let graphData = null;
+      document.getElementById('jsonFile').addEventListener('change', async (ev) => {
+        const file = ev.target.files[0];
+        if (!file) return;
+        const text = await file.text();
+        graphData = JSON.parse(text);
+        const view = document.getElementById('view').value;
+        cy.elements().remove();
+        cy.add(toElements(graphData, view));
+        relayout();
+      });
+
+      document.getElementById('view').addEventListener('change', () => {
+        if (!graphData) return;
+        const view = document.getElementById('view').value;
+        cy.elements().remove();
+        cy.add(toElements(graphData, view));
+        relayout();
+      });
+
+      cy.on('tap', 'node, edge', (evt) => updateDetails(evt.target));
+    </script>
+  </body>
+  </html>
+
+

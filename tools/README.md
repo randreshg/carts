@@ -10,7 +10,6 @@ tools/
 ├── run/                # CARTS C++ executable
 ├── opt/                # CARTS optimization passes
 ├── benchmark/          # Benchmarking tools
-├── report/             # Reporting tools
 └── setup/              # Setup tools
     └── carts-setup.py  # Automated setup script
 ```
@@ -58,8 +57,8 @@ tools/
    # Run benchmarks
    carts benchmark --target_examples matrixmul
    
-   # Generate reports
-   carts report --help
+   # Launch ArtsUI (dashboard, graphs, reports)
+   carts ui
    ```
 
 > **Important**: Project build uses **system clang**, while ARTS operations use **installed LLVM**
@@ -80,12 +79,8 @@ Performance testing and benchmarking tool.
 python3 tools/benchmark/carts-benchmark --help
 ```
 
-### Report (`tools/report/carts-report`)
-Results visualization and analysis tool.
-
-```bash
-python3 tools/report/carts-report --help
-```
+### Reports (ArtsUI)
+Use `carts ui` and open the Reports tab. The UI aggregates CSV/JSON from `examples/output_benchmarks/` and renders plots.
 
 ## Environment Setup
 

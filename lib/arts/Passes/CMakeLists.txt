@@ -17,6 +17,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   EdtPtrRematerialization.cpp
   ConvertDbToOpaquePtr.cpp
   EdtLowering.cpp
+  EdtConcurrency.cpp
   ${CARTS_TRANSFORMS_SOURCE_FILES}
   ${CARTS_UTILS_SOURCE_FILES}
   # Re-enabled: Only ArtsIR utilities, not complex codegen classes

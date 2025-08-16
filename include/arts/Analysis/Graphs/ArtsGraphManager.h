@@ -33,6 +33,9 @@ public:
   /// Export both graphs to DOT
   void exportToDot(llvm::raw_ostream &os) const;
 
+  /// Export graphs and concurrency view to JSON for interactive visualization
+  void exportToJson(llvm::raw_ostream &os) const;
+
   /// Unified node queries
   NodeBase *getNode(Operation *op) const;
 
