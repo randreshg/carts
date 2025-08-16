@@ -27,13 +27,15 @@
 #include "mlir/Transforms/DialectConversion.h"
 #include "polygeist/Ops.h"
 /// Debug
+#include "arts/Analysis/Db/DbAnalysis.h"
+#include "arts/Analysis/Graphs/Db/DbGraph.h"
+#include "arts/Analysis/Graphs/Db/DbNode.h"
+#include "arts/Analysis/Db/DbPlacement.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdint>
-// #include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Graphs/Db/DbGraph.h"
-#include "arts/Analysis/Graphs/Db/DbNode.h"
 
 #include "arts/Utils/ArtsDebug.h"
 ARTS_DEBUG_SETUP(db);
@@ -46,6 +48,8 @@ using namespace mlir::arts;
 
 //===----------------------------------------------------------------------===//
 // Pass Implementation
+// Responsibility: transform/optimize ARTS DB IR using DbGraph/analyses.
+// Non-Goals: task/EDT reasoning (kept in EDT passes/analyses).
 //===----------------------------------------------------------------------===//
 namespace {
 struct DbPass : public arts::DbBase<DbPass> {
@@ -77,6 +81,10 @@ struct DbPass : public arts::DbBase<DbPass> {
   /// Inline small DB allocs into acquires if single-use.
   bool inlineAllocs();
 
+  /// Prefetch and overlap: hoist acquires earlier (after operand defs) and
+  /// delay releases after last use within a block to overlap transfers.
+  bool prefetchOverlap();
+
 private:
   ModuleOp module;
 };
@@ -85,78 +93,231 @@ private:
 void DbPass::runOnOperation() {
   bool changed = false;
   module = getOperation();
-  changed |= canonicalizeDimOps();
+  changed |= canonicalizeDimOps(); // disabled internals kept as scaffolding
 
   ARTS_DEBUG_HEADER(DbPass);
   ARTS_DEBUG_REGION(module.dump(););
 
-  // auto &dbAnalysis = getAnalysis<DbAnalysis>();
-  // module.walk([&](func::FuncOp func) {
-  //   auto graph = dbAnalysis.getOrCreateGraph(func);
-  //   if (graph->getNumNodes() == 0) return;
+  auto &dbAnalysis = getAnalysis<DbAnalysis>();
+  // Force-build graphs so downstream opts can consume them now or later.
+  module.walk([&](func::FuncOp func) {
+    (void)dbAnalysis.getOrCreateGraph(func);
+    // Optional: dump concise DB metrics in debug builds
+    if (llvm::DebugFlag) {
+      if (auto *graph = dbAnalysis.getOrCreateGraph(func)) {
+        ARTS_DEBUG_SECTION("DbMetrics", {
+          llvm::SmallString<128> buf;
+          llvm::raw_svector_ostream os(buf);
+          graph->exportToJson(os);
+          ARTS_DBGS() << os.str();
+        });
+      }
+    }
+  });
 
-  //   std::string filename = "DbGraph_" + func.getName().str() + ".dot";
-  //   std::error_code EC;
-  //   llvm::raw_fd_ostream dotFile(filename, EC);
-  //   if (EC) {
-  //     dbgs() << "Error opening file: " << EC.message() << "\n";
-  //     return;
-  //   }
-  //   graph->printDot(dotFile);
-  //   dotFile.close();
-  // });
-
+  // Order below is conservative; each stage can be independently enabled
   changed |= deadDbElimination();
   changed |= convertToParameters();
   changed |= shrinkDb();
+  changed |= prefetchOverlap();
   changed |= bufferReuse();
   changed |= hoistAllocs();
   changed |= fuseAccesses();
   changed |= inlineAllocs();
 
+  // Analysis-only: emit DB placement JSON under debug for 4-node fabric
+  ARTS_DEBUG_SECTION("db-placement-json", {
+    module.walk([&](func::FuncOp func) {
+      auto *graph = dbAnalysis.getOrCreateGraph(func);
+      if (!graph) return;
+      DbPlacementHeuristics placer(graph);
+      auto nodes = DbPlacementHeuristics::makeNodeNames(4);
+      auto decisions = placer.compute(func, nodes);
+      std::string js;
+      llvm::raw_string_ostream jos(js);
+      placer.exportToJson(func, decisions, jos);
+      ARTS_DBGS() << js;
+    });
+  });
+
   if (!changed) {
     ARTS_INFO("No changes made to the module");
-    // markAnalysesPreserved<DbAnalysis>();
+    markAnalysesPreserved<DbAnalysis>();
   }
 
   ARTS_DEBUG_FOOTER(DbPass);
   ARTS_DEBUG_REGION(module.dump(););
 }
 
-bool DbPass::canonicalizeDimOps() {
+// Prefetch/overlap heuristic
+// - Hoist acquires upward to start transfers earlier, but never above the
+//   last defining op of their operands (preserves dominance and semantics).
+// - Delay releases to just after the last in-block user to avoid premature
+//   invalidation and reduce thrash while still keeping scope minimal.
+// Scope: intra-block only (no CFG restructuring). Conservative and local.
+// Example (before → after):
+//   %x = compute
+//   %a = arts.db_acquire %db offsets(%o0,%o1) sizes(%s0,%s1)
+//   use(%a, %x)
+//   arts.db_release %a
+// becomes (if uses of %a occur later)
+//   %x = compute
+//   %a = arts.db_acquire %db offsets(%o0,%o1) sizes(%s0,%s1)
+//   use(%a, %x)
+//   ...
+//   arts.db_release %a            // moved after last use
+bool DbPass::prefetchOverlap() {
   bool changed = false;
-  // module.walk([&](Operation *op) {
-  //   if (auto dimOp = dyn_cast<memref::DimOp>(op)) {
-  //     Value source = dimOp.getSource();
-  //     if (auto dbOp = source.getDefiningOp<DbAllocOp>()) {
-  //       if (auto constIndex = dimOp.getConstantIndex()) {
-  //         Value size = dbOp.getSizes()[*constIndex];
-  //         dimOp.replaceAllUsesWith(size);
-  //         dimOp.erase();
-  //         changed = true;
-  //       }
-  //     } else if (auto acquireOp = source.getDefiningOp<DbAcquireOp>()) {
-  //       DbAllocOp parent = dbAnalysis.getParentAlloc(acquireOp);
-  //       if (parent && auto constIndex = dimOp.getConstantIndex()) {
-  //         Value size = parent.getSizes()[*constIndex];
-  //         dimOp.replaceAllUsesWith(size);
-  //         dimOp.erase();
-  //         changed = true;
-  //       }
-  //     } else if (auto releaseOp = source.getDefiningOp<DbReleaseOp>()) {
-  //       DbAllocOp parent = dbAnalysis.getParentAlloc(releaseOp);
-  //       if (parent && auto constIndex = dimOp.getConstantIndex()) {
-  //         Value size = parent.getSizes()[*constIndex];
-  //         dimOp.replaceAllUsesWith(size);
-  //         dimOp.erase();
-  //         changed = true;
-  //       }
-  //     }
-  //   }
-  // });
+  // Operate within blocks to preserve simple dominance and avoid CFG changes
+  module.walk([&](func::FuncOp func) {
+    for (Block &block : func.getBody().getBlocks()) {
+      // Build a position index for stable ordering comparisons
+      llvm::DenseMap<Operation *, unsigned> pos;
+      unsigned i = 0;
+      for (Operation &op : block)
+        pos[&op] = i++;
+
+      // 1) Hoist acquires
+      // Move each acquire as early as possible after the last operand def in
+      // this block. If operands are block arguments or defined above, the
+      // acquire goes to the block front.
+      SmallVector<DbAcquireOp, 16> acquires;
+      for (Operation &op : block)
+        if (auto acq = dyn_cast<DbAcquireOp>(&op))
+          acquires.push_back(acq);
+
+      for (DbAcquireOp acq : acquires) {
+        Operation *op = acq.getOperation();
+        unsigned cur = pos[op];
+        Operation *anchor = nullptr;
+        for (Value v : op->getOperands()) {
+          if (Operation *def = v.getDefiningOp()) {
+            if (def->getBlock() == &block) {
+              if (!anchor || pos[def] > pos[anchor])
+                anchor = def;
+            }
+          }
+        }
+        unsigned targetPos = anchor ? (pos[anchor] + 1) : 0;
+        if (targetPos < cur) {
+          if (anchor)
+            op->moveAfter(anchor);
+          else
+            op->moveBefore(&block.front());
+          changed = true;
+        }
+      }
+
+      // Rebuild positions after moves
+      pos.clear();
+      i = 0;
+      for (Operation &op : block)
+        pos[&op] = i++;
+
+      // 2) Delay releases
+      // Move each release as late as possible within the same block: just
+      // after the last use of its operand(s). Skip if already in the best spot.
+      SmallVector<DbReleaseOp, 16> releases;
+      for (Operation &op : block)
+        if (auto rel = dyn_cast<DbReleaseOp>(&op))
+          releases.push_back(rel);
+
+      for (DbReleaseOp rel : releases) {
+        Operation *op = rel.getOperation();
+        unsigned cur = pos[op];
+        unsigned lastUsePos = cur;
+        // Consider all operands; typically the acquired view
+        for (Value v : op->getOperands()) {
+          for (OpOperand &use : v.getUses()) {
+            Operation *user = use.getOwner();
+            if (user->getBlock() != &block)
+              continue;
+            if (user == op)
+              continue;
+            lastUsePos = std::max(lastUsePos, pos[user]);
+          }
+        }
+        if (lastUsePos > cur) {
+          Operation *lastUser = nullptr;
+          for (Operation &it : block)
+            if (pos[&it] == lastUsePos) {
+              lastUser = &it;
+              break;
+            }
+          if (lastUser) {
+            op->moveAfter(lastUser);
+            changed = true;
+          }
+        }
+      }
+    }
+  });
   return changed;
 }
 
+// Canonicalize dimension queries for DB-backed memrefs
+// Responsibility: replace `memref.dim` on DB allocs/acquires with known
+// sizes when available.
+// Preference order:
+//   1) Explicit slice sizes on DbAcquireOp
+//   2) Parent DbAllocOp sizes (via DbGraph)
+// Scope: local fold-and-erase of dim ops; preserves semantics.
+// Example (before → after):
+//   %sz = memref.dim %acq, 1 : memref<?x?xi32>
+//   // where %acq = arts.db_acquire %db ... sizes(%c4, %c8)
+// becomes
+//   %sz = %c8 : index
+bool DbPass::canonicalizeDimOps() {
+  bool changed = false;
+  auto &dbAnalysis = getAnalysis<DbAnalysis>();
+  module.walk([&](memref::DimOp dimOp) {
+    auto cstIdx = dimOp.getConstantIndex();
+    if (!cstIdx)
+      return;
+    Value source = dimOp.getSource();
+    if (auto dbAlloc = source.getDefiningOp<DbAllocOp>()) {
+      Value sz = dbAlloc.getSizes()[*cstIdx];
+      dimOp.replaceAllUsesWith(sz);
+      dimOp.erase();
+      changed = true;
+      return;
+    }
+    if (auto dbAcq = source.getDefiningOp<DbAcquireOp>()) {
+      // Prefer the explicit acquire size slice if present; else fallback to
+      // alloc sizes.
+      auto sizes = dbAcq.getSizes();
+      if (sizes.size() > *cstIdx) {
+        Value sz = sizes[*cstIdx];
+        dimOp.replaceAllUsesWith(sz);
+        dimOp.erase();
+        changed = true;
+        return;
+      }
+      if (auto func = dimOp->getParentOfType<func::FuncOp>()) {
+        if (auto *graph = dbAnalysis.getOrCreateGraph(func)) {
+          if (DbAllocOp parent = graph->getParentAlloc(dbAcq.getOperation())) {
+            Value sz = parent.getSizes()[*cstIdx];
+            dimOp.replaceAllUsesWith(sz);
+            dimOp.erase();
+            changed = true;
+            return;
+          }
+        }
+      }
+    }
+  });
+  return changed;
+}
+
+// Convert trivial DBs to parameters (disabled scaffolding)
+// Intent: when a DB is effectively read-only and 1D, turn it into a parameter
+// to avoid runtime traffic. Requires validating usage patterns and lifetimes.
+// Current status: example scaffold left commented for future enablement.
+// Example (target behavior):
+//   %db = arts.db_alloc %ptr sizes(%cN)
+//   %a  = arts.db_acquire %db ...
+//   load %a[...]
+//   --> convert to a function/block argument replacing %db/%a
 bool DbPass::convertToParameters() {
   bool changed = false;
   // module.walk([&](func::FuncOp func) {
@@ -186,127 +347,72 @@ bool DbPass::convertToParameters() {
   return changed;
 }
 
+// Coarse-grain DB slices (Design Stub)
+// Many pipelines create extremely fine-grained DB acquires (e.g., size-1
+// along the last dimension), which can saturate the network. The correct way
+// to coarsen is to normalize DB granularity at allocation time (DbAllocOp),
+// e.g., switch from NxMxP DBs to N DBs of size MxP, then rewrite acquires/
+// releases and EDT operands accordingly. Implementing that requires a
+// dedicated transformation that touches DbAllocOps, DbAcquire/DbReleaseOps,
+// and the corresponding arts.edt operands/block-args.
+//
+// This function is currently a no-op placeholder. The earlier subview-based
+// approach is not used because EDTs consume acquired DBs across nodes; IR
+// subviews alone do not express runtime transfer granularity.
+//
+// Example (target behavior):
+//   Before:
+//     %db = arts.db_alloc %ptr sizes(%cN,%cM,%cP)
+//     acquires over (i,j,k)
+//   After (conceptual):
+//     for i in 0..N-1:
+//       %db_i = arts.db_alloc %ptr_i sizes(%cM,%cP)
+//     acquires only over (j,k) on %db_i chosen by i
+/*
+Implement a proper “DbGranularityNormalize” transformation:
+Split DbAlloc by chosen dimension.
+Update all downstream DbAcquire/DbRelease and arts.edt block args/operands to reference the new coarser-grained DBs.
+Ensure interaction with EdtGraph/DbGraph remains correct and verify with tests.
+*/
 bool DbPass::shrinkDb() {
-  bool changed = false;
-  // module.walk([&](func::FuncOp func) {
-  //   auto graph = dbAnalysis.getOrCreateGraph(func);
-  //   graph->forEachAllocNode([&](DbAllocNode *allocNode) {
-  //     DbAllocOp dbOp = allocNode->getDbAllocOp();
-  //     Location loc = dbOp.getLoc();
-  //     auto rank = dbOp.getSizes().size();
-
-  //     SmallVector<unsigned> dimsToShrink;
-  //     SmallVector<Value> offsets(rank);
-  //     SmallVector<Value> newSizes(rank);
-  //     bool needsShrinking = false;
-
-  //     OpBuilder builder(dbOp);
-  //     builder.setInsertionPoint(dbOp);
-
-  //     LLVM_DEBUG(dbgs() << "Analyzing DB: " << dbOp << "\n");
-
-  //     // DISABLED: Dimension analysis-based optimization
-  //     /*
-  //     for (unsigned i = 0; i < rank; ++i) {
-  //       auto dimAnalysis = dbAnalysis.getDimensionAnalysis(*allocNode);
-  //       int64_t minDim =
-  //       dimAnalysis[i].overallPattern.conservativeMin.constant; int64_t
-  //       maxDim = dimAnalysis[i].overallPattern.conservativeMax.constant;
-  //       int64_t originalSize =
-  //       dbOp.getSizes()[i].getDefiningOp<ConstantIndexOp>() ?
-  //       dbOp.getSizes()[i].getDefiningOp<ConstantIndexOp>().value() : -1;
-
-  //       bool shrinkMin = (minDim > 0);
-  //       bool shrinkMax = (maxDim < originalSize && originalSize != -1);
-  //       bool shrinkThisDim = shrinkMin || shrinkMax;
-
-  //       if (shrinkThisDim) {
-  //         needsShrinking = true;
-  //         dimsToShrink.push_back(i);
-  //         offsets[i] = builder.create<arith::ConstantIndexOp>(loc, minDim);
-  //         newSizes[i] = builder.create<arith::SubIOp>(loc,
-  //         builder.create<arith::ConstantIndexOp>(loc, maxDim), offsets[i]);
-  //       } else {
-  //         offsets[i] = builder.create<arith::ConstantIndexOp>(loc, 0);
-  //         newSizes[i] = dbOp.getSizes()[i];
-  //       }
-  //     }
-  //     */
-
-  //     // Simplified version without dimension analysis - just use original
-  //     sizes for (unsigned i = 0; i < rank; ++i) {
-  //       offsets[i] = builder.create<arith::ConstantIndexOp>(loc, 0);
-  //       newSizes[i] = dbOp.getSizes()[i];
-  //     }
-
-  //     // No shrinking without dimension analysis
-  //     needsShrinking = false;
-  //     if (!needsShrinking) return;
-
-  //     LLVM_DEBUG(dbgs() << "- Shrinking DB\n");
-  //     changed = true;
-
-  //     auto newDbOp = builder.create<DbAllocOp>(loc, dbOp.getMode(),
-  //     dbOp.getPtr(), newSizes); for (auto attr : dbOp->getAttrs()) {
-  //       if (attr.getName() != "operandSegmentSizes") {
-  //         newDbOp->setAttr(attr.getName(), attr.getValue());
-  //       }
-  //     }
-
-  //     allocNode->forEachChildNode([&](NodeBase *child) {
-  //       Operation *accessOp = child->getOp();
-  //       SmallVector<Value> oldIndices;
-  //       if (auto acquireOp = dyn_cast<DbAcquireOp>(accessOp)) {
-  //         oldIndices = acquireOp.getIndices();
-  //       } else if (auto releaseOp = dyn_cast<DbReleaseOp>(accessOp)) {
-  //         oldIndices = releaseOp.getIndices();
-  //       }
-  //       SmallVector<Value> newIndices = oldIndices;
-  //       for (unsigned j = 0; j < rank; ++j) {
-  //         if (offsets[j]) {
-  //           newIndices[j] = builder.create<arith::SubIOp>(loc, oldIndices[j],
-  //           offsets[j]);
-  //         }
-  //       }
-  //       if (auto acquireOp = dyn_cast<DbAcquireOp>(accessOp)) {
-  //         auto newAcquire = builder.create<DbAcquireOp>(loc,
-  //         newDbOp.getResult(0), newIndices);
-  //         acquireOp.replaceAllUsesWith(newAcquire.getResult());
-  //         acquireOp.erase();
-  //       } else if (auto releaseOp = dyn_cast<DbReleaseOp>(accessOp)) {
-  //         auto newRelease = builder.create<DbReleaseOp>(loc,
-  //         newDbOp.getResult(0), newIndices);
-  //         releaseOp.replaceAllUsesWith(newRelease.getResult());
-  //         releaseOp.erase();
-  //       }
-  //     });
-
-  //     dbOp.replaceAllUsesWith(newDbOp.getResults());
-  //     dbOp.erase();
-  //   });
-  // });
-  return changed;
+  return false;
 }
 
+// Dead DB elimination
+// Responsibility: remove DbAllocOps with no associated acquires/releases and
+// no remaining uses. Uses DbGraph to count children; then checks use_empty.
+// Example (before → after):
+//   %db = arts.db_alloc %ptr sizes(%cN,%cM)
+// no uses, no acquires/releases
+// becomes: (alloc erased)
 bool DbPass::deadDbElimination() {
   bool changed = false;
-  // module.walk([&](func::FuncOp func) {
-  //   auto graph = dbAnalysis.getOrCreateGraph(func);
-  //   SmallVector<DbAllocNode *> deadAllocs;
-  //   graph->forEachAllocNode([&](DbAllocNode *allocNode) {
-  //     if (allocNode->getAcquireNodesSize() == 0 &&
-  //     allocNode->getReleaseNodesSize() == 0) {
-  //       deadAllocs.push_back(allocNode);
-  //     }
-  //   });
-  //   for (auto *allocNode : deadAllocs) {
-  //     allocNode->getDbAllocOp().erase();
-  //     changed = true;
-  //   }
-  // });
+  auto &dbAnalysis = getAnalysis<DbAnalysis>();
+  module.walk([&](func::FuncOp func) {
+    auto *graph = dbAnalysis.getOrCreateGraph(func);
+    if (!graph)
+      return;
+    SmallVector<DbAllocNode *> deadAllocs;
+    graph->forEachAllocNode([&](DbAllocNode *allocNode) {
+      if (allocNode->getAcquireNodesSize() == 0 &&
+          allocNode->getReleaseNodesSize() == 0) {
+        deadAllocs.push_back(allocNode);
+      }
+    });
+    for (auto *allocNode : deadAllocs) {
+      auto dbOp = allocNode->getDbAllocOp();
+      if (dbOp && dbOp->use_empty()) {
+        dbOp.erase();
+        changed = true;
+      }
+    }
+  });
   return changed;
 }
 
+// Buffer reuse across non-overlapping lifetimes (disabled scaffolding)
+// Intent: reuse storage of two DBs when lifetimes do not overlap and aliasing
+// is safe. Requires alias and lifetime queries. Kept as future work.
 bool DbPass::bufferReuse() {
   bool changed = false;
   // module.walk([&](func::FuncOp func) {
@@ -342,6 +448,9 @@ bool DbPass::bufferReuse() {
   return changed;
 }
 
+// Hoist loop-invariant allocations (disabled scaffolding)
+// Intent: move DbAllocOps out of loops when invariant to reduce allocation
+// overhead. Requires LoopAnalysis integration. Kept as future work.
 bool DbPass::hoistAllocs() {
   bool changed = false;
   // module.walk([&](func::FuncOp func) {
@@ -360,48 +469,83 @@ bool DbPass::hoistAllocs() {
   return changed;
 }
 
+// Fuse adjacent identical accesses
+// Responsibility: within a block, fuse back-to-back identical DbAcquireOps on
+// the same parent alloc (replace later result with earlier), and similarly
+// collapse consecutive identical DbReleaseOps on the same source.
+// Scope: adjacency-only; does not reorder or cross block boundaries.
+// Example (before → after):
+//   %a0 = arts.db_acquire %db indices(%i,%j) sizes(%c4,%c4)
+//   %a1 = arts.db_acquire %db indices(%i,%j) sizes(%c4,%c4)
+//   use(%a1)
+// becomes
+//   %a0 = arts.db_acquire %db indices(%i,%j) sizes(%c4,%c4)
+//   use(%a0)
 bool DbPass::fuseAccesses() {
   bool changed = false;
-  // module.walk([&](func::FuncOp func) {
-  //   auto graph = dbAnalysis.getOrCreateGraph(func);
-  //   graph->forEachAllocNode([&](DbAllocNode *allocNode) {
-  //     SmallVector<DbAcquireNode *> acquires;
-  //     SmallVector<DbReleaseNode *> releases;
-  //     allocNode->forEachChildNode([&](NodeBase *child) {
-  //       if (auto acquire = dyn_cast<DbAcquireNode>(child))
-  //       acquires.push_back(acquire); if (auto release =
-  //       dyn_cast<DbReleaseNode>(child)) releases.push_back(release);
-  //     });
-
-  //     // Fuse consecutive acquires if no intervening ops
-  //     for (size_t i = 0; i < acquires.size() - 1; ++i) {
-  //       Operation *acq1 = acquires[i]->getOp();
-  //       Operation *acq2 = acquires[i + 1]->getOp();
-  //       if (acq1->getNextNode() == acq2 &&
-  //       dbAnalysis.getAliasAnalysis()->mayAlias(*acquires[i], *acquires[i +
-  //       1])) {
-  //         acq2->replaceAllUsesWith(acq1->getResults());
-  //         acq2->erase();
-  //         changed = true;
-  //       }
-  //     }
-
-  //     // Similar for releases
-  //     for (size_t i = 0; i < releases.size() - 1; ++i) {
-  //       Operation *rel1 = releases[i]->getOp();
-  //       Operation *rel2 = releases[i + 1]->getOp();
-  //       if (rel1->getNextNode() == rel2 &&
-  //       dbAnalysis.getAliasAnalysis()->mayAlias(*releases[i], *releases[i +
-  //       1])) {
-  //         rel2->erase();  // Fuse by removing redundant release
-  //         changed = true;
-  //       }
-  //     }
-  //   });
-  // });
+  auto &dbAnalysis = getAnalysis<DbAnalysis>();
+  auto equalRange = [](ValueRange a, ValueRange b) -> bool {
+    if (a.size() != b.size())
+      return false;
+    for (auto it = a.begin(), jt = b.begin(); it != a.end(); ++it, ++jt) {
+      if (*it != *jt)
+        return false;
+    }
+    return true;
+  };
+  module.walk([&](func::FuncOp func) {
+    auto *graph = dbAnalysis.getOrCreateGraph(func);
+    if (!graph)
+      return;
+    for (Block &block : func.getBody().getBlocks()) {
+      DbAcquireOp prevAcq = nullptr;
+      DbReleaseOp prevRel = nullptr;
+      for (Operation &op : block) {
+        if (auto acq = dyn_cast<DbAcquireOp>(&op)) {
+          if (prevAcq && prevAcq->getNextNode() == &op) {
+            auto parentPrev = graph->getParentAlloc(prevAcq.getOperation());
+            auto parentNow = graph->getParentAlloc(acq.getOperation());
+            if (parentPrev && parentNow && parentPrev == parentNow &&
+                prevAcq.getMode() == acq.getMode() &&
+                equalRange(prevAcq.getIndices(), acq.getIndices()) &&
+                equalRange(prevAcq.getOffsets(), acq.getOffsets()) &&
+                equalRange(prevAcq.getSizes(), acq.getSizes())) {
+              acq.getResult().replaceAllUsesWith(prevAcq.getResult());
+              acq.erase();
+              changed = true;
+              // Do not update prevAcq; continue chaining
+              continue;
+            }
+          }
+          prevAcq = acq;
+          prevRel = nullptr;
+          continue;
+        }
+        if (auto rel = dyn_cast<DbReleaseOp>(&op)) {
+          if (prevRel && prevRel->getNextNode() == &op) {
+            // Fuse identical consecutive releases of the same source.
+            if (!prevRel.getSources().empty() && !rel.getSources().empty() &&
+                prevRel.getSources()[0] == rel.getSources()[0]) {
+              rel.erase();
+              changed = true;
+              continue;
+            }
+          }
+          prevRel = rel;
+          prevAcq = nullptr;
+          continue;
+        }
+        prevAcq = nullptr;
+        prevRel = nullptr;
+      }
+    }
+  });
   return changed;
 }
 
+// Inline single-use allocs (disabled scaffolding)
+// Intent: for allocs used by exactly one access, inline the pointer and erase
+// the alloc. Requires careful ownership and lifetime checks. Kept as future.
 bool DbPass::inlineAllocs() {
   bool changed = false;
   // module.walk([&](func::FuncOp func) {

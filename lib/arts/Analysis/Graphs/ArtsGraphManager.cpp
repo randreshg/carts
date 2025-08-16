@@ -47,6 +47,132 @@ void ArtsGraphManager::exportToDot(llvm::raw_ostream &os) const {
   edtGraph->exportToDot(os);
 }
 
+void ArtsGraphManager::exportToJson(llvm::raw_ostream &os) const {
+  // Simple JSON schema:
+  // {
+  //   "db": { "nodes": [...], "edges": [...] },
+  //   "edt": { "nodes": [...], "edges": [...] },
+  //   "concurrency": { "edges": [...] }
+  // }
+  os << "{\n";
+
+  // DbGraph
+  os << "  \"db\": {\n";
+  // Nodes
+  os << "    \"nodes\": [\n";
+  bool first = true;
+  dbGraph->forEachNode([&](NodeBase *node) {
+    if (!first)
+      os << ",\n";
+    first = false;
+    os << "      {\"id\": \"" << node->getHierId() << "\", \"kind\": \"db\"}";
+  });
+  os << "\n    ],\n";
+
+  // Edges (iterate via child iteration by collecting from nodes' outEdges)
+  os << "    \"edges\": [\n";
+  bool firstEdge = true;
+  dbGraph->forEachNode([&](NodeBase *from) {
+    for (auto *edge : from->getOutEdges()) {
+      if (!firstEdge)
+        os << ",\n";
+      firstEdge = false;
+      os << "      {\"from\": \"" << edge->getFrom()->getHierId()
+         << "\", \"to\": \"" << edge->getTo()->getHierId()
+         << "\", \"type\": \"" << edge->getType() << "\"}";
+    }
+  });
+  os << "\n    ]\n";
+  os << "  },\n";
+
+  // EdtGraph
+  os << "  \"edt\": {\n";
+  // Nodes
+  os << "    \"nodes\": [\n";
+  first = true;
+  edtGraph->forEachNode([&](NodeBase *node) {
+    if (!first)
+      os << ",\n";
+    first = false;
+    os << "      {\"id\": \"" << node->getHierId() << "\", \"kind\": \"edt\"}";
+  });
+  os << "\n    ],\n";
+  // Edges
+  os << "    \"edges\": [\n";
+  firstEdge = true;
+  edtGraph->forEachNode([&](NodeBase *from) {
+    for (auto *edge : from->getOutEdges()) {
+      if (!firstEdge)
+        os << ",\n";
+      firstEdge = false;
+      os << "      {\"from\": \"" << edge->getFrom()->getHierId()
+         << "\", \"to\": \"" << edge->getTo()->getHierId()
+         << "\", \"type\": \"" << edge->getType() << "\"}";
+    }
+  });
+  os << "\n    ]\n";
+  os << "  },\n";
+
+  // Concurrency: compute light-weight view (edges only)
+  os << "  \"concurrency\": {\n";
+  os << "    \"edges\": [\n";
+  bool firstConc = true;
+  DenseMap<EdtOp, EdtTaskNode *> taskNodes;
+  edtGraph->forEachNode([&](NodeBase *node) {
+    if (auto *taskNode = dyn_cast<EdtTaskNode>(node)) {
+      taskNodes[taskNode->getEdtOp()] = taskNode;
+    }
+  });
+  for (auto &fromPair : taskNodes) {
+    EdtOp fromOp = fromPair.first;
+    EdtTaskNode *fromNode = fromPair.second;
+    for (auto &toPair : taskNodes) {
+      EdtOp toOp = toPair.first;
+      if (fromOp == toOp)
+        continue;
+      EdtTaskNode *toNode = toPair.second;
+      // Non-concurrent if direct dependency exists
+      if (edtGraph->isTaskReachable(fromOp, toOp)) {
+        if (!firstConc)
+          os << ",\n";
+        firstConc = false;
+        os << "      {\"from\": \"" << fromNode->getHierId() << "\", \"to\": \""
+           << toNode->getHierId() << "\", \"kind\": \"TaskDep\"}";
+        continue;
+      }
+      // Data conflicts via mayAlias
+      SmallVector<NodeBase *> fromDeps = getDbNodesForTask(fromOp);
+      SmallVector<NodeBase *> toDeps = getDbNodesForTask(toOp);
+      bool conflict = false;
+      for (NodeBase *fromDep : fromDeps) {
+        for (NodeBase *toDep : toDeps) {
+          if (auto *fromAlloc = dyn_cast<DbAllocNode>(fromDep)) {
+            if (auto *toAlloc = dyn_cast<DbAllocNode>(toDep)) {
+              if (dbGraph->mayAlias(fromAlloc->getDbAllocOp(),
+                                    toAlloc->getDbAllocOp())) {
+                if (!firstConc)
+                  os << ",\n";
+                firstConc = false;
+                os << "      {\"from\": \"" << fromNode->getHierId()
+                   << "\", \"to\": \"" << toNode->getHierId()
+                   << "\", \"kind\": \"AliasConflict\"}";
+                conflict = true;
+                break;
+              }
+            }
+          }
+        }
+        if (conflict)
+          break;
+      }
+    }
+  }
+  os << "\n    ]\n";
+  os << "  }\n";
+
+  os << "}\n";
+}
+
 NodeBase *ArtsGraphManager::getNode(Operation *op) const {
   if (NodeBase *node = dbGraph->getNode(op))
     return node;

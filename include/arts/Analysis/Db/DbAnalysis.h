@@ -6,8 +6,9 @@
 #define ARTS_ANALYSIS_DB_DBANALYSIS_H
 
 #include "mlir/IR/Operation.h"
-// #include "mlir/IR/Module.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Analysis/DataFlow/Solver.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
@@ -20,17 +21,20 @@
 namespace mlir {
 namespace arts {
 
-// DbAnalysis: Central manager for DB-related analyses across a module.
-// Manages per-function DbGraphs, alias analysis, data flow, and loop analysis.
-// Enhancements:
-// - Integrates DbDataFlowAnalysis to populate graph edges during build.
-// - Basic size queries (shape inference and dimension analysis disabled).
-// - Supports new DB ops (alloc, acquire, release) without DbDep.
-// Potential problems: Module-wide analysis may be memory-heavy; per-function graphs mitigate.
-// Improvements: Lazy graph creation; cache invalidation on IR changes.
-// TODO: Add inter-procedural analysis by propagating across func calls.
-// TODO: Integrate with MLIR's pass manager for automatic invalidation.
-// TODO: Re-enable dimension analysis and shape inference for advanced optimizations.
+// DbAnalysis
+// ---------------------------------------------------------------------------
+// Responsibility
+// - Central manager for DB-related analyses across a module
+// - Owns per-function DbGraphs and exposes high-level queries
+// - Hosts alias/dataflow/loop analyses when enabled
+// Non-Goals
+// - Does not mutate IR
+// - Does not build EDT graphs (kept in EDT analysis)
+// Design
+// - Lazy graph creation per func; explicit invalidation API
+// - Future: integrate dense/sparse dataflow and alias analyses
+// Notes
+// - Dimension/shape inference disabled for now to keep runtime lean
 class DbAnalysis {
 public:
   DbAnalysis(Operation *module);
@@ -58,12 +62,31 @@ public:
   // Access loop analysis.
   LoopAnalysis *getLoopAnalysis() { return loopAnalysis.get(); }
 
+  // Access dataflow solver for analyses wiring.
+  DataFlowSolver &getSolver() { return solver; }
+
+  // ---- Future, alias-aware overlap and slice volumes (stubs for later) ----
+  enum class OverlapKind { Unknown, Disjoint, Partial, Full };
+  struct SliceInfo {
+    SmallVector<int64_t, 4> offsets; // INT64_MIN if unknown
+    SmallVector<int64_t, 4> sizes;   // INT64_MIN if unknown
+    uint64_t estimatedBytes = 0;     // 0 if unknown
+  };
+
+  // Compute slice info for an acquire (best-effort; constants only for now).
+  SliceInfo computeSliceInfo(arts::DbAcquireOp acquire);
+
+  // Coarse overlap classification between two acquires (constants only for now).
+  OverlapKind estimateOverlap(arts::DbAcquireOp a, arts::DbAcquireOp b);
+
 private:
   Operation *module;
   DenseMap<func::FuncOp, std::unique_ptr<DbGraph>> functionGraphMap;
   std::unique_ptr<DbAliasAnalysis> dbAliasAnalysis;
   std::unique_ptr<LoopAnalysis> loopAnalysis;
   DataFlowSolver solver;  // Solver for data flow analyses
+  // Future: node placement hints for DbAllocOps; consumed by placement tools
+  // and passes to set the 'node' attribute on DbAllocOp.
 };
 
 } // namespace arts

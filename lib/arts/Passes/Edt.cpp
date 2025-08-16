@@ -22,22 +22,26 @@
 
 /// Dialects
 #include "arts/Utils/ArtsUtils.h"
-#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/IR/AffineMap.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Support/LLVM.h"
-#include "mlir/Transforms/RegionUtils.h"
-#include "polygeist/Dialect.h"
-#include "polygeist/Ops.h"
+// #include "mlir/Transforms/RegionUtils.h"
+// polygeist includes are not used directly here
+// #include "polygeist/Dialect.h"
+// #include "polygeist/Ops.h"
 /// Arts
 #include "ArtsPassDetails.h"
 // #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
+// Graphs
+#include "arts/Analysis/Graphs/Db/DbGraph.h"
+#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
+#include "arts/Analysis/Graphs/Edt/EdtConcurrencyGraph.h"
+#include "arts/Analysis/Edt/EdtAnalysis.h"
 /// Other
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
@@ -65,18 +69,20 @@ struct EdtPass : public arts::EdtBase<EdtPass> {
   bool processSyncTaskEdts();
   bool removeBarriers();
 
+  // Graph-driven cleanups
+  bool removeRedundantBarriersWithGraphs(func::FuncOp func,
+                                         arts::EdtGraph &graph);
+
 private:
   SetVector<Operation *> opsToRemove;
   ModuleOp module;
 };
 } // end namespace
 
-/// Converts a parallel EDT region into a sync-task EDT by locating its unique
-/// single-edt operation, refactoring the IR to reflect a single-threaded
-/// execution model with flattened nesting, and propagating unioned
-/// dependencies. Conversion is performed only if the parallel region contains
-/// only one single-edt and no unsupported operations. Dependencies from inner
-/// EDTs are collected and added to the outer EDT.
+/// Converts a parallel EDT region into a sync-task EDT when it contains a
+/// single inner `arts.edt` and no other ops beyond terminators/barriers.
+/// Responsibility: structural simplification; dependency collection limited to
+/// union of inner EDT dependencies. No global analysis here.
 bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
   /// Analyze the parallel region to locate the unique single-edt op.
   uint32_t numOps = 0;
@@ -137,9 +143,9 @@ bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
   return true;
 }
 
-/// Lower a parallel EDT into an arts::EpochOp wrapping an scf.for loop over
-/// workers. Enhanced to set sync-task attrs and propagate dependencies if
-/// applicable.
+/// Lowers a parallel EDT into an arts::EpochOp wrapping an scf.for loop over
+/// workers. Responsibility: structural lowering; optional propagation of inner
+/// dependencies as a conservative union.
 bool EdtPass::lowerParallel(EdtOp &op) {
   ARTS_INFO("Lowering parallel EDT");
   auto loc = op.getLoc();
@@ -211,17 +217,28 @@ bool EdtPass::lowerSingle(EdtOp &op) {
   return true;
 }
 
-/// New function: Remove barriers by assuming dependencies handle
-/// synchronization. For now, simply erase them; enhance later with analysis.
+/// Remove unconditional barriers that provide no additional ordering beyond
+/// computed EDT dependencies (graph-informed pruning).
 bool EdtPass::removeBarriers() {
-  SmallVector<BarrierOp, 8> barriers;
-  module.walk([&](BarrierOp barrier) { barriers.push_back(barrier); });
+  bool changed = false;
+  module.walk([&](func::FuncOp func) {
+    // Build graphs on-demand for this function
+    std::unique_ptr<arts::DbGraph> dbGraph =
+        std::make_unique<arts::DbGraph>(func, /*DbAnalysis*/ nullptr);
+    dbGraph->build();
 
-  for (BarrierOp barrier : barriers) {
-    ARTS_INFO("Removing barrier");
-    barrier.erase();
-  }
-  return true;
+    // If DbGraph could not be constructed, skip creating EdtGraph
+    if (!dbGraph) return;
+    std::unique_ptr<arts::EdtGraph> edtGraph =
+        std::make_unique<arts::EdtGraph>(func, dbGraph.get());
+    // Build requires DbGraph; will assert if missing
+    edtGraph->build();
+    if (edtGraph->getNumTasks() == 0)
+      return;
+
+    changed |= removeRedundantBarriersWithGraphs(func, *edtGraph);
+  });
+  return changed;
 }
 
 bool EdtPass::processParallelEdts() {
@@ -303,7 +320,8 @@ void EdtPass::runOnOperation() {
   ARTS_DEBUG_REGION(module->dump(););
 
   processParallelEdts();
-  removeBarriers();
+  // Graph-informed cleanups
+  (void)removeBarriers();
   processSyncTaskEdts();
 
   /// Remove all operations that were marked for deletion during conversion or
@@ -311,8 +329,103 @@ void EdtPass::runOnOperation() {
   OpBuilder builder(module.getContext());
   removeOps(module, builder, opsToRemove);
 
+  // Optional debug/JSON emission of concurrency graph per function
+  module.walk([&](func::FuncOp func) {
+    std::unique_ptr<arts::DbGraph> dbGraph =
+        std::make_unique<arts::DbGraph>(func, /*DbAnalysis*/ nullptr);
+    dbGraph->build();
+    if (!dbGraph)
+      return;
+    std::unique_ptr<arts::EdtGraph> edtGraph =
+        std::make_unique<arts::EdtGraph>(func, dbGraph.get());
+    edtGraph->build();
+    if (edtGraph->getNumTasks() == 0)
+      return;
+
+    arts::EdtAnalysis edtAnalysis(module);
+    edtAnalysis.analyze();
+    arts::EdtConcurrencyGraph cgraph(edtGraph.get(), &edtAnalysis);
+    cgraph.build();
+
+    ARTS_DEBUG_SECTION("edt-concurrency", {
+      std::string s;
+      llvm::raw_string_ostream os(s);
+      cgraph.print(os);
+      ARTS_DBGS() << os.str();
+    });
+
+    // Emit combined JSON bundle (function, edts, concurrency)
+    std::string js;
+    llvm::raw_string_ostream jos(js);
+    jos << "{\n  \"function\": \"" << func.getName() << "\",\n";
+    edtAnalysis.emitEdtsArray(func, jos);
+    jos << ",\n  \"concurrency\": ";
+    {
+      std::string cg;
+      llvm::raw_string_ostream cgos(cg);
+      cgraph.exportToJson(cgos);
+      cgos.flush();
+      // cgraph JSON is a full object; insert as-is but without outer braces
+      if (cg.size() >= 2 && cg.front() == '{' && cg.back() == '}') {
+        jos << cg;
+      } else {
+        jos << "{}";
+      }
+    }
+    jos << "\n}\n";
+    jos.flush();
+
+    ARTS_DEBUG_SECTION("edt-concurrency-json", { ARTS_DBGS() << js; });
+  });
+
   ARTS_DEBUG_FOOTER(EdtPass);
   ARTS_DEBUG_REGION(module->dump(););
+}
+
+bool EdtPass::removeRedundantBarriersWithGraphs(func::FuncOp func,
+                                                arts::EdtGraph &graph) {
+  bool changed = false;
+
+  // Collect barriers within this function and check redundancy
+  SmallVector<arts::BarrierOp, 8> toErase;
+  func.walk([&](arts::BarrierOp barrier) {
+    Block *block = barrier->getBlock();
+    // Partition EDTs in the same block into before/after
+    SmallVector<arts::EdtOp, 8> beforeTasks;
+    SmallVector<arts::EdtOp, 8> afterTasks;
+    bool pastBarrier = false;
+    for (Operation &op : *block) {
+      if (&op == barrier.getOperation()) {
+        pastBarrier = true;
+        continue;
+      }
+      if (auto edt = dyn_cast<arts::EdtOp>(&op)) {
+        (pastBarrier ? afterTasks : beforeTasks).push_back(edt);
+      }
+    }
+
+    if (beforeTasks.empty() || afterTasks.empty()) return;
+
+    bool redundant = true;
+    for (arts::EdtOp a : beforeTasks) {
+      for (arts::EdtOp b : afterTasks) {
+        if (!graph.isTaskReachable(a, b)) {
+          redundant = false;
+          break;
+        }
+      }
+      if (!redundant) break;
+    }
+
+    if (redundant) toErase.push_back(barrier);
+  });
+
+  for (auto b : toErase) {
+    ARTS_INFO("Removing redundant barrier");
+    b.erase();
+    changed = true;
+  }
+  return changed;
 }
 
 ///===----------------------------------------------------------------------===///

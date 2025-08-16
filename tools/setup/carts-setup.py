@@ -196,7 +196,7 @@ def main():
     print("1. Source the environment: source setup_env.sh")
     print("2. Use the carts wrapper: carts --help")
     print("3. Run benchmarks: carts-benchmark --help")
-    print("4. Generate reports: carts-report --help")
+    print("4. Launch ArtsUI: carts ui")
     print(f"5. Add to PATH: python3 tools/setup/{Path(__file__).name} --add-to-path")
 
 if __name__ == "__main__":
