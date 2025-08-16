@@ -5,7 +5,6 @@
 #include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 #include "arts/Analysis/Graphs/Edt/EdtEdge.h"
 #include "arts/Analysis/Graphs/Edt/EdtNode.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -28,11 +27,15 @@ EdtGraph::EdtGraph(func::FuncOp func, DbGraph *dbGraph)
   ARTS_INFO("Creating EDT graph for function: " << func.getName().str());
 }
 
+// Build task graph nodes and DB-induced dependency edges.
+// Responsibility: synthesize a minimal EDT dependency view from DbGraph.
+// Non-Goals: alias/lifetime inference (delegated to DbAnalysis/DbGraph).
 void EdtGraph::build() {
   if (isBuilt && !needsRebuild)
     return;
   ARTS_INFO("Building EDT graph");
   invalidate();
+  assert(dbGraph && "DbGraph is required to build EdtGraph");
   collectNodes();
   buildDependencies();
   isBuilt = true;
@@ -175,6 +178,18 @@ void EdtGraph::exportToDot(llvm::raw_ostream &os) const {
   os << "}\n";
 }
 
+GraphBase::ChildIterator EdtGraph::childBegin(NodeBase *node) {
+  static std::vector<NodeBase *> emptyChildren;
+  // For now, return empty iterator; edges are accessible via node->getOutEdges()
+  return emptyChildren.begin();
+}
+
+GraphBase::ChildIterator EdtGraph::childEnd(NodeBase *node) {
+  static std::vector<NodeBase *> emptyChildren;
+  return emptyChildren.end();
+}
+
+// Collect all arts.edt operations in the function and create task nodes.
 void EdtGraph::collectNodes() {
   ARTS_INFO("Phase 1 - Collecting EDT nodes");
 
@@ -183,44 +198,55 @@ void EdtGraph::collectNodes() {
   ARTS_INFO("Collected " << taskNodes.size() << " tasks");
 }
 
+// Build inter-EDT edges by connecting release sites in one EDT to acquire
+// sites in another EDT for the same root DbAlloc. Uses O(#ops) indexing by
+// DbAlloc to avoid nested walks.
 void EdtGraph::buildDependencies() {
   ARTS_INFO("Phase 2 - Building EDT dependencies");
 
-  for (auto &fromPair : taskNodes) {
-    EdtOp fromOp = fromPair.first;
-    EdtTaskNode *fromNode = fromPair.second.get();
+  // Index releases/acquires by root alloc to avoid quadratic walks
+  DenseMap<DbAllocOp, SmallVector<std::pair<EdtTaskNode *, NodeBase *>>>> allocToReleases;
+  DenseMap<DbAllocOp, SmallVector<std::pair<EdtTaskNode *, NodeBase *>>>> allocToAcquires;
 
-    fromOp.walk([&](Operation *op) {
-      if (auto releaseOp = dyn_cast<DbReleaseOp>(op)) {
-        NodeBase *releaseNode = dbGraph->getNode(releaseOp.getOperation());
-        if (!releaseNode)
+  for (auto &pair : taskNodes) {
+    EdtOp taskOp = pair.first;
+    EdtTaskNode *taskNode = pair.second.get();
+    taskOp.walk([&](Operation *op) {
+      if (auto rel = dyn_cast<DbReleaseOp>(op)) {
+        DbAllocOp a = dbGraph->getParentAlloc(rel);
+        if (!a)
           return;
-
-        // Find other EDTs that acquire the same alloc
-        for (auto &toPair : taskNodes) {
-          EdtOp toOp = toPair.first;
-          if (toOp == fromOp)
-            continue;
-          EdtTaskNode *toNode = toPair.second.get();
-
-          toOp.walk([&](Operation *innerOp) {
-            if (auto acquireOp = dyn_cast<DbAcquireOp>(innerOp)) {
-              NodeBase *acquireNode =
-                  dbGraph->getNode(acquireOp.getOperation());
-              if (!acquireNode)
-                return;
-              DbAllocOp fromAlloc = dbGraph->getParentAlloc(releaseOp);
-              DbAllocOp toAlloc = dbGraph->getParentAlloc(acquireOp);
-              if (fromAlloc && toAlloc && fromAlloc == toAlloc) {
-                auto edge =
-                    std::make_unique<EdtDepEdge>(fromNode, toNode, releaseNode);
-                addEdge(fromNode, toNode, edge.release());
-              }
-            }
-          });
-        }
+        NodeBase *n = dbGraph->getNode(rel.getOperation());
+        if (!n)
+          return;
+        allocToReleases[a].push_back({taskNode, n});
+      } else if (auto acq = dyn_cast<DbAcquireOp>(op)) {
+        DbAllocOp a = dbGraph->getParentAlloc(acq);
+        if (!a)
+          return;
+        NodeBase *n = dbGraph->getNode(acq.getOperation());
+        if (!n)
+          return;
+        allocToAcquires[a].push_back({taskNode, n});
       }
     });
+  }
+
+  for (auto &entry : allocToReleases) {
+    DbAllocOp alloc = entry.first;
+    auto &rels = entry.second;
+    auto itAcq = allocToAcquires.find(alloc);
+    if (itAcq == allocToAcquires.end())
+      continue;
+    auto &acqs = itAcq->second;
+    for (auto &r : rels) {
+      for (auto &a : acqs) {
+        if (r.first == a.first)
+          continue; // same task
+        auto edge = std::make_unique<EdtDepEdge>(r.first, a.first, r.second);
+        addEdge(r.first, a.first, edge.release());
+      }
+    }
   }
 
   ARTS_INFO("Phase 2 - Built " << edges.size() << " EDT dependencies");

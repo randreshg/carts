@@ -82,7 +82,8 @@ def DbAllocOp : Arts_Op<"db_alloc", [
     ArtsModeAttr:$mode,
     Optional<AnyMemRef>:$address,
     Variadic<Index>:$sizes,
-    OptionalAttr<DbAllocTypeAttr>:$allocType
+    OptionalAttr<DbAllocTypeAttr>:$allocType,
+    OptionalAttr<I32Attr>:$node // Preferred node/route for the DB (0 = current)
   );
 
   let results = (outs AnyMemRef:$ptr);
@@ -214,7 +215,8 @@ def EdtOp : Arts_Op<"edt",
 
   let arguments = (ins
     EdtTypeAttr:$type,
-    Variadic<AnyMemRef>:$dependencies
+    Variadic<AnyMemRef>:$dependencies,
+    OptionalAttr<I32Attr>:$node // Preferred node/route for the EDT (0 = current)
   );
 
   let regions = (region SizedRegion<1>:$body);

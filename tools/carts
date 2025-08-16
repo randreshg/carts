@@ -58,8 +58,10 @@ show_usage() {
     echo "  run [options]  - Run the CARTS C++ executable"
     echo "  mlir-translate <file> [mlir-translate_options]  - Run mlir-translate"
     echo "  compile <file> [clang_options]  - Compile with ARTS runtime"
+  echo "  visualize <mlir> [--func name] [--concurrency] [-o out.dot]  - Export ARTS graphs"
+  echo "             add --json to emit JSON (for interactive viewer)"
     echo "  benchmark [options]  - Run CARTS benchmarks"
-    echo "  report [options]  - Generate CARTS reports"
+  echo "  visualize [options] - Launch interactive visualizer UI server"
     echo "  setup [options]  - Set up CARTS environment"
     echo "  clean              - Clean generated files in current directory"
     echo "  check [options]    - Run CARTS test suite using llvm-lit"
@@ -224,19 +226,45 @@ run_benchmark() {
     python3 "$benchmark_script" "$@"
 }
 
-# Function to run report tool
-run_report() {
-    local report_script="${CARTS_DIR}/tools/report/carts-report"
-    if [[ ! -f "$report_script" ]]; then
-        echo "Error: Report script not found at $report_script"
-        exit 1
+
+# Function to run visualizer tool
+run_visualize() {
+    local server_dir="${CARTS_DIR}/tools/visualizer/server"
+    # Detect --serve flag
+    local serve_mode=false
+    local args=("$@")
+    for a in "$@"; do
+        if [[ "$a" == "--serve" ]]; then
+            serve_mode=true
+            break
+        fi
+    done
+
+    # If first arg is a .mlir file and --serve given, export JSON to server dir and launch UI
+    if [[ -f "$1" && "$1" == *.mlir && "$serve_mode" == true ]]; then
+        shift # remove mlir path from args for exporter capture
+        local mlir_file="$1" # actually after shift we lost it; restore
     fi
-    
-    if [[ -n "$CARTS_VERBOSE" ]]; then
-        echo "Running report: python3 $report_script $*"
+
+    if [[ -f "$1" && "$1" == *.mlir ]]; then
+        local mlir_file="$1"; shift
+        local out_json="${server_dir}/graph.json"
+        if [[ -n "$CARTS_VERBOSE" ]]; then
+            echo "Exporting JSON: ${CARTS_INSTALL_DIR}/bin/carts-visualizer $mlir_file --json -o $out_json $*"
+        fi
+        "${CARTS_INSTALL_DIR}/bin/carts-visualizer" "$mlir_file" --json -o "$out_json" "$@"
+        if [[ "$serve_mode" == true ]]; then
+            if [[ -n "$CARTS_VERBOSE" ]]; then
+                echo "Launching visualizer UI server: python3 ${server_dir}/app.py"
+            fi
+            python3 "${server_dir}/app.py"
+        fi
+    else
+        if [[ -n "$CARTS_VERBOSE" ]]; then
+            echo "Launching visualizer UI server: python3 ${server_dir}/app.py $*"
+        fi
+        python3 "${server_dir}/app.py" "$@"
     fi
-    
-    python3 "$report_script" "$@"
 }
 
 # Function to build CARTS project using system clang
@@ -627,8 +655,16 @@ main() {
         "benchmark")
             run_benchmark "$@"
             ;;
-        "report")
-            run_report "$@"
+        "ui")
+            # Start the external ARTS UI backend and frontend (dev helpers)
+            echo "Launching ARTS UI backend on :8090"
+            (cd "${CARTS_DIR}/external/ArtsUI/backend" && python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8090) &
+            echo "Launching ARTS UI frontend on :5174"
+            (cd "${CARTS_DIR}/external/ArtsUI/frontend" && npm run dev) &
+            echo "Open http://localhost:5174"
+            ;;
+        "visualize")
+            run_visualize "$@"
             ;;
         "setup")
             run_setup "$@"

@@ -10,10 +10,10 @@
 #include "arts/Analysis/Graphs/Base/GraphBase.h"
 #include "arts/Analysis/Graphs/Base/NodeBase.h"
 #include "arts/ArtsDialect.h" // For EdtOp
-#include "llvm/ADT/DenseMap.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "llvm/ADT/DenseMap.h" // EdtGraph stores taskNodes
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/GraphTraits.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -43,16 +43,24 @@ public:
   // Edt-specific methods
   bool isTaskReachable(EdtOp from, EdtOp to);
   llvm::SmallVector<NodeBase *> getDbDependencies(EdtOp task) const;
+  func::FuncOp getFunction() const { return func; }
+  bool hasDbGraph() const { return dbGraph != nullptr; }
+  size_t getNumTasks() const { return taskNodes.size(); }
 
   // For GraphTraits iterators
   NodesIterator nodesBegin() override { return nodes.begin(); }
   NodesIterator nodesEnd() override { return nodes.end(); }
+  ChildIterator childBegin(NodeBase *node) override;
+  ChildIterator childEnd(NodeBase *node) override;
 
 private:
   func::FuncOp func;
   DbGraph *dbGraph; // Reference to data block graph
   DenseMap<EdtOp, std::unique_ptr<EdtTaskNode>> taskNodes;
   std::vector<NodeBase *> nodes; // Non-owning for iteration
+
+  // Ensure DenseMap header is considered directly used
+  using __EnsureDenseMapUsed = llvm::DenseMap<int, int>;
 
   // Private helpers
   void collectNodes();
