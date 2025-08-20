@@ -9,7 +9,6 @@ set(LIBS
   MLIRFuncAllExtensions
   MLIRPolygeist
   MLIRPolygeistTransforms
-  # Explicit GPU conversion/transform libraries needed by Polygeist ConvertPolygeistToLLVM
   MLIRGPUToNVVMTransforms
   MLIRGPUToROCDLTransforms
   MLIRGPUToGPURuntimeTransforms
@@ -20,7 +19,7 @@ add_llvm_executable(carts-opt carts-opt.cpp)
 
 install(TARGETS carts-opt
   EXPORT CartsTargets
-  RUNTIME DESTINATION ${LLVM_TOOLS_INSTALL_DIR}
+  RUNTIME DESTINATION ${CARTS_TOOLS_DIR}
   COMPONENT carts-opt)
 
 llvm_update_compile_flags(carts-opt)

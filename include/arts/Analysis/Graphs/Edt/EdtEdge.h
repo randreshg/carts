@@ -29,7 +29,7 @@ public:
 private:
   NodeBase *from;
   NodeBase *to;
-  // DbGraph node causing dependency
+  /// DbGraph node causing dependency
   NodeBase *dbNode;
 };
 

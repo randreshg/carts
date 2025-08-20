@@ -1,47 +1,23 @@
-//===----------------------------------------------------------------------===//
-// Edt/EdtDataFlowAnalysis.cpp
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: EdtDataFlowAnalysis.cpp
+///
+/// This file implements dataflow analysis for EDT dependencies.
+/// TEMPORARILY DISABLED - requires rework to properly integrate with
+/// MLIR dataflow analysis framework.
+///==========================================================================
 
 #include "arts/Analysis/Edt/EdtDataFlowAnalysis.h"
-#include "llvm/Support/Debug.h"
-// Effects
-#include "mlir/Interfaces/SideEffectInterfaces.h"
 
-#include "arts/Utils/ArtsDebug.h"
-ARTS_DEBUG_SETUP(edt-dataflow)
+/// TODO: Reimplement using proper MLIR dataflow framework based on:
+/// https://lowlevelbits.com/p/the-missing-guide-to-dataflow-analysis
 
-using namespace mlir;
-using namespace mlir::arts;
-using namespace mlir::dataflow;
+namespace mlir {
+namespace arts {
 
-void EdtDataFlowAnalysis::visitOperation(Operation *op,
-                                         ArrayRef<const EdtLattice *> operands,
-                                         ArrayRef<EdtLattice *> results) {
-  if (results.empty()) return;
+/// Placeholder implementation - will be reimplemented properly
+/// No explicit definitions needed - using defaulted versions from header
 
-  EdtFactsValue agg{};
-  // Merge incoming facts
-  for (const EdtLattice *lat : operands) {
-    if (!lat) continue;
-    agg = EdtFactsValue::join(agg, lat->getValue());
-  }
-
-  // Track memory effects to flag reads/writes conservatively
-  if (auto mei = dyn_cast<MemoryEffectOpInterface>(op)) {
-    SmallVector<MemoryEffects::EffectInstance> effs;
-    mei.getEffects(effs);
-    for (auto &e : effs) {
-      if (isa<MemoryEffects::Read>(e.getEffect())) agg.reads = true;
-      if (isa<MemoryEffects::Write>(e.getEffect())) agg.writes = true;
-    }
-  }
-
-  for (EdtLattice *res : results) {
-    if (!res) continue;
-    (void)res->join(agg);
-    ARTS_INFO("edt-facts: op " << op->getName().getStringRef() << " R=" << agg.reads
-                                << " W=" << agg.writes);
-  }
-}
+} // namespace arts
+} // namespace mlir
 
 

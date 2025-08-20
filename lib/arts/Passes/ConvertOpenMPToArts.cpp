@@ -46,7 +46,7 @@ struct OMPParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
     ARTS_DEBUG_TYPE("Converting omp.parallel to arts.parallel");
 
     /// Create a new `arts.edt` operation.
-    auto parOp = rewriter.create<EdtOp>(loc, EdtType::parallel, ValueRange{});
+    auto parOp = rewriter.create<EdtOp>(loc, EdtType::parallel, ValueRange{}, nullptr);
     parOp.getBody().emplaceBlock();
     Block &blk = parOp.getBody().front();
 
@@ -73,7 +73,7 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
     rewriter.setInsertionPoint(op);
 
     /// Create an `arts.epoch` operation and add a region to it.
-    auto syncEdtOp = rewriter.create<EdtOp>(loc, EdtType::sync, ValueRange{});
+    auto syncEdtOp = rewriter.create<EdtOp>(loc, EdtType::sync, ValueRange{}, nullptr);
     Block &syncEdtBlock = syncEdtOp.getBody().emplaceBlock();
 
     /// Create the for loop inside the epoch
@@ -87,7 +87,7 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
 
     /// Create a new EDT operation inside the for loop body
     rewriter.setInsertionPointToStart(forBody);
-    auto edtOp = rewriter.create<EdtOp>(loc, EdtType::task, ValueRange{});
+    auto edtOp = rewriter.create<EdtOp>(loc, EdtType::task, ValueRange{}, nullptr);
     Block &edtBlock = edtOp.getBody().emplaceBlock();
     rewriter.setInsertionPointToStart(&edtBlock);
 
@@ -126,7 +126,7 @@ struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
 
     /// Create a new `arts.single` operation.
     auto artsSingle =
-        rewriter.create<EdtOp>(loc, EdtType::single, ValueRange{});
+        rewriter.create<EdtOp>(loc, EdtType::single, ValueRange{}, nullptr);
     artsSingle.getBody().emplaceBlock();
 
     /// Move the region's operations.
@@ -251,7 +251,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
     }
 
     /// Create a new `arts.edt` operation.
-    auto edtOp = rewriter.create<EdtOp>(loc, EdtType::task, deps);
+    auto edtOp = rewriter.create<EdtOp>(loc, EdtType::task, ValueRange{}, nullptr);
     edtOp.getBody().emplaceBlock();
     Block &blk = edtOp.getBody().front();
 

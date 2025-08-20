@@ -2,17 +2,19 @@
 // Db/DbGraph.cpp - Implementation of DbGraph
 //===----------------------------------------------------------------------===//
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
-#include "arts/Analysis/Db/DbDataFlowAnalysis.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
-#include "mlir/Analysis/DataFlow/Solver.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "arts/Analysis/Db/DbDataFlowAnalysis.h"
+#include "arts/Analysis/LoopAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbEdge.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
+#include "mlir/Analysis/DataFlowFramework.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <string>
-
+using namespace mlir;
 using namespace mlir::arts;
 
 #include "arts/Utils/ArtsDebug.h"
@@ -292,16 +294,22 @@ DbAllocOp DbGraph::findRootAllocOp(Operation *op) {
 
 void DbGraph::buildDependencies() {
   ARTS_INFO("Phase 2 - Building dependencies");
-  // Wire up a dense forward dataflow over the function to build lifetime edges.
+  // Use the dataflow analysis from the analysis instead of directly accessing the solver
   if (!dataFlowAnalysis) {
-    // Register analysis instance inside the solver and initialize it
-    dataFlowAnalysis = analysis->getSolver().load<DbDataFlowAnalysis>();
-    dataFlowAnalysis->initialize(this, analysis);
+    // Get the dataflow analysis from the analysis
+    dataFlowAnalysis = analysis->getDataFlowAnalysis();
+    if (dataFlowAnalysis) {
+      dataFlowAnalysis->initialize(this, analysis);
+    }
   }
-  // Initialize and run the solver starting from this function
-  (void)analysis->getSolver().initializeAndRun(func);
-  dataFlowAnalysis->analyze();
-  ARTS_INFO("Phase 2 - Data flow analysis finished");
+  
+  if (dataFlowAnalysis) {
+    // Run the dataflow analysis
+    dataFlowAnalysis->analyze();
+    ARTS_INFO("Phase 2 - Data flow analysis finished");
+  } else {
+    ARTS_WARN("No dataflow analysis available, skipping dependency building");
+  }
 }
 
 void DbGraph::computeOpOrder() {
@@ -309,10 +317,10 @@ void DbGraph::computeOpOrder() {
   func.walk([&](Operation *op) { opOrder[op] = idx++; });
 }
 
-static SmallVector<int64_t> extractConstVector(ValueRange vals) {
-  SmallVector<int64_t> out;
+static llvm::SmallVector<int64_t> extractConstVector(mlir::ValueRange vals) {
+  llvm::SmallVector<int64_t> out;
   out.reserve(vals.size());
-  for (Value v : vals) {
+  for (mlir::Value v : vals) {
     if (auto c = v.getDefiningOp<mlir::arith::ConstantIndexOp>()) {
       out.push_back(c.value());
     } else {
@@ -402,32 +410,49 @@ void DbGraph::computeMetrics() {
     });
     // Compute alloc-level end index (last release)
     unsigned lastEnd = M.allocIndex;
-    for (auto &iv : ivs) lastEnd = std::max(lastEnd, iv.endIndex);
+    for (auto &iv : ivs)
+      lastEnd = std::max(lastEnd, iv.endIndex);
     M.endIndex = lastEnd;
     M.intervals = std::move(ivs);
-    // Approximate per-alloc critical span and total access bytes using DbAnalysis slice info (best-effort)
+    // Approximate per-alloc critical span and total access bytes using
+    // DbAnalysis slice info (best-effort)
     M.criticalSpan = 0;
     if (!M.intervals.empty()) {
       unsigned minB = M.intervals.front().beginIndex;
       unsigned maxE = M.intervals.front().endIndex;
-      for (auto &iv : M.intervals) { minB = std::min(minB, iv.beginIndex); maxE = std::max(maxE, iv.endIndex); }
+      for (auto &iv : M.intervals) {
+        minB = std::min(minB, iv.beginIndex);
+        maxE = std::max(maxE, iv.endIndex);
+      }
       M.criticalSpan = maxE >= minB ? (maxE - minB + 1) : 0;
     }
     // Precise critical path (sum of disjoint durations after merging overlaps)
-    SmallVector<std::pair<unsigned,unsigned>, 8> segs;
-    for (auto &iv : M.intervals) segs.emplace_back(iv.beginIndex, iv.endIndex);
-    llvm::sort(segs, [](auto a, auto b){ return a.first < b.first || (a.first==b.first && a.second < b.second); });
-    unsigned curS = 0, curE = 0; bool initialized = false; M.criticalPath = 0;
-    for (auto [s,e] : segs) {
-      if (!initialized) { curS = s; curE = e; initialized = true; continue; }
+    SmallVector<std::pair<unsigned, unsigned>, 8> segs;
+    for (auto &iv : M.intervals)
+      segs.emplace_back(iv.beginIndex, iv.endIndex);
+    llvm::sort(segs, [](auto a, auto b) {
+      return a.first < b.first || (a.first == b.first && a.second < b.second);
+    });
+    unsigned curS = 0, curE = 0;
+    bool initialized = false;
+    M.criticalPath = 0;
+    for (auto [s, e] : segs) {
+      if (!initialized) {
+        curS = s;
+        curE = e;
+        initialized = true;
+        continue;
+      }
       if (s <= curE) {
         curE = std::max(curE, e);
       } else {
         M.criticalPath += (curE - curS + 1);
-        curS = s; curE = e;
+        curS = s;
+        curE = e;
       }
     }
-    if (initialized) M.criticalPath += (curE - curS + 1);
+    if (initialized)
+      M.criticalPath += (curE - curS + 1);
     // Sum estimated bytes per interval (unknown treated as 0)
     M.totalAccessBytes = 0;
     for (auto &iv : M.intervals) {
@@ -440,8 +465,9 @@ void DbGraph::computeMetrics() {
     if (auto *LA = analysis->getLoopAnalysis()) {
       unsigned depthMax = 0;
       for (auto &iv : M.intervals) {
-        if (!iv.acquire) continue;
-        SmallVector<LoopAnalysis::LoopInfo *, 4> enc;
+        if (!iv.acquire)
+          continue;
+        SmallVector<LoopInfo *, 4> enc;
         LA->collectEnclosingLoops(iv.acquire.getOperation(), enc);
         depthMax = std::max<unsigned>(depthMax, enc.size());
       }
@@ -451,9 +477,11 @@ void DbGraph::computeMetrics() {
     unsigned firstIdx = M.allocIndex;
     unsigned lastIdx = opOrder.empty() ? 0u : (unsigned)opOrder.size() - 1;
     if (lastIdx > 0) {
-      M.isLongLived = (double)(M.endIndex - firstIdx + 1) / (double)(lastIdx + 1) > 0.7;
+      M.isLongLived =
+          (double)(M.endIndex - firstIdx + 1) / (double)(lastIdx + 1) > 0.7;
     }
-    // Escaping if the alloc result is returned or passed to unknown calls (approx)
+    // Escaping if the alloc result is returned or passed to unknown calls
+    // (approx)
     M.maybeEscaping = false;
     for (Operation *user : alloc.getPtr().getUsers()) {
       if (!isa<DbAcquireOp>(user) && !isa<DbReleaseOp>(user)) {
@@ -465,7 +493,11 @@ void DbGraph::computeMetrics() {
   }
 
   // Sweep-line over intervals for peak
-  struct Event { unsigned idx; int delta; uint64_t bytes; };
+  struct Event {
+    unsigned idx;
+    int delta;
+    uint64_t bytes;
+  };
   SmallVector<Event, 32> events;
   for (auto &kv : allocMetrics) {
     const DbAllocMetrics &M = kv.second;
@@ -474,19 +506,24 @@ void DbGraph::computeMetrics() {
       events.push_back({iv.endIndex + 1, -1, M.staticBytes});
     }
   }
-  llvm::sort(events, [](const Event &a, const Event &b) { return a.idx < b.idx; });
+  llvm::sort(events,
+             [](const Event &a, const Event &b) { return a.idx < b.idx; });
   int live = 0;
   uint64_t liveBytes = 0;
   for (auto &e : events) {
     live += e.delta;
-    if (e.delta > 0) liveBytes += e.bytes; else liveBytes -= e.bytes;
+    if (e.delta > 0)
+      liveBytes += e.bytes;
+    else
+      liveBytes -= e.bytes;
     peakLiveDbs = std::max<uint64_t>(peakLiveDbs, (uint64_t)live);
     peakBytes = std::max<uint64_t>(peakBytes, liveBytes);
   }
 
   // Simple reuse candidates: non-overlapping alloc lifetimes with same bytes
   SmallVector<DbAllocOp, 16> allocs;
-  for (auto &kv : allocMetrics) allocs.push_back(kv.first);
+  for (auto &kv : allocMetrics)
+    allocs.push_back(kv.first);
   llvm::sort(allocs, [&](DbAllocOp a, DbAllocOp b) {
     return getOrder(a.getOperation()) < getOrder(b.getOperation());
   });
@@ -507,33 +544,41 @@ void DbGraph::computeReuseColoring() {
   allocColor.clear();
   colorGroups.clear();
   SmallVector<DbAllocOp, 16> allocs;
-  for (auto &kv : allocMetrics) allocs.push_back(kv.first);
+  for (auto &kv : allocMetrics)
+    allocs.push_back(kv.first);
   // Sort by descending weight: bigger and longer-lived first
   llvm::sort(allocs, [&](DbAllocOp a, DbAllocOp b) {
     const auto &A = allocMetrics[a];
     const auto &B = allocMetrics[b];
-    uint64_t wa = std::max<uint64_t>(A.staticBytes, A.totalAccessBytes) * (1 + A.criticalPath);
-    uint64_t wb = std::max<uint64_t>(B.staticBytes, B.totalAccessBytes) * (1 + B.criticalPath);
-    if (wa != wb) return wa > wb;
+    uint64_t wa = std::max<uint64_t>(A.staticBytes, A.totalAccessBytes) *
+                  (1 + A.criticalPath);
+    uint64_t wb = std::max<uint64_t>(B.staticBytes, B.totalAccessBytes) *
+                  (1 + B.criticalPath);
+    if (wa != wb)
+      return wa > wb;
     return A.allocIndex < B.allocIndex;
   });
 
   auto interferes = [&](DbAllocOp x, DbAllocOp y) -> bool {
     const auto &X = allocMetrics[x];
     const auto &Y = allocMetrics[y];
-    bool lifetimeOverlap = !(X.endIndex < Y.allocIndex || Y.endIndex < X.allocIndex);
-    if (lifetimeOverlap) return true;
+    bool lifetimeOverlap =
+        !(X.endIndex < Y.allocIndex || Y.endIndex < X.allocIndex);
+    if (lifetimeOverlap)
+      return true;
     return mayAlias(x, y);
   };
 
   for (DbAllocOp a : allocs) {
-    SmallDenseSet<unsigned, 8> used;
+    llvm::SmallDenseSet<DbAllocOp> seen;
     for (auto &kv : allocColor) {
       DbAllocOp b = kv.first;
-      if (interferes(a, b)) used.insert(kv.second);
+      if (interferes(a, b))
+        seen.insert(b);
     }
     unsigned c = 0;
-    while (used.count(c)) ++c;
+    while (seen.count(a))
+      ++c;
     allocColor[a] = c;
     colorGroups[c].push_back(a);
   }
@@ -548,21 +593,32 @@ void DbGraph::exportToJson(llvm::raw_ostream &os) const {
   os << "  \"allocs\": [\n";
   bool first = true;
   for (const auto &kv : allocMetrics) {
-    if (!first) os << ",\n"; first = false;
+    if (!first)
+      os << ",\n";
+    first = false;
     DbAllocOp alloc = kv.first;
     const DbAllocMetrics &M = kv.second;
     os << "    {\n";
-    os << "      \"id\": \"" << sanitizeForDot(getNode(alloc.getOperation())->getHierId()) << "\",\n";
-    os << "      \"allocIndex\": " << M.allocIndex << ", \"endIndex\": " << M.endIndex << ",\n";
-    os << "      \"numAcquires\": " << M.numAcquires << ", \"numReleases\": " << M.numReleases << ",\n";
-    os << "      \"staticBytes\": " << M.staticBytes << ", \"criticalSpan\": " << M.criticalSpan << ", \"criticalPath\": " << M.criticalPath << ", \"totalAccessBytes\": " << M.totalAccessBytes << ",\n";
-    os << "      \"isLongLived\": " << (M.isLongLived ? 1 : 0) << ", \"maybeEscaping\": " << (M.maybeEscaping ? 1 : 0) << ",\n";
+    os << "      \"id\": \""
+       << sanitizeForDot(getNode(alloc.getOperation())->getHierId()) << "\",\n";
+    os << "      \"allocIndex\": " << M.allocIndex
+       << ", \"endIndex\": " << M.endIndex << ",\n";
+    os << "      \"numAcquires\": " << M.numAcquires
+       << ", \"numReleases\": " << M.numReleases << ",\n";
+    os << "      \"staticBytes\": " << M.staticBytes
+       << ", \"criticalSpan\": " << M.criticalSpan
+       << ", \"criticalPath\": " << M.criticalPath
+       << ", \"totalAccessBytes\": " << M.totalAccessBytes << ",\n";
+    os << "      \"isLongLived\": " << (M.isLongLived ? 1 : 0)
+       << ", \"maybeEscaping\": " << (M.maybeEscaping ? 1 : 0) << ",\n";
     os << "      \"intervals\": [\n";
     bool firstIv = true;
     for (auto &iv : M.intervals) {
-      if (!firstIv) os << ",\n"; firstIv = false;
+      if (!firstIv)
+        os << ",\n";
+      firstIv = false;
       os << "        { \"begin\": " << iv.beginIndex << ", \"end\": " << iv.endIndex
-         << ", \"mode\": \"" << iv.acquire.getMode().getValue() << "\" }";
+         << ", \"mode\": \"" << const_cast<DbAcquireOp&>(iv.acquire).getMode() << "\" }";
     }
     os << "\n      ]\n";
     os << "    }";
@@ -573,21 +629,27 @@ void DbGraph::exportToJson(llvm::raw_ostream &os) const {
   for (size_t i = 0; i < reuseCandidates.size(); ++i) {
     auto A = reuseCandidates[i].first;
     auto B = reuseCandidates[i].second;
-    os << "    { \"a\": \"" << sanitizeForDot(getNode(A.getOperation())->getHierId())
-       << "\", \"b\": \"" << sanitizeForDot(getNode(B.getOperation())->getHierId())
-       << "\" }" << (i + 1 < reuseCandidates.size() ? "," : "") << "\n";
+    os << "    { \"a\": \""
+       << sanitizeForDot(getNode(A.getOperation())->getHierId())
+       << "\", \"b\": \""
+       << sanitizeForDot(getNode(B.getOperation())->getHierId()) << "\" }"
+       << (i + 1 < reuseCandidates.size() ? "," : "") << "\n";
   }
   os << "  ],\n";
   // Coloring groups
   os << "  \"reuseColoring\": {\n";
   bool firstColor = true;
   for (auto &cg : colorGroups) {
-    if (!firstColor) os << ",\n"; firstColor = false;
+    if (!firstColor)
+      os << ",\n";
+    firstColor = false;
     os << "    \"" << cg.first << "\": [";
     for (size_t i = 0; i < cg.second.size(); ++i) {
       auto A = cg.second[i];
-      os << "\"" << sanitizeForDot(getNode(A.getOperation())->getHierId()) << "\"";
-      if (i + 1 < cg.second.size()) os << ", ";
+      os << "\"" << sanitizeForDot(getNode(A.getOperation())->getHierId())
+         << "\"";
+      if (i + 1 < cg.second.size())
+        os << ", ";
     }
     os << "]";
   }

@@ -23,8 +23,8 @@ add_clang_executable(carts-run
 install(
   TARGETS carts-run
   EXPORT CartsTargets
-  RUNTIME DESTINATION ${LLVM_TOOLS_INSTALL_DIR}
-  COMPONENT carts
+  RUNTIME DESTINATION ${CARTS_TOOLS_DIR}
+  COMPONENT carts-run
 )
 
 target_include_directories(carts-run PRIVATE

@@ -4,6 +4,8 @@
 
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Db/DbDataFlowAnalysis.h"
+#include "arts/Analysis/Db/DbAliasAnalysis.h"
+#include "arts/Analysis/LoopAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -21,7 +23,11 @@ DbAnalysis::DbAnalysis(Operation *module) : module(module), solver() {
   ARTS_INFO("Initializing DbAnalysis for module");
   loopAnalysis = std::make_unique<LoopAnalysis>(module);
   dbAliasAnalysis = std::make_unique<DbAliasAnalysis>(this);
-  // Preload our DB dense analysis so solver knows about it
+  
+  // Create the dataflow analysis with the solver
+  dbDataFlowAnalysis = std::make_unique<DbDataFlowAnalysis>(solver);
+  
+  // Load the dataflow analysis into the solver
   (void)solver.load<DbDataFlowAnalysis>();
 
   // Add baseline data flow analyses to solver
@@ -41,6 +47,10 @@ DbGraph *DbAnalysis::getOrCreateGraph(func::FuncOp func) {
 
   ARTS_INFO("Creating new DbGraph for function: " << func.getName());
   auto newGraph = std::make_unique<DbGraph>(func, this);
+  
+  // Initialize the dataflow analysis with the graph and analysis context
+  dbDataFlowAnalysis->initialize(newGraph.get(), this);
+  
   // Build nodes and dependencies (runs dataflow internally)
   newGraph->build();
 

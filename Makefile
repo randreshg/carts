@@ -136,7 +136,6 @@ install: llvm arts polygeist build
 
 uninstall:
 	-cat $(BUILD_DIR)/install_manifest.txt | xargs rm -f -r
-	rm -f setup_env.sh
 	rm -rf $(BUILD_DIR)
 
 fulluninstall: uninstall arts-clean

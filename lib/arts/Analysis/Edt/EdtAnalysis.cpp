@@ -235,7 +235,7 @@ const EdtTaskSummary *EdtAnalysis::getSummary(Operation *edtOp) const {
 }
 
 EdtTaskSummary EdtAnalysis::summarizeEdt(Operation *edtOp) const {
-  EdtTaskSummary s{};
+  EdtTaskSummary s;
   // Count ops and memory behavior; estimate bytes using element type
   static_cast<EdtOp>(edtOp).walk([&](Operation *op) {
     ++s.totalOps;
@@ -317,7 +317,7 @@ static double jaccardOverlap(const DenseSet<Value> &a, const DenseSet<Value> &b)
 }
 
 EdtPairAffinity EdtAnalysis::affinity(Operation *aOp, Operation *bOp) const {
-  EdtPairAffinity aff{};
+  EdtPairAffinity aff;
   auto *sa = getSummary(aOp);
   auto *sb = getSummary(bOp);
   if (!sa || !sb) return aff;

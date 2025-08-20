@@ -13,9 +13,8 @@ CARTS is an LLVM/MLIR-based compiler framework that implements the ARTS (Asynchr
 ## Quick Start
 
 ```bash
-# Install dependencies and build
+# Install dependencies, build, and setup PATH automatically
 python3 tools/setup/carts-setup.py
-source setup_env.sh
 
 # Build project
 carts build
@@ -27,6 +26,7 @@ carts execute simple.cpp -o simple
 Notes:
 - Always use the `carts` wrapper for all operations (conversion, optimization, lowering, compile/link).
 - Project build uses system clang; ARTS operations use the installed LLVM toolchain.
+- The setup script automatically adds `carts` to your PATH.
 
 ## Contributing
 - Track work in the [Next Steps Dashboard](https://www.notion.so/a5b6038e1d06457ba2c97032d0da8e79)

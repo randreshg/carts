@@ -88,8 +88,7 @@ DbAllocOp createDbAlloc(OpBuilder &builder, Location loc, Value basePtr,
   /// Create DbAllocOp
   SmallVector<Value> emptySize;
   auto dbAllocOp = builder.create<DbAllocOp>(
-      loc, opaqueType, ArtsModeAttr::get(builder.getContext(), mode), basePtr,
-      emptySize, allocTypeAttr);
+      loc, mode, emptySize, basePtr);
 
   ARTS_INFO("Created DbAllocOp with allocation type: "
             << stringifyDbAllocType(allocType));
@@ -162,8 +161,7 @@ void ConvertDbToOpaquePtrPass::preprocessDbAllocOps(ModuleOp module) {
         auto newType = MemRefType::get(oldType.getShape(), builder.getI8Type());
 
         auto newDbAllocOp = builder.create<DbAllocOp>(
-            dbAllocOp.getLoc(), newType, dbAllocOp.getMode(),
-            dbAllocOp.getAddress(), ValueRange{}, dbAllocOp.getAllocTypeAttr());
+            dbAllocOp.getLoc(), dbAllocOp.getMode(), ValueRange{}, dbAllocOp.getAddress());
 
         /// Copy attributes and mark as processed
         newDbAllocOp->setAttrs(dbAllocOp->getAttrs());

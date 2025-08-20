@@ -3,8 +3,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "arts/Analysis/Db/DbDataFlowAnalysis.h"
-#include "arts/Analysis/Graphs/Db/DbEdge.h"
+
+#include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
+#include "arts/Analysis/Graphs/Db/DbEdge.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "llvm/Support/Debug.h"
@@ -83,7 +85,12 @@ void DbDataFlowAnalysis::visitOperation(Operation *op, const DbState &before,
   } else if (auto acquireOp = dyn_cast<DbAcquireOp>(op)) {
     DbAllocOp parentAlloc = graph->getParentAlloc(acquireOp.getOperation());
     if (parentAlloc && before.liveAllocs.contains(parentAlloc)) {
-      after->activeAcquires[parentAlloc].insert(acquireOp);
+      auto it = before.activeAcquires.find(parentAlloc);
+      if (it != before.activeAcquires.end()) {
+        after->activeAcquires[parentAlloc].insert(acquireOp);
+      } else {
+        after->activeAcquires[parentAlloc].insert(acquireOp);
+      }
       ARTS_INFO("facts: acquire active parent " << parentAlloc);
     } else {
       op->emitWarning("Acquire without live allocation");
@@ -91,32 +98,38 @@ void DbDataFlowAnalysis::visitOperation(Operation *op, const DbState &before,
     }
   } else if (auto releaseOp = dyn_cast<DbReleaseOp>(op)) {
     DbAllocOp parentAlloc = graph->getParentAlloc(releaseOp.getOperation());
-    if (parentAlloc && !before.activeAcquires[parentAlloc].empty()) {
-      after->pendingReleases[parentAlloc].insert(releaseOp);
-      // Pair in order: prefer the most recent active acquire first
-      SmallVector<DbAcquireOp, 8> actives;
-      for (auto acquire : before.activeAcquires[parentAlloc]) actives.push_back(acquire);
-      llvm::sort(actives, [&](DbAcquireOp a, DbAcquireOp b){
-        return graph->getParentAlloc(a.getOperation()) && graph->getParentAlloc(b.getOperation()) &&
-               graph->getParentAlloc(a.getOperation()) == graph->getParentAlloc(b.getOperation()) &&
-               a.getOperation()->isBeforeInBlock(b.getOperation());
-      });
-      for (auto acquire : actives) {
-        auto *acquireNode = static_cast<DbAcquireNode *>(
-            graph->getNode(acquire.getOperation()));
-        auto *releaseNode = static_cast<DbReleaseNode *>(
-            graph->getNode(releaseOp.getOperation()));
-        if (acquireNode && releaseNode && aliasAA &&
-            aliasAA->mayAlias(*acquireNode, *releaseNode)) {
-          createLifetimeEdge(acquireNode, releaseNode);
+    if (parentAlloc) {
+      auto it = before.activeAcquires.find(parentAlloc);
+      if (it != before.activeAcquires.end() && !it->second.empty()) {
+        after->pendingReleases[parentAlloc].insert(releaseOp);
+        // Pair in order: prefer the most recent active acquire first
+        SmallVector<DbAcquireOp, 8> actives;
+        auto it = before.activeAcquires.find(parentAlloc);
+        if (it != before.activeAcquires.end()) {
+          for (auto acquire : it->second) actives.push_back(acquire);
         }
+        llvm::sort(actives, [&](DbAcquireOp a, DbAcquireOp b){
+          return graph->getParentAlloc(a.getOperation()) && graph->getParentAlloc(b.getOperation()) &&
+                 graph->getParentAlloc(a.getOperation()) == graph->getParentAlloc(b.getOperation()) &&
+                 a.getOperation()->isBeforeInBlock(b.getOperation());
+        });
+        for (auto acquire : actives) {
+          auto *acquireNode = static_cast<DbAcquireNode *>(
+              graph->getNode(acquire.getOperation()));
+          auto *releaseNode = static_cast<DbReleaseNode *>(
+              graph->getNode(releaseOp.getOperation()));
+          if (acquireNode && releaseNode && aliasAA &&
+              aliasAA->mayAlias(*acquireNode, *releaseNode)) {
+            createLifetimeEdge(acquireNode, releaseNode);
+          }
+        }
+        // Reset active acquires for this allocation after matching release.
+        after->activeAcquires[parentAlloc].clear();
+        ARTS_INFO("facts: release processed parent " << parentAlloc);
+      } else {
+        op->emitWarning("Release without active acquire");
+        ARTS_WARN("Release without active acquire for " << releaseOp);
       }
-      // Reset active acquires for this allocation after matching release.
-      after->activeAcquires[parentAlloc].clear();
-      ARTS_INFO("facts: release processed parent " << parentAlloc);
-    } else {
-      op->emitWarning("Release without active acquire");
-      ARTS_WARN("Release without active acquire for " << releaseOp);
     }
   }
 
@@ -140,7 +153,6 @@ void DbDataFlowAnalysis::analyze() {
   //       acquire.getOperation()->emitWarning(
   //           "Unmatched acquire at end of function");
   //     }
-  //   }
   // }
   // for (const auto &pair : finalState.pendingReleases) {
   //   if (!pair.second.empty()) {
