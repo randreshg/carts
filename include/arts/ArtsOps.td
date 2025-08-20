@@ -83,7 +83,8 @@ def DbAllocOp : Arts_Op<"db_alloc", [
     Optional<AnyMemRef>:$address,
     Variadic<Index>:$sizes,
     OptionalAttr<DbAllocTypeAttr>:$allocType,
-    OptionalAttr<I32Attr>:$node // Preferred node/route for the DB (0 = current)
+    // Preferred node/route for the DB (0 = current)
+    OptionalAttr<I32Attr>:$node 
   );
 
   let results = (outs AnyMemRef:$ptr);
