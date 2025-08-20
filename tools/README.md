@@ -19,7 +19,7 @@ tools/
 1. **Setup everything automatically:**
    ```bash
    python3 tools/setup/carts-setup.py
-   source setup_env.sh
+   # The 'carts' command is now available in your PATH
    ```
 
 2. **Build the project:**
@@ -66,7 +66,7 @@ tools/
 ## Individual Tools
 
 ### Setup (`tools/setup/carts-setup.py`)
-Automated setup script that installs all dependencies and builds the project.
+Automated setup script that installs all dependencies, builds the project, and automatically adds `carts` to your PATH.
 
 ```bash
 python3 tools/setup/carts-setup.py --help
@@ -85,6 +85,8 @@ Use `carts ui` and open the Reports tab. The UI aggregates CSV/JSON from `exampl
 ## Environment Setup
 
 ### Adding carts to PATH
+The setup script automatically adds `carts` to your PATH. If you restart your terminal, you can re-add it with:
+
 ```bash
 python3 tools/setup/carts-setup.py --add-to-path
 ```

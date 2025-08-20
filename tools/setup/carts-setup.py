@@ -81,48 +81,13 @@ def build_project():
     
     return True
 
-def create_environment_script():
-    """Create an environment setup script."""
-    project_root = Path(__file__).resolve().parent.parent.parent
-    env_script = project_root / 'setup_env.sh'
-    
-    install_dir = project_root / '.install'
-    
-    script_content = f"""#!/bin/bash
-# CARTS Environment Setup Script
-# Source this script to set up the CARTS environment
-
-export CARTS_ROOT="{project_root}"
-export PATH="{install_dir}/carts/bin:{install_dir}/polygeist/bin:{install_dir}/llvm/bin:$PATH"
-export LD_LIBRARY_PATH="{install_dir}/carts/lib:{install_dir}/polygeist/lib:{install_dir}/arts/lib:{install_dir}/llvm/lib:$LD_LIBRARY_PATH"
-
-# For macOS, also set DYLD_LIBRARY_PATH
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    export DYLD_LIBRARY_PATH="{install_dir}/carts/lib:{install_dir}/polygeist/lib:{install_dir}/arts/lib:{install_dir}/llvm/lib:$DYLD_LIBRARY_PATH"
-fi
-
-echo "CARTS environment set up successfully!"
-echo "You can now use: carts --help"
-echo ""
-echo "To make carts available permanently, add this line to your shell profile:"
-echo "export PATH=\\"{install_dir}/carts/bin:$PATH\\""
-"""
-    
-    with open(env_script, 'w') as f:
-        f.write(script_content)
-    
-    os.chmod(env_script, 0o755)
-    print(f"Environment script created: {env_script}")
-    print("Source it with: source setup_env.sh")
-
 def add_to_path():
-    """Add CARTS to the user's PATH."""
+    """Add CARTS to the user's PATH by adding the carts script location."""
     project_root = Path(__file__).resolve().parent.parent.parent
-    install_dir = project_root / '.install'
-    carts_bin = install_dir / 'carts' / 'bin'
+    carts_script_dir = project_root / 'tools'
     
-    if not carts_bin.exists():
-        print("Error: CARTS installation not found. Please run setup first.")
+    if not (carts_script_dir / 'carts').exists():
+        print("Error: CARTS script not found. Please ensure you're in the correct directory.")
         return False
     
     # Check if carts is already in current PATH
@@ -140,7 +105,7 @@ def add_to_path():
             shell_profile = Path.home() / '.bash_profile'
     else:
         print("Unsupported shell. Please manually add to your shell profile:")
-        print(f"export PATH=\"{carts_bin}:$PATH\"")
+        print(f"export PATH=\"{carts_script_dir}:$PATH\"")
         return False
     
     # Check if already added to shell profile
@@ -148,14 +113,14 @@ def add_to_path():
         with open(shell_profile, 'r') as f:
             content = f.read()
             # Check for exact path match
-            if str(carts_bin) in content:
+            if str(carts_script_dir) in content:
                 print("CARTS is already configured in your shell profile")
                 print("Try: source ~/.zshrc (or restart your terminal)")
                 return True
     
     # Add to shell profile
     with open(shell_profile, 'a') as f:
-        f.write(f"\n# CARTS\nexport PATH=\"{carts_bin}:$PATH\"\n")
+        f.write(f"\n# CARTS\nexport PATH=\"{carts_script_dir}:$PATH\"\n")
     
     print(f"Added CARTS to {shell_profile}")
     print("Run 'source ~/.zshrc' or restart your terminal to use 'carts'")
@@ -176,6 +141,7 @@ def main():
     if args.add_to_path:
         if add_to_path():
             print("CARTS added to PATH successfully!")
+            print("You can now use 'carts' from anywhere")
         else:
             sys.exit(1)
         return
@@ -189,15 +155,18 @@ def main():
             print("Failed to build project")
             sys.exit(1)
     
-    create_environment_script()
+    # Add to PATH automatically after successful build
+    if add_to_path():
+        print("CARTS added to PATH automatically!")
     
     print("\n=== Setup Complete! ===")
     print("To use CARTS:")
-    print("1. Source the environment: source setup_env.sh")
+    print("1. The 'carts' command is now available in your PATH")
     print("2. Use the carts wrapper: carts --help")
-    print("3. Run benchmarks: carts-benchmark --help")
+    print("3. Run benchmarks: carts benchmark --help")
     print("4. Launch ArtsUI: carts ui")
-    print(f"5. Add to PATH: python3 tools/setup/{Path(__file__).name} --add-to-path")
+    print("")
+    print("Note: If you restart your terminal, run: python3 tools/setup/carts-setup.py --add-to-path")
 
 if __name__ == "__main__":
     main() 

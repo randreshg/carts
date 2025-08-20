@@ -205,8 +205,8 @@ void EdtGraph::buildDependencies() {
   ARTS_INFO("Phase 2 - Building EDT dependencies");
 
   // Index releases/acquires by root alloc to avoid quadratic walks
-  DenseMap<DbAllocOp, SmallVector<std::pair<EdtTaskNode *, NodeBase *>>>> allocToReleases;
-  DenseMap<DbAllocOp, SmallVector<std::pair<EdtTaskNode *, NodeBase *>>>> allocToAcquires;
+  llvm::DenseMap<DbAllocOp, llvm::SmallVector<std::pair<EdtTaskNode *, NodeBase *>>> allocToReleases;
+  llvm::DenseMap<DbAllocOp, llvm::SmallVector<std::pair<EdtTaskNode *, NodeBase *>>> allocToAcquires;
 
   for (auto &pair : taskNodes) {
     EdtOp taskOp = pair.first;
