@@ -19,7 +19,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include "arts/Utils/ArtsDebug.h"
-ARTS_DEBUG_SETUP(edt-invariant-code-motion);
+ARTS_DEBUG_SETUP(edt - invariant - code - motion);
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -50,8 +50,6 @@ void EdtInvariantCodeMotionPass::runOnOperation() {
     ARTS_INFO("Moved " << movedCount << " operations out of EDT.");
   });
 
-  // Optionally, mark analysis as preserved or invalidated if needed,
-  // depending on what the pass manager expects and what analyses are affected.
   // if (!changed)
   //  markAllAnalysesPreserved();
 

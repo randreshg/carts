@@ -48,6 +48,10 @@ carts setup [opts]             # Setup environment
 carts clean                    # Clean generated files
 ```
 
+### Cleaning and Rebuild Guidance
+- Run `carts clean` only inside the specific example/test directory you are working on (e.g., `tests/test/tasksimple`, `examples/tasking/matrixmul`).
+- Do not rebuild the entire CARTS project unless you have modified CARTS itself (files under `include/`, `lib/`, `tools/`, or build system configs).
+
 ## Complete Compilation Pipeline
 
 ### Pipeline Overview
@@ -59,39 +63,6 @@ carts cgeist → MLIR (.mlir)
 carts run → LLVM IR (.ll)
     ↓
 carts compile → Executable (binary)
-```
-
-### Step-by-Step Compilation Pipeline (Using carts script)
-
-#### 1. C++ to MLIR (Polygeist)
-```bash
-carts cgeist simple.cpp -std=c++17 -fopenmp  -O0 -S > simple.mlir
-```
-
-#### 2. MLIR Optimization and ARTS Conversion
-```bash
-carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg \
-  --canonicalize --loop-invariant-code-motion --arts-inliner \
-  --convert-openmp-to-arts --symbol-dce > simple-arts.mlir
-```
-
-#### 3. EDT and DataBlock Processing
-```bash
-carts opt simple-arts.mlir --edt --edt-invariant-code-motion \
-  --create-dbs --canonicalize --db --canonicalize --cse \
-  --edt-pointer-rematerialization --create-epochs \
-  --convert-arts-to-llvm --canonicalize --cse \
-  --convert-polygeist-to-llvm --cse > simple-final.mlir
-```
-
-#### 4. LLVM IR Generation
-```bash
-carts mlir-translate --mlir-to-llvmir simple-final.mlir > simple-arts.ll
-```
-
-#### 5. Final Compilation
-```bash
-carts compile simple-arts.ll -o simple
 ```
 
 ## Alternative: Complete Pipeline with carts run
@@ -117,10 +88,8 @@ This automatically runs the entire pipeline:
 ## Debug Options
 ```bash
 # Debug specific passes
-carts opt simple.mlir --convert-openmp-to-arts -debug-only=convert-openmp-to-arts
-carts opt simple.mlir --create-dbs -debug-only=create-dbs
-carts opt simple.mlir --db -debug-only=db,db-analysis
-carts opt simple.mlir --convert-arts-to-llvm -debug-only=convert-arts-to-llvm
+carts opt simple.mlir --convert-openmp-to-arts -debug-only=convert_openmp_to_arts
+carts opt simple.mlir --create-dbs -debug-only=create_dbs
 ```
 
 ## Pass Pipeline Control

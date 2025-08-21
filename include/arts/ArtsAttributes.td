@@ -38,9 +38,9 @@ class Arts_Attr<string attrName, string attrMnemonic, list<Trait> traits = []>
 def ArtsMode : Arts_I32Enum<"ArtsMode",
     "ARTS DataBlock access mode",
     [
-      I32EnumAttrCase<"in", 0, "Read-only access">,
-      I32EnumAttrCase<"out", 1, "Write-only access">,
-      I32EnumAttrCase<"inout", 2, "Read-write access">
+      I32EnumAttrCase<"in", 0, "in">,
+      I32EnumAttrCase<"out", 1, "out">,
+      I32EnumAttrCase<"inout", 2, "inout">
     ]>;
 
 // Enum attribute for ARTS access modes
@@ -50,10 +50,10 @@ def ArtsModeAttr : Arts_I32EnumAttr<"mode", ArtsMode>;
 def DbAllocType : Arts_I32Enum<"DbAllocType",
     "ARTS DB allocation type",
     [
-      I32EnumAttrCase<"stack", 0, "Stack allocation">,
-      I32EnumAttrCase<"heap", 1, "Heap allocation">,
-      I32EnumAttrCase<"global", 2, "Global allocation">,
-      I32EnumAttrCase<"unknown", 3, "Unknown allocation type">
+      I32EnumAttrCase<"stack", 0, "stack">,
+      I32EnumAttrCase<"heap", 1, "heap">,
+      I32EnumAttrCase<"global", 2, "global">,
+      I32EnumAttrCase<"unknown", 3, "unknown">
     ]>;
 
 /// Enum attribute for DB allocation types
@@ -63,10 +63,10 @@ def DbAllocTypeAttr : Arts_I32EnumAttr<"alloc_type", DbAllocType>;
 def EdtType : Arts_I32Enum<"EdtType",
     "ARTS EDT type",
     [
-      I32EnumAttrCase<"parallel", 0, "Parallel EDT">,
-      I32EnumAttrCase<"single", 1, "Single EDT">,
-      I32EnumAttrCase<"sync", 2, "Sync EDT">,
-      I32EnumAttrCase<"task", 3, "Task EDT">
+      I32EnumAttrCase<"parallel", 0, "parallel">,
+      I32EnumAttrCase<"single", 1, "single">,
+      I32EnumAttrCase<"sync", 2, "sync">,
+      I32EnumAttrCase<"task", 3, "task">
     ]>;
 
 /// Enum attribute for EDT types
