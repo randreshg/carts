@@ -22,25 +22,19 @@ LLVM_INSTALL_DIR="${INSTALL_DIR}/llvm"
 POLYGEIST_INSTALL_DIR="${INSTALL_DIR}/polygeist"
 ARTS_INSTALL_DIR="${INSTALL_DIR}/arts"
 CARTS_INSTALL_DIR="${INSTALL_DIR}/carts"
-
+OPENMP_INCLUDE_PATH="${LLVM_INSTALL_DIR}/lib/clang/18/include"
+OPENMP_LIB_PATH="${LLVM_INSTALL_DIR}/lib"
 # macOS specific paths
-MACOS_SDK_PATH="/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
-HOMEBREW_LIBOMP_PATH="/opt/homebrew/opt/libomp"
+MACOS_SDK_PATH="/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"
 
 # Function to detect OS and set appropriate paths
 detect_os_paths() {
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        # macOS paths
         SYSTEM_INCLUDE_PATH="${MACOS_SDK_PATH}/usr/include"
         SYSTEM_CXX_INCLUDE_PATH="${MACOS_SDK_PATH}/usr/include/c++/v1"
-        OPENMP_INCLUDE_PATH="${HOMEBREW_LIBOMP_PATH}/include"
-        OPENMP_LIB_PATH="${HOMEBREW_LIBOMP_PATH}/lib"
     elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        # Linux paths (adjust as needed)
         SYSTEM_INCLUDE_PATH="/usr/include"
         SYSTEM_CXX_INCLUDE_PATH="/usr/include/c++/v1"
-        OPENMP_INCLUDE_PATH="/usr/include"
-        OPENMP_LIB_PATH="/usr/lib"
     else
         echo "Unsupported OS: $OSTYPE"
         exit 1
@@ -58,10 +52,10 @@ show_usage() {
     echo "  run [options]  - Run the CARTS C++ executable"
     echo "  mlir-translate <file> [mlir-translate_options]  - Run mlir-translate"
     echo "  compile <file> [clang_options]  - Compile with ARTS runtime"
-  echo "  visualize <mlir> [--func name] [--concurrency] [-o out.dot]  - Export ARTS graphs"
-  echo "             add --json to emit JSON (for interactive viewer)"
+    echo "  visualize <mlir> [--func name] [--concurrency] [-o out.dot]  - Export ARTS graphs"
+    echo "             add --json to emit JSON for interactive viewer"
     echo "  benchmark [options]  - Run CARTS benchmarks"
-  echo "  visualize [options] - Launch interactive visualizer UI server"
+    echo "  visualize [options] - Launch interactive visualizer UI server"
     echo "  setup [options]  - Set up CARTS environment"
     echo "  clean              - Clean generated files in current directory"
     echo "  check [options]    - Run CARTS test suite using llvm-lit"
@@ -104,22 +98,33 @@ run_cgeist() {
         exit 1
     fi
     
-    # Build include paths
+    # Build include paths - use system C++ headers for compatibility, LLVM libraries for linking
     local include_paths=(
+        # OpenMP and clang resource headers
         "-I${OPENMP_INCLUDE_PATH}"
-        "-I${LLVM_INSTALL_DIR}/include"
-        "-I${LLVM_INSTALL_DIR}/include/c++/v1"
+        # System C headers from SDK
         "-I${SYSTEM_INCLUDE_PATH}"
+        # System libc++ headers from SDK 
         "-I${SYSTEM_CXX_INCLUDE_PATH}"
+        # ARTS runtime headers
+        "-I${ARTS_INSTALL_DIR}/include"
+        # LLVM includes
+        "-I${LLVM_INSTALL_DIR}/include"
     )
+
+    local extra_cflags=()
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # cgeist expects --sysroot instead of -isysroot
+        extra_cflags+=("--sysroot" "${MACOS_SDK_PATH}")
+    fi
     
     if [[ -n "$CARTS_VERBOSE" ]]; then
         echo "Running cgeist with include paths:"
         printf "  %s\n" "${include_paths[@]}"
-        echo "Command: ${POLYGEIST_INSTALL_DIR}/bin/cgeist ${include_paths[*]} $input_file $*"
+        echo "Command: ${POLYGEIST_INSTALL_DIR}/bin/cgeist ${include_paths[*]} ${extra_cflags[*]} $input_file $*"
     fi
     
-    "${POLYGEIST_INSTALL_DIR}/bin/cgeist" "${include_paths[@]}" "$input_file" "$@"
+    "${POLYGEIST_INSTALL_DIR}/bin/cgeist" "${include_paths[@]}" "${extra_cflags[@]}" "$input_file" "$@"
 }
 
 # Function to run carts-opt
@@ -171,30 +176,28 @@ run_compile() {
     local library_paths=(
         "-L${ARTS_INSTALL_DIR}/lib"
         "-L${OPENMP_LIB_PATH}"
+        "-L${LLVM_INSTALL_DIR}/lib"
         "-Wl,-rpath,${ARTS_INSTALL_DIR}/lib"
+        "-Wl,-rpath,${OPENMP_LIB_PATH}"
     )
     
-    # Add system library paths for LLVM clang
     if [[ "$OSTYPE" == "darwin"* ]]; then
-        library_paths+=("-L/usr/lib")
-        library_paths+=("-L/opt/homebrew/lib")
-        # Add system SDK path for macOS
-        local sdk_path="/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
-        if [[ -d "$sdk_path" ]]; then
-            library_paths+=("-isysroot" "$sdk_path")
-        fi
+        library_paths+=("-isysroot" "${MACOS_SDK_PATH}")
+        library_paths+=("-Wl,-rpath,${LLVM_INSTALL_DIR}/lib")
     elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
         library_paths+=("-L/usr/lib")
         library_paths+=("-L/usr/lib64")
     fi
     
-    # Set libraries based on OS
     local libraries=(
         "-larts"
         "-lomp"
+        "-lc++"
+        "-lc++abi"
+        "-lunwind"
     )
     
-    # Add pthread library only on Linux (part of system library on macOS)
+    # Add system libraries only if absolutely necessary
     if [[ "$OSTYPE" == "linux-gnu"* ]]; then
         libraries+=("-lpthread")
         libraries+=("-lrt")

@@ -81,7 +81,7 @@ endif()
 option(CARTS_ENABLE_TESTS "Enable CARTS test suite" ON)
 if(CARTS_ENABLE_TESTS)
   message(STATUS "CARTS tests enabled")
-  set(CARTS_TOOLS_DIR ${CMAKE_SOURCE_DIR}/.install/carts/bin)
+  set(CARTS_TOOLS_DIR bin)
 
   # Locate LLVM test tools (llvm-lit and FileCheck) from common LLVM build/install dirs
   set(_LLVM_TOOL_HINT_DIRS
@@ -173,7 +173,7 @@ endif()
 # set(CARTS_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(CARTS_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
 set(CARTS_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/include )
-set(CARTS_TOOLS_DIR ${CMAKE_BINARY_DIR}/bin)
+set(CARTS_TOOLS_DIR bin)
 set(CARTS_UTILS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/utils)
 
 # Add the subdirectories.

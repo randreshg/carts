@@ -222,7 +222,7 @@ def EdtOp : Arts_Op<"edt",
 
   let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
-    $type $dependencies attr-dict `:` type($dependencies)
+    $type (`(` $dependencies^ `)` `:` type($dependencies))? attr-dict-with-keyword
     $body
   }];
 
@@ -393,15 +393,27 @@ def GetCurrentNodeOp : Arts_Op<"get_current_node",
 // EDT Lowering Operations
 //===----------------------------------------------------------------------===//
 
-def EdtOutlineFnOp : Arts_Op<"edt_outline_fn", [Pure]> {
-  let summary = "Outlined EDT call with packed arrays.";
+def DbNumElementsOp : Arts_Op<"db_num_elements", [Pure]> {
+  let summary = "Compute the number of elements in a datablock.";
   let description = [{
-    Intermediate op for calling outlined EDT function with param/dep arrays. 
+    Computes the total number of elements in a datablock. This is used
+    to calculate dependency counts for EDT creation.
+  }];
+  let arguments = (ins AnyType:$db);
+  let results = (outs I32:$count);
+  let assemblyFormat = "$db attr-dict `:` type($db) `->` type($count)";
+}
+
+def EdtOutlineFnOp : Arts_Op<"edt_outline_fn", [Pure]> {
+  let summary = "Outlined EDT call with parameter pack and dependency count.";
+  let description = [{
+    Intermediate op for calling outlined EDT function with param array and total dependency count.
+    The depCount is the sum of number of elements of all dependencies.
     Returns EDT guid.
   }];
-  let arguments = (ins AnyMemRef:$param_memref, AnyMemRef:$dep_memref);
+  let arguments = (ins AnyMemRef:$param_memref, I32:$depCount);
   let results = (outs I64:$guid);
-  let assemblyFormat = "$param_memref `:` type($param_memref) $dep_memref `:` type($dep_memref) attr-dict";
+  let assemblyFormat = "`(` $param_memref `:` type($param_memref) `,` $depCount `)` attr-dict";
 }
 
 def EdtParamPackOp : Arts_Op<"edt_param_pack", [Pure]> {
@@ -435,21 +447,23 @@ def EdtDepUnpackOp : Arts_Op<"edt_dep_unpack", [Pure]> {
 }
 
 def RecordInDepOp : Arts_Op<"record_in_dep", [Pure]> {
-  let summary = "Record in-dependency for EDT.";
+  let summary = "Record in-dependencies for EDT.";
   let description = [{
-    Records an in-dep (e.g., DB acquire) for the EDT at a slot.
+    Records all in-dependencies (datablocks) for the EDT in order.
+    Each datablock will be recorded as a dependency for the EDT.
   }];
-  let arguments = (ins I64:$edt_guid, I64:$dep);
-  let assemblyFormat = "$edt_guid $dep attr-dict";
+  let arguments = (ins I64:$edt_guid, Variadic<AnyType>:$datablocks);
+  let assemblyFormat = "$edt_guid `(` $datablocks `:` type($datablocks) `)` attr-dict";
 }
 
 def IncrementOutLatchOp : Arts_Op<"increment_out_latch", [Pure]> {
-  let summary = "Increment out-latch for dependency.";
+  let summary = "Increment out-latches for EDT dependencies.";
   let description = [{
-    Increments latch count for out-dep (e.g., DB release).
+    Increments latch count for all out-dependencies (datablocks) of the EDT.
+    Each datablock will have its output latch incremented.
   }];
-  let arguments = (ins I64:$dep);
-  let assemblyFormat = "$dep attr-dict";
+  let arguments = (ins I64:$edt_guid, Variadic<AnyType>:$datablocks);
+  let assemblyFormat = "$edt_guid `(` $datablocks `:` type($datablocks) `)` attr-dict";
 }
 
 #endif // ARTS_OPS

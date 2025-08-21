@@ -44,7 +44,7 @@
 
 /// Debug
 #include "arts/Utils/ArtsDebug.h"
-ARTS_DEBUG_SETUP(preprocess_dbs);
+ARTS_DEBUG_SETUP(convert_db_to_opaque_ptr);
 
 using namespace mlir;
 using namespace arts;
@@ -79,16 +79,15 @@ static DbAllocType inferAllocType(Value basePtr) {
 DbAllocOp createDbAlloc(OpBuilder &builder, Location loc, Value basePtr,
                         ArtsMode mode) {
   /// Create the DbAllocOp with proper signature
-  auto opaqueType = MemRefType::get({-1}, builder.getI8Type()); // Opaque buffer
+  // auto opaqueType = MemRefType::get({-1}, builder.getI8Type());
 
   /// Infer allocation type from basePtr
   auto allocType = inferAllocType(basePtr);
-  auto allocTypeAttr = DbAllocTypeAttr::get(builder.getContext(), allocType);
+  // auto allocTypeAttr = DbAllocTypeAttr::get(builder.getContext(), allocType);
 
   /// Create DbAllocOp
   SmallVector<Value> emptySize;
-  auto dbAllocOp = builder.create<DbAllocOp>(
-      loc, mode, emptySize, basePtr);
+  auto dbAllocOp = builder.create<DbAllocOp>(loc, mode, emptySize, basePtr);
 
   ARTS_INFO("Created DbAllocOp with allocation type: "
             << stringifyDbAllocType(allocType));
@@ -160,8 +159,9 @@ void ConvertDbToOpaquePtrPass::preprocessDbAllocOps(ModuleOp module) {
         auto oldType = dbAllocOp.getResult().getType().cast<MemRefType>();
         auto newType = MemRefType::get(oldType.getShape(), builder.getI8Type());
 
-        auto newDbAllocOp = builder.create<DbAllocOp>(
-            dbAllocOp.getLoc(), dbAllocOp.getMode(), ValueRange{}, dbAllocOp.getAddress());
+        auto newDbAllocOp =
+            builder.create<DbAllocOp>(dbAllocOp.getLoc(), dbAllocOp.getMode(),
+                                      ValueRange{}, dbAllocOp.getAddress());
 
         /// Copy attributes and mark as processed
         newDbAllocOp->setAttrs(dbAllocOp->getAttrs());

@@ -152,7 +152,7 @@ LLVM_DEBUG({
 - Track conversion statistics
 - Handle edge cases gracefully
 
-## Key ARTS Passes
+## Key CARTS Passes
 Reference these existing passes in [lib/arts/Passes/](mdc:lib/arts/Passes/):
 - `ConvertOpenMPToArts.cpp`: OpenMP to ARTS conversion
 - `ConvertArtsToLLVM.cpp`: ARTS to LLVM conversion

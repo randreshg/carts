@@ -1,5 +1,6 @@
 ---
-alwaysApply: true
+description: When you need to understand how to use carts
+alwaysApply: false
 ---
 # CARTS Wrapper Script Usage
 

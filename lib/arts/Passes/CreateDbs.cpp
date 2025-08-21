@@ -89,6 +89,8 @@ private:
   bool identifyDbs;
   ModuleOp module;
   DenseMap<Value, DbAllocOp> allocToDbAlloc;
+  /// Maps each EDT to the block-argument created for a given original base.
+  DenseMap<Operation *, DenseMap<Value, BlockArgument>> edtBaseToArg;
 
   Value getOriginalAllocation(Value v);
   DepInfo computeDepInfo(OpBuilder &builder, EdtOp edt, Value originalBase,
@@ -261,7 +263,11 @@ void CreateDbsPass::adjustAccesses(OpBuilder &builder, Region &region,
                                    SmallVector<Value> pinned,
                                    SmallVector<Value> offsets) {
   int prefix = pinned.size();
-  region.walk([&](Operation *op) {
+  region.walk([&](Operation *op) -> WalkResult {
+    // Do not rewrite inside nested EDTs. Each EDT will be handled separately
+    // and should use its own acquired block arguments, not the parent's.
+    if (isa<EdtOp>(op))
+      return WalkResult::skip();
     Value mem;
     SmallVector<Value> oldIndices;
     bool isLoad = false;
@@ -273,10 +279,10 @@ void CreateDbsPass::adjustAccesses(OpBuilder &builder, Region &region,
       mem = store.getMemref();
       oldIndices = store.getIndices();
     } else {
-      return;
+      return WalkResult::advance();
     }
     if (getOriginalAllocation(mem) != originalBase)
-      return;
+      return WalkResult::advance();
 
     /// Verify leading pinned indices
     for (int i = 0; i < prefix; ++i) {
@@ -312,6 +318,7 @@ void CreateDbsPass::adjustAccesses(OpBuilder &builder, Region &region,
       store.getMemrefMutable().assign(view);
       store.getIndicesMutable().assign(newIndices);
     }
+    return WalkResult::advance();
   });
 }
 
@@ -383,23 +390,34 @@ void CreateDbsPass::runOnOperation() {
     */
   }
 
-  /// Process each EDT
-  module.walk([&](EdtOp edt) {
+  /// Collect all EDTs and process them in reverse post-order (parents before
+  /// children)
+  SmallVector<EdtOp> allEdts;
+  module.walk([&](EdtOp edt) { allEdts.push_back(edt); });
+
+  // Process EDTs in reverse order to ensure parents are processed before
+  // children
+  for (auto it = allEdts.rbegin(); it != allEdts.rend(); ++it) {
+    EdtOp edt = *it;
     SetVector<Value> externalBases;
-    edt.walk([&](Operation *op) {
+    edt.walk([&](Operation *op) -> WalkResult {
+      // Skip nested EDTs - they will be processed separately
+      if (isa<EdtOp>(op) && op != edt.getOperation())
+        return WalkResult::skip();
       Value mem;
       if (auto load = dyn_cast<memref::LoadOp>(op)) {
         mem = load.getMemref();
       } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
         mem = store.getMemref();
       } else {
-        return;
+        return WalkResult::advance();
       }
       Value base = getOriginalAllocation(mem);
       if (base && !edt.getRegion().isAncestor(
                       base.getDefiningOp()->getParentRegion())) {
         externalBases.insert(base);
       }
+      return WalkResult::advance();
     });
 
     for (Value base : externalBases) {
@@ -407,12 +425,25 @@ void CreateDbsPass::runOnOperation() {
       Value source =
           dbAlloc ? dbAlloc.getPtr() : base; /// Fallback if no dbAlloc
 
-      /// Check if parent EDT has a block arg for this base
+      /// Prefer using the parent's acquired block argument for this base,
+      /// if we are inside a nested EDT and the parent provides it.
       if (auto parentEdt = edt->getParentOfType<EdtOp>()) {
-        for (BlockArgument arg : parentEdt.getBody().getArguments()) {
-          if (getOriginalAllocation(arg) == base) {
-            source = arg;
-            break;
+        Operation *parentKey = parentEdt.getOperation();
+        auto parentIt = edtBaseToArg.find(parentKey);
+        if (parentIt != edtBaseToArg.end()) {
+          auto &map = parentIt->second;
+          auto it = map.find(base);
+          if (it != map.end()) {
+            source = it->second;
+          }
+        }
+        // Fallback: try to match by recomputing original allocation on args
+        if (source == (dbAlloc ? dbAlloc.getPtr() : base)) {
+          for (BlockArgument arg : parentEdt.getBody().getArguments()) {
+            if (getOriginalAllocation(arg) == base) {
+              source = arg;
+              break;
+            }
           }
         }
       }
@@ -433,13 +464,17 @@ void CreateDbsPass::runOnOperation() {
       BlockArgument arg =
           edt.getBody().front().addArgument(info.resultType, edt.getLoc());
 
+      // Record mapping from this EDT and base to the newly created block arg,
+      // so nested EDTs can reference the parent's argument as their source.
+      edtBaseToArg[edt.getOperation()][base] = arg;
+
       adjustAccesses(builder, edt.getRegion(), base, arg, info.pinned,
                      info.offsets);
 
       builder.setInsertionPoint(edt.getBody().front().getTerminator());
       builder.create<DbReleaseOp>(edt.getLoc(), arg);
     }
-  });
+  }
 
   ARTS_DEBUG_FOOTER(CreateDbsPass);
   ARTS_DEBUG_REGION(module.dump(););

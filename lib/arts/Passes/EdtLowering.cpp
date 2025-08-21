@@ -57,6 +57,7 @@ public:
 
   const SmallVector<Value> &getParameters() const { return parameters; }
   const SmallVector<Value> &getConstants() const { return constants; }
+  const SmallVector<Value> &getFreeVariables() const { return freeVariables; }
 
 private:
   void collectFreeVariables();
@@ -71,6 +72,13 @@ private:
 void EdtEnvironmentManager::collectFreeVariables() {
   DenseSet<Value> definedInRegion;
 
+  // Treat block arguments as defined within the region
+  for (Block &block : region) {
+    for (BlockArgument arg : block.getArguments()) {
+      definedInRegion.insert(arg);
+    }
+  }
+
   // Collect all values defined within the region
   region.walk([&](Operation *op) {
     for (Value result : op->getResults()) {
@@ -78,13 +86,12 @@ void EdtEnvironmentManager::collectFreeVariables() {
     }
   });
 
-  // Find values used but not defined in region
+  // Find values used but not defined in region (deduplicated)
+  DenseSet<Value> seenFree;
   region.walk([&](Operation *op) {
     for (Value operand : op->getOperands()) {
-      if (!definedInRegion.contains(operand) &&
-          !llvm::is_contained(freeVariables, operand)) {
+      if (!definedInRegion.contains(operand) && seenFree.insert(operand).second)
         freeVariables.push_back(operand);
-      }
     }
   });
 }
@@ -157,17 +164,37 @@ void EdtLoweringPass::runOnOperation() {
   ARTS_DEBUG_HEADER(EdtLoweringPass);
   ARTS_DEBUG_REGION(module->dump(););
 
-  // Collect all task EDTs to process (avoid iterator invalidation)
-  SmallVector<EdtOp> taskEdts;
+  // Collect all task EDTs to process, ordered by nesting depth (innermost
+  // first)
+  SmallVector<std::pair<EdtOp, unsigned>> taskEdtsWithDepth;
   module.walk([&](EdtOp edtOp) {
     if (canLowerEdt(edtOp)) {
-      taskEdts.push_back(edtOp);
+      // Calculate nesting depth
+      unsigned depth = 0;
+      Operation *parent = edtOp->getParentOp();
+      while (parent && parent != module) {
+        if (isa<EdtOp>(parent)) {
+          depth++;
+        }
+        parent = parent->getParentOp();
+      }
+      taskEdtsWithDepth.push_back({edtOp, depth});
     }
   });
 
-  ARTS_INFO("Found " << taskEdts.size() << " task EDTs to lower");
+  // Sort by depth (descending) - innermost EDTs first
+  llvm::sort(taskEdtsWithDepth,
+             [](const auto &a, const auto &b) { return a.second > b.second; });
 
-  // Process each task EDT
+  SmallVector<EdtOp> taskEdts;
+  taskEdts.reserve(taskEdtsWithDepth.size());
+  for (auto &pair : taskEdtsWithDepth)
+    taskEdts.push_back(pair.first);
+
+  ARTS_INFO("Found " << taskEdts.size()
+                     << " task EDTs to lower (innermost first)");
+
+  // Process each task EDT (innermost first)
   bool hasFailures = false;
   for (EdtOp edtOp : taskEdts) {
     if (failed(lowerEdt(edtOp))) {
@@ -193,9 +220,10 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
 
   SmallVector<Value> dependencies = analyzeDependencies(edtOp);
 
-  ARTS_INFO("Analyzed " << envMgr.getParameters().size() << " parameters, "
-                        << envMgr.getConstants().size() << " constants, "
-                        << dependencies.size() << " dependencies");
+  ARTS_INFO("Lowering EDT with "
+            << envMgr.getParameters().size() << " parameters, "
+            << envMgr.getConstants().size() << " constants, "
+            << dependencies.size() << " dependencies");
 
   // Step 2: Create outlined function with ARTS signature
   func::FuncOp outlinedFunc = createOutlinedFunction(edtOp, envMgr);
@@ -218,11 +246,16 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
     paramPack = builder.create<memref::AllocOp>(loc, emptyType);
   }
 
-  auto depType = MemRefType::get({static_cast<int64_t>(dependencies.size())},
-                                 builder.getI64Type());
-  Value depPack = builder.create<memref::AllocOp>(loc, depType);
+  // Calculate total dependency count (sum of elements in all dependencies)
+  Value depCount = builder.create<arith::ConstantOp>(
+      loc, builder.getI32Type(), builder.getI32IntegerAttr(0));
+  
+  for (Value dep : dependencies) {
+    Value numElements = builder.create<DbNumElementsOp>(loc, dep);
+    depCount = builder.create<arith::AddIOp>(loc, depCount, numElements);
+  }
 
-  auto outlineOp = builder.create<EdtOutlineFnOp>(loc, paramPack, depPack);
+  auto outlineOp = builder.create<EdtOutlineFnOp>(loc, paramPack, depCount);
   outlineOp->setAttr("outlined_func",
                      builder.getStringAttr(outlinedFunc.getName()));
 
@@ -233,8 +266,6 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   if (failed(insertDependencyManagement(builder, loc, edtGuid, dependencies))) {
     return edtOp.emitError("Failed to insert dependency management");
   }
-
-  ARTS_INFO("Successfully lowered EDT to function: " << outlinedFunc.getName());
 
   // Remove original EDT
   edtOp.erase();
@@ -248,12 +279,16 @@ EdtLoweringPass::createOutlinedFunction(EdtOp edtOp,
   Location loc = edtOp.getLoc();
   OpBuilder moduleBuilder(module.getBodyRegion());
 
-  // Create ARTS runtime signature: (i32, ptr, i32, ptr) -> void
+  // Create ARTS outlined function signature: (i32, memref<?xi64>, i32,
+  // memref<?xi64>) -> void Paramv/Depv are modeled as memref of i64 words, per
+  // edt_param_unpack/edt_dep_unpack requirements
   auto i32Type = moduleBuilder.getI32Type();
-  auto ptrType = LLVM::LLVMPointerType::get(moduleBuilder.getContext());
+  auto i64Type = moduleBuilder.getI64Type();
+  auto memrefI64Dyn = MemRefType::get({ShapedType::kDynamic}, i64Type);
 
-  FunctionType funcType = FunctionType::get(
-      moduleBuilder.getContext(), {i32Type, ptrType, i32Type, ptrType}, {});
+  FunctionType funcType =
+      FunctionType::get(moduleBuilder.getContext(),
+                        {i32Type, memrefI64Dyn, i32Type, memrefI64Dyn}, {});
 
   std::string funcName = generateUniqueFunctionName();
   auto outlinedFunc =
@@ -268,25 +303,27 @@ EdtLoweringPass::createOutlinedFunction(EdtOp edtOp,
 Value EdtLoweringPass::createParameterPack(
     OpBuilder &builder, Location loc, const SmallVector<Value> &parameters) {
   if (parameters.empty()) {
-    ARTS_INFO("No parameters to pack");
     return nullptr;
   }
 
   ARTS_INFO("Creating parameter pack for " << parameters.size()
-                                          << " parameters");
+                                           << " parameters");
 
-  // Create memref type for parameter pack - opaque i8 buffer
-  auto memrefType = MemRefType::get({-1}, builder.getI8Type());
+  // Create memref type for parameter pack - i64 word buffer (matches runtime)
+  auto memrefType =
+      MemRefType::get({ShapedType::kDynamic}, builder.getI64Type());
   auto packOp = builder.create<EdtParamPackOp>(loc, memrefType, parameters);
   return packOp.getMemref();
 }
 
 SmallVector<Value> EdtLoweringPass::analyzeDependencies(EdtOp edtOp) {
   SmallVector<Value> dependencies;
+  DenseSet<Value> seen;
 
-  // Get dependencies from EDT operands
+  // Only treat explicit EDT operands as dependencies; preserve order and dedup.
   for (Value operand : edtOp.getOperands()) {
-    dependencies.push_back(operand);
+    if (seen.insert(operand).second)
+      dependencies.push_back(operand);
   }
 
   return dependencies;
@@ -328,36 +365,68 @@ EdtLoweringPass::outlineRegionToFunction(EdtOp edtOp, func::FuncOp targetFunc,
 
   // Insert parameter and dependency unpacking
   auto args = entryBlock->getArguments();
-  Value paramv = args[1]; // Parameter array
-  // Value depv = args[3];   // Dependency array - TODO: implement dependency
-  // unpacking
+  Value paramv = args[1]; // Parameter array (memref<?xi64>)
+  Value depv = args[3];   // Dependency array (memref<?xi64>)
 
   const auto &parameters = envMgr.getParameters();
+  SmallVector<Value> unpackedParams;
   if (!parameters.empty()) {
     SmallVector<Type> paramTypes;
-    for (Value param : parameters) {
+    paramTypes.reserve(parameters.size());
+    for (Value param : parameters)
       paramTypes.push_back(param.getType());
-    }
-    funcBuilder.create<EdtParamUnpackOp>(loc, paramTypes, paramv);
-    ARTS_INFO("Inserted parameter unpacking");
+    auto paramUnpackOp =
+        funcBuilder.create<EdtParamUnpackOp>(loc, paramTypes, paramv);
+    llvm::append_range(unpackedParams, paramUnpackOp.getResults());
+  }
+
+  // Unpack dependencies from dependency array into the types expected by the
+  // EDT block
+  SmallVector<Value> unpackedDeps;
+  Region &edtRegion = edtOp.getRegion();
+  Block &edtBlock = edtRegion.front();
+  if (!edtBlock.getArguments().empty()) {
+    SmallVector<Type> depTypes;
+    depTypes.reserve(edtBlock.getNumArguments());
+    for (BlockArgument arg : edtBlock.getArguments())
+      depTypes.push_back(arg.getType());
+    auto depUnpackOp = funcBuilder.create<EdtDepUnpackOp>(loc, depTypes, depv);
+    llvm::append_range(unpackedDeps, depUnpackOp.getResults());
   }
 
   // Clone constants into function
-  DenseMap<Value, Value> valueMapping;
-  for (Value constant : envMgr.getConstants()) {
-    if (Operation *defOp = constant.getDefiningOp()) {
-      valueMapping[constant] = funcBuilder.clone(*defOp)->getResult(0);
-    }
+  IRMapping valueMapping;
+
+  // Handle block arguments if any (map them to unpacked dependencies)
+  for (auto [edtArg, unpackedDep] :
+       llvm::zip(edtBlock.getArguments(), unpackedDeps)) {
+    valueMapping.map(edtArg, unpackedDep);
   }
+
+  for (Value constant : envMgr.getConstants())
+    if (Operation *defOp = constant.getDefiningOp())
+      valueMapping.map(constant, funcBuilder.clone(*defOp)->getResult(0));
+
+  // Handle free variables (values defined outside EDT but used inside)
+  // Map parameters directly to their unpacked counterparts; clone true
+  // constants.
+  if (!parameters.empty())
+    for (auto [param, unpacked] : llvm::zip(parameters, unpackedParams))
+      valueMapping.map(param, unpacked);
+  for (Value freeVar : envMgr.getFreeVariables())
+    if (Operation *defOp = freeVar.getDefiningOp())
+      if (defOp->hasTrait<OpTrait::ConstantLike>())
+        valueMapping.map(freeVar, funcBuilder.clone(*defOp)->getResult(0));
 
   // Clone region operations (excluding terminator)
   funcBuilder.setInsertionPointToEnd(entryBlock);
-  Region &edtRegion = edtOp.getRegion();
-  Block &edtBlock = edtRegion.front();
 
   for (Operation &op :
        llvm::make_early_inc_range(edtBlock.without_terminator())) {
-    funcBuilder.clone(op);
+    Operation *clonedOp = funcBuilder.clone(op, valueMapping);
+    for (auto [orig, clone] :
+         llvm::zip(op.getResults(), clonedOp->getResults()))
+      valueMapping.map(orig, clone);
   }
 
   // Add return terminator
@@ -371,30 +440,34 @@ EdtLoweringPass::insertDependencyManagement(OpBuilder &builder, Location loc,
                                             Value edtGuid,
                                             const SmallVector<Value> &deps) {
   if (deps.empty()) {
-    ARTS_INFO("No dependencies to manage");
     return success();
   }
 
-  ARTS_INFO("Inserting dependency management for " << deps.size()
-                                                  << " dependencies");
-
+  // Separate dependencies by mode
+  SmallVector<Value> inDeps, outDeps;
+  
   for (Value dep : deps) {
     StringRef mode = getDependencyMode(dep);
 
-    // Create placeholder dependency ID - in real implementation would extract
-    // from dep
-    Value depId = builder.create<arith::ConstantOp>(
-        loc, builder.getI64Type(), builder.getI64IntegerAttr(0));
-
-    // Record input dependencies
+    // Collect input dependencies
     if (mode == "in" || mode == "inout") {
-      builder.create<RecordInDepOp>(loc, edtGuid, depId);
+      inDeps.push_back(dep);
     }
 
-    // Increment output latches
+    // Collect output dependencies
     if (mode == "out" || mode == "inout") {
-      builder.create<IncrementOutLatchOp>(loc, depId);
+      outDeps.push_back(dep);
     }
+  }
+
+  // Record all input dependencies at once
+  if (!inDeps.empty()) {
+    builder.create<RecordInDepOp>(loc, edtGuid, inDeps);
+  }
+
+  // Increment output latches for all dependencies at once
+  if (!outDeps.empty()) {
+    builder.create<IncrementOutLatchOp>(loc, edtGuid, outDeps);
   }
 
   return success();

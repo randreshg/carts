@@ -19,7 +19,7 @@ namespace mlir {
 namespace arts {
 class DbGraph;
 class DbAliasAnalysis;
-class LoopAnalysis;
+struct LoopAnalysis;
 class DbDataFlowAnalysis;
 class DbAcquireOp;
 } // namespace arts

@@ -19,10 +19,6 @@ namespace arts {
 using namespace types;
 
 /// Forward declarations
-class DbAllocCodegen;
-// class DbDepCodegen;
-class EdtCodegen;
-// class DbDepOp;
 
 class ArtsCodegen {
 public:
@@ -44,23 +40,12 @@ public:
                                  Location loc);
 
   /// DB management
-  DbAllocCodegen *getDbAlloc(Value op);
-  DbAllocCodegen *getDbAlloc(DbAllocOp dbOp);
-  // DbDepCodegen *getDbDep(Value op);
-  // DbDepCodegen *getDbDep(DbDepOp dbOp);
-  DbAllocCodegen *createDbAlloc(DbAllocOp dbOp, Location loc);
-  // DbDepCodegen *createDbDep(DbDepOp dbOp, Operation *parentOp = nullptr);
-  DbAllocCodegen *getOrCreateDbAlloc(DbAllocOp dbOp, Location loc);
-  // DbDepCodegen *getOrCreateDbDep(DbDepOp dbOp, Operation *parentOp = nullptr);
 
   void addDbDep(Value dbGuid, Value edtGuid, Value edtSlot, Location loc);
   void incrementDbLatchCount(Value dbGuid, Location loc);
   void decrementDbLatchCount(Value dbGuid, Location loc);
 
   /// EDT management
-  EdtCodegen *getEdt(Region *region);
-  EdtCodegen *createEdt(SmallVector<Value> *opDeps, Region *region,
-                        Value *epoch, Location *loc, bool build = true);
 
   /// Epoch management
   Value createEpoch(Value finishEdtGuid, Value finishEdtSlot, Location loc);
@@ -98,6 +83,20 @@ public:
   Value castToVoidPtr(Value source, Location loc);
   Value castToLLVMPtr(Value source, Location loc);
 
+  /// Memref helpers
+  Value computeMemrefElementSize(MemRefType memrefType, Location loc);
+  Value computeMemrefTotalElements(ValueRange sizes, Location loc);
+  Value createMemrefView(Value buffer, ValueRange sizes, ValueRange offsets, Type elementType, Location loc);
+
+  /// Loop construction helpers
+  using NestedLoopBodyFn = std::function<void(unsigned dim, SmallVector<Value> &indices)>;
+  void createNestedLoopsForRange(ValueRange lowerBounds, ValueRange upperBounds, 
+                                ValueRange steps, NestedLoopBodyFn bodyFn, Location loc);
+
+  /// Debug printing helpers
+  void printDebugInfo(Location loc, const Twine &message, ValueRange args = {});
+  void printDebugValue(Location loc, const Twine &label, Value value);
+
   /// Debug
   void collectGlobalLLVMStrings();
   Value getOrCreateGlobalLLVMString(Location loc, StringRef value);
@@ -133,10 +132,6 @@ private:
   mlir::DataLayout &mlirDL;
 
   /// Other Attributes
-  // unsigned edtCounter = 0;
-  llvm::DenseMap<Value, DbAllocCodegen *> dbAllocs;
-  // llvm::DenseMap<Value, DbDepCodegen *> dbDeps;
-  llvm::DenseMap<Region *, EdtCodegen *> edts;
   llvm::DenseMap<RuntimeFunction, func::FuncOp> runtimeFunctionCache;
   llvm::StringMap<LLVM::GlobalOp> llvmStringGlobals;
   llvm::DenseMap<Region *, llvm::DenseMap<Value, Value>> replacementMap;

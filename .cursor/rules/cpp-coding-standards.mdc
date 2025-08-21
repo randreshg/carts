@@ -57,12 +57,13 @@ Follow LLVM coding standards: https://llvm.org/docs/CodingStandards.html
 - Use `///` for class/function documentation
 - Use `//` for inline comments
 - Use `///<` for inline member variable documentation
+- Dont ever add temporary refactoring comments
 - Example:
 ```cpp
 /// Central manager for DB-related analyses across a module.
 /// Owns per-function DbGraphs and exposes high-level queries.
 class DbAnalysis {
-  DenseMap<func::FuncOp, std::unique_ptr<DbGraph>> functionGraphMap; ///< Maps functions to their graphs
+  DenseMap<func::FuncOp, std::unique_ptr<DbGraph>> functionGraphMap;
 };
 ```
 
