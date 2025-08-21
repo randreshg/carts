@@ -30,8 +30,7 @@ def ConvertOpenMPToArts : Pass<"convert-openmp-to-arts", "mlir::ModuleOp"> {
 }
 
 def Db : Pass<"db", "mlir::ModuleOp"> {
-  let summary = "Using the Datablock Analysis, perform changes to the DataBlock"
-                "operations and optimize them if the user wants to";
+  let summary = "Analyze and optimize the datablocks in the program";
   let dependentDialects = [
     "memref::MemRefDialect",
     "LLVM::LLVMDialect",
@@ -56,8 +55,7 @@ def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createCreateDbsPass()";
   let options = [
     Option<"identifyDbs", "identify-dbs", "bool", /*default=*/"true",
-           "Analyzes the module and tries to automatically identify the "
-           "datablocks.">,
+           "Automatically identify the datablocks.">,
   ];
 }
 

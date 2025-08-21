@@ -38,10 +38,10 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 // Graphs
-#include "arts/Analysis/Graphs/Db/DbGraph.h"
-#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
-#include "arts/Analysis/Graphs/Edt/EdtConcurrencyGraph.h"
 #include "arts/Analysis/Edt/EdtAnalysis.h"
+#include "arts/Analysis/Graphs/Db/DbGraph.h"
+#include "arts/Analysis/Graphs/Edt/EdtConcurrencyGraph.h"
+#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 /// Other
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
@@ -109,18 +109,15 @@ bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
     }
   }
 
-  if (!singleOp ||
-      numOps < 3) // Account for at least edt, yield, and possibly barrier
+  /// Account for at least edt, yield, and possibly barrier
+  if (!singleOp || numOps < 3)
     return false;
 
   ARTS_INFO("Converting parallel EDT into single EDT");
   /// Insert the single operation before the parallel op and remove the "single"
   /// attribute.
   singleOp->moveBefore(op);
-  singleOp.setType(arts::EdtType::task);
-
-  /// Set task-sync attribute
-  // Already set type to task above
+  singleOp.setType(arts::EdtType::sync);
 
   /// Collect unique dependencies from all inner EDTs
   SetVector<Value> allDeps;
@@ -228,7 +225,8 @@ bool EdtPass::removeBarriers() {
     dbGraph->build();
 
     // If DbGraph could not be constructed, skip creating EdtGraph
-    if (!dbGraph) return;
+    if (!dbGraph)
+      return;
     std::unique_ptr<arts::EdtGraph> edtGraph =
         std::make_unique<arts::EdtGraph>(func, dbGraph.get());
     // Build requires DbGraph; will assert if missing
@@ -320,63 +318,63 @@ void EdtPass::runOnOperation() {
   ARTS_DEBUG_REGION(module->dump(););
 
   processParallelEdts();
-  // Graph-informed cleanups
-  (void)removeBarriers();
   processSyncTaskEdts();
 
   /// Remove all operations that were marked for deletion during conversion or
   /// lowering
   OpBuilder builder(module.getContext());
   removeOps(module, builder, opsToRemove);
+  // Graph-informed cleanups
+  // (void)removeBarriers();
 
-  // Optional debug/JSON emission of concurrency graph per function
-  module.walk([&](func::FuncOp func) {
-    std::unique_ptr<arts::DbGraph> dbGraph =
-        std::make_unique<arts::DbGraph>(func, /*DbAnalysis*/ nullptr);
-    dbGraph->build();
-    if (!dbGraph)
-      return;
-    std::unique_ptr<arts::EdtGraph> edtGraph =
-        std::make_unique<arts::EdtGraph>(func, dbGraph.get());
-    edtGraph->build();
-    if (edtGraph->getNumTasks() == 0)
-      return;
+  // // Optional debug/JSON emission of concurrency graph per function
+  // module.walk([&](func::FuncOp func) {
+  //   std::unique_ptr<arts::DbGraph> dbGraph =
+  //       std::make_unique<arts::DbGraph>(func, /*DbAnalysis*/ nullptr);
+  //   dbGraph->build();
+  //   if (!dbGraph)
+  //     return;
+  //   std::unique_ptr<arts::EdtGraph> edtGraph =
+  //       std::make_unique<arts::EdtGraph>(func, dbGraph.get());
+  //   edtGraph->build();
+  //   if (edtGraph->getNumTasks() == 0)
+  //     return;
 
-    arts::EdtAnalysis edtAnalysis(module);
-    edtAnalysis.analyze();
-    arts::EdtConcurrencyGraph cgraph(edtGraph.get(), &edtAnalysis);
-    cgraph.build();
+  //   arts::EdtAnalysis edtAnalysis(module);
+  //   edtAnalysis.analyze();
+  //   arts::EdtConcurrencyGraph cgraph(edtGraph.get(), &edtAnalysis);
+  //   cgraph.build();
 
-    ARTS_DEBUG_SECTION("edt-concurrency", {
-      std::string s;
-      llvm::raw_string_ostream os(s);
-      cgraph.print(os);
-      ARTS_DBGS() << os.str();
-    });
+  //   ARTS_DEBUG_SECTION("edt-concurrency", {
+  //     std::string s;
+  //     llvm::raw_string_ostream os(s);
+  //     cgraph.print(os);
+  //     ARTS_DBGS() << os.str();
+  //   });
 
-    // Emit combined JSON bundle (function, edts, concurrency)
-    std::string js;
-    llvm::raw_string_ostream jos(js);
-    jos << "{\n  \"function\": \"" << func.getName() << "\",\n";
-    edtAnalysis.emitEdtsArray(func, jos);
-    jos << ",\n  \"concurrency\": ";
-    {
-      std::string cg;
-      llvm::raw_string_ostream cgos(cg);
-      cgraph.exportToJson(cgos);
-      cgos.flush();
-      // cgraph JSON is a full object; insert as-is but without outer braces
-      if (cg.size() >= 2 && cg.front() == '{' && cg.back() == '}') {
-        jos << cg;
-      } else {
-        jos << "{}";
-      }
-    }
-    jos << "\n}\n";
-    jos.flush();
+  //   // Emit combined JSON bundle (function, edts, concurrency)
+  //   std::string js;
+  //   llvm::raw_string_ostream jos(js);
+  //   jos << "{\n  \"function\": \"" << func.getName() << "\",\n";
+  //   edtAnalysis.emitEdtsArray(func, jos);
+  //   jos << ",\n  \"concurrency\": ";
+  //   {
+  //     std::string cg;
+  //     llvm::raw_string_ostream cgos(cg);
+  //     cgraph.exportToJson(cgos);
+  //     cgos.flush();
+  //     // cgraph JSON is a full object; insert as-is but without outer braces
+  //     if (cg.size() >= 2 && cg.front() == '{' && cg.back() == '}') {
+  //       jos << cg;
+  //     } else {
+  //       jos << "{}";
+  //     }
+  //   }
+  //   jos << "\n}\n";
+  //   jos.flush();
 
-    ARTS_DEBUG_SECTION("edt-concurrency-json", { ARTS_DBGS() << js; });
-  });
+  //   ARTS_DEBUG_SECTION("edt-concurrency-json", { ARTS_DBGS() << js; });
+  // });
 
   ARTS_DEBUG_FOOTER(EdtPass);
   ARTS_DEBUG_REGION(module->dump(););
@@ -404,7 +402,8 @@ bool EdtPass::removeRedundantBarriersWithGraphs(func::FuncOp func,
       }
     }
 
-    if (beforeTasks.empty() || afterTasks.empty()) return;
+    if (beforeTasks.empty() || afterTasks.empty())
+      return;
 
     bool redundant = true;
     for (arts::EdtOp a : beforeTasks) {
@@ -414,10 +413,12 @@ bool EdtPass::removeRedundantBarriersWithGraphs(func::FuncOp func,
           break;
         }
       }
-      if (!redundant) break;
+      if (!redundant)
+        break;
     }
 
-    if (redundant) toErase.push_back(barrier);
+    if (redundant)
+      toErase.push_back(barrier);
   });
 
   for (auto b : toErase) {

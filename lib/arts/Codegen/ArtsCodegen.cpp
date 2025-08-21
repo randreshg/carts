@@ -3,8 +3,6 @@
 ///==========================================================================
 
 #include "arts/Codegen/ArtsCodegen.h"
-#include "arts/Codegen/DbCodegen.h"
-#include "arts/Codegen/EdtCodegen.h"
 
 /// Other dialects
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -13,6 +11,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/LLVMIR/LLVMTypes.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Support/LLVM.h"
 #include "polygeist/Dialect.h"
 #include "polygeist/Ops.h"
@@ -44,7 +43,7 @@
 
 /// DEBUG
 #include "arts/Utils/ArtsDebug.h"
-ARTS_DEBUG_SETUP(arts-codegen);
+ARTS_DEBUG_SETUP(arts - codegen);
 
 using namespace mlir;
 using namespace mlir::func;
@@ -53,6 +52,7 @@ using namespace mlir::arts;
 using namespace mlir::arith;
 using namespace mlir::polygeist;
 using namespace mlir::cf;
+using namespace mlir::scf;
 
 /// ARTS Codegen
 ArtsCodegen::ArtsCodegen(ModuleOp &module, llvm::DataLayout &llvmDL,
@@ -147,60 +147,7 @@ func::CallOp ArtsCodegen::createRuntimeCall(RuntimeFunction FnID,
   return builder.create<func::CallOp>(loc, func, args);
 }
 
-/// DataBlock
-DbAllocCodegen *ArtsCodegen::getDbAlloc(Value op) {
-  if (!op)
-    return nullptr;
-  auto it = dbAllocs.find(op);
-  return (it != dbAllocs.end()) ? it->second : nullptr;
-}
-
-DbAllocCodegen *ArtsCodegen::getDbAlloc(DbAllocOp dbOp) {
-  if (!dbOp)
-    return nullptr;
-  auto it = dbAllocs.find(dbOp.getResult());
-  return (it != dbAllocs.end()) ? it->second : nullptr;
-}
-
-// DbDepCodegen *ArtsCodegen::getDbDep(Value op) {
-//   if (!op)
-//     return nullptr;
-//   auto it = dbDeps.find(op);
-//   return (it != dbDeps.end()) ? it->second : nullptr;
-// }
-
-// DbDepCodegen *ArtsCodegen::getDbDep(DbDepOp dbOp) {
-//   if (!dbOp)
-//     return nullptr;
-//   auto it = dbDeps.find(dbOp.getResult());
-//   if (it != dbDeps.end())
-//     return it->second;
-//   return nullptr;
-// }
-
-DbAllocCodegen *ArtsCodegen::createDbAlloc(DbAllocOp dbOp, Location loc) {
-  assert(!getDbAlloc(dbOp) && "DbAlloc already exists");
-  dbAllocs[dbOp.getResult()] = new DbAllocCodegen(*this, dbOp, loc);
-  return dbAllocs[dbOp.getResult()];
-}
-
-// DbDepCodegen *ArtsCodegen::createDbDep(DbDepOp dbOp, Operation *parentOp) {
-//   assert(!getDbDep(dbOp) && "DbDep already exists");
-//   dbDeps[dbOp.getResult()] = new DbDepCodegen(*this, dbOp, parentOp);
-//   return dbDeps[dbOp.getResult()];
-// }
-
-DbAllocCodegen *ArtsCodegen::getOrCreateDbAlloc(DbAllocOp dbOp, Location loc) {
-  if (auto existing = getDbAlloc(dbOp))
-    return existing;
-  return createDbAlloc(dbOp, loc);
-}
-
-// DbDepCodegen *ArtsCodegen::getOrCreateDbDep(DbDepOp dbOp, Operation *parentOp) {
-//   if (auto existing = getDbDep(dbOp))
-//     return existing;
-//   return createDbDep(dbOp, parentOp);
-// }
+/// DataBlock management
 
 void ArtsCodegen::addDbDep(Value dbGuid, Value edtGuid, Value edtSlot,
                            Location loc) {
@@ -217,23 +164,7 @@ void ArtsCodegen::decrementDbLatchCount(Value dbGuid, Location loc) {
   createRuntimeCall(ARTSRTL_artsDbDecrementLatch, {dbGuid}, loc);
 }
 
-/// EDT
-EdtCodegen *ArtsCodegen::getEdt(Region *region) {
-  auto it = edts.find(region);
-  if (it != edts.end())
-    return it->second;
-  return nullptr;
-}
-
-EdtCodegen *ArtsCodegen::createEdt(SmallVector<Value> *opDeps, Region *region,
-                                   Value *epoch, Location *loc, bool build) {
-  if (!region || getEdt(region)) {
-  ARTS_WARN("Region already has an EDT");
-    assert(false && "Edt already exists");
-  }
-  edts[region] = new EdtCodegen(*this, opDeps, region, epoch, loc, build);
-  return edts[region];
-}
+/// EDT management
 
 /// Epoch
 Value ArtsCodegen::createEpoch(Value finishEdtGuid, Value finishEdtSlot,
@@ -661,4 +592,112 @@ void ArtsCodegen::applyReplacements() {
       replaceInRegion(*region.first, region.second);
   }
   replacementMap.clear();
+}
+
+//===----------------------------------------------------------------------===//
+// Memref helpers
+//===----------------------------------------------------------------------===//
+
+Value ArtsCodegen::computeMemrefElementSize(MemRefType memrefType,
+                                            Location loc) {
+  auto elementType = memrefType.getElementType();
+  auto elementSizeInBits = mlirDL.getTypeSizeInBits(elementType);
+  return createIntConstant(elementSizeInBits / 8, Int64, loc);
+}
+
+Value ArtsCodegen::computeMemrefTotalElements(ValueRange sizes, Location loc) {
+  if (sizes.empty())
+    return createIndexConstant(1, loc);
+
+  Value total = sizes[0];
+  for (size_t i = 1; i < sizes.size(); ++i) {
+    total = builder.create<arith::MulIOp>(loc, total, sizes[i]);
+  }
+  return total;
+}
+
+Value ArtsCodegen::createMemrefView(Value buffer, ValueRange sizes,
+                                    ValueRange offsets, Type elementType,
+                                    Location loc) {
+  auto memrefType = MemRefType::get(
+      SmallVector<int64_t>(sizes.size(), ShapedType::kDynamic), elementType);
+
+  Value byteOffset = createIndexConstant(0, loc);
+  if (!offsets.empty()) {
+    auto elementSize =
+        computeMemrefElementSize(memrefType.cast<MemRefType>(), loc);
+    auto elementSizeIndex = castToIndex(elementSize, loc);
+
+    for (auto offset : offsets) {
+      auto offsetBytes =
+          builder.create<arith::MulIOp>(loc, offset, elementSizeIndex);
+      byteOffset = builder.create<arith::AddIOp>(loc, byteOffset, offsetBytes);
+    }
+  }
+
+  return builder.create<memref::ViewOp>(loc, memrefType, buffer, byteOffset,
+                                        sizes);
+}
+
+//===----------------------------------------------------------------------===//
+// Loop construction helpers (for multi-dimensional operations)
+//===----------------------------------------------------------------------===//
+
+void ArtsCodegen::createNestedLoopsForRange(ValueRange lowerBounds,
+                                            ValueRange upperBounds,
+                                            ValueRange steps,
+                                            NestedLoopBodyFn bodyFn,
+                                            Location loc) {
+  assert(lowerBounds.size() == upperBounds.size() &&
+         upperBounds.size() == steps.size() &&
+         "Bound and step sizes must match");
+
+  SmallVector<Value> indices;
+  std::function<void(unsigned)> createLoop = [&](unsigned dim) {
+    if (dim >= lowerBounds.size()) {
+      bodyFn(dim, indices);
+      return;
+    }
+
+    auto loopOp = builder.create<scf::ForOp>(loc, lowerBounds[dim],
+                                             upperBounds[dim], steps[dim]);
+    auto &loopBlock = loopOp.getRegion().front();
+    builder.setInsertionPointToStart(&loopBlock);
+
+    indices.push_back(loopOp.getInductionVar());
+    createLoop(dim + 1);
+    indices.pop_back();
+
+    builder.setInsertionPointAfter(loopOp);
+  };
+
+  createLoop(0);
+}
+
+//===----------------------------------------------------------------------===//
+// Debug printing helpers
+//===----------------------------------------------------------------------===//
+
+void ArtsCodegen::printDebugInfo(Location loc, const Twine &message,
+                                 ValueRange args) {
+  if (!debug)
+    return;
+
+  SmallString<128> formattedMessage;
+  message.toVector(formattedMessage);
+  formattedMessage.append("\n");
+  createPrintfCall(loc, formattedMessage, args);
+}
+
+void ArtsCodegen::printDebugValue(Location loc, const Twine &label,
+                                  Value value) {
+  if (!debug)
+    return;
+
+  SmallString<128> formattedLabel;
+  label.toVector(formattedLabel);
+  formattedLabel.append(": %lu\n");
+
+  auto castedValue = castToInt(Int64, value, loc);
+  createPrintfCall(loc, formattedLabel, {castedValue});
 }
