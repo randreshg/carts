@@ -26,47 +26,8 @@
 namespace mlir {
 namespace arts {
 
-///==========================================================================
-/// EdtEnvManager: region-local collector for EDT value usage
-/// Responsibility: assist passes transforming EDT regions by identifying
-/// parameters, constants, and dependencies used across region boundaries.
-/// Non-Goals: inter-procedural analysis; global graph reasoning.
-///==========================================================================
-class EdtEnvManager {
-public:
-  EdtEnvManager(PatternRewriter &rewriter, Region &region);
-  ~EdtEnvManager();
+class EdtOp; 
 
-  /// Collect parameters and dependencies
-  void naiveCollection(bool ignoreDeps = false);
-
-  /// Analyze and adjust the set of parameters
-  void adjust();
-
-  /// Add interface
-  bool addParameter(Value val);
-  void addDependency(Value val, StringRef mode = "inout");
-
-  /// Print
-  void print();
-
-  /// Getters
-  Region &getRegion() { return region; }
-  ArrayRef<Value> getParameters() { return parameters.getArrayRef(); }
-  ArrayRef<Value> getConstants() { return constants.getArrayRef(); }
-  ArrayRef<Value> getDependencies() { return dependencies.getArrayRef(); }
-  DenseMap<Value, StringRef> &getDepsToProcess() { return depsToProcess; }
-
-  void clearDepsToProcess() { depsToProcess.clear(); }
-
-private:
-  PatternRewriter &rewriter;
-  Region &region;
-  /// Set of possible parameters, constants, and dependencies
-  SetVector<Value> parameters, constants, dependencies;
-  /// Set of dependencies to process
-  DenseMap<Value, StringRef> depsToProcess;
-};
 
 ///==========================================================================
 /// EdtAnalysis Class Declaration

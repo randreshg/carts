@@ -80,17 +80,22 @@ def DbAllocOp : Arts_Op<"db_alloc", [
   }];
   let arguments = (ins
     ArtsModeAttr:$mode,
+    I32:$route,
+    DbAllocTypeAttr:$allocType,
     Optional<AnyMemRef>:$address,
-    Variadic<Index>:$sizes,
-    OptionalAttr<DbAllocTypeAttr>:$allocType,
-    // Preferred node/route for the DB (0 = current)
-    OptionalAttr<I32Attr>:$node 
+    Variadic<Index>:$sizes
   );
 
   let results = (outs AnyMemRef:$ptr);
   let hasCustomAssemblyFormat = 1;
-  
+
   let builders = [
+    OpBuilder<(ins "ArtsMode":$mode,
+                   "SmallVector<Value>":$sizes,
+                   "Value":$route,
+                   "DbAllocType":$allocType,
+                   CArg<"Value", "nullptr">:$address)>,
+    // Declaration only; implemented in ArtsDialect.cpp to default allocType=heap
     OpBuilder<(ins "ArtsMode":$mode,
                    "SmallVector<Value>":$sizes,
                    CArg<"Value", "nullptr">:$address)>
@@ -195,6 +200,17 @@ def DbControlOp : Arts_Op<"db_control",
   ];
 }
 
+def DbNumElementsOp : Arts_Op<"db_num_elements", [Pure]> {
+  let summary = "Compute the number of elements in a datablock.";
+  let description = [{
+    Computes the total number of elements in a datablock. This is used
+    to calculate dependency counts for EDT creation.
+  }];
+  let arguments = (ins AnyType:$db);
+  let results = (outs I32:$count);
+  let assemblyFormat = "$db attr-dict `:` type($db) `->` type($count)";
+}
+
 //===----------------------------------------------------------------------===//
 // arts.edt
 //===----------------------------------------------------------------------===//
@@ -216,19 +232,22 @@ def EdtOp : Arts_Op<"edt",
 
   let arguments = (ins
     EdtTypeAttr:$type,
-    Variadic<AnyMemRef>:$dependencies,
-    OptionalAttr<I32Attr>:$node // Preferred node/route for the EDT (0 = current)
+    I32:$route,
+    Variadic<AnyMemRef>:$dependencies
   );
 
   let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
-    $type (`(` $dependencies^ `)` `:` type($dependencies))? attr-dict-with-keyword
+    $type (`(` $dependencies^ `)` `:` type($dependencies))? `route` `(` $route `)` attr-dict-with-keyword
     $body
   }];
 
   let extraClassDeclaration = [{
     SmallVector<Value> getDependenciesVector();
   }];
+  let builders = [
+    OpBuilder<(ins "EdtType":$type, CArg<"ValueRange", "{}">:$dependencies)>
+  ];
 }
 
 //===----------------------------------------------------------------------===//
@@ -392,28 +411,20 @@ def GetCurrentNodeOp : Arts_Op<"get_current_node",
 //===----------------------------------------------------------------------===//
 // EDT Lowering Operations
 //===----------------------------------------------------------------------===//
-
-def DbNumElementsOp : Arts_Op<"db_num_elements", [Pure]> {
-  let summary = "Compute the number of elements in a datablock.";
-  let description = [{
-    Computes the total number of elements in a datablock. This is used
-    to calculate dependency counts for EDT creation.
-  }];
-  let arguments = (ins AnyType:$db);
-  let results = (outs I32:$count);
-  let assemblyFormat = "$db attr-dict `:` type($db) `->` type($count)";
-}
-
-def EdtOutlineFnOp : Arts_Op<"edt_outline_fn", [Pure]> {
+def EdtCreateOp : Arts_Op<"edt_create", [Pure]> {
   let summary = "Outlined EDT call with parameter pack and dependency count.";
   let description = [{
     Intermediate op for calling outlined EDT function with param array and total dependency count.
     The depCount is the sum of number of elements of all dependencies.
     Returns EDT guid.
   }];
-  let arguments = (ins AnyMemRef:$param_memref, I32:$depCount);
+  let arguments = (ins AnyMemRef:$param_memref, I32:$depCount, I32:$route);
   let results = (outs I64:$guid);
-  let assemblyFormat = "`(` $param_memref `:` type($param_memref) `,` $depCount `)` attr-dict";
+  let assemblyFormat = "`(` $param_memref `:` type($param_memref) `,` $depCount `,` $route `)` attr-dict";
+
+  let builders = [
+    OpBuilder<(ins "Value":$param_memref, "Value":$depCount)>
+  ];
 }
 
 def EdtParamPackOp : Arts_Op<"edt_param_pack", [Pure]> {
@@ -423,7 +434,7 @@ def EdtParamPackOp : Arts_Op<"edt_param_pack", [Pure]> {
   }];
   let arguments = (ins Variadic<AnyType>:$params);
   let results = (outs AnyMemRef:$memref);
-  let assemblyFormat = "$params attr-dict `:` type($params) `:` type($memref)";
+  let assemblyFormat = "`(` $params `)` attr-dict `:` type($params) `:` type($memref)";
 }
 
 def EdtParamUnpackOp : Arts_Op<"edt_param_unpack", [Pure]> {
@@ -433,17 +444,18 @@ def EdtParamUnpackOp : Arts_Op<"edt_param_unpack", [Pure]> {
   }];
   let arguments = (ins AnyMemRef:$memref);
   let results = (outs Variadic<AnyType>:$unpacked);
-  let assemblyFormat = "$memref `:` type($memref) attr-dict `:` type($unpacked)";
+  let assemblyFormat = "$memref `:` type($memref) attr-dict `:` `(` type($unpacked) `)`";
 }
 
 def EdtDepUnpackOp : Arts_Op<"edt_dep_unpack", [Pure]> {
   let summary = "Unpack dependencies from memref<?xi64>.";
   let description = [{
     Unpacks depv guids, calls artsGetFromDb for DB ptrs, casts others.
+    Output types are always !llvm.struct<(i64, i32, ptr)> for each dependency.
   }];
   let arguments = (ins AnyMemRef:$memref);
   let results = (outs Variadic<AnyType>:$unpacked);
-  let assemblyFormat = "$memref `:` type($memref) attr-dict `:` type($unpacked)";
+  let assemblyFormat = "$memref `:` type($memref) attr-dict `:` `(` type($unpacked) `)`";
 }
 
 def RecordInDepOp : Arts_Op<"record_in_dep", [Pure]> {
@@ -464,6 +476,46 @@ def IncrementOutLatchOp : Arts_Op<"increment_out_latch", [Pure]> {
   }];
   let arguments = (ins I64:$edt_guid, Variadic<AnyType>:$datablocks);
   let assemblyFormat = "$edt_guid `(` $datablocks `:` type($datablocks) `)` attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
+// Dependency Structure Access Operations
+//===----------------------------------------------------------------------===//
+
+def DepGetPtrOp : Arts_Op<"dep_get_ptr", [Pure]> {
+  let summary = "Extract pointer field from EDT dependency structure.";
+  let description = [{
+    Extracts the pointer field from an EDT dependency structure.
+    The input is a dependency structure containing both GUID and pointer fields.
+    Returns the pointer field which can be used to access the actual data.
+  }];
+  let arguments = (ins AnyType:$dep_struct);
+  let results = (outs AnyType:$ptr);
+  let assemblyFormat = "$dep_struct `:` type($dep_struct) attr-dict `:` type($ptr)";
+}
+
+def DepGetGuidOp : Arts_Op<"dep_get_guid", [Pure]> {
+  let summary = "Extract GUID field from EDT dependency structure.";
+  let description = [{
+    Extracts the GUID field from an EDT dependency structure.
+    The input is a dependency structure containing both GUID and pointer fields.
+    Returns the GUID field which identifies the datablock.
+  }];
+  let arguments = (ins AnyType:$dep_struct);
+  let results = (outs I64:$guid);
+  let assemblyFormat = "$dep_struct `:` type($dep_struct) attr-dict `:` type($guid)";
+}
+
+def DbSubIndexOp : Arts_Op<"db_subindex", [Pure]> {
+  let summary = "Multi-dimensional subindex operation for datablock access.";
+  let description = [{
+    Performs multi-dimensional subindexing for datablock access with multiple indices.
+    This operation is lowered to a series of polygeist subindex operations.
+    Supports accessing multidimensional datablock structures with proper offset calculations.
+  }];
+  let arguments = (ins AnyType:$source, Variadic<AnyType>:$indices);
+  let results = (outs AnyType:$result);
+  let assemblyFormat = "$source `[` $indices `]` `:` type($source) `,` type($indices) attr-dict `:` type($result)";
 }
 
 #endif // ARTS_OPS

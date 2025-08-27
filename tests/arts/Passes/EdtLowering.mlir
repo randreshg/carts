@@ -18,6 +18,6 @@ module {
 }
 
 // EDT_LOWER: func.func @test_edt_lowering
-// EDT_LOWER: arts.edt_outline_fn
+// EDT_LOWER: arts.edt_create
 // EDT_LOWER: func.func private @compute_task_outlined
 // Check that parameters and dependencies are properly packed for runtime execution

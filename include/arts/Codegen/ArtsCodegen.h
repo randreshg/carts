@@ -18,10 +18,9 @@ namespace mlir {
 namespace arts {
 using namespace types;
 
-/// Forward declarations
-
 class ArtsCodegen {
 public:
+  explicit ArtsCodegen(ModuleOp module, bool debug = false);
   ArtsCodegen(ModuleOp &module, llvm::DataLayout &llvmDL,
               mlir::DataLayout &mlirDL, bool debug = false);
   ~ArtsCodegen();
@@ -29,8 +28,21 @@ public:
   /// Getters
   OpBuilder &getBuilder() { return builder; }
   ModuleOp &getModule() { return module; }
-  llvm::DataLayout &getLLVMDataLayout() { return llvmDL; }
-  mlir::DataLayout &getMLIRDataLayout() { return mlirDL; }
+
+  /// Create an operation of specific op type at the current insertion point.
+  template <typename OpTy, typename... Args>
+  OpTy create(Location location, Args &&...args) {
+    return builder.create<OpTy>(location, std::forward<Args>(args)...);
+  }
+
+  llvm::DataLayout &getLLVMDataLayout() {
+    assert(llvmDL && "LLVM DataLayout not initialized");
+    return *llvmDL;
+  }
+  mlir::DataLayout &getMLIRDataLayout() {
+    assert(mlirDL && "MLIR DataLayout not initialized");
+    return *mlirDL;
+  }
   bool isDebug() const { return debug; }
   Location getUnknownLoc() { return UnknownLoc::get(module.getContext()); }
 
@@ -40,12 +52,9 @@ public:
                                  Location loc);
 
   /// DB management
-
   void addDbDep(Value dbGuid, Value edtGuid, Value edtSlot, Location loc);
   void incrementDbLatchCount(Value dbGuid, Location loc);
   void decrementDbLatchCount(Value dbGuid, Location loc);
-
-  /// EDT management
 
   /// Epoch management
   Value createEpoch(Value finishEdtGuid, Value finishEdtSlot, Location loc);
@@ -86,12 +95,15 @@ public:
   /// Memref helpers
   Value computeMemrefElementSize(MemRefType memrefType, Location loc);
   Value computeMemrefTotalElements(ValueRange sizes, Location loc);
-  Value createMemrefView(Value buffer, ValueRange sizes, ValueRange offsets, Type elementType, Location loc);
+  Value createMemrefView(Value buffer, ValueRange sizes, ValueRange offsets,
+                         Type elementType, Location loc);
 
   /// Loop construction helpers
-  using NestedLoopBodyFn = std::function<void(unsigned dim, SmallVector<Value> &indices)>;
-  void createNestedLoopsForRange(ValueRange lowerBounds, ValueRange upperBounds, 
-                                ValueRange steps, NestedLoopBodyFn bodyFn, Location loc);
+  using NestedLoopBodyFn =
+      std::function<void(unsigned dim, SmallVector<Value> &indices)>;
+  void createNestedLoopsForRange(ValueRange lowerBounds, ValueRange upperBounds,
+                                 ValueRange steps, NestedLoopBodyFn bodyFn,
+                                 Location loc);
 
   /// Debug printing helpers
   void printDebugInfo(Location loc, const Twine &message, ValueRange args = {});
@@ -104,6 +116,7 @@ public:
 
   /// Insertion point management
   void setInsertionPoint(Operation *op);
+  void setInsertionPointToStart(Block *block);
   void setInsertionPointAfter(Operation *op);
   void setInsertionPoint(ModuleOp &module);
 
@@ -126,19 +139,20 @@ public:
   ///}
 
 private:
-  ModuleOp &module;
+  ModuleOp module;
   OpBuilder builder;
-  llvm::DataLayout &llvmDL;
-  mlir::DataLayout &mlirDL;
+  std::unique_ptr<llvm::DataLayout> llvmDL;
+  std::unique_ptr<mlir::DataLayout> mlirDL;
+  bool debug = false;
 
   /// Other Attributes
   llvm::DenseMap<RuntimeFunction, func::FuncOp> runtimeFunctionCache;
   llvm::StringMap<LLVM::GlobalOp> llvmStringGlobals;
   llvm::DenseMap<Region *, llvm::DenseMap<Value, Value>> replacementMap;
-  bool debug = false;
 
   /// Helper functions
   void initializeTypes();
+  LogicalResult extractDataLayouts();
 
   /// Aux
   Region emptyRegion;

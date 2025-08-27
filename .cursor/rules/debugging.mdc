@@ -109,6 +109,32 @@ Ensure `arts.cfg` configuration exists, then run:
 4. **Verify**: Check ARTS runtime API usage
 5. **Iterate**: Fix issues and re-run pipeline
 
+### Stopping `carts run` at a specific stage
+`carts run` can execute the full pipeline or stop after a specific stage. Use one of the flags below to stop early and inspect the IR.
+
+Supported stages (mutually exclusive):
+- `--simplify`: stop after initial cleanup/simplification
+- `--arts-inliner`: stop after ArtsInliner
+- `--convert-openmp`: stop after ConvertOpenMPToARTS (+ symbol DCE)
+- `--edt-transforms`: stop after EDT transforms (Edt + EdtInvariantCodeMotion + Canonicalize)
+- `--datablock`: stop after datablock creation/optimization (CreateDbs + Db + CSE + Mem2Reg)
+- `--epochs`: stop after epoch creation (PtrRematerialization + CreateEpochs)
+- `--edt-lowering`: stop after EDT lowering (ConvertDbToOpaquePtr + EdtLowering)
+- `--arts-to-llvm`: stop after ARTS→LLVM conversion
+- `--complete`: run the full pipeline (default)
+
+Examples:
+```bash
+# Stop right after OpenMP→ARTS conversion
+carts run input.mlir --convert-openmp -o out-openmp.mlir
+
+# Stop after EDT transforms (before DB creation)
+carts run input.mlir --edt-transforms -o out-edt.mlir
+
+# Stop after EDT lowering
+carts run input.mlir --edt-lowering -o out-lowering.mlir
+```
+
 # Debugging CARTS
 
 ## Overview
