@@ -21,14 +21,23 @@ class DbAllocOp;
 namespace types {
 
 /// IDs for all arts runtime library (RTL) functions.
+#define ARTS_RTL_FUNCTIONS
 enum class RuntimeFunction {
 #define ARTS_RTL(Enum, ...) Enum,
 #include "arts/Codegen/ArtsKinds.def"
 };
+#undef ARTS_RTL_FUNCTIONS
 
 #define ARTS_RTL(Enum, ...)                                                    \
   constexpr auto Enum = arts::types::RuntimeFunction::Enum;
+#define ARTS_RTL_FUNCTIONS
 #include "arts/Codegen/ArtsKinds.def"
+#undef ARTS_RTL_FUNCTIONS
+
+// Include ARTS runtime constants
+#define ARTS_CONSTANTS
+#include "arts/Codegen/ArtsKinds.def"
+#undef ARTS_CONSTANTS
 
 } // end namespace types
 } // end namespace arts
