@@ -6,6 +6,9 @@
 ///
 //===----------------------------------------------------------------------===//
 
+// ARTS_CONSTANTS - ARTS runtime constants
+// ARTS_RTL - ARTS runtime function definitions
+
 /// ------------------- ARTS typedefs -------------------
 #define ArtsGuid Int64
 #define ArtsGuidPtr Int64Ptr
@@ -13,6 +16,43 @@
 #define ArtsType Int32
 #define SizeTy PtrSize
 #define Void builder.getNoneType()
+
+#ifdef ARTS_CONSTANTS
+/// ------------------- ARTS Constants -------------------
+/// NULL_GUID constant
+#define NULL_GUID ((ArtsGuid)0x0)
+
+/// EDT constants
+#define DEFAULT_EDT_SLOT 0
+
+/// Event constants (from ARTS runtime RT.h)
+#define ARTS_EVENT_LATCH_DECR_SLOT 0
+#define ARTS_EVENT_LATCH_INCR_SLOT 1
+#define ARTS_EVENT_UPDATE 2
+
+/// artsType_t enum values (from ARTS runtime RT.h)
+#define ARTS_NULL 0
+#define ARTS_EDT 1
+#define ARTS_GPU_EDT 2
+#define ARTS_EVENT 3
+#define ARTS_PERSISTENT_EVENT 4
+#define ARTS_EPOCH 5
+#define ARTS_CALLBACK 6
+#define ARTS_BUFFER 7
+
+/// artsType_t enum values for datablock modes (from ARTS runtime RT.h)
+#define ARTS_DB_READ 8
+#define ARTS_DB_WRITE 9
+#define ARTS_DB_PIN 10
+#define ARTS_DB_ONCE 11
+#define ARTS_DB_ONCE_LOCAL 12
+#define ARTS_DB_GPU_READ 13
+#define ARTS_DB_GPU_WRITE 14
+#define ARTS_DB_LC 15
+#define ARTS_DB_LC_SYNC 17
+#define ARTS_DB_LC_NO_COPY 18
+#define ARTS_DB_GPU_MEMSET 19
+#endif // ARTS_CONSTANTS
 
 /// -----------------Types used in RT structs or RT functions -----------------
 ///
@@ -38,7 +78,7 @@ __ARTS_TYPE(Float, mlir::Float32Type::get)
 __ARTS_TYPE(Double, mlir::Float64Type::get)
 
 /// Define integer types
-__ARTS_INTEGER_TYPE(PtrSize, llvmDL.getPointerSize())
+__ARTS_INTEGER_TYPE(PtrSize, llvmDL->getPointerSize())
 __ARTS_INTEGER_TYPE(Int1, 1)
 __ARTS_INTEGER_TYPE(Int8, 8)
 __ARTS_INTEGER_TYPE(Int16, 16)
@@ -110,9 +150,7 @@ __ARTS_FUNCTION_TYPE(MainFn, Int32, Int32, Int8PtrPtr)
 
 /// ------------------------------ Runtime ------------------------------ ///
 ///{
-#ifndef ARTS_RTL
-#define ARTS_RTL(Enum, Str, ReturnType, ...)
-#endif
+#ifdef ARTS_RTL_FUNCTIONS
 
 #define __ARTS_RTL(Name, ReturnType, ...)                                      \
   ARTS_RTL(ARTSRTL_##Name, #Name, ReturnType, __VA_ARGS__)
@@ -123,10 +161,36 @@ __ARTS_RTL(artsRT, Int32, Int32, Int8PtrPtr)
 __ARTS_RTL(artsShutdown, Void)
 // void *artsMalloc(size_t size);
 __ARTS_RTL(artsMalloc, VoidPtr, SizeTy)
+// void *artsMallocAlign(size_t size, size_t align);
+__ARTS_RTL(artsMallocAlign, VoidPtr, SizeTy, SizeTy)
+// void *artsCalloc(size_t size);
+__ARTS_RTL(artsCalloc, VoidPtr, SizeTy)
+// void *artsCallocAlign(size_t size, size_t align);
+__ARTS_RTL(artsCallocAlign, VoidPtr, SizeTy, SizeTy)
+// void *artsRealloc(void *ptr, size_t size);
+__ARTS_RTL(artsRealloc, VoidPtr, VoidPtr, SizeTy)
 // void artsFree(void *ptr);
 __ARTS_RTL(artsFree, Void, VoidPtr)
+// void artsFreeAlign(void *ptr);
+__ARTS_RTL(artsFreeAlign, Void, VoidPtr)
 // ArtsGuid artsReserveGuidRoute(ArtsType type, unsigned int route);
 __ARTS_RTL(artsReserveGuidRoute, ArtsGuid, ArtsType, Int32)
+// void artsEdtDestroy(ArtsGuid guid);
+__ARTS_RTL(artsEdtDestroy, Void, ArtsGuid)
+// void *artsSetBuffer(ArtsGuid bufferGuid, void *buffer, unsigned int size);
+__ARTS_RTL(artsSetBuffer, VoidPtr, ArtsGuid, VoidPtr, Int32)
+// void *artsGetBuffer(ArtsGuid bufferGuid);
+__ARTS_RTL(artsGetBuffer, VoidPtr, ArtsGuid)
+// void *artsBlockForBuffer(ArtsGuid bufferGuid);
+__ARTS_RTL(artsBlockForBuffer, VoidPtr, ArtsGuid)
+// bool artsIsGuidLocal(ArtsGuid guid);
+__ARTS_RTL(artsIsGuidLocal, Int1, ArtsGuid)
+// unsigned int artsGuidGetRank(ArtsGuid guid);
+__ARTS_RTL(artsGuidGetRank, Int32, ArtsGuid)
+// ArtsType artsGuidGetType(ArtsGuid guid);
+__ARTS_RTL(artsGuidGetType, ArtsType, ArtsGuid)
+// ArtsGuid artsGuidCast(ArtsGuid guid, ArtsType type);
+__ARTS_RTL(artsGuidCast, ArtsGuid, ArtsGuid, ArtsType)
 /// }
 
 /// ------------------------------ EDTs ------------------------------ ///
@@ -143,6 +207,22 @@ __ARTS_RTL(artsEdtCreateWithGuid, ArtsGuid, EdtFnPtr, ArtsGuid, Int32, Int64Ptr,
 //                                 uint32_t depc, ArtsGuid epochGuid);
 __ARTS_RTL(artsEdtCreateWithEpoch, ArtsGuid, EdtFnPtr, Int32, Int32, Int64Ptr,
            Int32, ArtsGuid)
+// ArtsGuid artsEdtCreateDep(artsEdt_t funcPtr, unsigned int route,
+//                           uint32_t paramc, uint64_t *paramv, uint32_t depc,
+//                           bool hasDepv);
+__ARTS_RTL(artsEdtCreateDep, ArtsGuid, EdtFnPtr, Int32, Int32, Int64Ptr, Int32,
+           Int1)
+// ArtsGuid artsEdtCreateWithGuidDep(artsEdt_t funcPtr, ArtsGuid guid,
+//                                   uint32_t paramc, uint64_t *paramv,
+//                                   uint32_t depc, bool hasDepv);
+__ARTS_RTL(artsEdtCreateWithGuidDep, ArtsGuid, EdtFnPtr, ArtsGuid, Int32,
+           Int64Ptr, Int32, Int1)
+// ArtsGuid artsEdtCreateWithEpochDep(artsEdt_t funcPtr, unsigned int route,
+//                                    uint32_t paramc, uint64_t *paramv,
+//                                    uint32_t depc, ArtsGuid epochGuid, bool
+//                                    hasDepv);
+__ARTS_RTL(artsEdtCreateWithEpochDep, ArtsGuid, EdtFnPtr, Int32, Int32,
+           Int64Ptr, Int32, ArtsGuid, Int1)
 // void artsSignalEdt(ArtsGuid edtGuid, uint32_t slot, ArtsGuid dataGuid);
 __ARTS_RTL(artsSignalEdt, Void, ArtsGuid, Int32, ArtsGuid)
 // void artsSignalEdtValue(ArtsGuid edtGuid, uint32_t slot, uint64_t data);
@@ -196,6 +276,9 @@ __ARTS_RTL(artsDbDecrementLatch, Void, ArtsGuid)
 //                         uint32_t edtSlot);
 __ARTS_RTL(artsDbAddDependence, Void, ArtsGuid, ArtsGuid, Int32)
 
+// artsGuid_t artsDbGetGuid(void *dbPtr);
+__ARTS_RTL(artsDbGetGuid, ArtsGuid, VoidPtr)
+
 /// }
 
 /// ------------------------------ Epoch ------------------------------ ///
@@ -227,3 +310,4 @@ __ARTS_RTL(artsGetTotalWorkers, Int32)
 
 #undef __ARTS_RTL
 #undef ARTS_RTL
+#endif // ARTS_RTL_FUNCTIONS

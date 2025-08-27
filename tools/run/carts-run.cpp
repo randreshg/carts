@@ -1,7 +1,6 @@
 //==========================================================================
 /// File: carts.cpp
 //==========================================================================
-#include "mlir/Pass/Pass.h"
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/Passes.h"
@@ -19,6 +18,7 @@
 #include "mlir/InitAllPasses.h"
 #include "mlir/InitAllTranslations.h"
 #include "mlir/Parser/Parser.h"
+#include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Support/FileUtilities.h"
@@ -81,6 +81,43 @@ static cl::opt<unsigned>
 static cl::opt<bool> Debug("g", cl::desc("Enable debug mode"), cl::init(false));
 
 //===----------------------------------------------------------------------===//
+// Pipeline Stop Options
+//===----------------------------------------------------------------------===//
+enum class PipelineStage {
+  Simplify,      // After initial cleanup and simplification
+  ArtsInliner,   // After ARTS inliner
+  ConvertOpenMP, // After ConvertOpenMPToARTS
+  EdtTransforms, // After EDT transformations
+  EdtLowering,   // After EDT lowering
+  Datablock,      // After datablock creation and optimization
+  Epochs,        // After epoch creation
+  ArtsToLLVM,    // After ConvertArtsToLLVM
+  Complete       // Full pipeline (default)
+};
+
+static cl::opt<PipelineStage>
+    StopAt(cl::desc("Stop pipeline at specified stage:"),
+           cl::values(clEnumValN(PipelineStage::Simplify, "simplify",
+                                 "Stop after simplification"),
+                      clEnumValN(PipelineStage::ArtsInliner, "arts-inliner",
+                                 "Stop after ARTS inliner"),
+                      clEnumValN(PipelineStage::ConvertOpenMP, "convert-openmp",
+                                 "Stop after OpenMP conversion"),
+                      clEnumValN(PipelineStage::EdtTransforms, "edt-transforms",
+                                 "Stop after EDT transformations"),
+                      clEnumValN(PipelineStage::EdtLowering, "edt-lowering",
+                                 "Stop after EDT lowering"),
+                      clEnumValN(PipelineStage::Datablock, "datablock",
+                                 "Stop after datablock optimization"),
+                      clEnumValN(PipelineStage::Epochs, "epochs",
+                                 "Stop after epoch creation"),
+                      clEnumValN(PipelineStage::ArtsToLLVM, "arts-to-llvm",
+                                 "Stop after ARTS to LLVM conversion"),
+                      clEnumValN(PipelineStage::Complete, "complete",
+                                 "Run complete pipeline (default)")),
+           cl::init(PipelineStage::Complete));
+
+//===----------------------------------------------------------------------===//
 // Helper Functions for Initialization and Pass Setup
 //===----------------------------------------------------------------------===//
 /// Register standard MLIR dialects, passes, and translations.
@@ -132,7 +169,58 @@ void initializeContext(MLIRContext &context) {
 }
 
 /// Configure the pass manager with the optimization passes.
-void setupPassManager(mlir::ModuleOp module, MLIRContext &context) {
+void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
+                      PipelineStage stopAt = PipelineStage::Complete) {
+
+  /// Complete pipeline
+  if (stopAt == PipelineStage::Complete) {
+    PassManager pm(&context);
+
+    mlir::OpPassManager &optPM = pm.nest<mlir::func::FuncOp>();
+    optPM.addPass(createLowerAffinePass());
+    optPM.addPass(polygeist::createCanonicalizeForPass());
+
+    if (Opt) {
+      optPM.addPass(createCSEPass());
+      optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+      optPM.addPass(createMem2Reg());
+      optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+      optPM.addPass(polygeist::replaceAffineCFGPass());
+      optPM.addPass(affine::createAffineScalarReplacementPass());
+      optPM.addPass(polygeist::replaceAffineCFGPass());
+      optPM.addPass(createLoopInvariantCodeMotionPass());
+      optPM.addPass(createCSEPass());
+      optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+      optPM.addPass(createLowerAffinePass());
+    }
+
+    optPM.addPass(createCSEPass());
+    optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+
+    /// Complete pipeline
+    pm.addPass(arts::createArtsInlinerPass());
+    pm.addPass(arts::createConvertOpenMPtoARTSPass());
+    pm.addPass(createSymbolDCEPass());
+    pm.addPass(arts::createEdtPass());
+    pm.addPass(arts::createEdtInvariantCodeMotionPass());
+    pm.addPass(createCanonicalizerPass());
+    pm.addPass(arts::createCreateDbsPass(IdentifyDbs));
+    pm.addPass(arts::createDbPass());
+    pm.addPass(createCSEPass());
+    pm.addPass(createMem2Reg());
+    pm.addPass(arts::createEdtPtrRematerializationPass());
+    pm.addPass(arts::createCreateEpochsPass());
+    pm.addPass(arts::createConvertDbToOpaquePtrPass());
+    pm.addPass(arts::createEdtLoweringPass());
+    pm.addPass(arts::createConvertArtsToLLVMPass(Debug));
+
+    if (mlir::failed(pm.run(module))) {
+      llvm::errs() << "Error running CARTS pipeline";
+      module->dump();
+      return;
+    }
+    return;
+  }
 
   /// Initial cleanup and simplification
   {
@@ -172,34 +260,114 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context) {
     }
   }
 
-  /// ARTS dialect conversion and optimization
-  PassManager pm(&context);
-  pm.addPass(arts::createArtsInlinerPass());
-  pm.addPass(arts::createConvertOpenMPtoARTSPass());
-  pm.addPass(createSymbolDCEPass());
-  pm.addPass(arts::createEdtPass());
-  pm.addPass(arts::createEdtInvariantCodeMotionPass());
-  pm.addPass(createCanonicalizerPass());
+  if (stopAt == PipelineStage::Simplify)
+    return;
 
-  /// Db pass to identify and optimize data dependencies
-  pm.addPass(arts::createCreateDbsPass(IdentifyDbs));
-  pm.addPass(arts::createDbPass());
-  pm.addPass(createCSEPass());
-  pm.addPass(createMem2Reg());
+  /// ARTS dialect conversion and optimization
+  {
+    PassManager pm(&context);
+    pm.addPass(arts::createArtsInlinerPass());
+    if (mlir::failed(pm.run(module))) {
+      llvm::errs() << "Error when running ARTS inliner";
+      module->dump();
+      return;
+    }
+  }
+
+  if (stopAt == PipelineStage::ArtsInliner)
+    return;
+
+  /// OpenMP to ARTS conversion
+  {
+    PassManager pm(&context);
+    pm.addPass(arts::createConvertOpenMPtoARTSPass());
+    pm.addPass(createSymbolDCEPass());
+    if (mlir::failed(pm.run(module))) {
+      llvm::errs() << "Error when converting OpenMP to ARTS";
+      module->dump();
+      return;
+    }
+  }
+
+  if (stopAt == PipelineStage::ConvertOpenMP)
+    return;
+
+  /// EDT transformations
+  {
+    PassManager pm(&context);
+    pm.addPass(arts::createEdtPass());
+    pm.addPass(arts::createEdtInvariantCodeMotionPass());
+    pm.addPass(createCanonicalizerPass());
+    if (mlir::failed(pm.run(module))) {
+      llvm::errs() << "Error when running EDT transformations";
+      module->dump();
+      return;
+    }
+  }
+
+  if (stopAt == PipelineStage::EdtTransforms)
+    return;
+
+  /// Datablock creation and optimization
+  {
+    PassManager pm(&context);
+    pm.addPass(arts::createCreateDbsPass(IdentifyDbs));
+    pm.addPass(arts::createDbPass());
+    pm.addPass(createCSEPass());
+    pm.addPass(createMem2Reg());
+    if (mlir::failed(pm.run(module))) {
+      llvm::errs() << "Error when running datablock passes";
+      module->dump();
+      return;
+    }
+  }
+
+  if (stopAt == PipelineStage::Datablock)
+    return;
 
   /// Create epochs
-  pm.addPass(arts::createEdtPtrRematerializationPass());
-  pm.addPass(arts::createCreateEpochsPass());
+  {
+    PassManager pm(&context);
+    pm.addPass(arts::createEdtPtrRematerializationPass());
+    pm.addPass(arts::createCreateEpochsPass());
+    if (mlir::failed(pm.run(module))) {
+      llvm::errs() << "Error when creating epochs";
+      module->dump();
+      return;
+    }
+  }
+
+  if (stopAt == PipelineStage::Epochs)
+    return;
+
+  /// EDT lowering
+  {
+    PassManager pm(&context);
+    pm.addPass(arts::createConvertDbToOpaquePtrPass());
+    pm.addPass(arts::createEdtLoweringPass());
+    if (mlir::failed(pm.run(module))) {
+      llvm::errs() << "Error when running EDT lowering";
+      module->dump();
+      return;
+    }
+  }
+
+  if (stopAt == PipelineStage::EdtLowering)
+    return;
 
   /// Convert ARTS to LLVM
-  pm.addPass(arts::createConvertDbToOpaquePtrPass());
-  pm.addPass(arts::createEdtLoweringPass());
-  pm.addPass(arts::createConvertArtsToLLVMPass(Debug));
-  if (mlir::failed(pm.run(module))) {
-    llvm::errs() << "Error when running ARTS Passes";
-    module->dump();
-    return;
+  {
+    PassManager pm(&context);
+    pm.addPass(arts::createConvertArtsToLLVMPass(Debug));
+    if (mlir::failed(pm.run(module))) {
+      llvm::errs() << "Error when converting ARTS to LLVM";
+      module->dump();
+      return;
+    }
   }
+
+  if (stopAt == PipelineStage::ArtsToLLVM)
+    return;
 
   /// Optimizations (if enabled)
   if (Opt) {
@@ -268,7 +436,7 @@ int main(int argc, char **argv) {
 
   /// Iteratively run the pass pipeline to drive IR to a fixpoint.
   for (unsigned i = 0; i < OptIterations; ++i)
-    setupPassManager(module.get(), context);
+    setupPassManager(module.get(), context, StopAt);
 
   /// Translate the optimized module to LLVM IR and write output.
   if (EmitLLVM) {

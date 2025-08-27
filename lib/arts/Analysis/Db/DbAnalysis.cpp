@@ -3,14 +3,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Db/DbDataFlowAnalysis.h"
 #include "arts/Analysis/Db/DbAliasAnalysis.h"
-#include "arts/Analysis/LoopAnalysis.h"
+#include "arts/Analysis/Db/DbDataFlowAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "mlir/IR/BuiltinOps.h"
+#include "arts/Analysis/LoopAnalysis.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "llvm/Support/Debug.h"
 
 #include "arts/Utils/ArtsDebug.h"
@@ -23,11 +21,9 @@ DbAnalysis::DbAnalysis(Operation *module) : module(module), solver() {
   ARTS_INFO("Initializing DbAnalysis for module");
   loopAnalysis = std::make_unique<LoopAnalysis>(module);
   dbAliasAnalysis = std::make_unique<DbAliasAnalysis>(this);
-  
-  // Create the dataflow analysis with the solver
+
+  /// Create and load the dataflow analysis
   dbDataFlowAnalysis = std::make_unique<DbDataFlowAnalysis>(solver);
-  
-  // Load the dataflow analysis into the solver
   (void)solver.load<DbDataFlowAnalysis>();
 
   // Add baseline data flow analyses to solver
@@ -47,10 +43,10 @@ DbGraph *DbAnalysis::getOrCreateGraph(func::FuncOp func) {
 
   ARTS_INFO("Creating new DbGraph for function: " << func.getName());
   auto newGraph = std::make_unique<DbGraph>(func, this);
-  
+
   // Initialize the dataflow analysis with the graph and analysis context
   dbDataFlowAnalysis->initialize(newGraph.get(), this);
-  
+
   // Build nodes and dependencies (runs dataflow internally)
   newGraph->build();
 
@@ -70,18 +66,24 @@ DbAnalysis::SliceInfo DbAnalysis::computeSliceInfo(arts::DbAcquireOp acquire) {
   for (Value v : offsets) {
     if (auto c = v.getDefiningOp<mlir::arith::ConstantIndexOp>())
       info.offsets.push_back(c.value());
-    else { info.offsets.push_back(INT64_MIN); hasUnknown = true; }
+    else {
+      info.offsets.push_back(INT64_MIN);
+      hasUnknown = true;
+    }
   }
   uint64_t totalElems = 1;
   for (Value v : sizes) {
     if (auto c = v.getDefiningOp<mlir::arith::ConstantIndexOp>()) {
       info.sizes.push_back(c.value());
       totalElems *= (uint64_t)std::max<int64_t>(c.value(), 1);
-    } else { info.sizes.push_back(INT64_MIN); hasUnknown = true; }
+    } else {
+      info.sizes.push_back(INT64_MIN);
+      hasUnknown = true;
+    }
   }
   if (!hasUnknown) {
     // Try element type size from result memref
-    if (auto memTy = dyn_cast<MemRefType>(acquire.getView().getType())) {
+    if (auto memTy = dyn_cast<MemRefType>(acquire.getPtr().getType())) {
       if (auto intTy = dyn_cast<IntegerType>(memTy.getElementType()))
         info.estimatedBytes = (intTy.getWidth() / 8u) * totalElems;
       else if (auto fTy = dyn_cast<FloatType>(memTy.getElementType()))
@@ -102,17 +104,25 @@ DbAnalysis::OverlapKind DbAnalysis::estimateOverlap(arts::DbAcquireOp a,
   for (size_t i = 0; i < r; ++i) {
     int64_t ao = sa.offsets[i], asz = sa.sizes[i];
     int64_t bo = sb.offsets[i], bsz = sb.sizes[i];
-    if (ao == INT64_MIN || asz == INT64_MIN || bo == INT64_MIN || bsz == INT64_MIN) {
-      anyUnknown = true; continue;
+    if (ao == INT64_MIN || asz == INT64_MIN || bo == INT64_MIN ||
+        bsz == INT64_MIN) {
+      anyUnknown = true;
+      continue;
     }
     int64_t a0 = ao, a1 = ao + asz;
     int64_t b0 = bo, b1 = bo + bsz;
     bool overlap = !(a1 <= b0 || b1 <= a0);
-    if (!overlap) { disjoint = true; break; }
+    if (!overlap) {
+      disjoint = true;
+      break;
+    }
   }
-  if (disjoint) return OverlapKind::Disjoint;
-  if (equal) return OverlapKind::Full;
-  if (anyUnknown) return OverlapKind::Unknown;
+  if (disjoint)
+    return OverlapKind::Disjoint;
+  if (equal)
+    return OverlapKind::Full;
+  if (anyUnknown)
+    return OverlapKind::Unknown;
   return OverlapKind::Partial;
 }
 
@@ -121,7 +131,7 @@ bool DbAnalysis::invalidateGraph(func::FuncOp func) {
   auto it = functionGraphMap.find(func);
   if (it != functionGraphMap.end()) {
     functionGraphMap.erase(it);
-  ARTS_INFO("DbGraph invalidated successfully.");
+    ARTS_INFO("DbGraph invalidated successfully.");
     return true;
   }
   ARTS_WARN("DbGraph not found, could not invalidate.");

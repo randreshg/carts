@@ -19,12 +19,7 @@ ARTS_DEBUG_SETUP(db-codegen);
 using namespace mlir;
 using namespace mlir::arts;
 
-// ARTS DB Mode Constants
-namespace {
-/// Taken from arts.h
-constexpr int ARTS_DB_PIN = 10; // Pin mode for write access
-constexpr int ARTS_DB_READ = 8; // Read-only mode
-} // namespace
+// ARTS DB Mode Constants are now defined in ArtsKinds.def
 
 class ArtsCodegen;
 

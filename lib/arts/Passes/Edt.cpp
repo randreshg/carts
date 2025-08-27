@@ -6,7 +6,7 @@
 // to ensure correct propagation of dependencies and identify opportunities for
 // merging or elimination.
 // TODO: Implement barrier removal by analyzing surrounding EDTs and converting
-// implicit synchronization to explicit database dependencies or events.
+// implicit synchronization to explicit datablock dependencies or events.
 // TODO: Enhance flattening to handle arbitrary nesting depths of EDTs, not just
 // parallel/single pairs, while preserving semantics.
 // TODO: Add dominance and use-def analysis to accurately collect and minimize

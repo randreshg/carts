@@ -4,9 +4,9 @@
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Db/DbDataFlowAnalysis.h"
-#include "arts/Analysis/LoopAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbEdge.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
+#include "arts/Analysis/LoopAnalysis.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -294,7 +294,8 @@ DbAllocOp DbGraph::findRootAllocOp(Operation *op) {
 
 void DbGraph::buildDependencies() {
   ARTS_INFO("Phase 2 - Building dependencies");
-  // Use the dataflow analysis from the analysis instead of directly accessing the solver
+  // Use the dataflow analysis from the analysis instead of directly accessing
+  // the solver
   if (!dataFlowAnalysis) {
     // Get the dataflow analysis from the analysis
     dataFlowAnalysis = analysis->getDataFlowAnalysis();
@@ -302,10 +303,10 @@ void DbGraph::buildDependencies() {
       dataFlowAnalysis->initialize(this, analysis);
     }
   }
-  
+
   if (dataFlowAnalysis) {
-    // Run the dataflow analysis
-    dataFlowAnalysis->analyze();
+    // Execute the solver over this function to run the analysis
+    (void)analysis->getSolver().initializeAndRun(func);
     ARTS_INFO("Phase 2 - Data flow analysis finished");
   } else {
     ARTS_WARN("No dataflow analysis available, skipping dependency building");
@@ -317,18 +318,7 @@ void DbGraph::computeOpOrder() {
   func.walk([&](Operation *op) { opOrder[op] = idx++; });
 }
 
-static llvm::SmallVector<int64_t> extractConstVector(mlir::ValueRange vals) {
-  llvm::SmallVector<int64_t> out;
-  out.reserve(vals.size());
-  for (mlir::Value v : vals) {
-    if (auto c = v.getDefiningOp<mlir::arith::ConstantIndexOp>()) {
-      out.push_back(c.value());
-    } else {
-      out.push_back(INT64_MIN); // unknown
-    }
-  }
-  return out;
-}
+// removed unused helper extractConstVector
 
 uint64_t DbGraph::getElementTypeByteSize(Type elemTy) {
   if (auto intTy = dyn_cast<IntegerType>(elemTy))
@@ -617,8 +607,9 @@ void DbGraph::exportToJson(llvm::raw_ostream &os) const {
       if (!firstIv)
         os << ",\n";
       firstIv = false;
-      os << "        { \"begin\": " << iv.beginIndex << ", \"end\": " << iv.endIndex
-         << ", \"mode\": \"" << const_cast<DbAcquireOp&>(iv.acquire).getMode() << "\" }";
+      os << "        { \"begin\": " << iv.beginIndex
+         << ", \"end\": " << iv.endIndex << ", \"mode\": \""
+         << const_cast<DbAcquireOp &>(iv.acquire).getMode() << "\" }";
     }
     os << "\n      ]\n";
     os << "    }";

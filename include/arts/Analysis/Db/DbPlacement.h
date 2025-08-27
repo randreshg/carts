@@ -13,18 +13,20 @@
 #include "llvm/Support/raw_ostream.h"
 
 namespace mlir {
-namespace arts {
+namespace arts {;
 
 struct DbPlacementNodeScore {
   std::string node;
   double score = 0.0;
-  uint64_t readers = 0; // number of acquires by EDTs placed on node
+  /// number of acquires by EDTs placed on node
+  uint64_t readers = 0; 
+  uint64_t writers = 0;
 };
 
 struct DbPlacementDecision {
   Operation *dbAllocOp = nullptr;
   std::string chosenNode;
-  llvm::SmallVector<DbPlacementNodeScore, 4> candidates;
+  SmallVector<DbPlacementNodeScore, 4> candidates;
 };
 
 /// Heuristics: place DbAlloc on the node with most readers (EDTs) using it,
@@ -33,13 +35,13 @@ class DbPlacementHeuristics {
 public:
   explicit DbPlacementHeuristics(DbGraph *graph) : dbGraph(graph) {}
 
-  static llvm::SmallVector<std::string, 8> makeNodeNames(unsigned count);
+  static SmallVector<std::string, 8> makeNodeNames(unsigned count);
 
-  llvm::SmallVector<DbPlacementDecision, 16>
-  compute(func::FuncOp func, const llvm::SmallVector<std::string, 8> &nodes);
+  SmallVector<DbPlacementDecision, 16>
+  compute(func::FuncOp func, const SmallVector<std::string, 8> &nodes);
 
   void exportToJson(func::FuncOp func,
-                    const llvm::SmallVector<DbPlacementDecision, 16> &decisions,
+                    const SmallVector<DbPlacementDecision, 16> &decisions,
                     llvm::raw_ostream &os) const;
 
 private:

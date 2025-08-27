@@ -55,10 +55,23 @@ using namespace mlir::cf;
 using namespace mlir::scf;
 
 /// ARTS Codegen
+ArtsCodegen::ArtsCodegen(ModuleOp module, bool debug)
+    : module(module), builder(OpBuilder(module->getContext())), debug(debug) {
+  if (failed(extractDataLayouts())) {
+    mlir::emitError(module.getLoc()) << "Failed to extract data layouts";
+    llvm_unreachable("Failed to extract data layouts");
+    return;
+  }
+  initializeTypes();
+  collectGlobalLLVMStrings();
+}
+
 ArtsCodegen::ArtsCodegen(ModuleOp &module, llvm::DataLayout &llvmDL,
                          mlir::DataLayout &mlirDL, bool debug)
-    : module(module), builder(OpBuilder(module->getContext())), llvmDL(llvmDL),
-      mlirDL(mlirDL), debug(debug) {
+    : module(module), builder(OpBuilder(module->getContext())), debug(debug) {
+  this->llvmDL = std::make_unique<llvm::DataLayout>(llvmDL);
+  this->mlirDL = std::make_unique<mlir::DataLayout>(mlirDL);
+
   initializeTypes();
   collectGlobalLLVMStrings();
 }
@@ -80,39 +93,31 @@ func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
   OpBuilder::InsertionGuard IG(builder);
   builder.setInsertionPointToStart(module.getBody());
 
-  FunctionType fnType = nullptr;
   func::FuncOp funcOp;
   /// Try to find the declaration in the module first.
-  switch (FnID) {
+#define ARTS_RTL_FUNCTIONS
 #define ARTS_RTL(Enum, Str, ReturnType, ...)                                   \
   case Enum: {                                                                 \
     SmallVector<Type, 4> argumentTypes{__VA_ARGS__};                           \
-    fnType = builder.getFunctionType(argumentTypes,                            \
-                                     ReturnType.isa<mlir::NoneType>()          \
-                                         ? ArrayRef<Type>{}                    \
-                                         : ArrayRef<Type>{ReturnType});        \
+    auto fnType = builder.getFunctionType(argumentTypes,                       \
+                                          ReturnType.isa<mlir::NoneType>()     \
+                                              ? ArrayRef<Type>{}               \
+                                              : ArrayRef<Type>{ReturnType});   \
     funcOp = module.lookupSymbol<func::FuncOp>(Str);                           \
+    if (!funcOp) {                                                             \
+      funcOp = builder.create<func::FuncOp>(getUnknownLoc(), Str, fnType);     \
+      funcOp.setPrivate();                                                     \
+      funcOp->setAttr("llvm.linkage",                                          \
+                      LLVM::LinkageAttr::get(builder.getContext(),             \
+                                             LLVM::Linkage::External));        \
+    }                                                                          \
     break;                                                                     \
   }
+  switch (FnID) {
 #include "arts/Codegen/ArtsKinds.def"
   }
-
-  if (!funcOp) {
-    /// Create a new declaration if we need one.
-    switch (FnID) {
-#define ARTS_RTL(Enum, Str, ...)                                               \
-  case Enum:                                                                   \
-    funcOp = builder.create<func::FuncOp>(getUnknownLoc(), Str, fnType);       \
-    break;
-#include "arts/Codegen/ArtsKinds.def"
-    }
-  }
-
-  /// Set the function as private and the llvm.linkage attribute to external
-  funcOp.setPrivate();
-  funcOp->setAttr(
-      "llvm.linkage",
-      LLVM::LinkageAttr::get(builder.getContext(), LLVM::Linkage::External));
+#undef ARTS_RTL_FUNCTIONS
+#undef ARTS_RTL
 
   assert(funcOp && "Failed to create ARTS runtime function");
 
@@ -124,6 +129,7 @@ func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
 void ArtsCodegen::initializeTypes() {
   MLIRContext *context = module.getContext();
   llvmPtr = LLVM::LLVMPointerType::get(context);
+
 #define ARTS_TYPE(VarName, InitValue) VarName = InitValue;
 #define ARTS_FUNCTION_TYPE(VarName, ReturnType, ...)                           \
   VarName = FunctionType::get(                                                 \
@@ -137,6 +143,18 @@ void ArtsCodegen::initializeTypes() {
   VarName = LLVM::LLVMStructType::getLiteral(context, {__VA_ARGS__}, Packed);  \
   VarName##Ptr = MemRefType::get({ShapedType::kDynamic}, VarName);
 #include "arts/Codegen/ArtsKinds.def"
+}
+
+LogicalResult ArtsCodegen::extractDataLayouts() {
+  /// Create LLVM DataLayout from the string attribute
+  auto llvmDLAttr = module->getAttrOfType<StringAttr>("llvm.data_layout");
+  if (!llvmDLAttr)
+    return module.emitError("Module missing required LLVM data layout");
+  llvmDL = std::make_unique<llvm::DataLayout>(llvmDLAttr.getValue().str());
+
+  /// Create MLIR DataLayout from the module
+  mlirDL = std::make_unique<mlir::DataLayout>(module);
+  return success();
 }
 
 func::CallOp ArtsCodegen::createRuntimeCall(RuntimeFunction FnID,
@@ -176,19 +194,27 @@ Value ArtsCodegen::createEpoch(Value finishEdtGuid, Value finishEdtSlot,
 }
 
 /// Utils
+// Value ArtsCodegen::getGuidFromEdtDep(Value dep, Location loc) {
+//   const auto zeroInt = createIntConstant(0, Int32, loc);
+//   auto guidValue = builder.create<LLVM::GEPOp>(loc, llvmPtr, ArtsEdtDep, dep,
+//                                                ValueRange{zeroInt, zeroInt});
+//   return builder.create<LLVM::LoadOp>(loc, ArtsGuid, guidValue.getResult());
+// }
+
+// Value ArtsCodegen::getPtrFromEdtDep(Value dep, Location loc) {
+//   const auto zeroInt = createIntConstant(0, Int32, loc);
+//   const auto twoInt = createIntConstant(2, Int32, loc);
+//   auto gepOp = builder.create<LLVM::GEPOp>(loc, llvmPtr, ArtsEdtDep, dep,
+//                                            ValueRange{zeroInt, twoInt});
+//   return builder.create<LLVM::LoadOp>(loc, VoidPtr, gepOp.getResult());
+// }
+
 Value ArtsCodegen::getGuidFromEdtDep(Value dep, Location loc) {
-  const auto zeroInt = createIntConstant(0, Int32, loc);
-  auto guidValue = builder.create<LLVM::GEPOp>(loc, llvmPtr, ArtsEdtDep, dep,
-                                               ValueRange{zeroInt, zeroInt});
-  return builder.create<LLVM::LoadOp>(loc, ArtsGuid, guidValue.getResult());
+  return builder.create<LLVM::ExtractValueOp>(loc, dep, ArrayRef<int64_t>{0});
 }
 
 Value ArtsCodegen::getPtrFromEdtDep(Value dep, Location loc) {
-  const auto zeroInt = createIntConstant(0, Int32, loc);
-  const auto twoInt = createIntConstant(2, Int32, loc);
-  auto gepOp = builder.create<LLVM::GEPOp>(loc, llvmPtr, ArtsEdtDep, dep,
-                                           ValueRange{zeroInt, twoInt});
-  return builder.create<LLVM::LoadOp>(loc, VoidPtr, gepOp.getResult());
+  return builder.create<LLVM::ExtractValueOp>(loc, dep, ArrayRef<int64_t>{2});
 }
 
 Value ArtsCodegen::getCurrentEpochGuid(Location loc) {
@@ -564,6 +590,10 @@ void ArtsCodegen::setInsertionPoint(Operation *op) {
   builder.setInsertionPoint(op);
 }
 
+void ArtsCodegen::setInsertionPointToStart(Block *block) {
+  builder.setInsertionPointToStart(block);
+}
+
 void ArtsCodegen::setInsertionPointAfter(Operation *op) {
   builder.setInsertionPointAfter(op);
 }
@@ -601,7 +631,7 @@ void ArtsCodegen::applyReplacements() {
 Value ArtsCodegen::computeMemrefElementSize(MemRefType memrefType,
                                             Location loc) {
   auto elementType = memrefType.getElementType();
-  auto elementSizeInBits = mlirDL.getTypeSizeInBits(elementType);
+  auto elementSizeInBits = mlirDL->getTypeSizeInBits(elementType);
   return createIntConstant(elementSizeInBits / 8, Int64, loc);
 }
 

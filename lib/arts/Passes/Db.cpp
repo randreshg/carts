@@ -4,38 +4,28 @@
 
 /// Dialects
 
-#include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/IR/AffineMap.h"
-#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
 /// Arts
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
-#include "arts/Utils/ArtsUtils.h"
 /// Other
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/Pass/Pass.h"
-#include "mlir/Transforms/CSE.h"
-#include "mlir/Transforms/DialectConversion.h"
-#include "polygeist/Ops.h"
 /// Debug
 #include "arts/Analysis/Db/DbAnalysis.h"
+#include "arts/Analysis/Db/DbPlacement.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "arts/Analysis/Db/DbPlacement.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-#include <cstdint>
 
 #include "arts/Utils/ArtsDebug.h"
 ARTS_DEBUG_SETUP(db);
@@ -48,8 +38,7 @@ using namespace mlir::arts;
 
 //===----------------------------------------------------------------------===//
 // Pass Implementation
-// Responsibility: transform/optimize ARTS DB IR using DbGraph/analyses.
-// Non-Goals: task/EDT reasoning (kept in EDT passes/analyses).
+// transform/optimize ARTS DB IR using DbGraph/analyses.
 //===----------------------------------------------------------------------===//
 namespace {
 struct DbPass : public arts::DbBase<DbPass> {
@@ -100,36 +89,52 @@ void DbPass::runOnOperation() {
 
   auto &dbAnalysis = getAnalysis<DbAnalysis>();
   // Force-build graphs so downstream opts can consume them now or later.
-  module.walk([&](func::FuncOp func) {
-    (void)dbAnalysis.getOrCreateGraph(func);
-    // Optional: dump concise DB metrics in debug builds
-    if (llvm::DebugFlag) {
-      if (auto *graph = dbAnalysis.getOrCreateGraph(func)) {
-        ARTS_DEBUG_SECTION("DbMetrics", {
-          llvm::SmallString<128> buf;
-          llvm::raw_svector_ostream os(buf);
-          graph->exportToJson(os);
-          ARTS_DBGS() << os.str();
-        });
-      }
-    }
-  });
+  module.walk([&](func::FuncOp func) { (void)dbAnalysis.getOrCreateGraph(func); });
 
   // Order below is conservative; each stage can be independently enabled
-  changed |= deadDbElimination();
-  changed |= convertToParameters();
-  changed |= shrinkDb();
-  changed |= prefetchOverlap();
-  changed |= bufferReuse();
-  changed |= hoistAllocs();
-  changed |= fuseAccesses();
-  changed |= inlineAllocs();
+  // changed |= deadDbElimination();
 
-  // Analysis-only: emit DB placement JSON under debug for 4-node fabric
+  bool ctpChanged = convertToParameters();
+  changed |= ctpChanged;
+  if (ctpChanged) {
+    module.walk([&](func::FuncOp func) {
+      (void)dbAnalysis.invalidateGraph(func);
+      (void)dbAnalysis.getOrCreateGraph(func);
+    });
+  }
+
+  bool shrinkChanged = shrinkDb();
+  changed |= shrinkChanged;
+  if (shrinkChanged) {
+    module.walk([&](func::FuncOp func) {
+      (void)dbAnalysis.invalidateGraph(func);
+      (void)dbAnalysis.getOrCreateGraph(func);
+    });
+  }
+
+  // changed |= prefetchOverlap();
+  // changed |= bufferReuse();
+  // changed |= hoistAllocs();
+  // changed |= fuseAccesses();
+  // changed |= inlineAllocs();
+
+  // Analysis-only: emit single final DbAnalysis JSON dump and placement JSON
+  ARTS_DEBUG_SECTION("db-analysis:final-json", {
+    module.walk([&](func::FuncOp func) {
+      if (auto *graph = dbAnalysis.getOrCreateGraph(func)) {
+        llvm::SmallString<128> buf;
+        llvm::raw_svector_ostream os(buf);
+        graph->exportToJson(os);
+        ARTS_DBGS() << os.str();
+      }
+    });
+  });
+
   ARTS_DEBUG_SECTION("db-placement-json", {
     module.walk([&](func::FuncOp func) {
       auto *graph = dbAnalysis.getOrCreateGraph(func);
-      if (!graph) return;
+      if (!graph)
+        return;
       DbPlacementHeuristics placer(graph);
       auto nodes = DbPlacementHeuristics::makeNodeNames(4);
       auto decisions = placer.compute(func, nodes);
@@ -286,7 +291,7 @@ bool DbPass::canonicalizeDimOps() {
       // Prefer the explicit acquire size slice if present; else fallback to
       // alloc sizes.
       auto sizes = dbAcq.getSizes();
-      if (sizes.size() > *cstIdx) {
+      if (static_cast<long long>(sizes.size()) > *cstIdx) {
         Value sz = sizes[*cstIdx];
         dimOp.replaceAllUsesWith(sz);
         dimOp.erase();
@@ -371,12 +376,11 @@ bool DbPass::convertToParameters() {
 /*
 Implement a proper “DbGranularityNormalize” transformation:
 Split DbAlloc by chosen dimension.
-Update all downstream DbAcquire/DbRelease and arts.edt block args/operands to reference the new coarser-grained DBs.
-Ensure interaction with EdtGraph/DbGraph remains correct and verify with tests.
+Update all downstream DbAcquire/DbRelease and arts.edt block args/operands to
+reference the new coarser-grained DBs. Ensure interaction with EdtGraph/DbGraph
+remains correct and verify with tests.
 */
-bool DbPass::shrinkDb() {
-  return false;
-}
+bool DbPass::shrinkDb() { return false; }
 
 // Dead DB elimination
 // Responsibility: remove DbAllocOps with no associated acquires/releases and
@@ -510,7 +514,7 @@ bool DbPass::fuseAccesses() {
                 equalRange(prevAcq.getIndices(), acq.getIndices()) &&
                 equalRange(prevAcq.getOffsets(), acq.getOffsets()) &&
                 equalRange(prevAcq.getSizes(), acq.getSizes())) {
-              acq.getResult().replaceAllUsesWith(prevAcq.getResult());
+              acq.getPtr().replaceAllUsesWith(prevAcq.getPtr());
               acq.erase();
               changed = true;
               // Do not update prevAcq; continue chaining
