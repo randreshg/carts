@@ -2,24 +2,6 @@
 /// File: Edt.cpp
 ///==========================================================================
 
-// TODO: Integrate DbAnalysis to perform dependency analysis before flattening,
-// to ensure correct propagation of dependencies and identify opportunities for
-// merging or elimination.
-// TODO: Implement barrier removal by analyzing surrounding EDTs and converting
-// implicit synchronization to explicit datablock dependencies or events.
-// TODO: Enhance flattening to handle arbitrary nesting depths of EDTs, not just
-// parallel/single pairs, while preserving semantics.
-// TODO: Add dominance and use-def analysis to accurately collect and minimize
-// dependencies during union operations.
-// TODO: Optimize by merging compatible sibling EDTs (e.g., those with
-// non-overlapping dependencies) into fewer tasks for reduced runtime overhead.
-// TODO: Handle db_control operations explicitly: propagate them as control
-// dependencies and potentially lower them to events or barriers if needed.
-// TODO: Add support for dynamic worker counts and load balancing in lowered
-// parallel regions.
-// TODO: Implement verification checks post-transformation to ensure no
-// dependency cycles or lost synchronizations.
-
 /// Dialects
 #include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -28,10 +10,6 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/Support/LLVM.h"
-// #include "mlir/Transforms/RegionUtils.h"
-// polygeist includes are not used directly here
-// #include "polygeist/Dialect.h"
-// #include "polygeist/Ops.h"
 /// Arts
 #include "ArtsPassDetails.h"
 // #include "arts/Analysis/Db/DbAnalysis.h"
@@ -65,6 +43,11 @@ struct EdtPass : public arts::EdtBase<EdtPass> {
   bool lowerSingle(EdtOp &op);
   bool convertParallelIntoSingle(EdtOp &op);
 
+  /// Utility for creating EDT with merged dependencies and region transfer
+  EdtOp createEdtWithMergedDepsAndRegion(OpBuilder &builder, Location loc,
+                                         arts::EdtType newType, EdtOp sourceOp,
+                                         ArrayRef<Value> additionalDeps = {});
+
   bool processParallelEdts();
   bool processSyncTaskEdts();
   bool removeBarriers();
@@ -79,16 +62,57 @@ private:
 };
 } // end namespace
 
+/// Utility function to create a new EDT operation with merged dependencies
+/// and transfer the region from the source operation.
+EdtOp EdtPass::createEdtWithMergedDepsAndRegion(
+    OpBuilder &builder, Location loc, arts::EdtType newType, EdtOp sourceOp,
+    ArrayRef<Value> additionalDeps) {
+
+  /// Collect all dependencies from source operation
+  SetVector<Value> allDeps;
+  for (Value dep : sourceOp.getDependencies())
+    allDeps.insert(dep);
+
+  /// Add any additional dependencies
+  for (Value dep : additionalDeps)
+    allDeps.insert(dep);
+
+  /// Create new EDT operation with merged dependencies
+  auto newEdt = builder.create<arts::EdtOp>(loc, newType, sourceOp.getRoute(),
+                                            allDeps.getArrayRef());
+
+  /// Transfer region from source to new operation
+  Region &sourceRegion = sourceOp.getRegion();
+  Region &newRegion = newEdt.getRegion();
+
+  /// Clear new region and transfer blocks
+  if (newRegion.empty())
+    newRegion.push_back(new Block());
+  Block &newBody = newRegion.front();
+  newBody.clear();
+
+  /// Move operations from source region to new region
+  SmallVector<Operation *, 16> opsToMove;
+  for (auto &block : sourceRegion) {
+    for (auto &op : block)
+      opsToMove.push_back(&op);
+  }
+
+  /// Move operations to new region
+  for (auto *opToMove : opsToMove)
+    opToMove->moveBefore(&newBody, newBody.end());
+
+  return newEdt;
+}
+
 /// Converts a parallel EDT region into a sync-task EDT when it contains a
 /// single inner `arts.edt` and no other ops beyond terminators/barriers.
 /// Responsibility: structural simplification; dependency collection limited to
 /// union of inner EDT dependencies. No global analysis here.
 bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
-  /// Analyze the parallel region to locate the unique single-edt op.
   uint32_t numOps = 0;
   EdtOp singleOp = nullptr;
 
-  /// Iterate over the immediate operations in the region.
   for (auto &block : op.getRegion()) {
     for (auto &inst : block) {
       ++numOps;
@@ -113,30 +137,21 @@ bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
   if (!singleOp || numOps < 3)
     return false;
 
-  ARTS_INFO("Converting parallel EDT into single EDT");
-  /// Insert the single operation before the parallel op and remove the "single"
-  /// attribute.
-  singleOp->moveBefore(op);
-  singleOp.setType(arts::EdtType::sync);
+  /// Create a new EDT operation using the utility function
+  OpBuilder builder(op);
+  SmallVector<Value> parallelDeps(op.getDependencies().begin(),
+                                  op.getDependencies().end());
+  auto newEdt = createEdtWithMergedDepsAndRegion(
+      builder, op.getLoc(), arts::EdtType::sync, singleOp, parallelDeps);
 
-  /// Collect unique dependencies from all inner EDTs
-  SetVector<Value> allDeps;
-  singleOp.walk([&](EdtOp inner) {
-    if (inner == singleOp)
-      return WalkResult::advance(); // Skip self
-    for (Value dep : inner.getDependenciesVector()) {
-      allDeps.insert(dep);
-    }
-    return WalkResult::advance();
-  });
+  /// Replace the parallel EDT with the new EDT and erase the single EDT
+  op->replaceAllUsesWith(newEdt);
+  singleOp->erase();
 
-  /// Append the collected dependencies to the outer EDT's operands
-  if (!allDeps.empty()) {
-    singleOp->insertOperands(singleOp.getNumOperands(), allDeps.getArrayRef());
-  }
-
-  /// Mark the parallel op for removal.
+  /// Mark the parallel EDT for removal
   opsToRemove.insert(op);
+
+  ARTS_INFO("Converted parallel EDT into single EDT");
   return true;
 }
 
@@ -170,23 +185,26 @@ bool EdtPass::lowerParallel(EdtOp &op) {
   /// Create terminator for the epochOp.
   builder.create<arts::YieldOp>(loc);
 
-  /// Move Edt op into the loop body.
-  op->moveBefore(forOp.getBody(), forOp.getBody()->begin());
-  op.setType(arts::EdtType::task); // Set to task type instead
-
-  /// Optionally propagate dependencies (similar to convert)
+  /// Collect all dependencies before creating new EDT
   SetVector<Value> allDeps;
   op.walk([&](EdtOp inner) {
     if (inner == op)
       return WalkResult::advance();
-    for (Value dep : inner.getDependenciesVector()) {
+    for (Value dep : inner.getDependencies())
       allDeps.insert(dep);
-    }
     return WalkResult::advance();
   });
-  if (!allDeps.empty()) {
-    op->insertOperands(op.getNumOperands(), allDeps.getArrayRef());
-  }
+
+  /// Always create new EDT with merged dependencies
+  auto newEdtOp = createEdtWithMergedDepsAndRegion(
+      builder, op.getLoc(), arts::EdtType::task, op, allDeps.getArrayRef());
+
+  /// Replace original EDT with new one and move into the loop body
+  op->replaceAllUsesWith(newEdtOp);
+  newEdtOp->moveBefore(forOp.getBody(), forOp.getBody()->begin());
+
+  /// Mark original EDT for removal
+  opsToRemove.insert(op);
 
   return true;
 }
@@ -195,21 +213,26 @@ bool EdtPass::lowerParallel(EdtOp &op) {
 /// top-level. Can be enhanced later for more complex single handling.
 bool EdtPass::lowerSingle(EdtOp &op) {
   ARTS_INFO("Lowering single EDT");
-  op.setType(arts::EdtType::sync);
 
-  /// Propagate inner dependencies similar to parallel handling
+  /// Collect inner dependencies
   SetVector<Value> allDeps;
   op.walk([&](EdtOp inner) {
     if (inner == op)
       return WalkResult::advance();
-    for (Value dep : inner.getDependenciesVector()) {
+    for (Value dep : inner.getDependencies()) {
       allDeps.insert(dep);
     }
     return WalkResult::advance();
   });
-  if (!allDeps.empty()) {
-    op->insertOperands(op.getNumOperands(), allDeps.getArrayRef());
-  }
+
+  /// Always create new EDT with merged dependencies using utility function
+  /// This avoids the problematic insertOperands approach and simplifies the
+  /// code
+  OpBuilder builder(op);
+  auto newEdt = createEdtWithMergedDepsAndRegion(
+      builder, op.getLoc(), arts::EdtType::sync, op, allDeps.getArrayRef());
+  op->replaceAllUsesWith(newEdt);
+  opsToRemove.insert(op);
 
   return true;
 }
@@ -250,16 +273,14 @@ bool EdtPass::processParallelEdts() {
   /// - Try to convert it into a single-EDT if it contains exactly one child.
   /// - Otherwise, lower it into a worker-loop enclosed in an EpochOp.
   for (EdtOp op : parallelOps) {
-    ARTS_INFO("Processing parallel EDT");
-    if (!convertParallelIntoSingle(op))
+    if (!convertParallelIntoSingle(op)) {
       lowerParallel(op);
+    }
   }
   return true;
 }
 
 bool EdtPass::processSyncTaskEdts() {
-  ARTS_INFO("Processing sync task EDTs");
-
   /// If the given single EdtOp is not nested within another EdtOp (i.e., is
   /// top-level), and is marked as sync, embed its region's contents in an
   /// arts::EpochOp. This effectively assigns the work to the master thread,
@@ -281,9 +302,17 @@ bool EdtPass::processSyncTaskEdts() {
     /// Move all operations except the terminator from the EdtOp's region to the
     /// epoch block
     Block *edtBody = &op.getRegion().front();
-    for (Operation &childOp :
-         llvm::make_early_inc_range(edtBody->without_terminator())) {
-      childOp.moveBefore(epochBlock.getTerminator());
+
+    /// Collect operations to move before moving them (to avoid iterator
+    /// invalidation)
+    SmallVector<Operation *, 8> opsToMove;
+    for (Operation &childOp : edtBody->without_terminator()) {
+      opsToMove.push_back(&childOp);
+    }
+
+    /// Move all operations to the epoch block
+    for (Operation *childOp : opsToMove) {
+      childOp->moveBefore(epochBlock.getTerminator());
     }
 
     /// Erase the now-empty EdtOp
@@ -296,8 +325,7 @@ bool EdtPass::processSyncTaskEdts() {
   /// Collect all sync task EDTs
   SmallVector<EdtOp, 8> syncTaskOps;
   module.walk([&](EdtOp edt) {
-    if (edt.getType() == arts::EdtType::task &&
-        edt.getType() == arts::EdtType::sync)
+    if (edt.getType() == arts::EdtType::sync)
       syncTaskOps.push_back(edt);
   });
 
@@ -314,70 +342,14 @@ bool EdtPass::processSyncTaskEdts() {
 
 void EdtPass::runOnOperation() {
   module = getOperation();
-  ARTS_DEBUG_HEADER(EdtPass);
-  ARTS_DEBUG_REGION(module->dump(););
+  ARTS_INFO("Starting EDT Pass on module");
 
   processParallelEdts();
   processSyncTaskEdts();
-
   /// Remove all operations that were marked for deletion during conversion or
   /// lowering
   OpBuilder builder(module.getContext());
   removeOps(module, builder, opsToRemove);
-  // Graph-informed cleanups
-  // (void)removeBarriers();
-
-  // // Optional debug/JSON emission of concurrency graph per function
-  // module.walk([&](func::FuncOp func) {
-  //   std::unique_ptr<arts::DbGraph> dbGraph =
-  //       std::make_unique<arts::DbGraph>(func, /*DbAnalysis*/ nullptr);
-  //   dbGraph->build();
-  //   if (!dbGraph)
-  //     return;
-  //   std::unique_ptr<arts::EdtGraph> edtGraph =
-  //       std::make_unique<arts::EdtGraph>(func, dbGraph.get());
-  //   edtGraph->build();
-  //   if (edtGraph->getNumTasks() == 0)
-  //     return;
-
-  //   arts::EdtAnalysis edtAnalysis(module);
-  //   edtAnalysis.analyze();
-  //   arts::EdtConcurrencyGraph cgraph(edtGraph.get(), &edtAnalysis);
-  //   cgraph.build();
-
-  //   ARTS_DEBUG_SECTION("edt-concurrency", {
-  //     std::string s;
-  //     llvm::raw_string_ostream os(s);
-  //     cgraph.print(os);
-  //     ARTS_DBGS() << os.str();
-  //   });
-
-  //   // Emit combined JSON bundle (function, edts, concurrency)
-  //   std::string js;
-  //   llvm::raw_string_ostream jos(js);
-  //   jos << "{\n  \"function\": \"" << func.getName() << "\",\n";
-  //   edtAnalysis.emitEdtsArray(func, jos);
-  //   jos << ",\n  \"concurrency\": ";
-  //   {
-  //     std::string cg;
-  //     llvm::raw_string_ostream cgos(cg);
-  //     cgraph.exportToJson(cgos);
-  //     cgos.flush();
-  //     // cgraph JSON is a full object; insert as-is but without outer braces
-  //     if (cg.size() >= 2 && cg.front() == '{' && cg.back() == '}') {
-  //       jos << cg;
-  //     } else {
-  //       jos << "{}";
-  //     }
-  //   }
-  //   jos << "\n}\n";
-  //   jos.flush();
-
-  //   ARTS_DEBUG_SECTION("edt-concurrency-json", { ARTS_DBGS() << js; });
-  // });
-
-  ARTS_DEBUG_FOOTER(EdtPass);
-  ARTS_DEBUG_REGION(module->dump(););
 }
 
 bool EdtPass::removeRedundantBarriersWithGraphs(func::FuncOp func,

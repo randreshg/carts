@@ -46,8 +46,7 @@ struct OMPParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
     ARTS_DEBUG_TYPE("Converting omp.parallel to arts.parallel");
 
     /// Create a new `arts.edt` operation.
-    auto parOp = rewriter.create<EdtOp>(loc, EdtType::parallel, ValueRange{});
-    parOp.getBody().emplaceBlock();
+    auto parOp = rewriter.create<EdtOp>(loc, EdtType::parallel);
     Block &blk = parOp.getBody().front();
 
     /// Move the region's operations.
@@ -73,8 +72,8 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
     rewriter.setInsertionPoint(op);
 
     /// Create an `arts.epoch` operation and add a region to it.
-    auto syncEdtOp = rewriter.create<EdtOp>(loc, EdtType::sync, ValueRange{});
-    Block &syncEdtBlock = syncEdtOp.getBody().emplaceBlock();
+    auto syncEdtOp = rewriter.create<EdtOp>(loc, EdtType::sync);
+    Block &syncEdtBlock = syncEdtOp.getBody().front();
 
     /// Create the for loop inside the epoch
     rewriter.setInsertionPointToStart(&syncEdtBlock);
@@ -125,9 +124,7 @@ struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
     auto loc = op.getLoc();
 
     /// Create a new `arts.single` operation.
-    auto artsSingle =
-        rewriter.create<EdtOp>(loc, EdtType::single, ValueRange{});
-    artsSingle.getBody().emplaceBlock();
+    auto artsSingle = rewriter.create<EdtOp>(loc, EdtType::single);
 
     /// Move the region's operations.
     Block &old = op.getRegion().front();
@@ -221,7 +218,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
         replaceInRegion(region, loadOp.getResult(), newLoad.getResult());
       }
 
-      /// Create the control dependency (will be removed in CreateDbs pass)
+      /// Create the control dependency - will be removed in CreateDbs pass
       {
         OpBuilder::InsertionGuard IG(rewriter);
         rewriter.setInsertionPointAfter(depLoadVal.getDefiningOp());
@@ -251,8 +248,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
     }
 
     /// Create a new `arts.edt` operation.
-    auto edtOp = rewriter.create<EdtOp>(loc, EdtType::task, ValueRange{});
-    edtOp.getBody().emplaceBlock();
+    auto edtOp = rewriter.create<EdtOp>(loc, EdtType::task, deps);
     Block &blk = edtOp.getBody().front();
 
     /// Move the region's operations.
