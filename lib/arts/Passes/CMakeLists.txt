@@ -10,12 +10,11 @@ add_mlir_dialect_library(MLIRArtsTransforms
   Db.cpp
   CreateEpochs.cpp
   ConvertArtsToLLVM.cpp
-  ConvertDbToOpaquePtr.cpp
   EdtLowering.cpp
   EdtPtrRematerialization.cpp
   EdtInvariantCodeMotion.cpp
   EdtPtrRematerialization.cpp
-  ConvertDbToOpaquePtr.cpp
+  NormalizeDbs.cpp
   EdtLowering.cpp
   EdtConcurrency.cpp
   ${CARTS_TRANSFORMS_SOURCE_FILES}

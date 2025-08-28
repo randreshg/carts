@@ -82,27 +82,40 @@ def DbAllocOp : Arts_Op<"db_alloc", [
     ArtsModeAttr:$mode,
     I32:$route,
     DbAllocTypeAttr:$allocType,
+    DbModeAttr:$dbMode,
     Optional<AnyMemRef>:$address,
     Variadic<Index>:$sizes
   );
-
-  let results = (outs AnyMemRef:$ptr);
-  let hasCustomAssemblyFormat = 1;
-
+  let results = (outs MemRefOf<[I64]>:$guid, AnyMemRef:$ptr);
+  let assemblyFormat = [{
+    `[` $mode `,` $allocType `,` $dbMode `]`
+    `route` `(` $route `:` type($route) `)`
+    ( `(` $address^ `:` type($address) `)` )?
+    `[` $sizes `]`
+    attr-dict `:` `(` type($guid) `,` type($ptr) `)`
+  }];
   let builders = [
     OpBuilder<(ins "ArtsMode":$mode,
-                   "SmallVector<Value>":$sizes,
+                   "DbMode":$dbMode,
+                   CArg<"Value", "nullptr">:$address,
+                   CArg<"SmallVector<Value>", "{}">:$sizes)>,
+    OpBuilder<(ins "ArtsMode":$mode,
                    "Value":$route,
                    "DbAllocType":$allocType,
-                   CArg<"Value", "nullptr">:$address)>,
-    // Declaration only; implemented in ArtsDialect.cpp to default allocType=heap
+                   "DbMode":$dbMode,
+                   CArg<"Value", "nullptr">:$address,
+                   CArg<"SmallVector<Value>", "{}">:$sizes)>,
     OpBuilder<(ins "ArtsMode":$mode,
-                   "SmallVector<Value>":$sizes,
-                   CArg<"Value", "nullptr">:$address)>
+                   "Value":$route,
+                   "DbAllocType":$allocType,
+                   "DbMode":$dbMode,
+                   "Type":$elementType,
+                   CArg<"Value", "nullptr">:$address,
+                   CArg<"SmallVector<Value>", "{}">:$sizes)>
   ];
 }
 
-def DbAcquireOp : Arts_Op<"db_acquire", 
+def DbAcquireOp : Arts_Op<"db_acquire",
   [AttrSizedOperandSegments]
   > {
   let summary = "Acquires access to an ARTS DataBlock.";
@@ -122,21 +135,19 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     Variadic<Index>:$offsets,
     Variadic<Index>:$sizes
   );
-
-  let results = (outs AnyMemRef:$view);
-  
+  let results = (outs MemRefOf<[I64]>:$guid, AnyMemRef:$ptr);
   let assemblyFormat = [{
-    $mode `(` $source `:` type($source) `)` 
-    `indices` `[` $indices `]` 
-    `offsets` `[` $offsets `]` 
-    `sizes` `[` $sizes `]` 
-    attr-dict `:` type($view)
+    `[` $mode `]`
+    $source
+    ( `(` $indices^ `)` )?
+    ( `[` $offsets^ `,` $sizes `]` )?
+    attr-dict `:` `(` type($source) `)` `->` `(` type($guid) `,` type($ptr) `)`
   }];
-  
+
   let builders = [
     OpBuilder<(ins "ArtsMode":$mode,
                    "Value":$source,
-                   "SmallVector<Value>":$pinnedIndices,
+                   CArg<"SmallVector<Value>", "{}">:$indices,
                    CArg<"SmallVector<Value>", "{}">:$offsets,
                    CArg<"SmallVector<Value>", "{}">:$sizes)>
   ];
@@ -238,16 +249,18 @@ def EdtOp : Arts_Op<"edt",
 
   let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
-    $type (`(` $dependencies^ `)` `:` type($dependencies))? `route` `(` $route `)` attr-dict-with-keyword
+    $type `route` `(` $route `)` (`(` $dependencies^ `)` `:` type($dependencies))? attr-dict-with-keyword
     $body
   }];
 
-  let extraClassDeclaration = [{
-    SmallVector<Value> getDependenciesVector();
-  }];
   let builders = [
-    OpBuilder<(ins "EdtType":$type, CArg<"ValueRange", "{}">:$dependencies)>
+    OpBuilder<(ins "EdtType":$type)>,
+    OpBuilder<(ins "EdtType":$type, "ValueRange":$dependencies)>
   ];
+
+  let extraClassDeclaration = [{
+    SmallVector<Value> getDependenciesAsVector();
+  }];
 }
 
 //===----------------------------------------------------------------------===//

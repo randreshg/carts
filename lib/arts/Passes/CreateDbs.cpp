@@ -1,45 +1,22 @@
 ///==========================================================================
-// File: CreateDbs.cpp
-//
-// This pass  focuses on handling memory dependencies for EDTs, where each EDT
-// might run in a separate memory environment. To ensure data availability,
-// every external memref (not allocated within the EDT) used in loads/stores
-// is wrapped in ARTS Dbs operations:
-// 1. Identify all unique external allocations across all EDTs via load/store
-// analysis.
-// 2. Create arts.db_alloc for each such allocation immediately after its
-// original alloc op.
-// 3. For each EDT, collect external bases used in its region (including
-// nested).
-// 4. For each base, determine the source (db_alloc or parent's acquired block
-// arg if nested).
-// 5. Compute dependency info (mode, pinned indices, offsets, sizes) based on
-// access patterns:
-//    - Mode: 'in', 'out', or 'inout' based on reads/writes.
-//    - Pinned: Leading constant indices common to all accesses.
-//    - Offsets/Sizes: Bounding box for variable or range indices; full dim if
-//    no access info.
-// 6. Insert arts.db_acquire before the EDT with computed slice, add as
-// operand and block arg.
-// 7. Adjust all loads/stores in the EDT region to use the acquired view,
-// updating indices for offsets.
-// 8. Insert arts.db_release before the yield terminator.
-// This ensures data is fetched/released properly for remote execution, with
-// nested EDTs inheriting parent's acquires when possible. db_control ops from
-// parent's acquires when possible. db_control ops from / prior passes are
-// ignored and erased, as dependencies are recomputed from / actual accesses.
-
-// Discussion on DB Acquisition Sizes and Efficiency:
-// In this pass, we compute acquisition regions based on actual accesses
-// within / the EDT and its nested tasks. For efficiency, we merge
-// finer-grained access / patterns into coarser ones where possible (e.g.,
-// using min/max for constant / indices). This coarsening reduces the number of
-// dependencies per EDT, / lowering runtime overhead in task-based systems.
-// However, coarser DBs may / over-approximate dependencies, potentially
-// reducing parallelism by making / tasks wait on larger data blocks. The
-// trade-off is between overhead reduction and preserving fine-grained
-// concurrency. We create coarser DBs here, with potential for further
-// optimization in subsequent passes.
+/// File: CreateDbs.cpp
+///
+/// This pass creates ARTS database (DB) operations to handle memory
+/// dependencies for EDTs (Event-Driven Tasks). Each EDT may execute in a
+/// separate memory environment, so external memory references must be properly
+/// managed.
+///
+/// Pass Overview:
+/// 1. Identify external memory allocations used by EDTs
+/// 2. Create arts.db_alloc operations for each allocation
+/// 3. Analyze memory access patterns within each EDT
+/// 4. Insert arts.db_acquire operations before EDTs with computed dependencies
+/// 5. Update load/store operations to use acquired memory views
+/// 6. Insert arts.db_release operations before EDT terminators
+///
+/// The pass computes optimal acquisition regions based on actual access
+/// patterns, balancing between reducing dependency overhead and preserving
+/// parallelism. Nested EDTs inherit parent acquisitions when possible.
 //==========================================================================
 
 #include "ArtsPassDetails.h"
@@ -56,28 +33,37 @@
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/SmallVector.h"
 
-#include "arts/Utils/ArtsDebug.h"
-ARTS_DEBUG_SETUP(create_dbs);
-
 using namespace mlir;
 using namespace mlir::arts;
 
-/// Access pattern info for a memref base
+/// Information about memory access patterns for a memref base.
+/// Tracks whether the base is read/written and the access patterns per
+/// dimension.
 struct AccessInfo {
+  /// True if base is read from
   bool hasRead = false;
+  /// True if base is written to
   bool hasWrite = false;
+  /// Constant indices per dimension
   SmallVector<SetVector<int64_t>> dimConstants;
+  /// Non-constant access per dimension
   SmallVector<bool> hasNonConstant;
 
   AccessInfo(int rank) : dimConstants(rank), hasNonConstant(rank, false) {}
 };
 
-/// Helper struct for dependency info
+/// Dependency information for database acquisition.
+/// Contains the access mode and slice parameters for acquiring a memory region.
 struct DepInfo {
+  /// Access mode (in, out, inout)
   ArtsMode mode;
+  /// Constant leading indices
   SmallVector<Value> pinned;
+  /// Offset values for each dimension
   SmallVector<Value> offsets;
+  /// Size values for each dimension
   SmallVector<Value> sizes;
+  /// Result type after acquisition
   MemRefType resultType;
 };
 
@@ -98,17 +84,22 @@ private:
   DenseMap<Operation *, DenseMap<Value, BlockArgument>> edtBaseToArg;
 
   /// Core helper functions
-  Value getOriginalAllocation(Value v);
+  Value getUnderlyingObject(Value v);
   void cleanupExistingDbOps();
   SetVector<Value> collectUsedAllocations();
   void createDbAllocOps(const SetVector<Value> &allocs, OpBuilder &builder);
   void processEdtDependencies(EdtOp edt, OpBuilder &builder,
                               const StringAnalysis &analysis);
 
+  /// Infer allocation type from the defining operation
+  DbAllocType inferAllocType(Value basePtr);
+
   /// Dependency analysis
   AccessInfo analyzeAccesses(EdtOp edt, Value originalBase);
   DepInfo computeDepInfo(OpBuilder &builder, EdtOp edt, Value originalBase,
                          Value source, const StringAnalysis &analysis);
+  DepInfo createFullAccessDepInfo(OpBuilder &builder, EdtOp edt, Value source,
+                                  ArtsMode mode);
   Value findParentSource(EdtOp edt, Value base);
 
   /// Access adjustment
@@ -118,34 +109,47 @@ private:
 };
 } // namespace
 
-Value CreateDbsPass::getOriginalAllocation(Value v) {
+Value CreateDbsPass::getUnderlyingObject(Value v) {
   if (v.isa<BlockArgument>()) {
     Block *block = v.getParentBlock();
     Operation *owner = block->getParentOp();
     if (auto edt = dyn_cast<EdtOp>(owner)) {
       unsigned argIndex = v.cast<BlockArgument>().getArgNumber();
       Value operand = edt.getOperand(argIndex);
-      return getOriginalAllocation(operand);
-    } else {
-      /// Function argument
-      return v;
+      return getUnderlyingObject(operand);
     }
+    /// Function argument
+    return v;
   }
   if (auto op = v.getDefiningOp()) {
-    if (auto dbAlloc = dyn_cast<DbAllocOp>(op)) {
-      return getOriginalAllocation(dbAlloc.getAddress());
-    } else if (auto dbAcquire = dyn_cast<DbAcquireOp>(op)) {
-      return getOriginalAllocation(dbAcquire.getSource());
-    } else if (isa<memref::AllocOp, memref::AllocaOp, memref::GetGlobalOp>(
-                   op)) {
+    if (auto dbAlloc = dyn_cast<DbAllocOp>(op))
+      return getUnderlyingObject(dbAlloc.getAddress());
+    if (auto dbAcquire = dyn_cast<DbAcquireOp>(op))
+      return getUnderlyingObject(dbAcquire.getSource());
+    if (isa<memref::AllocOp, memref::AllocaOp, memref::GetGlobalOp>(op))
       return v;
-    } else if (auto subview = dyn_cast<memref::SubViewOp>(op)) {
-      return getOriginalAllocation(subview.getSource());
-    } else if (auto cast = dyn_cast<memref::CastOp>(op)) {
-      return getOriginalAllocation(cast.getSource());
-    }
+    if (auto subview = dyn_cast<memref::SubViewOp>(op))
+      return getUnderlyingObject(subview.getSource());
+    if (auto cast = dyn_cast<memref::CastOp>(op))
+      return getUnderlyingObject(cast.getSource());
   }
   return nullptr;
+}
+
+/// Infer allocation type from the defining operation
+DbAllocType CreateDbsPass::inferAllocType(Value basePtr) {
+  if (!basePtr)
+    return DbAllocType::heap;
+
+  if (auto definingOp = basePtr.getDefiningOp()) {
+    if (isa<memref::AllocaOp>(definingOp))
+      return DbAllocType::stack;
+    if (isa<memref::AllocOp>(definingOp))
+      return DbAllocType::heap;
+    if (isa<memref::GetGlobalOp>(definingOp))
+      return DbAllocType::global;
+  }
+  return DbAllocType::unknown;
 }
 
 void CreateDbsPass::cleanupExistingDbOps() {
@@ -158,7 +162,11 @@ void CreateDbsPass::cleanupExistingDbOps() {
   /// Clear all existing EDT dependencies and block args
   module.walk([&](EdtOp edt) {
     edt.getBody().front().eraseArguments([](BlockArgument) { return true; });
-    edt->setOperands({});
+    /// Preserve the route operand when clearing dependencies
+    SmallVector<Value> preservedOperands;
+    if (Value route = edt.getRoute())
+      preservedOperands.push_back(route);
+    edt->setOperands(preservedOperands);
   });
 }
 
@@ -167,14 +175,14 @@ SetVector<Value> CreateDbsPass::collectUsedAllocations() {
   module.walk([&](EdtOp edt) {
     edt.walk([&](Operation *op) {
       Value mem;
-      if (auto load = dyn_cast<memref::LoadOp>(op)) {
+      if (auto load = dyn_cast<memref::LoadOp>(op))
         mem = load.getMemref();
-      } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      else if (auto store = dyn_cast<memref::StoreOp>(op))
         mem = store.getMemref();
-      } else {
+      else
         return;
-      }
-      Value base = getOriginalAllocation(mem);
+
+      Value base = getUnderlyingObject(mem);
       if (base)
         allUsedAllocs.insert(base);
     });
@@ -195,21 +203,32 @@ void CreateDbsPass::createDbAllocOps(const SetVector<Value> &allocs,
 
     SmallVector<Value> sizes;
     for (int i = 0; i < type.getRank(); ++i) {
-      if (type.isDynamicDim(i)) {
+      if (type.isDynamicDim(i))
         sizes.push_back(builder.create<memref::DimOp>(loc, alloc, i));
-      } else {
+      else
         sizes.push_back(
             builder.create<arith::ConstantIndexOp>(loc, type.getDimSize(i)));
-      }
     }
 
-    /// Create DbAllocOp with default values for route, allocType, and dbMode
+    /// Create DbAllocOp
     Value route = builder.create<arith::ConstantIntOp>(loc, 0, 32);
-    DbAllocType allocType = DbAllocType::heap;
-    DbMode dbMode = DbMode::pin;
+    DbAllocType allocType = inferAllocType(alloc);
+    DbMode dbMode = DbMode::pinned;
+    auto dbAllocOp = builder.create<DbAllocOp>(loc, ArtsMode::inout, route,
+                                               allocType, dbMode, alloc, sizes);
 
-    auto dbAllocOp = builder.create<DbAllocOp>(loc, ArtsMode::inout, sizes,
-                                               route, allocType, dbMode, alloc);
+    /// Replace all uses of the original allocation with the db_alloc ptr
+    /// Skip uses within EDT regions as they will be handled by db_acquire
+    alloc.replaceUsesWithIf(dbAllocOp.getPtr(), [](OpOperand &use) {
+      Operation *user = use.getOwner();
+      /// Don't replace uses that are operands to the db_alloc itself
+      if (isa<DbAllocOp>(user))
+        return false;
+      /// Don't replace uses within EDT regions - they will use acquired views
+      if (user->getParentOfType<EdtOp>())
+        return false;
+      return true;
+    });
 
     /// Store the mapping from original allocation to DbAllocOp
     allocToDbAlloc[alloc] = dbAllocOp;
@@ -220,17 +239,21 @@ AccessInfo CreateDbsPass::analyzeAccesses(EdtOp edt, Value originalBase) {
   Value anyMem;
   edt.walk([&](Operation *op) {
     if (auto load = dyn_cast<memref::LoadOp>(op)) {
-      if (getOriginalAllocation(load.getMemref()) == originalBase) {
+      if (getUnderlyingObject(load.getMemref()) == originalBase) {
         anyMem = load.getMemref();
         return;
       }
     } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
-      if (getOriginalAllocation(store.getMemref()) == originalBase) {
+      if (getUnderlyingObject(store.getMemref()) == originalBase) {
         anyMem = store.getMemref();
         return;
       }
     }
   });
+
+  /// If no accesses found, return access info with rank 0
+  if (!anyMem)
+    return AccessInfo(0);
 
   MemRefType type = anyMem.getType().cast<MemRefType>();
   AccessInfo info(type.getRank());
@@ -249,7 +272,9 @@ AccessInfo CreateDbsPass::analyzeAccesses(EdtOp edt, Value originalBase) {
     } else {
       return;
     }
-    if (getOriginalAllocation(mem) != originalBase)
+
+    /// Only analyze accesses to the original base
+    if (getUnderlyingObject(mem) != originalBase)
       return;
 
     for (int d = 0; d < type.getRank(); ++d) {
@@ -272,36 +297,28 @@ DepInfo CreateDbsPass::computeDepInfo(OpBuilder &builder, EdtOp edt,
   assert(sourceType && "Source must be memref");
   int rank = sourceType.getRank();
 
+  /// Handle scalar case (rank 0)
+  if (rank == 0) {
+    ArtsMode mode = ArtsMode::inout;
+    MemRefType resultType =
+        MemRefType::get(sourceType.getShape(), sourceType.getElementType());
+    return {mode, SmallVector<Value>{}, SmallVector<Value>{},
+            SmallVector<Value>{}, resultType};
+  }
+
   AccessInfo accInfo = analyzeAccesses(edt, originalBase);
 
   ArtsMode mode;
-  if (accInfo.hasWrite) {
+  if (accInfo.hasWrite)
     mode = accInfo.hasRead ? ArtsMode::inout : ArtsMode::out;
-  } else if (accInfo.hasRead) {
+  else if (accInfo.hasRead)
     mode = ArtsMode::in;
-  } else {
+  else
     mode = ArtsMode::inout;
-  }
 
   /// String memrefs: acquire the whole memory
-  if (analysis.isStringMemRef(originalBase)) {
-    SmallVector<Value> fullOffsets, fullSizes;
-    for (int d = 0; d < rank; ++d) {
-      fullOffsets.push_back(
-          builder.create<arith::ConstantIndexOp>(edt.getLoc(), 0));
-      Value sizeVal;
-      if (sourceType.isDynamicDim(d)) {
-        sizeVal = builder.create<memref::DimOp>(edt.getLoc(), source, d);
-      } else {
-        sizeVal = builder.create<arith::ConstantIndexOp>(
-            edt.getLoc(), sourceType.getDimSize(d));
-      }
-      fullSizes.push_back(sizeVal);
-    }
-    MemRefType fullResultType =
-        MemRefType::get(sourceType.getShape(), sourceType.getElementType());
-    return {mode, SmallVector<Value>{}, fullOffsets, fullSizes, fullResultType};
-  }
+  if (analysis.isStringMemRef(originalBase))
+    return createFullAccessDepInfo(builder, edt, source, mode);
 
   /// Compute pinned indices (leading constant dimensions)
   SmallVector<Value> pinned;
@@ -312,9 +329,8 @@ DepInfo CreateDbsPass::computeDepInfo(OpBuilder &builder, EdtOp edt,
       pinned.push_back(
           builder.create<arith::ConstantIndexOp>(edt.getLoc(), val));
       prefix++;
-    } else {
+    } else
       break;
-    }
   }
 
   /// Compute offsets and sizes for remaining dimensions
@@ -326,12 +342,11 @@ DepInfo CreateDbsPass::computeDepInfo(OpBuilder &builder, EdtOp edt,
     if (accInfo.hasNonConstant[d] || accInfo.dimConstants[d].empty()) {
       /// Use full dimension
       offVal = builder.create<arith::ConstantIndexOp>(edt.getLoc(), 0);
-      if (sourceType.isDynamicDim(d)) {
+      if (sourceType.isDynamicDim(d))
         sizeVal = builder.create<memref::DimOp>(edt.getLoc(), source, d);
-      } else {
+      else
         sizeVal = builder.create<arith::ConstantIndexOp>(
             edt.getLoc(), sourceType.getDimSize(d));
-      }
     } else {
       /// Use bounding box of constant accesses
       int64_t minVal = *std::min_element(accInfo.dimConstants[d].begin(),
@@ -359,6 +374,29 @@ DepInfo CreateDbsPass::computeDepInfo(OpBuilder &builder, EdtOp edt,
   return {mode, pinned, offsets, sizes, resultType};
 }
 
+DepInfo CreateDbsPass::createFullAccessDepInfo(OpBuilder &builder, EdtOp edt,
+                                               Value source, ArtsMode mode) {
+  MemRefType sourceType = source.getType().dyn_cast<MemRefType>();
+  assert(sourceType && "Source must be memref");
+  int rank = sourceType.getRank();
+
+  SmallVector<Value> offsets, sizes;
+  for (int d = 0; d < rank; ++d) {
+    offsets.push_back(builder.create<arith::ConstantIndexOp>(edt.getLoc(), 0));
+    Value sizeVal;
+    if (sourceType.isDynamicDim(d))
+      sizeVal = builder.create<memref::DimOp>(edt.getLoc(), source, d);
+    else
+      sizeVal = builder.create<arith::ConstantIndexOp>(
+          edt.getLoc(), sourceType.getDimSize(d));
+    sizes.push_back(sizeVal);
+  }
+
+  MemRefType resultType =
+      MemRefType::get(sourceType.getShape(), sourceType.getElementType());
+  return {mode, SmallVector<Value>{}, offsets, sizes, resultType};
+}
+
 Value CreateDbsPass::findParentSource(EdtOp edt, Value base) {
   auto parentEdt = edt->getParentOfType<EdtOp>();
   if (!parentEdt)
@@ -368,16 +406,14 @@ Value CreateDbsPass::findParentSource(EdtOp edt, Value base) {
   auto parentIt = edtBaseToArg.find(parentEdt.getOperation());
   if (parentIt != edtBaseToArg.end()) {
     auto it = parentIt->second.find(base);
-    if (it != parentIt->second.end()) {
+    if (it != parentIt->second.end())
       return it->second;
-    }
   }
 
   /// Fallback: scan parent block arguments
   for (BlockArgument arg : parentEdt.getBody().getArguments()) {
-    if (getOriginalAllocation(arg) == base) {
+    if (getUnderlyingObject(arg) == base)
       return arg;
-    }
   }
   return nullptr;
 }
@@ -387,48 +423,62 @@ void CreateDbsPass::processEdtDependencies(EdtOp edt, OpBuilder &builder,
   SetVector<Value> externalBases;
 
   /// Collect external bases used by this EDT (excluding nested EDTs)
-  edt.walk([&](Operation *op) -> WalkResult {
+  WalkResult result = edt.walk([&](Operation *op) -> WalkResult {
     if (isa<EdtOp>(op) && op != edt.getOperation())
       return WalkResult::skip();
 
     Value mem;
-    if (auto load = dyn_cast<memref::LoadOp>(op)) {
+    if (auto load = dyn_cast<memref::LoadOp>(op))
       mem = load.getMemref();
-    } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+    else if (auto store = dyn_cast<memref::StoreOp>(op))
       mem = store.getMemref();
-    } else {
+    else
       return WalkResult::advance();
-    }
 
-    Value base = getOriginalAllocation(mem);
-    if (base &&
-        !edt.getRegion().isAncestor(base.getDefiningOp()->getParentRegion())) {
+    Value base = getUnderlyingObject(mem);
+    if (!base)
+      return WalkResult::advance();
+
+    /// Mark as external if defined outside the EDT region
+    Operation *definingOp = base.getDefiningOp();
+    if (definingOp &&
+        !edt.getRegion().isAncestor(definingOp->getParentRegion()))
       externalBases.insert(base);
-    }
     return WalkResult::advance();
   });
+
+  if (result.wasInterrupted())
+    return;
+
+  /// Only process if there are external bases to acquire
+  if (externalBases.empty())
+    return;
 
   /// Process each external base
   for (Value base : externalBases) {
     /// Find source (db_alloc, parent arg, or original base)
-    Value source =
-        allocToDbAlloc[base] ? allocToDbAlloc[base].getPtr() : base;
-    if (Value parentSource = findParentSource(edt, base))
+    Value source = base;
+    if (allocToDbAlloc.count(base))
+      source = allocToDbAlloc[base].getPtr();
+    else if (Value parentSource = findParentSource(edt, base))
       source = parentSource;
 
     builder.setInsertionPoint(edt);
     DepInfo info = computeDepInfo(builder, edt, base, source, analysis);
 
     /// Create acquire operation
-    ArtsModeAttr modeAttr = ArtsModeAttr::get(builder.getContext(), info.mode);
     DbAcquireOp acquire = builder.create<DbAcquireOp>(
-        edt.getLoc(), info.resultType, modeAttr, source, info.pinned,
-        info.offsets, info.sizes);
+        edt.getLoc(), info.mode, source, info.pinned, info.offsets, info.sizes);
 
     /// Add dependency to EDT
-    SmallVector<Value> newDeps(edt.getDependencies());
-    newDeps.push_back(acquire.getPtr());
-    edt->setOperands(newDeps);
+    SmallVector<Value> newOperands;
+    if (Value route = edt.getRoute())
+      newOperands.push_back(route);
+    auto existingDeps = edt.getDependenciesAsVector();
+    newOperands.append(existingDeps.begin(), existingDeps.end());
+    newOperands.push_back(acquire.getPtr());
+    edt->setOperands(newOperands);
+
     BlockArgument arg =
         edt.getBody().front().addArgument(info.resultType, edt.getLoc());
 
@@ -466,7 +516,7 @@ void CreateDbsPass::adjustAccesses(OpBuilder &builder, Region &region,
     } else {
       return WalkResult::advance();
     }
-    if (getOriginalAllocation(mem) != originalBase)
+    if (getUnderlyingObject(mem) != originalBase)
       return WalkResult::advance();
 
     /// Verify leading pinned indices
@@ -507,30 +557,31 @@ void CreateDbsPass::adjustAccesses(OpBuilder &builder, Region &region,
   });
 }
 
+/// Main pass entry point.
+/// Transforms the module to create ARTS database operations for EDT memory
+/// dependencies. Process is divided into three phases for clarity and
+/// correctness.
 void CreateDbsPass::runOnOperation() {
   module = getOperation();
-  ARTS_DEBUG_HEADER(CreateDbsPass);
-  ARTS_DEBUG_REGION(module.dump(););
 
   OpBuilder builder(module.getContext());
   StringAnalysis stringAnalysis(module);
 
-  /// Phase 1: Cleanup existing DB operations
+  /// Phase 1: Cleanup existing DB operations to recompute dependencies
   cleanupExistingDbOps();
 
-  /// Phase 2: Collect and create db_alloc operations
+  /// Phase 2: Collect allocations used by EDTs and create db_alloc operations
   SetVector<Value> allUsedAllocs = collectUsedAllocations();
   createDbAllocOps(allUsedAllocs, builder);
 
   /// Phase 3: Process EDTs in reverse order (parents before children)
+  /// This ensures parent EDTs are processed before their nested children
   SmallVector<EdtOp> allEdts;
   module.walk([&](EdtOp edt) { allEdts.push_back(edt); });
 
-  for (auto it = allEdts.rbegin(); it != allEdts.rend(); ++it)
+  for (auto it = allEdts.rbegin(); it != allEdts.rend(); ++it) {
     processEdtDependencies(*it, builder, stringAnalysis);
-
-  ARTS_DEBUG_FOOTER(CreateDbsPass);
-  ARTS_DEBUG_REGION(module.dump(););
+  }
 }
 
 //===----------------------------------------------------------------------===//

@@ -89,7 +89,7 @@ enum class PipelineStage {
   ConvertOpenMP, // After ConvertOpenMPToARTS
   EdtTransforms, // After EDT transformations
   EdtLowering,   // After EDT lowering
-  Datablock,      // After datablock creation and optimization
+  Datablock,     // After datablock creation and optimization
   Epochs,        // After epoch creation
   ArtsToLLVM,    // After ConvertArtsToLLVM
   Complete       // Full pipeline (default)
@@ -210,7 +210,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     pm.addPass(createMem2Reg());
     pm.addPass(arts::createEdtPtrRematerializationPass());
     pm.addPass(arts::createCreateEpochsPass());
-    pm.addPass(arts::createConvertDbToOpaquePtrPass());
+    pm.addPass(arts::createNormalizeDbsPass());
     pm.addPass(arts::createEdtLoweringPass());
     pm.addPass(arts::createConvertArtsToLLVMPass(Debug));
 
@@ -343,7 +343,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   /// EDT lowering
   {
     PassManager pm(&context);
-    pm.addPass(arts::createConvertDbToOpaquePtrPass());
+    pm.addPass(arts::createNormalizeDbsPass());
     pm.addPass(arts::createEdtLoweringPass());
     if (mlir::failed(pm.run(module))) {
       llvm::errs() << "Error when running EDT lowering";

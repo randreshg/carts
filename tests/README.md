@@ -97,7 +97,7 @@ The following substitutions are available in tests:
 | `create-dbs` | `arts/Passes/CreateDbs.mlir` | DataBlock creation |
 | `db` | `arts/Passes/Db.mlir` | DataBlock optimization |
 | `create-epochs` | `arts/Passes/CreateEpochs.mlir` | Epoch synchronization |
-| `convert-db-to-opaque-ptr` | `arts/Passes/ConvertDbToOpaquePtr.mlir` | DB → opaque pointer |
+| `normalize-dbs` | `arts/Passes/ConvertDbToOpaquePtr.mlir` | Normalize DB handles |
 | `edt-lowering` | `arts/Passes/EdtLowering.mlir` | EDT outlining |
 | `convert-arts-to-llvm` | `arts/Passes/ConvertArtsToLLVM.mlir` | ARTS → LLVM conversion |
 | `edt-invariant-code-motion` | `arts/Transforms/EdtInvariantCodeMotion.mlir` | Loop invariant code motion |

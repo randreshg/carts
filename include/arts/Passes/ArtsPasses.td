@@ -59,8 +59,8 @@ def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
   ];
 }
 
-def ConvertDbToOpaquePtr : Pass<"convert-db-to-opaque-ptr", "mlir::ModuleOp"> {
-  let summary = "Preprocess ARTS DataBlocks for runtime compatibility";
+def NormalizeDbs : Pass<"normalize-dbs", "mlir::ModuleOp"> {
+  let summary = "Normalize ARTS DataBlock handles for runtime compatibility";
   let description = [{
     This pass converts ARTS DataBlocks from typed memrefs to opaque pointer types
     suitable for the ARTS runtime. The preprocessing logic differs based on the
@@ -74,7 +74,7 @@ def ConvertDbToOpaquePtr : Pass<"convert-db-to-opaque-ptr", "mlir::ModuleOp"> {
     "arith::ArithDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createConvertDbToOpaquePtrPass()";
+  let constructor = "mlir::arts::createNormalizeDbsPass()";
 }
 
 def Edt : Pass<"edt", "mlir::ModuleOp"> {
@@ -140,7 +140,8 @@ def EdtInvariantCodeMotion : Pass<"edt-invariant-code-motion", "mlir::ModuleOp">
 def EdtPtrRematerialization : Pass<"edt-ptr-rematerialization", "mlir::ModuleOp"> {
   let summary = "Rematerialize pointer dependencies in EDTs.";
   let description = [{
-    This pass rematerializes pointer dependencies in event-driven tasks (EDTs) to optimize memory usage and data movement.
+    This pass rematerializes pointer dependencies in event-driven tasks (EDTs) 
+    to optimize memory usage and data movement.
   }];
   let constructor = "mlir::arts::createEdtPtrRematerializationPass()";
 }

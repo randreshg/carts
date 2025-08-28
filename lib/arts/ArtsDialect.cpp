@@ -1,9 +1,6 @@
-//===- ArtsDialect.cpp - Arts dialect ---------------*- C++ -*-===//
-//
-// This file is licensed under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
+//===----------------------------------------------------------------------===//
+// ArtsDialect.cpp - Arts dialect
+// Defines the Arts dialect and the operations within it.
 //===----------------------------------------------------------------------===//
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -14,6 +11,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Types.h"
 #include "mlir/Support/LLVM.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include <cassert>
 
@@ -105,157 +103,21 @@ void UndefOp::getCanonicalizationPatterns(RewritePatternSet &results,
 //===----------------------------------------------------------------------===//
 // DbAllocOp
 //===----------------------------------------------------------------------===//
-ParseResult DbAllocOp::parse(OpAsmParser &parser, OperationState &result) {
-  StringAttr modeAttr;
-  OpAsmParser::UnresolvedOperand addressOperand;
-  Type addressType;
-  bool hasAddress = false;
-  SmallVector<OpAsmParser::UnresolvedOperand, 4> sizeOperands;
-  SmallVector<Type, 4> sizeTypes;
-  Type resultType;
-  OpAsmParser::UnresolvedOperand routeOperand;
-  Type routeType;
 
-  /// Parse mode string
-  if (parser.parseAttribute(modeAttr, "mode", result.attributes))
-    return failure();
-
-  /// Parse required route operand: `route (%val : i32)`
-  if (parser.parseKeyword("route") || parser.parseLParen() ||
-      parser.parseOperand(routeOperand) || parser.parseColon() ||
-      parser.parseType(routeType) || parser.parseRParen())
-    return failure();
-
-  /// Optionally parse address
-  if (succeeded(parser.parseOptionalLParen())) {
-    if (parser.parseOperand(addressOperand) || parser.parseColon() ||
-        parser.parseType(addressType) || parser.parseRParen())
-      return failure();
-    hasAddress = true;
-  }
-
-  /// Parse sizes
-  if (parser.parseLSquare() ||
-      parser.parseOperandList(sizeOperands, OpAsmParser::Delimiter::None) ||
-      parser.parseRSquare())
-    return failure();
-
-  /// Parse result type
-  if (parser.parseArrow() ||
-      parser.parseOptionalAttrDictWithKeyword(result.attributes) ||
-      parser.parseColon() || parser.parseType(resultType))
-    return failure();
-
-  /// Build operand segment sizes (address, sizes, route)
-  result.addAttribute("operandSegmentSizes",
-                      parser.getBuilder().getDenseI32ArrayAttr({
-                          hasAddress ? 1 : 0,                       /// address
-                          static_cast<int32_t>(sizeOperands.size()) /// sizes
-                      }));
-
-  /// Resolve operands (address, sizes, route)
-  if (hasAddress) {
-    if (parser.resolveOperand(addressOperand, addressType, result.operands))
-      return failure();
-  }
-
-  for (auto _ : sizeOperands)
-    sizeTypes.push_back(parser.getBuilder().getIndexType());
-
-  if (parser.resolveOperands(sizeOperands, sizeTypes,
-                             parser.getCurrentLocation(), result.operands))
-    return failure();
-
-  if (parser.resolveOperand(routeOperand, routeType, result.operands))
-    return failure();
-
-  /// Optionally parse alloc_type
-  StringAttr allocTypeAttr;
-  if (succeeded(parser.parseOptionalKeyword("alloc_type"))) {
-    if (parser.parseEqual() ||
-        parser.parseAttribute(allocTypeAttr, "allocType", result.attributes))
-      return failure();
-  }
-
-  result.addTypes(resultType);
-  return success();
-}
-
-void DbAllocOp::print(OpAsmPrinter &printer) {
-  printer << " ";
-  printer.printAttributeWithoutType(getModeAttr());
-
-  auto route = getRoute();
-  printer << " route (";
-  printer.printOperand(route);
-  printer << " : ";
-  printer.printType(route.getType());
-  printer << ")";
-
-  /// Print address if present
-  if (getAddress()) {
-    printer << " (";
-    printer.printOperand(getAddress());
-    printer << " : ";
-    printer.printType(getAddress().getType());
-    printer << ")";
-  }
-
-  /// Print sizes
-  printer << " [";
-  printer.printOperands(getSizes());
-  printer << "]";
-
-  /// Print alloc_type if present
-  if (auto allocType = getAllocTypeAttr()) {
-    printer << " alloc_type = ";
-    printer.printAttributeWithoutType(allocType);
-  }
-
-  printer << " -> ";
-  printer.printOptionalAttrDictWithKeyword(
-      getOperation()->getAttrs(),
-      /*elidedAttrs=*/{"mode", "allocType", "operandSegmentSizes"});
-  printer << " : ";
-  printer.printType(getPtr().getType());
-}
-
-// TODO: Fix inferReturnTypes method signature
-// LogicalResult
-// DbAllocOp::inferReturnTypes(MLIRContext *context,
-//                             std::optional<Location> location,
-//                             ValueShapeRange operands, DictionaryAttr
-//                             attributes, OpaqueProperties properties,
-//                             RegionRange regions, SmallVectorImpl<Type>
-//                             &inferredReturnTypes) {
-//   /// Extract sizes from operands
-//   SmallVector<int64_t> shape;
-//   for (Value operand : operands) {
-//     if (auto constOp = operand.getDefiningOp<arith::ConstantIndexOp>()) {
-//       shape.push_back(constOp.value());
-//     } else {
-//       shape.push_back(ShapedType::kDynamic);
-//     }
-//   }
-//
-//   /// Get element type from attributes or default to f32
-//   Type elementType = FloatType::getF32(context);
-//   if (auto elementTypeAttr = attributes.getAs<TypeAttr>("elementType")) {
-//     elementType = elementTypeAttr.getValue();
-//   }
-//
-//   inferredReturnTypes.push_back(MemRefType::get(shape, elementType));
-//   return success();
-// }
+//===----------------------------------------------------------------------===//
 
 //===----------------------------------------------------------------------===//
 // EdtOp
 //===----------------------------------------------------------------------===//
+SmallVector<Value> mlir::arts::EdtOp::getDependenciesAsVector() {
+  SmallVector<Value> deps(getDependencies().begin(), getDependencies().end());
+  return deps;
+}
 
 void EdtOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
-  /// Collect all effects from the dependencies
-  auto dependencies = getDependencies();
+  /// Collect all effects from the dependencies using safe method
+  auto dependencies = getDependenciesAsVector();
 
   /// If no dependencies, assume it has effects on all the memrefs
   /// and add read/write effects
@@ -275,125 +137,9 @@ void EdtOp::getEffects(
   /// }
 }
 
-/// Retrieve dependencies.
-SmallVector<Value> EdtOp::getDependenciesVector() {
-  auto dependencies = getDependencies();
-  SmallVector<Value, 4> dependenciesVector(dependencies.begin(),
-                                           dependencies.end());
-  return dependenciesVector;
-}
-
 //===----------------------------------------------------------------------===//
 // ARTS Operation Builders
 //===----------------------------------------------------------------------===//
-
-void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
-                      SmallVector<Value> sizes, Value route,
-                      DbAllocType allocType, DbMode dbMode, Value address) {
-  state.addAttribute("mode", ArtsModeAttr::get(builder.getContext(), mode));
-  state.addAttribute("allocType",
-                     DbAllocTypeAttr::get(builder.getContext(), allocType));
-  state.addAttribute("dbMode", DbModeAttr::get(builder.getContext(), dbMode));
-
-  /// Route defaults to 0 if missing
-  if (!route)
-    route = builder.create<arith::ConstantIntOp>(state.location, 0, 32);
-  state.addOperands(route);
-
-  /// Optional address next
-  if (address)
-    state.addOperands(address);
-
-  /// Add sizes operands
-  state.addOperands(sizes);
-
-  /// Build operand segment sizes (address, sizes, route)
-  state.addAttribute(
-      "operandSegmentSizes",
-      builder.getDenseI32ArrayAttr(
-          {address ? 1 : 0, static_cast<int32_t>(sizes.size())}));
-
-  /// Infer result type and materialize missing dynamic sizes from address
-  MemRefType ptrType;
-  if (address) {
-    auto addressType = address.getType().dyn_cast<MemRefType>();
-    assert(addressType && "Expected a MemRefType");
-
-    /// If sizes are not provided, extract them from the address memref
-    if (sizes.empty()) {
-      for (int64_t i = 0; i < addressType.getRank(); ++i) {
-        if (addressType.isDynamicDim(i)) {
-          sizes.push_back(
-              builder.create<memref::DimOp>(state.location, address, i));
-        } else {
-          sizes.push_back(builder.create<arith::ConstantIndexOp>(
-              state.location, addressType.getDimSize(i)));
-        }
-      }
-    }
-
-    ptrType =
-        MemRefType::get(addressType.getShape(), addressType.getElementType());
-  } else {
-    /// If no address is provided, create a basic i32 memref type
-    SmallVector<int64_t> shape;
-    for (auto _ : sizes)
-      shape.push_back(ShapedType::kDynamic);
-    ptrType = MemRefType::get(shape, builder.getI32Type());
-  }
-
-  state.addTypes(ptrType);
-}
-
-/// Builder with default allocType=heap
-void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
-                      SmallVector<Value> sizes, Value address) {
-  /// Default allocType to heap
-  DbAllocType allocType = DbAllocType::heap;
-  /// Default dbMode to pin
-  DbMode dbMode = DbMode::pin;
-
-  /// Create a dummy route=0 and call the full builder
-  Value route = builder.create<arith::ConstantIntOp>(state.location, 0, 32);
-  DbAllocOp::build(builder, state, mode, sizes, route, allocType, dbMode,
-                   address);
-}
-
-void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
-                        ArtsMode mode, Value source,
-                        SmallVector<Value> pinnedIndices,
-                        SmallVector<Value> offsets, SmallVector<Value> sizes) {
-  state.addAttribute("mode", ArtsModeAttr::get(builder.getContext(), mode));
-  state.addOperands(source);
-  state.addOperands(pinnedIndices);
-  state.addOperands(offsets);
-  state.addOperands(sizes);
-
-  /// Build operand segment sizes
-  state.addAttribute(
-      "operandSegmentSizes",
-      builder.getDenseI32ArrayAttr({1, /// source
-                                    static_cast<int32_t>(pinnedIndices.size()),
-                                    static_cast<int32_t>(offsets.size()),
-                                    static_cast<int32_t>(sizes.size())}));
-
-  /// Infer result type
-  auto resultType = source.getType().dyn_cast<MemRefType>();
-  assert(resultType && "Source must be a MemRefType");
-
-  /// Adjust result type if pinned indices reduce rank
-  int64_t originalRank = resultType.getRank();
-  int64_t pinnedCount = pinnedIndices.size();
-  if (pinnedCount > 0) {
-    SmallVector<int64_t> newShape;
-    for (int64_t i = pinnedCount; i < originalRank; ++i)
-      newShape.push_back(resultType.getDimSize(i));
-    resultType = MemRefType::get(newShape, resultType.getElementType());
-  }
-
-  state.addTypes(resultType);
-}
-
 void DbReleaseOp::build(OpBuilder &builder, OperationState &state,
                         Value source) {
   state.addOperands(source);
@@ -497,13 +243,21 @@ void EventOp::build(OpBuilder &builder, OperationState &state,
 //===----------------------------------------------------------------------===//
 // EDT Ops
 //===----------------------------------------------------------------------===//
-
 void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
                   ValueRange dependencies) {
   state.addAttribute("type", EdtTypeAttr::get(builder.getContext(), type));
   Value route = builder.create<arith::ConstantIntOp>(state.location, 0, 32);
   state.addOperands(route);
   state.addOperands(dependencies);
+
+  /// Create the region with a block
+  Region *bodyRegion = state.addRegion();
+  Block *bodyBlock = new Block();
+  bodyRegion->push_back(bodyBlock);
+}
+
+void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type) {
+  build(builder, state, type, ValueRange{});
 }
 
 void EdtCreateOp::build(OpBuilder &builder, OperationState &state,
@@ -521,3 +275,139 @@ void EventOp::setHasSingleSize() {
   getOperation()->setAttr("singleSize", UnitAttr::get(getContext()));
 }
 
+//===----------------------------------------------------------------------===//
+// DB operations builders
+//===----------------------------------------------------------------------===//
+void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
+                        ArtsMode mode, Value source, SmallVector<Value> indices,
+                        SmallVector<Value> offsets, SmallVector<Value> sizes) {
+  /// Auto-compute result types
+  Type guidType = MemRefType::get({}, builder.getI64Type());
+
+  /// Infer ptr type from source memref type and sizes
+  auto sourceMemRefType = llvm::cast<MemRefType>(source.getType());
+  Type elementType = sourceMemRefType.getElementType();
+
+  SmallVector<int64_t> shape;
+  if (sizes.empty()) {
+    /// No sizes provided, use source shape
+    shape.assign(sourceMemRefType.getShape().begin(),
+                 sourceMemRefType.getShape().end());
+  } else {
+    /// Sizes provided, create dynamic shape
+    for (size_t i = 0; i < sizes.size(); ++i)
+      shape.push_back(ShapedType::kDynamic);
+  }
+  Type ptrType = MemRefType::get(shape, elementType);
+
+  state.addTypes({guidType, ptrType});
+
+  /// Add operands and attributes
+  ArtsModeAttr modeAttr = ArtsModeAttr::get(builder.getContext(), mode);
+  state.addAttribute("mode", modeAttr);
+
+  state.addOperands(source);
+  state.addOperands(indices);
+  state.addOperands(offsets);
+  state.addOperands(sizes);
+
+  /// Build operand segment sizes: [source=1, indices, offsets, sizes]
+  state.addAttribute(
+      "operandSegmentSizes",
+      builder.getDenseI32ArrayAttr({1, static_cast<int32_t>(indices.size()),
+                                    static_cast<int32_t>(offsets.size()),
+                                    static_cast<int32_t>(sizes.size())}));
+}
+
+void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
+                      Value route, DbAllocType allocType, DbMode dbMode,
+                      Value address, SmallVector<Value> sizes) {
+  /// Auto-compute result types
+  Type guidType = MemRefType::get({}, builder.getI64Type());
+
+  /// Build ptr type from sizes and determine element type from address if
+  /// available
+  Type elementType = builder.getI32Type();
+  if (address && isa<MemRefType>(address.getType())) {
+    auto memRefType = cast<MemRefType>(address.getType());
+    elementType = memRefType.getElementType();
+  }
+
+  /// Build dynamic shape from sizes
+  SmallVector<int64_t> shape;
+  for (size_t i = 0; i < sizes.size(); ++i)
+    shape.push_back(ShapedType::kDynamic);
+  Type ptrType = MemRefType::get(shape, elementType);
+
+  state.addTypes({guidType, ptrType});
+
+  /// Add operands and attributes
+  ArtsModeAttr modeAttr = ArtsModeAttr::get(builder.getContext(), mode);
+  DbAllocTypeAttr allocTypeAttr =
+      DbAllocTypeAttr::get(builder.getContext(), allocType);
+  DbModeAttr dbModeAttr = DbModeAttr::get(builder.getContext(), dbMode);
+
+  state.addAttribute("mode", modeAttr);
+  state.addAttribute("allocType", allocTypeAttr);
+  state.addAttribute("dbMode", dbModeAttr);
+
+  state.addOperands(route);
+  if (address)
+    state.addOperands(address);
+  state.addOperands(sizes);
+
+  /// Build operand segment sizes: [route=1, address(0/1), sizes]
+  state.addAttribute(
+      "operandSegmentSizes",
+      builder.getDenseI32ArrayAttr({1, static_cast<int32_t>(address ? 1 : 0),
+                                    static_cast<int32_t>(sizes.size())}));
+}
+
+void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
+                      Value route, DbAllocType allocType, DbMode dbMode,
+                      Type elementType, Value address,
+                      SmallVector<Value> sizes) {
+  /// Auto-compute result types
+  Type guidType = MemRefType::get({}, builder.getI64Type());
+
+  /// Build dynamic shape from sizes
+  SmallVector<int64_t> shape;
+  for (size_t i = 0; i < sizes.size(); ++i)
+    shape.push_back(ShapedType::kDynamic);
+  Type ptrType = MemRefType::get(shape, elementType);
+
+  state.addTypes({guidType, ptrType});
+
+  /// Add operands and attributes
+  ArtsModeAttr modeAttr = ArtsModeAttr::get(builder.getContext(), mode);
+  DbAllocTypeAttr allocTypeAttr =
+      DbAllocTypeAttr::get(builder.getContext(), allocType);
+  DbModeAttr dbModeAttr = DbModeAttr::get(builder.getContext(), dbMode);
+
+  state.addAttribute("mode", modeAttr);
+  state.addAttribute("allocType", allocTypeAttr);
+  state.addAttribute("dbMode", dbModeAttr);
+
+  state.addOperands(route);
+  if (address)
+    state.addOperands(address);
+  state.addOperands(sizes);
+
+  /// Build operand segment sizes: [route=1, address(0/1), sizes]
+  state.addAttribute(
+      "operandSegmentSizes",
+      builder.getDenseI32ArrayAttr({1, static_cast<int32_t>(address ? 1 : 0),
+                                    static_cast<int32_t>(sizes.size())}));
+}
+
+void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
+                      DbMode dbMode, Value address, SmallVector<Value> sizes) {
+  /// Create default values
+  Value route = builder.create<arith::ConstantIntOp>(state.location, 0,
+                                                     builder.getI32Type());
+  DbAllocType allocType = DbAllocType::heap;
+
+  /// Call the main builder with defaults
+  DbAllocOp::build(builder, state, mode, route, allocType, dbMode, address,
+                   sizes);
+}

@@ -26,10 +26,24 @@ carts cgeist simple.cpp -std=c++17 -fopenmp -O0 -S > simple.mlir
 ```
 
 ### 2. MLIR Optimization and ARTS Conversion
-Execute the compilation pipeline step by step. For debugging, examine `tools/run/carts-run.cpp` to understand the complete pipeline.
 
-#### Step-by-Step Debugging Approach
-Create intermediate files after each major transformation pass to isolate issues:
+#### Primary Debugging Approach: Pipeline Stages
+**ALWAYS use `carts run` with pipeline stages first** - this is the recommended debugging approach:
+
+```bash
+# Stop at each major stage to isolate issues
+carts run simple.mlir --convert-openmp -o simple-openmp.mlir
+carts run simple.mlir --edt-transforms -o simple-edt.mlir
+carts run simple.mlir --datablock -o simple-db.mlir
+carts run simple.mlir --edt-lowering -o simple-llvm.mlir
+```
+
+#### Advanced Debugging: Individual Passes (when needed)
+Only use `carts opt` with individual passes when:
+- You need fine-grained control over specific passes
+- You want to debug a specific pass in isolation
+- You're developing new passes and need to test them individually
+- The pipeline stages don't provide enough granularity for your debugging needs
 
 **First Major Pass - OpenMP to ARTS:**
 ```bash
@@ -51,7 +65,7 @@ carts opt simple-arts.mlir \
 ```
 
 **Continue with remaining passes:**
-Examine `tools/run/carts-run.cpp` to understand the complete pipeline and identify which other passses to run
+Examine `tools/run/carts-run.cpp` to understand the complete pipeline and identify which other passes to run
 
 #### Debugging Pass-Specific Issues
 Enable debug output for specific passes when encountering errors:
@@ -103,11 +117,15 @@ Ensure `arts.cfg` configuration exists, then run:
 - **Code Generation Issues**: Return to ARTS-to-LLVM conversion passes and re-run with fixes
 
 ## Debugging Workflow Summary
-1. **Isolate**: Use step-by-step pipeline to identify failing pass
-2. **Debug**: Enable pass-specific debug output
-3. **Analyze**: Examine intermediate MLIR/LLVM files
-4. **Verify**: Check ARTS runtime API usage
-5. **Iterate**: Fix issues and re-run pipeline
+1. **Isolate**: Use `carts run` with pipeline stages to identify which stage fails
+2. **Debug**: Enable pass-specific debug output with `-debug-only=pass_name`
+3. **Analyze**: Examine intermediate MLIR files at each pipeline stage
+4. **Verify**: Check ARTS runtime API usage and MLIR structure
+5. **Iterate**: Fix issues and re-run pipeline stages as needed
+
+**When to use pipeline stages vs individual passes:**
+- **Pipeline stages** (`carts run --stage-name`): Primary debugging method for quick isolation
+- **Individual passes** (`carts opt --pass-name`): Advanced debugging when you need fine-grained control
 
 ### Stopping `carts run` at a specific stage
 `carts run` can execute the full pipeline or stop after a specific stage. Use one of the flags below to stop early and inspect the IR.
@@ -134,108 +152,4 @@ carts run input.mlir --edt-transforms -o out-edt.mlir
 # Stop after EDT lowering
 carts run input.mlir --edt-lowering -o out-lowering.mlir
 ```
-
-# Debugging CARTS
-
-## Overview
-Debugging CARTS involves understanding four main components:
-- **Polygeist**: Front-end infrastructure (external/Polygeist)
-- **LLVM/MLIR**: Compiler infrastructure (external/Polygeist/llvm-project)  
-- **ARTS**: Runtime system (external/arts)
-- **CARTS**: Core infrastructure (include/, lib/, tools/)
-
-**Note**: Always refer to `.cursor/rules/build-and-compilation.mdc` for build system details.
-
-## Step-by-Step Compilation Pipeline
-
-### 1. C++ to MLIR Conversion
-Convert C++ source to MLIR using Polygeist:
-```bash
-carts cgeist simple.cpp -std=c++17 -fopenmp -O0 -S > simple.mlir
-```
-
-### 2. MLIR Optimization and ARTS Conversion
-Execute the compilation pipeline step by step. For debugging, examine `tools/run/carts-run.cpp` to understand the complete pipeline.
-
-#### Step-by-Step Debugging Approach
-Create intermediate files after each major transformation pass to isolate issues:
-
-**First Major Pass - OpenMP to ARTS:**
-```bash
-carts opt simple.mlir \
-  --lower-affine \
-  --cse \
-  --polygeist-mem2reg \
-  --canonicalize \
-  --loop-invariant-code-motion \
-  --arts-inliner \
-  --convert-openmp-to-arts > simple-arts.mlir
-```
-
-**Second Major Pass - EDT Pass:**
-```bash
-carts opt simple-arts.mlir \
-  --symbol-dce \
-  --edt > simple-edt.mlir
-```
-
-**Continue with remaining carts passes:**
-Examine `tools/run/carts-run.cpp` to understand the complete pipeline and identify which other passses to run.
-You must run all arts related passes and group the non-arts related passes.
-
-#### Debugging Pass-Specific Issues
-Enable debug output for specific passes when encountering errors:
-```bash
-# Replace dashes with underscores in debug flag names
-carts opt simple.mlir \
-  --lower-affine \
-  --cse \
-  --polygeist-mem2reg \
-  --canonicalize \
-  --loop-invariant-code-motion \
-  --arts-inliner \
-  --convert-openmp-to-arts \
-  -debug-only=convert_openmp_to_arts > simple-arts.mlir
-```
-
-**Common Debug Flags:**
-- `-debug-only=convert_openmp_to_arts`
-- `-debug-only=edt`
-- `-debug-only=create_db`
-- `-debug-only=convert_arts_to_llvm`
-
-### 3. LLVM IR Generation
-Convert final MLIR to LLVM IR:
-```bash
-carts mlir-translate --mlir-to-llvmir simple-final.mlir > simple-arts.ll
-```
-
-**Troubleshooting LLVM Generation:**
-- Analyze error messages carefully
-- Check ARTS-to-LLVM conversion passes
-- Verify MLIR structure before conversion
-
-### 4. Final Compilation
-Compile LLVM IR to executable:
-```bash
-carts compile simple-arts.ll -o simple
-```
-
-### 5. Execution and Runtime Debugging
-Ensure `arts.cfg` configuration exists, then run:
-```bash
-./simple
-```
-
-**Runtime Issue Resolution:**
-- **Segmentation Faults**: Examine the generated `.ll` code for incorrect ARTS function calls
-- **Unknown ARTS Functions**: Check `external/arts` source files for correct function signatures
-- **Code Generation Issues**: Return to ARTS-to-LLVM conversion passes and re-run with fixes
-
-## Debugging Workflow Summary
-1. **Isolate**: Use step-by-step pipeline to identify failing pass
-2. **Debug**: Enable pass-specific debug output
-3. **Analyze**: Examine intermediate MLIR/LLVM files
-4. **Verify**: Check ARTS runtime API usage
-5. **Iterate**: Fix issues and re-run pipeline
 
