@@ -3,6 +3,9 @@
 # - Dependencies: ARTS, LLVM, Polygeist
 # - Required: CMake, Ninja, Clang, Clang++
 
+# Build verbosity control (set VERBOSE=1 to enable verbose output)
+VERBOSE ?= 0
+NINJA_FLAGS := $(if $(filter 1,$(VERBOSE)),-v,)
 
 # Source Directories
 CARTS_DIR = ${shell pwd}
@@ -130,7 +133,7 @@ build:
 		-DPOLYGEIST_BUILD_DIR=$(POLYGEIST_BUILD_DIR) \
 		-DPOLYGEIST_DIR=$(POLYGEIST_DIR) \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
-		ninja -v -C $(CARTS_BUILD_DIR) install
+		ninja $(NINJA_FLAGS) -C $(CARTS_BUILD_DIR) install
 
 install: llvm arts polygeist build
 

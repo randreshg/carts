@@ -68,6 +68,12 @@ include_directories(${PROJECT_BINARY_DIR}/include)
 link_directories(${LLVM_BUILD_LIBRARY_DIR})
 add_definitions(${LLVM_DEFINITIONS})
 
+# Suppress common LLVM/MLIR linker warnings on macOS
+if(APPLE)
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-no_warn_duplicate_libraries")
+  message(STATUS "Added macOS linker flags to suppress duplicate library warnings")
+endif()
+
 # ARTS introspection options
 option(ENABLE_ARTS_INTROSPECTION "Enable ARTS introspection and counter system" OFF)
 if(ENABLE_ARTS_INTROSPECTION)
