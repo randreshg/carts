@@ -92,4 +92,15 @@ def DbMode : Arts_I32Enum<"DbMode",
 /// Enum attribute for DB allocation modes
 def DbModeAttr : Arts_I32EnumAttr<"db_mode", DbMode>;
 
+/// Enum info for DB release types
+def DbReleaseType : Arts_I32Enum<"DbReleaseType",
+    "ARTS DB release type",
+    [
+      I32EnumAttrCase<"normal", 0, "normal">,
+      I32EnumAttrCase<"dynamic_free", 1, "dynamic_free">
+    ]>;
+
+/// Enum attribute for DB release types
+def DbReleaseTypeAttr : Arts_I32EnumAttr<"release_type", DbReleaseType>;
+
 #endif // ARTS_ATTRS

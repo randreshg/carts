@@ -321,23 +321,24 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
 
 void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
                       Value route, DbAllocType allocType, DbMode dbMode,
-                      Value address, SmallVector<Value> sizes) {
+                      Value address, SmallVector<Value> sizes,
+                      SmallVector<Value> payloadSizes) {
   /// Auto-compute result types
   Type guidType = MemRefType::get({}, builder.getI64Type());
 
-  /// Build ptr type from sizes and determine element type from address if
-  /// available
-  Type elementType = builder.getI32Type();
-  if (address && isa<MemRefType>(address.getType())) {
-    auto memRefType = cast<MemRefType>(address.getType());
-    elementType = memRefType.getElementType();
-  }
-
-  /// Build dynamic shape from sizes
+  /// Build ptr type from address shape (if any) or dynamic sizes with payload
+  /// element type
+  Type elemTy = builder.getI8Type();
   SmallVector<int64_t> shape;
-  for (size_t i = 0; i < sizes.size(); ++i)
-    shape.push_back(ShapedType::kDynamic);
-  Type ptrType = MemRefType::get(shape, elementType);
+  if (address && isa<MemRefType>(address.getType())) {
+    auto mt = cast<MemRefType>(address.getType());
+    elemTy = mt.getElementType();
+    shape.assign(mt.getShape().begin(), mt.getShape().end());
+  } else {
+    for (size_t i = 0; i < sizes.size(); ++i)
+      shape.push_back(ShapedType::kDynamic);
+  }
+  Type ptrType = MemRefType::get(shape, elemTy);
 
   state.addTypes({guidType, ptrType});
 
@@ -346,31 +347,82 @@ void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
   DbAllocTypeAttr allocTypeAttr =
       DbAllocTypeAttr::get(builder.getContext(), allocType);
   DbModeAttr dbModeAttr = DbModeAttr::get(builder.getContext(), dbMode);
+  /// Retain payload element type attribute using elemTy
+  TypeAttr elementTypeAttr = TypeAttr::get(elemTy);
 
   state.addAttribute("mode", modeAttr);
   state.addAttribute("allocType", allocTypeAttr);
   state.addAttribute("dbMode", dbModeAttr);
+  state.addAttribute("elementType", elementTypeAttr);
 
   state.addOperands(route);
   if (address)
     state.addOperands(address);
   state.addOperands(sizes);
+  state.addOperands(payloadSizes);
 
-  /// Build operand segment sizes: [route=1, address(0/1), sizes]
-  state.addAttribute(
-      "operandSegmentSizes",
-      builder.getDenseI32ArrayAttr({1, static_cast<int32_t>(address ? 1 : 0),
-                                    static_cast<int32_t>(sizes.size())}));
+  /// Build operand segment sizes: [route=1, address(0/1), sizes, payloadSizes]
+  state.addAttribute("operandSegmentSizes",
+                     builder.getDenseI32ArrayAttr(
+                         {1, static_cast<int32_t>(address ? 1 : 0),
+                          static_cast<int32_t>(sizes.size()),
+                          static_cast<int32_t>(payloadSizes.size())}));
 }
 
 void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
                       Value route, DbAllocType allocType, DbMode dbMode,
-                      Type elementType, Value address,
-                      SmallVector<Value> sizes) {
+                      Type elementType, Value address, SmallVector<Value> sizes,
+                      SmallVector<Value> payloadSizes) {
   /// Auto-compute result types
   Type guidType = MemRefType::get({}, builder.getI64Type());
 
-  /// Build dynamic shape from sizes
+  /// Build ptr type using provided elementType and address shape or sizes
+  SmallVector<int64_t> shape;
+  if (address && isa<MemRefType>(address.getType())) {
+    auto mt = cast<MemRefType>(address.getType());
+    shape.assign(mt.getShape().begin(), mt.getShape().end());
+  } else {
+    for (size_t i = 0; i < sizes.size(); ++i)
+      shape.push_back(ShapedType::kDynamic);
+  }
+  Type ptrType = MemRefType::get(shape, elementType);
+
+  state.addTypes({guidType, ptrType});
+
+  /// Add operands and attributes
+  ArtsModeAttr modeAttr = ArtsModeAttr::get(builder.getContext(), mode);
+  DbAllocTypeAttr allocTypeAttr =
+      DbAllocTypeAttr::get(builder.getContext(), allocType);
+  DbModeAttr dbModeAttr = DbModeAttr::get(builder.getContext(), dbMode);
+  TypeAttr elementTypeAttr = TypeAttr::get(elementType);
+
+  state.addAttribute("mode", modeAttr);
+  state.addAttribute("allocType", allocTypeAttr);
+  state.addAttribute("dbMode", dbModeAttr);
+  state.addAttribute("elementType", elementTypeAttr);
+
+  state.addOperands(route);
+  if (address)
+    state.addOperands(address);
+  state.addOperands(sizes);
+  state.addOperands(payloadSizes);
+
+  /// Build operand segment sizes: [route=1, address(0/1), sizes, payloadSizes]
+  state.addAttribute("operandSegmentSizes",
+                     builder.getDenseI32ArrayAttr(
+                         {1, static_cast<int32_t>(address ? 1 : 0),
+                          static_cast<int32_t>(sizes.size()),
+                          static_cast<int32_t>(payloadSizes.size())}));
+}
+
+void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
+                      Value route, DbAllocType allocType, DbMode dbMode,
+                      Type elementType, SmallVector<Value> sizes,
+                      SmallVector<Value> payloadSizes) {
+  /// Auto-compute result types
+  Type guidType = MemRefType::get({}, builder.getI64Type());
+
+  /// Build ptr type using provided elementType and dynamic shape from sizes
   SmallVector<int64_t> shape;
   for (size_t i = 0; i < sizes.size(); ++i)
     shape.push_back(ShapedType::kDynamic);
@@ -383,31 +435,64 @@ void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
   DbAllocTypeAttr allocTypeAttr =
       DbAllocTypeAttr::get(builder.getContext(), allocType);
   DbModeAttr dbModeAttr = DbModeAttr::get(builder.getContext(), dbMode);
+  TypeAttr elementTypeAttr = TypeAttr::get(elementType);
 
   state.addAttribute("mode", modeAttr);
   state.addAttribute("allocType", allocTypeAttr);
   state.addAttribute("dbMode", dbModeAttr);
+  state.addAttribute("elementType", elementTypeAttr);
 
   state.addOperands(route);
-  if (address)
-    state.addOperands(address);
+  // No address operand for this builder
   state.addOperands(sizes);
+  state.addOperands(payloadSizes);
 
-  /// Build operand segment sizes: [route=1, address(0/1), sizes]
-  state.addAttribute(
-      "operandSegmentSizes",
-      builder.getDenseI32ArrayAttr({1, static_cast<int32_t>(address ? 1 : 0),
-                                    static_cast<int32_t>(sizes.size())}));
+  /// Build operand segment sizes: [route=1, address=0, sizes, payloadSizes]
+  state.addAttribute("operandSegmentSizes",
+                     builder.getDenseI32ArrayAttr(
+                         {1, 0, static_cast<int32_t>(sizes.size()),
+                          static_cast<int32_t>(payloadSizes.size())}));
 }
 
-void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
-                      DbMode dbMode, Value address, SmallVector<Value> sizes) {
-  /// Create default values
-  Value route = builder.create<arith::ConstantIntOp>(state.location, 0,
-                                                     builder.getI32Type());
-  DbAllocType allocType = DbAllocType::heap;
+/// Custom builders for DbNumElementsOp that automatically extract sizes
+void DbNumElementsOp::build(OpBuilder &builder, OperationState &state,
+                            DbAllocOp allocOp) {
+  /// Extract sizes from the DbAllocOp
+  SmallVector<Value> sizes = allocOp.getSizes();
+  build(builder, state, sizes);
+}
 
-  /// Call the main builder with defaults
-  DbAllocOp::build(builder, state, mode, route, allocType, dbMode, address,
-                   sizes);
+void DbNumElementsOp::build(OpBuilder &builder, OperationState &state,
+                            DbAcquireOp acquireOp) {
+  /// Extract sizes from the DbAcquireOp
+  SmallVector<Value> sizes = acquireOp.getSizes();
+  build(builder, state, sizes);
+}
+
+///==========================================================================
+/// Utility functions for Arts dialect operations
+///==========================================================================
+
+/// Helper function to extract sizes from a datablock pointer
+/// by finding the original DbAllocOp or DbAcquireOp that created it
+SmallVector<Value> getSizesFromDb(Value datablockPtr) {
+  /// Find the defining operation of the datablock pointer
+  Operation *defOp = datablockPtr.getDefiningOp();
+  if (!defOp)
+    return {};
+
+  /// Check if it's a DbAllocOp result
+  if (auto allocOp = dyn_cast<DbAllocOp>(defOp)) {
+    return SmallVector<Value>(allocOp.getSizes().begin(),
+                              allocOp.getSizes().end());
+  }
+
+  /// Check if it's a DbAcquireOp result
+  if (auto acquireOp = dyn_cast<DbAcquireOp>(defOp)) {
+    return SmallVector<Value>(acquireOp.getSizes().begin(),
+                              acquireOp.getSizes().end());
+  }
+
+  // If we can't find the sizes, return empty (will result in 1 element)
+  return {};
 }

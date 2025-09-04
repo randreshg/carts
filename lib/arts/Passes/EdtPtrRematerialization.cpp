@@ -10,13 +10,7 @@
 
 /// Arts
 #include "arts/ArtsDialect.h"
-
-/// Others
 #include "arts/Transforms/EdtPtrRematerialization.h"
-
-/// LLVM support
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/raw_ostream.h"
 
 #include "arts/Utils/ArtsDebug.h"
 ARTS_DEBUG_SETUP(edt_ptr_rematerialization);

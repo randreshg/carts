@@ -214,7 +214,9 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   /// Calculate total dependency count (sum of elements in all deps)
   Value depCount = AC->createIntConstant(0, AC->Int32, loc);
   for (Value dep : envManager.getDependencies()) {
-    Value numElements = AC->create<DbNumElementsOp>(loc, dep);
+    SmallVector<Value> sizes = getSizesFromDb(dep);
+    Value numElements = AC->create<DbNumElementsOp>(loc, sizes);
+    numElements = AC->castToInt(AC->Int32, numElements, loc);
     depCount = AC->create<arith::AddIOp>(loc, depCount, numElements);
   }
 
@@ -406,9 +408,8 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
       }
     }
     /// Map to unpacked parameter
-    if (unpackedIndex < unpackedParams.size()) {
+    if (unpackedIndex < unpackedParams.size())
       valueMapping.map(param, unpackedParams[unpackedIndex++]);
-    }
   }
 
   for (Value freeVar : envManager.getCapturedValues())
@@ -426,13 +427,8 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
       valueMapping.map(orig, clone);
   }
 
-  /// Dependencies are now properly mapped via valueMapping above
-  /// transformDependencyUses is not needed since value mapping handles
-  /// everything
-
   /// Add return terminator
   AC->create<func::ReturnOp>(loc);
-
   return success();
 }
 

@@ -20,6 +20,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/IntegerSet.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Types.h"
 #include "mlir/IR/ValueRange.h"
@@ -27,11 +28,10 @@
 #include "mlir/Transforms/DialectConversion.h"
 /// Arts
 #include "arts/ArtsDialect.h"
-// DISABLED: Complex codegen functionality
 // #include "arts/Codegen/ArtsTypes.h"
 #include "arts/Utils/ArtsUtils.h"
 /// Debug
-#include "llvm/ADT/SmallVector.h"
+
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -43,7 +43,7 @@
 
 /// DEBUG
 #include "arts/Utils/ArtsDebug.h"
-ARTS_DEBUG_SETUP(arts - codegen);
+ARTS_DEBUG_SETUP(arts_codegen);
 
 using namespace mlir;
 using namespace mlir::func;
@@ -90,8 +90,8 @@ func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
   if (cacheIt != runtimeFunctionCache.end())
     return cacheIt->second;
 
-  OpBuilder::InsertionGuard IG(builder);
-  builder.setInsertionPointToStart(module.getBody());
+  OpBuilder::InsertionGuard IG(getBuilder());
+  getBuilder().setInsertionPointToStart(module.getBody());
 
   func::FuncOp funcOp;
   /// Try to find the declaration in the module first.
@@ -99,16 +99,16 @@ func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
 #define ARTS_RTL(Enum, Str, ReturnType, ...)                                   \
   case Enum: {                                                                 \
     SmallVector<Type, 4> argumentTypes{__VA_ARGS__};                           \
-    auto fnType = builder.getFunctionType(argumentTypes,                       \
-                                          ReturnType.isa<mlir::NoneType>()     \
-                                              ? ArrayRef<Type>{}               \
-                                              : ArrayRef<Type>{ReturnType});   \
+    auto fnType = getBuilder().getFunctionType(                                \
+        argumentTypes, ReturnType.isa<mlir::NoneType>()                        \
+                           ? ArrayRef<Type>{}                                  \
+                           : ArrayRef<Type>{ReturnType});                      \
     funcOp = module.lookupSymbol<func::FuncOp>(Str);                           \
     if (!funcOp) {                                                             \
-      funcOp = builder.create<func::FuncOp>(getUnknownLoc(), Str, fnType);     \
+      funcOp = create<func::FuncOp>(getUnknownLoc(), Str, fnType);             \
       funcOp.setPrivate();                                                     \
       funcOp->setAttr("llvm.linkage",                                          \
-                      LLVM::LinkageAttr::get(builder.getContext(),             \
+                      LLVM::LinkageAttr::get(getBuilder().getContext(),        \
                                              LLVM::Linkage::External));        \
     }                                                                          \
     break;                                                                     \
@@ -162,7 +162,7 @@ func::CallOp ArtsCodegen::createRuntimeCall(RuntimeFunction FnID,
                                             Location loc) {
   func::FuncOp func = getOrCreateRuntimeFunction(FnID);
   assert(func && "Runtime function should exist");
-  return builder.create<func::CallOp>(loc, func, args);
+  return create<func::CallOp>(loc, func, args);
 }
 
 /// DataBlock management
@@ -210,11 +210,11 @@ Value ArtsCodegen::createEpoch(Value finishEdtGuid, Value finishEdtSlot,
 // }
 
 Value ArtsCodegen::getGuidFromEdtDep(Value dep, Location loc) {
-  return builder.create<LLVM::ExtractValueOp>(loc, dep, ArrayRef<int64_t>{0});
+  return create<LLVM::ExtractValueOp>(loc, dep, ArrayRef<int64_t>{0});
 }
 
 Value ArtsCodegen::getPtrFromEdtDep(Value dep, Location loc) {
-  return builder.create<LLVM::ExtractValueOp>(loc, dep, ArrayRef<int64_t>{2});
+  return create<LLVM::ExtractValueOp>(loc, dep, ArrayRef<int64_t>{2});
 }
 
 Value ArtsCodegen::getCurrentEpochGuid(Location loc) {
@@ -224,32 +224,28 @@ Value ArtsCodegen::getCurrentEpochGuid(Location loc) {
 
 Value ArtsCodegen::getCurrentEdtGuid(Location loc) {
   func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentGuid);
-  return builder.create<func::CallOp>(loc, func, ArrayRef<Value>{})
-      .getResult(0);
+
+  return create<func::CallOp>(loc, func, ArrayRef<Value>{}).getResult(0);
 }
 
 Value ArtsCodegen::getTotalWorkers(Location loc) {
   func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetTotalWorkers);
-  return builder.create<func::CallOp>(loc, func, ArrayRef<Value>{})
-      .getResult(0);
+  return create<func::CallOp>(loc, func, ArrayRef<Value>{}).getResult(0);
 }
 
 Value ArtsCodegen::getTotalNodes(Location loc) {
   func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetTotalNodes);
-  return builder.create<func::CallOp>(loc, func, ArrayRef<Value>{})
-      .getResult(0);
+  return create<func::CallOp>(loc, func, ArrayRef<Value>{}).getResult(0);
 }
 
 Value ArtsCodegen::getCurrentWorker(Location loc) {
   func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentWorker);
-  return builder.create<func::CallOp>(loc, func, ArrayRef<Value>{})
-      .getResult(0);
+  return create<func::CallOp>(loc, func, ArrayRef<Value>{}).getResult(0);
 }
 
 Value ArtsCodegen::getCurrentNode(Location loc) {
   func::FuncOp func = getOrCreateRuntimeFunction(ARTSRTL_artsGetCurrentNode);
-  return builder.create<func::CallOp>(loc, func, ArrayRef<Value>{})
-      .getResult(0);
+  return create<func::CallOp>(loc, func, ArrayRef<Value>{}).getResult(0);
 }
 
 func::CallOp ArtsCodegen::signalEdt(Value edtGuid, Value edtSlot, Value dbGuid,
@@ -264,37 +260,36 @@ void ArtsCodegen::waitOnHandle(Value epochGuid, Location loc) {
 }
 
 func::FuncOp ArtsCodegen::insertInitPerWorker(Location loc) {
-  OpBuilder::InsertionGuard IG(builder);
+  OpBuilder::InsertionGuard IG(getBuilder());
   setInsertionPoint(module);
-  auto newFn =
-      builder.create<func::FuncOp>(loc, "initPerWorker", InitPerWorkerFn);
+  auto newFn = create<func::FuncOp>(loc, "initPerWorker", InitPerWorkerFn);
   newFn.setPublic();
   module.push_back(newFn);
   auto *entryBlock = newFn.addEntryBlock();
-  builder.setInsertionPointToStart(entryBlock);
-  builder.create<func::ReturnOp>(loc);
+  getBuilder().setInsertionPointToStart(entryBlock);
+  create<func::ReturnOp>(loc);
   return newFn;
 }
 
 func::FuncOp ArtsCodegen::insertInitPerNode(Location loc,
                                             func::FuncOp callback) {
-  OpBuilder::InsertionGuard IG(builder);
+  OpBuilder::InsertionGuard IG(getBuilder());
   setInsertionPoint(module);
 
   /// Create the function using the InitPerNodeFn type.
-  auto newFn = builder.create<func::FuncOp>(loc, "initPerNode", InitPerNodeFn);
+  auto newFn = create<func::FuncOp>(loc, "initPerNode", InitPerNodeFn);
   newFn.setPublic();
   module.push_back(newFn);
 
   /// Create the entry block.
   Block *entryBlock = newFn.addEntryBlock();
-  builder.setInsertionPointToStart(entryBlock);
+  getBuilder().setInsertionPointToStart(entryBlock);
 
   /// Retrieve the first argument and compare arg with 1.
   auto arg = entryBlock->getArgument(0);
-  auto cmp = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
-                                           castToIndex(arg, loc),
-                                           createIndexConstant(1, loc));
+  auto cmp =
+      create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
+                            castToIndex(arg, loc), createIndexConstant(1, loc));
 
   /// Create separate then and merge blocks in the function body.
   auto thenBlock = new Block();
@@ -306,72 +301,72 @@ func::FuncOp ArtsCodegen::insertInitPerNode(Location loc,
 
   /// In the entry block, do a conditional branch: if cmp true, jump to
   /// thenBlock; otherwise, continue in mergeBlock.
-  builder.create<cf::CondBranchOp>(
+  create<cf::CondBranchOp>(
       loc, cmp, thenBlock, ValueRange{}, mergeBlock,
       ValueRange{newFn.getArgument(1), newFn.getArgument(2)});
 
   /// thenBlock - If nodeId >= 1, return
-  builder.setInsertionPointToStart(thenBlock);
-  builder.create<func::ReturnOp>(loc);
+  getBuilder().setInsertionPointToStart(thenBlock);
+  create<func::ReturnOp>(loc);
 
   /// mergeBlock - Otherwise, call the callback function and return
-  builder.setInsertionPointToStart(mergeBlock);
+  getBuilder().setInsertionPointToStart(mergeBlock);
   if (callback) {
     /// If the callback function receives arguments, pass them to the call,
     /// otherwise, pass an empty ValueRange.
     auto callArgs = ValueRange{};
     if (callback.getNumArguments() > 0)
       callArgs = {newFn.getArgument(1), newFn.getArgument(2)};
-    builder.create<func::CallOp>(loc, callback, callArgs);
+    create<func::CallOp>(loc, callback, callArgs);
   }
   createRuntimeCall(ARTSRTL_artsShutdown, {}, loc);
-  builder.create<func::ReturnOp>(loc);
+  create<func::ReturnOp>(loc);
   return newFn;
 }
 
 func::FuncOp ArtsCodegen::insertArtsMainFn(Location loc,
                                            func::FuncOp callback) {
-  OpBuilder::InsertionGuard IG(builder);
+  OpBuilder::InsertionGuard IG(getBuilder());
   setInsertionPoint(module);
 
   /// Create the function using the "MainEdt" type.
-  auto newFn = builder.create<func::FuncOp>(loc, "artsMain", ArtsMainFn);
+  auto newFn = create<func::FuncOp>(loc, "artsMain", ArtsMainFn);
   newFn.setPublic();
 
   /// Create the entry block.
   auto *entryBlock = newFn.addEntryBlock();
-  builder.setInsertionPointToStart(entryBlock);
+  getBuilder().setInsertionPointToStart(entryBlock);
 
   /// Insert call to 'artsRT' function
   auto callArgs = ValueRange{};
   if (callback.getNumArguments() > 0)
     callArgs = {newFn.getArgument(0), newFn.getArgument(1)};
-  builder.create<func::CallOp>(loc, callback, callArgs);
+  create<func::CallOp>(loc, callback, callArgs);
 
   /// Return
   createRuntimeCall(ARTSRTL_artsShutdown, {}, loc);
-  builder.create<func::ReturnOp>(loc);
+  create<func::ReturnOp>(loc);
   return newFn;
 }
 
 func::FuncOp ArtsCodegen::insertMainFn(Location loc) {
-  OpBuilder::InsertionGuard IG(builder);
+  OpBuilder::InsertionGuard IG(getBuilder());
   setInsertionPoint(module);
 
   /// Create the function using the "MainFn" type.
-  auto newFn = builder.create<func::FuncOp>(loc, "main", MainFn);
+  auto newFn = create<func::FuncOp>(loc, "main", MainFn);
   newFn.setPublic();
 
   /// Create the entry block.
   auto *entryBlock = newFn.addEntryBlock();
-  builder.setInsertionPointToStart(entryBlock);
+  getBuilder().setInsertionPointToStart(entryBlock);
 
   /// Insert call to 'artsRT' function
   createRuntimeCall(ARTSRTL_artsRT,
                     {newFn.getArgument(0), newFn.getArgument(1)}, loc);
 
   /// Return 0
-  builder.create<func::ReturnOp>(loc, createIntConstant(0, Int32, loc));
+  create<func::ReturnOp>(loc, createIntConstant(0, Int32, loc));
   return newFn;
 }
 
@@ -393,22 +388,21 @@ Value ArtsCodegen::createFnPtr(func::FuncOp funcOp, Location loc) {
   auto FT = funcOp.getFunctionType();
   auto LFT = LLVM::LLVMFunctionType::get(
       LLVM::LLVMVoidType::get(funcOp.getContext()), FT.getInputs(), false);
-  auto getFuncOp = builder.create<polygeist::GetFuncOp>(
+  auto getFuncOp = create<polygeist::GetFuncOp>(
       loc, LLVM::LLVMPointerType::get(LFT), funcOp.getName());
-  return builder
-      .create<polygeist::Pointer2MemrefOp>(
-          loc, MemRefType::get({ShapedType::kDynamic}, LFT), getFuncOp)
+  return create<polygeist::Pointer2MemrefOp>(
+             loc, MemRefType::get({ShapedType::kDynamic}, LFT), getFuncOp)
       .getResult();
 }
 
 Value ArtsCodegen::createIndexConstant(int value, Location loc) {
-  return builder.create<arith::ConstantIndexOp>(loc, value);
+  return create<arith::ConstantIndexOp>(loc, value);
 }
 
 Value ArtsCodegen::createIntConstant(int value, Type type, Location loc) {
   assert(type.isa<IntegerType>() && "Expected integer type");
-  auto v = builder.create<arith::ConstantOp>(
-      loc, type, builder.getIntegerAttr(type, value));
+  auto v = create<arith::ConstantOp>(loc, type,
+                                     getBuilder().getIntegerAttr(type, value));
   return v;
 }
 
@@ -416,12 +410,15 @@ Value ArtsCodegen::createPtr(Value source, Location loc) {
   if (source.getType().isa<LLVM::LLVMPointerType>())
     return source;
   /// If it is not a pointer, cast it to a pointer
-  auto srcTy = source.getType().cast<MemRefType>();
-  auto valPtr = builder.create<polygeist::Memref2PointerOp>(
+  auto srcTy = source.getType().dyn_cast<MemRefType>();
+  /// Return source if not a MemRef type
+  if (!srcTy)
+    return source;
+  auto valPtr = create<polygeist::Memref2PointerOp>(
       loc, LLVM::LLVMPointerType::get(srcTy), source);
   auto valTy = mlir::MemRefType::get(srcTy.getShape(), VoidPtr,
                                      srcTy.getLayout(), srcTy.getMemorySpace());
-  return builder.create<polygeist::Pointer2MemrefOp>(loc, valTy, valPtr);
+  return create<polygeist::Pointer2MemrefOp>(loc, valTy, valPtr);
 }
 
 /// Casting
@@ -447,11 +444,11 @@ Value ArtsCodegen::castPtr(mlir::Type targetType, Value source, Location loc) {
 
   /// Cast if the types are compatible
   if (memref::CastOp::areCastCompatible(srcType, dstType))
-    return builder.create<memref::CastOp>(loc, dstType, source);
+    return create<memref::CastOp>(loc, dstType, source);
 
   /// If the types are not compatible, cast to LLVM pointer and then to memref
-  return builder.create<polygeist::Pointer2MemrefOp>(loc, targetType,
-                                                     createPtr(source, loc));
+  return create<polygeist::Pointer2MemrefOp>(loc, targetType,
+                                             createPtr(source, loc));
 }
 
 Value ArtsCodegen::castToIndex(Value source, Location loc) {
@@ -459,7 +456,7 @@ Value ArtsCodegen::castToIndex(Value source, Location loc) {
     return source;
   /// If it is not an index, cast it to an index.
   auto indexType = IndexType::get(source.getContext());
-  return builder.create<arith::IndexCastOp>(loc, indexType, source).getResult();
+  return create<arith::IndexCastOp>(loc, indexType, source).getResult();
 }
 
 Value ArtsCodegen::castToFloat(mlir::Type targetType, Value source,
@@ -468,7 +465,7 @@ Value ArtsCodegen::castToFloat(mlir::Type targetType, Value source,
   if (source.getType().isa<FloatType>())
     return source;
   /// If it is not a float, cast it to a float.
-  return builder.create<arith::SIToFPOp>(loc, targetType, source).getResult();
+  return create<arith::SIToFPOp>(loc, targetType, source).getResult();
 }
 
 Value ArtsCodegen::castToInt(Type targetType, Value source, Location loc) {
@@ -481,23 +478,25 @@ Value ArtsCodegen::castToInt(Type targetType, Value source, Location loc) {
 
   /// If source is index => use IndexCastOp to target integer type
   if (source.getType().isIndex())
-    return builder.create<arith::IndexCastOp>(loc, targetType, source);
+    return create<arith::IndexCastOp>(loc, targetType, source);
 
   /// If source is float => use FPToSIOp
   if (source.getType().isa<FloatType>())
-    return builder.create<arith::FPToSIOp>(loc, targetType, source);
+    return create<arith::FPToSIOp>(loc, targetType, source);
 
   /// If source is integer => handle extension or truncation
   if (auto srcIntType = source.getType().dyn_cast<IntegerType>()) {
-    auto dstIntType = targetType.cast<IntegerType>();
+    auto dstIntType = targetType.dyn_cast<IntegerType>();
+    if (!dstIntType)
+      return source;
     unsigned srcWidth = srcIntType.getWidth();
     unsigned dstWidth = dstIntType.getWidth();
 
     if (srcWidth == dstWidth)
       return source;
     else if (srcWidth < dstWidth)
-      return builder.create<arith::ExtSIOp>(loc, targetType, source);
-    return builder.create<arith::TruncIOp>(loc, targetType, source);
+      return create<arith::ExtSIOp>(loc, targetType, source);
+    return create<arith::TruncIOp>(loc, targetType, source);
   }
 
   /// If none of the above matched => unsupported type
@@ -511,16 +510,18 @@ Value ArtsCodegen::castToVoidPtr(Value source, Location loc) {
   if (!valPtr.getType().isa<LLVM::LLVMPointerType>()) {
     valPtr = castToLLVMPtr(source, loc);
   }
-  return builder.create<polygeist::Pointer2MemrefOp>(loc, VoidPtr, valPtr);
+  return create<polygeist::Pointer2MemrefOp>(loc, VoidPtr, valPtr);
 }
 
 Value ArtsCodegen::castToLLVMPtr(Value source, Location loc) {
   if (source.getType().isa<LLVM::LLVMPointerType>())
     return source;
-  MemRefType MT = source.getType().cast<MemRefType>();
-  return builder.create<polygeist::Memref2PointerOp>(
+  auto MT = source.getType().dyn_cast<MemRefType>();
+  if (!MT)
+    return source;
+  return create<polygeist::Memref2PointerOp>(
       loc,
-      LLVM::LLVMPointerType::get(builder.getContext(),
+      LLVM::LLVMPointerType::get(getBuilder().getContext(),
                                  MT.getMemorySpaceAsInt()),
       source);
 }
@@ -537,19 +538,19 @@ Value ArtsCodegen::getOrCreateGlobalLLVMString(Location loc, StringRef value) {
   /// Check if we already have this string cached. If so, return the cached
   /// global
   if (llvmStringGlobals.find(value.str()) == llvmStringGlobals.end()) {
-    OpBuilder::InsertionGuard guard(builder);
-    builder.setInsertionPointToStart(module.getBody());
-    auto type = LLVM::LLVMArrayType::get(builder.getI8Type(), value.size() + 1);
+    OpBuilder::InsertionGuard IG(getBuilder());
+    getBuilder().setInsertionPointToStart(module.getBody());
+    auto type = LLVM::LLVMArrayType::get(Int8, value.size() + 1);
 
     /// Create an unique name for the global
     std::string globalName = "str_" + std::to_string(llvmStringGlobals.size());
-    llvmStringGlobals[value.str()] = builder.create<LLVM::GlobalOp>(
+    llvmStringGlobals[value.str()] = create<LLVM::GlobalOp>(
         loc, type, true, LLVM::Linkage::Internal, globalName,
-        builder.getStringAttr(value.str() + '\0'));
+        getBuilder().getStringAttr(value.str() + '\0'));
   }
 
   LLVM::GlobalOp global = llvmStringGlobals[value.str()];
-  return builder.create<LLVM::AddressOfOp>(loc, global);
+  return create<LLVM::AddressOfOp>(loc, global);
 }
 
 void ArtsCodegen::createPrintfCall(Location loc, llvm::StringRef format,
@@ -560,19 +561,17 @@ void ArtsCodegen::createPrintfCall(Location loc, llvm::StringRef format,
   /// Create the printf function declaration if it doesn't exist
   auto printfFn = module.lookupSymbol<LLVM::LLVMFuncOp>("printf");
   if (!printfFn) {
-    auto i32Type = builder.getI32Type();
-    auto i8PtrType = LLVM::LLVMPointerType::get(builder.getContext());
-    auto printfType = LLVM::LLVMFunctionType::get(i32Type, {i8PtrType}, true);
+    auto i8PtrType = LLVM::LLVMPointerType::get(getBuilder().getContext());
+    auto printfType = LLVM::LLVMFunctionType::get(Int32, {i8PtrType}, true);
 
-    printfFn = builder.create<LLVM::LLVMFuncOp>(loc, "printf", printfType);
+    printfFn = create<LLVM::LLVMFuncOp>(loc, "printf", printfType);
     printfFn.setLinkage(LLVM::Linkage::External);
   }
   assert(printfFn && "printf function not found");
 
   /// Get or create the format string global and cast it to a generic pointer
   auto formatStrPtr = getOrCreateGlobalLLVMString(loc, format);
-  auto castedFormatPtr =
-      builder.create<LLVM::BitcastOp>(loc, llvmPtr, formatStrPtr);
+  auto castedFormatPtr = create<LLVM::BitcastOp>(loc, llvmPtr, formatStrPtr);
 
   /// Create the printf call with all arguments
   SmallVector<Value> callArgs;
@@ -580,26 +579,27 @@ void ArtsCodegen::createPrintfCall(Location loc, llvm::StringRef format,
   callArgs.append(args.begin(), args.end());
 
   /// Create the call operation with a symbol reference
-  builder.create<LLVM::CallOp>(
-      loc, TypeRange{builder.getI32Type()},
-      SymbolRefAttr::get(builder.getContext(), printfFn.getName()), callArgs);
+  create<LLVM::CallOp>(
+      loc, TypeRange{getBuilder().getI32Type()},
+      SymbolRefAttr::get(getBuilder().getContext(), printfFn.getName()),
+      callArgs);
 }
 
 /// Insertion point management
 void ArtsCodegen::setInsertionPoint(Operation *op) {
-  builder.setInsertionPoint(op);
+  getBuilder().setInsertionPoint(op);
 }
 
 void ArtsCodegen::setInsertionPointToStart(Block *block) {
-  builder.setInsertionPointToStart(block);
+  getBuilder().setInsertionPointToStart(block);
 }
 
 void ArtsCodegen::setInsertionPointAfter(Operation *op) {
-  builder.setInsertionPointAfter(op);
+  getBuilder().setInsertionPointAfter(op);
 }
 
 void ArtsCodegen::setInsertionPoint(ModuleOp &module) {
-  builder.setInsertionPointToStart(module.getBody());
+  getBuilder().setInsertionPointToStart(module.getBody());
 }
 
 void ArtsCodegen::addReplacement(Value original, Value newValue,
@@ -627,46 +627,23 @@ void ArtsCodegen::applyReplacements() {
 //===----------------------------------------------------------------------===//
 // Memref helpers
 //===----------------------------------------------------------------------===//
-
-Value ArtsCodegen::computeMemrefElementSize(MemRefType memrefType,
-                                            Location loc) {
-  auto elementType = memrefType.getElementType();
-  auto elementSizeInBits = mlirDL->getTypeSizeInBits(elementType);
-  return createIntConstant(elementSizeInBits / 8, Int64, loc);
+Value ArtsCodegen::computeElementTypeSize(Type elementType, Location loc) {
+  /// Insert polygeist type size op
+  auto elementSize = create<polygeist::TypeSizeOp>(
+      loc, IndexType::get(getBuilder().getContext()), elementType);
+  return elementSize;
+  // auto elementSizeInBits = mlirDL->getTypeSizeInBits(elementType);
+  // return createIntConstant(elementSizeInBits / 8, Int64, loc);
 }
 
-Value ArtsCodegen::computeMemrefTotalElements(ValueRange sizes, Location loc) {
+Value ArtsCodegen::computeTotalElements(ValueRange sizes, Location loc) {
   if (sizes.empty())
     return createIndexConstant(1, loc);
 
   Value total = sizes[0];
-  for (size_t i = 1; i < sizes.size(); ++i) {
-    total = builder.create<arith::MulIOp>(loc, total, sizes[i]);
-  }
+  for (size_t i = 1; i < sizes.size(); ++i)
+    total = create<arith::MulIOp>(loc, total, sizes[i]);
   return total;
-}
-
-Value ArtsCodegen::createMemrefView(Value buffer, ValueRange sizes,
-                                    ValueRange offsets, Type elementType,
-                                    Location loc) {
-  auto memrefType = MemRefType::get(
-      SmallVector<int64_t>(sizes.size(), ShapedType::kDynamic), elementType);
-
-  Value byteOffset = createIndexConstant(0, loc);
-  if (!offsets.empty()) {
-    auto elementSize =
-        computeMemrefElementSize(memrefType.cast<MemRefType>(), loc);
-    auto elementSizeIndex = castToIndex(elementSize, loc);
-
-    for (auto offset : offsets) {
-      auto offsetBytes =
-          builder.create<arith::MulIOp>(loc, offset, elementSizeIndex);
-      byteOffset = builder.create<arith::AddIOp>(loc, byteOffset, offsetBytes);
-    }
-  }
-
-  return builder.create<memref::ViewOp>(loc, memrefType, buffer, byteOffset,
-                                        sizes);
 }
 
 //===----------------------------------------------------------------------===//
@@ -689,16 +666,16 @@ void ArtsCodegen::createNestedLoopsForRange(ValueRange lowerBounds,
       return;
     }
 
-    auto loopOp = builder.create<scf::ForOp>(loc, lowerBounds[dim],
-                                             upperBounds[dim], steps[dim]);
+    auto loopOp =
+        create<scf::ForOp>(loc, lowerBounds[dim], upperBounds[dim], steps[dim]);
     auto &loopBlock = loopOp.getRegion().front();
-    builder.setInsertionPointToStart(&loopBlock);
+    getBuilder().setInsertionPointToStart(&loopBlock);
 
     indices.push_back(loopOp.getInductionVar());
     createLoop(dim + 1);
     indices.pop_back();
 
-    builder.setInsertionPointAfter(loopOp);
+    getBuilder().setInsertionPointAfter(loopOp);
   };
 
   createLoop(0);
