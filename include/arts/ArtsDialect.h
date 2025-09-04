@@ -55,4 +55,12 @@ bool isArtsOp(mlir::Operation *op);
 #define GET_OP_CLASSES
 #include "arts/ArtsOps.h.inc"
 
+//===----------------------------------------------------------------------===//
+// Arts Dialect Utility Functions
+//===----------------------------------------------------------------------===//
+
+/// Helper function to extract sizes from a datablock pointer
+/// by finding the original DbAllocOp or DbAcquireOp that created it
+mlir::SmallVector<mlir::Value> getSizesFromDb(mlir::Value datablockPtr);
+
 #endif // CARTS_DIALECT_H

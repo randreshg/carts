@@ -345,6 +345,8 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     PassManager pm(&context);
     pm.addPass(arts::createNormalizeDbsPass());
     pm.addPass(arts::createEdtLoweringPass());
+    pm.addPass(createCSEPass());
+    pm.addPass(createMem2Reg());
     if (mlir::failed(pm.run(module))) {
       llvm::errs() << "Error when running EDT lowering";
       module->dump();
@@ -359,6 +361,12 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   {
     PassManager pm(&context);
     pm.addPass(arts::createConvertArtsToLLVMPass(Debug));
+    pm.addPass(createCSEPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
+    pm.addPass(createMem2Reg());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
+    pm.addPass(createControlFlowSinkPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
     if (mlir::failed(pm.run(module))) {
       llvm::errs() << "Error when converting ARTS to LLVM";
       module->dump();
@@ -373,9 +381,6 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   if (Opt) {
     PassManager pm2(&context);
     mlir::OpPassManager &optPM = pm2.nest<mlir::func::FuncOp>();
-    optPM.addPass(createCSEPass());
-    optPM.addPass(polygeist::createPolygeistCanonicalizePass());
-    optPM.addPass(createMem2Reg());
     optPM.addPass(polygeist::createPolygeistCanonicalizePass());
     optPM.addPass(createControlFlowSinkPass());
     optPM.addPass(polygeist::createPolygeistCanonicalizePass());

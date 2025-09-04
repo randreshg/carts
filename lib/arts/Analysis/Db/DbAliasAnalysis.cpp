@@ -6,8 +6,8 @@
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "arts/Utils/ArtsDebug.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 ARTS_DEBUG_SETUP(db_alias_analysis);
 
 using namespace mlir;
@@ -50,7 +50,8 @@ bool DbAliasAnalysis::mayAlias(const NodeBase &a, const NodeBase &b,
   // Initial implementation: simple structural checks with slice comparison.
   bool result = true;
 
-  auto sliceOf = [&](const NodeBase &n) -> std::tuple<Value, SmallVector<int64_t>, SmallVector<int64_t>> {
+  auto sliceOf = [&](const NodeBase &n)
+      -> std::tuple<Value, SmallVector<int64_t>, SmallVector<int64_t>> {
     SmallVector<int64_t> offs, lens;
     Value root;
     if (auto *acq = dyn_cast<DbAcquireNode>(&n)) {
@@ -62,15 +63,20 @@ bool DbAliasAnalysis::mayAlias(const NodeBase &a, const NodeBase &b,
       lens.reserve(sizes.size());
       offs.reserve(offsets.size());
       for (Value v : offsets)
-        offs.push_back(v.getDefiningOp<mlir::arith::ConstantIndexOp>() ?
-                       v.getDefiningOp<mlir::arith::ConstantIndexOp>().value() : INT64_MIN);
+        offs.push_back(
+            v.getDefiningOp<mlir::arith::ConstantIndexOp>()
+                ? v.getDefiningOp<mlir::arith::ConstantIndexOp>().value()
+                : INT64_MIN);
       lens.reserve(sizes.size());
       for (Value v : sizes)
-        lens.push_back(v.getDefiningOp<mlir::arith::ConstantIndexOp>() ?
-                       v.getDefiningOp<mlir::arith::ConstantIndexOp>().value() : INT64_MIN);
+        lens.push_back(
+            v.getDefiningOp<mlir::arith::ConstantIndexOp>()
+                ? v.getDefiningOp<mlir::arith::ConstantIndexOp>().value()
+                : INT64_MIN);
     } else if (auto *rel = dyn_cast<DbReleaseNode>(&n)) {
       auto op = cast<DbReleaseOp>(rel->getOp());
-      if (!op.getSources().empty()) root = op.getSources()[0];
+      if (!op.getSources().empty())
+        root = op.getSources()[0];
       // Unknown slice for release; be conservative
       offs.assign(1, INT64_MIN);
       lens.assign(1, INT64_MIN);
@@ -87,10 +93,12 @@ bool DbAliasAnalysis::mayAlias(const NodeBase &a, const NodeBase &b,
   if (ra && rb && ra == rb) {
     // If both slices are constant and disjoint in all known dims → no alias.
     bool anyUnknown = false;
-    if (oa.size() == ob.size() && la.size() == lb.size() && oa.size() == la.size()) {
+    if (oa.size() == ob.size() && la.size() == lb.size() &&
+        oa.size() == la.size()) {
       bool disjoint = false;
       for (size_t i = 0; i < oa.size(); ++i) {
-        if (oa[i] == INT64_MIN || ob[i] == INT64_MIN || la[i] == INT64_MIN || lb[i] == INT64_MIN) {
+        if (oa[i] == INT64_MIN || ob[i] == INT64_MIN || la[i] == INT64_MIN ||
+            lb[i] == INT64_MIN) {
           anyUnknown = true;
           continue;
         }
@@ -99,7 +107,10 @@ bool DbAliasAnalysis::mayAlias(const NodeBase &a, const NodeBase &b,
         int64_t b0 = ob[i];
         int64_t b1 = ob[i] + lb[i];
         bool overlap = !(a1 <= b0 || b1 <= a0);
-        if (!overlap) { disjoint = true; break; }
+        if (!overlap) {
+          disjoint = true;
+          break;
+        }
       }
       if (!anyUnknown && disjoint) {
         result = false;
@@ -114,7 +125,8 @@ bool DbAliasAnalysis::mayAlias(const NodeBase &a, const NodeBase &b,
     if (acqA && acqB) {
       auto k = analysis->estimateOverlap(cast<DbAcquireOp>(acqA->getOp()),
                                          cast<DbAcquireOp>(acqB->getOp()));
-      if (k == DbAnalysis::OverlapKind::Disjoint) result = false;
+      if (k == DbAnalysis::OverlapKind::Disjoint)
+        result = false;
     }
   }
 
