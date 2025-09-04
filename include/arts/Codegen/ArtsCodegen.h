@@ -11,6 +11,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Location.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Types.h"
 #include "mlir/IR/Value.h"
 
@@ -26,13 +27,29 @@ public:
   ~ArtsCodegen();
 
   /// Getters
-  OpBuilder &getBuilder() { return builder; }
+  OpBuilder &getBuilder() { return activeRewriter ? *activeRewriter : builder; }
   ModuleOp &getModule() { return module; }
+
+  /// Rewriter management
+  void setRewriter(PatternRewriter *rewriter) { activeRewriter = rewriter; }
+  void clearRewriter() { activeRewriter = nullptr; }
+
+  /// RAII helper for managing rewriter context
+  class RewriterGuard {
+  public:
+    RewriterGuard(ArtsCodegen &ac, PatternRewriter &rewriter) : AC(ac) {
+      AC.setRewriter(&rewriter);
+    }
+    ~RewriterGuard() { AC.clearRewriter(); }
+
+  private:
+    ArtsCodegen &AC;
+  };
 
   /// Create an operation of specific op type at the current insertion point.
   template <typename OpTy, typename... Args>
   OpTy create(Location location, Args &&...args) {
-    return builder.create<OpTy>(location, std::forward<Args>(args)...);
+    return getBuilder().create<OpTy>(location, std::forward<Args>(args)...);
   }
 
   llvm::DataLayout &getLLVMDataLayout() {
@@ -93,10 +110,8 @@ public:
   Value castToLLVMPtr(Value source, Location loc);
 
   /// Memref helpers
-  Value computeMemrefElementSize(MemRefType memrefType, Location loc);
-  Value computeMemrefTotalElements(ValueRange sizes, Location loc);
-  Value createMemrefView(Value buffer, ValueRange sizes, ValueRange offsets,
-                         Type elementType, Location loc);
+  Value computeElementTypeSize(Type elementType, Location loc);
+  Value computeTotalElements(ValueRange sizes, Location loc);
 
   /// Loop construction helpers
   using NestedLoopBodyFn =
@@ -141,6 +156,7 @@ public:
 private:
   ModuleOp module;
   OpBuilder builder;
+  PatternRewriter *activeRewriter = nullptr;
   std::unique_ptr<llvm::DataLayout> llvmDL;
   std::unique_ptr<mlir::DataLayout> mlirDL;
   bool debug = false;

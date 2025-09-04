@@ -13,7 +13,7 @@
 /// - Datablocks live in heap memory. If a DB's source was stack-allocated,
 ///   we create a replacement DB allocation whose pointer result is a heap
 ///   pointer to the original memref (i.e., memref<memref<?xi8>>), effectively
-///   migrating the DB handle to the heap and making it opaque in one step.
+///   migrating the DB handle to the heap and making it opaque.
 /// - If the source was already heap/global, we only make the pointer opaque
 ///   (element type becomes i8) and preserve the shape.
 /// - In both cases, users of the DB pointer (EDTs, acquires/releases, loads/
@@ -55,11 +55,8 @@ private:
   /// Process all DB allocation operations
   void convertDbAllocOps();
 
-  /// Process all DB access operations (acquire/release)
-  void convertDbAccessOps();
-
-  /// Update all users of a DB operation
-  void updateUsers(Operation *oldOp, Operation *newOp);
+  /// Update all users of a DB allocation operation
+  void updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp);
 
 private:
   SetVector<Operation *> opsToRemove;
@@ -75,9 +72,8 @@ void NormalizeDbsPass::runOnOperation() {
   ARTS_DEBUG_HEADER(NormalizeDbs);
   ARTS_DEBUG_REGION(module.dump(););
 
-  /// Convert all DB operations to use opaque pointers
+  /// Convert all DB operations to use opaque pointers and update uses
   convertDbAllocOps();
-  convertDbAccessOps();
 
   /// Clean up old operations
   removeOps(module, AC->getBuilder(), opsToRemove);
@@ -88,161 +84,224 @@ void NormalizeDbsPass::runOnOperation() {
 
 /// Convert all DB allocation operations to use opaque pointers
 void NormalizeDbsPass::convertDbAllocOps() {
-  SmallVector<DbAllocOp, 8> oldAllocOps;
-  DenseMap<DbAllocOp, DbAllocOp> allocOpMap;
+  SmallVector<DbAllocOp, 8> allocOps;
 
-  /// Walk through all DbAllocOps and create replacement versions
-  module.walk([&](arts::DbAllocOp oldOp) -> mlir::WalkResult {
-    if (oldOp->hasAttr("newDb"))
-      return mlir::WalkResult::skip();
+  /// Collect all DbAllocOps
+  module.walk([&](arts::DbAllocOp allocOp) { allocOps.push_back(allocOp); });
 
+  if (allocOps.empty())
+    return;
+
+  /// Process each DbAllocOp
+  for (auto oldOp : allocOps) {
     AC->setInsertionPointAfter(oldOp);
 
-    /// Create new DbAllocOp with opaque pointer element type (memref<?xi8>)
+    /// Convert stack-backed allocations to heap and make ptr opaque
+    /// memref<?xi8>
     auto route = AC->createIntConstant(0, AC->Int32, oldOp.getLoc());
-    auto newOp = AC->create<DbAllocOp>(
-        oldOp.getLoc(), oldOp.getMode(), route, oldOp.getAllocType(),
-        oldOp.getDbMode(), AC->VoidPtr, oldOp.getAddress(), ValueRange{});
 
-    /// Copy attributes and mark as processed
-    newOp->setAttrs(oldOp->getAttrs());
-    newOp->setAttr("newDb", AC->getBuilder().getUnitAttr());
-
-    oldAllocOps.push_back(oldOp);
-    allocOpMap[oldOp] = newOp;
-    return mlir::WalkResult::advance();
-  });
-
-  if (allocOpMap.empty())
-    return;
-
-  /// Update all users and mark old operations for removal
-  for (auto oldOp : oldAllocOps) {
-    auto newOp = allocOpMap[oldOp];
-    updateUsers(oldOp.getOperation(), newOp.getOperation());
-    opsToRemove.insert(oldOp);
-  }
-}
-
-/// Convert all DB access operations (acquire/release) to use opaque pointers
-void NormalizeDbsPass::convertDbAccessOps() {
-  SmallVector<Operation *, 8> oldAccessOps;
-  DenseMap<Operation *, Operation *> accessOpMap;
-
-  /// Walk through all DB access operations
-  module.walk([&](Operation *op) -> mlir::WalkResult {
-    if (op->hasAttr("newDb"))
-      return mlir::WalkResult::skip();
-
-    AC->setInsertionPointAfter(op);
-
-    if (auto acquireOp = dyn_cast<DbAcquireOp>(op)) {
-      /// Create new DbAcquireOp with opaque pointer type
-      auto oldType = acquireOp.getPtr().getType().cast<MemRefType>();
-      auto newType = MemRefType::get(oldType.getShape(), AC->VoidPtr);
-      auto guidType = acquireOp.getGuid().getType();
-      auto newOp = AC->create<DbAcquireOp>(
-          acquireOp.getLoc(), TypeRange{guidType, newType}, acquireOp.getMode(),
-          acquireOp.getSource(), acquireOp.getIndices(), acquireOp.getOffsets(),
-          acquireOp.getSizes());
-
-      newOp->setAttrs(acquireOp->getAttrs());
-      newOp->setAttr("newDb", AC->getBuilder().getUnitAttr());
-
-      oldAccessOps.push_back(acquireOp);
-      accessOpMap[acquireOp] = newOp;
-
-    } else if (auto releaseOp = dyn_cast<DbReleaseOp>(op)) {
-      /// Create new DbReleaseOp
-      auto newOp =
-          AC->create<DbReleaseOp>(releaseOp.getLoc(), releaseOp.getSources());
-
-      newOp->setAttrs(releaseOp->getAttrs());
-      newOp->setAttr("newDb", AC->getBuilder().getUnitAttr());
-
-      oldAccessOps.push_back(releaseOp);
-      accessOpMap[releaseOp] = newOp;
+    SmallVector<Value> sizes(oldOp.getSizes().begin(), oldOp.getSizes().end());
+    SmallVector<Value> payloadSizes(oldOp.getPayloadSizes().begin(),
+                                    oldOp.getPayloadSizes().end());
+    if (Value addr = oldOp.getAddress()) {
+      if (auto mt = addr.getType().dyn_cast<MemRefType>()) {
+        if (mt.getRank() == 0 && sizes.empty())
+          sizes.push_back(AC->createIndexConstant(1, oldOp.getLoc()));
+      }
     }
 
-    return mlir::WalkResult::advance();
-  });
+    DbAllocType newAllocType = oldOp.getAllocType();
+    if (newAllocType == DbAllocType::stack)
+      newAllocType = DbAllocType::heap;
 
-  if (accessOpMap.empty())
-    return;
+    /// Build new DbAlloc controlling result shape: for scalar sources (rank 0)
+    /// omit the address so the builder uses 'sizes' (1D dynamic) for the ptr.
+    DbAllocOp newOp;
+    if (Value addr = oldOp.getAddress()) {
+      if (auto mt = addr.getType().dyn_cast<MemRefType>()) {
+        if (mt.getRank() == 0) {
+          newOp = AC->create<DbAllocOp>(
+              oldOp.getLoc(), oldOp.getMode(), route, newAllocType,
+              oldOp.getDbMode(), oldOp.getElementType(), sizes, payloadSizes);
+        } else {
+          newOp = AC->create<DbAllocOp>(oldOp.getLoc(), oldOp.getMode(), route,
+                                        newAllocType, oldOp.getDbMode(),
+                                        oldOp.getElementType(), addr, sizes,
+                                        payloadSizes);
+        }
+      } else {
+        newOp = AC->create<DbAllocOp>(
+            oldOp.getLoc(), oldOp.getMode(), route, newAllocType,
+            oldOp.getDbMode(), oldOp.getElementType(), sizes, payloadSizes);
+      }
+    } else {
+      newOp = AC->create<DbAllocOp>(
+          oldOp.getLoc(), oldOp.getMode(), route, newAllocType,
+          oldOp.getDbMode(), oldOp.getElementType(), sizes, payloadSizes);
+    }
 
-  /// Update all users and mark old operations for removal
-  for (auto oldOp : oldAccessOps) {
-    auto newOp = accessOpMap[oldOp];
     updateUsers(oldOp, newOp);
     opsToRemove.insert(oldOp);
   }
 }
 
 /// Update all users of an old DB operation to use the new one
-void NormalizeDbsPass::updateUsers(Operation *oldOp, Operation *newOp) {
-  /// Helper to get the pointer value from a DB operation
-  auto getPtrValue = [&](Operation *op) -> Value {
-    if (auto allocOp = dyn_cast<DbAllocOp>(op))
-      return allocOp.getPtr();
-    if (auto acquireOp = dyn_cast<DbAcquireOp>(op))
-      return acquireOp.getPtr();
-    /// fallback
-    return op->getResult(1);
+void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
+  bool isStackAlloc = oldAllocOp.getAllocType() == DbAllocType::stack;
+
+  Value oldPtr = oldAllocOp.getPtr();
+  Value newPtr = newAllocOp.getPtr();
+  assert(oldPtr && newPtr && "expected pointer values");
+
+  SmallVector<Value, 16> worklist;
+  SmallPtrSet<Value, 16> visited;
+  DenseMap<Value, bool> isStackAllocated;
+  DenseMap<Value, Value> ptrSource;
+
+  worklist.push_back(oldPtr);
+  visited.insert(oldPtr);
+  isStackAllocated[oldPtr] = isStackAlloc;
+  ptrSource[oldPtr] = newPtr;
+
+  SmallVector<std::pair<Block *, unsigned>, 8> blockArgsToErase;
+
+  /// Helper to enqueue a value for BFS with its stack flag and source ptr
+  auto enqueue = [&](Value v, bool stackFlag, Value src) {
+    if (visited.insert(v).second) {
+      worklist.push_back(v);
+      isStackAllocated[v] = stackFlag;
+      ptrSource[v] = src;
+    }
   };
 
-  /// Helper to get LLVM pointer, handling stack allocations specially
-  auto getLLVMPtr = [&](Location loc, Operation *op) -> Value {
-    Value ptrValue = getPtrValue(op);
-    Value llvmPtr = AC->castToLLVMPtr(ptrValue, loc);
+  auto computeLLVMPtrForMemrefUse = [&](Value ptrBase, ValueRange idx,
+                                        Location loc) -> Value {
+    Value targetPtr = ptrBase;
+    if (!idx.empty())
+      targetPtr =
+          AC->create<DbSubIndexOp>(loc, targetPtr.getType(), targetPtr, idx)
+              .getResult();
 
-    /// For stack allocations, load the pointer value
-    if (auto allocOp = dyn_cast<DbAllocOp>(op)) {
-      if (allocOp.getAllocType() == DbAllocType::stack)
-        return AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, llvmPtr);
-    }
+    auto it = isStackAllocated.find(ptrBase);
+    bool stack = (it != isStackAllocated.end()) ? it->second : false;
+
+    Value llvmPtr = AC->castToLLVMPtr(targetPtr, loc);
+    if (stack)
+      return AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, llvmPtr);
     return llvmPtr;
   };
 
-  /// Update all uses of the old operation
-  for (auto &use : llvm::make_early_inc_range(oldOp->getUses())) {
-    auto user = use.getOwner();
-    AC->setInsertionPoint(user);
+  auto rewriteLoad = [&](memref::LoadOp loadOp, Value basePtr) {
+    Location loc = loadOp.getLoc();
+    Value llvmPtr =
+        computeLLVMPtrForMemrefUse(basePtr, loadOp.getIndices(), loc);
+    auto newLoad =
+        AC->create<LLVM::LoadOp>(loc, loadOp.getResult().getType(), llvmPtr);
+    loadOp.getResult().replaceAllUsesWith(newLoad.getResult());
+    opsToRemove.insert(loadOp);
+  };
 
-    /// Handle different types of users
-    if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
-      /// Convert memref load to LLVM load
-      auto llvmPtr = getLLVMPtr(loadOp.getLoc(), newOp);
-      auto newLoad = AC->create<LLVM::LoadOp>(
-          loadOp.getLoc(), loadOp.getResult().getType(), llvmPtr);
-      loadOp.getResult().replaceAllUsesWith(newLoad.getResult());
-      opsToRemove.insert(loadOp);
+  auto rewriteStore = [&](memref::StoreOp storeOp, Value basePtr) {
+    Location loc = storeOp.getLoc();
+    Value llvmPtr =
+        computeLLVMPtrForMemrefUse(basePtr, storeOp.getIndices(), loc);
+    AC->create<LLVM::StoreOp>(loc, storeOp.getValueToStore(), llvmPtr);
+    opsToRemove.insert(storeOp);
+  };
 
-    } else if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
-      /// Convert memref store to LLVM store
-      auto llvmPtr = getLLVMPtr(storeOp.getLoc(), newOp);
-      AC->create<LLVM::StoreOp>(storeOp.getLoc(), storeOp.getValueToStore(),
-                                llvmPtr);
-      opsToRemove.insert(storeOp);
-    } else if (auto acquireUser = dyn_cast<DbAcquireOp>(user)) {
-      Value newPtr = getPtrValue(newOp);
-      use.set(newPtr);
+  auto queueBlockArgFollow = [&](Operation *user, unsigned operandIdx,
+                                 Value fromVal) {
+    if (user->getNumRegions() == 0)
+      return;
 
-    } else if (auto edtOp = dyn_cast<EdtOp>(user)) {
-      Value newPtr = getPtrValue(newOp);
-      Value oldPtr = getPtrValue(oldOp);
-      if (use.get() == oldPtr)
-        use.set(newPtr);
+    for (Region &region : user->getRegions()) {
+      if (region.empty())
+        continue;
+      Block &entry = region.front();
 
-    } else if (isa<DbReleaseOp>(user)) {
-      Value newPtr = getPtrValue(newOp);
-      Value oldPtr = getPtrValue(oldOp);
-      if (use.get() == oldPtr)
-        use.set(newPtr);
-    } else {
-      /// Unknown user type - this should not happen
-      user->emitError("Unsupported user of DB operation");
-      ARTS_ERROR("Unknown use of DB op: " << *user);
+      /// Adjust operand index for EDT operations (skip route parameter)
+      unsigned argIdx = operandIdx;
+      if (auto edtOp = dyn_cast<EdtOp>(user)) {
+        if (operandIdx == 0)
+          continue;              /// route parameter
+        argIdx = operandIdx - 1; /// dependencies start at 0 for block args
+      }
+
+      if (argIdx >= entry.getNumArguments())
+        continue;
+
+      Value oldArg = entry.getArgument(argIdx);
+      Type desiredType = newPtr.getType();
+      bool stackFlag = isStackAllocated.lookup(fromVal);
+
+      if (oldArg.getType() != desiredType) {
+        // Insert new argument with correct type and replace uses
+        Value newArg =
+            entry.insertArgument(argIdx, desiredType, oldArg.getLoc());
+        Value shiftedOldArg = entry.getArgument(argIdx + 1);
+        shiftedOldArg.replaceAllUsesWith(newArg);
+        enqueue(newArg, stackFlag, newArg);
+        blockArgsToErase.emplace_back(&entry, argIdx + 1);
+      } else {
+        enqueue(oldArg, stackFlag, oldArg);
+      }
     }
+  };
+
+  while (!worklist.empty()) {
+    Value cur = worklist.pop_back_val();
+    for (auto &use : llvm::make_early_inc_range(cur.getUses())) {
+      Operation *user = use.getOwner();
+      AC->setInsertionPoint(user);
+
+      if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+        if (loadOp.getMemref() == cur) {
+          Value src = ptrSource.lookup(cur);
+          assert(src && "expected pointer source for tracked value");
+          rewriteLoad(loadOp, src);
+        }
+      } else if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
+        if (storeOp.getMemref() == cur) {
+          Value src = ptrSource.lookup(cur);
+          assert(src && "expected pointer source for tracked value");
+          rewriteStore(storeOp, src);
+        }
+      } else if (auto acquireUser = dyn_cast<DbAcquireOp>(user)) {
+        /// Rebuild db_acquire so its result ptr type matches the updated source
+        auto loc = acquireUser.getLoc();
+        SmallVector<Value> idx(acquireUser.getIndices().begin(),
+                               acquireUser.getIndices().end());
+        SmallVector<Value> off(acquireUser.getOffsets().begin(),
+                               acquireUser.getOffsets().end());
+        SmallVector<Value> sz(acquireUser.getSizes().begin(),
+                              acquireUser.getSizes().end());
+        auto newAcquire = AC->create<DbAcquireOp>(loc, acquireUser.getMode(),
+                                                  newPtr, idx, off, sz);
+        acquireUser.getGuid().replaceAllUsesWith(newAcquire.getGuid());
+        acquireUser.getPtr().replaceAllUsesWith(newAcquire.getPtr());
+        opsToRemove.insert(acquireUser);
+
+        enqueue(newAcquire.getPtr(), isStackAllocated.lookup(cur), newPtr);
+      } else if (isa<EdtOp>(user)) {
+        queueBlockArgFollow(user, use.getOperandNumber(), cur);
+      } else if (isa<DbReleaseOp>(user)) {
+        // No-op: release will follow updated sources
+      } else if (isa<DbFreeOp>(user)) {
+        // No-op: free will follow updated sources
+      } else if (user->getNumRegions() > 0) {
+        queueBlockArgFollow(user, use.getOperandNumber(), cur);
+      } else {
+        llvm_unreachable("Unexpected operation");
+      }
+    }
+  }
+
+  /// Erase any old block arguments whose uses have been rewritten
+  for (auto &it : blockArgsToErase) {
+    Block *blk = it.first;
+    unsigned idx = it.second;
+    if (blk->getArgument(idx).use_empty())
+      blk->eraseArgument(idx);
   }
 }
 

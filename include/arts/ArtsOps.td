@@ -75,7 +75,8 @@ def DbAllocOp : Arts_Op<"db_alloc", [
     It allocates a DataBlock and returns its pointer and GUID.
     - mode: enum for "in", "out", "inout"
     - ptr: address that will be copied to the DataBlock
-    - sizes: sizes of the DataBlock
+    - sizes: outer sizes (number of datablocks along each dimension)
+    - payloadSizes: inner payload sizes used to compute datablock byte size
     - allocType: "stack", "heap", "global", "unknown" - tracks original allocation type
   }];
   let arguments = (ins
@@ -83,35 +84,44 @@ def DbAllocOp : Arts_Op<"db_alloc", [
     I32:$route,
     DbAllocTypeAttr:$allocType,
     DbModeAttr:$dbMode,
+    TypeAttr:$elementType,
     Optional<AnyMemRef>:$address,
-    Variadic<Index>:$sizes
+    Variadic<Index>:$sizes,
+    Variadic<Index>:$payloadSizes
   );
   let results = (outs MemRefOf<[I64]>:$guid, AnyMemRef:$ptr);
   let assemblyFormat = [{
     `[` $mode `,` $allocType `,` $dbMode `]`
     `route` `(` $route `:` type($route) `)`
     ( `(` $address^ `:` type($address) `)` )?
-    `[` $sizes `]`
+    `sizes` `[` $sizes `]`
+    `elementType` `(` $elementType `)`
+    `payloadSizes` `[` $payloadSizes `]`
     attr-dict `:` `(` type($guid) `,` type($ptr) `)`
   }];
   let builders = [
-    OpBuilder<(ins "ArtsMode":$mode,
-                   "DbMode":$dbMode,
-                   CArg<"Value", "nullptr">:$address,
-                   CArg<"SmallVector<Value>", "{}">:$sizes)>,
     OpBuilder<(ins "ArtsMode":$mode,
                    "Value":$route,
                    "DbAllocType":$allocType,
                    "DbMode":$dbMode,
                    CArg<"Value", "nullptr">:$address,
-                   CArg<"SmallVector<Value>", "{}">:$sizes)>,
+                   CArg<"SmallVector<Value>", "{}">:$sizes,
+                   CArg<"SmallVector<Value>", "{}">:$payloadSizes)>,
     OpBuilder<(ins "ArtsMode":$mode,
                    "Value":$route,
                    "DbAllocType":$allocType,
                    "DbMode":$dbMode,
                    "Type":$elementType,
                    CArg<"Value", "nullptr">:$address,
-                   CArg<"SmallVector<Value>", "{}">:$sizes)>
+                   CArg<"SmallVector<Value>", "{}">:$sizes,
+                   CArg<"SmallVector<Value>", "{}">:$payloadSizes)>,
+    OpBuilder<(ins "ArtsMode":$mode,
+                   "Value":$route,
+                   "DbAllocType":$allocType,
+                   "DbMode":$dbMode,
+                   "Type":$elementType,
+                   CArg<"SmallVector<Value>", "{}">:$sizes,
+                   CArg<"SmallVector<Value>", "{}">:$payloadSizes)>
   ];
 }
 
@@ -157,15 +167,34 @@ def DbReleaseOp : Arts_Op<"db_release", []> {
   let summary = "Releases access to an ARTS DataBlock source.";
   let description = [{
     This operation releases the acquired source, signaling completion to the runtime.
+    - release_type: specifies whether to perform memory freeing for dynamic allocations
   }];
-  let arguments = (ins Variadic<AnyMemRef>:$sources);
+  let arguments = (ins
+    Variadic<AnyMemRef>:$sources,
+    OptionalAttr<DbReleaseTypeAttr>:$release_type
+  );
   let assemblyFormat = [{
     $sources `:` type($sources) attr-dict
   }];
-  
+
   let builders = [
-    OpBuilder<(ins "Value":$source)>
+    OpBuilder<(ins "Value":$source)>,
+    OpBuilder<(ins "Value":$source, "DbReleaseType":$release_type)>
   ];
+}
+
+def DbFreeOp : Arts_Op<"db_free", []> {
+  let summary = "Frees a DataBlock allocated by arts.db_alloc.";
+  let description = [{
+    This operation frees a DataBlock that was previously allocated with arts.db_alloc.
+    It is used for memory management of dynamically allocated datablocks.
+  }];
+  let arguments = (ins
+    AnyMemRef:$source
+  );
+  let assemblyFormat = [{
+    $source `:` type($source) attr-dict
+  }];
 }
 
 def DbControlOp : Arts_Op<"db_control", 
@@ -217,9 +246,14 @@ def DbNumElementsOp : Arts_Op<"db_num_elements", [Pure]> {
     Computes the total number of elements in a datablock. This is used
     to calculate dependency counts for EDT creation.
   }];
-  let arguments = (ins AnyType:$db);
-  let results = (outs I32:$count);
-  let assemblyFormat = "$db attr-dict `:` type($db) `->` type($count)";
+  let arguments = (ins Variadic<Index>:$sizes);
+  let results = (outs Index:$count);
+  let assemblyFormat = "`sizes` `(` $sizes `)` attr-dict `:` `->` type($count)";
+
+  let builders = [
+    OpBuilder<(ins "DbAllocOp":$allocOp)>,
+    OpBuilder<(ins "DbAcquireOp":$acquireOp)>
+  ];
 }
 
 //===----------------------------------------------------------------------===//
@@ -424,7 +458,7 @@ def GetCurrentNodeOp : Arts_Op<"get_current_node",
 //===----------------------------------------------------------------------===//
 // EDT Lowering Operations
 //===----------------------------------------------------------------------===//
-def EdtCreateOp : Arts_Op<"edt_create", [Pure]> {
+def EdtCreateOp : Arts_Op<"edt_create", [MemoryEffects<[MemWrite]>]> {
   let summary = "Outlined EDT call with parameter pack and dependency count.";
   let description = [{
     Intermediate op for calling outlined EDT function with param array and total dependency count.
@@ -440,7 +474,7 @@ def EdtCreateOp : Arts_Op<"edt_create", [Pure]> {
   ];
 }
 
-def EdtParamPackOp : Arts_Op<"edt_param_pack", [Pure]> {
+def EdtParamPackOp : Arts_Op<"edt_param_pack", [MemoryEffects<[MemWrite]>]> {
   let summary = "Pack parameters into memref<?xi64>.";
   let description = [{
     Packs multiple parameters (cast to i64) into a memref for ARTS paramv.
@@ -471,7 +505,7 @@ def EdtDepUnpackOp : Arts_Op<"edt_dep_unpack", [Pure]> {
   let assemblyFormat = "$memref `:` type($memref) attr-dict `:` `(` type($unpacked) `)`";
 }
 
-def RecordInDepOp : Arts_Op<"record_in_dep", [Pure]> {
+def RecordInDepOp : Arts_Op<"record_in_dep", [MemoryEffects<[MemWrite]>]> {
   let summary = "Record in-dependencies for EDT.";
   let description = [{
     Records all in-dependencies (datablocks) for the EDT in order.
@@ -481,7 +515,7 @@ def RecordInDepOp : Arts_Op<"record_in_dep", [Pure]> {
   let assemblyFormat = "$edt_guid `(` $datablocks `:` type($datablocks) `)` attr-dict";
 }
 
-def IncrementOutLatchOp : Arts_Op<"increment_out_latch", [Pure]> {
+def IncrementOutLatchOp : Arts_Op<"increment_out_latch", [MemoryEffects<[MemWrite]>]> {
   let summary = "Increment out-latches for EDT dependencies.";
   let description = [{
     Increments latch count for all out-dependencies (datablocks) of the EDT.
