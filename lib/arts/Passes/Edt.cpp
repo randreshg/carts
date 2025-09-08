@@ -78,8 +78,8 @@ EdtOp EdtPass::createEdtWithMergedDepsAndRegion(
     allDeps.insert(dep);
 
   /// Create new EDT operation with merged dependencies
-  auto newEdt = builder.create<arts::EdtOp>(loc, newType, sourceOp.getRoute(),
-                                            allDeps.getArrayRef());
+  auto newEdt =
+      builder.create<arts::EdtOp>(loc, newType, allDeps.getArrayRef());
 
   /// Transfer region from source to new operation
   Region &sourceRegion = sourceOp.getRegion();

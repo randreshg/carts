@@ -225,7 +225,10 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   Value routeVal = edtOp.getRoute();
   if (!routeVal)
     routeVal = AC->createIntConstant(0, AC->Int32, loc);
+
+  /// Create the outline operation at the same location as the EDT
   auto outlineOp = AC->create<EdtCreateOp>(loc, paramPack, depCount, routeVal);
+
   outlineOp->setAttr("outlined_func",
                      AC->getBuilder().getStringAttr(outlinedFunc.getName()));
 
@@ -438,27 +441,30 @@ EdtLoweringPass::insertDependencyManagement(Location loc, Value edtGuid,
   if (deps.empty())
     return success();
 
-  /// Separate deps by mode
-  SmallVector<Value> inDeps, outDeps;
+  /// Separate deps by mode and extract GUIDs
+  SmallVector<Value> inDepGuids, outDepGuids;
 
   for (Value dep : deps) {
     auto dbAcquireOp = dep.getDefiningOp<DbAcquireOp>();
     assert(dbAcquireOp && "Dependencies must be DbAcquireOp operations");
 
+    /// Get the GUID from the DbAcquireOp
+    Value depGuid = dbAcquireOp.getGuid();
+
     ArtsMode mode = dbAcquireOp.getMode();
     if (mode == ArtsMode::in || mode == ArtsMode::inout)
-      inDeps.push_back(dep);
+      inDepGuids.push_back(depGuid);
     if (mode == ArtsMode::out || mode == ArtsMode::inout)
-      outDeps.push_back(dep);
+      outDepGuids.push_back(depGuid);
   }
 
-  /// Record all input deps at once
-  if (!inDeps.empty())
-    AC->create<RecordInDepOp>(loc, edtGuid, inDeps);
+  /// Record all input deps at once using GUIDs
+  if (!inDepGuids.empty())
+    AC->create<RecordInDepOp>(loc, edtGuid, inDepGuids);
 
-  /// Increment output latches for all deps at once
-  if (!outDeps.empty())
-    AC->create<IncrementOutLatchOp>(loc, edtGuid, outDeps);
+  /// Increment output latches for all deps at once using GUIDs
+  if (!outDepGuids.empty())
+    AC->create<IncrementOutLatchOp>(loc, edtGuid, outDepGuids);
 
   return success();
 }

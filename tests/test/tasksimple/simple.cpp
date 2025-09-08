@@ -7,16 +7,10 @@
 #include <time.h>
 /*
 carts cgeist simple.cpp -std=c++17 -fopenmp -O0 -S > simple.mlir
-
-carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --symbol-dce -debug-only=convert-openmp-to-arts &> simple-arts.mlir
-
-carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --symbol-dce &> simple-arts.mlir
-
-carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize --create-dbs --cse -debug-only=create-dbs &> simple-arts.mlir
-
-carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize --create-dbs  --canonicalize --db --canonicalize --cse -debug-only=db,db-analysis,db-alias-analysis,db-dataflow-analysis,db-info &> simple-arts.mlir
-
-carts opt simple.mlir --lower-affine --cse --polygeist-mem2reg --canonicalize --loop-invariant-code-motion --canonicalize --arts-inliner --convert-openmp-to-arts --edt --edt-invariant-code-motion --canonicalize --create-dbs --db --canonicalize --cse --polygeist-mem2reg --edt-pointer-rematerialization --create-epochs --canonicalize --preprocess-dbs --convert-arts-to-llvm --cse -debug-only=convert-arts-to-llvm,arts-codegen,edt-codegen,db-codegen &> simple-arts.mlir
+carts run simple.mlir --convert-openmp-to-arts -o simple-arts.mlir
+carts run simple-arts.mlir --edt-transforms -o simple-edt.mlir
+carts run simple-edt.mlir --create-dbs -o simple-db.mlir
+carts run simple.mlir --edt-lowering -o simple-llvm.mlir
 
 
 carts mlir-translate --mlir-to-llvmir simple-arts.mlir &> simple-arts.ll

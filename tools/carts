@@ -41,45 +41,77 @@ detect_os_paths() {
     fi
 }
 
+# Helper function for aligned output
+print_cmd() {
+    printf "  %-50s ## %s\n" "$1" "$2"
+}
+
 # Function to show usage
 show_usage() {
     echo "Usage: $0 <command> [options]"
     echo ""
     echo "Commands:"
-    echo "  build [options]  - Build CARTS project using system clang"
-    echo "  cgeist <file> [cgeist_options]  - Run cgeist with automatic include paths"
-    echo "  opt <file> [carts-opt_options]  - Run carts-opt"
-    echo "  run [options]  - Run the CARTS C++ executable"
-    echo "  mlir-translate <file> [mlir-translate_options]  - Run mlir-translate"
-    echo "  compile <file> [clang_options]  - Compile with ARTS runtime"
-    echo "  visualize <mlir> [--func name] [--concurrency] [-o out.dot]  - Export ARTS graphs"
-    echo "             add --json to emit JSON for interactive viewer"
-    echo "  benchmark [options]  - Run CARTS benchmarks"
-    echo "  visualize [options] - Launch interactive visualizer UI server"
-    echo "  setup [options]  - Set up CARTS environment"
-    echo "  clean              - Clean generated files in current directory"
-    echo "  check [options]    - Run CARTS test suite using llvm-lit"
-    echo "  execute <file> [options]  - Complete pipeline: C++ → executable"
+    print_cmd "build [options]"             "Build CARTS project using system clang"
+    print_cmd "cgeist <file> [options]"     "Run cgeist with automatic include paths"
+    print_cmd "opt <file> [options]"        "Run carts-opt"
+    print_cmd "run [options]"               "Run CARTS MLIR transformations"
+    print_cmd "mlir-translate <file> [options]" "Run mlir-translate"
+    print_cmd "compile <file> [options]"    "Compile with ARTS runtime"
+    print_cmd "visualize <mlir> [options]"  "Export ARTS graphs or launch visualizer UI"
+    print_cmd "benchmark [options]"         "Run CARTS benchmarks"
+    print_cmd "setup [options]"             "Set up CARTS environment"
+    print_cmd "clean"                       "Clean generated files in current directory"
+    print_cmd "check [options]"             "Run CARTS test suite using llvm-lit"
+    print_cmd "execute <file> [options]"    "Complete pipeline: C++ → executable"
+    
+    echo ""
+    echo "Pipeline Options (for 'run' command):"
+    print_cmd "--complete"                   "Run complete pipeline (default)"
+    print_cmd "--simplify"                   "Stop after initial cleanup and simplification"
+    print_cmd "--arts-inliner"               "Stop after ARTS inliner"
+    print_cmd "--convert-openmp"             "Stop after OpenMP conversion"
+    print_cmd "--edt-transforms"             "Stop after EDT transformations"
+    print_cmd "--edt-lowering"               "Stop after EDT lowering"
+    print_cmd "--datablock"                  "Stop after datablock creation and optimization"
+    print_cmd "--epochs"                     "Stop after epoch creation"
+    print_cmd "--arts-to-llvm"               "Stop after ARTS to LLVM conversion"
+    print_cmd "--emit-llvm"                  "Emit LLVM IR output (can be used with any stage)"
+    
     echo ""
     echo "Examples:"
-    echo "  $0 build                    # Build CARTS project (default)"
-    echo "  $0 build --clean           # Clean build"
-    echo "  $0 build --arts            # Build only ARTS components"
-    echo "  $0 build --polygeist       # Build only Polygeist"
-    echo "  $0 build --llvm            # Build only LLVM"
-    echo "  $0 cgeist simple.cpp -std=c++17 -fopenmp -O0 -S > simple.mlir"
-    echo "  $0 opt simple.mlir --lower-affine --cse --polygeist-mem2reg"
-    echo "  $0 run --help"
-    echo "  $0 compile simple-arts.ll -o simple"
-    echo "  $0 benchmark --target_examples matrixmul"
-    echo "  $0 report --help"
-    echo "  $0 setup                    # Setup CARTS environment"
-    echo "  $0 setup --add-to-path     # Add carts to PATH"
-    echo "  $0 setup --deps-only       # Install dependencies only"
-    echo "  $0 clean                    # Clean generated files"
-    echo "  $0 check                    # Run all CARTS tests"
-    echo "  $0 check --suite arts      # Run only ARTS tests"
-    echo "  $0 execute simple.cpp -o simple  # Complete pipeline"
+    echo "  # Build commands"
+    print_cmd "carts build"                    "Build CARTS project (default)"
+    print_cmd "carts build --clean"           "Clean and build"
+    print_cmd "carts build --arts"            "Build only ARTS components"
+    print_cmd "carts build --polygeist"       "Build only Polygeist"
+    print_cmd "carts build --llvm"            "Build only LLVM"
+    
+    echo ""
+    echo "  # Compilation pipeline"
+    print_cmd "carts cgeist simple.cpp -std=c++17 -fopenmp -O0 -S" "Convert C++ to MLIR"
+    print_cmd "carts run simple.mlir --complete --emit-llvm" "Full pipeline to LLVM"
+    print_cmd "carts run simple.mlir --convert-openmp --emit-llvm" "Stop after OpenMP conversion"
+    print_cmd "carts compile simple.ll -o simple" "Compile LLVM to executable"
+    print_cmd "carts execute simple.cpp -o simple" "Complete pipeline: C++ → executable"
+    
+    echo ""
+    echo "  # Development and testing"
+    print_cmd "carts opt simple.mlir --lower-affine --cse" "Apply MLIR optimizations"
+    print_cmd "carts run --help"               "Show pipeline options"
+    print_cmd "carts check"                    "Run all CARTS tests"
+    print_cmd "carts check --suite arts"      "Run only ARTS tests"
+    print_cmd "carts clean"                    "Clean generated files"
+    
+    echo ""
+    echo "  # Environment setup"
+    print_cmd "carts setup"                    "Setup CARTS environment"
+    print_cmd "carts setup --add-to-path"     "Add carts to PATH"
+    print_cmd "carts setup --deps-only"       "Install dependencies only"
+    
+    echo ""
+    echo "  # Benchmarking"
+    print_cmd "carts benchmark --target_examples matrixmul" "Run matrix multiplication benchmark"
+    
     echo ""
     echo "Environment variables:"
     echo "  CARTS_INSTALL_DIR - Override installation directory (default: .install)"
@@ -211,7 +243,7 @@ run_compile() {
         echo "Command: $clang_path ${library_paths[*]} ${libraries[*]} $input_file $*"
     fi
     
-    "$clang_path" "${library_paths[@]}" "${libraries[@]}" "$input_file" "$@"
+    "$clang_path" -O3 -g0 "${library_paths[@]}" "${libraries[@]}" "$input_file" "$@"
 }
 
 # Function to run benchmark tool
@@ -586,10 +618,10 @@ run_execute() {
     # Step 2: MLIR to LLVM IR with ARTS transformations
     echo "Step 2: Applying ARTS transformations and converting to LLVM IR..."
     if [[ -n "$original_verbose" ]]; then
-        echo "Running: carts run ${base_name}.mlir --O3 --arts-opt --emit-llvm > ${base_name}-arts.ll"
+        echo "Running: carts run ${base_name}.mlir --O3 --emit-llvm > ${base_name}-arts.ll"
     fi
     
-    if ! carts run "${base_name}.mlir" --O3 --arts-opt --emit-llvm > "${base_name}-arts.ll"; then
+    if ! carts run "${base_name}.mlir" --O3 --emit-llvm > "${base_name}-arts.ll"; then
         echo "Error: Failed to apply ARTS transformations"
         exit 1
     fi

@@ -125,8 +125,10 @@ Value CreateDbsPass::getUnderlyingObject(Value v) {
     Operation *owner = block->getParentOp();
     if (auto edt = dyn_cast<EdtOp>(owner)) {
       unsigned argIndex = v.cast<BlockArgument>().getArgNumber();
-      Value operand = edt.getOperand(argIndex);
-      return getUnderlyingObject(operand);
+      if (argIndex < edt.getNumOperands()) {
+        Value operand = edt.getOperand(argIndex);
+        return getUnderlyingObject(operand);
+      }
     }
     /// Function argument
     return v;
@@ -135,7 +137,7 @@ Value CreateDbsPass::getUnderlyingObject(Value v) {
     if (auto dbAlloc = dyn_cast<DbAllocOp>(op))
       return getUnderlyingObject(dbAlloc.getAddress());
     if (auto dbAcquire = dyn_cast<DbAcquireOp>(op))
-      return getUnderlyingObject(dbAcquire.getSource());
+      return getUnderlyingObject(dbAcquire.getSourcePtr());
     if (isa<memref::AllocOp, memref::AllocaOp, memref::GetGlobalOp>(op))
       return v;
     if (auto subview = dyn_cast<memref::SubViewOp>(op))
@@ -507,9 +509,18 @@ void CreateDbsPass::processEdtDependencies(EdtOp edt, OpBuilder &builder,
     builder.setInsertionPoint(edt);
     DepInfo info = computeDepInfo(builder, edt, base, source, analysis);
 
-    /// Create acquire operation
-    DbAcquireOp acquire = builder.create<DbAcquireOp>(
-        edt.getLoc(), info.mode, source, info.pinned, info.offsets, info.sizes);
+    /// Create acquire operation (pass both source guid and ptr)
+    Value sourceGuid;
+    if (auto allocOp = source.getDefiningOp<DbAllocOp>())
+      sourceGuid = allocOp.getGuid();
+    else if (auto acqOp = source.getDefiningOp<DbAcquireOp>())
+      sourceGuid = acqOp.getGuid();
+
+    assert((sourceGuid && source) && "Source guid and ptr must be non-null");
+
+    DbAcquireOp acquire =
+        builder.create<DbAcquireOp>(edt.getLoc(), info.mode, sourceGuid, source,
+                                    info.pinned, info.offsets, info.sizes);
 
     /// Add dependency to EDT
     SmallVector<Value> newOperands;

@@ -269,7 +269,7 @@ void DbGraph::collectNodes() {
 DbAllocOp DbGraph::findRootAllocOp(Operation *op) {
   Value source;
   if (auto acquireOp = dyn_cast<DbAcquireOp>(op))
-    source = acquireOp.getSource();
+    source = acquireOp.getSourcePtr();
   else if (auto releaseOp = dyn_cast<DbReleaseOp>(op))
     source = releaseOp.getSources()[0];
   else
@@ -280,13 +280,12 @@ DbAllocOp DbGraph::findRootAllocOp(Operation *op) {
   while (depth < maxChainDepth) {
     if (auto allocOp = source.getDefiningOp<DbAllocOp>())
       return allocOp;
-    if (auto chainedAcquireOp = source.getDefiningOp<DbAcquireOp>()) {
-      source = chainedAcquireOp.getSource();
-    } else if (auto chainedReleaseOp = source.getDefiningOp<DbReleaseOp>()) {
+    if (auto chainedAcquireOp = source.getDefiningOp<DbAcquireOp>())
+      source = chainedAcquireOp.getSourcePtr();
+    else if (auto chainedReleaseOp = source.getDefiningOp<DbReleaseOp>())
       source = chainedReleaseOp.getSources()[0];
-    } else {
+    else
       break;
-    }
     depth++;
   }
   return nullptr;
@@ -294,10 +293,10 @@ DbAllocOp DbGraph::findRootAllocOp(Operation *op) {
 
 void DbGraph::buildDependencies() {
   ARTS_INFO("Phase 2 - Building dependencies");
-  // Use the dataflow analysis from the analysis instead of directly accessing
-  // the solver
+  /// Use the dataflow analysis from the analysis instead of directly accessing
+  /// the solver
   if (!dataFlowAnalysis) {
-    // Get the dataflow analysis from the analysis
+    /// Get the dataflow analysis from the analysis
     dataFlowAnalysis = analysis->getDataFlowAnalysis();
     if (dataFlowAnalysis) {
       dataFlowAnalysis->initialize(this, analysis);
@@ -305,7 +304,7 @@ void DbGraph::buildDependencies() {
   }
 
   if (dataFlowAnalysis) {
-    // Execute the solver over this function to run the analysis
+    /// Execute the solver over this function to run the analysis
     (void)analysis->getSolver().initializeAndRun(func);
     ARTS_INFO("Phase 2 - Data flow analysis finished");
   } else {
@@ -318,14 +317,12 @@ void DbGraph::computeOpOrder() {
   func.walk([&](Operation *op) { opOrder[op] = idx++; });
 }
 
-// removed unused helper extractConstVector
-
 uint64_t DbGraph::getElementTypeByteSize(Type elemTy) {
   if (auto intTy = dyn_cast<IntegerType>(elemTy))
     return intTy.getWidth() / 8u;
   if (auto fTy = dyn_cast<FloatType>(elemTy))
     return fTy.getWidth() / 8u;
-  return 0; // unknown
+  return 0; /// unknown
 }
 
 bool DbGraph::isConstantIndex(Value v, int64_t &cst) {
@@ -342,13 +339,13 @@ void DbGraph::computeMetrics() {
   peakBytes = 0;
   reuseCandidates.clear();
 
-  // Gather intervals per alloc
+  /// Gather intervals per alloc
   for (const auto &pair : allocNodes) {
     DbAllocOp alloc = pair.first;
     DbAllocMetrics M;
     M.allocIndex = getOrder(alloc.getOperation());
     M.staticBytes = 0;
-    // Compute static bytes if memref shape is all-constant
+    /// Compute static bytes if memref shape is all-constant
     if (auto memTy = dyn_cast<MemRefType>(alloc.getPtr().getType())) {
       if (memTy.hasStaticShape()) {
         uint64_t bytes = getElementTypeByteSize(memTy.getElementType());
@@ -365,11 +362,11 @@ void DbGraph::computeMetrics() {
     }
 
     DbAllocNode *allocNode = pair.second.get();
-    // Enumerate children to find intervals
+    /// Enumerate children to find intervals
     SmallVector<AcquireInterval, 8> ivs;
     allocNode->forEachChildNode([&](NodeBase *child) {
       if (auto *acq = dyn_cast<DbAcquireNode>(child)) {
-        // Find matching release edge among out edges leading to a release node
+        /// Find matching release edge among out edges leading to a release node
         DbReleaseNode *matchedRelease = nullptr;
         for (auto *edge : acq->getOutEdges()) {
           if (auto *life = dyn_cast<DbLifetimeEdge>(edge)) {
@@ -385,7 +382,7 @@ void DbGraph::computeMetrics() {
           I.endIndex = getOrder(I.release.getOperation());
         } else {
           I.release = nullptr;
-          I.endIndex = I.beginIndex; // unknown; treat as minimal
+          I.endIndex = I.beginIndex; /// unknown; treat as minimal
         }
         ivs.push_back(I);
         ++M.numAcquires;
@@ -394,18 +391,18 @@ void DbGraph::computeMetrics() {
         ++M.numReleases;
       }
     });
-    // Sort intervals by begin
+    /// Sort intervals by begin
     llvm::sort(ivs, [&](const AcquireInterval &a, const AcquireInterval &b) {
       return a.beginIndex < b.beginIndex;
     });
-    // Compute alloc-level end index (last release)
+    /// Compute alloc-level end index (last release)
     unsigned lastEnd = M.allocIndex;
     for (auto &iv : ivs)
       lastEnd = std::max(lastEnd, iv.endIndex);
     M.endIndex = lastEnd;
     M.intervals = std::move(ivs);
-    // Approximate per-alloc critical span and total access bytes using
-    // DbAnalysis slice info (best-effort)
+    /// Approximate per-alloc critical span and total access bytes using
+    /// DbAnalysis slice info (best-effort)
     M.criticalSpan = 0;
     if (!M.intervals.empty()) {
       unsigned minB = M.intervals.front().beginIndex;
@@ -416,7 +413,7 @@ void DbGraph::computeMetrics() {
       }
       M.criticalSpan = maxE >= minB ? (maxE - minB + 1) : 0;
     }
-    // Precise critical path (sum of disjoint durations after merging overlaps)
+    /// Precise critical path (sum of disjoint durations after merging overlaps)
     SmallVector<std::pair<unsigned, unsigned>, 8> segs;
     for (auto &iv : M.intervals)
       segs.emplace_back(iv.beginIndex, iv.endIndex);
@@ -443,7 +440,7 @@ void DbGraph::computeMetrics() {
     }
     if (initialized)
       M.criticalPath += (curE - curS + 1);
-    // Sum estimated bytes per interval (unknown treated as 0)
+    /// Sum estimated bytes per interval (unknown treated as 0)
     M.totalAccessBytes = 0;
     for (auto &iv : M.intervals) {
       if (iv.acquire) {
@@ -451,7 +448,7 @@ void DbGraph::computeMetrics() {
         M.totalAccessBytes += info.estimatedBytes;
       }
     }
-    // Loop-aware depth (best-effort; require LoopAnalysis to be present)
+    /// Loop-aware depth (best-effort; require LoopAnalysis to be present)
     if (auto *LA = analysis->getLoopAnalysis()) {
       unsigned depthMax = 0;
       for (auto &iv : M.intervals) {
@@ -463,15 +460,15 @@ void DbGraph::computeMetrics() {
       }
       M.maxLoopDepth = depthMax;
     }
-    // Long lived if covers > 70% of function order span
+    /// Long lived if covers > 70% of function order span
     unsigned firstIdx = M.allocIndex;
     unsigned lastIdx = opOrder.empty() ? 0u : (unsigned)opOrder.size() - 1;
     if (lastIdx > 0) {
       M.isLongLived =
           (double)(M.endIndex - firstIdx + 1) / (double)(lastIdx + 1) > 0.7;
     }
-    // Escaping if the alloc result is returned or passed to unknown calls
-    // (approx)
+    /// Escaping if the alloc result is returned or passed to unknown calls
+    /// (approx)
     M.maybeEscaping = false;
     for (Operation *user : alloc.getPtr().getUsers()) {
       if (!isa<DbAcquireOp>(user) && !isa<DbReleaseOp>(user)) {
@@ -482,7 +479,7 @@ void DbGraph::computeMetrics() {
     allocMetrics[alloc] = std::move(M);
   }
 
-  // Sweep-line over intervals for peak
+  /// Sweep-line over intervals for peak
   struct Event {
     unsigned idx;
     int delta;
@@ -510,7 +507,7 @@ void DbGraph::computeMetrics() {
     peakBytes = std::max<uint64_t>(peakBytes, liveBytes);
   }
 
-  // Simple reuse candidates: non-overlapping alloc lifetimes with same bytes
+  /// Simple reuse candidates: non-overlapping alloc lifetimes with same bytes
   SmallVector<DbAllocOp, 16> allocs;
   for (auto &kv : allocMetrics)
     allocs.push_back(kv.first);
@@ -536,7 +533,7 @@ void DbGraph::computeReuseColoring() {
   SmallVector<DbAllocOp, 16> allocs;
   for (auto &kv : allocMetrics)
     allocs.push_back(kv.first);
-  // Sort by descending weight: bigger and longer-lived first
+  /// Sort by descending weight: bigger and longer-lived first
   llvm::sort(allocs, [&](DbAllocOp a, DbAllocOp b) {
     const auto &A = allocMetrics[a];
     const auto &B = allocMetrics[b];
@@ -576,10 +573,10 @@ void DbGraph::computeReuseColoring() {
 
 void DbGraph::exportToJson(llvm::raw_ostream &os) const {
   os << "{\n";
-  // Summary
+  /// Summary
   os << "  \"summary\": { \"peakLiveDbs\": " << peakLiveDbs
      << ", \"peakBytes\": " << peakBytes << " },\n";
-  // Allocs
+  /// Allocs
   os << "  \"allocs\": [\n";
   bool first = true;
   for (const auto &kv : allocMetrics) {
@@ -615,7 +612,7 @@ void DbGraph::exportToJson(llvm::raw_ostream &os) const {
     os << "    }";
   }
   os << "\n  ],\n";
-  // Reuse candidates
+  /// Reuse candidates
   os << "  \"reuseCandidates\": [\n";
   for (size_t i = 0; i < reuseCandidates.size(); ++i) {
     auto A = reuseCandidates[i].first;
@@ -627,7 +624,7 @@ void DbGraph::exportToJson(llvm::raw_ostream &os) const {
        << (i + 1 < reuseCandidates.size() ? "," : "") << "\n";
   }
   os << "  ],\n";
-  // Coloring groups
+  /// Coloring groups
   os << "  \"reuseColoring\": {\n";
   bool firstColor = true;
   for (auto &cg : colorGroups) {
@@ -649,15 +646,15 @@ void DbGraph::exportToJson(llvm::raw_ostream &os) const {
 }
 
 GraphBase::ChildIterator DbGraph::childBegin(NodeBase *node) {
-  // For now, return empty iterator
-  // TODO: Implement proper child iteration
+  /// For now, return empty iterator
+  /// TODO: Implement proper child iteration
   static std::vector<NodeBase *> emptyChildren;
   return emptyChildren.begin();
 }
 
 GraphBase::ChildIterator DbGraph::childEnd(NodeBase *node) {
-  // For now, return empty iterator
-  // TODO: Implement proper child iteration
+  /// For now, return empty iterator
+  /// TODO: Implement proper child iteration
   static std::vector<NodeBase *> emptyChildren;
   return emptyChildren.end();
 }
