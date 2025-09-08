@@ -432,29 +432,19 @@ struct EdtDepUnpackPattern : public ArtsToLLVMPattern<EdtDepUnpackOp> {
     auto results = op.getUnpacked();
     auto loc = op.getLoc();
 
-    /// Get the size of the ArtsEdtDep struct
-    auto depStructSize = AC->create<polygeist::TypeSizeOp>(
-        loc, AC->getBuilder().getIndexType(), AC->ArtsEdtDep);
-
-    /// Convert depMemref to LLVM pointer for GEP operations
-    auto depMemrefPtr = AC->castToLLVMPtr(depMemref, loc);
+    /// Convert depMemref to a typed LLVM pointer: ptr to ArtsEdtDep
+    auto rawPtr = AC->castToLLVMPtr(depMemref, loc);
+    auto typedPtrTy = LLVM::LLVMPointerType::get(AC->ArtsEdtDep);
+    auto typedPtr = AC->create<LLVM::BitcastOp>(loc, typedPtrTy, rawPtr);
 
     SmallVector<Value> newResults;
     for (unsigned i = 0; i < results.size(); ++i) {
-      /// Calculate memory offset: i * depStructSize
-      auto idx = AC->createIndexConstant(i, loc);
-      auto offset = AC->create<arith::MulIOp>(loc, idx, depStructSize);
-      auto intOffset = AC->castToInt(AC->PtrSize, offset, loc);
-
-      /// Use GEP to access the dependency struct
+      /// GEP to the i-th ArtsEdtDep and load that struct
+      auto idx = AC->createIntConstant(i, AC->Int32, loc);
       auto depStructPtr = AC->create<LLVM::GEPOp>(
-          loc, AC->llvmPtr, AC->PtrSize, depMemrefPtr, ValueRange{intOffset});
+          loc, typedPtrTy, AC->ArtsEdtDep, typedPtr, ValueRange{idx});
 
-      /// Load the struct from the pointer
-      auto resultType = results[i].getType();
-      auto depStruct = AC->create<LLVM::LoadOp>(loc, resultType, depStructPtr);
-
-      newResults.push_back(depStruct);
+      newResults.push_back(depStructPtr);
     }
 
     rewriter.replaceOp(op, newResults);
@@ -473,14 +463,25 @@ struct DepGetPtrOpPattern : public ArtsToLLVMPattern<DepGetPtrOp> {
     auto depStruct = op.getDepStruct();
     auto loc = op.getLoc();
 
-    /// Extract the actual pointer from the EDT dependency structure
-    auto actualPtr = AC->getPtrFromEdtDep(depStruct, loc);
+    /// depStruct is a pointer to ArtsEdtDep. GEP [0, 2] to the pointer field,
+    /// then load the actual pointer value.
+    auto typedDepPtrTy = LLVM::LLVMPointerType::get(AC->ArtsEdtDep);
+    Value typedDepPtr = depStruct;
+    if (depStruct.getType() != typedDepPtrTy)
+      typedDepPtr = AC->create<LLVM::BitcastOp>(loc, typedDepPtrTy, depStruct);
 
+    /// Compute address of dep.ptr (field #2)
+    auto c0 = AC->createIntConstant(0, AC->Int32, loc);
+    auto c2 = AC->createIntConstant(2, AC->Int32, loc);
+    auto ptrPtrTy = LLVM::LLVMPointerType::get(AC->llvmPtr);
+    auto fieldPtr = AC->create<LLVM::GEPOp>(loc, ptrPtrTy, typedDepPtrTy,
+                                            typedDepPtr, ValueRange{c0, c2});
+    // auto actualPtr =
+    //     AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, fieldPtr.getResult());
     /// Convert the raw pointer to a memref using polygeist helper
     auto resultType = op.getPtr().getType();
     auto memrefResult =
-        AC->create<polygeist::Pointer2MemrefOp>(loc, resultType, actualPtr);
-
+        AC->create<polygeist::Pointer2MemrefOp>(loc, resultType, fieldPtr);
     rewriter.replaceOp(op, memrefResult);
     return success();
   }
@@ -498,8 +499,17 @@ struct DepGetGuidOpPattern : public ArtsToLLVMPattern<DepGetGuidOp> {
     auto loc = op.getLoc();
 
     /// Extract the GUID from the EDT dependency structure
-    auto guid = AC->getGuidFromEdtDep(depStruct, loc);
-    rewriter.replaceOp(op, guid);
+    auto typedDepPtrTy = LLVM::LLVMPointerType::get(AC->ArtsEdtDep);
+    Value typedDepPtr = depStruct;
+    if (depStruct.getType() != typedDepPtrTy)
+      typedDepPtr = AC->create<LLVM::BitcastOp>(loc, typedDepPtrTy, depStruct);
+
+    auto c0 = AC->createIntConstant(0, AC->Int32, loc);
+    auto guidPtr = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, typedDepPtrTy,
+                                           typedDepPtr, ValueRange{c0, c0});
+    auto guid =
+        AC->create<LLVM::LoadOp>(loc, AC->ArtsGuid, guidPtr.getResult());
+    rewriter.replaceOp(op, guid.getResult());
     return success();
   }
 };
@@ -857,7 +867,6 @@ struct AllocPattern : public ArtsToLLVMPattern<AllocOp> {
     return success();
   }
 };
-
 
 //===----------------------------------------------------------------------===//
 // Terminator Patterns

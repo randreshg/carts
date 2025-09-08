@@ -78,9 +78,7 @@ ArtsCodegen::ArtsCodegen(ModuleOp &module, llvm::DataLayout &llvmDL,
   collectGlobalLLVMStrings();
 }
 
-ArtsCodegen::~ArtsCodegen() {
-  ARTS_DEBUG_FOOTER(ArtsCodegen);
-}
+ArtsCodegen::~ArtsCodegen() { ARTS_DEBUG_FOOTER(ArtsCodegen); }
 
 func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
   auto cacheIt = runtimeFunctionCache.find(FnID);
@@ -237,29 +235,6 @@ Value ArtsCodegen::createEpoch(Value finishEdtGuid, Value finishEdtSlot,
 }
 
 /// Utils
-// Value ArtsCodegen::getGuidFromEdtDep(Value dep, Location loc) {
-//   const auto zeroInt = createIntConstant(0, Int32, loc);
-//   auto guidValue = builder.create<LLVM::GEPOp>(loc, llvmPtr, ArtsEdtDep, dep,
-//                                                ValueRange{zeroInt, zeroInt});
-//   return builder.create<LLVM::LoadOp>(loc, ArtsGuid, guidValue.getResult());
-// }
-
-// Value ArtsCodegen::getPtrFromEdtDep(Value dep, Location loc) {
-//   const auto zeroInt = createIntConstant(0, Int32, loc);
-//   const auto twoInt = createIntConstant(2, Int32, loc);
-//   auto gepOp = builder.create<LLVM::GEPOp>(loc, llvmPtr, ArtsEdtDep, dep,
-//                                            ValueRange{zeroInt, twoInt});
-//   return builder.create<LLVM::LoadOp>(loc, VoidPtr, gepOp.getResult());
-// }
-
-Value ArtsCodegen::getGuidFromEdtDep(Value dep, Location loc) {
-  return create<LLVM::ExtractValueOp>(loc, dep, ArrayRef<int64_t>{0});
-}
-
-Value ArtsCodegen::getPtrFromEdtDep(Value dep, Location loc) {
-  return create<LLVM::ExtractValueOp>(loc, dep, ArrayRef<int64_t>{2});
-}
-
 Value ArtsCodegen::getCurrentEpochGuid(Location loc) {
   return createRuntimeCall(ARTSRTL_artsGetCurrentEpochGuid, {}, loc)
       .getResult(0);
@@ -601,8 +576,8 @@ Value ArtsCodegen::getOrCreateGlobalLLVMString(Location loc, StringRef value) {
 
 void ArtsCodegen::createPrintfCall(Location loc, llvm::StringRef format,
                                    ValueRange args) {
-  if (!debug)
-    return;
+  // if (!debug)
+  //   return;
 
   /// Create the printf function declaration if it doesn't exist
   auto printfFn = module.lookupSymbol<LLVM::LLVMFuncOp>("printf");
@@ -647,7 +622,6 @@ void ArtsCodegen::setInsertionPointAfter(Operation *op) {
 void ArtsCodegen::setInsertionPoint(ModuleOp &module) {
   getBuilder().setInsertionPointToStart(module.getBody());
 }
-
 
 //===----------------------------------------------------------------------===//
 // Memref helpers
