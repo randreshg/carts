@@ -112,6 +112,8 @@ public:
   /// Memref helpers
   Value computeElementTypeSize(Type elementType, Location loc);
   Value computeTotalElements(ValueRange sizes, Location loc);
+  Value computeLinearIndex(ArrayRef<Value> sizes, ArrayRef<Value> indices,
+                           Location loc);
 
   /// Loop construction helpers
   using NestedLoopBodyFn =
@@ -134,11 +136,6 @@ public:
   void setInsertionPointToStart(Block *block);
   void setInsertionPointAfter(Operation *op);
   void setInsertionPoint(ModuleOp &module);
-
-  /// Replacement map
-  void addReplacement(Value original, Value newValue, Region *region = nullptr);
-  void applyReplacements(Region *region);
-  void applyReplacements();
 
 /// Types
 ///{
@@ -164,14 +161,11 @@ private:
   /// Other Attributes
   llvm::DenseMap<RuntimeFunction, func::FuncOp> runtimeFunctionCache;
   llvm::StringMap<LLVM::GlobalOp> llvmStringGlobals;
-  llvm::DenseMap<Region *, llvm::DenseMap<Value, Value>> replacementMap;
 
   /// Helper functions
   void initializeTypes();
   LogicalResult extractDataLayouts();
-
-  /// Aux
-  Region emptyRegion;
+  void applyRuntimeFunctionAttributes(func::FuncOp funcOp, RuntimeFunction fnID);
 };
 
 } // namespace arts

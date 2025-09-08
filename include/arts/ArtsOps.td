@@ -140,7 +140,8 @@ def DbAcquireOp : Arts_Op<"db_acquire",
   }];
   let arguments = (ins
     ArtsModeAttr:$mode,
-    AnyMemRef:$source,
+    AnyMemRef:$source_guid,
+    AnyMemRef:$source_ptr,
     Variadic<Index>:$indices,
     Variadic<Index>:$offsets,
     Variadic<Index>:$sizes
@@ -148,15 +149,16 @@ def DbAcquireOp : Arts_Op<"db_acquire",
   let results = (outs MemRefOf<[I64]>:$guid, AnyMemRef:$ptr);
   let assemblyFormat = [{
     `[` $mode `]`
-    $source
+    $source_guid `,` $source_ptr
     ( `(` $indices^ `)` )?
     ( `[` $offsets^ `,` $sizes `]` )?
-    attr-dict `:` `(` type($source) `)` `->` `(` type($guid) `,` type($ptr) `)`
+    attr-dict `:` `(` type($source_guid) `,` type($source_ptr) `)` `->` `(` type($guid) `,` type($ptr) `)`
   }];
 
   let builders = [
     OpBuilder<(ins "ArtsMode":$mode,
-                   "Value":$source,
+                   "Value":$source_guid,
+                   "Value":$source_ptr,
                    CArg<"SmallVector<Value>", "{}">:$indices,
                    CArg<"SmallVector<Value>", "{}">:$offsets,
                    CArg<"SmallVector<Value>", "{}">:$sizes)>
@@ -333,12 +335,14 @@ def EpochOp : Arts_Op<"epoch",
   let summary = "Epoch region in ARTS";
   let description = [{
     An ARTS epoch region. It can spawn multiple tasks and
-    synchronize them at the end of the epoch.
+    synchronize them at the end of the epoch. Returns the epoch GUID
+    for use by contained EDTs.
   }];
   let regions = (region SizedRegion<1>:$body);
+  let results = (outs I64:$epochGuid);
 
   let assemblyFormat = [{
-    attr-dict-with-keyword $body
+    attr-dict-with-keyword $body `:` type($epochGuid)
   }];
 }
 
@@ -463,14 +467,16 @@ def EdtCreateOp : Arts_Op<"edt_create", [MemoryEffects<[MemWrite]>]> {
   let description = [{
     Intermediate op for calling outlined EDT function with param array and total dependency count.
     The depCount is the sum of number of elements of all dependencies.
+    Optional epochGuid parameter for EDT creation with specific epoch.
     Returns EDT guid.
   }];
-  let arguments = (ins AnyMemRef:$param_memref, I32:$depCount, I32:$route);
+  let arguments = (ins AnyMemRef:$param_memref, I32:$depCount, I32:$route, Optional<I64>:$epochGuid);
   let results = (outs I64:$guid);
-  let assemblyFormat = "`(` $param_memref `:` type($param_memref) `,` $depCount `,` $route `)` attr-dict";
+  let assemblyFormat = "`(` $param_memref `:` type($param_memref) `,` $depCount `,` $route `)` (`epoch` `(` $epochGuid^ `:` type($epochGuid) `)`)? attr-dict";
 
   let builders = [
-    OpBuilder<(ins "Value":$param_memref, "Value":$depCount)>
+    OpBuilder<(ins "Value":$param_memref, "Value":$depCount)>,
+    OpBuilder<(ins "Value":$param_memref, "Value":$depCount, "Value":$epochGuid)>
   ];
 }
 
