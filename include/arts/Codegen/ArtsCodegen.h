@@ -77,8 +77,6 @@ public:
   Value createEpoch(Value finishEdtGuid, Value finishEdtSlot, Location loc);
 
   /// Utility functions
-  Value getGuidFromEdtDep(Value dep, Location loc);
-  Value getPtrFromEdtDep(Value dep, Location loc);
   Value getCurrentEpochGuid(Location loc);
   Value getCurrentEdtGuid(Location loc);
   Value getTotalWorkers(Location loc);
