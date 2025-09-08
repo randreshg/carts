@@ -1,4 +1,4 @@
-// RUN: %carts opt %s --convert-db-to-opaque-ptr | %filecheck %s --check-prefix=OPAQUE
+// RUN: %carts opt %s --normalize-dbs | %filecheck %s --check-prefix=OPAQUE
 
 // Test that DB to opaque pointer conversion makes DBs compatible with ARTS runtime
 

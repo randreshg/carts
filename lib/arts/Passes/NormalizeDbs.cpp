@@ -55,6 +55,16 @@ private:
   /// Process all DB allocation operations
   void convertDbAllocOps();
 
+  /// Create the replacement DbAlloc operation for a given source alloc.
+  /// Decides the builder overload based on whether the address operand is a
+  /// scalar memref (rank 0) or a shaped memref, and ensures sizes/payloadSizes
+  /// are threaded correctly. For stack-backed sources, the alloc type is
+  /// switched to heap so the pointer result is heap-resident.
+  DbAllocOp createNormalizedAlloc(DbAllocOp oldOp, Value route,
+                                  SmallVector<Value> &sizes,
+                                  SmallVector<Value> &payloadSizes,
+                                  DbAllocType newAllocType);
+
   /// Update all users of a DB allocation operation
   void updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp);
 
@@ -84,65 +94,63 @@ void NormalizeDbsPass::runOnOperation() {
 
 /// Convert all DB allocation operations to use opaque pointers
 void NormalizeDbsPass::convertDbAllocOps() {
-  SmallVector<DbAllocOp, 8> allocOps;
+  SmallVector<DbAllocOp, 8> dbAllocOps;
 
   /// Collect all DbAllocOps
-  module.walk([&](arts::DbAllocOp allocOp) { allocOps.push_back(allocOp); });
+  module.walk([&](arts::DbAllocOp allocOp) { dbAllocOps.push_back(allocOp); });
 
-  if (allocOps.empty())
+  if (dbAllocOps.empty())
     return;
 
   /// Process each DbAllocOp
-  for (auto oldOp : allocOps) {
+  for (auto oldOp : dbAllocOps) {
     AC->setInsertionPointAfter(oldOp);
 
-    /// Convert stack-backed allocations to heap and make ptr opaque
-    /// memref<?xi8>
+    /// Convert stack-backed allocations to heap and make the pointer opaque
     auto route = AC->createIntConstant(0, AC->Int32, oldOp.getLoc());
 
     SmallVector<Value> sizes(oldOp.getSizes().begin(), oldOp.getSizes().end());
     SmallVector<Value> payloadSizes(oldOp.getPayloadSizes().begin(),
                                     oldOp.getPayloadSizes().end());
-    if (Value addr = oldOp.getAddress()) {
-      if (auto mt = addr.getType().dyn_cast<MemRefType>()) {
+    if (Value addr = oldOp.getAddress())
+      if (auto mt = addr.getType().dyn_cast<MemRefType>())
         if (mt.getRank() == 0 && sizes.empty())
           sizes.push_back(AC->createIndexConstant(1, oldOp.getLoc()));
-      }
-    }
 
     DbAllocType newAllocType = oldOp.getAllocType();
     if (newAllocType == DbAllocType::stack)
       newAllocType = DbAllocType::heap;
 
-    /// Build new DbAlloc controlling result shape: for scalar sources (rank 0)
-    /// omit the address so the builder uses 'sizes' (1D dynamic) for the ptr.
-    DbAllocOp newOp;
-    if (Value addr = oldOp.getAddress()) {
-      if (auto mt = addr.getType().dyn_cast<MemRefType>()) {
-        if (mt.getRank() == 0) {
-          newOp = AC->create<DbAllocOp>(
-              oldOp.getLoc(), oldOp.getMode(), route, newAllocType,
-              oldOp.getDbMode(), oldOp.getElementType(), sizes, payloadSizes);
-        } else {
-          newOp = AC->create<DbAllocOp>(oldOp.getLoc(), oldOp.getMode(), route,
-                                        newAllocType, oldOp.getDbMode(),
-                                        oldOp.getElementType(), addr, sizes,
-                                        payloadSizes);
-        }
-      } else {
-        newOp = AC->create<DbAllocOp>(
-            oldOp.getLoc(), oldOp.getMode(), route, newAllocType,
-            oldOp.getDbMode(), oldOp.getElementType(), sizes, payloadSizes);
-      }
-    } else {
-      newOp = AC->create<DbAllocOp>(
-          oldOp.getLoc(), oldOp.getMode(), route, newAllocType,
-          oldOp.getDbMode(), oldOp.getElementType(), sizes, payloadSizes);
-    }
+    DbAllocOp newOp =
+        createNormalizedAlloc(oldOp, route, sizes, payloadSizes, newAllocType);
 
     updateUsers(oldOp, newOp);
     opsToRemove.insert(oldOp);
   }
+}
+
+DbAllocOp NormalizeDbsPass::createNormalizedAlloc(
+    DbAllocOp oldOp, Value route, SmallVector<Value> &sizes,
+    SmallVector<Value> &payloadSizes, DbAllocType newAllocType) {
+  /// If address is a scalar memref, omit it so the builder uses sizes for ptr
+  if (Value addr = oldOp.getAddress()) {
+    if (auto mt = addr.getType().dyn_cast<MemRefType>()) {
+      if (mt.getRank() == 0) {
+        return AC->create<DbAllocOp>(
+            oldOp.getLoc(), oldOp.getMode(), route, newAllocType,
+            oldOp.getDbMode(), oldOp.getElementType(), sizes, payloadSizes);
+      }
+      return AC->create<DbAllocOp>(
+          oldOp.getLoc(), oldOp.getMode(), route, newAllocType,
+          oldOp.getDbMode(), oldOp.getElementType(), addr, sizes, payloadSizes);
+    }
+    return AC->create<DbAllocOp>(oldOp.getLoc(), oldOp.getMode(), route,
+                                 newAllocType, oldOp.getDbMode(),
+                                 oldOp.getElementType(), sizes, payloadSizes);
+  }
+  return AC->create<DbAllocOp>(oldOp.getLoc(), oldOp.getMode(), route,
+                               newAllocType, oldOp.getDbMode(),
+                               oldOp.getElementType(), sizes, payloadSizes);
 }
 
 /// Update all users of an old DB operation to use the new one
@@ -174,8 +182,10 @@ void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
     }
   };
 
-  auto computeLLVMPtrForMemrefUse = [&](Value ptrBase, ValueRange idx,
-                                        Location loc) -> Value {
+  /// Helper to cast a DB pointer to an LLVM pointer
+  /// - If stack-allocated, load the pointer from memory
+  /// - If heap-allocated, return the pointer directly
+  auto getLLVMPtr = [&](Value ptrBase, ValueRange idx, Location loc) -> Value {
     Value targetPtr = ptrBase;
     if (!idx.empty())
       targetPtr =
@@ -191,24 +201,8 @@ void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
     return llvmPtr;
   };
 
-  auto rewriteLoad = [&](memref::LoadOp loadOp, Value basePtr) {
-    Location loc = loadOp.getLoc();
-    Value llvmPtr =
-        computeLLVMPtrForMemrefUse(basePtr, loadOp.getIndices(), loc);
-    auto newLoad =
-        AC->create<LLVM::LoadOp>(loc, loadOp.getResult().getType(), llvmPtr);
-    loadOp.getResult().replaceAllUsesWith(newLoad.getResult());
-    opsToRemove.insert(loadOp);
-  };
-
-  auto rewriteStore = [&](memref::StoreOp storeOp, Value basePtr) {
-    Location loc = storeOp.getLoc();
-    Value llvmPtr =
-        computeLLVMPtrForMemrefUse(basePtr, storeOp.getIndices(), loc);
-    AC->create<LLVM::StoreOp>(loc, storeOp.getValueToStore(), llvmPtr);
-    opsToRemove.insert(storeOp);
-  };
-
+  /// Helper to rewire operations using the DB pointer to use the new pointer,
+  /// and queue block arguments to rewrite after the pointer is updated
   auto queueBlockArgFollow = [&](Operation *user, unsigned operandIdx,
                                  Value fromVal) {
     if (user->getNumRegions() == 0)
@@ -219,23 +213,28 @@ void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
         continue;
       Block &entry = region.front();
 
-      /// Adjust operand index for EDT operations (skip route parameter)
+      /// Map operand index to block argument index for EDT dependencies using
+      /// ODS segments
       unsigned argIdx = operandIdx;
       if (auto edtOp = dyn_cast<EdtOp>(user)) {
-        if (operandIdx == 0)
-          continue;              /// route parameter
-        argIdx = operandIdx - 1; /// dependencies start at 0 for block args
+        auto [depsBegin, depsLen] =
+            edtOp.getODSOperandIndexAndLength(/*dependencies*/ 1);
+        /// If it's before the dependencies segment (i.e., the route), skip
+        if (operandIdx < depsBegin)
+          continue;
+        /// If it's beyond the dependencies segment, skip as well
+        if (operandIdx >= depsBegin + depsLen)
+          continue;
+        /// Dependencies map 1:1 to block arguments starting at index 0
+        argIdx = operandIdx - depsBegin;
       }
-
-      if (argIdx >= entry.getNumArguments())
-        continue;
 
       Value oldArg = entry.getArgument(argIdx);
       Type desiredType = newPtr.getType();
       bool stackFlag = isStackAllocated.lookup(fromVal);
 
       if (oldArg.getType() != desiredType) {
-        // Insert new argument with correct type and replace uses
+        /// Insert new argument with correct type and replace uses
         Value newArg =
             entry.insertArgument(argIdx, desiredType, oldArg.getLoc());
         Value shiftedOldArg = entry.getArgument(argIdx + 1);
@@ -248,6 +247,8 @@ void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
     }
   };
 
+  /// Rebuild various uses of the DB pointer (load, store, etc.) and queue
+  /// block arguments to rewrite after the pointer is updated
   while (!worklist.empty()) {
     Value cur = worklist.pop_back_val();
     for (auto &use : llvm::make_early_inc_range(cur.getUses())) {
@@ -258,25 +259,38 @@ void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
         if (loadOp.getMemref() == cur) {
           Value src = ptrSource.lookup(cur);
           assert(src && "expected pointer source for tracked value");
-          rewriteLoad(loadOp, src);
+          Value llvmPtr = getLLVMPtr(src, loadOp.getIndices(), loadOp.getLoc());
+          auto newLoad = AC->create<LLVM::LoadOp>(
+              loadOp.getLoc(), loadOp.getResult().getType(), llvmPtr);
+          loadOp.getResult().replaceAllUsesWith(newLoad.getResult());
+          opsToRemove.insert(loadOp);
         }
       } else if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
         if (storeOp.getMemref() == cur) {
           Value src = ptrSource.lookup(cur);
           assert(src && "expected pointer source for tracked value");
-          rewriteStore(storeOp, src);
+          Value llvmPtr =
+              getLLVMPtr(src, storeOp.getIndices(), storeOp.getLoc());
+          AC->create<LLVM::StoreOp>(storeOp.getLoc(), storeOp.getValueToStore(),
+                                    llvmPtr);
+          opsToRemove.insert(storeOp);
         }
       } else if (auto acquireUser = dyn_cast<DbAcquireOp>(user)) {
-        /// Rebuild db_acquire so its result ptr type matches the updated source
         auto loc = acquireUser.getLoc();
-        SmallVector<Value> idx(acquireUser.getIndices().begin(),
-                               acquireUser.getIndices().end());
-        SmallVector<Value> off(acquireUser.getOffsets().begin(),
-                               acquireUser.getOffsets().end());
-        SmallVector<Value> sz(acquireUser.getSizes().begin(),
-                              acquireUser.getSizes().end());
-        auto newAcquire = AC->create<DbAcquireOp>(loc, acquireUser.getMode(),
-                                                  newPtr, idx, off, sz);
+        SmallVector<Value> indices(acquireUser.getIndices().begin(),
+                                   acquireUser.getIndices().end());
+        SmallVector<Value> offsets(acquireUser.getOffsets().begin(),
+                                   acquireUser.getOffsets().end());
+        SmallVector<Value> sizes(acquireUser.getSizes().begin(),
+                                 acquireUser.getSizes().end());
+        Value srcGuid;
+        if (auto allocOp = newPtr.getDefiningOp<DbAllocOp>())
+          srcGuid = allocOp.getGuid();
+        else if (auto acqSrc = newPtr.getDefiningOp<DbAcquireOp>())
+          srcGuid = acqSrc.getGuid();
+        auto newAcquire =
+            AC->create<DbAcquireOp>(loc, acquireUser.getMode(), srcGuid, newPtr,
+                                    indices, offsets, sizes);
         acquireUser.getGuid().replaceAllUsesWith(newAcquire.getGuid());
         acquireUser.getPtr().replaceAllUsesWith(newAcquire.getPtr());
         opsToRemove.insert(acquireUser);
@@ -285,9 +299,9 @@ void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
       } else if (isa<EdtOp>(user)) {
         queueBlockArgFollow(user, use.getOperandNumber(), cur);
       } else if (isa<DbReleaseOp>(user)) {
-        // No-op: release will follow updated sources
+        continue;
       } else if (isa<DbFreeOp>(user)) {
-        // No-op: free will follow updated sources
+        continue;
       } else if (user->getNumRegions() > 0) {
         queueBlockArgFollow(user, use.getOperandNumber(), cur);
       } else {

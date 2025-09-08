@@ -87,22 +87,19 @@ arts-download:
 	mkdir -p $(ARTS_DIR)
 	git clone --recursive https://github.com/randreshg/ARTS.git $(ARTS_DIR)
 arts:
-	@if [ -f "$(ARTS_INSTALL_DIR)/lib/libarts-api.so" ]; then \
-		echo "ARTS already installed. Skipping build."; \
-	else \
-		echo "Building ARTS..."; \
-		mkdir -p $(ARTS_BUILD_DIR); \
-		mkdir -p $(ARTS_INSTALL_DIR); \
-		cmake -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) \
-			-DCMAKE_C_COMPILER=clang \
-			-DCMAKE_CXX_COMPILER=clang++ \
-			-DCMAKE_BUILD_TYPE=Release \
-			-DSMART_DB=ON \
-			-DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR) \
-			-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
-		make -C $(ARTS_BUILD_DIR) install -j; \
-	fi
+	echo "Building ARTS..."; \
+	mkdir -p $(ARTS_BUILD_DIR); \
+	mkdir -p $(ARTS_INSTALL_DIR); \
+	cmake -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) \
+		-DCMAKE_C_COMPILER=clang \
+		-DCMAKE_CXX_COMPILER=clang++ \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DSMART_DB=ON \
+		-DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR) \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
+	make -C $(ARTS_BUILD_DIR) install -j;
 arts-debug:
+	echo "Building ARTS Debug..."; \
 	mkdir -p $(ARTS_BUILD_DIR)
 	mkdir -p $(ARTS_INSTALL_DIR)
 	cmake -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) \

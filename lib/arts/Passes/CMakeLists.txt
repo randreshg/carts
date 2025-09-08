@@ -10,6 +10,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   Db.cpp
   CreateEpochs.cpp
   ConvertArtsToLLVM.cpp
+  EpochLowering.cpp
   EdtLowering.cpp
   EdtPtrRematerialization.cpp
   EdtInvariantCodeMotion.cpp

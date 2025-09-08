@@ -146,6 +146,19 @@ def EdtPtrRematerialization : Pass<"edt-ptr-rematerialization", "mlir::ModuleOp"
   let constructor = "mlir::arts::createEdtPtrRematerializationPass()";
 }
 
+def EpochLowering : Pass<"epoch-lowering", "mlir::ModuleOp"> {
+  let summary = "Lower ARTS epochs and propagate epoch GUIDs to EDTs";
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "LLVM::LLVMDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "arith::ArithDialect",
+    "polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::arts::createEpochLoweringPass()";
+}
+
 def EdtLowering : Pass<"edt-lowering", "mlir::ModuleOp"> {
   let summary = "Lower ARTS EDTs to LLVM";
   let dependentDialects = [

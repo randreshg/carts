@@ -61,8 +61,6 @@ static cl::opt<std::string> OutputFilename("o", cl::desc("Output filename"),
                                            cl::value_desc("filename"),
                                            cl::init("-"));
 
-static cl::opt<bool> ArtsOpt("arts-opt", cl::desc("Apply ARTS Optimizations"),
-                             cl::init(false));
 
 static cl::opt<bool> Opt("O3", cl::desc("Apply Optimizations"),
                          cl::init(false));
@@ -154,8 +152,18 @@ void initializeContext(MLIRContext &context) {
   context.getOrLoadDialect<mlir::polygeist::PolygeistDialect>();
   context.getOrLoadDialect<mlir::cf::ControlFlowDialect>();
 
+  /// Register all necessary interfaces for LLVM conversion
   LLVM::LLVMFunctionType::attachInterface<MemRefInsider>(context);
+  LLVM::LLVMArrayType::attachInterface<MemRefInsider>(context);
   LLVM::LLVMPointerType::attachInterface<MemRefInsider>(context);
+  LLVM::LLVMStructType::attachInterface<MemRefInsider>(context);
+  MemRefType::attachInterface<PtrElementModel<MemRefType>>(context);
+  LLVM::LLVMStructType::attachInterface<PtrElementModel<LLVM::LLVMStructType>>(
+      context);
+  LLVM::LLVMPointerType::attachInterface<
+      PtrElementModel<LLVM::LLVMPointerType>>(context);
+  LLVM::LLVMArrayType::attachInterface<PtrElementModel<LLVM::LLVMArrayType>>(
+      context);
   LLVM::LLVMArrayType::attachInterface<MemRefInsider>(context);
   LLVM::LLVMStructType::attachInterface<MemRefInsider>(context);
   MemRefType::attachInterface<PtrElementModel<MemRefType>>(context);
@@ -212,14 +220,46 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     pm.addPass(arts::createCreateEpochsPass());
     pm.addPass(arts::createNormalizeDbsPass());
     pm.addPass(arts::createEdtLoweringPass());
+    pm.addPass(arts::createEpochLoweringPass());
     pm.addPass(arts::createConvertArtsToLLVMPass(Debug));
-
     if (mlir::failed(pm.run(module))) {
       llvm::errs() << "Error running CARTS pipeline";
       module->dump();
       return;
     }
-    return;
+
+    /// Optimizations (if enabled)
+    if (Opt) {
+      PassManager pm2(&context);
+      mlir::OpPassManager &optPM = pm2.nest<mlir::func::FuncOp>();
+      optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+      optPM.addPass(createControlFlowSinkPass());
+      optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+      optPM.addPass(createLoopInvariantCodeMotionPass());
+      optPM.addPass(createCSEPass());
+      optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+
+      if (mlir::failed(pm2.run(module))) {
+        llvm::errs() << "Error when running optimizations";
+        module->dump();
+        return;
+      }
+    }
+
+    /// LLVM IR conversion (if enabled)
+    if (EmitLLVM) {
+      PassManager pm3(&context);
+      pm3.addPass(createCSEPass());
+      pm3.addPass(polygeist::createPolygeistCanonicalizePass());
+      pm3.addPass(polygeist::createConvertPolygeistToLLVMPass());
+      pm3.addPass(polygeist::createPolygeistCanonicalizePass());
+      pm3.addPass(createCSEPass());
+      if (mlir::failed(pm3.run(module))) {
+        llvm::errs() << "Error when emitting LLVM IR";
+        module->dump();
+        return;
+      }
+    }
   }
 
   /// Initial cleanup and simplification
@@ -345,6 +385,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     PassManager pm(&context);
     pm.addPass(arts::createNormalizeDbsPass());
     pm.addPass(arts::createEdtLoweringPass());
+    pm.addPass(arts::createEpochLoweringPass());
     pm.addPass(createCSEPass());
     pm.addPass(createMem2Reg());
     if (mlir::failed(pm.run(module))) {
@@ -376,39 +417,6 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
 
   if (stopAt == PipelineStage::ArtsToLLVM)
     return;
-
-  /// Optimizations (if enabled)
-  if (Opt) {
-    PassManager pm2(&context);
-    mlir::OpPassManager &optPM = pm2.nest<mlir::func::FuncOp>();
-    optPM.addPass(polygeist::createPolygeistCanonicalizePass());
-    optPM.addPass(createControlFlowSinkPass());
-    optPM.addPass(polygeist::createPolygeistCanonicalizePass());
-    optPM.addPass(createLoopInvariantCodeMotionPass());
-    optPM.addPass(createCSEPass());
-    optPM.addPass(polygeist::createPolygeistCanonicalizePass());
-
-    if (mlir::failed(pm2.run(module))) {
-      llvm::errs() << "Error when running optimizations";
-      module->dump();
-      return;
-    }
-  }
-
-  /// LLVM IR conversion (if enabled)
-  if (EmitLLVM) {
-    PassManager pm3(&context);
-    pm3.addPass(createCSEPass());
-    pm3.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm3.addPass(polygeist::createConvertPolygeistToLLVMPass());
-    pm3.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm3.addPass(createCSEPass());
-    if (mlir::failed(pm3.run(module))) {
-      llvm::errs() << "Error when emitting LLVM IR";
-      module->dump();
-      return;
-    }
-  }
 }
 
 //===----------------------------------------------------------------------===//

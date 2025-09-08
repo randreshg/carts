@@ -15,6 +15,7 @@
 #include "mlir/Support/LLVM.h"
 #include "polygeist/Dialect.h"
 #include "polygeist/Ops.h"
+#include "llvm/IR/Attributes.h"
 /// Other
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -57,6 +58,7 @@ using namespace mlir::scf;
 /// ARTS Codegen
 ArtsCodegen::ArtsCodegen(ModuleOp module, bool debug)
     : module(module), builder(OpBuilder(module->getContext())), debug(debug) {
+  ARTS_DEBUG_HEADER(ArtsCodegen);
   if (failed(extractDataLayouts())) {
     mlir::emitError(module.getLoc()) << "Failed to extract data layouts";
     llvm_unreachable("Failed to extract data layouts");
@@ -77,12 +79,7 @@ ArtsCodegen::ArtsCodegen(ModuleOp &module, llvm::DataLayout &llvmDL,
 }
 
 ArtsCodegen::~ArtsCodegen() {
-  // for (auto &db : dbAllocs)
-  //   delete db.second;
-  // // for (auto &db : dbDeps)
-  // //   delete db.second;
-  // for (auto &edt : edts)
-  //   delete edt.second;
+  ARTS_DEBUG_FOOTER(ArtsCodegen);
 }
 
 func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
@@ -110,6 +107,8 @@ func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
       funcOp->setAttr("llvm.linkage",                                          \
                       LLVM::LinkageAttr::get(getBuilder().getContext(),        \
                                              LLVM::Linkage::External));        \
+      /* Apply function attributes for optimization */                         \
+      applyRuntimeFunctionAttributes(funcOp, Enum);                            \
     }                                                                          \
     break;                                                                     \
   }
@@ -124,6 +123,50 @@ func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
   /// Cache the function for future use
   runtimeFunctionCache[FnID] = funcOp;
   return funcOp;
+}
+
+void ArtsCodegen::applyRuntimeFunctionAttributes(func::FuncOp funcOp,
+                                                 RuntimeFunction fnID) {
+  /// Apply function attributes based on ARTS runtime function properties
+  auto unitAttr = getBuilder().getUnitAttr();
+
+  /// Helper to apply MLIR attributes from a list of attribute names
+  auto applyMLIRAttrs = [&](ArrayRef<StringRef> attrNames) {
+    for (StringRef attrName : attrNames)
+      funcOp->setAttr(attrName, unitAttr);
+  };
+
+  /// Helper to apply argument attributes from a list of attribute names
+  auto applyArgMLIRAttrs = [&](unsigned argIndex,
+                               ArrayRef<StringRef> attrNames) {
+    for (StringRef attrName : attrNames)
+      funcOp.setArgAttr(argIndex, attrName, unitAttr);
+  };
+
+  /// Define attribute sets
+#define ARTS_ATTRS_SET(VarName, AttrList)                                      \
+  SmallVector<StringRef> VarName = AttrList;
+#include "arts/Codegen/ArtsKinds.def"
+
+  /// Add attributes to the function declaration
+  switch (fnID) {
+#define ARTS_RTL_ATTRS(Enum, FnAttrSet, RetAttrSet, ArgAttrSets)               \
+  case Enum:                                                                   \
+    applyMLIRAttrs(FnAttrSet);                                                 \
+    /* Apply argument attributes */                                            \
+    for (size_t ArgNo = 0; ArgNo < ArgAttrSets.size(); ++ArgNo)                \
+      applyArgMLIRAttrs(ArgNo, ArgAttrSets[ArgNo]);                            \
+    break;
+#define ARTS_RTL_FUNCTIONS
+#define ARTS_RTL(Enum, Name, ReturnType, ...) /// No-op, we only want attributes
+#define ParamAttrs(...) SmallVector<SmallVector<StringRef>>({__VA_ARGS__})
+#include "arts/Codegen/ArtsKinds.def"
+#undef ParamAttrs
+#undef ARTS_RTL
+#undef ARTS_RTL_FUNCTIONS
+    /// All cases handled by .def file
+  }
+#undef ARTS_RTL_ATTRS
 }
 
 void ArtsCodegen::initializeTypes() {
@@ -336,6 +379,9 @@ func::FuncOp ArtsCodegen::insertArtsMainFn(Location loc,
   /// Create the entry block.
   auto *entryBlock = newFn.addEntryBlock();
   getBuilder().setInsertionPointToStart(entryBlock);
+
+  /// Debug: Print that artsMain is being called
+  createPrintfCall(loc, "DEBUG: artsMain function called!\n", {});
 
   /// Insert call to 'artsRT' function
   auto callArgs = ValueRange{};
@@ -602,27 +648,6 @@ void ArtsCodegen::setInsertionPoint(ModuleOp &module) {
   getBuilder().setInsertionPointToStart(module.getBody());
 }
 
-void ArtsCodegen::addReplacement(Value original, Value newValue,
-                                 Region *region) {
-  replacementMap[region ? region : &emptyRegion][original] = newValue;
-}
-
-void ArtsCodegen::applyReplacements(Region *region) {
-  assert(region && "Region must be provided");
-  replaceInRegion(*region, replacementMap[region]);
-}
-
-void ArtsCodegen::applyReplacements() {
-  ARTS_INFO("Applying " << replacementMap.size() << " delayed replacements");
-
-  for (auto &region : replacementMap) {
-    if (region.first == &emptyRegion)
-      replaceUses(region.second);
-    else
-      replaceInRegion(*region.first, region.second);
-  }
-  replacementMap.clear();
-}
 
 //===----------------------------------------------------------------------===//
 // Memref helpers
@@ -644,6 +669,31 @@ Value ArtsCodegen::computeTotalElements(ValueRange sizes, Location loc) {
   for (size_t i = 1; i < sizes.size(); ++i)
     total = create<arith::MulIOp>(loc, total, sizes[i]);
   return total;
+}
+
+Value ArtsCodegen::computeLinearIndex(ArrayRef<Value> sizes,
+                                      ArrayRef<Value> indices, Location loc) {
+  /// Convert multi-dimensional indices to linear index for 1D memref
+  /// Formula: linear_index = i0 * (size1 * size2 * ... * sizeN) +
+  ///                        i1 * (size2 * size3 * ... * sizeN) +
+  ///                        ...
+  ///                        iN
+  if (indices.size() <= 1)
+    return indices.empty() ? createIndexConstant(0, loc) : indices[0];
+
+  Value linearIndex = createIndexConstant(0, loc);
+  for (size_t i = 0; i < indices.size(); ++i) {
+    /// Compute the stride for this dimension
+    Value stride = createIndexConstant(1, loc);
+    for (size_t j = i + 1; j < sizes.size(); ++j)
+      stride = create<arith::MulIOp>(loc, stride, sizes[j]);
+
+    /// Add contribution from this dimension: indices[i] * stride
+    auto contribution = create<arith::MulIOp>(loc, indices[i], stride);
+    linearIndex = create<arith::AddIOp>(loc, linearIndex, contribution);
+  }
+
+  return linearIndex;
 }
 
 //===----------------------------------------------------------------------===//

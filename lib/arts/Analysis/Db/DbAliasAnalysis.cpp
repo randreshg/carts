@@ -15,7 +15,7 @@ using namespace mlir::arts;
 
 namespace {
 std::pair<Value, Value> makeOrderedPair(Value a, Value b) {
-  // Use pointer comparison for ordering
+  /// Use pointer comparison for ordering
   return a.getAsOpaquePointer() < b.getAsOpaquePointer() ? std::make_pair(a, b)
                                                          : std::make_pair(b, a);
 }
@@ -33,13 +33,13 @@ bool DbAliasAnalysis::mayAlias(const NodeBase &a, const NodeBase &b,
   ARTS_INFO("Analyzing alias between node " << a.getHierId() << " and node "
                                             << b.getHierId());
 
-  // Same value aliases with itself
+  /// Same value aliases with itself
   if (ptrA == ptrB) {
     ARTS_INFO("  -> Same pointer, must alias");
     return true;
   }
 
-  // Check cache
+  /// Check cache
   auto key = makeOrderedPair(ptrA, ptrB);
   auto it = aliasCache.find(key);
   if (it != aliasCache.end()) {
@@ -47,7 +47,7 @@ bool DbAliasAnalysis::mayAlias(const NodeBase &a, const NodeBase &b,
     return it->second;
   }
 
-  // Initial implementation: simple structural checks with slice comparison.
+  /// Initial implementation: simple structural checks with slice comparison.
   bool result = true;
 
   auto sliceOf = [&](const NodeBase &n)
@@ -56,7 +56,7 @@ bool DbAliasAnalysis::mayAlias(const NodeBase &a, const NodeBase &b,
     Value root;
     if (auto *acq = dyn_cast<DbAcquireNode>(&n)) {
       auto op = cast<DbAcquireOp>(acq->getOp());
-      root = op.getSource();
+      root = op.getSourcePtr();
       auto offsets = op.getOffsets();
       auto sizes = op.getSizes();
       offs.reserve(offsets.size());
@@ -77,7 +77,7 @@ bool DbAliasAnalysis::mayAlias(const NodeBase &a, const NodeBase &b,
       auto op = cast<DbReleaseOp>(rel->getOp());
       if (!op.getSources().empty())
         root = op.getSources()[0];
-      // Unknown slice for release; be conservative
+      /// Unknown slice for release; be conservative
       offs.assign(1, INT64_MIN);
       lens.assign(1, INT64_MIN);
     } else if (auto *alloc = dyn_cast<DbAllocNode>(&n)) {
@@ -91,7 +91,7 @@ bool DbAliasAnalysis::mayAlias(const NodeBase &a, const NodeBase &b,
   auto [ra, oa, la] = sliceOf(a);
   auto [rb, ob, lb] = sliceOf(b);
   if (ra && rb && ra == rb) {
-    // If both slices are constant and disjoint in all known dims → no alias.
+    /// If both slices are constant and disjoint in all known dims → no alias.
     bool anyUnknown = false;
     if (oa.size() == ob.size() && la.size() == lb.size() &&
         oa.size() == la.size()) {
@@ -118,7 +118,7 @@ bool DbAliasAnalysis::mayAlias(const NodeBase &a, const NodeBase &b,
     }
   }
 
-  // If still unknown, use DbAnalysis overlap estimator for acquires
+  /// If still unknown, use DbAnalysis overlap estimator for acquires
   if (result) {
     const auto *acqA = dyn_cast<DbAcquireNode>(&a);
     const auto *acqB = dyn_cast<DbAcquireNode>(&b);
@@ -130,33 +130,33 @@ bool DbAliasAnalysis::mayAlias(const NodeBase &a, const NodeBase &b,
     }
   }
 
-  // if (isa<DbAllocNode>(&a) && isa<DbAllocNode>(&b)) {
-  //   // Different allocations do not alias; same op aliases.
-  //   result = a.getOp() == b.getOp();
-  // } else if ((isa<DbAcquireNode>(&a) || isa<DbReleaseNode>(&a)) &&
-  //            (isa<DbAcquireNode>(&b) || isa<DbReleaseNode>(&b))) {
-  //   auto parentA = isa<DbAcquireNode>(&a)
-  //                      ? dyn_cast<DbAcquireNode>(&a)->getParent()
-  //                      : dyn_cast<DbReleaseNode>(&a)->getParent();
-  //   auto parentB = isa<DbAcquireNode>(&b)
-  //                      ? dyn_cast<DbAcquireNode>(&b)->getParent()
-  //                      : dyn_cast<DbReleaseNode>(&b)->getParent();
-  //   if (parentA && parentB)
-  //     result = parentA->getOp() == parentB->getOp();
-  //   else
-  //     result = true; // conservative
-  // } else {
-  //   // Mixed alloc and access: alias if access refers to the alloc
-  //   const NodeBase &alloc = isa<DbAllocNode>(&a) ? a : b;
-  //   const NodeBase &access = isa<DbAllocNode>(&a) ? b : a;
-  //   auto accessParent = isa<DbAcquireNode>(&access)
-  //                           ? dyn_cast<DbAcquireNode>(&access)->getParent()
-  //                           : dyn_cast<DbReleaseNode>(&access)->getParent();
-  //   if (accessParent)
-  //     result = accessParent->getOp() == alloc.getOp();
-  //   else
-  //     result = true; // conservative
-  // }
+  /// if (isa<DbAllocNode>(&a) && isa<DbAllocNode>(&b)) {
+  ///   /// Different allocations do not alias; same op aliases.
+  ///   result = a.getOp() == b.getOp();
+  /// } else if ((isa<DbAcquireNode>(&a) || isa<DbReleaseNode>(&a)) &&
+  ///            (isa<DbAcquireNode>(&b) || isa<DbReleaseNode>(&b))) {
+  ///   auto parentA = isa<DbAcquireNode>(&a)
+  ///                      ? dyn_cast<DbAcquireNode>(&a)->getParent()
+  ///                      : dyn_cast<DbReleaseNode>(&a)->getParent();
+  ///   auto parentB = isa<DbAcquireNode>(&b)
+  ///                      ? dyn_cast<DbAcquireNode>(&b)->getParent()
+  ///                      : dyn_cast<DbReleaseNode>(&b)->getParent();
+  ///   if (parentA && parentB)
+  ///     result = parentA->getOp() == parentB->getOp();
+  ///   else
+  ///     result = true; /// conservative
+  /// } else {
+  ///   /// Mixed alloc and access: alias if access refers to the alloc
+  ///   const NodeBase &alloc = isa<DbAllocNode>(&a) ? a : b;
+  ///   const NodeBase &access = isa<DbAllocNode>(&a) ? b : a;
+  ///   auto accessParent = isa<DbAcquireNode>(&access)
+  ///                           ? dyn_cast<DbAcquireNode>(&access)->getParent()
+  ///                           : dyn_cast<DbReleaseNode>(&access)->getParent();
+  ///   if (accessParent)
+  ///     result = accessParent->getOp() == alloc.getOp();
+  ///   else
+  ///     result = true; /// conservative
+  /// }
 
   aliasCache[key] = result;
   ARTS_INFO("  -> Final result: " << (result ? "may alias" : "no alias"));
@@ -168,7 +168,7 @@ Value DbAliasAnalysis::getUnderlyingValue(const NodeBase &node) {
   if (isa<DbAllocOp>(op)) {
     return op->getResult(0);
   } else if (isa<DbAcquireOp>(op)) {
-    return cast<DbAcquireOp>(op).getSource();
+    return cast<DbAcquireOp>(op).getSourcePtr();
   } else if (isa<DbReleaseOp>(op)) {
     return cast<DbReleaseOp>(op).getSources()[0];
   }
