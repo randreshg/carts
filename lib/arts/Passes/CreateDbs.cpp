@@ -1,7 +1,7 @@
 ///==========================================================================
 /// File: CreateDbs.cpp
 ///
-/// This pass creates ARTS database (DB) operations to handle memory
+/// This pass creates ARTS Datablocks (DB) operations to handle memory
 /// dependencies for EDTs (Event-Driven Tasks). Each EDT may execute in a
 /// separate memory environment, so external memory references must be properly
 /// managed.
@@ -58,7 +58,7 @@ struct AccessInfo {
   AccessInfo(int rank) : dimConstants(rank), hasNonConstant(rank, false) {}
 };
 
-/// Dependency information for database acquisition.
+/// Dependency information for Datablocks acquisition.
 /// Contains the access mode and slice parameters for acquiring a memory region.
 struct DepInfo {
   /// Access mode (in, out, inout)
@@ -90,6 +90,9 @@ private:
   DenseMap<Operation *, DenseMap<Value, BlockArgument>> edtBaseToArg;
   SmallVector<DbAllocOp> createdDbAllocs;
 
+  /// Cache for getUnderlyingObject to avoid redundant traversals
+  DenseMap<Value, Value> underlyingObjectCache;
+
   /// Core helper functions
   Value getUnderlyingObject(Value v);
   void cleanupExistingDbOps();
@@ -116,36 +119,55 @@ private:
 
   /// DbAlloc cleanup
   void insertDbFreeOperations(DbAllocOp dbAlloc, OpBuilder &builder);
+
+  /// Helper function to check if a value is related to the original allocation
+  bool isRelatedToAllocation(Value value, DbAllocOp dbAlloc);
 };
 } // namespace
 
 Value CreateDbsPass::getUnderlyingObject(Value v) {
+  /// Check cache first to avoid redundant traversals
+  auto cachedResult = underlyingObjectCache.find(v);
+  if (cachedResult != underlyingObjectCache.end())
+    return cachedResult->second;
+
+  Value result = nullptr;
+
   if (v.isa<BlockArgument>()) {
     Block *block = v.getParentBlock();
     Operation *owner = block->getParentOp();
     if (auto edt = dyn_cast<EdtOp>(owner)) {
       unsigned argIndex = v.cast<BlockArgument>().getArgNumber();
-      if (argIndex < edt.getNumOperands()) {
-        Value operand = edt.getOperand(argIndex);
-        return getUnderlyingObject(operand);
-      }
+      result = (argIndex < edt.getNumOperands())
+                   ? getUnderlyingObject(edt.getOperand(argIndex))
+                   : v; // Function argument
+    } else {
+      result = v; // Function argument
     }
-    /// Function argument
-    return v;
+  } else if (auto op = v.getDefiningOp()) {
+    /// Handle different operation types
+    if (isa<DbAllocOp, memref::AllocOp, memref::AllocaOp, memref::GetGlobalOp>(
+            op)) {
+      result = v; // Root objects
+    } else if (auto dbAcquire = dyn_cast<DbAcquireOp>(op)) {
+      result = getUnderlyingObject(dbAcquire.getSourcePtr());
+    } else if (auto dbSubIndex = dyn_cast<DbSubIndexOp>(op)) {
+      result = getUnderlyingObject(dbSubIndex.getSource());
+    } else if (auto subview = dyn_cast<memref::SubViewOp>(op)) {
+      result = getUnderlyingObject(subview.getSource());
+    } else if (auto castOp = dyn_cast<memref::CastOp>(op)) {
+      result = getUnderlyingObject(castOp.getSource());
+    } else {
+      result = nullptr; // Not a root object
+    }
+  } else {
+    /// Value has no defining operation and is not a block argument
+    result = nullptr;
   }
-  if (auto op = v.getDefiningOp()) {
-    if (auto dbAlloc = dyn_cast<DbAllocOp>(op))
-      return getUnderlyingObject(dbAlloc.getAddress());
-    if (auto dbAcquire = dyn_cast<DbAcquireOp>(op))
-      return getUnderlyingObject(dbAcquire.getSourcePtr());
-    if (isa<memref::AllocOp, memref::AllocaOp, memref::GetGlobalOp>(op))
-      return v;
-    if (auto subview = dyn_cast<memref::SubViewOp>(op))
-      return getUnderlyingObject(subview.getSource());
-    if (auto cast = dyn_cast<memref::CastOp>(op))
-      return getUnderlyingObject(cast.getSource());
-  }
-  return nullptr;
+
+  /// Cache the result for future lookups
+  underlyingObjectCache[v] = result;
+  return result;
 }
 
 /// Infer allocation type from the defining operation
@@ -224,6 +246,7 @@ SetVector<Value> CreateDbsPass::collectUsedAllocations() {
 
 void CreateDbsPass::createDbAllocOps(const SetVector<Value> &allocs,
                                      OpBuilder &builder) {
+
   for (Value alloc : allocs) {
     Operation *allocOp = alloc.getDefiningOp();
     if (!allocOp)
@@ -233,47 +256,38 @@ void CreateDbsPass::createDbAllocOps(const SetVector<Value> &allocs,
     builder.setInsertionPointAfter(allocOp);
 
     /// Create DbAllocOp
-    Value route = builder.create<arith::ConstantIntOp>(loc, 0, 32);
     DbAllocType allocType = inferAllocType(alloc);
     DbMode dbMode = DbMode::pinned;
-
-    /// Get element type from the allocation
     auto memRefType = alloc.getType().cast<MemRefType>();
     Type elementType = memRefType.getElementType();
 
-    /// For now, create a single heap-backed DB view with payload equal to the
-    /// full memref shape. We rely on NormalizeDbs/Convert pass to compute the
-    /// total byte size.
-    /// granular by default: all dims are outer sizes
+    /// Optimized: Pre-allocate and compute sizes more efficiently
     SmallVector<Value> sizes, payloadSizes;
-    auto type = alloc.getType().cast<MemRefType>();
-    for (int i = 0; i < type.getRank(); ++i) {
-      if (type.isDynamicDim(i))
-        sizes.push_back(builder.create<memref::DimOp>(loc, alloc, i));
-      else
-        sizes.push_back(
-            builder.create<arith::ConstantIndexOp>(loc, type.getDimSize(i)));
+    const int rank = memRefType.getRank();
+    sizes.reserve(rank);
+
+    for (int i = 0; i < rank; ++i) {
+      if (memRefType.isDynamicDim(i)) {
+        sizes.push_back(builder.create<arts::DbDimOp>(loc, alloc, (int64_t)i));
+      } else {
+        sizes.push_back(builder.create<arith::ConstantIndexOp>(
+            loc, memRefType.getDimSize(i)));
+      }
     }
-    auto dbAllocOp = builder.create<DbAllocOp>(loc, ArtsMode::inout, route,
+
+    auto zeroRoute = builder.create<arith::ConstantIntOp>(loc, 0, 32);
+    auto dbAllocOp = builder.create<DbAllocOp>(loc, ArtsMode::inout, zeroRoute,
                                                allocType, dbMode, elementType,
                                                alloc, sizes, payloadSizes);
 
-    /// Replace all uses of the original allocation with the db_alloc ptr
-    /// Skip uses within EDT regions as they will be handled by db_acquire
-    alloc.replaceUsesWithIf(dbAllocOp.getPtr(), [](OpOperand &use) {
+    alloc.replaceUsesWithIf(dbAllocOp.getPtr(), [&](OpOperand &use) -> bool {
       Operation *user = use.getOwner();
-      /// Don't replace uses that are operands to the db_alloc itself
-      if (isa<DbAllocOp>(user))
-        return false;
-      /// Don't replace uses within EDT regions - they will use acquired views
-      if (user->getParentOfType<EdtOp>())
-        return false;
-      return true;
+      /// Skip operands to the db_alloc itself and EDT regions
+      return !isa<DbAllocOp>(user) && !user->getParentOfType<EdtOp>();
     });
 
-    /// Store the mapping from original allocation to DbAllocOp
+    /// Store mappings for later use
     allocToDbAlloc[alloc] = dbAllocOp;
-    /// Track created DbAllocOp for release insertion
     createdDbAllocs.push_back(dbAllocOp);
   }
 }
@@ -385,9 +399,10 @@ DepInfo CreateDbsPass::computeDepInfo(OpBuilder &builder, EdtOp edt,
     if (accInfo.hasNonConstant[d] || accInfo.dimConstants[d].empty()) {
       /// Use full dimension
       offVal = builder.create<arith::ConstantIndexOp>(edt.getLoc(), 0);
-      if (sourceType.isDynamicDim(d))
-        sizeVal = builder.create<memref::DimOp>(edt.getLoc(), source, d);
-      else
+      if (sourceType.isDynamicDim(d)) {
+        auto dimIdx = builder.create<arith::ConstantIndexOp>(edt.getLoc(), d);
+        sizeVal = builder.create<arts::DbDimOp>(edt.getLoc(), source, dimIdx);
+      } else
         sizeVal = builder.create<arith::ConstantIndexOp>(
             edt.getLoc(), sourceType.getDimSize(d));
     } else {
@@ -427,9 +442,10 @@ DepInfo CreateDbsPass::createFullAccessDepInfo(OpBuilder &builder, EdtOp edt,
   for (int d = 0; d < rank; ++d) {
     offsets.push_back(builder.create<arith::ConstantIndexOp>(edt.getLoc(), 0));
     Value sizeVal;
-    if (sourceType.isDynamicDim(d))
-      sizeVal = builder.create<memref::DimOp>(edt.getLoc(), source, d);
-    else
+    if (sourceType.isDynamicDim(d)) {
+      auto dimIdx = builder.create<arith::ConstantIndexOp>(edt.getLoc(), d);
+      sizeVal = builder.create<arts::DbDimOp>(edt.getLoc(), source, dimIdx);
+    } else
       sizeVal = builder.create<arith::ConstantIndexOp>(
           edt.getLoc(), sourceType.getDimSize(d));
     sizes.push_back(sizeVal);
@@ -609,8 +625,9 @@ void CreateDbsPass::adjustAccesses(OpBuilder &builder, Region &region,
   });
 }
 
-/// Insert db_free operations for a database allocation.
+/// Insert db_free operations for a Datablocks allocation.
 /// Inserts DbFreeOp before all terminators/returns dominated by the db_alloc.
+/// Also detects and replaces existing free calls with DbFree operations.
 void CreateDbsPass::insertDbFreeOperations(DbAllocOp dbAlloc,
                                            OpBuilder &builder) {
   Region *region = dbAlloc->getParentRegion();
@@ -622,37 +639,91 @@ void CreateDbsPass::insertDbFreeOperations(DbAllocOp dbAlloc,
     return;
 
   DominanceInfo dom(regionOwner);
+  SmallVector<Operation *, 8> opsToErase;
+  bool foundFreeCalls = false;
+  auto replaceFreeCalls = [&](Operation *op) {
+    Value operandToCheck = nullptr;
+    Operation *opToReplace = nullptr;
 
-  if (auto parentFunc = dyn_cast<func::FuncOp>(regionOwner)) {
-    /// Skip outlined EDT functions (they handle their own releases)
+    if (auto callOp = dyn_cast<func::CallOp>(op)) {
+      if (callOp.getCallee() == "free") {
+        for (Value operand : callOp.getOperands()) {
+          if (isRelatedToAllocation(operand, dbAlloc)) {
+            operandToCheck = operand;
+            opToReplace = callOp;
+            break;
+          }
+        }
+      }
+    } else if (auto deallocOp = dyn_cast<memref::DeallocOp>(op)) {
+      Value memref = deallocOp.getMemref();
+      if (isRelatedToAllocation(memref, dbAlloc)) {
+        operandToCheck = memref;
+        opToReplace = deallocOp;
+      }
+    }
+
+    if (opToReplace) {
+      builder.setInsertionPoint(opToReplace);
+      /// Free both the datablock pointer and the GUID memref
+      builder.create<DbFreeOp>(dbAlloc.getLoc(), dbAlloc.getPtr());
+      builder.create<DbFreeOp>(dbAlloc.getLoc(), dbAlloc.getGuid());
+      opsToErase.push_back(opToReplace);
+      foundFreeCalls = true;
+      ARTS_INFO("Replaced deallocation operation with DbFree");
+    }
+  };
+
+  /// Skip outlined EDT functions
+  if (auto parentFunc = dyn_cast<func::FuncOp>(regionOwner))
     if (parentFunc.getName().startswith("__arts_edt_"))
       return;
 
-    /// Insert a release before each return dominated by the db_alloc
-    parentFunc.walk([&](func::ReturnOp ret) {
-      if (dom.dominates(dbAlloc.getOperation(), ret)) {
-        builder.setInsertionPoint(ret);
-        builder.create<DbFreeOp>(dbAlloc.getLoc(), dbAlloc.getPtr());
+  /// Find and replace existing deallocation operations
+  region->walk(replaceFreeCalls);
+
+  /// If no existing deallocations found, insert DbFree before terminators
+  if (!foundFreeCalls) {
+    for (Block &block : *region) {
+      if (Operation *terminator = block.getTerminator()) {
+        if (dom.dominates(dbAlloc.getOperation(), terminator)) {
+          builder.setInsertionPoint(terminator);
+          /// Free both the datablock pointer and the GUID memref
+          builder.create<DbFreeOp>(dbAlloc.getLoc(), dbAlloc.getPtr());
+          builder.create<DbFreeOp>(dbAlloc.getLoc(), dbAlloc.getGuid());
+        }
       }
-    });
-    return;
+    }
   }
 
-  /// Generic region owner: insert before each block terminator dominated by
-  /// the db_alloc
-  for (Block &block : *region) {
-    Operation *terminator = block.getTerminator();
-    if (!terminator)
-      continue;
-    if (!dom.dominates(dbAlloc.getOperation(), terminator))
-      continue;
-    builder.setInsertionPoint(terminator);
-    builder.create<DbFreeOp>(dbAlloc.getLoc(), dbAlloc.getPtr());
+  /// Erase all replaced operations in one batch
+  for (Operation *op : opsToErase)
+    op->erase();
+}
+
+/// Helper function to check if a value is related to the original allocation
+/// that was replaced by a DbAlloc operation
+bool CreateDbsPass::isRelatedToAllocation(Value value, DbAllocOp dbAlloc) {
+  /// First check if the value is directly from this DbAllocOp
+  if (auto dbAllocOp = value.getDefiningOp<DbAllocOp>()) {
+    if (dbAllocOp == dbAlloc)
+      return true;
   }
+
+  /// Use getUnderlyingObject to find the root allocation for both values
+  Value valueRoot = getUnderlyingObject(value);
+  Value dbAllocRoot = getUnderlyingObject(dbAlloc.getAddress());
+
+  /// If either root is null, we can't determine the relationship
+  if (!valueRoot || !dbAllocRoot)
+    return false;
+
+  /// Check if the root allocations are the same
+  return valueRoot == dbAllocRoot;
 }
 
 /// Main pass entry point.
-/// Transforms the module to create ARTS database operations for EDT memory
+/// Transforms the module to create ARTS Datablocks operations for EDT memory
 /// dependencies. Process is divided into three phases for clarity and
 /// correctness.
 void CreateDbsPass::runOnOperation() {
@@ -660,29 +731,36 @@ void CreateDbsPass::runOnOperation() {
   ARTS_DEBUG_HEADER(CreateDbsPass);
   ARTS_DEBUG_REGION(module.dump(););
 
+  /// Clear cache at the beginning for fresh analysis
+  underlyingObjectCache.clear();
+
   OpBuilder builder(module.getContext());
   StringAnalysis stringAnalysis(module);
 
-  /// Phase 1: Cleanup existing DB operations to recompute dependencies
+  /// Phase 1: Cleanup existing DB operations
   cleanupExistingDbOps();
 
-  /// Phase 2: Collect allocations used by EDTs and create db_alloc operations
+  /// Phase 2: Collect and convert allocations to Datablockss
   SetVector<Value> allUsedAllocs = collectUsedAllocations();
+  ARTS_INFO("Found " << allUsedAllocs.size()
+                     << " allocations to convert to Datablockss");
   createDbAllocOps(allUsedAllocs, builder);
 
-  /// Phase 3: Process EDTs in reverse order (parents before children)
-  /// This ensures parent EDTs are processed before their nested children
+  /// Phase 3: Process EDTs for dependencies
   SmallVector<EdtOp> allEdts;
   module.walk([&](EdtOp edt) { allEdts.push_back(edt); });
-
+  ARTS_INFO("Processing " << allEdts.size() << " EDT operations");
   for (auto it = allEdts.rbegin(); it != allEdts.rend(); ++it)
     processEdtDependencies(*it, builder, stringAnalysis);
 
-  /// Phase 4: Insert db_release operations for created db_alloc operations
-  /// Insert at the end of the defining region's scope (before region
-  /// terminators)
+  /// Phase 4: Insert DbFree operations
+  ARTS_INFO("Inserting DbFree operations for " << createdDbAllocs.size()
+                                               << " Datablocks allocations");
   for (DbAllocOp dbAlloc : createdDbAllocs)
     insertDbFreeOperations(dbAlloc, builder);
+
+  /// Clear cache at the end to free memory
+  underlyingObjectCache.clear();
 
   ARTS_DEBUG_FOOTER(CreateDbsPass);
   ARTS_DEBUG_REGION(module.dump(););

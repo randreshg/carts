@@ -103,12 +103,12 @@ static cl::opt<PipelineStage>
                                  "Stop after OpenMP conversion"),
                       clEnumValN(PipelineStage::EdtTransforms, "edt-transforms",
                                  "Stop after EDT transformations"),
-                      clEnumValN(PipelineStage::EdtLowering, "edt-lowering",
-                                 "Stop after EDT lowering"),
                       clEnumValN(PipelineStage::Datablock, "datablock",
                                  "Stop after datablock optimization"),
                       clEnumValN(PipelineStage::Epochs, "epochs",
                                  "Stop after epoch creation"),
+                      clEnumValN(PipelineStage::EdtLowering, "edt-lowering",
+                                  "Stop after EDT lowering"),
                       clEnumValN(PipelineStage::ArtsToLLVM, "arts-to-llvm",
                                  "Stop after ARTS to LLVM conversion"),
                       clEnumValN(PipelineStage::Complete, "complete",
@@ -208,19 +208,25 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     /// Complete pipeline
     pm.addPass(arts::createArtsInlinerPass());
     pm.addPass(arts::createConvertOpenMPtoARTSPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(createSymbolDCEPass());
     pm.addPass(arts::createEdtPass());
     pm.addPass(arts::createEdtInvariantCodeMotionPass());
-    pm.addPass(createCanonicalizerPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(arts::createCreateDbsPass(IdentifyDbs));
     pm.addPass(arts::createDbPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(createCSEPass());
     pm.addPass(createMem2Reg());
     pm.addPass(arts::createEdtPtrRematerializationPass());
     pm.addPass(arts::createCreateEpochsPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(arts::createNormalizeDbsPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(arts::createEdtLoweringPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(arts::createEpochLoweringPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(arts::createConvertArtsToLLVMPass(Debug));
     if (mlir::failed(pm.run(module))) {
       llvm::errs() << "Error running CARTS pipeline";
@@ -321,6 +327,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   {
     PassManager pm(&context);
     pm.addPass(arts::createConvertOpenMPtoARTSPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(createSymbolDCEPass());
     if (mlir::failed(pm.run(module))) {
       llvm::errs() << "Error when converting OpenMP to ARTS";
@@ -337,7 +344,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     PassManager pm(&context);
     pm.addPass(arts::createEdtPass());
     pm.addPass(arts::createEdtInvariantCodeMotionPass());
-    pm.addPass(createCanonicalizerPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
     if (mlir::failed(pm.run(module))) {
       llvm::errs() << "Error when running EDT transformations";
       module->dump();
@@ -353,6 +360,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     PassManager pm(&context);
     pm.addPass(arts::createCreateDbsPass(IdentifyDbs));
     pm.addPass(arts::createDbPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(createCSEPass());
     pm.addPass(createMem2Reg());
     if (mlir::failed(pm.run(module))) {
@@ -369,7 +377,9 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   {
     PassManager pm(&context);
     pm.addPass(arts::createEdtPtrRematerializationPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(arts::createCreateEpochsPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
     if (mlir::failed(pm.run(module))) {
       llvm::errs() << "Error when creating epochs";
       module->dump();
@@ -384,8 +394,11 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   {
     PassManager pm(&context);
     pm.addPass(arts::createNormalizeDbsPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(arts::createEdtLoweringPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(arts::createEpochLoweringPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(createCSEPass());
     pm.addPass(createMem2Reg());
     if (mlir::failed(pm.run(module))) {
@@ -402,8 +415,8 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   {
     PassManager pm(&context);
     pm.addPass(arts::createConvertArtsToLLVMPass(Debug));
-    pm.addPass(createCSEPass());
     pm.addPass(polygeist::createPolygeistCanonicalizePass());
+    pm.addPass(createCSEPass());
     pm.addPass(createMem2Reg());
     pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(createControlFlowSinkPass());

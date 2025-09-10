@@ -8,6 +8,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/IntegerSet.h"
+#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/IR/Types.h"
 #include "mlir/Support/LLVM.h"
@@ -51,6 +52,42 @@ void ArtsDialect::initialize() {
 //===----------------------------------------------------------------------===//
 #define GET_OP_CLASSES
 #include "arts/ArtsOps.cpp.inc"
+
+namespace {
+struct FoldDbDimFromDbOps : public OpRewritePattern<DbDimOp> {
+  using OpRewritePattern<DbDimOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(DbDimOp op,
+                                PatternRewriter &rewriter) const override {
+    auto cstIdx = op.getDim().getDefiningOp<arith::ConstantIndexOp>();
+    if (!cstIdx)
+      return failure();
+    int64_t idx = cstIdx.getValue().cast<IntegerAttr>().getInt();
+
+    if (auto dbAlloc = op.getSource().getDefiningOp<DbAllocOp>()) {
+      auto sizes = dbAlloc.getSizes();
+      if ((long long)sizes.size() > idx) {
+        rewriter.replaceOp(op, sizes[idx]);
+        return success();
+      }
+    }
+    if (auto dbAcq = op.getSource().getDefiningOp<DbAcquireOp>()) {
+      auto sizes = dbAcq.getSizes();
+      if ((long long)sizes.size() > idx) {
+        rewriter.replaceOp(op, sizes[idx]);
+        return success();
+      }
+    }
+    /// Fallback: query with memref.dim if source is not a DB op
+    rewriter.replaceOpWithNewOp<memref::DimOp>(op, op.getSource(), idx);
+    return success();
+  }
+};
+} // namespace
+
+void DbDimOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                          MLIRContext *context) {
+  results.add<FoldDbDimFromDbOps>(context);
+}
 
 bool isArtsRegion(Operation *op) { return isa<EdtOp>(op) || isa<EpochOp>(op); }
 bool isArtsOp(Operation *op) {
@@ -145,6 +182,14 @@ void DbReleaseOp::build(OpBuilder &builder, OperationState &state,
   state.addOperands(source);
 }
 
+void DbDimOp::build(OpBuilder &builder, OperationState &state, Value source,
+                    int64_t dim) {
+  state.addOperands(source);
+  auto c = builder.create<arith::ConstantIndexOp>(state.location, dim);
+  state.addOperands(c.getResult());
+  state.addTypes(builder.getIndexType());
+}
+
 void DbControlOp::build(OpBuilder &builder, OperationState &state,
                         ArtsMode mode, Value ptr,
                         SmallVector<Value> pinnedIndices) {
@@ -189,8 +234,8 @@ void DbControlOp::build(OpBuilder &builder, OperationState &state,
       int64_t dimSize = baseType.getDimSize(i);
       Value dimVal =
           isDyn
-              ? builder.create<memref::DimOp>(state.location, baseMemRef, i)
-                    .getResult()
+              ? (Value)builder.create<arts::DbDimOp>(state.location, baseMemRef,
+                                                     (int64_t)i)
               : builder.create<arith::ConstantIndexOp>(state.location, dimSize)
                     .getResult();
       sizes[j] = dimVal;
@@ -273,7 +318,6 @@ void EdtCreateOp::build(OpBuilder &builder, OperationState &state,
   state.addOperands({param_memref, depCount, route});
 }
 
-
 //===----------------------------------------------------------------------===//
 // EventOp
 //===----------------------------------------------------------------------===//
@@ -345,36 +389,62 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
                         ArtsMode mode, Value sourceGuid, Value sourcePtr,
                         SmallVector<Value> indices, SmallVector<Value> offsets,
                         SmallVector<Value> sizes) {
-  /// Auto-compute GUID type to match datablock dimensionality
-  /// 0 or 1 size -> memref<?xi64>, n sizes -> memref<?x?x...xi64>
+  auto sourceMemRefType = llvm::cast<MemRefType>(sourcePtr.getType());
+  const int64_t sourceRank = sourceMemRefType.getRank();
+  const int64_t pinnedDims = static_cast<int64_t>(indices.size());
+  assert(pinnedDims <= sourceRank && "Number of indices exceeds source rank");
+  const int64_t remainingRank = sourceRank - pinnedDims;
+
+  /// If sizes are not provided, infer sizes for remaining dimensions from
+  /// source
+  if (sizes.empty()) {
+    sizes.reserve(remainingRank);
+    for (int64_t d = 0; d < remainingRank; ++d) {
+      int64_t srcDim = pinnedDims + d;
+      if (sourceMemRefType.isDynamicDim(srcDim)) {
+        sizes.push_back(builder.create<arts::DbDimOp>(state.location, sourcePtr,
+                                                      (int64_t)srcDim));
+      } else {
+        sizes.push_back(
+            builder
+                .create<arith::ConstantIndexOp>(
+                    state.location, sourceMemRefType.getDimSize(srcDim))
+                .getResult());
+      }
+    }
+  }
+
+  /// Ensure offsets are present for remaining dimensions when omitted
+  if (offsets.empty() && remainingRank > 0) {
+    offsets.reserve(remainingRank);
+    for (int64_t d = 0; d < remainingRank; ++d)
+      offsets.push_back(
+          builder.create<arith::ConstantIndexOp>(state.location, 0));
+  }
+
+  /// GUID type uses dimensionality equal to number of sizes (at least 1)
   SmallVector<int64_t> guidShape;
-  size_t numDims = std::max(sizes.size(), size_t(1));
-  for (size_t i = 0; i < numDims; ++i)
-    guidShape.push_back(ShapedType::kDynamic);
+  size_t numGuidDims = std::max(sizes.size(), size_t(1));
+  guidShape.assign(numGuidDims, ShapedType::kDynamic);
   Type guidType = MemRefType::get(guidShape, builder.getI64Type());
 
-  /// Infer ptr type from source memref type and sizes
-  auto sourceMemRefType = llvm::cast<MemRefType>(sourcePtr.getType());
-  Type elementType = sourceMemRefType.getElementType();
-
-  SmallVector<int64_t> shape;
-  if (sizes.empty()) {
-    /// No sizes provided, use source shape
-    shape.assign(sourceMemRefType.getShape().begin(),
-                 sourceMemRefType.getShape().end());
-  } else {
-    /// Sizes provided, create dynamic shape
-    for (size_t i = 0; i < sizes.size(); ++i)
-      shape.push_back(ShapedType::kDynamic);
+  /// Result ptr type rank reduces by the number of indices. Preserve static
+  /// dims where possible from the source memref.
+  SmallVector<int64_t> subShape;
+  subShape.reserve(remainingRank);
+  for (int64_t d = 0; d < remainingRank; ++d) {
+    int64_t srcDim = pinnedDims + d;
+    subShape.push_back(sourceMemRefType.isDynamicDim(srcDim)
+                           ? ShapedType::kDynamic
+                           : sourceMemRefType.getDimSize(srcDim));
   }
-  Type ptrType = MemRefType::get(shape, elementType);
+  Type elementType = sourceMemRefType.getElementType();
+  Type ptrType = MemRefType::get(subShape, elementType);
 
   state.addTypes({guidType, ptrType});
 
   /// Add operands and attributes
-  ArtsModeAttr modeAttr = ArtsModeAttr::get(builder.getContext(), mode);
-  state.addAttribute("mode", modeAttr);
-
+  state.addAttribute("mode", ArtsModeAttr::get(builder.getContext(), mode));
   state.addOperands(sourceGuid);
   state.addOperands(sourcePtr);
   state.addOperands(indices);
@@ -459,6 +529,6 @@ SmallVector<Value> getSizesFromDb(Value datablockPtr) {
                               acquireOp.getSizes().end());
   }
 
-  // If we can't find the sizes, return empty (will result in 1 element)
+  /// If we can't find the sizes, return empty (will result in 1 element)
   return {};
 }

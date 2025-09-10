@@ -82,7 +82,6 @@ private:
 void DbPass::runOnOperation() {
   bool changed = false;
   module = getOperation();
-  changed |= canonicalizeDimOps(); // disabled internals kept as scaffolding
 
   ARTS_DEBUG_HEADER(DbPass);
   ARTS_DEBUG_REGION(module.dump(););
@@ -260,59 +259,6 @@ bool DbPass::prefetchOverlap() {
   return changed;
 }
 
-// Canonicalize dimension queries for DB-backed memrefs
-// Responsibility: replace `memref.dim` on DB allocs/acquires with known
-// sizes when available.
-// Preference order:
-//   1) Explicit slice sizes on DbAcquireOp
-//   2) Parent DbAllocOp sizes (via DbGraph)
-// Scope: local fold-and-erase of dim ops; preserves semantics.
-// Example (before → after):
-//   %sz = memref.dim %acq, 1 : memref<?x?xi32>
-//   // where %acq = arts.db_acquire %db ... sizes(%c4, %c8)
-// becomes
-//   %sz = %c8 : index
-bool DbPass::canonicalizeDimOps() {
-  bool changed = false;
-  auto &dbAnalysis = getAnalysis<DbAnalysis>();
-  module.walk([&](memref::DimOp dimOp) {
-    auto cstIdx = dimOp.getConstantIndex();
-    if (!cstIdx)
-      return;
-    Value source = dimOp.getSource();
-    if (auto dbAlloc = source.getDefiningOp<DbAllocOp>()) {
-      Value sz = dbAlloc.getSizes()[*cstIdx];
-      dimOp.replaceAllUsesWith(sz);
-      dimOp.erase();
-      changed = true;
-      return;
-    }
-    if (auto dbAcq = source.getDefiningOp<DbAcquireOp>()) {
-      // Prefer the explicit acquire size slice if present; else fallback to
-      // alloc sizes.
-      auto sizes = dbAcq.getSizes();
-      if (static_cast<long long>(sizes.size()) > *cstIdx) {
-        Value sz = sizes[*cstIdx];
-        dimOp.replaceAllUsesWith(sz);
-        dimOp.erase();
-        changed = true;
-        return;
-      }
-      if (auto func = dimOp->getParentOfType<func::FuncOp>()) {
-        if (auto *graph = dbAnalysis.getOrCreateGraph(func)) {
-          if (DbAllocOp parent = graph->getParentAlloc(dbAcq.getOperation())) {
-            Value sz = parent.getSizes()[*cstIdx];
-            dimOp.replaceAllUsesWith(sz);
-            dimOp.erase();
-            changed = true;
-            return;
-          }
-        }
-      }
-    }
-  });
-  return changed;
-}
 
 // Convert trivial DBs to parameters (disabled scaffolding)
 // Intent: when a DB is effectively read-only and 1D, turn it into a parameter

@@ -39,7 +39,6 @@ using namespace mlir::arts;
 namespace {
 struct EdtPass : public arts::EdtBase<EdtPass> {
   void runOnOperation() override;
-  bool lowerParallel(EdtOp &op);
   bool lowerSingle(EdtOp &op);
   bool convertParallelIntoSingle(EdtOp &op);
 
@@ -155,59 +154,6 @@ bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
   return true;
 }
 
-/// Lowers a parallel EDT into an arts::EpochOp wrapping an scf.for loop over
-/// workers. Responsibility: structural lowering; optional propagation of inner
-/// dependencies as a conservative union.
-bool EdtPass::lowerParallel(EdtOp &op) {
-  ARTS_INFO("Lowering parallel EDT");
-  auto loc = op.getLoc();
-  OpBuilder builder(op);
-
-  /// Create an arts::EpochOp to scope the parallel work.
-  auto epochOp = builder.create<arts::EpochOp>(loc);
-  auto &region = epochOp.getRegion();
-  if (region.empty())
-    region.push_back(new Block());
-  Block *newBlock = &region.front();
-
-  /// Set the insertion point to the end of the new block.
-  builder.setInsertionPointToEnd(newBlock);
-
-  /// Generate the SCF for-loop.
-  /// Build loop bounds: [0, numWorkers) with step = 1.
-  Value lowerBound = builder.create<arith::ConstantIndexOp>(loc, 0);
-  Value workers = builder.create<arts::GetTotalWorkersOp>(loc);
-  Value upperBound =
-      builder.create<arith::IndexCastOp>(loc, builder.getIndexType(), workers);
-  Value step = builder.create<arith::ConstantIndexOp>(loc, 1);
-  auto forOp = builder.create<scf::ForOp>(loc, lowerBound, upperBound, step);
-
-  /// Create terminator for the epochOp.
-  builder.create<arts::YieldOp>(loc);
-
-  /// Collect all dependencies before creating new EDT
-  SetVector<Value> allDeps;
-  op.walk([&](EdtOp inner) {
-    if (inner == op)
-      return WalkResult::advance();
-    for (Value dep : inner.getDependencies())
-      allDeps.insert(dep);
-    return WalkResult::advance();
-  });
-
-  /// Always create new EDT with merged dependencies
-  auto newEdtOp = createEdtWithMergedDepsAndRegion(
-      builder, op.getLoc(), arts::EdtType::task, op, allDeps.getArrayRef());
-
-  /// Replace original EDT with new one and move into the loop body
-  op->replaceAllUsesWith(newEdtOp);
-  newEdtOp->moveBefore(forOp.getBody(), forOp.getBody()->begin());
-
-  /// Mark original EDT for removal
-  opsToRemove.insert(op);
-
-  return true;
-}
 
 /// Lower a single EDT: For now, clear single attr and set to sync-task if
 /// top-level. Can be enhanced later for more complex single handling.
@@ -270,12 +216,9 @@ bool EdtPass::processParallelEdts() {
       parallelOps.push_back(edt);
   });
 
-  /// - Try to convert it into a single-EDT if it contains exactly one child.
-  /// - Otherwise, lower it into a worker-loop enclosed in an EpochOp.
+  /// Try to convert parallel EDTs into single EDTs if they contain exactly one child.
   for (EdtOp op : parallelOps) {
-    if (!convertParallelIntoSingle(op)) {
-      lowerParallel(op);
-    }
+    convertParallelIntoSingle(op);
   }
   return true;
 }
