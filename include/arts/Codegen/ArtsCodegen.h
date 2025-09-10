@@ -113,12 +113,13 @@ public:
   Value computeLinearIndex(ArrayRef<Value> sizes, ArrayRef<Value> indices,
                            Location loc);
 
-  /// Loop construction helpers
-  using NestedLoopBodyFn =
-      std::function<void(unsigned dim, SmallVector<Value> &indices)>;
-  void createNestedLoopsForRange(ValueRange lowerBounds, ValueRange upperBounds,
-                                 ValueRange steps, NestedLoopBodyFn bodyFn,
-                                 Location loc);
+  /// Db iteration helpers
+  void iterateDbElements(Value dbGuid, Value edtGuid, ArrayRef<Value> dbSizes,
+                         ArrayRef<Value> dbOffsets, bool isSingle, Location loc,
+                         std::function<void(Value)> elementCallback);
+  void iterateMultiDb(Value dbGuid, Value edtGuid, ArrayRef<Value> dbSizes,
+                      ArrayRef<Value> dbOffsets, Location loc,
+                      std::function<void(Value)> elementCallback);
 
   /// Debug printing helpers
   void printDebugInfo(Location loc, const Twine &message, ValueRange args = {});
@@ -163,7 +164,8 @@ private:
   /// Helper functions
   void initializeTypes();
   LogicalResult extractDataLayouts();
-  void applyRuntimeFunctionAttributes(func::FuncOp funcOp, RuntimeFunction fnID);
+  void applyRuntimeFunctionAttributes(func::FuncOp funcOp,
+                                      RuntimeFunction fnID);
 };
 
 } // namespace arts

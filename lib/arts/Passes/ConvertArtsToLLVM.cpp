@@ -55,33 +55,37 @@ protected:
 public:
   ArtsToLLVMPattern(MLIRContext *context, ArtsCodegen *ac)
       : OpRewritePattern<OpType>(context), AC(ac) {}
-
-  /// Helper to compute linear index from multi-dimensional indices
-  Value computeLinearIndex(ArrayRef<Value> sizes, ArrayRef<Value> indices,
-                           Location loc) const {
-    /// Convert multi-dimensional indices to linear index for 1D memref
-    /// Formula: linear_index = i0 * (size1 * size2 * ... * sizeN) +
-    ///                        i1 * (size2 * size3 * ... * sizeN) +
-    ///                        ...
-    ///                        iN
-    if (indices.size() <= 1)
-      return indices.empty() ? AC->createIndexConstant(0, loc) : indices[0];
-
-    Value linearIndex = AC->createIndexConstant(0, loc);
-    for (size_t i = 0; i < indices.size(); ++i) {
-      /// Compute the stride for this dimension
-      Value stride = AC->createIndexConstant(1, loc);
-      for (size_t j = i + 1; j < sizes.size(); ++j)
-        stride = AC->create<arith::MulIOp>(loc, stride, sizes[j]);
-
-      /// Add contribution from this dimension: indices[i] * stride
-      auto contribution = AC->create<arith::MulIOp>(loc, indices[i], stride);
-      linearIndex = AC->create<arith::AddIOp>(loc, linearIndex, contribution);
-    }
-
-    return linearIndex;
-  }
 };
+
+//===----------------------------------------------------------------------===//
+// Helpers for DB sizes and single-element detection
+//===----------------------------------------------------------------------===//
+namespace {
+template <typename OpType>
+static inline void getDbSizesOffsetsAndSingle(OpType op,
+                                              SmallVector<Value> &sizesOut,
+                                              SmallVector<Value> &offsetsOut,
+                                              bool &isSingleElement) {
+  sizesOut.assign(op.getSizes().begin(), op.getSizes().end());
+  /// If the operation has getOffsets method, use the offsets
+  if (isa<DbAcquireOp>(op)) {
+    auto acqOp = cast<DbAcquireOp>(op);
+    offsetsOut.assign(acqOp.getOffsets().begin(), acqOp.getOffsets().end());
+  } else {
+    offsetsOut.clear();
+  }
+
+  isSingleElement = false;
+  if (sizesOut.empty()) {
+    isSingleElement = true;
+    return;
+  }
+  if (sizesOut.size() == 1) {
+    if (auto constTotal = sizesOut[0].getDefiningOp<arith::ConstantIndexOp>())
+      isSingleElement = (constTotal.value() == 1);
+  }
+}
+} // namespace
 
 /// Pattern to convert arts.get_total_workers operations
 struct GetTotalWorkersPattern : public ArtsToLLVMPattern<GetTotalWorkersOp> {
@@ -150,8 +154,6 @@ struct EventPattern : public ArtsToLLVMPattern<EventOp> {
   LogicalResult matchAndRewrite(EventOp op,
                                 PatternRewriter &rewriter) const override {
     ARTS_INFO("Lowering Event Op " << op);
-    // ArtsCodegen::RewriterGuard RG(*AC, rewriter);
-    // auto result = AC->getCurrentEdtGuid(op.getLoc());
     rewriter.eraseOp(op);
     return success();
   }
@@ -182,77 +184,40 @@ struct RecordInDepPattern : public ArtsToLLVMPattern<RecordInDepOp> {
     auto edtGuid = op.getEdtGuid();
     auto loc = op.getLoc();
 
-    /// Allocate a slot allocation memref
-    auto slotAllocType = MemRefType::get({}, AC->Int32);
-    Value slotAlloc = AC->create<memref::AllocaOp>(loc, slotAllocType);
-    Value initSlot = AC->createIntConstant(0, AC->Int32, loc);
-    AC->create<memref::StoreOp>(loc, initSlot, slotAlloc);
-    auto stepConstant = AC->createIndexConstant(1, loc);
+    /// Create shared slot counter for all dependencies
+    auto slotTy = MemRefType::get({}, AC->Int32);
+    Value sharedSlotAlloc = AC->create<memref::AllocaOp>(loc, slotTy);
+    Value zeroI32 = AC->createIntConstant(0, AC->Int32, loc);
+    AC->create<memref::StoreOp>(loc, zeroI32, sharedSlotAlloc);
 
-    /// Add dependencies for each datablock
+    /// Add dependencies for each datablock using shared slot counter
     for (Value dbGuid : op.getDatablocks())
-      recordDepsForDb(dbGuid, edtGuid, slotAlloc, stepConstant, loc);
+      recordDepsForDb(dbGuid, edtGuid, sharedSlotAlloc, loc);
 
     rewriter.eraseOp(op);
     return success();
   }
 
 private:
-  void recordDepsForDb(Value dbGuid, Value edtGuid, Value slotAlloc,
-                       Value stepConstant, Location loc) const {
+  void recordDepsForDb(Value dbGuid, Value edtGuid, Value sharedSlotAlloc,
+                       Location loc) const {
     auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>();
     assert(dbAcquireOp && "DbAcquireOp not found");
 
-    /// Handle single-dimensional DBs
-    auto dbSizes = dbAcquireOp.getSizes();
-    if (dbSizes.empty() || dbSizes.size() == 1) {
-      auto zeroIndex = AC->createIndexConstant(0, loc);
-      recordSingleDb(dbGuid, edtGuid, slotAlloc, stepConstant, zeroIndex, loc);
-      return;
-    }
+    SmallVector<Value> dbSizes, dbOffsets;
+    bool isSingle = false;
+    getDbSizesOffsetsAndSingle(dbAcquireOp, dbSizes, dbOffsets, isSingle);
 
-    /// Handle multi-dimensional DBs
-    auto dbOffsets = dbAcquireOp.getOffsets();
-    recordMultiDb(dbGuid, edtGuid, slotAlloc, stepConstant, dbSizes, dbOffsets,
-                  loc);
-  }
-
-  void recordMultiDb(Value dbGuid, Value edtGuid, Value slotAlloc,
-                     Value stepConstant, const SmallVector<Value> &dbSizes,
-                     const SmallVector<Value> &dbOffsets, Location loc) const {
-    const unsigned dbRank = dbSizes.size();
-
-    std::function<void(unsigned, SmallVector<Value, 4> &)>
-        addDependenciesRecursive = [&](unsigned dim,
-                                       SmallVector<Value, 4> &indices) {
-          if (dim == dbRank) {
-            auto linearIndex = computeLinearIndex(dbSizes, indices, loc);
-            recordSingleDb(dbGuid, edtGuid, slotAlloc, stepConstant,
-                           linearIndex, loc);
-            return;
-          }
-          auto lowerBound = dbOffsets[dim];
-          auto upperBound =
-              AC->create<arith::AddIOp>(loc, lowerBound, dbSizes[dim]);
-          auto loopOp =
-              AC->create<scf::ForOp>(loc, lowerBound, upperBound, stepConstant);
-
-          auto &loopBlock = loopOp.getRegion().front();
-          AC->setInsertionPointToStart(&loopBlock);
-          indices.push_back(loopOp.getInductionVar());
-          addDependenciesRecursive(dim + 1, indices);
-          indices.pop_back();
-          AC->setInsertionPointAfter(loopOp);
-        };
-
-    SmallVector<Value, 4> initIndices;
-    addDependenciesRecursive(0, initIndices);
+    /// Use shared slot counter and iterate over all db elements
+    AC->iterateDbElements(dbGuid, edtGuid, dbSizes, dbOffsets, isSingle, loc,
+                          [&](Value linearIndex) {
+                            recordSingleDb(dbGuid, edtGuid, sharedSlotAlloc,
+                                           linearIndex, loc);
+                          });
   }
 
   void recordSingleDb(Value dbGuid, Value edtGuid, Value slotAlloc,
-                      Value stepConstant, Value linearIndex,
-                      Location loc) const {
-    auto currentSlot = AC->create<memref::LoadOp>(loc, slotAlloc);
+                      Value linearIndex, Location loc) const {
     auto dbGuidValue =
         AC->create<memref::LoadOp>(loc, dbGuid, ValueRange{linearIndex});
 
@@ -264,13 +229,15 @@ private:
     }
     edtGuidValue = AC->castToInt(AC->Int64, edtGuidValue, loc);
 
+    auto currentSlotI32 = AC->create<memref::LoadOp>(loc, slotAlloc);
     AC->createRuntimeCall(types::ARTSRTL_artsDbAddDependence,
-                          {dbGuidValue, edtGuidValue, currentSlot}, loc);
+                          {dbGuidValue, edtGuidValue, currentSlotI32}, loc);
 
-    auto incConstant =
-        AC->create<arith::IndexCastOp>(loc, AC->Int32, stepConstant);
-    auto nextSlot = AC->create<arith::AddIOp>(loc, currentSlot, incConstant);
-    AC->create<memref::StoreOp>(loc, nextSlot, slotAlloc);
+    /// Increment the shared slot counter for next dependency
+    auto oneI32 = AC->createIntConstant(1, AC->Int32, loc);
+    auto incrementedSlot =
+        AC->create<arith::AddIOp>(loc, currentSlotI32, oneI32);
+    AC->create<memref::StoreOp>(loc, incrementedSlot, slotAlloc);
   }
 };
 
@@ -284,67 +251,51 @@ struct IncrementOutLatchPattern
     ARTS_INFO("Lowering IncrementOutLatch Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
     auto loc = op.getLoc();
-    auto stepConstant = AC->createIndexConstant(1, loc);
+
+    /// Create shared slot counter for all latch increments
+    auto slotTy = MemRefType::get({}, AC->Int32);
+    Value sharedSlotAlloc = AC->create<memref::AllocaOp>(loc, slotTy);
+    Value zeroI32 = AC->createIntConstant(0, AC->Int32, loc);
+    AC->create<memref::StoreOp>(loc, zeroI32, sharedSlotAlloc);
+
+    /// Increment latch for each datablock using shared slot counter
     for (Value dbGuid : op.getDatablocks())
-      incLatchForDb(dbGuid, stepConstant, loc);
+      incLatchForDb(dbGuid, sharedSlotAlloc, loc);
 
     rewriter.eraseOp(op);
     return success();
   }
 
 private:
-  void incLatchForDb(Value dbGuid, Value stepConstant, Location loc) const {
+  void incLatchForDb(Value dbGuid, Value sharedSlotAlloc, Location loc) const {
     auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>();
     assert(dbAcquireOp && "DbAcquireOp not found");
 
-    /// Handle single-dimensional DBs
-    auto dbSizes = dbAcquireOp.getSizes();
-    if (dbSizes.empty()) {
-      auto zeroIndex = AC->createIndexConstant(0, loc);
-      incSingleLatch(dbGuid, zeroIndex, loc);
-      return;
-    }
+    SmallVector<Value> dbSizes, dbOffsets;
+    bool isSingle = false;
+    getDbSizesOffsetsAndSingle(dbAcquireOp, dbSizes, dbOffsets, isSingle);
 
-    /// Handle multi-dimensional DBs
-    auto dbOffsets = dbAcquireOp.getOffsets();
-    incLatchForMultiDb(dbGuid, dbSizes, dbOffsets, stepConstant, loc);
+    /// Use shared slot counter and iterate over all db elements
+    AC->iterateDbElements(dbGuid, Value(), dbSizes, dbOffsets, isSingle, loc,
+                          [&](Value linearIndex) {
+                            incSingleLatch(dbGuid, sharedSlotAlloc, linearIndex,
+                                           loc);
+                          });
   }
 
-  void incLatchForMultiDb(Value dbGuid, const SmallVector<Value> &dbSizes,
-                          const SmallVector<Value> &dbOffsets,
-                          Value stepConstant, Location loc) const {
-    const unsigned dbRank = dbSizes.size();
-
-    std::function<void(unsigned, SmallVector<Value, 4> &)> incLatchRecursive =
-        [&](unsigned dim, SmallVector<Value, 4> &indices) {
-          if (dim == dbRank) {
-            auto linearIndex = computeLinearIndex(dbSizes, indices, loc);
-            incSingleLatch(dbGuid, linearIndex, loc);
-            return;
-          }
-          auto lowerBound = dbOffsets[dim];
-          auto upperBound =
-              AC->create<arith::AddIOp>(loc, lowerBound, dbSizes[dim]);
-          auto loopOp =
-              AC->create<scf::ForOp>(loc, lowerBound, upperBound, stepConstant);
-
-          auto &loopBlock = loopOp.getRegion().front();
-          AC->setInsertionPointToStart(&loopBlock);
-          indices.push_back(loopOp.getInductionVar());
-          incLatchRecursive(dim + 1, indices);
-          indices.pop_back();
-          AC->setInsertionPointAfter(loopOp);
-        };
-
-    SmallVector<Value, 4> initIndices;
-    incLatchRecursive(0, initIndices);
-  }
-
-  void incSingleLatch(Value dbGuid, Value linearIndex, Location loc) const {
+  void incSingleLatch(Value dbGuid, Value slotAlloc, Value linearIndex,
+                      Location loc) const {
     auto dbGuidValue =
         AC->create<memref::LoadOp>(loc, dbGuid, ValueRange{linearIndex});
     AC->createRuntimeCall(types::ARTSRTL_artsDbIncrementLatch, {dbGuidValue},
                           loc);
+
+    /// Increment the shared slot counter for next latch increment
+    auto currentSlotI32 = AC->create<memref::LoadOp>(loc, slotAlloc);
+    auto oneI32 = AC->createIntConstant(1, AC->Int32, loc);
+    auto incrementedSlot =
+        AC->create<arith::AddIOp>(loc, currentSlotI32, oneI32);
+    AC->create<memref::StoreOp>(loc, incrementedSlot, slotAlloc);
   }
 };
 
@@ -439,12 +390,9 @@ struct EdtDepUnpackPattern : public ArtsToLLVMPattern<EdtDepUnpackOp> {
 
     SmallVector<Value> newResults;
     for (unsigned i = 0; i < results.size(); ++i) {
-      /// GEP to the i-th ArtsEdtDep and load that struct
-      auto idx = AC->createIntConstant(i, AC->Int32, loc);
-      auto depStructPtr = AC->create<LLVM::GEPOp>(
-          loc, typedPtrTy, AC->ArtsEdtDep, typedPtr, ValueRange{idx});
-
-      newResults.push_back(depStructPtr);
+      /// Return the base pointer to the dependency vector; per-argument
+      /// selection is handled by indices during dep_get_ptr lowering.
+      newResults.push_back(typedPtr);
     }
 
     rewriter.replaceOp(op, newResults);
@@ -461,27 +409,43 @@ struct DepGetPtrOpPattern : public ArtsToLLVMPattern<DepGetPtrOp> {
     ARTS_INFO("Lowering DepGetPtr Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
     auto depStruct = op.getDepStruct();
+    auto allOperands = op->getOperands();
+    ValueRange indices = ValueRange(allOperands).drop_front(1);
     auto loc = op.getLoc();
 
-    /// depStruct is a pointer to ArtsEdtDep. GEP [0, 2] to the pointer field,
-    /// then load the actual pointer value.
+    /// Ensure we have a typed pointer to ArtsEdtDep sequence
     auto typedDepPtrTy = LLVM::LLVMPointerType::get(AC->ArtsEdtDep);
-    Value typedDepPtr = depStruct;
-    if (depStruct.getType() != typedDepPtrTy)
-      typedDepPtr = AC->create<LLVM::BitcastOp>(loc, typedDepPtrTy, depStruct);
+    Value typedDepPtr;
+    if (auto llvmPtrTy = depStruct.getType().dyn_cast<LLVM::LLVMPointerType>()) {
+      typedDepPtr = depStruct;
+      if (llvmPtrTy != typedDepPtrTy)
+        typedDepPtr = AC->create<LLVM::BitcastOp>(loc, typedDepPtrTy, typedDepPtr);
+    } else {
+      /// Convert memref/other to a generic ptr and then bitcast
+      auto rawPtr = AC->castToLLVMPtr(depStruct, loc);
+      typedDepPtr = AC->create<LLVM::BitcastOp>(loc, typedDepPtrTy, rawPtr);
+    }
 
-    /// Compute address of dep.ptr (field #2)
+    /// If indices are provided, advance to the selected dependency entry.
+    Value selectedDepPtr = typedDepPtr;
+    if (!indices.empty()) {
+      Value idx = indices.front();
+      if (idx.getType() != AC->Int32)
+        idx = AC->castToInt(AC->Int32, idx, loc);
+      selectedDepPtr = AC->create<LLVM::GEPOp>(loc, typedDepPtrTy, AC->ArtsEdtDep,
+                                               typedDepPtr, ValueRange{idx});
+    }
+
+    /// Compute address of dep.ptr (field #2) and load the actual pointer value.
     auto c0 = AC->createIntConstant(0, AC->Int32, loc);
     auto c2 = AC->createIntConstant(2, AC->Int32, loc);
     auto ptrPtrTy = LLVM::LLVMPointerType::get(AC->llvmPtr);
     auto fieldPtr = AC->create<LLVM::GEPOp>(loc, ptrPtrTy, typedDepPtrTy,
-                                            typedDepPtr, ValueRange{c0, c2});
-    // auto actualPtr =
-    //     AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, fieldPtr.getResult());
+                                            selectedDepPtr, ValueRange{c0, c2});
+    auto actualPtr = AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, fieldPtr.getResult());
     /// Convert the raw pointer to a memref using polygeist helper
     auto resultType = op.getPtr().getType();
-    auto memrefResult =
-        AC->create<polygeist::Pointer2MemrefOp>(loc, resultType, fieldPtr);
+    auto memrefResult = AC->create<polygeist::Pointer2MemrefOp>(loc, resultType, actualPtr);
     rewriter.replaceOp(op, memrefResult);
     return success();
   }
@@ -544,7 +508,6 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
     Value paramc;
     if (auto memrefType = paramv.getType().dyn_cast<MemRefType>()) {
       if (memrefType.hasStaticShape() && memrefType.getNumElements() == 0) {
-        /// Empty static memref case
         paramc = AC->createIntConstant(0, AC->Int32, op.getLoc());
       } else {
         /// Dynamic memref case - get size from memref
@@ -602,8 +565,11 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
     auto resultPtrTy = op.getPtr().getType();
     Value typedMemref;
 
-    auto sizes = op.getSizes();
-    if (sizes.empty() || sizes.size() == 1) {
+    SmallVector<Value> dbSizes, dbOffsets;
+    bool isSingleElement = false;
+    getDbSizesOffsetsAndSingle(op, dbSizes, dbOffsets, isSingleElement);
+
+    if (isSingleElement) {
       ARTS_DEBUG("Creating single DB");
       /// Allocate a single GUID
       auto guidType = MemRefType::get({1}, AC->Int64);
@@ -620,8 +586,7 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
     } else {
       ARTS_DEBUG("Creating multi-dim DB");
       /// Compute total number of elements
-      SmallVector<Value> sizesVec(sizes.begin(), sizes.end());
-      Value totalElems = AC->computeTotalElements(sizesVec, loc);
+      Value totalElems = AC->computeTotalElements(dbSizes, loc);
       /// Allocate 1D linear array of GUIDs
       auto guidType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
       guidMemref =
@@ -631,10 +596,9 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
           MemRefType::get({ShapedType::kDynamic}, AC->llvmPtr);
       dbMemref = AC->create<memref::AllocOp>(loc, payloadPtrType,
                                              ValueRange{totalElems});
-      createMultiDimDbs(dbMemref, guidMemref, sizesVec, dbMode, route,
-                        elementSize, loc);
-      typedMemref =
-          AC->create<polygeist::Pointer2MemrefOp>(loc, resultPtrTy, dbMemref);
+      createMultiDbs(dbMemref, guidMemref, dbSizes, dbMode, route, elementSize,
+                     loc);
+      typedMemref = dbMemref;
     }
 
     rewriter.replaceOp(op, {guidMemref, typedMemref});
@@ -647,10 +611,9 @@ private:
                       ArrayRef<Value> sizes = {},
                       ArrayRef<Value> indices = {}) const {
     /// Reserve GUID for the DB
-    auto guidCall = AC->createRuntimeCall(types::ARTSRTL_artsReserveGuidRoute,
-                                          {dbMode, route}, loc);
-    auto guid = guidCall.getResult(0);
-
+    auto guid = AC->createRuntimeCall(types::ARTSRTL_artsReserveGuidRoute,
+                                      {dbMode, route}, loc)
+                    .getResult(0);
     /// Create the DB with GUID
     auto elemSize64 = AC->castToInt(AC->Int64, elementSize, loc);
     auto dbCall = AC->createRuntimeCall(types::ARTSRTL_artsDbCreateWithGuid,
@@ -665,7 +628,7 @@ private:
       AC->create<memref::StoreOp>(loc, dbRawPtr, dbMemref);
       AC->create<memref::StoreOp>(loc, guid, guidMemref, ValueRange{zeroIndex});
     } else {
-      auto linearIndex = computeLinearIndex(sizes, indices, loc);
+      auto linearIndex = AC->computeLinearIndex(sizes, indices, loc);
       AC->create<memref::StoreOp>(loc, guid, guidMemref,
                                   ValueRange{linearIndex});
       auto dbRawPtr =
@@ -675,9 +638,9 @@ private:
     }
   }
 
-  void createMultiDimDbs(Value dbMemref, Value guidMemref,
-                         ArrayRef<Value> sizes, Value dbMode, Value route,
-                         Value elementSize, Location loc) const {
+  void createMultiDbs(Value dbMemref, Value guidMemref, ArrayRef<Value> sizes,
+                      Value dbMode, Value route, Value elementSize,
+                      Location loc) const {
     const unsigned rank = sizes.size();
     auto stepConstant = AC->createIndexConstant(1, loc);
 
@@ -798,23 +761,14 @@ struct DbNumElementsPattern : public ArtsToLLVMPattern<DbNumElementsOp> {
       return success();
     }
 
-    /// Otherwise, compute product at runtime, and store into a scalar
-    /// memref<i32>
-    auto scalarI32 = MemRefType::get({}, AC->Int32);
-    auto allocOp = AC->create<memref::AllocOp>(loc, scalarI32);
-
+    /// Otherwise, compute product at runtime as a plain i32 value
     Value productVal = AC->createIntConstant(1, AC->Int32, loc);
     for (Value sz : sizes) {
-      Value szI32 = sz;
-      if (sz.getType().isa<IndexType>())
-        szI32 = AC->create<arith::IndexCastOp>(loc, AC->Int32, sz);
-      else if (!sz.getType().isInteger(32))
-        szI32 = AC->create<arith::TruncIOp>(loc, AC->Int32, sz);
+      Value szI32 = AC->castToInt(AC->Int32, sz, loc);
       productVal = AC->create<arith::MulIOp>(loc, productVal, szI32);
     }
 
-    AC->create<memref::StoreOp>(loc, productVal, allocOp);
-    rewriter.replaceOp(op, allocOp.getResult());
+    rewriter.replaceOp(op, productVal);
     return success();
   }
 };
@@ -840,9 +794,8 @@ struct DbSubIndexOpPattern : public ArtsToLLVMPattern<DbSubIndexOp> {
       if (!currentType)
         return failure();
       auto resultType = MemRefType::get(
-          currentType.getShape().drop_front(1), /// Drop one dimension
-          currentType.getElementType(), currentType.getLayout(),
-          currentType.getMemorySpace());
+          currentType.getShape().drop_front(1), currentType.getElementType(),
+          MemRefLayoutAttrInterface(), currentType.getMemorySpace());
 
       current = AC->create<polygeist::SubIndexOp>(loc, resultType, current,
                                                   indices[i]);
@@ -930,7 +883,7 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   //// Apply patterns with greedy rewriter (two runs)
   GreedyRewriteConfig config;
   config.useTopDownTraversal = true;
-  config.enableRegionSimplification = false;
+  config.enableRegionSimplification = true;
 
   /// Run 1: core patterns
   {
@@ -992,11 +945,7 @@ void ConvertArtsToLLVMPass::populateCorePatterns(RewritePatternSet &patterns) {
   /// Dependency patterns
   patterns.add<EdtDepUnpackPattern>(context, AC);
   patterns.add<DepGetPtrOpPattern, DepGetGuidOpPattern>(context, AC);
-  patterns.add<RecordInDepPattern>(context, AC);
   patterns.add<RecordInDepPattern, IncrementOutLatchPattern>(context, AC);
-
-  /// Terminator patterns
-  patterns.add<YieldPattern>(context, AC);
 }
 
 void ConvertArtsToLLVMPass::populateDbPatterns(RewritePatternSet &patterns) {
@@ -1005,9 +954,8 @@ void ConvertArtsToLLVMPass::populateDbPatterns(RewritePatternSet &patterns) {
   patterns.add<DbControlPattern>(context, AC);
   patterns.add<DbAllocPattern, DbFreePattern>(context, AC);
   patterns.add<DbNumElementsPattern>(context, AC);
-  // patterns.add<DbSubIndexOpPattern>(context, AC);
+  patterns.add<DbSubIndexOpPattern>(context, AC);
   patterns.add<DbAcquirePattern, DbReleasePattern>(context, AC);
-  // Also include Yield to clean any remaining terminators after DB cleanup
   patterns.add<YieldPattern>(context, AC);
 }
 

@@ -19,6 +19,7 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
@@ -141,6 +142,9 @@ private:
   std::string generateUniqueFunctionName();
   bool canLowerEdt(EdtOp edtOp);
 
+  /// Parallel EDT lowering
+  bool lowerParallel(EdtOp &op);
+
   /// State
   unsigned functionCounter = 0;
   ModuleOp module;
@@ -160,16 +164,27 @@ void EdtLoweringPass::runOnOperation() {
   ARTS_DEBUG_HEADER(EdtLoweringPass);
   ARTS_DEBUG_REGION(module.dump(););
 
-  /// Collect all task EDTs to process (innermost first)
-  SmallVector<EdtOp> taskEdts;
+  /// First, collect and lower all parallel EDTs
+  SmallVector<EdtOp, 8> parallelEdts;
+  module.walk<WalkOrder::PostOrder>([&](EdtOp edtOp) {
+    if (edtOp.getType() == EdtType::parallel)
+      parallelEdts.push_back(edtOp);
+  });
+  ARTS_INFO("Found " << parallelEdts.size() << " parallel EDTs to lower");
+  for (EdtOp edtOp : parallelEdts) {
+    if (!lowerParallel(edtOp)) {
+      edtOp.emitError("Failed to lower parallel EDT");
+      return signalPassFailure();
+    }
+  }
+
+  /// Now collect and lower all regular EDTs
+  SmallVector<EdtOp, 8> taskEdts;
   module.walk<WalkOrder::PostOrder>([&](EdtOp edtOp) {
     if (canLowerEdt(edtOp))
       taskEdts.push_back(edtOp);
   });
-
   ARTS_INFO("Found " << taskEdts.size() << " task EDTs to lower");
-
-  /// Process each task EDT
   for (EdtOp edtOp : taskEdts) {
     if (failed(lowerEdt(edtOp))) {
       edtOp.emitError("Failed to lower task EDT");
@@ -485,9 +500,97 @@ Value EdtLoweringPass::createFinalPtr(Location loc, Value depStruct,
   if (indices.empty())
     return AC->create<DepGetPtrOp>(loc, resultType, depStruct);
 
+  auto srcMemrefTy = depStruct.getType().dyn_cast<MemRefType>();
+  Type subIdxResultTy = depStruct.getType();
+  if (srcMemrefTy) {
+    auto srcShape = srcMemrefTy.getShape();
+    SmallVector<int64_t, 4> newShape;
+    if (indices.size() >= srcShape.size())
+      newShape = {};
+    else
+      newShape.assign(srcShape.begin() + static_cast<long>(indices.size()),
+                      srcShape.end());
+    /// Use default layout for the reduced-rank result
+    subIdxResultTy = MemRefType::get(newShape, srcMemrefTy.getElementType(),
+                                     MemRefLayoutAttrInterface(),
+                                     srcMemrefTy.getMemorySpace());
+  }
   auto subIndexOp =
-      AC->create<DbSubIndexOp>(loc, depStruct.getType(), depStruct, indices);
+      AC->create<DbSubIndexOp>(loc, subIdxResultTy, depStruct, indices);
   return AC->create<DepGetPtrOp>(loc, resultType, subIndexOp.getResult());
+}
+
+/// Lowers a parallel EDT into an arts::EpochOp wrapping an scf.for loop over
+/// workers. Responsibility: structural lowering; optional propagation of inner
+/// dependencies as a conservative union.
+bool EdtLoweringPass::lowerParallel(EdtOp &op) {
+  ARTS_INFO("Lowering parallel EDT");
+  auto loc = op.getLoc();
+  OpBuilder builder(op);
+
+  /// Create an arts::EpochOp to scope the parallel work.
+  auto epochOp = builder.create<arts::EpochOp>(loc);
+  auto &region = epochOp.getRegion();
+  if (region.empty())
+    region.push_back(new Block());
+  Block *newBlock = &region.front();
+
+  /// Set the insertion point to the end of the new block.
+  builder.setInsertionPointToEnd(newBlock);
+
+  /// Generate the SCF for-loop.
+  /// Build loop bounds: [0, numWorkers) with step = 1.
+  Value lowerBound = builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value workers = builder.create<arts::GetTotalWorkersOp>(loc);
+  Value upperBound =
+      builder.create<arith::IndexCastOp>(loc, builder.getIndexType(), workers);
+  Value step = builder.create<arith::ConstantIndexOp>(loc, 1);
+  auto forOp = builder.create<scf::ForOp>(loc, lowerBound, upperBound, step);
+
+  /// Create terminator for the epochOp.
+  builder.create<arts::YieldOp>(loc);
+
+  /// Collect all dependencies before creating new EDT
+  SetVector<Value> allDeps;
+  op.walk([&](EdtOp inner) {
+    if (inner == op)
+      return WalkResult::advance();
+    for (Value dep : inner.getDependencies())
+      allDeps.insert(dep);
+    return WalkResult::advance();
+  });
+
+  /// Create new EDT with merged dependencies and move the region
+  builder.setInsertionPointToStart(forOp.getBody());
+  auto newEdtOp = builder.create<arts::EdtOp>(loc, arts::EdtType::task,
+                                              allDeps.getArrayRef());
+
+  /// Move the region from the original EDT to the new EDT
+  Region &sourceRegion = op.getRegion();
+  Region &newRegion = newEdtOp.getRegion();
+  if (newRegion.empty())
+    newRegion.push_back(new Block());
+  Block &newBody = newRegion.front();
+  newBody.clear();
+
+  /// Move operations from source region to new region
+  SmallVector<Operation *, 16> opsToMove;
+  for (auto &block : sourceRegion) {
+    for (auto &opInBlock : block)
+      opsToMove.push_back(&opInBlock);
+  }
+
+  /// Move operations to new region
+  for (auto *opToMove : opsToMove)
+    opToMove->moveBefore(&newBody, newBody.end());
+
+  /// Replace original EDT with new one
+  op->replaceAllUsesWith(newEdtOp);
+
+  /// Remove the original EDT
+  op.erase();
+
+  return true;
 }
 
 void EdtLoweringPass::transformDependencyUses(Block *block,

@@ -187,10 +187,23 @@ void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
   /// - If heap-allocated, return the pointer directly
   auto getLLVMPtr = [&](Value ptrBase, ValueRange idx, Location loc) -> Value {
     Value targetPtr = ptrBase;
-    if (!idx.empty())
+    if (!idx.empty()) {
+      auto srcMemrefTy = targetPtr.getType().dyn_cast<MemRefType>();
+      if (!srcMemrefTy)
+        return targetPtr;
+      auto srcShape = srcMemrefTy.getShape();
+      SmallVector<int64_t, 4> newShape;
+      if (idx.size() >= srcShape.size())
+        newShape = {};
+      else
+        newShape.assign(srcShape.begin() + static_cast<long>(idx.size()),
+                        srcShape.end());
+      auto resultTy = MemRefType::get(newShape, srcMemrefTy.getElementType(),
+                                      MemRefLayoutAttrInterface(),
+                                      srcMemrefTy.getMemorySpace());
       targetPtr =
-          AC->create<DbSubIndexOp>(loc, targetPtr.getType(), targetPtr, idx)
-              .getResult();
+          AC->create<DbSubIndexOp>(loc, resultTy, targetPtr, idx).getResult();
+    }
 
     auto it = isStackAllocated.find(ptrBase);
     bool stack = (it != isStackAllocated.end()) ? it->second : false;
@@ -295,7 +308,15 @@ void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
         acquireUser.getPtr().replaceAllUsesWith(newAcquire.getPtr());
         opsToRemove.insert(acquireUser);
 
-        enqueue(newAcquire.getPtr(), isStackAllocated.lookup(cur), newPtr);
+        /// Do not propagate stack-allocated semantics through db_acquire. The
+        /// pointer result of acquire should be treated as a heap handle here,
+        /// avoiding extra loads injected by this normalization step.
+        enqueue(newAcquire.getPtr(), /*stackFlag*/ false, newPtr);
+      } else if (auto subIdx = dyn_cast<DbSubIndexOp>(user)) {
+        /// Propagate tracking through db_subindex so downstream loads/stores
+        /// can be rewritten with proper pointer dereference semantics.
+        enqueue(subIdx.getResult(), isStackAllocated.lookup(cur),
+                ptrSource.lookup(cur));
       } else if (isa<EdtOp>(user)) {
         queueBlockArgFollow(user, use.getOperandNumber(), cur);
       } else if (isa<DbReleaseOp>(user)) {

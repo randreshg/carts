@@ -6,16 +6,16 @@
 #include <stdlib.h>
 #include <time.h>
 /*
-carts cgeist simple.cpp -std=c++17 -fopenmp -O0 -S > simple.mlir
-carts run simple.mlir --convert-openmp-to-arts -o simple-arts.mlir
-carts run simple-arts.mlir --edt-transforms -o simple-edt.mlir
-carts run simple-edt.mlir --create-dbs -o simple-db.mlir
-carts run simple.mlir --edt-lowering -o simple-llvm.mlir
+carts cgeist task.cpp -std=c++17 -fopenmp -O0 -S > task.mlir
+carts run task.mlir --convert-openmp-to-arts -o task-arts.mlir
+carts run task-arts.mlir --edt-transforms -o task-edt.mlir
+carts run task-edt.mlir --create-dbs -o task-db.mlir
+carts run task.mlir --edt-lowering -o task-llvm.mlir
 
 
-carts mlir-translate --mlir-to-llvmir simple-arts.mlir &> simple-arts.ll
+carts mlir-translate --mlir-to-llvmir task-arts.mlir &> task-arts.ll
 
-carts compile simple-arts.ll -O3 -g0 -march=native -o simple
+carts compile task-arts.ll -O3 -g0 -march=native -o task
 
 python3 run_comparison.py \
   --problem_sizes "10 5" \

@@ -655,54 +655,126 @@ Value ArtsCodegen::computeLinearIndex(ArrayRef<Value> sizes,
   if (indices.size() <= 1)
     return indices.empty() ? createIndexConstant(0, loc) : indices[0];
 
-  Value linearIndex = createIndexConstant(0, loc);
-  for (size_t i = 0; i < indices.size(); ++i) {
-    /// Compute the stride for this dimension
-    Value stride = createIndexConstant(1, loc);
-    for (size_t j = i + 1; j < sizes.size(); ++j)
-      stride = create<arith::MulIOp>(loc, stride, sizes[j]);
+  /// If all sizes are constants, we can compute strides statically
+  bool allSizesConstant = true;
+  SmallVector<int64_t> constSizes;
+  for (Value sz : sizes) {
+    if (auto constOp = sz.getDefiningOp<arith::ConstantIndexOp>()) {
+      constSizes.push_back(constOp.value());
+    } else {
+      allSizesConstant = false;
+      break;
+    }
+  }
 
-    /// Add contribution from this dimension: indices[i] * stride
-    auto contribution = create<arith::MulIOp>(loc, indices[i], stride);
-    linearIndex = create<arith::AddIOp>(loc, linearIndex, contribution);
+  Value linearIndex = createIndexConstant(0, loc);
+  if (allSizesConstant) {
+    /// pre-compute strides when all sizes are constants
+    SmallVector<int64_t> strides(sizes.size());
+    strides.back() = 1;
+    for (int i = static_cast<int>(sizes.size()) - 2; i >= 0; --i)
+      strides[i] = strides[i + 1] * constSizes[i + 1];
+
+    for (size_t i = 0; i < indices.size(); ++i) {
+      if (auto constIdx = indices[i].getDefiningOp<arith::ConstantIndexOp>()) {
+        /// Constant folding: compute contribution at compile time
+        int64_t contribution = constIdx.value() * strides[i];
+        if (contribution != 0) {
+          auto constContrib = createIndexConstant(contribution, loc);
+          linearIndex = create<arith::AddIOp>(loc, linearIndex, constContrib);
+        }
+      } else {
+        /// Dynamic index: compute stride * index
+        auto stride = createIndexConstant(strides[i], loc);
+        auto contribution = create<arith::MulIOp>(loc, indices[i], stride);
+        linearIndex = create<arith::AddIOp>(loc, linearIndex, contribution);
+      }
+    }
+  } else {
+    /// Fallback: original dynamic computation
+    for (size_t i = 0; i < indices.size(); ++i) {
+      Value stride = createIndexConstant(1, loc);
+      for (size_t j = i + 1; j < sizes.size(); ++j)
+        stride = create<arith::MulIOp>(loc, stride, sizes[j]);
+
+      auto contribution = create<arith::MulIOp>(loc, indices[i], stride);
+      linearIndex = create<arith::AddIOp>(loc, linearIndex, contribution);
+    }
   }
 
   return linearIndex;
 }
 
-//===----------------------------------------------------------------------===//
-// Loop construction helpers (for multi-dimensional operations)
-//===----------------------------------------------------------------------===//
+/// Helper to iterate over all Db elements
+void ArtsCodegen::iterateDbElements(
+    Value dbGuid, Value edtGuid, ArrayRef<Value> dbSizes,
+    ArrayRef<Value> dbOffsets, bool isSingle, Location loc,
+    std::function<void(Value)> elementCallback) {
 
-void ArtsCodegen::createNestedLoopsForRange(ValueRange lowerBounds,
-                                            ValueRange upperBounds,
-                                            ValueRange steps,
-                                            NestedLoopBodyFn bodyFn,
-                                            Location loc) {
-  assert(lowerBounds.size() == upperBounds.size() &&
-         upperBounds.size() == steps.size() &&
-         "Bound and step sizes must match");
+  /// If the db sizes are empty, we are dealing with a single element
+  if (dbSizes.empty()) {
+    auto zeroIndex = createIndexConstant(0, loc);
+    elementCallback(zeroIndex);
+    return;
+  }
 
-  SmallVector<Value> indices;
-  std::function<void(unsigned)> createLoop = [&](unsigned dim) {
-    if (dim >= lowerBounds.size()) {
-      bodyFn(dim, indices);
-      return;
-    }
-
-    auto loopOp =
-        create<scf::ForOp>(loc, lowerBounds[dim], upperBounds[dim], steps[dim]);
+  /// If the db is single, we can use a single loop
+  if (isSingle) {
+    /// The loop goes from the dbOffsets[0] to dbOffsets[0] + dbSizes[0]
+    auto lowerBound =
+        dbOffsets.empty() ? createIndexConstant(0, loc) : dbOffsets[0];
+    auto upperBound = create<arith::AddIOp>(loc, lowerBound, dbSizes[0]);
+    auto stepConstant = createIndexConstant(1, loc);
+    auto loopOp = create<scf::ForOp>(loc, lowerBound, upperBound, stepConstant);
     auto &loopBlock = loopOp.getRegion().front();
-    getBuilder().setInsertionPointToStart(&loopBlock);
+    setInsertionPointToStart(&loopBlock);
+    Value adj = loopOp.getInductionVar();
+    if (!dbOffsets.empty())
+      adj = create<arith::SubIOp>(loc, adj, dbOffsets[0]);
+    elementCallback(adj);
+    setInsertionPointAfter(loopOp);
+    return;
+  }
 
-    indices.push_back(loopOp.getInductionVar());
-    createLoop(dim + 1);
-    indices.pop_back();
+  /// Otherwise, we need to iterate over all dimensions of the db
+  iterateMultiDb(dbGuid, edtGuid, dbSizes, dbOffsets, loc, elementCallback);
+}
 
-    getBuilder().setInsertionPointAfter(loopOp);
-  };
+/// Helper to iterate over multi-dimensional db elements
+void ArtsCodegen::iterateMultiDb(Value dbGuid, Value edtGuid,
+                                 ArrayRef<Value> dbSizes,
+                                 ArrayRef<Value> dbOffsets, Location loc,
+                                 std::function<void(Value)> elementCallback) {
+  const unsigned dbRank = dbSizes.size();
+  auto stepConstant = createIndexConstant(1, loc);
 
-  createLoop(0);
+  std::function<void(unsigned, SmallVector<Value, 4> &)>
+      addDependenciesRecursive = [&](unsigned dim,
+                                     SmallVector<Value, 4> &indices) {
+        if (dim == dbRank) {
+          auto linearIndex = computeLinearIndex(dbSizes, indices, loc);
+          elementCallback(linearIndex);
+          return;
+        }
+        /// The loop goes from the dbOffsets[dim] to dbOffsets[dim] +
+        /// dbSizes[dim]
+        auto lowerBound = (dim < dbOffsets.size())
+                              ? dbOffsets[dim]
+                              : createIndexConstant(0, loc);
+        auto upperBound = create<arith::AddIOp>(loc, lowerBound, dbSizes[dim]);
+        auto loopOp =
+            create<scf::ForOp>(loc, lowerBound, upperBound, stepConstant);
+
+        auto &loopBlock = loopOp.getRegion().front();
+        setInsertionPointToStart(&loopBlock);
+        indices.push_back(loopOp.getInductionVar());
+        addDependenciesRecursive(dim + 1, indices);
+        indices.pop_back();
+        setInsertionPointAfter(loopOp);
+      };
+
+  SmallVector<Value, 4> initIndices;
+  addDependenciesRecursive(0, initIndices);
 }
 
 //===----------------------------------------------------------------------===//

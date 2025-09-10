@@ -66,6 +66,25 @@ def AllocOp : Arts_Op<"alloc", []> {
 //===----------------------------------------------------------------------===//
 // Arts DB Operations
 //===----------------------------------------------------------------------===//
+// Query a datablock-backed memref dimension. Prefer this over memref.dim so
+// we can canonicalize using DB metadata.
+def DbDimOp : Arts_Op<"db_dim", [Pure]> {
+  let summary = "Query dimension of a datablock-backed memref";
+  let description = [{
+    The `arts.db_dim` op queries the size of the specified dimension of a
+    datablock-backed memref. It is preferred over `memref.dim` so DB-oriented
+    canonicalization can fold it to explicit values coming from `arts.db_alloc`
+    or `arts.db_acquire` slice sizes.
+  }];
+  let arguments = (ins AnyMemRef:$source, Index:$dim);
+  let results = (outs Index:$result);
+  let assemblyFormat = "$source `,` $dim attr-dict `:` type($source) `->` type($result)";
+  let hasCanonicalizer = 1;
+  let builders = [
+    OpBuilder<(ins "Value":$source, "int64_t":$dim)>
+  ];
+}
+
 def DbAllocOp : Arts_Op<"db_alloc", [
     AttrSizedOperandSegments, MemoryEffects<[MemAlloc]>
     ]> {
@@ -150,8 +169,9 @@ def DbAcquireOp : Arts_Op<"db_acquire",
   let assemblyFormat = [{
     `[` $mode `]`
     $source_guid `,` $source_ptr
-    ( `(` $indices^ `)` )?
-    ( `[` $offsets^ `,` $sizes `]` )?
+    ( `indices` `[` $indices^ `]` )?
+    ( `offsets` `[` $offsets^ `]` )?
+    ( `sizes` `[` $sizes^ `]` )?
     attr-dict `:` `(` type($source_guid) `,` type($source_ptr) `)` `->` `(` type($guid) `,` type($ptr) `)`
   }];
 
@@ -472,7 +492,11 @@ def EdtCreateOp : Arts_Op<"edt_create", [MemoryEffects<[MemWrite]>]> {
   }];
   let arguments = (ins AnyMemRef:$param_memref, I32:$depCount, I32:$route, Optional<I64>:$epochGuid);
   let results = (outs I64:$guid);
-  let assemblyFormat = "`(` $param_memref `:` type($param_memref) `,` $depCount `,` $route `)` (`epoch` `(` $epochGuid^ `:` type($epochGuid) `)`)? attr-dict";
+  
+  let assemblyFormat = [{
+    `(` $param_memref `:` type($param_memref) `,` $depCount `,` $route `)` 
+    (`epoch` `(` $epochGuid^ `:` type($epochGuid) `)`)? attr-dict
+  }];
 
   let builders = [
     OpBuilder<(ins "Value":$param_memref, "Value":$depCount)>,
@@ -536,15 +560,20 @@ def IncrementOutLatchOp : Arts_Op<"increment_out_latch", [MemoryEffects<[MemWrit
 //===----------------------------------------------------------------------===//
 
 def DepGetPtrOp : Arts_Op<"dep_get_ptr", [Pure]> {
-  let summary = "Extract pointer field from EDT dependency structure.";
+  let summary = "Extract pointer field from an EDT dependency structure";
   let description = [{
     Extracts the pointer field from an EDT dependency structure.
-    The input is a dependency structure containing both GUID and pointer fields.
-    Returns the pointer field which can be used to access the actual data.
+    The input can be a pointer to a dependency structure or a memref of
+    dependency structures. Optional indices specify which dependency entry
+    to access when the input is an array of dependencies (e.g., when a
+    DbAlloc/Acquire returned multiple datablocks). Returns a memref typed
+    view of the underlying pointer data suitable for further accesses.
   }];
-  let arguments = (ins AnyType:$dep_struct);
+  let arguments = (ins AnyType:$dep_struct, Variadic<AnyType>:$indices);
   let results = (outs AnyType:$ptr);
-  let assemblyFormat = "$dep_struct `:` type($dep_struct) attr-dict `:` type($ptr)";
+  let assemblyFormat = [{
+    $dep_struct ( `indices` `[` $indices^ `:` type($indices) `]` )? attr-dict `:` type($dep_struct) `:` type($ptr)
+  }];
 }
 
 def DepGetGuidOp : Arts_Op<"dep_get_guid", [Pure]> {
