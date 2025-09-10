@@ -299,38 +299,6 @@ struct TaskwaitToARTSPattern : public OpRewritePattern<omp::TaskwaitOp> {
     return success();
   }
 };
-
-/// Pattern to replace 'memref.alloc' with 'arts.alloc'
-struct AllocToARTSPattern : public OpRewritePattern<memref::AllocOp> {
-  using OpRewritePattern::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(memref::AllocOp allocOp,
-                                PatternRewriter &rewriter) const override {
-    /// Get the location of the original alloc operation.
-    Location loc = allocOp.getLoc();
-
-    /// Get the memref type from the alloc operation.
-    auto memRefType = allocOp.getType().dyn_cast<MemRefType>();
-    if (!memRefType)
-      return failure();
-
-    /// Collect the dynamic sizes of the memref (if any).
-    SmallVector<Value, 4> dynamicSizes;
-    for (Value operand : allocOp.getDynamicSizes())
-      dynamicSizes.push_back(operand);
-
-    /// Create the arts.alloc operation with the same memref type and dynamic
-    /// sizes.
-    auto artsAlloc =
-        rewriter.create<arts::AllocOp>(loc, memRefType, dynamicSizes);
-
-    /// Replace all uses of the original alloc with the new arts.alloc.
-    rewriter.replaceOp(allocOp, artsAlloc.getResult());
-
-    return success();
-  }
-};
-
 /// Pattern to replace 'func.call' with an equivalent 'arts' call if exists.
 struct CallToARTSPattern : public OpRewritePattern<func::CallOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -369,7 +337,7 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   RewritePatternSet patterns(context);
   patterns.add<OMPParallelToARTSPattern, SCFParallelToArtsPattern,
                MasterToARTSPattern, TaskToARTSPattern, TerminatorToARTSPattern,
-               BarrierToARTSPattern, AllocToARTSPattern, TaskwaitToARTSPattern,
+               BarrierToARTSPattern, TaskwaitToARTSPattern,
                CallToARTSPattern>(context);
   GreedyRewriteConfig config;
   (void)applyPatternsAndFoldGreedily(module, std::move(patterns), config);

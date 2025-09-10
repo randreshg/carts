@@ -62,7 +62,7 @@ If you ever need to recreate it (parent is the `Next Steps` page):
 Step 1 — Create minimal card with just `Task` and `Status`:
 ```json
 {
-  "parent": {"database_id": "<NEXT_STEPS_DB_ID>"},
+  "parent": {"db_id": "<NEXT_STEPS_DB_ID>"},
   "pages": [
     {"properties": {"Task": "Expanded OpenMP Support", "Status": "To Do"}}
   ]
