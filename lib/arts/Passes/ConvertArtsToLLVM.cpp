@@ -371,82 +371,61 @@ struct EdtParamUnpackPattern : public ArtsToLLVMPattern<EdtParamUnpackOp> {
   }
 };
 
-/// Pattern to convert arts.edt_dep_unpack operations
-struct EdtDepUnpackPattern : public ArtsToLLVMPattern<EdtDepUnpackOp> {
+/// Pattern to convert arts.dep_gep operations
+struct DepGepOpPattern : public ArtsToLLVMPattern<DepGepOp> {
   using ArtsToLLVMPattern::ArtsToLLVMPattern;
 
-  LogicalResult matchAndRewrite(EdtDepUnpackOp op,
+  LogicalResult matchAndRewrite(DepGepOp op,
                                 PatternRewriter &rewriter) const override {
-    ARTS_INFO("Lowering EdtDepUnpack Op " << op);
-    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
-    auto depMemref = op.getMemref();
-    auto results = op.getUnpacked();
-    auto loc = op.getLoc();
-
-    /// Convert depMemref to a typed LLVM pointer: ptr to ArtsEdtDep
-    auto rawPtr = AC->castToLLVMPtr(depMemref, loc);
-    auto typedPtrTy = LLVM::LLVMPointerType::get(AC->ArtsEdtDep);
-    auto typedPtr = AC->create<LLVM::BitcastOp>(loc, typedPtrTy, rawPtr);
-
-    SmallVector<Value> newResults;
-    for (unsigned i = 0; i < results.size(); ++i) {
-      /// Return the base pointer to the dependency vector; per-argument
-      /// selection is handled by indices during dep_get_ptr lowering.
-      newResults.push_back(typedPtr);
-    }
-
-    rewriter.replaceOp(op, newResults);
-    return success();
-  }
-};
-
-/// Pattern to convert arts.dep_get_ptr operations
-struct DepGetPtrOpPattern : public ArtsToLLVMPattern<DepGetPtrOp> {
-  using ArtsToLLVMPattern::ArtsToLLVMPattern;
-
-  LogicalResult matchAndRewrite(DepGetPtrOp op,
-                                PatternRewriter &rewriter) const override {
-    ARTS_INFO("Lowering DepGetPtr Op " << op);
+    ARTS_INFO("Lowering DepGep Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
     auto depStruct = op.getDepStruct();
-    auto allOperands = op->getOperands();
-    ValueRange indices = ValueRange(allOperands).drop_front(1);
+    auto offset = op.getOffset();
+    auto indices = op.getIndices();
+    auto strides = op.getStrides();
     auto loc = op.getLoc();
 
-    /// Ensure we have a typed pointer to ArtsEdtDep sequence
-    auto typedDepPtrTy = LLVM::LLVMPointerType::get(AC->ArtsEdtDep);
-    Value typedDepPtr;
-    if (auto llvmPtrTy = depStruct.getType().dyn_cast<LLVM::LLVMPointerType>()) {
-      typedDepPtr = depStruct;
-      if (llvmPtrTy != typedDepPtrTy)
-        typedDepPtr = AC->create<LLVM::BitcastOp>(loc, typedDepPtrTy, typedDepPtr);
-    } else {
-      /// Convert memref/other to a generic ptr and then bitcast
-      auto rawPtr = AC->castToLLVMPtr(depStruct, loc);
-      typedDepPtr = AC->create<LLVM::BitcastOp>(loc, typedDepPtrTy, rawPtr);
+    /// Cast dep_struct to typed pointer to ArtsEdtDep array
+    auto depPtrTy = LLVM::LLVMPointerType::get(AC->ArtsEdtDep);
+    Value typedDepPtr = AC->castToLLVMPtr(depStruct, loc);
+    if (typedDepPtr.getType() != depPtrTy)
+      typedDepPtr = AC->create<LLVM::BitcastOp>(loc, depPtrTy, typedDepPtr);
+
+    /// Compute linearized index: offset + sum_i indices[i] * strides[i]
+    Value depEntryPtr = typedDepPtr;
+    {
+      Value linearIndex = offset;
+      if (linearIndex.getType() != AC->Int64)
+        linearIndex = AC->castToInt(AC->Int64, linearIndex, loc);
+
+      for (size_t i = 0; i < indices.size(); ++i) {
+        Value idx = indices[i];
+        if (idx.getType() != AC->Int64)
+          idx = AC->castToInt(AC->Int64, idx, loc);
+        Value strideVal = (i < strides.size())
+                              ? strides[i]
+                              : AC->createIntConstant(1, AC->Int64, loc);
+        if (strideVal.getType() != AC->Int64)
+          strideVal = AC->castToInt(AC->Int64, strideVal, loc);
+
+        Value contrib = AC->create<arith::MulIOp>(loc, idx, strideVal);
+        linearIndex = AC->create<arith::AddIOp>(loc, linearIndex, contrib);
+      }
+
+      depEntryPtr = AC->create<LLVM::GEPOp>(
+          loc, depPtrTy, AC->ArtsEdtDep, typedDepPtr, ValueRange{linearIndex});
     }
 
-    /// If indices are provided, advance to the selected dependency entry.
-    Value selectedDepPtr = typedDepPtr;
-    if (!indices.empty()) {
-      Value idx = indices.front();
-      if (idx.getType() != AC->Int32)
-        idx = AC->castToInt(AC->Int32, idx, loc);
-      selectedDepPtr = AC->create<LLVM::GEPOp>(loc, typedDepPtrTy, AC->ArtsEdtDep,
-                                               typedDepPtr, ValueRange{idx});
-    }
+    /// Extract ptr field (field #2) from dependency structure
+    auto c0 = AC->createIntConstant(0, AC->Int64, loc);
+    auto c2 = AC->createIntConstant(2, AC->Int64, loc);
+    auto ptrFieldPtr = AC->create<LLVM::GEPOp>(
+        loc, LLVM::LLVMPointerType::get(AC->llvmPtr), AC->ArtsEdtDep,
+        depEntryPtr, ValueRange{c0, c2});
+    Value dataPtr = AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, ptrFieldPtr);
 
-    /// Compute address of dep.ptr (field #2) and load the actual pointer value.
-    auto c0 = AC->createIntConstant(0, AC->Int32, loc);
-    auto c2 = AC->createIntConstant(2, AC->Int32, loc);
-    auto ptrPtrTy = LLVM::LLVMPointerType::get(AC->llvmPtr);
-    auto fieldPtr = AC->create<LLVM::GEPOp>(loc, ptrPtrTy, typedDepPtrTy,
-                                            selectedDepPtr, ValueRange{c0, c2});
-    auto actualPtr = AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, fieldPtr.getResult());
-    /// Convert the raw pointer to a memref using polygeist helper
-    auto resultType = op.getPtr().getType();
-    auto memrefResult = AC->create<polygeist::Pointer2MemrefOp>(loc, resultType, actualPtr);
-    rewriter.replaceOp(op, memrefResult);
+    /// Return the LLVM pointer directly
+    rewriter.replaceOp(op, dataPtr);
     return success();
   }
 };
@@ -462,18 +441,67 @@ struct DepGetGuidOpPattern : public ArtsToLLVMPattern<DepGetGuidOp> {
     auto depStruct = op.getDepStruct();
     auto loc = op.getLoc();
 
-    /// Extract the GUID from the EDT dependency structure
-    auto typedDepPtrTy = LLVM::LLVMPointerType::get(AC->ArtsEdtDep);
-    Value typedDepPtr = depStruct;
-    if (depStruct.getType() != typedDepPtrTy)
-      typedDepPtr = AC->create<LLVM::BitcastOp>(loc, typedDepPtrTy, depStruct);
+    /// Cast dep_struct to typed pointer to ArtsEdtDep
+    auto depPtrTy = LLVM::LLVMPointerType::get(AC->ArtsEdtDep);
+    Value typedDepPtr = AC->castToLLVMPtr(depStruct, loc);
+    if (typedDepPtr.getType() != depPtrTy)
+      typedDepPtr = AC->create<LLVM::BitcastOp>(loc, depPtrTy, typedDepPtr);
 
-    auto c0 = AC->createIntConstant(0, AC->Int32, loc);
-    auto guidPtr = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, typedDepPtrTy,
-                                           typedDepPtr, ValueRange{c0, c0});
-    auto guid =
-        AC->create<LLVM::LoadOp>(loc, AC->ArtsGuid, guidPtr.getResult());
-    rewriter.replaceOp(op, guid.getResult());
+    /// Extract GUID field (field #0) from dependency structure using GEP
+    auto c0 = AC->createIntConstant(0, AC->Int64, loc);
+    auto guidFieldPtr = AC->create<LLVM::GEPOp>(
+        loc, LLVM::LLVMPointerType::get(AC->ArtsGuid), AC->ArtsEdtDep,
+        typedDepPtr, ValueRange{c0, c0});
+    auto guid = AC->create<LLVM::LoadOp>(loc, AC->ArtsGuid, guidFieldPtr);
+    rewriter.replaceOp(op, guid);
+    return success();
+  }
+};
+
+/// Pattern to convert arts.db_gep operations to LLVM GEP using element strides
+struct DbGepOpPattern : public ArtsToLLVMPattern<arts::DbGepOp> {
+  using ArtsToLLVMPattern::ArtsToLLVMPattern;
+
+  LogicalResult matchAndRewrite(arts::DbGepOp op,
+                                PatternRewriter &rewriter) const override {
+    ARTS_INFO("Lowering DbGep Op " << op);
+    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
+    auto base = op.getBasePtr();
+    auto indices = op.getIndices();
+    auto strides = op.getStrides();
+    auto loc = op.getLoc();
+
+    /// Cast base to LLVM pointer type
+    Value basePtr = AC->castToLLVMPtr(base, loc);
+
+    /// If base is a memref of pointers, we must load the pointer element;
+    /// otherwise we compute the address within the element buffer.
+    auto baseMT = base.getType().dyn_cast<MemRefType>();
+    const bool isPointerArray =
+        baseMT && baseMT.getElementType().isa<LLVM::LLVMPointerType>();
+
+    /// Pad strides with 1s to match indices length
+    SmallVector<Value> paddedStrides(strides.begin(), strides.end());
+    while (paddedStrides.size() < indices.size())
+      paddedStrides.push_back(AC->createIndexConstant(1, loc));
+
+    /// Compute linear element index using provided strides
+    Value linearIdx =
+        AC->computeLinearIndexFromStrides(paddedStrides, indices, loc);
+    Value idx64 = AC->castToInt(AC->Int64, linearIdx, loc);
+
+    /// Use typed GEP based on the element type; default to pointer elements
+    Type elemTy = baseMT ? baseMT.getElementType() : AC->llvmPtr;
+    Value elemAddr = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, elemTy, basePtr,
+                                             ValueRange{idx64});
+
+    /// For arrays of pointers, load the pointer value; else return address
+    if (isPointerArray) {
+      Value loadedPtr = AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, elemAddr);
+      rewriter.replaceOp(op, loadedPtr);
+    } else {
+      rewriter.replaceOp(op, elemAddr);
+    }
     return success();
   }
 };
@@ -494,7 +522,7 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
     auto outlined =
         AC->getModule().lookupSymbol<func::FuncOp>(funcNameAttr.getValue());
     if (!outlined)
-      return op.emitError("Outlined function not found");
+      return op.emitError("EDT Outlined function not found");
 
     /// Build artsEdtCreate arguments; route required, default 0 if missing
     auto funcPtr = AC->createFnPtr(outlined, op.getLoc());
@@ -773,39 +801,6 @@ struct DbNumElementsPattern : public ArtsToLLVMPattern<DbNumElementsOp> {
   }
 };
 
-/// Pattern to convert arts.db_subindex operations to polygeist subindex
-struct DbSubIndexOpPattern : public ArtsToLLVMPattern<DbSubIndexOp> {
-  using ArtsToLLVMPattern::ArtsToLLVMPattern;
-
-  LogicalResult matchAndRewrite(DbSubIndexOp op,
-                                PatternRewriter &rewriter) const override {
-    ARTS_INFO("Lowering DbSubIndex Op " << op);
-    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
-    auto source = op.getSource();
-    auto indices = op.getIndices();
-    auto loc = op.getLoc();
-
-    /// Chain polygeist::SubIndexOp operations for multidimensional access
-    /// Each polygeist::SubIndexOp handles one dimension
-    Value current = source;
-
-    for (size_t i = 0; i < indices.size(); ++i) {
-      auto currentType = current.getType().dyn_cast<MemRefType>();
-      if (!currentType)
-        return failure();
-      auto resultType = MemRefType::get(
-          currentType.getShape().drop_front(1), currentType.getElementType(),
-          MemRefLayoutAttrInterface(), currentType.getMemorySpace());
-
-      current = AC->create<polygeist::SubIndexOp>(loc, resultType, current,
-                                                  indices[i]);
-    }
-
-    rewriter.replaceOp(op, current);
-    return success();
-  }
-};
-
 /// Pattern to convert arts.alloc operations (ARTS memory allocation)
 struct AllocPattern : public ArtsToLLVMPattern<AllocOp> {
   using ArtsToLLVMPattern::ArtsToLLVMPattern;
@@ -943,8 +938,7 @@ void ConvertArtsToLLVMPass::populateCorePatterns(RewritePatternSet &patterns) {
   patterns.add<EdtCreatePattern>(context, AC);
 
   /// Dependency patterns
-  patterns.add<EdtDepUnpackPattern>(context, AC);
-  patterns.add<DepGetPtrOpPattern, DepGetGuidOpPattern>(context, AC);
+  patterns.add<DepGepOpPattern, DepGetGuidOpPattern>(context, AC);
   patterns.add<RecordInDepPattern, IncrementOutLatchPattern>(context, AC);
 }
 
@@ -954,7 +948,7 @@ void ConvertArtsToLLVMPass::populateDbPatterns(RewritePatternSet &patterns) {
   patterns.add<DbControlPattern>(context, AC);
   patterns.add<DbAllocPattern, DbFreePattern>(context, AC);
   patterns.add<DbNumElementsPattern>(context, AC);
-  patterns.add<DbSubIndexOpPattern>(context, AC);
+  patterns.add<DbGepOpPattern>(context, AC);
   patterns.add<DbAcquirePattern, DbReleasePattern>(context, AC);
   patterns.add<YieldPattern>(context, AC);
 }

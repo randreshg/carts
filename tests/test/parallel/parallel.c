@@ -3,7 +3,7 @@
 #include <stdlib.h>
 
 int main() {
-  printf("Demonstrating basic parallel region execution.\n");
+  printf("Parallel region execution.\n");
 #pragma omp parallel
   {
     int tid = omp_get_thread_num();

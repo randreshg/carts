@@ -112,6 +112,10 @@ public:
   Value computeTotalElements(ValueRange sizes, Location loc);
   Value computeLinearIndex(ArrayRef<Value> sizes, ArrayRef<Value> indices,
                            Location loc);
+  Value computeLinearIndexFromStrides(ValueRange strides, ValueRange indices,
+                                      Location loc);
+  SmallVector<Value> computeStridesFromSizes(ArrayRef<Value> sizes,
+                                             Location loc);
 
   /// Db iteration helpers
   void iterateDbElements(Value dbGuid, Value edtGuid, ArrayRef<Value> dbSizes,
