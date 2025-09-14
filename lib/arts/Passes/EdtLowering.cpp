@@ -19,6 +19,7 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -36,6 +37,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include "arts/Utils/ArtsDebug.h"
+#include "polygeist/Ops.h"
 ARTS_DEBUG_SETUP(edt_lowering);
 
 using namespace mlir;
@@ -95,10 +97,15 @@ public:
     return capturedValues.getArrayRef();
   }
   ArrayRef<Value> getDependencies() const { return deps.getArrayRef(); }
+  const DenseMap<Value, unsigned> &getValueToPackIndex() const {
+    return valueToPackIndex;
+  }
+  DenseMap<Value, unsigned> &getValueToPackIndex() { return valueToPackIndex; }
 
 private:
   EdtOp edtOp;
   SetVector<Value> capturedValues, parameters, constants, deps;
+  DenseMap<Value, unsigned> valueToPackIndex;
 };
 
 //===----------------------------------------------------------------------===//
@@ -118,7 +125,6 @@ private:
 
   /// Parameter handling
   Value packParameters(Location loc, EdtEnvManager &envManager,
-                       DenseMap<Value, unsigned> &valueToPackIndex,
                        SmallVector<Type> &packTypes);
 
   /// Region outlining
@@ -127,16 +133,13 @@ private:
                                         const SmallVector<Type> &packTypes,
                                         size_t numUserParams);
 
-  /// Transform dependency uses to use DbSubIndexOp + DepGetPtrOp pattern
-  void transformDependencyUses(Block *block, ArrayRef<Value> unpackedDeps);
-
-  /// Helper to create final ptr from dependency struct and indices
-  Value createFinalPtr(Location loc, Value depStruct, ValueRange indices,
-                       Type resultType);
+  void transformDepUses(Block *block, ArrayRef<Value> originalDeps, Value depv,
+                        ArrayRef<Value> allParams, EdtEnvManager &envManager,
+                        ArrayRef<Value> depIdentifiers);
 
   /// Dependency satisfaction
-  LogicalResult insertDependencyManagement(Location loc, Value edtGuid,
-                                           const SmallVector<Value> &deps);
+  LogicalResult insertDepManagement(Location loc, Value edtGuid,
+                                    const SmallVector<Value> &deps);
 
   /// Utilities
   std::string generateUniqueFunctionName();
@@ -206,10 +209,6 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   /// Create local variables for parameter packing/dedup
   DenseMap<Value, unsigned> valueToPackIndex;
   SmallVector<Type> packTypes;
-  ARTS_INFO("Lowering EDT with "
-            << envManager.getParameters().size() << " parameters, "
-            << envManager.getConstants().size() << " constants, "
-            << envManager.getDependencies().size() << " deps");
 
   /// Create edt outlined function
   func::FuncOp outlinedFunc = createOutlinedFunction(edtOp, envManager);
@@ -217,8 +216,7 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
     return edtOp.emitError("Failed to create outlined function");
 
   /// Pack parameters
-  Value paramPack =
-      packParameters(loc, envManager, valueToPackIndex, packTypes);
+  Value paramPack = packParameters(loc, envManager, packTypes);
 
   /// Outline region to function and replace EDT
   if (failed(outlineRegionToFunction(edtOp, outlinedFunc, envManager, packTypes,
@@ -252,7 +250,7 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   AC->setInsertionPointAfter(outlineOp);
   SmallVector<Value> depsVec(envManager.getDependencies().begin(),
                              envManager.getDependencies().end());
-  if (failed(insertDependencyManagement(loc, edtGuid, depsVec)))
+  if (failed(insertDepManagement(loc, edtGuid, depsVec)))
     return edtOp.emitError("Failed to insert dependency management");
 
   /// Replace all uses of EDT with the outlined function result
@@ -280,13 +278,13 @@ EdtLoweringPass::createOutlinedFunction(EdtOp edtOp,
   return outlinedFunc;
 }
 
-Value EdtLoweringPass::packParameters(
-    Location loc, EdtEnvManager &envManager,
-    DenseMap<Value, unsigned> &valueToPackIndex, SmallVector<Type> &packTypes) {
+Value EdtLoweringPass::packParameters(Location loc, EdtEnvManager &envManager,
+                                      SmallVector<Type> &packTypes) {
   const auto &parameters = envManager.getParameters();
   const auto &deps = envManager.getDependencies();
 
   SmallVector<Value> packValues;
+  auto &valueToPackIndex = envManager.getValueToPackIndex();
 
   /// Pack user parameters first
   for (Value v : parameters) {
@@ -374,41 +372,39 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
                          ? deps[i].getDefiningOp()->getName().getStringRef()
                          : "none"));
   }
-  SmallVector<Value> unpackedParams;
+  SmallVector<Value> unpackedParams, allParams;
 
   if (!packTypes.empty()) {
     auto paramUnpackOp = AC->create<EdtParamUnpackOp>(loc, packTypes, paramv);
     auto results = paramUnpackOp.getResults();
-    unpackedParams.append(results.begin(), results.begin() + numUserParams);
+    allParams.assign(results.begin(), results.end());
+    unpackedParams.append(allParams.begin(), allParams.begin() + numUserParams);
   }
 
-  /// Unpack deps from depv array into the types expected by the EDT block
-  SmallVector<Value> unpackedDeps;
+  /// Store dependency information for direct use
+  SmallVector<Value> originalDeps(envManager.getDependencies().begin(),
+                                  envManager.getDependencies().end());
   Region &edtRegion = edtOp.getRegion();
   Block &edtBlock = edtRegion.front();
-  if (!edtBlock.getArguments().empty()) {
-    SmallVector<Type> depStructTypes;
-    depStructTypes.reserve(edtBlock.getNumArguments());
-    for (size_t i = 0; i < edtBlock.getNumArguments(); ++i)
-      depStructTypes.push_back(AC->ArtsEdtDep);
 
-    auto depUnpackOp = AC->create<EdtDepUnpackOp>(loc, depStructTypes, depv);
-    llvm::append_range(unpackedDeps, depUnpackOp.getResults());
-  }
+  /// Create compact per-dependency placeholders for later dep_gep rewrite.
+  SmallVector<Value> depPlaceholders(originalDeps.size());
+  for (auto it : llvm::enumerate(originalDeps))
+    depPlaceholders[it.index()] =
+        AC->create<UndefOp>(loc, it.value().getType());
 
   /// Clone constants into function
   IRMapping valueMapping;
 
-  /// Handle block arguments - create proper memref values from dependency
-  /// handles
-  for (auto [edtArg, unpackedDep] :
-       llvm::zip(edtBlock.getArguments(), unpackedDeps)) {
-    /// Create memref from dependency handle using DepGetPtrOp pattern
-    Value memrefValue = createFinalPtr(loc, unpackedDep, {}, edtArg.getType());
-    valueMapping.map(edtArg, memrefValue);
-    ARTS_INFO("Mapping EDT arg " << edtArg.getType() << " to memref value "
-                                 << memrefValue.getType());
-  }
+  /// Map EDT args to placeholders so cloned ops don't reference outer values.
+  for (auto [edtArg, ph] : llvm::zip(edtBlock.getArguments(), depPlaceholders))
+    valueMapping.map(edtArg, ph);
+
+  /// Also map the original dependency values to their corresponding
+  /// placeholders to catch any direct uses that bypassed the block arguments.
+  for (auto [originalDep, placeholder] :
+       llvm::zip(originalDeps, depPlaceholders))
+    valueMapping.map(originalDep, placeholder);
 
   for (Value constant : envManager.getConstants())
     if (Operation *defOp = constant.getDefiningOp())
@@ -447,12 +443,16 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
 
   /// Add return terminator
   AC->create<func::ReturnOp>(loc);
+
+  /// Transform dependency uses inside outlined region
+  transformDepUses(entryBlock, originalDeps, depv, allParams, envManager,
+                   depPlaceholders);
   return success();
 }
 
 LogicalResult
-EdtLoweringPass::insertDependencyManagement(Location loc, Value edtGuid,
-                                            const SmallVector<Value> &deps) {
+EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
+                                     const SmallVector<Value> &deps) {
   if (deps.empty())
     return success();
 
@@ -492,32 +492,6 @@ bool EdtLoweringPass::canLowerEdt(EdtOp edtOp) {
   /// Only lower task EDTs with non-empty single-block regions
   return edtOp.getType() == EdtType::task && !edtOp.getRegion().empty() &&
          edtOp.getRegion().hasOneBlock();
-}
-
-/// Helper to create final ptr from dependency struct and indices
-Value EdtLoweringPass::createFinalPtr(Location loc, Value depStruct,
-                                      ValueRange indices, Type resultType) {
-  if (indices.empty())
-    return AC->create<DepGetPtrOp>(loc, resultType, depStruct);
-
-  auto srcMemrefTy = depStruct.getType().dyn_cast<MemRefType>();
-  Type subIdxResultTy = depStruct.getType();
-  if (srcMemrefTy) {
-    auto srcShape = srcMemrefTy.getShape();
-    SmallVector<int64_t, 4> newShape;
-    if (indices.size() >= srcShape.size())
-      newShape = {};
-    else
-      newShape.assign(srcShape.begin() + static_cast<long>(indices.size()),
-                      srcShape.end());
-    /// Use default layout for the reduced-rank result
-    subIdxResultTy = MemRefType::get(newShape, srcMemrefTy.getElementType(),
-                                     MemRefLayoutAttrInterface(),
-                                     srcMemrefTy.getMemorySpace());
-  }
-  auto subIndexOp =
-      AC->create<DbSubIndexOp>(loc, subIdxResultTy, depStruct, indices);
-  return AC->create<DepGetPtrOp>(loc, resultType, subIndexOp.getResult());
 }
 
 /// Lowers a parallel EDT into an arts::EpochOp wrapping an scf.for loop over
@@ -593,64 +567,77 @@ bool EdtLoweringPass::lowerParallel(EdtOp &op) {
   return true;
 }
 
-void EdtLoweringPass::transformDependencyUses(Block *block,
-                                              ArrayRef<Value> unpackedDeps) {
-  SmallVector<Operation *> toReplace;
+void EdtLoweringPass::transformDepUses(Block *block,
+                                       ArrayRef<Value> originalDeps, Value depv,
+                                       ArrayRef<Value> allParams,
+                                       EdtEnvManager &envManager,
+                                       ArrayRef<Value> depIdentifiers) {
 
-  ARTS_INFO("transformDependencyUses: Processing " << unpackedDeps.size()
-                                                   << " unpacked deps");
-  for (size_t i = 0; i < unpackedDeps.size(); ++i) {
-    Value dep = unpackedDeps[i];
-    ARTS_INFO("  [" << i << "] Type: " << dep.getType() << ", DefOp: "
-                    << (dep.getDefiningOp()
-                            ? dep.getDefiningOp()->getName().getStringRef()
-                            : "none"));
-  }
-
-  /// Find all load/store operations that use unpacked deps
-  block->walk([&](Operation *op) {
-    ARTS_INFO("  Examining op: " << op->getName().getStringRef());
-
-    Value memref;
-    if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
-      ARTS_INFO("    LoadOp found, getting memref...");
-      memref = loadOp.getMemref();
-      ARTS_INFO("    LoadOp memref type: " << memref.getType());
-    } else if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
-      ARTS_INFO("    StoreOp found, getting memref...");
-      memref = storeOp.getMemref();
-      ARTS_INFO("    StoreOp memref type: " << memref.getType());
-    } else {
-      return;
+  const auto &paramMap = envManager.getValueToPackIndex();
+  auto resolveSizes = [&](Value dep, Location loc) {
+    SmallVector<Value> sizes = getSizesFromDb(dep);
+    SmallVector<Value> resolved;
+    for (Value sz : sizes) {
+      auto it = paramMap.find(sz);
+      if (it != paramMap.end() && it->second < allParams.size())
+        resolved.push_back(allParams[it->second]);
+      else if (auto c = sz.getDefiningOp<arith::ConstantIndexOp>())
+        resolved.push_back(AC->createIndexConstant(c.value(), loc));
+      else
+        resolved.push_back(sz);
     }
+    if (resolved.empty())
+      resolved.push_back(AC->createIndexConstant(1, loc));
+    return resolved;
+  };
 
-    if (llvm::find(unpackedDeps, memref) != unpackedDeps.end()) {
-      ARTS_INFO("    Operation uses unpacked dep, marking for replacement");
-      toReplace.push_back(op);
+  auto computeBaseOffset = [&](size_t depIndex, Location loc) {
+    Value base = AC->createIndexConstant(0, loc);
+    for (size_t i = 0; i < depIndex; ++i) {
+      SmallVector<Value> prevResolved = resolveSizes(originalDeps[i], loc);
+      Value prevElems = AC->computeTotalElements(prevResolved, loc);
+      base = AC->create<arith::AddIOp>(loc, base, prevElems);
     }
-  });
+    return base;
+  };
 
-  /// Transform each operation to use DbSubIndexOp + DepGetPtrOp pattern
-  for (Operation *op : toReplace) {
-    AC->setInsertionPoint(op);
-    Location loc = op->getLoc();
+  /// For each dependency placeholder, rewrite its direct uses.
+  for (size_t depIndex = 0; depIndex < depIdentifiers.size(); ++depIndex) {
+    Value placeholder = depIdentifiers[depIndex];
+    SmallVector<Operation *, 16> users;
+    for (auto &use : placeholder.getUses())
+      users.push_back(use.getOwner());
 
-    if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
-      Value finalPtr =
-          createFinalPtr(loc, loadOp.getMemref(), loadOp.getIndices(),
-                         loadOp.getResult().getType());
-      auto newLoad = AC->create<memref::LoadOp>(loc, finalPtr, ValueRange{});
-      loadOp.replaceAllUsesWith(newLoad.getResult());
-
-    } else if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
-      Value finalPtr =
-          createFinalPtr(loc, storeOp.getMemref(), storeOp.getIndices(),
-                         storeOp.getMemref().getType());
-      AC->create<memref::StoreOp>(loc, storeOp.getValueToStore(), finalPtr,
-                                  ValueRange{});
+    for (Operation *op : users) {
+      if (auto mp = dyn_cast<polygeist::Memref2PointerOp>(op)) {
+        if (mp.getSource() != placeholder)
+          continue;
+        AC->setInsertionPoint(op);
+        Location loc = op->getLoc();
+        Value baseOffset = computeBaseOffset(depIndex, loc);
+        SmallVector<Value> sizes = resolveSizes(originalDeps[depIndex], loc);
+        SmallVector<Value> strides = AC->computeStridesFromSizes(sizes, loc);
+        SmallVector<Value> zeroIndices(sizes.size(),
+                                       AC->createIndexConstant(0, loc));
+        Value newPtr = AC->create<DepGepOp>(loc, AC->llvmPtr, depv, baseOffset,
+                                            zeroIndices, strides);
+        op->getResult(0).replaceAllUsesWith(newPtr);
+        op->erase();
+      } else if (auto dbGep = dyn_cast<arts::DbGepOp>(op)) {
+        if (dbGep.getBasePtr() != placeholder)
+          continue;
+        AC->setInsertionPoint(op);
+        Location loc = op->getLoc();
+        Value baseOffset = computeBaseOffset(depIndex, loc);
+        SmallVector<Value> sizes = resolveSizes(originalDeps[depIndex], loc);
+        SmallVector<Value> strides = AC->computeStridesFromSizes(sizes, loc);
+        SmallVector<Value> indices = dbGep.getIndices();
+        Value newDepGep = AC->create<DepGepOp>(loc, AC->llvmPtr, depv,
+                                               baseOffset, indices, strides);
+        op->getResult(0).replaceAllUsesWith(newDepGep);
+        op->erase();
+      }
     }
-
-    op->erase();
   }
 }
 

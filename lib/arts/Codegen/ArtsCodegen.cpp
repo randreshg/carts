@@ -631,8 +631,6 @@ Value ArtsCodegen::computeElementTypeSize(Type elementType, Location loc) {
   auto elementSize = create<polygeist::TypeSizeOp>(
       loc, IndexType::get(getBuilder().getContext()), elementType);
   return elementSize;
-  // auto elementSizeInBits = mlirDL->getTypeSizeInBits(elementType);
-  // return createIntConstant(elementSizeInBits / 8, Int64, loc);
 }
 
 Value ArtsCodegen::computeTotalElements(ValueRange sizes, Location loc) {
@@ -703,6 +701,41 @@ Value ArtsCodegen::computeLinearIndex(ArrayRef<Value> sizes,
   }
 
   return linearIndex;
+}
+
+Value ArtsCodegen::computeLinearIndexFromStrides(ValueRange strides,
+                                                 ValueRange indices,
+                                                 Location loc) {
+  if (indices.empty())
+    return createIndexConstant(0, loc);
+
+  Value linearIndex = createIndexConstant(0, loc);
+
+  /// Use strides directly: linear_index = sum(indices[i] * strides[i])
+  for (size_t i = 0; i < indices.size() && i < strides.size(); ++i) {
+    auto contribution = create<arith::MulIOp>(loc, indices[i], strides[i]);
+    linearIndex = create<arith::AddIOp>(loc, linearIndex, contribution);
+  }
+
+  return linearIndex;
+}
+
+SmallVector<Value> ArtsCodegen::computeStridesFromSizes(ArrayRef<Value> sizes,
+                                                        Location loc) {
+  if (sizes.empty())
+    return {};
+
+  SmallVector<Value> strides(sizes.size());
+  Value stride = createIndexConstant(1, loc);
+
+  // Compute strides from right to left (row-major)
+  for (int i = static_cast<int>(sizes.size()) - 1; i >= 0; --i) {
+    strides[i] = stride;
+    if (i > 0)
+      stride = create<arith::MulIOp>(loc, stride, sizes[i]);
+  }
+
+  return strides;
 }
 
 /// Helper to iterate over all Db elements

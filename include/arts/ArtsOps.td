@@ -524,16 +524,6 @@ def EdtParamUnpackOp : Arts_Op<"edt_param_unpack", [Pure]> {
   let assemblyFormat = "$memref `:` type($memref) attr-dict `:` `(` type($unpacked) `)`";
 }
 
-def EdtDepUnpackOp : Arts_Op<"edt_dep_unpack", [Pure]> {
-  let summary = "Unpack dependencies from memref<?xi64>.";
-  let description = [{
-    Unpacks depv guids, calls artsGetFromDb for DB ptrs, casts others.
-    Output types are always !llvm.struct<(i64, i32, ptr)> for each dependency.
-  }];
-  let arguments = (ins AnyMemRef:$memref);
-  let results = (outs Variadic<AnyType>:$unpacked);
-  let assemblyFormat = "$memref `:` type($memref) attr-dict `:` `(` type($unpacked) `)`";
-}
 
 def RecordInDepOp : Arts_Op<"record_in_dep", [MemoryEffects<[MemWrite]>]> {
   let summary = "Record in-dependencies for EDT.";
@@ -559,21 +549,34 @@ def IncrementOutLatchOp : Arts_Op<"increment_out_latch", [MemoryEffects<[MemWrit
 // Dependency Structure Access Operations
 //===----------------------------------------------------------------------===//
 
-def DepGetPtrOp : Arts_Op<"dep_get_ptr", [Pure]> {
+def DepGepOp : Arts_Op<"dep_gep", [Pure, AttrSizedOperandSegments]> {
   let summary = "Extract pointer field from an EDT dependency structure";
   let description = [{
     Extracts the pointer field from an EDT dependency structure.
     The input can be a pointer to a dependency structure or a memref of
     dependency structures. Optional indices specify which dependency entry
     to access when the input is an array of dependencies (e.g., when a
-    DbAlloc/Acquire returned multiple datablocks). Returns a memref typed
-    view of the underlying pointer data suitable for further accesses.
+    DbAlloc/Acquire returned multiple datablocks). Optional strides are used
+    for multi-dimensional indexing when converting from dbsubindex operations.
+    Returns a memref typed view of the underlying pointer data suitable for 
+    further accesses.
   }];
-  let arguments = (ins AnyType:$dep_struct, Variadic<AnyType>:$indices);
+  let arguments = (ins AnyType:$dep_struct, Index:$offset,
+                       Variadic<AnyType>:$indices, Variadic<Index>:$strides);
   let results = (outs AnyType:$ptr);
   let assemblyFormat = [{
-    $dep_struct ( `indices` `[` $indices^ `:` type($indices) `]` )? attr-dict `:` type($dep_struct) `:` type($ptr)
+    $dep_struct 
+     `offset` `[` $offset `:` type($offset) `]`
+    ( `indices` `[` $indices^ `:` type($indices) `]` )?
+    ( `strides` `[` $strides^ `]` )?
+    attr-dict `:` type($dep_struct) `:` type($ptr)
   }];
+  
+  let builders = [
+    OpBuilder<(ins "Value":$dep_struct, "Value":$offset)>,
+    OpBuilder<(ins "Value":$dep_struct, "Value":$offset, "SmallVector<Value>":$indices)>,
+    OpBuilder<(ins "Value":$dep_struct, "Value":$offset, "SmallVector<Value>":$indices, "SmallVector<Value>":$strides)>
+  ];
 }
 
 def DepGetGuidOp : Arts_Op<"dep_get_guid", [Pure]> {
@@ -588,16 +591,21 @@ def DepGetGuidOp : Arts_Op<"dep_get_guid", [Pure]> {
   let assemblyFormat = "$dep_struct `:` type($dep_struct) attr-dict `:` type($guid)";
 }
 
-def DbSubIndexOp : Arts_Op<"db_subindex", [Pure]> {
-  let summary = "Multi-dimensional subindex operation for datablock access.";
+def DbGepOp : Arts_Op<"db_gep", [Pure, AttrSizedOperandSegments]> {
+  let summary = "Compute element pointer (LLVM ptr) using byte strides.";
   let description = [{
-    Performs multi-dimensional subindexing for datablock access with multiple indices.
-    This operation is lowered to a series of polygeist subindex operations.
-    Supports accessing multidimensional datablock structures with proper offset calculations.
+    Computes a raw element pointer from a base pointer using indices and strides.
   }];
-  let arguments = (ins AnyType:$source, Variadic<AnyType>:$indices);
-  let results = (outs AnyType:$result);
-  let assemblyFormat = "$source `[` $indices `]` `:` type($source) `,` type($indices) attr-dict `:` type($result)";
+  let arguments = (ins AnyType:$base_ptr, Variadic<Index>:$indices, Variadic<Index>:$strides);
+  let results = (outs AnyType:$ptr);
+  let assemblyFormat = [{
+    `(` $base_ptr `:` type($base_ptr) `)`
+    `indices` `[` $indices `]` `strides` `[` $strides `]`
+    attr-dict `:` type($ptr)
+  }];
+  let builders = [
+    OpBuilder<(ins "Value":$base_ptr, "SmallVector<Value>":$indices, "SmallVector<Value>":$strides)>
+  ];
 }
 
 #endif // ARTS_OPS

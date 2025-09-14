@@ -151,8 +151,8 @@ Value CreateDbsPass::getUnderlyingObject(Value v) {
       result = v; // Root objects
     } else if (auto dbAcquire = dyn_cast<DbAcquireOp>(op)) {
       result = getUnderlyingObject(dbAcquire.getSourcePtr());
-    } else if (auto dbSubIndex = dyn_cast<DbSubIndexOp>(op)) {
-      result = getUnderlyingObject(dbSubIndex.getSource());
+    } else if (auto dbGep = dyn_cast<DbGepOp>(op)) {
+      result = getUnderlyingObject(dbGep.getBasePtr());
     } else if (auto subview = dyn_cast<memref::SubViewOp>(op)) {
       result = getUnderlyingObject(subview.getSource());
     } else if (auto castOp = dyn_cast<memref::CastOp>(op)) {

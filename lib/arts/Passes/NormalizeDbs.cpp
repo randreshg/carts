@@ -24,6 +24,7 @@
 /// Dialects
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "polygeist/Ops.h"
 /// Arts
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
@@ -185,29 +186,18 @@ void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
   /// Helper to cast a DB pointer to an LLVM pointer
   /// - If stack-allocated, load the pointer from memory
   /// - If heap-allocated, return the pointer directly
-  auto getLLVMPtr = [&](Value ptrBase, ValueRange idx, Location loc) -> Value {
+  auto getLLVMPtr = [&](Value ptrBase, ValueRange indices,
+                        Location loc) -> Value {
     Value targetPtr = ptrBase;
-    if (!idx.empty()) {
-      auto srcMemrefTy = targetPtr.getType().dyn_cast<MemRefType>();
-      if (!srcMemrefTy)
-        return targetPtr;
-      auto srcShape = srcMemrefTy.getShape();
-      SmallVector<int64_t, 4> newShape;
-      if (idx.size() >= srcShape.size())
-        newShape = {};
-      else
-        newShape.assign(srcShape.begin() + static_cast<long>(idx.size()),
-                        srcShape.end());
-      auto resultTy = MemRefType::get(newShape, srcMemrefTy.getElementType(),
-                                      MemRefLayoutAttrInterface(),
-                                      srcMemrefTy.getMemorySpace());
+    if (!indices.empty()) {
+      SmallVector<Value> sizes = getSizesFromDb(targetPtr);
+      SmallVector<Value> strides = AC->computeStridesFromSizes(sizes, loc);
       targetPtr =
-          AC->create<DbSubIndexOp>(loc, resultTy, targetPtr, idx).getResult();
+          AC->create<DbGepOp>(loc, AC->llvmPtr, targetPtr, indices, strides);
     }
 
     auto it = isStackAllocated.find(ptrBase);
     bool stack = (it != isStackAllocated.end()) ? it->second : false;
-
     Value llvmPtr = AC->castToLLVMPtr(targetPtr, loc);
     if (stack)
       return AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, llvmPtr);
@@ -312,14 +302,15 @@ void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
         /// pointer result of acquire should be treated as a heap handle here,
         /// avoiding extra loads injected by this normalization step.
         enqueue(newAcquire.getPtr(), /*stackFlag*/ false, newPtr);
-      } else if (auto subIdx = dyn_cast<DbSubIndexOp>(user)) {
-        /// Propagate tracking through db_subindex so downstream loads/stores
-        /// can be rewritten with proper pointer dereference semantics.
-        enqueue(subIdx.getResult(), isStackAllocated.lookup(cur),
+      } else if (auto gep = dyn_cast<DbGepOp>(user)) {
+        /// Propagate tracking through db_gep using the same source ptr
+        enqueue(gep.getPtr(), isStackAllocated.lookup(cur),
                 ptrSource.lookup(cur));
       } else if (isa<EdtOp>(user)) {
         queueBlockArgFollow(user, use.getOperandNumber(), cur);
       } else if (isa<DbReleaseOp>(user)) {
+        /// DbRelease are no longer needed. Remove them.
+        opsToRemove.insert(user);
         continue;
       } else if (isa<DbFreeOp>(user)) {
         continue;

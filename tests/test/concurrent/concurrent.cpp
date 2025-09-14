@@ -29,19 +29,16 @@ int main() {
   printf("Main EDT: Allocated separate data arrays for each task\n");
 
   /// Initialize task1 data
-  for (int i = 0; i < data_size; ++i)
+  for (int i = 0; i < data_size; ++i) {
     task1_data[i] = base_value + (double)i;
-
-  /// Initialize task2 data
-  for (int i = 0; i < data_size; ++i)
     task2_data[i] = base_value + 100.0 + (double)i;
-
+  }
+  
   /// Print initial values
   printf("\nMain EDT: Initial Array Values:\n");
   printf("=====================================\n");
   printf("%-8s %-12s %-12s\n", "Index", "Task1_Data", "Task2_Data");
   printf("-------------------------------------\n");
-
   for (int i = 0; i < data_size; ++i)
     printf("%-8d %-12.2f %-12.2f\n", i, task1_data[i], task2_data[i]);
 

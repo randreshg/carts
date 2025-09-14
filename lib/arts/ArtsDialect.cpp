@@ -529,6 +529,24 @@ SmallVector<Value> getSizesFromDb(Value datablockPtr) {
                               acquireOp.getSizes().end());
   }
 
+  /// If sizes are empty and targetPtr is a block argument, try to trace
+  /// back through EDT parameters to find the original db_acquire operation
+  if (datablockPtr.isa<BlockArgument>()) {
+    if (auto blockArg = datablockPtr.dyn_cast<BlockArgument>()) {
+      Block *block = blockArg.getOwner();
+      if (auto edtOp = dyn_cast_or_null<arts::EdtOp>(block->getParentOp())) {
+        // Get the corresponding dependency from the EDT operation
+        auto deps = edtOp.getDependencies();
+        unsigned argIdx = blockArg.getArgNumber();
+        if (argIdx < deps.size()) {
+          Value originalDep = deps[argIdx];
+          return getSizesFromDb(originalDep);
+        }
+      }
+    }
+  }
+
   /// If we can't find the sizes, return empty (will result in 1 element)
   return {};
 }
+
