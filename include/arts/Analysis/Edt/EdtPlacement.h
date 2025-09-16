@@ -1,14 +1,15 @@
-//===----------------------------------------------------------------------===//
-// EdtPlacement.h - Heuristics for EDT node placement (analysis-only)
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: EdtPlacement.h
+/// Defines heuristics for EDT node placement (analysis-only).
+///==========================================================================
 
 #ifndef ARTS_ANALYSIS_EDT_EDTPLACEMENT_H
 #define ARTS_ANALYSIS_EDT_EDTPLACEMENT_H
 
-#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 #include "arts/Analysis/Edt/EdtAnalysis.h"
-#include "llvm/ADT/SmallVector.h"
+#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -27,7 +28,7 @@ struct PlacementNodeScore {
 struct PlacementDecision {
   Operation *edtOp = nullptr;
   std::string chosenNode;
-  llvm::SmallVector<PlacementNodeScore, 4> candidates;
+  SmallVector<PlacementNodeScore, 4> candidates;
 };
 
 /// Greedy EDT placement using EdtAnalysis affinity metrics only.
@@ -39,25 +40,23 @@ public:
       : edtGraph(graph), edtAnalysis(analysis) {}
 
   /// Build a default node list: N0..N{count-1}
-  static llvm::SmallVector<std::string, 8> makeNodeNames(unsigned count);
+  static SmallVector<std::string, 8> makeNodeNames(unsigned count);
 
   /// Compute placement decisions for provided node set (names only)
-  llvm::SmallVector<PlacementDecision, 16>
-  compute(const llvm::SmallVector<std::string, 8> &nodes);
+  SmallVector<PlacementDecision, 16>
+  compute(const SmallVector<std::string, 8> &nodes);
 
   /// Export placement JSON for a function
   void exportToJson(func::FuncOp func,
-                    const llvm::SmallVector<PlacementDecision, 16> &decisions,
+                    const SmallVector<PlacementDecision, 16> &decisions,
                     llvm::raw_ostream &os) const;
 
 private:
-  EdtGraph *edtGraph = nullptr;     // not owned
-  EdtAnalysis *edtAnalysis = nullptr; // not owned
+  EdtGraph *edtGraph = nullptr; 
+  EdtAnalysis *edtAnalysis = nullptr;
 };
 
 } // namespace arts
 } // namespace mlir
 
 #endif // ARTS_ANALYSIS_EDT_EDTPLACEMENT_H
-
-

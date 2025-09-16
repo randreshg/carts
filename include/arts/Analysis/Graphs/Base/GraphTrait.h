@@ -1,6 +1,7 @@
-//===----------------------------------------------------------------------===//
-// GraphTraits.h - Shared LLVM GraphTraits specializations for ARTS graphs
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: GraphTrait.h
+/// Shared LLVM GraphTraits specializations for ARTS graphs.
+///==========================================================================
 
 #ifndef ARTS_ANALYSIS_GRAPHS_GRAPHTRAITS_H
 #define ARTS_ANALYSIS_GRAPHS_GRAPHTRAITS_H
@@ -10,7 +11,6 @@
 #include "arts/Analysis/Graphs/Base/NodeBase.h"
 #include "llvm/ADT/GraphTraits.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/DOTGraphTraits.h"
 
 namespace llvm {
 
@@ -49,32 +49,6 @@ template <typename GraphTy> struct BaseGraphTraits {
 template <>
 struct GraphTraits<::mlir::arts::GraphBase *>
     : public BaseGraphTraits<::mlir::arts::GraphBase> {};
-
-/// DOTGraphTraits for visualization
-template <typename GraphTy>
-struct DOTGraphTraits<BaseGraphTraits<GraphTy>> : public DefaultDOTGraphTraits {
-  DOTGraphTraits(bool simple = false) : DefaultDOTGraphTraits(simple) {}
-
-  std::string getNodeLabel(typename BaseGraphTraits<GraphTy>::NodeRef Node,
-                           GraphTy *Graph) {
-    return Node->getHierId().str();
-  }
-
-  std::string
-  getEdgeAttributes(typename BaseGraphTraits<GraphTy>::NodeRef From,
-                    typename BaseGraphTraits<GraphTy>::ChildIteratorType It,
-                    GraphTy *Graph) {
-    ::mlir::arts::NodeBase *To = *It;
-    auto edges = From->getOutEdges();
-    for (auto *edge : edges) {
-      if (edge->getTo() == To) {
-        return "label=\"" + edge->getType().str() + "\"";
-      }
-    }
-    return "";
-  }
-};
-
 } // namespace llvm
 
 #endif // ARTS_ANALYSIS_GRAPHS_GRAPHTRAITS_H

@@ -1,12 +1,13 @@
-//===----------------------------------------------------------------------===//
-// Db/DbDataFlowAnalysis.cpp - Implementation of DbDataFlowAnalysis
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: DbDataFlowAnalysis.cpp
+/// Implementation of dataflow analysis for DB operations.
+///==========================================================================
 
 #include "arts/Analysis/Db/DbDataFlowAnalysis.h"
 
 #include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbEdge.h"
+#include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "llvm/Support/Debug.h"
@@ -102,28 +103,29 @@ void DbDataFlowAnalysis::visitOperation(Operation *op, const DbState &before,
       auto it = before.activeAcquires.find(parentAlloc);
       if (it != before.activeAcquires.end() && !it->second.empty()) {
         after->pendingReleases[parentAlloc].insert(releaseOp);
-        // Pair in order: prefer the most recent active acquire first
+        /// Pair in order: prefer the most recent active acquire first
         SmallVector<DbAcquireOp, 8> actives;
         auto it = before.activeAcquires.find(parentAlloc);
         if (it != before.activeAcquires.end()) {
-          for (auto acquire : it->second) actives.push_back(acquire);
+          for (auto acquire : it->second)
+            actives.push_back(acquire);
         }
-        llvm::sort(actives, [&](DbAcquireOp a, DbAcquireOp b){
-          return graph->getParentAlloc(a.getOperation()) && graph->getParentAlloc(b.getOperation()) &&
-                 graph->getParentAlloc(a.getOperation()) == graph->getParentAlloc(b.getOperation()) &&
+        llvm::sort(actives, [&](DbAcquireOp a, DbAcquireOp b) {
+          return graph->getParentAlloc(a.getOperation()) &&
+                 graph->getParentAlloc(b.getOperation()) &&
+                 graph->getParentAlloc(a.getOperation()) ==
+                     graph->getParentAlloc(b.getOperation()) &&
                  a.getOperation()->isBeforeInBlock(b.getOperation());
         });
         for (auto acquire : actives) {
-          auto *acquireNode = static_cast<DbAcquireNode *>(
-              graph->getNode(acquire.getOperation()));
-          auto *releaseNode = static_cast<DbReleaseNode *>(
-              graph->getNode(releaseOp.getOperation()));
+          auto *acquireNode = graph->getOrCreateAcquireNode(acquire);
+          auto *releaseNode = graph->getOrCreateReleaseNode(releaseOp);
           if (acquireNode && releaseNode && aliasAA &&
               aliasAA->mayAlias(*acquireNode, *releaseNode)) {
             createLifetimeEdge(acquireNode, releaseNode);
           }
         }
-        // Reset active acquires for this allocation after matching release.
+        /// Reset active acquires for this allocation after matching release.
         after->activeAcquires[parentAlloc].clear();
         ARTS_INFO("facts: release processed parent " << parentAlloc);
       } else {
@@ -133,37 +135,10 @@ void DbDataFlowAnalysis::visitOperation(Operation *op, const DbState &before,
     }
   }
 
-  auto effects = getDbEffects(op);
-  if (!effects.empty()) {
-    ARTS_INFO("Op has effects; state propagated: " << *op);
-  }
-}
-
-void DbDataFlowAnalysis::analyze() {
-  ARTS_INFO("Running DB data flow analysis");
-
-  // Analysis is run by DataFlowSolver. Nothing to do here.
-
-  // // Post-process for unmatched states
-  // const DbState &finalState =
-  //     getLatticeElementAfter(funcOp->getBlock()->getTerminator());
-  // for (const auto &pair : finalState.activeAcquires) {
-  //   if (!pair.second.empty()) {
-  //     for (auto acquire : pair.second) {
-  //       acquire.getOperation()->emitWarning(
-  //           "Unmatched acquire at end of function");
-  //     }
+  // auto effects = getDbEffects(op);
+  // if (!effects.empty()) {
+  //   ARTS_INFO("Op has effects; state propagated: " << *op);
   // }
-  // for (const auto &pair : finalState.pendingReleases) {
-  //   if (!pair.second.empty()) {
-  //     for (auto release : pair.second) {
-  //       release.getOperation()->emitWarning(
-  //           "Pending release at end of function");
-  //     }
-  //   }
-  // }
-
-  ARTS_INFO("DB data flow analysis completed");
 }
 
 void DbDataFlowAnalysis::createLifetimeEdge(DbAcquireNode *acquire,
@@ -171,7 +146,7 @@ void DbDataFlowAnalysis::createLifetimeEdge(DbAcquireNode *acquire,
   if (!acquire || !release)
     return;
 
-  // Ownership of the edge is transferred to the graph.
+  /// Ownership of the edge is transferred to the graph.
   auto *edge = new DbLifetimeEdge(acquire, release);
   graph->addEdge(acquire, release, edge);
 
@@ -182,13 +157,12 @@ void DbDataFlowAnalysis::createLifetimeEdge(DbAcquireNode *acquire,
 SmallVector<MemoryEffects::EffectInstance>
 DbDataFlowAnalysis::getDbEffects(Operation *op) {
   SmallVector<MemoryEffects::EffectInstance> effects;
-  if (auto effectsOp = dyn_cast<MemoryEffectOpInterface>(op)) {
+  if (auto effectsOp = dyn_cast<MemoryEffectOpInterface>(op))
     effectsOp.getEffects(effects);
-  }
   return effects;
 }
 
 void DbDataFlowAnalysis::setToEntryState(DbState *lattice) {
-  // Default-empty state at function entry is sufficient.
+  /// Default-empty state at function entry is sufficient.
   (void)lattice;
 }

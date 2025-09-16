@@ -11,7 +11,6 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SmallVector.h"
 
 // Forward declarations
 namespace mlir {
@@ -39,6 +38,9 @@ public:
   /// Get or create DbGraph for a function, building if needed.
   DbGraph *getOrCreateGraph(func::FuncOp func);
 
+  /// Get or create DbGraph without edges/metrics (nodes only).
+  DbGraph *getOrCreateGraphNodesOnly(func::FuncOp func);
+
   /// Invalidate graph for a function.
   bool invalidateGraph(func::FuncOp func);
 
@@ -60,19 +62,6 @@ public:
   /// Overlap classification between DB operations
   enum class OverlapKind { Unknown, Disjoint, Partial, Full };
 
-  /// Slice information for DB operations
-  struct SliceInfo {
-    /// INT64_MIN if unknown
-    llvm::SmallVector<int64_t, 4> offsets;
-    /// INT64_MIN if unknown
-    llvm::SmallVector<int64_t, 4> sizes;
-    /// 0 if unknown
-    uint64_t estimatedBytes = 0;
-  };
-
-  /// Compute slice info for an acquire operation.
-  SliceInfo computeSliceInfo(arts::DbAcquireOp acquire);
-
   /// Coarse overlap classification between two acquire operations.
   OverlapKind estimateOverlap(arts::DbAcquireOp a, arts::DbAcquireOp b);
 
@@ -81,9 +70,8 @@ private:
   llvm::DenseMap<func::FuncOp, std::unique_ptr<DbGraph>> functionGraphMap;
   std::unique_ptr<DbAliasAnalysis> dbAliasAnalysis;
   std::unique_ptr<LoopAnalysis> loopAnalysis;
-  std::unique_ptr<DbDataFlowAnalysis>
-      dbDataFlowAnalysis;      ///< Dataflow analysis for DB operations
-  mlir::DataFlowSolver solver; ///< Solver for data flow analyses
+  std::unique_ptr<DbDataFlowAnalysis> dbDataFlowAnalysis;
+  mlir::DataFlowSolver solver;
 };
 
 } // namespace arts

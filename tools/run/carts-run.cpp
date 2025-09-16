@@ -1,6 +1,8 @@
-//==========================================================================
-/// File: carts.cpp
-//==========================================================================
+///==========================================================================
+/// File: carts-run.cpp
+/// Main entry point for the CARTS runtime execution tool.
+///==========================================================================
+
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/Passes.h"

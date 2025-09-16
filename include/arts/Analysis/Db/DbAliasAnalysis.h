@@ -1,6 +1,7 @@
-//===----------------------------------------------------------------------===//
-// Db/DbAliasAnalysis.h - Alias analysis helpers for DB nodes
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: DbAliasAnalysis.h
+/// Alias analysis helpers for DB nodes.
+///==========================================================================
 
 #ifndef ARTS_ANALYSIS_DB_DBALIASANALYSIS_H
 #define ARTS_ANALYSIS_DB_DBALIASANALYSIS_H

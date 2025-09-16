@@ -1,6 +1,7 @@
-//===----------------------------------------------------------------------===//
-// EdgeBase.h - Abstract base class for graph edges
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: EdgeBase.h
+/// Abstract base class for graph edges.
+///==========================================================================
 
 #ifndef ARTS_ANALYSIS_GRAPHS_EDGEBASE_H
 #define ARTS_ANALYSIS_GRAPHS_EDGEBASE_H
@@ -31,7 +32,7 @@ public:
   /// Strongly-typed edge kind for internal logic.
   virtual EdgeKind getKind() const = 0;
 
-  /// Human-readable label for debugging/printing only (derived from kind).
+  /// Human-readable label for debugging/printing only
   virtual llvm::StringRef getType() const = 0;
 
   /// Print edge details.

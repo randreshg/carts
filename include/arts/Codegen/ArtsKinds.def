@@ -1,8 +1,7 @@
-//===--- ArtsKinds.def - ARTS directives, clauses, rt-calls -*- C++ -*-===//
-/// This file defines the list of supported ARTS runtime
-/// calls, and other things that need to be listed in enums.
-///
-/// This file is under transition to ARTS.td with TableGen code generation.
+///==========================================================================
+/// File: ArtsKinds.def
+/// Defines ARTS directives, clauses, and runtime calls for code generation.
+///==========================================================================
 ///
 //===----------------------------------------------------------------------===//
 

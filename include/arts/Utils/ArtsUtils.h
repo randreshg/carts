@@ -43,6 +43,22 @@ void replaceInRegion(mlir::Region &region,
 
 /// Returns true if `val` is a constant value.
 bool isValueConstant(mlir::Value val);
+
+/// Get the underlying object (root allocation) for a given value.
+/// Recursively traverses through DbAcquireOp, DbGepOp, memref operations, etc.
+/// to find the root allocation (DbAllocOp, memref::AllocOp, memref::AllocaOp,
+/// etc.). Returns nullptr if no root object can be found.
+mlir::Value getUnderlyingValue(mlir::Value v);
+mlir::Operation *getUnderlyingOperation(mlir::Value v);
+
+/// Get the byte size of an element type.
+/// Returns the size in bytes for IntegerType and FloatType, 0 for unknown
+/// types.
+uint64_t getElementTypeByteSize(mlir::Type elemTy);
+
+/// Sanitize a string for use in DOT graph format.
+/// Replaces dots and dashes with underscores to make valid DOT identifiers.
+std::string sanitizeString(llvm::StringRef s);
 } // namespace arts
 } // namespace mlir
 

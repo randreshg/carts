@@ -161,8 +161,7 @@ struct ArtsInlinerPass : public arts::ArtsInlinerBase<ArtsInlinerPass> {
         /// Check if this is a recursive call (basic check)
         if (auto funcOp = dyn_cast<func::FuncOp>(callableOp.getOperation())) {
           auto enclosingFn = call->getParentOfType<func::FuncOp>();
-          if (enclosingFn &&
-              enclosingFn.getSymName() == funcOp.getSymName()) {
+          if (enclosingFn && enclosingFn.getSymName() == funcOp.getSymName()) {
             ARTS_INFO("Skipping recursive call to " << funcOp.getSymName());
             continue;
           }
@@ -187,7 +186,7 @@ struct ArtsInlinerPass : public arts::ArtsInlinerBase<ArtsInlinerPass> {
       ARTS_WARN("Hit maximum iteration limit");
 
     ARTS_INFO("Completed aggressive inlining after " << iteration
-                     << " iterations");
+                                                     << " iterations");
 
     /// Clean up unused functions
     cleanupUnusedFunctions(module);
