@@ -1,35 +1,28 @@
-//===----------------------------------------------------------------------===//
-// Edt/EdtGraph.cpp - Implementation of EdtGraph
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: EdtGraph.cpp
+/// Implementation of EdtGraph for EDT analysis and optimization.
+///==========================================================================
 
 #include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 #include "arts/Analysis/Graphs/Edt/EdtEdge.h"
 #include "arts/Analysis/Graphs/Edt/EdtNode.h"
+#include "arts/Utils/ArtsUtils.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
-#include <algorithm>
 
 using namespace mlir;
 using namespace mlir::arts;
 
 #include "arts/Utils/ArtsDebug.h"
-ARTS_DEBUG_SETUP(edt_graph);
-
-std::string EdtGraph::sanitizeForDot(StringRef s) const {
-  std::string id = s.str();
-  std::replace(id.begin(), id.end(), '.', '_');
-  std::replace(id.begin(), id.end(), '-', '_');
-  return id;
-}
+ARTS_DEBUG_SETUP(edt_analysis);
 
 EdtGraph::EdtGraph(func::FuncOp func, DbGraph *dbGraph)
     : func(func), dbGraph(dbGraph) {
   ARTS_INFO("Creating EDT graph for function: " << func.getName().str());
 }
 
-// Build task graph nodes and DB-induced dependency edges.
-// Responsibility: synthesize a minimal EDT dependency view from DbGraph.
-// Non-Goals: alias/lifetime inference (delegated to DbAnalysis/DbGraph).
+/// Build task graph nodes and DB-induced dependency edges.
 void EdtGraph::build() {
   if (isBuilt && !needsRebuild)
     return;
@@ -42,8 +35,18 @@ void EdtGraph::build() {
   needsRebuild = false;
 }
 
+void EdtGraph::buildNodesOnly() {
+  if (isBuilt && !needsRebuild)
+    return;
+  ARTS_INFO("Building EDT graph nodes only");
+  invalidate();
+  collectNodes();
+  isBuilt = true;
+  needsRebuild = false;
+}
+
 void EdtGraph::invalidate() {
-  taskNodes.clear();
+  edtNodes.clear();
   edges.clear();
   nodes.clear();
   isBuilt = false;
@@ -51,20 +54,20 @@ void EdtGraph::invalidate() {
 }
 
 NodeBase *EdtGraph::getEntryNode() const {
-  if (!taskNodes.empty())
-    return taskNodes.begin()->second.get();
+  if (!edtNodes.empty())
+    return edtNodes.begin()->second.get();
   return nullptr;
 }
 
 NodeBase *EdtGraph::getOrCreateNode(Operation *op) {
   if (auto edtOp = dyn_cast<EdtOp>(op)) {
-    auto it = taskNodes.find(edtOp);
-    if (it != taskNodes.end())
+    auto it = edtNodes.find(edtOp);
+    if (it != edtNodes.end())
       return it->second.get();
-    auto newNode = std::make_unique<EdtTaskNode>(edtOp);
-    newNode->setHierId("T" + std::to_string(taskNodes.size() + 1));
+    auto newNode = std::make_unique<EdtNode>(edtOp);
+    newNode->setHierId("T" + std::to_string(edtNodes.size() + 1));
     NodeBase *ptr = newNode.get();
-    taskNodes[edtOp] = std::move(newNode);
+    edtNodes[edtOp] = std::move(newNode);
     nodes.push_back(ptr);
     return ptr;
   }
@@ -73,10 +76,15 @@ NodeBase *EdtGraph::getOrCreateNode(Operation *op) {
 
 NodeBase *EdtGraph::getNode(Operation *op) const {
   if (auto edtOp = dyn_cast<EdtOp>(op)) {
-    auto it = taskNodes.find(edtOp);
-    return it != taskNodes.end() ? it->second.get() : nullptr;
+    auto it = edtNodes.find(edtOp);
+    return it != edtNodes.end() ? it->second.get() : nullptr;
   }
   return nullptr;
+}
+
+EdtNode *EdtGraph::getEdtNode(EdtOp edt) const {
+  auto it = edtNodes.find(edt);
+  return it != edtNodes.end() ? it->second.get() : nullptr;
 }
 
 void EdtGraph::forEachNode(const std::function<void(NodeBase *)> &fn) const {
@@ -94,10 +102,9 @@ bool EdtGraph::addEdge(NodeBase *from, NodeBase *to, EdgeBase *edge) {
   return true;
 }
 
-bool EdtGraph::isTaskReachable(EdtOp fromOp, EdtOp toOp) {
-  EdtTaskNode *from =
-      static_cast<EdtTaskNode *>(getNode(fromOp.getOperation()));
-  EdtTaskNode *to = static_cast<EdtTaskNode *>(getNode(toOp.getOperation()));
+bool EdtGraph::isEdtReachable(EdtOp fromOp, EdtOp toOp) {
+  EdtNode *from = static_cast<EdtNode *>(getNode(fromOp.getOperation()));
+  EdtNode *to = static_cast<EdtNode *>(getNode(toOp.getOperation()));
   if (!from || !to)
     return false;
   for (auto *edge : from->getOutEdges()) {
@@ -107,16 +114,15 @@ bool EdtGraph::isTaskReachable(EdtOp fromOp, EdtOp toOp) {
   return false;
 }
 
-SmallVector<NodeBase *> EdtGraph::getDbDependencies(EdtOp task) const {
-  SmallVector<NodeBase *> result;
-  EdtTaskNode *node = static_cast<EdtTaskNode *>(getNode(task.getOperation()));
-  if (!node)
+SmallVector<NodeBase *, 4> EdtGraph::getDbDeps(EdtOp edt) const {
+  SmallVector<NodeBase *, 4> result;
+  EdtNode *edtNode = getEdtNode(edt);
+  if (!edtNode)
     return result;
 
-  task.walk([&](Operation *op) {
-    if (auto dbNode = dbGraph->getNode(op)) {
+  edt.walk([&](Operation *op) {
+    if (auto dbNode = dbGraph->getNode(op))
       result.push_back(dbNode);
-    }
   });
   return result;
 }
@@ -127,17 +133,17 @@ void EdtGraph::print(llvm::raw_ostream &os) const {
      << "\n";
   os << "===============================================\n";
   os << "Summary:\n";
-  os << "  Tasks: " << taskNodes.size() << "\n";
+  os << "  Tasks: " << edtNodes.size() << "\n";
   os << "  Edges: " << edges.size() << "\n\n";
 
   os << "Task Hierarchy:\n";
-  for (const auto &pair : taskNodes) {
-    EdtTaskNode *task = pair.second.get();
+  for (const auto &pair : edtNodes) {
+    EdtNode *task = pair.second.get();
     os << "Task [" << task->getHierId() << "]: ";
     task->print(os);
     os << "\n";
 
-    SmallVector<NodeBase *> dbDeps = getDbDependencies(pair.first);
+    SmallVector<NodeBase *, 4> dbDeps = getDbDeps(pair.first);
     if (!dbDeps.empty()) {
       os << "  Data Dependencies:\n";
       for (NodeBase *dbNode : dbDeps) {
@@ -156,61 +162,94 @@ void EdtGraph::print(llvm::raw_ostream &os) const {
   }
 }
 
-void EdtGraph::exportToDot(llvm::raw_ostream &os) const {
-  os << "digraph EdtGraph {\n";
-  os << "  node [shape=ellipse];\n";
-  os << "  graph [label=\"" << const_cast<func::FuncOp &>(func).getName()
-     << "\", labelloc=t, fontsize=20];\n\n";
+void EdtGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
+  using namespace llvm::json;
 
-  for (const auto &pair : taskNodes) {
-    EdtTaskNode *task = pair.second.get();
-    os << "  " << sanitizeForDot(task->getHierId()) << " [label=\""
-       << task->getHierId() << "\"];\n";
+  Object root;
+  Array nodesArr;
+  forEachNode([&](NodeBase *node) {
+    nodesArr.push_back(Object{{"id", sanitizeString(node->getHierId())},
+                              {"group", "edt"},
+                              {"nodeKind", "EdtTask"}});
+  });
+
+  Array edgesArr;
+  forEachNode([&](NodeBase *from) {
+    for (auto *edge : from->getOutEdges()) {
+      edgesArr.push_back(
+          Object{{"from", sanitizeString(edge->getFrom()->getHierId())},
+                 {"to", sanitizeString(edge->getTo()->getHierId())},
+                 {"edgeKind", "Dep"},
+                 {"label", edge->getType().str()}});
+    }
+  });
+
+  root["nodes"] = std::move(nodesArr);
+  root["edges"] = std::move(edgesArr);
+
+  /// Include analysis data if requested
+  if (includeAnalysis) {
+    /// Add EDT-specific analysis data here if needed in the future
+    root["analysis"] = Object{{"numTasks", (double)getNumTasks()},
+                              {"function", getFunction().getName().str()}};
   }
 
-  for (const auto &pair : edges) {
-    EdgeBase *edge = pair.second.get();
-    os << "  " << sanitizeForDot(edge->getFrom()->getHierId()) << " -> "
-       << sanitizeForDot(edge->getTo()->getHierId()) << " [label=\""
-       << edge->getType() << "\"];\n";
+  os << llvm::json::Value(std::move(root)) << "\n";
+}
+
+/// Helper to populate and sort children cache for a node
+void EdtGraph::populateChildrenCache(NodeBase *node) {
+  auto &vec = childrenCache[node];
+  vec.clear();
+
+  // Collect children from the node's outgoing edges
+  for (auto *edge : node->getOutEdges()) {
+    vec.push_back(edge->getTo());
   }
 
-  os << "}\n";
+  // Sort by hierarchical ID for deterministic order
+  llvm::sort(vec, [&](NodeBase *a, NodeBase *b) {
+    auto hierIdA = a ? a->getHierId() : StringRef("");
+    auto hierIdB = b ? b->getHierId() : StringRef("");
+    return hierIdA < hierIdB;
+  });
 }
 
 GraphBase::ChildIterator EdtGraph::childBegin(NodeBase *node) {
-  static std::vector<NodeBase *> emptyChildren;
-  // For now, return empty iterator; edges are accessible via node->getOutEdges()
-  return emptyChildren.begin();
+  populateChildrenCache(node);
+  return childrenCache[node].begin();
 }
 
 GraphBase::ChildIterator EdtGraph::childEnd(NodeBase *node) {
-  static std::vector<NodeBase *> emptyChildren;
-  return emptyChildren.end();
+  auto it = childrenCache.find(node);
+  if (it == childrenCache.end()) {
+    populateChildrenCache(node);
+    return childrenCache[node].end();
+  }
+  return it->second.end();
 }
 
-// Collect all arts.edt operations in the function and create task nodes.
+/// Collect all arts.edt operations in the function and create task nodes.
 void EdtGraph::collectNodes() {
   ARTS_INFO("Phase 1 - Collecting EDT nodes");
 
   func.walk([&](EdtOp edtOp) { getOrCreateNode(edtOp.getOperation()); });
 
-  ARTS_INFO("Collected " << taskNodes.size() << " tasks");
+  ARTS_INFO("Collected " << edtNodes.size() << " tasks");
 }
 
-// Build inter-EDT edges by connecting release sites in one EDT to acquire
-// sites in another EDT for the same root DbAlloc. Uses O(#ops) indexing by
-// DbAlloc to avoid nested walks.
+/// Build inter-EDT edges by connecting release sites in one EDT to acquire
+/// sites in another EDT for the same root DbAlloc.
 void EdtGraph::buildDependencies() {
   ARTS_INFO("Phase 2 - Building EDT dependencies");
+  llvm::DenseMap<DbAllocOp, SmallVector<std::pair<EdtNode *, NodeBase *>>>
+      allocToReleases;
+  llvm::DenseMap<DbAllocOp, SmallVector<std::pair<EdtNode *, NodeBase *>>>
+      allocToAcquires;
 
-  // Index releases/acquires by root alloc to avoid quadratic walks
-  llvm::DenseMap<DbAllocOp, llvm::SmallVector<std::pair<EdtTaskNode *, NodeBase *>>> allocToReleases;
-  llvm::DenseMap<DbAllocOp, llvm::SmallVector<std::pair<EdtTaskNode *, NodeBase *>>> allocToAcquires;
-
-  for (auto &pair : taskNodes) {
+  for (auto &pair : edtNodes) {
     EdtOp taskOp = pair.first;
-    EdtTaskNode *taskNode = pair.second.get();
+    EdtNode *taskNode = pair.second.get();
     taskOp.walk([&](Operation *op) {
       if (auto rel = dyn_cast<DbReleaseOp>(op)) {
         DbAllocOp a = dbGraph->getParentAlloc(rel);
@@ -242,7 +281,7 @@ void EdtGraph::buildDependencies() {
     for (auto &r : rels) {
       for (auto &a : acqs) {
         if (r.first == a.first)
-          continue; // same task
+          continue; /// same task
         auto edge = std::make_unique<EdtDepEdge>(r.first, a.first, r.second);
         addEdge(r.first, a.first, edge.release());
       }

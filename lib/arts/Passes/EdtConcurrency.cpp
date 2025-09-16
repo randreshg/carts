@@ -1,16 +1,20 @@
-//===----------------------------------------------------------------------===//
-// EdtConcurrency.cpp - Concurrency-driven optimizations using EDT graph
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: EdtConcurrency.cpp
+/// Defines concurrency-driven optimizations using EDT graph analysis.
+///==========================================================================
 
 #include "ArtsPassDetails.h"
-#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
-#include "arts/Analysis/Graphs/Db/DbGraph.h"
-#include "arts/Analysis/Graphs/Edt/EdtConcurrencyGraph.h"
+#include "arts/Analysis/Db/DbPlacement.h"
 #include "arts/Analysis/Edt/EdtAnalysis.h"
 #include "arts/Analysis/Edt/EdtPlacement.h"
-#include "arts/Analysis/Db/DbPlacement.h"
+#include "arts/Analysis/Graphs/Db/DbGraph.h"
+#include "arts/Analysis/Graphs/Edt/EdtConcurrencyGraph.h"
+#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
+#include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsDebug.h"
+#include <optional>
+#include <tuple>
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -18,149 +22,324 @@ using namespace mlir::arts;
 ARTS_DEBUG_SETUP(edt)
 
 namespace {
-struct EdtConcurrencyPass : public arts::EdtConcurrencyBase<EdtConcurrencyPass> {
+
+/// Disjoint Set Union for grouping EDTs
+struct DisjointSetUnion {
+  llvm::DenseMap<EdtOp, EdtOp> parent;
+
+  EdtOp find(EdtOp x) {
+    auto it = parent.find(x);
+    if (it == parent.end() || it->second == x)
+      return parent[x] = x;
+    return it->second = find(it->second);
+  }
+
+  void unite(EdtOp a, EdtOp b) {
+    a = find(a);
+    b = find(b);
+    if (a != b)
+      parent[b] = a;
+  }
+};
+
+/// Helper functions for EdtConcurrencyPass
+class EdtConcurrencyOptimizer {
+private:
+  ModuleOp module;
+  EdtGraph *edtGraph;
+  EdtAnalysis *edtAnalysis;
+  EdtConcurrencyGraph *concurrencyGraph;
+
+public:
+  EdtConcurrencyOptimizer(ModuleOp module, EdtGraph *edtGraph,
+                          EdtAnalysis *edtAnalysis, EdtConcurrencyGraph *cg)
+      : module(module), edtGraph(edtGraph), edtAnalysis(edtAnalysis),
+        concurrencyGraph(cg) {}
+
+  /// Remove unnecessary barriers between low-risk concurrent EDTs
+  void pruneBarriers(func::FuncOp func) {
+    SmallVector<BarrierOp, 8> toErase;
+
+    func.walk([&](BarrierOp barrier) {
+      if (canRemoveBarrier(barrier)) {
+        toErase.push_back(barrier);
+      }
+    });
+
+    for (auto barrier : toErase) {
+      barrier.erase();
+    }
+  }
+
+  /// Group EDTs with high locality and no conflicts
+  void createPlacementGroups(func::FuncOp func) {
+    DisjointSetUnion dsu;
+
+    /// Initialize all EDTs as separate groups
+    for (EdtOp edt : concurrencyGraph->getEdts())
+      dsu.parent[edt] = edt;
+
+    /// Unite EDTs with high locality and no conflicts
+    for (const auto &edge : concurrencyGraph->getEdges()) {
+      if (!edge.mayConflict && edge.localityScore >= 0.6)
+        dsu.unite(edge.from, edge.to);
+    }
+
+    /// Assign group attributes
+    assignGroupAttributes(dsu);
+  }
+
+  /// Insert barriers between high-risk concurrent EDTs
+  void insertConflictBarriers() {
+    for (const auto &edge : concurrencyGraph->getEdges()) {
+      if (shouldInsertBarrier(edge))
+        insertBarrierBetween(edge.from, edge.to);
+    }
+  }
+
+  /// Apply EDT and DB placement decisions
+  void applyPlacementDecisions(func::FuncOp func, DbGraph *dbGraph) {
+    auto nodes = EdtPlacementHeuristics::makeNodeNames(4);
+
+    /// EDT placement
+    EdtPlacementHeuristics edtPlacer(edtGraph, edtAnalysis);
+    auto edtDecisions = edtPlacer.compute(nodes);
+    applyEdtPlacement(edtDecisions, nodes);
+
+    /// DB placement
+    DbPlacementHeuristics dbPlacer(dbGraph);
+    auto dbDecisions = dbPlacer.compute(func, nodes);
+    applyDbPlacement(dbDecisions, nodes);
+
+    /// Debug output
+    emitDebugOutput(func, edtPlacer, edtDecisions, dbPlacer, dbDecisions);
+  }
+
+private:
+  bool canRemoveBarrier(BarrierOp barrier) {
+    Block *block = barrier->getBlock();
+    SmallVector<EdtOp, 8> before, after;
+
+    /// Collect EDTs before and after the barrier
+    bool pastBarrier = false;
+    for (Operation &op : *block) {
+      if (&op == barrier.getOperation()) {
+        pastBarrier = true;
+        continue;
+      }
+      if (auto edt = dyn_cast<EdtOp>(&op)) {
+        (pastBarrier ? after : before).push_back(edt);
+      }
+    }
+
+    if (before.empty() || after.empty()) {
+      return false;
+    }
+
+    /// Check if all pairs are concurrent
+    for (EdtOp a : before) {
+      for (EdtOp b : after) {
+        if (edtGraph->isEdtReachable(a, b) || edtGraph->isEdtReachable(b, a)) {
+          return false; /// Not all pairs are concurrent
+        }
+      }
+    }
+
+    /// Check if all pairs are low-risk
+    for (EdtOp a : before) {
+      for (EdtOp b : after) {
+        auto affinity = edtAnalysis->affinity(a, b);
+        if (affinity.mayConflict || affinity.concurrencyRisk > 0.0) {
+          return false; /// Risky pair found
+        }
+      }
+    }
+
+    return true;
+  }
+
+  void assignGroupAttributes(const DisjointSetUnion &dsu) {
+    llvm::DenseMap<EdtOp, unsigned> repToGroup;
+    unsigned nextGroup = 1;
+
+    for (EdtOp edt : concurrencyGraph->getEdts()) {
+      EdtOp representative = const_cast<DisjointSetUnion &>(dsu).find(edt);
+      unsigned group =
+          repToGroup.try_emplace(representative, nextGroup).first->second;
+
+      if (group == nextGroup && representative == edt) {
+        nextGroup++;
+      }
+
+      edt->setAttr("arts.placement_group",
+                   StringAttr::get(module.getContext(),
+                                   ("G" + std::to_string(group)).c_str()));
+    }
+  }
+
+  bool shouldInsertBarrier(const EdtConcurrencyEdge &edge) {
+    /// Skip if EDTs are already ordered
+    if (edtGraph->isEdtReachable(edge.from, edge.to) ||
+        edtGraph->isEdtReachable(edge.to, edge.from)) {
+      return false;
+    }
+
+    /// Insert barrier for high-risk concurrent pairs
+    return edge.mayConflict && edge.concurrencyRisk >= 0.8;
+  }
+
+  void insertBarrierBetween(EdtOp a, EdtOp b) {
+    if (a->getBlock() != b->getBlock())
+      return;
+
+    Block *block = a->getBlock();
+
+    /// Determine order of operations
+    bool aBeforeB = true;
+    for (Operation &op : *block) {
+      if (&op == a) {
+        aBeforeB = true;
+        break;
+      }
+      if (&op == b) {
+        aBeforeB = false;
+        break;
+      }
+    }
+
+    EdtOp first = aBeforeB ? a : b;
+    EdtOp second = aBeforeB ? b : a;
+
+    /// Check if barrier already exists 2between them
+    for (Operation *it = first->getNextNode(); it && it != second;
+         it = it->getNextNode()) {
+      if (isa<BarrierOp>(it)) {
+        return; /// Barrier already exists
+      }
+    }
+
+    /// Insert new barrier
+    OpBuilder builder(second);
+    builder.create<BarrierOp>(second->getLoc());
+  }
+
+  void applyEdtPlacement(const SmallVector<PlacementDecision, 16> &decisions,
+                         const SmallVector<std::string, 8> &nodes) {
+    llvm::StringMap<unsigned> nodeIndex;
+    for (unsigned i = 0; i < nodes.size(); ++i) {
+      nodeIndex[nodes[i]] = i;
+    }
+
+    OpBuilder builder(module.getContext());
+    for (const auto &decision : decisions) {
+      auto it = nodeIndex.find(decision.chosenNode);
+      unsigned idx = (it != nodeIndex.end()) ? it->second : 0u;
+      decision.edtOp->setAttr(
+          "node", IntegerAttr::get(builder.getI32Type(), (int32_t)idx));
+    }
+  }
+
+  void applyDbPlacement(const SmallVector<DbPlacementDecision, 16> &decisions,
+                        const SmallVector<std::string, 8> &nodes) {
+    llvm::StringMap<unsigned> nodeIndex;
+    for (unsigned i = 0; i < nodes.size(); ++i) {
+      nodeIndex[nodes[i]] = i;
+    }
+
+    OpBuilder builder(module.getContext());
+    for (const auto &decision : decisions) {
+      auto it = nodeIndex.find(decision.chosenNode);
+      unsigned idx = (it != nodeIndex.end()) ? it->second : 0u;
+      if (Operation *op = decision.dbAllocOp) {
+        op->setAttr("node",
+                    IntegerAttr::get(builder.getI32Type(), (int32_t)idx));
+      }
+    }
+  }
+
+  void
+  emitDebugOutput(func::FuncOp func, const EdtPlacementHeuristics &edtPlacer,
+                  const SmallVector<PlacementDecision, 16> &edtDecisions,
+                  const DbPlacementHeuristics &dbPlacer,
+                  const SmallVector<DbPlacementDecision, 16> &dbDecisions) {
+    ARTS_DEBUG_SECTION("edt-concurrency-pass", {
+      std::string s;
+      llvm::raw_string_ostream os(s);
+      concurrencyGraph->print(os);
+      ARTS_DBGS() << os.str();
+    });
+
+    ARTS_DEBUG_SECTION("edt-placement-json", {
+      std::string js;
+      llvm::raw_string_ostream jos(js);
+      edtPlacer.exportToJson(func, edtDecisions, jos);
+      ARTS_DBGS() << js;
+    });
+
+    ARTS_DEBUG_SECTION("db-placement-json", {
+      std::string js;
+      llvm::raw_string_ostream jos(js);
+      dbPlacer.exportToJson(func, dbDecisions, jos);
+      ARTS_DBGS() << js;
+    });
+  }
+};
+
+struct EdtConcurrencyPass
+    : public arts::EdtConcurrencyBase<EdtConcurrencyPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
 
     module.walk([&](func::FuncOp func) {
-      std::unique_ptr<DbGraph> dbGraph = std::make_unique<DbGraph>(func, nullptr);
-      dbGraph->build();
-      if (!dbGraph)
-        return;
-      std::unique_ptr<EdtGraph> edtGraph = std::make_unique<EdtGraph>(func, dbGraph.get());
-      edtGraph->build();
-      if (edtGraph->getNumTasks() == 0)
-        return;
-
-      EdtAnalysis edtAnalysis(module);
-      edtAnalysis.analyze();
-      EdtConcurrencyGraph cg(edtGraph.get(), &edtAnalysis);
-      cg.build();
-
-      // 1) Barrier pruning: remove barriers if ALL pre/post EDT pairs are concurrent
-      // and low-risk (no write hazards) per affinity metrics
-      SmallVector<BarrierOp, 8> toErase;
-      func.walk([&](BarrierOp barrier) {
-        Block *block = barrier->getBlock();
-        SmallVector<EdtOp, 8> before, after;
-        bool past = false;
-        for (Operation &op : *block) {
-          if (&op == barrier.getOperation()) { past = true; continue; }
-          if (auto edt = dyn_cast<EdtOp>(&op)) (past ? after : before).push_back(edt);
-        }
-        if (before.empty() || after.empty()) return;
-
-        // Require all pairs be concurrent
-        for (EdtOp a : before) for (EdtOp b : after) {
-          if (edtGraph->isTaskReachable(a, b) || edtGraph->isTaskReachable(b, a))
-            return; // not all pairs concurrent
-        }
-
-        // All pairs concurrent: ensure low risk
-        for (EdtOp a : before) for (EdtOp b : after) {
-          auto aff = edtAnalysis.affinity(a.getOperation(), b.getOperation());
-          if (aff.mayConflict || aff.concurrencyRisk > 0.0) return; // risky
-        }
-        toErase.push_back(barrier);
-      });
-      for (auto b : toErase) b.erase();
-
-      // 2) Co-location hints: group tasks with high locality and no conflicts
-      struct DSU { llvm::DenseMap<Operation*, Operation*> p; Operation* f(Operation* x){
-        auto it=p.find(x); if(it==p.end()||it->second==x) return p[x]=x; return it->second=f(it->second);} void u(Operation*a,Operation*b){a=f(a);b=f(b); if(a!=b)p[b]=a;} } dsu;
-      for (Operation *t : cg.getTasks()) dsu.p[t]=t;
-      for (const auto &e : cg.getEdges()) {
-        if (!e.mayConflict && e.localityScore >= 0.6) dsu.u(e.a, e.b);
-      }
-      llvm::DenseMap<Operation*, unsigned> repToGroup;
-      unsigned nextG=1;
-      for (Operation *t : cg.getTasks()) {
-        Operation *r = dsu.f(t);
-        unsigned g = repToGroup.try_emplace(r, nextG).first->second;
-        if (g == nextG && r == t) nextG++;
-        t->setAttr("arts.placement_group", StringAttr::get(module.getContext(), ("G" + std::to_string(g)).c_str()));
+      /// Build analysis graphs
+      auto graphs = buildAnalysisGraphs(func, module);
+      if (!graphs.has_value()) {
+        return; /// Skip if no EDTs found
       }
 
-      // 3) Conflict fencing: insert a barrier between high-risk concurrent pairs in same block
-      auto insertBarrierBetween = [&](Operation *a, Operation *b) {
-        if (a->getBlock() != b->getBlock()) return;
-        Block *blk = a->getBlock();
-        // Determine order
-        bool aBeforeB = true;
-        for (Operation &op : *blk) {
-          if (&op == a) { aBeforeB = true; break; }
-          if (&op == b) { aBeforeB = false; break; }
-        }
-        Operation *first = aBeforeB ? a : b;
-        Operation *second = aBeforeB ? b : a;
-        // Check if a barrier already exists between them
-        for (Operation *it = first->getNextNode(); it && it != second; it = it->getNextNode()) {
-          if (isa<BarrierOp>(it)) return;
-        }
-        OpBuilder builder(second);
-        builder.create<BarrierOp>(second->getLoc());
-      };
+      auto [dbGraph, edtGraph, edtAnalysis, concurrencyGraph] =
+          std::move(graphs.value());
 
-      for (const auto &e : cg.getEdges()) {
-        if (edtGraph->isTaskReachable(static_cast<EdtOp>(e.a), static_cast<EdtOp>(e.b)) ||
-            edtGraph->isTaskReachable(static_cast<EdtOp>(e.b), static_cast<EdtOp>(e.a)))
-          continue; // already ordered
-        if (e.mayConflict && e.concurrencyRisk >= 0.8) insertBarrierBetween(e.a, e.b);
-      }
+      /// Create optimizer and apply transformations
+      EdtConcurrencyOptimizer optimizer(
+          module, edtGraph.get(), edtAnalysis.get(), concurrencyGraph.get());
 
-      ARTS_DEBUG_SECTION("edt-concurrency-pass", {
-        std::string s;
-        llvm::raw_string_ostream os(s);
-        cg.print(os);
-        ARTS_DBGS() << os.str();
-      });
-
-      // Compute EDT placement decisions with a default 4-node fabric
-      EdtPlacementHeuristics placer(edtGraph.get(), &edtAnalysis);
-      auto nodes = EdtPlacementHeuristics::makeNodeNames(4);
-      auto decisions = placer.compute(nodes);
-
-      // Apply placement as IR attributes: set i32 attr "node" on each arts.edt
-      // Also emit debug JSON
-      {
-        llvm::StringMap<unsigned> nodeIndex;
-        for (unsigned i = 0; i < nodes.size(); ++i) nodeIndex[nodes[i]] = i;
-        for (const auto &d : decisions) {
-          auto it = nodeIndex.find(d.chosenNode);
-          unsigned idx = (it != nodeIndex.end()) ? it->second : 0u;
-          OpBuilder builder(module.getContext());
-          d.edtOp->setAttr("node", IntegerAttr::get(builder.getI32Type(), (int32_t)idx));
-        }
-        ARTS_DEBUG_SECTION("edt-placement-json", {
-          std::string js;
-          llvm::raw_string_ostream jos(js);
-          placer.exportToJson(func, decisions, jos);
-          ARTS_DBGS() << js;
-        });
-      }
-
-      // Compute and apply DbAlloc placement based on EDT node hints
-      {
-        DbPlacementHeuristics dbPlacer(dbGraph.get());
-        auto dbDecisions = dbPlacer.compute(func, nodes);
-        OpBuilder builder(module.getContext());
-        llvm::StringMap<unsigned> nodeIndex;
-        for (unsigned i = 0; i < nodes.size(); ++i) nodeIndex[nodes[i]] = i;
-        for (const auto &d : dbDecisions) {
-          auto it = nodeIndex.find(d.chosenNode);
-          unsigned idx = (it != nodeIndex.end()) ? it->second : 0u;
-          if (Operation *op = d.dbAllocOp) {
-            op->setAttr("node", IntegerAttr::get(builder.getI32Type(), (int32_t)idx));
-          }
-        }
-        ARTS_DEBUG_SECTION("db-placement-json", {
-          std::string js;
-          llvm::raw_string_ostream jos(js);
-          dbPlacer.exportToJson(func, dbDecisions, jos);
-          ARTS_DBGS() << js;
-        });
-      }
+      optimizer.pruneBarriers(func);
+      optimizer.createPlacementGroups(func);
+      optimizer.insertConflictBarriers();
+      optimizer.applyPlacementDecisions(func, dbGraph.get());
     });
+  }
+
+private:
+  std::optional<std::tuple<std::unique_ptr<DbGraph>, std::unique_ptr<EdtGraph>,
+                           std::unique_ptr<EdtAnalysis>,
+                           std::unique_ptr<EdtConcurrencyGraph>>>
+  buildAnalysisGraphs(func::FuncOp func, ModuleOp module) {
+    /// Build DB graph
+    auto dbGraph = std::make_unique<DbGraph>(func, nullptr);
+    dbGraph->build();
+
+    /// Build EDT graph
+    auto edtGraph = std::make_unique<EdtGraph>(func, dbGraph.get());
+    edtGraph->build();
+
+    if (edtGraph->getNumTasks() == 0) {
+      return std::nullopt; /// No EDTs to process
+    }
+
+    /// Build EDT analysis
+    auto edtAnalysis =
+        std::make_unique<EdtAnalysis>(module, dbGraph.get(), edtGraph.get());
+    edtAnalysis->analyze();
+
+    /// Build concurrency graph
+    auto concurrencyGraph = std::make_unique<EdtConcurrencyGraph>(
+        edtGraph.get(), edtAnalysis.get());
+    concurrencyGraph->build();
+
+    return std::make_tuple(std::move(dbGraph), std::move(edtGraph),
+                           std::move(edtAnalysis), std::move(concurrencyGraph));
   }
 };
 } // namespace
@@ -168,5 +347,3 @@ struct EdtConcurrencyPass : public arts::EdtConcurrencyBase<EdtConcurrencyPass> 
 std::unique_ptr<Pass> mlir::arts::createEdtConcurrencyPass() {
   return std::make_unique<EdtConcurrencyPass>();
 }
-
-

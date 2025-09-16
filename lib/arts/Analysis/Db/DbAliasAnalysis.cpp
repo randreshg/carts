@@ -1,14 +1,17 @@
-//===----------------------------------------------------------------------===//
-// Db/DbAliasAnalysis.cpp - Implementation of DbAliasAnalysis
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: DbAliasAnalysis.cpp
+/// Defines alias analysis for DB operations and memory tracking.
+///==========================================================================
 
 #include "arts/Analysis/Db/DbAliasAnalysis.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "arts/Utils/ArtsDebug.h"
+#include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-ARTS_DEBUG_SETUP(db_alias_analysis);
+
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(db_analysis);
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -168,9 +171,11 @@ Value DbAliasAnalysis::getUnderlyingValue(const NodeBase &node) {
   if (isa<DbAllocOp>(op)) {
     return op->getResult(0);
   } else if (isa<DbAcquireOp>(op)) {
-    return cast<DbAcquireOp>(op).getSourcePtr();
+    Value sourcePtr = cast<DbAcquireOp>(op).getSourcePtr();
+    return arts::getUnderlyingValue(sourcePtr);
   } else if (isa<DbReleaseOp>(op)) {
-    return cast<DbReleaseOp>(op).getSources()[0];
+    Value source = cast<DbReleaseOp>(op).getSources()[0];
+    return arts::getUnderlyingValue(source);
   }
   llvm_unreachable("Invalid DB node type");
 }

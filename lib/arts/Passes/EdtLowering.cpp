@@ -1,17 +1,18 @@
-//===----------------------------------------------------------------------===//
-// EDT Lowering Pass - Complete Implementation
-// Transforms arts.edt operations into runtime-compatible function calls
-//
-// This pass implements the comprehensive 6-step EDT lowering process:
-// 1. Analyze EDT region for free variables and deps
-// 2. Outline EDT region to function with ARTS runtime signature
-// 3. Insert parameter packing before EDT (edt_param_pack) - It should include
-//    all parameters from the EDT + unique datablock sizes and indices for all
-//    deps
-// 4. Insert parameter/dependency unpacking in outlined function
-// 5. Replace EDT with edt_create call returning GUID
+///==========================================================================
+/// File: EdtLowering.cpp
+/// Complete implementation of EDT lowering pass that transforms arts.edt
+/// operations into runtime-compatible function calls.
+///
+/// This pass implements a 6-step EDT lowering process:
+/// 1. Analyze EDT region for free variables and deps
+/// 2. Outline EDT region to function with ARTS runtime signature
+/// 3. Insert parameter packing before EDT (edt_param_pack) - It should include
+///    all parameters from the EDT + unique datablock sizes and indices for all
+///    deps
+/// 4. Insert parameter/dependency unpacking in outlined function
+/// 5. Replace EDT with edt_create call returning GUID
 // 6. Add dependency management (record_in_dep, increment_out_latch)
-//===----------------------------------------------------------------------===//
+///==========================================================================
 
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
@@ -44,15 +45,14 @@ using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
 
-///==========================================================================
-/// EdtEnvManager
-/// Manages the environment analysis for EDT regions by collecting parameters,
-/// constants, and dependencies used in the region.
-///==========================================================================
 
 namespace {
 
-/// Manages the environment analysis for EDT regions in lowering
+//===----------------------------------------------------------------------===//
+// EdtEnvManager
+// Manages the environment analysis for EDT regions by collecting parameters,
+// constants, and dependencies used in the region.
+//===----------------------------------------------------------------------===//
 class EdtEnvManager {
 public:
   EdtEnvManager(EdtOp edtOp) : edtOp(edtOp) { analyze(); }

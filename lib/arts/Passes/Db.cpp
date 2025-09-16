@@ -1,6 +1,7 @@
-//===----------------------------------------------------------------------===//
-// Db/DbPass.cpp - Pass for DB optimizations
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: Db.cpp
+/// Pass for DB optimizations and memory management.
+///==========================================================================
 
 /// Dialects
 
@@ -44,9 +45,6 @@ namespace {
 struct DbPass : public arts::DbBase<DbPass> {
   void runOnOperation() override;
 
-  /// Canonicalize memref.dim ops of datablocks.
-  bool canonicalizeDimOps();
-
   /// DBs with single size, and "in" mode, can be converted into parameters.
   bool convertToParameters();
 
@@ -67,9 +65,6 @@ struct DbPass : public arts::DbBase<DbPass> {
   /// ops.
   bool fuseAccesses();
 
-  /// Inline small DB allocs into acquires if single-use.
-  bool inlineAllocs();
-
   /// Prefetch and overlap: hoist acquires earlier (after operand defs) and
   /// delay releases after last use within a block to overlap transfers.
   bool prefetchOverlap();
@@ -77,7 +72,7 @@ struct DbPass : public arts::DbBase<DbPass> {
 private:
   ModuleOp module;
 };
-} // end anonymous namespace
+} /// end anonymous namespace
 
 void DbPass::runOnOperation() {
   bool changed = false;
@@ -87,62 +82,63 @@ void DbPass::runOnOperation() {
   ARTS_DEBUG_REGION(module.dump(););
 
   auto &dbAnalysis = getAnalysis<DbAnalysis>();
-  // Force-build graphs so downstream opts can consume them now or later.
-  module.walk([&](func::FuncOp func) { (void)dbAnalysis.getOrCreateGraph(func); });
-
-  // Order below is conservative; each stage can be independently enabled
-  // changed |= deadDbElimination();
-
-  bool ctpChanged = convertToParameters();
-  changed |= ctpChanged;
-  if (ctpChanged) {
+  auto buildGraphNodesOnly = [&]() {
     module.walk([&](func::FuncOp func) {
-      (void)dbAnalysis.invalidateGraph(func);
-      (void)dbAnalysis.getOrCreateGraph(func);
+      (void)dbAnalysis.getOrCreateGraphNodesOnly(func);
     });
-  }
+  };
+  buildGraphNodesOnly();
 
   bool shrinkChanged = shrinkDb();
   changed |= shrinkChanged;
-  if (shrinkChanged) {
-    module.walk([&](func::FuncOp func) {
-      (void)dbAnalysis.invalidateGraph(func);
-      (void)dbAnalysis.getOrCreateGraph(func);
-    });
-  }
 
-  // changed |= prefetchOverlap();
-  // changed |= bufferReuse();
-  // changed |= hoistAllocs();
-  // changed |= fuseAccesses();
-  // changed |= inlineAllocs();
+  if (shrinkChanged)
+    buildGraphNodesOnly();
 
-  // Analysis-only: emit single final DbAnalysis JSON dump and placement JSON
-  ARTS_DEBUG_SECTION("db-analysis:final-json", {
-    module.walk([&](func::FuncOp func) {
-      if (auto *graph = dbAnalysis.getOrCreateGraph(func)) {
-        llvm::SmallString<128> buf;
-        llvm::raw_svector_ostream os(buf);
-        graph->exportToJson(os);
-        ARTS_DBGS() << os.str();
-      }
-    });
-  });
+  /// Order below is conservative; each stage can be independently enabled
+  /// changed |= deadDbElimination();
 
-  ARTS_DEBUG_SECTION("db-placement-json", {
-    module.walk([&](func::FuncOp func) {
-      auto *graph = dbAnalysis.getOrCreateGraph(func);
-      if (!graph)
-        return;
-      DbPlacementHeuristics placer(graph);
-      auto nodes = DbPlacementHeuristics::makeNodeNames(4);
-      auto decisions = placer.compute(func, nodes);
-      std::string js;
-      llvm::raw_string_ostream jos(js);
-      placer.exportToJson(func, decisions, jos);
-      ARTS_DBGS() << js;
-    });
-  });
+  /// bool ctpChanged = convertToParameters();
+  /// changed |= ctpChanged;
+  /// if (ctpChanged) {
+  ///   module.walk([&](func::FuncOp func) {
+  ///     (void)dbAnalysis.invalidateGraph(func);
+  ///     (void)dbAnalysis.getOrCreateGraph(func);
+  ///   });
+  /// }
+
+  /// changed |= prefetchOverlap();
+  /// changed |= bufferReuse();
+  /// changed |= hoistAllocs();
+  /// changed |= fuseAccesses();
+  /// changed |= inlineAllocs();
+
+  /// Analysis-only: emit single final DbAnalysis JSON dump and placement JSON
+  /// ARTS_DEBUG_SECTION("db-analysis:final-json", {
+  ///   module.walk([&](func::FuncOp func) {
+  ///     if (auto *graph = dbAnalysis.getOrCreateGraph(func)) {
+  ///       llvm::SmallString<128> buf;
+  ///       llvm::raw_svector_ostream os(buf);
+  ///       graph->exportToJson(os, true);
+  ///       ARTS_DBGS() << os.str();
+  ///     }
+  ///   });
+  /// });
+
+  /// ARTS_DEBUG_SECTION("db-placement-json", {
+  ///   module.walk([&](func::FuncOp func) {
+  ///     auto *graph = dbAnalysis.getOrCreateGraph(func);
+  ///     if (!graph)
+  ///       return;
+  ///     DbPlacementHeuristics placer(graph);
+  ///     auto nodes = DbPlacementHeuristics::makeNodeNames(4);
+  ///     auto decisions = placer.compute(func, nodes);
+  ///     std::string js;
+  ///     llvm::raw_string_ostream jos(js);
+  ///     placer.exportToJson(func, decisions, jos);
+  ///     ARTS_DBGS() << js;
+  ///   });
+  /// });
 
   if (!changed) {
     ARTS_INFO("No changes made to the module");
@@ -169,22 +165,22 @@ void DbPass::runOnOperation() {
 //   %a = arts.db_acquire %db offsets(%o0,%o1) sizes(%s0,%s1)
 //   use(%a, %x)
 //   ...
-//   arts.db_release %a            // moved after last use
+//   arts.db_release %a            /// moved after last use
 bool DbPass::prefetchOverlap() {
   bool changed = false;
-  // Operate within blocks to preserve simple dominance and avoid CFG changes
+  /// Operate within blocks to preserve simple dominance and avoid CFG changes
   module.walk([&](func::FuncOp func) {
     for (Block &block : func.getBody().getBlocks()) {
-      // Build a position index for stable ordering comparisons
+      /// Build a position index for stable ordering comparisons
       llvm::DenseMap<Operation *, unsigned> pos;
       unsigned i = 0;
       for (Operation &op : block)
         pos[&op] = i++;
 
-      // 1) Hoist acquires
-      // Move each acquire as early as possible after the last operand def in
-      // this block. If operands are block arguments or defined above, the
-      // acquire goes to the block front.
+      /// 1) Hoist acquires
+      /// Move each acquire as early as possible after the last operand def in
+      /// this block. If operands are block arguments or defined above, the
+      /// acquire goes to the block front.
       SmallVector<DbAcquireOp, 16> acquires;
       for (Operation &op : block)
         if (auto acq = dyn_cast<DbAcquireOp>(&op))
@@ -212,15 +208,15 @@ bool DbPass::prefetchOverlap() {
         }
       }
 
-      // Rebuild positions after moves
+      /// Rebuild positions after moves
       pos.clear();
       i = 0;
       for (Operation &op : block)
         pos[&op] = i++;
 
-      // 2) Delay releases
-      // Move each release as late as possible within the same block: just
-      // after the last use of its operand(s). Skip if already in the best spot.
+      /// 2) Delay releases
+      /// Move each release as late as possible within the same block: just
+      /// after the last use of its operand(s). Skip if already in the best spot.
       SmallVector<DbReleaseOp, 16> releases;
       for (Operation &op : block)
         if (auto rel = dyn_cast<DbReleaseOp>(&op))
@@ -230,7 +226,7 @@ bool DbPass::prefetchOverlap() {
         Operation *op = rel.getOperation();
         unsigned cur = pos[op];
         unsigned lastUsePos = cur;
-        // Consider all operands; typically the acquired view
+        /// Consider all operands; typically the acquired view
         for (Value v : op->getOperands()) {
           for (OpOperand &use : v.getUses()) {
             Operation *user = use.getOwner();
@@ -259,7 +255,6 @@ bool DbPass::prefetchOverlap() {
   return changed;
 }
 
-
 // Convert trivial DBs to parameters (disabled scaffolding)
 // Intent: when a DB is effectively read-only and 1D, turn it into a parameter
 // to avoid runtime traffic. Requires validating usage patterns and lifetimes.
@@ -271,30 +266,30 @@ bool DbPass::prefetchOverlap() {
 //   --> convert to a function/block argument replacing %db/%a
 bool DbPass::convertToParameters() {
   bool changed = false;
-  // module.walk([&](func::FuncOp func) {
-  //   auto graph = dbAnalysis.getOrCreateGraph(func);
-  //   graph->forEachAllocNode([&](DbAllocNode *allocNode) {
-  //     bool hasSingleSize = (allocNode->getSizes().size() == 1);
-  //     bool isOnlyReader = (allocNode->getAcquireNodesSize() > 0 &&
-  //     allocNode->getReleaseNodesSize() == 0);
+  /// module.walk([&](func::FuncOp func) {
+  ///   auto graph = dbAnalysis.getOrCreateGraph(func);
+  ///   graph->forEachAllocNode([&](DbAllocNode *allocNode) {
+  ///     bool hasSingleSize = (allocNode->getSizes().size() == 1);
+  ///     bool isOnlyReader = (allocNode->getAcquireNodesSize() > 0 &&
+  ///     allocNode->getReleaseNodesSize() == 0);
 
-  //     if (!hasSingleSize || !isOnlyReader) return;
+  ///     if (!hasSingleSize || !isOnlyReader) return;
 
-  //     LLVM_DEBUG(dbgs() << "- Converting DB to parameter: " <<
-  //     allocNode->getDbAllocOp() << "\n");
-  //     allocNode->forEachChildNode([&](NodeBase *child) {
-  //       if (auto acquireNode = dyn_cast<DbAcquireNode>(child)) {
-  //         Operation *acquireOp = acquireNode->getOp();
-  //         acquireOp->getResult(0).replaceAllUsesWith(allocNode->getPtr());
-  //         acquireOp->erase();
-  //       }
-  //     });
-  //     if (allocNode->getDbAllocOp().use_empty()) {
-  //       allocNode->getDbAllocOp().erase();
-  //     }
-  //     changed = true;
-  //   });
-  // });
+  ///     LLVM_DEBUG(dbgs() << "- Converting DB to parameter: " <<
+  ///     allocNode->getDbAllocOp() << "\n");
+  ///     allocNode->forEachChildNode([&](NodeBase *child) {
+  ///       if (auto acquireNode = dyn_cast<DbAcquireNode>(child)) {
+  ///         Operation *acquireOp = acquireNode->getOp();
+  ///         acquireOp->getResult(0).replaceAllUsesWith(allocNode->getPtr());
+  ///         acquireOp->erase();
+  ///       }
+  ///     });
+  ///     if (allocNode->getDbAllocOp().use_empty()) {
+  ///       allocNode->getDbAllocOp().erase();
+  ///     }
+  ///     changed = true;
+  ///   });
+  /// });
   return changed;
 }
 
@@ -326,7 +321,239 @@ Update all downstream DbAcquire/DbRelease and arts.edt block args/operands to
 reference the new coarser-grained DBs. Ensure interaction with EdtGraph/DbGraph
 remains correct and verify with tests.
 */
-bool DbPass::shrinkDb() { return false; }
+bool DbPass::shrinkDb() {
+  bool changed = false;
+  auto isDefinedOutside = [](Region &region, Value v) -> bool {
+    return !region.isAncestor(v.getParentRegion());
+  };
+
+  module.walk([&](arts::EdtOp edt) {
+    OpBuilder builder(edt);
+    Region &R = edt.getRegion();
+    Block &body = edt.getBody().front();
+    SmallVector<Value> deps = edt.getDependenciesAsVector();
+    unsigned nArgs = body.getNumArguments();
+    assert(deps.size() == nArgs && "mapping requires 1:1");
+
+    for (unsigned i = 0; i < nArgs; ++i) {
+      Value dep = deps[i];
+      Value arg = body.getArgument(i);
+      auto memTy = arg.getType().dyn_cast<MemRefType>();
+      if (!memTy)
+        continue;
+      auto acq = dep.getDefiningOp<arts::DbAcquireOp>();
+      if (!acq)
+        continue; /// only handle deps from acquires
+
+      int rank = memTy.getRank();
+      SmallVector<SmallVector<Value, 8>, 4> perDim(rank);
+
+      /// Collect index values used inside the EDT region.
+      R.walk([&](Operation *op) {
+        if (auto load = dyn_cast<memref::LoadOp>(op)) {
+          if (load.getMemref() != arg)
+            return;
+          auto idxs = load.getIndices();
+          for (int d = 0; d < (int)idxs.size(); ++d)
+            perDim[d].push_back(idxs[d]);
+        } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+          if (store.getMemref() != arg)
+            return;
+          auto idxs = store.getIndices();
+          for (int d = 0; d < (int)idxs.size(); ++d)
+            perDim[d].push_back(idxs[d]);
+        } else if (auto gep = dyn_cast<arts::DbGepOp>(op)) {
+          if (gep.getBasePtr() != arg)
+            return;
+          auto idxs = gep.getIndices();
+          if (!idxs.empty())
+            perDim[0].push_back(idxs.front());
+        }
+      });
+
+      /// Determine leading pinned invariant dims
+      SmallVector<Value, 4> pinned;
+      int pinnedCount = 0;
+      for (int d = 0; d < rank; ++d) {
+        auto &vals = perDim[d];
+        if (vals.empty())
+          break;
+        /// Check if all constant and same
+        bool allConst = true;
+        std::optional<int64_t> constVal;
+        for (Value v : vals) {
+          auto c = v.getDefiningOp<arith::ConstantIndexOp>();
+          if (!c) {
+            allConst = false;
+            break;
+          }
+          int64_t cv = c.value();
+          if (!constVal)
+            constVal = cv;
+          else if (*constVal != cv) {
+            allConst = false;
+            break;
+          }
+        }
+        if (allConst) {
+          pinned.push_back(
+              builder.create<arith::ConstantIndexOp>(edt.getLoc(), *constVal));
+          ++pinnedCount;
+          continue;
+        }
+        /// Check if all the same SSA value and defined outside the EDT
+        Value first = vals.front();
+        bool allSame = true;
+        for (Value v : vals) {
+          if (v != first) {
+            allSame = false;
+            break;
+          }
+        }
+        if (allSame && isDefinedOutside(R, first)) {
+          pinned.push_back(first);
+          ++pinnedCount;
+          continue;
+        }
+        break; /// stop at first non-pinnable dim
+      }
+
+      /// Compute offsets/sizes for remaining dims; default to full dim.
+      SmallVector<Value, 4> newOffsets, newSizes;
+      int tailRank = std::max(0, rank - pinnedCount);
+      newOffsets.reserve(tailRank);
+      newSizes.reserve(tailRank);
+      for (int d = pinnedCount; d < rank; ++d) {
+        /// For now, use full dimension for remaining dims
+        Value off = builder.create<arith::ConstantIndexOp>(edt.getLoc(), 0);
+        Value size;
+        if (auto srcTy = acq.getSourcePtr().getType().dyn_cast<MemRefType>()) {
+          if (srcTy.isDynamicDim(d)) {
+            auto dimIdx =
+                builder.create<arith::ConstantIndexOp>(edt.getLoc(), d);
+            size = builder.create<arts::DbDimOp>(edt.getLoc(),
+                                                 acq.getSourcePtr(), dimIdx);
+          } else {
+            size = builder.create<arith::ConstantIndexOp>(edt.getLoc(),
+                                                          srcTy.getDimSize(d));
+          }
+        } else {
+          size = builder.create<arith::ConstantIndexOp>(edt.getLoc(), 1);
+        }
+        newOffsets.push_back(off);
+        newSizes.push_back(size);
+      }
+
+      /// If all offsets are zero and sizes equal full dims, skip.
+      bool anyRefine = false;
+      for (int d = 0; d < rank; ++d) {
+        auto c0 = newOffsets[d].getDefiningOp<arith::ConstantIndexOp>();
+        if (!c0 || c0.value() != 0) {
+          anyRefine = true;
+          break;
+        }
+      }
+      if (!anyRefine)
+        continue;
+
+      /// Create a refined acquire before the old one, pinning leading dims and
+      /// adjusting result memref rank accordingly.
+      builder.setInsertionPoint(acq);
+      MemRefType newPtrTy = memTy;
+      if (pinnedCount > 0) {
+        SmallVector<int64_t, 4> newShape;
+        newShape.assign(std::max(0, rank - pinnedCount), ShapedType::kDynamic);
+        newPtrTy = MemRefType::get(newShape, memTy.getElementType());
+      }
+      auto refined = builder.create<arts::DbAcquireOp>(
+          edt.getLoc(), acq.getGuid().getType(), newPtrTy, acq.getMode(),
+          acq.getSourceGuid(), acq.getSourcePtr(), pinned, newOffsets,
+          newSizes);
+
+      /// Redirect EDT dependency to refined acquire pointer and rewrite indices.
+      SmallVector<Value> newDeps = deps;
+      newDeps[i] = refined.getPtr();
+      edt->setOperands(newDeps);
+
+      /// Update block argument type if rank reduced
+      if (pinnedCount > 0)
+        body.getArgument(i).setType(newPtrTy);
+
+      /// Normalize indices inside the EDT by dropping pinned dims and
+      /// subtracting offsets on remaining ones (currently offsets are zero).
+      R.walk([&](Operation *op) {
+        if (auto load = dyn_cast<memref::LoadOp>(op)) {
+          if (load.getMemref() != arg)
+            return;
+          SmallVector<Value> idxs;
+          for (int d = pinnedCount, e = (int)load.getIndices().size(); d < e;
+               ++d) {
+            Value idx = load.getIndices()[d];
+            /// subtract offset if non-zero
+            bool isZero = false;
+            if (auto c = newOffsets[d - pinnedCount]
+                             .getDefiningOp<arith::ConstantIndexOp>())
+              isZero = (c.value() == 0);
+            if (!isZero)
+              idx = builder.create<arith::SubIOp>(op->getLoc(), idx,
+                                                  newOffsets[d - pinnedCount]);
+            idxs.push_back(idx);
+          }
+          load.getIndicesMutable().assign(idxs);
+        } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+          if (store.getMemref() != arg)
+            return;
+          SmallVector<Value> idxs;
+          for (int d = pinnedCount, e = (int)store.getIndices().size(); d < e;
+               ++d) {
+            Value idx = store.getIndices()[d];
+            bool isZero = false;
+            if (auto c = newOffsets[d - pinnedCount]
+                             .getDefiningOp<arith::ConstantIndexOp>())
+              isZero = (c.value() == 0);
+            if (!isZero)
+              idx = builder.create<arith::SubIOp>(op->getLoc(), idx,
+                                                  newOffsets[d - pinnedCount]);
+            idxs.push_back(idx);
+          }
+          store.getIndicesMutable().assign(idxs);
+        } else if (auto gep = dyn_cast<arts::DbGepOp>(op)) {
+          if (gep.getBasePtr() != arg)
+            return;
+          SmallVector<Value> idxs;
+          auto gIdxs = gep.getIndices();
+          for (int d = pinnedCount, e = (int)gIdxs.size(); d < e; ++d) {
+            Value idx = gIdxs[d];
+            bool isZero = false;
+            if (auto c = newOffsets[d - pinnedCount]
+                             .getDefiningOp<arith::ConstantIndexOp>())
+              isZero = (c.value() == 0);
+            if (!isZero)
+              idx = builder.create<arith::SubIOp>(op->getLoc(), idx,
+                                                  newOffsets[d - pinnedCount]);
+            idxs.push_back(idx);
+          }
+          SmallVector<Value> strides;
+          strides.assign(gep.getStrides().begin(), gep.getStrides().end());
+          builder.setInsertionPoint(op);
+          auto newG =
+              builder.create<arts::DbGepOp>(op->getLoc(), arg, idxs, strides);
+          op->getResult(0).replaceAllUsesWith(newG.getResult());
+          op->erase();
+        }
+      });
+
+      /// If old acquire's results are now dead, erase it.
+      if (acq->use_empty())
+        acq.erase();
+
+      if (pinnedCount > 0)
+        ARTS_INFO("Pinned " << pinnedCount << " leading dims for one EDT dep");
+      changed = true;
+    }
+  });
+  return changed;
+}
 
 // Dead DB elimination
 // Responsibility: remove DbAllocOps with no associated acquires/releases and
@@ -365,36 +592,36 @@ bool DbPass::deadDbElimination() {
 // is safe. Requires alias and lifetime queries. Kept as future work.
 bool DbPass::bufferReuse() {
   bool changed = false;
-  // module.walk([&](func::FuncOp func) {
-  //   auto graph = dbAnalysis.getOrCreateGraph(func);
-  //   SmallVector<std::pair<DbAllocNode *, DbAllocNode *>> reusePairs;
-  //   graph->forEachAllocNode([&](DbAllocNode *alloc1) {
-  //     graph->forEachAllocNode([&](DbAllocNode *alloc2) {
-  //       if (alloc1 != alloc2 &&
-  //       !graph->isAllocReachable(alloc1->getDbAllocOp(),
-  //       alloc2->getDbAllocOp()) &&
-  //           !graph->isAllocReachable(alloc2->getDbAllocOp(),
-  //           alloc1->getDbAllocOp()) &&
-  //           dbAnalysis.getAliasAnalysis()->mayAlias(alloc1->getDbAllocOp(),
-  //           alloc2->getDbAllocOp())) {
-  //         reusePairs.push_back({alloc1, alloc2});
-  //       }
-  //     });
-  //   });
-  //   for (auto &[alloc1, alloc2] : reusePairs) {
-  //     alloc2->forEachChildNode([&](NodeBase *child) {
-  //       if (auto acquire = dyn_cast<DbAcquireNode>(child)) {
-  //         acquire->getOp()->setOperand(0,
-  //         alloc1->getDbAllocOp().getResult(0));
-  //       } else if (auto release = dyn_cast<DbReleaseNode>(child)) {
-  //         release->getOp()->setOperand(0,
-  //         alloc1->getDbAllocOp().getResult(0));
-  //       }
-  //     });
-  //     alloc2->getDbAllocOp().erase();
-  //     changed = true;
-  //   }
-  // });
+  /// module.walk([&](func::FuncOp func) {
+  ///   auto graph = dbAnalysis.getOrCreateGraph(func);
+  ///   SmallVector<std::pair<DbAllocNode *, DbAllocNode *>> reusePairs;
+  ///   graph->forEachAllocNode([&](DbAllocNode *alloc1) {
+  ///     graph->forEachAllocNode([&](DbAllocNode *alloc2) {
+  ///       if (alloc1 != alloc2 &&
+  ///       !graph->isAllocReachable(alloc1->getDbAllocOp(),
+  ///       alloc2->getDbAllocOp()) &&
+  ///           !graph->isAllocReachable(alloc2->getDbAllocOp(),
+  ///           alloc1->getDbAllocOp()) &&
+  ///           dbAnalysis.getAliasAnalysis()->mayAlias(alloc1->getDbAllocOp(),
+  ///           alloc2->getDbAllocOp())) {
+  ///         reusePairs.push_back({alloc1, alloc2});
+  ///       }
+  ///     });
+  ///   });
+  ///   for (auto &[alloc1, alloc2] : reusePairs) {
+  ///     alloc2->forEachChildNode([&](NodeBase *child) {
+  ///       if (auto acquire = dyn_cast<DbAcquireNode>(child)) {
+  ///         acquire->getOp()->setOperand(0,
+  ///         alloc1->getDbAllocOp().getResult(0));
+  ///       } else if (auto release = dyn_cast<DbReleaseNode>(child)) {
+  ///         release->getOp()->setOperand(0,
+  ///         alloc1->getDbAllocOp().getResult(0));
+  ///       }
+  ///     });
+  ///     alloc2->getDbAllocOp().erase();
+  ///     changed = true;
+  ///   }
+  /// });
   return changed;
 }
 
@@ -403,19 +630,19 @@ bool DbPass::bufferReuse() {
 // overhead. Requires LoopAnalysis integration. Kept as future work.
 bool DbPass::hoistAllocs() {
   bool changed = false;
-  // module.walk([&](func::FuncOp func) {
-  //   auto graph = dbAnalysis.getOrCreateGraph(func);
-  //   auto *loopAnalysis = dbAnalysis.getLoopAnalysis();
-  //   graph->forEachAllocNode([&](DbAllocNode *allocNode) {
-  //     Operation *allocOp = allocNode->getOp();
-  //     if (auto enclosingLoop = loopAnalysis->getEnclosingLoop(allocOp)) {
-  //       if (loopAnalysis->isLoopInvariant(allocOp, enclosingLoop)) {
-  //         allocOp->moveBefore(enclosingLoop);
-  //         changed = true;
-  //       }
-  //     }
-  //   });
-  // });
+  /// module.walk([&](func::FuncOp func) {
+  ///   auto graph = dbAnalysis.getOrCreateGraph(func);
+  ///   auto *loopAnalysis = dbAnalysis.getLoopAnalysis();
+  ///   graph->forEachAllocNode([&](DbAllocNode *allocNode) {
+  ///     Operation *allocOp = allocNode->getOp();
+  ///     if (auto enclosingLoop = loopAnalysis->getEnclosingLoop(allocOp)) {
+  ///       if (loopAnalysis->isLoopInvariant(allocOp, enclosingLoop)) {
+  ///         allocOp->moveBefore(enclosingLoop);
+  ///         changed = true;
+  ///       }
+  ///     }
+  ///   });
+  /// });
   return changed;
 }
 
@@ -463,7 +690,7 @@ bool DbPass::fuseAccesses() {
               acq.getPtr().replaceAllUsesWith(prevAcq.getPtr());
               acq.erase();
               changed = true;
-              // Do not update prevAcq; continue chaining
+              /// Do not update prevAcq; continue chaining
               continue;
             }
           }
@@ -473,7 +700,7 @@ bool DbPass::fuseAccesses() {
         }
         if (auto rel = dyn_cast<DbReleaseOp>(&op)) {
           if (prevRel && prevRel->getNextNode() == &op) {
-            // Fuse identical consecutive releases of the same source.
+            /// Fuse identical consecutive releases of the same source.
             if (!prevRel.getSources().empty() && !rel.getSources().empty() &&
                 prevRel.getSources()[0] == rel.getSources()[0]) {
               rel.erase();
@@ -493,34 +720,11 @@ bool DbPass::fuseAccesses() {
   return changed;
 }
 
-// Inline single-use allocs (disabled scaffolding)
-// Intent: for allocs used by exactly one access, inline the pointer and erase
-// the alloc. Requires careful ownership and lifetime checks. Kept as future.
-bool DbPass::inlineAllocs() {
-  bool changed = false;
-  // module.walk([&](func::FuncOp func) {
-  //   auto graph = dbAnalysis.getOrCreateGraph(func);
-  //   graph->forEachAllocNode([&](DbAllocNode *allocNode) {
-  //     if (allocNode->getAcquireNodesSize() + allocNode->getReleaseNodesSize()
-  //     == 1) {
-  //       NodeBase *child = nullptr;
-  //       allocNode->forEachChildNode([&](NodeBase *c) { child = c; });
-  //       if (child) {
-  //         Operation *childOp = child->getOp();
-  //         childOp->setOperand(0, allocNode->getPtr());  // Inline ptr
-  //         directly allocNode->getDbAllocOp().erase(); changed = true;
-  //       }
-  //     }
-  //   });
-  // });
-  return changed;
-}
-
 ///===----------------------------------------------------------------------===///
 /// Pass creation
 ///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {
 std::unique_ptr<Pass> createDbPass() { return std::make_unique<DbPass>(); }
-} // namespace arts
-} // namespace mlir
+} /// namespace arts
+} /// namespace mlir

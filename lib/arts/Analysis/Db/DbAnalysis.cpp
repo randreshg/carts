@@ -1,6 +1,7 @@
-//===----------------------------------------------------------------------===//
-// Db/DbAnalysis.cpp - Implementation of the DbAnalysis class
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: DbAnalysis.cpp
+/// Implementation of the DbAnalysis class for DB operation analysis.
+///==========================================================================
 
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Db/DbAliasAnalysis.h"
@@ -21,14 +22,8 @@ DbAnalysis::DbAnalysis(Operation *module) : module(module), solver() {
   ARTS_INFO("Initializing DbAnalysis for module");
   loopAnalysis = std::make_unique<LoopAnalysis>(module);
   dbAliasAnalysis = std::make_unique<DbAliasAnalysis>(this);
-
-  /// Create and load the dataflow analysis
   dbDataFlowAnalysis = std::make_unique<DbDataFlowAnalysis>(solver);
   (void)solver.load<DbDataFlowAnalysis>();
-
-  // Add baseline data flow analyses to solver
-  // solver.load<dataflow::DeadCodeAnalysis>();
-  // solver.load<dataflow::SparseConstantPropagation>();
 }
 
 DbAnalysis::~DbAnalysis() { ARTS_INFO("Destroying DbAnalysis"); }
@@ -44,66 +39,92 @@ DbGraph *DbAnalysis::getOrCreateGraph(func::FuncOp func) {
   ARTS_INFO("Creating new DbGraph for function: " << func.getName());
   auto newGraph = std::make_unique<DbGraph>(func, this);
 
-  // Initialize the dataflow analysis with the graph and analysis context
+  /// Initialize the dataflow analysis with the graph and analysis context
   dbDataFlowAnalysis->initialize(newGraph.get(), this);
 
-  // Build nodes and dependencies (runs dataflow internally)
+  /// Build nodes and dependencies
   newGraph->build();
 
+  /// Store the graph
   DbGraph *graphPtr = newGraph.get();
   functionGraphMap[func] = std::move(newGraph);
   return graphPtr;
 }
 
-// ---- Future/placeholder: slice info and overlap (constants only) ----
-DbAnalysis::SliceInfo DbAnalysis::computeSliceInfo(arts::DbAcquireOp acquire) {
-  SliceInfo info;
-  auto sizes = acquire.getSizes();
-  auto offsets = acquire.getOffsets();
-  info.sizes.reserve(sizes.size());
-  info.offsets.reserve(offsets.size());
-  bool hasUnknown = false;
-  for (Value v : offsets) {
-    if (auto c = v.getDefiningOp<mlir::arith::ConstantIndexOp>())
-      info.offsets.push_back(c.value());
-    else {
-      info.offsets.push_back(INT64_MIN);
-      hasUnknown = true;
-    }
-  }
-  uint64_t totalElems = 1;
-  for (Value v : sizes) {
-    if (auto c = v.getDefiningOp<mlir::arith::ConstantIndexOp>()) {
-      info.sizes.push_back(c.value());
-      totalElems *= (uint64_t)std::max<int64_t>(c.value(), 1);
-    } else {
-      info.sizes.push_back(INT64_MIN);
-      hasUnknown = true;
-    }
-  }
-  if (!hasUnknown) {
-    // Try element type size from result memref
-    if (auto memTy = dyn_cast<MemRefType>(acquire.getPtr().getType())) {
-      if (auto intTy = dyn_cast<IntegerType>(memTy.getElementType()))
-        info.estimatedBytes = (intTy.getWidth() / 8u) * totalElems;
-      else if (auto fTy = dyn_cast<FloatType>(memTy.getElementType()))
-        info.estimatedBytes = (fTy.getWidth() / 8u) * totalElems;
-    }
-  }
-  return info;
+DbGraph *DbAnalysis::getOrCreateGraphNodesOnly(func::FuncOp func) {
+  ARTS_INFO("Getting or creating DbGraph (nodes only) for function: "
+            << func.getName());
+  auto it = functionGraphMap.find(func);
+  if (it != functionGraphMap.end())
+    return it->second.get();
+  auto newGraph = std::make_unique<DbGraph>(func, this);
+  newGraph->buildNodesOnly();
+
+  /// Store the graph
+  DbGraph *graphPtr = newGraph.get();
+  functionGraphMap[func] = std::move(newGraph);
+  return graphPtr;
 }
 
 DbAnalysis::OverlapKind DbAnalysis::estimateOverlap(arts::DbAcquireOp a,
                                                     arts::DbAcquireOp b) {
-  SliceInfo sa = computeSliceInfo(a);
-  SliceInfo sb = computeSliceInfo(b);
-  size_t r = std::min(sa.sizes.size(), sb.sizes.size());
+  SmallVector<int64_t, 4> saOffs, saSizes, sbOffs, sbSizes;
+  {
+    const DbAcquireInfo *ai = nullptr;
+    const DbAcquireInfo *bi = nullptr;
+    for (auto &[func, graph] : functionGraphMap) {
+      if (!ai) {
+        if (auto *na = dyn_cast_or_null<DbAcquireNode>(
+                graph->getNode(a.getOperation())))
+          ai = &na->getInfoRef();
+      }
+      if (!bi) {
+        if (auto *nb = dyn_cast_or_null<DbAcquireNode>(
+                graph->getNode(b.getOperation())))
+          bi = &nb->getInfoRef();
+      }
+      if (ai && bi)
+        break;
+    }
+    if (ai) {
+      saOffs = ai->constOffsets;
+      saSizes = ai->constSizes;
+    } else {
+      // Fallback: derive constants directly from ops
+      for (Value v : a.getOffsets())
+        saOffs.push_back(
+            v.getDefiningOp<mlir::arith::ConstantIndexOp>()
+                ? v.getDefiningOp<mlir::arith::ConstantIndexOp>().value()
+                : INT64_MIN);
+      for (Value v : a.getSizes())
+        saSizes.push_back(
+            v.getDefiningOp<mlir::arith::ConstantIndexOp>()
+                ? v.getDefiningOp<mlir::arith::ConstantIndexOp>().value()
+                : INT64_MIN);
+    }
+    if (bi) {
+      sbOffs = bi->constOffsets;
+      sbSizes = bi->constSizes;
+    } else {
+      for (Value v : b.getOffsets())
+        sbOffs.push_back(
+            v.getDefiningOp<mlir::arith::ConstantIndexOp>()
+                ? v.getDefiningOp<mlir::arith::ConstantIndexOp>().value()
+                : INT64_MIN);
+      for (Value v : b.getSizes())
+        sbSizes.push_back(
+            v.getDefiningOp<mlir::arith::ConstantIndexOp>()
+                ? v.getDefiningOp<mlir::arith::ConstantIndexOp>().value()
+                : INT64_MIN);
+    }
+  }
+  size_t r = std::min(saSizes.size(), sbSizes.size());
   bool anyUnknown = false;
   bool disjoint = false;
-  bool equal = (sa.sizes == sb.sizes) && (sa.offsets == sb.offsets);
+  bool equal = (saSizes == sbSizes) && (saOffs == sbOffs);
   for (size_t i = 0; i < r; ++i) {
-    int64_t ao = sa.offsets[i], asz = sa.sizes[i];
-    int64_t bo = sb.offsets[i], bsz = sb.sizes[i];
+    int64_t ao = saOffs[i], asz = saSizes[i];
+    int64_t bo = sbOffs[i], bsz = sbSizes[i];
     if (ao == INT64_MIN || asz == INT64_MIN || bo == INT64_MIN ||
         bsz == INT64_MIN) {
       anyUnknown = true;
@@ -148,72 +169,3 @@ void DbAnalysis::print(func::FuncOp func) {
                << func.getName());
   }
 }
-
-// DISABLED: Shape inference method
-/*
-SmallVector<int64_t> DbAnalysis::getComputedDimSizes(const NodeBase &node) {
-  Operation *op = node.getOp();
-  SmallVector<int64_t> sizes;
-
-  // Base case for alloc: Assume DbAllocOp has ShapedType
-  if (auto shapedType = dyn_cast<ShapedType>(op->getResult(0).getType())) {
-    sizes = SmallVector<int64_t>(shapedType.getShape().begin(),
-shapedType.getShape().end());
-  }
-
-  // For acquire/release, inherit from parent alloc
-  if (isa<DbAcquireNode>(node) || isa<DbReleaseNode>(node)) {
-    auto parent = isa<DbAcquireNode>(node) ?
-dyn_cast<DbAcquireNode>(&node)->getParent() :
-dyn_cast<DbReleaseNode>(&node)->getParent(); if (parent) { return
-getComputedDimSizes(*parent);
-    }
-  }
-
-  // Infer if dynamic
-  if (auto inferOp = dyn_cast<InferShapedTypeOpInterface>(op)) {
-    SmallVector<ShapedTypeComponents> inferredShapes;
-    if (succeeded(inferOp.inferReturnTypeComponents(op->getContext(),
-op->getLoc(), op->getOperands(), op->getAttrDictionary(),
-op->getPropertiesStorage(), op->getRegions(), inferredShapes))) { if
-(!inferredShapes.empty()) { sizes = inferredShapes[0].getDims();
-      }
-    }
-  }
-
-  // If still unknown, use -1 for dynamic
-  if (sizes.empty()) {
-    sizes.assign(1, -1);  // Default to unknown
-  }
-
-  return sizes;
-}
-*/
-
-// DISABLED: Dimension analysis method
-/*
-SmallVector<DimensionAnalysis> DbAnalysis::getDimensionAnalysis(const NodeBase
-&node) { SmallVector<DimensionAnalysis> analysis;
-
-  // Placeholder logic: Analyze patterns based on op attributes or nested ops
-  // Assume ops have "pattern" attr or derive from loops
-  Operation *op = node.getOp();
-  SmallVector<int64_t> sizes = getComputedDimSizes(node);
-
-  for (size_t i = 0; i < sizes.size(); ++i) {
-    DimensionAnalysis dim;
-    dim.overallPattern.pattern = ComplexExpr::Constant;  // Default
-    // TODO: Analyze nested loops or attrs for sequential/strided/blocked
-patterns. analysis.push_back(dim);
-  }
-
-  // For acquire/release, add access-specific patterns (e.g., read/write)
-  if (isa<DbAcquireNode>(node)) {
-    // e.g., set read pattern
-  } else if (isa<DbReleaseNode>(node)) {
-    // e.g., set write pattern
-  }
-
-  return analysis;
-}
-*/

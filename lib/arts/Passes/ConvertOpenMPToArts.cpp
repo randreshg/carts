@@ -337,8 +337,8 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   RewritePatternSet patterns(context);
   patterns.add<OMPParallelToARTSPattern, SCFParallelToArtsPattern,
                MasterToARTSPattern, TaskToARTSPattern, TerminatorToARTSPattern,
-               BarrierToARTSPattern, TaskwaitToARTSPattern,
-               CallToARTSPattern>(context);
+               BarrierToARTSPattern, TaskwaitToARTSPattern, CallToARTSPattern>(
+      context);
   GreedyRewriteConfig config;
   (void)applyPatternsAndFoldGreedily(module, std::move(patterns), config);
   removeUndefOps(module);
