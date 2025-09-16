@@ -1,5 +1,6 @@
 ///==========================================================================
 /// File: ArtsUtils.cpp
+/// Defines utility functions for the ARTS dialect.
 ///==========================================================================
 #include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -7,6 +8,7 @@
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LLVM.h"
 #include "polygeist/Ops.h"
+#include <algorithm>
 #include <cassert>
 
 namespace mlir {
@@ -123,7 +125,7 @@ void removeOps(mlir::ModuleOp module, OpBuilder &builder,
 
 void recursivelyRemoveOp(mlir::Operation *op) {
   /// Collect all dependent operations.
-  llvm::SmallVector<mlir::Operation *, 8> toRemove;
+  SmallVector<mlir::Operation *, 8> toRemove;
   for (mlir::Value result : op->getResults()) {
     for (mlir::Operation *user : result.getUsers()) {
       toRemove.push_back(user);
@@ -143,7 +145,7 @@ void recursivelyRemoveOp(mlir::Operation *op) {
 
 void removeUndefOps(mlir::ModuleOp module) {
   /// Traverse all operations in the module and collect UndefOps.
-  llvm::SmallVector<mlir::arts::UndefOp, 8> undefOps;
+  SmallVector<mlir::arts::UndefOp, 8> undefOps;
   module.walk(
       [&](mlir::arts::UndefOp undefOp) { undefOps.push_back(undefOp); });
   /// Process each UndefOp and remove its dependent operations.
@@ -213,6 +215,62 @@ bool isValueConstant(Value val) {
     return true;
   return false;
 };
+
+Value getUnderlyingValue(Value v) {
+  if (v.isa<BlockArgument>()) {
+    Block *block = v.getParentBlock();
+    Operation *owner = block->getParentOp();
+    if (auto edt = dyn_cast<EdtOp>(owner)) {
+      unsigned argIndex = v.cast<BlockArgument>().getArgNumber();
+      return (argIndex < edt.getNumOperands())
+                 ? getUnderlyingValue(edt.getOperand(argIndex))
+                 : v;
+    } else {
+      /// Function argument
+      return v;
+    }
+  } else if (auto op = v.getDefiningOp()) {
+    /// Handle different operation types
+    if (isa<DbAllocOp, memref::AllocOp, memref::AllocaOp, memref::GetGlobalOp>(
+            op)) {
+      /// Root objects
+      return v;
+    } else if (auto dbAcquire = dyn_cast<DbAcquireOp>(op)) {
+      return getUnderlyingValue(dbAcquire.getSourcePtr());
+    } else if (auto dbGep = dyn_cast<DbGepOp>(op)) {
+      return getUnderlyingValue(dbGep.getBasePtr());
+    } else if (auto subview = dyn_cast<memref::SubViewOp>(op)) {
+      return getUnderlyingValue(subview.getSource());
+    } else if (auto castOp = dyn_cast<memref::CastOp>(op)) {
+      return getUnderlyingValue(castOp.getSource());
+    } else {
+      /// Not a root object
+      return nullptr;
+    }
+  } else {
+    /// Value has no defining operation and is not a block argument
+    return nullptr;
+  }
+}
+
+Operation *getUnderlyingOperation(Value v) {
+  return getUnderlyingValue(v).getDefiningOp();
+}
+
+uint64_t getElementTypeByteSize(Type elemTy) {
+  if (auto intTy = dyn_cast<IntegerType>(elemTy))
+    return intTy.getWidth() / 8u;
+  if (auto fTy = dyn_cast<FloatType>(elemTy))
+    return fTy.getWidth() / 8u;
+  return 0; /// unknown
+}
+
+std::string sanitizeString(StringRef s) {
+  std::string id = s.str();
+  std::replace(id.begin(), id.end(), '.', '_');
+  std::replace(id.begin(), id.end(), '-', '_');
+  return id;
+}
 
 } // namespace arts
 } // namespace mlir

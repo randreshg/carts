@@ -1,6 +1,7 @@
-//===----------------------------------------------------------------------===//
-// ArtsGraphManager.h - Coordinator for DbGraph and EdtGraph
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: ArtsGraphManager.h
+/// Coordinator for DbGraph and EdtGraph management.
+///==========================================================================
 
 #ifndef ARTS_ANALYSIS_GRAPHS_ARTSGRAPHMANAGER_H
 #define ARTS_ANALYSIS_GRAPHS_ARTSGRAPHMANAGER_H
@@ -30,18 +31,12 @@ public:
   /// Print combined summary
   void print(llvm::raw_ostream &os) const;
 
-  /// Export both graphs to DOT
-  void exportToDot(llvm::raw_ostream &os) const;
-
-  /// Export graphs and concurrency view to JSON for interactive visualization
-  void exportToJson(llvm::raw_ostream &os) const;
-
   /// Unified node queries
   NodeBase *getNode(Operation *op) const;
 
   /// Combined queries
-  bool isTaskDependentOnDb(EdtOp task, DbAllocOp alloc);
-  SmallVector<NodeBase *> getDbNodesForTask(EdtOp task) const;
+  bool isEdtDependentOnDb(EdtOp edt, DbAllocOp alloc);
+  SmallVector<NodeBase *, 4> getDbNodesForEdt(EdtOp edt) const;
 
   /// Placeholder for concurrency graph generation
   void buildConcurrencyView(llvm::raw_ostream &os) const;

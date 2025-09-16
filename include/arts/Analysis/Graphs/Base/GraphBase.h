@@ -1,15 +1,16 @@
-//===----------------------------------------------------------------------===//
-// GraphBase.h - Abstract base class for graphs in ARTS analysis
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: GraphBase.h
+/// Abstract base class for graphs in ARTS analysis.
+///==========================================================================
 
 #ifndef ARTS_ANALYSIS_GRAPHS_GRAPHBASE_H
 #define ARTS_ANALYSIS_GRAPHS_GRAPHBASE_H
 
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
-#include <vector>
 
 namespace mlir {
 namespace arts {
@@ -17,16 +18,19 @@ namespace arts {
 class NodeBase;
 class EdgeBase;
 
-
 /// Abstract base class for all graphs (e.g., DbGraph, EdtGraph).
-/// Provides common interface for building, invalidating, printing, and exporting.
-/// Manages nodes and edges polymorphically.
+/// Provides common interface for building, invalidating, printing, and
+/// exporting.
 class GraphBase {
 public:
   virtual ~GraphBase() = default;
 
-  /// Build the graph from the IR (e.g., walk func to collect nodes/edges).
+  /// Build the graph from the IR (e.g., walk func to collect nodes/edges and
+  /// build dependencies).
   virtual void build() = 0;
+
+  /// Build the graph from the IR (e.g., walk func to collect nodes/edges).
+  virtual void buildNodesOnly() = 0;
 
   /// Invalidate and clear the graph state.
   virtual void invalidate() = 0;
@@ -34,13 +38,14 @@ public:
   /// Print a human-readable summary of the graph.
   virtual void print(llvm::raw_ostream &os) const = 0;
 
-  /// Export the graph to DOT format for Graphviz.
-  virtual void exportToDot(llvm::raw_ostream &os) const = 0;
+  /// Export a JSON representation of the graph.
+  virtual void exportToJson(llvm::raw_ostream &os,
+                            bool includeAnalysis = false) const = 0;
 
   /// Get the entry node (e.g., first alloc or root task).
   virtual NodeBase *getEntryNode() const = 0;
 
-  /// Get or create a node for the given operation (polymorphic dispatch).
+  /// Get or create a node for the given operation
   virtual NodeBase *getOrCreateNode(Operation *op) = 0;
 
   /// Get a node for the given operation if it exists.
@@ -53,18 +58,18 @@ public:
   virtual bool addEdge(NodeBase *from, NodeBase *to, EdgeBase *edge) = 0;
 
   /// For GraphTraits: iterators over nodes.
-  using NodesIterator = std::vector<NodeBase *>::iterator;
+  using NodesIterator = SmallVector<NodeBase *, 4>::iterator;
   virtual NodesIterator nodesBegin() = 0;
   virtual NodesIterator nodesEnd() = 0;
 
   /// For children (outgoing neighbors).
-  using ChildIterator = std::vector<NodeBase *>::iterator;
+  using ChildIterator = SmallVector<NodeBase *, 4>::iterator;
   virtual ChildIterator childBegin(NodeBase *node) = 0;
   virtual ChildIterator childEnd(NodeBase *node) = 0;
 
 protected:
   // Protected members for derived classes to manage state.
-  std::vector<std::unique_ptr<NodeBase>> nodes;
+  SmallVector<std::unique_ptr<NodeBase>> nodes;
   DenseMap<std::pair<NodeBase *, NodeBase *>, std::unique_ptr<EdgeBase>> edges;
   bool isBuilt = false;
   bool needsRebuild = true;

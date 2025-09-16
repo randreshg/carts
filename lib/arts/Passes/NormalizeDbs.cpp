@@ -1,5 +1,5 @@
-//===----------------------------------------------------------------------===//
-// NormalizeDbs.cpp - Normalize DataBlock (DB) handle types prior to lowering:
+///==========================================================================
+/// File: NormalizeDbs.cpp
 ///
 /// - If the DB source was stack-allocated, create a replacement arts.db_alloc
 ///   whose pointer result is heap-resident and opaque (memref<memref<?xi8>>),
@@ -19,7 +19,7 @@
 /// - In both cases, users of the DB pointer (EDTs, acquires/releases, loads/
 ///   stores) are rewired to the new opaque pointer result. GUID uses are left
 ///   unchanged.
-//===----------------------------------------------------------------------===//
+///==========================================================================
 
 /// Dialects
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"

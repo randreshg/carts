@@ -5,12 +5,14 @@
 ///==========================================================================
 
 #include "arts/Analysis/Graphs/Edt/EdtConcurrencyGraph.h"
+#include "arts/Utils/ArtsUtils.h"
+#include "llvm/Support/JSON.h"
 
 using namespace mlir;
 using namespace mlir::arts;
 
 void EdtConcurrencyGraph::clear() {
-  tasks.clear();
+  edts.clear();
   edges.clear();
 }
 
@@ -19,25 +21,25 @@ void EdtConcurrencyGraph::build() {
   if (!edtGraph || !edtGraph->hasDbGraph())
     return;
 
-  /// Collect all tasks in a stable order
+  /// Collect all edts in a stable order
   edtGraph->forEachNode([&](NodeBase *node) {
-    if (auto *t = dyn_cast<EdtTaskNode>(node))
-      tasks.push_back(t->getEdtOp().getOperation());
+    if (auto *t = dyn_cast<EdtNode>(node))
+      edts.push_back(t->getEdtOp());
   });
 
   /// Build undirected edges A-B where neither is reachable from the other
-  for (size_t i = 0; i < tasks.size(); ++i) {
-    for (size_t j = i + 1; j < tasks.size(); ++j) {
-      EdtOp a = static_cast<EdtOp>(tasks[i]);
-      EdtOp b = static_cast<EdtOp>(tasks[j]);
-      bool depAB = edtGraph->isTaskReachable(a, b);
-      bool depBA = edtGraph->isTaskReachable(b, a);
+  for (size_t i = 0; i < edts.size(); ++i) {
+    for (size_t j = i + 1; j < edts.size(); ++j) {
+      EdtOp from = edts[i];
+      EdtOp to = edts[j];
+      bool depAB = edtGraph->isEdtReachable(from, to);
+      bool depBA = edtGraph->isEdtReachable(to, from);
       if (!depAB && !depBA) {
         EdtConcurrencyEdge e{};
-        e.a = a.getOperation();
-        e.b = b.getOperation();
+        e.from = from;
+        e.to = to;
         if (analysis) {
-          auto aff = analysis->affinity(e.a, e.b);
+          auto aff = analysis->affinity(from, to);
           e.dataOverlap = aff.dataOverlap;
           e.hazardScore = aff.hazardScore;
           e.mayConflict = aff.mayConflict;
@@ -52,10 +54,10 @@ void EdtConcurrencyGraph::build() {
 }
 
 void EdtConcurrencyGraph::print(llvm::raw_ostream &os) const {
-  os << "EdtConcurrencyGraph: tasks=" << tasks.size()
+  os << "EdtConcurrencyGraph: edts=" << edts.size()
      << ", edges=" << edges.size() << "\n";
   for (auto &e : edges) {
-    os << "  (" << e.a << ", " << e.b << ")"
+    os << "  (" << e.from << ", " << e.to << ")"
        << " overlap=" << e.dataOverlap << " hazard=" << e.hazardScore
        << " reuse=" << e.reuseProximity << " local=" << e.localityScore
        << " risk=" << e.concurrencyRisk
@@ -63,52 +65,44 @@ void EdtConcurrencyGraph::print(llvm::raw_ostream &os) const {
   }
 }
 
-void EdtConcurrencyGraph::exportToDot(llvm::raw_ostream &os) const {
-  os << "graph EdtConcurrency {\n";
-  /// Nodes
-  for (auto t : tasks) {
-    auto *n = static_cast<EdtTaskNode *>(edtGraph->getNode(t));
-    if (!n)
-      continue;
-    os << "  " << n->getHierId() << " [label=\"" << n->getHierId() << "\"];\n";
-  }
-  /// Edges
-  for (auto &e : edges) {
-    auto *na = static_cast<EdtTaskNode *>(edtGraph->getNode(e.a));
-    auto *nb = static_cast<EdtTaskNode *>(edtGraph->getNode(e.b));
-    if (!na || !nb)
-      continue;
-    os << "  " << na->getHierId() << " -- " << nb->getHierId()
-       << " [label=\"ovl=" << e.dataOverlap << ",hz=" << e.hazardScore
-       << "\"];\n";
-  }
-  os << "}\n";
-}
+void EdtConcurrencyGraph::exportToJson(llvm::raw_ostream &os,
+                                       bool includeAnalysis) const {
+  using namespace llvm::json;
 
-void EdtConcurrencyGraph::exportToJson(llvm::raw_ostream &os) const {
-  os << "{\n  \"tasks\": [\n";
-  bool first = true;
-  for (auto t : tasks) {
-    if (!first)
-      os << ",\n";
-    first = false;
-    auto *n = static_cast<EdtTaskNode *>(edtGraph->getNode(t));
-    os << "    {\"id\": \"" << (n ? n->getHierId() : "") << "\"}";
+  Object root;
+
+  Array tasksArr;
+  for (auto t : edts) {
+    auto *n = edtGraph->getNode(t);
+    tasksArr.push_back(
+        Object{{"id", n ? sanitizeString(n->getHierId()) : std::string("")}});
   }
-  os << "\n  ],\n  \"edges\": [\n";
-  first = true;
+  root["edts"] = std::move(tasksArr);
+
+  Array edgesArr;
   for (auto &e : edges) {
-    if (!first)
-      os << ",\n";
-    first = false;
-    auto *na = static_cast<EdtTaskNode *>(edtGraph->getNode(e.a));
-    auto *nb = static_cast<EdtTaskNode *>(edtGraph->getNode(e.b));
-    os << "    {\"a\": \"" << (na ? na->getHierId() : "") << "\", \"b\": \""
-       << (nb ? nb->getHierId() : "") << "\", \"ovl\": " << e.dataOverlap
-       << ", \"hz\": " << e.hazardScore << ", \"reuse\": " << e.reuseProximity
-       << ", \"local\": " << e.localityScore
-       << ", \"risk\": " << e.concurrencyRisk
-       << ", \"conflict\": " << (e.mayConflict ? "true" : "false") << "}";
+    auto *na = edtGraph->getNode(e.from);
+    auto *nb = edtGraph->getNode(e.to);
+    edgesArr.push_back(
+        Object{{"from", na ? sanitizeString(na->getHierId()) : std::string("")},
+               {"to", nb ? sanitizeString(nb->getHierId()) : std::string("")},
+               {"ovl", e.dataOverlap},
+               {"hz", e.hazardScore},
+               {"reuse", e.reuseProximity},
+               {"local", e.localityScore},
+               {"risk", e.concurrencyRisk},
+               {"conflict", e.mayConflict},
+               {"a", na ? sanitizeString(na->getHierId()) : std::string("")},
+               {"b", nb ? sanitizeString(nb->getHierId()) : std::string("")}});
   }
-  os << "\n  ]\n}\n";
+  root["edges"] = std::move(edgesArr);
+
+  /// Include analysis data if requested
+  if (includeAnalysis) {
+    root["analysis"] = Object{{"numTasks", (double)edts.size()},
+                              {"numEdges", (double)edges.size()},
+                              {"hasAnalysis", analysis != nullptr}};
+  }
+
+  os << llvm::json::Value(std::move(root)) << "\n";
 }

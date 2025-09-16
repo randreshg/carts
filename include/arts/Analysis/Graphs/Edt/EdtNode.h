@@ -1,10 +1,12 @@
-//===----------------------------------------------------------------------===//
-// Edt/EdtNode.h - EDT-specific nodes derived from NodeBase
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: EdtNode.h
+/// Defines EDT-specific nodes derived from NodeBase.
+///==========================================================================
 
 #ifndef ARTS_ANALYSIS_GRAPHS_EDT_EDTNODE_H
 #define ARTS_ANALYSIS_GRAPHS_EDT_EDTNODE_H
 
+#include "arts/Analysis/Edt/EdtInfo.h"
 #include "arts/Analysis/Graphs/Base/NodeBase.h"
 #include "arts/ArtsDialect.h"
 #include "llvm/ADT/DenseSet.h"
@@ -13,9 +15,9 @@
 namespace mlir {
 namespace arts {
 
-class EdtTaskNode : public NodeBase {
+class EdtNode : public NodeBase {
 public:
-  EdtTaskNode(EdtOp op);
+  EdtNode(EdtOp op);
 
   StringRef getHierId() const override { return hierId; }
   void setHierId(std::string id) { hierId = id; }
@@ -28,6 +30,8 @@ public:
   const DenseSet<EdgeBase *> &getOutEdges() const override { return outEdges; }
 
   EdtOp getEdtOp() const { return edtOp; }
+  EdtInfo &getInfoRef() { return info; }
+  const EdtInfo &getInfoRef() const { return info; }
 
   NodeKind getKind() const override { return NodeKind::EdtTask; }
   static bool classof(const NodeBase *N) {
@@ -38,6 +42,7 @@ private:
   EdtOp edtOp;
   Operation *opPtr = nullptr;
   std::string hierId;
+  EdtInfo info;
 };
 
 } // namespace arts

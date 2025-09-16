@@ -168,7 +168,7 @@ def DbAcquireOp : Arts_Op<"db_acquire",
   let results = (outs MemRefOf<[I64]>:$guid, AnyMemRef:$ptr);
   let assemblyFormat = [{
     `[` $mode `]`
-    $source_guid `,` $source_ptr
+    `(` $source_guid `,` $source_ptr `)`
     ( `indices` `[` $indices^ `]` )?
     ( `offsets` `[` $offsets^ `]` )?
     ( `sizes` `[` $sizes^ `]` )?
@@ -196,7 +196,7 @@ def DbReleaseOp : Arts_Op<"db_release", []> {
     OptionalAttr<DbReleaseTypeAttr>:$release_type
   );
   let assemblyFormat = [{
-    $sources `:` type($sources) attr-dict
+    `(` $sources `)` `:` type($sources) attr-dict
   }];
 
   let builders = [
@@ -215,7 +215,7 @@ def DbFreeOp : Arts_Op<"db_free", []> {
     AnyMemRef:$source
   );
   let assemblyFormat = [{
-    $source `:` type($source) attr-dict
+    `(` $source `)` `:` type($source) attr-dict
   }];
 }
 
@@ -246,7 +246,7 @@ def DbControlOp : Arts_Op<"db_control",
 
   let results = (outs AnyMemRef:$subview);
   let assemblyFormat = [{
-    $mode `(` $ptr `:` type($ptr) `)` 
+    `[` $mode `]` `(` $ptr `:` type($ptr) `)` 
     `elementType` `(` $elementType `)` 
     `elementTypeSize` `(` $elementTypeSize `:` type($elementTypeSize) `)` 
     `indices` `[` $indices `]` 

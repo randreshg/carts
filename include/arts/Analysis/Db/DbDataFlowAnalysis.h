@@ -1,6 +1,7 @@
-//===----------------------------------------------------------------------===//
-// Db/DbDataFlowAnalysis.h - Dense forward lifetime/dep builder
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: DbDataFlowAnalysis.h
+/// Dense forward lifetime/dependency builder for DB analysis.
+///==========================================================================
 
 #ifndef ARTS_ANALYSIS_DB_DBDATAFLOWANALYSIS_H
 #define ARTS_ANALYSIS_DB_DBDATAFLOWANALYSIS_H
@@ -9,8 +10,6 @@
 #include "arts/ArtsDialect.h"
 #include "mlir/Analysis/DataFlow/DenseAnalysis.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
-#include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/DenseSet.h"
 
 namespace mlir {
 namespace arts {
@@ -35,16 +34,14 @@ class DbDataFlowAnalysis
 public:
   explicit DbDataFlowAnalysis(DataFlowSolver &solver);
 
-  // Must be called before running the solver to provide context objects.
+  using mlir::dataflow::DenseForwardDataFlowAnalysis<DbState>::initialize;
+
   void initialize(DbGraph *graph, DbAnalysis *analysis);
 
   void visitOperation(Operation *op, const DbState &before,
                       DbState *after) override;
 
-  // Required by DenseForwardDataFlowAnalysis interface
   void setToEntryState(DbState *lattice) override;
-
-  void analyze();
 
 private:
   void createLifetimeEdge(DbAcquireNode *acquire, DbReleaseNode *release);

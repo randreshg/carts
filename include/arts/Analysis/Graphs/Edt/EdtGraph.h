@@ -1,21 +1,22 @@
-//===----------------------------------------------------------------------===//
-// Edt/EdtGraph.h - EdtGraph derived from GraphBase
-//===----------------------------------------------------------------------===//
+///==========================================================================
+/// File: EdtGraph.h
+/// Defines EdtGraph derived from GraphBase for EDT analysis.
+///==========================================================================
 
 #ifndef ARTS_ANALYSIS_GRAPHS_EDT_EDTGRAPH_H
 #define ARTS_ANALYSIS_GRAPHS_EDT_EDTGRAPH_H
 
-#include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Base/EdgeBase.h"
 #include "arts/Analysis/Graphs/Base/GraphBase.h"
 #include "arts/Analysis/Graphs/Base/NodeBase.h"
+#include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Edt/EdtNode.h"
 #include "arts/ArtsDialect.h" // For EdtOp
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "llvm/ADT/DenseMap.h" // EdtGraph stores taskNodes
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/GraphTraits.h"
-#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
@@ -31,21 +32,24 @@ public:
   EdtGraph(func::FuncOp func, DbGraph *dbGraph);
 
   void build() override;
+  void buildNodesOnly() override;
   void invalidate() override;
   void print(llvm::raw_ostream &os) const override;
-  void exportToDot(llvm::raw_ostream &os) const override;
+  void exportToJson(llvm::raw_ostream &os,
+                    bool includeAnalysis = false) const override;
   NodeBase *getEntryNode() const override;
   NodeBase *getOrCreateNode(Operation *op) override;
   NodeBase *getNode(Operation *op) const override;
+  EdtNode *getEdtNode(EdtOp edt) const;
   void forEachNode(const std::function<void(NodeBase *)> &fn) const override;
   bool addEdge(NodeBase *from, NodeBase *to, EdgeBase *edge) override;
 
   /// Edt-specific methods
-  bool isTaskReachable(EdtOp from, EdtOp to);
-  llvm::SmallVector<NodeBase *> getDbDependencies(EdtOp task) const;
+  bool isEdtReachable(EdtOp from, EdtOp to);
+  SmallVector<NodeBase *, 4> getDbDeps(EdtOp edt) const;
   func::FuncOp getFunction() const { return func; }
   bool hasDbGraph() const { return dbGraph != nullptr; }
-  size_t getNumTasks() const { return taskNodes.size(); }
+  size_t getNumTasks() const { return edtNodes.size(); }
 
   /// For GraphTraits iterators
   NodesIterator nodesBegin() override { return nodes.begin(); }
@@ -55,9 +59,11 @@ public:
 
 private:
   func::FuncOp func;
-  DbGraph *dbGraph; // Reference to data block graph
-  DenseMap<EdtOp, std::unique_ptr<EdtTaskNode>> taskNodes;
-  std::vector<NodeBase *> nodes; // Non-owning for iteration
+  DbGraph *dbGraph;
+  DenseMap<EdtOp, std::unique_ptr<EdtNode>> edtNodes;
+  SmallVector<NodeBase *, 8> nodes;
+  /// Cache of children per node for GraphBase child iterators.
+  DenseMap<NodeBase *, SmallVector<NodeBase *, 8>> childrenCache;
 
   /// Ensure DenseMap header is considered directly used
   using __EnsureDenseMapUsed = llvm::DenseMap<int, int>;
@@ -65,7 +71,7 @@ private:
   /// Private helpers
   void collectNodes();
   void buildDependencies();
-  std::string sanitizeForDot(StringRef s) const;
+  void populateChildrenCache(NodeBase *node);
 };
 
 } // namespace arts
@@ -83,30 +89,6 @@ struct GraphTraits<mlir::arts::EdtGraph *>
   }
   static ChildIteratorType child_end(NodeRef N) {
     return map_iterator(N->getOutEdges().end(), &getTo);
-  }
-};
-
-template <>
-struct DOTGraphTraits<mlir::arts::EdtGraph *> : public DefaultDOTGraphTraits {
-  DOTGraphTraits(bool simple = false) : DefaultDOTGraphTraits(simple) {}
-
-  std::string getNodeLabel(mlir::arts::NodeBase *Node,
-                           mlir::arts::EdtGraph *Graph) {
-    return Node->getHierId().str();
-  }
-
-  std::string getEdgeAttributes(mlir::arts::NodeBase *From,
-                                typename BaseGraphTraits<
-                                    mlir::arts::EdtGraph>::ChildIteratorType It,
-                                mlir::arts::EdtGraph *Graph) {
-    mlir::arts::NodeBase *To = *It;
-    auto edges = From->getOutEdges();
-    for (auto *edge : edges) {
-      if (edge->getTo() == To) {
-        return "label=\"" + edge->getType().str() + "\"";
-      }
-    }
-    return "";
   }
 };
 

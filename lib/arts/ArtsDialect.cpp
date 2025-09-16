@@ -1,8 +1,7 @@
-//===----------------------------------------------------------------------===//
-// ArtsDialect.cpp - Arts dialect
-// Defines the Arts dialect and the operations within it.
-//===----------------------------------------------------------------------===//
-
+///==========================================================================
+/// File: ArtsDialect.cpp
+/// Defines the Arts dialect and the operations within it.
+///==========================================================================
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -138,12 +137,6 @@ void UndefOp::getCanonicalizationPatterns(RewritePatternSet &results,
 }
 
 //===----------------------------------------------------------------------===//
-// DbAllocOp
-//===----------------------------------------------------------------------===//
-
-//===----------------------------------------------------------------------===//
-
-//===----------------------------------------------------------------------===//
 // EdtOp
 //===----------------------------------------------------------------------===//
 SmallVector<Value> mlir::arts::EdtOp::getDependenciesAsVector() {
@@ -188,6 +181,20 @@ void DbDimOp::build(OpBuilder &builder, OperationState &state, Value source,
   auto c = builder.create<arith::ConstantIndexOp>(state.location, dim);
   state.addOperands(c.getResult());
   state.addTypes(builder.getIndexType());
+}
+
+void DbGepOp::build(OpBuilder &builder, OperationState &state, Value base_ptr,
+                    SmallVector<Value> indices, SmallVector<Value> strides) {
+  state.addOperands(base_ptr);
+  state.addOperands(indices);
+  state.addOperands(strides);
+  /// Set operand segment sizes: [base_ptr, indices..., strides...]
+  SmallVector<int32_t, 3> segments = {1, (int32_t)indices.size(),
+                                      (int32_t)strides.size()};
+  state.addAttribute(getOperandSegmentSizesAttrName(state.name),
+                     builder.getDenseI32ArrayAttr(segments));
+  /// Result type matches base pointer type
+  state.addTypes(base_ptr.getType());
 }
 
 void DbControlOp::build(OpBuilder &builder, OperationState &state,
@@ -549,4 +556,3 @@ SmallVector<Value> getSizesFromDb(Value datablockPtr) {
   /// If we can't find the sizes, return empty (will result in 1 element)
   return {};
 }
-

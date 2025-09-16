@@ -17,17 +17,17 @@
 #include "llvm/Support/raw_ostream.h"
 
 /// Includes
+#include "arts/Analysis/Edt/EdtAnalysis.h"
 #include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 #include "arts/Analysis/Graphs/Edt/EdtNode.h"
-#include "arts/Analysis/Edt/EdtAnalysis.h"
 
 namespace mlir {
 namespace arts {
 
 /// Edge between two EDTs that may execute concurrently.
 struct EdtConcurrencyEdge {
-  Operation *a = nullptr;
-  Operation *b = nullptr;
+  EdtOp from = nullptr;
+  EdtOp to = nullptr;
   double dataOverlap = 0.0;
   double hazardScore = 0.0;
   bool mayConflict = false;
@@ -47,18 +47,17 @@ public:
   void build();
   void clear();
 
-  llvm::ArrayRef<Operation *> getTasks() const { return tasks; }
+  llvm::ArrayRef<EdtOp> getEdts() const { return edts; }
   llvm::ArrayRef<EdtConcurrencyEdge> getEdges() const { return edges; }
 
   void print(llvm::raw_ostream &os) const;
-  void exportToDot(llvm::raw_ostream &os) const;
-  void exportToJson(llvm::raw_ostream &os) const;
+  void exportToJson(llvm::raw_ostream &os, bool includeAnalysis = false) const;
 
 private:
   EdtGraph *edtGraph = nullptr;
   EdtAnalysis *analysis = nullptr;
-  llvm::SmallVector<Operation *, 16> tasks;
-  llvm::SmallVector<EdtConcurrencyEdge, 32> edges;
+  SmallVector<EdtOp, 16> edts;
+  SmallVector<EdtConcurrencyEdge, 32> edges;
 };
 
 } // namespace arts
