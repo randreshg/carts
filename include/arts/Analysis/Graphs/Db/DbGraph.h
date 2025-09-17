@@ -69,6 +69,7 @@ public:
   /// Db-specific methods
   /// Get the parent allocation for the given DB op (alloc/acquire/release).
   DbAllocOp getParentAlloc(Operation *op);
+
   /// Whether two allocations may alias according to analysis.
   bool mayAlias(DbAllocOp alloc1, DbAllocOp alloc2);
 
@@ -105,11 +106,10 @@ private:
   std::string getFunctionName() const;
 
   /// Metrics computation helpers
-  void computeAllocationMetrics(DbAllocOp alloc, DbAllocNode *allocNode);
+  void computeAllocMetrics(DbAllocOp alloc, DbAllocNode *allocNode);
   void processAcquireNode(DbAcquireNode *acq, DbAllocInfo &info);
   void processReleaseNode(DbReleaseNode *rel, DbAllocInfo &info);
   DbReleaseNode *findMatchingRelease(DbAcquireNode *acq);
-  void computeAllocationDerivedMetrics(DbAllocOp alloc, DbAllocInfo &info);
   void computeCriticalSpan(DbAllocInfo &info);
   void computeCriticalPath(DbAllocInfo &info);
   void computeLoopDepth(DbAllocInfo &info);
@@ -129,7 +129,7 @@ public:
 private:
   DenseMap<Operation *, unsigned> opOrder;
   uint64_t peakLiveDbs = 0;
-  uint64_t peakBytes = 0;
+  unsigned long long peakBytes = 0;
 
   /// Cache of children per node for GraphBase child iterators.
   DenseMap<NodeBase *, SmallVector<NodeBase *, 8>> childrenCache;

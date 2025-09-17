@@ -25,6 +25,7 @@ std::unique_ptr<Pass> createEdtConcurrencyPass();
 std::unique_ptr<Pass> createCreateDbsPass();
 std::unique_ptr<Pass> createCreateDbsPass(bool identifyDbs);
 std::unique_ptr<Pass> createDbPass();
+std::unique_ptr<Pass> createDbPass(bool exportJson);
 std::unique_ptr<Pass> createCreateEpochsPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug);

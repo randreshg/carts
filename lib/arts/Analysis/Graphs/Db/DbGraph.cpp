@@ -1,6 +1,6 @@
 ///==========================================================================
 /// File: DbGraph.cpp
-/// Implementation of DbGraph for database operation analysis.
+/// Implementation of DbGraph for DB operation analysis.
 ///==========================================================================
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
@@ -43,17 +43,15 @@ std::string DbGraph::getFunctionName() const {
 DbGraph::DbGraph(func::FuncOp func, DbAnalysis *analysis)
     : func(func), analysis(analysis) {
   assert(analysis && "Analysis cannot be null");
-  ARTS_INFO("Creating db graph for function: " << func.getName().str());
+  ARTS_DEBUG("Creating DB Graph for function: " << func.getName().str());
 }
 
 DbGraph::~DbGraph() = default;
 
-/// Build the complete database graph by collecting nodes, building
-/// dependencies, computing operation order, and calculating metrics.
 void DbGraph::build() {
   if (isBuilt && !needsRebuild)
     return;
-  ARTS_INFO("Building db graph");
+  ARTS_DEBUG("Building DB Graph");
   invalidate();
   collectNodes();
   buildDependencies();
@@ -65,9 +63,11 @@ void DbGraph::build() {
 }
 
 void DbGraph::buildNodesOnly() {
-  ARTS_INFO("Building db graph (nodes only)");
+  ARTS_DEBUG("Building DB Graph (nodes only)");
   invalidate();
   collectNodes();
+  computeOpOrder();
+  computeMetrics();
   isBuilt = true;
   needsRebuild = false;
 }
@@ -157,9 +157,19 @@ DbReleaseNode *DbGraph::getOrCreateReleaseNode(DbReleaseOp op) {
   if (it != releaseNodeMap.end())
     return it->second;
 
+  Value source = op.getSource();
+  if (!source) {
+    llvm::errs() << "[ERROR] DbReleaseOp source is null\n";
+    return nullptr;
+  }
+
   DbAllocOp allocOp =
-      dyn_cast_or_null<DbAllocOp>(getUnderlyingOperation(op.getSources()[0]));
-  assert(allocOp && "Expected DbAllocOp for release");
+      dyn_cast_or_null<DbAllocOp>(getUnderlyingOperation(source));
+  if (!allocOp) {
+    llvm::errs() << "[ERROR] Expected DbAllocOp for release, got: " << source
+                 << "\n";
+    return nullptr;
+  }
 
   DbAllocNode *allocNode = getOrCreateAllocNode(allocOp);
   DbReleaseNode *releaseNode = allocNode->getOrCreateReleaseNode(op);
@@ -194,7 +204,7 @@ DbAllocOp DbGraph::getParentAlloc(Operation *op) {
   }
   if (auto releaseOp = dyn_cast<DbReleaseOp>(op)) {
     DbAllocOp allocOp = dyn_cast_or_null<DbAllocOp>(
-        getUnderlyingOperation(releaseOp.getSources()[0]));
+        getUnderlyingOperation(releaseOp.getSource()));
     assert(allocOp && "Expected DbAllocOp for release");
     return allocOp;
   }
@@ -240,34 +250,32 @@ void DbGraph::print(llvm::raw_ostream &os) const {
   }
 }
 
-/// Walk through the function and collect all database operations
-/// (alloc/acquire/release) into graph nodes, creating the basic structure of
-/// the graph.
+/// Walk through the function and collect all DB operations
+/// (alloc/acquire/release) into graph nodes
 void DbGraph::collectNodes() {
-  ARTS_INFO("Phase 1 - Collecting nodes");
+  ARTS_DEBUG("Phase 1 - Collecting nodes");
 
   func.walk([&](Operation *op) {
-    if (isa<DbAllocOp, DbAcquireOp, DbReleaseOp>(op)) {
+    if (isa<DbAllocOp, DbAcquireOp, DbReleaseOp>(op))
       getOrCreateNode(op);
-    }
   });
 
-  ARTS_INFO("Collected " << allocNodes.size() << " allocations, "
-                         << acquireNodeMap.size() << " acquires, "
-                         << releaseNodeMap.size() << " releases");
+  ARTS_DEBUG("Collected " << allocNodes.size() << " allocations, "
+                          << acquireNodeMap.size() << " acquires, "
+                          << releaseNodeMap.size() << " releases");
 }
 
 /// Build dependency edges between nodes using dataflow analysis to determine
-/// lifetime relationships and data dependencies between database operations.
+/// lifetime relationships and data dependencies between DB operations.
 void DbGraph::buildDependencies() {
-  ARTS_INFO("Phase 2 - Building dependencies");
+  ARTS_DEBUG("Phase 2 - Building dependencies");
   auto *dataflowAnalysis = analysis->getDataFlowAnalysis();
   assert(dataflowAnalysis &&
          "Dataflow analysis is required to build dependencies");
 
   dataflowAnalysis->initialize(this, analysis);
   (void)analysis->getSolver().initializeAndRun(func);
-  ARTS_INFO("Phase 2 - Data flow analysis finished");
+  ARTS_DEBUG("Phase 2 - Data flow analysis finished");
 }
 
 void DbGraph::computeOpOrder() {
@@ -281,18 +289,16 @@ void DbGraph::computeMetrics() {
   peakBytes = 0;
 
   /// Process each allocation to compute its metrics
-  for (const auto &pair : allocNodes) {
-    computeAllocationMetrics(pair.first, pair.second.get());
-  }
+  for (const auto &pair : allocNodes)
+    computeAllocMetrics(pair.first, pair.second.get());
 
   computePeakMetrics();
   computeReuseCandidates();
 }
 
 /// Compute metrics for a single allocation
-void DbGraph::computeAllocationMetrics(DbAllocOp alloc,
-                                       DbAllocNode *allocNode) {
-  DbAllocInfo &info = allocNode->getInfoRef();
+void DbGraph::computeAllocMetrics(DbAllocOp alloc, DbAllocNode *allocNode) {
+  DbAllocInfo &info = allocNode->getInfo();
 
   /// Initialize basic allocation info
   info.isAlloc = true;
@@ -302,131 +308,123 @@ void DbGraph::computeAllocationMetrics(DbAllocOp alloc,
   info.inCount = 0;
   info.outCount = 0;
   info.totalAccessBytes = 0;
-  info.intervals.clear();
+  info.acquireNodes.clear();
 
   /// Process child nodes to build intervals
   allocNode->forEachChildNode([&](NodeBase *child) {
-    if (auto *acq = dyn_cast<DbAcquireNode>(child)) {
+    if (auto *acq = dyn_cast<DbAcquireNode>(child))
       processAcquireNode(acq, info);
-    } else if (auto *rel = dyn_cast<DbReleaseNode>(child)) {
+    else if (auto *rel = dyn_cast<DbReleaseNode>(child))
       processReleaseNode(rel, info);
-    }
   });
 
-  /// Sort intervals and compute derived metrics
-  llvm::sort(info.intervals,
-             [](const DbAcquireInfo &a, const DbAcquireInfo &b) {
-               return a.beginIndex < b.beginIndex;
+  /// Sort acquire nodes by begin index and compute derived metrics
+  llvm::sort(info.acquireNodes,
+             [](const DbAcquireNode *a, const DbAcquireNode *b) {
+               return a->getInfo().beginIndex < b->getInfo().beginIndex;
              });
 
-  computeAllocationDerivedMetrics(alloc, info);
+  /// Compute end index (last release)
+  unsigned lastEnd = info.allocIndex;
+  for (auto *node : info.acquireNodes) {
+    const auto &nodeInfo = node->getInfo();
+    lastEnd = std::max(lastEnd, nodeInfo.endIndex);
+  }
+  info.endIndex = lastEnd;
+
+  computeCriticalSpan(info);
+  computeCriticalPath(info);
+  computeLoopDepth(info);
+  computeLongLivedFlag(info);
 }
 
-/// Process an acquire node and add its interval
+/// Process an acquire node and add it to the allocation info
 void DbGraph::processAcquireNode(DbAcquireNode *acq, DbAllocInfo &info) {
   /// Find matching release node
   DbReleaseNode *matchedRelease = findMatchingRelease(acq);
 
-  /// Create interval
-  info.intervals.emplace_back();
-  DbAcquireInfo &interval = info.intervals.back();
-  interval.acquire = cast<DbAcquireOp>(acq->getOp());
-  interval.beginIndex = getOrder(interval.acquire.getOperation());
+  /// Set timing info directly in the acquire node
+  auto acquireOp = cast<DbAcquireOp>(acq->getOp());
+  unsigned beginIndex = getOrder(acquireOp.getOperation());
+  unsigned endIndex = beginIndex;
 
   if (matchedRelease) {
-    interval.release = cast<DbReleaseOp>(matchedRelease->getOp());
-    interval.endIndex = getOrder(interval.release.getOperation());
-  } else {
-    interval.release = nullptr;
-    interval.endIndex = interval.beginIndex; /// Unknown; treat as minimal
+    auto releaseOp = cast<DbReleaseOp>(matchedRelease->getOp());
+    endIndex = getOrder(releaseOp.getOperation());
+    /// Persist acquire/release ops on the node info for downstream users
+    acq->getInfo().acquire = acquireOp;
+    acq->getInfo().release = releaseOp;
   }
 
-  /// Copy information from acquire node
-  const auto &nodeInfo = acq->getInfoRef();
-  acq->getInfoRef().beginIndex = interval.beginIndex;
-  acq->getInfoRef().endIndex = interval.endIndex;
+  auto &nodeInfo = acq->getInfo();
+  /// Update the node's timing info
+  nodeInfo.beginIndex = beginIndex;
+  nodeInfo.endIndex = endIndex;
 
-  interval.offsets = nodeInfo.offsets;
-  interval.sizes = nodeInfo.sizes;
-  interval.pinned = nodeInfo.pinned;
-  interval.constOffsets = nodeInfo.constOffsets;
-  interval.constSizes = nodeInfo.constSizes;
-  interval.estimatedBytes = nodeInfo.estimatedBytes;
-  interval.inCount = nodeInfo.inCount;
-  interval.outCount = nodeInfo.outCount;
+  /// Store pointer to the acquire node
+  info.acquireNodes.push_back(acq);
 
-  /// Update allocation totals
+  /// Update allocation totals from node info
   ++info.numAcquires;
-  info.inCount += interval.inCount;
-  info.outCount += interval.outCount;
-  info.totalAccessBytes += interval.estimatedBytes;
+  info.inCount += nodeInfo.inCount;
+  info.outCount += nodeInfo.outCount;
+  info.totalAccessBytes += (unsigned long long)nodeInfo.estimatedBytes;
 }
 
 /// Process a release node
 void DbGraph::processReleaseNode(DbReleaseNode *rel, DbAllocInfo &info) {
   ++info.numReleases;
   auto releaseOp = cast<DbReleaseOp>(rel->getOp());
-  rel->getInfoRef().releaseIndex = getOrder(releaseOp.getOperation());
+  rel->getInfo().releaseIndex = getOrder(releaseOp.getOperation());
 }
 
-/// Find matching release node for an acquire node
+/// Find the unique matching release node for an acquire node.
 DbReleaseNode *DbGraph::findMatchingRelease(DbAcquireNode *acq) {
+  DbReleaseNode *found = nullptr;
+  unsigned count = 0;
   for (auto *edge : acq->getOutEdges()) {
     if (auto *life = dyn_cast<DbLifetimeEdge>(edge)) {
-      return dyn_cast<DbReleaseNode>(life->getTo());
+      found = dyn_cast<DbReleaseNode>(life->getTo());
+      ++count;
     }
   }
-  return nullptr;
-}
-
-/// Compute derived metrics for an allocation
-void DbGraph::computeAllocationDerivedMetrics(DbAllocOp alloc,
-                                              DbAllocInfo &info) {
-  /// Compute end index (last release)
-  unsigned lastEnd = info.allocIndex;
-  for (auto &interval : info.intervals) {
-    lastEnd = std::max(lastEnd, interval.endIndex);
+  if (count != 1) {
+    ARTS_DEBUG("Acquire node has " << count
+                                   << " matching releases (expected 1)");
+    return found;
   }
-  info.endIndex = lastEnd;
-
-  /// Compute critical span
-  computeCriticalSpan(info);
-
-  /// Compute critical path
-  computeCriticalPath(info);
-
-  /// Compute loop depth
-  computeLoopDepth(info);
-
-  /// Determine if long-lived
-  computeLongLivedFlag(info);
-
-  /// Check if escaping
-  computeEscapingFlag(alloc, info);
+  return found;
 }
 
-/// Compute critical span for an allocation
+/// Compute critical span for an allocation.
+/// Purpose: measure the bounding lifetime window (in op-order units) for the
+/// allocation across all of its acquires. This is the inclusive distance from
+/// the earliest acquire beginIndex to the latest acquire endIndex.
 void DbGraph::computeCriticalSpan(DbAllocInfo &info) {
   info.criticalSpan = 0;
-  if (info.intervals.empty())
+  if (info.acquireNodes.empty())
     return;
 
-  unsigned minBegin = info.intervals.front().beginIndex;
-  unsigned maxEnd = info.intervals.front().endIndex;
+  unsigned minBegin = info.acquireNodes.front()->getInfo().beginIndex;
+  unsigned maxEnd = info.acquireNodes.front()->getInfo().endIndex;
 
-  for (auto &interval : info.intervals) {
-    minBegin = std::min(minBegin, interval.beginIndex);
-    maxEnd = std::max(maxEnd, interval.endIndex);
+  for (auto *node : info.acquireNodes) {
+    const auto &nodeInfo = node->getInfo();
+    minBegin = std::min(minBegin, nodeInfo.beginIndex);
+    maxEnd = std::max(maxEnd, nodeInfo.endIndex);
   }
 
   info.criticalSpan = maxEnd >= minBegin ? (maxEnd - minBegin + 1) : 0;
 }
 
-/// Compute critical path for an allocation
+/// Compute critical path length as the union of acquire intervals.
+/// It measures the total active-use time by merging overlapping inclusive
+/// intervals [beginIndex, endIndex] and summing their lengths.
 void DbGraph::computeCriticalPath(DbAllocInfo &info) {
   SmallVector<std::pair<unsigned, unsigned>, 8> segments;
-  for (auto &interval : info.intervals) {
-    segments.emplace_back(interval.beginIndex, interval.endIndex);
+  for (auto *node : info.acquireNodes) {
+    const auto &nodeInfo = node->getInfo();
+    segments.emplace_back(nodeInfo.beginIndex, nodeInfo.endIndex);
   }
 
   llvm::sort(segments, [](auto a, auto b) {
@@ -459,31 +457,31 @@ void DbGraph::computeCriticalPath(DbAllocInfo &info) {
   }
 }
 
-/// Compute maximum loop depth for an allocation
+/// Compute maximum loop depth for an allocation.
+/// It captures the deepest loop nesting among all acquires of this
+/// allocation as a proxy for locality/pressure heuristics.
 void DbGraph::computeLoopDepth(DbAllocInfo &info) {
   if (auto *loopAnalysis = analysis->getLoopAnalysis()) {
     unsigned maxDepth = 0;
-    for (auto &interval : info.intervals) {
-      if (!interval.acquire)
-        continue;
-
+    for (auto *node : info.acquireNodes) {
       SmallVector<LoopInfo *, 4> enclosingLoops;
-      loopAnalysis->collectEnclosingLoops(interval.acquire.getOperation(),
-                                          enclosingLoops);
+      loopAnalysis->collectEnclosingLoops(node->getOp(), enclosingLoops);
       maxDepth = std::max<unsigned>(maxDepth, enclosingLoops.size());
     }
     info.maxLoopDepth = maxDepth;
   }
 }
 
-/// Determine if allocation is long-lived
+/// Classify whether the allocation is long-lived.
+/// It marks allocations that span most of the function's op-order so they
+/// can be handled differently by later heuristics (e.g., reuse/coloring).
 void DbGraph::computeLongLivedFlag(DbAllocInfo &info) {
   unsigned firstIdx = info.allocIndex;
   unsigned lastIdx = opOrder.empty() ? 0u : (unsigned)opOrder.size() - 1;
-
   if (lastIdx > 0) {
     double coverage =
         (double)(info.endIndex - firstIdx + 1) / (double)(lastIdx + 1);
+    /// If coverage > 0.7, set `isLongLived`.
     info.isLongLived = coverage > 0.7;
   }
 }
@@ -504,15 +502,16 @@ void DbGraph::computePeakMetrics() {
   struct Event {
     unsigned idx;
     int delta;
-    uint64_t bytes;
+    unsigned long long bytes;
   };
 
   SmallVector<Event, 32> events;
   for (auto &kv : allocNodes) {
-    const DbAllocInfo &info = kv.second->getInfoRef();
-    for (auto &interval : info.intervals) {
-      events.push_back({interval.beginIndex, +1, info.staticBytes});
-      events.push_back({interval.endIndex + 1, -1, info.staticBytes});
+    const DbAllocInfo &info = kv.second->getInfo();
+    for (auto *node : info.acquireNodes) {
+      const auto &nodeInfo = node->getInfo();
+      events.push_back({nodeInfo.beginIndex, +1, info.staticBytes});
+      events.push_back({nodeInfo.endIndex + 1, -1, info.staticBytes});
     }
   }
 
@@ -520,16 +519,15 @@ void DbGraph::computePeakMetrics() {
              [](const Event &a, const Event &b) { return a.idx < b.idx; });
 
   int liveCount = 0;
-  uint64_t liveBytes = 0;
+  unsigned long long liveBytes = 0;
   for (auto &event : events) {
     liveCount += event.delta;
-    if (event.delta > 0) {
+    if (event.delta > 0)
       liveBytes += event.bytes;
-    } else {
+    else
       liveBytes -= event.bytes;
-    }
     peakLiveDbs = std::max<uint64_t>(peakLiveDbs, (uint64_t)liveCount);
-    peakBytes = std::max<uint64_t>(peakBytes, liveBytes);
+    peakBytes = std::max<unsigned long long>(peakBytes, liveBytes);
   }
 }
 
@@ -546,8 +544,8 @@ void DbGraph::computeReuseCandidates() {
 
   for (size_t i = 0; i < allocs.size(); ++i) {
     for (size_t j = i + 1; j < allocs.size(); ++j) {
-      const auto &infoA = allocNodes[allocs[i]]->getInfoRef();
-      const auto &infoB = allocNodes[allocs[j]]->getInfoRef();
+      const auto &infoA = allocNodes[allocs[i]]->getInfo();
+      const auto &infoB = allocNodes[allocs[j]]->getInfo();
 
       /// Check if lifetimes don't overlap and sizes match
       bool noOverlap = (infoA.endIndex <= infoB.allocIndex ||
@@ -556,8 +554,8 @@ void DbGraph::computeReuseCandidates() {
           (infoA.staticBytes != 0 && infoA.staticBytes == infoB.staticBytes);
 
       if (noOverlap && sameSize) {
-        allocNodes[allocs[i]]->getInfoRef().reuseMatches.push_back(allocs[j]);
-        allocNodes[allocs[j]]->getInfoRef().reuseMatches.push_back(allocs[i]);
+        allocNodes[allocs[i]]->getInfo().reuseMatches.push_back(allocs[j]);
+        allocNodes[allocs[j]]->getInfo().reuseMatches.push_back(allocs[i]);
       }
     }
   }
@@ -570,13 +568,15 @@ void DbGraph::computeReuseColoring() {
 
   /// Sort by descending weight: bigger and longer-lived first
   llvm::sort(allocs, [&](DbAllocOp allocA, DbAllocOp allocB) {
-    const auto &infoA = allocNodes[allocA]->getInfoRef();
-    const auto &infoB = allocNodes[allocB]->getInfoRef();
-    uint64_t weightA =
-        std::max<uint64_t>(infoA.staticBytes, infoA.totalAccessBytes) *
+    const auto &infoA = allocNodes[allocA]->getInfo();
+    const auto &infoB = allocNodes[allocB]->getInfo();
+    unsigned long long weightA =
+        std::max<unsigned long long>(
+            infoA.staticBytes, (unsigned long long)infoA.totalAccessBytes) *
         (1 + infoA.criticalPath);
-    uint64_t weightB =
-        std::max<uint64_t>(infoB.staticBytes, infoB.totalAccessBytes) *
+    unsigned long long weightB =
+        std::max<unsigned long long>(
+            infoB.staticBytes, (unsigned long long)infoB.totalAccessBytes) *
         (1 + infoB.criticalPath);
     if (weightA != weightB)
       return weightA > weightB;
@@ -584,8 +584,8 @@ void DbGraph::computeReuseColoring() {
   });
 
   auto interferes = [&](DbAllocOp allocX, DbAllocOp allocY) -> bool {
-    const auto &infoX = allocNodes[allocX]->getInfoRef();
-    const auto &infoY = allocNodes[allocY]->getInfoRef();
+    const auto &infoX = allocNodes[allocX]->getInfo();
+    const auto &infoY = allocNodes[allocY]->getInfo();
     bool lifetimeOverlap = !(infoX.endIndex < infoY.allocIndex ||
                              infoY.endIndex < infoX.allocIndex);
     if (lifetimeOverlap)
@@ -607,7 +607,7 @@ void DbGraph::computeReuseColoring() {
       ++color;
 
     colorMap[alloc] = color;
-    allocNodes[alloc]->getInfoRef().reuseColor = color;
+    allocNodes[alloc]->getInfo().reuseColor = color;
   }
 }
 
@@ -628,7 +628,6 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
 
   Object root;
 
-  /// Always include structural information
   Array nodesArr;
   forEachNode([&](NodeBase *node) {
     const char *nkind = "DbNode";
@@ -672,45 +671,44 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
 
     /// Summary info
     root["info"] = Object{
-        {"peakLiveDbs", (double)peakLiveDbs},
-        {"peakBytes", (double)peakBytes},
+        {"peakLiveDbs", (uint64_t)peakLiveDbs},
+        {"peakBytes", std::to_string(peakBytes)},
     };
 
     /// Allocs
     Array allocs;
     for (const auto &kv : allocNodes) {
       DbAllocOp alloc = kv.first;
-      const DbAllocInfo &M = kv.second->getInfoRef();
+      const DbAllocInfo &M = kv.second->getInfo();
       Object A;
       A["id"] = sanitizeString(getNode(alloc.getOperation())->getHierId());
-      A["allocIndex"] = (double)M.allocIndex;
-      A["endIndex"] = (double)M.endIndex;
-      A["numAcquires"] = (double)M.numAcquires;
-      A["numReleases"] = (double)M.numReleases;
-      A["staticBytes"] = (double)M.staticBytes;
-      A["criticalSpan"] = (double)M.criticalSpan;
-      A["criticalPath"] = (double)M.criticalPath;
-      A["totalAccessBytes"] = (double)M.totalAccessBytes;
-      /// Preserve numeric 0/1 booleans as in prior output
-      A["isLongLived"] = (double)(M.isLongLived ? 1 : 0);
-      A["maybeEscaping"] = (double)(M.maybeEscaping ? 1 : 0);
+      A["allocIndex"] = (uint64_t)M.allocIndex;
+      A["endIndex"] = (uint64_t)M.endIndex;
+      A["numAcquires"] = (uint64_t)M.numAcquires;
+      A["numReleases"] = (uint64_t)M.numReleases;
+      A["staticBytes"] = std::to_string(M.staticBytes);
+      A["criticalSpan"] = (uint64_t)M.criticalSpan;
+      A["criticalPath"] = (uint64_t)M.criticalPath;
+      A["totalAccessBytes"] = std::to_string(M.totalAccessBytes);
+      A["isLongLived"] = (bool)M.isLongLived;
+      A["maybeEscaping"] = (bool)M.maybeEscaping;
 
       Array intervals;
-      for (const auto &iv : M.intervals) {
+      for (const auto *node : M.acquireNodes) {
+        const auto &nodeInfo = node->getInfo();
         Object I;
-        I["begin"] = (double)iv.beginIndex;
-        I["end"] = (double)iv.endIndex;
-        I["mode"] =
-            modeToString(const_cast<DbAcquireOp &>(iv.acquire).getMode());
+        I["begin"] = (uint64_t)nodeInfo.beginIndex;
+        I["end"] = (uint64_t)nodeInfo.endIndex;
+        I["mode"] = modeToString(cast<DbAcquireOp>(node->getOp()).getMode());
         Array offs;
-        for (auto v : iv.constOffsets)
-          offs.push_back((double)v);
+        for (auto v : nodeInfo.constOffsets)
+          offs.push_back((int64_t)v);
         I["constOffsets"] = std::move(offs);
         Array sizes;
-        for (auto v : iv.constSizes)
-          sizes.push_back((double)v);
+        for (auto v : nodeInfo.constSizes)
+          sizes.push_back((int64_t)v);
         I["constSizes"] = std::move(sizes);
-        I["estimatedBytes"] = (double)iv.estimatedBytes;
+        I["estimatedBytes"] = std::to_string(nodeInfo.estimatedBytes);
         intervals.push_back(std::move(I));
       }
       A["intervals"] = std::move(intervals);
@@ -718,35 +716,35 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
     }
     root["allocs"] = std::move(allocs);
 
-    /// Reuse candidates (deduplicated)
-    Array reuse;
-    for (const auto &kv : allocNodes) {
-      DbAllocOp Aop = kv.first;
-      const auto &AI = kv.second->getInfoRef();
-      for (DbAllocOp Bop : AI.reuseMatches) {
-        if (getOrder(Aop.getOperation()) < getOrder(Bop.getOperation())) {
-          Object P;
-          P["a"] = sanitizeString(getNode(Aop.getOperation())->getHierId());
-          P["b"] = sanitizeString(getNode(Bop.getOperation())->getHierId());
-          reuse.push_back(std::move(P));
-        }
-      }
-    }
-    root["reuseCandidates"] = std::move(reuse);
+    /// Reuse candidates
+    // Array reuse;
+    // for (const auto &kv : allocNodes) {
+    //   DbAllocOp Aop = kv.first;
+    //   const auto &AI = kv.second->getInfo();
+    //   for (DbAllocOp Bop : AI.reuseMatches) {
+    //     if (getOrder(Aop.getOperation()) < getOrder(Bop.getOperation())) {
+    //       Object P;
+    //       P["a"] = sanitizeString(getNode(Aop.getOperation())->getHierId());
+    //       P["b"] = sanitizeString(getNode(Bop.getOperation())->getHierId());
+    //       reuse.push_back(std::move(P));
+    //     }
+    //   }
+    // }
+    // root["reuseCandidates"] = std::move(reuse);
 
     /// Reuse coloring groups
-    llvm::DenseMap<unsigned, SmallVector<DbAllocOp, 8>> groups;
-    for (auto &kv : allocNodes)
-      groups[kv.second->getInfoRef().reuseColor].push_back(kv.first);
+    // llvm::DenseMap<unsigned, SmallVector<DbAllocOp, 8>> groups;
+    // for (auto &kv : allocNodes)
+    //   groups[kv.second->getInfo().reuseColor].push_back(kv.first);
 
-    Object coloring;
-    for (auto &cg : groups) {
-      Array ids;
-      for (auto Aop : cg.second)
-        ids.push_back(sanitizeString(getNode(Aop.getOperation())->getHierId()));
-      coloring[std::to_string(cg.first)] = std::move(ids);
-    }
-    root["reuseColoring"] = std::move(coloring);
+    // Object coloring;
+    // for (auto &cg : groups) {
+    //   Array ids;
+    //   for (auto Aop : cg.second)
+    //     ids.push_back(sanitizeString(getNode(Aop.getOperation())->getHierId()));
+    //   coloring[std::to_string(cg.first)] = std::move(ids);
+    // }
+    // root["reuseColoring"] = std::move(coloring);
   }
 
   os << llvm::json::Value(std::move(root)) << "\n";

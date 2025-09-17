@@ -63,7 +63,6 @@ static cl::opt<std::string> OutputFilename("o", cl::desc("Output filename"),
                                            cl::value_desc("filename"),
                                            cl::init("-"));
 
-
 static cl::opt<bool> Opt("O3", cl::desc("Apply Optimizations"),
                          cl::init(false));
 
@@ -79,6 +78,11 @@ static cl::opt<unsigned>
                   cl::init(1));
 
 static cl::opt<bool> Debug("g", cl::desc("Enable debug mode"), cl::init(false));
+
+static cl::opt<bool> ExportJson(
+    "export-json",
+    cl::desc("Export DB analysis to JSON files in output/ directory"),
+    cl::init(false));
 
 //===----------------------------------------------------------------------===//
 // Pipeline Stop Options
@@ -110,7 +114,7 @@ static cl::opt<PipelineStage>
                       clEnumValN(PipelineStage::Epochs, "epochs",
                                  "Stop after epoch creation"),
                       clEnumValN(PipelineStage::EdtLowering, "edt-lowering",
-                                  "Stop after EDT lowering"),
+                                 "Stop after EDT lowering"),
                       clEnumValN(PipelineStage::ArtsToLLVM, "arts-to-llvm",
                                  "Stop after ARTS to LLVM conversion"),
                       clEnumValN(PipelineStage::Complete, "complete",
@@ -216,7 +220,10 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     pm.addPass(arts::createEdtInvariantCodeMotionPass());
     pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(arts::createCreateDbsPass(IdentifyDbs));
-    pm.addPass(arts::createDbPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
+    pm.addPass(createCSEPass());
+    pm.addPass(createMem2Reg());
+    pm.addPass(arts::createDbPass(ExportJson));
     pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(createCSEPass());
     pm.addPass(createMem2Reg());
@@ -361,7 +368,10 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   {
     PassManager pm(&context);
     pm.addPass(arts::createCreateDbsPass(IdentifyDbs));
-    pm.addPass(arts::createDbPass());
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
+    pm.addPass(createCSEPass());
+    pm.addPass(createMem2Reg());
+    pm.addPass(arts::createDbPass(ExportJson));
     pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(createCSEPass());
     pm.addPass(createMem2Reg());

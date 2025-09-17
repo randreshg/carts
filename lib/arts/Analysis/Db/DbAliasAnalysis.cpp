@@ -78,8 +78,7 @@ bool DbAliasAnalysis::mayAlias(const NodeBase &a, const NodeBase &b,
                 : INT64_MIN);
     } else if (auto *rel = dyn_cast<DbReleaseNode>(&n)) {
       auto op = cast<DbReleaseOp>(rel->getOp());
-      if (!op.getSources().empty())
-        root = op.getSources()[0];
+      root = op.getSource();
       /// Unknown slice for release; be conservative
       offs.assign(1, INT64_MIN);
       lens.assign(1, INT64_MIN);
@@ -174,7 +173,7 @@ Value DbAliasAnalysis::getUnderlyingValue(const NodeBase &node) {
     Value sourcePtr = cast<DbAcquireOp>(op).getSourcePtr();
     return arts::getUnderlyingValue(sourcePtr);
   } else if (isa<DbReleaseOp>(op)) {
-    Value source = cast<DbReleaseOp>(op).getSources()[0];
+    Value source = cast<DbReleaseOp>(op).getSource();
     return arts::getUnderlyingValue(source);
   }
   llvm_unreachable("Invalid DB node type");

@@ -44,8 +44,8 @@ public:
   size_t getAcquireNodesSize() const { return acquireNodes.size(); }
   size_t getReleaseNodesSize() const { return releaseNodes.size(); }
   DbAllocOp getDbAllocOp() const { return dbAllocOp; }
-  DbAllocInfo &getInfoRef() { return info; }
-  const DbAllocInfo &getInfoRef() const { return info; }
+  DbAllocInfo &getInfo() { return info; }
+  const DbAllocInfo &getInfo() const { return info; }
 
   NodeKind getKind() const override { return NodeKind::DbAlloc; }
   static bool classof(const NodeBase *N) {
@@ -87,13 +87,43 @@ public:
   const DenseSet<EdgeBase *> &getOutEdges() const override { return outEdges; }
 
   DbAllocNode *getParent() const { return parent; }
-  DbAcquireInfo &getInfoRef() { return info; }
-  const DbAcquireInfo &getInfoRef() const { return info; }
+  DbAcquireInfo &getInfo() { return info; }
+  const DbAcquireInfo &getInfo() const { return info; }
 
   NodeKind getKind() const override { return NodeKind::DbAcquire; }
   static bool classof(const NodeBase *N) {
     return N->getKind() == NodeKind::DbAcquire;
   }
+
+
+  /// Access range for a single dimension. The effective accessed offset is
+  /// computed as base + idx, where base is the acquire's offset for the
+  /// dimension and idx is an index value used in loads/stores within the EDT.
+  ///
+  /// For conservative, non-mutating analysis, we return existing SSA Values
+  /// for the base, the best-known lower index (minIndex) and upper index
+  /// (maxIndex). When unknown, the respective Value is null. If the upper
+  /// bound originates from scf.for, maxIndex corresponds to the loop upper
+  /// bound (exclusive).
+  struct OffsetRange {
+    Value base;       ///< acquire offset[d]
+    Value minIndex;   ///< lower index bound Value (e.g., loop lower bound)
+    Value maxIndex;   ///< upper index bound Value (exclusive for scf.for)
+  };
+
+  /// Compute per-dimension accessed offset ranges for this acquire by scanning
+  /// memref.load/store users inside the enclosing EDT. Returns, for each
+  /// dimension, the acquire base offset and the best-known lower/upper index
+  /// Values that were used (e.g., loop bounds or constant indices). No IR is
+  /// created; if a bound cannot be proven, the corresponding Value is null.
+  SmallVector<OffsetRange, 4> computeAccessedOffsetRanges() const;
+
+  /// Compute a maximal prefix of invariant indices (one per leading dimension
+  /// of the acquired memref) that are uniform across the EDT. These indices
+  /// can be used to coarsen the acquire by pinning leading dimensions.
+  /// The returned Values are SSA values already present in the IR; this API
+  /// does not materialize new constants or perform replacements.
+  SmallVector<Value, 4> computeInvariantIndices() const;
 
 private:
   DbAcquireOp dbAcquireOp;
@@ -124,8 +154,8 @@ public:
   const DenseSet<EdgeBase *> &getOutEdges() const override { return outEdges; }
 
   DbAllocNode *getParent() const { return parent; }
-  DbReleaseInfo &getInfoRef() { return info; }
-  const DbReleaseInfo &getInfoRef() const { return info; }
+  DbReleaseInfo &getInfo() { return info; }
+  const DbReleaseInfo &getInfo() const { return info; }
 
   NodeKind getKind() const override { return NodeKind::DbRelease; }
   static bool classof(const NodeBase *N) {

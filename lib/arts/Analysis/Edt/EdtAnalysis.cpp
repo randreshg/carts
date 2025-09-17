@@ -45,7 +45,7 @@ void EdtAnalysis::analyzeFunc(func::FuncOp func) {
   unsigned edtIndex = 0;
   func.walk([&](EdtOp edt) {
     auto edtNode = edtGraph->getEdtNode(edt);
-    auto &info = edtNode->getInfoRef();
+    auto &info = edtNode->getInfo();
     info.orderIndex = edtIndex;
     edtOrderIndex[edt] = edtIndex++;
   });
@@ -55,8 +55,8 @@ EdtPairAffinity EdtAnalysis::affinity(EdtOp from, EdtOp to) const {
   EdtPairAffinity result;
   auto edtFrom = edtGraph->getEdtNode(from);
   auto edtTo = edtGraph->getEdtNode(to);
-  const EdtInfo *edtInfoFrom = &edtFrom->getInfoRef();
-  const EdtInfo *edtInfoTo = &edtTo->getInfoRef();
+  const EdtInfo *edtInfoFrom = &edtFrom->getInfo();
+  const EdtInfo *edtInfoTo = &edtTo->getInfo();
 
   if (!edtInfoFrom || !edtInfoTo) {
     return result; /// Return zero affinity
@@ -108,7 +108,8 @@ EdtPairAffinity EdtAnalysis::affinity(EdtOp from, EdtOp to) const {
     result.mayConflict = conflicts > 0;
   }
 
-  /// Simple program order proximity (could be enhanced with actual distance)
+  /// Simple program order proximity
+  /// TODO: could be enhanced with actual distance
   auto orderA = edtInfoFrom->orderIndex;
   auto orderB = edtInfoTo->orderIndex;
   if (orderA != orderB) {
@@ -128,7 +129,7 @@ void EdtAnalysis::print(func::FuncOp func, llvm::raw_ostream &os) const {
 
   func.walk([&](EdtOp edt) {
     auto edtNode = edtGraph->getEdtNode(edt);
-    const EdtInfo *edtInfo = &edtNode->getInfoRef();
+    const EdtInfo *edtInfo = &edtNode->getInfo();
     if (edtInfo) {
       unsigned edtIndex = edtInfo->orderIndex;
       os << "  EDT #" << edtIndex << ":\n";
@@ -155,7 +156,7 @@ void EdtAnalysis::toJson(func::FuncOp func, llvm::raw_ostream &os) const {
   func.walk([&](Operation *op) {
     if (auto edt = dyn_cast<EdtOp>(op)) {
       auto edtNode = static_cast<EdtNode *>(edtGraph->getNode(op));
-      const EdtInfo *edtInfo = &edtNode->getInfoRef();
+      const EdtInfo *edtInfo = &edtNode->getInfo();
 
       if (edtInfo) {
         if (!first)

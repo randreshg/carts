@@ -58,6 +58,8 @@ DbGraph *DbAnalysis::getOrCreateGraphNodesOnly(func::FuncOp func) {
   if (it != functionGraphMap.end())
     return it->second.get();
   auto newGraph = std::make_unique<DbGraph>(func, this);
+
+  /// Build nodes only
   newGraph->buildNodesOnly();
 
   /// Store the graph
@@ -76,12 +78,12 @@ DbAnalysis::OverlapKind DbAnalysis::estimateOverlap(arts::DbAcquireOp a,
       if (!ai) {
         if (auto *na = dyn_cast_or_null<DbAcquireNode>(
                 graph->getNode(a.getOperation())))
-          ai = &na->getInfoRef();
+          ai = &na->getInfo();
       }
       if (!bi) {
         if (auto *nb = dyn_cast_or_null<DbAcquireNode>(
                 graph->getNode(b.getOperation())))
-          bi = &nb->getInfoRef();
+          bi = &nb->getInfo();
       }
       if (ai && bi)
         break;
@@ -90,7 +92,7 @@ DbAnalysis::OverlapKind DbAnalysis::estimateOverlap(arts::DbAcquireOp a,
       saOffs = ai->constOffsets;
       saSizes = ai->constSizes;
     } else {
-      // Fallback: derive constants directly from ops
+      /// Fallback: derive constants directly from ops
       for (Value v : a.getOffsets())
         saOffs.push_back(
             v.getDefiningOp<mlir::arith::ConstantIndexOp>()

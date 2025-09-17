@@ -8,7 +8,12 @@ int main(int argc, char *argv[]) {
     exit(EXIT_FAILURE);
   }
   const int N = atoi(argv[1]);
-  double A[N][N], B[N][N];
+  double **A = (double **)malloc(N * sizeof(double *));
+  double **B = (double **)malloc(N * sizeof(double *));
+  for (int i = 0; i < N; i++) {
+    A[i] = (double *)malloc(N * sizeof(double));
+    B[i] = (double *)malloc(N * sizeof(double));
+  }
 
   srand(time(NULL));
   const int random = rand() % 11;

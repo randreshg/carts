@@ -261,6 +261,46 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
   }
 };
 
+/// Pattern to replace `omp.wsloop` with `arts.for` loop
+struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(omp::WsLoopOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ARTS_DEBUG_TYPE("Converting omp.wsloop to arts.for");
+
+    /// Get the loop bounds and step from the wsloop
+    auto lowerBound = op.getLowerBound()[0];
+    auto upperBound = op.getUpperBound()[0];
+    auto step = op.getStep()[0];
+
+    /// Create arts.for and move wsloop body
+    auto forOp = rewriter.create<arts::ForOp>(
+        loc, ValueRange{lowerBound}, ValueRange{upperBound}, ValueRange{step});
+    Region &dstRegion = forOp.getRegion();
+    if (dstRegion.empty())
+      dstRegion.push_back(new Block());
+    Block &dst = dstRegion.front();
+    if (dst.getNumArguments() == 0)
+      dst.addArgument(rewriter.getIndexType(), loc);
+
+    OpBuilder::InsertionGuard IG(rewriter);
+    rewriter.setInsertionPointToStart(&dst);
+    IRMapping mapper;
+    Block &src = op.getRegion().front();
+    if (!src.getArguments().empty())
+      mapper.map(src.getArgument(0), dst.getArgument(0));
+    for (Operation &srcOp : src.without_terminator())
+      rewriter.clone(srcOp, mapper);
+    rewriter.create<arts::YieldOp>(loc);
+
+    /// Remove the original wsloop
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 /// Pattern to replace `omp.terminator` with `arts.yield`
 struct TerminatorToARTSPattern : public OpRewritePattern<omp::TerminatorOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -299,6 +339,47 @@ struct TaskwaitToARTSPattern : public OpRewritePattern<omp::TaskwaitOp> {
     return success();
   }
 };
+
+/// Pattern to replace `omp.taskloop` with `arts.for` and EDT creation
+struct TaskloopToARTSPattern : public OpRewritePattern<omp::TaskLoopOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(omp::TaskLoopOp op,
+                                PatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    ARTS_DEBUG_TYPE("Converting omp.taskloop to arts.for with EDTs");
+
+    /// Get the loop bounds and step from the taskloop
+    auto lowerBound = op.getLowerBound()[0];
+    auto upperBound = op.getUpperBound()[0];
+    auto step = op.getStep()[0];
+
+    /// Create arts.for and move taskloop body
+    auto forOp = rewriter.create<arts::ForOp>(
+        loc, ValueRange{lowerBound}, ValueRange{upperBound}, ValueRange{step});
+    Region &dstRegion = forOp.getRegion();
+    if (dstRegion.empty())
+      dstRegion.push_back(new Block());
+    Block &dst = dstRegion.front();
+    if (dst.getNumArguments() == 0)
+      dst.addArgument(rewriter.getIndexType(), loc);
+
+    OpBuilder::InsertionGuard IG(rewriter);
+    rewriter.setInsertionPointToStart(&dst);
+    IRMapping mapper;
+    Block &src = op.getRegion().front();
+    if (!src.getArguments().empty())
+      mapper.map(src.getArgument(0), dst.getArgument(0));
+    for (Operation &srcOp : src.without_terminator())
+      rewriter.clone(srcOp, mapper);
+    rewriter.create<arts::YieldOp>(loc);
+
+    /// Remove the original taskloop
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 /// Pattern to replace 'func.call' with an equivalent 'arts' call if exists.
 struct CallToARTSPattern : public OpRewritePattern<func::CallOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -336,7 +417,8 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   MLIRContext *context = &getContext();
   RewritePatternSet patterns(context);
   patterns.add<OMPParallelToARTSPattern, SCFParallelToArtsPattern,
-               MasterToARTSPattern, TaskToARTSPattern, TerminatorToARTSPattern,
+               MasterToARTSPattern, TaskToARTSPattern, TaskloopToARTSPattern,
+               WsloopToARTSPattern, TerminatorToARTSPattern,
                BarrierToARTSPattern, TaskwaitToARTSPattern, CallToARTSPattern>(
       context);
   GreedyRewriteConfig config;

@@ -30,8 +30,8 @@ public:
   const DenseSet<EdgeBase *> &getOutEdges() const override { return outEdges; }
 
   EdtOp getEdtOp() const { return edtOp; }
-  EdtInfo &getInfoRef() { return info; }
-  const EdtInfo &getInfoRef() const { return info; }
+  EdtInfo &getInfo() { return info; }
+  const EdtInfo &getInfo() const { return info; }
 
   NodeKind getKind() const override { return NodeKind::EdtTask; }
   static bool classof(const NodeBase *N) {

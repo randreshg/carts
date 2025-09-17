@@ -192,11 +192,11 @@ def DbReleaseOp : Arts_Op<"db_release", []> {
     - release_type: specifies whether to perform memory freeing for dynamic allocations
   }];
   let arguments = (ins
-    Variadic<AnyMemRef>:$sources,
+    AnyMemRef:$source,
     OptionalAttr<DbReleaseTypeAttr>:$release_type
   );
   let assemblyFormat = [{
-    `(` $sources `)` `:` type($sources) attr-dict
+    `(` $source `)` `:` type($source) attr-dict
   }];
 
   let builders = [
@@ -371,7 +371,7 @@ def EpochOp : Arts_Op<"epoch",
 //===----------------------------------------------------------------------===//
 def YieldOp : Arts_Op<"yield", 
   [Pure, ReturnLike, Terminator, 
-   ParentOneOf<["EdtOp", "EpochOp"]>]> {
+   ParentOneOf<["EdtOp", "EpochOp", "ForOp"]>]> {
 
   let summary = "ARTS dialect yield terminator";
   let description = [{
@@ -606,6 +606,32 @@ def DbGepOp : Arts_Op<"db_gep", [Pure, AttrSizedOperandSegments]> {
   let builders = [
     OpBuilder<(ins "Value":$base_ptr, "SmallVector<Value>":$indices, "SmallVector<Value>":$strides)>
   ];
+}
+
+def ForOp : Arts_Op<"for", [AttrSizedOperandSegments, SingleBlockImplicitTerminator<"arts::YieldOp">]> {
+  let summary = "ARTS parallel for loop operation";
+  let description = [{
+    The `arts.for` operation represents a parallel for loop in the ARTS dialect.
+    It preserves the parallel semantics from OpenMP worksharing loops while
+    providing a native ARTS construct for parallel iteration.
+    
+    This operation takes lower bound, upper bound, and step values, and executes
+    the loop body in parallel across available workers.
+  }];
+  
+  let arguments = (ins Variadic<Index>:$lowerBound, 
+                      Variadic<Index>:$upperBound, 
+                      Variadic<Index>:$step);
+  let results = (outs);
+  let regions = (region AnyRegion:$region);
+  
+  let assemblyFormat = [{
+    `for` `(` $lowerBound `)` `to` `(` $upperBound `)` `step` `(` $step `)` `{`
+      $region
+    `}` attr-dict
+  }];
+  
+  let hasCanonicalizer = true;
 }
 
 #endif // ARTS_OPS

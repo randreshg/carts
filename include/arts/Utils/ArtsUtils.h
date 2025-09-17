@@ -5,10 +5,10 @@
 #ifndef CARTS_UTILS_ARTSUTILS_H
 #define CARTS_UTILS_ARTSUTILS_H
 
-#include "arts/ArtsDialect.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/IR/Value.h"
 
 namespace mlir {
 namespace arts {
@@ -44,6 +44,15 @@ void replaceInRegion(mlir::Region &region,
 /// Returns true if `val` is a constant value.
 bool isValueConstant(mlir::Value val);
 
+/// Try to extract an index constant from a Value.
+/// Returns true and sets `out` if the Value is a constant index (via
+/// arith.constant or compatible); otherwise returns false.
+bool getConstantIndex(mlir::Value v, int64_t &out);
+
+/// Returns true if `v` is an index constant not equal to zero,
+/// or a non-constant value (unknown -> conservatively non-zero).
+bool isNonZeroIndex(Value v);
+
 /// Get the underlying object (root allocation) for a given value.
 /// Recursively traverses through DbAcquireOp, DbGepOp, memref operations, etc.
 /// to find the root allocation (DbAllocOp, memref::AllocOp, memref::AllocaOp,
@@ -59,6 +68,10 @@ uint64_t getElementTypeByteSize(mlir::Type elemTy);
 /// Sanitize a string for use in DOT graph format.
 /// Replaces dots and dashes with underscores to make valid DOT identifiers.
 std::string sanitizeString(llvm::StringRef s);
+
+/// Return true if two ValueRanges have the same length and element-wise equal
+/// Values.
+bool equalRange(mlir::ValueRange a, mlir::ValueRange b);
 } // namespace arts
 } // namespace mlir
 

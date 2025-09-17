@@ -45,7 +45,6 @@ using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
 
-
 namespace {
 
 //===----------------------------------------------------------------------===//
@@ -119,6 +118,7 @@ struct EdtLoweringPass : public arts::EdtLoweringBase<EdtLoweringPass> {
 private:
   /// Core transformation methods
   LogicalResult lowerEdt(EdtOp edtOp);
+  LogicalResult lowerForOp(ForOp forOp);
 
   /// Function outlining with ARTS signature
   func::FuncOp createOutlinedFunction(EdtOp edtOp, EdtEnvManager &envManager);
@@ -466,9 +466,11 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     /// Get the GUID from the DbAcquireOp
     Value depGuid = dbAcquireOp.getGuid();
 
+    /// Always add to in-dependencies
+    inDepGuids.push_back(depGuid);
+  
+    /// Only add to out-dependencies if mode is out or inout
     ArtsMode mode = dbAcquireOp.getMode();
-    if (mode == ArtsMode::in || mode == ArtsMode::inout)
-      inDepGuids.push_back(depGuid);
     if (mode == ArtsMode::out || mode == ArtsMode::inout)
       outDepGuids.push_back(depGuid);
   }

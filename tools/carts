@@ -78,6 +78,11 @@ show_usage() {
     print_cmd "--emit-llvm"                  "Emit LLVM IR output (can be used with any stage)"
     
     echo ""
+    echo "Execute Options (for 'execute' command):"
+    print_cmd "--run-args <args>"               "Pass additional arguments to carts run command"
+    print_cmd "--compile-args <args>"           "Pass additional arguments to carts compile command"
+    
+    echo ""
     echo "Examples:"
     echo "  # Build commands"
     print_cmd "carts build"                    "Build CARTS project (default)"
@@ -93,6 +98,9 @@ show_usage() {
     print_cmd "carts run simple.mlir --convert-openmp --emit-llvm" "Stop after OpenMP conversion"
     print_cmd "carts compile simple.ll -o simple" "Compile LLVM to executable"
     print_cmd "carts execute simple.cpp -o simple" "Complete pipeline: C++ → executable"
+    print_cmd "carts execute simple.cpp --run-args --export-json -o simple" "Pipeline with JSON export"
+    print_cmd "carts execute simple.cpp --run-args --debug-only=db -o simple" "Pipeline with debug flags"
+    print_cmd "carts execute simple.cpp --compile-args -lm -lpthread -o simple" "Pipeline with library dependencies"
     
     echo ""
     echo "  # Development and testing"
@@ -587,6 +595,38 @@ run_execute() {
         exit 1
     fi
     
+    # Parse execute options
+    local execute_args=()
+    local run_args=()
+    local compile_args=()
+    local parsing_run_args=false
+    local parsing_compile_args=false
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            "--run-args")
+                parsing_run_args=true
+                parsing_compile_args=false
+                shift
+                ;;
+            "--compile-args")
+                parsing_run_args=false
+                parsing_compile_args=true
+                shift
+                ;;
+            *)
+                if [[ "$parsing_run_args" == "true" ]]; then
+                    run_args+=("$1")
+                elif [[ "$parsing_compile_args" == "true" ]]; then
+                    compile_args+=("$1")
+                else
+                    execute_args+=("$1")
+                fi
+                shift
+                ;;
+        esac
+    done
+    
     echo "Executing complete CARTS pipeline for: $input_file"
     echo "Pipeline: C++ → MLIR → LLVM IR → Executable"
     echo ""
@@ -617,11 +657,20 @@ run_execute() {
     
     # Step 2: MLIR to LLVM IR with ARTS transformations
     echo "Step 2: Applying ARTS transformations and converting to LLVM IR..."
-    if [[ -n "$original_verbose" ]]; then
-        echo "Running: carts run ${base_name}.mlir --O3 --emit-llvm > ${base_name}-arts.ll"
+    
+    # Build the carts run command with additional args
+    local run_cmd_args=("${base_name}.mlir" "--O3" "--emit-llvm")
+    
+    # Add any additional run arguments
+    if [[ ${#run_args[@]} -gt 0 ]]; then
+        run_cmd_args+=("${run_args[@]}")
     fi
     
-    if ! carts run "${base_name}.mlir" --O3 --emit-llvm > "${base_name}-arts.ll"; then
+    if [[ -n "$original_verbose" ]]; then
+        echo "Running: carts run ${run_cmd_args[*]} > ${base_name}-arts.ll"
+    fi
+    
+    if ! carts run "${run_cmd_args[@]}" > "${base_name}-arts.ll"; then
         echo "Error: Failed to apply ARTS transformations"
         exit 1
     fi
@@ -633,11 +682,18 @@ run_execute() {
     
     # Step 3: Compile to executable
     echo "Step 3: Compiling to executable..."
-    if [[ -n "$CARTS_VERBOSE" ]]; then
-        echo "Running: carts compile ${base_name}-arts.ll -o ${base_name} $*"
+    
+    # Build the compile command with additional args
+    local compile_cmd_args=("${base_name}-arts.ll" "-o" "${base_name}")
+    if [[ ${#compile_args[@]} -gt 0 ]]; then
+        compile_cmd_args+=("${compile_args[@]}")
     fi
     
-    if ! carts compile "${base_name}-arts.ll" -o "${base_name}" "$@"; then
+    if [[ -n "$CARTS_VERBOSE" ]]; then
+        echo "Running: carts compile ${compile_cmd_args[*]}"
+    fi
+    
+    if ! carts compile "${compile_cmd_args[@]}"; then
         echo "Error: Failed to compile to executable"
         exit 1
     fi

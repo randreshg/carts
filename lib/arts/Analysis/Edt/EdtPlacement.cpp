@@ -42,7 +42,7 @@ EdtPlacementHeuristics::compute(const SmallVector<std::string, 8> &nodes) {
   /// Greedy scoring
   for (EdtOp t : edts) {
     auto edtNode = edtGraph->getEdtNode(t);
-    const EdtInfo *sum = edtNode ? &edtNode->getInfoRef() : nullptr;
+    const EdtInfo *sum = edtNode ? &edtNode->getInfo() : nullptr;
     double cmr = sum ? sum->computeToMemRatio : 1.0;
     double baseCost = sum ? (double)sum->totalOps : 1.0;
 
