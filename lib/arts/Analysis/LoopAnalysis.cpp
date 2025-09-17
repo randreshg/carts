@@ -4,9 +4,6 @@
 
 #include "arts/Analysis/LoopAnalysis.h"
 #include "arts/Utils/ArtsDebug.h"
-#include "arts/Utils/ArtsUtils.h"
-#include "mlir/Transforms/RegionUtils.h"
-#include "polygeist/Ops.h"
 ARTS_DEBUG_SETUP(loop_analysis);
 
 using namespace mlir;
@@ -66,6 +63,27 @@ void LoopAnalysis::collectEnclosingLoops(
       enclosingLoops.push_back(getLoopInfo(fo));
   }
   std::reverse(enclosingLoops.begin(), enclosingLoops.end());
+}
+
+void LoopAnalysis::collectAffectingLoops(
+    Operation *op, SmallVectorImpl<Operation *> &affectingLoops) {
+  DenseSet<Operation *> uniq;
+  for (Value operand : op->getOperands()) {
+    SmallVector<Operation *, 4> loopsForVal;
+    if (isDependentOnLoop(operand, loopsForVal)) {
+      for (Operation *l : loopsForVal) {
+        if (uniq.insert(l).second)
+          affectingLoops.push_back(l);
+      }
+    }
+  }
+}
+
+void LoopAnalysis::collectAffectingLoops(
+    Value val, SmallVectorImpl<Operation *> &affectingLoops) {
+  SmallVector<Operation *, 4> loopsForVal;
+  if (isDependentOnLoop(val, loopsForVal))
+    affectingLoops.append(loopsForVal.begin(), loopsForVal.end());
 }
 
 void LoopAnalysis::analyzeLoopIV() {
