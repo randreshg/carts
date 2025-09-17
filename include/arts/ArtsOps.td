@@ -399,6 +399,21 @@ def BarrierOp : Arts_Op<"barrier", [MemoryEffects<[MemWrite]>]> {
 }
 
 //===----------------------------------------------------------------------===//
+// arts.atomic_add
+//===----------------------------------------------------------------------===//
+def AtomicAddOp : Arts_Op<"atomic_add", [MemoryEffects<[MemWrite]>]> {
+  let summary = "Atomic add to a scalar memref element";
+  let description = [{
+    Atomically adds a value to the element at the given address. This is the
+    ARTS representation for reductions when converting from OpenMP.
+    Only scalar memrefs (rank-0) are supported for now.
+  }];
+
+  let arguments = (ins AnyType:$addr, AnyType:$value);
+  let assemblyFormat = "`(` $addr `,` $value `:` type($addr) `,` type($value) `)` attr-dict";
+}
+
+//===----------------------------------------------------------------------===//
 // arts.get_total_workers
 //===----------------------------------------------------------------------===//
 def GetTotalWorkersOp : Arts_Op<"get_total_workers", 
