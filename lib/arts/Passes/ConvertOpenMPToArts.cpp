@@ -7,6 +7,7 @@
 
 /// Dialects
 // #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
@@ -301,6 +302,63 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
   }
 };
 
+/// Pattern to convert a subset of omp.atomic.update to arts.atomic_add
+struct AtomicUpdateToArtsPattern
+    : public OpRewritePattern<omp::AtomicUpdateOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(omp::AtomicUpdateOp op,
+                                PatternRewriter &rewriter) const override {
+    /// Only handle canonical form: one block, single arg, computes add of arg
+    /// and a captured value
+    auto &region = op.getRegion();
+    if (!region.hasOneBlock())
+      return failure();
+    Block &blk = region.front();
+    if (blk.getNumArguments() != 1)
+      return failure();
+
+    /// Heuristically detect add: last non-terminator must yield result of
+    /// arith.add*
+    Operation *yield = blk.getTerminator();
+    if (!yield)
+      return failure();
+    Value yielded;
+    if (auto y = dyn_cast<omp::YieldOp>(yield)) {
+      if (y->getNumOperands() != 1)
+        return failure();
+      yielded = y->getOperand(0);
+    } else {
+      return failure();
+    }
+
+    Operation *def = yielded.getDefiningOp();
+    if (!def)
+      return failure();
+    bool isAdd = isa<arith::AddIOp>(def) || isa<arith::AddFOp>(def);
+    if (!isAdd)
+      return failure();
+
+    /// addr must be a memref (rank-0) for now
+    Value addr = op.getX();
+    // Accept any pointer-like or memref target; downstream passes will lower
+    // to runtime atomics.
+
+    /// Extract the non-block-arg operand as the increment value
+    Value blockArg = blk.getArgument(0);
+    Value inc;
+    if (def->getOperand(0) == blockArg)
+      inc = def->getOperand(1);
+    else if (def->getOperand(1) == blockArg)
+      inc = def->getOperand(0);
+    else
+      return failure();
+
+    rewriter.replaceOpWithNewOp<arts::AtomicAddOp>(op, addr, inc);
+    return success();
+  }
+};
+
 /// Pattern to replace `omp.terminator` with `arts.yield`
 struct TerminatorToARTSPattern : public OpRewritePattern<omp::TerminatorOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -418,9 +476,9 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   RewritePatternSet patterns(context);
   patterns.add<OMPParallelToARTSPattern, SCFParallelToArtsPattern,
                MasterToARTSPattern, TaskToARTSPattern, TaskloopToARTSPattern,
-               WsloopToARTSPattern, TerminatorToARTSPattern,
-               BarrierToARTSPattern, TaskwaitToARTSPattern, CallToARTSPattern>(
-      context);
+               WsloopToARTSPattern, AtomicUpdateToArtsPattern,
+               TerminatorToARTSPattern, BarrierToARTSPattern,
+               TaskwaitToARTSPattern, CallToARTSPattern>(context);
   GreedyRewriteConfig config;
   (void)applyPatternsAndFoldGreedily(module, std::move(patterns), config);
   removeUndefOps(module);

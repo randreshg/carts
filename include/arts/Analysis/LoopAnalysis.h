@@ -59,6 +59,16 @@ public:
   void collectEnclosingLoops(Operation *op,
     SmallVectorImpl<LoopInfo *> &enclosingLoops);
 
+  /// Collect loops whose induction variables affect the given operation's
+  /// operands. The returned vector contains unique loop operations.
+  void collectAffectingLoops(Operation *op,
+    SmallVectorImpl<Operation *> &affectingLoops);
+
+  /// Collect loops whose induction variables affect the given SSA value.
+  /// The returned vector contains loop operations that the value depends on.
+  void collectAffectingLoops(Value val,
+    SmallVectorImpl<Operation *> &affectingLoops);
+
 private:
   ModuleOp module;
   /// List of loops in the module.
