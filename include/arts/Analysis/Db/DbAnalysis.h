@@ -27,8 +27,6 @@ namespace mlir {
 namespace arts {
 
 /// Central manager for DB-related analyses across a module.
-/// Owns per-function DbGraphs and exposes high-level queries.
-/// Hosts alias/dataflow/loop analyses when enabled.
 class DbAnalysis {
 public:
   DbAnalysis(Operation *module);
