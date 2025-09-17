@@ -9,7 +9,8 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   int N = atoi(argv[1]);
-  int A[N], B[N];
+  int *A = (int *)malloc(N * sizeof(int));
+  int *B = (int *)malloc(N * sizeof(int));
   srand(time(NULL));
 
   printf("-----------------\nMain function\n-----------------\n");

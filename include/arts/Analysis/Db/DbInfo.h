@@ -26,11 +26,12 @@ struct DbInfo {
   /// Constant fallbacks: INT64_MIN if unknown
   SmallVector<int64_t, 4> constOffsets;
   SmallVector<int64_t, 4> constSizes;
-  /// Pinned leading indices if any (values)
-  SmallVector<Value, 4> pinned;
   /// Estimated byte size for the described slice or allocation.
   /// 0 if unknown.
-  uint64_t estimatedBytes = 0;
+  unsigned long long estimatedBytes = 0;
+
+  /// Get the rank of the DB.
+  uint64_t getRank() const { return sizes.size(); }
 
   /// Join two DbInfo objects, preferably preserving the left-hand side
   /// value-based slices and merging basic counts.
@@ -57,16 +58,7 @@ struct DbInfo {
   }
 };
 
-/// Acquire-level info: extends DbInfo with lifetime indices and ops.
-struct DbAcquireInfo : public DbInfo {
-  unsigned beginIndex = 0;
-  /// inclusive order index of matching release
-  unsigned endIndex = 0;
-  DbAcquireOp acquire;
-  DbReleaseOp release;
-};
-
-/// Allocation-level summary: extends DbInfo with aggregated metrics.
+/// Allocation-level info
 struct DbAllocInfo : public DbInfo {
   unsigned allocIndex = 0;
   /// last release order
@@ -74,20 +66,29 @@ struct DbAllocInfo : public DbInfo {
   unsigned numAcquires = 0;
   unsigned numReleases = 0;
   /// 0 if unknown
-  uint64_t staticBytes = 0;
-  SmallVector<DbAcquireInfo, 8> intervals;
+  unsigned long long staticBytes = 0;
+  SmallVector<class DbAcquireNode *, 8> acquireNodes;
   bool isLongLived = false;
   bool maybeEscaping = false;
   unsigned maxLoopDepth = 0;
   unsigned criticalSpan = 0;
   unsigned criticalPath = 0;
-  uint64_t totalAccessBytes = 0;
+  unsigned long long totalAccessBytes = 0;
   /// Reuse info (graph coloring and candidate matches)
   unsigned reuseColor = 0;
   SmallVector<DbAllocOp, 8> reuseMatches;
 };
 
-/// Release-level info: extends DbInfo with release position and op.
+/// Acquire-level info
+struct DbAcquireInfo : public DbInfo {
+  SmallVector<Value, 4> indices;
+  unsigned beginIndex = 0;
+  unsigned endIndex = 0;
+  DbAcquireOp acquire;
+  DbReleaseOp release;
+};
+
+/// Release-level info
 struct DbReleaseInfo : public DbInfo {
   unsigned releaseIndex = 0;
   DbReleaseOp release;

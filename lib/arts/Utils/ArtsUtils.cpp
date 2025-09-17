@@ -3,11 +3,10 @@
 /// Defines utility functions for the ARTS dialect.
 ///==========================================================================
 #include "arts/Utils/ArtsUtils.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "arts/ArtsDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LLVM.h"
-#include "polygeist/Ops.h"
 #include <algorithm>
 #include <cassert>
 
@@ -216,15 +215,48 @@ bool isValueConstant(Value val) {
   return false;
 };
 
+bool getConstantIndex(Value v, int64_t &out) {
+  if (!v)
+    return false;
+  if (auto c = v.getDefiningOp<arith::ConstantIndexOp>()) {
+    out = c.value();
+    return true;
+  }
+  if (auto c2 = v.getDefiningOp<arith::ConstantOp>()) {
+    if (auto intAttr = llvm::dyn_cast<mlir::IntegerAttr>(c2.getValue())) {
+      out = intAttr.getInt();
+      return true;
+    }
+  }
+  return false;
+}
+
+bool isNonZeroIndex(Value v) {
+  if (!v)
+    return false;
+  if (auto c = v.getDefiningOp<arith::ConstantIndexOp>())
+    return c.value() != 0;
+  return true;
+}
+
 Value getUnderlyingValue(Value v) {
+  if (!v)
+    return nullptr;
+
   if (v.isa<BlockArgument>()) {
     Block *block = v.getParentBlock();
     Operation *owner = block->getParentOp();
     if (auto edt = dyn_cast<EdtOp>(owner)) {
       unsigned argIndex = v.cast<BlockArgument>().getArgNumber();
-      return (argIndex < edt.getNumOperands())
-                 ? getUnderlyingValue(edt.getOperand(argIndex))
-                 : v;
+      /// EDT operands: route (index 0) + dependencies (index 1+)
+      /// Block arguments correspond to dependencies only
+      unsigned dependencyIndex = argIndex + 1;
+      if (dependencyIndex < edt.getNumOperands()) {
+        Value operand = edt.getOperand(dependencyIndex);
+        return getUnderlyingValue(operand);
+      } else {
+        return v;
+      }
     } else {
       /// Function argument
       return v;
@@ -254,7 +286,11 @@ Value getUnderlyingValue(Value v) {
 }
 
 Operation *getUnderlyingOperation(Value v) {
-  return getUnderlyingValue(v).getDefiningOp();
+  Value underlyingValue = getUnderlyingValue(v);
+  if (!underlyingValue)
+    return nullptr;
+
+  return underlyingValue.getDefiningOp();
 }
 
 uint64_t getElementTypeByteSize(Type elemTy) {
@@ -270,6 +306,16 @@ std::string sanitizeString(StringRef s) {
   std::replace(id.begin(), id.end(), '.', '_');
   std::replace(id.begin(), id.end(), '-', '_');
   return id;
+}
+
+bool equalRange(ValueRange a, ValueRange b) {
+  if (a.size() != b.size())
+    return false;
+  for (auto it = a.begin(), jt = b.begin(); it != a.end(); ++it, ++jt) {
+    if (*it != *jt)
+      return false;
+  }
+  return true;
 }
 
 } // namespace arts

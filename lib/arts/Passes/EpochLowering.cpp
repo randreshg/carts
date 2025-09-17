@@ -10,6 +10,7 @@
 /// 4. Return the epoch GUID for synchronization
 ///==========================================================================
 
+#include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
@@ -40,8 +41,7 @@ using namespace mlir::arts;
 //===----------------------------------------------------------------------===//
 // Epoch Lowering Pass Implementation
 //===----------------------------------------------------------------------===//
-struct EpochLoweringPass
-    : public PassWrapper<EpochLoweringPass, OperationPass<ModuleOp>> {
+struct EpochLoweringPass : public arts::EpochLoweringBase<EpochLoweringPass> {
   explicit EpochLoweringPass(bool debug = false) : debugMode(debug) {}
   ~EpochLoweringPass() { delete AC; }
 

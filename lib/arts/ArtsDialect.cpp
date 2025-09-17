@@ -556,3 +556,16 @@ SmallVector<Value> getSizesFromDb(Value datablockPtr) {
   /// If we can't find the sizes, return empty (will result in 1 element)
   return {};
 }
+
+//===----------------------------------------------------------------------===//
+// ForOp Canonicalization
+//===----------------------------------------------------------------------===//
+
+void arts::ForOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
+                                              MLIRContext *context) {
+  /// No canonicalization patterns for now
+  /// Future patterns could include:
+  ///  - Loop unrolling for small iteration counts
+  /// - Loop fusion for adjacent loops
+  /// - Loop invariant code motion
+}

@@ -40,6 +40,10 @@ def Db : Pass<"db", "mlir::ModuleOp"> {
     "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createDbPass()";
+  let options = [
+    Option<"exportJson", "export-json", "bool", /*default=*/"false",
+           "Export DB analysis to JSON files in output/ directory.">,
+  ];
 }
 
 def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
