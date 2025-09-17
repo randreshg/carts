@@ -4,6 +4,7 @@
 
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
+#include "arts/Analysis/LoopAnalysis.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -79,8 +80,7 @@ void DbAcquireNode::print(llvm::raw_ostream &os) const {
 }
 
 namespace {
-static void collectAliasedAccesses(Value root,
-                                   SmallVectorImpl<Operation *> &ops) {
+static void collectAccesses(Value root, SmallVectorImpl<Operation *> &ops) {
   SmallVector<Value, 8> worklist{root};
   DenseSet<Value> visited;
   while (!worklist.empty()) {
@@ -102,7 +102,7 @@ static void collectAliasedAccesses(Value root,
 } // namespace
 
 SmallVector<DbAcquireNode::OffsetRange, 4>
-DbAcquireNode::computeAccessedOffsetRanges() const {
+DbAcquireNode::computeAccessedOffsetRanges() {
   SmallVector<OffsetRange, 4> result;
   const size_t rank = info.sizes.size();
   result.resize(rank);
@@ -111,15 +111,16 @@ DbAcquireNode::computeAccessedOffsetRanges() const {
   if (!edt)
     return result;
 
-  Value ptr = cast<DbAcquireOp>(op).getPtr();
   SmallVector<Operation *, 16> accesses;
-  collectAliasedAccesses(ptr, accesses);
+  collectAccesses(dbAcquireOp.getPtr(), accesses);
 
   SmallVector<Value, 4> minIdx(rank, Value());
   SmallVector<Value, 4> maxIdx(rank, Value());
   SmallVector<bool, 4> minIsConst(rank, false), maxIsConst(rank, false);
   SmallVector<int64_t, 4> minConst(rank, std::numeric_limits<int64_t>::max());
   SmallVector<int64_t, 4> maxConst(rank, std::numeric_limits<int64_t>::min());
+  assert(analysis && "DbAnalysis must be available");
+  auto *loopAnalysis = analysis->getLoopAnalysis();
 
   for (Operation *acc : accesses) {
     Value mem;
@@ -162,22 +163,24 @@ DbAcquireNode::computeAccessedOffsetRanges() const {
       Value lbV, ubV;
       int64_t lbC = 0, ubm1C = 0;
       bool lbCst = false, ubCst = false;
-      if (auto ba = iv.dyn_cast<BlockArgument>()) {
-        if (auto forOp = dyn_cast<scf::ForOp>(ba.getOwner()->getParentOp())) {
-          if (iv == forOp.getInductionVar()) {
-            lbV = forOp.getLowerBound();
-            Value ubVtmp = forOp.getUpperBound();
-            Value stepV = forOp.getStep();
-            lbCst = arts::getConstantIndex(lbV, lbC);
-            int64_t ubC = 0, stC = 0;
-            bool ubCstTmp = arts::getConstantIndex(ubVtmp, ubC);
-            bool stCst = arts::getConstantIndex(stepV, stC);
-            if (ubCstTmp && stCst) {
-              ubCst = true;
-              ubm1C = ubC - stC;
-            }
-            ubV = ubVtmp; // exclusive bound
+
+      // Use LoopAnalysis to find loops affecting this index expression.
+      SmallVector<Operation *, 4> affecting;
+      loopAnalysis->collectAffectingLoops(iv, affecting);
+      if (affecting.size() == 1) {
+        if (auto forOp = dyn_cast<scf::ForOp>(affecting.front())) {
+          lbV = forOp.getLowerBound();
+          Value ubVtmp = forOp.getUpperBound();
+          Value stepV = forOp.getStep();
+          lbCst = arts::getConstantIndex(lbV, lbC);
+          int64_t ubC = 0, stC = 0;
+          bool ubCstTmp = arts::getConstantIndex(ubVtmp, ubC);
+          bool stCst = arts::getConstantIndex(stepV, stC);
+          if (ubCstTmp && stCst) {
+            ubCst = true;
+            ubm1C = ubC - stC;
           }
+          ubV = ubVtmp; // exclusive bound
         }
       }
       if (lbV || ubV || lbCst || ubCst) {
@@ -227,7 +230,7 @@ DbAcquireNode::computeAccessedOffsetRanges() const {
   return result;
 }
 
-SmallVector<Value, 4> DbAcquireNode::computeInvariantIndices() const {
+SmallVector<Value, 4> DbAcquireNode::computeInvariantIndices() {
   SmallVector<Value, 4> result;
   const size_t rank = info.sizes.size();
 
@@ -235,9 +238,8 @@ SmallVector<Value, 4> DbAcquireNode::computeInvariantIndices() const {
   if (!edt)
     return result;
 
-  Value ptr = cast<DbAcquireOp>(op).getPtr();
   SmallVector<Operation *, 16> accesses;
-  collectAliasedAccesses(ptr, accesses);
+  collectAccesses(dbAcquireOp.getPtr(), accesses);
 
   SmallVector<Value, 4> candidate(rank, Value());
   SmallVector<bool, 4> invalid(rank, false);

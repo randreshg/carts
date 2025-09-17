@@ -116,14 +116,14 @@ public:
   /// dimension, the acquire base offset and the best-known lower/upper index
   /// Values that were used (e.g., loop bounds or constant indices). No IR is
   /// created; if a bound cannot be proven, the corresponding Value is null.
-  SmallVector<OffsetRange, 4> computeAccessedOffsetRanges() const;
+  SmallVector<OffsetRange, 4> computeAccessedOffsetRanges();
 
   /// Compute a maximal prefix of invariant indices (one per leading dimension
   /// of the acquired memref) that are uniform across the EDT. These indices
   /// can be used to coarsen the acquire by pinning leading dimensions.
   /// The returned Values are SSA values already present in the IR; this API
   /// does not materialize new constants or perform replacements.
-  SmallVector<Value, 4> computeInvariantIndices() const;
+  SmallVector<Value, 4> computeInvariantIndices();
 
 private:
   DbAcquireOp dbAcquireOp;
