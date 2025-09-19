@@ -3,16 +3,11 @@
 ///==========================================================================
 
 #include "arts/Analysis/Edt/EdtAnalysis.h"
+#include "arts/Analysis/ArtsAnalysisManager.h"
+#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/ArtsUtils.h"
 /// Dialects
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-/// Others
-#include "arts/Analysis/Graphs/Db/DbGraph.h"
-#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/Transforms/RegionUtils.h"
 
 /// Debug
 #include "llvm/Support/Debug.h"
@@ -28,33 +23,33 @@ using namespace arts;
 /// EdtAnalysis
 ///==========================================================================
 
-EdtAnalysis::EdtAnalysis(Operation *module, DbGraph *db, EdtGraph *edt)
-    : module(cast<ModuleOp>(module)), dbGraph(db), edtGraph(edt) {
-  assert(module && "Module is required");
-  assert(dbGraph && "DbGraph is required");
-  assert(edtGraph && "EdtGraph is required");
+EdtAnalysis::EdtAnalysis(ArtsAnalysisManager &AM) : AM(AM) {
+  assert(AM.getModule() && "Module is required");
 }
 
 void EdtAnalysis::analyze() {
-  for (auto func : module.getOps<func::FuncOp>()) {
+  for (auto func : AM.getModule().getOps<func::FuncOp>())
     analyzeFunc(func);
-  }
 }
 
 void EdtAnalysis::analyzeFunc(func::FuncOp func) {
   unsigned edtIndex = 0;
+  EdtGraph &edtGraph = getOrCreateEdtGraph(func);
   func.walk([&](EdtOp edt) {
-    auto edtNode = edtGraph->getEdtNode(edt);
+    auto edtNode = edtGraph.getEdtNode(edt);
     auto &info = edtNode->getInfo();
     info.orderIndex = edtIndex;
     edtOrderIndex[edt] = edtIndex++;
   });
 }
 
-EdtPairAffinity EdtAnalysis::affinity(EdtOp from, EdtOp to) const {
+EdtPairAffinity EdtAnalysis::affinity(EdtOp from, EdtOp to) {
+  /// TODO: Fix this
   EdtPairAffinity result;
-  auto edtFrom = edtGraph->getEdtNode(from);
-  auto edtTo = edtGraph->getEdtNode(to);
+  auto parentFunc = from->getParentOfType<func::FuncOp>();
+  EdtGraph &edtGraph = getOrCreateEdtGraph(parentFunc);
+  auto edtFrom = edtGraph.getEdtNode(from);
+  auto edtTo = edtGraph.getEdtNode(to);
   const EdtInfo *edtInfoFrom = &edtFrom->getInfo();
   const EdtInfo *edtInfoTo = &edtTo->getInfo();
 
@@ -124,11 +119,12 @@ EdtPairAffinity EdtAnalysis::affinity(EdtOp from, EdtOp to) const {
   return result;
 }
 
-void EdtAnalysis::print(func::FuncOp func, llvm::raw_ostream &os) const {
+void EdtAnalysis::print(func::FuncOp func, llvm::raw_ostream &os) {
   os << "EdtAnalysis for function: " << func.getName() << "\n";
 
+  EdtGraph &edtGraph = getOrCreateEdtGraph(func);
   func.walk([&](EdtOp edt) {
-    auto edtNode = edtGraph->getEdtNode(edt);
+    auto edtNode = edtGraph.getEdtNode(edt);
     const EdtInfo *edtInfo = &edtNode->getInfo();
     if (edtInfo) {
       unsigned edtIndex = edtInfo->orderIndex;
@@ -147,15 +143,16 @@ void EdtAnalysis::print(func::FuncOp func, llvm::raw_ostream &os) const {
   });
 }
 
-void EdtAnalysis::toJson(func::FuncOp func, llvm::raw_ostream &os) const {
+void EdtAnalysis::toJson(func::FuncOp func, llvm::raw_ostream &os) {
   os << "{\n";
   os << "  \"function\": \"" << func.getName() << "\",\n";
   os << "  \"edts\": [\n";
 
   bool first = true;
+  EdtGraph &edtGraph = getOrCreateEdtGraph(func);
   func.walk([&](Operation *op) {
     if (auto edt = dyn_cast<EdtOp>(op)) {
-      auto edtNode = static_cast<EdtNode *>(edtGraph->getNode(op));
+      auto edtNode = static_cast<EdtNode *>(edtGraph.getNode(op));
       const EdtInfo *edtInfo = &edtNode->getInfo();
 
       if (edtInfo) {
@@ -181,4 +178,35 @@ void EdtAnalysis::toJson(func::FuncOp func, llvm::raw_ostream &os) const {
 
   os << "\n  ]\n";
   os << "}\n";
+}
+
+EdtGraph &EdtAnalysis::getOrCreateEdtGraph(func::FuncOp func) {
+  auto it = edtGraphs.find(func);
+  if (it != edtGraphs.end())
+    return *it->second.get();
+  // Build using DbGraph from DbAnalysis for consistency
+  DbGraph &db = AM.getDbAnalysis().getOrCreateGraph(func);
+  auto eg = std::make_unique<EdtGraph>(func, &db);
+  eg->build();
+  auto *ptr = eg.get();
+  const_cast<EdtAnalysis *>(this)->edtGraphs[func] = std::move(eg);
+  return *ptr;
+}
+
+bool EdtAnalysis::invalidateEdtGraph(func::FuncOp func) {
+  auto it = edtGraphs.find(func);
+  if (it != edtGraphs.end()) {
+    if (it->second)
+      it->second->invalidate();
+    edtGraphs.erase(it);
+    return true;
+  }
+  return false;
+}
+
+void EdtAnalysis::invalidate() {
+  for (auto &kv : edtGraphs)
+    if (kv.second)
+      kv.second->invalidate();
+  edtGraphs.clear();
 }

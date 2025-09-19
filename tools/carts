@@ -53,7 +53,6 @@ show_usage() {
     echo "Commands:"
     print_cmd "build [options]"             "Build CARTS project using system clang"
     print_cmd "cgeist <file> [options]"     "Run cgeist with automatic include paths"
-    print_cmd "opt <file> [options]"        "Run carts-opt"
     print_cmd "run [options]"               "Run CARTS MLIR transformations"
     print_cmd "mlir-translate <file> [options]" "Run mlir-translate"
     print_cmd "compile <file> [options]"    "Compile with ARTS runtime"
@@ -104,7 +103,6 @@ show_usage() {
     
     echo ""
     echo "  # Development and testing"
-    print_cmd "carts opt simple.mlir --lower-affine --cse" "Apply MLIR optimizations"
     print_cmd "carts run --help"               "Show pipeline options"
     print_cmd "carts check"                    "Run all CARTS tests"
     print_cmd "carts check --suite arts"      "Run only ARTS tests"
@@ -167,14 +165,6 @@ run_cgeist() {
     "${POLYGEIST_INSTALL_DIR}/bin/cgeist" "${include_paths[@]}" "${extra_cflags[@]}" "$input_file" "$@"
 }
 
-# Function to run carts-opt
-run_opt() {
-    if [[ -n "$CARTS_VERBOSE" ]]; then
-        echo "Running carts-opt: ${CARTS_INSTALL_DIR}/bin/carts-opt $*"
-    fi
-    
-    "${CARTS_INSTALL_DIR}/bin/carts-opt" "$@"
-}
 
 # Function to run carts-run (the C++ executable)
 run_run() {
@@ -730,9 +720,6 @@ main() {
             ;;
         "cgeist")
             run_cgeist "$@"
-            ;;
-        "opt")
-            run_opt "$@"
             ;;
         "run")
             run_run "$@"

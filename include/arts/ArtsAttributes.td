@@ -103,4 +103,17 @@ def DbReleaseType : Arts_I32Enum<"DbReleaseType",
 /// Enum attribute for DB release types
 def DbReleaseTypeAttr : Arts_I32EnumAttr<"release_type", DbReleaseType>;
 
+
+def ForScheduleKind : Arts_I32Enum<"ForScheduleKind",
+    "ARTS for-loop schedule kind",
+    [
+      I32EnumAttrCase<"Static", 0, "static">,
+      I32EnumAttrCase<"Dynamic", 1, "dynamic">,
+      I32EnumAttrCase<"Guided", 2, "guided">,
+      I32EnumAttrCase<"Auto", 3, "auto">,
+      I32EnumAttrCase<"Runtime", 4, "runtime">
+    ]>;
+
+def ForScheduleKindAttr : Arts_I32EnumAttr<"for_schedule", ForScheduleKind>;
+
 #endif // ARTS_ATTRS

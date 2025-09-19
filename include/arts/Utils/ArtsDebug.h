@@ -11,9 +11,17 @@
 
 namespace mlir {
 namespace arts {
+#define ARTS_DEBUG_COLORS true
+
 /// Returns the ARTS debug output stream. Intended as the single entrypoint
 /// for emitting debug logs so callers don't use llvm::dbgs() directly.
-static inline llvm::raw_ostream &debugStream() { return llvm::dbgs(); }
+static inline llvm::raw_ostream &debugStream() {
+  static llvm::raw_ostream &stream = llvm::errs();
+  // Force color support if we're connected to a terminal
+  if (stream.is_displayed())
+    stream.enable_colors(ARTS_DEBUG_COLORS);
+  return stream;
+}
 
 /// Common line separator used in debug headers/footers
 #ifndef ARTS_LINE
@@ -84,34 +92,38 @@ static inline llvm::raw_ostream &debugStream() { return llvm::dbgs(); }
 #define ARTS_INFO(x)                                                           \
   DEBUG_WITH_TYPE(ARTS_DEBUG_TYPE_STR, {                                       \
     auto &__os = ARTS_DBGS();                                                  \
-    __os.changeColor(llvm::raw_ostream::WHITE, /*bold=*/true);                 \
-    __os << "[INFO] " << x << "\n";                                            \
+    __os.changeColor(llvm::raw_ostream::BLUE, /*bold=*/true);                  \
+    __os << "[INFO] [" << ARTS_DEBUG_TYPE_STR << "]";                          \
     __os.resetColor();                                                         \
+    __os << " " << x << "\n";                                                  \
   })
 
 #define ARTS_DEBUG(x)                                                          \
   DEBUG_WITH_TYPE(ARTS_DEBUG_TYPE_STR, {                                       \
     auto &__os = ARTS_DBGS();                                                  \
     __os.changeColor(llvm::raw_ostream::MAGENTA, /*bold=*/true);               \
-    __os << "[DEBUG] " << x << "\n";                                           \
+    __os << "[DEBUG] [" << ARTS_DEBUG_TYPE_STR << "]";                         \
     __os.resetColor();                                                         \
+    __os << " " << x << "\n";                                                  \
   })
 
 #define ARTS_WARN(x)                                                           \
   DEBUG_WITH_TYPE(ARTS_DEBUG_TYPE_STR, {                                       \
     auto &__os = ARTS_DBGS();                                                  \
     __os.changeColor(llvm::raw_ostream::YELLOW, /*bold=*/true);                \
-    __os << "[WARN] " << x << "\n";                                            \
+    __os << "[WARN] [" << ARTS_DEBUG_TYPE_STR << "]";                          \
     __os.resetColor();                                                         \
+    __os << " " << x << "\n";                                                  \
   })
 
 #define ARTS_ERROR(x)                                                          \
-  DEBUG_WITH_TYPE(ARTS_DEBUG_TYPE_STR, {                                       \
-    auto &__os = ARTS_DBGS();                                                  \
+  {                                                                            \
+    auto &__os = llvm::errs();                                                 \
     __os.changeColor(llvm::raw_ostream::RED, /*bold=*/true);                   \
-    __os << "[ERROR] " << x << "\n";                                           \
+    __os << "[ERROR] [" << ARTS_DEBUG_TYPE_STR << "]";                         \
     __os.resetColor();                                                         \
-  })
+    __os << " " << x << "\n";                                                  \
+  }
 } // namespace arts
 } // namespace mlir
 #endif // ARTS_UTILS_ARTSDEBUG_H

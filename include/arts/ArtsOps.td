@@ -636,14 +636,15 @@ def ForOp : Arts_Op<"for", [AttrSizedOperandSegments, SingleBlockImplicitTermina
   
   let arguments = (ins Variadic<Index>:$lowerBound, 
                       Variadic<Index>:$upperBound, 
-                      Variadic<Index>:$step);
+                      Variadic<Index>:$step,
+                      OptionalAttr<ForScheduleKindAttr>:$schedule);
   let results = (outs);
   let regions = (region AnyRegion:$region);
   
   let assemblyFormat = [{
-    `for` `(` $lowerBound `)` `to` `(` $upperBound `)` `step` `(` $step `)` `{`
-      $region
-    `}` attr-dict
+    `(` $lowerBound `)` `to` `(` $upperBound `)` `step` `(` $step `)`
+    ( `schedule` `(` $schedule^ `)` )?
+    `{` $region `}` attr-dict
   }];
   
   let hasCanonicalizer = true;

@@ -31,8 +31,10 @@
 #include "polygeist/Dialect.h"
 #include "polygeist/Passes/Passes.h"
 
+#include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
+#include "arts/Utils/ArtsDebug.h"
 #include "llvm/Support/InitLLVM.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/ToolOutputFile.h"
@@ -40,6 +42,8 @@
 
 using namespace llvm;
 using namespace mlir;
+
+ARTS_DEBUG_SETUP(carts_run)
 
 //===----------------------------------------------------------------------===//
 // Interface Attachments
@@ -88,38 +92,41 @@ static cl::opt<bool> ExportJson(
 // Pipeline Stop Options
 //===----------------------------------------------------------------------===//
 enum class PipelineStage {
-  Simplify,      // After initial cleanup and simplification
-  ArtsInliner,   // After ARTS inliner
-  ConvertOpenMP, // After ConvertOpenMPToARTS
-  EdtTransforms, // After EDT transformations
-  EdtLowering,   // After EDT lowering
-  Datablock,     // After datablock creation and optimization
-  Epochs,        // After epoch creation
-  ArtsToLLVM,    // After ConvertArtsToLLVM
-  Complete       // Full pipeline (default)
+  Simplify,         // After initial cleanup and simplification
+  ArtsInliner,      // After ARTS inliner
+  ConvertOpenMP,    // After ConvertOpenMPToARTS
+  EdtTransforms,    // After EDT transformations
+  EdtOptimizations, // After EDT optimizations
+  EdtLowering,      // After EDT lowering
+  Datablock,        // After datablock creation and optimization
+  Epochs,           // After epoch creation
+  ArtsToLLVM,       // After ConvertArtsToLLVM
+  Complete          // Full pipeline (default)
 };
 
-static cl::opt<PipelineStage>
-    StopAt(cl::desc("Stop pipeline at specified stage:"),
-           cl::values(clEnumValN(PipelineStage::Simplify, "simplify",
-                                 "Stop after simplification"),
-                      clEnumValN(PipelineStage::ArtsInliner, "arts-inliner",
-                                 "Stop after ARTS inliner"),
-                      clEnumValN(PipelineStage::ConvertOpenMP, "convert-openmp",
-                                 "Stop after OpenMP conversion"),
-                      clEnumValN(PipelineStage::EdtTransforms, "edt-transforms",
-                                 "Stop after EDT transformations"),
-                      clEnumValN(PipelineStage::Datablock, "datablock",
-                                 "Stop after datablock optimization"),
-                      clEnumValN(PipelineStage::Epochs, "epochs",
-                                 "Stop after epoch creation"),
-                      clEnumValN(PipelineStage::EdtLowering, "edt-lowering",
-                                 "Stop after EDT lowering"),
-                      clEnumValN(PipelineStage::ArtsToLLVM, "arts-to-llvm",
-                                 "Stop after ARTS to LLVM conversion"),
-                      clEnumValN(PipelineStage::Complete, "complete",
-                                 "Run complete pipeline (default)")),
-           cl::init(PipelineStage::Complete));
+static cl::opt<PipelineStage> StopAt(
+    cl::desc("Stop pipeline at specified stage:"),
+    cl::values(clEnumValN(PipelineStage::Simplify, "simplify",
+                          "Stop after simplification"),
+               clEnumValN(PipelineStage::ArtsInliner, "arts-inliner",
+                          "Stop after ARTS inliner"),
+               clEnumValN(PipelineStage::ConvertOpenMP, "convert-openmp",
+                          "Stop after OpenMP conversion"),
+               clEnumValN(PipelineStage::EdtTransforms, "edt-transforms",
+                          "Stop after EDT transformations"),
+               clEnumValN(PipelineStage::Datablock, "datablock",
+                          "Stop after datablock optimization"),
+               clEnumValN(PipelineStage::Epochs, "epochs",
+                          "Stop after epoch creation"),
+               clEnumValN(PipelineStage::EdtOptimizations, "edt-optimizations",
+                          "Stop after EDT optimizations"),
+               clEnumValN(PipelineStage::EdtLowering, "edt-lowering",
+                          "Stop after EDT lowering"),
+               clEnumValN(PipelineStage::ArtsToLLVM, "arts-to-llvm",
+                          "Stop after ARTS to LLVM conversion"),
+               clEnumValN(PipelineStage::Complete, "complete",
+                          "Run complete pipeline (default)")),
+    cl::init(PipelineStage::Complete));
 
 //===----------------------------------------------------------------------===//
 // Helper Functions for Initialization and Pass Setup
@@ -185,6 +192,9 @@ void initializeContext(MLIRContext &context) {
 /// Configure the pass manager with the optimization passes.
 void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
                       PipelineStage stopAt = PipelineStage::Complete) {
+  // Create module-level analysis manager for caching across functions
+  std::unique_ptr<arts::ArtsAnalysisManager> AM =
+      std::make_unique<arts::ArtsAnalysisManager>(module);
 
   /// Complete pipeline
   if (stopAt == PipelineStage::Complete) {
@@ -216,17 +226,19 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     pm.addPass(arts::createConvertOpenMPtoARTSPass());
     pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(createSymbolDCEPass());
-    pm.addPass(arts::createEdtPass());
+    pm.addPass(arts::createEdtPass(AM.get(), false));
     pm.addPass(arts::createEdtInvariantCodeMotionPass());
     pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(arts::createCreateDbsPass(IdentifyDbs));
     pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(createCSEPass());
     pm.addPass(createMem2Reg());
-    pm.addPass(arts::createDbPass(ExportJson));
+    pm.addPass(arts::createDbPass(AM.get(), ExportJson));
     pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(createCSEPass());
     pm.addPass(createMem2Reg());
+    pm.addPass(arts::createEdtPass(AM.get(), true));
+    pm.addPass(arts::createConcurrencyPass(AM.get()));
     pm.addPass(arts::createEdtPtrRematerializationPass());
     pm.addPass(arts::createCreateEpochsPass());
     pm.addPass(polygeist::createPolygeistCanonicalizePass());
@@ -238,7 +250,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(arts::createConvertArtsToLLVMPass(Debug));
     if (mlir::failed(pm.run(module))) {
-      llvm::errs() << "Error running CARTS pipeline";
+      ARTS_ERROR("Error running CARTS pipeline");
       module->dump();
       return;
     }
@@ -255,7 +267,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
       optPM.addPass(polygeist::createPolygeistCanonicalizePass());
 
       if (mlir::failed(pm2.run(module))) {
-        llvm::errs() << "Error when running optimizations";
+        ARTS_ERROR("Error when running optimizations");
         module->dump();
         return;
       }
@@ -270,7 +282,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
       pm3.addPass(polygeist::createPolygeistCanonicalizePass());
       pm3.addPass(createCSEPass());
       if (mlir::failed(pm3.run(module))) {
-        llvm::errs() << "Error when emitting LLVM IR";
+        ARTS_ERROR("Error when emitting LLVM IR");
         module->dump();
         return;
       }
@@ -309,7 +321,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     optPM.addPass(polygeist::createPolygeistCanonicalizePass());
 
     if (mlir::failed(pm.run(module))) {
-      llvm::errs() << "Error simplyfing the IR";
+      ARTS_ERROR("Error simplyfing the IR");
       module->dump();
       return;
     }
@@ -323,7 +335,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     PassManager pm(&context);
     pm.addPass(arts::createArtsInlinerPass());
     if (mlir::failed(pm.run(module))) {
-      llvm::errs() << "Error when running ARTS inliner";
+      ARTS_ERROR("Error when running ARTS inliner");
       module->dump();
       return;
     }
@@ -339,7 +351,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(createSymbolDCEPass());
     if (mlir::failed(pm.run(module))) {
-      llvm::errs() << "Error when converting OpenMP to ARTS";
+      ARTS_ERROR("Error when converting OpenMP to ARTS");
       module->dump();
       return;
     }
@@ -351,11 +363,11 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   /// EDT transformations
   {
     PassManager pm(&context);
-    pm.addPass(arts::createEdtPass());
+    pm.addPass(arts::createEdtPass(AM.get(), true));
     pm.addPass(arts::createEdtInvariantCodeMotionPass());
     pm.addPass(polygeist::createPolygeistCanonicalizePass());
     if (mlir::failed(pm.run(module))) {
-      llvm::errs() << "Error when running EDT transformations";
+      ARTS_ERROR("Error when running EDT transformations");
       module->dump();
       return;
     }
@@ -371,18 +383,33 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(createCSEPass());
     pm.addPass(createMem2Reg());
-    pm.addPass(arts::createDbPass(ExportJson));
+    pm.addPass(arts::createDbPass(AM.get(), ExportJson));
     pm.addPass(polygeist::createPolygeistCanonicalizePass());
     pm.addPass(createCSEPass());
     pm.addPass(createMem2Reg());
     if (mlir::failed(pm.run(module))) {
-      llvm::errs() << "Error when running datablock passes";
+      ARTS_ERROR("Error when running datablock passes");
       module->dump();
       return;
     }
   }
 
   if (stopAt == PipelineStage::Datablock)
+    return;
+
+  /// EDT optimizations
+  {
+    PassManager pm(&context);
+    pm.addPass(arts::createEdtPass(AM.get(), true));
+    pm.addPass(arts::createConcurrencyPass(AM.get()));
+    pm.addPass(polygeist::createPolygeistCanonicalizePass());
+    if (mlir::failed(pm.run(module))) {
+      ARTS_ERROR("Error when running EDT optimizations");
+      module->dump();
+      return;
+    }
+  }
+  if (stopAt == PipelineStage::EdtOptimizations)
     return;
 
   /// Create epochs
@@ -393,7 +420,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     pm.addPass(arts::createCreateEpochsPass());
     pm.addPass(polygeist::createPolygeistCanonicalizePass());
     if (mlir::failed(pm.run(module))) {
-      llvm::errs() << "Error when creating epochs";
+      ARTS_ERROR("Error when creating epochs");
       module->dump();
       return;
     }
@@ -414,7 +441,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     pm.addPass(createCSEPass());
     pm.addPass(createMem2Reg());
     if (mlir::failed(pm.run(module))) {
-      llvm::errs() << "Error when running EDT lowering";
+      ARTS_ERROR("Error when running EDT lowering");
       module->dump();
       return;
     }
@@ -434,7 +461,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     pm.addPass(createControlFlowSinkPass());
     pm.addPass(polygeist::createPolygeistCanonicalizePass());
     if (mlir::failed(pm.run(module))) {
-      llvm::errs() << "Error when converting ARTS to LLVM";
+      ARTS_ERROR("Error when converting ARTS to LLVM");
       module->dump();
       return;
     }
@@ -460,15 +487,14 @@ int main(int argc, char **argv) {
   /// Open the input file.
   auto file = openInputFile(InputFilename);
   if (!file) {
-    llvm::errs() << "Error: Could not open input file: " << InputFilename
-                 << "\n";
+    ARTS_ERROR("Could not open input file: " << InputFilename);
     return 1;
   }
 
   /// Parse the input module.
   auto module = parseSourceString<ModuleOp>(file->getBuffer(), &context);
   if (!module) {
-    llvm::errs() << "Error: Could not parse input file\n";
+    ARTS_ERROR("Could not parse input file");
     return 1;
   }
 
@@ -482,7 +508,7 @@ int main(int argc, char **argv) {
     auto llvmModule = translateModuleToLLVMIR(module.get(), llvmContext);
     if (!llvmModule) {
       module->dump();
-      llvm::errs() << "Failed to emit LLVM IR\n";
+      ARTS_ERROR("Failed to emit LLVM IR");
       return -1;
     }
     std::string llvmIR;
@@ -491,8 +517,7 @@ int main(int argc, char **argv) {
 
     auto output = openOutputFile(OutputFilename);
     if (!output) {
-      llvm::errs() << "Error: Could not open output file: " << OutputFilename
-                   << "\n";
+      ARTS_ERROR("Could not open output file: " << OutputFilename);
       return 1;
     }
     output->os() << llvmStream.str();
@@ -501,8 +526,7 @@ int main(int argc, char **argv) {
     /// Otherwise, print the final MLIR module.
     auto output = openOutputFile(OutputFilename);
     if (!output) {
-      llvm::errs() << "Error: Could not open output file: " << OutputFilename
-                   << "\n";
+      ARTS_ERROR("Could not open output file: " << OutputFilename);
       return 1;
     }
     module->print(output->os());

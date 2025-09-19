@@ -11,9 +11,6 @@
 #include "mlir/Support/LLVM.h"
 /// Arts
 #include "ArtsPassDetails.h"
-// #include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Edt/EdtAnalysis.h"
-#include "arts/Analysis/Graphs/ArtsGraphManager.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
@@ -28,18 +25,10 @@
 ARTS_DEBUG_SETUP(create_epochs);
 
 using namespace mlir;
-using namespace mlir::func;
-using namespace mlir::arith;
 using namespace mlir::arts;
 
-// Helper functions for EdtOp attribute management
-static bool isSync(EdtOp op) {
-  auto typeAttr = op.getTypeAttr();
-  return typeAttr && typeAttr.getValue() == EdtType::sync;
-}
 
 static void clearIsSyncAttr(EdtOp op) {
-  // Remove sync type - set to single as default
   auto newTypeAttr = EdtTypeAttr::get(op.getContext(), EdtType::single);
   op.setTypeAttr(newTypeAttr);
 }
@@ -50,17 +39,17 @@ static void setIsTaskAttr(EdtOp op) {
 }
 
 /// Helper function to process synchronous EDT ops.
-static void processSyncEdtOp(arts::EdtOp op) {
+static void processSyncEdtOp(EdtOp op) {
   /// Only process EDT ops with sync attribute.
-  if (!isSync(op))
+  if (op.getTypeAttr().getValue() != EdtType::sync)
     return;
 
   auto loc = op.getLoc();
   OpBuilder builder(op);
-  auto epochOp = builder.create<arts::EpochOp>(loc);
+  auto epochOp = builder.create<EpochOp>(loc);
   auto &epochBlock = epochOp.getBody().emplaceBlock();
   builder.setInsertionPointToEnd(&epochBlock);
-  builder.create<arts::YieldOp>(loc);
+  builder.create<YieldOp>(loc);
 
   /// Move the EDT op to the end of the new block.
   op->moveBefore(&epochBlock, --epochBlock.end());
@@ -71,12 +60,12 @@ static void processSyncEdtOp(arts::EdtOp op) {
 }
 
 /// Helper function to process barrier ops
-static void processBarrierOp(arts::BarrierOp barrier) {
+static void processBarrierOp(BarrierOp barrier) {
   ARTS_DEBUG_TYPE("Processing BarrierOp");
   auto loc = barrier.getLoc();
 
   bool hasParentEdt = true;
-  Operation *parentOp = barrier->getParentOfType<arts::EdtOp>();
+  Operation *parentOp = barrier->getParentOfType<EdtOp>();
   if (!parentOp) {
     parentOp = barrier->getParentOfType<func::FuncOp>();
     hasParentEdt = false;
@@ -84,9 +73,9 @@ static void processBarrierOp(arts::BarrierOp barrier) {
 
   /// Determine the appropriate parent insertion point.
   Region *parentIP = nullptr;
-  parentOp->walk([&](arts::EdtOp childEdt) {
+  parentOp->walk([&](EdtOp childEdt) {
     /// Check if the childEDT is a direct child of the parentOp when necessary.
-    if (hasParentEdt && (childEdt->getParentOfType<arts::EdtOp>() != parentOp))
+    if (hasParentEdt && (childEdt->getParentOfType<EdtOp>() != parentOp))
       return;
 
     /// Skip the childEDT if it cannot reach the barrier.
@@ -120,7 +109,7 @@ static void processBarrierOp(arts::BarrierOp barrier) {
 
   /// Create a new epoch op and prepare its region.
   OpBuilder builder(parentIP);
-  auto epochOp = builder.create<arts::EpochOp>(loc);
+  auto epochOp = builder.create<EpochOp>(loc);
   auto &epochRegion = epochOp.getRegion();
   if (epochRegion.empty())
     epochRegion.push_back(new Block());
@@ -134,7 +123,7 @@ static void processBarrierOp(arts::BarrierOp barrier) {
 
   /// Finalize epoch block by inserting a yield op.
   builder.setInsertionPointToEnd(newBlock);
-  builder.create<arts::YieldOp>(loc);
+  builder.create<YieldOp>(loc);
 
   /// Remove the barrier op.
   barrier.erase();
@@ -144,7 +133,7 @@ static void processBarrierOp(arts::BarrierOp barrier) {
 // Pass Implementation
 ///==========================================================================
 namespace {
-struct CreateEpochsPass : public arts::CreateEpochsBase<CreateEpochsPass> {
+struct CreateEpochsPass : public CreateEpochsBase<CreateEpochsPass> {
   void runOnOperation() override;
 };
 } // end namespace
@@ -156,11 +145,11 @@ void CreateEpochsPass::runOnOperation() {
 
   /// Process Sync EDT Ops: for each EDT op that is sync, create an epoch op
   /// and move the EDT op inside the epoch op.
-  module.walk([](arts::EdtOp op) { processSyncEdtOp(op); });
+  module.walk([](EdtOp op) { processSyncEdtOp(op); });
 
   /// Process Barrier Ops: for each barrier, collect all EDTs that are affected
   /// by the barrier and embed them in a new epoch op.
-  module.walk([&](arts::BarrierOp barrier) { processBarrierOp(barrier); });
+  module.walk([&](BarrierOp barrier) { processBarrierOp(barrier); });
 
   ARTS_DEBUG_FOOTER(CreateEpochsPass);
   ARTS_DEBUG_REGION(module.dump(););
