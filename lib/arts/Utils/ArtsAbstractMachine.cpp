@@ -2,8 +2,12 @@
 /// File: ArtsAbstractMachine.cpp
 ///
 /// Implementation of ARTS Abstract Machine with comprehensive configuration
-/// parsing and machine information capabilities.
+/// parsing and abstractMachine information capabilities.
 ///==========================================================================
+
+/// Debug
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(abstract_machine);
 
 #include "arts/Utils/ArtsAbstractMachine.h"
 #include <algorithm>
@@ -13,141 +17,195 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 
 namespace mlir {
 namespace arts {
 
-ArtsAbstractMachine::ArtsAbstractMachine() {
-  std::error_code ec;
-  auto cwd = std::filesystem::current_path(ec);
-  assert(!ec && "Failed to get current working directory");
+ArtsAbstractMachine::ArtsAbstractMachine(const std::string &configFile) {
+  ARTS_DEBUG_HEADER(AbstractMachine);
 
-  auto path = (cwd / "arts.cfg").string();
-  auto parsed = parseFromFile(path);
-  assert(parsed.has_value() &&
-         "Failed to parse arts.cfg from current directory");
+  /// Helper function to get default config path
+  auto getDefaultConfigPath = [&]() -> std::string {
+    std::error_code ec;
+    auto cwd = std::filesystem::current_path(ec);
+    if (ec) {
+      ARTS_ERROR("Failed to get current working directory: " << ec.message());
+      configFileExists = false;
+      return "";
+    }
+    return (cwd / "arts.cfg").string();
+  };
 
-  *this = std::move(parsed.value());
-  assert(isValid() && "Invalid arts.cfg: threads and nodeCount must be > 0");
+  /// Check if config file is provided - if not, use default config path
+  std::string path;
+  if (!configFile.empty())
+    path = configFile;
+  else 
+    path = getDefaultConfigPath();
+
+  ARTS_DEBUG("Looking for configuration file at: " << path);
+  if (!parseFromFile(path)) {
+    ARTS_ERROR("No arts.cfg file found at " << path);
+    configFileExists = false;
+    return;
+  }
+
+  /// Validate the configuration
+  if (!validateConfiguration())
+    ARTS_WARN("Configuration validation failed - using defaults");
+  else
+    ARTS_INFO("Configuration loaded successfully");
+  ARTS_DEBUG_FOOTER(AbstractMachine);
 }
 
-std::optional<ArtsAbstractMachine>
-ArtsAbstractMachine::parseFromFile(const std::string &path) {
+bool ArtsAbstractMachine::parseFromFile(const std::string &path) {
   std::ifstream in(path);
-  if (!in.is_open())
-    return std::nullopt;
+  if (!in.is_open()) {
+    ARTS_DEBUG("Could not open configuration file: " << path);
+    return false;
+  }
 
-  ArtsAbstractMachine machine;
+  ARTS_DEBUG("Successfully opened configuration file: " << path);
+
+  configFileExists = true; 
   std::string line;
   bool inArtsSection = false;
+  int lineNumber = 0;
 
   while (std::getline(in, line)) {
+    lineNumber++;
     line = trim(line);
-    if (line.empty() || line[0] == '#')
-      continue;
-    if (line.front() == '[' && line.back() == ']') {
-      inArtsSection = (line == "[ARTS]");
+    if (line.empty() || line[0] == '#') {
+      if (!line.empty())
+        ARTS_DEBUG("Line " << lineNumber << " (comment): " << line);
       continue;
     }
-    if (!inArtsSection)
+    if (line.front() == '[' && line.back() == ']') {
+      inArtsSection = (line == "[ARTS]");
+      ARTS_DEBUG("Line " << lineNumber << " (section): " << line
+                         << " - inArtsSection="
+                         << (inArtsSection ? "true" : "false"));
       continue;
+    }
+    if (!inArtsSection) {
+      ARTS_DEBUG("Line " << lineNumber << " (skipped): " << line);
+      continue;
+    }
 
     auto pos = line.find('=');
-    if (pos == std::string::npos)
+    if (pos == std::string::npos) {
+      ARTS_DEBUG("Line " << lineNumber << " (no equals): " << line);
       continue;
+    }
     std::string key = trim(line.substr(0, pos));
     std::string val = trim(line.substr(pos + 1));
+    ARTS_DEBUG("Line " << lineNumber << " (config): " << key << "=" << val);
 
     /// Core Configuration
-    if (key == "threads")
-      machine.threads = parseInt(val);
-    else if (key == "tMT")
-      machine.tMT = parseInt(val, 0);
-    else if (key == "nodeCount")
-      machine.nodeCount = parseInt(val);
-    else if (key == "nodes")
-      machine.nodes = splitCSV(val);
-    else if (key == "masterNode")
-      machine.masterNode = val;
-    else if (key == "launcher")
-      machine.launcher = val;
+    if (key == "threads") {
+      threads = parseInt(val);
+      ARTS_DEBUG("Set threads=" << threads);
+    } else if (key == "tMT") {
+      tMT = parseInt(val, 0);
+      ARTS_DEBUG("Set tMT=" << tMT);
+    } else if (key == "nodeCount") {
+      nodeCount = parseInt(val);
+      ARTS_DEBUG("Set nodeCount=" << nodeCount);
+    } else if (key == "nodes") {
+      nodes = splitCSV(val);
+      ARTS_DEBUG("Set nodes=" << val << " (parsed " << nodes.size()
+                              << " nodes)");
+    } else if (key == "masterNode") {
+      masterNode = val;
+      ARTS_DEBUG("Set masterNode=" << masterNode);
+    } else if (key == "launcher") {
+      launcher = val;
+      ARTS_DEBUG("Set launcher=" << launcher);
+    }
 
     /// GPU Configuration
     else if (key == "scheduler")
-      machine.scheduler = parseInt(val, 0);
+      scheduler = parseInt(val, 0);
     else if (key == "gpu")
-      machine.gpu = parseInt(val, 0);
+      gpu = parseInt(val, 0);
     else if (key == "gpuRouteTableSize")
-      machine.gpuRouteTableSize = parseInt(val, 12);
+      gpuRouteTableSize = parseInt(val, 12);
     else if (key == "freeDbAfterGpuRun")
-      machine.freeDbAfterGpuRun = parseBool(val, false);
+      freeDbAfterGpuRun = parseBool(val, false);
     else if (key == "deleteZerosGpuGc")
-      machine.deleteZerosGpuGc = parseBool(val, true);
+      deleteZerosGpuGc = parseBool(val, true);
     else if (key == "runGpuGcIdle")
-      machine.runGpuGcIdle = parseBool(val, true);
+      runGpuGcIdle = parseBool(val, true);
     else if (key == "runGpuGcPreEdt")
-      machine.runGpuGcPreEdt = parseBool(val, false);
+      runGpuGcPreEdt = parseBool(val, false);
     else if (key == "gpuLocality")
-      machine.gpuLocality = parseInt(val, 0);
+      gpuLocality = parseInt(val, 0);
     else if (key == "gpuFit")
-      machine.gpuFit = parseInt(val, 0);
+      gpuFit = parseInt(val, 0);
     else if (key == "gpuLCSync")
-      machine.gpuLCSync = parseInt(val, 0);
+      gpuLCSync = parseInt(val, 0);
     else if (key == "gpuBufferOn")
-      machine.gpuBufferOn = parseBool(val, true);
+      gpuBufferOn = parseBool(val, true);
     else if (key == "gpuMaxMemory")
-      machine.gpuMaxMemory = parseInt(val, -1);
+      gpuMaxMemory = parseInt(val, -1);
     else if (key == "gpuMaxEdts")
-      machine.gpuMaxEdts = parseInt(val, -1);
+      gpuMaxEdts = parseInt(val, -1);
     else if (key == "gpuP2P")
-      machine.gpuP2P = parseBool(val, false);
+      gpuP2P = parseBool(val, false);
 
     /// Network Configuration
     else if (key == "outgoing")
-      machine.outgoing = parseInt(val, 1);
+      outgoing = parseInt(val, 1);
     else if (key == "incoming")
-      machine.incoming = parseInt(val, 1);
+      incoming = parseInt(val, 1);
     else if (key == "ports")
-      machine.ports = parseInt(val, 1);
+      ports = parseInt(val, 1);
     else if (key == "protocol")
-      machine.protocol = val;
+      protocol = val;
     else if (key == "port")
-      machine.port = parseInt(val, 34739);
+      port = parseInt(val, 34739);
     else if (key == "netInterface")
-      machine.netInterface = val;
+      netInterface = val;
 
     /// Hardware Configuration
     else if (key == "pinStride")
-      machine.pinStride = parseInt(val, 1);
+      pinStride = parseInt(val, 1);
     else if (key == "printTopology")
-      machine.printTopology = parseBool(val, false);
+      printTopology = parseBool(val, false);
     else if (key == "workerInitDequeSize")
-      machine.workerInitDequeSize = parseInt(val, 2048);
+      workerInitDequeSize = parseInt(val, 2048);
     else if (key == "routeTableSize")
-      machine.routeTableSize = parseInt(val, 16);
+      routeTableSize = parseInt(val, 16);
     else if (key == "coreDump")
-      machine.coreDump = parseBool(val, true);
+      coreDump = parseBool(val, true);
 
     /// Performance Monitoring
     else if (key == "counterFolder")
-      machine.counterFolder = val;
+      counterFolder = val;
     else if (key == "counterStartPoint")
-      machine.counterStartPoint = parseInt(val, 1);
+      counterStartPoint = parseInt(val, 1);
     else if (key == "killMode")
-      machine.killMode = parseBool(val, false);
+      killMode = parseBool(val, false);
 
     /// Introspection
     else if (key == "introspectiveConf")
-      machine.introspectiveConf = val;
+      introspectiveConf = val;
     else if (key == "introspectiveFolder")
-      machine.introspectiveFolder = val;
+      introspectiveFolder = val;
     else if (key == "introspectiveTraceLevel")
-      machine.introspectiveTraceLevel = parseInt(val, 0);
+      introspectiveTraceLevel = parseInt(val, 0);
     else if (key == "introspectiveStartPoint")
-      machine.introspectiveStartPoint = parseInt(val, 1);
+      introspectiveStartPoint = parseInt(val, 1);
   }
-  return machine;
+
+  ARTS_DEBUG("Finished parsing configuration file");
+  ARTS_INFO("Final configuration - threads=" << threads
+                                             << ", nodeCount=" << nodeCount
+                                             << ", launcher=" << launcher);
+
+  return true;
 }
 
 std::string ArtsAbstractMachine::getMachineDescription() const {
@@ -242,6 +300,70 @@ bool ArtsAbstractMachine::parseBool(const std::string &value,
   std::string lower = value;
   std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
   return lower == "1" || lower == "true" || lower == "yes" || lower == "on";
+}
+
+bool ArtsAbstractMachine::validateConfiguration() {
+  ARTS_DEBUG("Validating configuration...");
+
+  bool isValid = true;
+
+  /// Check core requirements
+  if (threads <= 0) {
+    ARTS_WARN("Invalid threads value: " << threads << " (must be > 0)");
+    isValid = false;
+  }
+
+  if (nodeCount <= 0) {
+    ARTS_WARN("Invalid nodeCount value: " << nodeCount << " (must be > 0)");
+    isValid = false;
+  }
+
+  /// Check nodes consistency
+  if (nodes.empty()) {
+    ARTS_WARN("No nodes specified");
+    isValid = false;
+  } else if (static_cast<int>(nodes.size()) != nodeCount) {
+    ARTS_WARN("Nodes count (" << nodes.size() << ") doesn't match nodeCount ("
+                              << nodeCount << ")");
+    isValid = false;
+  }
+
+  /// Check master node is in nodes list
+  if (!nodes.empty() &&
+      std::find(nodes.begin(), nodes.end(), masterNode) == nodes.end()) {
+    ARTS_WARN("Master node '" << masterNode << "' not found in nodes list");
+    isValid = false;
+  }
+
+  /// Check GPU configuration consistency
+  if (hasGpuSupport()) {
+    if (gpu <= 0) {
+      ARTS_WARN("GPU support enabled but gpu count is " << gpu);
+      isValid = false;
+    }
+    if (scheduler != 3) {
+      ARTS_WARN("GPU support requires scheduler=3, got " << scheduler);
+      isValid = false;
+    }
+  }
+
+  /// Check network configuration
+  if (outgoing <= 0 || incoming <= 0) {
+    ARTS_WARN("Invalid network thread counts: outgoing="
+              << outgoing << ", incoming=" << incoming);
+    isValid = false;
+  }
+
+  if (port <= 0 || port > 65535) {
+    ARTS_WARN("Invalid port number: " << port);
+    isValid = false;
+  }
+
+  /// Set the validation flag
+  isValidFlag = isValid;
+
+  ARTS_DEBUG("Configuration validation " << (isValid ? "PASSED" : "FAILED"));
+  return isValid;
 }
 
 } // namespace arts

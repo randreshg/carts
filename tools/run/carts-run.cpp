@@ -88,6 +88,11 @@ static cl::opt<bool> ExportJson(
     cl::desc("Export DB analysis to JSON files in output/ directory"),
     cl::init(false));
 
+static cl::opt<std::string> ArtsConfig("arts-config",
+                                       cl::desc("ARTS configuration file path"),
+                                       cl::value_desc("config_file"),
+                                       cl::init(""));
+
 //===----------------------------------------------------------------------===//
 // Pipeline Stop Options
 //===----------------------------------------------------------------------===//
@@ -104,29 +109,29 @@ enum class PipelineStage {
   Complete          // Full pipeline (default)
 };
 
-static cl::opt<PipelineStage> StopAt(
-    cl::desc("Stop pipeline at specified stage:"),
-    cl::values(clEnumValN(PipelineStage::Simplify, "simplify",
-                          "Stop after simplification"),
-               clEnumValN(PipelineStage::ArtsInliner, "arts-inliner",
-                          "Stop after ARTS inliner"),
-               clEnumValN(PipelineStage::ConvertOpenMP, "convert-openmp",
-                          "Stop after OpenMP conversion"),
-               clEnumValN(PipelineStage::EdtTransforms, "edt-transforms",
-                          "Stop after EDT transformations"),
-               clEnumValN(PipelineStage::Datablock, "datablock",
-                          "Stop after datablock optimization"),
-               clEnumValN(PipelineStage::Epochs, "epochs",
-                          "Stop after epoch creation"),
-               clEnumValN(PipelineStage::EdtOptimizations, "edt-optimizations",
-                          "Stop after EDT optimizations"),
-               clEnumValN(PipelineStage::EdtLowering, "edt-lowering",
-                          "Stop after EDT lowering"),
-               clEnumValN(PipelineStage::ArtsToLLVM, "arts-to-llvm",
-                          "Stop after ARTS to LLVM conversion"),
-               clEnumValN(PipelineStage::Complete, "complete",
-                          "Run complete pipeline (default)")),
-    cl::init(PipelineStage::Complete));
+static cl::opt<PipelineStage>
+    StopAt(cl::desc("Stop pipeline at specified stage:"),
+           cl::values(clEnumValN(PipelineStage::Simplify, "simplify",
+                                 "Stop after simplification"),
+                      clEnumValN(PipelineStage::ArtsInliner, "arts-inliner",
+                                 "Stop after ARTS inliner"),
+                      clEnumValN(PipelineStage::ConvertOpenMP, "convert-openmp",
+                                 "Stop after OpenMP conversion"),
+                      clEnumValN(PipelineStage::EdtTransforms, "edt-transforms",
+                                 "Stop after EDT transformations"),
+                      clEnumValN(PipelineStage::Datablock, "datablock",
+                                 "Stop after datablock optimization"),
+                      clEnumValN(PipelineStage::Epochs, "epochs",
+                                 "Stop after epoch creation"),
+                      clEnumValN(PipelineStage::EdtOptimizations, "edt-opt",
+                                 "Stop after EDT optimizations"),
+                      clEnumValN(PipelineStage::EdtLowering, "edt-lowering",
+                                 "Stop after EDT lowering"),
+                      clEnumValN(PipelineStage::ArtsToLLVM, "arts-to-llvm",
+                                 "Stop after ARTS to LLVM conversion"),
+                      clEnumValN(PipelineStage::Complete, "complete",
+                                 "Run complete pipeline (default)")),
+           cl::init(PipelineStage::Complete));
 
 //===----------------------------------------------------------------------===//
 // Helper Functions for Initialization and Pass Setup
@@ -163,6 +168,7 @@ void initializeContext(MLIRContext &context) {
   context.getOrLoadDialect<mlir::memref::MemRefDialect>();
   context.getOrLoadDialect<mlir::linalg::LinalgDialect>();
   context.getOrLoadDialect<mlir::polygeist::PolygeistDialect>();
+  context.getOrLoadDialect<mlir::arts::ArtsDialect>();
   context.getOrLoadDialect<mlir::cf::ControlFlowDialect>();
 
   /// Register all necessary interfaces for LLVM conversion
@@ -194,7 +200,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
                       PipelineStage stopAt = PipelineStage::Complete) {
   // Create module-level analysis manager for caching across functions
   std::unique_ptr<arts::ArtsAnalysisManager> AM =
-      std::make_unique<arts::ArtsAnalysisManager>(module);
+      std::make_unique<arts::ArtsAnalysisManager>(module, ArtsConfig);
 
   /// Complete pipeline
   if (stopAt == PipelineStage::Complete) {
@@ -363,7 +369,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   /// EDT transformations
   {
     PassManager pm(&context);
-    pm.addPass(arts::createEdtPass(AM.get(), true));
+    pm.addPass(arts::createEdtPass(AM.get(), false));
     pm.addPass(arts::createEdtInvariantCodeMotionPass());
     pm.addPass(polygeist::createPolygeistCanonicalizePass());
     if (mlir::failed(pm.run(module))) {

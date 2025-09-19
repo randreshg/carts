@@ -2,14 +2,14 @@
 /// File: ArtsAbstractMachine.h
 ///
 /// This file defines the ARTS Abstract Machine representation that reads
-/// configuration files and provides comprehensive information about machine
-/// capabilities, threading, networking, GPU support, and execution parameters.
+/// configuration files and provides comprehensive information about
+/// abstractMachine capabilities, threading, networking, GPU support, and
+/// execution parameters.
 ///==========================================================================
 
 #pragma once
 
 #include <cassert>
-#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -17,15 +17,9 @@
 namespace mlir {
 namespace arts {
 
-/// ARTS Abstract Machine with comprehensive configuration parsing and machine
-/// information
 class ArtsAbstractMachine {
 public:
-  ArtsAbstractMachine();
-
-  /// Parse arts.cfg at the given path. Returns std::nullopt on failure.
-  static std::optional<ArtsAbstractMachine>
-  parseFromFile(const std::string &path);
+  ArtsAbstractMachine(const std::string &configFile = "");
 
   /// Core Machine Configuration
   int getThreads() const { return threads; }
@@ -75,16 +69,23 @@ public:
   int getTotalWorkerThreads() const { return threads * nodeCount; }
   int getTotalGpuThreads() const { return hasGpuSupport() ? gpu : 0; }
 
-  /// Get machine description as a formatted string
+  /// Get abstractMachine description as a formatted string
   std::string getMachineDescription() const;
 
   /// Get configuration summary
   std::string getConfigurationSummary() const;
 
+  /// Configuration file status
+  bool hasConfigFile() const { return configFileExists; }
+  bool isValid() const { return isValidFlag; }
+
   /// Validation methods
   bool hasValidThreads() const { return threads > 0; }
   bool hasValidNodeCount() const { return nodeCount > 0; }
-  bool isValid() const { return hasValidThreads() && hasValidNodeCount(); }
+  bool validateConfiguration();
+
+  /// Parse arts.cfg at the given path. Returns false on failure.
+  bool parseFromFile(const std::string &path);
 
 private:
   static std::string trim(const std::string &s);
@@ -94,10 +95,11 @@ private:
   static bool parseBool(const std::string &value, bool defaultValue = false);
 
   /// Core Configuration
-  int threads = -1;
+  int threads = 1;
   int tMT = 0;
-  int nodeCount = -1;
-  std::vector<std::string> nodes;
+  int nodeCount = 1;
+
+  std::vector<std::string> nodes = {"localhost"};
   std::string masterNode = "localhost";
   std::string launcher = "ssh";
 
@@ -142,7 +144,11 @@ private:
   std::string introspectiveFolder = "./introspective";
   int introspectiveTraceLevel = 0;
   int introspectiveStartPoint = 1;
+
+  /// Configuration file status
+  bool configFileExists = false;
+  bool isValidFlag = false;
 };
 
-} /// namespace arts
-} /// namespace mlir
+} // namespace arts
+} // namespace mlir
