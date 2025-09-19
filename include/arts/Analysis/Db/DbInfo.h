@@ -12,6 +12,7 @@
 
 namespace mlir {
 namespace arts {
+class DbAcquireNode;
 
 /// DbInfo aggregates facts and hints about a datablock.
 struct DbInfo {
@@ -67,15 +68,13 @@ struct DbAllocInfo : public DbInfo {
   unsigned numReleases = 0;
   /// 0 if unknown
   unsigned long long staticBytes = 0;
-  SmallVector<class DbAcquireNode *, 8> acquireNodes;
+  SmallVector<DbAcquireNode *, 8> acquireNodes;
   bool isLongLived = false;
   bool maybeEscaping = false;
   unsigned maxLoopDepth = 0;
   unsigned criticalSpan = 0;
   unsigned criticalPath = 0;
   unsigned long long totalAccessBytes = 0;
-  /// Reuse info (graph coloring and candidate matches)
-  unsigned reuseColor = 0;
   SmallVector<DbAllocOp, 8> reuseMatches;
 };
 

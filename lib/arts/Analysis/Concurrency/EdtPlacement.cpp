@@ -3,7 +3,7 @@
 /// Defines greedy EDT placement scorer for optimal task scheduling.
 ///==========================================================================
 
-#include "arts/Analysis/Edt/EdtPlacement.h"
+#include "arts/Analysis/Concurrency/EdtPlacement.h"
 
 using namespace mlir;
 using namespace mlir::arts;

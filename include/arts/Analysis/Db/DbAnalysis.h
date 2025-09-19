@@ -9,7 +9,7 @@
 
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/IR/Operation.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "llvm/ADT/DenseMap.h"
 
 // Forward declarations
@@ -20,6 +20,7 @@ class DbAliasAnalysis;
 struct LoopAnalysis;
 class DbDataFlowAnalysis;
 class DbAcquireOp;
+class ArtsAnalysisManager;
 } // namespace arts
 } // namespace mlir
 
@@ -27,20 +28,25 @@ namespace mlir {
 namespace arts {
 
 /// Central manager for DB-related analyses across a module.
+class ArtsAnalysisManager;
+
 class DbAnalysis {
 public:
-  DbAnalysis(Operation *module);
+  DbAnalysis(ArtsAnalysisManager &AM);
 
   ~DbAnalysis();
 
   /// Get or create DbGraph for a function, building if needed.
-  DbGraph *getOrCreateGraph(func::FuncOp func);
+  DbGraph &getOrCreateGraph(func::FuncOp func);
 
   /// Get or create DbGraph without edges/metrics (nodes only).
-  DbGraph *getOrCreateGraphNodesOnly(func::FuncOp func);
+  DbGraph &getOrCreateGraphNodesOnly(func::FuncOp func);
 
   /// Invalidate graph for a function.
   bool invalidateGraph(func::FuncOp func);
+
+  /// Invalidate all graphs
+  void invalidate();
 
   /// Print analysis for a function.
   void print(func::FuncOp func);
@@ -64,7 +70,7 @@ public:
   OverlapKind estimateOverlap(arts::DbAcquireOp a, arts::DbAcquireOp b);
 
 private:
-  Operation *module;
+  ArtsAnalysisManager &AM;
   llvm::DenseMap<func::FuncOp, std::unique_ptr<DbGraph>> functionGraphMap;
   std::unique_ptr<DbAliasAnalysis> dbAliasAnalysis;
   std::unique_ptr<LoopAnalysis> loopAnalysis;

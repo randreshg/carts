@@ -4,7 +4,7 @@
 
 int main(int argc, char *argv[]) {
   if (argc < 2) {
-    fprintf(stderr, "Usage: %s <N>\n", argv[0]);
+    printf("Usage: %s N\n", argv[0]);
     exit(EXIT_FAILURE);
   }
   const int N = atoi(argv[1]);

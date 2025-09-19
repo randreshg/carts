@@ -1,6 +1,6 @@
 ///==========================================================================
 /// File: EdtPlacement.h
-/// Defines heuristics for EDT node placement (analysis-only).
+/// Defines heuristics for EDT node placement
 ///==========================================================================
 
 #ifndef ARTS_ANALYSIS_EDT_EDTPLACEMENT_H
@@ -52,7 +52,7 @@ public:
                     llvm::raw_ostream &os) const;
 
 private:
-  EdtGraph *edtGraph = nullptr; 
+  EdtGraph *edtGraph = nullptr;
   EdtAnalysis *edtAnalysis = nullptr;
 };
 

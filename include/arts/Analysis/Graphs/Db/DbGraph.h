@@ -64,6 +64,10 @@ public:
 
   /// Apply a function to every node (alloc/acquire/release)
   void forEachNode(const std::function<void(NodeBase *)> &fn) const override;
+  void forEachAllocNode(const std::function<void(DbAllocNode *)> &fn) const;
+  void forEachAcquireNode(const std::function<void(DbAcquireNode *)> &fn) const;
+  void forEachReleaseNode(const std::function<void(DbReleaseNode *)> &fn) const;
+
   bool addEdge(NodeBase *from, NodeBase *to, EdgeBase *edge) override;
 
   /// Db-specific methods
@@ -73,10 +77,14 @@ public:
   /// Whether two allocations may alias according to analysis.
   bool mayAlias(DbAllocOp alloc1, DbAllocOp alloc2);
 
+  /// Get allocation info for a given allocation operation
+  const DbAllocInfo &getAllocInfo(DbAllocOp alloc) const;
+
   /// For acquire/release
   bool hasAcquireReleasePair(DbAllocOp alloc);
 
   /// For GraphTraits iterators
+  bool isEmpty() const override { return nodes.empty(); }
   NodesIterator nodesBegin() override { return nodes.begin(); }
   NodesIterator nodesEnd() override { return nodes.end(); }
   ChildIterator childBegin(NodeBase *node) override;
@@ -101,7 +109,6 @@ private:
   void buildDependencies();
   void computeOpOrder();
   void computeMetrics();
-  void computeReuseColoring();
   std::string generateAllocId(unsigned id);
   std::string getFunctionName() const;
 
@@ -118,13 +125,6 @@ private:
   void computePeakMetrics();
   void computeReuseCandidates();
   void populateChildrenCache(NodeBase *node);
-
-public:
-  /// Iterate only allocation nodes
-  void forEachAllocNode(const std::function<void(DbAllocNode *)> &fn) const {
-    for (const auto &pair : allocNodes)
-      fn(pair.second.get());
-  }
 
 private:
   DenseMap<Operation *, unsigned> opOrder;
