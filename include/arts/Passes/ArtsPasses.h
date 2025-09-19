@@ -23,10 +23,8 @@ std::unique_ptr<Pass> createArtsInlinerPass();
 std::unique_ptr<Pass> createConvertOpenMPtoARTSPass();
 std::unique_ptr<Pass> createEdtPass(ArtsAnalysisManager *AM,
                                     bool runAnalysis);
-std::unique_ptr<Pass> createConcurrencyPass();
 std::unique_ptr<Pass>
 createConcurrencyPass(ArtsAnalysisManager *AM);
-std::unique_ptr<Pass> createCreateDbsPass();
 std::unique_ptr<Pass> createCreateDbsPass(bool identifyDbs);
 std::unique_ptr<Pass> createDbPass(ArtsAnalysisManager *AM,
                                    bool exportJson);

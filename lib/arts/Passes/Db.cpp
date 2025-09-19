@@ -139,12 +139,12 @@ void DbPass::runOnOperation() {
     exportToJson();
 
   /// Global dimensionality reduction at allocation level
-  bool dimReduced = reduceAllocDimensionality();
-  changed |= dimReduced;
+  // bool dimReduced = reduceAllocDimensionality();
+  // changed |= dimReduced;
 
-  /// Per-acquire slice tightening (offset narrowing and splitting)
-  bool tightened = tightenAcquireSlices();
-  changed |= tightened;
+  // /// Per-acquire slice tightening (offset narrowing and splitting)
+  // bool tightened = tightenAcquireSlices();
+  // changed |= tightened;
 
   /// bool ctpChanged = convertToParameters();
   /// changed |= ctpChanged;

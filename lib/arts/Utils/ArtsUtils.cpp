@@ -248,11 +248,9 @@ Value getUnderlyingValue(Value v) {
     Operation *owner = block->getParentOp();
     if (auto edt = dyn_cast<EdtOp>(owner)) {
       unsigned argIndex = v.cast<BlockArgument>().getArgNumber();
-      /// EDT operands: route (index 0) + dependencies (index 1+)
-      /// Block arguments correspond to dependencies only
-      unsigned dependencyIndex = argIndex + 1;
-      if (dependencyIndex < edt.getNumOperands()) {
-        Value operand = edt.getOperand(dependencyIndex);
+      /// Block arguments correspond directly to EDT operands
+      if (argIndex < edt.getNumOperands()) {
+        Value operand = edt.getOperand(argIndex);
         return getUnderlyingValue(operand);
       } else {
         return v;
@@ -265,7 +263,6 @@ Value getUnderlyingValue(Value v) {
     /// Handle different operation types
     if (isa<DbAllocOp, memref::AllocOp, memref::AllocaOp, memref::GetGlobalOp>(
             op)) {
-      /// Root objects
       return v;
     } else if (auto dbAcquire = dyn_cast<DbAcquireOp>(op)) {
       return getUnderlyingValue(dbAcquire.getSourcePtr());
@@ -290,7 +287,58 @@ Operation *getUnderlyingOperation(Value v) {
   if (!underlyingValue)
     return nullptr;
 
-  return underlyingValue.getDefiningOp();
+  /// If the underlying value is a result of an operation, return that operation
+  if (auto definingOp = underlyingValue.getDefiningOp())
+    return definingOp;
+
+  return nullptr;
+}
+
+/// Returns the datablock-producing/consuming op tied to a value if present.
+Operation *getUnderlyingDb(Value v) {
+  if (!v)
+    return nullptr;
+
+  /// Directly return the DbAcquireOp or DbAllocOp if present
+  if (auto acq = v.getDefiningOp<DbAcquireOp>())
+    return acq.getOperation();
+  if (auto alloc = v.getDefiningOp<DbAllocOp>())
+    return alloc.getOperation();
+
+  /// If it's a block argument of an EDT, map to the corresponding operand and
+  /// recurse. Block arguments correspond to dependencies (after optional
+  /// route).
+  if (auto blockArg = v.dyn_cast<BlockArgument>()) {
+    Block *block = blockArg.getOwner();
+    Operation *owner = block->getParentOp();
+    if (auto edt = dyn_cast<EdtOp>(owner)) {
+      unsigned argIndex = blockArg.getArgNumber();
+      /// EDT operands layout: [optional route] [dependencies...]
+      unsigned numOperands = edt.getNumOperands();
+      if (argIndex < numOperands) {
+        Value operand = edt.getOperand(argIndex);
+        return getUnderlyingDb(operand);
+      }
+    }
+  }
+
+  /// Peel through common view/cast/gep nodes to reach DB ops
+  if (Operation *def = v.getDefiningOp()) {
+    if (auto gep = dyn_cast<DbGepOp>(def))
+      return getUnderlyingDb(gep.getBasePtr());
+    if (auto castOp = dyn_cast<memref::CastOp>(def))
+      return getUnderlyingDb(castOp.getSource());
+    if (auto subview = dyn_cast<memref::SubViewOp>(def))
+      return getUnderlyingDb(subview.getSource());
+  }
+
+  /// As a last resort, try underlying root op if it's a DB op
+  if (Operation *root = getUnderlyingOperation(v)) {
+    if (isa<DbAcquireOp, DbAllocOp>(root))
+      return root;
+  }
+
+  return nullptr;
 }
 
 uint64_t getElementTypeByteSize(Type elemTy) {
