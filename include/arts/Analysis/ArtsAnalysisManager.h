@@ -10,12 +10,12 @@
 #ifndef ARTS_ANALYSIS_ARTSANALYSISMANAGER_H
 #define ARTS_ANALYSIS_ARTSANALYSISMANAGER_H
 
+#include "arts/Analysis/Concurrency/ConcurrencyAnalysis.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Edt/EdtAnalysis.h"
-#include "arts/Analysis/Concurrency/ConcurrencyAnalysis.h"
+#include "arts/Utils/ArtsAbstractMachine.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "llvm/ADT/DenseMap.h"
 #include <memory>
 
 namespace mlir {
@@ -34,7 +34,7 @@ class ConcurrencyGraph;
 class ArtsAnalysisManager {
 public:
   /// Module-level constructor for external ownership and caching across funcs
-  ArtsAnalysisManager(ModuleOp module);
+  ArtsAnalysisManager(ModuleOp module, const std::string &configFile = "");
 
   /// Destructor
   ~ArtsAnalysisManager();
@@ -58,6 +58,15 @@ public:
   /// Get the module containing the function
   ModuleOp &getModule() { return module; }
 
+  /// Get the configuration file path
+  const std::string &getConfigFile() const { return configFile; }
+
+  /// Get the ARTS abstract machine
+  ArtsAbstractMachine &getAbstractMachine() { return abstractMachine; }
+  const ArtsAbstractMachine &getAbstractMachine() const {
+    return abstractMachine;
+  }
+
   /// Print summary of analysis objects and their graphs
   void print(llvm::raw_ostream &os);
 
@@ -66,6 +75,8 @@ public:
 
 private:
   ModuleOp module;
+  std::string configFile;
+  ArtsAbstractMachine abstractMachine;
   bool built = false;
 
   std::unique_ptr<DbAnalysis> dbAnalysis;

@@ -61,6 +61,15 @@ bool isNonZeroIndex(Value v);
 Value getUnderlyingValue(Value v);
 Operation *getUnderlyingOperation(Value v);
 
+/// Return the Datablock operation associated with a value, if any.
+/// - If the value is produced by arts.db_acquire, returns that DbAcquireOp.
+/// - If the value is produced by arts.db_alloc, returns that DbAllocOp.
+/// - If the value is a BlockArgument of an arts.edt body, attempts to map it
+///   to its corresponding operand (skipping route if present) and returns the
+///   associated DbAcquireOp if found. Traces through simple view/cast/gep ops.
+/// Returns nullptr if no associated DB operation can be determined.
+Operation *getUnderlyingDb(Value v);
+
 /// Get the byte size of an element type.
 /// Returns the size in bytes for IntegerType and FloatType, 0 for unknown
 /// types.

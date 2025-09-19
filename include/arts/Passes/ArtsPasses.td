@@ -56,7 +56,7 @@ def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
     "arith::ArithDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createCreateDbsPass()";
+  let constructor = "mlir::arts::createCreateDbsPass(true)";
   let options = [
     Option<"identifyDbs", "identify-dbs", "bool", /*default=*/"true",
            "Automatically identify the datablocks.">,
@@ -104,7 +104,7 @@ def Concurrency : Pass<"concurrency", "mlir::ModuleOp"> {
     "func::FuncDialect",
     "arts::ArtsDialect"
   ];
-  let constructor = "mlir::arts::createConcurrencyPass()";
+  let constructor = "mlir::arts::createConcurrencyPass(nullptr)";
 }
 
 def CreateEpochs : Pass<"create-epochs", "mlir::ModuleOp"> {

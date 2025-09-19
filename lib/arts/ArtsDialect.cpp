@@ -16,6 +16,7 @@
 #include <cassert>
 
 #include "arts/ArtsDialect.h"
+#include "arts/Utils/ArtsUtils.h"
 #include "polygeist/Ops.h"
 
 using namespace mlir;
@@ -519,38 +520,21 @@ void DbNumElementsOp::build(OpBuilder &builder, OperationState &state,
 /// Helper function to extract sizes from a datablock pointer
 /// by finding the original DbAllocOp or DbAcquireOp that created it
 SmallVector<Value> getSizesFromDb(Value datablockPtr) {
-  /// Find the defining operation of the datablock pointer
-  Operation *defOp = datablockPtr.getDefiningOp();
-  if (!defOp)
+  /// Use getUnderlyingDb to find the original DB operation
+  Operation *underlyingDb = arts::getUnderlyingDb(datablockPtr);
+  if (!underlyingDb)
     return {};
 
   /// Check if it's a DbAllocOp result
-  if (auto allocOp = dyn_cast<DbAllocOp>(defOp)) {
+  if (auto allocOp = dyn_cast<DbAllocOp>(underlyingDb)) {
     return SmallVector<Value>(allocOp.getSizes().begin(),
                               allocOp.getSizes().end());
   }
 
   /// Check if it's a DbAcquireOp result
-  if (auto acquireOp = dyn_cast<DbAcquireOp>(defOp)) {
+  if (auto acquireOp = dyn_cast<DbAcquireOp>(underlyingDb)) {
     return SmallVector<Value>(acquireOp.getSizes().begin(),
                               acquireOp.getSizes().end());
-  }
-
-  /// If sizes are empty and targetPtr is a block argument, try to trace
-  /// back through EDT parameters to find the original db_acquire operation
-  if (datablockPtr.isa<BlockArgument>()) {
-    if (auto blockArg = datablockPtr.dyn_cast<BlockArgument>()) {
-      Block *block = blockArg.getOwner();
-      if (auto edtOp = dyn_cast_or_null<arts::EdtOp>(block->getParentOp())) {
-        // Get the corresponding dependency from the EDT operation
-        auto deps = edtOp.getDependencies();
-        unsigned argIdx = blockArg.getArgNumber();
-        if (argIdx < deps.size()) {
-          Value originalDep = deps[argIdx];
-          return getSizesFromDb(originalDep);
-        }
-      }
-    }
   }
 
   /// If we can't find the sizes, return empty (will result in 1 element)

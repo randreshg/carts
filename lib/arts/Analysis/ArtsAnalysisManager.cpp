@@ -15,7 +15,9 @@
 using namespace mlir;
 using namespace mlir::arts;
 
-ArtsAnalysisManager::ArtsAnalysisManager(ModuleOp module) : module(module) {}
+ArtsAnalysisManager::ArtsAnalysisManager(ModuleOp module,
+                                         const std::string &configFile)
+    : module(module), configFile(configFile), abstractMachine(configFile) {}
 
 ArtsAnalysisManager::~ArtsAnalysisManager() {}
 

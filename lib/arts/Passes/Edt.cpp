@@ -38,7 +38,6 @@ struct EdtPass : public arts::EdtBase<EdtPass> {
     this->runAnalysis = runAnalysis;
   }
   void runOnOperation() override;
-  bool lowerSingle(EdtOp &op);
   bool convertParallelIntoSingle(EdtOp &op);
 
   /// Utility for creating EDT with merged dependencies and region transfer
@@ -55,53 +54,62 @@ struct EdtPass : public arts::EdtBase<EdtPass> {
                                          arts::EdtGraph &graph);
 
 private:
-  SetVector<Operation *> opsToRemove;
   ModuleOp module;
   ArtsAnalysisManager *AM = nullptr;
+  SetVector<Operation *> opsToRemove;
 };
 } // namespace
 
-/// Utility function to create a new EDT operation with merged dependencies
-/// and transfer the region from the source operation.
-EdtOp EdtPass::createEdtWithMergedDepsAndRegion(
-    OpBuilder &builder, Location loc, arts::EdtType newType, EdtOp sourceOp,
-    ArrayRef<Value> additionalDeps) {
+void EdtPass::runOnOperation() {
+  module = getOperation();
+  ARTS_DEBUG_HEADER(EdtPass);
+  ARTS_DEBUG_REGION(module.dump(););
 
-  /// Collect all dependencies from source operation
-  SetVector<Value> allDeps;
-  for (Value dep : sourceOp.getDependencies())
-    allDeps.insert(dep);
-
-  /// Add any additional dependencies
-  for (Value dep : additionalDeps)
-    allDeps.insert(dep);
-
-  /// Create new EDT operation with merged dependencies
-  auto newEdt =
-      builder.create<arts::EdtOp>(loc, newType, allDeps.getArrayRef());
-
-  /// Transfer region from source to new operation
-  Region &sourceRegion = sourceOp.getRegion();
-  Region &newRegion = newEdt.getRegion();
-
-  /// Clear new region and transfer blocks
-  if (newRegion.empty())
-    newRegion.push_back(new Block());
-  Block &newBody = newRegion.front();
-  newBody.clear();
-
-  /// Move operations from source region to new region
-  SmallVector<Operation *, 16> opsToMove;
-  for (auto &block : sourceRegion) {
-    for (auto &op : block)
-      opsToMove.push_back(&op);
+  if (runAnalysis) {
+    ARTS_INFO("Running EDT pass with analysis");
+    // removeBarriers();
+  } else {
+    ARTS_INFO("Running EDT pass without analysis");
+    processParallelEdts();
+    processSyncTaskEdts();
   }
 
-  /// Move operations to new region
-  for (auto *opToMove : opsToMove)
-    opToMove->moveBefore(&newBody, newBody.end());
+  /// Remove ops marked for removal
+  OpBuilder builder(module.getContext());
+  removeOps(module, builder, opsToRemove);
 
-  return newEdt;
+  ARTS_DEBUG_FOOTER(EdtPass);
+  ARTS_DEBUG_REGION(module.dump(););
+}
+
+/// Remove unconditional barriers that provide no additional ordering beyond
+/// computed EDT dependencies (graph-informed pruning).
+bool EdtPass::removeBarriers() {
+  bool changed = false;
+  module.walk([&](func::FuncOp func) {
+    auto &edtGraph = AM->getEdtGraph(func);
+    if (edtGraph.size() == 0) {
+      return;
+    }
+
+    changed |= removeRedundantBarriersWithGraphs(func, edtGraph);
+  });
+  return changed;
+}
+
+bool EdtPass::processParallelEdts() {
+  /// Gather all parallel-EDT ops in the module.
+  SmallVector<EdtOp, 8> parallelOps;
+  module.walk([&](EdtOp edt) {
+    if (edt.getType() == arts::EdtType::parallel)
+      parallelOps.push_back(edt);
+  });
+
+  /// Try to convert parallel EDTs into single EDTs if they contain exactly one
+  /// child.
+  for (EdtOp op : parallelOps)
+    convertParallelIntoSingle(op);
+  return true;
 }
 
 /// Converts a parallel EDT region into a sync-task EDT when it contains a
@@ -152,63 +160,47 @@ bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
   return true;
 }
 
-/// Lower a single EDT: For now, clear single attr and set to sync-task if
-/// top-level. Can be enhanced later for more complex single handling.
-bool EdtPass::lowerSingle(EdtOp &op) {
-  ARTS_INFO("Lowering single EDT");
+/// Utility function to create a new EDT operation with merged dependencies
+/// and transfer the region from the source operation.
+EdtOp EdtPass::createEdtWithMergedDepsAndRegion(
+    OpBuilder &builder, Location loc, arts::EdtType newType, EdtOp sourceOp,
+    ArrayRef<Value> additionalDeps) {
 
-  /// Collect inner dependencies
+  /// Collect all dependencies from source operation
   SetVector<Value> allDeps;
-  op.walk([&](EdtOp inner) {
-    if (inner == op)
-      return WalkResult::advance();
-    for (Value dep : inner.getDependencies()) {
-      allDeps.insert(dep);
-    }
-    return WalkResult::advance();
-  });
+  for (Value dep : sourceOp.getDependencies())
+    allDeps.insert(dep);
 
-  /// Always create new EDT with merged dependencies using utility function
-  /// This avoids the problematic insertOperands approach and simplifies the
-  /// code
-  OpBuilder builder(op);
-  auto newEdt = createEdtWithMergedDepsAndRegion(
-      builder, op.getLoc(), arts::EdtType::sync, op, allDeps.getArrayRef());
-  op->replaceAllUsesWith(newEdt);
-  opsToRemove.insert(op);
+  /// Add any additional dependencies
+  for (Value dep : additionalDeps)
+    allDeps.insert(dep);
 
-  return true;
-}
+  /// Create new EDT operation with merged dependencies
+  auto newEdt =
+      builder.create<arts::EdtOp>(loc, newType, allDeps.getArrayRef());
 
-/// Remove unconditional barriers that provide no additional ordering beyond
-/// computed EDT dependencies (graph-informed pruning).
-bool EdtPass::removeBarriers() {
-  bool changed = false;
-  module.walk([&](func::FuncOp func) {
-    auto &edtGraph = AM->getEdtGraph(func);
-    if (edtGraph.size() == 0) {
-      return;
-    }
+  /// Transfer region from source to new operation
+  Region &sourceRegion = sourceOp.getRegion();
+  Region &newRegion = newEdt.getRegion();
 
-    changed |= removeRedundantBarriersWithGraphs(func, edtGraph);
-  });
-  return changed;
-}
+  /// Clear new region and transfer blocks
+  if (newRegion.empty())
+    newRegion.push_back(new Block());
+  Block &newBody = newRegion.front();
+  newBody.clear();
 
-bool EdtPass::processParallelEdts() {
-  /// Gather all parallel-EDT ops in the module.
-  SmallVector<EdtOp, 8> parallelOps;
-  module.walk([&](EdtOp edt) {
-    if (edt.getType() == arts::EdtType::parallel)
-      parallelOps.push_back(edt);
-  });
-
-  /// Try to convert parallel EDTs into single EDTs if they contain exactly one
-  /// child.
-  for (EdtOp op : parallelOps) {
-    convertParallelIntoSingle(op);
+  /// Move operations from source region to new region
+  SmallVector<Operation *, 16> opsToMove;
+  for (auto &block : sourceRegion) {
+    for (auto &op : block)
+      opsToMove.push_back(&op);
   }
-  return true;
+
+  /// Move operations to new region
+  for (auto *opToMove : opsToMove)
+    opToMove->moveBefore(&newBody, newBody.end());
+
+  return newEdt;
 }
 
 bool EdtPass::processSyncTaskEdts() {
@@ -234,17 +226,14 @@ bool EdtPass::processSyncTaskEdts() {
     /// epoch block
     Block *edtBody = &op.getRegion().front();
 
-    /// Collect operations to move before moving them (to avoid iterator
-    /// invalidation)
+    /// Collect operations to move before moving them
     SmallVector<Operation *, 8> opsToMove;
-    for (Operation &childOp : edtBody->without_terminator()) {
+    for (Operation &childOp : edtBody->without_terminator())
       opsToMove.push_back(&childOp);
-    }
 
     /// Move all operations to the epoch block
-    for (Operation *childOp : opsToMove) {
+    for (Operation *childOp : opsToMove)
       childOp->moveBefore(epochBlock.getTerminator());
-    }
 
     /// Erase the now-empty EdtOp
     op.erase();
@@ -269,21 +258,6 @@ bool EdtPass::processSyncTaskEdts() {
     convertToEpoch(op);
   }
   return true;
-}
-
-void EdtPass::runOnOperation() {
-  module = getOperation();
-  ARTS_INFO("Starting EDT Pass on module");
-
-  processParallelEdts();
-  processSyncTaskEdts();
-  /// Optionally run graph-informed cleanups when requested
-  if (this->runAnalysis) {
-    removeBarriers();
-  }
-  /// Remove ops marked for removal
-  OpBuilder builder(module.getContext());
-  removeOps(module, builder, opsToRemove);
 }
 
 bool EdtPass::removeRedundantBarriersWithGraphs(func::FuncOp func,
