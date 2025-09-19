@@ -190,7 +190,7 @@ void EdtGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
   /// Include analysis data if requested
   if (includeAnalysis) {
     /// Add EDT-specific analysis data here if needed in the future
-    root["analysis"] = Object{{"numTasks", (double)getNumTasks()},
+    root["analysis"] = Object{{"numTasks", size()},
                               {"function", getFunction().getName().str()}};
   }
 

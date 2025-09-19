@@ -18,14 +18,18 @@ class RewritePatternSet;
 class DominanceInfo;
 
 namespace arts {
+class ArtsAnalysisManager;
 std::unique_ptr<Pass> createArtsInlinerPass();
 std::unique_ptr<Pass> createConvertOpenMPtoARTSPass();
-std::unique_ptr<Pass> createEdtPass();
-std::unique_ptr<Pass> createEdtConcurrencyPass();
+std::unique_ptr<Pass> createEdtPass(ArtsAnalysisManager *AM,
+                                    bool runAnalysis);
+std::unique_ptr<Pass> createConcurrencyPass();
+std::unique_ptr<Pass>
+createConcurrencyPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createCreateDbsPass();
 std::unique_ptr<Pass> createCreateDbsPass(bool identifyDbs);
-std::unique_ptr<Pass> createDbPass();
-std::unique_ptr<Pass> createDbPass(bool exportJson);
+std::unique_ptr<Pass> createDbPass(ArtsAnalysisManager *AM,
+                                   bool exportJson);
 std::unique_ptr<Pass> createCreateEpochsPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug);

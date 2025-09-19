@@ -6,14 +6,12 @@
 ///==========================================================================
 
 /// Dialects
-// #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "polygeist/Ops.h"
 /// Arts
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
@@ -60,58 +58,56 @@ struct OMPParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
   }
 };
 
-/// Pattern to replace 'scf.parallel' with an 'scf.for' loop that creates an
-/// 'arts.edt' operation and embodies the operation in an 'arts.epoch'
-/// operation.
+/// Pattern to replace `scf.parallel` with an `arts.edt` with `parallel`
+/// attribute
 struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(scf::ParallelOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    ARTS_DEBUG_TYPE("Converting scf.parallel to arts.parallel");
+    ARTS_DEBUG_TYPE("Converting scf.parallel to arts.edt<parallel> + arts.for");
     rewriter.setInsertionPoint(op);
 
-    /// Create an `arts.epoch` operation and add a region to it.
-    auto syncEdtOp = rewriter.create<EdtOp>(loc, EdtType::sync);
-    Block &syncEdtBlock = syncEdtOp.getBody().front();
+    /// Create `arts.edt` with `parallel` type and get its body block
+    auto parEdt = rewriter.create<EdtOp>(loc, EdtType::parallel);
+    Block &parBlk = parEdt.getBody().front();
 
-    /// Create the for loop inside the epoch
-    rewriter.setInsertionPointToStart(&syncEdtBlock);
+    /// Insert `arts.for` inside the parallel EDT with same bounds/step
+    rewriter.setInsertionPointToStart(&parBlk);
     Value lb = op.getLowerBound().front();
     Value ub = op.getUpperBound().front();
     Value st = op.getStep().front();
-    auto forOp = rewriter.create<scf::ForOp>(loc, lb, ub, st);
-    Block *forBody = forOp.getBody();
-    Value inductionVar = forOp.getInductionVar();
 
-    /// Create a new EDT operation inside the for loop body
-    rewriter.setInsertionPointToStart(forBody);
-    auto edtOp = rewriter.create<EdtOp>(loc, EdtType::task, ValueRange{});
-    Block &edtBlock = edtOp.getBody().emplaceBlock();
-    rewriter.setInsertionPointToStart(&edtBlock);
+    auto artsFor = rewriter.create<arts::ForOp>(
+        loc, ValueRange{lb}, ValueRange{ub}, ValueRange{st}, nullptr);
 
-    /// Map the original parallel loop induction variable to our new for loop
-    /// induction variable
+    Region &dstRegion = artsFor.getRegion();
+    if (dstRegion.empty())
+      dstRegion.push_back(new Block());
+    Block &dst = dstRegion.front();
+    if (dst.getNumArguments() == 0)
+      dst.addArgument(rewriter.getIndexType(), loc);
+
+    /// Map IV and clone original body into arts.for body
+    OpBuilder::InsertionGuard IG(rewriter);
+    rewriter.setInsertionPointToStart(&dst);
     IRMapping mapper;
+    Block &src = op.getRegion().front();
     if (!op.getInductionVars().empty())
-      mapper.map(op.getInductionVars().front(), inductionVar);
-
-    /// Clone the original parallel loop body operations into the EDT body
-    Block &srcBlock = op.getRegion().front();
-    for (Operation &srcOp : srcBlock.without_terminator())
+      mapper.map(op.getInductionVars().front(), dst.getArgument(0));
+    if (!src.getArguments().empty())
+      mapper.map(src.getArgument(0), dst.getArgument(0));
+    for (Operation &srcOp : src.without_terminator())
       rewriter.clone(srcOp, mapper);
-
-    /// Add the yield operation to the EDT body
     rewriter.create<arts::YieldOp>(loc);
 
-    /// Add the yield operation to the epoch block
-    rewriter.setInsertionPointToEnd(&syncEdtBlock);
+    /// Terminate parallel EDT body
+    rewriter.setInsertionPointToEnd(&parBlk);
     rewriter.create<arts::YieldOp>(loc);
 
-    /// Remove the original operation
+    /// Remove original scf.parallel
     rewriter.eraseOp(op);
-
     return success();
   }
 };
@@ -276,9 +272,49 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
     auto upperBound = op.getUpperBound()[0];
     auto step = op.getStep()[0];
 
+    /// Map OpenMP schedule to ARTS ForScheduleKindAttr if present
+    arts::ForScheduleKindAttr schedAttr = nullptr;
+    if (auto sched = op.getScheduleVal()) {
+      switch (*sched) {
+      case omp::ClauseScheduleKind::Static:
+        schedAttr = arts::ForScheduleKindAttr::get(
+            rewriter.getContext(), arts::ForScheduleKind::Static);
+        break;
+      case omp::ClauseScheduleKind::Dynamic:
+        schedAttr = arts::ForScheduleKindAttr::get(
+            rewriter.getContext(), arts::ForScheduleKind::Dynamic);
+        break;
+      case omp::ClauseScheduleKind::Guided:
+        schedAttr = arts::ForScheduleKindAttr::get(
+            rewriter.getContext(), arts::ForScheduleKind::Guided);
+        break;
+      case omp::ClauseScheduleKind::Auto:
+        schedAttr = arts::ForScheduleKindAttr::get(rewriter.getContext(),
+                                                   arts::ForScheduleKind::Auto);
+        break;
+      case omp::ClauseScheduleKind::Runtime:
+        schedAttr = arts::ForScheduleKindAttr::get(
+            rewriter.getContext(), arts::ForScheduleKind::Runtime);
+        break;
+      }
+    }
+
+    /// Use OpenMP chunk as step if present, otherwise use original step
+    Value finalStep = step;
+    if (auto chunk = op.getScheduleChunkVar()) {
+      // Convert chunk to index type if needed
+      if (chunk.getType() != rewriter.getIndexType()) {
+        finalStep = rewriter.create<arith::IndexCastOp>(
+            loc, rewriter.getIndexType(), chunk);
+      } else {
+        finalStep = chunk;
+      }
+    }
+
     /// Create arts.for and move wsloop body
-    auto forOp = rewriter.create<arts::ForOp>(
-        loc, ValueRange{lowerBound}, ValueRange{upperBound}, ValueRange{step});
+    auto forOp = rewriter.create<arts::ForOp>(loc, ValueRange{lowerBound},
+                                              ValueRange{upperBound},
+                                              ValueRange{finalStep}, schedAttr);
     Region &dstRegion = forOp.getRegion();
     if (dstRegion.empty())
       dstRegion.push_back(new Block());
@@ -413,8 +449,9 @@ struct TaskloopToARTSPattern : public OpRewritePattern<omp::TaskLoopOp> {
     auto step = op.getStep()[0];
 
     /// Create arts.for and move taskloop body
-    auto forOp = rewriter.create<arts::ForOp>(
-        loc, ValueRange{lowerBound}, ValueRange{upperBound}, ValueRange{step});
+    auto forOp = rewriter.create<arts::ForOp>(loc, ValueRange{lowerBound},
+                                              ValueRange{upperBound},
+                                              ValueRange{step}, nullptr);
     Region &dstRegion = forOp.getRegion();
     if (dstRegion.empty())
       dstRegion.push_back(new Block());

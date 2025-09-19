@@ -7,7 +7,9 @@
 
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/IR/Region.h"
 #include "mlir/IR/Value.h"
 
 namespace mlir {
@@ -24,30 +26,29 @@ bool isInvariantInEdt(Region &edtRegion, Value value);
 bool isReachable(Operation *source, Operation *target);
 
 /// Remove a set of operations from the module.
-void removeOps(mlir::ModuleOp module, OpBuilder &builder,
-               llvm::SetVector<mlir::Operation *> &opsToRemove);
-void recursivelyRemoveOp(mlir::Operation *op);
-void removeUndefOps(mlir::ModuleOp module);
+void removeOps(ModuleOp module, OpBuilder &builder,
+               llvm::SetVector<Operation *> &opsToRemove);
+void recursivelyRemoveOp(Operation *op);
+void removeUndefOps(ModuleOp module);
 
 /// Replace the operation with an undef operation.
-void replaceWithUndef(mlir::Operation *op, OpBuilder &builder);
-void replaceUses(mlir::Value from, mlir::Value to, DominanceInfo &domInfo,
+void replaceWithUndef(Operation *op, OpBuilder &builder);
+void replaceUses(Value from, Value to, DominanceInfo &domInfo,
                  Operation *dominatingOp);
 
 /// Replace all uses of `from` with `to` in the module.
-void replaceUses(llvm::DenseMap<mlir::Value, mlir::Value> &rewireMap);
-void replaceInRegion(mlir::Region &region, mlir::Value from, mlir::Value to);
-void replaceInRegion(mlir::Region &region,
-                     llvm::DenseMap<mlir::Value, mlir::Value> &rewireMap,
+void replaceUses(llvm::DenseMap<Value, Value> &rewireMap);
+void replaceInRegion(Region &region, Value from, Value to);
+void replaceInRegion(Region &region, llvm::DenseMap<Value, Value> &rewireMap,
                      bool clear = true);
 
 /// Returns true if `val` is a constant value.
-bool isValueConstant(mlir::Value val);
+bool isValueConstant(Value val);
 
 /// Try to extract an index constant from a Value.
 /// Returns true and sets `out` if the Value is a constant index (via
 /// arith.constant or compatible); otherwise returns false.
-bool getConstantIndex(mlir::Value v, int64_t &out);
+bool getConstantIndex(Value v, int64_t &out);
 
 /// Returns true if `v` is an index constant not equal to zero,
 /// or a non-constant value (unknown -> conservatively non-zero).
@@ -57,13 +58,13 @@ bool isNonZeroIndex(Value v);
 /// Recursively traverses through DbAcquireOp, DbGepOp, memref operations, etc.
 /// to find the root allocation (DbAllocOp, memref::AllocOp, memref::AllocaOp,
 /// etc.). Returns nullptr if no root object can be found.
-mlir::Value getUnderlyingValue(mlir::Value v);
-mlir::Operation *getUnderlyingOperation(mlir::Value v);
+Value getUnderlyingValue(Value v);
+Operation *getUnderlyingOperation(Value v);
 
 /// Get the byte size of an element type.
 /// Returns the size in bytes for IntegerType and FloatType, 0 for unknown
 /// types.
-uint64_t getElementTypeByteSize(mlir::Type elemTy);
+uint64_t getElementTypeByteSize(Type elemTy);
 
 /// Sanitize a string for use in DOT graph format.
 /// Replaces dots and dashes with underscores to make valid DOT identifiers.
@@ -71,7 +72,7 @@ std::string sanitizeString(llvm::StringRef s);
 
 /// Return true if two ValueRanges have the same length and element-wise equal
 /// Values.
-bool equalRange(mlir::ValueRange a, mlir::ValueRange b);
+bool equalRange(ValueRange a, ValueRange b);
 } // namespace arts
 } // namespace mlir
 

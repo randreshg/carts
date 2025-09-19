@@ -14,9 +14,7 @@
 #include "arts/ArtsDialect.h" // For EdtOp
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/GraphTraits.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
@@ -49,7 +47,8 @@ public:
   SmallVector<NodeBase *, 4> getDbDeps(EdtOp edt) const;
   func::FuncOp getFunction() const { return func; }
   bool hasDbGraph() const { return dbGraph != nullptr; }
-  size_t getNumTasks() const { return edtNodes.size(); }
+  DbGraph *getDbGraph() const { return dbGraph; }
+
 
   /// For GraphTraits iterators
   NodesIterator nodesBegin() override { return nodes.begin(); }

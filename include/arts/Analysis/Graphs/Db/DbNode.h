@@ -95,7 +95,6 @@ public:
     return N->getKind() == NodeKind::DbAcquire;
   }
 
-
   /// Access range for a single dimension. The effective accessed offset is
   /// computed as base + idx, where base is the acquire's offset for the
   /// dimension and idx is an index value used in loads/stores within the EDT.
@@ -106,9 +105,9 @@ public:
   /// bound originates from scf.for, maxIndex corresponds to the loop upper
   /// bound (exclusive).
   struct OffsetRange {
-    Value base;       ///< acquire offset[d]
-    Value minIndex;   ///< lower index bound Value (e.g., loop lower bound)
-    Value maxIndex;   ///< upper index bound Value (exclusive for scf.for)
+    Value base;     ///< acquire offset[d]
+    Value minIndex; ///< lower index bound Value (e.g., loop lower bound)
+    Value maxIndex; ///< upper index bound Value (exclusive for scf.for)
   };
 
   /// Compute per-dimension accessed offset ranges for this acquire by scanning
@@ -125,6 +124,13 @@ public:
   /// does not materialize new constants or perform replacements.
   SmallVector<Value, 4> computeInvariantIndices();
 
+  EdtOp getEdtUser() const { return edtUser; }
+  Value getUseInEdt() const { return useInEdt; }
+  const SmallVector<Operation *, 16> &getMemoryAccesses() const {
+    return memoryAccesses;
+  }
+  DbAcquireOp getDbAcquireOp() const { return dbAcquireOp; }
+
 private:
   DbAcquireOp dbAcquireOp;
   Operation *op;
@@ -132,6 +138,9 @@ private:
   DbAnalysis *analysis;
   std::string hierId;
   DbAcquireInfo info;
+  EdtOp edtUser;
+  Value useInEdt;
+  SmallVector<Operation *, 16> memoryAccesses;
 };
 
 //===----------------------------------------------------------------------===//

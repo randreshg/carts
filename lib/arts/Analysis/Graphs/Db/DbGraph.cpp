@@ -21,7 +21,7 @@ using namespace mlir;
 using namespace mlir::arts;
 
 #include "arts/Utils/ArtsDebug.h"
-ARTS_DEBUG_SETUP(db_analysis);
+ARTS_DEBUG_SETUP(db_graph);
 
 std::string DbGraph::generateAllocId(unsigned id) {
   std::string s;
@@ -159,15 +159,14 @@ DbReleaseNode *DbGraph::getOrCreateReleaseNode(DbReleaseOp op) {
 
   Value source = op.getSource();
   if (!source) {
-    llvm::errs() << "[ERROR] DbReleaseOp source is null\n";
+    ARTS_ERROR("DbReleaseOp source is null");
     return nullptr;
   }
 
   DbAllocOp allocOp =
       dyn_cast_or_null<DbAllocOp>(getUnderlyingOperation(source));
   if (!allocOp) {
-    llvm::errs() << "[ERROR] Expected DbAllocOp for release, got: " << source
-                 << "\n";
+    ARTS_ERROR("Expected DbAllocOp for release, got: " << source);
     return nullptr;
   }
 
@@ -181,6 +180,24 @@ DbReleaseNode *DbGraph::getOrCreateReleaseNode(DbReleaseOp op) {
 void DbGraph::forEachNode(const std::function<void(NodeBase *)> &fn) const {
   for (auto *node : nodes)
     fn(node);
+}
+
+void DbGraph::forEachAllocNode(
+    const std::function<void(DbAllocNode *)> &fn) const {
+  for (const auto &pair : allocNodes)
+    fn(pair.second.get());
+}
+
+void DbGraph::forEachAcquireNode(
+    const std::function<void(DbAcquireNode *)> &fn) const {
+  for (const auto &pair : acquireNodeMap)
+    fn(pair.second);
+}
+
+void DbGraph::forEachReleaseNode(
+    const std::function<void(DbReleaseNode *)> &fn) const {
+  for (const auto &pair : releaseNodeMap)
+    fn(pair.second);
 }
 
 bool DbGraph::addEdge(NodeBase *from, NodeBase *to, EdgeBase *edge) {
@@ -217,6 +234,12 @@ bool DbGraph::mayAlias(DbAllocOp alloc1, DbAllocOp alloc2) {
   if (!n1 || !n2)
     return false;
   return analysis->getAliasAnalysis()->mayAlias(*n1, *n2);
+}
+
+const DbAllocInfo &DbGraph::getAllocInfo(DbAllocOp alloc) const {
+  auto it = allocNodes.find(alloc);
+  assert(it != allocNodes.end() && "Allocation not found in graph");
+  return it->second->getInfo();
 }
 
 bool DbGraph::hasAcquireReleasePair(DbAllocOp alloc) {
@@ -389,8 +412,8 @@ DbReleaseNode *DbGraph::findMatchingRelease(DbAcquireNode *acq) {
     }
   }
   if (count != 1) {
-    ARTS_DEBUG("Acquire node has " << count
-                                   << " matching releases (expected 1)");
+    ARTS_WARN("Acquire node has " << count
+                                  << " matching releases (expected 1)");
     return found;
   }
   return found;
@@ -561,56 +584,6 @@ void DbGraph::computeReuseCandidates() {
   }
 }
 
-void DbGraph::computeReuseColoring() {
-  SmallVector<DbAllocOp, 16> allocs;
-  for (auto &kv : allocNodes)
-    allocs.push_back(kv.first);
-
-  /// Sort by descending weight: bigger and longer-lived first
-  llvm::sort(allocs, [&](DbAllocOp allocA, DbAllocOp allocB) {
-    const auto &infoA = allocNodes[allocA]->getInfo();
-    const auto &infoB = allocNodes[allocB]->getInfo();
-    unsigned long long weightA =
-        std::max<unsigned long long>(
-            infoA.staticBytes, (unsigned long long)infoA.totalAccessBytes) *
-        (1 + infoA.criticalPath);
-    unsigned long long weightB =
-        std::max<unsigned long long>(
-            infoB.staticBytes, (unsigned long long)infoB.totalAccessBytes) *
-        (1 + infoB.criticalPath);
-    if (weightA != weightB)
-      return weightA > weightB;
-    return infoA.allocIndex < infoB.allocIndex;
-  });
-
-  auto interferes = [&](DbAllocOp allocX, DbAllocOp allocY) -> bool {
-    const auto &infoX = allocNodes[allocX]->getInfo();
-    const auto &infoY = allocNodes[allocY]->getInfo();
-    bool lifetimeOverlap = !(infoX.endIndex < infoY.allocIndex ||
-                             infoY.endIndex < infoX.allocIndex);
-    if (lifetimeOverlap)
-      return true;
-    return mayAlias(allocX, allocY);
-  };
-
-  llvm::SmallDenseMap<DbAllocOp, unsigned> colorMap;
-  for (DbAllocOp alloc : allocs) {
-    llvm::SmallDenseSet<unsigned> usedColors;
-    for (auto &entry : colorMap) {
-      DbAllocOp otherAlloc = entry.first;
-      if (interferes(alloc, otherAlloc))
-        usedColors.insert(entry.second);
-    }
-
-    unsigned color = 0;
-    while (usedColors.count(color))
-      ++color;
-
-    colorMap[alloc] = color;
-    allocNodes[alloc]->getInfo().reuseColor = color;
-  }
-}
-
 void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
   using namespace llvm::json;
 
@@ -731,20 +704,6 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
     //   }
     // }
     // root["reuseCandidates"] = std::move(reuse);
-
-    /// Reuse coloring groups
-    // llvm::DenseMap<unsigned, SmallVector<DbAllocOp, 8>> groups;
-    // for (auto &kv : allocNodes)
-    //   groups[kv.second->getInfo().reuseColor].push_back(kv.first);
-
-    // Object coloring;
-    // for (auto &cg : groups) {
-    //   Array ids;
-    //   for (auto Aop : cg.second)
-    //     ids.push_back(sanitizeString(getNode(Aop.getOperation())->getHierId()));
-    //   coloring[std::to_string(cg.first)] = std::move(ids);
-    // }
-    // root["reuseColoring"] = std::move(coloring);
   }
 
   os << llvm::json::Value(std::move(root)) << "\n";

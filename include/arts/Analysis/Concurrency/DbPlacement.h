@@ -1,6 +1,6 @@
 ///==========================================================================
 /// File: DbPlacement.h
-/// Defines heuristics for DbAlloc node placement (analysis-only).
+/// Defines heuristics for DbAlloc node placement
 ///==========================================================================
 
 #ifndef ARTS_ANALYSIS_DB_DBPLACEMENT_H

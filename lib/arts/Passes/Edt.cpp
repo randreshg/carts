@@ -4,7 +4,6 @@
 
 /// Dialects
 #include "arts/Utils/ArtsUtils.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
@@ -12,14 +11,10 @@
 #include "mlir/Support/LLVM.h"
 /// Arts
 #include "ArtsPassDetails.h"
-// #include "arts/Analysis/Db/DbAnalysis.h"
+#include "arts/Analysis/ArtsAnalysisManager.h"
+#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
-// Graphs
-#include "arts/Analysis/Edt/EdtAnalysis.h"
-#include "arts/Analysis/Graphs/Db/DbGraph.h"
-#include "arts/Analysis/Graphs/Edt/EdtConcurrencyGraph.h"
-#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 /// Other
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
@@ -38,6 +33,10 @@ using namespace mlir::arts;
 //===----------------------------------------------------------------------===//
 namespace {
 struct EdtPass : public arts::EdtBase<EdtPass> {
+  EdtPass(ArtsAnalysisManager *AM, bool runAnalysis) : AM(AM) {
+    assert(AM && "ArtsAnalysisManager must be provided externally");
+    this->runAnalysis = runAnalysis;
+  }
   void runOnOperation() override;
   bool lowerSingle(EdtOp &op);
   bool convertParallelIntoSingle(EdtOp &op);
@@ -58,6 +57,7 @@ struct EdtPass : public arts::EdtBase<EdtPass> {
 private:
   SetVector<Operation *> opsToRemove;
   ModuleOp module;
+  ArtsAnalysisManager *AM = nullptr;
 };
 } // namespace
 
@@ -106,8 +106,6 @@ EdtOp EdtPass::createEdtWithMergedDepsAndRegion(
 
 /// Converts a parallel EDT region into a sync-task EDT when it contains a
 /// single inner `arts.edt` and no other ops beyond terminators/barriers.
-/// Responsibility: structural simplification; dependency collection limited to
-/// union of inner EDT dependencies. No global analysis here.
 bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
   uint32_t numOps = 0;
   EdtOp singleOp = nullptr;
@@ -187,22 +185,12 @@ bool EdtPass::lowerSingle(EdtOp &op) {
 bool EdtPass::removeBarriers() {
   bool changed = false;
   module.walk([&](func::FuncOp func) {
-    /// Build graphs on-demand for this function
-    std::unique_ptr<arts::DbGraph> dbGraph =
-        std::make_unique<arts::DbGraph>(func, /*DbAnalysis*/ nullptr);
-    dbGraph->build();
-
-    /// If DbGraph could not be constructed, skip creating EdtGraph
-    if (!dbGraph)
+    auto &edtGraph = AM->getEdtGraph(func);
+    if (edtGraph.size() == 0) {
       return;
-    std::unique_ptr<arts::EdtGraph> edtGraph =
-        std::make_unique<arts::EdtGraph>(func, dbGraph.get());
-    /// Build requires DbGraph; will assert if missing
-    edtGraph->build();
-    if (edtGraph->getNumTasks() == 0)
-      return;
+    }
 
-    changed |= removeRedundantBarriersWithGraphs(func, *edtGraph);
+    changed |= removeRedundantBarriersWithGraphs(func, edtGraph);
   });
   return changed;
 }
@@ -289,6 +277,10 @@ void EdtPass::runOnOperation() {
 
   processParallelEdts();
   processSyncTaskEdts();
+  /// Optionally run graph-informed cleanups when requested
+  if (this->runAnalysis) {
+    removeBarriers();
+  }
   /// Remove ops marked for removal
   OpBuilder builder(module.getContext());
   removeOps(module, builder, opsToRemove);
@@ -348,6 +340,8 @@ bool EdtPass::removeRedundantBarriersWithGraphs(func::FuncOp func,
 ///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createEdtPass() { return std::make_unique<EdtPass>(); }
+std::unique_ptr<Pass> createEdtPass(ArtsAnalysisManager *AM, bool runAnalysis) {
+  return std::make_unique<EdtPass>(AM, runAnalysis);
+}
 } // namespace arts
 } // namespace mlir

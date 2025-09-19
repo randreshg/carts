@@ -51,6 +51,12 @@ public:
   /// Get a node for the given operation if it exists.
   virtual NodeBase *getNode(Operation *op) const = 0;
 
+  /// Get the number of nodes in the graph.
+  virtual size_t size() const { return nodes.size(); }
+
+  /// Check if the graph is empty (has no nodes).
+  virtual bool isEmpty() const { return nodes.empty(); }
+
   /// Iterate over all nodes.
   virtual void forEachNode(const std::function<void(NodeBase *)> &fn) const = 0;
 

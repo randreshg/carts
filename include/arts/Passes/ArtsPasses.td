@@ -39,7 +39,7 @@ def Db : Pass<"db", "mlir::ModuleOp"> {
     "arith::ArithDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createDbPass()";
+  let constructor = "mlir::arts::createDbPass(nullptr, false)";
   let options = [
     Option<"exportJson", "export-json", "bool", /*default=*/"false",
            "Export DB analysis to JSON files in output/ directory.">,
@@ -91,16 +91,20 @@ def Edt : Pass<"edt", "mlir::ModuleOp"> {
     "arith::ArithDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createEdtPass()";
+  let constructor = "mlir::arts::createEdtPass(nullptr, true)";
+  let options = [
+    Option<"runAnalysis", "run-analysis", "bool", /*default=*/"true",
+           "Enable EDT analysis.">
+  ];
 }
 
-def EdtConcurrency : Pass<"edt-concurrency", "mlir::ModuleOp"> {
+def Concurrency : Pass<"concurrency", "mlir::ModuleOp"> {
   let summary = "Build EDT concurrency graph and apply concurrency-driven cleanups";
   let dependentDialects = [
     "func::FuncDialect",
     "arts::ArtsDialect"
   ];
-  let constructor = "mlir::arts::createEdtConcurrencyPass()";
+  let constructor = "mlir::arts::createConcurrencyPass()";
 }
 
 def CreateEpochs : Pass<"create-epochs", "mlir::ModuleOp"> {

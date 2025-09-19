@@ -11,38 +11,19 @@
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/BuiltinTypes.h"
-#include "mlir/IR/Dominance.h"
-#include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Region.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
+#include "llvm/ADT/DenseMap.h"
 
 #include "arts/Analysis/Edt/EdtInfo.h"
+#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 
+// Forward declarations
 namespace mlir {
 namespace arts {
-
-class EdtOp;
-
-///==========================================================================
-/// EdtAnalysis Class Declaration
-///==========================================================================
-// class EdtAnalysis {
-// public:
-//   explicit EdtAnalysis(Operation *module);
-
-// private:
-// };
-
-} // namespace arts
-} // namespace mlir
-
-namespace mlir {
-namespace arts {
-
+class ArtsAnalysisManager;
 class DbGraph;
-class EdtGraph;
 
 //==========================================================================
 // EdtAnalysis: per-EDT summaries and pairwise affinity metrics
@@ -50,31 +31,37 @@ class EdtGraph;
 
 class EdtAnalysis {
 public:
-  explicit EdtAnalysis(Operation *module, DbGraph *db = nullptr,
-                       EdtGraph *edt = nullptr);
+  EdtAnalysis(ArtsAnalysisManager &AM);
 
   /// Build summaries for all EDTs in the module.
   void analyze();
 
   /// Compute affinity metrics for two EDTs using their summaries.
-  EdtPairAffinity affinity(EdtOp from, EdtOp to) const;
+  EdtPairAffinity affinity(EdtOp from, EdtOp to);
 
   /// Debug printing
-  void print(func::FuncOp func, llvm::raw_ostream &os) const;
-  void toJson(func::FuncOp func, llvm::raw_ostream &os) const;
+  void print(func::FuncOp func, llvm::raw_ostream &os);
+  void toJson(func::FuncOp func, llvm::raw_ostream &os);
+
+  /// Graph accessor
+  EdtGraph &getOrCreateEdtGraph(func::FuncOp func);
+
+  /// Invalidate EDT graph for a specific function
+  bool invalidateEdtGraph(func::FuncOp func);
+
+  /// Invalidate internal caches
+  void invalidate();
 
 private:
-  ModuleOp module;
-  DbGraph *dbGraph;
-  EdtGraph *edtGraph;
+  ArtsAnalysisManager &AM;
 
   /// Order index per EDT in a function
   DenseMap<EdtOp, unsigned> edtOrderIndex;
 
-  void analyzeFunc(func::FuncOp func);
+  /// Per-function graph caches
+  llvm::DenseMap<func::FuncOp, std::unique_ptr<EdtGraph>> edtGraphs;
 
-  /// Helpers
-  static uint64_t estimateMaxLoopDepth(Region &region);
+  void analyzeFunc(func::FuncOp func);
 };
 
 } // namespace arts

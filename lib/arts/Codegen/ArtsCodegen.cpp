@@ -521,7 +521,7 @@ Value ArtsCodegen::castToInt(Type targetType, Value source, Location loc) {
   }
 
   /// If none of the above matched => unsupported type
-  llvm::errs() << "Unsupported type for casting to integer: " << source << "\n";
+  ARTS_ERROR("Unsupported type for casting to integer: " << source);
   assert(false && "Unsupported type in castToInt");
   return nullptr;
 }

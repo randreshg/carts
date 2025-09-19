@@ -13,11 +13,15 @@
 using namespace mlir;
 using namespace mlir::arts;
 
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(db_alloc_node);
+
 //===----------------------------------------------------------------------===//
 // DbAllocNode
 //===----------------------------------------------------------------------===//
 DbAllocNode::DbAllocNode(DbAllocOp op, DbAnalysis *analysis)
     : dbAllocOp(op), op(op.getOperation()), analysis(analysis) {
+  ARTS_DEBUG(" - Creating DbAllocNode for operation: " << op);
   info.isAlloc = true;
   info.estimatedBytes = 0;
   info.staticBytes = 0;
