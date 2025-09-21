@@ -136,5 +136,5 @@ if [[ -n "$EXAMPLE_FILE" ]]; then
     # Finally: run the binary on the master node (ARTS will SSH to others)
     REMOTE_RUN_CMD="cd '$CONTAINER_FILE_DIR' && ./$BASE_NAME"
     carts_build "Run command: $REMOTE_RUN_CMD"
-    # docker exec "$MASTER_CONTAINER" bash -c "$REMOTE_RUN_CMD"
+    docker exec "$MASTER_CONTAINER" bash -c "$REMOTE_RUN_CMD"
 fi
