@@ -102,39 +102,66 @@ sleep 5
 carts_step "Checking for changes in repositories"
 GIT_BRANCH=${GIT_BRANCH:-mlir}
 
-# Check for changes remotely before building
-carts_info "Fetching latest changes from remote repositories..."
+# Check for remote changes inside the container
+carts_info "Checking for remote changes in repositories..."
 
-# Function to check for remote changes
-check_remote_changes() {
-    local repo_path="$1"
-    local repo_branch="$2"
+# Execute remote change detection inside the container
+REMOTE_CHANGES=$(docker exec arts-node-update bash -c "
+    set -e
+    GIT_BRANCH='$GIT_BRANCH'
 
-    if [[ ! -d "$repo_path/.git" ]]; then
-        echo ""
-        return
+    # Function to check for remote changes
+    check_repo() {
+        local repo_path=\"\$1\"
+        local repo_branch=\"\$2\"
+
+        [[ ! -d \"\$repo_path/.git\" ]] && echo '' && return
+
+        # Fetch and check for changes
+        if ! git -C \"\$repo_path\" fetch origin \"\$repo_branch\" 2>/dev/null ||
+           ! git -C \"\$repo_path\" show-ref --verify --quiet refs/remotes/origin/\"\$repo_branch\" 2>/dev/null; then
+            echo \"WARNING: \$repo_path - Failed to fetch or branch not found\"
+            echo ''
+            return
+        fi
+
+        # Get changes in both directions
+        local remote_ahead=\$(git -C \"\$repo_path\" log HEAD..origin/\"\$repo_branch\" --oneline 2>/dev/null)
+        local local_ahead=\$(git -C \"\$repo_path\" log origin/\"\$repo_branch\"..HEAD --oneline 2>/dev/null)
+
+        # Output combined changes or empty if no changes
+        [[ -n \"\$remote_ahead\$local_ahead\" ]] && echo \"\$remote_ahead\$local_ahead\" || echo ''
+    }
+
+    # Check repositories and output in parseable format
+    printf 'CARTS:%s\n' \"\$(check_repo '/opt/carts' \"\$GIT_BRANCH\")\"
+    printf 'POLYGEIST:%s\n' \"\$(check_repo '/opt/carts/external/Polygeist' 'carts')\"
+    printf 'ARTS:%s\n' \"\$(check_repo '/opt/carts/external/arts' 'master')\"
+
+    # Check LLVM if it exists
+    if [[ -d '/opt/carts/external/Polygeist/llvm-project/.git' ]]; then
+        local llvm_branch=\$(git -C '/opt/carts/external/Polygeist/llvm-project' rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null | sed 's|origin/||' || echo 'main')
+        printf 'LLVM:%s\n' \"\$(check_repo '/opt/carts/external/Polygeist/llvm-project' \"\$llvm_branch\")\"
+    else
+        printf 'LLVM:\n'
     fi
+" 2>/dev/null || echo "ERROR: Failed to check remote changes")
 
-    # Fetch latest changes
-    git -C "$repo_path" fetch origin "$repo_branch" 2>/dev/null || return
-
-    # Check if there are commits ahead on remote
-    local changes=$(git -C "$repo_path" log HEAD..origin/"$repo_branch" --oneline 2>/dev/null | sed 's/"/\\"/g' || echo "")
-    echo "$changes"
-}
-
-# Check each repository for remote changes
-CARTS_CHANGES=$(check_remote_changes "$CARTS_DIR" "$GIT_BRANCH")
-POLYGEIST_CHANGES=$(check_remote_changes "$CARTS_DIR/external/Polygeist" "carts")
-ARTS_CHANGES=$(check_remote_changes "$CARTS_DIR/external/arts" "master")
-
-# Check LLVM repository if it exists
+# Parse results and handle warnings more efficiently
+CARTS_CHANGES=""
+POLYGEIST_CHANGES=""
+ARTS_CHANGES=""
 LLVM_CHANGES=""
-if [[ -d "$CARTS_DIR/external/Polygeist/llvm-project/.git" ]]; then
-    # Get upstream branch name for LLVM
-    local llvm_upstream=$(git -C "$CARTS_DIR/external/Polygeist/llvm-project" rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo "origin/main")
-    LLVM_CHANGES=$(check_remote_changes "$CARTS_DIR/external/Polygeist/llvm-project" "${llvm_upstream#origin/}")
-fi
+
+while IFS=':' read -r repo changes; do
+    case "$repo" in
+        CARTS) CARTS_CHANGES="$changes" ;;
+        POLYGEIST) POLYGEIST_CHANGES="$changes" ;;
+        ARTS) ARTS_CHANGES="$changes" ;;
+        LLVM) LLVM_CHANGES="$changes" ;;
+        WARNING*) carts_warning "${changes#WARNING: }" ;;
+    esac
+done <<< "$REMOTE_CHANGES"
 
 BUILD_LLVM=false
 BUILD_POLY=false
