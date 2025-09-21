@@ -39,54 +39,13 @@ carts run simple.mlir --edt-lowering -o simple-llvm.mlir
 ```
 
 #### Advanced Debugging: Individual Passes (when needed)
-Only use `carts opt` with individual passes when:
+Only use individual pass debugging when:
 - You need fine-grained control over specific passes
 - You want to debug a specific pass in isolation
 - You're developing new passes and need to test them individually
 - The pipeline stages don't provide enough granularity for your debugging needs
 
-**First Major Pass - OpenMP to ARTS:**
-```bash
-carts opt simple.mlir \
-  --lower-affine \
-  --cse \
-  --polygeist-mem2reg \
-  --canonicalize \
-  --loop-invariant-code-motion \
-  --arts-inliner \
-  --convert-openmp-to-arts > simple-arts.mlir
-```
-
-**Second Major Pass - EDT Pass:**
-```bash
-carts opt simple-arts.mlir \
-  --symbol-dce \
-  --edt > simple-edt.mlir
-```
-
-**Continue with remaining passes:**
-Examine `tools/run/carts-run.cpp` to understand the complete pipeline and identify which other passes to run
-
-#### Debugging Pass-Specific Issues
-Enable debug output for specific passes when encountering errors:
-```bash
-# Replace dashes with underscores in debug flag names
-carts opt simple.mlir \
-  --lower-affine \
-  --cse \
-  --polygeist-mem2reg \
-  --canonicalize \
-  --loop-invariant-code-motion \
-  --arts-inliner \
-  --convert-openmp-to-arts \
-  -debug-only=convert_openmp_to_arts > simple-arts.mlir
-```
-
-**Common Debug Flags:**
-- `-debug-only=convert_openmp_to_arts`
-- `-debug-only=edt`
-- `-debug-only=create_db`
-- `-debug-only=convert_arts_to_llvm`
+**Note**: Individual pass debugging should be done through the underlying MLIR tools when absolutely necessary, but prefer using `carts run` with pipeline stages for most debugging scenarios.
 
 ### 3. LLVM IR Generation
 Convert final MLIR to LLVM IR:
@@ -125,7 +84,7 @@ Ensure `arts.cfg` configuration exists, then run:
 
 **When to use pipeline stages vs individual passes:**
 - **Pipeline stages** (`carts run --stage-name`): Primary debugging method for quick isolation
-- **Individual passes** (`carts opt --pass-name`): Advanced debugging when you need fine-grained control
+- **Individual passes**: Advanced debugging when you need fine-grained control (use underlying MLIR tools)
 
 ### Stopping `carts run` at a specific stage
 `carts run` can execute the full pipeline or stop after a specific stage. Use one of the flags below to stop early and inspect the IR.
