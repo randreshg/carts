@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     openssh-server \
     openssh-client \
+    gdb \
     ca-certificates \
     curl \
     vim \
