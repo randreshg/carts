@@ -576,8 +576,8 @@ Value ArtsCodegen::getOrCreateGlobalLLVMString(Location loc, StringRef value) {
 
 void ArtsCodegen::createPrintfCall(Location loc, llvm::StringRef format,
                                    ValueRange args) {
-  // if (!debug)
-  //   return;
+  if (!debug)
+    return;
 
   /// Create the printf function declaration if it doesn't exist
   auto printfFn = module.lookupSymbol<LLVM::LLVMFuncOp>("printf");
