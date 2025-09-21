@@ -246,15 +246,26 @@ run_compile() {
         libraries+=("-lrt")
     fi
     
+    # Build compile flags and force non-PIE output so function pointers remain
+    # stable across nodes (required for remote EDT execution).
+    local compile_flags=("-O3" "-g0")
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        compile_flags+=("-fno-pie" "-Wl,-no_pie")
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        compile_flags+=("-fno-pie" "-no-pie")
+    fi
+
     if [[ -n "$CARTS_VERBOSE" ]]; then
-        carts_debug "Running LLVM clang with library paths:"
+        carts_debug "Running LLVM clang with compile flags:"
+        printf "  %s\n" "${compile_flags[@]}"
+        carts_debug "Library paths:"
         printf "  %s\n" "${library_paths[@]}"
         carts_debug "Libraries:"
         printf "  %s\n" "${libraries[@]}"
-        carts_debug "Command: $clang_path ${library_paths[*]} ${libraries[*]} $input_file $*"
+        carts_debug "Command: $clang_path ${compile_flags[*]} ${library_paths[*]} ${libraries[*]} $input_file $*"
     fi
     
-    "$clang_path" -O3 -g0 "${library_paths[@]}" "${libraries[@]}" "$input_file" "$@"
+    "$clang_path" "${compile_flags[@]}" "${library_paths[@]}" "${libraries[@]}" "$input_file" "$@"
 }
 
 # Function to run benchmark tool
