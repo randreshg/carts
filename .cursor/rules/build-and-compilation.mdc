@@ -37,7 +37,6 @@ source enable
 ```bash
 carts build                    # Build CARTS project
 carts cgeist <file> [opts]     # Convert C++ to MLIR
-carts opt <file> [opts]        # Run MLIR optimizations (single pass)
 carts run [opts]               # Run ARTS transformations
 carts mlir-translate <file>    # Convert MLIR to LLVM IR
 carts compile <file> [opts]    # Compile LLVM IR to executable
@@ -87,9 +86,9 @@ This automatically runs the entire pipeline:
 
 ## Debug Options
 ```bash
-# Debug specific passes
-carts opt simple.mlir --convert-openmp-to-arts -debug-only=convert_openmp_to_arts
-carts opt simple.mlir --create-dbs -debug-only=create_dbs
+# Debug specific passes using carts run with pipeline stages
+carts run simple.mlir --convert-openmp -debug-only=convert_openmp_to_arts
+carts run simple.mlir --datablock -debug-only=create_dbs
 ```
 
 ## Pass Pipeline Control

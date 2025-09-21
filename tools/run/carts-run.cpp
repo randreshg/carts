@@ -74,12 +74,9 @@ static cl::opt<bool> EmitLLVM("emit-llvm", cl::desc("Emit LLVM IR output"),
                               cl::init(false));
 
 static cl::opt<bool> IdentifyDbs("identify-dbs",
-                                 cl::desc("Number of optimization iterations"),
-                                 cl::init(1));
+                                 cl::desc("Identify datablocks"),
+                                 cl::init(false));
 
-static cl::opt<unsigned>
-    OptIterations("iterations", cl::desc("Number of optimization iterations"),
-                  cl::init(1));
 
 static cl::opt<bool> Debug("g", cl::desc("Enable debug mode"), cl::init(false));
 
@@ -195,6 +192,117 @@ void initializeContext(MLIRContext &context) {
       context);
 }
 
+/// Setup initial cleanup and simplification passes.
+void setupInitialCleanup(mlir::OpPassManager &optPM, bool optEnabled) {
+  optPM.addPass(createLowerAffinePass());
+  optPM.addPass(polygeist::createCanonicalizeForPass());
+
+  if (optEnabled) {
+    optPM.addPass(createCSEPass());
+    optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+    optPM.addPass(createMem2Reg());
+    optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+    optPM.addPass(polygeist::replaceAffineCFGPass());
+    optPM.addPass(affine::createAffineScalarReplacementPass());
+    optPM.addPass(polygeist::replaceAffineCFGPass());
+    optPM.addPass(createLoopInvariantCodeMotionPass());
+    optPM.addPass(createCSEPass());
+    optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+    optPM.addPass(createLowerAffinePass());
+  }
+
+  optPM.addPass(createCSEPass());
+  optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+}
+
+/// Setup ARTS inliner pass.
+void setupArtsInliner(PassManager &pm) {
+  pm.addPass(arts::createArtsInlinerPass());
+}
+
+/// Setup OpenMP to ARTS conversion passes.
+void setupConvertOpenMP(PassManager &pm) {
+  pm.addPass(arts::createConvertOpenMPtoARTSPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createSymbolDCEPass());
+}
+
+/// Setup EDT transformation passes.
+void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
+  pm.addPass(arts::createEdtPass(AM, false));
+  pm.addPass(arts::createEdtInvariantCodeMotionPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+}
+
+/// Setup datablock creation and optimization passes.
+void setupDatablock(PassManager &pm, arts::ArtsAnalysisManager *AM, bool identifyDbs, bool exportJson) {
+  pm.addPass(arts::createCreateDbsPass(identifyDbs));
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCSEPass());
+  pm.addPass(createMem2Reg());
+  pm.addPass(arts::createDbPass(AM, exportJson));
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCSEPass());
+  pm.addPass(createMem2Reg());
+}
+
+/// Setup EDT optimization passes.
+void setupEdtOptimizations(PassManager &pm, arts::ArtsAnalysisManager *AM) {
+  pm.addPass(arts::createEdtPass(AM, true));
+  pm.addPass(arts::createConcurrencyPass(AM));
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+}
+
+/// Setup epoch creation passes.
+void setupEpochs(PassManager &pm, arts::ArtsAnalysisManager *AM) {
+  pm.addPass(arts::createEdtPtrRematerializationPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(arts::createCreateEpochsPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+}
+
+/// Setup EDT lowering passes.
+void setupEdtLowering(PassManager &pm) {
+  pm.addPass(arts::createNormalizeDbsPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(arts::createEdtLoweringPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(arts::createEpochLoweringPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCSEPass());
+  pm.addPass(createMem2Reg());
+}
+
+/// Setup ARTS to LLVM conversion passes.
+void setupArtsToLLVM(PassManager &pm, bool debug) {
+  pm.addPass(arts::createConvertArtsToLLVMPass(debug));
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCSEPass());
+  pm.addPass(createMem2Reg());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createControlFlowSinkPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+}
+
+/// Setup additional optimizations (post-ARTS pipeline).
+void setupAdditionalOptimizations(mlir::OpPassManager &optPM) {
+  optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+  optPM.addPass(createControlFlowSinkPass());
+  optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+  optPM.addPass(createLoopInvariantCodeMotionPass());
+  optPM.addPass(createCSEPass());
+  optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+}
+
+/// Setup LLVM IR emission passes.
+void setupLLVMIREmission(PassManager &pm) {
+  pm.addPass(createCSEPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(polygeist::createConvertPolygeistToLLVMPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCSEPass());
+}
+
 /// Configure the pass manager with the optimization passes.
 void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
                       PipelineStage stopAt = PipelineStage::Complete) {
@@ -207,54 +315,18 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     PassManager pm(&context);
 
     mlir::OpPassManager &optPM = pm.nest<mlir::func::FuncOp>();
-    optPM.addPass(createLowerAffinePass());
-    optPM.addPass(polygeist::createCanonicalizeForPass());
-
-    if (Opt) {
-      optPM.addPass(createCSEPass());
-      optPM.addPass(polygeist::createPolygeistCanonicalizePass());
-      optPM.addPass(createMem2Reg());
-      optPM.addPass(polygeist::createPolygeistCanonicalizePass());
-      optPM.addPass(polygeist::replaceAffineCFGPass());
-      optPM.addPass(affine::createAffineScalarReplacementPass());
-      optPM.addPass(polygeist::replaceAffineCFGPass());
-      optPM.addPass(createLoopInvariantCodeMotionPass());
-      optPM.addPass(createCSEPass());
-      optPM.addPass(polygeist::createPolygeistCanonicalizePass());
-      optPM.addPass(createLowerAffinePass());
-    }
-
-    optPM.addPass(createCSEPass());
-    optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+    setupInitialCleanup(optPM, Opt);
 
     /// Complete pipeline
-    pm.addPass(arts::createArtsInlinerPass());
-    pm.addPass(arts::createConvertOpenMPtoARTSPass());
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm.addPass(createSymbolDCEPass());
-    pm.addPass(arts::createEdtPass(AM.get(), false));
-    pm.addPass(arts::createEdtInvariantCodeMotionPass());
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm.addPass(arts::createCreateDbsPass(IdentifyDbs));
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm.addPass(createCSEPass());
-    pm.addPass(createMem2Reg());
-    pm.addPass(arts::createDbPass(AM.get(), ExportJson));
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm.addPass(createCSEPass());
-    pm.addPass(createMem2Reg());
-    pm.addPass(arts::createEdtPass(AM.get(), true));
-    pm.addPass(arts::createConcurrencyPass(AM.get()));
-    pm.addPass(arts::createEdtPtrRematerializationPass());
-    pm.addPass(arts::createCreateEpochsPass());
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm.addPass(arts::createNormalizeDbsPass());
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm.addPass(arts::createEdtLoweringPass());
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm.addPass(arts::createEpochLoweringPass());
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm.addPass(arts::createConvertArtsToLLVMPass(Debug));
+    setupArtsInliner(pm);
+    setupConvertOpenMP(pm);
+    setupEdtTransforms(pm, AM.get());
+    setupDatablock(pm, AM.get(), IdentifyDbs, ExportJson);
+    setupEdtOptimizations(pm, AM.get());
+    setupEpochs(pm, AM.get());
+    setupEdtLowering(pm);
+    setupArtsToLLVM(pm, Debug);
+
     if (mlir::failed(pm.run(module))) {
       ARTS_ERROR("Error running CARTS pipeline");
       module->dump();
@@ -265,12 +337,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     if (Opt) {
       PassManager pm2(&context);
       mlir::OpPassManager &optPM = pm2.nest<mlir::func::FuncOp>();
-      optPM.addPass(polygeist::createPolygeistCanonicalizePass());
-      optPM.addPass(createControlFlowSinkPass());
-      optPM.addPass(polygeist::createPolygeistCanonicalizePass());
-      optPM.addPass(createLoopInvariantCodeMotionPass());
-      optPM.addPass(createCSEPass());
-      optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+      setupAdditionalOptimizations(optPM);
 
       if (mlir::failed(pm2.run(module))) {
         ARTS_ERROR("Error when running optimizations");
@@ -282,49 +349,21 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     /// LLVM IR conversion (if enabled)
     if (EmitLLVM) {
       PassManager pm3(&context);
-      pm3.addPass(createCSEPass());
-      pm3.addPass(polygeist::createPolygeistCanonicalizePass());
-      pm3.addPass(polygeist::createConvertPolygeistToLLVMPass());
-      pm3.addPass(polygeist::createPolygeistCanonicalizePass());
-      pm3.addPass(createCSEPass());
+      setupLLVMIREmission(pm3);
       if (mlir::failed(pm3.run(module))) {
         ARTS_ERROR("Error when emitting LLVM IR");
         module->dump();
         return;
       }
     }
+    return;
   }
 
   /// Initial cleanup and simplification
   {
     PassManager pm(&context);
     mlir::OpPassManager &optPM = pm.nest<mlir::func::FuncOp>();
-    optPM.addPass(createLowerAffinePass());
-    optPM.addPass(polygeist::createCanonicalizeForPass());
-
-    if (Opt) {
-      optPM.addPass(createCSEPass());
-      optPM.addPass(polygeist::createPolygeistCanonicalizePass());
-      optPM.addPass(createMem2Reg());
-      optPM.addPass(polygeist::createPolygeistCanonicalizePass());
-      optPM.addPass(polygeist::replaceAffineCFGPass());
-      optPM.addPass(affine::createAffineScalarReplacementPass());
-      optPM.addPass(polygeist::replaceAffineCFGPass());
-
-      // optPM.addPass(polygeist::createRaiseSCFToAffinePass());
-      // optPM.addPass(polygeist::createPolygeistCanonicalizePass());
-      // optPM.addPass(polygeist::replaceAffineCFGPass());
-      // optPM.addPass(affine::createAffineExpandIndexOpsPass());
-      // optPM.addPass(affine::createAffineScalarReplacementPass());
-      // optPM.addPass(polygeist::replaceAffineCFGPass());
-      optPM.addPass(createLoopInvariantCodeMotionPass());
-      optPM.addPass(createCSEPass());
-      optPM.addPass(polygeist::createPolygeistCanonicalizePass());
-      optPM.addPass(createLowerAffinePass());
-    }
-
-    optPM.addPass(createCSEPass());
-    optPM.addPass(polygeist::createPolygeistCanonicalizePass());
+    setupInitialCleanup(optPM, Opt);
 
     if (mlir::failed(pm.run(module))) {
       ARTS_ERROR("Error simplyfing the IR");
@@ -339,7 +378,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   /// ARTS dialect conversion and optimization
   {
     PassManager pm(&context);
-    pm.addPass(arts::createArtsInlinerPass());
+    setupArtsInliner(pm);
     if (mlir::failed(pm.run(module))) {
       ARTS_ERROR("Error when running ARTS inliner");
       module->dump();
@@ -353,9 +392,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   /// OpenMP to ARTS conversion
   {
     PassManager pm(&context);
-    pm.addPass(arts::createConvertOpenMPtoARTSPass());
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm.addPass(createSymbolDCEPass());
+    setupConvertOpenMP(pm);
     if (mlir::failed(pm.run(module))) {
       ARTS_ERROR("Error when converting OpenMP to ARTS");
       module->dump();
@@ -369,9 +406,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   /// EDT transformations
   {
     PassManager pm(&context);
-    pm.addPass(arts::createEdtPass(AM.get(), false));
-    pm.addPass(arts::createEdtInvariantCodeMotionPass());
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
+    setupEdtTransforms(pm, AM.get());
     if (mlir::failed(pm.run(module))) {
       ARTS_ERROR("Error when running EDT transformations");
       module->dump();
@@ -385,14 +420,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   /// Datablock creation and optimization
   {
     PassManager pm(&context);
-    pm.addPass(arts::createCreateDbsPass(IdentifyDbs));
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm.addPass(createCSEPass());
-    pm.addPass(createMem2Reg());
-    pm.addPass(arts::createDbPass(AM.get(), ExportJson));
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm.addPass(createCSEPass());
-    pm.addPass(createMem2Reg());
+    setupDatablock(pm, AM.get(), IdentifyDbs, ExportJson);
     if (mlir::failed(pm.run(module))) {
       ARTS_ERROR("Error when running datablock passes");
       module->dump();
@@ -406,9 +434,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   /// EDT optimizations
   {
     PassManager pm(&context);
-    pm.addPass(arts::createEdtPass(AM.get(), true));
-    pm.addPass(arts::createConcurrencyPass(AM.get()));
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
+    setupEdtOptimizations(pm, AM.get());
     if (mlir::failed(pm.run(module))) {
       ARTS_ERROR("Error when running EDT optimizations");
       module->dump();
@@ -421,10 +447,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   /// Create epochs
   {
     PassManager pm(&context);
-    pm.addPass(arts::createEdtPtrRematerializationPass());
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm.addPass(arts::createCreateEpochsPass());
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
+    setupEpochs(pm, AM.get());
     if (mlir::failed(pm.run(module))) {
       ARTS_ERROR("Error when creating epochs");
       module->dump();
@@ -438,14 +461,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   /// EDT lowering
   {
     PassManager pm(&context);
-    pm.addPass(arts::createNormalizeDbsPass());
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm.addPass(arts::createEdtLoweringPass());
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm.addPass(arts::createEpochLoweringPass());
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm.addPass(createCSEPass());
-    pm.addPass(createMem2Reg());
+    setupEdtLowering(pm);
     if (mlir::failed(pm.run(module))) {
       ARTS_ERROR("Error when running EDT lowering");
       module->dump();
@@ -459,13 +475,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   /// Convert ARTS to LLVM
   {
     PassManager pm(&context);
-    pm.addPass(arts::createConvertArtsToLLVMPass(Debug));
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm.addPass(createCSEPass());
-    pm.addPass(createMem2Reg());
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
-    pm.addPass(createControlFlowSinkPass());
-    pm.addPass(polygeist::createPolygeistCanonicalizePass());
+    setupArtsToLLVM(pm, Debug);
     if (mlir::failed(pm.run(module))) {
       ARTS_ERROR("Error when converting ARTS to LLVM");
       module->dump();
@@ -504,9 +514,8 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  /// Iteratively run the pass pipeline to drive IR to a fixpoint.
-  for (unsigned i = 0; i < OptIterations; ++i)
-    setupPassManager(module.get(), context, StopAt);
+  /// Run the pass pipeline once.
+  setupPassManager(module.get(), context, StopAt);
 
   /// Translate the optimized module to LLVM IR and write output.
   if (EmitLLVM) {

@@ -80,7 +80,7 @@ if(ENABLE_ARTS_INTROSPECTION)
   message(STATUS "ARTS introspection enabled - will collect performance data")
   add_definitions(-DINSPECTOR)
 else()
-  message(STATUS "ARTS introspection disabled - zero runtime overhead")
+  message(STATUS "ARTS introspection disabled")
 endif()
 
 # CARTS testing options

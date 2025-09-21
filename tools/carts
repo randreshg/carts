@@ -6,6 +6,9 @@
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Source common print functions
+source "${SCRIPT_DIR}/config/carts-print.sh"
+
 # Determine if we're running from the installed location or the source location
 if [[ "$SCRIPT_DIR" == *"/.install/carts/bin" ]]; then
     # We're running from the installed location
@@ -22,8 +25,15 @@ LLVM_INSTALL_DIR="${INSTALL_DIR}/llvm"
 POLYGEIST_INSTALL_DIR="${INSTALL_DIR}/polygeist"
 ARTS_INSTALL_DIR="${INSTALL_DIR}/arts"
 CARTS_INSTALL_DIR="${INSTALL_DIR}/carts"
-OPENMP_INCLUDE_PATH="${LLVM_INSTALL_DIR}/lib/clang/18/include"
-OPENMP_LIB_PATH="${LLVM_INSTALL_DIR}/lib"
+LLVM_INCLUDE_PATH="${LLVM_INSTALL_DIR}/lib/clang/18/include"
+# Detect LLVM library path
+if [[ -d "${LLVM_INSTALL_DIR}/lib/aarch64-unknown-linux-gnu" ]]; then
+    LLVM_LIB_PATH="${LLVM_INSTALL_DIR}/lib/aarch64-unknown-linux-gnu"
+elif [[ -d "${LLVM_INSTALL_DIR}/lib/x86_64-unknown-linux-gnu" ]]; then
+    LLVM_LIB_PATH="${LLVM_INSTALL_DIR}/lib/x86_64-unknown-linux-gnu"
+else
+    LLVM_LIB_PATH="${LLVM_INSTALL_DIR}/lib"
+fi
 # macOS specific paths
 MACOS_SDK_PATH="/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"
 
@@ -36,14 +46,9 @@ detect_os_paths() {
         SYSTEM_INCLUDE_PATH="/usr/include"
         SYSTEM_CXX_INCLUDE_PATH="/usr/include/c++/v1"
     else
-        echo "Unsupported OS: $OSTYPE"
+        carts_error "Unsupported OS: $OSTYPE"
         exit 1
     fi
-}
-
-# Helper function for aligned output
-print_cmd() {
-    printf "  %-50s ## %s\n" "$1" "$2"
 }
 
 # Function to show usage
@@ -51,79 +56,86 @@ show_usage() {
     echo "Usage: $0 <command> [options]"
     echo ""
     echo "Commands:"
-    print_cmd "build [options]"             "Build CARTS project using system clang"
-    print_cmd "cgeist <file> [options]"     "Run cgeist with automatic include paths"
-    print_cmd "run [options]"               "Run CARTS MLIR transformations"
-    print_cmd "mlir-translate <file> [options]" "Run mlir-translate"
-    print_cmd "compile <file> [options]"    "Compile with ARTS runtime"
-    print_cmd "visualize <mlir> [options]"  "Export ARTS graphs or launch visualizer UI"
-    print_cmd "benchmark [options]"         "Run CARTS benchmarks"
-    print_cmd "setup [options]"             "Set up CARTS environment"
-    print_cmd "clean"                       "Clean generated files in current directory"
-    print_cmd "check [options]"             "Run CARTS test suite using llvm-lit"
-    print_cmd "execute <file> [options]"    "Complete pipeline: C++ → executable"
+    carts_cmd "build [options]"             "Build CARTS project using system clang"
+    carts_cmd "cgeist <file> [options]"     "Run cgeist with automatic include paths"
+    carts_cmd "run [options]"               "Run CARTS MLIR transformations"
+    carts_cmd "mlir-translate <file> [options]" "Run mlir-translate"
+    carts_cmd "compile <file> [options]"    "Compile with ARTS runtime"
+    carts_cmd "visualize <mlir> [options]"  "Export ARTS graphs or launch visualizer UI"
+    carts_cmd "benchmark [options]"         "Run CARTS benchmarks"
+    carts_cmd "setup [options]"             "Set up CARTS environment"
+    carts_cmd "clean [options]"              "Clean generated files in current directory"
+    carts_cmd "check [options]"             "Run CARTS test suite using llvm-lit"
+    carts_cmd "execute <file> [options]"    "Complete pipeline: C++ → executable"
     
     echo ""
     echo "Pipeline Options (for 'run' command):"
-    print_cmd "--complete"                   "Run complete pipeline (default)"
-    print_cmd "--simplify"                   "Stop after initial cleanup and simplification"
-    print_cmd "--arts-inliner"               "Stop after ARTS inliner"
-    print_cmd "--convert-openmp"             "Stop after OpenMP conversion"
-    print_cmd "--edt-transforms"             "Stop after EDT transformations"
-    print_cmd "--edt-lowering"               "Stop after EDT lowering"
-    print_cmd "--datablock"                  "Stop after datablock creation and optimization"
-    print_cmd "--epochs"                     "Stop after epoch creation"
-    print_cmd "--arts-to-llvm"               "Stop after ARTS to LLVM conversion"
-    print_cmd "--emit-llvm"                  "Emit LLVM IR output (can be used with any stage)"
+    carts_cmd "--complete"                   "Run complete pipeline (default)"
+    carts_cmd "--simplify"                   "Stop after initial cleanup and simplification"
+    carts_cmd "--arts-inliner"               "Stop after ARTS inliner"
+    carts_cmd "--convert-openmp"             "Stop after OpenMP conversion"
+    carts_cmd "--edt-transforms"             "Stop after EDT transformations"
+    carts_cmd "--edt-lowering"               "Stop after EDT lowering"
+    carts_cmd "--datablock"                  "Stop after datablock creation and optimization"
+    carts_cmd "--epochs"                     "Stop after epoch creation"
+    carts_cmd "--arts-to-llvm"               "Stop after ARTS to LLVM conversion"
+    carts_cmd "--emit-llvm"                  "Emit LLVM IR output (can be used with any stage)"
     
     echo ""
     echo "Execute Options (for 'execute' command):"
-    print_cmd "--run-args <args>"               "Pass additional arguments to carts run command"
-    print_cmd "--compile-args <args>"           "Pass additional arguments to carts compile command"
+    carts_cmd "--run-args <args>"               "Pass additional arguments to carts run command"
+    carts_cmd "--compile-args <args>"           "Pass additional arguments to carts compile command"
     
     echo ""
     echo "Examples:"
     echo "  # Build commands"
-    print_cmd "carts build"                    "Build CARTS project (default)"
-    print_cmd "carts build --clean"           "Clean and build"
-    print_cmd "carts build --arts"            "Build only ARTS components"
-    print_cmd "carts build --polygeist"       "Build only Polygeist"
-    print_cmd "carts build --llvm"            "Build only LLVM"
+    carts_cmd "carts build"                    "Build CARTS project (default)"
+    carts_cmd "carts build --clean"           "Clean and build"
+    carts_cmd "carts build --arts"            "Build only ARTS components"
+    carts_cmd "carts build --polygeist"       "Build only Polygeist"
+    carts_cmd "carts build --llvm"            "Build only LLVM"
+    carts_cmd "carts build --docker"          "Build Docker image (docker/docker-build.sh)"
     
     echo ""
     echo "  # Compilation pipeline"
-    print_cmd "carts cgeist simple.cpp -std=c++17 -fopenmp -O0 -S" "Convert C++ to MLIR"
-    print_cmd "carts run simple.mlir --complete --emit-llvm" "Full pipeline to LLVM"
-    print_cmd "carts run simple.mlir --convert-openmp --emit-llvm" "Stop after OpenMP conversion"
-    print_cmd "carts compile simple.ll -o simple" "Compile LLVM to executable"
-    print_cmd "carts execute simple.cpp -o simple" "Complete pipeline: C++ → executable"
-    print_cmd "carts execute simple.cpp --run-args --export-json -o simple" "Pipeline with JSON export"
-    print_cmd "carts execute simple.cpp --run-args --debug-only=db -o simple" "Pipeline with debug flags"
-    print_cmd "carts execute simple.cpp --compile-args -lm -lpthread -o simple" "Pipeline with library dependencies"
+    carts_cmd "carts cgeist simple.cpp -std=c++17 -fopenmp -O0 -S" "Convert C++ to MLIR"
+    carts_cmd "carts run simple.mlir --complete --emit-llvm" "Full pipeline to LLVM"
+    carts_cmd "carts run simple.mlir --convert-openmp --emit-llvm" "Stop after OpenMP conversion"
+    carts_cmd "carts compile simple.ll -o simple" "Compile LLVM to executable"
+    carts_cmd "carts execute simple.cpp -o simple" "Complete pipeline: C++ → executable"
+    carts_cmd "carts execute simple.cpp --run-args --export-json -o simple" "Pipeline with JSON export"
+    carts_cmd "carts execute simple.cpp --run-args --debug-only=db -o simple" "Pipeline with debug flags"
+    carts_cmd "carts execute simple.cpp --compile-args -lm -lpthread -o simple" "Pipeline with library dependencies"
     
     echo ""
     echo "  # Development and testing"
-    print_cmd "carts run --help"               "Show pipeline options"
-    print_cmd "carts check"                    "Run all CARTS tests"
-    print_cmd "carts check --suite arts"      "Run only ARTS tests"
-    print_cmd "carts clean"                    "Clean generated files"
+    carts_cmd "carts run --help"               "Show pipeline options"
+    carts_cmd "carts check"                    "Run all CARTS tests"
+    carts_cmd "carts check --suite arts"      "Run only ARTS tests"
+    carts_cmd "carts clean"                    "Clean generated files"
+    carts_cmd "carts clean --docker"          "Clean Docker containers and images"
     
     echo ""
     echo "  # Environment setup"
-    print_cmd "carts setup"                    "Setup CARTS environment"
-    print_cmd "carts setup --add-to-path"     "Add carts to PATH"
-    print_cmd "carts setup --deps-only"       "Install dependencies only"
+    carts_cmd "carts setup"                    "Setup CARTS environment"
+    carts_cmd "carts setup --add-to-path"     "Add carts to PATH"
+    carts_cmd "carts setup --deps-only"       "Install dependencies only"
     
     echo ""
     echo "  # Benchmarking"
-    print_cmd "carts benchmark --target_examples matrixmul" "Run matrix multiplication benchmark"
+    carts_cmd "carts benchmark --target_examples matrixmul" "Run matrix multiplication benchmark"
+
+    echo ""
+    echo "  # Docker operations"
+    carts_cmd "carts docker --update"                        "Rebuild image via docker/docker-update.sh (requires clean repos)"
+    carts_cmd "carts docker --run example.c --extraflags"  "Start 2-node cluster and run example inside master container"
+    carts_cmd "carts docker --kill"                         "Kill all processes in running ARTS containers"
     
     echo ""
     echo "Environment variables:"
     echo "  CARTS_INSTALL_DIR - Override installation directory (default: .install)"
     echo "  CARTS_VERBOSE - Enable verbose output"
     echo ""
-    echo "Note: 'build' uses system clang, while ARTS operations use installed LLVM"
 }
 
 # Function to run cgeist with automatic include paths
@@ -132,14 +144,14 @@ run_cgeist() {
     shift
     
     if [[ ! -f "$input_file" ]]; then
-        echo "Error: Input file '$input_file' not found"
+        carts_error "Input file '$input_file' not found"
         exit 1
     fi
     
     # Build include paths - use system C++ headers for compatibility, LLVM libraries for linking
     local include_paths=(
         # OpenMP and clang resource headers
-        "-I${OPENMP_INCLUDE_PATH}"
+        "-I${LLVM_INCLUDE_PATH}"
         # System C headers from SDK
         "-I${SYSTEM_INCLUDE_PATH}"
         # System libc++ headers from SDK 
@@ -157,9 +169,9 @@ run_cgeist() {
     fi
     
     if [[ -n "$CARTS_VERBOSE" ]]; then
-        echo "Running cgeist with include paths:"
+        carts_debug "Running cgeist with include paths:"
         printf "  %s\n" "${include_paths[@]}"
-        echo "Command: ${POLYGEIST_INSTALL_DIR}/bin/cgeist ${include_paths[*]} ${extra_cflags[*]} $input_file $*"
+        carts_debug "Command: ${POLYGEIST_INSTALL_DIR}/bin/cgeist ${include_paths[*]} ${extra_cflags[*]} $input_file $*"
     fi
     
     "${POLYGEIST_INSTALL_DIR}/bin/cgeist" "${include_paths[@]}" "${extra_cflags[@]}" "$input_file" "$@"
@@ -169,7 +181,7 @@ run_cgeist() {
 # Function to run carts-run (the C++ executable)
 run_run() {
     if [[ -n "$CARTS_VERBOSE" ]]; then
-        echo "Running carts-run: ${CARTS_INSTALL_DIR}/bin/carts-run $*"
+        carts_debug "Running carts-run: ${CARTS_INSTALL_DIR}/bin/carts-run $*"
     fi
     
     "${CARTS_INSTALL_DIR}/bin/carts-run" "$@"
@@ -178,7 +190,7 @@ run_run() {
 # Function to run mlir-translate
 run_mlir_translate() {
     if [[ -n "$CARTS_VERBOSE" ]]; then
-        echo "Running mlir-translate: ${LLVM_INSTALL_DIR}/bin/mlir-translate $*"
+        carts_debug "Running mlir-translate: ${LLVM_INSTALL_DIR}/bin/mlir-translate $*"
     fi
     
     "${LLVM_INSTALL_DIR}/bin/mlir-translate" "$@"
@@ -190,25 +202,26 @@ run_compile() {
     shift
     
     if [[ ! -f "$input_file" ]]; then
-        echo "Error: Input file '$input_file' not found"
+        carts_error "Input file '$input_file' not found"
         exit 1
     fi
     
     # Use installed LLVM clang for ARTS operations
     local clang_path="${LLVM_INSTALL_DIR}/bin/clang"
     if [[ ! -f "$clang_path" ]]; then
-        echo "Error: LLVM clang not found at $clang_path"
-        echo "Please ensure LLVM is properly installed"
+        carts_error "LLVM clang not found at $clang_path"
+        carts_info "Please ensure LLVM is properly installed"
         exit 1
     fi
     
     # Build library paths
     local library_paths=(
         "-L${ARTS_INSTALL_DIR}/lib"
-        "-L${OPENMP_LIB_PATH}"
+        "-L${LLVM_LIB_PATH}"
         "-L${LLVM_INSTALL_DIR}/lib"
         "-Wl,-rpath,${ARTS_INSTALL_DIR}/lib"
-        "-Wl,-rpath,${OPENMP_LIB_PATH}"
+        "-Wl,-rpath,${LLVM_LIB_PATH}"
+        "-Wl,-rpath,${LLVM_INSTALL_DIR}/lib"
     )
     
     if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -234,11 +247,11 @@ run_compile() {
     fi
     
     if [[ -n "$CARTS_VERBOSE" ]]; then
-        echo "Running LLVM clang with library paths:"
+        carts_debug "Running LLVM clang with library paths:"
         printf "  %s\n" "${library_paths[@]}"
-        echo "Libraries:"
+        carts_debug "Libraries:"
         printf "  %s\n" "${libraries[@]}"
-        echo "Command: $clang_path ${library_paths[*]} ${libraries[*]} $input_file $*"
+        carts_debug "Command: $clang_path ${library_paths[*]} ${libraries[*]} $input_file $*"
     fi
     
     "$clang_path" -O3 -g0 "${library_paths[@]}" "${libraries[@]}" "$input_file" "$@"
@@ -248,12 +261,12 @@ run_compile() {
 run_benchmark() {
     local benchmark_script="${CARTS_DIR}/tools/benchmark/carts-benchmark"
     if [[ ! -f "$benchmark_script" ]]; then
-        echo "Error: Benchmark script not found at $benchmark_script"
+        carts_error "Benchmark script not found at $benchmark_script"
         exit 1
     fi
     
     if [[ -n "$CARTS_VERBOSE" ]]; then
-        echo "Running benchmark: python3 $benchmark_script $*"
+        carts_debug "Running benchmark: python3 $benchmark_script $*"
     fi
     
     python3 "$benchmark_script" "$@"
@@ -283,18 +296,18 @@ run_visualize() {
         local mlir_file="$1"; shift
         local out_json="${server_dir}/graph.json"
         if [[ -n "$CARTS_VERBOSE" ]]; then
-            echo "Exporting JSON: ${CARTS_INSTALL_DIR}/bin/carts-visualizer $mlir_file --json -o $out_json $*"
+            carts_debug "Exporting JSON: ${CARTS_INSTALL_DIR}/bin/carts-visualizer $mlir_file --json -o $out_json $*"
         fi
         "${CARTS_INSTALL_DIR}/bin/carts-visualizer" "$mlir_file" --json -o "$out_json" "$@"
         if [[ "$serve_mode" == true ]]; then
             if [[ -n "$CARTS_VERBOSE" ]]; then
-                echo "Launching visualizer UI server: python3 ${server_dir}/app.py"
+                carts_debug "Launching visualizer UI server: python3 ${server_dir}/app.py"
             fi
             python3 "${server_dir}/app.py"
         fi
     else
         if [[ -n "$CARTS_VERBOSE" ]]; then
-            echo "Launching visualizer UI server: python3 ${server_dir}/app.py $*"
+            carts_debug "Launching visualizer UI server: python3 ${server_dir}/app.py $*"
         fi
         python3 "${server_dir}/app.py" "$@"
     fi
@@ -302,20 +315,20 @@ run_visualize() {
 
 # Function to build CARTS project using system clang
 run_build() {
-    echo "Building CARTS project using system clang..."
-    echo "Note: Project build uses system clang, ARTS operations use installed LLVM"
-    echo ""
+    carts_header "CARTS Build"
+    carts_print "Building CARTS project using system clang"
     
     # Check if we're in the right directory
     if [[ ! -f "${CARTS_DIR}/Makefile" ]]; then
-        echo "Error: Makefile not found. Are you in the CARTS project root?"
+        carts_error "Makefile not found. Are you in the CARTS project root?"
         exit 1
     fi
     
     # Parse build options
     local clean_build=false
     local build_target="build"
-    
+    local docker_build=false
+
     while [[ $# -gt 0 ]]; do
         case "$1" in
             "--clean"|"-c")
@@ -334,19 +347,24 @@ run_build() {
                 build_target="llvm"
                 shift
                 ;;
+            "--docker"|"-d")
+                docker_build=true
+                shift
+                ;;
             "--help"|"-h")
-                echo "Build options:"
-                echo "  (default)       Build CARTS project (make build)"
-                echo "  --clean, -c     Clean build (make clean && make build)"
-                echo "  --arts, -a      Build only ARTS components (make arts)"
-                echo "  --polygeist, -p Build only Polygeist (make polygeist)"
-                echo "  --llvm, -l      Build only LLVM (make llvm)"
-                echo "  --help, -h      Show this help"
+                carts_print "Build options:"
+                carts_print "  (default)       Build CARTS project (make build)"
+                carts_print "  --clean, -c     Clean build (make clean && make build)"
+                carts_print "  --arts, -a      Build only ARTS components (make arts)"
+                carts_print "  --polygeist, -p Build only Polygeist (make polygeist)"
+                carts_print "  --llvm, -l      Build only LLVM (make llvm)"
+                carts_print "  --docker, -d    Build Docker image (docker/docker-build.sh)"
+                carts_print "  --help, -h      Show this help"
                 exit 0
                 ;;
             *)
-                echo "Unknown build option: $1"
-                echo "Use --help for available options"
+                carts_error "Unknown build option: $1"
+                carts_print "Use --help for available options"
                 exit 1
                 ;;
         esac
@@ -357,26 +375,51 @@ run_build() {
     
     if [[ "$clean_build" == "true" ]]; then
         if [[ -n "$CARTS_VERBOSE" ]]; then
-            echo "Cleaning build..."
+            carts_debug "Cleaning build..."
         fi
-        make clean
+        if [[ "$docker_build" == "true" ]]; then
+            local docker_dir="${CARTS_DIR}/docker"
+            if [[ ! -d "$docker_dir" ]]; then
+                carts_error "Docker directory not found at $docker_dir"
+                exit 1
+            fi
+            if [[ -n "$CARTS_VERBOSE" ]]; then
+                carts_debug "Running Docker clean script: $docker_dir/docker-clean.sh"
+            fi
+            (cd "$docker_dir" && ./docker-clean.sh)
+        else
+            make clean
+        fi
     fi
-    
+
     if [[ -n "$CARTS_VERBOSE" ]]; then
-        echo "Running: make $build_target"
+        if [[ "$docker_build" == "true" ]]; then
+            carts_debug "Running Docker build script: ${CARTS_DIR}/docker/docker-build.sh"
+        else
+            carts_debug "Running: make $build_target"
+        fi
     fi
-    
-    make "$build_target"
+
+    if [[ "$docker_build" == "true" ]]; then
+        local docker_dir="${CARTS_DIR}/docker"
+        if [[ ! -d "$docker_dir" ]]; then
+            carts_error "Docker directory not found at $docker_dir"
+            exit 1
+        fi
+        (cd "$docker_dir" && ./docker-build.sh)
+    else
+        make "$build_target"
+    fi
     
     if [[ $? -eq 0 ]]; then
-        echo ""
-        echo "CARTS build completed successfully!"
-        echo "Install directory: ${CARTS_INSTALL_DIR}"
-        echo "System clang used for build"
-        echo "ARTS operations will use installed LLVM"
+        carts_header "Build Complete"
+        carts_success "CARTS build completed successfully!"
+        if [[ "$docker_build" == "true" ]]; then
+            carts_success "Docker build completed"
+        fi
     else
-        echo ""
-        echo "CARTS build failed!"
+        carts_header "Build Failed"
+        carts_error "CARTS build failed!"
         exit 1
     fi
 }
@@ -385,21 +428,201 @@ run_build() {
 run_setup() {
     local setup_script="${CARTS_DIR}/tools/setup/carts-setup.py"
     if [[ ! -f "$setup_script" ]]; then
-        echo "Error: Setup script not found at $setup_script"
+        carts_error "Setup script not found at $setup_script"
         exit 1
     fi
     
     if [[ -n "$CARTS_VERBOSE" ]]; then
-        echo "Running setup: python3 $setup_script $*"
+        carts_debug "Running setup: python3 $setup_script $*"
     fi
     
     python3 "$setup_script" "$@"
 }
 
+# Function to run docker operations
+run_docker() {
+    # Parse docker subcommands as flags
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            "--run"|"-r")
+                shift
+                if [[ $# -eq 0 ]]; then
+                    carts_error "--run requires a file argument"
+                    carts_info "Usage: carts docker --run <file> [options]"
+                    exit 1
+                fi
+                run_docker_run "$@"
+                return
+                ;;
+            "--update"|"-u")
+                shift
+                run_docker_update "$@"
+                return
+                ;;
+            "--kill"|"-k")
+                shift
+                run_docker_kill
+                return
+                ;;
+            "--clean"|"-c")
+                shift
+                run_docker_clean
+                return
+                ;;
+            "--help"|"-h")
+                carts_info "Docker operations:"
+                carts_info "  --run <file> [options]    Run example in Docker containers (starts containers + executes)"
+                carts_info "  --update, -u             Update Docker containers (requires clean repos)"
+                carts_info "  --kill, -k               Kill all processes in running ARTS containers"
+                carts_info "  --clean, -c              Clean Docker containers and images"
+                carts_info "  --help, -h               Show this help"
+                carts_line
+                carts_info "Examples:"
+                carts_info "  carts docker --run example.c          # Run example.c in Docker containers"
+                carts_info "  carts docker --update                 # Update Docker image (requires clean repos)"
+                carts_info "  carts docker --kill                   # Kill all processes in containers"
+                carts_info "  carts docker --clean                  # Clean Docker setup"
+                exit 0
+                ;;
+            *)
+                carts_error "Unknown docker option: $1"
+                carts_info "Use 'carts docker --help' for available options"
+                exit 1
+                ;;
+        esac
+    done
+
+    # If no arguments provided, show help
+    carts_error "Docker command requires an option"
+    carts_info "Use 'carts docker --help' for available options"
+    exit 1
+}
+
+# Function to update Docker containers and commit/push changes
+run_docker_update() {
+    local docker_dir="${CARTS_DIR}/docker"
+    if [[ ! -d "$docker_dir" ]]; then
+        carts_error "Docker directory not found at $docker_dir"
+        exit 1
+    fi
+
+    carts_step "Running Docker update script"
+    cd "$docker_dir"
+    if [[ -f "docker-update.sh" ]]; then
+        if [[ -n "$CARTS_VERBOSE" ]]; then
+            carts_debug "Running: ./docker-update.sh"
+        fi
+        ./docker-update.sh
+    else
+        carts_error "docker-update.sh not found in $docker_dir"
+        exit 1
+    fi
+}
+
+# Function to kill all processes in Docker containers
+run_docker_kill() {
+    local docker_dir="${CARTS_DIR}/docker"
+    if [[ ! -d "$docker_dir" ]]; then
+        carts_error "Docker directory not found at $docker_dir"
+        exit 1
+    fi
+
+    carts_info "Killing all processes in ARTS containers..."
+    cd "$docker_dir"
+
+    # Run the docker-kill.sh script
+    if [[ -f "docker-kill.sh" ]]; then
+        if [[ -n "$CARTS_VERBOSE" ]]; then
+            carts_debug "Running: ./docker-kill.sh"
+        fi
+        ./docker-kill.sh
+    else
+        carts_error "docker-kill.sh not found in $docker_dir"
+        exit 1
+    fi
+}
+
+# Function to clean Docker containers and images
+run_docker_clean() {
+    local docker_dir="${CARTS_DIR}/docker"
+    if [[ ! -d "$docker_dir" ]]; then
+        carts_error "Docker directory not found at $docker_dir"
+        exit 1
+    fi
+
+    carts_info "Cleaning Docker multi-node setup..."
+    cd "$docker_dir"
+
+    # Run the docker-clean.sh script
+    if [[ -f "docker-clean.sh" ]]; then
+        if [[ -n "$CARTS_VERBOSE" ]]; then
+            carts_debug "Running: ./docker-clean.sh"
+        fi
+        ./docker-clean.sh
+    else
+        carts_error "docker-clean.sh not found in $docker_dir"
+        exit 1
+    fi
+}
+
+# Function to run examples in Docker containers
+run_docker_run() {
+    local docker_dir="${CARTS_DIR}/docker"
+    if [[ ! -d "$docker_dir" ]]; then
+        carts_error "Docker directory not found at $docker_dir"
+        exit 1
+    fi
+
+    # Change to docker directory and run docker-run.sh with all arguments
+    cd "$docker_dir"
+    if [[ -f "docker-run.sh" ]]; then
+        if [[ -n "$CARTS_VERBOSE" ]]; then
+            carts_debug "Running: ./docker-run.sh $*"
+        fi
+        ./docker-run.sh "$@"
+    else
+        carts_error "docker-run.sh not found in $docker_dir"
+        exit 1
+    fi
+}
+
 # Function to clean generated files
 run_clean() {
-    echo "Cleaning generated files in current directory..."
-    
+    local docker_clean=false
+
+    # Parse clean options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            "--docker"|"-d")
+                docker_clean=true
+                shift
+                ;;
+            "--help"|"-h")
+                carts_info "Clean options:"
+                carts_info "  (default)       Clean generated files in current directory"
+                carts_info "  --docker, -d    Clean Docker containers and images"
+                carts_info "  --help, -h      Show this help"
+                exit 0
+                ;;
+            *)
+                carts_error "Unknown clean option: $1"
+                carts_info "Use --help for available options"
+                exit 1
+                ;;
+        esac
+    done
+
+    if [[ "$docker_clean" == "true" ]]; then
+        run_docker_clean
+    else
+        run_local_clean
+    fi
+}
+
+# Function to clean local generated files
+run_local_clean() {
+    carts_info "Cleaning generated files in current directory..."
+
     # Files to remove
     local files_to_remove=(
         "*.mlir"
@@ -414,77 +637,100 @@ run_clean() {
         "*.tmp"
         ".artsPrintLock"
     )
-    
+
     # Directories to remove
     local dirs_to_remove=(
         "build"
         "cmake-build-*"
         ".cache"
     )
-    
+
     local removed_count=0
-    
+
     # Remove files
     for pattern in "${files_to_remove[@]}"; do
         for file in $pattern; do
             if [[ -f "$file" ]]; then
                 if [[ -n "$CARTS_VERBOSE" ]]; then
-                    echo "Removing file: $file"
+                    carts_debug "Removing file: $file"
                 fi
                 rm -f "$file"
                 ((removed_count++))
             fi
         done
     done
-    
+
     # Remove directories
     for pattern in "${dirs_to_remove[@]}"; do
         for dir in $pattern; do
             if [[ -d "$dir" ]]; then
                 if [[ -n "$CARTS_VERBOSE" ]]; then
-                    echo "Removing directory: $dir"
+                    carts_debug "Removing directory: $dir"
                 fi
                 rm -rf "$dir"
                 ((removed_count++))
             fi
         done
     done
-    
+
     # Remove executables (but preserve source files)
     for file in *; do
         if [[ -f "$file" && -x "$file" && ! "$file" =~ \.(cpp|c|h|hpp|py|sh|md|txt|cfg|yaml|json)$ ]]; then
             if [[ -n "$CARTS_VERBOSE" ]]; then
-                echo "Removing executable: $file"
+                carts_debug "Removing executable: $file"
             fi
             rm -f "$file"
             ((removed_count++))
         fi
     done
-    
+
     if [[ $removed_count -eq 0 ]]; then
-        echo "No generated files found to clean"
+        carts_info "No generated files found to clean"
     else
-        echo "Cleaned $removed_count files/directories"
+        carts_success "Cleaned $removed_count files/directories"
+    fi
+}
+
+# Function to clean Docker containers and images
+run_docker_clean() {
+    local docker_dir="${CARTS_DIR}/docker"
+    if [[ ! -d "$docker_dir" ]]; then
+        echo "Error: Docker directory not found at $docker_dir"
+        exit 1
+    fi
+
+    echo "Cleaning Docker multi-node setup..."
+
+    # Change to docker directory and run docker-clean.sh
+    cd "$docker_dir"
+    if [[ -f "docker-clean.sh" ]]; then
+        if [[ -n "$CARTS_VERBOSE" ]]; then
+            echo "Running: ./docker-clean.sh"
+        fi
+        ./docker-clean.sh
+    else
+        echo "Error: docker-clean.sh not found in $docker_dir"
+        exit 1
     fi
 }
 
 # Function to run CARTS test suite
 run_check() {
-    echo "Running CARTS test suite..."
+    carts_info "Running CARTS test suite..."
     
     # Check if tests directory exists
     local tests_dir="${CARTS_DIR}/tests"
     if [[ ! -d "$tests_dir" ]]; then
-        echo "Error: Tests directory not found at $tests_dir"
-        echo "The test infrastructure may not be set up yet."
+        carts_error "Tests directory not found at $tests_dir"
+        carts_info "The test infrastructure may not be set up yet."
         exit 1
     fi
     
     # Check if llvm-lit exists
     local llvm_lit="${LLVM_INSTALL_DIR}/bin/llvm-lit"
     if [[ ! -f "$llvm_lit" ]]; then
-        echo "Error: llvm-lit not found at $llvm_lit"
-        echo "Please ensure LLVM is properly installed by running 'carts build'"
+        carts_error "llvm-lit not found at $llvm_lit"
+        carts_info "Please ensure LLVM is properly installed by running 'carts build'"
         exit 1
     fi
     
@@ -499,17 +745,17 @@ run_check() {
                     test_suite="$2"
                     shift 2
                 else
-                    echo "Error: --suite requires a value (e.g., 'mlir', 'all')"
+                    carts_error "--suite requires a value (e.g., 'mlir', 'all')"
                     exit 1
                 fi
                 ;;
             "--help"|"-h")
-                echo "Check options:"
-                echo "  (default)           Run all CARTS tests"
-                echo "  --suite arts        Run only ARTS tests"
-                echo "  --suite all         Run all test suites (default)"
-                echo "  -v                  Verbose output from llvm-lit"
-                echo "  --help, -h          Show this help"
+                carts_info "Check options:"
+                carts_info "  (default)           Run all CARTS tests"
+                carts_info "  --suite arts        Run only ARTS tests"
+                carts_info "  --suite all         Run all test suites (default)"
+                carts_info "  -v                  Verbose output from llvm-lit"
+                carts_info "  --help, -h          Show this help"
                 exit 0
                 ;;
             *)
@@ -530,36 +776,36 @@ run_check() {
             test_path="$tests_dir/arts"
             ;;
         *)
-            echo "Error: Unknown test suite '$test_suite'"
-            echo "Available suites: all, arts"
+            carts_error "Unknown test suite '$test_suite'"
+            carts_info "Available suites: all, arts"
             exit 1
             ;;
     esac
     
     # Ensure test path exists
     if [[ ! -d "$test_path" ]]; then
-        echo "Error: Test path not found: $test_path"
+        carts_error "Test path not found: $test_path"
         exit 1
     fi
     
-    echo "Test suite: $test_suite"
-    echo "Test path: $test_path"
-    echo ""
+    carts_info "Test suite: $test_suite"
+    carts_info "Test path: $test_path"
+    carts_line
     
     if [[ -n "$CARTS_VERBOSE" ]]; then
-        echo "Running: $llvm_lit -v $test_path ${extra_args[*]}"
-        echo ""
+        carts_debug "Running: $llvm_lit -v $test_path ${extra_args[*]}"
+        carts_line
     fi
     
     # Run the tests
     "$llvm_lit" -v "$test_path" "${extra_args[@]}"
     local exit_code=$?
     
-    echo ""
+    carts_line
     if [[ $exit_code -eq 0 ]]; then
-        echo "CARTS test suite completed successfully!"
+        carts_success "CARTS test suite completed successfully!"
     else
-        echo "CARTS test suite failed with exit code $exit_code"
+        carts_error "CARTS test suite failed with exit code $exit_code"
     fi
     
     return $exit_code
@@ -571,7 +817,7 @@ run_execute() {
     shift
     
     if [[ ! -f "$input_file" ]]; then
-        echo "Error: Input file '$input_file' not found"
+        carts_error "Input file '$input_file' not found"
         exit 1
     fi
     
@@ -581,7 +827,7 @@ run_execute() {
     
     # Validate input file type
     if [[ "$extension" != "cpp" && "$extension" != "c" ]]; then
-        echo "Error: Input file must be .cpp or .c"
+        carts_error "Input file must be .cpp or .c"
         exit 1
     fi
     
@@ -617,13 +863,13 @@ run_execute() {
         esac
     done
     
-    echo "Executing complete CARTS pipeline for: $input_file"
-    echo "Pipeline: C++ → MLIR → LLVM IR → Executable"
-    echo ""
+    carts_header "CARTS Execution"
+    carts_info "Running CARTS for: $input_file"
+    carts_line
     
     # Step 1: C++ to MLIR
-    echo "Step 1: Converting C++ to MLIR..."
-    
+    carts_step "Converting C++ to MLIR"
+
     # Determine standard flag based on file extension
     local std_flag=""
     if [[ "$extension" == "cpp" ]]; then
@@ -633,7 +879,7 @@ run_execute() {
     fi
     
     if [[ -n "$CARTS_VERBOSE" ]]; then
-        echo "Running: carts cgeist $input_file $std_flag -fopenmp -O0 -S > ${base_name}.mlir"
+        carts_debug "Running: carts cgeist $input_file $std_flag -fopenmp -O0 -S > ${base_name}.mlir"
     fi
     
     # Temporarily disable verbose output for file generation
@@ -641,12 +887,12 @@ run_execute() {
     unset CARTS_VERBOSE
     
     if ! carts cgeist "$input_file" $std_flag -fopenmp -O0 -S > "${base_name}.mlir"; then
-        echo "Error: Failed to convert C++ to MLIR"
+        carts_error "Failed to convert C++ to MLIR"
         exit 1
     fi
     
     # Step 2: MLIR to LLVM IR with ARTS transformations
-    echo "Step 2: Applying ARTS transformations and converting to LLVM IR..."
+    carts_step "Applying ARTS transformations and converting to LLVM IR"
     
     # Build the carts run command with additional args
     local run_cmd_args=("${base_name}.mlir" "--O3" "--emit-llvm")
@@ -657,11 +903,11 @@ run_execute() {
     fi
     
     if [[ -n "$original_verbose" ]]; then
-        echo "Running: carts run ${run_cmd_args[*]} > ${base_name}-arts.ll"
+        carts_debug "Running: carts run ${run_cmd_args[*]} > ${base_name}-arts.ll"
     fi
     
     if ! carts run "${run_cmd_args[@]}" > "${base_name}-arts.ll"; then
-        echo "Error: Failed to apply ARTS transformations"
+        carts_error "Failed to apply ARTS transformations"
         exit 1
     fi
     
@@ -671,7 +917,7 @@ run_execute() {
     fi
     
     # Step 3: Compile to executable
-    echo "Step 3: Compiling to executable..."
+    carts_step "Compiling to executable"
     
     # Build the compile command with additional args
     local compile_cmd_args=("${base_name}-arts.ll" "-o" "${base_name}")
@@ -680,24 +926,24 @@ run_execute() {
     fi
     
     if [[ -n "$CARTS_VERBOSE" ]]; then
-        echo "Running: carts compile ${compile_cmd_args[*]}"
+        carts_debug "Running: carts compile ${compile_cmd_args[*]}"
     fi
     
     if ! carts compile "${compile_cmd_args[@]}"; then
-        echo "Error: Failed to compile to executable"
+        carts_error "Failed to compile to executable"
         exit 1
     fi
     
-    echo ""
-    echo "Pipeline completed successfully!"
-    echo "Generated executable: ${base_name}"
-    echo ""
-    echo "Intermediate files:"
-    echo "  MLIR: ${base_name}.mlir"
-    echo "  LLVM IR: ${base_name}-arts.ll"
-    echo "  Executable: ${base_name}"
-    echo ""
-    echo "To clean intermediate files, run: carts clean"
+    carts_line
+    carts_success "Generated executable: ${base_name}"
+    carts_line
+    carts_info "Intermediate files:"
+    carts_print "  MLIR: ${base_name}.mlir"
+    carts_print "  LLVM IR: ${base_name}-arts.ll"
+    carts_print "  Executable: ${base_name}"
+    carts_line
+    carts_info "To clean intermediate files, run: carts clean"
+    carts_header "CARTS Complete"
 }
 
 # Main script logic
@@ -735,11 +981,11 @@ main() {
             ;;
         "ui")
             # Start the external ARTS UI backend and frontend (dev helpers)
-            echo "Launching ARTS UI backend on :8090"
+            carts_info "Launching ARTS UI backend on :8090"
             (cd "${CARTS_DIR}/external/ArtsUI/backend" && python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8090) &
-            echo "Launching ARTS UI frontend on :5174"
+            carts_info "Launching ARTS UI frontend on :5174"
             (cd "${CARTS_DIR}/external/ArtsUI/frontend" && npm run dev) &
-            echo "Open http://localhost:5174"
+            carts_info "Open http://localhost:5174"
             ;;
         "visualize")
             run_visualize "$@"
@@ -756,11 +1002,14 @@ main() {
         "execute")
             run_execute "$@"
             ;;
+        "docker")
+            run_docker "$@"
+            ;;
         "help"|"-h"|"--help")
             show_usage
             ;;
         *)
-            echo "Unknown command: $command"
+            carts_error "Unknown command: $command"
             show_usage
             exit 1
             ;;
