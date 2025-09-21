@@ -1,0 +1,244 @@
+# Docker Multi-Node ARTS Testing
+
+This folder contains everything needed to run ARTS tests across multiple Docker containers, simulating a true multi-node environment.
+
+## Prerequisites
+
+### Install Docker Runtime (Colima)
+We use Colima for terminal-only Docker with full CPU access:
+
+```bash
+brew install colima
+
+# Start Colima with maximum resources for fast compilation
+colima start --cpu 16 --memory 32
+```
+
+**Important**: Configure Colima with enough resources for fast compilation:
+- **CPU**: Use all available cores (e.g., `--cpu 16` for 16-core Mac)
+- **Memory**: Use at least 16GB (e.g., `--memory 32` for 32GB Mac)
+
+### Verify Docker is Working
+```bash
+docker ps
+```
+
+## Files
+
+- `docker-compose.yml` - Orchestrates 2 ARTS containers (optional, we use manual commands)
+- `Dockerfile` - Optimized base image with ARTS dependencies and SSH setup
+- `docker-build.sh` - **One-time build script** - Creates base image with all dependencies and CARTS pre-built
+- `docker-run.sh` - **Run script** - Loads pre-built image and starts multi-node containers
+- `docker-update.sh` - **Update script** - Pulls latest changes and rebuilds CARTS components
+- `docker-clean.sh` - Cleanup script - Removes all Docker containers and images
+- `run-test.sh` - Helper script to run ARTS tests
+- `.dockerignore` - Reduces build context for faster builds
+
+## Step-by-Step Setup
+
+### 1. One-Time Build (Run Once)
+```bash
+cd docker
+./docker-build.sh
+```
+
+**What this does**:
+- Builds base Docker image with Ubuntu 22.04 and all dependencies
+- Installs LLVM 18, binutils, and CMake required by CARTS
+- Sets up SSH for passwordless access between containers
+- Clones CARTS repository and runs `carts-setup.py` with all available CPU cores
+- The setup script handles the correct build order automatically
+- Creates `arts-node:built` image with CARTS pre-installed
+
+**Time**: 3-5 minutes (one-time only, with 16 cores and optimizations)
+
+### 2. Start Multi-Node Containers
+```bash
+./docker-run.sh                    # Start containers only
+./docker-run.sh parallel.c         # Start containers and run example
+./docker-run.sh parallel.c --debug-only=db  # Start containers and run with options
+```
+
+**What this does**:
+- Loads the pre-built `arts-node:built` image
+- Starts 2 containers (arts-node-1 and arts-node-2)
+- Sets up SSH keys between containers
+- Creates multi-node ARTS configuration
+- Tests SSH connectivity
+- **If example file provided**: Builds and executes the example distributedly
+
+**Time**: 30 seconds (very fast)
+
+### 3. Fast Rebuild (For Development)
+```bash
+./docker-fast-rebuild.sh
+```
+
+**What this does**:
+- Skips base image rebuild (uses existing arts-node-base)
+- Only rebuilds CARTS components
+- Perfect for development when you change CARTS code
+- Uses shallow git clone for faster downloads
+
+**Time**: 1-2 minutes (with 16 cores)
+
+### 4. Update CARTS Components (When Needed)
+```bash
+./docker-update.sh
+```
+
+**What this does**:
+- Pulls latest changes from CARTS, Polygeist, and ARTS repositories
+- Rebuilds components with all available CPU cores in correct order:
+  - `carts build --llvm`
+  - `carts build --polygeist`
+  - `carts build --arts`
+  - `carts build`
+- Updates the `arts-node:built` image
+
+**Time**: 2-5 minutes (depending on changes, with 16 cores)
+
+## Running Tests
+
+### Method 1: Manual Commands
+```bash
+# Access a container
+docker exec -it arts-node-1 bash
+
+# Run a test using carts wrapper
+cd /opt/carts
+carts execute tests/test/parallel/parallel.c
+./parallel
+```
+
+### Method 2: Using Helper Script
+```bash
+./run-test.sh tests/test/parallel
+```
+
+### Method 3: Using carts docker command
+```bash
+# From host machine (automatically starts containers and runs)
+carts docker --run example.c
+```
+
+### Method 4: Using docker-run.sh directly
+```bash
+# From docker directory (automatically starts containers and runs)
+./docker-run.sh parallel.c
+```
+
+## CARTS Docker Commands
+
+The `carts docker` command provides a unified interface for Docker operations:
+
+```bash
+carts docker --run <file>     # Run example in Docker containers
+carts docker --update [msg]   # Update and rebuild Docker containers
+carts docker --clean          # Clean all Docker containers and images
+carts docker --help           # Show help
+```
+
+### Script Functionality
+
+Each Docker script has a specific purpose:
+
+- **`docker-build.sh`**: One-time setup script that creates the base Docker image with all CARTS dependencies pre-installed. This script should only be run once initially.
+
+- **`docker-run.sh`**: Starts the multi-node Docker containers and sets up the ARTS runtime environment. This script configures SSH between containers and generates the multi-node ARTS configuration file. If an example file is provided as an argument, it will also build and execute the example distributedly across the containers.
+
+- **`docker-update.sh`**: Intelligent update script that detects changes in CARTS, Polygeist, ARTS runtime, and LLVM repositories. Only rebuilds components that have actually changed, saving time during development.
+
+- **`docker-clean.sh`**: Complete cleanup script that removes all Docker containers, images, and networks related to CARTS. Use this to reset the Docker environment.
+
+## Container Management
+
+### Check Container Status
+```bash
+docker ps
+```
+
+### Access Container Shell
+```bash
+docker exec -it arts-node-1 bash
+```
+
+### View Container Logs
+```bash
+docker logs arts-node-1
+```
+
+### Stop Containers
+```bash
+docker stop arts-node-1 arts-node-2
+```
+
+### Remove Containers
+```bash
+docker rm arts-node-1 arts-node-2
+```
+
+### Clean Up Everything
+```bash
+./docker-clean.sh
+```
+
+## Container Details
+
+Each container:
+- **Hostname**: arts-node-1, arts-node-2
+- **OS**: Ubuntu 22.04
+- **User**: root (for SSH access)
+- **Working Directory**: /opt/carts (CARTS pre-installed)
+- **SSH**: Passwordless SSH between all containers
+- **IP Addresses**: Dynamically assigned by Docker (typically 172.17.0.x)
+
+## ARTS Configuration
+
+The setup generates a multi-node ARTS configuration:
+- **2 nodes** with Docker-assigned IPs
+- **SSH launcher** for inter-node communication
+- **Port 34739** for ARTS communication
+- **4 threads per node**
+- **Config file**: `/opt/carts/arts.cfg`
+
+## Troubleshooting
+
+### SSH Connectivity Issues
+```bash
+# Test SSH between specific nodes
+docker exec arts-node-1 bash -c "ssh -o StrictHostKeyChecking=no root@172.17.0.3 'echo SSH works!'"
+```
+
+### Container Not Starting
+```bash
+# Check container logs
+docker logs arts-node-1
+
+# Restart a specific container
+docker restart arts-node-1
+```
+
+### Build Issues (during `docker-build.sh`)
+```bash
+# If the build fails in the builder container, you can access it before it's removed:
+docker exec -it arts-node-builder bash
+# Then manually debug the build process in /opt/carts
+```
+
+## Advantages over Loopback IPs
+
+- **No system configuration** - No sudo, no loopback aliases
+- **True isolation** - Each container is a real separate node
+- **Automatic networking** - Docker handles all networking
+- **SSH pre-configured** - Passwordless SSH between containers
+- **Easy cleanup** - Just run cleanup script
+- **Reproducible** - Same setup every time
+- **No conflicts** - Won't interfere with your system
+
+## Notes
+
+- **Building ARTS**: CARTS is pre-built in the Docker image with all dependencies
+- **IP Addresses**: Container IPs are dynamically assigned and may change between runs
+- **SSH Keys**: Each container generates its own SSH keys for inter-container communication
+- **Self-contained**: All containers have CARTS pre-installed at `/opt/carts`
