@@ -130,8 +130,8 @@ show_usage() {
     echo ""
     echo "  # Docker operations"
     carts_cmd "carts docker --update"                        "Rebuild image via docker/docker-update.sh (requires clean repos)"
-    carts_cmd "carts docker --run example.c --extraflags"  "Start 2-node cluster and run example inside master container"
-    carts_cmd "carts docker --kill"                         "Kill all processes in running ARTS containers"
+    carts_cmd "carts docker --run example.c -- 100 10"       "Start nodes cluster and run example with runtime args"
+    carts_cmd "carts docker --kill"                          "Kill all processes in running ARTS containers"
     
     echo ""
     echo "Environment variables:"
@@ -496,17 +496,19 @@ run_docker() {
                 ;;
             "--help"|"-h")
                 carts_info "Docker operations:"
-                carts_info "  --run <file> [options]    Run example in Docker containers (starts containers + executes)"
+                carts_info "  --run <file> [build_args] [-- runtime_args]    Run example in Docker containers"
                 carts_info "  --update, -u             Update Docker containers (requires clean repos)"
                 carts_info "  --kill, -k               Kill all processes in running ARTS containers"
                 carts_info "  --clean, -c              Clean Docker containers and images"
                 carts_info "  --help, -h               Show this help"
                 carts_line
                 carts_info "Examples:"
-                carts_info "  carts docker --run example.c          # Run example.c in Docker containers"
-                carts_info "  carts docker --update                 # Update Docker image (requires clean repos)"
-                carts_info "  carts docker --kill                   # Kill all processes in containers"
-                carts_info "  carts docker --clean                  # Clean Docker setup"
+                carts_info "  carts docker --run example.c                    # Run example.c in Docker containers"
+                carts_info "  carts docker --run matrixmul -- 100 10          # Run with runtime args: matrix size 100, block size 10"
+                carts_info "  carts docker --run fib --run-args --debug-only=db -- 15    # Build with debug, run with fib input 15"
+                carts_info "  carts docker --update                           # Update Docker image (requires clean repos)"
+                carts_info "  carts docker --kill                             # Kill all processes in containers"
+                carts_info "  carts docker --clean                            # Clean Docker setup"
                 exit 0
                 ;;
             *)

@@ -10,12 +10,26 @@ source "$(dirname "$0")/../tools/config/carts-print.sh"
 
 # Parse arguments
 EXAMPLE_FILE=""
-EXTRA_ARGS=""
+BUILD_ARGS=""
+RUNTIME_ARGS=""
 
 if [[ $# -gt 0 ]]; then
     EXAMPLE_FILE="$1"
     shift
-    EXTRA_ARGS="$*"
+
+    # Parse remaining arguments, using -- as separator between build and runtime args
+    while [[ $# -gt 0 ]]; do
+        if [[ "$1" == "--" ]]; then
+            shift
+            # Everything after -- goes to runtime args
+            RUNTIME_ARGS="$*"
+            break
+        else
+            # Everything before -- goes to build args
+            BUILD_ARGS="$BUILD_ARGS $1"
+            shift
+        fi
+    done
 fi
 
 carts_header "CARTS Multi-Node Containers"
@@ -119,8 +133,8 @@ if [[ -n "$EXAMPLE_FILE" ]]; then
 
     # First: build the binary on the master node
     REMOTE_BUILD_CMD="cd '$CONTAINER_FILE_DIR' && carts execute '$FILE_NAME'"
-    if [[ -n "$EXTRA_ARGS" ]]; then
-        REMOTE_BUILD_CMD+=" $EXTRA_ARGS"
+    if [[ -n "$BUILD_ARGS" ]]; then
+        REMOTE_BUILD_CMD+=" $BUILD_ARGS"
     fi
     carts_build "Build command: $REMOTE_BUILD_CMD"
     docker exec "$MASTER_CONTAINER" bash -c "$REMOTE_BUILD_CMD"
@@ -135,6 +149,9 @@ if [[ -n "$EXAMPLE_FILE" ]]; then
 
     # Finally: run the binary on the master node (ARTS will SSH to others)
     REMOTE_RUN_CMD="cd '$CONTAINER_FILE_DIR' && ./$BASE_NAME"
+    if [[ -n "$RUNTIME_ARGS" ]]; then
+        REMOTE_RUN_CMD+=" $RUNTIME_ARGS"
+    fi
     carts_build "Run command: $REMOTE_RUN_CMD"
     docker exec "$MASTER_CONTAINER" bash -c "$REMOTE_RUN_CMD"
 fi
