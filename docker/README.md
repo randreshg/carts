@@ -134,7 +134,7 @@ The `carts docker` command provides a unified interface for Docker operations:
 
 ```bash
 carts docker --run <file>     # Run example in Docker containers
-carts docker --update [msg]   # Update and rebuild Docker containers
+carts docker --update         # Update and rebuild Docker containers
 carts docker --clean          # Clean all Docker containers and images
 carts docker --help           # Show help
 ```
