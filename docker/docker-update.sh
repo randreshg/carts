@@ -296,7 +296,7 @@ docker exec arts-node-update bash -c "\
     [[ \"$ARTS_CHANGES\" != \"\" ]] && { cd /opt/carts/external/arts && git pull --no-tags --quiet origin master; }; \
     [[ \"$LLVM_CHANGES\" != \"\" ]] && { cd /opt/carts && carts build --llvm; }; \
     [[ \"$BUILD_POLY\" == \"true\" ]] && { cd /opt/carts && carts build --polygeist; }; \
-    [[ \"$BUILD_ARTS\" == \"true\" ]] && { cd /opt/carts && carts build --arts-debug; }; \
+    [[ \"$BUILD_ARTS\" == \"true\" ]] && { cd /opt/carts && carts build --arts-info; }; \
     [[ \"$BUILD_LLVM\" == \"true\" || \"$BUILD_POLY\" == \"true\" || \"$BUILD_ARTS\" == \"true\" || \"$BUILD_CARTS\" == \"true\" ]] && { cd /opt/carts && carts build; } \
 "
 
