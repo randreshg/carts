@@ -85,19 +85,31 @@ cd docker
 
 ### 4. Update CARTS Components (When Needed)
 ```bash
-./docker-update.sh
+./docker-update.sh                    # Update only changed components
+./docker-update.sh --arts -f          # Force rebuild ARTS component
+./docker-update.sh --llvm -f          # Force rebuild LLVM and dependent components
+./docker-update.sh -f                 # Force rebuild everything
 ```
 
 **What this does**:
-- Pulls latest changes from CARTS, Polygeist, and ARTS repositories
+- Pulls latest changes from CARTS, Polygeist, ARTS runtime, and LLVM repositories
+- By default, only rebuilds components that have detected changes
+- With force options, rebuilds specified components regardless of changes
 - Rebuilds components with all available CPU cores in correct order:
-  - `carts build --llvm`
-  - `carts build --polygeist`
-  - `carts build --arts`
-  - `carts build`
+  - `carts build --llvm` (when LLVM changes or forced)
+  - `carts build --polygeist` (when Polygeist or LLVM changes)
+  - `carts build --arts` (when ARTS changes or forced)
+  - `carts build` (when CARTS changes or forced)
 - Updates the `arts-node:built` image
 
 **Time**: 2-5 minutes (depending on changes, with 16 cores)
+
+**Force Options**:
+- `--force, -f`: Force rebuild mode (rebuilds everything)
+- `--arts, -a`: Force rebuild ARTS runtime only
+- `--polygeist, -p`: Force rebuild Polygeist compiler only
+- `--llvm, -l`: Force rebuild LLVM compiler (also rebuilds Polygeist)
+- `--carts, -c`: Force rebuild CARTS framework only
 
 ## Running Tests
 
@@ -139,10 +151,28 @@ The `carts docker` command provides a unified interface for Docker operations:
 
 ```bash
 carts docker --run <file> [build_args] [-- runtime_args]    # Run example in Docker containers
-carts docker --update                                        # Update and rebuild Docker containers
+carts docker --update [options]                              # Update and rebuild Docker containers
 carts docker --clean                                         # Clean all Docker containers and images
 carts docker --help                                          # Show help
 ```
+
+### Update Options
+
+The `--update` command supports force rebuild options:
+
+```bash
+carts docker --update                    # Update only changed components
+carts docker --update --arts -f         # Force rebuild ARTS component
+carts docker --update --llvm -f         # Force rebuild LLVM and dependent components
+carts docker --update -f                # Force rebuild everything
+```
+
+**Available options**:
+- `--arts, -a`: Force rebuild ARTS runtime
+- `--polygeist, -p`: Force rebuild Polygeist compiler
+- `--llvm, -l`: Force rebuild LLVM compiler
+- `--carts, -c`: Force rebuild CARTS framework
+- `--force, -f`: Force rebuild mode (rebuilds everything)
 
 ### Argument Separation
 

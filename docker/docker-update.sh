@@ -8,8 +8,66 @@ set -e
 # Source common print functions
 source "$(dirname "$0")/../tools/config/carts-print.sh"
 
+# Parse command line arguments
+FORCE_MODE=false
+FORCE_ARTS=false
+FORCE_POLYGEIST=false
+FORCE_LLVM=false
+FORCE_CARTS=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        "--force"|"-f")
+            FORCE_MODE=true
+            shift
+            ;;
+        "--arts"|"-a")
+            FORCE_ARTS=true
+            shift
+            ;;
+        "--polygeist"|"-p")
+            FORCE_POLYGEIST=true
+            shift
+            ;;
+        "--llvm"|"-l")
+            FORCE_LLVM=true
+            shift
+            ;;
+        "--carts"|"-c")
+            FORCE_CARTS=true
+            shift
+            ;;
+        "--help"|"-h")
+            echo "Usage: $0 [options]"
+            echo ""
+            echo "Options:"
+            echo "  --force, -f        Force rebuild mode (rebuilds even without changes)"
+            echo "  --arts, -a         Force rebuild ARTS runtime"
+            echo "  --polygeist, -p    Force rebuild Polygeist compiler"
+            echo "  --llvm, -l         Force rebuild LLVM compiler"
+            echo "  --carts, -c        Force rebuild CARTS framework"
+            echo "  --help, -h         Show this help"
+            echo ""
+            echo "Examples:"
+            echo "  $0 --arts -f       # Force rebuild ARTS"
+            echo "  $0 --llvm -f       # Force rebuild LLVM"
+            echo "  $0 -f              # Force rebuild everything"
+            exit 0
+            ;;
+        *)
+            carts_error "Unknown option: $1"
+            carts_info "Use '$0 --help' for available options"
+            exit 1
+            ;;
+    esac
+done
+
 carts_header "CARTS Docker Update"
-carts_info "Updating CARTS components in Docker"
+if [[ "$FORCE_MODE" == "true" ]]; then
+    carts_info "Updating CARTS components in Docker (FORCE MODE)"
+else
+    carts_info "Updating CARTS components in Docker"
+fi
 
 # Check for local changes before proceeding
 carts_step "Checking for local changes in repositories"
@@ -174,12 +232,47 @@ BUILD_CARTS=false
 [[ -n "$ARTS_CHANGES" ]] && BUILD_ARTS=true
 [[ -n "$LLVM_CHANGES" ]] && { BUILD_LLVM=true; BUILD_POLY=true; }
 
+# Apply force flags (overrides change detection)
+if [[ "$FORCE_MODE" == "true" ]]; then
+    BUILD_LLVM=true
+    BUILD_POLY=true
+    BUILD_ARTS=true
+    BUILD_CARTS=true
+elif [[ "$FORCE_ARTS" == "true" ]]; then
+    BUILD_ARTS=true
+elif [[ "$FORCE_POLYGEIST" == "true" ]]; then
+    BUILD_POLY=true
+elif [[ "$FORCE_LLVM" == "true" ]]; then
+    BUILD_LLVM=true
+    BUILD_POLY=true  # LLVM changes require rebuilding Polygeist
+elif [[ "$FORCE_CARTS" == "true" ]]; then
+    BUILD_CARTS=true
+fi
+
 carts_line
-carts_info "Change Detection Results:"
+if [[ "$FORCE_MODE" == "true" ]]; then
+    carts_info "Build Mode: FORCE (rebuilding everything)"
+else
+    carts_info "Change Detection Results:"
+fi
 [[ -n "$CARTS_CHANGES" ]] && carts_warning "CARTS: Changes detected" || carts_success "CARTS: Up to date"
 [[ -n "$POLYGEIST_CHANGES" ]] && carts_warning "Polygeist: Changes detected" || carts_success "Polygeist: Up to date"
 [[ -n "$ARTS_CHANGES" ]] && carts_warning "ARTS: Changes detected" || carts_success "ARTS: Up to date"
 [[ -n "$LLVM_CHANGES" ]] && carts_warning "LLVM: Changes detected" || carts_success "LLVM: Up to date"
+
+# Show force rebuild indicators
+if [[ "$FORCE_ARTS" == "true" ]]; then
+    carts_warning "ARTS: Force rebuild enabled"
+fi
+if [[ "$FORCE_POLYGEIST" == "true" ]]; then
+    carts_warning "Polygeist: Force rebuild enabled"
+fi
+if [[ "$FORCE_LLVM" == "true" ]]; then
+    carts_warning "LLVM: Force rebuild enabled"
+fi
+if [[ "$FORCE_CARTS" == "true" ]]; then
+    carts_warning "CARTS: Force rebuild enabled"
+fi
 carts_line
 
 # If nothing changed, skip
