@@ -297,9 +297,22 @@ void EventOp::build(OpBuilder &builder, OperationState &state,
 // EDT Ops
 //===----------------------------------------------------------------------===//
 void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
+                  EdtConcurrency concurrency) {
+  build(builder, state, type, concurrency, ValueRange{});
+}
+
+void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
+                  EdtConcurrency concurrency, ValueRange dependencies) {
+  Value route = builder.create<arith::ConstantIntOp>(state.location, 0, 32);
+  build(builder, state, type, concurrency, route, dependencies);
+}
+
+void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
+                  EdtConcurrency concurrency, Value route,
                   ValueRange dependencies) {
   state.addAttribute("type", EdtTypeAttr::get(builder.getContext(), type));
-  Value route = builder.create<arith::ConstantIntOp>(state.location, 0, 32);
+  state.addAttribute("concurrency", EdtConcurrencyAttr::get(
+                                        builder.getContext(), concurrency));
   state.addOperands(route);
   state.addOperands(dependencies);
 
@@ -309,9 +322,9 @@ void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
   bodyRegion->push_back(bodyBlock);
 }
 
-void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type) {
-  build(builder, state, type, ValueRange{});
-}
+//===----------------------------------------------------------------------===//
+// EDT Create Ops
+//===----------------------------------------------------------------------===//
 
 void EdtCreateOp::build(OpBuilder &builder, OperationState &state,
                         Value param_memref, Value depCount) {
@@ -385,7 +398,8 @@ static void buildDbAllocOpCommon(OpBuilder &builder, OperationState &state,
   state.addOperands(sizes);
   state.addOperands(payloadSizes);
 
-  /// Build operand segment sizes: [route=1, address(0/1), sizes, payloadSizes]
+  /// Build operand segment sizes: [route=1, address(0/1), sizes,
+  /// payloadSizes]
   state.addAttribute("operandSegmentSizes",
                      builder.getDenseI32ArrayAttr(
                          {1, static_cast<int32_t>(address ? 1 : 0),
@@ -436,15 +450,22 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
   guidShape.assign(numGuidDims, ShapedType::kDynamic);
   Type guidType = MemRefType::get(guidShape, builder.getI64Type());
 
-  /// Result ptr type rank reduces by the number of indices. Preserve static
-  /// dims where possible from the source memref.
+  /// Result ptr type: when sizes are provided, use dynamic dimensions
+  /// since the actual sizes are determined at runtime
   SmallVector<int64_t> subShape;
   subShape.reserve(remainingRank);
-  for (int64_t d = 0; d < remainingRank; ++d) {
-    int64_t srcDim = pinnedDims + d;
-    subShape.push_back(sourceMemRefType.isDynamicDim(srcDim)
-                           ? ShapedType::kDynamic
-                           : sourceMemRefType.getDimSize(srcDim));
+  if (!sizes.empty()) {
+    /// When explicit sizes are provided, result has dynamic dimensions
+    subShape.assign(remainingRank, ShapedType::kDynamic);
+  } else {
+    /// When no sizes provided, preserve static dims from source where
+    /// possible
+    for (int64_t d = 0; d < remainingRank; ++d) {
+      int64_t srcDim = pinnedDims + d;
+      subShape.push_back(sourceMemRefType.isDynamicDim(srcDim)
+                             ? ShapedType::kDynamic
+                             : sourceMemRefType.getDimSize(srcDim));
+    }
   }
   Type elementType = sourceMemRefType.getElementType();
   Type ptrType = MemRefType::get(subShape, elementType);
@@ -459,8 +480,8 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
   state.addOperands(offsets);
   state.addOperands(sizes);
 
-  /// Build operand segment sizes: [sourceGuid=1, sourcePtr=1, indices, offsets,
-  /// sizes]
+  /// Build operand segment sizes: [sourceGuid=1, sourcePtr=1, indices,
+  /// offsets, sizes]
   state.addAttribute(
       "operandSegmentSizes",
       builder.getDenseI32ArrayAttr({1, 1, static_cast<int32_t>(indices.size()),
@@ -538,6 +559,18 @@ SmallVector<Value> getSizesFromDb(Value datablockPtr) {
   }
 
   /// If we can't find the sizes, return empty (will result in 1 element)
+  return {};
+}
+
+SmallVector<Value> getOffsetsFromDb(Value datablockPtr) {
+  Operation *underlyingDb = arts::getUnderlyingDb(datablockPtr);
+  if (!underlyingDb)
+    return {};
+
+  if (auto acquireOp = dyn_cast<DbAcquireOp>(underlyingDb))
+    return SmallVector<Value>(acquireOp.getOffsets().begin(),
+                              acquireOp.getOffsets().end());
+
   return {};
 }
 

@@ -761,10 +761,7 @@ void ArtsCodegen::iterateDbElements(
     auto loopOp = create<scf::ForOp>(loc, lowerBound, upperBound, stepConstant);
     auto &loopBlock = loopOp.getRegion().front();
     setInsertionPointToStart(&loopBlock);
-    Value adj = loopOp.getInductionVar();
-    if (!dbOffsets.empty())
-      adj = create<arith::SubIOp>(loc, adj, dbOffsets[0]);
-    elementCallback(adj);
+    elementCallback(loopOp.getInductionVar());
     setInsertionPointAfter(loopOp);
     return;
   }
