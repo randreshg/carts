@@ -129,7 +129,7 @@ show_usage() {
 
     echo ""
     echo "  # Docker operations"
-    carts_cmd "carts docker --update"                        "Rebuild image via docker/docker-update.sh (requires clean repos)"
+    carts_cmd "carts docker --update [options]"              "Rebuild image via docker/docker-update.sh (requires clean repos)"
     carts_cmd "carts docker --run example.c -- 100 10"       "Start nodes cluster and run example with runtime args"
     carts_cmd "carts docker --kill"                          "Kill all processes in running ARTS containers"
     
@@ -497,7 +497,7 @@ run_docker() {
             "--help"|"-h")
                 carts_info "Docker operations:"
                 carts_info "  --run <file> [build_args] [-- runtime_args]    Run example in Docker containers"
-                carts_info "  --update, -u             Update Docker containers (requires clean repos)"
+                carts_info "  --update [options]        Update Docker containers (requires clean repos)"
                 carts_info "  --kill, -k               Kill all processes in running ARTS containers"
                 carts_info "  --clean, -c              Clean Docker containers and images"
                 carts_info "  --help, -h               Show this help"
@@ -507,6 +507,8 @@ run_docker() {
                 carts_info "  carts docker --run matrixmul -- 100 10          # Run with runtime args: matrix size 100, block size 10"
                 carts_info "  carts docker --run fib --run-args --debug-only=db -- 15    # Build with debug, run with fib input 15"
                 carts_info "  carts docker --update                           # Update Docker image (requires clean repos)"
+                carts_info "  carts docker --update --arts -f                 # Force rebuild ARTS component"
+                carts_info "  carts docker --update --llvm --polygeist -f     # Force rebuild LLVM and Polygeist"
                 carts_info "  carts docker --kill                             # Kill all processes in containers"
                 carts_info "  carts docker --clean                            # Clean Docker setup"
                 exit 0
@@ -533,13 +535,71 @@ run_docker_update() {
         exit 1
     fi
 
+    # Parse update options
+    local force_mode=false
+    local force_components=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            "--arts"|"-a")
+                force_components+=("arts")
+                shift
+                ;;
+            "--polygeist"|"-p")
+                force_components+=("polygeist")
+                shift
+                ;;
+            "--llvm"|"-l")
+                force_components+=("llvm")
+                shift
+                ;;
+            "--carts"|"-c")
+                force_components+=("carts")
+                shift
+                ;;
+            "--force"|"-f")
+                force_mode=true
+                shift
+                ;;
+            "--help"|"-h")
+                carts_info "Docker update options:"
+                carts_info "  --arts, -a         Force rebuild ARTS runtime"
+                carts_info "  --polygeist, -p    Force rebuild Polygeist compiler"
+                carts_info "  --llvm, -l         Force rebuild LLVM compiler"
+                carts_info "  --carts, -c        Force rebuild CARTS framework"
+                carts_info "  --force, -f        Force rebuild mode (rebuilds even without changes)"
+                carts_info "  --help, -h         Show this help"
+                carts_line
+                carts_info "Examples:"
+                carts_info "  carts docker --update --arts -f     # Force rebuild ARTS"
+                carts_info "  carts docker --update --llvm -f     # Force rebuild LLVM"
+                carts_info "  carts docker --update -f            # Force rebuild everything"
+                exit 0
+                ;;
+            *)
+                carts_error "Unknown update option: $1"
+                carts_info "Use 'carts docker --update --help' for available options"
+                exit 1
+                ;;
+        esac
+    done
+
     carts_step "Running Docker update script"
     cd "$docker_dir"
     if [[ -f "docker-update.sh" ]]; then
-        if [[ -n "$CARTS_VERBOSE" ]]; then
-            carts_debug "Running: ./docker-update.sh"
+        # Build command line arguments
+        local update_args=""
+        if [[ "$force_mode" == "true" ]]; then
+            update_args+=" --force"
         fi
-        ./docker-update.sh
+        for component in "${force_components[@]}"; do
+            update_args+=" --$component"
+        done
+
+        if [[ -n "$CARTS_VERBOSE" ]]; then
+            carts_debug "Running: ./docker-update.sh$update_args"
+        fi
+        ./docker-update.sh $update_args
     else
         carts_error "docker-update.sh not found in $docker_dir"
         exit 1
