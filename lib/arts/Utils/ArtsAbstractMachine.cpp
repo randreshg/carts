@@ -348,16 +348,16 @@ bool ArtsAbstractMachine::validateConfiguration() {
   }
 
   /// Check network configuration
-  if (outgoing <= 0 || incoming <= 0) {
-    ARTS_WARN("Invalid network thread counts: outgoing="
-              << outgoing << ", incoming=" << incoming);
-    isValid = false;
-  }
+  // if (outgoing <= 0 || incoming <= 0) {
+  //   ARTS_WARN("Invalid network thread counts: outgoing="
+  //             << outgoing << ", incoming=" << incoming);
+  //   isValid = false;
+  // }
 
-  if (port <= 0 || port > 65535) {
-    ARTS_WARN("Invalid port number: " << port);
-    isValid = false;
-  }
+  // if (port <= 0 || port > 65535) {
+  //   ARTS_WARN("Invalid port number: " << port);
+  //   isValid = false;
+  // }
 
   /// Set the validation flag
   isValidFlag = isValid;

@@ -62,5 +62,6 @@ bool isArtsOp(mlir::Operation *op);
 /// Helper function to extract sizes from a datablock pointer
 /// by finding the original DbAllocOp or DbAcquireOp that created it
 mlir::SmallVector<mlir::Value> getSizesFromDb(mlir::Value datablockPtr);
+mlir::SmallVector<mlir::Value> getOffsetsFromDb(mlir::Value datablockPtr);
 
 #endif // CARTS_DIALECT_H

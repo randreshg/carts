@@ -7,11 +7,19 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LLVM.h"
+#include "mlir/Transforms/CSE.h"
 #include <algorithm>
 #include <cassert>
 
 namespace mlir {
 namespace arts {
+
+bool simplifyIR(ModuleOp module, DominanceInfo &domInfo) {
+  IRRewriter rewriter(module.getContext());
+  bool changed = false;
+  eliminateCommonSubExpressions(rewriter, domInfo, module, &changed);
+  return changed;
+}
 
 bool isInvariantInEdt(Region &edtRegion, Value value) {
   /// Case 1: Value is a constant. Constants are always invariant.

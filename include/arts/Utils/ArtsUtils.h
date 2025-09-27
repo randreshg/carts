@@ -15,6 +15,9 @@
 namespace mlir {
 namespace arts {
 
+/// Simplify the IR
+bool simplifyIR(ModuleOp module, DominanceInfo &domInfo);
+
 /// Checks if a Value is invariant within a given EDT region.
 /// A value is considered invariant if it's defined outside the region
 /// and not modified by any operation inside the region. Constants are

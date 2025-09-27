@@ -77,7 +77,6 @@ static cl::opt<bool> IdentifyDbs("identify-dbs",
                                  cl::desc("Identify datablocks"),
                                  cl::init(false));
 
-
 static cl::opt<bool> Debug("g", cl::desc("Enable debug mode"), cl::init(false));
 
 static cl::opt<bool> ExportJson(
@@ -235,7 +234,8 @@ void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 }
 
 /// Setup datablock creation and optimization passes.
-void setupDatablock(PassManager &pm, arts::ArtsAnalysisManager *AM, bool identifyDbs, bool exportJson) {
+void setupDatablock(PassManager &pm, arts::ArtsAnalysisManager *AM,
+                    bool identifyDbs, bool exportJson) {
   pm.addPass(arts::createCreateDbsPass(identifyDbs));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
@@ -262,7 +262,7 @@ void setupEpochs(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 }
 
 /// Setup EDT lowering passes.
-void setupEdtLowering(PassManager &pm) {
+void setupEdtLowering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createNormalizeDbsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createEdtLoweringPass());
@@ -324,7 +324,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     setupDatablock(pm, AM.get(), IdentifyDbs, ExportJson);
     setupEdtOptimizations(pm, AM.get());
     setupEpochs(pm, AM.get());
-    setupEdtLowering(pm);
+    setupEdtLowering(pm, AM.get());
     setupArtsToLLVM(pm, Debug);
 
     if (mlir::failed(pm.run(module))) {
@@ -461,7 +461,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   /// EDT lowering
   {
     PassManager pm(&context);
-    setupEdtLowering(pm);
+    setupEdtLowering(pm, AM.get());
     if (mlir::failed(pm.run(module))) {
       ARTS_ERROR("Error when running EDT lowering");
       module->dump();

@@ -116,4 +116,30 @@ def ForScheduleKind : Arts_I32Enum<"ForScheduleKind",
 
 def ForScheduleKindAttr : Arts_I32EnumAttr<"for_schedule", ForScheduleKind>;
 
+/// Enum info for EDT concurrency types
+def EdtConcurrency : Arts_I32Enum<"EdtConcurrency",
+    "ARTS EDT concurrency type",
+    [
+      I32EnumAttrCase<"intranode", 0, "intranode">,
+      I32EnumAttrCase<"internode", 1, "internode">
+    ]>;
+
+/// Enum attribute for EDT concurrency types
+def EdtConcurrencyAttr : Arts_I32EnumAttr<"concurrency", EdtConcurrency>;
+
+/// Integer attribute for storing number of workers for EDT operations
+def WorkersAttr : AttrDef<ArtsDialect, "workers"> {
+  let summary = "Number of parallel workers for EDT operations";
+  let description = [{
+    Specifies the number of parallel workers to use for executing an EDT.
+    This attribute is set by the concurrency pass based on the abstract machine
+    configuration and determines how many task instances to create.
+  }];
+  let parameters = (ins
+    "int32_t":$value
+  );
+  let mnemonic = "workers";
+  let assemblyFormat = "`<` $value `>`";
+}
+
 #endif // ARTS_ATTRS
