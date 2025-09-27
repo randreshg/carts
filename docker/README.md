@@ -54,9 +54,10 @@ cd docker
 
 ### 2. Start Multi-Node Containers
 ```bash
-./docker-run.sh                    # Start containers only
-./docker-run.sh parallel.c         # Start containers and run example
-./docker-run.sh parallel.c --debug-only=db  # Start containers and run with options
+./docker-run.sh                                         # Start containers only
+./docker-run.sh parallel.c                              # Start containers and run example
+./docker-run.sh matrixmul -- 100 10                     # Start containers and run with runtime arguments
+./docker-run.sh fib --run-args --debug-only=db -- 15    # Start containers and run with build+runtime args
 ```
 
 **What this does**:
@@ -118,14 +119,18 @@ carts execute tests/test/parallel/parallel.c
 
 ### Method 3: Using carts docker command
 ```bash
-# From host machine (automatically starts containers and runs)
-carts docker --run example.c
+# From host machine
+carts docker --run example.c                    # Run example with default settings
+carts docker --run matrixmul -- 100 10          # Run with runtime arguments: matrix size 100, block size 10
+carts docker --run fib --run-args --debug-only=db -- 15    # Build with debug flags, run fibonacci with input 15
 ```
 
 ### Method 4: Using docker-run.sh directly
 ```bash
-# From docker directory (automatically starts containers and runs)
-./docker-run.sh parallel.c
+# From docker directory
+./docker-run.sh parallel.c                    # Run example with default settings
+./docker-run.sh matrixmul -- 100 10          # Run with runtime arguments: matrix size 100, block size 10
+./docker-run.sh fib --run-args --debug-only=db -- 15    # Build with debug flags, run fibonacci with input 15
 ```
 
 ## CARTS Docker Commands
@@ -133,10 +138,29 @@ carts docker --run example.c
 The `carts docker` command provides a unified interface for Docker operations:
 
 ```bash
-carts docker --run <file>     # Run example in Docker containers
-carts docker --update         # Update and rebuild Docker containers
-carts docker --clean          # Clean all Docker containers and images
-carts docker --help           # Show help
+carts docker --run <file> [build_args] [-- runtime_args]    # Run example in Docker containers
+carts docker --update                                        # Update and rebuild Docker containers
+carts docker --clean                                         # Clean all Docker containers and images
+carts docker --help                                          # Show help
+```
+
+### Argument Separation
+
+The `--run` command supports separating build-time arguments from runtime arguments:
+
+- **Build arguments** (before `--`): Passed to the `carts execute` command (compilation flags, debug options, etc.)
+- **Runtime arguments** (after `--`): Passed to the actual binary execution (program input parameters)
+
+**Examples:**
+```bash
+# Runtime arguments only
+carts docker --run matrixmul -- 100 10
+
+# Build arguments only
+carts docker --run fib --run-args --debug-only=db
+
+# Both build and runtime arguments
+carts docker --run fib --run-args --debug-only=db -- 15
 ```
 
 ### Script Functionality
