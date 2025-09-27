@@ -282,8 +282,8 @@ def DbNumElementsOp : Arts_Op<"db_num_elements", [Pure]> {
 // arts.edt
 //===----------------------------------------------------------------------===//
 def EdtOp : Arts_Op<"edt",
-  [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>, 
-   SingleBlockImplicitTerminator<"arts::YieldOp">, 
+  [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
+   SingleBlockImplicitTerminator<"arts::YieldOp">,
    RecursiveMemoryEffects]> {
 
   let summary = "Event-Driven Task in ARTS";
@@ -295,23 +295,29 @@ def EdtOp : Arts_Op<"edt",
     - if 'parallel' attribute is set, it can spawn multiple tasks.
     - if 'single' attribute is set, it is guaranteed to run in a single
       task, even if it is called from a parallel region.
+    - 'concurrency' specifies the execution scope: intranode or internode.
+    - 'workers' specifies the number of parallel workers to use (optional).
   }];
 
   let arguments = (ins
     EdtTypeAttr:$type,
+    EdtConcurrencyAttr:$concurrency,
     I32:$route,
+    OptionalAttr<WorkersAttr>:$workers,
     Variadic<AnyMemRef>:$dependencies
   );
 
   let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
-    $type `route` `(` $route `)` (`(` $dependencies^ `)` `:` type($dependencies))? attr-dict-with-keyword
+    $type $concurrency `route` `(` $route `)` (`(` $dependencies^ `)` `:` type($dependencies))? attr-dict-with-keyword
     $body
   }];
 
+  let skipDefaultBuilders = 1;
   let builders = [
-    OpBuilder<(ins "EdtType":$type)>,
-    OpBuilder<(ins "EdtType":$type, "ValueRange":$dependencies)>
+    OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency)>,
+    OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency, "ValueRange":$dependencies)>,
+    OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency, "Value":$route, "ValueRange":$dependencies)>
   ];
 
   let extraClassDeclaration = [{

@@ -92,6 +92,8 @@ show_usage() {
     carts_cmd "carts build"                    "Build CARTS project (default)"
     carts_cmd "carts build --clean"           "Clean and build"
     carts_cmd "carts build --arts"            "Build only ARTS components"
+    carts_cmd "carts build --arts-info"       "Build ARTS with info enabled"
+    carts_cmd "carts build --arts-debug"      "Build ARTS with debug+info enabled"
     carts_cmd "carts build --polygeist"       "Build only Polygeist"
     carts_cmd "carts build --llvm"            "Build only LLVM"
     carts_cmd "carts build --docker"          "Build Docker image (docker/docker-build.sh)"
@@ -339,6 +341,7 @@ run_build() {
     local clean_build=false
     local build_target="build"
     local docker_build=false
+    local arts_debug=false
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -348,6 +351,15 @@ run_build() {
                 ;;
             "--arts"|"-a")
                 build_target="arts"
+                shift
+                ;;
+            "--arts-info")
+                build_target="arts-info"
+                shift
+                ;;
+            "--arts-debug")
+                build_target="arts-debug"
+                arts_debug=true
                 shift
                 ;;
             "--polygeist"|"-p")
@@ -366,7 +378,9 @@ run_build() {
                 carts_print "Build options:"
                 carts_print "  (default)       Build CARTS project (make build)"
                 carts_print "  --clean, -c     Clean build (make clean && make build)"
-                carts_print "  --arts, -a      Build only ARTS components (make arts)"
+                carts_print "  --arts, -a      Build only ARTS components (make arts - no debug)"
+                carts_print "  --arts-info     Build ARTS with info enabled (make arts-info)"
+                carts_print "  --arts-debug    Build ARTS with debug+info enabled (make arts-debug)"
                 carts_print "  --polygeist, -p Build only Polygeist (make polygeist)"
                 carts_print "  --llvm, -l      Build only LLVM (make llvm)"
                 carts_print "  --docker, -d    Build Docker image (docker/docker-build.sh)"

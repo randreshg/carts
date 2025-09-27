@@ -27,6 +27,7 @@
 #include "llvm/ADT/SmallVector.h"
 /// Debug
 #include "arts/Utils/ArtsDebug.h"
+#include <optional>
 ARTS_DEBUG_SETUP(convert_openmp_to_arts);
 
 using namespace mlir;
@@ -44,8 +45,9 @@ struct OMPParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
     auto loc = op.getLoc();
     ARTS_DEBUG_TYPE("Converting omp.parallel to arts.parallel");
 
-    /// Create a new `arts.edt` operation.
-    auto parOp = rewriter.create<EdtOp>(loc, EdtType::parallel);
+    /// Create a new `arts.edt` operation with parallel type
+    auto parOp = rewriter.create<EdtOp>(loc, EdtType::parallel,
+                                        EdtConcurrency::internode);
     Block &blk = parOp.getBody().front();
 
     /// Move the region's operations.
@@ -69,8 +71,9 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
     ARTS_DEBUG_TYPE("Converting scf.parallel to arts.edt<parallel> + arts.for");
     rewriter.setInsertionPoint(op);
 
-    /// Create `arts.edt` with `parallel` type and get its body block
-    auto parEdt = rewriter.create<EdtOp>(loc, EdtType::parallel);
+    /// Create `arts.edt` with `parallel` type and internode concurrency
+    auto parEdt = rewriter.create<EdtOp>(loc, EdtType::parallel,
+                                         EdtConcurrency::internode);
     Block &parBlk = parEdt.getBody().front();
 
     /// Insert `arts.for` inside the parallel EDT with same bounds/step
@@ -120,8 +123,9 @@ struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
 
-    /// Create a new `arts.single` operation.
-    auto artsSingle = rewriter.create<EdtOp>(loc, EdtType::single);
+    /// Create a new `arts.single` operation with intranode concurrency.
+    auto artsSingle =
+        rewriter.create<EdtOp>(loc, EdtType::single, EdtConcurrency::intranode);
 
     /// Move the region's operations.
     Block &old = op.getRegion().front();
@@ -244,8 +248,9 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
       return failure();
     }
 
-    /// Create a new `arts.edt` operation.
-    auto edtOp = rewriter.create<EdtOp>(loc, EdtType::task, deps);
+    /// Create a new `arts.edt` operation with intranode concurrency.
+    auto edtOp = rewriter.create<EdtOp>(loc, EdtType::task,
+                                        EdtConcurrency::intranode, deps);
     Block &blk = edtOp.getBody().front();
 
     /// Move the region's operations.
@@ -299,22 +304,27 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
       }
     }
 
-    /// Use OpenMP chunk as step if present, otherwise use original step
-    Value finalStep = step;
+    /// Capture OpenMP chunk size if it is a known constant so later passes can
+    /// implement the desired scheduling policy. The loop step should remain the
+    /// original iteration step irrespective of the chunk size.
+    std::optional<int64_t> staticChunkSize;
     if (auto chunk = op.getScheduleChunkVar()) {
-      // Convert chunk to index type if needed
-      if (chunk.getType() != rewriter.getIndexType()) {
-        finalStep = rewriter.create<arith::IndexCastOp>(
-            loc, rewriter.getIndexType(), chunk);
-      } else {
-        finalStep = chunk;
+      if (auto constOp = chunk.getDefiningOp<arith::ConstantOp>()) {
+        if (auto intAttr = constOp.getValue().dyn_cast<IntegerAttr>()) {
+          int64_t chunkVal = intAttr.getInt();
+          if (chunkVal > 0)
+            staticChunkSize = chunkVal;
+        }
       }
     }
 
     /// Create arts.for and move wsloop body
     auto forOp = rewriter.create<arts::ForOp>(loc, ValueRange{lowerBound},
                                               ValueRange{upperBound},
-                                              ValueRange{finalStep}, schedAttr);
+                                              ValueRange{step}, schedAttr);
+    if (staticChunkSize)
+      forOp->setAttr("chunk_size",
+                     rewriter.getI64IntegerAttr(*staticChunkSize));
     Region &dstRegion = forOp.getRegion();
     if (dstRegion.empty())
       dstRegion.push_back(new Block());
