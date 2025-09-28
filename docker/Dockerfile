@@ -42,7 +42,6 @@ RUN wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /etc
     libasan6 \
     libtsan2 \
     libubsan1 \
-    libmsan2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create symlinks for easier access
