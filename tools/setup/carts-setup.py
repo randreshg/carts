@@ -222,14 +222,6 @@ def main():
             sys.exit(1)
 
     print("\n=== Setup Complete! ===")
-    print("To use CARTS:")
-    print("1. The 'carts' command is now available in your PATH")
-    print("2. Use the carts wrapper: carts --help")
-    print("3. Run benchmarks: carts benchmark --help")
-    print("4. Launch ArtsUI: carts ui")
-    print("")
-    print("Note: If you restart your terminal, run: python3 tools/setup/carts-setup.py --add-to-path")
-
 
 if __name__ == "__main__":
     main()
