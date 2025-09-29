@@ -205,6 +205,7 @@ void ConcurrencyPass::updateRuntimeQueryOperations() {
           /// get_current_node
           ARTS_INFO("Replacing arts.get_current_worker with "
                     "arts.get_current_node in internode EDT");
+          builder.setInsertionPoint(getWorkerOp);
           auto getNodeOp =
               builder.create<GetCurrentNodeOp>(getWorkerOp.getLoc());
           getWorkerOp.replaceAllUsesWith(getNodeOp.getResult());
@@ -216,6 +217,7 @@ void ConcurrencyPass::updateRuntimeQueryOperations() {
           /// get_total_nodes
           ARTS_INFO("Replacing arts.get_total_workers with "
                     "arts.get_total_nodes in internode EDT");
+          builder.setInsertionPoint(getTotalWorkersOp);
           auto getTotalNodesOp =
               builder.create<GetTotalNodesOp>(getTotalWorkersOp.getLoc());
           getTotalWorkersOp.replaceAllUsesWith(getTotalNodesOp.getResult());
@@ -227,6 +229,7 @@ void ConcurrencyPass::updateRuntimeQueryOperations() {
           /// get_current_worker
           ARTS_INFO("Replacing arts.get_current_node with "
                     "arts.get_current_worker in intranode EDT");
+          builder.setInsertionPoint(getNodeOp);
           auto getWorkerOp =
               builder.create<GetCurrentWorkerOp>(getNodeOp.getLoc());
           getNodeOp.replaceAllUsesWith(getWorkerOp.getResult());
@@ -238,6 +241,7 @@ void ConcurrencyPass::updateRuntimeQueryOperations() {
           /// get_total_workers
           ARTS_INFO("Replacing arts.get_total_nodes with "
                     "arts.get_total_workers in intranode EDT");
+          builder.setInsertionPoint(getTotalNodesOp);
           auto getTotalWorkersOp =
               builder.create<GetTotalWorkersOp>(getTotalNodesOp.getLoc());
           getTotalNodesOp.replaceAllUsesWith(getTotalWorkersOp.getResult());
