@@ -900,15 +900,18 @@ private:
     OpBuilder bodyBuilder(newEdt);
     bodyBuilder.setInsertionPointToEnd(&dstBody);
 
+    /// Clone operations in forward order so producers are cloned before consumers
+    SmallVector<Operation *> opsToErase;
     for (Operation &op : srcBody.without_terminator()) {
       if (&op != operationToSkip) {
+        opsToErase.push_back(&op);
         bodyBuilder.clone(op, mapper);
       }
     }
 
-    for (Operation &op :
-         llvm::make_early_inc_range(srcBody.without_terminator()))
-      op.erase();
+    /// Erase operations in reverse order (consumers before producers)
+    for (auto it = opsToErase.rbegin(); it != opsToErase.rend(); ++it)
+      (*it)->erase();
 
     if (dstBody.empty() || !isa<YieldOp>(dstBody.back())) {
       bodyBuilder.setInsertionPointToEnd(&dstBody);
