@@ -57,6 +57,11 @@ struct AccessInfo {
   AccessInfo(int) {}
 };
 
+struct AllocUsage {
+  bool hasRead = false;
+  bool hasWrite = false;
+};
+
 /// Dependency information for Datablocks acquisition.
 /// Contains the access mode and slice parameters for acquiring a memory region.
 struct DepInfo {
@@ -84,6 +89,7 @@ private:
   ModuleOp module;
   DenseMap<Value, DbAllocOp> allocToDbAlloc;
   SmallVector<DbAllocOp, 8> createdDbAllocs;
+  DenseMap<Value, AllocUsage> allocUsage;
   StringAnalysis *stringAnalysis;
 
   /// Core helper functions
@@ -220,6 +226,15 @@ SetVector<Value> CreateDbsPass::collectUsedAllocations() {
       Value base = arts::getUnderlyingValue(mem);
       if (base)
         allUsedAllocs.insert(base);
+
+      if (!base)
+        return;
+
+      auto &usage = allocUsage[base];
+      if (isa<memref::LoadOp>(op))
+        usage.hasRead = true;
+      if (isa<memref::StoreOp>(op))
+        usage.hasWrite = true;
     });
   });
   return allUsedAllocs;
@@ -238,7 +253,19 @@ void CreateDbsPass::createDbAllocOps(const SetVector<Value> &allocs,
 
     /// Create DbAllocOp
     DbAllocType allocType = inferAllocType(alloc);
-    DbMode dbMode = DbMode::pinned;
+    AllocUsage usage;
+    if (auto it = allocUsage.find(alloc); it != allocUsage.end())
+      usage = it->second;
+
+    ArtsMode mode = ArtsMode::inout;
+    if (usage.hasWrite)
+      mode = usage.hasRead ? ArtsMode::inout : ArtsMode::out;
+    else if (usage.hasRead)
+      mode = ArtsMode::in;
+
+    DbMode dbMode = (mode == ArtsMode::in) ? DbMode::read : DbMode::write;
+    ARTS_DEBUG("DbAlloc mode=" << static_cast<int>(mode)
+                               << " dbMode=" << static_cast<int>(dbMode));
     auto memRefType = alloc.getType().cast<MemRefType>();
     Type elementType = memRefType.getElementType();
 
@@ -257,9 +284,9 @@ void CreateDbsPass::createDbAllocOps(const SetVector<Value> &allocs,
     }
 
     auto zeroRoute = builder.create<arith::ConstantIntOp>(loc, 0, 32);
-    auto dbAllocOp = builder.create<DbAllocOp>(loc, ArtsMode::inout, zeroRoute,
-                                               allocType, dbMode, elementType,
-                                               alloc, sizes, payloadSizes);
+    auto dbAllocOp =
+        builder.create<DbAllocOp>(loc, mode, zeroRoute, allocType, dbMode,
+                                  elementType, alloc, sizes, payloadSizes);
 
     alloc.replaceUsesWithIf(dbAllocOp.getPtr(), [&](OpOperand &use) -> bool {
       Operation *user = use.getOwner();
