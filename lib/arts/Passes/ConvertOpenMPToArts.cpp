@@ -493,11 +493,13 @@ struct CallToARTSPattern : public OpRewritePattern<func::CallOp> {
                                 PatternRewriter &rewriter) const override {
     auto callee = callOp.getCallee();
     if (callee == "omp_get_thread_num") {
-      rewriter.replaceOpWithNewOp<arts::GetCurrentWorkerOp>(callOp);
+      rewriter.replaceOpWithNewOp<arts::GetCurrentNodeOp>(callOp);
+      // rewriter.replaceOpWithNewOp<arts::GetCurrentWorkerOp>(callOp);
       return success();
     }
     if (callee == "omp_get_num_threads" || callee == "omp_get_max_threads") {
-      rewriter.replaceOpWithNewOp<arts::GetTotalWorkersOp>(callOp);
+      rewriter.replaceOpWithNewOp<arts::GetTotalNodesOp>(callOp);
+      // rewriter.replaceOpWithNewOp<arts::GetTotalWorkersOp>(callOp);
       return success();
     }
     /// nothing to do, leave the op as-is

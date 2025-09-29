@@ -98,6 +98,9 @@ private:
   /// Adjust datablock modes based on EDT concurrency
   void adjustDatablockModes();
 
+  /// Update runtime query operations based on EDT concurrency
+  void updateRuntimeQueryOperations();
+
   ArtsAbstractMachine *abstractMachine = nullptr;
   ArtsAnalysisManager *AM = nullptr;
   ModuleOp module;
@@ -120,6 +123,9 @@ void ConcurrencyPass::runOnOperation() {
 
   /// Adjust datablock modes based on EDT concurrency
   adjustDatablockModes();
+
+  /// Update runtime query operations based on EDT concurrency
+  updateRuntimeQueryOperations();
 
   /// Apply EDT and DB placement decisions to all functions
   // module.walk([&](func::FuncOp func) {
@@ -173,6 +179,73 @@ void ConcurrencyPass::applyDbPlacement(
                       IntegerAttr::get(builder.getI32Type(), (int32_t)idx));
         }
       });
+}
+
+void ConcurrencyPass::updateRuntimeQueryOperations() {
+  /// For each EDT that has parallelism strategy set, update runtime query
+  /// operations
+  module.walk([&](EdtOp edtOp) {
+    if (!edtOp.getWorkers().has_value())
+      return; /// No parallelism strategy set
+
+    bool isInterNode = (edtOp.getConcurrency() == EdtConcurrency::internode);
+    EdtType edtType = edtOp.getType();
+
+    /// Only modify operations within parallel EDTs
+    if (edtType != EdtType::parallel)
+      return;
+
+    OpBuilder builder(edtOp.getContext());
+
+    /// Walk through operations in the EDT body and update runtime queries
+    edtOp.walk([&](Operation *op) {
+      if (auto getWorkerOp = dyn_cast<GetCurrentWorkerOp>(op)) {
+        if (isInterNode) {
+          /// For internode parallelism, replace get_current_worker with
+          /// get_current_node
+          ARTS_INFO("Replacing arts.get_current_worker with "
+                    "arts.get_current_node in internode EDT");
+          auto getNodeOp =
+              builder.create<GetCurrentNodeOp>(getWorkerOp.getLoc());
+          getWorkerOp.replaceAllUsesWith(getNodeOp.getResult());
+          getWorkerOp.erase();
+        }
+      } else if (auto getTotalWorkersOp = dyn_cast<GetTotalWorkersOp>(op)) {
+        if (isInterNode) {
+          /// For internode parallelism, replace get_total_workers with
+          /// get_total_nodes
+          ARTS_INFO("Replacing arts.get_total_workers with "
+                    "arts.get_total_nodes in internode EDT");
+          auto getTotalNodesOp =
+              builder.create<GetTotalNodesOp>(getTotalWorkersOp.getLoc());
+          getTotalWorkersOp.replaceAllUsesWith(getTotalNodesOp.getResult());
+          getTotalWorkersOp.erase();
+        }
+      } else if (auto getNodeOp = dyn_cast<GetCurrentNodeOp>(op)) {
+        if (!isInterNode) {
+          /// For intranode parallelism, replace get_current_node with
+          /// get_current_worker
+          ARTS_INFO("Replacing arts.get_current_node with "
+                    "arts.get_current_worker in intranode EDT");
+          auto getWorkerOp =
+              builder.create<GetCurrentWorkerOp>(getNodeOp.getLoc());
+          getNodeOp.replaceAllUsesWith(getWorkerOp.getResult());
+          getNodeOp.erase();
+        }
+      } else if (auto getTotalNodesOp = dyn_cast<GetTotalNodesOp>(op)) {
+        if (!isInterNode) {
+          /// For intranode parallelism, replace get_total_nodes with
+          /// get_total_workers
+          ARTS_INFO("Replacing arts.get_total_nodes with "
+                    "arts.get_total_workers in intranode EDT");
+          auto getTotalWorkersOp =
+              builder.create<GetTotalWorkersOp>(getTotalNodesOp.getLoc());
+          getTotalNodesOp.replaceAllUsesWith(getTotalWorkersOp.getResult());
+          getTotalNodesOp.erase();
+        }
+      }
+    });
+  });
 }
 
 void ConcurrencyPass::adjustDatablockModes() {
