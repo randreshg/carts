@@ -13,11 +13,10 @@
 /// 4. Insert arts.db_acquire operations before EDTs with computed dependencies
 /// 5. Update load/store operations to use acquired memory views
 /// 6. Insert arts.db_release operations before EDT terminators
-/// 7. Insert arts.db_release operations for db_alloc operations
+/// 7. Insert arts.db_free operations for db_alloc operations
 ///
-/// The pass computes optimal acquisition regions based on actual access
-/// patterns, balancing between reducing dependency overhead and preserving
-/// parallelism. Nested EDTs inherit parent acquisitions when possible.
+/// This pass assumes the worst-case scenario for access modes, always using
+/// inout.
 //==========================================================================
 
 #include "ArtsPassDetails.h"
@@ -42,25 +41,6 @@ ARTS_DEBUG_SETUP(create_dbs);
 
 using namespace mlir;
 using namespace mlir::arts;
-
-/// Information about memory access patterns for a memref base.
-/// Tracks whether the base is read/written and the access patterns per
-/// dimension.
-struct AccessInfo {
-  /// True if base is read from
-  bool hasRead = false;
-  /// True if base is written to
-  bool hasWrite = false;
-  /// Computed ARTS mode based on read/write flags
-  ArtsMode mode = ArtsMode::inout;
-
-  AccessInfo(int) {}
-};
-
-struct AllocUsage {
-  bool hasRead = false;
-  bool hasWrite = false;
-};
 
 /// Dependency information for Datablocks acquisition.
 /// Contains the access mode and slice parameters for acquiring a memory region.
@@ -89,7 +69,6 @@ private:
   ModuleOp module;
   DenseMap<Value, DbAllocOp> allocToDbAlloc;
   SmallVector<DbAllocOp, 8> createdDbAllocs;
-  DenseMap<Value, AllocUsage> allocUsage;
   StringAnalysis *stringAnalysis;
 
   /// Core helper functions
@@ -103,7 +82,6 @@ private:
   DbAllocType inferAllocType(Value basePtr);
 
   /// Dependency analysis
-  AccessInfo analyzeAccesses(EdtOp edt, Value originalValue);
   DepInfo computeDepInfo(OpBuilder &builder, EdtOp edt, Value originalValue,
                          Value source);
 
@@ -226,15 +204,6 @@ SetVector<Value> CreateDbsPass::collectUsedAllocations() {
       Value base = arts::getUnderlyingValue(mem);
       if (base)
         allUsedAllocs.insert(base);
-
-      if (!base)
-        return;
-
-      auto &usage = allocUsage[base];
-      if (isa<memref::LoadOp>(op))
-        usage.hasRead = true;
-      if (isa<memref::StoreOp>(op))
-        usage.hasWrite = true;
     });
   });
   return allUsedAllocs;
@@ -253,17 +222,8 @@ void CreateDbsPass::createDbAllocOps(const SetVector<Value> &allocs,
 
     /// Create DbAllocOp
     DbAllocType allocType = inferAllocType(alloc);
-    AllocUsage usage;
-    if (auto it = allocUsage.find(alloc); it != allocUsage.end())
-      usage = it->second;
-
     ArtsMode mode = ArtsMode::inout;
-    if (usage.hasWrite)
-      mode = usage.hasRead ? ArtsMode::inout : ArtsMode::out;
-    else if (usage.hasRead)
-      mode = ArtsMode::in;
-
-    DbMode dbMode = (mode == ArtsMode::in) ? DbMode::read : DbMode::write;
+    DbMode dbMode = DbMode::write;
     ARTS_DEBUG("DbAlloc mode=" << static_cast<int>(mode)
                                << " dbMode=" << static_cast<int>(dbMode));
     auto memRefType = alloc.getType().cast<MemRefType>();
@@ -301,64 +261,10 @@ void CreateDbsPass::createDbAllocOps(const SetVector<Value> &allocs,
   }
 }
 
-AccessInfo CreateDbsPass::analyzeAccesses(EdtOp edt, Value originalValue) {
-  Value anyMem;
-  edt.walk([&](Operation *op) {
-    if (auto load = dyn_cast<memref::LoadOp>(op)) {
-      if (arts::getUnderlyingValue(load.getMemref()) == originalValue) {
-        anyMem = load.getMemref();
-        return;
-      }
-    } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
-      if (arts::getUnderlyingValue(store.getMemref()) == originalValue) {
-        anyMem = store.getMemref();
-        return;
-      }
-    }
-  });
-
-  /// If no accesses found, return access info with rank 0
-  if (!anyMem)
-    return AccessInfo(0);
-
-  MemRefType type = anyMem.getType().cast<MemRefType>();
-  AccessInfo info(type.getRank());
-
-  edt.walk([&](Operation *op) {
-    Value mem;
-    SmallVector<Value> indices;
-    if (auto load = dyn_cast<memref::LoadOp>(op)) {
-      mem = load.getMemref();
-      indices = load.getIndices();
-      info.hasRead = true;
-    } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
-      mem = store.getMemref();
-      indices = store.getIndices();
-      info.hasWrite = true;
-    } else {
-      return;
-    }
-
-    /// Only analyze accesses to the original base
-    if (arts::getUnderlyingValue(mem) != originalValue)
-      return;
-  });
-
-  /// Compute ARTS mode from aggregated access kinds
-  if (info.hasWrite)
-    info.mode = info.hasRead ? ArtsMode::inout : ArtsMode::out;
-  else if (info.hasRead)
-    info.mode = ArtsMode::in;
-  else
-    info.mode = ArtsMode::inout;
-  return info;
-}
-
 DepInfo CreateDbsPass::computeDepInfo(OpBuilder &builder, EdtOp edt,
                                       Value originalValue, Value source) {
   MemRefType sourceType = source.getType().dyn_cast<MemRefType>();
   assert(sourceType && "Source must be memref");
-  AccessInfo accInfo = analyzeAccesses(edt, originalValue);
 
   /// For strings, force coarse full-region acquisition.
   if (stringAnalysis->isStringMemRef(originalValue)) {
@@ -379,12 +285,12 @@ DepInfo CreateDbsPass::computeDepInfo(OpBuilder &builder, EdtOp edt,
 
     MemRefType resultType =
         MemRefType::get(sourceType.getShape(), sourceType.getElementType());
-    return {accInfo.mode, offsets, sizes, resultType};
+    return {ArtsMode::inout, offsets, sizes, resultType};
   }
   /// For other memrefs, use a fine-grained approach.
   SmallVector<Value> offsets, sizes;
   MemRefType resultType = sourceType;
-  return {accInfo.mode, offsets, sizes, resultType};
+  return {ArtsMode::inout, offsets, sizes, resultType};
 }
 
 SetVector<Value> CreateDbsPass::getEdtExternalValues(EdtOp edt) {

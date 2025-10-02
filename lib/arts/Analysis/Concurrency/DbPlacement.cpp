@@ -33,9 +33,10 @@ DbPlacementHeuristics::compute(func::FuncOp func,
     std::string n = (edtNodeAttr ? ("N" + std::to_string(edtNodeAttr.getInt()))
                                  : std::string("N0"));
     edt.walk([&](DbAcquireOp acq) {
-      if (DbAllocOp parent = dbGraph->getParentAlloc(acq.getOperation())) {
-        allocToNodeReads[parent.getOperation()][n] += 1;
-      }
+      auto *acqNode = dbGraph->getDbAcquireNode(acq);
+      DbAllocNode *parent = acqNode->getParent();
+      assert(parent && "Parent allocation not found");
+      allocToNodeReads[parent->getOp()][n] += 1;
     });
   });
 

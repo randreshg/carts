@@ -203,9 +203,8 @@ void EdtGraph::populateChildrenCache(NodeBase *node) {
   vec.clear();
 
   // Collect children from the node's outgoing edges
-  for (auto *edge : node->getOutEdges()) {
+  for (auto *edge : node->getOutEdges())
     vec.push_back(edge->getTo());
-  }
 
   // Sort by hierarchical ID for deterministic order
   llvm::sort(vec, [&](NodeBase *a, NodeBase *b) {
@@ -242,51 +241,6 @@ void EdtGraph::collectNodes() {
 /// sites in another EDT for the same root DbAlloc.
 void EdtGraph::buildDependencies() {
   ARTS_INFO("Phase 2 - Building EDT dependencies");
-  llvm::DenseMap<DbAllocOp, SmallVector<std::pair<EdtNode *, NodeBase *>>>
-      allocToReleases;
-  llvm::DenseMap<DbAllocOp, SmallVector<std::pair<EdtNode *, NodeBase *>>>
-      allocToAcquires;
-
-  for (auto &pair : edtNodes) {
-    EdtOp taskOp = pair.first;
-    EdtNode *taskNode = pair.second.get();
-    taskOp.walk([&](Operation *op) {
-      if (auto rel = dyn_cast<DbReleaseOp>(op)) {
-        DbAllocOp a = dbGraph->getParentAlloc(rel);
-        if (!a)
-          return;
-        NodeBase *n = dbGraph->getNode(rel.getOperation());
-        if (!n)
-          return;
-        allocToReleases[a].push_back({taskNode, n});
-      } else if (auto acq = dyn_cast<DbAcquireOp>(op)) {
-        DbAllocOp a = dbGraph->getParentAlloc(acq);
-        if (!a)
-          return;
-        NodeBase *n = dbGraph->getNode(acq.getOperation());
-        if (!n)
-          return;
-        allocToAcquires[a].push_back({taskNode, n});
-      }
-    });
-  }
-
-  for (auto &entry : allocToReleases) {
-    DbAllocOp alloc = entry.first;
-    auto &rels = entry.second;
-    auto itAcq = allocToAcquires.find(alloc);
-    if (itAcq == allocToAcquires.end())
-      continue;
-    auto &acqs = itAcq->second;
-    for (auto &r : rels) {
-      for (auto &a : acqs) {
-        if (r.first == a.first)
-          continue; /// same task
-        auto edge = std::make_unique<EdtDepEdge>(r.first, a.first, r.second);
-        addEdge(r.first, a.first, edge.release());
-      }
-    }
-  }
-
+  llvm_unreachable("Not implemented");
   ARTS_INFO("Phase 2 - Built " << edges.size() << " EDT dependencies");
 }

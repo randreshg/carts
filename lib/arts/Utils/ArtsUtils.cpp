@@ -230,8 +230,8 @@ bool getConstantIndex(Value v, int64_t &out) {
     out = c.value();
     return true;
   }
-  if (auto c2 = v.getDefiningOp<arith::ConstantOp>()) {
-    if (auto intAttr = llvm::dyn_cast<mlir::IntegerAttr>(c2.getValue())) {
+  if (auto c = v.getDefiningOp<arith::ConstantOp>()) {
+    if (auto intAttr = llvm::dyn_cast<mlir::IntegerAttr>(c.getValue())) {
       out = intAttr.getInt();
       return true;
     }
@@ -247,8 +247,14 @@ bool isNonZeroIndex(Value v) {
   return true;
 }
 
-Value getUnderlyingValue(Value v) {
+/// Internal helper with recursion detection
+static Value getUnderlyingValueImpl(Value v,
+                                    llvm::SmallPtrSet<Value, 8> &visited) {
   if (!v)
+    return nullptr;
+
+  /// Check for cycles
+  if (!visited.insert(v).second)
     return nullptr;
 
   if (v.isa<BlockArgument>()) {
@@ -259,7 +265,7 @@ Value getUnderlyingValue(Value v) {
       /// Block arguments correspond directly to EDT operands
       if (argIndex < edt.getNumOperands()) {
         Value operand = edt.getOperand(argIndex);
-        return getUnderlyingValue(operand);
+        return getUnderlyingValueImpl(operand, visited);
       } else {
         return v;
       }
@@ -270,24 +276,27 @@ Value getUnderlyingValue(Value v) {
   } else if (auto op = v.getDefiningOp()) {
     /// Handle different operation types
     if (isa<DbAllocOp, memref::AllocOp, memref::AllocaOp, memref::GetGlobalOp>(
-            op)) {
+            op))
       return v;
-    } else if (auto dbAcquire = dyn_cast<DbAcquireOp>(op)) {
-      return getUnderlyingValue(dbAcquire.getSourcePtr());
-    } else if (auto dbGep = dyn_cast<DbGepOp>(op)) {
-      return getUnderlyingValue(dbGep.getBasePtr());
-    } else if (auto subview = dyn_cast<memref::SubViewOp>(op)) {
-      return getUnderlyingValue(subview.getSource());
-    } else if (auto castOp = dyn_cast<memref::CastOp>(op)) {
-      return getUnderlyingValue(castOp.getSource());
-    } else {
-      /// Not a root object
+    else if (auto dbAcquire = dyn_cast<DbAcquireOp>(op))
+      return getUnderlyingValueImpl(dbAcquire.getSourcePtr(), visited);
+    else if (auto dbGep = dyn_cast<DbGepOp>(op))
+      return getUnderlyingValueImpl(dbGep.getBasePtr(), visited);
+    else if (auto subview = dyn_cast<memref::SubViewOp>(op))
+      return getUnderlyingValueImpl(subview.getSource(), visited);
+    else if (auto castOp = dyn_cast<memref::CastOp>(op))
+      return getUnderlyingValueImpl(castOp.getSource(), visited);
+    else
       return nullptr;
-    }
   } else {
     /// Value has no defining operation and is not a block argument
     return nullptr;
   }
+}
+
+Value getUnderlyingValue(Value v) {
+  llvm::SmallPtrSet<Value, 8> visited;
+  return getUnderlyingValueImpl(v, visited);
 }
 
 Operation *getUnderlyingOperation(Value v) {

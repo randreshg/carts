@@ -6,9 +6,9 @@
 #ifndef ARTS_ANALYSIS_GRAPHS_NODEBASE_H
 #define ARTS_ANALYSIS_GRAPHS_NODEBASE_H
 
+#include "mlir/IR/Operation.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/Support/raw_ostream.h"
-#include "mlir/IR/Operation.h"
 
 namespace mlir {
 namespace arts {
@@ -16,17 +16,11 @@ namespace arts {
 class EdgeBase;
 
 /// Abstract base class for all nodes (e.g., allocs, deps, tasks).
-/// Provides common interface for hierarchy, printing, and edges.
 class NodeBase {
 public:
   virtual ~NodeBase() = default;
 
-  enum class NodeKind {
-    DbAlloc,
-    DbAcquire,
-    DbRelease,
-    EdtTask
-  };
+  enum class NodeKind { DbAlloc, DbAcquire, EdtTask };
 
   /// Get the hierarchical ID (e.g., "A.1" for deps).
   virtual StringRef getHierId() const = 0;

@@ -14,21 +14,36 @@ namespace arts {
 class DbAnalysis;
 class NodeBase;
 class DbAcquireNode;
-class DbReleaseNode;
 class DbAllocNode;
+class DbAcquireOp;
 
 class DbAliasAnalysis {
 public:
   explicit DbAliasAnalysis(DbAnalysis *analysis);
 
+  enum class AliasResult { NoAlias, MayAlias, MustAlias };
+
+  AliasResult classifyAlias(const NodeBase &a, const NodeBase &b,
+                            const std::string &indent = "");
+
   bool mayAlias(const NodeBase &a, const NodeBase &b,
-                const std::string &indent = "");
+                const std::string &indent = "") {
+    return classifyAlias(a, b, indent) != AliasResult::NoAlias;
+  }
+  bool mustAlias(const NodeBase &a, const NodeBase &b,
+                 const std::string &indent = "") {
+    return classifyAlias(a, b, indent) == AliasResult::MustAlias;
+  }
+
+  /// Overlap classification between DB acquire slices
+  enum class OverlapKind { Unknown, Disjoint, Partial, Full };
+  OverlapKind estimateOverlap(const DbAcquireNode *a, const DbAcquireNode *b);
 
   Value getUnderlyingValue(const NodeBase &node);
 
 private:
   DbAnalysis *analysis;
-  DenseMap<std::pair<Value, Value>, bool> aliasCache;
+  DenseMap<std::pair<Value, Value>, AliasResult> aliasCache;
 };
 
 } // namespace arts

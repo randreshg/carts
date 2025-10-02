@@ -94,8 +94,9 @@ bool isArtsOp(Operation *op) {
   return isArtsRegion(op) ||
          isa<arts::EdtOp, arts::EpochOp, arts::BarrierOp, arts::AllocOp,
              arts::DbAllocOp, arts::DbAcquireOp, arts::DbReleaseOp,
-             arts::DbControlOp, arts::GetTotalWorkersOp, arts::GetTotalNodesOp,
-             arts::GetCurrentWorkerOp, arts::GetCurrentNodeOp>(op);
+             arts::DbFreeOp, arts::DbControlOp, arts::GetTotalWorkersOp,
+             arts::GetTotalNodesOp, arts::GetCurrentWorkerOp,
+             arts::GetCurrentNodeOp>(op);
 }
 
 //===----------------------------------------------------------------------===//
