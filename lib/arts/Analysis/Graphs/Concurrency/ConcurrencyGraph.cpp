@@ -5,8 +5,8 @@
 ///==========================================================================
 
 #include "arts/Analysis/Graphs/Concurrency/ConcurrencyGraph.h"
-#include "arts/Analysis/Concurrency/ConcurrencyAnalysis.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
+#include "arts/Analysis/Concurrency/ConcurrencyAnalysis.h"
 #include "arts/Analysis/Edt/EdtAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
@@ -18,7 +18,8 @@
 using namespace mlir;
 using namespace mlir::arts;
 
-ConcurrencyGraph::ConcurrencyGraph(func::FuncOp func, ConcurrencyAnalysis *analysis)
+ConcurrencyGraph::ConcurrencyGraph(func::FuncOp func,
+                                   ConcurrencyAnalysis *analysis)
     : func(func), analysis(analysis) {
   // EdtGraph will be obtained through the analysis manager during build
 }
@@ -31,17 +32,17 @@ void ConcurrencyGraph::invalidate() {
 
 void ConcurrencyGraph::build() {
   invalidate();
-  
+
   // Get EdtGraph through the analysis manager
   if (!analysis) {
     return;
   }
-  
+
   // Get the ArtsAnalysisManager from the ConcurrencyAnalysis
   ArtsAnalysisManager &AM = analysis->getAM();
   EdtGraph &edtGraphRef = AM.getEdtGraph(func);
   edtGraph = &edtGraphRef;
-  
+
   if (!edtGraph || !edtGraph->hasDbGraph())
     return;
 
@@ -70,15 +71,15 @@ void ConcurrencyGraph::build() {
         e.to = &to;
         if (analysis) {
           // Get EdtAnalysis through the ArtsAnalysisManager
-          ArtsAnalysisManager &AM = analysis->getAM();
-          EdtAnalysis &edtAnalysis = AM.getEdtAnalysis();
-          auto aff = edtAnalysis.affinity(from, to);
-          e.dataOverlap = aff.dataOverlap;
-          e.hazardScore = aff.hazardScore;
-          e.mayConflict = aff.mayConflict;
-          e.reuseProximity = aff.reuseProximity;
-          e.localityScore = aff.localityScore;
-          e.concurrencyRisk = aff.concurrencyRisk;
+          // ArtsAnalysisManager &AM = analysis->getAM();
+          // EdtAnalysis &edtAnalysis = AM.getEdtAnalysis();
+          // auto aff = edtAnalysis.affinity(from, to);
+          // e.dataOverlap = aff.dataOverlap;
+          // e.hazardScore = aff.hazardScore;
+          // e.mayConflict = aff.mayConflict;
+          // e.reuseProximity = aff.reuseProximity;
+          // e.localityScore = aff.localityScore;
+          // e.concurrencyRisk = aff.concurrencyRisk;
         }
         edges.push_back(e);
       }
@@ -240,7 +241,7 @@ void ConcurrencyGraph::computeReuseColoring() {
   if (!analysis) {
     return;
   }
-  
+
   // Get DbGraph through the ArtsAnalysisManager
   ArtsAnalysisManager &AM = analysis->getAM();
   DbGraph &dbGraphRef = AM.getDbGraph(func);
@@ -275,7 +276,8 @@ void ConcurrencyGraph::computeReuseColoring() {
                              infoY.endIndex < infoX.allocIndex);
     if (lifetimeOverlap)
       return true;
-    return dbGraph->mayAlias(allocX, allocY);
+    // return dbGraph->mayAlias(allocX, allocY);
+    return false;
   };
 
   llvm::SmallDenseMap<DbAllocOp, unsigned> colorMap;

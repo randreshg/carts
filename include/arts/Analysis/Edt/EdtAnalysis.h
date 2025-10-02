@@ -36,9 +36,6 @@ public:
   /// Build summaries for all EDTs in the module.
   void analyze();
 
-  /// Compute affinity metrics for two EDTs using their summaries.
-  EdtPairAffinity affinity(EdtOp from, EdtOp to);
-
   /// Debug printing
   void print(func::FuncOp func, llvm::raw_ostream &os);
   void toJson(func::FuncOp func, llvm::raw_ostream &os);
@@ -47,7 +44,7 @@ public:
   EdtGraph &getOrCreateEdtGraph(func::FuncOp func);
 
   /// Invalidate EDT graph for a specific function
-  bool invalidateEdtGraph(func::FuncOp func);
+  bool invalidateGraph(func::FuncOp func);
 
   /// Invalidate internal caches
   void invalidate();

@@ -27,10 +27,7 @@ class DbAnalysis;
 
 class DbAllocNode;
 class DbAcquireNode;
-class DbReleaseNode;
 class DbAllocEdge;
-class DbLifetimeEdge;
-// Forward declarations
 class DbNode;
 class DbEdge;
 
@@ -55,33 +52,22 @@ public:
   /// Retrieve node accessors by concrete op type
   DbAllocNode *getDbAllocNode(DbAllocOp op) const;
   DbAcquireNode *getDbAcquireNode(DbAcquireOp op) const;
-  DbReleaseNode *getDbReleaseNode(DbReleaseOp op) const;
 
   /// Convenience methods for getting or creating specific node types
   DbAllocNode *getOrCreateAllocNode(DbAllocOp op);
   DbAcquireNode *getOrCreateAcquireNode(DbAcquireOp op);
-  DbReleaseNode *getOrCreateReleaseNode(DbReleaseOp op);
 
-  /// Apply a function to every node (alloc/acquire/release)
+  /// Apply a function to every node (alloc/acquire)
   void forEachNode(const std::function<void(NodeBase *)> &fn) const override;
   void forEachAllocNode(const std::function<void(DbAllocNode *)> &fn) const;
   void forEachAcquireNode(const std::function<void(DbAcquireNode *)> &fn) const;
-  void forEachReleaseNode(const std::function<void(DbReleaseNode *)> &fn) const;
 
+  /// Edges
   bool addEdge(NodeBase *from, NodeBase *to, EdgeBase *edge) override;
-
-  /// Db-specific methods
-  /// Get the parent allocation for the given DB op (alloc/acquire/release).
-  DbAllocOp getParentAlloc(Operation *op);
-
-  /// Whether two allocations may alias according to analysis.
-  bool mayAlias(DbAllocOp alloc1, DbAllocOp alloc2);
+  size_t getEdgeCount() const { return edges.size(); }
 
   /// Get allocation info for a given allocation operation
   const DbAllocInfo &getAllocInfo(DbAllocOp alloc) const;
-
-  /// For acquire/release
-  bool hasAcquireReleasePair(DbAllocOp alloc);
 
   /// For GraphTraits iterators
   bool isEmpty() const override { return nodes.empty(); }
@@ -97,7 +83,6 @@ private:
   /// Node maps
   DenseMap<DbAllocOp, std::unique_ptr<DbAllocNode>> allocNodes;
   DenseMap<DbAcquireOp, DbAcquireNode *> acquireNodeMap;
-  DenseMap<DbReleaseOp, DbReleaseNode *> releaseNodeMap;
 
   /// All nodes
   SmallVector<NodeBase *, 8> nodes;
@@ -110,13 +95,10 @@ private:
   void computeOpOrder();
   void computeMetrics();
   std::string generateAllocId(unsigned id);
-  std::string getFunctionName() const;
 
   /// Metrics computation helpers
   void computeAllocMetrics(DbAllocOp alloc, DbAllocNode *allocNode);
   void processAcquireNode(DbAcquireNode *acq, DbAllocInfo &info);
-  void processReleaseNode(DbReleaseNode *rel, DbAllocInfo &info);
-  DbReleaseNode *findMatchingRelease(DbAcquireNode *acq);
   void computeCriticalSpan(DbAllocInfo &info);
   void computeCriticalPath(DbAllocInfo &info);
   void computeLoopDepth(DbAllocInfo &info);

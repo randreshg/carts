@@ -1,55 +1,75 @@
 ///==========================================================================
 /// File: DbDataFlowAnalysis.h
-/// Dense forward lifetime/dependency builder for DB analysis.
+/// Environment-based dataflow analysis for building DDG.
 ///==========================================================================
 
 #ifndef ARTS_ANALYSIS_DB_DBDATAFLOWANALYSIS_H
 #define ARTS_ANALYSIS_DB_DBDATAFLOWANALYSIS_H
 
-#include "arts/Analysis/Db/DbAliasAnalysis.h"
+#include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/ArtsDialect.h"
-#include "mlir/Analysis/DataFlow/DenseAnalysis.h"
-#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallVector.h"
 
 namespace mlir {
+class Region;
+
+namespace func {
+class FuncOp;
+}
+
+namespace scf {
+class ForOp;
+class IfOp;
+} // namespace scf
+
 namespace arts {
 
 class DbGraph;
 class DbAcquireNode;
-class DbReleaseNode;
+class DbAllocOp;
 class DbAnalysis;
+class DbAliasAnalysis;
 
-struct DbState : public dataflow::AbstractDenseLattice {
-  using AbstractDenseLattice::AbstractDenseLattice;
-  ChangeResult join(const AbstractDenseLattice &rhs) override;
-  void print(llvm::raw_ostream &os) const override;
-
-  DenseSet<DbAllocOp> liveAllocs;
-  DenseMap<DbAllocOp, DenseSet<DbAcquireOp>> activeAcquires;
-  DenseMap<DbAllocOp, DenseSet<DbReleaseOp>> pendingReleases;
-};
-
-class DbDataFlowAnalysis
-    : public dataflow::DenseForwardDataFlowAnalysis<DbState> {
+/// Environment-based dataflow analysis for building DDG.
+/// Tracks reaching definitions through control flow to create dependency edges.
+class DbDataFlowAnalysis {
 public:
-  explicit DbDataFlowAnalysis(DataFlowSolver &solver);
+  /// Environment maps each allocation node to its latest acquire definitions
+  using Environment = DenseMap<DbAllocNode *, llvm::SetVector<DbAcquireNode *>>;
 
-  using mlir::dataflow::DenseForwardDataFlowAnalysis<DbState>::initialize;
+  DbDataFlowAnalysis();
+  ~DbDataFlowAnalysis() = default;
 
   void initialize(DbGraph *graph, DbAnalysis *analysis);
-
-  void visitOperation(Operation *op, const DbState &before,
-                      DbState *after) override;
-
-  void setToEntryState(DbState *lattice) override;
+  void runAnalysis(func::FuncOp func);
 
 private:
-  void createLifetimeEdge(DbAcquireNode *acquire, DbReleaseNode *release);
-  SmallVector<MemoryEffects::EffectInstance> getDbEffects(Operation *op);
+  /// Process different region types
+  std::pair<Environment, bool> processRegion(Region &region, Environment &env);
+  std::pair<Environment, bool> processEdt(EdtOp edtOp, Environment &env);
+  std::pair<Environment, bool> processFor(scf::ForOp forOp, Environment &env);
+  std::pair<Environment, bool> processIf(scf::IfOp ifOp, Environment &env);
+
+  /// Find reaching definitions for a given acquire
+  SmallVector<DbAcquireNode *> findDefinitions(DbAcquireNode *acquire,
+                                               Environment &env);
+
+  /// Merge environments from different control flow paths
+  Environment mergeEnvironments(const Environment &env1,
+                                const Environment &env2);
+
+  /// Helper that unions definitions from `source` into `target` and returns
+  /// true if `target` changed.
+  bool unionInto(Environment &target, const Environment &source);
+
+  /// Check if two acquires may have a dependency
+  bool mayDepend(DbAcquireNode *producer, DbAcquireNode *consumer);
 
   DbGraph *graph = nullptr;
   DbAnalysis *analysis = nullptr;
-  DbAliasAnalysis *aliasAA;
+  DbAliasAnalysis *aliasAA = nullptr;
 };
 
 } // namespace arts

@@ -43,82 +43,6 @@ void EdtAnalysis::analyzeFunc(func::FuncOp func) {
   });
 }
 
-EdtPairAffinity EdtAnalysis::affinity(EdtOp from, EdtOp to) {
-  /// TODO: Fix this
-  EdtPairAffinity result;
-  auto parentFunc = from->getParentOfType<func::FuncOp>();
-  EdtGraph &edtGraph = getOrCreateEdtGraph(parentFunc);
-  auto edtFrom = edtGraph.getEdtNode(from);
-  auto edtTo = edtGraph.getEdtNode(to);
-  const EdtInfo *edtInfoFrom = &edtFrom->getInfo();
-  const EdtInfo *edtInfoTo = &edtTo->getInfo();
-
-  if (!edtInfoFrom || !edtInfoTo) {
-    return result; /// Return zero affinity
-  }
-
-  /// Calculate data overlap (Jaccard similarity)
-  DenseSet<Value> unionBases = edtInfoFrom->basesRead;
-  unionBases.insert(edtInfoFrom->basesWritten.begin(),
-                    edtInfoFrom->basesWritten.end());
-  unionBases.insert(edtInfoTo->basesRead.begin(), edtInfoTo->basesRead.end());
-  unionBases.insert(edtInfoTo->basesWritten.begin(),
-                    edtInfoTo->basesWritten.end());
-
-  DenseSet<Value> intersectionBases;
-  for (Value base : edtInfoFrom->basesRead) {
-    if (edtInfoTo->basesRead.count(base) ||
-        edtInfoTo->basesWritten.count(base)) {
-      intersectionBases.insert(base);
-    }
-  }
-  for (Value base : edtInfoFrom->basesWritten) {
-    if (edtInfoTo->basesRead.count(base) ||
-        edtInfoTo->basesWritten.count(base)) {
-      intersectionBases.insert(base);
-    }
-  }
-
-  if (!unionBases.empty()) {
-    result.dataOverlap =
-        static_cast<double>(intersectionBases.size()) / unionBases.size();
-  }
-
-  /// Calculate hazard score (write conflicts)
-  unsigned conflicts = 0;
-  for (Value base : intersectionBases) {
-    if ((edtInfoFrom->basesWritten.count(base) &&
-         edtInfoTo->basesRead.count(base)) ||
-        (edtInfoFrom->basesRead.count(base) &&
-         edtInfoTo->basesWritten.count(base)) ||
-        (edtInfoFrom->basesWritten.count(base) &&
-         edtInfoTo->basesWritten.count(base))) {
-      conflicts++;
-    }
-  }
-
-  if (!intersectionBases.empty()) {
-    result.hazardScore =
-        static_cast<double>(conflicts) / intersectionBases.size();
-    result.mayConflict = conflicts > 0;
-  }
-
-  /// Simple program order proximity
-  /// TODO: could be enhanced with actual distance
-  auto orderA = edtInfoFrom->orderIndex;
-  auto orderB = edtInfoTo->orderIndex;
-  if (orderA != orderB) {
-    result.reuseProximity =
-        1.0 /
-        (1.0 + std::abs(static_cast<int>(orderA) - static_cast<int>(orderB)));
-  }
-
-  result.localityScore = result.dataOverlap * result.reuseProximity;
-  result.concurrencyRisk = result.hazardScore * result.dataOverlap;
-
-  return result;
-}
-
 void EdtAnalysis::print(func::FuncOp func, llvm::raw_ostream &os) {
   os << "EdtAnalysis for function: " << func.getName() << "\n";
 
@@ -193,7 +117,7 @@ EdtGraph &EdtAnalysis::getOrCreateEdtGraph(func::FuncOp func) {
   return *ptr;
 }
 
-bool EdtAnalysis::invalidateEdtGraph(func::FuncOp func) {
+bool EdtAnalysis::invalidateGraph(func::FuncOp func) {
   auto it = edtGraphs.find(func);
   if (it != edtGraphs.end()) {
     if (it->second)

@@ -51,23 +51,10 @@ public:
   /// Print analysis for a function.
   void print(func::FuncOp func);
 
-  /// Access alias analysis.
+  /// Access analyses
   DbAliasAnalysis *getAliasAnalysis() { return dbAliasAnalysis.get(); }
-
-  /// Access loop analysis.
   LoopAnalysis *getLoopAnalysis() { return loopAnalysis.get(); }
-
-  /// Access dataflow analysis.
   DbDataFlowAnalysis *getDataFlowAnalysis() { return dbDataFlowAnalysis.get(); }
-
-  /// Access dataflow solver for analyses wiring.
-  mlir::DataFlowSolver &getSolver() { return solver; }
-
-  /// Overlap classification between DB operations
-  enum class OverlapKind { Unknown, Disjoint, Partial, Full };
-
-  /// Coarse overlap classification between two acquire operations.
-  OverlapKind estimateOverlap(arts::DbAcquireOp a, arts::DbAcquireOp b);
 
 private:
   ArtsAnalysisManager &AM;
@@ -75,7 +62,6 @@ private:
   std::unique_ptr<DbAliasAnalysis> dbAliasAnalysis;
   std::unique_ptr<LoopAnalysis> loopAnalysis;
   std::unique_ptr<DbDataFlowAnalysis> dbDataFlowAnalysis;
-  mlir::DataFlowSolver solver;
 };
 
 } // namespace arts
