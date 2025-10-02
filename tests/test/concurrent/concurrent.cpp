@@ -3,15 +3,6 @@
 
 #include <omp.h>
 #include <time.h>
-/*
-carts cgeist concurrent.cpp -std=c++17 -fopenmp -O0 -S > concurrent.mlir
-carts run concurrent.mlir --convert-openmp -o concurrent-arts.mlir
-carts run concurrent.mlir --edt-transforms -o concurrent-edt.mlir
-carts run concurrent.mlir --datablock -o concurrent-db.mlir
-carts run concurrent.mlir --edt-lowering -o concurrent-llvm.mlir
-
-carts compile concurrent.ll -O3 -g0 -march=native -o concurrent
-*/
 
 int main() {
   srand(time(NULL));

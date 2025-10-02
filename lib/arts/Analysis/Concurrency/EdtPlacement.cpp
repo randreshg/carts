@@ -93,23 +93,24 @@ EdtPlacementHeuristics::compute(const SmallVector<std::string, 8> &nodes) {
       /// edts already chosen for node n and can run concurrently with them,
       /// prefer co-location when locality is high and hazards are low; penalize
       /// otherwise.
-      if (edtGraph) {
-        for (Operation *other : nodeedtsPlaced[n]) {
-          auto a = static_cast<EdtOp>(t);
-          auto b = static_cast<EdtOp>(other);
-          bool depAB = edtGraph->isEdtReachable(a, b);
-          bool depBA = edtGraph->isEdtReachable(b, a);
-          if (!depAB && !depBA) {
-            auto aff = edtAnalysis->affinity(a, b);
-            affinityBoost += aff.localityScore; /// reward shared read locality
-            riskSum += aff.concurrencyRisk;     /// penalize write hazards
-          } else {
-            /// Sequential reuse: encourage co-location slightly
-            auto aff = edtAnalysis->affinity(a, b);
-            affinityBoost += 0.5 * aff.localityScore;
-          }
-        }
-      }
+      // if (edtGraph) {
+      //   for (Operation *other : nodeedtsPlaced[n]) {
+      //     auto a = static_cast<EdtOp>(t);
+      //     auto b = static_cast<EdtOp>(other);
+      //     bool depAB = edtGraph->isEdtReachable(a, b);
+      //     bool depBA = edtGraph->isEdtReachable(b, a);
+      //     if (!depAB && !depBA) {
+      //       auto aff = edtAnalysis->affinity(a, b);
+      //       affinityBoost += aff.localityScore; /// reward shared read
+      //       locality riskSum += aff.concurrencyRisk;     /// penalize write
+      //       hazards
+      //     } else {
+      //       /// Sequential reuse: encourage co-location slightly
+      //       auto aff = edtAnalysis->affinity(a, b);
+      //       affinityBoost += 0.5 * aff.localityScore;
+      //     }
+      //   }
+      // }
       double risk = 0.0; /// aggregate with neighbors if needed
       double load = nodeLoad[n];
       double contention = load; /// proxy

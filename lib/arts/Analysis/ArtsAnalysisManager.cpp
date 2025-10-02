@@ -65,7 +65,7 @@ bool ArtsAnalysisManager::invalidateFunction(func::FuncOp func) {
   if (dbAnalysis)
     invalidated |= dbAnalysis->invalidateGraph(func);
   if (edtAnalysis)
-    invalidated |= edtAnalysis->invalidateEdtGraph(func);
+    invalidated |= edtAnalysis->invalidateGraph(func);
   if (concurrencyAnalysis)
     invalidated |= concurrencyAnalysis->invalidateConcurrencyGraph(func);
   return invalidated;

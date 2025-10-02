@@ -57,56 +57,7 @@ struct EdtInfo {
   bool isReadWrite() const {
     return !basesRead.empty() && !basesWritten.empty();
   }
-
-  static EdtInfo join(const EdtInfo &a, const EdtInfo &b) {
-    EdtInfo r;
-    // Sum basic counts
-    r.totalOps = a.totalOps + b.totalOps;
-    r.numLoads = a.numLoads + b.numLoads;
-    r.numStores = a.numStores + b.numStores;
-    r.numCalls = a.numCalls + b.numCalls;
-    /// Sum traffic
-    r.bytesRead = a.bytesRead + b.bytesRead;
-    r.bytesWritten = a.bytesWritten + b.bytesWritten;
-    /// Max structural depth
-    r.maxLoopDepth = std::max<uint64_t>(a.maxLoopDepth, b.maxLoopDepth);
-    /// Preserve earliest order index
-    r.orderIndex = std::min<unsigned>(a.orderIndex, b.orderIndex);
-    /// Union sets
-    r.basesRead = a.basesRead;
-    r.basesRead.insert(b.basesRead.begin(), b.basesRead.end());
-    r.basesWritten = a.basesWritten;
-    r.basesWritten.insert(b.basesWritten.begin(), b.basesWritten.end());
-    r.dbAllocsRead = a.dbAllocsRead;
-    r.dbAllocsRead.insert(b.dbAllocsRead.begin(), b.dbAllocsRead.end());
-    r.dbAllocsWritten = a.dbAllocsWritten;
-    r.dbAllocsWritten.insert(b.dbAllocsWritten.begin(),
-                             b.dbAllocsWritten.end());
-    /// Merge maps by summing values
-    r.dbAllocAccessCount = a.dbAllocAccessCount;
-    for (auto &kv : b.dbAllocAccessCount)
-      r.dbAllocAccessCount[kv.first] += kv.second;
-    r.dbAllocAccessBytes = a.dbAllocAccessBytes;
-    for (auto &kv : b.dbAllocAccessBytes)
-      r.dbAllocAccessBytes[kv.first] += kv.second;
-    /// Recompute ratio
-    const uint64_t memOps = r.numLoads + r.numStores;
-    r.computeToMemRatio =
-        memOps ? double(r.totalOps - memOps) / double(memOps) : 0.0;
-    return r;
-  }
 };
-
-/// Pairwise affinity between two EDTs for placement decisions.
-struct EdtPairAffinity {
-  double dataOverlap = 0.0;     /// Jaccard overlap on base sets
-  double hazardScore = 0.0;     /// fraction of overlapping bases with writers
-  bool mayConflict = false;     /// true if hazardScore > 0
-  double reuseProximity = 0.0;  /// higher when edts are closer in program order
-  double localityScore = 0.0;   /// dataOverlap * reuseProximity
-  double concurrencyRisk = 0.0; /// hazardScore * dataOverlap
-};
-
 } // namespace arts
 } // namespace mlir
 

@@ -73,8 +73,7 @@ static cl::opt<bool> Opt("O3", cl::desc("Apply Optimizations"),
 static cl::opt<bool> EmitLLVM("emit-llvm", cl::desc("Emit LLVM IR output"),
                               cl::init(false));
 
-static cl::opt<bool> IdentifyDbs("identify-dbs",
-                                 cl::desc("Identify datablocks"),
+static cl::opt<bool> IdentifyDbs("identify-dbs", cl::desc("Identify DBs"),
                                  cl::init(false));
 
 static cl::opt<bool> Debug("g", cl::desc("Enable debug mode"), cl::init(false));
@@ -99,7 +98,7 @@ enum class PipelineStage {
   EdtTransforms,    // After EDT transformations
   EdtOptimizations, // After EDT optimizations
   EdtLowering,      // After EDT lowering
-  Datablock,        // After datablock creation and optimization
+  Db,               // After DB creation and optimization
   Epochs,           // After epoch creation
   ArtsToLLVM,       // After ConvertArtsToLLVM
   Complete          // Full pipeline (default)
@@ -115,8 +114,8 @@ static cl::opt<PipelineStage>
                                  "Stop after OpenMP conversion"),
                       clEnumValN(PipelineStage::EdtTransforms, "edt-transforms",
                                  "Stop after EDT transformations"),
-                      clEnumValN(PipelineStage::Datablock, "datablock",
-                                 "Stop after datablock optimization"),
+                      clEnumValN(PipelineStage::Db, "db",
+                                 "Stop after db optimization"),
                       clEnumValN(PipelineStage::Epochs, "epochs",
                                  "Stop after epoch creation"),
                       clEnumValN(PipelineStage::EdtOptimizations, "edt-opt",
@@ -233,9 +232,9 @@ void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
 }
 
-/// Setup datablock creation and optimization passes.
-void setupDatablock(PassManager &pm, arts::ArtsAnalysisManager *AM,
-                    bool identifyDbs, bool exportJson) {
+/// Setup db creation and optimization passes.
+void setupDb(PassManager &pm, arts::ArtsAnalysisManager *AM, bool identifyDbs,
+             bool exportJson) {
   pm.addPass(arts::createCreateDbsPass(identifyDbs));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
@@ -321,7 +320,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     setupArtsInliner(pm);
     setupConvertOpenMP(pm);
     setupEdtTransforms(pm, AM.get());
-    setupDatablock(pm, AM.get(), IdentifyDbs, ExportJson);
+    setupDb(pm, AM.get(), IdentifyDbs, ExportJson);
     setupEdtOptimizations(pm, AM.get());
     setupEpochs(pm, AM.get());
     setupEdtLowering(pm, AM.get());
@@ -417,18 +416,18 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   if (stopAt == PipelineStage::EdtTransforms)
     return;
 
-  /// Datablock creation and optimization
+  /// Db creation and optimization
   {
     PassManager pm(&context);
-    setupDatablock(pm, AM.get(), IdentifyDbs, ExportJson);
+    setupDb(pm, AM.get(), IdentifyDbs, ExportJson);
     if (mlir::failed(pm.run(module))) {
-      ARTS_ERROR("Error when running datablock passes");
+      ARTS_ERROR("Error when running db passes");
       module->dump();
       return;
     }
   }
 
-  if (stopAt == PipelineStage::Datablock)
+  if (stopAt == PipelineStage::Db)
     return;
 
   /// EDT optimizations

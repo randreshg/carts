@@ -17,7 +17,7 @@ int main(int argc, char *argv[]) {
 
   srand(time(NULL));
   const int random = rand() % 11;
-  printf("Random number: %d\n", random);
+  printf("\nRandom number: %d\n", random);
 #pragma omp parallel
   {
 #pragma omp single
