@@ -104,7 +104,6 @@ void DbPass::runOnOperation() {
 
   /// Adjust DB modes based on dependencies and accesses
   changed |= adjustDbModes();
-  ;
 
   /// Global dimensionality reduction at allocation level
   // changed |= reduceAllocDimensionality();
@@ -133,46 +132,71 @@ void DbPass::runOnOperation() {
 /// inout.
 //===----------------------------------------------------------------------===//
 bool DbPass::adjustDbModes() {
+  ARTS_DEBUG("Adjusting DB modes");
   bool changed = false;
 
   module.walk([&](func::FuncOp func) {
     DbGraph &graph = AM->getDbGraph(func);
 
-    // First, adjust per-acquire modes
+    /// Helper: lattice join for ArtsMode. Ensures monotonic escalation:
+    /// in U in = in, out U out = out, any U inout = inout, and
+    /// in U out = inout
+    auto joinMode = [](ArtsMode a, ArtsMode b) -> ArtsMode {
+      if (a == b)
+        return a;
+      if (a == ArtsMode::inout || b == ArtsMode::inout)
+        return ArtsMode::inout;
+      /// Remaining distinct cases are (in, out) or (out, in)
+      return ArtsMode::inout;
+    };
+
+    /// First, adjust per-acquire modes
     graph.forEachAcquireNode([&](DbAcquireNode *acqNode) {
       bool hasLoads = !acqNode->getLoads().empty();
       bool hasStores = !acqNode->getStores().empty();
 
       DbAcquireOp acqOp = acqNode->getDbAcquireOp();
-      ArtsMode newMode = ArtsMode::inout;
+      ArtsMode newMode = ArtsMode::in;
       if (hasLoads && hasStores)
         newMode = ArtsMode::inout;
       else if (hasStores)
         newMode = ArtsMode::out;
-      else if (hasLoads)
+      else
         newMode = ArtsMode::in;
+
+      // Each DbAcquireNode's mode is derived from its own accesses only.
+      // Nested acquires will be processed separately by forEachAcquireNode.
 
       if (newMode == acqOp.getMode())
         return;
 
+      ARTS_DEBUG("Adjusting acqOp: " << acqOp << " from " << acqOp.getMode()
+                                     << " to " << newMode);
       acqOp.setModeAttr(ArtsModeAttr::get(acqOp.getContext(), newMode));
       changed = true;
     });
 
-    /// Then, adjust alloc dbMode - if all child acquires are in, then the alloc
-    /// dbMode should be in otherwise it should be out if some child acquires
-    /// are inout, then the alloc dbMode should be inout
+    /// Then, adjust alloc dbMode - collect modes from all acquires in hierarchy
+    /// (direct children and nested acquires) and compute maximum required mode
     graph.forEachAllocNode([&](DbAllocNode *allocNode) {
       ArtsMode maxMode = ArtsMode::in;
+
+      /// Recursive helper to collect modes from all acquire levels
+      std::function<void(DbAcquireNode *)> collectModes =
+          [&](DbAcquireNode *acqNode) {
+            ArtsMode mode = acqNode->getDbAcquireOp().getMode();
+            maxMode = joinMode(maxMode, mode);
+
+            /// Recursively process child acquires
+            acqNode->forEachChildNode([&](NodeBase *child) {
+              if (auto *nestedAcq = dyn_cast<DbAcquireNode>(child))
+                collectModes(nestedAcq);
+            });
+          };
+
       allocNode->forEachChildNode([&](NodeBase *child) {
         if (auto *acqNode = dyn_cast<DbAcquireNode>(child)) {
-          ArtsMode mode = acqNode->getDbAcquireOp().getMode();
-          if (mode == ArtsMode::in)
-            maxMode = ArtsMode::in;
-          else if (mode == ArtsMode::out)
-            maxMode = ArtsMode::out;
-          else if (mode == ArtsMode::inout)
-            maxMode = ArtsMode::inout;
+          collectModes(acqNode);
         }
       });
 
@@ -180,8 +204,10 @@ bool DbPass::adjustDbModes() {
       ArtsMode currentDbMode = allocOp.getMode();
       if (currentDbMode == maxMode)
         return;
-
+      ARTS_DEBUG("Adjusting allocOp:" << allocOp << " from " << currentDbMode
+                                      << " to " << maxMode);
       allocOp.setModeAttr(ArtsModeAttr::get(allocOp.getContext(), maxMode));
+
       changed = true;
     });
   });
@@ -215,11 +241,24 @@ bool DbPass::reduceAllocDimensionality() {
       // if (oldAlloc.getAddress())
       //   return;
 
-      /// Gather acquire nodes for this allocation.
+      /// Gather all acquire nodes for this allocation (including nested ones).
       SmallVector<DbAcquireNode *, 8> acquires;
+
+      /// Recursive helper to collect all acquire nodes in the hierarchy
+      std::function<void(DbAcquireNode *)> collectAcquires =
+          [&](DbAcquireNode *acqNode) {
+            acquires.push_back(acqNode);
+
+            /// Recursively process child acquires
+            acqNode->forEachChildNode([&](NodeBase *child) {
+              if (auto *nestedAcq = dyn_cast<DbAcquireNode>(child))
+                collectAcquires(nestedAcq);
+            });
+          };
+
       allocNode->forEachChildNode([&](NodeBase *child) {
         if (auto *acq = dyn_cast<DbAcquireNode>(child))
-          acquires.push_back(acq);
+          collectAcquires(acq);
       });
       if (acquires.empty())
         return;
@@ -756,9 +795,27 @@ bool DbPass::deadDbElimination() {
     auto &graph = AM->getDbGraph(func);
     SmallVector<DbAllocNode *> deadAllocs;
     graph.forEachAllocNode([&](DbAllocNode *allocNode) {
-      /// Check if allocation has no acquires (releases are connected via edges,
-      /// not stored)
-      if (allocNode->getAcquireNodesSize() == 0) {
+      /// Check if allocation has no acquires (counting nested acquires too)
+      size_t totalAcquires = 0;
+
+      /// Count all acquire nodes in the hierarchy
+      std::function<void(DbAcquireNode *)> countAcquires =
+          [&](DbAcquireNode *acqNode) {
+            totalAcquires++;
+
+            /// Recursively count child acquires
+            acqNode->forEachChildNode([&](NodeBase *child) {
+              if (auto *nestedAcq = dyn_cast<DbAcquireNode>(child))
+                countAcquires(nestedAcq);
+            });
+          };
+
+      allocNode->forEachChildNode([&](NodeBase *child) {
+        if (auto *acqNode = dyn_cast<DbAcquireNode>(child))
+          countAcquires(acqNode);
+      });
+
+      if (totalAcquires == 0) {
         deadAllocs.push_back(allocNode);
       }
     });

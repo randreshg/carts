@@ -28,10 +28,11 @@ ARTS_DEBUG_SETUP(db_acquire_node);
 //===----------------------------------------------------------------------===//
 // DbAcquireNode
 //===----------------------------------------------------------------------===//
-DbAcquireNode::DbAcquireNode(DbAcquireOp op, DbAllocNode *parent,
-                             DbAnalysis *analysis, std::string initialHierId)
+DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
+                             DbAllocNode *rootAlloc, DbAnalysis *analysis,
+                             std::string initialHierId)
     : dbAcquireOp(op), dbReleaseOp(nullptr), op(op.getOperation()),
-      parent(parent), analysis(analysis) {
+      parent(parent), rootAlloc(rootAlloc), analysis(analysis) {
   if (!initialHierId.empty())
     hierId = std::move(initialHierId);
 
@@ -88,8 +89,8 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, DbAllocNode *parent,
 
   /// Compute estimated bytes for this acquire slice
   if (!hasUnknown) {
-    unsigned long long elemBytes =
-        arts::getElementTypeByteSize(parent->getDbAllocOp().getElementType());
+    unsigned long long elemBytes = arts::getElementTypeByteSize(
+        rootAlloc->getDbAllocOp().getElementType());
     if (elemBytes > 0) {
       if (totalElems >
           std::numeric_limits<unsigned long long>::max() / elemBytes) {
@@ -105,38 +106,51 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, DbAllocNode *parent,
   Value ptrResult = dbAcquireOp.getPtr();
   assert(ptrResult.hasOneUse() && "Acquire ptr should be used exactly once");
 
-  /// The ptr result should be passed directly to an EDT
-  edtUser = dyn_cast<EdtOp>(*ptrResult.getUsers().begin());
-  assert(edtUser && "Acquire ptr should be used by an EDT");
+  /// The ptr result should be passed directly to an EDT or another acquire
+  Operation *singleUser = *ptrResult.getUsers().begin();
+  if (auto nestedAcquire = dyn_cast<DbAcquireOp>(singleUser)) {
+    // Nested acquire; create child node lazily via getOrCreateAcquireNode
+    // The rest of this constructor computes info for this node; nested
+    // children will compute their own.
+  } else {
+    edtUser = dyn_cast<EdtOp>(singleUser);
+    assert(edtUser &&
+           "Acquire ptr should be used by an EDT or another acquire");
+  }
 
   /// Collect all memory accesses (loads/stores)
   auto [depsBegin, depsLen] =
       edtUser.getODSOperandIndexAndLength(/*dependencies*/ 1);
 
-  unsigned operandIdx = 0;
-  for (auto &use : ptrResult.getUses()) {
-    if (use.getOwner() == edtUser.getOperation()) {
-      operandIdx = use.getOperandNumber();
-      break;
+  if (edtUser) {
+    unsigned operandIdx = 0;
+    for (auto &use : ptrResult.getUses()) {
+      if (use.getOwner() == edtUser.getOperation()) {
+        operandIdx = use.getOperandNumber();
+        break;
+      }
     }
+    unsigned depIndex = operandIdx - depsBegin;
+    assert(depIndex < depsLen && "Dependency index should be within range");
+    useInEdt = edtUser.getBody().getArgument(depIndex);
   }
-  unsigned depIndex = operandIdx - depsBegin;
-  assert(depIndex < depsLen && "Dependency index should be within range");
-  useInEdt = edtUser.getBody().getArgument(depIndex);
 
   /// Find the corresponding DbReleaseOp for this acquire
-  for (Operation *user : useInEdt.getUsers()) {
-    auto releaseOp = dyn_cast<DbReleaseOp>(user);
-    if (!releaseOp)
-      continue;
-    if (releaseOp.getSource() == useInEdt) {
-      dbReleaseOp = releaseOp;
-      break;
+  if (useInEdt) {
+    for (Operation *user : useInEdt.getUsers()) {
+      auto releaseOp = dyn_cast<DbReleaseOp>(user);
+      if (!releaseOp)
+        continue;
+      if (releaseOp.getSource() == useInEdt) {
+        dbReleaseOp = releaseOp;
+        break;
+      }
     }
   }
 
   /// Get the in/out mode based on the memory accesses
-  collectAccesses(useInEdt);
+  if (useInEdt)
+    collectAccesses(useInEdt);
   if (loads.size() > 0) {
     info.inCount = 1;
     info.outCount = 0;
@@ -150,7 +164,27 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, DbAllocNode *parent,
 
   /// Compute accessed offset ranges for this acquire
   /// This analyzes the memory access patterns within the EDT
-  computeAccessedOffsetRanges();
+  if (useInEdt)
+    computeAccessedOffsetRanges();
+}
+
+DbAcquireNode *DbAcquireNode::getOrCreateAcquireNode(DbAcquireOp op) {
+  auto it = childMap.find(op);
+  if (it != childMap.end())
+    return it->second;
+  std::string childId = getHierId().str() + "." + std::to_string(nextChildId++);
+  auto newNode =
+      std::make_unique<DbAcquireNode>(op, this, rootAlloc, analysis, childId);
+  DbAcquireNode *ptr = newNode.get();
+  childAcquires.push_back(std::move(newNode));
+  childMap[op] = ptr;
+  return ptr;
+}
+
+void DbAcquireNode::forEachChildNode(
+    const std::function<void(NodeBase *)> &fn) const {
+  for (const auto &n : childAcquires)
+    fn(n.get());
 }
 
 void DbAcquireNode::print(llvm::raw_ostream &os) const {

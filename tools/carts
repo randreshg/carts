@@ -58,6 +58,7 @@ show_usage() {
     echo "Commands:"
     carts_cmd "build [options]"             "Build CARTS project using system clang"
     carts_cmd "cgeist <file> [options]"     "Run cgeist with automatic include paths"
+    carts_cmd "clang <file> [options]"      "Compile C/C++ with LLVM clang and OpenMP"
     carts_cmd "run [options]"               "Run CARTS MLIR transformations"
     carts_cmd "mlir-translate <file> [options]" "Run mlir-translate"
     carts_cmd "compile <file> [options]"    "Compile with ARTS runtime"
@@ -89,7 +90,7 @@ show_usage() {
     echo ""
     echo "Examples:"
     echo "  # Build commands"
-    carts_cmd "carts build"                    "Build CARTS project (default)"
+    carts_cmd "carts build"                   "Build CARTS project (default)"
     carts_cmd "carts build --clean"           "Clean and build"
     carts_cmd "carts build --arts"            "Build only ARTS components"
     carts_cmd "carts build --arts-info"       "Build ARTS with info enabled"
@@ -100,28 +101,28 @@ show_usage() {
     
     echo ""
     echo "  # Compilation pipeline"
-    carts_cmd "carts cgeist simple.cpp -std=c++17 -fopenmp -O0 -S" "Convert C++ to MLIR"
-    carts_cmd "carts run simple.mlir --complete --emit-llvm" "Full pipeline to LLVM"
-    carts_cmd "carts run simple.mlir --convert-openmp --emit-llvm" "Stop after OpenMP conversion"
-    carts_cmd "carts compile simple.ll -o simple" "Compile LLVM to executable"
-    carts_cmd "carts execute simple.cpp -o simple" "Complete pipeline: C++ → executable"
-    carts_cmd "carts execute simple.cpp --run-args --export-json -o simple" "Pipeline with JSON export"
-    carts_cmd "carts execute simple.cpp --run-args --debug-only=db -o simple" "Pipeline with debug flags"
+    carts_cmd "carts cgeist simple.cpp -std=c++17 -fopenmp -O0 -S"              "Convert C++ to MLIR"
+    carts_cmd "carts clang simple.cpp -fopenmp -o simple"                       "Compile C++ with OpenMP directly"
+    carts_cmd "carts run simple.mlir --complete --emit-llvm"                    "Full pipeline to LLVM"
+    carts_cmd "carts compile simple.ll -o simple"                               "Compile LLVM to executable"
+    carts_cmd "carts execute simple.cpp -o simple"                              "Complete pipeline: C++ to executable"
+    carts_cmd "carts execute simple.cpp --run-args --export-json -o simple"     "Pipeline with JSON export"
+    carts_cmd "carts execute simple.cpp --run-args --debug-only=db -o simple"   "Pipeline with debug flags"
     carts_cmd "carts execute simple.cpp --compile-args -lm -lpthread -o simple" "Pipeline with library dependencies"
     
     echo ""
     echo "  # Development and testing"
-    carts_cmd "carts run --help"               "Show pipeline options"
-    carts_cmd "carts check"                    "Run all CARTS tests"
-    carts_cmd "carts check --suite arts"      "Run only ARTS tests"
-    carts_cmd "carts clean"                    "Clean generated files"
-    carts_cmd "carts clean --docker"          "Clean Docker containers and images"
+    carts_cmd "carts run --help"                "Show pipeline options"
+    carts_cmd "carts check"                     "Run all CARTS tests"
+    carts_cmd "carts check --suite arts"        "Run only ARTS tests"
+    carts_cmd "carts clean"                     "Clean generated files"
+    carts_cmd "carts clean --docker"            "Clean Docker containers and images"
     
     echo ""
     echo "  # Environment setup"
-    carts_cmd "carts setup"                    "Setup CARTS environment"
-    carts_cmd "carts setup --add-to-path"     "Add carts to PATH"
-    carts_cmd "carts setup --deps-only"       "Install dependencies only"
+    carts_cmd "carts setup"                     "Setup CARTS environment"
+    carts_cmd "carts setup --add-to-path"       "Add carts to PATH"
+    carts_cmd "carts setup --deps-only"         "Install dependencies only"
     
     echo ""
     echo "  # Benchmarking"
@@ -177,6 +178,72 @@ run_cgeist() {
     fi
     
     "${POLYGEIST_INSTALL_DIR}/bin/cgeist" "${include_paths[@]}" "${extra_cflags[@]}" "$input_file" "$@"
+}
+
+
+# Function to run clang with automatic include and library paths
+run_clang() {
+    local input_file="$1"
+    shift
+
+    if [[ ! -f "$input_file" ]]; then
+        carts_error "Input file '$input_file' not found"
+        exit 1
+    fi
+
+    # Use installed LLVM clang
+    local clang_path="${LLVM_INSTALL_DIR}/bin/clang"
+    if [[ ! -f "$clang_path" ]]; then
+        carts_error "LLVM clang not found at $clang_path"
+        carts_info "Please ensure LLVM is properly installed"
+        exit 1
+    fi
+
+    # Build include paths (same as cgeist)
+    local include_paths=(
+        "-I${LLVM_INCLUDE_PATH}"
+        "-I${SYSTEM_INCLUDE_PATH}"
+        "-I${SYSTEM_CXX_INCLUDE_PATH}"
+        "-I${ARTS_INSTALL_DIR}/include"
+        "-I${LLVM_INSTALL_DIR}/include"
+    )
+
+    # Build library paths
+    local library_paths=(
+        "-L${ARTS_INSTALL_DIR}/lib"
+        "-L${LLVM_LIB_PATH}"
+        "-L${LLVM_INSTALL_DIR}/lib"
+        "-Wl,-rpath,${ARTS_INSTALL_DIR}/lib"
+        "-Wl,-rpath,${LLVM_LIB_PATH}"
+    )
+
+    # Add macOS specific paths
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        library_paths+=("-isysroot" "${MACOS_SDK_PATH}")
+    fi
+
+    # Libraries for C++
+    local libraries=(
+        "-lc++"
+        "-lc++abi"
+        "-lunwind"
+    )
+
+    # Add system libraries for Linux
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        libraries+=("-lpthread")
+        libraries+=("-lrt")
+    fi
+
+    if [[ -n "$CARTS_VERBOSE" ]]; then
+        carts_debug "Running LLVM clang with:"
+        carts_debug "Include paths: ${include_paths[*]}"
+        carts_debug "Library paths: ${library_paths[*]}"
+        carts_debug "Libraries: ${libraries[*]}"
+        carts_debug "Command: ${clang_path} ${include_paths[*]} ${library_paths[*]} -fopenmp $input_file ${libraries[*]} $*"
+    fi
+
+    "${clang_path}" "${include_paths[@]}" "${library_paths[@]}" -fopenmp "$input_file" "${libraries[@]}" "$@"
 }
 
 
@@ -272,16 +339,28 @@ run_compile() {
 
 # Function to run benchmark tool
 run_benchmark() {
+    # Check if carts-benchmarks submodule is initialized
+    local benchmarks_dir="${CARTS_DIR}/submodules/carts-benchmarks"
+    if [[ ! -d "${benchmarks_dir}/.git" ]]; then
+        carts_info "Initializing carts-benchmarks submodule..."
+        if ! git submodule update --init --recursive submodules/carts-benchmarks; then
+            carts_error "Failed to initialize carts-benchmarks submodule. Please run:"
+            carts_error "  git submodule add https://github.com/randreshg/carts-benchmarks.git submodules/carts-benchmarks"
+            carts_error "  git submodule update --init submodules/carts-benchmarks"
+            exit 1
+        fi
+    fi
+
     local benchmark_script="${CARTS_DIR}/tools/benchmark/carts-benchmark"
     if [[ ! -f "$benchmark_script" ]]; then
         carts_error "Benchmark script not found at $benchmark_script"
         exit 1
     fi
-    
+
     if [[ -n "$CARTS_VERBOSE" ]]; then
         carts_debug "Running benchmark: python3 $benchmark_script $*"
     fi
-    
+
     python3 "$benchmark_script" "$@"
 }
 
@@ -1053,6 +1132,9 @@ main() {
             ;;
         "cgeist")
             run_cgeist "$@"
+            ;;
+        "clang")
+            run_clang "$@"
             ;;
         "run")
             run_run "$@"

@@ -175,64 +175,104 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
       }
       Value depVar = task.getDependVars()[i];
 
-      /// Ensure the dependency variable comes from a memref.alloc operation.
-      auto depAlloc = depVar.getDefiningOp<memref::AllocaOp>();
-      if (!depAlloc) {
-        ARTS_ERROR("Dependency variable does not originate from memref.alloc");
-        return failure();
+      /// Two supported forms for dependency variables:
+      ///  (A) Scalar token held in a local memref (memref.alloca or
+      ///  memref.alloc)
+      ///      where a value is stored before the task; we extract the stored
+      ///      value (expected produced by memref.load) as the dependency
+      ///      source.
+      ///  (B) A memref loaded from a table of memrefs (i.e., depVar defined by
+      ///      memref.load and has memref type). In this case, use the loaded
+      ///      memref directly as the dependency source.
+
+      Operation *allocLikeOp = nullptr;
+      if (auto a = depVar.getDefiningOp<memref::AllocaOp>())
+        allocLikeOp = a.getOperation();
+      else if (auto a2 = depVar.getDefiningOp<memref::AllocOp>())
+        allocLikeOp = a2.getOperation();
+      if (allocLikeOp) {
+        /// Find the first user (except the task itself) that is a memref.store
+        memref::StoreOp depStoreOp = nullptr;
+        for (Operation *user : depVar.getUsers()) {
+          if (user == task)
+            continue;
+          if ((depStoreOp = dyn_cast<memref::StoreOp>(user)))
+            break;
+        }
+        if (!depStoreOp) {
+          ARTS_ERROR("Expected a memref.store operation for dependency var");
+          return failure();
+        }
+
+        /// Get the value that was stored; expect a memref.load
+        Operation *valueDefOp = depStoreOp.getValueToStore().getDefiningOp();
+        Value depLoadVal;
+        if (auto loadOp = dyn_cast<memref::LoadOp>(valueDefOp))
+          depLoadVal = loadOp.getResult();
+        else {
+          ARTS_ERROR("Expected a memref.load operation feeding dep store");
+          return failure();
+        }
+
+        /// Clone the load operation at the beginning of the edt region and
+        /// replace uses in-region so the region no longer depends on the outer
+        /// SSA value.
+        auto &region = task.getRegion();
+        {
+          OpBuilder::InsertionGuard IG(rewriter);
+          rewriter.setInsertionPointToStart(&region.front());
+          auto loadOp = cast<memref::LoadOp>(depLoadVal.getDefiningOp());
+          auto newLoad = rewriter.create<memref::LoadOp>(
+              loc, loadOp.getMemref(), loadOp.getIndices());
+          replaceInRegion(region, loadOp.getResult(), newLoad.getResult());
+        }
+
+        /// Create the control dependency - will be removed in CreateDbs pass
+        {
+          OpBuilder::InsertionGuard IG(rewriter);
+          rewriter.setInsertionPointAfter(depLoadVal.getDefiningOp());
+          SmallVector<Value> emptyIndices;
+          Value dbControl = rewriter.create<DbControlOp>(
+              depLoadVal.getLoc(), getDbMode(depClause.getValue()), depLoadVal,
+              emptyIndices);
+          deps.push_back(dbControl);
+        }
+
+        /// Replace the dependency allocation with an undefined value to allow
+        /// DCE of the token container.
+        replaceWithUndef(allocLikeOp, rewriter);
+        continue;
       }
 
-      /// Find the first user (except the task itself) that is an memref.store
-      /// op.
-      memref::StoreOp depStoreOp = nullptr;
-      for (Operation *user : depVar.getUsers()) {
-        if (user == task)
-          continue;
-        if ((depStoreOp = dyn_cast<memref::StoreOp>(user)))
-          break;
-      }
-      if (!depStoreOp) {
-        ARTS_ERROR("Expected a memref.store operation for dependency var");
-        return failure();
-      }
+      if (auto depMemrefLoad = depVar.getDefiningOp<memref::LoadOp>()) {
+        /// This is the case where the dependency is a memref loaded from a
+        /// table (e.g., memref<?xmemref<?xf64>>). Use the loaded memref as the
+        /// dependency source. Clone the load inside the task region so the
+        /// region has a local definition if it uses this value.
+        auto &region = task.getRegion();
+        {
+          OpBuilder::InsertionGuard IG(rewriter);
+          rewriter.setInsertionPointToStart(&region.front());
+          auto newLoad = rewriter.create<memref::LoadOp>(
+              loc, depMemrefLoad.getMemref(), depMemrefLoad.getIndices());
+          replaceInRegion(region, depVar, newLoad.getResult());
+        }
 
-      /// Get the value that was stored; expect a memref.load
-      Operation *valueDefOp = depStoreOp.getValueToStore().getDefiningOp();
-      Value depLoadVal;
-      if (auto loadOp = dyn_cast<memref::LoadOp>(valueDefOp))
-        depLoadVal = loadOp.getResult();
-      else {
-        ARTS_ERROR("Expected a memref.load operation feeding dep store");
-        return failure();
-      }
-
-      /// Clone the load operation at the beginning of the edt region.
-      auto &region = task.getRegion();
-      {
-        OpBuilder::InsertionGuard IG(rewriter);
-        rewriter.setInsertionPointToStart(&region.front());
-
-        Operation *defOp = depLoadVal.getDefiningOp();
-        auto loadOp = cast<memref::LoadOp>(defOp);
-        auto newLoad = rewriter.create<memref::LoadOp>(loc, loadOp.getMemref(),
-                                                       loadOp.getIndices());
-        replaceInRegion(region, loadOp.getResult(), newLoad.getResult());
+        {
+          OpBuilder::InsertionGuard IG(rewriter);
+          rewriter.setInsertionPointAfter(depMemrefLoad);
+          SmallVector<Value> emptyIndices;
+          Value dbControl = rewriter.create<DbControlOp>(
+              depMemrefLoad.getLoc(), getDbMode(depClause.getValue()), depVar,
+              emptyIndices);
+          deps.push_back(dbControl);
+        }
+        continue;
       }
 
-      /// Create the control dependency - will be removed in CreateDbs pass
-      {
-        OpBuilder::InsertionGuard IG(rewriter);
-        rewriter.setInsertionPointAfter(depLoadVal.getDefiningOp());
-        SmallVector<Value> emptyIndices;
-        /// Create db_control and add to deps
-        Value dbControl = rewriter.create<DbControlOp>(
-            depLoadVal.getLoc(), getDbMode(depClause.getValue()), depLoadVal,
-            emptyIndices);
-        deps.push_back(dbControl);
-      }
-
-      /// Replace the dependency allocation with an undefined value.
-      replaceWithUndef(depAlloc.getOperation(), rewriter);
+      ARTS_ERROR("Unsupported dependency variable producer. Expected "
+                 "memref.alloca, memref.alloc, or memref.load of a memref");
+      return failure();
     }
     return success();
   }

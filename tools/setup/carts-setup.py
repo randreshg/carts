@@ -72,25 +72,11 @@ def setup_project():
     for dir_name in dirs_to_create:
         (project_root / dir_name).mkdir(exist_ok=True)
 
-    # Download dependencies if they don't exist
-    arts_dir = project_root / 'external' / 'arts'
-    polygeist_dir = project_root / 'external' / 'Polygeist'
-
-    if not arts_dir.exists():
-        print("Downloading ARTS runtime...")
-        if not run_command(f"git clone --recursive https://github.com/randreshg/ARTS.git {arts_dir}", realtime=True):
-            print("Failed to download ARTS runtime")
-            return False
-    else:
-        print("ARTS runtime already exists. Skipping download.")
-
-    if not polygeist_dir.exists():
-        print("Downloading Polygeist...")
-        if not run_command(f"git clone --branch carts --recursive https://github.com/randreshg/Polygeist.git {polygeist_dir}", realtime=True):
-            print("Failed to download Polygeist")
-            return False
-    else:
-        print("Polygeist already exists. Skipping download.")
+    # Initialize and update submodules
+    print("Initializing and updating git submodules...")
+    if not run_command("git submodule update --init --recursive", cwd=project_root, realtime=True):
+        print("Failed to initialize/update submodules")
+        return False
 
     return True
 

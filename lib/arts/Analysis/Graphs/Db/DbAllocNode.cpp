@@ -99,7 +99,8 @@ DbAcquireNode *DbAllocNode::getOrCreateAcquireNode(DbAcquireOp op) {
     return it->second;
   std::string childId =
       (getHierId() + "." + std::to_string(nextChildId++)).str();
-  auto newNode = std::make_unique<DbAcquireNode>(op, this, analysis, childId);
+  auto newNode =
+      std::make_unique<DbAcquireNode>(op, this, this, analysis, childId);
   DbAcquireNode *ptr = newNode.get();
   acquireNodes.push_back(std::move(newNode));
   acquireMap[op] = ptr;

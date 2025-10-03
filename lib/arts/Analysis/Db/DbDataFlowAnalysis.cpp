@@ -138,7 +138,7 @@ DbDataFlowAnalysis::processEdt(EdtOp edtOp,
                           << producer->getHierId() << " -> "
                           << consumer->getHierId());
 
-      auto *edge = new DbAllocEdge(producer, consumer);
+      auto *edge = new DbDepEdge(producer, consumer, DbDepType::RAW);
       if (graph->addEdge(producer, consumer, edge)) {
         ARTS_DEBUG(INDENT() << "        Edge created successfully");
       } else {
@@ -165,7 +165,7 @@ DbDataFlowAnalysis::processEdt(EdtOp edtOp,
                           << producer->getHierId() << " -> "
                           << writer->getHierId());
 
-      auto *edge = new DbAllocEdge(producer, writer);
+      auto *edge = new DbDepEdge(producer, writer, DbDepType::WAW);
       if (graph->addEdge(producer, writer, edge)) {
         ARTS_DEBUG(INDENT() << "      WAW edge created successfully");
       } else {
