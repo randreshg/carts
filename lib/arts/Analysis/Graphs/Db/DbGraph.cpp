@@ -126,15 +126,32 @@ DbAcquireNode *DbGraph::getOrCreateAcquireNode(DbAcquireOp op) {
   if (auto node = getDbAcquireNode(op))
     return node;
 
-  DbAllocOp allocOp =
-      dyn_cast_or_null<DbAllocOp>(getUnderlyingOperation(op.getPtr()));
-  assert(allocOp && "Expected DbAllocOp for acquire");
+  Operation *underlying = getUnderlyingOperation(op.getPtr());
+  if (auto allocOp = dyn_cast_or_null<DbAllocOp>(underlying)) {
+    DbAllocNode *allocNode = getOrCreateAllocNode(allocOp);
+    DbAcquireNode *acquireNode = allocNode->getOrCreateAcquireNode(op);
+    acquireNodeMap[op] = acquireNode;
+    /// Create hierarchy edge: alloc -> acquire
+    addEdge(allocNode, acquireNode, new DbChildEdge(allocNode, acquireNode));
+    nodes.push_back(acquireNode);
+    return acquireNode;
+  }
 
-  DbAllocNode *allocNode = getOrCreateAllocNode(allocOp);
-  DbAcquireNode *acquireNode = allocNode->getOrCreateAcquireNode(op);
-  acquireNodeMap[op] = acquireNode;
-  nodes.push_back(acquireNode);
-  return acquireNode;
+  if (auto parentAcquireOp = dyn_cast_or_null<DbAcquireOp>(underlying)) {
+    DbAcquireNode *parentAcquire = getOrCreateAcquireNode(parentAcquireOp);
+    /// Parent acquire must exist now; its root alloc is tracked inside the node
+    DbAcquireNode *acquireNode = parentAcquire->getOrCreateAcquireNode(op);
+    acquireNodeMap[op] = acquireNode;
+    /// Create hierarchy edge: parent acquire -> child acquire
+    addEdge(parentAcquire, acquireNode,
+            new DbChildEdge(parentAcquire, acquireNode));
+    nodes.push_back(acquireNode);
+    return acquireNode;
+  }
+
+  assert(false &&
+         "Expected DbAllocOp or DbAcquireOp as underlying for acquire");
+  return nullptr;
 }
 
 void DbGraph::forEachNode(const std::function<void(NodeBase *)> &fn) const {
@@ -279,16 +296,16 @@ void DbGraph::print(llvm::raw_ostream &os) const {
   /// Show edge summary
   os << "Edge Summary:\n";
   os << "======================================\n";
-  unsigned allocEdges = 0;
+  unsigned childEdges = 0;
 
   forEachNode([&](NodeBase *node) {
     for (auto *edge : node->getOutEdges()) {
-      if (edge->getKind() == EdgeBase::EdgeKind::Alloc)
-        allocEdges++;
+      if (edge->getKind() == EdgeBase::EdgeKind::Child)
+        childEdges++;
     }
   });
 
-  os << "  Alloc edges: " << allocEdges << "\n";
+  os << "  Child edges: " << childEdges << "\n";
   os << "\n";
 }
 
@@ -361,9 +378,17 @@ void DbGraph::computeAllocMetrics(DbAllocOp alloc, DbAllocNode *allocNode) {
   info.acquireNodes.clear();
 
   /// Process acquire and release nodes to compute timing and access info
+  std::function<void(DbAcquireNode *)> processAcqRec;
+  processAcqRec = [&](DbAcquireNode *acq) {
+    processAcquireNode(acq, info);
+    acq->forEachChildNode([&](NodeBase *child) {
+      if (auto *nested = dyn_cast<DbAcquireNode>(child))
+        processAcqRec(nested);
+    });
+  };
   allocNode->forEachChildNode([&](NodeBase *child) {
     if (auto *acq = dyn_cast<DbAcquireNode>(child))
-      processAcquireNode(acq, info);
+      processAcqRec(acq);
   });
 
   /// Sort acquire nodes by program order for interval processing
@@ -589,8 +614,8 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
 
   auto edgeKindStr = [](EdgeBase::EdgeKind k) -> const char * {
     switch (k) {
-    case EdgeBase::EdgeKind::Alloc:
-      return "Alloc";
+    case EdgeBase::EdgeKind::Child:
+      return "Child";
     case EdgeBase::EdgeKind::Dep:
       return "Dep";
     }

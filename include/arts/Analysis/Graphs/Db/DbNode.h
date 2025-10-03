@@ -8,7 +8,10 @@
 #include "arts/Analysis/Db/DbInfo.h"
 #include "arts/Analysis/Graphs/Base/NodeBase.h"
 #include "arts/ArtsDialect.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/raw_ostream.h"
+#include <functional>
+#include <memory>
 #include <string>
 
 namespace mlir {
@@ -69,8 +72,8 @@ private:
 //===----------------------------------------------------------------------===//
 class DbAcquireNode : public NodeBase {
 public:
-  DbAcquireNode(DbAcquireOp op, DbAllocNode *parent, DbAnalysis *analysis,
-                std::string initialHierId = "");
+  DbAcquireNode(DbAcquireOp op, NodeBase *parent, DbAllocNode *rootAlloc,
+                DbAnalysis *analysis, std::string initialHierId = "");
 
   StringRef getHierId() const override { return hierId; }
   void setHierId(std::string id) { hierId = id; }
@@ -82,7 +85,11 @@ public:
   const DenseSet<EdgeBase *> &getInEdges() const override { return inEdges; }
   const DenseSet<EdgeBase *> &getOutEdges() const override { return outEdges; }
 
-  DbAllocNode *getParent() const { return parent; }
+  /// For legacy callers that expect allocation parent
+  DbAllocNode *getParent() const { return rootAlloc; }
+  /// Direct hierarchical parent, which can be an alloc or another acquire
+  NodeBase *getDirectParent() const { return parent; }
+  DbAllocNode *getRootAlloc() const { return rootAlloc; }
   DbAcquireInfo &getInfo() { return info; }
   const DbAcquireInfo &getInfo() const { return info; }
 
@@ -108,11 +115,15 @@ public:
 
   SmallVector<Value, 4> computeInvariantIndices();
 
+  DbAcquireNode *getOrCreateAcquireNode(DbAcquireOp op);
+  void forEachChildNode(const std::function<void(NodeBase *)> &fn) const;
+
 private:
   DbAcquireOp dbAcquireOp;
   DbReleaseOp dbReleaseOp;
   Operation *op;
-  DbAllocNode *parent;
+  NodeBase *parent;
+  DbAllocNode *rootAlloc;
   DbAnalysis *analysis;
   std::string hierId;
   DbAcquireInfo info;
@@ -124,6 +135,11 @@ private:
   /// Helper functions
   SmallVector<DbOffsetRange, 4> computeAccessedOffsetRanges();
   void collectAccesses(Value db);
+
+  /// Nested acquire storage
+  unsigned nextChildId = 1;
+  SmallVector<std::unique_ptr<DbAcquireNode>, 4> childAcquires;
+  DenseMap<DbAcquireOp, DbAcquireNode *> childMap;
 };
 
 } // namespace arts

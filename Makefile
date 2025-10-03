@@ -31,8 +31,12 @@ all: install
 
 # Polygeist
 polygeist-download:
-	mkdir -p $(POLYGEIST_DIR)
-	git clone --branch carts --recursive https://github.com/randreshg/Polygeist.git $(POLYGEIST_DIR) 
+	@if [ ! -d "$(POLYGEIST_DIR)/.git" ]; then \
+		echo "Initializing Polygeist submodule..."; \
+		git submodule update --init --recursive external/Polygeist; \
+	else \
+		echo "Polygeist submodule already initialized."; \
+	fi 
 polygeist:
 	echo "Building Polygeist..."; \
 	mkdir -p $(POLYGEIST_BUILD_DIR); \
@@ -84,8 +88,12 @@ llvm-clean:
 
 # ARTS
 arts-download:
-	mkdir -p $(ARTS_DIR)
-	git clone --recursive https://github.com/randreshg/ARTS.git $(ARTS_DIR)
+	@if [ ! -d "$(ARTS_DIR)/.git" ]; then \
+		echo "Initializing ARTS submodule..."; \
+		git submodule update --init --recursive external/arts; \
+	else \
+		echo "ARTS submodule already initialized."; \
+	fi
 arts:
 	echo "Building ARTS..."; \
 	mkdir -p $(ARTS_BUILD_DIR); \
@@ -147,7 +155,7 @@ build:
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
 		ninja $(NINJA_FLAGS) -C $(CARTS_BUILD_DIR) install
 
-install: llvm arts polygeist build
+install: arts-download polygeist-download llvm arts polygeist build
 
 uninstall:
 	-cat $(BUILD_DIR)/install_manifest.txt | xargs rm -f -r
@@ -160,4 +168,4 @@ clean:
 	make -C $(BUILD_DIR) clean -j
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all build install postinstall uninstall fulluninstall clean test llvm-runtimes
+.PHONY: all build install postinstall uninstall fulluninstall clean test llvm-runtimes arts-download polygeist-download

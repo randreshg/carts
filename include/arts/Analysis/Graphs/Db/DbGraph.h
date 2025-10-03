@@ -27,7 +27,7 @@ class DbAnalysis;
 
 class DbAllocNode;
 class DbAcquireNode;
-class DbAllocEdge;
+class DbChildEdge;
 class DbNode;
 class DbEdge;
 
