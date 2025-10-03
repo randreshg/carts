@@ -19,7 +19,7 @@ class EdgeBase {
 public:
   virtual ~EdgeBase() = default;
 
-  enum class EdgeKind { Alloc, Dep };
+  enum class EdgeKind { Child, Dep };
 
   /// Get source and destination nodes.
   virtual NodeBase *getFrom() const = 0;
