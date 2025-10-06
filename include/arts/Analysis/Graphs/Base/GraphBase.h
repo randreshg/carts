@@ -35,8 +35,8 @@ public:
   /// Invalidate and clear the graph state.
   virtual void invalidate() = 0;
 
-  /// Print a human-readable summary of the graph.
-  virtual void print(llvm::raw_ostream &os) const = 0;
+  /// Print summary of the graph.
+  virtual void print(llvm::raw_ostream &os) = 0;
 
   /// Export a JSON representation of the graph.
   virtual void exportToJson(llvm::raw_ostream &os,

@@ -559,7 +559,7 @@ struct ConvertOpenMPToArtsPass
 
 /// Pass to convert OpenMP operations to ARTS operations
 void ConvertOpenMPToArtsPass::runOnOperation() {
-  ARTS_DEBUG_HEADER(ConvertOpenMPToArtsPass);
+  ARTS_INFO_HEADER(ConvertOpenMPToArtsPass);
   ModuleOp module = getOperation();
   MLIRContext *context = &getContext();
   RewritePatternSet patterns(context);
@@ -571,7 +571,7 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   GreedyRewriteConfig config;
   (void)applyPatternsAndFoldGreedily(module, std::move(patterns), config);
   removeUndefOps(module);
-  ARTS_DEBUG_FOOTER(ConvertOpenMPToArtsPass);
+  ARTS_INFO_FOOTER(ConvertOpenMPToArtsPass);
   ARTS_DEBUG_REGION(module.dump(););
 }
 

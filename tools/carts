@@ -90,14 +90,16 @@ show_usage() {
     echo ""
     echo "Examples:"
     echo "  # Build commands"
-    carts_cmd "carts build"                   "Build CARTS project (default)"
-    carts_cmd "carts build --clean"           "Clean and build"
-    carts_cmd "carts build --arts"            "Build only ARTS components"
-    carts_cmd "carts build --arts-info"       "Build ARTS with info enabled"
-    carts_cmd "carts build --arts-debug"      "Build ARTS with debug+info enabled"
-    carts_cmd "carts build --polygeist"       "Build only Polygeist"
-    carts_cmd "carts build --llvm"            "Build only LLVM"
-    carts_cmd "carts build --docker"          "Build Docker image (docker/docker-build.sh)"
+    carts_cmd "carts build"                                 "Build CARTS project (default)"
+    carts_cmd "carts build --clean"                         "Clean and build"
+    carts_cmd "carts build --arts"                          "Build only ARTS components"
+    carts_cmd "carts build --arts --info"                   "Build ARTS with info-level debugging"
+    carts_cmd "carts build --arts --debug"                  "Build ARTS with debug build and logging"
+    carts_cmd "carts build --arts --introspection"          "Build ARTS with introspection and counters"
+    carts_cmd "carts build --arts --info --introspection"   "Build ARTS with info+introspection"
+    carts_cmd "carts build --polygeist"                     "Build only Polygeist"
+    carts_cmd "carts build --llvm"                          "Build only LLVM"
+    carts_cmd "carts build --docker"                        "Build Docker image
     
     echo ""
     echo "  # Compilation pipeline"
@@ -339,19 +341,7 @@ run_compile() {
 
 # Function to run benchmark tool
 run_benchmark() {
-    # Check if carts-benchmarks submodule is initialized
-    local benchmarks_dir="${CARTS_DIR}/submodules/carts-benchmarks"
-    if [[ ! -d "${benchmarks_dir}/.git" ]]; then
-        carts_info "Initializing carts-benchmarks submodule..."
-        if ! git submodule update --init --recursive submodules/carts-benchmarks; then
-            carts_error "Failed to initialize carts-benchmarks submodule. Please run:"
-            carts_error "  git submodule add https://github.com/randreshg/carts-benchmarks.git submodules/carts-benchmarks"
-            carts_error "  git submodule update --init submodules/carts-benchmarks"
-            exit 1
-        fi
-    fi
-
-    local benchmark_script="${CARTS_DIR}/tools/benchmark/carts-benchmark"
+    local benchmark_script="${CARTS_DIR}/tools/benchmark/carts-benchmark.py"
     if [[ ! -f "$benchmark_script" ]]; then
         carts_error "Benchmark script not found at $benchmark_script"
         exit 1
@@ -420,7 +410,9 @@ run_build() {
     local clean_build=false
     local build_target="build"
     local docker_build=false
-    local arts_debug=false
+    local arts_debug_level="none"
+    local arts_build_type="Release"
+    local arts_introspection=false
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -432,13 +424,17 @@ run_build() {
                 build_target="arts"
                 shift
                 ;;
-            "--arts-info")
-                build_target="arts-info"
+            "--introspection"|"-i")
+                arts_introspection=true
                 shift
                 ;;
-            "--arts-debug")
-                build_target="arts-debug"
-                arts_debug=true
+            "--info")
+                arts_debug_level="info"
+                shift
+                ;;
+            "--debug")
+                arts_debug_level="debug"
+                arts_build_type="Debug"
                 shift
                 ;;
             "--polygeist"|"-p")
@@ -457,9 +453,10 @@ run_build() {
                 carts_print "Build options:"
                 carts_print "  (default)       Build CARTS project (make build)"
                 carts_print "  --clean, -c     Clean build (make clean && make build)"
-                carts_print "  --arts, -a      Build only ARTS components (make arts - no debug)"
-                carts_print "  --arts-info     Build ARTS with info enabled (make arts-info)"
-                carts_print "  --arts-debug    Build ARTS with debug+info enabled (make arts-debug)"
+                carts_print "  --arts, -a      Build only ARTS components"
+                carts_print "  --introspection, -i  Enable ARTS introspection and counters (use with --arts)"
+                carts_print "  --info           Enable info-level debugging (use with --arts)"
+                carts_print "  --debug          Enable debug build with debug+info logging (use with --arts)"
                 carts_print "  --polygeist, -p Build only Polygeist (make polygeist)"
                 carts_print "  --llvm, -l      Build only LLVM (make llvm)"
                 carts_print "  --docker, -d    Build Docker image (docker/docker-build.sh)"
@@ -496,11 +493,23 @@ run_build() {
         fi
     fi
 
+    # Build make command with variables
+    local make_vars=""
+    if [[ "$arts_introspection" == "true" ]]; then
+        make_vars="$make_vars ARTS_COUNTERS=ON ARTS_METRICS=ON"
+    fi
+    if [[ "$arts_debug_level" != "none" ]]; then
+        make_vars="$make_vars ARTS_DEBUG_LEVEL=$arts_debug_level"
+    fi
+    if [[ "$arts_build_type" != "Release" ]]; then
+        make_vars="$make_vars ARTS_BUILD_TYPE=$arts_build_type"
+    fi
+
     if [[ -n "$CARTS_VERBOSE" ]]; then
         if [[ "$docker_build" == "true" ]]; then
             carts_debug "Running Docker build script: ${CARTS_DIR}/docker/docker-build.sh"
         else
-            carts_debug "Running: make $build_target"
+            carts_debug "Running: make $make_vars $build_target"
         fi
     fi
 
@@ -512,7 +521,11 @@ run_build() {
         fi
         (cd "$docker_dir" && ./docker-build.sh)
     else
-        make "$build_target"
+        if [[ -n "$make_vars" ]]; then
+            make $make_vars "$build_target"
+        else
+            make "$build_target"
+        fi
     fi
     
     if [[ $? -eq 0 ]]; then

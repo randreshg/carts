@@ -101,8 +101,10 @@ public:
   EdtOp getEdtUser() const { return edtUser; }
   Value getUseInEdt() const { return useInEdt; }
   void getMemoryAccesses(SmallVector<Operation *> &memAccesses,
-                         bool load = false, bool store = false) {
-    memAccesses.resize((load ? loads.size() : 0) + (store ? stores.size() : 0));
+                         bool load = true, bool store = true) {
+    memAccesses.clear();
+    memAccesses.reserve((load ? loads.size() : 0) +
+                        (store ? stores.size() : 0));
     if (load)
       memAccesses.append(loads.begin(), loads.end());
     if (store)

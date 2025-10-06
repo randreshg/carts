@@ -87,6 +87,11 @@ llvm-clean:
 	rm -f -r $(LLVM_INSTALL_DIR)
 
 # ARTS
+ARTS_DEBUG_LEVEL ?= none
+ARTS_BUILD_TYPE ?= Release
+ARTS_COUNTERS ?= OFF
+ARTS_METRICS ?= OFF
+
 arts-download:
 	@if [ ! -d "$(ARTS_DIR)/.git" ]; then \
 		echo "Initializing ARTS submodule..."; \
@@ -95,44 +100,20 @@ arts-download:
 		echo "ARTS submodule already initialized."; \
 	fi
 arts:
-	echo "Building ARTS..."; \
+	echo "Building ARTS (debug_level=$(ARTS_DEBUG_LEVEL), build_type=$(ARTS_BUILD_TYPE), counters=$(ARTS_COUNTERS), metrics=$(ARTS_METRICS))..."; \
 	mkdir -p $(ARTS_BUILD_DIR); \
 	mkdir -p $(ARTS_INSTALL_DIR); \
 	cmake -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) \
 		-DCMAKE_C_COMPILER=clang \
 		-DCMAKE_CXX_COMPILER=clang++ \
-		-DCMAKE_BUILD_TYPE=Release \
-		-DARTS_DEBUG_LEVEL=none \
+		-DCMAKE_BUILD_TYPE=$(ARTS_BUILD_TYPE) \
+		-DARTS_DEBUG_LEVEL=$(ARTS_DEBUG_LEVEL) \
 		-DSMART_DB=ON \
+		-DCOUNTERS=$(ARTS_COUNTERS) \
+		-DMETRICS=$(ARTS_METRICS) \
 		-DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR) \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
 	make -C $(ARTS_BUILD_DIR) install -j;
-arts-info:
-	echo "Building ARTS Info..."; \
-	mkdir -p $(ARTS_BUILD_DIR); \
-	mkdir -p $(ARTS_INSTALL_DIR); \
-	cmake -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) \
-		-DCMAKE_C_COMPILER=clang \
-		-DCMAKE_CXX_COMPILER=clang++ \
-		-DCMAKE_BUILD_TYPE=Release \
-		-DARTS_DEBUG_LEVEL=info \
-		-DSMART_DB=ON \
-		-DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR) \
-		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
-	make -C $(ARTS_BUILD_DIR) install -j;
-arts-debug:
-	echo "Building ARTS Debug..."; \
-	mkdir -p $(ARTS_BUILD_DIR)
-	mkdir -p $(ARTS_INSTALL_DIR)
-	cmake -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) \
-		-DCMAKE_C_COMPILER=clang \
-		-DCMAKE_CXX_COMPILER=clang++ \
-		-DCMAKE_BUILD_TYPE=Debug \
-		-DARTS_DEBUG_LEVEL=debug \
-		-DSMART_DB=ON \
-		-DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR) \
-		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-	make -C $(ARTS_BUILD_DIR) install -j
 arts-clean:
 	rm -f -r $(ARTS_BUILD_DIR)
 	rm -f -r $(ARTS_INSTALL_DIR)
