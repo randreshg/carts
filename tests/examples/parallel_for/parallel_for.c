@@ -22,7 +22,7 @@ int main(int argc, char **argv) {
     printf("a[%d] = %d, b[%d] = %d\n", i, a[i], i, b[i]);
   }
 
-/// Parallel region with worksharing loop - vector addition
+  /// Parallel region with worksharing loop - vector addition
   printf("Parallel region:\n");
 #pragma omp parallel for schedule(static, 4)
   {
@@ -31,25 +31,18 @@ int main(int argc, char **argv) {
     }
   }
 
-  // #pragma omp parallel for schedule(dynamic)
-  // {
-  //   for (int i = 0; i < N; i++) {
-  //     c[i] = a[i] + b[i];
-  //   }
-  // }
+  /// Verify results
+  int sum = 0;
+#pragma omp parallel
+  {
+#pragma omp for reduction(+ : sum)
+    for (int i = 0; i < N; i++) {
+      sum += c[i];
+    }
+  }
 
-  // /// Verify results
-  //   int sum = 0;
-  // #pragma omp parallel
-  //   {
-  // #pragma omp for reduction(+ : sum)
-  //     for (int i = 0; i < N; i++) {
-  //       sum += c[i];
-  //     }
-  //   }
-
-  //   printf("Sum of results: %d\n", sum);
-  //   printf("Expected sum: %d\n", N * (N - 1) / 2 + N * (N - 1));
+  printf("Sum of results: %d\n", sum);
+  printf("Expected sum: %d\n", N * (N - 1) / 2 + N * (N - 1));
 
   printf("Results:\n");
   for (int i = 0; i < N; i++) {

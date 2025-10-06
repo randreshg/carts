@@ -28,6 +28,10 @@ static inline llvm::raw_ostream &debugStream() {
 #define ARTS_LINE "-----------------------------------------\n"
 #endif
 
+#ifndef ARTS_SEPARATOR
+#define ARTS_SEPARATOR "===================================\n"
+#endif
+
 /// Macro to set up debug infrastructure for a pass/component
 /// Usage: ARTS_DEBUG_SETUP(edt) at the top of your file
 #define ARTS_DEBUG_SETUP(pass_name)                                            \
@@ -72,19 +76,19 @@ static inline llvm::raw_ostream &debugStream() {
   })
 
 /// Standard header/footer patterns for passes
-#define ARTS_DEBUG_HEADER(pass_name)                                           \
+#define ARTS_DEBUG_HEADER(x)                                                   \
   DEBUG_WITH_TYPE(ARTS_DEBUG_TYPE_STR, {                                       \
     auto &__os = ARTS_DBGS();                                                  \
-    __os.changeColor(llvm::raw_ostream::CYAN, /*bold=*/true);                  \
-    __os << "\n" << ARTS_LINE << #pass_name " STARTED\n" << ARTS_LINE;         \
+    __os.changeColor(llvm::raw_ostream::MAGENTA, /*bold=*/true);               \
+    __os << "\n" << #x " STARTED\n" << ARTS_SEPARATOR;                         \
     __os.resetColor();                                                         \
   })
 
-#define ARTS_DEBUG_FOOTER(pass_name)                                           \
+#define ARTS_DEBUG_FOOTER(x)                                                   \
   DEBUG_WITH_TYPE(ARTS_DEBUG_TYPE_STR, {                                       \
     auto &__os = ARTS_DBGS();                                                  \
-    __os.changeColor(llvm::raw_ostream::GREEN, /*bold=*/true);                 \
-    __os << "\n" << ARTS_LINE << #pass_name " FINISHED\n" << ARTS_LINE;        \
+    __os.changeColor(llvm::raw_ostream::MAGENTA, /*bold=*/true);               \
+    __os << "\n" << #x " FINISHED\n" << ARTS_SEPARATOR << "\n";                \
     __os.resetColor();                                                         \
   })
 
@@ -96,6 +100,22 @@ static inline llvm::raw_ostream &debugStream() {
     __os << "[INFO] [" << ARTS_DEBUG_TYPE_STR << "]";                          \
     __os.resetColor();                                                         \
     __os << " " << x << "\n";                                                  \
+  })
+
+#define ARTS_INFO_HEADER(x)                                                    \
+  DEBUG_WITH_TYPE(ARTS_DEBUG_TYPE_STR, {                                       \
+    auto &__os = ARTS_DBGS();                                                  \
+    __os.changeColor(llvm::raw_ostream::BLUE, /*bold=*/true);                  \
+    __os << "\n" << ARTS_LINE << #x " STARTED\n" << ARTS_LINE;                 \
+    __os.resetColor();                                                         \
+  })
+
+#define ARTS_INFO_FOOTER(x)                                                    \
+  DEBUG_WITH_TYPE(ARTS_DEBUG_TYPE_STR, {                                       \
+    auto &__os = ARTS_DBGS();                                                  \
+    __os.changeColor(llvm::raw_ostream::BLUE, /*bold=*/true);                  \
+    __os << "\n" << ARTS_LINE << #x " FINISHED\n" << ARTS_LINE << "\n";        \
+    __os.resetColor();                                                         \
   })
 
 #define ARTS_DEBUG(x)                                                          \

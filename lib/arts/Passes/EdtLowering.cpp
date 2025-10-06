@@ -900,7 +900,8 @@ private:
     OpBuilder bodyBuilder(newEdt);
     bodyBuilder.setInsertionPointToEnd(&dstBody);
 
-    /// Clone operations in forward order so producers are cloned before consumers
+    /// Clone operations in forward order so producers are cloned before
+    /// consumers
     SmallVector<Operation *> opsToErase;
     for (Operation &op : srcBody.without_terminator()) {
       if (&op != operationToSkip) {
@@ -1016,7 +1017,7 @@ void EdtLoweringPass::runOnOperation() {
   module = getOperation();
   AC = new ArtsCodegen(module, false);
 
-  ARTS_DEBUG_HEADER(EdtLoweringPass);
+  ARTS_INFO_HEADER(EdtLoweringPass);
   ARTS_DEBUG_REGION(module.dump(););
 
   /// Lower all parallel EDTs
@@ -1057,10 +1058,10 @@ void EdtLoweringPass::runOnOperation() {
       ARTS_DEBUG_FOOTER(TaskEdtLowering);
       ARTS_DEBUG_REGION(module.dump(););
     }
-
-    ARTS_DEBUG_FOOTER(EdtLoweringPass);
-    ARTS_DEBUG_REGION(module.dump(););
   }
+
+  ARTS_INFO_FOOTER(EdtLoweringPass);
+  ARTS_DEBUG_REGION(module.dump(););
 }
 
 LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {

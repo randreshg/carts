@@ -866,7 +866,7 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   ModuleOp module = getOperation();
   MLIRContext *context = &getContext();
 
-  ARTS_DEBUG_HEADER(ConvertArtsToLLVMPass);
+  ARTS_INFO_HEADER(ConvertArtsToLLVMPass);
   ARTS_DEBUG_REGION(module.dump(););
 
   //// Initialize codegen infrastructure
@@ -911,7 +911,7 @@ void ConvertArtsToLLVMPass::runOnOperation() {
   delete AC;
   AC = nullptr;
 
-  ARTS_DEBUG_FOOTER(ConvertArtsToLLVMPass);
+  ARTS_INFO_FOOTER(ConvertArtsToLLVMPass);
   ARTS_DEBUG_REGION(module.dump(););
 }
 

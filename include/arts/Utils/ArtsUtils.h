@@ -85,6 +85,10 @@ std::string sanitizeString(llvm::StringRef s);
 /// Return true if two ValueRanges have the same length and element-wise equal
 /// Values.
 bool equalRange(ValueRange a, ValueRange b);
+
+/// Return true if all values in the range are identical.
+/// Returns false if the range is empty.
+bool allSameValue(ValueRange values);
 } // namespace arts
 } // namespace mlir
 

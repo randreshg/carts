@@ -62,7 +62,7 @@ void EpochLoweringPass::runOnOperation() {
   module = getOperation();
   AC = new ArtsCodegen(module, debugMode);
 
-  ARTS_DEBUG_HEADER(EpochLoweringPass);
+  ARTS_INFO_HEADER(EpochLoweringPass);
   ARTS_DEBUG_REGION(module.dump(););
 
   /// Collect all epoch operations to process
@@ -145,7 +145,7 @@ void EpochLoweringPass::runOnOperation() {
     epochOp.erase();
   }
 
-  ARTS_DEBUG_FOOTER(EpochLoweringPass);
+  ARTS_INFO_FOOTER(EpochLoweringPass);
   ARTS_DEBUG_REGION(module.dump(););
 }
 

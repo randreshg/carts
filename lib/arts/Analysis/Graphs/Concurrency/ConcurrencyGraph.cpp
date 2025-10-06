@@ -143,7 +143,7 @@ ConcurrencyGraph::ChildIterator ConcurrencyGraph::childEnd(NodeBase *node) {
   return ChildIterator();
 }
 
-void ConcurrencyGraph::print(llvm::raw_ostream &os) const {
+void ConcurrencyGraph::print(llvm::raw_ostream &os) {
   os << "ConcurrencyGraph: edts=" << edts.size() << ", edges=" << edges.size()
      << "\n";
   for (auto &e : edges) {
