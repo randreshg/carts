@@ -62,7 +62,7 @@ private:
 
 void EdtPass::runOnOperation() {
   module = getOperation();
-  ARTS_DEBUG_HEADER(EdtPass);
+  ARTS_INFO_HEADER(EdtPass);
   ARTS_DEBUG_REGION(module.dump(););
 
   if (runAnalysis) {
@@ -78,7 +78,7 @@ void EdtPass::runOnOperation() {
   OpBuilder builder(module.getContext());
   removeOps(module, builder, opsToRemove);
 
-  ARTS_DEBUG_FOOTER(EdtPass);
+  ARTS_INFO_FOOTER(EdtPass);
   ARTS_DEBUG_REGION(module.dump(););
 }
 

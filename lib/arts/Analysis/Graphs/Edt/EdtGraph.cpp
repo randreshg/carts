@@ -127,17 +127,16 @@ SmallVector<NodeBase *, 4> EdtGraph::getDbDeps(EdtOp edt) const {
   return result;
 }
 
-void EdtGraph::print(llvm::raw_ostream &os) const {
+void EdtGraph::print(llvm::raw_ostream &os) {
   os << "===============================================\n";
-  os << "EdtGraph for function: " << const_cast<func::FuncOp &>(func).getName()
-     << "\n";
+  os << "EdtGraph for function: " << func.getName().str() << "\n";
   os << "===============================================\n";
   os << "Summary:\n";
   os << "  Tasks: " << edtNodes.size() << "\n";
   os << "  Edges: " << edges.size() << "\n\n";
 
   os << "Task Hierarchy:\n";
-  for (const auto &pair : edtNodes) {
+  for (auto &pair : edtNodes) {
     EdtNode *task = pair.second.get();
     os << "Task [" << task->getHierId() << "]: ";
     task->print(os);

@@ -80,7 +80,7 @@ void NormalizeDbsPass::runOnOperation() {
   module = getOperation();
   AC = new ArtsCodegen(module, false);
 
-  ARTS_DEBUG_HEADER(NormalizeDbs);
+  ARTS_INFO_HEADER(NormalizeDbs);
   ARTS_DEBUG_REGION(module.dump(););
 
   /// Convert all DB operations to use opaque pointers and update uses
@@ -89,7 +89,7 @@ void NormalizeDbsPass::runOnOperation() {
   /// Clean up old operations
   removeOps(module, AC->getBuilder(), opsToRemove);
 
-  ARTS_DEBUG_FOOTER(NormalizeDbsPass);
+  ARTS_INFO_FOOTER(NormalizeDbsPass);
   ARTS_DEBUG_REGION(module.dump(););
 }
 

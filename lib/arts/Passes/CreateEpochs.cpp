@@ -27,7 +27,6 @@ ARTS_DEBUG_SETUP(create_epochs);
 using namespace mlir;
 using namespace mlir::arts;
 
-
 static void clearIsSyncAttr(EdtOp op) {
   auto newTypeAttr = EdtTypeAttr::get(op.getContext(), EdtType::single);
   op.setTypeAttr(newTypeAttr);
@@ -140,7 +139,7 @@ struct CreateEpochsPass : public CreateEpochsBase<CreateEpochsPass> {
 
 void CreateEpochsPass::runOnOperation() {
   ModuleOp module = getOperation();
-  ARTS_DEBUG_HEADER(CreateEpochsPass);
+  ARTS_INFO_HEADER(CreateEpochsPass);
   ARTS_DEBUG_REGION(module.dump(););
 
   /// Process Sync EDT Ops: for each EDT op that is sync, create an epoch op
@@ -151,7 +150,7 @@ void CreateEpochsPass::runOnOperation() {
   /// by the barrier and embed them in a new epoch op.
   module.walk([&](BarrierOp barrier) { processBarrierOp(barrier); });
 
-  ARTS_DEBUG_FOOTER(CreateEpochsPass);
+  ARTS_INFO_FOOTER(CreateEpochsPass);
   ARTS_DEBUG_REGION(module.dump(););
 }
 

@@ -32,7 +32,7 @@ public:
   void build() override;
   void buildNodesOnly() override;
   void invalidate() override;
-  void print(llvm::raw_ostream &os) const override;
+  void print(llvm::raw_ostream &os) override;
   void exportToJson(llvm::raw_ostream &os,
                     bool includeAnalysis = false) const override;
   NodeBase *getEntryNode() const override;
@@ -48,7 +48,6 @@ public:
   func::FuncOp getFunction() const { return func; }
   bool hasDbGraph() const { return dbGraph != nullptr; }
   DbGraph *getDbGraph() const { return dbGraph; }
-
 
   /// For GraphTraits iterators
   NodesIterator nodesBegin() override { return nodes.begin(); }

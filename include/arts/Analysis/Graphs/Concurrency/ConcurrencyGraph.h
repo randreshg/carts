@@ -70,7 +70,7 @@ public:
     build();
   } // Same as build for concurrency graph
   void invalidate() override;
-  void print(llvm::raw_ostream &os) const override;
+  void print(llvm::raw_ostream &os) override;
   void exportToJson(llvm::raw_ostream &os,
                     bool includeAnalysis = false) const override;
   NodeBase *getEntryNode() const override;
@@ -84,7 +84,6 @@ public:
   NodesIterator nodesEnd() override;
   ChildIterator childBegin(NodeBase *node) override;
   ChildIterator childEnd(NodeBase *node) override;
-
 
   /// Coloring/grouping methods for EDT and DB placement
   void createPlacementGroups(ModuleOp module);

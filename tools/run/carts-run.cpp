@@ -73,9 +73,6 @@ static cl::opt<bool> Opt("O3", cl::desc("Apply Optimizations"),
 static cl::opt<bool> EmitLLVM("emit-llvm", cl::desc("Emit LLVM IR output"),
                               cl::init(false));
 
-static cl::opt<bool> IdentifyDbs("identify-dbs", cl::desc("Identify DBs"),
-                                 cl::init(false));
-
 static cl::opt<bool> Debug("g", cl::desc("Enable debug mode"), cl::init(false));
 
 static cl::opt<bool> ExportJson(
@@ -320,7 +317,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     setupArtsInliner(pm);
     setupConvertOpenMP(pm);
     setupEdtTransforms(pm, AM.get());
-    setupDb(pm, AM.get(), IdentifyDbs, ExportJson);
+    setupDb(pm, AM.get(), true, ExportJson);
     setupEdtOptimizations(pm, AM.get());
     setupEpochs(pm, AM.get());
     setupEdtLowering(pm, AM.get());
@@ -419,7 +416,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   /// Db creation and optimization
   {
     PassManager pm(&context);
-    setupDb(pm, AM.get(), IdentifyDbs, ExportJson);
+    setupDb(pm, AM.get(), true, ExportJson);
     if (mlir::failed(pm.run(module))) {
       ARTS_ERROR("Error when running db passes");
       module->dump();

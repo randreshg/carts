@@ -26,8 +26,8 @@ int main(int argc, char **argv) {
   printf("Performing parallel dot product...\n");
 
   double t_start = omp_get_wtime();
-  /// Parallel loop for dot product calculation
-  #pragma omp parallel for reduction(+:dot_product)
+/// Parallel loop for dot product calculation
+#pragma omp parallel for reduction(+ : dot_product)
   for (i = 0; i < N; i++) {
     dot_product += (long long)a[i] * b[i];
   }
@@ -44,12 +44,14 @@ int main(int argc, char **argv) {
   }
 
   if (dot_product != expected_dot_product) {
-      printf("Result: INCORRECT\n");
-      free(a); free(b);
-      return 1;
+    printf("Result: INCORRECT\n");
+    free(a);
+    free(b);
+    return 1;
   } else {
-      printf("Result: CORRECT\n");
+    printf("Result: CORRECT\n");
   }
-  free(a); free(b);
+  free(a);
+  free(b);
   return 0;
 }

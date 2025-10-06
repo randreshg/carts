@@ -4,10 +4,12 @@
 ///==========================================================================
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/ArtsDialect.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/CSE.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include <algorithm>
 #include <cassert>
 
@@ -22,65 +24,83 @@ bool simplifyIR(ModuleOp module, DominanceInfo &domInfo) {
 }
 
 bool isInvariantInEdt(Region &edtRegion, Value value) {
-  /// Case 1: Value is a constant. Constants are always invariant.
-  if (isValueConstant(value))
+  llvm::SmallPtrSet<Value, 16> visited;
+
+  std::function<bool(Value)> definedInvariant = [&](Value v) -> bool {
+    if (!v)
+      return false;
+    if (!visited.insert(v).second)
+      return true;
+
+    if (isValueConstant(v))
+      return true;
+
+    if (auto blockArg = v.dyn_cast<BlockArgument>()) {
+      Block *owner = blockArg.getOwner();
+      if (!owner)
+        return false;
+      Region *ownerRegion = owner->getParent();
+      if (!ownerRegion)
+        return false;
+
+      /// Entry block arguments of the EDT region are considered invariant
+      /// because their defining value is outside the region.
+      if (ownerRegion == &edtRegion && owner == &edtRegion.front())
+        return true;
+
+      /// Block arguments that belong to regions outside of this EDT are also
+      /// treated as invariant inputs.
+      if (!edtRegion.isAncestor(ownerRegion))
+        return true;
+
+      return false;
+    }
+
+    Operation *defOp = v.getDefiningOp();
+    if (!defOp)
+      return false;
+
+    if (!edtRegion.isAncestor(defOp->getParentRegion()))
+      return true;
+
+    if (isa<arith::ConstantIndexOp, arith::ConstantIntOp>(defOp))
+      return true;
+
+    if (isa<arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::DivSIOp,
+            arith::DivUIOp, arith::IndexCastOp, arith::ExtSIOp, arith::ExtUIOp,
+            arith::TruncIOp>(defOp)) {
+      for (Value operand : defOp->getOperands())
+        if (!definedInvariant(operand))
+          return false;
+      return true;
+    }
+
+    return false;
+  };
+
+  if (!definedInvariant(value))
+    return false;
+
+  auto isPointerLike = [](Type type) {
+    return type.isa<MemRefType, UnrankedMemRefType>();
+  };
+
+  if (!isPointerLike(value.getType()))
     return true;
 
-  Operation *definingOp = value.getDefiningOp();
-  bool definedInside = false;
-
-  if (definingOp) {
-    if (edtRegion.isAncestor(definingOp->getParentRegion()))
-      definedInside = true;
-  } else if (auto blockArg = value.dyn_cast<BlockArgument>()) {
-    /// A block arguments is considered defined inside if it's an argument of
-    /// a nested block within the EDT region, but not an argument of the EDT
-    /// region's entry block itself.
-    if (blockArg.getOwner()->getParent() != &edtRegion &&
-        edtRegion.isAncestor(blockArg.getOwner()->getParent())) {
-      definedInside = true;
-    }
-    /// Otherwise, it's an argument to the EDT region itself or defined outside,
-    /// treat it as potentially invariant but check for writes below.
-  } else {
-    /// This case should ideally not happen in well-formed IR.
-    /// A value should either be a result of an operation or a block argument.
-    /// Assert or return conservatively.
-    assert(false && "Value is neither defined by an op nor a block argument");
-    return false;
-  }
-
-  /// Case 2: Value is defined inside the region (and not a constant).
-  /// Such values are generally not invariant with respect to the region.
-  if (definedInside)
-    return false;
-
-  /// Case 3: Value is defined outside the region (or is an argument to the
-  /// region's entry block). Check if it is written to by any operation
-  /// inside the region.
   for (Operation *user : value.getUsers()) {
-    /// Only consider users that are located within the EDT region.
-    if (edtRegion.isAncestor(user->getParentRegion())) {
-      /// Check for known memory write operations where 'value' is the
-      /// destination buffer/pointer.
-      if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
-        if (storeOp.getMemRef() == value) {
-          /// Found a store to 'value' inside the region. Not invariant.
-          return false;
-        }
-      }
-    } else if (auto atomicOp = dyn_cast<memref::AtomicRMWOp>(user)) {
-      /// Found an atomic op on 'value' inside the region. Not invariant.
-      if (atomicOp.getMemref() == value) {
-        return false;
-      }
-    }
+    if (!edtRegion.isAncestor(user->getParentRegion()))
+      continue;
 
-    /// TODO: Check for function calls where 'value' might be modified.
+    if (auto store = dyn_cast<memref::StoreOp>(user))
+      if (store.getMemref() == value)
+        return false;
+
+    if (auto atomicRmw = dyn_cast<memref::AtomicRMWOp>(user))
+      if (atomicRmw.getMemref() == value)
+        return false;
   }
 
-  /// If the value is defined outside and no writes/modifications were found
-  /// inside the region, it is considered invariant with respect to this region.
   return true;
 }
 
@@ -381,6 +401,13 @@ bool equalRange(ValueRange a, ValueRange b) {
       return false;
   }
   return true;
+}
+
+bool allSameValue(ValueRange values) {
+  if (values.empty())
+    return false;
+  Value first = values[0];
+  return llvm::all_of(values, [&](Value v) { return v == first; });
 }
 
 } // namespace arts

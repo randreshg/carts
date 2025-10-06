@@ -77,11 +77,13 @@ endif()
 # ARTS introspection options
 option(ENABLE_ARTS_INTROSPECTION "Enable ARTS introspection and counter system" OFF)
 if(ENABLE_ARTS_INTROSPECTION)
-  message(STATUS "ARTS introspection enabled - will collect performance data")
-  add_definitions(-DINSPECTOR)
+  message(STATUS "ARTS introspection enabled")
+  add_definitions(-DCOUNTERS)
+  add_definitions(-DMETRICS)
 else()
   message(STATUS "ARTS introspection disabled")
 endif()
+
 
 # CARTS testing options
 option(CARTS_ENABLE_TESTS "Enable CARTS test suite" ON)

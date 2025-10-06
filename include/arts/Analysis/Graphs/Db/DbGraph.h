@@ -40,7 +40,7 @@ public:
   void build() override;
   void buildNodesOnly() override;
   void invalidate() override;
-  void print(llvm::raw_ostream &os) const override;
+  void print(llvm::raw_ostream &os) override;
 
   /// Export graph to JSON
   void exportToJson(llvm::raw_ostream &os,

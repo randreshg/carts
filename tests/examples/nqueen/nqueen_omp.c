@@ -104,11 +104,10 @@ int main(int argc, char *argv[]) {
                     92, 352, 724, 2680, 14200, 73712, 365596};
   if (n < 15) {
     printf("Expected solutions for %d-queens: %d\n", n, expected[n]);
-    if (solutions == expected[n]) {
-      printf("✓ Result verified!\n");
-    } else {
-      printf("✗ Result incorrect!\n");
-    }
+    if (solutions == expected[n])
+      printf("Result verified!\n");
+    else
+      printf("Result incorrect!\n");
   }
 
   return 0;

@@ -112,7 +112,7 @@ void ConcurrencyPass::runOnOperation() {
   /// Get abstractMachine from ArtsAnalysisManager
   abstractMachine = &AM->getAbstractMachine();
 
-  ARTS_DEBUG_HEADER(concurrency);
+  ARTS_INFO_HEADER(concurrency);
   ARTS_DEBUG_REGION(module.dump(););
   ARTS_INFO("Machine valid=" << (abstractMachine->isValid() ? 1 : 0)
                              << ", nodes=" << abstractMachine->getNodeCount()
@@ -132,7 +132,7 @@ void ConcurrencyPass::runOnOperation() {
   //   applyPlacementDecisions(func);
   // });
 
-  ARTS_DEBUG_FOOTER(concurrency);
+  ARTS_INFO_FOOTER(concurrency);
   ARTS_DEBUG_REGION(module.dump(););
 }
 

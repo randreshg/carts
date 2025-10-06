@@ -187,10 +187,9 @@ const DbAllocInfo &DbGraph::getAllocInfo(DbAllocOp alloc) const {
   return it->second->getInfo();
 }
 
-void DbGraph::print(llvm::raw_ostream &os) const {
+void DbGraph::print(llvm::raw_ostream &os) {
   os << "\n";
-  auto func = const_cast<func::FuncOp &>(this->func);
-  os << "DbGraph Analysis: " << func.getName().str() << "\n";
+  os << "DbGraph Analysis: " << this->func.getName().str() << "\n";
   os << "======================================\n";
 
   if (allocNodes.empty()) {
@@ -222,8 +221,8 @@ void DbGraph::print(llvm::raw_ostream &os) const {
     /// Show acquires
     if (!info.acquireNodes.empty()) {
       os << "  Acquires (" << info.acquireNodes.size() << "):\n";
-      for (const auto *acqNode : info.acquireNodes) {
-        const auto &acqInfo = acqNode->getInfo();
+      for (auto *acqNode : info.acquireNodes) {
+        auto &acqInfo = acqNode->getInfo();
         os << "    [" << acqNode->getHierId() << "] Op " << acqInfo.beginIndex;
         if (acqInfo.endIndex != acqInfo.beginIndex)
           os << "->" << acqInfo.endIndex;
@@ -259,6 +258,12 @@ void DbGraph::print(llvm::raw_ostream &os) const {
           }
           os << "]\n";
         }
+
+        /// Show number of reads and writes
+        auto loads = acqNode->getLoads().size();
+        auto stores = acqNode->getStores().size();
+        os << "      EDT Uses - Reads: " << loads << ", Writes: " << stores
+           << "\n";
 
         /// Show outgoing edges for this acquire
         const auto &outEdges = acqNode->getOutEdges();
