@@ -300,7 +300,7 @@ DbAliasAnalysis::classifyAlias(const NodeBase &a, const NodeBase &b,
     ARTS_INFO("    A: rank=" << oa.size() << indent);
     ARTS_INFO("    B: rank=" << ob.size() << indent);
 
-    /// If both slices are constant and disjoint in any dim → no alias
+    /// If both slices are constant and disjoint in any dim -> no alias
     bool anyUnknown = false;
     bool equalSlices = true;
     if (oa.size() == ob.size() && la.size() == lb.size() &&

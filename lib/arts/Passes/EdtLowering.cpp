@@ -440,28 +440,33 @@ private:
         loc, range, AC->create<arith::SubIOp>(loc, info.loopStep, oneIndex));
     info.totalIterations =
         AC->create<arith::DivUIOp>(loc, adjustedRange, info.loopStep);
-    info.chunkSize = oneIndex; /// For block distribution, chunk_size = 1
 
-    info.totalChunks = info.totalIterations; /// Each iteration is a "chunk"
+    /// For block distribution, chunk_size = 1
+    info.chunkSize = oneIndex;
+
+    /// Each iteration is a "chunk"
+    info.totalChunks = info.totalIterations;
 
     /// BLOCK DISTRIBUTION: Divide total chunks evenly across workers
     /// Example: 100 iterations, 4 workers
-    Value chunksPerEDT = AC->create<arith::DivUIOp>(
-        loc, info.totalChunks, totalWorkers); /// chunksPerEDT = 100/4 = 25
-    Value remainderChunks = AC->create<arith::RemUIOp>(
-        loc, info.totalChunks, totalWorkers); /// remainderChunks = 100%4 = 0
+    /// chunksPerEDT = 100/4 = 25
+    Value chunksPerEDT =
+        AC->create<arith::DivUIOp>(loc, info.totalChunks, totalWorkers);
+    /// remainderChunks = 100%4 = 0
+    Value remainderChunks =
+        AC->create<arith::RemUIOp>(loc, info.totalChunks, totalWorkers);
 
     /// First few workers get an extra chunk if remainder > 0
     /// Example: remainderChunks=0, so getsExtra = (workerId < 0) = false for
     /// all workers
-    Value getsExtra = AC->create<arith::CmpIOp>(
-        loc, arith::CmpIPredicate::ult, workerId,
-        remainderChunks); /// getsExtra = workerId < remainderChunks
-    Value extraChunk =
-        AC->castToIndex(getsExtra, loc); /// extraChunk = getsExtra ? 1 : 0
-    info.workerChunkCount = AC->create<arith::AddIOp>(
-        loc, chunksPerEDT,
-        extraChunk); /// workerChunkCount = 25 + 0 = 25 for all
+    /// getsExtra = workerId < remainderChunks
+    Value getsExtra = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult,
+                                                workerId, remainderChunks);
+    /// extraChunk = getsExtra ? 1 : 0
+    Value extraChunk = AC->castToIndex(getsExtra, loc);
+    /// workerChunkCount = 25 + 0 = 25 for all
+    info.workerChunkCount =
+        AC->create<arith::AddIOp>(loc, chunksPerEDT, extraChunk);
 
     info.totalWorkers = totalWorkers;
 
@@ -488,33 +493,34 @@ private:
     /// rawIterCount=25*1=25, startElems=75*1=75, remaining=100-75=25
     /// workerIterationCount = min(25, 25) = 25
 
+    /// rawIterCount = workerChunkCount * chunkSize
     Value rawIterCount =
         AC->create<arith::MulIOp>(loc, info.workerChunkCount, info.chunkSize);
-    /// rawIterCount = workerChunkCount * chunkSize
 
-    Value startElems =
-        AC->create<arith::MulIOp>(loc, info.workerFirstChunk, info.chunkSize);
     /// startElems = workerFirstChunk * chunkSize  (first element this worker
     /// handles)
+    Value startElems =
+        AC->create<arith::MulIOp>(loc, info.workerFirstChunk, info.chunkSize);
 
+    /// needZero = (totalIterations < startElems) ? true if worker starts past
+    /// end
     Value zeroIndex = AC->createIndexConstant(0, loc);
     Value needZero = AC->create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::ult, info.totalIterations, startElems);
-    /// needZero = (totalIterations < startElems) ? true if worker starts past
-    /// end
 
-    Value remaining =
-        AC->create<arith::SubIOp>(loc, info.totalIterations, startElems);
     /// remaining = totalIterations - startElems  (iterations available to this
     /// worker)
+    Value remaining =
+        AC->create<arith::SubIOp>(loc, info.totalIterations, startElems);
 
+    /// remainingNonNeg = needZero ? 0 : remaining  (clamp negative to zero)
     Value remainingNonNeg =
         AC->create<arith::SelectOp>(loc, needZero, zeroIndex, remaining);
-    /// remainingNonNeg = needZero ? 0 : remaining  (clamp negative to zero)
 
+    /// workerIterationCount = min(rawIterCount, remainingNonNeg)
     info.workerIterationCount =
         AC->create<arith::MinUIOp>(loc, rawIterCount, remainingNonNeg);
-    /// workerIterationCount = min(rawIterCount, remainingNonNeg)
+
     return info;
   }
 
@@ -570,7 +576,8 @@ private:
     AC->setInsertionPointToStart(chunkLoop.getBody());
 
     DenseMap<Value, Value> depArgMap = makeDependencyMap(op);
-    Value chunkId = chunkLoop.getInductionVar(); /// chunkId ∈ [0, totalChunks)
+    /// chunkId ∈ [0, totalChunks)
+    Value chunkId = chunkLoop.getInductionVar();
 
     /// CYCLIC ASSIGNMENT: worker = chunkId % totalWorkers
     /// Example: 20 chunks, 4 workers, chunk_size=5
@@ -656,23 +663,23 @@ private:
     Value localIndex = assignedLoop.getInductionVar();
 
     /// iterationNumber = chunkStartIter + localIndex
-    /// Example: chunkId=0, localIndex=0 → 0+0=0, chunkId=4, localIndex=4 →
+    /// Example: chunkId=0, localIndex=0 -> 0+0=0, chunkId=4, localIndex=4 ->
     /// 20+4=24
+    /// iterationNumber = chunkStartIter + localIndex
     Value iterationNumber =
         AC->create<arith::AddIOp>(loc, chunkStartIter, localIndex);
-    /// iterationNumber = chunkStartIter + localIndex
 
     /// Convert to actual loop index: actual_index = lowerBound +
     /// iterationNumber * step Example: for i=0 to 100 step 1: actual_index = 0
     /// + iterationNumber * 1
     IRMapping iterationMapper = mapper;
+    /// actualLoopIndex = lowerBound + iterationNumber * step
     Value actualLoopIndex = AC->create<arith::AddIOp>(
         loc, info.lowerBound,
         AC->create<arith::MulIOp>(loc, iterationNumber, info.loopStep));
-    /// actualLoopIndex = lowerBound + iterationNumber * step
 
-    iterationMapper.map(loopInductionVar, actualLoopIndex);
     /// Map the original loop induction variable to our computed actual index
+    iterationMapper.map(loopInductionVar, actualLoopIndex);
 
     for (Operation &inner : loopBody.without_terminator()) {
       Operation *cloned = AC->getBuilder().clone(inner, iterationMapper);
@@ -871,7 +878,7 @@ private:
         AC->create<arith::SubIOp>(loc, info.chunkSize, oneIndex));
 
     /// Integer division gives ceiling
-    /// totalChunks = adjustedIterations / chunkSiz)
+    /// totalChunks = adjustedIterations / chunkSize)
     info.totalChunks =
         AC->create<arith::DivUIOp>(loc, adjustedIterations, info.chunkSize);
   }
@@ -910,7 +917,7 @@ private:
       }
     }
 
-    /// Erase operations in reverse order (consumers before producers)
+    /// Erase operations in reverse order - consumers before producers
     for (auto it = opsToErase.rbegin(); it != opsToErase.rend(); ++it)
       (*it)->erase();
 
@@ -1035,9 +1042,12 @@ void EdtLoweringPass::runOnOperation() {
         return signalPassFailure();
       }
     }
-    simplifyIR(module, getAnalysis<DominanceInfo>());
+    if (parallelEdts.size() > 0) {
+      simplifyIR(module, getAnalysis<DominanceInfo>());
+      ARTS_DEBUG_REGION(module.dump(););
+    }
+
     ARTS_DEBUG_FOOTER(ParallelEdtLowering);
-    ARTS_DEBUG_REGION(module.dump(););
   }
 
   /// Now collect and lower all regular EDTs
@@ -1054,9 +1064,7 @@ void EdtLoweringPass::runOnOperation() {
         edtOp.emitError("Failed to lower task EDT");
         return signalPassFailure();
       }
-      simplifyIR(module, getAnalysis<DominanceInfo>());
-      ARTS_DEBUG_FOOTER(TaskEdtLowering);
-      ARTS_DEBUG_REGION(module.dump(););
+
     }
   }
 

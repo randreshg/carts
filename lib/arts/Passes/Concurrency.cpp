@@ -96,7 +96,7 @@ private:
   void applyEdtParallelismStrategy(EdtOp edtOp);
 
   /// Adjust datablock modes based on EDT concurrency
-  void adjustDatablockModes();
+  void adjustDbModes();
 
   /// Update runtime query operations based on EDT concurrency
   void updateRuntimeQueryOperations();
@@ -112,7 +112,7 @@ void ConcurrencyPass::runOnOperation() {
   /// Get abstractMachine from ArtsAnalysisManager
   abstractMachine = &AM->getAbstractMachine();
 
-  ARTS_INFO_HEADER(concurrency);
+  ARTS_INFO_HEADER(Concurrency);
   ARTS_DEBUG_REGION(module.dump(););
   ARTS_INFO("Machine valid=" << (abstractMachine->isValid() ? 1 : 0)
                              << ", nodes=" << abstractMachine->getNodeCount()
@@ -122,7 +122,7 @@ void ConcurrencyPass::runOnOperation() {
   module.walk([&](EdtOp edtOp) { applyEdtParallelismStrategy(edtOp); });
 
   /// Adjust datablock modes based on EDT concurrency
-  adjustDatablockModes();
+  adjustDbModes();
 
   /// Update runtime query operations based on EDT concurrency
   updateRuntimeQueryOperations();
@@ -132,7 +132,7 @@ void ConcurrencyPass::runOnOperation() {
   //   applyPlacementDecisions(func);
   // });
 
-  ARTS_INFO_FOOTER(concurrency);
+  ARTS_INFO_FOOTER(Concurrency);
   ARTS_DEBUG_REGION(module.dump(););
 }
 
@@ -252,7 +252,7 @@ void ConcurrencyPass::updateRuntimeQueryOperations() {
   });
 }
 
-void ConcurrencyPass::adjustDatablockModes() {
+void ConcurrencyPass::adjustDbModes() {
   /// For each EDT that has parallelism strategy set, adjust datablock modes
   module.walk([&](EdtOp edtOp) {
     if (!edtOp.getWorkers().has_value())

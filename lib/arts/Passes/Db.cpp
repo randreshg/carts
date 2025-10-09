@@ -54,26 +54,19 @@ struct DbPass : public arts::DbBase<DbPass> {
 
   void runOnOperation() override;
 
-  /// Adjust DB modes based on actual read/write accesses.
+  /// Optimizations
+  bool deadDbElimination();
   bool adjustDbModes();
-
-  /// DBs with single size, and "in" mode, can be converted into parameters.
+  bool pinAndSplitAcquires();
+  bool promotePinnedDimsToPayload();
+  bool tightenAcquireSlices();
   bool convertToParameters();
 
-  /// Remove unused DB allocations.
-  bool deadDbElimination();
+  /// Graph rebuild
+  void invalidateAndRebuildGraph();
 
-  /// Export DB analysis to JSON files in output/ directory.
+  /// Other
   void exportToJson();
-
-  /// Reduce DB dimensionality at allocation level
-  bool reduceAllocDimensionality();
-
-  /// Tighten acquire slices inside EDTs.
-  bool tightenAcquireSlices();
-
-  /// Pin and split acquires based on invariant index patterns.
-  bool pinAndSplitAcquires();
 
 private:
   ModuleOp module;
@@ -91,47 +84,79 @@ void DbPass::runOnOperation() {
   assert(AM && "ArtsAnalysisManager must be provided externally");
 
   /// Graph construction and analysis
-  module.walk([&](func::FuncOp func) {
-    DbGraph &graph = AM->getDbGraph(func);
-    graph.build();
+  invalidateAndRebuildGraph();
 
-    /// Print analysis results for verification
-    ARTS_DEBUG_REGION({
-      llvm::outs() << "\n";
-      graph.print(llvm::outs());
-      llvm::outs() << "\n";
-    });
-  });
-  /// flush buffer
-  llvm::outs().flush();
-
-  /// Adjust DB modes based on dependencies and accesses
+  /// Optimizations
+  changed |= deadDbElimination();
   changed |= adjustDbModes();
+  changed |= pinAndSplitAcquires();
+  changed |= promotePinnedDimsToPayload();
 
-  /// Pin and split acquires based on invariant indices
-  bool pinChanged = pinAndSplitAcquires();
-  changed |= pinChanged;
-
-  /// If pinning changed the IR, rebuild graph for dimensionality reduction
-  if (pinChanged) {
-    ARTS_DEBUG("Rebuilding graph after pinAndSplitAcquires");
-    module.walk([&](func::FuncOp func) {
-      AM->invalidateFunction(func);
-      DbGraph &graph = AM->getDbGraph(func);
-      graph.build();
-    });
+  if (changed) {
+    ARTS_INFO(" Module has changed, invalidating analyses");
+    AM->invalidate();
   }
-
-  /// Reduce allocation dimensionality (assumes pinAndSplitAcquires ran first)
-  changed |= reduceAllocDimensionality();
-
-  if (changed)
-    module.walk([&](func::FuncOp func) { AM->invalidateFunction(func); });
-  else
-    ARTS_INFO("No changes made to the module");
 
   ARTS_INFO_FOOTER(DbPass);
   ARTS_DEBUG_REGION(module.dump(););
+}
+
+//===----------------------------------------------------------------------===//
+/// Dead DB elimination
+///
+/// Remove DbAllocOps with no associated acquires/releases and
+/// no remaining uses. Uses DbGraph to count children; then checks use_empty.
+/// Example (before -> after):
+///   %db = arts.db_alloc %ptr sizes(%cN,%cM)
+/// no uses, no acquires/releases
+/// becomes: (alloc erased)
+//===----------------------------------------------------------------------===//
+bool DbPass::deadDbElimination() {
+  bool changed = false;
+  ARTS_DEBUG_HEADER(DeadDbElimination);
+
+  module.walk([&](func::FuncOp func) {
+    auto &graph = AM->getDbGraph(func);
+    SmallVector<DbAllocNode *> deadAllocs;
+    graph.forEachAllocNode([&](DbAllocNode *allocNode) {
+      /// Check if allocation has no acquires (counting nested acquires too)
+      size_t totalAcquires = 0;
+
+      /// Count all acquire nodes in the hierarchy
+      std::function<void(DbAcquireNode *)> countAcquires =
+          [&](DbAcquireNode *acqNode) {
+            totalAcquires++;
+            acqNode->forEachChildNode([&](NodeBase *child) {
+              if (auto *nestedAcq = dyn_cast<DbAcquireNode>(child))
+                countAcquires(nestedAcq);
+            });
+          };
+
+      allocNode->forEachChildNode([&](NodeBase *child) {
+        if (auto *acqNode = dyn_cast<DbAcquireNode>(child))
+          countAcquires(acqNode);
+      });
+
+      if (totalAcquires == 0)
+        deadAllocs.push_back(allocNode);
+    });
+    for (auto *allocNode : deadAllocs) {
+      auto dbOp = allocNode->getDbAllocOp();
+      if (dbOp && dbOp->use_empty()) {
+        dbOp.erase();
+        ARTS_DEBUG(" - Erased dead DB " << dbOp);
+        changed = true;
+      }
+    }
+  });
+
+  if (changed)
+    invalidateAndRebuildGraph();
+  else
+    ARTS_DEBUG(" - No dead DBs found");
+
+  ARTS_DEBUG_FOOTER(DeadDbElimination);
+  return changed;
 }
 
 //===----------------------------------------------------------------------===//
@@ -146,7 +171,7 @@ bool DbPass::adjustDbModes() {
   module.walk([&](func::FuncOp func) {
     DbGraph &graph = AM->getDbGraph(func);
 
-    /// Helper: lattice join for ArtsMode. Ensures monotonic escalation:
+    /// Lattice join for ArtsMode. Ensures monotonic escalation:
     /// in U in = in, out U out = out, any U inout = inout, and
     /// in U out = inout
     auto joinMode = [](ArtsMode a, ArtsMode b) -> ArtsMode {
@@ -172,14 +197,13 @@ bool DbPass::adjustDbModes() {
       else
         newMode = ArtsMode::in;
 
-      // Each DbAcquireNode's mode is derived from its own accesses only.
-      // Nested acquires will be processed separately by forEachAcquireNode.
-
+      /// Each DbAcquireNode's mode is derived from its own accesses only.
+      /// Nested acquires will be processed separately by forEachAcquireNode.
       if (newMode == acqOp.getMode())
         return;
 
-      ARTS_DEBUG("AcquireOp: " << acqOp << " from " << acqOp.getMode() << " to "
-                               << newMode);
+      ARTS_DEBUG("AcquireOp: " << acqOp);
+      ARTS_DEBUG(" from " << acqOp.getMode() << " to " << newMode);
       acqOp.setModeAttr(ArtsModeAttr::get(acqOp.getContext(), newMode));
       changed = true;
     });
@@ -292,7 +316,7 @@ bool DbPass::pinAndSplitAcquires() {
                  return a.depth > b.depth;
                });
 
-    ARTS_DEBUG("Found " << allAcquires.size() << " acquire nodes");
+    ARTS_DEBUG(" Found " << allAcquires.size() << " acquire nodes");
     if (allAcquires.empty())
       return;
 
@@ -302,13 +326,14 @@ bool DbPass::pinAndSplitAcquires() {
       DbAcquireOp acqOp = acqNode->getDbAcquireOp();
       size_t rank = acqNode->getInfo().getRank();
 
-      ARTS_DEBUG("Processing acquire: " << acqOp << " (rank=" << rank << ")");
+      ARTS_DEBUG(" - Processing acquire: " << acqOp << " (rank=" << rank
+                                           << ")");
 
       /// Get memory accesses (loads/stores) within the EDT
       SmallVector<Operation *> accesses;
       acqNode->getMemoryAccesses(accesses);
       if (accesses.empty()) {
-        ARTS_DEBUG("  No memory accesses, skipping");
+        ARTS_DEBUG("  - No memory accesses, skipping");
         continue;
       }
 
@@ -345,7 +370,8 @@ bool DbPass::pinAndSplitAcquires() {
 
         /// Check for rank mismatch
         if (indicesOpt->size() != rank) {
-          ARTS_DEBUG("  Access with mismatched rank, marking all dims variant");
+          ARTS_DEBUG(
+              "  - Access with mismatched rank, marking all dims variant");
           std::fill(dimHasInvariant.begin(), dimHasInvariant.end(), false);
           break;
         }
@@ -354,8 +380,8 @@ bool DbPass::pinAndSplitAcquires() {
         for (size_t d = 0; d < rank; ++d) {
           Value idx = indices[d];
           bool isInv = arts::isInvariantInEdt(edtRegion, idx);
-          ARTS_DEBUG("    Index [" << d << "]: " << idx
-                                   << " -> invariant=" << isInv);
+          ARTS_DEBUG("    - Index [" << d << "]: " << idx
+                                     << " -> invariant=" << isInv);
           if (!isInv)
             dimHasInvariant[d] = false;
         }
@@ -363,7 +389,7 @@ bool DbPass::pinAndSplitAcquires() {
 
       /// If no dimensions have invariant accesses, skip
       if (llvm::none_of(dimHasInvariant, [](bool b) { return b; })) {
-        ARTS_DEBUG("  No invariant dimensions, skipping");
+        ARTS_DEBUG("  - No invariant dimensions, skipping");
         continue;
       }
 
@@ -401,11 +427,11 @@ bool DbPass::pinAndSplitAcquires() {
 
       size_t numGroups = groups.size();
       if (numGroups == 0) {
-        ARTS_DEBUG("  No valid access groups, skipping");
+        ARTS_DEBUG("  - No valid access groups, skipping");
         continue;
       }
 
-      ARTS_DEBUG("  Found " << numGroups << " unique access patterns");
+      ARTS_DEBUG("  - Found " << numGroups << " unique access patterns");
 
       /// Step 5: Create new acquires - one per access group
       /// Each new acquire has:
@@ -448,7 +474,7 @@ bool DbPass::pinAndSplitAcquires() {
         DbAcquireOp newAcq = b.create<DbAcquireOp>(
             loc, acqOp.getMode(), acqOp.getSourceGuid(), acqOp.getSourcePtr(),
             newIndices, newOffsets, newSizes);
-        ARTS_DEBUG("  Created new acquire: " << newAcq);
+        ARTS_DEBUG("    - Created new acquire: " << newAcq);
         newAcquires.push_back(newAcq);
       }
 
@@ -482,15 +508,15 @@ bool DbPass::pinAndSplitAcquires() {
       Block &entryBlock = edtRegion.front();
       BlockArgument oldBlockArg = cast<BlockArgument>(edtArg);
       size_t argIdx = oldBlockArg.getArgNumber();
-      Type argType = edtArg.getType();
 
-      /// Insert all new block arguments (this pushes the old one to argIdx +
-      /// numGroups)
+      /// Insert all new block arguments with reduced-rank types from new
+      /// acquires
       SmallVector<BlockArgument> newBlockArgs;
       newBlockArgs.reserve(numGroups);
       for (size_t k = 0; k < numGroups; ++k) {
+        Type newArgType = newAcquires[k].getPtr().getType();
         BlockArgument newArg =
-            entryBlock.insertArgument(argIdx + k, argType, loc);
+            entryBlock.insertArgument(argIdx + k, newArgType, loc);
         newBlockArgs.push_back(newArg);
       }
 
@@ -503,13 +529,15 @@ bool DbPass::pinAndSplitAcquires() {
           if (!indicesOpt)
             continue;
 
-          /// Build new indices: zero for invariant dims, keep for variant dims
+          /// Build new indices: only include variant (non-invariant) dims
+          /// since invariant dims are now pinned and removed from the type
           SmallVector<Value> newAccessIndices;
-          newAccessIndices.reserve(rank);
+          size_t newRank = rank - llvm::count(dimHasInvariant, true);
+          newAccessIndices.reserve(newRank);
           ValueRange oldIndices = *indicesOpt;
           for (size_t d = 0; d < rank; ++d) {
-            newAccessIndices.push_back(dimHasInvariant[d] ? zero
-                                                          : oldIndices[d]);
+            if (!dimHasInvariant[d])
+              newAccessIndices.push_back(oldIndices[d]);
           }
 
           /// Update the memory operation
@@ -543,62 +571,62 @@ bool DbPass::pinAndSplitAcquires() {
       acqOp.getGuid().replaceAllUsesWith(newAcquires[0].getGuid());
       acqOp.erase();
 
-      ARTS_DEBUG("  Successfully split acquire into " << numGroups
-                                                      << " acquires");
+      ARTS_DEBUG("  - Successfully split acquire into " << numGroups
+                                                        << " acquires");
       changed = true;
     }
   });
+
+  if (changed)
+    invalidateAndRebuildGraph();
 
   ARTS_DEBUG_FOOTER(PinAndSplitAcquires);
   return changed;
 }
 
 //===----------------------------------------------------------------------===//
-/// Reduce allocation dimensionality
+/// Promote pinned indices from acquires into the alloc payload.
 ///
-/// After pinAndSplitAcquires runs, acquires will have extended indices arrays
-/// where extra indices indicate pinned dimensions. This pass checks if all
-/// acquires for an allocation have at least one pinned dimension. If so, the
-/// allocation can be reduced by moving those dimensions to the payload.
+/// When every DbAcquire of a given DbAlloc pins the same leading subset of
+/// dimensions and those dimensions are accessed at zero offset, we can move the
+/// corresponding alloc sizes into the payload. This enlarges the per-datablock
+/// payload while reducing the number of outer dimensions. Each acquire shrinks
+/// its index list by the promoted dimensions and converts the matching pinned
+/// indices into offsets (with unit sizes) so the payload slice remains
+/// accurate. The number of offsets/sizes on every acquire remains unchanged
+/// compared to the original program.
 ///
-/// Assumes pinAndSplitAcquires ran first to ensure acquires have extended
-/// indices with pinned dimensions indicated by sizes=1.
-///
-/// Example:
+/// Example (matrix rows):
 ///   Before:
-///     %alloc = arts.db_alloc sizes[%N] elementType(memref<?xf64>)
-///     %acq1 = arts.db_acquire indices[%i, %c5] sizes[%c1]  // pinned dim
-///     %acq2 = arts.db_acquire indices[%j, %c7] sizes[%c1]  // pinned dim
-///
+///     %alloc = arts.db_alloc sizes[%N, %M] payloadSizes[]
+///     %acq   = arts.db_acquire indices[%row, %col] offsets[%o0, %o1]
+///                                sizes[%s0, %s1]
 ///   After:
-///     %alloc = arts.db_alloc sizes[] elementType(memref<?xf64>)
-///              payloadSizes[%N]
-///     %acq1 = arts.db_acquire indices[%i] sizes[]
-///     %acq2 = arts.db_acquire indices[%j] sizes[]
+///     %alloc = arts.db_alloc sizes[%M] payloadSizes[%N]
+///     %acq   = arts.db_acquire indices[%col] offsets[%row]
+///                                sizes[%s1]
 //===----------------------------------------------------------------------===//
-bool DbPass::reduceAllocDimensionality() {
-  ARTS_DEBUG_HEADER(ReduceAllocDimensionality);
+bool DbPass::promotePinnedDimsToPayload() {
+  ARTS_DEBUG_HEADER(PromotePinnedDimsToPayload);
   bool changed = false;
 
+  SetVector<Operation *> opsToRemove;
   module.walk([&](func::FuncOp func) {
     DbGraph &graph = AM->getDbGraph(func);
 
     graph.forEachAllocNode([&](DbAllocNode *allocNode) {
       DbAllocOp oldAlloc = allocNode->getDbAllocOp();
       assert(oldAlloc && "Alloc node must have a DbAllocOp");
+      ARTS_DEBUG("Processing alloc: " << oldAlloc);
 
-      /// Get allocation's base dimensionality
-      size_t allocDims = oldAlloc.getSizes().size();
-      if (allocDims == 0) {
-        ARTS_DEBUG("Alloc has no dimensions, skipping");
-        return;
-      }
+      /// Get the rank of the allocation
+      size_t allocRank = allocNode->getInfo().getRank();
 
-      /// Collect all acquire nodes (including nested ones)
-      SmallVector<DbAcquireNode *, 8> acquires;
+      /// Collect all acquire operations
+      SmallVector<DbAcquireOp> acquires;
       std::function<void(DbAcquireNode *)> collectAcquires =
           [&](DbAcquireNode *acqNode) {
-            acquires.push_back(acqNode);
+            acquires.push_back(acqNode->getDbAcquireOp());
             acqNode->forEachChildNode([&](NodeBase *child) {
               if (auto *nestedAcq = dyn_cast<DbAcquireNode>(child))
                 collectAcquires(nestedAcq);
@@ -610,116 +638,187 @@ bool DbPass::reduceAllocDimensionality() {
           collectAcquires(acq);
       });
 
-      if (acquires.empty())
-        return;
-
-      /// Check if all acquires have the same number of pinned dimensions
-      /// Pinned dimensions are indicated by: indices.size() > allocDims
-      std::optional<size_t> commonPinnedDims;
-      for (DbAcquireNode *acqNode : acquires) {
-        DbAcquireOp acqOp = acqNode->getDbAcquireOp();
-        size_t numIndices = acqOp.getIndices().size();
-
-        if (numIndices < allocDims) {
-          ARTS_DEBUG("  Acquire has fewer indices than alloc dims, skipping");
-          return;
-        }
-
-        size_t pinnedDims = numIndices - allocDims;
-
-        if (!commonPinnedDims.has_value()) {
-          commonPinnedDims = pinnedDims;
-        } else if (*commonPinnedDims != pinnedDims) {
-          ARTS_DEBUG("  Acquires have different numbers of pinned dimensions");
-          return;
-        }
-      }
-
-      /// If no dimensions are pinned, nothing to reduce
-      size_t dropDims = commonPinnedDims.value_or(0);
-      if (dropDims == 0) {
-        ARTS_DEBUG("  No pinned dimensions, skipping");
+      if (acquires.empty()) {
+        ARTS_DEBUG(" - No acquires for alloc " << oldAlloc << ", skipping");
         return;
       }
 
-      ARTS_DEBUG("Reducing alloc " << oldAlloc << " by " << dropDims
-                                   << " dimensions");
+      /// Find the minimum number of pinned dimensions across all acquires
+      size_t minPinned = std::numeric_limits<size_t>::max();
+      for (DbAcquireOp acqOp : acquires) {
+        ValueRange indices = acqOp.getIndices();
 
-      /// Build new allocation with reduced dimensionality
-      SmallVector<Value> oldSizes(oldAlloc.getSizes().begin(),
-                                  oldAlloc.getSizes().end());
-      if (dropDims > oldSizes.size())
+        /// This acquire doesn't pin any dimensions
+        if (indices.size() <= allocRank) {
+          ARTS_DEBUG(" - Acquire has no pinned dimensions");
+          return;
+        }
+
+        /// Get the pinned indices (beyond alloc rank)
+        size_t pinnedCount = indices.size() - allocRank;
+        minPinned = std::min(minPinned, pinnedCount);
+      }
+
+      if (minPinned == 0) {
+        ARTS_DEBUG(" - No common pinned dimensions found");
         return;
+      }
 
-      SmallVector<Value> oldPayload(oldAlloc.getPayloadSizes().begin(),
-                                    oldAlloc.getPayloadSizes().end());
+      /// Use the first acquire's pinned indices as candidate common prefix
+      DbAcquireOp firstAcq = *acquires.begin();
+      ValueRange firstIndices = firstAcq.getIndices();
+      ValueRange firstPinned = firstIndices.drop_front(allocRank);
 
-      /// New sizes: drop the first dropDims dimensions
-      SmallVector<Value> newSizes(oldSizes.begin() + dropDims, oldSizes.end());
+      if (firstPinned.empty()) {
+        ARTS_DEBUG(" - No common pinned dimensions found");
+        return;
+      }
 
-      /// New payload: prepend dropped dimensions to existing payload
+      ARTS_DEBUG(" - Found " << minPinned << " candidate pinned dimensions");
+
+      /// Determine how many leading pinned dimensions can be pushed based on
+      /// the zero-offset constraint across all acquires. Missing offsets are
+      /// treated as zero.
+      auto isZeroIndexValue = [&](Value v) -> bool {
+        int64_t cst = 0;
+        return arts::getConstantIndex(v, cst) && cst == 0;
+      };
+
+      size_t pushCount = 0;
+      size_t maxPinned = std::min<size_t>(minPinned, firstPinned.size());
+      for (size_t m = 0; m < maxPinned; ++m) {
+        bool offsetsZero = true;
+        for (DbAcquireOp acqOp : acquires) {
+          ValueRange offs = acqOp.getOffsets();
+          if (m < offs.size()) {
+            if (!isZeroIndexValue(offs[m])) {
+              offsetsZero = false;
+              break;
+            }
+          }
+          /// If offset is missing at position m, treat it as zero
+        }
+        if (!offsetsZero)
+          break;
+        ++pushCount;
+      }
+
+      if (pushCount == 0) {
+        ARTS_DEBUG(
+            " - Zero-offset constraint failed; skipping alloc optimization");
+        return;
+      }
+
+      /// Gather existing size/payload operands
+      SmallVector<Value> oldSizeVals(oldAlloc.getSizes().begin(),
+                                     oldAlloc.getSizes().end());
+      SmallVector<Value> oldPayloadVals(oldAlloc.getPayloadSizes().begin(),
+                                        oldAlloc.getPayloadSizes().end());
+
+      /// Do not push more dimensions than we have explicit sizes.
+      if (pushCount > oldSizeVals.size())
+        pushCount = oldSizeVals.size();
+
+      if (pushCount == 0) {
+        ARTS_DEBUG(
+            " - Zero-offset constraint failed; skipping alloc optimization");
+        return;
+      }
+
+      /// Move the first pushCount size operands to the payload vector.
+      SmallVector<Value> movedSizes(oldSizeVals.begin(),
+                                    oldSizeVals.begin() + pushCount);
+      SmallVector<Value> newAllocSizes(oldSizeVals.begin() + pushCount,
+                                       oldSizeVals.end());
+
+      if (newAllocSizes.empty()) {
+        ARTS_DEBUG(" - Moving all sizes to payload would collapse alloc; "
+                   "skipping");
+        return;
+      }
+
+      ARTS_DEBUG(" - Moving " << pushCount
+                              << " leading size operand(s) into payload");
       SmallVector<Value> newPayload;
-      newPayload.reserve(dropDims + oldPayload.size());
-      newPayload.append(oldSizes.begin(), oldSizes.begin() + dropDims);
-      newPayload.append(oldPayload.begin(), oldPayload.end());
+      newPayload.reserve(movedSizes.size() + oldPayloadVals.size());
+      newPayload.append(movedSizes.begin(), movedSizes.end());
+      newPayload.append(oldPayloadVals.begin(), oldPayloadVals.end());
 
-      if (newSizes.empty()) {
-        ARTS_DEBUG("  All dimensions would be dropped, skipping");
-        return;
-      }
-
-      OpBuilder builder(oldAlloc);
+      /// Create new alloc with updated sizes/payload
+      OpBuilder b(oldAlloc);
       Location loc = oldAlloc.getLoc();
-      Value newAddress = oldAlloc.getAddress();
 
-      DbAllocOp newAlloc;
-      if (newAddress)
-        newAlloc = builder.create<DbAllocOp>(
-            loc, oldAlloc.getMode(), oldAlloc.getRoute(),
-            oldAlloc.getAllocType(), oldAlloc.getDbMode(), newAddress, newSizes,
-            newPayload);
-      else
-        newAlloc = builder.create<DbAllocOp>(
-            loc, oldAlloc.getMode(), oldAlloc.getRoute(),
-            oldAlloc.getAllocType(), oldAlloc.getDbMode(),
-            oldAlloc.getElementType(), newSizes, newPayload);
+      /// Create new alloc
+      DbAllocOp newAlloc = b.create<DbAllocOp>(
+          loc, oldAlloc.getMode(), oldAlloc.getRoute(), oldAlloc.getAllocType(),
+          oldAlloc.getDbMode(), oldAlloc.getElementType(),
+          oldAlloc.getAddress(), newAllocSizes, newPayload);
+      ARTS_DEBUG("   -> New alloc: " << newAlloc);
 
-      /// Update all acquires - drop pinned indices
-      for (DbAcquireNode *acqNode : acquires) {
-        DbAcquireOp oldAcq = acqNode->getDbAcquireOp();
-        OpBuilder acqBuilder(oldAcq);
-        Location aloc = oldAcq.getLoc();
-
-        /// Drop the trailing pinned indices (keep only first allocDims indices)
-        SmallVector<Value> allIndices(oldAcq.getIndices().begin(),
-                                      oldAcq.getIndices().end());
-        SmallVector<Value> newIdx(allIndices.begin(),
-                                  allIndices.begin() + allocDims);
-        SmallVector<Value> offs(oldAcq.getOffsets().begin(),
-                                oldAcq.getOffsets().end());
-        SmallVector<Value> szs(oldAcq.getSizes().begin(),
-                               oldAcq.getSizes().end());
-
-        DbAcquireOp newAcq = acqBuilder.create<DbAcquireOp>(
-            aloc, oldAcq.getMode(), newAlloc.getGuid(), newAlloc.getPtr(),
-            newIdx, offs, szs);
-
-        oldAcq.getGuid().replaceAllUsesWith(newAcq.getGuid());
-        oldAcq.getPtr().replaceAllUsesWith(newAcq.getPtr());
-        oldAcq.erase();
-      }
-
+      /// Replace old alloc uses with new alloc
       oldAlloc.getGuid().replaceAllUsesWith(newAlloc.getGuid());
       oldAlloc.getPtr().replaceAllUsesWith(newAlloc.getPtr());
-      oldAlloc.erase();
 
-      ARTS_DEBUG("Reduced alloc dimensionality by " << dropDims
-                                                    << " dimensions");
+      /// Update all acquires to convert pushed prefix of pinned indices to
+      /// offsets and keep the non-pushed tail in indices
+      for (DbAcquireOp acqOp : acquires) {
+        ValueRange oldIndices = acqOp.getIndices();
+        ValueRange oldOffsets = acqOp.getOffsets();
+        ValueRange oldSizes = acqOp.getSizes();
+
+        // Split indices: drop the moved leading dimensions, keep the remaining
+        // base indices, convert the first pushCount pinned indices to offsets,
+        // and keep any remaining pinned
+        // indices stay in indices
+        size_t baseCount = std::min(oldIndices.size(), allocRank);
+        size_t dropBase = std::min(pushCount, baseCount);
+
+        if (oldOffsets.size() < pushCount || oldSizes.size() < pushCount) {
+          ARTS_DEBUG(" - Acquire " << acqOp
+                                   << " lacks explicit offsets/sizes for "
+                                      "promoted dims; skipping alloc");
+          return;
+        }
+
+        SmallVector<Value> newIndices;
+        newIndices.reserve(oldIndices.size());
+        newIndices.append(oldIndices.begin() + dropBase,
+                          oldIndices.begin() + baseCount);
+
+        SmallVector<Value> newOffsets;
+        newOffsets.reserve(pushCount);
+        newOffsets.append(oldIndices.begin() + baseCount,
+                          oldIndices.begin() + baseCount + pushCount);
+
+        SmallVector<Value> newSizesVec(oldSizes.begin() + pushCount,
+                                       oldSizes.end());
+
+        /// Append remaining pinned indices (tail) back to indices
+        newIndices.append(oldIndices.begin() + baseCount + pushCount,
+                          oldIndices.end());
+
+        /// Update the acquire operation
+        acqOp.getIndicesMutable().assign(newIndices);
+        acqOp.getOffsetsMutable().assign(newOffsets);
+        acqOp.getSizesMutable().assign(newSizesVec);
+        acqOp.getSourceGuidMutable().assign(newAlloc.getGuid());
+        acqOp.getSourcePtrMutable().assign(newAlloc.getPtr());
+      }
+
+      /// Remove the old alloc
+      opsToRemove.insert(oldAlloc.getOperation());
+      ARTS_DEBUG(" - Pushed " << pushCount << " pinned dimensions to alloc");
       changed = true;
     });
   });
 
-  ARTS_DEBUG_FOOTER(ReduceAllocDimensionality);
+  /// Apply all collected updates
+  removeOps(module, opsToRemove);
+
+  if (changed)
+    invalidateAndRebuildGraph();
+
+  ARTS_DEBUG_FOOTER(PromotePinnedDimsToPayload);
   return changed;
 }
 
@@ -813,7 +912,7 @@ bool DbPass::tightenAcquireSlices() {
         return;
       }
 
-      // Case A: Single invariant tuple used – tighten acquire.
+      /// Case A: Single invariant tuple used – tighten acquire.
       if (uniqueTuples.size() == 1) {
         ARTS_DEBUG("Tightening acquire " << acqOp
                                          << " to single element slice");
@@ -886,16 +985,16 @@ bool DbPass::tightenAcquireSlices() {
         acqOp.getPtr().replaceAllUsesWith(newAcq.getPtr());
         acqOp.erase();
 
-        ARTS_DEBUG("Successfully tightened acquire " << newAcq
-                                                     << " to single element");
+        ARTS_DEBUG(" - Successfully tightened acquire "
+                   << newAcq << " to single element");
         changed = true;
         return;
       }
-
-      // Case B removed: splitting acquires is handled in
-      // reduceAllocDimensionality.
     });
   });
+
+  if (changed)
+    invalidateAndRebuildGraph();
 
   ARTS_DEBUG_FOOTER(TightenAcquireSlices);
   return changed;
@@ -913,88 +1012,63 @@ bool DbPass::tightenAcquireSlices() {
 ///   --> convert to a function/block argument replacing %db/%a
 //===----------------------------------------------------------------------===//
 bool DbPass::convertToParameters() {
+  ARTS_DEBUG_HEADER(ConvertToParameters);
   bool changed = false;
-  // module.walk([&](func::FuncOp func) {
-  //   DbGraph &graph = AM->getDbGraph(func);
-  //   graph.forEachAllocNode([&](DbAllocNode *allocNode) {
-  //     bool hasSingleSize = (allocNode->getSizes().size() == 1);
-  //     bool isOnlyReader = (allocNode->getAcquireNodesSize() > 0 &&
-  //                          allocNode->getReleaseNodesSize() == 0);
-
-  //     if (!hasSingleSize || !isOnlyReader)
-  //       return;
-
-  //     ARTS_DEBUG("- Converting DB to parameter: "
-  //                       << allocNode->getDbAllocOp() << "\n");
-  //     allocNode->forEachChildNode([&](NodeBase *child) {
-  //       if (auto acquireNode = dyn_cast<DbAcquireNode>(child)) {
-  //         DbAcquireOp acquireOp = acquireNode->getDbAcquireOp();
-  //         acquireOp.getPtr().replaceAllUsesWith(allocNode->getPtr());
-  //         acquireOp.erase();
-  //       }
-  //     });
-  //     DbAllocOp allocOp = allocNode->getDbAllocOp();
-  //     if (allocOp.getGuid().use_empty() && allocOp.getPtr().use_empty()) {
-  //       allocOp.erase();
-  //     }
-  //     changed = true;
-  //   });
-  // });
-  return changed;
-}
-
-//===----------------------------------------------------------------------===//
-/// Dead DB elimination
-///
-/// Remove DbAllocOps with no associated acquires/releases and
-/// no remaining uses. Uses DbGraph to count children; then checks use_empty.
-/// Example (before → after):
-///   %db = arts.db_alloc %ptr sizes(%cN,%cM)
-/// no uses, no acquires/releases
-/// becomes: (alloc erased)
-//===----------------------------------------------------------------------===//
-bool DbPass::deadDbElimination() {
-  bool changed = false;
-
   module.walk([&](func::FuncOp func) {
-    auto &graph = AM->getDbGraph(func);
-    SmallVector<DbAllocNode *> deadAllocs;
+    DbGraph &graph = AM->getDbGraph(func);
     graph.forEachAllocNode([&](DbAllocNode *allocNode) {
-      /// Check if allocation has no acquires (counting nested acquires too)
-      size_t totalAcquires = 0;
+      bool hasSingleSize = (allocNode->getInfo().sizes.size() == 1);
+      bool isOnlyReader = (allocNode->getAcquireNodesSize() > 0 &&
+                           allocNode->getInfo().numReleases == 0);
 
-      /// Count all acquire nodes in the hierarchy
-      std::function<void(DbAcquireNode *)> countAcquires =
-          [&](DbAcquireNode *acqNode) {
-            totalAcquires++;
+      if (!hasSingleSize || !isOnlyReader)
+        return;
 
-            /// Recursively count child acquires
-            acqNode->forEachChildNode([&](NodeBase *child) {
-              if (auto *nestedAcq = dyn_cast<DbAcquireNode>(child))
-                countAcquires(nestedAcq);
-            });
-          };
-
+      ARTS_DEBUG("- Converting DB to parameter: " << allocNode->getDbAllocOp()
+                                                  << "\n");
       allocNode->forEachChildNode([&](NodeBase *child) {
-        if (auto *acqNode = dyn_cast<DbAcquireNode>(child))
-          countAcquires(acqNode);
+        if (auto acquireNode = dyn_cast<DbAcquireNode>(child)) {
+          DbAcquireOp acquireOp = acquireNode->getDbAcquireOp();
+          acquireOp.getPtr().replaceAllUsesWith(
+              allocNode->getDbAllocOp().getPtr());
+          acquireOp.erase();
+        }
       });
-
-      if (totalAcquires == 0) {
-        deadAllocs.push_back(allocNode);
+      DbAllocOp allocOp = allocNode->getDbAllocOp();
+      if (allocOp.getGuid().use_empty() && allocOp.getPtr().use_empty()) {
+        allocOp.erase();
       }
+      changed = true;
     });
-    for (auto *allocNode : deadAllocs) {
-      auto dbOp = allocNode->getDbAllocOp();
-      if (dbOp && dbOp->use_empty()) {
-        dbOp.erase();
-        changed = true;
-      }
-    }
   });
+
+  if (changed)
+    invalidateAndRebuildGraph();
+
+  ARTS_DEBUG_FOOTER(ConvertToParameters);
   return changed;
 }
 
+//===----------------------------------------------------------------------===//
+/// Invalidate and rebuild the graph
+//===----------------------------------------------------------------------===//
+void DbPass::invalidateAndRebuildGraph() {
+  module.walk([&](func::FuncOp func) {
+    AM->invalidateFunction(func);
+    DbGraph &graph = AM->getDbGraph(func);
+    graph.build();
+
+    /// Print analysis results for verification
+    ARTS_DEBUG_REGION({
+      graph.print(llvm::outs());
+      llvm::outs().flush();
+    });
+  });
+}
+
+//===----------------------------------------------------------------------===//
+/// Export the graph to JSON
+//===----------------------------------------------------------------------===//
 void DbPass::exportToJson() {
   /// Create output directory if it doesn't exist
   std::string outputDir = "output";

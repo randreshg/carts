@@ -43,11 +43,11 @@ int main(int argc, char **argv) {
     }
   }
   // Output correctness in a script-parseable format
-  if (success) {
+  if (success)
     printf("Result: CORRECT\n");
-  } else {
+  else
     printf("Result: INCORRECT\n");
-  }
+
   fflush(stdout);
   return 0;
 }

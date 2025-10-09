@@ -39,9 +39,8 @@ int main(int argc, char **argv) {
 
   /// Verify results
   long long expected_dot_product = 0;
-  for (i = 0; i < N; i++) {
+  for (i = 0; i < N; i++)
     expected_dot_product += (long long)a[i] * b[i];
-  }
 
   if (dot_product != expected_dot_product) {
     printf("Result: INCORRECT\n");

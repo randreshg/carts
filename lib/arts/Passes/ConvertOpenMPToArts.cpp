@@ -43,7 +43,7 @@ struct OMPParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
   LogicalResult matchAndRewrite(omp::ParallelOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    ARTS_DEBUG_TYPE("Converting omp.parallel to arts.parallel");
+    ARTS_INFO("Converting omp.parallel to arts.parallel");
 
     /// Create a new `arts.edt` operation with parallel type
     auto parOp = rewriter.create<EdtOp>(loc, EdtType::parallel,
@@ -68,7 +68,7 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
   LogicalResult matchAndRewrite(scf::ParallelOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    ARTS_DEBUG_TYPE("Converting scf.parallel to arts.edt<parallel> + arts.for");
+    ARTS_INFO("Converting scf.parallel to arts.edt<parallel> + arts.for");
     rewriter.setInsertionPoint(op);
 
     /// Create `arts.edt` with `parallel` type and internode concurrency
@@ -162,10 +162,10 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
     /// Collect the task deps clause
     auto dependList = task.getDependsAttr();
     if (!dependList) {
-      ARTS_INFO("No dependencies found for task");
+      ARTS_DEBUG(" - No dependencies found for task");
       return success();
     }
-    ARTS_INFO("Processing " << dependList.size() << " dependencies");
+    ARTS_DEBUG(" - Processing " << dependList.size() << " dependencies");
     for (unsigned i = 0, e = dependList.size(); i < e; ++i) {
       /// Get dependency clause and type.
       auto depClause = dyn_cast<omp::ClauseTaskDependAttr>(dependList[i]);
@@ -310,7 +310,7 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
   LogicalResult matchAndRewrite(omp::WsLoopOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    ARTS_DEBUG_TYPE("Converting omp.wsloop to arts.for");
+    ARTS_INFO("Converting omp.wsloop to arts.for");
 
     /// Get the loop bounds and step from the wsloop
     auto lowerBound = op.getLowerBound()[0];
@@ -395,6 +395,7 @@ struct AtomicUpdateToArtsPattern
 
   LogicalResult matchAndRewrite(omp::AtomicUpdateOp op,
                                 PatternRewriter &rewriter) const override {
+    ARTS_INFO("Converting omp.atomic.update to arts.atomic_add");
     /// Only handle canonical form: one block, single arg, computes add of arg
     /// and a captured value
     auto &region = op.getRegion();
@@ -464,6 +465,7 @@ struct BarrierToARTSPattern : public OpRewritePattern<omp::BarrierOp> {
 
   LogicalResult matchAndRewrite(omp::BarrierOp op,
                                 PatternRewriter &rewriter) const override {
+    ARTS_INFO("Converting omp.barrier to arts.barrier");
     auto loc = op.getLoc();
     rewriter.create<arts::BarrierOp>(loc);
     rewriter.eraseOp(op);
@@ -477,6 +479,7 @@ struct TaskwaitToARTSPattern : public OpRewritePattern<omp::TaskwaitOp> {
 
   LogicalResult matchAndRewrite(omp::TaskwaitOp op,
                                 PatternRewriter &rewriter) const override {
+    ARTS_INFO("Converting omp.taskwait to arts.barrier");
     auto loc = op.getLoc();
     rewriter.create<arts::BarrierOp>(loc);
     rewriter.eraseOp(op);
@@ -491,7 +494,7 @@ struct TaskloopToARTSPattern : public OpRewritePattern<omp::TaskLoopOp> {
   LogicalResult matchAndRewrite(omp::TaskLoopOp op,
                                 PatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
-    ARTS_DEBUG_TYPE("Converting omp.taskloop to arts.for with EDTs");
+    ARTS_INFO("Converting omp.taskloop to arts.for with EDTs");
 
     /// Get the loop bounds and step from the taskloop
     auto lowerBound = op.getLowerBound()[0];
@@ -559,8 +562,9 @@ struct ConvertOpenMPToArtsPass
 
 /// Pass to convert OpenMP operations to ARTS operations
 void ConvertOpenMPToArtsPass::runOnOperation() {
-  ARTS_INFO_HEADER(ConvertOpenMPToArtsPass);
   ModuleOp module = getOperation();
+  ARTS_INFO_HEADER(ConvertOpenMPToArtsPass);
+  ARTS_DEBUG_REGION(module.dump(););
   MLIRContext *context = &getContext();
   RewritePatternSet patterns(context);
   patterns.add<OMPParallelToARTSPattern, SCFParallelToArtsPattern,
@@ -570,6 +574,7 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
                TaskwaitToARTSPattern, CallToARTSPattern>(context);
   GreedyRewriteConfig config;
   (void)applyPatternsAndFoldGreedily(module, std::move(patterns), config);
+
   removeUndefOps(module);
   ARTS_INFO_FOOTER(ConvertOpenMPToArtsPass);
   ARTS_DEBUG_REGION(module.dump(););

@@ -87,7 +87,7 @@ void NormalizeDbsPass::runOnOperation() {
   convertDbAllocOps();
 
   /// Clean up old operations
-  removeOps(module, AC->getBuilder(), opsToRemove);
+  removeOps(module, opsToRemove);
 
   ARTS_INFO_FOOTER(NormalizeDbsPass);
   ARTS_DEBUG_REGION(module.dump(););
@@ -99,7 +99,6 @@ void NormalizeDbsPass::convertDbAllocOps() {
 
   /// Collect all DbAllocOps
   module.walk([&](arts::DbAllocOp allocOp) { dbAllocOps.push_back(allocOp); });
-
   if (dbAllocOps.empty())
     return;
 
@@ -108,11 +107,11 @@ void NormalizeDbsPass::convertDbAllocOps() {
     AC->setInsertionPointAfter(oldOp);
 
     /// Convert stack-backed allocations to heap and make the pointer opaque
-    auto route = AC->createIntConstant(0, AC->Int32, oldOp.getLoc());
-
+    Value route = AC->createIntConstant(0, AC->Int32, oldOp.getLoc());
     SmallVector<Value> sizes(oldOp.getSizes().begin(), oldOp.getSizes().end());
     SmallVector<Value> payloadSizes(oldOp.getPayloadSizes().begin(),
                                     oldOp.getPayloadSizes().end());
+
     if (Value addr = oldOp.getAddress())
       if (auto mt = addr.getType().dyn_cast<MemRefType>())
         if (mt.getRank() == 0 && sizes.empty())
@@ -124,7 +123,6 @@ void NormalizeDbsPass::convertDbAllocOps() {
 
     DbAllocOp newOp =
         createNormalizedAlloc(oldOp, route, sizes, payloadSizes, newAllocType);
-
     updateUsers(oldOp, newOp);
     opsToRemove.insert(oldOp);
   }
@@ -133,6 +131,7 @@ void NormalizeDbsPass::convertDbAllocOps() {
 DbAllocOp NormalizeDbsPass::createNormalizedAlloc(
     DbAllocOp oldOp, Value route, SmallVector<Value> &sizes,
     SmallVector<Value> &payloadSizes, DbAllocType newAllocType) {
+
   /// If address is a scalar memref, omit it so the builder uses sizes for ptr
   if (Value addr = oldOp.getAddress()) {
     if (auto mt = addr.getType().dyn_cast<MemRefType>()) {
@@ -141,23 +140,34 @@ DbAllocOp NormalizeDbsPass::createNormalizedAlloc(
             oldOp.getLoc(), oldOp.getMode(), route, newAllocType,
             oldOp.getDbMode(), oldOp.getElementType(), sizes, payloadSizes);
       }
+
       return AC->create<DbAllocOp>(
           oldOp.getLoc(), oldOp.getMode(), route, newAllocType,
           oldOp.getDbMode(), oldOp.getElementType(), addr, sizes, payloadSizes);
     }
+
     return AC->create<DbAllocOp>(oldOp.getLoc(), oldOp.getMode(), route,
                                  newAllocType, oldOp.getDbMode(),
                                  oldOp.getElementType(), sizes, payloadSizes);
   }
+
   return AC->create<DbAllocOp>(oldOp.getLoc(), oldOp.getMode(), route,
                                newAllocType, oldOp.getDbMode(),
                                oldOp.getElementType(), sizes, payloadSizes);
 }
 
 /// Update all users of an old DB operation to use the new one
-void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
-  bool isStackAlloc = oldAllocOp.getAllocType() == DbAllocType::stack;
 
+void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
+
+  bool isStackAlloc = oldAllocOp.getAllocType() == DbAllocType::stack;
+  /// Verify we have guid and replace the old one with the new one
+  Value oldGuid = oldAllocOp.getGuid();
+  Value newGuid = newAllocOp.getGuid();
+  assert(oldGuid && newGuid && "expected guid values");
+  oldGuid.replaceAllUsesWith(newGuid);
+
+  /// Replace the old ptr with the new one
   Value oldPtr = oldAllocOp.getPtr();
   Value newPtr = newAllocOp.getPtr();
   assert(oldPtr && newPtr && "expected pointer values");
@@ -165,14 +175,18 @@ void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
   SmallVector<Value, 16> worklist;
   SmallPtrSet<Value, 16> visited;
   DenseMap<Value, bool> isStackAllocated;
-  DenseMap<Value, Value> ptrSource;
 
+  DenseMap<Value, Value> ptrSource;
   worklist.push_back(oldPtr);
   visited.insert(oldPtr);
   isStackAllocated[oldPtr] = isStackAlloc;
   ptrSource[oldPtr] = newPtr;
 
-  SmallVector<std::pair<Block *, unsigned>, 8> blockArgsToErase;
+  DenseMap<Block *, SmallVector<unsigned>> argsToErase;
+  SmallVector<std::pair<Block *, unsigned>> blockArgsToErase;
+
+  /// To avoid duplicate processing of EdtOps
+  SmallPtrSet<Operation *, 8> processedEdts;
 
   /// Helper to enqueue a value for BFS with its stack flag and source ptr
   auto enqueue = [&](Value v, bool stackFlag, Value src) {
@@ -204,8 +218,7 @@ void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
     return llvmPtr;
   };
 
-  /// Helper to rewire operations using the DB pointer to use the new pointer,
-  /// and queue block arguments to rewrite after the pointer is updated
+  /// Helper to update the block arg for the dependency operand
   auto queueBlockArgFollow = [&](Operation *user, unsigned operandIdx,
                                  Value fromVal) {
     if (user->getNumRegions() == 0)
@@ -214,6 +227,7 @@ void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
     for (Region &region : user->getRegions()) {
       if (region.empty())
         continue;
+
       Block &entry = region.front();
 
       /// Map operand index to block argument index for EDT dependencies using
@@ -222,42 +236,43 @@ void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
       if (auto edtOp = dyn_cast<EdtOp>(user)) {
         auto [depsBegin, depsLen] =
             edtOp.getODSOperandIndexAndLength(/*dependencies*/ 1);
+
         /// If it's before the dependencies segment (i.e., the route), skip
         if (operandIdx < depsBegin)
           continue;
+
         /// If it's beyond the dependencies segment, skip as well
         if (operandIdx >= depsBegin + depsLen)
           continue;
+
         /// Dependencies map 1:1 to block arguments starting at index 0
         argIdx = operandIdx - depsBegin;
       }
 
       Value oldArg = entry.getArgument(argIdx);
-      Type desiredType = newPtr.getType();
+      Type desiredType = ptrSource.lookup(fromVal).getType();
       bool stackFlag = isStackAllocated.lookup(fromVal);
-
       if (oldArg.getType() != desiredType) {
-        /// Insert new argument with correct type and replace uses
-        Value newArg =
-            entry.insertArgument(argIdx, desiredType, oldArg.getLoc());
-        Value shiftedOldArg = entry.getArgument(argIdx + 1);
-        shiftedOldArg.replaceAllUsesWith(newArg);
-        enqueue(newArg, stackFlag, newArg);
-        blockArgsToErase.emplace_back(&entry, argIdx + 1);
+        /// Add new argument at the end with correct type and replace uses
+        Value newArg = entry.addArgument(desiredType, oldArg.getLoc());
+        oldArg.replaceAllUsesWith(newArg);
+        enqueue(newArg, stackFlag, ptrSource.lookup(fromVal));
+
+        /// Mark the old arg for erasure
+        argsToErase[&entry].push_back(argIdx);
       } else {
-        enqueue(oldArg, stackFlag, oldArg);
+        enqueue(oldArg, stackFlag, ptrSource.lookup(fromVal));
       }
     }
   };
 
-  /// Rebuild various uses of the DB pointer (load, store, etc.) and queue
-  /// block arguments to rewrite after the pointer is updated
+  /// Rebuild various uses of the DB pointer (load, store, etc.) and queue block
+  /// arguments to rewrite after the pointer is updated
   while (!worklist.empty()) {
     Value cur = worklist.pop_back_val();
     for (auto &use : llvm::make_early_inc_range(cur.getUses())) {
       Operation *user = use.getOwner();
       AC->setInsertionPoint(user);
-
       if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
         if (loadOp.getMemref() == cur) {
           Value src = ptrSource.lookup(cur);
@@ -286,14 +301,15 @@ void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
                                    acquireUser.getOffsets().end());
         SmallVector<Value> sizes(acquireUser.getSizes().begin(),
                                  acquireUser.getSizes().end());
+
         Value srcGuid;
-        if (auto allocOp = newPtr.getDefiningOp<DbAllocOp>())
+        if (auto allocOp = ptrSource[cur].getDefiningOp<DbAllocOp>())
           srcGuid = allocOp.getGuid();
-        else if (auto acqSrc = newPtr.getDefiningOp<DbAcquireOp>())
+        else if (auto acqSrc = ptrSource[cur].getDefiningOp<DbAcquireOp>())
           srcGuid = acqSrc.getGuid();
         auto newAcquire =
-            AC->create<DbAcquireOp>(loc, acquireUser.getMode(), srcGuid, newPtr,
-                                    indices, offsets, sizes);
+            AC->create<DbAcquireOp>(loc, acquireUser.getMode(), srcGuid,
+                                    ptrSource[cur], indices, offsets, sizes);
         acquireUser.getGuid().replaceAllUsesWith(newAcquire.getGuid());
         acquireUser.getPtr().replaceAllUsesWith(newAcquire.getPtr());
         opsToRemove.insert(acquireUser);
@@ -301,7 +317,7 @@ void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
         /// Do not propagate stack-allocated semantics through db_acquire. The
         /// pointer result of acquire should be treated as a heap handle here,
         /// avoiding extra loads injected by this normalization step.
-        enqueue(newAcquire.getPtr(), /*stackFlag*/ false, newPtr);
+        enqueue(newAcquire.getPtr(), false, newAcquire.getPtr());
       } else if (auto gep = dyn_cast<DbGepOp>(user)) {
         /// Propagate tracking through db_gep using the same source ptr
         enqueue(gep.getPtr(), isStackAllocated.lookup(cur),
@@ -309,10 +325,12 @@ void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
       } else if (isa<EdtOp>(user)) {
         queueBlockArgFollow(user, use.getOperandNumber(), cur);
       } else if (isa<DbReleaseOp>(user)) {
-        /// DbRelease are no longer needed. Remove them.
         opsToRemove.insert(user);
         continue;
       } else if (isa<DbFreeOp>(user)) {
+        auto freeOp = cast<DbFreeOp>(user);
+        auto allocOp = ptrSource[cur].getDefiningOp<DbAllocOp>();
+        freeOp.getSourceMutable().assign(allocOp.getPtr());
         continue;
       } else if (user->getNumRegions() > 0) {
         queueBlockArgFollow(user, use.getOperandNumber(), cur);
@@ -323,11 +341,14 @@ void NormalizeDbsPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
   }
 
   /// Erase any old block arguments whose uses have been rewritten
-  for (auto &it : blockArgsToErase) {
-    Block *blk = it.first;
-    unsigned idx = it.second;
-    if (blk->getArgument(idx).use_empty())
-      blk->eraseArgument(idx);
+  for (auto &pair : argsToErase) {
+    Block *blk = pair.first;
+    SmallVector<unsigned> idxs = pair.second;
+    std::sort(idxs.begin(), idxs.end(), std::greater<unsigned>());
+    for (unsigned idx : idxs) {
+      if (blk->getArgument(idx).use_empty())
+        blk->eraseArgument(idx);
+    }
   }
 }
 

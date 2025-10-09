@@ -6,25 +6,144 @@
 #include "arts/ArtsDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/OperationSupport.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/CSE.h"
-#include "llvm/ADT/SmallPtrSet.h"
 #include <algorithm>
 #include <cassert>
+
+/// Debug
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(arts_utils);
 
 namespace mlir {
 namespace arts {
 
+//===----------------------------------------------------------------------===//
+/// IR Simplification Utilities
+//===----------------------------------------------------------------------===//
+
+/// Simplifies the IR by running common subexpression elimination (CSE)
+/// across the module using the provided dominance information.
 bool simplifyIR(ModuleOp module, DominanceInfo &domInfo) {
   IRRewriter rewriter(module.getContext());
   bool changed = false;
   eliminateCommonSubExpressions(rewriter, domInfo, module, &changed);
+
   return changed;
 }
 
+//===----------------------------------------------------------------------===//
+/// Value Analysis Utilities
+//===----------------------------------------------------------------------===//
+
+/// Checks if the given value is a constant, including constant-like operations
+/// such as constant indices and constant operations.
+bool isValueConstant(Value val) {
+  Operation *defOp = val.getDefiningOp();
+  if (!defOp)
+    return false;
+
+  if (defOp->hasTrait<OpTrait::ConstantLike>())
+    return true;
+
+  if (isa<arith::ConstantIndexOp>(defOp) || isa<arith::ConstantOp>(defOp))
+    return true;
+  return false;
+};
+
+/// Attempts to extract a constant index value from the given value, supporting
+/// both constant index operations and constant operations with integer
+/// attributes.
+bool getConstantIndex(Value v, int64_t &out) {
+  if (!v)
+    return false;
+  if (auto c = v.getDefiningOp<arith::ConstantIndexOp>()) {
+    out = c.value();
+    return true;
+  }
+  if (auto c = v.getDefiningOp<arith::ConstantOp>()) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(c.getValue())) {
+      out = intAttr.getInt();
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Determines if the given value represents a non-zero index, returning true
+/// for non-zero constants or unknown (non-constant) values.
+bool isNonZeroIndex(Value v) {
+  if (!v)
+    return false;
+  if (auto c = v.getDefiningOp<arith::ConstantIndexOp>())
+    return c.value() != 0;
+  return true;
+}
+
+//===----------------------------------------------------------------------===//
+/// Type and Size Utilities
+//===----------------------------------------------------------------------===//
+
+/// Computes the byte size of the given element type, supporting integer and
+/// floating-point types.
+uint64_t getElementTypeByteSize(Type elemTy) {
+  if (auto intTy = dyn_cast<IntegerType>(elemTy))
+    return intTy.getWidth() / 8u;
+  if (auto fTy = dyn_cast<FloatType>(elemTy))
+    return fTy.getWidth() / 8u;
+  /// Unknown type
+  return 0;
+}
+
+//===----------------------------------------------------------------------===//
+/// String Utilities
+//===----------------------------------------------------------------------===//
+
+/// Sanitizes the given string by replacing dots and dashes with underscores,
+/// making it suitable for use as an identifier.
+std::string sanitizeString(StringRef s) {
+  std::string id = s.str();
+  std::replace(id.begin(), id.end(), '.', '_');
+  std::replace(id.begin(), id.end(), '-', '_');
+  return id;
+}
+
+//===----------------------------------------------------------------------===//
+/// Range and Value Comparison Utilities
+//===----------------------------------------------------------------------===//
+
+/// Compares two ValueRanges for equality, checking both size and element-wise
+/// equivalence.
+bool equalRange(ValueRange a, ValueRange b) {
+  if (a.size() != b.size())
+    return false;
+  for (auto it = a.begin(), jt = b.begin(); it != a.end(); ++it, ++jt) {
+    if (*it != *jt)
+      return false;
+  }
+  return true;
+}
+
+/// Checks if all values in the given range are identical, returning false for
+/// empty ranges.
+bool allSameValue(ValueRange values) {
+  if (values.empty())
+    return false;
+  Value first = values[0];
+  return llvm::all_of(values, [&](Value v) { return v == first; });
+}
+
+//===----------------------------------------------------------------------===//
+/// EDT Analysis Utilities
+//===----------------------------------------------------------------------===//
+
+/// Determines if a value is invariant within the given EDT region, meaning it
+/// is defined outside the region or not modified within it.
 bool isInvariantInEdt(Region &edtRegion, Value value) {
-  llvm::SmallPtrSet<Value, 16> visited;
+  SmallPtrSet<Value, 16> visited;
 
   std::function<bool(Value)> definedInvariant = [&](Value v) -> bool {
     if (!v)
@@ -104,6 +223,8 @@ bool isInvariantInEdt(Region &edtRegion, Value value) {
   return true;
 }
 
+/// Checks if the target operation is reachable from the source operation in
+/// the EDT control flow graph.
 bool isReachable(Operation *source, Operation *target) {
   /// Early exit if either pointer is null or both are the same.
   if (!source || !target)
@@ -138,138 +259,9 @@ bool isReachable(Operation *source, Operation *target) {
   return false;
 }
 
-void removeOps(mlir::ModuleOp module, OpBuilder &builder,
-               llvm::SetVector<mlir::Operation *> &opsToRemove) {
-  for (auto op : opsToRemove) {
-    if (!op)
-      continue;
-    replaceWithUndef(op, builder);
-    recursivelyRemoveOp(op);
-  }
-  removeUndefOps(module);
-  opsToRemove.clear();
-}
-
-void recursivelyRemoveOp(mlir::Operation *op) {
-  /// Collect all dependent operations.
-  SmallVector<mlir::Operation *, 8> toRemove;
-  for (mlir::Value result : op->getResults()) {
-    for (mlir::Operation *user : result.getUsers()) {
-      toRemove.push_back(user);
-    }
-  }
-
-  /// Remove dependent operations recursively.
-  for (mlir::Operation *userOp : toRemove)
-    recursivelyRemoveOp(userOp);
-
-  /// Remove the operation.
-  if (op) {
-    op->erase();
-    op = nullptr;
-  }
-}
-
-void removeUndefOps(mlir::ModuleOp module) {
-  /// Traverse all operations in the module and collect UndefOps.
-  SmallVector<mlir::arts::UndefOp, 8> undefOps;
-  module.walk(
-      [&](mlir::arts::UndefOp undefOp) { undefOps.push_back(undefOp); });
-  /// Process each UndefOp and remove its dependent operations.
-  for (auto undefOp : undefOps)
-    recursivelyRemoveOp(undefOp);
-}
-
-void replaceWithUndef(mlir::Operation *op, OpBuilder &builder) {
-  if (op->getNumResults() == 0)
-    return;
-
-  OpBuilder::InsertionGuard guard(builder);
-  builder.setInsertionPoint(op);
-  for (mlir::Value result : op->getResults()) {
-    auto undefOp =
-        builder.create<mlir::arts::UndefOp>(op->getLoc(), result.getType());
-    result.replaceAllUsesWith(undefOp.getResult());
-  }
-}
-
-void replaceUses(mlir::Value from, mlir::Value to, DominanceInfo &domInfo,
-                 Operation *dominatingOp) {
-  /// Ensure that 'from' has a defining operation.
-  auto *definingOp = from.getDefiningOp();
-  if (!definingOp)
-    return;
-
-  /// Replace all uses of 'from' with 'to' if the user is dominated by the
-  /// defining operation of 'from'.
-  from.replaceUsesWithIf(to, [&](OpOperand &operand) {
-    if (operand.getOwner() == dominatingOp)
-      return false;
-
-    return domInfo.dominates(dominatingOp, operand.getOwner());
-  });
-}
-
-void replaceUses(DenseMap<Value, Value> &rewireMap) {
-  for (auto &rewire : rewireMap)
-    rewire.first.replaceAllUsesWith(rewire.second);
-  rewireMap.clear();
-}
-
-void replaceInRegion(Region &region, Value from, Value to) {
-  from.replaceUsesWithIf(to, [&](OpOperand &operand) {
-    return region.isAncestor(operand.getOwner()->getParentRegion());
-  });
-}
-
-void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap,
-                     bool clear) {
-  for (auto &rewire : rewireMap)
-    replaceInRegion(region, rewire.first, rewire.second);
-  if (clear)
-    rewireMap.clear();
-}
-
-bool isValueConstant(Value val) {
-  Operation *defOp = val.getDefiningOp();
-  if (!defOp)
-    return false;
-
-  if (defOp->hasTrait<OpTrait::ConstantLike>())
-    return true;
-
-  if (isa<arith::ConstantIndexOp>(defOp) || isa<arith::ConstantOp>(defOp))
-    return true;
-  return false;
-};
-
-bool getConstantIndex(Value v, int64_t &out) {
-  if (!v)
-    return false;
-  if (auto c = v.getDefiningOp<arith::ConstantIndexOp>()) {
-    out = c.value();
-    return true;
-  }
-  if (auto c = v.getDefiningOp<arith::ConstantOp>()) {
-    if (auto intAttr = llvm::dyn_cast<mlir::IntegerAttr>(c.getValue())) {
-      out = intAttr.getInt();
-      return true;
-    }
-  }
-  return false;
-}
-
-bool isNonZeroIndex(Value v) {
-  if (!v)
-    return false;
-  if (auto c = v.getDefiningOp<arith::ConstantIndexOp>())
-    return c.value() != 0;
-  return true;
-}
-
-/// Internal helper with recursion detection
-static Value getUnderlyingValueImpl(Value v,
-                                    llvm::SmallPtrSet<Value, 8> &visited) {
+/// Internal helper to trace the underlying value through various operations,
+/// with cycle detection to avoid infinite recursion.
+static Value getUnderlyingValueImpl(Value v, SmallPtrSet<Value, 8> &visited) {
   if (!v)
     return nullptr;
 
@@ -306,6 +298,8 @@ static Value getUnderlyingValueImpl(Value v,
       return getUnderlyingValueImpl(subview.getSource(), visited);
     else if (auto castOp = dyn_cast<memref::CastOp>(op))
       return getUnderlyingValueImpl(castOp.getSource(), visited);
+    else if (isa<arts::UndefOp>(op))
+      return nullptr;
     else
       return nullptr;
   } else {
@@ -314,11 +308,19 @@ static Value getUnderlyingValueImpl(Value v,
   }
 }
 
+//===----------------------------------------------------------------------===//
+/// Underlying Value Tracing Utilities
+//===----------------------------------------------------------------------===//
+
+/// Traces the underlying root allocation value for the given value, unwinding
+/// through various MLIR operations.
 Value getUnderlyingValue(Value v) {
-  llvm::SmallPtrSet<Value, 8> visited;
+  SmallPtrSet<Value, 8> visited;
   return getUnderlyingValueImpl(v, visited);
 }
 
+/// Retrieves the underlying operation that defines the root value for the
+/// given value.
 Operation *getUnderlyingOperation(Value v) {
   Value underlyingValue = getUnderlyingValue(v);
   if (!underlyingValue)
@@ -331,7 +333,8 @@ Operation *getUnderlyingOperation(Value v) {
   return nullptr;
 }
 
-/// Returns the datablock-producing/consuming op tied to a value if present.
+/// Finds the datablock-related operation (DbAllocOp or DbAcquireOp) associated
+/// with the given value.
 Operation *getUnderlyingDb(Value v) {
   if (!v)
     return nullptr;
@@ -378,36 +381,123 @@ Operation *getUnderlyingDb(Value v) {
   return nullptr;
 }
 
-uint64_t getElementTypeByteSize(Type elemTy) {
-  if (auto intTy = dyn_cast<IntegerType>(elemTy))
-    return intTy.getWidth() / 8u;
-  if (auto fTy = dyn_cast<FloatType>(elemTy))
-    return fTy.getWidth() / 8u;
-  return 0; /// unknown
-}
+//===----------------------------------------------------------------------===//
+/// Operation Removal and Dead Code Elimination Utilities
+//===----------------------------------------------------------------------===//
 
-std::string sanitizeString(StringRef s) {
-  std::string id = s.str();
-  std::replace(id.begin(), id.end(), '.', '_');
-  std::replace(id.begin(), id.end(), '-', '_');
-  return id;
-}
+/// Recursively removes the given operation and all its dependent operations
+/// that become dead, tracking visited operations to avoid infinite recursion.
+static void removeOpImpl(Operation *op, OpBuilder &builder,
+                         SmallPtrSet<Operation *, 32> &seen, bool recursive) {
+  if (!op || !op->getBlock())
+    return;
 
-bool equalRange(ValueRange a, ValueRange b) {
-  if (a.size() != b.size())
-    return false;
-  for (auto it = a.begin(), jt = b.begin(); it != a.end(); ++it, ++jt) {
-    if (*it != *jt)
-      return false;
+  /// Already visited
+  if (!seen.insert(op).second)
+    return;
+
+  /// Get dependents before dropping uses
+  SmallVector<Operation *, 8> dependents;
+  if (recursive) {
+    for (Value result : op->getResults())
+      for (Operation *user : result.getUsers())
+        dependents.push_back(user);
   }
-  return true;
+
+  /// Drop all uses of this operation's results to dereference them
+  op->dropAllUses();
+
+  /// Erase the operation immediately since all uses have been dropped
+  op->erase();
+
+  /// No recursion requested
+  if (!recursive)
+    return;
+
+  /// Remove dependents recursively
+  for (Operation *userOp : dependents)
+    removeOpImpl(userOp, builder, seen, recursive);
 }
 
-bool allSameValue(ValueRange values) {
-  if (values.empty())
-    return false;
-  Value first = values[0];
-  return llvm::all_of(values, [&](Value v) { return v == first; });
+/// Removes a set of operations from the module by dereferencing their uses
+/// and recursively removing dependent operations that become dead.
+void removeOps(ModuleOp module, SetVector<Operation *> &opsToRemove,
+               bool recursive) {
+  if (opsToRemove.empty())
+    return;
+
+  OpBuilder builder(module.getContext());
+  SmallPtrSet<Operation *, 32> seen;
+
+  /// Remove operations by dereferencing uses and erasing immediately
+  ARTS_DEBUG(" - Removing " << opsToRemove.size() << " operations");
+  for (auto *op : opsToRemove)
+    removeOpImpl(op, builder, seen, recursive);
+}
+
+/// Remove undef operations with optional recursion
+void removeUndefOps(ModuleOp module) {
+  SetVector<Operation *> tempOps;
+  module.walk([&](arts::UndefOp op) { tempOps.insert(op); });
+  ARTS_DEBUG(" - Removing " << tempOps.size() << " undef operations");
+  removeOps(module, tempOps, true);
+}
+
+/// Replaces all results of the given operation with undef operations.
+void replaceWithUndef(Operation *op, OpBuilder &builder) {
+  if (!op || op->getNumResults() == 0)
+    return;
+
+  OpBuilder::InsertionGuard IG(builder);
+  builder.setInsertionPoint(op);
+  for (Value result : op->getResults()) {
+    if (!result.use_empty()) {
+      auto undef =
+          builder.create<arts::UndefOp>(op->getLoc(), result.getType());
+      result.replaceAllUsesWith(undef.getResult());
+    }
+  }
+}
+
+/// Replaces uses of one value with another under dominance constraints,
+/// skipping the dominating operation.
+void replaceUses(Value from, Value to, DominanceInfo &domInfo,
+                 Operation *dominatingOp) {
+  /// Ensure that 'from' has a defining operation.
+  auto *definingOp = from.getDefiningOp();
+  if (!definingOp)
+    return;
+
+  /// Replace all uses of 'from' with 'to' if the user is dominated by the
+  /// defining operation of 'from'.
+  from.replaceUsesWithIf(to, [&](OpOperand &operand) {
+    if (operand.getOwner() == dominatingOp)
+      return false;
+    return domInfo.dominates(dominatingOp, operand.getOwner());
+  });
+}
+
+/// Replaces uses according to a mapping of values.
+void replaceUses(DenseMap<Value, Value> &rewireMap) {
+  for (auto &rewire : rewireMap)
+    rewire.first.replaceAllUsesWith(rewire.second);
+  rewireMap.clear();
+}
+
+/// Replaces uses of a value within a specific region.
+void replaceInRegion(Region &region, Value from, Value to) {
+  from.replaceUsesWithIf(to, [&](OpOperand &operand) {
+    return region.isAncestor(operand.getOwner()->getParentRegion());
+  });
+}
+
+/// Replaces uses according to a mapping within a specific region.
+void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap,
+                     bool clear) {
+  for (auto &rewire : rewireMap)
+    replaceInRegion(region, rewire.first, rewire.second);
+  if (clear)
+    rewireMap.clear();
 }
 
 } // namespace arts
