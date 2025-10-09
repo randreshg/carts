@@ -49,7 +49,7 @@ carts_header() {
 }
 
 carts_step() {
-    echo -e "${CYAN}→${NC} ${BOLD}$1${NC}"
+    echo -e "${CYAN}->${NC} ${BOLD}$1${NC}"
 }
 
 carts_substep() {
@@ -157,7 +157,7 @@ carts_next_steps() {
     echo -e "\n${BOLD}${GREEN}Next Steps:${NC}"
     carts_line
     for step in "$@"; do
-        echo -e "  ${CYAN}→${NC} $step"
+        echo -e "  ${CYAN}->${NC} $step"
     done
     carts_line
 }

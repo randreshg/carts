@@ -82,24 +82,24 @@ module {
 
 The following substitutions are available in tests:
 
-- `%carts` → `tools/carts` (main wrapper script)
-- `%mlir_translate` → `.install/llvm/bin/mlir-translate`
-- `%filecheck` → `.install/llvm/bin/FileCheck`
-- `%mlir_opt` → `.install/llvm/bin/mlir-opt`
+- `%carts` -> `tools/carts` (main wrapper script)
+- `%mlir_translate` -> `.install/llvm/bin/mlir-translate`
+- `%filecheck` -> `.install/llvm/bin/FileCheck`
+- `%mlir_opt` -> `.install/llvm/bin/mlir-opt`
 
 ## Pass Names Reference
 
 | Pass Name | Test Location | Description |
 |-----------|---------------|-------------|
 | `arts-inliner` | `arts/Passes/ArtsInliner.mlir` | Function inlining |
-| `convert-openmp-to-arts` | `arts/Passes/ConvertOpenMPToArts.mlir` | OpenMP → ARTS conversion |
+| `convert-openmp-to-arts` | `arts/Passes/ConvertOpenMPToArts.mlir` | OpenMP -> ARTS conversion |
 | `edt` | `arts/Passes/Edt.mlir` | EDT optimization |
 | `create-dbs` | `arts/Passes/CreateDbs.mlir` | DataBlock creation |
 | `db` | `arts/Passes/Db.mlir` | DataBlock optimization |
 | `create-epochs` | `arts/Passes/CreateEpochs.mlir` | Epoch synchronization |
 | `normalize-dbs` | `arts/Passes/ConvertDbToOpaquePtr.mlir` | Normalize DB handles |
 | `edt-lowering` | `arts/Passes/EdtLowering.mlir` | EDT outlining |
-| `convert-arts-to-llvm` | `arts/Passes/ConvertArtsToLLVM.mlir` | ARTS → LLVM conversion |
+| `convert-arts-to-llvm` | `arts/Passes/ConvertArtsToLLVM.mlir` | ARTS -> LLVM conversion |
 | `edt-invariant-code-motion` | `arts/Transforms/EdtInvariantCodeMotion.mlir` | Loop invariant code motion |
 | `edt-ptr-rematerialization` | `arts/Transforms/EdtPtrRematerialization.mlir` | Pointer rematerialization |
 

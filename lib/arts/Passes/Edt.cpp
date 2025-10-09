@@ -75,8 +75,7 @@ void EdtPass::runOnOperation() {
   }
 
   /// Remove ops marked for removal
-  OpBuilder builder(module.getContext());
-  removeOps(module, builder, opsToRemove);
+  removeOps(module, opsToRemove);
 
   ARTS_INFO_FOOTER(EdtPass);
   ARTS_DEBUG_REGION(module.dump(););
@@ -88,9 +87,8 @@ bool EdtPass::removeBarriers() {
   bool changed = false;
   module.walk([&](func::FuncOp func) {
     auto &edtGraph = AM->getEdtGraph(func);
-    if (edtGraph.size() == 0) {
+    if (edtGraph.size() == 0)
       return;
-    }
 
     changed |= removeRedundantBarriersWithGraphs(func, edtGraph);
   });

@@ -188,14 +188,12 @@ const DbAllocInfo &DbGraph::getAllocInfo(DbAllocOp alloc) const {
 }
 
 void DbGraph::print(llvm::raw_ostream &os) {
+  if (allocNodes.empty())
+    return;
+
   os << "\n";
   os << "DbGraph Analysis: " << this->func.getName().str() << "\n";
   os << "======================================\n";
-
-  if (allocNodes.empty()) {
-    os << "  No DB allocations\n";
-    return;
-  }
 
   os << "Summary: " << allocNodes.size() << " allocs, " << acquireNodeMap.size()
      << " acquires\n";
@@ -293,24 +291,24 @@ void DbGraph::print(llvm::raw_ostream &os) {
     alloc->forEachChildNode(
         [&](NodeBase *child) { totalEdges += child->getOutEdges().size(); });
     if (totalEdges > 0)
-      os << "  Total edges: " << totalEdges << "\n";
+      os << "  Total edges: " << totalEdges;
 
     os << "\n";
   }
 
-  /// Show edge summary
-  os << "Edge Summary:\n";
-  os << "======================================\n";
-  unsigned childEdges = 0;
+  // /// Show edge summary
+  // os << "Edge Summary:\n";
+  // os << "======================================\n";
+  // unsigned childEdges = 0;
 
-  forEachNode([&](NodeBase *node) {
-    for (auto *edge : node->getOutEdges()) {
-      if (edge->getKind() == EdgeBase::EdgeKind::Child)
-        childEdges++;
-    }
-  });
+  // forEachNode([&](NodeBase *node) {
+  //   for (auto *edge : node->getOutEdges()) {
+  //     if (edge->getKind() == EdgeBase::EdgeKind::Child)
+  //       childEdges++;
+  //   }
+  // });
 
-  os << "  Child edges: " << childEdges << "\n";
+  // os << "  Child edges: " << childEdges << "\n";
   os << "\n";
 }
 
