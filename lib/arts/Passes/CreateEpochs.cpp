@@ -42,7 +42,7 @@ static void processSyncEdtOp(EdtOp op) {
   /// Only process EDT ops with sync attribute.
   if (op.getTypeAttr().getValue() != EdtType::sync)
     return;
-
+  ARTS_DEBUG("Processing Sync EDT Op: " << op);
   auto loc = op.getLoc();
   OpBuilder builder(op);
   auto epochOp = builder.create<EpochOp>(loc);
@@ -60,7 +60,7 @@ static void processSyncEdtOp(EdtOp op) {
 
 /// Helper function to process barrier ops
 static void processBarrierOp(BarrierOp barrier) {
-  ARTS_DEBUG_TYPE("Processing BarrierOp");
+  ARTS_DEBUG("Processing BarrierOp");
   auto loc = barrier.getLoc();
 
   bool hasParentEdt = true;
@@ -144,11 +144,15 @@ void CreateEpochsPass::runOnOperation() {
 
   /// Process Sync EDT Ops: for each EDT op that is sync, create an epoch op
   /// and move the EDT op inside the epoch op.
+  ARTS_DEBUG_HEADER(ProcessSyncEdtOp);
   module.walk([](EdtOp op) { processSyncEdtOp(op); });
+  ARTS_DEBUG_FOOTER(ProcessSyncEdtOp);
 
   /// Process Barrier Ops: for each barrier, collect all EDTs that are affected
   /// by the barrier and embed them in a new epoch op.
+  ARTS_DEBUG_HEADER(ProcessBarrierOp);
   module.walk([&](BarrierOp barrier) { processBarrierOp(barrier); });
+  ARTS_DEBUG_FOOTER(ProcessBarrierOp);
 
   ARTS_INFO_FOOTER(CreateEpochsPass);
   ARTS_DEBUG_REGION(module.dump(););

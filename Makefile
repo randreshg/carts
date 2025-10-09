@@ -89,6 +89,8 @@ llvm-clean:
 # ARTS
 ARTS_DEBUG_LEVEL ?= none
 ARTS_BUILD_TYPE ?= Release
+# Introspection is disabled by default for performance
+# Use ARTS_COUNTERS=ON and ARTS_METRICS=ON to enable introspection
 ARTS_COUNTERS ?= OFF
 ARTS_METRICS ?= OFF
 

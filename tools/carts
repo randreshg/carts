@@ -67,7 +67,7 @@ show_usage() {
     carts_cmd "setup [options]"             "Set up CARTS environment"
     carts_cmd "clean [options]"              "Clean generated files in current directory"
     carts_cmd "check [options]"             "Run CARTS test suite using llvm-lit"
-    carts_cmd "execute <file> [options]"    "Complete pipeline: C++ → executable"
+    carts_cmd "execute <file> [options]"    "Complete pipeline: C++ -> executable"
     
     echo ""
     echo "Pipeline Options (for 'run' command):"
@@ -81,11 +81,17 @@ show_usage() {
     carts_cmd "--epochs"                     "Stop after epoch creation"
     carts_cmd "--arts-to-llvm"               "Stop after ARTS to LLVM conversion"
     carts_cmd "--emit-llvm"                  "Emit LLVM IR output (can be used with any stage)"
+    carts_cmd "-g"                           "Enable MLIR/LLVM debug info emission during run"
     
     echo ""
     echo "Execute Options (for 'execute' command):"
     carts_cmd "--run-args <args>"               "Pass additional arguments to carts run command"
     carts_cmd "--compile-args <args>"           "Pass additional arguments to carts compile command"
+    carts_cmd "-g"                               "Generate debug symbols (propagates to all stages)"
+
+    echo ""
+    echo "Compile Options (for 'compile' command):"
+    carts_cmd "-g"                               "Embed DWARF debug symbols in the final binary"
     
     echo ""
     echo "Examples:"
@@ -319,7 +325,7 @@ run_compile() {
     
     # Build compile flags and force non-PIE output so function pointers remain
     # stable across nodes (required for remote EDT execution).
-    local compile_flags=("-O3" "-g0")
+    local compile_flags=("-O3")
     if [[ "$OSTYPE" == "darwin"* ]]; then
         compile_flags+=("-fno-pie" "-Wl,-no_pie")
     elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
@@ -822,6 +828,7 @@ run_local_clean() {
         "build"
         "cmake-build-*"
         ".cache"
+        "introspection"
     )
 
     local removed_count=0
@@ -1016,6 +1023,7 @@ run_execute() {
     local compile_args=()
     local parsing_run_args=false
     local parsing_compile_args=false
+    local debug_mode=false
     
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -1027,6 +1035,10 @@ run_execute() {
             "--compile-args")
                 parsing_run_args=false
                 parsing_compile_args=true
+                shift
+                ;;
+            "-g")
+                debug_mode=true
                 shift
                 ;;
             *)
@@ -1057,15 +1069,18 @@ run_execute() {
         std_flag="-std=c17"
     fi
     
+    # Build cgeist flags
+    local cgeist_flags=("$std_flag" "-fopenmp" "-O0" "-S")
+
     if [[ -n "$CARTS_VERBOSE" ]]; then
-        carts_debug "Running: carts cgeist $input_file $std_flag -fopenmp -O0 -S > ${base_name}.mlir"
+        carts_debug "Running: carts cgeist $input_file ${cgeist_flags[*]} > ${base_name}.mlir"
     fi
     
     # Temporarily disable verbose output for file generation
     local original_verbose="$CARTS_VERBOSE"
     unset CARTS_VERBOSE
     
-    if ! carts cgeist "$input_file" $std_flag -fopenmp -O0 -S > "${base_name}.mlir"; then
+    if ! carts cgeist "$input_file" "${cgeist_flags[@]}" > "${base_name}.mlir"; then
         carts_error "Failed to convert C++ to MLIR"
         exit 1
     fi
@@ -1075,6 +1090,9 @@ run_execute() {
     
     # Build the carts run command with additional args
     local run_cmd_args=("${base_name}.mlir" "--O3" "--emit-llvm")
+    if [[ "$debug_mode" == "true" ]]; then
+        run_cmd_args+=("-g")
+    fi
     
     # Add any additional run arguments
     if [[ ${#run_args[@]} -gt 0 ]]; then
@@ -1100,6 +1118,9 @@ run_execute() {
     
     # Build the compile command with additional args
     local compile_cmd_args=("${base_name}-arts.ll" "-o" "${base_name}")
+    if [[ "$debug_mode" == "true" ]]; then
+        compile_cmd_args+=("-g")
+    fi
     if [[ ${#compile_args[@]} -gt 0 ]]; then
         compile_cmd_args+=("${compile_args[@]}")
     fi
