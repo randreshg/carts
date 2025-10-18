@@ -44,7 +44,7 @@ def ConvertOpenMPToArts : Pass<"convert-openmp-to-arts", "mlir::ModuleOp"> {
     "arts::ArtsDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createConvertOpenMPtoARTSPass()";
+  let constructor = "mlir::arts::createConvertOpenMPtoArtsPass()";
 }
 
 def Db : Pass<"db", "mlir::ModuleOp"> {

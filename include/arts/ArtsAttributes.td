@@ -127,6 +127,17 @@ def EdtConcurrency : Arts_I32Enum<"EdtConcurrency",
 /// Enum attribute for EDT concurrency types
 def EdtConcurrencyAttr : Arts_I32EnumAttr<"concurrency", EdtConcurrency>;
 
+/// Enum info for reduction kinds
+def ReductionKind : Arts_I32Enum<"ReductionKind",
+    "ARTS reduction operation kind",
+    [
+      I32EnumAttrCase<"add", 0, "add">,
+      I32EnumAttrCase<"mul", 1, "mul">
+    ]>;
+
+/// Enum attribute for reduction kinds
+def ReductionKindAttr : Arts_I32EnumAttr<"reduction_kind", ReductionKind>;
+
 /// Integer attribute for storing number of workers for EDT operations
 def WorkersAttr : AttrDef<ArtsDialect, "workers"> {
   let summary = "Number of parallel workers for EDT operations";

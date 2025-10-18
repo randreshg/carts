@@ -2,7 +2,7 @@
 /// File: ConvertOpenMPToArts.cpp
 //
 // This file implements a module pass that converts OpenMP ops
-// (omp.parallel, omp.master, omp.task, etc.) into ARTS ops
+// (omp.parallel, omp.master, omp.task, etc.) into Arts ops
 ///==========================================================================
 
 /// Dialects
@@ -321,7 +321,7 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
     auto upperBound = op.getUpperBound()[0];
     auto step = op.getStep()[0];
 
-    /// Map OpenMP schedule to ARTS ForScheduleKindAttr if present
+    /// Map OpenMP schedule to Arts ForScheduleKindAttr if present
     arts::ForScheduleKindAttr schedAttr = nullptr;
     if (auto sched = op.getScheduleVal()) {
       switch (*sched) {
@@ -564,7 +564,7 @@ struct ConvertOpenMPToArtsPass
 };
 } // end namespace
 
-/// Pass to convert OpenMP operations to ARTS operations
+/// Pass to convert OpenMP operations to Arts operations
 void ConvertOpenMPToArtsPass::runOnOperation() {
   ModuleOp module = getOperation();
   ARTS_INFO_HEADER(ConvertOpenMPToArtsPass);
@@ -589,7 +589,7 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
 //===----------------------------------------------------------------------===//
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createConvertOpenMPtoARTSPass() {
+std::unique_ptr<Pass> createConvertOpenMPtoArtsPass() {
   return std::make_unique<ConvertOpenMPToArtsPass>();
 }
 } // namespace arts
