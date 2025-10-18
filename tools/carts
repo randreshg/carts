@@ -37,17 +37,310 @@ fi
 # macOS specific paths
 MACOS_SDK_PATH="/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"
 
-# Function to detect OS and set appropriate paths
-detect_os_paths() {
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        SYSTEM_INCLUDE_PATH="${MACOS_SDK_PATH}/usr/include"
-        SYSTEM_CXX_INCLUDE_PATH="${MACOS_SDK_PATH}/usr/include/c++/v1"
-    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        SYSTEM_INCLUDE_PATH="/usr/include"
-        SYSTEM_CXX_INCLUDE_PATH="/usr/include/c++/v1"
-    else
-        carts_error "Unsupported OS: $OSTYPE"
-        exit 1
+# Platform configuration variables populated during initialization
+CARTS_HOST_OS=""
+CARTS_HOST_ARCH="$(uname -m 2>/dev/null || echo unknown)"
+SYSTEM_INCLUDE_PATH=""
+SYSTEM_CXX_INCLUDE_PATH=""
+CARTS_INCLUDE_FLAGS=()
+CARTS_CGEIST_SYSROOT_FLAGS=()
+CARTS_CLANG_SYSROOT_FLAGS=()
+CARTS_CLANG_LIBRARY_FLAGS=()
+CARTS_COMPILE_LIBRARY_FLAGS=()
+CARTS_CLANG_LIBRARIES=()
+CARTS_COMPILE_LIBRARIES=()
+CARTS_COMPILE_FLAGS=()
+CARTS_LINKER_FLAGS=()
+
+# Function to detect host configuration and populate shared flags
+detect_host_config() {
+    # Reset configurable arrays to ensure clean reinitialization
+    CARTS_INCLUDE_FLAGS=(
+        # OpenMP and clang resource headers
+        "-I${LLVM_INCLUDE_PATH}"
+    )
+
+    CARTS_CLANG_LIBRARY_FLAGS=()
+    CARTS_COMPILE_LIBRARY_FLAGS=()
+    CARTS_CLANG_LIBRARY_FLAGS+=(
+        # ARTS runtime libraries
+        "-L${ARTS_INSTALL_DIR}/lib"
+        # LLVM target-specific libraries
+        "-L${LLVM_LIB_PATH}"
+        # LLVM libraries
+        "-L${LLVM_INSTALL_DIR}/lib"
+    )
+    CARTS_COMPILE_LIBRARY_FLAGS+=(
+        # ARTS runtime libraries
+        "-L${ARTS_INSTALL_DIR}/lib"
+        # LLVM target-specific libraries
+        "-L${LLVM_LIB_PATH}"
+        # LLVM libraries
+        "-L${LLVM_INSTALL_DIR}/lib"
+    )
+
+    CARTS_CLANG_LIBRARIES=(
+        # C++ standard library
+        "-lc++"
+        # C++ ABI library
+        "-lc++abi"
+        # Unwind library
+        "-lunwind"
+    )
+
+    CARTS_COMPILE_LIBRARIES=(
+        # ARTS runtime
+        "-larts"
+        # OpenMP runtime
+        "-lomp"
+        # C++ standard library
+        "-lc++"
+        # C++ ABI library
+        "-lc++abi"
+        # Unwind library
+        "-lunwind"
+    )
+
+    CARTS_COMPILE_FLAGS=(
+        # Default optimization level
+        "-O3"
+    )
+
+    CARTS_CGEIST_SYSROOT_FLAGS=()
+    CARTS_CLANG_SYSROOT_FLAGS=()
+
+    case "$OSTYPE" in
+        darwin*)
+            CARTS_HOST_OS="macos"
+            SYSTEM_INCLUDE_PATH="${MACOS_SDK_PATH}/usr/include"
+            SYSTEM_CXX_INCLUDE_PATH="${MACOS_SDK_PATH}/usr/include/c++/v1"
+            CARTS_INCLUDE_FLAGS+=(
+                # System C headers from SDK
+                "-I${SYSTEM_INCLUDE_PATH}"
+                # System libc++ headers from SDK
+                "-I${SYSTEM_CXX_INCLUDE_PATH}"
+            )
+            CARTS_CGEIST_SYSROOT_FLAGS=(
+                # cgeist expects --sysroot on macOS
+                "--sysroot" "${MACOS_SDK_PATH}"
+            )
+            CARTS_CLANG_SYSROOT_FLAGS=(
+                # clang uses -isysroot on macOS
+                "-isysroot" "${MACOS_SDK_PATH}"
+            )
+            CARTS_CLANG_LIBRARY_FLAGS+=(
+                # Linker runtime search path for ARTS
+                "-Wl,-rpath,${ARTS_INSTALL_DIR}/lib"
+            )
+            CARTS_COMPILE_LIBRARY_FLAGS+=(
+                # Linker runtime search path for ARTS
+                "-Wl,-rpath,${ARTS_INSTALL_DIR}/lib"
+                # Linker runtime search path for LLVM
+                "-Wl,-rpath,${LLVM_INSTALL_DIR}/lib"
+            )
+            if [[ "$CARTS_HOST_ARCH" == "x86_64" ]]; then
+                CARTS_COMPILE_FLAGS+=(
+                    # Force non-PIE output on x86_64 builds
+                    "-fno-pie"
+                    "-Wl,-no_pie"
+                )
+            fi
+            ;;
+        linux-gnu*|linux-musl*|linux*)
+            CARTS_HOST_OS="linux"
+            SYSTEM_INCLUDE_PATH="/usr/include"
+            SYSTEM_CXX_INCLUDE_PATH="/usr/include/c++/v1"
+            CARTS_INCLUDE_FLAGS+=(
+                # System C headers
+                "-I${SYSTEM_INCLUDE_PATH}"
+                # System libc++ headers
+                "-I${SYSTEM_CXX_INCLUDE_PATH}"
+            )
+            CARTS_CLANG_LIBRARY_FLAGS+=(
+                # Linker runtime search path for ARTS
+                "-Wl,-rpath,${ARTS_INSTALL_DIR}/lib"
+            )
+            CARTS_COMPILE_LIBRARY_FLAGS+=(
+                # Linker runtime search path for ARTS
+                "-Wl,-rpath,${ARTS_INSTALL_DIR}/lib"
+                # Linker runtime search path for LLVM
+                "-Wl,-rpath,${LLVM_INSTALL_DIR}/lib"
+                # System library directories
+                "-L/usr/lib"
+                "-L/usr/lib64"
+            )
+            CARTS_CLANG_LIBRARIES+=(
+                # POSIX threading library
+                "-lpthread"
+                # POSIX realtime library
+                "-lrt"
+            )
+            CARTS_COMPILE_LIBRARIES+=(
+                # POSIX threading library
+                "-lpthread"
+                # POSIX realtime library
+                "-lrt"
+            )
+            CARTS_COMPILE_FLAGS+=(
+                # Force non-PIE output on Linux
+                "-fno-pie"
+                "-no-pie"
+            )
+            ;;
+        msys*|cygwin*|mingw*|win32*)
+            CARTS_HOST_OS="windows"
+            local sdk_dir="${WindowsSdkDir:-${WINDOWSSDKDIR:-}}"
+            local sdk_version="${WindowsSDKVersion:-${WINDOWSSDKVERSION:-}}"
+            local vc_tools_dir="${VCToolsInstallDir:-}"
+            local arch="${CARTS_WINDOWS_ARCH:-x64}"
+
+            if [[ -z "$sdk_dir" || -z "$sdk_version" ]]; then
+                carts_error "Windows SDK environment not detected. Please run inside a Visual Studio developer command prompt or set WindowsSdkDir and WindowsSDKVersion."
+                exit 1
+            fi
+
+            if [[ -z "$vc_tools_dir" ]]; then
+                carts_error "VCToolsInstallDir is not set. Please run inside a Visual Studio developer command prompt."
+                exit 1
+            fi
+
+            sdk_dir="${sdk_dir%/}"
+            sdk_version="${sdk_version%/}"
+            vc_tools_dir="${vc_tools_dir%/}"
+
+            SYSTEM_INCLUDE_PATH="${sdk_dir}/Include/${sdk_version}/ucrt"
+            SYSTEM_CXX_INCLUDE_PATH="${vc_tools_dir}/include"
+
+            if [[ ! -d "${SYSTEM_CXX_INCLUDE_PATH}" ]]; then
+                carts_error "MSVC include directory not found at ${SYSTEM_CXX_INCLUDE_PATH}"
+                exit 1
+            fi
+
+            if [[ ! -d "${sdk_dir}/Include/${sdk_version}" ]]; then
+                carts_error "Windows SDK headers not found at ${sdk_dir}/Include/${sdk_version}"
+                exit 1
+            fi
+
+            CARTS_INCLUDE_FLAGS+=(
+                # Windows SDK universal CRT headers
+                "-I${sdk_dir}/Include/${sdk_version}/ucrt"
+                # Windows SDK shared headers
+                "-I${sdk_dir}/Include/${sdk_version}/shared"
+                # Windows SDK UM headers
+                "-I${sdk_dir}/Include/${sdk_version}/um"
+                # MSVC standard library headers
+                "-I${vc_tools_dir}/include"
+            )
+
+            CARTS_CLANG_LIBRARY_FLAGS+=(
+                # Windows SDK universal CRT libraries
+                "-L${sdk_dir}/Lib/${sdk_version}/ucrt/${arch}"
+                # Windows SDK UM libraries
+                "-L${sdk_dir}/Lib/${sdk_version}/um/${arch}"
+                # MSVC toolchain libraries
+                "-L${vc_tools_dir}/lib/${arch}"
+            )
+
+            CARTS_COMPILE_LIBRARY_FLAGS+=(
+                # Windows SDK universal CRT libraries
+                "-L${sdk_dir}/Lib/${sdk_version}/ucrt/${arch}"
+                # Windows SDK UM libraries
+                "-L${sdk_dir}/Lib/${sdk_version}/um/${arch}"
+                # MSVC toolchain libraries
+                "-L${vc_tools_dir}/lib/${arch}"
+            )
+
+            if [[ ! -d "${sdk_dir}/Lib/${sdk_version}/ucrt/${arch}" || ! -d "${sdk_dir}/Lib/${sdk_version}/um/${arch}" ]]; then
+                carts_error "Windows SDK libraries not found for architecture ${arch} under ${sdk_dir}/Lib/${sdk_version}"
+                exit 1
+            fi
+
+            if [[ ! -d "${vc_tools_dir}/lib/${arch}" ]]; then
+                carts_error "MSVC toolchain libraries not found at ${vc_tools_dir}/lib/${arch}"
+                exit 1
+            fi
+
+            # Windows builds rely on MSVC runtime, so remove libc++ specific libraries
+            CARTS_CLANG_LIBRARIES=()
+            CARTS_COMPILE_LIBRARIES=(
+                # ARTS runtime
+                "-larts"
+                # OpenMP runtime
+                "-lomp"
+            )
+            CARTS_COMPILE_FLAGS+=(
+                # Suppress linker banner noise on Windows
+                "-Xlinker" "/NOLOGO"
+            )
+            ;;
+        *)
+            carts_error "Unsupported OS: $OSTYPE"
+            exit 1
+            ;;
+    esac
+
+    CARTS_INCLUDE_FLAGS+=(
+        # ARTS runtime headers
+        "-I${ARTS_INSTALL_DIR}/include"
+        # LLVM includes
+        "-I${LLVM_INSTALL_DIR}/include"
+    )
+}
+
+# Function to detect and configure appropriate linker
+detect_linker_config() {
+    local linker_type=""
+    local linker_path=""
+    CARTS_LINKER_FLAGS=()
+    
+    # Check if we have an installed lld
+    case "$CARTS_HOST_OS" in
+        macos)
+            if [[ -f "${LLVM_INSTALL_DIR}/bin/ld64.lld" ]]; then
+                linker_type="lld"
+                linker_path="${LLVM_INSTALL_DIR}/bin/ld64.lld"
+            elif [[ -f "${LLVM_INSTALL_DIR}/bin/lld" ]]; then
+                linker_type="lld"
+                linker_path="${LLVM_INSTALL_DIR}/bin/lld"
+            fi
+            ;;
+        linux)
+            if [[ -f "${LLVM_INSTALL_DIR}/bin/ld.lld" ]]; then
+                linker_type="lld"
+                linker_path="${LLVM_INSTALL_DIR}/bin/ld.lld"
+            elif [[ -f "${LLVM_INSTALL_DIR}/bin/lld" ]]; then
+                linker_type="lld"
+                linker_path="${LLVM_INSTALL_DIR}/bin/lld"
+            fi
+            ;;
+        windows)
+            if [[ -f "${LLVM_INSTALL_DIR}/bin/lld-link.exe" ]]; then
+                linker_type="lld-link"
+                linker_path="${LLVM_INSTALL_DIR}/bin/lld-link.exe"
+            elif [[ -f "${LLVM_INSTALL_DIR}/bin/lld-link" ]]; then
+                linker_type="lld-link"
+                linker_path="${LLVM_INSTALL_DIR}/bin/lld-link"
+            fi
+            ;;
+        *)
+            ;;
+    esac
+
+    if [[ -n "$linker_path" ]]; then
+        if [[ "$CARTS_HOST_OS" == "windows" ]]; then
+            CARTS_LINKER_FLAGS+=("-fuse-ld=lld")
+            CARTS_LINKER_FLAGS+=("--ld-path=${linker_path}")
+        else
+            CARTS_LINKER_FLAGS+=("--ld-path=${linker_path}")
+        fi
+    fi
+    
+    # Export linker configuration for use by other functions
+    export CARTS_LINKER_TYPE="$linker_type"
+    export CARTS_LINKER_PATH="$linker_path"
+    
+    if [[ -n "$CARTS_VERBOSE" && -n "$linker_type" ]]; then
+        carts_debug "Detected linker: $linker_type at $linker_path"
     fi
 }
 
@@ -159,29 +452,16 @@ run_cgeist() {
         exit 1
     fi
     
-    # Build include paths - use system C++ headers for compatibility, LLVM libraries for linking
-    local include_paths=(
-        # OpenMP and clang resource headers
-        "-I${LLVM_INCLUDE_PATH}"
-        # System C headers from SDK
-        "-I${SYSTEM_INCLUDE_PATH}"
-        # System libc++ headers from SDK 
-        "-I${SYSTEM_CXX_INCLUDE_PATH}"
-        # ARTS runtime headers
-        "-I${ARTS_INSTALL_DIR}/include"
-        # LLVM includes
-        "-I${LLVM_INSTALL_DIR}/include"
-    )
-
-    local extra_cflags=()
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        # cgeist expects --sysroot instead of -isysroot
-        extra_cflags+=("--sysroot" "${MACOS_SDK_PATH}")
-    fi
+    # Use shared include and sysroot configuration populated during host detection
+    local include_paths=("${CARTS_INCLUDE_FLAGS[@]}")
+    local extra_cflags=("${CARTS_CGEIST_SYSROOT_FLAGS[@]}")
     
     if [[ -n "$CARTS_VERBOSE" ]]; then
         carts_debug "Running cgeist with include paths:"
         printf "  %s\n" "${include_paths[@]}"
+        if [[ ${#extra_cflags[@]} -gt 0 ]]; then
+            carts_debug "Additional cgeist flags: ${extra_cflags[*]}"
+        fi
         carts_debug "Command: ${POLYGEIST_INSTALL_DIR}/bin/cgeist ${include_paths[*]} ${extra_cflags[*]} $input_file $*"
     fi
     
@@ -207,51 +487,25 @@ run_clang() {
         exit 1
     fi
 
-    # Build include paths (same as cgeist)
-    local include_paths=(
-        "-I${LLVM_INCLUDE_PATH}"
-        "-I${SYSTEM_INCLUDE_PATH}"
-        "-I${SYSTEM_CXX_INCLUDE_PATH}"
-        "-I${ARTS_INSTALL_DIR}/include"
-        "-I${LLVM_INSTALL_DIR}/include"
-    )
-
-    # Build library paths
-    local library_paths=(
-        "-L${ARTS_INSTALL_DIR}/lib"
-        "-L${LLVM_LIB_PATH}"
-        "-L${LLVM_INSTALL_DIR}/lib"
-        "-Wl,-rpath,${ARTS_INSTALL_DIR}/lib"
-        "-Wl,-rpath,${LLVM_LIB_PATH}"
-    )
-
-    # Add macOS specific paths
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        library_paths+=("-isysroot" "${MACOS_SDK_PATH}")
-    fi
-
-    # Libraries for C++
-    local libraries=(
-        "-lc++"
-        "-lc++abi"
-        "-lunwind"
-    )
-
-    # Add system libraries for Linux
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        libraries+=("-lpthread")
-        libraries+=("-lrt")
-    fi
+    # Use shared include, library, sysroot, and linker configuration
+    local include_paths=("${CARTS_INCLUDE_FLAGS[@]}")
+    local sysroot_flags=("${CARTS_CLANG_SYSROOT_FLAGS[@]}")
+    local library_paths=("${CARTS_CLANG_LIBRARY_FLAGS[@]}")
+    local linker_flags=("${CARTS_LINKER_FLAGS[@]}")
+    local libraries=("${CARTS_CLANG_LIBRARIES[@]}")
 
     if [[ -n "$CARTS_VERBOSE" ]]; then
         carts_debug "Running LLVM clang with:"
         carts_debug "Include paths: ${include_paths[*]}"
-        carts_debug "Library paths: ${library_paths[*]}"
+        if [[ ${#sysroot_flags[@]} -gt 0 ]]; then
+            carts_debug "Sysroot flags: ${sysroot_flags[*]}"
+        fi
+        carts_debug "Library and linker flags: ${library_paths[*]} ${linker_flags[*]}"
         carts_debug "Libraries: ${libraries[*]}"
-        carts_debug "Command: ${clang_path} ${include_paths[*]} ${library_paths[*]} -fopenmp $input_file ${libraries[*]} $*"
+        carts_debug "Command: ${clang_path} ${include_paths[*]} ${sysroot_flags[*]} ${library_paths[*]} ${linker_flags[*]} -fopenmp $input_file ${libraries[*]} $*"
     fi
 
-    "${clang_path}" "${include_paths[@]}" "${library_paths[@]}" -fopenmp "$input_file" "${libraries[@]}" "$@"
+    "${clang_path}" "${include_paths[@]}" "${sysroot_flags[@]}" "${library_paths[@]}" "${linker_flags[@]}" -fopenmp "$input_file" "${libraries[@]}" "$@"
 }
 
 
@@ -260,7 +514,7 @@ run_run() {
     if [[ -n "$CARTS_VERBOSE" ]]; then
         carts_debug "Running carts-run: ${CARTS_INSTALL_DIR}/bin/carts-run $*"
     fi
-    
+
     "${CARTS_INSTALL_DIR}/bin/carts-run" "$@"
 }
 
@@ -278,6 +532,20 @@ run_compile() {
     local input_file="$1"
     shift
     
+    # Handle help flag
+    if [[ "$input_file" == "--help" || "$input_file" == "-h" ]]; then
+        carts_info "Compile options:"
+        carts_info "  <input_file>        Input LLVM IR file (.ll)"
+        carts_info "  -o <output>         Output executable name"
+        carts_info "  -g                  Embed DWARF debug symbols in the final binary"
+        carts_info "  --help, -h          Show this help"
+        carts_info ""
+        carts_info "Examples:"
+        carts_info "  carts compile simple.ll -o simple"
+        carts_info "  carts compile simple.ll -o simple -g"
+        exit 0
+    fi
+    
     if [[ ! -f "$input_file" ]]; then
         carts_error "Input file '$input_file' not found"
         exit 1
@@ -291,58 +559,35 @@ run_compile() {
         exit 1
     fi
     
-    # Build library paths
-    local library_paths=(
-        "-L${ARTS_INSTALL_DIR}/lib"
-        "-L${LLVM_LIB_PATH}"
-        "-L${LLVM_INSTALL_DIR}/lib"
-        "-Wl,-rpath,${ARTS_INSTALL_DIR}/lib"
-        "-Wl,-rpath,${LLVM_LIB_PATH}"
-        "-Wl,-rpath,${LLVM_INSTALL_DIR}/lib"
-    )
+    # Reuse host-specific configuration collected earlier
+    local library_paths=("${CARTS_COMPILE_LIBRARY_FLAGS[@]}")
+    local libraries=("${CARTS_COMPILE_LIBRARIES[@]}")
+    local sysroot_flags=("${CARTS_CLANG_SYSROOT_FLAGS[@]}")
+    local linker_flags=("${CARTS_LINKER_FLAGS[@]}")
     
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        library_paths+=("-isysroot" "${MACOS_SDK_PATH}")
-        library_paths+=("-Wl,-rpath,${LLVM_INSTALL_DIR}/lib")
-    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        library_paths+=("-L/usr/lib")
-        library_paths+=("-L/usr/lib64")
-    fi
-    
-    local libraries=(
-        "-larts"
-        "-lomp"
-        "-lc++"
-        "-lc++abi"
-        "-lunwind"
-    )
-    
-    # Add system libraries only if absolutely necessary
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        libraries+=("-lpthread")
-        libraries+=("-lrt")
-    fi
-    
-    # Build compile flags and force non-PIE output so function pointers remain
-    # stable across nodes (required for remote EDT execution).
-    local compile_flags=("-O3")
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        compile_flags+=("-fno-pie" "-Wl,-no_pie")
-    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        compile_flags+=("-fno-pie" "-no-pie")
-    fi
+    # Build compile flags and force non-PIE output when required so function
+    # pointers remain stable across nodes (required for remote EDT execution).
+    local compile_flags=("${CARTS_COMPILE_FLAGS[@]}")
 
     if [[ -n "$CARTS_VERBOSE" ]]; then
         carts_debug "Running LLVM clang with compile flags:"
         printf "  %s\n" "${compile_flags[@]}"
-        carts_debug "Library paths:"
-        printf "  %s\n" "${library_paths[@]}"
+        if [[ ${#sysroot_flags[@]} -gt 0 ]]; then
+            carts_debug "Sysroot flags:"
+            printf "  %s\n" "${sysroot_flags[@]}"
+        fi
+        carts_debug "Library and linker flags:"
+        local combined_flags=("${library_paths[@]}" "${linker_flags[@]}")
+        printf "  %s\n" "${combined_flags[@]}"
         carts_debug "Libraries:"
         printf "  %s\n" "${libraries[@]}"
-        carts_debug "Command: $clang_path ${compile_flags[*]} ${library_paths[*]} ${libraries[*]} $input_file $*"
+        if [[ -n "$CARTS_LINKER_PATH" ]]; then
+            carts_debug "Using linker: $CARTS_LINKER_PATH"
+        fi
+        carts_debug "Command: $clang_path ${compile_flags[*]} ${sysroot_flags[*]} ${library_paths[*]} ${linker_flags[*]} ${libraries[*]} $input_file $*"
     fi
     
-    "$clang_path" "${compile_flags[@]}" "${library_paths[@]}" "${libraries[@]}" "$input_file" "$@"
+    "$clang_path" "${compile_flags[@]}" "${sysroot_flags[@]}" "${library_paths[@]}" "${linker_flags[@]}" "${libraries[@]}" "$input_file" "$@"
 }
 
 # Function to run benchmark tool
@@ -502,11 +747,19 @@ run_build() {
     # Build make command with variables
     local make_vars=""
     if [[ "$arts_introspection" == "true" ]]; then
-        make_vars="$make_vars ARTS_COUNTERS=ON ARTS_METRICS=ON"
+        make_vars="$make_vars ARTS_USE_COUNTERS=ON ARTS_USE_METRICS=ON"
     fi
-    if [[ "$arts_debug_level" != "none" ]]; then
-        make_vars="$make_vars ARTS_DEBUG_LEVEL=$arts_debug_level"
-    fi
+
+    # Handle debug level flags
+    case "$arts_debug_level" in
+        "info")
+            make_vars="$make_vars ARTS_INFO_ENABLED=ON"
+            ;;
+        "debug")
+            make_vars="$make_vars ARTS_DEBUG_ENABLED=ON ARTS_INFO_ENABLED=ON"
+            ;;
+    esac
+
     if [[ "$arts_build_type" != "Release" ]]; then
         make_vars="$make_vars ARTS_BUILD_TYPE=$arts_build_type"
     fi
@@ -1148,8 +1401,14 @@ run_execute() {
 
 # Main script logic
 main() {
-    # Detect OS and set paths
-    detect_os_paths
+    # Set LLVM_SYMBOLIZER_PATH for better stack traces on crashes
+    export LLVM_SYMBOLIZER_PATH="${LLVM_INSTALL_DIR}/bin/llvm-symbolizer"
+
+    # Detect host configuration and set shared flags
+    detect_host_config
+
+    # Detect and configure appropriate linker
+    detect_linker_config
     
     # Check if we have a command
     if [[ $# -eq 0 ]]; then

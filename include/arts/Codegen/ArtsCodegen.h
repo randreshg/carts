@@ -27,6 +27,7 @@ public:
   ~ArtsCodegen();
 
   /// Getters
+  MLIRContext *getContext() { return getBuilder().getContext(); }
   OpBuilder &getBuilder() { return activeRewriter ? *activeRewriter : builder; }
   ModuleOp &getModule() { return module; }
 
@@ -108,6 +109,7 @@ public:
   Value castToLLVMPtr(Value source, Location loc);
 
   /// Memref helpers
+  LLVM::LLVMPointerType getLLVMPointerType(Value source);
   Value computeElementTypeSize(Type elementType, Location loc);
   Value computeTotalElements(ValueRange sizes, Location loc);
   Value computeLinearIndex(ArrayRef<Value> sizes, ArrayRef<Value> indices,

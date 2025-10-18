@@ -68,10 +68,14 @@ include_directories(${PROJECT_BINARY_DIR}/include)
 link_directories(${LLVM_BUILD_LIBRARY_DIR})
 add_definitions(${LLVM_DEFINITIONS})
 
-# Suppress common LLVM/MLIR linker warnings on macOS
-if(APPLE)
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-no_warn_duplicate_libraries")
-  message(STATUS "Added macOS linker flags to suppress duplicate library warnings")
+
+# Linker configuration
+option(CARTS_USE_LINKER "Specify linker to use for CARTS builds" "")
+if(CARTS_USE_LINKER)
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} --ld-path=${CARTS_USE_LINKER} -w")
+  set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} --ld-path=${CARTS_USE_LINKER} -w")
+  set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} --ld-path=${CARTS_USE_LINKER} -w")
+  message(STATUS "Using custom linker: ${CARTS_USE_LINKER}")
 endif()
 
 # ARTS introspection options

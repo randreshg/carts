@@ -7,14 +7,14 @@
 int main(int argc, char *argv[]) {
   /// Check for the correct number of arguments
   if (argc != 3) {
-    fprintf(stderr, "Usage: %s <matrix_size> <block_size>\n", argv[0]);
+    printf("Usage: %s <matrix_size> <block_size>\n", argv[0]);
     return EXIT_FAILURE;
   }
 
   const int N = atoi(argv[1]);
   const int BS = atoi(argv[2]);
   if (N <= 0 || BS <= 0) {
-    fprintf(stderr, "Matrix size and block size must be positive integers.\n");
+    printf("Matrix size and block size must be positive integers.\n");
     return EXIT_FAILURE;
   }
 
@@ -38,6 +38,23 @@ int main(int argc, char *argv[]) {
       C_parallel[i][j] = 0.0f;
       C_sequential[i][j] = 0.0f;
     }
+  }
+
+  /// Print A and B
+  printf("Matrix A:\n");
+  for (int i = 0; i < N; i++) {
+    printf("  ");
+    for (int j = 0; j < N; j++)
+      printf("%6.2f ", A[i][j]);
+    printf("\n");
+  }
+
+  printf("\nMatrix B:\n");
+  for (int i = 0; i < N; i++) {
+    printf("  ");
+    for (int j = 0; j < N; j++)
+      printf("%6.2f ", B[i][j]);
+    printf("\n");
   }
 
   /// Parallel computation
@@ -73,6 +90,15 @@ int main(int argc, char *argv[]) {
         sum += A[i][k] * B[k][j];
       C_sequential[i][j] = sum;
     }
+  }
+
+  /// Print C parallel
+  printf("\nMatrix C (Parallel Result):\n");
+  for (int i = 0; i < N; i++) {
+    printf("  ");
+    for (int j = 0; j < N; j++)
+      printf("%8.2f ", C_parallel[i][j]);
+    printf("\n");
   }
 
   /// Verification

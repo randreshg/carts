@@ -20,6 +20,8 @@ ARTS_INSTALL_DIR ?=$(INSTALL_DIR)/arts
 LLVM_INSTALL_DIR ?=$(INSTALL_DIR)/llvm
 POLYGEIST_INSTALL_DIR ?=$(INSTALL_DIR)/polygeist
 
+CARTS_LINKER_PATH ?= ${LLVM_INSTALL_DIR}/bin/ld.lld
+
 # Build Directories
 CARTS_BUILD_DIR=build
 ARTS_BUILD_DIR =$(ARTS_DIR)/build
@@ -50,7 +52,8 @@ polygeist:
 		-DMLIR_DIR=$(LLVM_BUILD_DIR)/lib/cmake/mlir \
 		-DClang_DIR=$(LLVM_BUILD_DIR)/lib/cmake/clang \
 		-DLLVM_EXTERNAL_LIT="$(LLVM_BUILD_DIR)/bin/llvm-lit" \
-		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+		-DPOLYGEIST_USE_LINKER="$(CARTS_LINKER_PATH)";
 	ninja -C $(POLYGEIST_BUILD_DIR) install;
 polygeist-clean:
 	rm -f -r $(POLYGEIST_BUILD_DIR)
@@ -87,12 +90,14 @@ llvm-clean:
 	rm -f -r $(LLVM_INSTALL_DIR)
 
 # ARTS
-ARTS_DEBUG_LEVEL ?= none
 ARTS_BUILD_TYPE ?= Release
 # Introspection is disabled by default for performance
-# Use ARTS_COUNTERS=ON and ARTS_METRICS=ON to enable introspection
-ARTS_COUNTERS ?= OFF
-ARTS_METRICS ?= OFF
+# Use ARTS_USE_COUNTERS=ON and ARTS_USE_METRICS=ON to enable introspection
+ARTS_USE_COUNTERS ?= OFF
+ARTS_USE_METRICS ?= OFF
+# Logging levels (disabled by default for performance)
+ARTS_INFO_ENABLED ?= OFF
+ARTS_DEBUG_ENABLED ?= OFF
 
 arts-download:
 	@if [ ! -d "$(ARTS_DIR)/.git" ]; then \
@@ -102,19 +107,22 @@ arts-download:
 		echo "ARTS submodule already initialized."; \
 	fi
 arts:
-	echo "Building ARTS (debug_level=$(ARTS_DEBUG_LEVEL), build_type=$(ARTS_BUILD_TYPE), counters=$(ARTS_COUNTERS), metrics=$(ARTS_METRICS))..."; \
+	echo "Building ARTS (build_type=$(ARTS_BUILD_TYPE), counters=$(ARTS_USE_COUNTERS), metrics=$(ARTS_USE_METRICS), info=$(ARTS_INFO_ENABLED), debug=$(ARTS_DEBUG_ENABLED))..."; \
 	mkdir -p $(ARTS_BUILD_DIR); \
 	mkdir -p $(ARTS_INSTALL_DIR); \
 	cmake -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) \
 		-DCMAKE_C_COMPILER=clang \
 		-DCMAKE_CXX_COMPILER=clang++ \
 		-DCMAKE_BUILD_TYPE=$(ARTS_BUILD_TYPE) \
-		-DARTS_DEBUG_LEVEL=$(ARTS_DEBUG_LEVEL) \
-		-DSMART_DB=ON \
-		-DCOUNTERS=$(ARTS_COUNTERS) \
-		-DMETRICS=$(ARTS_METRICS) \
+		-DUSE_GPU=OFF \
+		-DUSE_SMART_DB=ON \
+		-DUSE_COUNTERS=$(ARTS_USE_COUNTERS) \
+		-DUSE_METRICS=$(ARTS_USE_METRICS) \
+		-DARTS_INFO_ENABLED=$(ARTS_INFO_ENABLED) \
+		-DARTS_DEBUG_ENABLED=$(ARTS_DEBUG_ENABLED) \
 		-DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR) \
-		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+		-DARTS_USE_LINKER="$(CARTS_LINKER_PATH)"; 
 	make -C $(ARTS_BUILD_DIR) install -j;
 arts-clean:
 	rm -f -r $(ARTS_BUILD_DIR)
@@ -135,13 +143,14 @@ build:
 		-DClang_DIR=$(LLVM_BUILD_DIR)/lib/cmake/clang \
 		-DPOLYGEIST_BUILD_DIR=$(POLYGEIST_BUILD_DIR) \
 		-DPOLYGEIST_DIR=$(POLYGEIST_DIR) \
-		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON 
+		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+		-DCARTS_USE_LINKER="$(CARTS_LINKER_PATH)" 
 		ninja $(NINJA_FLAGS) -C $(CARTS_BUILD_DIR) install
 
 install: arts-download polygeist-download llvm arts polygeist build
 
 uninstall:
-	-cat $(BUILD_DIR)/install_manifest.txt | xargs rm -f -r
+	cat $(BUILD_DIR)/install_manifest.txt | xargs rm -f -r
 	rm -rf $(BUILD_DIR)
 
 fulluninstall: uninstall arts-clean

@@ -20,6 +20,7 @@ class DominanceInfo;
 namespace arts {
 class ArtsAnalysisManager;
 std::unique_ptr<Pass> createArtsInlinerPass();
+std::unique_ptr<Pass> createPreprocessNestedAllocationsPass();
 std::unique_ptr<Pass> createConvertOpenMPtoARTSPass();
 std::unique_ptr<Pass> createEdtPass(ArtsAnalysisManager *AM, bool runAnalysis);
 std::unique_ptr<Pass> createConcurrencyPass(ArtsAnalysisManager *AM);
@@ -30,7 +31,8 @@ std::unique_ptr<Pass> createConvertArtsToLLVMPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug);
 std::unique_ptr<Pass> createEdtInvariantCodeMotionPass();
 std::unique_ptr<Pass> createEdtPtrRematerializationPass();
-std::unique_ptr<Pass> createNormalizeDbsPass();
+std::unique_ptr<Pass> createCanonicalizeDbsPass();
+std::unique_ptr<Pass> createDbLoweringPass();
 std::unique_ptr<Pass> createEpochLoweringPass();
 std::unique_ptr<Pass> createEdtLoweringPass();
 } // namespace arts

@@ -68,8 +68,6 @@ def AllocOp : Arts_Op<"alloc", []> {
 //===----------------------------------------------------------------------===//
 // Arts DB Operations
 //===----------------------------------------------------------------------===//
-// Query a datablock-backed memref dimension. Prefer this over memref.dim so
-// we can canonicalize using DB metadata.
 def DbDimOp : Arts_Op<"db_dim", [Pure]> {
   let summary = "Query dimension of a datablock-backed memref";
   let description = [{
@@ -97,7 +95,7 @@ def DbAllocOp : Arts_Op<"db_alloc", [
     - mode: enum for "in", "out", "inout"
     - ptr: address that will be copied to the DataBlock
     - sizes: outer sizes (number of datablocks along each dimension)
-    - payloadSizes: inner payload sizes used to compute datablock byte size
+    - elementSizes: logical dimensions of the datablock element payload
     - allocType: "stack", "heap", "global", "unknown" - tracks original allocation type
   }];
   let arguments = (ins
@@ -108,7 +106,7 @@ def DbAllocOp : Arts_Op<"db_alloc", [
     TypeAttr:$elementType,
     Optional<AnyMemRef>:$address,
     Variadic<Index>:$sizes,
-    Variadic<Index>:$payloadSizes
+    Variadic<Index>:$elementSizes
   );
   let results = (outs MemRefOf<[I64]>:$guid, AnyMemRef:$ptr);
   let assemblyFormat = [{
@@ -117,7 +115,7 @@ def DbAllocOp : Arts_Op<"db_alloc", [
     ( `(` $address^ `:` type($address) `)` )?
     `sizes` `[` $sizes `]`
     `elementType` `(` $elementType `)`
-    `payloadSizes` `[` $payloadSizes `]`
+    `elementSizes` `[` $elementSizes `]`
     attr-dict `:` `(` type($guid) `,` type($ptr) `)`
   }];
   let builders = [
@@ -125,25 +123,29 @@ def DbAllocOp : Arts_Op<"db_alloc", [
                    "Value":$route,
                    "DbAllocType":$allocType,
                    "DbMode":$dbMode,
-                   CArg<"Value", "nullptr">:$address,
-                   CArg<"SmallVector<Value>", "{}">:$sizes,
-                   CArg<"SmallVector<Value>", "{}">:$payloadSizes)>,
-    OpBuilder<(ins "ArtsMode":$mode,
-                   "Value":$route,
-                   "DbAllocType":$allocType,
-                   "DbMode":$dbMode,
                    "Type":$elementType,
                    CArg<"Value", "nullptr">:$address,
                    CArg<"SmallVector<Value>", "{}">:$sizes,
-                   CArg<"SmallVector<Value>", "{}">:$payloadSizes)>,
+                   CArg<"SmallVector<Value>", "{}">:$elementSizes)>,
     OpBuilder<(ins "ArtsMode":$mode,
                    "Value":$route,
                    "DbAllocType":$allocType,
                    "DbMode":$dbMode,
                    "Type":$elementType,
                    CArg<"SmallVector<Value>", "{}">:$sizes,
-                   CArg<"SmallVector<Value>", "{}">:$payloadSizes)>
+                   CArg<"SmallVector<Value>", "{}">:$elementSizes)>,
+    OpBuilder<(ins "ArtsMode":$mode,
+                   "Value":$route,
+                   "DbAllocType":$allocType,
+                   "DbMode":$dbMode,
+                   "Type":$elementType,
+                   "Type":$pointerType,
+                   CArg<"SmallVector<Value>", "{}">:$sizes,
+                   CArg<"SmallVector<Value>", "{}">:$elementSizes)>
   ];
+  let extraClassDeclaration = [{
+    MemRefType getAllocatedElementType();
+  }];
 }
 
 def DbAcquireOp : Arts_Op<"db_acquire",
@@ -154,7 +156,7 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     This operation acquires a local view of the DataBlock for safe access within EDTs.
     It subsumes dependency creation with mode and subregion support.
     - mode: enum for "in", "out", "inout"
-    - source: DbAllocOp or previous acquire
+    - source: DbAllocOp or previous DbAcquireOp
     - indices: indices for subregion
     - offsets: offsets for subregion
     - sizes: sizes for subregion
@@ -176,7 +178,7 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     ( `sizes` `[` $sizes^ `]` )?
     attr-dict `:` `(` type($source_guid) `,` type($source_ptr) `)` `->` `(` type($guid) `,` type($ptr) `)`
   }];
-
+  let hasVerifier = 1;
   let builders = [
     OpBuilder<(ins "ArtsMode":$mode,
                    "Value":$source_guid,
@@ -185,6 +187,28 @@ def DbAcquireOp : Arts_Op<"db_acquire",
                    CArg<"SmallVector<Value>", "{}">:$offsets,
                    CArg<"SmallVector<Value>", "{}">:$sizes)>
   ];
+}
+
+def DbRefOp : Arts_Op<"db_ref", [Pure]> {
+  let summary = "References an outer datablock element.";
+  let description = [{
+    References an element from a datablock handle using only the outer
+    dimensions. The result type must match the element type of the source
+    memref. 
+  }];
+  let arguments = (ins
+    AnyMemRef:$source,
+    Variadic<Index>:$indices
+  );
+  let results = (outs AnyType:$result);
+  let assemblyFormat = [{
+    $source `[` $indices `]` attr-dict `:` type($source) `->` type($result)
+  }];
+  let builders = [
+    OpBuilder<(ins "Value":$source,
+                   CArg<"ArrayRef<Value>", "{}">:$indices)>
+  ];
+  let hasVerifier = 1;
 }
 
 def DbReleaseOp : Arts_Op<"db_release", []> {
@@ -287,7 +311,6 @@ def EdtOp : Arts_Op<"edt",
   [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
    SingleBlockImplicitTerminator<"arts::YieldOp">,
    RecursiveMemoryEffects]> {
-
   let summary = "Event-Driven Task in ARTS";
   let description = [{
     Defines an ARTS event-driven task (EDT) with:
@@ -300,57 +323,28 @@ def EdtOp : Arts_Op<"edt",
     - 'concurrency' specifies the execution scope: intranode or internode.
     - 'workers' specifies the number of parallel workers to use (optional).
   }];
-
   let arguments = (ins
     EdtTypeAttr:$type,
     EdtConcurrencyAttr:$concurrency,
     I32:$route,
     OptionalAttr<WorkersAttr>:$workers,
+    OptionalAttr<NoVerifyAttr>:$no_verify,
     Variadic<AnyMemRef>:$dependencies
   );
-
   let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
     $type $concurrency `route` `(` $route `)` (`(` $dependencies^ `)` `:` type($dependencies))? attr-dict-with-keyword
     $body
   }];
-
   let skipDefaultBuilders = 1;
   let builders = [
     OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency)>,
     OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency, "ValueRange":$dependencies)>,
     OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency, "Value":$route, "ValueRange":$dependencies)>
   ];
-
+  let hasVerifier = 1;
   let extraClassDeclaration = [{
     SmallVector<Value> getDependenciesAsVector();
-  }];
-}
-
-//===----------------------------------------------------------------------===//
-// arts.event
-//===----------------------------------------------------------------------===//
-def EventOp : Arts_Op<"event", []> {
-  let summary = "Create an event or array of events in ARTS";
-  let description = [{
-    The `arts.event` operation creates an event (or array of events) that 
-    can be used for inter-loop or cross-task dependencies within the 
-    ARTS dialect.
-  }];
-
-  let arguments = (ins Variadic<Index>:$sizes);
-  let results = (outs AnyMemRef:$event);
-  let assemblyFormat = [{
-    `[` $sizes `]` `->` attr-dict `:` type($event)
-  }];
-  
-  let builders = [
-    OpBuilder<(ins "ArrayRef<Value>":$sizes)>
-  ];
-  
-  let extraClassDeclaration = [{
-    bool hasSingleSize();
-    void setHasSingleSize();
   }];
 }
 
@@ -547,8 +541,22 @@ def EdtParamUnpackOp : Arts_Op<"edt_param_unpack", [Pure]> {
   let assemblyFormat = "$memref `:` type($memref) attr-dict `:` `(` type($unpacked) `)`";
 }
 
+def HandleDepOp : Arts_Op<"handle_dep", [MemoryEffects<[MemWrite]>]> {
+  let summary = "Handle DB dependency.";
+  let description = [{
+    Handles DB dependencies for the EDT.
+  }];
+  let arguments = (ins I64:$edt_guid, AnyType:$db_guid, BoolAttr:$record, BoolAttr:$increment);
+  let assemblyFormat = [{
+  $edt_guid `(` 
+    $db_guid `:` type($db_guid) `,` 
+    `record` $record `,` 
+    `increment` $increment 
+  `)` attr-dict `:` type($edt_guid)
+  }];
+}
 
-def RecordInDepOp : Arts_Op<"record_in_dep", [MemoryEffects<[MemWrite]>]> {
+def RecordDepOp : Arts_Op<"record_dep", [MemoryEffects<[MemWrite]>]> {
   let summary = "Record in-dependencies for EDT.";
   let description = [{
     Records all in-dependencies (datablocks) for the EDT in order.
@@ -558,7 +566,7 @@ def RecordInDepOp : Arts_Op<"record_in_dep", [MemoryEffects<[MemWrite]>]> {
   let assemblyFormat = "$edt_guid `(` $datablocks `:` type($datablocks) `)` attr-dict";
 }
 
-def IncrementOutLatchOp : Arts_Op<"increment_out_latch", [MemoryEffects<[MemWrite]>]> {
+def IncrementDepOp : Arts_Op<"increment_dep", [MemoryEffects<[MemWrite]>]> {
   let summary = "Increment out-latches for EDT dependencies.";
   let description = [{
     Increments latch count for all out-dependencies (datablocks) of the EDT.
@@ -602,22 +610,12 @@ def DepGepOp : Arts_Op<"dep_gep", [Pure, AttrSizedOperandSegments]> {
   ];
 }
 
-def DepGetGuidOp : Arts_Op<"dep_get_guid", [Pure]> {
-  let summary = "Extract GUID field from EDT dependency structure.";
-  let description = [{
-    Extracts the GUID field from an EDT dependency structure.
-    The input is a dependency structure containing both GUID and pointer fields.
-    Returns the GUID field which identifies the datablock.
-  }];
-  let arguments = (ins AnyType:$dep_struct);
-  let results = (outs I64:$guid);
-  let assemblyFormat = "$dep_struct `:` type($dep_struct) attr-dict `:` type($guid)";
-}
 
 def DbGepOp : Arts_Op<"db_gep", [Pure, AttrSizedOperandSegments]> {
   let summary = "Compute element pointer (LLVM ptr) using byte strides.";
   let description = [{
-    Computes a raw element pointer from a base pointer using indices and strides.
+    Computes a raw LLVM pointer to an element from a base pointer using indices and strides.
+    Always produces an LLVM pointer result regardless of the input type.
   }];
   let arguments = (ins AnyType:$base_ptr, Variadic<Index>:$indices, Variadic<Index>:$strides);
   let results = (outs AnyType:$ptr);
@@ -627,7 +625,7 @@ def DbGepOp : Arts_Op<"db_gep", [Pure, AttrSizedOperandSegments]> {
     attr-dict `:` type($ptr)
   }];
   let builders = [
-    OpBuilder<(ins "Value":$base_ptr, "SmallVector<Value>":$indices, "SmallVector<Value>":$strides)>
+    OpBuilder<(ins "Type":$ptr, "Value":$base_ptr, "SmallVector<Value>":$indices, "SmallVector<Value>":$strides)>
   ];
 }
 

@@ -30,7 +30,8 @@ bool isNonZeroIndex(Value v);
 //===----------------------------------------------------------------------===//
 /// Type and Size Utilities
 //===----------------------------------------------------------------------===//
-uint64_t getElementTypeByteSize(Type elemTy);
+uint64_t getElementTypeByteSize(Type elementType);
+MemRefType getElementMemRefType(Type elementType, ArrayRef<Value> elementSizes);
 
 //===----------------------------------------------------------------------===//
 /// String Utilities
@@ -42,6 +43,7 @@ std::string sanitizeString(StringRef s);
 //===----------------------------------------------------------------------===//
 bool equalRange(ValueRange a, ValueRange b);
 bool allSameValue(ValueRange values);
+bool scalesAreEquivalent(Value a, Value b);
 
 //===----------------------------------------------------------------------===//
 /// EDT Analysis Utilities
@@ -49,12 +51,27 @@ bool allSameValue(ValueRange values);
 bool isInvariantInEdt(Region &edtRegion, Value value);
 bool isReachable(Operation *source, Operation *target);
 
+class EdtOp;
+class DbAcquireOp;
+
+std::pair<EdtOp, BlockArgument>
+getEdtBlockArgumentForAcquire(DbAcquireOp acquireOp);
+
 //===----------------------------------------------------------------------===//
 /// Underlying Value Tracing Utilities
 //===----------------------------------------------------------------------===//
 Value getUnderlyingValue(Value v);
+Value stripNumericCasts(Value v);
 Operation *getUnderlyingOperation(Value v);
 Operation *getUnderlyingDb(Value v);
+Operation *getUnderlyingDbAlloc(Value v);
+
+//===----------------------------------------------------------------------===//
+/// Index Splitting Utilities for Datablocks
+//===----------------------------------------------------------------------===//
+std::pair<SmallVector<Value>, SmallVector<Value>>
+splitDbIndices(Operation *dbOp, ValueRange indices, OpBuilder &builder,
+                      Location loc);
 
 //===----------------------------------------------------------------------===//
 /// Operation Removal and Replacement Utilities

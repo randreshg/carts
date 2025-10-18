@@ -22,14 +22,13 @@
 #include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
-
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
@@ -163,6 +162,9 @@ public:
 
   ParallelEdtLowering(ArtsCodegen *AC, Location loc) : AC(AC), loc(loc) {}
 
+  //===----------------------------------------------------------------------===//
+  /// Lower a parallel EDT.
+  //===----------------------------------------------------------------------===//
   LogicalResult lowerParallelEdt(EdtOp op) {
     if (!op.getRegion().hasOneBlock()) {
       ARTS_ERROR("Parallel EDT must have exactly one block");
@@ -213,16 +215,19 @@ private:
     return epochOp;
   }
 
-  /// BLOCK DISTRIBUTION EXAMPLE with 4 workers (threads=4):
+  //===----------------------------------------------------------------------===//
   ///
-  /// INPUT IR (no chunk_size):
+  /// Lowering parallel EDT with arts.for using block distribution
+  /// Block distribution example with 4 workers (threads=4):
+  ///
+  /// Input IR (no chunk_size):
   ///   arts.edt<parallel> {
   ///     arts.for %i = 0 to 100 step 1 {
   ///       /// loop body computing 100 iterations
   ///     }
   ///   }
   ///
-  /// OUTPUT IR:
+  /// Output IR:
   ///   Total iterations: 100, Workers: 4
   ///   Worker 0: iterations 0-24   (25 iterations)
   ///   Worker 1: iterations 25-49  (25 iterations)
@@ -337,6 +342,9 @@ private:
       AC->create<YieldOp>(loc);
   }
 
+  //===----------------------------------------------------------------------===//
+  /// Create the dependencies for a given worker.
+  //===----------------------------------------------------------------------===//
   ChunkedDepsResult createBlockDeps(EdtOp op, ForOp containedForOp,
                                     Value workerId, Value totalWorkers,
                                     DenseMap<Value, Value> &depArgMap,
@@ -351,9 +359,10 @@ private:
         Value sourcePtr =
             materializeValue(acq.getSourcePtr(), valueCache, &depArgMap);
 
-        /// Example: Worker 0: offset=0*1=0, size=min(25,100)=25 (elements 0-24)
-        /// Worker 1: offset=25*1=25, size=min(25,75)=25 (elements 25-49)
-        /// Worker 3: offset=75*1=75, size=min(25,25)=25 (elements 75-99)
+        /// Example:
+        /// - Worker 0: offset=0*1=0, size=min(25,100)=25 (elements 0-24)
+        /// - Worker 1: offset=25*1=25, size=min(25,75)=25 (elements 25-49)
+        /// - Worker 3: offset=75*1=75, size=min(25,25)=25 (elements 75-99)
 
         /// Element index where this worker starts
         /// chunkOffset = workerFirstChunk * chunkSize
@@ -381,10 +390,10 @@ private:
         Value remaining =
             AC->create<arith::SelectOp>(loc, needClamp, zeroIndex, diff);
 
-        chunkSizeElems =
-            AC->create<arith::MinUIOp>(loc, chunkSizeElems, remaining);
         /// Don't exceed available elements
         /// chunkSizeElems = min(chunkSizeElems, remaining)
+        chunkSizeElems =
+            AC->create<arith::MinUIOp>(loc, chunkSizeElems, remaining);
 
         /// Create new DbAcquireOp with the chunked offsets and sizes
         SmallVector<Value> offsets{chunkOffset};
@@ -403,28 +412,31 @@ private:
     return result;
   }
 
+  //===----------------------------------------------------------------------===//
+  /// Compute the chunk bounds for a given worker.
+  ///
+  /// Block distribution example with 4 workers, loop 0 to 100:
+  /// - Total iterations = (100 - 0) / 1 = 100
+  /// - chunksPerWorker = 100 / 4 = 25
+  /// - remainderChunks = 100 % 4 = 0
+  //
+  /// - Worker 0: firstChunk = 0*25 + min(0,0) = 0, count = 25+0 = 25
+  /// - Worker 1: firstChunk = 1*25 + min(1,0) = 25, count = 25+0 = 25
+  /// - Worker 2: firstChunk = 2*25 + min(2,0) = 50, count = 25+0 = 25
+  /// - Worker 3: firstChunk = 3*25 + min(3,0) = 75, count = 25+0 = 25
+  //
+  /// Uneven example with 101 iterations:
+  /// - Total iterations = 101, workers = 4
+  /// - chunksPerWorker = 101/4 = 25, remainder = 101%4 = 1
+  ///   - Worker 0: firstChunk = 0 + min(0,1) = 0, count = 25+1 = 26
+  ///   - Worker 1: firstChunk = 25 + min(1,1) = 26, count = 25+1 = 26
+  ///   - Worker 2: firstChunk = 50 + min(2,1) = 51, count = 25+0 = 25
+  ///   - Worker 3: firstChunk = 75 + min(3,1) = 76, count = 25+0 = 25
+  //===----------------------------------------------------------------------===//
   ChunkedForInfo computeChunkBounds(ForOp containedForOp, Value workerId,
                                     Value totalWorkers,
                                     DenseMap<Value, Value> &valueCache,
                                     DenseMap<Value, Value> &depArgMap) {
-    /// BLOCK DISTRIBUTION CALCULATION EXAMPLE with 4 workers, loop 0 to 100:
-    /// Total iterations = (100 - 0) / 1 = 100
-    /// chunksPerWorker = 100 / 4 = 25
-    /// remainderChunks = 100 % 4 = 0
-    //
-    /// Worker 0: firstChunk = 0*25 + min(0,0) = 0, count = 25+0 = 25
-    /// Worker 1: firstChunk = 1*25 + min(1,0) = 25, count = 25+0 = 25
-    /// Worker 2: firstChunk = 2*25 + min(2,0) = 50, count = 25+0 = 25
-    /// Worker 3: firstChunk = 3*25 + min(3,0) = 75, count = 25+0 = 25
-    //
-    /// UNEVEN EXAMPLE with 101 iterations:
-    /// Total iterations = 101, workers = 4
-    /// chunksPerWorker = 101/4 = 25, remainder = 101%4 = 1
-    /// Worker 0: firstChunk = 0 + min(0,1) = 0, count = 25+1 = 26
-    /// Worker 1: firstChunk = 25 + min(1,1) = 26, count = 25+1 = 26
-    /// Worker 2: firstChunk = 50 + min(2,1) = 51, count = 25+0 = 25
-    /// Worker 3: firstChunk = 75 + min(3,1) = 76, count = 25+0 = 25
-
     ChunkedForInfo info;
 
     info.lowerBound = containedForOp.getLowerBound()[0];
@@ -432,7 +444,7 @@ private:
     info.loopStep = containedForOp.getStep()[0];
 
     /// Calculate total iterations: (upper - lower) / step
-    /// Example: (100 - 0) / 1 = 100 iterations
+
     Value oneIndex = AC->createIndexConstant(1, loc);
     Value range =
         AC->create<arith::SubIOp>(loc, info.upperBound, info.lowerBound);
@@ -447,76 +459,76 @@ private:
     /// Each iteration is a "chunk"
     info.totalChunks = info.totalIterations;
 
-    /// BLOCK DISTRIBUTION: Divide total chunks evenly across workers
-    /// Example: 100 iterations, 4 workers
-    /// chunksPerEDT = 100/4 = 25
+    /// Divide total chunks evenly across workers
+    /// chunksPerEDT = totalChunks / totalWorkers
     Value chunksPerEDT =
         AC->create<arith::DivUIOp>(loc, info.totalChunks, totalWorkers);
-    /// remainderChunks = 100%4 = 0
+
+    /// Remainder chunks
+    /// remainderChunks = totalChunks % totalWorkers
     Value remainderChunks =
         AC->create<arith::RemUIOp>(loc, info.totalChunks, totalWorkers);
 
     /// First few workers get an extra chunk if remainder > 0
-    /// Example: remainderChunks=0, so getsExtra = (workerId < 0) = false for
-    /// all workers
     /// getsExtra = workerId < remainderChunks
     Value getsExtra = AC->create<arith::CmpIOp>(loc, arith::CmpIPredicate::ult,
                                                 workerId, remainderChunks);
     /// extraChunk = getsExtra ? 1 : 0
     Value extraChunk = AC->castToIndex(getsExtra, loc);
-    /// workerChunkCount = 25 + 0 = 25 for all
+
+    /// Total chunks this worker should handle
+    /// workerChunkCount = chunksPerEDT + extraChunk
     info.workerChunkCount =
         AC->create<arith::AddIOp>(loc, chunksPerEDT, extraChunk);
 
+    /// Total number of workers
     info.totalWorkers = totalWorkers;
 
     /// Calculate which chunk this worker starts with:
-    /// Formula: workerFirstChunk = workerId * chunksPerWorker + min(workerId,
-    /// remainder) Example: Worker 0: 0*25 + min(0,0) = 0, Worker 1: 1*25 +
-    /// min(1,0) = 25 With remainder=1: Worker 0: 0*25 + min(0,1) = 0, Worker 1:
-    /// 1*25 + min(1,1) = 26
+    /// Formula:
+    ///  workerFirstChunk = workerId * chunksPerWorker + min(workerId,remainder)
 
-    Value baseStart = AC->create<arith::MulIOp>(loc, workerId, chunksPerEDT);
+    /// Base start
     /// baseStart = workerId * chunksPerEDT
+    Value baseStart = AC->create<arith::MulIOp>(loc, workerId, chunksPerEDT);
 
+    /// Extra chunks this worker gets
+    /// prefixExtra = min(workerId, remainderChunks)
     Value prefixExtra =
         AC->create<arith::MinUIOp>(loc, workerId, remainderChunks);
-    /// prefixExtra = min(workerId, remainderChunks)
 
+    /// First chunk this worker handles
+    /// workerFirstChunk = baseStart + prefixExtra
     info.workerFirstChunk =
         AC->create<arith::AddIOp>(loc, baseStart, prefixExtra);
-    /// workerFirstChunk = baseStart + prefixExtra
 
-    /// Calculate actual iteration count (may be less if we run out of
-    /// iterations) Example: Worker 0: rawIterCount=25*1=25, startElems=0*1=0,
-    /// remaining=100-0=100 workerIterationCount = min(25, 100) = 25 Worker 3:
-    /// rawIterCount=25*1=25, startElems=75*1=75, remaining=100-75=25
-    /// workerIterationCount = min(25, 25) = 25
-
+    /// Calculate actual iteration count
     /// rawIterCount = workerChunkCount * chunkSize
     Value rawIterCount =
         AC->create<arith::MulIOp>(loc, info.workerChunkCount, info.chunkSize);
 
-    /// startElems = workerFirstChunk * chunkSize  (first element this worker
-    /// handles)
+    /// First element this worker handles
+    /// startElems = workerFirstChunk * chunkSize
     Value startElems =
         AC->create<arith::MulIOp>(loc, info.workerFirstChunk, info.chunkSize);
 
-    /// needZero = (totalIterations < startElems) ? true if worker starts past
-    /// end
+    /// If worker starts past end
+    /// needZero = (totalIterations < startElems) ? true
     Value zeroIndex = AC->createIndexConstant(0, loc);
     Value needZero = AC->create<arith::CmpIOp>(
         loc, arith::CmpIPredicate::ult, info.totalIterations, startElems);
 
-    /// remaining = totalIterations - startElems  (iterations available to this
-    /// worker)
+    /// Iterations available to this worker
+    /// remaining = totalIterations - startElems
     Value remaining =
         AC->create<arith::SubIOp>(loc, info.totalIterations, startElems);
 
-    /// remainingNonNeg = needZero ? 0 : remaining  (clamp negative to zero)
+    /// Clamp negative to zero
+    /// remainingNonNeg = needZero ? 0 : remaining
     Value remainingNonNeg =
         AC->create<arith::SelectOp>(loc, needZero, zeroIndex, remaining);
 
+    /// Iterations this worker should execute
     /// workerIterationCount = min(rawIterCount, remainingNonNeg)
     info.workerIterationCount =
         AC->create<arith::MinUIOp>(loc, rawIterCount, remainingNonNeg);
@@ -524,21 +536,24 @@ private:
     return info;
   }
 
-  /// CYCLIC DISTRIBUTION EXAMPLE with 4 workers (threads=4):
+  //===----------------------------------------------------------------------===//
+  /// Cyclic distribution example with 4 workers (threads=4):
   ///
-  /// INPUT IR (with chunk_size=5):
+  ///  Assigning chunks to workers in a cyclic manner.
+  ///  Example:
+  /// - Input IR (with chunk_size=5):
   ///   arts.edt<parallel> {
   ///     arts.for %i = 0 to 100 step 1 chunk_size=5 {
   ///       /// loop body
   ///     }
   ///   }
   ///
-  /// OUTPUT IR:
-  ///   Total iterations: 100, Chunk size: 5, Total chunks: 20
-  ///   Worker 0: chunks 0,4,8,12,16  (iterations 0-4,20-24,40-44,60-64,80-84)
-  ///   Worker 1: chunks 1,5,9,13,17  (iterations 5-9,25-29,45-49,65-69,85-89)
-  ///   Worker 2: chunks 2,6,10,14,18 (iterations 10-14,30-34,50-54,70-74,90-94)
-  ///   Worker 3: chunks 3,7,11,15,19 (iterations 15-19,35-39,55-59,75-79,95-99)
+  /// - Output IR:
+  ///  Total iterations: 100, Chunk size: 5, Total chunks: 20
+  ///  -Worker 0: chunks 0,4,8,12,16  (iterations 0-4,20-24,40-44,60-64,80-84)
+  ///  -Worker 1: chunks 1,5,9,13,17  (iterations 5-9,25-29,45-49,65-69,85-89)
+  ///  -Worker 2: chunks 2,6,10,14,18 (iterations 10-14,30-34,50-54,70-74,90-94)
+  ///  -Worker 3: chunks 3,7,11,15,19 (iterations 15-19,35-39,55-59,75-79,95-99)
   ///
   ///   scf.for %chunk = 0 to 20 step 1 {
   ///     %worker = %chunk % 4  /// cyclic assignment
@@ -549,6 +564,7 @@ private:
   ///       }
   ///     }
   ///   }
+  //===----------------------------------------------------------------------===//
   void lowerStaticCyclic(EdtOp op, ForOp containedForOp, Value lb, Value ub,
                          bool isInterNode) {
 
@@ -579,16 +595,16 @@ private:
     /// chunkId ∈ [0, totalChunks)
     Value chunkId = chunkLoop.getInductionVar();
 
-    /// CYCLIC ASSIGNMENT: worker = chunkId % totalWorkers
+    /// Cyclic assignment: worker = chunkId % totalWorkers
     /// Example: 20 chunks, 4 workers, chunk_size=5
-    /// Chunk  0: worker = 0%4 = 0, iterations 0-4
-    /// Chunk  1: worker = 1%4 = 1, iterations 5-9
-    /// Chunk  2: worker = 2%4 = 2, iterations 10-14
-    /// Chunk  3: worker = 3%4 = 3, iterations 15-19
-    /// Chunk  4: worker = 4%4 = 0, iterations 20-24
-    /// Chunk  5: worker = 5%4 = 1, iterations 25-29
-    /// ...
-    /// Chunk 19: worker = 19%4 = 3, iterations 95-99
+    /// - Chunk  0: worker = 0%4 = 0, iterations 0-4
+    /// - Chunk  1: worker = 1%4 = 1, iterations 5-9
+    /// - Chunk  2: worker = 2%4 = 2, iterations 10-14
+    /// - Chunk  3: worker = 3%4 = 3, iterations 15-19
+    /// - Chunk  4: worker = 4%4 = 0, iterations 20-24
+    /// - Chunk  5: worker = 5%4 = 1, iterations 25-29
+    /// - ...
+    /// - Chunk 19: worker = 19%4 = 3, iterations 95-99
     //
     /// Result: Each worker gets 5 chunks of 5 iterations = 25 iterations total
 
@@ -697,25 +713,23 @@ private:
       AC->create<YieldOp>(loc);
   }
 
-  /// SIMPLE PARALLEL EDT EXAMPLE with 4 workers (threads=4):
+  //===----------------------------------------------------------------------===//
+  /// Simple parallel EDT with 4 workers (threads=4):
   ///
-  /// INPUT IR (no loop, just computation):
+  /// Creates identical task EDTs for embarrassingly parallel workloads
+  /// - Input IR (no loop, just computation):
   ///   arts.edt<parallel> {
   ///     /// some computation work
   ///   }
   ///
-  /// OUTPUT IR:
+  /// - Output IR:
   ///   scf.for %worker = 0 to 4 step 1 {
   ///     arts.edt<task route=0> deps[...] {
   ///       /// cloned computation work
   ///     }
   ///   }
-  ///
-  /// This creates identical task EDTs for embarrassingly parallel workloads
-  /// where each worker performs the same computation independently (e.g.,
-  /// Monte Carlo simulations, parameter sweeps, etc.)
+  //===----------------------------------------------------------------------===//
   void lowerSimpleParallelEdt(EdtOp op) {
-
     auto [lb, ub, isInterNode] = determineParallelismStrategy(op);
     ARTS_INFO("Lowering simple parallel EDT; bounds: " << lb << ".." << ub);
 
@@ -742,6 +756,13 @@ private:
     moveOperationsToNewEdt(op, newEdt, nullptr, Value());
   }
 
+  //===----------------------------------------------------------------------===//
+  /// Setup EDT region structure
+  ///
+  /// Initializes the region and block structure for a new EDT operation.
+  /// Creates block arguments for each dependency and prepares the EDT
+  /// for receiving cloned operations from the source EDT.
+  //===----------------------------------------------------------------------===//
   void setupEdtRegion(EdtOp edt, EdtOp sourceEdt) {
     Region &dst = edt.getRegion();
     if (dst.empty())
@@ -755,6 +776,14 @@ private:
       dstBody.addArgument(dep.getType(), loc);
   }
 
+  //===----------------------------------------------------------------------===//
+  /// Determine parallelism strategy for EDT
+  ///
+  /// Analyzes EDT attributes to determine the number of workers and whether
+  /// the parallelism is intra-node or inter-node. Uses concurrency pass
+  /// attributes or falls back to runtime worker count. Returns: (lower_bound=0,
+  /// upper_bound=worker_count, is_inter_node)
+  //===----------------------------------------------------------------------===//
   std::tuple<Value, Value, bool> determineParallelismStrategy(EdtOp edtOp) {
     Value lb = AC->createIndexConstant(0, loc);
     Value ub = nullptr;
@@ -892,6 +921,17 @@ private:
     return deps;
   }
 
+  //===----------------------------------------------------------------------===//
+  /// Move operations from source EDT to new EDT
+  ///
+  /// Clones operations from the source EDT region into the target EDT region,
+  /// mapping block arguments and optionally skipping certain operations.
+  /// Handles the transfer of computation from one EDT to another during
+  /// parallel EDT lowering transformations.
+  /// Example:
+  ///   Source EDT with body operations -> cloned into target EDT with mapped
+  ///   arguments
+  //===----------------------------------------------------------------------===//
   void moveOperationsToNewEdt(EdtOp sourceOp, EdtOp newEdt,
                               Operation *operationToSkip, Value releaseValue) {
     Block &dstBody = newEdt.getRegion().front();
@@ -1000,7 +1040,7 @@ private:
                                         const SmallVector<Type> &packTypes,
                                         size_t numUserParams);
 
-  void transformDepUses(Block *block, ArrayRef<Value> originalDeps, Value depv,
+  void transformDepUses(ArrayRef<Value> originalDeps, Value depv,
                         ArrayRef<Value> allParams, EdtEnvManager &envManager,
                         ArrayRef<Value> depIdentifiers);
 
@@ -1064,7 +1104,6 @@ void EdtLoweringPass::runOnOperation() {
         edtOp.emitError("Failed to lower task EDT");
         return signalPassFailure();
       }
-
     }
   }
 
@@ -1072,6 +1111,24 @@ void EdtLoweringPass::runOnOperation() {
   ARTS_DEBUG_REGION(module.dump(););
 }
 
+//===----------------------------------------------------------------------===//
+/// Lower EDT operations to runtime calls
+///
+/// Transforms arts.edt operations into outlined functions and runtime calls.
+/// Creates an outlined function with the EDT body, packs parameters and
+/// dependencies, and replaces the EDT with arts.edt_create and dependency
+/// management calls. Example:
+///   %result = arts.edt(%dep) {
+///   ^bb0(%arg: memref<f64>):
+///     %val = memref.load %arg[] : memref<f64>
+///     arts.return %val : f64
+///   }
+/// becomes:
+///   %param_pack = arts.edt_param_pack ...
+///   %edt_guid = arts.edt_create %param_pack, %dep_count, %route
+///   arts.record_in_dep %edt_guid, %dep
+///   arts.increment_out_latch %edt_guid
+//===----------------------------------------------------------------------===//
 LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   OpBuilder::InsertionGuard IG(AC->getBuilder());
   AC->setInsertionPoint(edtOp);
@@ -1121,8 +1178,9 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   /// Insert dependency management after the outline op
   Value edtGuid = outlineOp.getGuid();
   AC->setInsertionPointAfter(outlineOp);
-  SmallVector<Value> depsVec(envManager.getDependencies().begin(),
-                             envManager.getDependencies().end());
+  SmallVector<Value> depsVec;
+  for (Value d : edtOp.getDependencies())
+    depsVec.push_back(d);
   if (failed(insertDepManagement(loc, edtGuid, depsVec)))
     return edtOp.emitError("Failed to insert dependency management");
 
@@ -1137,6 +1195,27 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   return success();
 }
 
+//===----------------------------------------------------------------------===//
+/// Lower parallel EDT operations
+///
+/// Transforms parallel EDT operations that contain loop constructs into
+/// epoch-wrapped task graphs. Handles different parallelism strategies
+/// including static block distribution and cyclic distribution based on EDT
+/// concurrency. Example:
+///   arts.edt_parallel(%dep) {
+///   ^bb0(%arg: memref<f64>):
+///     arts.for %i = %lb to %ub step %step {
+///       %val = memref.load %arg[%i] : memref<f64>
+///       // compute...
+///     }
+///   }
+/// becomes:
+///   arts.epoch {
+///     // task creation and distribution logic
+///     arts.edt_create ...
+///     arts.record_in_dep ...
+///   }
+//===----------------------------------------------------------------------===//
 LogicalResult EdtLoweringPass::lowerParallelEdt(EdtOp op) {
   ArtsCodegen AC(module, false);
   AC.setInsertionPoint(op);
@@ -1144,6 +1223,12 @@ LogicalResult EdtLoweringPass::lowerParallelEdt(EdtOp op) {
   return lowerer.lowerParallelEdt(op);
 }
 
+//===----------------------------------------------------------------------===//
+/// Create outlined function for EDT body
+///
+/// Generates a new private function with the ARTS EDT signature to contain
+/// the outlined EDT region.
+//===----------------------------------------------------------------------===//
 func::FuncOp
 EdtLoweringPass::createOutlinedFunction(EdtOp edtOp,
                                         EdtEnvManager &envManager) {
@@ -1158,6 +1243,12 @@ EdtLoweringPass::createOutlinedFunction(EdtOp edtOp,
   return outlinedFunc;
 }
 
+//===----------------------------------------------------------------------===//
+/// Pack EDT parameters and dependency metadata
+///
+/// Creates a parameter pack containing user-defined parameters, constants,
+/// and metadata for datablock dependencies (indices, offsets, sizes).
+//===----------------------------------------------------------------------===//
 Value EdtLoweringPass::packParams(Location loc, EdtEnvManager &envManager,
                                   SmallVector<Type> &packTypes) {
   const auto &parameters = envManager.getParameters();
@@ -1214,19 +1305,23 @@ Value EdtLoweringPass::packParams(Location loc, EdtEnvManager &envManager,
 
   ARTS_DEBUG_REGION({
     ARTS_INFO("Creating parameter pack for " << packValues.size() << " items");
-    for (size_t i = 0; i < packValues.size(); ++i) {
-      ARTS_INFO("  packValues[" << i << "]: " << packValues[i]
-                                << " type: " << packValues[i].getType());
-    }
+    for (size_t i = 0; i < packValues.size(); ++i)
+      ARTS_DEBUG("  packValues[" << i << "]: " << packValues[i]);
   });
 
   auto memrefType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
-  ARTS_INFO("About to create EdtParamPackOp with type: " << memrefType);
   auto packOp = AC->create<EdtParamPackOp>(loc, TypeRange{memrefType},
                                            ValueRange(packValues));
   return packOp;
 }
 
+//===----------------------------------------------------------------------===//
+/// Outline EDT region to target function
+///
+/// Moves the EDT body region into the outlined function, performs parameter
+/// and dependency unpacking, and updates value references to work with the
+/// new function context.
+//===----------------------------------------------------------------------===//
 LogicalResult EdtLoweringPass::outlineRegionToFunction(
     EdtOp edtOp, func::FuncOp targetFunc, EdtEnvManager &envManager,
     const SmallVector<Type> &packTypes, size_t numUserParams) {
@@ -1242,16 +1337,12 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
   Value depv = args[3];
 
   const auto &parameters = envManager.getParameters();
-  SmallVector<Value> deps(envManager.getDependencies().begin(),
-                          envManager.getDependencies().end());
+  SmallVector<Value> deps;
+  for (Value d : edtOp.getDependencies())
+    deps.push_back(d);
   ARTS_INFO("analyzeDependencies returned " << deps.size() << " dependencies");
-  for (size_t i = 0; i < deps.size(); ++i) {
-    ARTS_INFO(
-        "  dep[" << i << "] type: " << deps[i].getType() << ", defOp: "
-                 << (deps[i].getDefiningOp()
-                         ? deps[i].getDefiningOp()->getName().getStringRef()
-                         : "none"));
-  }
+  for (size_t i = 0; i < deps.size(); ++i)
+    ARTS_DEBUG("  dep[" << i << "]: " << deps[i]);
   SmallVector<Value> unpackedParams, allParams;
 
   if (!packTypes.empty()) {
@@ -1261,9 +1352,10 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
     unpackedParams.append(allParams.begin(), allParams.begin() + numUserParams);
   }
 
-  /// Store dependency information for direct use
-  SmallVector<Value> originalDeps(envManager.getDependencies().begin(),
-                                  envManager.getDependencies().end());
+  /// Store dependency information for direct use in strict operand order
+  SmallVector<Value> originalDeps;
+  for (Value d : edtOp.getDependencies())
+    originalDeps.push_back(d);
   Region &edtRegion = edtOp.getRegion();
   Block &edtBlock = edtRegion.front();
 
@@ -1271,14 +1363,15 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
   SmallVector<Value> depPlaceholders(originalDeps.size());
   for (auto it : llvm::enumerate(originalDeps))
     depPlaceholders[it.index()] =
-        AC->create<UndefOp>(loc, it.value().getType());
+        AC->create<UndefOp>(loc, edtBlock.getArguments()[it.index()].getType());
 
   /// Clone constants into function
   IRMapping valueMapping;
 
   /// Map EDT args to placeholders so cloned ops don't reference outer values.
-  for (auto [edtArg, ph] : llvm::zip(edtBlock.getArguments(), depPlaceholders))
-    valueMapping.map(edtArg, ph);
+  for (auto [edtArg, placeholder] :
+       llvm::zip(edtBlock.getArguments(), depPlaceholders))
+    valueMapping.map(edtArg, placeholder);
 
   /// Also map the original dependency values to their corresponding
   /// placeholders to catch any direct uses that bypassed the block arguments.
@@ -1325,11 +1418,21 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
   AC->create<func::ReturnOp>(loc);
 
   /// Transform dependency uses inside outlined region
-  transformDepUses(entryBlock, originalDeps, depv, allParams, envManager,
-                   depPlaceholders);
+  transformDepUses(originalDeps, depv, allParams, envManager, depPlaceholders);
   return success();
 }
 
+//===----------------------------------------------------------------------===//
+/// Insert dependency management operations
+///
+/// Adds runtime dependency tracking operations (record_in_dep,
+/// increment_out_latch) for EDT execution. Separates dependencies by access
+/// mode and creates appropriate runtime calls to establish data dependencies
+/// between EDTs. Example:
+///   EDT with input deps %d1, %d2 and output deps %d3
+///   becomes: arts.record_in_dep %edt_guid, [%d1_guid, %d2_guid, %d3_guid]
+///            arts.increment_out_latch %edt_guid, [%d3_guid]
+//===----------------------------------------------------------------------===//
 LogicalResult
 EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
                                      const SmallVector<Value> &deps) {
@@ -1349,30 +1452,40 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     /// Always add to in-dependencies
     inDepGuids.push_back(depGuid);
 
+    /// TODO: Fix this
     /// Only add to out-dependencies if mode is out or inout
-    ArtsMode mode = dbAcquireOp.getMode();
-    if (mode == ArtsMode::out || mode == ArtsMode::inout)
-      outDepGuids.push_back(depGuid);
+    // ArtsMode mode = dbAcquireOp.getMode();
+    // if (mode == ArtsMode::out || mode == ArtsMode::inout)
+    outDepGuids.push_back(depGuid);
   }
 
   /// Record all input deps at once using GUIDs
   if (!inDepGuids.empty())
-    AC->create<RecordInDepOp>(loc, edtGuid, inDepGuids);
+    AC->create<RecordDepOp>(loc, edtGuid, inDepGuids);
 
   /// Increment output latches for all deps at once using GUIDs
   if (!outDepGuids.empty())
-    AC->create<IncrementOutLatchOp>(loc, edtGuid, outDepGuids);
+    AC->create<IncrementDepOp>(loc, edtGuid, outDepGuids);
 
   return success();
 }
 
-void EdtLoweringPass::transformDepUses(Block *block,
-                                       ArrayRef<Value> originalDeps, Value depv,
+//===----------------------------------------------------------------------===//
+/// Transform dependency uses in outlined function
+///
+/// Rewrites dependency access operations in the outlined EDT function to use
+/// the packed dependency data structure. Computes proper base offsets and
+/// strides for each dependency, adjusting indices to account for datablock
+/// offsets.
+//===----------------------------------------------------------------------===//
+void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
                                        ArrayRef<Value> allParams,
                                        EdtEnvManager &envManager,
                                        ArrayRef<Value> depIdentifiers) {
-
+  /// Get the parameter map
   const auto &paramMap = envManager.getValueToPackIndex();
+
+  /// Resolve the sizes of the dependency within the outlined Edt
   auto resolveSizes = [&](Value dep, Location loc) {
     SmallVector<Value> sizes = getSizesFromDb(dep);
     SmallVector<Value> resolved;
@@ -1390,21 +1503,9 @@ void EdtLoweringPass::transformDepUses(Block *block,
     return resolved;
   };
 
-  auto resolveOffsets = [&](Value dep, Location loc) {
-    SmallVector<Value> offsets = getOffsetsFromDb(dep);
-    SmallVector<Value> resolved;
-    for (Value off : offsets) {
-      auto it = paramMap.find(off);
-      if (it != paramMap.end() && it->second < allParams.size())
-        resolved.push_back(allParams[it->second]);
-      else if (auto c = off.getDefiningOp<arith::ConstantIndexOp>())
-        resolved.push_back(AC->createIndexConstant(c.value(), loc));
-      else
-        resolved.push_back(off);
-    }
-    return resolved;
-  };
-
+  /// Compute the base offset of the dependency within the outlined Edt
+  /// This corresponds to the sum of number of elements in the previous
+  /// dependencies
   auto computeBaseOffset = [&](size_t depIndex, Location loc) {
     Value base = AC->createIndexConstant(0, loc);
     for (size_t i = 0; i < depIndex; ++i) {
@@ -1418,58 +1519,72 @@ void EdtLoweringPass::transformDepUses(Block *block,
   /// For each dependency placeholder, rewrite its direct uses.
   for (size_t depIndex = 0; depIndex < depIdentifiers.size(); ++depIndex) {
     Value placeholder = depIdentifiers[depIndex];
+    AC->setInsertionPoint(placeholder.getDefiningOp());
+
+    Location loc = placeholder.getLoc();
+
+    /// Get the base offset, sizes, strides, and offsets of the dependency
+    ARTS_DEBUG("Processing Dep[" << depIndex
+                                 << "]: " << originalDeps[depIndex]);
+    Value baseOffset = computeBaseOffset(depIndex, loc);
+    SmallVector<Value> depSizes = resolveSizes(originalDeps[depIndex], loc);
+    SmallVector<Value> depStrides = AC->computeStridesFromSizes(depSizes, loc);
+
+    bool isSingleElement =
+        dbHasSingleSize(originalDeps[depIndex].getDefiningOp<DbAcquireOp>());
+    if (isSingleElement) {
+      Value depPtr = AC->create<DepGepOp>(loc, AC->llvmPtr, depv, baseOffset,
+                                          ValueRange(), ValueRange());
+      placeholder.replaceAllUsesWith(depPtr);
+      continue;
+    }
+
+    /// Get the users of the dependency placeholder
     SmallVector<Operation *, 16> users;
     for (auto &use : placeholder.getUses())
       users.push_back(use.getOwner());
 
+    ARTS_DEBUG(" - Rewriting " << users.size() << " users");
+
+    /// For each user of the dependency placeholder, rewrite the operation
     for (Operation *op : users) {
       if (auto mp = dyn_cast<polygeist::Memref2PointerOp>(op)) {
         if (mp.getSource() != placeholder)
           continue;
-        AC->setInsertionPoint(op);
-        Location loc = op->getLoc();
-        Value baseOffset = computeBaseOffset(depIndex, loc);
-        SmallVector<Value> sizes = resolveSizes(originalDeps[depIndex], loc);
-        SmallVector<Value> strides = AC->computeStridesFromSizes(sizes, loc);
-        SmallVector<Value> offsets =
-            resolveOffsets(originalDeps[depIndex], loc);
-        SmallVector<Value> offsetIndices;
-        offsetIndices.reserve(strides.size());
-        for (size_t i = 0; i < strides.size(); ++i) {
-          if (i < offsets.size())
-            offsetIndices.push_back(offsets[i]);
-          else
-            offsetIndices.push_back(AC->createIndexConstant(0, loc));
-        }
-        Value newPtr = AC->create<DepGepOp>(loc, AC->llvmPtr, depv, baseOffset,
-                                            offsetIndices, strides);
-        op->getResult(0).replaceAllUsesWith(newPtr);
+        Value depPtr = AC->create<DepGepOp>(loc, AC->llvmPtr, depv, baseOffset,
+                                            ValueRange(), ValueRange());
+        op->getResult(0).replaceAllUsesWith(depPtr);
         op->erase();
       } else if (auto dbGep = dyn_cast<arts::DbGepOp>(op)) {
         if (dbGep.getBasePtr() != placeholder)
           continue;
         AC->setInsertionPoint(op);
-        Location loc = op->getLoc();
-        Value baseOffset = computeBaseOffset(depIndex, loc);
-        SmallVector<Value> sizes = resolveSizes(originalDeps[depIndex], loc);
-        SmallVector<Value> strides = AC->computeStridesFromSizes(sizes, loc);
-        SmallVector<Value> indices = dbGep.getIndices();
-        SmallVector<Value> offsets =
-            resolveOffsets(originalDeps[depIndex], loc);
-        SmallVector<Value> adjustedIndices;
-        adjustedIndices.reserve(indices.size());
-        for (size_t i = 0; i < indices.size(); ++i) {
-          Value idx = indices[i];
-          if (i < offsets.size()) {
-            Value off = offsets[i];
-            if (!matchPattern(off, m_Zero()))
-              idx = AC->create<arith::SubIOp>(loc, idx, off);
-          }
-          adjustedIndices.push_back(idx);
-        }
-        Value newDepGep = AC->create<DepGepOp>(
-            loc, AC->llvmPtr, depv, baseOffset, adjustedIndices, strides);
-        op->getResult(0).replaceAllUsesWith(newDepGep);
+        SmallVector<Value> dbGepIndices(dbGep.getIndices().begin(),
+                                        dbGep.getIndices().end());
+        Value depPtr = AC->create<DepGepOp>(loc, AC->llvmPtr, depv, baseOffset,
+                                            dbGepIndices, depStrides);
+        op->getResult(0).replaceAllUsesWith(depPtr);
+        op->erase();
+      } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+        if (store.getMemRef() != placeholder)
+          continue;
+        AC->setInsertionPoint(op);
+        SmallVector<Value> storeIndices(store.getIndices().begin(),
+                                        store.getIndices().end());
+        Value depPtr = AC->create<DepGepOp>(loc, AC->llvmPtr, depv, baseOffset,
+                                            storeIndices, depStrides);
+        AC->create<LLVM::StoreOp>(loc, store.getValue(), depPtr);
+        op->erase();
+      } else if (auto load = dyn_cast<memref::LoadOp>(op)) {
+        if (load.getMemRef() != placeholder)
+          continue;
+        AC->setInsertionPoint(op);
+        SmallVector<Value> loadIndices(load.getIndices().begin(),
+                                       load.getIndices().end());
+        Value depPtr = AC->create<DepGepOp>(loc, AC->llvmPtr, depv, baseOffset,
+                                            loadIndices, depStrides);
+        Value loaded = AC->create<LLVM::LoadOp>(loc, load.getType(), depPtr);
+        op->getResult(0).replaceAllUsesWith(loaded);
         op->erase();
       }
     }

@@ -146,6 +146,60 @@ SmallVector<Value> mlir::arts::EdtOp::getDependenciesAsVector() {
   return deps;
 }
 
+LogicalResult EdtOp::verify() {
+  /// Skip verification if no_verify attribute is present
+  if (getNoVerifyAttr())
+    return success();
+
+  Block &block = getBody().front();
+  auto blockArgs = block.getArguments();
+  auto deps = getDependenciesAsVector();
+
+  /// Check that dependencies and block arguments match
+  if (blockArgs.size() != deps.size()) {
+    return emitOpError("block arguments (")
+           << blockArgs.size() << ") must match dependencies (" << deps.size()
+           << ")";
+  }
+
+  /// Collect all values defined outside the EDT region
+  DenseSet<Value> externalValues;
+  for (Value dep : deps)
+    externalValues.insert(dep);
+
+  /// Walk all operations in the EDT body
+  auto walkResult = getBody().walk([&](Operation *op) {
+    /// Skip the block itself
+    if (op == &block.front())
+      return WalkResult::advance();
+
+    /// Check each operand
+    for (Value operand : op->getOperands()) {
+      /// Skip if operand is defined inside the region
+      if (operand.getParentRegion() == &getBody())
+        continue;
+
+      /// Skip block arguments - these are allowed
+      if (llvm::is_contained(blockArgs, operand))
+        continue;
+
+      /// Check if this is a dependency value used directly
+      if (externalValues.contains(operand)) {
+        op->emitOpError("EDT region uses external dependency value '")
+            << operand << "' directly instead of block argument. "
+            << "All dependency accesses must go through block arguments.";
+        return WalkResult::interrupt();
+      }
+    }
+    return WalkResult::advance();
+  });
+
+  if (walkResult.wasInterrupted())
+    return failure();
+
+  return success();
+}
+
 void EdtOp::getEffects(
     SmallVectorImpl<MemoryEffects::EffectInstance> &effects) {
   /// Collect all effects from the dependencies using safe method
@@ -185,8 +239,9 @@ void DbDimOp::build(OpBuilder &builder, OperationState &state, Value source,
   state.addTypes(builder.getIndexType());
 }
 
-void DbGepOp::build(OpBuilder &builder, OperationState &state, Value base_ptr,
-                    SmallVector<Value> indices, SmallVector<Value> strides) {
+void DbGepOp::build(OpBuilder &builder, OperationState &state, Type ptr,
+                    Value base_ptr, SmallVector<Value> indices,
+                    SmallVector<Value> strides) {
   state.addOperands(base_ptr);
   state.addOperands(indices);
   state.addOperands(strides);
@@ -195,8 +250,7 @@ void DbGepOp::build(OpBuilder &builder, OperationState &state, Value base_ptr,
                                       (int32_t)strides.size()};
   state.addAttribute(getOperandSegmentSizesAttrName(state.name),
                      builder.getDenseI32ArrayAttr(segments));
-  /// Result type matches base pointer type
-  state.addTypes(base_ptr.getType());
+  state.addTypes(ptr);
 }
 
 void DbControlOp::build(OpBuilder &builder, OperationState &state,
@@ -283,17 +337,6 @@ void DbControlOp::build(OpBuilder &builder, OperationState &state,
   state.addTypes(resultType);
 }
 
-void EventOp::build(OpBuilder &builder, OperationState &state,
-                    ArrayRef<Value> sizes) {
-  SmallVector<Value> eventSizes(sizes.begin(), sizes.end());
-  /// Assuming event type is memref<?x...xi8> or similar; adjust if needed
-  SmallVector<int64_t> shape(sizes.size(), ShapedType::kDynamic);
-  MemRefType eventType = MemRefType::get(shape, builder.getI8Type());
-
-  state.addOperands(eventSizes);
-  state.addTypes(eventType);
-}
-
 //===----------------------------------------------------------------------===//
 // EDT Ops
 //===----------------------------------------------------------------------===//
@@ -341,24 +384,14 @@ void EdtCreateOp::build(OpBuilder &builder, OperationState &state,
 }
 
 //===----------------------------------------------------------------------===//
-// EventOp
-//===----------------------------------------------------------------------===//
-bool EventOp::hasSingleSize() { return getOperation()->hasAttr("singleSize"); }
-void EventOp::setHasSingleSize() {
-  getOperation()->setAttr("singleSize", UnitAttr::get(getContext()));
-}
-
-//===----------------------------------------------------------------------===//
 // DB operations builders
 //===----------------------------------------------------------------------===//
-
-/// Helper function for DbAllocOp builders to reduce code duplication
-static void buildDbAllocOpCommon(OpBuilder &builder, OperationState &state,
-                                 ArtsMode mode, Value route,
-                                 DbAllocType allocType, DbMode dbMode,
-                                 Type elementType, Value address,
-                                 SmallVector<Value> sizes,
-                                 SmallVector<Value> payloadSizes) {
+/// DbAllocOp builders
+static void
+buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
+                     Value route, DbAllocType allocType, DbMode dbMode,
+                     Type elementType, Value address, SmallVector<Value> sizes,
+                     SmallVector<Value> elementSizes, Type pointerType) {
   /// Auto-compute GUID type to match datablock dimensionality
   /// 0 or 1 size -> memref<?xi64>, n sizes -> memref<?x?x...xi64>
   SmallVector<int64_t> guidShape;
@@ -368,16 +401,20 @@ static void buildDbAllocOpCommon(OpBuilder &builder, OperationState &state,
   Type guidType = MemRefType::get(guidShape, builder.getI64Type());
 
   /// Build ptr type from address shape (if any) or dynamic sizes
-  SmallVector<int64_t> shape;
-  if (address && isa<MemRefType>(address.getType())) {
-    auto mt = cast<MemRefType>(address.getType());
-    shape.assign(mt.getShape().begin(), mt.getShape().end());
-  } else {
-    for (size_t i = 0; i < sizes.size(); ++i)
-      shape.push_back(ShapedType::kDynamic);
-  }
-  Type ptrType = MemRefType::get(shape, elementType);
+  Type pointerElementType;
+  if (elementSizes.empty())
+    pointerElementType = elementType;
+  else
+    pointerElementType = arts::getElementMemRefType(elementType, elementSizes);
 
+  Type ptrType;
+  if (pointerType) {
+    ptrType = pointerType;
+  } else {
+    SmallVector<int64_t> shape;
+    shape.assign(sizes.size(), ShapedType::kDynamic);
+    ptrType = MemRefType::get(shape, MemRefType::get({}, pointerElementType));
+  }
   state.addTypes({guidType, ptrType});
 
   /// Add attributes
@@ -397,17 +434,50 @@ static void buildDbAllocOpCommon(OpBuilder &builder, OperationState &state,
   if (address)
     state.addOperands(address);
   state.addOperands(sizes);
-  state.addOperands(payloadSizes);
+  state.addOperands(elementSizes);
 
   /// Build operand segment sizes: [route=1, address(0/1), sizes,
-  /// payloadSizes]
+  /// elementSizes]
   state.addAttribute("operandSegmentSizes",
                      builder.getDenseI32ArrayAttr(
                          {1, static_cast<int32_t>(address ? 1 : 0),
                           static_cast<int32_t>(sizes.size()),
-                          static_cast<int32_t>(payloadSizes.size())}));
+                          static_cast<int32_t>(elementSizes.size())}));
 }
 
+void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
+                      Value route, DbAllocType allocType, DbMode dbMode,
+                      Type elementType, Value address, SmallVector<Value> sizes,
+                      SmallVector<Value> elementSizes) {
+  buildDbAllocOpCommon(builder, state, mode, route, allocType, dbMode,
+                       elementType, address, sizes, elementSizes, nullptr);
+}
+
+void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
+                      Value route, DbAllocType allocType, DbMode dbMode,
+                      Type elementType, SmallVector<Value> sizes,
+                      SmallVector<Value> elementSizes) {
+  buildDbAllocOpCommon(builder, state, mode, route, allocType, dbMode,
+                       elementType, Value{}, sizes, elementSizes, nullptr);
+}
+
+void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
+                      Value route, DbAllocType allocType, DbMode dbMode,
+                      Type elementType, Type pointerType,
+                      SmallVector<Value> sizes,
+                      SmallVector<Value> elementSizes) {
+  buildDbAllocOpCommon(builder, state, mode, route, allocType, dbMode,
+                       elementType, Value{}, sizes, elementSizes, pointerType);
+}
+
+MemRefType DbAllocOp::getAllocatedElementType() {
+  return MemRefType::get(
+      {}, arts::getElementMemRefType(
+              getElementType(), SmallVector<Value>(getElementSizes().begin(),
+                                                   getElementSizes().end())));
+}
+
+/// DbAcquireOp builders
 void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
                         ArtsMode mode, Value sourceGuid, Value sourcePtr,
                         SmallVector<Value> indices, SmallVector<Value> offsets,
@@ -490,34 +560,78 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
                                     static_cast<int32_t>(sizes.size())}));
 }
 
-void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
-                      Value route, DbAllocType allocType, DbMode dbMode,
-                      Value address, SmallVector<Value> sizes,
-                      SmallVector<Value> payloadSizes) {
-  /// Infer element type from address or default to i8
-  Type elementType = builder.getI8Type();
-  if (address && isa<MemRefType>(address.getType())) {
-    elementType = cast<MemRefType>(address.getType()).getElementType();
+LogicalResult DbAcquireOp::verify() {
+  /// Check that the number of offsets matches the number of sizes
+  auto dbSizes = getSizes().size();
+  auto dbOffsets = getOffsets().size();
+  if (dbOffsets != dbSizes) {
+    return emitOpError("Number of offsets (")
+           << dbOffsets << ") must match Number of sizes (" << dbSizes << ")";
   }
 
-  buildDbAllocOpCommon(builder, state, mode, route, allocType, dbMode,
-                       elementType, address, sizes, payloadSizes);
+  /// Get the source pointer type and rank
+  auto srcRank = getSizesFromDb(getSourcePtr()).size();
+  auto dbIndices = getIndices().size();
+  auto remainingRank = srcRank - dbIndices;
+
+  /// Check that source rank minus Db indices equals number of sizes
+  if (remainingRank != dbSizes) {
+    return emitOpError("Source rank (")
+           << srcRank << ") - (" << dbIndices << ") = " << remainingRank
+           << " must equal Number of sizes (" << dbSizes << ")";
+  }
+
+  /// Check if the source has a single size of 1 and we are using indices
+  if (dbIndices > 0) {
+    Operation *sourceDb = getUnderlyingDb(getSourcePtr());
+    if (dbHasSingleSize(sourceDb)) {
+      return emitOpError(
+          "Cannot use indices on single-element datablock (size=1)");
+    }
+  }
+
+  return success();
 }
 
-void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
-                      Value route, DbAllocType allocType, DbMode dbMode,
-                      Type elementType, Value address, SmallVector<Value> sizes,
-                      SmallVector<Value> payloadSizes) {
-  buildDbAllocOpCommon(builder, state, mode, route, allocType, dbMode,
-                       elementType, address, sizes, payloadSizes);
+/// DbRefOp builders
+void DbRefOp::build(OpBuilder &builder, OperationState &state, Value source,
+                    ArrayRef<Value> indices) {
+  /// The dbref
+  DbAllocOp dbAllocOp = dyn_cast<DbAllocOp>(arts::getUnderlyingDbAlloc(source));
+  assert(dbAllocOp && "Expected dbAllocOp");
+  state.addTypes(dbAllocOp.getAllocatedElementType().getElementType());
+  state.addOperands(source);
+  state.addOperands(indices);
+  state.addAttribute(
+      "operandSegmentSizes",
+      builder.getDenseI32ArrayAttr({1, static_cast<int32_t>(indices.size())}));
 }
 
-void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
-                      Value route, DbAllocType allocType, DbMode dbMode,
-                      Type elementType, SmallVector<Value> sizes,
-                      SmallVector<Value> payloadSizes) {
-  buildDbAllocOpCommon(builder, state, mode, route, allocType, dbMode,
-                       elementType, /*address=*/Value{}, sizes, payloadSizes);
+LogicalResult DbRefOp::verify() {
+  auto underlyingDbOp = arts::getUnderlyingDb(getSource());
+  if (!underlyingDbOp)
+    return emitOpError("source must be a datablock operation");
+
+  /// Verify outer indices
+  auto outerSizes = getSizesFromDb(underlyingDbOp);
+  if (getIndices().size() != outerSizes.size())
+    return emitOpError("expects ")
+           << outerSizes.size() << " index operands (got "
+           << getIndices().size() << ")";
+
+  /// Verify output
+  DbAllocOp dbAllocOp = nullptr;
+  if (auto dbAcquire = dyn_cast<DbAcquireOp>(underlyingDbOp)) {
+    dbAllocOp = dyn_cast<DbAllocOp>(
+        arts::getUnderlyingDbAlloc(dbAcquire.getSourcePtr()));
+  } else
+    dbAllocOp = dyn_cast<DbAllocOp>(underlyingDbOp);
+
+  /// Verify output type
+  auto resultType = getResult().getType().cast<MemRefType>();
+  if (resultType != dbAllocOp.getAllocatedElementType().getElementType())
+    return emitOpError("result type must match source element type");
+  return success();
 }
 
 /// Custom builders for DbNumElementsOp that automatically extract sizes
@@ -541,26 +655,53 @@ void DbNumElementsOp::build(OpBuilder &builder, OperationState &state,
 
 /// Helper function to extract sizes from a datablock pointer
 /// by finding the original DbAllocOp or DbAcquireOp that created it
+SmallVector<Value> getSizesFromDb(Operation *dbOp) {
+  if (auto allocOp = dyn_cast<DbAllocOp>(dbOp)) {
+    return SmallVector<Value>(allocOp.getSizes().begin(),
+                              allocOp.getSizes().end());
+  }
+  if (auto acquireOp = dyn_cast<DbAcquireOp>(dbOp)) {
+    return SmallVector<Value>(acquireOp.getSizes().begin(),
+                              acquireOp.getSizes().end());
+  }
+  return {};
+}
+
+SmallVector<Value> getElementSizesFromDb(Operation *dbOp) {
+  if (auto allocOp = dyn_cast<DbAllocOp>(dbOp)) {
+    return SmallVector<Value>(allocOp.getElementSizes().begin(),
+                              allocOp.getElementSizes().end());
+  }
+  return {};
+}
+
 SmallVector<Value> getSizesFromDb(Value datablockPtr) {
   /// Use getUnderlyingDb to find the original DB operation
   Operation *underlyingDb = arts::getUnderlyingDb(datablockPtr);
   if (!underlyingDb)
     return {};
 
-  /// Check if it's a DbAllocOp result
-  if (auto allocOp = dyn_cast<DbAllocOp>(underlyingDb)) {
-    return SmallVector<Value>(allocOp.getSizes().begin(),
-                              allocOp.getSizes().end());
-  }
+  return getSizesFromDb(underlyingDb);
+}
 
-  /// Check if it's a DbAcquireOp result
-  if (auto acquireOp = dyn_cast<DbAcquireOp>(underlyingDb)) {
-    return SmallVector<Value>(acquireOp.getSizes().begin(),
-                              acquireOp.getSizes().end());
-  }
+/// Check if a datablock operation has a single size of 1
+bool dbHasSingleSize(Operation *dbOp) {
+  if (!dbOp)
+    return false;
 
-  /// If we can't find the sizes, return empty (will result in 1 element)
-  return {};
+  SmallVector<Value> sizes = getSizesFromDb(dbOp);
+
+  if (sizes.empty())
+    return false;
+
+  /// Check if there's exactly one size and it's constant 1
+  if (sizes.size() != 1)
+    return false;
+
+  if (auto constSize = sizes[0].getDefiningOp<arith::ConstantIndexOp>())
+    return constSize.value() == 1;
+
+  return false;
 }
 
 SmallVector<Value> getOffsetsFromDb(Value datablockPtr) {

@@ -70,12 +70,10 @@ int main(int argc, char **argv) {
   double **C_parallel = new double *[output_size];
   double **C_serial = new double *[output_size];
 
-  for (int i = 0; i < matrix_size; ++i) {
+  for (int i = 0; i < matrix_size; ++i)
     A[i] = new double[matrix_size];
-  }
-  for (int i = 0; i < kernel_size; ++i) {
+  for (int i = 0; i < kernel_size; ++i)
     Kernel[i] = new double[kernel_size];
-  }
   for (int i = 0; i < output_size; ++i) {
     C_parallel[i] = new double[output_size];
     C_serial[i] = new double[output_size];
@@ -104,17 +102,13 @@ int main(int argc, char **argv) {
     }
   } else {
     printf("Initializing matrices with default values (1.0)...\n");
-    for (int i = 0; i < matrix_size; ++i) {
-      for (int j = 0; j < matrix_size; ++j) {
+    for (int i = 0; i < matrix_size; ++i)
+      for (int j = 0; j < matrix_size; ++j)
         A[i][j] = 1.0;
-      }
-    }
 
-    for (int i = 0; i < kernel_size; ++i) {
-      for (int j = 0; j < kernel_size; ++j) {
+    for (int i = 0; i < kernel_size; ++i)
+      for (int j = 0; j < kernel_size; ++j)
         Kernel[i][j] = 1.0;
-      }
-    }
   }
 
   double t_start = omp_get_wtime();

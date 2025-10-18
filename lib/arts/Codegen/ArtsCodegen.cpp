@@ -29,7 +29,6 @@
 #include "mlir/Transforms/DialectConversion.h"
 /// Arts
 #include "arts/ArtsDialect.h"
-// #include "arts/Codegen/ArtsTypes.h"
 #include "arts/Utils/ArtsUtils.h"
 /// Debug
 
@@ -102,9 +101,9 @@ func::FuncOp ArtsCodegen::getOrCreateRuntimeFunction(RuntimeFunction FnID) {
     if (!funcOp) {                                                             \
       funcOp = create<func::FuncOp>(getUnknownLoc(), Str, fnType);             \
       funcOp.setPrivate();                                                     \
-      funcOp->setAttr("llvm.linkage",                                          \
-                      LLVM::LinkageAttr::get(getBuilder().getContext(),        \
-                                             LLVM::Linkage::External));        \
+      funcOp->setAttr(                                                         \
+          "llvm.linkage",                                                      \
+          LLVM::LinkageAttr::get(getContext(), LLVM::Linkage::External));      \
       /* Apply function attributes for optimization */                         \
       applyRuntimeFunctionAttributes(funcOp, Enum);                            \
     }                                                                          \
@@ -528,30 +527,22 @@ Value ArtsCodegen::castToInt(Type targetType, Value source, Location loc) {
 
 Value ArtsCodegen::castToVoidPtr(Value source, Location loc) {
   auto valPtr = source;
-  if (!valPtr.getType().isa<LLVM::LLVMPointerType>()) {
+  if (!valPtr.getType().isa<LLVM::LLVMPointerType>())
     valPtr = castToLLVMPtr(source, loc);
-  }
   return create<polygeist::Pointer2MemrefOp>(loc, VoidPtr, valPtr);
 }
 
 Value ArtsCodegen::castToLLVMPtr(Value source, Location loc) {
-  if (source.getType().isa<LLVM::LLVMPointerType>())
+  auto ptrType = getLLVMPointerType(source);
+  if (!ptrType)
     return source;
-  auto MT = source.getType().dyn_cast<MemRefType>();
-  if (!MT)
-    return source;
-  return create<polygeist::Memref2PointerOp>(
-      loc,
-      LLVM::LLVMPointerType::get(getBuilder().getContext(),
-                                 MT.getMemorySpaceAsInt()),
-      source);
+  return create<polygeist::Memref2PointerOp>(loc, ptrType, source);
 }
 
 void ArtsCodegen::collectGlobalLLVMStrings() {
   for (auto &op : module.getOps()) {
-    if (auto global = dyn_cast<LLVM::GlobalOp>(op)) {
+    if (auto global = dyn_cast<LLVM::GlobalOp>(op))
       llvmStringGlobals[global.getName().str()] = global;
-    }
   }
 }
 
@@ -582,9 +573,7 @@ void ArtsCodegen::createPrintfCall(Location loc, llvm::StringRef format,
   /// Create the printf function declaration if it doesn't exist
   auto printfFn = module.lookupSymbol<LLVM::LLVMFuncOp>("printf");
   if (!printfFn) {
-    auto i8PtrType = LLVM::LLVMPointerType::get(getBuilder().getContext());
-    auto printfType = LLVM::LLVMFunctionType::get(Int32, {i8PtrType}, true);
-
+    auto printfType = LLVM::LLVMFunctionType::get(Int32, {llvmPtr}, true);
     printfFn = create<LLVM::LLVMFuncOp>(loc, "printf", printfType);
     printfFn.setLinkage(LLVM::Linkage::External);
   }
@@ -600,10 +589,9 @@ void ArtsCodegen::createPrintfCall(Location loc, llvm::StringRef format,
   callArgs.append(args.begin(), args.end());
 
   /// Create the call operation with a symbol reference
-  create<LLVM::CallOp>(
-      loc, TypeRange{getBuilder().getI32Type()},
-      SymbolRefAttr::get(getBuilder().getContext(), printfFn.getName()),
-      callArgs);
+  create<LLVM::CallOp>(loc, TypeRange{getBuilder().getI32Type()},
+                       SymbolRefAttr::get(getContext(), printfFn.getName()),
+                       callArgs);
 }
 
 /// Insertion point management
@@ -626,10 +614,21 @@ void ArtsCodegen::setInsertionPoint(ModuleOp &module) {
 //===----------------------------------------------------------------------===//
 // Memref helpers
 //===----------------------------------------------------------------------===//
+
+LLVM::LLVMPointerType ArtsCodegen::getLLVMPointerType(Value source) {
+  if (source.getType().isa<LLVM::LLVMPointerType>())
+    return nullptr;
+  auto MT = source.getType().dyn_cast<MemRefType>();
+  if (!MT)
+    return nullptr;
+
+  return LLVM::LLVMPointerType::get(getContext(), MT.getMemorySpaceAsInt());
+}
+
 Value ArtsCodegen::computeElementTypeSize(Type elementType, Location loc) {
   /// Insert polygeist type size op
   auto elementSize = create<polygeist::TypeSizeOp>(
-      loc, IndexType::get(getBuilder().getContext()), elementType);
+      loc, IndexType::get(getContext()), elementType);
   return elementSize;
 }
 
@@ -753,9 +752,8 @@ void ArtsCodegen::iterateDbElements(
 
   /// If the db is single, we can use a single loop
   if (isSingle) {
-    /// The loop goes from the dbOffsets[0] to dbOffsets[0] + dbSizes[0]
-    auto lowerBound =
-        dbOffsets.empty() ? createIndexConstant(0, loc) : dbOffsets[0];
+    /// The loop goes from the (offset) to (offset + size)
+    auto lowerBound = dbOffsets[0];
     auto upperBound = create<arith::AddIOp>(loc, lowerBound, dbSizes[0]);
     auto stepConstant = createIndexConstant(1, loc);
     auto loopOp = create<scf::ForOp>(loc, lowerBound, upperBound, stepConstant);
@@ -786,11 +784,8 @@ void ArtsCodegen::iterateMultiDb(Value dbGuid, Value edtGuid,
           elementCallback(linearIndex);
           return;
         }
-        /// The loop goes from the dbOffsets[dim] to dbOffsets[dim] +
-        /// dbSizes[dim]
-        auto lowerBound = (dim < dbOffsets.size())
-                              ? dbOffsets[dim]
-                              : createIndexConstant(0, loc);
+        /// The loop goes from (offset) for this dimension
+        auto lowerBound = dbOffsets[dim];
         auto upperBound = create<arith::AddIOp>(loc, lowerBound, dbSizes[dim]);
         auto loopOp =
             create<scf::ForOp>(loc, lowerBound, upperBound, stepConstant);
