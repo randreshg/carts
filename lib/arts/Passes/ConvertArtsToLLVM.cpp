@@ -62,17 +62,18 @@ public:
 //===----------------------------------------------------------------------===//
 namespace {
 template <typename OpType>
-static inline void getDbSizesOffsetsAndSingle(OpType op,
-                                              SmallVector<Value> &sizesOut,
-                                              SmallVector<Value> &offsetsOut,
-                                              bool &isSingleElement) {
+static inline void getDbInfo(OpType op, SmallVector<Value> &sizesOut,
+                             SmallVector<Value> &offsetsOut,
+                             SmallVector<Value> &indicesOut,
+                             bool &isSingleElement) {
   sizesOut.assign(op.getSizes().begin(), op.getSizes().end());
-  /// If the operation has getOffsets method, use the offsets
-  if (isa<DbAcquireOp>(op)) {
-    auto acqOp = cast<DbAcquireOp>(op);
+
+  if (auto acqOp = dyn_cast<DbAcquireOp>(op.getOperation())) {
     offsetsOut.assign(acqOp.getOffsets().begin(), acqOp.getOffsets().end());
+    indicesOut.assign(acqOp.getIndices().begin(), acqOp.getIndices().end());
   } else {
     offsetsOut.clear();
+    indicesOut.clear();
   }
 
   isSingleElement = false;
@@ -147,18 +148,6 @@ struct GetCurrentNodePattern : public ArtsToLLVMPattern<GetCurrentNodeOp> {
 // Event and Barrier Patterns
 //===----------------------------------------------------------------------===//
 
-/// Pattern to convert arts.event operations
-struct EventPattern : public ArtsToLLVMPattern<EventOp> {
-  using ArtsToLLVMPattern::ArtsToLLVMPattern;
-
-  LogicalResult matchAndRewrite(EventOp op,
-                                PatternRewriter &rewriter) const override {
-    ARTS_INFO("Lowering Event Op " << op);
-    rewriter.eraseOp(op);
-    return success();
-  }
-};
-
 /// Pattern to convert arts.barrier operations
 struct BarrierPattern : public ArtsToLLVMPattern<BarrierOp> {
   using ArtsToLLVMPattern::ArtsToLLVMPattern;
@@ -173,11 +162,11 @@ struct BarrierPattern : public ArtsToLLVMPattern<BarrierOp> {
   }
 };
 
-/// Pattern to convert arts.record_in_dep operations
-struct RecordInDepPattern : public ArtsToLLVMPattern<RecordInDepOp> {
+/// Pattern to convert arts.record_dep operations
+struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
   using ArtsToLLVMPattern::ArtsToLLVMPattern;
 
-  LogicalResult matchAndRewrite(RecordInDepOp op,
+  LogicalResult matchAndRewrite(RecordDepOp op,
                                 PatternRewriter &rewriter) const override {
     ARTS_INFO("Lowering RecordInDep Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
@@ -204,9 +193,9 @@ private:
     auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>();
     assert(dbAcquireOp && "DbAcquireOp not found");
 
-    SmallVector<Value> dbSizes, dbOffsets;
+    SmallVector<Value> dbSizes, dbOffsets, dbIndices;
     bool isSingle = false;
-    getDbSizesOffsetsAndSingle(dbAcquireOp, dbSizes, dbOffsets, isSingle);
+    getDbInfo(dbAcquireOp, dbSizes, dbOffsets, dbIndices, isSingle);
 
     /// Use shared slot counter and iterate over all db elements
     AC->iterateDbElements(dbGuid, edtGuid, dbSizes, dbOffsets, isSingle, loc,
@@ -241,12 +230,11 @@ private:
   }
 };
 
-/// Pattern to convert arts.increment_out_latch operations
-struct IncrementOutLatchPattern
-    : public ArtsToLLVMPattern<IncrementOutLatchOp> {
+/// Pattern to convert arts.increment_dep operations
+struct IncrementDepPattern : public ArtsToLLVMPattern<IncrementDepOp> {
   using ArtsToLLVMPattern::ArtsToLLVMPattern;
 
-  LogicalResult matchAndRewrite(IncrementOutLatchOp op,
+  LogicalResult matchAndRewrite(IncrementDepOp op,
                                 PatternRewriter &rewriter) const override {
     ARTS_INFO("Lowering IncrementOutLatch Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
@@ -271,9 +259,9 @@ private:
     auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>();
     assert(dbAcquireOp && "DbAcquireOp not found");
 
-    SmallVector<Value> dbSizes, dbOffsets;
+    SmallVector<Value> dbSizes, dbOffsets, dbIndices;
     bool isSingle = false;
-    getDbSizesOffsetsAndSingle(dbAcquireOp, dbSizes, dbOffsets, isSingle);
+    getDbInfo(dbAcquireOp, dbSizes, dbOffsets, dbIndices, isSingle);
 
     /// Use shared slot counter and iterate over all db elements
     AC->iterateDbElements(dbGuid, Value(), dbSizes, dbOffsets, isSingle, loc,
@@ -385,75 +373,39 @@ struct DepGepOpPattern : public ArtsToLLVMPattern<DepGepOp> {
     auto strides = op.getStrides();
     auto loc = op.getLoc();
 
-    /// Cast dep_struct to typed pointer to ArtsEdtDep array
-    auto depPtrTy = LLVM::LLVMPointerType::get(AC->ArtsEdtDep);
+    /// Cast dep_struct to typed pointer to LLVM pointer
     Value typedDepPtr = AC->castToLLVMPtr(depStruct, loc);
-    if (typedDepPtr.getType() != depPtrTy)
-      typedDepPtr = AC->create<LLVM::BitcastOp>(loc, depPtrTy, typedDepPtr);
 
     /// Compute linearized index: offset + sum_i indices[i] * strides[i]
-    Value depEntryPtr = typedDepPtr;
-    {
-      Value linearIndex = offset;
-      if (linearIndex.getType() != AC->Int64)
-        linearIndex = AC->castToInt(AC->Int64, linearIndex, loc);
+    Value linearIndex = offset;
+    if (linearIndex.getType() != AC->Int64)
+      linearIndex = AC->castToInt(AC->Int64, linearIndex, loc);
 
-      for (size_t i = 0; i < indices.size(); ++i) {
-        Value idx = indices[i];
-        if (idx.getType() != AC->Int64)
-          idx = AC->castToInt(AC->Int64, idx, loc);
-        Value strideVal = (i < strides.size())
-                              ? strides[i]
-                              : AC->createIntConstant(1, AC->Int64, loc);
-        if (strideVal.getType() != AC->Int64)
-          strideVal = AC->castToInt(AC->Int64, strideVal, loc);
+    for (size_t i = 0; i < indices.size(); ++i) {
+      Value idx = indices[i];
+      if (idx.getType() != AC->Int64)
+        idx = AC->castToInt(AC->Int64, idx, loc);
+      Value strideVal = (i < strides.size())
+                            ? strides[i]
+                            : AC->createIntConstant(1, AC->Int64, loc);
+      if (strideVal.getType() != AC->Int64)
+        strideVal = AC->castToInt(AC->Int64, strideVal, loc);
 
-        Value contrib = AC->create<arith::MulIOp>(loc, idx, strideVal);
-        linearIndex = AC->create<arith::AddIOp>(loc, linearIndex, contrib);
-      }
-
-      depEntryPtr = AC->create<LLVM::GEPOp>(
-          loc, depPtrTy, AC->ArtsEdtDep, typedDepPtr, ValueRange{linearIndex});
+      Value contrib = AC->create<arith::MulIOp>(loc, idx, strideVal);
+      linearIndex = AC->create<arith::AddIOp>(loc, linearIndex, contrib);
     }
+
+    Value depEntryPtr = AC->create<LLVM::GEPOp>(
+        loc, AC->llvmPtr, AC->ArtsEdtDep, typedDepPtr, ValueRange{linearIndex});
 
     /// Extract ptr field (field #2) from dependency structure
     auto c0 = AC->createIntConstant(0, AC->Int64, loc);
     auto c2 = AC->createIntConstant(2, AC->Int64, loc);
-    auto ptrFieldPtr = AC->create<LLVM::GEPOp>(
-        loc, LLVM::LLVMPointerType::get(AC->llvmPtr), AC->ArtsEdtDep,
-        depEntryPtr, ValueRange{c0, c2});
-    Value dataPtr = AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, ptrFieldPtr);
+    auto dataPtr = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep,
+                                           depEntryPtr, ValueRange{c0, c2});
 
-    /// Return the LLVM pointer directly
+    /// Return pointer to the array element
     rewriter.replaceOp(op, dataPtr);
-    return success();
-  }
-};
-
-/// Pattern to convert arts.dep_get_guid operations
-struct DepGetGuidOpPattern : public ArtsToLLVMPattern<DepGetGuidOp> {
-  using ArtsToLLVMPattern::ArtsToLLVMPattern;
-
-  LogicalResult matchAndRewrite(DepGetGuidOp op,
-                                PatternRewriter &rewriter) const override {
-    ARTS_INFO("Lowering DepGetGuid Op " << op);
-    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
-    auto depStruct = op.getDepStruct();
-    auto loc = op.getLoc();
-
-    /// Cast dep_struct to typed pointer to ArtsEdtDep
-    auto depPtrTy = LLVM::LLVMPointerType::get(AC->ArtsEdtDep);
-    Value typedDepPtr = AC->castToLLVMPtr(depStruct, loc);
-    if (typedDepPtr.getType() != depPtrTy)
-      typedDepPtr = AC->create<LLVM::BitcastOp>(loc, depPtrTy, typedDepPtr);
-
-    /// Extract GUID field (field #0) from dependency structure using GEP
-    auto c0 = AC->createIntConstant(0, AC->Int64, loc);
-    auto guidFieldPtr = AC->create<LLVM::GEPOp>(
-        loc, LLVM::LLVMPointerType::get(AC->ArtsGuid), AC->ArtsEdtDep,
-        typedDepPtr, ValueRange{c0, c0});
-    auto guid = AC->create<LLVM::LoadOp>(loc, AC->ArtsGuid, guidFieldPtr);
-    rewriter.replaceOp(op, guid);
     return success();
   }
 };
@@ -477,8 +429,6 @@ struct DbGepOpPattern : public ArtsToLLVMPattern<arts::DbGepOp> {
     /// If base is a memref of pointers, we must load the pointer element;
     /// otherwise we compute the address within the element buffer.
     auto baseMT = base.getType().dyn_cast<MemRefType>();
-    const bool isPointerArray =
-        baseMT && baseMT.getElementType().isa<LLVM::LLVMPointerType>();
 
     /// Pad strides with 1s to match indices length
     SmallVector<Value> paddedStrides(strides.begin(), strides.end());
@@ -495,13 +445,7 @@ struct DbGepOpPattern : public ArtsToLLVMPattern<arts::DbGepOp> {
     Value elemAddr = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, elemTy, basePtr,
                                              ValueRange{idx64});
 
-    /// For arrays of pointers, load the pointer value; else return address
-    if (isPointerArray) {
-      Value loadedPtr = AC->create<LLVM::LoadOp>(loc, AC->llvmPtr, elemAddr);
-      rewriter.replaceOp(op, loadedPtr);
-    } else {
-      rewriter.replaceOp(op, elemAddr);
-    }
+    rewriter.replaceOp(op, elemAddr);
     return success();
   }
 };
@@ -590,27 +534,29 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
       route = AC->createIntConstant(0, AC->Int32, loc);
     Value elementSize = AC->computeElementTypeSize(op.getElementType(), loc);
 
-    auto resultPtrTy = op.getPtr().getType();
-    Value typedMemref;
+    /// Compute payload size from elementSizes (product of all payload
+    /// dimensions)
+    Value payloadSize = AC->createIndexConstant(1, loc);
+    for (Value payloadDim : op.getElementSizes())
+      payloadSize = AC->create<arith::MulIOp>(loc, payloadSize, payloadDim);
 
-    SmallVector<Value> dbSizes, dbOffsets;
+    /// Total datablock size = elementSize * payloadSize
+    Value totalDbSize =
+        AC->create<arith::MulIOp>(loc, elementSize, payloadSize);
+
+    SmallVector<Value> dbSizes, dbOffsets, dbIndices;
     bool isSingleElement = false;
-    getDbSizesOffsetsAndSingle(op, dbSizes, dbOffsets, isSingleElement);
+    getDbInfo(op, dbSizes, dbOffsets, dbIndices, isSingleElement);
 
     if (isSingleElement) {
       ARTS_DEBUG("Creating single DB");
-      /// Allocate a single GUID
+      /// Allocate a single GUID as 1-element array
       auto guidType = MemRefType::get({1}, AC->Int64);
-      // Static shape (no dynamic dims) => no dynamic size operands
       guidMemref = AC->create<memref::AllocOp>(loc, guidType);
-      /// Allocate a single DB Pointer
-      auto payloadPtrType = MemRefType::get({}, AC->llvmPtr);
+      /// Allocate a single DB Pointer as 1-element array
+      auto payloadPtrType = MemRefType::get({1}, AC->llvmPtr);
       dbMemref = AC->create<memref::AllocOp>(loc, payloadPtrType);
-      createSingleDb(dbMemref, guidMemref, dbMode, route, elementSize, loc);
-      /// Load the raw ptr from the dbMemref and cast to the result memref type.
-      auto rawPtr = AC->create<memref::LoadOp>(loc, dbMemref).getResult();
-      typedMemref =
-          AC->create<polygeist::Pointer2MemrefOp>(loc, resultPtrTy, rawPtr);
+      createSingleDb(dbMemref, guidMemref, dbMode, route, totalDbSize, loc);
     } else {
       ARTS_DEBUG("Creating multi-dim DB");
       /// Compute total number of elements
@@ -624,12 +570,11 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
           MemRefType::get({ShapedType::kDynamic}, AC->llvmPtr);
       dbMemref = AC->create<memref::AllocOp>(loc, payloadPtrType,
                                              ValueRange{totalElems});
-      createMultiDbs(dbMemref, guidMemref, dbSizes, dbMode, route, elementSize,
+      createMultiDbs(dbMemref, guidMemref, dbSizes, dbMode, route, totalDbSize,
                      loc);
-      typedMemref = dbMemref;
     }
 
-    rewriter.replaceOp(op, {guidMemref, typedMemref});
+    rewriter.replaceOp(op, {guidMemref, dbMemref});
     return success();
   }
 
@@ -651,17 +596,13 @@ private:
     /// Store the DB pointer and GUID in the linearized memrefs
     if (indices.empty()) {
       auto zeroIndex = AC->createIndexConstant(0, loc);
-      auto dbRawPtr =
-          AC->create<polygeist::Memref2PointerOp>(loc, AC->llvmPtr, dbPtr);
-      AC->create<memref::StoreOp>(loc, dbRawPtr, dbMemref);
+      AC->create<memref::StoreOp>(loc, dbPtr, dbMemref, ValueRange{zeroIndex});
       AC->create<memref::StoreOp>(loc, guid, guidMemref, ValueRange{zeroIndex});
     } else {
       auto linearIndex = AC->computeLinearIndex(sizes, indices, loc);
       AC->create<memref::StoreOp>(loc, guid, guidMemref,
                                   ValueRange{linearIndex});
-      auto dbRawPtr =
-          AC->create<polygeist::Memref2PointerOp>(loc, AC->llvmPtr, dbPtr);
-      AC->create<memref::StoreOp>(loc, dbRawPtr, dbMemref,
+      AC->create<memref::StoreOp>(loc, dbPtr, dbMemref,
                                   ValueRange{linearIndex});
     }
   }
@@ -706,7 +647,48 @@ struct DbAcquirePattern : public ArtsToLLVMPattern<DbAcquireOp> {
   LogicalResult matchAndRewrite(DbAcquireOp op,
                                 PatternRewriter &rewriter) const override {
     ARTS_INFO("Lowering DbAcquire Op " << op);
-    rewriter.replaceOp(op, ValueRange{op.getSourceGuid(), op.getSourcePtr()});
+    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
+    auto loc = op.getLoc();
+
+    Value sourceGuid = op.getSourceGuid();
+    Value sourcePtr = op.getSourcePtr();
+
+    /// Get source sizes from the defining op
+    auto sourceOp = sourceGuid.getDefiningOp();
+    SmallVector<Value> sourceSizes;
+    if (auto allocOp = dyn_cast_or_null<DbAllocOp>(sourceOp))
+      sourceSizes.assign(allocOp.getSizes().begin(), allocOp.getSizes().end());
+    else if (auto acqOp = dyn_cast_or_null<DbAcquireOp>(sourceOp))
+      sourceSizes.assign(acqOp.getSizes().begin(), acqOp.getSizes().end());
+
+    if (!sourceSizes.empty()) {
+      SmallVector<Value> indices(op.getIndices().begin(),
+                                 op.getIndices().end());
+      SmallVector<Value> strides =
+          AC->computeStridesFromSizes(sourceSizes, loc);
+      /// Guid llvm type
+      auto guidMT = op.getGuid().getType().dyn_cast<MemRefType>();
+      auto llvmGuidType = LLVM::LLVMPointerType::get(
+          AC->getContext(), guidMT.getMemorySpaceAsInt());
+      auto loadedGuid =
+          AC->create<DbGepOp>(loc, llvmGuidType, sourceGuid, indices, strides);
+      /// Ptr llvm type
+      auto ptrMT = op.getPtr().getType().dyn_cast<MemRefType>();
+      auto llvmPtrType = LLVM::LLVMPointerType::get(
+          AC->getContext(), ptrMT.getMemorySpaceAsInt());
+      auto loadedPtr =
+          AC->create<DbGepOp>(loc, llvmPtrType, sourcePtr, indices, strides);
+      /// Convert to memref type
+      auto guidMemref =
+          AC->create<polygeist::Pointer2MemrefOp>(loc, guidMT, loadedGuid);
+      auto ptrMemref =
+          AC->create<polygeist::Pointer2MemrefOp>(loc, ptrMT, loadedPtr);
+      rewriter.replaceOp(op, ValueRange{guidMemref, ptrMemref});
+    } else {
+      /// Fallback: just forward the source values
+      rewriter.replaceOp(op, ValueRange{sourceGuid, sourcePtr});
+    }
+
     return success();
   }
 };
@@ -847,9 +829,7 @@ struct ConvertArtsToLLVMPass
 
 private:
   LogicalResult initializeCodegen();
-  /// First run: populate core patterns (no DbAcquire/DbRelease)
   void populateCorePatterns(RewritePatternSet &patterns);
-  /// Second run: populate only DbAcquire/DbRelease cleanup patterns
   void populateDbPatterns(RewritePatternSet &patterns);
 
   //// Member variables
@@ -882,6 +862,7 @@ void ConvertArtsToLLVMPass::runOnOperation() {
 
   /// Run 1: core patterns
   {
+    ARTS_INFO("Running core patterns");
     RewritePatternSet corePatterns(context);
     populateCorePatterns(corePatterns);
     if (failed(applyPatternsAndFoldGreedily(module, std::move(corePatterns),
@@ -894,6 +875,7 @@ void ConvertArtsToLLVMPass::runOnOperation() {
 
   /// Run 2: Db Patterns
   {
+    ARTS_INFO("Running db patterns");
     RewritePatternSet dbPatterns(context);
     populateDbPatterns(dbPatterns);
     if (failed(applyPatternsAndFoldGreedily(module, std::move(dbPatterns),
@@ -904,6 +886,20 @@ void ConvertArtsToLLVMPass::runOnOperation() {
     }
   }
 
+  /// Run 3: Other Patterns
+  {
+    ARTS_INFO("Running other patterns");
+    RewritePatternSet otherPatterns(context);
+    otherPatterns.add<DbAllocPattern, DbFreePattern>(context, AC);
+    otherPatterns.add<DbNumElementsPattern>(context, AC);
+    otherPatterns.add<YieldPattern>(context, AC);
+    if (failed(applyPatternsAndFoldGreedily(module, std::move(otherPatterns),
+                                            config))) {
+      ARTS_ERROR("Failed to apply other conversion patterns");
+      delete AC;
+      return signalPassFailure();
+    }
+  }
   //// Initialize runtime
   AC->initRT(AC->getUnknownLoc());
 
@@ -930,27 +926,24 @@ void ConvertArtsToLLVMPass::populateCorePatterns(RewritePatternSet &patterns) {
   patterns.add<GetTotalWorkersPattern, GetTotalNodesPattern,
                GetCurrentWorkerPattern, GetCurrentNodePattern>(context, AC);
 
-  /// Event and barrier patterns
-  patterns.add<EventPattern, BarrierPattern>(context, AC);
+  /// Synchronization patterns
+  patterns.add<BarrierPattern>(context, AC);
 
   /// EDT patterns
   patterns.add<EdtParamPackPattern, EdtParamUnpackPattern>(context, AC);
   patterns.add<EdtCreatePattern>(context, AC);
 
   /// Dependency patterns
-  patterns.add<DepGepOpPattern, DepGetGuidOpPattern>(context, AC);
-  patterns.add<RecordInDepPattern, IncrementOutLatchPattern>(context, AC);
+  patterns.add<DepGepOpPattern>(context, AC);
+  patterns.add<RecordDepPattern, IncrementDepPattern>(context, AC);
 }
 
 void ConvertArtsToLLVMPass::populateDbPatterns(RewritePatternSet &patterns) {
   MLIRContext *context = patterns.getContext();
   /// DB patterns
   patterns.add<DbControlPattern>(context, AC);
-  patterns.add<DbAllocPattern, DbFreePattern>(context, AC);
-  patterns.add<DbNumElementsPattern>(context, AC);
-  patterns.add<DbGepOpPattern>(context, AC);
   patterns.add<DbAcquirePattern, DbReleasePattern>(context, AC);
-  patterns.add<YieldPattern>(context, AC);
+  patterns.add<DbGepOpPattern>(context, AC);
 }
 
 //===----------------------------------------------------------------------===//

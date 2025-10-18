@@ -112,6 +112,7 @@ public:
   }
   SmallVector<Operation *, 16> &getLoads() { return loads; }
   SmallVector<Operation *, 16> &getStores() { return stores; }
+  SmallVector<Operation *, 16> &getReferences() { return references; }
   DbAcquireOp getDbAcquireOp() const { return dbAcquireOp; }
   DbReleaseOp getDbReleaseOp() const { return dbReleaseOp; }
 
@@ -132,7 +133,7 @@ private:
   EdtOp edtUser;
   Value useInEdt;
   /// Memory accesses (loads/stores) inside the EDT
-  SmallVector<Operation *, 16> loads, stores;
+  SmallVector<Operation *, 16> loads, stores, references;
 
   /// Helper functions
   SmallVector<DbOffsetRange, 4> computeAccessedOffsetRanges();

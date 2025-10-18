@@ -8,6 +8,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
@@ -25,7 +26,9 @@
 #include "mlir/Pass/Pass.h"
 /// Debug
 #include "arts/Analysis/Graphs/Db/DbNode.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include <algorithm>
 #include <cstdint>
 /// File operations
 #include "llvm/Support/FileSystem.h"
@@ -58,7 +61,7 @@ struct DbPass : public arts::DbBase<DbPass> {
   bool deadDbElimination();
   bool adjustDbModes();
   bool pinAndSplitAcquires();
-  bool promotePinnedDimsToPayload();
+  bool promotePinnedDimsToElementDims();
   bool tightenAcquireSlices();
   bool convertToParameters();
 
@@ -71,6 +74,18 @@ struct DbPass : public arts::DbBase<DbPass> {
 private:
   ModuleOp module;
   ArtsAnalysisManager *AM = nullptr;
+
+  /// Helper functions
+  void updateDbAllocAfterPromotion(DbAllocOp oldAlloc, DbAllocOp newAlloc,
+                                   size_t pushCount,
+                                   SetVector<Operation *> &opsToRemove);
+  void updateDbAcquireAfterPromotion(DbAcquireOp acqOp, DbAllocOp newAlloc,
+                                     size_t pushCount, OpBuilder &b,
+                                     Location loc,
+                                     SetVector<Operation *> &opsToRemove);
+  void updateDbRefOpsAfterPromotion(Value sourcePtr, Type elementMemRefType,
+                                    SetVector<Operation *> &opsToRemove,
+                                    Value newSourcePtr);
 };
 } // namespace
 
@@ -90,9 +105,11 @@ void DbPass::runOnOperation() {
   changed |= deadDbElimination();
   changed |= adjustDbModes();
   changed |= pinAndSplitAcquires();
-  changed |= promotePinnedDimsToPayload();
+  changed |= promotePinnedDimsToElementDims();
 
   if (changed) {
+    /// If the module has changed, adjust the db modes again
+    changed |= adjustDbModes();
     ARTS_INFO(" Module has changed, invalidating analyses");
     AM->invalidate();
   }
@@ -261,8 +278,8 @@ bool DbPass::adjustDbModes() {
 ///                   indices[%i] offsets[%c0] sizes[%N]
 ///     arts.edt (%ptr) {
 ///     ^bb0(%arg: memref<?xmemref<?xf64>>):
-///       %a = memref.load %arg[%c5]  // invariant index
-///       %b = memref.load %arg[%c7]  // different invariant index
+///       %a = memref.load %arg[%c5]  /// invariant index
+///       %b = memref.load %arg[%c7]  /// different invariant index
 ///     }
 ///
 ///   After (split into two acquires):
@@ -272,12 +289,9 @@ bool DbPass::adjustDbModes() {
 ///                     indices[%i, %c7] offsets[%c0] sizes[%c1]
 ///     arts.edt (%ptr1, %ptr2) {
 ///     ^bb0(%arg1: memref<?xf64>, %arg2: memref<?xf64>):
-///       %a = memref.load %arg1[]  // now scalar access
-///       %b = memref.load %arg2[]  // now scalar access
+///       %a = memref.load %arg1[]  /// now scalar access
+///       %b = memref.load %arg2[]  /// now scalar access
 ///     }
-///
-/// Key principle: We modify the acquire's indices (dimension selectors) and
-/// set sizes to 1 for pinned dimensions, but offsets remain unchanged.
 //===----------------------------------------------------------------------===//
 bool DbPass::pinAndSplitAcquires() {
   ARTS_DEBUG_HEADER(PinAndSplitAcquires);
@@ -329,54 +343,39 @@ bool DbPass::pinAndSplitAcquires() {
       ARTS_DEBUG(" - Processing acquire: " << acqOp << " (rank=" << rank
                                            << ")");
 
-      /// Get memory accesses (loads/stores) within the EDT
-      SmallVector<Operation *> accesses;
-      acqNode->getMemoryAccesses(accesses);
-      if (accesses.empty()) {
-        ARTS_DEBUG("  - No memory accesses, skipping");
+      /// Check if parent is a single-element datablock (size=1)
+      if (dbHasSingleSize(acqNode->getParent()->getOp())) {
+        ARTS_DEBUG("  - Skipping single-element datablock (size=1)");
         continue;
       }
 
       Region &edtRegion = acqNode->getEdtUser().getBody();
       Value edtArg = acqNode->getUseInEdt();
 
-      /// Helper: Extract indices from memory operation if it accesses edtArg
-      auto getAccessIndices = [&](Operation *op) -> std::optional<ValueRange> {
-        Value mem;
-        ValueRange idxs;
-        if (auto ld = dyn_cast<memref::LoadOp>(op)) {
-          mem = ld.getMemref();
-          idxs = ld.getIndices();
-        } else if (auto st = dyn_cast<memref::StoreOp>(op)) {
-          mem = st.getMemref();
-          idxs = st.getIndices();
-        } else {
-          return std::nullopt;
-        }
-        if (!edtRegion.isAncestor(op->getParentRegion()) || mem != edtArg)
-          return std::nullopt;
-        return idxs;
+      /// Collect accesses that operate on the EDT datablock argument.
+      SmallVector<bool> dimHasInvariant(rank, true);
+      llvm::DenseMap<Operation *, SmallVector<Value>> accessIndices;
+      SmallVector<Operation *, 8> accessOrder;
+
+      auto recordAccess = [&](Operation *op, ValueRange idxs) {
+        SmallVector<Value> idxVec(idxs.begin(), idxs.end());
+        accessOrder.push_back(op);
+        accessIndices.try_emplace(op, std::move(idxVec));
       };
 
-      /// Step 3: Analyze which dimensions use invariant indices
-      /// For each dimension, track whether ALL accesses use invariant indices
-      SmallVector<bool> dimHasInvariant(rank, true);
-
-      for (Operation *acc : accesses) {
-        auto indicesOpt = getAccessIndices(acc);
-        /// Skip accesses that don't match (e.g., nested memref accesses)
-        if (!indicesOpt)
-          continue;
-
-        /// Check for rank mismatch
-        if (indicesOpt->size() != rank) {
+      bool invariantsBroken = false;
+      auto analyzeAccess = [&](Operation *op, ValueRange idxs) -> void {
+        if (!edtRegion.isAncestor(op->getParentRegion()))
+          return;
+        if (idxs.size() != rank) {
           ARTS_DEBUG(
               "  - Access with mismatched rank, marking all dims variant");
           std::fill(dimHasInvariant.begin(), dimHasInvariant.end(), false);
-          break;
+          invariantsBroken = true;
+          return;
         }
-
-        ValueRange indices = *indicesOpt;
+        recordAccess(op, idxs);
+        const SmallVector<Value> &indices = accessIndices.lookup(op);
         for (size_t d = 0; d < rank; ++d) {
           Value idx = indices[d];
           bool isInv = arts::isInvariantInEdt(edtRegion, idx);
@@ -385,8 +384,46 @@ bool DbPass::pinAndSplitAcquires() {
           if (!isInv)
             dimHasInvariant[d] = false;
         }
+      };
+
+      /// Primary path: use db_ref operations for outer-dimension analysis.
+      for (Operation *op : acqNode->getReferences()) {
+        auto ref = dyn_cast<DbRefOp>(op);
+        if (!ref)
+          continue;
+        if (ref.getSource() != edtArg)
+          continue;
+        analyzeAccess(op, ref.getIndices());
+        if (invariantsBroken)
+          break;
       }
 
+      /// Fallback: consider direct loads/stores on the EDT argument.
+      if (!invariantsBroken && accessOrder.empty()) {
+        SmallVector<Operation *> legacyAccesses;
+        acqNode->getMemoryAccesses(legacyAccesses);
+        for (Operation *acc : legacyAccesses) {
+          if (auto ld = dyn_cast<memref::LoadOp>(acc)) {
+            if (ld.getMemref() != edtArg)
+              continue;
+            analyzeAccess(acc, ld.getIndices());
+          } else if (auto st = dyn_cast<memref::StoreOp>(acc)) {
+            if (st.getMemref() != edtArg)
+              continue;
+            analyzeAccess(acc, st.getIndices());
+          }
+          if (invariantsBroken)
+            break;
+        }
+      }
+
+      if (accessOrder.empty()) {
+        ARTS_DEBUG("  - No relevant accesses (db_ref or direct), skipping");
+        continue;
+      }
+
+      /// Step 3: Analyze which dimensions use invariant indices
+      /// For each dimension, track whether ALL accesses use invariant indices
       /// If no dimensions have invariant accesses, skip
       if (llvm::none_of(dimHasInvariant, [](bool b) { return b; })) {
         ARTS_DEBUG("  - No invariant dimensions, skipping");
@@ -402,12 +439,11 @@ bool DbPass::pinAndSplitAcquires() {
       };
       SmallVector<AccessGroup> groups;
 
-      for (Operation *acc : accesses) {
-        auto indicesOpt = getAccessIndices(acc);
-        if (!indicesOpt || indicesOpt->size() != rank)
+      for (Operation *acc : accessOrder) {
+        auto accessIt = accessIndices.find(acc);
+        if (accessIt == accessIndices.end())
           continue;
-
-        ValueRange indices = *indicesOpt;
+        const SmallVector<Value> &indices = accessIt->second;
         SmallVector<Value> pattern;
         for (size_t d = 0; d < rank; ++d) {
           if (dimHasInvariant[d])
@@ -415,11 +451,11 @@ bool DbPass::pinAndSplitAcquires() {
         }
 
         /// Find existing group or create new one
-        auto it = llvm::find_if(groups, [&](const AccessGroup &g) {
+        auto groupIt = llvm::find_if(groups, [&](const AccessGroup &g) {
           return arts::equalRange(g.invariantIndices, pattern);
         });
-        if (it != groups.end()) {
-          it->operations.push_back(acc);
+        if (groupIt != groups.end()) {
+          groupIt->operations.push_back(acc);
         } else {
           groups.push_back({pattern, {acc}});
         }
@@ -446,6 +482,7 @@ bool DbPass::pinAndSplitAcquires() {
       SmallVector<DbAcquireOp> newAcquires;
       newAcquires.reserve(numGroups);
 
+      size_t pinnedDims = llvm::count(dimHasInvariant, true);
       for (const AccessGroup &group : groups) {
         /// Build new indices: original + invariant values
         SmallVector<Value> newIndices(acqOp.getIndices().begin(),
@@ -453,23 +490,24 @@ bool DbPass::pinAndSplitAcquires() {
         newIndices.append(group.invariantIndices.begin(),
                           group.invariantIndices.end());
 
-        /// Build new sizes: set to 1 for invariant dimensions
+        /// Build new sizes: remove sizes for invariant dimensions
         SmallVector<Value> newSizes;
-        newSizes.reserve(rank);
         auto oldSizes = acqOp.getSizes();
+        size_t newRank = rank - pinnedDims;
+        newSizes.reserve(newRank);
         for (size_t d = 0; d < rank; ++d) {
-          if (dimHasInvariant[d])
-            newSizes.push_back(one);
-          else
+          if (!dimHasInvariant[d])
             newSizes.push_back(d < oldSizes.size() ? oldSizes[d] : one);
         }
 
-        /// Offsets remain unchanged
+        /// Build new offsets: remove offsets for invariant dimensions
         SmallVector<Value> newOffsets;
-        newOffsets.reserve(rank);
+        newOffsets.reserve(newRank);
         auto oldOffsets = acqOp.getOffsets();
-        for (size_t d = 0; d < rank; ++d)
-          newOffsets.push_back(d < oldOffsets.size() ? oldOffsets[d] : zero);
+        for (size_t d = 0; d < rank; ++d) {
+          if (!dimHasInvariant[d])
+            newOffsets.push_back(d < oldOffsets.size() ? oldOffsets[d] : zero);
+        }
 
         DbAcquireOp newAcq = b.create<DbAcquireOp>(
             loc, acqOp.getMode(), acqOp.getSourceGuid(), acqOp.getSourcePtr(),
@@ -525,16 +563,16 @@ bool DbPass::pinAndSplitAcquires() {
       for (size_t k = 0; k < numGroups; ++k) {
         BlockArgument newArg = newBlockArgs[k];
         for (Operation *acc : groups[k].operations) {
-          auto indicesOpt = getAccessIndices(acc);
-          if (!indicesOpt)
+          auto it = accessIndices.find(acc);
+          if (it == accessIndices.end())
             continue;
 
           /// Build new indices: only include variant (non-invariant) dims
           /// since invariant dims are now pinned and removed from the type
           SmallVector<Value> newAccessIndices;
-          size_t newRank = rank - llvm::count(dimHasInvariant, true);
+          size_t newRank = rank - pinnedDims;
           newAccessIndices.reserve(newRank);
-          ValueRange oldIndices = *indicesOpt;
+          const SmallVector<Value> &oldIndices = it->second;
           for (size_t d = 0; d < rank; ++d) {
             if (!dimHasInvariant[d])
               newAccessIndices.push_back(oldIndices[d]);
@@ -547,6 +585,9 @@ bool DbPass::pinAndSplitAcquires() {
           } else if (auto st = dyn_cast<memref::StoreOp>(acc)) {
             st.setMemRef(newArg);
             st.getIndicesMutable().assign(newAccessIndices);
+          } else if (auto ref = dyn_cast<DbRefOp>(acc)) {
+            ref.getOperation()->setOperand(0, newArg);
+            ref.getIndicesMutable().assign(newAccessIndices);
           }
         }
       }
@@ -585,29 +626,25 @@ bool DbPass::pinAndSplitAcquires() {
 }
 
 //===----------------------------------------------------------------------===//
-/// Promote pinned indices from acquires into the alloc payload.
+/// Promote pinned indices from acquires into the alloc elementSize.
 ///
 /// When every DbAcquire of a given DbAlloc pins the same leading subset of
 /// dimensions and those dimensions are accessed at zero offset, we can move the
-/// corresponding alloc sizes into the payload. This enlarges the per-datablock
-/// payload while reducing the number of outer dimensions. Each acquire shrinks
-/// its index list by the promoted dimensions and converts the matching pinned
-/// indices into offsets (with unit sizes) so the payload slice remains
-/// accurate. The number of offsets/sizes on every acquire remains unchanged
-/// compared to the original program.
+/// corresponding alloc sizes into the elementSize. This enlarges the
+/// per-datablock elementSize while reducing the number of outer dimensions.
 ///
 /// Example (matrix rows):
 ///   Before:
-///     %alloc = arts.db_alloc sizes[%N, %M] payloadSizes[]
+///     %alloc = arts.db_alloc sizes[%N, %M] elementSizes[]
 ///     %acq   = arts.db_acquire indices[%row, %col] offsets[%o0, %o1]
 ///                                sizes[%s0, %s1]
 ///   After:
-///     %alloc = arts.db_alloc sizes[%M] payloadSizes[%N]
+///     %alloc = arts.db_alloc sizes[%M] elementSizes[%N]
 ///     %acq   = arts.db_acquire indices[%col] offsets[%row]
 ///                                sizes[%s1]
 //===----------------------------------------------------------------------===//
-bool DbPass::promotePinnedDimsToPayload() {
-  ARTS_DEBUG_HEADER(PromotePinnedDimsToPayload);
+bool DbPass::promotePinnedDimsToElementDims() {
+  ARTS_DEBUG_HEADER(PromotePinnedDimsToElementDims);
   bool changed = false;
 
   SetVector<Operation *> opsToRemove;
@@ -643,19 +680,35 @@ bool DbPass::promotePinnedDimsToPayload() {
         return;
       }
 
-      /// Find the minimum number of pinned dimensions across all acquires
+      /// Find the minimum number of promotable pinned dimensions across all
+      /// acquires. A dimension is promotable when it is currently represented
+      /// by an index (pinned) and the corresponding offset is zero.
       size_t minPinned = std::numeric_limits<size_t>::max();
       for (DbAcquireOp acqOp : acquires) {
+        ValueRange offsets = acqOp.getOffsets();
         ValueRange indices = acqOp.getIndices();
 
-        /// This acquire doesn't pin any dimensions
-        if (indices.size() <= allocRank) {
-          ARTS_DEBUG(" - Acquire has no pinned dimensions");
+        /// All promoted dimensions must have zero offsets.
+        if (llvm::any_of(offsets, [](Value v) {
+              int64_t cst = 0;
+              return !arts::getConstantIndex(v, cst) || cst != 0;
+            })) {
+          ARTS_DEBUG(" - Acquire has non-zero offsets");
           return;
         }
 
-        /// Get the pinned indices (beyond alloc rank)
-        size_t pinnedCount = indices.size() - allocRank;
+        if (offsets.size() > allocRank) {
+          ARTS_DEBUG(" - Acquire has more offsets than alloc rank");
+          return;
+        }
+
+        size_t pinnedCount = allocRank - offsets.size();
+        if (indices.size() < pinnedCount) {
+          ARTS_DEBUG(" - Acquire has insufficient pinned indices (expected "
+                     << pinnedCount << ")");
+          return;
+        }
+
         minPinned = std::min(minPinned, pinnedCount);
       }
 
@@ -664,145 +717,73 @@ bool DbPass::promotePinnedDimsToPayload() {
         return;
       }
 
-      /// Use the first acquire's pinned indices as candidate common prefix
-      DbAcquireOp firstAcq = *acquires.begin();
-      ValueRange firstIndices = firstAcq.getIndices();
-      ValueRange firstPinned = firstIndices.drop_front(allocRank);
+      assert(minPinned > 0 && "No pinned dimensions found");
+      ARTS_DEBUG(" - Found " << minPinned << " pinned dimensions");
 
-      if (firstPinned.empty()) {
-        ARTS_DEBUG(" - No common pinned dimensions found");
-        return;
-      }
-
-      ARTS_DEBUG(" - Found " << minPinned << " candidate pinned dimensions");
-
-      /// Determine how many leading pinned dimensions can be pushed based on
-      /// the zero-offset constraint across all acquires. Missing offsets are
-      /// treated as zero.
-      auto isZeroIndexValue = [&](Value v) -> bool {
-        int64_t cst = 0;
-        return arts::getConstantIndex(v, cst) && cst == 0;
-      };
-
-      size_t pushCount = 0;
-      size_t maxPinned = std::min<size_t>(minPinned, firstPinned.size());
-      for (size_t m = 0; m < maxPinned; ++m) {
-        bool offsetsZero = true;
-        for (DbAcquireOp acqOp : acquires) {
-          ValueRange offs = acqOp.getOffsets();
-          if (m < offs.size()) {
-            if (!isZeroIndexValue(offs[m])) {
-              offsetsZero = false;
-              break;
-            }
-          }
-          /// If offset is missing at position m, treat it as zero
-        }
-        if (!offsetsZero)
-          break;
-        ++pushCount;
-      }
-
-      if (pushCount == 0) {
-        ARTS_DEBUG(
-            " - Zero-offset constraint failed; skipping alloc optimization");
-        return;
-      }
-
-      /// Gather existing size/payload operands
+      /// Gather existing size/elementSize operands
       SmallVector<Value> oldSizeVals(oldAlloc.getSizes().begin(),
                                      oldAlloc.getSizes().end());
-      SmallVector<Value> oldPayloadVals(oldAlloc.getPayloadSizes().begin(),
-                                        oldAlloc.getPayloadSizes().end());
 
       /// Do not push more dimensions than we have explicit sizes.
+      size_t pushCount = minPinned;
       if (pushCount > oldSizeVals.size())
         pushCount = oldSizeVals.size();
 
-      if (pushCount == 0) {
-        ARTS_DEBUG(
-            " - Zero-offset constraint failed; skipping alloc optimization");
-        return;
-      }
-
-      /// Move the first pushCount size operands to the payload vector.
+      /// Move the first pushCount size operands to the elementSize vector.
       SmallVector<Value> movedSizes(oldSizeVals.begin(),
                                     oldSizeVals.begin() + pushCount);
       SmallVector<Value> newAllocSizes(oldSizeVals.begin() + pushCount,
                                        oldSizeVals.end());
 
       if (newAllocSizes.empty()) {
-        ARTS_DEBUG(" - Moving all sizes to payload would collapse alloc; "
+        ARTS_DEBUG(" - Moving all sizes to elementSizes would collapse alloc; "
                    "skipping");
         return;
       }
 
-      ARTS_DEBUG(" - Moving " << pushCount
-                              << " leading size operand(s) into payload");
-      SmallVector<Value> newPayload;
-      newPayload.reserve(movedSizes.size() + oldPayloadVals.size());
-      newPayload.append(movedSizes.begin(), movedSizes.end());
-      newPayload.append(oldPayloadVals.begin(), oldPayloadVals.end());
+      ARTS_DEBUG(" - Moving "
+                 << pushCount
+                 << " leading size operand(s) into element elementSize");
+      SmallVector<Value> oldElementSizes(oldAlloc.getElementSizes().begin(),
+                                         oldAlloc.getElementSizes().end());
 
-      /// Create new alloc with updated sizes/payload
+      SmallVector<Value> newElementSizes;
+      /// If canonicalization injected a single placeholder dimension (const 1),
+      /// drop it and replace with the promoted outer dimensions only.
+      bool hasSinglePlaceholder = false;
+      if (oldElementSizes.size() == 1) {
+        int64_t cst = 0;
+        hasSinglePlaceholder =
+            arts::getConstantIndex(oldElementSizes.front(), cst) && cst == 1;
+      }
+
+      if (hasSinglePlaceholder) {
+        newElementSizes.append(movedSizes.begin(), movedSizes.end());
+      } else {
+        newElementSizes.reserve(movedSizes.size() + oldElementSizes.size());
+        newElementSizes.append(movedSizes.begin(), movedSizes.end());
+        newElementSizes.append(oldElementSizes.begin(), oldElementSizes.end());
+      }
+
+      /// Create new alloc with updated sizes/elementSize
       OpBuilder b(oldAlloc);
       Location loc = oldAlloc.getLoc();
 
-      /// Create new alloc
+      /// Create new alloc with updated result types using generic create
       DbAllocOp newAlloc = b.create<DbAllocOp>(
           loc, oldAlloc.getMode(), oldAlloc.getRoute(), oldAlloc.getAllocType(),
           oldAlloc.getDbMode(), oldAlloc.getElementType(),
-          oldAlloc.getAddress(), newAllocSizes, newPayload);
-      ARTS_DEBUG("   -> New alloc: " << newAlloc);
+          oldAlloc.getAddress(), newAllocSizes, newElementSizes);
+      ARTS_DEBUG("   - New alloc: " << newAlloc);
 
-      /// Replace old alloc uses with new alloc
-      oldAlloc.getGuid().replaceAllUsesWith(newAlloc.getGuid());
-      oldAlloc.getPtr().replaceAllUsesWith(newAlloc.getPtr());
+      /// Replace old alloc uses with new promoted alloc
+      updateDbAllocAfterPromotion(oldAlloc, newAlloc, pushCount, opsToRemove);
 
       /// Update all acquires to convert pushed prefix of pinned indices to
-      /// offsets and keep the non-pushed tail in indices
+      /// offsets and keep the non-push tail in indices
       for (DbAcquireOp acqOp : acquires) {
-        ValueRange oldIndices = acqOp.getIndices();
-        ValueRange oldOffsets = acqOp.getOffsets();
-        ValueRange oldSizes = acqOp.getSizes();
-
-        // Split indices: drop the moved leading dimensions, keep the remaining
-        // base indices, convert the first pushCount pinned indices to offsets,
-        // and keep any remaining pinned
-        // indices stay in indices
-        size_t baseCount = std::min(oldIndices.size(), allocRank);
-        size_t dropBase = std::min(pushCount, baseCount);
-
-        if (oldOffsets.size() < pushCount || oldSizes.size() < pushCount) {
-          ARTS_DEBUG(" - Acquire " << acqOp
-                                   << " lacks explicit offsets/sizes for "
-                                      "promoted dims; skipping alloc");
-          return;
-        }
-
-        SmallVector<Value> newIndices;
-        newIndices.reserve(oldIndices.size());
-        newIndices.append(oldIndices.begin() + dropBase,
-                          oldIndices.begin() + baseCount);
-
-        SmallVector<Value> newOffsets;
-        newOffsets.reserve(pushCount);
-        newOffsets.append(oldIndices.begin() + baseCount,
-                          oldIndices.begin() + baseCount + pushCount);
-
-        SmallVector<Value> newSizesVec(oldSizes.begin() + pushCount,
-                                       oldSizes.end());
-
-        /// Append remaining pinned indices (tail) back to indices
-        newIndices.append(oldIndices.begin() + baseCount + pushCount,
-                          oldIndices.end());
-
-        /// Update the acquire operation
-        acqOp.getIndicesMutable().assign(newIndices);
-        acqOp.getOffsetsMutable().assign(newOffsets);
-        acqOp.getSizesMutable().assign(newSizesVec);
-        acqOp.getSourceGuidMutable().assign(newAlloc.getGuid());
-        acqOp.getSourcePtrMutable().assign(newAlloc.getPtr());
+        updateDbAcquireAfterPromotion(acqOp, newAlloc, pushCount, b, loc,
+                                      opsToRemove);
       }
 
       /// Remove the old alloc
@@ -818,7 +799,7 @@ bool DbPass::promotePinnedDimsToPayload() {
   if (changed)
     invalidateAndRebuildGraph();
 
-  ARTS_DEBUG_FOOTER(PromotePinnedDimsToPayload);
+  ARTS_DEBUG_FOOTER(PromotePinnedDimsToElementDims);
   return changed;
 }
 
@@ -850,60 +831,76 @@ bool DbPass::tightenAcquireSlices() {
       if (rank == 0)
         return;
 
-      SmallVector<Operation *, 6> accesses;
-      acqNode->getMemoryAccesses(accesses);
-      if (accesses.empty())
-        return;
-
-      DenseMap<Operation *, SmallVector<Value>> accToTuple;
+      llvm::DenseMap<Operation *, SmallVector<Value>> accToTuple;
+      SmallVector<Operation *, 8> accessOrder;
       SmallVector<SmallVector<Value>> uniqueTuples;
       bool anyNonInvariant = false;
 
       Region &edtRegion = acqNode->getEdtUser().getBody();
       Value edtArg = acqNode->getUseInEdt();
 
-      for (Operation *acc : accesses) {
-        Value mem;
-        ValueRange idxs;
-        if (auto ld = dyn_cast<memref::LoadOp>(acc)) {
-          mem = ld.getMemref();
-          idxs = ld.getIndices();
-        } else if (auto st = dyn_cast<memref::StoreOp>(acc)) {
-          mem = st.getMemref();
-          idxs = st.getIndices();
-        } else {
-          continue;
-        }
-        if (!edtRegion.isAncestor(acc->getParentRegion()) || mem != edtArg)
-          continue;
-
+      auto registerAccess = [&](Operation *op, ValueRange idxs) {
+        if (anyNonInvariant)
+          return;
+        if (accToTuple.find(op) != accToTuple.end())
+          return;
+        if (!edtRegion.isAncestor(op->getParentRegion()))
+          return;
         if (idxs.size() != rank) {
           anyNonInvariant = true;
-          break;
+          return;
         }
 
         SmallVector<Value> tuple(idxs.begin(), idxs.end());
-        bool allInvariant = true;
         for (Value iv : tuple) {
           if (!arts::isInvariantInEdt(edtRegion, iv)) {
-            allInvariant = false;
-            break;
+            anyNonInvariant = true;
+            return;
           }
         }
-        if (!allInvariant) {
-          anyNonInvariant = true;
-          break;
-        }
 
-        accToTuple[acc] = tuple;
+        accessOrder.push_back(op);
+        accToTuple.try_emplace(op, tuple);
         bool found = false;
-        for (const auto &u : uniqueTuples)
-          if (u == tuple) {
+        for (const auto &u : uniqueTuples) {
+          if (arts::equalRange(ValueRange(u), ValueRange(tuple))) {
             found = true;
             break;
           }
+        }
         if (!found)
           uniqueTuples.push_back(tuple);
+      };
+
+      /// Prefer analyzing db_ref operations first.
+      for (Operation *op : acqNode->getReferences()) {
+        if (anyNonInvariant)
+          break;
+        auto ref = dyn_cast<DbRefOp>(op);
+        if (!ref)
+          continue;
+        if (ref.getSource() != edtArg)
+          continue;
+        registerAccess(op, ref.getIndices());
+      }
+
+      /// Fallback to legacy load/store path when no db_ref was recorded.
+      if (!anyNonInvariant && accessOrder.empty()) {
+        SmallVector<Operation *, 6> accesses;
+        acqNode->getMemoryAccesses(accesses);
+        for (Operation *acc : accesses) {
+          if (anyNonInvariant)
+            break;
+          if (auto ld = dyn_cast<memref::LoadOp>(acc)) {
+            if (ld.getMemref() != edtArg)
+              continue;
+            registerAccess(acc, ld.getIndices());
+          } else if (auto st = dyn_cast<memref::StoreOp>(acc)) {
+            if (st.getMemref() != edtArg)
+              continue;
+            registerAccess(acc, st.getIndices());
+          }
+        }
       }
 
       if (anyNonInvariant) {
@@ -911,6 +908,8 @@ bool DbPass::tightenAcquireSlices() {
                                        << " - has non-invariant indices");
         return;
       }
+      if (accessOrder.empty())
+        return;
 
       /// Case A: Single invariant tuple used – tighten acquire.
       if (uniqueTuples.size() == 1) {
@@ -955,7 +954,7 @@ bool DbPass::tightenAcquireSlices() {
             loc, acqOp.getMode(), acqOp.getSourceGuid(), acqOp.getSourcePtr(),
             acqOp.getIndices(), newOffs, newSizes);
 
-        // Update EDT operand (replace pointer use in the EDT)
+        /// Update EDT operand (replace pointer use in the EDT)
         Value oldPtr = acqOp.getPtr();
         Operation *edtOp = acqNode->getEdtUser().getOperation();
         for (auto &use : oldPtr.getUses()) {
@@ -965,7 +964,7 @@ bool DbPass::tightenAcquireSlices() {
           }
         }
 
-        // Retarget accesses to zero indices
+        /// Retarget accesses to zero indices
         Value zero = b.create<arith::ConstantIndexOp>(loc, 0);
         SmallVector<Value> zeroIdx(rank, zero);
         for (auto &kv : accToTuple) {
@@ -978,6 +977,9 @@ bool DbPass::tightenAcquireSlices() {
             OpBuilder sb(st);
             st.getMemrefMutable().assign(edtArg);
             st.getIndicesMutable().assign(zeroIdx);
+          } else if (auto ref = dyn_cast<DbRefOp>(acc)) {
+            ref.getOperation()->setOperand(0, edtArg);
+            ref.getIndicesMutable().assign(zeroIdx);
           }
         }
 
@@ -1101,6 +1103,120 @@ void DbPass::exportToJson() {
     ARTS_INFO("Exported DB analysis for function '" << func.getName() << "' to "
                                                     << filename);
   });
+}
+
+//===----------------------------------------------------------------------===//
+// Helper Function Implementations
+//===----------------------------------------------------------------------===//
+
+/// Replace uses of old DbAllocOp with new promoted DbAllocOp
+void DbPass::updateDbAllocAfterPromotion(DbAllocOp oldAlloc, DbAllocOp newAlloc,
+                                         size_t pushCount,
+                                         SetVector<Operation *> &opsToRemove) {
+  /// Replace old alloc GUID uses
+  oldAlloc.getGuid().replaceAllUsesWith(newAlloc.getGuid());
+
+  /// Update memref loads/stores that use the old pointer
+  /// After promotion, multi-dimensional accesses need to be split
+  Value oldPtr = oldAlloc.getPtr();
+  Value newPtr = newAlloc.getPtr();
+  /// Use the allocated element type from the new alloc
+  Type elementMemRefType = newAlloc.getAllocatedElementType().getElementType();
+
+  updateDbRefOpsAfterPromotion(oldPtr, elementMemRefType, opsToRemove, newPtr);
+
+  /// Replace old alloc pointer uses
+  oldPtr.replaceAllUsesWith(newPtr);
+}
+
+/// Update DbRefOp operations after datablock promotion
+void DbPass::updateDbRefOpsAfterPromotion(Value sourcePtr,
+                                          Type elementMemRefType,
+                                          SetVector<Operation *> &opsToRemove,
+                                          Value newSourcePtr) {
+  SetVector<DbRefOp> refsToRewrite;
+
+  for (Operation *user : sourcePtr.getUsers()) {
+    if (auto refOp = dyn_cast<DbRefOp>(user)) {
+      if (refOp.getSource() == sourcePtr)
+        refsToRewrite.insert(refOp);
+    }
+  }
+
+  /// Rewrite db_ref operations to match the new pointer rank hierarchy and
+  /// preserve indexing semantics by forwarding dropped indices (suffix)
+  /// into consumer load/store indices.
+  for (auto refOp : refsToRewrite) {
+    ARTS_DEBUG(" Rewriting db_ref " << refOp << " after promotion");
+    ValueRange indices = refOp.getIndices();
+
+    OpBuilder b(refOp);
+    auto underlyingDb = arts::getUnderlyingDb(newSourcePtr);
+    auto [prefix, suffix] =
+        arts::splitDbIndices(underlyingDb, indices, b, refOp.getLoc());
+
+    /// Build DbRefOp with prefix indices.
+    auto prefixRef = b.create<DbRefOp>(refOp.getLoc(), elementMemRefType,
+                                       newSourcePtr, prefix);
+
+    /// Forward any dropped indices into consumer load/store ops by
+    /// prepending them to the existing index list.
+    Value oldResult = refOp.getResult();
+    SmallVector<Operation *> users(oldResult.getUsers().begin(),
+                                   oldResult.getUsers().end());
+    for (Operation *user : users) {
+      if (auto ld = dyn_cast<memref::LoadOp>(user)) {
+        SmallVector<Value> newIndices(suffix.begin(), suffix.end());
+        ld.getMemrefMutable().assign(prefixRef);
+        ld.getIndicesMutable().assign(newIndices);
+      } else if (auto st = dyn_cast<memref::StoreOp>(user)) {
+        SmallVector<Value> newIndices(suffix.begin(), suffix.end());
+        st.getMemrefMutable().assign(prefixRef);
+        st.getIndicesMutable().assign(newIndices);
+      } else {
+        user->replaceUsesOfWith(oldResult, prefixRef);
+      }
+    }
+
+    refOp.erase();
+  }
+}
+
+/// Update DbAcquireOp indices, offsets, and sizes after dimension promotion
+void DbPass::updateDbAcquireAfterPromotion(
+    DbAcquireOp acqOp, DbAllocOp newAlloc, size_t pushCount, OpBuilder &b,
+    Location loc, SetVector<Operation *> &opsToRemove) {
+  ValueRange oldIndices = acqOp.getIndices();
+  ValueRange oldOffsets = acqOp.getOffsets();
+  ValueRange oldSizes = acqOp.getSizes();
+
+  SmallVector<Value> newIndices, newOffsets, newSizes;
+
+  /// Move promoted indices to offsets
+  if (!oldIndices.empty()) {
+    newIndices.assign(oldIndices.begin() + pushCount, oldIndices.end());
+    newOffsets.assign(oldIndices.begin(), oldIndices.begin() + pushCount);
+    for (size_t i = 0; i < pushCount; ++i)
+      newSizes.push_back(b.create<arith::ConstantIndexOp>(loc, 1));
+  }
+
+  /// Append existing offsets/sizes for non-promoted dimensions
+  newOffsets.append(oldOffsets.begin() + pushCount, oldOffsets.end());
+  newSizes.append(oldSizes.begin() + pushCount, oldSizes.end());
+
+  /// Update the acquire operation
+  acqOp.getIndicesMutable().assign(newIndices);
+  acqOp.getOffsetsMutable().assign(newOffsets);
+  acqOp.getSizesMutable().assign(newSizes);
+  acqOp.getSourceGuidMutable().assign(newAlloc.getGuid());
+  acqOp.getSourcePtrMutable().assign(newAlloc.getPtr());
+
+  ARTS_DEBUG(" - Updated acquire " << acqOp << " after promotion");
+
+  Type elementMemRefType = newAlloc.getAllocatedElementType().getElementType();
+  auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(acqOp);
+  updateDbRefOpsAfterPromotion(blockArg, elementMemRefType, opsToRemove,
+                               blockArg);
 }
 
 ///===----------------------------------------------------------------------===///
