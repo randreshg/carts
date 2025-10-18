@@ -29,13 +29,14 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "polygeist/Ops.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
-// #include "polygeist/Ops.h" // no direct use after removal of subview/collapse path
+#include "polygeist/Ops.h"
+// #include "polygeist/Ops.h" // no direct use after removal of subview/collapse
+// path
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include <optional>
@@ -577,7 +578,6 @@ bool CreateDbsPass::isRelatedToAllocation(Value value, DbAllocOp dbAlloc) {
   /// Check if the root allocations are the same
   return valueRoot == dbAllocRoot;
 }
-
 
 //===----------------------------------------------------------------------===//
 // Pass creation
