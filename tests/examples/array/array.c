@@ -13,7 +13,6 @@ int main(int argc, char *argv[]) {
   int *B = (int *)malloc(N * sizeof(int));
   srand(time(NULL));
 
-  printf("-----------------\nMain function\n-----------------\n");
   printf("Initializing arrays A and B with size %d\n", N);
 
 #pragma omp parallel
@@ -48,9 +47,7 @@ int main(int argc, char *argv[]) {
   }
 
   printf("Final arrays:\n");
-  /// print position 0
   for (int i = 0; i < N; i++)
     printf("A[%d] = %d, B[%d] = %d\n", i, A[i], i, B[i]);
-  printf("-----------------\nMain function DONE\n-----------------\n");
   return 0;
 }

@@ -162,6 +162,32 @@ struct BarrierPattern : public ArtsToLLVMPattern<BarrierOp> {
   }
 };
 
+/// Pattern to convert arts.atomic_add operations
+struct AtomicAddPattern : public ArtsToLLVMPattern<AtomicAddOp> {
+  using ArtsToLLVMPattern::ArtsToLLVMPattern;
+
+  LogicalResult matchAndRewrite(AtomicAddOp op,
+                                PatternRewriter &rewriter) const override {
+    ARTS_INFO("Lowering AtomicAdd Op " << op);
+    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
+
+    auto loc = op.getLoc();
+    auto addr = op.getAddr();
+    auto value = op.getValue();
+
+    // Convert memref to LLVM pointer
+    Value llvmPtr = rewriter.create<polygeist::Memref2PointerOp>(
+        loc, LLVM::LLVMPointerType::get(rewriter.getContext()), addr);
+
+    // Create LLVM atomic add operation
+    rewriter.create<LLVM::AtomicRMWOp>(loc, LLVM::AtomicBinOp::add, llvmPtr,
+                                       value, LLVM::AtomicOrdering::seq_cst);
+
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
 /// Pattern to convert arts.record_dep operations
 struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
   using ArtsToLLVMPattern::ArtsToLLVMPattern;
@@ -927,7 +953,7 @@ void ConvertArtsToLLVMPass::populateCorePatterns(RewritePatternSet &patterns) {
                GetCurrentWorkerPattern, GetCurrentNodePattern>(context, AC);
 
   /// Synchronization patterns
-  patterns.add<BarrierPattern>(context, AC);
+  patterns.add<BarrierPattern, AtomicAddPattern>(context, AC);
 
   /// EDT patterns
   patterns.add<EdtParamPackPattern, EdtParamUnpackPattern>(context, AC);

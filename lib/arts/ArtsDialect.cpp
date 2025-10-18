@@ -728,3 +728,16 @@ void arts::ForOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
   /// - Loop fusion for adjacent loops
   /// - Loop invariant code motion
 }
+
+//===----------------------------------------------------------------------===//
+// ReductionOp Builders
+//===----------------------------------------------------------------------===//
+
+void ReductionOp::build(OpBuilder &builder, OperationState &state, Value array,
+                        Value result, Value lower_bound, Value upper_bound,
+                        Value step, ReductionKind reduction_kind) {
+  state.addOperands({array, result, lower_bound, upper_bound, step});
+  state.addAttribute(
+      "reduction_kind",
+      ReductionKindAttr::get(builder.getContext(), reduction_kind));
+}
