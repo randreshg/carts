@@ -209,6 +209,7 @@ void DbGraph::print(llvm::raw_ostream &os) {
     os << "  Lifetime: Op " << info.allocIndex << " -> " << info.endIndex
        << " (span=" << info.criticalSpan << ", path=" << info.criticalPath
        << ")\n";
+    os << "  Rank: " << info.getRank() << "\n";
     os << "  Size: " << info.staticBytes << " bytes";
     if (info.staticBytes == 0)
       os << " (dynamic)";

@@ -109,42 +109,27 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
   /// The ptr result should be passed directly to an EDT or another acquire
   Operation *singleUser = *ptrResult.getUsers().begin();
   if (auto nestedAcquire = dyn_cast<DbAcquireOp>(singleUser)) {
-    // Nested acquire; create child node lazily via getOrCreateAcquireNode
-    // The rest of this constructor computes info for this node; nested
-    // children will compute their own.
+    /// Nested acquire; create child node lazily via getOrCreateAcquireNode
+    /// The rest of this constructor computes info for this node; nested
+    /// children will compute their own.
   } else {
-    edtUser = dyn_cast<EdtOp>(singleUser);
-    assert(edtUser &&
+    /// Use utility function to get EDT and block argument
+    auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(dbAcquireOp);
+    edtUser = edt;
+    useInEdt = blockArg;
+    assert(edtUser && useInEdt &&
            "Acquire ptr should be used by an EDT or another acquire");
   }
 
-  /// Collect all memory accesses (loads/stores)
-  auto [depsBegin, depsLen] =
-      edtUser.getODSOperandIndexAndLength(/*dependencies*/ 1);
-
-  if (edtUser) {
-    unsigned operandIdx = 0;
-    for (auto &use : ptrResult.getUses()) {
-      if (use.getOwner() == edtUser.getOperation()) {
-        operandIdx = use.getOperandNumber();
-        break;
-      }
-    }
-    unsigned depIndex = operandIdx - depsBegin;
-    assert(depIndex < depsLen && "Dependency index should be within range");
-    useInEdt = edtUser.getBody().getArgument(depIndex);
-  }
-
   /// Find the corresponding DbReleaseOp for this acquire
-  if (useInEdt) {
-    for (Operation *user : useInEdt.getUsers()) {
-      auto releaseOp = dyn_cast<DbReleaseOp>(user);
-      if (!releaseOp)
-        continue;
-      if (releaseOp.getSource() == useInEdt) {
-        dbReleaseOp = releaseOp;
-        break;
-      }
+  assert(useInEdt && "Acquire ptr should be used by an EDT or another acquire");
+  for (Operation *user : useInEdt.getUsers()) {
+    auto releaseOp = dyn_cast<DbReleaseOp>(user);
+    if (!releaseOp)
+      continue;
+    if (releaseOp.getSource() == useInEdt) {
+      dbReleaseOp = releaseOp;
+      break;
     }
   }
 
@@ -276,6 +261,9 @@ SmallVector<DbOffsetRange, 4> DbAcquireNode::computeAccessedOffsetRanges() {
       if (auto ld = dyn_cast<memref::LoadOp>(acc)) {
         mem = ld.getMemRef();
         idxs = ld.getIndices();
+      } else if (auto ref = dyn_cast<arts::DbRefOp>(acc)) {
+        mem = ref.getSource();
+        idxs = ref.getIndices();
       } else if (auto st = dyn_cast<memref::StoreOp>(acc)) {
         mem = st.getMemRef();
         idxs = st.getIndices();
@@ -465,6 +453,8 @@ SmallVector<Value, 4> DbAcquireNode::computeInvariantIndices() {
     ValueRange idxs;
     if (auto ld = dyn_cast<memref::LoadOp>(acc))
       idxs = ld.getIndices();
+    else if (auto dbLd = dyn_cast<DbRefOp>(acc))
+      idxs = dbLd.getIndices();
     else if (auto st = dyn_cast<memref::StoreOp>(acc))
       idxs = st.getIndices();
     else
@@ -529,11 +519,17 @@ void DbAcquireNode::collectAccesses(Value db) {
       /// Track memref loads
       if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
         loads.push_back(user);
-        /// If load returns a pointer type, follow it for nested accesses
-        /// (e.g., matrix[i] -> memref<?xf64>, then matrix[i][j])
         Type resultTy = loadOp.getResult().getType();
         if (isa<MemRefType>(resultTy))
           worklist.push_back(loadOp.getResult());
+        continue;
+      }
+
+      if (auto dbRefOp = dyn_cast<DbRefOp>(user)) {
+        references.push_back(user);
+        Type resultTy = dbRefOp.getResult().getType();
+        if (isa<MemRefType>(resultTy))
+          worklist.push_back(dbRefOp.getResult());
         continue;
       }
 

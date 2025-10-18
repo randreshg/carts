@@ -48,6 +48,7 @@ struct OMPParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
     /// Create a new `arts.edt` operation with parallel type
     auto parOp = rewriter.create<EdtOp>(loc, EdtType::parallel,
                                         EdtConcurrency::internode);
+    parOp.setNoVerifyAttr(NoVerifyAttr::get(rewriter.getContext()));
     Block &blk = parOp.getBody().front();
 
     /// Move the region's operations.
@@ -74,6 +75,7 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
     /// Create `arts.edt` with `parallel` type and internode concurrency
     auto parEdt = rewriter.create<EdtOp>(loc, EdtType::parallel,
                                          EdtConcurrency::internode);
+    parEdt.setNoVerifyAttr(NoVerifyAttr::get(rewriter.getContext()));
     Block &parBlk = parEdt.getBody().front();
 
     /// Insert `arts.for` inside the parallel EDT with same bounds/step
@@ -126,6 +128,7 @@ struct MasterToARTSPattern : public OpRewritePattern<omp::MasterOp> {
     /// Create a new `arts.single` operation with intranode concurrency.
     auto artsSingle =
         rewriter.create<EdtOp>(loc, EdtType::single, EdtConcurrency::intranode);
+    artsSingle.setNoVerifyAttr(NoVerifyAttr::get(rewriter.getContext()));
 
     /// Move the region's operations.
     Block &old = op.getRegion().front();
@@ -291,6 +294,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
     /// Create a new `arts.edt` operation with intranode concurrency.
     auto edtOp = rewriter.create<EdtOp>(loc, EdtType::task,
                                         EdtConcurrency::intranode, deps);
+    edtOp.setNoVerifyAttr(NoVerifyAttr::get(rewriter.getContext()));
     Block &blk = edtOp.getBody().front();
 
     /// Move the region's operations.

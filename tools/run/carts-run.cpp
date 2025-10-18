@@ -94,7 +94,7 @@ enum class PipelineStage {
   ConvertOpenMP,    // After ConvertOpenMPToARTS
   EdtTransforms,    // After EDT transformations
   EdtOptimizations, // After EDT optimizations
-  EdtLowering,      // After EDT lowering
+  PreLowering,      // After pre-lowering transformations
   Db,               // After DB creation and optimization
   Epochs,           // After epoch creation
   ArtsToLLVM,       // After ConvertArtsToLLVM
@@ -117,8 +117,8 @@ static cl::opt<PipelineStage>
                                  "Stop after epoch creation"),
                       clEnumValN(PipelineStage::EdtOptimizations, "edt-opt",
                                  "Stop after EDT optimizations"),
-                      clEnumValN(PipelineStage::EdtLowering, "edt-lowering",
-                                 "Stop after EDT lowering"),
+                      clEnumValN(PipelineStage::PreLowering, "pre-lowering",
+                                 "Stop after pre-lowering transformations"),
                       clEnumValN(PipelineStage::ArtsToLLVM, "arts-to-llvm",
                                  "Stop after ARTS to LLVM conversion"),
                       clEnumValN(PipelineStage::Complete, "complete",
@@ -232,10 +232,14 @@ void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 /// Setup db creation and optimization passes.
 void setupDb(PassManager &pm, arts::ArtsAnalysisManager *AM, bool identifyDbs,
              bool exportJson) {
+  pm.addPass(arts::createPreprocessNestedAllocationsPass());
   pm.addPass(arts::createCreateDbsPass(identifyDbs));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
+  pm.addPass(createSymbolDCEPass());
   pm.addPass(createMem2Reg());
+  pm.addPass(arts::createCanonicalizeDbsPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createDbPass(AM, exportJson));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
@@ -257,9 +261,9 @@ void setupEpochs(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
 }
 
-/// Setup EDT lowering passes.
-void setupEdtLowering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
-  pm.addPass(arts::createNormalizeDbsPass());
+/// Setup pre-lowering passes.
+void setupPreLowering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
+  pm.addPass(arts::createDbLoweringPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createEdtLoweringPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
@@ -320,7 +324,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     setupDb(pm, AM.get(), true, ExportJson);
     setupEdtOptimizations(pm, AM.get());
     setupEpochs(pm, AM.get());
-    setupEdtLowering(pm, AM.get());
+    setupPreLowering(pm, AM.get());
     setupArtsToLLVM(pm, Debug);
 
     if (mlir::failed(pm.run(module))) {
@@ -454,18 +458,18 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   if (stopAt == PipelineStage::Epochs)
     return;
 
-  /// EDT lowering
+  /// Pre-lowering
   {
     PassManager pm(&context);
-    setupEdtLowering(pm, AM.get());
+    setupPreLowering(pm, AM.get());
     if (mlir::failed(pm.run(module))) {
-      ARTS_ERROR("Error when running EDT lowering");
+      ARTS_ERROR("Error when running pre-lowering");
       module->dump();
       return;
     }
   }
 
-  if (stopAt == PipelineStage::EdtLowering)
+  if (stopAt == PipelineStage::PreLowering)
     return;
 
   /// Convert ARTS to LLVM

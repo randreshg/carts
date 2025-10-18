@@ -7,6 +7,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   ConvertOpenMPToArts.cpp
   Edt.cpp
   CreateDbs.cpp
+  PreprocessNestedAllocations.cpp
   Db.cpp
   CreateEpochs.cpp
   ConvertArtsToLLVM.cpp
@@ -15,7 +16,8 @@ add_mlir_dialect_library(MLIRArtsTransforms
   EdtPtrRematerialization.cpp
   EdtInvariantCodeMotion.cpp
   EdtPtrRematerialization.cpp
-  NormalizeDbs.cpp
+  CanonicalizeDbs.cpp
+  DbLowering.cpp
   EdtLowering.cpp
   Concurrency.cpp
   ${CARTS_TRANSFORMS_SOURCE_FILES}
@@ -73,4 +75,3 @@ target_compile_definitions(obj.MLIRArtsTransforms
   CARTS_PGO_ALTERNATIVE_ENV_VAR="${CARTS_PGO_ALTERNATIVE_ENV_VAR}"
   CARTS_PGO_DATA_DIR_ENV_VAR="${CARTS_PGO_DATA_DIR_ENV_VAR}"
 )
-

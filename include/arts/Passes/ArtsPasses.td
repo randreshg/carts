@@ -16,6 +16,23 @@ def ArtsInliner : Pass<"arts-inliner", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createArtsInlinerPass()";
 }
 
+def PreprocessNestedAllocations : Pass<"preprocess-nested-allocations", "mlir::ModuleOp"> {
+  let summary = "Preprocess nested allocation patterns before DB creation";
+  let description = [{
+    This pass detects multi-dimensional arrays allocated as arrays-of-pointers
+    and converts them to single N-dimensional allocations to simplify DB handling.
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "LLVM::LLVMDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "arith::ArithDialect",
+    "polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::arts::createPreprocessNestedAllocationsPass()";
+}
+
 
 def ConvertOpenMPToArts : Pass<"convert-openmp-to-arts", "mlir::ModuleOp"> {
   let summary = "Convert OpenMP functions to ARTS";
@@ -63,12 +80,12 @@ def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
   ];
 }
 
-def NormalizeDbs : Pass<"normalize-dbs", "mlir::ModuleOp"> {
-  let summary = "Normalize ARTS DataBlock handles for runtime compatibility";
+def CanonicalizeDbs : Pass<"canonicalize-dbs", "mlir::ModuleOp"> {
+  let summary = "Canonicalize ARTS DataBlock handles and uses to typed memrefs";
   let description = [{
-    This pass converts ARTS DataBlocks from typed memrefs to opaque pointer types
-    suitable for the ARTS runtime. The preprocessing logic differs based on the
-    original allocation type (stack vs dynamic).
+    This pass rewrites datablock allocations and accesses into a canonical form
+    that makes size payloads explicit while keeping typed memrefs so that DB
+    analyses and optimizations can reason about the layout.
   }];
   let dependentDialects = [
     "memref::MemRefDialect",
@@ -78,7 +95,25 @@ def NormalizeDbs : Pass<"normalize-dbs", "mlir::ModuleOp"> {
     "arith::ArithDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createNormalizeDbsPass()";
+  let constructor = "mlir::arts::createCanonicalizeDbsPass()";
+}
+
+def DbLowering : Pass<"db-lowering", "mlir::ModuleOp"> {
+  let summary = "Lower ARTS DataBlock handles to opaque pointer form";
+  let description = [{
+    This pass converts ARTS DataBlocks from typed memrefs to the opaque pointer
+    representation required by the runtime. It assumes the datablocks are already
+    in canonical form.
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "LLVM::LLVMDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "arith::ArithDialect",
+    "polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::arts::createDbLoweringPass()";
 }
 
 def Edt : Pass<"edt", "mlir::ModuleOp"> {

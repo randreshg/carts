@@ -61,7 +61,12 @@ bool isArtsOp(mlir::Operation *op);
 
 /// Helper function to extract sizes from a datablock pointer
 /// by finding the original DbAllocOp or DbAcquireOp that created it
+mlir::SmallVector<mlir::Value> getSizesFromDb(mlir::Operation *dbOp);
+mlir::SmallVector<mlir::Value> getElementSizesFromDb(mlir::Operation *dbOp);
 mlir::SmallVector<mlir::Value> getSizesFromDb(mlir::Value datablockPtr);
 mlir::SmallVector<mlir::Value> getOffsetsFromDb(mlir::Value datablockPtr);
+
+/// Check if a datablock operation has a single size of 1
+bool dbHasSingleSize(mlir::Operation *dbOp);
 
 #endif // CARTS_DIALECT_H

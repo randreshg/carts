@@ -36,9 +36,8 @@ int main(int argc, char **argv) {
 #pragma omp parallel
   {
 #pragma omp for reduction(+ : sum)
-    for (int i = 0; i < N; i++) {
+    for (int i = 0; i < N; i++)
       sum += c[i];
-    }
   }
 
   printf("Sum of results: %d\n", sum);

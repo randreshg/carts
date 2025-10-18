@@ -1,7 +1,7 @@
 ///==========================================================================
 /// File: CreateDbs.cpp
 ///
-/// This pass creates ARTS Datablocks (DB) operations to handle memory
+/// This pass creates ARTS Dbs (DB) operations to handle memory
 /// dependencies for EDTs (Event-Driven Tasks). Each EDT may execute in a
 /// separate memory environment, so external memory references must be properly
 /// managed.
@@ -14,29 +14,6 @@
 /// 5. Update load/store operations to use acquired memory views
 /// 6. Insert arts.db_release operations before EDT terminators
 /// 7. Insert arts.db_free operations for db_alloc operations
-/// ----------------------------------------------------------------
-/// Special Case: Nested Array Allocations (Multi-Dimensional Arrays)
-/// This pass handles a common C/C++ pattern where multi-dimensional arrays
-/// are allocated as arrays of pointers, with each pointer allocated separately:
-/// Example:
-///   double **A = malloc(N * sizeof(double*));
-///   for (int i = 0; i < N; i++)
-///     A[i] = malloc(M * sizeof(double));
-///
-/// This pattern translates to MLIR as:
-///   %outer = memref.alloc(%N) : memref<?xmemref<?xf64>>
-///   scf.for %i = 0 to %N {
-///     %inner = memref.alloc(%M) : memref<?xf64>
-///     memref.store %inner, %outer[%i]
-///   }
-///
-/// Instead of creating separate DBs for each row, this pass:
-/// 1. Detects the nested allocation pattern
-/// 2. Creates a single N-dimensional datablock (e.g., memref<?x?xf64>)
-/// 3. Transforms cascaded memory accesses (load(load(A[i])[j])) into
-///    direct N-dimensional access (load(A_ND[i,j]))
-/// 4. Removes the initialization loop that allocated individual rows
-///
 ///
 /// This pass assumes the worst-case scenario for access modes, always using
 /// inout.
@@ -52,12 +29,13 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "polygeist/Ops.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
-#include "polygeist/Ops.h"
+// #include "polygeist/Ops.h" // no direct use after removal of subview/collapse path
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include <optional>
@@ -69,71 +47,10 @@ ARTS_DEBUG_SETUP(create_dbs);
 using namespace mlir;
 using namespace mlir::arts;
 
-/// Dependency information for Datablocks acquisition.
-/// Contains the access mode and slice parameters for acquiring a memory region.
-struct DepInfo {
-  ArtsMode mode;
-  SmallVector<Value> offsets;
-  SmallVector<Value> sizes;
-  MemRefType resultType;
-};
-
 //===----------------------------------------------------------------------===//
 // Helper Functions
 //===----------------------------------------------------------------------===//
 namespace {
-
-/// Strip numeric cast operations to find the underlying value.
-/// Traverses through index casts, sign/zero extensions, and truncations.
-static Value stripNumericCasts(Value value) {
-  while (true) {
-    if (auto idxCast = value.getDefiningOp<arith::IndexCastOp>()) {
-      value = idxCast.getIn();
-      continue;
-    }
-    if (auto ext = value.getDefiningOp<arith::ExtSIOp>()) {
-      value = ext.getIn();
-      continue;
-    }
-    if (auto ext = value.getDefiningOp<arith::ExtUIOp>()) {
-      value = ext.getIn();
-      continue;
-    }
-    if (auto trunc = value.getDefiningOp<arith::TruncIOp>()) {
-      value = trunc.getIn();
-      continue;
-    }
-    break;
-  }
-  return value;
-}
-
-/// Check if two values represent equivalent scaling factors.
-/// Used to recognize patterns like (N * sizeof(T)) / sizeof(T) -> N.
-static bool scalesAreEquivalent(Value lhs, Value rhs) {
-  Value a = stripNumericCasts(lhs);
-  Value b = stripNumericCasts(rhs);
-  if (a == b)
-    return true;
-
-  auto constantValue = [](Value v) -> std::optional<int64_t> {
-    if (auto cIdx = v.getDefiningOp<arith::ConstantIndexOp>())
-      return cIdx.value();
-    if (auto cInt = v.getDefiningOp<arith::ConstantIntOp>())
-      return cInt.value();
-    return std::nullopt;
-  };
-
-  if (auto lhsConst = constantValue(a))
-    if (auto rhsConst = constantValue(b))
-      return lhsConst == rhsConst;
-
-  if (auto lhsType = a.getDefiningOp<polygeist::TypeSizeOp>())
-    if (auto rhsType = b.getDefiningOp<polygeist::TypeSizeOp>())
-      return lhsType.getType() == rhsType.getType();
-
-  return false;
-}
 
 /// Cast a value to index type if needed.
 static Value castToIndex(Value value, OpBuilder &builder, Location loc) {
@@ -190,10 +107,6 @@ private:
   /// Infer allocation type from the defining operation
   DbAllocType inferAllocType(Value basePtr);
 
-  /// Group all nested allocation handling (detect, convert, cleanup)
-  void processNestedAllocations(OpBuilder &builder,
-                                SetVector<Value> &nestedAllocs);
-
   /// Helper: mark an operation for deferred removal
   void markForRemoval(Operation *op) {
     if (!op)
@@ -201,62 +114,8 @@ private:
     opsToRemove.insert(op);
   }
 
-  /// Pattern recognition for nested allocations
-  struct NestedAllocPattern {
-    Value outerAlloc;      /// The outermost array allocation for this level
-    Value dimSize;         /// Size for this dimension
-    Value innerDimSize;    /// Inner size only for base case
-    Value innerAllocValue; /// Inner alloc value only for base case
-    Type elementType;      /// Final scalar element type (e.g., f64)
-    scf::ForOp initLoop;   /// The initialization loop for this level
-    std::unique_ptr<NestedAllocPattern> inner; /// Next nested level
-
-    NestedAllocPattern() = default;
-    NestedAllocPattern(NestedAllocPattern &&) = default;
-    NestedAllocPattern &operator=(NestedAllocPattern &&) = default;
-    NestedAllocPattern(const NestedAllocPattern &) = delete;
-    NestedAllocPattern &operator=(const NestedAllocPattern &) = delete;
-
-    int getDepth() const { return inner ? 1 + inner->getDepth() : 2; }
-
-    SmallVector<Value> getAllSizes() const {
-      SmallVector<Value> s = {dimSize};
-      if (inner)
-        s.append(inner->getAllSizes());
-      else
-        s.push_back(innerDimSize);
-
-      return s;
-    }
-
-    SmallVector<scf::ForOp> getAllInitLoops() const {
-      SmallVector<scf::ForOp> l = {initLoop};
-      if (inner)
-        l.append(inner->getAllInitLoops());
-      return l;
-    }
-
-    SmallVector<Value> getAllNestedAllocs() const {
-      SmallVector<Value> a = {outerAlloc};
-      if (inner)
-        a.append(inner->getAllNestedAllocs());
-      else if (innerAllocValue)
-        a.push_back(innerAllocValue);
-      return a;
-    }
-
-    Type getFinalElementType() const { return elementType; }
-  };
-
-  std::optional<NestedAllocPattern> detectNestedAllocPattern(Value alloc);
-  void transformNestedAccesses(Value outerAlloc, Value ndPtr);
-  /// Dependency analysis
-  DepInfo computeDepInfo(OpBuilder &builder, EdtOp edt, Value originalValue,
-                         Value source);
-
   /// Access adjustment
-  void adjustAccesses(Region &region, Value originalValue, Value view,
-                      ArrayRef<Value> offsets);
+  void adjustAccesses(Region &region, Value originalValue, Value dbAcquire);
 
   /// Extract the logical (pre-malloc) size for a dynamically computed value
   Value getOriginalSizeValue(Value size, OpBuilder &builder, Location loc);
@@ -291,52 +150,44 @@ void CreateDbsPass::runOnOperation() {
   stringAnalysis->run();
   assert(stringAnalysis && "StringAnalysis must be created");
 
-  /// ARTS_INFO 1: Cleanup existing Control DB operations
+  /// Phase 1: Cleanup existing Control DB operations
   ARTS_INFO("Phase 1: Cleaning up existing Control DB operations");
   cleanupControlDbOps();
 
-  /// Phase 2: Detect and convert nested allocation patterns
-  ARTS_INFO("Phase 2: Detecting nested allocation patterns");
-  SetVector<Value> nestedAllocs;
-  processNestedAllocations(builder, nestedAllocs);
+  /// Phase 2: Collect allocations used in EDTs
+  ARTS_INFO("Phase 2: Collecting allocations used in EDTs");
+  SetVector<Value> usedAllocs = collectUsedAllocations();
 
-  /// Phase 3: Collect allocations used in EDTs
-  /// Separate regular allocations from nested ones for different handling
-  ARTS_INFO("Phase 3: Collecting allocations used in EDTs");
-  SetVector<Value> allUsedAllocs = collectUsedAllocations();
-  SetVector<Value> regularAllocs;
-  for (Value alloc : allUsedAllocs) {
-    if (!nestedAllocs.contains(alloc))
-      regularAllocs.insert(alloc);
-  }
+  ARTS_DEBUG(" - Found " << usedAllocs.size()
+                         << " allocations to convert to DB");
 
-  ARTS_DEBUG(" - Found " << regularAllocs.size() << " regular allocations and "
-                         << nestedAllocs.size()
-                         << " nested allocations to convert to DB");
+  /// Convert allocations to DBs
+  createDbAllocOps(usedAllocs, builder);
 
-  /// Convert regular allocations to DBs
-  createDbAllocOps(regularAllocs, builder);
-
-  /// Phase 4: Process EDTs for dependencies
+  /// Phase 3: Process EDTs for dependencies
   SmallVector<EdtOp> allEdts;
   module.walk([&](EdtOp edt) { allEdts.push_back(edt); });
-  ARTS_INFO("Phase 4: Processing " << allEdts.size() << " EDT operations");
+  ARTS_INFO("Phase 3: Processing " << allEdts.size() << " EDT operations");
   for (auto it = allEdts.rbegin(); it != allEdts.rend(); ++it)
     processEdtDeps(*it, builder);
 
-  /// Phase 5: Insert DbFree operations
-  ARTS_INFO("Phase 5: Inserting DbFree operations for "
+  /// Phase 4: Insert DbFree operations
+  ARTS_INFO("Phase 4: Inserting DbFree operations for "
             << createdDbAllocs.size() << " DB allocations");
   for (DbAllocOp dbAlloc : createdDbAllocs)
     insertDbFreeOperations(dbAlloc, builder);
 
-  /// Phase 6: Clean up legacy allocations
+  /// Phase 5: Clean up legacy allocations
   ARTS_INFO(" - Cleaning up legacy allocations");
   removeOps(module, opsToRemove, true);
+
+  /// Phase 6: Enabling verification for EDTs
+  module.walk([](EdtOp edt) { edt.removeNoVerifyAttr(); });
 
   /// Phase 7: Simplify the module
   DominanceInfo domInfo(module);
   arts::simplifyIR(module, domInfo);
+
   ARTS_INFO_FOOTER(CreateDbsPass);
   ARTS_DEBUG_REGION(module.dump(););
   delete stringAnalysis;
@@ -359,83 +210,6 @@ DbAllocType CreateDbsPass::inferAllocType(Value basePtr) {
       return DbAllocType::global;
   }
   return DbAllocType::unknown;
-}
-
-//===----------------------------------------------------------------------===//
-// Nested Allocation Processing (detect, convert, cleanup)
-//===----------------------------------------------------------------------===//
-void CreateDbsPass::processNestedAllocations(OpBuilder &builder,
-                                             SetVector<Value> &nestedAllocs) {
-  /// Multi-dimensional arrays allocated as arrays-of-pointers are detected
-  /// and grouped by their initialization loop for later conversion to N-D DBs
-  DenseMap<scf::ForOp, SmallVector<NestedAllocPattern>> nestedPatternsByLoop;
-
-  module.walk([&](memref::AllocOp allocOp) {
-    Value alloc = allocOp.getResult();
-    /// Skip allocations inside loops - these are inner allocations
-    if (allocOp->getParentOfType<scf::ForOp>())
-      return;
-    if (auto pattern = detectNestedAllocPattern(alloc)) {
-      nestedPatternsByLoop[pattern->initLoop].push_back(std::move(*pattern));
-      nestedAllocs.insert(alloc);
-    }
-  });
-
-  if (nestedPatternsByLoop.empty()) {
-    ARTS_DEBUG(" - No nested allocation patterns found");
-    return;
-  }
-
-  /// Convert nested patterns to a single N-D stack allocation and rewrite
-  /// accesses to index directly into that allocation.
-  ARTS_DEBUG(
-      " - Converting nested patterns to N-D alloca and rewriting accesses");
-  for (auto &[loop, patterns] : nestedPatternsByLoop) {
-    for (auto &pattern : patterns) {
-      auto allocOp = pattern.outerAlloc.getDefiningOp<memref::AllocOp>();
-      if (!allocOp)
-        continue;
-
-      Location loc = allocOp->getLoc();
-      SmallVector<Value> allSizes = pattern.getAllSizes();
-      if (allSizes.empty())
-        continue;
-
-      builder.setInsertionPoint(pattern.initLoop);
-
-      /// Extract logical sizes
-      SmallVector<Value> originalSizes;
-      originalSizes.reserve(allSizes.size());
-      for (Value size : allSizes)
-        originalSizes.push_back(getOriginalSizeValue(size, builder, loc));
-
-      SmallVector<int64_t> shape(pattern.getDepth(), ShapedType::kDynamic);
-      MemRefType ndType = MemRefType::get(shape, pattern.getFinalElementType());
-      Value ndAlloc =
-          builder.create<memref::AllocaOp>(loc, ndType, originalSizes);
-
-      /// Rewrite cascaded memory accesses to direct N-D indexing
-      transformNestedAccesses(pattern.outerAlloc, ndAlloc);
-
-      /// Schedule the initialization loop and legacy allocations for removal.
-      auto legacyAllocs = pattern.getAllNestedAllocs();
-      for (Value legacy : legacyAllocs) {
-        if (!legacy)
-          continue;
-        if (Operation *def = legacy.getDefiningOp())
-          opsToRemove.insert(def);
-      }
-
-      /// Clean up obsolete outer allocation
-      Value outer = pattern.outerAlloc;
-      if (Operation *defOp = outer.getDefiningOp())
-        opsToRemove.insert(defOp);
-    }
-  }
-
-  ARTS_DEBUG(" - Removing legacy allocations");
-  removeOps(module, opsToRemove, true);
-  ARTS_DEBUG_REGION(module.dump(););
 }
 
 //===----------------------------------------------------------------------===//
@@ -525,9 +299,11 @@ void CreateDbsPass::createDbAllocOps(const SetVector<Value> &allocs,
     ArtsMode mode = ArtsMode::inout;
     DbMode dbMode = DbMode::write;
     Type elementType = memRefType.getElementType();
+    while (auto nestedMemRef = elementType.dyn_cast<MemRefType>())
+      elementType = nestedMemRef.getElementType();
 
     /// Extract dimension sizes from the memref type
-    SmallVector<Value> sizes, payloadSizes;
+    SmallVector<Value> sizes, elementSizes;
     const int rank = memRefType.getRank();
     sizes.reserve(rank);
 
@@ -540,10 +316,25 @@ void CreateDbsPass::createDbAllocOps(const SetVector<Value> &allocs,
       }
     }
 
+    /// If this is a string memref, allocate a single DB with full payload:
+    /// move all logical sizes into elementSizes and clear outer sizes
+    if (stringAnalysis && stringAnalysis->isStringMemRef(alloc)) {
+      elementSizes = sizes;
+      sizes.clear();
+      sizes.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
+    }
+
     auto zeroRoute = builder.create<arith::ConstantIntOp>(loc, 0, 32);
-    auto dbAllocOp =
-        builder.create<DbAllocOp>(loc, mode, zeroRoute, allocType, dbMode,
-                                  elementType, alloc, sizes, payloadSizes);
+    Type pointerType;
+    if (stringAnalysis && stringAnalysis->isStringMemRef(alloc)) {
+      pointerType = arts::getElementMemRefType(elementType, elementSizes);
+    } else {
+      /// For regular memrefs, use the original memref type
+      pointerType = memRefType;
+    }
+    auto dbAllocOp = builder.create<DbAllocOp>(loc, mode, zeroRoute, allocType,
+                                               dbMode, elementType, pointerType,
+                                               sizes, elementSizes);
 
     alloc.replaceUsesWithIf(dbAllocOp.getPtr(), [&](OpOperand &use) -> bool {
       Operation *user = use.getOwner();
@@ -556,42 +347,6 @@ void CreateDbsPass::createDbAllocOps(const SetVector<Value> &allocs,
     allocToDbAlloc[alloc] = dbAllocOp;
     createdDbAllocs.push_back(dbAllocOp);
   }
-}
-
-//===----------------------------------------------------------------------===//
-// Dependency Information Computation
-//===----------------------------------------------------------------------===//
-DepInfo CreateDbsPass::computeDepInfo(OpBuilder &builder, EdtOp edt,
-                                      Value originalValue, Value source) {
-  MemRefType sourceType = source.getType().dyn_cast<MemRefType>();
-  assert(sourceType && "Source must be memref");
-
-  /// For string memrefs, acquire the full region
-  if (stringAnalysis->isStringMemRef(originalValue)) {
-    int rank = sourceType.getRank();
-    SmallVector<Value> offsets, sizes;
-    for (int d = 0; d < rank; ++d) {
-      offsets.push_back(
-          builder.create<arith::ConstantIndexOp>(edt.getLoc(), 0));
-      Value sizeVal;
-      if (sourceType.isDynamicDim(d)) {
-        auto dimIdx = builder.create<arith::ConstantIndexOp>(edt.getLoc(), d);
-        sizeVal = builder.create<arts::DbDimOp>(edt.getLoc(), source, dimIdx);
-      } else
-        sizeVal = builder.create<arith::ConstantIndexOp>(
-            edt.getLoc(), sourceType.getDimSize(d));
-      sizes.push_back(sizeVal);
-    }
-
-    MemRefType resultType =
-        MemRefType::get(sourceType.getShape(), sourceType.getElementType());
-    return {ArtsMode::inout, offsets, sizes, resultType};
-  }
-
-  /// For other memrefs, defer slicing to downstream passes
-  SmallVector<Value> offsets, sizes;
-  MemRefType resultType = sourceType;
-  return {ArtsMode::inout, offsets, sizes, resultType};
 }
 
 //===----------------------------------------------------------------------===//
@@ -643,15 +398,18 @@ void CreateDbsPass::processEdtDeps(EdtOp edt, OpBuilder &builder) {
 
   /// For each external memory value, create acquire and release operations
   for (Value value : externalValues) {
-    /// Locate the source datablock (db_alloc or db_acquire)
+    /// Locate the source Db (db_alloc or db_acquire)
     Operation *sourceOp = nullptr;
     if (allocToDbAlloc.count(value))
       sourceOp = allocToDbAlloc[value];
     else
       sourceOp = arts::getUnderlyingDb(value);
 
-    /// Check that the source operation is a DbAllocOp or DbAcquireOp
-    assert(sourceOp && "Source operation must be non-null");
+    /// If no DB was found (e.g., unrelated pointer or not yet converted),
+    /// skip this external value. Downstream passes may handle it or it is not
+    /// a datablock candidate.
+    if (!sourceOp)
+      continue;
     assert(sourceOp->getNumResults() == 2 &&
            "Source operation must have 2 results");
     auto sourceGuid = sourceOp->getResult(0);
@@ -660,10 +418,22 @@ void CreateDbsPass::processEdtDeps(EdtOp edt, OpBuilder &builder) {
 
     /// Create acquire operation (pass both source guid and ptr)
     builder.setInsertionPoint(edt);
-    DepInfo info = computeDepInfo(builder, edt, value, sourcePtr);
-    DbAcquireOp acquire = builder.create<DbAcquireOp>(
-        edt.getLoc(), info.mode, sourceGuid, sourcePtr, SmallVector<Value>{},
-        info.offsets, info.sizes);
+
+    SmallVector<Value> indices, offsets, sizes;
+
+    /// For string memrefs, the source has outer size 1, so acquire should use
+    /// size 1 For non-string memrefs, we defer slicing to downstream passes
+    /// (empty offsets/sizes)
+    if (stringAnalysis && stringAnalysis->isStringMemRef(value)) {
+      /// Acquire the whole string DB (outer size 1, offset 0)
+      offsets.push_back(
+          builder.create<arith::ConstantIndexOp>(edt.getLoc(), 0));
+      sizes.push_back(builder.create<arith::ConstantIndexOp>(edt.getLoc(), 1));
+    }
+
+    DbAcquireOp acquire =
+        builder.create<DbAcquireOp>(edt.getLoc(), ArtsMode::inout, sourceGuid,
+                                    sourcePtr, indices, offsets, sizes);
 
     /// Add acquire pointer as EDT dependency
     SmallVector<Value> newOperands;
@@ -675,24 +445,25 @@ void CreateDbsPass::processEdtDeps(EdtOp edt, OpBuilder &builder) {
     edt->setOperands(newOperands);
 
     /// Add corresponding block argument for the acquired view
-    BlockArgument arg =
-        edt.getBody().front().addArgument(info.resultType, edt.getLoc());
+    auto sourceType = sourcePtr.getType().dyn_cast<MemRefType>();
+    BlockArgument dbAcquireArg =
+        edt.getBody().front().addArgument(sourceType, edt.getLoc());
 
     /// Rewrite memory accesses to use the acquired view
-    adjustAccesses(edt.getRegion(), value, arg, info.offsets);
+    adjustAccesses(edt.getRegion(), value, dbAcquireArg);
 
     /// Insert release before EDT terminator
     builder.setInsertionPoint(edt.getBody().front().getTerminator());
-    builder.create<DbReleaseOp>(edt.getLoc(), arg);
+    builder.create<DbReleaseOp>(edt.getLoc(), dbAcquireArg);
   }
 }
 
 //===----------------------------------------------------------------------===//
 // Adjust Memory Accesses
-/// Rewrite load/store operations to use acquired datablock views
+/// Rewrite load/store operations to use acquired Db
 //===----------------------------------------------------------------------===//
 void CreateDbsPass::adjustAccesses(Region &region, Value originalValue,
-                                   Value view, ArrayRef<Value> offsets) {
+                                   Value dbAcquire) {
   region.walk([&](Operation *op) -> WalkResult {
     /// Do not rewrite inside nested EDTs. Each EDT will be handled separately
     /// and should use its own acquired block arguments, not the parent's.
@@ -720,10 +491,9 @@ void CreateDbsPass::adjustAccesses(Region &region, Value originalValue,
     /// Rewrite the memref to the acquired view.
     if (isLoad) {
       auto load = cast<memref::LoadOp>(op);
-      load.getMemrefMutable().assign(view);
+      load.getMemrefMutable().assign(dbAcquire);
     } else if (auto st = dyn_cast<memref::StoreOp>(op)) {
-      auto s = cast<memref::StoreOp>(op);
-      s.getMemrefMutable().assign(view);
+      st.getMemrefMutable().assign(dbAcquire);
     }
     return WalkResult::advance();
   });
@@ -753,7 +523,7 @@ Value CreateDbsPass::getOriginalSizeValue(Value size, OpBuilder &builder,
 
 //===----------------------------------------------------------------------===//
 // Insert DB Free Operations
-/// Insert db_free for each datablock, replacing existing dealloc operations
+/// Insert db_free for each Db, replacing existing dealloc operations
 //===----------------------------------------------------------------------===//
 void CreateDbsPass::insertDbFreeOperations(DbAllocOp dbAlloc,
                                            OpBuilder &builder) {
@@ -765,46 +535,29 @@ void CreateDbsPass::insertDbFreeOperations(DbAllocOp dbAlloc,
   if (!regionOwner)
     return;
 
-  DominanceInfo dom(regionOwner);
-  bool foundFreeCalls = false;
-  auto replaceFreeCalls = [&](memref::DeallocOp deallocOp) {
-    Value memref = deallocOp.getMemref();
-    if (isRelatedToAllocation(memref, dbAlloc)) {
-      builder.setInsertionPoint(deallocOp);
-      /// Free both the datablock pointer and the GUID memref
-      builder.create<DbFreeOp>(dbAlloc.getLoc(), dbAlloc.getPtr());
-      builder.create<DbFreeOp>(dbAlloc.getLoc(), dbAlloc.getGuid());
-      markForRemoval(deallocOp);
-      foundFreeCalls = true;
-    }
-  };
-
-  /// Skip outlined EDT functions
-  if (auto parentFunc = dyn_cast<func::FuncOp>(regionOwner))
+  /// Insert a conservative free at the end of the owning function/region.
+  /// Avoid complex dominance checks and IR mutation during walks.
+  if (auto parentFunc = dyn_cast<func::FuncOp>(regionOwner)) {
+    /// Skip outlined EDT functions
     if (parentFunc.getName().startswith("__arts_edt_"))
       return;
-
-  /// Find and replace existing deallocation operations
-  region->walk(replaceFreeCalls);
-
-  /// If no existing deallocations found, insert DbFree before terminators
-  if (!foundFreeCalls) {
-    for (Block &block : *region) {
-      if (Operation *terminator = block.getTerminator()) {
-        if (dom.dominates(dbAlloc.getOperation(), terminator)) {
-          builder.setInsertionPoint(terminator);
-          /// Free both the datablock pointer and the GUID memref
-          builder.create<DbFreeOp>(dbAlloc.getLoc(), dbAlloc.getPtr());
-          builder.create<DbFreeOp>(dbAlloc.getLoc(), dbAlloc.getGuid());
-        }
-      }
-    }
+    Block &lastBlock = parentFunc.getBody().back();
+    Operation *terminator = lastBlock.getTerminator();
+    if (!terminator)
+      return;
+    OpBuilder::InsertionGuard IG(builder);
+    builder.setInsertionPoint(terminator);
+    builder.create<DbFreeOp>(dbAlloc.getLoc(), dbAlloc.getGuid());
+    builder.create<DbFreeOp>(dbAlloc.getLoc(), dbAlloc.getPtr());
+    return;
   }
+
+  /// If not within a function, skip insertion to avoid unsafe mutations.
 }
 
 //===----------------------------------------------------------------------===//
 // Allocation Relationship Check
-/// Check if a value is related to a specific datablock allocation
+/// Check if a value is related to a specific Db allocation
 //===----------------------------------------------------------------------===//
 bool CreateDbsPass::isRelatedToAllocation(Value value, DbAllocOp dbAlloc) {
   /// First check if the value is directly from this DbAllocOp
@@ -825,224 +578,6 @@ bool CreateDbsPass::isRelatedToAllocation(Value value, DbAllocOp dbAlloc) {
   return valueRoot == dbAllocRoot;
 }
 
-//===----------------------------------------------------------------------===//
-// Nested Allocation Pattern Detection
-/// Detect multi-dimensional arrays allocated as nested arrays-of-pointers
-//===----------------------------------------------------------------------===//
-std::optional<CreateDbsPass::NestedAllocPattern>
-CreateDbsPass::detectNestedAllocPattern(Value alloc) {
-  auto currentType = alloc.getType().dyn_cast<MemRefType>();
-  if (!currentType)
-    return std::nullopt;
-
-  auto elementType = currentType.getElementType();
-  auto innerMemRefType = elementType.dyn_cast<MemRefType>();
-  if (!innerMemRefType)
-    return std::nullopt;
-
-  /// Get this dimension size
-  Value thisSize;
-  auto allocOp = alloc.getDefiningOp<memref::AllocOp>();
-  if (!allocOp)
-    return std::nullopt;
-  Location loc = allocOp->getLoc();
-  if (currentType.isDynamicDim(0) && !allocOp.getDynamicSizes().empty()) {
-    thisSize = allocOp.getDynamicSizes()[0];
-  } else if (!currentType.isDynamicDim(0)) {
-    OpBuilder builder(module.getContext());
-    builder.setInsertionPointAfter(allocOp);
-    thisSize =
-        builder.create<arith::ConstantIndexOp>(loc, currentType.getDimSize(0));
-  } else {
-    return std::nullopt;
-  }
-
-  /// Find the initialization loop and inner allocations
-  scf::ForOp initLoop = nullptr;
-  Value storedValue;
-
-  for (Operation *user : alloc.getUsers()) {
-    if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
-      if (storeOp.getMemref() != alloc)
-        continue;
-
-      storedValue = storeOp.getValue();
-      auto innerAlloc = storedValue.getDefiningOp<memref::AllocOp>();
-      if (!innerAlloc)
-        continue;
-
-      auto forOp = storeOp->getParentOfType<scf::ForOp>();
-      if (!forOp)
-        continue;
-
-      initLoop = forOp;
-      auto innerAllocType = innerAlloc.getResult().getType().cast<MemRefType>();
-
-      /// Get inner dimension size and hoist it if needed
-      Value innerSize;
-      if (innerAllocType.isDynamicDim(0) &&
-          !innerAlloc.getDynamicSizes().empty()) {
-        innerSize = innerAlloc.getDynamicSizes()[0];
-
-        /// Hoist the inner size computation before the loop if it's defined
-        /// inside
-        if (auto sizeDefOp = innerSize.getDefiningOp()) {
-          if (forOp.getRegion().isAncestor(sizeDefOp->getParentRegion())) {
-            /// Size is defined inside loop - need to hoist it
-            OpBuilder hoistBuilder(forOp->getContext());
-            hoistBuilder.setInsertionPoint(forOp);
-
-            /// Recursively clone the operation and its operands
-            std::function<Value(Value)> hoistValue = [&](Value val) -> Value {
-              if (auto defOp = val.getDefiningOp()) {
-                if (forOp.getRegion().isAncestor(defOp->getParentRegion())) {
-                  /// Need to hoist this operation too
-                  SmallVector<Value> newOperands;
-                  for (Value operand : defOp->getOperands())
-                    newOperands.push_back(hoistValue(operand));
-
-                  Operation *cloned = hoistBuilder.clone(*defOp);
-                  for (size_t i = 0; i < newOperands.size(); ++i)
-                    cloned->setOperand(i, newOperands[i]);
-
-                  return cloned->getResult(0);
-                }
-              }
-              /// Already outside loop or is block argument
-              return val;
-            };
-
-            innerSize = hoistValue(innerSize);
-          }
-        }
-      } else if (!innerAllocType.isDynamicDim(0)) {
-        OpBuilder builder(innerAlloc->getContext());
-        builder.setInsertionPoint(innerAlloc);
-        innerSize = builder.create<arith::ConstantIndexOp>(
-            innerAlloc->getLoc(), innerAllocType.getDimSize(0));
-      }
-
-      if (!innerSize)
-        continue;
-
-      /// Recursively detect inner pattern
-      auto innerPattern = detectNestedAllocPattern(innerAlloc.getResult());
-
-      NestedAllocPattern pattern;
-      pattern.outerAlloc = alloc;
-      pattern.dimSize = thisSize;
-      pattern.initLoop = initLoop;
-      if (innerPattern) {
-        pattern.inner =
-            std::make_unique<NestedAllocPattern>(std::move(*innerPattern));
-        pattern.elementType = innerPattern->getFinalElementType();
-      } else {
-        pattern.elementType = innerAllocType.getElementType();
-        pattern.innerDimSize = innerSize;
-        pattern.innerAllocValue = innerAlloc.getResult();
-      }
-
-      ARTS_DEBUG(" - Detected nested allocation pattern: depth="
-                 << pattern.getDepth()
-                 << ", element_type=" << pattern.elementType);
-
-      return pattern;
-    }
-  }
-
-  return std::nullopt;
-}
-
-//===----------------------------------------------------------------------===//
-// Transform Nested Memory Accesses
-/// Convert cascaded load/store chains into direct N-dimensional indexing
-/// Pattern: load(load(A[i])[j]) -> load(A_2D[i,j])
-//===----------------------------------------------------------------------===//
-void CreateDbsPass::transformNestedAccesses(Value outerAlloc, Value ndPtr) {
-
-  MemRefType ndType = ndPtr.getType().cast<MemRefType>();
-  int rank = ndType.getRank();
-  int expectedChainLength = rank - 1;
-  OpBuilder builder(module.getContext());
-
-  struct ChainInfo {
-    SmallVector<Value> indices;
-    SmallVector<Operation *> loads;
-  };
-
-  /// Recursive function to collect index chain
-  auto collectChain = [&](Value mem, auto &&self) -> std::optional<ChainInfo> {
-    Value base = arts::getUnderlyingValue(mem);
-    if (base == outerAlloc)
-      return ChainInfo{{}, {}};
-
-    if (auto defOp = mem.getDefiningOp<memref::LoadOp>()) {
-      auto indicesRange = defOp.getIndices();
-      SmallVector<Value> thisIndices(indicesRange.begin(), indicesRange.end());
-      if (thisIndices.size() != 1)
-        return std::nullopt;
-
-      auto prevOpt = self(defOp.getMemref(), self);
-      if (!prevOpt)
-        return std::nullopt;
-
-      ChainInfo prev = *prevOpt;
-      prev.indices.push_back(thisIndices[0]);
-      prev.loads.push_back(defOp);
-      return prev;
-    }
-
-    return std::nullopt;
-  };
-
-  module.walk([&](Operation *op) -> WalkResult {
-    Value mem;
-    SmallVector<Value> indices;
-    bool isLoad = false;
-    Value storedValue;
-    if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
-      mem = loadOp.getMemref();
-      indices.assign(loadOp.getIndices().begin(), loadOp.getIndices().end());
-      isLoad = true;
-    } else if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
-      mem = storeOp.getMemref();
-      indices.assign(storeOp.getIndices().begin(), storeOp.getIndices().end());
-      isLoad = false;
-      storedValue = storeOp.getValue();
-    } else {
-      return WalkResult::advance();
-    }
-
-    auto chainOpt = collectChain(mem, collectChain);
-    if (!chainOpt)
-      return WalkResult::advance();
-
-    SmallVector<Value> fullIndices = chainOpt->indices;
-    if (static_cast<int>(fullIndices.size()) != expectedChainLength)
-      return WalkResult::advance();
-
-    if (indices.size() != 1)
-      return WalkResult::advance();
-
-    fullIndices.push_back(indices[0]);
-
-    builder.setInsertionPoint(op);
-    if (isLoad) {
-      auto newLoad =
-          builder.create<memref::LoadOp>(op->getLoc(), ndPtr, fullIndices);
-      op->getResult(0).replaceAllUsesWith(newLoad);
-    } else {
-      builder.create<memref::StoreOp>(op->getLoc(), storedValue, ndPtr,
-                                      fullIndices);
-    }
-
-    opsToRemove.insert(op);
-    for (auto *load : chainOpt->loads)
-      opsToRemove.insert(load);
-
-    return WalkResult::advance();
-  });
-}
 
 //===----------------------------------------------------------------------===//
 // Pass creation

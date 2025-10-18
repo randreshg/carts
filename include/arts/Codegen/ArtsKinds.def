@@ -93,6 +93,9 @@ __ARTS_PTR_TYPE(Int32Ptr, Int32)
 __ARTS_PTR_TYPE(Int64Ptr, Int64)
 __ARTS_PTR_TYPE(Int8PtrPtr, Int8Ptr)
 
+/// Raw LLVM pointer for runtime functions that return void*
+__ARTS_TYPE(RawPtr, mlir::LLVM::LLVMPointerType::get)
+
 #undef __ARTS_INTEGER_TYPE
 #undef __ARTS_TYPE
 #undef __ARTS_PTR_TYPE
@@ -330,13 +333,13 @@ __ARTS_RTL_ATTRS(artsAddDependenceToPersistentEvent, ControlAttrs,
 /// ------------------------------ DataBlock ------------------------------ ///
 /// {
 // void *artsDbCreateWithGuid(artsGuid_t guid, uint64_t size);
-__ARTS_RTL(artsDbCreateWithGuid, VoidPtr, ArtsGuid, Int64)
+__ARTS_RTL(artsDbCreateWithGuid, RawPtr, ArtsGuid, Int64)
 __ARTS_RTL_ATTRS(artsDbCreateWithGuid, AllocAttrs, ReturnPtrAttrs,
                  ParamAttrs(EmptyAttrs, EmptyAttrs))
 
 // void *artsDbCreateWithGuidAndData(artsGuid_t guid, void *data,
 //                                   uint64_t size);
-__ARTS_RTL(artsDbCreateWithGuidAndData, VoidPtr, ArtsGuid, VoidPtr, Int64)
+__ARTS_RTL(artsDbCreateWithGuidAndData, RawPtr, ArtsGuid, VoidPtr, Int64)
 __ARTS_RTL_ATTRS(artsDbCreateWithGuidAndData, AllocAttrs, ReturnPtrAttrs,
                  ParamAttrs(EmptyAttrs, ReadOnlyPtrAttrs, EmptyAttrs))
 

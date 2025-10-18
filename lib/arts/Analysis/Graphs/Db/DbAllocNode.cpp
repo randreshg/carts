@@ -26,6 +26,8 @@ DbAllocNode::DbAllocNode(DbAllocOp op, DbAnalysis *analysis)
   info.isAlloc = true;
   info.estimatedBytes = 0;
   info.staticBytes = 0;
+  info.sizes.reserve(op.getSizes().size());
+  info.sizes.assign(op.getSizes().begin(), op.getSizes().end());
 
   /// Find the corresponding DbFreeOp for this allocation
   Value dbVal = op.getPtr();
@@ -41,12 +43,12 @@ DbAllocNode::DbAllocNode(DbAllocOp op, DbAnalysis *analysis)
   unsigned long long elemBytes =
       arts::getElementTypeByteSize(op.getElementType());
 
-  if (!op.getPayloadSizes().empty()) {
+  if (!op.getElementSizes().empty()) {
     bool allConst = true;
     unsigned long long payloadElems = 1;
 
     /// Compute total element count from payload dimensions
-    for (Value v : op.getPayloadSizes()) {
+    for (Value v : op.getElementSizes()) {
       if (auto c = v.getDefiningOp<arith::ConstantIndexOp>()) {
         unsigned long long mul =
             (unsigned long long)std::max<int64_t>(c.value(), 1);
