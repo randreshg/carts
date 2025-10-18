@@ -28,18 +28,12 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
-#include "polygeist/Ops.h"
-// #include "polygeist/Ops.h" // no direct use after removal of subview/collapse
-// path
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include <optional>
 
 /// Debug
 #include "arts/Utils/ArtsDebug.h"
@@ -116,7 +110,8 @@ private:
   }
 
   /// Access adjustment
-  void adjustAccesses(Region &region, Value originalValue, Value dbAcquire);
+  void adjustAccesses(Region &region, Value originalValue, Value dbAcquire,
+                      OpBuilder &builder);
 
   /// Extract the logical (pre-malloc) size for a dynamically computed value
   Value getOriginalSizeValue(Value size, OpBuilder &builder, Location loc);
@@ -261,17 +256,15 @@ SetVector<Value> CreateDbsPass::collectUsedAllocations() {
   SetVector<Value> allUsedAllocs;
   module.walk([&](EdtOp edt) {
     edt.walk([&](Operation *op) {
-      Value mem;
-      if (auto load = dyn_cast<memref::LoadOp>(op))
-        mem = load.getMemref();
-      else if (auto store = dyn_cast<memref::StoreOp>(op))
-        mem = store.getMemref();
-      else
-        return;
-
-      Value base = arts::getUnderlyingValue(mem);
-      if (base)
-        allUsedAllocs.insert(base);
+      /// Check all operands of all operations for memory references
+      for (Value operand : op->getOperands()) {
+        if (!operand.getType().isa<MemRefType>())
+          continue;
+        /// Get the underlying value of the memory reference
+        Value base = arts::getUnderlyingValue(operand);
+        if (base)
+          allUsedAllocs.insert(base);
+      }
     });
   });
   return allUsedAllocs;
@@ -451,7 +444,7 @@ void CreateDbsPass::processEdtDeps(EdtOp edt, OpBuilder &builder) {
         edt.getBody().front().addArgument(sourceType, edt.getLoc());
 
     /// Rewrite memory accesses to use the acquired view
-    adjustAccesses(edt.getRegion(), value, dbAcquireArg);
+    adjustAccesses(edt.getRegion(), value, dbAcquireArg, builder);
 
     /// Insert release before EDT terminator
     builder.setInsertionPoint(edt.getBody().front().getTerminator());
@@ -463,38 +456,51 @@ void CreateDbsPass::processEdtDeps(EdtOp edt, OpBuilder &builder) {
 // Adjust Memory Accesses
 /// Rewrite load/store operations to use acquired Db
 //===----------------------------------------------------------------------===//
+
+/// Helper function to adjust memref indices when rank changes
+template <typename MemRefOp>
+void adjustMemrefIndices(MemRefOp op, Value originalMemref, Value dbAcquire,
+                         OpBuilder &builder) {
+  auto originalMemRefType = originalMemref.getType().cast<MemRefType>();
+  auto newMemRefType = dbAcquire.getType().cast<MemRefType>();
+
+  if (originalMemRefType.getRank() < newMemRefType.getRank()) {
+    // Add zero indices for the additional dimensions
+    SmallVector<Value> indices;
+    indices.reserve(newMemRefType.getRank());
+
+    auto zeroIndex = builder.create<arith::ConstantIndexOp>(op->getLoc(), 0);
+    for (int i = 0; i < newMemRefType.getRank(); ++i)
+      indices.push_back(zeroIndex);
+    op.getIndicesMutable().assign(indices);
+  }
+}
+
 void CreateDbsPass::adjustAccesses(Region &region, Value originalValue,
-                                   Value dbAcquire) {
+                                   Value dbAcquire, OpBuilder &builder) {
   region.walk([&](Operation *op) -> WalkResult {
-    /// Do not rewrite inside nested EDTs. Each EDT will be handled separately
-    /// and should use its own acquired block arguments, not the parent's.
     if (isa<EdtOp>(op))
       return WalkResult::skip();
+
     Value mem;
-    SmallVector<Value> oldIndices;
-    bool isLoad = false;
-    if (auto load = dyn_cast<memref::LoadOp>(op)) {
+    if (auto load = dyn_cast<memref::LoadOp>(op))
       mem = load.getMemref();
-      oldIndices = load.getIndices();
-      isLoad = true;
-    } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+    else if (auto store = dyn_cast<memref::StoreOp>(op))
       mem = store.getMemref();
-      oldIndices = store.getIndices();
-    } else if (auto gep = dyn_cast<DbGepOp>(op)) {
+    else if (auto gep = dyn_cast<DbGepOp>(op))
       mem = gep.getBasePtr();
-      oldIndices.assign(gep.getIndices().begin(), gep.getIndices().end());
-    } else {
+    else
       return WalkResult::advance();
-    }
+
     if (arts::getUnderlyingValue(mem) != originalValue)
       return WalkResult::advance();
 
-    /// Rewrite the memref to the acquired view.
-    if (isLoad) {
-      auto load = cast<memref::LoadOp>(op);
+    if (auto load = dyn_cast<memref::LoadOp>(op)) {
       load.getMemrefMutable().assign(dbAcquire);
-    } else if (auto st = dyn_cast<memref::StoreOp>(op)) {
-      st.getMemrefMutable().assign(dbAcquire);
+      adjustMemrefIndices(load, mem, dbAcquire, builder);
+    } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      store.getMemrefMutable().assign(dbAcquire);
+      adjustMemrefIndices(store, mem, dbAcquire, builder);
     }
     return WalkResult::advance();
   });
@@ -537,7 +543,7 @@ void CreateDbsPass::insertDbFreeOperations(DbAllocOp dbAlloc,
     return;
 
   /// Insert a conservative free at the end of the owning function/region.
-  /// Avoid complex dominance checks and IR mutation during walks.
+
   if (auto parentFunc = dyn_cast<func::FuncOp>(regionOwner)) {
     /// Skip outlined EDT functions
     if (parentFunc.getName().startswith("__arts_edt_"))

@@ -217,8 +217,6 @@ int main() {
          max_seq_err);
   printf("Parallel time: %.4fs\nSequential time: %.4fs\n", parallel_time,
          sequential_time);
-  if (sequential_time > 1e-9 && parallel_time > 1e-9)
-    printf("Speedup: %.2fx\n", sequential_time / parallel_time);
 
   /// Verify results
   if (parallel_correct)

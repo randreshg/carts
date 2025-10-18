@@ -91,7 +91,7 @@ static cl::opt<std::string> ArtsConfig("arts-config",
 enum class PipelineStage {
   Simplify,         // After initial cleanup and simplification
   ArtsInliner,      // After ARTS inliner
-  ConvertOpenMP,    // After ConvertOpenMPToARTS
+  OpenMPToArts,     // After OpenMPToArts
   EdtTransforms,    // After EDT transformations
   EdtOptimizations, // After EDT optimizations
   PreLowering,      // After pre-lowering transformations
@@ -106,21 +106,21 @@ static cl::opt<PipelineStage>
            cl::values(clEnumValN(PipelineStage::Simplify, "simplify",
                                  "Stop after simplification"),
                       clEnumValN(PipelineStage::ArtsInliner, "arts-inliner",
-                                 "Stop after ARTS inliner"),
-                      clEnumValN(PipelineStage::ConvertOpenMP, "convert-openmp",
-                                 "Stop after OpenMP conversion"),
+                                 "Stop after Arts inliner"),
+                      clEnumValN(PipelineStage::OpenMPToArts, "openmp-to-arts",
+                                 "Stop after OpenMP to Arts conversion"),
                       clEnumValN(PipelineStage::EdtTransforms, "edt-transforms",
                                  "Stop after EDT transformations"),
                       clEnumValN(PipelineStage::Db, "db",
                                  "Stop after db optimization"),
                       clEnumValN(PipelineStage::Epochs, "epochs",
                                  "Stop after epoch creation"),
-                      clEnumValN(PipelineStage::EdtOptimizations, "edt-opt",
+                      clEnumValN(PipelineStage::EdtOptimizations, "edt",
                                  "Stop after EDT optimizations"),
                       clEnumValN(PipelineStage::PreLowering, "pre-lowering",
                                  "Stop after pre-lowering transformations"),
                       clEnumValN(PipelineStage::ArtsToLLVM, "arts-to-llvm",
-                                 "Stop after ARTS to LLVM conversion"),
+                                 "Stop after Arts to LLVM conversion"),
                       clEnumValN(PipelineStage::Complete, "complete",
                                  "Run complete pipeline (default)")),
            cl::init(PipelineStage::Complete));
@@ -216,8 +216,8 @@ void setupArtsInliner(PassManager &pm) {
 }
 
 /// Setup OpenMP to ARTS conversion passes.
-void setupConvertOpenMP(PassManager &pm) {
-  pm.addPass(arts::createConvertOpenMPtoARTSPass());
+void setupOpenMPToArts(PassManager &pm) {
+  pm.addPass(arts::createConvertOpenMPtoArtsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createSymbolDCEPass());
 }
@@ -233,6 +233,10 @@ void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 void setupDb(PassManager &pm, arts::ArtsAnalysisManager *AM, bool identifyDbs,
              bool exportJson) {
   pm.addPass(arts::createCanonicalizeMemrefsPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCSEPass());
+  pm.addPass(arts::createEdtPtrRematerializationPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createCreateDbsPass(identifyDbs));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
@@ -255,7 +259,6 @@ void setupEdtOptimizations(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 
 /// Setup epoch creation passes.
 void setupEpochs(PassManager &pm, arts::ArtsAnalysisManager *AM) {
-  pm.addPass(arts::createEdtPtrRematerializationPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createCreateEpochsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
@@ -319,7 +322,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
 
     /// Complete pipeline
     setupArtsInliner(pm);
-    setupConvertOpenMP(pm);
+    setupOpenMPToArts(pm);
     setupEdtTransforms(pm, AM.get());
     setupDb(pm, AM.get(), true, ExportJson);
     setupEdtOptimizations(pm, AM.get());
@@ -392,7 +395,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   /// OpenMP to ARTS conversion
   {
     PassManager pm(&context);
-    setupConvertOpenMP(pm);
+    setupOpenMPToArts(pm);
     if (mlir::failed(pm.run(module))) {
       ARTS_ERROR("Error when converting OpenMP to ARTS");
       module->dump();
@@ -400,7 +403,7 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
     }
   }
 
-  if (stopAt == PipelineStage::ConvertOpenMP)
+  if (stopAt == PipelineStage::OpenMPToArts)
     return;
 
   /// EDT transformations

@@ -18,17 +18,15 @@ int main(int argc, char **argv) {
   }
   /// Print initial values
   printf("Initial values:\n");
-  for (int i = 0; i < N; i++) {
+  for (int i = 0; i < N; i++)
     printf("a[%d] = %d, b[%d] = %d\n", i, a[i], i, b[i]);
-  }
 
   /// Parallel region with worksharing loop - vector addition
   printf("Parallel region:\n");
 #pragma omp parallel for schedule(static, 4)
   {
-    for (int i = 0; i < N; i++) {
+    for (int i = 0; i < N; i++)
       c[i] = a[i] + b[i];
-    }
   }
 
   /// Verify results
@@ -44,9 +42,8 @@ int main(int argc, char **argv) {
   printf("Expected sum: %d\n", N * (N - 1) / 2 + N * (N - 1));
 
   printf("Results:\n");
-  for (int i = 0; i < N; i++) {
+  for (int i = 0; i < N; i++)
     printf("c[%d] = %d\n", i, c[i]);
-  }
 
   free(a);
   free(b);

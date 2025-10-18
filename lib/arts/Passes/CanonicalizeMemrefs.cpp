@@ -46,25 +46,6 @@ using namespace mlir;
 using namespace mlir::arts;
 
 //===----------------------------------------------------------------------===//
-// Helper Functions
-//===----------------------------------------------------------------------===//
-namespace {
-
-/// Cast a value to index type if needed.
-static Value castToIndex(Value value, OpBuilder &builder, Location loc) {
-  if (!value)
-    return value;
-  if (value.getType().isIndex())
-    return value;
-  if (value.getType().isIntOrIndex())
-    return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
-                                              value);
-  return value;
-}
-
-} // namespace
-
-//===----------------------------------------------------------------------===//
 // Pass Implementation
 //===----------------------------------------------------------------------===//
 
