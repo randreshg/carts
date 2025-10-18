@@ -685,5 +685,79 @@ splitDbIndices(Operation *dbOp, ValueRange indices, OpBuilder &builder,
   return std::make_pair(outerIndices, innerIndices);
 }
 
+//===----------------------------------------------------------------------===//
+// Type Casting and Conversion Utilities
+//===----------------------------------------------------------------------===//
+
+/// Cast a value to index type if needed.
+Value castToIndex(Value value, OpBuilder &builder, Location loc) {
+  if (!value)
+    return value;
+  if (value.getType().isIndex())
+    return value;
+  if (value.getType().isIntOrIndex())
+    return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
+                                              value);
+  return value;
+}
+
+//===----------------------------------------------------------------------===//
+// Pattern Recognition and Analysis Utilities
+//===----------------------------------------------------------------------===//
+
+/// Extract original size from (N * scale) / scale pattern.
+/// Common in malloc size calculations: malloc(N * sizeof(T)) / sizeof(T) -> N.
+Value extractOriginalSize(Value numerator, Value denominator,
+                          OpBuilder &builder, Location loc) {
+  Value stripped = stripNumericCasts(numerator);
+  if (auto mul = stripped.getDefiningOp<arith::MulIOp>()) {
+    Value lhs = mul.getLhs();
+    Value rhs = mul.getRhs();
+    if (scalesAreEquivalent(lhs, denominator))
+      return castToIndex(stripNumericCasts(rhs), builder, loc);
+    if (scalesAreEquivalent(rhs, denominator))
+      return castToIndex(stripNumericCasts(lhs), builder, loc);
+  }
+  return Value();
+}
+
+/// Extract array index from byte offset pattern: bytes = (index * elemBytes).
+/// Handles common patterns where GEP indices are scaled by element byte size.
+/// Returns the logical array index or null Value if pattern doesn't match.
+Value extractArrayIndexFromByteOffset(Value byteOffset, Type elemType) {
+  /// Strip any index casts to get to the core computation
+  Value idxSource = byteOffset;
+  while (auto castOp = idxSource.getDefiningOp<arith::IndexCastOp>())
+    idxSource = castOp.getIn();
+
+  /// Look for multiplication: index * elemBytes
+  auto mulOp = idxSource.getDefiningOp<arith::MulIOp>();
+  if (!mulOp)
+    return Value();
+
+  int64_t elemSize = getElementTypeByteSize(elemType);
+  if (elemSize == 0)
+    return Value();
+
+  /// Identify which operand is the constant element size
+  auto isElementSizeConstant = [elemSize](Value v) -> bool {
+    if (auto constIdx = v.getDefiningOp<arith::ConstantIndexOp>())
+      return constIdx.value() == elemSize;
+    if (auto constInt = v.getDefiningOp<arith::ConstantIntOp>())
+      return constInt.value() == elemSize && constInt.getType().isInteger(64);
+    return false;
+  };
+
+  Value lhs = mulOp.getLhs();
+  Value rhs = mulOp.getRhs();
+
+  if (isElementSizeConstant(lhs))
+    return rhs;
+  if (isElementSizeConstant(rhs))
+    return lhs;
+  /// Pattern doesn't match expected form
+  return Value();
+}
+
 } // namespace arts
 } // namespace mlir

@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <omp.h>
 
 void print_usage(const char *program_name) {
@@ -11,7 +12,6 @@ void print_usage(const char *program_name) {
   printf("  -n <size>     Matrix size (NxN, default: 200)\n");
   printf("  -k <size>     Kernel size (KxK, default: 5)\n");
   printf("  -t <tasks>    Number of tasks (default: 4)\n");
-  printf("  -i            Read matrix and kernel from stdin\n");
   printf("  -h            Show this help\n");
 }
 
@@ -19,7 +19,6 @@ int main(int argc, char **argv) {
   int matrix_size = 200;
   int kernel_size = 5;
   int num_tasks = 4;
-  bool read_from_input = false;
 
   // Parse command line arguments
   for (int i = 1; i < argc; ++i) {
@@ -29,13 +28,11 @@ int main(int argc, char **argv) {
       kernel_size = atoi(argv[++i]);
     } else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) {
       num_tasks = atoi(argv[++i]);
-    } else if (strcmp(argv[i], "-i") == 0) {
-      read_from_input = true;
     } else if (strcmp(argv[i], "-h") == 0) {
       print_usage(argv[0]);
       return EXIT_SUCCESS;
     } else {
-      fprintf(stderr, "Unknown option: %s\n", argv[i]);
+      printf("Unknown option: %s\n", argv[i]);
       print_usage(argv[0]);
       return EXIT_FAILURE;
     }
@@ -43,12 +40,12 @@ int main(int argc, char **argv) {
 
   // Validate parameters
   if (matrix_size <= 0 || kernel_size <= 0 || num_tasks <= 0) {
-    fprintf(stderr, "Error: All sizes must be positive\n");
+    printf("Error: All sizes must be positive\n");
     return EXIT_FAILURE;
   }
 
   if (kernel_size > matrix_size) {
-    fprintf(stderr, "Error: Kernel size cannot be larger than matrix size\n");
+    printf("Error: Kernel size cannot be larger than matrix size\n");
     return EXIT_FAILURE;
   }
 
@@ -62,7 +59,7 @@ int main(int argc, char **argv) {
   printf("  Number of tasks: %d\n", num_tasks);
   printf("  Block size: %d\n", block_size);
   printf("  Output size: %dx%d\n", output_size, output_size);
-  printf("  Reading from input: %s\n\n", read_from_input ? "yes" : "no");
+  printf("  Initializing with random numbers\n\n");
 
   // Dynamic memory allocation
   double **A = new double *[matrix_size];
@@ -79,36 +76,32 @@ int main(int argc, char **argv) {
     C_serial[i] = new double[output_size];
   }
 
-  /// Initialize matrices
-  if (read_from_input) {
-    printf("Reading matrix A (%dx%d)...\n", matrix_size, matrix_size);
-    for (int i = 0; i < matrix_size; ++i) {
-      for (int j = 0; j < matrix_size; ++j) {
-        if (scanf("%lf", &A[i][j]) != 1) {
-          fprintf(stderr, "Error reading matrix A at position (%d,%d)\n", i, j);
-          return EXIT_FAILURE;
-        }
-      }
-    }
+  /// Initialize matrices with random numbers
+  printf("Initializing matrices with random numbers...\n");
 
-    printf("Reading kernel (%dx%d)...\n", kernel_size, kernel_size);
-    for (int i = 0; i < kernel_size; ++i) {
-      for (int j = 0; j < kernel_size; ++j) {
-        if (scanf("%lf", &Kernel[i][j]) != 1) {
-          fprintf(stderr, "Error reading kernel at position (%d,%d)\n", i, j);
-          return EXIT_FAILURE;
-        }
-      }
-    }
-  } else {
-    printf("Initializing matrices with default values (1.0)...\n");
-    for (int i = 0; i < matrix_size; ++i)
-      for (int j = 0; j < matrix_size; ++j)
-        A[i][j] = 1.0;
+  // Seed random number generator
+  srand(time(NULL));
 
-    for (int i = 0; i < kernel_size; ++i)
-      for (int j = 0; j < kernel_size; ++j)
-        Kernel[i][j] = 1.0;
+  // Initialize matrix A with random values between 0.0 and 1.0
+  for (int i = 0; i < matrix_size; ++i) {
+    for (int j = 0; j < matrix_size; ++j) {
+      A[i][j] = (double)rand() / RAND_MAX;
+    }
+  }
+
+  // Initialize kernel with random values between -1.0 and 1.0
+  for (int i = 0; i < kernel_size; ++i) {
+    for (int j = 0; j < kernel_size; ++j) {
+      Kernel[i][j] = 2.0 * ((double)rand() / RAND_MAX) - 1.0;
+    }
+  }
+
+  // Initialize output matrices to zero
+  for (int i = 0; i < output_size; ++i) {
+    for (int j = 0; j < output_size; ++j) {
+      C_parallel[i][j] = 0.0;
+      C_serial[i][j] = 0.0;
+    }
   }
 
   double t_start = omp_get_wtime();
@@ -174,43 +167,6 @@ int main(int argc, char **argv) {
       }
     }
   }
-
-  /// Print results
-  // printf("convolution A:\n");
-  // for (int i = 0; i < A_size; ++i) {
-  //   for (int j = 0; j < A_size; ++j) {
-  //     printf("%4.1f ", A[i][j]);
-  //   }
-  //   printf("\n");
-  // }
-  // printf("\n");
-
-  // printf("convolution Kernel:\n");
-  // for (int i = 0; i < KERNEL_SIZE; ++i) {
-  //   for (int j = 0; j < KERNEL_SIZE; ++j) {
-  //     printf("%4.1f ", Kernel[i][j]);
-  //   }
-  //   printf("\n");
-  // }
-  // printf("\n");
-
-  // printf("convolution C_parallel:\n");
-  // for (int i = 0; i < output_size; ++i) {
-  //   for (int j = 0; j < output_size; ++j) {
-  //     printf("%4.1f ", C_parallel[i][j]);
-  //   }
-  //   printf("\n");
-  // }
-  // printf("\n");
-
-  // printf("convolution C_serial:\n");
-  // for (int i = 0; i < output_size; ++i) {
-  //   for (int j = 0; j < output_size; ++j) {
-  //     printf("%4.1f ", C_serial[i][j]);
-  //   }
-  //   printf("\n");
-  // }
-  // printf("\n");
 
   if (errors == 0)
     printf("Result: CORRECT\n");

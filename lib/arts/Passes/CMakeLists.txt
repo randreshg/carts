@@ -7,7 +7,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   ConvertOpenMPToArts.cpp
   Edt.cpp
   CreateDbs.cpp
-  PreprocessNestedAllocations.cpp
+  CanonicalizeMemrefs.cpp
   Db.cpp
   CreateEpochs.cpp
   ConvertArtsToLLVM.cpp

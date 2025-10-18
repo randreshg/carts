@@ -16,11 +16,12 @@ def ArtsInliner : Pass<"arts-inliner", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createArtsInlinerPass()";
 }
 
-def PreprocessNestedAllocations : Pass<"preprocess-nested-allocations", "mlir::ModuleOp"> {
-  let summary = "Preprocess nested allocation patterns before DB creation";
+def CanonicalizeMemrefs : Pass<"canonicalize-memrefs", "mlir::ModuleOp"> {
+  let summary = "Canonicalize memref allocations and accesses";
   let description = [{
-    This pass detects multi-dimensional arrays allocated as arrays-of-pointers
-    and converts them to single N-dimensional allocations to simplify DB handling.
+    This pass canonicalizes memref allocations and accesses for downstream passes.
+    It converts nested array-of-pointer allocations to multi-dimensional memrefs and
+    rewrites pointer-based accesses to direct memref indexed accesses.
   }];
   let dependentDialects = [
     "memref::MemRefDialect",
@@ -30,7 +31,7 @@ def PreprocessNestedAllocations : Pass<"preprocess-nested-allocations", "mlir::M
     "arith::ArithDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createPreprocessNestedAllocationsPass()";
+  let constructor = "mlir::arts::createCanonicalizeMemrefsPass()";
 }
 
 

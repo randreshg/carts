@@ -74,6 +74,18 @@ splitDbIndices(Operation *dbOp, ValueRange indices, OpBuilder &builder,
                       Location loc);
 
 //===----------------------------------------------------------------------===//
+// Type Casting and Conversion Utilities
+//===----------------------------------------------------------------------===//
+Value castToIndex(Value value, OpBuilder &builder, Location loc);
+
+//===----------------------------------------------------------------------===//
+// Pattern Recognition and Analysis Utilities
+//===----------------------------------------------------------------------===//
+Value extractOriginalSize(Value numerator, Value denominator,
+                          OpBuilder &builder, Location loc);
+Value extractArrayIndexFromByteOffset(Value byteOffset, Type elemType);
+
+//===----------------------------------------------------------------------===//
 /// Operation Removal and Replacement Utilities
 //===----------------------------------------------------------------------===//
 

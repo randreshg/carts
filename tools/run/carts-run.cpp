@@ -232,7 +232,7 @@ void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 /// Setup db creation and optimization passes.
 void setupDb(PassManager &pm, arts::ArtsAnalysisManager *AM, bool identifyDbs,
              bool exportJson) {
-  pm.addPass(arts::createPreprocessNestedAllocationsPass());
+  pm.addPass(arts::createCanonicalizeMemrefsPass());
   pm.addPass(arts::createCreateDbsPass(identifyDbs));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());

@@ -1,23 +1,26 @@
 ///==========================================================================
-/// File: PreprocessNestedAllocations.cpp
+/// File: CanonicalizeMemrefs.cpp
 ///
-/// This pass preprocesses nested allocation patterns before DB creation.
-/// It detects multi-dimensional arrays allocated as arrays-of-pointers and
-/// converts them to single N-dimensional allocations to simplify DB handling.
+/// This pass preprocesses nested allocation patterns by converting them to
+/// single N-dimensional allocations. This is essential for proper DB creation
+/// and LLVM code generation.
 ///
 /// Pass Overview:
-/// 1. Detect nested allocation patterns (arrays of pointers to arrays)
-/// 2. Convert nested patterns to single N-dimensional allocations
-/// 3. Transform cascaded memory accesses into direct N-dimensional indexing
-/// 4. Remove initialization loops and legacy allocations
+/// 1. Detect nested allocation patterns (arrays of pointers)
+/// 2. Convert them to single N-dimensional allocations
+/// 3. Rewrite memory accesses to use direct N-dimensional indexing
+/// 4. Remove the initialization loops and legacy allocations
 ///
-/// This pass runs before CreateDbsPass to ensure all nested allocations are
-/// converted to a canonical form that DB creation can handle uniformly.
 ///
-///==========================================================================
+/// Instead of creating separate DBs for each row, this pass:
+/// 1. Detects the nested allocation pattern
+/// 2. Creates a single N-dimensional datablock (e.g., memref<?x?xf64>)
+/// 3. Transforms cascaded memory accesses (load(load(A[i])[j])) into
+///    direct N-dimensional access (load(A_ND[i,j]))
+/// 4. Removes the initialization loop that allocated individual rows
+//==========================================================================
 
 #include "ArtsPassDetails.h"
-#include "arts/Analysis/StringAnalysis.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsUtils.h"
 
@@ -26,23 +29,18 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-// Avoid depending on LLVM op headers directly; match by op name
-#include "polygeist/Ops.h"
-// #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
-// #include "polygeist/Ops.h" // no direct use after removal of subview/collapse
-// path
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include <optional>
 
 /// Debug
 #include "arts/Utils/ArtsDebug.h"
-ARTS_DEBUG_SETUP(preprocess_nested_allocations);
+ARTS_DEBUG_SETUP(canonicalize_memrefs);
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -64,29 +62,14 @@ static Value castToIndex(Value value, OpBuilder &builder, Location loc) {
   return value;
 }
 
-/// Extract original size from (N * scale) / scale pattern.
-/// Common in malloc size calculations: malloc(N * sizeof(T)) / sizeof(T) -> N.
-static Value extractOriginalSize(Value numerator, Value denominator,
-                                 OpBuilder &builder, Location loc) {
-  Value stripped = stripNumericCasts(numerator);
-  if (auto mul = stripped.getDefiningOp<arith::MulIOp>()) {
-    Value lhs = mul.getLhs();
-    Value rhs = mul.getRhs();
-    if (scalesAreEquivalent(lhs, denominator))
-      return castToIndex(stripNumericCasts(rhs), builder, loc);
-    if (scalesAreEquivalent(rhs, denominator))
-      return castToIndex(stripNumericCasts(lhs), builder, loc);
-  }
-  return Value();
-}
+} // namespace
 
 //===----------------------------------------------------------------------===//
 // Pass Implementation
 //===----------------------------------------------------------------------===//
 
-struct PreprocessNestedAllocationsPass
-    : public arts::PreprocessNestedAllocationsBase<
-          PreprocessNestedAllocationsPass> {
+struct CanonicalizeMemrefsPass
+    : public arts::CanonicalizeMemrefsBase<CanonicalizeMemrefsPass> {
 
   void runOnOperation() override;
 
@@ -155,27 +138,20 @@ private:
   Value getOriginalSizeValue(Value size, OpBuilder &builder, Location loc);
 };
 
-} // namespace
-
 //===----------------------------------------------------------------------===//
 // Pass Entry Point
 //===----------------------------------------------------------------------===//
-void PreprocessNestedAllocationsPass::runOnOperation() {
+void CanonicalizeMemrefsPass::runOnOperation() {
   module = getOperation();
   opsToRemove.clear();
 
-  ARTS_INFO_HEADER(PreprocessNestedAllocationsPass);
+  ARTS_INFO_HEADER(CanonicalizeMemrefsPass);
   ARTS_DEBUG_REGION(module.dump(););
 
   OpBuilder builder(module.getContext());
 
   /// Phase 1: Detect and convert nested allocation patterns
   ARTS_INFO("Phase 1: Detecting nested allocation patterns");
-  SetVector<Value> nestedAllocs;
-
-  /// Multi-dimensional arrays allocated as arrays-of-pointers are detected
-  /// and grouped by their initialization loop for later conversion to N-D
-  /// allocs
   DenseMap<scf::ForOp, SmallVector<NestedAllocPattern>> nestedPatternsByLoop;
 
   module.walk([&](memref::AllocOp allocOp) {
@@ -185,20 +161,19 @@ void PreprocessNestedAllocationsPass::runOnOperation() {
       return;
     if (auto pattern = detectNestedAllocPattern(alloc)) {
       nestedPatternsByLoop[pattern->initLoop].push_back(std::move(*pattern));
-      nestedAllocs.insert(alloc);
     }
   });
 
   if (nestedPatternsByLoop.empty()) {
     ARTS_DEBUG(" - No nested allocation patterns found");
-    ARTS_INFO_FOOTER(PreprocessNestedAllocationsPass);
+    ARTS_INFO_FOOTER(CanonicalizeMemrefsPass);
     return;
   }
 
   /// Convert nested patterns to a single N-D stack allocation and rewrite
   /// accesses to index directly into that allocation.
-  ARTS_DEBUG(
-      " - Converting nested patterns to N-D alloca and rewriting accesses");
+  ARTS_INFO("Phase 2: Converting nested patterns to N-D alloca and rewriting "
+            "accesses");
   for (auto &[loop, patterns] : nestedPatternsByLoop) {
     for (auto &pattern : patterns) {
       auto allocOp = pattern.outerAlloc.getDefiningOp<memref::AllocOp>();
@@ -226,10 +201,7 @@ void PreprocessNestedAllocationsPass::runOnOperation() {
       /// Rewrite cascaded memory accesses to direct N-D indexing
       transformNestedAccesses(pattern.outerAlloc, ndAlloc);
 
-      /// Schedule removal of the initialization loop and legacy outer/inner
-      /// allocations for cleanup; all uses should be rewritten by now.
-      if (pattern.initLoop)
-        opsToRemove.insert(pattern.initLoop.getOperation());
+      /// Schedule the initialization loop and legacy allocations for removal.
       auto legacyAllocs = pattern.getAllNestedAllocs();
       for (Value legacy : legacyAllocs) {
         if (!legacy)
@@ -237,14 +209,17 @@ void PreprocessNestedAllocationsPass::runOnOperation() {
         if (Operation *def = legacy.getDefiningOp())
           opsToRemove.insert(def);
       }
+
+      /// Clean up obsolete outer allocation
+      Value outer = pattern.outerAlloc;
+      if (Operation *defOp = outer.getDefiningOp())
+        opsToRemove.insert(defOp);
     }
   }
 
-  /// Cleanup legacy allocations
-  ARTS_INFO(" - Cleaning up legacy nested allocations");
+  ARTS_INFO("Phase 3: Removing legacy allocations");
   removeOps(module, opsToRemove, true);
-
-  ARTS_INFO_FOOTER(PreprocessNestedAllocationsPass);
+  ARTS_INFO_FOOTER(CanonicalizeMemrefsPass);
   ARTS_DEBUG_REGION(module.dump(););
 }
 
@@ -252,31 +227,31 @@ void PreprocessNestedAllocationsPass::runOnOperation() {
 // Size Value Extraction
 /// Extract logical allocation size from sizeof-scaled expressions
 //===----------------------------------------------------------------------===//
-Value PreprocessNestedAllocationsPass::getOriginalSizeValue(Value size,
-                                                            OpBuilder &builder,
-                                                            Location loc) {
+Value CanonicalizeMemrefsPass::getOriginalSizeValue(Value size,
+                                                    OpBuilder &builder,
+                                                    Location loc) {
   if (!size)
     return size;
 
   if (auto div = size.getDefiningOp<arith::DivUIOp>())
     if (Value original =
-            extractOriginalSize(div.getLhs(), div.getRhs(), builder, loc))
+            arts::extractOriginalSize(div.getLhs(), div.getRhs(), builder, loc))
       return original;
 
   if (auto div = size.getDefiningOp<arith::DivSIOp>())
     if (Value original =
-            extractOriginalSize(div.getLhs(), div.getRhs(), builder, loc))
+            arts::extractOriginalSize(div.getLhs(), div.getRhs(), builder, loc))
       return original;
 
-  return castToIndex(stripNumericCasts(size), builder, loc);
+  return size;
 }
 
 //===----------------------------------------------------------------------===//
 // Nested Allocation Pattern Detection
 /// Detect multi-dimensional arrays allocated as nested arrays-of-pointers
 //===----------------------------------------------------------------------===//
-std::optional<PreprocessNestedAllocationsPass::NestedAllocPattern>
-PreprocessNestedAllocationsPass::detectNestedAllocPattern(Value alloc) {
+std::optional<CanonicalizeMemrefsPass::NestedAllocPattern>
+CanonicalizeMemrefsPass::detectNestedAllocPattern(Value alloc) {
   auto currentType = alloc.getType().dyn_cast<MemRefType>();
   if (!currentType)
     return std::nullopt;
@@ -329,38 +304,6 @@ PreprocessNestedAllocationsPass::detectNestedAllocPattern(Value alloc) {
       if (innerAllocType.isDynamicDim(0) &&
           !innerAlloc.getDynamicSizes().empty()) {
         innerSize = innerAlloc.getDynamicSizes()[0];
-
-        /// Hoist the inner size computation before the loop if it's defined
-        /// inside
-        if (auto sizeDefOp = innerSize.getDefiningOp()) {
-          if (forOp.getRegion().isAncestor(sizeDefOp->getParentRegion())) {
-            /// Size is defined inside loop - need to hoist it
-            OpBuilder hoistBuilder(forOp->getContext());
-            hoistBuilder.setInsertionPoint(forOp);
-
-            /// Recursively clone the operation and its operands
-            std::function<Value(Value)> hoistValue = [&](Value val) -> Value {
-              if (auto defOp = val.getDefiningOp()) {
-                if (forOp.getRegion().isAncestor(defOp->getParentRegion())) {
-                  /// Need to hoist this operation too
-                  SmallVector<Value> newOperands;
-                  for (Value operand : defOp->getOperands())
-                    newOperands.push_back(hoistValue(operand));
-
-                  Operation *cloned = hoistBuilder.clone(*defOp);
-                  for (size_t i = 0; i < newOperands.size(); ++i)
-                    cloned->setOperand(i, newOperands[i]);
-
-                  return cloned->getResult(0);
-                }
-              }
-              /// Already outside loop or is block argument
-              return val;
-            };
-
-            innerSize = hoistValue(innerSize);
-          }
-        }
       } else if (!innerAllocType.isDynamicDim(0)) {
         OpBuilder builder(innerAlloc->getContext());
         builder.setInsertionPoint(innerAlloc);
@@ -404,8 +347,8 @@ PreprocessNestedAllocationsPass::detectNestedAllocPattern(Value alloc) {
 /// Convert cascaded load/store chains into direct N-dimensional indexing
 /// Pattern: load(load(A[i])[j]) -> load(A_2D[i,j])
 //===----------------------------------------------------------------------===//
-void PreprocessNestedAllocationsPass::transformNestedAccesses(Value outerAlloc,
-                                                              Value ndPtr) {
+void CanonicalizeMemrefsPass::transformNestedAccesses(Value outerAlloc,
+                                                      Value ndPtr) {
 
   MemRefType ndType = ndPtr.getType().cast<MemRefType>();
   int rank = ndType.getRank();
@@ -483,121 +426,11 @@ void PreprocessNestedAllocationsPass::transformNestedAccesses(Value outerAlloc,
                                       fullIndices);
     }
 
-    /// Remove the operation that we directly replaced.
     opsToRemove.insert(op);
-
-    /// If intermediate chain loads became dead due to the rewrite, remove them.
-    for (auto *load : chainOpt->loads) {
-      if (load && load->getNumResults() > 0 && load->getResult(0).use_empty())
-        opsToRemove.insert(load);
-    }
+    for (auto *load : chainOpt->loads)
+      opsToRemove.insert(load);
 
     return WalkResult::advance();
-  });
-
-  // Rewrite pointer-paths that consume row pointers: replace
-  //   row = memref.load A[i]
-  //   p = memref2pointer(row)
-  //   gep(p, j*elemBytes)
-  // with base = memref2pointer(ndPtr); gep(base, ((i*dim1)+j)*elemBytes)
-  module.walk([&](polygeist::Memref2PointerOp m2p) {
-    auto rowLoad = m2p.getSource().getDefiningOp<memref::LoadOp>();
-    if (!rowLoad)
-      return;
-    // Ensure this load comes from the outer array-of-pointers
-    Value base = arts::getUnderlyingValue(rowLoad.getMemref());
-    if (base != outerAlloc)
-      return;
-
-    // Expect exactly one index: the row index i
-    auto loadIndices = rowLoad.getIndices();
-    if (loadIndices.size() != 1)
-      return;
-    Value iIndex = loadIndices[0];
-
-    // Find the GEP op that uses the pointer produced by memref2pointer
-    Operation *gepUser = nullptr;
-    for (auto &use : m2p.getResult().getUses()) {
-      Operation *user = use.getOwner();
-      if (user && user->getName().getStringRef() == "llvm.getelementptr") {
-        gepUser = user;
-        break;
-      }
-    }
-    if (!gepUser)
-      return; // Only rewrite when pattern matches
-
-    // Extract j index from the bytes index pattern: bytes = (j * elemBytes)
-    // Assume operand #1 holds the dynamic index in our patterns
-    if (gepUser->getNumOperands() < 2)
-      return;
-    Value gepIdx = gepUser->getOperand(1);
-
-    // In many cases gepIdx is i64; try to find the source index value j
-    Value idxSource = gepIdx;
-    if (auto ic2 = idxSource.getDefiningOp<arith::IndexCastOp>())
-      idxSource = ic2.getIn();
-    if (auto ic = idxSource.getDefiningOp<arith::IndexCastOp>())
-      idxSource = ic.getIn();
-
-    auto mulIdx = idxSource.getDefiningOp<arith::MulIOp>();
-    if (!mulIdx)
-      return;
-    // Identify j operand (the non-constant-8 operand)
-    auto isConst8 = [](Value v) {
-      if (auto c = v.getDefiningOp<arith::ConstantIndexOp>())
-        return c.value() == 8;
-      if (auto ci = v.getDefiningOp<arith::ConstantIntOp>())
-        return ci.value() == 8 && ci.getType().isInteger(64);
-      return false;
-    };
-    Value jIndex =
-        isConst8(mulIdx.getLhs())
-            ? mulIdx.getRhs()
-            : (isConst8(mulIdx.getRhs()) ? mulIdx.getLhs() : Value());
-    if (!jIndex)
-      return;
-
-    OpBuilder builder(module.getContext());
-    builder.setInsertionPoint(gepUser);
-    Location loc = gepUser->getLoc();
-
-    // Compute dim1 = dim(ndPtr, 1)
-    Value dim1 = builder.create<memref::DimOp>(loc, ndPtr, 1);
-
-    // Compute linear index: i*dim1 + j
-    Value iTimesDim = builder.create<arith::MulIOp>(loc, iIndex, dim1);
-    Value linIdx = builder.create<arith::AddIOp>(loc, iTimesDim, jIndex);
-
-    // Convert to i64 and scale by element size in bytes
-    uint64_t elemBytes = getElementTypeByteSize(
-        ndPtr.getType().cast<MemRefType>().getElementType());
-    Value linIdxI64 =
-        builder.create<arith::IndexCastOp>(loc, builder.getI64Type(), linIdx);
-    Value cElem = builder.create<arith::ConstantIntOp>(
-        loc, static_cast<int64_t>(elemBytes), 64);
-    Value byteOff = builder.create<arith::MulIOp>(loc, linIdxI64, cElem);
-
-    // Create pointer to base of ndPtr and update GEP operands
-    auto llvmPtrTy = LLVM::LLVMPointerType::get(builder.getContext());
-    Value basePtr =
-        builder.create<polygeist::Memref2PointerOp>(loc, llvmPtrTy, ndPtr)
-            .getResult();
-
-    // Replace operands in-place
-    gepUser->setOperand(0, basePtr);
-    // For GEPOp, the last operand is the index in our patterns
-    if (gepUser->getNumOperands() >= 2) {
-      // Operand 0: base pointer, Operand 1: index
-      gepUser->setOperand(0, basePtr);
-      gepUser->setOperand(1, byteOff);
-    }
-
-    // Clean up the old memref2pointer and row load if now unused
-    if (m2p.getResult().use_empty())
-      opsToRemove.insert(m2p.getOperation());
-    if (rowLoad && rowLoad->use_empty())
-      opsToRemove.insert(rowLoad.getOperation());
   });
 }
 
@@ -606,8 +439,8 @@ void PreprocessNestedAllocationsPass::transformNestedAccesses(Value outerAlloc,
 //===----------------------------------------------------------------------===//
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createPreprocessNestedAllocationsPass() {
-  return std::make_unique<PreprocessNestedAllocationsPass>();
+std::unique_ptr<Pass> createCanonicalizeMemrefsPass() {
+  return std::make_unique<CanonicalizeMemrefsPass>();
 }
 } // namespace arts
 } // namespace mlir
