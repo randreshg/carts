@@ -24,11 +24,10 @@ int main(int argc, char **argv) {
   /// Parallel region with worksharing loop - vector addition
   printf("Parallel region:\n");
 #pragma omp parallel for schedule(static, 4)
-  {
-    for (int i = 0; i < N; i++)
-      c[i] = a[i] + b[i];
-  }
+  for (int i = 0; i < N; i++)
+    c[i] = a[i] + b[i];
 
+  printf("Parallel region completed\n");
   /// Verify results
   int sum = 0;
 #pragma omp parallel

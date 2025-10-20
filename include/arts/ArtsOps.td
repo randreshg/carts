@@ -635,10 +635,7 @@ def DepGepOp : Arts_Op<"dep_gep", [Pure, AttrSizedOperandSegments]> {
     The input can be a pointer to a dependency structure or a memref of
     dependency structures. Optional indices specify which dependency entry
     to access when the input is an array of dependencies (e.g., when a
-    DbAlloc/Acquire returned multiple datablocks). Optional strides are used
-    for multi-dimensional indexing when converting from dbsubindex operations.
-    Returns a memref typed view of the underlying pointer data suitable for 
-    further accesses.
+    DbAlloc/Acquire returned multiple datablocks). 
   }];
   let arguments = (ins AnyType:$dep_struct, Index:$offset,
                        Variadic<AnyType>:$indices, Variadic<Index>:$strides);
@@ -691,13 +688,15 @@ def ForOp : Arts_Op<"for", [AttrSizedOperandSegments, SingleBlockImplicitTermina
   let arguments = (ins Variadic<Index>:$lowerBound, 
                       Variadic<Index>:$upperBound, 
                       Variadic<Index>:$step,
-                      OptionalAttr<ForScheduleKindAttr>:$schedule);
+                      OptionalAttr<ForScheduleKindAttr>:$schedule,
+                      Variadic<AnyType>:$reductionAccumulators);
   let results = (outs);
   let regions = (region AnyRegion:$region);
   
   let assemblyFormat = [{
     `(` $lowerBound `)` `to` `(` $upperBound `)` `step` `(` $step `)`
     ( `schedule` `(` $schedule^ `)` )?
+    ( `reduction` `(` $reductionAccumulators^ `:` type($reductionAccumulators) `)` )?
     `{` $region `}` attr-dict
   }];
   

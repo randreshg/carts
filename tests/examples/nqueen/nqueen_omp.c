@@ -19,34 +19,34 @@ int isSafe(int board[], int row, int col) {
 void solveParallel(int board[], int row, int n, int *local_count,
                    int *task_count) {
   if (row == n) {
-#pragma omp atomic
-    (*local_count)++;
+    #pragma omp atomic
+      (*local_count)++;
     return;
   }
 
   for (int col = 0; col < n; col++) {
     if (isSafe(board, row, col)) {
-// Increment task counter before creating task
-#pragma omp atomic
-      (*task_count)++;
+      // Increment task counter before creating task
+      #pragma omp atomic
+        (*task_count)++;
 
-// Create a task for each valid placement
-#pragma omp task firstprivate(board, row, col, n, local_count, task_count)
+      // Create a task for each valid placement
+      #pragma omp task firstprivate(board, row, col, n, local_count, task_count)
       {
-        int *new_board = (int *)malloc(n * sizeof(int));
-        // Copy the current board state
-        memcpy(new_board, board, row * sizeof(int));
-        new_board[row] = col;
+          int *new_board = (int *)malloc(n * sizeof(int));
+          // Copy the current board state
+          memcpy(new_board, board, row * sizeof(int));
+          new_board[row] = col;
 
-        solveParallel(new_board, row + 1, n, local_count, task_count);
+          solveParallel(new_board, row + 1, n, local_count, task_count);
 
-        free(new_board);
+          free(new_board);
       }
     }
   }
 
-// Wait for all tasks to complete at this level
-#pragma omp taskwait
+  // Wait for all tasks to complete at this level
+  #pragma omp taskwait
 }
 
 // Main solving function that sets up the parallel region
@@ -55,16 +55,17 @@ int solveNqueens(int n, int *total_tasks) {
   int task_count = 0;
   int *board = (int *)malloc(n * sizeof(int));
 
-#pragma omp parallel
+  #pragma omp parallel
   {
-#pragma omp single
-      {printf("Starting N-Queens solver with %d threads\n",
-              omp_get_num_threads());
+    #pragma omp single
+    {
+      printf("Starting N-Queens solver with %d threads\n",
+                 omp_get_num_threads());
 
-  // Start the parallel solving process
-  solveParallel(board, 0, n, &solution_count, &task_count);
-}
-}
+      // Start the parallel solving process
+      solveParallel(board, 0, n, &solution_count, &task_count);
+    }
+  }
 
 *total_tasks = task_count;
 free(board);
