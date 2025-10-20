@@ -7,6 +7,7 @@
 int main(int argc, char *argv[]) {
   /// Check for the correct number of arguments
   if (argc != 3) {
+    /// E.g. ./matrixmul 8 2
     printf("Usage: %s <matrix_size> <block_size>\n", argv[0]);
     return EXIT_FAILURE;
   }

@@ -23,6 +23,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 /// Debug
@@ -32,12 +33,11 @@ ARTS_DEBUG_SETUP(convert_openmp_to_arts);
 
 using namespace mlir;
 using namespace arts;
-
 //===----------------------------------------------------------------------===//
 // Conversion Patterns
 //===----------------------------------------------------------------------===//
 /// Pattern to replace `omp.parallel` with `arts.edt` with `parallel` attribute
-struct OMPParallelToARTSPattern : public OpRewritePattern<omp::ParallelOp> {
+struct OMPParallelToArtsPattern : public OpRewritePattern<omp::ParallelOp> {
   using OpRewritePattern::OpRewritePattern;
 
   LogicalResult matchAndRewrite(omp::ParallelOp op,
@@ -85,7 +85,9 @@ struct SCFParallelToArtsPattern : public OpRewritePattern<scf::ParallelOp> {
     Value st = op.getStep().front();
 
     auto artsFor = rewriter.create<arts::ForOp>(
-        loc, ValueRange{lb}, ValueRange{ub}, ValueRange{st}, nullptr);
+        loc, ValueRange{lb}, ValueRange{ub}, ValueRange{st},
+        /*schedule*/ nullptr,
+        /*reductionAccumulators*/ ValueRange{});
 
     Region &dstRegion = artsFor.getRegion();
     if (dstRegion.empty())
@@ -353,22 +355,27 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
     /// original iteration step irrespective of the chunk size.
     std::optional<int64_t> staticChunkSize;
     if (auto chunk = op.getScheduleChunkVar()) {
-      if (auto constOp = chunk.getDefiningOp<arith::ConstantOp>()) {
-        if (auto intAttr = constOp.getValue().dyn_cast<IntegerAttr>()) {
-          int64_t chunkVal = intAttr.getInt();
-          if (chunkVal > 0)
-            staticChunkSize = chunkVal;
-        }
-      }
+      int64_t chunkVal;
+      if (getConstantIndex(chunk, chunkVal) && chunkVal > 0)
+        staticChunkSize = chunkVal;
     }
 
-    /// Create arts.for and move wsloop body
-    auto forOp = rewriter.create<arts::ForOp>(loc, ValueRange{lowerBound},
-                                              ValueRange{upperBound},
-                                              ValueRange{step}, schedAttr);
+    /// Collect reduction metadata if present on omp.wsloop
+    SmallVector<Value> redAccs;
+    DenseMap<Value, omp::ReductionDeclareOp> reductionDecls;
+    collectReductionMetadata(op, rewriter, redAccs, reductionDecls);
+
+    /// Create `arts.for` and move `omp.wsloop` body
+    auto forOp = rewriter.create<arts::ForOp>(
+        loc, ValueRange{lowerBound}, ValueRange{upperBound}, ValueRange{step},
+        schedAttr, ValueRange{redAccs});
+
+    /// Set chunk size attribute if present
     if (staticChunkSize)
       forOp->setAttr("chunk_size",
                      rewriter.getI64IntegerAttr(*staticChunkSize));
+
+    /// Add region and argument to the forOp
     Region &dstRegion = forOp.getRegion();
     if (dstRegion.empty())
       dstRegion.push_back(new Block());
@@ -376,19 +383,113 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
     if (dst.getNumArguments() == 0)
       dst.addArgument(rewriter.getIndexType(), loc);
 
+    /// Move ops and inline reductions
     OpBuilder::InsertionGuard IG(rewriter);
     rewriter.setInsertionPointToStart(&dst);
     IRMapping mapper;
     Block &src = op.getRegion().front();
     if (!src.getArguments().empty())
       mapper.map(src.getArgument(0), dst.getArgument(0));
-    for (Operation &srcOp : src.without_terminator())
-      rewriter.clone(srcOp, mapper);
+    moveOps(src, dst, rewriter, mapper, reductionDecls);
     rewriter.create<arts::YieldOp>(loc);
 
     /// Remove the original wsloop
     rewriter.eraseOp(op);
     return success();
+  }
+
+private:
+  /// Collect reduction metadata from the OpenMP wsloop operation
+  void collectReductionMetadata(
+      omp::WsLoopOp op, PatternRewriter &rewriter, SmallVector<Value> &redAccs,
+      DenseMap<Value, omp::ReductionDeclareOp> &reductionDecls) const {
+    auto reds = op.getReductionsAttr();
+    if (!reds)
+      return;
+
+    /// Get the reduction variables
+    auto reductionVars = op.getReductionVars();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    assert(module && "Module is required");
+
+    for (auto [attr, value] : llvm::zip(reds.getValue(), reductionVars)) {
+      redAccs.push_back(arts::getUnderlyingValue(value));
+      if (auto symRef = dyn_cast<SymbolRefAttr>(attr)) {
+        auto decl = dyn_cast_or_null<omp::ReductionDeclareOp>(
+            module.lookupSymbol(symRef.getLeafReference()));
+        assert(decl && "Failed to resolve reduction declaration");
+        reductionDecls.try_emplace(value, decl);
+      }
+    }
+  }
+
+  /// Inline reduction operations and move non-reduction operations
+  void moveOps(Block &src, Block &dst, PatternRewriter &rewriter,
+               IRMapping &mapper,
+               DenseMap<Value, omp::ReductionDeclareOp> &reductionDecls) const {
+    for (Operation &srcOp : src.without_terminator()) {
+      if (auto redOp = dyn_cast<omp::ReductionOp>(&srcOp)) {
+        if (inlineReduction(redOp, rewriter, mapper, reductionDecls))
+          continue;
+      }
+      rewriter.clone(srcOp, mapper);
+    }
+
+    /// Analyzes the reductionDecls and removes the ones that are not used
+    for (auto [value, decl] : reductionDecls) {
+      if (decl.use_empty())
+        rewriter.eraseOp(decl);
+    }
+  }
+
+  /// Inline a reduction operation
+  bool inlineReduction(
+      omp::ReductionOp redOp, PatternRewriter &rewriter, IRMapping &mapper,
+      const DenseMap<Value, omp::ReductionDeclareOp> &reductionDecls) const {
+    auto it = reductionDecls.find(redOp.getAccumulator());
+    if (it == reductionDecls.end())
+      return false;
+
+    Value operand = mapper.lookupOrDefault(redOp.getOperand());
+    Value accumulator = mapper.lookupOrDefault(redOp.getAccumulator());
+    auto memType = accumulator.getType().dyn_cast<MemRefType>();
+    if (!memType)
+      return false;
+
+    Location loc = redOp.getLoc();
+    unsigned rank = memType.getRank();
+    SmallVector<Value> zeroIndices;
+    zeroIndices.reserve(rank);
+    for (unsigned i = 0; i < rank; ++i)
+      zeroIndices.push_back(rewriter.create<arith::ConstantIndexOp>(loc, 0));
+
+    Value current =
+        rewriter.create<memref::LoadOp>(loc, accumulator, zeroIndices);
+
+    Value combined =
+        cloneCombinerRegion(it->second, current, operand, rewriter, loc);
+    if (!combined)
+      return false;
+
+    rewriter.create<memref::StoreOp>(loc, combined, accumulator, zeroIndices);
+    return true;
+  }
+
+  /// Clone combiner region for reduction operation
+  Value cloneCombinerRegion(omp::ReductionDeclareOp decl, Value lhs, Value rhs,
+                            PatternRewriter &rewriter, Location loc) const {
+    Block &combinerBlock = decl.getReductionRegion().front();
+    IRMapping combinerMap;
+    combinerMap.map(combinerBlock.getArgument(0), lhs);
+    combinerMap.map(combinerBlock.getArgument(1), rhs);
+
+    for (Operation &combOp : combinerBlock.without_terminator())
+      rewriter.clone(combOp, combinerMap);
+
+    auto yieldOp = dyn_cast<omp::YieldOp>(combinerBlock.getTerminator());
+    if (!yieldOp || yieldOp.getNumOperands() != 1)
+      return Value();
+    return combinerMap.lookup(yieldOp.getOperand(0));
   }
 };
 
@@ -432,8 +533,6 @@ struct AtomicUpdateToArtsPattern
 
     /// addr must be a memref (rank-0) for now
     Value addr = op.getX();
-    // Accept any pointer-like or memref target; downstream passes will lower
-    // to runtime atomics.
 
     /// Extract the non-block-arg operand as the increment value
     Value blockArg = blk.getArgument(0);
@@ -506,9 +605,10 @@ struct TaskloopToARTSPattern : public OpRewritePattern<omp::TaskLoopOp> {
     auto step = op.getStep()[0];
 
     /// Create arts.for and move taskloop body
-    auto forOp = rewriter.create<arts::ForOp>(loc, ValueRange{lowerBound},
-                                              ValueRange{upperBound},
-                                              ValueRange{step}, nullptr);
+    auto forOp = rewriter.create<arts::ForOp>(
+        loc, ValueRange{lowerBound}, ValueRange{upperBound}, ValueRange{step},
+        /*schedule*/ nullptr,
+        /*reductionAccumulators*/ ValueRange{});
     Region &dstRegion = forOp.getRegion();
     if (dstRegion.empty())
       dstRegion.push_back(new Block());
@@ -570,8 +670,10 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   ARTS_INFO_HEADER(ConvertOpenMPToArtsPass);
   ARTS_DEBUG_REGION(module.dump(););
   MLIRContext *context = &getContext();
+
+  /// Add patterns to convert OpenMP operations to Arts operations
   RewritePatternSet patterns(context);
-  patterns.add<OMPParallelToARTSPattern, SCFParallelToArtsPattern,
+  patterns.add<OMPParallelToArtsPattern, SCFParallelToArtsPattern,
                MasterToARTSPattern, TaskToARTSPattern, TaskloopToARTSPattern,
                WsloopToARTSPattern, AtomicUpdateToArtsPattern,
                TerminatorToARTSPattern, BarrierToARTSPattern,
