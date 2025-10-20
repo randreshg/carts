@@ -110,7 +110,7 @@ private:
   }
 
   /// Access adjustment
-  void adjustAccesses(Region &region, Value originalValue, Value dbAcquire,
+  void adjustAccesses(EdtOp edt, Value originalValue, Value dbAcquire,
                       OpBuilder &builder);
 
   /// Extract the logical (pre-malloc) size for a dynamically computed value
@@ -444,7 +444,7 @@ void CreateDbsPass::processEdtDeps(EdtOp edt, OpBuilder &builder) {
         edt.getBody().front().addArgument(sourceType, edt.getLoc());
 
     /// Rewrite memory accesses to use the acquired view
-    adjustAccesses(edt.getRegion(), value, dbAcquireArg, builder);
+    adjustAccesses(edt, value, dbAcquireArg, builder);
 
     /// Insert release before EDT terminator
     builder.setInsertionPoint(edt.getBody().front().getTerminator());
@@ -476,9 +476,9 @@ void adjustMemrefIndices(MemRefOp op, Value originalMemref, Value dbAcquire,
   }
 }
 
-void CreateDbsPass::adjustAccesses(Region &region, Value originalValue,
+void CreateDbsPass::adjustAccesses(EdtOp edt, Value originalValue,
                                    Value dbAcquire, OpBuilder &builder) {
-  region.walk([&](Operation *op) -> WalkResult {
+  edt->getRegion(0).walk([&](Operation *op) -> WalkResult {
     if (isa<EdtOp>(op))
       return WalkResult::skip();
 
@@ -503,6 +503,13 @@ void CreateDbsPass::adjustAccesses(Region &region, Value originalValue,
       adjustMemrefIndices(store, mem, dbAcquire, builder);
     }
     return WalkResult::advance();
+  });
+
+  /// Replace remaining uses of the original value with the db acquire if they
+  /// are in the edt region
+  originalValue.replaceUsesWithIf(dbAcquire, [&](OpOperand &use) -> bool {
+    Operation *user = use.getOwner();
+    return user->getParentOfType<EdtOp>() == edt;
   });
 }
 

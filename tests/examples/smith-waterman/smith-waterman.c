@@ -70,23 +70,6 @@ int main() {
     }
   }
 
-  // Print the sequential score matrix
-  printf("Sequential Score Matrix:\n");
-  for (int i = 0; i <= len1; i++) {
-    printf("  ");
-    for (int j = 0; j <= len2; j++)
-      printf("%3d ", score_sequential[i][j]);
-    printf("\n");
-  }
-
-  printf("\nParallel Score Matrix:\n");
-  for (int i = 0; i <= len1; i++) {
-    printf("  ");
-    for (int j = 0; j <= len2; j++)
-      printf("%3d ", score_parallel[i][j]);
-    printf("\n");
-  }
-
   /// Verify the results inline
   int ok = 1;
   for (int i = 0; i <= len1; i++) {

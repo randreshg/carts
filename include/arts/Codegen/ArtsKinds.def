@@ -87,6 +87,7 @@ __ARTS_INTEGER_TYPE(Int64, 64)
 /// Define pointer types
 __ARTS_PTR_TYPE(VoidPtr, PtrSize)
 __ARTS_PTR_TYPE(VoidPtrPtr, VoidPtr)
+__ARTS_PTR_TYPE(Int1Ptr, Int1)
 __ARTS_PTR_TYPE(Int8Ptr, Int8)
 __ARTS_PTR_TYPE(Int16Ptr, Int16)
 __ARTS_PTR_TYPE(Int32Ptr, Int32)
@@ -403,6 +404,91 @@ __ARTS_RTL_ATTRS(artsGetCurrentWorker, PureAttrs, ZExt, ParamAttrs())
 // unsigned int artsGetTotalWorkers();
 __ARTS_RTL(artsGetTotalWorkers, Int32)
 __ARTS_RTL_ATTRS(artsGetTotalWorkers, PureAttrs, ZExt, ParamAttrs())
+/// }
+
+/// ------------------------------ Atomics ------------------------------ ///
+/// {
+// unsigned int artsAtomicSwap(volatile unsigned int *destination, unsigned int swapIn);
+__ARTS_RTL(artsAtomicSwap, Int32, Int32Ptr, Int32)
+__ARTS_RTL_ATTRS(artsAtomicSwap, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs))
+
+// uint64_t artsAtomicSwapU64(volatile uint64_t *destination, uint64_t swapIn);
+__ARTS_RTL(artsAtomicSwapU64, Int64, Int64Ptr, Int64)
+__ARTS_RTL_ATTRS(artsAtomicSwapU64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
+
+// void *artsAtomicSwapPtr(volatile void **destination, void *swapIn);
+__ARTS_RTL(artsAtomicSwapPtr, VoidPtr, VoidPtrPtr, VoidPtr)
+__ARTS_RTL_ATTRS(artsAtomicSwapPtr, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
+
+// unsigned int artsAtomicSub(volatile unsigned int *destination, unsigned int subVal);
+__ARTS_RTL(artsAtomicSub, Int32, Int32Ptr, Int32)
+__ARTS_RTL_ATTRS(artsAtomicSub, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs))
+
+// unsigned int artsAtomicAdd(volatile unsigned int *destination, unsigned int addVal);
+__ARTS_RTL(artsAtomicAdd, Int32, Int32Ptr, Int32)
+__ARTS_RTL_ATTRS(artsAtomicAdd, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs))
+
+// unsigned int artsAtomicFetchAdd(volatile unsigned int *destination, unsigned int addVal);
+__ARTS_RTL(artsAtomicFetchAdd, Int32, Int32Ptr, Int32)
+__ARTS_RTL_ATTRS(artsAtomicFetchAdd, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs))
+
+// unsigned int artsAtomicCswap(volatile unsigned int *destination, unsigned int oldVal, unsigned int swapIn);
+__ARTS_RTL(artsAtomicCswap, Int32, Int32Ptr, Int32, Int32)
+__ARTS_RTL_ATTRS(artsAtomicCswap, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs, EmptyAttrs))
+
+// uint64_t artsAtomicCswapU64(volatile uint64_t *destination, uint64_t oldVal, uint64_t swapIn);
+__ARTS_RTL(artsAtomicCswapU64, Int64, Int64Ptr, Int64, Int64)
+__ARTS_RTL_ATTRS(artsAtomicCswapU64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs, EmptyAttrs))
+
+// void *artsAtomicCswapPtr(volatile void **destination, void *oldVal, void *swapIn);
+__ARTS_RTL(artsAtomicCswapPtr, VoidPtr, VoidPtrPtr, VoidPtr, VoidPtr)
+__ARTS_RTL_ATTRS(artsAtomicCswapPtr, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs, EmptyAttrs))
+
+// bool artsAtomicSwapBool(volatile bool *destination, bool value);
+__ARTS_RTL(artsAtomicSwapBool, Int1, Int1Ptr, Int1)
+__ARTS_RTL_ATTRS(artsAtomicSwapBool, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, ZExt))
+
+// uint64_t artsAtomicFetchAddU64(volatile uint64_t *destination, uint64_t addVal);
+__ARTS_RTL(artsAtomicFetchAddU64, Int64, Int64Ptr, Int64)
+__ARTS_RTL_ATTRS(artsAtomicFetchAddU64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
+
+// uint64_t artsAtomicFetchSubU64(volatile uint64_t *destination, uint64_t subVal);
+__ARTS_RTL(artsAtomicFetchSubU64, Int64, Int64Ptr, Int64)
+__ARTS_RTL_ATTRS(artsAtomicFetchSubU64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
+
+// uint64_t artsAtomicAddU64(volatile uint64_t *destination, uint64_t addVal);
+__ARTS_RTL(artsAtomicAddU64, Int64, Int64Ptr, Int64)
+__ARTS_RTL_ATTRS(artsAtomicAddU64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
+
+// uint64_t artsAtomicSubU64(volatile uint64_t *destination, uint64_t subVal);
+__ARTS_RTL(artsAtomicSubU64, Int64, Int64Ptr, Int64)
+__ARTS_RTL_ATTRS(artsAtomicSubU64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
+
+// bool artsTryLock(volatile unsigned int *lock);
+__ARTS_RTL(artsTryLock, Int1, Int32Ptr)
+__ARTS_RTL_ATTRS(artsTryLock, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs))
+
+// uint64_t artsAtomicFetchAndU64(volatile uint64_t *destination, uint64_t addVal);
+__ARTS_RTL(artsAtomicFetchAndU64, Int64, Int64Ptr, Int64)
+__ARTS_RTL_ATTRS(artsAtomicFetchAndU64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
+
+// uint64_t artsAtomicFetchOrU64(volatile uint64_t *destination, uint64_t addVal);
+__ARTS_RTL(artsAtomicFetchOrU64, Int64, Int64Ptr, Int64)
+__ARTS_RTL_ATTRS(artsAtomicFetchOrU64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
+
+// uint64_t artsAtomicFetchXOrU64(volatile uint64_t *destination, uint64_t addVal);
+__ARTS_RTL(artsAtomicFetchXOrU64, Int64, Int64Ptr, Int64)
+__ARTS_RTL_ATTRS(artsAtomicFetchXOrU64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
+
+// unsigned int artsAtomicFetchOr(volatile unsigned int *destination, unsigned int addVal);
+__ARTS_RTL(artsAtomicFetchOr, Int32, Int32Ptr, Int32)
+__ARTS_RTL_ATTRS(artsAtomicFetchOr, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs))
+
+// unsigned int artsAtomicFetchAnd(volatile unsigned int *destination, unsigned int addVal);
+__ARTS_RTL(artsAtomicFetchAnd, Int32, Int32Ptr, Int32)
+__ARTS_RTL_ATTRS(artsAtomicFetchAnd, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs))
+
+
 /// }
 
 #undef __ARTS_RTL_ATTRS

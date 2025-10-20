@@ -380,10 +380,14 @@ void CanonicalizeMemrefsPass::transformNestedAccesses(Value outerAlloc,
       indices.assign(storeOp.getIndices().begin(), storeOp.getIndices().end());
       isLoad = false;
       storedValue = storeOp.getValue();
+    } else if (auto dbControlOp = dyn_cast<arts::DbControlOp>(op)) {
+      dbControlOp.getPtrMutable().assign(ndPtr);
+      return WalkResult::advance();
     } else {
       return WalkResult::advance();
     }
 
+    /// Collect the index chain
     auto chainOpt = collectChain(mem, collectChain);
     if (!chainOpt)
       return WalkResult::advance();
@@ -392,9 +396,11 @@ void CanonicalizeMemrefsPass::transformNestedAccesses(Value outerAlloc,
     if (static_cast<int>(fullIndices.size()) != expectedChainLength)
       return WalkResult::advance();
 
+    /// Check if the current indices are a single index
     if (indices.size() != 1)
       return WalkResult::advance();
 
+    /// Combine the index chain with the current indices
     fullIndices.push_back(indices[0]);
 
     builder.setInsertionPoint(op);
@@ -407,6 +413,7 @@ void CanonicalizeMemrefsPass::transformNestedAccesses(Value outerAlloc,
                                       fullIndices);
     }
 
+    /// Schedule the operation for removal
     opsToRemove.insert(op);
     for (auto *load : chainOpt->loads)
       opsToRemove.insert(load);

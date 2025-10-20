@@ -131,6 +131,8 @@ detect_host_config() {
             CARTS_CLANG_LIBRARY_FLAGS+=(
                 # Linker runtime search path for ARTS
                 "-Wl,-rpath,${ARTS_INSTALL_DIR}/lib"
+                # Linker runtime search path for LLVM
+                "-Wl,-rpath,${LLVM_INSTALL_DIR}/lib"
             )
             CARTS_COMPILE_LIBRARY_FLAGS+=(
                 # Linker runtime search path for ARTS
@@ -159,6 +161,8 @@ detect_host_config() {
             CARTS_CLANG_LIBRARY_FLAGS+=(
                 # Linker runtime search path for ARTS
                 "-Wl,-rpath,${ARTS_INSTALL_DIR}/lib"
+                # Linker runtime search path for LLVM
+                "-Wl,-rpath,${LLVM_INSTALL_DIR}/lib"
             )
             CARTS_COMPILE_LIBRARY_FLAGS+=(
                 # Linker runtime search path for ARTS
