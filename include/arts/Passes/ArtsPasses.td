@@ -203,6 +203,25 @@ def EpochLowering : Pass<"epoch-lowering", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createEpochLoweringPass()";
 }
 
+def ParallelEdtLowering : Pass<"parallel-edt-lowering", "mlir::ModuleOp"> {
+  let summary = "Lower ARTS parallel EDTs to task graphs";
+  let description = [{
+    This pass transforms parallel EDT operations that contain loop constructs into
+    epoch-wrapped task graphs. It must execute before datablock lowering to ensure
+    proper dependency management.
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "LLVM::LLVMDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "arith::ArithDialect",
+    "scf::SCFDialect",
+    "polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::arts::createParallelEdtLoweringPass()";
+}
+
 def EdtLowering : Pass<"edt-lowering", "mlir::ModuleOp"> {
   let summary = "Lower ARTS EDTs to LLVM";
   let dependentDialects = [

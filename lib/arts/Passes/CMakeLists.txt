@@ -18,6 +18,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   EdtPtrRematerialization.cpp
   CanonicalizeDbs.cpp
   DbLowering.cpp
+  ParallelEdtLowering.cpp
   EdtLowering.cpp
   Concurrency.cpp
   ${CARTS_TRANSFORMS_SOURCE_FILES}
