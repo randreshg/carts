@@ -28,6 +28,7 @@ int main(int argc, char **argv) {
     c[i] = a[i] + b[i];
 
   printf("Parallel region completed\n");
+
   /// Verify results
   int sum = 0;
 #pragma omp parallel
@@ -39,10 +40,6 @@ int main(int argc, char **argv) {
 
   printf("Sum of results: %d\n", sum);
   printf("Expected sum: %d\n", N * (N - 1) / 2 + N * (N - 1));
-
-  printf("Results:\n");
-  for (int i = 0; i < N; i++)
-    printf("c[%d] = %d\n", i, c[i]);
 
   free(a);
   free(b);

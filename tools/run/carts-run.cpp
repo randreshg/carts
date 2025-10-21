@@ -266,6 +266,8 @@ void setupEpochs(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 
 /// Setup pre-lowering passes.
 void setupPreLowering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
+  pm.addPass(arts::createParallelEdtLoweringPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createDbLoweringPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createEdtLoweringPass());

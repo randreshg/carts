@@ -88,6 +88,7 @@ private:
   bool identifyDbs;
   ModuleOp module;
   DenseMap<Value, DbAllocOp> allocToDbAlloc;
+  DenseMap<Value, Value> dbPtrToOriginalAlloc;
   SmallVector<DbAllocOp, 8> createdDbAllocs;
   SetVector<Operation *> opsToRemove;
   StringAnalysis *stringAnalysis = nullptr;
@@ -118,6 +119,9 @@ private:
 
   /// DbAlloc cleanup
   void insertDbFreeOperations(DbAllocOp dbAlloc, OpBuilder &builder);
+
+  /// Remove dealloc operations for allocations converted to DBs
+  void removeDeallocOperations();
 
   /// Helper function to check if a value is related to the original allocation
   bool isRelatedToAllocation(Value value, DbAllocOp dbAlloc);
@@ -173,14 +177,18 @@ void CreateDbsPass::runOnOperation() {
   for (DbAllocOp dbAlloc : createdDbAllocs)
     insertDbFreeOperations(dbAlloc, builder);
 
-  /// Phase 5: Clean up legacy allocations
+  /// Phase 5: Remove dealloc operations for converted allocations
+  ARTS_INFO("Phase 5: Removing dealloc operations for converted allocations");
+  removeDeallocOperations();
+
+  /// Phase 6: Clean up legacy allocations
   ARTS_INFO(" - Cleaning up legacy allocations");
   removeOps(module, opsToRemove, true);
 
-  /// Phase 6: Enabling verification for EDTs
+  /// Phase 7: Enabling verification for EDTs
   module.walk([](EdtOp edt) { edt.removeNoVerifyAttr(); });
 
-  /// Phase 7: Simplify the module
+  /// Phase 8: Simplify the module
   DominanceInfo domInfo(module);
   arts::simplifyIR(module, domInfo);
 
@@ -339,6 +347,7 @@ void CreateDbsPass::createDbAllocOps(const SetVector<Value> &allocs,
 
     /// Store mappings for later use
     allocToDbAlloc[alloc] = dbAllocOp;
+    dbPtrToOriginalAlloc[dbAllocOp.getPtr()] = alloc;
     createdDbAllocs.push_back(dbAllocOp);
   }
 }
@@ -550,7 +559,6 @@ void CreateDbsPass::insertDbFreeOperations(DbAllocOp dbAlloc,
     return;
 
   /// Insert a conservative free at the end of the owning function/region.
-
   if (auto parentFunc = dyn_cast<func::FuncOp>(regionOwner)) {
     /// Skip outlined EDT functions
     if (parentFunc.getName().startswith("__arts_edt_"))
@@ -567,6 +575,42 @@ void CreateDbsPass::insertDbFreeOperations(DbAllocOp dbAlloc,
   }
 
   /// If not within a function, skip insertion to avoid unsafe mutations.
+}
+
+//===----------------------------------------------------------------------===//
+// Remove Dealloc Operations
+/// Remove memref.dealloc operations for allocations converted to DBs
+//===----------------------------------------------------------------------===//
+void CreateDbsPass::removeDeallocOperations() {
+  /// Walk the module to find memref.dealloc operations
+  module.walk([&](memref::DeallocOp deallocOp) {
+    Value deallocValue = deallocOp.getMemref();
+
+    ARTS_DEBUG("Checking dealloc: " << deallocOp
+                                    << " on value: " << deallocValue);
+
+    /// Check if this dealloc corresponds to an allocation we converted to DB
+    Value underlyingValue = arts::getUnderlyingValue(deallocValue);
+    ARTS_DEBUG("Underlying value: " << underlyingValue);
+
+    if (underlyingValue) {
+      /// Check if this underlying value was converted to a DB
+      if (allocToDbAlloc.count(underlyingValue)) {
+        ARTS_DEBUG("Marking dealloc operation for removal (original alloc): "
+                   << deallocOp);
+        markForRemoval(deallocOp);
+        return;
+      }
+    }
+
+    /// Check if this dealloc is on a DB pointer that we created
+    if (dbPtrToOriginalAlloc.count(deallocValue)) {
+      ARTS_DEBUG(
+          "Marking dealloc operation for removal (DB ptr): " << deallocOp);
+      markForRemoval(deallocOp);
+      return;
+    }
+  });
 }
 
 //===----------------------------------------------------------------------===//

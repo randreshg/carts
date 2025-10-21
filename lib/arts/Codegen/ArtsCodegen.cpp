@@ -603,6 +603,10 @@ void ArtsCodegen::setInsertionPointToStart(Block *block) {
   getBuilder().setInsertionPointToStart(block);
 }
 
+void ArtsCodegen::setInsertionPointToEnd(Block *block) {
+  getBuilder().setInsertionPointToEnd(block);
+}
+
 void ArtsCodegen::setInsertionPointAfter(Operation *op) {
   getBuilder().setInsertionPointAfter(op);
 }
@@ -611,6 +615,11 @@ void ArtsCodegen::setInsertionPoint(ModuleOp &module) {
   getBuilder().setInsertionPointToStart(module.getBody());
 }
 
+Operation *ArtsCodegen::clone(Operation &op) { return getBuilder().clone(op); }
+
+Operation *ArtsCodegen::clone(Operation &op, IRMapping &mapper) {
+  return getBuilder().clone(op, mapper);
+}
 //===----------------------------------------------------------------------===//
 // Memref helpers
 //===----------------------------------------------------------------------===//

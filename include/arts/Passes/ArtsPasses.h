@@ -34,6 +34,7 @@ std::unique_ptr<Pass> createEdtPtrRematerializationPass();
 std::unique_ptr<Pass> createCanonicalizeDbsPass();
 std::unique_ptr<Pass> createDbLoweringPass();
 std::unique_ptr<Pass> createEpochLoweringPass();
+std::unique_ptr<Pass> createParallelEdtLoweringPass();
 std::unique_ptr<Pass> createEdtLoweringPass();
 } // namespace arts
 } // namespace mlir
