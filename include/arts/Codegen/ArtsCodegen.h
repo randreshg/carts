@@ -139,8 +139,13 @@ public:
   /// Insertion point management
   void setInsertionPoint(Operation *op);
   void setInsertionPointToStart(Block *block);
+  void setInsertionPointToEnd(Block *block);
   void setInsertionPointAfter(Operation *op);
   void setInsertionPoint(ModuleOp &module);
+
+  /// Operation management
+  Operation *clone(Operation &op);
+  Operation *clone(Operation &op, IRMapping &mapper);
 
 /// Types
 ///{
