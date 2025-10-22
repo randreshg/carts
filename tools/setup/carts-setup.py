@@ -75,7 +75,7 @@ def setup_project():
     # Initialize and update submodules to latest commits
     print("Initializing and updating git submodules to latest commits...")
     # Configure git to use HTTPS instead of SSH for GitHub
-    if not run_command("git submodule update --init --recursive --remote", cwd=project_root, realtime=True):
+    if not run_command("git submodule update --init --recursive", cwd=project_root, realtime=True):
         print("Failed to initialize/update submodules")
         return False
 
