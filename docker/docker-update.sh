@@ -79,81 +79,7 @@ else
     carts_info "Updating CARTS components in Docker (auto-pulling changes)"
 fi
 
-# Automatically handle repository updates (unless skipped)
-if [[ "$SKIP_PULL" == "false" ]]; then
-    carts_step "Checking for and pulling repository changes"
-    
-    # Get the current directory (should be the docker directory)
-    DOCKER_DIR="$(cd "$(dirname "$0")" && pwd)"
-    CARTS_DIR="$(dirname "$DOCKER_DIR")"
-    
-    # Function to automatically handle repository changes
-    auto_update_repo() {
-        local repo_path="$1"
-        local repo_name="$2"
-        
-        if [[ ! -d "$repo_path/.git" ]]; then
-            carts_warning "$repo_name ($repo_path): Not a git repository"
-            return 0
-        fi
-        
-        # Check for local changes
-        local has_changes=false
-        if ! git -C "$repo_path" diff-index --quiet HEAD -- 2>/dev/null; then
-            has_changes=true
-        fi
-        if ! git -C "$repo_path" diff --cached --quiet 2>/dev/null; then
-            has_changes=true
-        fi
-        
-        if [[ "$has_changes" == "true" ]]; then
-            carts_warning "$repo_name: Local changes detected, stashing them..."
-            git -C "$repo_path" stash push -m "Auto-stash before docker update $(date)" || {
-                carts_error "$repo_name: Failed to stash changes"
-                return 1
-            }
-            carts_success "$repo_name: Local changes stashed"
-        fi
-        
-        # Always try to pull latest changes
-        carts_info "$repo_name: Checking for remote changes..."
-        git -C "$repo_path" fetch origin || {
-            carts_error "$repo_name: Failed to fetch from origin"
-            return 1
-        }
-        
-        # Get current branch
-        local current_branch=$(git -C "$repo_path" branch --show-current)
-        if [[ -n "$current_branch" ]]; then
-            # Check if there are remote changes
-            local behind_count=$(git -C "$repo_path" rev-list --count HEAD..origin/"$current_branch" 2>/dev/null || echo "0")
-            if [[ "$behind_count" -gt 0 ]]; then
-                carts_info "$repo_name: Pulling $behind_count new commits..."
-                git -C "$repo_path" pull origin "$current_branch" || {
-                    carts_error "$repo_name: Failed to pull changes"
-                    return 1
-                }
-                carts_success "$repo_name: Updated to latest changes"
-            else
-                carts_success "$repo_name: Already up to date"
-            fi
-        else
-            carts_warning "$repo_name: No current branch, skipping pull"
-        fi
-        
-        return 0
-    }
-    
-    # Update CARTS main repository
-    if ! auto_update_repo "$CARTS_DIR" "CARTS"; then
-        carts_error "Failed to update CARTS repository"
-        exit 1
-    fi
-    
-    carts_line
-fi
-
-# Skip local changes check since we handle them automatically above
+# Repository updates will be handled inside the Docker container
 carts_step "Proceeding with Docker update"
 
 # Change to docker directory
@@ -170,6 +96,7 @@ fi
 DOCKER_CPUS=$(docker run --rm ubuntu:22.04 nproc 2>/dev/null || echo "2")
 carts_step "Starting update container with full CPU access"
 docker rm -f arts-node-update >/dev/null 2>&1 || true
+
 docker run -d --name arts-node-update --hostname arts-node-update --network bridge \
     --cpus="$DOCKER_CPUS" arts-node:built
 
@@ -194,6 +121,26 @@ SUBMODULE_CHANGES=$(docker exec arts-node-update bash -c "
         before_commits[\$submodule_name]=\"\$commit\"
     done < <(git submodule status --quiet | awk '{print \$1, \$2}')
 
+    # Pull latest changes from main repository if not skipping
+    if [[ \"$SKIP_PULL\" == \"false\" ]]; then
+        # Check for local changes and stash them
+        if ! git diff-index --quiet HEAD -- || ! git diff --cached --quiet; then
+            echo 'CARTS:stashing'
+            git stash push -m \"Auto-stash before docker update \$(date)\" || true
+        fi
+        
+        # Fetch and pull latest changes
+        git fetch origin || true
+        current_branch=\$(git branch --show-current)
+        if [[ -n \"\$current_branch\" ]]; then
+            behind_count=\$(git rev-list --count HEAD..origin/\$current_branch 2>/dev/null || echo \"0\")
+            if [[ \"\$behind_count\" -gt 0 ]]; then
+                echo 'CARTS:pulling'
+                git pull origin \"\$current_branch\" || true
+            fi
+        fi
+    fi
+
     # Update submodules to latest remote versions
     git submodule update --remote --quiet 2>/dev/null || true
 
@@ -208,7 +155,7 @@ SUBMODULE_CHANGES=$(docker exec arts-node-update bash -c "
         fi
     done
 
-    # Always check if main repo has changes (from our auto-pull above)
+    # Check if main repo has changes (either from pull or local modifications)
     if ! git diff-index --quiet HEAD --; then
         echo 'CARTS:changed'
     fi
@@ -229,7 +176,7 @@ while read -r change; do
         "arts:changed")
             BUILD_ARTS=true
             ;;
-        "CARTS:changed")
+        "CARTS:changed"|"CARTS:stashing"|"CARTS:pulling")
             BUILD_CARTS=true
             ;;
     esac
