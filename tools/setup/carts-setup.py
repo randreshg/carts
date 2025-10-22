@@ -72,9 +72,10 @@ def setup_project():
     for dir_name in dirs_to_create:
         (project_root / dir_name).mkdir(exist_ok=True)
 
-    # Initialize and update submodules
-    print("Initializing and updating git submodules...")
-    if not run_command("git submodule update --init --recursive", cwd=project_root, realtime=True):
+    # Initialize and update submodules to latest commits
+    print("Initializing and updating git submodules to latest commits...")
+    # Configure git to use HTTPS instead of SSH for GitHub
+    if not run_command("git submodule update --init --recursive --remote", cwd=project_root, realtime=True):
         print("Failed to initialize/update submodules")
         return False
 
