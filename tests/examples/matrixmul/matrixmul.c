@@ -63,6 +63,8 @@ int main(int argc, char *argv[]) {
 #pragma omp parallel
 #pragma omp single
   {
+    /// Print number of threads
+    printf("Number of threads: %d\n", omp_get_num_threads());
     for (int i = 0; i < N; i += BS) {
       for (int j = 0; j < N; j += BS) {
         for (int k = 0; k < N; k += BS) {
