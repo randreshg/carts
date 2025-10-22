@@ -156,81 +156,57 @@ docker run -d --name arts-node-update --hostname arts-node-update --network brid
 carts_info "Waiting for update container to be ready"
 sleep 5
 
-# Update CARTS components
-carts_step "Checking for changes in repositories"
+# Update CARTS components using Git submodules
+carts_step "Updating submodules and checking for changes"
 GIT_BRANCH=${GIT_BRANCH:-mlir}
 
-# Check for remote changes inside the container
-carts_info "Checking for remote changes in repositories..."
-
-# Execute remote change detection inside the container
-REMOTE_CHANGES=$(docker exec arts-node-update bash -c "
+# Update submodules and check for changes
+carts_info "Updating Git submodules..."
+SUBMODULE_CHANGES=$(docker exec arts-node-update bash -c "
     set -e
-    GIT_BRANCH='$GIT_BRANCH'
+    cd /opt/carts
 
-    # Function to check for remote changes
-    check_repo() {
-        local repo_path=\"\$1\"
-        local repo_branch=\"\$2\"
+    # Update submodules to latest remote versions
+    git submodule update --remote --quiet 2>/dev/null || true
 
-        [[ ! -d \"\$repo_path/.git\" ]] && echo '' && return
-
-        # Fetch and check for changes
-        if ! git -C \"\$repo_path\" fetch origin \"\$repo_branch\" 2>/dev/null ||
-           ! git -C \"\$repo_path\" show-ref --verify --quiet refs/remotes/origin/\"\$repo_branch\" 2>/dev/null; then
-            echo \"WARNING: \$repo_path - Failed to fetch or branch not found\"
-            echo ''
-            return
+    # Check submodule status to see what changed
+    git submodule status --quiet | while read -r line; do
+        # Parse submodule status: +/-commit path (name)
+        status=\${line:0:1}
+        if [[ \"\$status\" == \"+\" || \"\$status\" == \"-\" ]]; then
+            # Extract submodule name from path
+            submodule_path=\$(echo \"\$line\" | awk '{print \$2}')
+            submodule_name=\$(basename \"\$submodule_path\")
+            echo \"\$submodule_name:changed\"
         fi
+    done
 
-        # Get changes in both directions
-        local remote_ahead=\$(git -C \"\$repo_path\" log HEAD..origin/\"\$repo_branch\" --oneline 2>/dev/null)
-        local local_ahead=\$(git -C \"\$repo_path\" log origin/\"\$repo_branch\"..HEAD --oneline 2>/dev/null)
-
-        # Output combined changes or empty if no changes
-        [[ -n \"\$remote_ahead\$local_ahead\" ]] && echo \"\$remote_ahead\$local_ahead\" || echo ''
-    }
-
-    # Check repositories and output in parseable format
-    printf 'CARTS:%s\n' \"\$(check_repo '/opt/carts' \"\$GIT_BRANCH\")\"
-    printf 'POLYGEIST:%s\n' \"\$(check_repo '/opt/carts/external/Polygeist' 'carts')\"
-    printf 'ARTS:%s\n' \"\$(check_repo '/opt/carts/external/arts' 'master')\"
-
-    # Check LLVM if it exists
-    if [[ -d '/opt/carts/external/Polygeist/llvm-project/.git' ]]; then
-        local llvm_branch=\$(git -C '/opt/carts/external/Polygeist/llvm-project' rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null | sed 's|origin/||' || echo 'main')
-        printf 'LLVM:%s\n' \"\$(check_repo '/opt/carts/external/Polygeist/llvm-project' \"\$llvm_branch\")\"
-    else
-        printf 'LLVM:\n'
+    # Always check main repo
+    if ! git diff-index --quiet HEAD --; then
+        echo 'CARTS:changed'
     fi
-" 2>/dev/null || echo "ERROR: Failed to check remote changes")
+" 2>/dev/null || echo "ERROR: Failed to update submodules")
 
-# Parse results and handle warnings more efficiently
-CARTS_CHANGES=""
-POLYGEIST_CHANGES=""
-ARTS_CHANGES=""
-LLVM_CHANGES=""
-
-while IFS=':' read -r repo changes; do
-    case "$repo" in
-        CARTS) CARTS_CHANGES="$changes" ;;
-        POLYGEIST) POLYGEIST_CHANGES="$changes" ;;
-        ARTS) ARTS_CHANGES="$changes" ;;
-        LLVM) LLVM_CHANGES="$changes" ;;
-        WARNING*) carts_warning "${changes#WARNING: }" ;;
-    esac
-done <<< "$REMOTE_CHANGES"
-
+# Parse submodule changes
 BUILD_LLVM=false
 BUILD_POLY=false
 BUILD_ARTS=false
 BUILD_CARTS=false
 
-# Determine what needs to be built
-[[ -n "$CARTS_CHANGES" ]] && BUILD_CARTS=true
-[[ -n "$POLYGEIST_CHANGES" ]] && BUILD_POLY=true
-[[ -n "$ARTS_CHANGES" ]] && BUILD_ARTS=true
-[[ -n "$LLVM_CHANGES" ]] && { BUILD_LLVM=true; BUILD_POLY=true; }
+while read -r change; do
+    case "$change" in
+        "Polygeist:changed"|"llvm-project:changed")
+            BUILD_LLVM=true
+            BUILD_POLY=true
+            ;;
+        "arts:changed")
+            BUILD_ARTS=true
+            ;;
+        "CARTS:changed")
+            BUILD_CARTS=true
+            ;;
+    esac
+done <<< "$SUBMODULE_CHANGES"
 
 # Apply force flags (overrides change detection)
 if [[ "$FORCE_MODE" == "true" ]]; then
@@ -253,12 +229,27 @@ carts_line
 if [[ "$FORCE_MODE" == "true" ]]; then
     carts_info "Build Mode: FORCE (rebuilding everything)"
 else
-    carts_info "Change Detection Results:"
+    carts_info "Submodule Update Results:"
 fi
-[[ -n "$CARTS_CHANGES" ]] && carts_warning "CARTS: Changes detected" || carts_success "CARTS: Up to date"
-[[ -n "$POLYGEIST_CHANGES" ]] && carts_warning "Polygeist: Changes detected" || carts_success "Polygeist: Up to date"
-[[ -n "$ARTS_CHANGES" ]] && carts_warning "ARTS: Changes detected" || carts_success "ARTS: Up to date"
-[[ -n "$LLVM_CHANGES" ]] && carts_warning "LLVM: Changes detected" || carts_success "LLVM: Up to date"
+
+# Show what changed
+changed_any=false
+if [[ "$BUILD_LLVM" == "true" ]]; then
+    carts_warning "LLVM/Polygeist: Changes detected or force rebuild"
+    changed_any=true
+fi
+if [[ "$BUILD_ARTS" == "true" ]]; then
+    carts_warning "ARTS: Changes detected or force rebuild"
+    changed_any=true
+fi
+if [[ "$BUILD_CARTS" == "true" ]]; then
+    carts_warning "CARTS: Changes detected or force rebuild"
+    changed_any=true
+fi
+
+if [[ "$changed_any" == "false" ]]; then
+    carts_success "No submodule changes detected."
+fi
 
 # Show force rebuild indicators
 if [[ "$FORCE_ARTS" == "true" ]]; then
@@ -275,7 +266,7 @@ if [[ "$FORCE_CARTS" == "true" ]]; then
 fi
 carts_line
 
-# If nothing changed, skip
+# If nothing changed and no force flags, skip
 if [[ "$BUILD_LLVM" == "false" && "$BUILD_POLY" == "false" && "$BUILD_ARTS" == "false" && "$BUILD_CARTS" == "false" ]]; then
     carts_success "No changes detected. Skipping build process."
     carts_step "Cleaning up update container"
@@ -286,18 +277,16 @@ if [[ "$BUILD_LLVM" == "false" && "$BUILD_POLY" == "false" && "$BUILD_ARTS" == "
     exit 0
 fi
 
-carts_step "Changes detected. Proceeding with selective update and build..."
-# Pull repos that changed and rebuild selectively
+carts_step "Changes detected. Proceeding with selective rebuild..."
+# Rebuild components that changed
 docker exec arts-node-update bash -c "\
     set -e; \
+    cd /opt/carts; \
     export MAKEFLAGS='-j$DOCKER_CPUS'; \
-    [[ \"$CARTS_CHANGES\" != \"\" ]] && { cd /opt/carts && git pull --no-tags --quiet origin $GIT_BRANCH; }; \
-    [[ \"$POLYGEIST_CHANGES\" != \"\" || \"$LLVM_CHANGES\" != \"\" ]] && { cd /opt/carts/external/Polygeist && git pull --no-tags --quiet origin carts; }; \
-    [[ \"$ARTS_CHANGES\" != \"\" ]] && { cd /opt/carts/external/arts && git pull --no-tags --quiet origin master; }; \
-    [[ \"$LLVM_CHANGES\" != \"\" ]] && { cd /opt/carts && carts build --llvm; }; \
-    [[ \"$BUILD_POLY\" == \"true\" ]] && { cd /opt/carts && carts build --polygeist; }; \
-    [[ \"$BUILD_ARTS\" == \"true\" ]] && { cd /opt/carts && carts build --arts-info; }; \
-    [[ \"$BUILD_LLVM\" == \"true\" || \"$BUILD_POLY\" == \"true\" || \"$BUILD_ARTS\" == \"true\" || \"$BUILD_CARTS\" == \"true\" ]] && { cd /opt/carts && carts build; } \
+    [[ \"$BUILD_LLVM\" == \"true\" ]] && { carts build --llvm; }; \
+    [[ \"$BUILD_POLY\" == \"true\" ]] && { carts build --polygeist; }; \
+    [[ \"$BUILD_ARTS\" == \"true\" ]] && { carts build --arts-info; }; \
+    [[ \"$BUILD_LLVM\" == \"true\" || \"$BUILD_POLY\" == \"true\" || \"$BUILD_ARTS\" == \"true\" || \"$BUILD_CARTS\" == \"true\" ]] && { carts build; } \
 "
 
 # Commit updated container as new image
