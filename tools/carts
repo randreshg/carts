@@ -243,10 +243,16 @@ detect_linker_config() {
 
     # Add rpaths once for ELF/Mach-O targets
     if [[ "$CARTS_HOST_OS" == "linux" || "$CARTS_HOST_OS" == "macos" ]]; then
+        # On Linux, ensure DT_RPATH is emitted instead of RUNPATH
+        if [[ "$CARTS_HOST_OS" == "linux" ]]; then
+            CARTS_LINKER_FLAGS+=("-Wl,--disable-new-dtags")
+        fi
+
         # Always include core install locations
         local rpaths=("${CARTS_INSTALL_DIR}/lib" "${ARTS_INSTALL_DIR}/lib" "${LLVM_INSTALL_DIR}/lib" "${LLVM_LIB_PATH}")
         # Merge with platform-provided extras (if any)
         rpaths+=("${PLATFORM_RPATHS[@]}")
+
         # Deduplicate and add
         for rp in "${rpaths[@]}"; do
             [[ -z "$rp" ]] && continue
