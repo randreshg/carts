@@ -78,12 +78,24 @@ for node_i in $ALL_NODES; do
     done
 done
 
+# Setup hostname resolution in /etc/hosts for all containers
+carts_step "Setting up hostname resolution"
+for node_i in $ALL_NODES; do
+    # Build hosts entries for all nodes
+    HOSTS_ENTRIES=""
+    for node_j in $ALL_NODES; do
+        NODE_J_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$node_j")
+        HOSTS_ENTRIES="${HOSTS_ENTRIES}${NODE_J_IP} ${node_j}\n"
+    done
+    # Add entries to /etc/hosts (avoid duplicates)
+    docker exec "$node_i" bash -c "echo -e \"$HOSTS_ENTRIES\" >> /etc/hosts"
+done
+
 # Test SSH connectivity between first two nodes (if they exist)
 FIRST_NODE=$(echo "$ALL_NODES" | head -1)
 SECOND_NODE=$(echo "$ALL_NODES" | head -2 | tail -1)
 if [ -n "$FIRST_NODE" ] && [ -n "$SECOND_NODE" ] && [ "$FIRST_NODE" != "$SECOND_NODE" ]; then
-    SECOND_NODE_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$SECOND_NODE")
-    docker exec "$FIRST_NODE" bash -c "ssh -o StrictHostKeyChecking=no root@$SECOND_NODE_IP 'echo SSH test successful'" >/dev/null 2>&1
+    docker exec "$FIRST_NODE" bash -c "ssh -o StrictHostKeyChecking=no root@$SECOND_NODE 'echo SSH test successful'" >/dev/null 2>&1
 fi
 
 carts_header "Multi-Node Setup Complete"
