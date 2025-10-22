@@ -196,14 +196,14 @@ BUILD_CARTS=false
 
 while read -r change; do
     case "$change" in
-        "Polygeist:changed"|"llvm-project:changed")
+        "Polygeist:changed"*|"llvm-project:changed"*)
             BUILD_LLVM=true
             BUILD_POLY=true
             ;;
-        "arts:changed")
+        "arts:changed"*)
             BUILD_ARTS=true
             ;;
-        "CARTS:changed"|"CARTS:stashing"|"CARTS:pulling")
+        "CARTS:changed"*|"CARTS:stashing"*|"CARTS:pulling"*)
             BUILD_CARTS=true
             ;;
     esac
