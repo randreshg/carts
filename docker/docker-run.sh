@@ -62,21 +62,8 @@ docker run -d --name arts-node-6 --hostname arts-node-6 --network bridge -e ARTS
 carts_info "Waiting for containers to be ready"
 sleep 3
 
-# Setup SSH keys between containers  - required on each run due to dynamic IPs
-carts_step "Setting up SSH connectivity between containers"
-
 # Get all arts-node containers
 ALL_NODES=$(docker ps --format '{{.Names}}' | grep '^arts-node-' | sort)
-
-# Setup SSH keyscan for all node combinations
-for node_i in $ALL_NODES; do
-    for node_j in $ALL_NODES; do
-        if [ "$node_i" != "$node_j" ]; then
-            NODE_J_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$node_j")
-            docker exec "$node_i" bash -c "ssh-keyscan -H $NODE_J_IP >> /root/.ssh/known_hosts" >/dev/null 2>&1
-        fi
-    done
-done
 
 # Setup hostname resolution in /etc/hosts for all containers
 carts_step "Setting up hostname resolution"
@@ -95,7 +82,7 @@ done
 FIRST_NODE=$(echo "$ALL_NODES" | head -1)
 SECOND_NODE=$(echo "$ALL_NODES" | head -2 | tail -1)
 if [ -n "$FIRST_NODE" ] && [ -n "$SECOND_NODE" ] && [ "$FIRST_NODE" != "$SECOND_NODE" ]; then
-    docker exec "$FIRST_NODE" bash -c "ssh -o StrictHostKeyChecking=no root@$SECOND_NODE 'echo SSH test successful'" >/dev/null 2>&1
+    docker exec "$FIRST_NODE" bash -c "ssh root@$SECOND_NODE 'echo SSH test successful'" >/dev/null 2>&1
 fi
 
 carts_header "Multi-Node Setup Complete"
@@ -163,7 +150,7 @@ if [[ -n "$EXAMPLE_FILE" ]]; then
     for node in $OTHER_NODES; do
         NODE_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$node")
         carts_info "Copying binary to $node ($NODE_IP): $CONTAINER_FILE_DIR/$BASE_NAME"
-        docker exec "$MASTER_CONTAINER" bash -c "scp '$CONTAINER_FILE_DIR/$BASE_NAME' root@$NODE_IP:'$CONTAINER_FILE_DIR/'"
+        docker exec "$MASTER_CONTAINER" bash -c "scp '$CONTAINER_FILE_DIR/$BASE_NAME' root@$node:'$CONTAINER_FILE_DIR/'"
     done
 
     # Finally: run the binary on the master node (ARTS will SSH to others with config from environment)
