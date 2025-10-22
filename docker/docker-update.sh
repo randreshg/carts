@@ -291,7 +291,7 @@ docker exec arts-node-update bash -c "\
     export MAKEFLAGS='-j$DOCKER_CPUS'; \
     [[ \"$BUILD_LLVM\" == \"true\" ]] && { carts build --llvm; }; \
     [[ \"$BUILD_POLY\" == \"true\" ]] && { carts build --polygeist; }; \
-    [[ \"$BUILD_ARTS\" == \"true\" ]] && { carts build --arts-info; }; \
+    [[ \"$BUILD_ARTS\" == \"true\" ]] && { carts build --arts --info; }; \
     [[ \"$BUILD_LLVM\" == \"true\" || \"$BUILD_POLY\" == \"true\" || \"$BUILD_ARTS\" == \"true\" || \"$BUILD_CARTS\" == \"true\" ]] && { carts build; } \
 "
 
