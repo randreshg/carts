@@ -135,8 +135,11 @@ if [[ -n "$EXAMPLE_FILE" ]]; then
     carts_substep "File: $FILE_NAME"
     carts_substep "Binary: $BASE_NAME"
 
+    # ARTS config file path inside the container
+    REMOTE_ARTS_CONFIG="/opt/carts/docker/arts-docker.cfg"
+
     # First: build the binary on the master node
-    REMOTE_BUILD_CMD="cd '$CONTAINER_FILE_DIR' && carts execute '$FILE_NAME'"
+    REMOTE_BUILD_CMD="cd '$CONTAINER_FILE_DIR' && carts execute '$FILE_NAME' --run-args --arts-config=$REMOTE_ARTS_CONFIG"
     if [[ -n "$BUILD_ARGS" ]]; then
         REMOTE_BUILD_CMD+=" $BUILD_ARGS"
     fi
@@ -152,7 +155,7 @@ if [[ -n "$EXAMPLE_FILE" ]]; then
     done
 
     # Finally: run the binary on the master node (ARTS will SSH to others)
-    REMOTE_RUN_CMD="cd '$CONTAINER_FILE_DIR' && ./$BASE_NAME"
+    REMOTE_RUN_CMD="cd '$CONTAINER_FILE_DIR' && artsConfig=$REMOTE_ARTS_CONFIG ./$BASE_NAME"
     if [[ -n "$RUNTIME_ARGS" ]]; then
         REMOTE_RUN_CMD+=" $RUNTIME_ARGS"
     fi
