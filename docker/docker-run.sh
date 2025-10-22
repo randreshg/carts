@@ -47,14 +47,16 @@ fi
 
 # Clean up any existing containers
 carts_step "Cleaning up existing containers"
-docker rm -f arts-node-1 arts-node-2 arts-node-3 arts-node-4 >/dev/null 2>&1 || true
+docker rm -f arts-node-1 arts-node-2 arts-node-3 arts-node-4 arts-node-5 arts-node-6 >/dev/null 2>&1 || true
 
 # Start all containers from prebuilt image
-carts_step "Starting 4 ARTS node containers"
+carts_step "Starting 6 ARTS node containers"
 docker run -d --name arts-node-1 --hostname arts-node-1 --network bridge -e ARTS_NODE_ID=0 arts-node:built
 docker run -d --name arts-node-2 --hostname arts-node-2 --network bridge -e ARTS_NODE_ID=1 arts-node:built
 docker run -d --name arts-node-3 --hostname arts-node-3 --network bridge -e ARTS_NODE_ID=2 arts-node:built
 docker run -d --name arts-node-4 --hostname arts-node-4 --network bridge -e ARTS_NODE_ID=3 arts-node:built
+docker run -d --name arts-node-5 --hostname arts-node-5 --network bridge -e ARTS_NODE_ID=4 arts-node:built
+docker run -d --name arts-node-6 --hostname arts-node-6 --network bridge -e ARTS_NODE_ID=5 arts-node:built
 
 # Wait for containers to be ready
 carts_info "Waiting for containers to be ready"
