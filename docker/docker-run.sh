@@ -154,7 +154,7 @@ if [[ -n "$EXAMPLE_FILE" ]]; then
         docker exec "$MASTER_CONTAINER" bash -c "scp '$CONTAINER_FILE_DIR/$BASE_NAME' root@$NODE_IP:'$CONTAINER_FILE_DIR/'"
     done
 
-    # Finally: run the binary on the master node (ARTS will SSH to others)
+    # Finally: run the binary on the master node (ARTS will SSH to others with config from environment)
     REMOTE_RUN_CMD="cd '$CONTAINER_FILE_DIR' && artsConfig=$REMOTE_ARTS_CONFIG ./$BASE_NAME"
     if [[ -n "$RUNTIME_ARGS" ]]; then
         REMOTE_RUN_CMD+=" $RUNTIME_ARGS"
