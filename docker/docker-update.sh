@@ -88,11 +88,11 @@ fi
 
 # Detect CPU cores
 DOCKER_CPUS=$(docker run --rm ubuntu:22.04 nproc 2>/dev/null || echo "2")
-carts_step "Starting update container with full CPU access"
+carts_step "Starting update container"
 docker rm -f arts-node-update >/dev/null 2>&1 || true
 
 docker run -d --name arts-node-update --hostname arts-node-update --network bridge \
-    --cpus="$DOCKER_CPUS" arts-node:built
+    --cpus="$DOCKER_CPUS" arts-node:built >/dev/null 2>&1
 
 # Wait for container to be ready
 carts_info "Waiting for update container to be ready"
@@ -135,8 +135,14 @@ SUBMODULE_CHANGES=$(docker exec arts-node-update bash -c "
             fi
         fi
 
+        # Log remote and branch
+        echo \"CARTS:remote \$(git config --get remote.origin.url 2>/dev/null || echo unknown)\"
+        echo \"CARTS:branch \$target_branch\"
+
         # Fetch and ensure branch checkout
-        git fetch origin \"\$target_branch\" || true
+        if ! git fetch origin \"\$target_branch\" --prune; then
+            echo \"CARTS:fetch_failed\"
+        fi
         if git show-ref --verify --quiet \"refs/heads/\$target_branch\"; then
             git checkout \"\$target_branch\" || true
         else
@@ -176,6 +182,11 @@ SUBMODULE_CHANGES=$(docker exec arts-node-update bash -c "
         echo 'CARTS:changed'
     fi
 " 2>/dev/null || echo "ERROR: Failed to update submodules")
+
+# Print container CARTS messages so user sees pull status
+if [[ -n "$SUBMODULE_CHANGES" ]]; then
+    echo "$SUBMODULE_CHANGES" | awk '/^CARTS:/ { print }'
+fi
 
 # Parse submodule changes
 BUILD_LLVM=false
