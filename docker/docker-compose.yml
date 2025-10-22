@@ -30,3 +30,19 @@ services:
     environment:
       - ARTS_NODE_ID=3
     command: ["/usr/sbin/sshd", "-D"]
+
+  arts-node-5:
+    image: arts-node:built
+    hostname: arts-node-5
+    container_name: arts-node-5
+    environment:
+      - ARTS_NODE_ID=4
+    command: ["/usr/sbin/sshd", "-D"]
+
+  arts-node-6:
+    image: arts-node:built
+    hostname: arts-node-6
+    container_name: arts-node-6
+    environment:
+      - ARTS_NODE_ID=5
+    command: ["/usr/sbin/sshd", "-D"]
