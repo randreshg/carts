@@ -78,9 +78,8 @@ RUN git config --global init.defaultBranch main \
 # Default working directory
 WORKDIR /root
 
-# Environment variables for future CARTS installs inside container
+# Environment variables
 ENV PATH="/opt/carts/tools:$PATH"
-ENV LD_LIBRARY_PATH="/opt/carts/.install/carts/lib:$LD_LIBRARY_PATH"
 
 
 # Expose SSH port
