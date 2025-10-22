@@ -166,17 +166,23 @@ SUBMODULE_CHANGES=$(docker exec arts-node-update bash -c "
     set -e
     cd /opt/carts
 
+    # Check current submodule commits before update
+    declare -A before_commits
+    while read -r commit path; do
+        submodule_name=\$(basename \"\$path\")
+        before_commits[\$submodule_name]=\"\$commit\"
+    done < <(git submodule status --quiet | awk '{print \$1, \$2}')
+
     # Update submodules to latest remote versions
     git submodule update --remote --quiet 2>/dev/null || true
 
-    # Check submodule status to see what changed
+    # Check which submodules changed by comparing commits
     git submodule status --quiet | while read -r line; do
-        # Parse submodule status: +/-commit path (name)
-        status=\${line:0:1}
-        if [[ \"\$status\" == \"+\" || \"\$status\" == \"-\" ]]; then
-            # Extract submodule name from path
-            submodule_path=\$(echo \"\$line\" | awk '{print \$2}')
-            submodule_name=\$(basename \"\$submodule_path\")
+        commit=\$(echo \"\$line\" | awk '{print \$1}')
+        path=\$(echo \"\$line\" | awk '{print \$2}')
+        submodule_name=\$(basename \"\$path\")
+        before_commit=\${before_commits[\$submodule_name]}
+        if [[ \"\$commit\" != \"\$before_commit\" ]]; then
             echo \"\$submodule_name:changed\"
         fi
     done
