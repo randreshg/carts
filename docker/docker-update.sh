@@ -54,12 +54,6 @@ while [[ $# -gt 0 ]]; do
             echo "  --no-pull, -n      Skip pulling changes from repositories"
             echo "  --help, -h         Show this help"
             echo ""
-            echo "Examples:"
-            echo "  $0                # Auto-pull changes and update if needed"
-            echo "  $0 --arts -f      # Force rebuild ARTS"
-            echo "  $0 --llvm -f      # Force rebuild LLVM"
-            echo "  $0 -f             # Force rebuild everything"
-            echo "  $0 --no-pull      # Update without pulling changes"
             exit 0
             ;;
         *)
@@ -123,26 +117,44 @@ SUBMODULE_CHANGES=$(docker exec arts-node-update bash -c "
 
     # Pull latest changes from main repository if not skipping
     if [[ \"$SKIP_PULL\" == \"false\" ]]; then
-        # Check for local changes and stash them
-        if ! git diff-index --quiet HEAD -- || ! git diff --cached --quiet; then
-            echo 'CARTS:stashing'
-            git stash push -m \"Auto-stash before docker update \$(date)\" || true
-        fi
-        
-        # Fetch and pull latest changes
-        git fetch origin || true
-        current_branch=\$(git branch --show-current)
-        if [[ -n \"\$current_branch\" ]]; then
-            behind_count=\$(git rev-list --count HEAD..origin/\$current_branch 2>/dev/null || echo \"0\")
-            if [[ \"\$behind_count\" -gt 0 ]]; then
-                echo 'CARTS:pulling'
-                git pull origin \"\$current_branch\" || true
+        git config --global --add safe.directory /opt/carts || true
+
+        # Resolve target branch
+        target_branch=\"${GIT_BRANCH:-}\"
+        if [[ -z \"\$target_branch\" ]]; then
+            current_branch=\$(git branch --show-current)
+            if [[ -n \"\$current_branch\" ]]; then
+                target_branch=\"\$current_branch\"
+            else
+                remote_head=\$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
+                if [[ -n \"\$remote_head\" ]]; then
+                    target_branch=\"\$remote_head\"
+                else
+                    target_branch=\"mlir\"
+                fi
             fi
+        fi
+
+        # Ensure branch exists and is checked out
+        git fetch origin \"\$target_branch\" || true
+        if git show-ref --verify --quiet \"refs/heads/\$target_branch\"; then
+            git checkout \"\$target_branch\" || true
+        else
+            git checkout -B \"\$target_branch\" \"origin/\$target_branch\" || true
+        fi
+
+        # Hard reset to remote to ignore any local changes
+        before_commit=\$(git rev-parse HEAD 2>/dev/null || echo \"\")
+        git reset --hard \"origin/\$target_branch\" || true
+        after_commit=\$(git rev-parse HEAD 2>/dev/null || echo \"\")
+        if [[ -n \"\$before_commit\" && -n \"\$after_commit\" && \"\$before_commit\" != \"\$after_commit\" ]]; then
+            echo 'CARTS:pulling'
         fi
     fi
 
-    # Update submodules to latest remote versions
-    git submodule update --remote --quiet 2>/dev/null || true
+    # Align submodules to remote (ignore local changes)
+    git submodule foreach --recursive '\''git config --global --add safe.directory "$PWD" || true; git fetch --all || true; ub=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || true); if [ -n "$ub" ]; then git reset --hard "$ub" || true; else cb=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo ""); if [ -n "$cb" ]; then git reset --hard origin/$cb || true; fi; fi'\'' || true
+    git submodule update --init --recursive --remote --quiet 2>/dev/null || true
 
     # Check which submodules changed by comparing commits
     git submodule status --quiet | while read -r line; do
