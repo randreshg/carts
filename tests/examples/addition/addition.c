@@ -42,11 +42,12 @@ int main(int argc, char **argv) {
       break;
     }
   }
-  // Output correctness in a script-parseable format
-  if (success)
-    printf("Result: CORRECT\n");
-  else
-    printf("Result: INCORRECT\n");
+
+  printf("Results:\n");
+  for (int i = 0; i < N; i++)
+    printf("c[%d] = %d, a[%d] = %d, b[%d] = %d\n", i, c[i], i, a[i], i, b[i]);
+  
+  printf("Success: %s\n", success ? "true" : "false");
 
   fflush(stdout);
   return 0;
