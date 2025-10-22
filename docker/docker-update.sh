@@ -14,6 +14,7 @@ FORCE_ARTS=false
 FORCE_POLYGEIST=false
 FORCE_LLVM=false
 FORCE_CARTS=false
+SKIP_PULL=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -37,6 +38,10 @@ while [[ $# -gt 0 ]]; do
             FORCE_CARTS=true
             shift
             ;;
+        "--no-pull"|"-n")
+            SKIP_PULL=true
+            shift
+            ;;
         "--help"|"-h")
             echo "Usage: $0 [options]"
             echo ""
@@ -46,12 +51,15 @@ while [[ $# -gt 0 ]]; do
             echo "  --polygeist, -p    Force rebuild Polygeist compiler"
             echo "  --llvm, -l         Force rebuild LLVM compiler"
             echo "  --carts, -c        Force rebuild CARTS framework"
+            echo "  --no-pull, -n      Skip pulling changes from repositories"
             echo "  --help, -h         Show this help"
             echo ""
             echo "Examples:"
-            echo "  $0 --arts -f       # Force rebuild ARTS"
-            echo "  $0 --llvm -f       # Force rebuild LLVM"
-            echo "  $0 -f              # Force rebuild everything"
+            echo "  $0                # Auto-pull changes and update if needed"
+            echo "  $0 --arts -f      # Force rebuild ARTS"
+            echo "  $0 --llvm -f      # Force rebuild LLVM"
+            echo "  $0 -f             # Force rebuild everything"
+            echo "  $0 --no-pull      # Update without pulling changes"
             exit 0
             ;;
         *)
@@ -65,75 +73,88 @@ done
 carts_header "CARTS Docker Update"
 if [[ "$FORCE_MODE" == "true" ]]; then
     carts_info "Updating CARTS components in Docker (FORCE MODE)"
+elif [[ "$SKIP_PULL" == "true" ]]; then
+    carts_info "Updating CARTS components in Docker (skipping pull)"
 else
-    carts_info "Updating CARTS components in Docker"
+    carts_info "Updating CARTS components in Docker (auto-pulling changes)"
 fi
 
-# Check for local changes before proceeding
-carts_step "Checking for local changes in repositories"
-carts_info "Verifying all repositories are clean before updating..."
-
-# Function to check if repository has local changes
-check_repo_changes() {
-    local repo_path="$1"
-    local repo_name="$2"
-
-    if [[ ! -d "$repo_path/.git" ]]; then
-        carts_warning "$repo_name ($repo_path): Not a git repository"
+# Automatically handle repository updates (unless skipped)
+if [[ "$SKIP_PULL" == "false" ]]; then
+    carts_step "Checking for and pulling repository changes"
+    
+    # Get the current directory (should be the docker directory)
+    DOCKER_DIR="$(cd "$(dirname "$0")" && pwd)"
+    CARTS_DIR="$(dirname "$DOCKER_DIR")"
+    
+    # Function to automatically handle repository changes
+    auto_update_repo() {
+        local repo_path="$1"
+        local repo_name="$2"
+        
+        if [[ ! -d "$repo_path/.git" ]]; then
+            carts_warning "$repo_name ($repo_path): Not a git repository"
+            return 0
+        fi
+        
+        # Check for local changes
+        local has_changes=false
+        if ! git -C "$repo_path" diff-index --quiet HEAD -- 2>/dev/null; then
+            has_changes=true
+        fi
+        if ! git -C "$repo_path" diff --cached --quiet 2>/dev/null; then
+            has_changes=true
+        fi
+        
+        if [[ "$has_changes" == "true" ]]; then
+            carts_warning "$repo_name: Local changes detected, stashing them..."
+            git -C "$repo_path" stash push -m "Auto-stash before docker update $(date)" || {
+                carts_error "$repo_name: Failed to stash changes"
+                return 1
+            }
+            carts_success "$repo_name: Local changes stashed"
+        fi
+        
+        # Always try to pull latest changes
+        carts_info "$repo_name: Checking for remote changes..."
+        git -C "$repo_path" fetch origin || {
+            carts_error "$repo_name: Failed to fetch from origin"
+            return 1
+        }
+        
+        # Get current branch
+        local current_branch=$(git -C "$repo_path" branch --show-current)
+        if [[ -n "$current_branch" ]]; then
+            # Check if there are remote changes
+            local behind_count=$(git -C "$repo_path" rev-list --count HEAD..origin/"$current_branch" 2>/dev/null || echo "0")
+            if [[ "$behind_count" -gt 0 ]]; then
+                carts_info "$repo_name: Pulling $behind_count new commits..."
+                git -C "$repo_path" pull origin "$current_branch" || {
+                    carts_error "$repo_name: Failed to pull changes"
+                    return 1
+                }
+                carts_success "$repo_name: Updated to latest changes"
+            else
+                carts_success "$repo_name: Already up to date"
+            fi
+        else
+            carts_warning "$repo_name: No current branch, skipping pull"
+        fi
+        
         return 0
+    }
+    
+    # Update CARTS main repository
+    if ! auto_update_repo "$CARTS_DIR" "CARTS"; then
+        carts_error "Failed to update CARTS repository"
+        exit 1
     fi
-
-    if ! git -C "$repo_path" diff-index --quiet HEAD -- 2>/dev/null; then
-        carts_error "$repo_name ($repo_path): Local changes detected!"
-        return 1
-    fi
-
-    if ! git -C "$repo_path" diff --cached --quiet 2>/dev/null; then
-        carts_error "$repo_name ($repo_path): Staged changes detected!"
-        return 1
-    fi
-
-    carts_success "$repo_name ($repo_path): Clean"
-    return 0
-}
-
-# Check all repositories for local changes
-LOCAL_CHANGES_FOUND=false
-
-# Check CARTS main repository
-# Get the current directory (should be the docker directory)
-DOCKER_DIR="$(cd "$(dirname "$0")" && pwd)"
-CARTS_DIR="$(dirname "$DOCKER_DIR")"
-if ! check_repo_changes "$CARTS_DIR" "CARTS"; then
-    LOCAL_CHANGES_FOUND=true
-fi
-# Check Polygeist repository
-if ! check_repo_changes "$CARTS_DIR/external/Polygeist" "Polygeist"; then
-    LOCAL_CHANGES_FOUND=true
-fi
-# Check ARTS repository
-if ! check_repo_changes "$CARTS_DIR/external/arts" "ARTS"; then
-    LOCAL_CHANGES_FOUND=true
-fi
-# Check LLVM repository (if it exists)
-if [[ -d "$CARTS_DIR/external/Polygeist/llvm-project/.git" ]]; then
-    if ! check_repo_changes "$CARTS_DIR/external/Polygeist/llvm-project" "LLVM"; then
-        LOCAL_CHANGES_FOUND=true
-    fi
-fi
-
-# If any local changes found, exit
-if [[ "$LOCAL_CHANGES_FOUND" == "true" ]]; then
+    
     carts_line
-    carts_error "Local changes detected in one or more repositories!"
-    carts_info "Please commit and push your changes before running docker update."
-    carts_line
-    carts_header "Update Cancelled"
-    exit 1
 fi
-carts_line
-carts_success "All repositories are clean. Proceeding with update..."
-carts_line
+
+# Skip local changes check since we handle them automatically above
+carts_step "Proceeding with Docker update"
 
 # Change to docker directory
 cd "$(dirname "$0")"
@@ -187,7 +208,7 @@ SUBMODULE_CHANGES=$(docker exec arts-node-update bash -c "
         fi
     done
 
-    # Always check main repo
+    # Always check if main repo has changes (from our auto-pull above)
     if ! git diff-index --quiet HEAD --; then
         echo 'CARTS:changed'
     fi
