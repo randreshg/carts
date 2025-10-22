@@ -135,7 +135,7 @@ SUBMODULE_CHANGES=$(docker exec arts-node-update bash -c "
             fi
         fi
 
-        # Ensure branch exists and is checked out
+        # Fetch and ensure branch checkout
         git fetch origin \"\$target_branch\" || true
         if git show-ref --verify --quiet \"refs/heads/\$target_branch\"; then
             git checkout \"\$target_branch\" || true
@@ -143,13 +143,17 @@ SUBMODULE_CHANGES=$(docker exec arts-node-update bash -c "
             git checkout -B \"\$target_branch\" \"origin/\$target_branch\" || true
         fi
 
-        # Hard reset to remote to ignore any local changes
-        before_commit=\$(git rev-parse HEAD 2>/dev/null || echo \"\")
-        git reset --hard \"origin/\$target_branch\" || true
-        after_commit=\$(git rev-parse HEAD 2>/dev/null || echo \"\")
-        if [[ -n \"\$before_commit\" && -n \"\$after_commit\" && \"\$before_commit\" != \"\$after_commit\" ]]; then
-            echo 'CARTS:pulling'
+        # Compare local vs remote and hard reset to remote
+        local_before=\$(git rev-parse HEAD 2>/dev/null || echo \"\")
+        remote_sha=\$(git rev-parse \"origin/\$target_branch\" 2>/dev/null || echo \"\")
+        if [[ -n \"\$local_before\" && -n \"\$remote_sha\" && \"\$local_before\" != \"\$remote_sha\" ]]; then
+            echo \"CARTS:pulling \$local_before -> \$remote_sha\"
+        else
+            if [[ -n \"\$remote_sha\" ]]; then
+                echo \"CARTS:up_to_date \$remote_sha\"
+            fi
         fi
+        git reset --hard \"origin/\$target_branch\" || true
     fi
 
     # Align submodules to remote (ignore local changes)

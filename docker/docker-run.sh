@@ -51,12 +51,12 @@ docker rm -f arts-node-1 arts-node-2 arts-node-3 arts-node-4 arts-node-5 arts-no
 
 # Start all containers from prebuilt image
 carts_step "Starting 6 ARTS node containers"
-docker run -d --name arts-node-1 --hostname arts-node-1 --network bridge -e ARTS_NODE_ID=0 arts-node:built
-docker run -d --name arts-node-2 --hostname arts-node-2 --network bridge -e ARTS_NODE_ID=1 arts-node:built
-docker run -d --name arts-node-3 --hostname arts-node-3 --network bridge -e ARTS_NODE_ID=2 arts-node:built
-docker run -d --name arts-node-4 --hostname arts-node-4 --network bridge -e ARTS_NODE_ID=3 arts-node:built
-docker run -d --name arts-node-5 --hostname arts-node-5 --network bridge -e ARTS_NODE_ID=4 arts-node:built
-docker run -d --name arts-node-6 --hostname arts-node-6 --network bridge -e ARTS_NODE_ID=5 arts-node:built
+docker run -d --name arts-node-1 --hostname arts-node-1 --network bridge -e ARTS_NODE_ID=0 arts-node:built >/dev/null 2>&1
+docker run -d --name arts-node-2 --hostname arts-node-2 --network bridge -e ARTS_NODE_ID=1 arts-node:built >/dev/null 2>&1
+docker run -d --name arts-node-3 --hostname arts-node-3 --network bridge -e ARTS_NODE_ID=2 arts-node:built >/dev/null 2>&1
+docker run -d --name arts-node-4 --hostname arts-node-4 --network bridge -e ARTS_NODE_ID=3 arts-node:built >/dev/null 2>&1
+docker run -d --name arts-node-5 --hostname arts-node-5 --network bridge -e ARTS_NODE_ID=4 arts-node:built >/dev/null 2>&1
+docker run -d --name arts-node-6 --hostname arts-node-6 --network bridge -e ARTS_NODE_ID=5 arts-node:built >/dev/null 2>&1
 
 # Wait for containers to be ready
 carts_info "Waiting for containers to be ready"
@@ -87,7 +87,7 @@ for node_i in $ALL_NODES; do
         NODE_J_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$node_j")
         HOSTS_ENTRIES="${HOSTS_ENTRIES}${NODE_J_IP} ${node_j}\n"
     done
-    # Add entries to /etc/hosts (avoid duplicates)
+    # Add entries to /etc/hosts
     docker exec "$node_i" bash -c "echo -e \"$HOSTS_ENTRIES\" >> /etc/hosts"
 done
 
