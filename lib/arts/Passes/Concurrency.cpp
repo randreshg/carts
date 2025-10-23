@@ -320,35 +320,32 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
   EdtConcurrency concurrencyType = EdtConcurrency::intranode;
 
   if (!abstractMachine->isValid()) {
-    ARTS_WARN("Invalid abstract machine configuration, using runtime fallback");
-    /// Don't set attributes - let runtime handle it
-    return;
+    ARTS_WARN("Abstract machine validation failed; using available configuration "
+              "data when setting parallelism");
   }
 
-  if (abstractMachine->hasValidNodeCount()) {
-    int nodeCount = abstractMachine->getNodeCount();
-    if (nodeCount > 1) {
-      numWorkers = nodeCount;
-      concurrencyType = EdtConcurrency::internode;
-      ARTS_INFO("Setting EDT parallelism: inter-node across " << nodeCount
-                                                              << " nodes");
-    } else if (abstractMachine->hasValidThreads()) {
-      int threads = abstractMachine->getThreads();
-      numWorkers = threads;
-      concurrencyType = EdtConcurrency::intranode;
-      ARTS_INFO("Setting EDT parallelism: intra-node across " << threads
-                                                              << " threads");
-    }
-  } else if (abstractMachine->hasValidThreads()) {
-    int threads = abstractMachine->getThreads();
+  int nodeCount =
+      abstractMachine->hasValidNodeCount() ? abstractMachine->getNodeCount() : 0;
+  int threads =
+      abstractMachine->hasValidThreads() ? abstractMachine->getThreads() : 0;
+
+  if (nodeCount > 1) {
+    numWorkers = nodeCount;
+    concurrencyType = EdtConcurrency::internode;
+    ARTS_INFO("Setting EDT parallelism: inter-node across " << nodeCount
+                                                            << " nodes");
+  } else if (threads > 0) {
     numWorkers = threads;
     concurrencyType = EdtConcurrency::intranode;
     ARTS_INFO("Setting EDT parallelism: intra-node across " << threads
                                                             << " threads");
+  } else if (nodeCount == 1) {
+    numWorkers = 1;
+    concurrencyType = EdtConcurrency::intranode;
+    ARTS_INFO("Setting EDT parallelism: single-node execution with 1 worker");
   } else {
     /// Unknown configuration - let runtime handle it
-    ARTS_INFO(
-        "Unknown thread count: letting runtime determine EDT parallelism");
+    ARTS_INFO("Unable to determine parallelism statically; deferring to runtime");
     return;
   }
 
