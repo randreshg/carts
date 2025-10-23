@@ -858,24 +858,41 @@ private:
   //===----------------------------------------------------------------------===//
   std::tuple<Value, Value, bool> determineParallelismStrategy(EdtOp edtOp) {
     Value lb = AC->createIndexConstant(0, loc);
-    Value ub = nullptr;
+
+    bool isParallel = edtOp.getType() == EdtType::parallel;
+    bool isInterNode = (edtOp.getConcurrency() == EdtConcurrency::internode);
 
     /// Read parallelism strategy from EDT attributes set by concurrency pass
     if (auto workersAttr = edtOp.getWorkers()) {
       int numWorkers = workersAttr->getValue();
-      ub = AC->createIndexConstant(numWorkers, loc);
+      Value ub = AC->createIndexConstant(numWorkers, loc);
 
-      bool isInterNode = (edtOp.getConcurrency() == EdtConcurrency::internode);
       ARTS_INFO("Using EDT attributes: workers="
                 << numWorkers << ", concurrency="
                 << (isInterNode ? "internode" : "intranode"));
       return {lb, ub, isInterNode};
     }
 
-    /// Fallback: no attributes set, use runtime workers
-    ARTS_WARN("No parallelism attributes set on EDT, using runtime fallback");
-    ub = AC->castToIndex(AC->getTotalWorkers(loc), loc);
-    return {lb, ub, /*isInterNode=*/false};
+    if (!isParallel) {
+      /// Non-parallel EDTs without explicit workers execute on a single worker.
+      Value ub = AC->createIndexConstant(1, loc);
+      ARTS_INFO("Non-parallel EDT without workers attribute; defaulting to a"
+                " single worker");
+      return {lb, ub, isInterNode};
+    }
+
+    /// Fallback: no attributes set, query runtime for the appropriate count.
+    Value runtimeCount = isInterNode ? AC->getTotalNodes(loc)
+                                     : AC->getTotalWorkers(loc);
+    Value ub = AC->castToIndex(runtimeCount, loc);
+
+    if (isInterNode)
+      ARTS_WARN(
+          "No workers attribute set on parallel EDT - using runtime total nodes fallback");
+    else
+      ARTS_WARN(
+          "No workers attribute set on parallel EDT - using runtime total workers fallback");
+    return {lb, ub, isInterNode};
   }
 
   ForOp findContainedForOp(EdtOp op) {
