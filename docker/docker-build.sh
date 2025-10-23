@@ -20,13 +20,13 @@ carts_step "Building base Docker image (arts-node-base)"
 docker build -t arts-node-base .
 
 # Start builder container with access to all system threads
-carts_step "Starting builder container with full CPU access"
+carts_step "Starting builder container"
 docker rm -f arts-node-builder >/dev/null 2>&1 || true
 
 # Detect CPU cores 
 DOCKER_CPUS=$(docker run --rm ubuntu:22.04 nproc 2>/dev/null || echo "2")
 docker run -d --name arts-node-builder --hostname arts-node-builder --network bridge \
-    --cpus="$DOCKER_CPUS" arts-node-base
+    --cpus="$DOCKER_CPUS" arts-node-base >/dev/null 2>&1
 
 # Wait for builder to be ready
 carts_info "Waiting for builder to be ready"
@@ -51,8 +51,6 @@ docker exec arts-node-builder bash -c "\
     export MAKEFLAGS='-j$DOCKER_CPUS'; \
     export CMAKE_BUILD_PARALLEL_LEVEL=$DOCKER_CPUS; \
     python3 -u tools/setup/carts-setup.py; \
-    echo 'export PATH=/opt/carts/tools:\$PATH' >> /root/.bashrc; \
-    echo 'export PATH=/opt/carts/tools:\$PATH' >> /root/.zshrc 2>/dev/null || true \
 "
 
 # Commit builder as the final reusable image

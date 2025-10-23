@@ -323,7 +323,7 @@ bool ArtsAbstractMachine::validateConfiguration() {
     ARTS_WARN("No nodes specified");
     isValid = false;
   } else if (static_cast<int>(nodes.size()) != nodeCount) {
-    ARTS_WARN("Nodes count (" << nodes.size() << ") doesn't match nodeCount ("
+    ARTS_ERROR("Nodes count (" << nodes.size() << ") doesn't match nodeCount ("
                               << nodeCount << ")");
     isValid = false;
   }
@@ -331,14 +331,14 @@ bool ArtsAbstractMachine::validateConfiguration() {
   /// Check master node is in nodes list
   if (!nodes.empty() &&
       std::find(nodes.begin(), nodes.end(), masterNode) == nodes.end()) {
-    ARTS_WARN("Master node '" << masterNode << "' not found in nodes list");
+        ARTS_ERROR("Master node '" << masterNode << "' not found in nodes list");
     isValid = false;
   }
 
   /// Check GPU configuration consistency
   if (hasGpuSupport()) {
     if (gpu <= 0) {
-      ARTS_WARN("GPU support enabled but gpu count is " << gpu);
+      ARTS_ERROR("GPU support enabled but gpu count is " << gpu);
       isValid = false;
     }
     if (scheduler != 3) {
