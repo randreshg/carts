@@ -82,7 +82,7 @@ done
 FIRST_NODE=$(echo "$ALL_NODES" | head -1)
 SECOND_NODE=$(echo "$ALL_NODES" | head -2 | tail -1)
 if [ -n "$FIRST_NODE" ] && [ -n "$SECOND_NODE" ] && [ "$FIRST_NODE" != "$SECOND_NODE" ]; then
-    docker exec "$FIRST_NODE" bash -c "ssh root@$SECOND_NODE 'echo SSH test successful'" >/dev/null 2>&1
+    docker exec "$FIRST_NODE" bash -c "ssh -o StrictHostKeyChecking=no -o LogLevel=ERROR root@$SECOND_NODE 'echo SSH test successful'" >/dev/null 2>&1
 fi
 
 carts_header "Multi-Node Setup Complete"
@@ -144,13 +144,29 @@ if [[ -n "$EXAMPLE_FILE" ]]; then
     fi
     carts_build "Build command: $REMOTE_BUILD_CMD"
     docker exec "$MASTER_CONTAINER" bash -c "$REMOTE_BUILD_CMD"
+    if [[ $? -ne 0 ]]; then
+        carts_error "Failed to build binary on master node"
+        exit 1
+    fi
+    
+    # Verify the binary was created
+    docker exec "$MASTER_CONTAINER" bash -c "test -f '$CONTAINER_FILE_DIR/$BASE_NAME'"
+    if [[ $? -ne 0 ]]; then
+        carts_error "Binary '$BASE_NAME' was not created successfully"
+        exit 1
+    fi
 
     # Then: copy the built binary to all other nodes so SSH launcher can start it remotely
-    OTHER_NODES=$(docker ps --format '{{.Names}}' | grep '^arts-node-' | grep -v "$MASTER_CONTAINER" || true)
+    # Only copy to numbered arts-node containers (1-6), not builder/update containers
+    OTHER_NODES=$(docker ps --format '{{.Names}}' | grep '^arts-node-[1-6]$' | grep -v "$MASTER_CONTAINER" || true)
     for node in $OTHER_NODES; do
         NODE_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$node")
         carts_info "Copying binary to $node ($NODE_IP): $CONTAINER_FILE_DIR/$BASE_NAME"
-        docker exec "$MASTER_CONTAINER" bash -c "scp '$CONTAINER_FILE_DIR/$BASE_NAME' root@$node:'$CONTAINER_FILE_DIR/'"
+        docker exec "$MASTER_CONTAINER" bash -c "scp -o StrictHostKeyChecking=no -o LogLevel=ERROR '$CONTAINER_FILE_DIR/$BASE_NAME' root@$node:'$CONTAINER_FILE_DIR/'"
+        if [[ $? -ne 0 ]]; then
+            carts_error "Failed to copy binary to $node"
+            exit 1
+        fi
     done
 
     # Finally: run the binary on the master node (ARTS will SSH to others with config from environment)
