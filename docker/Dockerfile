@@ -53,6 +53,14 @@ RUN ln -s /usr/bin/clang-18 /usr/bin/clang && \
     ln -s /usr/bin/clang++-18 /usr/bin/clang++ && \
     ln -s /usr/bin/llvm-config-18 /usr/bin/llvm-config
 
+# Install Node.js and npm (latest LTS version)
+RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# Verify Node.js and npm installation
+RUN node --version && npm --version
+
 # Configure SSH for passwordless access
 RUN mkdir /var/run/sshd && \
     echo 'root:arts' | chpasswd && \
