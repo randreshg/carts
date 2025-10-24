@@ -788,6 +788,8 @@ run_docker() {
                 carts_info "  carts docker --run fib --run-args --debug-only=db -- 15    # Build with debug, run with fib input 15"
                 carts_info "  carts docker --update                           # Update Docker image (requires clean repos)"
                 carts_info "  carts docker --update --arts -f                 # Force rebuild ARTS component"
+                carts_info "  carts docker --update --arts --debug -f         # Force rebuild ARTS with debug logging"
+                carts_info "  carts docker --update --arts=debug -f           # Force rebuild ARTS with debug logging"
                 carts_info "  carts docker --update --llvm --polygeist -f     # Force rebuild LLVM and Polygeist"
                 carts_info "  carts docker --kill                             # Kill all processes in containers"
                 carts_info "  carts docker --clean                            # Clean Docker setup"
@@ -822,7 +824,20 @@ run_docker_update() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             "--arts"|"-a")
-                force_components+=("arts")
+                # Check if next argument is --info or --debug
+                if [[ $# -gt 1 && ("$2" == "--info" || "$2" == "--debug") ]]; then
+                    # Extract just the mode name (remove the -- prefix)
+                    mode="${2#--}"
+                    force_components+=("--arts=$mode")
+                    shift 2
+                else
+                    force_components+=("arts")
+                    shift
+                fi
+                ;;
+            "--arts="*|"--arts:"*)
+                # Handle --arts=info, --arts=debug, etc.
+                force_components+=("$1")
                 shift
                 ;;
             "--polygeist"|"-p")
@@ -843,17 +858,20 @@ run_docker_update() {
                 ;;
             "--help"|"-h")
                 carts_info "Docker update options:"
-                carts_info "  --arts, -a         Force rebuild ARTS runtime"
-                carts_info "  --polygeist, -p    Force rebuild Polygeist compiler"
-                carts_info "  --llvm, -l         Force rebuild LLVM compiler"
-                carts_info "  --carts, -c        Force rebuild CARTS framework"
-                carts_info "  --force, -f        Force rebuild mode (rebuilds even without changes)"
-                carts_info "  --help, -h         Show this help"
+                carts_info "  --arts[=MODE], -a    Force rebuild ARTS runtime (MODE: info, debug)"
+                carts_info "  --polygeist, -p      Force rebuild Polygeist compiler"
+                carts_info "  --llvm, -l           Force rebuild LLVM compiler"
+                carts_info "  --carts, -c          Force rebuild CARTS framework"
+                carts_info "  --force, -f          Force rebuild mode (rebuilds even without changes)"
+                carts_info "  --help, -h           Show this help"
                 carts_line
                 carts_info "Examples:"
-                carts_info "  carts docker --update --arts -f     # Force rebuild ARTS"
-                carts_info "  carts docker --update --llvm -f     # Force rebuild LLVM"
-                carts_info "  carts docker --update -f            # Force rebuild everything"
+                carts_info "  carts docker --update --arts -f           # Force rebuild ARTS"
+                carts_info "  carts docker --update --arts --debug -f   # Force rebuild ARTS with debug logging"
+                carts_info "  carts docker --update --arts=info -f      # Force rebuild ARTS with info logging"
+                carts_info "  carts docker --update --arts=debug -f     # Force rebuild ARTS with debug logging"
+                carts_info "  carts docker --update --llvm -f           # Force rebuild LLVM"
+                carts_info "  carts docker --update -f                  # Force rebuild everything"
                 exit 0
                 ;;
             *)
@@ -873,7 +891,12 @@ run_docker_update() {
             update_args+=" --force"
         fi
         for component in "${force_components[@]}"; do
-            update_args+=" --$component"
+            # Check if component already starts with -- (for extended syntax like --arts=info)
+            if [[ "$component" == --* ]]; then
+                update_args+=" $component"
+            else
+                update_args+=" --$component"
+            fi
         done
 
         if [[ -n "$CARTS_VERBOSE" ]]; then

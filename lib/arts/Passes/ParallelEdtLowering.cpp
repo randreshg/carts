@@ -140,25 +140,16 @@ public:
       activeLoopCount = Value();
       activeLoopOp = nullptr;
 
-      if (containedForOp->hasAttr("chunk_size")) {
-        /// Cyclic distribution: prepare chunks and workers
-        LoopInfo info;
-        info.lowerBound = containedForOp.getLowerBound()[0];
-        info.upperBound = containedForOp.getUpperBound()[0];
-        info.loopStep = containedForOp.getStep()[0];
-        info.totalWorkers = ub;
-        computeTotalIterationsAndChunkSize(containedForOp, info);
-        prepareReductionBuffers(containedForOp, info.totalChunks);
-        lowerStaticCyclic(op, containedForOp, lb, ub, isInterNode);
-        activeLoopCount = info.totalChunks;
-      } else {
-        /// Block distribution: create one worker per iteration
-        Value totalIterations = computeTotalIterations(containedForOp);
-        Value slotCount = totalIterations;
-        prepareReductionBuffers(containedForOp, slotCount);
-        lowerStaticBlock(op, containedForOp, lb, slotCount, isInterNode);
-        activeLoopCount = slotCount;
-      }
+      /// Cyclic distribution: prepare chunks and workers
+      LoopInfo info;
+      info.lowerBound = containedForOp.getLowerBound()[0];
+      info.upperBound = containedForOp.getUpperBound()[0];
+      info.loopStep = containedForOp.getStep()[0];
+      info.totalWorkers = ub;
+      computeTotalIterationsAndChunkSize(containedForOp, info);
+      prepareReductionBuffers(containedForOp, info.totalChunks);
+      lowerStaticCyclic(op, containedForOp, lb, ub, isInterNode);
+      activeLoopCount = info.totalChunks;
 
       if (!activeReductions.empty()) {
         /// Create reduction aggregator EDT
@@ -240,168 +231,6 @@ private:
     if (region.empty())
       region.push_back(new Block());
     return epochOp;
-  }
-
-  //===----------------------------------------------------------------------===//
-  ///
-  /// Lowering parallel EDT with arts.for using block distribution
-  /// Block distribution example with 4 workers (threads=4):
-  ///
-  /// Input IR (no chunk_size):
-  ///   arts.edt<parallel> {
-  ///     arts.for %i = 0 to 100 step 1 {
-  ///       /// loop body computing 100 iterations
-  ///     }
-  ///   }
-  ///
-  /// Output IR:
-  ///   Total iterations: 100, Workers: 4
-  ///   Worker 0: iterations 0-24   (25 iterations)
-  ///   Worker 1: iterations 25-49  (25 iterations)
-  ///   Worker 2: iterations 50-74  (25 iterations)
-  ///   Worker 3: iterations 75-99  (25 iterations)
-  ///
-  ///   scf.for %worker = 0 to 4 step 1 {
-  ///     arts.edt<task route=0> deps[...] {
-  ///       scf.for %local_i = 0 to worker_chunk_count step 1 {
-  ///         %global_i = worker_first_chunk * 1 + %local_i
-  ///         /// cloned loop body with %global_i
-  ///       }
-  ///     }
-  ///   }
-  ///
-  /// For uneven division (101 iterations):
-  /// Worker 0: 26 iterations, Worker 1: 26 iterations
-  /// Worker 2: 25 iterations, Worker 3: 24 iterations
-  void lowerStaticBlock(EdtOp op, ForOp containedForOp, Value lb, Value ub,
-                        bool isInterNode) {
-
-    /// Create scf.for loop over workers
-    Value one = AC->createIndexConstant(1, loc);
-    scf::ForOp workerLoop = AC->create<scf::ForOp>(loc, lb, ub, one);
-    OpBuilder::InsertionGuard IG(AC->getBuilder());
-    AC->setInsertionPointToStart(workerLoop.getBody());
-
-    Value workerId = workerLoop.getInductionVar();
-    Value route = createRouteValue(workerId, isInterNode);
-
-    /// Compute worker's iteration bounds
-    ChunkedForInfo chunkInfo = computeChunkBounds(containedForOp, workerId, ub);
-
-    /// Create dependencies for this worker
-    auto chunkResult =
-        createBlockDeps(op, containedForOp, workerId, ub, chunkInfo);
-    SmallVector<bool> chunkedDepFlags(chunkResult.deps.size(), false);
-    for (DbAcquireOp acquire : chunkResult.chunkedAcquires) {
-      auto it = llvm::find(chunkResult.deps, acquire.getPtr());
-      if (it != chunkResult.deps.end())
-        chunkedDepFlags[it - chunkResult.deps.begin()] = true;
-    }
-
-    appendReductionDeps(workerId, chunkResult.deps);
-
-    /// Create arts.edt<task> for this worker
-    auto newEdt = AC->create<EdtOp>(
-        loc, EdtType::task, EdtConcurrency::intranode, route, chunkResult.deps);
-    setupEdtRegion(newEdt, op);
-
-    AC->setInsertionPointToEnd(&newEdt.getRegion().front());
-    SmallVector<BlockArgument> chunkedArgs;
-    auto newEdtArgs = newEdt.getRegion().front().getArguments();
-    for (auto [idx, arg] : llvm::enumerate(newEdtArgs))
-      if (idx < chunkedDepFlags.size() && chunkedDepFlags[idx])
-        chunkedArgs.push_back(arg);
-
-    SmallVector<Value> privateAccArgs;
-    if (!activeReductions.empty()) {
-      Block &edtBody = newEdt.getRegion().front();
-      auto dstArgs = edtBody.getArguments();
-      size_t reductionArgStart = dstArgs.size() - activeReductions.size();
-      for (unsigned i = 0; i < activeReductions.size(); ++i)
-        privateAccArgs.push_back(dstArgs[reductionArgStart + i]);
-      if (failed(initializePrivateAccumulators(privateAccArgs, edtBody)))
-        return;
-    }
-
-    IRMapping mapper;
-    auto srcArgs = op.getRegion().front().getArguments();
-    auto dstArgs = newEdt.getRegion().front().getArguments();
-    for (auto [srcArg, dstArg] : zip(srcArgs, dstArgs))
-      mapper.map(srcArg, dstArg);
-
-    /// Clone arts.for loop body into worker EDT
-    Block &loopBody = containedForOp.getRegion().front();
-    Value loopInductionVar = loopBody.getArgument(0);
-
-    /// Create scf.for for worker's iterations
-    Value zeroIndex = AC->createIndexConstant(0, loc);
-    Value oneIndex = AC->createIndexConstant(1, loc);
-    auto assignedLoop = AC->create<scf::ForOp>(
-        loc, zeroIndex, chunkInfo.workerIterationCount, oneIndex);
-
-    Block &assignedBody = assignedLoop.getRegion().front();
-    Value localIndex = assignedLoop.getInductionVar();
-    AC->setInsertionPointToStart(&assignedBody);
-
-    /// Convert to global iteration number and loop index
-    Value baseIter = AC->create<arith::MulIOp>(loc, chunkInfo.workerFirstChunk,
-                                               chunkInfo.chunkSize);
-    Value iterationNumber =
-        AC->create<arith::AddIOp>(loc, baseIter, localIndex);
-
-    IRMapping iterationMapper = mapper;
-    Value actualLoopIndex = AC->create<arith::AddIOp>(
-        loc, chunkInfo.lowerBound,
-        AC->create<arith::MulIOp>(loc, iterationNumber, chunkInfo.loopStep));
-    iterationMapper.map(loopInductionVar, actualLoopIndex);
-    if (!activeReductions.empty()) {
-      for (auto [idx, info] : llvm::enumerate(activeReductions))
-        iterationMapper.map(info.originalAcc, privateAccArgs[idx]);
-    }
-    mapReductionIdentityValues(iterationMapper, containedForOp);
-
-    /// Clone operations from arts.for body
-    for (Operation &inner : loopBody.without_terminator()) {
-      Operation *cloned = AC->clone(inner, iterationMapper);
-      for (auto [oldRes, newRes] :
-           llvm::zip(inner.getResults(), cloned->getResults()))
-        iterationMapper.map(oldRes, newRes);
-    }
-    replaceUndefWithZero(assignedBody);
-
-    /// Fix arts.db_ref indices for chunked datablocks
-    SmallVector<DbRefOp> chunkedDbRefs;
-    for (Operation &inner : assignedBody)
-      if (auto dbRef = dyn_cast<DbRefOp>(&inner))
-        if (dbRef.getSource().isa<BlockArgument>()) {
-          auto barg = dbRef.getSource().cast<BlockArgument>();
-          if (llvm::is_contained(chunkedArgs, barg))
-            chunkedDbRefs.push_back(dbRef);
-        }
-    for (DbRefOp dbRef : chunkedDbRefs) {
-      AC->setInsertionPoint(dbRef);
-      Value globalIndex = iterationMapper.lookup(loopInductionVar);
-      Value localIndexForDb =
-          AC->create<arith::SubIOp>(loc, globalIndex, baseIter);
-      dbRef.getIndicesMutable().assign(ValueRange{localIndexForDb});
-    }
-
-    /// Release chunked datablocks
-    AC->setInsertionPointToEnd(&newEdt.getRegion().front());
-    for (BlockArgument barg : chunkedArgs)
-      AC->create<DbReleaseOp>(loc, barg);
-
-    if (!privateAccArgs.empty()) {
-      AC->setInsertionPointToEnd(&newEdt.getRegion().front());
-      for (Value accArg : privateAccArgs)
-        AC->create<DbReleaseOp>(loc, accArg);
-    }
-
-    AC->setInsertionPointToEnd(&newEdt.getRegion().front());
-    if (!isa<YieldOp>(newEdt.getRegion().front().back()))
-      AC->create<YieldOp>(loc);
-    if (!activeReductions.empty())
-      activeLoopOp = workerLoop.getOperation();
   }
 
   //===----------------------------------------------------------------------===//
@@ -882,16 +711,16 @@ private:
     }
 
     /// Fallback: no attributes set, query runtime for the appropriate count.
-    Value runtimeCount = isInterNode ? AC->getTotalNodes(loc)
-                                     : AC->getTotalWorkers(loc);
+    Value runtimeCount =
+        isInterNode ? AC->getTotalNodes(loc) : AC->getTotalWorkers(loc);
     Value ub = AC->castToIndex(runtimeCount, loc);
 
     if (isInterNode)
-      ARTS_WARN(
-          "No workers attribute set on parallel EDT - using runtime total nodes fallback");
+      ARTS_WARN("No workers attribute set on parallel EDT - using runtime "
+                "total nodes fallback");
     else
-      ARTS_WARN(
-          "No workers attribute set on parallel EDT - using runtime total workers fallback");
+      ARTS_WARN("No workers attribute set on parallel EDT - using runtime "
+                "total workers fallback");
     return {lb, ub, isInterNode};
   }
 
@@ -952,8 +781,8 @@ private:
     /// Calculate total chunks: ceil(totalIterations / chunkSize)
     /// Formula: (totalIterations + chunkSize - 1) / chunkSize
     /// Example: 100 iterations, chunkSize=5 -> (100 + 5 - 1) / 5 = 104 / 5 = 20
-
     Value oneIndex = AC->createIndexConstant(1, loc);
+
     /// Calculate total iterations: (upper - lower) / step
     Value range =
         AC->create<arith::SubIOp>(loc, info.upperBound, info.lowerBound);
@@ -963,9 +792,13 @@ private:
         AC->create<arith::DivUIOp>(loc, adjustedRange, info.loopStep);
 
     /// Get chunk_size attribute from the arts.for operation
-    auto chunkAttr = containedForOp->getAttrOfType<IntegerAttr>("chunk_size");
-    int64_t chunkInt = std::max<int64_t>(1, chunkAttr.getInt());
-    info.chunkSize = AC->createIndexConstant(chunkInt, loc);
+    if (auto chunkAttr =
+            containedForOp->getAttrOfType<IntegerAttr>("chunk_size")) {
+      int64_t chunkInt = std::max<int64_t>(1, chunkAttr.getInt());
+      info.chunkSize = AC->createIndexConstant(chunkInt, loc);
+    } else {
+      info.chunkSize = AC->createIndexConstant(1, loc);
+    }
 
     /// Calculate total chunks: ceil(totalIterations / chunkSize)
     /// Formula: (totalIterations + chunkSize - 1) / chunkSize
@@ -1079,11 +912,13 @@ private:
   }
 };
 
+//===----------------------------------------------------------------------===//
 /// Prepare reduction buffers for the given arts.for loop.
 /// Clears the active reductions list and creates partial result datablocks
 /// for each reduction accumulator found in the for loop. Each partial buffer
 /// is allocated with the specified slot count to store intermediate results
 /// from parallel worker EDTs before final aggregation.
+//===----------------------------------------------------------------------===//
 void ParallelEdtLowering::prepareReductionBuffers(ForOp forOp,
                                                   Value slotCount) {
   assert(forOp && "ForOp cannot be null when preparing reduction buffers");
@@ -1133,12 +968,14 @@ void ParallelEdtLowering::prepareReductionBuffers(ForOp forOp,
   }
 }
 
+//===----------------------------------------------------------------------===//
 /// Append reduction dependencies to the dependency list for a worker EDT.
 ///
 /// Each worker EDT needs write access to its designated slot in the partial
 /// result datablocks for each reduction variable. This function creates
 /// DbAcquire operations in "out" mode for each active reduction accumulator,
 /// using the provided offset as the slot index within the partial buffers.
+//===----------------------------------------------------------------------===//
 void ParallelEdtLowering::appendReductionDeps(Value offset,
                                               SmallVector<Value> &deps) {
   if (activeReductions.empty())
@@ -1156,6 +993,7 @@ void ParallelEdtLowering::appendReductionDeps(Value offset,
   }
 }
 
+//===----------------------------------------------------------------------===//
 /// Initialize private accumulator variables for a worker EDT.
 ///
 /// Each worker EDT receives private accumulator arguments that correspond to
@@ -1164,6 +1002,7 @@ void ParallelEdtLowering::appendReductionDeps(Value offset,
 /// results. It iterates through each private accumulator argument, creates
 /// a zero value of the appropriate type, and stores it in the accumulator's
 /// memory location.
+//===----------------------------------------------------------------------===//
 LogicalResult
 ParallelEdtLowering::initializePrivateAccumulators(ArrayRef<Value> privateArgs,
                                                    Block &body) {
@@ -1193,6 +1032,7 @@ ParallelEdtLowering::initializePrivateAccumulators(ArrayRef<Value> privateArgs,
   return success();
 }
 
+//===----------------------------------------------------------------------===//
 /// Create a zero value of the specified type for reduction initialization.
 ///
 /// This utility function creates appropriate zero constants for different
@@ -1201,7 +1041,7 @@ ParallelEdtLowering::initializePrivateAccumulators(ArrayRef<Value> privateArgs,
 /// be used to initialize reduction accumulators or as a starting value
 /// for reduction aggregation.
 ///
-/// Returns an empty Value() if the type is not supported for reductions.
+//===----------------------------------------------------------------------===//
 Value ParallelEdtLowering::createZeroValue(Type type) {
   if (type.isa<IndexType>())
     return AC->createIndexConstant(0, loc);
@@ -1213,11 +1053,13 @@ Value ParallelEdtLowering::createZeroValue(Type type) {
   return Value();
 }
 
+//===----------------------------------------------------------------------===//
 /// Combine two values using the appropriate reduction operation.
 ///
 /// Performs the core reduction operation by combining two
 /// values of the same type. For integer and index types, it uses integer
 /// addition. For floating-point types, it uses floating-point addition.
+//===----------------------------------------------------------------------===//
 Value ParallelEdtLowering::combineValues(Type type, Value lhs, Value rhs) {
   if (type.isa<IntegerType>() || type.isa<IndexType>())
     return AC->create<arith::AddIOp>(loc, lhs, rhs).getResult();
@@ -1278,10 +1120,12 @@ ParallelEdtLowering::computeReductionAccess(const ReductionInfo &info,
   return access;
 }
 
+//===----------------------------------------------------------------------===//
 /// Create reduction aggregator EDT.
 ///
 /// Creates an arts.edt<task> that combines partial reduction results
 /// from all worker EDTs back into the original accumulators.
+//===----------------------------------------------------------------------===//
 LogicalResult ParallelEdtLowering::createReductionAggregator(
     Value loopCount, Operation *insertAfter, EdtOp sourceOp) {
   assert(loopCount && "LoopCount cannot be null when creating aggregator");

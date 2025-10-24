@@ -59,8 +59,14 @@ done
 
 carts_header "Kill Complete"
 carts_success "All processes killed in ARTS containers!"
-carts_info "Containers are still running but processes have been terminated."
+carts_info "Now stopping all containers..."
 
-# Show container status
-carts_info "Container status:"
-docker ps --filter "name=arts-node-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+# Stop all ARTS containers
+carts_info "Stopping containers: $RUNNING_CONTAINERS"
+docker stop $RUNNING_CONTAINERS
+
+carts_success "All ARTS containers stopped!"
+
+# Show final container status
+carts_info "Final container status:"
+docker ps --filter "name=arts-node-" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null || carts_info "No containers running"

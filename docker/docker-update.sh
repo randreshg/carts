@@ -11,10 +11,10 @@ source "$(dirname "$0")/../tools/config/carts-print.sh"
 # Parse command line arguments
 FORCE_MODE=false
 FORCE_ARTS=false
+ARTS_BUILD_MODE=""
 FORCE_POLYGEIST=false
 FORCE_LLVM=false
 FORCE_CARTS=false
-SKIP_PULL=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -24,6 +24,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         "--arts"|"-a")
             FORCE_ARTS=true
+            ARTS_BUILD_MODE=""
+            shift
+            ;;
+        "--arts="*|"--arts:"*)
+            FORCE_ARTS=true
+            ARTS_BUILD_MODE="${1#*=}"
+            ARTS_BUILD_MODE="${ARTS_BUILD_MODE#*:}"
+            # Validate build mode
+            if [[ "$ARTS_BUILD_MODE" != "info" && "$ARTS_BUILD_MODE" != "debug" && "$ARTS_BUILD_MODE" != "" ]]; then
+                carts_error "Invalid ARTS build mode: $ARTS_BUILD_MODE. Use 'info', 'debug', or no mode"
+                exit 1
+            fi
             shift
             ;;
         "--polygeist"|"-p")
@@ -38,21 +50,21 @@ while [[ $# -gt 0 ]]; do
             FORCE_CARTS=true
             shift
             ;;
-        "--no-pull"|"-n")
-            SKIP_PULL=true
-            shift
-            ;;
         "--help"|"-h")
             echo "Usage: $0 [options]"
             echo ""
             echo "Options:"
-            echo "  --force, -f        Force rebuild mode (rebuilds even without changes)"
-            echo "  --arts, -a         Force rebuild ARTS runtime"
-            echo "  --polygeist, -p    Force rebuild Polygeist compiler"
-            echo "  --llvm, -l         Force rebuild LLVM compiler"
-            echo "  --carts, -c        Force rebuild CARTS framework"
-            echo "  --no-pull, -n      Skip pulling changes from repositories"
-            echo "  --help, -h         Show this help"
+            echo "  --force, -f              Force rebuild mode (rebuilds even without changes)"
+            echo "  --arts[=MODE], -a        Force rebuild ARTS runtime (MODE: info, debug; default: none)"
+            echo "  --polygeist, -p          Force rebuild Polygeist compiler"
+            echo "  --llvm, -l               Force rebuild LLVM compiler"
+            echo "  --carts, -c              Force rebuild CARTS framework"
+            echo "  --help, -h               Show this help"
+            echo ""
+            echo "Examples:"
+            echo "  $0 --arts                # Force rebuild ARTS with default output"
+            echo "  $0 --arts=debug          # Force rebuild ARTS with debug output and logging"
+            echo "  $0 --arts=info           # Force rebuild ARTS with info-level debugging"
             echo ""
             exit 0
             ;;
@@ -67,10 +79,8 @@ done
 carts_header "CARTS Docker Update"
 if [[ "$FORCE_MODE" == "true" ]]; then
     carts_info "Updating CARTS components in Docker (FORCE MODE)"
-elif [[ "$SKIP_PULL" == "true" ]]; then
-    carts_info "Updating CARTS components in Docker (skipping pull)"
 else
-    carts_info "Updating CARTS components in Docker (auto-pulling changes)"
+    carts_info "Updating CARTS components in Docker"
 fi
 
 # Repository updates will be handled inside the Docker container
@@ -115,56 +125,55 @@ SUBMODULE_CHANGES=$(docker exec arts-node-update bash -c "
         before_commits[\$submodule_name]=\"\$commit\"
     done < <(git submodule status --quiet | awk '{print \$1, \$2}')
 
-    # Pull latest changes from main repository if not skipping
-    if [[ \"$SKIP_PULL\" == \"false\" ]]; then
-        git config --global --add safe.directory /opt/carts || true
+    # Pull latest changes from main repository
+    git config --global --add safe.directory /opt/carts || true
 
-        # Resolve target branch
-        target_branch=\"${GIT_BRANCH:-}\"
-        if [[ -z \"\$target_branch\" ]]; then
-            current_branch=\$(git branch --show-current)
-            if [[ -n \"\$current_branch\" ]]; then
-                target_branch=\"\$current_branch\"
+    # Resolve target branch
+    target_branch=\"${GIT_BRANCH:-}\"
+    if [[ -z \"\$target_branch\" ]]; then
+        current_branch=\$(git branch --show-current)
+        if [[ -n \"\$current_branch\" ]]; then
+            target_branch=\"\$current_branch\"
+        else
+            remote_head=\$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
+            if [[ -n \"\$remote_head\" ]]; then
+                target_branch=\"\$remote_head\"
             else
-                remote_head=\$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')
-                if [[ -n \"\$remote_head\" ]]; then
-                    target_branch=\"\$remote_head\"
-                else
-                    target_branch=\"mlir\"
-                fi
+                target_branch=\"mlir\"
             fi
         fi
-
-        # Log remote and branch
-        echo \"CARTS:remote \$(git config --get remote.origin.url 2>/dev/null || echo unknown)\"
-        echo \"CARTS:branch \$target_branch\"
-
-        # Fetch and ensure branch checkout
-        if ! git fetch origin \"\$target_branch\" --prune; then
-            echo \"CARTS:fetch_failed\"
-        fi
-        if git show-ref --verify --quiet \"refs/heads/\$target_branch\"; then
-            git checkout \"\$target_branch\" || true
-        else
-            git checkout -B \"\$target_branch\" \"origin/\$target_branch\" || true
-        fi
-
-        # Compare local vs remote and hard reset to remote
-        local_before=\$(git rev-parse HEAD 2>/dev/null || echo \"\")
-        remote_sha=\$(git rev-parse \"origin/\$target_branch\" 2>/dev/null || echo \"\")
-        if [[ -n \"\$local_before\" && -n \"\$remote_sha\" && \"\$local_before\" != \"\$remote_sha\" ]]; then
-            echo \"CARTS:pulling \$local_before -> \$remote_sha\"
-        else
-            if [[ -n \"\$remote_sha\" ]]; then
-                echo \"CARTS:up_to_date \$remote_sha\"
-            fi
-        fi
-        git reset --hard \"origin/\$target_branch\" || true
     fi
 
-    # Align submodules to remote (ignore local changes)
-    git submodule foreach --recursive '\''git config --global --add safe.directory "$PWD" || true; git fetch --all || true; ub=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || true); if [ -n "$ub" ]; then git reset --hard "$ub" || true; else cb=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo ""); if [ -n "$cb" ]; then git reset --hard origin/$cb || true; fi; fi'\'' || true
-    git submodule update --init --recursive --remote --quiet 2>/dev/null || true
+    # Log remote and branch
+    echo \"CARTS:remote \$(git config --get remote.origin.url 2>/dev/null || echo unknown)\"
+    echo \"CARTS:branch \$target_branch\"
+
+    # Fetch and ensure branch checkout
+    if ! git fetch origin \"\$target_branch\" --prune; then
+        echo \"CARTS:fetch_failed\"
+    fi
+    if git show-ref --verify --quiet \"refs/heads/\$target_branch\"; then
+        git checkout \"\$target_branch\" || true
+    else
+        git checkout -B \"\$target_branch\" \"origin/\$target_branch\" || true
+    fi
+
+    # Compare local vs remote and hard reset to remote
+    local_before=\$(git rev-parse HEAD 2>/dev/null || echo \"\")
+    remote_sha=\$(git rev-parse \"origin/\$target_branch\" 2>/dev/null || echo \"\")
+    if [[ -n \"\$local_before\" && -n \"\$remote_sha\" && \"\$local_before\" != \"\$remote_sha\" ]]; then
+        echo \"CARTS:pulling \$local_before -> \$remote_sha\"
+    else
+        if [[ -n \"\$remote_sha\" ]]; then
+            echo \"CARTS:up_to_date \$remote_sha\"
+        fi
+    fi
+    git reset --hard \"origin/\$target_branch\" || true
+
+    # Sync submodule URLs and update submodules to recorded SHAs from the superproject
+    git submodule sync --recursive || true
+    git submodule init || true
+    git submodule update --recursive --init --quiet 2>/dev/null || true
 
     # Check which submodules changed by comparing commits
     git submodule status --quiet | while read -r line; do
@@ -254,7 +263,11 @@ fi
 
 # Show force rebuild indicators
 if [[ "$FORCE_ARTS" == "true" ]]; then
-    carts_warning "ARTS: Force rebuild enabled"
+    if [[ -n "$ARTS_BUILD_MODE" ]]; then
+        carts_warning "ARTS: Force rebuild enabled (mode: $ARTS_BUILD_MODE)"
+    else
+        carts_warning "ARTS: Force rebuild enabled"
+    fi
 fi
 if [[ "$FORCE_POLYGEIST" == "true" ]]; then
     carts_warning "Polygeist: Force rebuild enabled"
@@ -286,7 +299,7 @@ docker exec arts-node-update bash -c "\
     export MAKEFLAGS='-j$DOCKER_CPUS'; \
     [[ \"$BUILD_LLVM\" == \"true\" ]] && { carts build --llvm; }; \
     [[ \"$BUILD_POLY\" == \"true\" ]] && { carts build --polygeist; }; \
-    [[ \"$BUILD_ARTS\" == \"true\" ]] && { carts build --arts; }; \
+    [[ \"$BUILD_ARTS\" == \"true\" ]] && { [[ -n \"$ARTS_BUILD_MODE\" ]] && carts build --arts --$ARTS_BUILD_MODE || carts build --arts; }; \
     [[ \"$BUILD_LLVM\" == \"true\" || \"$BUILD_POLY\" == \"true\" || \"$BUILD_ARTS\" == \"true\" || \"$BUILD_CARTS\" == \"true\" ]] && { carts build; } \
 "
 
