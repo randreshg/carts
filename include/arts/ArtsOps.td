@@ -559,7 +559,9 @@ def EdtCreateOp : Arts_Op<"edt_create", [MemoryEffects<[MemWrite]>]> {
   let results = (outs I64:$guid);
   
   let assemblyFormat = [{
-    `(` $param_memref `:` type($param_memref) `,` $depCount `,` $route `)` 
+    `(` $param_memref `:` type($param_memref) `)` 
+    `depCount` `(` $depCount `)`
+    `route` `(` $route `)`
     (`epoch` `(` $epochGuid^ `:` type($epochGuid) `)`)? attr-dict
   }];
 
