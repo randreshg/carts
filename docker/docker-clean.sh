@@ -32,7 +32,7 @@ docker volume rm carts-workspace >/dev/null 2>&1 || true
 carts_step "Cleaning up networks"
 docker network prune -f >/dev/null 2>&1 || true
 
-# Remove all unused Docker resources (uncomment if needed)
+# Remove all unused Docker resources
 carts_step "Removing all unused Docker resources"
 docker system prune -af >/dev/null 2>&1 || true
 
