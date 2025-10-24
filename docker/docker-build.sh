@@ -142,11 +142,14 @@ fi
 if [[ "$WORKSPACE_EXISTS" == "false" || "$FORCE_MODE" == "true" ]]; then
     if [[ "$BUILT_IMAGE_EXISTS" == "false" || "$FORCE_MODE" == "true" ]]; then
         carts_step "Initializing shared volume with CARTS installation"
-        docker run --rm -v carts-workspace:/dest arts-node-builder bash -c "cp -a /opt/carts/. /dest/" >/dev/null
+        # Copy from the running builder container
+        docker exec arts-node-builder bash -c "cp -a /opt/carts/. /tmp/carts-copy/" >/dev/null
+        docker run --rm -v carts-workspace:/dest -v /tmp:/tmp arts-node-base bash -c "cp -a /tmp/carts-copy/. /dest/" >/dev/null
+        docker exec arts-node-builder bash -c "rm -rf /tmp/carts-copy" >/dev/null
         carts_success "Shared volume initialized with CARTS"
     else
         carts_step "Initializing shared volume with CARTS installation"
-        # Copy from existing built image instead of builder container
+        # Copy from existing built image
         docker run --rm -v carts-workspace:/dest arts-node:built bash -c "cp -a /opt/carts/. /dest/" >/dev/null
         carts_success "Shared volume initialized with CARTS"
     fi
