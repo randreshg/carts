@@ -49,14 +49,28 @@ fi
 carts_step "Cleaning up existing containers"
 docker rm -f arts-node-1 arts-node-2 arts-node-3 arts-node-4 arts-node-5 arts-node-6 >/dev/null 2>&1 || true
 
-# Start all containers from prebuilt image
-carts_step "Starting 6 ARTS node containers"
-docker run -d --name arts-node-1 --hostname arts-node-1 --network bridge -e ARTS_NODE_ID=0 arts-node:built >/dev/null 2>&1
-docker run -d --name arts-node-2 --hostname arts-node-2 --network bridge -e ARTS_NODE_ID=1 arts-node:built >/dev/null 2>&1
-docker run -d --name arts-node-3 --hostname arts-node-3 --network bridge -e ARTS_NODE_ID=2 arts-node:built >/dev/null 2>&1
-docker run -d --name arts-node-4 --hostname arts-node-4 --network bridge -e ARTS_NODE_ID=3 arts-node:built >/dev/null 2>&1
-docker run -d --name arts-node-5 --hostname arts-node-5 --network bridge -e ARTS_NODE_ID=4 arts-node:built >/dev/null 2>&1
-docker run -d --name arts-node-6 --hostname arts-node-6 --network bridge -e ARTS_NODE_ID=5 arts-node:built >/dev/null 2>&1
+# Create shared volume if it doesn't exist
+carts_step "Setting up shared workspace volume"
+if ! docker volume inspect carts-workspace >/dev/null 2>&1; then
+    docker volume create carts-workspace >/dev/null
+    carts_info "Created new shared volume: carts-workspace"
+
+    # Initialize the volume with CARTS from the built image
+    carts_info "Initializing shared volume with CARTS installation"
+    docker run --rm -v carts-workspace:/dest arts-node:built bash -c "cp -a /opt/carts/. /dest/" >/dev/null
+    carts_success "Shared volume initialized with CARTS"
+else
+    carts_info "Using existing shared volume: carts-workspace"
+fi
+
+# Start all containers from prebuilt image with shared volume
+carts_step "Starting 6 ARTS node containers with shared workspace"
+docker run -d --name arts-node-1 --hostname arts-node-1 --network bridge -e ARTS_NODE_ID=0 -v carts-workspace:/opt/carts arts-node:built >/dev/null 2>&1
+docker run -d --name arts-node-2 --hostname arts-node-2 --network bridge -e ARTS_NODE_ID=1 -v carts-workspace:/opt/carts arts-node:built >/dev/null 2>&1
+docker run -d --name arts-node-3 --hostname arts-node-3 --network bridge -e ARTS_NODE_ID=2 -v carts-workspace:/opt/carts arts-node:built >/dev/null 2>&1
+docker run -d --name arts-node-4 --hostname arts-node-4 --network bridge -e ARTS_NODE_ID=3 -v carts-workspace:/opt/carts arts-node:built >/dev/null 2>&1
+docker run -d --name arts-node-5 --hostname arts-node-5 --network bridge -e ARTS_NODE_ID=4 -v carts-workspace:/opt/carts arts-node:built >/dev/null 2>&1
+docker run -d --name arts-node-6 --hostname arts-node-6 --network bridge -e ARTS_NODE_ID=5 -v carts-workspace:/opt/carts arts-node:built >/dev/null 2>&1
 
 # Wait for containers to be ready
 carts_info "Waiting for containers to be ready"
@@ -156,20 +170,10 @@ if [[ -n "$EXAMPLE_FILE" ]]; then
         exit 1
     fi
 
-    # Then: copy the built binary to all other nodes so SSH launcher can start it remotely
-    # Only copy to numbered arts-node containers (1-6), not builder/update containers
-    OTHER_NODES=$(docker ps --format '{{.Names}}' | grep '^arts-node-[1-6]$' | grep -v "$MASTER_CONTAINER" || true)
-    for node in $OTHER_NODES; do
-        NODE_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$node")
-        carts_info "Copying binary to $node ($NODE_IP): $CONTAINER_FILE_DIR/$BASE_NAME"
-        docker exec "$MASTER_CONTAINER" bash -c "scp -o StrictHostKeyChecking=no -o LogLevel=ERROR '$CONTAINER_FILE_DIR/$BASE_NAME' root@$node:'$CONTAINER_FILE_DIR/'"
-        if [[ $? -ne 0 ]]; then
-            carts_error "Failed to copy binary to $node"
-            exit 1
-        fi
-    done
+    carts_success "Binary built successfully in shared workspace - visible to all nodes"
 
-    # Finally: run the binary on the master node (ARTS will SSH to others with config from environment)
+    # Run the binary on the master node (ARTS will SSH to others with config from environment)
+    # No need to copy binaries - all nodes share the same /opt/carts workspace
     REMOTE_RUN_CMD="cd '$CONTAINER_FILE_DIR' && artsConfig=$REMOTE_ARTS_CONFIG ./$BASE_NAME"
     if [[ -n "$RUNTIME_ARGS" ]]; then
         REMOTE_RUN_CMD+=" $RUNTIME_ARGS"

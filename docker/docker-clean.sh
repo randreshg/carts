@@ -16,13 +16,17 @@ cd "$(dirname "$0")"
 
 # Stop and remove containers
 carts_step "Stopping and removing containers"
-docker rm -f arts-node-1 arts-node-2 >/dev/null 2>&1 || true
+docker rm -f arts-node-1 arts-node-2 arts-node-3 arts-node-4 arts-node-5 arts-node-6 >/dev/null 2>&1 || true
 docker rm -f arts-node-builder arts-node-update >/dev/null 2>&1 || true
 
 # Remove images
 carts_step "Removing Docker images"
 docker rmi arts-node:built >/dev/null 2>&1 || true
 docker rmi arts-node-base >/dev/null 2>&1 || true
+
+# Remove shared volume
+carts_step "Removing shared workspace volume"
+docker volume rm carts-workspace >/dev/null 2>&1 || true
 
 # Remove any orphaned networks
 carts_step "Cleaning up networks"
