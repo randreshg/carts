@@ -327,7 +327,6 @@ show_usage() {
     carts_cmd "carts build --arts --info --introspection"   "Build ARTS with info+introspection"
     carts_cmd "carts build --polygeist"                     "Build only Polygeist"
     carts_cmd "carts build --llvm"                          "Build only LLVM"
-    carts_cmd "carts build --docker"                        "Build Docker image
     
     echo ""
     echo "  # Compilation pipeline"
@@ -589,7 +588,6 @@ run_build() {
     # Parse build options
     local clean_build=false
     local build_target="build"
-    local docker_build=false
     local arts_debug_level="none"
     local arts_build_type="Release"
     local arts_introspection=false
@@ -625,10 +623,6 @@ run_build() {
                 build_target="llvm"
                 shift
                 ;;
-            "--docker"|"-d")
-                docker_build=true
-                shift
-                ;;
             "--help"|"-h")
                 carts_print "Build options:"
                 carts_print "  (default)       Build CARTS project (make build)"
@@ -639,7 +633,6 @@ run_build() {
                 carts_print "  --debug          Enable debug build with debug+info logging (use with --arts)"
                 carts_print "  --polygeist, -p Build only Polygeist (make polygeist)"
                 carts_print "  --llvm, -l      Build only LLVM (make llvm)"
-                carts_print "  --docker, -d    Build Docker image (docker/docker-build.sh)"
                 carts_print "  --help, -h      Show this help"
                 exit 0
                 ;;
@@ -658,19 +651,7 @@ run_build() {
         if [[ -n "$CARTS_VERBOSE" ]]; then
             carts_debug "Cleaning build..."
         fi
-        if [[ "$docker_build" == "true" ]]; then
-            local docker_dir="${CARTS_DIR}/docker"
-            if [[ ! -d "$docker_dir" ]]; then
-                carts_error "Docker directory not found at $docker_dir"
-                exit 1
-            fi
-            if [[ -n "$CARTS_VERBOSE" ]]; then
-                carts_debug "Running Docker clean script: $docker_dir/docker-clean.sh"
-            fi
-            (cd "$docker_dir" && ./docker-clean.sh)
-        else
-            make clean
-        fi
+        make clean
     fi
 
     # Build make command with variables
@@ -694,34 +675,18 @@ run_build() {
     fi
 
     if [[ -n "$CARTS_VERBOSE" ]]; then
-        if [[ "$docker_build" == "true" ]]; then
-            carts_debug "Running Docker build script: ${CARTS_DIR}/docker/docker-build.sh"
-        else
-            carts_debug "Running: make $make_vars $build_target"
-        fi
+        carts_debug "Running: make $make_vars $build_target"
     fi
 
-    if [[ "$docker_build" == "true" ]]; then
-        local docker_dir="${CARTS_DIR}/docker"
-        if [[ ! -d "$docker_dir" ]]; then
-            carts_error "Docker directory not found at $docker_dir"
-            exit 1
-        fi
-        (cd "$docker_dir" && ./docker-build.sh)
+    if [[ -n "$make_vars" ]]; then
+        make $make_vars "$build_target"
     else
-        if [[ -n "$make_vars" ]]; then
-            make $make_vars "$build_target"
-        else
-            make "$build_target"
-        fi
+        make "$build_target"
     fi
     
     if [[ $? -eq 0 ]]; then
         carts_header "Build Complete"
         carts_success "CARTS build completed successfully!"
-        if [[ "$docker_build" == "true" ]]; then
-            carts_success "Docker build completed"
-        fi
     else
         carts_header "Build Failed"
         carts_error "CARTS build failed!"
@@ -764,6 +729,11 @@ run_docker() {
                 run_docker_update "$@"
                 return
                 ;;
+            "--build"|"-b")
+                shift
+                run_docker_build "$@"
+                return
+                ;;
             "--kill"|"-k")
                 shift
                 run_docker_kill
@@ -777,12 +747,15 @@ run_docker() {
             "--help"|"-h")
                 carts_info "Docker operations:"
                 carts_info "  --run <file> [build_args] [-- runtime_args]    Run example in Docker containers"
+                carts_info "  --build [options]        Build Docker image and workspace (smart build)"
                 carts_info "  --update [options]        Update Docker containers (requires clean repos)"
                 carts_info "  --kill, -k               Kill all processes in running ARTS containers"
                 carts_info "  --clean, -c              Clean Docker containers and images"
                 carts_info "  --help, -h               Show this help"
                 carts_line
                 carts_info "Examples:"
+                carts_info "  carts docker --build                            # Smart build: update existing or build new"
+                carts_info "  carts docker --build --force                    # Force rebuild everything from scratch"
                 carts_info "  carts docker --run example.c                    # Run example.c in Docker containers"
                 carts_info "  carts docker --run matrixmul -- 100 10          # Run with runtime args: matrix size 100, block size 10"
                 carts_info "  carts docker --run fib --run-args --debug-only=db -- 15    # Build with debug, run with fib input 15"
@@ -972,6 +945,56 @@ run_docker_run() {
         ./docker-run.sh "$@"
     else
         carts_error "docker-run.sh not found in $docker_dir"
+        exit 1
+    fi
+}
+
+# Function to build Docker image and workspace
+run_docker_build() {
+    local docker_dir="${CARTS_DIR}/docker"
+    if [[ ! -d "$docker_dir" ]]; then
+        carts_error "Docker directory not found at $docker_dir"
+        exit 1
+    fi
+
+    # Parse build options
+    local force_mode=false
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            "--force"|"-f")
+                force_mode=true
+                shift
+                ;;
+            "--help"|"-h")
+                carts_info "Docker build options:"
+                carts_info "  (default)       Smart build: update existing or build new"
+                carts_info "  --force, -f     Force rebuild everything from scratch"
+                carts_info "  --help, -h      Show this help"
+                exit 0
+                ;;
+            *)
+                carts_error "Unknown build option: $1"
+                carts_info "Use --help for available options"
+                exit 1
+                ;;
+        esac
+    done
+
+    # Change to docker directory and run docker-build.sh
+    cd "$docker_dir"
+    if [[ -f "docker-build.sh" ]]; then
+        local build_args=""
+        if [[ "$force_mode" == "true" ]]; then
+            build_args="--force"
+        fi
+        
+        if [[ -n "$CARTS_VERBOSE" ]]; then
+            carts_debug "Running: ./docker-build.sh $build_args"
+        fi
+        ./docker-build.sh $build_args
+    else
+        carts_error "docker-build.sh not found in $docker_dir"
         exit 1
     fi
 }
