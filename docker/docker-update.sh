@@ -98,11 +98,18 @@ fi
 
 # Detect CPU cores
 DOCKER_CPUS=$(docker run --rm ubuntu:22.04 nproc 2>/dev/null || echo "2")
-carts_step "Starting update container"
+carts_step "Starting update container with shared workspace"
 docker rm -f arts-node-update >/dev/null 2>&1 || true
 
+# Check if shared volume exists
+if ! docker volume inspect carts-workspace >/dev/null 2>&1; then
+    carts_error "Shared volume 'carts-workspace' not found!"
+    carts_warning "Please run './docker-run.sh' first to create the shared workspace."
+    exit 1
+fi
+
 docker run -d --name arts-node-update --hostname arts-node-update --network bridge \
-    --cpus="$DOCKER_CPUS" arts-node:built >/dev/null 2>&1
+    --cpus="$DOCKER_CPUS" -v carts-workspace:/opt/carts arts-node:built >/dev/null 2>&1
 
 # Wait for container to be ready
 carts_info "Waiting for update container to be ready"

@@ -237,24 +237,34 @@ docker rm arts-node-1 arts-node-2
 ./docker-clean.sh
 ```
 
+## Shared Workspace
+
+All containers share the same `/opt/carts` directory through a Docker volume named `carts-workspace`:
+- **Shared Directory**: `/opt/carts` (mounted on all containers)
+- **Benefits**: Changes made in any container are immediately visible to all other containers
+- **No Binary Copying**: Binaries built on arts-node-1 are automatically available on all nodes
+- **Development Workflow**: Work on arts-node-1, and all changes are instantly shared
+
+The shared workspace is automatically initialized from the built image on first run.
+
 ## Container Details
 
 Each container:
-- **Hostname**: arts-node-1, arts-node-2
+- **Hostname**: arts-node-1, arts-node-2, arts-node-3, arts-node-4, arts-node-5, arts-node-6
 - **OS**: Ubuntu 22.04
 - **User**: root (for SSH access)
-- **Working Directory**: /opt/carts (CARTS pre-installed)
+- **Working Directory**: /opt/carts (shared across all containers)
 - **SSH**: Passwordless SSH between all containers
 - **IP Addresses**: Dynamically assigned by Docker (typically 172.17.0.x)
 
 ## ARTS Configuration
 
 The setup generates a multi-node ARTS configuration:
-- **2 nodes** with Docker-assigned IPs
+- **6 nodes** (arts-node-1 through arts-node-6) with Docker-assigned IPs
 - **SSH launcher** for inter-node communication
 - **Port 34739** for ARTS communication
 - **4 threads per node**
-- **Config file**: `/opt/carts/arts.cfg`
+- **Config file**: `/opt/carts/docker/arts-docker.cfg`
 
 ## Troubleshooting
 
@@ -279,20 +289,3 @@ docker restart arts-node-1
 docker exec -it arts-node-builder bash
 # Then manually debug the build process in /opt/carts
 ```
-
-## Advantages over Loopback IPs
-
-- **No system configuration** - No sudo, no loopback aliases
-- **True isolation** - Each container is a real separate node
-- **Automatic networking** - Docker handles all networking
-- **SSH pre-configured** - Passwordless SSH between containers
-- **Easy cleanup** - Just run cleanup script
-- **Reproducible** - Same setup every time
-- **No conflicts** - Won't interfere with your system
-
-## Notes
-
-- **Building ARTS**: CARTS is pre-built in the Docker image with all dependencies
-- **IP Addresses**: Container IPs are dynamically assigned and may change between runs
-- **SSH Keys**: Each container generates its own SSH keys for inter-container communication
-- **Self-contained**: All containers have CARTS pre-installed at `/opt/carts`
