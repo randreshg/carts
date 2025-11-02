@@ -14,6 +14,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include <cassert>
+#include <cstdint>
 
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsUtils.h"
@@ -160,6 +161,15 @@ LogicalResult EdtOp::verify() {
     return emitOpError("block arguments (")
            << blockArgs.size() << ") must match dependencies (" << deps.size()
            << ")";
+  }
+
+  /// Check that all dependencies come from DbAcquireOp operations
+  for (Value dep : deps) {
+    auto dbAcquireOp = dep.getDefiningOp<DbAcquireOp>();
+    if (!dbAcquireOp) {
+      return emitOpError("dependency must be a result of DbAcquireOp, got: ")
+             << dep;
+    }
   }
 
   /// Collect all values defined outside the EDT region
@@ -400,17 +410,21 @@ buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
     guidShape.push_back(ShapedType::kDynamic);
   Type guidType = MemRefType::get(guidShape, builder.getI64Type());
 
-  /// Build ptr type from address shape (if any) or dynamic sizes
-  Type pointerElementType;
+  /// If outersizes are empty, set to 1
+  if (sizes.empty())
+    sizes.push_back(builder.create<arith::ConstantIndexOp>(state.location, 1));
+
+  /// If element sizes are empty, set to 1
   if (elementSizes.empty())
-    pointerElementType = elementType;
-  else
-    pointerElementType = arts::getElementMemRefType(elementType, elementSizes);
+    elementSizes.push_back(
+        builder.create<arith::ConstantIndexOp>(state.location, 1));
 
   Type ptrType;
   if (pointerType) {
     ptrType = pointerType;
   } else {
+    Type pointerElementType =
+        arts::getElementMemRefType(elementType, elementSizes);
     SmallVector<int64_t> shape;
     shape.assign(sizes.size(), ShapedType::kDynamic);
     ptrType = MemRefType::get(shape, MemRefType::get({}, pointerElementType));
@@ -482,35 +496,35 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
                         ArtsMode mode, Value sourceGuid, Value sourcePtr,
                         SmallVector<Value> indices, SmallVector<Value> offsets,
                         SmallVector<Value> sizes) {
-  auto sourceMemRefType = llvm::cast<MemRefType>(sourcePtr.getType());
-  const int64_t sourceRank = sourceMemRefType.getRank();
-  const int64_t pinnedDims = static_cast<int64_t>(indices.size());
-  assert(pinnedDims <= sourceRank && "Number of indices exceeds source rank");
-  const int64_t remainingRank = sourceRank - pinnedDims;
+  auto sourceDb = arts::getUnderlyingDb(sourcePtr);
+  auto sourceDbAlloc =
+      dyn_cast<DbAllocOp>(arts::getUnderlyingDbAlloc(sourcePtr));
+  assert(sourceDb && "Source pointer must be a Datablock");
+  assert(sourceDbAlloc && "Source pointer must have a DbAllocOp");
 
-  /// If sizes are not provided, infer sizes for remaining dimensions from
-  /// source
+  /// Get the sizes from the source datablock
+  auto sourceSizes = getSizesFromDb(sourceDb);
+  const uint64_t sourceRank = sourceSizes.size();
+  const uint64_t pinnedDims = indices.size();
+  assert(pinnedDims <= sourceRank && "Number of indices exceeds source rank");
+
+  /// Compute the remaining rank, if it is 0, we still need a pointer to the db
+  uint64_t remainingRank = sourceRank - pinnedDims;
+  if (remainingRank == 0)
+    remainingRank = 1;
+
+  /// If sizes are not provided, add single size for each remaining dimension
   if (sizes.empty()) {
     sizes.reserve(remainingRank);
-    for (int64_t d = 0; d < remainingRank; ++d) {
-      int64_t srcDim = pinnedDims + d;
-      if (sourceMemRefType.isDynamicDim(srcDim)) {
-        sizes.push_back(builder.create<arts::DbDimOp>(state.location, sourcePtr,
-                                                      (int64_t)srcDim));
-      } else {
-        sizes.push_back(
-            builder
-                .create<arith::ConstantIndexOp>(
-                    state.location, sourceMemRefType.getDimSize(srcDim))
-                .getResult());
-      }
-    }
+    for (uint64_t d = 0; d < remainingRank; ++d)
+      sizes.push_back(
+          builder.create<arith::ConstantIndexOp>(state.location, 1));
   }
 
   /// Ensure offsets are present for remaining dimensions when omitted
-  if (offsets.empty() && remainingRank > 0) {
+  if (offsets.empty()) {
     offsets.reserve(remainingRank);
-    for (int64_t d = 0; d < remainingRank; ++d)
+    for (uint64_t d = 0; d < remainingRank; ++d)
       offsets.push_back(
           builder.create<arith::ConstantIndexOp>(state.location, 0));
   }
@@ -521,26 +535,11 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
   guidShape.assign(numGuidDims, ShapedType::kDynamic);
   Type guidType = MemRefType::get(guidShape, builder.getI64Type());
 
-  /// Result ptr type: when sizes are provided, use dynamic dimensions
-  /// since the actual sizes are determined at runtime
-  SmallVector<int64_t> subShape;
-  subShape.reserve(remainingRank);
-  if (!sizes.empty()) {
-    /// When explicit sizes are provided, result has dynamic dimensions
-    subShape.assign(remainingRank, ShapedType::kDynamic);
-  } else {
-    /// When no sizes provided, preserve static dims from source where
-    /// possible
-    for (int64_t d = 0; d < remainingRank; ++d) {
-      int64_t srcDim = pinnedDims + d;
-      subShape.push_back(sourceMemRefType.isDynamicDim(srcDim)
-                             ? ShapedType::kDynamic
-                             : sourceMemRefType.getDimSize(srcDim));
-    }
-  }
-  Type elementType = sourceMemRefType.getElementType();
-  Type ptrType = MemRefType::get(subShape, elementType);
+  /// The DbAcquireOp only offsets the pointer, so the type is the same as the
+  /// source pointer
+  Type ptrType = sourceDbAlloc.getPtr().getType().cast<MemRefType>();
 
+  /// Result types
   state.addTypes({guidType, ptrType});
 
   /// Add operands and attributes
@@ -551,8 +550,8 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
   state.addOperands(offsets);
   state.addOperands(sizes);
 
-  /// Build operand segment sizes: [sourceGuid=1, sourcePtr=1, indices,
-  /// offsets, sizes]
+  /// Build operand segment sizes:
+  /// [sourceGuid=1, sourcePtr=1, indices, offsets, sizes]
   state.addAttribute(
       "operandSegmentSizes",
       builder.getDenseI32ArrayAttr({1, 1, static_cast<int32_t>(indices.size()),
@@ -575,7 +574,7 @@ LogicalResult DbAcquireOp::verify() {
   auto remainingRank = srcRank - dbIndices;
 
   /// Check that source rank minus Db indices equals number of sizes
-  if (remainingRank != dbSizes) {
+  if (remainingRank > 0 && remainingRank != dbSizes) {
     return emitOpError("Source rank (")
            << srcRank << ") - (" << dbIndices << ") = " << remainingRank
            << " must equal Number of sizes (" << dbSizes << ")";
@@ -614,10 +613,11 @@ LogicalResult DbRefOp::verify() {
 
   /// Verify outer indices
   auto outerSizes = getSizesFromDb(underlyingDbOp);
-  if (getIndices().size() != outerSizes.size())
+  if (getIndices().size() != outerSizes.size()) {
     return emitOpError("expects ")
            << outerSizes.size() << " index operands (got "
            << getIndices().size() << ")";
+  }
 
   /// Verify output
   DbAllocOp dbAllocOp = nullptr;
@@ -649,6 +649,26 @@ void DbNumElementsOp::build(OpBuilder &builder, OperationState &state,
   build(builder, state, sizes);
 }
 
+/// Canonicalization pattern for DbNumElementsOp
+struct FoldDbNumElementsSingleSize : public OpRewritePattern<DbNumElementsOp> {
+  using OpRewritePattern<DbNumElementsOp>::OpRewritePattern;
+  LogicalResult matchAndRewrite(DbNumElementsOp op,
+                                PatternRewriter &rewriter) const override {
+    /// If we have a single size, we can rewire the value directly
+    if (op.getSizes().size() == 1) {
+      rewriter.replaceOp(op, op.getSizes()[0]);
+      return success();
+    }
+    return failure();
+  }
+};
+
+/// Add canonicalization patterns for DbNumElementsOp
+void DbNumElementsOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                                  MLIRContext *context) {
+  results.add<FoldDbNumElementsSingleSize>(context);
+}
+
 ///==========================================================================
 /// Utility functions for Arts dialect operations
 ///==========================================================================
@@ -663,6 +683,10 @@ SmallVector<Value> getSizesFromDb(Operation *dbOp) {
   if (auto acquireOp = dyn_cast<DbAcquireOp>(dbOp)) {
     return SmallVector<Value>(acquireOp.getSizes().begin(),
                               acquireOp.getSizes().end());
+  }
+  if (auto depDbAcquireOp = dyn_cast<DepDbAcquireOp>(dbOp)) {
+    return SmallVector<Value>(depDbAcquireOp.getSizes().begin(),
+                              depDbAcquireOp.getSizes().end());
   }
   return {};
 }

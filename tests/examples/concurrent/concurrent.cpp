@@ -42,7 +42,7 @@ int main() {
       printf("Creating Task 1...\n");
 #pragma omp task
       {
-        printf("Task 1: Processing its own data array\n");
+        printf("Task 1: Thread ID = %d\n", omp_get_thread_num());
 
         /// Process task1 data
         double sum = 0.0;
@@ -58,7 +58,7 @@ int main() {
       printf("Creating Task 2...\n");
 #pragma omp task
       {
-        printf("Task 2: Processing its own data array\n");
+        printf("Task 2: Thread ID = %d\n", omp_get_thread_num());
 
         /// Process task2 data
         double product = 1.0;

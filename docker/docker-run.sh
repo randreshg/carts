@@ -33,21 +33,40 @@ if [[ $# -gt 0 ]]; then
 fi
 
 carts_header "CARTS Multi-Node Containers"
-carts_info "Starting CARTS multi-node containers"
+if [[ -n "$EXAMPLE_FILE" ]]; then
+    carts_info "Starting CARTS multi-node containers and running example: $EXAMPLE_FILE"
+else
+    carts_info "Starting fresh CARTS multi-node containers (no example file provided)"
+    carts_info "This will kill any existing containers and start new ones"
+fi
 
 # Change to docker directory
 cd "$(dirname "$0")"
 
-# Check if the built image exists
-if ! docker images | grep -q "arts-node.*built"; then
-    carts_error "arts-node:built image not found!"
+# Check if the base image exists
+if ! docker images | grep -q "arts-node-base"; then
+    carts_error "arts-node-base image not found!"
     carts_warning "Please run './docker-build.sh' first to build the base image."
     exit 1
 fi
 
-# Clean up any existing containers
+# Clean up any existing containers using docker-kill.sh
 carts_step "Cleaning up existing containers"
-docker rm -f arts-node-1 arts-node-2 arts-node-3 arts-node-4 arts-node-5 arts-node-6 >/dev/null 2>&1 || true
+carts_info "Calling docker-kill.sh to kill processes..."
+
+# Call docker-kill.sh script for thorough cleanup
+if [[ -f "docker-kill.sh" ]]; then
+    # Run docker-kill.sh and capture its output
+    if ./docker-kill.sh; then
+        carts_info "docker-kill.sh completed successfully"
+    else
+        carts_info "No running containers to kill"
+    fi
+else
+    carts_error "docker-kill.sh not found!"
+    exit 1
+fi
+carts_success "Existing containers cleaned up"
 
 # Create shared volume if it doesn't exist
 carts_step "Setting up shared workspace volume"
@@ -65,12 +84,12 @@ fi
 
 # Start all containers from prebuilt image with shared volume
 carts_step "Starting 6 ARTS node containers with shared workspace"
-docker run -d --name arts-node-1 --hostname arts-node-1 --network bridge -e ARTS_NODE_ID=0 -v carts-workspace:/opt/carts arts-node:built >/dev/null 2>&1
-docker run -d --name arts-node-2 --hostname arts-node-2 --network bridge -e ARTS_NODE_ID=1 -v carts-workspace:/opt/carts arts-node:built >/dev/null 2>&1
-docker run -d --name arts-node-3 --hostname arts-node-3 --network bridge -e ARTS_NODE_ID=2 -v carts-workspace:/opt/carts arts-node:built >/dev/null 2>&1
-docker run -d --name arts-node-4 --hostname arts-node-4 --network bridge -e ARTS_NODE_ID=3 -v carts-workspace:/opt/carts arts-node:built >/dev/null 2>&1
-docker run -d --name arts-node-5 --hostname arts-node-5 --network bridge -e ARTS_NODE_ID=4 -v carts-workspace:/opt/carts arts-node:built >/dev/null 2>&1
-docker run -d --name arts-node-6 --hostname arts-node-6 --network bridge -e ARTS_NODE_ID=5 -v carts-workspace:/opt/carts arts-node:built >/dev/null 2>&1
+docker run -d --name arts-node-1 --hostname arts-node-1 --network bridge -e ARTS_NODE_ID=0 -v carts-workspace:/opt/carts arts-node-base >/dev/null 2>&1
+docker run -d --name arts-node-2 --hostname arts-node-2 --network bridge -e ARTS_NODE_ID=1 -v carts-workspace:/opt/carts arts-node-base >/dev/null 2>&1
+docker run -d --name arts-node-3 --hostname arts-node-3 --network bridge -e ARTS_NODE_ID=2 -v carts-workspace:/opt/carts arts-node-base >/dev/null 2>&1
+docker run -d --name arts-node-4 --hostname arts-node-4 --network bridge -e ARTS_NODE_ID=3 -v carts-workspace:/opt/carts arts-node-base >/dev/null 2>&1
+docker run -d --name arts-node-5 --hostname arts-node-5 --network bridge -e ARTS_NODE_ID=4 -v carts-workspace:/opt/carts arts-node-base >/dev/null 2>&1
+docker run -d --name arts-node-6 --hostname arts-node-6 --network bridge -e ARTS_NODE_ID=5 -v carts-workspace:/opt/carts arts-node-base >/dev/null 2>&1
 
 # Wait for containers to be ready
 carts_info "Waiting for containers to be ready"
@@ -102,6 +121,11 @@ fi
 carts_header "Multi-Node Setup Complete"
 carts_success "CARTS multi-node containers are ready!"
 carts_container_status
+
+if [[ -z "$EXAMPLE_FILE" ]]; then
+    carts_info "No example file provided - containers are ready for manual use"
+    carts_info "You can now SSH into any container or run examples manually"
+fi
 
 # If an example file was provided, execute it
 if [[ -n "$EXAMPLE_FILE" ]]; then

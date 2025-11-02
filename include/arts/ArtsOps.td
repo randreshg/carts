@@ -179,6 +179,7 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     attr-dict `:` `(` type($source_guid) `,` type($source_ptr) `)` `->` `(` type($guid) `,` type($ptr) `)`
   }];
   let hasVerifier = 1;
+  let skipDefaultBuilders = 1;
   let builders = [
     OpBuilder<(ins "ArtsMode":$mode,
                    "Value":$source_guid,
@@ -194,7 +195,7 @@ def DbRefOp : Arts_Op<"db_ref", [Pure]> {
   let description = [{
     References an element from a datablock handle using only the outer
     dimensions. The result type must match the element type of the source
-    memref. 
+    memref.
   }];
   let arguments = (ins
     AnyMemRef:$source,
@@ -297,6 +298,7 @@ def DbNumElementsOp : Arts_Op<"db_num_elements", [Pure]> {
   let arguments = (ins Variadic<Index>:$sizes);
   let results = (outs Index:$count);
   let assemblyFormat = "`sizes` `(` $sizes `)` attr-dict `:` `->` type($count)";
+  let hasCanonicalizer = 1;
 
   let builders = [
     OpBuilder<(ins "DbAllocOp":$allocOp)>,
@@ -591,38 +593,43 @@ def EdtParamUnpackOp : Arts_Op<"edt_param_unpack", [Pure]> {
   let assemblyFormat = "$memref `:` type($memref) attr-dict `:` `(` type($unpacked) `)`";
 }
 
-def HandleDepOp : Arts_Op<"handle_dep", [MemoryEffects<[MemWrite]>]> {
-  let summary = "Handle DB dependency.";
-  let description = [{
-    Handles DB dependencies for the EDT.
-  }];
-  let arguments = (ins I64:$edt_guid, AnyType:$db_guid, BoolAttr:$record, BoolAttr:$increment);
-  let assemblyFormat = [{
-  $edt_guid `(` 
-    $db_guid `:` type($db_guid) `,` 
-    `record` $record `,` 
-    `increment` $increment 
-  `)` attr-dict `:` type($edt_guid)
-  }];
-}
 
-def RecordDepOp : Arts_Op<"record_dep", [MemoryEffects<[MemWrite]>]> {
+def RecordDepOp : Arts_Op<"rec_dep", [MemoryEffects<[MemWrite]>]> {
   let summary = "Record in-dependencies for EDT.";
   let description = [{
     Records all in-dependencies (datablocks) for the EDT in order.
     Each datablock will be recorded as a dependency for the EDT.
+    The access_mode attribute specifies how to access the GUID values:
+    - direct: GUIDs accessed via memref.load from DbAcquireOp results
+    - from_depv: GUIDs accessed via dep_gep from EDT depv structure
+
+    The acquire_modes array stores the DbMode for each acquire operation.
+    When acquire mode differs from alloc mode, artsAddDependenceWithMode is used
+    to enable runtime optimizations (e.g., skip frontier progression for read-only EDTs).
   }];
-  let arguments = (ins I64:$edt_guid, Variadic<AnyType>:$datablocks);
+  let arguments = (ins
+    I64:$edt_guid,
+    Variadic<AnyType>:$datablocks,
+    DefaultValuedAttr<DepAccessModeAttr, "::mlir::arts::DepAccessMode::direct">:$access_mode,
+    OptionalAttr<DenseI32ArrayAttr>:$acquire_modes
+  );
   let assemblyFormat = "$edt_guid `(` $datablocks `:` type($datablocks) `)` attr-dict";
 }
 
-def IncrementDepOp : Arts_Op<"increment_dep", [MemoryEffects<[MemWrite]>]> {
+def IncrementDepOp : Arts_Op<"inc_dep", [MemoryEffects<[MemWrite]>]> {
   let summary = "Increment out-latches for EDT dependencies.";
   let description = [{
     Increments latch count for all out-dependencies (datablocks) of the EDT.
     Each datablock will have its output latch incremented.
+    The access_mode attribute specifies how to access the GUID values:
+    - direct: GUIDs accessed via memref.load from DbAcquireOp results
+    - from_depv: GUIDs accessed via dep_gep from EDT depv structure
   }];
-  let arguments = (ins I64:$edt_guid, Variadic<AnyType>:$datablocks);
+  let arguments = (ins
+    I64:$edt_guid,
+    Variadic<AnyType>:$datablocks,
+    DefaultValuedAttr<DepAccessModeAttr, "::mlir::arts::DepAccessMode::direct">:$access_mode
+  );
   let assemblyFormat = "$edt_guid `(` $datablocks `:` type($datablocks) `)` attr-dict";
 }
 
@@ -637,24 +644,44 @@ def DepGepOp : Arts_Op<"dep_gep", [Pure, AttrSizedOperandSegments]> {
     The input can be a pointer to a dependency structure or a memref of
     dependency structures. Optional indices specify which dependency entry
     to access when the input is an array of dependencies (e.g., when a
-    DbAlloc/Acquire returned multiple datablocks). 
+    DbAlloc/Acquire returned multiple datablocks).
   }];
   let arguments = (ins AnyType:$dep_struct, Index:$offset,
                        Variadic<AnyType>:$indices, Variadic<Index>:$strides);
-  let results = (outs AnyType:$ptr);
+  let results = (outs AnyType:$guid, AnyType:$ptr);
   let assemblyFormat = [{
-    $dep_struct 
+    `(` $dep_struct `)`
      `offset` `[` $offset `:` type($offset) `]`
     ( `indices` `[` $indices^ `:` type($indices) `]` )?
     ( `strides` `[` $strides^ `]` )?
-    attr-dict `:` type($dep_struct) `:` type($ptr)
+    attr-dict `:` type($dep_struct) `->` type($guid) `,` type($ptr)
   }];
-  
-  let builders = [
-    OpBuilder<(ins "Value":$dep_struct, "Value":$offset)>,
-    OpBuilder<(ins "Value":$dep_struct, "Value":$offset, "SmallVector<Value>":$indices)>,
-    OpBuilder<(ins "Value":$dep_struct, "Value":$offset, "SmallVector<Value>":$indices, "SmallVector<Value>":$strides)>
-  ];
+}
+
+def DepDbAcquireOp : Arts_Op<"dep_db_acquire", [Pure, AttrSizedOperandSegments]> {
+  let summary = "Acquires a datablock from EDT dependency structure with subregion access.";
+  let description = [{
+    Extracts GUID and pointer from an EDT dependency structure at the specified
+    offset with optional subregion access (indices, offsets, sizes).
+    Used within outlined EDT functions to access datablocks that were
+    passed as dependencies, similar to DbAcquireOp but from dependency structures.
+  }];
+  let arguments = (ins
+    AnyType:$dep_struct,
+    Index:$offset,
+    Variadic<AnyType>:$indices,
+    Variadic<Index>:$offsets,
+    Variadic<Index>:$sizes
+  );
+  let results = (outs AnyType:$guid, AnyType:$ptr);
+  let assemblyFormat = [{
+    `(` $dep_struct `)`
+    `offset` `[` $offset `:` type($offset) `]`
+    ( `indices` `[` $indices^ `:` type($indices) `]` )?
+    ( `offsets` `[` $offsets^ `]` )?
+    ( `sizes` `[` $sizes^ `]` )?
+    attr-dict `:` type($dep_struct) `->` type($guid) `,` type($ptr)
+  }];
 }
 
 
@@ -664,11 +691,16 @@ def DbGepOp : Arts_Op<"db_gep", [Pure, AttrSizedOperandSegments]> {
     Computes a raw LLVM pointer to an element from a base pointer using indices and strides.
     Always produces an LLVM pointer result regardless of the input type.
   }];
-  let arguments = (ins AnyType:$base_ptr, Variadic<Index>:$indices, Variadic<Index>:$strides);
+  let arguments = (
+    ins AnyType:$base_ptr, 
+    Variadic<Index>:$indices, 
+    Variadic<Index>:$strides
+  );
   let results = (outs AnyType:$ptr);
   let assemblyFormat = [{
     `(` $base_ptr `:` type($base_ptr) `)`
-    `indices` `[` $indices `]` `strides` `[` $strides `]`
+    `indices` `[` $indices `]` 
+    `strides` `[` $strides `]`
     attr-dict `:` type($ptr)
   }];
   let builders = [

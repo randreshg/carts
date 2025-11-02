@@ -84,16 +84,14 @@ int main(int argc, char **argv) {
 
   // Initialize matrix A with random values between 0.0 and 1.0
   for (int i = 0; i < matrix_size; ++i) {
-    for (int j = 0; j < matrix_size; ++j) {
+    for (int j = 0; j < matrix_size; ++j)
       A[i][j] = (double)rand() / RAND_MAX;
-    }
   }
 
   // Initialize kernel with random values between -1.0 and 1.0
   for (int i = 0; i < kernel_size; ++i) {
-    for (int j = 0; j < kernel_size; ++j) {
+    for (int j = 0; j < kernel_size; ++j)
       Kernel[i][j] = 2.0 * ((double)rand() / RAND_MAX) - 1.0;
-    }
   }
 
   // Initialize output matrices to zero
@@ -169,9 +167,9 @@ int main(int argc, char **argv) {
   }
 
   if (errors == 0)
-    printf("Result: CORRECT\n");
+    printf("Result: PASS\n");
   else
-    printf("Result: INCORRECT\n");
+    printf("Result: FAIL\n");
 
   // printf("Parallel time: %.6f sec\n", end_parallel - start_parallel);
   // printf("Serial time: %.6f sec\n", end_serial - start_serial);

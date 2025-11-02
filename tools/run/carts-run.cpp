@@ -212,11 +212,15 @@ void setupInitialCleanup(mlir::OpPassManager &optPM, bool optEnabled) {
 
 /// Setup ARTS inliner pass.
 void setupArtsInliner(PassManager &pm) {
+  pm.addPass(createInlinerPass());
   pm.addPass(arts::createArtsInlinerPass());
 }
 
 /// Setup OpenMP to ARTS conversion passes.
 void setupOpenMPToArts(PassManager &pm) {
+  pm.addPass(arts::createCanonicalizeMemrefsPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCSEPass());
   pm.addPass(arts::createConvertOpenMPtoArtsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createSymbolDCEPass());
@@ -232,9 +236,6 @@ void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 /// Setup db creation and optimization passes.
 void setupDb(PassManager &pm, arts::ArtsAnalysisManager *AM, bool identifyDbs,
              bool exportJson) {
-  pm.addPass(arts::createCanonicalizeMemrefsPass());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(createCSEPass());
   pm.addPass(arts::createEdtPtrRematerializationPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createCreateDbsPass(identifyDbs));
@@ -242,7 +243,6 @@ void setupDb(PassManager &pm, arts::ArtsAnalysisManager *AM, bool identifyDbs,
   pm.addPass(createCSEPass());
   pm.addPass(createSymbolDCEPass());
   pm.addPass(createMem2Reg());
-  pm.addPass(arts::createCanonicalizeDbsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createDbPass(AM, exportJson));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());

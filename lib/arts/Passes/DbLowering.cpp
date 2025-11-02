@@ -37,7 +37,11 @@ private:
   /// Processes all DB allocation ops, converting to opaque pointers.
   void convertDbAllocOps();
   /// Updates all users of the old DB alloc to use the new one.
-  void updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp);
+  void updateAllocUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp);
+  /// Processes a single DbAcquireOp and its nested acquire operations.
+  void updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid, Value newPtr);
+  /// Helper function to get LLVM pointer from a base value and indices.
+  Value getLLVMPtr(Value base, ValueRange opIndices, Location loc);
 
 private:
   SetVector<Operation *> opsToRemove;
@@ -103,7 +107,7 @@ void DbLoweringPass::convertDbAllocOps() {
         oldOp.getDbMode(), oldOp.getElementType(), ptrType, sizes,
         elementSizes);
     ARTS_DEBUG("  - New DbAllocOp: " << newOp);
-    updateUsers(oldOp, newOp);
+    updateAllocUsers(oldOp, newOp);
     opsToRemove.insert(oldOp);
   }
 }
@@ -111,7 +115,8 @@ void DbLoweringPass::convertDbAllocOps() {
 //===----------------------------------------------------------------------===//
 /// Update all users of the old allocation to use the new lowered allocation
 //===----------------------------------------------------------------------===//
-void DbLoweringPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
+void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
+                                      DbAllocOp newAllocOp) {
   /// Replace all uses of the old GUID with the new GUID.
   Value oldGuid = oldAllocOp.getGuid();
   Value newGuid = newAllocOp.getGuid();
@@ -122,18 +127,6 @@ void DbLoweringPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
   Value oldPtr = oldAllocOp.getPtr();
   Value newPtr = newAllocOp.getPtr();
   assert(oldPtr && newPtr && "expected pointer values");
-
-  auto getLLVMPtr = [&](Value base, ValueRange opIndices,
-                        Location loc) -> Value {
-    if (opIndices.empty())
-      return AC->castToLLVMPtr(base, loc);
-
-    SmallVector<Value> sizes = getSizesFromDb(base);
-    SmallVector<Value> strides = AC->computeStridesFromSizes(sizes, loc);
-    SmallVector<Value> indices(opIndices.begin(), opIndices.end());
-    return AC->create<DbGepOp>(loc, AC->getLLVMPointerType(base), base, indices,
-                               strides);
-  };
 
   /// Process each use of the old pointer
   for (auto &use : llvm::make_early_inc_range(oldPtr.getUses())) {
@@ -169,74 +162,7 @@ void DbLoweringPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
     }
 
     if (auto acquireOp = dyn_cast<DbAcquireOp>(userOp)) {
-      SmallVector<Value> indices(acquireOp.getIndices().begin(),
-                                 acquireOp.getIndices().end());
-      SmallVector<Value> offsets(acquireOp.getOffsets().begin(),
-                                 acquireOp.getOffsets().end());
-      SmallVector<Value> sizes(acquireOp.getSizes().begin(),
-                               acquireOp.getSizes().end());
-      auto newAcquireOp =
-          AC->create<DbAcquireOp>(acquireOp.getLoc(), acquireOp.getMode(),
-                                  newGuid, newPtr, indices, offsets, sizes);
-      ARTS_DEBUG("  - New DbAcquireOp: " << newAcquireOp);
-
-      /// Find the EDT that uses this acquire op and the corresponding block argument
-      auto [edtUser, blockArg] = arts::getEdtBlockArgumentForAcquire(acquireOp);
-      assert(edtUser && blockArg && "Expected EDT user with block argument");
-
-      /// Update the block argument type to match the new lowered type
-      blockArg.setType(newPtr.getType());
-
-      /// Handle the uses of the block argument within the EDT
-      for (auto &blockUse : llvm::make_early_inc_range(blockArg.getUses())) {
-        Operation *blockUserOp = blockUse.getOwner();
-        AC->setInsertionPoint(blockUserOp);
-
-        if (auto dbRefOp = dyn_cast<DbRefOp>(blockUserOp)) {
-          Value llvmPtr =
-              getLLVMPtr(blockArg, dbRefOp.getIndices(), dbRefOp.getLoc());
-          auto loadOp = AC->create<LLVM::LoadOp>(
-              dbRefOp.getLoc(), dbRefOp.getResult().getType(), llvmPtr);
-          dbRefOp.getResult().replaceAllUsesWith(loadOp.getResult());
-          opsToRemove.insert(dbRefOp);
-          continue;
-        }
-
-        if (auto loadOp = dyn_cast<memref::LoadOp>(blockUserOp)) {
-          Value llvmPtr =
-              getLLVMPtr(blockArg, loadOp.getIndices(), loadOp.getLoc());
-          auto newLoad = AC->create<LLVM::LoadOp>(
-              loadOp.getLoc(), loadOp.getResult().getType(), llvmPtr);
-          loadOp.getResult().replaceAllUsesWith(newLoad.getResult());
-          opsToRemove.insert(loadOp);
-          continue;
-        }
-
-        if (auto storeOp = dyn_cast<memref::StoreOp>(blockUserOp)) {
-          Value llvmPtr =
-              getLLVMPtr(blockArg, storeOp.getIndices(), storeOp.getLoc());
-          AC->create<LLVM::StoreOp>(storeOp.getLoc(), storeOp.getValueToStore(),
-                                    llvmPtr);
-          opsToRemove.insert(storeOp);
-          continue;
-        }
-
-        if (auto m2p = dyn_cast<polygeist::Memref2PointerOp>(blockUserOp)) {
-          Value llvmPtr = AC->castToLLVMPtr(blockArg, m2p.getLoc());
-          m2p.getResult().replaceAllUsesWith(llvmPtr);
-          opsToRemove.insert(m2p);
-          continue;
-        }
-
-        if (auto releaseOp = dyn_cast<DbReleaseOp>(blockUserOp)) {
-          opsToRemove.insert(releaseOp);
-          continue;
-        }
-      }
-
-      /// Replace the old acquire op with the new one
-      acquireOp->replaceAllUsesWith(newAcquireOp);
-      opsToRemove.insert(acquireOp);
+      updateAcquireUsers(acquireOp, newGuid, newPtr);
       continue;
     }
 
@@ -255,6 +181,104 @@ void DbLoweringPass::updateUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp) {
     }
   }
 }
+
+//===----------------------------------------------------------------------===//
+/// Process a single DbAcquireOp and its nested acquire operations
+//===----------------------------------------------------------------------===//
+void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
+                                        Value newPtr) {
+  SmallVector<Value> indices(acquireOp.getIndices().begin(),
+                             acquireOp.getIndices().end());
+  SmallVector<Value> offsets(acquireOp.getOffsets().begin(),
+                             acquireOp.getOffsets().end());
+  SmallVector<Value> sizes(acquireOp.getSizes().begin(),
+                           acquireOp.getSizes().end());
+  auto newAcquireOp =
+      AC->create<DbAcquireOp>(acquireOp.getLoc(), acquireOp.getMode(), newGuid,
+                              newPtr, indices, offsets, sizes);
+  ARTS_DEBUG("  - New DbAcquireOp: " << newAcquireOp);
+
+  /// Find the EDT that uses this acquire op and the corresponding block
+  /// argument
+  auto [edtUser, blockArg] = arts::getEdtBlockArgumentForAcquire(acquireOp);
+  assert(edtUser && blockArg && "Expected EDT user with block argument");
+
+  /// Update the block argument type to match the new lowered type
+  blockArg.setType(newPtr.getType());
+
+  /// Handle the uses of the block argument within the EDT
+  for (auto &blockUse : llvm::make_early_inc_range(blockArg.getUses())) {
+    Operation *blockUserOp = blockUse.getOwner();
+    AC->setInsertionPoint(blockUserOp);
+
+    if (auto dbRefOp = dyn_cast<DbRefOp>(blockUserOp)) {
+      Value llvmPtr =
+          getLLVMPtr(blockArg, dbRefOp.getIndices(), dbRefOp.getLoc());
+      auto loadOp = AC->create<LLVM::LoadOp>(
+          dbRefOp.getLoc(), dbRefOp.getResult().getType(), llvmPtr);
+      dbRefOp.getResult().replaceAllUsesWith(loadOp.getResult());
+      opsToRemove.insert(dbRefOp);
+      continue;
+    }
+
+    if (auto loadOp = dyn_cast<memref::LoadOp>(blockUserOp)) {
+      Value llvmPtr =
+          getLLVMPtr(blockArg, loadOp.getIndices(), loadOp.getLoc());
+      auto newLoad = AC->create<LLVM::LoadOp>(
+          loadOp.getLoc(), loadOp.getResult().getType(), llvmPtr);
+      loadOp.getResult().replaceAllUsesWith(newLoad.getResult());
+      opsToRemove.insert(loadOp);
+      continue;
+    }
+
+    if (auto storeOp = dyn_cast<memref::StoreOp>(blockUserOp)) {
+      Value llvmPtr =
+          getLLVMPtr(blockArg, storeOp.getIndices(), storeOp.getLoc());
+      AC->create<LLVM::StoreOp>(storeOp.getLoc(), storeOp.getValueToStore(),
+                                llvmPtr);
+      opsToRemove.insert(storeOp);
+      continue;
+    }
+
+    if (auto m2p = dyn_cast<polygeist::Memref2PointerOp>(blockUserOp)) {
+      Value llvmPtr = AC->castToLLVMPtr(blockArg, m2p.getLoc());
+      m2p.getResult().replaceAllUsesWith(llvmPtr);
+      opsToRemove.insert(m2p);
+      continue;
+    }
+
+    if (auto nestedAcquireOp = dyn_cast<DbAcquireOp>(blockUserOp)) {
+      /// Recursively process nested acquire operations
+      updateAcquireUsers(nestedAcquireOp, newGuid, blockArg);
+      continue;
+    }
+
+    if (auto releaseOp = dyn_cast<DbReleaseOp>(blockUserOp)) {
+      opsToRemove.insert(releaseOp);
+      continue;
+    }
+  }
+
+  /// Replace the old acquire op with the new one
+  acquireOp->replaceAllUsesWith(newAcquireOp);
+  opsToRemove.insert(acquireOp);
+}
+
+//===----------------------------------------------------------------------===//
+/// Helper function to get LLVM pointer from a base value and indices
+//===----------------------------------------------------------------------===//
+Value DbLoweringPass::getLLVMPtr(Value base, ValueRange opIndices,
+                                 Location loc) {
+  if (opIndices.empty())
+    return AC->castToLLVMPtr(base, loc);
+
+  SmallVector<Value> sizes = getSizesFromDb(base);
+  SmallVector<Value> strides = AC->computeStridesFromSizes(sizes, loc);
+  SmallVector<Value> indices(opIndices.begin(), opIndices.end());
+  return AC->create<DbGepOp>(loc, AC->getLLVMPointerType(base), base, indices,
+                             strides);
+}
+
 //===----------------------------------------------------------------------===//
 // Pass creation
 //===----------------------------------------------------------------------===//

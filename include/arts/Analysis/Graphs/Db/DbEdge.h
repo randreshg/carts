@@ -34,8 +34,19 @@ private:
 
 /// Dependency edge between DB acquires
 enum class DbDepType { RAW, WAR, WAW, RAR };
+
 class DbDepEdge : public EdgeBase {
 public:
+  /// Access pattern information for this dependency
+  struct AccessInfo {
+    llvm::SmallVector<int64_t> sourceOffsets;
+    llvm::SmallVector<int64_t> sourceSizes;
+    llvm::SmallVector<int64_t> sinkOffsets;
+    llvm::SmallVector<int64_t> sinkSizes;
+    /// Proven disjoint by alias analysis
+    bool isDisjoint = false;
+  };
+
   DbDepEdge(NodeBase *from, NodeBase *to, DbDepType depType);
 
   NodeBase *getFrom() const override { return from; }
@@ -43,6 +54,19 @@ public:
   EdgeKind getKind() const override { return EdgeKind::Dep; }
   llvm::StringRef getType() const override { return typeStr; }
   void print(llvm::raw_ostream &os) const override;
+
+  /// Get the dependency type
+  DbDepType getDepType() const { return depType; }
+
+  /// Check dependency classification
+  bool isAntiDep() const { return depType == DbDepType::WAR; }
+  bool isFlowDep() const { return depType == DbDepType::RAW; }
+  bool isOutputDep() const { return depType == DbDepType::WAW; }
+  bool isAffinityDep() const { return depType == DbDepType::RAR; }
+
+  /// Access to pattern information
+  AccessInfo &getAccessInfo() { return accessInfo; }
+  const AccessInfo &getAccessInfo() const { return accessInfo; }
 
   static bool classof(const EdgeBase *E) {
     return E->getKind() == EdgeKind::Dep;
@@ -54,6 +78,7 @@ private:
   NodeBase *to;
   DbDepType depType;
   llvm::StringRef typeStr;
+  AccessInfo accessInfo;
 };
 
 } // namespace arts

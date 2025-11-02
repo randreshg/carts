@@ -81,24 +81,6 @@ def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
   ];
 }
 
-def CanonicalizeDbs : Pass<"canonicalize-dbs", "mlir::ModuleOp"> {
-  let summary = "Canonicalize ARTS DataBlock handles and uses to typed memrefs";
-  let description = [{
-    This pass rewrites datablock allocations and accesses into a canonical form
-    that makes size payloads explicit while keeping typed memrefs so that DB
-    analyses and optimizations can reason about the layout.
-  }];
-  let dependentDialects = [
-    "memref::MemRefDialect",
-    "LLVM::LLVMDialect",
-    "func::FuncDialect",
-    "arts::ArtsDialect",
-    "arith::ArithDialect",
-    "polygeist::PolygeistDialect"
-  ];
-  let constructor = "mlir::arts::createCanonicalizeDbsPass()";
-}
-
 def DbLowering : Pass<"db-lowering", "mlir::ModuleOp"> {
   let summary = "Lower ARTS DataBlock handles to opaque pointer form";
   let description = [{

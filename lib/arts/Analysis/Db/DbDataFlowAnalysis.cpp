@@ -64,7 +64,7 @@ DbDataFlowAnalysis::processRegion(Region &region,
       if (auto edtOp = dyn_cast<EdtOp>(&op))
         result = processEdt(edtOp, newEnv);
       else if (auto epochOp = dyn_cast<EpochOp>(&op))
-        result = processRegion(epochOp.getBody(), newEnv);
+        result = processEpoch(epochOp, newEnv);
       else if (auto ifOp = dyn_cast<scf::IfOp>(&op))
         result = processIf(ifOp, newEnv);
       else if (auto forOp = dyn_cast<scf::ForOp>(&op))
@@ -176,7 +176,7 @@ DbDataFlowAnalysis::processEdt(EdtOp edtOp,
 
     /// Update environment: this writer now defines the allocation regardless of
     /// whether a new edge was emitted.
-    auto &defs = newEnv[parentAlloc];
+    auto &defs = newEnv.writers[parentAlloc];
     bool needsUpdate = defs.size() != 1 || !defs.contains(writer);
     if (needsUpdate) {
       ARTS_DEBUG(INDENT() << "    - Updating environment: "
@@ -186,6 +186,58 @@ DbDataFlowAnalysis::processEdt(EdtOp edtOp,
       defs.insert(writer);
       changed = true;
     }
+  }
+
+  /// Create WAR edges (anti-dependencies)
+  /// For each writer, find all live readers that must complete first
+  ARTS_DEBUG(INDENT() << "  Processing " << outputAcquires.size()
+                      << " output acquires (WAR)");
+
+  for (auto *writer : outputAcquires) {
+    DbAllocNode *parentAlloc = writer->getParent();
+
+    /// Find all live readers in environment for this allocation
+    auto &liveReaders = newEnv.readers[parentAlloc];
+
+    if (!liveReaders.empty()) {
+      ARTS_DEBUG(INDENT() << "    - Found " << liveReaders.size()
+                          << " live readers for " << parentAlloc->getHierId());
+
+      for (auto *reader : liveReaders) {
+        /// Check if they may access overlapping regions
+        if (!mayDepend(reader, writer))
+          continue;
+
+        ARTS_DEBUG(INDENT()
+                   << "    - Creating WAR edge: " << reader->getHierId()
+                   << " -> " << writer->getHierId());
+
+        auto *edge = new DbDepEdge(reader, writer, DbDepType::WAR);
+
+        if (graph->addEdge(reader, writer, edge)) {
+          ARTS_DEBUG(INDENT() << "      WAR edge created successfully");
+          changed = true;
+        } else {
+          ARTS_DEBUG(INDENT() << "      WAR edge already exists");
+          delete edge;
+        }
+      }
+
+      /// Clear live readers for this allocation after write
+      /// (writers invalidate all previous readers)
+      liveReaders.clear();
+      ARTS_DEBUG(INDENT() << "    - Cleared live readers for "
+                          << parentAlloc->getHierId());
+    }
+  }
+
+  /// Track readers for future WAR detection
+  ARTS_DEBUG(INDENT() << "  Updating live readers");
+  for (auto *reader : inputAcquires) {
+    DbAllocNode *parentAlloc = reader->getParent();
+    newEnv.readers[parentAlloc].insert(reader);
+    ARTS_DEBUG(INDENT() << "    - Added reader " << reader->getHierId()
+                        << " to " << parentAlloc->getHierId());
   }
 
   return {newEnv, changed};
@@ -266,14 +318,37 @@ DbDataFlowAnalysis::processIf(scf::IfOp ifOp,
   return {std::move(merged), changed};
 }
 
+std::pair<DbDataFlowAnalysis::Environment, bool>
+DbDataFlowAnalysis::processEpoch(EpochOp epochOp,
+                                 DbDataFlowAnalysis::Environment &env) {
+  ARTS_DEBUG(INDENT() << "Processing Epoch (synchronization barrier)");
+
+  /// Process the epoch body with current environment
+  auto bodyResult = processRegion(epochOp.getBody(), env);
+  bool changed = bodyResult.second;
+
+  /// Epochs are synchronization points!
+  /// Clear the environment after the epoch - no dependencies cross this
+  /// boundary This models the frontier progression at epoch boundaries
+  DbDataFlowAnalysis::Environment emptyEnv;
+
+  ARTS_DEBUG(INDENT() << "  Epoch acts as synchronization barrier - "
+                      << "clearing environment");
+  ARTS_DEBUG(INDENT() << "  Before: " << env.writers.size() << " writers, "
+                      << env.readers.size() << " readers");
+  ARTS_DEBUG(INDENT() << "  After: environment cleared");
+
+  return {std::move(emptyEnv), changed};
+}
+
 SmallVector<DbAcquireNode *>
 DbDataFlowAnalysis::findDefinitions(DbAcquireNode *acquire,
                                     DbDataFlowAnalysis::Environment &env) {
   SmallVector<DbAcquireNode *> defs;
   DbAllocNode *parentAlloc = acquire->getParent();
 
-  auto it = env.find(parentAlloc);
-  if (it != env.end()) {
+  auto it = env.writers.find(parentAlloc);
+  if (it != env.writers.end()) {
     for (auto *def : it->second) {
       /// Check alias via roots, then refine with overlap classification
       auto aliasRes = aliasAA->classifyAlias(*def, *acquire);
@@ -303,14 +378,27 @@ bool DbDataFlowAnalysis::unionInto(
     DbDataFlowAnalysis::Environment &target,
     const DbDataFlowAnalysis::Environment &source) {
   bool changed = false;
-  for (const auto &pair : source) {
-    auto &defs = target[pair.first];
+
+  /// Union writers
+  for (const auto &pair : source.writers) {
+    auto &defs = target.writers[pair.first];
     for (auto *acquire : pair.second)
       if (!defs.contains(acquire)) {
         defs.insert(acquire);
         changed = true;
       }
   }
+
+  /// Union readers
+  for (const auto &pair : source.readers) {
+    auto &defs = target.readers[pair.first];
+    for (auto *acquire : pair.second)
+      if (!defs.contains(acquire)) {
+        defs.insert(acquire);
+        changed = true;
+      }
+  }
+
   return changed;
 }
 
