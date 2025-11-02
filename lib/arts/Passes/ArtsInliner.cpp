@@ -112,7 +112,7 @@ struct ArtsInlinerPass : public arts::ArtsInlinerBase<ArtsInlinerPass> {
     ARTS_DEBUG_HEADER(ArtsInlinerPass);
 
     /// Build the inliner interface
-    InlinerInterface inliner(&getContext());
+    ArtsInlinerInterface inliner(&getContext());
 
     /// Use a worklist approach to handle newly created calls during inlining
     bool changed;

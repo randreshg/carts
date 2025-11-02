@@ -36,8 +36,16 @@ class DbAliasAnalysis;
 /// Tracks reaching definitions through control flow to create dependency edges.
 class DbDataFlowAnalysis {
 public:
-  /// Environment maps each allocation node to its latest acquire definitions
-  using Environment = DenseMap<DbAllocNode *, llvm::SetVector<DbAcquireNode *>>;
+  /// Environment tracks both writers and readers for each allocation
+  /// Used to create RAW, WAW, and WAR dependencies
+  struct Environment {
+    /// Maps each allocation node to its latest writer acquire definitions
+    DenseMap<DbAllocNode *, llvm::SetVector<DbAcquireNode *>> writers;
+
+    /// Maps each allocation node to its live reader acquire definitions
+    /// Readers are cleared when a new writer arrives (creates WAR edges first)
+    DenseMap<DbAllocNode *, llvm::SetVector<DbAcquireNode *>> readers;
+  };
 
   DbDataFlowAnalysis();
   ~DbDataFlowAnalysis() = default;
@@ -51,6 +59,7 @@ private:
   std::pair<Environment, bool> processEdt(EdtOp edtOp, Environment &env);
   std::pair<Environment, bool> processFor(scf::ForOp forOp, Environment &env);
   std::pair<Environment, bool> processIf(scf::IfOp ifOp, Environment &env);
+  std::pair<Environment, bool> processEpoch(EpochOp epochOp, Environment &env);
 
   /// Find reaching definitions for a given acquire
   SmallVector<DbAcquireNode *> findDefinitions(DbAcquireNode *acquire,

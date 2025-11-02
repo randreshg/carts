@@ -89,9 +89,9 @@ carts_step "Proceeding with Docker update"
 # Change to docker directory
 cd "$(dirname "$0")"
 
-# Check if the built image exists
-if ! docker images | grep -q "arts-node.*built"; then
-    carts_error "arts-node:built image not found!"
+# Ensure base image exists
+if ! docker images | grep -q "arts-node-base"; then
+    carts_error "arts-node-base image not found!"
     carts_warning "Please run './docker-build.sh' first to build the base image."
     exit 1
 fi
@@ -101,15 +101,14 @@ DOCKER_CPUS=$(docker run --rm ubuntu:22.04 nproc 2>/dev/null || echo "2")
 carts_step "Starting update container with shared workspace"
 docker rm -f arts-node-update >/dev/null 2>&1 || true
 
-# Check if shared volume exists
+# Ensure shared volume exists
 if ! docker volume inspect carts-workspace >/dev/null 2>&1; then
-    carts_error "Shared volume 'carts-workspace' not found!"
-    carts_warning "Please run './docker-run.sh' first to create the shared workspace."
-    exit 1
+    carts_warning "Shared volume 'carts-workspace' not found! Creating it now..."
+    docker volume create carts-workspace >/dev/null
 fi
 
 docker run -d --name arts-node-update --hostname arts-node-update --network bridge \
-    --cpus="$DOCKER_CPUS" -v carts-workspace:/opt/carts arts-node:built >/dev/null 2>&1
+    --cpus="$DOCKER_CPUS" -v carts-workspace:/opt/carts arts-node-base >/dev/null 2>&1
 
 # Wait for container to be ready
 carts_info "Waiting for update container to be ready"
@@ -294,7 +293,7 @@ if [[ "$BUILD_LLVM" == "false" && "$BUILD_POLY" == "false" && "$BUILD_ARTS" == "
     docker stop arts-node-update >/dev/null
     docker rm arts-node-update >/dev/null
     carts_header "Update Complete"
-    carts_success "No changes needed - arts-node:built image is already up to date!"
+    carts_success "No changes needed - workspace is already up to date!"
     exit 0
 fi
 
@@ -310,17 +309,10 @@ docker exec arts-node-update bash -c "\
     [[ \"$BUILD_LLVM\" == \"true\" || \"$BUILD_POLY\" == \"true\" || \"$BUILD_ARTS\" == \"true\" || \"$BUILD_CARTS\" == \"true\" ]] && { carts build; } \
 "
 
-# Commit updated container as new image
-carts_step "Committing updated container to arts-node:built image"
-docker commit arts-node-update arts-node:built >/dev/null
-
 # Clean up update container
 carts_step "Cleaning up update container"
 docker stop arts-node-update >/dev/null
 docker rm arts-node-update >/dev/null
-
-# Run docker-run.sh
-./docker-run.sh
 
 carts_header "Update Complete"
 carts_success "CARTS Docker update completed successfully!"

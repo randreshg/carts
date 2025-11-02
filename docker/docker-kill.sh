@@ -43,8 +43,6 @@ if [[ -z "$RUNNING_CONTAINERS" ]]; then
     exit 1
 fi
 
-carts_step "Found running containers: $RUNNING_CONTAINERS"
-
 # Kill processes in each container
 for container in $RUNNING_CONTAINERS; do
     # Get container IP for display
@@ -62,8 +60,9 @@ carts_success "All processes killed in ARTS containers!"
 carts_info "Now stopping all containers..."
 
 # Stop all ARTS containers
-carts_info "Stopping containers: $RUNNING_CONTAINERS"
-docker stop $RUNNING_CONTAINERS
+carts_info "Stopping containers"
+docker stop $RUNNING_CONTAINERS >/dev/null 2>&1 || true
+docker rm -f $RUNNING_CONTAINERS >/dev/null 2>&1 || true
 
 carts_success "All ARTS containers stopped!"
 

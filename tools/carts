@@ -302,6 +302,7 @@ show_usage() {
     carts_cmd "--datablock"                  "Stop after datablock creation and optimization"
     carts_cmd "--epochs"                     "Stop after epoch creation"
     carts_cmd "--arts-to-llvm"               "Stop after ARTS to LLVM conversion"
+    carts_cmd "--all-stages"                 "Dump intermediate MLIR for all pipeline stages"
     carts_cmd "--emit-llvm"                  "Emit LLVM IR output (can be used with any stage)"
     carts_cmd "-g"                           "Enable MLIR/LLVM debug info emission during run"
     
@@ -333,6 +334,7 @@ show_usage() {
     carts_cmd "carts cgeist simple.cpp -std=c++17 -fopenmp -O0 -S"              "Convert C++ to MLIR"
     carts_cmd "carts clang simple.cpp -fopenmp -o simple"                       "Compile C++ with OpenMP directly"
     carts_cmd "carts run simple.mlir --complete --emit-llvm"                    "Full pipeline to LLVM"
+    carts_cmd "carts run simple.mlir --all-stages"                              "Dump all intermediate stages"
     carts_cmd "carts compile simple.ll -o simple"                               "Compile LLVM to executable"
     carts_cmd "carts execute simple.cpp -o simple"                              "Complete pipeline: C++ to executable"
     carts_cmd "carts execute simple.cpp --run-args --export-json -o simple"     "Pipeline with JSON export"
@@ -439,11 +441,104 @@ run_clang() {
 
 # Function to run carts-run (the C++ executable)
 run_run() {
-    if [[ -n "$CARTS_VERBOSE" ]]; then
-        carts_debug "Running carts-run: ${CARTS_INSTALL_DIR}/bin/carts-run $*"
+    # Parse for --all-stages option
+    local all_stages=false
+    for arg in "$@"; do
+        if [[ "$arg" == "--all-stages" ]]; then
+            all_stages=true
+            break
+        fi
+    done
+    
+    if [[ "$all_stages" != true ]]; then
+        # Normal operation - just pass through to carts-run
+        if [[ -n "$CARTS_VERBOSE" ]]; then
+            carts_debug "Running carts-run: ${CARTS_INSTALL_DIR}/bin/carts-run $*"
+        fi
+        "${CARTS_INSTALL_DIR}/bin/carts-run" "$@"
+        return
     fi
-
-    "${CARTS_INSTALL_DIR}/bin/carts-run" "$@"
+    
+    # Handle --all-stages: Parse arguments
+    local source_file="" config_file="" output_dir=""
+    local remaining_args=() parsing_positional=true
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            "--all-stages") shift ;;
+            "--arts-config")
+                [[ $# -gt 1 ]] && config_file="$2" && shift
+                shift
+                ;;
+            "--outdir")
+                [[ $# -gt 1 ]] && output_dir="$2" && shift
+                shift
+                ;;
+            "--help"|"-h")
+                carts_info "All-stages options:"
+                carts_info "  <mlir_file>           Input MLIR file"
+                carts_info "  --all-stages          Dump intermediate MLIR for all stages"
+                carts_info "  --arts-config <path>  ARTS configuration file (optional)"
+                carts_info "  --outdir <dir>        Output directory (default: same as input)"
+                exit 0
+                ;;
+            *)
+                if [[ "$parsing_positional" == true ]]; then
+                    source_file="$1"
+                    parsing_positional=false
+                else
+                    remaining_args+=("$1")
+                fi
+                shift
+                ;;
+        esac
+    done
+    
+    # Validate input file
+    [[ -z "$source_file" ]] && { carts_error "Missing required input MLIR file for --all-stages"; exit 1; }
+    [[ ! -f "$source_file" ]] && { carts_error "Input file '$source_file' not found"; exit 1; }
+    
+    # Auto-detect config file if not provided
+    if [[ -z "$config_file" ]]; then
+        local source_dir="$(dirname "$source_file")"
+        [[ -f "$source_dir/arts.cfg" ]] && config_file="$source_dir/arts.cfg"
+    fi
+    
+    # Set output directory
+    output_dir="${output_dir:-$(dirname "$source_file")}"
+    mkdir -p "$output_dir"
+    output_dir="$(cd "$output_dir" && pwd)"
+    
+    local stem="$(basename "${source_file%.*}")"
+    local STAGES=("simplify" "arts-inliner" "openmp-to-arts" "edt-transforms" "db" "edt" "epochs" "pre-lowering" "arts-to-llvm")
+    local total_steps=$((2 + ${#STAGES[@]})) step=1
+    
+    carts_header "CARTS Pipeline Dump"
+    carts_step "[$step/$total_steps] Processing input: $source_file"
+    
+    # Run each stage and final outputs
+    local base_cmd=("$source_file" --O3)
+    [[ -n "$config_file" ]] && base_cmd+=(--arts-config "$config_file")
+    
+    for stage in "${STAGES[@]}"; do
+        step=$((step + 1))
+        local out="$output_dir/${stem}_${stage}.mlir"
+        carts_step "[$step/$total_steps] Dumping stage '${stage}' -> $out"
+        "${CARTS_INSTALL_DIR}/bin/carts-run" "${base_cmd[@]}" --${stage} -o "$out" "${remaining_args[@]}"
+    done
+    
+    local final_mlir="$output_dir/${stem}_complete.mlir"
+    local final_ll="$output_dir/${stem}.ll"
+    
+    step=$((step + 1))
+    carts_step "[$step/$total_steps] Exporting full pipeline MLIR -> $final_mlir"
+    "${CARTS_INSTALL_DIR}/bin/carts-run" "${base_cmd[@]}" -o "$final_mlir" "${remaining_args[@]}"
+    
+    step=$((step + 1))
+    carts_step "[$step/$total_steps] Exporting LLVM IR -> $final_ll"
+    "${CARTS_INSTALL_DIR}/bin/carts-run" "${base_cmd[@]}" --emit-llvm -o "$final_ll" "${remaining_args[@]}"
+    
+    carts_success "Pipeline dumps written to $output_dir"
 }
 
 # Function to run mlir-translate
@@ -716,11 +811,6 @@ run_docker() {
         case "$1" in
             "--run"|"-r")
                 shift
-                if [[ $# -eq 0 ]]; then
-                    carts_error "--run requires a file argument"
-                    carts_info "Usage: carts docker --run <file> [options]"
-                    exit 1
-                fi
                 run_docker_run "$@"
                 return
                 ;;
@@ -746,7 +836,7 @@ run_docker() {
                 ;;
             "--help"|"-h")
                 carts_info "Docker operations:"
-                carts_info "  --run <file> [build_args] [-- runtime_args]    Run example in Docker containers"
+                carts_info "  --run [file] [build_args] [-- runtime_args]    Run example in Docker containers"
                 carts_info "  --build [options]        Build Docker image and workspace (smart build)"
                 carts_info "  --update [options]        Update Docker containers (requires clean repos)"
                 carts_info "  --kill, -k               Kill all processes in running ARTS containers"
@@ -756,6 +846,7 @@ run_docker() {
                 carts_info "Examples:"
                 carts_info "  carts docker --build                            # Smart build: update existing or build new"
                 carts_info "  carts docker --build --force                    # Force rebuild everything from scratch"
+                carts_info "  carts docker --run                              # Start fresh containers (kill existing, start new)"
                 carts_info "  carts docker --run example.c                    # Run example.c in Docker containers"
                 carts_info "  carts docker --run matrixmul -- 100 10          # Run with runtime args: matrix size 100, block size 10"
                 carts_info "  carts docker --run fib --run-args --debug-only=db -- 15    # Build with debug, run with fib input 15"
@@ -934,6 +1025,11 @@ run_docker_run() {
     if [[ ! -d "$docker_dir" ]]; then
         carts_error "Docker directory not found at $docker_dir"
         exit 1
+    fi
+
+    # Handle no arguments case
+    if [[ $# -eq 0 ]]; then
+        carts_info "No example file provided - starting fresh containers"
     fi
 
     # Change to docker directory and run docker-run.sh with all arguments

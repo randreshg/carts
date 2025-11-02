@@ -45,6 +45,10 @@ struct EdtPass : public arts::EdtBase<EdtPass> {
                                          arts::EdtType newType, EdtOp sourceOp,
                                          ArrayRef<Value> additionalDeps = {});
 
+  /// Remove barriers immediately before and after a single EDT
+  void removeBarriersAroundSingleEdt(EdtOp parallelOp, EdtOp singleOp);
+
+  bool processSingleEdts();
   bool processParallelEdts();
   bool processSyncTaskEdts();
   bool removeBarriers();
@@ -70,6 +74,7 @@ void EdtPass::runOnOperation() {
     // removeBarriers();
   } else {
     ARTS_INFO("Running EDT pass without analysis");
+    processSingleEdts();
     processParallelEdts();
     processSyncTaskEdts();
   }
@@ -93,6 +98,25 @@ bool EdtPass::removeBarriers() {
     changed |= removeRedundantBarriersWithGraphs(func, edtGraph);
   });
   return changed;
+}
+
+bool EdtPass::processSingleEdts() {
+  /// Find all single EDTs and remove barriers around them since single EDTs
+  /// have implicit barrier semantics
+  SmallVector<EdtOp, 8> singleOps;
+  module.walk([&](EdtOp edt) {
+    if (edt.getType() == arts::EdtType::single)
+      singleOps.push_back(edt);
+  });
+
+  for (EdtOp singleEdt : singleOps) {
+    /// Find parent parallel EDT if it exists
+    EdtOp parallelOp = singleEdt->getParentOfType<EdtOp>();
+    if (parallelOp && parallelOp.getType() == arts::EdtType::parallel)
+      removeBarriersAroundSingleEdt(parallelOp, singleEdt);
+  }
+
+  return !singleOps.empty();
 }
 
 bool EdtPass::processParallelEdts() {
@@ -128,15 +152,17 @@ bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
         } else
           return false;
 
-      } else if (isa<arts::YieldOp>(&inst) || isa<arts::BarrierOp>(&inst))
+      } else if (isa<arts::YieldOp>(&inst) || isa<arts::BarrierOp>(&inst)) {
         continue;
-      else {
+      } else {
+        // Any other operation (including arts.for) means we keep parallel
+        // structure
         return false;
       }
     }
   }
 
-  /// Account for at least edt, yield, and possibly barrier
+  /// Only convert to sync if it's JUST a single EDT with barriers/yield
   if (!singleOp || numOps < 3)
     return false;
 
@@ -156,6 +182,26 @@ bool EdtPass::convertParallelIntoSingle(EdtOp &op) {
 
   ARTS_INFO("Converted parallel EDT into single EDT");
   return true;
+}
+
+/// Remove barriers immediately before and after a single EDT within a parallel
+/// region. Since arts.edt<single> has implicit barrier semantics, explicit
+/// barriers around it are redundant and cause issues with the CreateEpochs
+/// pass.
+void EdtPass::removeBarriersAroundSingleEdt(EdtOp parallelOp, EdtOp singleOp) {
+  Block *parentBlock = singleOp->getBlock();
+  if (!parentBlock)
+    return;
+
+  /// Find and remove barrier immediately before the single EDT
+  Operation *prevOp = singleOp->getPrevNode();
+  if (prevOp && isa<arts::BarrierOp>(prevOp))
+    opsToRemove.insert(prevOp);
+
+  /// Find and remove barrier immediately after the single EDT
+  Operation *nextOp = singleOp->getNextNode();
+  if (nextOp && isa<arts::BarrierOp>(nextOp))
+    opsToRemove.insert(nextOp);
 }
 
 /// Utility function to create a new EDT operation with merged dependencies

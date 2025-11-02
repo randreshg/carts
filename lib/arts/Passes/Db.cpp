@@ -102,10 +102,14 @@ void DbPass::runOnOperation() {
   invalidateAndRebuildGraph();
 
   /// Optimizations
-  changed |= deadDbElimination();
+  /// NOTE: Most optimizations are disabled to avoid conflicts with fine-grained
+  /// allocation Only adjustDbModes is enabled to set correct access modes based
+  /// on memory operations
+  // changed |= deadDbElimination();  // DISABLED
   changed |= adjustDbModes();
-  changed |= pinAndSplitAcquires();
-  changed |= promotePinnedDimsToElementDims();
+  // changed |= pinAndSplitAcquires();  // DISABLED - conflicts with
+  // fine-grained indexing changed |= promotePinnedDimsToElementDims();  //
+  // DISABLED - conflicts with fine-grained indexing
 
   if (changed) {
     /// If the module has changed, adjust the db modes again

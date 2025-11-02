@@ -31,7 +31,6 @@ std::unique_ptr<Pass> createConvertArtsToLLVMPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug);
 std::unique_ptr<Pass> createEdtInvariantCodeMotionPass();
 std::unique_ptr<Pass> createEdtPtrRematerializationPass();
-std::unique_ptr<Pass> createCanonicalizeDbsPass();
 std::unique_ptr<Pass> createDbLoweringPass();
 std::unique_ptr<Pass> createEpochLoweringPass();
 std::unique_ptr<Pass> createParallelEdtLoweringPass();

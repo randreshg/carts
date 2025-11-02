@@ -13,8 +13,8 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 
-// #include "arts/Utils/ArtsDebug.h"
-// ARTS_DEBUG_SETUP(edt_analysis)
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(edt_analysis)
 
 using namespace mlir;
 using namespace arts;
@@ -112,6 +112,12 @@ EdtGraph &EdtAnalysis::getOrCreateEdtGraph(func::FuncOp func) {
   DbGraph &db = AM.getDbAnalysis().getOrCreateGraph(func);
   auto eg = std::make_unique<EdtGraph>(func, &db);
   eg->build();
+
+  /// Print EDT graph for debugging
+  llvm::errs() << "\n";
+  eg->print(llvm::errs());
+  llvm::errs().flush();
+
   auto *ptr = eg.get();
   const_cast<EdtAnalysis *>(this)->edtGraphs[func] = std::move(eg);
   return *ptr;

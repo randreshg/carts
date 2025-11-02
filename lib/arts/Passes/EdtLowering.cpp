@@ -27,9 +27,9 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
-#include "mlir/IR/Diagnostics.h"
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
@@ -113,7 +113,6 @@ private:
   DenseMap<Value, unsigned> valueToPackIndex;
 };
 
-
 //===----------------------------------------------------------------------===//
 // EDT Lowering Pass Implementation
 //===----------------------------------------------------------------------===//
@@ -142,6 +141,10 @@ private:
   void transformDepUses(ArrayRef<Value> originalDeps, Value depv,
                         ArrayRef<Value> allParams, EdtEnvManager &envManager,
                         ArrayRef<Value> depIdentifiers);
+
+  /// Clone EDT body operations with nested region remapping
+  void cloneAndRemapEdtBody(Block &sourceBlock, OpBuilder &builder,
+                            IRMapping &valueMapping);
 
   /// Dependency satisfaction
   LogicalResult insertDepManagement(Location loc, Value edtGuid,
@@ -245,7 +248,6 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   if (!routeVal)
     routeVal = AC->createIntConstant(0, AC->Int32, loc);
 
-  /// Create the outline operation at the same location as the EDT
   auto outlineOp = AC->create<EdtCreateOp>(loc, paramPack, depCount, routeVal);
 
   outlineOp->setAttr("outlined_func",
@@ -254,9 +256,8 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   /// Insert dependency management after the outline op
   Value edtGuid = outlineOp.getGuid();
   AC->setInsertionPointAfter(outlineOp);
-  SmallVector<Value> depsVec;
-  for (Value d : edtOp.getDependencies())
-    depsVec.push_back(d);
+  SmallVector<Value> depsVec(envManager.getDependencies().begin(),
+                             envManager.getDependencies().end());
   if (failed(insertDepManagement(loc, edtGuid, depsVec)))
     return edtOp.emitError("Failed to insert dependency management");
 
@@ -265,12 +266,12 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
     SmallVector<Value> replacementValues = {outlineOp.getResult()};
     edtOp->replaceAllUsesWith(replacementValues);
   }
+
   /// Remove original EDT
   edtOp.erase();
 
   return success();
 }
-
 
 //===----------------------------------------------------------------------===//
 /// Create outlined function for EDT body
@@ -386,12 +387,6 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
   Value depv = args[3];
 
   const auto &parameters = envManager.getParameters();
-  SmallVector<Value> deps;
-  for (Value d : edtOp.getDependencies())
-    deps.push_back(d);
-  ARTS_INFO("analyzeDependencies returned " << deps.size() << " dependencies");
-  for (size_t i = 0; i < deps.size(); ++i)
-    ARTS_DEBUG("  dep[" << i << "]: " << deps[i]);
   SmallVector<Value> unpackedParams, allParams;
 
   if (!packTypes.empty()) {
@@ -401,20 +396,17 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
     unpackedParams.append(allParams.begin(), allParams.begin() + numUserParams);
   }
 
-  /// Store dependency information for direct use in strict operand order
-  SmallVector<Value> originalDeps;
-  for (Value d : edtOp.getDependencies())
-    originalDeps.push_back(d);
+  /// Create per-dependency placeholders for later dep_gep rewrite
   Region &edtRegion = edtOp.getRegion();
   Block &edtBlock = edtRegion.front();
+  ArrayRef<Value> originalDeps = envManager.getDependencies();
 
-  /// Create compact per-dependency placeholders for later dep_gep rewrite.
   SmallVector<Value> depPlaceholders(originalDeps.size());
   for (auto it : llvm::enumerate(originalDeps))
     depPlaceholders[it.index()] =
         AC->create<UndefOp>(loc, edtBlock.getArguments()[it.index()].getType());
 
-  /// Clone constants into function
+  /// Build value mapping for cloning EDT body into outlined function
   IRMapping valueMapping;
 
   /// Map EDT args to placeholders so cloned ops don't reference outer values.
@@ -422,46 +414,41 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
        llvm::zip(edtBlock.getArguments(), depPlaceholders))
     valueMapping.map(edtArg, placeholder);
 
-  /// Also map the original dependency values to their corresponding
-  /// placeholders to catch any direct uses that bypassed the block arguments.
+  /// Also map original dependency values to placeholders to catch direct uses
   for (auto [originalDep, placeholder] :
        llvm::zip(originalDeps, depPlaceholders))
     valueMapping.map(originalDep, placeholder);
 
-  for (Value constant : envManager.getConstants())
-    if (Operation *defOp = constant.getDefiningOp())
-      valueMapping.map(constant, builder.clone(*defOp)->getResult(0));
+  /// Clone constants and constant-like operations into the outlined function
+  auto cloneConstantLike = [&](Value val) {
+    if (Operation *defOp = val.getDefiningOp())
+      if (defOp->hasTrait<OpTrait::ConstantLike>() ||
+          defOp->getName().getStringRef() == "llvm.mlir.undef")
+        valueMapping.map(val, builder.clone(*defOp)->getResult(0));
+  };
 
-  /// Map parameters directly to their unpacked counterparts; clone constants
-  /// and undef.
+  for (Value constant : envManager.getConstants())
+    cloneConstantLike(constant);
+
+  for (Value freeVar : envManager.getCapturedValues())
+    cloneConstantLike(freeVar);
+
+  /// Map parameters to their unpacked counterparts (skip undef - already
+  /// cloned)
   size_t unpackedIndex = 0;
   for (Value param : parameters) {
-    /// Handle llvm.mlir.undef by recreating it instead of unpacking
-    if (auto defOp = param.getDefiningOp()) {
+    if (auto defOp = param.getDefiningOp())
       if (defOp->getName().getStringRef() == "llvm.mlir.undef") {
-        valueMapping.map(param, builder.clone(*defOp)->getResult(0));
+        cloneConstantLike(param);
         continue;
       }
-    }
-    /// Map to unpacked parameter
     if (unpackedIndex < unpackedParams.size())
       valueMapping.map(param, unpackedParams[unpackedIndex++]);
   }
 
-  for (Value freeVar : envManager.getCapturedValues())
-    if (Operation *defOp = freeVar.getDefiningOp())
-      if (defOp->hasTrait<OpTrait::ConstantLike>())
-        valueMapping.map(freeVar, builder.clone(*defOp)->getResult(0));
-
-  /// Clone region operations
+  /// Clone EDT body operations into outlined function
   builder.setInsertionPointToEnd(entryBlock);
-  for (Operation &op :
-       llvm::make_early_inc_range(edtBlock.without_terminator())) {
-    Operation *clonedOp = builder.clone(op, valueMapping);
-    for (auto [orig, clone] :
-         llvm::zip(op.getResults(), clonedOp->getResults()))
-      valueMapping.map(orig, clone);
-  }
+  cloneAndRemapEdtBody(edtBlock, builder, valueMapping);
 
   /// Add return terminator
   AC->create<func::ReturnOp>(loc);
@@ -475,12 +462,12 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
 /// Insert dependency management operations
 ///
 /// Adds runtime dependency tracking operations (record_in_dep,
-/// increment_out_latch) for EDT execution. Separates dependencies by access
-/// mode and creates appropriate runtime calls to establish data dependencies
-/// between EDTs. Example:
+/// increment_out_latch) for EDT execution. Determines access mode based on
+/// dependency source and extracts GUIDs appropriately. Example:
 ///   EDT with input deps %d1, %d2 and output deps %d3
-///   becomes: arts.record_in_dep %edt_guid, [%d1_guid, %d2_guid, %d3_guid]
-///            arts.increment_out_latch %edt_guid, [%d3_guid]
+///   becomes: arts.rec_dep %edt_guid, [%d1_guid, %d2_guid, %d3_guid]
+///   {access_mode = direct}
+///            arts.inc_dep %edt_guid, [%d3_guid] {access_mode = direct}
 //===----------------------------------------------------------------------===//
 LogicalResult
 EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
@@ -488,35 +475,110 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
   if (deps.empty())
     return success();
 
-  /// Separate deps by mode and extract GUIDs
-  SmallVector<Value> inDepGuids, outDepGuids;
-
+  /// Determine access mode based on dependency sources
+  /// If any dependency comes from DepDbAcquireOp, use from_depv mode
+  DepAccessMode accessMode = DepAccessMode::direct;
   for (Value dep : deps) {
-    auto dbAcquireOp = dep.getDefiningOp<DbAcquireOp>();
-    assert(dbAcquireOp && "Dependencies must be DbAcquireOp operations");
-
-    /// Get the GUID from the DbAcquireOp
-    Value depGuid = dbAcquireOp.getGuid();
-
-    /// Always add to in-dependencies
-    inDepGuids.push_back(depGuid);
-
-    /// TODO: Fix this
-    /// Only add to out-dependencies if mode is out or inout
-    // ArtsMode mode = dbAcquireOp.getMode();
-    // if (mode == ArtsMode::out || mode == ArtsMode::inout)
-    outDepGuids.push_back(depGuid);
+    if (dep.getDefiningOp<DepDbAcquireOp>()) {
+      accessMode = DepAccessMode::from_depv;
+      break;
+    }
   }
 
-  /// Record all input deps at once using GUIDs
-  if (!inDepGuids.empty())
-    AC->create<RecordDepOp>(loc, edtGuid, inDepGuids);
+  /// Extract GUIDs and acquire modes from dependencies
+  SmallVector<Value> depGuids;
+  SmallVector<int32_t> acquireModes;
+  for (Value dep : deps) {
+    /// Handle both DbAcquireOp and DepDbAcquireOp as dependency sources
+    auto dbAcquireOp = dep.getDefiningOp<DbAcquireOp>();
+    if (!dbAcquireOp && !dep.getDefiningOp<DepDbAcquireOp>()) {
+      return mlir::emitError(
+                 loc,
+                 "Dependency must be from DbAcquireOp or DepDbAcquireOp, got: ")
+             << dep;
+    }
 
-  /// Increment output latches for all deps at once using GUIDs
-  if (!outDepGuids.empty())
-    AC->create<IncrementDepOp>(loc, edtGuid, outDepGuids);
+    /// Get the GUID from the acquire operation
+    Value depGuid = dbAcquireOp ? dbAcquireOp.getGuid()
+                                : dep.getDefiningOp<DepDbAcquireOp>().getGuid();
+    depGuids.push_back(depGuid);
+
+    /// Extract acquire mode: Convert ArtsMode to DbMode enum
+    ArtsMode artsMode = ArtsMode::inout;
+    if (dbAcquireOp)
+      artsMode = dbAcquireOp.getMode();
+
+    /// Map ArtsMode to DbMode (which matches runtime artsType_t values)
+    DbMode dbMode;
+    if (artsMode == ArtsMode::in) {
+      // ARTS_DB_READ = 8
+      dbMode = DbMode::read;
+    } else if (artsMode == ArtsMode::out || artsMode == ArtsMode::inout) {
+      // ARTS_DB_WRITE = 9
+      dbMode = DbMode::write;
+    } else {
+      // Default to WRITE for safety
+      dbMode = DbMode::write;
+    }
+    acquireModes.push_back(static_cast<int32_t>(dbMode));
+  }
+
+  /// Create dependency management ops with appropriate access mode
+  auto modeAttr =
+      DepAccessModeAttr::get(AC->getBuilder().getContext(), accessMode);
+
+  DenseI32ArrayAttr acquireAttr;
+  if (!acquireModes.empty())
+    acquireAttr =
+        DenseI32ArrayAttr::get(AC->getBuilder().getContext(), acquireModes);
+
+  AC->create<RecordDepOp>(loc, edtGuid, depGuids, modeAttr, acquireAttr);
+  AC->create<IncrementDepOp>(loc, edtGuid, depGuids, modeAttr);
 
   return success();
+}
+
+//===----------------------------------------------------------------------===//
+/// Clone EDT body operations with nested region remapping
+///
+/// Clones all operations from the EDT body into the outlined function while
+/// recursively remapping operands in nested regions to use values from the
+/// provided IRMapping. This ensures operations with nested regions (like
+/// scf.for, arts.epoch) have their operands correctly updated.
+//===----------------------------------------------------------------------===//
+void EdtLoweringPass::cloneAndRemapEdtBody(Block &sourceBlock,
+                                           OpBuilder &builder,
+                                           IRMapping &valueMapping) {
+  /// Lambda to recursively remap operands in nested regions
+  std::function<void(Operation *, IRMapping &)> remapNestedRegions =
+      [&remapNestedRegions](Operation *op, IRMapping &mapping) {
+        for (Region &region : op->getRegions()) {
+          for (Block &block : region) {
+            for (Operation &nestedOp : block) {
+              /// Remap each operand of the nested operation
+              for (OpOperand &operand : nestedOp.getOpOperands()) {
+                if (Value newValue = mapping.lookupOrNull(operand.get()))
+                  operand.set(newValue);
+              }
+              /// Recursively process nested regions
+              if (nestedOp.getNumRegions() > 0)
+                remapNestedRegions(&nestedOp, mapping);
+            }
+          }
+        }
+      };
+
+  /// Clone operations and update mappings
+  for (Operation &op :
+       llvm::make_early_inc_range(sourceBlock.without_terminator())) {
+    Operation *clonedOp = builder.clone(op, valueMapping);
+    /// Update mapping with cloned results so later ops reference cloned values
+    for (auto [orig, clone] :
+         llvm::zip(op.getResults(), clonedOp->getResults()))
+      valueMapping.map(orig, clone);
+    /// Recursively remap operands in nested regions
+    remapNestedRegions(clonedOp, valueMapping);
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -534,18 +596,20 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
   /// Get the parameter map
   const auto &paramMap = envManager.getValueToPackIndex();
 
-  /// Resolve the sizes of the dependency within the outlined Edt
-  auto resolveSizes = [&](Value dep, Location loc) {
-    SmallVector<Value> sizes = getSizesFromDb(dep);
+  /// Collect placeholders to erase at the end
+  SmallVector<Operation *> placeholdersToErase;
+
+  /// Resolve parameters within the outlined Edt
+  auto resolveParam = [&](ArrayRef<Value> params, Location loc) {
     SmallVector<Value> resolved;
-    for (Value sz : sizes) {
-      auto it = paramMap.find(sz);
+    for (Value param : params) {
+      auto it = paramMap.find(param);
       if (it != paramMap.end() && it->second < allParams.size())
         resolved.push_back(allParams[it->second]);
-      else if (auto c = sz.getDefiningOp<arith::ConstantIndexOp>())
+      else if (auto c = param.getDefiningOp<arith::ConstantIndexOp>())
         resolved.push_back(AC->createIndexConstant(c.value(), loc));
       else
-        resolved.push_back(sz);
+        resolved.push_back(param);
     }
     if (resolved.empty())
       resolved.push_back(AC->createIndexConstant(1, loc));
@@ -558,7 +622,8 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
   auto computeBaseOffset = [&](size_t depIndex, Location loc) {
     Value base = AC->createIndexConstant(0, loc);
     for (size_t i = 0; i < depIndex; ++i) {
-      SmallVector<Value> prevResolved = resolveSizes(originalDeps[i], loc);
+      SmallVector<Value> prevSizes = getSizesFromDb(originalDeps[i]);
+      SmallVector<Value> prevResolved = resolveParam(prevSizes, loc);
       Value prevElems = AC->computeTotalElements(prevResolved, loc);
       base = AC->create<arith::AddIOp>(loc, base, prevElems);
     }
@@ -568,75 +633,132 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
   /// For each dependency placeholder, rewrite its direct uses.
   for (size_t depIndex = 0; depIndex < depIdentifiers.size(); ++depIndex) {
     Value placeholder = depIdentifiers[depIndex];
-    AC->setInsertionPoint(placeholder.getDefiningOp());
-
     Location loc = placeholder.getLoc();
 
     /// Get the base offset, sizes, strides, and offsets of the dependency
     ARTS_DEBUG("Processing Dep[" << depIndex
                                  << "]: " << originalDeps[depIndex]);
+    AC->setInsertionPoint(placeholder.getDefiningOp());
     Value baseOffset = computeBaseOffset(depIndex, loc);
-    SmallVector<Value> depSizes = resolveSizes(originalDeps[depIndex], loc);
+    SmallVector<Value> depSizes =
+        resolveParam(getSizesFromDb(originalDeps[depIndex]), loc);
     SmallVector<Value> depStrides = AC->computeStridesFromSizes(depSizes, loc);
 
+    /// Replace remaining uses of the dependency placeholder with the dependency
     bool isSingleElement =
         dbHasSingleSize(originalDeps[depIndex].getDefiningOp<DbAcquireOp>());
+
+    /// Get the users of the dependency placeholder
+    SmallVector<Operation *, 16> users, dbAcquireUsers;
+    for (auto &use : placeholder.getUses()) {
+      if (auto dbAcquire = dyn_cast<arts::DbAcquireOp>(use.getOwner()))
+        dbAcquireUsers.push_back(use.getOwner());
+      else
+        users.push_back(use.getOwner());
+    }
+
+    /// Rewrite the dbAcquire users
+    ARTS_DEBUG(" - Rewriting " << dbAcquireUsers.size() << " dbAcquire users");
+    for (Operation *op : dbAcquireUsers) {
+      /// Replace with DepDbAcquireOp to access datablock from depv
+      auto dbAcquire = dyn_cast<arts::DbAcquireOp>(op);
+      assert(dbAcquire && "dbAcquire must be a DbAcquireOp");
+      AC->setInsertionPoint(op);
+      SmallVector<Value> indices(dbAcquire.getIndices().begin(),
+                                 dbAcquire.getIndices().end());
+      SmallVector<Value> offsets(dbAcquire.getOffsets().begin(),
+                                 dbAcquire.getOffsets().end());
+      SmallVector<Value> sizes(dbAcquire.getSizes().begin(),
+                               dbAcquire.getSizes().end());
+      indices = resolveParam(indices, dbAcquire.getLoc());
+      offsets = resolveParam(offsets, dbAcquire.getLoc());
+      sizes = resolveParam(sizes, dbAcquire.getLoc());
+      auto depDbAcquire = AC->create<arts::DepDbAcquireOp>(
+          dbAcquire.getLoc(), dbAcquire.getResult(0).getType(),
+          dbAcquire.getResult(1).getType(), depv, baseOffset, indices, offsets,
+          sizes);
+      /// Replace the uses of the dbAcquire with the depDbAcquire
+      dbAcquire.getResult(0).replaceAllUsesWith(depDbAcquire.getResult(0));
+      dbAcquire.getResult(1).replaceAllUsesWith(depDbAcquire.getResult(1));
+      dbAcquire.erase();
+    }
+
+    /// If single element, rewrite the placeholder with a DepGepOp
     if (isSingleElement) {
-      Value depPtr = AC->create<DepGepOp>(loc, AC->llvmPtr, depv, baseOffset,
-                                          ValueRange(), ValueRange());
-      placeholder.replaceAllUsesWith(depPtr);
+      ARTS_DEBUG(" - Rewriting single element placeholder");
+      Operation *placeholderOp = placeholder.getDefiningOp();
+      AC->setInsertionPoint(placeholderOp);
+      auto depGep =
+          AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv, baseOffset,
+                               ValueRange(), ValueRange());
+      placeholder.replaceAllUsesWith(depGep.getPtr());
+      /// Collect placeholder for later erasure
+      placeholdersToErase.push_back(placeholderOp);
       continue;
     }
 
-    /// Get the users of the dependency placeholder
-    SmallVector<Operation *, 16> users;
-    for (auto &use : placeholder.getUses())
-      users.push_back(use.getOwner());
-
+    /// If not, for each user of the dependency placeholder, rewrite the
+    /// operation
     ARTS_DEBUG(" - Rewriting " << users.size() << " users");
-
-    /// For each user of the dependency placeholder, rewrite the operation
     for (Operation *op : users) {
       if (auto mp = dyn_cast<polygeist::Memref2PointerOp>(op)) {
-        if (mp.getSource() != placeholder)
-          continue;
-        Value depPtr = AC->create<DepGepOp>(loc, AC->llvmPtr, depv, baseOffset,
-                                            ValueRange(), ValueRange());
-        op->getResult(0).replaceAllUsesWith(depPtr);
+        AC->setInsertionPoint(op);
+        SmallVector<Value> emptyArgs;
+        auto depGep = AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
+                                           baseOffset, emptyArgs, emptyArgs);
+        op->getResult(0).replaceAllUsesWith(depGep.getPtr());
         op->erase();
       } else if (auto dbGep = dyn_cast<arts::DbGepOp>(op)) {
-        if (dbGep.getBasePtr() != placeholder)
-          continue;
         AC->setInsertionPoint(op);
         SmallVector<Value> dbGepIndices(dbGep.getIndices().begin(),
                                         dbGep.getIndices().end());
-        Value depPtr = AC->create<DepGepOp>(loc, AC->llvmPtr, depv, baseOffset,
-                                            dbGepIndices, depStrides);
-        op->getResult(0).replaceAllUsesWith(depPtr);
+        auto depGep =
+            AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
+                                 baseOffset, dbGepIndices, depStrides);
+        op->getResult(0).replaceAllUsesWith(depGep.getPtr());
         op->erase();
       } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
-        if (store.getMemRef() != placeholder)
-          continue;
         AC->setInsertionPoint(op);
         SmallVector<Value> storeIndices(store.getIndices().begin(),
                                         store.getIndices().end());
-        Value depPtr = AC->create<DepGepOp>(loc, AC->llvmPtr, depv, baseOffset,
-                                            storeIndices, depStrides);
-        AC->create<LLVM::StoreOp>(loc, store.getValue(), depPtr);
+        auto depGep =
+            AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
+                                 baseOffset, storeIndices, depStrides);
+        AC->create<LLVM::StoreOp>(loc, store.getValue(), depGep.getPtr());
         op->erase();
       } else if (auto load = dyn_cast<memref::LoadOp>(op)) {
-        if (load.getMemRef() != placeholder)
-          continue;
         AC->setInsertionPoint(op);
         SmallVector<Value> loadIndices(load.getIndices().begin(),
                                        load.getIndices().end());
-        Value depPtr = AC->create<DepGepOp>(loc, AC->llvmPtr, depv, baseOffset,
-                                            loadIndices, depStrides);
-        Value loaded = AC->create<LLVM::LoadOp>(loc, load.getType(), depPtr);
+        auto depGep = AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
+                                           baseOffset, loadIndices, depStrides);
+        Value loaded =
+            AC->create<LLVM::LoadOp>(loc, load.getType(), depGep.getPtr());
         op->getResult(0).replaceAllUsesWith(loaded);
+        op->erase();
+      } else if (auto release = dyn_cast<DbReleaseOp>(op)) {
+        /// DbReleaseOp using placeholder can be safely erased
+        /// Dependency management is now handled through depv
         op->erase();
       }
     }
+
+    /// Collect placeholder for later erasure
+    if (auto defOp = placeholder.getDefiningOp())
+      placeholdersToErase.push_back(defOp);
+  }
+
+  /// Erase all placeholders at the end
+  for (Operation *op : placeholdersToErase) {
+    /// Replace any remaining placeholder uses with undef before erasing
+    if (op->getNumResults() > 0 && !op->getResult(0).use_empty()) {
+      OpBuilder::InsertionGuard IG(AC->getBuilder());
+      AC->setInsertionPoint(op);
+      auto newUndef =
+          AC->create<UndefOp>(op->getLoc(), op->getResult(0).getType());
+      op->getResult(0).replaceAllUsesWith(newUndef);
+    }
+    op->erase();
   }
 }
 

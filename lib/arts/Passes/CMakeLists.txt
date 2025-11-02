@@ -16,7 +16,6 @@ add_mlir_dialect_library(MLIRArtsTransforms
   EdtPtrRematerialization.cpp
   EdtInvariantCodeMotion.cpp
   EdtPtrRematerialization.cpp
-  CanonicalizeDbs.cpp
   DbLowering.cpp
   ParallelEdtLowering.cpp
   EdtLowering.cpp

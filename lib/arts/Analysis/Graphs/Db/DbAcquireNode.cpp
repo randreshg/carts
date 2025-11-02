@@ -149,8 +149,12 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
 
   /// Compute accessed offset ranges for this acquire
   /// This analyzes the memory access patterns within the EDT
-  if (useInEdt)
+  if (useInEdt) {
+    /// Compute accessed offset ranges for this acquire
     computeAccessedOffsetRanges();
+    /// Analyze access patterns directly from EDT body
+    analyzeAccessPatterns();
+  }
 }
 
 DbAcquireNode *DbAcquireNode::getOrCreateAcquireNode(DbAcquireOp op) {
@@ -537,6 +541,161 @@ void DbAcquireNode::collectAccesses(Value db) {
       if (auto loadOp = dyn_cast<LLVM::LoadOp>(user)) {
         loads.push_back(user);
         continue;
+      }
+    }
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// Analyze Access Patterns
+/// Analyzes access patterns directly from EDT body by examining load/store ops
+//===----------------------------------------------------------------------===//
+void DbAcquireNode::analyzeAccessPatterns() {
+  ARTS_DEBUG("Analyzing access patterns for " << getHierId());
+
+  if (!useInEdt) {
+    ARTS_DEBUG("  No EDT context, skipping pattern analysis");
+    return;
+  }
+
+  /// Collect all indices used in loads and stores
+  DenseMap<unsigned, SmallVector<int64_t>> indicesPerDim;
+
+  /// Walk all memory operations
+  for (Operation *op : loads) {
+    if (auto loadOp = dyn_cast<memref::LoadOp>(op))
+      analyzeMemRefIndices(loadOp.getIndices(), indicesPerDim);
+  }
+
+  for (Operation *op : stores) {
+    if (auto storeOp = dyn_cast<memref::StoreOp>(op))
+      analyzeMemRefIndices(storeOp.getIndices(), indicesPerDim);
+  }
+
+  if (indicesPerDim.empty()) {
+    ARTS_DEBUG("  No analyzable access patterns found");
+    return;
+  }
+
+  /// Store indexed dimensions
+  for (auto &kv : indicesPerDim)
+    info.indexedDimensions.push_back(kv.first);
+  ARTS_DEBUG("  Found " << info.indexedDimensions.size()
+                        << " indexed dimensions");
+
+  buildAccessPatternsFromIndices(indicesPerDim);
+  detectStencilPattern();
+  computeStridesFromPatterns();
+}
+
+void DbAcquireNode::analyzeMemRefIndices(
+    ValueRange indices,
+    DenseMap<unsigned, SmallVector<int64_t>> &indicesPerDim) {
+  for (auto [dim, index] : llvm::enumerate(indices)) {
+    /// Try to extract constant index
+    int64_t constValue = INT64_MIN;
+    if (auto constOp = index.getDefiningOp<arith::ConstantIndexOp>())
+      constValue = constOp.value();
+
+    indicesPerDim[dim].push_back(constValue);
+  }
+}
+
+void DbAcquireNode::buildAccessPatternsFromIndices(
+    const DenseMap<unsigned, SmallVector<int64_t>> &indicesPerDim) {
+  /// Build pattern vectors
+  /// For now, store as separate patterns per access
+  if (indicesPerDim.empty())
+    return;
+
+  /// Find max number of accesses across all dimensions
+  size_t maxAccesses = 0;
+  for (auto &kv : indicesPerDim)
+    maxAccesses = std::max(maxAccesses, kv.second.size());
+
+  /// Build patterns
+  for (size_t i = 0; i < maxAccesses; ++i) {
+    SmallVector<int64_t> pattern;
+    for (unsigned dim : info.indexedDimensions) {
+      auto it = indicesPerDim.find(dim);
+      if (it != indicesPerDim.end() && i < it->second.size())
+        pattern.push_back(it->second[i]);
+      else
+        pattern.push_back(INT64_MIN);
+    }
+    info.accessPatterns.push_back(pattern);
+  }
+
+  ARTS_DEBUG("  Built " << info.accessPatterns.size() << " access patterns");
+}
+
+void DbAcquireNode::detectStencilPattern() {
+  if (info.accessPatterns.size() < 2)
+    return;
+
+  /// Check if all patterns differ by constant offsets
+  /// For simplicity, check first dimension only
+  if (info.indexedDimensions.empty())
+    return;
+
+  SmallVector<int64_t> offsets;
+  bool allConstant = true;
+
+  for (auto &pattern : info.accessPatterns) {
+    if (pattern.empty() || pattern[0] == INT64_MIN) {
+      allConstant = false;
+      break;
+    }
+    offsets.push_back(pattern[0]);
+  }
+
+  if (!allConstant || offsets.empty())
+    return;
+
+  /// Check if offsets form a regular pattern (e.g., i-1, i, i+1)
+  /// For stencil, we expect consecutive or symmetric offsets
+  int64_t minOffset = *std::min_element(offsets.begin(), offsets.end());
+  int64_t maxOffset = *std::max_element(offsets.begin(), offsets.end());
+
+  /// If offsets span a small range and are relatively uniform, it's a stencil
+  if (maxOffset - minOffset <= 10 && offsets.size() >= 2) {
+    info.isStencil = true;
+    info.stencilRadius = (maxOffset - minOffset) / 2;
+    ARTS_DEBUG("  Detected stencil pattern: radius=" << info.stencilRadius);
+  }
+}
+
+void DbAcquireNode::computeStridesFromPatterns() {
+  if (info.accessPatterns.size() < 2)
+    return;
+
+  ARTS_DEBUG("  Computing strides");
+
+  unsigned numDims = info.accessPatterns[0].size();
+  info.strides.resize(numDims, INT64_MIN);
+
+  for (unsigned dim = 0; dim < numDims; ++dim) {
+    SmallVector<int64_t> diffs;
+    for (size_t i = 1; i < info.accessPatterns.size(); ++i) {
+      int64_t prev = info.accessPatterns[i - 1][dim];
+      int64_t curr = info.accessPatterns[i][dim];
+
+      if (prev == INT64_MIN || curr == INT64_MIN) {
+        info.strides[dim] = INT64_MIN;
+        break;
+      }
+
+      diffs.push_back(curr - prev);
+    }
+
+    if (!diffs.empty() && info.strides[dim] != INT64_MIN) {
+      bool uniform = std::all_of(diffs.begin(), diffs.end(),
+                                 [&](int64_t d) { return d == diffs[0]; });
+      if (uniform) {
+        info.strides[dim] = diffs[0];
+        ARTS_DEBUG("    stride[" << dim << "] = " << info.strides[dim]);
+      } else {
+        info.strides[dim] = INT64_MIN;
       }
     }
   }

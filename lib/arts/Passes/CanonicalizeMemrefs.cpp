@@ -28,12 +28,14 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/OpenMP/OpenMPDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
+#include "polygeist/Ops.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include <optional>
@@ -44,6 +46,7 @@ ARTS_DEBUG_SETUP(canonicalize_memrefs);
 
 using namespace mlir;
 using namespace mlir::arts;
+using namespace mlir::omp;
 
 //===----------------------------------------------------------------------===//
 // Pass Implementation
@@ -114,6 +117,7 @@ private:
 
   std::optional<NestedAllocPattern> detectNestedAllocPattern(Value alloc);
   void transformNestedAccesses(Value outerAlloc, Value ndPtr);
+  void linearizePolygeistViews();
 
   /// Extract the logical (pre-malloc) size for a dynamically computed value
   Value getOriginalSizeValue(Value size, OpBuilder &builder, Location loc);
@@ -128,6 +132,11 @@ void CanonicalizeMemrefsPass::runOnOperation() {
 
   ARTS_INFO_HEADER(CanonicalizeMemrefsPass);
   ARTS_DEBUG_REGION(module.dump(););
+
+  /// Verification: Count OpenMP task operations before pass execution
+  unsigned numOmpTasksBefore = 0;
+  module.walk([&](omp::TaskOp task) { ++numOmpTasksBefore; });
+  ARTS_DEBUG(" - OpenMP task count before pass: " << numOmpTasksBefore);
 
   OpBuilder builder(module.getContext());
 
@@ -176,30 +185,135 @@ void CanonicalizeMemrefsPass::runOnOperation() {
 
       SmallVector<int64_t> shape(pattern.getDepth(), ShapedType::kDynamic);
       MemRefType ndType = MemRefType::get(shape, pattern.getFinalElementType());
+
+      /// Use heap allocation (alloc) instead of stack (alloca) to enable
+      /// proper DB management and give flexibility for memory allocation
       Value ndAlloc =
-          builder.create<memref::AllocaOp>(loc, ndType, originalSizes);
+          builder.create<memref::AllocOp>(loc, ndType, originalSizes);
 
       /// Rewrite cascaded memory accesses to direct N-D indexing
       transformNestedAccesses(pattern.outerAlloc, ndAlloc);
 
-      /// Schedule the initialization loop and legacy allocations for removal.
+      /// Replace loads from outer array with subviews ONLY if they're used by
+      /// omp.task depend clauses. All other loads should be part of cascaded
+      /// chains and will be handled by transformNestedAccesses.
+      Value innerSize =
+          originalSizes.back(); // Last size is the column dimension
+      SmallVector<scf::ForOp> initLoops = pattern.getAllInitLoops();
+      SmallVector<memref::LoadOp> loadsForDepends;
+
+      for (Operation *user : pattern.outerAlloc.getUsers()) {
+        if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+          /// Skip loads inside initialization loops
+          bool insideInitLoop = false;
+          for (auto loop : initLoops) {
+            if (loop->isAncestor(loadOp)) {
+              insideInitLoop = true;
+              break;
+            }
+          }
+          if (insideInitLoop)
+            continue;
+
+          /// Check if this load is used by an omp.task depend clause
+          bool usedByTaskDepend = false;
+          for (Operation *loadUser : loadOp->getUsers()) {
+            if (isa<omp::TaskOp>(loadUser)) {
+              usedByTaskDepend = true;
+              break;
+            }
+          }
+
+          if (usedByTaskDepend && loadOp.getIndices().size() == 1)
+            loadsForDepends.push_back(loadOp);
+        }
+      }
+
+      /// Create subviews only for depend clauses
+      for (auto loadOp : loadsForDepends) {
+        Value rowIndex = loadOp.getIndices()[0];
+        Location loc = loadOp->getLoc();
+        builder.setInsertionPoint(loadOp);
+
+        /// Create a subview that extracts row[rowIndex] as memref<?xf64>
+        SmallVector<OpFoldResult> offsets = {rowIndex, builder.getIndexAttr(0)};
+        SmallVector<OpFoldResult> sizes = {builder.getIndexAttr(1), innerSize};
+        SmallVector<OpFoldResult> strides = {builder.getIndexAttr(1),
+                                             builder.getIndexAttr(1)};
+
+        auto subviewOp = builder.create<memref::SubViewOp>(
+            loc, ndAlloc, offsets, sizes, strides);
+
+        /// Replace all uses of the load with the subview
+        loadOp.getResult().replaceAllUsesWith(subviewOp.getResult());
+        opsToRemove.insert(loadOp);
+      }
+
+      /// Schedule all legacy allocations and stores for removal
       auto legacyAllocs = pattern.getAllNestedAllocs();
       for (Value legacy : legacyAllocs) {
         if (!legacy)
           continue;
         if (Operation *def = legacy.getDefiningOp())
           opsToRemove.insert(def);
+        /// Remove stores that write this allocation into the outer array
+        for (Operation *user : legacy.getUsers()) {
+          if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
+            if (storeOp.getValue() == legacy)
+              opsToRemove.insert(storeOp);
+          }
+        }
       }
 
-      /// Clean up obsolete outer allocation
-      Value outer = pattern.outerAlloc;
-      if (Operation *defOp = outer.getDefiningOp())
-        opsToRemove.insert(defOp);
+      /// Schedule initialization loops for removal since they're now obsolete
+      for (auto loop : initLoops)
+        opsToRemove.insert(loop);
+
+      /// Find and remove deallocation loops that dealloc inner arrays
+      /// These are loops that load from outer array and dealloc the result
+      for (Operation *user : pattern.outerAlloc.getUsers()) {
+        if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+          /// Check if this load's result is used by memref.dealloc
+          for (Operation *loadUser : loadOp->getUsers()) {
+            if (isa<memref::DeallocOp>(loadUser)) {
+              /// This is a dealloc of an inner array - mark load and dealloc
+              opsToRemove.insert(loadOp);
+              opsToRemove.insert(loadUser);
+              /// Also mark the enclosing loop for removal if it only contains
+              /// deallocs
+              if (auto forOp = loadOp->getParentOfType<scf::ForOp>())
+                opsToRemove.insert(forOp);
+              break;
+            }
+          }
+        } else if (auto deallocOp = dyn_cast<memref::DeallocOp>(user)) {
+          /// Direct dealloc of outer array
+          opsToRemove.insert(deallocOp);
+        }
+      }
     }
   }
 
-  ARTS_INFO("Phase 3: Removing legacy allocations");
+  ARTS_INFO("Phase 3: Linearizing polygeist pointer2memref views");
+  linearizePolygeistViews();
+
+  ARTS_INFO("Phase 4: Removing legacy allocations");
   removeOps(module, opsToRemove, true);
+
+  /// Verification: Count OpenMP task operations after pass execution
+  unsigned numOmpTasksAfter = 0;
+  module.walk([&](omp::TaskOp task) { ++numOmpTasksAfter; });
+  ARTS_DEBUG(" - OpenMP task count after pass: " << numOmpTasksAfter);
+
+  /// Fail if OpenMP task count changed
+  if (numOmpTasksBefore != numOmpTasksAfter) {
+    module.emitError("CanonicalizeMemrefsPass verification failed: OpenMP task "
+                     "count mismatch (before: ")
+        << numOmpTasksBefore << ", after: " << numOmpTasksAfter << ")";
+    signalPassFailure();
+    return;
+  }
+
   ARTS_INFO_FOOTER(CanonicalizeMemrefsPass);
   ARTS_DEBUG_REGION(module.dump(););
 }
@@ -366,6 +480,7 @@ void CanonicalizeMemrefsPass::transformNestedAccesses(Value outerAlloc,
     return std::nullopt;
   };
 
+  /// Transform nested memory accesses to direct N-dimensional indexing
   module.walk([&](Operation *op) -> WalkResult {
     Value mem;
     SmallVector<Value> indices;
@@ -380,9 +495,6 @@ void CanonicalizeMemrefsPass::transformNestedAccesses(Value outerAlloc,
       indices.assign(storeOp.getIndices().begin(), storeOp.getIndices().end());
       isLoad = false;
       storedValue = storeOp.getValue();
-    } else if (auto dbControlOp = dyn_cast<arts::DbControlOp>(op)) {
-      dbControlOp.getPtrMutable().assign(ndPtr);
-      return WalkResult::advance();
     } else {
       return WalkResult::advance();
     }
@@ -415,11 +527,158 @@ void CanonicalizeMemrefsPass::transformNestedAccesses(Value outerAlloc,
 
     /// Schedule the operation for removal
     opsToRemove.insert(op);
-    for (auto *load : chainOpt->loads)
-      opsToRemove.insert(load);
+    /// Only mark intermediate loads for removal if they have no remaining uses
+    /// (they may be used by omp.task depend clauses, for example)
+    for (auto *load : chainOpt->loads) {
+      if (load->use_empty())
+        opsToRemove.insert(load);
+    }
 
     return WalkResult::advance();
   });
+}
+
+//===----------------------------------------------------------------------===//
+// Linearize Polygeist Pointer2Memref Views
+/// When polygeist creates multidimensional views from 1D allocations,
+/// we need to linearize the indices to match the underlying 1D memory layout.
+/// Pattern: memref.load %2d_view[%i, %j] -> memref.load %1d_alloc[%i * dim +
+/// %j]
+//===----------------------------------------------------------------------===//
+void CanonicalizeMemrefsPass::linearizePolygeistViews() {
+  OpBuilder builder(module.getContext());
+
+  /// Find all pointer2memref operations that create multidimensional views
+  SmallVector<polygeist::Pointer2MemrefOp> viewsToLinearize;
+
+  module.walk([&](polygeist::Pointer2MemrefOp p2mOp) {
+    auto resultType = p2mOp.getResult().getType().dyn_cast<MemRefType>();
+    if (!resultType || resultType.getRank() <= 1)
+      return;
+
+    /// Get the source - should trace back to a 1D allocation
+    Value source = p2mOp.getSource();
+    if (auto m2pOp = source.getDefiningOp<polygeist::Memref2PointerOp>()) {
+      Value baseAlloc = m2pOp.getSource();
+      auto baseType = baseAlloc.getType().dyn_cast<MemRefType>();
+
+      /// Only linearize if base is 1D and view is multidimensional
+      if (baseType && baseType.getRank() == 1 && resultType.getRank() > 1) {
+        viewsToLinearize.push_back(p2mOp);
+      }
+    }
+  });
+
+  /// Process each multidimensional view
+  for (auto p2mOp : viewsToLinearize) {
+    auto viewType = p2mOp.getResult().getType().cast<MemRefType>();
+    Value view = p2mOp.getResult();
+
+    /// Get the underlying 1D allocation
+    auto m2pOp = p2mOp.getSource().getDefiningOp<polygeist::Memref2PointerOp>();
+    if (!m2pOp)
+      continue;
+    Value baseAlloc = m2pOp.getSource();
+
+    /// Handle 2D -> 1D case
+    if (viewType.getRank() == 2) {
+      ARTS_DEBUG(" - Linearizing 2D polygeist view to 1D");
+
+      /// Find all load/store operations using this view
+      SmallVector<Operation *> usersToUpdate;
+      for (Operation *user : view.getUsers()) {
+        if (isa<memref::LoadOp, memref::StoreOp>(user))
+          usersToUpdate.push_back(user);
+      }
+
+      /// Extract dimension info for linearization: index = i * dim1 + j
+      for (Operation *op : usersToUpdate) {
+        Location loc = op->getLoc();
+
+        if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
+          auto indices = loadOp.getIndices();
+          if (indices.size() != 2)
+            continue;
+
+          Value i = indices[0];
+          Value j = indices[1];
+
+          builder.setInsertionPoint(op);
+
+          /// Extract dimension from the memref type or context
+          int64_t dim1 = viewType.getDimSize(1);
+          Value dim1Value;
+
+          if (dim1 != ShapedType::kDynamic) {
+            /// Static dimension - use it directly
+            dim1Value = builder.create<arith::ConstantIndexOp>(loc, dim1);
+          } else {
+            /// Dynamic dimension - extract from enclosing loop
+            scf::ForOp innermostLoop = op->getParentOfType<scf::ForOp>();
+            if (innermostLoop) {
+              dim1Value = innermostLoop.getUpperBound();
+            } else {
+              /// Cannot determine dimension - skip this operation
+              continue;
+            }
+          }
+
+          /// Linearize: linearIndex = i * dim1 + j
+          Value offset = builder.create<arith::MulIOp>(loc, i, dim1Value);
+          Value linearIndex = builder.create<arith::AddIOp>(loc, offset, j);
+
+          /// Create new load with 1D index
+          auto newLoad =
+              builder.create<memref::LoadOp>(loc, baseAlloc, linearIndex);
+          loadOp.getResult().replaceAllUsesWith(newLoad.getResult());
+          markForRemoval(loadOp);
+
+        } else if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
+          auto indices = storeOp.getIndices();
+          if (indices.size() != 2)
+            continue;
+
+          Value i = indices[0];
+          Value j = indices[1];
+          Value valueToStore = storeOp.getValue();
+
+          builder.setInsertionPoint(op);
+
+          /// Extract dimension from the memref type or context
+          int64_t dim1 = viewType.getDimSize(1);
+          Value dim1Value;
+
+          if (dim1 != ShapedType::kDynamic) {
+            /// Static dimension - use it directly
+            dim1Value = builder.create<arith::ConstantIndexOp>(loc, dim1);
+          } else {
+            /// Dynamic dimension - extract from enclosing loop
+            scf::ForOp innermostLoop = op->getParentOfType<scf::ForOp>();
+            if (innermostLoop) {
+              dim1Value = innermostLoop.getUpperBound();
+            } else {
+              /// Cannot determine dimension - skip this operation
+              continue;
+            }
+          }
+
+          /// Linearize: linearIndex = i * dim1 + j
+          Value offset = builder.create<arith::MulIOp>(loc, i, dim1Value);
+          Value linearIndex = builder.create<arith::AddIOp>(loc, offset, j);
+
+          /// Create new store with 1D index
+          builder.create<memref::StoreOp>(loc, valueToStore, baseAlloc,
+                                          linearIndex);
+          markForRemoval(storeOp);
+        }
+      }
+
+      /// Mark polygeist operations for removal
+      markForRemoval(p2mOp);
+      markForRemoval(m2pOp);
+    }
+    /// TODO: Add support for 3D -> 1D and other rank transformations
+  }
 }
 
 //===----------------------------------------------------------------------===//

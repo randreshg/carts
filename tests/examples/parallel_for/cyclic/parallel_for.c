@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 int main(int argc, char **argv) {
   if (argc < 2) {
@@ -29,18 +30,19 @@ int main(int argc, char **argv) {
 
   printf("Parallel region completed\n");
 
-  /// Verify results
-  int sum = 0;
-#pragma omp parallel
-  {
-#pragma omp for reduction(+ : sum)
-    for (int i = 0; i < N; i++)
-      sum += c[i];
+  /// Results:
+  bool success = true;
+  for (int i = 0; i < N; i++) {
+    if (c[i] != a[i] + b[i]) {
+      success = false;
+      break;
+    }
   }
-
-  printf("Sum of results: %d\n", sum);
-  printf("Expected sum: %d\n", N * (N - 1) / 2 + N * (N - 1));
-
+  printf("Results:\n");
+  for (int i = 0; i < N; i++)
+    printf("c[%d] = %d, a[%d] = %d, b[%d] = %d\n", i, c[i], i, a[i], i, b[i]);
+  printf("Success: %s\n", success ? "true" : "false");
+  
   free(a);
   free(b);
   free(c);

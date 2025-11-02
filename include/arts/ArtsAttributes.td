@@ -138,6 +138,17 @@ def ReductionKind : Arts_I32Enum<"ReductionKind",
 /// Enum attribute for reduction kinds
 def ReductionKindAttr : Arts_I32EnumAttr<"reduction_kind", ReductionKind>;
 
+/// Enum info for dependency access modes
+def DepAccessMode : Arts_I32Enum<"DepAccessMode",
+    "Dependency GUID access mode",
+    [
+      I32EnumAttrCase<"direct", 0, "direct">,
+      I32EnumAttrCase<"from_depv", 1, "from_depv">
+    ]>;
+
+/// Enum attribute for dependency access modes
+def DepAccessModeAttr : Arts_I32EnumAttr<"dep_access", DepAccessMode>;
+
 /// Integer attribute for storing number of workers for EDT operations
 def WorkersAttr : AttrDef<ArtsDialect, "workers"> {
   let summary = "Number of parallel workers for EDT operations";

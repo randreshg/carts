@@ -258,6 +258,49 @@ void DbGraph::print(llvm::raw_ostream &os) {
           os << "]\n";
         }
 
+        /// Show access patterns
+        if (!acqInfo.accessPatterns.empty()) {
+          os << "      Access Patterns:\n";
+          for (size_t i = 0; i < acqInfo.accessPatterns.size(); ++i) {
+            os << "        [" << i << "]: ";
+            const auto &pattern = acqInfo.accessPatterns[i];
+            os << "[";
+            for (size_t j = 0; j < pattern.size(); ++j) {
+              if (j > 0)
+                os << ", ";
+              if (pattern[j] == INT64_MIN)
+                os << "?";
+              else
+                os << pattern[j];
+            }
+            os << "]\n";
+          }
+        }
+
+        /// Show stencil information
+        if (acqInfo.isStencil) {
+          os << "      Stencil: radius=" << acqInfo.stencilRadius << "\n";
+        }
+
+        /// Show stride information
+        if (!acqInfo.strides.empty() &&
+            std::any_of(acqInfo.strides.begin(), acqInfo.strides.end(),
+                        [](int64_t s) { return s != INT64_MIN; })) {
+          os << "      Strides: [";
+          for (size_t i = 0; i < acqInfo.strides.size(); ++i) {
+            if (i > 0)
+              os << ", ";
+            if (acqInfo.strides[i] == INT64_MIN)
+              os << "?";
+            else
+              os << acqInfo.strides[i];
+          }
+          os << "]";
+          if (acqInfo.hasUnitStride())
+            os << " (unit stride)";
+          os << "\n";
+        }
+
         /// Show number of reads and writes
         auto loads = acqNode->getLoads().size();
         auto stores = acqNode->getStores().size();
@@ -707,6 +750,44 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
           sizes.push_back((int64_t)v);
         I["constSizes"] = std::move(sizes);
         I["estimatedBytes"] = std::to_string(nodeInfo.estimatedBytes);
+
+        /// Add access pattern information
+        if (!nodeInfo.accessPatterns.empty()) {
+          Array patterns;
+          for (const auto &pattern : nodeInfo.accessPatterns) {
+            Array patternArr;
+            for (auto val : pattern)
+              patternArr.push_back((int64_t)val);
+            patterns.push_back(std::move(patternArr));
+          }
+          I["accessPatterns"] = std::move(patterns);
+        }
+
+        /// Add stencil information
+        if (nodeInfo.isStencil) {
+          I["isStencil"] = true;
+          I["stencilRadius"] = (int64_t)nodeInfo.stencilRadius;
+        }
+
+        /// Add indexed dimensions
+        if (!nodeInfo.indexedDimensions.empty()) {
+          Array dims;
+          for (auto dim : nodeInfo.indexedDimensions) {
+            dims.push_back((int64_t)dim);
+          }
+          I["indexedDimensions"] = std::move(dims);
+        }
+
+        /// Add stride information
+        if (!nodeInfo.strides.empty()) {
+          Array stridesArr;
+          for (auto stride : nodeInfo.strides) {
+            stridesArr.push_back((int64_t)stride);
+          }
+          I["strides"] = std::move(stridesArr);
+          I["hasUnitStride"] = nodeInfo.hasUnitStride();
+        }
+
         intervals.push_back(std::move(I));
       }
       A["intervals"] = std::move(intervals);
