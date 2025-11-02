@@ -7,7 +7,7 @@ compile_commands.json
 build/
 CMakeFiles/
 core.*
-
+docs/
 
 # External dependencies - ignore build artifacts but not the submodules themselves
 external/*/build/
@@ -17,3 +17,7 @@ external/*/*.a
 external/*/*.o
 external/*/compile_commands.json
 external/*/cmake_install.cmake
+
+# Generated MLIR files
+*.mlir
+*.ll

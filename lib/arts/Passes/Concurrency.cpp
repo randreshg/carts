@@ -182,18 +182,11 @@ void ConcurrencyPass::applyDbPlacement(
 }
 
 void ConcurrencyPass::updateRuntimeQueryOperations() {
+  ARTS_DEBUG("Updating runtime query operations");
   /// For each EDT that has parallelism strategy set, update runtime query
   /// operations
   module.walk([&](EdtOp edtOp) {
-    if (!edtOp.getWorkers().has_value())
-      return; /// No parallelism strategy set
-
     bool isInterNode = (edtOp.getConcurrency() == EdtConcurrency::internode);
-    EdtType edtType = edtOp.getType();
-
-    /// Only modify operations within parallel EDTs
-    if (edtType != EdtType::parallel)
-      return;
 
     OpBuilder builder(edtOp.getContext());
 

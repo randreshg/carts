@@ -139,6 +139,16 @@ private:
   SmallVector<DbOffsetRange, 4> computeAccessedOffsetRanges();
   void collectAccesses(Value db);
 
+  /// Access pattern analysis (directly from EDT body)
+  void analyzeAccessPatterns();
+  void
+  analyzeMemRefIndices(ValueRange indices,
+                       DenseMap<unsigned, SmallVector<int64_t>> &indicesPerDim);
+  void buildAccessPatternsFromIndices(
+      const DenseMap<unsigned, SmallVector<int64_t>> &indicesPerDim);
+  void detectStencilPattern();
+  void computeStridesFromPatterns();
+
   /// Nested acquire storage
   unsigned nextChildId = 1;
   SmallVector<std::unique_ptr<DbAcquireNode>, 4> childAcquires;

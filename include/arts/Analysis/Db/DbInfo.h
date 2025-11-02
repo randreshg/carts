@@ -143,6 +143,22 @@ struct DbAcquireInfo : public DbInfo {
   ///      Identify stride patterns for prefetching
   ///      Detect over-acquisition (acquired > used)
   SmallVector<DbOffsetRange, 4> offsetRanges;
+
+  /// Access pattern information from CreateDbs
+  /// Which dims are indexed
+  SmallVector<unsigned> indexedDimensions;
+  /// Observed patterns
+  SmallVector<SmallVector<int64_t>> accessPatterns;
+  bool isStencil = false;
+  int stencilRadius = 0;
+
+  /// Stride information (computed from patterns)
+  /// Per-dimension stride
+  SmallVector<int64_t> strides;
+  bool hasUnitStride() const {
+    return !strides.empty() && std::all_of(strides.begin(), strides.end(),
+                                           [](int64_t s) { return s == 1; });
+  }
 };
 
 /// Release-level info

@@ -357,6 +357,41 @@ DbAliasAnalysis::classifyAlias(const NodeBase &a, const NodeBase &b,
     }
   }
 
+  /// Use access pattern information for refined analysis
+  if (result == AliasResult::MayAlias) {
+    if (auto *acqA = dyn_cast<DbAcquireNode>(&a)) {
+      if (auto *acqB = dyn_cast<DbAcquireNode>(&b)) {
+        const auto &infoA = acqA->getInfo();
+        const auto &infoB = acqB->getInfo();
+
+        /// Check if both have consistent access patterns
+        if (!infoA.accessPatterns.empty() && !infoB.accessPatterns.empty()) {
+          ARTS_INFO("  Step 1.5: Checking access patterns" << indent);
+
+          /// For stencil patterns, check if halos overlap
+          if (infoA.isStencil && infoB.isStencil) {
+            ARTS_INFO("    Both accesses are stencil patterns" << indent);
+            ARTS_INFO("    StencilA radius=" << infoA.stencilRadius
+                                             << ", StencilB radius="
+                                             << infoB.stencilRadius << indent);
+            /// Different stencil patterns may indicate different regions
+            /// Conservative: assume may overlap unless proven otherwise
+          }
+
+          /// For strided access, check if strides cause disjoint access
+          if (!infoA.strides.empty() && !infoB.strides.empty()) {
+            bool sameStride = (infoA.strides == infoB.strides);
+            if (sameStride) {
+              ARTS_INFO("    Same stride patterns detected" << indent);
+              /// Same stride but different starting points might be disjoint
+              /// This requires further analysis based on starting offsets
+            }
+          }
+        }
+      }
+    }
+  }
+
   /// If still unknown, use DbAnalysis overlap estimator for acquires
   if (result == AliasResult::MayAlias) {
     /// Try to refine using per-dimension accessed offset ranges if available

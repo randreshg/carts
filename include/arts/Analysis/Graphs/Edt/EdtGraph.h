@@ -45,6 +45,7 @@ public:
   /// Edt-specific methods
   bool isEdtReachable(EdtOp from, EdtOp to);
   SmallVector<NodeBase *, 4> getDbDeps(EdtOp edt) const;
+  SmallVector<EdtNode *> getAllEdtNodes();
   func::FuncOp getFunction() const { return func; }
   bool hasDbGraph() const { return dbGraph != nullptr; }
   DbGraph *getDbGraph() const { return dbGraph; }
@@ -70,6 +71,9 @@ private:
   void collectNodes();
   void buildDependencies();
   void populateChildrenCache(NodeBase *node);
+
+  /// Lift DB dependencies to EDT level for a pair of EDTs
+  bool liftDbDepsToEdtDeps(EdtNode *fromTask, EdtNode *toTask);
 };
 
 } // namespace arts

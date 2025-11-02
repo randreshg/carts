@@ -44,15 +44,10 @@ carts_info "Building CARTS Docker base image with all dependencies"
 
 # Check if components already exist
 BASE_IMAGE_EXISTS=false
-BUILT_IMAGE_EXISTS=false
 WORKSPACE_EXISTS=false
 
 if docker images | grep -q "arts-node-base"; then
     BASE_IMAGE_EXISTS=true
-fi
-
-if docker images | grep -q "arts-node.*built"; then
-    BUILT_IMAGE_EXISTS=true
 fi
 
 if docker volume inspect carts-workspace >/dev/null 2>&1; then
@@ -62,17 +57,13 @@ fi
 # Determine build strategy
 if [[ "$FORCE_MODE" == "true" ]]; then
     carts_info "Force mode enabled - rebuilding everything from scratch"
-elif [[ "$BASE_IMAGE_EXISTS" == "true" && "$BUILT_IMAGE_EXISTS" == "true" && "$WORKSPACE_EXISTS" == "true" ]]; then
+elif [[ "$BASE_IMAGE_EXISTS" == "true" && "$WORKSPACE_EXISTS" == "true" ]]; then
     carts_info "All Docker components already exist!"
     carts_line
     carts_info "Using incremental update strategy..."
     carts_info "Run './docker-update.sh' to pull latest changes and rebuild components"
     carts_info "Or run './docker-build.sh --force' to rebuild everything from scratch"
     exit 0
-elif [[ "$BASE_IMAGE_EXISTS" == "true" && "$BUILT_IMAGE_EXISTS" == "true" ]]; then
-    carts_info "Docker images exist, but workspace may need updating"
-    carts_info "Using incremental update strategy..."
-    # Fall through to update logic
 elif [[ "$BASE_IMAGE_EXISTS" == "true" ]]; then
     carts_info "Base image exists, building CARTS components..."
     # Fall through to build logic
@@ -105,7 +96,7 @@ carts_info "Waiting for builder to be ready"
 sleep 5
 
 # Clone and build CARTS in builder 
-if [[ "$BUILT_IMAGE_EXISTS" == "false" || "$FORCE_MODE" == "true" ]]; then
+if [[ "$WORKSPACE_EXISTS" == "false" || "$FORCE_MODE" == "true" ]]; then
     carts_step "Cloning and building CARTS in builder (using $DOCKER_CPUS threads)"
     GIT_URL=${GIT_URL:-https://github.com/randreshg/carts.git}
     GIT_BRANCH=${GIT_BRANCH:-mlir}
@@ -140,29 +131,14 @@ fi
 
 # Initialize the volume with CARTS from the builder
 if [[ "$WORKSPACE_EXISTS" == "false" || "$FORCE_MODE" == "true" ]]; then
-    if [[ "$BUILT_IMAGE_EXISTS" == "false" || "$FORCE_MODE" == "true" ]]; then
-        carts_step "Initializing shared volume with CARTS installation"
-        # Copy from the running builder container
-        docker exec arts-node-builder bash -c "cp -a /opt/carts/. /tmp/carts-copy/" >/dev/null
-        docker run --rm -v carts-workspace:/dest -v /tmp:/tmp arts-node-base bash -c "cp -a /tmp/carts-copy/. /dest/" >/dev/null
-        docker exec arts-node-builder bash -c "rm -rf /tmp/carts-copy" >/dev/null
-        carts_success "Shared volume initialized with CARTS"
-    else
-        carts_step "Initializing shared volume with CARTS installation"
-        # Copy from existing built image
-        docker run --rm -v carts-workspace:/dest arts-node:built bash -c "cp -a /opt/carts/. /dest/" >/dev/null
-        carts_success "Shared volume initialized with CARTS"
-    fi
+    carts_step "Initializing shared volume with CARTS installation"
+    # Copy from the running builder container
+    docker exec arts-node-builder bash -c "cp -a /opt/carts/. /tmp/carts-copy/" >/dev/null
+    docker run --rm -v carts-workspace:/dest -v /tmp:/tmp arts-node-base bash -c "cp -a /tmp/carts-copy/. /dest/" >/dev/null
+    docker exec arts-node-builder bash -c "rm -rf /tmp/carts-copy" >/dev/null
+    carts_success "Shared volume initialized with CARTS"
 else
     carts_info "Using existing workspace volume"
-fi
-
-# Commit builder as the final reusable image
-if [[ "$BUILT_IMAGE_EXISTS" == "false" || "$FORCE_MODE" == "true" ]]; then
-    carts_step "Committing builder to arts-node:built image"
-    docker commit arts-node-builder arts-node:built >/dev/null
-else
-    carts_info "Using existing arts-node:built image"
 fi
 
 # Clean up builder container
@@ -179,7 +155,6 @@ fi
 
 carts_info "Docker components status:"
 carts_info "  - arts-node-base: $(docker images | grep -q "arts-node-base" && echo " Available" || echo " Missing")"
-carts_info "  - arts-node:built: $(docker images | grep -q "arts-node.*built" && echo " Available" || echo " Missing")"
 carts_info "  - carts-workspace: $(docker volume inspect carts-workspace >/dev/null 2>&1 && echo " Available" || echo " Missing")"
 
 carts_next_steps \

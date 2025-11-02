@@ -360,6 +360,12 @@ __ARTS_RTL(artsDbAddDependence, Void, ArtsGuid, ArtsGuid, Int32)
 __ARTS_RTL_ATTRS(artsDbAddDependence, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs, EmptyAttrs, ZExt))
 
+// void artsAddDependenceWithMode(artsGuid_t dbSrc, artsGuid_t edtDest,
+//                                uint32_t edtSlot, artsType_t mode);
+__ARTS_RTL(artsAddDependenceWithMode, Void, ArtsGuid, ArtsGuid, Int32, Int32)
+__ARTS_RTL_ATTRS(artsAddDependenceWithMode, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs, ZExt, ZExt))
+
 // artsGuid_t artsDbGetGuid(void *dbPtr);
 __ARTS_RTL(artsDbGetGuid, ArtsGuid, VoidPtr)
 __ARTS_RTL_ATTRS(artsDbGetGuid, PureAttrs, EmptyAttrs,

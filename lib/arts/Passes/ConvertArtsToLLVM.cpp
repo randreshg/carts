@@ -71,6 +71,11 @@ static inline void getDbInfo(OpType op, SmallVector<Value> &sizesOut,
   if (auto acqOp = dyn_cast<DbAcquireOp>(op.getOperation())) {
     offsetsOut.assign(acqOp.getOffsets().begin(), acqOp.getOffsets().end());
     indicesOut.assign(acqOp.getIndices().begin(), acqOp.getIndices().end());
+  } else if (auto depAcqOp = dyn_cast<DepDbAcquireOp>(op.getOperation())) {
+    offsetsOut.assign(depAcqOp.getOffsets().begin(),
+                      depAcqOp.getOffsets().end());
+    indicesOut.assign(depAcqOp.getIndices().begin(),
+                      depAcqOp.getIndices().end());
   } else {
     offsetsOut.clear();
     indicesOut.clear();
@@ -199,6 +204,14 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
     auto edtGuid = op.getEdtGuid();
     auto loc = op.getLoc();
 
+    /// Get access mode from attribute
+    auto accessMode = op.getAccessMode();
+
+    /// Get acquire modes if available
+    // std::optional<ArrayRef<int32_t>> acquireModes = std::nullopt;
+    // if (auto accessModeAttr = op.getAccessMode().getValue())
+    //   accessMode = accessModeAttr.getValue();
+
     /// Create shared slot counter for all dependencies
     auto slotTy = MemRefType::get({}, AC->Int32);
     Value sharedSlotAlloc = AC->create<memref::AllocaOp>(loc, slotTy);
@@ -206,8 +219,14 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
     AC->create<memref::StoreOp>(loc, zeroI32, sharedSlotAlloc);
 
     /// Add dependencies for each datablock using shared slot counter
-    for (Value dbGuid : op.getDatablocks())
-      recordDepsForDb(dbGuid, edtGuid, sharedSlotAlloc, loc);
+    // size_t dbIdx = 0;
+    for (Value dbGuid : op.getDatablocks()) {
+      std::optional<int32_t> acquireMode = std::nullopt;
+      // if (accessMode && dbIdx < accessMode.value().size())
+      //   acquireMode = accessMode.value()[dbIdx];
+      recordDepsForDb(dbGuid, edtGuid, sharedSlotAlloc, accessMode, acquireMode,
+                      loc);
+    }
 
     rewriter.eraseOp(op);
     return success();
@@ -215,26 +234,60 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
 
 private:
   void recordDepsForDb(Value dbGuid, Value edtGuid, Value sharedSlotAlloc,
-                       Location loc) const {
-    auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>();
-    assert(dbAcquireOp && "DbAcquireOp not found");
-
+                       DepAccessMode accessMode,
+                       std::optional<int32_t> acquireMode, Location loc) const {
     SmallVector<Value> dbSizes, dbOffsets, dbIndices;
     bool isSingle = false;
-    getDbInfo(dbAcquireOp, dbSizes, dbOffsets, dbIndices, isSingle);
+
+    /// Extract base offset and dep_struct for THIS specific dependency
+    Value depStruct = nullptr;
+    Value baseOffset = nullptr;
+
+    /// Handle both DbAcquireOp and DepDbAcquireOp as sources
+    if (auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>()) {
+      getDbInfo(dbAcquireOp, dbSizes, dbOffsets, dbIndices, isSingle);
+      /// depStruct and baseOffset remain null for DbAcquireOp
+    } else if (auto depDbAcquireOp = dbGuid.getDefiningOp<DepDbAcquireOp>()) {
+      getDbInfo(depDbAcquireOp, dbSizes, dbOffsets, dbIndices, isSingle);
+      /// For DepDbAcquireOp, always extract dep_struct and base offset
+      depStruct = depDbAcquireOp.getDepStruct();
+      baseOffset = depDbAcquireOp.getOffset();
+    } else {
+      ARTS_ERROR("dbGuid must come from DbAcquireOp or DepDbAcquireOp"
+                 << dbGuid);
+      llvm_unreachable("dbGuid must come from DbAcquireOp or DepDbAcquireOp");
+    }
 
     /// Use shared slot counter and iterate over all db elements
     AC->iterateDbElements(dbGuid, edtGuid, dbSizes, dbOffsets, isSingle, loc,
                           [&](Value linearIndex) {
                             recordSingleDb(dbGuid, edtGuid, sharedSlotAlloc,
-                                           linearIndex, loc);
+                                           linearIndex, accessMode, acquireMode,
+                                           depStruct, baseOffset, loc);
                           });
   }
 
   void recordSingleDb(Value dbGuid, Value edtGuid, Value slotAlloc,
-                      Value linearIndex, Location loc) const {
-    auto dbGuidValue =
-        AC->create<memref::LoadOp>(loc, dbGuid, ValueRange{linearIndex});
+                      Value linearIndex, DepAccessMode accessMode,
+                      std::optional<int32_t> acquireMode, Value depStruct,
+                      Value baseOffset, Location loc) const {
+    /// Load dbGuid value - check if we actually have depStruct (from
+    /// DepDbAcquireOp) or if this specific dependency is from DbAcquireOp
+    Value dbGuidValue;
+    if (depStruct && baseOffset) {
+      /// Access GUID via DepGepOp from EDT depv structure
+      /// Must add baseOffset to linearIndex to get correct position in depv
+      Value finalOffset =
+          AC->create<arith::AddIOp>(loc, baseOffset, linearIndex);
+      auto depGep =
+          AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depStruct,
+                               finalOffset, ValueRange(), ValueRange());
+      dbGuidValue = AC->create<LLVM::LoadOp>(loc, AC->Int64, depGep.getGuid());
+    } else {
+      /// Direct access via memref.load for DbAcquireOp
+      dbGuidValue =
+          AC->create<memref::LoadOp>(loc, dbGuid, ValueRange{linearIndex});
+    }
 
     Value edtGuidValue = edtGuid;
     if (auto mt = edtGuid.getType().dyn_cast<MemRefType>()) {
@@ -245,8 +298,20 @@ private:
     edtGuidValue = AC->castToInt(AC->Int64, edtGuidValue, loc);
 
     auto currentSlotI32 = AC->create<memref::LoadOp>(loc, slotAlloc);
-    AC->createRuntimeCall(types::ARTSRTL_artsDbAddDependence,
-                          {dbGuidValue, edtGuidValue, currentSlotI32}, loc);
+
+    /// Use artsAddDependenceWithMode when acquire mode is provided
+    /// TODO: Enable this
+    if (acquireMode.has_value() && false) {
+      Value modeValue =
+          AC->createIntConstant(acquireMode.value(), AC->Int32, loc);
+      AC->createRuntimeCall(
+          types::ARTSRTL_artsAddDependenceWithMode,
+          {dbGuidValue, edtGuidValue, currentSlotI32, modeValue}, loc);
+    } else {
+      /// Fall back to normal artsDbAddDependence (extracts mode from GUID)
+      AC->createRuntimeCall(types::ARTSRTL_artsDbAddDependence,
+                            {dbGuidValue, edtGuidValue, currentSlotI32}, loc);
+    }
 
     /// Increment the shared slot counter for next dependency
     auto oneI32 = AC->createIntConstant(1, AC->Int32, loc);
@@ -266,6 +331,9 @@ struct IncrementDepPattern : public ArtsToLLVMPattern<IncrementDepOp> {
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
     auto loc = op.getLoc();
 
+    /// Get access mode from attribute
+    auto accessMode = op.getAccessMode();
+
     /// Create shared slot counter for all latch increments
     auto slotTy = MemRefType::get({}, AC->Int32);
     Value sharedSlotAlloc = AC->create<memref::AllocaOp>(loc, slotTy);
@@ -274,33 +342,66 @@ struct IncrementDepPattern : public ArtsToLLVMPattern<IncrementDepOp> {
 
     /// Increment latch for each datablock using shared slot counter
     for (Value dbGuid : op.getDatablocks())
-      incLatchForDb(dbGuid, sharedSlotAlloc, loc);
+      incLatchForDb(dbGuid, sharedSlotAlloc, accessMode, loc);
 
     rewriter.eraseOp(op);
     return success();
   }
 
 private:
-  void incLatchForDb(Value dbGuid, Value sharedSlotAlloc, Location loc) const {
-    auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>();
-    assert(dbAcquireOp && "DbAcquireOp not found");
-
+  void incLatchForDb(Value dbGuid, Value sharedSlotAlloc,
+                     DepAccessMode accessMode, Location loc) const {
     SmallVector<Value> dbSizes, dbOffsets, dbIndices;
     bool isSingle = false;
-    getDbInfo(dbAcquireOp, dbSizes, dbOffsets, dbIndices, isSingle);
+
+    /// Extract base offset and dep_struct for this specific dependency
+    Value depStruct = nullptr;
+    Value baseOffset = nullptr;
+
+    /// Handle both DbAcquireOp and DepDbAcquireOp as sources
+    if (auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>()) {
+      getDbInfo(dbAcquireOp, dbSizes, dbOffsets, dbIndices, isSingle);
+      /// depStruct and baseOffset remain null for DbAcquireOp
+    } else if (auto depDbAcquireOp = dbGuid.getDefiningOp<DepDbAcquireOp>()) {
+      getDbInfo(depDbAcquireOp, dbSizes, dbOffsets, dbIndices, isSingle);
+      /// For DepDbAcquireOp, always extract dep_struct and base offset
+      depStruct = depDbAcquireOp.getDepStruct();
+      baseOffset = depDbAcquireOp.getOffset();
+    } else {
+      ARTS_ERROR("dbGuid must come from DbAcquireOp or DepDbAcquireOp"
+                 << dbGuid);
+      llvm_unreachable("dbGuid must come from DbAcquireOp or DepDbAcquireOp");
+    }
 
     /// Use shared slot counter and iterate over all db elements
     AC->iterateDbElements(dbGuid, Value(), dbSizes, dbOffsets, isSingle, loc,
                           [&](Value linearIndex) {
                             incSingleLatch(dbGuid, sharedSlotAlloc, linearIndex,
+                                           accessMode, depStruct, baseOffset,
                                            loc);
                           });
   }
 
   void incSingleLatch(Value dbGuid, Value slotAlloc, Value linearIndex,
-                      Location loc) const {
-    auto dbGuidValue =
-        AC->create<memref::LoadOp>(loc, dbGuid, ValueRange{linearIndex});
+                      DepAccessMode accessMode, Value depStruct,
+                      Value baseOffset, Location loc) const {
+    /// Load dbGuid value - check if we actually have depStruct (from
+    /// DepDbAcquireOp) or if this specific dependency is from DbAcquireOp
+    Value dbGuidValue;
+    if (depStruct && baseOffset) {
+      /// Access GUID via DepGepOp from EDT depv structure
+      /// Must add baseOffset to linearIndex to get correct position in depv
+      Value finalOffset =
+          AC->create<arith::AddIOp>(loc, baseOffset, linearIndex);
+      auto depGep =
+          AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depStruct,
+                               finalOffset, ValueRange(), ValueRange());
+      dbGuidValue = AC->create<LLVM::LoadOp>(loc, AC->Int64, depGep.getGuid());
+    } else {
+      /// Direct access via memref.load for DbAcquireOp
+      dbGuidValue =
+          AC->create<memref::LoadOp>(loc, dbGuid, ValueRange{linearIndex});
+    }
     AC->createRuntimeCall(types::ARTSRTL_artsDbIncrementLatch, {dbGuidValue},
                           loc);
 
@@ -424,14 +525,32 @@ struct DepGepOpPattern : public ArtsToLLVMPattern<DepGepOp> {
     Value depEntryPtr = AC->create<LLVM::GEPOp>(
         loc, AC->llvmPtr, AC->ArtsEdtDep, typedDepPtr, ValueRange{linearIndex});
 
-    /// Extract ptr field (field #2) from dependency structure
+    /// Extract both guid (field #0) and ptr (field #2) from depV
     auto c0 = AC->createIntConstant(0, AC->Int64, loc);
     auto c2 = AC->createIntConstant(2, AC->Int64, loc);
+
+    /// Get the guid pointer (field #0)
+    auto guidPtr = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep,
+                                           depEntryPtr, ValueRange{c0, c0});
+
+    /// Get the data pointer (field #2)
     auto dataPtr = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep,
                                            depEntryPtr, ValueRange{c0, c2});
 
-    /// Return pointer to the array element
-    rewriter.replaceOp(op, dataPtr);
+    /// Return both: guid pointer and data pointer
+    rewriter.replaceOp(op, ValueRange{guidPtr, dataPtr});
+    return success();
+  }
+};
+
+/// Pattern to convert arts.dep_db_acquire operations
+struct DepDbAcquireOpPattern : public ArtsToLLVMPattern<DepDbAcquireOp> {
+  using ArtsToLLVMPattern::ArtsToLLVMPattern;
+
+  LogicalResult matchAndRewrite(DepDbAcquireOp op,
+                                PatternRewriter &rewriter) const override {
+    auto depStruct = op.getDepStruct();
+    rewriter.replaceOp(op, ValueRange{depStruct, depStruct});
     return success();
   }
 };
@@ -969,7 +1088,7 @@ void ConvertArtsToLLVMPass::populateDbPatterns(RewritePatternSet &patterns) {
   /// DB patterns
   patterns.add<DbControlPattern>(context, AC);
   patterns.add<DbAcquirePattern, DbReleasePattern>(context, AC);
-  patterns.add<DbGepOpPattern>(context, AC);
+  patterns.add<DbGepOpPattern, DepDbAcquireOpPattern>(context, AC);
 }
 
 //===----------------------------------------------------------------------===//

@@ -69,6 +69,19 @@ public:
   /// Get allocation info for a given allocation operation
   const DbAllocInfo &getAllocInfo(DbAllocOp alloc) const;
 
+  /// Get operation order for ordering comparisons
+  unsigned getOpOrder(Operation *op) const {
+    auto it = opOrder.find(op);
+    return it == opOrder.end() ? 0u : it->second;
+  }
+
+  /// Get edge between two nodes if it exists
+  EdgeBase *getEdge(NodeBase *from, NodeBase *to) const {
+    auto key = std::make_pair(from, to);
+    auto it = edges.find(key);
+    return it == edges.end() ? nullptr : it->second.get();
+  }
+
   /// For GraphTraits iterators
   bool isEmpty() const override { return nodes.empty(); }
   NodesIterator nodesBegin() override { return nodes.begin(); }
