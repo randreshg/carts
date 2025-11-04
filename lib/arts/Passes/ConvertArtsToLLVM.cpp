@@ -274,7 +274,8 @@ private:
     /// Load dbGuid value - check if we actually have depStruct (from
     /// DepDbAcquireOp) or if this specific dependency is from DbAcquireOp
     Value dbGuidValue;
-    if (depStruct && baseOffset) {
+    /// TODO: Enable this
+    if (depStruct && baseOffset && false) {
       /// Access GUID via DepGepOp from EDT depv structure
       /// Must add baseOffset to linearIndex to get correct position in depv
       Value finalOffset =
@@ -388,7 +389,8 @@ private:
     /// Load dbGuid value - check if we actually have depStruct (from
     /// DepDbAcquireOp) or if this specific dependency is from DbAcquireOp
     Value dbGuidValue;
-    if (depStruct && baseOffset) {
+    /// TODO: Enable this
+    if (depStruct && baseOffset && false) {
       /// Access GUID via DepGepOp from EDT depv structure
       /// Must add baseOffset to linearIndex to get correct position in depv
       Value finalOffset =
