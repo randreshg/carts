@@ -237,7 +237,6 @@ void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 void setupDb(PassManager &pm, arts::ArtsAnalysisManager *AM, bool identifyDbs,
              bool exportJson) {
   pm.addPass(arts::createEdtPtrRematerializationPass());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createCreateDbsPass(identifyDbs));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());

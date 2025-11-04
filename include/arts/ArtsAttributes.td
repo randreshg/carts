@@ -34,13 +34,14 @@ class Arts_Attr<string attrName, string attrMnemonic, list<Trait> traits = []>
   let mnemonic = attrMnemonic;
 }
 
-// Enum info for ARTS access modes (in, out, inout)
+// Enum info for ARTS access modes (in, out, inout, uninitialized)
 def ArtsMode : Arts_I32Enum<"ArtsMode",
     "ARTS DataBlock access mode",
     [
       I32EnumAttrCase<"in", 0, "in">,
       I32EnumAttrCase<"out", 1, "out">,
-      I32EnumAttrCase<"inout", 2, "inout">
+      I32EnumAttrCase<"inout", 2, "inout">,
+      I32EnumAttrCase<"uninitialized", 3, "uninitialized">
     ]>;
 
 // Enum attribute for ARTS access modes

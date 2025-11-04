@@ -118,9 +118,17 @@ private:
   std::optional<NestedAllocPattern> detectNestedAllocPattern(Value alloc);
   void transformNestedAccesses(Value outerAlloc, Value ndPtr);
   void linearizePolygeistViews();
+  void canonicalizeOmpDependencies();
 
   /// Extract the logical (pre-malloc) size for a dynamically computed value
   Value getOriginalSizeValue(Value size, OpBuilder &builder, Location loc);
+
+  /// Helper: Get dependency mode from omp.task for a given depend variable
+  std::optional<ArtsMode> getDepModeFromTask(omp::TaskOp task, Value depVar);
+
+  /// Helper: Materialize an OpFoldResult as a Value
+  Value materializeOpFoldResult(OpFoldResult ofr, OpBuilder &builder,
+                                Location loc);
 };
 
 //===----------------------------------------------------------------------===//
@@ -154,150 +162,297 @@ void CanonicalizeMemrefsPass::runOnOperation() {
     }
   });
 
-  if (nestedPatternsByLoop.empty()) {
-    ARTS_DEBUG(" - No nested allocation patterns found");
-    ARTS_INFO_FOOTER(CanonicalizeMemrefsPass);
-    return;
-  }
-
-  /// Convert nested patterns to a single N-D stack allocation and rewrite
-  /// accesses to index directly into that allocation.
-  ARTS_INFO("Phase 2: Converting nested patterns to N-D alloca and rewriting "
-            "accesses");
-  for (auto &[loop, patterns] : nestedPatternsByLoop) {
-    for (auto &pattern : patterns) {
-      auto allocOp = pattern.outerAlloc.getDefiningOp<memref::AllocOp>();
-      if (!allocOp)
-        continue;
-
-      Location loc = allocOp->getLoc();
-      SmallVector<Value> allSizes = pattern.getAllSizes();
-      if (allSizes.empty())
-        continue;
-
-      builder.setInsertionPoint(pattern.initLoop);
-
-      /// Extract logical sizes
-      SmallVector<Value> originalSizes;
-      originalSizes.reserve(allSizes.size());
-      for (Value size : allSizes)
-        originalSizes.push_back(getOriginalSizeValue(size, builder, loc));
-
-      SmallVector<int64_t> shape(pattern.getDepth(), ShapedType::kDynamic);
-      MemRefType ndType = MemRefType::get(shape, pattern.getFinalElementType());
-
-      /// Use heap allocation (alloc) instead of stack (alloca) to enable
-      /// proper DB management and give flexibility for memory allocation
-      Value ndAlloc =
-          builder.create<memref::AllocOp>(loc, ndType, originalSizes);
-
-      /// Rewrite cascaded memory accesses to direct N-D indexing
-      transformNestedAccesses(pattern.outerAlloc, ndAlloc);
-
-      /// Replace loads from outer array with subviews ONLY if they're used by
-      /// omp.task depend clauses. All other loads should be part of cascaded
-      /// chains and will be handled by transformNestedAccesses.
-      Value innerSize =
-          originalSizes.back(); // Last size is the column dimension
-      SmallVector<scf::ForOp> initLoops = pattern.getAllInitLoops();
-      SmallVector<memref::LoadOp> loadsForDepends;
-
-      for (Operation *user : pattern.outerAlloc.getUsers()) {
-        if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
-          /// Skip loads inside initialization loops
-          bool insideInitLoop = false;
-          for (auto loop : initLoops) {
-            if (loop->isAncestor(loadOp)) {
-              insideInitLoop = true;
-              break;
-            }
-          }
-          if (insideInitLoop)
-            continue;
-
-          /// Check if this load is used by an omp.task depend clause
-          bool usedByTaskDepend = false;
-          for (Operation *loadUser : loadOp->getUsers()) {
-            if (isa<omp::TaskOp>(loadUser)) {
-              usedByTaskDepend = true;
-              break;
-            }
-          }
-
-          if (usedByTaskDepend && loadOp.getIndices().size() == 1)
-            loadsForDepends.push_back(loadOp);
-        }
-      }
-
-      /// Create subviews only for depend clauses
-      for (auto loadOp : loadsForDepends) {
-        Value rowIndex = loadOp.getIndices()[0];
-        Location loc = loadOp->getLoc();
-        builder.setInsertionPoint(loadOp);
-
-        /// Create a subview that extracts row[rowIndex] as memref<?xf64>
-        SmallVector<OpFoldResult> offsets = {rowIndex, builder.getIndexAttr(0)};
-        SmallVector<OpFoldResult> sizes = {builder.getIndexAttr(1), innerSize};
-        SmallVector<OpFoldResult> strides = {builder.getIndexAttr(1),
-                                             builder.getIndexAttr(1)};
-
-        auto subviewOp = builder.create<memref::SubViewOp>(
-            loc, ndAlloc, offsets, sizes, strides);
-
-        /// Replace all uses of the load with the subview
-        loadOp.getResult().replaceAllUsesWith(subviewOp.getResult());
-        opsToRemove.insert(loadOp);
-      }
-
-      /// Schedule all legacy allocations and stores for removal
-      auto legacyAllocs = pattern.getAllNestedAllocs();
-      for (Value legacy : legacyAllocs) {
-        if (!legacy)
+  if (!nestedPatternsByLoop.empty()) {
+    /// Convert nested patterns to a single N-D stack allocation and rewrite
+    /// accesses to index directly into that allocation.
+    ARTS_INFO("Phase 2: Converting nested patterns to N-D alloca and rewriting "
+              "accesses");
+    for (auto &[loop, patterns] : nestedPatternsByLoop) {
+      for (auto &pattern : patterns) {
+        auto allocOp = pattern.outerAlloc.getDefiningOp<memref::AllocOp>();
+        if (!allocOp)
           continue;
-        if (Operation *def = legacy.getDefiningOp())
-          opsToRemove.insert(def);
-        /// Remove stores that write this allocation into the outer array
-        for (Operation *user : legacy.getUsers()) {
-          if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
-            if (storeOp.getValue() == legacy)
-              opsToRemove.insert(storeOp);
+
+        Location loc = allocOp->getLoc();
+        SmallVector<Value> allSizes = pattern.getAllSizes();
+        if (allSizes.empty())
+          continue;
+
+        builder.setInsertionPoint(pattern.initLoop);
+
+        /// Extract logical sizes
+        SmallVector<Value> originalSizes;
+        originalSizes.reserve(allSizes.size());
+        for (Value size : allSizes)
+          originalSizes.push_back(getOriginalSizeValue(size, builder, loc));
+
+        SmallVector<int64_t> shape(pattern.getDepth(), ShapedType::kDynamic);
+        MemRefType ndType =
+            MemRefType::get(shape, pattern.getFinalElementType());
+
+        /// Use heap allocation (alloc) instead of stack (alloca) to enable
+        /// proper DB management and give flexibility for memory allocation
+        Value ndAlloc =
+            builder.create<memref::AllocOp>(loc, ndType, originalSizes);
+
+        /// Rewrite cascaded memory accesses to direct N-D indexing
+        transformNestedAccesses(pattern.outerAlloc, ndAlloc);
+
+        /// Replace loads from outer array with subviews ONLY if they're used by
+        /// omp.task depend clauses. All other loads should be part of cascaded
+        /// chains and will be handled by transformNestedAccesses.
+        Value innerSize = originalSizes.back();
+        SmallVector<scf::ForOp> initLoops = pattern.getAllInitLoops();
+        SmallVector<memref::LoadOp> loadsForDepends;
+
+        for (Operation *user : pattern.outerAlloc.getUsers()) {
+          if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+            /// Skip loads inside initialization loops
+            bool insideInitLoop = false;
+            for (auto loop : initLoops) {
+              if (loop->isAncestor(loadOp)) {
+                insideInitLoop = true;
+                break;
+              }
+            }
+            if (insideInitLoop)
+              continue;
+
+            /// Check if this load is used by an omp.task depend clause
+            /// either directly or transitively through subview/cast operations
+            if (loadOp.getIndices().size() != 1)
+              continue;
+
+            bool usedByTaskDepend = false;
+            bool hasDirectSubviewToTask = false;
+
+            /// Check direct task usage
+            for (Operation *user : loadOp->getUsers()) {
+              if (isa<omp::TaskOp>(user)) {
+                usedByTaskDepend = true;
+                break;
+              }
+              /// Check if subview leads to task
+              if (auto subviewOp = dyn_cast<memref::SubViewOp>(user)) {
+                for (Operation *subviewUser : subviewOp->getUsers()) {
+                  /// Check through casts too
+                  if (isa<omp::TaskOp>(subviewUser)) {
+                    usedByTaskDepend = true;
+                    hasDirectSubviewToTask = true;
+                    break;
+                  } else if (auto castOp =
+                                 dyn_cast<memref::CastOp>(subviewUser)) {
+                    for (Operation *castUser : castOp->getUsers()) {
+                      if (isa<omp::TaskOp>(castUser)) {
+                        usedByTaskDepend = true;
+                        hasDirectSubviewToTask = true;
+                        break;
+                      }
+                    }
+                  }
+                  if (usedByTaskDepend)
+                    break;
+                }
+              }
+              if (usedByTaskDepend)
+                break;
+            }
+
+            /// Only create new subview if load is directly used by task
+            /// (not through an existing subview)
+            if (usedByTaskDepend && !hasDirectSubviewToTask)
+              loadsForDepends.push_back(loadOp);
           }
         }
-      }
 
-      /// Schedule initialization loops for removal since they're now obsolete
-      for (auto loop : initLoops)
-        opsToRemove.insert(loop);
+        /// Create subviews for depend clauses
+        /// This handles both:
+        /// 1. Loads directly used by tasks (create subview, remove load)
+        /// 2. Loads used by subviews->tasks (create row subview, keep for
+        /// chaining)
+        for (auto loadOp : loadsForDepends) {
+          Value rowIndex = loadOp.getIndices()[0];
+          Location loc = loadOp->getLoc();
+          builder.setInsertionPoint(loadOp);
 
-      /// Find and remove deallocation loops that dealloc inner arrays
-      /// These are loops that load from outer array and dealloc the result
-      for (Operation *user : pattern.outerAlloc.getUsers()) {
-        if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
-          /// Check if this load's result is used by memref.dealloc
-          for (Operation *loadUser : loadOp->getUsers()) {
-            if (isa<memref::DeallocOp>(loadUser)) {
-              /// This is a dealloc of an inner array - mark load and dealloc
-              opsToRemove.insert(loadOp);
-              opsToRemove.insert(loadUser);
-              /// Also mark the enclosing loop for removal if it only contains
-              /// deallocs
-              if (auto forOp = loadOp->getParentOfType<scf::ForOp>())
-                opsToRemove.insert(forOp);
-              break;
+          /// Create a subview that extracts row[rowIndex] as memref<?xf64>
+          SmallVector<OpFoldResult> offsets = {rowIndex,
+                                               builder.getIndexAttr(0)};
+          SmallVector<OpFoldResult> sizes = {builder.getIndexAttr(1),
+                                             innerSize};
+          SmallVector<OpFoldResult> strides = {builder.getIndexAttr(1),
+                                               builder.getIndexAttr(1)};
+
+          auto subviewOp = builder.create<memref::SubViewOp>(
+              loc, ndAlloc, offsets, sizes, strides);
+
+          /// Replace all uses of the load with the subview
+          loadOp.getResult().replaceAllUsesWith(subviewOp.getResult());
+          opsToRemove.insert(loadOp);
+        }
+
+        /// Handle loads that feed into subviews used by omp.task dependencies
+        /// Create arts.omp_dep operations instead of complex subview/collapse
+        /// chains
+        for (Operation *user : pattern.outerAlloc.getUsers()) {
+          if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+            if (loadOp.getIndices().size() != 1)
+              continue;
+
+            /// Skip if already in loadsForDepends
+            if (llvm::find(loadsForDepends, loadOp) != loadsForDepends.end())
+              continue;
+
+            /// Skip loads in init loops
+            bool insideInitLoop = false;
+            for (auto loop : initLoops) {
+              if (loop->isAncestor(loadOp)) {
+                insideInitLoop = true;
+                break;
+              }
+            }
+            if (insideInitLoop)
+              continue;
+
+            /// Find subview→task dependency chains
+            for (Operation *loadUser :
+                 llvm::make_early_inc_range(loadOp->getUsers())) {
+              if (auto subviewOp = dyn_cast<memref::SubViewOp>(loadUser)) {
+                /// Check if this subview is used by an omp.task (possibly
+                /// through cast)
+                omp::TaskOp taskOp = nullptr;
+                Value taskDepVar = subviewOp.getResult();
+
+                for (Operation *subviewUser : subviewOp->getUsers()) {
+                  if (auto task = dyn_cast<omp::TaskOp>(subviewUser)) {
+                    taskOp = task;
+                    break;
+                  }
+                  if (auto castOp = dyn_cast<memref::CastOp>(subviewUser)) {
+                    taskDepVar = castOp.getResult();
+                    for (Operation *castUser : castOp->getUsers()) {
+                      if (auto task = dyn_cast<omp::TaskOp>(castUser)) {
+                        taskOp = task;
+                        break;
+                      }
+                    }
+                    if (taskOp)
+                      break;
+                  }
+                }
+
+                if (!taskOp)
+                  continue;
+
+                /// Get dependency mode from task
+                auto modeOpt = getDepModeFromTask(taskOp, taskDepVar);
+                if (!modeOpt)
+                  continue;
+
+                Value rowIndex = loadOp.getIndices()[0];
+                Location loc = loadOp->getLoc();
+                builder.setInsertionPoint(subviewOp);
+
+                /// Extract indices and sizes from the subview
+                auto offsets1D = subviewOp.getMixedOffsets();
+                auto sizes1D = subviewOp.getMixedSizes();
+
+                SmallVector<Value> indices = {rowIndex};
+                SmallVector<Value> sizes = {
+                    builder.create<arith::ConstantIndexOp>(loc, 1)};
+
+                for (auto [offset, size] : llvm::zip(offsets1D, sizes1D)) {
+                  indices.push_back(
+                      materializeOpFoldResult(offset, builder, loc));
+                  sizes.push_back(materializeOpFoldResult(size, builder, loc));
+                }
+
+                /// Create arts.omp_dep
+                auto ompDepOp = builder.create<OmpDepOp>(loc, *modeOpt, ndAlloc,
+                                                         indices, sizes);
+
+                ARTS_DEBUG("Created arts.omp_dep for chunk dependency with "
+                           << indices.size()
+                           << " dimensions, sizes: " << sizes.size());
+
+                /// Replace subview (and cast if present) with omp_dep
+                for (Operation *subviewUser :
+                     llvm::make_early_inc_range(subviewOp->getUsers())) {
+                  if (auto castOp = dyn_cast<memref::CastOp>(subviewUser)) {
+                    castOp.getResult().replaceAllUsesWith(ompDepOp.getResult());
+                    opsToRemove.insert(castOp);
+                  }
+                }
+                subviewOp.getResult().replaceAllUsesWith(ompDepOp.getResult());
+                opsToRemove.insert(subviewOp);
+                opsToRemove.insert(loadOp);
+              }
             }
           }
-        } else if (auto deallocOp = dyn_cast<memref::DeallocOp>(user)) {
-          /// Direct dealloc of outer array
-          opsToRemove.insert(deallocOp);
+        }
+
+        /// Schedule all legacy allocations and stores for removal
+        auto legacyAllocs = pattern.getAllNestedAllocs();
+        for (Value legacy : legacyAllocs) {
+          if (!legacy)
+            continue;
+          if (Operation *def = legacy.getDefiningOp())
+            opsToRemove.insert(def);
+          /// Remove stores that write this allocation into the outer array
+          for (Operation *user : legacy.getUsers()) {
+            if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
+              if (storeOp.getValue() == legacy)
+                opsToRemove.insert(storeOp);
+            }
+          }
+        }
+
+        /// Schedule initialization loops for removal since they're now obsolete
+        for (auto loop : initLoops)
+          opsToRemove.insert(loop);
+
+        /// Find and remove deallocation loops that dealloc inner arrays
+        /// These are loops that load from outer array and dealloc the result
+        for (Operation *user : pattern.outerAlloc.getUsers()) {
+          if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+            /// Check if this load's result is used by memref.dealloc
+            for (Operation *loadUser : loadOp->getUsers()) {
+              if (isa<memref::DeallocOp>(loadUser)) {
+                /// This is a dealloc of an inner array - mark load and dealloc
+                opsToRemove.insert(loadOp);
+                opsToRemove.insert(loadUser);
+                /// Also mark the enclosing loop for removal if it only contains
+                /// deallocs
+                if (auto forOp = loadOp->getParentOfType<scf::ForOp>())
+                  opsToRemove.insert(forOp);
+                break;
+              }
+            }
+          } else if (auto deallocOp = dyn_cast<memref::DeallocOp>(user)) {
+            /// Direct dealloc of outer array
+            opsToRemove.insert(deallocOp);
+          }
         }
       }
     }
+  } else {
+    ARTS_DEBUG(" - No nested allocation patterns found");
   }
 
-  ARTS_INFO("Phase 3: Linearizing polygeist pointer2memref views");
+  ARTS_INFO(
+      "Phase 3: Canonicalizing OpenMP task dependencies through OmpDepOp");
+
+  /// Count tasks before canonicalization
+  unsigned numTasks = 0;
+  module.walk([&](omp::TaskOp) { ++numTasks; });
+  ARTS_DEBUG(" - Found " << numTasks << " omp.task operations");
+
+  canonicalizeOmpDependencies();
+
+  ARTS_INFO("Phase 4: Linearizing polygeist pointer2memref views");
   linearizePolygeistViews();
 
-  ARTS_INFO("Phase 4: Removing legacy allocations");
+  ARTS_INFO("Phase 5: Removing legacy allocations");
   removeOps(module, opsToRemove, true);
 
   /// Verification: Count OpenMP task operations after pass execution
@@ -677,8 +832,196 @@ void CanonicalizeMemrefsPass::linearizePolygeistViews() {
       markForRemoval(p2mOp);
       markForRemoval(m2pOp);
     }
-    /// TODO: Add support for 3D -> 1D and other rank transformations
   }
+}
+
+//===----------------------------------------------------------------------===//
+// Canonicalize OpenMP Dependencies
+/// Walk all omp.task operations and create arts.omp_dep for all dependencies
+//===----------------------------------------------------------------------===//
+void CanonicalizeMemrefsPass::canonicalizeOmpDependencies() {
+  OpBuilder builder(module.getContext());
+
+  unsigned taskCount = 0;
+  unsigned depCount = 0;
+
+  module.walk([&](omp::TaskOp task) {
+    ++taskCount;
+    auto dependList = task.getDependsAttr();
+    if (!dependList) {
+      ARTS_DEBUG(" - Task " << taskCount << " has no dependencies");
+      return;
+    }
+
+    auto depVars = task.getDependVars();
+    SmallVector<Value> newDepVars;
+
+    ARTS_DEBUG(" - Task " << taskCount << " has " << depVars.size()
+                          << " dependencies");
+
+    for (size_t i = 0; i < depVars.size(); ++i) {
+      ++depCount;
+      Value depVar = depVars[i];
+      auto depClause =
+          dyn_cast<omp::ClauseTaskDependAttr>(dependList.getValue()[i]);
+      if (!depClause)
+        continue;
+
+      /// Skip if already an omp_dep
+      if (depVar.getDefiningOp<OmpDepOp>()) {
+        newDepVars.push_back(depVar);
+        continue;
+      }
+
+      /// Get dependency mode from clause
+      ArtsMode mode;
+      switch (depClause.getValue()) {
+      case omp::ClauseTaskDepend::taskdependin:
+        mode = ArtsMode::in;
+        break;
+      case omp::ClauseTaskDepend::taskdependout:
+        mode = ArtsMode::out;
+        break;
+      case omp::ClauseTaskDepend::taskdependinout:
+        mode = ArtsMode::inout;
+        break;
+      }
+
+      Location loc = depVar.getLoc();
+      builder.setInsertionPoint(task);
+
+      Value source;
+      SmallVector<Value> indices;
+      SmallVector<Value> sizes;
+
+      /// Case 1: memref.load - point dependency (e.g., A[i][j])
+      if (auto loadOp = depVar.getDefiningOp<memref::LoadOp>()) {
+        source = loadOp.getMemref();
+        indices.assign(loadOp.getIndices().begin(), loadOp.getIndices().end());
+        for (size_t dim = 0; dim < indices.size(); ++dim)
+          sizes.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
+
+        ARTS_DEBUG(" - Creating OmpDepOp from memref.load with "
+                   << indices.size() << " indices");
+      }
+      /// Case 2: memref.subview - chunk dependency (e.g., A[i:bs][j:bs])
+      else if (auto subviewOp = depVar.getDefiningOp<memref::SubViewOp>()) {
+        source = subviewOp.getSource();
+        for (auto offset : subviewOp.getMixedOffsets())
+          indices.push_back(materializeOpFoldResult(offset, builder, loc));
+        for (auto size : subviewOp.getMixedSizes())
+          sizes.push_back(materializeOpFoldResult(size, builder, loc));
+
+        ARTS_DEBUG(" - Creating OmpDepOp from memref.subview with "
+                   << indices.size() << " dimensions");
+      }
+      /// Case 3: Token container (alloca/alloc with stored load)
+      else if (auto allocLike = depVar.getDefiningOp()) {
+        if (isa<memref::AllocaOp, memref::AllocOp>(allocLike)) {
+          ARTS_DEBUG("   - Dep " << i << " is alloca/alloc token container");
+          /// Find the stored value in the token container
+          memref::StoreOp depStoreOp = nullptr;
+          for (Operation *user : depVar.getUsers()) {
+            if (user != task && (depStoreOp = dyn_cast<memref::StoreOp>(user)))
+              break;
+          }
+
+          if (!depStoreOp) {
+            ARTS_DEBUG("   - No store found for token container");
+          } else {
+            ARTS_DEBUG("   - Found store operation");
+            Value storedVal = depStoreOp.getValueToStore();
+            if (auto loadOp = storedVal.getDefiningOp<memref::LoadOp>()) {
+              ARTS_DEBUG("   - Stored value is from a load");
+              source = loadOp.getMemref();
+              indices.assign(loadOp.getIndices().begin(),
+                             loadOp.getIndices().end());
+
+              /// For array accesses: use actual indices and size 1 per
+              /// dimension For scalar accesses: no indices, size 1
+              if (!indices.empty()) {
+                for (size_t dim = 0; dim < indices.size(); ++dim)
+                  sizes.push_back(
+                      builder.create<arith::ConstantIndexOp>(loc, 1));
+
+                ARTS_DEBUG(
+                    " - Creating OmpDepOp from alloca/store/load pattern with "
+                    << indices.size() << " indices");
+              } else {
+                /// Scalar dependency: no indices, size 1
+                sizes.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
+                ARTS_DEBUG(" - Creating OmpDepOp for scalar dependency");
+              }
+            } else {
+              ARTS_DEBUG("   - Stored value is NOT from a load: "
+                         << *storedVal.getDefiningOp());
+            }
+          }
+        }
+      }
+
+      /// Create OmpDepOp if we successfully extracted dependency info
+      /// For scalars: source + empty indices + size=[1]
+      /// For arrays: source + indices + sizes
+      if (source && !sizes.empty()) {
+        auto ompDepOp =
+            builder.create<OmpDepOp>(loc, mode, source, indices, sizes);
+        newDepVars.push_back(ompDepOp.getResult());
+        ARTS_DEBUG(" - Created OmpDepOp for dependency " << i);
+      } else {
+        /// Keep original if we couldn't analyze it
+        newDepVars.push_back(depVar);
+        ARTS_DEBUG(" - Could not create OmpDepOp for dependency "
+                   << i << ", keeping original");
+      }
+    }
+
+    /// Update the task's depend vars
+    task.getDependVarsMutable().assign(newDepVars);
+  });
+}
+
+//===----------------------------------------------------------------------===//
+// Helper Functions
+//===----------------------------------------------------------------------===//
+
+/// Get dependency mode from omp.task for a given depend variable
+std::optional<ArtsMode>
+CanonicalizeMemrefsPass::getDepModeFromTask(omp::TaskOp task, Value depVar) {
+  auto dependList = task.getDependsAttr();
+  if (!dependList)
+    return std::nullopt;
+
+  auto depVars = task.getDependVars();
+  for (size_t i = 0; i < depVars.size(); ++i) {
+    if (depVars[i] == depVar) {
+      auto depClause =
+          dyn_cast<omp::ClauseTaskDependAttr>(dependList.getValue()[i]);
+      if (!depClause)
+        continue;
+
+      switch (depClause.getValue()) {
+      case omp::ClauseTaskDepend::taskdependin:
+        return ArtsMode::in;
+      case omp::ClauseTaskDepend::taskdependout:
+        return ArtsMode::out;
+      case omp::ClauseTaskDepend::taskdependinout:
+        return ArtsMode::inout;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+/// Materialize an OpFoldResult as a Value
+Value CanonicalizeMemrefsPass::materializeOpFoldResult(OpFoldResult ofr,
+                                                       OpBuilder &builder,
+                                                       Location loc) {
+  if (auto value = ofr.dyn_cast<Value>())
+    return value;
+
+  auto attr = ofr.get<Attribute>().cast<IntegerAttr>();
+  return builder.create<arith::ConstantIndexOp>(loc, attr.getInt());
 }
 
 //===----------------------------------------------------------------------===//

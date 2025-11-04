@@ -107,12 +107,13 @@ int main(int argc, char **argv) {
   {
 #pragma omp single
     {
+      printf("Starting tasks\n");
       for (int task_id = 0; task_id < num_tasks; ++task_id) {
         const int start_row = task_id * block_size;
 // printf("Task %d starting at row %d\n", task_id + 1, start_row);
 #pragma omp task firstprivate(start_row, task_id)
         {
-          // printf("Task %d running\n", task_id + 1);
+          printf("Task %d running\n", task_id + 1);
           for (int i = start_row;
                (i < start_row + block_size) && (i < output_size); ++i) {
             for (int j = 0; j < output_size; ++j) {
@@ -170,9 +171,6 @@ int main(int argc, char **argv) {
     printf("Result: PASS\n");
   else
     printf("Result: FAIL\n");
-
-  // printf("Parallel time: %.6f sec\n", end_parallel - start_parallel);
-  // printf("Serial time: %.6f sec\n", end_serial - start_serial);
 
   // Memory cleanup
   for (int i = 0; i < matrix_size; ++i)
