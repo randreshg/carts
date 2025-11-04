@@ -693,14 +693,15 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       for (const auto &dep : deps) {
         const auto &depIndices = dep.indices;
         const auto &depOffsets = dep.offsets;
-        const auto &depSizes = dep.sizes;
 
-        /// For fine-grained element-level access: use indices, offsets, sizes
-        /// from dep
+        /// Create fine-grained acquire operation
         SmallVector<Value> acquireIndices(depIndices.begin(), depIndices.end());
         SmallVector<Value> acquireOffsets(depOffsets.begin(), depOffsets.end());
-        SmallVector<Value> acquireSizes(depSizes.begin(), depSizes.end());
-
+        SmallVector<Value> acquireSizes;
+        for (size_t i = 0; i < depIndices.size(); ++i) {
+          acquireSizes.push_back(
+              builder.create<arith::ConstantIndexOp>(edt.getLoc(), 1));
+        }
         auto acquireOp = builder.create<DbAcquireOp>(
             edt.getLoc(), dep.mode, sourceGuid, sourcePtr, acquireIndices,
             acquireOffsets, acquireSizes);
