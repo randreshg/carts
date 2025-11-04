@@ -39,7 +39,8 @@ private:
   /// Updates all users of the old DB alloc to use the new one.
   void updateAllocUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp);
   /// Processes a single DbAcquireOp and its nested acquire operations.
-  void updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid, Value newPtr);
+  void updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid, Value newPtr,
+                          SmallVector<Value> elementSizes);
   /// Helper function to get LLVM pointer from a base value and indices.
   Value getLLVMPtr(Value base, ValueRange opIndices, Location loc);
 
@@ -128,17 +129,55 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
   Value newPtr = newAllocOp.getPtr();
   assert(oldPtr && newPtr && "expected pointer values");
 
+  /// Get element sizes
+  SmallVector<Value> elementSizes(newAllocOp.getElementSizes().begin(),
+                                  newAllocOp.getElementSizes().end());
+
   /// Process each use of the old pointer
   for (auto &use : llvm::make_early_inc_range(oldPtr.getUses())) {
     Operation *userOp = use.getOwner();
     AC->setInsertionPoint(userOp);
 
+    /// DbRef Ops iterate over the outer sizes of the DBAllocOp.
     if (auto dbRefOp = dyn_cast<DbRefOp>(userOp)) {
-      Value llvmPtr =
-          getLLVMPtr(newPtr, dbRefOp.getIndices(), dbRefOp.getLoc());
-      auto loadOp = AC->create<LLVM::LoadOp>(
-          dbRefOp.getLoc(), dbRefOp.getResult().getType(), llvmPtr);
-      dbRefOp.getResult().replaceAllUsesWith(loadOp.getResult());
+      /// Extract the !llvm.ptr from newPtr using db_gep at dbRefOp location
+      SmallVector<Value> dbRefIndices(dbRefOp.getIndices().begin(),
+                                      dbRefOp.getIndices().end());
+      Value llvmPtr = getLLVMPtr(newPtr, dbRefIndices, dbRefOp.getLoc());
+      auto loadedLlvmPtr = AC->create<LLVM::LoadOp>(dbRefOp.getLoc(),
+                                                    llvmPtr.getType(), llvmPtr);
+      /// Cast the !llvm.ptr to the appropriate memref type at dbRefOp location
+      auto originalMemrefType =
+          dbRefOp.getResult().getType().cast<MemRefType>();
+      Value castedMemref = AC->create<polygeist::Pointer2MemrefOp>(
+          dbRefOp.getLoc(), originalMemrefType, loadedLlvmPtr);
+
+      /// Rewrite uses of the DbRefOp so we propagate the element sizes
+      for (auto &dbRefUse :
+           llvm::make_early_inc_range(dbRefOp.getResult().getUses())) {
+        Operation *userOp = dbRefUse.getOwner();
+        AC->setInsertionPoint(userOp);
+
+        if (auto loadOp = dyn_cast<memref::LoadOp>(userOp)) {
+          SmallVector<Value> indices(loadOp.getIndices().begin(),
+                                     loadOp.getIndices().end());
+          auto dynLoad = AC->create<polygeist::DynLoadOp>(
+              loadOp.getLoc(), loadOp.getResult().getType(), castedMemref,
+              indices, elementSizes);
+          loadOp.getResult().replaceAllUsesWith(dynLoad.getResult());
+          opsToRemove.insert(loadOp);
+        } else if (auto storeOp = dyn_cast<memref::StoreOp>(userOp)) {
+          SmallVector<Value> indices(storeOp.getIndices().begin(),
+                                     storeOp.getIndices().end());
+          AC->create<polygeist::DynStoreOp>(
+              storeOp.getLoc(), storeOp.getValueToStore(), castedMemref,
+              indices, elementSizes);
+          opsToRemove.insert(storeOp);
+        } else {
+          /// For other users, replace with the casted memref
+          dbRefUse.set(castedMemref);
+        }
+      }
       opsToRemove.insert(dbRefOp);
       continue;
     }
@@ -162,7 +201,7 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
     }
 
     if (auto acquireOp = dyn_cast<DbAcquireOp>(userOp)) {
-      updateAcquireUsers(acquireOp, newGuid, newPtr);
+      updateAcquireUsers(acquireOp, newGuid, newPtr, elementSizes);
       continue;
     }
 
@@ -186,7 +225,8 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
 /// Process a single DbAcquireOp and its nested acquire operations
 //===----------------------------------------------------------------------===//
 void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
-                                        Value newPtr) {
+                                        Value newPtr,
+                                        SmallVector<Value> elementSizes) {
   SmallVector<Value> indices(acquireOp.getIndices().begin(),
                              acquireOp.getIndices().end());
   SmallVector<Value> offsets(acquireOp.getOffsets().begin(),
@@ -212,11 +252,43 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
     AC->setInsertionPoint(blockUserOp);
 
     if (auto dbRefOp = dyn_cast<DbRefOp>(blockUserOp)) {
-      Value llvmPtr =
-          getLLVMPtr(blockArg, dbRefOp.getIndices(), dbRefOp.getLoc());
-      auto loadOp = AC->create<LLVM::LoadOp>(
-          dbRefOp.getLoc(), dbRefOp.getResult().getType(), llvmPtr);
-      dbRefOp.getResult().replaceAllUsesWith(loadOp.getResult());
+      SmallVector<Value> dbRefIndices(dbRefOp.getIndices().begin(),
+                                      dbRefOp.getIndices().end());
+      Value llvmPtr = getLLVMPtr(blockArg, dbRefIndices, dbRefOp.getLoc());
+      auto loadedLlvmPtr = AC->create<LLVM::LoadOp>(dbRefOp.getLoc(),
+                                                    llvmPtr.getType(), llvmPtr);
+      auto originalMemrefType =
+          dbRefOp.getResult().getType().cast<MemRefType>();
+      Value castedMemref = AC->create<polygeist::Pointer2MemrefOp>(
+          dbRefOp.getLoc(), originalMemrefType, loadedLlvmPtr);
+
+      /// Propagate the element sizes to the uses of the DbRefOp
+      for (auto &dbRefUse :
+           llvm::make_early_inc_range(dbRefOp.getResult().getUses())) {
+        Operation *userOp = dbRefUse.getOwner();
+        AC->setInsertionPoint(userOp);
+
+        /// Create pointer2memref fresh for each use
+        if (auto loadOp = dyn_cast<memref::LoadOp>(userOp)) {
+          SmallVector<Value> indices(loadOp.getIndices().begin(),
+                                     loadOp.getIndices().end());
+          auto dynLoad = AC->create<polygeist::DynLoadOp>(
+              loadOp.getLoc(), loadOp.getResult().getType(), castedMemref,
+              indices, elementSizes);
+          loadOp.getResult().replaceAllUsesWith(dynLoad.getResult());
+          opsToRemove.insert(loadOp);
+        } else if (auto storeOp = dyn_cast<memref::StoreOp>(userOp)) {
+          SmallVector<Value> indices(storeOp.getIndices().begin(),
+                                     storeOp.getIndices().end());
+          AC->create<polygeist::DynStoreOp>(
+              storeOp.getLoc(), storeOp.getValueToStore(), castedMemref,
+              indices, elementSizes);
+          opsToRemove.insert(storeOp);
+        } else {
+          /// For other users, replace with the casted memref
+          dbRefUse.set(castedMemref);
+        }
+      }
       opsToRemove.insert(dbRefOp);
       continue;
     }
@@ -249,7 +321,7 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
 
     if (auto nestedAcquireOp = dyn_cast<DbAcquireOp>(blockUserOp)) {
       /// Recursively process nested acquire operations
-      updateAcquireUsers(nestedAcquireOp, newGuid, blockArg);
+      updateAcquireUsers(nestedAcquireOp, newGuid, blockArg, elementSizes);
       continue;
     }
 

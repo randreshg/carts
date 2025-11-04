@@ -523,7 +523,18 @@ Operation *getUnderlyingDbAlloc(Value v) {
 static void removeOpImpl(Operation *op, OpBuilder &builder,
                          SmallPtrSet<Operation *, 32> &seen, bool recursive,
                          SetVector<Operation *> &opsToRemove) {
-  if (!op || !op->getBlock())
+  /// Check if operation is still valid
+  if (!op)
+    return;
+
+  /// Check if operation is still properly linked in the IR
+  Block *block = op->getBlock();
+  if (!block)
+    return;
+
+  /// Additional check: ensure the block has a valid parent operation
+  Operation *parentOp = block->getParentOp();
+  if (!parentOp)
     return;
 
   /// Already visited
@@ -575,10 +586,18 @@ void removeOps(ModuleOp module, SetVector<Operation *> &opsToRemove,
   /// Use index-based iteration since we may add to opsToRemove during
   /// processing
   ARTS_DEBUG(" - Removing operations");
+
+  /// Filter out operations that may have been removed
+  SetVector<Operation *> validOpsToRemove;
+  for (Operation *op : opsToRemove) {
+    if (op && op->getBlock() && op->getBlock()->getParentOp())
+      validOpsToRemove.insert(op);
+  }
+
   size_t idx = 0;
-  while (idx < opsToRemove.size()) {
-    Operation *op = opsToRemove[idx++];
-    removeOpImpl(op, builder, seen, recursive, opsToRemove);
+  while (idx < validOpsToRemove.size()) {
+    Operation *op = validOpsToRemove[idx++];
+    removeOpImpl(op, builder, seen, recursive, validOpsToRemove);
   }
   opsToRemove.clear();
   ARTS_DEBUG(" - Removed " << seen.size() << " operations total");

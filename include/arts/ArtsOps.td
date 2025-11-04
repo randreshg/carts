@@ -246,7 +246,7 @@ def DbFreeOp : Arts_Op<"db_free", []> {
   }];
 }
 
-def DbControlOp : Arts_Op<"db_control", 
+def DbControlOp : Arts_Op<"db_control",
   [AttrSizedOperandSegments]> {
   let summary = "Creates a control dependency for arts.edt";
   let description = [{
@@ -254,39 +254,36 @@ def DbControlOp : Arts_Op<"db_control",
     It is used to ensure that the DataBlock is ready before the EDT is executed.
     - mode: "in", "out", "inout"
     - ptr: base address of the DataBlock
-    - elementType: type of the DataBlock
-    - elementTypeSize: size of the element type
-    - indices: indices for the subview
-    - offsets: offsets for the subview
-    - sizes: sizes for the subview
+    - indices: pinned indices for the subview (dimensions with size=1)
+    - offsets: chunk offsets for the subview (dimensions with size>1)
+    - sizes: chunk sizes for the subview (dimensions with size>1)
     Note: Currently ignored for execution, but retained for future correctness enforcement.
   }];
   let arguments = (ins
     ArtsModeAttr:$mode,
     AnyMemRef:$ptr,
-    TypeAttr:$elementType,
-    Index:$elementTypeSize,
     Variadic<Index>:$indices,
     Variadic<Index>:$offsets,
     Variadic<Index>:$sizes
   );
 
-  let results = (outs AnyMemRef:$subview);
+  let results = (outs MemRefOf<[I64]>:$subview);
   let assemblyFormat = [{
-    `[` $mode `]` `(` $ptr `:` type($ptr) `)` 
-    `elementType` `(` $elementType `)` 
-    `elementTypeSize` `(` $elementTypeSize `:` type($elementTypeSize) `)` 
-    `indices` `[` $indices `]` 
-    `offsets` `[` $offsets `]` 
-    `sizes` `[` $sizes `]` 
+    `[` $mode `]` `(` $ptr `:` type($ptr) `)`
+    `indices` `[` $indices `]`
+    `offsets` `[` $offsets `]`
+    `sizes` `[` $sizes `]`
     attr-dict `:` type($subview)
   }];
-  
+
   let builders = [
     OpBuilder<(ins "ArtsMode":$mode,
                    "Value":$ptr,
-                   CArg<"SmallVector<Value>", "{}">:$pinnedIndices)>
+                   CArg<"SmallVector<Value>", "{}">:$indices,
+                   CArg<"SmallVector<Value>", "{}">:$offsets,
+                   CArg<"SmallVector<Value>", "{}">:$sizes)>
   ];
+
 }
 
 def DbNumElementsOp : Arts_Op<"db_num_elements", [Pure]> {
@@ -303,6 +300,58 @@ def DbNumElementsOp : Arts_Op<"db_num_elements", [Pure]> {
   let builders = [
     OpBuilder<(ins "DbAllocOp":$allocOp)>,
     OpBuilder<(ins "DbAcquireOp":$acquireOp)>
+  ];
+}
+
+def OmpDepOp : Arts_Op<"omp_dep", [Pure, AttrSizedOperandSegments]> {
+  let summary = "OpenMP dependency descriptor for chunk-based task dependencies";
+  let description = [{
+    Captures dependency information from OpenMP task depend clauses during
+    CanonicalizeMemrefs pass. This operation simplifies the conversion pipeline
+    by avoiding complex subview/collapse operations that only exist to satisfy
+    OpenMP's memref requirement. Instead, it directly captures:
+    - Base array (canonicalized N-D array)
+    - Access mode (in/out/inout)
+    - Starting indices for each dimension
+    - Chunk size for each dimension
+
+    This operation is created in CanonicalizeMemrefs when transforming nested
+    arrays to N-D arrays, and is consumed in ConvertOpenMPToArts to create
+    DbControlOp operations with proper chunk support.
+
+    Examples:
+      // Point dependency: depend(in: A[i][j])
+      %dep = arts.omp_dep <in> %A_2D[%i, %j] size [%c1, %c1] : memref<?x?xf64>
+
+      // Chunk dependency: depend(out: A[i:BLOCK_SIZE][j:BLOCK_SIZE])
+      %dep = arts.omp_dep <out> %A_2D[%i, %j] size [%bs, %bs] : memref<?x?xf64>
+
+      // Mixed: depend(in: A[i][j:COLS])
+      %dep = arts.omp_dep <in> %A_2D[%i, %j] size [%c1, %cols] : memref<?x?xf64>
+
+      // Full array: depend(in: B[0:N][0:N])
+      %dep = arts.omp_dep <in> %B[%c0, %c0] size [%N, %N] : memref<?x?xf64>
+  }];
+
+  let arguments = (ins
+    ArtsModeAttr:$mode,              // Dependency mode (in/out/inout)
+    AnyMemRef:$source,               // Canonicalized N-D array
+    Variadic<Index>:$indices,        // Start indices [i, j, ...]
+    Variadic<Index>:$sizes           // Chunk sizes [size_i, size_j, ...]
+  );
+
+  let results = (outs AnyMemRef:$result);
+
+  let assemblyFormat = [{
+    `<` $mode `>` $source `[` $indices `]` `size` `[` $sizes `]`
+    attr-dict `:` type($source) `->` type($result)
+  }];
+
+  let builders = [
+    OpBuilder<(ins "ArtsMode":$mode,
+                   "Value":$source,
+                   CArg<"SmallVector<Value>", "{}">:$indices,
+                   CArg<"SmallVector<Value>", "{}">:$sizes)>
   ];
 }
 

@@ -196,6 +196,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
       return success();
     }
     ARTS_DEBUG(" - Processing " << dependList.size() << " dependencies");
+
     for (unsigned i = 0, e = dependList.size(); i < e; ++i) {
       /// Get dependency clause and type.
       auto depClause = dyn_cast<omp::ClauseTaskDependAttr>(dependList[i]);
@@ -205,206 +206,68 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
       }
       Value depVar = task.getDependVars()[i];
 
-      /// Two supported forms for dependency variables:
-      ///  (A) Scalar token held in a local memref (memref.alloca or
-      ///  memref.alloc)
-      ///      where a value is stored before the task; we extract the stored
-      ///      value (expected produced by memref.load) as the dependency
-      ///      source.
-      ///  (B) A memref loaded from a table of memrefs (i.e., depVar defined by
-      ///      memref.load and has memref type). In this case, use the loaded
-      ///      memref directly as the dependency source.
+      /// All dependencies should be arts.omp_dep
+      auto ompDepOp = depVar.getDefiningOp<OmpDepOp>();
+      if (!ompDepOp) {
+        ARTS_ERROR("Expected arts.omp_dep for dependency "
+                   << i << ", but got " << *depVar.getDefiningOp()
+                   << ". Make sure CanonicalizeMemrefs runs before this pass.");
+        return failure();
+      }
 
-      Operation *allocLikeOp = nullptr;
-      if (auto a = depVar.getDefiningOp<memref::AllocaOp>())
-        allocLikeOp = a.getOperation();
-      else if (auto a2 = depVar.getDefiningOp<memref::AllocOp>())
-        allocLikeOp = a2.getOperation();
-      if (allocLikeOp) {
-        /// Find the first user (except the task itself) that is a memref.store
-        memref::StoreOp depStoreOp = nullptr;
-        for (Operation *user : depVar.getUsers()) {
-          if (user == task)
-            continue;
-          if ((depStoreOp = dyn_cast<memref::StoreOp>(user)))
-            break;
-        }
-        if (!depStoreOp) {
-          ARTS_ERROR("Expected a memref.store operation for dependency var");
-          return failure();
-        }
+      /// Clone arts.omp_dep inside the task region for local use
+      auto &region = task.getRegion();
+      {
+        OpBuilder::InsertionGuard IG(rewriter);
+        rewriter.setInsertionPointToStart(&region.front());
 
-        /// Get the value that was stored; expect a memref.load
-        Operation *valueDefOp = depStoreOp.getValueToStore().getDefiningOp();
-        Value depLoadVal;
-        if (auto loadOp = dyn_cast<memref::LoadOp>(valueDefOp))
-          depLoadVal = loadOp.getResult();
-        else {
-          ARTS_ERROR("Expected a memref.load operation feeding dep store");
-          return failure();
-        }
+        auto newOmpDep = rewriter.create<OmpDepOp>(
+            loc, ompDepOp.getMode(), ompDepOp.getSource(),
+            SmallVector<Value>(ompDepOp.getIndices().begin(),
+                               ompDepOp.getIndices().end()),
+            SmallVector<Value>(ompDepOp.getSizes().begin(),
+                               ompDepOp.getSizes().end()));
+        replaceInRegion(region, depVar, newOmpDep.getResult());
+      }
 
-        /// Clone the load operation at the beginning of the edt region and
-        /// replace uses in-region so the region no longer depends on the outer
-        /// SSA value.
-        /// For nested loads (load from loaded memref), clone both levels.
-        auto &region = task.getRegion();
-        {
-          OpBuilder::InsertionGuard IG(rewriter);
-          rewriter.setInsertionPointToStart(&region.front());
-          auto loadOp = cast<memref::LoadOp>(depLoadVal.getDefiningOp());
+      /// Extract indices and sizes from arts.omp_dep
+      /// Separate pinned dims (size=1) from chunk dims (size>1)
+      {
+        OpBuilder::InsertionGuard IG(rewriter);
+        rewriter.setInsertionPoint(ompDepOp);
 
-          /// Check for nested load pattern and clone parent load if needed
-          Value memrefToUse = loadOp.getMemref();
-          if (auto parentLoadOp = memrefToUse.getDefiningOp<memref::LoadOp>()) {
-            /// Clone the parent load (table -> row) first
-            auto newParentLoad = rewriter.create<memref::LoadOp>(
-                loc, parentLoadOp.getMemref(), parentLoadOp.getIndices());
-            /// Use the cloned parent as the memref for the child load
-            memrefToUse = newParentLoad.getResult();
+        SmallVector<Value> allIndices(ompDepOp.getIndices().begin(),
+                                      ompDepOp.getIndices().end());
+        SmallVector<Value> allSizes(ompDepOp.getSizes().begin(),
+                                    ompDepOp.getSizes().end());
+
+        SmallVector<Value> pinnedIndices, chunkOffsets, chunkSizes;
+
+        for (size_t i = 0; i < allIndices.size() && i < allSizes.size(); ++i) {
+          /// Check if this dimension has size == 1 (pinned) or > 1 (chunk)
+          bool isPinned = false;
+          if (auto constOp =
+                  allSizes[i].getDefiningOp<arith::ConstantIndexOp>()) {
+            isPinned = (constOp.value() == 1);
           }
 
-          /// Clone the element load
-          auto newLoad = rewriter.create<memref::LoadOp>(loc, memrefToUse,
-                                                         loadOp.getIndices());
-          replaceInRegion(region, loadOp.getResult(), newLoad.getResult());
-        }
-
-        /// Create the control dependency - will be removed in CreateDbs pass
-        /// Extract indices from the load operation to track fine-grained
-        /// dependencies
-        {
-          OpBuilder::InsertionGuard IG(rewriter);
-          rewriter.setInsertionPointAfter(depLoadVal.getDefiningOp());
-          auto loadOp = cast<memref::LoadOp>(depLoadVal.getDefiningOp());
-
-          /// Extract indices from the load operation for fine-grained
-          /// dependency tracking. This assumes that nested loads
-          /// (array-of-arrays) should be canonicalized by CanonicalizeMemrefs
-          /// pass before this conversion, so we expect direct N-dimensional
-          /// loads here (e.g., load A[i,j] on memref<?x?xT>)
-          SmallVector<Value> indices;
-          indices.assign(loadOp.getIndices().begin(),
-                         loadOp.getIndices().end());
-
-          ARTS_DEBUG("  - Creating DbControlOp with " << indices.size()
-                                                      << " indices");
-          Value dbControl = rewriter.create<DbControlOp>(
-              depLoadVal.getLoc(), getDbMode(depClause.getValue()), depLoadVal,
-              indices);
-          deps.push_back(dbControl);
-        }
-
-        /// Replace the dependency allocation with an undefined value to allow
-        /// DCE of the token container.
-        replaceWithUndef(allocLikeOp, rewriter);
-        continue;
-      }
-
-      if (auto depMemrefLoad = depVar.getDefiningOp<memref::LoadOp>()) {
-        /// This is the case where the dependency is a memref loaded from a
-        /// table (e.g., memref<?xmemref<?xf64>>). Use the loaded memref as the
-        /// dependency source. Clone the load inside the task region so the
-        /// region has a local definition if it uses this value.
-        auto &region = task.getRegion();
-        {
-          OpBuilder::InsertionGuard IG(rewriter);
-          rewriter.setInsertionPointToStart(&region.front());
-          auto newLoad = rewriter.create<memref::LoadOp>(
-              loc, depMemrefLoad.getMemref(), depMemrefLoad.getIndices());
-          replaceInRegion(region, depVar, newLoad.getResult());
-        }
-
-        {
-          OpBuilder::InsertionGuard IG(rewriter);
-          rewriter.setInsertionPointAfter(depMemrefLoad);
-
-          /// Extract indices from the memref.load that loads from the table
-          /// For example: %depVar = memref.load %table[%i]
-          /// The %i is the index we want to track
-          SmallVector<Value> indices(depMemrefLoad.getIndices().begin(),
-                                     depMemrefLoad.getIndices().end());
-
-          ARTS_DEBUG("  - Creating DbControlOp (table case) with "
-                     << indices.size() << " indices");
-          Value dbControl = rewriter.create<DbControlOp>(
-              depMemrefLoad.getLoc(), getDbMode(depClause.getValue()), depVar,
-              indices);
-          deps.push_back(dbControl);
-        }
-        continue;
-      }
-
-      if (auto depSubview = depVar.getDefiningOp<memref::SubViewOp>()) {
-        /// This is the case where the dependency is a subview of an N-D array
-        /// (e.g., %row = memref.subview %array[%i, 0][1, %cols][1, 1])
-        /// This happens after CanonicalizeMemrefs converts array-of-arrays to
-        /// N-D. Clone the subview inside the task region for local definition.
-        auto &region = task.getRegion();
-        {
-          OpBuilder::InsertionGuard IG(rewriter);
-          rewriter.setInsertionPointToStart(&region.front());
-          auto newSubview = rewriter.create<memref::SubViewOp>(
-              loc, depSubview.getSource(), depSubview.getMixedOffsets(),
-              depSubview.getMixedSizes(), depSubview.getMixedStrides());
-          replaceInRegion(region, depVar, newSubview.getResult());
-        }
-
-        {
-          OpBuilder::InsertionGuard IG(rewriter);
-          rewriter.setInsertionPointAfter(depSubview);
-
-          /// Extract indices from the subview offsets
-          /// For N-D subviews, extract all dimension indices where size=1
-          /// Examples:
-          ///   2D: subview %arr[%i, 0][1, %cols][1, 1] -> track [%i]
-          ///   3D: subview %arr[%i, %j, 0][1, 1, %depth][1, 1, 1]
-          ///       ->track [%i, %j]
-          /// The pattern: extract offsets where corresponding size is 1
-          SmallVector<Value> indices;
-          auto offsets = depSubview.getMixedOffsets();
-          auto sizes = depSubview.getMixedSizes();
-
-          for (size_t dim = 0; dim < offsets.size() && dim < sizes.size();
-               ++dim) {
-            /// Check if this dimension has size=1 (we're selecting a slice)
-            bool isSliceDim = false;
-            auto sizeAtDim = sizes[dim];
-            if (auto attr = sizeAtDim.dyn_cast<Attribute>()) {
-              if (auto intAttr = attr.dyn_cast<IntegerAttr>())
-                isSliceDim = (intAttr.getInt() == 1);
-            }
-
-            if (isSliceDim) {
-              /// This dimension has size=1, so extract its offset index
-              auto offset = offsets[dim];
-              if (auto valueOffset = offset.dyn_cast<Value>()) {
-                indices.push_back(valueOffset);
-              } else {
-                /// Materialize constant offsets as Values
-                auto attr = offset.get<Attribute>().cast<IntegerAttr>();
-                Value constIndex = rewriter.create<arith::ConstantIndexOp>(
-                    depSubview.getLoc(), attr.getInt());
-                indices.push_back(constIndex);
-              }
-            }
+          if (isPinned) {
+            pinnedIndices.push_back(allIndices[i]);
+          } else {
+            chunkOffsets.push_back(allIndices[i]);
+            chunkSizes.push_back(allSizes[i]);
           }
-
-          ARTS_DEBUG("  - Creating DbControlOp (subview case) with "
-                     << indices.size() << " indices");
-          /// Use the source of the subview (the N-D array) as the dependency
-          /// target, not the subview itself
-          Value dbControl = rewriter.create<DbControlOp>(
-              depSubview.getLoc(), getDbMode(depClause.getValue()),
-              depSubview.getSource(), indices);
-          deps.push_back(dbControl);
         }
-        continue;
-      }
 
-      ARTS_ERROR("Unsupported dependency variable producer. Expected "
-                 "memref.alloca, memref.alloc, memref.load, or memref.subview");
-      return failure();
+        ARTS_DEBUG("  - Creating DbControlOp from arts.omp_dep: "
+                   << allIndices.size() << " indices, " << pinnedIndices.size()
+                   << " pinned, " << chunkSizes.size() << " chunks");
+
+        Value dbControl = rewriter.create<DbControlOp>(
+            ompDepOp.getLoc(), ompDepOp.getMode(), ompDepOp.getSource(),
+            pinnedIndices, chunkOffsets, chunkSizes);
+        deps.push_back(dbControl);
+      }
     }
     return success();
   }
@@ -768,12 +631,12 @@ struct CallToARTSPattern : public OpRewritePattern<func::CallOp> {
     auto callee = callOp.getCallee();
     if (callee == "omp_get_thread_num") {
       rewriter.replaceOpWithNewOp<arts::GetCurrentNodeOp>(callOp);
-      // rewriter.replaceOpWithNewOp<arts::GetCurrentWorkerOp>(callOp);
+      /// rewriter.replaceOpWithNewOp<arts::GetCurrentWorkerOp>(callOp);
       return success();
     }
     if (callee == "omp_get_num_threads" || callee == "omp_get_max_threads") {
       rewriter.replaceOpWithNewOp<arts::GetTotalNodesOp>(callOp);
-      // rewriter.replaceOpWithNewOp<arts::GetTotalWorkersOp>(callOp);
+      /// rewriter.replaceOpWithNewOp<arts::GetTotalWorkersOp>(callOp);
       return success();
     }
     /// nothing to do, leave the op as-is
@@ -789,7 +652,7 @@ struct ConvertOpenMPToArtsPass
     : public arts::ConvertOpenMPToArtsBase<ConvertOpenMPToArtsPass> {
   void runOnOperation() override;
 };
-} // end namespace
+} // namespace
 
 /// Pass to convert OpenMP operations to Arts operations
 void ConvertOpenMPToArtsPass::runOnOperation() {

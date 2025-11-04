@@ -133,7 +133,5 @@ int main(int argc, char *argv[]) {
   else
     printf("Result: INCORRECT\n");
 
-  fflush(stdout);
-
   return 0;
 }

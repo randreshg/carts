@@ -695,12 +695,16 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
 
     if (isSingleElement) {
       ARTS_DEBUG("Creating single DB");
-      /// Allocate a single GUID as 1-element array
-      auto guidType = MemRefType::get({1}, AC->Int64);
-      guidMemref = AC->create<memref::AllocOp>(loc, guidType);
-      /// Allocate a single DB Pointer as 1-element array
-      auto payloadPtrType = MemRefType::get({1}, AC->llvmPtr);
-      dbMemref = AC->create<memref::AllocOp>(loc, payloadPtrType);
+      /// Allocate 1D linear array of GUIDs
+      Value totalElems = AC->createIndexConstant(1, loc);
+      auto guidType = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
+      guidMemref =
+          AC->create<memref::AllocOp>(loc, guidType, ValueRange{totalElems});
+      /// Allocate 1D linear array of DB Pointers
+      auto payloadPtrType =
+          MemRefType::get({ShapedType::kDynamic}, AC->llvmPtr);
+      dbMemref = AC->create<memref::AllocOp>(loc, payloadPtrType,
+                                             ValueRange{totalElems});
       createSingleDb(dbMemref, guidMemref, dbMode, route, totalDbSize, loc);
     } else {
       ARTS_DEBUG("Creating multi-dim DB");
