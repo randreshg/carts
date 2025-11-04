@@ -773,13 +773,26 @@ run_build() {
         carts_debug "Running: make $make_vars $build_target"
     fi
 
+    local build_status=0
     if [[ -n "$make_vars" ]]; then
-        make $make_vars "$build_target"
+        make $make_vars "$build_target" || build_status=$?
     else
-        make "$build_target"
+        make "$build_target" || build_status=$?
+    fi
+
+    if [[ $build_status -eq 0 && "$build_target" == "polygeist" ]]; then
+        if [[ -n "$CARTS_VERBOSE" ]]; then
+            carts_debug "Polygeist rebuilt; refreshing CARTS (carts-run)"
+        fi
+        # Build only carts-run instead of the entire CARTS project
+        if [[ -n "$make_vars" ]]; then
+            make $make_vars carts-run-only || build_status=$?
+        else
+            make carts-run-only || build_status=$?
+        fi
     fi
     
-    if [[ $? -eq 0 ]]; then
+    if [[ $build_status -eq 0 ]]; then
         carts_header "Build Complete"
         carts_success "CARTS build completed successfully!"
     else
@@ -1377,7 +1390,7 @@ run_execute() {
                 ;;
         esac
     done
-    
+
     carts_header "CARTS Execution"
     carts_info "Running CARTS for: $input_file"
     carts_line

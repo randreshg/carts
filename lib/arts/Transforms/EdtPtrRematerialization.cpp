@@ -41,9 +41,16 @@ void rematerializePointersInEdt(EdtOp edt) {
     if (valueMap.count(val))
       return valueMap[val];
 
-    /// Return if the value is not an LLVM pointer type
-    if (!val.getDefiningOp() || val.getType().isIntOrIndexOrFloat() ||
-        val.getType().isa<MemRefType>())
+    /// Skip if there's no defining operation
+    if (!val.getDefiningOp())
+      return val;
+
+    /// Check if this is a memref.load operation
+    bool isLoadOp = isa<memref::LoadOp>(val.getDefiningOp());
+
+    /// Return if the value is a scalar/memref and NOT from a load operation
+    if (!isLoadOp && (val.getType().isIntOrIndexOrFloat() ||
+                      val.getType().isa<MemRefType>()))
       return val;
 
     /// First clone dependencies
@@ -69,8 +76,17 @@ void rematerializePointersInEdt(EdtOp edt) {
 
   DenseMap<Value, Value> valueMap;
   for (Value operand : usedValues) {
-    /// Skip non-pointer types
-    if (!operand.getType().isa<LLVM::LLVMPointerType>())
+    /// Check if this is a pointer type that needs rematerialization
+    bool isPointer = operand.getType().isa<LLVM::LLVMPointerType>();
+
+    /// Check if this is a scalar from a memref.load that needs
+    /// rematerialization
+    bool isLoadFromMemref = false;
+    if (auto *defOp = operand.getDefiningOp())
+      isLoadFromMemref = isa<memref::LoadOp>(defOp);
+
+    /// Skip if it's neither a pointer nor a load from memref
+    if (!isPointer && !isLoadFromMemref)
       continue;
 
     /// Clone operation and its dependencies recursively

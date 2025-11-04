@@ -185,21 +185,48 @@ LogicalResult EdtOp::verify() {
 
     /// Check each operand
     for (Value operand : op->getOperands()) {
-      /// Skip if operand is defined inside the region
-      if (operand.getParentRegion() == &getBody())
+      /// Skip if operand is not a memref
+      if (!operand.getType().isa<MemRefType>())
         continue;
 
       /// Skip block arguments - these are allowed
-      if (llvm::is_contained(blockArgs, operand))
+      if (llvm::is_contained(blockArgs, operand)) {
+        /// Verify that the operand is a DbAcquireOp
+        DbAcquireOp underlyingAcquire =
+            dyn_cast<DbAcquireOp>(arts::getUnderlyingDb(operand));
+        if (!underlyingAcquire) {
+          op->emitOpError("EDT region uses block argument '")
+              << operand << "' as a DbAcquire value.";
+          return WalkResult::interrupt();
+        }
+        /// Block argument is valid, skip remaining checks
+        continue;
+      }
+
+      /// Get the underlying operation for the operand
+      auto definingOp = operand.getDefiningOp();
+      if (!definingOp)
+        continue;
+
+      /// Skip if operand is defined inside the region
+      if (definingOp->getParentOfType<EdtOp>() == *this)
         continue;
 
       /// Check if this is a dependency value used directly
       if (externalValues.contains(operand)) {
-        op->emitOpError("EDT region uses external dependency value '")
-            << operand << "' directly instead of block argument. "
-            << "All dependency accesses must go through block arguments.";
+        op->emitOpError("EDT region uses external DbAcquire value '")
+            << operand << "' directly instead of DbAcquire block argument. ";
         return WalkResult::interrupt();
       }
+
+      /// If we  got this far, the operand is not a block argument, not a
+      /// dependency, and not defined inside the region
+      op->emitOpError("EDT region uses external value '")
+          << operand
+          << "' that is not a block argument, not a dependency, and not "
+             "defined inside the region.\n"
+          << *definingOp;
+      return WalkResult::interrupt();
     }
     return WalkResult::advance();
   });
@@ -264,87 +291,12 @@ void DbGepOp::build(OpBuilder &builder, OperationState &state, Type ptr,
 }
 
 void DbControlOp::build(OpBuilder &builder, OperationState &state,
-                        ArtsMode mode, Value ptr,
-                        SmallVector<Value> pinnedIndices) {
-  auto ptrOp = ptr.getDefiningOp();
-  assert(ptrOp && "Input must be a defining operation.");
-
-  /// If the defining op is a load op, obtain the base memref and pinned
-  /// indices.
-  Value baseMemRef;
-  auto processLoad = [&](auto loadOp) {
-    baseMemRef = loadOp.getMemref();
-    if (pinnedIndices.empty())
-      pinnedIndices.assign(loadOp.getIndices().begin(),
-                           loadOp.getIndices().end());
-  };
-
-  if (auto loadOp = dyn_cast<memref::LoadOp>(ptrOp))
-    processLoad(loadOp);
-  else
-    baseMemRef = ptr;
-
-  /// Ensure the base memref type.
-  auto baseType = baseMemRef.getType().dyn_cast<MemRefType>();
-  assert(baseType && "Input must be a MemRefType.");
-
-  int64_t rank = baseType.getRank();
-  const auto pinnedCount = static_cast<int64_t>(pinnedIndices.size());
-  assert(pinnedCount <= rank &&
-         "Pinned indices exceed the rank of the memref.");
-
-  /// Compute sizes and subshape.
-  SmallVector<Value, 4> indices(pinnedCount), sizes(rank - pinnedCount);
-  SmallVector<Value, 4> offsets(
-      rank - pinnedCount,
-      builder.create<arith::ConstantIndexOp>(state.location, 0));
-  SmallVector<int64_t, 4> subShape;
-  for (int64_t i = 0, j = 0; i < rank; ++i) {
-    if (i < pinnedCount) {
-      indices[i] = pinnedIndices[i];
-    } else {
-      bool isDyn = baseType.isDynamicDim(i);
-      int64_t dimSize = baseType.getDimSize(i);
-      Value dimVal =
-          isDyn
-              ? (Value)builder.create<arts::DbDimOp>(state.location, baseMemRef,
-                                                     (int64_t)i)
-              : builder.create<arith::ConstantIndexOp>(state.location, dimSize)
-                    .getResult();
-      sizes[j] = dimVal;
-      /// For the normal subview type, preserve the static dim if available.
-      subShape.push_back(isDyn ? ShapedType::kDynamic : dimSize);
-      j++;
-    }
-  }
-
-  /// Compute the element type size.
-  auto elementType = baseType.getElementType();
-  auto elementTypeSize =
-      builder
-          .create<polygeist::TypeSizeOp>(state.location, builder.getIndexType(),
-                                         elementType)
-          .getResult();
-
-  state.addAttribute("mode", ArtsModeAttr::get(builder.getContext(), mode));
-  state.addOperands(baseMemRef);
-  state.addAttribute("elementType", TypeAttr::get(elementType));
-  state.addOperands(elementTypeSize);
-  state.addOperands(indices);
-  state.addOperands(offsets);
-  state.addOperands(sizes);
-
-  /// Build operand segment sizes
-  state.addAttribute(
-      "operandSegmentSizes",
-      builder.getDenseI32ArrayAttr({1, /// ptr
-                                    1, /// elementTypeSize
-                                    static_cast<int32_t>(indices.size()),
-                                    static_cast<int32_t>(offsets.size()),
-                                    static_cast<int32_t>(sizes.size())}));
-
-  auto resultType = MemRefType::get(subShape, elementType);
-  state.addTypes(resultType);
+                        ArtsMode mode, Value ptr, SmallVector<Value> indices,
+                        SmallVector<Value> offsets, SmallVector<Value> sizes) {
+  auto subviewType =
+      MemRefType::get({ShapedType::kDynamic}, builder.getI64Type());
+  DbControlOp::build(builder, state, subviewType, mode, ptr, indices, offsets,
+                     sizes);
 }
 
 //===----------------------------------------------------------------------===//
@@ -667,6 +619,31 @@ struct FoldDbNumElementsSingleSize : public OpRewritePattern<DbNumElementsOp> {
 void DbNumElementsOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                                   MLIRContext *context) {
   results.add<FoldDbNumElementsSingleSize>(context);
+}
+
+///==========================================================================
+/// OmpDepOp Builder
+///==========================================================================
+
+void OmpDepOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
+                     Value source, SmallVector<Value> indices,
+                     SmallVector<Value> sizes) {
+  /// Result type is the same as source memref type
+  state.addTypes(source.getType());
+
+  /// Add mode attribute
+  state.addAttribute("mode", ArtsModeAttr::get(builder.getContext(), mode));
+
+  /// Add operands: source, indices, sizes
+  state.addOperands(source);
+  state.addOperands(indices);
+  state.addOperands(sizes);
+
+  /// Build operand segment sizes: [source=1, indices, sizes]
+  state.addAttribute(
+      "operandSegmentSizes",
+      builder.getDenseI32ArrayAttr({1, static_cast<int32_t>(indices.size()),
+                                    static_cast<int32_t>(sizes.size())}));
 }
 
 ///==========================================================================
