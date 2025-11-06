@@ -36,6 +36,8 @@
 
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/Metadata/ArtsMetadata.h"
+#include "arts/Utils/Metadata/MemrefMetadata.h"
 ARTS_DEBUG_SETUP(db);
 
 using namespace mlir;
@@ -50,9 +52,11 @@ using namespace mlir::arts;
 //===----------------------------------------------------------------------===//
 namespace {
 struct DbPass : public arts::DbBase<DbPass> {
-  DbPass(ArtsAnalysisManager *AM, bool exportJson) : AM(AM) {
+  DbPass(ArtsAnalysisManager *AM, bool exportJson, bool processParallel)
+      : AM(AM) {
     assert(AM && "ArtsAnalysisManager must be provided externally");
     this->exportJson = exportJson;
+    this->processParallel = processParallel;
   }
 
   void runOnOperation() override;
@@ -64,6 +68,7 @@ struct DbPass : public arts::DbBase<DbPass> {
   bool promotePinnedDimsToElementDims();
   bool tightenAcquireSlices();
   bool convertToParameters();
+  bool refineParallelAcquires();
 
   /// Graph rebuild
   void invalidateAndRebuildGraph();
@@ -86,6 +91,13 @@ private:
   void updateDbRefOpsAfterPromotion(Value sourcePtr, Type elementMemRefType,
                                     SetVector<Operation *> &opsToRemove,
                                     Value newSourcePtr);
+
+  /// Metadata-driven helper functions
+  /// Use imported metadata from sequential compilation to make better decisions
+  ArtsMode inferModeFromMetadata(Operation *allocOp);
+  std::optional<int64_t> suggestChunkSize(Operation *loopOp,
+                                          Operation *allocOp);
+  bool shouldUseAffineOptimizations(Operation *allocOp);
 };
 } // namespace
 
@@ -93,23 +105,38 @@ void DbPass::runOnOperation() {
   bool changed = false;
   module = getOperation();
 
-  ARTS_INFO_HEADER(DbPass);
-  ARTS_DEBUG_REGION(module.dump(););
+  ARTS_DEBUG_REGION({
+    if (processParallel)
+      ARTS_INFO_HEADER(DbPass - Phase 2 : Parallel EDT Refinement);
+    else
+      ARTS_INFO_HEADER(DbPass - Phase 1 : Non - Parallel Analysis);
+
+    /// Print the module
+    module.dump();
+  });
 
   assert(AM && "ArtsAnalysisManager must be provided externally");
 
   /// Graph construction and analysis
   invalidateAndRebuildGraph();
 
-  /// Optimizations
-  /// NOTE: Most optimizations are disabled to avoid conflicts with fine-grained
-  /// allocation Only adjustDbModes is enabled to set correct access modes based
-  /// on memory operations
-  // changed |= deadDbElimination();  // DISABLED
-  changed |= adjustDbModes();
-  // changed |= pinAndSplitAcquires();  // DISABLED - conflicts with
-  // fine-grained indexing changed |= promotePinnedDimsToElementDims();  //
-  // DISABLED - conflicts with fine-grained indexing
+  if (processParallel) {
+    /// Phase 2: Focus on parallel EDT worker acquires
+    /// After ArtsForLowering has created worker EDTs with chunk-based acquires,
+    /// this phase refines the partitioning strategy
+    ARTS_INFO(" - Running Phase 2 optimizations (parallel EDT refinement)");
+    // changed |= refineParallelAcquires();
+    // changed |= adjustDbModes();
+  } else {
+    /// Phase 1: Focus on non-parallel EDTs (tasks)
+    /// This runs before ArtsForLowering, analyzing task dependencies
+    ARTS_INFO(" - Running Phase 1 optimizations (non-parallel analysis)");
+    // changed |= deadDbElimination();  // DISABLED
+    // changed |= adjustDbModes();
+    // changed |= pinAndSplitAcquires();  // DISABLED - conflicts with
+    // fine-grained indexing changed |= promotePinnedDimsToElementDims();  //
+    // DISABLED - conflicts with fine-grained indexing
+  }
 
   if (changed) {
     /// If the module has changed, adjust the db modes again
@@ -192,18 +219,6 @@ bool DbPass::adjustDbModes() {
   module.walk([&](func::FuncOp func) {
     DbGraph &graph = AM->getDbGraph(func);
 
-    /// Lattice join for ArtsMode. Ensures monotonic escalation:
-    /// in U in = in, out U out = out, any U inout = inout, and
-    /// in U out = inout
-    auto joinMode = [](ArtsMode a, ArtsMode b) -> ArtsMode {
-      if (a == b)
-        return a;
-      if (a == ArtsMode::inout || b == ArtsMode::inout)
-        return ArtsMode::inout;
-      /// Remaining distinct cases are (in, out) or (out, in)
-      return ArtsMode::inout;
-    };
-
     /// First, adjust per-acquire modes
     graph.forEachAcquireNode([&](DbAcquireNode *acqNode) {
       bool hasLoads = !acqNode->getLoads().empty();
@@ -238,7 +253,7 @@ bool DbPass::adjustDbModes() {
       std::function<void(DbAcquireNode *)> collectModes =
           [&](DbAcquireNode *acqNode) {
             ArtsMode mode = acqNode->getDbAcquireOp().getMode();
-            maxMode = joinMode(maxMode, mode);
+            maxMode = combineAccessModes(maxMode, mode);
 
             /// Recursively process child acquires
             acqNode->forEachChildNode([&](NodeBase *child) {
@@ -254,6 +269,9 @@ bool DbPass::adjustDbModes() {
       });
 
       DbAllocOp allocOp = allocNode->getDbAllocOp();
+      maxMode = combineAccessModes(
+          maxMode, inferModeFromMetadata(allocOp.getOperation()));
+
       ArtsMode currentDbMode = allocOp.getMode();
       if (currentDbMode == maxMode)
         return;
@@ -1224,12 +1242,141 @@ void DbPass::updateDbAcquireAfterPromotion(
 }
 
 ///===----------------------------------------------------------------------===///
+/// Refine Parallel Acquires (Phase 2 Optimization)
+///
+/// After ArtsForLowering creates worker EDTs with chunk-based db_acquire ops,
+/// this optimization analyzes and refines the partitioning strategy for
+/// parallel EDT datablocks.
+///
+/// Current implementation: Stub for future work
+/// TODO: Implement halo exchange detection and overlapping chunk handling
+///===----------------------------------------------------------------------===///
+bool DbPass::refineParallelAcquires() {
+  ARTS_DEBUG_HEADER(RefineParallelAcquires);
+  bool changed = false;
+
+  /// For each worker EDT created by ArtsForLowering:
+  ///   1. Analyze access pattern within worker EDT body
+  ///   2. Detect chunk bounds from loop structure
+  ///   3. Identify stencil/halo patterns (e.g., A[i-1], A[i], A[i+1])
+  ///   4. Refine db_acquire to handle overlapping accesses correctly
+  ///   5. Mark halo regions as read-only, center chunks as read-write
+
+  /// TODO: Implementation deferred to Phase 3
+  /// For now, the chunk-based acquires created by ArtsForLowering are
+  /// sufficient for non-overlapping access patterns
+
+  ARTS_DEBUG(" - Phase 2 refinement not yet implemented (using ArtsForLowering "
+             "acquires as-is)");
+
+  ARTS_DEBUG_FOOTER(RefineParallelAcquires);
+  return changed;
+}
+
+//===----------------------------------------------------------------------===//
+// Metadata-Driven Optimization Helpers
+//===----------------------------------------------------------------------===//
+
+/// Infer the appropriate access mode using imported metadata
+/// Uses read/write ratio from sequential analysis to make better decisions
+ArtsMode DbPass::inferModeFromMetadata(Operation *allocOp) {
+  MemrefMetadata memrefMeta(allocOp);
+  memrefMeta.importFromOp();
+
+  // Use read/write ratio if available (from sequential compilation)
+  if (auto ratio = memrefMeta.readWriteRatio) {
+    ARTS_DEBUG(
+        "  Metadata-driven mode inference: read/write ratio = " << *ratio);
+
+    // Read-heavy: use read-only mode for better caching
+    if (*ratio > 0.9) {
+      ARTS_DEBUG("    -> Selecting 'in' mode (read-heavy pattern)");
+      return ArtsMode::in;
+    }
+    // Write-heavy: use write-only mode
+    else if (*ratio < 0.1) {
+      ARTS_DEBUG("    -> Selecting 'out' mode (write-heavy pattern)");
+      return ArtsMode::out;
+    }
+    // Mixed access: use read-write mode
+    else {
+      ARTS_DEBUG("    -> Selecting 'inout' mode (mixed access pattern)");
+      return ArtsMode::inout;
+    }
+  }
+
+  // Fallback: if no metadata, default to inout
+  ARTS_DEBUG("  No metadata available, using default 'inout' mode");
+  return ArtsMode::inout;
+}
+
+/// Suggest partitioning strategy based on access pattern metadata
+/// Returns "block", "cyclic", "block-cyclic", or nullopt if no suggestion
+/// Suggest chunk size based on memory footprint and cache characteristics
+/// Returns suggested chunk size in elements, or nullopt if no suggestion
+std::optional<int64_t> DbPass::suggestChunkSize(Operation *loopOp,
+                                                Operation *allocOp) {
+  MemrefMetadata memrefMeta(allocOp);
+  memrefMeta.importFromOp();
+
+  // Use memory footprint from polyhedral analysis (sequential compilation)
+  if (auto footprint = memrefMeta.memoryFootprint) {
+    if (*footprint <= 0)
+      return std::nullopt;
+
+    int64_t footprintBytes = *footprint;
+
+    // Typical L2 cache size: 256KB - 1MB, use 256KB as conservative estimate
+    constexpr int64_t L2_CACHE_SIZE = 256 * 1024;
+
+    ARTS_DEBUG("  Metadata-driven chunk sizing: footprint = " << footprintBytes
+                                                              << " bytes");
+
+    // If the entire array fits in L2 cache, use larger chunks
+    if (footprintBytes < L2_CACHE_SIZE) {
+      int64_t chunkSize =
+          footprintBytes / 64; // Divide by element size estimate
+      ARTS_DEBUG("    -> Array fits in L2, suggest chunk size = " << chunkSize);
+      return chunkSize;
+    }
+    // For larger arrays, chunk to fit in L2 cache
+    else {
+      int64_t chunkSize = L2_CACHE_SIZE / 64; // Cache-sized chunks
+      ARTS_DEBUG(
+          "    -> Large array, suggest cache-sized chunks = " << chunkSize);
+      return chunkSize;
+    }
+  }
+
+  return std::nullopt;
+}
+
+/// Determine if affine-specific optimizations should be used
+/// Based on whether all accesses are affine (from sequential analysis)
+bool DbPass::shouldUseAffineOptimizations(Operation *allocOp) {
+  MemrefMetadata memrefMeta(allocOp);
+  memrefMeta.importFromOp();
+
+  // Check if all accesses are affine (only knowable from sequential analysis)
+  if (memrefMeta.allAccessesAffine && *memrefMeta.allAccessesAffine) {
+    ARTS_DEBUG("  Metadata confirms all accesses are affine, enabling affine "
+               "optimizations");
+    return true;
+  }
+
+  ARTS_DEBUG("  Metadata indicates non-affine accesses, skipping affine "
+             "optimizations");
+  return false;
+}
+
+///===----------------------------------------------------------------------===///
 /// Pass creation
 ///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createDbPass(ArtsAnalysisManager *AM, bool exportJson) {
-  return std::make_unique<DbPass>(AM, exportJson);
+std::unique_ptr<Pass> createDbPass(ArtsAnalysisManager *AM, bool exportJson,
+                                   bool processParallel) {
+  return std::make_unique<DbPass>(AM, exportJson, processParallel);
 }
 } // namespace arts
 } // namespace mlir

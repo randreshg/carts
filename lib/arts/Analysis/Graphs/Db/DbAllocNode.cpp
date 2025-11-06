@@ -5,6 +5,8 @@
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/Metadata/ArtsMetadata.h"
+#include "arts/Utils/Metadata/MemrefMetadata.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include <algorithm>
@@ -80,6 +82,19 @@ DbAllocNode::DbAllocNode(DbAllocOp op, DbAnalysis *analysis)
       info.staticBytes = bytes;
       info.estimatedBytes = bytes;
     }
+  }
+
+  /// Import metadata-driven hints 
+  MemrefMetadata metadata(op.getOperation());
+  metadata.importFromOp();
+
+  if (metadata.memoryFootprint) {
+    unsigned long long footprint =
+        static_cast<unsigned long long>(*metadata.memoryFootprint);
+    if (info.estimatedBytes < footprint)
+      info.estimatedBytes = footprint;
+    if (info.staticBytes == 0)
+      info.staticBytes = footprint;
   }
 }
 

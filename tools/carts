@@ -284,13 +284,13 @@ show_usage() {
     carts_cmd "run [options]"               "Run CARTS MLIR transformations"
     carts_cmd "mlir-translate <file> [options]" "Run mlir-translate"
     carts_cmd "compile <file> [options]"    "Compile with ARTS runtime"
-    carts_cmd "visualize <mlir> [options]"  "Export ARTS graphs or launch visualizer UI"
     carts_cmd "benchmark [options]"         "Run CARTS benchmarks"
     carts_cmd "setup [options]"             "Set up CARTS environment"
     carts_cmd "clean [options]"              "Clean generated files in current directory"
     carts_cmd "check [options]"             "Run CARTS test suite using llvm-lit"
     carts_cmd "execute <file> [options]"    "Complete pipeline: C++ -> executable"
-    
+    carts_cmd "dual-execute <file> [options]" "Dual-compilation: sequential analysis + parallel execution"
+
     echo ""
     echo "Pipeline Options (for 'run' command):"
     carts_cmd "--complete"                   "Run complete pipeline (default)"
@@ -340,7 +340,8 @@ show_usage() {
     carts_cmd "carts execute simple.cpp --run-args --export-json -o simple"     "Pipeline with JSON export"
     carts_cmd "carts execute simple.cpp --run-args --debug-only=db -o simple"   "Pipeline with debug flags"
     carts_cmd "carts execute simple.cpp --compile-args -lm -lpthread -o simple" "Pipeline with library dependencies"
-    
+    carts_cmd "carts dual-execute simple.cpp -o simple"                         "Dual-compilation with metadata transfer"
+
     echo ""
     echo "  # Development and testing"
     carts_cmd "carts run --help"                "Show pipeline options"
@@ -385,17 +386,21 @@ run_cgeist() {
     # Use shared include and sysroot configuration populated during host detection
     local include_paths=("${CARTS_INCLUDE_FLAGS[@]}")
     local extra_cflags=("${CARTS_CGEIST_SYSROOT_FLAGS[@]}")
-    
+
+    # Always add --raise-scf-to-affine for affine analysis
+    local affine_flags=("--raise-scf-to-affine")
+
     if [[ -n "$CARTS_VERBOSE" ]]; then
         carts_debug "Running cgeist with include paths:"
         printf "  %s\n" "${include_paths[@]}"
         if [[ ${#extra_cflags[@]} -gt 0 ]]; then
             carts_debug "Additional cgeist flags: ${extra_cflags[*]}"
         fi
-        carts_debug "Command: ${POLYGEIST_INSTALL_DIR}/bin/cgeist ${include_paths[*]} ${extra_cflags[*]} $input_file $*"
+        carts_debug "Affine flags: ${affine_flags[*]}"
+        carts_debug "Command: ${POLYGEIST_INSTALL_DIR}/bin/cgeist ${include_paths[*]} ${extra_cflags[*]} ${affine_flags[*]} $input_file $*"
     fi
-    
-    "${POLYGEIST_INSTALL_DIR}/bin/cgeist" "${include_paths[@]}" "${extra_cflags[@]}" "$input_file" "$@"
+
+    "${POLYGEIST_INSTALL_DIR}/bin/cgeist" "${include_paths[@]}" "${extra_cflags[@]}" "${affine_flags[@]}" "$input_file" "$@"
 }
 
 
@@ -629,45 +634,6 @@ run_benchmark() {
 }
 
 
-# Function to run visualizer tool
-run_visualize() {
-    local server_dir="${CARTS_DIR}/tools/visualizer/server"
-    # Detect --serve flag
-    local serve_mode=false
-    local args=("$@")
-    for a in "$@"; do
-        if [[ "$a" == "--serve" ]]; then
-            serve_mode=true
-            break
-        fi
-    done
-
-    # If first arg is a .mlir file and --serve given, export JSON to server dir and launch UI
-    if [[ -f "$1" && "$1" == *.mlir && "$serve_mode" == true ]]; then
-        shift # remove mlir path from args for exporter capture
-        local mlir_file="$1" # actually after shift we lost it; restore
-    fi
-
-    if [[ -f "$1" && "$1" == *.mlir ]]; then
-        local mlir_file="$1"; shift
-        local out_json="${server_dir}/graph.json"
-        if [[ -n "$CARTS_VERBOSE" ]]; then
-            carts_debug "Exporting JSON: ${CARTS_INSTALL_DIR}/bin/carts-visualizer $mlir_file --json -o $out_json $*"
-        fi
-        "${CARTS_INSTALL_DIR}/bin/carts-visualizer" "$mlir_file" --json -o "$out_json" "$@"
-        if [[ "$serve_mode" == true ]]; then
-            if [[ -n "$CARTS_VERBOSE" ]]; then
-                carts_debug "Launching visualizer UI server: python3 ${server_dir}/app.py"
-            fi
-            python3 "${server_dir}/app.py"
-        fi
-    else
-        if [[ -n "$CARTS_VERBOSE" ]]; then
-            carts_debug "Launching visualizer UI server: python3 ${server_dir}/app.py $*"
-        fi
-        python3 "${server_dir}/app.py" "$@"
-    fi
-}
 
 # Function to build CARTS project using system clang
 run_build() {
@@ -1158,6 +1124,7 @@ run_local_clean() {
         "*.log"
         "*.tmp"
         ".artsPrintLock"
+        ".carts-metadata.json"
     )
 
     # Directories to remove
@@ -1483,6 +1450,165 @@ run_execute() {
     carts_header "CARTS Complete"
 }
 
+# Dual compilation: Sequential → Metadata → Parallel
+run_dual_execute() {
+    local input_file="$1"
+    shift
+
+    if [[ ! -f "$input_file" ]]; then
+        carts_error "Input file '$input_file' not found"
+        exit 1
+    fi
+
+    # Extract base name without extension
+    local base_name="${input_file%.*}"
+    local extension="${input_file##*.}"
+
+    # Validate input file type
+    if [[ "$extension" != "cpp" && "$extension" != "c" ]]; then
+        carts_error "Input file must be .cpp or .c"
+        exit 1
+    fi
+
+    # Parse execute options
+    local run_args=()
+    local compile_args=()
+    local parsing_run_args=false
+    local parsing_compile_args=false
+    local debug_mode=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            "--run-args")
+                parsing_run_args=true
+                parsing_compile_args=false
+                shift
+                ;;
+            "--compile-args")
+                parsing_run_args=false
+                parsing_compile_args=true
+                shift
+                ;;
+            "-g")
+                debug_mode=true
+                shift
+                ;;
+            *)
+                if [[ "$parsing_run_args" == "true" ]]; then
+                    run_args+=("$1")
+                elif [[ "$parsing_compile_args" == "true" ]]; then
+                    compile_args+=("$1")
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    carts_header "CARTS Dual Compilation"
+    carts_info "Dual compilation workflow for: $input_file"
+    carts_line
+
+    # Determine standard flag based on file extension
+    local std_flag=""
+    if [[ "$extension" == "cpp" ]]; then
+        std_flag="-std=c++17"
+    elif [[ "$extension" == "c" ]]; then
+        std_flag="-std=c17"
+    fi
+
+    # Step 1: Sequential compilation (no OpenMP) with debug info
+    carts_step "1/5: Sequential compilation (without OpenMP)"
+    carts_info "Compiling to preserve clean debug locations..."
+
+    local original_verbose="$CARTS_VERBOSE"
+    unset CARTS_VERBOSE
+
+    # Always generate debug info for source location matching
+    if ! carts cgeist "$input_file" "$std_flag" "-O0" "-S" "--print-debug-info" > "${base_name}_seq.mlir"; then
+        carts_error "Failed to convert C++ to MLIR (sequential)"
+        exit 1
+    fi
+
+    # Step 2: Collect and export metadata
+    carts_step "2/5: Collecting metadata"
+    carts_info "Running metadata analysis on sequential code..."
+
+    if ! carts run "${base_name}_seq.mlir" --collect-metadata; then
+        carts_error "Failed to collect metadata"
+        exit 1
+    fi
+
+    # Verify metadata was created
+    if [[ -f ".carts-metadata.json" ]]; then
+        local metadata_size=$(wc -l < .carts-metadata.json 2>/dev/null || echo "0")
+        carts_success "Metadata exported: ${metadata_size} lines in .carts-metadata.json"
+    else
+        carts_error "Metadata file not created"
+        exit 1
+    fi
+
+    # Step 3: Parallel compilation (with OpenMP) with debug info
+    carts_step "3/5: Parallel compilation (with OpenMP)"
+    carts_info "Compiling with OpenMP directives..."
+
+    # Also generate debug info for parallel compilation to match source locations
+    if ! carts cgeist "$input_file" "$std_flag" "-fopenmp" "-O0" "-S" "--print-debug-info" > "${base_name}.mlir"; then
+        carts_error "Failed to convert C++ to MLIR (parallel)"
+        exit 1
+    fi
+
+    # Step 4: ARTS transformations (imports metadata automatically)
+    carts_step "4/5: Applying ARTS transformations"
+    carts_info "Importing metadata from .carts-metadata.json"
+
+    local run_cmd_args=("${base_name}.mlir" "--O3" "--emit-llvm")
+    if [[ "$debug_mode" == "true" ]]; then
+        run_cmd_args+=("-g")
+    fi
+    if [[ ${#run_args[@]} -gt 0 ]]; then
+        run_cmd_args+=("${run_args[@]}")
+    fi
+
+    if ! carts run "${run_cmd_args[@]}" > "${base_name}-arts.ll"; then
+        carts_error "Failed to apply ARTS transformations"
+        exit 1
+    fi
+
+    # Restore verbose output
+    if [[ -n "$original_verbose" ]]; then
+        export CARTS_VERBOSE="$original_verbose"
+    fi
+
+    # Step 5: Compile to executable
+    carts_step "5/5: Compiling to executable"
+
+    local compile_cmd_args=("${base_name}-arts.ll" "-o" "${base_name}")
+    if [[ "$debug_mode" == "true" ]]; then
+        compile_cmd_args+=("-g")
+    fi
+    if [[ ${#compile_args[@]} -gt 0 ]]; then
+        compile_cmd_args+=("${compile_args[@]}")
+    fi
+
+    if ! carts compile "${compile_cmd_args[@]}"; then
+        carts_error "Failed to compile to executable"
+        exit 1
+    fi
+
+    carts_line
+    carts_success "Dual compilation complete: ${base_name}"
+    carts_line
+    carts_info "Generated files:"
+    carts_print "  Sequential MLIR: ${base_name}_seq.mlir"
+    carts_print "  Metadata: .carts-metadata.json"
+    carts_print "  Parallel MLIR: ${base_name}.mlir"
+    carts_print "  LLVM IR: ${base_name}-arts.ll"
+    carts_print "  Executable: ${base_name}"
+    carts_line
+    carts_info "Metadata was imported by CreateDbs pass during ARTS transformations"
+    carts_header "CARTS Dual Compilation Complete"
+}
+
 # Main script logic
 main() {
     # Set LLVM_SYMBOLIZER_PATH for better stack traces on crashes
@@ -1525,17 +1651,6 @@ main() {
         "benchmark")
             run_benchmark "$@"
             ;;
-        "ui")
-            # Start the external ARTS UI backend and frontend (dev helpers)
-            carts_info "Launching ARTS UI backend on :8090"
-            (cd "${CARTS_DIR}/external/ArtsUI/backend" && python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8090) &
-            carts_info "Launching ARTS UI frontend on :5174"
-            (cd "${CARTS_DIR}/external/ArtsUI/frontend" && npm run dev) &
-            carts_info "Open http://localhost:5174"
-            ;;
-        "visualize")
-            run_visualize "$@"
-            ;;
         "setup")
             run_setup "$@"
             ;;
@@ -1547,6 +1662,9 @@ main() {
             ;;
         "execute")
             run_execute "$@"
+            ;;
+        "dual-execute")
+            run_dual_execute "$@"
             ;;
         "docker")
             run_docker "$@"

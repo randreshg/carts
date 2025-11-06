@@ -7,6 +7,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   ConvertOpenMPToArts.cpp
   Edt.cpp
   CreateDbs.cpp
+  CollectMetadata.cpp
   CanonicalizeMemrefs.cpp
   Db.cpp
   CreateEpochs.cpp
@@ -17,6 +18,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   EdtInvariantCodeMotion.cpp
   EdtPtrRematerialization.cpp
   DbLowering.cpp
+  ForLowering.cpp
   ParallelEdtLowering.cpp
   EdtLowering.cpp
   Concurrency.cpp

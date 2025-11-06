@@ -20,12 +20,16 @@ class DominanceInfo;
 namespace arts {
 class ArtsAnalysisManager;
 std::unique_ptr<Pass> createArtsInlinerPass();
+std::unique_ptr<Pass> createCollectMetadataPass();
+std::unique_ptr<Pass> createCollectMetadataPass(bool exportMetadata,
+                                                llvm::StringRef metadataFile);
 std::unique_ptr<Pass> createCanonicalizeMemrefsPass();
 std::unique_ptr<Pass> createConvertOpenMPtoArtsPass();
 std::unique_ptr<Pass> createEdtPass(ArtsAnalysisManager *AM, bool runAnalysis);
 std::unique_ptr<Pass> createConcurrencyPass(ArtsAnalysisManager *AM);
-std::unique_ptr<Pass> createCreateDbsPass(bool identifyDbs);
-std::unique_ptr<Pass> createDbPass(ArtsAnalysisManager *AM, bool exportJson);
+std::unique_ptr<Pass> createCreateDbsPass();
+std::unique_ptr<Pass> createDbPass(ArtsAnalysisManager *AM, bool exportJson,
+                                   bool processParallel = false);
 std::unique_ptr<Pass> createCreateEpochsPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug);
@@ -35,6 +39,7 @@ std::unique_ptr<Pass> createDbLoweringPass();
 std::unique_ptr<Pass> createEpochLoweringPass();
 std::unique_ptr<Pass> createParallelEdtLoweringPass();
 std::unique_ptr<Pass> createEdtLoweringPass();
+std::unique_ptr<Pass> createForLoweringPass();
 } // namespace arts
 } // namespace mlir
 
