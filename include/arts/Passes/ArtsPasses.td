@@ -16,6 +16,39 @@ def ArtsInliner : Pass<"arts-inliner", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createArtsInlinerPass()";
 }
 
+def CollectMetadata : Pass<"collect-metadata", "mlir::ModuleOp"> {
+  let summary = "Collect metadata for dual-compilation strategy";
+  let description = [{
+    This pass analyzes program structures (loops, array accesses, both affine
+    and non-affine) and attaches comprehensive metadata for use in dual-compilation.
+    It runs on sequential (non-OpenMP) code where analysis is cleaner, then the
+    metadata is exported and injected into the parallel compilation.
+
+    Metadata collected from both affine and non-affine operations:
+    - Array dimensions inferred from access patterns (e.g., i*128+j → [128,128])
+    - Loop bounds (static and dynamic), trip counts, and parallelism opportunities
+    - Memory access patterns and regions (affine and non-affine loads/stores)
+    - Data dependencies and access frequency statistics
+    - Read/write ratios and lifetime information
+
+    This preserves high-level semantic information through OpenMP transformations.
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "arith::ArithDialect",
+    "affine::AffineDialect"
+  ];
+  let options = [
+    Option<"exportMetadata", "export-metadata", "bool", "false",
+           "Export metadata to JSON file after collection">,
+    Option<"metadataFile", "metadata-file", "std::string", "\".carts-metadata.json\"",
+           "Path to metadata JSON file for export">
+  ];
+  let constructor = "mlir::arts::createCollectMetadataPass()";
+}
+
 def CanonicalizeMemrefs : Pass<"canonicalize-memrefs", "mlir::ModuleOp"> {
   let summary = "Canonicalize memref allocations and accesses";
   let description = [{
@@ -57,10 +90,12 @@ def Db : Pass<"db", "mlir::ModuleOp"> {
     "arith::ArithDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createDbPass(nullptr, false)";
+  let constructor = "mlir::arts::createDbPass(nullptr, false, false)";
   let options = [
     Option<"exportJson", "export-json", "bool", /*default=*/"false",
            "Export DB analysis to JSON files in output/ directory.">,
+    Option<"processParallel", "process-parallel", "bool", /*default=*/"true",
+           "Process parallel Dbs.">,
   ];
 }
 
@@ -74,11 +109,7 @@ def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
     "arith::ArithDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createCreateDbsPass(true)";
-  let options = [
-    Option<"identifyDbs", "identify-dbs", "bool", /*default=*/"true",
-           "Automatically identify the datablocks.">,
-  ];
+  let constructor = "mlir::arts::createCreateDbsPass()";
 }
 
 def DbLowering : Pass<"db-lowering", "mlir::ModuleOp"> {
@@ -202,6 +233,25 @@ def ParallelEdtLowering : Pass<"parallel-edt-lowering", "mlir::ModuleOp"> {
     "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createParallelEdtLoweringPass()";
+}
+
+def ForLowering : Pass<"for-lowering", "mlir::ModuleOp"> {
+  let summary = "Lower arts.for inside parallel EDTs to chunked task EDTs";
+  let description = [{
+    Lowers arts.for operations nested within arts.edt<parallel> by creating a
+    symbolic worker-id placeholder, computing chunk bounds, acquiring required
+    datablocks, and generating a task EDT with a local scf.for over the chunk.
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "LLVM::LLVMDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "arith::ArithDialect",
+    "scf::SCFDialect",
+    "polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::arts::createForLoweringPass()";
 }
 
 def EdtLowering : Pass<"edt-lowering", "mlir::ModuleOp"> {

@@ -9,7 +9,7 @@
 #include "arts/Utils/ArtsDebug.h"
 ARTS_DEBUG_SETUP(abstract_machine);
 
-#include "arts/Utils/ArtsAbstractMachine.h"
+#include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include <algorithm>
 #include <cassert>
 #include <cctype>
@@ -42,7 +42,7 @@ ArtsAbstractMachine::ArtsAbstractMachine(const std::string &configFile) {
   std::string path;
   if (!configFile.empty())
     path = configFile;
-  else 
+  else
     path = getDefaultConfigPath();
 
   ARTS_DEBUG("Looking for configuration file at: " << path);
@@ -69,7 +69,7 @@ bool ArtsAbstractMachine::parseFromFile(const std::string &path) {
 
   ARTS_DEBUG("Successfully opened configuration file: " << path);
 
-  configFileExists = true; 
+  configFileExists = true;
   std::string line;
   bool inArtsSection = false;
   int lineNumber = 0;
@@ -324,14 +324,14 @@ bool ArtsAbstractMachine::validateConfiguration() {
     isValid = false;
   } else if (static_cast<int>(nodes.size()) != nodeCount) {
     ARTS_ERROR("Nodes count (" << nodes.size() << ") doesn't match nodeCount ("
-                              << nodeCount << ")");
+                               << nodeCount << ")");
     isValid = false;
   }
 
   /// Check master node is in nodes list
   if (!nodes.empty() &&
       std::find(nodes.begin(), nodes.end(), masterNode) == nodes.end()) {
-        ARTS_ERROR("Master node '" << masterNode << "' not found in nodes list");
+    ARTS_ERROR("Master node '" << masterNode << "' not found in nodes list");
     isValid = false;
   }
 

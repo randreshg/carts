@@ -33,6 +33,8 @@ source enable
 
 **IMPORTANT**: Always use the `carts` wrapper script for all CARTS operations. This ensures proper path resolution, library linking, and environment setup.
 
+**Getting Help**: If you need help understanding how to use CARTS commands, run `carts -h` to see the complete help guide with all available options and pipeline stages.
+
 ### Available Commands
 ```bash
 carts build                    # Build CARTS project
@@ -45,6 +47,7 @@ carts benchmark [opts]         # Run benchmarks
 carts report [opts]            # Generate reports
 carts setup [opts]             # Setup environment
 carts clean                    # Clean generated files
+carts -h                       # Show help guide
 ```
 
 ### Cleaning and Rebuild Guidance
@@ -68,9 +71,73 @@ carts compile → Executable (binary)
 
 For a complete transformation pipeline in one command:
 ```bash
-carts run simple.mlir --O3 --arts-opt --emit-llvm > simple-arts.ll
+carts run simple.mlir --O3 --emit-llvm > simple-arts.ll
 carts compile simple-arts.ll -o simple
 ```
+
+## Pipeline Stages in carts run
+
+The `carts run` command supports stopping at specific pipeline stages for debugging and incremental compilation. Use the `--stop-at` option (or `-stop-at`) to control where the pipeline stops:
+
+```bash
+# Stop after canonicalizing memrefs
+carts run simple.mlir --stop-at=canonicalize-memrefs
+
+# Stop after collecting metadata
+carts run simple.mlir --stop-at=collect-metadata
+
+# Stop after initial cleanup and simplification
+carts run simple.mlir --stop-at=initial-cleanup
+
+# Stop after OpenMP to ARTS conversion
+carts run simple.mlir --stop-at=openmp-to-arts
+
+# Stop after EDT transformations
+carts run simple.mlir --stop-at=edt-transforms
+
+# Stop after creating data blocks (DBs)
+carts run simple.mlir --stop-at=create-dbs
+
+# Stop after DB optimization
+carts run simple.mlir --stop-at=db-opt
+
+# Stop after EDT optimization
+carts run simple.mlir --stop-at=edt-opt
+
+# Stop after concurrency analysis
+carts run simple.mlir --stop-at=concurrency
+
+# Stop after concurrency optimization
+carts run simple.mlir --stop-at=concurrency-opt
+
+# Stop after epoch creation
+carts run simple.mlir --stop-at=epochs
+
+# Stop after pre-lowering transformations
+carts run simple.mlir --stop-at=pre-lowering
+
+# Stop after ARTS to LLVM conversion
+carts run simple.mlir --stop-at=arts-to-llvm
+
+# Run complete pipeline (default)
+carts run simple.mlir --stop-at=complete
+```
+
+### Available Pipeline Stages
+1. **canonicalize-memrefs**: Canonicalize memref allocations and accesses
+2. **collect-metadata**: Collect metadata for dual-compilation strategy
+3. **initial-cleanup**: Initial cleanup and simplification passes
+4. **openmp-to-arts**: Convert OpenMP to ARTS dialect
+5. **edt-transforms**: EDT (Event-Driven Task) transformations
+6. **create-dbs**: Create data blocks
+7. **db-opt**: Optimize data blocks
+8. **edt-opt**: Optimize EDT operations
+9. **concurrency**: Concurrency analysis
+10. **concurrency-opt**: Concurrency optimization
+11. **epochs**: Create epochs
+12. **pre-lowering**: Pre-lowering transformations
+13. **arts-to-llvm**: Convert ARTS dialect to LLVM IR
+14. **complete**: Run complete pipeline (default)
 
 ## One-Command Execution: carts execute
 
@@ -87,16 +154,31 @@ This automatically runs the entire pipeline:
 ## Debug Options
 ```bash
 # Debug specific passes using carts run with pipeline stages
-carts run simple.mlir --convert-openmp -debug-only=convert_openmp_to_arts
-carts run simple.mlir --datablock -debug-only=create_dbs
+carts run simple.mlir --stop-at=openmp-to-arts --debug-only=convert_openmp_to_arts
+carts run simple.mlir --stop-at=create-dbs --debug-only=create_dbs
+
+# Enable debug mode
+carts run simple.mlir -g
+
+# Use debug-only flag (note: use underscores, not dashes)
+carts run simple.mlir --debug-only=edt_lowering
+carts run simple.mlir --debug-only=convert_openmp_to_arts
 ```
 
+**Note**: When using `--debug-only` flags, replace dashes with underscores in the pass name (e.g., `edt_lowering` not `edt-lowering`).
+
 ## Pass Pipeline Control
-You can modify the pipeline by:
-- Adding/removing passes from the command line
-- Changing pass ordering
-- Enabling/disabling debug output
-- Adjusting optimization levels
+
+The `carts run` command provides fine-grained control over the compilation pipeline:
+
+- **Stop at specific stages**: Use `--stop-at=<stage>` to stop the pipeline at a particular stage
+- **Enable optimizations**: Use `--O3` to enable optimization passes
+- **Emit LLVM IR**: Use `--emit-llvm` to output LLVM IR instead of MLIR
+- **Debug specific passes**: Use `--debug-only=<pass_name>` to enable debug output for specific passes
+- **Export metadata**: Use `--metadata-file=<path>` to specify metadata export location
+- **Export JSON**: Use `--export-json` to export DB analysis to JSON files
+
+For complete documentation of all available options, run `carts -h` or `carts run -h`.
 
 ## Environment Variables
 ```bash

@@ -186,6 +186,35 @@ bool scalesAreEquivalent(Value lhs, Value rhs) {
 }
 
 //===----------------------------------------------------------------------===//
+/// Access Mode Utilities
+//===----------------------------------------------------------------------===//
+
+/// Combine two access modes and return the more permissive mode
+ArtsMode combineAccessModes(ArtsMode mode1, ArtsMode mode2) {
+  /// If either mode is uninitialized, return the other mode
+  if (mode1 == ArtsMode::uninitialized)
+    return mode2;
+  if (mode2 == ArtsMode::uninitialized)
+    return mode1;
+
+  /// If either mode is inout, the result is inout (most permissive)
+  if (mode1 == ArtsMode::inout || mode2 == ArtsMode::inout)
+    return ArtsMode::inout;
+
+  /// If one is 'in' and the other is 'out', the result is inout
+  if ((mode1 == ArtsMode::in && mode2 == ArtsMode::out) ||
+      (mode1 == ArtsMode::out && mode2 == ArtsMode::in))
+    return ArtsMode::inout;
+
+  /// If both are the same, return that mode
+  if (mode1 == mode2)
+    return mode1;
+
+  /// Default to inout for any other combination (shouldn't happen)
+  return ArtsMode::inout;
+}
+
+//===----------------------------------------------------------------------===//
 /// EDT Analysis Utilities
 //===----------------------------------------------------------------------===//
 

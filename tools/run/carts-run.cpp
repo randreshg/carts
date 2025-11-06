@@ -50,11 +50,11 @@ ARTS_DEBUG_SETUP(carts_run)
 //===----------------------------------------------------------------------===//
 /// Use the original models for attaching type interfaces.
 class MemRefInsider
-    : public mlir::MemRefElementTypeInterface::FallbackModel<MemRefInsider> {};
+    : public MemRefElementTypeInterface::FallbackModel<MemRefInsider> {};
 
 template <typename T>
 struct PtrElementModel
-    : public mlir::LLVM::PointerElementTypeInterface::ExternalModel<
+    : public LLVM::PointerElementTypeInterface::ExternalModel<
           PtrElementModel<T>, T> {};
 
 //===----------------------------------------------------------------------===//
@@ -85,61 +85,80 @@ static cl::opt<std::string> ArtsConfig("arts-config",
                                        cl::value_desc("config_file"),
                                        cl::init(""));
 
+/// Metadata file path
+static cl::opt<std::string> MetadataFile("metadata-file",
+                                         cl::desc("Path to metadata JSON file"),
+                                         cl::value_desc("filename"),
+                                         cl::init(".carts-metadata.json"));
+
 //===----------------------------------------------------------------------===//
 // Pipeline Stop Options
 //===----------------------------------------------------------------------===//
 enum class PipelineStage {
-  Simplify,         // After initial cleanup and simplification
-  ArtsInliner,      // After ARTS inliner
-  OpenMPToArts,     // After OpenMPToArts
-  EdtTransforms,    // After EDT transformations
-  EdtOptimizations, // After EDT optimizations
-  PreLowering,      // After pre-lowering transformations
-  Db,               // After DB creation and optimization
-  Epochs,           // After epoch creation
-  ArtsToLLVM,       // After ConvertArtsToLLVM
-  Complete          // Full pipeline (default)
+  CanonicalizeMemrefs,
+  InitialCleanup,
+  CollectMetadata,
+  OpenMPToArts,
+  EdtTransforms,
+  CreateDbs,
+  DbOpt,
+  EdtOpt,
+  Concurrency,
+  ConcurrencyOpt,
+  Epochs,
+  PreLowering,
+  ArtsToLLVM,
+  Complete
 };
 
-static cl::opt<PipelineStage>
-    StopAt(cl::desc("Stop pipeline at specified stage:"),
-           cl::values(clEnumValN(PipelineStage::Simplify, "simplify",
-                                 "Stop after simplification"),
-                      clEnumValN(PipelineStage::ArtsInliner, "arts-inliner",
-                                 "Stop after Arts inliner"),
-                      clEnumValN(PipelineStage::OpenMPToArts, "openmp-to-arts",
-                                 "Stop after OpenMP to Arts conversion"),
-                      clEnumValN(PipelineStage::EdtTransforms, "edt-transforms",
-                                 "Stop after EDT transformations"),
-                      clEnumValN(PipelineStage::Db, "db",
-                                 "Stop after db optimization"),
-                      clEnumValN(PipelineStage::Epochs, "epochs",
-                                 "Stop after epoch creation"),
-                      clEnumValN(PipelineStage::EdtOptimizations, "edt",
-                                 "Stop after EDT optimizations"),
-                      clEnumValN(PipelineStage::PreLowering, "pre-lowering",
-                                 "Stop after pre-lowering transformations"),
-                      clEnumValN(PipelineStage::ArtsToLLVM, "arts-to-llvm",
-                                 "Stop after Arts to LLVM conversion"),
-                      clEnumValN(PipelineStage::Complete, "complete",
-                                 "Run complete pipeline (default)")),
-           cl::init(PipelineStage::Complete));
+static cl::opt<PipelineStage> StopAt(
+    cl::desc("Stop pipeline at specified stage:"),
+    cl::values(clEnumValN(PipelineStage::CanonicalizeMemrefs,
+                          "canonicalize-memrefs",
+                          "Stop after canonicalizing memrefs pass"),
+               clEnumValN(PipelineStage::CollectMetadata, "collect-metadata",
+                          "Stop after collecting metadata"),
+               clEnumValN(PipelineStage::InitialCleanup, "initial-cleanup",
+                          "Stop after initial cleanup and simplification"),
+               clEnumValN(PipelineStage::OpenMPToArts, "openmp-to-arts",
+                          "Stop after OpenMP to Arts conversion"),
+               clEnumValN(PipelineStage::EdtTransforms, "edt-transforms",
+                          "Stop after EDT transformations"),
+               clEnumValN(PipelineStage::CreateDbs, "create-dbs",
+                          "Stop after Dbs creation"),
+               clEnumValN(PipelineStage::DbOpt, "db-opt",
+                          "Stop after Dbs optimization"),
+               clEnumValN(PipelineStage::Epochs, "epochs",
+                          "Stop after Epochs creation"),
+               clEnumValN(PipelineStage::EdtOpt, "edt-opt",
+                          "Stop after EDT optimizations"),
+               clEnumValN(PipelineStage::Concurrency, "concurrency",
+                          "Stop after concurrency"),
+               clEnumValN(PipelineStage::ConcurrencyOpt, "concurrency-opt",
+                          "Stop after concurrency optimization"),
+               clEnumValN(PipelineStage::PreLowering, "pre-lowering",
+                          "Stop after pre-lowering transformations"),
+               clEnumValN(PipelineStage::ArtsToLLVM, "arts-to-llvm",
+                          "Stop after Arts to LLVM conversion"),
+               clEnumValN(PipelineStage::Complete, "complete",
+                          "Run complete pipeline (default)")),
+    cl::init(PipelineStage::Complete));
 
 //===----------------------------------------------------------------------===//
 // Helper Functions for Initialization and Pass Setup
 //===----------------------------------------------------------------------===//
 /// Register standard MLIR dialects, passes, and translations.
 void registerDialects(DialectRegistry &registry) {
-  registry.insert<mlir::polygeist::PolygeistDialect, mlir::arts::ArtsDialect>();
-  mlir::registerAllPasses();
-  mlir::registerAllTranslations();
-  mlir::registerpolygeistPasses();
-  mlir::func::registerInlinerExtension(registry);
-  mlir::registerAllDialects(registry);
-  mlir::registerAllExtensions(registry);
-  mlir::registerAllFromLLVMIRTranslations(registry);
-  mlir::registerBuiltinDialectTranslation(registry);
-  mlir::registerLLVMDialectTranslation(registry);
+  registry.insert<polygeist::PolygeistDialect, arts::ArtsDialect>();
+  registerAllPasses();
+  registerAllTranslations();
+  registerpolygeistPasses();
+  func::registerInlinerExtension(registry);
+  registerAllDialects(registry);
+  registerAllExtensions(registry);
+  registerAllFromLLVMIRTranslations(registry);
+  registerBuiltinDialectTranslation(registry);
+  registerLLVMDialectTranslation(registry);
 }
 
 /// Initialize the MLIR context by loading necessary dialects and attaching
@@ -149,19 +168,19 @@ void initializeContext(MLIRContext &context) {
   context.getOrLoadDialect<affine::AffineDialect>();
   context.getOrLoadDialect<func::FuncDialect>();
   context.getOrLoadDialect<DLTIDialect>();
-  context.getOrLoadDialect<mlir::scf::SCFDialect>();
-  context.getOrLoadDialect<mlir::async::AsyncDialect>();
-  context.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
-  context.getOrLoadDialect<mlir::NVVM::NVVMDialect>();
-  context.getOrLoadDialect<mlir::ROCDL::ROCDLDialect>();
-  context.getOrLoadDialect<mlir::gpu::GPUDialect>();
-  context.getOrLoadDialect<mlir::omp::OpenMPDialect>();
-  context.getOrLoadDialect<mlir::math::MathDialect>();
-  context.getOrLoadDialect<mlir::memref::MemRefDialect>();
-  context.getOrLoadDialect<mlir::linalg::LinalgDialect>();
-  context.getOrLoadDialect<mlir::polygeist::PolygeistDialect>();
-  context.getOrLoadDialect<mlir::arts::ArtsDialect>();
-  context.getOrLoadDialect<mlir::cf::ControlFlowDialect>();
+  context.getOrLoadDialect<scf::SCFDialect>();
+  context.getOrLoadDialect<async::AsyncDialect>();
+  context.getOrLoadDialect<LLVM::LLVMDialect>();
+  context.getOrLoadDialect<NVVM::NVVMDialect>();
+  context.getOrLoadDialect<ROCDL::ROCDLDialect>();
+  context.getOrLoadDialect<gpu::GPUDialect>();
+  context.getOrLoadDialect<omp::OpenMPDialect>();
+  context.getOrLoadDialect<math::MathDialect>();
+  context.getOrLoadDialect<memref::MemRefDialect>();
+  context.getOrLoadDialect<linalg::LinalgDialect>();
+  context.getOrLoadDialect<polygeist::PolygeistDialect>();
+  context.getOrLoadDialect<arts::ArtsDialect>();
+  context.getOrLoadDialect<cf::ControlFlowDialect>();
 
   /// Register all necessary interfaces for LLVM conversion
   LLVM::LLVMFunctionType::attachInterface<MemRefInsider>(context);
@@ -187,11 +206,28 @@ void initializeContext(MLIRContext &context) {
       context);
 }
 
-/// Setup initial cleanup and simplification passes.
-void setupInitialCleanup(mlir::OpPassManager &optPM, bool optEnabled) {
-  optPM.addPass(createLowerAffinePass());
-  optPM.addPass(polygeist::createCanonicalizeForPass());
+/// Inliner and canonicalize memrefs pass.
+void setupCanonicalizeMemrefs(PassManager &pm) {
+  pm.addPass(createCSEPass());
+  pm.addPass(createInlinerPass());
+  pm.addPass(arts::createArtsInlinerPass());
+  pm.addPass(arts::createCanonicalizeMemrefsPass());
+}
 
+/// Metadata collection pass.
+void setupCollectMetadata(PassManager &pm, bool shouldExport = false,
+                          StringRef metadataFile = "") {
+  std::string actualMetadataFile =
+      metadataFile.empty() ? MetadataFile.getValue() : metadataFile.str();
+  pm.addPass(createCSEPass());
+  if (shouldExport)
+    pm.addPass(arts::createCollectMetadataPass(true, actualMetadataFile));
+  else
+    pm.addPass(arts::createCollectMetadataPass());
+}
+
+/// Initial cleanup and simplification passes.
+void setupInitialCleanup(OpPassManager &optPM, bool optEnabled) {
   if (optEnabled) {
     optPM.addPass(createCSEPass());
     optPM.addPass(polygeist::createPolygeistCanonicalizePass());
@@ -202,79 +238,98 @@ void setupInitialCleanup(mlir::OpPassManager &optPM, bool optEnabled) {
     optPM.addPass(polygeist::replaceAffineCFGPass());
     optPM.addPass(createLoopInvariantCodeMotionPass());
     optPM.addPass(createCSEPass());
-    optPM.addPass(polygeist::createPolygeistCanonicalizePass());
-    optPM.addPass(createLowerAffinePass());
   }
 
+  optPM.addPass(createLowerAffinePass());
   optPM.addPass(createCSEPass());
+  optPM.addPass(polygeist::createCanonicalizeForPass());
   optPM.addPass(polygeist::createPolygeistCanonicalizePass());
 }
 
-/// Setup ARTS inliner pass.
-void setupArtsInliner(PassManager &pm) {
-  pm.addPass(createInlinerPass());
-  pm.addPass(arts::createArtsInlinerPass());
-}
-
-/// Setup OpenMP to ARTS conversion passes.
+/// OpenMP to ARTS conversion pass.
 void setupOpenMPToArts(PassManager &pm) {
-  pm.addPass(arts::createCanonicalizeMemrefsPass());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(createCSEPass());
   pm.addPass(arts::createConvertOpenMPtoArtsPass());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createSymbolDCEPass());
+  pm.addPass(createCSEPass());
 }
 
-/// Setup EDT transformation passes.
+/// EDT transformation passes.
 void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createEdtPass(AM, false));
   pm.addPass(arts::createEdtInvariantCodeMotionPass());
-  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createSymbolDCEPass());
+  pm.addPass(createCSEPass());
 }
 
-/// Setup db creation and optimization passes.
-void setupDb(PassManager &pm, arts::ArtsAnalysisManager *AM, bool identifyDbs,
-             bool exportJson) {
-  pm.addPass(arts::createEdtPtrRematerializationPass());
-  pm.addPass(arts::createCreateDbsPass(identifyDbs));
+/// Db creation pass.
+void setupCreateDbs(PassManager &pm, arts::ArtsAnalysisManager *AM) {
+  pm.addPass(arts::createCreateDbsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createSymbolDCEPass());
   pm.addPass(createMem2Reg());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
+}
+
+/// Db creation and optimization passes.
+void setupDbOpt(PassManager &pm, arts::ArtsAnalysisManager *AM,
+                bool exportJson) {
   pm.addPass(arts::createDbPass(AM, exportJson));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createMem2Reg());
 }
 
-/// Setup EDT optimization passes.
-void setupEdtOptimizations(PassManager &pm, arts::ArtsAnalysisManager *AM) {
-  pm.addPass(arts::createEdtPass(AM, true));
-  pm.addPass(arts::createConcurrencyPass(AM));
+/// EDT optimization passes.
+void setupEdtOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(arts::createEdtPass(AM, true));
+  pm.addPass(createCSEPass());
 }
 
-/// Setup epoch creation passes.
+/// Concurrency passes.
+void setupConcurrency(PassManager &pm, arts::ArtsAnalysisManager *AM) {
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(arts::createConcurrencyPass(AM));
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(arts::createForLoweringPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCSEPass());
+}
+
+/// Concurrency optimization passes.
+void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
+  pm.addPass(arts::createDbPass(AM, false, true));
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCSEPass());
+  pm.addPass(createMem2Reg());
+  // pm.addPass(createConcurrencyOptPass());
+}
+
+/// Epoch creation passes.
 void setupEpochs(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createCreateEpochsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  // pm.addPass(arts::createEpochsPass());
+  // pm.addPass(createMem2Reg());
+  // pm.addPass(polygeist::createPolygeistCanonicalizePass());
 }
 
-/// Setup pre-lowering passes.
+/// Pre-lowering passes.
 void setupPreLowering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createParallelEdtLoweringPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCSEPass());
   pm.addPass(arts::createDbLoweringPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCSEPass());
   pm.addPass(arts::createEdtLoweringPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCSEPass());
   pm.addPass(arts::createEpochLoweringPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
-  pm.addPass(createMem2Reg());
 }
 
 /// Setup ARTS to LLVM conversion passes.
@@ -289,7 +344,7 @@ void setupArtsToLLVM(PassManager &pm, bool debug) {
 }
 
 /// Setup additional optimizations (post-ARTS pipeline).
-void setupAdditionalOptimizations(mlir::OpPassManager &optPM) {
+void setupAdditionalOptimizations(OpPassManager &optPM) {
   optPM.addPass(polygeist::createPolygeistCanonicalizePass());
   optPM.addPass(createControlFlowSinkPass());
   optPM.addPass(polygeist::createPolygeistCanonicalizePass());
@@ -308,102 +363,62 @@ void setupLLVMIREmission(PassManager &pm) {
 }
 
 /// Configure the pass manager with the optimization passes.
-void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
+void setupPassManager(ModuleOp module, MLIRContext &context,
                       PipelineStage stopAt = PipelineStage::Complete) {
-  // Create module-level analysis manager for caching across functions
+  /// Create module-level analysis manager for caching across functions
   std::unique_ptr<arts::ArtsAnalysisManager> AM =
       std::make_unique<arts::ArtsAnalysisManager>(module, ArtsConfig);
 
-  /// Complete pipeline
-  if (stopAt == PipelineStage::Complete) {
+  /// Canonicalize memrefs
+  {
     PassManager pm(&context);
-
-    mlir::OpPassManager &optPM = pm.nest<mlir::func::FuncOp>();
-    setupInitialCleanup(optPM, Opt);
-
-    /// Complete pipeline
-    setupArtsInliner(pm);
-    setupOpenMPToArts(pm);
-    setupEdtTransforms(pm, AM.get());
-    setupDb(pm, AM.get(), true, ExportJson);
-    setupEdtOptimizations(pm, AM.get());
-    setupEpochs(pm, AM.get());
-    setupPreLowering(pm, AM.get());
-    setupArtsToLLVM(pm, Debug);
-
-    if (mlir::failed(pm.run(module))) {
-      ARTS_ERROR("Error running CARTS pipeline");
+    setupCanonicalizeMemrefs(pm);
+    if (failed(pm.run(module))) {
+      ARTS_ERROR("Error when canonicalizing memrefs");
       module->dump();
       return;
     }
+  }
+  if (stopAt == PipelineStage::CanonicalizeMemrefs)
+    return;
 
-    /// Optimizations (if enabled)
-    if (Opt) {
-      PassManager pm2(&context);
-      mlir::OpPassManager &optPM = pm2.nest<mlir::func::FuncOp>();
-      setupAdditionalOptimizations(optPM);
-
-      if (mlir::failed(pm2.run(module))) {
-        ARTS_ERROR("Error when running optimizations");
-        module->dump();
-        return;
-      }
-    }
-
-    /// LLVM IR conversion (if enabled)
-    if (EmitLLVM) {
-      PassManager pm3(&context);
-      setupLLVMIREmission(pm3);
-      if (mlir::failed(pm3.run(module))) {
-        ARTS_ERROR("Error when emitting LLVM IR");
-        module->dump();
-        return;
-      }
+  /// Metadata collection
+  if (stopAt == PipelineStage::CollectMetadata) {
+    PassManager pm(&context);
+    setupCollectMetadata(pm, true);
+    if (failed(pm.run(module))) {
+      ARTS_ERROR("Error when collecting metadata");
+      module->dump();
+      return;
     }
     return;
   }
 
-  /// Initial cleanup and simplification
+  /// Initial cleanup
   {
     PassManager pm(&context);
-    mlir::OpPassManager &optPM = pm.nest<mlir::func::FuncOp>();
+    OpPassManager &optPM = pm.nest<func::FuncOp>();
     setupInitialCleanup(optPM, Opt);
 
-    if (mlir::failed(pm.run(module))) {
+    if (failed(pm.run(module))) {
       ARTS_ERROR("Error simplyfing the IR");
       module->dump();
       return;
     }
   }
-
-  if (stopAt == PipelineStage::Simplify)
-    return;
-
-  /// ARTS dialect conversion and optimization
-  {
-    PassManager pm(&context);
-    setupArtsInliner(pm);
-    if (mlir::failed(pm.run(module))) {
-      ARTS_ERROR("Error when running ARTS inliner");
-      module->dump();
-      return;
-    }
-  }
-
-  if (stopAt == PipelineStage::ArtsInliner)
+  if (stopAt == PipelineStage::InitialCleanup)
     return;
 
   /// OpenMP to ARTS conversion
   {
     PassManager pm(&context);
     setupOpenMPToArts(pm);
-    if (mlir::failed(pm.run(module))) {
+    if (failed(pm.run(module))) {
       ARTS_ERROR("Error when converting OpenMP to ARTS");
       module->dump();
       return;
     }
   }
-
   if (stopAt == PipelineStage::OpenMPToArts)
     return;
 
@@ -411,54 +426,90 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   {
     PassManager pm(&context);
     setupEdtTransforms(pm, AM.get());
-    if (mlir::failed(pm.run(module))) {
+    if (failed(pm.run(module))) {
       ARTS_ERROR("Error when running EDT transformations");
       module->dump();
       return;
     }
   }
-
   if (stopAt == PipelineStage::EdtTransforms)
     return;
 
-  /// Db creation and optimization
+  /// Create Dbs
   {
     PassManager pm(&context);
-    setupDb(pm, AM.get(), true, ExportJson);
-    if (mlir::failed(pm.run(module))) {
-      ARTS_ERROR("Error when running db passes");
+    setupCreateDbs(pm, AM.get());
+    if (failed(pm.run(module))) {
+      ARTS_ERROR("Error when creating Dbs");
       module->dump();
       return;
     }
   }
-
-  if (stopAt == PipelineStage::Db)
+  if (stopAt == PipelineStage::CreateDbs)
     return;
 
-  /// EDT optimizations
+  /// Db optimizations
   {
     PassManager pm(&context);
-    setupEdtOptimizations(pm, AM.get());
-    if (mlir::failed(pm.run(module))) {
-      ARTS_ERROR("Error when running EDT optimizations");
+    setupDbOpt(pm, AM.get(), ExportJson);
+    if (failed(pm.run(module))) {
+      ARTS_ERROR("Error when optimizing Dbs");
       module->dump();
       return;
     }
   }
-  if (stopAt == PipelineStage::EdtOptimizations)
+  if (stopAt == PipelineStage::DbOpt)
     return;
 
-  /// Create epochs
+  /// Edt optimizations
+  {
+    PassManager pm(&context);
+    setupEdtOpt(pm, AM.get());
+    if (failed(pm.run(module))) {
+      ARTS_ERROR("Error when optimizing EDTs");
+      module->dump();
+      return;
+    }
+  }
+  if (stopAt == PipelineStage::EdtOpt)
+    return;
+
+  /// Concurrency
+  {
+    PassManager pm(&context);
+    setupConcurrency(pm, AM.get());
+    if (failed(pm.run(module))) {
+      ARTS_ERROR("Error when running concurrency");
+      module->dump();
+      return;
+    }
+  }
+  if (stopAt == PipelineStage::Concurrency)
+    return;
+
+  /// Concurrency optimizations
+  {
+    PassManager pm(&context);
+    setupConcurrencyOpt(pm, AM.get());
+    if (failed(pm.run(module))) {
+      ARTS_ERROR("Error when optimizing concurrency");
+      module->dump();
+      return;
+    }
+  }
+  if (stopAt == PipelineStage::ConcurrencyOpt)
+    return;
+
+  /// Epochs: creation and optimization
   {
     PassManager pm(&context);
     setupEpochs(pm, AM.get());
-    if (mlir::failed(pm.run(module))) {
-      ARTS_ERROR("Error when creating epochs");
+    if (failed(pm.run(module))) {
+      ARTS_ERROR("Error when creating and optimizing epochs");
       module->dump();
       return;
     }
   }
-
   if (stopAt == PipelineStage::Epochs)
     return;
 
@@ -466,13 +517,12 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   {
     PassManager pm(&context);
     setupPreLowering(pm, AM.get());
-    if (mlir::failed(pm.run(module))) {
-      ARTS_ERROR("Error when running pre-lowering");
+    if (failed(pm.run(module))) {
+      ARTS_ERROR("Error when pre-lowering DBs, EDTs, and Epochs");
       module->dump();
       return;
     }
   }
-
   if (stopAt == PipelineStage::PreLowering)
     return;
 
@@ -480,15 +530,38 @@ void setupPassManager(mlir::ModuleOp module, MLIRContext &context,
   {
     PassManager pm(&context);
     setupArtsToLLVM(pm, Debug);
-    if (mlir::failed(pm.run(module))) {
+    if (failed(pm.run(module))) {
       ARTS_ERROR("Error when converting ARTS to LLVM");
       module->dump();
       return;
     }
   }
-
   if (stopAt == PipelineStage::ArtsToLLVM)
     return;
+
+  /// Optimizations
+  if (Opt) {
+    PassManager pm(&context);
+    OpPassManager &optPM = pm.nest<func::FuncOp>();
+    setupAdditionalOptimizations(optPM);
+
+    if (failed(pm.run(module))) {
+      ARTS_ERROR("Error when running classical optimizations");
+      module->dump();
+      return;
+    }
+  }
+
+  /// LLVM IR conversion
+  if (EmitLLVM) {
+    PassManager pm(&context);
+    setupLLVMIREmission(pm);
+    if (failed(pm.run(module))) {
+      ARTS_ERROR("Error when emitting LLVM IR");
+      module->dump();
+      return;
+    }
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -523,7 +596,7 @@ int main(int argc, char **argv) {
 
   /// Translate the optimized module to LLVM IR and write output.
   if (EmitLLVM) {
-    llvm::LLVMContext llvmContext;
+    LLVMContext llvmContext;
     auto llvmModule = translateModuleToLLVMIR(module.get(), llvmContext);
     if (!llvmModule) {
       module->dump();
@@ -531,7 +604,7 @@ int main(int argc, char **argv) {
       return -1;
     }
     std::string llvmIR;
-    llvm::raw_string_ostream llvmStream(llvmIR);
+    raw_string_ostream llvmStream(llvmIR);
     llvmModule->print(llvmStream, nullptr);
 
     auto output = openOutputFile(OutputFilename);

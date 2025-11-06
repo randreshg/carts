@@ -16,7 +16,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
-#include "arts/Utils/ArtsAbstractMachine.h"
+#include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/IRMapping.h"
@@ -41,64 +41,8 @@ struct ConcurrencyPass : public ConcurrencyBase<ConcurrencyPass> {
   void runOnOperation() override;
 
 private:
-  /// Apply EDT and DB placement decisions
-  void applyPlacementDecisions(func::FuncOp func);
-
-  /// Apply EDT placement decisions to operations
-  void applyEdtPlacement(const SmallVector<PlacementDecision, 16> &decisions,
-                         const SmallVector<std::string, 8> &nodes);
-
-  /// Apply DB placement decisions to operations
-  void applyDbPlacement(const SmallVector<DbPlacementDecision, 16> &decisions,
-                        const SmallVector<std::string, 8> &nodes);
-
-  /// Helper to apply placement decisions for any operation type
-  template <typename DecisionsT, typename GetOpFunc, typename SetAttrFunc>
-  void applyPlacementDecisions(const SmallVector<std::string, 8> &nodes,
-                               const DecisionsT &decisions, GetOpFunc getOpFunc,
-                               SetAttrFunc setAttrFunc) {
-    llvm::StringMap<unsigned> nodeIndex;
-    for (unsigned i = 0; i < nodes.size(); ++i) {
-      nodeIndex[nodes[i]] = i;
-    }
-
-    ModuleOp module = getOperation();
-    OpBuilder builder(module.getContext());
-    for (const auto &decision : decisions) {
-      auto it = nodeIndex.find(decision.chosenNode);
-      unsigned idx = (it != nodeIndex.end()) ? it->second : 0u;
-      if (Operation *op = getOpFunc(decision)) {
-        setAttrFunc(op, idx, builder);
-      }
-    }
-  }
-
-  /// Helper to emit debug output with string stream
-  template <typename OutputFunc>
-  void emitDebugString(const std::string &sectionName,
-                       OutputFunc &&outputFunc) {
-    ARTS_DEBUG_SECTION(sectionName, {
-      std::string s;
-      llvm::raw_string_ostream os(s);
-      outputFunc(os);
-      ARTS_DBGS() << s;
-    });
-  }
-
-  /// Emit debug output for placement decisions
-  void emitDebugOutput(func::FuncOp func,
-                       const EdtPlacementHeuristics &edtPlacer,
-                       const SmallVector<PlacementDecision, 16> &edtDecisions,
-                       const DbPlacementHeuristics &dbPlacer,
-                       const SmallVector<DbPlacementDecision, 16> &dbDecisions);
-
-  /// Apply parallelism strategy to EDT operations
   void applyEdtParallelismStrategy(EdtOp edtOp);
-
-  /// Adjust datablock modes based on EDT concurrency
   void adjustDbModes();
-
-  /// Update runtime query operations based on EDT concurrency
   void updateRuntimeQueryOperations();
 
   ArtsAbstractMachine *abstractMachine = nullptr;
@@ -134,51 +78,6 @@ void ConcurrencyPass::runOnOperation() {
 
   ARTS_INFO_FOOTER(Concurrency);
   ARTS_DEBUG_REGION(module.dump(););
-}
-
-void ConcurrencyPass::applyPlacementDecisions(func::FuncOp func) {
-  auto nodes = EdtPlacementHeuristics::makeNodeNames(4);
-  auto &dbGraph = AM->getDbGraph(func);
-  auto &edtGraph = AM->getEdtGraph(func);
-  auto &edtAnalysis = AM->getEdtAnalysis();
-
-  /// EDT placement
-  EdtPlacementHeuristics edtPlacer(&edtGraph, &edtAnalysis);
-  auto edtDecisions = edtPlacer.compute(nodes);
-  applyEdtPlacement(edtDecisions, nodes);
-
-  /// DB placement
-  DbPlacementHeuristics dbPlacer(&dbGraph);
-  auto dbDecisions = dbPlacer.compute(func, nodes);
-  applyDbPlacement(dbDecisions, nodes);
-
-  /// Debug output
-  emitDebugOutput(func, edtPlacer, edtDecisions, dbPlacer, dbDecisions);
-}
-
-void ConcurrencyPass::applyEdtPlacement(
-    const SmallVector<PlacementDecision, 16> &decisions,
-    const SmallVector<std::string, 8> &nodes) {
-  applyPlacementDecisions(
-      nodes, decisions, [](const PlacementDecision &d) { return d.edtOp; },
-      [](Operation *op, unsigned idx, OpBuilder &builder) {
-        op->setAttr("node",
-                    IntegerAttr::get(builder.getI32Type(), (int32_t)idx));
-      });
-}
-
-void ConcurrencyPass::applyDbPlacement(
-    const SmallVector<DbPlacementDecision, 16> &decisions,
-    const SmallVector<std::string, 8> &nodes) {
-  applyPlacementDecisions(
-      nodes, decisions,
-      [](const DbPlacementDecision &d) -> Operation * { return d.dbAllocOp; },
-      [](Operation *op, unsigned idx, OpBuilder &builder) {
-        if (op) {
-          op->setAttr("node",
-                      IntegerAttr::get(builder.getI32Type(), (int32_t)idx));
-        }
-      });
 }
 
 void ConcurrencyPass::updateRuntimeQueryOperations() {
@@ -313,12 +212,14 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
   EdtConcurrency concurrencyType = EdtConcurrency::intranode;
 
   if (!abstractMachine->isValid()) {
-    ARTS_WARN("Abstract machine validation failed; using available configuration "
-              "data when setting parallelism");
+    ARTS_WARN(
+        "Abstract machine validation failed; using available configuration "
+        "data when setting parallelism");
   }
 
-  int nodeCount =
-      abstractMachine->hasValidNodeCount() ? abstractMachine->getNodeCount() : 0;
+  int nodeCount = abstractMachine->hasValidNodeCount()
+                      ? abstractMachine->getNodeCount()
+                      : 0;
   int threads =
       abstractMachine->hasValidThreads() ? abstractMachine->getThreads() : 0;
 
@@ -338,7 +239,8 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
     ARTS_INFO("Setting EDT parallelism: single-node execution with 1 worker");
   } else {
     /// Unknown configuration - let runtime handle it
-    ARTS_INFO("Unable to determine parallelism statically; deferring to runtime");
+    ARTS_INFO(
+        "Unable to determine parallelism statically; deferring to runtime");
     return;
   }
 
@@ -350,32 +252,6 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
             << (concurrencyType == EdtConcurrency::internode ? "internode"
                                                              : "intranode")
             << ", workers=" << numWorkers);
-}
-
-void ConcurrencyPass::emitDebugOutput(
-    func::FuncOp func, const EdtPlacementHeuristics &edtPlacer,
-    const SmallVector<PlacementDecision, 16> &edtDecisions,
-    const DbPlacementHeuristics &dbPlacer,
-    const SmallVector<DbPlacementDecision, 16> &dbDecisions) {
-  auto &concurrencyGraph = AM->getConcurrencyGraph(func);
-
-  /// Print concurrency graph
-  emitDebugString("edt-concurrency-pass",
-                  [&](llvm::raw_string_ostream &os) -> void {
-                    concurrencyGraph.print(os);
-                  });
-
-  /// Export EDT placement to JSON
-  emitDebugString("edt-placement-json",
-                  [&](llvm::raw_string_ostream &os) -> void {
-                    edtPlacer.exportToJson(func, edtDecisions, os);
-                  });
-
-  /// Export DB placement to JSON
-  emitDebugString("db-placement-json",
-                  [&](llvm::raw_string_ostream &os) -> void {
-                    dbPlacer.exportToJson(func, dbDecisions, os);
-                  });
 }
 
 namespace mlir {

@@ -177,4 +177,131 @@ def NoVerifyAttr : AttrDef<ArtsDialect, "NoVerify"> {
   let assemblyFormat = "";
 }
 
+//===----------------------------------------------------------------------===//
+// ARTS Metadata Attributes
+//===----------------------------------------------------------------------===//
+
+/// Attribute to store dimensional analysis results for flattened memrefs
+def MemrefDimInfoAttr : Arts_Attr<"MemrefDimInfo", "memref_dim_info"> {
+  let summary = "Recovered dimensional information for flattened memrefs";
+  let description = [{
+    Stores inferred multi-dimensional shape and affine access patterns
+    for array allocations that were originally flattened (e.g., array[N*M]).
+    This enables canonicalization of memref<N*M> to memref<NxM> with proper
+    multi-dimensional indexing.
+
+    The attribute captures:
+    - inferredDims: The recovered dimensions (e.g., [128, 128] for N=128)
+    - strideExprs: Stride multipliers for each dimension (e.g., [128, 1])
+    - accessPattern: Affine map showing linearization pattern
+  }];
+  let parameters = (ins
+    "::mlir::ArrayAttr":$inferredDims,
+    "::mlir::ArrayAttr":$strideExprs,
+    "::mlir::AffineMapAttr":$accessPattern
+  );
+  let mnemonic = "memref_dim_info";
+  let assemblyFormat = "`<` $inferredDims `,` $strideExprs `,` $accessPattern `>`";
+}
+
+/// Loop metadata attribute
+def LoopMetadataAttr : Arts_Attr<"LoopMetadata", "loop_metadata"> {
+  let summary = "Loop metadata for loop operations";
+  let description = [{
+    Stores high-level semantic loop analysis results that are difficult or
+    impossible to recover after OpenMP transformation.
+  }];
+  let parameters = (ins
+    /// Parallelism analysis
+    "::mlir::BoolAttr":$potentiallyParallel,
+    "::mlir::BoolAttr":$hasReductions,
+    OptionalParameter<"::mlir::ArrayAttr">:$reductionKinds,
+    /// Memory access patterns
+    "::mlir::IntegerAttr":$readCount,
+    "::mlir::IntegerAttr":$writeCount,
+    /// Loop structure information
+    OptionalParameter<"::mlir::IntegerAttr">:$tripCount,
+    OptionalParameter<"::mlir::IntegerAttr">:$nestingLevel,
+    /// Access pattern analysis
+    OptionalParameter<"::mlir::BoolAttr">:$hasUniformStride,
+    OptionalParameter<"::mlir::BoolAttr">:$hasGatherScatter,
+    OptionalParameter<"::mlir::IntegerAttr">:$dataMovementPattern,
+    /// Partitioning hints
+    OptionalParameter<"::mlir::IntegerAttr">:$suggestedPartitioning,
+    OptionalParameter<"::mlir::IntegerAttr">:$suggestedChunkSize,
+    OptionalParameter<"::mlir::IntegerAttr">:$memoryFootprintPerIter,
+    /// Dependency information
+    OptionalParameter<"::mlir::BoolAttr">:$hasInterIterationDeps,
+    OptionalParameter<"::mlir::IntegerAttr">:$dependenceDistance,
+    // Source location
+    "::mlir::StringAttr":$locationKey
+  );
+  let mnemonic = "loop_metadata";
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+
+/// Memref metadata attribute
+def MemrefMetadataAttr : Arts_Attr<"MemrefMetadata", "memref_metadata"> {
+  let summary = "Memref allocation metadata";
+  let description = [{
+    Stores comprehensive analysis results for memref allocations including
+    access patterns, memory characteristics, and lifetime information that
+    are difficult to recover after OpenMP transformation.
+  }];
+  let parameters = (ins
+    /// Basic type information
+    OptionalParameter<"::mlir::IntegerAttr">:$rank,
+    "::mlir::StringAttr":$allocationId,
+    /// Access pattern analysis
+    OptionalParameter<"::mlir::IntegerAttr">:$totalAccesses,
+    OptionalParameter<"::mlir::IntegerAttr">:$readCount,
+    OptionalParameter<"::mlir::IntegerAttr">:$writeCount,
+    OptionalParameter<"::mlir::FloatAttr">:$readWriteRatio,
+    OptionalParameter<"::mlir::BoolAttr">:$allAccessesAffine,
+    OptionalParameter<"::mlir::BoolAttr">:$hasAffineAccesses,
+    OptionalParameter<"::mlir::BoolAttr">:$hasNonAffineAccesses,
+    /// Memory characteristics
+    OptionalParameter<"::mlir::IntegerAttr">:$memoryFootprint,
+    OptionalParameter<"::mlir::BoolAttr">:$isFlattenedArray,
+    /// Canonicalization metadata
+    OptionalParameter<"::mlir::BoolAttr">:$shouldCanonicalize,
+    OptionalParameter<"::mlir::BoolAttr">:$isCanonicalized,
+    /// Lifetime information (location keys)
+    OptionalParameter<"::mlir::StringAttr">:$firstUseLocationKey,
+    OptionalParameter<"::mlir::StringAttr">:$lastUseLocationKey,
+    /// Extended access characterization
+    OptionalParameter<"::mlir::BoolAttr">:$hasUniformAccess,
+    OptionalParameter<"::mlir::BoolAttr">:$hasStrideOneAccess,
+    OptionalParameter<"::mlir::StringAttr">:$dominantAccessPattern,
+    OptionalParameter<"::mlir::IntegerAttr">:$nestingDepth,
+    OptionalParameter<"::mlir::BoolAttr">:$accessedInParallelLoop,
+    OptionalParameter<"::mlir::BoolAttr">:$hasLoopCarriedDeps,
+    OptionalParameter<"::mlir::IntegerAttr">:$reuseDistance,
+    OptionalParameter<"::mlir::BoolAttr">:$hasGoodSpatialLocality
+  );
+  let mnemonic = "memref_metadata";
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+
+/// Value metadata attribute
+def ValueMetadataAttr : Arts_Attr<"ValueMetadata", "value_metadata"> {
+  let summary = "Value source and provenance metadata";
+  let description = [{
+    Tracks the source and provenance of values in the IR, useful for
+    understanding where dynamic values (like array dimensions) come from.
+  }];
+  let parameters = (ins
+    /// Source type (function_argument, loop_iv, constant, etc.)
+    "::mlir::StringAttr":$sourceType,
+    /// Index (for function arguments, loop IVs, etc.)
+    "::mlir::IntegerAttr":$index,
+    /// Variable name (if available)
+    OptionalParameter<"::mlir::StringAttr">:$varName,
+    /// Source location key
+    OptionalParameter<"::mlir::StringAttr">:$locationKey
+  );
+  let mnemonic = "value_metadata";
+  let assemblyFormat = "`<` struct(params) `>`";
+}
+
 #endif // ARTS_ATTRS

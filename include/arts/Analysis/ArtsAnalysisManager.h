@@ -13,7 +13,7 @@
 #include "arts/Analysis/Concurrency/ConcurrencyAnalysis.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Edt/EdtAnalysis.h"
-#include "arts/Utils/ArtsAbstractMachine.h"
+#include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include <memory>
