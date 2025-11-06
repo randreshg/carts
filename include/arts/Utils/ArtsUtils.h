@@ -5,6 +5,7 @@
 #ifndef CARTS_UTILS_ARTSUTILS_H
 #define CARTS_UTILS_ARTSUTILS_H
 
+#include "arts/ArtsDialect.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
@@ -46,6 +47,11 @@ bool allSameValue(ValueRange values);
 bool scalesAreEquivalent(Value a, Value b);
 
 //===----------------------------------------------------------------------===//
+/// Access Mode Utilities
+//===----------------------------------------------------------------------===//
+ArtsMode combineAccessModes(ArtsMode mode1, ArtsMode mode2);
+
+//===----------------------------------------------------------------------===//
 /// EDT Analysis Utilities
 //===----------------------------------------------------------------------===//
 bool isInvariantInEdt(Region &edtRegion, Value value);
@@ -71,7 +77,7 @@ Operation *getUnderlyingDbAlloc(Value v);
 //===----------------------------------------------------------------------===//
 std::pair<SmallVector<Value>, SmallVector<Value>>
 splitDbIndices(Operation *dbOp, ValueRange indices, OpBuilder &builder,
-                      Location loc);
+               Location loc);
 
 //===----------------------------------------------------------------------===//
 // Type Casting and Conversion Utilities

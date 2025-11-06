@@ -1,6 +1,6 @@
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
 
 int main(int argc, char **argv) {
   if (argc < 2) {
@@ -12,10 +12,11 @@ int main(int argc, char **argv) {
   int *b = (int *)malloc(N * sizeof(int));
   int *c = (int *)malloc(N * sizeof(int));
 
+  int randomNumber = rand() % 100;
   // Initialize arrays
   for (int i = 0; i < N; i++) {
     a[i] = i;
-    b[i] = i * 2;
+    b[i] = (i * 2) + randomNumber;
   }
   /// Print initial values
   printf("Initial values:\n");
@@ -40,7 +41,8 @@ int main(int argc, char **argv) {
   }
 
   printf("Sum of results: %d\n", sum);
-  printf("Expected sum: %d\n", N * (N - 1) / 2 + N * (N - 1));
+  printf("Expected sum: %d\n",
+         N * (N - 1) / 2 + N * (N - 1) + N * randomNumber);
 
   free(a);
   free(b);

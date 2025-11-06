@@ -577,11 +577,11 @@ def GetCurrentWorkerOp : Arts_Op<"get_current_worker",
 //===----------------------------------------------------------------------===//
 // arts.get_current_node
 //===----------------------------------------------------------------------===//
-def GetCurrentNodeOp : Arts_Op<"get_current_node", 
+def GetCurrentNodeOp : Arts_Op<"get_current_node",
   [MemoryEffects<[MemWrite]>, RecursiveMemoryEffects]> {
   let summary = "Get the current node ID in ARTS";
   let description = [{
-    The `arts.get_current_node` operation retrieves the ID of the 
+    The `arts.get_current_node` operation retrieves the ID of the
     current node executing the operation in the ARTS runtime environment.
   }];
   let results = (outs I32:$result);
@@ -590,6 +590,30 @@ def GetCurrentNodeOp : Arts_Op<"get_current_node",
   let builders = [
     OpBuilder<(ins), [{
       $_state.addTypes(IntegerType::get($_builder.getContext(), 32));
+    }]>
+  ];
+}
+
+//===----------------------------------------------------------------------===//
+// arts.get_parallel_worker_id
+//===----------------------------------------------------------------------===//
+def GetParallelWorkerIdOp : Arts_Op<"get_parallel_worker_id", []> {
+  let summary = "Get the parallel worker ID placeholder";
+  let description = [{
+    The `arts.get_parallel_worker_id` operation is a placeholder that will be
+    replaced by ParallelEdtLowering with the actual worker ID (scf.for induction
+    variable). This allows ForLowering pass to use the worker ID symbolically
+    before the parallel loop structure is created.
+
+    This operation is created by ForLowering and consumed by ParallelEdtLowering.
+    It should not appear in the final lowered IR.
+  }];
+  let results = (outs Index:$result);
+  let assemblyFormat = "attr-dict";
+  let skipDefaultBuilders = 1;
+  let builders = [
+    OpBuilder<(ins), [{
+      $_state.addTypes(IndexType::get($_builder.getContext()));
     }]>
   ];
 }

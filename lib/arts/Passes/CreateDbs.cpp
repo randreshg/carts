@@ -37,6 +37,10 @@
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/Metadata/ArtsMetadata.h"
+#include "arts/Utils/Metadata/ArtsMetadataManager.h"
+#include "arts/Utils/Metadata/MemrefMetadata.h"
+#include <optional>
 
 #include "arts/Passes/ArtsPasses.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -64,68 +68,31 @@ using namespace mlir::arts;
 namespace {
 
 //===----------------------------------------------------------------------===//
-// Access Mode Combination
-/// Combine two access modes and return the more permissive mode
-//===----------------------------------------------------------------------===//
-static ArtsMode combineAccessModes(ArtsMode mode1, ArtsMode mode2) {
-  /// If either mode is uninitialized, return the other mode
-  if (mode1 == ArtsMode::uninitialized)
-    return mode2;
-  if (mode2 == ArtsMode::uninitialized)
-    return mode1;
-
-  /// If either mode is inout, the result is inout (most permissive)
-  if (mode1 == ArtsMode::inout || mode2 == ArtsMode::inout)
-    return ArtsMode::inout;
-
-  /// If one is 'in' and the other is 'out', the result is inout
-  if ((mode1 == ArtsMode::in && mode2 == ArtsMode::out) ||
-      (mode1 == ArtsMode::out && mode2 == ArtsMode::in))
-    return ArtsMode::inout;
-
-  /// If both are the same, return that mode
-  if (mode1 == mode2)
-    return mode1;
-
-  /// Default to inout for any other combination (shouldn't happen)
-  return ArtsMode::inout;
-}
-//===----------------------------------------------------------------------===//
 // Pass Implementation
 //===----------------------------------------------------------------------===//
 
 struct CreateDbsPass : public arts::CreateDbsBase<CreateDbsPass> {
-  CreateDbsPass(bool identifyDbs) { this->identifyDbs = identifyDbs; }
+  CreateDbsPass() {}
 
   void runOnOperation() override;
 
 private:
-  bool identifyDbs;
   ModuleOp module;
   DenseMap<Operation *, Operation *> dbPtrToOriginalAlloc;
   SetVector<Operation *> opsToRemove;
 
   /// Consolidated structure to track all usage information for a memref
   struct MemrefInfo {
-    /// Base allocation
     Operation *alloc = nullptr;
-    /// Parent EDT
     EdtOp parentEdt = nullptr;
-    /// Combined access mode for this memref
-    /// Default to uninitialized - will be set by DbControlOps or inferred as
-    /// inout
     ArtsMode accessMode = ArtsMode::uninitialized;
-    /// Whether this memref used fine-grained allocation
     bool usedFineGrained = false;
-    /// The DB allocation operation created for this memref
     DbAllocOp dbAllocOp = nullptr;
 
     /// Structure to track a specific DB access (mode + indices + chunks)
     struct DbDep {
       ArtsMode mode;
-      SmallVector<Value, 4> indices;
-      SmallVector<Value, 4> offsets;
-      SmallVector<Value, 4> sizes;
+      SmallVector<Value, 4> indices, offsets, sizes;
       SmallVector<Operation *, 4> operations;
     };
 
@@ -200,7 +167,8 @@ private:
   /// Map an edtOp to its external values
   DenseMap<EdtOp, SetVector<Value>> edtExternalValues;
 
-  /// Core helper functions
+  /// Helper functions
+  void importMetadata();
   void collectMemrefs();
   void collectControlDbOps();
   void createDbAllocOps();
@@ -249,7 +217,7 @@ void CreateDbsPass::runOnOperation() {
   ARTS_INFO("Phase 2: collect and clean up existing Control DB operations");
   collectControlDbOps();
 
-  /// Phase 2.5: Check for memrefs used without DbControlOps
+  /// Phase 3.5: Check for memrefs used without DbControlOps
   /// For each EDT with external dependencies, check if any memref is used
   /// without a corresponding DbControlOp. If so, set that memref to inout.
   for (auto &edtEntry : edtExternalValues) {
@@ -265,7 +233,6 @@ void CreateDbsPass::runOnOperation() {
 
       /// Check if this EDT has any DbControlOps for this memref
       bool hasControlDb = !info.edtToDeps[edt].empty();
-
       if (!hasControlDb) {
         /// No DbControlOps for this memref in this EDT - set to inout
         ARTS_DEBUG(
@@ -318,6 +285,40 @@ void CreateDbsPass::runOnOperation() {
 }
 
 //===----------------------------------------------------------------------===//
+// Metadata Import
+//===----------------------------------------------------------------------===//
+void CreateDbsPass::importMetadata() {
+  std::string metadataPath = ".carts-metadata.json";
+  ARTS_INFO("Attempting to import metadata from: " << metadataPath);
+
+  ArtsMetadataManager manager(module.getContext());
+  bool success = manager.importFromJsonFile(metadataPath);
+  if (success) {
+    manager.importFromOperations(module);
+    ARTS_INFO("Successfully imported metadata from sequential compilation");
+
+    /// Print summary of imported metadata
+    unsigned allocsWithMeta = 0, loopsWithMeta = 0;
+    module.walk([&](Operation *op) {
+      if (isa<memref::AllocOp, memref::AllocaOp>(op)) {
+        if (op->hasAttr(AttrNames::MemrefMetadata::Rank))
+          allocsWithMeta++;
+      }
+    });
+    module.walk([&](affine::AffineForOp forOp) {
+      if (forOp->hasAttr("arts.is_parallel"))
+        loopsWithMeta++;
+    });
+
+    ARTS_INFO("  Allocations with metadata: " << allocsWithMeta);
+    ARTS_INFO("  Loops with metadata: " << loopsWithMeta);
+  } else {
+    ARTS_DEBUG(
+        "No metadata file found or import failed, continuing without metadata");
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // Allocation Type Inference
 //===----------------------------------------------------------------------===//
 DbAllocType CreateDbsPass::inferAllocType(Operation *alloc) {
@@ -352,6 +353,7 @@ void CreateDbsPass::collectMemrefs() {
       for (Value operand : op->getOperands()) {
         if (!operand.getType().isa<MemRefType>())
           continue;
+
         /// Get the underlying value of the memory reference
         Operation *underlyingOp = arts::getUnderlyingOperation(operand);
         if (!underlyingOp) {
@@ -512,7 +514,7 @@ void CreateDbsPass::createDbAllocOps() {
   /// All memrefs in memrefInfo are converted to DBs
   for (auto &entry : memrefInfo) {
     Operation *alloc = entry.first;
-    MemrefInfo &memrefInfo = entry.second;
+    MemrefInfo &info = entry.second;
     Location loc = alloc->getLoc();
     builder.setInsertionPointAfter(alloc);
 
@@ -520,7 +522,7 @@ void CreateDbsPass::createDbAllocOps() {
     DbAllocType allocType = inferAllocType(alloc);
 
     /// Use the dependency mode from DbControlOp
-    ArtsMode mode = memrefInfo.accessMode;
+    ArtsMode mode = info.accessMode;
     ARTS_DEBUG(" - Using access mode " << mode << " for memref " << *alloc);
 
     /// Set DbMode based on the access mode
@@ -542,13 +544,13 @@ void CreateDbsPass::createDbAllocOps() {
     /// - Otherwise, use coarse-grained allocation (single DB with full memref)
     SmallVector<Value> sizes, elementSizes;
     const unsigned rank = memRefType.getRank();
-    const auto accessPatternInfo = memrefInfo.getAccessPatternInfo();
+    const auto accessPatternInfo = info.getAccessPatternInfo();
     bool useFineGrainedAllocation = accessPatternInfo.isConsistent &&
                                     accessPatternInfo.pinnedDimCount > 0 &&
                                     accessPatternInfo.allAccessesHaveIndices;
 
     if (useFineGrainedAllocation) {
-      memrefInfo.usedFineGrained = true;
+      info.usedFineGrained = true;
       const auto pinnedDimCount = accessPatternInfo.pinnedDimCount;
 
       /// All indexed dimensions go into sizes (outer array
@@ -615,15 +617,23 @@ void CreateDbsPass::createDbAllocOps() {
     auto dbAllocOp = builder.create<DbAllocOp>(
         loc, mode, route, allocType, dbMode, elementType, sizes, elementSizes);
 
+    /// Transfer metadata from original allocation to DbAllocOp
+    for (auto namedAttr : alloc->getAttrs()) {
+      StringRef attrName = namedAttr.getName().strref();
+      if (attrName.starts_with("arts."))
+        dbAllocOp->setAttr(namedAttr.getName(), namedAttr.getValue());
+    }
+    ARTS_DEBUG("  Transferred metadata from original allocation to DbAllocOp");
+
     /// Store mappings for later use
-    memrefInfo.dbAllocOp = dbAllocOp;
+    info.dbAllocOp = dbAllocOp;
     dbPtrToOriginalAlloc[dbAllocOp] = alloc;
 
     /// Insert DbFreeOp and remove associated dealloc operations
     insertDbFreeForDbAlloc(dbAllocOp, alloc, builder);
 
     /// Rewire uses of the original allocation to use the db_alloc operation
-    rewriteUsesInParentEdt(memrefInfo);
+    rewriteUsesInParentEdt(info);
   }
 }
 
@@ -665,6 +675,7 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
     /// Get the source guid and ptr
     auto sourceGuid = dbAllocOp.getGuid();
     auto sourcePtr = dbAllocOp.getPtr();
+    auto sourceSizes = dbAllocOp.getSizes();
     assert((sourceGuid && sourcePtr) && "Source guid and ptr must be non-null");
 
     /// Create acquire operation (pass both source guid and ptr)
@@ -697,8 +708,12 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
         /// Create fine-grained acquire operation
         SmallVector<Value> acquireIndices(depIndices.begin(), depIndices.end());
         SmallVector<Value> acquireOffsets(depOffsets.begin(), depOffsets.end());
+        assert(sourceSizes.size() >= depIndices.size() &&
+               "Sizes must be greater than or equal to indices");
+        uint64_t acquireRank = sourceSizes.size() - depIndices.size();
+
         SmallVector<Value> acquireSizes;
-        for (size_t i = 0; i < depIndices.size(); ++i) {
+        for (size_t i = 0; i < acquireRank; ++i) {
           acquireSizes.push_back(
               builder.create<arith::ConstantIndexOp>(edt.getLoc(), 1));
         }
@@ -1007,8 +1022,8 @@ void CreateDbsPass::rewriteUsesInEdt(EdtOp edt,
 //===----------------------------------------------------------------------===//
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createCreateDbsPass(bool identifyDbs) {
-  return std::make_unique<CreateDbsPass>(identifyDbs);
+std::unique_ptr<Pass> createCreateDbsPass() {
+  return std::make_unique<CreateDbsPass>();
 }
 } // namespace arts
 } // namespace mlir
