@@ -1,7 +1,7 @@
-///==========================================================================
+///==========================================================================///
 /// File: DbGraph.h
 /// Defines DbGraph derived from GraphBase for database operation analysis.
-///==========================================================================
+///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_GRAPHS_DB_DBGRAPH_H
 #define ARTS_ANALYSIS_GRAPHS_DB_DBGRAPH_H
@@ -22,8 +22,9 @@
 namespace mlir {
 namespace arts {
 
-// Forward declarations
+/// Forward declarations
 class DbAnalysis;
+class ArtsMetadataManager;
 
 class DbAllocNode;
 class DbAcquireNode;
@@ -81,6 +82,9 @@ public:
     auto it = edges.find(key);
     return it == edges.end() ? nullptr : it->second.get();
   }
+
+  /// Get DbAnalysis instance
+  DbAnalysis *getAnalysis() const { return analysis; }
 
   /// For GraphTraits iterators
   bool isEmpty() const override { return nodes.empty(); }

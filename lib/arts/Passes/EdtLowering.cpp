@@ -1,4 +1,4 @@
-///==========================================================================
+///==========================================================================///
 /// File: EdtLowering.cpp
 /// Complete implementation of EDT lowering pass that transforms arts.edt
 /// operations into runtime-compatible function calls.
@@ -12,7 +12,7 @@
 /// 4. Insert parameter/dependency unpacking in outlined function
 /// 5. Replace EDT with edt_create call returning GUID
 /// 6. Add dependency management (record_in_dep, increment_out_latch)
-///==========================================================================
+///==========================================================================///
 
 #include "ArtsPassDetails.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
@@ -53,11 +53,11 @@ using namespace mlir::arts;
 
 namespace {
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // EdtEnvManager
 // Manages the environment analysis for EDT regions by collecting parameters,
 // constants, and dependencies used in the region.
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 class EdtEnvManager {
 public:
   EdtEnvManager(EdtOp edtOp) : edtOp(edtOp) { analyze(); }
@@ -113,9 +113,9 @@ private:
   DenseMap<Value, unsigned> valueToPackIndex;
 };
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // EDT Lowering Pass Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 struct EdtLoweringPass : public arts::EdtLoweringBase<EdtLoweringPass> {
   explicit EdtLoweringPass() {}
   ~EdtLoweringPass() { delete AC; }
@@ -158,9 +158,9 @@ private:
 
 } // namespace
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Pass Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 void EdtLoweringPass::runOnOperation() {
   module = getOperation();
@@ -190,7 +190,7 @@ void EdtLoweringPass::runOnOperation() {
   ARTS_DEBUG_REGION(module.dump(););
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Lower EDT operations to runtime calls
 ///
 /// Transforms arts.edt operations into outlined functions and runtime calls.
@@ -207,7 +207,7 @@ void EdtLoweringPass::runOnOperation() {
 ///   %edt_guid = arts.edt_create %param_pack, %dep_count, %route
 ///   arts.record_in_dep %edt_guid, %dep
 ///   arts.increment_out_latch %edt_guid
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   OpBuilder::InsertionGuard IG(AC->getBuilder());
   AC->setInsertionPoint(edtOp);
@@ -273,12 +273,12 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   return success();
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Create outlined function for EDT body
 ///
 /// Generates a new private function with the ARTS EDT signature to contain
 /// the outlined EDT region.
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 func::FuncOp
 EdtLoweringPass::createOutlinedFunction(EdtOp edtOp,
                                         EdtEnvManager &envManager) {
@@ -293,12 +293,12 @@ EdtLoweringPass::createOutlinedFunction(EdtOp edtOp,
   return outlinedFunc;
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Pack EDT parameters and dependency metadata
 ///
 /// Creates a parameter pack containing user-defined parameters, constants,
 /// and metadata for datablock dependencies (indices, offsets, sizes).
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 Value EdtLoweringPass::packParams(Location loc, EdtEnvManager &envManager,
                                   SmallVector<Type> &packTypes) {
   const auto &parameters = envManager.getParameters();
@@ -365,13 +365,13 @@ Value EdtLoweringPass::packParams(Location loc, EdtEnvManager &envManager,
   return packOp;
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Outline EDT region to target function
 ///
 /// Moves the EDT body region into the outlined function, performs parameter
 /// and dependency unpacking, and updates value references to work with the
 /// new function context.
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 LogicalResult EdtLoweringPass::outlineRegionToFunction(
     EdtOp edtOp, func::FuncOp targetFunc, EdtEnvManager &envManager,
     const SmallVector<Type> &packTypes, size_t numUserParams) {
@@ -458,7 +458,7 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
   return success();
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Insert dependency management operations
 ///
 /// Adds runtime dependency tracking operations (record_in_dep,
@@ -468,7 +468,7 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
 ///   becomes: arts.rec_dep %edt_guid, [%d1_guid, %d2_guid, %d3_guid]
 ///   {access_mode = direct}
 ///            arts.inc_dep %edt_guid, [%d3_guid] {access_mode = direct}
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 LogicalResult
 EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
                                      const SmallVector<Value> &deps) {
@@ -538,14 +538,14 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
   return success();
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Clone EDT body operations with nested region remapping
 ///
 /// Clones all operations from the EDT body into the outlined function while
 /// recursively remapping operands in nested regions to use values from the
 /// provided IRMapping. This ensures operations with nested regions (like
 /// scf.for, arts.epoch) have their operands correctly updated.
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void EdtLoweringPass::cloneAndRemapEdtBody(Block &sourceBlock,
                                            OpBuilder &builder,
                                            IRMapping &valueMapping) {
@@ -581,14 +581,14 @@ void EdtLoweringPass::cloneAndRemapEdtBody(Block &sourceBlock,
   }
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Transform dependency uses in outlined function
 ///
 /// Rewrites dependency access operations in the outlined EDT function to use
 /// the packed dependency data structure. Computes proper base offsets and
 /// strides for each dependency, adjusting indices to account for datablock
 /// offsets.
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
                                        ArrayRef<Value> allParams,
                                        EdtEnvManager &envManager,
@@ -762,9 +762,9 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
   }
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Pass Registration
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 namespace mlir {
 namespace arts {

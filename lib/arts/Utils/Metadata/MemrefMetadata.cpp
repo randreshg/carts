@@ -1,6 +1,6 @@
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // MemrefMetadata.cpp - Memref/Allocation Metadata Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 #include "arts/Utils/Metadata/MemrefMetadata.h"
 #include "arts/ArtsDialect.h"
@@ -18,9 +18,9 @@ MemrefMetadata::MemrefMetadata(Operation *allocOp)
   assert(allocOp_ && "Allocation operation must not be null");
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Enum Serialization Helpers
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 std::string MemrefMetadata::accessPatternToString(AccessPatternType pattern) {
   switch (pattern) {
@@ -117,9 +117,9 @@ MemrefMetadata::stringToSpatialLocality(llvm::StringRef str) {
   return std::nullopt;
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // ArtsMetadata Interface Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 bool MemrefMetadata::importFromOp() {
   /// Get the metadata attribute

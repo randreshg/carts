@@ -1,9 +1,9 @@
-///==========================================================================
+///==========================================================================///
 /// File: ConcurrencyGraph.h
 ///
 /// This file defines the concurrency graph for EDT analysis.
 /// Identifies pairs of EDTs that may execute concurrently.
-///==========================================================================
+///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_GRAPHS_CONCURRENCY_CONCURRENCYGRAPH_H
 #define ARTS_ANALYSIS_GRAPHS_CONCURRENCY_CONCURRENCYGRAPH_H

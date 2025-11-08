@@ -1,11 +1,11 @@
-///==========================================================================
+///==========================================================================///
 /// File: ArtsAnalysisManager.h
 ///
 /// This file defines the ArtsAnalysisManager for centralized management
 /// of all ARTS analysis objects. Provides a clean interface that exposes
 /// only analysis objects, while internally managing graphs through
 /// the respective analysis classes.
-///==========================================================================
+///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_ARTSANALYSISMANAGER_H
 #define ARTS_ANALYSIS_ARTSANALYSISMANAGER_H
@@ -13,6 +13,7 @@
 #include "arts/Analysis/Concurrency/ConcurrencyAnalysis.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Edt/EdtAnalysis.h"
+#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -67,6 +68,10 @@ public:
     return abstractMachine;
   }
 
+  /// Get the metadata manager (creates if needed, loads from operations)
+  ArtsMetadataManager &getMetadataManager();
+  const ArtsMetadataManager &getMetadataManager() const;
+
   /// Print summary of analysis objects and their graphs
   void print(llvm::raw_ostream &os);
 
@@ -82,6 +87,7 @@ private:
   std::unique_ptr<DbAnalysis> dbAnalysis;
   std::unique_ptr<EdtAnalysis> edtAnalysis;
   std::unique_ptr<ConcurrencyAnalysis> concurrencyAnalysis;
+  std::unique_ptr<ArtsMetadataManager> metadataManager;
 };
 
 } // namespace arts

@@ -1,6 +1,6 @@
-///==========================================================================
+///==========================================================================///
 /// Db/DbNode.h - Db-specific nodes derived from NodeBase
-///==========================================================================
+///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_GRAPHS_DB_DBNODE_H
 #define ARTS_ANALYSIS_GRAPHS_DB_DBNODE_H
@@ -8,6 +8,7 @@
 #include "arts/Analysis/Db/DbInfo.h"
 #include "arts/Analysis/Graphs/Base/NodeBase.h"
 #include "arts/ArtsDialect.h"
+#include "arts/Utils/Metadata/MemrefMetadata.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
@@ -21,11 +22,11 @@ namespace arts {
 class DbAnalysis;
 class DbAcquireNode;
 
-//===----------------------------------------------------------------------===//
-// DbAllocNode
-// It represents a `arts.db.alloc` operations
-//===----------------------------------------------------------------------===//
-class DbAllocNode : public NodeBase {
+////===----------------------------------------------------------------------===////
+/// DbAllocNode
+/// It represents a `arts.db.alloc` operations
+////===----------------------------------------------------------------------===////
+class DbAllocNode : public NodeBase, public MemrefMetadata {
 public:
   DbAllocNode(DbAllocOp op, DbAnalysis *analysis);
 
@@ -66,10 +67,10 @@ private:
   DbAllocInfo info;
 };
 
-//===----------------------------------------------------------------------===//
-// DbAcquireNode
-// It represents a `arts.db.acquire` operation.
-//===----------------------------------------------------------------------===//
+////===----------------------------------------------------------------------===////
+/// DbAcquireNode
+/// It represents a `arts.db.acquire` operation.
+////===----------------------------------------------------------------------===////
 class DbAcquireNode : public NodeBase {
 public:
   DbAcquireNode(DbAcquireOp op, NodeBase *parent, DbAllocNode *rootAlloc,
@@ -85,9 +86,7 @@ public:
   const DenseSet<EdgeBase *> &getInEdges() const override { return inEdges; }
   const DenseSet<EdgeBase *> &getOutEdges() const override { return outEdges; }
 
-  /// For legacy callers that expect allocation parent
   DbAllocNode *getParent() const { return rootAlloc; }
-  /// Direct hierarchical parent, which can be an alloc or another acquire
   NodeBase *getDirectParent() const { return parent; }
   DbAllocNode *getRootAlloc() const { return rootAlloc; }
   DbAcquireInfo &getInfo() { return info; }

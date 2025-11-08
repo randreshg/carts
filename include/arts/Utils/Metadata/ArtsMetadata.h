@@ -1,12 +1,10 @@
-//===----------------------------------------------------------------------===//
-// ArtsMetadata.h - Metadata Import/Export Utilities
-//===----------------------------------------------------------------------===//
-//
-// This file defines utilities for importing and exporting ARTS metadata
-// to/from JSON files. This centralizes metadata handling logic for reuse
-// across passes and tools.
-//
-//===----------------------------------------------------------------------===//
+///==========================================================================///
+/// File: ArtsMetadata.h
+///
+/// This file defines utilities for importing and exporting ARTS metadata
+/// to/from JSON files. This centralizes metadata handling logic for reuse
+/// across passes and tools.
+///==========================================================================///
 
 #ifndef ARTS_UTILS_ARTSMETADATA_H
 #define ARTS_UTILS_ARTSMETADATA_H
@@ -23,9 +21,9 @@
 namespace mlir {
 namespace arts {
 
-//===----------------------------------------------------------------------===//
-// ArtsMetadata - Base class for all metadata
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// ArtsMetadata - Base class for all metadata
+///===----------------------------------------------------------------------===///
 class ArtsMetadata {
 public:
   ArtsMetadata(Operation *op) : op_(op) {
@@ -60,4 +58,4 @@ protected:
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_UTILS_ARTSMETADATA_H
+#endif /// ARTS_UTILS_ARTSMETADATA_H

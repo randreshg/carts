@@ -1,12 +1,12 @@
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // MemrefAnalyzer.h - Memory Reference Analysis for Metadata Collection
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 //
 // This file defines the MemrefAnalyzer class, which performs comprehensive
 // analysis of memory allocations including access patterns, reuse distance,
 // and lifetime analysis.
 //
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 #ifndef ARTS_ANALYSIS_METADATA_MEMREFANALYZER_H
 #define ARTS_ANALYSIS_METADATA_MEMREFANALYZER_H
@@ -24,9 +24,9 @@
 namespace mlir {
 namespace arts {
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // ReuseAnalyzer - Stack distance algorithm for reuse distance computation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 class ReuseAnalyzer {
 public:
   explicit ReuseAnalyzer(AccessAnalyzer &accessAnalyzer)
@@ -46,9 +46,9 @@ private:
                                      const SmallVector<Operation *> &accesses);
 };
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // MemrefAnalyzer - Memory allocation analysis
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 class MemrefAnalyzer {
 public:
   MemrefAnalyzer(MLIRContext *context, AccessAnalyzer &accessAnalyzer,

@@ -1,9 +1,9 @@
-///==========================================================================
+///==========================================================================///
 /// File: ArtsAnalysisManager.cpp
 ///
 /// This file implements the ArtsAnalysisManager for centralized management
 /// of all ARTS analysis objects with clean separation from graph management.
-///==========================================================================
+///==========================================================================///
 
 #include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Concurrency/ConcurrencyAnalysis.h"
@@ -28,6 +28,8 @@ void ArtsAnalysisManager::invalidate() {
     edtAnalysis->invalidate();
   if (concurrencyAnalysis)
     concurrencyAnalysis->invalidate();
+  if (metadataManager)
+    metadataManager->clear();
 }
 
 DbAnalysis &ArtsAnalysisManager::getDbAnalysis() {
@@ -46,6 +48,23 @@ ConcurrencyAnalysis &ArtsAnalysisManager::getConcurrencyAnalysis() {
   if (!concurrencyAnalysis)
     concurrencyAnalysis = std::make_unique<ConcurrencyAnalysis>(*this);
   return *concurrencyAnalysis.get();
+}
+
+ArtsMetadataManager &ArtsAnalysisManager::getMetadataManager() {
+  if (!metadataManager) {
+    metadataManager =
+        std::make_unique<ArtsMetadataManager>(module.getContext());
+    // Import metadata from operations (attributes attached by CollectMetadata pass)
+    metadataManager->importFromOperations(module);
+  }
+  return *metadataManager;
+}
+
+const ArtsMetadataManager &ArtsAnalysisManager::getMetadataManager() const {
+  // For const access, we need metadataManager to be already initialized
+  assert(metadataManager && "Metadata manager not initialized. Call non-const "
+                             "getMetadataManager() first.");
+  return *metadataManager;
 }
 
 DbGraph &ArtsAnalysisManager::getDbGraph(func::FuncOp func) {

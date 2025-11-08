@@ -1,7 +1,7 @@
-///==========================================================================
+///==========================================================================///
 /// File: ArtsAttrs.td
 /// This file declares the ARTS dialect attributes.
-///==========================================================================
+///==========================================================================///
 
 #ifndef ARTS_ATTRS
 #define ARTS_ATTRS
@@ -12,9 +12,9 @@ include "mlir/IR/BuiltinAttributeInterfaces.td"
 include "mlir/IR/BuiltinAttributes.td"
 include "ArtsDialect.td"
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // ARTS Enum Helpers
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 class Arts_I32Enum<string name, string description, list<I32EnumAttrCase> cases>
     : I32EnumAttr<name, description, cases> {
@@ -26,9 +26,9 @@ class Arts_I32EnumAttr<string mnemonic, Arts_I32Enum enumInfo> :
   let assemblyFormat = "`<` $value `>`";
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // ARTS Attributes
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 class Arts_Attr<string attrName, string attrMnemonic, list<Trait> traits = []>
     : AttrDef<ArtsDialect, attrName, traits> {
   let mnemonic = attrMnemonic;
@@ -177,9 +177,9 @@ def NoVerifyAttr : AttrDef<ArtsDialect, "NoVerify"> {
   let assemblyFormat = "";
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // ARTS Metadata Attributes
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Attribute to store dimensional analysis results for flattened memrefs
 def MemrefDimInfoAttr : Arts_Attr<"MemrefDimInfo", "memref_dim_info"> {

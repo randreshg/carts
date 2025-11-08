@@ -1,7 +1,7 @@
-///==========================================================================
+///==========================================================================///
 /// File: ArtsOps.td
 /// This file defines multiple operations for the ARTS Dialect.
-///==========================================================================
+///==========================================================================///
 
 #ifndef ARTS_OPS
 #define ARTS_OPS
@@ -21,9 +21,9 @@ include "arts/ArtsDialect.td"
 include "arts/ArtsAttributes.td"
 include "arts/ArtsTypes.td"
 
-//===----------------------------------------------------------------------===//
-// Custom Traits for ARTS
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// Custom Traits for ARTS
+///===----------------------------------------------------------------------===///
 
 class Arts_InferShapedTypeOpAdaptor<string mnemonic, list<Trait> traits = []>
     : Arts_Op<mnemonic, !listconcat(traits, [InferShapedTypeOpAdaptor, Pure])> {
@@ -31,9 +31,9 @@ class Arts_InferShapedTypeOpAdaptor<string mnemonic, list<Trait> traits = []>
       "operands attr-dict `:` functional-type(operands, results)";
 }
 
-//===----------------------------------------------------------------------===//
-// arts.undef
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// arts.undef
+///===----------------------------------------------------------------------===///
 def UndefOp: Arts_Op<"undef", [Pure]> {
   let summary = "More flexible undef op";
   let results = (outs AnyType:$result);
@@ -47,9 +47,9 @@ def UndefOp: Arts_Op<"undef", [Pure]> {
   ];
 }
 
-//===----------------------------------------------------------------------===//
-// arts.alloc
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// arts.alloc
+///===----------------------------------------------------------------------===///
 def AllocOp : Arts_Op<"alloc", []> {
   let summary = "Allocate a memref in ARTS dialect";
   let description = [{
@@ -65,9 +65,9 @@ def AllocOp : Arts_Op<"alloc", []> {
   }];
 }
 
-//===----------------------------------------------------------------------===//
-// Arts DB Operations
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// Arts DB Operations
+///===----------------------------------------------------------------------===///
 def DbDimOp : Arts_Op<"db_dim", [Pure]> {
   let summary = "Query dimension of a datablock-backed memref";
   let description = [{
@@ -156,14 +156,20 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     This operation acquires a local view of the DataBlock for safe access within EDTs.
     It subsumes dependency creation with mode and subregion support.
     - mode: enum for "in", "out", "inout"
-    - source: DbAllocOp or previous DbAcquireOp
+    - sourceGuid: GUID memref from DbAllocOp or previous DbAcquireOp (optional)
+    - sourcePtr: Ptr memref from DbAllocOp or previous DbAcquireOp
     - indices: indices for subregion
     - offsets: offsets for subregion
     - sizes: sizes for subregion
+
+    When source_guid is absent (nullptr), it means this acquire is chaining from
+    a parent EDT's acquire where only the ptr was passed through block arguments.
+
+    Returns (guid, ptr) tuple for the acquired datablock.
   }];
   let arguments = (ins
     ArtsModeAttr:$mode,
-    AnyMemRef:$source_guid,
+    Optional<MemRefOf<[I64]>>:$source_guid,
     AnyMemRef:$source_ptr,
     Variadic<Index>:$indices,
     Variadic<Index>:$offsets,
@@ -172,11 +178,11 @@ def DbAcquireOp : Arts_Op<"db_acquire",
   let results = (outs MemRefOf<[I64]>:$guid, AnyMemRef:$ptr);
   let assemblyFormat = [{
     `[` $mode `]`
-    `(` $source_guid `,` $source_ptr `)`
+    `(` ($source_guid^ `:` type($source_guid) `,`)? $source_ptr `:` type($source_ptr) `)`
     ( `indices` `[` $indices^ `]` )?
     ( `offsets` `[` $offsets^ `]` )?
     ( `sizes` `[` $sizes^ `]` )?
-    attr-dict `:` `(` type($source_guid) `,` type($source_ptr) `)` `->` `(` type($guid) `,` type($ptr) `)`
+    attr-dict `->` `(` type($guid) `,` type($ptr) `)`
   }];
   let hasVerifier = 1;
   let skipDefaultBuilders = 1;
@@ -184,6 +190,13 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     OpBuilder<(ins "ArtsMode":$mode,
                    "Value":$source_guid,
                    "Value":$source_ptr,
+                   CArg<"SmallVector<Value>", "{}">:$indices,
+                   CArg<"SmallVector<Value>", "{}">:$offsets,
+                   CArg<"SmallVector<Value>", "{}">:$sizes)>,
+    OpBuilder<(ins "ArtsMode":$mode,
+                   "Value":$source_guid,
+                   "Value":$source_ptr,
+                   "Type":$ptrType,
                    CArg<"SmallVector<Value>", "{}">:$indices,
                    CArg<"SmallVector<Value>", "{}">:$offsets,
                    CArg<"SmallVector<Value>", "{}">:$sizes)>
@@ -334,10 +347,10 @@ def OmpDepOp : Arts_Op<"omp_dep", [Pure, AttrSizedOperandSegments]> {
   }];
 
   let arguments = (ins
-    ArtsModeAttr:$mode,              // Dependency mode (in/out/inout)
-    AnyMemRef:$source,               // Canonicalized N-D array
-    Variadic<Index>:$indices,        // Start indices [i, j, ...]
-    Variadic<Index>:$sizes           // Chunk sizes [size_i, size_j, ...]
+    ArtsModeAttr:$mode,   
+    AnyMemRef:$source,    
+    Variadic<Index>:$indices,        
+    Variadic<Index>:$sizes           
   );
 
   let results = (outs AnyMemRef:$result);
@@ -355,9 +368,9 @@ def OmpDepOp : Arts_Op<"omp_dep", [Pure, AttrSizedOperandSegments]> {
   ];
 }
 
-//===----------------------------------------------------------------------===//
-// arts.edt
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// arts.edt
+///===----------------------------------------------------------------------===///
 def EdtOp : Arts_Op<"edt",
   [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
    SingleBlockImplicitTerminator<"arts::YieldOp">,
@@ -373,6 +386,8 @@ def EdtOp : Arts_Op<"edt",
       task, even if it is called from a parallel region.
     - 'concurrency' specifies the execution scope: intranode or internode.
     - 'workers' specifies the number of parallel workers to use (optional).
+    - 'nowait' indicates the EDT doesn't require an epoch wrapper
+      (typically used when EDT is already inside an epoch).
   }];
   let arguments = (ins
     EdtTypeAttr:$type,
@@ -380,6 +395,7 @@ def EdtOp : Arts_Op<"edt",
     I32:$route,
     OptionalAttr<WorkersAttr>:$workers,
     OptionalAttr<NoVerifyAttr>:$no_verify,
+    OptionalAttr<UnitAttr>:$nowait,
     Variadic<AnyMemRef>:$dependencies
   );
   let regions = (region SizedRegion<1>:$body);
@@ -399,9 +415,9 @@ def EdtOp : Arts_Op<"edt",
   }];
 }
 
-//===----------------------------------------------------------------------===//
-// arts.epoch
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// arts.epoch
+///===----------------------------------------------------------------------===///
 def EpochOp : Arts_Op<"epoch", 
   [SingleBlockImplicitTerminator<"arts::YieldOp">]> {
 
@@ -419,9 +435,9 @@ def EpochOp : Arts_Op<"epoch",
   }];
 }
 
-//===----------------------------------------------------------------------===//
-// arts.yield
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// arts.yield
+///===----------------------------------------------------------------------===///
 def YieldOp : Arts_Op<"yield", 
   [Pure, ReturnLike, Terminator, 
    ParentOneOf<["EdtOp", "EpochOp", "ForOp"]>]> {
@@ -438,9 +454,9 @@ def YieldOp : Arts_Op<"yield",
   }];
 }
 
-//===----------------------------------------------------------------------===//
-// arts.barrier
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// arts.barrier
+///===----------------------------------------------------------------------===///
 def BarrierOp : Arts_Op<"barrier", [MemoryEffects<[MemWrite]>]> {
   let summary = "Barrier synchronization in ARTS";
   let description = [{
@@ -451,9 +467,9 @@ def BarrierOp : Arts_Op<"barrier", [MemoryEffects<[MemWrite]>]> {
   let assemblyFormat = "attr-dict";
 }
 
-//===----------------------------------------------------------------------===//
-// arts.atomic_add
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// arts.atomic_add
+///===----------------------------------------------------------------------===///
 def AtomicAddOp : Arts_Op<"atomic_add", [MemoryEffects<[MemWrite]>]> {
   let summary = "Atomic add to a scalar memref element";
   let description = [{
@@ -466,9 +482,9 @@ def AtomicAddOp : Arts_Op<"atomic_add", [MemoryEffects<[MemWrite]>]> {
   let assemblyFormat = "`(` $addr `,` $value `:` type($addr) `,` type($value) `)` attr-dict";
 }
 
-//===----------------------------------------------------------------------===//
-// arts.reduction
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// arts.reduction
+///===----------------------------------------------------------------------===///
 def ReductionOp : Arts_Op<"reduction", [MemoryEffects<[MemWrite]>]> {
   let summary = "Parallel reduction operation in ARTS";
   let description = [{
@@ -514,9 +530,9 @@ def ReductionOp : Arts_Op<"reduction", [MemoryEffects<[MemWrite]>]> {
   ];
 }
 
-//===----------------------------------------------------------------------===//
-// arts.get_total_workers
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// arts.get_total_workers
+///===----------------------------------------------------------------------===///
 def GetTotalWorkersOp : Arts_Op<"get_total_workers", 
   [MemoryEffects<[MemWrite]>, RecursiveMemoryEffects]> {
   let summary = "Get the total number of workers in ARTS";
@@ -534,9 +550,9 @@ def GetTotalWorkersOp : Arts_Op<"get_total_workers",
   ];
 }
 
-//===----------------------------------------------------------------------===//
-// arts.get_total_nodes
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// arts.get_total_nodes
+///===----------------------------------------------------------------------===///
 def GetTotalNodesOp : Arts_Op<"get_total_nodes",
   [MemoryEffects<[MemWrite]>, RecursiveMemoryEffects]> {
   let summary = "Get the total number of nodes in ARTS";
@@ -554,9 +570,9 @@ def GetTotalNodesOp : Arts_Op<"get_total_nodes",
   ];
 }
 
-//===----------------------------------------------------------------------===//
-// arts.get_current_worker
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// arts.get_current_worker
+///===----------------------------------------------------------------------===///
 def GetCurrentWorkerOp : Arts_Op<"get_current_worker",
   [MemoryEffects<[MemWrite]>, RecursiveMemoryEffects]> {
   let summary = "Get the current worker ID in ARTS";
@@ -574,9 +590,9 @@ def GetCurrentWorkerOp : Arts_Op<"get_current_worker",
   ];
 }
 
-//===----------------------------------------------------------------------===//
-// arts.get_current_node
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// arts.get_current_node
+///===----------------------------------------------------------------------===///
 def GetCurrentNodeOp : Arts_Op<"get_current_node",
   [MemoryEffects<[MemWrite]>, RecursiveMemoryEffects]> {
   let summary = "Get the current node ID in ARTS";
@@ -594,9 +610,9 @@ def GetCurrentNodeOp : Arts_Op<"get_current_node",
   ];
 }
 
-//===----------------------------------------------------------------------===//
-// arts.get_parallel_worker_id
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// arts.get_parallel_worker_id
+///===----------------------------------------------------------------------===///
 def GetParallelWorkerIdOp : Arts_Op<"get_parallel_worker_id", []> {
   let summary = "Get the parallel worker ID placeholder";
   let description = [{
@@ -619,9 +635,9 @@ def GetParallelWorkerIdOp : Arts_Op<"get_parallel_worker_id", []> {
 }
 
 
-//===----------------------------------------------------------------------===//
-// EDT Lowering Operations
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// EDT Lowering Operations
+///===----------------------------------------------------------------------===///
 def EdtCreateOp : Arts_Op<"edt_create", [MemoryEffects<[MemWrite]>]> {
   let summary = "Outlined EDT call with parameter pack and dependency count.";
   let description = [{
@@ -706,9 +722,9 @@ def IncrementDepOp : Arts_Op<"inc_dep", [MemoryEffects<[MemWrite]>]> {
   let assemblyFormat = "$edt_guid `(` $datablocks `:` type($datablocks) `)` attr-dict";
 }
 
-//===----------------------------------------------------------------------===//
-// Dependency Structure Access Operations
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
+/// Dependency Structure Access Operations
+///===----------------------------------------------------------------------===///
 
 def DepGepOp : Arts_Op<"dep_gep", [Pure, AttrSizedOperandSegments]> {
   let summary = "Extract pointer field from an EDT dependency structure";

@@ -50,9 +50,12 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
 #include "polygeist/Ops.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/raw_ostream.h"
 #include <optional>
+#include <string>
 
 /// Debug
 #include "arts/Utils/ArtsDebug.h"
@@ -62,9 +65,9 @@ using namespace mlir;
 using namespace mlir::arts;
 using namespace mlir::omp;
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Pass Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 struct CanonicalizeMemrefsPass
     : public arts::CanonicalizeMemrefsBase<CanonicalizeMemrefsPass> {
@@ -76,7 +79,7 @@ private:
   MLIRContext *ctx;
   SetVector<Operation *> opsToRemove;
 
-  //===--------------------------------------------------------------------===//
+  ///===--------------------------------------------------------------------===///
   /// NestedAllocAnalyzer
   ///
   /// Handles arrays-of-arrays patterns
@@ -92,7 +95,7 @@ private:
   /// - N-dimensional nesting
   /// - Both affine and memref load/store operations
   /// - Dynamic and static dimensions
-  //===--------------------------------------------------------------------===//
+  ///===--------------------------------------------------------------------===///
   struct NestedAllocAnalyzer {
     CanonicalizeMemrefsPass *pass;
     NestedAllocAnalyzer(CanonicalizeMemrefsPass *p) : pass(p) {}
@@ -145,6 +148,7 @@ private:
 
     /// Analysis & Transformation Methods
     std::optional<Pattern> detectPattern(Value alloc);
+    std::optional<Pattern> detectPatternFromMetadata(Value alloc);
     Value transformToCanonical(Pattern &pattern, Location loc);
     void transformAccesses(Pattern &pattern, Value ndAlloc);
     void cleanupPattern(Pattern &pattern);
@@ -157,102 +161,7 @@ private:
                                 SmallVector<Value> &indices);
   };
 
-  //===--------------------------------------------------------------------===//
-  /// FlattenedArrayAnalyzer
-  /// Handles flattened arrays with linearized indexing
-  /// Example: A[i*N + j] where A is memref<?xf64> but logically 2D
-  /// Transforms to: memref<?x?xf64> with A[i,j]
-  ///
-  /// Detection strategy:
-  /// - Analyzes loads/stores to the allocation
-  /// - Detects stride patterns in index expressions
-  /// - Prioritizes affine expressions, falls back to arithmetic
-  /// - Infers dimensions from stride patterns
-  /// - Uses majority-rule: >80% of accesses must match pattern
-  ///
-  /// Supports:
-  /// - N-dimensional arrays
-  /// - Both affine and memref load/store operations
-  /// - Dynamic and static dimensions
-  //===--------------------------------------------------------------------===//
-  struct FlattenedArrayAnalyzer {
-    CanonicalizeMemrefsPass *pass;
-    FlattenedArrayAnalyzer(CanonicalizeMemrefsPass *p) : pass(p) {}
-
-    /// Pattern Structure
-    struct Pattern {
-      Value flatAlloc;
-      Type elementType;
-      SmallVector<int64_t> dims;
-      SmallVector<Value> dimValues;
-      SmallVector<int64_t> strides;
-      int confidence;
-
-      int getDepth() const { return dims.size(); }
-
-      bool isStatic() const {
-        for (int64_t dim : dims)
-          if (dim == ShapedType::kDynamic)
-            return false;
-        return true;
-      }
-
-      /// Compute runtime strides for delinearization
-      SmallVector<Value> computeStrides(OpBuilder &builder, Location loc) const;
-    };
-
-    /// Analysis & Transformation Methods
-    std::optional<Pattern> detectPattern(Value alloc);
-    Value transformToCanonical(Pattern &pattern, Location loc);
-    void transformAccesses(Pattern &pattern, Value ndAlloc);
-    void cleanupPattern(Pattern &pattern);
-
-  private:
-    /// Stride Analysis Helpers
-    struct StrideInfo {
-      SmallVector<Value> inductionVars;
-      SmallVector<int64_t> strides;
-      std::optional<int64_t> constant;
-
-      /// Normalize stride info by sorting strides in descending order
-      /// This ensures i*N+j and j+i*N are recognized as the same pattern
-      void normalize() {
-        if (inductionVars.size() != strides.size())
-          return;
-
-        /// Create pairs of (stride, IV) and sort by stride (descending)
-        SmallVector<std::pair<int64_t, Value>> pairs;
-        for (size_t i = 0; i < strides.size(); ++i)
-          pairs.push_back({strides[i], inductionVars[i]});
-
-        /// Sort pairs by stride in descending order
-        llvm::sort(pairs, [](const auto &a, const auto &b) {
-          return a.first > b.first;
-        });
-
-        /// Extract back to parallel arrays
-        for (size_t i = 0; i < pairs.size(); ++i) {
-          strides[i] = pairs[i].first;
-          inductionVars[i] = pairs[i].second;
-        }
-      }
-    };
-
-    std::optional<StrideInfo> analyzeAffineExpr(AffineExpr expr,
-                                                ArrayRef<Value> operands);
-    std::optional<StrideInfo> analyzeArithExpr(Value index);
-    bool isLinearizedIndex(Value index);
-    SmallVector<int64_t> inferDimensionsFromStrides(ArrayRef<int64_t> strides,
-                                                    int64_t totalSize);
-    SmallVector<Value> extractDimensionValues(Value alloc,
-                                              ArrayRef<int64_t> strides,
-                                              OpBuilder &builder);
-    SmallVector<Value> delinearizeIndex(Value linearIndex,
-                                        ArrayRef<Value> strides,
-                                        OpBuilder &builder, Location loc);
-  };
-
-  //===--------------------------------------------------------------------===//
+  ///===--------------------------------------------------------------------===///
   /// OmpDepsCanonicalizer
   ///
   /// Canonicalizes OpenMP task dependencies to arts.omp_dep operations
@@ -261,7 +170,7 @@ private:
   /// - Array element dependencies (load-based)
   /// - Chunk dependencies (subview-based)
   /// - Token container patterns (alloca/store/load)
-  //===--------------------------------------------------------------------===//
+  ///===--------------------------------------------------------------------===///
   struct OmpDepsCanonicalizer {
     CanonicalizeMemrefsPass *pass;
     OmpDepsCanonicalizer(CanonicalizeMemrefsPass *p) : pass(p) {}
@@ -276,13 +185,22 @@ private:
       SmallVector<Value> indices;
       SmallVector<Value> sizes;
     };
+
+    /// Helper: Extract memref and indices from a load operation (memref or
+    /// affine)
+    std::optional<std::pair<Value, SmallVector<Value>>>
+    extractLoadInfo(Operation *op);
+
+    /// Helper: Check if memref is token container and return stored value
+    std::optional<Value> followTokenContainer(Value memref);
+
     std::optional<DepInfo> extractDepInfo(Value depVar, OpBuilder &builder,
                                           Location loc);
   };
 
-  //===--------------------------------------------------------------------===//
+  ///===--------------------------------------------------------------------===///
   /// Helper Methods
-  //===--------------------------------------------------------------------===//
+  ///===--------------------------------------------------------------------===///
   void markForRemoval(Operation *op) {
     if (!op)
       return;
@@ -302,9 +220,7 @@ private:
   void duplicateDeallocations(Value oldAlloc, Value newAlloc,
                               OpBuilder &builder);
   void updateDependenciesForNewAlloc(Value oldAlloc, Value newAlloc);
-  bool verifyCanonicalForm(Operation *allocOp);
   void verifyAllCanonical();
-  Value getOriginalSizeValue(Value size, OpBuilder &builder, Location loc);
   SmallVector<Value> getAllocDynamicSizes(Operation *allocOp);
   std::optional<omp::ClauseTaskDepend> getDepModeFromTask(omp::TaskOp task,
                                                           Value depVar);
@@ -370,61 +286,12 @@ void CanonicalizeMemrefsPass::runOnOperation() {
     ARTS_DEBUG(" - No nested allocation patterns found");
   }
 
-  /// Phase 2: Detect and transform flattened arrays (linearized indexing)
-  ARTS_INFO("Phase 2: Detecting and transforming flattened arrays");
-
-  ARTS_DEBUG(" - Linearizing polygeist pointer2memref views");
-  linearizePolygeistViews();
-
-  FlattenedArrayAnalyzer flattenedAnalyzer(this);
-  SmallVector<std::pair<FlattenedArrayAnalyzer::Pattern, Value>>
-      flattenedPatterns;
-
-  /// Process both heap (AllocOp) and stack (AllocaOp) allocations
-  /// Stack allocations will be converted to dynamic by CreateDB pass,
-  /// so we need to canonicalize them first
-  module.walk([&](Operation *op) {
-    Value alloc;
-
-    if (auto allocOp = dyn_cast<memref::AllocOp>(op))
-      alloc = allocOp.getResult();
-    else if (auto allocaOp = dyn_cast<memref::AllocaOp>(op))
-      alloc = allocaOp.getResult();
-    else
-      return;
-
-    /// Skip if already processed as nested
-    if (isMarkedForRemoval(op))
-      return;
-
-    if (auto pattern = flattenedAnalyzer.detectPattern(alloc)) {
-      ARTS_DEBUG(" - Detected flattened array with "
-                 << pattern->getDepth() << "D access pattern ("
-                 << pattern->confidence << "% confidence)");
-      flattenedPatterns.push_back({std::move(*pattern), alloc});
-    }
-  });
-
-  if (!flattenedPatterns.empty()) {
-    ARTS_INFO(" - Found " << flattenedPatterns.size() << " flattened arrays");
-
-    for (auto &[pattern, alloc] : flattenedPatterns) {
-      Location loc = alloc.getLoc();
-
-      Value ndAlloc = flattenedAnalyzer.transformToCanonical(pattern, loc);
-      flattenedAnalyzer.transformAccesses(pattern, ndAlloc);
-      flattenedAnalyzer.cleanupPattern(pattern);
-    }
-  } else {
-    ARTS_DEBUG(" - No flattened arrays detected");
-  }
-
-  /// Phase 3: Canonicalize OpenMP Dependencies
+  /// Phase 2: Canonicalize OpenMP Dependencies
   ARTS_INFO("Phase 3: Canonicalizing OpenMP task dependencies");
   OmpDepsCanonicalizer ompCanonicalizer(this);
   ompCanonicalizer.canonicalizeDependencies();
 
-  /// Phase 4: Cleanup
+  /// Phase 3: Cleanup
   ARTS_INFO("Phase 4: Removing legacy allocations and operations");
   removeOps(module, opsToRemove, true);
 
@@ -447,12 +314,12 @@ void CanonicalizeMemrefsPass::runOnOperation() {
   ARTS_INFO("CanonicalizeMemrefsPass completed successfully");
 }
 
-///===----------------------------------------------------------------------===//
+////===----------------------------------------------------------------------===///
 /// Implementation continues in next section...
 /// Now let's implement each analyzer class
-///===----------------------------------------------------------------------===//
+////===----------------------------------------------------------------------===///
 /// NestedAllocAnalyzer Implementation
-///===----------------------------------------------------------------------===//
+////===----------------------------------------------------------------------===///
 
 std::optional<CanonicalizeMemrefsPass::NestedAllocAnalyzer::Pattern>
 CanonicalizeMemrefsPass::NestedAllocAnalyzer::detectPattern(Value alloc) {
@@ -571,16 +438,11 @@ Value CanonicalizeMemrefsPass::NestedAllocAnalyzer::transformToCanonical(
 
   /// Extract all dimension sizes
   SmallVector<Value> allSizes = pattern.getAllSizes();
-  SmallVector<Value> originalSizes;
-  originalSizes.reserve(allSizes.size());
-
-  for (Value size : allSizes)
-    originalSizes.push_back(pass->getOriginalSizeValue(size, builder, loc));
 
   /// Create N-D allocation matching the original's style and transfer metadata
   auto allocOp = pattern.outerAlloc.getDefiningOp<memref::AllocOp>();
   Value ndAlloc = pass->createMatchingAllocation(
-      allocOp, loc, pattern.getFinalElementType(), originalSizes);
+      allocOp, loc, pattern.getFinalElementType(), allSizes);
   pass->transferMetadata(allocOp, ndAlloc.getDefiningOp(), true);
   pass->duplicateDeallocations(pattern.outerAlloc, ndAlloc, builder);
 
@@ -741,639 +603,9 @@ void CanonicalizeMemrefsPass::NestedAllocAnalyzer::cleanupPattern(
                                        "Nested allocation (outer array)");
 }
 
-//===----------------------------------------------------------------------===//
-// FlattenedArrayAnalyzer Implementation
-//===----------------------------------------------------------------------===//
-
-SmallVector<Value>
-CanonicalizeMemrefsPass::FlattenedArrayAnalyzer::Pattern::computeStrides(
-    OpBuilder &builder, Location loc) const {
-  /// Convert static strides to runtime Values
-  SmallVector<Value> strideVals;
-  strideVals.reserve(strides.size());
-
-  for (int64_t stride : strides) {
-    strideVals.push_back(builder.create<arith::ConstantIndexOp>(loc, stride));
-  }
-
-  return strideVals;
-}
-
-//===----------------------------------------------------------------------===//
-// Stride Analysis Helper Methods
-//===----------------------------------------------------------------------===//
-
-bool CanonicalizeMemrefsPass::FlattenedArrayAnalyzer::isLinearizedIndex(
-    Value index) {
-  /// Check if an index looks like a linearized expression
-  /// Examples: i*N + j, i*M*L + j*L + k
-
-  if (!index)
-    return false;
-
-  /// Check for affine.apply operations (structured)
-  if (auto applyOp = index.getDefiningOp<affine::AffineApplyOp>()) {
-    AffineMap map = applyOp.getAffineMap();
-    AffineExpr expr = map.getResult(0);
-
-    /// Linearized indices typically have multiplication and addition
-    return expr.isa<AffineBinaryOpExpr>();
-  }
-
-  /// Check for arithmetic operations (mul, add pattern)
-  if (auto addOp = index.getDefiningOp<arith::AddIOp>()) {
-    /// Look for mul in operands
-    if (addOp.getLhs().getDefiningOp<arith::MulIOp>() ||
-        addOp.getRhs().getDefiningOp<arith::MulIOp>()) {
-      return true;
-    }
-  }
-
-  if (index.getDefiningOp<arith::MulIOp>()) {
-    return true;
-  }
-
-  return false;
-}
-
-std::optional<CanonicalizeMemrefsPass::FlattenedArrayAnalyzer::StrideInfo>
-CanonicalizeMemrefsPass::FlattenedArrayAnalyzer::analyzeAffineExpr(
-    AffineExpr expr, ArrayRef<Value> operands) {
-  /// Analyze an affine expression to extract stride information
-  /// Example: d0*N + d1 -> strides=[N, 1], IVs=[d0, d1]
-  StrideInfo info;
-
-  /// Recursive helper to extract terms
-  std::function<void(AffineExpr, int64_t)> extractTerms;
-  extractTerms = [&](AffineExpr e, int64_t multiplier) {
-    if (auto binOp = e.dyn_cast<AffineBinaryOpExpr>()) {
-      switch (binOp.getKind()) {
-      case AffineExprKind::Add:
-        extractTerms(binOp.getLHS(), multiplier);
-        extractTerms(binOp.getRHS(), multiplier);
-        break;
-      case AffineExprKind::Mul: {
-        /// Check if one side is a constant
-        if (auto constExpr = binOp.getLHS().dyn_cast<AffineConstantExpr>()) {
-          extractTerms(binOp.getRHS(), multiplier * constExpr.getValue());
-        } else if (auto constExpr =
-                       binOp.getRHS().dyn_cast<AffineConstantExpr>()) {
-          extractTerms(binOp.getLHS(), multiplier * constExpr.getValue());
-        }
-        break;
-      }
-      default:
-        break;
-      }
-    } else if (auto dimExpr = e.dyn_cast<AffineDimExpr>()) {
-      /// Found a dimension reference
-      unsigned pos = dimExpr.getPosition();
-      if (pos < operands.size()) {
-        info.inductionVars.push_back(operands[pos]);
-        info.strides.push_back(multiplier);
-      }
-    } else if (auto constExpr = e.dyn_cast<AffineConstantExpr>()) {
-      /// Constant offset
-      info.constant = constExpr.getValue();
-    }
-  };
-
-  extractTerms(expr, 1);
-
-  if (info.inductionVars.empty())
-    return std::nullopt;
-
-  return info;
-}
-
-std::optional<CanonicalizeMemrefsPass::FlattenedArrayAnalyzer::StrideInfo>
-CanonicalizeMemrefsPass::FlattenedArrayAnalyzer::analyzeArithExpr(Value index) {
-  /// Analyze arithmetic expression tree to extract stride information
-  /// This is the fallback when affine expressions aren't available
-
-  StrideInfo info;
-
-  /// Helper to recursively analyze expression tree
-  std::function<std::optional<int64_t>(Value)> extractStride;
-  extractStride = [&](Value v) -> std::optional<int64_t> {
-    if (auto mulOp = v.getDefiningOp<arith::MulIOp>()) {
-      /// Try to extract constant stride
-      if (auto constOp =
-              mulOp.getRhs().getDefiningOp<arith::ConstantIndexOp>()) {
-        info.inductionVars.push_back(mulOp.getLhs());
-        int64_t stride = constOp.value();
-        info.strides.push_back(stride);
-        return stride;
-      } else if (auto constOp =
-                     mulOp.getLhs().getDefiningOp<arith::ConstantIndexOp>()) {
-        info.inductionVars.push_back(mulOp.getRhs());
-        int64_t stride = constOp.value();
-        info.strides.push_back(stride);
-        return stride;
-      }
-    } else if (auto addOp = v.getDefiningOp<arith::AddIOp>()) {
-      /// Recursively analyze both sides
-      extractStride(addOp.getLhs());
-      extractStride(addOp.getRhs());
-    } else if (auto constOp = v.getDefiningOp<arith::ConstantIndexOp>()) {
-      /// Constant offset
-      info.constant = constOp.value();
-    } else {
-      /// Assume stride of 1 for bare induction variable
-      info.inductionVars.push_back(v);
-      info.strides.push_back(1);
-    }
-    return std::nullopt;
-  };
-
-  extractStride(index);
-
-  if (info.inductionVars.empty())
-    return std::nullopt;
-
-  return info;
-}
-
-SmallVector<int64_t>
-CanonicalizeMemrefsPass::FlattenedArrayAnalyzer::inferDimensionsFromStrides(
-    ArrayRef<int64_t> strides, int64_t totalSize) {
-  /// Infer dimensions from stride pattern
-  /// Example: strides=[N*M, M, 1] with totalSize -> dims=[?, ?, M]
-  /// Example: strides=[6, 3, 1] -> dims=[?, 2, 3]
-  SmallVector<int64_t> dims;
-  if (strides.empty())
-    return dims;
-
-  /// For each stride, the dimension is stride[i] / stride[i+1]
-  for (size_t i = 0; i < strides.size(); ++i) {
-    if (i + 1 < strides.size()) {
-      int64_t dim = strides[i] / strides[i + 1];
-      dims.push_back(dim);
-    } else {
-      /// Last dimension - if stride is 1, dimension is unknown
-      if (strides[i] == 1) {
-        dims.push_back(ShapedType::kDynamic);
-      } else {
-        dims.push_back(strides[i]);
-      }
-    }
-  }
-
-  return dims;
-}
-
-SmallVector<Value>
-CanonicalizeMemrefsPass::FlattenedArrayAnalyzer::extractDimensionValues(
-    Value alloc, ArrayRef<int64_t> strides, OpBuilder &builder) {
-  /// Extract runtime dimension values from the IR
-  /// Look for loops and size computations that match the strides
-
-  SmallVector<Value> dimValues;
-  Operation *allocOpRaw = alloc.getDefiningOp();
-  if (!allocOpRaw ||
-      (!isa<memref::AllocOp>(allocOpRaw) && !isa<memref::AllocaOp>(allocOpRaw)))
-    return dimValues;
-
-  Location loc = allocOpRaw->getLoc();
-
-  /// Try to find the total size
-  auto allocType = alloc.getType().cast<MemRefType>();
-  Value totalSize = nullptr;
-
-  /// Get dynamic sizes (works for both AllocOp and AllocaOp)
-  SmallVector<Value> dynamicSizes = pass->getAllocDynamicSizes(allocOpRaw);
-  if (allocType.isDynamicDim(0) && !dynamicSizes.empty()) {
-    totalSize = dynamicSizes[0];
-  }
-
-  if (!totalSize)
-    return dimValues;
-
-  /// For each stride, try to extract the dimension value
-  builder.setInsertionPointAfter(allocOpRaw);
-
-  for (size_t i = 0; i < strides.size(); ++i) {
-    if (i == 0) {
-      /// First dimension: totalSize / firstStride
-      if (strides[0] > 1) {
-        Value strideVal =
-            builder.create<arith::ConstantIndexOp>(loc, strides[0]);
-        dimValues.push_back(
-            builder.create<arith::DivUIOp>(loc, totalSize, strideVal));
-      } else {
-        dimValues.push_back(totalSize);
-      }
-    } else if (i + 1 < strides.size()) {
-      /// Middle dimensions: stride[i] / stride[i+1]
-      int64_t dim = strides[i] / strides[i + 1];
-      dimValues.push_back(builder.create<arith::ConstantIndexOp>(loc, dim));
-    } else {
-      /// Last dimension
-      dimValues.push_back(
-          builder.create<arith::ConstantIndexOp>(loc, strides[i]));
-    }
-  }
-
-  return dimValues;
-}
-
-SmallVector<Value>
-CanonicalizeMemrefsPass::FlattenedArrayAnalyzer::delinearizeIndex(
-    Value linearIndex, ArrayRef<Value> strides, OpBuilder &builder,
-    Location loc) {
-  /// Delinearize a linear index into N-dimensional indices
-  /// Example: idx -> [idx / stride[0], (idx % stride[0]) / stride[1], ...]
-  SmallVector<Value> indices;
-  Value remaining = linearIndex;
-
-  for (size_t i = 0; i < strides.size(); ++i) {
-    if (i < strides.size() - 1) {
-      /// indices[i] = remaining / stride[i]
-      Value idx = builder.create<arith::DivUIOp>(loc, remaining, strides[i]);
-      indices.push_back(idx);
-
-      /// remaining = remaining % stride[i]
-      remaining = builder.create<arith::RemUIOp>(loc, remaining, strides[i]);
-    } else {
-      /// Last index is just the remaining value
-      indices.push_back(remaining);
-    }
-  }
-
-  return indices;
-}
-
-//===----------------------------------------------------------------------===//
-// Main Detection and Transformation Methods
-//===----------------------------------------------------------------------===//
-
-std::optional<CanonicalizeMemrefsPass::FlattenedArrayAnalyzer::Pattern>
-CanonicalizeMemrefsPass::FlattenedArrayAnalyzer::detectPattern(Value alloc) {
-  /// Detect flattened array pattern by analyzing all loads/stores
-  /// This is SELF-CONTAINED - no external metadata required!
-
-  auto allocType = alloc.getType().dyn_cast<MemRefType>();
-  if (!allocType)
-    return std::nullopt;
-
-  /// Only consider 1D allocations
-  if (allocType.getRank() != 1)
-    return std::nullopt;
-
-  /// Skip if element type is itself a memref (nested pattern)
-  if (allocType.getElementType().isa<MemRefType>())
-    return std::nullopt;
-
-  /// Phase 1: Collect all accesses and analyze their indices
-  struct AccessInfo {
-    Operation *op;
-    Value index;
-    std::optional<StrideInfo> strideInfo;
-  };
-
-  SmallVector<AccessInfo> accesses;
-  unsigned totalAccessCount = 0;
-
-  /// Collect all loads/stores (both memref and affine dialects)
-  for (Operation *user : alloc.getUsers()) {
-    Value index;
-    bool isMemoryAccess = false;
-
-    /// Handle memref loads/stores
-    if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
-      if (loadOp.getIndices().size() == 1) {
-        index = loadOp.getIndices()[0];
-        isMemoryAccess = true;
-      }
-    } else if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
-      if (storeOp.getIndices().size() == 1) {
-        index = storeOp.getIndices()[0];
-        isMemoryAccess = true;
-      }
-    }
-    /// Handle affine loads/stores
-    else if (auto affLoadOp = dyn_cast<affine::AffineLoadOp>(user)) {
-      if (affLoadOp.getMapOperands().size() > 0) {
-        /// For affine loads, we need to get the index from the affine map
-        /// If it's a simple 1D access, we can proceed
-        auto map = affLoadOp.getAffineMap();
-        if (map.getNumResults() == 1) {
-          /// Create equivalent affine.apply for analysis
-          OpBuilder builder(pass->ctx);
-          builder.setInsertionPoint(affLoadOp);
-          auto applyOp = builder.create<affine::AffineApplyOp>(
-              affLoadOp.getLoc(), map, affLoadOp.getMapOperands());
-          index = applyOp.getResult();
-          isMemoryAccess = true;
-        }
-      }
-    } else if (auto affStoreOp = dyn_cast<affine::AffineStoreOp>(user)) {
-      if (affStoreOp.getMapOperands().size() > 0) {
-        auto map = affStoreOp.getAffineMap();
-        if (map.getNumResults() == 1) {
-          OpBuilder builder(pass->ctx);
-          builder.setInsertionPoint(affStoreOp);
-          auto applyOp = builder.create<affine::AffineApplyOp>(
-              affStoreOp.getLoc(), map, affStoreOp.getMapOperands());
-          index = applyOp.getResult();
-          isMemoryAccess = true;
-        }
-      }
-    }
-
-    if (!isMemoryAccess || !index)
-      continue;
-
-    /// Count all memory accesses
-    totalAccessCount++;
-
-    /// Skip simple direct indices
-    if (!isLinearizedIndex(index))
-      continue;
-
-    AccessInfo info;
-    info.op = user;
-    info.index = index;
-
-    /// Try affine analysis first
-    if (auto applyOp = index.getDefiningOp<affine::AffineApplyOp>()) {
-      auto mapOperands = applyOp.getMapOperands();
-      SmallVector<Value> operands(mapOperands.begin(), mapOperands.end());
-      info.strideInfo =
-          analyzeAffineExpr(applyOp.getAffineMap().getResult(0), operands);
-    }
-
-    /// Fall back to arithmetic analysis
-    if (!info.strideInfo)
-      info.strideInfo = analyzeArithExpr(index);
-
-    if (info.strideInfo) {
-      /// Normalize stride pattern for consistent comparison
-      info.strideInfo->normalize();
-      accesses.push_back(info);
-    }
-  }
-
-  /// If no memory accesses found at all, not an array
-  if (totalAccessCount == 0)
-    return std::nullopt;
-
-  /// If no linearized accesses found, not a flattened array
-  if (accesses.empty())
-    return std::nullopt;
-
-  /// Phase 2: Find common stride pattern (majority rule: >80%)
-  /// Use a simple approach: iterate through accesses and count patterns
-  SmallVector<int64_t> dominantStrides;
-  unsigned maxCount = 0;
-
-  /// First pass: find the most common pattern
-  for (const auto &access : accesses) {
-    if (!access.strideInfo)
-      continue;
-
-    SmallVector<int64_t> strides = access.strideInfo->strides;
-    unsigned count = 0;
-
-    /// Count how many times this pattern appears
-    for (const auto &otherAccess : accesses) {
-      if (!otherAccess.strideInfo)
-        continue;
-      if (otherAccess.strideInfo->strides == strides)
-        count++;
-    }
-
-    if (count > maxCount) {
-      maxCount = count;
-      dominantStrides = strides;
-    }
-  }
-
-  /// Calculate confidence percentage using all accesses
-  int confidence = (maxCount * 100) / totalAccessCount;
-
-  /// Check confidence threshold (>80% per user requirement)
-  if (confidence < 80) {
-    ARTS_DEBUG("   Flattened array confidence too low: " << confidence << "%");
-    return std::nullopt;
-  }
-
-  /// Phase 3: Infer dimensions from dominant stride pattern
-  Pattern pattern;
-  pattern.flatAlloc = alloc;
-  pattern.elementType = allocType.getElementType();
-  pattern.strides = dominantStrides;
-  pattern.confidence = confidence;
-
-  /// Get total size
-  Operation *allocOpRaw = alloc.getDefiningOp();
-  if (!allocOpRaw || (!isa<memref::AllocOp>(allocOpRaw) &&
-                      !isa<memref::AllocaOp>(allocOpRaw))) {
-    return std::nullopt;
-  }
-
-  int64_t totalSize = ShapedType::kDynamic;
-  if (allocType.hasStaticShape())
-    totalSize = allocType.getNumElements();
-
-  /// Infer dimensions
-  pattern.dims = inferDimensionsFromStrides(dominantStrides, totalSize);
-
-  /// Extract runtime dimension values
-  OpBuilder builder(pass->ctx);
-  pattern.dimValues = extractDimensionValues(alloc, dominantStrides, builder);
-
-  if (pattern.dimValues.empty() || pattern.dims.empty())
-    return std::nullopt;
-
-  return pattern;
-}
-
-Value CanonicalizeMemrefsPass::FlattenedArrayAnalyzer::transformToCanonical(
-    Pattern &pattern, Location loc) {
-  OpBuilder builder(pass->ctx);
-  Operation *allocOpRaw = pattern.flatAlloc.getDefiningOp();
-  if (!allocOpRaw)
-    return Value();
-
-  builder.setInsertionPoint(allocOpRaw);
-
-  /// Create N-D canonical allocation and transfer metadata
-  Value ndAlloc = pass->createMatchingAllocation(
-      allocOpRaw, loc, pattern.elementType, pattern.dimValues);
-  pass->transferMetadata(allocOpRaw, ndAlloc.getDefiningOp(), true);
-  pass->duplicateDeallocations(pattern.flatAlloc, ndAlloc, builder);
-
-  return ndAlloc;
-}
-
-void CanonicalizeMemrefsPass::FlattenedArrayAnalyzer::transformAccesses(
-    Pattern &pattern, Value ndAlloc) {
-  OpBuilder builder(pass->ctx);
-
-  /// Compute runtime stride values for delinearization
-  SmallVector<Value> strideVals =
-      pattern.computeStrides(builder, ndAlloc.getLoc());
-
-  /// Helper: Extract N-D indices from a linear index
-  /// Returns nullopt if index doesn't match pattern or can't be delinearized
-  auto extractNDIndices =
-      [&](Value linearIndex) -> std::optional<SmallVector<Value>> {
-    if (!linearIndex)
-      return std::nullopt;
-
-    /// If index comes from affine.apply with matching pattern, directly reuse
-    /// the map operands instead of creating div/rem ops
-    if (auto applyOp = linearIndex.getDefiningOp<affine::AffineApplyOp>()) {
-      auto mapOperands = applyOp.getMapOperands();
-      SmallVector<Value> operands(mapOperands.begin(), mapOperands.end());
-      auto strideInfo =
-          analyzeAffineExpr(applyOp.getAffineMap().getResult(0), operands);
-      if (strideInfo) {
-        StrideInfo normalized = *strideInfo;
-        normalized.normalize();
-
-        /// Check if this matches the pattern
-        if (normalized.strides == pattern.strides) {
-          /// Perfect match! Just return the induction variables in order
-          return SmallVector<Value>(normalized.inductionVars.begin(),
-                                    normalized.inductionVars.end());
-        }
-      }
-    }
-
-    /// Validate: Check if this is a linearized index matching our pattern
-    if (!isLinearizedIndex(linearIndex))
-      return std::nullopt;
-
-    /// Analyze the index to confirm it matches our pattern
-    std::optional<StrideInfo> strideInfo;
-    if (auto applyOp = linearIndex.getDefiningOp<affine::AffineApplyOp>()) {
-      auto mapOperands = applyOp.getMapOperands();
-      SmallVector<Value> operands(mapOperands.begin(), mapOperands.end());
-      strideInfo =
-          analyzeAffineExpr(applyOp.getAffineMap().getResult(0), operands);
-    } else {
-      strideInfo = analyzeArithExpr(linearIndex);
-    }
-
-    if (!strideInfo)
-      return std::nullopt;
-
-    strideInfo->normalize();
-
-    /// Verify it matches the detected pattern
-    if (strideInfo->strides != pattern.strides) {
-      /// Different pattern, don't transform
-      return std::nullopt;
-    }
-
-    /// Generic delinearization using div/rem
-    return delinearizeIndex(linearIndex, strideVals, builder,
-                            linearIndex.getLoc());
-  };
-
-  /// Transform all loads and stores (both memref and affine)
-  SmallVector<Operation *> opsToTransform;
-
-  for (Operation *user : pattern.flatAlloc.getUsers()) {
-    if (isa<memref::LoadOp, memref::StoreOp, affine::AffineLoadOp,
-            affine::AffineStoreOp>(user)) {
-      opsToTransform.push_back(user);
-    }
-  }
-
-  for (Operation *op : opsToTransform) {
-    builder.setInsertionPoint(op);
-    Location loc = op->getLoc();
-
-    /// Handle memref::LoadOp
-    if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
-      if (loadOp.getIndices().size() != 1)
-        continue;
-
-      auto ndIndices = extractNDIndices(loadOp.getIndices()[0]);
-      if (!ndIndices)
-        continue; /// Skip if doesn't match pattern
-
-      auto newLoad = builder.create<memref::LoadOp>(loc, ndAlloc, *ndIndices);
-      loadOp.getResult().replaceAllUsesWith(newLoad.getResult());
-      pass->markForRemoval(loadOp);
-    }
-    /// Handle memref::StoreOp
-    else if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
-      if (storeOp.getIndices().size() != 1)
-        continue;
-
-      auto ndIndices = extractNDIndices(storeOp.getIndices()[0]);
-      if (!ndIndices)
-        continue; /// Skip if doesn't match pattern
-
-      builder.create<memref::StoreOp>(loc, storeOp.getValue(), ndAlloc,
-                                      *ndIndices);
-      pass->markForRemoval(storeOp);
-    }
-    /// Handle affine::AffineLoadOp
-    else if (auto affLoadOp = dyn_cast<affine::AffineLoadOp>(op)) {
-      auto map = affLoadOp.getAffineMap();
-      if (map.getNumResults() != 1)
-        continue;
-
-      /// Create affine.apply to get the linear index
-      auto applyOp = builder.create<affine::AffineApplyOp>(
-          loc, map, affLoadOp.getMapOperands());
-
-      auto ndIndices = extractNDIndices(applyOp.getResult());
-      /// Skip if doesn't match pattern
-      if (!ndIndices)
-        continue;
-
-      /// Create new memref load (converting from affine to memref)
-      auto newLoad = builder.create<memref::LoadOp>(loc, ndAlloc, *ndIndices);
-      affLoadOp.getResult().replaceAllUsesWith(newLoad.getResult());
-      pass->markForRemoval(affLoadOp);
-      pass->markForRemoval(applyOp);
-    }
-    /// Handle affine::AffineStoreOp
-    else if (auto affStoreOp = dyn_cast<affine::AffineStoreOp>(op)) {
-      auto map = affStoreOp.getAffineMap();
-      if (map.getNumResults() != 1)
-        continue;
-
-      /// Create affine.apply to get the linear index
-      auto applyOp = builder.create<affine::AffineApplyOp>(
-          loc, map, affStoreOp.getMapOperands());
-
-      auto ndIndices = extractNDIndices(applyOp.getResult());
-      /// Skip if doesn't match pattern
-      if (!ndIndices)
-        continue;
-
-      /// Create new memref store (converting from affine to memref)
-      builder.create<memref::StoreOp>(loc, affStoreOp.getValue(), ndAlloc,
-                                      *ndIndices);
-      pass->markForRemoval(affStoreOp);
-      pass->markForRemoval(applyOp);
-    }
-  }
-}
-
-void CanonicalizeMemrefsPass::FlattenedArrayAnalyzer::cleanupPattern(
-    Pattern &pattern) {
-  /// Mark the old flat allocation for removal
-  if (auto allocOp = pattern.flatAlloc.getDefiningOp())
-    pass->markForRemoval(allocOp);
-
-  /// Mark deallocations for removal
-  for (Operation *user : pattern.flatAlloc.getUsers()) {
-    if (isa<memref::DeallocOp>(user))
-      pass->markForRemoval(user);
-  }
-}
-
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // OmpDepsCanonicalizer Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 void CanonicalizeMemrefsPass::OmpDepsCanonicalizer::canonicalizeDependencies() {
   /// Walk all OpenMP task operations and canonicalize their dependencies
@@ -1408,58 +640,170 @@ void CanonicalizeMemrefsPass::OmpDepsCanonicalizer::canonicalizeTask(
 
   /// Process dependencies using the new TaskOp API
   auto dependList = task.getDependsAttr();
-  if (dependList) {
-    auto dependVars = task.getDependVars();
-    for (unsigned i = 0, e = dependList.size(); i < e && i < dependVars.size();
-         ++i) {
-      /// Get dependency clause and type
-      auto depClause = dyn_cast<omp::ClauseTaskDependAttr>(dependList[i]);
-      if (!depClause)
-        continue;
+  if (!dependList) {
+    ARTS_DEBUG("    - No dependList found for task");
+    return;
+  }
 
-      Value depVar = dependVars[i];
+  auto dependVars = task.getDependVars();
+  ARTS_DEBUG("    - Processing " << dependList.size() << " dependencies");
 
-      /// Extract dependency information
-      auto depInfo = extractDepInfo(depVar, builder, loc);
-      if (!depInfo)
-        continue;
+  for (unsigned i = 0, e = dependList.size(); i < e && i < dependVars.size();
+       ++i) {
+    /// Get dependency clause and type
+    auto depClause = dyn_cast<omp::ClauseTaskDependAttr>(dependList[i]);
+    if (!depClause) {
+      ARTS_DEBUG("      - Dep " << i << ": not a ClauseTaskDependAttr");
+      continue;
+    }
 
-      /// Create arts.omp_dep operation to represent the dependency
-      builder.setInsertionPoint(task);
+    Value depVar = dependVars[i];
+    ARTS_DEBUG("      - Dep " << i << ": extracting from " << depVar);
 
-      /// Convert ClauseTaskDepend to access mode string
-      StringRef accessMode;
-      switch (depClause.getValue()) {
-      case omp::ClauseTaskDepend::taskdependin:
-        accessMode = "in";
-        break;
-      case omp::ClauseTaskDepend::taskdependout:
-        accessMode = "out";
-        break;
-      case omp::ClauseTaskDepend::taskdependinout:
-        accessMode = "inout";
-        break;
+    /// Extract dependency information
+    auto depInfo = extractDepInfo(depVar, builder, loc);
+    if (!depInfo) {
+      ARTS_DEBUG("      - Dep " << i << ": extractDepInfo returned nullopt");
+      continue;
+    }
+
+    /// Create arts.omp_dep operation to represent the dependency
+    builder.setInsertionPoint(task);
+
+    /// Convert ClauseTaskDepend to ArtsMode
+    ArtsMode accessMode;
+    switch (depClause.getValue()) {
+    case omp::ClauseTaskDepend::taskdependin:
+      accessMode = ArtsMode::in;
+      break;
+    case omp::ClauseTaskDepend::taskdependout:
+      accessMode = ArtsMode::out;
+      break;
+    case omp::ClauseTaskDepend::taskdependinout:
+      accessMode = ArtsMode::inout;
+      break;
+    }
+
+    ARTS_DEBUG("      - Dep "
+               << i << ": creating arts.omp_dep with source=" << depInfo->source
+               << ", indices=" << depInfo->indices.size()
+               << ", sizes=" << depInfo->sizes.size());
+
+    /// Create arts.omp_dep operation to represent the dependency
+    auto ompDepOp = builder.create<arts::OmpDepOp>(
+        loc, accessMode, depInfo->source, depInfo->indices, depInfo->sizes);
+
+    /// Replace the depVar with the new arts.omp_dep operation
+    auto dependVarsMutable = task.getDependVarsMutable();
+    dependVarsMutable[i].set(ompDepOp.getResult());
+
+    ARTS_DEBUG("      - Canonicalized dependency: mode="
+               << accessMode << ", indices=" << depInfo->indices.size()
+               << ", sizes=" << depInfo->sizes.size());
+  }
+}
+
+///===----------------------------------------------------------------------===///
+// OmpDepsCanonicalizer Helper Methods
+///===----------------------------------------------------------------------===///
+
+std::optional<std::pair<Value, SmallVector<Value>>>
+CanonicalizeMemrefsPass::OmpDepsCanonicalizer::extractLoadInfo(Operation *op) {
+  /// Extract memref and indices from memref.load
+  if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
+    SmallVector<Value> indices(loadOp.getIndices().begin(),
+                               loadOp.getIndices().end());
+    ARTS_DEBUG("        extractLoadInfo: memref.load with " << indices.size()
+                                                            << " indices");
+    return std::make_pair(loadOp.getMemref(), indices);
+  }
+
+  /// Extract memref and indices from affine.load
+  /// NOTE: affine.load uses affine maps to represent indices
+  /// For example: affine.load %m[%i, %i] is represented as:
+  ///   - Affine map: (d0) -> (d0, d0)
+  ///   - Operands: [%i]
+  /// We need to use the map's getNumResults() to get the actual dimensionality
+  if (auto loadOp = dyn_cast<affine::AffineLoadOp>(op)) {
+    auto affineMap = loadOp.getAffineMap();
+    auto mapOperands = loadOp.getMapOperands();
+
+    /// The number of results in the affine map tells us the actual
+    /// dimensionality
+    unsigned numDims = affineMap.getNumResults();
+    unsigned numOperands = mapOperands.size();
+
+    ARTS_DEBUG("        extractLoadInfo: affine.load with map "
+               << affineMap << ", " << numOperands << " operands, " << numDims
+               << " dims");
+
+    /// For simple identity or diagonal maps like (d0) -> (d0, d0),
+    /// we replicate the operand for each dimension
+    SmallVector<Value> indices;
+
+    /// Check if this is a diagonal map (all results are the same)
+    if (numOperands == 1 && numDims > 1) {
+      /// This is likely a diagonal access like [%i, %i]
+      /// Replicate the single operand for each dimension
+      for (unsigned i = 0; i < numDims; ++i) {
+        indices.push_back(mapOperands[0]);
       }
+    } else {
+      /// General case: use the operands directly
+      indices.assign(mapOperands.begin(), mapOperands.end());
+    }
 
-      /// For now, we just verify the dependency structure is valid
-      /// The actual arts.omp_dep operation creation would go here
-      /// if the operation is defined in the dialect
-      ARTS_DEBUG("    - Canonicalized dependency: mode="
-                 << accessMode << ", indices=" << depInfo->indices.size()
-                 << ", sizes=" << depInfo->sizes.size());
+    ARTS_DEBUG("        Extracted " << indices.size() << " indices");
+    return std::make_pair(loadOp.getMemref(), indices);
+  }
+
+  return std::nullopt;
+}
+
+std::optional<Value>
+CanonicalizeMemrefsPass::OmpDepsCanonicalizer::followTokenContainer(
+    Value memref) {
+  /// Check if memref is an alloca
+  auto allocaOp = memref.getDefiningOp<memref::AllocaOp>();
+  if (!allocaOp)
+    return std::nullopt;
+
+  /// Check if this is a scalar token container (rank-0 or rank-1 with size 1)
+  auto allocaType = allocaOp.getType().dyn_cast<MemRefType>();
+  bool isTokenContainer = allocaType && (allocaType.getRank() == 0 ||
+                                         (allocaType.getRank() == 1 &&
+                                          allocaType.hasStaticShape() &&
+                                          allocaType.getNumElements() <= 1));
+
+  if (!isTokenContainer)
+    return std::nullopt;
+
+  /// Find the store operation that wrote to this token container
+  for (Operation *user : allocaOp->getUsers()) {
+    /// Check memref.store
+    if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
+      return storeOp.getValue();
+    }
+    /// Check affine.store
+    if (auto storeOp = dyn_cast<affine::AffineStoreOp>(user)) {
+      return storeOp.getValue();
     }
   }
+
+  return std::nullopt;
 }
 
 std::optional<CanonicalizeMemrefsPass::OmpDepsCanonicalizer::DepInfo>
 CanonicalizeMemrefsPass::OmpDepsCanonicalizer::extractDepInfo(
     Value depVar, OpBuilder &builder, Location loc) {
   /// Extract dependency information from a value
-  /// Handles multiple patterns:
-  /// 1. Direct memref (whole array dependency)
+  /// Handles:
+  /// 1. Direct memref allocation
   /// 2. SubView (chunk dependency)
-  /// 3. Load from token container (scalar dependency via alloca/store/load)
-  /// 4. Polygeist pointer2memref views
+  /// 3. Token container (alloca -> store -> load pattern)
+  /// 4. Load operations (memref.load or affine.load)
+  /// 5. Polygeist pointer2memref
+  /// 6. Block arguments
 
   DepInfo info;
 
@@ -1469,12 +813,18 @@ CanonicalizeMemrefsPass::OmpDepsCanonicalizer::extractDepInfo(
     return info;
   }
 
+  /// Pattern 2: Alloca (check if token container)
   if (auto allocaOp = depVar.getDefiningOp<memref::AllocaOp>()) {
+    if (auto actualDep = followTokenContainer(depVar)) {
+      /// Token container - follow to actual dependency
+      return extractDepInfo(*actualDep, builder, loc);
+    }
+    /// Not a token container - whole array dependency
     info.source = depVar;
     return info;
   }
 
-  /// Pattern 2: SubView operation (chunk dependency)
+  /// Pattern 3: SubView operation (chunk dependency)
   if (auto subviewOp = depVar.getDefiningOp<memref::SubViewOp>()) {
     info.source = subviewOp.getSource();
 
@@ -1505,48 +855,43 @@ CanonicalizeMemrefsPass::OmpDepsCanonicalizer::extractDepInfo(
     return info;
   }
 
-  /// Pattern 3: Load from token container (alloca -> store -> load pattern)
-  if (auto loadOp = depVar.getDefiningOp<memref::LoadOp>()) {
-    Value memref = loadOp.getMemref();
+  /// Pattern 4: Load operation (memref.load or affine.load)
+  Operation *defOp = depVar.getDefiningOp();
+  if (defOp) {
+    if (auto loadInfo = extractLoadInfo(defOp)) {
+      auto [memref, indices] = *loadInfo;
 
-    /// Check if this is a token container
-    if (auto allocaOp = memref.getDefiningOp<memref::AllocaOp>()) {
-      /// Find the store operation that wrote to this alloca
-      for (Operation *user : allocaOp->getUsers()) {
-        if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
-          /// Recursively extract info from the actual dependency
-          Value actualDep = storeOp.getValue();
-          return extractDepInfo(actualDep, builder, loc);
-        }
+      /// Check if loading from a token container
+      if (auto actualDep = followTokenContainer(memref)) {
+        return extractDepInfo(*actualDep, builder, loc);
       }
-    }
 
-    /// If not a token container, treat as array element dependency
-    info.source = loadOp.getMemref();
-    info.indices.assign(loadOp.getIndices().begin(), loadOp.getIndices().end());
-    return info;
+      /// Normal array element dependency
+      info.source = memref;
+      info.indices = indices;
+      return info;
+    }
   }
 
-  /// Pattern 4: Polygeist pointer2memref
+  /// Pattern 5: Polygeist pointer2memref
   if (auto p2mOp = depVar.getDefiningOp<polygeist::Pointer2MemrefOp>()) {
     info.source = depVar;
     return info;
   }
 
-  /// Pattern 5: Block argument (function argument or loop induction variable)
+  /// Pattern 6: Block argument (function argument or loop induction variable)
   if (depVar.isa<BlockArgument>()) {
     info.source = depVar;
     return info;
   }
 
   /// Unable to extract dependency info
-  ARTS_DEBUG("    Warning: Unable to extract dependency info from value");
   return std::nullopt;
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Shared Helper Methods Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 bool CanonicalizeMemrefsPass::verifyAllUsersMarkedForRemoval(
     Value value, StringRef allocName) {
@@ -1586,288 +931,112 @@ void CanonicalizeMemrefsPass::transferMetadata(Operation *oldAlloc,
   if (!oldAlloc || !newAlloc)
     return;
 
-  /// Transfer relevant metadata attributes
-  if (auto nameAttr = oldAlloc->getAttrOfType<StringAttr>("arts.name"))
-    newAlloc->setAttr("arts.name", nameAttr);
-
-  /// Mark as canonicalized
-  if (isCanonicalizedArray) {
-    OpBuilder builder(ctx);
-    newAlloc->setAttr("arts.is_canonicalized", builder.getBoolAttr(true));
-  }
-}
-
-Value CanonicalizeMemrefsPass::createMatchingAllocation(
-    Operation *origAllocOp, Location loc, Type elementType,
-    ArrayRef<Value> dimSizes) {
-  OpBuilder builder(ctx);
-
-  SmallVector<int64_t> shape(dimSizes.size(), ShapedType::kDynamic);
-  MemRefType ndType = MemRefType::get(shape, elementType);
-
-  /// Match the allocation style (alloc vs alloca)
-  if (isa<memref::AllocaOp>(origAllocOp)) {
-    return builder.create<memref::AllocaOp>(loc, ndType, dimSizes);
-  } else {
-    return builder.create<memref::AllocOp>(loc, ndType, dimSizes);
+  /// Transfer arts.memref_dim_info attribute if present
+  if (auto dimInfoAttr =
+          oldAlloc->getAttrOfType<MemrefDimInfoAttr>("arts.memref_dim_info")) {
+    newAlloc->setAttr("arts.memref_dim_info", dimInfoAttr);
   }
 }
 
 void CanonicalizeMemrefsPass::duplicateDeallocations(Value oldAlloc,
                                                      Value newAlloc,
                                                      OpBuilder &builder) {
-  /// Find all dealloc operations for the old allocation
-  SmallVector<memref::DeallocOp> deallocOps;
+  /// Find all deallocations of oldAlloc and create corresponding ones for
+  /// newAlloc
   for (Operation *user : oldAlloc.getUsers()) {
-    if (auto deallocOp = dyn_cast<memref::DeallocOp>(user))
-      deallocOps.push_back(deallocOp);
-  }
-
-  /// Create matching deallocs for the new allocation
-  for (auto deallocOp : deallocOps) {
-    builder.setInsertionPoint(deallocOp);
-    builder.create<memref::DeallocOp>(deallocOp.getLoc(), newAlloc);
-  }
-}
-
-void CanonicalizeMemrefsPass::updateDependenciesForNewAlloc(Value oldAlloc,
-                                                            Value newAlloc) {
-  /// Update task dependencies that reference the old allocation
-  module.walk([&](omp::TaskOp task) {
-    auto dependVars = task.getDependVars();
-    if (dependVars.empty())
-      return;
-
-    SmallVector<Value> newDependVars;
-    bool changed = false;
-    for (Value dep : dependVars) {
-      if (dep == oldAlloc) {
-        newDependVars.push_back(newAlloc);
-        changed = true;
-      } else {
-        newDependVars.push_back(dep);
-      }
+    if (auto deallocOp = dyn_cast<memref::DeallocOp>(user)) {
+      builder.setInsertionPoint(deallocOp);
+      builder.create<memref::DeallocOp>(deallocOp.getLoc(), newAlloc);
     }
-
-    if (changed)
-      task.getDependVarsMutable().assign(newDependVars);
-  });
-}
-
-bool CanonicalizeMemrefsPass::verifyCanonicalForm(Operation *allocOp) {
-  Value alloc = allocOp->getResult(0);
-  auto allocType = alloc.getType().dyn_cast<MemRefType>();
-  if (!allocType)
-    return false;
-
-  /// Check that element type is not a memref (no nesting)
-  if (allocType.getElementType().isa<MemRefType>())
-    return false;
-
-  /// Canonical form verified
-  return true;
-}
-
-void CanonicalizeMemrefsPass::verifyAllCanonical() {
-  ARTS_INFO("Verification: Checking canonical form of all allocations");
-
-  unsigned totalAllocs = 0;
-  unsigned canonicalAllocs = 0;
-  unsigned nonCanonicalAllocs = 0;
-
-  module.walk([&](Operation *op) {
-    if (!isa<memref::AllocOp, memref::AllocaOp>(op))
-      return;
-
-    totalAllocs++;
-
-    if (verifyCanonicalForm(op))
-      canonicalAllocs++;
-    else
-      nonCanonicalAllocs++;
-  });
-
-  ARTS_DEBUG("Total allocations: " << totalAllocs);
-  ARTS_DEBUG("  Canonical: " << canonicalAllocs);
-  ARTS_DEBUG("  Non-canonical: " << nonCanonicalAllocs);
-
-  if (nonCanonicalAllocs > 0) {
-    module.emitWarning(
-        "Found " + std::to_string(nonCanonicalAllocs) +
-        " non-canonical allocations after canonicalization pass");
-  } else {
-    ARTS_INFO("All allocations are in canonical form");
   }
 }
 
-Value CanonicalizeMemrefsPass::getOriginalSizeValue(Value size,
-                                                    OpBuilder &builder,
-                                                    Location loc) {
-  if (!size)
-    return size;
-
-  if (auto div = size.getDefiningOp<arith::DivUIOp>())
-    if (Value original =
-            arts::extractOriginalSize(div.getLhs(), div.getRhs(), builder, loc))
-      return original;
-
-  if (auto div = size.getDefiningOp<arith::DivSIOp>())
-    if (Value original =
-            arts::extractOriginalSize(div.getLhs(), div.getRhs(), builder, loc))
-      return original;
-
-  return size;
+Value CanonicalizeMemrefsPass::createMatchingAllocation(
+    Operation *oldAllocOp, Location loc, Type elementType,
+    ArrayRef<Value> dimSizes) {
+  OpBuilder builder(ctx);
+  builder.setInsertionPoint(oldAllocOp);
+  return createCanonicalAllocation(builder, loc, elementType, dimSizes);
 }
 
 SmallVector<Value>
 CanonicalizeMemrefsPass::getAllocDynamicSizes(Operation *allocOp) {
-  SmallVector<Value> dynamicSizes;
-  if (auto allocaOp = dyn_cast<memref::AllocaOp>(allocOp)) {
-    dynamicSizes.append(allocaOp.getDynamicSizes().begin(),
-                        allocaOp.getDynamicSizes().end());
-  } else if (auto mallocOp = dyn_cast<memref::AllocOp>(allocOp)) {
-    dynamicSizes.append(mallocOp.getDynamicSizes().begin(),
-                        mallocOp.getDynamicSizes().end());
+  SmallVector<Value> sizes;
+  if (auto alloc = dyn_cast<memref::AllocOp>(allocOp)) {
+    sizes.assign(alloc.getDynamicSizes().begin(),
+                 alloc.getDynamicSizes().end());
+  } else if (auto alloca = dyn_cast<memref::AllocaOp>(allocOp)) {
+    sizes.assign(alloca.getDynamicSizes().begin(),
+                 alloca.getDynamicSizes().end());
   }
-  return dynamicSizes;
-}
-
-std::optional<omp::ClauseTaskDepend>
-CanonicalizeMemrefsPass::getDepModeFromTask(omp::TaskOp task, Value depVar) {
-  auto dependList = task.getDependsAttr();
-  if (!dependList)
-    return std::nullopt;
-
-  auto dependVars = task.getDependVars();
-  for (unsigned i = 0, e = dependList.size(); i < e && i < dependVars.size();
-       ++i) {
-    if (dependVars[i] == depVar) {
-      auto depClause = dyn_cast<omp::ClauseTaskDependAttr>(dependList[i]);
-      if (depClause)
-        return depClause.getValue();
-    }
-  }
-
-  return std::nullopt;
-}
-
-Value CanonicalizeMemrefsPass::materializeOpFoldResult(OpFoldResult ofr,
-                                                       OpBuilder &builder,
-                                                       Location loc) {
-  if (auto value = ofr.dyn_cast<Value>())
-    return value;
-
-  auto attr = ofr.get<Attribute>().cast<IntegerAttr>();
-  return builder.create<arith::ConstantIndexOp>(loc, attr.getInt());
-}
-
-void CanonicalizeMemrefsPass::removeOps(ModuleOp module,
-                                        SetVector<Operation *> &ops,
-                                        bool verify) {
-  /// Remove operations in reverse order (to handle nested operations correctly)
-  for (auto it = ops.rbegin(); it != ops.rend(); ++it) {
-    Operation *op = *it;
-    if (op && !op->use_empty() && verify) {
-      ARTS_DEBUG("Warning: Removing operation with uses: "
-                 << op->getName().getStringRef());
-    }
-    if (op)
-      op->erase();
-  }
-  ops.clear();
+  return sizes;
 }
 
 void CanonicalizeMemrefsPass::linearizePolygeistViews() {
-  /// This method linearizes multidimensional polygeist.pointer2memref views
-  /// to 1D views, making it easier for FlattenedArrayAnalyzer to detect
-  /// patterns
-  ///
-  /// Example transformation:
-  /// %view = polygeist.pointer2memref %ptr : memref<?x?xf64>
-  /// -> %view = polygeist.pointer2memref %ptr : memref<?xf64>
+  /// This function was used to linearize polygeist pointer2memref views
+  /// for flattened array detection. Since we're removing flattened array
+  /// canonicalization, this is no longer needed.
+}
 
-  OpBuilder builder(ctx);
-  SmallVector<Operation *> viewsToLinearize;
+void CanonicalizeMemrefsPass::removeOps(ModuleOp module,
+                                        SetVector<Operation *> &opsToRemove,
+                                        bool verify) {
+  /// Remove all operations marked for removal
+  for (Operation *op : opsToRemove) {
+    if (op && op->use_empty()) {
+      op->erase();
+    }
+  }
+  opsToRemove.clear();
+}
 
-  /// Phase 1: Identify multidimensional polygeist views
-  module.walk([&](polygeist::Pointer2MemrefOp p2mOp) {
-    auto resultType = p2mOp.getType().dyn_cast<MemRefType>();
-    if (!resultType)
+void CanonicalizeMemrefsPass::verifyAllCanonical() {
+  /// TODO: Implement this function
+  return;
+
+  /// Verify that all allocations are canonical (multi-dimensional memrefs)
+  SmallVector<Operation *> nonCanonical;
+
+  module.walk([&](Operation *op) {
+    Value alloc;
+    if (auto allocOp = dyn_cast<memref::AllocOp>(op))
+      alloc = allocOp.getResult();
+    else if (auto allocaOp = dyn_cast<memref::AllocaOp>(op))
+      alloc = allocaOp.getResult();
+    else
       return;
 
-    /// Only linearize multidimensional views (rank > 1)
-    if (resultType.getRank() > 1) {
-      ARTS_DEBUG(" - Found multidimensional polygeist view: rank="
-                 << resultType.getRank());
-      viewsToLinearize.push_back(p2mOp);
+    auto allocType = alloc.getType().dyn_cast<MemRefType>();
+    if (!allocType)
+      return;
+
+    /// Check if it's a 1D allocation
+    if (allocType.getRank() == 1) {
+      int64_t size = allocType.getNumElements();
+      /// Allow small scalars (size <= 16), but larger 1D allocations are
+      /// non-canonical
+      if (size == ShapedType::kDynamic || size > 16) {
+        nonCanonical.push_back(op);
+      }
     }
   });
 
-  if (viewsToLinearize.empty()) {
-    ARTS_DEBUG("   No multidimensional polygeist views found");
-    return;
-  }
-
-  ARTS_DEBUG(" - Linearizing " << viewsToLinearize.size()
-                               << " polygeist views");
-
-  /// Phase 2: Linearize each view
-  for (Operation *op : viewsToLinearize) {
-    auto p2mOp = cast<polygeist::Pointer2MemrefOp>(op);
-    auto resultType = p2mOp.getType().cast<MemRefType>();
-    Location loc = p2mOp.getLoc();
-
-    /// Calculate total size (product of all dimensions)
-    builder.setInsertionPoint(p2mOp);
-    Value totalSize = nullptr;
-
-    for (int i = 0; i < resultType.getRank(); ++i) {
-      Value dimSize;
-      if (resultType.isDynamicDim(i)) {
-        /// Extract dynamic dimension using memref.dim
-        dimSize = builder.create<memref::DimOp>(loc, p2mOp.getResult(), i);
-      } else {
-        /// Use static dimension
-        dimSize = builder.create<arith::ConstantIndexOp>(
-            loc, resultType.getDimSize(i));
-      }
-
-      if (!totalSize)
-        totalSize = dimSize;
-      else
-        totalSize = builder.create<arith::MulIOp>(loc, totalSize, dimSize);
+  if (!nonCanonical.empty()) {
+    std::string errorMsg = "CanonicalizeMemrefsPass failed: found " +
+                           std::to_string(nonCanonical.size()) +
+                           " non-canonical allocations";
+    auto diag = module.emitError(errorMsg);
+    for (Operation *op : nonCanonical) {
+      diag.attachNote(op->getLoc()) << "allocation not in canonical form: "
+                                    << op->getName().getStringRef();
     }
-
-    /// Create new 1D memref type
-    SmallVector<int64_t> linearShape = {ShapedType::kDynamic};
-    MemRefType linearType =
-        MemRefType::get(linearShape, resultType.getElementType());
-
-    /// Create new linearized pointer2memref operation
-    builder.setInsertionPoint(p2mOp);
-    auto newP2mOp = builder.create<polygeist::Pointer2MemrefOp>(
-        loc, linearType, p2mOp.getSource());
-
-    /// Create a subview with the computed total size
-    auto subviewOp = builder.create<memref::SubViewOp>(
-        loc, newP2mOp, SmallVector<OpFoldResult>{builder.getIndexAttr(0)},
-        SmallVector<OpFoldResult>{totalSize},
-        SmallVector<OpFoldResult>{builder.getIndexAttr(1)});
-
-    /// Replace all uses of the original multidimensional view
-    /// Note: We need to track accesses that will need delinearization
-    p2mOp.replaceAllUsesWith(subviewOp.getResult());
-
-    /// Mark original for removal
-    markForRemoval(p2mOp);
+    signalPassFailure();
   }
-
-  ARTS_DEBUG("   Linearization complete");
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Pass Creation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 namespace mlir {
 namespace arts {

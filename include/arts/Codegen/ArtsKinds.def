@@ -1,14 +1,15 @@
-///==========================================================================
+///==========================================================================///
 /// File: ArtsKinds.def
-/// Defines ARTS directives, clauses, and runtime calls for code generation.
-///==========================================================================
 ///
-//===----------------------------------------------------------------------===//
+/// Defines ARTS directives, clauses, and runtime calls for code generation.
+///==========================================================================///
 
-// ARTS_CONSTANTS - ARTS runtime constants
-// ARTS_RTL - ARTS runtime function definitions
+/// ARTS_CONSTANTS - ARTS runtime constants
+/// ARTS_RTL - ARTS runtime function definitions
 
-/// ------------------- ARTS typedefs -------------------
+///===----------------------------------------------------------------------===///
+/// ARTS typedefs
+///===----------------------------------------------------------------------===///
 #define ArtsGuid Int64
 #define ArtsGuidPtr Int64Ptr
 #define ArtsPtr Int64
@@ -17,7 +18,9 @@
 #define Void builder.getNoneType()
 
 #ifdef ARTS_CONSTANTS
-/// ------------------- ARTS Constants -------------------
+///===----------------------------------------------------------------------===///
+/// ARTS Constants
+///===----------------------------------------------------------------------===///
 /// NULL_GUID constant
 #define NULL_GUID ((ArtsGuid)0x0)
 
@@ -53,8 +56,9 @@
 #define ARTS_DB_GPU_MEMSET 19
 #endif // ARTS_CONSTANTS
 
-/// -----------------Types used in RT structs or RT functions -----------------
-///
+///===----------------------------------------------------------------------===///
+/// Types used in RT structs or RT functions
+///===----------------------------------------------------------------------===///
 ///{
 #ifndef ARTS_TYPE
 #define ARTS_TYPE(VarName, InitValue)
@@ -103,7 +107,9 @@ __ARTS_TYPE(RawPtr, mlir::LLVM::LLVMPointerType::get)
 #undef ARTS_TYPE
 ///}
 
-/// ---------------------------- Struct types ---------------------------- ///
+///===----------------------------------------------------------------------===///
+/// Struct types
+///===----------------------------------------------------------------------===///
 ///{
 #ifndef ARTS_STRUCT_TYPE
 #define ARTS_STRUCT_TYPE(VarName, StructName, Packed, ...)
@@ -112,17 +118,19 @@ __ARTS_TYPE(RawPtr, mlir::LLVM::LLVMPointerType::get)
 #define __ARTS_STRUCT_TYPE(VarName, Name, Packed, ...)                         \
   ARTS_STRUCT_TYPE(VarName, "struct." #Name, Packed, __VA_ARGS__)
 
-// typedef struct {
-//   ArtsGuid guid;
-//   ArtsType mode;
-//   void *ptr;
-// } artsEdtDep_t;
+/// typedef struct {
+///   ArtsGuid guid;
+///   ArtsType mode;
+///   void *ptr;
+/// } artsEdtDep_t;
 __ARTS_STRUCT_TYPE(ArtsEdtDep, artsEdtDep_t, false, ArtsGuid, ArtsType, llvmPtr)
 
 #undef __ARTS_STRUCT_TYPE
 #undef ARTS_STRUCT_TYPE
 
-/// ---------------------------- Function types ---------------------------- ///
+///===----------------------------------------------------------------------===///
+/// Function types
+///===----------------------------------------------------------------------===///
 ///{
 #ifndef ARTS_FUNCTION_TYPE
 #define ARTS_FUNCTION_TYPE(VarName, ReturnType, ...)
@@ -131,18 +139,18 @@ __ARTS_STRUCT_TYPE(ArtsEdtDep, artsEdtDep_t, false, ArtsGuid, ArtsType, llvmPtr)
 #define __ARTS_FUNCTION_TYPE(VarName, ReturnType, ...)                         \
   ARTS_FUNCTION_TYPE(VarName, ReturnType, __VA_ARGS__)
 
-// typedef void (*artsEdt_t)(uint32_t paramc, uint64_t *paramv, uint32_t depc,
-//                           artsEdtDep_t depv[]);
+/// typedef void (*artsEdt_t)(uint32_t paramc, uint64_t *paramv, uint32_t depc,
+///                           artsEdtDep_t depv[]);
 __ARTS_FUNCTION_TYPE(EdtFn, Void, Int32, Int64Ptr, Int32, ArtsEdtDepPtr)
 
-// void mainEdt(int argc, char **argv)
+/// void mainEdt(int argc, char **argv)
 __ARTS_FUNCTION_TYPE(ArtsMainFn, Void, Int32, Int8PtrPtr)
 
-// void initPerNode(unsigned int nodeId, int argc, char **argv)
+/// void initPerNode(unsigned int nodeId, int argc, char **argv)
 __ARTS_FUNCTION_TYPE(InitPerNodeFn, Void, Int32, Int32, Int8PtrPtr)
 
-// void initPerWorker(unsigned int nodeId, unsigned int workerId, int argc,
-//                    char** argv)
+/// void initPerWorker(unsigned int nodeId, unsigned int workerId, int argc,
+///                    char** argv)
 __ARTS_FUNCTION_TYPE(InitPerWorkerFn, Void, Int32, Int32, Int8PtrPtr)
 
 /// int main(int argc, char** argv)
@@ -151,7 +159,9 @@ __ARTS_FUNCTION_TYPE(MainFn, Int32, Int32, Int8PtrPtr)
 #undef ARTS_FUNCTION_TYPE
 ///}
 
-/// ------------------------------ Runtime ------------------------------ ///
+///===----------------------------------------------------------------------===///
+/// Runtime
+///===----------------------------------------------------------------------===///
 ///{
 #ifdef ARTS_RTL_FUNCTIONS
 
@@ -165,164 +175,149 @@ __ARTS_FUNCTION_TYPE(MainFn, Int32, Int32, Int8PtrPtr)
 #define __ARTS_RTL_ATTRS(Name, FnAttrSet, RetAttrSet, ArgAttrSets)             \
   ARTS_RTL_ATTRS(ARTSRTL_##Name, FnAttrSet, RetAttrSet, ArgAttrSets)
 
-// int artsRT(int argc, char **argv);
+/// int artsRT(int argc, char **argv);
 __ARTS_RTL(artsRT, Int32, Int32, Int8PtrPtr)
 __ARTS_RTL_ATTRS(artsRT, ControlAttrs, SExt, ParamAttrs(SExt, ReadOnlyPtrAttrs))
-// void artsShutdown();
+
+/// void artsShutdown();
 __ARTS_RTL(artsShutdown, Void)
 __ARTS_RTL_ATTRS(artsShutdown, ControlAttrs, EmptyAttrs, ParamAttrs())
 
-// void *artsMalloc(size_t size);
+/// void *artsMalloc(size_t size);
 __ARTS_RTL(artsMalloc, VoidPtr, SizeTy)
 __ARTS_RTL_ATTRS(artsMalloc, AllocAttrs, ReturnPtrAttrs, ParamAttrs(EmptyAttrs))
-// void *artsMallocAlign(size_t size, size_t align);
-__ARTS_RTL(artsMallocAlign, VoidPtr, SizeTy, SizeTy)
-__ARTS_RTL_ATTRS(artsMallocAlign, AllocAttrs, ReturnPtrAttrs,
-                 ParamAttrs(EmptyAttrs, EmptyAttrs))
-// void *artsCalloc(size_t size);
+
+/// void *artsCalloc(size_t size);
 __ARTS_RTL(artsCalloc, VoidPtr, SizeTy)
 __ARTS_RTL_ATTRS(artsCalloc, AllocAttrs, ReturnPtrAttrs, ParamAttrs(EmptyAttrs))
-// void *artsCallocAlign(size_t size, size_t align);
-__ARTS_RTL(artsCallocAlign, VoidPtr, SizeTy, SizeTy)
-__ARTS_RTL_ATTRS(artsCallocAlign, AllocAttrs, ReturnPtrAttrs,
-                 ParamAttrs(EmptyAttrs, EmptyAttrs))
-// void *artsRealloc(void *ptr, size_t size);
-__ARTS_RTL(artsRealloc, VoidPtr, VoidPtr, SizeTy)
-__ARTS_RTL_ATTRS(artsRealloc, AllocAttrs, ReturnPtrAttrs,
-                 ParamAttrs(EmptyAttrs, EmptyAttrs))
-// void artsFree(void *ptr);
+
+/// void artsFree(void *ptr);
 __ARTS_RTL(artsFree, Void, VoidPtr)
 __ARTS_RTL_ATTRS(artsFree, AllocAttrs, EmptyAttrs,
                  ParamAttrs(ArgPtrAttrs))
-// void artsFreeAlign(void *ptr);
-__ARTS_RTL(artsFreeAlign, Void, VoidPtr)
-__ARTS_RTL_ATTRS(artsFreeAlign, AllocAttrs, EmptyAttrs,
-                 ParamAttrs(ArgPtrAttrs))
-// ArtsGuid artsReserveGuidRoute(ArtsType type, unsigned int route);
+
+/// ArtsGuid artsReserveGuidRoute(ArtsType type, unsigned int route);
 __ARTS_RTL(artsReserveGuidRoute, ArtsGuid, ArtsType, Int32)
 __ARTS_RTL_ATTRS(artsReserveGuidRoute, ControlAttrs, EmptyAttrs,
                  ParamAttrs(SExt, ZExt))
-// void artsEdtDestroy(ArtsGuid guid);
-__ARTS_RTL(artsEdtDestroy, Void, ArtsGuid)
-__ARTS_RTL_ATTRS(artsEdtDestroy, ControlAttrs, EmptyAttrs,
-                 ParamAttrs(EmptyAttrs))
-// void *artsSetBuffer(ArtsGuid bufferGuid, void *buffer, unsigned int size);
-__ARTS_RTL(artsSetBuffer, VoidPtr, ArtsGuid, VoidPtr, Int32)
-__ARTS_RTL_ATTRS(artsSetBuffer, ControlAttrs, EmptyAttrs,
-                 ParamAttrs(EmptyAttrs, ReadOnlyPtrAttrs, ZExt))
-// void *artsGetBuffer(ArtsGuid bufferGuid);
-__ARTS_RTL(artsGetBuffer, VoidPtr, ArtsGuid)
-__ARTS_RTL_ATTRS(artsGetBuffer, GetterAttrs, EmptyAttrs,
-                 ParamAttrs(EmptyAttrs))
-// void *artsBlockForBuffer(ArtsGuid bufferGuid);
-__ARTS_RTL(artsBlockForBuffer, VoidPtr, ArtsGuid)
-__ARTS_RTL_ATTRS(artsBlockForBuffer, GetterAttrs, EmptyAttrs,
-                 ParamAttrs(EmptyAttrs))
-// bool artsIsGuidLocal(ArtsGuid guid);
-__ARTS_RTL(artsIsGuidLocal, Int1, ArtsGuid)
-__ARTS_RTL_ATTRS(artsIsGuidLocal, PureAttrs, ZExt, ParamAttrs(EmptyAttrs))
-// unsigned int artsGuidGetRank(ArtsGuid guid);
+
+/// unsigned int artsGuidGetRank(ArtsGuid guid);
 __ARTS_RTL(artsGuidGetRank, Int32, ArtsGuid)
 __ARTS_RTL_ATTRS(artsGuidGetRank, PureAttrs, ZExt, ParamAttrs(EmptyAttrs))
-// ArtsType artsGuidGetType(ArtsGuid guid);
+
+/// ArtsType artsGuidGetType(ArtsGuid guid);
 __ARTS_RTL(artsGuidGetType, ArtsType, ArtsGuid)
 __ARTS_RTL_ATTRS(artsGuidGetType, PureAttrs, SExt, ParamAttrs(EmptyAttrs))
-// ArtsGuid artsGuidCast(ArtsGuid guid, ArtsType type);
+
+/// ArtsGuid artsGuidCast(ArtsGuid guid, ArtsType type);
 __ARTS_RTL(artsGuidCast, ArtsGuid, ArtsGuid, ArtsType)
 __ARTS_RTL_ATTRS(artsGuidCast, PureAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, SExt))
 /// }
 
-/// ------------------------------ EDTs ------------------------------ ///
+///===----------------------------------------------------------------------===///
+/// EDTs
+///===----------------------------------------------------------------------===///
 /// {
-// ArtsGuid artsEdtCreate(artsEdt_t funcPtr, unsigned int route,
-//                        uint32_t paramc, uint64_t *paramv, uint32_t depc);
+/// ArtsGuid artsEdtCreate(artsEdt_t funcPtr, unsigned int route,
+///                        uint32_t paramc, uint64_t *paramv, uint32_t depc);
 __ARTS_RTL(artsEdtCreate, ArtsGuid, EdtFnPtr, Int32, Int32, Int64Ptr, Int32)
 __ARTS_RTL_ATTRS(artsEdtCreate, ControlAttrs, EmptyAttrs,
                  ParamAttrs(ReadOnlyPtrAttrs, ZExt, ZExt, ReadOnlyPtrAttrs, ZExt))
-// ArtsGuid artsEdtCreateWithGuid(artsEdt_t funcPtr, ArtsGuid guid, uint32_t
-//                                paramc, uint64_t * paramv, uint32_t depc);
+
+/// ArtsGuid artsEdtCreateWithGuid(artsEdt_t funcPtr, ArtsGuid guid, uint32_t
+///                                paramc, uint64_t * paramv, uint32_t depc);
 __ARTS_RTL(artsEdtCreateWithGuid, ArtsGuid, EdtFnPtr, ArtsGuid, Int32, Int64Ptr,
            Int32)
 __ARTS_RTL_ATTRS(artsEdtCreateWithGuid, ControlAttrs, EmptyAttrs,
                  ParamAttrs(ReadOnlyPtrAttrs, EmptyAttrs, ZExt,
                             ReadOnlyPtrAttrs, ZExt))
-// ArtsGuid artsEdtCreateWithEpoch(artsEdt_t funcPtr, unsigned int route,
-//                                 uint32_t paramc, uint64_t *paramv,
-//                                 uint32_t depc, ArtsGuid epochGuid);
+
+/// ArtsGuid artsEdtCreateWithEpoch(artsEdt_t funcPtr, unsigned int route,
+///                                 uint32_t paramc, uint64_t *paramv,
+///                                 uint32_t depc, ArtsGuid epochGuid);
 __ARTS_RTL(artsEdtCreateWithEpoch, ArtsGuid, EdtFnPtr, Int32, Int32, Int64Ptr,
            Int32, ArtsGuid)
 __ARTS_RTL_ATTRS(artsEdtCreateWithEpoch, ControlAttrs, EmptyAttrs,
                  ParamAttrs(ReadOnlyPtrAttrs, ZExt, ZExt, ReadOnlyPtrAttrs,
                             ZExt, EmptyAttrs))
-// ArtsGuid artsEdtCreateDep(artsEdt_t funcPtr, unsigned int route,
-//                           uint32_t paramc, uint64_t *paramv, uint32_t depc,
-//                           bool hasDepv);
+
+/// ArtsGuid artsEdtCreateDep(artsEdt_t funcPtr, unsigned int route,
+///                           uint32_t paramc, uint64_t *paramv, uint32_t depc,
+///                           bool hasDepv);
 __ARTS_RTL(artsEdtCreateDep, ArtsGuid, EdtFnPtr, Int32, Int32, Int64Ptr, Int32,
            Int1)
 __ARTS_RTL_ATTRS(artsEdtCreateDep, ControlAttrs, EmptyAttrs,
                  ParamAttrs(ReadOnlyPtrAttrs, ZExt, ZExt, ReadOnlyPtrAttrs,
                             ZExt, ZExt))
-// ArtsGuid artsEdtCreateWithGuidDep(artsEdt_t funcPtr, ArtsGuid guid,
-//                                   uint32_t paramc, uint64_t *paramv,
-//                                   uint32_t depc, bool hasDepv);
+
+/// ArtsGuid artsEdtCreateWithGuidDep(artsEdt_t funcPtr, ArtsGuid guid,
+///                                   uint32_t paramc, uint64_t *paramv,
+///                                   uint32_t depc, bool hasDepv);
 __ARTS_RTL(artsEdtCreateWithGuidDep, ArtsGuid, EdtFnPtr, ArtsGuid, Int32,
            Int64Ptr, Int32, Int1)
 __ARTS_RTL_ATTRS(artsEdtCreateWithGuidDep, ControlAttrs, EmptyAttrs,
                  ParamAttrs(ReadOnlyPtrAttrs, EmptyAttrs, ZExt,
                             ReadOnlyPtrAttrs, ZExt, ZExt))
-// ArtsGuid artsEdtCreateWithEpochDep(artsEdt_t funcPtr, unsigned int route,
-//                                    uint32_t paramc, uint64_t *paramv,
-//                                    uint32_t depc, ArtsGuid epochGuid, bool
-//                                    hasDepv);
+
+/// ArtsGuid artsEdtCreateWithEpochDep(artsEdt_t funcPtr, unsigned int route,
+///                                    uint32_t paramc, uint64_t *paramv,
+///                                    uint32_t depc, ArtsGuid epochGuid, bool
+///                                    hasDepv);
 __ARTS_RTL(artsEdtCreateWithEpochDep, ArtsGuid, EdtFnPtr, Int32, Int32,
            Int64Ptr, Int32, ArtsGuid, Int1)
 __ARTS_RTL_ATTRS(artsEdtCreateWithEpochDep, ControlAttrs, EmptyAttrs,
                  ParamAttrs(ReadOnlyPtrAttrs, ZExt, ZExt, ReadOnlyPtrAttrs,
                             ZExt, EmptyAttrs, ZExt))
-// void artsSignalEdt(ArtsGuid edtGuid, uint32_t slot, ArtsGuid dataGuid);
+
+/// void artsSignalEdt(ArtsGuid edtGuid, uint32_t slot, ArtsGuid dataGuid);
 __ARTS_RTL(artsSignalEdt, Void, ArtsGuid, Int32, ArtsGuid)
 __ARTS_RTL_ATTRS(artsSignalEdt, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs, ZExt, EmptyAttrs))
-// void artsSignalEdtValue(ArtsGuid edtGuid, uint32_t slot, uint64_t data);
+
+/// void artsSignalEdtValue(ArtsGuid edtGuid, uint32_t slot, uint64_t data);
 __ARTS_RTL(artsSignalEdtValue, Void, ArtsGuid, Int32, Int64)
 __ARTS_RTL_ATTRS(artsSignalEdtValue, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs, ZExt, EmptyAttrs))
-// void artsSignalEdtPtr(ArtsGuid edtGuid, uint32_t slot, void *ptr, unsigned
-//                       int size);
+
+/// void artsSignalEdtPtr(ArtsGuid edtGuid, uint32_t slot, void *ptr, unsigned
+///                       int size);
 __ARTS_RTL(artsSignalEdtPtr, Void, ArtsGuid, Int32, VoidPtr, Int32)
 __ARTS_RTL_ATTRS(artsSignalEdtPtr, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs, ZExt, ReadOnlyPtrAttrs, ZExt))
 /// }
 
-/// ------------------------- Persistent Events -------------------------- ///
+
+///===----------------------------------------------------------------------===///
+/// Persistent Events
+///===----------------------------------------------------------------------===///
 /// {
-// artsGuid_t artsPersistentEventCreate(
-//    unsigned int route, unsigned int latchCount, artsGuid_t dataGuid);
+/// artsGuid_t artsPersistentEventCreate(
+///    unsigned int route, unsigned int latchCount, artsGuid_t dataGuid);
 __ARTS_RTL(artsPersistentEventCreate, ArtsGuid, Int32, Int32, ArtsGuid)
 __ARTS_RTL_ATTRS(artsPersistentEventCreate, ControlAttrs, EmptyAttrs,
                  ParamAttrs(ZExt, ZExt, EmptyAttrs))
 
-// void artsPersistentEventSatisfy(artsGuid_t eventGuid, artsGuid_t dataGuid,
-//                                 uint32_t action);
+/// void artsPersistentEventSatisfy(artsGuid_t eventGuid, artsGuid_t dataGuid,
+///                                 uint32_t action);
 __ARTS_RTL(artsPersistentEventSatisfy, Void, ArtsGuid, ArtsGuid, Int32)
 __ARTS_RTL_ATTRS(artsPersistentEventSatisfy, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs, EmptyAttrs, ZExt))
 
-// void artsPersistentEventIncrementLatch(artsGuid_t eventGuid,
-//                                        artsGuid_t dataGuid);
+/// void artsPersistentEventIncrementLatch(artsGuid_t eventGuid,
+///                                        artsGuid_t dataGuid);
 __ARTS_RTL(artsPersistentEventIncrementLatch, Void, ArtsGuid, ArtsGuid)
 __ARTS_RTL_ATTRS(artsPersistentEventIncrementLatch, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-// void artsPersistentEventDecrementLatch(artsGuid_t eventGuid,
-//                                        artsGuid_t dataGuid);
+/// void artsPersistentEventDecrementLatch(artsGuid_t eventGuid,
+///                                        artsGuid_t dataGuid);
 __ARTS_RTL(artsPersistentEventDecrementLatch, Void, ArtsGuid, ArtsGuid)
 __ARTS_RTL_ATTRS(artsPersistentEventDecrementLatch, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-// void artsAddDependenceToPersistentEvent(
-//    artsGuid_t eventSource, artsGuid_t edtDest, uint32_t edtSlot,
-//    artsGuid dataGuid);
+/// void artsAddDependenceToPersistentEvent(
+///    artsGuid_t eventSource, artsGuid_t edtDest, uint32_t edtSlot,
+///    artsGuid dataGuid);
 __ARTS_RTL(artsAddDependenceToPersistentEvent, Void, ArtsGuid, ArtsGuid, Int32,
            ArtsGuid)
 __ARTS_RTL_ATTRS(artsAddDependenceToPersistentEvent, ControlAttrs,
@@ -331,170 +326,183 @@ __ARTS_RTL_ATTRS(artsAddDependenceToPersistentEvent, ControlAttrs,
                             EmptyAttrs))
 /// }
 
-/// ------------------------------ DataBlock ------------------------------ ///
+
+///===----------------------------------------------------------------------===///
+/// DataBlock
+///===----------------------------------------------------------------------===///
 /// {
-// void *artsDbCreateWithGuid(artsGuid_t guid, uint64_t size);
+/// void *artsDbCreateWithGuid(artsGuid_t guid, uint64_t size);
 __ARTS_RTL(artsDbCreateWithGuid, RawPtr, ArtsGuid, Int64)
 __ARTS_RTL_ATTRS(artsDbCreateWithGuid, AllocAttrs, ReturnPtrAttrs,
                  ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-// void *artsDbCreateWithGuidAndData(artsGuid_t guid, void *data,
-//                                   uint64_t size);
+/// void *artsDbCreateWithGuidAndData(artsGuid_t guid, void *data,
+///                                   uint64_t size);
 __ARTS_RTL(artsDbCreateWithGuidAndData, RawPtr, ArtsGuid, VoidPtr, Int64)
 __ARTS_RTL_ATTRS(artsDbCreateWithGuidAndData, AllocAttrs, ReturnPtrAttrs,
                  ParamAttrs(EmptyAttrs, ReadOnlyPtrAttrs, EmptyAttrs))
 
-// void artsDbIncrementLatch(artsGuid_t guid);
+/// void artsDbIncrementLatch(artsGuid_t guid);
 __ARTS_RTL(artsDbIncrementLatch, Void, ArtsGuid)
 __ARTS_RTL_ATTRS(artsDbIncrementLatch, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs))
 
-// void artsDbDecrementLatch(artsGuid_t guid);
+/// void artsDbDecrementLatch(artsGuid_t guid);
 __ARTS_RTL(artsDbDecrementLatch, Void, ArtsGuid)
 __ARTS_RTL_ATTRS(artsDbDecrementLatch, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs))
 
-// void artsDbAddDependence(artsGuid_t dbSrc, artsGuid_t edtDest,
-//                         uint32_t edtSlot);
+/// void artsDbAddDependence(artsGuid_t dbSrc, artsGuid_t edtDest,
+///                         uint32_t edtSlot);
 __ARTS_RTL(artsDbAddDependence, Void, ArtsGuid, ArtsGuid, Int32)
 __ARTS_RTL_ATTRS(artsDbAddDependence, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs, EmptyAttrs, ZExt))
 
-// void artsAddDependenceWithMode(artsGuid_t dbSrc, artsGuid_t edtDest,
-//                                uint32_t edtSlot, artsType_t mode);
+/// void artsAddDependenceWithMode(artsGuid_t dbSrc, artsGuid_t edtDest,
+///                                uint32_t edtSlot, artsType_t mode);
 __ARTS_RTL(artsAddDependenceWithMode, Void, ArtsGuid, ArtsGuid, Int32, Int32)
 __ARTS_RTL_ATTRS(artsAddDependenceWithMode, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs, EmptyAttrs, ZExt, ZExt))
 
-// artsGuid_t artsDbGetGuid(void *dbPtr);
+/// artsGuid_t artsDbGetGuid(void *dbPtr);
 __ARTS_RTL(artsDbGetGuid, ArtsGuid, VoidPtr)
 __ARTS_RTL_ATTRS(artsDbGetGuid, PureAttrs, EmptyAttrs,
                  ParamAttrs(ReadOnlyPtrAttrs))
 
 /// }
 
-/// ------------------------------ Epoch ------------------------------ ///
+///===----------------------------------------------------------------------===///
+/// Epoch
+///===----------------------------------------------------------------------===///
 /// {
-// ArtsGuid artsGetCurrentEpochGuid();
+/// ArtsGuid artsGetCurrentEpochGuid();
 __ARTS_RTL(artsGetCurrentEpochGuid, ArtsGuid)
 __ARTS_RTL_ATTRS(artsGetCurrentEpochGuid, GetterAttrs, EmptyAttrs,
                  ParamAttrs())
-// ArtsGuid artsInitializeAndStartEpoch(ArtsGuid finishEdtGuid,
-//                                      unsigned int slot);
+/// ArtsGuid artsInitializeAndStartEpoch(ArtsGuid finishEdtGuid,
+///                                      unsigned int slot);
 __ARTS_RTL(artsInitializeAndStartEpoch, ArtsGuid, ArtsGuid, Int32)
 __ARTS_RTL_ATTRS(artsInitializeAndStartEpoch, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs, ZExt))
-// bool artsWaitOnHandle(ArtsGuid epochGuid);
+
+/// bool artsWaitOnHandle(ArtsGuid epochGuid);
 __ARTS_RTL(artsWaitOnHandle, Int1, ArtsGuid)
 __ARTS_RTL_ATTRS(artsWaitOnHandle, ControlAttrs, ZExt,
                  ParamAttrs(EmptyAttrs))
-// void artsYield();
+
+/// void artsYield();
 __ARTS_RTL(artsYield, Void)
 __ARTS_RTL_ATTRS(artsYield, ControlAttrs, EmptyAttrs, ParamAttrs())
 /// }
 
-/// ------------------------------ Utils ------------------------------ ///
+///===----------------------------------------------------------------------===///
+/// Utils
+///===----------------------------------------------------------------------===///
 /// {
-// ArtsGuid artsGetCurrentGuid();
+/// ArtsGuid artsGetCurrentGuid();
 __ARTS_RTL(artsGetCurrentGuid, ArtsGuid)
 __ARTS_RTL_ATTRS(artsGetCurrentGuid, GetterAttrs, EmptyAttrs, ParamAttrs())
-// unsigned int artsGetCurrentNode();
+
+/// unsigned int artsGetCurrentNode();
 __ARTS_RTL(artsGetCurrentNode, Int32)
 __ARTS_RTL_ATTRS(artsGetCurrentNode, PureAttrs, ZExt, ParamAttrs())
-// unsigned int artsGetTotalNodes();
+
+/// unsigned int artsGetTotalNodes();
 __ARTS_RTL(artsGetTotalNodes, Int32)
 __ARTS_RTL_ATTRS(artsGetTotalNodes, PureAttrs, ZExt, ParamAttrs())
-// unsigned int artsGetCurrentWorker();
+
+/// unsigned int artsGetCurrentWorker();
 __ARTS_RTL(artsGetCurrentWorker, Int32)
 __ARTS_RTL_ATTRS(artsGetCurrentWorker, PureAttrs, ZExt, ParamAttrs())
-// unsigned int artsGetTotalWorkers();
+
+/// unsigned int artsGetTotalWorkers();
 __ARTS_RTL(artsGetTotalWorkers, Int32)
 __ARTS_RTL_ATTRS(artsGetTotalWorkers, PureAttrs, ZExt, ParamAttrs())
 /// }
 
-/// ------------------------------ Atomics ------------------------------ ///
+///===----------------------------------------------------------------------===///
+/// Atomics
+///===----------------------------------------------------------------------===///
 /// {
-// unsigned int artsAtomicSwap(volatile unsigned int *destination, unsigned int swapIn);
+/// unsigned int artsAtomicSwap(volatile unsigned int *destination, unsigned int swapIn);
 __ARTS_RTL(artsAtomicSwap, Int32, Int32Ptr, Int32)
 __ARTS_RTL_ATTRS(artsAtomicSwap, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-// uint64_t artsAtomicSwapU64(volatile uint64_t *destination, uint64_t swapIn);
+/// uint64_t artsAtomicSwapU64(volatile uint64_t *destination, uint64_t swapIn);
 __ARTS_RTL(artsAtomicSwapU64, Int64, Int64Ptr, Int64)
 __ARTS_RTL_ATTRS(artsAtomicSwapU64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-// void *artsAtomicSwapPtr(volatile void **destination, void *swapIn);
+/// void *artsAtomicSwapPtr(volatile void **destination, void *swapIn);
 __ARTS_RTL(artsAtomicSwapPtr, VoidPtr, VoidPtrPtr, VoidPtr)
 __ARTS_RTL_ATTRS(artsAtomicSwapPtr, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-// unsigned int artsAtomicSub(volatile unsigned int *destination, unsigned int subVal);
+/// unsigned int artsAtomicSub(volatile unsigned int *destination, unsigned int subVal);
 __ARTS_RTL(artsAtomicSub, Int32, Int32Ptr, Int32)
 __ARTS_RTL_ATTRS(artsAtomicSub, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-// unsigned int artsAtomicAdd(volatile unsigned int *destination, unsigned int addVal);
+/// unsigned int artsAtomicAdd(volatile unsigned int *destination, unsigned int addVal);
 __ARTS_RTL(artsAtomicAdd, Int32, Int32Ptr, Int32)
 __ARTS_RTL_ATTRS(artsAtomicAdd, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-// unsigned int artsAtomicFetchAdd(volatile unsigned int *destination, unsigned int addVal);
+/// unsigned int artsAtomicFetchAdd(volatile unsigned int *destination, unsigned int addVal);
 __ARTS_RTL(artsAtomicFetchAdd, Int32, Int32Ptr, Int32)
 __ARTS_RTL_ATTRS(artsAtomicFetchAdd, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-// unsigned int artsAtomicCswap(volatile unsigned int *destination, unsigned int oldVal, unsigned int swapIn);
+/// unsigned int artsAtomicCswap(volatile unsigned int *destination, unsigned int oldVal, unsigned int swapIn);
 __ARTS_RTL(artsAtomicCswap, Int32, Int32Ptr, Int32, Int32)
 __ARTS_RTL_ATTRS(artsAtomicCswap, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs, EmptyAttrs))
 
-// uint64_t artsAtomicCswapU64(volatile uint64_t *destination, uint64_t oldVal, uint64_t swapIn);
+/// uint64_t artsAtomicCswapU64(volatile uint64_t *destination, uint64_t oldVal, uint64_t swapIn);
 __ARTS_RTL(artsAtomicCswapU64, Int64, Int64Ptr, Int64, Int64)
 __ARTS_RTL_ATTRS(artsAtomicCswapU64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs, EmptyAttrs))
 
-// void *artsAtomicCswapPtr(volatile void **destination, void *oldVal, void *swapIn);
+/// void *artsAtomicCswapPtr(volatile void **destination, void *oldVal, void *swapIn);
 __ARTS_RTL(artsAtomicCswapPtr, VoidPtr, VoidPtrPtr, VoidPtr, VoidPtr)
 __ARTS_RTL_ATTRS(artsAtomicCswapPtr, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs, EmptyAttrs))
 
-// bool artsAtomicSwapBool(volatile bool *destination, bool value);
+/// bool artsAtomicSwapBool(volatile bool *destination, bool value);
 __ARTS_RTL(artsAtomicSwapBool, Int1, Int1Ptr, Int1)
 __ARTS_RTL_ATTRS(artsAtomicSwapBool, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, ZExt))
 
-// uint64_t artsAtomicFetchAddU64(volatile uint64_t *destination, uint64_t addVal);
+/// uint64_t artsAtomicFetchAddU64(volatile uint64_t *destination, uint64_t addVal);
 __ARTS_RTL(artsAtomicFetchAddU64, Int64, Int64Ptr, Int64)
 __ARTS_RTL_ATTRS(artsAtomicFetchAddU64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-// uint64_t artsAtomicFetchSubU64(volatile uint64_t *destination, uint64_t subVal);
+/// uint64_t artsAtomicFetchSubU64(volatile uint64_t *destination, uint64_t subVal);
 __ARTS_RTL(artsAtomicFetchSubU64, Int64, Int64Ptr, Int64)
 __ARTS_RTL_ATTRS(artsAtomicFetchSubU64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-// uint64_t artsAtomicAddU64(volatile uint64_t *destination, uint64_t addVal);
+/// uint64_t artsAtomicAddU64(volatile uint64_t *destination, uint64_t addVal);
 __ARTS_RTL(artsAtomicAddU64, Int64, Int64Ptr, Int64)
 __ARTS_RTL_ATTRS(artsAtomicAddU64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-// uint64_t artsAtomicSubU64(volatile uint64_t *destination, uint64_t subVal);
+/// uint64_t artsAtomicSubU64(volatile uint64_t *destination, uint64_t subVal);
 __ARTS_RTL(artsAtomicSubU64, Int64, Int64Ptr, Int64)
 __ARTS_RTL_ATTRS(artsAtomicSubU64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-// bool artsTryLock(volatile unsigned int *lock);
+/// bool artsTryLock(volatile unsigned int *lock);
 __ARTS_RTL(artsTryLock, Int1, Int32Ptr)
 __ARTS_RTL_ATTRS(artsTryLock, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs))
 
-// uint64_t artsAtomicFetchAndU64(volatile uint64_t *destination, uint64_t addVal);
+/// uint64_t artsAtomicFetchAndU64(volatile uint64_t *destination, uint64_t addVal);
 __ARTS_RTL(artsAtomicFetchAndU64, Int64, Int64Ptr, Int64)
 __ARTS_RTL_ATTRS(artsAtomicFetchAndU64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-// uint64_t artsAtomicFetchOrU64(volatile uint64_t *destination, uint64_t addVal);
+/// uint64_t artsAtomicFetchOrU64(volatile uint64_t *destination, uint64_t addVal);
 __ARTS_RTL(artsAtomicFetchOrU64, Int64, Int64Ptr, Int64)
 __ARTS_RTL_ATTRS(artsAtomicFetchOrU64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-// uint64_t artsAtomicFetchXOrU64(volatile uint64_t *destination, uint64_t addVal);
+/// uint64_t artsAtomicFetchXOrU64(volatile uint64_t *destination, uint64_t addVal);
 __ARTS_RTL(artsAtomicFetchXOrU64, Int64, Int64Ptr, Int64)
 __ARTS_RTL_ATTRS(artsAtomicFetchXOrU64, ControlAttrs, EmptyAttrs, ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-// unsigned int artsAtomicFetchOr(volatile unsigned int *destination, unsigned int addVal);
+/// unsigned int artsAtomicFetchOr(volatile unsigned int *destination, unsigned int addVal);
 __ARTS_RTL(artsAtomicFetchOr, Int32, Int32Ptr, Int32)
 __ARTS_RTL_ATTRS(artsAtomicFetchOr, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs))
 
-// unsigned int artsAtomicFetchAnd(volatile unsigned int *destination, unsigned int addVal);
+/// unsigned int artsAtomicFetchAnd(volatile unsigned int *destination, unsigned int addVal);
 __ARTS_RTL(artsAtomicFetchAnd, Int32, Int32Ptr, Int32)
 __ARTS_RTL_ATTRS(artsAtomicFetchAnd, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, EmptyAttrs))
-
-
 /// }
 
 #undef __ARTS_RTL_ATTRS
@@ -502,10 +510,11 @@ __ARTS_RTL_ATTRS(artsAtomicFetchAnd, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, 
 #undef ARTS_RTL
 #endif // ARTS_RTL_FUNCTIONS
 
+///===----------------------------------------------------------------------===///
 /// Runtime library function attributes
-///
+///===----------------------------------------------------------------------===///
+/// 
 ///{
-
 /// Attribute definitions for LLVM function optimization
 #ifndef ARTS_RTL_ATTRS
 #define ARTS_RTL_ATTRS(Enum, FnAttrSet, RetAttrSet, ArgAttrSets)
@@ -521,7 +530,6 @@ __ARTS_RTL_ATTRS(artsAtomicFetchAnd, ControlAttrs, ZExt, ParamAttrs(EmptyAttrs, 
 #define __ARTS_ATTRS_SET(VarName, AttrSet) ARTS_ATTRS_SET(VarName, AttrSet)
 
 /// Attribute sets for ARTS runtime functions 
-
 #define ParamAttrs(...) SmallVector<SmallVector<StringRef>>({__VA_ARGS__})
 
 /// Define attribute sets for different function categories
