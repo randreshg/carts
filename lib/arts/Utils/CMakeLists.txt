@@ -1,6 +1,6 @@
 file(GLOB CARTS_UTILS_SOURCE_FILES "*.cpp")
 
-# Add metadata files
+# Add metadata files 
 file(GLOB CARTS_METADATA_SOURCE_FILES "Metadata/*.cpp")
 set(CARTS_UTILS_SOURCE_FILES ${CARTS_UTILS_SOURCE_FILES} ${CARTS_METADATA_SOURCE_FILES})
 

@@ -1,4 +1,4 @@
-///==========================================================================
+///==========================================================================///
 /// File: CreateDbs.cpp
 ///
 /// This pass creates ARTS Dbs (DB) operations to handle memory
@@ -38,7 +38,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
-#include "arts/Utils/Metadata/ArtsMetadataManager.h"
+#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Utils/Metadata/MemrefMetadata.h"
 #include <optional>
 
@@ -62,14 +62,14 @@ ARTS_DEBUG_SETUP(create_dbs);
 using namespace mlir;
 using namespace mlir::arts;
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Helper Functions
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 namespace {
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Pass Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 struct CreateDbsPass : public arts::CreateDbsBase<CreateDbsPass> {
   CreateDbsPass() {}
@@ -197,9 +197,9 @@ private:
 };
 } // namespace
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Pass Entry Point
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void CreateDbsPass::runOnOperation() {
   module = getOperation();
   opsToRemove.clear();
@@ -284,9 +284,9 @@ void CreateDbsPass::runOnOperation() {
   ARTS_DEBUG_REGION(module.dump(););
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Metadata Import
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void CreateDbsPass::importMetadata() {
   std::string metadataPath = ".carts-metadata.json";
   ARTS_INFO("Attempting to import metadata from: " << metadataPath);
@@ -318,9 +318,9 @@ void CreateDbsPass::importMetadata() {
   }
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Allocation Type Inference
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 DbAllocType CreateDbsPass::inferAllocType(Operation *alloc) {
   assert(alloc && "Allocation operation not found");
 
@@ -336,9 +336,9 @@ DbAllocType CreateDbsPass::inferAllocType(Operation *alloc) {
   return DbAllocType::heap;
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Collect Allocations Used in EDTs
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void CreateDbsPass::collectMemrefs() {
   memrefInfo.clear();
   module.walk([&](EdtOp edt) {
@@ -380,9 +380,9 @@ void CreateDbsPass::collectMemrefs() {
   });
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Collect Control DB Operations
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void CreateDbsPass::collectControlDbOps() {
   /// First, extract dependency mode and index information from all db_control
   /// ops before erasing them
@@ -506,9 +506,9 @@ void CreateDbsPass::collectControlDbOps() {
   });
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Create DB Allocation Operations
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void CreateDbsPass::createDbAllocOps() {
   OpBuilder builder(module.getContext());
   /// All memrefs in memrefInfo are converted to DBs
@@ -637,11 +637,11 @@ void CreateDbsPass::createDbAllocOps() {
   }
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Process EDT Dependencies
 /// For each EDT, analyze external memory dependencies and insert
 /// acquire/release
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void CreateDbsPass::createDbAcquireOps(EdtOp edt,
                                        SetVector<Value> &externalDeps) {
   OpBuilder builder(module.getContext());
@@ -835,11 +835,11 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
   edt->setOperands(newOperands);
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Insert DB Free Operations
 /// Insert db_free for DbAllocOp at the appropriate location and remove
 /// associated dealloc operations
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void CreateDbsPass::insertDbFreeForDbAlloc(DbAllocOp dbAlloc, Operation *alloc,
                                            OpBuilder &builder) {
   Location loc = dbAlloc.getLoc();
@@ -877,10 +877,10 @@ void CreateDbsPass::insertDbFreeForDbAlloc(DbAllocOp dbAlloc, Operation *alloc,
   builder.create<DbFreeOp>(loc, dbAlloc.getPtr());
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Rewrite Operation Helper
 /// Rewrite a single operation to use DbRefOp pattern
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 bool CreateDbsPass::rewriteOperation(Operation *op, Type elementMemRefType,
                                      Value basePtr, Operation *dbOp,
                                      OpBuilder &builder, uint64_t initialIndex,
@@ -954,10 +954,10 @@ bool CreateDbsPass::rewriteOperation(Operation *op, Type elementMemRefType,
   return false;
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Rewrite Alloc uses
 /// Adjust load/store indices based on DB allocation granularity.
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
   assert(memrefInfo.dbAllocOp && "No DbAllocOp found");
 
@@ -983,11 +983,11 @@ void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
   }
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Rewrite Uses in EDT
 /// Rewrite loads/stores in an EDT to use acquired datablocks
 /// Finds all operations that use external values and match the acquire indices
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void CreateDbsPass::rewriteUsesInEdt(EdtOp edt,
                                      SmallVector<Operation *> &operations,
                                      DbAcquireOp dbAcquire,
@@ -1017,9 +1017,9 @@ void CreateDbsPass::rewriteUsesInEdt(EdtOp edt,
   }
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Pass creation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {
 std::unique_ptr<Pass> createCreateDbsPass() {

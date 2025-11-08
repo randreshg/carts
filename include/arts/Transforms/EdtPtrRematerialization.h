@@ -1,4 +1,4 @@
-///==========================================================================
+///==========================================================================///
 /// File: EdtPointerRematerialization.h
 ///
 /// Problem - When EDTs run on different nodes, pointer values passed as
@@ -26,7 +26,7 @@
 ///   %ptr = llvm.getelementptr %arg0[%arg1] : !llvm.ptr
 ///   %val = llvm.load %ptr : !llvm.ptr
 /// }
-///==========================================================================
+///==========================================================================///
 
 #ifndef CARTS_TRANSFORMS_EDTPOINTERREMATERIALIZATION_H
 #define CARTS_TRANSFORMS_EDTPOINTERREMATERIALIZATION_H

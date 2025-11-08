@@ -1,11 +1,11 @@
-///==========================================================================
+///==========================================================================///
 /// File: ArtsAbstractMachine.h
 ///
 /// This file defines the ARTS Abstract Machine representation that reads
 /// configuration files and provides comprehensive information about
 /// abstractMachine capabilities, threading, networking, GPU support, and
 /// execution parameters.
-///==========================================================================
+///==========================================================================///
 
 #pragma once
 

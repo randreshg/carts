@@ -1,7 +1,7 @@
-///==========================================================================
+///==========================================================================///
 /// File: DbPlacement.cpp
 /// Defines greedy DbAlloc placement scorer for optimal memory allocation.
-///==========================================================================
+///==========================================================================///
 
 #include "arts/Analysis/Concurrency/DbPlacement.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"

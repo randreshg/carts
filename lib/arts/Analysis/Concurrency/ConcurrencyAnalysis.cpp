@@ -1,8 +1,8 @@
-///==========================================================================
+///==========================================================================///
 /// File: ConcurrencyAnalysis.cpp
 ///
 /// This file implements the central analysis for concurrency operations.
-///==========================================================================
+///==========================================================================///
 
 #include "arts/Analysis/Concurrency/ConcurrencyAnalysis.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"

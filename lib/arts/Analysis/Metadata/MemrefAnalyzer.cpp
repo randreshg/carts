@@ -1,6 +1,6 @@
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // MemrefAnalyzer.cpp - Memory Reference Analysis Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 #include "arts/Analysis/Metadata/MemrefAnalyzer.h"
 #include "arts/Utils/ArtsUtils.h"
@@ -16,9 +16,9 @@
 using namespace mlir;
 using namespace mlir::arts;
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // ReuseAnalyzer Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Collect all memory accesses in program order
 SmallVector<Operation *>
@@ -122,9 +122,9 @@ ReuseAnalyzer::classifyTemporalLocality(uint64_t reuseDistance) {
     return TemporalLocalityLevel::Poor;
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // MemrefAnalyzer Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Count total accesses (reads + writes) to a memref
 std::pair<uint64_t, uint64_t>
 MemrefAnalyzer::countAccesses(Value memref, Operation *scopeOp) {

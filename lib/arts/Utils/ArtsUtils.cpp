@@ -1,7 +1,7 @@
-///==========================================================================
+///==========================================================================///
 /// File: ArtsUtils.cpp
 /// Defines utility functions for the ARTS dialect.
-///==========================================================================
+///==========================================================================///
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/ArtsDialect.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -22,9 +22,9 @@ ARTS_DEBUG_SETUP(arts_utils);
 namespace mlir {
 namespace arts {
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// IR Simplification Utilities
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Simplifies the IR by running common subexpression elimination (CSE)
 /// across the module using the provided dominance information.
@@ -36,9 +36,9 @@ bool simplifyIR(ModuleOp module, DominanceInfo &domInfo) {
   return changed;
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Value Analysis Utilities
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Checks if the given value is a constant, including constant-like operations
 /// such as constant indices and constant operations.
@@ -84,9 +84,9 @@ bool isNonZeroIndex(Value v) {
   return true;
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Type and Size Utilities
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Computes the byte size of the given element type, supporting integer and
 /// floating-point types. When the type is a memref, all static dimensions must
@@ -120,9 +120,9 @@ MemRefType getElementMemRefType(Type elementType,
   return MemRefType::get(elementShape, elementType);
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// String Utilities
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Sanitizes the given string by replacing dots and dashes with underscores,
 /// making it suitable for use as an identifier.
@@ -133,9 +133,9 @@ std::string sanitizeString(StringRef s) {
   return id;
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Range and Value Comparison Utilities
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Compares two ValueRanges for equality, checking both size and element-wise
 /// equivalence.
@@ -185,9 +185,9 @@ bool scalesAreEquivalent(Value lhs, Value rhs) {
   return false;
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Access Mode Utilities
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Combine two access modes and return the more permissive mode
 ArtsMode combineAccessModes(ArtsMode mode1, ArtsMode mode2) {
@@ -214,9 +214,9 @@ ArtsMode combineAccessModes(ArtsMode mode1, ArtsMode mode2) {
   return ArtsMode::inout;
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// EDT Analysis Utilities
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Determines if a value is invariant within the given EDT region, meaning it
 /// is defined outside the region or not modified within it.
@@ -432,9 +432,9 @@ static Value getUnderlyingValueImpl(Value v, SmallPtrSet<Value, 8> &visited) {
   }
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Underlying Value Tracing Utilities
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Strip numeric cast operations to find the underlying value.
 /// Traverses through index casts, sign/zero extensions, and truncations.
@@ -543,9 +543,9 @@ Operation *getUnderlyingDbAlloc(Value v) {
   assert(dbAcquire);
   return getUnderlyingDbAlloc(dbAcquire.getSourcePtr());
 }
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Operation Removal and Dead Code Elimination Utilities
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Recursively removes the given operation and all its dependent operations
 /// that become dead, tracking visited operations to avoid infinite recursion.
@@ -697,9 +697,9 @@ void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap,
     rewireMap.clear();
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Index Splitting Utilities for Datablocks
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Splits datablock indices into outer and inner indices based on the
 /// datablock's structure. For a memref<?xmemref<?xi32>> with indices [i, j, k]:
@@ -739,9 +739,9 @@ splitDbIndices(Operation *dbOp, ValueRange indices, OpBuilder &builder,
   return std::make_pair(outerIndices, innerIndices);
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Type Casting and Conversion Utilities
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Cast a value to index type if needed.
 Value castToIndex(Value value, OpBuilder &builder, Location loc) {
@@ -755,9 +755,9 @@ Value castToIndex(Value value, OpBuilder &builder, Location loc) {
   return value;
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Pattern Recognition and Analysis Utilities
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Extract original size from (N * scale) / scale pattern.
 /// Common in malloc size calculations: malloc(N * sizeof(T)) / sizeof(T) -> N.

@@ -66,6 +66,13 @@ else
     carts_error "docker-kill.sh not found!"
     exit 1
 fi
+
+# Remove any stopped containers that might still exist
+STOPPED_CONTAINERS=$(docker ps -a --format '{{.Names}}' | grep '^arts-node-' | sort)
+if [[ -n "$STOPPED_CONTAINERS" ]]; then
+    carts_info "Removing stopped containers: $STOPPED_CONTAINERS"
+    docker rm -f $STOPPED_CONTAINERS >/dev/null 2>&1 || true
+fi
 carts_success "Existing containers cleaned up"
 
 # Create shared volume if it doesn't exist

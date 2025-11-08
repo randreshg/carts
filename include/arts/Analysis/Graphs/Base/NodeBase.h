@@ -1,7 +1,7 @@
-///==========================================================================
+///==========================================================================///
 /// File: NodeBase.h
 /// Abstract base class for graph nodes.
-///==========================================================================
+///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_GRAPHS_NODEBASE_H
 #define ARTS_ANALYSIS_GRAPHS_NODEBASE_H
@@ -20,7 +20,7 @@ class NodeBase {
 public:
   virtual ~NodeBase() = default;
 
-  enum class NodeKind { DbAlloc, DbAcquire, EdtTask };
+  enum class NodeKind { DbAlloc, DbAcquire, EdtTask, ConcurrencyTask, Loop };
 
   /// Get the hierarchical ID (e.g., "A.1" for deps).
   virtual StringRef getHierId() const = 0;

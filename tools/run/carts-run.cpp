@@ -1,7 +1,7 @@
-///==========================================================================
+///==========================================================================///
 /// File: carts-run.cpp
 /// Main entry point for the CARTS runtime execution tool.
-///==========================================================================
+///==========================================================================///
 
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -45,9 +45,9 @@ using namespace mlir;
 
 ARTS_DEBUG_SETUP(carts_run)
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Interface Attachments
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Use the original models for attaching type interfaces.
 class MemRefInsider
     : public MemRefElementTypeInterface::FallbackModel<MemRefInsider> {};
@@ -57,9 +57,9 @@ struct PtrElementModel
     : public LLVM::PointerElementTypeInterface::ExternalModel<
           PtrElementModel<T>, T> {};
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Command Line Options
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 static cl::opt<std::string>
     InputFilename(cl::Positional, cl::desc("<input file>"), cl::init("-"));
 
@@ -91,9 +91,9 @@ static cl::opt<std::string> MetadataFile("metadata-file",
                                          cl::value_desc("filename"),
                                          cl::init(".carts-metadata.json"));
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Pipeline Stop Options
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 enum class PipelineStage {
   CanonicalizeMemrefs,
   InitialCleanup,
@@ -144,9 +144,9 @@ static cl::opt<PipelineStage> StopAt(
                           "Run complete pipeline (default)")),
     cl::init(PipelineStage::Complete));
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Helper Functions for Initialization and Pass Setup
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Register standard MLIR dialects, passes, and translations.
 void registerDialects(DialectRegistry &registry) {
   registry.insert<polygeist::PolygeistDialect, arts::ArtsDialect>();
@@ -219,7 +219,11 @@ void setupCollectMetadata(PassManager &pm, bool shouldExport = false,
                           StringRef metadataFile = "") {
   std::string actualMetadataFile =
       metadataFile.empty() ? MetadataFile.getValue() : metadataFile.str();
-  pm.addPass(createCSEPass());
+  /// Raise to affine first
+  OpPassManager &optPM = pm.nest<func::FuncOp>();
+  optPM.addPass(polygeist::createRaiseSCFToAffinePass());
+  optPM.addPass(polygeist::replaceAffineCFGPass());
+  optPM.addPass(createCSEPass());
   if (shouldExport)
     pm.addPass(arts::createCollectMetadataPass(true, actualMetadataFile));
   else
@@ -299,7 +303,7 @@ void setupConcurrency(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 
 /// Concurrency optimization passes.
 void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
-  pm.addPass(arts::createDbPass(AM, false, true));
+  // pm.addPass(arts::createDbPass(AM, false, true));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createMem2Reg());
@@ -564,9 +568,9 @@ void setupPassManager(ModuleOp module, MLIRContext &context,
   }
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Main Function
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 int main(int argc, char **argv) {
   InitLLVM y(argc, argv);
   cl::ParseCommandLineOptions(argc, argv, "MLIR Optimization Driver\n");

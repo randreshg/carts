@@ -1,10 +1,10 @@
-///==========================================================================
+///==========================================================================///
 // File: ConvertArtsToLLVM.cpp
 //
 // This file implements a pass to convert ARTS dialect operations into
 // LLVM dialect operations. Since preprocessing is handled by a separate
 // pass, this pass focuses purely on ARTS-specific conversion logic.
-///==========================================================================
+///==========================================================================///
 
 /// Dialects
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -35,16 +35,16 @@ ARTS_DEBUG_SETUP(convert_arts_to_llvm);
 using namespace mlir;
 using namespace arts;
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Constants and Configuration
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 namespace {
 /// Configuration constants
 } // namespace
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Conversion Patterns
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Base class for ARTS to LLVM conversion patterns with shared ArtsCodegen
 template <typename OpType>
@@ -57,9 +57,9 @@ public:
       : OpRewritePattern<OpType>(context), AC(ac) {}
 };
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Helpers for DB sizes and single-element detection
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 namespace {
 template <typename OpType>
 static inline void getDbInfo(OpType op, SmallVector<Value> &sizesOut,
@@ -149,9 +149,9 @@ struct GetCurrentNodePattern : public ArtsToLLVMPattern<GetCurrentNodeOp> {
   }
 };
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Event and Barrier Patterns
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Pattern to convert arts.barrier operations
 struct BarrierPattern : public ArtsToLLVMPattern<BarrierOp> {
@@ -416,9 +416,9 @@ private:
   }
 };
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // EDT  Patterns
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Pattern to convert arts.edt_param_pack operations
 struct EdtParamPackPattern : public ArtsToLLVMPattern<EdtParamPackOp> {
   using ArtsToLLVMPattern::ArtsToLLVMPattern;
@@ -660,9 +660,9 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
   }
 };
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // DB Patterns
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Pattern to convert arts.db_alloc operations
 struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
   using ArtsToLLVMPattern::ArtsToLLVMPattern;
@@ -949,9 +949,9 @@ struct AllocPattern : public ArtsToLLVMPattern<AllocOp> {
   }
 };
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Terminator Patterns
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Pattern to convert arts.yield operations (terminator)
 struct YieldPattern : public ArtsToLLVMPattern<YieldOp> {
@@ -967,9 +967,9 @@ struct YieldPattern : public ArtsToLLVMPattern<YieldOp> {
   }
 };
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Pass Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 namespace {
 struct ConvertArtsToLLVMPass
     : public arts::ConvertArtsToLLVMBase<ConvertArtsToLLVMPass> {
@@ -989,9 +989,9 @@ private:
 };
 } // namespace
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Core Pass Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 void ConvertArtsToLLVMPass::runOnOperation() {
   ModuleOp module = getOperation();
@@ -1097,9 +1097,9 @@ void ConvertArtsToLLVMPass::populateDbPatterns(RewritePatternSet &patterns) {
   patterns.add<DbGepOpPattern, DepDbAcquireOpPattern>(context, AC);
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Pass Functions
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {
 std::unique_ptr<Pass> createConvertArtsToLLVMPass() {

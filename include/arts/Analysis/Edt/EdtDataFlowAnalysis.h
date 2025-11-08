@@ -1,10 +1,10 @@
-///==========================================================================
+///==========================================================================///
 /// File: EdtDataFlowAnalysis.h
 ///
 /// This file defines dataflow analysis for EDT dependencies.
 /// TEMPORARILY DISABLED - requires rework to properly integrate with
 /// MLIR dataflow analysis framework.
-///==========================================================================
+///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_EDT_EDTDATAFLOWANALYSIS_H
 #define ARTS_ANALYSIS_EDT_EDTDATAFLOWANALYSIS_H

@@ -1,6 +1,6 @@
-///==========================================================================
+///==========================================================================///
 /// File: ArtsCodegen.cpp
-///==========================================================================
+///==========================================================================///
 
 #include "arts/Codegen/ArtsCodegen.h"
 
@@ -620,9 +620,9 @@ Operation *ArtsCodegen::clone(Operation &op) { return getBuilder().clone(op); }
 Operation *ArtsCodegen::clone(Operation &op, IRMapping &mapper) {
   return getBuilder().clone(op, mapper);
 }
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Memref helpers
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 LLVM::LLVMPointerType ArtsCodegen::getLLVMPointerType(Value source) {
   if (source.getType().isa<LLVM::LLVMPointerType>())
@@ -811,9 +811,9 @@ void ArtsCodegen::iterateMultiDb(Value dbGuid, Value edtGuid,
   addDependenciesRecursive(0, initIndices);
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Debug printing helpers
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 void ArtsCodegen::printDebugInfo(Location loc, const Twine &message,
                                  ValueRange args) {

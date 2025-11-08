@@ -1,3 +1,9 @@
+///==========================================================================///
+/// File: ArtsPasses.td
+///
+/// This file defines the ArtsPasses class which is used to register the passes
+/// for the ARTS dialect.
+///==========================================================================///
 #ifndef CARTS_PASSES
 #define CARTS_PASSES
 

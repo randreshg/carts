@@ -1,12 +1,12 @@
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // LoopAnalyzer.h - Loop Analysis for Metadata Collection
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 //
 // This file defines the LoopAnalyzer class, which performs comprehensive
 // analysis of loop operations including parallelism detection, memory access
 // patterns, and partitioning strategy recommendations.
 //
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 #ifndef ARTS_ANALYSIS_METADATA_LOOPANALYZER_H
 #define ARTS_ANALYSIS_METADATA_LOOPANALYZER_H
@@ -22,9 +22,9 @@
 namespace mlir {
 namespace arts {
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // LoopAnalyzer - Loop analysis
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 class LoopAnalyzer {
 public:
   LoopAnalyzer(MLIRContext *context, AccessAnalyzer &accessAnalyzer,

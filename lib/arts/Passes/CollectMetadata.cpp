@@ -1,4 +1,4 @@
-///==========================================================================
+///==========================================================================///
 /// File: CollectMetadata.cpp
 ///
 /// This pass collects comprehensive metadata from sequential code before
@@ -18,7 +18,7 @@
 /// - Memrefs have clear multi-dimensional types (no flattened arrays)
 /// - Sequential code before OpenMP pragmas
 ///
-///==========================================================================
+///==========================================================================///
 
 #include "ArtsPassDetails.h"
 #include "arts/Analysis/Metadata/AccessAnalyzer.h"
@@ -29,7 +29,7 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
-#include "arts/Utils/Metadata/ArtsMetadataManager.h"
+#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/Metadata/MemrefMetadata.h"
@@ -61,9 +61,9 @@ using namespace mlir::arts;
 // arts/Analysis/Metadata/MemrefAnalyzer.h LoopAnalyzer is now defined in
 // arts/Analysis/Metadata/LoopAnalyzer.h
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // CollectMetadataPass
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 struct CollectMetadataPass : public CollectMetadataBase<CollectMetadataPass> {
   CollectMetadataPass() = default;
@@ -163,9 +163,9 @@ private:
   }
 };
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Pass Registration
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 std::unique_ptr<Pass> mlir::arts::createCollectMetadataPass() {
   return std::make_unique<CollectMetadataPass>();

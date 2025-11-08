@@ -1,7 +1,7 @@
-///==========================================================================
+///==========================================================================///
 /// File: EdtGraph.h
 /// Defines EdtGraph derived from GraphBase for EDT analysis.
-///==========================================================================
+///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_GRAPHS_EDT_EDTGRAPH_H
 #define ARTS_ANALYSIS_GRAPHS_EDT_EDTGRAPH_H
@@ -69,6 +69,7 @@ private:
 
   /// Private helpers
   void collectNodes();
+  void linkEdtsToLoops();
   void buildDependencies();
   void populateChildrenCache(NodeBase *node);
 
@@ -79,7 +80,7 @@ private:
 } // namespace arts
 } // namespace mlir
 
-// GraphTraits specialization for EdtGraph
+/// GraphTraits specialization for EdtGraph
 namespace llvm {
 template <>
 struct GraphTraits<mlir::arts::EdtGraph *>

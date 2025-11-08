@@ -1,7 +1,7 @@
-///==========================================================================
+///==========================================================================///
 /// File: DbAliasAnalysis.cpp
 /// Defines alias analysis for DB operations and memory tracking.
-///==========================================================================
+///==========================================================================///
 
 #include "arts/Analysis/Db/DbAliasAnalysis.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
@@ -164,7 +164,7 @@ bool slicesProvablyDisjoint(const DbAcquireNode *lhs, const DbAcquireNode *rhs,
 }
 } // namespace
 
-DbAliasAnalysis::DbAliasAnalysis(DbAnalysis *analysis) : analysis(analysis) {
+DbAliasAnalysis::DbAliasAnalysis(DbAnalysis *analysis) {
   assert(analysis && "Analysis cannot be null");
 }
 
@@ -353,6 +353,80 @@ DbAliasAnalysis::classifyAlias(const NodeBase &a, const NodeBase &b,
             result = AliasResult::NoAlias;
           }
         }
+      }
+    }
+  }
+
+  /// Use metadata for quick alias refinement
+  if (result == AliasResult::MayAlias) {
+    /// Get root alloc nodes for metadata access
+    auto getRootAlloc = [](const NodeBase &n) -> const DbAllocNode * {
+      if (auto *acq = dyn_cast<DbAcquireNode>(&n))
+        return acq->getRootAlloc();
+      if (auto *alloc = dyn_cast<DbAllocNode>(&n))
+        return alloc;
+      return nullptr;
+    };
+
+    auto *allocA = getRootAlloc(a);
+    auto *allocB = getRootAlloc(b);
+
+    /// Use metadata to quickly rule out aliases
+    if (allocA && allocB && allocA != allocB) {
+      bool metadataRefinement = false;
+
+      // Different access patterns suggest different regions
+      if (allocA->dominantAccessPattern && allocB->dominantAccessPattern) {
+        auto patA = *allocA->dominantAccessPattern;
+        auto patB = *allocB->dominantAccessPattern;
+
+        /// Sequential + Random -> likely disjoint
+        if ((patA == AccessPatternType::Sequential &&
+             patB == AccessPatternType::Random) ||
+            (patA == AccessPatternType::Random &&
+             patB == AccessPatternType::Sequential)) {
+          ARTS_INFO("  Metadata: Different access patterns (Sequential vs "
+                    "Random) suggest NoAlias"
+                    << indent);
+          result = AliasResult::NoAlias;
+          metadataRefinement = true;
+        }
+      }
+
+      /// Very different spatial locality -> likely different regions
+      if (!metadataRefinement && allocA->spatialLocality &&
+          allocB->spatialLocality) {
+        auto locA = *allocA->spatialLocality;
+        auto locB = *allocB->spatialLocality;
+
+        if ((locA == SpatialLocalityLevel::Excellent &&
+             locB == SpatialLocalityLevel::Poor) ||
+            (locA == SpatialLocalityLevel::Poor &&
+             locB == SpatialLocalityLevel::Excellent)) {
+          ARTS_INFO("  Metadata: Very different spatial locality suggests "
+                    "different regions"
+                    << indent);
+          /// Don't set to NoAlias, but note the hint
+        }
+      }
+
+      /// Very different temporal locality -> different access times
+      if (!metadataRefinement && allocA->temporalLocality &&
+          allocB->temporalLocality) {
+        auto tempA = *allocA->temporalLocality;
+        auto tempB = *allocB->temporalLocality;
+
+        if ((tempA == TemporalLocalityLevel::Excellent &&
+             tempB == TemporalLocalityLevel::Poor) ||
+            (tempA == TemporalLocalityLevel::Poor &&
+             tempB == TemporalLocalityLevel::Excellent)) {
+          ARTS_INFO("  Metadata: Very different temporal locality noted"
+                    << indent);
+        }
+      }
+
+      if (metadataRefinement) {
+        ARTS_INFO("  Step 1.5 Result: Refined using metadata" << indent);
       }
     }
   }
