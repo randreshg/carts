@@ -1,7 +1,7 @@
-///==========================================================================
+///==========================================================================///
 /// File: ArtsDialect.cpp
 /// Defines the Arts dialect and the operations within it.
-///==========================================================================
+///==========================================================================///
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -23,9 +23,9 @@
 using namespace mlir;
 using namespace mlir::arts;
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Arts dialect.
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void ArtsDialect::initialize() {
   /// Register operations
   addOperations<
@@ -48,9 +48,9 @@ void ArtsDialect::initialize() {
 
 #include "arts/ArtsOpsDialect.cpp.inc"
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Arts Dialect Operations - method definitions
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 #define GET_OP_CLASSES
 #include "arts/ArtsOps.cpp.inc"
 
@@ -100,26 +100,26 @@ bool isArtsOp(Operation *op) {
              arts::GetCurrentNodeOp>(op);
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Arts Dialect Types - method definitions
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 #define GET_TYPEDEF_CLASSES
 #include "arts/ArtsOpsTypes.cpp.inc"
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Arts Dialect Attributes - method definitions
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 #define GET_ATTRDEF_CLASSES
 #include "arts/ArtsOpsAttributes.cpp.inc"
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Arts Dialect Enums - method definitions
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 #include "arts/ArtsOpsEnums.cpp.inc"
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // UndefOp
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 class UndefToLLVM final : public OpRewritePattern<UndefOp> {
 public:
   using OpRewritePattern<UndefOp>::OpRewritePattern;
@@ -139,9 +139,9 @@ void UndefOp::getCanonicalizationPatterns(RewritePatternSet &results,
   results.insert<UndefToLLVM>(context);
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // EdtOp
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 SmallVector<Value> mlir::arts::EdtOp::getDependenciesAsVector() {
   SmallVector<Value> deps(getDependencies().begin(), getDependencies().end());
   return deps;
@@ -183,6 +183,10 @@ LogicalResult EdtOp::verify() {
     if (op == &block.front())
       return WalkResult::advance();
 
+    /// Skip children EDTs
+    if (isa<EdtOp>(op))
+      return WalkResult::advance();
+
     /// Check each operand
     for (Value operand : op->getOperands()) {
       /// Skip if operand is not a memref
@@ -209,7 +213,7 @@ LogicalResult EdtOp::verify() {
         continue;
 
       /// Skip if operand is defined inside the region
-      if (definingOp->getParentOfType<EdtOp>() == *this)
+      if (getBody().isAncestor(definingOp->getParentRegion()))
         continue;
 
       /// Check if this is a dependency value used directly
@@ -225,7 +229,8 @@ LogicalResult EdtOp::verify() {
           << operand
           << "' that is not a block argument, not a dependency, and not "
              "defined inside the region.\n"
-          << *definingOp;
+          << *definingOp << "\n"
+          << *op << "\n";
       return WalkResult::interrupt();
     }
     return WalkResult::advance();
@@ -260,9 +265,9 @@ void EdtOp::getEffects(
   /// }
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // ARTS Operation Builders
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void DbReleaseOp::build(OpBuilder &builder, OperationState &state,
                         Value source) {
   state.addOperands(source);
@@ -299,9 +304,9 @@ void DbControlOp::build(OpBuilder &builder, OperationState &state,
                      sizes);
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // EDT Ops
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
                   EdtConcurrency concurrency) {
   build(builder, state, type, concurrency, ValueRange{});
@@ -328,9 +333,9 @@ void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
   bodyRegion->push_back(bodyBlock);
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // EDT Create Ops
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 void EdtCreateOp::build(OpBuilder &builder, OperationState &state,
                         Value param_memref, Value depCount) {
@@ -345,9 +350,9 @@ void EdtCreateOp::build(OpBuilder &builder, OperationState &state,
   state.addOperands({param_memref, depCount, route});
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // DB operations builders
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// DbAllocOp builders
 static void
 buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
@@ -451,8 +456,8 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
   auto sourceDb = arts::getUnderlyingDb(sourcePtr);
   auto sourceDbAlloc =
       dyn_cast<DbAllocOp>(arts::getUnderlyingDbAlloc(sourcePtr));
-  assert(sourceDb && "Source pointer must be a Datablock");
-  assert(sourceDbAlloc && "Source pointer must have a DbAllocOp");
+  assert(sourceDb && "Expected sourceDb");
+  assert(sourceDbAlloc && "Expected sourceDbAlloc");
 
   /// Get the sizes from the source datablock
   auto sourceSizes = getSizesFromDb(sourceDb);
@@ -496,17 +501,64 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
 
   /// Add operands and attributes
   state.addAttribute("mode", ArtsModeAttr::get(builder.getContext(), mode));
-  state.addOperands(sourceGuid);
+  if (sourceGuid)
+    state.addOperands(sourceGuid);
   state.addOperands(sourcePtr);
   state.addOperands(indices);
   state.addOperands(offsets);
   state.addOperands(sizes);
 
-  /// Build operand segment sizes:
-  /// [sourceGuid=1, sourcePtr=1, indices, offsets, sizes]
+  /// Build operand segment sizes: [source_guid(0/1), source_ptr=1, indices,
+  /// offsets, sizes]
   state.addAttribute(
       "operandSegmentSizes",
-      builder.getDenseI32ArrayAttr({1, 1, static_cast<int32_t>(indices.size()),
+      builder.getDenseI32ArrayAttr({sourceGuid ? 1 : 0, 1,
+                                    static_cast<int32_t>(indices.size()),
+                                    static_cast<int32_t>(offsets.size()),
+                                    static_cast<int32_t>(sizes.size())}));
+}
+
+/// DbAcquireOp builder with explicit ptr type (for block arguments)
+void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
+                        ArtsMode mode, Value sourceGuid, Value sourcePtr,
+                        Type ptrType, SmallVector<Value> indices,
+                        SmallVector<Value> offsets, SmallVector<Value> sizes) {
+  /// When sourceGuid is null and sourcePtr is a block argument,
+  /// we can't trace back to find the DB, so we use explicit sizes/offsets
+
+  /// If sizes/offsets not provided, use defaults for rank-1
+  if (sizes.empty()) {
+    sizes.push_back(builder.create<arith::ConstantIndexOp>(state.location, 1));
+  }
+  if (offsets.empty()) {
+    for (size_t i = 0; i < sizes.size(); ++i)
+      offsets.push_back(
+          builder.create<arith::ConstantIndexOp>(state.location, 0));
+  }
+
+  /// GUID type uses dimensionality equal to number of sizes (at least 1)
+  SmallVector<int64_t> guidShape;
+  size_t numGuidDims = std::max(sizes.size(), size_t(1));
+  guidShape.assign(numGuidDims, ShapedType::kDynamic);
+  Type guidType = MemRefType::get(guidShape, builder.getI64Type());
+
+  /// Result types
+  state.addTypes({guidType, ptrType});
+
+  /// Add operands and attributes
+  state.addAttribute("mode", ArtsModeAttr::get(builder.getContext(), mode));
+  if (sourceGuid)
+    state.addOperands(sourceGuid);
+  state.addOperands(sourcePtr);
+  state.addOperands(indices);
+  state.addOperands(offsets);
+  state.addOperands(sizes);
+
+  /// Build operand segment sizes
+  state.addAttribute(
+      "operandSegmentSizes",
+      builder.getDenseI32ArrayAttr({sourceGuid ? 1 : 0, 1,
+                                    static_cast<int32_t>(indices.size()),
                                     static_cast<int32_t>(offsets.size()),
                                     static_cast<int32_t>(sizes.size())}));
 }
@@ -621,9 +673,9 @@ void DbNumElementsOp::getCanonicalizationPatterns(RewritePatternSet &results,
   results.add<FoldDbNumElementsSingleSize>(context);
 }
 
-///==========================================================================
+///==========================================================================///
 /// OmpDepOp Builder
-///==========================================================================
+///==========================================================================///
 
 void OmpDepOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
                      Value source, SmallVector<Value> indices,
@@ -646,9 +698,9 @@ void OmpDepOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
                                     static_cast<int32_t>(sizes.size())}));
 }
 
-///==========================================================================
+///==========================================================================///
 /// Utility functions for Arts dialect operations
-///==========================================================================
+///==========================================================================///
 
 /// Helper function to extract sizes from a datablock pointer
 /// by finding the original DbAllocOp or DbAcquireOp that created it
@@ -717,9 +769,9 @@ SmallVector<Value> getOffsetsFromDb(Value datablockPtr) {
   return {};
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // ForOp Canonicalization
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 void arts::ForOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                               MLIRContext *context) {
@@ -730,9 +782,9 @@ void arts::ForOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
   /// - Loop invariant code motion
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // ReductionOp Builders
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 void ReductionOp::build(OpBuilder &builder, OperationState &state, Value array,
                         Value result, Value lower_bound, Value upper_bound,

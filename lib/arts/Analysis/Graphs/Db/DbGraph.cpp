@@ -1,15 +1,17 @@
-///==========================================================================
+///==========================================================================///
 /// File: DbGraph.cpp
 /// Implementation of DbGraph for DB operation analysis.
-///==========================================================================
+///==========================================================================///
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
+#include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Db/DbAliasAnalysis.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Db/DbDataFlowAnalysis.h"
 #include "arts/Analysis/Db/DbInfo.h"
 #include "arts/Analysis/Graphs/Db/DbEdge.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "arts/Analysis/LoopAnalysis.h"
+#include "arts/Analysis/Loop/LoopAnalysis.h"
+#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "llvm/Support/Debug.h"
@@ -49,7 +51,7 @@ void DbGraph::build() {
     return;
   ARTS_DEBUG("Building DB Graph");
   invalidate();
-  collectNodes();
+  collectNodes(); 
   buildDependencies();
   computeOpOrder();
   computeMetrics();
@@ -560,7 +562,7 @@ void DbGraph::computeLoopDepth(DbAllocInfo &info) {
   assert(loopAnalysis && "Loop analysis required for loop depth");
   unsigned maxDepth = 0;
   for (auto *node : info.acquireNodes) {
-    SmallVector<LoopInfo *, 4> enclosingLoops;
+    SmallVector<LoopNode *, 4> enclosingLoops;
     loopAnalysis->collectEnclosingLoops(node->getOp(), enclosingLoops);
     maxDepth = std::max<unsigned>(maxDepth, enclosingLoops.size());
   }

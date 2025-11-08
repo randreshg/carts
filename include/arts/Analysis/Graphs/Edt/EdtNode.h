@@ -1,7 +1,7 @@
-///==========================================================================
+///==========================================================================///
 /// File: EdtNode.h
 /// Defines EDT-specific nodes derived from NodeBase.
-///==========================================================================
+///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_GRAPHS_EDT_EDTNODE_H
 #define ARTS_ANALYSIS_GRAPHS_EDT_EDTNODE_H
@@ -15,6 +15,12 @@
 namespace mlir {
 namespace arts {
 
+/// Forward declaration
+class LoopNode;
+
+////===----------------------------------------------------------------------===////
+/// EdtNode - represents an EDT operation
+////===----------------------------------------------------------------------===////
 class EdtNode : public NodeBase {
 public:
   EdtNode(EdtOp op);
@@ -33,6 +39,11 @@ public:
   EdtInfo &getInfo() { return info; }
   const EdtInfo &getInfo() const { return info; }
 
+  /// Loop association
+  void setAssociatedLoop(LoopNode *loop) { associatedLoop = loop; }
+  LoopNode *getAssociatedLoop() { return associatedLoop; }
+  const LoopNode *getAssociatedLoop() const { return associatedLoop; }
+
   NodeKind getKind() const override { return NodeKind::EdtTask; }
   static bool classof(const NodeBase *N) {
     return N->getKind() == NodeKind::EdtTask;
@@ -43,6 +54,9 @@ private:
   Operation *opPtr = nullptr;
   std::string hierId;
   EdtInfo info;
+
+  /// Optional association with an enclosing loop
+  LoopNode *associatedLoop = nullptr;
 };
 
 } // namespace arts

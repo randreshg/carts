@@ -1,4 +1,4 @@
-///==========================================================================
+///==========================================================================///
 /// File: Concurrency.cpp
 /// Defines concurrency-driven optimizations using ARTS analysis managers.
 /// The Concurrency pass make high-level decisions about task (EDT) placement
@@ -6,7 +6,7 @@
 /// nodes—essentially, deciding locality (e.g., which worker thread, node, or
 /// memory tier) based on access patterns, dependencies, and the abstract
 /// machine model.
-///==========================================================================
+///==========================================================================///
 
 #include "ArtsPassDetails.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
@@ -31,9 +31,9 @@ ARTS_DEBUG_SETUP(concurrency)
 using namespace mlir;
 using namespace mlir::arts;
 
-///==========================================================================
+///==========================================================================///
 /// ConcurrencyPass
-///==========================================================================
+///==========================================================================///
 struct ConcurrencyPass : public ConcurrencyBase<ConcurrencyPass> {
   explicit ConcurrencyPass(ArtsAnalysisManager *AM) : AM(AM) {
     assert(AM && "ArtsAnalysisManager must be provided externally");

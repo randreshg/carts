@@ -1,7 +1,12 @@
-#ifndef CARTS_DIALECT_CARTS_PASSES_H
-#define CARTS_DIALECT_CARTS_PASSES_H
+///==========================================================================///
+/// File: ArtsPasses.h
+///
+/// This file defines the ArtsPasses class which is used to register the passes
+/// for the ARTS dialect.
+///==========================================================================///
 
-// #include <memory>
+#ifndef ARTS_PASSES_ARTSPASSES_H
+#define ARTS_PASSES_ARTSPASSES_H
 
 #include "arts/ArtsDialect.h"
 #include "mlir/Conversion/LLVMCommon/LoweringOptions.h"
@@ -50,31 +55,31 @@ void registerDialect(DialectRegistry &registry);
 
 namespace omp {
 class OpenMPDialect;
-} // end namespace omp
+} // namespace omp
 
 namespace memref {
 class MemRefDialect;
-} // end namespace memref
+} // namespace memref
 
 namespace LLVM {
 class LLVMDialect;
-} // end namespace LLVM
+} // namespace LLVM
 
 namespace func {
 class FuncDialect;
-} // end namespace func
+} // namespace func
 
 namespace arith {
 class ArithDialect;
-} // end namespace arith
+} // namespace arith
 
 namespace polygeist {
 class PolygeistDialect;
-} // end namespace polygeist
+} // namespace polygeist
 
 #define GEN_PASS_REGISTRATION
 #include "arts/Passes/ArtsPasses.h.inc"
 
-} // end namespace mlir
+} // namespace mlir
 
-#endif // CARTS_DIALECT_CARTS_PASSES_H
+#endif /// CARTS_DIALECT_CARTS_PASSES_H

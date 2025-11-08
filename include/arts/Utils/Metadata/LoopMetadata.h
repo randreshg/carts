@@ -1,11 +1,11 @@
-///==========================================================================
+///==========================================================================///
 /// File: LoopMetadata.h
 ///
 /// This file defines the LoopMetadata class for managing loop metadata
 /// operations. It provides a clean, object-oriented interface for querying
 /// and attaching metadata to loop operations (affine.for, scf.for,
 /// scf.parallel, etc.).
-///==========================================================================
+///==========================================================================///
 
 #ifndef ARTS_UTILS_LOOPMETADATA_H
 #define ARTS_UTILS_LOOPMETADATA_H
@@ -48,12 +48,12 @@ constexpr StringLiteral LocationKey = "location_key";
 } // namespace LoopMetadata
 } // namespace AttrNames
 
-//===--------------------------------------------------------------------===//
+///===--------------------------------------------------------------------===///
 /// LoopMetadata - Manages metadata for loop operations
 ///
 /// This class provides an interface for querying and attaching metadata
 /// to loop operations.
-//===--------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 class LoopMetadata : public ArtsMetadata {
 public:
   //===-------------------------------------------------------------===//

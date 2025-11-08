@@ -293,18 +293,27 @@ show_usage() {
 
     echo ""
     echo "Pipeline Options (for 'run' command):"
-    carts_cmd "--complete"                   "Run complete pipeline (default)"
-    carts_cmd "--simplify"                   "Stop after initial cleanup and simplification"
-    carts_cmd "--arts-inliner"               "Stop after ARTS inliner"
-    carts_cmd "--convert-openmp"             "Stop after OpenMP conversion"
-    carts_cmd "--edt-transforms"             "Stop after EDT transformations"
-    carts_cmd "--edt-lowering"               "Stop after EDT lowering"
-    carts_cmd "--datablock"                  "Stop after datablock creation and optimization"
-    carts_cmd "--epochs"                     "Stop after epoch creation"
-    carts_cmd "--arts-to-llvm"               "Stop after ARTS to LLVM conversion"
+    carts_cmd "--stop-at=<stage>"            "Stop pipeline at specified stage (see stages below)"
+    carts_cmd "--complete"                   "Run complete pipeline (default, same as --stop-at=complete)"
     carts_cmd "--all-stages"                 "Dump intermediate MLIR for all pipeline stages"
     carts_cmd "--emit-llvm"                  "Emit LLVM IR output (can be used with any stage)"
     carts_cmd "-g"                           "Enable MLIR/LLVM debug info emission during run"
+    echo ""
+    echo "Available pipeline stages (use with --stop-at=<stage>):"
+    carts_cmd "canonicalize-memrefs"         "Stop after canonicalizing memrefs pass"
+    carts_cmd "collect-metadata"             "Stop after collecting metadata"
+    carts_cmd "initial-cleanup"              "Stop after initial cleanup and simplification"
+    carts_cmd "openmp-to-arts"                "Stop after OpenMP to Arts conversion"
+    carts_cmd "edt-transforms"               "Stop after EDT transformations"
+    carts_cmd "create-dbs"                   "Stop after Dbs creation"
+    carts_cmd "db-opt"                       "Stop after Dbs optimization"
+    carts_cmd "edt-opt"                      "Stop after EDT optimizations"
+    carts_cmd "concurrency"                  "Stop after concurrency"
+    carts_cmd "concurrency-opt"              "Stop after concurrency optimization"
+    carts_cmd "epochs"                       "Stop after Epochs creation"
+    carts_cmd "pre-lowering"                 "Stop after pre-lowering transformations"
+    carts_cmd "arts-to-llvm"                 "Stop after Arts to LLVM conversion"
+    carts_cmd "complete"                     "Run complete pipeline (default)"
     
     echo ""
     echo "Execute Options (for 'execute' command):"
@@ -334,6 +343,8 @@ show_usage() {
     carts_cmd "carts cgeist simple.cpp -std=c++17 -fopenmp -O0 -S"              "Convert C++ to MLIR"
     carts_cmd "carts clang simple.cpp -fopenmp -o simple"                       "Compile C++ with OpenMP directly"
     carts_cmd "carts run simple.mlir --complete --emit-llvm"                    "Full pipeline to LLVM"
+    carts_cmd "carts run simple.mlir --stop-at=openmp-to-arts"                  "Stop after OpenMP conversion"
+    carts_cmd "carts run simple.mlir --stop-at=create-dbs"                      "Stop after DB creation"
     carts_cmd "carts run simple.mlir --all-stages"                              "Dump all intermediate stages"
     carts_cmd "carts compile simple.ll -o simple"                               "Compile LLVM to executable"
     carts_cmd "carts execute simple.cpp -o simple"                              "Complete pipeline: C++ to executable"
@@ -515,7 +526,7 @@ run_run() {
     output_dir="$(cd "$output_dir" && pwd)"
     
     local stem="$(basename "${source_file%.*}")"
-    local STAGES=("simplify" "arts-inliner" "openmp-to-arts" "edt-transforms" "db" "edt" "epochs" "pre-lowering" "arts-to-llvm")
+    local STAGES=("canonicalize-memrefs" "collect-metadata" "initial-cleanup" "openmp-to-arts" "edt-transforms" "create-dbs" "db-opt" "edt-opt" "concurrency" "concurrency-opt" "epochs" "pre-lowering" "arts-to-llvm")
     local total_steps=$((2 + ${#STAGES[@]})) step=1
     
     carts_header "CARTS Pipeline Dump"
@@ -529,7 +540,7 @@ run_run() {
         step=$((step + 1))
         local out="$output_dir/${stem}_${stage}.mlir"
         carts_step "[$step/$total_steps] Dumping stage '${stage}' -> $out"
-        "${CARTS_INSTALL_DIR}/bin/carts-run" "${base_cmd[@]}" --${stage} -o "$out" "${remaining_args[@]}"
+        "${CARTS_INSTALL_DIR}/bin/carts-run" "${base_cmd[@]}" --stop-at="$stage" -o "$out" "${remaining_args[@]}"
     done
     
     local final_mlir="$output_dir/${stem}_complete.mlir"

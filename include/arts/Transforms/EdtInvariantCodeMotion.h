@@ -1,4 +1,4 @@
-///===========================================================================
+///==========================================================================///
 /// File: EdtInvariantCodeMotion.h
 ///
 /// Problem - When operations within EDT regions are invariant (depend only on
@@ -37,7 +37,7 @@
 /// it will create datablocks for all values used in the EDT region. If the
 /// invariant code is not moved out, the db will be created for the
 /// invariant code, which is not the intended behavior.
-///===========================================================================
+///==========================================================================///=
 
 #ifndef CARTS_TRANSFORMS_EDTINVARIANTCODEMOTION_H
 #define CARTS_TRANSFORMS_EDTINVARIANTCODEMOTION_H

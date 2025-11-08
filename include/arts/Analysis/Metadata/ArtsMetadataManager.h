@@ -1,12 +1,12 @@
-///==========================================================================
+///==========================================================================///
 /// ArtsMetadataManager.h - Centralized Metadata Management
 ///
 /// Centralized interface for managing metadata collection, attachment, and
 /// recovery across MLIR operations.
-///==========================================================================
+///==========================================================================///
 
-#ifndef ARTS_UTILS_ARTSMETADATAMANAGER_H
-#define ARTS_UTILS_ARTSMETADATAMANAGER_H
+#ifndef ARTS_ANALYSIS_METADATA_ARTSMETADATAMANAGER_H
+#define ARTS_ANALYSIS_METADATA_ARTSMETADATAMANAGER_H
 
 #include "arts/Utils/Metadata/ArtsMetadata.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
@@ -38,14 +38,14 @@ constexpr StringLiteral Allocations = "allocations";
 } // namespace Metadata
 } // namespace AttrNames
 
-//===--------------------------------------------------------------------===//
+///===--------------------------------------------------------------------===///
 /// ArtsMetadataManager - Metadata management
 ///
 /// This class manages the lifecycle of metadata objects and provides a clean
 /// interface for metadata collection, attachment, and recovery. It maintains
 /// a mapping from operations to their metadata and supports batch operations.
 ///
-//===--------------------------------------------------------------------===//
+///===--------------------------------------------------------------------===///
 class ArtsMetadataManager {
 public:
   explicit ArtsMetadataManager(MLIRContext *context) : context_(context) {
@@ -171,4 +171,5 @@ private:
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_UTILS_ARTSMETADATAMANAGER_H
+#endif // ARTS_ANALYSIS_METADATA_ARTSMETADATAMANAGER_H
+

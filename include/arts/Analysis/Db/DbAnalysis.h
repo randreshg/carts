@@ -1,8 +1,8 @@
-///==========================================================================
+///==========================================================================///
 /// File: DbAnalysis.h
 ///
 /// This file defines the central analysis for DB operations.
-///==========================================================================
+///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_DB_DBANALYSIS_H
 #define ARTS_ANALYSIS_DB_DBANALYSIS_H
@@ -17,7 +17,7 @@ namespace mlir {
 namespace arts {
 class DbGraph;
 class DbAliasAnalysis;
-struct LoopAnalysis;
+class LoopAnalysis;
 class DbDataFlowAnalysis;
 class DbAcquireOp;
 class ArtsAnalysisManager;
@@ -55,6 +55,7 @@ public:
   DbAliasAnalysis *getAliasAnalysis() { return dbAliasAnalysis.get(); }
   LoopAnalysis *getLoopAnalysis() { return loopAnalysis.get(); }
   DbDataFlowAnalysis *getDataFlowAnalysis() { return dbDataFlowAnalysis.get(); }
+  ArtsAnalysisManager &getAnalysisManager() { return AM; }
 
 private:
   ArtsAnalysisManager &AM;

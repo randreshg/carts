@@ -1,13 +1,16 @@
-///==========================================================================
+///==========================================================================///
 /// File: EdtGraph.cpp
 /// Implementation of EdtGraph for EDT analysis and optimization.
-///==========================================================================
+///==========================================================================///
 
 #include "arts/Analysis/Graphs/Edt/EdtGraph.h"
+#include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbEdge.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Analysis/Graphs/Edt/EdtEdge.h"
 #include "arts/Analysis/Graphs/Edt/EdtNode.h"
+#include "arts/Analysis/Loop/LoopAnalysis.h"
+#include "arts/Analysis/Loop/LoopNode.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/JSON.h"
@@ -32,6 +35,7 @@ void EdtGraph::build() {
   invalidate();
   assert(dbGraph && "DbGraph is required to build EdtGraph");
   collectNodes();
+  linkEdtsToLoops();
   buildDependencies();
   isBuilt = true;
   needsRebuild = false;
@@ -238,6 +242,49 @@ void EdtGraph::collectNodes() {
   ARTS_INFO("Collected " << edtNodes.size() << " tasks");
 }
 
+/// Link EDTs to their enclosing loops (if any)
+void EdtGraph::linkEdtsToLoops() {
+  ARTS_INFO("Phase 1.5 - Linking EDTs to enclosing loops");
+
+  if (!dbGraph) {
+    ARTS_WARN("  No DbGraph available, skipping loop linking");
+    return;
+  }
+
+  /// Get LoopAnalysis through DbGraph -> DbAnalysis
+  auto *dbAnalysis = dbGraph->getAnalysis();
+  if (!dbAnalysis) {
+    ARTS_WARN("  No DbAnalysis available, skipping loop linking");
+    return;
+  }
+
+  auto *loopAnalysis = dbAnalysis->getLoopAnalysis();
+  if (!loopAnalysis) {
+    ARTS_WARN("  No LoopAnalysis available, skipping loop linking");
+    return;
+  }
+
+  size_t linkedCount = 0;
+  for (auto &[edtOp, edtNode] : edtNodes) {
+    Operation *op = edtOp.getOperation();
+
+    /// Find the immediately enclosing loop
+    for (Operation *parent = op->getParentOp(); parent;
+         parent = parent->getParentOp()) {
+      if (LoopNode *loopNode = loopAnalysis->getLoopNode(parent)) {
+        edtNode->setAssociatedLoop(loopNode);
+        linkedCount++;
+        ARTS_DEBUG("  Linked " << edtNode->getHierId() << " to loop "
+                               << loopNode->getHierId());
+        /// Only link to immediately enclosing loop
+        break;
+      }
+    }
+  }
+
+  ARTS_INFO("Linked " << linkedCount << " EDTs to loops");
+}
+
 SmallVector<EdtNode *> EdtGraph::getAllEdtNodes() {
   SmallVector<EdtNode *> result;
   for (auto &kv : edtNodes)
@@ -273,9 +320,8 @@ void EdtGraph::buildDependencies() {
       EdtNode *to = (order1 < order2) ? task2 : task1;
 
       /// Try to lift DB dependencies to EDT level
-      if (liftDbDepsToEdtDeps(from, to)) {
+      if (liftDbDepsToEdtDeps(from, to))
         edgeCount++;
-      }
     }
   }
 

@@ -1,7 +1,7 @@
-///==========================================================================
+///==========================================================================///
 /// File: DbAnalysis.cpp
 /// Implementation of the DbAnalysis class for DB operation analysis.
-///==========================================================================
+///==========================================================================///
 
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
@@ -9,7 +9,7 @@
 #include "arts/Analysis/Db/DbDataFlowAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "arts/Analysis/LoopAnalysis.h"
+#include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "llvm/Support/Debug.h"

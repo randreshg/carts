@@ -1,10 +1,10 @@
-///==========================================================================
+///==========================================================================///
 /// File: LocationMetadata.h
-//===----------------------------------------------------------------------===//
+///
 /// This file defines LocationMetadata for tracking and matching source code
 /// locations. This is a lightweight value type for representing source
 /// locations.
-///==========================================================================
+///==========================================================================///
 
 #ifndef ARTS_UTILS_LOCATIONMETADATA_H
 #define ARTS_UTILS_LOCATIONMETADATA_H
@@ -17,6 +17,9 @@
 namespace mlir {
 namespace arts {
 
+///===----------------------------------------------------------------------===///
+/// LocationMetadata
+///===----------------------------------------------------------------------===///
 class LocationMetadata {
 public:
   /// Attributes

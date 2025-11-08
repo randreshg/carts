@@ -1,7 +1,7 @@
-///==========================================================================
+///==========================================================================///
 /// File: DbAliasAnalysis.h
 /// Alias analysis helpers for DB nodes.
-///==========================================================================
+///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_DB_DBALIASANALYSIS_H
 #define ARTS_ANALYSIS_DB_DBALIASANALYSIS_H
@@ -42,7 +42,6 @@ public:
   Value getUnderlyingValue(const NodeBase &node);
 
 private:
-  DbAnalysis *analysis;
   DenseMap<std::pair<Value, Value>, AliasResult> aliasCache;
 };
 

@@ -1,8 +1,8 @@
-///==========================================================================
+///==========================================================================///
 /// File: ConcurrencyGraph.cpp
 ///
 /// This file implements the concurrency graph for EDT analysis.
-///==========================================================================
+///==========================================================================///
 
 #include "arts/Analysis/Graphs/Concurrency/ConcurrencyGraph.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"

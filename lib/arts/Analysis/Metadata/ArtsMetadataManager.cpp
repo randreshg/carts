@@ -1,10 +1,11 @@
-//===----------------------------------------------------------------------===//
-// ArtsMetadataManager.cpp
-//===----------------------------------------------------------------------===//
+////===----------------------------------------------------------------------===////
+/// ArtsMetadataManager.cpp
+////===----------------------------------------------------------------------===////
 
-#include "arts/Utils/Metadata/ArtsMetadataManager.h"
+#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
+#include "arts/Utils/ArtsDebug.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -12,12 +13,14 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
 
+ARTS_DEBUG_SETUP(metadata_manager);
+
 using namespace mlir;
 using namespace mlir::arts;
 
-//===----------------------------------------------------------------------===//
-// Metadata Addition
-//===----------------------------------------------------------------------===//
+////===----------------------------------------------------------------------===////
+/// Metadata Addition
+////===----------------------------------------------------------------------===////
 
 /// Add loop metadata for an operation
 LoopMetadata *ArtsMetadataManager::addLoopMetadata(Operation *op) {
@@ -34,9 +37,9 @@ ValueMetadata *ArtsMetadataManager::addValueMetadata(Operation *op) {
   return addMetadata<ValueMetadata>(op);
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Metadata Retrieval
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 LoopMetadata *ArtsMetadataManager::getLoopMetadata(Operation *op) {
   return getMetadata<LoopMetadata>(op);
@@ -64,13 +67,24 @@ ArtsMetadataManager::getValueMetadata(Operation *op) const {
   return getMetadata<ValueMetadata>(op);
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Batch Operations
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Walk all operations and import metadata from those with arts.* attributes
 void ArtsMetadataManager::importFromOperations(ModuleOp module) {
-  module.walk([&](Operation *op) { importFromOperation(op); });
+  ARTS_DEBUG_HEADER(ArtsMetadataManager::importFromOperations);
+
+  size_t importCount = 0;
+  module.walk([&](Operation *op) {
+    size_t before = metadataMap_.size();
+    importFromOperation(op);
+    if (metadataMap_.size() > before)
+      importCount++;
+  });
+
+  ARTS_DEBUG("Imported metadata for " << importCount << " operations");
+  ARTS_DEBUG_FOOTER(ArtsMetadataManager::importFromOperations);
 }
 
 /// Export all metadata objects to their respective operations
@@ -82,6 +96,11 @@ void ArtsMetadataManager::exportToOperations() {
 /// Walk the module and create metadata objects for operations with arts.*
 /// attributes
 void ArtsMetadataManager::collectFromModule(ModuleOp module) {
+  ARTS_DEBUG_HEADER(ArtsMetadataManager::collectFromModule);
+
+  size_t opsWithArtsAttrs = 0;
+  size_t importedCount = 0;
+
   module.walk([&](Operation *op) {
     bool hasArtsAttr = false;
     for (auto namedAttr : op->getAttrs()) {
@@ -94,47 +113,60 @@ void ArtsMetadataManager::collectFromModule(ModuleOp module) {
     if (!hasArtsAttr)
       return;
 
+    opsWithArtsAttrs++;
+    size_t before = metadataMap_.size();
+
     /// Try to import metadata based on operation type
     importFromOperation(op);
+
+    if (metadataMap_.size() > before)
+      importedCount++;
   });
+
+  ARTS_DEBUG("Found " << opsWithArtsAttrs << " operations with arts.* attributes");
+  ARTS_DEBUG("Successfully imported metadata for " << importedCount << " operations");
+  ARTS_DEBUG_FOOTER(ArtsMetadataManager::collectFromModule);
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // JSON Import/Export
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 bool ArtsMetadataManager::importFromJson(llvm::StringRef jsonStr) {
+  ARTS_DEBUG_HEADER(ArtsMetadataManager::importFromJson);
+
   // Parse JSON
   auto json = llvm::json::parse(jsonStr);
   if (!json) {
-    llvm::errs() << "Failed to parse JSON: " << toString(json.takeError())
-                 << "\n";
+    ARTS_ERROR("Failed to parse JSON: " << toString(json.takeError()));
     return false;
   }
 
   auto *root = json->getAsObject();
   if (!root) {
-    llvm::errs() << "JSON root is not an object\n";
+    ARTS_ERROR("JSON root is not an object");
     return false;
   }
 
   /// Import allocations
   if (auto *allocations = root->getObject(AttrNames::Metadata::Allocations)) {
     for (const auto &_ : *allocations) {
-      llvm::errs() << "Warning: importFromJson requires operations to attach "
-                      "metadata to\n";
-      llvm::errs() << "Use importFromOperations after loading from JSON file\n";
+      ARTS_WARN("importFromJson requires operations to attach metadata to");
+      ARTS_WARN("Use importFromOperations after loading from JSON file");
       return false;
     }
   }
 
+  ARTS_DEBUG_FOOTER(ArtsMetadataManager::importFromJson);
   return true;
 }
 
 bool ArtsMetadataManager::importFromJsonFile(llvm::StringRef filename) {
+  ARTS_DEBUG("Importing metadata from JSON file: " << filename);
+
   auto fileOrErr = llvm::MemoryBuffer::getFile(filename);
   if (!fileOrErr) {
-    llvm::errs() << "Error opening metadata file: " << filename << "\n";
+    ARTS_ERROR("Error opening metadata file: " << filename);
     return false;
   }
 
@@ -186,23 +218,26 @@ std::string ArtsMetadataManager::exportToJson() const {
 }
 
 bool ArtsMetadataManager::exportToJsonFile(llvm::StringRef filename) const {
+  ARTS_DEBUG("Exporting metadata to JSON file: " << filename);
+
   std::string jsonStr = exportToJson();
 
   // Write to file
   std::error_code ec;
   llvm::raw_fd_ostream file(filename, ec);
   if (ec) {
-    llvm::errs() << "Error opening file for writing: " << filename << "\n";
+    ARTS_ERROR("Error opening file for writing: " << filename);
     return false;
   }
 
   file << jsonStr;
+  ARTS_DEBUG("Successfully exported " << metadataMap_.size() << " metadata entries");
   return true;
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Iteration and Inspection
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 SmallVector<Operation *>
 ArtsMetadataManager::getOperationsWithMetadata() const {
@@ -237,9 +272,9 @@ SmallVector<Operation *> ArtsMetadataManager::getMemrefOperations() const {
   return ops;
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Debug and Utilities
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 void ArtsMetadataManager::printStatistics(llvm::raw_ostream &os) const {
   size_t loopCount = 0, memrefCount = 0, locationCount = 0, valueCount = 0;
@@ -289,9 +324,9 @@ void ArtsMetadataManager::dump() const {
   }
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Helper Methods
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 bool ArtsMetadataManager::isLoopOp(Operation *op) {
   return isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp, scf::ForallOp>(
@@ -312,11 +347,19 @@ void ArtsMetadataManager::importFromOperation(Operation *op) {
 
   if (isLoopOp(op)) {
     auto loopMeta = std::make_unique<LoopMetadata>(op);
-    if (loopMeta->importFromOp())
+    if (loopMeta->importFromOp()) {
+      ARTS_DEBUG_REGION({
+        ARTS_DEBUG("Imported LoopMetadata for operation: " << op->getName());
+      });
       metadataMap_[op] = std::move(loopMeta);
+    }
   } else if (isMemrefAllocOp(op)) {
     auto memrefMeta = std::make_unique<MemrefMetadata>(op);
-    if (memrefMeta->importFromOp())
+    if (memrefMeta->importFromOp()) {
+      ARTS_DEBUG_REGION({
+        ARTS_DEBUG("Imported MemrefMetadata for operation: " << op->getName());
+      });
       metadataMap_[op] = std::move(memrefMeta);
+    }
   }
 }

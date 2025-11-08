@@ -1,4 +1,4 @@
-///==========================================================================
+///==========================================================================///
 /// File: DbLowering.cpp
 ///
 /// Ensures datablock (DB) allocations use heap-resident handles.
@@ -8,7 +8,7 @@
 ///   see a uniform heap-based handle.
 /// Pointer-result uses are updated; GUID uses remain unchanged.
 /// db_acquire/release ops are recreated with the new handles.
-///==========================================================================
+///==========================================================================///
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
@@ -51,9 +51,9 @@ private:
 };
 } // namespace
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Lower datablock allocations to use opaque pointers
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void DbLoweringPass::runOnOperation() {
   module = getOperation();
   AC = new ArtsCodegen(module, false);
@@ -65,9 +65,9 @@ void DbLoweringPass::runOnOperation() {
   ARTS_DEBUG_REGION(module.dump(););
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Convert all DB allocation operations to use opaque pointers
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void DbLoweringPass::convertDbAllocOps() {
   SmallVector<DbAllocOp, 8> dbAllocOps;
   module.walk([&](arts::DbAllocOp allocOp) { dbAllocOps.push_back(allocOp); });
@@ -113,9 +113,9 @@ void DbLoweringPass::convertDbAllocOps() {
   }
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Update all users of the old allocation to use the new lowered allocation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
                                       DbAllocOp newAllocOp) {
   /// Replace all uses of the old GUID with the new GUID.
@@ -221,9 +221,9 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
   }
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Process a single DbAcquireOp and its nested acquire operations
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
                                         Value newPtr,
                                         SmallVector<Value> elementSizes) {
@@ -336,9 +336,9 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
   opsToRemove.insert(acquireOp);
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Helper function to get LLVM pointer from a base value and indices
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 Value DbLoweringPass::getLLVMPtr(Value base, ValueRange opIndices,
                                  Location loc) {
   if (opIndices.empty())
@@ -351,9 +351,9 @@ Value DbLoweringPass::getLLVMPtr(Value base, ValueRange opIndices,
                              strides);
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Pass creation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {
 std::unique_ptr<Pass> createDbLoweringPass() {

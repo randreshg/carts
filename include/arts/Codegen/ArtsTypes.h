@@ -1,6 +1,9 @@
-///==========================================================================
-/// File: ArtsTypes.h - ARTS Runtime Type Definitions
-///==========================================================================
+///==========================================================================///
+/// File: ArtsTypes.h
+///
+/// This file defines the ArtsTypes class which is used to define the types for
+/// the ARTS dialect.
+///==========================================================================///
 
 #ifndef CARTS_CODEGEN_ARTSRTTYPES_H
 #define CARTS_CODEGEN_ARTSRTTYPES_H
@@ -15,12 +18,12 @@
 namespace mlir {
 namespace arts {
 
-// Forward declarations
+/// Forward declarations
 class DbAllocOp;
 
 namespace types {
 
-/// IDs for all arts runtime library (RTL) functions.
+/// IDs for all ARTS runtime library (RTL) functions.
 #define ARTS_RTL_FUNCTIONS
 enum class RuntimeFunction {
 #define ARTS_RTL(Enum, ...) Enum,
@@ -34,7 +37,7 @@ enum class RuntimeFunction {
 #include "arts/Codegen/ArtsKinds.def"
 #undef ARTS_RTL_FUNCTIONS
 
-// Include ARTS runtime constants
+/// Include ARTS runtime constants
 #define ARTS_CONSTANTS
 #include "arts/Codegen/ArtsKinds.def"
 #undef ARTS_CONSTANTS
@@ -43,7 +46,7 @@ enum class RuntimeFunction {
 } // end namespace arts
 } // end namespace mlir
 
-/// Specialization of DenseMapInfo for RuntimeFunction enum
+/// Specialization of DenseMapInfo for RuntimeFunction enum.
 namespace llvm {
 template <> struct DenseMapInfo<mlir::arts::types::RuntimeFunction> {
   static mlir::arts::types::RuntimeFunction getEmptyKey() {

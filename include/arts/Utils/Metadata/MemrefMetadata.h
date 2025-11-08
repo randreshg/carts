@@ -1,10 +1,10 @@
-///==========================================================================
+///==========================================================================///
 /// File: MemrefMetadata.h
 ///
 /// This file defines the MemrefMetadata class for managing allocation metadata
 /// operations. It provides a clean, object-oriented interface for querying and
 /// attaching metadata to memref allocations.
-///==========================================================================
+///==========================================================================///
 
 #ifndef ARTS_UTILS_MEMREFMETADATA_H
 #define ARTS_UTILS_MEMREFMETADATA_H
@@ -29,9 +29,9 @@ namespace arts {
 /// Forward declarations
 enum class DimensionSourceType;
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Memory Analysis Enums
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 /// Memory access pattern classification
 enum class AccessPatternType {
@@ -107,7 +107,7 @@ constexpr StringLiteral NestingDepth = "nesting_depth";
 } // namespace MemrefMetadata
 } // namespace AttrNames
 
-//===--------------------------------------------------------------------===//
+///===--------------------------------------------------------------------===///
 /// MemrefMetadata - Manages metadata for memref allocations
 ///
 /// This class provides a clean interface for querying and attaching metadata
@@ -120,7 +120,7 @@ constexpr StringLiteral NestingDepth = "nesting_depth";
 ///     auto info = memrefMeta.getInfo();
 ///     auto footprint = memrefMeta.getMemoryFootprint();
 ///   }
-//===--------------------------------------------------------------------===//
+///===--------------------------------------------------------------------===///
 class MemrefMetadata : public ArtsMetadata {
 public:
   //===-------------------------------------------------------------===//
@@ -155,9 +155,9 @@ public:
   std::optional<TemporalLocalityLevel> temporalLocality;
   std::optional<SpatialLocalityLevel> spatialLocality;
 
-  //===--------------------------------------------------------------------===//
+  ///===--------------------------------------------------------------------===///
   /// Constructors
-  //===--------------------------------------------------------------------===//
+  ///===--------------------------------------------------------------------===///
 
   /// Construct from an allocation operation
   explicit MemrefMetadata(Operation *allocOp);

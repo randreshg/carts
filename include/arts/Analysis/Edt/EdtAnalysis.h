@@ -1,10 +1,10 @@
-///==========================================================================
+///==========================================================================///
 /// File: EdtAnalysis.h
 ///
 /// This pass performs a comprehensive analysis on arts.edt operations.
 /// It also provides helpers to analyze regions and find dependencies,
 /// parameters, and constants.
-///==========================================================================
+///==========================================================================///
 
 #ifndef CARTS_ANALYSIS_EDTANALYSIS_H
 #define CARTS_ANALYSIS_EDTANALYSIS_H
@@ -19,15 +19,15 @@
 #include "arts/Analysis/Edt/EdtInfo.h"
 #include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 
-// Forward declarations
+/// Forward declarations
 namespace mlir {
 namespace arts {
 class ArtsAnalysisManager;
 class DbGraph;
 
-//==========================================================================
-// EdtAnalysis: per-EDT summaries and pairwise affinity metrics
-//==========================================================================
+///==========================================================================///
+/// EdtAnalysis: per-EDT summaries and pairwise affinity metrics
+///==========================================================================///
 
 class EdtAnalysis {
 public:

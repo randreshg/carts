@@ -1,7 +1,8 @@
-///==========================================================================
+///==========================================================================///
 /// File: ArtsDebug.h
+///
 /// Centralized debug utilities for ARTS passes and components
-///==========================================================================
+///==========================================================================///
 
 #ifndef ARTS_UTILS_ARTSDEBUG_H
 #define ARTS_UTILS_ARTSDEBUG_H
@@ -37,8 +38,6 @@ static inline llvm::raw_ostream &debugStream() {
 #define ARTS_DEBUG_SETUP(pass_name)                                            \
   static constexpr const char *ARTS_DEBUG_TYPE_STR = #pass_name;
 
-/// Debug macros that work with LLVM's debug infrastructure
-// #define ARTS_DEBUG(x) DEBUG_WITH_TYPE(ARTS_DEBUG_TYPE_STR, { x; })
 
 /// ARTS debug stream accessor. Use this instead of llvm::dbgs()
 #define ARTS_DBGS() debugStream()

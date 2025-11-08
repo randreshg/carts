@@ -42,15 +42,15 @@ Follow LLVM coding standards: https://llvm.org/docs/CodingStandards.html
 ## Documentation and Comments
 
 ### File Headers
-- Use `///==========================================================================` format with clear description
+- Use `///==========================================================================///` format with clear description
 - Include file purpose and key functionality
 - Example:
 ```cpp
-///==========================================================================
+///==========================================================================///
 /// File: DbAnalysis.h
 ///
 /// This file defines the central analysis for DB operations.
-///==========================================================================
+///==========================================================================///
 ```
 
 ### Comment Style
@@ -118,15 +118,15 @@ Follow LLVM coding standards: https://llvm.org/docs/CodingStandards.html
 ## Documentation and Comments
 
 ### File Headers
-- Use `///==========================================================================` format with clear description
+- Use `///==========================================================================///` format with clear description
 - Include file purpose and key functionality
 - Example:
 ```cpp
-///==========================================================================
+///==========================================================================///
 /// File: DbAnalysis.h
 ///
 /// This file defines the central analysis for DB operations.
-///==========================================================================
+///==========================================================================///
 ```
 
 ### Comment Style

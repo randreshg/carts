@@ -1,10 +1,10 @@
-///==========================================================================
+///==========================================================================///
 /// File: EdtDataFlowAnalysis.cpp
 ///
 /// This file implements dataflow analysis for EDT dependencies.
 /// TEMPORARILY DISABLED - requires rework to properly integrate with
 /// MLIR dataflow analysis framework.
-///==========================================================================
+///==========================================================================///
 
 #include "arts/Analysis/Edt/EdtDataFlowAnalysis.h"
 

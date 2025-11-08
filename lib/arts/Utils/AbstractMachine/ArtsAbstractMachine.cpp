@@ -1,9 +1,9 @@
-///==========================================================================
+///==========================================================================///
 /// File: ArtsAbstractMachine.cpp
 ///
 /// Implementation of ARTS Abstract Machine with comprehensive configuration
 /// parsing and abstractMachine information capabilities.
-///==========================================================================
+///==========================================================================///
 
 /// Debug
 #include "arts/Utils/ArtsDebug.h"

@@ -1,4 +1,4 @@
-///==========================================================================
+///==========================================================================///
 /// Epoch Lowering Pass - Complete Implementation
 /// Transforms arts.epoch operations into runtime-compatible function calls
 /// and propagates epoch GUIDs to contained EdtCreateOps
@@ -8,7 +8,7 @@
 /// 2. Propagate the epoch GUID to all EdtCreateOps within the epoch
 /// 3. Lower epoch operations to runtime calls
 /// 4. Return the epoch GUID for synchronization
-///==========================================================================
+///==========================================================================///
 
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
@@ -38,9 +38,9 @@ using namespace mlir;
 using namespace mlir::func;
 using namespace mlir::arts;
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Epoch Lowering Pass Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 struct EpochLoweringPass : public arts::EpochLoweringBase<EpochLoweringPass> {
   explicit EpochLoweringPass(bool debug = false) : debugMode(debug) {}
   ~EpochLoweringPass() { delete AC; }
@@ -54,9 +54,9 @@ private:
   bool debugMode = false;
 };
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Pass Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 void EpochLoweringPass::runOnOperation() {
   module = getOperation();
@@ -149,9 +149,9 @@ void EpochLoweringPass::runOnOperation() {
   ARTS_DEBUG_REGION(module.dump(););
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Pass Registration
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 
 namespace mlir {
 namespace arts {

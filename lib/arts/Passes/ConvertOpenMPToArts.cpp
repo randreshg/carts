@@ -1,9 +1,9 @@
-///==========================================================================
+///==========================================================================///
 /// File: ConvertOpenMPToArts.cpp
 //
 // This file implements a module pass that converts OpenMP ops
 // (omp.parallel, omp.master, omp.task, etc.) into Arts ops
-///==========================================================================
+///==========================================================================///
 
 /// Dialects
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -33,9 +33,9 @@ ARTS_DEBUG_SETUP(convert_openmp_to_arts);
 
 using namespace mlir;
 using namespace arts;
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Conversion Patterns
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 /// Pattern to replace `omp.parallel` with `arts.edt` with `parallel` attribute
 struct OMPParallelToArtsPattern : public OpRewritePattern<omp::ParallelOp> {
   using OpRewritePattern::OpRewritePattern;
@@ -243,19 +243,30 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
 
         SmallVector<Value> pinnedIndices, chunkOffsets, chunkSizes;
 
-        for (size_t i = 0; i < allIndices.size() && i < allSizes.size(); ++i) {
-          /// Check if this dimension has size == 1 (pinned) or > 1 (chunk)
-          bool isPinned = false;
-          if (auto constOp =
-                  allSizes[i].getDefiningOp<arith::ConstantIndexOp>()) {
-            isPinned = (constOp.value() == 1);
-          }
+        /// If we have indices but no explicit sizes, treat indices as offsets
+        /// and use them as pinned dimensions (sizes will be analyzed later)
+        if (!allIndices.empty() && allSizes.empty()) {
+          /// No explicit chunk sizes - use indices as pinned dimensions
+          pinnedIndices = allIndices;
+          ARTS_DEBUG("  - No explicit sizes, using "
+                     << allIndices.size() << " indices as pinned dims");
+        } else {
+          /// We have explicit sizes - separate pinned from chunked dimensions
+          for (size_t i = 0; i < allIndices.size() && i < allSizes.size();
+               ++i) {
+            /// Check if this dimension has size == 1 (pinned) or > 1 (chunk)
+            bool isPinned = false;
+            if (auto constOp =
+                    allSizes[i].getDefiningOp<arith::ConstantIndexOp>()) {
+              isPinned = (constOp.value() == 1);
+            }
 
-          if (isPinned) {
-            pinnedIndices.push_back(allIndices[i]);
-          } else {
-            chunkOffsets.push_back(allIndices[i]);
-            chunkSizes.push_back(allSizes[i]);
+            if (isPinned) {
+              pinnedIndices.push_back(allIndices[i]);
+            } else {
+              chunkOffsets.push_back(allIndices[i]);
+              chunkSizes.push_back(allSizes[i]);
+            }
           }
         }
 
@@ -644,9 +655,9 @@ struct CallToARTSPattern : public OpRewritePattern<func::CallOp> {
   }
 };
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Pass Implementation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 namespace {
 struct ConvertOpenMPToArtsPass
     : public arts::ConvertOpenMPToArtsBase<ConvertOpenMPToArtsPass> {
@@ -677,9 +688,9 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   ARTS_DEBUG_REGION(module.dump(););
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Pass creation
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {
 std::unique_ptr<Pass> createConvertOpenMPtoArtsPass() {

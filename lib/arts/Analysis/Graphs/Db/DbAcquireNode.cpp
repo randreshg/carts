@@ -1,10 +1,10 @@
-///==========================================================================
+///==========================================================================///
 /// DbAcquireNode.cpp - Implementation of DbAcquire node
-///==========================================================================
+///==========================================================================///
 
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "arts/Analysis/LoopAnalysis.h"
+#include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -25,9 +25,9 @@ using namespace mlir::arts;
 #include "arts/Utils/ArtsDebug.h"
 ARTS_DEBUG_SETUP(db_acquire_node);
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // DbAcquireNode
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
                              DbAllocNode *rootAlloc, DbAnalysis *analysis,
                              std::string initialHierId)
@@ -546,10 +546,10 @@ void DbAcquireNode::collectAccesses(Value db) {
   }
 }
 
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 // Analyze Access Patterns
 /// Analyzes access patterns directly from EDT body by examining load/store ops
-//===----------------------------------------------------------------------===//
+///===----------------------------------------------------------------------===///
 void DbAcquireNode::analyzeAccessPatterns() {
   ARTS_DEBUG("Analyzing access patterns for " << getHierId());
 
@@ -557,6 +557,59 @@ void DbAcquireNode::analyzeAccessPatterns() {
     ARTS_DEBUG("  No EDT context, skipping pattern analysis");
     return;
   }
+
+  /// Check if root alloc has metadata with access pattern information
+  if (rootAlloc) {
+    bool usedMetadata = false;
+
+    /// Check for dominant access pattern from metadata
+    if (rootAlloc->dominantAccessPattern) {
+      ARTS_DEBUG("  Using dominantAccessPattern from metadata: "
+                 << static_cast<int>(*rootAlloc->dominantAccessPattern));
+      /// Map metadata pattern to our info structure
+      switch (*rootAlloc->dominantAccessPattern) {
+      case AccessPatternType::Sequential:
+        info.isStencil = false;
+        usedMetadata = true;
+        break;
+      case AccessPatternType::Strided:
+        info.isStencil = false;
+        usedMetadata = true;
+        break;
+      case AccessPatternType::GatherScatter:
+      case AccessPatternType::Random:
+        info.isStencil = false;
+        usedMetadata = true;
+        break;
+      default:
+        break;
+      }
+    }
+
+    /// Check for uniform access from metadata
+    if (rootAlloc->hasUniformAccess && *rootAlloc->hasUniformAccess) {
+      ARTS_DEBUG("  Metadata indicates uniform access pattern");
+      usedMetadata = true;
+    }
+
+    /// Check for stride information
+    if (rootAlloc->hasStrideOneAccess && *rootAlloc->hasStrideOneAccess) {
+      ARTS_DEBUG("  Metadata indicates stride-one access");
+      info.strides.clear();
+      info.strides.push_back(1);
+      usedMetadata = true;
+    }
+
+    /// If we got useful metadata, we can skip manual analysis
+    if (usedMetadata) {
+      ARTS_DEBUG("  Skipping manual access pattern analysis (using metadata)");
+      return;
+    }
+  }
+
+  /// Manual analysis if metadata not available
+  ARTS_DEBUG(
+      "  No metadata available, performing manual access pattern analysis");
 
   /// Collect all indices used in loads and stores
   DenseMap<unsigned, SmallVector<int64_t>> indicesPerDim;
