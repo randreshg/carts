@@ -96,13 +96,7 @@ def Db : Pass<"db", "mlir::ModuleOp"> {
     "arith::ArithDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createDbPass(nullptr, false, false)";
-  let options = [
-    Option<"exportJson", "export-json", "bool", /*default=*/"false",
-           "Export DB analysis to JSON files in output/ directory.">,
-    Option<"processParallel", "process-parallel", "bool", /*default=*/"true",
-           "Process parallel Dbs.">,
-  ];
+  let constructor = "mlir::arts::createDbPass(nullptr)";
 }
 
 def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {

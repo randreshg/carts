@@ -662,24 +662,20 @@ Value ArtsCodegen::computeLinearIndex(ArrayRef<Value> sizes,
     return indices.empty() ? createIndexConstant(0, loc) : indices[0];
 
   /// If all sizes are constants, we can compute strides statically
-  bool allSizesConstant = true;
-  SmallVector<int64_t> constSizes;
-  for (Value sz : sizes) {
-    if (auto constOp = sz.getDefiningOp<arith::ConstantIndexOp>()) {
-      constSizes.push_back(constOp.value());
-    } else {
-      allSizesConstant = false;
-      break;
-    }
-  }
+  bool allSizesConstant = llvm::all_of(sizes, [](Value sz) {
+    return sz.getDefiningOp<arith::ConstantIndexOp>() != nullptr;
+  });
 
   Value linearIndex = createIndexConstant(0, loc);
   if (allSizesConstant) {
     /// pre-compute strides when all sizes are constants
     SmallVector<int64_t> strides(sizes.size());
     strides.back() = 1;
-    for (int i = static_cast<int>(sizes.size()) - 2; i >= 0; --i)
-      strides[i] = strides[i + 1] * constSizes[i + 1];
+    for (int i = static_cast<int>(sizes.size()) - 2; i >= 0; --i) {
+      auto *constOp =
+          sizes[i + 1].getDefiningOp<arith::ConstantIndexOp>();
+      strides[i] = strides[i + 1] * constOp->value();
+    }
 
     for (size_t i = 0; i < indices.size(); ++i) {
       if (auto constIdx = indices[i].getDefiningOp<arith::ConstantIndexOp>()) {

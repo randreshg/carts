@@ -8,6 +8,7 @@
 #ifndef ARTS_ANALYSIS_METADATA_ARTSMETADATAMANAGER_H
 #define ARTS_ANALYSIS_METADATA_ARTSMETADATAMANAGER_H
 
+#include "arts/Utils/ArtsId.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
@@ -18,9 +19,11 @@
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/Support/JSON.h"
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace mlir {
 namespace arts {
@@ -64,15 +67,7 @@ public:
   MemrefMetadata *addMemrefMetadata(Operation *op);
   ValueMetadata *addValueMetadata(Operation *op);
 
-  template <typename MetadataT> MetadataT *addMetadata(Operation *op) {
-    static_assert(std::is_base_of<ArtsMetadata, MetadataT>::value,
-                  "MetadataT must derive from ArtsMetadata");
-
-    auto metadata = std::make_unique<MetadataT>(op);
-    MetadataT *ptr = metadata.get();
-    metadataMap_[op] = std::move(metadata);
-    return ptr;
-  }
+  template <typename MetadataT> MetadataT *addMetadata(Operation *op);
 
   //===------------------------------------------------------------------===//
   // Metadata Retrieval
@@ -123,7 +118,13 @@ public:
   // Metadata Removal
   //===------------------------------------------------------------------===//
   bool removeMetadata(Operation *op) { return metadataMap_.erase(op) > 0; }
-  void clear() { metadataMap_.clear(); }
+  void clear() {
+    metadataMap_.clear();
+    loopJsonCache.clear();
+    memrefJsonCache.clear();
+    jsonCacheInitialized = false;
+    nextMetadataId = 1;
+  }
 
   //===------------------------------------------------------------------===//
   // Batch Operations
@@ -136,7 +137,7 @@ public:
   // JSON Import/Export
   //===------------------------------------------------------------------===//
   bool importFromJson(llvm::StringRef jsonStr);
-  bool importFromJsonFile(llvm::StringRef filename);
+  bool importFromJsonFile(ModuleOp module, llvm::StringRef filename);
   std::string exportToJson() const;
   bool exportToJsonFile(llvm::StringRef filename) const;
 
@@ -151,6 +152,14 @@ public:
   MLIRContext *getContext() const { return context_; }
 
   //===------------------------------------------------------------------===//
+  // Metadata Recovery Helpers
+  //===------------------------------------------------------------------===//
+  void setMetadataFile(llvm::StringRef filename);
+  bool ensureLoopMetadata(Operation *op);
+  bool ensureMemrefMetadata(Operation *op);
+  ArtsId assignOperationId(Operation *op);
+
+  //===------------------------------------------------------------------===//
   // Debug and Utilities
   //===------------------------------------------------------------------===//
   void printStatistics(llvm::raw_ostream &os) const;
@@ -160,16 +169,38 @@ private:
   MLIRContext *context_;
   llvm::DenseMap<Operation *, std::unique_ptr<ArtsMetadata>> metadataMap_;
 
+  // JSON cache management
+  bool jsonCacheInitialized = false;
+  std::string metadataFilePath = ".carts-metadata.json";
+  llvm::StringMap<std::unique_ptr<llvm::json::Object>> loopJsonCache;
+  llvm::StringMap<std::unique_ptr<llvm::json::Object>> memrefJsonCache;
+  int64_t nextMetadataId = 1;
+
   //===------------------------------------------------------------------===//
   // Helper Methods
   //===------------------------------------------------------------------===//
   static bool isLoopOp(Operation *op);
   static bool isMemrefAllocOp(Operation *op);
   void importFromOperation(Operation *op);
+  bool loadJsonCache();
+  bool attachMetadataFromJson(
+      Operation *op, llvm::StringRef key,
+      llvm::StringMap<std::unique_ptr<llvm::json::Object>> &cache, bool isLoop);
+  void initializeMetadata(ArtsMetadata *metadata);
 };
 
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_ANALYSIS_METADATA_ARTSMETADATAMANAGER_H
+template <typename MetadataT>
+MetadataT *mlir::arts::ArtsMetadataManager::addMetadata(Operation *op) {
+  static_assert(std::is_base_of<ArtsMetadata, MetadataT>::value,
+                "MetadataT must derive from ArtsMetadata");
+  auto metadata = std::make_unique<MetadataT>(op);
+  MetadataT *ptr = metadata.get();
+  initializeMetadata(ptr);
+  metadataMap_[op] = std::move(metadata);
+  return ptr;
+}
 
+#endif // ARTS_ANALYSIS_METADATA_ARTSMETADATAMANAGER_H

@@ -4,14 +4,11 @@
 
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
-#include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
-#include "mlir/Interfaces/ValueBoundsOpInterface.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -36,78 +33,75 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
   if (!initialHierId.empty())
     hierId = std::move(initialHierId);
 
-  std::string hierTag = hierId.empty() ? std::string("<unassigned>") : hierId;
-  ARTS_DEBUG("Creating DbAcquireNode [" << hierTag << "] for operation:\n   "
-                                        << op);
-
-  const size_t numSizes = op.getSizes().size();
-  const size_t numOffsets = op.getOffsets().size();
-  const size_t numIndices = op.getIndices().size();
-
-  info.sizes.reserve(numSizes);
-  info.offsets.reserve(numOffsets);
-  info.indices.reserve(numIndices);
-  info.constSizes.reserve(numSizes);
-  info.constOffsets.reserve(numOffsets);
-
-  /// Copy slice parameters from the operation
-  info.sizes.assign(op.getSizes().begin(), op.getSizes().end());
-  info.offsets.assign(op.getOffsets().begin(), op.getOffsets().end());
-  info.indices.assign(op.getIndices().begin(), op.getIndices().end());
-
-  bool hasUnknown = false;
-
-  /// Extract constant offsets where possible
-  for (Value v : info.offsets) {
-    int64_t cst = INT64_MIN;
-    /// INT64_MIN indicates unknown offset
-    if (!arts::getConstantIndex(v, cst))
-      hasUnknown = true;
-    info.constOffsets.push_back(cst);
+  /// Verify operation is valid
+  Operation *opPtr = op.getOperation();
+  if (!opPtr) {
+    ARTS_ERROR("Cannot create DbAcquireNode: operation pointer is null");
+    return;
   }
 
-  /// Extract constant sizes and compute total element count
-  unsigned long long totalElems = 1;
-  for (Value v : info.sizes) {
-    int64_t cst = INT64_MIN;
-    /// INT64_MIN indicates unknown size
-    if (!arts::getConstantIndex(v, cst))
-      hasUnknown = true;
-    info.constSizes.push_back(cst);
-    if (hasUnknown)
-      continue;
+  /// Verify rootAlloc is valid
+  if (!rootAlloc) {
+    ARTS_ERROR("Cannot create DbAcquireNode: rootAlloc is null");
+    return;
+  }
 
-    /// Check for overflow when multiplying dimensions
-    if (totalElems <= std::numeric_limits<unsigned long long>::max() /
-                          std::max<int64_t>(cst, 1)) {
-      totalElems *= (unsigned long long)std::max<int64_t>(cst, 1);
-    } else {
-      totalElems = std::numeric_limits<unsigned long long>::max();
+  /// Estimate the footprint of this acquire from constant slice information.
+  bool hasUnknown = false;
+  unsigned long long totalElems = 1;
+  for (Value v : dbAcquireOp.getSizes()) {
+    int64_t cst = 0;
+    if (!arts::getConstantIndex(v, cst)) {
+      hasUnknown = true;
       break;
     }
+
+    if (cst <= 0)
+      continue;
+    if (totalElems >
+        std::numeric_limits<unsigned long long>::max() /
+            (unsigned long long)cst) {
+      estimatedBytes = std::numeric_limits<unsigned long long>::max();
+      hasUnknown = true;
+      break;
+    }
+    totalElems *= (unsigned long long)cst;
   }
 
-  /// Compute estimated bytes for this acquire slice
   if (!hasUnknown) {
-    unsigned long long elemBytes = arts::getElementTypeByteSize(
-        rootAlloc->getDbAllocOp().getElementType());
-    if (elemBytes > 0) {
-      if (totalElems >
-          std::numeric_limits<unsigned long long>::max() / elemBytes) {
-        info.estimatedBytes = std::numeric_limits<unsigned long long>::max();
-        ARTS_WARN("Estimated bytes overflow, using max value");
-      } else {
-        info.estimatedBytes = totalElems * elemBytes;
+    DbAllocOp rootAllocOp = rootAlloc->getDbAllocOp();
+    if (Type elementType = rootAllocOp.getElementType()) {
+      unsigned long long elemBytes = arts::getElementTypeByteSize(elementType);
+      if (elemBytes != 0) {
+        if (totalElems >
+            std::numeric_limits<unsigned long long>::max() / elemBytes) {
+          estimatedBytes = std::numeric_limits<unsigned long long>::max();
+        } else {
+          estimatedBytes = totalElems * elemBytes;
+        }
       }
     }
   }
 
   /// Identify the EDT that consumes this acquire and the block argument used
   Value ptrResult = dbAcquireOp.getPtr();
-  assert(ptrResult.hasOneUse() && "Acquire ptr should be used exactly once");
+  if (!ptrResult) {
+    ARTS_ERROR("DbAcquireOp ptr result is null");
+    return;
+  }
 
   /// The ptr result should be passed directly to an EDT or another acquire
-  Operation *singleUser = *ptrResult.getUsers().begin();
+  auto users = ptrResult.getUsers();
+  if (users.empty()) {
+    ARTS_ERROR("DbAcquireOp ptr has no users");
+    return;
+  }
+
+  Operation *singleUser = *users.begin();
+  if (!singleUser) {
+    ARTS_ERROR("DbAcquireOp ptr user is null");
+    return;
+  }
   if (auto nestedAcquire = dyn_cast<DbAcquireOp>(singleUser)) {
     /// Nested acquire; create child node lazily via getOrCreateAcquireNode
     /// The rest of this constructor computes info for this node; nested
@@ -137,24 +131,16 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
   if (useInEdt)
     collectAccesses(useInEdt);
   if (loads.size() > 0) {
-    info.inCount = 1;
-    info.outCount = 0;
+    inCount = 1;
+    outCount = 0;
   } else if (stores.size() > 0) {
-    info.inCount = 0;
-    info.outCount = 1;
+    inCount = 0;
+    outCount = 1;
   } else {
-    info.inCount = 1;
-    info.outCount = 1;
+    inCount = 1;
+    outCount = 1;
   }
 
-  /// Compute accessed offset ranges for this acquire
-  /// This analyzes the memory access patterns within the EDT
-  if (useInEdt) {
-    /// Compute accessed offset ranges for this acquire
-    computeAccessedOffsetRanges();
-    /// Analyze access patterns directly from EDT body
-    analyzeAccessPatterns();
-  }
 }
 
 DbAcquireNode *DbAcquireNode::getOrCreateAcquireNode(DbAcquireOp op) {
@@ -178,260 +164,8 @@ void DbAcquireNode::forEachChildNode(
 
 void DbAcquireNode::print(llvm::raw_ostream &os) const {
   os << "DbAcquireNode (" << getHierId() << ")";
-  os << " estimatedBytes=" << info.estimatedBytes;
+  os << " estimatedBytes=" << estimatedBytes;
   os << "\n";
-}
-
-/// Compute per-dimension accessed offset ranges for this acquire by scanning
-/// memref.load/store users inside the enclosing EDT. Returns, for each
-/// dimension, the acquire base offset and the best-known lower/upper index
-/// Values that were used (e.g., loop bounds or constant indices).
-SmallVector<DbOffsetRange, 4> DbAcquireNode::computeAccessedOffsetRanges() {
-  const size_t rank = info.sizes.size();
-  SmallVector<DbOffsetRange, 4> result(rank);
-  info.offsetRanges.clear();
-  info.offsetRanges.resize(rank);
-
-  if (rank == 0)
-    return result;
-
-  auto *loopAnalysis = analysis->getLoopAnalysis();
-  assert(loopAnalysis && "LoopAnalysis must be available");
-
-  OpBuilder builder(op);
-  builder.setInsertionPoint(op);
-
-  SmallVector<Value, 4> minIdx(rank, Value());
-  SmallVector<Value, 4> maxIdx(rank, Value());
-  SmallVector<std::optional<int64_t>, 4> minConst(rank);
-  SmallVector<std::optional<int64_t>, 4> maxConst(rank);
-  SmallVector<SmallVector<Value, 4>, 4> observed(rank);
-
-  auto tryConstIndex = [&](Value v) -> std::optional<int64_t> {
-    if (!v)
-      return std::nullopt;
-    auto lb = ValueBoundsConstraintSet::computeConstantBound(
-        presburger::BoundType::LB, v, std::nullopt, nullptr,
-        /*closedUB=*/false);
-    if (failed(lb))
-      return std::nullopt;
-    auto ub = ValueBoundsConstraintSet::computeConstantBound(
-        presburger::BoundType::UB, v, std::nullopt, nullptr,
-        /*closedUB=*/true);
-    if (failed(ub) || *lb != *ub)
-      return std::nullopt;
-    return *lb;
-  };
-
-  llvm::DenseMap<Value, llvm::DenseMap<Value, Value>> inclusiveUpperCache;
-
-  auto getInclusiveUpper = [&](Value ub, Value step) -> Value {
-    if (!ub || !step)
-      return Value();
-    auto &byStep = inclusiveUpperCache[ub];
-    if (auto it = byStep.find(step); it != byStep.end())
-      return it->second;
-
-    Value diff = builder.createOrFold<arith::SubIOp>(op->getLoc(), ub, step);
-    byStep.try_emplace(step, diff);
-    return diff;
-  };
-
-  auto updateMinConst = [&](size_t dim, int64_t value, Value src) {
-    auto &slot = minConst[dim];
-    if (!slot || value < *slot) {
-      slot = value;
-      if (src)
-        minIdx[dim] = src;
-    }
-  };
-  auto updateMaxConst = [&](size_t dim, int64_t value, Value src) {
-    auto &slot = maxConst[dim];
-    if (!slot || value > *slot) {
-      slot = value;
-      if (src)
-        maxIdx[dim] = src;
-    }
-  };
-
-  /// Process both loads and stores to get complete accessed index ranges.
-  auto processAccesses = [&](const SmallVector<Operation *, 16> &accesses) {
-    for (Operation *acc : accesses) {
-      if (!edtUser.getBody().isAncestor(acc->getParentRegion()))
-        continue;
-
-      Value mem;
-      ValueRange idxs;
-      if (auto ld = dyn_cast<memref::LoadOp>(acc)) {
-        mem = ld.getMemRef();
-        idxs = ld.getIndices();
-      } else if (auto ref = dyn_cast<arts::DbRefOp>(acc)) {
-        mem = ref.getSource();
-        idxs = ref.getIndices();
-      } else if (auto st = dyn_cast<memref::StoreOp>(acc)) {
-        mem = st.getMemRef();
-        idxs = st.getIndices();
-      } else {
-        continue;
-      }
-
-      if (!mem) {
-        ARTS_WARN("Encountered null memref value in access analysis");
-        continue;
-      }
-
-      auto memTy = dyn_cast<MemRefType>(mem.getType());
-      if (!memTy || (size_t)memTy.getRank() != rank)
-        continue;
-
-      if (idxs.size() < rank) {
-        ARTS_WARN("Skipping access with insufficient indices: have "
-                  << idxs.size() << ", expect " << rank);
-        continue;
-      }
-
-      for (size_t d = 0; d < rank; ++d) {
-        Value iv = idxs[d];
-        if (!iv) {
-          ARTS_WARN("Encountered null index value at dimension " << d);
-          continue;
-        }
-
-        observed[d].push_back(iv);
-
-        if (auto maybeConst = tryConstIndex(iv)) {
-          updateMinConst(d, *maybeConst, iv);
-          updateMaxConst(d, *maybeConst, iv);
-          continue;
-        }
-
-        Value lbV, ubV;
-        std::optional<int64_t> lbC, ubCMinusOne;
-
-        /// Use LoopAnalysis to find loops affecting this index expression.
-        SmallVector<Operation *, 4> affecting;
-        loopAnalysis->collectAffectingLoops(iv, affecting);
-        for (Operation *affectingLoop : affecting) {
-          if (!affectingLoop)
-            continue;
-          if (auto forOp = dyn_cast<scf::ForOp>(affectingLoop)) {
-            Value lbTmp = forOp.getLowerBound();
-            Value ubTmp = forOp.getUpperBound();
-            Value stepV = forOp.getStep();
-
-            if (!lbV)
-              lbV = lbTmp;
-            if (!ubV) {
-              Value inclusive = getInclusiveUpper(ubTmp, stepV);
-              ubV = inclusive ? inclusive : ubTmp;
-            }
-
-            if (auto lbVal = tryConstIndex(lbTmp))
-              if (!lbC || *lbVal < *lbC)
-                lbC = *lbVal;
-
-            if (auto ubVal = tryConstIndex(ubTmp)) {
-              int64_t stepVal = 1;
-              if (auto stepConst = tryConstIndex(stepV))
-                stepVal = *stepConst > 0 ? *stepConst : 1;
-              int64_t closed = *ubVal - stepVal;
-              if (!ubCMinusOne || closed > *ubCMinusOne)
-                ubCMinusOne = closed;
-            }
-          }
-        }
-
-        if (lbC)
-          updateMinConst(d, *lbC, lbV ? lbV : iv);
-        else if (lbV && !minIdx[d])
-          minIdx[d] = lbV;
-
-        if (ubCMinusOne)
-          updateMaxConst(d, *ubCMinusOne, ubV);
-        else if (ubV && !maxIdx[d])
-          maxIdx[d] = ubV;
-      }
-    }
-  };
-
-  /// Process both loads and stores to get complete accessed ranges
-  processAccesses(loads);
-  processAccesses(stores);
-
-  /// Refine bounds with value-bounds analysis when possible.
-  auto refineWithValueBounds = [&](size_t dim, presburger::BoundType kind,
-                                   bool closed, std::optional<int64_t> &slot,
-                                   Value &slotValue, bool isMin) {
-    for (Value candidate : observed[dim]) {
-      if (!candidate)
-        continue;
-      auto bound = ValueBoundsConstraintSet::computeConstantBound(
-          kind, candidate, std::nullopt, nullptr, closed);
-      if (failed(bound))
-        continue;
-      int64_t boundVal = *bound;
-      if (!slot || (isMin ? boundVal < *slot : boundVal > *slot)) {
-        slot = boundVal;
-        if (!slotValue)
-          slotValue = candidate;
-      }
-    }
-  };
-
-  for (size_t d = 0; d < rank; ++d) {
-    if (!minConst[d])
-      refineWithValueBounds(d, presburger::BoundType::LB, /*closed=*/false,
-                            minConst[d], minIdx[d], /*isMin=*/true);
-    if (!maxConst[d])
-      refineWithValueBounds(d, presburger::BoundType::UB, /*closed=*/true,
-                            maxConst[d], maxIdx[d], /*isMin=*/false);
-  }
-
-  /// Materialize constant indices if needed and populate result + info
-  for (size_t d = 0; d < rank; ++d) {
-    DbOffsetRange &range = result[d];
-
-    if (!minIdx[d] && minConst[d])
-      minIdx[d] =
-          builder.create<arith::ConstantIndexOp>(op->getLoc(), *minConst[d]);
-    if (!maxIdx[d] && maxConst[d])
-      maxIdx[d] =
-          builder.create<arith::ConstantIndexOp>(op->getLoc(), *maxConst[d]);
-
-    if (!minIdx[d] && !observed[d].empty())
-      minIdx[d] = observed[d].front();
-    if (!maxIdx[d] && !observed[d].empty())
-      maxIdx[d] = observed[d].front();
-
-    range.minIndex = minIdx[d];
-    range.maxIndex = maxIdx[d];
-    range.minConst = minConst[d];
-    range.maxConst = maxConst[d];
-
-    info.offsetRanges[d] = range;
-  }
-
-  ARTS_DEBUG_REGION({
-    auto stringifyValue = [](Value v) -> std::string {
-      if (!v)
-        return "?";
-      std::string buffer;
-      llvm::raw_string_ostream os(buffer);
-      v.print(os);
-      return os.str();
-    };
-
-    ARTS_DEBUG("Computed accessed offset ranges for " << getHierId());
-    for (size_t d = 0; d < rank; ++d) {
-      std::string minStr = minConst[d] ? std::to_string(*minConst[d])
-                                       : stringifyValue(minIdx[d]);
-      std::string maxStr = maxConst[d] ? std::to_string(*maxConst[d])
-                                       : stringifyValue(maxIdx[d]);
-      ARTS_DEBUG("  dim " << d << " => [" << minStr << ", " << maxStr << "]");
-    }
-  });
-
-  return result;
 }
 
 /// Compute a maximal prefix of invariant indices (one per leading dimension
@@ -443,7 +177,7 @@ SmallVector<Value, 4> DbAcquireNode::computeInvariantIndices() {
   ARTS_DEBUG("Starting invariant indices computation for " << dbAcquireOp);
 
   SmallVector<Value, 4> result;
-  const size_t rank = info.sizes.size();
+  const size_t rank = sizes.size();
 
   SmallVector<Operation *> memoryAccesses;
   getMemoryAccesses(memoryAccesses, true, true);
@@ -541,214 +275,6 @@ void DbAcquireNode::collectAccesses(Value db) {
       if (auto loadOp = dyn_cast<LLVM::LoadOp>(user)) {
         loads.push_back(user);
         continue;
-      }
-    }
-  }
-}
-
-///===----------------------------------------------------------------------===///
-// Analyze Access Patterns
-/// Analyzes access patterns directly from EDT body by examining load/store ops
-///===----------------------------------------------------------------------===///
-void DbAcquireNode::analyzeAccessPatterns() {
-  ARTS_DEBUG("Analyzing access patterns for " << getHierId());
-
-  if (!useInEdt) {
-    ARTS_DEBUG("  No EDT context, skipping pattern analysis");
-    return;
-  }
-
-  /// Check if root alloc has metadata with access pattern information
-  if (rootAlloc) {
-    bool usedMetadata = false;
-
-    /// Check for dominant access pattern from metadata
-    if (rootAlloc->dominantAccessPattern) {
-      ARTS_DEBUG("  Using dominantAccessPattern from metadata: "
-                 << static_cast<int>(*rootAlloc->dominantAccessPattern));
-      /// Map metadata pattern to our info structure
-      switch (*rootAlloc->dominantAccessPattern) {
-      case AccessPatternType::Sequential:
-        info.isStencil = false;
-        usedMetadata = true;
-        break;
-      case AccessPatternType::Strided:
-        info.isStencil = false;
-        usedMetadata = true;
-        break;
-      case AccessPatternType::GatherScatter:
-      case AccessPatternType::Random:
-        info.isStencil = false;
-        usedMetadata = true;
-        break;
-      default:
-        break;
-      }
-    }
-
-    /// Check for uniform access from metadata
-    if (rootAlloc->hasUniformAccess && *rootAlloc->hasUniformAccess) {
-      ARTS_DEBUG("  Metadata indicates uniform access pattern");
-      usedMetadata = true;
-    }
-
-    /// Check for stride information
-    if (rootAlloc->hasStrideOneAccess && *rootAlloc->hasStrideOneAccess) {
-      ARTS_DEBUG("  Metadata indicates stride-one access");
-      info.strides.clear();
-      info.strides.push_back(1);
-      usedMetadata = true;
-    }
-
-    /// If we got useful metadata, we can skip manual analysis
-    if (usedMetadata) {
-      ARTS_DEBUG("  Skipping manual access pattern analysis (using metadata)");
-      return;
-    }
-  }
-
-  /// Manual analysis if metadata not available
-  ARTS_DEBUG(
-      "  No metadata available, performing manual access pattern analysis");
-
-  /// Collect all indices used in loads and stores
-  DenseMap<unsigned, SmallVector<int64_t>> indicesPerDim;
-
-  /// Walk all memory operations
-  for (Operation *op : loads) {
-    if (auto loadOp = dyn_cast<memref::LoadOp>(op))
-      analyzeMemRefIndices(loadOp.getIndices(), indicesPerDim);
-  }
-
-  for (Operation *op : stores) {
-    if (auto storeOp = dyn_cast<memref::StoreOp>(op))
-      analyzeMemRefIndices(storeOp.getIndices(), indicesPerDim);
-  }
-
-  if (indicesPerDim.empty()) {
-    ARTS_DEBUG("  No analyzable access patterns found");
-    return;
-  }
-
-  /// Store indexed dimensions
-  for (auto &kv : indicesPerDim)
-    info.indexedDimensions.push_back(kv.first);
-  ARTS_DEBUG("  Found " << info.indexedDimensions.size()
-                        << " indexed dimensions");
-
-  buildAccessPatternsFromIndices(indicesPerDim);
-  detectStencilPattern();
-  computeStridesFromPatterns();
-}
-
-void DbAcquireNode::analyzeMemRefIndices(
-    ValueRange indices,
-    DenseMap<unsigned, SmallVector<int64_t>> &indicesPerDim) {
-  for (auto [dim, index] : llvm::enumerate(indices)) {
-    /// Try to extract constant index
-    int64_t constValue = INT64_MIN;
-    if (auto constOp = index.getDefiningOp<arith::ConstantIndexOp>())
-      constValue = constOp.value();
-
-    indicesPerDim[dim].push_back(constValue);
-  }
-}
-
-void DbAcquireNode::buildAccessPatternsFromIndices(
-    const DenseMap<unsigned, SmallVector<int64_t>> &indicesPerDim) {
-  /// Build pattern vectors
-  /// For now, store as separate patterns per access
-  if (indicesPerDim.empty())
-    return;
-
-  /// Find max number of accesses across all dimensions
-  size_t maxAccesses = 0;
-  for (auto &kv : indicesPerDim)
-    maxAccesses = std::max(maxAccesses, kv.second.size());
-
-  /// Build patterns
-  for (size_t i = 0; i < maxAccesses; ++i) {
-    SmallVector<int64_t> pattern;
-    for (unsigned dim : info.indexedDimensions) {
-      auto it = indicesPerDim.find(dim);
-      if (it != indicesPerDim.end() && i < it->second.size())
-        pattern.push_back(it->second[i]);
-      else
-        pattern.push_back(INT64_MIN);
-    }
-    info.accessPatterns.push_back(pattern);
-  }
-
-  ARTS_DEBUG("  Built " << info.accessPatterns.size() << " access patterns");
-}
-
-void DbAcquireNode::detectStencilPattern() {
-  if (info.accessPatterns.size() < 2)
-    return;
-
-  /// Check if all patterns differ by constant offsets
-  /// For simplicity, check first dimension only
-  if (info.indexedDimensions.empty())
-    return;
-
-  SmallVector<int64_t> offsets;
-  bool allConstant = true;
-
-  for (auto &pattern : info.accessPatterns) {
-    if (pattern.empty() || pattern[0] == INT64_MIN) {
-      allConstant = false;
-      break;
-    }
-    offsets.push_back(pattern[0]);
-  }
-
-  if (!allConstant || offsets.empty())
-    return;
-
-  /// Check if offsets form a regular pattern (e.g., i-1, i, i+1)
-  /// For stencil, we expect consecutive or symmetric offsets
-  int64_t minOffset = *std::min_element(offsets.begin(), offsets.end());
-  int64_t maxOffset = *std::max_element(offsets.begin(), offsets.end());
-
-  /// If offsets span a small range and are relatively uniform, it's a stencil
-  if (maxOffset - minOffset <= 10 && offsets.size() >= 2) {
-    info.isStencil = true;
-    info.stencilRadius = (maxOffset - minOffset) / 2;
-    ARTS_DEBUG("  Detected stencil pattern: radius=" << info.stencilRadius);
-  }
-}
-
-void DbAcquireNode::computeStridesFromPatterns() {
-  if (info.accessPatterns.size() < 2)
-    return;
-
-  ARTS_DEBUG("  Computing strides");
-
-  unsigned numDims = info.accessPatterns[0].size();
-  info.strides.resize(numDims, INT64_MIN);
-
-  for (unsigned dim = 0; dim < numDims; ++dim) {
-    SmallVector<int64_t> diffs;
-    for (size_t i = 1; i < info.accessPatterns.size(); ++i) {
-      int64_t prev = info.accessPatterns[i - 1][dim];
-      int64_t curr = info.accessPatterns[i][dim];
-
-      if (prev == INT64_MIN || curr == INT64_MIN) {
-        info.strides[dim] = INT64_MIN;
-        break;
-      }
-
-      diffs.push_back(curr - prev);
-    }
-
-    if (!diffs.empty() && info.strides[dim] != INT64_MIN) {
-      bool uniform = std::all_of(diffs.begin(), diffs.end(),
-                                 [&](int64_t d) { return d == diffs[0]; });
-      if (uniform) {
-        info.strides[dim] = diffs[0];
-        ARTS_DEBUG("    stride[" << dim << "] = " << info.strides[dim]);
-      } else {
-        info.strides[dim] = INT64_MIN;
       }
     }
   }

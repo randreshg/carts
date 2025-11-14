@@ -122,6 +122,7 @@ MemrefMetadata::stringToSpatialLocality(llvm::StringRef str) {
 ///===----------------------------------------------------------------------===///
 
 bool MemrefMetadata::importFromOp() {
+  importIdFromOp();
   /// Get the metadata attribute
   MemrefMetadataAttr attr =
       op_->getAttrOfType<MemrefMetadataAttr>(getMetadataName());
@@ -129,65 +130,51 @@ bool MemrefMetadata::importFromOp() {
     return false;
 
   /// Import basic type information
-  if (attr.getRank())
-    rank = attr.getRank().getInt();
+  if (auto rankVal = getIntFromAttr(attr.getRank()))
+    rank = *rankVal;
   allocationId = attr.getAllocationId().str();
 
   /// Import access pattern analysis
-  if (attr.getTotalAccesses())
-    totalAccesses = attr.getTotalAccesses().getInt();
-  if (attr.getReadCount())
-    readCount = attr.getReadCount().getInt();
-  if (attr.getWriteCount())
-    writeCount = attr.getWriteCount().getInt();
+  if (auto totalAccessesVal = getIntFromAttr(attr.getTotalAccesses()))
+    totalAccesses = *totalAccessesVal;
+  if (auto readCountVal = getIntFromAttr(attr.getReadCount()))
+    readCount = *readCountVal;
+  if (auto writeCountVal = getIntFromAttr(attr.getWriteCount()))
+    writeCount = *writeCountVal;
   if (attr.getReadWriteRatio())
     readWriteRatio = attr.getReadWriteRatio().getValueAsDouble();
-  if (attr.getAllAccessesAffine())
-    allAccessesAffine = attr.getAllAccessesAffine().getValue();
-  if (attr.getHasAffineAccesses())
-    hasAffineAccesses = attr.getHasAffineAccesses().getValue();
-  if (attr.getHasNonAffineAccesses())
-    hasNonAffineAccesses = attr.getHasNonAffineAccesses().getValue();
+  allAccessesAffine = getBoolFromAttr(attr.getAllAccessesAffine());
+  hasAffineAccesses = getBoolFromAttr(attr.getHasAffineAccesses());
+  hasNonAffineAccesses = getBoolFromAttr(attr.getHasNonAffineAccesses());
 
   /// Import memory characteristics
-  if (attr.getMemoryFootprint())
-    memoryFootprint = attr.getMemoryFootprint().getInt();
-  if (attr.getIsFlattenedArray())
-    isFlattenedArrayFlag = attr.getIsFlattenedArray().getValue();
+  if (auto memoryFootprintVal = getIntFromAttr(attr.getMemoryFootprint()))
+    memoryFootprint = *memoryFootprintVal;
+  isFlattenedArrayFlag = getBoolFromAttr(attr.getIsFlattenedArray());
 
   /// Import canonicalization metadata
-  if (attr.getShouldCanonicalize())
-    shouldCanonicalizeFlag = attr.getShouldCanonicalize().getValue();
-  if (attr.getIsCanonicalized())
-    isCanonicalizedFlag = attr.getIsCanonicalized().getValue();
+  shouldCanonicalizeFlag = getBoolFromAttr(attr.getShouldCanonicalize());
+  isCanonicalizedFlag = getBoolFromAttr(attr.getIsCanonicalized());
 
   /// Import lifetime information
-  if (attr.getFirstUseLocationKey())
-    firstUseLocation =
-        LocationMetadata::fromKey(attr.getFirstUseLocationKey().getValue());
-  if (attr.getLastUseLocationKey())
-    lastUseLocation =
-        LocationMetadata::fromKey(attr.getLastUseLocationKey().getValue());
+  firstUseId = getIntFromAttr(attr.getFirstUseId());
+  lastUseId = getIntFromAttr(attr.getLastUseId());
 
   /// Import extended access characterization
-  if (attr.getHasUniformAccess())
-    hasUniformAccess = attr.getHasUniformAccess().getValue();
-  if (attr.getHasStrideOneAccess())
-    hasStrideOneAccess = attr.getHasStrideOneAccess().getValue();
+  hasUniformAccess = getBoolFromAttr(attr.getHasUniformAccess());
+  hasStrideOneAccess = getBoolFromAttr(attr.getHasStrideOneAccess());
   if (attr.getDominantAccessPattern())
     dominantAccessPattern =
         stringToAccessPattern(attr.getDominantAccessPattern().getValue());
-  if (attr.getNestingDepth())
-    nestingDepth = attr.getNestingDepth().getInt();
-  if (attr.getAccessedInParallelLoop())
-    accessedInParallelLoop = attr.getAccessedInParallelLoop().getValue();
-  if (attr.getHasLoopCarriedDeps())
-    hasLoopCarriedDeps = attr.getHasLoopCarriedDeps().getValue();
-  if (attr.getReuseDistance())
-    reuseDistance = attr.getReuseDistance().getInt();
+  if (auto nestingDepthVal = getIntFromAttr(attr.getNestingDepth()))
+    nestingDepth = *nestingDepthVal;
+  accessedInParallelLoop = getBoolFromAttr(attr.getAccessedInParallelLoop());
+  hasLoopCarriedDeps = getBoolFromAttr(attr.getHasLoopCarriedDeps());
+  if (auto reuseDistanceVal = getIntFromAttr(attr.getReuseDistance()))
+    reuseDistance = *reuseDistanceVal;
   /// Backward compatibility: convert old bool to new enum
   if (attr.getHasGoodSpatialLocality()) {
-    spatialLocality = attr.getHasGoodSpatialLocality().getValue()
+    spatialLocality = getBoolFromAttr(attr.getHasGoodSpatialLocality())
                           ? SpatialLocalityLevel::Good
                           : SpatialLocalityLevel::Poor;
   }
@@ -212,16 +199,6 @@ Attribute MemrefMetadata::getMetadataAttr() const {
   /// Helper to convert optional double to FloatAttr
   auto toFloatAttr = [&](const std::optional<double> &v) -> FloatAttr {
     return v ? builder.getF64FloatAttr(*v) : FloatAttr();
-  };
-
-  /// Helper to convert optional string to StringAttr
-  auto toStrAttr = [&](const std::optional<std::string> &v) -> StringAttr {
-    return (v && !v->empty()) ? builder.getStringAttr(*v) : StringAttr();
-  };
-
-  /// Helper to convert LocationMetadata to StringAttr (key)
-  auto toLocKeyAttr = [&](const LocationMetadata &loc) -> StringAttr {
-    return loc.isValid() ? builder.getStringAttr(loc.toString()) : StringAttr();
   };
 
   /// Helper to convert AccessPatternType enum to StringAttr
@@ -254,7 +231,7 @@ Attribute MemrefMetadata::getMetadataAttr() const {
       /// Canonicalization metadata
       toBoolAttr(shouldCanonicalizeFlag), toBoolAttr(isCanonicalizedFlag),
       /// Lifetime information
-      toLocKeyAttr(firstUseLocation), toLocKeyAttr(lastUseLocation),
+      toIntAttr(firstUseId), toIntAttr(lastUseId),
       /// Extended access characterization
       toBoolAttr(hasUniformAccess), toBoolAttr(hasStrideOneAccess),
       toAccessPatternAttr(dominantAccessPattern), toIntAttr(nestingDepth),
@@ -263,6 +240,7 @@ Attribute MemrefMetadata::getMetadataAttr() const {
 }
 
 void MemrefMetadata::exportToJson(llvm::json::Object &json) const {
+  exportIdToJson(json);
   auto setI64 = [&](const std::optional<int64_t> &v, llvm::StringRef key) {
     if (v)
       json[key] = static_cast<int64_t>(*v);
@@ -275,11 +253,6 @@ void MemrefMetadata::exportToJson(llvm::json::Object &json) const {
     if (v)
       json[key] = static_cast<double>(*v);
   };
-  auto setStr = [&](const std::string &v, llvm::StringRef key) {
-    if (!v.empty())
-      json[key] = v;
-  };
-
   setI64(rank, AttrNames::MemrefMetadata::Rank);
   if (!allocationId.empty())
     json[AttrNames::MemrefMetadata::AllocationId.str()] = allocationId;
@@ -312,13 +285,16 @@ void MemrefMetadata::exportToJson(llvm::json::Object &json) const {
     json[AttrNames::MemrefMetadata::HasGoodSpatialLocality.str()] =
         spatialLocalityToString(*spatialLocality);
   /// Export lifetime information
-  if (firstUseLocation.isValid())
-    json["first_use_location"] = firstUseLocation.toString().str();
-  if (lastUseLocation.isValid())
-    json["last_use_location"] = lastUseLocation.toString().str();
+  if (firstUseId)
+    json[AttrNames::MemrefMetadata::FirstUseId.str()] =
+        static_cast<int64_t>(*firstUseId);
+  if (lastUseId)
+    json[AttrNames::MemrefMetadata::LastUseId.str()] =
+        static_cast<int64_t>(*lastUseId);
 }
 
 void MemrefMetadata::importFromJson(const llvm::json::Object &json) {
+  importIdFromJson(json);
   auto getI64 = [&](llvm::StringRef key, std::optional<int64_t> &out) {
     if (auto v = json.getInteger(key))
       out = static_cast<int64_t>(*v);
@@ -331,11 +307,6 @@ void MemrefMetadata::importFromJson(const llvm::json::Object &json) {
     if (auto v = json.getNumber(key))
       out = static_cast<double>(*v);
   };
-  auto getStr = [&](llvm::StringRef key, std::string &out) {
-    if (auto v = json.getString(key))
-      out = v->str();
-  };
-
   getI64(AttrNames::MemrefMetadata::Rank, rank);
   if (auto str = json.getString(AttrNames::MemrefMetadata::AllocationId))
     allocationId = str->str();
@@ -354,15 +325,10 @@ void MemrefMetadata::importFromJson(const llvm::json::Object &json) {
   getBool(AttrNames::MemrefMetadata::IsCanonicalized, isCanonicalizedFlag);
 
   /// Import lifetime information
-  if (auto *locObj = json.getObject("first_use_location"))
-    firstUseLocation.importFromJson(*locObj);
-  else if (auto locStr = json.getString("first_use_location"))
-    firstUseLocation = LocationMetadata::fromKey(*locStr);
-
-  if (auto *locObj = json.getObject("last_use_location"))
-    lastUseLocation.importFromJson(*locObj);
-  else if (auto locStr = json.getString("last_use_location"))
-    lastUseLocation = LocationMetadata::fromKey(*locStr);
+  if (auto v = json.getInteger(AttrNames::MemrefMetadata::FirstUseId))
+    firstUseId = static_cast<int64_t>(*v);
+  if (auto v = json.getInteger(AttrNames::MemrefMetadata::LastUseId))
+    lastUseId = static_cast<int64_t>(*v);
 
   getBool(AttrNames::MemrefMetadata::HasUniformAccess, hasUniformAccess);
   getBool(AttrNames::MemrefMetadata::HasStrideOneAccess, hasStrideOneAccess);

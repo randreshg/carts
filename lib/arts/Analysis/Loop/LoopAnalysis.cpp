@@ -4,6 +4,8 @@
 ///==========================================================================///
 
 #include "arts/Analysis/Loop/LoopAnalysis.h"
+#include "arts/Analysis/ArtsAnalysisManager.h"
+#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Utils/ArtsDebug.h"
 
 ARTS_DEBUG_SETUP(loop_analysis);
@@ -11,7 +13,9 @@ ARTS_DEBUG_SETUP(loop_analysis);
 using namespace mlir;
 using namespace mlir::arts;
 
-LoopAnalysis::LoopAnalysis(Operation *module) : module(cast<ModuleOp>(module)) {
+LoopAnalysis::LoopAnalysis(Operation *module,
+                           ArtsAnalysisManager *analysisManager)
+    : module(cast<ModuleOp>(module)), analysisManager(analysisManager) {
   run();
 }
 
@@ -29,20 +33,20 @@ void LoopAnalysis::run() {
   module.walk([&](Operation *op) {
     if (auto fop = dyn_cast<scf::ForOp>(op)) {
       loops.push_back(fop);
-      // Create LoopNode (auto-imports metadata)
-      loopNodes[fop] = std::make_unique<LoopNode>(fop);
+      // Create LoopNode (auto-imports metadata via LoopAnalysis)
+      loopNodes[fop] = std::make_unique<LoopNode>(fop, this);
       // Legacy LoopInfo
       loopInfoMap[fop] = new LoopInfo(false, {}, {}, fop, fop.getInductionVar());
     } else if (auto aop = dyn_cast<affine::AffineForOp>(op)) {
       loops.push_back(aop);
-      // Create LoopNode (auto-imports metadata)
-      loopNodes[aop] = std::make_unique<LoopNode>(aop);
+      // Create LoopNode (auto-imports metadata via LoopAnalysis)
+      loopNodes[aop] = std::make_unique<LoopNode>(aop, this);
       // Legacy LoopInfo
       loopInfoMap[aop] = new LoopInfo(true, aop, {}, {}, aop.getInductionVar());
     } else if (auto pop = dyn_cast<scf::ParallelOp>(op)) {
       loops.push_back(pop);
-      // Create LoopNode (auto-imports metadata)
-      loopNodes[pop] = std::make_unique<LoopNode>(pop);
+      // Create LoopNode (auto-imports metadata via LoopAnalysis)
+      loopNodes[pop] = std::make_unique<LoopNode>(pop, this);
       // Legacy LoopInfo (parallel loops have multiple IVs, use first)
       Value firstIV = pop.getInductionVars().empty() ? Value() : pop.getInductionVars()[0];
       loopInfoMap[pop] = new LoopInfo(false, {}, pop, {}, firstIV);
@@ -79,8 +83,8 @@ LoopNode *LoopAnalysis::getOrCreateLoopNode(Operation *loopOp) {
   if (it != loopNodes.end())
     return it->second.get();
 
-  // Create new LoopNode
-  auto newNode = std::make_unique<LoopNode>(loopOp);
+  // Create new LoopNode (pass this for LoopAnalysis)
+  auto newNode = std::make_unique<LoopNode>(loopOp, this);
   LoopNode *ptr = newNode.get();
   loopNodes[loopOp] = std::move(newNode);
 

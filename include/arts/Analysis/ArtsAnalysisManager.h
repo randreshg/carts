@@ -10,9 +10,9 @@
 #ifndef ARTS_ANALYSIS_ARTSANALYSISMANAGER_H
 #define ARTS_ANALYSIS_ARTSANALYSISMANAGER_H
 
-#include "arts/Analysis/Concurrency/ConcurrencyAnalysis.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Edt/EdtAnalysis.h"
+#include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -27,7 +27,6 @@ namespace arts {
 
 class DbGraph;
 class EdtGraph;
-class ConcurrencyGraph;
 
 /// Centralized manager for all ARTS analysis objects.
 /// Provides a clean public interface that exposes only analysis objects.
@@ -46,12 +45,11 @@ public:
   /// Get analysis objects
   DbAnalysis &getDbAnalysis();
   EdtAnalysis &getEdtAnalysis();
-  ConcurrencyAnalysis &getConcurrencyAnalysis();
+  LoopAnalysis &getLoopAnalysis();
 
   /// Graph getters (lazy-built and cached per function)
   DbGraph &getDbGraph(func::FuncOp func);
   EdtGraph &getEdtGraph(func::FuncOp func);
-  ConcurrencyGraph &getConcurrencyGraph(func::FuncOp func);
 
   /// Per-function invalidation
   bool invalidateFunction(func::FuncOp func);
@@ -86,7 +84,7 @@ private:
 
   std::unique_ptr<DbAnalysis> dbAnalysis;
   std::unique_ptr<EdtAnalysis> edtAnalysis;
-  std::unique_ptr<ConcurrencyAnalysis> concurrencyAnalysis;
+  std::unique_ptr<LoopAnalysis> loopAnalysis;
   std::unique_ptr<ArtsMetadataManager> metadataManager;
 };
 

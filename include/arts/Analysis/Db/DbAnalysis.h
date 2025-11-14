@@ -18,7 +18,6 @@ namespace arts {
 class DbGraph;
 class DbAliasAnalysis;
 class LoopAnalysis;
-class DbDataFlowAnalysis;
 class DbAcquireOp;
 class ArtsAnalysisManager;
 } // namespace arts
@@ -54,7 +53,6 @@ public:
   /// Access analyses
   DbAliasAnalysis *getAliasAnalysis() { return dbAliasAnalysis.get(); }
   LoopAnalysis *getLoopAnalysis() { return loopAnalysis.get(); }
-  DbDataFlowAnalysis *getDataFlowAnalysis() { return dbDataFlowAnalysis.get(); }
   ArtsAnalysisManager &getAnalysisManager() { return AM; }
 
 private:
@@ -62,7 +60,6 @@ private:
   llvm::DenseMap<func::FuncOp, std::unique_ptr<DbGraph>> functionGraphMap;
   std::unique_ptr<DbAliasAnalysis> dbAliasAnalysis;
   std::unique_ptr<LoopAnalysis> loopAnalysis;
-  std::unique_ptr<DbDataFlowAnalysis> dbDataFlowAnalysis;
 };
 
 } // namespace arts

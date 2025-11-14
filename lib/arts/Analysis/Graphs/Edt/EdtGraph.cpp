@@ -5,10 +5,10 @@
 
 #include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
-#include "arts/Analysis/Graphs/Db/DbEdge.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Analysis/Graphs/Edt/EdtEdge.h"
 #include "arts/Analysis/Graphs/Edt/EdtNode.h"
+#include "arts/Analysis/Edt/EdtDataFlowAnalysis.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/Loop/LoopNode.h"
 #include "arts/Utils/ArtsUtils.h"
@@ -21,6 +21,22 @@ using namespace mlir::arts;
 
 #include "arts/Utils/ArtsDebug.h"
 ARTS_DEBUG_SETUP(edt_analysis);
+
+namespace {
+StringRef depTypeToString(DbDepType type) {
+  switch (type) {
+  case DbDepType::RAW:
+    return "RAW";
+  case DbDepType::WAR:
+    return "WAR";
+  case DbDepType::WAW:
+    return "WAW";
+  case DbDepType::RAR:
+    return "RAR";
+  }
+  return "Dep";
+}
+} // namespace
 
 EdtGraph::EdtGraph(func::FuncOp func, DbGraph *dbGraph)
     : func(func), dbGraph(dbGraph) {
@@ -120,19 +136,6 @@ bool EdtGraph::isEdtReachable(EdtOp fromOp, EdtOp toOp) {
   return false;
 }
 
-SmallVector<NodeBase *, 4> EdtGraph::getDbDeps(EdtOp edt) const {
-  SmallVector<NodeBase *, 4> result;
-  EdtNode *edtNode = getEdtNode(edt);
-  if (!edtNode)
-    return result;
-
-  edt.walk([&](Operation *op) {
-    if (auto dbNode = dbGraph->getNode(op))
-      result.push_back(dbNode);
-  });
-  return result;
-}
-
 void EdtGraph::print(llvm::raw_ostream &os) {
   os << "===============================================\n";
   os << "EdtGraph for function: " << func.getName().str() << "\n";
@@ -148,11 +151,16 @@ void EdtGraph::print(llvm::raw_ostream &os) {
     task->print(os);
     os << "\n";
 
-    SmallVector<NodeBase *, 4> dbDeps = getDbDeps(pair.first);
+    SmallVector<DbEdgeSlice, 4> dbDeps;
+    for (auto *edge : task->getOutEdges())
+      if (auto *depEdge = dyn_cast<EdtDepEdge>(edge))
+        dbDeps.append(depEdge->getSlices().begin(),
+                      depEdge->getSlices().end());
     if (!dbDeps.empty()) {
       os << "  Data Dependencies:\n";
-      for (NodeBase *dbNode : dbDeps) {
-        os << "    - " << dbNode->getHierId() << "\n";
+      for (const auto &slice : dbDeps) {
+        os << "    - " << (slice.description.empty() ? "db" : slice.description)
+           << " (" << depTypeToString(slice.depType) << ")\n";
       }
     }
   }
@@ -268,28 +276,17 @@ void EdtGraph::linkEdtsToLoops() {
   for (auto &[edtOp, edtNode] : edtNodes) {
     Operation *op = edtOp.getOperation();
 
-    /// Find the immediately enclosing loop
-    for (Operation *parent = op->getParentOp(); parent;
-         parent = parent->getParentOp()) {
-      if (LoopNode *loopNode = loopAnalysis->getLoopNode(parent)) {
-        edtNode->setAssociatedLoop(loopNode);
-        linkedCount++;
-        ARTS_DEBUG("  Linked " << edtNode->getHierId() << " to loop "
-                               << loopNode->getHierId());
-        /// Only link to immediately enclosing loop
-        break;
-      }
+    SmallVector<LoopNode *, 4> enclosingLoops;
+    loopAnalysis->collectEnclosingLoops(op, enclosingLoops);
+    if (!enclosingLoops.empty()) {
+      edtNode->setAssociatedLoops(enclosingLoops);
+      linkedCount += enclosingLoops.size();
+      ARTS_DEBUG("  Linked " << edtNode->getHierId() << " to "
+                             << enclosingLoops.size() << " enclosing loops");
     }
   }
 
-  ARTS_INFO("Linked " << linkedCount << " EDTs to loops");
-}
-
-SmallVector<EdtNode *> EdtGraph::getAllEdtNodes() {
-  SmallVector<EdtNode *> result;
-  for (auto &kv : edtNodes)
-    result.push_back(kv.second.get());
-  return result;
+  ARTS_INFO("Linked " << linkedCount << " loop references to EDTs");
 }
 
 /// Build inter-EDT edges by connecting release sites in one EDT to acquire
@@ -302,133 +299,34 @@ void EdtGraph::buildDependencies() {
     return;
   }
 
-  auto allEdts = getAllEdtNodes();
-  unsigned edgeCount = 0;
+  auto *dbAnalysis = dbGraph->getAnalysis();
+  if (!dbAnalysis) {
+    ARTS_WARN("  No DbAnalysis available, skipping dependency construction");
+    return;
+  }
 
-  /// For each pair of EDTs, check for data dependencies
-  for (size_t i = 0; i < allEdts.size(); ++i) {
-    for (size_t j = i + 1; j < allEdts.size(); ++j) {
-      auto *task1 = allEdts[i];
-      auto *task2 = allEdts[j];
+  EdtDataFlowAnalysis dataflow(dbGraph, dbAnalysis);
+  auto deps = dataflow.run(func);
 
-      /// Check program order
-      unsigned order1 = dbGraph->getOpOrder(task1->getEdtOp().getOperation());
-      unsigned order2 = dbGraph->getOpOrder(task2->getEdtOp().getOperation());
+  unsigned created = 0;
+  for (auto &dep : deps) {
+    if (!dep.from || !dep.to || dep.slices.empty())
+      continue;
+    EdtNode *fromNode = getEdtNode(dep.from);
+    EdtNode *toNode = getEdtNode(dep.to);
+    if (!fromNode || !toNode)
+      continue;
 
-      /// Only create edges in program order direction
-      EdtNode *from = (order1 < order2) ? task1 : task2;
-      EdtNode *to = (order1 < order2) ? task2 : task1;
+    auto *edge = new EdtDepEdge(fromNode, toNode, dep.slices.front());
+    for (size_t idx = 1; idx < dep.slices.size(); ++idx)
+      edge->appendSlice(dep.slices[idx]);
 
-      /// Try to lift DB dependencies to EDT level
-      if (liftDbDepsToEdtDeps(from, to))
-        edgeCount++;
+    if (addEdge(fromNode, toNode, edge)) {
+      ++created;
+    } else {
+      delete edge;
     }
   }
 
-  ARTS_INFO("Created " << edgeCount << " EDT dependency edges");
-  ARTS_INFO("Phase 2 - Built " << edges.size() << " EDT dependencies");
-}
-
-bool EdtGraph::liftDbDepsToEdtDeps(EdtNode *fromTask, EdtNode *toTask) {
-  ARTS_DEBUG("Checking dependencies: " << fromTask->getHierId() << " -> "
-                                       << toTask->getHierId());
-
-  /// Get all DB acquires for each task
-  SmallVector<DbAcquireNode *> fromAcquires;
-  SmallVector<DbAcquireNode *> toAcquires;
-
-  /// Collect acquires from EDT dependencies
-  for (auto dep : fromTask->getEdtOp().getDependencies()) {
-    if (auto acqOp = dep.getDefiningOp<DbAcquireOp>()) {
-      if (auto *node = dbGraph->getDbAcquireNode(acqOp))
-        fromAcquires.push_back(node);
-    }
-  }
-
-  for (auto dep : toTask->getEdtOp().getDependencies()) {
-    if (auto acqOp = dep.getDefiningOp<DbAcquireOp>()) {
-      if (auto *node = dbGraph->getDbAcquireNode(acqOp))
-        toAcquires.push_back(node);
-    }
-  }
-
-  /// Find DB-level dependencies between acquires
-  SmallVector<DbDepEdge *> underlyingDeps;
-  bool hasRaw = false, hasWaw = false, hasWar = false;
-
-  for (auto *fromAcq : fromAcquires) {
-    for (auto *toAcq : toAcquires) {
-      /// Check if they access the same allocation
-      if (fromAcq->getParent() != toAcq->getParent())
-        continue;
-
-      /// Look for edge in DbGraph
-      auto *edge = dbGraph->getEdge(fromAcq, toAcq);
-      if (!edge)
-        continue;
-
-      auto *depEdge = dyn_cast<DbDepEdge>(edge);
-      if (!depEdge)
-        continue;
-
-      underlyingDeps.push_back(depEdge);
-
-      /// Classify dependency type
-      switch (depEdge->getDepType()) {
-      case DbDepType::RAW:
-        hasRaw = true;
-        break;
-      case DbDepType::WAW:
-        hasWaw = true;
-        break;
-      case DbDepType::WAR:
-        hasWar = true;
-        break;
-      case DbDepType::RAR:
-        break; /// Affinity, not ordering
-      }
-
-      ARTS_DEBUG("  Found DB dependency: " << fromAcq->getHierId() << " -> "
-                                           << toAcq->getHierId() << " ("
-                                           << depEdge->getType() << ")");
-    }
-  }
-
-  /// No dependencies found
-  if (underlyingDeps.empty())
-    return false;
-
-  /// Create EDT-level edge
-  EdgeBase *edtEdge = nullptr;
-
-  /// Find the DB node that causes the dependency
-  NodeBase *dbNode = nullptr;
-  for (auto *dep : underlyingDeps) {
-    /// Use the DB node from any dependency
-    dbNode = dep->getFrom();
-    break;
-  }
-
-  if (hasRaw) {
-    /// Consumer reads producer's writes
-    edtEdge = new EdtDepEdge(fromTask, toTask, dbNode);
-    ARTS_DEBUG("  Creating EDT DEP edge (RAW)");
-  } else if (hasWaw) {
-    /// Both write same data
-    edtEdge = new EdtDepEdge(fromTask, toTask, dbNode);
-    ARTS_DEBUG("  Creating EDT DEP edge (WAW)");
-  } else if (hasWar) {
-    /// WAR is control dependency
-    edtEdge = new EdtDepEdge(fromTask, toTask, dbNode);
-    ARTS_DEBUG("  Creating EDT CONTROL edge (WAR)");
-  }
-
-  if (edtEdge && addEdge(fromTask, toTask, edtEdge)) {
-    ARTS_INFO("  Created EDT edge: " << fromTask->getHierId() << " -> "
-                                     << toTask->getHierId());
-    return true;
-  }
-
-  delete edtEdge;
-  return false;
+  ARTS_INFO("Created " << created << " EDT dependency edges");
 }

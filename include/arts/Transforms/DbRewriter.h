@@ -184,6 +184,22 @@ private:
   DenseMap<Value, Value> valueMapping_;
 };
 
+/// Shared helper used by CreateDbs/DbPass to rewrite loads/stores after
+/// Db slicing. Applies chunk offsets and recomputes outer/inner indices.
+bool rewriteDbUserOperation(Operation *op, Type elementMemRefType,
+                            Value basePtr, Operation *dbOp,
+                            uint64_t initialIndex, ArrayRef<Value> chunkOffsets,
+                            OpBuilder &builder,
+                            llvm::SetVector<Operation *> &opsToRemove);
+
+/// Splits datablock indices into outer and inner indices based on the
+/// datablock's structure. For a memref<?xmemref<?xi32>> with indices [i, j, k]:
+/// - Outer indices [i]: select which element memref
+/// - Inner indices [j, k]: index into the element memref
+std::pair<SmallVector<Value>, SmallVector<Value>>
+splitDbIndices(Operation *dbOp, ValueRange indices, OpBuilder &builder,
+               Location loc);
+
 } // namespace arts
 } // namespace mlir
 

@@ -9,7 +9,9 @@
 #include "arts/Analysis/Graphs/Base/EdgeBase.h"
 #include "arts/Analysis/Graphs/Base/GraphBase.h"
 #include "arts/Analysis/Graphs/Base/NodeBase.h"
+#include "arts/Analysis/Graphs/Base/GraphTrait.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
+#include "arts/Analysis/Graphs/Edt/EdtEdge.h"
 #include "arts/Analysis/Graphs/Edt/EdtNode.h"
 #include "arts/ArtsDialect.h" // For EdtOp
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -44,8 +46,6 @@ public:
 
   /// Edt-specific methods
   bool isEdtReachable(EdtOp from, EdtOp to);
-  SmallVector<NodeBase *, 4> getDbDeps(EdtOp edt) const;
-  SmallVector<EdtNode *> getAllEdtNodes();
   func::FuncOp getFunction() const { return func; }
   bool hasDbGraph() const { return dbGraph != nullptr; }
   DbGraph *getDbGraph() const { return dbGraph; }
@@ -72,9 +72,6 @@ private:
   void linkEdtsToLoops();
   void buildDependencies();
   void populateChildrenCache(NodeBase *node);
-
-  /// Lift DB dependencies to EDT level for a pair of EDTs
-  bool liftDbDepsToEdtDeps(EdtNode *fromTask, EdtNode *toTask);
 };
 
 } // namespace arts

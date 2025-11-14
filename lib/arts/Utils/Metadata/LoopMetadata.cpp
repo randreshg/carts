@@ -113,6 +113,7 @@ LoopMetadata::stringToPartitioning(llvm::StringRef str) const {
 bool LoopMetadata::importFromOp() {
   MLIRContext *ctx = op_->getContext();
   OpBuilder builder(ctx);
+  importIdFromOp();
 
   /// Get the metadata attribute
   LoopMetadataAttr attr =
@@ -121,39 +122,45 @@ bool LoopMetadata::importFromOp() {
     return false;
 
   /// Parallelism analysis
-  potentiallyParallel = attr.getPotentiallyParallel().getValue();
-  hasReductions = attr.getHasReductions().getValue();
+  potentiallyParallel = getBoolFromAttr(attr.getPotentiallyParallel());
+  hasReductions = getBoolFromAttr(attr.getHasReductions());
   ArrayAttr reductionKindsAttr = attr.getReductionKinds();
-  for (auto kind : reductionKindsAttr.getValue())
-    reductionKinds.push_back(
-        stringToReductionKind(kind.cast<StringAttr>().str()));
+  reductionKinds.clear();
+  if (reductionKindsAttr) {
+    for (auto kind : reductionKindsAttr.getValue())
+      reductionKinds.push_back(
+          stringToReductionKind(kind.cast<StringAttr>().str()));
+  }
 
   /// Memory access patterns
-  readCount = attr.getReadCount().getInt();
-  writeCount = attr.getWriteCount().getInt();
+  readCount = getIntFromAttr(attr.getReadCount()).value_or(0);
+  writeCount = getIntFromAttr(attr.getWriteCount()).value_or(0);
 
   /// Loop structure information
-  tripCount = attr.getTripCount().getInt();
-  nestingLevel = attr.getNestingLevel().getInt();
+  tripCount = getIntFromAttr(attr.getTripCount()).value_or(0);
+  nestingLevel = getIntFromAttr(attr.getNestingLevel()).value_or(0);
 
   /// Access pattern analysis
-  hasUniformStride = attr.getHasUniformStride().getValue();
-  hasGatherScatter = attr.getHasGatherScatter().getValue();
-  dataMovementPattern = DataMovement(attr.getDataMovementPattern().getInt());
+  hasUniformStride = getBoolFromAttr(attr.getHasUniformStride());
+  hasGatherScatter = getBoolFromAttr(attr.getHasGatherScatter());
+  dataMovementPattern =
+      DataMovement(getIntFromAttr(attr.getDataMovementPattern()).value_or(0));
 
   /// Partitioning hints
   suggestedPartitioning =
-      Partitioning(attr.getSuggestedPartitioning().getInt());
-  suggestedChunkSize = attr.getSuggestedChunkSize().getInt();
-  memoryFootprintPerIter = attr.getMemoryFootprintPerIter().getInt();
+      Partitioning(getIntFromAttr(attr.getSuggestedPartitioning()).value_or(0));
+  suggestedChunkSize = getIntFromAttr(attr.getSuggestedChunkSize()).value_or(0);
+  memoryFootprintPerIter =
+      getIntFromAttr(attr.getMemoryFootprintPerIter()).value_or(0);
 
   /// Dependency information
-  hasInterIterationDeps = attr.getHasInterIterationDeps().getValue();
-  dependenceDistance = attr.getDependenceDistance().getInt();
+  hasInterIterationDeps = getBoolFromAttr(attr.getHasInterIterationDeps());
+  dependenceDistance = getIntFromAttr(attr.getDependenceDistance()).value_or(0);
   return true;
 }
 
 void LoopMetadata::importFromJson(const llvm::json::Object &json) {
+  importIdFromJson(json);
   potentiallyParallel =
       json.getBoolean(AttrNames::LoopMetadata::PotentiallyParallel)
           .value_or(false);
@@ -195,6 +202,7 @@ void LoopMetadata::importFromJson(const llvm::json::Object &json) {
 }
 
 void LoopMetadata::exportToJson(llvm::json::Object &json) const {
+  exportIdToJson(json);
   json[AttrNames::LoopMetadata::PotentiallyParallel.str()] =
       potentiallyParallel;
   json[AttrNames::LoopMetadata::HasReductions.str()] = hasReductions;
@@ -236,13 +244,14 @@ Attribute LoopMetadata::getMetadataAttr() const {
   OpBuilder builder(ctx);
 
   /// Helper to convert optional int64 to IntegerAttr
-  auto toIntAttr = [&](const std::optional<int64_t> &v) -> IntegerAttr {
-    return v ? builder.getI64IntegerAttr(*v) : IntegerAttr();
+  auto toIntAttr = [&](const std::optional<int64_t> &v,
+                       int64_t defaultValue = 0) -> IntegerAttr {
+    return builder.getI64IntegerAttr(v.value_or(defaultValue));
   };
 
   /// Helper to convert optional bool to BoolAttr
   auto toBoolAttr = [&](const std::optional<bool> &v) -> BoolAttr {
-    return v ? builder.getBoolAttr(*v) : BoolAttr();
+    return builder.getBoolAttr(v.value_or(false));
   };
 
   /// Convert reduction kinds to ArrayAttr
@@ -267,13 +276,11 @@ Attribute LoopMetadata::getMetadataAttr() const {
       toIntAttr(tripCount), toIntAttr(nestingLevel),
       /// Access pattern analysis
       toBoolAttr(hasUniformStride), toBoolAttr(hasGatherScatter),
-      dataMovementPattern ? builder.getI64IntegerAttr(
-                                static_cast<int64_t>(*dataMovementPattern))
-                          : IntegerAttr(),
+      builder.getI64IntegerAttr(static_cast<int64_t>(
+          dataMovementPattern.value_or(DataMovement::Unknown))),
       /// Partitioning hints
-      suggestedPartitioning ? builder.getI64IntegerAttr(
-                                  static_cast<int64_t>(*suggestedPartitioning))
-                            : IntegerAttr(),
+      builder.getI64IntegerAttr(static_cast<int64_t>(
+          suggestedPartitioning.value_or(Partitioning::Unknown))),
       toIntAttr(suggestedChunkSize), toIntAttr(memoryFootprintPerIter),
       /// Dependency information
       toBoolAttr(hasInterIterationDeps), toIntAttr(dependenceDistance),

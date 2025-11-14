@@ -3,7 +3,9 @@
 ///===----------------------------------------------------------------------===///
 
 #include "arts/Analysis/Metadata/MemrefAnalyzer.h"
+#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/Metadata/ArtsMetadata.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
@@ -149,23 +151,23 @@ MemrefAnalyzer::countAccessTypes(Value memref, Operation *scopeOp) {
 }
 
 /// Compute allocation and deallocation locations
-std::pair<LocationMetadata, LocationMetadata>
+std::pair<ArtsId, ArtsId>
 MemrefAnalyzer::computeLifetime(Value memref, Operation *scopeOp) {
-  LocationMetadata allocLoc, deallocLoc;
+  auto getId = [&](Operation *op) -> ArtsId {
+    if (!op)
+      return std::nullopt;
+    return metadataManager.assignOperationId(op);
+  };
 
-  /// Get allocation location
-  if (Operation *defOp = memref.getDefiningOp())
-    allocLoc = LocationMetadata::fromMLIRLocation(defOp->getLoc());
-
-  /// Find deallocation operation
+  ArtsId allocId = getId(memref.getDefiningOp());
+  ArtsId deallocId;
   for (Operation *user : memref.getUsers()) {
     if (isa<memref::DeallocOp>(user)) {
-      deallocLoc = LocationMetadata::fromMLIRLocation(user->getLoc());
+      deallocId = getId(user);
       break;
     }
   }
-
-  return {allocLoc, deallocLoc};
+  return {allocId, deallocId};
 }
 
 /// Analyze access characteristics (affine vs non-affine)
@@ -246,9 +248,10 @@ void MemrefAnalyzer::analyzeAllocation(Operation *allocOp,
   if (memrefType.hasStaticShape()) {
     int64_t totalElements = memrefType.getNumElements();
     Type elemType = memrefType.getElementType();
-    unsigned elemBitWidth = elemType.getIntOrFloatBitWidth();
-    int64_t elemBytes = (elemBitWidth + 7) / 8;
-    metadata->memoryFootprint = totalElements * elemBytes;
+    uint64_t elemBytes = arts::getElementTypeByteSize(elemType);
+    if (elemBytes > 0)
+      metadata->memoryFootprint =
+          totalElements * static_cast<int64_t>(elemBytes);
   }
 
   /// Count accesses
@@ -262,9 +265,9 @@ void MemrefAnalyzer::analyzeAllocation(Operation *allocOp,
         static_cast<double>(reads) / *metadata->totalAccesses;
   }
 
-  auto [allocLoc, deallocLoc] = computeLifetime(memref, scopeOp);
-  metadata->firstUseLocation = allocLoc;
-  metadata->lastUseLocation = deallocLoc;
+  auto [firstId, lastId] = computeLifetime(memref, scopeOp);
+  metadata->firstUseId = firstId;
+  metadata->lastUseId = lastId;
   analyzeAccessCharacteristics(memref, metadata, scopeOp);
   metadata->hasUniformAccess = analyzeUniformAccess(memref, scopeOp);
   metadata->dominantAccessPattern =
@@ -285,4 +288,33 @@ void MemrefAnalyzer::analyzeAllocation(Operation *allocOp,
     metadata->spatialLocality = SpatialLocalityLevel::Excellent;
   else
     metadata->spatialLocality = SpatialLocalityLevel::Poor;
+
+  metadata->accessedInParallelLoop = isAccessedInsideParallelLoop(memref);
+  metadata->hasLoopCarriedDeps = hasLoopCarriedDependencies(memref);
+}
+
+bool MemrefAnalyzer::isAccessedInsideParallelLoop(Value memref) const {
+  for (Operation *user : memref.getUsers()) {
+    for (Operation *parent = user->getParentOp(); parent;
+         parent = parent->getParentOp()) {
+      if (auto *loopMeta = metadataManager.getLoopMetadata(parent)) {
+        if (loopMeta->potentiallyParallel)
+          return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool MemrefAnalyzer::hasLoopCarriedDependencies(Value memref) const {
+  for (Operation *user : memref.getUsers()) {
+    for (Operation *parent = user->getParentOp(); parent;
+         parent = parent->getParentOp()) {
+      if (auto *loopMeta = metadataManager.getLoopMetadata(parent)) {
+        if (loopMeta->hasInterIterationDeps && *loopMeta->hasInterIterationDeps)
+          return true;
+      }
+    }
+  }
+  return false;
 }

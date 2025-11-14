@@ -6,7 +6,6 @@
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Db/DbAliasAnalysis.h"
-#include "arts/Analysis/Db/DbDataFlowAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
@@ -22,9 +21,9 @@ using namespace mlir::arts;
 
 DbAnalysis::DbAnalysis(ArtsAnalysisManager &AM) : AM(AM) {
   ARTS_DEBUG("Initializing DbAnalysis");
-  loopAnalysis = std::make_unique<LoopAnalysis>(AM.getModule());
+
+  loopAnalysis = AM.getLoopAnalysis();
   dbAliasAnalysis = std::make_unique<DbAliasAnalysis>(this);
-  dbDataFlowAnalysis = std::make_unique<DbDataFlowAnalysis>();
 }
 
 DbAnalysis::~DbAnalysis() { ARTS_DEBUG("Destroying DbAnalysis"); }
@@ -77,6 +76,8 @@ bool DbAnalysis::invalidateGraph(func::FuncOp func) {
 void DbAnalysis::invalidate() {
   ARTS_INFO("Invalidating all DbGraphs");
   functionGraphMap.clear();
+  loopAnalysis =
+      std::make_unique<LoopAnalysis>(AM.getModule(), &AM.getMetadataManager());
 }
 
 void DbAnalysis::print(func::FuncOp func) {

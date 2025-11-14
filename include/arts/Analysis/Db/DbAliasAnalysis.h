@@ -1,6 +1,10 @@
 ///==========================================================================///
 /// File: DbAliasAnalysis.h
-/// Alias analysis helpers for DB nodes.
+/// Alias analysis for DB nodes.
+///
+/// This module provides alias analysis for database (DB) allocations and
+/// acquires, determining whether two memory accesses may reference the same
+/// or overlapping memory regions.
 ///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_DB_DBALIASANALYSIS_H

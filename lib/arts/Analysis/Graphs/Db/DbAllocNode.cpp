@@ -2,8 +2,10 @@
 /// DbAllocNode.cpp - Implementation of DbAlloc node
 ///==========================================================================///
 
+#include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
+#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
 #include "arts/Utils/Metadata/MemrefMetadata.h"
@@ -22,85 +24,39 @@ ARTS_DEBUG_SETUP(db_alloc_node);
 // DbAllocNode
 ///===----------------------------------------------------------------------===///
 DbAllocNode::DbAllocNode(DbAllocOp op, DbAnalysis *analysis)
-    : NodeBase(), MemrefMetadata(op.getOperation()), dbAllocOp(op),
-      dbFreeOp(nullptr), op(op.getOperation()), analysis(analysis) {
-  ARTS_DEBUG(" - Creating DbAllocNode for operation: " << op);
-  /// Import metadata from operation attributes (if available)
-  importFromOp();
-  info.isAlloc = true;
-  info.estimatedBytes = 0;
-  info.staticBytes = 0;
-  info.sizes.reserve(op.getSizes().size());
-  info.sizes.assign(op.getSizes().begin(), op.getSizes().end());
+    : MemrefMetadata(op.getOperation()), dbAllocOp(op), dbFreeOp(nullptr),
+      op(op.getOperation()), analysis(analysis) {
+  /// Verify operation is valid
+  Operation *opPtr = op.getOperation();
+  if (!opPtr) {
+    ARTS_ERROR("Cannot create DbAllocNode: operation pointer is null");
+    return;
+  }
+
+  /// Import metadata from operation attributes, falling back to manager
+  bool hasMetadata = importFromOp();
+  if (!hasMetadata && analysis) {
+    ArtsMetadataManager &metadataManager =
+        analysis->getAnalysisManager().getMetadataManager();
+    if (metadataManager.ensureMemrefMetadata(op.getOperation()))
+      importFromOp();
+  }
+  sizes.reserve(dbAllocOp.getSizes().size());
+  sizes.assign(dbAllocOp.getSizes().begin(), dbAllocOp.getSizes().end());
 
   /// Find the corresponding DbFreeOp for this allocation
-  Value dbVal = op.getPtr();
+  Value dbVal = dbAllocOp.getPtr();
   for (Operation *user : dbVal.getUsers()) {
     if (auto freeOp = dyn_cast<DbFreeOp>(user)) {
       dbFreeOp = freeOp;
       break;
     }
   }
-
-  /// Use metadata footprint if available (already imported via importFromOp())
-  /// This respects metadata as the source of truth and avoids redundant computation
-  if (memoryFootprint) {
-    unsigned long long footprint =
-        static_cast<unsigned long long>(*memoryFootprint);
-    info.staticBytes = footprint;
-    info.estimatedBytes = footprint;
-    ARTS_DEBUG("  Using metadata footprint: " << footprint << " bytes");
-  } else {
-    /// Fallback: Compute allocation size from operation if metadata not available
-    ARTS_DEBUG("  No metadata footprint, computing from operation");
-    unsigned long long elemBytes =
-        arts::getElementTypeByteSize(op.getElementType());
-
-    if (!op.getElementSizes().empty()) {
-      bool allConst = true;
-      unsigned long long payloadElems = 1;
-
-      /// Compute total element count from payload dimensions
-      for (Value v : op.getElementSizes()) {
-        if (auto c = v.getDefiningOp<arith::ConstantIndexOp>()) {
-          unsigned long long mul =
-              (unsigned long long)std::max<int64_t>(c.value(), 1);
-          /// Check for overflow
-          if (payloadElems >
-              std::numeric_limits<unsigned long long>::max() / mul) {
-            payloadElems = std::numeric_limits<unsigned long long>::max();
-            /// Still treat as const but saturated
-            allConst = true;
-            break;
-          }
-          payloadElems *= mul;
-        } else {
-          allConst = false;
-          break;
-        }
-      }
-
-      /// If all dimensions are constant, compute static byte size
-      if (elemBytes > 0 && allConst) {
-        unsigned long long bytes = 0;
-        if (payloadElems > 0) {
-          if (payloadElems >
-              std::numeric_limits<unsigned long long>::max() / elemBytes)
-            bytes = std::numeric_limits<unsigned long long>::max();
-          else
-            bytes = payloadElems * elemBytes;
-        }
-        info.staticBytes = bytes;
-        info.estimatedBytes = bytes;
-        ARTS_DEBUG("  Computed footprint: " << bytes << " bytes");
-      }
-    }
-  }
+    
 }
 
 void DbAllocNode::print(llvm::raw_ostream &os) const {
   os << "DbAllocNode (" << getHierId() << ")";
-  os << " staticBytes=" << info.staticBytes;
   os << "\n";
 }
 

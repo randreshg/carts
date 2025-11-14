@@ -1,0 +1,48 @@
+CXXDeleteExpr 0x989355998 'void' array Function 0x98934c0f0 'operator delete[]' 'void (void *) noexcept'
+`-ImplicitCastExpr 0x989355980 'double *' <LValueToRValue>
+  `-ArraySubscriptExpr 0x989355960 'double *' lvalue
+    |-ImplicitCastExpr 0x989355930 'double **' <LValueToRValue>
+    | `-DeclRefExpr 0x9893558f0 'double **' lvalue Var 0x98934b2a8 'A' 'double **'
+    `-ImplicitCastExpr 0x989355948 'int' <LValueToRValue>
+      `-DeclRefExpr 0x989355910 'int' lvalue Var 0x989355788 'i' 'int'
+warning not calling destructor on delete
+CXXDeleteExpr 0x989355c18 'void' array Function 0x98934c0f0 'operator delete[]' 'void (void *) noexcept'
+`-ImplicitCastExpr 0x989355c00 'double *' <LValueToRValue>
+  `-ArraySubscriptExpr 0x989355be0 'double *' lvalue
+    |-ImplicitCastExpr 0x989355bb0 'double **' <LValueToRValue>
+    | `-DeclRefExpr 0x989355b70 'double **' lvalue Var 0x98934c4f0 'Kernel' 'double **'
+    `-ImplicitCastExpr 0x989355bc8 'int' <LValueToRValue>
+      `-DeclRefExpr 0x989355b90 'int' lvalue Var 0x989355a08 'i' 'int'
+warning not calling destructor on delete
+CXXDeleteExpr 0x989355e98 'void' array Function 0x98934c0f0 'operator delete[]' 'void (void *) noexcept'
+`-ImplicitCastExpr 0x989355e80 'double *' <LValueToRValue>
+  `-ArraySubscriptExpr 0x989355e60 'double *' lvalue
+    |-ImplicitCastExpr 0x989355e30 'double **' <LValueToRValue>
+    | `-DeclRefExpr 0x989355df0 'double **' lvalue Var 0x98934c638 'C_parallel' 'double **'
+    `-ImplicitCastExpr 0x989355e48 'int' <LValueToRValue>
+      `-DeclRefExpr 0x989355e10 'int' lvalue Var 0x989355c88 'i' 'int'
+warning not calling destructor on delete
+CXXDeleteExpr 0x989355f60 'void' array Function 0x98934c0f0 'operator delete[]' 'void (void *) noexcept'
+`-ImplicitCastExpr 0x989355f48 'double *' <LValueToRValue>
+  `-ArraySubscriptExpr 0x989355f28 'double *' lvalue
+    |-ImplicitCastExpr 0x989355ef8 'double **' <LValueToRValue>
+    | `-DeclRefExpr 0x989355eb8 'double **' lvalue Var 0x98934c780 'C_serial' 'double **'
+    `-ImplicitCastExpr 0x989355f10 'int' <LValueToRValue>
+      `-DeclRefExpr 0x989355ed8 'int' lvalue Var 0x989355c88 'i' 'int'
+warning not calling destructor on delete
+CXXDeleteExpr 0x989356010 'void' array Function 0x98934c0f0 'operator delete[]' 'void (void *) noexcept'
+`-ImplicitCastExpr 0x989355ff8 'double **' <LValueToRValue>
+  `-DeclRefExpr 0x989355fd8 'double **' lvalue Var 0x98934b2a8 'A' 'double **'
+warning not calling destructor on delete
+CXXDeleteExpr 0x989356068 'void' array Function 0x98934c0f0 'operator delete[]' 'void (void *) noexcept'
+`-ImplicitCastExpr 0x989356050 'double **' <LValueToRValue>
+  `-DeclRefExpr 0x989356030 'double **' lvalue Var 0x98934c4f0 'Kernel' 'double **'
+warning not calling destructor on delete
+CXXDeleteExpr 0x9893560c0 'void' array Function 0x98934c0f0 'operator delete[]' 'void (void *) noexcept'
+`-ImplicitCastExpr 0x9893560a8 'double **' <LValueToRValue>
+  `-DeclRefExpr 0x989356088 'double **' lvalue Var 0x98934c638 'C_parallel' 'double **'
+warning not calling destructor on delete
+CXXDeleteExpr 0x989356118 'void' array Function 0x98934c0f0 'operator delete[]' 'void (void *) noexcept'
+`-ImplicitCastExpr 0x989356100 'double **' <LValueToRValue>
+  `-DeclRefExpr 0x9893560e0 'double **' lvalue Var 0x98934c780 'C_serial' 'double **'
+warning not calling destructor on delete

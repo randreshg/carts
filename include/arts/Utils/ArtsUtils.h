@@ -8,6 +8,7 @@
 #define CARTS_UTILS_ARTSUTILS_H
 
 #include "arts/ArtsDialect.h"
+#include "arts/Utils/OpRemovalManager.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
@@ -71,15 +72,8 @@ getEdtBlockArgumentForAcquire(DbAcquireOp acquireOp);
 Value getUnderlyingValue(Value v);
 Value stripNumericCasts(Value v);
 Operation *getUnderlyingOperation(Value v);
-Operation *getUnderlyingDb(Value v);
+Operation *getUnderlyingDb(Value v, unsigned depth = 0);
 Operation *getUnderlyingDbAlloc(Value v);
-
-///===----------------------------------------------------------------------===///
-/// Index Splitting Utilities for Datablocks
-///===----------------------------------------------------------------------===///
-std::pair<SmallVector<Value>, SmallVector<Value>>
-splitDbIndices(Operation *dbOp, ValueRange indices, OpBuilder &builder,
-               Location loc);
 
 ///===----------------------------------------------------------------------===///
 // Type Casting and Conversion Utilities
@@ -94,13 +88,8 @@ Value extractOriginalSize(Value numerator, Value denominator,
 Value extractArrayIndexFromByteOffset(Value byteOffset, Type elemType);
 
 ///===----------------------------------------------------------------------===///
-/// Operation Removal and Replacement Utilities
+/// Operation Replacement Utilities
 ///===----------------------------------------------------------------------===///
-
-void removeOps(ModuleOp module, SetVector<Operation *> &opsToRemove,
-               bool recursive = false);
-void removeUndefOps(ModuleOp module);
-void replaceWithUndef(Operation *op, OpBuilder &builder);
 void replaceUses(Value from, Value to, DominanceInfo &domInfo,
                  Operation *dominatingOp);
 void replaceUses(DenseMap<Value, Value> &rewireMap);
