@@ -80,7 +80,10 @@ void EdtPass::runOnOperation() {
   }
 
   /// Remove ops marked for removal
-  removeOps(module, opsToRemove);
+  OpRemovalManager removalMgr;
+  for (Operation *op : opsToRemove)
+    removalMgr.markForRemoval(op);
+  removalMgr.removeAllMarked(module, /*recursive=*/false);
 
   ARTS_INFO_FOOTER(EdtPass);
   ARTS_DEBUG_REGION(module.dump(););

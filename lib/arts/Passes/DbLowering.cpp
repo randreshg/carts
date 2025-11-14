@@ -60,7 +60,10 @@ void DbLoweringPass::runOnOperation() {
   ARTS_INFO_HEADER(DbLowering);
   ARTS_DEBUG_REGION(module.dump(););
   convertDbAllocOps();
-  removeOps(module, opsToRemove);
+  OpRemovalManager removalMgr;
+  for (Operation *op : opsToRemove)
+    removalMgr.markForRemoval(op);
+  removalMgr.removeAllMarked(module, /*recursive=*/false);
   ARTS_INFO_FOOTER(DbLoweringPass);
   ARTS_DEBUG_REGION(module.dump(););
 }

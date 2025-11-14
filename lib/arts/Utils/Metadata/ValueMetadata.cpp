@@ -45,13 +45,15 @@ ValueMetadata::stringToSourceType(llvm::StringRef str) {
 ///===----------------------------------------------------------------------===///
 
 bool ValueMetadata::importFromOp() {
+  importIdFromOp();
   /// Get the metadata attribute
   ValueMetadataAttr attr =
       op_->getAttrOfType<ValueMetadataAttr>(getMetadataName());
   if (!attr)
     return false;
   type = stringToSourceType(attr.getSourceType().getValue());
-  index = attr.getIndex().getInt();
+  if (auto indexVal = getIntFromAttr(attr.getIndex()))
+    index = *indexVal;
   if (attr.getVarName())
     varName = attr.getVarName().str();
   if (attr.getLocationKey())
@@ -64,6 +66,7 @@ bool ValueMetadata::importFromOp() {
 void ValueMetadata::exportToOp() { ArtsMetadata::exportToOp(); }
 
 void ValueMetadata::importFromJson(const llvm::json::Object &json) {
+  importIdFromJson(json);
   /// Import source type
   if (auto typeStr = json.getString(AttrNames::ValueMetadata::SourceType))
     type = stringToSourceType(*typeStr);
@@ -81,6 +84,7 @@ void ValueMetadata::importFromJson(const llvm::json::Object &json) {
 }
 
 void ValueMetadata::exportToJson(llvm::json::Object &json) const {
+  exportIdToJson(json);
   json[AttrNames::ValueMetadata::SourceType.str()] = sourceTypeToString();
   json[AttrNames::ValueMetadata::Index.str()] = static_cast<int64_t>(index);
   if (!varName.empty())

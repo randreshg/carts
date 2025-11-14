@@ -22,6 +22,7 @@
 
 #include "ArtsPassDetails.h"
 #include "arts/Analysis/Metadata/AccessAnalyzer.h"
+#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Analysis/Metadata/DependenceAnalyzer.h"
 #include "arts/Analysis/Metadata/LoopAnalyzer.h"
 #include "arts/Analysis/Metadata/MemrefAnalyzer.h"
@@ -29,7 +30,6 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
-#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/Metadata/MemrefMetadata.h"
@@ -55,12 +55,6 @@ ARTS_DEBUG_SETUP(collect_metadata);
 using namespace mlir;
 using namespace mlir::arts;
 
-// AccessAnalyzer is now defined in arts/Analysis/Metadata/AccessAnalyzer.h
-// DependenceAnalyzer is now defined in
-// arts/Analysis/Metadata/DependenceAnalyzer.h MemrefAnalyzer is now defined in
-// arts/Analysis/Metadata/MemrefAnalyzer.h LoopAnalyzer is now defined in
-// arts/Analysis/Metadata/LoopAnalyzer.h
-
 ///===----------------------------------------------------------------------===///
 // CollectMetadataPass
 ///===----------------------------------------------------------------------===///
@@ -79,47 +73,47 @@ struct CollectMetadataPass : public CollectMetadataBase<CollectMetadataPass> {
 
     ARTS_INFO_HEADER(CollectMetadataPass);
 
-    // Initialize metadata manager and analyzers
+    ///  Initialize metadata manager and analyzers
     auto manager = std::make_unique<ArtsMetadataManager>(context);
     auto accessAnalyzer = std::make_unique<AccessAnalyzer>(context);
     auto depAnalyzer =
         std::make_unique<DependenceAnalyzer>(context, *accessAnalyzer);
     auto reuseAnalyzer = std::make_unique<ReuseAnalyzer>(*accessAnalyzer);
     auto memrefAnalyzer = std::make_unique<MemrefAnalyzer>(
-        context, *accessAnalyzer, *reuseAnalyzer);
+        context, *accessAnalyzer, *reuseAnalyzer, *manager);
     auto loopAnalyzer =
         std::make_unique<LoopAnalyzer>(context, *accessAnalyzer, *depAnalyzer);
 
-    // Collect loop metadata
+    ///  Collect loop metadata
     ARTS_DEBUG("Collecting loop metadata...");
     collectLoopMetadata(module, *manager, *loopAnalyzer);
 
-    // Collect memref metadata
+    ///  Collect memref metadata
     ARTS_DEBUG("Collecting memref metadata...");
     collectMemrefMetadata(module, *manager, *memrefAnalyzer);
 
-    // Export all metadata to operations
+    ///  Export all metadata to operations
     ARTS_DEBUG("Exporting metadata to operations...");
     manager->exportToOperations();
 
-    // Export to JSON if requested
+    ///  Export to JSON if requested
     if (exportMetadata && !metadataFile.empty()) {
       ARTS_DEBUG("Exporting metadata to JSON file: " << metadataFile);
       if (!manager->exportToJsonFile(metadataFile))
         ARTS_ERROR("Failed to export metadata to JSON");
     }
 
-    // Print statistics
+    ///  Print statistics
     ARTS_DEBUG("CollectMetadata: Collected metadata for " << manager->size()
                                                           << " operations");
     manager->printStatistics(llvm::errs());
   }
 
 private:
-  /// Collect metadata for all loops in the module
+  /// / Collect metadata for all loops in the module
   void collectLoopMetadata(ModuleOp module, ArtsMetadataManager &manager,
                            LoopAnalyzer &analyzer) {
-    // Collect affine.for loops
+    ///  Collect affine.for loops
     module.walk([&](affine::AffineForOp forOp) {
       auto *metadata = manager.addLoopMetadata(forOp);
       analyzer.analyzeAffineLoop(forOp, metadata);
@@ -127,7 +121,7 @@ private:
                  << metadata->locationMetadata.toString());
     });
 
-    // Collect scf.for loops
+    ///  Collect scf.for loops
     module.walk([&](scf::ForOp forOp) {
       auto *metadata = manager.addLoopMetadata(forOp);
       analyzer.analyzeSCFLoop(forOp, metadata);
@@ -135,7 +129,7 @@ private:
                  << metadata->locationMetadata.toString());
     });
 
-    // Collect scf.parallel loops
+    ///  Collect scf.parallel loops
     module.walk([&](scf::ParallelOp parOp) {
       auto *metadata = manager.addLoopMetadata(parOp);
       analyzer.analyzeSCFLoop(parOp, metadata);
@@ -144,17 +138,17 @@ private:
     });
   }
 
-  /// Collect metadata for all memref allocations
+  /// / Collect metadata for all memref allocations
   void collectMemrefMetadata(ModuleOp module, ArtsMetadataManager &manager,
                              MemrefAnalyzer &analyzer) {
-    // Collect memref.alloc
+    ///  Collect memref.alloc
     module.walk([&](memref::AllocOp allocOp) {
       auto *metadata = manager.addMemrefMetadata(allocOp);
       analyzer.analyzeAllocation(allocOp, metadata, module);
       ARTS_DEBUG("  Analyzed memref.alloc " << metadata->allocationId);
     });
 
-    // Collect memref.alloca
+    ///  Collect memref.alloca
     module.walk([&](memref::AllocaOp allocaOp) {
       auto *metadata = manager.addMemrefMetadata(allocaOp);
       analyzer.analyzeAllocation(allocaOp, metadata, module);

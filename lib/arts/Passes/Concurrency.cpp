@@ -10,9 +10,6 @@
 
 #include "ArtsPassDetails.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
-#include "arts/Analysis/Concurrency/DbPlacement.h"
-#include "arts/Analysis/Concurrency/EdtPlacement.h"
-#include "arts/Analysis/Graphs/Concurrency/ConcurrencyGraph.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"

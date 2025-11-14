@@ -6,6 +6,7 @@
 #include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "polygeist/Ops.h"
 #include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "db-rewriter"
@@ -478,7 +479,7 @@ void DbRewriter::updateDbRefOpsAfterPromotion(
     OpBuilder b(refOp);
     auto underlyingDb = arts::getUnderlyingDb(newSourcePtr);
     auto [prefix, suffix] =
-        arts::splitDbIndices(underlyingDb, indices, b, refOp.getLoc());
+        splitDbIndices(underlyingDb, indices, b, refOp.getLoc());
 
     /// Build DbRefOp with prefix indices.
     auto prefixRef = b.create<DbRefOp>(refOp.getLoc(), elementMemRefType,
@@ -706,8 +707,11 @@ static void updateLoadStoreForChunking(DbAcquireOp oldAcq, DbAcquireOp newAcq,
 
 void DbRewriter::cleanup() {
   ModuleOp module = oldAlloc_->getParentOfType<ModuleOp>();
-  arts::removeOps(module, opsToRemove_, config_.recursiveRemoval);
+  OpRemovalManager removalMgr;
+  for (Operation *op : opsToRemove_)
+    removalMgr.markForRemoval(op);
   stats_.operationsRemoved = opsToRemove_.size();
+  removalMgr.removeAllMarked(module, config_.recursiveRemoval);
 }
 
 LogicalResult DbRewriter::verify() {
@@ -727,4 +731,152 @@ LogicalResult DbRewriter::verify() {
   }
 
   return success();
+}
+
+bool mlir::arts::rewriteDbUserOperation(
+    Operation *op, Type elementMemRefType, Value basePtr, Operation *dbOp,
+    uint64_t initialIndex, ArrayRef<Value> chunkOffsets, OpBuilder &builder,
+    llvm::SetVector<Operation *> &opsToRemove) {
+  if (auto dbRef = dyn_cast<DbRefOp>(op)) {
+    Location loc = dbRef.getLoc();
+    builder.setInsertionPoint(dbRef);
+    SmallVector<Value> zeroIndices;
+    Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+    for (size_t i = 0, e = dbRef.getIndices().size(); i < e; ++i)
+      zeroIndices.push_back(zero);
+    dbRef.getSourceMutable().assign(basePtr);
+    dbRef.getIndicesMutable().assign(zeroIndices);
+
+    Value refResult = dbRef.getResult();
+    SmallVector<Operation *> refUsers;
+    for (Operation *user : refResult.getUsers()) {
+      if (isa<memref::LoadOp, memref::StoreOp>(user))
+        refUsers.push_back(user);
+    }
+
+    for (Operation *user : refUsers) {
+      builder.setInsertionPoint(user);
+      auto adjustWithOffsets = [&](OperandRange idxRange) {
+        SmallVector<Value> remapped(idxRange.begin(), idxRange.end());
+        size_t limit = std::min(remapped.size(), chunkOffsets.size());
+        for (size_t i = 0; i < limit; ++i) {
+          if (!chunkOffsets[i])
+            continue;
+          remapped[i] = builder.create<arith::SubIOp>(
+              user->getLoc(), remapped[i], chunkOffsets[i]);
+        }
+        return remapped;
+      };
+
+      if (auto load = dyn_cast<memref::LoadOp>(user)) {
+        SmallVector<Value> localIdx = adjustWithOffsets(load.getIndices());
+        load.getIndicesMutable().assign(localIdx);
+      } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
+        SmallVector<Value> localIdx = adjustWithOffsets(store.getIndices());
+        store.getIndicesMutable().assign(localIdx);
+      }
+    }
+
+    return true;
+  }
+
+  auto adjustIndices = [&](mlir::OperandRange rawIndices) {
+    SmallVector<Value> indices;
+    if (rawIndices.size() > initialIndex) {
+      indices.append(rawIndices.begin() + initialIndex, rawIndices.end());
+    }
+    if (!chunkOffsets.empty()) {
+      size_t limit = std::min(indices.size(), chunkOffsets.size());
+      for (size_t i = 0; i < limit; ++i) {
+        if (!chunkOffsets[i])
+          continue;
+        indices[i] = builder.create<arith::SubIOp>(op->getLoc(), indices[i],
+                                                   chunkOffsets[i]);
+      }
+    }
+    return indices;
+  };
+
+  if (auto load = dyn_cast<memref::LoadOp>(op)) {
+    Location loc = load.getLoc();
+    builder.setInsertionPoint(load);
+    SmallVector<Value> indices = adjustIndices(load.getIndices());
+    auto [outerIdx, innerIdx] = splitDbIndices(dbOp, indices, builder, loc);
+    auto dbRef =
+        builder.create<DbRefOp>(loc, elementMemRefType, basePtr, outerIdx);
+    auto newLoad = builder.create<memref::LoadOp>(loc, dbRef, innerIdx);
+    load.replaceAllUsesWith(newLoad.getResult());
+    opsToRemove.insert(load);
+    return true;
+  }
+
+  if (auto store = dyn_cast<memref::StoreOp>(op)) {
+    Location loc = store.getLoc();
+    builder.setInsertionPoint(store);
+    SmallVector<Value> indices = adjustIndices(store.getIndices());
+    auto [outerIdx, innerIdx] = splitDbIndices(dbOp, indices, builder, loc);
+    auto dbRef =
+        builder.create<DbRefOp>(loc, elementMemRefType, basePtr, outerIdx);
+    builder.create<memref::StoreOp>(loc, store.getValue(), dbRef, innerIdx);
+    opsToRemove.insert(store);
+    return true;
+  }
+
+  if (auto m2p = dyn_cast<polygeist::Memref2PointerOp>(op)) {
+    Location loc = m2p.getLoc();
+    builder.setInsertionPoint(m2p);
+    SmallVector<Value> indicesConst0(
+        {builder.create<arith::ConstantIndexOp>(loc, 0)});
+    auto dbRef =
+        builder.create<DbRefOp>(loc, elementMemRefType, basePtr, indicesConst0);
+    auto newM2p = builder.create<polygeist::Memref2PointerOp>(
+        loc, m2p.getResult().getType(), dbRef.getResult());
+    m2p.getResult().replaceAllUsesWith(newM2p.getResult());
+    opsToRemove.insert(m2p);
+    return true;
+  }
+
+  return false;
+}
+
+///===----------------------------------------------------------------------===///
+/// Index Splitting Utilities for Datablocks
+///===----------------------------------------------------------------------===///
+
+/// Splits datablock indices into outer and inner indices based on the
+/// datablock's structure. For a memref<?xmemref<?xi32>> with indices [i, j, k]:
+/// - Outer indices [i]: select which element memref
+/// - Inner indices [j, k]: index into the element memref
+std::pair<SmallVector<Value>, SmallVector<Value>>
+mlir::arts::splitDbIndices(Operation *dbOp, ValueRange indices,
+                           OpBuilder &builder, Location loc) {
+  SmallVector<Value> outerIndices, innerIndices;
+
+  /// Get datablock properties
+  auto hasSingleSize = dbHasSingleSize(dbOp);
+  auto outerRank = getSizesFromDb(dbOp).size();
+
+  /// If the Db has single size, all the indices are inner indices
+  if (hasSingleSize)
+    innerIndices.assign(indices.begin(), indices.end());
+
+  /// If the indices are less than or equal to the outer rank, all the indices
+  /// are outer indices
+  else if (indices.size() <= outerRank)
+    outerIndices.assign(indices.begin(), indices.end());
+
+  /// If the indices are greater than the outer rank, split the indices into
+  /// outer and inner indices
+  else {
+    outerIndices.assign(indices.begin(), indices.begin() + outerRank);
+    innerIndices.assign(indices.begin() + outerRank, indices.end());
+  }
+
+  /// For all other cases, add a default index of 0
+  if (outerIndices.empty())
+    outerIndices.push_back(builder.create<arith::ConstantIndexOp>(loc, 0));
+  if (innerIndices.empty())
+    innerIndices.push_back(builder.create<arith::ConstantIndexOp>(loc, 0));
+
+  return std::make_pair(outerIndices, innerIndices);
 }

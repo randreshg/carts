@@ -67,6 +67,7 @@
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/Metadata/LoopMetadata.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -582,7 +583,8 @@ EdtOp ForLoweringPass::createTaskEdt(ArtsCodegen *AC, LoopInfo &loopInfo,
     if (shouldSkipReductionArg(parallelArg, redInfo, reductionBlockArgs))
       continue;
 
-    /// Acquire using parallel EDT's block arg (maintains EDT isolation)
+    /// Acquire using parallel EDT's block arg (coarse-grained acquire)
+    /// Partitioning is done by the DbPass after the ForLowering pass
     auto chunkAcqOp = AC->create<DbAcquireOp>(
         loc, parentAcqOp.getMode(), Value(), parallelArg, parallelArg.getType(),
         ValueRange{}, ValueRange{}, ValueRange{});
@@ -642,6 +644,17 @@ EdtOp ForLoweringPass::createTaskEdt(ArtsCodegen *AC, LoopInfo &loopInfo,
   /// Loop from 0 to workerIterationCount (local iterations for this worker)
   scf::ForOp iterLoop =
       AC->create<scf::ForOp>(loc, zero, loopInfo.workerIterationCount, one);
+
+  // if (auto loopAttr = forOp->getAttr(AttrNames::LoopMetadata::Name)) {
+  //   iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
+  // } else {
+  //   LoopMetadata synthetic(iterLoop.getOperation());
+  //   synthetic.potentiallyParallel = true;
+  //   synthetic.hasInterIterationDeps = false;
+  //   synthetic.locationMetadata = LocationMetadata::fromKey(
+  //       LocationMetadata::getCompactLocationKey(forOp.getLoc()));
+  //   synthetic.exportToOp();
+  // }
 
   AC->setInsertionPointToStart(iterLoop.getBody());
 
@@ -762,8 +775,6 @@ SmallVector<Value> ForLoweringPass::createChunkAcquires(
     BlockArgument taskArg = taskBlock.addArgument(parallelArg.getType(), loc);
 
     /// Create acquire for whole DB inside task EDT, using task's block arg
-    /// Use null guid to avoid passing external values
-    /// Pass explicit ptrType so builder doesn't need to trace through block arg
     auto chunkAcqOp = AC->create<DbAcquireOp>(
         loc, parentAcqOp.getMode(), Value(), taskArg, parallelArg.getType(),
         ValueRange{}, ValueRange{}, ValueRange{});

@@ -124,11 +124,11 @@ public:
   StringRef toString() const override { return locationMetadata.toString(); }
   bool importFromOp() override;
   void exportToOp() override;
+  void importFromJson(const llvm::json::Object &json) override;
+  void exportToJson(llvm::json::Object &json) const override;
 
 private:
   Attribute getMetadataAttr() const override;
-  void importFromJson(const llvm::json::Object &json) override;
-  void exportToJson(llvm::json::Object &json) const override;
 };
 
 } // namespace arts

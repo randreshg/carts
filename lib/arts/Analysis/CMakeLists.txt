@@ -7,9 +7,6 @@ add_subdirectory(Db)
 # Add the EDT subdirectory
 add_subdirectory(Edt)
 
-# Add the Concurrency subdirectory
-add_subdirectory(Concurrency)
-
 # Add the Graphs subdirectory
 add_subdirectory(Graphs)
 
@@ -22,7 +19,6 @@ add_subdirectory(Loop)
 # Combine all analysis source files
 list(APPEND CARTS_ANALYSIS_SOURCE_FILES ${CARTS_DB_ANALYSIS_SOURCE_FILES})
 list(APPEND CARTS_ANALYSIS_SOURCE_FILES ${CARTS_EDT_ANALYSIS_SOURCE_FILES})
-list(APPEND CARTS_ANALYSIS_SOURCE_FILES ${CONCURRENCY_SOURCE_FILES})
 list(APPEND CARTS_ANALYSIS_SOURCE_FILES ${CARTS_GRAPHS_SOURCE_FILES})
 list(APPEND CARTS_ANALYSIS_SOURCE_FILES ${CARTS_METADATA_ANALYSIS_SOURCE_FILES})
 list(APPEND CARTS_ANALYSIS_SOURCE_FILES ${LOOP_ANALYSIS_SOURCE_FILES})

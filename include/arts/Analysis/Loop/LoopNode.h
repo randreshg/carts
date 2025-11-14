@@ -24,10 +24,11 @@ namespace arts {
 /// LoopNode - Represents a loop operation with metadata
 /// Combines graph node capabilities (NodeBase) with loop metadata
 ///==========================================================================///
+class LoopAnalysis;
 class LoopNode : public NodeBase, public LoopMetadata {
 public:
   /// Constructor: automatically imports metadata from operation
-  explicit LoopNode(Operation *loopOp);
+  explicit LoopNode(Operation *loopOp, LoopAnalysis *loopAnalysis = nullptr);
 
   /// Get the underlying loop operation (affine.for, scf.for, scf.parallel)
   Operation *getLoopOp() const { return loopOp; }
@@ -48,20 +49,10 @@ public:
     return N->getKind() == NodeKind::Loop;
   }
 
-  /// All loop metadata fields inherited from LoopMetadata:
-  ///   - potentiallyParallel
-  ///   - hasReductions
-  ///   - readCount, writeCount
-  ///   - tripCount, nestingLevel
-  ///   - hasInterIterationDeps
-  ///   - suggestedPartitioning, suggestedChunkSize
-  ///   - dataMovementPattern
-  ///   etc. (directly accessible as members)
-
 private:
-  Operation *loopOp;  ///< The loop operation this node represents
-  std::string hierId; ///< Hierarchical identifier for debugging
-  DenseSet<EdgeBase *> edges; ///< Unused (kept for interface compliance)
+  Operation *loopOp;
+  std::string hierId;
+  DenseSet<EdgeBase *> edges;
 };
 
 } // namespace arts

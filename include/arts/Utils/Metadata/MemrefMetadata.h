@@ -88,8 +88,8 @@ constexpr StringLiteral HasGoodSpatialLocality = "has_good_spatial_locality";
 constexpr StringLiteral AverageStride = "average_stride";
 
 /// Lifetime information
-constexpr StringLiteral FirstUseLocation = "first_use_location";
-constexpr StringLiteral LastUseLocation = "last_use_location";
+constexpr StringLiteral FirstUseId = "first_use_id";
+constexpr StringLiteral LastUseId = "last_use_id";
 
 /// Dynamic dimension tracking
 constexpr StringLiteral DynamicStrideInfo = "dynamic_stride_info";
@@ -144,7 +144,7 @@ public:
   std::optional<bool> shouldCanonicalizeFlag, isCanonicalizedFlag;
 
   //// Lifetime information
-  LocationMetadata firstUseLocation, lastUseLocation;
+  std::optional<int64_t> firstUseId, lastUseId;
 
   ///// Extended analysis
   std::optional<bool> hasUniformAccess, hasStrideOneAccess;

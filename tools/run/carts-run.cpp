@@ -75,11 +75,6 @@ static cl::opt<bool> EmitLLVM("emit-llvm", cl::desc("Emit LLVM IR output"),
 
 static cl::opt<bool> Debug("g", cl::desc("Enable debug mode"), cl::init(false));
 
-static cl::opt<bool> ExportJson(
-    "export-json",
-    cl::desc("Export DB analysis to JSON files in output/ directory"),
-    cl::init(false));
-
 static cl::opt<std::string> ArtsConfig("arts-config",
                                        cl::desc("ARTS configuration file path"),
                                        cl::value_desc("config_file"),
@@ -208,6 +203,8 @@ void initializeContext(MLIRContext &context) {
 
 /// Inliner and canonicalize memrefs pass.
 void setupCanonicalizeMemrefs(PassManager &pm) {
+  OpPassManager &optPM = pm.nest<func::FuncOp>();
+  optPM.addPass(createLowerAffinePass());
   pm.addPass(createCSEPass());
   pm.addPass(createInlinerPass());
   pm.addPass(arts::createArtsInlinerPass());
@@ -221,8 +218,10 @@ void setupCollectMetadata(PassManager &pm, bool shouldExport = false,
       metadataFile.empty() ? MetadataFile.getValue() : metadataFile.str();
   /// Raise to affine first
   OpPassManager &optPM = pm.nest<func::FuncOp>();
+  optPM.addPass(polygeist::replaceAffineCFGPass());
   optPM.addPass(polygeist::createRaiseSCFToAffinePass());
   optPM.addPass(polygeist::replaceAffineCFGPass());
+  optPM.addPass(polygeist::createRaiseSCFToAffinePass());
   optPM.addPass(createCSEPass());
   if (shouldExport)
     pm.addPass(arts::createCollectMetadataPass(true, actualMetadataFile));
@@ -276,9 +275,8 @@ void setupCreateDbs(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 }
 
 /// Db creation and optimization passes.
-void setupDbOpt(PassManager &pm, arts::ArtsAnalysisManager *AM,
-                bool exportJson) {
-  pm.addPass(arts::createDbPass(AM, exportJson));
+void setupDbOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
+  pm.addPass(arts::createDbPass(AM));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createMem2Reg());
@@ -303,7 +301,7 @@ void setupConcurrency(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 
 /// Concurrency optimization passes.
 void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
-  // pm.addPass(arts::createDbPass(AM, false, true));
+  pm.addPass(arts::createDbPass(AM));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createMem2Reg());
@@ -455,7 +453,7 @@ void setupPassManager(ModuleOp module, MLIRContext &context,
   /// Db optimizations
   {
     PassManager pm(&context);
-    setupDbOpt(pm, AM.get(), ExportJson);
+    setupDbOpt(pm, AM.get());
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error when optimizing Dbs");
       module->dump();

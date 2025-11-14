@@ -5,7 +5,6 @@
 #ifndef ARTS_ANALYSIS_GRAPHS_DB_DBNODE_H
 #define ARTS_ANALYSIS_GRAPHS_DB_DBNODE_H
 
-#include "arts/Analysis/Db/DbInfo.h"
 #include "arts/Analysis/Graphs/Base/NodeBase.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/Metadata/MemrefMetadata.h"
@@ -21,10 +20,11 @@ namespace arts {
 /// Forward declarations
 class DbAnalysis;
 class DbAcquireNode;
+class ArtsMetadataManager;
 
 ////===----------------------------------------------------------------------===////
 /// DbAllocNode
-/// It represents a `arts.db.alloc` operations
+/// Represents a `arts.db.alloc` operation in the DB graph.
 ////===----------------------------------------------------------------------===////
 class DbAllocNode : public NodeBase, public MemrefMetadata {
 public:
@@ -40,19 +40,33 @@ public:
   const DenseSet<EdgeBase *> &getInEdges() const override { return inEdges; }
   const DenseSet<EdgeBase *> &getOutEdges() const override { return outEdges; }
 
+  /// Graph structure management
   DbAcquireNode *getOrCreateAcquireNode(DbAcquireOp op);
   void forEachChildNode(const std::function<void(NodeBase *)> &fn) const;
   size_t getAcquireNodesSize() const { return acquireNodes.size(); }
 
+  /// Operation accessors
   DbAllocOp getDbAllocOp() const { return dbAllocOp; }
   DbFreeOp getDbFreeOp() const { return dbFreeOp; }
-  DbAllocInfo &getInfo() { return info; }
-  const DbAllocInfo &getInfo() const { return info; }
-
   NodeKind getKind() const override { return NodeKind::DbAlloc; }
   static bool classof(const NodeBase *N) {
     return N->getKind() == NodeKind::DbAlloc;
   }
+
+  /// Analysis metadata
+  uint64_t inCount = 0;
+  uint64_t outCount = 0;
+  uint64_t beginIndex = 0;
+  uint64_t endIndex = 0;
+  bool isLongLived = false;
+  uint64_t maxLoopDepth = 0;
+  uint64_t criticalSpan = 0;
+  uint64_t criticalPath = 0;
+  unsigned long long totalAccessBytes = 0;
+  uint64_t numReleases = 0;
+  bool maybeEscaping = false;
+  uint64_t numAcquires = 0;
+  SmallVector<DbAllocOp, 8> reuseMatches;
 
 private:
   DbAllocOp dbAllocOp;
@@ -62,14 +76,14 @@ private:
   std::string hierId;
   unsigned nextChildId = 1;
 
+  /// Graph structure: children acquire nodes
   SmallVector<std::unique_ptr<DbAcquireNode>, 4> acquireNodes;
   DenseMap<DbAcquireOp, DbAcquireNode *> acquireMap;
-  DbAllocInfo info;
 };
 
 ////===----------------------------------------------------------------------===////
 /// DbAcquireNode
-/// It represents a `arts.db.acquire` operation.
+/// Represents a `arts.db.acquire` operation in the DB graph.
 ////===----------------------------------------------------------------------===////
 class DbAcquireNode : public NodeBase {
 public:
@@ -89,8 +103,6 @@ public:
   DbAllocNode *getParent() const { return rootAlloc; }
   NodeBase *getDirectParent() const { return parent; }
   DbAllocNode *getRootAlloc() const { return rootAlloc; }
-  DbAcquireInfo &getInfo() { return info; }
-  const DbAcquireInfo &getInfo() const { return info; }
 
   NodeKind getKind() const override { return NodeKind::DbAcquire; }
   static bool classof(const NodeBase *N) {
@@ -128,25 +140,20 @@ private:
   DbAllocNode *rootAlloc;
   DbAnalysis *analysis;
   std::string hierId;
-  DbAcquireInfo info;
   EdtOp edtUser;
   Value useInEdt;
   /// Memory accesses (loads/stores) inside the EDT
   SmallVector<Operation *, 16> loads, stores, references;
 
-  /// Helper functions
-  SmallVector<DbOffsetRange, 4> computeAccessedOffsetRanges();
-  void collectAccesses(Value db);
+public:
+  uint64_t inCount = 0;
+  uint64_t outCount = 0;
+  uint64_t beginIndex = 0;
+  uint64_t endIndex = 0;
+  unsigned long long estimatedBytes = 0;
 
-  /// Access pattern analysis (directly from EDT body)
-  void analyzeAccessPatterns();
-  void
-  analyzeMemRefIndices(ValueRange indices,
-                       DenseMap<unsigned, SmallVector<int64_t>> &indicesPerDim);
-  void buildAccessPatternsFromIndices(
-      const DenseMap<unsigned, SmallVector<int64_t>> &indicesPerDim);
-  void detectStencilPattern();
-  void computeStridesFromPatterns();
+  /// Helper functions
+  void collectAccesses(Value db);
 
   /// Nested acquire storage
   unsigned nextChildId = 1;

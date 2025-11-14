@@ -1,0 +1,444 @@
+[0;1;34m
+-----------------------------------------
+DbPass STARTED
+-----------------------------------------
+[0mmodule attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i128, dense<128> : vector<2xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:o-i64:64-i128:128-n32:64-S128", llvm.target_triple = "arm64-apple-macosx16.0.0", "polygeist.target-cpu" = "apple-m1", "polygeist.target-features" = "+aes,+crc,+dotprod,+fp-armv8,+fp16fml,+fullfp16,+lse,+neon,+ras,+rcpc,+rdm,+sha2,+sha3,+v8.1a,+v8.2a,+v8.3a,+v8.4a,+v8.5a,+v8a,+zcm,+zcz"} {
+  llvm.mlir.global internal constant @str9("false\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str8("true\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str7("Success: %s\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str6("c[%d] = %d, a[%d] = %d, b[%d] = %d\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str5("Results:\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str4("Parallel region completed\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str3("Parallel region:\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str2("a[%d] = %d, b[%d] = %d\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str1("Initial values:\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str0("Usage: %s <size>\0A\00") {addr_space = 0 : i32}
+  llvm.func @printf(!llvm.ptr, ...) -> i32
+  func.func @main(%arg0: i32, %arg1: memref<?xmemref<?xi8>>) -> i32 attributes {llvm.linkage = #llvm.linkage<external>} {
+    %false = arith.constant false
+    %true = arith.constant true
+    %c4 = arith.constant 4 : index
+    %c4_i64 = arith.constant 4 : i64
+    %c1_i8 = arith.constant 1 : i8
+    %c0_i8 = arith.constant 0 : i8
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c2_i32 = arith.constant 2 : i32
+    %c1 = arith.constant 1 : index
+    %c0 = arith.constant 0 : index
+    %0 = llvm.mlir.undef : i32
+    %1 = arith.cmpi slt, %arg0, %c2_i32 : i32
+    %2 = arith.cmpi sge, %arg0, %c2_i32 : i32
+    %3 = arith.select %1, %c1_i32, %0 : i32
+    scf.if %1 {
+      %5 = llvm.mlir.addressof @str0 : !llvm.ptr
+      %6 = llvm.getelementptr %5[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<18 x i8>
+      %7 = memref.load %arg1[%c0] : memref<?xmemref<?xi8>>
+      %8 = polygeist.memref2pointer %7 : memref<?xi8> to !llvm.ptr
+      %9 = llvm.call @printf(%6, %8) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, !llvm.ptr) -> i32
+    }
+    %4 = arith.select %2, %c0_i32, %3 : i32
+    scf.if %2 {
+      %5 = memref.load %arg1[%c1] : memref<?xmemref<?xi8>>
+      %6 = func.call @atoi(%5) : (memref<?xi8>) -> i32
+      %7 = arith.extsi %6 : i32 to i64
+      %8 = arith.muli %7, %c4_i64 : i64
+      %9 = arith.index_cast %8 : i64 to index
+      %10 = arith.divui %9, %c4 : index
+      %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>] route(%c0_i32 : i32) sizes[%c1] elementType(i32) elementSizes[%10] {arts.id = 8 : i64, arts.memref = #arts.memref_metadata<rank = 1 : i64, allocationId = "parallel_for.c:13:12", totalAccesses = 3 : i64, readCount = 2 : i64, writeCount = 1 : i64, readWriteRatio = 0.66666666666666663 : f64, allAccessesAffine = true, hasNonAffineAccesses = false, firstUseId = 8 : i64, hasUniformAccess = true, dominantAccessPattern = "sequential", accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 1 : i64, hasGoodSpatialLocality = true>} : (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+      %11 = arith.index_cast %6 : i32 to index
+      %12 = llvm.mlir.addressof @str1 : !llvm.ptr
+      %13 = llvm.getelementptr %12[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<17 x i8>
+      %14 = llvm.call @printf(%13) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+      %15 = llvm.mlir.addressof @str2 : !llvm.ptr
+      %16 = llvm.getelementptr %15[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<24 x i8>
+      scf.for %arg2 = %c0 to %11 step %c1 {
+        %36 = arith.index_cast %arg2 : index to i32
+        %37 = arith.muli %36, %c2_i32 : i32
+        %38 = llvm.call @printf(%16, %36, %36, %36, %37) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32, i32, i32) -> i32
+      } {arts.id = 2 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, readCount = 2 : i64, writeCount = 0 : i64, tripCount = 0 : i64, nestingLevel = 0 : i64, hasUniformStride = true, hasGatherScatter = false, dataMovementPattern = 0 : i64, suggestedPartitioning = 0 : i64, suggestedChunkSize = 0 : i64, memoryFootprintPerIter = 8 : i64, hasInterIterationDeps = false, dependenceDistance = 0 : i64, locationKey = "-">}
+      %17 = llvm.mlir.addressof @str3 : !llvm.ptr
+      %18 = llvm.getelementptr %17[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<18 x i8>
+      %19 = llvm.call @printf(%18) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+      %guid_0, %ptr_1 = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi32>>>) offsets[%c0] sizes[%c1] -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+      arts.edt <parallel> <internode> route(%c0_i32) (%ptr_1) : memref<?xmemref<memref<?xi32>>> {
+      ^bb0(%arg2: memref<?xmemref<memref<?xi32>>>):
+        arts.for(%c0) to(%11) step(%c1) schedule(<static>) {{
+        ^bb0(%arg3: index):
+          %36 = arith.index_cast %arg3 : index to i32
+          %37 = arith.muli %36, %c2_i32 : i32
+          %38 = arith.addi %36, %37 : i32
+          %39 = arts.db_ref %arg2[%c0] : memref<?xmemref<memref<?xi32>>> -> memref<?xi32>
+          memref.store %38, %39[%arg3] : memref<?xi32>
+        }}
+        arts.db_release(%arg2) : memref<?xmemref<memref<?xi32>>>
+      }
+      %20 = llvm.mlir.addressof @str4 : !llvm.ptr
+      %21 = llvm.getelementptr %20[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<27 x i8>
+      %22 = llvm.call @printf(%21) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+      %23 = arith.cmpi sgt, %6, %c0_i32 : i32
+      %24 = scf.if %23 -> (i8) {
+        %36:2 = scf.for %arg2 = %c0 to %11 step %c1 iter_args(%arg3 = %c1_i8, %arg4 = %true) -> (i8, i1) {
+          %37:2 = scf.if %arg4 -> (i8, i1) {
+            %38 = arts.db_ref %ptr[%c0] : memref<?xmemref<memref<?xi32>>> -> memref<?xi32>
+            %39 = memref.load %38[%arg2] : memref<?xi32>
+            %40 = arith.index_cast %arg2 : index to i32
+            %41 = arith.muli %40, %c2_i32 : i32
+            %42 = arith.addi %40, %41 : i32
+            %43 = arith.cmpi ne, %39, %42 : i32
+            %44 = arith.select %43, %c0_i8, %arg3 : i8
+            %45 = arith.cmpi eq, %39, %42 : i32
+            scf.yield %44, %45 : i8, i1
+          } else {
+            scf.yield %arg3, %false : i8, i1
+          }
+          scf.yield %37#0, %37#1 : i8, i1
+        } {arts.id = 4 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, readCount = 3 : i64, writeCount = 0 : i64, tripCount = 0 : i64, nestingLevel = 0 : i64, hasUniformStride = true, hasGatherScatter = false, dataMovementPattern = 0 : i64, suggestedPartitioning = 0 : i64, suggestedChunkSize = 0 : i64, memoryFootprintPerIter = 12 : i64, hasInterIterationDeps = true, dependenceDistance = 0 : i64, locationKey = "-">}
+        scf.yield %36#0 : i8
+      } else {
+        scf.yield %c1_i8 : i8
+      }
+      %25 = llvm.mlir.addressof @str5 : !llvm.ptr
+      %26 = llvm.getelementptr %25[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<10 x i8>
+      %27 = llvm.call @printf(%26) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+      %28 = llvm.mlir.addressof @str6 : !llvm.ptr
+      %29 = llvm.getelementptr %28[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<36 x i8>
+      scf.for %arg2 = %c0 to %11 step %c1 {
+        %36 = arith.index_cast %arg2 : index to i32
+        %37 = arts.db_ref %ptr[%c0] : memref<?xmemref<memref<?xi32>>> -> memref<?xi32>
+        %38 = memref.load %37[%arg2] : memref<?xi32>
+        %39 = arith.muli %36, %c2_i32 : i32
+        %40 = llvm.call @printf(%29, %36, %38, %36, %36, %36, %39) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32, i32, i32, i32, i32) -> i32
+      } {arts.id = 5 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, readCount = 3 : i64, writeCount = 0 : i64, tripCount = 0 : i64, nestingLevel = 0 : i64, hasUniformStride = true, hasGatherScatter = false, dataMovementPattern = 0 : i64, suggestedPartitioning = 0 : i64, suggestedChunkSize = 0 : i64, memoryFootprintPerIter = 12 : i64, hasInterIterationDeps = false, dependenceDistance = 0 : i64, locationKey = "-">}
+      %30 = llvm.mlir.addressof @str7 : !llvm.ptr
+      %31 = llvm.getelementptr %30[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<13 x i8>
+      %32 = arith.extui %24 : i8 to i32
+      %33 = arith.cmpi ne, %32, %c0_i32 : i32
+      %34 = scf.if %33 -> (!llvm.ptr) {
+        %36 = llvm.mlir.addressof @str8 : !llvm.ptr
+        %37 = llvm.getelementptr %36[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<5 x i8>
+        scf.yield %37 : !llvm.ptr
+      } else {
+        %36 = llvm.mlir.addressof @str9 : !llvm.ptr
+        %37 = llvm.getelementptr %36[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<6 x i8>
+        scf.yield %37 : !llvm.ptr
+      }
+      %35 = llvm.call @printf(%31, %34) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, !llvm.ptr) -> i32
+      arts.db_free(%guid) : memref<?xi64>
+      arts.db_free(%ptr) : memref<?xmemref<memref<?xi32>>>
+    }
+    return %4 : i32
+  }
+  func.func private @atoi(memref<?xi8>) -> i32 attributes {llvm.linkage = #llvm.linkage<external>}
+}
+
+DbGraph Analysis: main
+======================================
+Summary: 1 allocs, 1 acquires
+Peak: 1 live DBs, 0 bytes
+
+DB [A]
+  Op: %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>] route(%c0_i32 : i32) sizes[%c1] elementType(i32) elementSizes[%10] {arts.id = 8 : i64, arts.memref = #arts.memref_metadata<rank = 1 : i64, allocationId = "parallel_for.c:13:12", totalAccesses = 3 : i64, readCount = 2 : i64, writeCount = 1 : i64, readWriteRatio = 0.66666666666666663 : f64, allAccessesAffine = true, hasNonAffineAccesses = false, firstUseId = 8 : i64, hasUniformAccess = true, dominantAccessPattern = "sequential", accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 1 : i64, hasGoodSpatialLocality = true>} : (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+  Lifetime: Op 29 -> 52 (span=9, path=9)
+  Rank: 1
+  Size: 0 bytes (dynamic)
+  Usage: 1 acquires, 1 releases, depth=0
+  Acquires (1):
+    [A.1] Op 44->52, mode=#arts.mode<inout>, size=[1]
+      Offsets: [0]
+      EDT Uses - Reads: 0, Writes: 1
+  Releases: 1 (tracked in acquires)
+
+
+[0;1;35m[DEBUG] [db][0m Function main has 1 DbAcquire nodes
+[0;1;35m[DEBUG] [db][0m Skipping acquire %guid_0, %ptr_1 = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi32>>>) offsets[%c0] sizes[%c1] -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>): not a task EDT
+[0;1;35m[DEBUG] [db][0m Function atoi has 0 DbAcquire nodes
+[0;1;34m[INFO] [db][0m  - Running Phase 2 optimizations (parallel EDT refinement)
+[0;1;34m
+-----------------------------------------
+DbPass FINISHED
+-----------------------------------------
+
+[0mmodule attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i128, dense<128> : vector<2xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:o-i64:64-i128:128-n32:64-S128", llvm.target_triple = "arm64-apple-macosx16.0.0", "polygeist.target-cpu" = "apple-m1", "polygeist.target-features" = "+aes,+crc,+dotprod,+fp-armv8,+fp16fml,+fullfp16,+lse,+neon,+ras,+rcpc,+rdm,+sha2,+sha3,+v8.1a,+v8.2a,+v8.3a,+v8.4a,+v8.5a,+v8a,+zcm,+zcz"} {
+  llvm.mlir.global internal constant @str9("false\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str8("true\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str7("Success: %s\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str6("c[%d] = %d, a[%d] = %d, b[%d] = %d\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str5("Results:\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str4("Parallel region completed\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str3("Parallel region:\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str2("a[%d] = %d, b[%d] = %d\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str1("Initial values:\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str0("Usage: %s <size>\0A\00") {addr_space = 0 : i32}
+  llvm.func @printf(!llvm.ptr, ...) -> i32
+  func.func @main(%arg0: i32, %arg1: memref<?xmemref<?xi8>>) -> i32 attributes {llvm.linkage = #llvm.linkage<external>} {
+    %false = arith.constant false
+    %true = arith.constant true
+    %c4 = arith.constant 4 : index
+    %c4_i64 = arith.constant 4 : i64
+    %c1_i8 = arith.constant 1 : i8
+    %c0_i8 = arith.constant 0 : i8
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c2_i32 = arith.constant 2 : i32
+    %c1 = arith.constant 1 : index
+    %c0 = arith.constant 0 : index
+    %0 = llvm.mlir.undef : i32
+    %1 = arith.cmpi slt, %arg0, %c2_i32 : i32
+    %2 = arith.cmpi sge, %arg0, %c2_i32 : i32
+    %3 = arith.select %1, %c1_i32, %0 : i32
+    scf.if %1 {
+      %5 = llvm.mlir.addressof @str0 : !llvm.ptr
+      %6 = llvm.getelementptr %5[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<18 x i8>
+      %7 = memref.load %arg1[%c0] : memref<?xmemref<?xi8>>
+      %8 = polygeist.memref2pointer %7 : memref<?xi8> to !llvm.ptr
+      %9 = llvm.call @printf(%6, %8) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, !llvm.ptr) -> i32
+    }
+    %4 = arith.select %2, %c0_i32, %3 : i32
+    scf.if %2 {
+      %5 = memref.load %arg1[%c1] : memref<?xmemref<?xi8>>
+      %6 = func.call @atoi(%5) : (memref<?xi8>) -> i32
+      %7 = arith.extsi %6 : i32 to i64
+      %8 = arith.muli %7, %c4_i64 : i64
+      %9 = arith.index_cast %8 : i64 to index
+      %10 = arith.divui %9, %c4 : index
+      %guid, %ptr = arts.db_alloc[<inout>, <heap>, <write>] route(%c0_i32 : i32) sizes[%c1] elementType(i32) elementSizes[%10] {arts.id = 8 : i64, arts.memref = #arts.memref_metadata<rank = 1 : i64, allocationId = "parallel_for.c:13:12", totalAccesses = 3 : i64, readCount = 2 : i64, writeCount = 1 : i64, readWriteRatio = 0.66666666666666663 : f64, allAccessesAffine = true, hasNonAffineAccesses = false, firstUseId = 8 : i64, hasUniformAccess = true, dominantAccessPattern = "sequential", accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 1 : i64, hasGoodSpatialLocality = true>} : (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+      %11 = arith.index_cast %6 : i32 to index
+      %12 = llvm.mlir.addressof @str1 : !llvm.ptr
+      %13 = llvm.getelementptr %12[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<17 x i8>
+      %14 = llvm.call @printf(%13) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+      %15 = llvm.mlir.addressof @str2 : !llvm.ptr
+      %16 = llvm.getelementptr %15[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<24 x i8>
+      scf.for %arg2 = %c0 to %11 step %c1 {
+        %36 = arith.index_cast %arg2 : index to i32
+        %37 = arith.muli %36, %c2_i32 : i32
+        %38 = llvm.call @printf(%16, %36, %36, %36, %37) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32, i32, i32) -> i32
+      } {arts.id = 2 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, readCount = 2 : i64, writeCount = 0 : i64, tripCount = 0 : i64, nestingLevel = 0 : i64, hasUniformStride = true, hasGatherScatter = false, dataMovementPattern = 0 : i64, suggestedPartitioning = 0 : i64, suggestedChunkSize = 0 : i64, memoryFootprintPerIter = 8 : i64, hasInterIterationDeps = false, dependenceDistance = 0 : i64, locationKey = "-">}
+      %17 = llvm.mlir.addressof @str3 : !llvm.ptr
+      %18 = llvm.getelementptr %17[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<18 x i8>
+      %19 = llvm.call @printf(%18) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+      %guid_0, %ptr_1 = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi32>>>) offsets[%c0] sizes[%c1] -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+      arts.edt <parallel> <internode> route(%c0_i32) (%ptr_1) : memref<?xmemref<memref<?xi32>>> {
+      ^bb0(%arg2: memref<?xmemref<memref<?xi32>>>):
+        arts.for(%c0) to(%11) step(%c1) schedule(<static>) {{
+        ^bb0(%arg3: index):
+          %36 = arith.index_cast %arg3 : index to i32
+          %37 = arith.muli %36, %c2_i32 : i32
+          %38 = arith.addi %36, %37 : i32
+          %39 = arts.db_ref %arg2[%c0] : memref<?xmemref<memref<?xi32>>> -> memref<?xi32>
+          memref.store %38, %39[%arg3] : memref<?xi32>
+        }}
+        arts.db_release(%arg2) : memref<?xmemref<memref<?xi32>>>
+      }
+      %20 = llvm.mlir.addressof @str4 : !llvm.ptr
+      %21 = llvm.getelementptr %20[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<27 x i8>
+      %22 = llvm.call @printf(%21) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+      %23 = arith.cmpi sgt, %6, %c0_i32 : i32
+      %24 = scf.if %23 -> (i8) {
+        %36:2 = scf.for %arg2 = %c0 to %11 step %c1 iter_args(%arg3 = %c1_i8, %arg4 = %true) -> (i8, i1) {
+          %37:2 = scf.if %arg4 -> (i8, i1) {
+            %38 = arts.db_ref %ptr[%c0] : memref<?xmemref<memref<?xi32>>> -> memref<?xi32>
+            %39 = memref.load %38[%arg2] : memref<?xi32>
+            %40 = arith.index_cast %arg2 : index to i32
+            %41 = arith.muli %40, %c2_i32 : i32
+            %42 = arith.addi %40, %41 : i32
+            %43 = arith.cmpi ne, %39, %42 : i32
+            %44 = arith.select %43, %c0_i8, %arg3 : i8
+            %45 = arith.cmpi eq, %39, %42 : i32
+            scf.yield %44, %45 : i8, i1
+          } else {
+            scf.yield %arg3, %false : i8, i1
+          }
+          scf.yield %37#0, %37#1 : i8, i1
+        } {arts.id = 4 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, readCount = 3 : i64, writeCount = 0 : i64, tripCount = 0 : i64, nestingLevel = 0 : i64, hasUniformStride = true, hasGatherScatter = false, dataMovementPattern = 0 : i64, suggestedPartitioning = 0 : i64, suggestedChunkSize = 0 : i64, memoryFootprintPerIter = 12 : i64, hasInterIterationDeps = true, dependenceDistance = 0 : i64, locationKey = "-">}
+        scf.yield %36#0 : i8
+      } else {
+        scf.yield %c1_i8 : i8
+      }
+      %25 = llvm.mlir.addressof @str5 : !llvm.ptr
+      %26 = llvm.getelementptr %25[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<10 x i8>
+      %27 = llvm.call @printf(%26) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+      %28 = llvm.mlir.addressof @str6 : !llvm.ptr
+      %29 = llvm.getelementptr %28[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<36 x i8>
+      scf.for %arg2 = %c0 to %11 step %c1 {
+        %36 = arith.index_cast %arg2 : index to i32
+        %37 = arts.db_ref %ptr[%c0] : memref<?xmemref<memref<?xi32>>> -> memref<?xi32>
+        %38 = memref.load %37[%arg2] : memref<?xi32>
+        %39 = arith.muli %36, %c2_i32 : i32
+        %40 = llvm.call @printf(%29, %36, %38, %36, %36, %36, %39) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32, i32, i32, i32, i32) -> i32
+      } {arts.id = 5 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, readCount = 3 : i64, writeCount = 0 : i64, tripCount = 0 : i64, nestingLevel = 0 : i64, hasUniformStride = true, hasGatherScatter = false, dataMovementPattern = 0 : i64, suggestedPartitioning = 0 : i64, suggestedChunkSize = 0 : i64, memoryFootprintPerIter = 12 : i64, hasInterIterationDeps = false, dependenceDistance = 0 : i64, locationKey = "-">}
+      %30 = llvm.mlir.addressof @str7 : !llvm.ptr
+      %31 = llvm.getelementptr %30[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<13 x i8>
+      %32 = arith.extui %24 : i8 to i32
+      %33 = arith.cmpi ne, %32, %c0_i32 : i32
+      %34 = scf.if %33 -> (!llvm.ptr) {
+        %36 = llvm.mlir.addressof @str8 : !llvm.ptr
+        %37 = llvm.getelementptr %36[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<5 x i8>
+        scf.yield %37 : !llvm.ptr
+      } else {
+        %36 = llvm.mlir.addressof @str9 : !llvm.ptr
+        %37 = llvm.getelementptr %36[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<6 x i8>
+        scf.yield %37 : !llvm.ptr
+      }
+      %35 = llvm.call @printf(%31, %34) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, !llvm.ptr) -> i32
+      arts.db_free(%guid) : memref<?xi64>
+      arts.db_free(%ptr) : memref<?xmemref<memref<?xi32>>>
+    }
+    return %4 : i32
+  }
+  func.func private @atoi(memref<?xi8>) -> i32 attributes {llvm.linkage = #llvm.linkage<external>}
+}
+module attributes {dlti.dl_spec = #dlti.dl_spec<#dlti.dl_entry<i128, dense<128> : vector<2xi32>>, #dlti.dl_entry<f128, dense<128> : vector<2xi32>>, #dlti.dl_entry<i64, dense<64> : vector<2xi32>>, #dlti.dl_entry<i32, dense<32> : vector<2xi32>>, #dlti.dl_entry<i16, dense<16> : vector<2xi32>>, #dlti.dl_entry<f16, dense<16> : vector<2xi32>>, #dlti.dl_entry<f64, dense<64> : vector<2xi32>>, #dlti.dl_entry<!llvm.ptr, dense<64> : vector<4xi32>>, #dlti.dl_entry<i8, dense<8> : vector<2xi32>>, #dlti.dl_entry<i1, dense<8> : vector<2xi32>>, #dlti.dl_entry<"dlti.stack_alignment", 128 : i32>, #dlti.dl_entry<"dlti.endianness", "little">>, llvm.data_layout = "e-m:o-i64:64-i128:128-n32:64-S128", llvm.target_triple = "arm64-apple-macosx16.0.0", "polygeist.target-cpu" = "apple-m1", "polygeist.target-features" = "+aes,+crc,+dotprod,+fp-armv8,+fp16fml,+fullfp16,+lse,+neon,+ras,+rcpc,+rdm,+sha2,+sha3,+v8.1a,+v8.2a,+v8.3a,+v8.4a,+v8.5a,+v8a,+zcm,+zcz"} {
+  llvm.mlir.global internal constant @str9("false\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str8("true\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str7("Success: %s\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str6("c[%d] = %d, a[%d] = %d, b[%d] = %d\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str5("Results:\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str4("Parallel region completed\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str3("Parallel region:\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str2("a[%d] = %d, b[%d] = %d\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str1("Initial values:\0A\00") {addr_space = 0 : i32}
+  llvm.mlir.global internal constant @str0("Usage: %s <size>\0A\00") {addr_space = 0 : i32}
+  llvm.func @printf(!llvm.ptr, ...) -> i32
+  func.func @main(%arg0: i32, %arg1: memref<?xmemref<?xi8>>) -> i32 attributes {llvm.linkage = #llvm.linkage<external>} {
+    %c8 = arith.constant 8 : index
+    %false = arith.constant false
+    %true = arith.constant true
+    %c4 = arith.constant 4 : index
+    %c4_i64 = arith.constant 4 : i64
+    %c1_i8 = arith.constant 1 : i8
+    %c0_i8 = arith.constant 0 : i8
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c2_i32 = arith.constant 2 : i32
+    %c1 = arith.constant 1 : index
+    %c0 = arith.constant 0 : index
+    %0 = llvm.mlir.undef : i32
+    %1 = arith.cmpi slt, %arg0, %c2_i32 : i32
+    %2 = arith.cmpi sge, %arg0, %c2_i32 : i32
+    %3 = arith.select %1, %c1_i32, %0 : i32
+    scf.if %1 {
+      %5 = llvm.mlir.addressof @str0 : !llvm.ptr
+      %6 = llvm.getelementptr %5[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<18 x i8>
+      %7 = memref.load %arg1[%c0] : memref<?xmemref<?xi8>>
+      %8 = polygeist.memref2pointer %7 : memref<?xi8> to !llvm.ptr
+      %9 = llvm.call @printf(%6, %8) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, !llvm.ptr) -> i32
+    }
+    %4 = arith.select %2, %c0_i32, %3 : i32
+    scf.if %2 {
+      %5 = memref.load %arg1[%c1] : memref<?xmemref<?xi8>>
+      %6 = func.call @atoi(%5) : (memref<?xi8>) -> i32
+      %7 = arith.extsi %6 : i32 to i64
+      %8 = arith.muli %7, %c4_i64 : i64
+      %9 = arith.index_cast %8 : i64 to index
+      %10 = arith.divui %9, %c4 : index
+      %guid, %ptr = arts.db_alloc[<inout>, <heap>, <pinned>] route(%c0_i32 : i32) sizes[%c1] elementType(i32) elementSizes[%10] {arts.id = 8 : i64, arts.memref = #arts.memref_metadata<rank = 1 : i64, allocationId = "parallel_for.c:13:12", totalAccesses = 3 : i64, readCount = 2 : i64, writeCount = 1 : i64, readWriteRatio = 0.66666666666666663 : f64, allAccessesAffine = true, hasNonAffineAccesses = false, firstUseId = 8 : i64, hasUniformAccess = true, dominantAccessPattern = "sequential", accessedInParallelLoop = true, hasLoopCarriedDeps = true, reuseDistance = 1 : i64, hasGoodSpatialLocality = true>} : (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+      %11 = arith.index_cast %6 : i32 to index
+      %12 = llvm.mlir.addressof @str1 : !llvm.ptr
+      %13 = llvm.getelementptr %12[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<17 x i8>
+      %14 = llvm.call @printf(%13) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+      %15 = llvm.mlir.addressof @str2 : !llvm.ptr
+      %16 = llvm.getelementptr %15[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<24 x i8>
+      scf.for %arg2 = %c0 to %11 step %c1 {
+        %36 = arith.index_cast %arg2 : index to i32
+        %37 = arith.muli %36, %c2_i32 : i32
+        %38 = llvm.call @printf(%16, %36, %36, %36, %37) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32, i32, i32) -> i32
+      } {arts.id = 2 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, readCount = 2 : i64, writeCount = 0 : i64, tripCount = 0 : i64, nestingLevel = 0 : i64, hasUniformStride = true, hasGatherScatter = false, dataMovementPattern = 0 : i64, suggestedPartitioning = 0 : i64, suggestedChunkSize = 0 : i64, memoryFootprintPerIter = 8 : i64, hasInterIterationDeps = false, dependenceDistance = 0 : i64, locationKey = "-">}
+      %17 = llvm.mlir.addressof @str3 : !llvm.ptr
+      %18 = llvm.getelementptr %17[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<18 x i8>
+      %19 = llvm.call @printf(%18) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+      %guid_0, %ptr_1 = arts.db_acquire[<inout>] (%guid : memref<?xi64>, %ptr : memref<?xmemref<memref<?xi32>>>) offsets[%c0] sizes[%c1] -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+      arts.edt <parallel> <intranode> route(%c0_i32) (%ptr_1) : memref<?xmemref<memref<?xi32>>> attributes {workers = #arts.workers<8>} {
+      ^bb0(%arg2: memref<?xmemref<memref<?xi32>>>):
+        %36 = arts.epoch {
+          %37 = arts.get_parallel_worker_id
+          %38 = arith.divui %11, %c8 : index
+          %39 = arith.remui %11, %c8 : index
+          %40 = arith.cmpi ult, %37, %39 : index
+          %41 = arith.index_cast %40 : i1 to index
+          %42 = arith.addi %38, %41 : index
+          %43 = arith.muli %37, %38 : index
+          %44 = arith.minui %37, %39 : index
+          %45 = arith.addi %43, %44 : index
+          %46 = arith.cmpi ult, %11, %45 : index
+          %47 = arith.subi %11, %45 : index
+          %48 = arith.select %46, %c0, %47 : index
+          %49 = arith.minui %42, %48 : index
+          %50 = arith.cmpi ugt, %49, %c0 : index
+          scf.if %50 {
+            %guid_2, %ptr_3 = arts.db_acquire[<inout>] ( %arg2 : memref<?xmemref<memref<?xi32>>>) offsets[%c0] sizes[%c1] -> (memref<?xi64>, memref<?xmemref<memref<?xi32>>>)
+            %51 = arith.index_cast %37 : index to i32
+            arts.edt <task> <intranode> route(%51) (%ptr_3) : memref<?xmemref<memref<?xi32>>> {
+            ^bb0(%arg3: memref<?xmemref<memref<?xi32>>>):
+              scf.for %arg4 = %c0 to %49 step %c1 {
+                %52 = arith.addi %45, %arg4 : index
+                %53 = arith.index_cast %52 : index to i32
+                %54 = arith.muli %53, %c2_i32 : i32
+                %55 = arith.addi %53, %54 : i32
+                %56 = arts.db_ref %arg3[%c0] : memref<?xmemref<memref<?xi32>>> -> memref<?xi32>
+                memref.store %55, %56[%52] : memref<?xi32>
+              } {arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, readCount = 0 : i64, writeCount = 0 : i64, tripCount = 0 : i64, nestingLevel = 0 : i64, hasUniformStride = false, hasGatherScatter = false, dataMovementPattern = 6 : i64, suggestedPartitioning = 4 : i64, suggestedChunkSize = 0 : i64, memoryFootprintPerIter = 0 : i64, hasInterIterationDeps = false, dependenceDistance = 0 : i64, locationKey = "parallel_for.c:27:1">}
+              arts.db_release(%arg3) : memref<?xmemref<memref<?xi32>>>
+            }
+          }
+        } : i64
+        arts.db_release(%arg2) : memref<?xmemref<memref<?xi32>>>
+      }
+      %20 = llvm.mlir.addressof @str4 : !llvm.ptr
+      %21 = llvm.getelementptr %20[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<27 x i8>
+      %22 = llvm.call @printf(%21) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+      %23 = arith.cmpi sgt, %6, %c0_i32 : i32
+      %24 = scf.if %23 -> (i8) {
+        %36:2 = scf.for %arg2 = %c0 to %11 step %c1 iter_args(%arg3 = %c1_i8, %arg4 = %true) -> (i8, i1) {
+          %37:2 = scf.if %arg4 -> (i8, i1) {
+            %38 = arts.db_ref %ptr[%c0] : memref<?xmemref<memref<?xi32>>> -> memref<?xi32>
+            %39 = memref.load %38[%arg2] : memref<?xi32>
+            %40 = arith.index_cast %arg2 : index to i32
+            %41 = arith.muli %40, %c2_i32 : i32
+            %42 = arith.addi %40, %41 : i32
+            %43 = arith.cmpi ne, %39, %42 : i32
+            %44 = arith.select %43, %c0_i8, %arg3 : i8
+            %45 = arith.cmpi eq, %39, %42 : i32
+            scf.yield %44, %45 : i8, i1
+          } else {
+            scf.yield %arg3, %false : i8, i1
+          }
+          scf.yield %37#0, %37#1 : i8, i1
+        } {arts.id = 4 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = false, hasReductions = false, readCount = 3 : i64, writeCount = 0 : i64, tripCount = 0 : i64, nestingLevel = 0 : i64, hasUniformStride = true, hasGatherScatter = false, dataMovementPattern = 0 : i64, suggestedPartitioning = 0 : i64, suggestedChunkSize = 0 : i64, memoryFootprintPerIter = 12 : i64, hasInterIterationDeps = true, dependenceDistance = 0 : i64, locationKey = "-">}
+        scf.yield %36#0 : i8
+      } else {
+        scf.yield %c1_i8 : i8
+      }
+      %25 = llvm.mlir.addressof @str5 : !llvm.ptr
+      %26 = llvm.getelementptr %25[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<10 x i8>
+      %27 = llvm.call @printf(%26) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr) -> i32
+      %28 = llvm.mlir.addressof @str6 : !llvm.ptr
+      %29 = llvm.getelementptr %28[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<36 x i8>
+      scf.for %arg2 = %c0 to %11 step %c1 {
+        %36 = arith.index_cast %arg2 : index to i32
+        %37 = arts.db_ref %ptr[%c0] : memref<?xmemref<memref<?xi32>>> -> memref<?xi32>
+        %38 = memref.load %37[%arg2] : memref<?xi32>
+        %39 = arith.muli %36, %c2_i32 : i32
+        %40 = llvm.call @printf(%29, %36, %38, %36, %36, %36, %39) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, i32, i32, i32, i32, i32, i32) -> i32
+      } {arts.id = 5 : i64, arts.loop = #arts.loop_metadata<potentiallyParallel = true, hasReductions = false, readCount = 3 : i64, writeCount = 0 : i64, tripCount = 0 : i64, nestingLevel = 0 : i64, hasUniformStride = true, hasGatherScatter = false, dataMovementPattern = 0 : i64, suggestedPartitioning = 0 : i64, suggestedChunkSize = 0 : i64, memoryFootprintPerIter = 12 : i64, hasInterIterationDeps = false, dependenceDistance = 0 : i64, locationKey = "-">}
+      %30 = llvm.mlir.addressof @str7 : !llvm.ptr
+      %31 = llvm.getelementptr %30[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<13 x i8>
+      %32 = arith.extui %24 : i8 to i32
+      %33 = arith.cmpi ne, %32, %c0_i32 : i32
+      %34 = scf.if %33 -> (!llvm.ptr) {
+        %36 = llvm.mlir.addressof @str8 : !llvm.ptr
+        %37 = llvm.getelementptr %36[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<5 x i8>
+        scf.yield %37 : !llvm.ptr
+      } else {
+        %36 = llvm.mlir.addressof @str9 : !llvm.ptr
+        %37 = llvm.getelementptr %36[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<6 x i8>
+        scf.yield %37 : !llvm.ptr
+      }
+      %35 = llvm.call @printf(%31, %34) vararg(!llvm.func<i32 (ptr, ...)>) : (!llvm.ptr, !llvm.ptr) -> i32
+      arts.db_free(%guid) : memref<?xi64>
+      arts.db_free(%ptr) : memref<?xmemref<memref<?xi32>>>
+    }
+    return %4 : i32
+  }
+  func.func private @atoi(memref<?xi8>) -> i32 attributes {llvm.linkage = #llvm.linkage<external>}
+}

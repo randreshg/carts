@@ -41,9 +41,11 @@ struct LoopInfo {
 /// Manages all loop operations in the module and provides LoopNode objects
 /// that combine graph structure with rich loop metadata.
 ///===----------------------------------------------------------------------===///
+class ArtsAnalysisManager;
 class LoopAnalysis {
 public:
-  explicit LoopAnalysis(Operation *module);
+  explicit LoopAnalysis(Operation *module,
+                        ArtsAnalysisManager *analysisManager = nullptr);
   ~LoopAnalysis();
 
   /// Build analysis - creates LoopNodes for all loops in module
@@ -68,22 +70,12 @@ public:
   void collectAffectingLoops(Operation *op,
                              SmallVectorImpl<LoopNode *> &affectingLoops);
 
-  ///===--------------------------------------------------------------------===///
-  /// Legacy API 
-  ///===--------------------------------------------------------------------===///
-
-  /// Get basic loop information (legacy)
-  LoopInfo *getLoopInfo(Operation *op);
-
-  /// Check if a value is dependent on a loop
-  bool isDependentOnLoop(Value val, SmallVectorImpl<Operation *> &loops);
-
-  /// Collect affecting loops (returns Operation* for legacy code)
-  void collectAffectingLoops(Value val,
-                             SmallVectorImpl<Operation *> &affectingLoops);
+  /// Get the analysis manager
+  ArtsAnalysisManager *getAnalysisManager() const { return analysisManager; }
 
 private:
   ModuleOp module;
+  ArtsAnalysisManager *analysisManager = nullptr;
 
   /// THE KEY: Map from loop operation → LoopNode (owns metadata)
   /// This is the single source of truth for all loop information

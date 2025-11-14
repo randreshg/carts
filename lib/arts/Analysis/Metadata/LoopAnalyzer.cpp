@@ -52,7 +52,7 @@ void LoopAnalyzer::analyzeAffineLoop(affine::AffineForOp forOp,
   metadata->dataMovementPattern = classifyDataMovement(metadata);
   suggestPartitioning(metadata);
   computeMemoryFootprintPerIter(forOp, metadata);
-  /// TODO: Add reduction detection when available
+  finalizeParallelFlag(forOp.getOperation(), metadata);
 }
 
 void LoopAnalyzer::analyzeSCFLoop(Operation *loopOp, LoopMetadata *metadata) {
@@ -106,6 +106,7 @@ void LoopAnalyzer::analyzeSCFLoop(Operation *loopOp, LoopMetadata *metadata) {
   suggestPartitioning(metadata);
   computeMemoryFootprintPerIter(loopOp, metadata);
   /// TODO: Add reduction detection when available
+  finalizeParallelFlag(loopOp, metadata);
 }
 
 void LoopAnalyzer::analyzeMemoryAccesses(Operation *loopOp,
@@ -151,7 +152,7 @@ LoopMetadata::DataMovement
 LoopAnalyzer::classifyDataMovement(LoopMetadata *metadata) {
   /// Classify based on access patterns
   if (metadata->hasGatherScatter) {
-    if (metadata->writeCount > metadata->readCount) 
+    if (metadata->writeCount > metadata->readCount)
       return LoopMetadata::DataMovement::Scatter;
     else
       return LoopMetadata::DataMovement::Gather;
@@ -169,7 +170,7 @@ LoopAnalyzer::classifyDataMovement(LoopMetadata *metadata) {
 
 void LoopAnalyzer::suggestPartitioning(LoopMetadata *metadata) {
   /// Don't suggest partitioning for sequential loops
-  if (!metadata->potentiallyParallel) 
+  if (!metadata->potentiallyParallel)
     return;
 
   /// Suggest partitioning based on trip count
@@ -208,11 +209,27 @@ void LoopAnalyzer::computeMemoryFootprintPerIter(Operation *loopOp,
   for (Value memref : uniqueMemrefs) {
     if (auto memrefType = memref.getType().dyn_cast<MemRefType>()) {
       Type elemType = memrefType.getElementType();
-      unsigned elemBits = elemType.getIntOrFloatBitWidth();
-      int64_t elemBytes = (elemBits + 7) / 8;
-      footprint += elemBytes;
+      uint64_t elemBytes = arts::getElementTypeByteSize(elemType);
+      if (elemBytes > 0)
+        footprint += static_cast<int64_t>(elemBytes);
     }
   }
 
   metadata->memoryFootprintPerIter = footprint;
+}
+
+void LoopAnalyzer::finalizeParallelFlag(Operation *loopOp,
+                                        LoopMetadata *metadata) {
+  bool hasDeps =
+      metadata->hasInterIterationDeps && *metadata->hasInterIterationDeps;
+  if (hasDeps) {
+    metadata->potentiallyParallel = false;
+    return;
+  }
+
+  if (!metadata->potentiallyParallel &&
+      isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp, scf::ForallOp>(
+          loopOp)) {
+    metadata->potentiallyParallel = true;
+  }
 }
