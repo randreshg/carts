@@ -35,10 +35,11 @@
 //==========================================================================
 
 #include "ArtsPassDetails.h"
+#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/ArtsDialect.h"
+#include "arts/Transforms/DbRewriter.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
-#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Utils/Metadata/MemrefMetadata.h"
 #include <optional>
 
@@ -205,6 +206,8 @@ void CreateDbsPass::runOnOperation() {
   opsToRemove.clear();
   memrefInfo.clear();
 
+  importMetadata();
+
   ARTS_INFO_HEADER(CreateDbsPass);
   ARTS_DEBUG_REGION(module.dump(););
 
@@ -271,7 +274,10 @@ void CreateDbsPass::runOnOperation() {
 
   /// Phase 5: Clean up legacy allocations
   ARTS_INFO("Phase 5: Cleaning up legacy allocations");
-  removeOps(module, opsToRemove, true);
+  OpRemovalManager removalMgr;
+  for (Operation *op : opsToRemove)
+    removalMgr.markForRemoval(op);
+  removalMgr.removeAllMarked(module, /*recursive=*/true);
 
   /// Phase 6: Enabling verification for EDTs
   module.walk([](EdtOp edt) { edt.removeNoVerifyAttr(); });
@@ -292,22 +298,20 @@ void CreateDbsPass::importMetadata() {
   ARTS_INFO("Attempting to import metadata from: " << metadataPath);
 
   ArtsMetadataManager manager(module.getContext());
-  bool success = manager.importFromJsonFile(metadataPath);
+  bool success = manager.importFromJsonFile(module, metadataPath);
   if (success) {
-    manager.importFromOperations(module);
-    ARTS_INFO("Successfully imported metadata from sequential compilation");
+    ARTS_INFO("Successfully attached metadata from sequential compilation");
 
     /// Print summary of imported metadata
     unsigned allocsWithMeta = 0, loopsWithMeta = 0;
     module.walk([&](Operation *op) {
       if (isa<memref::AllocOp, memref::AllocaOp>(op)) {
-        if (op->hasAttr(AttrNames::MemrefMetadata::Rank))
+        if (op->hasAttr(AttrNames::MemrefMetadata::Name))
           allocsWithMeta++;
+      } else if (isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp>(op)) {
+        if (op->hasAttr(AttrNames::LoopMetadata::Name))
+          loopsWithMeta++;
       }
-    });
-    module.walk([&](affine::AffineForOp forOp) {
-      if (forOp->hasAttr("arts.is_parallel"))
-        loopsWithMeta++;
     });
 
     ARTS_INFO("  Allocations with metadata: " << allocsWithMeta);
@@ -357,9 +361,12 @@ void CreateDbsPass::collectMemrefs() {
         /// Get the underlying value of the memory reference
         Operation *underlyingOp = arts::getUnderlyingOperation(operand);
         if (!underlyingOp) {
-          ARTS_ERROR("Value with no underlying operation: " << operand);
-          assert(false && "Value with no underlying operation");
-          return;
+          if (auto load = operand.getDefiningOp<memref::LoadOp>())
+            underlyingOp = arts::getUnderlyingOperation(load.getMemref());
+        }
+        if (!underlyingOp) {
+          ARTS_WARN("Skipping value with no underlying operation: " << operand);
+          continue;
         }
 
         /// If it is found, check the parent edt
@@ -657,9 +664,11 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
     /// Locate the underlying operation
     ARTS_DEBUG(" - Getting underlying operation for " << externalDep);
     Operation *underlyingOp = arts::getUnderlyingOperation(externalDep);
+    if (!underlyingOp)
+      if (auto load = externalDep.getDefiningOp<memref::LoadOp>())
+        underlyingOp = arts::getUnderlyingOperation(load.getMemref());
     if (!underlyingOp) {
-      ARTS_ERROR("Value with no underlying operation: " << externalDep);
-      assert(false && "Value with no underlying operation");
+      ARTS_WARN("Skipping value with no underlying operation: " << externalDep);
       continue;
     }
 
@@ -885,73 +894,14 @@ bool CreateDbsPass::rewriteOperation(Operation *op, Type elementMemRefType,
                                      Value basePtr, Operation *dbOp,
                                      OpBuilder &builder, uint64_t initialIndex,
                                      SmallVector<Value> *chunkOffsets) {
-  /// Helper to adjust indices for chunk offsets
-  auto adjustIndicesForChunks =
-      [&](mlir::OperandRange rawIndices) -> SmallVector<Value> {
-    /// First, strip pinned dimensions (initialIndex)
-    SmallVector<Value> indices(rawIndices.begin() + initialIndex,
-                               rawIndices.end());
-
-    /// Then, subtract chunk offsets if provided
-    if (chunkOffsets && !chunkOffsets->empty()) {
-      for (size_t i = 0; i < indices.size() && i < chunkOffsets->size(); ++i) {
-        Value offset = (*chunkOffsets)[i];
-        /// Subtract offset to get relative index within chunk
-        indices[i] =
-            builder.create<arith::SubIOp>(op->getLoc(), indices[i], offset);
-      }
-    }
-    return indices;
-  };
-
-  /// Dbref for outer indices and new load for inner indices
-  if (auto load = dyn_cast<memref::LoadOp>(op)) {
-    Location loc = load.getLoc();
-    builder.setInsertionPoint(load);
-    SmallVector<Value> indices = adjustIndicesForChunks(load.getIndices());
-    auto [outerIdx, innerIdx] =
-        arts::splitDbIndices(dbOp, indices, builder, loc);
-    auto dbRef =
-        builder.create<DbRefOp>(loc, elementMemRefType, basePtr, outerIdx);
-    auto newLoad = builder.create<memref::LoadOp>(loc, dbRef, innerIdx);
-    load.replaceAllUsesWith(newLoad.getResult());
-    opsToRemove.insert(load);
-    return true;
-  }
-
-  /// Dbref for outer indices and new store for inner indices
-  if (auto store = dyn_cast<memref::StoreOp>(op)) {
-    Location loc = store.getLoc();
-    builder.setInsertionPoint(store);
-    SmallVector<Value> indices = adjustIndicesForChunks(store.getIndices());
-    auto [outerIdx, innerIdx] =
-        arts::splitDbIndices(dbOp, indices, builder, loc);
-
-    auto dbRef =
-        builder.create<DbRefOp>(loc, elementMemRefType, basePtr, outerIdx);
-    builder.create<memref::StoreOp>(loc, store.getValueToStore(), dbRef,
-                                    innerIdx);
-    opsToRemove.insert(store);
-    return true;
-  }
-
-  /// Memref2PointerOp loads the element 0 of the acquired memref and creates
-  /// a new DbRefOp
-  if (auto m2p = dyn_cast<polygeist::Memref2PointerOp>(op)) {
-    Location loc = m2p.getLoc();
-    builder.setInsertionPoint(m2p);
-    SmallVector<Value> indicesConst0;
-    indicesConst0.push_back(builder.create<arith::ConstantIndexOp>(loc, 0));
-    auto dbRef =
-        builder.create<DbRefOp>(loc, elementMemRefType, basePtr, indicesConst0);
-    auto newM2p = builder.create<polygeist::Memref2PointerOp>(
-        loc, m2p.getResult().getType(), dbRef.getResult());
-    m2p.getResult().replaceAllUsesWith(newM2p.getResult());
-    opsToRemove.insert(m2p);
-    return true;
-  }
-
-  return false;
+  ArrayRef<Value> offsetsRef;
+  SmallVector<Value> empty;
+  if (chunkOffsets)
+    offsetsRef = *chunkOffsets;
+  else
+    offsetsRef = empty;
+  return rewriteDbUserOperation(op, elementMemRefType, basePtr, dbOp,
+                                initialIndex, offsetsRef, builder, opsToRemove);
 }
 
 ///===----------------------------------------------------------------------===///

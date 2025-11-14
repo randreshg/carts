@@ -9,7 +9,9 @@
 #include "arts/Analysis/Edt/EdtInfo.h"
 #include "arts/Analysis/Graphs/Base/NodeBase.h"
 #include "arts/ArtsDialect.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace mlir {
@@ -39,10 +41,15 @@ public:
   EdtInfo &getInfo() { return info; }
   const EdtInfo &getInfo() const { return info; }
 
-  /// Loop association
-  void setAssociatedLoop(LoopNode *loop) { associatedLoop = loop; }
-  LoopNode *getAssociatedLoop() { return associatedLoop; }
-  const LoopNode *getAssociatedLoop() const { return associatedLoop; }
+  /// Loop association helpers
+  void setAssociatedLoops(ArrayRef<LoopNode *> loops) {
+    enclosingLoops.assign(loops.begin(), loops.end());
+  }
+  void addAssociatedLoop(LoopNode *loop) {
+    if (loop)
+      enclosingLoops.push_back(loop);
+  }
+  ArrayRef<LoopNode *> getAssociatedLoops() const { return enclosingLoops; }
 
   NodeKind getKind() const override { return NodeKind::EdtTask; }
   static bool classof(const NodeBase *N) {
@@ -55,8 +62,8 @@ private:
   std::string hierId;
   EdtInfo info;
 
-  /// Optional association with an enclosing loop
-  LoopNode *associatedLoop = nullptr;
+  /// Optional association with one or more enclosing loops
+  SmallVector<LoopNode *, 4> enclosingLoops;
 };
 
 } // namespace arts

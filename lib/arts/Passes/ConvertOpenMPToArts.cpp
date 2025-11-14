@@ -683,7 +683,7 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   GreedyRewriteConfig config;
   (void)applyPatternsAndFoldGreedily(module, std::move(patterns), config);
 
-  removeUndefOps(module);
+  OpRemovalManager::removeUndefOps(module);
   ARTS_INFO_FOOTER(ConvertOpenMPToArtsPass);
   ARTS_DEBUG_REGION(module.dump(););
 }

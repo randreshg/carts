@@ -1,4 +1,0 @@
-# Concurrency analysis source files
-file(GLOB CONCURRENCY_SOURCE_FILES "*.cpp")
-
-set(CONCURRENCY_SOURCE_FILES ${CONCURRENCY_SOURCE_FILES} PARENT_SCOPE)

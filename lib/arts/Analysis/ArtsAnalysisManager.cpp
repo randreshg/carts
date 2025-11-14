@@ -6,7 +6,6 @@
 ///==========================================================================///
 
 #include "arts/Analysis/ArtsAnalysisManager.h"
-#include "arts/Analysis/Concurrency/ConcurrencyAnalysis.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "llvm/Support/raw_ostream.h"
@@ -26,8 +25,6 @@ void ArtsAnalysisManager::invalidate() {
     dbAnalysis->invalidate();
   if (edtAnalysis)
     edtAnalysis->invalidate();
-  if (concurrencyAnalysis)
-    concurrencyAnalysis->invalidate();
   if (metadataManager)
     metadataManager->clear();
 }
@@ -44,18 +41,12 @@ EdtAnalysis &ArtsAnalysisManager::getEdtAnalysis() {
   return *edtAnalysis.get();
 }
 
-ConcurrencyAnalysis &ArtsAnalysisManager::getConcurrencyAnalysis() {
-  if (!concurrencyAnalysis)
-    concurrencyAnalysis = std::make_unique<ConcurrencyAnalysis>(*this);
-  return *concurrencyAnalysis.get();
-}
-
 ArtsMetadataManager &ArtsAnalysisManager::getMetadataManager() {
   if (!metadataManager) {
     metadataManager =
         std::make_unique<ArtsMetadataManager>(module.getContext());
-    // Import metadata from operations (attributes attached by CollectMetadata pass)
     metadataManager->importFromOperations(module);
+    metadataManager->setMetadataFile(".carts-metadata.json");
   }
   return *metadataManager;
 }
@@ -63,7 +54,7 @@ ArtsMetadataManager &ArtsAnalysisManager::getMetadataManager() {
 const ArtsMetadataManager &ArtsAnalysisManager::getMetadataManager() const {
   // For const access, we need metadataManager to be already initialized
   assert(metadataManager && "Metadata manager not initialized. Call non-const "
-                             "getMetadataManager() first.");
+                            "getMetadataManager() first.");
   return *metadataManager;
 }
 
@@ -75,18 +66,12 @@ EdtGraph &ArtsAnalysisManager::getEdtGraph(func::FuncOp func) {
   return getEdtAnalysis().getOrCreateEdtGraph(func);
 }
 
-ConcurrencyGraph &ArtsAnalysisManager::getConcurrencyGraph(func::FuncOp func) {
-  return getConcurrencyAnalysis().getOrCreateConcurrencyGraph(func);
-}
-
 bool ArtsAnalysisManager::invalidateFunction(func::FuncOp func) {
   bool invalidated = false;
   if (dbAnalysis)
     invalidated |= dbAnalysis->invalidateGraph(func);
   if (edtAnalysis)
     invalidated |= edtAnalysis->invalidateGraph(func);
-  if (concurrencyAnalysis)
-    invalidated |= concurrencyAnalysis->invalidateConcurrencyGraph(func);
   return invalidated;
 }
 
@@ -98,7 +83,6 @@ void ArtsAnalysisManager::print(llvm::raw_ostream &os) {
     os << "  Function: " << func.getName() << "\n";
     os << "    DB Graph: Available\n";
     os << "    EDT Graph: Available\n";
-    os << "    Concurrency Graph: Available\n";
   }
 }
 
@@ -121,8 +105,7 @@ void ArtsAnalysisManager::exportToJson(llvm::raw_ostream &os,
     os << "      \"function\": \"" << func.getName() << "\",\n";
     os << "      \"graphs\": {\n";
     os << "        \"db\": \"available\",\n";
-    os << "        \"edt\": \"available\",\n";
-    os << "        \"concurrency\": \"available\"\n";
+    os << "        \"edt\": \"available\"\n";
     os << "      }\n";
     os << "    }";
   }

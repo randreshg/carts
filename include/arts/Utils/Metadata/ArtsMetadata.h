@@ -9,7 +9,9 @@
 #ifndef ARTS_UTILS_ARTSMETADATA_H
 #define ARTS_UTILS_ARTSMETADATA_H
 
+#include "arts/Utils/ArtsId.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "llvm/ADT/SmallVector.h"
@@ -26,6 +28,8 @@ namespace arts {
 ///===----------------------------------------------------------------------===///
 class ArtsMetadata {
 public:
+  static constexpr llvm::StringLiteral IdAttrName = "arts.id";
+
   ArtsMetadata(Operation *op) : op_(op) {
     assert(op_ && "Operation must not be null");
   }
@@ -40,6 +44,7 @@ public:
     Attribute attr = getMetadataAttr();
     if (attr)
       op_->setAttr(getMetadataName(), attr);
+    exportIdToOp();
   };
 
   /// Import/export metadata to/from JSON
@@ -47,13 +52,63 @@ public:
   virtual void exportToJson(llvm::json::Object &json) const = 0;
   virtual StringRef toString() const = 0;
 
+  Operation *getOperation() const { return op_; }
+  ArtsId getMetadataId() const { return metadataId_; }
+  void setMetadataId(ArtsId id) { metadataId_ = id; }
+
+protected:
+  void importIdFromOp() {
+    if (!op_)
+      return;
+    if (auto attr = op_->getAttrOfType<IntegerAttr>(IdAttrName))
+      metadataId_.set(attr.getInt());
+  }
+
+  void exportIdToOp() const {
+    if (!metadataId_.has_value() || !op_)
+      return;
+    auto *ctx = op_->getContext();
+    auto i64Ty = IntegerType::get(ctx, 64);
+    op_->setAttr(IdAttrName, IntegerAttr::get(i64Ty, metadataId_.value()));
+  }
+
+  void importIdFromJson(const llvm::json::Object &json,
+                        llvm::StringRef key = "arts_id") {
+    if (auto value = json.getInteger(key))
+      metadataId_.set(*value);
+  }
+
+  void exportIdToJson(llvm::json::Object &json,
+                      llvm::StringRef key = "arts_id") const {
+    if (metadataId_.has_value())
+      json[key] = metadataId_.value();
+  }
+
 private:
   /// Get the metadata attribute based on the Metadata attributes
   virtual Attribute getMetadataAttr() const = 0;
 
 protected:
   Operation *op_;
+  ArtsId metadataId_;
 };
+
+///===----------------------------------------------------------------------===///
+/// Metadata Attribute Utilities
+///===----------------------------------------------------------------------===///
+
+/// Extract boolean value from BoolAttr, returning false if attribute is null.
+inline bool getBoolFromAttr(BoolAttr attr) {
+  return attr ? attr.getValue() : false;
+}
+
+/// Extract integer value from IntegerAttr, returning nullopt if attribute is
+/// null.
+inline std::optional<int64_t> getIntFromAttr(IntegerAttr attr) {
+  if (!attr)
+    return std::nullopt;
+  return attr.getInt();
+}
 
 } // namespace arts
 } // namespace mlir

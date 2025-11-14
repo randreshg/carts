@@ -7,21 +7,50 @@
 #define ARTS_ANALYSIS_GRAPHS_EDT_EDTEDGE_H
 
 #include "arts/Analysis/Graphs/Base/EdgeBase.h"
-#include "arts/Analysis/Graphs/Db/DbNode.h"
+#include "arts/Analysis/Loop/LoopNode.h"
+#include "arts/ArtsDialect.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
+#include <string>
+#include <cstdint>
 
 namespace mlir {
 namespace arts {
 
+class DbAllocNode;
+class DbAcquireNode;
+
+struct DbAcquireUsage {
+  DbAllocOp alloc;
+  DbAcquireOp acquire;
+  DbAllocNode *allocNode = nullptr;
+  DbAcquireNode *acquireNode = nullptr;
+  ArtsMode mode = ArtsMode::in;
+  uint64_t estimatedBytes = 0;
+  std::string label;
+  SmallVector<LoopNode *, 4> loops;
+};
+
+struct DbEdgeSlice {
+  DbAcquireUsage producer;
+  DbAcquireUsage consumer;
+  DbDepType depType = DbDepType::RAW;
+  std::string description;
+};
+
 class EdtDepEdge : public EdgeBase {
 public:
-  EdtDepEdge(NodeBase *from, NodeBase *to, NodeBase *dbNode);
+  EdtDepEdge(NodeBase *from, NodeBase *to, const DbEdgeSlice &slice);
 
   NodeBase *getFrom() const override { return from; }
   NodeBase *getTo() const override { return to; }
   EdgeKind getKind() const override { return EdgeKind::Dep; }
-  StringRef getType() const override { return dbNode->getHierId(); }
+  StringRef getType() const override { return typeLabel; }
   void print(llvm::raw_ostream &os) const override;
+
+  ArrayRef<DbEdgeSlice> getSlices() const { return dbSlices; }
+  void appendSlice(const DbEdgeSlice &slice) { dbSlices.push_back(slice); }
 
   static bool classof(const EdgeBase *E) {
     return E->getKind() == EdgeKind::Dep;
@@ -30,8 +59,8 @@ public:
 private:
   NodeBase *from;
   NodeBase *to;
-  /// DbGraph node causing dependency
-  NodeBase *dbNode;
+  SmallVector<DbEdgeSlice, 2> dbSlices;
+  std::string typeLabel;
 };
 
 } // namespace arts

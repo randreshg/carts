@@ -45,6 +45,7 @@ private:
   LoopMetadata::DataMovement classifyDataMovement(LoopMetadata *metadata);
   void suggestPartitioning(LoopMetadata *metadata);
   void computeMemoryFootprintPerIter(Operation *loopOp, LoopMetadata *metadata);
+  void finalizeParallelFlag(Operation *loopOp, LoopMetadata *metadata);
 };
 
 } // namespace arts

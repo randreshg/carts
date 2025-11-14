@@ -266,9 +266,9 @@ def MemrefMetadataAttr : Arts_Attr<"MemrefMetadata", "memref_metadata"> {
     /// Canonicalization metadata
     OptionalParameter<"::mlir::BoolAttr">:$shouldCanonicalize,
     OptionalParameter<"::mlir::BoolAttr">:$isCanonicalized,
-    /// Lifetime information (location keys)
-    OptionalParameter<"::mlir::StringAttr">:$firstUseLocationKey,
-    OptionalParameter<"::mlir::StringAttr">:$lastUseLocationKey,
+    /// Lifetime information (operation ids)
+    OptionalParameter<"::mlir::IntegerAttr">:$firstUseId,
+    OptionalParameter<"::mlir::IntegerAttr">:$lastUseId,
     /// Extended access characterization
     OptionalParameter<"::mlir::BoolAttr">:$hasUniformAccess,
     OptionalParameter<"::mlir::BoolAttr">:$hasStrideOneAccess,

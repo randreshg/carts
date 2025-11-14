@@ -92,6 +92,11 @@ bool isNonZeroIndex(Value v) {
 /// floating-point types. When the type is a memref, all static dimensions must
 /// be known; otherwise, the size is treated as unknown (returns 0).
 uint64_t getElementTypeByteSize(Type elemTy) {
+  /// Safety check: return 0 for null or invalid types
+  if (!elemTy) {
+    return 0;
+  }
+
   if (auto memTy = dyn_cast<MemRefType>(elemTy)) {
     uint64_t elementBytes = getElementTypeByteSize(memTy.getElementType());
     if (elementBytes == 0)
@@ -484,9 +489,17 @@ Operation *getUnderlyingOperation(Value v) {
 
 /// Finds the datablock-related operation (DbAllocOp or DbAcquireOp) associated
 /// with the given value.
-Operation *getUnderlyingDb(Value v) {
+/// The depth parameter prevents infinite recursion in circular acquire chains.
+Operation *getUnderlyingDb(Value v, unsigned depth) {
   if (!v)
     return nullptr;
+
+  /// Prevent infinite recursion from circular acquire chains
+  if (depth > 20) {
+    ARTS_WARN("getUnderlyingDb exceeded depth limit of 20 "
+              << "(possible circular acquire chain)");
+    return nullptr;
+  }
 
   /// Directly return the DbAcquireOp or DbAllocOp if present
   if (auto acq = v.getDefiningOp<DbAcquireOp>())
@@ -494,7 +507,7 @@ Operation *getUnderlyingDb(Value v) {
   if (auto alloc = v.getDefiningOp<DbAllocOp>())
     return alloc.getOperation();
   if (auto dbLoad = v.getDefiningOp<DbRefOp>())
-    return getUnderlyingDb(dbLoad.getSource());
+    return getUnderlyingDb(dbLoad.getSource(), depth + 1);
 
   /// If it's a block argument of an EDT, map to the corresponding operand and
   /// recurse. Block arguments correspond to dependencies
@@ -508,7 +521,7 @@ Operation *getUnderlyingDb(Value v) {
       auto [depsBegin, depsLen] = edt.getODSOperandIndexAndLength(1);
       if (argIndex < depsLen) {
         Value operand = edt.getOperand(depsBegin + argIndex);
-        return getUnderlyingDb(operand);
+        return getUnderlyingDb(operand, depth + 1);
       }
     }
   }
@@ -516,11 +529,11 @@ Operation *getUnderlyingDb(Value v) {
   /// Peel through common view/cast/gep nodes to reach DB ops
   if (Operation *def = v.getDefiningOp()) {
     if (auto gep = dyn_cast<DbGepOp>(def))
-      return getUnderlyingDb(gep.getBasePtr());
+      return getUnderlyingDb(gep.getBasePtr(), depth + 1);
     if (auto castOp = dyn_cast<memref::CastOp>(def))
-      return getUnderlyingDb(castOp.getSource());
+      return getUnderlyingDb(castOp.getSource(), depth + 1);
     if (auto subview = dyn_cast<memref::SubViewOp>(def))
-      return getUnderlyingDb(subview.getSource());
+      return getUnderlyingDb(subview.getSource(), depth + 1);
   }
 
   /// As a last resort, try underlying root op if it's a DB op
@@ -544,117 +557,8 @@ Operation *getUnderlyingDbAlloc(Value v) {
   return getUnderlyingDbAlloc(dbAcquire.getSourcePtr());
 }
 ///===----------------------------------------------------------------------===///
-/// Operation Removal and Dead Code Elimination Utilities
+/// Operation Replacement Utilities
 ///===----------------------------------------------------------------------===///
-
-/// Recursively removes the given operation and all its dependent operations
-/// that become dead, tracking visited operations to avoid infinite recursion.
-static void removeOpImpl(Operation *op, OpBuilder &builder,
-                         SmallPtrSet<Operation *, 32> &seen, bool recursive,
-                         SetVector<Operation *> &opsToRemove) {
-  /// Check if operation is still valid
-  if (!op)
-    return;
-
-  /// Check if operation is still properly linked in the IR
-  Block *block = op->getBlock();
-  if (!block)
-    return;
-
-  /// Additional check: ensure the block has a valid parent operation
-  Operation *parentOp = block->getParentOp();
-  if (!parentOp)
-    return;
-
-  /// Already visited
-  if (!seen.insert(op).second)
-    return;
-
-  ARTS_DEBUG("   - Removing operation: " << *op);
-
-  /// Get dependents before modifying uses
-  SmallVector<Operation *, 8> dependents;
-  if (recursive) {
-    for (Value result : op->getResults())
-      for (Operation *user : result.getUsers())
-        dependents.push_back(user);
-  }
-
-  /// If this is a terminator, remove its parent
-  if (op->hasTrait<OpTrait::IsTerminator>()) {
-    if (Operation *parent = op->getParentOp())
-      opsToRemove.insert(parent);
-  }
-
-  /// Drop all uses of this operation's results to dereference them
-  op->dropAllUses();
-
-  /// Erase the operation immediately since all uses have been dropped
-  op->erase();
-
-  /// No recursion requested
-  if (!recursive)
-    return;
-
-  /// Remove dependents recursively
-  for (Operation *userOp : dependents)
-    removeOpImpl(userOp, builder, seen, recursive, opsToRemove);
-}
-
-/// Removes a set of operations from the module by dereferencing their uses
-/// and recursively removing dependent operations that become dead.
-void removeOps(ModuleOp module, SetVector<Operation *> &opsToRemove,
-               bool recursive) {
-  if (opsToRemove.empty())
-    return;
-
-  OpBuilder builder(module.getContext());
-  SmallPtrSet<Operation *, 32> seen;
-
-  /// Remove operations, processing newly discovered dead parents
-  /// Use index-based iteration since we may add to opsToRemove during
-  /// processing
-  ARTS_DEBUG(" - Removing operations");
-
-  /// Filter out operations that may have been removed
-  SetVector<Operation *> validOpsToRemove;
-  for (Operation *op : opsToRemove) {
-    if (op && op->getBlock() && op->getBlock()->getParentOp())
-      validOpsToRemove.insert(op);
-  }
-
-  size_t idx = 0;
-  while (idx < validOpsToRemove.size()) {
-    Operation *op = validOpsToRemove[idx++];
-    removeOpImpl(op, builder, seen, recursive, validOpsToRemove);
-  }
-  opsToRemove.clear();
-  ARTS_DEBUG(" - Removed " << seen.size() << " operations total");
-}
-
-/// Remove undef operations with optional recursion
-void removeUndefOps(ModuleOp module) {
-  SetVector<Operation *> tempOps;
-  module.walk([&](arts::UndefOp op) { tempOps.insert(op); });
-  ARTS_DEBUG(" - Removing " << tempOps.size() << " undef operations");
-  removeOps(module, tempOps, true);
-}
-
-/// Replaces all results of the given operation with undef operations.
-void replaceWithUndef(Operation *op, OpBuilder &builder) {
-  if (!op || op->getNumResults() == 0)
-    return;
-
-  OpBuilder::InsertionGuard IG(builder);
-  builder.setInsertionPoint(op);
-  for (Value result : op->getResults()) {
-    if (!result.use_empty()) {
-      auto undef =
-          builder.create<arts::UndefOp>(op->getLoc(), result.getType());
-      result.replaceAllUsesWith(undef.getResult());
-    }
-  }
-}
 
 /// Replaces uses of one value with another under dominance constraints,
 /// skipping the dominating operation.
@@ -695,48 +599,6 @@ void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap,
     replaceInRegion(region, rewire.first, rewire.second);
   if (clear)
     rewireMap.clear();
-}
-
-///===----------------------------------------------------------------------===///
-/// Index Splitting Utilities for Datablocks
-///===----------------------------------------------------------------------===///
-
-/// Splits datablock indices into outer and inner indices based on the
-/// datablock's structure. For a memref<?xmemref<?xi32>> with indices [i, j, k]:
-/// - Outer indices [i]: select which element memref
-/// - Inner indices [j, k]: index into the element memref
-std::pair<SmallVector<Value>, SmallVector<Value>>
-splitDbIndices(Operation *dbOp, ValueRange indices, OpBuilder &builder,
-               Location loc) {
-  SmallVector<Value> outerIndices, innerIndices;
-
-  /// Get datablock properties
-  auto hasSingleSize = dbHasSingleSize(dbOp);
-  auto outerRank = getSizesFromDb(dbOp).size();
-
-  /// If the Db has single size, all the indices are inner indices
-  if (hasSingleSize)
-    innerIndices.assign(indices.begin(), indices.end());
-
-  /// If the indices are less than or equal to the outer rank, all the indices
-  /// are outer indices
-  else if (indices.size() <= outerRank)
-    outerIndices.assign(indices.begin(), indices.end());
-
-  /// If the indices are greater than the outer rank, split the indices into
-  /// outer and inner indices
-  else {
-    outerIndices.assign(indices.begin(), indices.begin() + outerRank);
-    innerIndices.assign(indices.begin() + outerRank, indices.end());
-  }
-
-  /// For all other cases, add a default index of 0
-  if (outerIndices.empty())
-    outerIndices.push_back(builder.create<arith::ConstantIndexOp>(loc, 0));
-  if (innerIndices.empty())
-    innerIndices.push_back(builder.create<arith::ConstantIndexOp>(loc, 0));
-
-  return std::make_pair(outerIndices, innerIndices);
 }
 
 ///===----------------------------------------------------------------------===///
