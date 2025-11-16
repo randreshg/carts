@@ -107,6 +107,30 @@ LoopMetadata::stringToPartitioning(llvm::StringRef str) const {
       .Default(Partitioning::Unknown);
 }
 
+const char *LoopMetadata::parallelClassificationToString(
+    ParallelClassification classification) const {
+  switch (classification) {
+  case ParallelClassification::ReadOnly:
+    return "read_only";
+  case ParallelClassification::Likely:
+    return "likely";
+  case ParallelClassification::Sequential:
+    return "sequential";
+  case ParallelClassification::Unknown:
+    return "unknown";
+  }
+  return "unknown";
+}
+
+LoopMetadata::ParallelClassification
+LoopMetadata::stringToParallelClassification(llvm::StringRef str) const {
+  return llvm::StringSwitch<ParallelClassification>(str)
+      .Case("read_only", ParallelClassification::ReadOnly)
+      .Case("likely", ParallelClassification::Likely)
+      .Case("sequential", ParallelClassification::Sequential)
+      .Default(ParallelClassification::Unknown);
+}
+
 ////===----------------------------------------------------------------------===////
 /// Interface
 ////===----------------------------------------------------------------------===////
@@ -156,6 +180,30 @@ bool LoopMetadata::importFromOp() {
   /// Dependency information
   hasInterIterationDeps = getBoolFromAttr(attr.getHasInterIterationDeps());
   dependenceDistance = getIntFromAttr(attr.getDependenceDistance()).value_or(0);
+
+  auto assignOptionalInt = [&](const std::optional<int64_t> &value,
+                               std::optional<int64_t> &target) {
+    if (value)
+      target = *value;
+    else
+      target.reset();
+  };
+
+  assignOptionalInt(getIntFromAttr(attr.getMemrefCount()), memrefCount);
+  assignOptionalInt(getIntFromAttr(attr.getReadOnlyMemrefCount()),
+                    readOnlyMemrefCount);
+  assignOptionalInt(getIntFromAttr(attr.getWriteOnlyMemrefCount()),
+                    writeOnlyMemrefCount);
+  assignOptionalInt(getIntFromAttr(attr.getReadWriteMemrefCount()),
+                    readWriteMemrefCount);
+  assignOptionalInt(getIntFromAttr(attr.getMemrefsWithLoopCarriedDeps()),
+                    memrefsWithLoopCarriedDeps);
+  assignOptionalInt(getIntFromAttr(attr.getPoorTemporalLocalityMemrefs()),
+                    poorTemporalLocalityMemrefCount);
+  if (auto value = getIntFromAttr(attr.getParallelClassification()))
+    parallelClassification = static_cast<ParallelClassification>(value.value());
+  else
+    parallelClassification.reset();
   return true;
 }
 
@@ -197,6 +245,26 @@ void LoopMetadata::importFromJson(const llvm::json::Object &json) {
           .value_or(false);
   dependenceDistance =
       json.getInteger(AttrNames::LoopMetadata::DependenceDistance).value_or(0);
+  memrefCount =
+      json.getInteger(AttrNames::LoopMetadata::MemrefCount).value_or(0);
+  readOnlyMemrefCount =
+      json.getInteger(AttrNames::LoopMetadata::ReadOnlyMemrefCount).value_or(0);
+  writeOnlyMemrefCount =
+      json.getInteger(AttrNames::LoopMetadata::WriteOnlyMemrefCount)
+          .value_or(0);
+  readWriteMemrefCount =
+      json.getInteger(AttrNames::LoopMetadata::ReadWriteMemrefCount)
+          .value_or(0);
+  memrefsWithLoopCarriedDeps =
+      json.getInteger(AttrNames::LoopMetadata::MemrefsWithLoopCarriedDeps)
+          .value_or(0);
+  poorTemporalLocalityMemrefCount =
+      json.getInteger(AttrNames::LoopMetadata::PoorTemporalLocalityMemrefs)
+          .value_or(0);
+  parallelClassification = ParallelClassification::Unknown;
+  if (auto str =
+          json.getString(AttrNames::LoopMetadata::ParallelClassification))
+    parallelClassification = stringToParallelClassification(*str);
   locationMetadata.fromKey(
       json.getString(AttrNames::LoopMetadata::LocationKey).value_or(""));
 }
@@ -230,6 +298,20 @@ void LoopMetadata::exportToJson(llvm::json::Object &json) const {
   json[AttrNames::LoopMetadata::HasInterIterationDeps.str()] =
       hasInterIterationDeps;
   json[AttrNames::LoopMetadata::DependenceDistance.str()] = dependenceDistance;
+  json[AttrNames::LoopMetadata::MemrefCount.str()] = memrefCount.value_or(0);
+  json[AttrNames::LoopMetadata::ReadOnlyMemrefCount.str()] =
+      readOnlyMemrefCount.value_or(0);
+  json[AttrNames::LoopMetadata::WriteOnlyMemrefCount.str()] =
+      writeOnlyMemrefCount.value_or(0);
+  json[AttrNames::LoopMetadata::ReadWriteMemrefCount.str()] =
+      readWriteMemrefCount.value_or(0);
+  json[AttrNames::LoopMetadata::MemrefsWithLoopCarriedDeps.str()] =
+      memrefsWithLoopCarriedDeps.value_or(0);
+  json[AttrNames::LoopMetadata::PoorTemporalLocalityMemrefs.str()] =
+      poorTemporalLocalityMemrefCount.value_or(0);
+  if (parallelClassification)
+    json[AttrNames::LoopMetadata::ParallelClassification.str()] =
+        parallelClassificationToString(*parallelClassification);
   json[AttrNames::LoopMetadata::LocationKey.str()] =
       locationMetadata.toString();
 }
@@ -252,6 +334,12 @@ Attribute LoopMetadata::getMetadataAttr() const {
   /// Helper to convert optional bool to BoolAttr
   auto toBoolAttr = [&](const std::optional<bool> &v) -> BoolAttr {
     return builder.getBoolAttr(v.value_or(false));
+  };
+
+  auto toEnumAttr = [&](const std::optional<ParallelClassification> &v,
+                        ParallelClassification defaultValue) -> IntegerAttr {
+    return builder.getI64IntegerAttr(
+        static_cast<int64_t>(v.value_or(defaultValue)));
   };
 
   /// Convert reduction kinds to ArrayAttr
@@ -284,6 +372,11 @@ Attribute LoopMetadata::getMetadataAttr() const {
       toIntAttr(suggestedChunkSize), toIntAttr(memoryFootprintPerIter),
       /// Dependency information
       toBoolAttr(hasInterIterationDeps), toIntAttr(dependenceDistance),
+      toIntAttr(memrefCount), toIntAttr(readOnlyMemrefCount),
+      toIntAttr(writeOnlyMemrefCount), toIntAttr(readWriteMemrefCount),
+      toIntAttr(memrefsWithLoopCarriedDeps),
+      toIntAttr(poorTemporalLocalityMemrefCount),
+      toEnumAttr(parallelClassification, ParallelClassification::Unknown),
       /// Source location
       builder.getStringAttr(locationMetadata.toString()));
 }

@@ -8,6 +8,9 @@ build/
 CMakeFiles/
 core.*
 docs/
+.cursor/
+.claude/
+.vscode/
 
 # External dependencies - ignore build artifacts but not the submodules themselves
 external/*/build/

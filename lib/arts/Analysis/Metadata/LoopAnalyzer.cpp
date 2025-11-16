@@ -5,6 +5,7 @@
 #include "arts/Analysis/Metadata/LoopAnalyzer.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
+#include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -12,6 +13,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -49,9 +51,11 @@ void LoopAnalyzer::analyzeAffineLoop(affine::AffineForOp forOp,
   analyzeMemoryAccesses(forOp, metadata);
 
   metadata->hasInterIterationDeps = depAnalyzer.hasInterIterationDeps(forOp);
+  metadata->dependenceDistance = depAnalyzer.getMinDependenceDistance(forOp);
   metadata->dataMovementPattern = classifyDataMovement(metadata);
   suggestPartitioning(metadata);
   computeMemoryFootprintPerIter(forOp, metadata);
+  detectReductions(forOp.getOperation(), metadata);
   finalizeParallelFlag(forOp.getOperation(), metadata);
 }
 
@@ -98,6 +102,10 @@ void LoopAnalyzer::analyzeSCFLoop(Operation *loopOp, LoopMetadata *metadata) {
         }
       }
     }
+  } else if (auto whileOp = dyn_cast<scf::WhileOp>(loopOp)) {
+    /// While loops have unknown trip count but carry block arguments similar to
+    /// scf.for. Treat them conservatively (trip count unknown).
+    (void)whileOp;
   }
 
   analyzeMemoryAccesses(loopOp, metadata);
@@ -106,6 +114,7 @@ void LoopAnalyzer::analyzeSCFLoop(Operation *loopOp, LoopMetadata *metadata) {
   suggestPartitioning(metadata);
   computeMemoryFootprintPerIter(loopOp, metadata);
   /// TODO: Add reduction detection when available
+  detectReductions(loopOp, metadata);
   finalizeParallelFlag(loopOp, metadata);
 }
 
@@ -218,6 +227,58 @@ void LoopAnalyzer::computeMemoryFootprintPerIter(Operation *loopOp,
   metadata->memoryFootprintPerIter = footprint;
 }
 
+void LoopAnalyzer::detectReductions(Operation *loopOp, LoopMetadata *metadata) {
+  SmallVector<BlockArgument, 4> iterArgs;
+  if (auto forOp = dyn_cast<scf::ForOp>(loopOp)) {
+    llvm::append_range(iterArgs, forOp.getRegionIterArgs());
+  } else if (auto affineFor = dyn_cast<affine::AffineForOp>(loopOp)) {
+    llvm::append_range(iterArgs, affineFor.getRegionIterArgs());
+  } else {
+    return;
+  }
+
+  if (iterArgs.empty())
+    return;
+
+  for (const auto &it : llvm::enumerate(iterArgs)) {
+    SmallVector<Operation *, 4> combinerOps;
+    Value reducedValue = matchReduction(
+        iterArgs, static_cast<unsigned>(it.index()), combinerOps);
+    if (!reducedValue)
+      continue;
+    metadata->hasReductions = true;
+    LoopMetadata::ReductionKind kind = LoopMetadata::ReductionKind::Unknown;
+    if (!combinerOps.empty()) {
+      if (auto inferred = inferReductionKind(combinerOps.front()))
+        kind = *inferred;
+    }
+    metadata->reductionKinds.push_back(kind);
+  }
+}
+
+std::optional<LoopMetadata::ReductionKind>
+LoopAnalyzer::inferReductionKind(Operation *op) const {
+  if (!op)
+    return std::nullopt;
+
+  if (isa<arith::AddIOp, arith::AddFOp>(op))
+    return LoopMetadata::ReductionKind::Add;
+  if (isa<arith::MulIOp, arith::MulFOp>(op))
+    return LoopMetadata::ReductionKind::Mul;
+  if (isa<arith::MinSIOp, arith::MinUIOp, arith::MinimumFOp>(op))
+    return LoopMetadata::ReductionKind::Min;
+  if (isa<arith::MaxSIOp, arith::MaxUIOp, arith::MaximumFOp>(op))
+    return LoopMetadata::ReductionKind::Max;
+  if (isa<arith::AndIOp>(op))
+    return LoopMetadata::ReductionKind::And;
+  if (isa<arith::OrIOp>(op))
+    return LoopMetadata::ReductionKind::Or;
+  if (isa<arith::XOrIOp>(op))
+    return LoopMetadata::ReductionKind::Xor;
+
+  return std::nullopt;
+}
+
 void LoopAnalyzer::finalizeParallelFlag(Operation *loopOp,
                                         LoopMetadata *metadata) {
   bool hasDeps =
@@ -228,8 +289,8 @@ void LoopAnalyzer::finalizeParallelFlag(Operation *loopOp,
   }
 
   if (!metadata->potentiallyParallel &&
-      isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp, scf::ForallOp>(
-          loopOp)) {
+      isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp, scf::ForallOp,
+          scf::WhileOp>(loopOp)) {
     metadata->potentiallyParallel = true;
   }
 }

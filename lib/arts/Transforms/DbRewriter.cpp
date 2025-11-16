@@ -46,6 +46,12 @@ LogicalResult DbRewriter::rewriteAllUses(DbAllocOp oldAlloc,
   oldAlloc_ = oldAlloc;
   newAlloc_ = newAlloc;
 
+  if (!oldAlloc_ || !oldAlloc_.getOperation() || !newAlloc_ ||
+      !newAlloc_.getOperation()) {
+    ARTS_ERROR("DbRewriter invoked with invalid allocation ops");
+    return failure();
+  }
+
   /// Step 1: Analyze structural differences
   diff_ = analyzeChanges(oldAlloc, newAlloc);
 
@@ -135,20 +141,20 @@ LogicalResult DbRewriter::rewriteAllUses(DbAllocOp oldAlloc,
   oldAlloc.getGuid().replaceAllUsesWith(newAlloc.getGuid());
   oldAlloc.getPtr().replaceAllUsesWith(newAlloc.getPtr());
 
-  /// Step 6: Cleanup
-  if (config_.removeDeadOps) {
-    opsToRemove_.insert(oldAlloc.getOperation());
-    cleanup();
-    ARTS_INFO("  - Removed " << stats_.operationsRemoved << " operations");
-  }
-
-  /// Step 7: Verify
+  /// Step 6: Verify BEFORE cleanup (while oldAlloc is still valid)
   if (config_.preserveSemantics) {
     if (failed(verify())) {
       ARTS_INFO("  - Verification failed!");
       return failure();
     }
     ARTS_INFO("  - Verification passed");
+  }
+
+  /// Step 7: Cleanup (now safe to erase oldAlloc after verification)
+  if (config_.removeDeadOps) {
+    opsToRemove_.insert(oldAlloc.getOperation());
+    cleanup();
+    ARTS_INFO("  - Removed " << stats_.operationsRemoved << " operations");
   }
 
   ARTS_INFO("  - DbRewriter: Transformation complete!");
@@ -419,9 +425,69 @@ LogicalResult DbRewriter::transformDbRef(DbRefOp dbRef,
 
 LogicalResult DbRewriter::transformDbAcquire(DbAcquireOp acquire,
                                              const StructuralDiff &diff) {
-  /// Acquire operations may need their indices updated
-  /// For now, we let replaceAllUsesWith handle the simple case
-  /// TODO: Handle chunk-based acquires with index transformation
+  /// Acquire operations need their indices/offsets/sizes updated when
+  /// the source DbAlloc structure changes dimensionality
+
+  /// Always update source pointers to point to new alloc
+  acquire.getSourceGuidMutable().assign(newAlloc_.getGuid());
+  acquire.getSourcePtrMutable().assign(newAlloc_.getPtr());
+
+  /// If no index transformation needed, we're done
+  if (!diff.needsIndexTransform) {
+    return success();
+  }
+
+  /// Handle different transformation types
+  switch (diff.changeType) {
+  case StructuralDiff::Chunking: {
+    /// For chunking transformation (sizes=[1] -> sizes=[N]):
+    /// The acquire's offsets/sizes refer to outer dimensions and remain valid.
+    /// The acquire already has the correct offsets/sizes from ForLowering.
+    /// We just need to ensure the source pointers are updated (already done
+    /// above).
+    ///
+    /// Example:
+    ///   Old alloc: sizes=[1] elementSizes=[1000]
+    ///   Old acquire: offsets=[0] sizes=[125] (chunk for worker 0)
+    ///   New alloc: sizes=[1000] elementSizes=[1]
+    ///   New acquire: offsets=[0] sizes=[125] (still valid - same chunk)
+    ///
+    /// The type change is handled automatically when source pointers are
+    /// updated.
+    ARTS_DEBUG("  - Chunking transformation: offsets/sizes remain unchanged");
+    break;
+  }
+
+  case StructuralDiff::Promotion: {
+    /// For promotion (dimensions moved from outer to inner):
+    /// Indices should move to offsets to maintain the same semantic access
+    /// pattern.
+    ///
+    /// Example:
+    ///   Old alloc: sizes=[N, M] elementSizes=[K]
+    ///   Old acquire: indices=[i] offsets=[] sizes=[]
+    ///   New alloc: sizes=[N] elementSizes=[M, K]
+    ///   New acquire: indices=[] offsets=[i] sizes=[1]
+    ///
+    /// TODO: Implement full promotion logic similar to
+    /// updateDbAcquireAfterPromotion
+    ARTS_DEBUG("  - Promotion transformation: TODO - not yet implemented");
+    /// For now, keep acquire unchanged and let verification catch issues
+    break;
+  }
+
+  case StructuralDiff::Reshape:
+  case StructuralDiff::Refinement:
+  default: {
+    /// For complex reshaping, we cannot automatically determine the correct
+    /// transformation. Keep the acquire unchanged and rely on later passes or
+    /// manual intervention.
+    ARTS_DEBUG(
+        "  - Reshape/Refinement transformation: keeping acquire unchanged");
+    break;
+  }
+  }
+
   return success();
 }
 
@@ -715,6 +781,11 @@ void DbRewriter::cleanup() {
 }
 
 LogicalResult DbRewriter::verify() {
+  if (!oldAlloc_ || !oldAlloc_.getOperation()) {
+    ARTS_ERROR("DbRewriter verification failed: old allocation was erased");
+    return failure();
+  }
+
   /// Check that old allocation has no remaining uses (except what we tracked)
   for (auto &use : oldAlloc_.getGuid().getUses()) {
     if (!opsToRemove_.contains(use.getOwner())) {

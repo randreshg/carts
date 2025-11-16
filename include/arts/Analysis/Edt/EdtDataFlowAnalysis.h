@@ -15,6 +15,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include <optional>
 
 namespace mlir {
 namespace arts {
@@ -25,7 +26,7 @@ class DbAnalysis;
 struct EdtDependency {
   EdtOp from;
   EdtOp to;
-  SmallVector<DbEdgeSlice, 2> slices;
+  SmallVector<DbEdge, 2> edges;
 };
 
 /// Performs a lightweight dataflow analysis over EDT regions to determine
@@ -42,8 +43,7 @@ private:
     llvm::DenseMap<DbAllocNode *, llvm::SetVector<DbAcquireNode *>> readers;
   };
 
-  std::pair<Environment, bool> processRegion(Region &region,
-                                             Environment &env);
+  std::pair<Environment, bool> processRegion(Region &region, Environment &env);
   std::pair<Environment, bool> processEdt(EdtOp edtOp, Environment &env);
   std::pair<Environment, bool> processEpoch(EpochOp epochOp, Environment &env);
   std::pair<Environment, bool> processIf(scf::IfOp ifOp, Environment &env);
@@ -52,20 +52,18 @@ private:
   SmallVector<DbAcquireNode *> findDefinitions(DbAcquireNode *acquire,
                                                Environment &env);
   bool unionInto(Environment &target, const Environment &source);
-  bool mayDepend(DbAcquireNode *producer, DbAcquireNode *consumer);
+  std::optional<DbDepType> classifyDependency(DbAcquireNode *producer,
+                                              DbAcquireNode *consumer);
 
   void recordDependency(DbAcquireNode *producer, DbAcquireNode *consumer,
                         DbDepType depType);
   void recordDependency(DbAcquireNode *reader, DbAcquireNode *writer);
 
-  DbAcquireUsage buildUsage(DbAcquireNode *node);
-
   DbGraph *dbGraph = nullptr;
-  DbAnalysis *analysis = nullptr;
   DbAliasAnalysis *aliasAA = nullptr;
 
   llvm::DenseMap<std::pair<Operation *, Operation *>,
-                 SmallVector<DbEdgeSlice, 2>>
+                 llvm::SetVector<DbEdge, llvm::SmallVector<DbEdge, 2>>>
       dependencyMap;
 };
 

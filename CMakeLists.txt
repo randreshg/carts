@@ -91,6 +91,8 @@ endif()
 
 # CARTS testing options
 option(CARTS_ENABLE_TESTS "Enable CARTS test suite" ON)
+option(CARTS_TESTS_REQUIRE_INSTALLED_RUNNER
+       "Keep .install/carts/bin/carts-run in sync when running tests" ON)
 if(CARTS_ENABLE_TESTS)
   message(STATUS "CARTS tests enabled")
   set(CARTS_TOOLS_DIR bin)
@@ -196,3 +198,11 @@ message_blue(" -- Adding lib")
 add_subdirectory(lib)
 message_blue(" -- Adding tools")
 add_subdirectory(tools)
+
+if(CARTS_ENABLE_TESTS AND CARTS_TESTS_REQUIRE_INSTALLED_RUNNER)
+  foreach(_carts_test_target check check-arts check-verbose)
+    if(TARGET ${_carts_test_target} AND TARGET carts-run)
+      add_dependencies(${_carts_test_target} carts-run)
+    endif()
+  endforeach()
+endif()

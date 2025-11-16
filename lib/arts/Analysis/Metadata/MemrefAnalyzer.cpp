@@ -7,6 +7,7 @@
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
+#include "arts/Utils/ArtsDebug.h"
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -17,6 +18,8 @@
 
 using namespace mlir;
 using namespace mlir::arts;
+
+ARTS_DEBUG_SETUP(memref_analyzer);
 
 ///===----------------------------------------------------------------------===///
 // ReuseAnalyzer Implementation
@@ -151,11 +154,11 @@ MemrefAnalyzer::countAccessTypes(Value memref, Operation *scopeOp) {
 }
 
 /// Compute allocation and deallocation locations
-std::pair<ArtsId, ArtsId>
-MemrefAnalyzer::computeLifetime(Value memref, Operation *scopeOp) {
+std::pair<ArtsId, ArtsId> MemrefAnalyzer::computeLifetime(Value memref,
+                                                          Operation *scopeOp) {
   auto getId = [&](Operation *op) -> ArtsId {
     if (!op)
-      return std::nullopt;
+      return ArtsId();
     return metadataManager.assignOperationId(op);
   };
 
@@ -180,8 +183,12 @@ void MemrefAnalyzer::analyzeAccessCharacteristics(Value memref,
     if (accessAnalyzer.getAccessedMemref(op) == memref) {
       if (accessAnalyzer.isAffineAccess(op))
         affineCount++;
-      else
+      else {
         nonAffineCount++;
+        if (metadata)
+          ARTS_DEBUG("Non-affine access for allocation "
+                     << metadata->allocationId << ": " << *op);
+      }
     }
   });
 
