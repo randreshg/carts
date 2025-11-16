@@ -22,64 +22,13 @@ carts execute simple.cpp -o simple
 carts check
 ```
 
----
+## Running Tests
 
-## Documentation
-
-All documentation is in the [`docs/`](docs/) directory:
-
-### Essential Guides
-
-- **[docs/COMPILER.md](docs/COMPILER.md)** - Complete compiler pipeline, passes, stages, and limitations
-- **[docs/BENCHMARKS.md](docs/BENCHMARKS.md)** - Available benchmarks, performance comparisons, and tuning
-- **[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)** - Development guidelines, coding style, and testing
-
-### Advanced Topics
-
-- **[docs/COMPILER_PATTERNS.md](docs/COMPILER_PATTERNS.md)** - Critical OpenMP patterns requiring special handling
-- **[NEXT_TASKS_OMP_SINGLE.md](NEXT_TASKS_OMP_SINGLE.md)** - Implementation plan for OMP single region support
-
-### External Documentation
-
-- [CARTS Documentation (Notion)](https://www.notion.so/248fde4bf3a2816d8c11f3c1cf5c4617)
-- [Architecture & Dependencies](https://www.notion.so/249fde4bf3a281b5ab16e087ee4056b1)
-- [Next Steps Dashboard (Kanban)](https://www.notion.so/a5b6038e1d06457ba2c97032d0da8e79)
+- Use `carts check --suite arts` to exercise the fast metadata regression suite (default `carts check` runs everything).
+- The lit configuration (`tests/lit.cfg.py`) resolves tools from `.install/`, so re-run `carts build` whenever you modify the compiler to keep the installed toolchain fresh.
+- `tools/carts check` now detects missing `.install` tools and automatically triggers `carts build`, but you can still invoke it manually if the environment has drifted.
 
 ---
-
-## Key Features
-
-### Fully Supported
-
-- Direct `#pragma omp parallel for` patterns
-- Multidimensional arrays (automatic linearization)
-- Task-based parallelism with dependencies
-- `#pragma omp task depend` clauses
-
-### Partial Support
-
-- Nested `parallel` + multiple `for` (requires proper barrier insertion)
-- See [docs/COMPILER_PATTERNS.md](docs/COMPILER_PATTERNS.md) for details
-
-### Not Yet Supported
-
-- `#pragma omp single` regions
-- Implementation plan in [NEXT_TASKS_OMP_SINGLE.md](NEXT_TASKS_OMP_SINGLE.md)
-
----
-
-## Performance
-
-CARTS provides **2-3x speedup** over OpenMP for:
-
-- Pipeline parallelism (overlapping execution stages)
-- Async recursion (no taskwait overhead)
-- Irregular workloads (adaptive task graphs)
-
-See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for details and examples.
-
----
-
 ## Common Commands
 
 ```bash
@@ -183,20 +132,6 @@ carts build --arts --debug
 ARTS_DEBUG=1 ARTS_TRACE=1 ./example
 ```
 
-See [docs/COMPILER.md](docs/COMPILER.md) for more debugging techniques.
-
----
-
-## Contributing
-
-1. Read [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for guidelines
-2. Follow LLVM coding style (2-space indent, CamelCase types)
-3. Run `carts check` before submitting
-4. Include test commands in PR description
-5. Track work in [Next Steps Dashboard](https://www.notion.so/a5b6038e1d06457ba2c97032d0da8e79)
-
----
-
 ## Notes
 
 - Always use the `carts` wrapper for all operations
@@ -207,7 +142,5 @@ See [docs/COMPILER.md](docs/COMPILER.md) for more debugging techniques.
 ---
 
 **Author**: Rafael Andres Herrera Guaitero
-
 **Email**: <rafaelhg@udel.edu>
-
 **License**: See LICENSE file

@@ -9,7 +9,6 @@
 #ifndef ARTS_UTILS_ARTSMETADATA_H
 #define ARTS_UTILS_ARTSMETADATA_H
 
-#include "arts/Utils/ArtsId.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -17,11 +16,14 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
+#include <cstdint>
 #include <optional>
 #include <string>
 
 namespace mlir {
 namespace arts {
+
+using ArtsId = std::optional<int64_t>;
 
 ///===----------------------------------------------------------------------===///
 /// ArtsMetadata - Base class for all metadata
@@ -61,7 +63,7 @@ protected:
     if (!op_)
       return;
     if (auto attr = op_->getAttrOfType<IntegerAttr>(IdAttrName))
-      metadataId_.set(attr.getInt());
+      metadataId_ = attr.getInt();
   }
 
   void exportIdToOp() const {
@@ -75,7 +77,7 @@ protected:
   void importIdFromJson(const llvm::json::Object &json,
                         llvm::StringRef key = "arts_id") {
     if (auto value = json.getInteger(key))
-      metadataId_.set(*value);
+      metadataId_ = *value;
   }
 
   void exportIdToJson(llvm::json::Object &json,

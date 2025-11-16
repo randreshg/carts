@@ -63,6 +63,7 @@
 ///==========================================================================///
 
 #include "ArtsPassDetails.h"
+#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
@@ -81,6 +82,9 @@
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/FileSystem.h"
+#include <memory>
+#include <optional>
 
 #include "arts/Utils/ArtsDebug.h"
 ARTS_DEBUG_SETUP(for_lowering);
@@ -136,6 +140,12 @@ private:
 struct ReductionInfo {
   /// Original reduction variables from arts.for operation
   SmallVector<Value> reductionVars;
+
+  /// Original loop metadata attribute (if present)
+  Attribute loopMetadataAttr;
+
+  /// Location of the original arts.for operation
+  std::optional<Location> loopLocation;
 
   /// Partial accumulators: array[num_workers] for intermediate results
   SmallVector<Value> partialAccumGuids; /// GUID handles (outside EDT)
@@ -211,6 +221,11 @@ private:
                        ReductionInfo &redInfo, Location loc);
 
   void lowerSingleFor(ArtsCodegen &AC, EdtOp parallelEdt, ForOp forOp);
+
+  /// Ensure sequential metadata has been imported into the module so the
+  /// original arts.for operations carry loop metadata before lowering.
+  void ensureMetadataAvailable();
+  Attribute getLoopMetadataAttr(ForOp forOp);
 };
 
 } // namespace
@@ -320,6 +335,8 @@ void ForLoweringPass::runOnOperation() {
 
   ARTS_INFO_HEADER(ForLowering);
   ARTS_DEBUG_REGION(module.dump(););
+
+  ensureMetadataAvailable();
 
   /// Walk all parallel EDTs and lower arts.for operations
   SmallVector<EdtOp, 4> parallelEdts;
@@ -431,6 +448,37 @@ void ForLoweringPass::lowerSingleFor(ArtsCodegen &AC, EdtOp parallelEdt,
       AC.create<DbFreeOp>(loc, redInfo.finalResultPtrs[i]);
     }
   }
+}
+
+void ForLoweringPass::ensureMetadataAvailable() {
+  if (module->hasAttr("arts.for_lowering.metadata_imported"))
+    return;
+
+  std::string metadataPath = ".carts-metadata.json";
+  if (!llvm::sys::fs::exists(metadataPath)) {
+    ARTS_DEBUG("Metadata file " << metadataPath
+                                << " not found for ForLowering");
+    return;
+  }
+
+  ArtsMetadataManager manager(module.getContext());
+  if (manager.importFromJsonFile(module, metadataPath)) {
+    ARTS_INFO("Imported metadata for ForLowering from " << metadataPath);
+    module->setAttr("arts.for_lowering.metadata_imported",
+                    mlir::UnitAttr::get(module.getContext()));
+  } else {
+    ARTS_WARN("Failed to import metadata for ForLowering from "
+              << metadataPath);
+  }
+}
+
+Attribute ForLoweringPass::getLoopMetadataAttr(ForOp forOp) {
+  Attribute attr = forOp->getAttr(AttrNames::LoopMetadata::Name);
+  if (attr)
+    return attr;
+  ArtsMetadataManager manager(forOp.getContext());
+  manager.ensureLoopMetadata(forOp);
+  return forOp->getAttr(AttrNames::LoopMetadata::Name);
 }
 
 ///===----------------------------------------------------------------------===///
@@ -585,9 +633,12 @@ EdtOp ForLoweringPass::createTaskEdt(ArtsCodegen *AC, LoopInfo &loopInfo,
 
     /// Acquire using parallel EDT's block arg (coarse-grained acquire)
     /// Partitioning is done by the DbPass after the ForLowering pass
+    SmallVector<Value> chunkOffsets, chunkSizes;
+    chunkOffsets.push_back(chunkOffset);
+    chunkSizes.push_back(loopInfo.workerIterationCount);
     auto chunkAcqOp = AC->create<DbAcquireOp>(
         loc, parentAcqOp.getMode(), Value(), parallelArg, parallelArg.getType(),
-        ValueRange{}, ValueRange{}, ValueRange{});
+        ValueRange{}, chunkOffsets, chunkSizes);
     Value acquirePtr = chunkAcqOp.getResult(1);
 
     /// Replace uses within arts.for so cloned body uses acquire result
@@ -623,9 +674,8 @@ EdtOp ForLoweringPass::createTaskEdt(ArtsCodegen *AC, LoopInfo &loopInfo,
 
     /// For regular dependencies, map the acquire result to task block arg
     /// For reduction dependencies, we'll handle mapping separately below
-    if (i < reductionArgStart) {
+    if (i < reductionArgStart)
       mapper.map(dep, taskArg);
-    }
   }
 
   /// Update task EDT operands
@@ -645,16 +695,8 @@ EdtOp ForLoweringPass::createTaskEdt(ArtsCodegen *AC, LoopInfo &loopInfo,
   scf::ForOp iterLoop =
       AC->create<scf::ForOp>(loc, zero, loopInfo.workerIterationCount, one);
 
-  // if (auto loopAttr = forOp->getAttr(AttrNames::LoopMetadata::Name)) {
-  //   iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
-  // } else {
-  //   LoopMetadata synthetic(iterLoop.getOperation());
-  //   synthetic.potentiallyParallel = true;
-  //   synthetic.hasInterIterationDeps = false;
-  //   synthetic.locationMetadata = LocationMetadata::fromKey(
-  //       LocationMetadata::getCompactLocationKey(forOp.getLoc()));
-  //   synthetic.exportToOp();
-  // }
+  if (Attribute loopAttr = getLoopMetadataAttr(forOp))
+    iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
 
   AC->setInsertionPointToStart(iterLoop.getBody());
 
@@ -883,6 +925,9 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
                                                            EdtOp parallelEdt,
                                                            Location loc) {
   ReductionInfo redInfo;
+  Attribute loopAttr = getLoopMetadataAttr(forOp);
+  redInfo.loopMetadataAttr = loopAttr;
+  redInfo.loopLocation = forOp.getLoc();
   ValueRange reductionAccums = forOp.getReductionAccumulators();
   if (reductionAccums.empty())
     return redInfo;
@@ -982,7 +1027,10 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
 
     /// Loop to initialize each worker's partial accumulator
     /// for (i = 0; i < numWorkers; i++) { partialAccums[i] = identity; }
-    auto initLoop = AC->create<scf::ForOp>(loc, zeroIndex, numWorkers, one);
+    Location loopLoc = redInfo.loopLocation.value_or(loc);
+    auto initLoop = AC->create<scf::ForOp>(loopLoc, zeroIndex, numWorkers, one);
+    if (loopAttr)
+      initLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
     AC->setInsertionPointToStart(initLoop.getBody());
     Value workerIdx = initLoop.getInductionVar();
 
@@ -1214,8 +1262,28 @@ void ForLoweringPass::createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
     /// sum
     Value zeroIdx = AC->createIndexConstant(0, loc);
     Value oneIdx = AC->createIndexConstant(1, loc);
-    auto combineLoop = AC->create<scf::ForOp>(loc, zeroIdx, numWorkers, oneIdx,
-                                              ValueRange{identity});
+    Location loopLoc = redInfo.loopLocation.value_or(loc);
+    auto combineLoop = AC->create<scf::ForOp>(loopLoc, zeroIdx, numWorkers,
+                                              oneIdx, ValueRange{identity});
+    if (redInfo.loopMetadataAttr) {
+      combineLoop->setAttr(AttrNames::LoopMetadata::Name,
+                           redInfo.loopMetadataAttr);
+      ARTS_DEBUG("  Set loop metadata on result EDT combine loop");
+
+      /// Validate that metadata was properly set
+      if (auto loopAttr = combineLoop->getAttr(AttrNames::LoopMetadata::Name)) {
+        if (auto loopMetadata = dyn_cast<LoopMetadataAttr>(loopAttr)) {
+          ARTS_DEBUG("    - Metadata validated: potentiallyParallel="
+                     << loopMetadata.getPotentiallyParallel().getValue());
+        }
+      } else {
+        ARTS_DEBUG(
+            "    - WARNING: Loop metadata attribute not found after setting");
+      }
+    } else {
+      ARTS_DEBUG(
+          "  WARNING: No loop metadata available for result EDT combine loop");
+    }
 
     AC->setInsertionPointToStart(combineLoop.getBody());
     Value workerIdx = combineLoop.getInductionVar();

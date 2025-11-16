@@ -43,6 +43,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 #include <limits>
@@ -80,7 +81,7 @@ struct CollectMetadataPass : public CollectMetadataBase<CollectMetadataPass> {
         std::make_unique<DependenceAnalyzer>(context, *accessAnalyzer);
     auto reuseAnalyzer = std::make_unique<ReuseAnalyzer>(*accessAnalyzer);
     auto memrefAnalyzer = std::make_unique<MemrefAnalyzer>(
-        context, *accessAnalyzer, *reuseAnalyzer, *manager);
+        *accessAnalyzer, *reuseAnalyzer, *manager);
     auto loopAnalyzer =
         std::make_unique<LoopAnalyzer>(context, *accessAnalyzer, *depAnalyzer);
 
@@ -91,6 +92,9 @@ struct CollectMetadataPass : public CollectMetadataBase<CollectMetadataPass> {
     ///  Collect memref metadata
     ARTS_DEBUG("Collecting memref metadata...");
     collectMemrefMetadata(module, *manager, *memrefAnalyzer);
+
+    ///  Refine loop metadata using memref insights
+    refineLoopMemrefMetadata(module, *manager, *accessAnalyzer, *depAnalyzer);
 
     ///  Export all metadata to operations
     ARTS_DEBUG("Exporting metadata to operations...");
@@ -136,6 +140,14 @@ private:
       ARTS_DEBUG("  Analyzed scf.parallel at "
                  << metadata->locationMetadata.toString());
     });
+
+    ///  Collect scf.while loops
+    module.walk([&](scf::WhileOp whileOp) {
+      auto *metadata = manager.addLoopMetadata(whileOp);
+      analyzer.analyzeSCFLoop(whileOp, metadata);
+      ARTS_DEBUG("  Analyzed scf.while at "
+                 << metadata->locationMetadata.toString());
+    });
   }
 
   /// / Collect metadata for all memref allocations
@@ -153,6 +165,97 @@ private:
       auto *metadata = manager.addMemrefMetadata(allocaOp);
       analyzer.analyzeAllocation(allocaOp, metadata, module);
       ARTS_DEBUG("  Analyzed memref.alloca " << metadata->allocationId);
+    });
+  }
+
+  struct LoopMemrefUsage {
+    int64_t readCount = 0;
+    int64_t writeCount = 0;
+    MemrefMetadata *memrefMetadata = nullptr;
+    bool hasLoopCarriedDeps = false;
+  };
+
+  void refineLoopMemrefMetadata(ModuleOp module, ArtsMetadataManager &manager,
+                                AccessAnalyzer &accessAnalyzer,
+                                DependenceAnalyzer &depAnalyzer) {
+    module.walk([&](Operation *loopOp) {
+      auto *loopMeta = manager.getLoopMetadata(loopOp);
+      if (!loopMeta)
+        return;
+
+      llvm::DenseMap<Value, LoopMemrefUsage> usage;
+      loopOp->walk([&](Operation *op) {
+        if (!accessAnalyzer.isMemoryAccess(op))
+          return;
+        Value memref = accessAnalyzer.getAccessedMemref(op);
+        if (!memref)
+          return;
+
+        auto [it, inserted] = usage.try_emplace(memref);
+        auto &info = it->second;
+        if (inserted) {
+          if (Operation *def = memref.getDefiningOp())
+            info.memrefMetadata = manager.getMemrefMetadata(def);
+          info.hasLoopCarriedDeps =
+              depAnalyzer.hasLoopCarriedDeps(loopOp, memref);
+        }
+        if (accessAnalyzer.isReadAccess(op))
+          info.readCount++;
+        if (accessAnalyzer.isWriteAccess(op))
+          info.writeCount++;
+      });
+
+      if (usage.empty())
+        return;
+
+      int64_t readOnly = 0, writeOnly = 0, readWrite = 0;
+      int64_t memrefsWithDeps = 0, poorTemporal = 0;
+      for (auto &entry : usage) {
+        LoopMemrefUsage &info = entry.second;
+        bool hasReads = info.readCount > 0;
+        bool hasWrites = info.writeCount > 0;
+        if (hasReads && !hasWrites)
+          readOnly++;
+        else if (!hasReads && hasWrites)
+          writeOnly++;
+        else if (hasReads && hasWrites)
+          readWrite++;
+
+        if (info.hasLoopCarriedDeps)
+          memrefsWithDeps++;
+        if (info.memrefMetadata) {
+          if (info.memrefMetadata->temporalLocality &&
+              *info.memrefMetadata->temporalLocality ==
+                  TemporalLocalityLevel::Poor)
+            poorTemporal++;
+        }
+      }
+
+      loopMeta->memrefCount = static_cast<int64_t>(usage.size());
+      loopMeta->readOnlyMemrefCount = readOnly;
+      loopMeta->writeOnlyMemrefCount = writeOnly;
+      loopMeta->readWriteMemrefCount = readWrite;
+      loopMeta->memrefsWithLoopCarriedDeps = memrefsWithDeps;
+      loopMeta->poorTemporalLocalityMemrefCount = poorTemporal;
+
+      bool hasLoopLevelDeps =
+          loopMeta->hasInterIterationDeps && *loopMeta->hasInterIterationDeps;
+      bool sequential = hasLoopLevelDeps || memrefsWithDeps > 0;
+      bool hasWrites = (writeOnly + readWrite) > 0 || loopMeta->writeCount > 0;
+      LoopMetadata::ParallelClassification classification =
+          LoopMetadata::ParallelClassification::Unknown;
+      if (sequential) {
+        classification = LoopMetadata::ParallelClassification::Sequential;
+        loopMeta->potentiallyParallel = false;
+      } else if (!hasWrites) {
+        classification = LoopMetadata::ParallelClassification::ReadOnly;
+        loopMeta->potentiallyParallel = true;
+      } else {
+        classification = LoopMetadata::ParallelClassification::Likely;
+        if (!loopMeta->potentiallyParallel)
+          loopMeta->potentiallyParallel = true;
+      }
+      loopMeta->parallelClassification = classification;
     });
   }
 };

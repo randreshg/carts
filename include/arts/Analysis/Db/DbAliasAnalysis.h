@@ -44,6 +44,7 @@ public:
   OverlapKind estimateOverlap(const DbAcquireNode *a, const DbAcquireNode *b);
 
   Value getUnderlyingValue(const NodeBase &node);
+  void resetCache();
 
 private:
   DenseMap<std::pair<Value, Value>, AliasResult> aliasCache;

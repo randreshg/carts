@@ -233,6 +233,14 @@ def LoopMetadataAttr : Arts_Attr<"LoopMetadata", "loop_metadata"> {
     /// Dependency information
     OptionalParameter<"::mlir::BoolAttr">:$hasInterIterationDeps,
     OptionalParameter<"::mlir::IntegerAttr">:$dependenceDistance,
+    /// Aggregated memref usage
+    OptionalParameter<"::mlir::IntegerAttr">:$memrefCount,
+    OptionalParameter<"::mlir::IntegerAttr">:$readOnlyMemrefCount,
+    OptionalParameter<"::mlir::IntegerAttr">:$writeOnlyMemrefCount,
+    OptionalParameter<"::mlir::IntegerAttr">:$readWriteMemrefCount,
+    OptionalParameter<"::mlir::IntegerAttr">:$memrefsWithLoopCarriedDeps,
+    OptionalParameter<"::mlir::IntegerAttr">:$poorTemporalLocalityMemrefs,
+    OptionalParameter<"::mlir::IntegerAttr">:$parallelClassification,
     // Source location
     "::mlir::StringAttr":$locationKey
   );

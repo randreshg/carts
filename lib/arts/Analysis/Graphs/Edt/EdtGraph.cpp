@@ -71,6 +71,7 @@ void EdtGraph::invalidate() {
   edtNodes.clear();
   edges.clear();
   nodes.clear();
+  childrenCache.clear();
   isBuilt = false;
   needsRebuild = true;
 }
@@ -151,16 +152,21 @@ void EdtGraph::print(llvm::raw_ostream &os) {
     task->print(os);
     os << "\n";
 
-    SmallVector<DbEdgeSlice, 4> dbDeps;
+    SmallVector<DbEdge, 4> dbDeps;
     for (auto *edge : task->getOutEdges())
-      if (auto *depEdge = dyn_cast<EdtDepEdge>(edge))
-        dbDeps.append(depEdge->getSlices().begin(),
-                      depEdge->getSlices().end());
+      if (auto *depEdge = dyn_cast<EdtDepEdge>(edge)) {
+        auto edges = depEdge->getEdges();
+        dbDeps.append(edges.begin(), edges.end());
+      }
     if (!dbDeps.empty()) {
       os << "  Data Dependencies:\n";
-      for (const auto &slice : dbDeps) {
-        os << "    - " << (slice.description.empty() ? "db" : slice.description)
-           << " (" << depTypeToString(slice.depType) << ")\n";
+      for (const auto &edge : dbDeps) {
+        std::string label = "db";
+        if (auto *prod = edge.producer)
+          if (auto *alloc = prod->getRootAlloc())
+            label = alloc->getHierId().str();
+        os << "    - " << label << " (" << depTypeToString(edge.depType)
+           << ")\n";
       }
     }
   }
@@ -310,16 +316,18 @@ void EdtGraph::buildDependencies() {
 
   unsigned created = 0;
   for (auto &dep : deps) {
-    if (!dep.from || !dep.to || dep.slices.empty())
+    if (!dep.from || !dep.to || dep.edges.empty())
       continue;
     EdtNode *fromNode = getEdtNode(dep.from);
     EdtNode *toNode = getEdtNode(dep.to);
     if (!fromNode || !toNode)
       continue;
 
-    auto *edge = new EdtDepEdge(fromNode, toNode, dep.slices.front());
-    for (size_t idx = 1; idx < dep.slices.size(); ++idx)
-      edge->appendSlice(dep.slices[idx]);
+    auto iter = dep.edges.begin();
+    auto *edge = new EdtDepEdge(fromNode, toNode, *iter);
+    ++iter;
+    for (; iter != dep.edges.end(); ++iter)
+      edge->appendEdge(*iter);
 
     if (addEdge(fromNode, toNode, edge)) {
       ++created;

@@ -20,6 +20,10 @@ ARTS_INSTALL_DIR ?=$(INSTALL_DIR)/arts
 LLVM_INSTALL_DIR ?=$(INSTALL_DIR)/llvm
 POLYGEIST_INSTALL_DIR ?=$(INSTALL_DIR)/polygeist
 
+PYTHON ?= python3
+PYTHON_VERSION := $(shell $(PYTHON) -c 'import sys; print("{}.{}".format(sys.version_info.major, sys.version_info.minor))')
+PYTHON_SITE_PACKAGES := $(LLVM_INSTALL_DIR)/lib/python$(PYTHON_VERSION)/site-packages
+
 CARTS_LINKER_PATH ?= ${LLVM_INSTALL_DIR}/bin/ld.lld
 
 # Build Directories
@@ -84,18 +88,30 @@ llvm:
 		-DLLVM_INCLUDE_BENCHMARKS=OFF \
 		-DLLVM_INCLUDE_UTILS=ON \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
-	ninja -C $(LLVM_BUILD_DIR) install; 
+	ninja -C $(LLVM_BUILD_DIR) llvm-lit; \
+	ninja -C $(LLVM_BUILD_DIR) install; \
+	if [ -f "$(LLVM_BUILD_DIR)/bin/llvm-lit" ]; then \
+		mkdir -p $(LLVM_INSTALL_DIR)/bin; \
+		cp $(LLVM_BUILD_DIR)/bin/llvm-lit $(LLVM_INSTALL_DIR)/bin/; \
+	fi
+llvm-lit: llvm
+	mkdir -p $(PYTHON_SITE_PACKAGES) $(LLVM_BUILD_DIR)/lit-tmp && \
+	rsync -a --exclude='build' --exclude='*.egg-info' --exclude='*.pyc' --exclude='__pycache__' --exclude='ExampleTests*' $(LLVM_DIR)/llvm/utils/lit/ $(LLVM_BUILD_DIR)/lit-tmp/ && \
+	cd $(LLVM_BUILD_DIR)/lit-tmp && \
+	$(PYTHON) -m pip install --target=$(PYTHON_SITE_PACKAGES) --no-deps --no-build-isolation --no-cache-dir . && \
+	rm -rf $(LLVM_BUILD_DIR)/lit-tmp && \
+	[ -f "$(PYTHON_SITE_PACKAGES)/bin/lit" ] && mkdir -p $(LLVM_INSTALL_DIR)/bin && cp $(PYTHON_SITE_PACKAGES)/bin/lit $(LLVM_INSTALL_DIR)/bin/ || true
 llvm-clean:
 	rm -rf $(LLVM_BUILD_DIR)
 	rm -f -r $(LLVM_INSTALL_DIR)
 
 # ARTS
 ARTS_BUILD_TYPE ?= Release
-# Introspection is disabled by default for performance
+# Introspection 
 # Use ARTS_USE_COUNTERS=ON and ARTS_USE_METRICS=ON to enable introspection
 ARTS_USE_COUNTERS ?= OFF
 ARTS_USE_METRICS ?= OFF
-# Logging levels (disabled by default for performance)
+# Logging levels 
 ARTS_INFO_ENABLED ?= OFF
 ARTS_DEBUG_ENABLED ?= OFF
 
@@ -131,6 +147,14 @@ arts-clean:
 
 # CARTS
 build:
+	@if [ ! -f "$(LLVM_INSTALL_DIR)/bin/clang" ] || [ ! -d "$(LLVM_BUILD_DIR)/lib/cmake/mlir" ]; then \
+		echo "Error: LLVM is not built. Please run 'make llvm' or 'carts build --llvm' first."; \
+		exit 1; \
+	fi
+	@if [ ! -d "$(POLYGEIST_BUILD_DIR)" ]; then \
+		echo "Error: Polygeist is not built. Please run 'make polygeist' or 'carts build --polygeist' first."; \
+		exit 1; \
+	fi
 	mkdir -p $(CARTS_BUILD_DIR)
 	mkdir -p $(CARTS_INSTALL_DIR)
 	cmake -B $(CARTS_BUILD_DIR) \
@@ -145,7 +169,7 @@ build:
 		-DPOLYGEIST_DIR=$(POLYGEIST_DIR) \
 		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
 		-DCARTS_USE_LINKER="$(CARTS_LINKER_PATH)"
-		ninja $(NINJA_FLAGS) -C $(CARTS_BUILD_DIR) install
+	ninja $(NINJA_FLAGS) -C $(CARTS_BUILD_DIR) install
 
 # Build only carts-run
 carts-run-only:
@@ -158,7 +182,7 @@ carts-run-only:
 	ninja $(NINJA_FLAGS) -C $(CARTS_BUILD_DIR) carts-run
 	cmake --install $(CARTS_BUILD_DIR) --component carts-run
 
-install: arts-download polygeist-download llvm arts polygeist build
+install: arts-download polygeist-download llvm-lit arts polygeist build
 
 uninstall:
 	cat $(BUILD_DIR)/install_manifest.txt | xargs rm -f -r
@@ -171,4 +195,4 @@ clean:
 	make -C $(BUILD_DIR) clean -j
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all build install postinstall uninstall fulluninstall clean test llvm-runtimes arts-download polygeist-download
+.PHONY: all build install postinstall uninstall fulluninstall clean test llvm-runtimes arts-download polygeist-download llvm llvm-lit

@@ -276,7 +276,7 @@ void setupCreateDbs(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 
 /// Db creation and optimization passes.
 void setupDbOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
-  pm.addPass(arts::createDbPass(AM));
+  pm.addPass(arts::createDbPass(AM, /*enablePartitioning=*/false));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createMem2Reg());
@@ -301,7 +301,7 @@ void setupConcurrency(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 
 /// Concurrency optimization passes.
 void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
-  pm.addPass(arts::createDbPass(AM));
+  pm.addPass(arts::createDbPass(AM, /*enablePartitioning=*/true));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createMem2Reg());

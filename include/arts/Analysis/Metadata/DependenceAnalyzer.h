@@ -11,6 +11,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
+#include <optional>
 
 namespace mlir {
 namespace arts {
@@ -26,17 +27,56 @@ public:
 
   /// Check if a loop has inter-iteration dependencies
   bool hasInterIterationDeps(Operation *loopOp) const {
-    /// For affine loops, use MLIR's analysis
+    /// For affine loops, run precise dependence checks
     if (auto forOp = dyn_cast<affine::AffineForOp>(loopOp))
-      return !affine::isLoopParallel(forOp);
+      return analyzeAffineLoopDependences(forOp, std::nullopt).hasDependence;
 
-    /// For SCF loops, check for loop-carried dependencies via iter_args
-    if (auto forOp = dyn_cast<scf::ForOp>(loopOp))
-      return !forOp.getInitArgs().empty();
+    /// For SCF loops, treat iter_args that are actually updated as deps
+    if (auto forOp = dyn_cast<scf::ForOp>(loopOp)) {
+      if (forOp.getInitArgs().empty())
+        return false;
+
+      auto *terminator = forOp.getBody()->getTerminator();
+      auto yieldOp = dyn_cast<scf::YieldOp>(terminator);
+      if (!yieldOp)
+        return true;
+      auto regionArgs = forOp.getRegionIterArgs();
+      auto yieldedValues = yieldOp.getResults();
+
+      if (regionArgs.size() != yieldedValues.size())
+        return true;
+
+      for (unsigned i = 0, e = regionArgs.size(); i < e; ++i) {
+        if (yieldedValues[i] != regionArgs[i])
+          return true;
+      }
+      return false;
+    }
 
     /// scf.parallel is explicitly parallel
     if (isa<scf::ParallelOp>(loopOp))
       return false;
+
+    if (auto whileOp = dyn_cast<scf::WhileOp>(loopOp)) {
+      if (whileOp.getInits().empty())
+        return false;
+      auto &after = whileOp.getAfter();
+      if (after.empty())
+        return true;
+      Block &bodyBlock = after.front();
+      auto yieldOp = dyn_cast<scf::YieldOp>(bodyBlock.getTerminator());
+      if (!yieldOp)
+        return true;
+      auto regionArgs = bodyBlock.getArguments();
+      auto yieldedValues = yieldOp.getResults();
+      if (regionArgs.size() != yieldedValues.size())
+        return true;
+      for (auto [arg, value] : llvm::zip(regionArgs, yieldedValues)) {
+        if (value != arg)
+          return true;
+      }
+      return false;
+    }
 
     /// Conservative default
     return true;
@@ -44,6 +84,9 @@ public:
 
   /// Check if a memref has loop-carried dependencies in a loop
   bool hasLoopCarriedDeps(Operation *loopOp, Value memref) const {
+    if (auto forOp = dyn_cast<affine::AffineForOp>(loopOp))
+      return analyzeAffineLoopDependences(forOp, memref).hasDependence;
+
     /// Simple heuristic:
     ///  If same memref is both read and written, assume dependency
     bool hasRead = false, hasWrite = false;
@@ -77,9 +120,109 @@ public:
     return hasRead && hasWrite;
   }
 
+  /// Compute the minimum positive dependence distance for affine loops.
+  std::optional<int64_t>
+  getMinDependenceDistance(affine::AffineForOp forOp) const {
+    return analyzeAffineLoopDependences(forOp, std::nullopt).minDistance;
+  }
+
 private:
   MLIRContext *context [[maybe_unused]];
   AccessAnalyzer &accessAnalyzer [[maybe_unused]];
+
+  struct DependenceSummary {
+    bool hasDependence = false;
+    std::optional<int64_t> minDistance;
+  };
+
+  static unsigned getAffineLoopDepth(affine::AffineForOp forOp) {
+    unsigned depth = 1;
+    Operation *parent = forOp->getParentOp();
+    while (parent) {
+      if (isa<affine::AffineForOp>(parent))
+        depth++;
+      parent = parent->getParentOp();
+    }
+    return depth;
+  }
+
+  static bool isLoopCarriedComponent(const affine::DependenceComponent &comp,
+                                     Operation *loopOp) {
+    if (comp.op != loopOp)
+      return false;
+    bool lbZero = comp.lb && *comp.lb == 0;
+    bool ubZero = comp.ub && *comp.ub == 0;
+    if (lbZero && ubZero)
+      return false;
+    return true;
+  }
+
+  static void updateMinDistance(std::optional<int64_t> &current,
+                                const affine::DependenceComponent &comp) {
+    auto chooseDistance =
+        [&](std::optional<int64_t> bound) -> std::optional<int64_t> {
+      if (bound.has_value() && *bound > 0)
+        return bound;
+      return std::nullopt;
+    };
+
+    std::optional<int64_t> candidate = chooseDistance(comp.lb);
+    if (!candidate)
+      candidate = chooseDistance(comp.ub);
+    if (!candidate)
+      candidate = 1;
+
+    if (!current || *candidate < *current)
+      current = candidate;
+  }
+
+  DependenceSummary
+  analyzeAffineLoopDependences(affine::AffineForOp forOp,
+                               std::optional<Value> memrefFilter) const {
+    DependenceSummary summary;
+    SmallVector<Operation *, 8> accesses;
+    forOp->walk([&](Operation *nestedOp) {
+      if (isa<affine::AffineReadOpInterface, affine::AffineWriteOpInterface>(
+              nestedOp))
+        accesses.push_back(nestedOp);
+    });
+
+    if (accesses.size() < 2)
+      return summary;
+
+    unsigned loopDepth = getAffineLoopDepth(forOp);
+    for (Operation *srcOp : accesses) {
+      affine::MemRefAccess srcAccess(srcOp);
+      if (memrefFilter && srcAccess.memref != *memrefFilter)
+        continue;
+      for (Operation *dstOp : accesses) {
+        if (srcOp == dstOp)
+          continue;
+        affine::MemRefAccess dstAccess(dstOp);
+        if (memrefFilter && dstAccess.memref != *memrefFilter)
+          continue;
+        SmallVector<affine::DependenceComponent, 2> components;
+        auto result = affine::checkMemrefAccessDependence(
+            srcAccess, dstAccess, loopDepth, /*dependenceConstraints=*/nullptr,
+            &components);
+        if (!affine::hasDependence(result))
+          continue;
+        bool carried = false;
+        for (const auto &component : components) {
+          if (!isLoopCarriedComponent(component, forOp.getOperation()))
+            continue;
+          carried = true;
+          updateMinDistance(summary.minDistance, component);
+        }
+        if (carried) {
+          summary.hasDependence = true;
+          if (!summary.minDistance)
+            summary.minDistance = 1;
+        }
+      }
+    }
+    return summary;
+  }
 };
 
 } // namespace arts

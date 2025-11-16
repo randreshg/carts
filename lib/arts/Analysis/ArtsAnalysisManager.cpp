@@ -25,6 +25,10 @@ void ArtsAnalysisManager::invalidate() {
     dbAnalysis->invalidate();
   if (edtAnalysis)
     edtAnalysis->invalidate();
+  if (loopAnalysis)
+    loopAnalysis->invalidate();
+  if (stringAnalysis)
+    stringAnalysis->invalidate();
   if (metadataManager)
     metadataManager->clear();
 }
@@ -39,6 +43,18 @@ EdtAnalysis &ArtsAnalysisManager::getEdtAnalysis() {
   if (!edtAnalysis)
     edtAnalysis = std::make_unique<EdtAnalysis>(*this);
   return *edtAnalysis.get();
+}
+
+LoopAnalysis &ArtsAnalysisManager::getLoopAnalysis() {
+  if (!loopAnalysis)
+    loopAnalysis = std::make_unique<LoopAnalysis>(*this);
+  return *loopAnalysis.get();
+}
+
+StringAnalysis &ArtsAnalysisManager::getStringAnalysis() {
+  if (!stringAnalysis)
+    stringAnalysis = std::make_unique<StringAnalysis>(*this);
+  return *stringAnalysis;
 }
 
 ArtsMetadataManager &ArtsAnalysisManager::getMetadataManager() {
@@ -58,6 +74,12 @@ const ArtsMetadataManager &ArtsAnalysisManager::getMetadataManager() const {
   return *metadataManager;
 }
 
+const StringAnalysis &ArtsAnalysisManager::getStringAnalysis() const {
+  assert(stringAnalysis && "String analysis not initialized. Call non-const "
+                           "getStringAnalysis() first.");
+  return *stringAnalysis;
+}
+
 DbGraph &ArtsAnalysisManager::getDbGraph(func::FuncOp func) {
   return getDbAnalysis().getOrCreateGraph(func);
 }
@@ -72,6 +94,10 @@ bool ArtsAnalysisManager::invalidateFunction(func::FuncOp func) {
     invalidated |= dbAnalysis->invalidateGraph(func);
   if (edtAnalysis)
     invalidated |= edtAnalysis->invalidateGraph(func);
+  if (loopAnalysis)
+    loopAnalysis->invalidate();
+  if (stringAnalysis)
+    stringAnalysis->invalidate();
   return invalidated;
 }
 
