@@ -7,10 +7,13 @@
 #ifndef CARTS_ANALYSIS_STRINGANALYSIS_H
 #define CARTS_ANALYSIS_STRINGANALYSIS_H
 
+#include "arts/Analysis/ArtsAnalysis.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinAttributes.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Value.h"
-#include "mlir/Pass/Pass.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 
 namespace mlir {
 namespace arts {
@@ -18,28 +21,25 @@ namespace arts {
 ///===----------------------------------------------------------------------===///
 // StringAnalysis
 ///===----------------------------------------------------------------------===///
-struct StringAnalysis {
-  explicit StringAnalysis(Operation *module) {
-    this->module = cast<ModuleOp>(module);
-    run();
-  }
-  ~StringAnalysis() {}
-
+class StringAnalysis : public ArtsAnalysis {
 public:
-  bool isStringMemRef(Value value) const { return stringMemRefs.count(value); }
-  const DenseSet<Value> &getStringMemRefs() const { return stringMemRefs; }
-  const DenseMap<Value, LLVM::GlobalOp> &getGlobalSources() const {
-    return globalSources;
-  }
+  explicit StringAnalysis(ArtsAnalysisManager &manager);
 
-  /// Main function that performs analysis.
   void run();
+  void invalidate() override;
+
+  bool isStringMemRef(Value value) const;
+  const DenseSet<Value> &getStringMemRefs() const;
+  const DenseMap<Value, LLVM::GlobalOp> &getGlobalSources() const;
 
 private:
+  void ensureAnalyzed() const;
+
   /// Cached results from the analysis.
   DenseSet<Value> stringMemRefs;
   DenseMap<Value, LLVM::GlobalOp> globalSources;
   ModuleOp module;
+  mutable bool built = false;
 
   /// Check whether the LLVM global contains a null-terminated string.
   bool isStringGlobal(LLVM::GlobalOp globalOp);

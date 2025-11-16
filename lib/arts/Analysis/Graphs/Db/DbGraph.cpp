@@ -235,11 +235,12 @@ void DbGraph::print(llvm::raw_ostream &os) {
   for (const auto &pair : allocNodes) {
     DbAllocNode *alloc = pair.second.get();
 
-    os << "DB [" << alloc->getHierId() << "]\n";
+    os << "  DB [" << alloc->getHierId() << "]\n";
     os << "  Op: " << alloc->getDbAllocOp() << "\n";
     os << "  Lifetime: Op " << alloc->beginIndex << " -> " << alloc->endIndex
        << " (span=" << alloc->criticalSpan << ")\n";
-    os << "  Rank: " << alloc->getRank() << "\n";
+    if (alloc->rank)
+      os << "  Rank: " << *alloc->rank << "\n";
     os << "\n";
     os << "  Usage: " << alloc->numAcquires << " acquires"
        << "\n";
@@ -262,7 +263,6 @@ void DbGraph::print(llvm::raw_ostream &os) {
         auto stores = acqNode->getStores().size();
         os << "      EDT Uses - Reads: " << loads << ", Writes: " << stores
            << "\n";
-
       });
     }
 
@@ -338,9 +338,8 @@ void DbGraph::computeAllocMetrics(DbAllocOp alloc, DbAllocNode *allocNode) {
   info.inCount = 0;
   info.outCount = 0;
   info.totalAccessBytes = 0;
-  info.numReleases = 0;
 
-  /// Collect all acquire nodes (including nested) 
+  /// Collect all acquire nodes (including nested)
   SmallVector<DbAcquireNode *, 16> allAcquireNodes;
   std::function<void(DbAcquireNode *)> collectAcqRec;
   collectAcqRec = [&](DbAcquireNode *acq) {
@@ -387,7 +386,6 @@ void DbGraph::processAcquireNode(DbAcquireNode *acq, DbAllocNode &info) {
   DbReleaseOp releaseOp = acq->getDbReleaseOp();
   if (releaseOp) {
     endIndex = getOpOrder(releaseOp.getOperation());
-    ++info.numReleases;
   }
 
   /// Update timing info in the acquire node
@@ -494,17 +492,6 @@ void DbGraph::computeLongLivedFlag(DbAllocNode &info) {
   }
 }
 
-/// Determine if allocation may be escaping
-void DbGraph::computeEscapingFlag(DbAllocOp alloc, DbAllocNode &info) {
-  info.maybeEscaping = false;
-  for (Operation *user : alloc.getPtr().getUsers()) {
-    if (!isa<DbAcquireOp>(user) && !isa<DbReleaseOp>(user)) {
-      info.maybeEscaping = true;
-      break;
-    }
-  }
-}
-
 /// Compute peak live databases and bytes using sweep-line algorithm
 void DbGraph::computePeakMetrics() {
   struct Event {
@@ -517,12 +504,10 @@ void DbGraph::computePeakMetrics() {
   for (auto &kv : allocNodes) {
     const DbAllocNode &info = *kv.second;
     DbAllocNode *allocNode = kv.second.get();
-    /// Iterate through graph structure (not alloc->acquireNodes which no longer
-    /// exists)
+    /// Iterate through graph structure
     allocNode->forEachChildNode([&](NodeBase *child) {
       if (auto *node = dyn_cast<DbAcquireNode>(child)) {
-        unsigned long long bytes =
-            info.memoryFootprint.value_or<int64_t>(0);
+        unsigned long long bytes = info.memoryFootprint.value_or<int64_t>(0);
         events.push_back({node->beginIndex, +1, bytes});
         events.push_back({node->endIndex + 1, -1, bytes});
       }
@@ -547,34 +532,7 @@ void DbGraph::computePeakMetrics() {
 
 /// Compute reuse candidates for allocations
 void DbGraph::computeReuseCandidates() {
-  SmallVector<DbAllocOp, 16> allocs;
-  for (auto &kv : allocNodes) {
-    allocs.push_back(kv.first);
-  }
-
-  llvm::sort(allocs, [&](DbAllocOp a, DbAllocOp b) {
-    return getOpOrder(a.getOperation()) < getOpOrder(b.getOperation());
-  });
-
-  for (size_t i = 0; i < allocs.size(); ++i) {
-    for (size_t j = i + 1; j < allocs.size(); ++j) {
-      const DbAllocNode &infoA = *allocNodes[allocs[i]];
-      const DbAllocNode &infoB = *allocNodes[allocs[j]];
-
-      /// Check if lifetimes don't overlap and sizes match
-      bool noOverlap =
-          (infoA.endIndex <= infoB.beginIndex ||
-           infoB.endIndex <= infoA.beginIndex);
-      auto bytesA = infoA.memoryFootprint.value_or<int64_t>(0);
-      auto bytesB = infoB.memoryFootprint.value_or<int64_t>(0);
-      bool sameSize = (bytesA != 0 && bytesA == bytesB);
-
-      if (noOverlap && sameSize) {
-        allocNodes[allocs[i]]->reuseMatches.push_back(allocs[j]);
-        allocNodes[allocs[j]]->reuseMatches.push_back(allocs[i]);
-      }
-    }
-  }
+  // Reuse detection disabled until we reintroduce a consumer.
 }
 
 void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
@@ -590,10 +548,9 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
                               {"nodeKind", "DbAlloc"}});
     allocNode->forEachChildNode([&](NodeBase *child) {
       if (auto *acq = dyn_cast<DbAcquireNode>(child)) {
-        nodesArr.push_back(
-            Object{{"id", sanitizeString(acq->getHierId())},
-                   {"group", "db"},
-                   {"nodeKind", "DbAcquire"}});
+        nodesArr.push_back(Object{{"id", sanitizeString(acq->getHierId())},
+                                  {"group", "db"},
+                                  {"nodeKind", "DbAcquire"}});
       }
     });
   }
@@ -623,21 +580,19 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
     /// Allocs
     Array allocs;
     for (const auto &kv : allocNodes) {
-    DbAllocNode *allocNode = kv.second.get();
-    const DbAllocNode &M = *allocNode;
+      DbAllocNode *allocNode = kv.second.get();
+      const DbAllocNode &M = *allocNode;
       Object A;
       A["id"] = sanitizeString(allocNode->getHierId());
       A["allocIndex"] = (uint64_t)M.beginIndex;
       A["endIndex"] = (uint64_t)M.endIndex;
       A["numAcquires"] = (uint64_t)M.numAcquires;
-      A["numReleases"] = (uint64_t)M.numReleases;
       if (M.memoryFootprint)
         A["staticBytes"] = std::to_string(*M.memoryFootprint);
       A["criticalSpan"] = (uint64_t)M.criticalSpan;
       A["criticalPath"] = (uint64_t)M.criticalPath;
       A["totalAccessBytes"] = std::to_string(M.totalAccessBytes);
       A["isLongLived"] = (bool)M.isLongLived;
-      A["maybeEscaping"] = (bool)M.maybeEscaping;
 
       /// Iterate through graph structure (not M.acquireNodes which no longer
       /// exists)
@@ -649,8 +604,7 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
         Object I;
         I["begin"] = (uint64_t)acqNode->beginIndex;
         I["end"] = (uint64_t)acqNode->endIndex;
-        I["mode"] =
-            modeToString(cast<DbAcquireOp>(acqNode->getOp()).getMode());
+        I["mode"] = modeToString(cast<DbAcquireOp>(acqNode->getOp()).getMode());
         I["estimatedBytes"] = std::to_string(acqNode->estimatedBytes);
         intervals.push_back(std::move(I));
       });

@@ -3,6 +3,7 @@
 ///==========================================================================///
 
 #include "arts/Analysis/StringAnalysis.h"
+#include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Utils/ArtsUtils.h"
 /// Dialects
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -21,7 +22,11 @@ ARTS_DEBUG_SETUP(string_analysis);
 using namespace mlir;
 using namespace arts;
 
+StringAnalysis::StringAnalysis(ArtsAnalysisManager &manager)
+    : ArtsAnalysis(manager), module(manager.getModule()) {}
+
 void StringAnalysis::run() {
+  invalidate();
   ARTS_DEBUG_HEADER(StringAnalysis);
   trackGlobalUsers();
   trackMemrefInitializations();
@@ -33,7 +38,35 @@ void StringAnalysis::run() {
       ARTS_INFO("Found " << stringMemRefs.size() << " string memrefs");
     }
   });
+  built = true;
   ARTS_DEBUG_FOOTER(StringAnalysis);
+}
+
+void StringAnalysis::invalidate() {
+  stringMemRefs.clear();
+  globalSources.clear();
+  built = false;
+}
+
+bool StringAnalysis::isStringMemRef(Value value) const {
+  ensureAnalyzed();
+  return stringMemRefs.contains(value);
+}
+
+const DenseSet<Value> &StringAnalysis::getStringMemRefs() const {
+  ensureAnalyzed();
+  return stringMemRefs;
+}
+
+const DenseMap<Value, LLVM::GlobalOp> &
+StringAnalysis::getGlobalSources() const {
+  ensureAnalyzed();
+  return globalSources;
+}
+
+void StringAnalysis::ensureAnalyzed() const {
+  if (!built)
+    const_cast<StringAnalysis *>(this)->run();
 }
 
 bool StringAnalysis::isStringGlobal(LLVM::GlobalOp globalOp) {

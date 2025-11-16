@@ -23,11 +23,12 @@ using namespace arts;
 /// EdtAnalysis
 ///==========================================================================///
 
-EdtAnalysis::EdtAnalysis(ArtsAnalysisManager &AM) : AM(AM) {
+EdtAnalysis::EdtAnalysis(ArtsAnalysisManager &AM) : ArtsAnalysis(AM) {
   assert(AM.getModule() && "Module is required");
 }
 
 void EdtAnalysis::analyze() {
+  auto &AM = getAnalysisManager();
   for (auto func : AM.getModule().getOps<func::FuncOp>())
     analyzeFunc(func);
 }
@@ -109,7 +110,7 @@ EdtGraph &EdtAnalysis::getOrCreateEdtGraph(func::FuncOp func) {
   if (it != edtGraphs.end())
     return *it->second.get();
   // Build using DbGraph from DbAnalysis for consistency
-  DbGraph &db = AM.getDbAnalysis().getOrCreateGraph(func);
+  DbGraph &db = getAnalysisManager().getDbAnalysis().getOrCreateGraph(func);
   auto eg = std::make_unique<EdtGraph>(func, &db);
   eg->build();
 

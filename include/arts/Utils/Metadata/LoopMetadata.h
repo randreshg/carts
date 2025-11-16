@@ -44,6 +44,15 @@ constexpr StringLiteral SuggestedChunkSize = "suggested_chunk_size";
 constexpr StringLiteral MemoryFootprintPerIter = "memory_footprint_per_iter";
 constexpr StringLiteral HasInterIterationDeps = "has_inter_iteration_deps";
 constexpr StringLiteral DependenceDistance = "dependence_distance";
+constexpr StringLiteral MemrefCount = "memref_count";
+constexpr StringLiteral ReadOnlyMemrefCount = "read_only_memref_count";
+constexpr StringLiteral WriteOnlyMemrefCount = "write_only_memref_count";
+constexpr StringLiteral ReadWriteMemrefCount = "read_write_memref_count";
+constexpr StringLiteral MemrefsWithLoopCarriedDeps =
+    "memrefs_with_loop_carried_deps";
+constexpr StringLiteral PoorTemporalLocalityMemrefs =
+    "poor_temporal_locality_memrefs";
+constexpr StringLiteral ParallelClassification = "parallel_classification";
 constexpr StringLiteral LocationKey = "location_key";
 } // namespace LoopMetadata
 } // namespace AttrNames
@@ -82,6 +91,13 @@ public:
   const char *partitioningToString(Partitioning strategy) const;
   Partitioning stringToPartitioning(llvm::StringRef str) const;
 
+  /// Parallel classification for loops
+  enum class ParallelClassification { Unknown, ReadOnly, Likely, Sequential };
+  const char *
+  parallelClassificationToString(ParallelClassification classification) const;
+  ParallelClassification
+  stringToParallelClassification(llvm::StringRef str) const;
+
   //===-------------------------------------------------------------===//
   // Attributes
   //===-------------------------------------------------------------===//
@@ -106,6 +122,15 @@ public:
   /// Dependency information
   std::optional<bool> hasInterIterationDeps;
   std::optional<int64_t> dependenceDistance;
+
+  /// Aggregated memref usage information
+  std::optional<int64_t> memrefCount;
+  std::optional<int64_t> readOnlyMemrefCount;
+  std::optional<int64_t> writeOnlyMemrefCount;
+  std::optional<int64_t> readWriteMemrefCount;
+  std::optional<int64_t> memrefsWithLoopCarriedDeps;
+  std::optional<int64_t> poorTemporalLocalityMemrefCount;
+  std::optional<ParallelClassification> parallelClassification;
 
   /// Source Location
   LocationMetadata locationMetadata;

@@ -8,6 +8,7 @@
 #ifndef CARTS_ANALYSIS_LOOP_LOOPANALYSIS_H
 #define CARTS_ANALYSIS_LOOP_LOOPANALYSIS_H
 
+#include "arts/Analysis/ArtsAnalysis.h"
 #include "arts/Analysis/Loop/LoopNode.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -21,35 +22,19 @@ namespace mlir {
 namespace arts {
 
 ///===----------------------------------------------------------------------===///
-/// LoopInfo - Basic loop information
-///===----------------------------------------------------------------------===///
-struct LoopInfo {
-  bool isAffine;
-  affine::AffineForOp affine;
-  scf::ParallelOp scfParallel;
-  scf::ForOp scfFor;
-  Value inductionVar;
-
-  LoopInfo(bool isAffine, affine::AffineForOp affine,
-           scf::ParallelOp scfParallel, scf::ForOp scfFor, Value inductionVar)
-      : isAffine(isAffine), affine(affine), scfParallel(scfParallel),
-        scfFor(scfFor), inductionVar(inductionVar) {}
-};
-
-///===----------------------------------------------------------------------===///
 /// LoopAnalysis
 /// Manages all loop operations in the module and provides LoopNode objects
 /// that combine graph structure with rich loop metadata.
 ///===----------------------------------------------------------------------===///
 class ArtsAnalysisManager;
-class LoopAnalysis {
+class LoopAnalysis : public ArtsAnalysis {
 public:
-  explicit LoopAnalysis(Operation *module,
-                        ArtsAnalysisManager *analysisManager = nullptr);
-  ~LoopAnalysis();
+  explicit LoopAnalysis(ArtsAnalysisManager &analysisManager);
+  ~LoopAnalysis() = default;
 
   /// Build analysis - creates LoopNodes for all loops in module
   void run();
+  void invalidate() override;
 
   ///===--------------------------------------------------------------------===///
   /// LoopNode Access
@@ -66,32 +51,10 @@ public:
   void collectEnclosingLoops(Operation *op,
                              SmallVectorImpl<LoopNode *> &enclosingLoops);
 
-  /// Collect LoopNodes whose induction variables affect the given operation
-  void collectAffectingLoops(Operation *op,
-                             SmallVectorImpl<LoopNode *> &affectingLoops);
-
-  /// Get the analysis manager
-  ArtsAnalysisManager *getAnalysisManager() const { return analysisManager; }
-
 private:
   ModuleOp module;
-  ArtsAnalysisManager *analysisManager = nullptr;
 
-  /// THE KEY: Map from loop operation → LoopNode (owns metadata)
-  /// This is the single source of truth for all loop information
   DenseMap<Operation *, std::unique_ptr<LoopNode>> loopNodes;
-
-  /// Legacy map: Operation → LoopInfo (for backward compatibility)
-  DenseMap<Operation *, LoopInfo *> loopInfoMap;
-
-  /// Quick list of all loop operations
-  SmallVector<Operation *, 4> loops;
-
-  /// Maps values to loops they depend on
-  DenseMap<Value, SmallVector<Operation *, 4>> loopValsMap;
-
-  /// Helper: Analyze induction variables
-  void analyzeLoopIV();
 
   /// Helper: Check if an operation is a recognized loop
   bool isLoopOperation(Operation *op) const;

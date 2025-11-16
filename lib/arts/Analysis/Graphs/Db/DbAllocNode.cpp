@@ -41,8 +41,13 @@ DbAllocNode::DbAllocNode(DbAllocOp op, DbAnalysis *analysis)
     if (metadataManager.ensureMemrefMetadata(op.getOperation()))
       importFromOp();
   }
-  sizes.reserve(dbAllocOp.getSizes().size());
-  sizes.assign(dbAllocOp.getSizes().begin(), dbAllocOp.getSizes().end());
+
+  if (analysis) {
+    if (Value address = dbAllocOp.getAddress()) {
+      auto &stringAnalysis = analysis->getAnalysisManager().getStringAnalysis();
+      isStringBacked = stringAnalysis.isStringMemRef(address);
+    }
+  }
 
   /// Find the corresponding DbFreeOp for this allocation
   Value dbVal = dbAllocOp.getPtr();
@@ -52,7 +57,6 @@ DbAllocNode::DbAllocNode(DbAllocOp op, DbAnalysis *analysis)
       break;
     }
   }
-    
 }
 
 void DbAllocNode::print(llvm::raw_ostream &os) const {

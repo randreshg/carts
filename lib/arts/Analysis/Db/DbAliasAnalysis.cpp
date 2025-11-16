@@ -26,6 +26,69 @@ std::pair<Value, Value> makeOrderedPair(Value a, Value b) {
                                                          : std::make_pair(b, a);
 }
 
+struct ConstantSlice {
+  SmallVector<int64_t, 4> offsets;
+  SmallVector<int64_t, 4> sizes;
+};
+
+std::optional<ConstantSlice> extractConstantSlice(DbAcquireOp op) {
+  ConstantSlice slice;
+  auto extractRange = [&](ValueRange range,
+                          SmallVectorImpl<int64_t> &storage) -> bool {
+    storage.clear();
+    storage.reserve(range.size());
+    for (Value v : range) {
+      int64_t cst = 0;
+      if (!arts::getConstantIndex(v, cst))
+        return false;
+      storage.push_back(cst);
+    }
+    return true;
+  };
+
+  if (!extractRange(op.getOffsets(), slice.offsets))
+    return std::nullopt;
+  if (!extractRange(op.getSizes(), slice.sizes))
+    return std::nullopt;
+  return slice;
+}
+
+std::optional<DbAliasAnalysis::AliasResult>
+refineAliasWithSlices(const DbAcquireNode *a, const DbAcquireNode *b) {
+  if (!a || !b)
+    return std::nullopt;
+  auto sliceA = extractConstantSlice(a->getDbAcquireOp());
+  auto sliceB = extractConstantSlice(b->getDbAcquireOp());
+  if (!sliceA || !sliceB)
+    return std::nullopt;
+
+  // Normalize dimensionality
+  if (sliceA->offsets.size() != sliceB->offsets.size() ||
+      sliceA->sizes.size() != sliceB->sizes.size())
+    return std::nullopt;
+
+  bool identical =
+      sliceA->offsets == sliceB->offsets && sliceA->sizes == sliceB->sizes;
+  if (identical)
+    return DbAliasAnalysis::AliasResult::MustAlias;
+
+  bool disjoint = false;
+  for (size_t dim = 0; dim < sliceA->sizes.size(); ++dim) {
+    int64_t beginA = sliceA->offsets[dim];
+    int64_t endA = beginA + sliceA->sizes[dim];
+    int64_t beginB = sliceB->offsets[dim];
+    int64_t endB = beginB + sliceB->sizes[dim];
+    if (endA <= beginB || endB <= beginA) {
+      disjoint = true;
+      break;
+    }
+  }
+
+  if (disjoint)
+    return DbAliasAnalysis::AliasResult::NoAlias;
+  return DbAliasAnalysis::AliasResult::MayAlias;
+}
+
 } // namespace
 
 DbAliasAnalysis::DbAliasAnalysis(DbAnalysis *analysis) {
@@ -167,6 +230,16 @@ DbAliasAnalysis::classifyAlias(const NodeBase &a, const NodeBase &b,
     const auto *acqA = dyn_cast<DbAcquireNode>(&a);
     const auto *acqB = dyn_cast<DbAcquireNode>(&b);
     if (acqA && acqB) {
+      if (auto sliceResult = refineAliasWithSlices(acqA, acqB)) {
+        if (*sliceResult != AliasResult::MayAlias) {
+          ARTS_INFO("  Step 2: Constant slice refinement -> "
+                    << aliasResultToString(*sliceResult) << indent);
+          result = *sliceResult;
+        }
+      }
+    }
+
+    if (acqA && acqB) {
       ARTS_INFO("  Step 2: Using DbAliasAnalysis::estimateOverlap" << indent);
       auto k = estimateOverlap(acqA, acqB);
       const char *kindStr = k == OverlapKind::Disjoint  ? "DISJOINT"
@@ -231,3 +304,5 @@ DbAliasAnalysis::estimateOverlap(const DbAcquireNode *a,
 
   return OverlapKind::Partial;
 }
+
+void DbAliasAnalysis::resetCache() { aliasCache.clear(); }

@@ -9,6 +9,7 @@
 #ifndef CARTS_ANALYSIS_EDTANALYSIS_H
 #define CARTS_ANALYSIS_EDTANALYSIS_H
 
+#include "arts/Analysis/ArtsAnalysis.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Region.h"
@@ -29,7 +30,7 @@ class DbGraph;
 /// EdtAnalysis: per-EDT summaries and pairwise affinity metrics
 ///==========================================================================///
 
-class EdtAnalysis {
+class EdtAnalysis : public ArtsAnalysis {
 public:
   EdtAnalysis(ArtsAnalysisManager &AM);
 
@@ -47,11 +48,11 @@ public:
   bool invalidateGraph(func::FuncOp func);
 
   /// Invalidate internal caches
-  void invalidate();
+  void invalidate() override;
+
+  using ArtsAnalysis::getAnalysisManager;
 
 private:
-  ArtsAnalysisManager &AM;
-
   /// Order index per EDT in a function
   DenseMap<EdtOp, unsigned> edtOrderIndex;
 

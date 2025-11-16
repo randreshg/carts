@@ -7,6 +7,7 @@
 #ifndef ARTS_ANALYSIS_DB_DBANALYSIS_H
 #define ARTS_ANALYSIS_DB_DBANALYSIS_H
 
+#include "arts/Analysis/ArtsAnalysis.h"
 #include "mlir/Analysis/DataFlowFramework.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -29,7 +30,7 @@ namespace arts {
 /// Central manager for DB-related analyses across a module.
 class ArtsAnalysisManager;
 
-class DbAnalysis {
+class DbAnalysis : public ArtsAnalysis {
 public:
   DbAnalysis(ArtsAnalysisManager &AM);
 
@@ -38,28 +39,23 @@ public:
   /// Get or create DbGraph for a function, building if needed.
   DbGraph &getOrCreateGraph(func::FuncOp func);
 
-  /// Get or create DbGraph without edges/metrics (nodes only).
-  DbGraph &getOrCreateGraphNodesOnly(func::FuncOp func);
-
   /// Invalidate graph for a function.
   bool invalidateGraph(func::FuncOp func);
 
   /// Invalidate all graphs
-  void invalidate();
+  void invalidate() override;
 
   /// Print analysis for a function.
   void print(func::FuncOp func);
 
   /// Access analyses
   DbAliasAnalysis *getAliasAnalysis() { return dbAliasAnalysis.get(); }
-  LoopAnalysis *getLoopAnalysis() { return loopAnalysis.get(); }
-  ArtsAnalysisManager &getAnalysisManager() { return AM; }
+  LoopAnalysis *getLoopAnalysis();
+  using ArtsAnalysis::getAnalysisManager;
 
 private:
-  ArtsAnalysisManager &AM;
   llvm::DenseMap<func::FuncOp, std::unique_ptr<DbGraph>> functionGraphMap;
   std::unique_ptr<DbAliasAnalysis> dbAliasAnalysis;
-  std::unique_ptr<LoopAnalysis> loopAnalysis;
 };
 
 } // namespace arts

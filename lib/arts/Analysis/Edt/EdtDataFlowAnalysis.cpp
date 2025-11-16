@@ -7,6 +7,7 @@
 
 #include "arts/Analysis/Db/DbAliasAnalysis.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
+#include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 
 #include "arts/Utils/ArtsDebug.h"
@@ -27,7 +28,7 @@ std::string indent() { return std::string(IndentScope::depth * 2, ' '); }
 } // namespace
 
 EdtDataFlowAnalysis::EdtDataFlowAnalysis(DbGraph *dbGraph, DbAnalysis *analysis)
-    : dbGraph(dbGraph), analysis(analysis) {
+    : dbGraph(dbGraph) {
   assert(dbGraph && "DbGraph is required");
   assert(analysis && "DbAnalysis is required");
   aliasAA = analysis->getAliasAnalysis();
@@ -35,11 +36,33 @@ EdtDataFlowAnalysis::EdtDataFlowAnalysis(DbGraph *dbGraph, DbAnalysis *analysis)
 }
 
 SmallVector<EdtDependency, 16> EdtDataFlowAnalysis::run(func::FuncOp func) {
+  dependencyMap.clear();
   Environment env;
   processRegion(func.getBody(), env);
 
-  SmallVector<EdtDependency, 16> result;
+  using DependencyKey = std::pair<Operation *, Operation *>;
+  using DependencyEntry = std::pair<DependencyKey, SmallVector<DbEdge, 2>>;
+  SmallVector<DependencyEntry, 16> entries;
+  entries.reserve(dependencyMap.size());
   for (auto &entry : dependencyMap) {
+    SmallVector<DbEdge, 2> edges(entry.second.begin(), entry.second.end());
+    entries.emplace_back(entry.first, std::move(edges));
+  }
+
+  llvm::DenseMap<Operation *, unsigned> opOrder;
+  unsigned order = 0;
+  func.walk([&](Operation *op) { opOrder[op] = order++; });
+
+  llvm::sort(entries, [&](const auto &lhs, const auto &rhs) {
+    auto lhsFrom = opOrder.lookup(lhs.first.first);
+    auto rhsFrom = opOrder.lookup(rhs.first.first);
+    if (lhsFrom != rhsFrom)
+      return lhsFrom < rhsFrom;
+    return opOrder.lookup(lhs.first.second) < opOrder.lookup(rhs.first.second);
+  });
+
+  SmallVector<EdtDependency, 16> result;
+  for (auto &entry : entries) {
     Operation *fromOp = entry.first.first;
     Operation *toOp = entry.first.second;
     auto from = dyn_cast_or_null<EdtOp>(fromOp);
@@ -48,6 +71,7 @@ SmallVector<EdtDependency, 16> EdtDataFlowAnalysis::run(func::FuncOp func) {
       continue;
     result.push_back(EdtDependency{from, to, entry.second});
   }
+  dependencyMap.clear();
   return result;
 }
 
@@ -85,6 +109,8 @@ EdtDataFlowAnalysis::processEdt(EdtOp edtOp, Environment &env) {
   ARTS_DEBUG(indent() << "Processing EDT");
 
   auto deps = edtOp.getDependenciesAsVector();
+  EdtType edtType = edtOp.getType();
+  bool isSyncEdt = (edtType == EdtType::sync);
   bool changed = false;
   Environment newEnv = env;
 
@@ -112,9 +138,10 @@ EdtDataFlowAnalysis::processEdt(EdtOp edtOp, Environment &env) {
       continue;
 
     for (auto *producer : prodDefs) {
-      if (!mayDepend(producer, consumer))
+      auto depType = classifyDependency(producer, consumer);
+      if (!depType || *depType != DbDepType::RAW)
         continue;
-      recordDependency(producer, consumer, DbDepType::RAW);
+      recordDependency(producer, consumer, *depType);
     }
   }
 
@@ -122,18 +149,28 @@ EdtDataFlowAnalysis::processEdt(EdtOp edtOp, Environment &env) {
   for (auto *writer : outputAcquires) {
     auto prodDefs = findDefinitions(writer, newEnv);
     for (auto *producer : prodDefs) {
-      if (!mayDepend(producer, writer))
+      auto depType = classifyDependency(producer, writer);
+      if (!depType || *depType != DbDepType::WAW)
         continue;
-      recordDependency(producer, writer, DbDepType::WAW);
+      recordDependency(producer, writer, *depType);
     }
 
     DbAllocNode *parentAlloc = writer->getParent();
     auto &defs = newEnv.writers[parentAlloc];
-    bool needsUpdate = defs.size() != 1 || !defs.contains(writer);
-    if (needsUpdate) {
-      defs.clear();
-      defs.insert(writer);
-      changed = true;
+    bool writerIsParallel = writer->getEdtUser() &&
+                            writer->getEdtUser().getType() == EdtType::parallel;
+    if (writerIsParallel) {
+      if (!defs.contains(writer)) {
+        defs.insert(writer);
+        changed = true;
+      }
+    } else {
+      bool needsUpdate = defs.size() != 1 || !defs.contains(writer);
+      if (needsUpdate) {
+        defs.clear();
+        defs.insert(writer);
+        changed = true;
+      }
     }
   }
 
@@ -144,9 +181,10 @@ EdtDataFlowAnalysis::processEdt(EdtOp edtOp, Environment &env) {
     if (liveReaders.empty())
       continue;
     for (auto *reader : liveReaders) {
-      if (!mayDepend(reader, writer))
+      auto depType = classifyDependency(reader, writer);
+      if (!depType || *depType != DbDepType::WAR)
         continue;
-      recordDependency(reader, writer, DbDepType::WAR);
+      recordDependency(reader, writer, *depType);
     }
     liveReaders.clear();
   }
@@ -154,6 +192,12 @@ EdtDataFlowAnalysis::processEdt(EdtOp edtOp, Environment &env) {
   for (auto *reader : inputAcquires) {
     DbAllocNode *parentAlloc = reader->getParent();
     newEnv.readers[parentAlloc].insert(reader);
+  }
+
+  if (isSyncEdt) {
+    changed |= !newEnv.writers.empty() || !newEnv.readers.empty();
+    newEnv.writers.clear();
+    newEnv.readers.clear();
   }
 
   return {newEnv, changed};
@@ -209,8 +253,7 @@ EdtDataFlowAnalysis::processFor(scf::ForOp forOp, Environment &env) {
 }
 
 SmallVector<DbAcquireNode *>
-EdtDataFlowAnalysis::findDefinitions(DbAcquireNode *acquire,
-                                     Environment &env) {
+EdtDataFlowAnalysis::findDefinitions(DbAcquireNode *acquire, Environment &env) {
   SmallVector<DbAcquireNode *> defs;
   DbAllocNode *parentAlloc = acquire->getParent();
 
@@ -258,47 +301,34 @@ bool EdtDataFlowAnalysis::unionInto(Environment &target,
   return changed;
 }
 
-bool EdtDataFlowAnalysis::mayDepend(DbAcquireNode *producer,
-                                    DbAcquireNode *consumer) {
-  assert(producer->getParent() == consumer->getParent() &&
-         "Producer and consumer must share same allocation");
+std::optional<DbDepType>
+EdtDataFlowAnalysis::classifyDependency(DbAcquireNode *producer,
+                                        DbAcquireNode *consumer) {
+  if (!producer || !consumer)
+    return std::nullopt;
+  if (producer->getParent() != consumer->getParent())
+    return std::nullopt;
 
   auto prodMode = producer->getDbAcquireOp().getMode();
   auto consMode = consumer->getDbAcquireOp().getMode();
 
   if ((prodMode == ArtsMode::out || prodMode == ArtsMode::inout) &&
       (consMode == ArtsMode::in || consMode == ArtsMode::inout))
-    return true; // RAW
+    return DbDepType::RAW;
 
   if ((prodMode == ArtsMode::out || prodMode == ArtsMode::inout) &&
       (consMode == ArtsMode::out || consMode == ArtsMode::inout))
-    return true; // WAW
+    return DbDepType::WAW;
 
   if ((prodMode == ArtsMode::in || prodMode == ArtsMode::inout) &&
       (consMode == ArtsMode::out || consMode == ArtsMode::inout))
-    return true; // WAR
+    return DbDepType::WAR;
 
-  return false;
-}
+  if ((prodMode == ArtsMode::in || prodMode == ArtsMode::inout) &&
+      (consMode == ArtsMode::in || consMode == ArtsMode::inout))
+    return DbDepType::RAR;
 
-DbAcquireUsage EdtDataFlowAnalysis::buildUsage(DbAcquireNode *node) {
-  DbAcquireUsage usage;
-  if (!node)
-    return usage;
-  usage.acquireNode = node;
-  usage.allocNode = node->getRootAlloc();
-  usage.acquire = node->getDbAcquireOp();
-  if (usage.acquire)
-    usage.mode = usage.acquire.getMode();
-  usage.estimatedBytes = node->estimatedBytes;
-  if (auto *alloc = node->getRootAlloc()) {
-    usage.alloc = alloc->getDbAllocOp();
-    usage.label = alloc->getHierId().str();
-  }
-  if (auto *loopAnalysis = analysis->getLoopAnalysis()) {
-    loopAnalysis->collectEnclosingLoops(node->getOp(), usage.loops);
-  }
-  return usage;
+  return std::nullopt;
 }
 
 void EdtDataFlowAnalysis::recordDependency(DbAcquireNode *producer,
@@ -311,20 +341,13 @@ void EdtDataFlowAnalysis::recordDependency(DbAcquireNode *producer,
   if (!from || !to || from == to)
     return;
 
-  auto &slices =
-      dependencyMap[{from.getOperation(), to.getOperation()}];
-  DbEdgeSlice slice;
-  slice.depType = depType;
-  slice.producer = buildUsage(producer);
-  slice.consumer = buildUsage(consumer);
-  slice.description =
-      slice.producer.label.empty() ? slice.consumer.label : slice.producer.label;
-  if (slice.description.empty())
-    slice.description = "db";
-  slices.push_back(std::move(slice));
+  DbEdge edge{producer, consumer, depType};
+  dependencyMap[{from.getOperation(), to.getOperation()}].insert(edge);
 }
 
 void EdtDataFlowAnalysis::recordDependency(DbAcquireNode *reader,
                                            DbAcquireNode *writer) {
-  recordDependency(reader, writer, DbDepType::WAR);
+  auto depType = classifyDependency(reader, writer);
+  if (depType)
+    recordDependency(reader, writer, *depType);
 }

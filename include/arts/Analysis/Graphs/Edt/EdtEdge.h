@@ -7,13 +7,14 @@
 #define ARTS_ANALYSIS_GRAPHS_EDT_EDTEDGE_H
 
 #include "arts/Analysis/Graphs/Base/EdgeBase.h"
-#include "arts/Analysis/Loop/LoopNode.h"
 #include "arts/ArtsDialect.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMapInfo.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
-#include <string>
 #include <cstdint>
+#include <string>
 
 namespace mlir {
 namespace arts {
@@ -21,27 +22,23 @@ namespace arts {
 class DbAllocNode;
 class DbAcquireNode;
 
-struct DbAcquireUsage {
-  DbAllocOp alloc;
-  DbAcquireOp acquire;
-  DbAllocNode *allocNode = nullptr;
-  DbAcquireNode *acquireNode = nullptr;
-  ArtsMode mode = ArtsMode::in;
-  uint64_t estimatedBytes = 0;
-  std::string label;
-  SmallVector<LoopNode *, 4> loops;
-};
+/// Data dependency types carried by EDT edges.
+enum class DbDepType { RAW, WAR, WAW, RAR };
 
-struct DbEdgeSlice {
-  DbAcquireUsage producer;
-  DbAcquireUsage consumer;
+struct DbEdge {
+  DbAcquireNode *producer = nullptr;
+  DbAcquireNode *consumer = nullptr;
   DbDepType depType = DbDepType::RAW;
-  std::string description;
+
+  bool operator==(const DbEdge &other) const {
+    return producer == other.producer && consumer == other.consumer &&
+           depType == other.depType;
+  }
 };
 
 class EdtDepEdge : public EdgeBase {
 public:
-  EdtDepEdge(NodeBase *from, NodeBase *to, const DbEdgeSlice &slice);
+  EdtDepEdge(NodeBase *from, NodeBase *to, const DbEdge &edge);
 
   NodeBase *getFrom() const override { return from; }
   NodeBase *getTo() const override { return to; }
@@ -49,21 +46,44 @@ public:
   StringRef getType() const override { return typeLabel; }
   void print(llvm::raw_ostream &os) const override;
 
-  ArrayRef<DbEdgeSlice> getSlices() const { return dbSlices; }
-  void appendSlice(const DbEdgeSlice &slice) { dbSlices.push_back(slice); }
+  ArrayRef<DbEdge> getEdges() const { return dbEdges.getArrayRef(); }
+  void appendEdge(const DbEdge &edge) { dbEdges.insert(edge); }
 
   static bool classof(const EdgeBase *E) {
     return E->getKind() == EdgeKind::Dep;
   }
 
 private:
-  NodeBase *from;
-  NodeBase *to;
-  SmallVector<DbEdgeSlice, 2> dbSlices;
+  NodeBase *from, *to;
+  SetVector<DbEdge, SmallVector<DbEdge, 2>> dbEdges;
   std::string typeLabel;
 };
 
 } // namespace arts
 } // namespace mlir
+
+namespace llvm {
+template <> struct DenseMapInfo<mlir::arts::DbEdge> {
+  using DbEdge = mlir::arts::DbEdge;
+  static inline DbEdge getEmptyKey() {
+    return {reinterpret_cast<mlir::arts::DbAcquireNode *>(-1),
+            reinterpret_cast<mlir::arts::DbAcquireNode *>(-1),
+            mlir::arts::DbDepType::RAW};
+  }
+  static inline DbEdge getTombstoneKey() {
+    return {reinterpret_cast<mlir::arts::DbAcquireNode *>(-2),
+            reinterpret_cast<mlir::arts::DbAcquireNode *>(-2),
+            mlir::arts::DbDepType::RAW};
+  }
+  static unsigned getHashValue(const DbEdge &edge) {
+    return DenseMapInfo<void *>::getHashValue(edge.producer) ^
+           (DenseMapInfo<void *>::getHashValue(edge.consumer) << 1) ^
+           static_cast<unsigned>(edge.depType);
+  }
+  static bool isEqual(const DbEdge &lhs, const DbEdge &rhs) {
+    return lhs == rhs;
+  }
+};
+} // namespace llvm
 
 #endif // ARTS_ANALYSIS_GRAPHS_EDT_EDTEDGE_H

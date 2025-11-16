@@ -14,6 +14,7 @@
 #include "arts/Analysis/Edt/EdtAnalysis.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
+#include "arts/Analysis/StringAnalysis.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -29,14 +30,9 @@ class DbGraph;
 class EdtGraph;
 
 /// Centralized manager for all ARTS analysis objects.
-/// Provides a clean public interface that exposes only analysis objects.
-/// Internally manages graphs through the respective analysis classes.
 class ArtsAnalysisManager {
 public:
-  /// Module-level constructor for external ownership and caching across funcs
   ArtsAnalysisManager(ModuleOp module, const std::string &configFile = "");
-
-  /// Destructor
   ~ArtsAnalysisManager();
 
   /// Invalidate all analysis objects and graphs
@@ -46,8 +42,9 @@ public:
   DbAnalysis &getDbAnalysis();
   EdtAnalysis &getEdtAnalysis();
   LoopAnalysis &getLoopAnalysis();
+  StringAnalysis &getStringAnalysis();
 
-  /// Graph getters (lazy-built and cached per function)
+  /// Graph getters
   DbGraph &getDbGraph(func::FuncOp func);
   EdtGraph &getEdtGraph(func::FuncOp func);
 
@@ -66,9 +63,10 @@ public:
     return abstractMachine;
   }
 
-  /// Get the metadata manager (creates if needed, loads from operations)
+  /// Get the metadata manager
   ArtsMetadataManager &getMetadataManager();
   const ArtsMetadataManager &getMetadataManager() const;
+  const StringAnalysis &getStringAnalysis() const;
 
   /// Print summary of analysis objects and their graphs
   void print(llvm::raw_ostream &os);
@@ -85,6 +83,7 @@ private:
   std::unique_ptr<DbAnalysis> dbAnalysis;
   std::unique_ptr<EdtAnalysis> edtAnalysis;
   std::unique_ptr<LoopAnalysis> loopAnalysis;
+  std::unique_ptr<StringAnalysis> stringAnalysis;
   std::unique_ptr<ArtsMetadataManager> metadataManager;
 };
 

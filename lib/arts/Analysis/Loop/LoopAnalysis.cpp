@@ -7,63 +7,35 @@
 #include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Utils/ArtsDebug.h"
+#include <algorithm>
 
 ARTS_DEBUG_SETUP(loop_analysis);
 
 using namespace mlir;
 using namespace mlir::arts;
 
-LoopAnalysis::LoopAnalysis(Operation *module,
-                           ArtsAnalysisManager *analysisManager)
-    : module(cast<ModuleOp>(module)), analysisManager(analysisManager) {
+LoopAnalysis::LoopAnalysis(ArtsAnalysisManager &analysisManager)
+    : ArtsAnalysis(analysisManager), module(analysisManager.getModule()) {
   run();
 }
 
-LoopAnalysis::~LoopAnalysis() {
-  // Clean up legacy LoopInfo objects
-  for (auto &loop : loopInfoMap) {
-    delete loop.second;
-  }
-}
+void LoopAnalysis::invalidate() { run(); }
 
 void LoopAnalysis::run() {
   ARTS_DEBUG_HEADER(LoopAnalysis);
 
-  /// Walk module and create LoopNodes + legacy LoopInfo for all loops
+  loopNodes.clear();
   module.walk([&](Operation *op) {
-    if (auto fop = dyn_cast<scf::ForOp>(op)) {
-      loops.push_back(fop);
-      // Create LoopNode (auto-imports metadata via LoopAnalysis)
-      loopNodes[fop] = std::make_unique<LoopNode>(fop, this);
-      // Legacy LoopInfo
-      loopInfoMap[fop] = new LoopInfo(false, {}, {}, fop, fop.getInductionVar());
-    } else if (auto aop = dyn_cast<affine::AffineForOp>(op)) {
-      loops.push_back(aop);
-      // Create LoopNode (auto-imports metadata via LoopAnalysis)
-      loopNodes[aop] = std::make_unique<LoopNode>(aop, this);
-      // Legacy LoopInfo
-      loopInfoMap[aop] = new LoopInfo(true, aop, {}, {}, aop.getInductionVar());
-    } else if (auto pop = dyn_cast<scf::ParallelOp>(op)) {
-      loops.push_back(pop);
-      // Create LoopNode (auto-imports metadata via LoopAnalysis)
-      loopNodes[pop] = std::make_unique<LoopNode>(pop, this);
-      // Legacy LoopInfo (parallel loops have multiple IVs, use first)
-      Value firstIV = pop.getInductionVars().empty() ? Value() : pop.getInductionVars()[0];
-      loopInfoMap[pop] = new LoopInfo(false, {}, pop, {}, firstIV);
-    }
+    if (!isLoopOperation(op))
+      return;
+    loopNodes[op] = std::make_unique<LoopNode>(op, this);
   });
 
-  ARTS_DEBUG_REGION({
-    if (loops.empty()) {
-      ARTS_WARN("No loops found in module");
-    } else {
-      ARTS_INFO("Discovered " << loops.size() << " loops ("
-                              << loopNodes.size() << " LoopNodes created)");
-    }
-  });
+  if (loopNodes.empty())
+    ARTS_WARN("No loops found in module");
+  else
+    ARTS_INFO("Discovered " << loopNodes.size() << " loops");
 
-  /// Analyze induction variables
-  analyzeLoopIV();
   ARTS_DEBUG_FOOTER(LoopAnalysis);
 }
 
@@ -83,22 +55,9 @@ LoopNode *LoopAnalysis::getOrCreateLoopNode(Operation *loopOp) {
   if (it != loopNodes.end())
     return it->second.get();
 
-  // Create new LoopNode (pass this for LoopAnalysis)
   auto newNode = std::make_unique<LoopNode>(loopOp, this);
   LoopNode *ptr = newNode.get();
   loopNodes[loopOp] = std::move(newNode);
-
-  // Also add to legacy structures
-  loops.push_back(loopOp);
-  if (auto fop = dyn_cast<scf::ForOp>(loopOp)) {
-    loopInfoMap[loopOp] = new LoopInfo(false, {}, {}, fop, fop.getInductionVar());
-  } else if (auto aop = dyn_cast<affine::AffineForOp>(loopOp)) {
-    loopInfoMap[loopOp] = new LoopInfo(true, aop, {}, {}, aop.getInductionVar());
-  } else if (auto pop = dyn_cast<scf::ParallelOp>(loopOp)) {
-    Value firstIV = pop.getInductionVars().empty() ? Value() : pop.getInductionVars()[0];
-    loopInfoMap[loopOp] = new LoopInfo(false, {}, pop, {}, firstIV);
-  }
-
   return ptr;
 }
 
@@ -118,82 +77,4 @@ void LoopAnalysis::collectEnclosingLoops(
   }
   // Reverse to get outermost-to-innermost order
   std::reverse(enclosingLoops.begin(), enclosingLoops.end());
-}
-
-void LoopAnalysis::collectAffectingLoops(
-    Operation *op, SmallVectorImpl<LoopNode *> &affectingLoops) {
-  DenseSet<Operation *> uniq;
-  for (Value operand : op->getOperands()) {
-    SmallVector<Operation *, 4> loopsForVal;
-    if (isDependentOnLoop(operand, loopsForVal)) {
-      for (Operation *l : loopsForVal) {
-        if (uniq.insert(l).second) {
-          if (LoopNode *node = getLoopNode(l)) {
-            affectingLoops.push_back(node);
-          }
-        }
-      }
-    }
-  }
-}
-
-///===----------------------------------------------------------------------===///
-// Legacy API (for backward compatibility)
-///===----------------------------------------------------------------------===///
-
-LoopInfo *LoopAnalysis::getLoopInfo(Operation *op) {
-  auto it = loopInfoMap.find(op);
-  return it != loopInfoMap.end() ? it->second : nullptr;
-}
-
-bool LoopAnalysis::isDependentOnLoop(Value val,
-                                     SmallVectorImpl<Operation *> &loops) {
-  auto it = loopValsMap.find(val);
-  if (it != loopValsMap.end()) {
-    loops.assign(it->second.begin(), it->second.end());
-    return true;
-  }
-  return false;
-}
-
-void LoopAnalysis::collectAffectingLoops(
-    Value val, SmallVectorImpl<Operation *> &affectingLoops) {
-  SmallVector<Operation *, 4> loopsForVal;
-  if (isDependentOnLoop(val, loopsForVal))
-    affectingLoops.append(loopsForVal.begin(), loopsForVal.end());
-}
-
-///===----------------------------------------------------------------------===///
-// Private helpers
-///===----------------------------------------------------------------------===///
-
-void LoopAnalysis::analyzeLoopIV() {
-  auto loopBfs = [&](Operation *loopOp, Value iv) {
-    if (!iv)
-      return;  // Skip if no induction variable
-
-    DenseSet<Value> visited;
-    SmallVector<Value, 8> queue;
-    visited.insert(iv);
-    queue.push_back(iv);
-
-    while (!queue.empty()) {
-      Value cur = queue.pop_back_val();
-      for (auto &use : cur.getUses()) {
-        Operation *owner = use.getOwner();
-        for (Value res : owner->getResults()) {
-          if (visited.insert(res).second)
-            queue.push_back(res);
-        }
-      }
-    }
-
-    for (auto &val : visited)
-      loopValsMap[val].push_back(loopOp);
-  };
-
-  // Analyze induction variables for all loops
-  for (auto &loopPair : loopInfoMap) {
-    loopBfs(loopPair.first, loopPair.second->inductionVar);
-  }
 }

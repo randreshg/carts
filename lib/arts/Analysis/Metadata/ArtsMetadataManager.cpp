@@ -10,11 +10,14 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cmath>
+#include <limits>
 #include <system_error>
 
 ARTS_DEBUG_SETUP(metadata_manager);
@@ -92,14 +95,19 @@ bool ArtsMetadataManager::ensureLoopMetadata(Operation *op) {
     return getLoopMetadata(op) != nullptr;
   }
 
+  LocationMetadata loc = LocationMetadata::fromMLIRLocation(op->getLoc());
   std::string key;
   if (auto idAttr = op->getAttrOfType<IntegerAttr>(ArtsMetadata::IdAttrName))
     key = std::to_string(idAttr.getInt());
   if (key.empty())
-    key = LocationMetadata::getCompactLocationKey(op->getLoc());
-  if (key.empty())
+    key = loc.toString().str();
+  if (!key.empty() &&
+      attachMetadataFromJson(op, key, loopJsonCache, /*isLoop=*/true))
+    return true;
+
+  if (!loc.isValid())
     return false;
-  return attachMetadataFromJson(op, key, loopJsonCache, /*isLoop=*/true);
+  return attachLoopMetadataNearLocation(op, loc);
 }
 
 bool ArtsMetadataManager::ensureMemrefMetadata(Operation *op) {
@@ -511,6 +519,59 @@ bool ArtsMetadataManager::attachMetadataFromJson(
   return true;
 }
 
+bool ArtsMetadataManager::attachLoopMetadataNearLocation(
+    Operation *op, const LocationMetadata &loc, unsigned lineTolerance) {
+  if (!op || !loc.isValid() || lineTolerance == 0)
+    return false;
+
+  if (!loadJsonCache())
+    return false;
+
+  llvm::DenseSet<const llvm::json::Object *> visited;
+  const llvm::json::Object *bestMatch = nullptr;
+  unsigned bestDistance = std::numeric_limits<unsigned>::max();
+  std::string baseFile = LocationMetadata::getLocationBasename(loc.file);
+
+  for (auto &entry : loopJsonCache) {
+    const llvm::json::Object *obj = entry.second.get();
+    if (!visited.insert(obj).second)
+      continue;
+
+    auto locStr = obj->getString(AttrNames::LoopMetadata::LocationKey);
+    if (!locStr)
+      continue;
+
+    LocationMetadata entryLoc = LocationMetadata::fromKey(*locStr);
+    if (!entryLoc.isValid())
+      continue;
+
+    if (entryLoc.file != baseFile)
+      continue;
+
+    unsigned distance = static_cast<unsigned>(
+        std::abs(static_cast<int>(entryLoc.line) - static_cast<int>(loc.line)));
+    if (distance == 0 || distance > lineTolerance)
+      continue;
+
+    if (bestMatch && distance >= bestDistance)
+      continue;
+
+    bestMatch = obj;
+    bestDistance = distance;
+  }
+
+  if (!bestMatch)
+    return false;
+
+  auto metadata = std::make_unique<LoopMetadata>(op);
+  metadata->importFromJson(*bestMatch);
+  initializeMetadata(metadata.get());
+  metadata->exportToOp();
+  metadataMap_[op] = std::move(metadata);
+  ARTS_DEBUG("Attached loop metadata near location " << loc.toString());
+  return true;
+}
+
 void ArtsMetadataManager::initializeMetadata(ArtsMetadata *metadata) {
   if (!metadata)
     return;
@@ -519,7 +580,7 @@ void ArtsMetadataManager::initializeMetadata(ArtsMetadata *metadata) {
   if (op) {
     id = assignOperationId(op);
   } else if (!id.has_value()) {
-    id = nextMetadataId++;
+    id = ArtsId(nextMetadataId++);
   }
   metadata->setMetadataId(id);
   if (id.has_value())
@@ -528,13 +589,13 @@ void ArtsMetadataManager::initializeMetadata(ArtsMetadata *metadata) {
 
 ArtsId ArtsMetadataManager::assignOperationId(Operation *op) {
   if (!op)
-    return std::nullopt;
+    return ArtsId();
   if (auto attr = op->getAttrOfType<IntegerAttr>(ArtsMetadata::IdAttrName))
-    return attr.getInt();
+    return ArtsId(attr.getInt());
   Builder builder(op->getContext());
   int64_t id = nextMetadataId++;
   op->setAttr(ArtsMetadata::IdAttrName, builder.getI64IntegerAttr(id));
-  return id;
+  return ArtsId(id);
 }
 
 ///===----------------------------------------------------------------------===///

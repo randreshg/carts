@@ -575,13 +575,24 @@ LogicalResult DbAcquireOp::verify() {
   /// Get the source pointer type and rank
   auto srcRank = getSizesFromDb(getSourcePtr()).size();
   auto dbIndices = getIndices().size();
+
+  /// Check that indices don't exceed source rank
+  if (dbIndices > srcRank) {
+    return emitOpError("Number of indices (")
+           << dbIndices << ") exceeds source datablock rank (" << srcRank
+           << "). This indicates a dimensionality mismatch between DbAcquire "
+           << "and its source DbAlloc.";
+  }
+
   auto remainingRank = srcRank - dbIndices;
 
   /// Check that source rank minus Db indices equals number of sizes
   if (remainingRank > 0 && remainingRank != dbSizes) {
     return emitOpError("Source rank (")
-           << srcRank << ") - (" << dbIndices << ") = " << remainingRank
-           << " must equal Number of sizes (" << dbSizes << ")";
+           << srcRank << ") - indices (" << dbIndices << ") = " << remainingRank
+           << " must equal Number of sizes (" << dbSizes
+           << "). When modifying DbAcquire layout, ensure the source DbAlloc "
+           << "dimensionality is updated correspondingly.";
   }
 
   /// Check if the source has a single size of 1 and we are using indices

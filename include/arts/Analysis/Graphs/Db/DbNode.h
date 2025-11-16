@@ -48,25 +48,21 @@ public:
   /// Operation accessors
   DbAllocOp getDbAllocOp() const { return dbAllocOp; }
   DbFreeOp getDbFreeOp() const { return dbFreeOp; }
+  bool isStringDatablock() const { return isStringBacked; }
   NodeKind getKind() const override { return NodeKind::DbAlloc; }
   static bool classof(const NodeBase *N) {
     return N->getKind() == NodeKind::DbAlloc;
   }
 
   /// Analysis metadata
-  uint64_t inCount = 0;
-  uint64_t outCount = 0;
-  uint64_t beginIndex = 0;
-  uint64_t endIndex = 0;
+  uint64_t inCount = 0, outCount = 0;
+  uint64_t beginIndex = 0, endIndex = 0;
   bool isLongLived = false;
   uint64_t maxLoopDepth = 0;
-  uint64_t criticalSpan = 0;
-  uint64_t criticalPath = 0;
+  uint64_t criticalSpan = 0, criticalPath = 0;
   unsigned long long totalAccessBytes = 0;
-  uint64_t numReleases = 0;
-  bool maybeEscaping = false;
   uint64_t numAcquires = 0;
-  SmallVector<DbAllocOp, 8> reuseMatches;
+  bool isStringBacked = false;
 
 private:
   DbAllocOp dbAllocOp;
@@ -146,10 +142,8 @@ private:
   SmallVector<Operation *, 16> loads, stores, references;
 
 public:
-  uint64_t inCount = 0;
-  uint64_t outCount = 0;
-  uint64_t beginIndex = 0;
-  uint64_t endIndex = 0;
+  uint64_t inCount = 0, outCount = 0;
+  uint64_t beginIndex = 0, endIndex = 0;
   unsigned long long estimatedBytes = 0;
 
   /// Helper functions

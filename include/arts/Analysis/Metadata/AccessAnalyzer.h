@@ -48,6 +48,11 @@ public:
     return isa<affine::AffineLoadOp, memref::LoadOp>(op);
   }
 
+  /// Check if an access is a write operation
+  bool isWriteAccess(Operation *op) const {
+    return isa<affine::AffineStoreOp, memref::StoreOp>(op);
+  }
+
   /// Get the memref being accessed
   Value getAccessedMemref(Operation *op) const {
     if (auto load = dyn_cast<affine::AffineLoadOp>(op))

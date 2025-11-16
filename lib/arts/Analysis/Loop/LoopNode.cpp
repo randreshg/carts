@@ -5,8 +5,8 @@
 ///==========================================================================///
 
 #include "arts/Analysis/Loop/LoopNode.h"
-#include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
+#include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -19,12 +19,10 @@ LoopNode::LoopNode(Operation *loopOp, LoopAnalysis *loopAnalysis)
   bool hasMetadata = importFromOp();
   if (!hasMetadata && loopAnalysis) {
     /// Get metadata manager from ArtsAnalysisManager via LoopAnalysis
-    auto *analysisManager = loopAnalysis->getAnalysisManager();
-    if (analysisManager) {
-      auto &metadataManager = analysisManager->getMetadataManager();
-      if (metadataManager.ensureLoopMetadata(loopOp))
-        importFromOp();
-    }
+    auto &analysisManager = loopAnalysis->getAnalysisManager();
+    auto &metadataManager = analysisManager.getMetadataManager();
+    if (metadataManager.ensureLoopMetadata(loopOp))
+      importFromOp();
   }
   /// Generate a simple hierarchical ID based on pointer
   hierId = "loop@" + std::to_string(reinterpret_cast<uintptr_t>(loopOp));

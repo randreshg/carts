@@ -8,7 +8,6 @@
 #ifndef ARTS_ANALYSIS_METADATA_ARTSMETADATAMANAGER_H
 #define ARTS_ANALYSIS_METADATA_ARTSMETADATAMANAGER_H
 
-#include "arts/Utils/ArtsId.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
@@ -79,8 +78,6 @@ public:
   ValueMetadata *getValueMetadata(Operation *op);
   const ValueMetadata *getValueMetadata(Operation *op) const;
 
-  /// Generic template method to get any metadata type
-  /// Usage: auto *metadata = manager.getMetadata<LoopMetadata>(op)
   template <typename MetadataT> MetadataT *getMetadata(Operation *op) {
     static_assert(std::is_base_of<ArtsMetadata, MetadataT>::value,
                   "MetadataT must derive from ArtsMetadata");
@@ -92,7 +89,6 @@ public:
     return static_cast<MetadataT *>(it->second.get());
   }
 
-  /// Generic template method to get any metadata type
   template <typename MetadataT>
   const MetadataT *getMetadata(Operation *op) const {
     static_assert(std::is_base_of<ArtsMetadata, MetadataT>::value,
@@ -186,6 +182,9 @@ private:
   bool attachMetadataFromJson(
       Operation *op, llvm::StringRef key,
       llvm::StringMap<std::unique_ptr<llvm::json::Object>> &cache, bool isLoop);
+  bool attachLoopMetadataNearLocation(Operation *op,
+                                      const LocationMetadata &loc,
+                                      unsigned lineTolerance = 1);
   void initializeMetadata(ArtsMetadata *metadata);
 };
 

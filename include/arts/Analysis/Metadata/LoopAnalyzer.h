@@ -46,6 +46,9 @@ private:
   void suggestPartitioning(LoopMetadata *metadata);
   void computeMemoryFootprintPerIter(Operation *loopOp, LoopMetadata *metadata);
   void finalizeParallelFlag(Operation *loopOp, LoopMetadata *metadata);
+  void detectReductions(Operation *loopOp, LoopMetadata *metadata);
+  std::optional<LoopMetadata::ReductionKind>
+  inferReductionKind(Operation *op) const;
 };
 
 } // namespace arts

@@ -85,3 +85,17 @@ set(LIBS
 
 target_link_libraries(carts-run PRIVATE ${LIBS})
 add_dependencies(carts-run MLIRArtsOpsIncGen MLIRArtsPassIncGen)
+
+if(CARTS_ENABLE_TESTS AND CARTS_TESTS_REQUIRE_INSTALLED_RUNNER)
+  set(_carts_install_bin_dir ${CMAKE_INSTALL_PREFIX}/${CARTS_TOOLS_DIR})
+  add_custom_command(
+    TARGET carts-run
+    POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${_carts_install_bin_dir}
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:carts-run>
+            ${_carts_install_bin_dir}/$<TARGET_FILE_NAME:carts-run>
+    COMMENT "Syncing carts-run into ${_carts_install_bin_dir} for tests"
+    VERBATIM
+  )
+endif()

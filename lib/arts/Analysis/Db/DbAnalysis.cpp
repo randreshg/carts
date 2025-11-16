@@ -19,10 +19,8 @@ ARTS_DEBUG_SETUP(db_analysis);
 using namespace mlir;
 using namespace mlir::arts;
 
-DbAnalysis::DbAnalysis(ArtsAnalysisManager &AM) : AM(AM) {
+DbAnalysis::DbAnalysis(ArtsAnalysisManager &AM) : ArtsAnalysis(AM) {
   ARTS_DEBUG("Initializing DbAnalysis");
-
-  loopAnalysis = AM.getLoopAnalysis();
   dbAliasAnalysis = std::make_unique<DbAliasAnalysis>(this);
 }
 
@@ -46,28 +44,13 @@ DbGraph &DbAnalysis::getOrCreateGraph(func::FuncOp func) {
   return *graphPtr;
 }
 
-DbGraph &DbAnalysis::getOrCreateGraphNodesOnly(func::FuncOp func) {
-  ARTS_DEBUG("Getting or creating DbGraph (nodes only) for function: "
-             << func.getName());
-  auto it = functionGraphMap.find(func);
-  if (it != functionGraphMap.end())
-    return *it->second.get();
-  auto newGraph = std::make_unique<DbGraph>(func, this);
-
-  /// Build nodes only
-  newGraph->buildNodesOnly();
-
-  /// Store the graph
-  DbGraph *graphPtr = newGraph.get();
-  functionGraphMap[func] = std::move(newGraph);
-  return *graphPtr;
-}
-
 bool DbAnalysis::invalidateGraph(func::FuncOp func) {
   ARTS_INFO("Invalidating DbGraph for function: " << func.getName());
   auto it = functionGraphMap.find(func);
   if (it != functionGraphMap.end()) {
     functionGraphMap.erase(it);
+    if (dbAliasAnalysis)
+      dbAliasAnalysis->resetCache();
     return true;
   }
   return false;
@@ -76,12 +59,16 @@ bool DbAnalysis::invalidateGraph(func::FuncOp func) {
 void DbAnalysis::invalidate() {
   ARTS_INFO("Invalidating all DbGraphs");
   functionGraphMap.clear();
-  loopAnalysis =
-      std::make_unique<LoopAnalysis>(AM.getModule(), &AM.getMetadataManager());
+  if (dbAliasAnalysis)
+    dbAliasAnalysis->resetCache();
 }
 
 void DbAnalysis::print(func::FuncOp func) {
   ARTS_INFO("Printing DbGraph for function: " << func.getName());
   DbGraph &graph = getOrCreateGraph(func);
   graph.print(ARTS_DBGS());
+}
+
+LoopAnalysis *DbAnalysis::getLoopAnalysis() {
+  return &getAnalysisManager().getLoopAnalysis();
 }

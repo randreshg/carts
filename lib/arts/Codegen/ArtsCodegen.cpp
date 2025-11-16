@@ -672,9 +672,8 @@ Value ArtsCodegen::computeLinearIndex(ArrayRef<Value> sizes,
     SmallVector<int64_t> strides(sizes.size());
     strides.back() = 1;
     for (int i = static_cast<int>(sizes.size()) - 2; i >= 0; --i) {
-      auto *constOp =
-          sizes[i + 1].getDefiningOp<arith::ConstantIndexOp>();
-      strides[i] = strides[i + 1] * constOp->value();
+      auto constOp = sizes[i + 1].getDefiningOp<arith::ConstantIndexOp>();
+      strides[i] = strides[i + 1] * constOp.value();
     }
 
     for (size_t i = 0; i < indices.size(); ++i) {

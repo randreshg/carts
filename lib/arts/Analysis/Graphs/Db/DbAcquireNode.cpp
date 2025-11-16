@@ -58,9 +58,8 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
 
     if (cst <= 0)
       continue;
-    if (totalElems >
-        std::numeric_limits<unsigned long long>::max() /
-            (unsigned long long)cst) {
+    if (totalElems > std::numeric_limits<unsigned long long>::max() /
+                         (unsigned long long)cst) {
       estimatedBytes = std::numeric_limits<unsigned long long>::max();
       hasUnknown = true;
       break;
@@ -140,7 +139,6 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
     inCount = 1;
     outCount = 1;
   }
-
 }
 
 DbAcquireNode *DbAcquireNode::getOrCreateAcquireNode(DbAcquireOp op) {
@@ -177,7 +175,7 @@ SmallVector<Value, 4> DbAcquireNode::computeInvariantIndices() {
   ARTS_DEBUG("Starting invariant indices computation for " << dbAcquireOp);
 
   SmallVector<Value, 4> result;
-  const size_t rank = sizes.size();
+  const size_t rank = dbAcquireOp.getSizes().size();
 
   SmallVector<Operation *> memoryAccesses;
   getMemoryAccesses(memoryAccesses, true, true);
