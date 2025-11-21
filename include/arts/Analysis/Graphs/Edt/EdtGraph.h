@@ -8,8 +8,8 @@
 
 #include "arts/Analysis/Graphs/Base/EdgeBase.h"
 #include "arts/Analysis/Graphs/Base/GraphBase.h"
-#include "arts/Analysis/Graphs/Base/NodeBase.h"
 #include "arts/Analysis/Graphs/Base/GraphTrait.h"
+#include "arts/Analysis/Graphs/Base/NodeBase.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Edt/EdtEdge.h"
 #include "arts/Analysis/Graphs/Edt/EdtNode.h"
@@ -25,11 +25,12 @@ namespace mlir {
 namespace arts {
 
 class EdtDepEdge;
+class ArtsAnalysisManager;
 
 /// Represents task dependencies with edges labeled by data blocks.
 class EdtGraph : public GraphBase {
 public:
-  EdtGraph(func::FuncOp func, DbGraph *dbGraph);
+  EdtGraph(func::FuncOp func, DbGraph *dbGraph, ArtsAnalysisManager *AM);
 
   void build() override;
   void buildNodesOnly() override;
@@ -59,6 +60,7 @@ public:
 private:
   func::FuncOp func;
   DbGraph *dbGraph;
+  ArtsAnalysisManager *analysisManager;
   DenseMap<EdtOp, std::unique_ptr<EdtNode>> edtNodes;
   SmallVector<NodeBase *, 8> nodes;
   /// Cache of children per node for GraphBase child iterators.

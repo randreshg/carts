@@ -280,12 +280,14 @@ def MemrefMetadataAttr : Arts_Attr<"MemrefMetadata", "memref_metadata"> {
     /// Extended access characterization
     OptionalParameter<"::mlir::BoolAttr">:$hasUniformAccess,
     OptionalParameter<"::mlir::BoolAttr">:$hasStrideOneAccess,
-    OptionalParameter<"::mlir::StringAttr">:$dominantAccessPattern,
+    OptionalParameter<"::mlir::IntegerAttr">:$dominantAccessPattern,
     OptionalParameter<"::mlir::IntegerAttr">:$nestingDepth,
     OptionalParameter<"::mlir::BoolAttr">:$accessedInParallelLoop,
     OptionalParameter<"::mlir::BoolAttr">:$hasLoopCarriedDeps,
     OptionalParameter<"::mlir::IntegerAttr">:$reuseDistance,
-    OptionalParameter<"::mlir::BoolAttr">:$hasGoodSpatialLocality
+    OptionalParameter<"::mlir::BoolAttr">:$hasGoodSpatialLocality,
+    OptionalParameter<"::mlir::ArrayAttr">:$dimAccessPatterns,
+    OptionalParameter<"::mlir::IntegerAttr">:$estimatedAccessBytes
   );
   let mnemonic = "memref_metadata";
   let assemblyFormat = "`<` struct(params) `>`";

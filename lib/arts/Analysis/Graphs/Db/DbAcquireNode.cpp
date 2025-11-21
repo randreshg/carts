@@ -2,12 +2,19 @@
 /// DbAcquireNode.cpp - Implementation of DbAcquire node
 ///==========================================================================///
 
+#include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
+#include "arts/Analysis/Edt/EdtAnalysis.h"
+#include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
+#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
+#include "arts/Analysis/Graphs/Edt/EdtNode.h"
+#include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/raw_ostream.h"
@@ -101,6 +108,13 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
     ARTS_ERROR("DbAcquireOp ptr user is null");
     return;
   }
+
+  /// Capture optional chunk hints directly from the operation.
+  if (Value hintOff = dbAcquireOp.getChunkOffsetHint())
+    partitionOffset = hintOff;
+  if (Value hintSize = dbAcquireOp.getChunkSizeHint())
+    partitionSize = hintSize;
+
   if (auto nestedAcquire = dyn_cast<DbAcquireOp>(singleUser)) {
     /// Nested acquire; create child node lazily via getOrCreateAcquireNode
     /// The rest of this constructor computes info for this node; nested
@@ -158,6 +172,204 @@ void DbAcquireNode::forEachChildNode(
     const std::function<void(NodeBase *)> &fn) const {
   for (const auto &n : childAcquires)
     fn(n.get());
+}
+
+bool DbAcquireNode::isEligibleForSlicing() {
+  auto skip = [&](StringRef reason) {
+    ARTS_DEBUG("Skipping acquire " << dbAcquireOp << ": " << reason);
+    return false;
+  };
+
+  if (!dbAcquireOp)
+    return skip("invalid acquire operation");
+
+  EdtOp edt = getEdtUser();
+  if (!edt || edt.getType() != EdtType::task)
+    return skip("not a task EDT");
+
+  if (loads.empty() && stores.empty())
+    return skip("no memory accesses");
+
+  DbAllocNode *allocNode = getRootAlloc();
+  if (!allocNode)
+    return skip("missing allocation node");
+
+  if (allocNode->hasUniformAccess && !*allocNode->hasUniformAccess)
+    return skip("non-uniform access");
+
+  if (!allocNode->isParallelFriendly())
+    return skip("memref metadata is not marked as parallel-friendly");
+
+  ArtsAnalysisManager &AM = analysis->getAnalysisManager();
+  EdtAnalysis &edtAnalysis = AM.getEdtAnalysis();
+
+  func::FuncOp func = edt->getParentOfType<func::FuncOp>();
+  if (!func)
+    return skip("unable to find parent function");
+
+  EdtGraph &edtGraph = edtAnalysis.getOrCreateEdtGraph(func);
+  EdtNode *edtNode = edtGraph.getEdtNode(edt);
+  if (!edtNode)
+    return skip("missing EDT node");
+
+  if (!edtNode->hasParallelLoopMetadata())
+    return skip("worker EDT does not contain parallel loop metadata");
+
+  DbAcquireOp mutableAcquire = DbAcquireOp(dbAcquireOp.getOperation());
+
+  /// Prefer explicit chunk hints if they exist.
+  if (Value hintOffset = mutableAcquire.getChunkOffsetHint())
+    partitionOffset = hintOffset;
+  if (Value hintSize = mutableAcquire.getChunkSizeHint())
+    partitionSize = hintSize;
+
+  /// Only fall back to existing offsets/sizes if they look meaningful
+  /// (i.e., not the default slice of offset=0, size=1).
+  auto hasMeaningfulSlice = [&](Value off, Value size) -> bool {
+    int64_t offConst = 0, sizeConst = 0;
+    bool isDefaultOffset =
+        arts::getConstantIndex(off, offConst) && offConst == 0;
+    bool isDefaultSize =
+        arts::getConstantIndex(size, sizeConst) && sizeConst == 1;
+    return !(isDefaultOffset && isDefaultSize);
+  };
+
+  if (!partitionOffset && !mutableAcquire.getOffsets().empty() &&
+      !mutableAcquire.getSizes().empty() &&
+      hasMeaningfulSlice(mutableAcquire.getOffsets().front(),
+                         mutableAcquire.getSizes().front())) {
+    partitionOffset = mutableAcquire.getOffsets().front();
+    partitionSize = mutableAcquire.getSizes().front();
+  }
+
+  return true;
+}
+
+LogicalResult DbAcquireNode::computeChunkInfo(Value &chunkOffset,
+                                              Value &chunkSize) {
+  EdtOp edt = getEdtUser();
+  if (!edt)
+    return failure();
+
+  if (partitionOffset && partitionSize) {
+    chunkOffset = partitionOffset;
+    chunkSize = partitionSize;
+    return success();
+  }
+
+  scf::ForOp chunkLoop;
+  scf::WhileOp chunkWhile;
+  edt.walk([&](scf::ForOp forOp) {
+    chunkLoop = forOp;
+    return WalkResult::interrupt();
+  });
+  edt.walk([&](scf::WhileOp whileOp) {
+    chunkWhile = whileOp;
+    return WalkResult::interrupt();
+  });
+
+  if (chunkWhile) {
+    if (succeeded(
+            computeChunkInfoFromWhile(chunkWhile, chunkOffset, chunkSize)))
+      return success();
+  }
+
+  if (!chunkLoop)
+    return failure();
+
+  chunkSize = chunkLoop.getUpperBound();
+
+  Value ptrArg = getUseInEdt();
+  if (!ptrArg)
+    return failure();
+
+  Value offsetCandidate;
+  for (Operation *user : ptrArg.getUsers()) {
+    auto refOp = dyn_cast<DbRefOp>(user);
+    if (!refOp || !chunkLoop->isAncestor(refOp))
+      continue;
+
+    Value refVal = refOp.getResult();
+    for (Operation *memUser : refVal.getUsers()) {
+      auto storeOp = dyn_cast<memref::StoreOp>(memUser);
+      if (!storeOp || !chunkLoop->isAncestor(storeOp))
+        continue;
+
+      if (storeOp.getIndices().empty())
+        continue;
+      Value idx = storeOp.getIndices().front();
+      auto addOp = idx.getDefiningOp<arith::AddIOp>();
+      if (!addOp)
+        continue;
+
+      Value iv = chunkLoop.getInductionVar();
+      if (addOp.getOperand(0) == iv)
+        offsetCandidate = addOp.getOperand(1);
+      else if (addOp.getOperand(1) == iv)
+        offsetCandidate = addOp.getOperand(0);
+
+      if (offsetCandidate)
+        break;
+    }
+    if (offsetCandidate)
+      break;
+  }
+
+  if (!offsetCandidate)
+    return failure();
+
+  chunkOffset = offsetCandidate;
+  return success();
+}
+
+LogicalResult DbAcquireNode::computeChunkInfoFromWhile(scf::WhileOp whileOp,
+                                                       Value &chunkOffset,
+                                                       Value &chunkSize) {
+  if (!whileOp || !dbAcquireOp)
+    return failure();
+  if (whileOp.getInits().size() != 1)
+    return failure();
+
+  Value initValue = whileOp.getInits().front();
+  Block &before = whileOp.getBefore().front();
+  auto condition = dyn_cast<scf::ConditionOp>(before.getTerminator());
+  if (!condition || before.getNumArguments() != 1)
+    return failure();
+
+  SmallVector<Value> bounds;
+  arts::collectWhileBounds(condition.getCondition(), before.getArgument(0),
+                           bounds);
+  if (bounds.empty())
+    return failure();
+
+  OpBuilder builder(dbAcquireOp);
+  Location loc = dbAcquireOp.getLoc();
+  Value startIdx = arts::ensureIndexType(initValue, builder, loc);
+  if (!startIdx)
+    return failure();
+
+  SmallVector<Value> chunkSizes;
+  for (Value bound : bounds) {
+    Value boundIdx = arts::ensureIndexType(bound, builder, loc);
+    if (!boundIdx)
+      continue;
+    chunkSizes.push_back(
+        builder.create<arith::SubIOp>(loc, boundIdx, startIdx));
+  }
+
+  if (chunkSizes.empty())
+    return failure();
+
+  Value minSize = chunkSizes.front();
+  for (Value candidate : llvm::drop_begin(chunkSizes))
+    minSize = builder.create<arith::MinSIOp>(loc, minSize, candidate);
+
+  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+  minSize = builder.create<arith::MaxSIOp>(loc, minSize, zero);
+
+  chunkOffset = startIdx;
+  chunkSize = minSize;
+  return success();
 }
 
 void DbAcquireNode::print(llvm::raw_ostream &os) const {

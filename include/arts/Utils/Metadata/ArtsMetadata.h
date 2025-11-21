@@ -55,6 +55,10 @@ public:
   virtual StringRef toString() const = 0;
 
   Operation *getOperation() const { return op_; }
+  void setOperation(Operation *op) {
+    assert(op && "Operation must not be null");
+    op_ = op;
+  }
   ArtsId getMetadataId() const { return metadataId_; }
   void setMetadataId(ArtsId id) { metadataId_ = id; }
 

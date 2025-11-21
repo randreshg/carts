@@ -109,7 +109,7 @@ def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
     "arith::ArithDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createCreateDbsPass()";
+  let constructor = "mlir::arts::createCreateDbsPass(nullptr)";
 }
 
 def DbLowering : Pass<"db-lowering", "mlir::ModuleOp"> {

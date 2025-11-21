@@ -35,6 +35,7 @@
 //==========================================================================
 
 #include "ArtsPassDetails.h"
+#include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Transforms/DbRewriter.h"
@@ -73,12 +74,15 @@ namespace {
 ///===----------------------------------------------------------------------===///
 
 struct CreateDbsPass : public arts::CreateDbsBase<CreateDbsPass> {
-  CreateDbsPass() {}
+  CreateDbsPass(ArtsAnalysisManager *AM) : AM(AM) {
+    assert(AM && "ArtsAnalysisManager must be provided externally");
+  }
 
   void runOnOperation() override;
 
 private:
   ModuleOp module;
+  ArtsAnalysisManager *AM = nullptr;
   DenseMap<Operation *, Operation *> dbPtrToOriginalAlloc;
   SetVector<Operation *> opsToRemove;
 
@@ -169,7 +173,6 @@ private:
   DenseMap<EdtOp, SetVector<Value>> edtExternalValues;
 
   /// Helper functions
-  void importMetadata();
   void collectMemrefs();
   void collectControlDbOps();
   void createDbAllocOps();
@@ -205,8 +208,6 @@ void CreateDbsPass::runOnOperation() {
   module = getOperation();
   opsToRemove.clear();
   memrefInfo.clear();
-
-  importMetadata();
 
   ARTS_INFO_HEADER(CreateDbsPass);
   ARTS_DEBUG_REGION(module.dump(););
@@ -288,38 +289,6 @@ void CreateDbsPass::runOnOperation() {
 
   ARTS_INFO_FOOTER(CreateDbsPass);
   ARTS_DEBUG_REGION(module.dump(););
-}
-
-///===----------------------------------------------------------------------===///
-// Metadata Import
-///===----------------------------------------------------------------------===///
-void CreateDbsPass::importMetadata() {
-  std::string metadataPath = ".carts-metadata.json";
-  ARTS_INFO("Attempting to import metadata from: " << metadataPath);
-
-  ArtsMetadataManager manager(module.getContext());
-  bool success = manager.importFromJsonFile(module, metadataPath);
-  if (success) {
-    ARTS_INFO("Successfully attached metadata from sequential compilation");
-
-    /// Print summary of imported metadata
-    unsigned allocsWithMeta = 0, loopsWithMeta = 0;
-    module.walk([&](Operation *op) {
-      if (isa<memref::AllocOp, memref::AllocaOp>(op)) {
-        if (op->hasAttr(AttrNames::MemrefMetadata::Name))
-          allocsWithMeta++;
-      } else if (isa<affine::AffineForOp, scf::ForOp, scf::ParallelOp>(op)) {
-        if (op->hasAttr(AttrNames::LoopMetadata::Name))
-          loopsWithMeta++;
-      }
-    });
-
-    ARTS_INFO("  Allocations with metadata: " << allocsWithMeta);
-    ARTS_INFO("  Loops with metadata: " << loopsWithMeta);
-  } else {
-    ARTS_DEBUG(
-        "No metadata file found or import failed, continuing without metadata");
-  }
 }
 
 ///===----------------------------------------------------------------------===///
@@ -617,20 +586,18 @@ void CreateDbsPass::createDbAllocOps() {
       sizes.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
     }
 
-    /// By default, use zero route
-    auto route = builder.create<arith::ConstantIntOp>(loc, 0, 32);
-
     /// Create the db_alloc operation
+    auto route = builder.create<arith::ConstantIntOp>(loc, 0, 32);
     auto dbAllocOp = builder.create<DbAllocOp>(
         loc, mode, route, allocType, dbMode, elementType, sizes, elementSizes);
 
     /// Transfer metadata from original allocation to DbAllocOp
-    for (auto namedAttr : alloc->getAttrs()) {
-      StringRef attrName = namedAttr.getName().strref();
-      if (attrName.starts_with("arts."))
-        dbAllocOp->setAttr(namedAttr.getName(), namedAttr.getValue());
+    if (AM->getMetadataManager().transferMetadata(alloc, dbAllocOp)) {
+      ARTS_DEBUG(
+          "  Transferred metadata from original allocation to DbAllocOp");
+    } else {
+      ARTS_DEBUG("  No metadata found for original allocation");
     }
-    ARTS_DEBUG("  Transferred metadata from original allocation to DbAllocOp");
 
     /// Store mappings for later use
     info.dbAllocOp = dbAllocOp;
@@ -972,8 +939,8 @@ void CreateDbsPass::rewriteUsesInEdt(EdtOp edt,
 ///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {
-std::unique_ptr<Pass> createCreateDbsPass() {
-  return std::make_unique<CreateDbsPass>();
+std::unique_ptr<Pass> createCreateDbsPass(ArtsAnalysisManager *AM) {
+  return std::make_unique<CreateDbsPass>(AM);
 }
 } // namespace arts
 } // namespace mlir

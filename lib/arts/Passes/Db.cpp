@@ -4,7 +4,6 @@
 ///==========================================================================///
 
 /// Dialects
-
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -30,16 +29,17 @@
 #include "mlir/Support/LogicalResult.h"
 /// Debug
 #include "arts/Analysis/Graphs/Db/DbNode.h"
+#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
+#include "arts/Analysis/Graphs/Edt/EdtNode.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <iterator>
 #include <limits>
-/// File operations
-#include "llvm/Support/FileSystem.h"
-#include "llvm/Support/raw_ostream.h"
 
 #include "arts/Transforms/DbRewriter.h"
 #include "arts/Utils/ArtsDebug.h"
@@ -57,7 +57,7 @@ using namespace mlir::arts;
 
 ///===----------------------------------------------------------------------===///
 // Pass Implementation
-// transform/optimize ARTS DB IR using DbGraph/analyses.
+// Transform/optimize Datablocks using
 ///===----------------------------------------------------------------------===///
 namespace {
 struct DbPass : public arts::DbBase<DbPass> {
@@ -70,26 +70,16 @@ struct DbPass : public arts::DbBase<DbPass> {
 
   /// Optimizations
   bool adjustDbModes();
-  bool refineParallelAcquires();
+  bool partitionDb();
 
   /// Graph rebuild
   void invalidateAndRebuildGraph();
   bool isEligibleForSlicing(DbAcquireNode *node);
-  bool edtHasParallelLoopMetadata(EdtOp edt);
-  bool isMemrefParallelFriendly(DbAllocNode *allocNode);
-  bool shouldSliceAlloc(DbAllocNode *allocNode);
-  LogicalResult computeChunkInfo(DbAcquireNode *node, Value &chunkOffset,
-                                 Value &chunkSize);
   FailureOr<DbAllocOp> promoteAllocForChunking(DbAllocOp allocOp);
-  void updateAcquireForChunk(DbAcquireOp acqOp, Value chunkOffset,
-                             Value chunkSize);
-  LogicalResult computeChunkInfoFromWhile(scf::WhileOp whileOp,
-                                          DbAcquireOp acqOp, Value &chunkOffset,
-                                          Value &chunkSize);
-  void collectWhileBounds(Value cond, Value iterArg,
-                          SmallVector<Value> &bounds);
-  Value stripIndexCasts(Value value);
-  Value ensureIndexType(Value value, OpBuilder &builder, Location loc);
+  bool updateAcquireForChunk(DbAcquireOp acqOp, DbAllocOp promotedAlloc,
+                             Value chunkOffset, Value chunkSize);
+  bool normalizeRootAcquires(DbAllocOp allocOp);
+  bool rewriteAcquireUsersForChunk(DbAcquireOp acqOp, Value chunkOffset);
 
 private:
   ModuleOp module;
@@ -112,24 +102,11 @@ void DbPass::runOnOperation() {
 
   assert(AM && "ArtsAnalysisManager must be provided externally");
 
-  /// Import sequential metadata if available
-  ArtsMetadataManager &metadataManager = AM->getMetadataManager();
-  std::string metadataFile = ".carts-metadata.json";
-  if (llvm::sys::fs::exists(metadataFile)) {
-    ARTS_DEBUG("Importing metadata from .carts-metadata.json");
-    metadataManager.importFromJsonFile(module, metadataFile);
-  }
-
   /// Graph construction and analysis
   invalidateAndRebuildGraph();
 
   changed |= adjustDbModes();
-  changed |= refineParallelAcquires();
-
-  /// Phase 2: Focus on parallel EDT worker acquires
-  /// After ArtsForLowering has created worker EDTs with chunk-based acquires,
-  /// this phase refines the partitioning strategy
-  ARTS_INFO(" - Running Phase 2 optimizations (parallel EDT refinement)");
+  changed |= partitionDb();
 
   if (changed) {
     /// If the module has changed, adjust the db modes again
@@ -173,14 +150,13 @@ bool DbPass::adjustDbModes() {
       if (newMode == acqOp.getMode())
         return;
 
-      ARTS_DEBUG("AcquireOp: " << acqOp);
-      ARTS_DEBUG(" from " << acqOp.getMode() << " to " << newMode);
+      ARTS_DEBUG("AcquireOp: " << acqOp << " from " << acqOp.getMode() << " to "
+                               << newMode);
       acqOp.setModeAttr(ArtsModeAttr::get(acqOp.getContext(), newMode));
       changed = true;
     });
 
     /// Then, adjust alloc dbMode - collect modes from all acquires in hierarchy
-    /// (direct children and nested acquires) and compute maximum required mode
     graph.forEachAllocNode([&](DbAllocNode *allocNode) {
       ArtsMode maxMode = ArtsMode::in;
 
@@ -189,8 +165,6 @@ bool DbPass::adjustDbModes() {
           [&](DbAcquireNode *acqNode) {
             ArtsMode mode = acqNode->getDbAcquireOp().getMode();
             maxMode = combineAccessModes(maxMode, mode);
-
-            /// Recursively process child acquires
             acqNode->forEachChildNode([&](NodeBase *child) {
               if (auto *nestedAcq = dyn_cast<DbAcquireNode>(child))
                 collectModes(nestedAcq);
@@ -198,14 +172,11 @@ bool DbPass::adjustDbModes() {
           };
 
       allocNode->forEachChildNode([&](NodeBase *child) {
-        if (auto *acqNode = dyn_cast<DbAcquireNode>(child)) {
+        if (auto *acqNode = dyn_cast<DbAcquireNode>(child))
           collectModes(acqNode);
-        }
       });
 
-      DbAllocOp allocOp = allocNode->getDbAllocOp();
-
-      /// Use metadata from allocNode's info (MemrefMetadata)
+      /// Use metadata from allocNode's info
       if (allocNode->readWriteRatio) {
         double ratio = *allocNode->readWriteRatio;
         ArtsMode metadataMode = ArtsMode::inout;
@@ -218,6 +189,8 @@ bool DbPass::adjustDbModes() {
                                                          << metadataMode);
       }
 
+      /// Update the alloc mode
+      DbAllocOp allocOp = allocNode->getDbAllocOp();
       ArtsMode currentDbMode = allocOp.getMode();
       if (currentDbMode == maxMode)
         return;
@@ -233,38 +206,56 @@ bool DbPass::adjustDbModes() {
   return changed;
 }
 
-bool DbPass::refineParallelAcquires() {
+bool DbPass::partitionDb() {
   if (!enablePartitioning)
     return false;
-  ARTS_DEBUG_HEADER(RefineParallelAcquires);
+  ARTS_DEBUG_HEADER(PartitionDb);
   bool changed = false;
 
   /// Collect all (alloc, acquire, offset, size) tuples
-  /// This is a READ-ONLY walk - no modifications to avoid iterator invalidation
-  llvm::DenseMap<Operation *,
-                 SmallVector<std::tuple<DbAcquireOp, Value, Value>, 4>>
-      allocsToPromote;
+  using AcqChunkInfo = std::tuple<DbAcquireOp, Value, Value>;
+  DenseMap<DbAllocOp, SmallVector<AcqChunkInfo, 4>> allocsToPromote;
 
+  /// Walk the module,
   module.walk([&](func::FuncOp func) {
     DbGraph &graph = AM->getDbGraph(func);
 
     SmallVector<DbAcquireNode *, 16> candidates;
+    /// Walk the graph, and collect the eligible acquire nodes
     graph.forEachAcquireNode([&](DbAcquireNode *acqNode) {
       if (!isEligibleForSlicing(acqNode))
         return;
 
+      /// If the parent allocation node is not eligible for slicing, skip
       DbAllocNode *allocNode = acqNode->getRootAlloc();
-      if (!allocNode || !shouldSliceAlloc(allocNode))
+      if (!allocNode || !allocNode->shouldSliceAlloc())
         return;
 
+      /// Add the acquire node to the candidates list
       candidates.push_back(acqNode);
     });
 
+    /// For each eligible acquire node, compute the chunk info and promote the
+    /// allocation
     for (DbAcquireNode *node : candidates) {
-      Value chunkOffset;
-      Value chunkSize;
-      if (failed(computeChunkInfo(node, chunkOffset, chunkSize)))
+      Value chunkOffset, chunkSize;
+      auto [cachedOffset, cachedSize] = node->getPartitionInfo();
+      if (cachedOffset && cachedSize) {
+        chunkOffset = cachedOffset;
+        chunkSize = cachedSize;
+        ARTS_DEBUG("  Using cached chunk info for acquire "
+                   << node->getDbAcquireOp() << " offset=" << chunkOffset
+                   << " size=" << chunkSize);
+      } else if (failed(node->computeChunkInfo(chunkOffset, chunkSize))) {
+        ARTS_DEBUG("  Failed to compute chunk info for acquire "
+                   << node->getDbAcquireOp());
         continue;
+      } else {
+        node->setPartitionInfo(chunkOffset, chunkSize);
+        ARTS_DEBUG("  Computed chunk info for acquire "
+                   << node->getDbAcquireOp() << " offset=" << chunkOffset
+                   << " size=" << chunkSize);
+      }
 
       DbAllocNode *allocNode = node->getRootAlloc();
       if (!allocNode)
@@ -274,7 +265,7 @@ bool DbPass::refineParallelAcquires() {
       DbAcquireOp acqOp = node->getDbAcquireOp();
 
       /// Collect this (acquire, offset, size) tuple for this alloc
-      allocsToPromote[allocOp.getOperation()].push_back(
+      allocsToPromote[allocOp].push_back(
           std::make_tuple(acqOp, chunkOffset, chunkSize));
     }
   });
@@ -307,12 +298,15 @@ bool DbPass::refineParallelAcquires() {
       changed = true;
     }
 
+    changed |= normalizeRootAcquires(promoted);
+
     /// Update all acquires for this alloc
     for (auto &[acqOp, chunkOffset, chunkSize] : acquireList) {
       if (!acqOp)
         continue;
 
-      updateAcquireForChunk(acqOp, chunkOffset, chunkSize);
+      if (updateAcquireForChunk(acqOp, promoted, chunkOffset, chunkSize))
+        changed = true;
 
       /// Verify the transformation
       if (acqOp.getOffsets().empty() || acqOp.getSizes().empty()) {
@@ -323,7 +317,9 @@ bool DbPass::refineParallelAcquires() {
                    << " sizes=" << acqOp.getSizes().size());
       }
 
-      if (acqOp.getSourcePtr() != promoted.getPtr()) {
+      Operation *underlyingAlloc =
+          arts::getUnderlyingDbAlloc(acqOp.getSourcePtr());
+      if (underlyingAlloc && underlyingAlloc != promoted.getOperation()) {
         ARTS_DEBUG(
             "  WARNING: Acquire source ptr doesn't match promoted alloc");
       }
@@ -336,254 +332,16 @@ bool DbPass::refineParallelAcquires() {
     invalidateAndRebuildGraph();
   }
 
-  ARTS_DEBUG_FOOTER(RefineParallelAcquires);
+  ARTS_DEBUG_FOOTER(PartitionDb);
   return changed;
 }
 
 bool DbPass::isEligibleForSlicing(DbAcquireNode *node) {
-  DbAcquireOp acq = node->getDbAcquireOp();
-  auto skip = [&](StringRef reason) {
-    ARTS_DEBUG("Skipping acquire " << acq << ": " << reason);
-    return false;
-  };
-  if (!acq)
-    return false;
-
-  EdtOp edt = node->getEdtUser();
-  if (!edt || edt.getType() != EdtType::task)
-    return skip("not a task EDT");
-
-  if (node->getLoads().empty() && node->getStores().empty())
-    return skip("no memory accesses");
-
-  DbAllocNode *allocNode = node->getRootAlloc();
-  if (!allocNode)
-    return skip("missing allocation node");
-
-  if (allocNode->hasUniformAccess && !*allocNode->hasUniformAccess)
-    return skip("non-uniform access");
-
-  if (!isMemrefParallelFriendly(allocNode))
-    return skip("memref metadata is not marked as parallel-friendly");
-
-  if (!edtHasParallelLoopMetadata(edt))
-    return skip("worker EDT does not contain parallel loop metadata");
-
-  return true;
-}
-
-bool DbPass::isMemrefParallelFriendly(DbAllocNode *allocNode) {
-  if (!allocNode)
-    return false;
-
-  if (allocNode->isStringDatablock())
-    return false;
-
-  if (!allocNode->accessedInParallelLoop ||
-      !allocNode->accessedInParallelLoop.value_or(false))
-    return false;
-
-  return true;
-}
-
-bool DbPass::shouldSliceAlloc(DbAllocNode *allocNode) {
-  if (!allocNode)
-    return false;
-
-  bool canSlice = false;
-  if (allocNode->accessedInParallelLoop && *allocNode->accessedInParallelLoop) {
-    if (!allocNode->hasLoopCarriedDeps || !*allocNode->hasLoopCarriedDeps)
-      canSlice = true;
-  }
-
-  if (allocNode->hasUniformAccess && *allocNode->hasUniformAccess) {
-    if (allocNode->dominantAccessPattern) {
-      auto pattern = *allocNode->dominantAccessPattern;
-      if (pattern == AccessPatternType::Sequential ||
-          pattern == AccessPatternType::Strided)
-        canSlice = true;
-    }
-  }
-
-  return canSlice;
-}
-
-LogicalResult DbPass::computeChunkInfo(DbAcquireNode *node, Value &chunkOffset,
-                                       Value &chunkSize) {
   if (!node)
-    return failure();
+    return false;
 
-  EdtOp edt = node->getEdtUser();
-  if (!edt)
-    return failure();
-
-  scf::ForOp chunkLoop;
-  scf::WhileOp chunkWhile;
-  edt.walk([&](scf::ForOp forOp) {
-    chunkLoop = forOp;
-    return WalkResult::interrupt();
-  });
-  edt.walk([&](scf::WhileOp whileOp) {
-    chunkWhile = whileOp;
-    return WalkResult::interrupt();
-  });
-
-  if (chunkWhile) {
-    DbAcquireOp acqOp = node->getDbAcquireOp();
-    if (!acqOp)
-      return failure();
-    if (succeeded(computeChunkInfoFromWhile(chunkWhile, acqOp, chunkOffset,
-                                            chunkSize)))
-      return success();
-  }
-
-  if (!chunkLoop)
-    return failure();
-
-  chunkSize = chunkLoop.getUpperBound();
-
-  Value ptrArg = node->getUseInEdt();
-  if (!ptrArg)
-    return failure();
-
-  Value offsetCandidate;
-  for (Operation *user : ptrArg.getUsers()) {
-    auto refOp = dyn_cast<DbRefOp>(user);
-    if (!refOp || !chunkLoop->isAncestor(refOp))
-      continue;
-
-    Value refVal = refOp.getResult();
-    for (Operation *memUser : refVal.getUsers()) {
-      auto storeOp = dyn_cast<memref::StoreOp>(memUser);
-      if (!storeOp || !chunkLoop->isAncestor(storeOp))
-        continue;
-
-      if (storeOp.getIndices().empty())
-        continue;
-      Value idx = storeOp.getIndices().front();
-      auto addOp = idx.getDefiningOp<arith::AddIOp>();
-      if (!addOp)
-        continue;
-
-      Value iv = chunkLoop.getInductionVar();
-      if (addOp.getOperand(0) == iv)
-        offsetCandidate = addOp.getOperand(1);
-      else if (addOp.getOperand(1) == iv)
-        offsetCandidate = addOp.getOperand(0);
-
-      if (offsetCandidate)
-        break;
-    }
-    if (offsetCandidate)
-      break;
-  }
-
-  if (!offsetCandidate)
-    return failure();
-
-  chunkOffset = offsetCandidate;
-  return success();
-}
-
-Value DbPass::stripIndexCasts(Value value) {
-  if (!value)
-    return value;
-  if (auto cast = value.getDefiningOp<arith::IndexCastOp>())
-    return stripIndexCasts(cast.getIn());
-  if (auto trunc = value.getDefiningOp<arith::TruncIOp>())
-    return stripIndexCasts(trunc.getIn());
-  if (auto ext = value.getDefiningOp<arith::ExtSIOp>())
-    return stripIndexCasts(ext.getIn());
-  return value;
-}
-
-Value DbPass::ensureIndexType(Value value, OpBuilder &builder, Location loc) {
-  if (!value)
-    return Value();
-  if (value.getType().isa<IndexType>())
-    return value;
-  if (auto intTy = value.getType().dyn_cast<IntegerType>())
-    return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
-                                              value);
-  return Value();
-}
-
-void DbPass::collectWhileBounds(Value cond, Value iterArg,
-                                SmallVector<Value> &bounds) {
-  if (!cond)
-    return;
-  cond = stripIndexCasts(cond);
-  if (auto andOp = cond.getDefiningOp<arith::AndIOp>()) {
-    collectWhileBounds(andOp.getLhs(), iterArg, bounds);
-    collectWhileBounds(andOp.getRhs(), iterArg, bounds);
-    return;
-  }
-  if (auto cmp = cond.getDefiningOp<arith::CmpIOp>()) {
-    auto lhs = stripIndexCasts(cmp.getLhs());
-    auto rhs = stripIndexCasts(cmp.getRhs());
-    auto pred = cmp.getPredicate();
-    auto isLessPred =
-        pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::ult;
-    if (lhs == iterArg && isLessPred) {
-      bounds.push_back(cmp.getRhs());
-      return;
-    }
-    if (rhs == iterArg && (pred == arith::CmpIPredicate::sgt ||
-                           pred == arith::CmpIPredicate::ugt)) {
-      bounds.push_back(cmp.getLhs());
-      return;
-    }
-  }
-}
-
-LogicalResult DbPass::computeChunkInfoFromWhile(scf::WhileOp whileOp,
-                                                DbAcquireOp acqOp,
-                                                Value &chunkOffset,
-                                                Value &chunkSize) {
-  if (!whileOp || !acqOp)
-    return failure();
-  if (whileOp.getInits().size() != 1)
-    return failure();
-
-  Value initValue = whileOp.getInits().front();
-  Block &before = whileOp.getBefore().front();
-  auto condition = dyn_cast<scf::ConditionOp>(before.getTerminator());
-  if (!condition || before.getNumArguments() != 1)
-    return failure();
-
-  SmallVector<Value> bounds;
-  collectWhileBounds(condition.getCondition(), before.getArgument(0), bounds);
-  if (bounds.empty())
-    return failure();
-
-  OpBuilder builder(acqOp);
-  Location loc = acqOp.getLoc();
-  Value startIdx = ensureIndexType(initValue, builder, loc);
-  if (!startIdx)
-    return failure();
-
-  SmallVector<Value> chunkSizes;
-  for (Value bound : bounds) {
-    Value boundIdx = ensureIndexType(bound, builder, loc);
-    if (!boundIdx)
-      continue;
-    chunkSizes.push_back(
-        builder.create<arith::SubIOp>(loc, boundIdx, startIdx));
-  }
-
-  if (chunkSizes.empty())
-    return failure();
-
-  Value minSize = chunkSizes.front();
-  for (Value candidate : llvm::drop_begin(chunkSizes)) {
-    minSize = builder.create<arith::MinSIOp>(loc, minSize, candidate);
-  }
-  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
-  minSize = builder.create<arith::MaxSIOp>(loc, minSize, zero);
-
-  chunkOffset = startIdx;
-  chunkSize = minSize;
-  return success();
+  /// Use the node's method to check eligibility
+  return node->isEligibleForSlicing();
 }
 
 FailureOr<DbAllocOp> DbPass::promoteAllocForChunking(DbAllocOp allocOp) {
@@ -643,63 +401,108 @@ FailureOr<DbAllocOp> DbPass::promoteAllocForChunking(DbAllocOp allocOp) {
   return newAlloc;
 }
 
-void DbPass::updateAcquireForChunk(DbAcquireOp acqOp, Value chunkOffset,
-                                   Value chunkSize) {
+bool DbPass::normalizeRootAcquires(DbAllocOp allocOp) {
+  if (!allocOp)
+    return false;
+
+  ValueRange allocSizes = allocOp.getSizes();
+  if (allocSizes.empty())
+    return false;
+
+  SmallVector<DbAcquireOp> acquires;
+  for (Operation *user : allocOp.getPtr().getUsers())
+    if (auto acq = dyn_cast<DbAcquireOp>(user))
+      acquires.push_back(acq);
+
+  if (acquires.empty())
+    return false;
+
+  bool changed = false;
+  OpBuilder builder(allocOp.getContext());
+  for (DbAcquireOp acq : acquires) {
+    auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(acq);
+    /// Skip worker EDT acquires; they will be chunked separately.
+    if (edt && edt.getType() == EdtType::task)
+      continue;
+
+    bool needsRewrite = acq.getSizes().size() != allocSizes.size() ||
+                        !std::equal(acq.getSizes().begin(),
+                                    acq.getSizes().end(), allocSizes.begin());
+    if (!needsRewrite)
+      continue;
+
+    builder.setInsertionPoint(acq);
+    Value zero = builder.create<arith::ConstantIndexOp>(acq.getLoc(), 0);
+    SmallVector<Value> offsets(allocSizes.size(), zero);
+    SmallVector<Value> sizes(allocSizes.begin(), allocSizes.end());
+    acq.getOffsetsMutable().assign(offsets);
+    acq.getSizesMutable().assign(sizes);
+    changed = true;
+    ARTS_DEBUG("  Normalized acquire " << acq << " to full allocation extents");
+  }
+
+  return changed;
+}
+
+bool DbPass::rewriteAcquireUsersForChunk(DbAcquireOp acqOp, Value chunkOffset) {
+  auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(acqOp);
+  if (!blockArg)
+    return false;
+
+  /// Try to reuse an existing DbRef result type if available to keep types
+  /// consistent with surrounding code.
+  Type targetType;
+  for (Operation *user : blockArg.getUsers()) {
+    if (auto ref = dyn_cast<DbRefOp>(user)) {
+      targetType = ref.getResult().getType();
+      break;
+    }
+  }
+  if (!targetType) {
+    targetType = blockArg.getType();
+    if (auto outerMemref = targetType.dyn_cast<MemRefType>())
+      if (auto innerMemref =
+              outerMemref.getElementType().dyn_cast<MemRefType>())
+        targetType = innerMemref;
+  }
+
+  if (!targetType || !targetType.isa<MemRefType>()) {
+    ARTS_DEBUG("  Skipping chunk user rewrite for acquire "
+               << acqOp << " (type mismatch)");
+    return false;
+  }
+
+  SmallVector<Value> chunkOffsets{chunkOffset};
+  llvm::SetVector<Operation *> opsToRemove;
+  OpBuilder builder(acqOp.getContext());
+  SmallVector<Operation *> users(blockArg.getUsers().begin(),
+                                 blockArg.getUsers().end());
+  bool rewritten = false;
+  for (Operation *user : users) {
+    if (rewriteDbUserOperation(user, targetType, blockArg, acqOp.getOperation(),
+                               acqOp.getIndices().size(), chunkOffsets, builder,
+                               opsToRemove))
+      rewritten = true;
+  }
+
+  for (Operation *op : opsToRemove)
+    op->erase();
+
+  return rewritten;
+}
+
+bool DbPass::updateAcquireForChunk(DbAcquireOp acqOp, DbAllocOp promotedAlloc,
+                                   Value chunkOffset, Value chunkSize) {
   if (!acqOp)
-    return;
+    return false;
 
   SmallVector<Value> offsets{chunkOffset};
   SmallVector<Value> sizes{chunkSize};
   acqOp.getOffsetsMutable().assign(offsets);
   acqOp.getSizesMutable().assign(sizes);
-}
 
-bool DbPass::edtHasParallelLoopMetadata(EdtOp edt) {
-  if (!edt)
-    return false;
-
-  bool foundParallelLoop = false;
-  auto &dbAnalysis = AM->getDbAnalysis();
-  auto *loopAnalysis = dbAnalysis.getLoopAnalysis();
-  if (!loopAnalysis)
-    return false;
-  ArtsMetadataManager &metadataManager = AM->getMetadataManager();
-
-  edt.walk([&](Operation *op) {
-    if (auto forOp = dyn_cast<scf::ForOp>(op)) {
-      metadataManager.ensureLoopMetadata(forOp);
-
-      /// Validate that metadata was recovered
-      if (auto loopAttr = forOp->getAttr(AttrNames::LoopMetadata::Name)) {
-        ARTS_DEBUG("  Found loop metadata on scf.for in EDT");
-      } else {
-        ARTS_DEBUG("  No loop metadata found on scf.for in EDT");
-      }
-
-      if (LoopNode *loopNode = loopAnalysis->getOrCreateLoopNode(forOp)) {
-        bool noDeps = !loopNode->hasInterIterationDeps.has_value() ||
-                      !loopNode->hasInterIterationDeps.value();
-        if (loopNode->potentiallyParallel && noDeps) {
-          ARTS_DEBUG(
-              "  Loop is parallel-friendly: potentiallyParallel=true, noDeps="
-              << noDeps);
-          foundParallelLoop = true;
-          return WalkResult::interrupt();
-        } else {
-          ARTS_DEBUG(
-              "  Loop is NOT parallel-friendly: potentiallyParallel="
-              << loopNode->potentiallyParallel << ", hasInterIterationDeps="
-              << (loopNode->hasInterIterationDeps.has_value()
-                      ? (loopNode->hasInterIterationDeps.value() ? "true"
-                                                                 : "false")
-                      : "unknown"));
-        }
-      }
-    }
-    return WalkResult::advance();
-  });
-
-  return foundParallelLoop;
+  (void)rewriteAcquireUsersForChunk(acqOp, chunkOffset);
+  return true;
 }
 
 ///===----------------------------------------------------------------------===///

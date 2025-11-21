@@ -54,6 +54,14 @@ public:
     return N->getKind() == NodeKind::DbAlloc;
   }
 
+  /// Returns true if the memref is accessed in parallel loops and is not a
+  /// string datablock
+  bool isParallelFriendly() const;
+
+  /// Check if this allocation should be sliced for parallel execution
+  /// Returns true if the memref can be safely sliced based on access patterns
+  bool shouldSliceAlloc() const;
+
   /// Analysis metadata
   uint64_t inCount = 0, outCount = 0;
   uint64_t beginIndex = 0, endIndex = 0;
@@ -99,6 +107,7 @@ public:
   DbAllocNode *getParent() const { return rootAlloc; }
   NodeBase *getDirectParent() const { return parent; }
   DbAllocNode *getRootAlloc() const { return rootAlloc; }
+  DbAnalysis *getAnalysis() const { return analysis; }
 
   NodeKind getKind() const override { return NodeKind::DbAcquire; }
   static bool classof(const NodeBase *N) {
@@ -128,6 +137,19 @@ public:
   DbAcquireNode *getOrCreateAcquireNode(DbAcquireOp op);
   void forEachChildNode(const std::function<void(NodeBase *)> &fn) const;
 
+  /// Check if this acquire node is eligible for slicing
+  bool isEligibleForSlicing();
+  LogicalResult computeChunkInfo(Value &chunkOffset, Value &chunkSize);
+  LogicalResult computeChunkInfoFromWhile(scf::WhileOp whileOp,
+                                          Value &chunkOffset, Value &chunkSize);
+  void setPartitionInfo(Value offset, Value size) {
+    partitionOffset = offset;
+    partitionSize = size;
+  }
+  std::pair<Value, Value> getPartitionInfo() const {
+    return {partitionOffset, partitionSize};
+  }
+
 private:
   DbAcquireOp dbAcquireOp;
   DbReleaseOp dbReleaseOp;
@@ -138,6 +160,8 @@ private:
   std::string hierId;
   EdtOp edtUser;
   Value useInEdt;
+  Value partitionOffset;
+  Value partitionSize;
   /// Memory accesses (loads/stores) inside the EDT
   SmallVector<Operation *, 16> loads, stores, references;
 

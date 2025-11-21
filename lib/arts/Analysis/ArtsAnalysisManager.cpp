@@ -8,6 +8,7 @@
 #include "arts/Analysis/ArtsAnalysisManager.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
 
@@ -61,14 +62,12 @@ ArtsMetadataManager &ArtsAnalysisManager::getMetadataManager() {
   if (!metadataManager) {
     metadataManager =
         std::make_unique<ArtsMetadataManager>(module.getContext());
-    metadataManager->importFromOperations(module);
-    metadataManager->setMetadataFile(".carts-metadata.json");
+    metadataManager->importFromJsonFile(module, ".carts-metadata.json");
   }
   return *metadataManager;
 }
 
 const ArtsMetadataManager &ArtsAnalysisManager::getMetadataManager() const {
-  // For const access, we need metadataManager to be already initialized
   assert(metadataManager && "Metadata manager not initialized. Call non-const "
                             "getMetadataManager() first.");
   return *metadataManager;
@@ -114,28 +113,25 @@ void ArtsAnalysisManager::print(llvm::raw_ostream &os) {
 
 void ArtsAnalysisManager::exportToJson(llvm::raw_ostream &os,
                                        bool includeAnalysis) {
-  os << "{\n";
-  os << "  \"module\": \""
-     << (module.getName() ? module.getName()->str() : "unnamed") << "\",\n";
-  os << "  \"built\": " << (built ? "true" : "false") << ",\n";
-  os << "  \"valid\": true";
+  using namespace llvm::json;
+
+  Object root;
+  root["module"] = module.getName() ? module.getName()->str() : "unnamed";
+  root["built"] = built;
+  root["valid"] = true;
 
   /// Export graphs via analysis objects
-  os << ",\n  \"functions\": [\n";
-  bool first = true;
+  Array functions;
   for (auto func : module.getOps<func::FuncOp>()) {
-    if (!first)
-      os << ",\n";
-    first = false;
-    os << "    {\n";
-    os << "      \"function\": \"" << func.getName() << "\",\n";
-    os << "      \"graphs\": {\n";
-    os << "        \"db\": \"available\",\n";
-    os << "        \"edt\": \"available\"\n";
-    os << "      }\n";
-    os << "    }";
+    Object funcObj;
+    funcObj["function"] = func.getName().str();
+    Object graphs;
+    graphs["db"] = "available";
+    graphs["edt"] = "available";
+    funcObj["graphs"] = std::move(graphs);
+    functions.push_back(std::move(funcObj));
   }
-  os << "\n  ]";
+  root["functions"] = std::move(functions);
 
-  os << "\n}\n";
+  os << llvm::json::Value(std::move(root)) << "\n";
 }

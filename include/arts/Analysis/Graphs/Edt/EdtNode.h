@@ -17,15 +17,18 @@
 namespace mlir {
 namespace arts {
 
-/// Forward declaration
+/// Forward declarations
 class LoopNode;
+class LoopAnalysis;
+class ArtsMetadataManager;
+class ArtsAnalysisManager;
 
 ////===----------------------------------------------------------------------===////
 /// EdtNode - represents an EDT operation
 ////===----------------------------------------------------------------------===////
 class EdtNode : public NodeBase {
 public:
-  EdtNode(EdtOp op);
+  EdtNode(EdtOp op, ArtsAnalysisManager *AM);
 
   StringRef getHierId() const override { return hierId; }
   void setHierId(std::string id) { hierId = id; }
@@ -45,11 +48,16 @@ public:
   void setAssociatedLoops(ArrayRef<LoopNode *> loops) {
     enclosingLoops.assign(loops.begin(), loops.end());
   }
+
   void addAssociatedLoop(LoopNode *loop) {
     if (loop)
       enclosingLoops.push_back(loop);
   }
+
   ArrayRef<LoopNode *> getAssociatedLoops() const { return enclosingLoops; }
+
+  /// Check if this EDT has parallel loop metadata
+  bool hasParallelLoopMetadata() const;
 
   NodeKind getKind() const override { return NodeKind::EdtTask; }
   static bool classof(const NodeBase *N) {
@@ -59,6 +67,7 @@ public:
 private:
   EdtOp edtOp;
   Operation *opPtr = nullptr;
+  ArtsAnalysisManager *analysisManager = nullptr;
   std::string hierId;
   EdtInfo info;
 

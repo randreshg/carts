@@ -83,3 +83,32 @@ DbAcquireNode *DbAllocNode::getOrCreateAcquireNode(DbAcquireOp op) {
   acquireMap[op] = ptr;
   return ptr;
 }
+
+bool DbAllocNode::isParallelFriendly() const {
+  if (isStringDatablock())
+    return false;
+
+  if (!accessedInParallelLoop || !accessedInParallelLoop.value_or(false))
+    return false;
+
+  return true;
+}
+
+bool DbAllocNode::shouldSliceAlloc() const {
+  bool canSlice = false;
+  if (accessedInParallelLoop && *accessedInParallelLoop) {
+    if (!hasLoopCarriedDeps || !*hasLoopCarriedDeps)
+      canSlice = true;
+  }
+
+  if (hasUniformAccess && *hasUniformAccess) {
+    if (dominantAccessPattern) {
+      auto pattern = *dominantAccessPattern;
+      if (pattern == AccessPatternType::Sequential ||
+          pattern == AccessPatternType::Strided)
+        canSlice = true;
+    }
+  }
+
+  return canSlice;
+}

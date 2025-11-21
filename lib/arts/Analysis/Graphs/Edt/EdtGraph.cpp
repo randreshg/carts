@@ -4,11 +4,12 @@
 ///==========================================================================///
 
 #include "arts/Analysis/Graphs/Edt/EdtGraph.h"
+#include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
+#include "arts/Analysis/Edt/EdtDataFlowAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Analysis/Graphs/Edt/EdtEdge.h"
 #include "arts/Analysis/Graphs/Edt/EdtNode.h"
-#include "arts/Analysis/Edt/EdtDataFlowAnalysis.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/Loop/LoopNode.h"
 #include "arts/Utils/ArtsUtils.h"
@@ -38,8 +39,8 @@ StringRef depTypeToString(DbDepType type) {
 }
 } // namespace
 
-EdtGraph::EdtGraph(func::FuncOp func, DbGraph *dbGraph)
-    : func(func), dbGraph(dbGraph) {
+EdtGraph::EdtGraph(func::FuncOp func, DbGraph *dbGraph, ArtsAnalysisManager *AM)
+    : func(func), dbGraph(dbGraph), analysisManager(AM) {
   ARTS_INFO("Creating EDT graph for function: " << func.getName().str());
 }
 
@@ -87,7 +88,7 @@ NodeBase *EdtGraph::getOrCreateNode(Operation *op) {
     auto it = edtNodes.find(edtOp);
     if (it != edtNodes.end())
       return it->second.get();
-    auto newNode = std::make_unique<EdtNode>(edtOp);
+    auto newNode = std::make_unique<EdtNode>(edtOp, analysisManager);
     newNode->setHierId("T" + std::to_string(edtNodes.size() + 1));
     NodeBase *ptr = newNode.get();
     edtNodes[edtOp] = std::move(newNode);

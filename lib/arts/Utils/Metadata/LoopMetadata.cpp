@@ -135,8 +135,6 @@ LoopMetadata::stringToParallelClassification(llvm::StringRef str) const {
 /// Interface
 ////===----------------------------------------------------------------------===////
 bool LoopMetadata::importFromOp() {
-  MLIRContext *ctx = op_->getContext();
-  OpBuilder builder(ctx);
   importIdFromOp();
 
   /// Get the metadata attribute
@@ -217,8 +215,8 @@ void LoopMetadata::importFromJson(const llvm::json::Object &json) {
   reductionKinds.clear();
   if (auto *arr = json.getArray(AttrNames::LoopMetadata::ReductionKinds)) {
     for (const auto &e : *arr)
-      if (auto s = e.getAsString())
-        reductionKinds.push_back(stringToReductionKind(*s));
+      if (auto i = e.getAsInteger())
+        reductionKinds.push_back(static_cast<ReductionKind>(*i));
   }
   readCount = json.getInteger(AttrNames::LoopMetadata::ReadCount).value_or(0);
   writeCount = json.getInteger(AttrNames::LoopMetadata::WriteCount).value_or(0);
@@ -262,9 +260,8 @@ void LoopMetadata::importFromJson(const llvm::json::Object &json) {
       json.getInteger(AttrNames::LoopMetadata::PoorTemporalLocalityMemrefs)
           .value_or(0);
   parallelClassification = ParallelClassification::Unknown;
-  if (auto str =
-          json.getString(AttrNames::LoopMetadata::ParallelClassification))
-    parallelClassification = stringToParallelClassification(*str);
+  if (auto i = json.getInteger(AttrNames::LoopMetadata::ParallelClassification))
+    parallelClassification = static_cast<ParallelClassification>(*i);
   locationMetadata.fromKey(
       json.getString(AttrNames::LoopMetadata::LocationKey).value_or(""));
 }
@@ -277,7 +274,7 @@ void LoopMetadata::exportToJson(llvm::json::Object &json) const {
   if (!reductionKinds.empty()) {
     llvm::json::Array kinds;
     for (auto k : reductionKinds)
-      kinds.push_back(reductionKindToString(k));
+      kinds.push_back(static_cast<int64_t>(k));
     json[AttrNames::LoopMetadata::ReductionKinds.str()] = std::move(kinds);
   }
   json[AttrNames::LoopMetadata::ReadCount.str()] = readCount;
@@ -287,11 +284,10 @@ void LoopMetadata::exportToJson(llvm::json::Object &json) const {
   json[AttrNames::LoopMetadata::HasUniformStride.str()] = hasUniformStride;
   json[AttrNames::LoopMetadata::HasGatherScatter.str()] = hasGatherScatter;
   json[AttrNames::LoopMetadata::DataMovementPattern.str()] =
-      dataMovementPattern ? dataMovementToString(*dataMovementPattern)
-                          : "unknown";
+      static_cast<int64_t>(dataMovementPattern.value_or(DataMovement::Unknown));
   json[AttrNames::LoopMetadata::SuggestedPartitioning.str()] =
-      suggestedPartitioning ? partitioningToString(*suggestedPartitioning)
-                            : "unknown";
+      static_cast<int64_t>(
+          suggestedPartitioning.value_or(Partitioning::Unknown));
   json[AttrNames::LoopMetadata::SuggestedChunkSize.str()] = suggestedChunkSize;
   json[AttrNames::LoopMetadata::MemoryFootprintPerIter.str()] =
       memoryFootprintPerIter;
@@ -311,7 +307,7 @@ void LoopMetadata::exportToJson(llvm::json::Object &json) const {
       poorTemporalLocalityMemrefCount.value_or(0);
   if (parallelClassification)
     json[AttrNames::LoopMetadata::ParallelClassification.str()] =
-        parallelClassificationToString(*parallelClassification);
+        static_cast<int64_t>(*parallelClassification);
   json[AttrNames::LoopMetadata::LocationKey.str()] =
       locationMetadata.toString();
 }

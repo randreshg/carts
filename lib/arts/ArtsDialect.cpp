@@ -452,7 +452,8 @@ MemRefType DbAllocOp::getAllocatedElementType() {
 void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
                         ArtsMode mode, Value sourceGuid, Value sourcePtr,
                         SmallVector<Value> indices, SmallVector<Value> offsets,
-                        SmallVector<Value> sizes) {
+                        SmallVector<Value> sizes, Value chunkOffsetHint,
+                        Value chunkSizeHint) {
   auto sourceDb = arts::getUnderlyingDb(sourcePtr);
   auto sourceDbAlloc =
       dyn_cast<DbAllocOp>(arts::getUnderlyingDbAlloc(sourcePtr));
@@ -507,22 +508,28 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
   state.addOperands(indices);
   state.addOperands(offsets);
   state.addOperands(sizes);
+  if (chunkOffsetHint)
+    state.addOperands(chunkOffsetHint);
+  if (chunkSizeHint)
+    state.addOperands(chunkSizeHint);
 
   /// Build operand segment sizes: [source_guid(0/1), source_ptr=1, indices,
-  /// offsets, sizes]
+  /// offsets, sizes, chunkOffsetHint, chunkSizeHint]
   state.addAttribute(
       "operandSegmentSizes",
-      builder.getDenseI32ArrayAttr({sourceGuid ? 1 : 0, 1,
-                                    static_cast<int32_t>(indices.size()),
-                                    static_cast<int32_t>(offsets.size()),
-                                    static_cast<int32_t>(sizes.size())}));
+      builder.getDenseI32ArrayAttr(
+          {sourceGuid ? 1 : 0, 1, static_cast<int32_t>(indices.size()),
+           static_cast<int32_t>(offsets.size()),
+           static_cast<int32_t>(sizes.size()), chunkOffsetHint ? 1 : 0,
+           chunkSizeHint ? 1 : 0}));
 }
 
 /// DbAcquireOp builder with explicit ptr type (for block arguments)
 void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
                         ArtsMode mode, Value sourceGuid, Value sourcePtr,
                         Type ptrType, SmallVector<Value> indices,
-                        SmallVector<Value> offsets, SmallVector<Value> sizes) {
+                        SmallVector<Value> offsets, SmallVector<Value> sizes,
+                        Value chunkOffsetHint, Value chunkSizeHint) {
   /// When sourceGuid is null and sourcePtr is a block argument,
   /// we can't trace back to find the DB, so we use explicit sizes/offsets
 
@@ -553,14 +560,19 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
   state.addOperands(indices);
   state.addOperands(offsets);
   state.addOperands(sizes);
+  if (chunkOffsetHint)
+    state.addOperands(chunkOffsetHint);
+  if (chunkSizeHint)
+    state.addOperands(chunkSizeHint);
 
   /// Build operand segment sizes
   state.addAttribute(
       "operandSegmentSizes",
-      builder.getDenseI32ArrayAttr({sourceGuid ? 1 : 0, 1,
-                                    static_cast<int32_t>(indices.size()),
-                                    static_cast<int32_t>(offsets.size()),
-                                    static_cast<int32_t>(sizes.size())}));
+      builder.getDenseI32ArrayAttr(
+          {sourceGuid ? 1 : 0, 1, static_cast<int32_t>(indices.size()),
+           static_cast<int32_t>(offsets.size()),
+           static_cast<int32_t>(sizes.size()), chunkOffsetHint ? 1 : 0,
+           chunkSizeHint ? 1 : 0}));
 }
 
 LogicalResult DbAcquireOp::verify() {
