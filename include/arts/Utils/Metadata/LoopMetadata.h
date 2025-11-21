@@ -19,7 +19,6 @@
 #include "mlir/Support/LLVM.h"
 #include <optional>
 #include <string>
-#include <vector>
 
 namespace mlir {
 namespace arts {

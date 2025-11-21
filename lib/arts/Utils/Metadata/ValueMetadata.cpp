@@ -68,8 +68,8 @@ void ValueMetadata::exportToOp() { ArtsMetadata::exportToOp(); }
 void ValueMetadata::importFromJson(const llvm::json::Object &json) {
   importIdFromJson(json);
   /// Import source type
-  if (auto typeStr = json.getString(AttrNames::ValueMetadata::SourceType))
-    type = stringToSourceType(*typeStr);
+  if (auto i = json.getInteger(AttrNames::ValueMetadata::SourceType))
+    type = static_cast<SourceType>(*i);
 
   /// Import index
   index = json.getInteger(AttrNames::ValueMetadata::Index).value_or(0);
@@ -85,7 +85,7 @@ void ValueMetadata::importFromJson(const llvm::json::Object &json) {
 
 void ValueMetadata::exportToJson(llvm::json::Object &json) const {
   exportIdToJson(json);
-  json[AttrNames::ValueMetadata::SourceType.str()] = sourceTypeToString();
+  json[AttrNames::ValueMetadata::SourceType.str()] = static_cast<int64_t>(type);
   json[AttrNames::ValueMetadata::Index.str()] = static_cast<int64_t>(index);
   if (!varName.empty())
     json[AttrNames::ValueMetadata::VarName.str()] = varName;

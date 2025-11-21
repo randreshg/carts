@@ -109,15 +109,11 @@ EdtGraph &EdtAnalysis::getOrCreateEdtGraph(func::FuncOp func) {
   auto it = edtGraphs.find(func);
   if (it != edtGraphs.end())
     return *it->second.get();
-  // Build using DbGraph from DbAnalysis for consistency
+  
+  /// Build using DbGraph from DbAnalysis for consistency
   DbGraph &db = getAnalysisManager().getDbAnalysis().getOrCreateGraph(func);
-  auto eg = std::make_unique<EdtGraph>(func, &db);
+  auto eg = std::make_unique<EdtGraph>(func, &db, &getAnalysisManager());
   eg->build();
-
-  /// Print EDT graph for debugging
-  llvm::errs() << "\n";
-  eg->print(llvm::errs());
-  llvm::errs().flush();
 
   auto *ptr = eg.get();
   const_cast<EdtAnalysis *>(this)->edtGraphs[func] = std::move(eg);

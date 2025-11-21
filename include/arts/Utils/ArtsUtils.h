@@ -86,6 +86,8 @@ Value castToIndex(Value value, OpBuilder &builder, Location loc);
 Value extractOriginalSize(Value numerator, Value denominator,
                           OpBuilder &builder, Location loc);
 Value extractArrayIndexFromByteOffset(Value byteOffset, Type elemType);
+Value ensureIndexType(Value value, OpBuilder &builder, Location loc);
+void collectWhileBounds(Value cond, Value iterArg, SmallVector<Value> &bounds);
 
 ///===----------------------------------------------------------------------===///
 /// Operation Replacement Utilities

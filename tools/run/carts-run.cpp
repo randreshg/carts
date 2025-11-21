@@ -266,7 +266,7 @@ void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 
 /// Db creation pass.
 void setupCreateDbs(PassManager &pm, arts::ArtsAnalysisManager *AM) {
-  pm.addPass(arts::createCreateDbsPass());
+  pm.addPass(arts::createCreateDbsPass(AM));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createSymbolDCEPass());

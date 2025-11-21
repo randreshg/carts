@@ -84,8 +84,11 @@ constexpr StringLiteral DominantAccessPattern = "dominant_access_pattern";
 constexpr StringLiteral AccessedInParallelLoop = "accessed_in_parallel_loop";
 constexpr StringLiteral HasLoopCarriedDeps = "has_loop_carried_deps";
 constexpr StringLiteral ReuseDistance = "reuse_distance";
+constexpr StringLiteral TemporalLocality = "temporal_locality";
 constexpr StringLiteral HasGoodSpatialLocality = "has_good_spatial_locality";
 constexpr StringLiteral AverageStride = "average_stride";
+constexpr StringLiteral DimAccessPatterns = "dim_access_patterns";
+constexpr StringLiteral EstimatedAccessBytes = "estimated_access_bytes";
 
 /// Lifetime information
 constexpr StringLiteral FirstUseId = "first_use_id";
@@ -123,6 +126,14 @@ constexpr StringLiteral NestingDepth = "nesting_depth";
 ///===--------------------------------------------------------------------===///
 class MemrefMetadata : public ArtsMetadata {
 public:
+  enum class DimAccessPatternType {
+    Unknown = 0,
+    Constant = 1,
+    UnitStride = 2,
+    Affine = 3,
+    NonAffine = 4
+  };
+
   //===-------------------------------------------------------------===//
   /// Attributes
   //===-------------------------------------------------------------===//
@@ -154,6 +165,8 @@ public:
   std::optional<int64_t> reuseDistance;
   std::optional<TemporalLocalityLevel> temporalLocality;
   std::optional<SpatialLocalityLevel> spatialLocality;
+  std::optional<int64_t> estimatedAccessBytes;
+  SmallVector<DimAccessPatternType> dimAccessPatterns;
 
   ///===--------------------------------------------------------------------===///
   /// Constructors
@@ -190,6 +203,9 @@ public:
   static std::string spatialLocalityToString(SpatialLocalityLevel level);
   static std::optional<SpatialLocalityLevel>
   stringToSpatialLocality(llvm::StringRef str);
+  static std::string dimAccessPatternToString(DimAccessPatternType pattern);
+  static std::optional<DimAccessPatternType>
+  stringToDimAccessPattern(llvm::StringRef str);
 
 private:
   Operation *allocOp_;

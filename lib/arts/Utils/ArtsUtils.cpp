@@ -675,5 +675,43 @@ Value extractArrayIndexFromByteOffset(Value byteOffset, Type elemType) {
   return Value();
 }
 
+Value ensureIndexType(Value value, OpBuilder &builder, Location loc) {
+  if (!value)
+    return Value();
+  if (value.getType().isa<IndexType>())
+    return value;
+  if (auto intTy = value.getType().dyn_cast<IntegerType>())
+    return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
+                                              value);
+  return Value();
+}
+
+void collectWhileBounds(Value cond, Value iterArg, SmallVector<Value> &bounds) {
+  if (!cond)
+    return;
+  cond = stripNumericCasts(cond);
+  if (auto andOp = cond.getDefiningOp<arith::AndIOp>()) {
+    collectWhileBounds(andOp.getLhs(), iterArg, bounds);
+    collectWhileBounds(andOp.getRhs(), iterArg, bounds);
+    return;
+  }
+  if (auto cmp = cond.getDefiningOp<arith::CmpIOp>()) {
+    auto lhs = stripNumericCasts(cmp.getLhs());
+    auto rhs = stripNumericCasts(cmp.getRhs());
+    auto pred = cmp.getPredicate();
+    auto isLessPred =
+        pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::ult;
+    if (lhs == iterArg && isLessPred) {
+      bounds.push_back(cmp.getRhs());
+      return;
+    }
+    if (rhs == iterArg && (pred == arith::CmpIPredicate::sgt ||
+                           pred == arith::CmpIPredicate::ugt)) {
+      bounds.push_back(cmp.getLhs());
+      return;
+    }
+  }
+}
+
 } // namespace arts
 } // namespace mlir
