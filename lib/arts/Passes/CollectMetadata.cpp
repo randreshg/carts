@@ -48,6 +48,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <limits>
 #include <memory>
+#include <utility>
 
 /// Debug
 #include "arts/Utils/ArtsDebug.h"
@@ -110,7 +111,7 @@ struct CollectMetadataPass : public CollectMetadataBase<CollectMetadataPass> {
     ///  Print statistics
     ARTS_DEBUG("CollectMetadata: Collected metadata for " << manager->size()
                                                           << " operations");
-    manager->printStatistics(llvm::errs());
+    manager->printStatistics(ARTS_DBGS());
   }
 
 private:
@@ -169,8 +170,7 @@ private:
   }
 
   struct LoopMemrefUsage {
-    int64_t readCount = 0;
-    int64_t writeCount = 0;
+    uint64_t readCount = 0, writeCount = 0;
     MemrefMetadata *memrefMetadata = nullptr;
     bool hasLoopCarriedDeps = false;
   };
@@ -208,8 +208,8 @@ private:
       if (usage.empty())
         return;
 
-      int64_t readOnly = 0, writeOnly = 0, readWrite = 0;
-      int64_t memrefsWithDeps = 0, poorTemporal = 0;
+      uint64_t readOnly = 0, writeOnly = 0, readWrite = 0;
+      uint64_t memrefsWithDeps = 0, poorTemporal = 0;
       for (auto &entry : usage) {
         LoopMemrefUsage &info = entry.second;
         bool hasReads = info.readCount > 0;

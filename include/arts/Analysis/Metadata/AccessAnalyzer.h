@@ -53,6 +53,17 @@ public:
     return isa<affine::AffineStoreOp, memref::StoreOp>(op);
   }
 
+  /// Inspect whether an index expression is affine.
+  bool isAffineIndex(Value value) const { return isAffineIndexExpr(value); }
+
+  /// Inspect whether an index expression represents unit stride.
+  bool isUnitStrideLike(Value value) const { return isUnitStrideIndex(value); }
+
+  /// Inspect if an index expression is a constant.
+  bool isConstantIndexValue(Value value) const {
+    return isConstantIndex(value);
+  }
+
   /// Get the memref being accessed
   Value getAccessedMemref(Operation *op) const {
     if (auto load = dyn_cast<affine::AffineLoadOp>(op))

@@ -82,7 +82,6 @@
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/FileSystem.h"
 #include <memory>
 #include <optional>
 
@@ -197,13 +196,6 @@ private:
                       Value workerIdPlaceholder, EdtOp parallelEdt,
                       ReductionInfo &redInfo);
 
-  /// Create chunk-based db_acquire operations using worker_id
-  SmallVector<Value> createChunkAcquires(ArtsCodegen *AC, Location loc,
-                                         Value chunkOffset, Value chunkSize,
-                                         ValueRange parentDeps,
-                                         Block &parallelBlock, EdtOp taskEdt,
-                                         IRMapping &mapper);
-
   /// Clone loop body into task EDT's scf.for
   void cloneLoopBody(ArtsCodegen *AC, ForOp forOp, scf::ForOp chunkLoop,
                      Value chunkOffset, IRMapping &mapper);
@@ -222,9 +214,6 @@ private:
 
   void lowerSingleFor(ArtsCodegen &AC, EdtOp parallelEdt, ForOp forOp);
 
-  /// Ensure sequential metadata has been imported into the module so the
-  /// original arts.for operations carry loop metadata before lowering.
-  void ensureMetadataAvailable();
   Attribute getLoopMetadataAttr(ForOp forOp);
 };
 
@@ -336,8 +325,6 @@ void ForLoweringPass::runOnOperation() {
   ARTS_INFO_HEADER(ForLowering);
   ARTS_DEBUG_REGION(module.dump(););
 
-  ensureMetadataAvailable();
-
   /// Walk all parallel EDTs and lower arts.for operations
   SmallVector<EdtOp, 4> parallelEdts;
   module.walk([&](EdtOp edt) {
@@ -407,16 +394,8 @@ void ForLoweringPass::lowerSingleFor(ArtsCodegen &AC, EdtOp parallelEdt,
   }
 
   /// Create a single task EDT that uses the worker_id placeholder
-  EdtOp taskEdt = createTaskEdt(&AC, loopInfo, forOp, workerIdPlaceholder,
-                                parallelEdt, redInfo);
-
-  ARTS_DEBUG_REGION({
-    if (taskEdt)
-      ARTS_INFO(" - Created task EDT with worker_id placeholder");
-    else
-      ARTS_ERROR(" - Failed to create task EDT");
-  });
-
+  createTaskEdt(&AC, loopInfo, forOp, workerIdPlaceholder, parallelEdt,
+                redInfo);
   /// If reductions exist, create result EDT to combine partial accumulators
   if (!redInfo.reductionVars.empty()) {
     AC.setInsertionPointToEnd(&epochBlock);
@@ -447,28 +426,6 @@ void ForLoweringPass::lowerSingleFor(ArtsCodegen &AC, EdtOp parallelEdt,
       AC.create<DbFreeOp>(loc, redInfo.finalResultGuids[i]);
       AC.create<DbFreeOp>(loc, redInfo.finalResultPtrs[i]);
     }
-  }
-}
-
-void ForLoweringPass::ensureMetadataAvailable() {
-  if (module->hasAttr("arts.for_lowering.metadata_imported"))
-    return;
-
-  std::string metadataPath = ".carts-metadata.json";
-  if (!llvm::sys::fs::exists(metadataPath)) {
-    ARTS_DEBUG("Metadata file " << metadataPath
-                                << " not found for ForLowering");
-    return;
-  }
-
-  ArtsMetadataManager manager(module.getContext());
-  if (manager.importFromJsonFile(module, metadataPath)) {
-    ARTS_INFO("Imported metadata for ForLowering from " << metadataPath);
-    module->setAttr("arts.for_lowering.metadata_imported",
-                    mlir::UnitAttr::get(module.getContext()));
-  } else {
-    ARTS_WARN("Failed to import metadata for ForLowering from "
-              << metadataPath);
   }
 }
 
@@ -631,14 +588,12 @@ EdtOp ForLoweringPass::createTaskEdt(ArtsCodegen *AC, LoopInfo &loopInfo,
     if (shouldSkipReductionArg(parallelArg, redInfo, reductionBlockArgs))
       continue;
 
-    /// Acquire using parallel EDT's block arg (coarse-grained acquire)
-    /// Partitioning is done by the DbPass after the ForLowering pass
-    SmallVector<Value> chunkOffsets, chunkSizes;
-    chunkOffsets.push_back(chunkOffset);
-    chunkSizes.push_back(loopInfo.workerIterationCount);
+    /// Acquire using parallel EDT's block arg (coarse-grained acquire) and
+    /// attach chunk hints so DbPass can reuse the known partitioning.
     auto chunkAcqOp = AC->create<DbAcquireOp>(
         loc, parentAcqOp.getMode(), Value(), parallelArg, parallelArg.getType(),
-        ValueRange{}, chunkOffsets, chunkSizes);
+        ValueRange{}, ValueRange{}, ValueRange{}, chunkOffset,
+        loopInfo.workerIterationCount);
     Value acquirePtr = chunkAcqOp.getResult(1);
 
     /// Replace uses within arts.for so cloned body uses acquire result
@@ -787,65 +742,6 @@ EdtOp ForLoweringPass::createTaskEdt(ArtsCodegen *AC, LoopInfo &loopInfo,
   AC->setInsertionPointAfter(ifOp);
 
   return taskEdt;
-}
-
-SmallVector<Value> ForLoweringPass::createChunkAcquires(
-    ArtsCodegen *AC, Location loc, Value chunkOffset, Value chunkSize,
-    ValueRange parentDeps, Block &parallelBlock, EdtOp taskEdt,
-    IRMapping &mapper) {
-  SmallVector<Value> taskDeps;
-  Block &taskBlock = taskEdt.getBody().front();
-
-  ARTS_DEBUG("    Creating " << parentDeps.size() << " chunk-based acquires");
-
-  /// For each db_acquire dependency from parent, create a chained acquire
-  /// We don't partition the DB - each task acquires the entire DB. The DB pass
-  /// will add partitioning logic later.
-  for (auto [idx, parentDep] : llvm::enumerate(parentDeps)) {
-    /// Check if this dependency is from a DbAcquireOp (returns DbHandleType)
-    auto parentAcqOp = parentDep.getDefiningOp<DbAcquireOp>();
-    if (!parentAcqOp) {
-      ARTS_DEBUG("    Skipping non-DbAcquireOp dependency at index " << idx);
-      continue;
-    }
-
-    /// Get the corresponding block argument in the parallel EDT
-    /// Parent acquire handle becomes a block argument inside parallel EDT
-    BlockArgument parallelArg = parallelBlock.getArgument(idx);
-
-    /// Add block argument to task EDT first (receives ptr from parallel EDT)
-    BlockArgument taskArg = taskBlock.addArgument(parallelArg.getType(), loc);
-
-    /// Create acquire for whole DB inside task EDT, using task's block arg
-    auto chunkAcqOp = AC->create<DbAcquireOp>(
-        loc, parentAcqOp.getMode(), Value(), taskArg, parallelArg.getType(),
-        ValueRange{}, ValueRange{}, ValueRange{});
-
-    /// DbAcquireOp returns (guid, ptr) tuple
-    /// The ptr result is what the loop body should use (not the block arg)
-    Value acquirePtr = chunkAcqOp.getResult(1);
-
-    /// Map parallel EDT's block arg to the acquire's ptr result
-    /// This way the loop body uses the locally acquired ptr, not external
-    /// values
-    mapper.map(parallelArg, acquirePtr);
-
-    /// Track the parallel EDT's ptr as dependency (to pass to task EDT)
-    taskDeps.push_back(parallelArg);
-
-    ARTS_DEBUG(
-        "    Created chunk acquire: indices=[chunkOffset], sizes=[chunkSize]");
-  }
-
-  /// Set task EDT operands to the acquired dependencies (handles)
-  SmallVector<Value> edtOperands;
-  if (Value route = taskEdt.getRoute())
-    edtOperands.push_back(route);
-  for (Value dep : taskDeps)
-    edtOperands.push_back(dep);
-  taskEdt->setOperands(edtOperands);
-
-  return taskDeps;
 }
 
 void ForLoweringPass::cloneLoopBody(ArtsCodegen *AC, ForOp forOp,

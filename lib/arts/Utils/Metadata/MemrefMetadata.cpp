@@ -117,6 +117,38 @@ MemrefMetadata::stringToSpatialLocality(llvm::StringRef str) {
   return std::nullopt;
 }
 
+std::string
+MemrefMetadata::dimAccessPatternToString(DimAccessPatternType pattern) {
+  switch (pattern) {
+  case DimAccessPatternType::Constant:
+    return "constant";
+  case DimAccessPatternType::UnitStride:
+    return "unit_stride";
+  case DimAccessPatternType::Affine:
+    return "affine";
+  case DimAccessPatternType::NonAffine:
+    return "non_affine";
+  case DimAccessPatternType::Unknown:
+    return "unknown";
+  }
+  return "unknown";
+}
+
+std::optional<MemrefMetadata::DimAccessPatternType>
+MemrefMetadata::stringToDimAccessPattern(llvm::StringRef str) {
+  if (str == "constant")
+    return DimAccessPatternType::Constant;
+  if (str == "unit_stride")
+    return DimAccessPatternType::UnitStride;
+  if (str == "affine")
+    return DimAccessPatternType::Affine;
+  if (str == "non_affine")
+    return DimAccessPatternType::NonAffine;
+  if (str == "unknown")
+    return DimAccessPatternType::Unknown;
+  return std::nullopt;
+}
+
 ///===----------------------------------------------------------------------===///
 // ArtsMetadata Interface Implementation
 ///===----------------------------------------------------------------------===///
@@ -163,9 +195,10 @@ bool MemrefMetadata::importFromOp() {
   /// Import extended access characterization
   hasUniformAccess = getBoolFromAttr(attr.getHasUniformAccess());
   hasStrideOneAccess = getBoolFromAttr(attr.getHasStrideOneAccess());
-  if (attr.getDominantAccessPattern())
-    dominantAccessPattern =
-        stringToAccessPattern(attr.getDominantAccessPattern().getValue());
+  if (auto value = getIntFromAttr(attr.getDominantAccessPattern()))
+    dominantAccessPattern = static_cast<AccessPatternType>(value.value());
+  else
+    dominantAccessPattern.reset();
   if (auto nestingDepthVal = getIntFromAttr(attr.getNestingDepth()))
     nestingDepth = *nestingDepthVal;
   accessedInParallelLoop = getBoolFromAttr(attr.getAccessedInParallelLoop());
@@ -178,6 +211,16 @@ bool MemrefMetadata::importFromOp() {
                           ? SpatialLocalityLevel::Good
                           : SpatialLocalityLevel::Poor;
   }
+  if (auto dimAttr = attr.getDimAccessPatterns()) {
+    dimAccessPatterns.clear();
+    for (Attribute entry : dimAttr.getValue()) {
+      if (auto intAttr = dyn_cast<IntegerAttr>(entry))
+        dimAccessPatterns.push_back(
+            static_cast<DimAccessPatternType>(intAttr.getInt()));
+    }
+  }
+  if (auto est = getIntFromAttr(attr.getEstimatedAccessBytes()))
+    estimatedAccessBytes = *est;
 
   return true;
 }
@@ -201,10 +244,11 @@ Attribute MemrefMetadata::getMetadataAttr() const {
     return v ? builder.getF64FloatAttr(*v) : FloatAttr();
   };
 
-  /// Helper to convert AccessPatternType enum to StringAttr
+  /// Helper to convert AccessPatternType enum to IntegerAttr
   auto toAccessPatternAttr =
-      [&](const std::optional<AccessPatternType> &v) -> StringAttr {
-    return v ? builder.getStringAttr(accessPatternToString(*v)) : StringAttr();
+      [&](const std::optional<AccessPatternType> &v) -> IntegerAttr {
+    return v ? builder.getI64IntegerAttr(static_cast<int64_t>(*v))
+             : IntegerAttr();
   };
 
   /// Helper to convert SpatialLocalityLevel enum to BoolAttr (for backward
@@ -216,6 +260,16 @@ Attribute MemrefMetadata::getMetadataAttr() const {
                                    SpatialLocalityLevel::Excellent ||
                                *spatialLocality == SpatialLocalityLevel::Good);
   };
+
+  ArrayAttr dimPatternAttr;
+  if (!dimAccessPatterns.empty()) {
+    SmallVector<Attribute> patterns;
+    patterns.reserve(dimAccessPatterns.size());
+    for (DimAccessPatternType pattern : dimAccessPatterns)
+      patterns.push_back(
+          builder.getI64IntegerAttr(static_cast<int64_t>(pattern)));
+    dimPatternAttr = builder.getArrayAttr(patterns);
+  }
 
   /// Build the MemrefMetadataAttr
   return MemrefMetadataAttr::get(
@@ -236,7 +290,8 @@ Attribute MemrefMetadata::getMetadataAttr() const {
       toBoolAttr(hasUniformAccess), toBoolAttr(hasStrideOneAccess),
       toAccessPatternAttr(dominantAccessPattern), toIntAttr(nestingDepth),
       toBoolAttr(accessedInParallelLoop), toBoolAttr(hasLoopCarriedDeps),
-      toIntAttr(reuseDistance), spatialLocalityToBool());
+      toIntAttr(reuseDistance), spatialLocalityToBool(), dimPatternAttr,
+      toIntAttr(estimatedAccessBytes));
 }
 
 void MemrefMetadata::exportToJson(llvm::json::Object &json) const {
@@ -273,17 +328,25 @@ void MemrefMetadata::exportToJson(llvm::json::Object &json) const {
   setBool(hasStrideOneAccess, AttrNames::MemrefMetadata::HasStrideOneAccess);
   if (dominantAccessPattern)
     json[AttrNames::MemrefMetadata::DominantAccessPattern.str()] =
-        accessPatternToString(*dominantAccessPattern);
+        static_cast<int64_t>(*dominantAccessPattern);
   setI64(nestingDepth, AttrNames::MemrefMetadata::NestingDepth);
   setBool(accessedInParallelLoop,
           AttrNames::MemrefMetadata::AccessedInParallelLoop);
   setBool(hasLoopCarriedDeps, AttrNames::MemrefMetadata::HasLoopCarriedDeps);
   setI64(reuseDistance, AttrNames::MemrefMetadata::ReuseDistance);
   if (temporalLocality)
-    json["temporal_locality"] = temporalLocalityToString(*temporalLocality);
+    json[AttrNames::MemrefMetadata::TemporalLocality.str()] =
+        static_cast<int64_t>(*temporalLocality);
   if (spatialLocality)
     json[AttrNames::MemrefMetadata::HasGoodSpatialLocality.str()] =
-        spatialLocalityToString(*spatialLocality);
+        static_cast<int64_t>(*spatialLocality);
+  if (!dimAccessPatterns.empty()) {
+    llvm::json::Array dims;
+    for (DimAccessPatternType pattern : dimAccessPatterns)
+      dims.emplace_back(static_cast<int64_t>(pattern));
+    json[AttrNames::MemrefMetadata::DimAccessPatterns.str()] = std::move(dims);
+  }
+  setI64(estimatedAccessBytes, AttrNames::MemrefMetadata::EstimatedAccessBytes);
   /// Export lifetime information
   if (firstUseId)
     json[AttrNames::MemrefMetadata::FirstUseId.str()] =
@@ -332,8 +395,9 @@ void MemrefMetadata::importFromJson(const llvm::json::Object &json) {
 
   getBool(AttrNames::MemrefMetadata::HasUniformAccess, hasUniformAccess);
   getBool(AttrNames::MemrefMetadata::HasStrideOneAccess, hasStrideOneAccess);
-  if (auto s = json.getString(AttrNames::MemrefMetadata::DominantAccessPattern))
-    dominantAccessPattern = stringToAccessPattern(*s);
+  if (auto i =
+          json.getInteger(AttrNames::MemrefMetadata::DominantAccessPattern))
+    dominantAccessPattern = static_cast<AccessPatternType>(*i);
   getI64(AttrNames::MemrefMetadata::NestingDepth, nestingDepth);
   getBool(AttrNames::MemrefMetadata::AccessedInParallelLoop,
           accessedInParallelLoop);
@@ -341,16 +405,26 @@ void MemrefMetadata::importFromJson(const llvm::json::Object &json) {
   getI64(AttrNames::MemrefMetadata::ReuseDistance, reuseDistance);
 
   /// Import temporal locality
-  if (auto s = json.getString("temporal_locality"))
-    temporalLocality = stringToTemporalLocality(*s);
+  if (auto i = json.getInteger(AttrNames::MemrefMetadata::TemporalLocality))
+    temporalLocality = static_cast<TemporalLocalityLevel>(*i);
 
-  /// Import spatial locality (new enum format)
-  if (auto s =
-          json.getString(AttrNames::MemrefMetadata::HasGoodSpatialLocality))
-    spatialLocality = stringToSpatialLocality(*s);
+  /// Import spatial locality
+  if (auto i =
+          json.getInteger(AttrNames::MemrefMetadata::HasGoodSpatialLocality))
+    spatialLocality = static_cast<SpatialLocalityLevel>(*i);
   /// Backward compatibility: convert old bool format to enum
   else if (auto b = json.getBoolean(
                AttrNames::MemrefMetadata::HasGoodSpatialLocality))
     spatialLocality =
         *b ? SpatialLocalityLevel::Good : SpatialLocalityLevel::Poor;
+
+  if (auto arr = json.getArray(AttrNames::MemrefMetadata::DimAccessPatterns)) {
+    dimAccessPatterns.clear();
+    for (const llvm::json::Value &entry : *arr) {
+      if (auto i = entry.getAsInteger())
+        dimAccessPatterns.push_back(static_cast<DimAccessPatternType>(*i));
+    }
+  }
+
+  getI64(AttrNames::MemrefMetadata::EstimatedAccessBytes, estimatedAccessBytes);
 }

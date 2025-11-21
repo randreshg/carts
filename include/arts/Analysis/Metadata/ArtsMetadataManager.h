@@ -37,6 +37,7 @@ constexpr StringLiteral Memrefs = "memrefs";
 constexpr StringLiteral Locations = "locations";
 constexpr StringLiteral Values = "values";
 constexpr StringLiteral Allocations = "allocations";
+constexpr StringLiteral SerializedBlob = "arts.metadata.serialized";
 } // namespace Metadata
 } // namespace AttrNames
 
@@ -75,6 +76,8 @@ public:
   const LoopMetadata *getLoopMetadata(Operation *op) const;
   MemrefMetadata *getMemrefMetadata(Operation *op);
   const MemrefMetadata *getMemrefMetadata(Operation *op) const;
+  MemrefMetadata *getMemrefMetadataById(int64_t artsId);
+  const MemrefMetadata *getMemrefMetadataById(int64_t artsId) const;
   ValueMetadata *getValueMetadata(Operation *op);
   const ValueMetadata *getValueMetadata(Operation *op) const;
 
@@ -120,6 +123,7 @@ public:
     memrefJsonCache.clear();
     jsonCacheInitialized = false;
     nextMetadataId = 1;
+    serializedMetadataCache.clear();
   }
 
   //===------------------------------------------------------------------===//
@@ -148,12 +152,13 @@ public:
   MLIRContext *getContext() const { return context_; }
 
   //===------------------------------------------------------------------===//
-  // Metadata Recovery Helpers
+  // Metadata Helpers
   //===------------------------------------------------------------------===//
   void setMetadataFile(llvm::StringRef filename);
   bool ensureLoopMetadata(Operation *op);
   bool ensureMemrefMetadata(Operation *op);
   ArtsId assignOperationId(Operation *op);
+  bool transferMetadata(Operation *sourceOp, Operation *targetOp);
 
   //===------------------------------------------------------------------===//
   // Debug and Utilities
@@ -179,6 +184,8 @@ private:
   static bool isMemrefAllocOp(Operation *op);
   void importFromOperation(Operation *op);
   bool loadJsonCache();
+  bool loadJsonCacheFromString(llvm::StringRef jsonStr);
+  bool populateJsonCaches(const llvm::json::Object &root);
   bool attachMetadataFromJson(
       Operation *op, llvm::StringRef key,
       llvm::StringMap<std::unique_ptr<llvm::json::Object>> &cache, bool isLoop);
@@ -186,6 +193,8 @@ private:
                                       const LocationMetadata &loc,
                                       unsigned lineTolerance = 1);
   void initializeMetadata(ArtsMetadata *metadata);
+  bool attachMetadataFromCache(ModuleOp module, llvm::StringRef source);
+  std::string serializedMetadataCache;
 };
 
 } // namespace arts

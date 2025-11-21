@@ -78,6 +78,10 @@ private:
                                           Operation *scopeOp);
   bool isAccessedInsideParallelLoop(Value memref) const;
   bool hasLoopCarriedDependencies(Value memref) const;
+  SmallVector<MemrefMetadata::DimAccessPatternType>
+  computeDimAccessPatterns(Value memref, Operation *scopeOp);
+  std::optional<int64_t> computeEstimatedAccessBytes(Value memref,
+                                                     MemrefMetadata *metadata);
 };
 
 } // namespace arts

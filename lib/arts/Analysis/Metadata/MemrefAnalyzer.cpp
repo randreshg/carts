@@ -7,7 +7,6 @@
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
-#include "arts/Utils/ArtsDebug.h"
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -19,7 +18,15 @@
 using namespace mlir;
 using namespace mlir::arts;
 
-ARTS_DEBUG_SETUP(memref_analyzer);
+namespace {
+using DimPattern = MemrefMetadata::DimAccessPatternType;
+
+DimPattern mergePattern(DimPattern current, DimPattern candidate) {
+  if (static_cast<int64_t>(candidate) > static_cast<int64_t>(current))
+    return candidate;
+  return current;
+}
+} // namespace
 
 ///===----------------------------------------------------------------------===///
 // ReuseAnalyzer Implementation
@@ -158,7 +165,7 @@ std::pair<ArtsId, ArtsId> MemrefAnalyzer::computeLifetime(Value memref,
                                                           Operation *scopeOp) {
   auto getId = [&](Operation *op) -> ArtsId {
     if (!op)
-      return ArtsId();
+      return std::nullopt;
     return metadataManager.assignOperationId(op);
   };
 
@@ -183,17 +190,16 @@ void MemrefAnalyzer::analyzeAccessCharacteristics(Value memref,
     if (accessAnalyzer.getAccessedMemref(op) == memref) {
       if (accessAnalyzer.isAffineAccess(op))
         affineCount++;
-      else {
+      else
         nonAffineCount++;
-        if (metadata)
-          ARTS_DEBUG("Non-affine access for allocation "
-                     << metadata->allocationId << ": " << *op);
-      }
     }
   });
 
   metadata->allAccessesAffine = (affineCount > 0 && nonAffineCount == 0);
   metadata->hasNonAffineAccesses = (nonAffineCount > 0);
+  metadata->dimAccessPatterns = computeDimAccessPatterns(memref, scopeOp);
+  metadata->estimatedAccessBytes =
+      computeEstimatedAccessBytes(memref, metadata);
 }
 
 /// Analyze uniform access pattern
@@ -324,4 +330,78 @@ bool MemrefAnalyzer::hasLoopCarriedDependencies(Value memref) const {
     }
   }
   return false;
+}
+
+SmallVector<MemrefMetadata::DimAccessPatternType>
+MemrefAnalyzer::computeDimAccessPatterns(Value memref, Operation *scopeOp) {
+  SmallVector<MemrefMetadata::DimAccessPatternType> patterns;
+  auto type = memref.getType().dyn_cast<MemRefType>();
+  if (!type)
+    return patterns;
+
+  unsigned rank = type.getRank();
+  patterns.assign(rank, DimPattern::Unknown);
+
+  auto classifyIndex =
+      [&](Value idx, unsigned dim) -> MemrefMetadata::DimAccessPatternType {
+    if (!idx)
+      return DimPattern::Unknown;
+    if (accessAnalyzer.isConstantIndexValue(idx))
+      return DimPattern::Constant;
+    if (dim + 1 == rank && accessAnalyzer.isUnitStrideLike(idx))
+      return DimPattern::UnitStride;
+    if (accessAnalyzer.isAffineIndex(idx))
+      return DimPattern::Affine;
+    return DimPattern::NonAffine;
+  };
+
+  auto updateDim = [&](unsigned dim,
+                       MemrefMetadata::DimAccessPatternType candidate) {
+    if (dim >= patterns.size())
+      return;
+    patterns[dim] = mergePattern(patterns[dim], candidate);
+  };
+
+  scopeOp->walk([&](Operation *op) {
+    if (auto load = dyn_cast<memref::LoadOp>(op)) {
+      if (load.getMemref() != memref)
+        return;
+      for (auto [dim, idx] : llvm::enumerate(load.getIndices()))
+        updateDim(dim, classifyIndex(idx, dim));
+    } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      if (store.getMemRef() != memref)
+        return;
+      for (auto [dim, idx] : llvm::enumerate(store.getIndices()))
+        updateDim(dim, classifyIndex(idx, dim));
+    } else if (auto affineLoad = dyn_cast<affine::AffineLoadOp>(op)) {
+      if (affineLoad.getMemRef() != memref)
+        return;
+      for (unsigned dim = 0; dim < rank; ++dim)
+        updateDim(dim, DimPattern::Affine);
+    } else if (auto affineStore = dyn_cast<affine::AffineStoreOp>(op)) {
+      if (affineStore.getMemRef() != memref)
+        return;
+      for (unsigned dim = 0; dim < rank; ++dim)
+        updateDim(dim, DimPattern::Affine);
+    }
+  });
+
+  return patterns;
+}
+
+std::optional<int64_t>
+MemrefAnalyzer::computeEstimatedAccessBytes(Value memref,
+                                            MemrefMetadata *metadata) {
+  if (!metadata || !metadata->totalAccesses)
+    return std::nullopt;
+
+  auto type = memref.getType().dyn_cast<MemRefType>();
+  if (!type)
+    return std::nullopt;
+
+  uint64_t elemBytes = arts::getElementTypeByteSize(type.getElementType());
+  if (!elemBytes)
+    return std::nullopt;
+
+  return static_cast<int64_t>(*metadata->totalAccesses * elemBytes);
 }

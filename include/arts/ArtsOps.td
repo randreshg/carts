@@ -173,7 +173,9 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     AnyMemRef:$source_ptr,
     Variadic<Index>:$indices,
     Variadic<Index>:$offsets,
-    Variadic<Index>:$sizes
+    Variadic<Index>:$sizes,
+    Optional<Index>:$chunk_offset_hint,
+    Optional<Index>:$chunk_size_hint
   );
   let results = (outs MemRefOf<[I64]>:$guid, AnyMemRef:$ptr);
   let assemblyFormat = [{
@@ -182,6 +184,7 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     ( `indices` `[` $indices^ `]` )?
     ( `offsets` `[` $offsets^ `]` )?
     ( `sizes` `[` $sizes^ `]` )?
+    ( `chunk_hint` `[` $chunk_offset_hint^ `,` $chunk_size_hint `]` )?
     attr-dict `->` `(` type($guid) `,` type($ptr) `)`
   }];
   let hasVerifier = 1;
@@ -192,14 +195,18 @@ def DbAcquireOp : Arts_Op<"db_acquire",
                    "Value":$source_ptr,
                    CArg<"SmallVector<Value>", "{}">:$indices,
                    CArg<"SmallVector<Value>", "{}">:$offsets,
-                   CArg<"SmallVector<Value>", "{}">:$sizes)>,
+                   CArg<"SmallVector<Value>", "{}">:$sizes,
+                   CArg<"Value", "Value()">:$chunk_offset_hint,
+                   CArg<"Value", "Value()">:$chunk_size_hint)>,
     OpBuilder<(ins "ArtsMode":$mode,
                    "Value":$source_guid,
                    "Value":$source_ptr,
                    "Type":$ptrType,
                    CArg<"SmallVector<Value>", "{}">:$indices,
                    CArg<"SmallVector<Value>", "{}">:$offsets,
-                   CArg<"SmallVector<Value>", "{}">:$sizes)>
+                   CArg<"SmallVector<Value>", "{}">:$sizes,
+                   CArg<"Value", "Value()">:$chunk_offset_hint,
+                   CArg<"Value", "Value()">:$chunk_size_hint)>
   ];
 }
 
