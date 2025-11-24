@@ -65,9 +65,11 @@ void EpochLoweringPass::runOnOperation() {
   ARTS_INFO_HEADER(EpochLoweringPass);
   ARTS_DEBUG_REGION(module.dump(););
 
-  /// Collect all epoch operations to process
+  /// Collect all epoch operations bottom-to-top (post-order) so inner epochs
+  /// are lowered before their parents.
   SmallVector<EpochOp> epochOps;
-  module.walk([&](EpochOp epochOp) { epochOps.push_back(epochOp); });
+  module.walk<WalkOrder::PostOrder>(
+      [&](EpochOp epochOp) { epochOps.push_back(epochOp); });
 
   ARTS_INFO("Found " << epochOps.size() << " epoch operations to lower");
 
@@ -123,8 +125,11 @@ void EpochLoweringPass::runOnOperation() {
       edtCreateOp->erase();
     }
 
-    /// Move operations out of epoch region to before the epoch
+    /// Move operations out of epoch region to before the epoch, but keep
+    /// track of where the epoch originally ended so we can insert the wait
+    /// after all of its contents (respecting original ordering).
     auto &epochRegionForMove = epochOp.getRegion();
+    Operation *insertionAfter = epochOp.getOperation();
     if (!epochRegionForMove.empty()) {
       auto &epochBlock = epochRegionForMove.front();
       SmallVector<Operation *> opsToMove;
@@ -132,12 +137,15 @@ void EpochLoweringPass::runOnOperation() {
         if (!isa<EpochOp>(innerOp))
           opsToMove.push_back(&innerOp);
       }
-      for (auto *opToMove : opsToMove)
+      for (auto *opToMove : opsToMove) {
         opToMove->moveBefore(epochOp);
+        insertionAfter = opToMove;
+      }
     }
 
-    /// Wait on the epoch
-    AC->setInsertionPointAfter(epochOp);
+    /// Wait on the epoch after all of its original operations (moved) to
+    /// preserve the epoch ordering hierarchy.
+    AC->setInsertionPointAfter(insertionAfter);
     AC->waitOnHandle(currentEpoch, epochOp.getLoc());
 
     /// Replace the epoch operation with its result (the epoch GUID)

@@ -149,35 +149,18 @@ void ConcurrencyPass::adjustDbModes() {
 
     bool isInterNode = (edtOp.getConcurrency() == EdtConcurrency::internode);
 
-    /// If intranode, ensure datablocks use pinned mode (default)
-    /// If internode, adjust based on access mode
+    /// Set Datablock mode based on access mode
     std::function<void(Operation *)> adjustDbMode = [&](Operation *op) {
       if (auto dbAlloc = dyn_cast<DbAllocOp>(op)) {
-        if (isInterNode) {
-          /// For internode: adjust based on ArtsMode
-          ArtsMode accessMode = dbAlloc.getMode();
-          DbMode newDbMode;
-          if (accessMode == ArtsMode::in) {
-            newDbMode = DbMode::read;
-          } else {
-            /// out or inout -> write mode
-            newDbMode = DbMode::write;
-          }
+        ArtsMode accessMode = dbAlloc.getMode();
+        DbMode newDbMode =
+            (accessMode == ArtsMode::in) ? DbMode::read : DbMode::write;
 
-          /// Update the dbMode attribute
-          OpBuilder builder(dbAlloc.getContext());
-          dbAlloc.setDbModeAttr(
-              DbModeAttr::get(builder.getContext(), newDbMode));
-          ARTS_INFO("Adjusted datablock mode to "
-                    << (newDbMode == DbMode::read ? "read" : "write")
-                    << " for internode EDT");
-        } else {
-          /// For intranode: ensure pinned mode
-          OpBuilder builder(dbAlloc.getContext());
-          dbAlloc.setDbModeAttr(
-              DbModeAttr::get(builder.getContext(), DbMode::pinned));
-          ARTS_INFO("Ensured datablock mode is pinned for intranode EDT");
-        }
+        /// Update the dbMode attribute
+        OpBuilder builder(dbAlloc.getContext());
+        dbAlloc.setDbModeAttr(DbModeAttr::get(builder.getContext(), newDbMode));
+        ARTS_INFO("Adjusted datablock mode to "
+                  << (newDbMode == DbMode::read ? "read" : "write"));
       }
 
       /// Recursively check operands

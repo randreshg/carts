@@ -31,6 +31,7 @@
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/Interfaces/InferTypeOpInterface.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
@@ -117,7 +118,7 @@ private:
 // EDT Lowering Pass Implementation
 ///===----------------------------------------------------------------------===///
 struct EdtLoweringPass : public arts::EdtLoweringBase<EdtLoweringPass> {
-  explicit EdtLoweringPass() {}
+  explicit EdtLoweringPass(uint64_t idStride = 1000) : idStride(idStride) {}
   ~EdtLoweringPass() { delete AC; }
   void runOnOperation() override;
 
@@ -151,6 +152,7 @@ private:
                                     const SmallVector<Value> &deps);
 
   /// Attributes
+  uint64_t idStride = 1000;
   unsigned functionCounter = 0;
   ModuleOp module;
   ArtsCodegen *AC = nullptr;
@@ -174,7 +176,15 @@ void EdtLoweringPass::runOnOperation() {
     ARTS_DEBUG_HEADER(TaskEdtLowering);
     SmallVector<EdtOp, 8> taskEdts;
     module.walk<WalkOrder::PostOrder>([&](EdtOp edtOp) {
-      assert(edtOp.getType() == EdtType::task && "Expected task EDT");
+      /// Demote any remaining non-task EDTs (e.g., single) so we can lower
+      /// them uniformly. Parallel EDTs should have been handled by
+      /// ParallelEdtLowering already.
+      if (edtOp.getType() != EdtType::task) {
+        ARTS_DEBUG("Demoting non-task EDT to task: " << edtOp);
+        edtOp.setType(EdtType::task);
+        edtOp->removeAttr("workers");
+        edtOp->removeAttr("nowait");
+      }
       taskEdts.push_back(edtOp);
     });
     ARTS_INFO("Found " << taskEdts.size() << " task EDTs to lower");
@@ -233,9 +243,11 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
     return edtOp.emitError("Failed to outline region to function");
   }
 
-  /// Calculate total dependency count (sum of elements in all deps)
+  ArrayRef<Value> edtDeps = envManager.getDependencies();
+
+  /// Calculate total dependency count as the sum of elements of all deps
   Value depCount = AC->createIntConstant(0, AC->Int32, loc);
-  for (Value dep : envManager.getDependencies()) {
+  for (Value dep : edtDeps) {
     SmallVector<Value> sizes = getSizesFromDb(dep);
     Value numElements = AC->create<DbNumElementsOp>(loc, sizes);
     numElements = AC->castToInt(AC->Int32, numElements, loc);
@@ -252,12 +264,16 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
 
   outlineOp->setAttr("outlined_func",
                      AC->getBuilder().getStringAttr(outlinedFunc.getName()));
+  if (auto edtId = edtOp->getAttrOfType<IntegerAttr>("arts.id")) {
+    int64_t groupedId = edtId.getInt() * static_cast<int64_t>(idStride);
+    outlineOp->setAttr("arts.create_id",
+                       AC->getBuilder().getI64IntegerAttr(groupedId));
+  }
 
   /// Insert dependency management after the outline op
   Value edtGuid = outlineOp.getGuid();
   AC->setInsertionPointAfter(outlineOp);
-  SmallVector<Value> depsVec(envManager.getDependencies().begin(),
-                             envManager.getDependencies().end());
+  SmallVector<Value> depsVec(edtDeps.begin(), edtDeps.end());
   if (failed(insertDepManagement(loc, edtGuid, depsVec)))
     return edtOp.emitError("Failed to insert dependency management");
 
@@ -446,6 +462,52 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
       valueMapping.map(param, unpackedParams[unpackedIndex++]);
   }
 
+  /// Clone remaining captured values that are pure and regionless (e.g.,
+  /// llvm.getelementptr chains computing format strings) so the outlined
+  /// function does not reference parent-scope SSA values.
+  DenseSet<Operation *> visited;
+  std::function<LogicalResult(Value)> cloneCaptured = [&](Value val) {
+    if (valueMapping.contains(val))
+      return success();
+
+    Operation *defOp = val.getDefiningOp();
+    if (!defOp)
+      return success();
+
+    if (visited.contains(defOp))
+      return success();
+    visited.insert(defOp);
+
+    for (Value operand : defOp->getOperands())
+      if (failed(cloneCaptured(operand)))
+        return failure();
+
+    bool hasRegions = defOp->getNumRegions() != 0;
+    bool hasSideEffects = false;
+    if (auto memInterface = dyn_cast<MemoryEffectOpInterface>(defOp)) {
+      hasSideEffects = memInterface.hasEffect<MemoryEffects::Write>() ||
+                       memInterface.hasEffect<MemoryEffects::Allocate>() ||
+                       memInterface.hasEffect<MemoryEffects::Free>();
+    } else {
+      hasSideEffects = !isMemoryEffectFree(defOp);
+    }
+
+    if (hasRegions || hasSideEffects) {
+      defOp->emitError("Cannot capture non-pure value while outlining EDT");
+      return failure();
+    }
+
+    Operation *cloned = builder.clone(*defOp, valueMapping);
+    for (auto [oldRes, newRes] :
+         llvm::zip(defOp->getResults(), cloned->getResults()))
+      valueMapping.map(oldRes, newRes);
+    return success();
+  };
+
+  for (Value captured : envManager.getCapturedValues())
+    if (failed(cloneCaptured(captured)))
+      return failure();
+
   /// Clone EDT body operations into outlined function
   builder.setInsertionPointToEnd(entryBlock);
   cloneAndRemapEdtBody(edtBlock, builder, valueMapping);
@@ -488,6 +550,7 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
   /// Extract GUIDs and acquire modes from dependencies
   SmallVector<Value> depGuids;
   SmallVector<int32_t> acquireModes;
+  SmallVector<bool> twinDiffHints;
   for (Value dep : deps) {
     /// Handle both DbAcquireOp and DepDbAcquireOp as dependency sources
     auto dbAcquireOp = dep.getDefiningOp<DbAcquireOp>();
@@ -503,24 +566,39 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
                                 : dep.getDefiningOp<DepDbAcquireOp>().getGuid();
     depGuids.push_back(depGuid);
 
+    DbAllocOp allocForHint =
+        dyn_cast_or_null<DbAllocOp>(arts::getUnderlyingDbAlloc(dep));
+    if (dbAcquireOp && !allocForHint)
+      allocForHint = dyn_cast<DbAllocOp>(
+          arts::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()));
+
     /// Extract acquire mode: Convert ArtsMode to DbMode enum
     ArtsMode artsMode = ArtsMode::inout;
     if (dbAcquireOp)
       artsMode = dbAcquireOp.getMode();
 
-    /// Map ArtsMode to DbMode (which matches runtime artsType_t values)
-    DbMode dbMode;
-    if (artsMode == ArtsMode::in) {
-      // ARTS_DB_READ = 8
-      dbMode = DbMode::read;
-    } else if (artsMode == ArtsMode::out || artsMode == ArtsMode::inout) {
-      // ARTS_DB_WRITE = 9
-      dbMode = DbMode::write;
-    } else {
-      // Default to WRITE for safety
-      dbMode = DbMode::write;
+    /// Map ArtsMode to DbMode
+    /// Preserve explicit READ acquisitions (e.g., aggregator reading partials)
+    /// even if the underlying allocation is WRITE-only. The allocation mode is
+    /// only used to narrow (not widen) the access when the arts mode is not
+    /// already read.
+    DbMode dbMode = (artsMode == ArtsMode::in) ? DbMode::read : DbMode::write;
+    if (allocForHint && dbMode != DbMode::read) {
+      DbMode allocMode = allocForHint.getDbMode();
+      if (allocMode == DbMode::read || allocMode == DbMode::write)
+        dbMode = allocMode;
     }
     acquireModes.push_back(static_cast<int32_t>(dbMode));
+
+    /// Twin-diff hint travels with the underlying DbAllocOp when partitioning
+    /// falls back to a coarse grain strategy.
+    bool useTwinDiff = false;
+    if (allocForHint) {
+      if (auto twinAttr =
+              allocForHint->getAttrOfType<BoolAttr>("arts.twin_diff"))
+        useTwinDiff = twinAttr.getValue();
+    }
+    twinDiffHints.push_back(useTwinDiff);
   }
 
   /// Create dependency management ops with appropriate access mode
@@ -532,8 +610,13 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     acquireAttr =
         DenseI32ArrayAttr::get(AC->getBuilder().getContext(), acquireModes);
 
-  AC->create<RecordDepOp>(loc, edtGuid, depGuids, modeAttr, acquireAttr);
-  AC->create<IncrementDepOp>(loc, edtGuid, depGuids, modeAttr);
+  DenseBoolArrayAttr twinDiffAttr;
+  if (!twinDiffHints.empty())
+    twinDiffAttr =
+        DenseBoolArrayAttr::get(AC->getBuilder().getContext(), twinDiffHints);
+
+  AC->create<RecordDepOp>(loc, edtGuid, depGuids, modeAttr, acquireAttr,
+                          twinDiffAttr);
 
   return success();
 }
@@ -771,6 +854,10 @@ namespace arts {
 
 std::unique_ptr<Pass> createEdtLoweringPass() {
   return std::make_unique<EdtLoweringPass>();
+}
+
+std::unique_ptr<Pass> createEdtLoweringPass(uint64_t idStride) {
+  return std::make_unique<EdtLoweringPass>(idStride);
 }
 
 } // namespace arts

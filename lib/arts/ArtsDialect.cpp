@@ -452,8 +452,9 @@ MemRefType DbAllocOp::getAllocatedElementType() {
 void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
                         ArtsMode mode, Value sourceGuid, Value sourcePtr,
                         SmallVector<Value> indices, SmallVector<Value> offsets,
-                        SmallVector<Value> sizes, Value chunkOffsetHint,
-                        Value chunkSizeHint) {
+                        SmallVector<Value> sizes,
+                        SmallVector<Value> offsetHints,
+                        SmallVector<Value> sizeHints) {
   auto sourceDb = arts::getUnderlyingDb(sourcePtr);
   auto sourceDbAlloc =
       dyn_cast<DbAllocOp>(arts::getUnderlyingDbAlloc(sourcePtr));
@@ -508,20 +509,19 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
   state.addOperands(indices);
   state.addOperands(offsets);
   state.addOperands(sizes);
-  if (chunkOffsetHint)
-    state.addOperands(chunkOffsetHint);
-  if (chunkSizeHint)
-    state.addOperands(chunkSizeHint);
+  state.addOperands(offsetHints);
+  state.addOperands(sizeHints);
 
   /// Build operand segment sizes: [source_guid(0/1), source_ptr=1, indices,
-  /// offsets, sizes, chunkOffsetHint, chunkSizeHint]
+  /// offsets, sizes, offsetHints, sizeHints]
   state.addAttribute(
       "operandSegmentSizes",
-      builder.getDenseI32ArrayAttr(
-          {sourceGuid ? 1 : 0, 1, static_cast<int32_t>(indices.size()),
-           static_cast<int32_t>(offsets.size()),
-           static_cast<int32_t>(sizes.size()), chunkOffsetHint ? 1 : 0,
-           chunkSizeHint ? 1 : 0}));
+      builder.getDenseI32ArrayAttr({sourceGuid ? 1 : 0, 1,
+                                    static_cast<int32_t>(indices.size()),
+                                    static_cast<int32_t>(offsets.size()),
+                                    static_cast<int32_t>(sizes.size()),
+                                    static_cast<int32_t>(offsetHints.size()),
+                                    static_cast<int32_t>(sizeHints.size())}));
 }
 
 /// DbAcquireOp builder with explicit ptr type (for block arguments)
@@ -529,7 +529,8 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
                         ArtsMode mode, Value sourceGuid, Value sourcePtr,
                         Type ptrType, SmallVector<Value> indices,
                         SmallVector<Value> offsets, SmallVector<Value> sizes,
-                        Value chunkOffsetHint, Value chunkSizeHint) {
+                        SmallVector<Value> offsetHints,
+                        SmallVector<Value> sizeHints) {
   /// When sourceGuid is null and sourcePtr is a block argument,
   /// we can't trace back to find the DB, so we use explicit sizes/offsets
 
@@ -560,19 +561,18 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
   state.addOperands(indices);
   state.addOperands(offsets);
   state.addOperands(sizes);
-  if (chunkOffsetHint)
-    state.addOperands(chunkOffsetHint);
-  if (chunkSizeHint)
-    state.addOperands(chunkSizeHint);
+  state.addOperands(offsetHints);
+  state.addOperands(sizeHints);
 
   /// Build operand segment sizes
   state.addAttribute(
       "operandSegmentSizes",
-      builder.getDenseI32ArrayAttr(
-          {sourceGuid ? 1 : 0, 1, static_cast<int32_t>(indices.size()),
-           static_cast<int32_t>(offsets.size()),
-           static_cast<int32_t>(sizes.size()), chunkOffsetHint ? 1 : 0,
-           chunkSizeHint ? 1 : 0}));
+      builder.getDenseI32ArrayAttr({sourceGuid ? 1 : 0, 1,
+                                    static_cast<int32_t>(indices.size()),
+                                    static_cast<int32_t>(offsets.size()),
+                                    static_cast<int32_t>(sizes.size()),
+                                    static_cast<int32_t>(offsetHints.size()),
+                                    static_cast<int32_t>(sizeHints.size())}));
 }
 
 LogicalResult DbAcquireOp::verify() {
@@ -614,6 +614,18 @@ LogicalResult DbAcquireOp::verify() {
       return emitOpError(
           "Cannot use indices on single-element datablock (size=1)");
     }
+  }
+
+  auto offsetHints = getOffsetHints();
+  if (!offsetHints.empty() && offsetHints.size() != dbSizes) {
+    return emitOpError("offset_hints must match the number of sizes when set (")
+           << offsetHints.size() << " vs " << dbSizes << ")";
+  }
+
+  auto sizeHints = getSizeHints();
+  if (!sizeHints.empty() && sizeHints.size() != dbSizes) {
+    return emitOpError("size_hints must match the number of sizes when set (")
+           << sizeHints.size() << " vs " << dbSizes << ")";
   }
 
   return success();
@@ -658,6 +670,23 @@ LogicalResult DbRefOp::verify() {
   auto resultType = getResult().getType().cast<MemRefType>();
   if (resultType != dbAllocOp.getAllocatedElementType().getElementType())
     return emitOpError("result type must match source element type");
+  return success();
+}
+
+LogicalResult RecordDepOp::verify() {
+  const size_t dbCount = getDatablocks().size();
+  if (auto modes = getAcquireModes()) {
+    if (modes->size() != dbCount)
+      return emitOpError("acquire_modes entries (")
+             << modes->size() << ") must match datablocks (" << dbCount << ")";
+  }
+
+  if (auto twinDiff = getTwinDiff()) {
+    if (twinDiff->size() != dbCount)
+      return emitOpError("twin_diff entries (")
+             << twinDiff->size() << ") must match datablocks (" << dbCount
+             << ")";
+  }
   return success();
 }
 

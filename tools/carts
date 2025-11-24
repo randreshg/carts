@@ -284,12 +284,11 @@ show_usage() {
     carts_cmd "run [options]"               "Run CARTS MLIR transformations"
     carts_cmd "mlir-translate <file> [options]" "Run mlir-translate"
     carts_cmd "compile <file> [options]"    "Compile with ARTS runtime"
-    carts_cmd "benchmark [options]"         "Run CARTS benchmarks"
+    carts_cmd "benchmarks <name> [size] [arts.cfg]" "Build carts benchmarkss"
     carts_cmd "setup [options]"             "Set up CARTS environment"
     carts_cmd "clean [options]"              "Clean generated files in current directory"
     carts_cmd "check [options]"             "Run CARTS test suite using llvm-lit"
-    carts_cmd "execute <file> [options]"    "Complete pipeline: C++ -> executable"
-    carts_cmd "dual-execute <file> [options]" "Dual-compilation: sequential analysis + parallel execution"
+    carts_cmd "execute <file> [options]"    "Complete pipeline: C++ -> executable (use -O3 for dual compilation)"
 
     echo ""
     echo "Pipeline Options (for 'run' command):"
@@ -348,10 +347,10 @@ show_usage() {
     carts_cmd "carts run simple.mlir --all-stages"                              "Dump all intermediate stages"
     carts_cmd "carts compile simple.ll -o simple"                               "Compile LLVM to executable"
     carts_cmd "carts execute simple.cpp -o simple"                              "Complete pipeline: C++ to executable"
+    carts_cmd "carts execute simple.cpp -O3 -o simple"                          "Dual compilation with metadata transfer (optimized)"
     carts_cmd "carts execute simple.cpp --run-args --export-json -o simple"     "Pipeline with JSON export"
     carts_cmd "carts execute simple.cpp --run-args --debug-only=db -o simple"   "Pipeline with debug flags"
     carts_cmd "carts execute simple.cpp --compile-args -lm -lpthread -o simple" "Pipeline with library dependencies"
-    carts_cmd "carts dual-execute simple.cpp -o simple"                         "Dual-compilation with metadata transfer"
 
     echo ""
     echo "  # Development and testing"
@@ -369,7 +368,14 @@ show_usage() {
     
     echo ""
     echo "  # Benchmarking"
-    carts_cmd "carts benchmark --target_examples matrixmul" "Run matrix multiplication benchmark"
+    carts_cmd "carts benchmarks --help"                           "Show benchmarks options"
+    carts_cmd "carts benchmarks list"                             "List all available benchmarks"
+    carts_cmd "carts benchmarks polybench/2mm small"               "Build polybench 2mm with small size"
+    carts_cmd "carts benchmarks sw4lite/rhs4sg-base medium"        "Build sw4lite rhs4sg-base with medium size"
+    carts_cmd "carts benchmarks ml-kernels/batchnorm large"        "Build ml-kernels batchnorm with large size"
+    carts_cmd "carts benchmarks clean polybench/2mm"               "Clean specific benchmarks"
+    carts_cmd "carts benchmarks clean sw4lite"                     "Clean entire suite"
+    carts_cmd "carts benchmarks clean --all"                       "Clean all benchmarks"
 
     echo ""
     echo "  # Docker operations"
@@ -629,19 +635,108 @@ run_compile() {
     "$clang_path" "${compile_flags[@]}" "${sysroot_flags[@]}" "${library_paths[@]}" "${linker_flags[@]}" "${libraries[@]}" "$input_file" "$@"
 }
 
-# Function to run benchmark tool
+# Function to list available benchmarks and examples
+list_benchmarks_and_examples() {
+    local benchmarks_dir="${CARTS_DIR}/external/carts-benchmarks"
+    local examples_dir="${CARTS_DIR}/tests/examples"
+    
+    carts_header "Available Benchmarks and Examples"
+    
+    # List benchmarks
+    if [[ -d "$benchmarks_dir" ]]; then
+        carts_info "Benchmarks (from external/carts-benchmarks/):"
+        carts_line
+        
+        # Use single find command to locate all directories with Makefiles
+        local benchmark_list=()
+        while IFS= read -r -d '' makefile_path; do
+            local dir=$(dirname "$makefile_path")
+            local rel_path="${dir#$benchmarks_dir/}"
+            local dirname=$(basename "$dir")
+            
+            # Skip common/non-benchmarks directories
+            case "$dirname" in
+                common|include|src|utilities|.git|.svn|.hg) continue ;;
+                .*) continue ;;  # Skip hidden directories
+            esac
+            
+            # Makefile presence is the most reliable indicator of a runnable benchmarks
+            benchmark_list+=("$rel_path")
+        done < <(find "$benchmarks_dir" -mindepth 1 -maxdepth 4 -type f -name "Makefile" -print0 2>/dev/null)
+        
+        # Sort and display benchmarks
+        if [[ ${#benchmark_list[@]} -gt 0 ]]; then
+            printf "%s\n" "${benchmark_list[@]}" | sort -u | while read -r bench; do
+                if [[ -n "$bench" ]]; then
+                    carts_print "  - $bench"
+                fi
+            done
+        else
+            carts_warning "No benchmarks found"
+        fi
+    else
+        carts_warning "Benchmarks directory not found: $benchmarks_dir"
+    fi
+    
+    echo ""
+    carts_line
+    echo ""
+    
+    # List examples
+    if [[ -d "$examples_dir" ]]; then
+        carts_info "Examples (from tests/examples/):"
+        carts_line
+        
+        # Use single find command to locate directories with source files or Makefiles
+        local example_list=()
+        while IFS= read -r -d '' dir; do
+            local rel_path="${dir#$examples_dir/}"
+            local dirname=$(basename "$dir")
+            
+            # Skip hidden directories
+            [[ "$dirname" =~ ^\. ]] && continue
+            
+            # Check for source files or Makefile (examples may not always have Makefiles)
+            if [[ -f "$dir/Makefile" ]] || \
+               [[ -n "$(find "$dir" -maxdepth 1 \( -name "*.c" -o -name "*.cpp" \) 2>/dev/null | head -1)" ]]; then
+                example_list+=("$rel_path")
+            fi
+        done < <(find "$examples_dir" -mindepth 1 -maxdepth 2 -type d -print0 2>/dev/null)
+        
+        # Sort and display examples
+        if [[ ${#example_list[@]} -gt 0 ]]; then
+            printf "%s\n" "${example_list[@]}" | sort -u | while read -r example; do
+                if [[ -n "$example" ]]; then
+                    carts_print "  - $example"
+                fi
+            done
+        else
+            carts_warning "No examples found"
+        fi
+    else
+        carts_warning "Examples directory not found: $examples_dir"
+    fi
+    
+    echo ""
+    carts_line
+}
+
+# Function to run benchmarks tool
 run_benchmark() {
-    local benchmark_script="${CARTS_DIR}/tools/benchmark/carts-benchmark.py"
+    # Use the carts-benchmarks script from external/carts-benchmarks
+    local benchmark_script="${CARTS_DIR}/external/carts-benchmarks/carts-benchmarks"
     if [[ ! -f "$benchmark_script" ]]; then
         carts_error "Benchmark script not found at $benchmark_script"
+        carts_info "Please ensure the carts-benchmarks repository is properly set up"
         exit 1
     fi
 
     if [[ -n "$CARTS_VERBOSE" ]]; then
-        carts_debug "Running benchmark: python3 $benchmark_script $*"
+        carts_debug "Running benchmarks: $benchmark_script $*"
     fi
 
-    python3 "$benchmark_script" "$@"
+    # Pass all arguments directly to carts-benchmarks
+    "$benchmark_script" "$@"
 }
 
 
@@ -1405,6 +1500,7 @@ run_execute() {
     local parsing_run_args=false
     local parsing_compile_args=false
     local debug_mode=false
+    local use_dual_execution=false
     
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -1422,6 +1518,11 @@ run_execute() {
                 debug_mode=true
                 shift
                 ;;
+            "-O3")
+                use_dual_execution=true
+                execute_args+=("$1")
+                shift
+                ;;
             *)
                 if [[ "$parsing_run_args" == "true" ]]; then
                     run_args+=("$1")
@@ -1434,6 +1535,12 @@ run_execute() {
                 ;;
         esac
     done
+    
+    # If -O3 is specified, use dual execution workflow
+    if [[ "$use_dual_execution" == "true" ]]; then
+        run_execute_dual "$input_file" "${run_args[@]}" "${compile_args[@]}" "${execute_args[@]}"
+        return $?
+    fi
 
     carts_header "CARTS Execution"
     carts_info "Running CARTS for: $input_file"
@@ -1497,8 +1604,19 @@ run_execute() {
     # Step 3: Compile to executable
     carts_step "Compiling to executable"
     
+    # Determine output name from execute_args or use base_name
+    local output_name="${base_name}"
+    local i=0
+    while [[ $i -lt ${#execute_args[@]} ]]; do
+        if [[ "${execute_args[$i]}" == "-o" && $((i+1)) -lt ${#execute_args[@]} ]]; then
+            output_name="${execute_args[$((i+1))]}"
+            break
+        fi
+        ((i++))
+    done
+    
     # Build the compile command with additional args
-    local compile_cmd_args=("${base_name}-arts.ll" "-o" "${base_name}")
+    local compile_cmd_args=("${base_name}-arts.ll" "-o" "${output_name}")
     if [[ "$debug_mode" == "true" ]]; then
         compile_cmd_args+=("-g")
     fi
@@ -1516,19 +1634,20 @@ run_execute() {
     fi
     
     carts_line
-    carts_success "Generated executable: ${base_name}"
+    carts_success "Generated executable: ${output_name}"
     carts_line
     carts_info "Intermediate files:"
     carts_print "  MLIR: ${base_name}.mlir"
     carts_print "  LLVM IR: ${base_name}-arts.ll"
-    carts_print "  Executable: ${base_name}"
+    carts_print "  Executable: ${output_name}"
     carts_line
     carts_info "To clean intermediate files, run: carts clean"
     carts_header "CARTS Complete"
 }
 
-# Dual compilation: Sequential → Metadata → Parallel
-run_dual_execute() {
+# Dual compilation: Sequential -> Metadata -> Parallel
+# Called internally by run_execute when -O3 is specified
+run_execute_dual() {
     local input_file="$1"
     shift
 
@@ -1550,6 +1669,7 @@ run_dual_execute() {
     # Parse execute options
     local run_args=()
     local compile_args=()
+    local execute_args=()
     local parsing_run_args=false
     local parsing_compile_args=false
     local debug_mode=false
@@ -1575,14 +1695,19 @@ run_dual_execute() {
                     run_args+=("$1")
                 elif [[ "$parsing_compile_args" == "true" ]]; then
                     compile_args+=("$1")
+                else
+                    # Skip -O3 as it's already handled, but keep other execute args
+                    if [[ "$1" != "-O3" ]]; then
+                        execute_args+=("$1")
+                    fi
                 fi
                 shift
                 ;;
         esac
     done
 
-    carts_header "CARTS Dual Compilation"
-    carts_info "Dual compilation workflow for: $input_file"
+    carts_header "CARTS Execution (Optimized with Dual Compilation)"
+    carts_info "Running optimized CARTS with dual compilation for: $input_file"
     carts_line
 
     # Determine standard flag based on file extension
@@ -1659,7 +1784,18 @@ run_dual_execute() {
     # Step 5: Compile to executable
     carts_step "5/5: Compiling to executable"
 
-    local compile_cmd_args=("${base_name}-arts.ll" "-o" "${base_name}")
+    # Determine output name from execute_args or use base_name
+    local output_name="${base_name}"
+    local i=0
+    while [[ $i -lt ${#execute_args[@]} ]]; do
+        if [[ "${execute_args[$i]}" == "-o" && $((i+1)) -lt ${#execute_args[@]} ]]; then
+            output_name="${execute_args[$((i+1))]}"
+            break
+        fi
+        ((i++))
+    done
+
+    local compile_cmd_args=("${base_name}-arts.ll" "-o" "${output_name}")
     if [[ "$debug_mode" == "true" ]]; then
         compile_cmd_args+=("-g")
     fi
@@ -1673,17 +1809,17 @@ run_dual_execute() {
     fi
 
     carts_line
-    carts_success "Dual compilation complete: ${base_name}"
+    carts_success "Dual compilation complete: ${output_name}"
     carts_line
     carts_info "Generated files:"
     carts_print "  Sequential MLIR: ${base_name}_seq.mlir"
     carts_print "  Metadata: .carts-metadata.json"
     carts_print "  Parallel MLIR: ${base_name}.mlir"
     carts_print "  LLVM IR: ${base_name}-arts.ll"
-    carts_print "  Executable: ${base_name}"
+    carts_print "  Executable: ${output_name}"
     carts_line
     carts_info "Metadata was imported by CreateDbs pass during ARTS transformations"
-    carts_header "CARTS Dual Compilation Complete"
+    carts_header "CARTS Execution Complete"
 }
 
 # Main script logic
@@ -1725,7 +1861,7 @@ main() {
         "compile")
             run_compile "$@"
             ;;
-        "benchmark")
+        "benchmarks")
             run_benchmark "$@"
             ;;
         "setup")
@@ -1739,9 +1875,6 @@ main() {
             ;;
         "execute")
             run_execute "$@"
-            ;;
-        "dual-execute")
-            run_dual_execute "$@"
             ;;
         "docker")
             run_docker "$@"

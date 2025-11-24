@@ -55,7 +55,7 @@ tools/
    carts compile simple-arts.ll -o simple
    
    # Run benchmarks
-   carts benchmark --target_examples matrixmul
+   carts benchmarks --target_examples matrixmul
    
    # Launch ArtsUI (dashboard, graphs, reports)
    carts ui

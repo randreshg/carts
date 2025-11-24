@@ -109,11 +109,13 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
     return;
   }
 
-  /// Capture optional chunk hints directly from the operation.
-  if (Value hintOff = dbAcquireOp.getChunkOffsetHint())
-    partitionOffset = hintOff;
-  if (Value hintSize = dbAcquireOp.getChunkSizeHint())
-    partitionSize = hintSize;
+  /// Capture optional offset/size hints directly from the operation.
+  /// For now lets only consider the front hint for the partition offset and
+  /// size
+  if (!dbAcquireOp.getOffsetHints().empty())
+    partitionOffset = dbAcquireOp.getOffsetHints().front();
+  if (!dbAcquireOp.getSizeHints().empty())
+    partitionSize = dbAcquireOp.getSizeHints().front();
 
   if (auto nestedAcquire = dyn_cast<DbAcquireOp>(singleUser)) {
     /// Nested acquire; create child node lazily via getOrCreateAcquireNode
@@ -217,11 +219,13 @@ bool DbAcquireNode::isEligibleForSlicing() {
 
   DbAcquireOp mutableAcquire = DbAcquireOp(dbAcquireOp.getOperation());
 
-  /// Prefer explicit chunk hints if they exist.
-  if (Value hintOffset = mutableAcquire.getChunkOffsetHint())
-    partitionOffset = hintOffset;
-  if (Value hintSize = mutableAcquire.getChunkSizeHint())
-    partitionSize = hintSize;
+  /// Prefer explicit offset/size hints if they exist.
+  auto offsetHints = mutableAcquire.getOffsetHints();
+  auto sizeHints = mutableAcquire.getSizeHints();
+  if (!offsetHints.empty())
+    partitionOffset = offsetHints.front();
+  if (!sizeHints.empty())
+    partitionSize = sizeHints.front();
 
   /// Only fall back to existing offsets/sizes if they look meaningful
   /// (i.e., not the default slice of offset=0, size=1).

@@ -43,7 +43,8 @@ int main(int argc, char **argv) {
     expected_dot_product += (long long)a[i] * b[i];
 
   if (dot_product != expected_dot_product)
-    printf("Result: INCORRECT\n");
+    printf("Result: INCORRECT - %lld != %lld\n", dot_product,
+           expected_dot_product);
   else
     printf("Result: CORRECT\n");
   free(a);
