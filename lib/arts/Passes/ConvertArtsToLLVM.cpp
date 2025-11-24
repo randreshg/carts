@@ -206,6 +206,12 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
 
     /// Get access mode from attribute
     auto accessMode = op.getAccessMode();
+    auto acquireModesAttr = op.getAcquireModes();
+    auto twinDiffAttr = op.getTwinDiff();
+    ArrayRef<int32_t> acquireModeValues =
+        acquireModesAttr ? *acquireModesAttr : ArrayRef<int32_t>{};
+    ArrayRef<bool> twinDiffValues =
+        twinDiffAttr ? *twinDiffAttr : ArrayRef<bool>{};
 
     /// Get acquire modes if available
     // std::optional<ArrayRef<int32_t>> acquireModes = std::nullopt;
@@ -219,13 +225,16 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
     AC->create<memref::StoreOp>(loc, zeroI32, sharedSlotAlloc);
 
     /// Add dependencies for each datablock using shared slot counter
-    // size_t dbIdx = 0;
+    unsigned dbIdx = 0;
     for (Value dbGuid : op.getDatablocks()) {
       std::optional<int32_t> acquireMode = std::nullopt;
-      // if (accessMode && dbIdx < accessMode.value().size())
-      //   acquireMode = accessMode.value()[dbIdx];
+      if (dbIdx < acquireModeValues.size())
+        acquireMode = acquireModeValues[dbIdx];
+      bool twinDiff =
+          (dbIdx < twinDiffValues.size()) ? twinDiffValues[dbIdx] : false;
       recordDepsForDb(dbGuid, edtGuid, sharedSlotAlloc, accessMode, acquireMode,
-                      loc);
+                      twinDiff, loc);
+      ++dbIdx;
     }
 
     rewriter.eraseOp(op);
@@ -235,7 +244,8 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
 private:
   void recordDepsForDb(Value dbGuid, Value edtGuid, Value sharedSlotAlloc,
                        DepAccessMode accessMode,
-                       std::optional<int32_t> acquireMode, Location loc) const {
+                       std::optional<int32_t> acquireMode, bool twinDiff,
+                       Location loc) const {
     SmallVector<Value> dbSizes, dbOffsets, dbIndices;
     bool isSingle = false;
 
@@ -263,19 +273,21 @@ private:
                           [&](Value linearIndex) {
                             recordSingleDb(dbGuid, edtGuid, sharedSlotAlloc,
                                            linearIndex, accessMode, acquireMode,
-                                           depStruct, baseOffset, loc);
+                                           twinDiff, depStruct, baseOffset,
+                                           loc);
                           });
   }
 
   void recordSingleDb(Value dbGuid, Value edtGuid, Value slotAlloc,
                       Value linearIndex, DepAccessMode accessMode,
-                      std::optional<int32_t> acquireMode, Value depStruct,
-                      Value baseOffset, Location loc) const {
+                      std::optional<int32_t> acquireMode, bool twinDiff,
+                      Value depStruct, Value baseOffset, Location loc) const {
     /// Load dbGuid value - check if we actually have depStruct (from
     /// DepDbAcquireOp) or if this specific dependency is from DbAcquireOp
     Value dbGuidValue;
-    /// TODO: Enable this
-    if (depStruct && baseOffset && false) {
+    const bool useDepv =
+        accessMode == DepAccessMode::from_depv && depStruct && baseOffset;
+    if (useDepv) {
       /// Access GUID via DepGepOp from EDT depv structure
       /// Must add baseOffset to linearIndex to get correct position in depv
       Value finalOffset =
@@ -300,19 +312,13 @@ private:
 
     auto currentSlotI32 = AC->create<memref::LoadOp>(loc, slotAlloc);
 
-    /// Use artsAddDependenceWithMode when acquire mode is provided
-    /// TODO: Enable this
-    if (acquireMode.has_value() && false) {
-      Value modeValue =
-          AC->createIntConstant(acquireMode.value(), AC->Int32, loc);
-      AC->createRuntimeCall(
-          types::ARTSRTL_artsAddDependenceWithMode,
-          {dbGuidValue, edtGuidValue, currentSlotI32, modeValue}, loc);
-    } else {
-      /// Fall back to normal artsDbAddDependence (extracts mode from GUID)
-      AC->createRuntimeCall(types::ARTSRTL_artsDbAddDependence,
-                            {dbGuidValue, edtGuidValue, currentSlotI32}, loc);
-    }
+    int32_t modeInt = acquireMode.value_or(static_cast<int32_t>(DbMode::write));
+    Value modeValue = AC->createIntConstant(modeInt, AC->Int32, loc);
+    Value twinDiffVal = AC->createIntConstant(twinDiff ? 1 : 0, AC->Int1, loc);
+    AC->createRuntimeCall(
+        types::ARTSRTL_artsRecordDep,
+        {dbGuidValue, edtGuidValue, currentSlotI32, modeValue, twinDiffVal},
+        loc);
 
     /// Increment the shared slot counter for next dependency
     auto oneI32 = AC->createIntConstant(1, AC->Int32, loc);
@@ -527,17 +533,17 @@ struct DepGepOpPattern : public ArtsToLLVMPattern<DepGepOp> {
     Value depEntryPtr = AC->create<LLVM::GEPOp>(
         loc, AC->llvmPtr, AC->ArtsEdtDep, typedDepPtr, ValueRange{linearIndex});
 
-    /// Extract both guid (field #0) and ptr (field #2) from depV
+    /// Extract both guid (field #0) and ptr (field #2) from depv
     auto c0 = AC->createIntConstant(0, AC->Int64, loc);
-    auto c2 = AC->createIntConstant(2, AC->Int64, loc);
+    auto cPtrIdx = AC->createIntConstant(2, AC->Int64, loc);
 
     /// Get the guid pointer (field #0)
     auto guidPtr = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep,
                                            depEntryPtr, ValueRange{c0, c0});
 
     /// Get the data pointer (field #2)
-    auto dataPtr = AC->create<LLVM::GEPOp>(loc, AC->llvmPtr, AC->ArtsEdtDep,
-                                           depEntryPtr, ValueRange{c0, c2});
+    auto dataPtr = AC->create<LLVM::GEPOp>(
+        loc, AC->llvmPtr, AC->ArtsEdtDep, depEntryPtr, ValueRange{c0, cPtrIdx});
 
     /// Return both: guid pointer and data pointer
     rewriter.replaceOp(op, ValueRange{guidPtr, dataPtr});
@@ -655,6 +661,8 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
                                      {funcPtr, route, paramc, paramv, depc},
                                      op.getLoc());
     }
+    if (auto createId = op->getAttr("arts.create_id"))
+      callOp->setAttr("arts.create_id", createId);
     rewriter.replaceOp(op, callOp.getResult(0));
     return success();
   }
@@ -690,6 +698,9 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
     /// Total datablock size = elementSize * payloadSize
     Value totalDbSize =
         AC->create<arith::MulIOp>(loc, elementSize, payloadSize);
+    std::optional<int64_t> nextId;
+    if (auto groupId = op->getAttrOfType<IntegerAttr>("arts.db_group_id"))
+      nextId = groupId.getInt();
 
     SmallVector<Value> dbSizes, dbOffsets, dbIndices;
     bool isSingleElement = false;
@@ -707,7 +718,8 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
           MemRefType::get({ShapedType::kDynamic}, AC->llvmPtr);
       dbMemref = AC->create<memref::AllocOp>(loc, payloadPtrType,
                                              ValueRange{totalElems});
-      createSingleDb(dbMemref, guidMemref, dbMode, route, totalDbSize, loc);
+      createSingleDb(dbMemref, guidMemref, dbMode, route, totalDbSize,
+                     nextId ? &nextId : nullptr, loc);
     } else {
       ARTS_DEBUG("Creating multi-dim DB");
       /// Compute total number of elements
@@ -722,7 +734,7 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
       dbMemref = AC->create<memref::AllocOp>(loc, payloadPtrType,
                                              ValueRange{totalElems});
       createMultiDbs(dbMemref, guidMemref, dbSizes, dbMode, route, totalDbSize,
-                     loc);
+                     nextId ? &nextId : nullptr, loc);
     }
 
     rewriter.replaceOp(op, {guidMemref, dbMemref});
@@ -731,7 +743,8 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
 
 private:
   void createSingleDb(Value dbMemref, Value guidMemref, Value dbMode,
-                      Value route, Value elementSize, Location loc,
+                      Value route, Value elementSize,
+                      std::optional<int64_t> *nextId, Location loc,
                       ArrayRef<Value> sizes = {},
                       ArrayRef<Value> indices = {}) const {
     /// Reserve GUID for the DB
@@ -742,6 +755,11 @@ private:
     auto elemSize64 = AC->castToInt(AC->Int64, elementSize, loc);
     auto dbCall = AC->createRuntimeCall(types::ARTSRTL_artsDbCreateWithGuid,
                                         {guid, elemSize64}, loc);
+    if (nextId && nextId->has_value()) {
+      dbCall->setAttr("arts.id_hint",
+                      AC->getBuilder().getI64IntegerAttr(**nextId));
+      **nextId = **nextId + 1;
+    }
     auto dbPtr = dbCall.getResult(0);
 
     /// Store the DB pointer and GUID in the linearized memrefs
@@ -760,7 +778,7 @@ private:
 
   void createMultiDbs(Value dbMemref, Value guidMemref, ArrayRef<Value> sizes,
                       Value dbMode, Value route, Value elementSize,
-                      Location loc) const {
+                      std::optional<int64_t> *nextId, Location loc) const {
     const unsigned rank = sizes.size();
     auto stepConstant = AC->createIndexConstant(1, loc);
 
@@ -768,7 +786,7 @@ private:
         [&](unsigned dim, SmallVector<Value, 4> &indices) {
           if (dim == rank) {
             createSingleDb(dbMemref, guidMemref, dbMode, route, elementSize,
-                           loc, sizes, indices);
+                           nextId, loc, sizes, indices);
             return;
           }
 

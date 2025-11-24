@@ -40,10 +40,10 @@ std::unique_ptr<Pass> createConvertArtsToLLVMPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug);
 std::unique_ptr<Pass> createEdtInvariantCodeMotionPass();
 std::unique_ptr<Pass> createEdtPtrRematerializationPass();
-std::unique_ptr<Pass> createDbLoweringPass();
+std::unique_ptr<Pass> createDbLoweringPass(uint64_t idStride = 1000);
 std::unique_ptr<Pass> createEpochLoweringPass();
 std::unique_ptr<Pass> createParallelEdtLoweringPass();
-std::unique_ptr<Pass> createEdtLoweringPass();
+std::unique_ptr<Pass> createEdtLoweringPass(uint64_t idStride = 1000);
 std::unique_ptr<Pass> createForLoweringPass();
 } // namespace arts
 } // namespace mlir

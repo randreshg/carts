@@ -24,3 +24,7 @@ external/*/cmake_install.cmake
 # Generated MLIR files
 *.mlir
 *.ll
+
+# CARTS generated metadata/logs
+**/.carts-metadata.json
+*.log
