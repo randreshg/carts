@@ -13,6 +13,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Dominance.h"
+#include "llvm/ADT/STLExtras.h"
 
 ARTS_DEBUG_SETUP(nested_alloc_transformer);
 
@@ -23,8 +24,7 @@ namespace arts {
 /// Helper Methods
 ///===----------------------------------------------------------------------===///
 
-SmallVector<Value>
-NestedAllocTransformer::Pattern::getAllSizes() const {
+SmallVector<Value> NestedAllocTransformer::Pattern::getAllSizes() const {
   SmallVector<Value> s = {dimSize};
   if (inner)
     s.append(inner->getAllSizes());
@@ -41,8 +41,7 @@ NestedAllocTransformer::Pattern::getAllInitLoops() const {
   return l;
 }
 
-SmallVector<Value>
-NestedAllocTransformer::Pattern::getAllNestedAllocs() const {
+SmallVector<Value> NestedAllocTransformer::Pattern::getAllNestedAllocs() const {
   SmallVector<Value> a = {outerAlloc};
   if (inner)
     a.append(inner->getAllNestedAllocs());
@@ -71,9 +70,9 @@ NestedAllocTransformer::NestedAllocTransformer(MLIRContext *context,
 /// Main Entry Point
 ///===----------------------------------------------------------------------===///
 
-LogicalResult
-NestedAllocTransformer::transform(ModuleOp module, OpBuilder &builder,
-                                  OpRemovalManager &removalMgr) {
+LogicalResult NestedAllocTransformer::transform(ModuleOp module,
+                                                OpBuilder &builder,
+                                                OpRemovalManager &removalMgr) {
   module_ = module;
   stats_ = Statistics();
 
@@ -127,7 +126,8 @@ NestedAllocTransformer::transform(ModuleOp module, OpBuilder &builder,
 
         /// Transform all accesses to use canonical allocation
         if (failed(transformAccesses(pattern, ndAlloc))) {
-          module.emitError("Failed to transform accesses for nested allocation");
+          module.emitError(
+              "Failed to transform accesses for nested allocation");
           return failure();
         }
 
@@ -140,7 +140,7 @@ NestedAllocTransformer::transform(ModuleOp module, OpBuilder &builder,
   }
 
   ARTS_DEBUG("  Transformation complete: " << stats_.patternsTransformed
-                                            << " patterns transformed");
+                                           << " patterns transformed");
 
   return success();
 }
@@ -190,80 +190,118 @@ NestedAllocTransformer::detectPattern(Value alloc) {
   scf::ForOp initLoop = nullptr;
   Value storedValue;
 
+  /// First, check if alloc is stored to a wrapper alloca (rank-0)
+  /// If so, we need to follow the wrapper's loads to find the init pattern
+  Value wrapperAlloca;
   for (Operation *user : alloc.getUsers()) {
-    if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
-      if (storeOp.getMemref() != alloc)
-        continue;
-
-      storedValue = storeOp.getValue();
-
-      /// Check for both AllocOp and AllocaOp
-      Operation *innerAllocOp = storedValue.getDefiningOp();
-      if (!innerAllocOp || (!isa<memref::AllocOp>(innerAllocOp) &&
-                            !isa<memref::AllocaOp>(innerAllocOp)))
-        continue;
-
-      auto forOp = storeOp->getParentOfType<scf::ForOp>();
-      if (!forOp)
-        continue;
-
-      initLoop = forOp;
-      auto innerAllocType = storedValue.getType().cast<MemRefType>();
-
-      /// Get inner dimension size
-      Value innerSize;
-      SmallVector<Value> innerDynamicSizes = getAllocDynamicSizes(innerAllocOp);
-
-      if (innerAllocType.isDynamicDim(0) && !innerDynamicSizes.empty()) {
-        innerSize = innerDynamicSizes[0];
-      } else if (!innerAllocType.isDynamicDim(0)) {
-        OpBuilder innerBuilder(ctx_);
-        innerBuilder.setInsertionPoint(innerAllocOp);
-        innerSize = innerBuilder.create<arith::ConstantIndexOp>(
-            innerAllocOp->getLoc(), innerAllocType.getDimSize(0));
-      }
-
-      if (!innerSize)
-        continue;
-
-      /// Recursively detect inner pattern
-      auto innerPattern = detectPattern(storedValue);
-
-      Pattern pattern;
-      pattern.outerAlloc = alloc;
-      pattern.dimSize = thisSize;
-      pattern.initLoop = initLoop;
-      if (innerPattern) {
-        pattern.inner = std::make_unique<Pattern>(std::move(*innerPattern));
-        pattern.elementType = innerPattern->getFinalElementType();
-      } else {
-        pattern.elementType = innerAllocType.getElementType();
-        pattern.innerDimSize = innerSize;
-        pattern.innerAllocValue = storedValue;
-      }
-
-      /// Check if outerAlloc is stored to a rank-0 alloca (wrapper pattern)
-      for (Operation *allocUser : alloc.getUsers()) {
-        if (auto allocStoreOp = dyn_cast<memref::StoreOp>(allocUser)) {
-          if (allocStoreOp.getValue() == alloc) {
-            Value destMemref = allocStoreOp.getMemref();
-            if (auto allocaOp = destMemref.getDefiningOp<memref::AllocaOp>()) {
-              auto allocaType = allocaOp.getType().cast<MemRefType>();
-              if (allocaType.getRank() == 0) {
-                pattern.wrapperAlloca = destMemref;
-                ARTS_DEBUG("   - Found wrapper alloca for outer allocation");
-                break;
-              }
-            }
+    if (auto storeToWrapper = dyn_cast<memref::StoreOp>(user)) {
+      if (storeToWrapper.getValue() == alloc) {
+        Value wrapperDest = storeToWrapper.getMemref();
+        if (auto allocaOp = wrapperDest.getDefiningOp<memref::AllocaOp>()) {
+          auto allocaType = allocaOp.getType().cast<MemRefType>();
+          if (allocaType.getRank() == 0) {
+            wrapperAlloca = wrapperDest;
+            ARTS_DEBUG("   - Found wrapper alloca pattern");
+            break;
           }
         }
       }
+    }
+  }
 
-      ARTS_DEBUG(" - Detected nested allocation pattern: depth="
-                 << pattern.getDepth()
-                 << ", element_type=" << pattern.elementType);
+  /// Now look for stores TO alloc (or loaded values from wrapper)
+  /// These stores should be inside an initialization loop
 
-      return pattern;
+  /// Collect potential targets: alloc itself, or loads from wrapper
+  SmallVector<Value> storeTargets = {alloc};
+  if (wrapperAlloca) {
+    for (Operation *wrapperUser : wrapperAlloca.getUsers()) {
+      if (auto loadOp = dyn_cast<memref::LoadOp>(wrapperUser)) {
+        storeTargets.push_back(loadOp.getResult());
+        ARTS_DEBUG("   - Added loaded value from wrapper as target");
+      }
+    }
+  }
+
+  /// Search for stores to any of the targets
+  for (Value target : storeTargets) {
+    ARTS_DEBUG("   - Checking target for stores");
+    for (Operation *user : target.getUsers()) {
+      if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
+        if (storeOp.getMemref() != target)
+          continue;
+
+        ARTS_DEBUG("   - Found store to target");
+        storedValue = storeOp.getValue();
+
+        /// Look through casts to find the underlying allocation
+        Value allocValue = getUnderlyingValue(storedValue);
+
+        /// Check for both AllocOp and AllocaOp
+        Operation *innerAllocOp = allocValue.getDefiningOp();
+        if (!innerAllocOp || (!isa<memref::AllocOp>(innerAllocOp) &&
+                              !isa<memref::AllocaOp>(innerAllocOp))) {
+          ARTS_DEBUG("   - Stored value is not an alloc/alloca");
+          continue;
+        }
+
+        /// Update storedValue to the actual allocation (before cast)
+        storedValue = allocValue;
+
+        ARTS_DEBUG("   - Stored value is an allocation");
+        auto forOp = storeOp->getParentOfType<scf::ForOp>();
+        if (!forOp) {
+          ARTS_DEBUG("   - Store is not in a loop");
+          continue;
+        }
+
+        ARTS_DEBUG("   - Store is in a loop - pattern detected!");
+        initLoop = forOp;
+        auto innerAllocType = storedValue.getType().cast<MemRefType>();
+
+        /// Get inner dimension size
+        Value innerSize;
+        SmallVector<Value> innerDynamicSizes =
+            getAllocDynamicSizes(innerAllocOp);
+
+        if (innerAllocType.isDynamicDim(0) && !innerDynamicSizes.empty()) {
+          innerSize = innerDynamicSizes[0];
+        } else if (!innerAllocType.isDynamicDim(0)) {
+          /// Create constant for static size BEFORE the init loop to avoid
+          /// dominance issues
+          OpBuilder innerBuilder(ctx_);
+          innerBuilder.setInsertionPoint(forOp);
+          innerSize = innerBuilder.create<arith::ConstantIndexOp>(
+              innerAllocOp->getLoc(), innerAllocType.getDimSize(0));
+        }
+
+        if (!innerSize)
+          continue;
+
+        /// Recursively detect inner pattern
+        auto innerPattern = detectPattern(storedValue);
+
+        Pattern pattern;
+        pattern.outerAlloc = alloc;
+        pattern.dimSize = thisSize;
+        pattern.initLoop = initLoop;
+        pattern.wrapperAlloca = wrapperAlloca; // Use wrapper detected earlier
+
+        if (innerPattern) {
+          pattern.inner = std::make_unique<Pattern>(std::move(*innerPattern));
+          pattern.elementType = innerPattern->getFinalElementType();
+        } else {
+          pattern.elementType = innerAllocType.getElementType();
+          pattern.innerDimSize = innerSize;
+          pattern.innerAllocValue = storedValue;
+        }
+
+        ARTS_DEBUG(" - Detected nested allocation pattern: depth="
+                   << pattern.getDepth()
+                   << ", element_type=" << pattern.elementType);
+
+        return pattern;
+      }
     }
   }
 
@@ -275,17 +313,16 @@ NestedAllocTransformer::detectPattern(Value alloc) {
 ///===----------------------------------------------------------------------===///
 
 Value NestedAllocTransformer::transformToCanonical(Pattern &pattern,
-                                                    Location loc,
-                                                    OpBuilder &builder) {
+                                                   Location loc,
+                                                   OpBuilder &builder) {
   builder.setInsertionPoint(pattern.initLoop);
 
   /// Extract all dimension sizes
   SmallVector<Value> allSizes = pattern.getAllSizes();
 
   /// Create N-D allocation
-  Value ndAlloc = createCanonicalAllocation(builder, loc,
-                                            pattern.getFinalElementType(),
-                                            allSizes);
+  Value ndAlloc = createCanonicalAllocation(
+      builder, loc, pattern.getFinalElementType(), allSizes);
   if (!ndAlloc) {
     ARTS_DEBUG("  Failed to create canonical allocation");
     return nullptr;
@@ -308,8 +345,8 @@ Value NestedAllocTransformer::transformToCanonical(Pattern &pattern,
 /// Access Transformation
 ///===----------------------------------------------------------------------===///
 
-LogicalResult
-NestedAllocTransformer::transformAccesses(Pattern &pattern, Value ndAlloc) {
+LogicalResult NestedAllocTransformer::transformAccesses(Pattern &pattern,
+                                                        Value ndAlloc) {
   /// Structure to hold information about a load chain
   struct ChainInfo {
     SmallVector<Value> indices;
@@ -429,7 +466,7 @@ NestedAllocTransformer::transformAccesses(Pattern &pattern, Value ndAlloc) {
     if (access.isLoad) {
       auto loadOp = cast<memref::LoadOp>(access.op);
       auto newLoad = builder.create<memref::LoadOp>(loadOp.getLoc(), ndAlloc,
-                                                     access.allIndices);
+                                                    access.allIndices);
       loadOp.replaceAllUsesWith(newLoad.getResult());
       access.op->erase();
       rewritten++;
@@ -459,87 +496,185 @@ NestedAllocTransformer::transformAccesses(Pattern &pattern, Value ndAlloc) {
 
 void NestedAllocTransformer::cleanupPattern(Pattern &pattern,
                                             OpRemovalManager &removalMgr) {
+  OpBuilder builder(ctx_);
   /// Clean up wrapper alloca if present
   if (pattern.wrapperAlloca) {
-    /// Remove loads from the wrapper alloca
+    /// Remove loads from the wrapper alloca that are only used for cascaded
+    /// accesses (but keep loads used by operations we haven't transformed, like
+    /// function calls)
     for (Operation *user : pattern.wrapperAlloca.getUsers()) {
       if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
-        if (loadOp.getMemref() == pattern.wrapperAlloca)
-          removalMgr.markForRemoval(loadOp);
+        if (loadOp.getMemref() == pattern.wrapperAlloca) {
+          /// Check if this load is used by any operations we can't handle
+          bool hasUnhandledUsers = false;
+          for (Operation *loadUser : loadOp->getUsers()) {
+            /// Skip if used by function calls or other operations we don't
+            /// transform
+            if (isa<func::CallOp>(loadUser)) {
+              hasUnhandledUsers = true;
+              ARTS_DEBUG("  Keeping wrapper load used by function call");
+              break;
+            }
+          }
+          if (!hasUnhandledUsers) {
+            removalMgr.markForRemoval(loadOp);
+          }
+        }
       }
     }
-    /// Remove stores to the wrapper alloca
+    /// Remove the initial store to the wrapper alloca
     for (Operation *user : pattern.wrapperAlloca.getUsers()) {
       if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
-        if (storeOp.getMemref() == pattern.wrapperAlloca)
+        if (storeOp.getMemref() == pattern.wrapperAlloca &&
+            storeOp.getValue() == pattern.outerAlloc) {
           removalMgr.markForRemoval(storeOp);
+        }
       }
     }
-    /// Remove the wrapper alloca itself
-    if (Operation *allocaOp = pattern.wrapperAlloca.getDefiningOp())
-      removalMgr.markForRemoval(allocaOp);
+    /// Note: wrapper alloca itself will be marked for removal later
+    /// if all its users have been handled
   }
 
-  /// Schedule all legacy allocations for removal
+  /// Remove stores that write inner allocations to the outer array
+  /// The allocations themselves become dead code after this
   auto legacyAllocs = pattern.getAllNestedAllocs();
   for (Value legacy : legacyAllocs) {
     if (!legacy)
       continue;
-    if (Operation *def = legacy.getDefiningOp()) {
-      removalMgr.markForRemoval(def);
-      stats_.allocationsRemoved++;
-    }
 
     /// Remove stores that write this allocation into the outer array
+    /// These stores are what connect the old allocations to the array
     for (Operation *user : legacy.getUsers()) {
       if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
-        if (storeOp.getValue() == legacy)
+        /// Compare underlying values so casts don't block cleanup
+        if (getUnderlyingValue(storeOp.getValue()) ==
+            getUnderlyingValue(legacy)) {
           removalMgr.markForRemoval(storeOp);
-      }
-    }
-  }
-
-  /// Schedule initialization loops for removal
-  auto initLoops = pattern.getAllInitLoops();
-  for (auto loop : initLoops)
-    removalMgr.markForRemoval(loop);
-
-  /// Find and remove deallocation loops that dealloc inner arrays
-  for (Operation *user : pattern.outerAlloc.getUsers()) {
-    if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
-      /// Check if this load's result is used by memref.dealloc
-      for (Operation *loadUser : loadOp->getUsers()) {
-        if (isa<memref::DeallocOp>(loadUser)) {
-          removalMgr.markForRemoval(loadOp);
-          removalMgr.markForRemoval(loadUser);
-          /// Also mark the enclosing loop for removal if it only contains
-          /// deallocs
-          if (auto forOp = loadOp->getParentOfType<scf::ForOp>())
-            removalMgr.markForRemoval(forOp);
-          break;
+          ARTS_DEBUG("  Marking store of inner alloc for removal");
         }
       }
-    } else if (auto deallocOp = dyn_cast<memref::DeallocOp>(user)) {
-      /// Direct dealloc of outer array
-      removalMgr.markForRemoval(deallocOp);
+    }
+
+    /// Don't remove the allocation itself - it will become dead code and be
+    /// eliminated by DCE passes. Removing it here causes dominance errors.
+    // if (Operation *def = legacy.getDefiningOp()) {
+    //   removalMgr.markForRemoval(def);
+    //   stats_.allocationsRemoved++;
+    // }
+  }
+
+  /// Don't remove init loops - they contain constants that may be used
+  /// elsewhere These loops will become dead code (their stores are removed) and
+  /// will be eliminated by standard DCE passes. Removing them here causes
+  /// crashes because constants inside the loop may be used by other parts of
+  /// the IR. auto initLoops = pattern.getAllInitLoops(); for (auto loop :
+  /// initLoops) {
+  ///   removalMgr.markForRemoval(loop);
+  /// }
+
+  /// Helper lambda to find and remove deallocation loops for an allocation
+  auto cleanupDeallocLoops = [&](Value alloc) {
+    for (Operation *user : alloc.getUsers()) {
+      if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+        /// Check if this load's result is used by memref.dealloc
+        Value loadResult = loadOp.getResult();
+        for (Operation *loadUser : loadResult.getUsers()) {
+          if (isa<memref::DeallocOp>(loadUser)) {
+            removalMgr.markForRemoval(loadOp);
+            removalMgr.markForRemoval(loadUser);
+            /// Also mark the enclosing loop for removal if it only contains
+            /// deallocs
+            if (auto forOp = loadOp->getParentOfType<scf::ForOp>())
+              removalMgr.markForRemoval(forOp);
+            break;
+          }
+          /// Also check if load result is itself loaded (for cascaded accesses)
+          if (auto innerLoadOp = dyn_cast<memref::LoadOp>(loadUser)) {
+            for (Operation *innerLoadUser : innerLoadOp->getUsers()) {
+              if (isa<memref::DeallocOp>(innerLoadUser)) {
+                removalMgr.markForRemoval(innerLoadOp);
+                removalMgr.markForRemoval(innerLoadUser);
+                if (auto forOp = innerLoadOp->getParentOfType<scf::ForOp>())
+                  removalMgr.markForRemoval(forOp);
+                break;
+              }
+            }
+          }
+        }
+      } else if (auto deallocOp = dyn_cast<memref::DeallocOp>(user)) {
+        /// Direct dealloc of the allocation
+        removalMgr.markForRemoval(deallocOp);
+      }
+    }
+  };
+
+  /// Find and remove deallocation loops that dealloc inner arrays
+  /// Check both the outer alloc and the wrapper alloca (if present)
+  cleanupDeallocLoops(pattern.outerAlloc);
+  if (pattern.wrapperAlloca) {
+    ARTS_DEBUG("  Cleaning up deallocs through wrapper alloca");
+    cleanupDeallocLoops(pattern.wrapperAlloca);
+  }
+
+  /// At this point any remaining direct uses of the legacy outer allocation
+  /// (or its wrapper) are vestigial. Mark simple memory ops so we can drop it.
+  auto markResidualUses = [&](Value memref) {
+    for (Operation *user : memref.getUsers()) {
+      if (removalMgr.isMarkedForRemoval(user))
+        continue;
+
+      if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+        bool allUsesHandled =
+            llvm::all_of(loadOp->getUsers(), [&](Operation *u) {
+              return removalMgr.isMarkedForRemoval(u);
+            });
+        if (allUsesHandled) {
+          removalMgr.markForRemoval(loadOp);
+          continue;
+        }
+      }
+
+      if (isa<memref::StoreOp, memref::DeallocOp>(user))
+        removalMgr.markForRemoval(user);
+    }
+  };
+
+  markResidualUses(pattern.outerAlloc);
+  if (pattern.wrapperAlloca)
+    markResidualUses(pattern.wrapperAlloca);
+
+  /// Only mark outer allocation for removal if all users are handled
+  bool canRemoveOuter = succeeded(removalMgr.verifyAllUsersMarked(
+      pattern.outerAlloc, "Nested allocation (outer array)"));
+
+  if (canRemoveOuter) {
+    auto allocOp = pattern.outerAlloc.getDefiningOp<memref::AllocOp>();
+    if (allocOp) {
+      ARTS_DEBUG("  Marking outer allocation for removal");
+      removalMgr.markForRemoval(allocOp);
+    }
+  } else {
+    ARTS_DEBUG("  Warning: Not all users of outer allocation are marked - "
+               "keeping allocation");
+  }
+
+  /// Only mark wrapper alloca for removal if all users are handled
+  if (pattern.wrapperAlloca) {
+    bool canRemoveWrapper = succeeded(removalMgr.verifyAllUsersMarked(
+        pattern.wrapperAlloca, "Wrapper alloca"));
+
+    if (canRemoveWrapper) {
+      ARTS_DEBUG("  Marking wrapper alloca for removal");
+      auto wrapperAllocaOp =
+          pattern.wrapperAlloca.getDefiningOp<memref::AllocaOp>();
+      if (wrapperAllocaOp)
+        removalMgr.markForRemoval(wrapperAllocaOp);
+    } else {
+      ARTS_DEBUG("  Warning: Not all users of wrapper alloca are marked - "
+                 "keeping wrapper");
     }
   }
-
-  /// Mark outer allocation for removal
-  auto allocOp = pattern.outerAlloc.getDefiningOp<memref::AllocOp>();
-  if (allocOp)
-    removalMgr.markForRemoval(allocOp);
-
-  /// Verify that all remaining users are marked for removal
-  if (failed(removalMgr.verifyAllUsersMarked(pattern.outerAlloc,
-                                              "Nested allocation (outer array)"))) {
-    ARTS_DEBUG("  Warning: Not all users of outer allocation are marked");
-  }
 }
-
-///===----------------------------------------------------------------------===///
-/// Helper Methods
-///===----------------------------------------------------------------------===///
 
 SmallVector<Value>
 NestedAllocTransformer::getAllocDynamicSizes(Operation *allocOp) {
@@ -562,13 +697,12 @@ Value NestedAllocTransformer::createCanonicalAllocation(
   auto memrefType = MemRefType::get(shape, elementType);
 
   /// Create the allocation
-  auto allocOp =
-      builder.create<memref::AllocOp>(loc, memrefType, dimSizes);
+  auto allocOp = builder.create<memref::AllocOp>(loc, memrefType, dimSizes);
   return allocOp.getResult();
 }
 
 void NestedAllocTransformer::transferMetadata(Operation *oldAlloc,
-                                               Operation *newAlloc) {
+                                              Operation *newAlloc) {
   if (!oldAlloc || !newAlloc)
     return;
 
@@ -582,8 +716,8 @@ void NestedAllocTransformer::transferMetadata(Operation *oldAlloc,
 }
 
 void NestedAllocTransformer::duplicateDeallocations(Value oldAlloc,
-                                                     Value newAlloc,
-                                                     OpBuilder &builder) {
+                                                    Value newAlloc,
+                                                    OpBuilder &builder) {
   /// Find all deallocation operations for the old allocation
   SmallVector<memref::DeallocOp> deallocs;
   for (Operation *user : oldAlloc.getUsers()) {

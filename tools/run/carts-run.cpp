@@ -86,6 +86,11 @@ static cl::opt<std::string> MetadataFile("metadata-file",
                                          cl::value_desc("filename"),
                                          cl::init(".carts-metadata.json"));
 
+static cl::opt<uint64_t>
+    ArtsIdStride("arts-id-stride",
+                 cl::desc("Stride multiplier for grouped arts ids"),
+                 cl::init(1000));
+
 ///===----------------------------------------------------------------------===///
 // Pipeline Stop Options
 ///===----------------------------------------------------------------------===///
@@ -262,6 +267,7 @@ void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createEdtInvariantCodeMotionPass());
   pm.addPass(createSymbolDCEPass());
   pm.addPass(createCSEPass());
+  pm.addPass(arts::createEdtPtrRematerializationPass());
 }
 
 /// Db creation pass.
@@ -323,10 +329,10 @@ void setupPreLowering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createParallelEdtLoweringPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
-  pm.addPass(arts::createDbLoweringPass());
+  pm.addPass(arts::createDbLoweringPass(ArtsIdStride));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
-  pm.addPass(arts::createEdtLoweringPass());
+  pm.addPass(arts::createEdtLoweringPass(ArtsIdStride));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(arts::createEpochLoweringPass());
@@ -365,8 +371,8 @@ void setupLLVMIREmission(PassManager &pm) {
 }
 
 /// Configure the pass manager with the optimization passes.
-void setupPassManager(ModuleOp module, MLIRContext &context,
-                      PipelineStage stopAt = PipelineStage::Complete) {
+LogicalResult setupPassManager(ModuleOp module, MLIRContext &context,
+                               PipelineStage stopAt = PipelineStage::Complete) {
   /// Create module-level analysis manager for caching across functions
   std::unique_ptr<arts::ArtsAnalysisManager> AM =
       std::make_unique<arts::ArtsAnalysisManager>(module, ArtsConfig);
@@ -378,11 +384,11 @@ void setupPassManager(ModuleOp module, MLIRContext &context,
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error when canonicalizing memrefs");
       module->dump();
-      return;
+      return failure();
     }
   }
   if (stopAt == PipelineStage::CanonicalizeMemrefs)
-    return;
+    return success();
 
   /// Metadata collection
   if (stopAt == PipelineStage::CollectMetadata) {
@@ -391,9 +397,9 @@ void setupPassManager(ModuleOp module, MLIRContext &context,
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error when collecting metadata");
       module->dump();
-      return;
+      return failure();
     }
-    return;
+    return success();
   }
 
   /// Initial cleanup
@@ -405,11 +411,11 @@ void setupPassManager(ModuleOp module, MLIRContext &context,
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error simplyfing the IR");
       module->dump();
-      return;
+      return failure();
     }
   }
   if (stopAt == PipelineStage::InitialCleanup)
-    return;
+    return success();
 
   /// OpenMP to ARTS conversion
   {
@@ -418,11 +424,11 @@ void setupPassManager(ModuleOp module, MLIRContext &context,
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error when converting OpenMP to ARTS");
       module->dump();
-      return;
+      return failure();
     }
   }
   if (stopAt == PipelineStage::OpenMPToArts)
-    return;
+    return success();
 
   /// EDT transformations
   {
@@ -431,11 +437,11 @@ void setupPassManager(ModuleOp module, MLIRContext &context,
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error when running EDT transformations");
       module->dump();
-      return;
+      return failure();
     }
   }
   if (stopAt == PipelineStage::EdtTransforms)
-    return;
+    return success();
 
   /// Create Dbs
   {
@@ -444,11 +450,11 @@ void setupPassManager(ModuleOp module, MLIRContext &context,
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error when creating Dbs");
       module->dump();
-      return;
+      return failure();
     }
   }
   if (stopAt == PipelineStage::CreateDbs)
-    return;
+    return success();
 
   /// Db optimizations
   {
@@ -457,11 +463,11 @@ void setupPassManager(ModuleOp module, MLIRContext &context,
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error when optimizing Dbs");
       module->dump();
-      return;
+      return failure();
     }
   }
   if (stopAt == PipelineStage::DbOpt)
-    return;
+    return success();
 
   /// Edt optimizations
   {
@@ -470,11 +476,11 @@ void setupPassManager(ModuleOp module, MLIRContext &context,
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error when optimizing EDTs");
       module->dump();
-      return;
+      return failure();
     }
   }
   if (stopAt == PipelineStage::EdtOpt)
-    return;
+    return success();
 
   /// Concurrency
   {
@@ -483,11 +489,11 @@ void setupPassManager(ModuleOp module, MLIRContext &context,
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error when running concurrency");
       module->dump();
-      return;
+      return failure();
     }
   }
   if (stopAt == PipelineStage::Concurrency)
-    return;
+    return success();
 
   /// Concurrency optimizations
   {
@@ -496,11 +502,11 @@ void setupPassManager(ModuleOp module, MLIRContext &context,
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error when optimizing concurrency");
       module->dump();
-      return;
+      return failure();
     }
   }
   if (stopAt == PipelineStage::ConcurrencyOpt)
-    return;
+    return success();
 
   /// Epochs: creation and optimization
   {
@@ -509,11 +515,11 @@ void setupPassManager(ModuleOp module, MLIRContext &context,
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error when creating and optimizing epochs");
       module->dump();
-      return;
+      return failure();
     }
   }
   if (stopAt == PipelineStage::Epochs)
-    return;
+    return success();
 
   /// Pre-lowering
   {
@@ -522,11 +528,11 @@ void setupPassManager(ModuleOp module, MLIRContext &context,
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error when pre-lowering DBs, EDTs, and Epochs");
       module->dump();
-      return;
+      return failure();
     }
   }
   if (stopAt == PipelineStage::PreLowering)
-    return;
+    return success();
 
   /// Convert ARTS to LLVM
   {
@@ -535,11 +541,11 @@ void setupPassManager(ModuleOp module, MLIRContext &context,
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error when converting ARTS to LLVM");
       module->dump();
-      return;
+      return failure();
     }
   }
   if (stopAt == PipelineStage::ArtsToLLVM)
-    return;
+    return success();
 
   /// Optimizations
   if (Opt) {
@@ -550,7 +556,7 @@ void setupPassManager(ModuleOp module, MLIRContext &context,
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error when running classical optimizations");
       module->dump();
-      return;
+      return failure();
     }
   }
 
@@ -561,9 +567,11 @@ void setupPassManager(ModuleOp module, MLIRContext &context,
     if (failed(pm.run(module))) {
       ARTS_ERROR("Error when emitting LLVM IR");
       module->dump();
-      return;
+      return failure();
     }
   }
+
+  return success();
 }
 
 ///===----------------------------------------------------------------------===///
@@ -594,7 +602,9 @@ int main(int argc, char **argv) {
   }
 
   /// Run the pass pipeline once.
-  setupPassManager(module.get(), context, StopAt);
+  if (failed(setupPassManager(module.get(), context, StopAt))) {
+    return 1;
+  }
 
   /// Translate the optimized module to LLVM IR and write output.
   if (EmitLLVM) {

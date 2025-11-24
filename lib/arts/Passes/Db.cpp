@@ -33,6 +33,7 @@
 #include "arts/Analysis/Graphs/Edt/EdtNode.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -211,6 +212,10 @@ bool DbPass::partitionDb() {
     return false;
   ARTS_DEBUG_HEADER(PartitionDb);
   bool changed = false;
+  OpBuilder attrBuilder(module.getContext());
+  llvm::SmallPtrSet<Operation *, 8> partitionAttempt;
+  llvm::SmallPtrSet<Operation *, 8> partitionSuccess;
+  llvm::SmallPtrSet<Operation *, 8> partitionFailed;
 
   /// Collect all (alloc, acquire, offset, size) tuples
   using AcqChunkInfo = std::tuple<DbAcquireOp, Value, Value>;
@@ -240,6 +245,9 @@ bool DbPass::partitionDb() {
     for (DbAcquireNode *node : candidates) {
       Value chunkOffset, chunkSize;
       auto [cachedOffset, cachedSize] = node->getPartitionInfo();
+      DbAllocNode *allocNode = node->getRootAlloc();
+      if (allocNode && allocNode->getDbAllocOp())
+        partitionAttempt.insert(allocNode->getDbAllocOp().getOperation());
       if (cachedOffset && cachedSize) {
         chunkOffset = cachedOffset;
         chunkSize = cachedSize;
@@ -249,6 +257,8 @@ bool DbPass::partitionDb() {
       } else if (failed(node->computeChunkInfo(chunkOffset, chunkSize))) {
         ARTS_DEBUG("  Failed to compute chunk info for acquire "
                    << node->getDbAcquireOp());
+        if (allocNode && allocNode->getDbAllocOp())
+          partitionFailed.insert(allocNode->getDbAllocOp().getOperation());
         continue;
       } else {
         node->setPartitionInfo(chunkOffset, chunkSize);
@@ -257,7 +267,6 @@ bool DbPass::partitionDb() {
                    << " size=" << chunkSize);
       }
 
-      DbAllocNode *allocNode = node->getRootAlloc();
       if (!allocNode)
         continue;
 
@@ -286,10 +295,13 @@ bool DbPass::partitionDb() {
     ARTS_DEBUG("Promoting alloc with " << acquireList.size() << " acquires");
 
     auto promotedOr = promoteAllocForChunking(allocOp);
-    if (failed(promotedOr))
+    if (failed(promotedOr)) {
+      partitionFailed.insert(allocOp.getOperation());
       continue;
+    }
 
     DbAllocOp promoted = promotedOr.value();
+    partitionAttempt.insert(promoted.getOperation());
     if (promoted.getOperation() == allocOp.getOperation()) {
       ARTS_DEBUG("  Alloc already promoted, updating acquires");
     } else {
@@ -299,14 +311,17 @@ bool DbPass::partitionDb() {
     }
 
     changed |= normalizeRootAcquires(promoted);
+    bool chunkRewrite = false;
 
     /// Update all acquires for this alloc
     for (auto &[acqOp, chunkOffset, chunkSize] : acquireList) {
       if (!acqOp)
         continue;
 
-      if (updateAcquireForChunk(acqOp, promoted, chunkOffset, chunkSize))
+      if (updateAcquireForChunk(acqOp, promoted, chunkOffset, chunkSize)) {
         changed = true;
+        chunkRewrite = true;
+      }
 
       /// Verify the transformation
       if (acqOp.getOffsets().empty() || acqOp.getSizes().empty()) {
@@ -324,7 +339,36 @@ bool DbPass::partitionDb() {
             "  WARNING: Acquire source ptr doesn't match promoted alloc");
       }
     }
+    if (chunkRewrite)
+      partitionSuccess.insert(promoted.getOperation());
+    else
+      partitionFailed.insert(promoted.getOperation());
   }
+
+  auto setTwinAttr = [&](DbAllocOp alloc, bool useTwinDiff) {
+    if (!alloc)
+      return;
+    BoolAttr newAttr = attrBuilder.getBoolAttr(useTwinDiff);
+    if (auto existing = alloc->getAttrOfType<BoolAttr>("arts.twin_diff"))
+      if (existing == newAttr)
+        return;
+    alloc->setAttr("arts.twin_diff", newAttr);
+    changed = true;
+  };
+
+  for (Operation *op : partitionSuccess)
+    setTwinAttr(DbAllocOp(op), false);
+
+  for (Operation *op : partitionFailed) {
+    if (partitionSuccess.contains(op))
+      continue;
+    setTwinAttr(DbAllocOp(op), true);
+  }
+
+  module.walk([&](DbAllocOp alloc) {
+    if (!alloc->hasAttr("arts.twin_diff"))
+      setTwinAttr(alloc, false);
+  });
 
   /// Rebuild graph if any promotions occurred
   if (changed) {
@@ -348,6 +392,11 @@ FailureOr<DbAllocOp> DbPass::promoteAllocForChunking(DbAllocOp allocOp) {
   if (!allocOp || !allocOp.getOperation())
     return failure();
 
+  /// Example of the promotion performed here:
+  ///   coarse alloc : sizes=[1], elementSizes=[N]
+  ///   normalized   : sizes=[N], elementSizes=[1]
+  /// Root acquires are then normalized to offsets=[0], sizes=[N] so worker
+  /// acquires can safely slice chunks by rewriting offsets/sizes only.
   ValueRange elementSizes = allocOp.getElementSizes();
   ValueRange sizes = allocOp.getSizes();
   if (elementSizes.empty())
@@ -409,6 +458,9 @@ bool DbPass::normalizeRootAcquires(DbAllocOp allocOp) {
   if (allocSizes.empty())
     return false;
 
+  /// Normalization ensures that the root acquire mirrors the promoted alloc
+  /// (offset 0 / full size). Worker acquires can then safely slice without
+  /// guessing the original extent.
   SmallVector<DbAcquireOp> acquires;
   for (Operation *user : allocOp.getPtr().getUsers())
     if (auto acq = dyn_cast<DbAcquireOp>(user))
@@ -437,6 +489,8 @@ bool DbPass::normalizeRootAcquires(DbAllocOp allocOp) {
     SmallVector<Value> sizes(allocSizes.begin(), allocSizes.end());
     acq.getOffsetsMutable().assign(offsets);
     acq.getSizesMutable().assign(sizes);
+    acq.getOffsetHintsMutable().assign(offsets);
+    acq.getSizeHintsMutable().assign(sizes);
     changed = true;
     ARTS_DEBUG("  Normalized acquire " << acq << " to full allocation extents");
   }
@@ -500,6 +554,10 @@ bool DbPass::updateAcquireForChunk(DbAcquireOp acqOp, DbAllocOp promotedAlloc,
   SmallVector<Value> sizes{chunkSize};
   acqOp.getOffsetsMutable().assign(offsets);
   acqOp.getSizesMutable().assign(sizes);
+  /// Provide hints mirroring the chosen slice so downstream passes can keep
+  /// worker-aware chunking stable.
+  acqOp.getOffsetHintsMutable().assign(offsets);
+  acqOp.getSizeHintsMutable().assign(sizes);
 
   (void)rewriteAcquireUsersForChunk(acqOp, chunkOffset);
   return true;

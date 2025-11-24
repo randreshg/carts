@@ -123,7 +123,8 @@ __ARTS_TYPE(RawPtr, mlir::LLVM::LLVMPointerType::get)
 ///   ArtsType mode;
 ///   void *ptr;
 /// } artsEdtDep_t;
-__ARTS_STRUCT_TYPE(ArtsEdtDep, artsEdtDep_t, false, ArtsGuid, ArtsType, llvmPtr)
+__ARTS_STRUCT_TYPE(ArtsEdtDep, artsEdtDep_t, false, ArtsGuid, ArtsType, llvmPtr,
+                   ArtsType, Int1)
 
 #undef __ARTS_STRUCT_TYPE
 #undef ARTS_STRUCT_TYPE
@@ -363,6 +364,12 @@ __ARTS_RTL_ATTRS(artsDbAddDependence, ControlAttrs, EmptyAttrs,
 __ARTS_RTL(artsAddDependenceWithMode, Void, ArtsGuid, ArtsGuid, Int32, Int32)
 __ARTS_RTL_ATTRS(artsAddDependenceWithMode, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs, EmptyAttrs, ZExt, ZExt))
+/// void artsRecordDep(artsGuid_t dbSrc, artsGuid_t edtDest,
+///                    uint32_t edtSlot, artsType_t acquireMode,
+///                    bool useTwinDiff);
+__ARTS_RTL(artsRecordDep, Void, ArtsGuid, ArtsGuid, Int32, ArtsType, Int1)
+__ARTS_RTL_ATTRS(artsRecordDep, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs, ZExt, ZExt, ZExt))
 
 /// artsGuid_t artsDbGetGuid(void *dbPtr);
 __ARTS_RTL(artsDbGetGuid, ArtsGuid, VoidPtr)

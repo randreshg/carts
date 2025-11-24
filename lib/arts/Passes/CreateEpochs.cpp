@@ -59,55 +59,81 @@ static void processSyncEdtOp(EdtOp op) {
 }
 
 /// Helper function to process barrier ops
+static Region *findCommonRegion(Region *a, Region *b) {
+  if (!a)
+    return b;
+  if (!b)
+    return a;
+
+  SmallPtrSet<Region *, 8> ancestors;
+  for (Region *it = a; it; it = it->getParentRegion())
+    ancestors.insert(it);
+
+  for (Region *it = b; it; it = it->getParentRegion())
+    if (ancestors.contains(it))
+      return it;
+  return nullptr;
+}
+
 static void processBarrierOp(BarrierOp barrier) {
   ARTS_DEBUG("Processing BarrierOp");
   auto loc = barrier.getLoc();
 
-  bool hasParentEdt = true;
-  Operation *parentOp = barrier->getParentOfType<EdtOp>();
-  if (!parentOp) {
-    parentOp = barrier->getParentOfType<func::FuncOp>();
-    hasParentEdt = false;
-  }
+  /// Find the nearest common region for all operations that can reach this
+  /// barrier. We only consider operations within the enclosing EDT (or the
+  /// function if no EDT parent exists) and exclude ancestors of the barrier
+  /// itself.
+  Operation *scope = barrier->getParentOfType<EdtOp>();
+  if (!scope)
+    scope = barrier->getParentOfType<func::FuncOp>();
+  if (!scope)
+    return;
 
-  /// Determine the appropriate parent insertion point.
-  Region *parentIP = nullptr;
-  parentOp->walk([&](EdtOp childEdt) {
-    /// Check if the childEDT is a direct child of the parentOp when necessary.
-    if (hasParentEdt && (childEdt->getParentOfType<EdtOp>() != parentOp))
+  SmallVector<Operation *> reachableOps;
+  scope->walk([&](Operation *op) {
+    if (op == barrier)
       return;
-
-    /// Skip the childEDT if it cannot reach the barrier.
-    if (!isReachable(childEdt, barrier))
+    if (op->isProperAncestor(barrier))
       return;
-
-    /// Initialize or update the parent insertion point.
-    if (!parentIP)
-      parentIP = childEdt->getParentRegion();
-    else {
-      while (parentIP && !parentIP->isAncestor(childEdt->getParentRegion()))
-        parentIP = parentIP->getParentRegion();
-    }
+    if (isa<YieldOp>(op))
+      return;
+    if (!isReachable(op, barrier))
+      return;
+    reachableOps.push_back(op);
   });
-  assert(parentIP && "Parent insertion point cannot be null");
 
-  /// Collect operations preceding the barrier to avoid iterator invalidation.
-  bool finishCollection = false;
+  Region *parentIP = barrier->getParentRegion();
+  for (Operation *op : reachableOps)
+    parentIP = findCommonRegion(parentIP, op->getParentRegion());
+  if (!parentIP)
+    parentIP = barrier->getParentRegion();
+
+  DenseSet<Operation *> reachableSet(reachableOps.begin(), reachableOps.end());
+
+  /// Collect operations (in program order) inside the chosen parent region that
+  /// can reach the barrier.
   SmallVector<Operation *, 8> opsToMove;
-  for (Block &block : *parentIP) {
-    for (Operation &op : block) {
-      if (&op == barrier) {
-        finishCollection = true;
-        break;
-      }
-      opsToMove.push_back(&op);
-    }
-    if (finishCollection)
-      break;
-  }
+  parentIP->walk([&](Operation *op) {
+    if (op == barrier)
+      return;
+    if (!reachableSet.contains(op))
+      return;
+    opsToMove.push_back(op);
+  });
 
   /// Create a new epoch op and prepare its region.
-  OpBuilder builder(parentIP);
+  Operation *insertionOp = nullptr;
+  for (Operation *op : opsToMove) {
+    if (op->getParentRegion() == parentIP) {
+      insertionOp = op;
+      break;
+    }
+  }
+
+  Block *insertBlock =
+      insertionOp ? insertionOp->getBlock() : &parentIP->front();
+  OpBuilder builder(insertBlock, insertionOp ? Block::iterator(insertionOp)
+                                             : insertBlock->begin());
   auto epochOp = builder.create<EpochOp>(loc);
   auto &epochRegion = epochOp.getRegion();
   if (epochRegion.empty())

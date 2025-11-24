@@ -5,6 +5,7 @@
 /// Dialects
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Value.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 
 /// Arts
 #include "arts/ArtsDialect.h"
@@ -42,23 +43,49 @@ void rematerializePointersInEdt(EdtOp edt) {
       return valueMap[val];
 
     /// Skip if there's no defining operation
-    if (!val.getDefiningOp())
+    Operation *defOp = val.getDefiningOp();
+    if (!defOp)
       return val;
 
-    /// Check if this is a memref.load operation
-    bool isLoadOp = isa<memref::LoadOp>(val.getDefiningOp());
+    /// Check if operation has side effects that prevent rematerialization
+    /// (same pattern as EdtLowering.cpp)
+    bool hasRegions = defOp->getNumRegions() != 0;
+    bool hasSideEffects = false;
+    if (auto memInterface = dyn_cast<MemoryEffectOpInterface>(defOp)) {
+      hasSideEffects = memInterface.hasEffect<MemoryEffects::Write>() ||
+                       memInterface.hasEffect<MemoryEffects::Allocate>() ||
+                       memInterface.hasEffect<MemoryEffects::Free>();
+    } else {
+      hasSideEffects = !isMemoryEffectFree(defOp);
+    }
 
-    /// Return if the value is a scalar/memref and NOT from a load operation
-    if (!isLoadOp && (val.getType().isIntOrIndexOrFloat() ||
-                      val.getType().isa<MemRefType>()))
+    /// Skip operations with regions or write/allocate/free side effects
+    if (hasRegions || hasSideEffects)
       return val;
 
     /// First clone dependencies
     SmallVector<Value, 4> newOperands;
-    for (Value operand : val.getDefiningOp()->getOperands()) {
-      if (operand.getDefiningOp() &&
-          operand.getType().isa<LLVM::LLVMPointerType>()) {
-        newOperands.push_back(cloneWithDeps(operand, builder, valueMap));
+    for (Value operand : defOp->getOperands()) {
+      /// Check if operand needs to be cloned (has defining op and can be
+      /// rematerialized)
+      if (operand.getDefiningOp()) {
+        Operation *opDefOp = operand.getDefiningOp();
+        bool opHasRegions = opDefOp->getNumRegions() != 0;
+        bool opHasSideEffects = false;
+        if (auto memInterface = dyn_cast<MemoryEffectOpInterface>(opDefOp)) {
+          opHasSideEffects =
+              memInterface.hasEffect<MemoryEffects::Write>() ||
+              memInterface.hasEffect<MemoryEffects::Allocate>() ||
+              memInterface.hasEffect<MemoryEffects::Free>();
+        } else {
+          opHasSideEffects = !isMemoryEffectFree(opDefOp);
+        }
+        /// Clone if it's a pure operation without regions
+        if (!opHasRegions && !opHasSideEffects) {
+          newOperands.push_back(cloneWithDeps(operand, builder, valueMap));
+        } else {
+          newOperands.push_back(operand);
+        }
       } else {
         newOperands.push_back(operand);
       }
@@ -76,17 +103,25 @@ void rematerializePointersInEdt(EdtOp edt) {
 
   DenseMap<Value, Value> valueMap;
   for (Value operand : usedValues) {
-    /// Check if this is a pointer type that needs rematerialization
-    bool isPointer = operand.getType().isa<LLVM::LLVMPointerType>();
+    /// Check if this operand can be safely rematerialized
+    /// Only rematerialize operations without write/allocate/free side effects
+    Operation *defOp = operand.getDefiningOp();
+    if (!defOp)
+      continue;
 
-    /// Check if this is a scalar from a memref.load that needs
-    /// rematerialization
-    bool isLoadFromMemref = false;
-    if (auto *defOp = operand.getDefiningOp())
-      isLoadFromMemref = isa<memref::LoadOp>(defOp);
+    /// Check if operation has side effects that prevent rematerialization
+    bool hasRegions = defOp->getNumRegions() != 0;
+    bool hasSideEffects = false;
+    if (auto memInterface = dyn_cast<MemoryEffectOpInterface>(defOp)) {
+      hasSideEffects = memInterface.hasEffect<MemoryEffects::Write>() ||
+                       memInterface.hasEffect<MemoryEffects::Allocate>() ||
+                       memInterface.hasEffect<MemoryEffects::Free>();
+    } else {
+      hasSideEffects = !isMemoryEffectFree(defOp);
+    }
 
-    /// Skip if it's neither a pointer nor a load from memref
-    if (!isPointer && !isLoadFromMemref)
+    /// Skip operations with regions or write/allocate/free side effects
+    if (hasRegions || hasSideEffects)
       continue;
 
     /// Clone operation and its dependencies recursively

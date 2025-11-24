@@ -161,6 +161,9 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     - indices: indices for subregion
     - offsets: offsets for subregion
     - sizes: sizes for subregion
+    - offset_hints / size_hints: optional per-dimension hints for downstream
+      passes. These are not semantically relevant but help partitioning passes
+      propagate the intended chunking strategy (e.g., worker chunk offsets).
 
     When source_guid is absent (nullptr), it means this acquire is chaining from
     a parent EDT's acquire where only the ptr was passed through block arguments.
@@ -174,8 +177,8 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     Variadic<Index>:$indices,
     Variadic<Index>:$offsets,
     Variadic<Index>:$sizes,
-    Optional<Index>:$chunk_offset_hint,
-    Optional<Index>:$chunk_size_hint
+    Variadic<Index>:$offset_hints,
+    Variadic<Index>:$size_hints
   );
   let results = (outs MemRefOf<[I64]>:$guid, AnyMemRef:$ptr);
   let assemblyFormat = [{
@@ -184,7 +187,8 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     ( `indices` `[` $indices^ `]` )?
     ( `offsets` `[` $offsets^ `]` )?
     ( `sizes` `[` $sizes^ `]` )?
-    ( `chunk_hint` `[` $chunk_offset_hint^ `,` $chunk_size_hint `]` )?
+    ( `offset_hints` `[` $offset_hints^ `]` )?
+    ( `size_hints` `[` $size_hints^ `]` )?
     attr-dict `->` `(` type($guid) `,` type($ptr) `)`
   }];
   let hasVerifier = 1;
@@ -196,8 +200,8 @@ def DbAcquireOp : Arts_Op<"db_acquire",
                    CArg<"SmallVector<Value>", "{}">:$indices,
                    CArg<"SmallVector<Value>", "{}">:$offsets,
                    CArg<"SmallVector<Value>", "{}">:$sizes,
-                   CArg<"Value", "Value()">:$chunk_offset_hint,
-                   CArg<"Value", "Value()">:$chunk_size_hint)>,
+                   CArg<"SmallVector<Value>", "{}">:$offset_hints,
+                   CArg<"SmallVector<Value>", "{}">:$size_hints)>,
     OpBuilder<(ins "ArtsMode":$mode,
                    "Value":$source_guid,
                    "Value":$source_ptr,
@@ -205,8 +209,8 @@ def DbAcquireOp : Arts_Op<"db_acquire",
                    CArg<"SmallVector<Value>", "{}">:$indices,
                    CArg<"SmallVector<Value>", "{}">:$offsets,
                    CArg<"SmallVector<Value>", "{}">:$sizes,
-                   CArg<"Value", "Value()">:$chunk_offset_hint,
-                   CArg<"Value", "Value()">:$chunk_size_hint)>
+                   CArg<"SmallVector<Value>", "{}">:$offset_hints,
+                   CArg<"SmallVector<Value>", "{}">:$size_hints)>
   ];
 }
 
@@ -694,7 +698,8 @@ def RecordDepOp : Arts_Op<"rec_dep", [MemoryEffects<[MemWrite]>]> {
   let summary = "Record in-dependencies for EDT.";
   let description = [{
     Records all in-dependencies (datablocks) for the EDT in order.
-    Each datablock will be recorded as a dependency for the EDT.
+    Each datablock will be recorded as a dependency for the EDT and latches will
+    be updated by the runtime as needed.
     The access_mode attribute specifies how to access the GUID values:
     - direct: GUIDs accessed via memref.load from DbAcquireOp results
     - from_depv: GUIDs accessed via dep_gep from EDT depv structure
@@ -702,13 +707,18 @@ def RecordDepOp : Arts_Op<"rec_dep", [MemoryEffects<[MemWrite]>]> {
     The acquire_modes array stores the DbMode for each acquire operation.
     When acquire mode differs from alloc mode, artsAddDependenceWithMode is used
     to enable runtime optimizations (e.g., skip frontier progression for read-only EDTs).
+    The twin_diff attribute is a per-dependency hint indicating whether the
+    runtime should enable twin-diff reuse for that datablock. When unset, all
+    entries default to false.
   }];
   let arguments = (ins
     I64:$edt_guid,
     Variadic<AnyType>:$datablocks,
     DefaultValuedAttr<DepAccessModeAttr, "::mlir::arts::DepAccessMode::direct">:$access_mode,
-    OptionalAttr<DenseI32ArrayAttr>:$acquire_modes
+    OptionalAttr<DenseI32ArrayAttr>:$acquire_modes,
+    OptionalAttr<DenseBoolArrayAttr>:$twin_diff
   );
+  let hasVerifier = 1;
   let assemblyFormat = "$edt_guid `(` $datablocks `:` type($datablocks) `)` attr-dict";
 }
 

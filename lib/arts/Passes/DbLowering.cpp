@@ -30,6 +30,7 @@ using namespace mlir;
 using namespace arts;
 namespace {
 struct DbLoweringPass : public arts::DbLoweringBase<DbLoweringPass> {
+  DbLoweringPass(uint64_t idStride = 1000) : idStride(idStride) {}
   ~DbLoweringPass() override { delete AC; }
   void runOnOperation() override;
 
@@ -45,6 +46,7 @@ private:
   Value getLLVMPtr(Value base, ValueRange opIndices, Location loc);
 
 private:
+  uint64_t idStride = 1000;
   SetVector<Operation *> opsToRemove;
   ModuleOp module;
   ArtsCodegen *AC = nullptr;
@@ -111,6 +113,21 @@ void DbLoweringPass::convertDbAllocOps() {
         oldOp.getDbMode(), oldOp.getElementType(), ptrType, sizes,
         elementSizes);
     ARTS_DEBUG("  - New DbAllocOp: " << newOp);
+    for (auto &attr : oldOp->getAttrs()) {
+      if (!attr.getName().getValue().starts_with("arts."))
+        continue;
+      if (attr.getName() == "arts.db_group_id" ||
+          attr.getName() == "arts.db_group_stride")
+        continue;
+      newOp->setAttr(attr.getName(), attr.getValue());
+    }
+    if (auto idAttr = oldOp->getAttrOfType<IntegerAttr>("arts.id")) {
+      int64_t grouped = idAttr.getInt() * static_cast<int64_t>(idStride);
+      newOp->setAttr("arts.db_group_id",
+                     AC->getBuilder().getI64IntegerAttr(grouped));
+      newOp->setAttr("arts.db_group_stride",
+                     AC->getBuilder().getI64IntegerAttr(idStride));
+    }
     updateAllocUsers(oldOp, newOp);
     opsToRemove.insert(oldOp);
   }
@@ -236,9 +253,17 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
                              acquireOp.getOffsets().end());
   SmallVector<Value> sizes(acquireOp.getSizes().begin(),
                            acquireOp.getSizes().end());
-  auto newAcquireOp =
-      AC->create<DbAcquireOp>(acquireOp.getLoc(), acquireOp.getMode(), newGuid,
-                              newPtr, indices, offsets, sizes);
+  SmallVector<Value> offsetHints(acquireOp.getOffsetHints().begin(),
+                                 acquireOp.getOffsetHints().end());
+  SmallVector<Value> sizeHints(acquireOp.getSizeHints().begin(),
+                               acquireOp.getSizeHints().end());
+  auto newAcquireOp = AC->create<DbAcquireOp>(
+      acquireOp.getLoc(), acquireOp.getMode(), newGuid, newPtr, indices,
+      offsets, sizes, offsetHints, sizeHints);
+  for (auto &attr : acquireOp->getAttrs()) {
+    if (attr.getName().getValue().starts_with("arts."))
+      newAcquireOp->setAttr(attr.getName(), attr.getValue());
+  }
   ARTS_DEBUG("  - New DbAcquireOp: " << newAcquireOp);
 
   auto rewriteBlockUses = [&](Value base, Value replacementBase) {
@@ -372,6 +397,10 @@ namespace mlir {
 namespace arts {
 std::unique_ptr<Pass> createDbLoweringPass() {
   return std::make_unique<DbLoweringPass>();
+}
+
+std::unique_ptr<Pass> createDbLoweringPass(uint64_t idStride) {
+  return std::make_unique<DbLoweringPass>(idStride);
 }
 } // namespace arts
 } // namespace mlir

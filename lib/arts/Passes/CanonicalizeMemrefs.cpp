@@ -156,7 +156,7 @@ void CanonicalizeMemrefsPass::runOnOperation() {
   /// Verify all allocations are in canonical form
   verifyAllCanonical();
 
-  ARTS_INFO_HEADER(CanonicalizeMemrefsPass Finished);
+  ARTS_INFO_FOOTER(CanonicalizeMemrefsPass);
   ARTS_DEBUG_REGION(module.dump(););
 }
 
@@ -166,14 +166,17 @@ void CanonicalizeMemrefsPass::runOnOperation() {
 
 void CanonicalizeMemrefsPass::verifyAllCanonical() {
   ModuleOp module = getOperation();
+  bool hasIssues = false;
 
   /// Verify no nested memref types remain
   module.walk([&](Operation *op) {
     if (auto allocOp = dyn_cast<memref::AllocOp>(op)) {
       auto memrefType = allocOp.getType();
       if (auto elemType = memrefType.getElementType().dyn_cast<MemRefType>()) {
-        ARTS_WARN("  Warning: Found non-canonical nested memref allocation: "
-                  << allocOp);
+        allocOp->emitError("CanonicalizeMemrefsPass verification failed: "
+                           "Found nested memref allocation (memref-of-memref) "
+                           "after canonicalization");
+        hasIssues = true;
       }
     }
     if (auto allocaOp = dyn_cast<memref::AllocaOp>(op)) {
@@ -181,13 +184,66 @@ void CanonicalizeMemrefsPass::verifyAllCanonical() {
       if (memrefType.getRank() == 0) {
         if (auto elemType =
                 memrefType.getElementType().dyn_cast<MemRefType>()) {
-          ARTS_WARN("  Warning: Found non-canonical rank-0 alloca with memref "
-                    "element: "
-                    << allocaOp);
+          allocaOp->emitError(
+              "CanonicalizeMemrefsPass verification failed: Found rank-0 "
+              "alloca storing a memref after canonicalization");
+          hasIssues = true;
         }
       }
     }
+
+    /// Verify memref.load operations have correct number of indices
+    if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
+      auto memrefType = loadOp.getMemRefType();
+      unsigned memrefRank = memrefType.getRank();
+      unsigned numIndices = loadOp.getIndices().size();
+
+      if (numIndices != memrefRank) {
+        op->emitError(
+            "CanonicalizeMemrefsPass verification failed: memref.load "
+            "has ")
+            << numIndices << " indices but memref type has rank " << memrefRank
+            << ". This indicates strided or multi-dimensional access patterns "
+            << "that were not properly canonicalized. The source code may use "
+            << "VLA pointer casts or other memory layouts that CARTS does not "
+            << "currently support. Consider rewriting the code to use "
+            << "explicit multi-dimensional arrays (e.g., malloc for each "
+               "dimension).";
+        hasIssues = true;
+      }
+    }
+
+    /// Verify memref.store operations have correct number of indices
+    if (auto storeOp = dyn_cast<memref::StoreOp>(op)) {
+      auto memrefType = storeOp.getMemRefType();
+      unsigned memrefRank = memrefType.getRank();
+      unsigned numIndices = storeOp.getIndices().size();
+
+      if (numIndices != memrefRank) {
+        op->emitError(
+            "CanonicalizeMemrefsPass verification failed: memref.store "
+            "has ")
+            << numIndices << " indices but memref type has rank " << memrefRank
+            << ". This indicates strided or multi-dimensional access patterns "
+            << "that were not properly canonicalized. The source code may use "
+            << "VLA pointer casts or other memory layouts that CARTS does not "
+            << "currently support. Consider rewriting the code to use "
+            << "explicit multi-dimensional arrays (e.g., malloc for each "
+               "dimension).";
+        hasIssues = true;
+      }
+    }
   });
+
+  if (hasIssues) {
+    module.emitError(
+        "CanonicalizeMemrefsPass verification failed: Non-canonical memref "
+        "operations remain after transformation. This typically occurs when "
+        "source code uses VLA pointer casts or other layouts that cannot be "
+        "canonicalized; please rewrite to use explicit multi-dimensional "
+        "allocations.");
+    signalPassFailure();
+  }
 }
 
 ///===----------------------------------------------------------------------===///
