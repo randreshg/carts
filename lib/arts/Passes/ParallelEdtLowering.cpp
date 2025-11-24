@@ -101,6 +101,18 @@ static void ensureNestedEdtCaptures(Operation *op) {
   });
 }
 
+/// Route all internode EDTs nested under `op` to the current worker.
+static void routeEdtsToWorker(Operation *op, Value workerRoute) {
+  if (!workerRoute)
+    return;
+
+  op->walk([&](EdtOp edt) {
+    if (edt.getConcurrency() != EdtConcurrency::internode)
+      return;
+    edt.getRouteMutable().assign(workerRoute);
+  });
+}
+
 class ParallelEdtLoweringPass
     : public arts::ParallelEdtLoweringBase<ParallelEdtLoweringPass> {
 public:
@@ -155,40 +167,63 @@ private:
     Location loc = parallelEdt.getLoc();
     OpBuilder builder(parallelEdt);
     builder.setInsertionPoint(parallelEdt);
-    Value numWorkers = getNumWorkers(builder, loc, parallelEdt);
-    if (!numWorkers.getType().isIndex())
-      numWorkers = builder.create<arith::IndexCastOp>(
-          loc, builder.getIndexType(), numWorkers);
-    Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
-    Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
 
-    IRMapping mapping;
-    for (auto [arg, dep] : llvm::zip(body.getArguments(), deps))
-      mapping.map(arg, dep);
+    /// Wrap lowered worker loop in an epoch to provide an explicit
+    auto epochOp = builder.create<EpochOp>(loc);
+    Region &epochRegion = epochOp.getBody();
+    if (epochRegion.empty())
+      epochRegion.push_back(new Block());
+    Block *epochBlock = &epochRegion.front();
+    OpBuilder epochBuilder = OpBuilder::atBlockBegin(epochBlock);
+
+    Value numWorkers = getNumWorkers(epochBuilder, loc, parallelEdt);
+    if (!numWorkers.getType().isIndex())
+      numWorkers = epochBuilder.create<arith::IndexCastOp>(
+          loc, epochBuilder.getIndexType(), numWorkers);
+    Value zero = epochBuilder.create<arith::ConstantIndexOp>(loc, 0);
+    Value one = epochBuilder.create<arith::ConstantIndexOp>(loc, 1);
 
     /// Create a single worker loop to preserve program order
-    auto workerLoop = builder.create<scf::ForOp>(loc, zero, numWorkers, one);
+    auto workerLoop =
+        epochBuilder.create<scf::ForOp>(loc, zero, numWorkers, one);
     OpBuilder loopBuilder =
         OpBuilder::atBlockBegin(&workerLoop.getRegion().front());
     Value workerId = workerLoop.getInductionVar();
 
-    for (Operation &op : body.without_terminator()) {
-      /// Handle GetParallelWorkerIdOp specifically
-      if (auto getId = dyn_cast<GetParallelWorkerIdOp>(op)) {
-        mapping.map(getId.getResult(), workerId);
-        continue;
-      }
-
-      /// Clone operation
-      Operation *cloned = loopBuilder.clone(op, mapping);
-      for (auto [oldRes, newRes] :
-           llvm::zip(op.getResults(), cloned->getResults()))
-        mapping.map(oldRes, newRes);
-
-      replaceWorkerIds(cloned, workerId);
-      guardSingleEdts(cloned, workerId);
-      ensureNestedEdtCaptures(cloned);
+    /// For internode parallelism, set EDT route to the worker ID (node).
+    Value workerRoute;
+    bool routeWorkers =
+        parallelEdt.getConcurrency() == EdtConcurrency::internode;
+    if (routeWorkers) {
+      Type i32Ty = loopBuilder.getIntegerType(32);
+      workerRoute = workerId;
+      if (workerRoute.getType() != i32Ty)
+        workerRoute =
+            loopBuilder.create<arith::IndexCastOp>(loc, i32Ty, workerRoute);
     }
+
+    /// Clone the parallel EDT into the worker loop as a task EDT
+    Operation *clonedOp = loopBuilder.clone(*parallelEdt.getOperation());
+    auto clonedEdt = cast<EdtOp>(clonedOp);
+    clonedEdt.setType(EdtType::task);
+    clonedEdt->removeAttr("workers");
+    clonedEdt->removeAttr("nowait");
+
+    /// Update route: internode uses worker route, otherwise keep existing or 0
+    Value routeVal = routeWorkers ? workerRoute : clonedEdt.getRoute();
+    if (!routeVal)
+      routeVal = loopBuilder.create<arith::ConstantIntOp>(loc, 0, 32);
+    clonedEdt.getRouteMutable().assign(routeVal);
+
+    replaceWorkerIds(clonedEdt, workerId);
+    guardSingleEdts(clonedEdt, workerId);
+    ensureNestedEdtCaptures(clonedEdt);
+    if (routeWorkers)
+      routeEdtsToWorker(clonedEdt, routeVal);
+
+    /// Finalize the epoch region.
+    epochBuilder.setInsertionPointToEnd(epochBlock);
+    epochBuilder.create<YieldOp>(loc);
 
     parallelEdt.erase();
     ARTS_DEBUG("  Lowered parallel EDT into worker loop form");
