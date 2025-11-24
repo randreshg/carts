@@ -1706,8 +1706,8 @@ run_execute_dual() {
         esac
     done
 
-    carts_header "CARTS Execution (Optimized with Dual Compilation)"
-    carts_info "Running optimized CARTS with dual compilation for: $input_file"
+    carts_header "CARTS Execution"
+    carts_info "Running CARTS for: $input_file"
     carts_line
 
     # Determine standard flag based on file extension
@@ -1719,7 +1719,7 @@ run_execute_dual() {
     fi
 
     # Step 1: Sequential compilation (no OpenMP) with debug info
-    carts_step "1/5: Sequential compilation (without OpenMP)"
+    carts_step "[1/5]: Sequential compilation (without OpenMP)"
     carts_info "Compiling to preserve clean debug locations..."
 
     local original_verbose="$CARTS_VERBOSE"
@@ -1732,7 +1732,7 @@ run_execute_dual() {
     fi
 
     # Step 2: Collect and export metadata
-    carts_step "2/5: Collecting metadata"
+    carts_step "[2/5]: Collecting metadata"
     carts_info "Running metadata analysis on sequential code..."
 
     if ! carts run "${base_name}_seq.mlir" --collect-metadata; then
@@ -1750,7 +1750,7 @@ run_execute_dual() {
     fi
 
     # Step 3: Parallel compilation (with OpenMP) with debug info
-    carts_step "3/5: Parallel compilation (with OpenMP)"
+    carts_step "[3/5]: Parallel compilation (with OpenMP)"
     carts_info "Compiling with OpenMP directives..."
 
     # Also generate debug info for parallel compilation to match source locations
@@ -1759,9 +1759,9 @@ run_execute_dual() {
         exit 1
     fi
 
-    # Step 4: ARTS transformations (imports metadata automatically)
-    carts_step "4/5: Applying ARTS transformations"
-    carts_info "Importing metadata from .carts-metadata.json"
+    # Step 4: ARTS transformations
+    carts_step "[4/5]: Applying ARTS transformations"
+    carts_info "Generating LLVM IR from MLIR with ARTS transformations..."
 
     local run_cmd_args=("${base_name}.mlir" "--O3" "--emit-llvm")
     if [[ "$debug_mode" == "true" ]]; then
@@ -1782,7 +1782,7 @@ run_execute_dual() {
     fi
 
     # Step 5: Compile to executable
-    carts_step "5/5: Compiling to executable"
+    carts_step "[5/5]: Compiling to executable"
 
     # Determine output name from execute_args or use base_name
     local output_name="${base_name}"
@@ -1809,7 +1809,7 @@ run_execute_dual() {
     fi
 
     carts_line
-    carts_success "Dual compilation complete: ${output_name}"
+    carts_success "Execution complete: ${output_name}"
     carts_line
     carts_info "Generated files:"
     carts_print "  Sequential MLIR: ${base_name}_seq.mlir"
@@ -1818,7 +1818,6 @@ run_execute_dual() {
     carts_print "  LLVM IR: ${base_name}-arts.ll"
     carts_print "  Executable: ${output_name}"
     carts_line
-    carts_info "Metadata was imported by CreateDbs pass during ARTS transformations"
     carts_header "CARTS Execution Complete"
 }
 

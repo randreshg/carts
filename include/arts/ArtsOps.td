@@ -693,7 +693,6 @@ def EdtParamUnpackOp : Arts_Op<"edt_param_unpack", [Pure]> {
   let assemblyFormat = "$memref `:` type($memref) attr-dict `:` `(` type($unpacked) `)`";
 }
 
-
 def RecordDepOp : Arts_Op<"rec_dep", [MemoryEffects<[MemWrite]>]> {
   let summary = "Record in-dependencies for EDT.";
   let description = [{
@@ -789,7 +788,6 @@ def DepDbAcquireOp : Arts_Op<"dep_db_acquire", [Pure, AttrSizedOperandSegments]>
     attr-dict `:` type($dep_struct) `->` type($guid) `,` type($ptr)
   }];
 }
-
 
 def DbGepOp : Arts_Op<"db_gep", [Pure, AttrSizedOperandSegments]> {
   let summary = "Compute element pointer (LLVM ptr) using byte strides.";

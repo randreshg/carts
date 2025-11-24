@@ -285,8 +285,9 @@ private:
     /// Load dbGuid value - check if we actually have depStruct (from
     /// DepDbAcquireOp) or if this specific dependency is from DbAcquireOp
     Value dbGuidValue;
-    const bool useDepv =
-        accessMode == DepAccessMode::from_depv && depStruct && baseOffset;
+    const bool useDepv = depStruct && baseOffset &&
+                         (accessMode == DepAccessMode::from_depv ||
+                          dbGuid.getDefiningOp<DepDbAcquireOp>());
     if (useDepv) {
       /// Access GUID via DepGepOp from EDT depv structure
       /// Must add baseOffset to linearIndex to get correct position in depv
