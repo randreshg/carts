@@ -1735,15 +1735,14 @@ run_execute_dual() {
     carts_step "[2/5]: Collecting metadata"
     carts_info "Running metadata analysis on sequential code..."
 
-    if ! carts run "${base_name}_seq.mlir" --collect-metadata; then
+    if ! carts run "${base_name}_seq.mlir" --collect-metadata -o "${base_name}_seq_metadata.mlir"; then
         carts_error "Failed to collect metadata"
         exit 1
     fi
 
     # Verify metadata was created
     if [[ -f ".carts-metadata.json" ]]; then
-        local metadata_size=$(wc -l < .carts-metadata.json 2>/dev/null || echo "0")
-        carts_success "Metadata exported: ${metadata_size} lines in .carts-metadata.json"
+        carts_success "Metadata exported: .carts-metadata.json"
     else
         carts_error "Metadata file not created"
         exit 1

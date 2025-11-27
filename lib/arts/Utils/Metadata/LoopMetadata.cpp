@@ -155,8 +155,8 @@ bool LoopMetadata::importFromOp() {
   }
 
   /// Memory access patterns
-  readCount = getIntFromAttr(attr.getReadCount()).value_or(0);
-  writeCount = getIntFromAttr(attr.getWriteCount()).value_or(0);
+  accessStats.readCount = getIntFromAttr(attr.getReadCount());
+  accessStats.writeCount = getIntFromAttr(attr.getWriteCount());
 
   /// Loop structure information
   tripCount = getIntFromAttr(attr.getTripCount()).value_or(0);
@@ -218,8 +218,7 @@ void LoopMetadata::importFromJson(const llvm::json::Object &json) {
       if (auto i = e.getAsInteger())
         reductionKinds.push_back(static_cast<ReductionKind>(*i));
   }
-  readCount = json.getInteger(AttrNames::LoopMetadata::ReadCount).value_or(0);
-  writeCount = json.getInteger(AttrNames::LoopMetadata::WriteCount).value_or(0);
+  accessStats.importFromJson(json);
   tripCount = json.getInteger(AttrNames::LoopMetadata::TripCount).value_or(0);
   nestingLevel =
       json.getInteger(AttrNames::LoopMetadata::NestingLevel).value_or(0);
@@ -262,7 +261,7 @@ void LoopMetadata::importFromJson(const llvm::json::Object &json) {
   parallelClassification = ParallelClassification::Unknown;
   if (auto i = json.getInteger(AttrNames::LoopMetadata::ParallelClassification))
     parallelClassification = static_cast<ParallelClassification>(*i);
-  locationMetadata.fromKey(
+  locationMetadata = LocationMetadata::fromKey(
       json.getString(AttrNames::LoopMetadata::LocationKey).value_or(""));
 }
 
@@ -277,8 +276,7 @@ void LoopMetadata::exportToJson(llvm::json::Object &json) const {
       kinds.push_back(static_cast<int64_t>(k));
     json[AttrNames::LoopMetadata::ReductionKinds.str()] = std::move(kinds);
   }
-  json[AttrNames::LoopMetadata::ReadCount.str()] = readCount;
-  json[AttrNames::LoopMetadata::WriteCount.str()] = writeCount;
+  accessStats.exportToJson(json);
   json[AttrNames::LoopMetadata::TripCount.str()] = tripCount;
   json[AttrNames::LoopMetadata::NestingLevel.str()] = nestingLevel;
   json[AttrNames::LoopMetadata::HasUniformStride.str()] = hasUniformStride;
@@ -309,7 +307,7 @@ void LoopMetadata::exportToJson(llvm::json::Object &json) const {
     json[AttrNames::LoopMetadata::ParallelClassification.str()] =
         static_cast<int64_t>(*parallelClassification);
   json[AttrNames::LoopMetadata::LocationKey.str()] =
-      locationMetadata.toString();
+      locationMetadata.getKey().str();
 }
 
 void LoopMetadata::exportToOp() {
@@ -354,8 +352,8 @@ Attribute LoopMetadata::getMetadataAttr() const {
       builder.getBoolAttr(potentiallyParallel),
       builder.getBoolAttr(hasReductions), reductionKindsAttr,
       /// Memory access patterns
-      builder.getI64IntegerAttr(readCount),
-      builder.getI64IntegerAttr(writeCount),
+      builder.getI64IntegerAttr(accessStats.readCount.value_or(0)),
+      builder.getI64IntegerAttr(accessStats.writeCount.value_or(0)),
       /// Loop structure information
       toIntAttr(tripCount), toIntAttr(nestingLevel),
       /// Access pattern analysis
@@ -374,5 +372,5 @@ Attribute LoopMetadata::getMetadataAttr() const {
       toIntAttr(poorTemporalLocalityMemrefCount),
       toEnumAttr(parallelClassification, ParallelClassification::Unknown),
       /// Source location
-      builder.getStringAttr(locationMetadata.toString()));
+      builder.getStringAttr(locationMetadata.getKey()));
 }

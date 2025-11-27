@@ -25,8 +25,8 @@ public:
   /// Attributes
   std::string file;
   unsigned line = 0, column = 0;
+  /// Computed: "basename:line:col"
   std::string key;
-  bool isStatic = false;
 
   /// Constructor
   LocationMetadata() = default;
@@ -38,27 +38,35 @@ public:
   }
 
   //===-------------------------------------------------------------===//
-  // Interface
+  // Factory Methods
   //===-------------------------------------------------------------===//
 
-  /// Import/export metadata to/from JSON
-  void importFromJson(const llvm::json::Object &json);
-  void exportToJson(llvm::json::Object &json) const;
+  /// SINGLE factory method for creating LocationMetadata from MLIR Location
+  /// Handles FileLineColLoc, FusedLoc, CallSiteLoc, NameLoc
+  static LocationMetadata fromLocation(Location loc);
 
-  /// Convert to string representation
-  llvm::StringRef toString() const {
-    static const llvm::StringRef emptyKey("-");
-    return key.empty() ? emptyKey : key;
-  }
-
-  /// Helper methods
-  static LocationMetadata fromMLIRLocation(Location loc);
-
+  /// Parse from key string (format: "basename:line:col")
   static LocationMetadata fromKey(llvm::StringRef key);
 
-  static std::string getLocationBasename(llvm::StringRef path);
+  /// Extract basename from a file path
+  static std::string getBasename(llvm::StringRef path);
 
-  static std::string getCompactLocationKey(Location loc);
+  //===-------------------------------------------------------------===//
+  // JSON Serialization
+  //===-------------------------------------------------------------===//
+
+  /// Import from JSON (reads "file", "line", "column" fields)
+  void importFromJson(const llvm::json::Object &json);
+
+  /// Export to JSON (writes "file", "line", "column" fields)
+  void exportToJson(llvm::json::Object &json) const;
+
+  //===-------------------------------------------------------------===//
+  // Accessors
+  //===-------------------------------------------------------------===//
+
+  /// Get the location key
+  llvm::StringRef getKey() const { return key; }
 
   /// Check if location is valid
   bool isValid() const { return line > 0; }

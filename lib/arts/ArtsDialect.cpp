@@ -147,6 +147,24 @@ SmallVector<Value> mlir::arts::EdtOp::getDependenciesAsVector() {
   return deps;
 }
 
+void mlir::arts::EdtOp::setDependencies(ValueRange newDeps) {
+  getDependenciesMutable().assign(newDeps);
+  /// Update operandSegmentSizes to reflect new dependency count
+  /// Format: [route=1, epochGuid=0 or 1, dependencies=N]
+  int32_t epochGuidCount = getEpochGuid() ? 1 : 0;
+  (*this)->setAttr(
+      "operandSegmentSizes",
+      DenseI32ArrayAttr::get(getContext(),
+                             {1, epochGuidCount,
+                              static_cast<int32_t>(newDeps.size())}));
+}
+
+void mlir::arts::EdtOp::appendDependency(Value dep) {
+  SmallVector<Value> deps(getDependencies().begin(), getDependencies().end());
+  deps.push_back(dep);
+  setDependencies(deps);
+}
+
 LogicalResult EdtOp::verify() {
   /// Skip verification if no_verify attribute is present
   if (getNoVerifyAttr())
@@ -185,7 +203,7 @@ LogicalResult EdtOp::verify() {
 
     /// Skip children EDTs
     if (isa<EdtOp>(op))
-      return WalkResult::advance();
+      return WalkResult::skip();
 
     /// Check each operand
     for (Value operand : op->getOperands()) {
@@ -326,6 +344,37 @@ void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
                                         builder.getContext(), concurrency));
   state.addOperands(route);
   state.addOperands(dependencies);
+
+  /// Set the operand segment sizes attribute for variable operands
+  /// Format: [1 (route), 0 (epochGuid - not provided), N (dependencies)]
+  state.addAttribute(
+      "operandSegmentSizes",
+      builder.getDenseI32ArrayAttr(
+          {1, 0, static_cast<int32_t>(dependencies.size())}));
+
+  /// Create the region with a block
+  Region *bodyRegion = state.addRegion();
+  Block *bodyBlock = new Block();
+  bodyRegion->push_back(bodyBlock);
+}
+
+void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
+                  EdtConcurrency concurrency, Value route, Value epochGuid,
+                  ValueRange dependencies) {
+  state.addAttribute("type", EdtTypeAttr::get(builder.getContext(), type));
+  state.addAttribute("concurrency", EdtConcurrencyAttr::get(
+                                        builder.getContext(), concurrency));
+  state.addOperands(route);
+  if (epochGuid)
+    state.addOperands(epochGuid);
+  state.addOperands(dependencies);
+
+  /// Set the operand segment sizes attribute for variable operands
+  /// Format: [1 (route), 0 or 1 (epochGuid), N (dependencies)]
+  state.addAttribute(
+      "operandSegmentSizes",
+      builder.getDenseI32ArrayAttr({1, epochGuid ? 1 : 0,
+                                    static_cast<int32_t>(dependencies.size())}));
 
   /// Create the region with a block
   Region *bodyRegion = state.addRegion();

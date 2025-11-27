@@ -49,11 +49,13 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
 #include "polygeist/Ops.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include <cstdint>
 
@@ -180,6 +182,11 @@ private:
   /// Helper functions for collectControlDbOps
   void createDbAcquireOps(EdtOp edt, SetVector<Value> &externalDeps);
 
+  /// Checks if the parent EDT already has an acquired handle for the given
+  /// DbAllocOp.
+  Value findParentAcquireSource(EdtOp edt, Operation *dbAllocOp,
+                                bool requiresIndexedAccess = false);
+
   /// Infer allocation type from the defining operation
   DbAllocType inferAllocType(Operation *alloc);
 
@@ -193,11 +200,11 @@ private:
                         uint64_t initialIndex = 0,
                         SmallVector<Value> *chunkOffsets = nullptr);
   void rewriteUsesInEdt(EdtOp edt, SmallVector<Operation *> &operations,
-                        DbAcquireOp dbAcquire,
-                        SmallVector<Value> &acquireIndices,
+                        Operation *dbOp, SmallVector<Value> &acquireIndices,
                         SmallVector<Value> &acquireOffsets,
                         BlockArgument dbAcquireArg);
   void rewriteUsesInParentEdt(MemrefInfo &memrefInfo);
+  void rewriteUsesEverywhere(Operation *alloc, DbAllocOp dbAlloc);
 };
 } // namespace
 
@@ -265,13 +272,15 @@ void CreateDbsPass::runOnOperation() {
   createDbAllocOps();
 
   /// Phase 4: Process EDTs for dependencies
+  /// Use pre-order walk to naturally visit parents before children.
   ARTS_INFO("Phase 4: Creating DbAcquire operations for "
             << edtExternalValues.size() << " EDTs");
-  for (auto &entry : edtExternalValues) {
-    EdtOp edt = entry.first;
-    SetVector<Value> &externalDeps = entry.second;
-    createDbAcquireOps(edt, externalDeps);
-  }
+
+  module.walk<WalkOrder::PreOrder>([&](EdtOp edt) {
+    auto it = edtExternalValues.find(edt);
+    if (it != edtExternalValues.end())
+      createDbAcquireOps(edt, it->second);
+  });
 
   /// Phase 5: Clean up legacy allocations
   ARTS_INFO("Phase 5: Cleaning up legacy allocations");
@@ -348,9 +357,8 @@ void CreateDbsPass::collectMemrefs() {
 
         /// If the parent edt is different from the current edt, it means
         /// it is an external dependency
-        if (parentEdt != edt) {
+        if (parentEdt != edt)
           edtExternalValues[edt].insert(operand);
-        }
       }
     });
   });
@@ -490,6 +498,7 @@ void CreateDbsPass::createDbAllocOps() {
   /// All memrefs in memrefInfo are converted to DBs
   for (auto &entry : memrefInfo) {
     Operation *alloc = entry.first;
+    ARTS_DEBUG("Creating DB Alloc Op for memref " << *alloc);
     MemrefInfo &info = entry.second;
     Location loc = alloc->getLoc();
     builder.setInsertionPointAfter(alloc);
@@ -499,7 +508,7 @@ void CreateDbsPass::createDbAllocOps() {
 
     /// Use the dependency mode from DbControlOp
     ArtsMode mode = info.accessMode;
-    ARTS_DEBUG(" - Using access mode " << mode << " for memref " << *alloc);
+    ARTS_DEBUG(" - Using access mode " << mode);
 
     /// Set DbMode based on the access mode
     DbMode dbMode = DbMode::write;
@@ -519,9 +528,11 @@ void CreateDbsPass::createDbAllocOps() {
     /// - If all accesses use a consistent dimension, allocate fine-grained DBs
     /// - Otherwise, use coarse-grained allocation (single DB with full memref)
     SmallVector<Value> sizes, elementSizes;
-    const unsigned rank = memRefType.getRank();
+    const bool isRankZero = memRefType.getRank() == 0;
+    const unsigned rank = std::max<unsigned>(1, memRefType.getRank());
     const auto accessPatternInfo = info.getAccessPatternInfo();
-    bool useFineGrainedAllocation = accessPatternInfo.isConsistent &&
+    bool useFineGrainedAllocation = !isRankZero &&
+                                    accessPatternInfo.isConsistent &&
                                     accessPatternInfo.pinnedDimCount > 0 &&
                                     accessPatternInfo.allAccessesHaveIndices;
 
@@ -569,16 +580,19 @@ void CreateDbsPass::createDbAllocOps() {
       ARTS_DEBUG("   - Created fine-grained DB: Outer rank="
                  << sizes.size() << ", Inner rank=" << elementSizes.size());
     } else {
-      /// Coarse-grained: all dimensions go to elementSizes, single DB
+      /// Coarse-grained: all dimensions go to elementSizes, single DB. For
+      /// rank-0 memrefs, model them as a 1-D memref of size 1.
       ARTS_DEBUG(" - Falling back to coarse-grained allocation");
       elementSizes.reserve(rank);
       for (unsigned i = 0; i < rank; ++i) {
-        if (memRefType.isDynamicDim(i)) {
+        if (!isRankZero && memRefType.isDynamicDim(i)) {
           elementSizes.push_back(
               builder.create<arts::DbDimOp>(loc, allocValue, (int64_t)i));
         } else {
-          elementSizes.push_back(builder.create<arith::ConstantIndexOp>(
-              loc, memRefType.getDimSize(i)));
+          int64_t dimSize =
+              isRankZero ? 1 : static_cast<int64_t>(memRefType.getDimSize(i));
+          elementSizes.push_back(
+              builder.create<arith::ConstantIndexOp>(loc, dimSize));
         }
       }
 
@@ -606,9 +620,81 @@ void CreateDbsPass::createDbAllocOps() {
     /// Insert DbFreeOp and remove associated dealloc operations
     insertDbFreeForDbAlloc(dbAllocOp, alloc, builder);
 
-    /// Rewire uses of the original allocation to use the db_alloc operation
-    rewriteUsesInParentEdt(info);
+    /// Rewire uses of the original allocation to use the db_alloc operation.
+    /// If the allocation has a defining EDT, rewrite within that EDT. If it
+    /// lives outside any EDT (host/global), rewrite all uses so host code sees
+    /// the datablock contents as well.
+    if (info.parentEdt)
+      rewriteUsesInParentEdt(info);
+    else
+      rewriteUsesEverywhere(alloc, dbAllocOp);
   }
+}
+
+/// Find parent scope's acquired handle for a datablock
+/// Checks if the parent EDT already has an acquired handle for the given
+/// DbAllocOp.
+Value CreateDbsPass::findParentAcquireSource(EdtOp edt, Operation *dbAllocOp,
+                                             bool requiresIndexedAccess) {
+  auto dbAlloc = dyn_cast_or_null<DbAllocOp>(dbAllocOp);
+  if (!dbAlloc)
+    return nullptr;
+
+  ARTS_DEBUG("   - Checking if parent has acquired handle for this memref");
+
+  Block *parentBlock = edt->getBlock();
+  if (!parentBlock)
+    return nullptr;
+
+  Type targetType = dbAlloc.getPtr().getType();
+
+  auto matchesDb = [&](Value v) -> bool {
+    if (!v || v.getType() != targetType)
+      return false;
+
+    Operation *db = arts::getUnderlyingDbAlloc(v);
+    if (!db || db != dbAllocOp)
+      return false;
+
+    /// If the caller intends to index into this handle, avoid reusing a
+    /// single-element datablock view.
+    if (requiresIndexedAccess) {
+      if (Operation *dbOp = arts::getUnderlyingDb(v)) {
+        if (dbHasSingleSize(dbOp))
+          return false;
+      }
+    }
+
+    /// Avoid treating the DbAllocOp results themselves as reusable handles
+    if (auto *defOp = v.getDefiningOp())
+      if (isa<DbAllocOp>(defOp))
+        return false;
+
+    return true;
+  };
+
+  /// Check parent EDT's block arguments
+  for (BlockArgument arg : parentBlock->getArguments()) {
+    if (matchesDb(arg)) {
+      ARTS_DEBUG("   - Found matching handle in parent block arguments");
+      return arg;
+    }
+  }
+
+  /// Check previously defined values in the block (e.g., earlier acquires)
+  for (Operation &op : parentBlock->getOperations()) {
+    if (&op == edt.getOperation())
+      break;
+    for (Value res : op.getResults()) {
+      if (matchesDb(res)) {
+        ARTS_DEBUG("   - Found matching handle from prior operation");
+        return res;
+      }
+    }
+  }
+
+  ARTS_DEBUG("   - No existing handle found in parent scope");
+  return nullptr;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -622,26 +708,22 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
   ARTS_DEBUG(" - Creating DbAcquire operations for "
              << externalDeps.size() << " external dependencies");
 
-  /// Accumulate all acquires and block arguments across all memrefs
-  SmallVector<DbAcquireOp> allAcquireOps;
-  SmallVector<BlockArgument> allBlockArgs;
+  /// Accumulate dependency operands to set on the EDT
+  SmallVector<Value> dependencyOperands;
 
   /// For each external value, create acquire and release operations
   for (Value externalDep : externalDeps) {
     /// Locate the underlying operation
-    ARTS_DEBUG(" - Getting underlying operation for " << externalDep);
     Operation *underlyingOp = arts::getUnderlyingOperation(externalDep);
     if (!underlyingOp)
       if (auto load = externalDep.getDefiningOp<memref::LoadOp>())
         underlyingOp = arts::getUnderlyingOperation(load.getMemref());
-    if (!underlyingOp) {
-      ARTS_WARN("Skipping value with no underlying operation: " << externalDep);
-      continue;
-    }
+    assert(underlyingOp && "Underlying operation not found");
 
     /// Get the memref info for the underlying operation
     MemrefInfo &info = memrefInfo[underlyingOp];
     DbAllocOp dbAllocOp = info.dbAllocOp;
+    ARTS_DEBUG("DbAllocOp " << dbAllocOp);
     if (!dbAllocOp) {
       ARTS_ERROR("DbAllocOp not found for: " << *underlyingOp);
       assert(false && "DbAllocOp not found for underlying operation");
@@ -666,27 +748,27 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       ARTS_DEBUG(" - Using fine-grained acquire with " << deps.size()
                                                        << " dependencies");
 
-      /// Combine access modes across all deps (e.g., all 'in' for inputs)
-      ArtsMode combinedMode = deps[0].mode;
-      for (size_t i = 1; i < deps.size(); ++i)
-        combinedMode = combineAccessModes(combinedMode, deps[i].mode);
-
-      /// Create an acquire for each dependency
-      ARTS_DEBUG(" - Creating " << deps.size() << " fine-grained acquires");
-
-      /// Track starting index for this memref's acquires
-      size_t startIdx = allAcquireOps.size();
-
       for (const auto &dep : deps) {
         const auto &depIndices = dep.indices;
         const auto &depOffsets = dep.offsets;
 
-        /// Create fine-grained acquire operation
         SmallVector<Value> acquireIndices(depIndices.begin(), depIndices.end());
         SmallVector<Value> acquireOffsets(depOffsets.begin(), depOffsets.end());
         assert(sourceSizes.size() >= depIndices.size() &&
                "Sizes must be greater than or equal to indices");
         uint64_t acquireRank = sourceSizes.size() - depIndices.size();
+
+        /// Source guid and ptr are the source of the acquire
+        Value acqGuid = sourceGuid;
+        Value acqPtr = sourcePtr;
+
+        /// Check if there is a parent acquired handle for this memref
+        if (Value availableHandle =
+                findParentAcquireSource(edt, dbAllocOp, !depIndices.empty())) {
+          ARTS_DEBUG("   - Reusing existing datablock handle in parent scope");
+          acqGuid = Value();
+          acqPtr = availableHandle;
+        }
 
         SmallVector<Value> acquireSizes;
         for (size_t i = 0; i < acquireRank; ++i) {
@@ -694,43 +776,24 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
               builder.create<arith::ConstantIndexOp>(edt.getLoc(), 1));
         }
         auto acquireOp = builder.create<DbAcquireOp>(
-            edt.getLoc(), dep.mode, sourceGuid, sourcePtr, acquireIndices,
+            edt.getLoc(), dep.mode, acqGuid, acqPtr, acquireIndices,
             acquireOffsets, acquireSizes);
-        allAcquireOps.push_back(acquireOp);
 
-        /// Add corresponding block argument for each acquired view
-        auto sourceType = sourcePtr.getType().dyn_cast<MemRefType>();
+        /// Add corresponding block argument for each acquired/reused view
+        Value acquirePtr = acquireOp.getPtr();
+        auto sourceType = acquirePtr.getType().dyn_cast<MemRefType>();
         BlockArgument dbAcquireArg =
             edt.getBody().front().addArgument(sourceType, edt.getLoc());
-        allBlockArgs.push_back(dbAcquireArg);
-      }
-
-      /// Now rewrite operations for each acquire
-      for (size_t i = 0; i < deps.size(); ++i) {
-        const auto &dep = deps[i];
-        auto acquireOp = allAcquireOps[startIdx + i];
-        auto dbAcquireArg = allBlockArgs[startIdx + i];
-
-        SmallVector<Value> acquireIndices(dep.indices.begin(),
-                                          dep.indices.end());
-        SmallVector<Value> acquireOffsets(dep.offsets.begin(),
-                                          dep.offsets.end());
+        dependencyOperands.push_back(acquirePtr);
 
         /// Rewrite uses in edt - pass tracked operations and offsets for chunk
         /// handling
         SmallVector<Operation *> opsToRewrite(dep.operations.begin(),
                                               dep.operations.end());
-        if (opsToRewrite.empty()) {
-          ARTS_DEBUG("    WARNING: No operations found to rewrite for this "
-                     "dependency");
-          ARTS_DEBUG("    Falling back: operations will access original memref "
-                     "directly");
-        } else {
-          rewriteUsesInEdt(edt, opsToRewrite, acquireOp, acquireIndices,
-                           acquireOffsets, dbAcquireArg);
-        }
+        rewriteUsesInEdt(edt, opsToRewrite, acquireOp, acquireIndices,
+                         acquireOffsets, dbAcquireArg);
 
-        /// Insert release for this acquire before EDT terminator
+        /// Insert release for each acquire before EDT terminator
         OpBuilder::InsertionGuard IG(builder);
         builder.setInsertionPoint(edt.getBody().front().getTerminator());
         builder.create<DbReleaseOp>(edt.getLoc(), dbAcquireArg);
@@ -747,38 +810,66 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       acquireSizes.push_back(
           builder.create<arith::ConstantIndexOp>(edt.getLoc(), 1));
 
+      /// Source guid and ptr are the source of the acquire
+      Value acqGuid = sourceGuid;
+      Value acqPtr = sourcePtr;
+
+      /// Check if there is a parent acquired handle for this memref
+      if (Value availableHandle = findParentAcquireSource(edt, dbAllocOp)) {
+        ARTS_DEBUG(" - Reusing existing datablock handle in parent scope");
+        acqGuid = Value();
+        acqPtr = availableHandle;
+      }
+
       /// Use the dependency mode from DbControlOp if available
       ArtsMode acquireMode = ArtsMode::inout;
       auto acquireOp = builder.create<DbAcquireOp>(
-          edt.getLoc(), acquireMode, sourceGuid, sourcePtr, acquireIndices,
+          edt.getLoc(), acquireMode, acqGuid, acqPtr, acquireIndices,
           acquireOffsets, acquireSizes);
 
-      /// Add to accumulated list of acquires
-      allAcquireOps.push_back(acquireOp);
-
-      /// Add corresponding block argument for the acquired view
-      auto sourceType = sourcePtr.getType().dyn_cast<MemRefType>();
+      /// Add corresponding block argument for the acquired/reused view
+      Value acquirePtr = acquireOp.getPtr();
+      auto sourceType = acquirePtr.getType().dyn_cast<MemRefType>();
       BlockArgument dbAcquireArg =
           edt.getBody().front().addArgument(sourceType, edt.getLoc());
-      allBlockArgs.push_back(dbAcquireArg);
+      dependencyOperands.push_back(acquirePtr);
 
       /// Collect all operations from all deps for coarse-grained rewrite
       SmallVector<Operation *> opsToRewrite;
-      const auto &deps = info.edtToDeps[edt];
-      for (const auto &dep : deps)
-        opsToRewrite.append(dep.operations.begin(), dep.operations.end());
+      llvm::SmallPtrSet<Operation *, 16> seenOps;
+      auto addOpIfNew = [&](Operation *op) {
+        if (!op)
+          return;
+        if (seenOps.insert(op).second)
+          opsToRewrite.push_back(op);
+      };
 
-      /// If no tracked operations (no DbControlOps), find all operations
-      /// in this EDT that use the external memref
-      if (opsToRewrite.empty()) {
-        ARTS_DEBUG(" - No DbControlOps found, collecting all operations using "
-                   "this memref");
+      bool missingOpsForDeps = false;
+      const auto &deps = info.edtToDeps[edt];
+      for (const auto &dep : deps) {
+        if (dep.operations.empty())
+          missingOpsForDeps = true;
+        for (Operation *op : dep.operations)
+          addOpIfNew(op);
+      }
+
+      /// If we failed to match operations for any dependency (SSA mismatch)
+      /// or if none were found, conservatively rewrite all uses of the memref
+      /// within this EDT.
+      if (opsToRewrite.empty() || missingOpsForDeps) {
+        ARTS_DEBUG(" - Falling back: collecting all operations using this "
+                   "memref in the EDT");
         edt.walk([&](Operation *op) {
+          /// Skip operations that belong to nested EDTs - they will be
+          /// processed when their containing EDT is handled
+          if (op->getParentOfType<EdtOp>() != edt)
+            return;
+
           for (Value operand : op->getOperands()) {
             Operation *operandUnderlyingOp =
                 arts::getUnderlyingOperation(operand);
             if (operandUnderlyingOp == underlyingOp) {
-              opsToRewrite.push_back(op);
+              addOpIfNew(op);
               break;
             }
           }
@@ -799,16 +890,8 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
     }
   }
 
-  /// After processing all memrefs, set EDT operands once with all acquires
-  /// Note: We replace the existing dependencies (DbControlOp results) with
-  /// the new DbAcquire operations. We only preserve the route.
-  SmallVector<Value> newOperands;
-  if (Value route = edt.getRoute())
-    newOperands.push_back(route);
-  for (auto acquireOp : allAcquireOps)
-    newOperands.push_back(acquireOp.getPtr());
-
-  edt->setOperands(newOperands);
+  /// After processing all memrefs, set EDT dependencies
+  edt.setDependencies(dependencyOperands);
 }
 
 ///===----------------------------------------------------------------------===///
@@ -823,10 +906,8 @@ void CreateDbsPass::insertDbFreeForDbAlloc(DbAllocOp dbAlloc, Operation *alloc,
 
   /// Find associated dealloc operation
   std::optional<Operation *> deallocOp = memref::findDealloc(allocResult);
-  if (deallocOp.has_value() && *deallocOp) {
-    ARTS_DEBUG("Found dealloc operation for alloc: " << *deallocOp);
+  if (deallocOp.has_value() && *deallocOp)
     opsToRemove.insert(*deallocOp);
-  }
 
   /// Determine where to insert DbFreeOp based on where dbAlloc is located
   Operation *insertionPoint = nullptr;
@@ -841,8 +922,6 @@ void CreateDbsPass::insertDbFreeForDbAlloc(DbAllocOp dbAlloc, Operation *alloc,
     /// Insert at the end of the block containing dbAlloc to ensure dominance
     Block *allocBlock = dbAlloc->getBlock();
     insertionPoint = allocBlock->getTerminator();
-    ARTS_DEBUG("Inserting DbFreeOp before block terminator "
-               << *insertionPoint);
   }
 
   /// Insert DbFreeOp if we found a valid insertion point
@@ -891,8 +970,34 @@ void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
 
   ARTS_DEBUG(" - Rewriting " << users.size() << " operations in parent EDT");
 
-  OpBuilder builder(module.getContext());
   /// Fine-grained allocations don't have chunk offsets
+  OpBuilder builder(module.getContext());
+  SmallVector<Value> emptyOffsets;
+  for (Operation *user : users) {
+    rewriteOperation(user, elementMemRefType, dbAlloc.getPtr(),
+                     dbAlloc.getOperation(), builder, 0, &emptyOffsets);
+  }
+}
+
+/// Rewrite all uses of an allocation to point to the new db_alloc pointer. This
+/// is used when the allocation is not inside an EDT, but is still shared with
+/// EDTs and the host needs to see the updated data.
+void CreateDbsPass::rewriteUsesEverywhere(Operation *alloc, DbAllocOp dbAlloc) {
+  Type elementMemRefType = dbAlloc.getAllocatedElementType().getElementType();
+
+  SmallVector<Operation *> users;
+  for (auto &use : alloc->getUses()) {
+    Operation *user = use.getOwner();
+    /// Skip the DbAlloc itself
+    if (user == dbAlloc.getOperation())
+      continue;
+    /// Skip uses inside EDTs; those are rewritten via acquires separately.
+    if (user->getParentOfType<EdtOp>())
+      continue;
+    users.push_back(user);
+  }
+
+  OpBuilder builder(module.getContext());
   SmallVector<Value> emptyOffsets;
   for (Operation *user : users) {
     rewriteOperation(user, elementMemRefType, dbAlloc.getPtr(),
@@ -907,7 +1012,7 @@ void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
 ///===----------------------------------------------------------------------===///
 void CreateDbsPass::rewriteUsesInEdt(EdtOp edt,
                                      SmallVector<Operation *> &operations,
-                                     DbAcquireOp dbAcquire,
+                                     Operation *dbOp,
                                      SmallVector<Value> &acquireIndices,
                                      SmallVector<Value> &acquireOffsets,
                                      BlockArgument dbAcquireArg) {
@@ -925,12 +1030,48 @@ void CreateDbsPass::rewriteUsesInEdt(EdtOp edt,
     }
   }
 
+  /// Build value mapping from parent EDT block args/acquires to this EDT's args
+  /// This ensures operations inside this EDT use the correct scoped values
+  IRMapping scopeMapping;
+  Block &edtBlock = edt.getBody().front();
+  auto deps = edt.getDependenciesAsVector();
+
+  for (auto [idx, blockArg] : llvm::enumerate(edtBlock.getArguments())) {
+    if (idx < deps.size()) {
+      Value externalDep = deps[idx];
+
+      /// Map parent block args -> this EDT's block args
+      if (auto parentArg = externalDep.dyn_cast<BlockArgument>()) {
+        scopeMapping.map(parentArg, blockArg);
+        ARTS_DEBUG("   - Mapping parent block arg to local: "
+                   << parentArg << " -> " << blockArg);
+      }
+
+      /// Map acquire ptr results -> this EDT's block args
+      if (auto acquireOp = externalDep.getDefiningOp<DbAcquireOp>()) {
+        scopeMapping.map(acquireOp.getPtr(), blockArg);
+        /// Also map the source ptr of the acquire for chained acquires
+        if (Value srcPtr = acquireOp.getSourcePtr())
+          scopeMapping.map(srcPtr, blockArg);
+        ARTS_DEBUG("   - Mapping acquire result to local block arg");
+      }
+    }
+  }
+
   /// Rewrite each tracked operation with DbRefOp pattern
   OpBuilder builder(edt.getContext());
   for (Operation *op : operations) {
-    rewriteOperation(op, elementMemRefType, dbAcquireArg,
-                     dbAcquire.getOperation(), builder, acquireIndices.size(),
-                     &acquireOffsets);
+    /// Apply scope mapping to operands before rewriting
+    for (OpOperand &operand : op->getOpOperands()) {
+      Value mappedVal = scopeMapping.lookupOrDefault(operand.get());
+      if (mappedVal != operand.get()) {
+        operand.set(mappedVal);
+        ARTS_DEBUG("   - Remapped operand from outer scope to inner scope");
+      }
+    }
+
+    rewriteOperation(op, elementMemRefType, dbAcquireArg, dbOp, builder,
+                     acquireIndices.size(), &acquireOffsets);
   }
 }
 

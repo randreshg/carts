@@ -4,8 +4,6 @@
 #include <string.h>
 
 // 1D stencil computation: output[i] = input[i-1] + input[i] + input[i+1]
-// This demonstrates dependencies on contiguous slices of the array
-
 int main(int argc, char *argv[]) {
   if (argc < 2) {
     printf("Usage: %s N\n", argv[0]);

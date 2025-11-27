@@ -167,14 +167,11 @@ bool MemrefMetadata::importFromOp() {
   allocationId = attr.getAllocationId().str();
 
   /// Import access pattern analysis
-  if (auto totalAccessesVal = getIntFromAttr(attr.getTotalAccesses()))
-    totalAccesses = *totalAccessesVal;
-  if (auto readCountVal = getIntFromAttr(attr.getReadCount()))
-    readCount = *readCountVal;
-  if (auto writeCountVal = getIntFromAttr(attr.getWriteCount()))
-    writeCount = *writeCountVal;
+  accessStats.totalAccesses = getIntFromAttr(attr.getTotalAccesses());
+  accessStats.readCount = getIntFromAttr(attr.getReadCount());
+  accessStats.writeCount = getIntFromAttr(attr.getWriteCount());
   if (attr.getReadWriteRatio())
-    readWriteRatio = attr.getReadWriteRatio().getValueAsDouble();
+    accessStats.readWriteRatio = attr.getReadWriteRatio().getValueAsDouble();
   allAccessesAffine = getBoolFromAttr(attr.getAllAccessesAffine());
   hasAffineAccesses = getBoolFromAttr(attr.getHasAffineAccesses());
   hasNonAffineAccesses = getBoolFromAttr(attr.getHasNonAffineAccesses());
@@ -277,8 +274,9 @@ Attribute MemrefMetadata::getMetadataAttr() const {
       /// Basic type information
       toIntAttr(rank), builder.getStringAttr(allocationId),
       /// Access pattern analysis
-      toIntAttr(totalAccesses), toIntAttr(readCount), toIntAttr(writeCount),
-      toFloatAttr(readWriteRatio), toBoolAttr(allAccessesAffine),
+      toIntAttr(accessStats.totalAccesses), toIntAttr(accessStats.readCount),
+      toIntAttr(accessStats.writeCount),
+      toFloatAttr(accessStats.readWriteRatio), toBoolAttr(allAccessesAffine),
       toBoolAttr(hasAffineAccesses), toBoolAttr(hasNonAffineAccesses),
       /// Memory characteristics
       toIntAttr(memoryFootprint), toBoolAttr(isFlattenedArrayFlag),
@@ -311,10 +309,7 @@ void MemrefMetadata::exportToJson(llvm::json::Object &json) const {
   setI64(rank, AttrNames::MemrefMetadata::Rank);
   if (!allocationId.empty())
     json[AttrNames::MemrefMetadata::AllocationId.str()] = allocationId;
-  setI64(totalAccesses, AttrNames::MemrefMetadata::TotalAccesses);
-  setI64(readCount, AttrNames::MemrefMetadata::ReadCount);
-  setI64(writeCount, AttrNames::MemrefMetadata::WriteCount);
-  setF64(readWriteRatio, AttrNames::MemrefMetadata::ReadWriteRatio);
+  accessStats.exportToJson(json);
   setBool(allAccessesAffine, AttrNames::MemrefMetadata::AllAccessesAffine);
   setBool(hasAffineAccesses, AttrNames::MemrefMetadata::HasAffineAccesses);
   setBool(hasNonAffineAccesses,
@@ -373,10 +368,7 @@ void MemrefMetadata::importFromJson(const llvm::json::Object &json) {
   getI64(AttrNames::MemrefMetadata::Rank, rank);
   if (auto str = json.getString(AttrNames::MemrefMetadata::AllocationId))
     allocationId = str->str();
-  getI64(AttrNames::MemrefMetadata::TotalAccesses, totalAccesses);
-  getI64(AttrNames::MemrefMetadata::ReadCount, readCount);
-  getI64(AttrNames::MemrefMetadata::WriteCount, writeCount);
-  getF64(AttrNames::MemrefMetadata::ReadWriteRatio, readWriteRatio);
+  accessStats.importFromJson(json);
   getBool(AttrNames::MemrefMetadata::AllAccessesAffine, allAccessesAffine);
   getBool(AttrNames::MemrefMetadata::HasAffineAccesses, hasAffineAccesses);
   getBool(AttrNames::MemrefMetadata::HasNonAffineAccesses,

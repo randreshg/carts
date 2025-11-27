@@ -17,8 +17,8 @@ int main() {
   double L_orig[N][N];
 
   /// Generate a positive-definite matrix A = L_orig * L_orig^T
-  for (int i = 0; i < N; i++) {
-    for (int j = 0; j < N; j++) {
+  for (unsigned i = 0; i < N; i++) {
+    for (unsigned j = 0; j < N; j++) {
       /// Avoid zeros on off-diagonal
       if (j <= i)
         L_orig[i][j] = (double)rand() / RAND_MAX + 0.01;
@@ -30,24 +30,24 @@ int main() {
     L_orig[i][i] += 1.0;
   }
 
-  for (int i = 0; i < N; i++) {
+  for (unsigned i = 0; i < N; i++) {
     /// A is symmetric, compute its lower triangle
-    for (int j = 0; j <= i; j++) {
+    for (unsigned j = 0; j <= i; j++) {
       A[i][j] = 0.0;
-      for (int k_sum = 0; k_sum <= j; k_sum++)
+      for (unsigned k_sum = 0; k_sum <= j; k_sum++)
         A[i][j] += L_orig[i][k_sum] * L_orig[j][k_sum];
     }
   }
 
   /// Fill upper triangle of A by symmetry
-  for (int i = 0; i < N; i++) {
-    for (int j = i + 1; j < N; j++)
+  for (unsigned i = 0; i < N; i++) {
+    for (unsigned j = i + 1; j < N; j++)
       A[i][j] = A[j][i];
   }
 
   /// Initialize matrices for Cholesky decomposition
-  for (int i = 0; i < N; i++) {
-    for (int j = 0; j < N; j++) {
+  for (unsigned i = 0; i < N; i++) {
+    for (unsigned j = 0; j < N; j++) {
       L_parallel[i][j] = A[i][j];
       L_sequential[i][j] = A[i][j];
     }
@@ -74,7 +74,7 @@ int main() {
             L_parallel[i][i] = 0.0;
           L_parallel[i][i] = sqrt(L_parallel[i][i]);
 
-          for (int j = i + 1; j < k_block + kb; j++) {
+          for (unsigned j = i + 1; j < k_block + kb; j++) {
             for (int m = k_block; m < i; m++) {
               L_parallel[j][i] -=
                   L_parallel[j][m] * L_parallel[i][m];
@@ -152,7 +152,7 @@ int main() {
 
   /// Sequential Cholesky Decomposition
   start_time = omp_get_wtime();
-  for (int k = 0; k < N; k++) {
+  for (unsigned k = 0; k < N; k++) {
     /// Avoid sqrt of negative
     if (L_sequential[k][k] < 0.0)
       L_sequential[k][k] = 0.0;
@@ -181,11 +181,11 @@ int main() {
   int sequential_correct = 1;
   double max_par_err = 0.0, max_seq_err = 0.0;
 
-  for (int i = 0; i < N; i++) {
+  for (unsigned i = 0; i < N; i++) {
     /// Check lower triangle
-    for (int j = 0; j <= i; j++) {
+    for (unsigned j = 0; j <= i; j++) {
       double sum = 0.0;
-      for (int k_sum = 0; k_sum <= j; k_sum++)
+      for (unsigned k_sum = 0; k_sum <= j; k_sum++)
         sum += L_parallel[i][k_sum] * L_parallel[j][k_sum];
       double err = fabs(A[i][j] - sum);
       if (err > max_par_err)
@@ -195,11 +195,11 @@ int main() {
     }
   }
 
-  for (int i = 0; i < N; i++) {
+  for (unsigned i = 0; i < N; i++) {
     /// Check lower triangle
-    for (int j = 0; j <= i; j++) {
+    for (unsigned j = 0; j <= i; j++) {
       double sum = 0.0;
-      for (int k_sum = 0; k_sum <= j; k_sum++)
+      for (unsigned k_sum = 0; k_sum <= j; k_sum++)
         sum += L_sequential[i][k_sum] * L_sequential[j][k_sum];
       double err = fabs(A[i][j] - sum);
       if (err > max_seq_err)

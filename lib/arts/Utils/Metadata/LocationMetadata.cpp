@@ -18,13 +18,13 @@ using namespace mlir::arts;
 
 void LocationMetadata::updateKey() {
   if (line == 0) {
-    key = "-";
+    key = "";
     return;
   }
 
   std::string keyStr;
   llvm::raw_string_ostream os(keyStr);
-  os << getLocationBasename(file) << ":" << line << ":" << column;
+  os << getBasename(file) << ":" << line << ":" << column;
   key = os.str();
 }
 
@@ -51,101 +51,63 @@ void LocationMetadata::exportToJson(llvm::json::Object &json) const {
 // Utility Methods
 ///===----------------------------------------------------------------------===///
 
-/// Extract basename from a file path for compact location representation
-std::string LocationMetadata::getLocationBasename(llvm::StringRef path) {
+std::string LocationMetadata::getBasename(llvm::StringRef path) {
   size_t lastSlash = path.rfind('/');
   if (lastSlash != llvm::StringRef::npos)
     return path.substr(lastSlash + 1).str();
   return path.str();
 }
 
-/// Convert a location to a compact string key (basename:line:col)
-/// Extracts C source locations from various MLIR location types
-std::string LocationMetadata::getCompactLocationKey(Location loc) {
-  std::string key;
-  llvm::raw_string_ostream os(key);
+///===----------------------------------------------------------------------===///
+// Factory Methods
+///===----------------------------------------------------------------------===///
 
-  /// Try to extract FileLineColLoc directly
-  if (auto fileLoc = loc.dyn_cast<FileLineColLoc>()) {
-    llvm::StringRef filename = fileLoc.getFilename();
-    os << getLocationBasename(filename) << ":" << fileLoc.getLine() << ":"
-       << fileLoc.getColumn();
-  }
-  /// Handle FusedLoc - may contain C source location
-  else if (auto fusedLoc = loc.dyn_cast<FusedLoc>()) {
-    /// Try to find a FileLineColLoc in the fused locations
-    for (Location subLoc : fusedLoc.getLocations()) {
-      if (auto fileLoc = subLoc.dyn_cast<FileLineColLoc>()) {
-        llvm::StringRef filename = fileLoc.getFilename();
-        /// Prefer .c, .cpp, .h files over MLIR files
-        if (filename.ends_with(".c") || filename.ends_with(".cpp") ||
-            filename.ends_with(".h") || filename.ends_with(".hpp")) {
-          os << getLocationBasename(filename) << ":" << fileLoc.getLine() << ":"
-             << fileLoc.getColumn();
-          return os.str();
-        }
-      }
-    }
-    /// If no C source file found, recurse on first location
-    if (!fusedLoc.getLocations().empty())
-      return getCompactLocationKey(fusedLoc.getLocations()[0]);
-  }
-  /// Handle CallSiteLoc - may wrap C source location
-  else if (auto callLoc = loc.dyn_cast<CallSiteLoc>()) {
-    /// Prefer callee location (the actual source) over caller
-    return getCompactLocationKey(callLoc.getCallee());
-  }
-  /// Handle NameLoc
-  else if (auto nameLoc = loc.dyn_cast<NameLoc>()) {
-    /// Check if the child location has more info
-    Location childLoc = nameLoc.getChildLoc();
-    if (!childLoc.isa<UnknownLoc>()) {
-      std::string childKey = getCompactLocationKey(childLoc);
-      if (childKey != "unknown:0:0")
-        return childKey;
-    }
-    os << nameLoc.getName().str();
-  }
-  /// Fallback to printing the location
-  else {
-    loc.print(os);
-    os.flush();
-    /// If the printed location is empty or just "-", mark as unknown
-    if (key.empty() || key == "-")
-      return "unknown:0:0";
-  }
-
-  return os.str();
+/// Helper to check if filename is a C/C++ source file
+static bool isCSourceFile(llvm::StringRef filename) {
+  return filename.ends_with(".c") || filename.ends_with(".cpp") ||
+         filename.ends_with(".h") || filename.ends_with(".hpp");
 }
 
-////===----------------------------------------------------------------------===////
-/// Factory Methods
-////===----------------------------------------------------------------------===////
-
-LocationMetadata LocationMetadata::fromMLIRLocation(Location loc) {
+LocationMetadata LocationMetadata::fromLocation(Location loc) {
   LocationMetadata metadata;
 
+  // Try to extract FileLineColLoc directly
   if (auto fileLoc = loc.dyn_cast<FileLineColLoc>()) {
     metadata.file = fileLoc.getFilename().str();
     metadata.line = fileLoc.getLine();
     metadata.column = fileLoc.getColumn();
-  } else if (auto fusedLoc = loc.dyn_cast<FusedLoc>()) {
-    /// Try to find a FileLineColLoc in the fused locations
+  }
+  // Handle FusedLoc - may contain C source location
+  else if (auto fusedLoc = loc.dyn_cast<FusedLoc>()) {
+    // Try to find a C/C++ source FileLineColLoc
     for (Location subLoc : fusedLoc.getLocations()) {
       if (auto fileLoc = subLoc.dyn_cast<FileLineColLoc>()) {
         llvm::StringRef filename = fileLoc.getFilename();
-        /// Prefer .c, .cpp, .h files over MLIR files
-        if (filename.ends_with(".c") || filename.ends_with(".cpp") ||
-            filename.ends_with(".h") || filename.ends_with(".hpp")) {
+        if (isCSourceFile(filename)) {
           metadata.file = filename.str();
           metadata.line = fileLoc.getLine();
           metadata.column = fileLoc.getColumn();
-          break;
+          metadata.updateKey();
+          return metadata;
         }
       }
     }
-  } else if (auto callLoc = loc.dyn_cast<CallSiteLoc>()) {
-    return fromMLIRLocation(callLoc.getCallee());
+    // If no C source file found, recurse on first location
+    if (!fusedLoc.getLocations().empty())
+      return fromLocation(fusedLoc.getLocations()[0]);
+  }
+  // Handle CallSiteLoc - prefer callee location
+  else if (auto callLoc = loc.dyn_cast<CallSiteLoc>()) {
+    return fromLocation(callLoc.getCallee());
+  }
+  // Handle NameLoc - check child location
+  else if (auto nameLoc = loc.dyn_cast<NameLoc>()) {
+    Location childLoc = nameLoc.getChildLoc();
+    if (!childLoc.isa<UnknownLoc>()) {
+      LocationMetadata childMeta = fromLocation(childLoc);
+      if (childMeta.isValid())
+        return childMeta;
+    }
   }
 
   metadata.updateKey();

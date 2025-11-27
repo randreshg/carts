@@ -11,6 +11,7 @@
 #define ARTS_UTILS_LOOPMETADATA_H
 
 #include "arts/ArtsDialect.h"
+#include "arts/Utils/Metadata/AccessStats.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
 #include "mlir/IR/Builders.h"
@@ -105,7 +106,7 @@ public:
   SmallVector<ReductionKind> reductionKinds;
 
   /// Memory access patterns
-  int64_t readCount = 0, writeCount = 0;
+  AccessStats accessStats;
 
   /// Loop structure information
   std::optional<int64_t> tripCount, nestingLevel;
@@ -145,7 +146,7 @@ public:
   StringRef getMetadataName() const override {
     return AttrNames::LoopMetadata::Name;
   }
-  StringRef toString() const override { return locationMetadata.toString(); }
+  StringRef toString() const override { return locationMetadata.getKey(); }
   bool importFromOp() override;
   void exportToOp() override;
   void importFromJson(const llvm::json::Object &json) override;

@@ -20,6 +20,7 @@
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
+#include "arts/Utils/OperationAttributes.h"
 /// Other
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
@@ -178,8 +179,8 @@ bool DbPass::adjustDbModes() {
       });
 
       /// Use metadata from allocNode's info
-      if (allocNode->readWriteRatio) {
-        double ratio = *allocNode->readWriteRatio;
+      if (allocNode->accessStats.readWriteRatio) {
+        double ratio = *allocNode->accessStats.readWriteRatio;
         ArtsMode metadataMode = ArtsMode::inout;
         if (ratio > 0.9)
           metadataMode = ArtsMode::in;
@@ -349,10 +350,11 @@ bool DbPass::partitionDb() {
     if (!alloc)
       return;
     BoolAttr newAttr = attrBuilder.getBoolAttr(useTwinDiff);
-    if (auto existing = alloc->getAttrOfType<BoolAttr>("arts.twin_diff"))
+    if (auto existing = alloc->getAttrOfType<BoolAttr>(
+            AttrNames::Operation::ArtsTwinDiff))
       if (existing == newAttr)
         return;
-    alloc->setAttr("arts.twin_diff", newAttr);
+    alloc->setAttr(AttrNames::Operation::ArtsTwinDiff, newAttr);
     changed = true;
   };
 
@@ -366,7 +368,7 @@ bool DbPass::partitionDb() {
   }
 
   module.walk([&](DbAllocOp alloc) {
-    if (!alloc->hasAttr("arts.twin_diff"))
+    if (!alloc->hasAttr(AttrNames::Operation::ArtsTwinDiff))
       setTwinAttr(alloc, false);
   });
 

@@ -2,11 +2,11 @@
 #include <stdlib.h>
 
 int main(int argc, char *argv[]) {
-  const int N = atoi(argv[1]);
-  if (N <= 0) {
-    printf("Matrix size must be a positive integer.\n");
+  if(argc < 2) {
+    printf("Usage: %s <matrix_size>\n", argv[0]);
     return EXIT_FAILURE;
   }
+  const int N = atoi(argv[1]);
 
   /// Allocate matrices
   double **A = (double **)malloc(N * sizeof(double *));
@@ -28,7 +28,6 @@ int main(int argc, char *argv[]) {
         {
           for (int j = 0; j < N; j++) {
             A[i][j] = i + j;
-            printf("A[%d][%d] = %f\n", i, j, A[i][j]);
           }
         }
       }
@@ -38,7 +37,6 @@ int main(int argc, char *argv[]) {
       {
         for (int j = 0; j < N; j++) {
           B[0][j] = A[0][j];
-          printf("B[0][%d] = %f\n", j, B[0][j]);
         }
       }
 
@@ -49,27 +47,12 @@ int main(int argc, char *argv[]) {
         {
           for (int j = 0; j < N; j++) {
             B[i][j] = A[i][j] + A[i - 1][j];
-            printf("B[%d][%d] = %f\n", i, j, B[i][j]);
           }
         }
       }
     }
   }
 
-  /// Print the computed matrices
-  printf("Matrix A:\n");
-  for (int i = 0; i < N; i++) {
-    for (int j = 0; j < N; j++)
-      printf("%6.2f ", A[i][j]);
-    printf("\n");
-  }
-
-  printf("\nMatrix B:\n");
-  for (int i = 0; i < N; i++) {
-    for (int j = 0; j < N; j++)
-      printf("%6.2f ", B[i][j]);
-    printf("\n");
-  }
 
   /// Verification check for matrix B.
   int error = 0;

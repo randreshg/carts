@@ -134,6 +134,11 @@ void OpRemovalManager::removeOpImpl(Operation *op, OpBuilder &builder,
       markForRemoval(parent);
   }
 
+  /// In non-recursive mode, never erase operations that still have uses; keep
+  /// the IR well-formed for subsequent passes.
+  if (!recursive && !op->use_empty())
+    return;
+
   /// Drop all uses of this operation's results to dereference them
   op->dropAllUses();
 

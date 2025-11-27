@@ -17,7 +17,11 @@ using namespace mlir::arts;
 ARTS_DEBUG_SETUP(edt_node);
 
 EdtNode::EdtNode(EdtOp op, ArtsAnalysisManager *AM)
-    : NodeBase(), edtOp(op), opPtr(op.getOperation()), analysisManager(AM) {}
+    : NodeBase(), edtOp(op), analysisManager(AM) {
+  assert(edtOp.getOperation() && "Operation must always be available");
+  if (AM)
+    AM->getMetadataManager().getIdRegistry().getOrCreate(edtOp);
+}
 
 void EdtNode::print(llvm::raw_ostream &os) const {
   os << "EdtNode (" << getHierId() << ")\n";

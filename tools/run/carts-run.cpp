@@ -88,7 +88,7 @@ static cl::opt<std::string> MetadataFile("metadata-file",
 
 static cl::opt<uint64_t>
     ArtsIdStride("arts-id-stride",
-                 cl::desc("Stride multiplier for grouped arts ids"),
+                 cl::desc("Stride multiplier for arts ids (EDTs/DBs)"),
                  cl::init(1000));
 
 ///===----------------------------------------------------------------------===///

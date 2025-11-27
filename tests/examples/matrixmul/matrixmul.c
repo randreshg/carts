@@ -63,16 +63,11 @@ int main(int argc, char *argv[]) {
 #pragma omp parallel
 #pragma omp single
   {
-    /// Print number of threads
-    printf("Number of threads: %d\n", omp_get_num_threads());
     for (int i = 0; i < N; i += BS) {
       for (int j = 0; j < N; j += BS) {
         for (int k = 0; k < N; k += BS) {
 #pragma omp task depend(in : A[i][k], B[k][j]) depend(inout : C_parallel[i][j])
           {
-            printf(
-                "Thread %d is working on block (%d, %d, %d) to (%d, %d, %d)\n",
-                omp_get_thread_num(), i, j, k, i + BS, j + BS, k + BS);
             for (int ii = i; ii < i + BS; ii++)
               for (int jj = j; jj < j + BS; jj++)
                 for (int kk = k; kk < k + BS; kk++)

@@ -385,7 +385,8 @@ def OmpDepOp : Arts_Op<"omp_dep", [Pure, AttrSizedOperandSegments]> {
 def EdtOp : Arts_Op<"edt",
   [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
    SingleBlockImplicitTerminator<"arts::YieldOp">,
-   RecursiveMemoryEffects]> {
+   RecursiveMemoryEffects,
+   AttrSizedOperandSegments]> {
   let summary = "Event-Driven Task in ARTS";
   let description = [{
     Defines an ARTS event-driven task (EDT) with:
@@ -399,6 +400,9 @@ def EdtOp : Arts_Op<"edt",
     - 'workers' specifies the number of parallel workers to use (optional).
     - 'nowait' indicates the EDT doesn't require an epoch wrapper
       (typically used when EDT is already inside an epoch).
+    - 'epochGuid' specifies an explicit epoch GUID to spawn the EDT into.
+      If set, the EDT will be created with this epoch instead of relying
+      on the enclosing EpochOp. Used for barrier synchronization patterns.
   }];
   let arguments = (ins
     EdtTypeAttr:$type,
@@ -407,22 +411,26 @@ def EdtOp : Arts_Op<"edt",
     OptionalAttr<WorkersAttr>:$workers,
     OptionalAttr<NoVerifyAttr>:$no_verify,
     OptionalAttr<UnitAttr>:$nowait,
+    Optional<I64>:$epochGuid,
     Variadic<AnyMemRef>:$dependencies
   );
   let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
-    $type $concurrency `route` `(` $route `)` (`(` $dependencies^ `)` `:` type($dependencies))? attr-dict-with-keyword
+    $type $concurrency `route` `(` $route `)` (`epoch` `(` $epochGuid^ `)`)? (`(` $dependencies^ `)` `:` type($dependencies))? attr-dict-with-keyword
     $body
   }];
   let skipDefaultBuilders = 1;
   let builders = [
     OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency)>,
     OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency, "ValueRange":$dependencies)>,
-    OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency, "Value":$route, "ValueRange":$dependencies)>
+    OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency, "Value":$route, "ValueRange":$dependencies)>,
+    OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency, "Value":$route, "Value":$epochGuid, "ValueRange":$dependencies)>
   ];
   let hasVerifier = 1;
   let extraClassDeclaration = [{
     SmallVector<Value> getDependenciesAsVector();
+    void setDependencies(ValueRange newDeps);
+    void appendDependency(Value dep);
   }];
 }
 
@@ -447,10 +455,40 @@ def EpochOp : Arts_Op<"epoch",
 }
 
 ///===----------------------------------------------------------------------===///
+/// arts.create_epoch
+///===----------------------------------------------------------------------===///
+def CreateEpochOp : Arts_Op<"create_epoch", [MemoryEffects<[MemWrite]>]> {
+  let summary = "Create an ARTS epoch and return its GUID";
+  let description = [{
+    Creates an ARTS epoch and returns its GUID. Unlike arts.epoch which wraps
+    a region, this operation simply creates an epoch that can be passed around
+    as a value. EDTs can be added to this epoch using EdtCreateOp with the
+    epoch parameter. Use WaitOnEpochOp to wait for completion.
+  }];
+  let results = (outs I64:$epochGuid);
+  let assemblyFormat = "attr-dict `:` type($epochGuid)";
+}
+
+///===----------------------------------------------------------------------===///
+/// arts.wait_on_epoch
+///===----------------------------------------------------------------------===///
+def WaitOnEpochOp : Arts_Op<"wait_on_epoch", [MemoryEffects<[MemWrite]>]> {
+  let summary = "Wait for an ARTS epoch to complete";
+  let description = [{
+    Blocks until the specified epoch completes. All EDTs added to the epoch
+    must finish before this operation returns.
+
+    This is the counterpart to CreateEpochOp for barrier synchronization.
+  }];
+  let arguments = (ins I64:$epochGuid);
+  let assemblyFormat = "$epochGuid `:` type($epochGuid) attr-dict";
+}
+
+///===----------------------------------------------------------------------===///
 /// arts.yield
 ///===----------------------------------------------------------------------===///
-def YieldOp : Arts_Op<"yield", 
-  [Pure, ReturnLike, Terminator, 
+def YieldOp : Arts_Op<"yield",
+  [Pure, ReturnLike, Terminator,
    ParentOneOf<["EdtOp", "EpochOp", "ForOp"]>]> {
 
   let summary = "ARTS dialect yield terminator";

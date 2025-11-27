@@ -20,6 +20,8 @@
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/Metadata/IdRegistry.h"
+#include "arts/Utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -38,6 +40,7 @@
 #include "mlir/Transforms/RegionUtils.h"
 
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 
 #include "llvm/ADT/SmallVector.h"
@@ -118,7 +121,8 @@ private:
 // EDT Lowering Pass Implementation
 ///===----------------------------------------------------------------------===///
 struct EdtLoweringPass : public arts::EdtLoweringBase<EdtLoweringPass> {
-  explicit EdtLoweringPass(uint64_t idStride = 1000) : idStride(idStride) {}
+  explicit EdtLoweringPass(uint64_t idStride = IdRegistry::DefaultStride)
+      : idStride(idStride) {}
   ~EdtLoweringPass() { delete AC; }
   void runOnOperation() override;
 
@@ -152,10 +156,11 @@ private:
                                     const SmallVector<Value> &deps);
 
   /// Attributes
-  uint64_t idStride = 1000;
+  uint64_t idStride = IdRegistry::DefaultStride;
   unsigned functionCounter = 0;
   ModuleOp module;
   ArtsCodegen *AC = nullptr;
+  IdRegistry idRegistry;
 };
 
 } // namespace
@@ -182,8 +187,8 @@ void EdtLoweringPass::runOnOperation() {
       if (edtOp.getType() != EdtType::task) {
         ARTS_DEBUG("Demoting non-task EDT to task: " << edtOp);
         edtOp.setType(EdtType::task);
-        edtOp->removeAttr("workers");
-        edtOp->removeAttr("nowait");
+        edtOp->removeAttr(AttrNames::Operation::Workers);
+        edtOp->removeAttr(AttrNames::Operation::Nowait);
       }
       taskEdts.push_back(edtOp);
     });
@@ -260,14 +265,31 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   if (!routeVal)
     routeVal = AC->createIntConstant(0, AC->Int32, loc);
 
-  auto outlineOp = AC->create<EdtCreateOp>(loc, paramPack, depCount, routeVal);
+  /// If EdtOp has an explicit epoch GUID, pass it to EdtCreateOp
+  EdtCreateOp outlineOp;
+  if (Value epochGuid = edtOp.getEpochGuid()) {
+    ARTS_DEBUG("Creating EdtCreateOp with epoch GUID: " << epochGuid);
+    outlineOp =
+        AC->create<EdtCreateOp>(loc, paramPack, depCount, routeVal, epochGuid);
+  } else {
+    ARTS_DEBUG("Creating EdtCreateOp without epoch GUID");
+    outlineOp = AC->create<EdtCreateOp>(loc, paramPack, depCount, routeVal);
+  }
 
-  outlineOp->setAttr("outlined_func",
+  outlineOp->setAttr(AttrNames::Operation::OutlinedFunc,
                      AC->getBuilder().getStringAttr(outlinedFunc.getName()));
-  if (auto edtId = edtOp->getAttrOfType<IntegerAttr>("arts.id")) {
-    int64_t groupedId = edtId.getInt() * static_cast<int64_t>(idStride);
-    outlineOp->setAttr("arts.create_id",
-                       AC->getBuilder().getI64IntegerAttr(groupedId));
+  int64_t baseId = 0;
+  if (auto edtId = edtOp->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsId))
+    baseId = edtId.getInt();
+  else
+    baseId = idRegistry.getOrCreate(edtOp.getOperation());
+  /// Set the create id for the outlined operation
+  if (baseId) {
+    int64_t createId = baseId * static_cast<int64_t>(idStride);
+    outlineOp->setAttr(AttrNames::Operation::ArtsCreateId,
+                       AC->getBuilder().getI64IntegerAttr(createId));
+    ARTS_DEBUG("  - EDT arts.create_id=" << createId << " (base=" << baseId
+                                         << " x stride=" << idStride << ")");
   }
 
   /// Insert dependency management after the outline op
@@ -482,21 +504,6 @@ LogicalResult EdtLoweringPass::outlineRegionToFunction(
       if (failed(cloneCaptured(operand)))
         return failure();
 
-    bool hasRegions = defOp->getNumRegions() != 0;
-    bool hasSideEffects = false;
-    if (auto memInterface = dyn_cast<MemoryEffectOpInterface>(defOp)) {
-      hasSideEffects = memInterface.hasEffect<MemoryEffects::Write>() ||
-                       memInterface.hasEffect<MemoryEffects::Allocate>() ||
-                       memInterface.hasEffect<MemoryEffects::Free>();
-    } else {
-      hasSideEffects = !isMemoryEffectFree(defOp);
-    }
-
-    if (hasRegions || hasSideEffects) {
-      defOp->emitError("Cannot capture non-pure value while outlining EDT");
-      return failure();
-    }
-
     Operation *cloned = builder.clone(*defOp, valueMapping);
     for (auto [oldRes, newRes] :
          llvm::zip(defOp->getResults(), cloned->getResults()))
@@ -552,9 +559,12 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
   SmallVector<int32_t> acquireModes;
   SmallVector<bool> twinDiffHints;
   for (Value dep : deps) {
-    /// Handle both DbAcquireOp and DepDbAcquireOp as dependency sources
-    auto dbAcquireOp = dep.getDefiningOp<DbAcquireOp>();
-    if (!dbAcquireOp && !dep.getDefiningOp<DepDbAcquireOp>()) {
+    /// Handle both DbAcquireOp and DepDbAcquireOp as dependency sources, even
+    /// when they are threaded through block arguments.
+    Operation *underlyingDb = arts::getUnderlyingDb(dep);
+    auto dbAcquireOp = dyn_cast_or_null<DbAcquireOp>(underlyingDb);
+    auto depDbAcquireOp = dyn_cast_or_null<DepDbAcquireOp>(underlyingDb);
+    if (!dbAcquireOp && !depDbAcquireOp) {
       return mlir::emitError(
                  loc,
                  "Dependency must be from DbAcquireOp or DepDbAcquireOp, got: ")
@@ -562,8 +572,8 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     }
 
     /// Get the GUID from the acquire operation
-    Value depGuid = dbAcquireOp ? dbAcquireOp.getGuid()
-                                : dep.getDefiningOp<DepDbAcquireOp>().getGuid();
+    Value depGuid =
+        dbAcquireOp ? dbAcquireOp.getGuid() : depDbAcquireOp.getGuid();
     depGuids.push_back(depGuid);
 
     DbAllocOp allocForHint =
@@ -595,7 +605,8 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     bool useTwinDiff = false;
     if (allocForHint) {
       if (auto twinAttr =
-              allocForHint->getAttrOfType<BoolAttr>("arts.twin_diff"))
+              allocForHint->getAttrOfType<BoolAttr>(
+                  AttrNames::Operation::ArtsTwinDiff))
         useTwinDiff = twinAttr.getValue();
     }
     twinDiffHints.push_back(useTwinDiff);
@@ -799,6 +810,16 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
             AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
                                  baseOffset, dbGepIndices, depStrides);
         op->getResult(0).replaceAllUsesWith(depGep.getPtr());
+        op->erase();
+      } else if (auto dbRef = dyn_cast<arts::DbRefOp>(op)) {
+        AC->setInsertionPoint(op);
+        SmallVector<Value> refIndices(dbRef.getIndices().begin(),
+                                      dbRef.getIndices().end());
+        auto depGep = AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depv,
+                                           baseOffset, refIndices, depStrides);
+        auto newMemref = AC->create<polygeist::Pointer2MemrefOp>(
+            loc, dbRef.getType(), depGep.getPtr());
+        dbRef.getResult().replaceAllUsesWith(newMemref.getResult());
         op->erase();
       } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
         AC->setInsertionPoint(op);

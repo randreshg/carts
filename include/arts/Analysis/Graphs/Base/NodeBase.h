@@ -43,9 +43,8 @@ public:
   virtual const DenseSet<EdgeBase *> &getOutEdges() const = 0;
 
 protected:
-  // Protected for derived classes.
-  DenseSet<EdgeBase *> inEdges;
-  DenseSet<EdgeBase *> outEdges;
+  /// Protected for derived classes.
+  DenseSet<EdgeBase *> inEdges, outEdges;
 };
 
 } // namespace arts

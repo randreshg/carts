@@ -12,6 +12,9 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Transforms/EdtPtrRematerialization.h"
 
+/// LLVM
+#include "llvm/ADT/SmallVector.h"
+
 #include "arts/Utils/ArtsDebug.h"
 ARTS_DEBUG_SETUP(edt_ptr_rematerialization);
 
@@ -27,13 +30,21 @@ struct EdtPtrRematerializationPass
 
 void EdtPtrRematerializationPass::runOnOperation() {
   ModuleOp module = getOperation();
-  ARTS_INFO_HEADER(EdtPtrRematerializationPass);
+  ARTS_DEBUG_HEADER(EdtPtrRematerializationPass);
   ARTS_DEBUG_REGION(module.dump(););
 
-  /// Walk through all EdtOp instances in the module.
-  module.walk([&](arts::EdtOp edtOp) { rematerializePointersInEdt(edtOp); });
+  /// Collect all EDT operations
+  SmallVector<arts::EdtOp, 4> edtOps;
+  module.walk([&](arts::EdtOp edtOp) { edtOps.push_back(edtOp); });
 
-  ARTS_INFO_FOOTER(EdtPtrRematerializationPass);
+  ARTS_DEBUG("Found " << edtOps.size() << " EDT operations to process");
+
+  /// Walk through all EdtOp instances in the module.
+  for (arts::EdtOp edtOp : edtOps)
+    rematerializePointersInEdt(edtOp);
+
+  ARTS_DEBUG("Processed " << edtOps.size() << " EDT operations");
+  ARTS_DEBUG_FOOTER(EdtPtrRematerializationPass);
   ARTS_DEBUG_REGION(module.dump(););
 }
 
