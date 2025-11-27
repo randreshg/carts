@@ -77,6 +77,10 @@ struct CollectMetadataPass : public CollectMetadataBase<CollectMetadataPass> {
 
     ///  Initialize metadata manager and analyzers
     auto manager = std::make_unique<ArtsMetadataManager>(context);
+
+    /// Initialize deterministic sequential ID assignment
+    manager->getIdRegistry().reset();
+    manager->getIdRegistry().initializeFromModule(module);
     auto accessAnalyzer = std::make_unique<AccessAnalyzer>(context);
     auto depAnalyzer =
         std::make_unique<DependenceAnalyzer>(context, *accessAnalyzer);
@@ -123,7 +127,7 @@ private:
       auto *metadata = manager.addLoopMetadata(forOp);
       analyzer.analyzeAffineLoop(forOp, metadata);
       ARTS_DEBUG("  Analyzed affine.for at "
-                 << metadata->locationMetadata.toString());
+                 << metadata->locationMetadata.getKey());
     });
 
     ///  Collect scf.for loops
@@ -131,7 +135,7 @@ private:
       auto *metadata = manager.addLoopMetadata(forOp);
       analyzer.analyzeSCFLoop(forOp, metadata);
       ARTS_DEBUG("  Analyzed scf.for at "
-                 << metadata->locationMetadata.toString());
+                 << metadata->locationMetadata.getKey());
     });
 
     ///  Collect scf.parallel loops
@@ -139,7 +143,7 @@ private:
       auto *metadata = manager.addLoopMetadata(parOp);
       analyzer.analyzeSCFLoop(parOp, metadata);
       ARTS_DEBUG("  Analyzed scf.parallel at "
-                 << metadata->locationMetadata.toString());
+                 << metadata->locationMetadata.getKey());
     });
 
     ///  Collect scf.while loops
@@ -147,7 +151,7 @@ private:
       auto *metadata = manager.addLoopMetadata(whileOp);
       analyzer.analyzeSCFLoop(whileOp, metadata);
       ARTS_DEBUG("  Analyzed scf.while at "
-                 << metadata->locationMetadata.toString());
+                 << metadata->locationMetadata.getKey());
     });
   }
 
@@ -241,7 +245,9 @@ private:
       bool hasLoopLevelDeps =
           loopMeta->hasInterIterationDeps && *loopMeta->hasInterIterationDeps;
       bool sequential = hasLoopLevelDeps || memrefsWithDeps > 0;
-      bool hasWrites = (writeOnly + readWrite) > 0 || loopMeta->writeCount > 0;
+      bool hasWrites =
+          (writeOnly + readWrite) > 0 ||
+          loopMeta->accessStats.writeCount.value_or(0) > 0;
       LoopMetadata::ParallelClassification classification =
           LoopMetadata::ParallelClassification::Unknown;
       if (sequential) {

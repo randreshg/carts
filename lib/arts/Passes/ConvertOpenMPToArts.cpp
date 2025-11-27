@@ -17,6 +17,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/OperationAttributes.h"
 /// Others
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -373,7 +374,7 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
 
     /// Set chunk size attribute if present
     if (staticChunkSize)
-      forOp->setAttr("chunk_size",
+      forOp->setAttr(AttrNames::Operation::ChunkSize,
                      rewriter.getI64IntegerAttr(*staticChunkSize));
 
     /// Add region and argument to the forOp

@@ -12,6 +12,7 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
+#include "arts/Utils/OperationAttributes.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -40,15 +41,13 @@ namespace {
 
 ///===----------------------------------------------------------------------===///
 // LoopInfo - Information about a loop within a parallel EDT
-// This class encapsulates worker iteration distribution logic
 ///===----------------------------------------------------------------------===///
-/// LoopInfo: encapsulates worker partitioning for arts.for inside a parallel
+/// LoopInfo encapsulates worker partitioning for arts.for inside a parallel
 /// EDT. It implements a simple block distribution:
 ///   - chunkSizeCeil = ceil(totalIterations / numWorkers)
 ///   - start = workerId * chunkSizeCeil
 ///   - count = min(chunkSizeCeil, max(0, totalIterations - start))
 ///   - hasWork = start < totalIterations
-/// This avoids overlapping slices and keeps the math easy to audit.
 class LoopInfo {
 public:
   LoopInfo(ArtsCodegen *AC, ForOp forOp, Value numWorkers)
@@ -81,7 +80,7 @@ private:
 ///===----------------------------------------------------------------------===///
 // ReductionInfo - Information about reductions within a parallel for
 ///===----------------------------------------------------------------------===///
-/// Tracks DB handles for reduction pattern (see file header for full details).
+/// Tracks DB handles for reduction pattern
 ///
 /// Two sets of DBs per reduction variable:
 /// 1. Partial accumulators: array[num_workers] for intermediate worker results
@@ -107,6 +106,44 @@ struct ReductionInfo {
 
   /// Number of workers (from workers attribute - provides bounded memory)
   Value numWorkers;
+};
+
+///===----------------------------------------------------------------------===///
+// ParallelRegionAnalysis - Analyze parallel EDT contents for splitting
+///===----------------------------------------------------------------------===///
+/// Categorizes operations in a parallel EDT relative to arts.for operations.
+/// Used to split the parallel region into pre-for, orchestrator, and post-for
+/// sections.
+struct ParallelRegionAnalysis {
+  SmallVector<Operation *, 8> opsBeforeFor;
+  SmallVector<ForOp, 4> forOps;
+  SmallVector<Operation *, 8> opsAfterFor;
+
+  bool hasWorkBefore() const { return !opsBeforeFor.empty(); }
+  bool hasWorkAfter() const { return !opsAfterFor.empty(); }
+  bool needsSplit() const { return !forOps.empty(); }
+
+  /// Analyze a parallel EDT and populate the analysis
+  static ParallelRegionAnalysis analyze(EdtOp parallelEdt) {
+    ParallelRegionAnalysis analysis;
+    Block &body = parallelEdt.getBody().front();
+
+    bool seenFor = false;
+
+    for (Operation &op : body.without_terminator()) {
+      if (auto forOp = dyn_cast<ForOp>(&op)) {
+        analysis.forOps.push_back(forOp);
+        seenFor = true;
+      } else {
+        if (!seenFor)
+          analysis.opsBeforeFor.push_back(&op);
+        else
+          analysis.opsAfterFor.push_back(&op);
+      }
+    }
+
+    return analysis;
+  }
 };
 
 /// Create a zero/identity value matching the provided element type.
@@ -158,8 +195,11 @@ private:
                                             EdtOp parallelEdt, Location loc);
 
   /// Create result EDT that combines partial accumulators
+  /// The barrierEpochGuid parameter specifies which epoch the result EDT
+  /// should be spawned into.
   void createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
-                       ReductionInfo &redInfo, Location loc);
+                       ReductionInfo &redInfo, Location loc,
+                       Value barrierEpochGuid);
 
   void lowerSingleFor(ArtsCodegen &AC, EdtOp parallelEdt, ForOp forOp);
 
@@ -179,7 +219,8 @@ void LoopInfo::initialize() {
   Location loc = forOp.getLoc();
 
   /// Extract or default the chunk size from loop attributes
-  if (auto chunkAttr = forOp->getAttrOfType<IntegerAttr>("chunk_size"))
+  if (auto chunkAttr =
+          forOp->getAttrOfType<IntegerAttr>(AttrNames::Operation::ChunkSize))
     chunkSize =
         AC->createIndexConstant(std::max<int64_t>(1, chunkAttr.getInt()), loc);
   else
@@ -208,7 +249,7 @@ void LoopInfo::computeWorkerIterationsBlock(Value workerId) {
   auto loc = forOp.getLoc();
 
   ///===--------------------------------------------------------------------===///
-  /// Block Distribution Strategy 
+  /// Block Distribution Strategy
   ///===--------------------------------------------------------------------===///
   /// This function computes the iteration bounds for a specific worker using
   /// block distribution to ensure balanced load across all workers.
@@ -299,35 +340,60 @@ void ForLoweringPass::runOnOperation() {
 void ForLoweringPass::lowerParallelEdt(EdtOp parallelEdt) {
   ARTS_INFO("Lowering parallel EDT");
 
-  /// Find all arts.for operations within this parallel EDT
-  SmallVector<ForOp, 4> forOps;
-  parallelEdt.walk([&](ForOp forOp) { forOps.push_back(forOp); });
-  if (forOps.empty()) {
+  /// Analyze the parallel EDT structure to find arts.for operations
+  /// and categorize operations as before/after the for loop
+  ParallelRegionAnalysis analysis =
+      ParallelRegionAnalysis::analyze(parallelEdt);
+
+  if (!analysis.needsSplit()) {
     ARTS_DEBUG(" - No arts.for operations found, skipping");
     return;
   }
 
-  ARTS_INFO(" - Found " << forOps.size() << " arts.for operation(s)");
+  ARTS_INFO(" - Found " << analysis.forOps.size() << " arts.for operation(s)");
+
+  /// Log analysis results
+  if (analysis.hasWorkBefore()) {
+    ARTS_DEBUG(" - Found " << analysis.opsBeforeFor.size()
+                           << " operations before for loop");
+  } else {
+    ARTS_DEBUG(" - Skipping empty pre-for parallel region");
+  }
+
+  if (analysis.hasWorkAfter()) {
+    ARTS_DEBUG(" - Found " << analysis.opsAfterFor.size()
+                           << " operations after for loop");
+  } else {
+    ARTS_DEBUG(" - Skipping empty post-for parallel region");
+  }
+
   /// Construct codegen with runtime debug printing disabled by default.
   ArtsCodegen AC(module, /*debug=*/false);
-  for (ForOp forOp : forOps)
+
+  /// Process ALL arts.for operations sequentially (they are siblings, not
+  /// nested). Each arts.for creates its own EpochOp region for synchronization.
+  for (ForOp forOp : analysis.forOps) {
     lowerSingleFor(AC, parallelEdt, forOp);
+  }
 }
 
 void ForLoweringPass::lowerSingleFor(ArtsCodegen &AC, EdtOp parallelEdt,
                                      ForOp forOp) {
   Location loc = forOp.getLoc();
 
+  ARTS_INFO(" - Lowering arts.for with simplified epoch synchronization");
+
   OpBuilder::InsertionGuard topGuard(AC.getBuilder());
   AC.setInsertionPoint(forOp);
 
-  /// Create epoch wrapper to synchronize all spawned EDTs
-  auto epochOp = AC.create<EpochOp>(loc);
-  Region &epochRegion = epochOp.getRegion();
-  if (epochRegion.empty())
-    epochRegion.push_back(new Block());
-  Block &epochBlock = epochRegion.front();
-  AC.setInsertionPointToStart(&epochBlock);
+  /// SIMPLIFIED DESIGN: Use EpochOp regions for implicit synchronization
+  /// instead of the problematic CreateEpochOp + JoinEpoch + WaitOnEpoch
+  /// pattern.
+  ///
+  /// The orchestrator pattern remains inside the parallel EDT, but we use
+  /// EpochOp regions which provide implicit synchronization:
+  /// - EpochOp waits for all EDTs created within to complete
+  /// - No explicit join/wait needed
 
   /// Allocate and initialize partial accumulators for reductions
   /// If the loop has reduction variables, allocate:
@@ -340,16 +406,22 @@ void ForLoweringPass::lowerSingleFor(ArtsCodegen &AC, EdtOp parallelEdt,
     redInfo = allocatePartialAccumulators(&AC, forOp, parallelEdt, loc);
   }
 
-  /// Create orchestrator pattern
-  /// Only worker 0 (orchestrator) launches all worker EDTs and the reduction
-  /// EDT. Other workers skip this block via the scf.if guard.
+  /// Get number of workers for partitioning
+  Value numWorkers;
+  if (auto workers =
+          parallelEdt->getAttrOfType<workersAttr>(AttrNames::Operation::Workers))
+    numWorkers = AC.createIndexConstant(workers.getValue(), loc);
+  else
+    numWorkers = AC.create<GetTotalWorkersOp>(loc).getResult();
 
   /// Create arts.get_parallel_worker_id() placeholder
   /// ParallelEdtLowering will replace this with the outer worker loop IV
   Value currentWorkerId = AC.create<GetParallelWorkerIdOp>(loc).getResult();
 
   /// Check if current worker is the orchestrator (worker 0)
+  /// Only worker 0 creates all the task EDTs
   Value zero = AC.createIndexConstant(0, loc);
+  Value one = AC.createIndexConstant(1, loc);
   Value isOrchestrator = AC.create<arith::CmpIOp>(loc, arith::CmpIPredicate::eq,
                                                   currentWorkerId, zero);
 
@@ -357,43 +429,52 @@ void ForLoweringPass::lowerSingleFor(ArtsCodegen &AC, EdtOp parallelEdt,
   auto ifOrchestrator =
       AC.create<scf::IfOp>(loc, isOrchestrator, /*withElseRegion=*/false);
   Block &orchestratorBlock = ifOrchestrator.getThenRegion().front();
-  Operation *orchestratorTerminator = orchestratorBlock.getTerminator();
 
   /// Compute work partitioning parameters
   AC.setInsertionPointToStart(&orchestratorBlock);
-  Value numWorkers;
-  if (auto workers = parallelEdt->getAttrOfType<workersAttr>("workers"))
-    numWorkers = AC.createIndexConstant(workers.getValue(), loc);
-  else
-    numWorkers = AC.create<GetTotalWorkersOp>(loc).getResult();
-  Value one = AC.createIndexConstant(1, loc);
   LoopInfo loopInfo(&AC, forOp, numWorkers);
 
-  /// Launch all worker EDTs
+  /// Create SINGLE epoch for entire arts.for (workers + result)
+  /// The EpochOp region provides implicit synchronization - it waits for all
+  /// EDTs created within the region to complete before continuing.
+  ///
+  /// DB dependencies handle worker→result ordering automatically:
+  /// - Workers: RecordDep(partialDB, WRITE) → latch incremented
+  /// - Result: RecordDep(partialDB, READ) → waits for latch=0
+  /// This eliminates the need for separate task/result epochs.
+  ARTS_DEBUG(" - Creating single epoch for arts.for synchronization");
+  auto forEpochOp = AC.create<EpochOp>(loc);
+  Region &forEpochRegion = forEpochOp.getRegion();
+  if (forEpochRegion.empty())
+    forEpochRegion.push_back(new Block());
+  Block &forEpochBlock = forEpochRegion.front();
+  AC.setInsertionPointToStart(&forEpochBlock);
+
+  /// Launch all worker EDTs inside the epoch
   /// For each worker w in [0, numWorkers):
   ///   - Compute chunk bounds: offset, size
   ///   - Check if worker has work (hasWork)
   ///   - If hasWork, acquire input DBs with chunk hints
   ///   - Create worker task EDT to process the chunk
+  ARTS_DEBUG(" - Creating worker dispatch loop");
   auto workerLoop = AC.create<scf::ForOp>(loc, zero, numWorkers, one);
   AC.setInsertionPointToStart(workerLoop.getBody());
   Value workerIV = workerLoop.getInductionVar();
   createTaskEdt(&AC, loopInfo, forOp, workerIV, parallelEdt, redInfo);
 
-  /// Create reduction EDT (if reductions exist)
-  /// After launching all worker EDTs, create a single reduction EDT to combine
-  /// partial accumulators into the final result.
-  AC.setInsertionPoint(orchestratorTerminator);
+  /// After worker loop, still inside epoch, create result EDT (if reductions)
+  /// Result EDT has READ deps on partialDBs → waits for workers via DB deps
+  AC.setInsertionPointAfter(workerLoop);
   if (!redInfo.reductionVars.empty()) {
-    /// Barrier ensures all worker EDTs complete before reduction EDT spawns
-    AC.create<BarrierOp>(loc);
-    createResultEdt(&AC, parallelEdt, redInfo, loc);
+    ARTS_DEBUG(" - Creating result EDT inside same epoch");
+    createResultEdt(&AC, parallelEdt, redInfo, loc,
+                    /*barrierEpochGuid=*/Value());
   }
 
-  /// Finalize epoch and cleanup
-  AC.setInsertionPointToEnd(&epochBlock);
+  /// Finalize the single epoch region
+  AC.setInsertionPointToEnd(&forEpochBlock);
   AC.create<YieldOp>(loc);
-  AC.setInsertionPointAfter(epochOp);
+
   forOp.erase();
 
   /// After the parallel EDT finishes, copy final reduction results back into
@@ -527,7 +608,8 @@ EdtOp ForLoweringPass::createTaskEdt(ArtsCodegen *AC, LoopInfo &loopInfo,
   ARTS_DEBUG("  Creating task EDT using worker_id placeholder");
 
   /// Recreate numWorkers constant inside the parallel EDT to avoid external
-  if (auto workers = parallelEdt->getAttrOfType<workersAttr>("workers"))
+  if (auto workers = parallelEdt->getAttrOfType<workersAttr>(
+          AttrNames::Operation::Workers))
     loopInfo.totalWorkers = AC->createIndexConstant(workers.getValue(), loc);
   else
     loopInfo.totalWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
@@ -599,14 +681,23 @@ EdtOp ForLoweringPass::createTaskEdt(ArtsCodegen *AC, LoopInfo &loopInfo,
 
   /// Chain db_acquire operations from parent EDT
   SmallVector<Value> taskDeps;
+  ARTS_DEBUG("  - Processing "
+             << parentDeps.size() << " parent dependencies, block has "
+             << parallelBlock.getNumArguments() << " arguments");
   for (auto [idx, parentDep] : llvm::enumerate(parentDeps)) {
+    ARTS_DEBUG("    - Dep " << idx << ": " << (parentDep ? "valid" : "null"));
     auto parentAcqOp = parentDep.getDefiningOp<DbAcquireOp>();
-    if (!parentAcqOp)
+    if (!parentAcqOp) {
+      ARTS_DEBUG("      - Not a DbAcquireOp, skipping");
       continue;
+    }
 
+    ARTS_DEBUG("      - Getting block argument at index " << idx);
     BlockArgument parallelArg = parallelBlock.getArgument(idx);
+    ARTS_DEBUG("      - Got block argument: " << parallelArg);
     if (shouldSkipReductionArg(parallelArg, redInfo, reductionBlockArgs))
       continue;
+    ARTS_DEBUG("      - Processing this dependency");
 
     /// Acquire using parallel EDT's block arg (coarse-grained acquire) and
     /// attach chunk hints so DbPass can reuse the known partitioning.
@@ -638,7 +729,7 @@ EdtOp ForLoweringPass::createTaskEdt(ArtsCodegen *AC, LoopInfo &loopInfo,
     taskDeps.push_back(acquirePtr);
   }
 
-  /// Create task EDT with route = workerIdPlaceholder
+  /// Create task EDT with route = 0
   /// For intranode tasks the route should remain local (0).
   Value routeValue = AC->createIntConstant(0, AC->Int32, loc);
   auto taskEdt = AC->create<EdtOp>(
@@ -653,9 +744,18 @@ EdtOp ForLoweringPass::createTaskEdt(ArtsCodegen *AC, LoopInfo &loopInfo,
   /// Combine regular and reduction dependencies
   taskDeps.append(reductionTaskDeps.begin(), reductionTaskDeps.end());
 
+  ARTS_DEBUG("  - Adding " << taskDeps.size()
+                           << " block arguments to task EDT");
+
   /// Add block arguments to task EDT for the acquire results
   for (uint64_t i = 0; i < taskDeps.size(); i++) {
     Value dep = taskDeps[i];
+    ARTS_DEBUG("    - Processing dep " << i << ": "
+                                       << (dep ? "valid" : "null"));
+    if (!dep) {
+      ARTS_ERROR("Null dependency at index " << i);
+      continue;
+    }
     BlockArgument taskArg = taskBlock.addArgument(dep.getType(), loc);
 
     /// For regular dependencies, map the acquire result to task block arg
@@ -664,13 +764,9 @@ EdtOp ForLoweringPass::createTaskEdt(ArtsCodegen *AC, LoopInfo &loopInfo,
       mapper.map(dep, taskArg);
   }
 
-  /// Update task EDT operands
-  SmallVector<Value> edtOperands;
-  if (Value route = taskEdt.getRoute())
-    edtOperands.push_back(route);
-  for (Value dep : taskDeps)
-    edtOperands.push_back(dep);
-  taskEdt->setOperands(edtOperands);
+  /// Update task EDT dependencies using helper to keep operandSegmentSizes in
+  /// sync
+  taskEdt.setDependencies(taskDeps);
 
   /// Create simple loop over worker's local iterations
   /// Each worker accumulates ALL its work into partialAccums[worker_id]
@@ -908,7 +1004,8 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
 
   /// Use numWorkers from parallel EDT workers attribute
   Value numWorkers;
-  if (auto workers = parallelEdt->getAttrOfType<workersAttr>("workers"))
+  if (auto workers = parallelEdt->getAttrOfType<workersAttr>(
+          AttrNames::Operation::Workers))
     numWorkers = AC->createIndexConstant(workers.getValue(), loc);
   else
     numWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
@@ -979,7 +1076,7 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
 
       /// Add as dependency and create block argument for parallel EDT
       Value finalDepPtr = finalDepAcqOp.getPtr();
-      parallelEdt.getDependenciesMutable().append(finalDepPtr);
+      parallelEdt.appendDependency(finalDepPtr);
       BlockArgument finalPtrArg =
           parallelBlock.addArgument(finalDepPtr.getType(), loc);
       redInfo.finalResultArgs.push_back(finalPtrArg);
@@ -1037,7 +1134,7 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
 
     /// Add as dependency and create block argument for parallel EDT
     Value depPtr = depAcqOp.getPtr();
-    parallelEdt.getDependenciesMutable().append(depPtr);
+    parallelEdt.appendDependency(depPtr);
     BlockArgument partialPtrArg =
         parallelBlock.addArgument(depPtr.getType(), loc);
 
@@ -1059,9 +1156,13 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
 
 ///===----------------------------------------------------------------------===///
 /// Create result EDT to combine partial accumulators into final result.
+/// The barrierEpochGuid specifies which epoch the result EDT should be spawned
+/// into. This enables all workers to wait on the same epoch for
+/// synchronization.
 ///===----------------------------------------------------------------------===///
 void ForLoweringPass::createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
-                                      ReductionInfo &redInfo, Location loc) {
+                                      ReductionInfo &redInfo, Location loc,
+                                      Value barrierEpochGuid) {
   OpBuilder::InsertionGuard IG(AC->getBuilder());
   if (redInfo.reductionVars.empty())
     return;
@@ -1160,10 +1261,13 @@ void ForLoweringPass::createResultEdt(ArtsCodegen *AC, EdtOp parallelEdt,
   for (Value dep : finalResultAcqPtrs)
     edtDeps.push_back(dep);
 
-  /// Create the result EDT as a task EDT
+  /// Create the result EDT as a task EDT with explicit barrier epoch
+  /// This ensures the result EDT is spawned into the shared barrier epoch,
+  /// so all workers waiting on that epoch will be released when it completes.
   Value routeZero = AC->create<arith::ConstantIntOp>(loc, 0, 32);
-  auto resultEdt = AC->create<EdtOp>(
-      loc, EdtType::task, EdtConcurrency::intranode, routeZero, edtDeps);
+  auto resultEdt =
+      AC->create<EdtOp>(loc, EdtType::task, EdtConcurrency::intranode,
+                        routeZero, barrierEpochGuid, edtDeps);
 
   Block &resultBlock = resultEdt.getBody().front();
   AC->setInsertionPointToStart(&resultBlock);

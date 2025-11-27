@@ -348,37 +348,35 @@ std::pair<EdtOp, BlockArgument>
 getEdtBlockArgumentForAcquire(DbAcquireOp acquireOp) {
   /// Find the EDT that uses this acquire's pointer result
   EdtOp edtUser = nullptr;
-  unsigned argIdx = 0;
+  Value operandValue = nullptr;
 
   for (auto &use : acquireOp->getUses()) {
     Operation *userOp = use.getOwner();
     if (auto edtOp = dyn_cast<EdtOp>(userOp)) {
       edtUser = edtOp;
-      argIdx = use.getOperandNumber();
+      operandValue = edtOp->getOperand(use.getOperandNumber());
       break;
     }
   }
 
-  if (!edtUser)
+  if (!edtUser || !operandValue)
     return {nullptr, nullptr};
 
-  /// EDT operands are segmented: route, deps, ...
-  /// Index 1 is the deps segment (block arguments)
-  auto [depsBegin, depsLen] = edtUser.getODSOperandIndexAndLength(1);
-
-  /// Check if the operand is within deps range
-  if (argIdx < depsBegin || argIdx >= depsBegin + depsLen)
+  /// Find the operand Value in the dependencies range
+  /// The index within dependencies equals the block argument index
+  ValueRange deps = edtUser.getDependencies();
+  auto depIt = std::find(deps.begin(), deps.end(), operandValue);
+  if (depIt == deps.end())
     return {nullptr, nullptr};
 
-  /// Convert operand index to block argument index
-  argIdx = argIdx - depsBegin;
+  unsigned blockArgIdx = std::distance(deps.begin(), depIt);
 
   /// Get the block argument
   Block &body = edtUser.getRegion().front();
-  if (argIdx >= body.getNumArguments())
+  if (blockArgIdx >= body.getNumArguments())
     return {nullptr, nullptr};
 
-  BlockArgument blockArg = body.getArgument(argIdx);
+  BlockArgument blockArg = body.getArgument(blockArgIdx);
   return {edtUser, blockArg};
 }
 
@@ -397,9 +395,10 @@ static Value getUnderlyingValueImpl(Value v, SmallPtrSet<Value, 8> &visited) {
     Operation *owner = block->getParentOp();
     if (auto edt = dyn_cast<EdtOp>(owner)) {
       unsigned argIndex = v.cast<BlockArgument>().getArgNumber();
-      /// Block arguments correspond directly to EDT operands
-      if (argIndex < edt.getNumOperands()) {
-        Value operand = edt.getOperand(argIndex);
+      /// Block arguments correspond to dependencies
+      ValueRange deps = edt.getDependencies();
+      if (argIndex < deps.size()) {
+        Value operand = deps[argIndex];
         return getUnderlyingValueImpl(operand, visited);
       } else {
         return v;
@@ -516,11 +515,10 @@ Operation *getUnderlyingDb(Value v, unsigned depth) {
     Operation *owner = block->getParentOp();
     if (auto edt = dyn_cast<EdtOp>(owner)) {
       unsigned argIndex = blockArg.getArgNumber();
-      /// EDT operands layout: [route] [dependencies...]
-      /// Block arguments correspond to dependencies, so offset by 1
-      auto [depsBegin, depsLen] = edt.getODSOperandIndexAndLength(1);
-      if (argIndex < depsLen) {
-        Value operand = edt.getOperand(depsBegin + argIndex);
+      /// Block arguments correspond to dependencies
+      ValueRange deps = edt.getDependencies();
+      if (argIndex < deps.size()) {
+        Value operand = deps[argIndex];
         return getUnderlyingDb(operand, depth + 1);
       }
     }

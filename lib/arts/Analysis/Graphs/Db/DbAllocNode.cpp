@@ -32,6 +32,11 @@ DbAllocNode::DbAllocNode(DbAllocOp op, DbAnalysis *analysis)
     ARTS_ERROR("Cannot create DbAllocNode: operation pointer is null");
     return;
   }
+  if (analysis)
+    analysis->getAnalysisManager()
+        .getMetadataManager()
+        .getIdRegistry()
+        .getOrCreate(opPtr);
 
   /// Import metadata from operation attributes, falling back to manager
   bool hasMetadata = importFromOp();

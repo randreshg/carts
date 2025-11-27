@@ -35,9 +35,19 @@ int main(int argc, char **argv) {
   for (int i = 0; i < N; ++i)
     checksum += out[i];
 
+  int expected_checksum = 3 * N * (N - 1) / 2;
   printf("Checksum: %d\n", checksum);
+  printf("Expected checksum: %d\n", expected_checksum);
 
-  free(in);
-  free(out);
-  return 0;
+  if (checksum == expected_checksum) {
+    printf("Verification: PASSED\n");
+    free(in);
+    free(out);
+    return 0;
+  } else {
+    printf("Verification: FAILED\n");
+    free(in);
+    free(out);
+    return 1;
+  }
 }

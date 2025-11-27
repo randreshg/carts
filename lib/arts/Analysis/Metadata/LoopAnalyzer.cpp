@@ -24,8 +24,7 @@ using namespace mlir::arts;
 void LoopAnalyzer::analyzeAffineLoop(affine::AffineForOp forOp,
                                      LoopMetadata *metadata) {
   /// Set location metadata
-  metadata->locationMetadata =
-      LocationMetadata::fromMLIRLocation(forOp.getLoc());
+  metadata->locationMetadata = LocationMetadata::fromLocation(forOp.getLoc());
 
   /// Compute trip count from affine bounds
   if (forOp.hasConstantBounds()) {
@@ -61,8 +60,7 @@ void LoopAnalyzer::analyzeAffineLoop(affine::AffineForOp forOp,
 
 void LoopAnalyzer::analyzeSCFLoop(Operation *loopOp, LoopMetadata *metadata) {
   /// Set location metadata
-  metadata->locationMetadata =
-      LocationMetadata::fromMLIRLocation(loopOp->getLoc());
+  metadata->locationMetadata = LocationMetadata::fromLocation(loopOp->getLoc());
 
   /// Compute nesting level
   int64_t nestLevel = 0;
@@ -151,8 +149,8 @@ void LoopAnalyzer::analyzeMemoryAccesses(Operation *loopOp,
     }
   });
 
-  metadata->readCount = reads;
-  metadata->writeCount = writes;
+  metadata->accessStats.readCount = reads;
+  metadata->accessStats.writeCount = writes;
   metadata->hasUniformStride = hasUniformStride;
   metadata->hasGatherScatter = hasGatherScatter;
 }
@@ -161,7 +159,8 @@ LoopMetadata::DataMovement
 LoopAnalyzer::classifyDataMovement(LoopMetadata *metadata) {
   /// Classify based on access patterns
   if (metadata->hasGatherScatter) {
-    if (metadata->writeCount > metadata->readCount)
+    if (metadata->accessStats.writeCount.value_or(0) >
+        metadata->accessStats.readCount.value_or(0))
       return LoopMetadata::DataMovement::Scatter;
     else
       return LoopMetadata::DataMovement::Gather;
@@ -171,7 +170,8 @@ LoopAnalyzer::classifyDataMovement(LoopMetadata *metadata) {
     return LoopMetadata::DataMovement::Streaming;
 
   /// Check for tiled access (multiple memrefs with structured access)
-  if (metadata->readCount > 0 && metadata->writeCount > 0)
+  if (metadata->accessStats.readCount.value_or(0) > 0 &&
+      metadata->accessStats.writeCount.value_or(0) > 0)
     return LoopMetadata::DataMovement::Tiled;
 
   return LoopMetadata::DataMovement::Unknown;

@@ -255,7 +255,7 @@ void MemrefAnalyzer::analyzeAllocation(Operation *allocOp,
   /// Basic properties
   metadata->rank = memrefType.getRank();
   metadata->allocationId =
-      LocationMetadata::getCompactLocationKey(allocOp->getLoc());
+      LocationMetadata::fromLocation(allocOp->getLoc()).getKey().str();
 
   /// Compute total size in bytes
   if (memrefType.hasStaticShape()) {
@@ -269,13 +269,14 @@ void MemrefAnalyzer::analyzeAllocation(Operation *allocOp,
 
   /// Count accesses
   auto [reads, writes] = countAccesses(memref, scopeOp);
-  metadata->totalAccesses = reads + writes;
-  metadata->readCount = reads;
-  metadata->writeCount = writes;
+  metadata->accessStats.totalAccesses = reads + writes;
+  metadata->accessStats.readCount = reads;
+  metadata->accessStats.writeCount = writes;
 
-  if (metadata->totalAccesses && *metadata->totalAccesses > 0) {
-    metadata->readWriteRatio =
-        static_cast<double>(reads) / *metadata->totalAccesses;
+  if (metadata->accessStats.totalAccesses &&
+      *metadata->accessStats.totalAccesses > 0) {
+    metadata->accessStats.readWriteRatio =
+        static_cast<double>(reads) / *metadata->accessStats.totalAccesses;
   }
 
   auto [firstId, lastId] = computeLifetime(memref, scopeOp);
@@ -392,7 +393,7 @@ MemrefAnalyzer::computeDimAccessPatterns(Value memref, Operation *scopeOp) {
 std::optional<int64_t>
 MemrefAnalyzer::computeEstimatedAccessBytes(Value memref,
                                             MemrefMetadata *metadata) {
-  if (!metadata || !metadata->totalAccesses)
+  if (!metadata || !metadata->accessStats.totalAccesses)
     return std::nullopt;
 
   auto type = memref.getType().dyn_cast<MemRefType>();
@@ -403,5 +404,5 @@ MemrefAnalyzer::computeEstimatedAccessBytes(Value memref,
   if (!elemBytes)
     return std::nullopt;
 
-  return static_cast<int64_t>(*metadata->totalAccesses * elemBytes);
+  return static_cast<int64_t>(*metadata->accessStats.totalAccesses * elemBytes);
 }
