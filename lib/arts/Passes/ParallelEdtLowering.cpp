@@ -11,6 +11,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsDebug.h"
+#include "arts/Utils/OperationAttributes.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -70,7 +71,7 @@ static void guardSingleEdts(Operation *op, Value workerId) {
 
     // Fix EDT type
     edt.setType(EdtType::task);
-    edt->removeAttr("nowait");
+    edt->removeAttr(AttrNames::Operation::Nowait);
   }
 }
 
@@ -97,7 +98,7 @@ static void ensureNestedEdtCaptures(Operation *op) {
           use.set(newArg);
       deps.push_back(capturedVal);
     }
-    edt.getDependenciesMutable().assign(deps);
+    edt.setDependencies(deps);
   });
 }
 
@@ -143,14 +144,15 @@ public:
 private:
   Value getNumWorkers(OpBuilder &builder, Location loc, EdtOp parallelEdt) {
     if (auto workersAttribute =
-            parallelEdt->getAttrOfType<workersAttr>("workers"))
+            parallelEdt->getAttrOfType<workersAttr>(
+                AttrNames::Operation::Workers))
       return builder.create<arith::ConstantIndexOp>(
           loc, workersAttribute.getValue());
     return builder.create<GetTotalWorkersOp>(loc).getResult();
   }
 
   LogicalResult lowerParallelEdt(EdtOp parallelEdt) {
-    ARTS_DEBUG("Lowering parallel EDT " << parallelEdt);
+    ARTS_DEBUG("Lowering parallel EDT\n" << parallelEdt);
     Block &body = parallelEdt.getBody().front();
     if (body.without_terminator().empty()) {
       parallelEdt.erase();
@@ -206,7 +208,7 @@ private:
     Operation *clonedOp = loopBuilder.clone(*parallelEdt.getOperation());
     auto clonedEdt = cast<EdtOp>(clonedOp);
     clonedEdt.setType(EdtType::task);
-    clonedEdt->removeAttr("workers");
+    clonedEdt->removeAttr(AttrNames::Operation::Workers);
     clonedEdt->removeAttr("nowait");
 
     /// Update route: internode uses worker route, otherwise keep existing or 0

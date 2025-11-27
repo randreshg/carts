@@ -18,6 +18,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
+#include "arts/Utils/OperationAttributes.h"
 /// Others
 #include "mlir/Analysis/DataLayoutAnalysis.h"
 #include "mlir/IR/Builders.h"
@@ -162,6 +163,39 @@ struct BarrierPattern : public ArtsToLLVMPattern<BarrierOp> {
     ARTS_INFO("Lowering Barrier Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
     AC->createRuntimeCall(types::ARTSRTL_artsYield, {}, op.getLoc());
+    rewriter.eraseOp(op);
+    return success();
+  }
+};
+
+/// Pattern to convert arts.create_epoch operations
+struct CreateEpochPattern : public ArtsToLLVMPattern<CreateEpochOp> {
+  using ArtsToLLVMPattern::ArtsToLLVMPattern;
+
+  LogicalResult matchAndRewrite(CreateEpochOp op,
+                                PatternRewriter &rewriter) const override {
+    ARTS_INFO("Lowering CreateEpoch Op " << op);
+    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
+    auto loc = op.getLoc();
+    auto guid = AC->createIntConstant(0, AC->Int64, loc);
+    auto edtSlot = AC->createIntConstant(DEFAULT_EDT_SLOT, AC->Int32, loc);
+
+    /// Create epoch guid
+    auto epochGuid = AC->createEpoch(guid, edtSlot, loc);
+    rewriter.replaceOp(op, epochGuid);
+    return success();
+  }
+};
+
+/// Pattern to convert arts.wait_on_epoch operations
+struct WaitOnEpochPattern : public ArtsToLLVMPattern<WaitOnEpochOp> {
+  using ArtsToLLVMPattern::ArtsToLLVMPattern;
+
+  LogicalResult matchAndRewrite(WaitOnEpochOp op,
+                                PatternRewriter &rewriter) const override {
+    ARTS_INFO("Lowering WaitOnEpoch Op " << op);
+    ArtsCodegen::RewriterGuard RG(*AC, rewriter);
+    AC->waitOnHandle(op.getEpochGuid(), op.getLoc());
     rewriter.eraseOp(op);
     return success();
   }
@@ -613,7 +647,8 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
     ARTS_INFO("Lowering EdtCreate Op " << op);
     ArtsCodegen::RewriterGuard RG(*AC, rewriter);
     /// Get outlined function name
-    auto funcNameAttr = op->getAttrOfType<StringAttr>("outlined_func");
+    auto funcNameAttr =
+        op->getAttrOfType<StringAttr>(AttrNames::Operation::OutlinedFunc);
     if (!funcNameAttr)
       return op.emitError("Missing outlined_func attribute");
 
@@ -647,23 +682,42 @@ struct EdtCreatePattern : public ArtsToLLVMPattern<EdtCreateOp> {
       paramc = AC->createIntConstant(0, AC->Int32, op.getLoc());
     }
 
-    /// Create artsEdtCreate or artsEdtCreateWithEpoch call based on epoch GUID
-    /// availability
-    func::CallOp callOp;
-    if (op.getEpochGuid()) {
-      /// Use artsEdtCreateWithEpoch when epoch GUID is provided
-      callOp = AC->createRuntimeCall(
-          types::ARTSRTL_artsEdtCreateWithEpoch,
-          {funcPtr, route, paramc, paramv, depc, op.getEpochGuid()},
-          op.getLoc());
-    } else {
-      /// Use regular artsEdtCreate when no epoch GUID
-      callOp = AC->createRuntimeCall(types::ARTSRTL_artsEdtCreate,
-                                     {funcPtr, route, paramc, paramv, depc},
-                                     op.getLoc());
+    auto createIdAttr =
+        op->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsCreateId);
+    Value artsIdVal;
+    if (createIdAttr) {
+      artsIdVal =
+          AC->create<arith::ConstantOp>(op.getLoc(), AC->Int64, createIdAttr);
     }
-    if (auto createId = op->getAttr("arts.create_id"))
-      callOp->setAttr("arts.create_id", createId);
+
+    /// Create artsEdtCreate call; prefer arts_id-aware variant when available
+    func::CallOp callOp;
+    if (createIdAttr) {
+      if (op.getEpochGuid()) {
+        callOp =
+            AC->createRuntimeCall(types::ARTSRTL_artsEdtCreateWithEpochArtsId,
+                                  {funcPtr, route, paramc, paramv, depc,
+                                   op.getEpochGuid(), artsIdVal},
+                                  op.getLoc());
+      } else {
+        callOp = AC->createRuntimeCall(
+            types::ARTSRTL_artsEdtCreateWithArtsId,
+            {funcPtr, route, paramc, paramv, depc, artsIdVal}, op.getLoc());
+      }
+    } else {
+      if (op.getEpochGuid()) {
+        callOp = AC->createRuntimeCall(
+            types::ARTSRTL_artsEdtCreateWithEpoch,
+            {funcPtr, route, paramc, paramv, depc, op.getEpochGuid()},
+            op.getLoc());
+      } else {
+        callOp = AC->createRuntimeCall(types::ARTSRTL_artsEdtCreate,
+                                       {funcPtr, route, paramc, paramv, depc},
+                                       op.getLoc());
+      }
+    }
+    if (createIdAttr)
+      callOp->setAttr(AttrNames::Operation::ArtsCreateId, createIdAttr);
     rewriter.replaceOp(op, callOp.getResult(0));
     return success();
   }
@@ -700,8 +754,9 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
     Value totalDbSize =
         AC->create<arith::MulIOp>(loc, elementSize, payloadSize);
     std::optional<int64_t> nextId;
-    if (auto groupId = op->getAttrOfType<IntegerAttr>("arts.db_group_id"))
-      nextId = groupId.getInt();
+    if (auto createIdAttr = op->getAttrOfType<IntegerAttr>(
+            AttrNames::Operation::ArtsCreateId))
+      nextId = createIdAttr.getInt();
 
     SmallVector<Value> dbSizes, dbOffsets, dbIndices;
     bool isSingleElement = false;
@@ -754,12 +809,18 @@ private:
                     .getResult(0);
     /// Create the DB with GUID
     auto elemSize64 = AC->castToInt(AC->Int64, elementSize, loc);
-    auto dbCall = AC->createRuntimeCall(types::ARTSRTL_artsDbCreateWithGuid,
-                                        {guid, elemSize64}, loc);
+    func::CallOp dbCall;
     if (nextId && nextId->has_value()) {
-      dbCall->setAttr("arts.id_hint",
-                      AC->getBuilder().getI64IntegerAttr(**nextId));
+      auto artsIdAttr = AC->getBuilder().getI64IntegerAttr(**nextId);
+      auto artsIdValue =
+          AC->create<arith::ConstantOp>(loc, AC->Int64, artsIdAttr);
+      dbCall =
+          AC->createRuntimeCall(types::ARTSRTL_artsDbCreateWithGuidAndArtsId,
+                                {guid, elemSize64, artsIdValue}, loc);
       **nextId = **nextId + 1;
+    } else {
+      dbCall = AC->createRuntimeCall(types::ARTSRTL_artsDbCreateWithGuid,
+                                     {guid, elemSize64}, loc);
     }
     auto dbPtr = dbCall.getResult(0);
 
@@ -1098,6 +1159,9 @@ void ConvertArtsToLLVMPass::populateCorePatterns(RewritePatternSet &patterns) {
 
   /// Synchronization patterns
   patterns.add<BarrierPattern, AtomicAddPattern>(context, AC);
+
+  /// Epoch patterns
+  patterns.add<CreateEpochPattern, WaitOnEpochPattern>(context, AC);
 
   /// EDT patterns
   patterns.add<EdtParamPackPattern, EdtParamUnpackPattern>(context, AC);

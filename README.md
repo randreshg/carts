@@ -129,7 +129,7 @@ carts execute example.c -o example
 carts build --arts --debug
 
 # Run with ARTS tracing
-ARTS_DEBUG=1 ARTS_TRACE=1 ./example
+./example
 ```
 
 ## Notes

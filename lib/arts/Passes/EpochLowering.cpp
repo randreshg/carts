@@ -1,12 +1,12 @@
 ///==========================================================================///
 /// Epoch Lowering Pass - Complete Implementation
-/// Transforms arts.epoch operations into runtime-compatible function calls
+/// Transforms arts.epoch operations into CreateEpochOp and WaitOnEpochOp
 /// and propagates epoch GUIDs to contained EdtCreateOps
 ///
 /// This pass runs after EdtLowering and implements the epoch lowering process:
-/// 1. Create epoch GUID for each epoch operation
+/// 1. Create CreateEpochOp for each epoch operation
 /// 2. Propagate the epoch GUID to all EdtCreateOps within the epoch
-/// 3. Lower epoch operations to runtime calls
+/// 3. Lower epoch operations to CreateEpochOp + operations + WaitOnEpochOp
 /// 4. Return the epoch GUID for synchronization
 ///==========================================================================///
 
@@ -14,19 +14,10 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/IR/Dominance.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
-#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "mlir/Transforms/RegionUtils.h"
 
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -85,12 +76,11 @@ void EpochLoweringPass::runOnOperation() {
       continue;
     }
 
-    /// Create epoch GUID for the epoch (using NULL_GUID = 0)
+    /// Create CreateEpochOp for the epoch
     AC->setInsertionPoint(epochOp);
-    auto guid = AC->createIntConstant(0, AC->Int64, epochOp.getLoc());
-    auto edtSlot =
-        AC->createIntConstant(DEFAULT_EDT_SLOT, AC->Int32, epochOp.getLoc());
-    auto currentEpoch = AC->createEpoch(guid, edtSlot, epochOp.getLoc());
+    auto createEpochOp = AC->create<CreateEpochOp>(
+        epochOp.getLoc(), IntegerType::get(AC->getContext(), 64));
+    auto currentEpoch = createEpochOp.getEpochGuid();
 
     /// Find all EdtCreateOp operations within this epoch region and update them
     /// with the epoch GUID
@@ -143,10 +133,9 @@ void EpochLoweringPass::runOnOperation() {
       }
     }
 
-    /// Wait on the epoch after all of its original operations (moved) to
-    /// preserve the epoch ordering hierarchy.
+    /// Insert wait on handle
     AC->setInsertionPointAfter(insertionAfter);
-    AC->waitOnHandle(currentEpoch, epochOp.getLoc());
+    AC->create<WaitOnEpochOp>(epochOp.getLoc(), currentEpoch);
 
     /// Replace the epoch operation with its result (the epoch GUID)
     epochOp.replaceAllUsesWith(currentEpoch);

@@ -37,18 +37,11 @@ struct EdtInfo {
   unsigned orderIndex = 0;
 
   /// Base allocations (original memrefs) read/written by this EDT
-  llvm::DenseSet<Value> basesRead;
-  llvm::DenseSet<Value> basesWritten;
-
-  /// When DbGraph is available: DbAlloc ops (read/written)
-  llvm::DenseSet<DbAllocOp> dbAllocsRead;
-  llvm::DenseSet<DbAllocOp> dbAllocsWritten;
+  llvm::DenseSet<Value> basesRead, basesWritten;
+  llvm::DenseSet<DbAllocOp> dbAllocsRead, dbAllocsWritten;
 
   /// Detailed per-alloc access metrics
-  /// (loads+stores)
-  llvm::DenseMap<DbAllocOp, uint64_t> dbAllocAccessCount;
-  /// Estimated bytes
-  llvm::DenseMap<DbAllocOp, uint64_t> dbAllocAccessBytes;
+  llvm::DenseMap<DbAllocOp, uint64_t> dbAllocAccessCount, dbAllocAccessBytes;
 
   bool isReadOnly() const { return !basesRead.empty() && basesWritten.empty(); }
   bool isWriteOnly() const {

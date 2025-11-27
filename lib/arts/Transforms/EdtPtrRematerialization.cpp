@@ -3,6 +3,7 @@
 ///==========================================================================///=
 
 /// Dialects
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -18,37 +19,64 @@
 #include "llvm/ADT/SmallVector.h"
 
 /// LLVM support
-// #include "arts/Utils/ArtsDebug.h"
-// ARTS_DEBUG_SETUP(edt_ptr_rematerialization);
+#include "arts/Utils/ArtsDebug.h"
+ARTS_DEBUG_SETUP(edt_ptr_rematerialization);
 
 namespace mlir {
 namespace arts {
 
+/// Check if an operation produces pointer or memref types that should be
+/// rematerialized. Returns true if ANY result is a pointer-like type.
+static bool producesPointerLikeType(Operation *op) {
+  for (Value result : op->getResults()) {
+    Type resultType = result.getType();
+    /// LLVM pointers (e.g., from llvm.getelementptr)
+    if (resultType.isa<LLVM::LLVMPointerType>())
+      return true;
+    /// MemRef types (e.g., from memref.cast, memref.subview)
+    if (resultType.isa<MemRefType>())
+      return true;
+    /// Unranked memref types
+    if (resultType.isa<UnrankedMemRefType>())
+      return true;
+  }
+  return false;
+}
+
 void rematerializePointersInEdt(EdtOp edt) {
-  /// Analyzes the EDT environment to check if there is any parameter that
-  /// loads a memref and indices of any dependency. If so, it creates a new
-  /// load operation at the start of the region and replaces all the uses of
-  /// the parameter.
+  ARTS_DEBUG("Processing EDT: " << edt);
+
   SetVector<Value> usedValues;
   auto &edtRegion = edt.getRegion();
   getUsedValuesDefinedAbove(edtRegion, usedValues);
 
+  ARTS_DEBUG("Found " << usedValues.size() << " values used from outside EDT");
+
   /// Helper function to recursively clone operations and their pointer
   /// dependencies
-  std::function<Value(Value, OpBuilder &, DenseMap<Value, Value> &)>
-      cloneWithDeps = [&](Value val, OpBuilder &builder,
-                          DenseMap<Value, Value> &valueMap) -> Value {
+  OpBuilder builder(edtRegion.getContext());
+  builder.setInsertionPointToStart(&edtRegion.front());
+
+  std::function<Value(Value, DenseMap<Value, Value> &)> cloneWithDeps =
+      [&](Value val, DenseMap<Value, Value> &valueMap) -> Value {
+    ARTS_DEBUG("cloneWithDeps: processing value " << val);
+
     /// If already cloned, return the mapped value
-    if (valueMap.count(val))
+    if (valueMap.count(val)) {
+      ARTS_DEBUG("  Already cloned, returning mapped value");
       return valueMap[val];
+    }
 
     /// Skip if there's no defining operation
     Operation *defOp = val.getDefiningOp();
-    if (!defOp)
+    if (!defOp) {
+      ARTS_DEBUG("  No defining operation, returning original value");
       return val;
+    }
+
+    ARTS_DEBUG("  Defining op: " << *defOp);
 
     /// Check if operation has side effects that prevent rematerialization
-    /// (same pattern as EdtLowering.cpp)
     bool hasRegions = defOp->getNumRegions() != 0;
     bool hasSideEffects = false;
     if (auto memInterface = dyn_cast<MemoryEffectOpInterface>(defOp)) {
@@ -59,11 +87,24 @@ void rematerializePointersInEdt(EdtOp edt) {
       hasSideEffects = !isMemoryEffectFree(defOp);
     }
 
+    ARTS_DEBUG("  hasRegions=" << hasRegions
+                               << ", hasSideEffects=" << hasSideEffects);
+
     /// Skip operations with regions or write/allocate/free side effects
-    if (hasRegions || hasSideEffects)
+    if (hasRegions || hasSideEffects) {
+      ARTS_DEBUG("  Skipping due to regions or side effects");
       return val;
+    }
+
+    /// Only rematerialize operations that produce pointer-like types
+    if (!producesPointerLikeType(defOp)) {
+      ARTS_DEBUG("  Skipping: does not produce pointer-like type");
+      return val;
+    }
 
     /// First clone dependencies
+    ARTS_DEBUG("  Cloning dependencies for " << defOp->getNumOperands()
+                                             << " operands");
     SmallVector<Value, 4> newOperands;
     for (Value operand : defOp->getOperands()) {
       /// Check if operand needs to be cloned (has defining op and can be
@@ -80,21 +121,31 @@ void rematerializePointersInEdt(EdtOp edt) {
         } else {
           opHasSideEffects = !isMemoryEffectFree(opDefOp);
         }
-        /// Clone if it's a pure operation without regions
-        if (!opHasRegions && !opHasSideEffects) {
-          newOperands.push_back(cloneWithDeps(operand, builder, valueMap));
+        /// Clone if it's a pure operation without regions AND produces
+        /// pointer-like type
+        if (!opHasRegions && !opHasSideEffects &&
+            producesPointerLikeType(opDefOp)) {
+          ARTS_DEBUG("    Cloning operand (pointer-like): " << operand);
+          newOperands.push_back(cloneWithDeps(operand, valueMap));
         } else {
+          ARTS_DEBUG("    Keeping operand as-is: " << operand);
           newOperands.push_back(operand);
         }
       } else {
+        ARTS_DEBUG("    Keeping operand as-is (no defining op): " << operand);
         newOperands.push_back(operand);
       }
     }
     /// Update operands with the cloned versions
+    ARTS_DEBUG("  Creating clone of operation");
     auto clonedOp = val.getDefiningOp()->clone();
     for (auto [idx, newOp] : llvm::enumerate(newOperands))
       clonedOp->setOperand(idx, newOp);
-    builder.insert(clonedOp);
+    clonedOp = builder.insert(clonedOp);
+    builder.setInsertionPointAfter(clonedOp);
+
+    ARTS_DEBUG("  Cloned operation: " << *clonedOp);
+    ARTS_DEBUG("  Mapping " << val << " -> " << clonedOp->getResult(0));
 
     /// Store the mapping
     valueMap[val] = clonedOp->getResult(0);
@@ -103,11 +154,17 @@ void rematerializePointersInEdt(EdtOp edt) {
 
   DenseMap<Value, Value> valueMap;
   for (Value operand : usedValues) {
+    ARTS_DEBUG("\n--- Processing used value: " << operand);
+
     /// Check if this operand can be safely rematerialized
     /// Only rematerialize operations without write/allocate/free side effects
     Operation *defOp = operand.getDefiningOp();
-    if (!defOp)
+    if (!defOp) {
+      ARTS_DEBUG("  Skipping: no defining operation");
       continue;
+    }
+
+    ARTS_DEBUG("  Defining operation: " << *defOp);
 
     /// Check if operation has side effects that prevent rematerialization
     bool hasRegions = defOp->getNumRegions() != 0;
@@ -120,16 +177,30 @@ void rematerializePointersInEdt(EdtOp edt) {
       hasSideEffects = !isMemoryEffectFree(defOp);
     }
 
+    ARTS_DEBUG("  hasRegions=" << hasRegions
+                               << ", hasSideEffects=" << hasSideEffects);
+
     /// Skip operations with regions or write/allocate/free side effects
-    if (hasRegions || hasSideEffects)
+    if (hasRegions || hasSideEffects) {
+      ARTS_DEBUG(
+          "  Skipping: cannot rematerialize (has regions or side effects)");
       continue;
+    }
+
+    /// Only rematerialize operations that produce pointer-like types
+    if (!producesPointerLikeType(defOp)) {
+      ARTS_DEBUG("  Skipping: does not produce pointer-like type");
+      continue;
+    }
 
     /// Clone operation and its dependencies recursively
-    OpBuilder builder(edtRegion.getContext());
-    builder.setInsertionPointToStart(&edtRegion.front());
-    Value newVal = cloneWithDeps(operand, builder, valueMap);
+    ARTS_DEBUG("  Rematerializing operation");
+    Value newVal = cloneWithDeps(operand, valueMap);
     if (newVal != operand) {
+      ARTS_DEBUG("  Replacing uses of " << operand << " with " << newVal);
       replaceInRegion(edtRegion, operand, newVal);
+    } else {
+      ARTS_DEBUG("  No replacement needed (newVal == operand)");
     }
   }
 }

@@ -242,6 +242,25 @@ __ARTS_RTL_ATTRS(artsEdtCreateWithEpoch, ControlAttrs, EmptyAttrs,
                  ParamAttrs(ReadOnlyPtrAttrs, ZExt, ZExt, ReadOnlyPtrAttrs,
                             ZExt, EmptyAttrs))
 
+/// ArtsGuid artsEdtCreateWithArtsId(artsEdt_t funcPtr, unsigned int route,
+///                                  uint32_t paramc, uint64_t *paramv,
+///                                  uint32_t depc, uint64_t arts_id);
+__ARTS_RTL(artsEdtCreateWithArtsId, ArtsGuid, EdtFnPtr, Int32, Int32, Int64Ptr,
+           Int32, Int64)
+__ARTS_RTL_ATTRS(artsEdtCreateWithArtsId, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(ReadOnlyPtrAttrs, ZExt, ZExt, ReadOnlyPtrAttrs,
+                            ZExt, EmptyAttrs))
+
+/// ArtsGuid artsEdtCreateWithEpochArtsId(artsEdt_t funcPtr,
+///                                       unsigned int route, uint32_t paramc,
+///                                       uint64_t *paramv, uint32_t depc,
+///                                       ArtsGuid epochGuid, uint64_t arts_id);
+__ARTS_RTL(artsEdtCreateWithEpochArtsId, ArtsGuid, EdtFnPtr, Int32, Int32,
+           Int64Ptr, Int32, ArtsGuid, Int64)
+__ARTS_RTL_ATTRS(artsEdtCreateWithEpochArtsId, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(ReadOnlyPtrAttrs, ZExt, ZExt, ReadOnlyPtrAttrs,
+                            ZExt, EmptyAttrs, EmptyAttrs))
+
 /// ArtsGuid artsEdtCreateDep(artsEdt_t funcPtr, unsigned int route,
 ///                           uint32_t paramc, uint64_t *paramv, uint32_t depc,
 ///                           bool hasDepv);
@@ -336,6 +355,19 @@ __ARTS_RTL_ATTRS(artsAddDependenceToPersistentEvent, ControlAttrs,
 __ARTS_RTL(artsDbCreateWithGuid, RawPtr, ArtsGuid, Int64)
 __ARTS_RTL_ATTRS(artsDbCreateWithGuid, AllocAttrs, ReturnPtrAttrs,
                  ParamAttrs(EmptyAttrs, EmptyAttrs))
+
+/// artsGuid_t artsDbCreateWithArtsId(void **addr, uint64_t size,
+///                                   artsType_t mode, uint64_t arts_id);
+__ARTS_RTL(artsDbCreateWithArtsId, ArtsGuid, VoidPtrPtr, Int64, ArtsType,
+           Int64)
+__ARTS_RTL_ATTRS(artsDbCreateWithArtsId, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(ArgPtrAttrs, EmptyAttrs, SExt, EmptyAttrs))
+
+/// void *artsDbCreateWithGuidAndArtsId(artsGuid_t guid, uint64_t size,
+///                                     uint64_t arts_id);
+__ARTS_RTL(artsDbCreateWithGuidAndArtsId, RawPtr, ArtsGuid, Int64, Int64)
+__ARTS_RTL_ATTRS(artsDbCreateWithGuidAndArtsId, AllocAttrs, ReturnPtrAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs, EmptyAttrs))
 
 /// void *artsDbCreateWithGuidAndData(artsGuid_t guid, void *data,
 ///                                   uint64_t size);

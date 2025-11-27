@@ -9,6 +9,7 @@
 #define ARTS_ANALYSIS_METADATA_ARTSMETADATAMANAGER_H
 
 #include "arts/Utils/Metadata/ArtsMetadata.h"
+#include "arts/Utils/Metadata/IdRegistry.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/Metadata/MemrefMetadata.h"
@@ -38,6 +39,12 @@ constexpr StringLiteral Locations = "locations";
 constexpr StringLiteral Values = "values";
 constexpr StringLiteral Allocations = "allocations";
 constexpr StringLiteral SerializedBlob = "arts.metadata.serialized";
+
+/// Shared JSON keys for nested location objects
+constexpr StringLiteral ArtsId = "arts_id";
+constexpr StringLiteral File = "file";
+constexpr StringLiteral Line = "line";
+constexpr StringLiteral Column = "column";
 } // namespace Metadata
 } // namespace AttrNames
 
@@ -122,7 +129,7 @@ public:
     loopJsonCache.clear();
     memrefJsonCache.clear();
     jsonCacheInitialized = false;
-    nextMetadataId = 1;
+    idRegistry_.reset();
     serializedMetadataCache.clear();
   }
 
@@ -161,6 +168,12 @@ public:
   bool transferMetadata(Operation *sourceOp, Operation *targetOp);
 
   //===------------------------------------------------------------------===//
+  // ID Registry Access
+  //===------------------------------------------------------------------===//
+  IdRegistry &getIdRegistry() { return idRegistry_; }
+  const IdRegistry &getIdRegistry() const { return idRegistry_; }
+
+  //===------------------------------------------------------------------===//
   // Debug and Utilities
   //===------------------------------------------------------------------===//
   void printStatistics(llvm::raw_ostream &os) const;
@@ -169,13 +182,13 @@ public:
 private:
   MLIRContext *context_;
   llvm::DenseMap<Operation *, std::unique_ptr<ArtsMetadata>> metadataMap_;
+  IdRegistry idRegistry_;
 
   // JSON cache management
   bool jsonCacheInitialized = false;
   std::string metadataFilePath = ".carts-metadata.json";
   llvm::StringMap<std::unique_ptr<llvm::json::Object>> loopJsonCache;
   llvm::StringMap<std::unique_ptr<llvm::json::Object>> memrefJsonCache;
-  int64_t nextMetadataId = 1;
 
   //===------------------------------------------------------------------===//
   // Helper Methods

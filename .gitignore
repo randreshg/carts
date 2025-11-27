@@ -7,10 +7,11 @@ compile_commands.json
 build/
 CMakeFiles/
 core.*
-docs/
 .cursor/
 .claude/
 .vscode/
+.docs/
+counters/
 
 # External dependencies - ignore build artifacts but not the submodules themselves
 external/*/build/
@@ -28,3 +29,7 @@ external/*/cmake_install.cmake
 # CARTS generated metadata/logs
 **/.carts-metadata.json
 *.log
+*.txt
+*.tmp
+*.csv
+

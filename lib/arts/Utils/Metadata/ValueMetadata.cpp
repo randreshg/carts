@@ -111,6 +111,6 @@ Attribute ValueMetadata::getMetadataAttr() const {
       ctx, builder.getStringAttr(sourceTypeToString()),
       builder.getI64IntegerAttr(index),
       !varName.empty() ? builder.getStringAttr(varName) : StringAttr(),
-      location.isValid() ? builder.getStringAttr(location.toString())
+      location.isValid() ? builder.getStringAttr(location.getKey())
                          : StringAttr());
 }

@@ -15,6 +15,8 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/Metadata/IdRegistry.h"
+#include "arts/Utils/OperationAttributes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
@@ -25,12 +27,17 @@
 #include "mlir/Support/LLVM.h"
 #include "polygeist/Ops.h"
 
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
+#include <cstdint>
+
 ARTS_DEBUG_SETUP(db_lowering);
 using namespace mlir;
 using namespace arts;
 namespace {
 struct DbLoweringPass : public arts::DbLoweringBase<DbLoweringPass> {
-  DbLoweringPass(uint64_t idStride = 1000) : idStride(idStride) {}
+  DbLoweringPass(uint64_t idStride = IdRegistry::DefaultStride)
+      : idStride(idStride) {}
   ~DbLoweringPass() override { delete AC; }
   void runOnOperation() override;
 
@@ -46,10 +53,11 @@ private:
   Value getLLVMPtr(Value base, ValueRange opIndices, Location loc);
 
 private:
-  uint64_t idStride = 1000;
+  uint64_t idStride = IdRegistry::DefaultStride;
   SetVector<Operation *> opsToRemove;
   ModuleOp module;
   ArtsCodegen *AC = nullptr;
+  IdRegistry idRegistry;
 };
 } // namespace
 
@@ -116,17 +124,25 @@ void DbLoweringPass::convertDbAllocOps() {
     for (auto &attr : oldOp->getAttrs()) {
       if (!attr.getName().getValue().starts_with("arts."))
         continue;
-      if (attr.getName() == "arts.db_group_id" ||
-          attr.getName() == "arts.db_group_stride")
+      if (attr.getName() == AttrNames::Operation::ArtsCreateId)
         continue;
       newOp->setAttr(attr.getName(), attr.getValue());
     }
-    if (auto idAttr = oldOp->getAttrOfType<IntegerAttr>("arts.id")) {
-      int64_t grouped = idAttr.getInt() * static_cast<int64_t>(idStride);
-      newOp->setAttr("arts.db_group_id",
-                     AC->getBuilder().getI64IntegerAttr(grouped));
-      newOp->setAttr("arts.db_group_stride",
-                     AC->getBuilder().getI64IntegerAttr(idStride));
+    int64_t baseId = 0;
+    if (auto idAttr =
+            oldOp->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsId))
+      baseId = idAttr.getInt();
+    else
+      baseId = idRegistry.getOrCreate(oldOp.getOperation());
+
+    /// Set the create id for the new operation - We multiply the base id by the
+    /// stride to get the create id
+    if (baseId) {
+      int64_t createId = baseId * static_cast<int64_t>(idStride);
+      newOp->setAttr(AttrNames::Operation::ArtsCreateId,
+                     AC->getBuilder().getI64IntegerAttr(createId));
+      ARTS_DEBUG("  - DB arts.create_id=" << createId << " (base=" << baseId
+                                          << " x stride=" << idStride << ")");
     }
     updateAllocUsers(oldOp, newOp);
     opsToRemove.insert(oldOp);

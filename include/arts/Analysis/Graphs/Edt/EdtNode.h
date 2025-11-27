@@ -31,9 +31,11 @@ public:
   EdtNode(EdtOp op, ArtsAnalysisManager *AM);
 
   StringRef getHierId() const override { return hierId; }
-  void setHierId(std::string id) { hierId = id; }
+  void setHierId(std::string id) { hierId = std::move(id); }
   void print(llvm::raw_ostream &os) const override;
-  Operation *getOp() const override { return opPtr; }
+  Operation *getOp() const override {
+    return const_cast<EdtOp &>(edtOp).getOperation();
+  }
 
   void addInEdge(EdgeBase *edge) override { inEdges.insert(edge); }
   void addOutEdge(EdgeBase *edge) override { outEdges.insert(edge); }
@@ -66,7 +68,6 @@ public:
 
 private:
   EdtOp edtOp;
-  Operation *opPtr = nullptr;
   ArtsAnalysisManager *analysisManager = nullptr;
   std::string hierId;
   EdtInfo info;
