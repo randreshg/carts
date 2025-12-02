@@ -52,6 +52,7 @@ struct EdtPass : public arts::EdtBase<EdtPass> {
   bool processParallelEdts();
   bool processSyncTaskEdts();
   bool removeBarriers();
+  bool removeTriviallyEmptyEdts();
 
   /// Graph-driven cleanups
   bool removeRedundantBarriersWithGraphs(func::FuncOp func,
@@ -79,11 +80,13 @@ void EdtPass::runOnOperation() {
     processSyncTaskEdts();
   }
 
+  removeTriviallyEmptyEdts();
+
   /// Remove ops marked for removal
   OpRemovalManager removalMgr;
   for (Operation *op : opsToRemove)
     removalMgr.markForRemoval(op);
-  removalMgr.removeAllMarked(module, /*recursive=*/false);
+  removalMgr.removeAllMarked(module, /*recursive=*/true);
 
   ARTS_INFO_FOOTER(EdtPass);
   ARTS_DEBUG_REGION(module.dump(););
@@ -135,6 +138,37 @@ bool EdtPass::processParallelEdts() {
   for (EdtOp op : parallelOps)
     convertParallelIntoSingle(op);
   return true;
+}
+
+bool EdtPass::removeTriviallyEmptyEdts() {
+  bool changed = false;
+  module.walk([&](EdtOp edt) {
+    bool hasWork = false;
+    for (Operation &op : edt.getBody().front()) {
+      if (isa<arts::YieldOp>(op) || isa<arts::BarrierOp>(op))
+        continue;
+      if (isa<arts::DbReleaseOp>(op))
+        continue;
+      hasWork = true;
+      break;
+    }
+    if (hasWork)
+      return;
+
+    /// Remove the EDT and any single-use acquires that only feed it.
+    for (Value dep : edt.getDependencies()) {
+      if (auto acq = dep.getDefiningOp<arts::DbAcquireOp>()) {
+        bool ptrOnlyUsedHere = acq.getPtr() == dep && acq.getPtr().hasOneUse();
+        bool guidUnused = acq.getGuid().use_empty();
+        if (ptrOnlyUsedHere && guidUnused)
+          opsToRemove.insert(acq);
+      }
+    }
+
+    opsToRemove.insert(edt);
+    changed = true;
+  });
+  return changed;
 }
 
 /// Converts a parallel EDT region into a sync-task EDT when it contains a

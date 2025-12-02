@@ -212,6 +212,18 @@ def DbAcquireOp : Arts_Op<"db_acquire",
                    CArg<"SmallVector<Value>", "{}">:$offset_hints,
                    CArg<"SmallVector<Value>", "{}">:$size_hints)>
   ];
+  let extraClassDeclaration = [{
+    /// Set the twin_diff attribute for this acquire operation.
+    /// twin_diff=true enables shadow copy for distributed sync (safer but slower)
+    /// twin_diff=false disables it when disjoint access is proven (faster)
+    void setTwinDiff(bool enabled);
+
+    /// Check if twin_diff attribute has been explicitly set
+    bool hasTwinDiff();
+
+    /// Get twin_diff value. Returns true (safe default) if not explicitly set.
+    bool getTwinDiff();
+  }];
 }
 
 def DbRefOp : Arts_Op<"db_ref", [Pure]> {
@@ -385,8 +397,7 @@ def OmpDepOp : Arts_Op<"omp_dep", [Pure, AttrSizedOperandSegments]> {
 def EdtOp : Arts_Op<"edt",
   [DeclareOpInterfaceMethods<MemoryEffectsOpInterface>,
    SingleBlockImplicitTerminator<"arts::YieldOp">,
-   RecursiveMemoryEffects,
-   AttrSizedOperandSegments]> {
+   RecursiveMemoryEffects]> {
   let summary = "Event-Driven Task in ARTS";
   let description = [{
     Defines an ARTS event-driven task (EDT) with:
@@ -400,9 +411,6 @@ def EdtOp : Arts_Op<"edt",
     - 'workers' specifies the number of parallel workers to use (optional).
     - 'nowait' indicates the EDT doesn't require an epoch wrapper
       (typically used when EDT is already inside an epoch).
-    - 'epochGuid' specifies an explicit epoch GUID to spawn the EDT into.
-      If set, the EDT will be created with this epoch instead of relying
-      on the enclosing EpochOp. Used for barrier synchronization patterns.
   }];
   let arguments = (ins
     EdtTypeAttr:$type,
@@ -411,20 +419,18 @@ def EdtOp : Arts_Op<"edt",
     OptionalAttr<WorkersAttr>:$workers,
     OptionalAttr<NoVerifyAttr>:$no_verify,
     OptionalAttr<UnitAttr>:$nowait,
-    Optional<I64>:$epochGuid,
     Variadic<AnyMemRef>:$dependencies
   );
   let regions = (region SizedRegion<1>:$body);
   let assemblyFormat = [{
-    $type $concurrency `route` `(` $route `)` (`epoch` `(` $epochGuid^ `)`)? (`(` $dependencies^ `)` `:` type($dependencies))? attr-dict-with-keyword
+    $type $concurrency `route` `(` $route `)` (`(` $dependencies^ `)` `:` type($dependencies))? attr-dict-with-keyword
     $body
   }];
   let skipDefaultBuilders = 1;
   let builders = [
     OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency)>,
     OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency, "ValueRange":$dependencies)>,
-    OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency, "Value":$route, "ValueRange":$dependencies)>,
-    OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency, "Value":$route, "Value":$epochGuid, "ValueRange":$dependencies)>
+    OpBuilder<(ins "EdtType":$type, "EdtConcurrency":$concurrency, "Value":$route, "ValueRange":$dependencies)>
   ];
   let hasVerifier = 1;
   let extraClassDeclaration = [{
@@ -701,8 +707,7 @@ def EdtCreateOp : Arts_Op<"edt_create", [MemoryEffects<[MemWrite]>]> {
   let assemblyFormat = [{
     `(` $param_memref `:` type($param_memref) `)` 
     `depCount` `(` $depCount `)`
-    `route` `(` $route `)`
-    (`epoch` `(` $epochGuid^ `:` type($epochGuid) `)`)? attr-dict
+    `route` `(` $route `)` (`epoch` `(` $epochGuid^ `:` type($epochGuid) `)`)? attr-dict
   }];
 
   let builders = [
@@ -745,8 +750,9 @@ def RecordDepOp : Arts_Op<"rec_dep", [MemoryEffects<[MemWrite]>]> {
     When acquire mode differs from alloc mode, artsAddDependenceWithMode is used
     to enable runtime optimizations (e.g., skip frontier progression for read-only EDTs).
     The twin_diff attribute is a per-dependency hint indicating whether the
-    runtime should enable twin-diff reuse for that datablock. When unset, all
-    entries default to false.
+    runtime should enable twin-diff reuse for that datablock. Lowering enables
+    twin-diff by default for safety; an explicit `false` entry opts out when
+    analysis proves the dependency accesses are disjoint.
   }];
   let arguments = (ins
     I64:$edt_guid,

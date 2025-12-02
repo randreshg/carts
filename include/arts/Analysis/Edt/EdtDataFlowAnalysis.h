@@ -21,7 +21,7 @@ namespace mlir {
 namespace arts {
 
 class DbAliasAnalysis;
-class DbAnalysis;
+class ArtsAnalysisManager;
 
 struct EdtDependency {
   EdtOp from;
@@ -33,7 +33,7 @@ struct EdtDependency {
 /// dependencies between tasks based on their datablock acquires.
 class EdtDataFlowAnalysis {
 public:
-  EdtDataFlowAnalysis(DbGraph *dbGraph, DbAnalysis *analysis);
+  EdtDataFlowAnalysis(DbGraph *dbGraph, ArtsAnalysisManager *AM);
 
   SmallVector<EdtDependency, 16> run(func::FuncOp func);
 
