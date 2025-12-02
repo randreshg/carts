@@ -5,6 +5,7 @@
 
 #include "arts/Analysis/Edt/EdtDataFlowAnalysis.h"
 
+#include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Db/DbAliasAnalysis.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
@@ -27,11 +28,12 @@ int IndentScope::depth = 0;
 std::string indent() { return std::string(IndentScope::depth * 2, ' '); }
 } // namespace
 
-EdtDataFlowAnalysis::EdtDataFlowAnalysis(DbGraph *dbGraph, DbAnalysis *analysis)
+EdtDataFlowAnalysis::EdtDataFlowAnalysis(DbGraph *dbGraph,
+                                         ArtsAnalysisManager *AM)
     : dbGraph(dbGraph) {
   assert(dbGraph && "DbGraph is required");
-  assert(analysis && "DbAnalysis is required");
-  aliasAA = analysis->getAliasAnalysis();
+  assert(AM && "ArtsAnalysisManager is required");
+  aliasAA = AM->getDbAnalysis().getAliasAnalysis();
   assert(aliasAA && "Alias analysis is required");
 }
 

@@ -27,7 +27,7 @@ external/*/cmake_install.cmake
 *.ll
 
 # CARTS generated metadata/logs
-**/.carts-metadata.json
+*.json
 *.log
 *.txt
 *.tmp

@@ -18,6 +18,7 @@
 
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/OperationAttributes.h"
 #include "polygeist/Ops.h"
 
 using namespace mlir;
@@ -148,15 +149,15 @@ SmallVector<Value> mlir::arts::EdtOp::getDependenciesAsVector() {
 }
 
 void mlir::arts::EdtOp::setDependencies(ValueRange newDeps) {
-  getDependenciesMutable().assign(newDeps);
-  /// Update operandSegmentSizes to reflect new dependency count
-  /// Format: [route=1, epochGuid=0 or 1, dependencies=N]
-  int32_t epochGuidCount = getEpochGuid() ? 1 : 0;
-  (*this)->setAttr(
-      "operandSegmentSizes",
-      DenseI32ArrayAttr::get(getContext(),
-                             {1, epochGuidCount,
-                              static_cast<int32_t>(newDeps.size())}));
+  Operation *op = getOperation();
+  SmallVector<Value> operands;
+
+  /// Operand layout: route (required), then dependencies.
+  if (op->getNumOperands() > 0)
+    operands.push_back(op->getOperand(0));
+
+  operands.append(newDeps.begin(), newDeps.end());
+  op->setOperands(operands);
 }
 
 void mlir::arts::EdtOp::appendDependency(Value dep) {
@@ -345,37 +346,6 @@ void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
   state.addOperands(route);
   state.addOperands(dependencies);
 
-  /// Set the operand segment sizes attribute for variable operands
-  /// Format: [1 (route), 0 (epochGuid - not provided), N (dependencies)]
-  state.addAttribute(
-      "operandSegmentSizes",
-      builder.getDenseI32ArrayAttr(
-          {1, 0, static_cast<int32_t>(dependencies.size())}));
-
-  /// Create the region with a block
-  Region *bodyRegion = state.addRegion();
-  Block *bodyBlock = new Block();
-  bodyRegion->push_back(bodyBlock);
-}
-
-void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
-                  EdtConcurrency concurrency, Value route, Value epochGuid,
-                  ValueRange dependencies) {
-  state.addAttribute("type", EdtTypeAttr::get(builder.getContext(), type));
-  state.addAttribute("concurrency", EdtConcurrencyAttr::get(
-                                        builder.getContext(), concurrency));
-  state.addOperands(route);
-  if (epochGuid)
-    state.addOperands(epochGuid);
-  state.addOperands(dependencies);
-
-  /// Set the operand segment sizes attribute for variable operands
-  /// Format: [1 (route), 0 or 1 (epochGuid), N (dependencies)]
-  state.addAttribute(
-      "operandSegmentSizes",
-      builder.getDenseI32ArrayAttr({1, epochGuid ? 1 : 0,
-                                    static_cast<int32_t>(dependencies.size())}));
-
   /// Create the region with a block
   Region *bodyRegion = state.addRegion();
   Block *bodyBlock = new Block();
@@ -495,6 +465,26 @@ MemRefType DbAllocOp::getAllocatedElementType() {
       {}, arts::getElementMemRefType(
               getElementType(), SmallVector<Value>(getElementSizes().begin(),
                                                    getElementSizes().end())));
+}
+
+///===----------------------------------------------------------------------===///
+/// DbAcquireOp twin_diff attribute accessors
+///===----------------------------------------------------------------------===///
+
+void DbAcquireOp::setTwinDiff(bool enabled) {
+  (*this)->setAttr(AttrNames::Operation::ArtsTwinDiff,
+                   BoolAttr::get(getContext(), enabled));
+}
+
+bool DbAcquireOp::hasTwinDiff() {
+  return (*this)->hasAttr(AttrNames::Operation::ArtsTwinDiff);
+}
+
+bool DbAcquireOp::getTwinDiff() {
+  if (auto attr =
+          (*this)->getAttrOfType<BoolAttr>(AttrNames::Operation::ArtsTwinDiff))
+    return attr.getValue();
+  return true;
 }
 
 /// DbAcquireOp builders

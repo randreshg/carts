@@ -300,19 +300,10 @@ void EdtGraph::linkEdtsToLoops() {
 /// sites in another EDT for the same root DbAlloc.
 void EdtGraph::buildDependencies() {
   ARTS_INFO("Phase 2 - Building EDT dependencies");
-
-  if (!dbGraph) {
-    ARTS_DEBUG("No DbGraph available, skipping dependency construction");
-    return;
-  }
-
-  auto *dbAnalysis = dbGraph->getAnalysis();
-  if (!dbAnalysis) {
-    ARTS_WARN("  No DbAnalysis available, skipping dependency construction");
-    return;
-  }
-
-  EdtDataFlowAnalysis dataflow(dbGraph, dbAnalysis);
+  assert(dbGraph && "DbGraph is required to build EDT dependencies");
+  assert(analysisManager &&
+         "ArtsAnalysisManager is required to build EDT dependencies");
+  EdtDataFlowAnalysis dataflow(dbGraph, analysisManager);
   auto deps = dataflow.run(func);
 
   unsigned created = 0;

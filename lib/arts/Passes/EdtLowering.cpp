@@ -265,24 +265,16 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   if (!routeVal)
     routeVal = AC->createIntConstant(0, AC->Int32, loc);
 
-  /// If EdtOp has an explicit epoch GUID, pass it to EdtCreateOp
-  EdtCreateOp outlineOp;
-  if (Value epochGuid = edtOp.getEpochGuid()) {
-    ARTS_DEBUG("Creating EdtCreateOp with epoch GUID: " << epochGuid);
-    outlineOp =
-        AC->create<EdtCreateOp>(loc, paramPack, depCount, routeVal, epochGuid);
-  } else {
-    ARTS_DEBUG("Creating EdtCreateOp without epoch GUID");
-    outlineOp = AC->create<EdtCreateOp>(loc, paramPack, depCount, routeVal);
-  }
+  ARTS_DEBUG("Creating EdtCreateOp");
+  EdtCreateOp outlineOp =
+      AC->create<EdtCreateOp>(loc, paramPack, depCount, routeVal);
 
   outlineOp->setAttr(AttrNames::Operation::OutlinedFunc,
                      AC->getBuilder().getStringAttr(outlinedFunc.getName()));
-  int64_t baseId = 0;
-  if (auto edtId = edtOp->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsId))
-    baseId = edtId.getInt();
-  else
+  int64_t baseId = getArtsId(edtOp);
+  if (!baseId)
     baseId = idRegistry.getOrCreate(edtOp.getOperation());
+
   /// Set the create id for the outlined operation
   if (baseId) {
     int64_t createId = baseId * static_cast<int64_t>(idStride);
@@ -600,13 +592,20 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     }
     acquireModes.push_back(static_cast<int32_t>(dbMode));
 
-    /// Twin-diff hint travels with the underlying DbAllocOp when partitioning
-    /// falls back to a coarse grain strategy.
-    bool useTwinDiff = false;
-    if (allocForHint) {
-      if (auto twinAttr =
-              allocForHint->getAttrOfType<BoolAttr>(
-                  AttrNames::Operation::ArtsTwinDiff))
+    /// Twin-diff hint lives on the db_acquire. Fall back to alloc-level hints
+    /// for legacy pipelines. Default to enabled unless an explicit opt-out is
+    /// present. Try DbAcquireOp first, then fall back to legacy attribute
+    /// check.
+    bool useTwinDiff = true;
+    if (dbAcquireOp && dbAcquireOp.hasTwinDiff()) {
+      useTwinDiff = dbAcquireOp.getTwinDiff();
+    } else if (depDbAcquireOp) {
+      if (auto twinAttr = depDbAcquireOp->getAttrOfType<BoolAttr>(
+              AttrNames::Operation::ArtsTwinDiff))
+        useTwinDiff = twinAttr.getValue();
+    } else if (allocForHint) {
+      if (auto twinAttr = allocForHint->getAttrOfType<BoolAttr>(
+              AttrNames::Operation::ArtsTwinDiff))
         useTwinDiff = twinAttr.getValue();
     }
     twinDiffHints.push_back(useTwinDiff);

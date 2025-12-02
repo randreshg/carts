@@ -2,6 +2,35 @@
 /// File: Db.cpp
 /// Pass for DB optimizations and memory management.
 ///==========================================================================///
+///
+///===----------------------------------------------------------------------===///
+/// Twin-Diff Policy for Distributed Datablock Synchronization
+///===----------------------------------------------------------------------===///
+///
+/// In distributed execution, when multiple workers write to a shared datablock,
+/// we must ensure data consistency. Twin-diff is a runtime mechanism that:
+///   1. Allocates a shadow copy ("twin") of the datablock
+///   2. Tracks which regions were modified during EDT execution
+///   3. Sends only the changed regions to other nodes (bandwidth optimization)
+///
+/// Policy:
+///   - DEFAULT: twin_diff = TRUE (safe, handles potential overlap at runtime)
+///   - DISABLE: Only when we can PROVE non-overlapping access patterns
+///
+/// Proof Methods (in order of application):
+///   1. Fine-grained allocation with DbControlOps (from OpenMP depend clauses)
+///      - Set in CreateDbs.cpp when DbControlOps guarantee isolation
+///   2. Successful partitioning with proven disjoint acquires
+///      - Checked in partitionDb() after successful chunk promotion
+///   3. DbAliasAnalysis proving disjoint acquires via offset/size analysis
+///      - Uses constant slice extraction and range comparison
+///
+/// Safety Guarantee:
+///   When twin-diff is DISABLED but workers write overlapping regions,
+///   DATA CORRUPTION will occur. Therefore, we use a conservative default
+///   (twin_diff=TRUE) and only disable when we have positive proof of safety.
+///
+///===----------------------------------------------------------------------===///
 
 /// Dialects
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -15,6 +44,7 @@
 /// Arts
 #include "ArtsPassDetails.h"
 #include "arts/Analysis/ArtsAnalysisManager.h"
+#include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
@@ -33,6 +63,7 @@
 #include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 #include "arts/Analysis/Graphs/Edt/EdtNode.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -76,8 +107,8 @@ struct DbPass : public arts::DbBase<DbPass> {
 
   /// Graph rebuild
   void invalidateAndRebuildGraph();
-  bool isEligibleForSlicing(DbAcquireNode *node);
-  FailureOr<DbAllocOp> promoteAllocForChunking(DbAllocOp allocOp);
+  FailureOr<DbAllocOp> promoteAllocForChunking(DbAllocOp allocOp,
+                                               DbAllocNode *allocNode);
   bool updateAcquireForChunk(DbAcquireOp acqOp, DbAllocOp promotedAlloc,
                              Value chunkOffset, Value chunkSize);
   bool normalizeRootAcquires(DbAllocOp allocOp);
@@ -208,19 +239,54 @@ bool DbPass::adjustDbModes() {
   return changed;
 }
 
+///===----------------------------------------------------------------------===///
+/// partitionDb - Partition datablocks and set twin-diff attributes
+///===----------------------------------------------------------------------===///
+///
+/// This function performs two key tasks:
+/// 1. PARTITIONING: Attempts to promote coarse-grained allocations to
+///    fine-grained ones by computing chunk info (offset, size) for each
+///    acquire. This allows workers to access disjoint regions of the DB.
+///
+/// 2. TWIN-DIFF ASSIGNMENT: Sets the twin_diff attribute on each DbAcquireOp
+///    based on whether overlapping access can be ruled out:
+///    - twin_diff=FALSE: Only when partitioning succeeds AND we can prove
+///      that all acquires access disjoint regions. This is safe because
+///      workers won't write to overlapping memory.
+///    - twin_diff=TRUE: When partitioning fails OR we cannot prove disjoint
+///      access. The runtime will use the twin-diff mechanism to track changes
+///      and merge updates correctly.
+/// Decision Flow:
+///   1. Collect candidates for partitioning (eligible acquires with chunk info)
+///   2. For each allocation, attempt promotion and update acquires
+///   3. If chunk rewrite succeeds → twin_diff=FALSE (proven disjoint)
+///   4. If chunk rewrite fails → twin_diff=TRUE (potential overlap)
+///   5. Final pass: any unset acquires get twin_diff=TRUE (safe default)
+///===----------------------------------------------------------------------===///
 bool DbPass::partitionDb() {
   if (!enablePartitioning)
     return false;
   ARTS_DEBUG_HEADER(PartitionDb);
   bool changed = false;
   OpBuilder attrBuilder(module.getContext());
-  llvm::SmallPtrSet<Operation *, 8> partitionAttempt;
-  llvm::SmallPtrSet<Operation *, 8> partitionSuccess;
-  llvm::SmallPtrSet<Operation *, 8> partitionFailed;
+
+  /// Helper lambda to set twin-diff attribute on a DbAcquireOp.
+  auto setTwinAttr = [&](DbAcquireOp acq, bool useTwinDiff) {
+    if (!acq)
+      return;
+    if (acq.hasTwinDiff() && acq.getTwinDiff() == useTwinDiff)
+      return;
+    acq.setTwinDiff(useTwinDiff);
+    ARTS_DEBUG("  Set twin_diff=" << (useTwinDiff ? "true" : "false"));
+    changed = true;
+  };
+  llvm::SmallPtrSet<Operation *, 8> partitionAttempt, partitionSuccess,
+      partitionFailed;
 
   /// Collect all (alloc, acquire, offset, size) tuples
   using AcqChunkInfo = std::tuple<DbAcquireOp, Value, Value>;
-  DenseMap<DbAllocOp, SmallVector<AcqChunkInfo, 4>> allocsToPromote;
+  DenseMap<DbAllocOp, std::pair<DbAllocNode *, SmallVector<AcqChunkInfo, 4>>>
+      allocsToPromote;
 
   /// Walk the module,
   module.walk([&](func::FuncOp func) {
@@ -229,7 +295,7 @@ bool DbPass::partitionDb() {
     SmallVector<DbAcquireNode *, 16> candidates;
     /// Walk the graph, and collect the eligible acquire nodes
     graph.forEachAcquireNode([&](DbAcquireNode *acqNode) {
-      if (!isEligibleForSlicing(acqNode))
+      if (!acqNode->isEligibleForSlicing())
         return;
 
       /// If the parent allocation node is not eligible for slicing, skip
@@ -275,27 +341,31 @@ bool DbPass::partitionDb() {
       DbAcquireOp acqOp = node->getDbAcquireOp();
 
       /// Collect this (acquire, offset, size) tuple for this alloc
-      allocsToPromote[allocOp].push_back(
-          std::make_tuple(acqOp, chunkOffset, chunkSize));
+      auto &[nodePtr, acquireList] = allocsToPromote[allocOp];
+      if (!nodePtr)
+        nodePtr = allocNode;
+      acquireList.push_back(std::make_tuple(acqOp, chunkOffset, chunkSize));
     }
   });
 
   /// Now promote allocations and update acquires (OUTSIDE the walk)
   /// Copy to vector to avoid iterator invalidation when keys (Operation*) get
   /// erased
-  SmallVector<std::pair<DbAllocOp,
-                        SmallVector<std::tuple<DbAcquireOp, Value, Value>, 4>>>
+  SmallVector<std::tuple<DbAllocOp, DbAllocNode *,
+                         SmallVector<std::tuple<DbAcquireOp, Value, Value>, 4>>>
       allocsToProcess;
-  for (auto &[allocOpPtr, acquireList] : allocsToPromote) {
+  for (auto &[allocOpPtr, nodeAndList] : allocsToPromote) {
+    auto &[allocNode, acquireList] = nodeAndList;
     allocsToProcess.push_back(
-        {cast<DbAllocOp>(allocOpPtr), std::move(acquireList)});
+        {cast<DbAllocOp>(allocOpPtr), allocNode, std::move(acquireList)});
   }
-  allocsToPromote.clear(); /// Clear map to avoid using dangling pointers
+  /// Clear map to avoid using dangling pointers
+  allocsToPromote.clear();
 
-  for (auto &[allocOp, acquireList] : allocsToProcess) {
+  for (auto &[allocOp, allocNode, acquireList] : allocsToProcess) {
     ARTS_DEBUG("Promoting alloc with " << acquireList.size() << " acquires");
 
-    auto promotedOr = promoteAllocForChunking(allocOp);
+    auto promotedOr = promoteAllocForChunking(allocOp, allocNode);
     if (failed(promotedOr)) {
       partitionFailed.insert(allocOp.getOperation());
       continue;
@@ -322,6 +392,7 @@ bool DbPass::partitionDb() {
       if (updateAcquireForChunk(acqOp, promoted, chunkOffset, chunkSize)) {
         changed = true;
         chunkRewrite = true;
+        setTwinAttr(acqOp, false);
       }
 
       /// Verify the transformation
@@ -346,30 +417,64 @@ bool DbPass::partitionDb() {
       partitionFailed.insert(promoted.getOperation());
   }
 
-  auto setTwinAttr = [&](DbAllocOp alloc, bool useTwinDiff) {
-    if (!alloc)
-      return;
-    BoolAttr newAttr = attrBuilder.getBoolAttr(useTwinDiff);
-    if (auto existing = alloc->getAttrOfType<BoolAttr>(
-            AttrNames::Operation::ArtsTwinDiff))
-      if (existing == newAttr)
+  /// AFTER partition attempts, BEFORE final default pass:
+  /// Analyze acquires that weren't partitioned using DbAliasAnalysis and
+  /// partition hints. This allows us to disable twin-diff for allocations
+  /// where we can PROVE non-overlapping access even without full partitioning.
+  ARTS_DEBUG("  Enhanced overlap analysis for unpartitioned allocations:");
+  module.walk([&](func::FuncOp func) {
+    DbGraph &graph = AM->getDbGraph(func);
+
+    graph.forEachAllocNode([&](DbAllocNode *allocNode) {
+      DbAllocOp allocOp = allocNode->getDbAllocOp();
+      if (!allocOp)
         return;
-    alloc->setAttr(AttrNames::Operation::ArtsTwinDiff, newAttr);
-    changed = true;
-  };
 
-  for (Operation *op : partitionSuccess)
-    setTwinAttr(DbAllocOp(op), false);
+      /// Skip if already handled by successful partitioning
+      if (partitionSuccess.contains(allocOp.getOperation())) {
+        ARTS_DEBUG("    Skipping alloc " << allocNode->getHierId()
+                                         << " - already partitioned");
+        return;
+      }
 
-  for (Operation *op : partitionFailed) {
-    if (partitionSuccess.contains(op))
-      continue;
-    setTwinAttr(DbAllocOp(op), true);
-  }
+      if (allocNode->getAcquireNodesSize() == 0)
+        return;
 
-  module.walk([&](DbAllocOp alloc) {
-    if (!alloc->hasAttr(AttrNames::Operation::ArtsTwinDiff))
-      setTwinAttr(alloc, false);
+      ARTS_DEBUG("    Analyzing alloc " << allocNode->getHierId() << " with "
+                                        << allocNode->getAcquireNodesSize()
+                                        << " acquires");
+
+      /// Analyze using node's canProveNonOverlapping method
+      bool allDisjoint = allocNode->canProveNonOverlapping();
+
+      if (allDisjoint) {
+        /// Set twin_diff=false on all acquires for this allocation
+        allocNode->forEachChildNode([&](NodeBase *child) {
+          if (auto *acqNode = dyn_cast<DbAcquireNode>(child)) {
+            DbAcquireOp acqOp = acqNode->getDbAcquireOp();
+            if (acqOp && !acqOp.hasTwinDiff()) {
+              setTwinAttr(acqOp, false);
+              ARTS_DEBUG("      acquire "
+                         << acqNode->getHierId()
+                         << ": proven disjoint -> twin_diff=false");
+            }
+          }
+        });
+      } else {
+        ARTS_DEBUG("      Potential overlap detected → will use default "
+                   "twin_diff=true");
+      }
+    });
+  });
+
+  /// Safe default - enable twin-diff for any unanalyzed acquires
+  ARTS_DEBUG(
+      "  Final pass: Setting safe default twin_diff=true for unset acquires");
+  module.walk([&](DbAcquireOp acq) {
+    if (!acq.hasTwinDiff()) {
+      setTwinAttr(acq, true);
+      ARTS_DEBUG("    Default twin_diff=true for unset acquire");
+    }
   });
 
   /// Rebuild graph if any promotions occurred
@@ -382,15 +487,8 @@ bool DbPass::partitionDb() {
   return changed;
 }
 
-bool DbPass::isEligibleForSlicing(DbAcquireNode *node) {
-  if (!node)
-    return false;
-
-  /// Use the node's method to check eligibility
-  return node->isEligibleForSlicing();
-}
-
-FailureOr<DbAllocOp> DbPass::promoteAllocForChunking(DbAllocOp allocOp) {
+FailureOr<DbAllocOp> DbPass::promoteAllocForChunking(DbAllocOp allocOp,
+                                                     DbAllocNode *allocNode) {
   if (!allocOp || !allocOp.getOperation())
     return failure();
 
@@ -404,12 +502,10 @@ FailureOr<DbAllocOp> DbPass::promoteAllocForChunking(DbAllocOp allocOp) {
   if (elementSizes.empty())
     return failure();
 
-  bool elementsAreUnit = llvm::all_of(elementSizes.drop_front(), [](Value v) {
-    int64_t cst;
-    return arts::getConstantIndex(v, cst) && cst == 1;
-  });
-  bool alreadyPromoted = !sizes.empty() && !elementsAreUnit;
-  if (alreadyPromoted)
+  /// Check if allocation is already fine-grained.
+  /// Fine-grained means each datablock holds exactly one element - no further
+  /// promotion is possible or needed.
+  if (allocNode && allocNode->isFineGrained())
     return allocOp;
 
   OpBuilder builder(allocOp);
@@ -534,12 +630,11 @@ bool DbPass::rewriteAcquireUsersForChunk(DbAcquireOp acqOp, Value chunkOffset) {
   SmallVector<Operation *> users(blockArg.getUsers().begin(),
                                  blockArg.getUsers().end());
   bool rewritten = false;
-  for (Operation *user : users) {
+  for (Operation *user : users)
     if (rewriteDbUserOperation(user, targetType, blockArg, acqOp.getOperation(),
                                acqOp.getIndices().size(), chunkOffsets, builder,
                                opsToRemove))
       rewritten = true;
-  }
 
   for (Operation *op : opsToRemove)
     op->erase();

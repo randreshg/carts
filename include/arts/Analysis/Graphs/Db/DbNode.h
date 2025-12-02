@@ -62,6 +62,24 @@ public:
   /// Returns true if the memref can be safely sliced based on access patterns
   bool shouldSliceAlloc() const;
 
+  /// Check if this allocation is already fine-grained
+  /// (all elementSizes are constant 1, meaning each datablock holds one
+  /// element)
+  bool isFineGrained() const;
+
+  /// Check if at most one acquire writes to this allocation.
+  /// If true, twin-diff is not needed (no write conflicts possible).
+  bool hasSingleWriter() const;
+
+  /// Check if all acquires use worker-indexed pattern (array[workerId] size=1).
+  /// If true, all accesses are inherently disjoint.
+  bool allAcquiresWorkerIndexed() const;
+
+  /// Analyze if all acquires can be proven non-overlapping.
+  /// Uses multiple detection methods: alias analysis, partition hints,
+  /// worker-indexed patterns, and single-writer detection.
+  bool canProveNonOverlapping() const;
+
   /// Analysis metadata
   uint64_t inCount = 0, outCount = 0;
   uint64_t beginIndex = 0, endIndex = 0;
@@ -149,6 +167,14 @@ public:
   std::pair<Value, Value> getPartitionInfo() const {
     return {partitionOffset, partitionSize};
   }
+
+  /// Check if this acquire uses worker-indexed pattern: offsets[%workerId] with
+  /// sizes[1]. This pattern is inherently disjoint across workers.
+  bool isWorkerIndexedAccess() const;
+
+  /// Check if this acquire has disjoint partition info with another acquire.
+  /// Uses offset_hints/size_hints from ForLowering to determine disjointness.
+  bool hasDisjointPartitionWith(const DbAcquireNode *other) const;
 
 private:
   DbAcquireOp dbAcquireOp;

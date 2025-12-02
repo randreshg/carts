@@ -1520,7 +1520,6 @@ run_execute() {
                 ;;
             "-O3")
                 use_dual_execution=true
-                execute_args+=("$1")
                 shift
                 ;;
             *)
@@ -1696,7 +1695,6 @@ run_execute_dual() {
                 elif [[ "$parsing_compile_args" == "true" ]]; then
                     compile_args+=("$1")
                 else
-                    # Skip -O3 as it's already handled, but keep other execute args
                     if [[ "$1" != "-O3" ]]; then
                         execute_args+=("$1")
                     fi

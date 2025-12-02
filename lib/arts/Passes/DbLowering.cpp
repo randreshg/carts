@@ -128,12 +128,9 @@ void DbLoweringPass::convertDbAllocOps() {
         continue;
       newOp->setAttr(attr.getName(), attr.getValue());
     }
-    int64_t baseId = 0;
-    if (auto idAttr =
-            oldOp->getAttrOfType<IntegerAttr>(AttrNames::Operation::ArtsId))
-      baseId = idAttr.getInt();
-    else
-      baseId = idRegistry.getOrCreate(oldOp.getOperation());
+    int64_t baseId = getArtsId(oldOp);
+    if (!baseId)
+      baseId = idRegistry.getOrCreate(oldOp);
 
     /// Set the create id for the new operation - We multiply the base id by the
     /// stride to get the create id
