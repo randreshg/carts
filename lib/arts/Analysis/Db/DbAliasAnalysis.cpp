@@ -62,7 +62,7 @@ refineAliasWithSlices(const DbAcquireNode *a, const DbAcquireNode *b) {
   if (!sliceA || !sliceB)
     return std::nullopt;
 
-  // Normalize dimensionality
+  /// Normalize dimensionality
   if (sliceA->offsets.size() != sliceB->offsets.size() ||
       sliceA->sizes.size() != sliceB->sizes.size())
     return std::nullopt;
@@ -169,7 +169,7 @@ DbAliasAnalysis::classifyAlias(const NodeBase &a, const NodeBase &b,
     if (allocA && allocB && allocA != allocB) {
       bool metadataRefinement = false;
 
-      // Different access patterns suggest different regions
+      /// Different access patterns suggest different regions
       if (allocA->dominantAccessPattern && allocB->dominantAccessPattern) {
         auto patA = *allocA->dominantAccessPattern;
         auto patB = *allocB->dominantAccessPattern;

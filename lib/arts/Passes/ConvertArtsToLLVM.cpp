@@ -754,9 +754,7 @@ struct DbAllocPattern : public ArtsToLLVMPattern<DbAllocOp> {
     Value totalDbSize =
         AC->create<arith::MulIOp>(loc, elementSize, payloadSize);
     std::optional<int64_t> nextId;
-    if (auto createIdAttr = op->getAttrOfType<IntegerAttr>(
-            AttrNames::Operation::ArtsCreateId))
-      nextId = createIdAttr.getInt();
+    nextId = getArtsId(op);
 
     SmallVector<Value> dbSizes, dbOffsets, dbIndices;
     bool isSingleElement = false;
@@ -811,13 +809,26 @@ private:
     auto elemSize64 = AC->castToInt(AC->Int64, elementSize, loc);
     func::CallOp dbCall;
     if (nextId && nextId->has_value()) {
-      auto artsIdAttr = AC->getBuilder().getI64IntegerAttr(**nextId);
-      auto artsIdValue =
-          AC->create<arith::ConstantOp>(loc, AC->Int64, artsIdAttr);
+      auto baseArtsIdAttr = AC->getBuilder().getI64IntegerAttr(**nextId);
+      auto baseArtsId =
+          AC->create<arith::ConstantOp>(loc, AC->Int64, baseArtsIdAttr);
+
+      Value artsIdValue;
+      if (!indices.empty()) {
+        /// For multi-DB case: compute runtime arts_id = base + linearIndex
+        /// This ensures each DB in the loop gets a unique ID
+        auto linearIndex = AC->computeLinearIndex(sizes, indices, loc);
+        auto linearIndex64 = AC->castToInt(AC->Int64, linearIndex, loc);
+        artsIdValue = AC->create<arith::AddIOp>(loc, baseArtsId, linearIndex64);
+      } else {
+        /// Single DB case: use base directly
+        artsIdValue = baseArtsId;
+        **nextId = **nextId + 1;
+      }
+
       dbCall =
           AC->createRuntimeCall(types::ARTSRTL_artsDbCreateWithGuidAndArtsId,
                                 {guid, elemSize64, artsIdValue}, loc);
-      **nextId = **nextId + 1;
     } else {
       dbCall = AC->createRuntimeCall(types::ARTSRTL_artsDbCreateWithGuid,
                                      {guid, elemSize64}, loc);

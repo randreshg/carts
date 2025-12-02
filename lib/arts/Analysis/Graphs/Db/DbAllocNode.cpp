@@ -3,6 +3,7 @@
 ///==========================================================================///
 
 #include "arts/Analysis/ArtsAnalysisManager.h"
+#include "arts/Analysis/Db/DbAliasAnalysis.h"
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
@@ -26,32 +27,32 @@ ARTS_DEBUG_SETUP(db_alloc_node);
 DbAllocNode::DbAllocNode(DbAllocOp op, DbAnalysis *analysis)
     : MemrefMetadata(op.getOperation()), dbAllocOp(op), dbFreeOp(nullptr),
       op(op.getOperation()), analysis(analysis) {
+  assert(op && "DbAllocOp is required to create DbAllocNode");
+  assert(op.getOperation() && "Operation is required to create DbAllocNode");
+
   /// Verify operation is valid
   Operation *opPtr = op.getOperation();
   if (!opPtr) {
     ARTS_ERROR("Cannot create DbAllocNode: operation pointer is null");
     return;
   }
-  if (analysis)
-    analysis->getAnalysisManager()
-        .getMetadataManager()
-        .getIdRegistry()
-        .getOrCreate(opPtr);
+  analysis->getAnalysisManager()
+      .getMetadataManager()
+      .getIdRegistry()
+      .getOrCreate(opPtr);
 
   /// Import metadata from operation attributes, falling back to manager
   bool hasMetadata = importFromOp();
-  if (!hasMetadata && analysis) {
+  if (!hasMetadata) {
     ArtsMetadataManager &metadataManager =
         analysis->getAnalysisManager().getMetadataManager();
     if (metadataManager.ensureMemrefMetadata(op.getOperation()))
       importFromOp();
   }
 
-  if (analysis) {
-    if (Value address = dbAllocOp.getAddress()) {
-      auto &stringAnalysis = analysis->getAnalysisManager().getStringAnalysis();
-      isStringBacked = stringAnalysis.isStringMemRef(address);
-    }
+  if (Value address = dbAllocOp.getAddress()) {
+    auto &stringAnalysis = analysis->getAnalysisManager().getStringAnalysis();
+    isStringBacked = stringAnalysis.isStringMemRef(address);
   }
 
   /// Find the corresponding DbFreeOp for this allocation
@@ -116,4 +117,129 @@ bool DbAllocNode::shouldSliceAlloc() const {
   }
 
   return canSlice;
+}
+
+bool DbAllocNode::isFineGrained() const {
+  if (!dbAllocOp)
+    return false;
+
+  DbAllocOp allocOp = const_cast<DbAllocOp &>(dbAllocOp);
+  ValueRange elementSizes = allocOp.getElementSizes();
+  if (elementSizes.empty())
+    return false;
+
+  /// Fine-grained: ALL elementSizes are constant 1
+  /// This means each datablock holds exactly one element
+  return llvm::all_of(elementSizes, [](Value v) {
+    int64_t cst;
+    return arts::getConstantIndex(v, cst) && cst == 1;
+  });
+}
+
+///===----------------------------------------------------------------------===///
+// Twin-diff overlap analysis methods
+///===----------------------------------------------------------------------===///
+
+bool DbAllocNode::hasSingleWriter() const {
+  int writeCount = 0;
+
+  for (const auto &acqNode : acquireNodes) {
+    if (!acqNode)
+      continue;
+    DbAcquireOp acqOp = acqNode->getDbAcquireOp();
+    if (!acqOp)
+      continue;
+
+    ArtsMode mode = acqOp.getMode();
+    if (mode == ArtsMode::out || mode == ArtsMode::inout)
+      writeCount++;
+
+    /// Early exit - more than one writer
+    if (writeCount > 1)
+      return false;
+  }
+
+  if (writeCount <= 1) {
+    ARTS_DEBUG("Single writer detected (" << writeCount
+                                          << " writers) → no overlap possible");
+    return true;
+  }
+
+  return false;
+}
+
+bool DbAllocNode::allAcquiresWorkerIndexed() const {
+  if (acquireNodes.empty())
+    return true;
+
+  for (const auto &acqNode : acquireNodes) {
+    if (!acqNode)
+      continue;
+    if (!acqNode->isWorkerIndexedAccess())
+      return false;
+  }
+
+  ARTS_DEBUG("All acquires use worker-indexed pattern -> disjoint");
+  return true;
+}
+
+bool DbAllocNode::canProveNonOverlapping() const {
+  /// No acquires = trivially non-overlapping
+  if (acquireNodes.empty())
+    return true;
+
+  /// Single acquire = non-overlapping with itself
+  if (acquireNodes.size() == 1)
+    return true;
+
+  ARTS_DEBUG("Analyzing overlap for " << acquireNodes.size() << " acquires");
+
+  /// Method 1: Single writer = no overlap possible
+  /// If only one EDT writes, there's no possibility of write conflicts
+  if (hasSingleWriter())
+    return true;
+
+  /// Method 2: All worker-indexed = disjoint
+  /// If all acquires use the pattern array[workerId] with size=1,
+  /// they access disjoint slots by construction
+  if (allAcquiresWorkerIndexed())
+    return true;
+
+  /// Get alias analysis from DbAnalysis
+  DbAliasAnalysis *aliasAnalysis = analysis->getAliasAnalysis();
+
+  /// Check all acquire pairs using enhanced analysis
+  for (size_t i = 0; i < acquireNodes.size(); ++i) {
+    for (size_t j = i + 1; j < acquireNodes.size(); ++j) {
+      const DbAcquireNode *acqA = acquireNodes[i].get();
+      const DbAcquireNode *acqB = acquireNodes[j].get();
+
+      if (!acqA || !acqB)
+        continue;
+
+      /// Method 3: Use DbAliasAnalysis overlap estimation
+      auto overlap = aliasAnalysis->estimateOverlap(
+          const_cast<DbAcquireNode *>(acqA), const_cast<DbAcquireNode *>(acqB));
+      if (overlap == DbAliasAnalysis::OverlapKind::Disjoint) {
+        /// Proven disjoint by alias analysis
+        ARTS_DEBUG("Pair (" << i << "," << j << "): Disjoint (aliasAnalysis)");
+        continue;
+      }
+
+      /// Method 4: Check offset_hints/size_hints from ForLowering
+      if (acqA->hasDisjointPartitionWith(acqB)) {
+        /// Proven disjoint by loop partitioning
+        ARTS_DEBUG("Pair (" << i << "," << j
+                            << "): Disjoint (partition hints)");
+        continue;
+      }
+
+      /// Could not prove disjoint - potential overlap
+      ARTS_DEBUG("Pair (" << i << "," << j << "): POTENTIAL OVERLAP");
+      return false;
+    }
+  }
+
+  ARTS_DEBUG("All acquire pairs proven disjoint");
+  return true; /// All pairs proven disjoint
 }

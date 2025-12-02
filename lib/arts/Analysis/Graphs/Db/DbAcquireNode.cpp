@@ -444,6 +444,101 @@ SmallVector<Value, 4> DbAcquireNode::computeInvariantIndices() {
   return result;
 }
 
+///===----------------------------------------------------------------------===///
+// Twin-diff overlap analysis methods
+///===----------------------------------------------------------------------===///
+
+bool DbAcquireNode::isWorkerIndexedAccess() const {
+  if (!op)
+    return false;
+
+  /// Need mutable reference to call non-const getters (op is Operation*)
+  DbAcquireOp mutableOp(op);
+  auto offsets = mutableOp.getOffsetHints();
+  auto sizes = mutableOp.getSizeHints();
+
+  if (offsets.empty() || sizes.empty())
+    return false;
+
+  /// Check size is constant 1 (unit access per worker)
+  int64_t sz = 0;
+  if (!arts::getConstantIndex(sizes[0], sz) || sz != 1)
+    return false;
+
+  /// Check offset is a BlockArgument (varying per EDT/iteration)
+  Value offset = offsets[0];
+  if (isa<BlockArgument>(offset)) {
+    /// This is indexed by loop induction var or EDT parameter
+    /// Each invocation gets different offset -> disjoint by construction
+    ARTS_DEBUG(
+        "Worker-indexed pattern detected: offset is BlockArg with size=1");
+    return true;
+  }
+
+  return false;
+}
+
+bool DbAcquireNode::hasDisjointPartitionWith(const DbAcquireNode *other) const {
+  if (!other)
+    return false;
+
+  DbAcquireOp acqA = dbAcquireOp;
+  DbAcquireOp acqB = other->getDbAcquireOp();
+  if (!acqA || !acqB)
+    return false;
+
+  auto offsetsA = acqA.getOffsetHints();
+  auto sizesA = acqA.getSizeHints();
+  auto offsetsB = acqB.getOffsetHints();
+  auto sizesB = acqB.getSizeHints();
+
+  /// Need at least one dimension of offset/size hints
+  if (offsetsA.empty() || sizesA.empty() || offsetsB.empty() || sizesB.empty())
+    return false;
+
+  Value offA = offsetsA[0];
+  Value sizeA = sizesA[0];
+  Value offB = offsetsB[0];
+  Value sizeB = sizesB[0];
+
+  /// Try constant range disjointness first
+  int64_t offAVal = 0, sizeAVal = 0, offBVal = 0, sizeBVal = 0;
+  if (arts::getConstantIndex(offA, offAVal) &&
+      arts::getConstantIndex(sizeA, sizeAVal) &&
+      arts::getConstantIndex(offB, offBVal) &&
+      arts::getConstantIndex(sizeB, sizeBVal)) {
+    int64_t endA = offAVal + sizeAVal;
+    int64_t endB = offBVal + sizeBVal;
+    if (endA <= offBVal || endB <= offAVal) {
+      ARTS_DEBUG("Partition hints prove disjoint: constant ranges ["
+                 << offAVal << "," << endA << ") vs [" << offBVal << "," << endB
+                 << ")");
+      return true;
+    }
+  }
+
+  /// Check worker-indexed pattern: different BlockArguments with size=1
+  int64_t sizeAConst = 0, sizeBConst = 0;
+  bool sizeAIsOne =
+      arts::getConstantIndex(sizeA, sizeAConst) && sizeAConst == 1;
+  bool sizeBIsOne =
+      arts::getConstantIndex(sizeB, sizeBConst) && sizeBConst == 1;
+
+  if (sizeAIsOne && sizeBIsOne) {
+    auto blockArgA = dyn_cast<BlockArgument>(offA);
+    auto blockArgB = dyn_cast<BlockArgument>(offB);
+    if (blockArgA && blockArgB && blockArgA != blockArgB) {
+      if (blockArgA.getOwner() != blockArgB.getOwner()) {
+        ARTS_DEBUG(
+            "Partition hints prove disjoint: different BlockArgs with size=1");
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 /// Collect all memory accesses (loads/stores) that transitively use a value.
 void DbAcquireNode::collectAccesses(Value db) {
   SmallVector<Value, 8> worklist{db};

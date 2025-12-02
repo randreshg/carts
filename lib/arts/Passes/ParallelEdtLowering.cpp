@@ -143,9 +143,8 @@ public:
 
 private:
   Value getNumWorkers(OpBuilder &builder, Location loc, EdtOp parallelEdt) {
-    if (auto workersAttribute =
-            parallelEdt->getAttrOfType<workersAttr>(
-                AttrNames::Operation::Workers))
+    if (auto workersAttribute = parallelEdt->getAttrOfType<workersAttr>(
+            AttrNames::Operation::Workers))
       return builder.create<arith::ConstantIndexOp>(
           loc, workersAttribute.getValue());
     return builder.create<GetTotalWorkersOp>(loc).getResult();
@@ -153,11 +152,8 @@ private:
 
   LogicalResult lowerParallelEdt(EdtOp parallelEdt) {
     ARTS_DEBUG("Lowering parallel EDT\n" << parallelEdt);
+
     Block &body = parallelEdt.getBody().front();
-    if (body.without_terminator().empty()) {
-      parallelEdt.erase();
-      return success();
-    }
 
     ValueRange deps = parallelEdt.getDependencies();
     if (body.getNumArguments() != deps.size()) {

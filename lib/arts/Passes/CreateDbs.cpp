@@ -42,6 +42,7 @@
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
 #include "arts/Utils/Metadata/MemrefMetadata.h"
+#include "arts/Utils/OperationAttributes.h"
 #include <optional>
 
 #include "arts/Passes/ArtsPasses.h"
@@ -779,6 +780,19 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
             edt.getLoc(), dep.mode, acqGuid, acqPtr, acquireIndices,
             acquireOffsets, acquireSizes);
 
+        /// Twin-diff decision for fine-grained acquires:
+        /// When DbControlOps provide indexed access patterns (from OpenMP
+        /// depend clauses like `depend(inout: A[i])`), each EDT acquires a
+        /// DISTINCT element of the datablock. This guarantees isolation
+        /// because:
+        ///   1. The indices come directly from task dependencies in the source
+        ///   2. OpenMP semantics ensure no two concurrent tasks share the same
+        ///      depend index
+        ///   3. Each EDT has exclusive read/write access to its indexed element
+        /// Therefore, twin-diff is NOT needed - we can safely disable it.
+        acquireOp.setTwinDiff(false);
+        ARTS_DEBUG("   - Fine-grained acquire: twin_diff=false");
+
         /// Add corresponding block argument for each acquired/reused view
         Value acquirePtr = acquireOp.getPtr();
         auto sourceType = acquirePtr.getType().dyn_cast<MemRefType>();
@@ -826,6 +840,24 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       auto acquireOp = builder.create<DbAcquireOp>(
           edt.getLoc(), acquireMode, acqGuid, acqPtr, acquireIndices,
           acquireOffsets, acquireSizes);
+
+      /// Twin-diff decision for coarse-grained acquires:
+      /// When we fall back to coarse-grained allocation, we CANNOT guarantee
+      /// that EDTs access disjoint regions of the datablock. This happens when:
+      ///   1. No DbControlOps were provided (no OpenMP depend clauses)
+      ///   2. Access patterns are inconsistent across EDTs
+      ///   3. Some EDTs need full array access without specific indices
+      ///
+      /// In these cases, we MUST enable twin-diff because:
+      ///   - Multiple workers may write to overlapping regions
+      ///   - Without twin-diff, concurrent writes cause DATA CORRUPTION
+      ///   - The runtime twin-diff mechanism safely merges partial updates
+      ///
+      /// The Db.cpp pass may later disable twin-diff if it can prove
+      /// non-overlap through successful partitioning or alias analysis.
+      acquireOp.setTwinDiff(true);
+      ARTS_DEBUG("   - Coarse-grained acquire: twin_diff=true (conservative, "
+                 "potential overlap)");
 
       /// Add corresponding block argument for the acquired/reused view
       Value acquirePtr = acquireOp.getPtr();
