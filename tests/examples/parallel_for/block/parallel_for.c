@@ -1,8 +1,13 @@
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
+
+#include "arts/Utils/Testing/CartsTest.h"
+
+#define DEBUG 0
 
 int main(int argc, char **argv) {
+  CARTS_TIMER_START();
   if (argc < 2) {
     printf("Usage: %s <size>\n", argv[0]);
     return 1;
@@ -17,18 +22,17 @@ int main(int argc, char **argv) {
     a[i] = i;
     b[i] = i * 2;
   }
-  /// Print initial values
+/// Print initial values
+#if DEBUG
   printf("Initial values:\n");
   for (int i = 0; i < N; i++)
     printf("a[%d] = %d, b[%d] = %d\n", i, a[i], i, b[i]);
+#endif
 
   /// Parallel region with worksharing loop - vector addition
-  printf("Parallel region:\n");
 #pragma omp parallel for schedule(static)
   for (int i = 0; i < N; i++)
     c[i] = a[i] + b[i];
-
-  printf("Parallel region completed\n");
 
   /// Results:
   bool success = true;
@@ -38,14 +42,20 @@ int main(int argc, char **argv) {
       break;
     }
   }
+
+#if DEBUG
   printf("Results:\n");
   for (int i = 0; i < N; i++)
     printf("c[%d] = %d, a[%d] = %d, b[%d] = %d\n", i, c[i], i, a[i], i, b[i]);
-  printf("Success: %s\n", success ? "true" : "false");
-  
+#endif
+
   free(a);
   free(b);
   free(c);
 
-  return 0;
+  if (success) {
+    CARTS_TEST_PASS();
+  } else {
+    CARTS_TEST_FAIL("vector addition mismatch");
+  }
 }

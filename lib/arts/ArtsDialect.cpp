@@ -84,11 +84,34 @@ struct FoldDbDimFromDbOps : public OpRewritePattern<DbDimOp> {
     return success();
   }
 };
+
+/// Canonicalization pattern to remove unused DbAcquireOp operations.
+/// An acquire is considered unused if both its guid and ptr results have no
+/// uses. This can happen when an acquire is created but the associated EDT is
+/// later removed or when duplicate acquires are created for the same datablock.
+struct RemoveUnusedDbAcquire : public OpRewritePattern<DbAcquireOp> {
+  using OpRewritePattern<DbAcquireOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(DbAcquireOp op,
+                                PatternRewriter &rewriter) const override {
+    // Check if both guid and ptr results are unused
+    if (op.getGuid().use_empty() && op.getPtr().use_empty()) {
+      rewriter.eraseOp(op);
+      return success();
+    }
+    return failure();
+  }
+};
 } // namespace
 
 void DbDimOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                           MLIRContext *context) {
   results.add<FoldDbDimFromDbOps>(context);
+}
+
+void DbAcquireOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                              MLIRContext *context) {
+  results.add<RemoveUnusedDbAcquire>(context);
 }
 
 bool isArtsRegion(Operation *op) { return isa<EdtOp>(op) || isa<EpochOp>(op); }
@@ -667,6 +690,13 @@ LogicalResult DbAcquireOp::verify() {
            << sizeHints.size() << " vs " << dbSizes << ")";
   }
 
+  /// NOTE: We do NOT warn about unused ptr results here because:
+  /// 1. During IR transformations, acquires may temporarily have unused results
+  /// 2. Emitting a warning here triggers operation printing, which triggers
+  ///    verification again, causing infinite recursion and stack overflow
+  /// 3. The RemoveUnusedDbAcquire canonicalization pattern handles cleanup
+  ///    of truly orphaned acquires after transformations complete
+
   return success();
 }
 
@@ -687,14 +717,33 @@ void DbRefOp::build(OpBuilder &builder, OperationState &state, Value source,
 LogicalResult DbRefOp::verify() {
   auto underlyingDbOp = arts::getUnderlyingDb(getSource());
   if (!underlyingDbOp)
-    return emitOpError("source must be a datablock operation");
+    return emitOpError("source must be a datablock operation\n")
+           << *getOperation();
 
   /// Verify outer indices
   auto outerSizes = getSizesFromDb(underlyingDbOp);
   if (getIndices().size() != outerSizes.size()) {
     return emitOpError("expects ")
            << outerSizes.size() << " index operands (got "
-           << getIndices().size() << ")";
+           << getIndices().size() << ")\n"
+           << *getOperation();
+  }
+
+  /// If the underlying datablock is coarse-grained (all outer sizes are 1),
+  /// every db_ref index must be constant zero. Using any other value would
+  /// select a non-existent datablock slice.
+  bool isCoarse = !outerSizes.empty() && llvm::all_of(outerSizes, [](Value v) {
+    int64_t val;
+    return arts::getConstantIndex(v, val) && val == 1;
+  });
+  if (isCoarse) {
+    for (Value idx : getIndices()) {
+      int64_t val;
+      if (!arts::getConstantIndex(idx, val) || val != 0)
+        return emitOpError("Coarse-grained datablock expects db_ref indices ")
+               << "to be constant zero\n"
+               << *getOperation();
+    }
   }
 
   /// Verify output
@@ -708,7 +757,8 @@ LogicalResult DbRefOp::verify() {
   /// Verify output type
   auto resultType = getResult().getType().cast<MemRefType>();
   if (resultType != dbAllocOp.getAllocatedElementType().getElementType())
-    return emitOpError("result type must match source element type");
+    return emitOpError("result type must match source element type\n")
+           << *getOperation();
   return success();
 }
 
@@ -717,14 +767,16 @@ LogicalResult RecordDepOp::verify() {
   if (auto modes = getAcquireModes()) {
     if (modes->size() != dbCount)
       return emitOpError("acquire_modes entries (")
-             << modes->size() << ") must match datablocks (" << dbCount << ")";
+             << modes->size() << ") must match datablocks (" << dbCount << ")\n"
+             << *getOperation();
   }
 
   if (auto twinDiff = getTwinDiff()) {
     if (twinDiff->size() != dbCount)
       return emitOpError("twin_diff entries (")
              << twinDiff->size() << ") must match datablocks (" << dbCount
-             << ")";
+             << ")\n"
+             << *getOperation();
   }
   return success();
 }

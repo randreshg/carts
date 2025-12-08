@@ -1,11 +1,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "arts/Utils/Testing/CartsTest.h"
+
 static inline int clamp(int x, int lo, int hi) {
   return x < lo ? lo : (x > hi ? hi : x);
 }
 
 int main(int argc, char **argv) {
+  CARTS_TIMER_START();
   if (argc < 2) {
     printf("Usage: %s <size>\n", argv[0]);
     return 1;
@@ -39,15 +42,12 @@ int main(int argc, char **argv) {
   printf("Checksum: %d\n", checksum);
   printf("Expected checksum: %d\n", expected_checksum);
 
+  free(in);
+  free(out);
+
   if (checksum == expected_checksum) {
-    printf("Verification: PASSED\n");
-    free(in);
-    free(out);
-    return 0;
+    CARTS_TEST_PASS();
   } else {
-    printf("Verification: FAILED\n");
-    free(in);
-    free(out);
-    return 1;
+    CARTS_TEST_FAIL("checksum mismatch");
   }
 }

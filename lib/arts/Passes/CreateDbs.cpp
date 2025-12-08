@@ -38,7 +38,7 @@
 #include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/ArtsDialect.h"
-#include "arts/Transforms/DbRewriter.h"
+#include "arts/Transforms/DbTransforms.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
 #include "arts/Utils/Metadata/MemrefMetadata.h"
@@ -196,10 +196,6 @@ private:
                               OpBuilder &builder);
 
   /// Rewrite uses of datablocks
-  bool rewriteOperation(Operation *op, Type elementMemRefType, Value basePtr,
-                        Operation *dbOp, OpBuilder &builder,
-                        uint64_t initialIndex = 0,
-                        SmallVector<Value> *chunkOffsets = nullptr);
   void rewriteUsesInEdt(EdtOp edt, SmallVector<Operation *> &operations,
                         Operation *dbOp, SmallVector<Value> &acquireIndices,
                         SmallVector<Value> &acquireOffsets,
@@ -682,18 +678,6 @@ Value CreateDbsPass::findParentAcquireSource(EdtOp edt, Operation *dbAllocOp,
     }
   }
 
-  /// Check previously defined values in the block (e.g., earlier acquires)
-  for (Operation &op : parentBlock->getOperations()) {
-    if (&op == edt.getOperation())
-      break;
-    for (Value res : op.getResults()) {
-      if (matchesDb(res)) {
-        ARTS_DEBUG("   - Found matching handle from prior operation");
-        return res;
-      }
-    }
-  }
-
   ARTS_DEBUG("   - No existing handle found in parent scope");
   return nullptr;
 }
@@ -711,6 +695,11 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
 
   /// Accumulate dependency operands to set on the EDT
   SmallVector<Value> dependencyOperands;
+
+  /// Track which DbAllocOps have already been processed for coarse-grained
+  /// acquires. For fine-grained acquires, we may need multiple acquires per
+  /// DbAllocOp with different indices/offsets, so we don't skip those.
+  DenseSet<Operation *> processedCoarseAllocs;
 
   /// For each external value, create acquire and release operations
   for (Value externalDep : externalDeps) {
@@ -817,6 +806,15 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
     } else {
       /// Coarse-grained acquire: Acquire entire DB as a single block
       ARTS_DEBUG(" - Using coarse-grained acquire");
+
+      /// For coarse-grained acquires, all acquires for the same DbAllocOp have
+      /// identical parameters (offsets=[0], sizes=[1]). Skip duplicates to avoid
+      /// creating orphaned acquires that aren't used by any EDT.
+      if (!processedCoarseAllocs.insert(dbAllocOp.getOperation()).second) {
+        ARTS_DEBUG("   - Skipping duplicate coarse-grained acquire for "
+                   "already-processed DbAllocOp");
+        continue;
+      }
 
       SmallVector<Value> acquireIndices, acquireOffsets, acquireSizes;
       acquireOffsets.push_back(
@@ -965,24 +963,6 @@ void CreateDbsPass::insertDbFreeForDbAlloc(DbAllocOp dbAlloc, Operation *alloc,
 }
 
 ///===----------------------------------------------------------------------===///
-/// Rewrite Operation Helper
-/// Rewrite a single operation to use DbRefOp pattern
-///===----------------------------------------------------------------------===///
-bool CreateDbsPass::rewriteOperation(Operation *op, Type elementMemRefType,
-                                     Value basePtr, Operation *dbOp,
-                                     OpBuilder &builder, uint64_t initialIndex,
-                                     SmallVector<Value> *chunkOffsets) {
-  ArrayRef<Value> offsetsRef;
-  SmallVector<Value> empty;
-  if (chunkOffsets)
-    offsetsRef = *chunkOffsets;
-  else
-    offsetsRef = empty;
-  return rewriteDbUserOperation(op, elementMemRefType, basePtr, dbOp,
-                                initialIndex, offsetsRef, builder, opsToRemove);
-}
-
-///===----------------------------------------------------------------------===///
 /// Rewrite Alloc uses
 /// Adjust load/store indices based on DB allocation granularity.
 ///===----------------------------------------------------------------------===///
@@ -1002,13 +982,17 @@ void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
 
   ARTS_DEBUG(" - Rewriting " << users.size() << " operations in parent EDT");
 
-  /// Fine-grained allocations don't have chunk offsets
   OpBuilder builder(module.getContext());
-  SmallVector<Value> emptyOffsets;
-  for (Operation *user : users) {
-    rewriteOperation(user, elementMemRefType, dbAlloc.getPtr(),
-                     dbAlloc.getOperation(), builder, 0, &emptyOffsets);
-  }
+  DbTransforms transforms(module.getContext());
+
+  /// Coarse-grained: db_ref[0] + load/store[indices]
+  /// Fine-grained: db_ref[indices] + load/store[0]
+  bool isCoarse = DbTransforms::isCoarseGrained(dbAlloc);
+  unsigned outerCount = isCoarse ? 0 : dbAlloc.getSizes().size();
+  for (Operation *user : users)
+    transforms.rewriteAccessWithDbPattern(user, dbAlloc.getPtr(),
+                                          elementMemRefType, outerCount,
+                                          builder, opsToRemove);
 }
 
 /// Rewrite all uses of an allocation to point to the new db_alloc pointer. This
@@ -1030,11 +1014,16 @@ void CreateDbsPass::rewriteUsesEverywhere(Operation *alloc, DbAllocOp dbAlloc) {
   }
 
   OpBuilder builder(module.getContext());
-  SmallVector<Value> emptyOffsets;
-  for (Operation *user : users) {
-    rewriteOperation(user, elementMemRefType, dbAlloc.getPtr(),
-                     dbAlloc.getOperation(), builder, 0, &emptyOffsets);
-  }
+  DbTransforms transforms(module.getContext());
+
+  /// Coarse-grained: db_ref[0] + load/store[indices]
+  /// Fine-grained: db_ref[indices] + load/store[0]
+  bool isCoarse = DbTransforms::isCoarseGrained(dbAlloc);
+  unsigned outerCount = isCoarse ? 0 : dbAlloc.getSizes().size();
+  for (Operation *user : users)
+    transforms.rewriteAccessWithDbPattern(user, dbAlloc.getPtr(),
+                                          elementMemRefType, outerCount,
+                                          builder, opsToRemove);
 }
 
 ///===----------------------------------------------------------------------===///
@@ -1092,6 +1081,8 @@ void CreateDbsPass::rewriteUsesInEdt(EdtOp edt,
 
   /// Rewrite each tracked operation with DbRefOp pattern
   OpBuilder builder(edt.getContext());
+  DbTransforms transforms(edt.getContext());
+
   for (Operation *op : operations) {
     /// Apply scope mapping to operands before rewriting
     for (OpOperand &operand : op->getOpOperands()) {
@@ -1102,8 +1093,21 @@ void CreateDbsPass::rewriteUsesInEdt(EdtOp edt,
       }
     }
 
-    rewriteOperation(op, elementMemRefType, dbAcquireArg, dbOp, builder,
-                     acquireIndices.size(), &acquireOffsets);
+    if (acquireOffsets.empty() && acquireIndices.empty()) {
+      unsigned outerCount = 0;
+      if (auto load = dyn_cast<memref::LoadOp>(op))
+        outerCount = load.getIndices().size();
+      else if (auto store = dyn_cast<memref::StoreOp>(op))
+        outerCount = store.getIndices().size();
+      transforms.rewriteAccessWithDbPattern(op, dbAcquireArg, elementMemRefType,
+                                            outerCount, builder, opsToRemove);
+    } else if (acquireIndices.empty()) {
+      transforms.rewriteAccessWithDbPattern(op, dbAcquireArg, elementMemRefType,
+                                            0, builder, opsToRemove);
+    } else if (auto acquireOp = dyn_cast<DbAcquireOp>(dbOp)) {
+      transforms.rebaseToAcquireView(op, acquireOp, dbAcquireArg,
+                                     elementMemRefType, builder, opsToRemove);
+    }
   }
 }
 

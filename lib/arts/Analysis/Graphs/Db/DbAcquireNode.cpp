@@ -117,21 +117,34 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
   if (!dbAcquireOp.getSizeHints().empty())
     partitionSize = dbAcquireOp.getSizeHints().front();
 
-  if (auto nestedAcquire = dyn_cast<DbAcquireOp>(singleUser)) {
+  if (isa<DbAcquireOp>(singleUser)) {
     /// Nested acquire; create child node lazily via getOrCreateAcquireNode
     /// The rest of this constructor computes info for this node; nested
-    /// children will compute their own.
-  } else {
-    /// Use utility function to get EDT and block argument
-    auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(dbAcquireOp);
-    edtUser = edt;
-    useInEdt = blockArg;
-    assert(edtUser && useInEdt &&
-           "Acquire ptr should be used by an EDT or another acquire");
+    /// children will compute their own. For nested acquires, the EDT user
+    /// is found when processing the child acquire node.
+    return;
+  }
+
+  /// Use utility function to get EDT and block argument
+  auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(dbAcquireOp);
+  edtUser = edt;
+  useInEdt = blockArg;
+
+  if (!edtUser || !useInEdt) {
+    ARTS_ERROR("DbAcquireOp ptr result is not used by an EDT or another "
+               "acquire.\n"
+               "  Acquire op: "
+               << dbAcquireOp
+               << "\n"
+                  "  Single user: "
+               << *singleUser
+               << "\n"
+                  "  User type: "
+               << singleUser->getName());
+    llvm_unreachable("Acquire ptr should be used by an EDT or another acquire");
   }
 
   /// Find the corresponding DbReleaseOp for this acquire
-  assert(useInEdt && "Acquire ptr should be used by an EDT or another acquire");
   for (Operation *user : useInEdt.getUsers()) {
     auto releaseOp = dyn_cast<DbReleaseOp>(user);
     if (!releaseOp)
@@ -143,8 +156,7 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
   }
 
   /// Get the in/out mode based on the memory accesses
-  if (useInEdt)
-    collectAccesses(useInEdt);
+  collectAccesses(useInEdt);
   if (loads.size() > 0) {
     inCount = 1;
     outCount = 0;

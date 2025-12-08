@@ -2,7 +2,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "arts/Utils/Testing/CartsTest.h"
+
 int main() {
+  CARTS_TIMER_START();
   int sum = 0;
   int data[100];
 
@@ -29,5 +32,10 @@ int main() {
   printf("Sum value: %d\n", sum);
   printf("First element: %d, Last element: %d\n", data[0], data[99]);
 
-  return 0;
+  // Verify: sum should be 1000, data[i] = i*2
+  if (sum == 1000 && data[0] == 0 && data[99] == 198) {
+    CARTS_TEST_PASS();
+  } else {
+    CARTS_TEST_FAIL("verification failed");
+  }
 }

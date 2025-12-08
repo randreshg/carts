@@ -12,6 +12,7 @@ get_args() {
     matrixmul) echo "64 16" ;;
     rowdep) echo "64" ;;
     stencil) echo "100" ;;
+    parallel_for/*) echo "100" ;;
     *) echo "" ;;
   esac
 }
@@ -23,13 +24,19 @@ examples=(
   matrix
   matrixmul
   parallel
+  parallel_for/block
+  parallel_for/chunk
+  parallel_for/loops
+  parallel_for/reduction
+  parallel_for/single
+  parallel_for/stencil
   rowdep
   smith-waterman
   stencil
 )
 
-printf "%-16s | %-8s | %s\n" "Example" "Status" "Note"
-printf "%-16s-+-%-8s-+-%s\n" "----------------" "--------" "-----------------------------"
+printf "%-24s | %-8s | %s\n" "Example" "Status" "Note"
+printf "%-24s-+-%-8s-+-%s\n" "------------------------" "--------" "-----------------------------"
 
 for ex in "${examples[@]}"; do
   dir="${ROOT}/${ex}"
@@ -42,11 +49,11 @@ for ex in "${examples[@]}"; do
   if ! (cd "${dir}" && carts execute "${bin}.c" -O3 >/dev/null 2>&1); then
     status="FAIL"
     note="carts execute failed"
-    printf "%-16s | %-8s | %s\n" "${ex}" "${status}" "${note}"
+    printf "%-24s | %-8s | %s\n" "${ex}" "${status}" "${note}"
     continue
   fi
 
-  cmd=( "./${bin}" )
+  cmd=( "./${bin}_arts" )
   ex_args="$(get_args "${ex}")"
   if [[ -n "${ex_args}" ]]; then
     # Split arguments for this example.
@@ -62,7 +69,16 @@ for ex in "${examples[@]}"; do
   if [[ ${run_rc} -ne 0 ]]; then
     status="FAIL"
     note="runtime error (rc=${run_rc})"
+  elif grep -q "\[CARTS\].*FAIL" <<< "${run_output}"; then
+    # New CARTS test format - failure
+    status="FAIL"
+    note="$(grep "\[CARTS\]" <<< "${run_output}" | tail -1)"
+  elif grep -q "\[CARTS\].*PASS" <<< "${run_output}"; then
+    # New CARTS test format - success
+    status="PASS"
+    note="$(grep "\[CARTS\]" <<< "${run_output}" | tail -1)"
   elif grep -q "INCORRECT" <<< "${run_output}"; then
+    # Legacy format
     status="FAIL"
     note="reported incorrect result"
   else
@@ -71,5 +87,5 @@ for ex in "${examples[@]}"; do
     note="${first_line}"
   fi
 
-  printf "%-16s | %-8s | %s\n" "${ex}" "${status}" "${note}"
+  printf "%-24s | %-8s | %s\n" "${ex}" "${status}" "${note}"
 done

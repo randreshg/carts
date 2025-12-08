@@ -147,6 +147,8 @@ detect_host_config() {
     CARTS_CLANG_LIBRARY_FLAGS=()
     CARTS_COMPILE_LIBRARY_FLAGS=()
     CARTS_CLANG_LIBRARY_FLAGS+=(
+        # CARTS libraries (for libcartstest)
+        "-L${CARTS_INSTALL_DIR}/lib"
         # ARTS runtime libraries
         "-L${ARTS_INSTALL_DIR}/lib"
         # LLVM target-specific libraries
@@ -155,6 +157,8 @@ detect_host_config() {
         "-L${LLVM_INSTALL_DIR}/lib"
     )
     CARTS_COMPILE_LIBRARY_FLAGS+=(
+        # CARTS libraries (for libcartstest)
+        "-L${CARTS_INSTALL_DIR}/lib"
         # ARTS runtime libraries
         "-L${ARTS_INSTALL_DIR}/lib"
         # LLVM target-specific libraries
@@ -173,6 +177,8 @@ detect_host_config() {
     )
 
     CARTS_COMPILE_LIBRARIES=(
+        # CARTS test utilities
+        "-lcartstest"
         # ARTS runtime
         "-larts"
         # OpenMP runtime
@@ -207,6 +213,8 @@ detect_host_config() {
     CARTS_COMPILE_LIBRARIES+=("${PLATFORM_LIBRARIES[@]}")
 
     CARTS_INCLUDE_FLAGS+=(
+        # CARTS installed headers (for CartsTest.h)
+        "-I${CARTS_INSTALL_DIR}/include"
         # ARTS runtime headers
         "-I${ARTS_INSTALL_DIR}/include"
         # LLVM includes
@@ -1239,6 +1247,8 @@ run_local_clean() {
         "cmake-build-*"
         ".cache"
         "introspection"
+        "counter"
+        "counters"
     )
 
     local removed_count=0
@@ -1603,8 +1613,8 @@ run_execute() {
     # Step 3: Compile to executable
     carts_step "Compiling to executable"
     
-    # Determine output name from execute_args or use base_name
-    local output_name="${base_name}"
+    # Determine output name from execute_args or use base_name with _arts suffix
+    local output_name="${base_name}_arts"
     local i=0
     while [[ $i -lt ${#execute_args[@]} ]]; do
         if [[ "${execute_args[$i]}" == "-o" && $((i+1)) -lt ${#execute_args[@]} ]]; then
@@ -1781,8 +1791,8 @@ run_execute_dual() {
     # Step 5: Compile to executable
     carts_step "[5/5]: Compiling to executable"
 
-    # Determine output name from execute_args or use base_name
-    local output_name="${base_name}"
+    # Determine output name from execute_args or use base_name with _arts suffix
+    local output_name="${base_name}_arts"
     local i=0
     while [[ $i -lt ${#execute_args[@]} ]]; do
         if [[ "${execute_args[$i]}" == "-o" && $((i+1)) -lt ${#execute_args[@]} ]]; then
