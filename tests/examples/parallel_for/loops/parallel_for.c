@@ -1,8 +1,14 @@
 #include <omp.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "arts/Utils/Testing/CartsTest.h"
+
+#define DEBUG 0
+
 int main(int argc, char **argv) {
+  CARTS_TIMER_START();
   if (argc < 2) {
     printf("Usage: %s <size>\n", argv[0]);
     return 1;
@@ -20,6 +26,14 @@ int main(int argc, char **argv) {
     c[i] = 0;
     d[i] = 0;
   }
+
+#if DEBUG
+  printf("Initial values:\n");
+  for (int i = 0; i < N; i++)
+    printf("a[%d] = %d, b[%d] = %d, c[%d] = %d, d[%d] = %d\n", i, a[i], i, b[i],
+           i, c[i], i, d[i]);
+#endif
+
   /// Single parallel region with back-to-back for loops
 #pragma omp parallel
   {
@@ -32,19 +46,22 @@ int main(int argc, char **argv) {
       d[i] = c[i] * 2;
   }
 
-  int success = 1;
+  bool success = true;
   for (int i = 0; i < N; i++) {
     if (c[i] != a[i] + b[i] || d[i] != 2 * (a[i] + b[i])) {
-      success = 0;
+      success = false;
       break;
     }
   }
-
-  printf("Success: %s\n", success ? "true" : "false");
 
   free(a);
   free(b);
   free(c);
   free(d);
-  return 0;
+
+  if (success) {
+    CARTS_TEST_PASS();
+  } else {
+    CARTS_TEST_FAIL("computation mismatch");
+  }
 }

@@ -2,7 +2,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "arts/Utils/Testing/CartsTest.h"
+
 int main(int argc, char **argv) {
+  CARTS_TIMER_START();
   if (argc < 2) {
     printf("Usage: %s <size>\n", argv[0]);
     return 1;
@@ -42,12 +45,12 @@ int main(int argc, char **argv) {
   for (i = 0; i < N; i++)
     expected_dot_product += (long long)a[i] * b[i];
 
-  if (dot_product != expected_dot_product)
-    printf("Result: INCORRECT - %lld != %lld\n", dot_product,
-           expected_dot_product);
-  else
-    printf("Result: CORRECT\n");
   free(a);
   free(b);
-  return 0;
+
+  if (dot_product == expected_dot_product) {
+    CARTS_TEST_PASS();
+  } else {
+    CARTS_TEST_FAIL("dot product mismatch");
+  }
 }

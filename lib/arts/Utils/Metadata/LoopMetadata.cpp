@@ -374,3 +374,99 @@ Attribute LoopMetadata::getMetadataAttr() const {
       /// Source location
       builder.getStringAttr(locationMetadata.getKey()));
 }
+
+LoopMetadataAttr LoopMetadata::toAttribute(MLIRContext *ctx) const {
+  OpBuilder builder(ctx);
+
+  /// Helper to convert optional int64 to IntegerAttr
+  auto toIntAttr = [&](const std::optional<int64_t> &v,
+                       int64_t defaultValue = 0) -> IntegerAttr {
+    return builder.getI64IntegerAttr(v.value_or(defaultValue));
+  };
+
+  /// Helper to convert optional bool to BoolAttr
+  auto toBoolAttr = [&](const std::optional<bool> &v) -> BoolAttr {
+    return builder.getBoolAttr(v.value_or(false));
+  };
+
+  auto toEnumAttr = [&](const std::optional<ParallelClassification> &v,
+                        ParallelClassification defaultValue) -> IntegerAttr {
+    return builder.getI64IntegerAttr(
+        static_cast<int64_t>(v.value_or(defaultValue)));
+  };
+
+  /// Convert reduction kinds to ArrayAttr
+  ArrayAttr reductionKindsAttr;
+  if (!reductionKinds.empty()) {
+    SmallVector<Attribute> kinds;
+    for (auto kind : reductionKinds)
+      kinds.push_back(builder.getStringAttr(reductionKindToString(kind)));
+    reductionKindsAttr = builder.getArrayAttr(kinds);
+  }
+
+  return LoopMetadataAttr::get(
+      ctx, builder.getBoolAttr(potentiallyParallel),
+      builder.getBoolAttr(hasReductions), reductionKindsAttr,
+      builder.getI64IntegerAttr(accessStats.readCount.value_or(0)),
+      builder.getI64IntegerAttr(accessStats.writeCount.value_or(0)),
+      toIntAttr(tripCount), toIntAttr(nestingLevel),
+      toBoolAttr(hasUniformStride), toBoolAttr(hasGatherScatter),
+      builder.getI64IntegerAttr(static_cast<int64_t>(
+          dataMovementPattern.value_or(DataMovement::Unknown))),
+      builder.getI64IntegerAttr(static_cast<int64_t>(
+          suggestedPartitioning.value_or(Partitioning::Unknown))),
+      toIntAttr(suggestedChunkSize), toIntAttr(memoryFootprintPerIter),
+      toBoolAttr(hasInterIterationDeps), toIntAttr(dependenceDistance),
+      toIntAttr(memrefCount), toIntAttr(readOnlyMemrefCount),
+      toIntAttr(writeOnlyMemrefCount), toIntAttr(readWriteMemrefCount),
+      toIntAttr(memrefsWithLoopCarriedDeps),
+      toIntAttr(poorTemporalLocalityMemrefCount),
+      toEnumAttr(parallelClassification, ParallelClassification::Unknown),
+      builder.getStringAttr(locationMetadata.getKey()));
+}
+
+LoopMetadataAttr
+LoopMetadata::createParallelizedMetadata(MLIRContext *ctx,
+                                         const LoopMetadataAttr &base) {
+  OpBuilder builder(ctx);
+
+  /// Create new metadata with reduction handling applied:
+  /// - potentiallyParallel = true (loop is now parallel after reduction)
+  /// - hasReductions = false (handled via partial accumulators)
+  /// - hasInterIterationDeps = false (broken by partial accumulators)
+  /// - memrefsWithLoopCarriedDeps = 0
+  /// - parallelClassification = Likely
+  /// - reductionKinds = null (cleared)
+  /// - dependenceDistance = null (cleared)
+  /// All other fields are copied from base.
+
+  return LoopMetadataAttr::get(
+      ctx,
+      /// Parallelism - now parallel after reduction handling
+      builder.getBoolAttr(true),  // potentiallyParallel
+      builder.getBoolAttr(false), // hasReductions (handled via partials)
+      nullptr,                    // reductionKinds (cleared)
+      /// Memory access patterns - copied from base
+      base.getReadCount(), base.getWriteCount(),
+      /// Loop structure - copied from base
+      base.getTripCount(), base.getNestingLevel(),
+      /// Access patterns - copied from base
+      base.getHasUniformStride(), base.getHasGatherScatter(),
+      base.getDataMovementPattern(),
+      /// Partitioning hints - copied from base
+      base.getSuggestedPartitioning(), base.getSuggestedChunkSize(),
+      base.getMemoryFootprintPerIter(),
+      /// Dependency info - updated for parallelization
+      builder.getBoolAttr(false), // hasInterIterationDeps (broken by partials)
+      nullptr,                    // dependenceDistance (cleared)
+      /// Memref stats - copied from base, except loop-carried deps
+      base.getMemrefCount(), base.getReadOnlyMemrefCount(),
+      base.getWriteOnlyMemrefCount(), base.getReadWriteMemrefCount(),
+      builder.getI64IntegerAttr(0), // memrefsWithLoopCarriedDeps = 0
+      base.getPoorTemporalLocalityMemrefs(),
+      /// Classification - now Likely parallel
+      builder.getI64IntegerAttr(
+          static_cast<int64_t>(ParallelClassification::Likely)),
+      /// Location - copied from base
+      base.getLocationKey());
+}

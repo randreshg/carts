@@ -2,9 +2,13 @@
 #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+#include "arts/Utils/Testing/CartsTest.h"
+
 #define TOLERANCE 1e-6
 
 int main(int argc, char *argv[]) {
+  CARTS_TIMER_START();
   /// Check for the correct number of arguments
   if (argc != 3) {
     /// E.g. ./matrixmul 8 2
@@ -123,10 +127,9 @@ int main(int argc, char *argv[]) {
   free(C_parallel);
   free(C_sequential);
 
-  if (verified)
-    printf("Result: CORRECT\n");
-  else
-    printf("Result: INCORRECT\n");
-
-  return 0;
+  if (verified) {
+    CARTS_TEST_PASS();
+  } else {
+    CARTS_TEST_FAIL("matrix multiplication mismatch");
+  }
 }

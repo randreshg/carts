@@ -2,7 +2,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "arts/Utils/Testing/CartsTest.h"
+
 int main() {
+  CARTS_TIMER_START();
   printf("Parallel region execution.\n");
 #pragma omp parallel
   {
@@ -13,5 +16,5 @@ int main() {
 
   printf("Parallel region finished.\n");
 
-  return 0;
+  CARTS_TEST_PASS();
 }

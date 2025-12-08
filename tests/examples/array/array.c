@@ -3,7 +3,10 @@
 #include <stdlib.h>
 #include <time.h>
 
+#include "arts/Utils/Testing/CartsTest.h"
+
 int main(int argc, char *argv[]) {
+  CARTS_TIMER_START();
   if (argc < 2) {
     printf("Usage: %s N\n", argv[0]);
     return 1;
@@ -49,5 +52,26 @@ int main(int argc, char *argv[]) {
   printf("Final arrays:\n");
   for (int i = 0; i < N; i++)
     printf("A[%d] = %d, B[%d] = %d\n", i, A[i], i, B[i]);
-  return 0;
+
+  // Verify: A[i] = i, B[i] = sum(A[0..i]) + 5*(i+1)
+  int correct = 1;
+  for (int i = 0; i < N; i++) {
+    int expected_B = (i == 0) ? A[0] + 5 : A[i] + B[i - 1] + 5;
+    // Check iteratively: B[i] = i*(i+1)/2 + 5*(i+1)
+    int sum_A = i * (i + 1) / 2;
+    expected_B = sum_A + 5 * (i + 1);
+    if (A[i] != i || B[i] != expected_B) {
+      correct = 0;
+      break;
+    }
+  }
+
+  free(A);
+  free(B);
+
+  if (correct) {
+    CARTS_TEST_PASS();
+  } else {
+    CARTS_TEST_FAIL("array computation mismatch");
+  }
 }

@@ -3,8 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "arts/Utils/Testing/CartsTest.h"
+
 // 1D stencil computation: output[i] = input[i-1] + input[i] + input[i+1]
 int main(int argc, char *argv[]) {
+  CARTS_TIMER_START();
   if (argc < 2) {
     printf("Usage: %s N\n", argv[0]);
     return 1;
@@ -47,21 +50,25 @@ int main(int argc, char *argv[]) {
                  input[i - 1], input[i], input[i + 1], output[i]);
         }
       }
+    }
+  }
 
-      // Verify task that reads all outputs
-#pragma omp task depend(in : output[0])
-      {
-        printf("\nVerification:\n");
-        for (int i = 1; i < N - 1; i++) {
-          int expected = (i - 1 + 1) + (i + 1) + (i + 1 + 1);
-          printf("output[%d] = %d (expected %d) %s\n", i, output[i], expected,
-                 output[i] == expected ? "PASS" : "FAIL");
-        }
-      }
+  // Verify results
+  int correct = 1;
+  for (int i = 1; i < N - 1; i++) {
+    int expected = (i - 1 + 1) + (i + 1) + (i + 1 + 1); // = 3*i + 3
+    if (output[i] != expected) {
+      correct = 0;
+      break;
     }
   }
 
   free(input);
   free(output);
-  return 0;
+
+  if (correct) {
+    CARTS_TEST_PASS();
+  } else {
+    CARTS_TEST_FAIL("stencil computation mismatch");
+  }
 }
