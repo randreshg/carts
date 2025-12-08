@@ -487,8 +487,8 @@ Operation *getUnderlyingOperation(Value v) {
 }
 
 /// Finds the datablock-related operation (DbAllocOp or DbAcquireOp) associated
-/// with the given value.
-/// The depth parameter prevents infinite recursion in circular acquire chains.
+/// with the given value. The depth parameter prevents infinite recursion in
+/// circular acquire chains.
 Operation *getUnderlyingDb(Value v, unsigned depth) {
   if (!v)
     return nullptr;

@@ -1,0 +1,11 @@
+# CARTS generated executables
+*_arts
+
+# CARTS intermediate files
+*.mlir
+*.ll
+
+# Debug/analysis outputs
+counters/
+DbGraph_*.dot
+*.json

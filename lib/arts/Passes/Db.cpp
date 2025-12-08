@@ -74,7 +74,7 @@
 #include <iterator>
 #include <limits>
 
-#include "arts/Transforms/DbRewriter.h"
+#include "arts/Transforms/DbTransforms.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
@@ -487,60 +487,30 @@ bool DbPass::partitionDb() {
   return changed;
 }
 
+/// Promote coarse allocation for chunking.
+/// sizes=[1], elementSizes=[N] -> sizes=[N], elementSizes=[1]
 FailureOr<DbAllocOp> DbPass::promoteAllocForChunking(DbAllocOp allocOp,
                                                      DbAllocNode *allocNode) {
   if (!allocOp || !allocOp.getOperation())
     return failure();
 
-  /// Example of the promotion performed here:
-  ///   coarse alloc : sizes=[1], elementSizes=[N]
-  ///   normalized   : sizes=[N], elementSizes=[1]
-  /// Root acquires are then normalized to offsets=[0], sizes=[N] so worker
-  /// acquires can safely slice chunks by rewriting offsets/sizes only.
-  ValueRange elementSizes = allocOp.getElementSizes();
-  ValueRange sizes = allocOp.getSizes();
-  if (elementSizes.empty())
+  if (allocOp.getElementSizes().empty())
     return failure();
 
-  /// Check if allocation is already fine-grained.
-  /// Fine-grained means each datablock holds exactly one element - no further
-  /// promotion is possible or needed.
+  // Already fine-grained - no promotion needed
   if (allocNode && allocNode->isFineGrained())
     return allocOp;
 
   OpBuilder builder(allocOp);
-  Location loc = allocOp.getLoc();
-  Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
+  DbTransforms transforms(module.getContext());
 
-  SmallVector<Value> newSizes;
-  for (Value size : sizes) {
-    int64_t cst;
-    if (newSizes.empty() && arts::getConstantIndex(size, cst) && cst == 1)
-      continue;
-    newSizes.push_back(size);
-  }
-  newSizes.push_back(elementSizes.front());
+  // Promote 1 dimension with trimLeadingOnes for chunking pattern
+  auto newAlloc =
+      transforms.promoteAllocation(allocOp, 1, builder, /*trimLeadingOnes=*/true);
+  if (!newAlloc)
+    return failure();
 
-  SmallVector<Value> newElementSizes;
-  newElementSizes.append(elementSizes.begin() + 1, elementSizes.end());
-  if (newElementSizes.empty())
-    newElementSizes.push_back(one);
-
-  Value address = allocOp.getAddress();
-  auto newAlloc = builder.create<DbAllocOp>(
-      loc, allocOp.getMode(), allocOp.getRoute(), allocOp.getAllocType(),
-      allocOp.getDbMode(), allocOp.getElementType(), address, newSizes,
-      newElementSizes);
-  for (auto attr : allocOp->getAttrs()) {
-    if (attr.getName().getValue() == "operandSegmentSizes")
-      continue;
-    newAlloc->setAttr(attr.getName(), attr.getValue());
-  }
-
-  DbRewriter::Config rewriterConfig;
-  rewriterConfig.preserveSemantics = false;
-  DbRewriter rewriter(module.getContext(), rewriterConfig);
-  if (failed(rewriter.rewriteAllUses(allocOp, newAlloc))) {
+  if (failed(transforms.rewriteAllUses(allocOp, newAlloc))) {
     newAlloc.erase();
     return failure();
   }
@@ -597,49 +567,13 @@ bool DbPass::normalizeRootAcquires(DbAllocOp allocOp) {
 }
 
 bool DbPass::rewriteAcquireUsersForChunk(DbAcquireOp acqOp, Value chunkOffset) {
-  auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(acqOp);
-  if (!blockArg)
-    return false;
-
-  /// Try to reuse an existing DbRef result type if available to keep types
-  /// consistent with surrounding code.
-  Type targetType;
-  for (Operation *user : blockArg.getUsers()) {
-    if (auto ref = dyn_cast<DbRefOp>(user)) {
-      targetType = ref.getResult().getType();
-      break;
-    }
-  }
-  if (!targetType) {
-    targetType = blockArg.getType();
-    if (auto outerMemref = targetType.dyn_cast<MemRefType>())
-      if (auto innerMemref =
-              outerMemref.getElementType().dyn_cast<MemRefType>())
-        targetType = innerMemref;
-  }
-
-  if (!targetType || !targetType.isa<MemRefType>()) {
-    ARTS_DEBUG("  Skipping chunk user rewrite for acquire "
-               << acqOp << " (type mismatch)");
-    return false;
-  }
-
   SmallVector<Value> chunkOffsets{chunkOffset};
-  llvm::SetVector<Operation *> opsToRemove;
+  acqOp.getOffsetsMutable().assign(chunkOffsets);
+
   OpBuilder builder(acqOp.getContext());
-  SmallVector<Operation *> users(blockArg.getUsers().begin(),
-                                 blockArg.getUsers().end());
-  bool rewritten = false;
-  for (Operation *user : users)
-    if (rewriteDbUserOperation(user, targetType, blockArg, acqOp.getOperation(),
-                               acqOp.getIndices().size(), chunkOffsets, builder,
-                               opsToRemove))
-      rewritten = true;
+  DbTransforms transforms(module.getContext());
 
-  for (Operation *op : opsToRemove)
-    op->erase();
-
-  return rewritten;
+  return transforms.rebaseAllUsersToAcquireView(acqOp, builder);
 }
 
 bool DbPass::updateAcquireForChunk(DbAcquireOp acqOp, DbAllocOp promotedAlloc,

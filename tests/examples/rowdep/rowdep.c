@@ -1,8 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "arts/Utils/Testing/CartsTest.h"
+
 int main(int argc, char *argv[]) {
-  if(argc < 2) {
+  CARTS_TIMER_START();
+  if (argc < 2) {
     printf("Usage: %s <matrix_size>\n", argv[0]);
     return EXIT_FAILURE;
   }
@@ -53,7 +56,6 @@ int main(int argc, char *argv[]) {
     }
   }
 
-
   /// Verification check for matrix B.
   int error = 0;
   for (int i = 0; i < N; i++) {
@@ -80,11 +82,9 @@ int main(int argc, char *argv[]) {
   free(A);
   free(B);
 
-  /// Print the verification result
-  if (error == 0)
-    printf("Verification succeeded: All B elements are correct.\n");
-  else
-    printf("Verification encountered %d error(s).\n", error);
-
-  return 0;
+  if (error == 0) {
+    CARTS_TEST_PASS();
+  } else {
+    CARTS_TEST_FAIL("row dependency computation mismatch");
+  }
 }

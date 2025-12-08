@@ -547,9 +547,12 @@ void ForLoweringPass::lowerParallelEdt(EdtOp parallelEdt) {
     /// Erase the parallel first
     parallelEdt.erase();
 
-    /// Then erase the orphaned acquires
+    /// Then erase the orphaned acquires.
+    /// An acquire is orphaned if its ptr result is unused. The guid may still
+    /// be referenced but without a corresponding ptr use, the acquire serves
+    /// no purpose.
     for (DbAcquireOp acqOp : acquiresToErase) {
-      if (acqOp.getPtr().use_empty() && acqOp.getGuid().use_empty()) {
+      if (acqOp.getPtr().use_empty()) {
         ARTS_DEBUG("  - Erasing orphaned acquire for original parallel");
         acqOp.erase();
       }
@@ -1529,8 +1532,44 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   scf::ForOp iterLoop =
       AC->create<scf::ForOp>(loc, zero, loopInfo.workerIterationCount, one);
 
-  if (Attribute loopAttr = getLoopMetadataAttr(forOp))
-    iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
+  /// Set loop metadata on the chunked iteration loop.
+  /// When handling reductions, update metadata to reflect that the chunked loop
+  /// is now parallel for input arrays (but ONLY if there are no stencil/memref
+  /// loop-carried dependencies).
+  if (Attribute loopAttr = getLoopMetadataAttr(forOp)) {
+    if (!reductionVarIndex.empty()) {
+      /// We have reductions - check if we can mark as parallel
+      if (auto origMeta = dyn_cast<LoopMetadataAttr>(loopAttr)) {
+        /// Check if the ONLY source of inter-iteration deps was the reduction.
+        /// If there are memref-based loop-carried deps (stencil patterns like
+        /// a[i] = a[i-1] + a[i+1]), we CANNOT mark as parallel even after
+        /// handling the reduction via partial accumulators.
+        int64_t memrefDeps = 0;
+        if (auto attr = origMeta.getMemrefsWithLoopCarriedDeps())
+          memrefDeps = attr.getInt();
+
+        if (memrefDeps == 0) {
+          /// Safe: only scalar reduction deps existed, now broken by partial
+          /// accumulators.
+          auto parallelMeta = LoopMetadata::createParallelizedMetadata(
+              forOp.getContext(), origMeta);
+          iterLoop->setAttr(AttrNames::LoopMetadata::Name, parallelMeta);
+          ARTS_DEBUG("  Updated loop metadata: potentiallyParallel=true "
+                     "(reduction-only deps, no stencil patterns)");
+        } else {
+          /// NOT safe: there are stencil/memref loop-carried deps that are NOT
+          /// broken by handling reductions. Keep original metadata.
+          iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
+          ARTS_DEBUG("  Keeping original metadata: memrefsWithLoopCarriedDeps="
+                     << memrefDeps << " (stencil patterns detected)");
+        }
+      } else {
+        iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
+      }
+    } else {
+      iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
+    }
+  }
 
   AC->setInsertionPointToStart(iterLoop.getBody());
 

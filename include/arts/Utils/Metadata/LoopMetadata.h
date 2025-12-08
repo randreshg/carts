@@ -152,6 +152,26 @@ public:
   void importFromJson(const llvm::json::Object &json) override;
   void exportToJson(llvm::json::Object &json) const override;
 
+  //===-------------------------------------------------------------===//
+  // Attribute Creation Helpers
+  //===-------------------------------------------------------------===//
+
+  /// Create LoopMetadataAttr from current state using provided context.
+  /// Use this when you need to create an attribute without modifying the
+  /// associated operation.
+  LoopMetadataAttr toAttribute(MLIRContext *ctx) const;
+
+  /// Create metadata for loop after reduction handling via partial
+  /// accumulators. Copies all fields from base, then sets:
+  ///   - potentiallyParallel = true
+  ///   - hasReductions = false
+  ///   - hasInterIterationDeps = false
+  ///   - memrefsWithLoopCarriedDeps = 0
+  ///   - parallelClassification = Likely
+  ///   - Clears reductionKinds and dependenceDistance
+  static LoopMetadataAttr
+  createParallelizedMetadata(MLIRContext *ctx, const LoopMetadataAttr &base);
+
 private:
   Attribute getMetadataAttr() const override;
 };

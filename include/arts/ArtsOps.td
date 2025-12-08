@@ -192,6 +192,7 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     attr-dict `->` `(` type($guid) `,` type($ptr) `)`
   }];
   let hasVerifier = 1;
+  let hasCanonicalizer = 1;
   let skipDefaultBuilders = 1;
   let builders = [
     OpBuilder<(ins "ArtsMode":$mode,

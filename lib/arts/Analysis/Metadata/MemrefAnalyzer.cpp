@@ -4,6 +4,7 @@
 
 #include "arts/Analysis/Metadata/MemrefAnalyzer.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
+#include "arts/Analysis/Metadata/DependenceAnalyzer.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
@@ -324,8 +325,10 @@ bool MemrefAnalyzer::hasLoopCarriedDependencies(Value memref) const {
   for (Operation *user : memref.getUsers()) {
     for (Operation *parent = user->getParentOp(); parent;
          parent = parent->getParentOp()) {
-      if (auto *loopMeta = metadataManager.getLoopMetadata(parent)) {
-        if (loopMeta->hasInterIterationDeps && *loopMeta->hasInterIterationDeps)
+      /// Check if this is a loop operation we track
+      if (metadataManager.getLoopMetadata(parent)) {
+        /// Use per-memref dependency check instead of loop-level flag
+        if (depAnalyzer.hasLoopCarriedDeps(parent, memref))
           return true;
       }
     }

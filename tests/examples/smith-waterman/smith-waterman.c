@@ -3,11 +3,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "arts/Utils/Testing/CartsTest.h"
+
 #define MATCH_SCORE 2
 #define MISMATCH_PENALTY -1
 #define GAP_PENALTY -2
 
 int main() {
+  CARTS_TIMER_START();
   const char seq1[] = "AGTACGCATGACCTGATCGTACGATCGATGCA";
   const char seq2[] = "TATGCGCTAGCTAGGCTATGCGATCGTAGCGA";
   int len1 = strlen(seq1);
@@ -81,10 +84,10 @@ int main() {
       }
     }
   }
-  if (ok)
-    printf("Result: CORRECT\n");
-  else
-    printf("Result: INCORRECT\n");
 
-  return 0;
+  if (ok) {
+    CARTS_TEST_PASS();
+  } else {
+    CARTS_TEST_FAIL("smith-waterman result mismatch");
+  }
 }

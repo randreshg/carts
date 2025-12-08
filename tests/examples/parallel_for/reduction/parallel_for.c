@@ -2,7 +2,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "arts/Utils/Testing/CartsTest.h"
+
+#define DEBUG 0
+
 int main(int argc, char **argv) {
+  CARTS_TIMER_START();
   if (argc < 2) {
     printf("Usage: %s <size>\n", argv[0]);
     return 1;
@@ -18,10 +23,13 @@ int main(int argc, char **argv) {
     a[i] = i;
     b[i] = (i * 2) + randomNumber;
   }
+
+#if DEBUG
   /// Print initial values
   printf("Initial values:\n");
   for (int i = 0; i < N; i++)
     printf("a[%d] = %d, b[%d] = %d\n", i, a[i], i, b[i]);
+#endif
 
   /// Parallel region with worksharing loop - vector addition
   printf("Parallel region:\n");
@@ -41,12 +49,16 @@ int main(int argc, char **argv) {
   }
 
   printf("Sum of results: %d\n", sum);
-  printf("Expected sum: %d\n",
-         N * (N - 1) / 2 + N * (N - 1) + N * randomNumber);
+  int expectedSum = N * (N - 1) / 2 + N * (N - 1) + N * randomNumber;
+  printf("Expected sum: %d\n", expectedSum);
 
   free(a);
   free(b);
   free(c);
 
-  return 0;
+  if (sum == expectedSum) {
+    CARTS_TEST_PASS();
+  } else {
+    CARTS_TEST_FAIL("sum mismatch");
+  }
 }

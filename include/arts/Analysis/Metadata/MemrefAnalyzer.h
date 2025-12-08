@@ -25,6 +25,7 @@ namespace mlir {
 namespace arts {
 
 class ArtsMetadataManager;
+class DependenceAnalyzer;
 
 ///===----------------------------------------------------------------------===///
 // ReuseAnalyzer - Stack distance algorithm for reuse distance computation
@@ -54,9 +55,10 @@ private:
 class MemrefAnalyzer {
 public:
   MemrefAnalyzer(AccessAnalyzer &accessAnalyzer, ReuseAnalyzer &reuseAnalyzer,
-                 ArtsMetadataManager &metadataManager)
+                 ArtsMetadataManager &metadataManager,
+                 DependenceAnalyzer &depAnalyzer)
       : accessAnalyzer(accessAnalyzer), reuseAnalyzer(reuseAnalyzer),
-        metadataManager(metadataManager) {}
+        metadataManager(metadataManager), depAnalyzer(depAnalyzer) {}
 
   void analyzeAllocation(Operation *allocOp, MemrefMetadata *metadata,
                          Operation *scopeOp);
@@ -65,6 +67,7 @@ private:
   AccessAnalyzer &accessAnalyzer;
   ReuseAnalyzer &reuseAnalyzer;
   ArtsMetadataManager &metadataManager;
+  DependenceAnalyzer &depAnalyzer;
 
   std::pair<uint64_t, uint64_t> countAccesses(Value memref, Operation *scopeOp);
   std::pair<uint64_t, uint64_t> countAccessTypes(Value memref,

@@ -86,7 +86,7 @@ struct CollectMetadataPass : public CollectMetadataBase<CollectMetadataPass> {
         std::make_unique<DependenceAnalyzer>(context, *accessAnalyzer);
     auto reuseAnalyzer = std::make_unique<ReuseAnalyzer>(*accessAnalyzer);
     auto memrefAnalyzer = std::make_unique<MemrefAnalyzer>(
-        *accessAnalyzer, *reuseAnalyzer, *manager);
+        *accessAnalyzer, *reuseAnalyzer, *manager, *depAnalyzer);
     auto loopAnalyzer =
         std::make_unique<LoopAnalyzer>(context, *accessAnalyzer, *depAnalyzer);
 

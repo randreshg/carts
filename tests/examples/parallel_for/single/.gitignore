@@ -1,5 +1,0 @@
-parallel_single_for_*
-counters/
-DbGraph_*.dot
-*.mlir
-*.ll

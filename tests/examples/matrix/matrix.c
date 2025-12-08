@@ -2,7 +2,10 @@
 #include <stdlib.h>
 #include <time.h>
 
+#include "arts/Utils/Testing/CartsTest.h"
+
 int main(int argc, char *argv[]) {
+  CARTS_TIMER_START();
   if (argc < 2) {
     printf("Usage: %s N\n", argv[0]);
     exit(EXIT_FAILURE);
@@ -86,11 +89,10 @@ int main(int argc, char *argv[]) {
       }
     }
   }
-  if (correct) {
-    printf("\nVerification: PASSED\n");
-  } else {
-    printf("\nVerification: FAILED\n");
-  }
 
-  return 0;
+  if (correct) {
+    CARTS_TEST_PASS();
+  } else {
+    CARTS_TEST_FAIL("matrix verification failed");
+  }
 }

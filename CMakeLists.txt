@@ -58,6 +58,7 @@ include(AddLLVM)
 include(AddMLIR)
 include(AddClang)
 include(HandleLLVMOptions)
+include(GNUInstallDirs)
 
 # Clang and MLIR
 include_directories(${LLVM_INCLUDE_DIRS})
