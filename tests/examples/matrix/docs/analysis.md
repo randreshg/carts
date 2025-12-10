@@ -13,11 +13,11 @@ Walk through these steps and fix any problem that you find in the way
    ```bash
    carts build
    carts cgeist matrix.c -O0 --print-debug-info -S --raise-scf-to-affine &> matrix_seq.mlir
-   carts run matrix_seq.mlir --collect-metadata &> matrix_seq_metadata.mlir
+   carts run matrix_seq.mlir --collect-metadata &> matrix_arts_metadata.mlir
    carts cgeist matrix.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine &> matrix.mlir
    ```
 
-   `matrix_seq.mlir` shows the sequential shape, `matrix_seq_metadata.mlir` keeps the collected metadata, and `matrix.mlir` is the OpenMP input for the pipeline.
+   `matrix_seq.mlir` shows the sequential shape, `matrix_arts_metadata.mlir` keeps the collected metadata, and `matrix.mlir` is the OpenMP input for the pipeline.
 
 3. **Canonicalize memrefs (array-of-pointers → shaped memrefs):**
 

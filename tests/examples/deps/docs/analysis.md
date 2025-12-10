@@ -13,7 +13,7 @@ Walk through these steps and fix any problem that you find in the way.
    ```bash
    carts build
    carts cgeist deps.c -O0 --print-debug-info -S --raise-scf-to-affine &> deps_seq.mlir
-   carts run deps_seq.mlir --collect-metadata &> deps_seq_metadata.mlir
+   carts run deps_seq.mlir --collect-metadata &> deps_arts_metadata.mlir
    carts cgeist deps.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine &> deps.mlir
    ```
 

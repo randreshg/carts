@@ -86,6 +86,24 @@ def ConvertOpenMPToArts : Pass<"convert-openmp-to-arts", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createConvertOpenMPtoArtsPass()";
 }
 
+def DeadCodeElimination : Pass<"arts-dce", "mlir::ModuleOp"> {
+  let summary = "Remove dead loads, stores, allocas, and symbols";
+  let description = [{
+    Performs dead code elimination for memref operations:
+    - Removes loads whose results are unused
+    - Removes stores to allocas that are never loaded
+    - Removes allocas with no remaining uses
+    - Runs SymbolDCE for dead functions and globals
+
+    This is particularly useful after openmp-to-arts conversion where OMP
+    dependency proxy allocas become unused.
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect"
+  ];
+  let constructor = "mlir::arts::createDeadCodeEliminationPass()";
+}
+
 def Db : Pass<"db", "mlir::ModuleOp"> {
   let summary = "Analyze and optimize the datablocks in the program";
   let dependentDialects = [

@@ -65,7 +65,6 @@ constexpr StringLiteral AllocationId = "allocation_id";
 constexpr StringLiteral TotalAccesses = "total_accesses";
 constexpr StringLiteral ReadCount = "read_count";
 constexpr StringLiteral WriteCount = "write_count";
-constexpr StringLiteral ReadWriteRatio = "read_write_ratio";
 constexpr StringLiteral AllAccessesAffine = "all_accesses_affine";
 constexpr StringLiteral HasAffineAccesses = "has_affine_accesses";
 constexpr StringLiteral HasNonAffineAccesses = "has_non_affine_accesses";

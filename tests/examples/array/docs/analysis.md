@@ -18,7 +18,7 @@ Walk through these steps and fix any problem that you find in the way
 
    ```bash
       carts cgeist array.c -O0 --print-debug-info -S --raise-scf-to-affine &> array_seq.mlir
-      carts run array_seq.mlir --collect-metadata &> array_seq_metadata.txt
+      carts run array_seq.mlir --collect-metadata &> array_arts_metadata.mlir
       carts cgeist array.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine &> array.mlir
    ```
 
@@ -152,5 +152,83 @@ Walk through these steps and fix any problem that you find in the way
 4. **Finally lets carts execute and check**
 ```bash
    carts execute array.c
-   ./array 8
+   ./array_arts 8
 ```
+
+---
+
+## Conditional Stencil Pattern (No Bounds Checking Needed)
+
+The array.c example demonstrates a **conditional stencil** pattern that does NOT require bounds checking.
+
+### 1. The Pattern in C Code
+
+```c
+if (i == 0) {
+  #pragma omp task depend(in : A[i]) depend(inout : B[i])
+  { B[i] = A[i] + 5; }
+} else {
+  #pragma omp task depend(in : A[i]) depend(in : B[i - 1]) depend(inout : B[i])
+  { B[i] = A[i] + B[i - 1] + 5; }
+}
+```
+
+**Key observation:** The `B[i-1]` dependency is **inside the else block** - it's only registered when `i > 0`.
+
+### 2. How CARTS Handles This
+
+Looking at the MLIR above (lines 72-124), notice:
+
+```mlir
+%32 = arith.cmpi eq, %31, %c0_i32 : i32      /// Check: is i == 0?
+scf.if %32 {
+   /// When i == 0: Only A[i] and B[i] dependencies - NO B[i-1]
+   %guid_4, %ptr_5 = arts.db_acquire[<in>] ... indices[%arg2] ...
+   %guid_6, %ptr_7 = arts.db_acquire[<inout>] ... indices[%arg2] ...
+   arts.edt <task> ... (%ptr_5, %ptr_7) ...
+} else {
+   /// When i > 0: A[i], B[i-1], and B[i] dependencies
+   %33 = arith.addi %31, %c-1_i32 : i32       /// Compute i-1
+   %34 = arith.index_cast %33 : i32 to index
+   %guid_4, %ptr_5 = arts.db_acquire[<in>] ... indices[%arg2] ...
+   %guid_6, %ptr_7 = arts.db_acquire[<in>] ... indices[%34] ...   /// B[i-1] ONLY HERE
+   %guid_8, %ptr_9 = arts.db_acquire[<inout>] ... indices[%arg2] ...
+   arts.edt <task> ... (%ptr_5, %ptr_7, %ptr_9) ...
+}
+```
+
+The `B[i-1]` access (indices `%34`) is computed and acquired ONLY in the else branch where `i > 0` is guaranteed.
+
+### 3. Comparison with jacobi-task-dep (Unconditional Stencil)
+
+| Aspect | array.c | jacobi-task-dep |
+|--------|---------|-----------------|
+| **Pattern** | `B[i-1]` in else block | `u[i-1]` unconditional |
+| **Guard** | `if (i == 0)` in C code | None in dependency |
+| **Bounds Check** | NOT needed | NEEDED |
+| **Why** | Control flow guards access | All iterations declare stencil |
+
+In jacobi-task-dep:
+```c
+#pragma omp task depend(in : u[i-1], u[i], u[i+1]) depend(out : unew[i])
+// Dependencies declared for ALL i values, including boundaries!
+```
+
+When `i=0`, this declares `u[-1]` which is out of bounds. CARTS must:
+1. Generate `bounds_valid` condition: `0 <= (i-1) < size`
+2. Use `artsSignalEdtNull` when bounds are invalid
+
+### 4. Why No `bounds_valid` for array.c
+
+CARTS correctly identifies that array.c does NOT need bounds checking because:
+
+1. **Control flow guards the access**: The `scf.if` condition ensures `B[i-1]` is only accessed when `i > 0`
+2. **The dependency is conditional**: Unlike jacobi where `u[i-1]` is declared for ALL iterations
+3. **No runtime check required**: The C programmer already handled the boundary case explicitly
+
+### 5. Summary: Conditional vs Unconditional Stencil
+
+| Pattern Type | Example | Bounds Check | CARTS Handling |
+|--------------|---------|--------------|----------------|
+| **Conditional** | `if (i > 0) depend(B[i-1])` | NOT needed | Control flow preserved |
+| **Unconditional** | `depend(u[i-1])` for all i | NEEDED | `bounds_valid` + `artsSignalEdtNull` |
