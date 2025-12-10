@@ -6,6 +6,7 @@
 #include "arts/Transforms/DbTransforms.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/OpRemovalManager.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "llvm/ADT/STLExtras.h"
@@ -52,6 +53,28 @@ static bool isVisibleIn(Value val, Block *block) {
   return false;
 }
 
+/// Check if 'value' is provably derived from 'base' via addition.
+/// Returns delta if value = base + delta, nullptr otherwise.
+///
+/// Recognized patterns:
+///   1. value == base -> delta = 0
+///   2. value = arith.addi(base, delta) -> delta
+///   3. value = arith.addi(delta, base) -> delta
+static Value getOffsetDelta(Value value, Value base, OpBuilder &builder,
+                            Location loc) {
+  if (value == base)
+    return builder.create<arith::ConstantIndexOp>(loc, 0);
+
+  if (auto addOp = value.getDefiningOp<arith::AddIOp>()) {
+    if (addOp.getLhs() == base)
+      return addOp.getRhs();
+    if (addOp.getRhs() == base)
+      return addOp.getLhs();
+  }
+  /// Cannot prove derivation - do NOT subtract
+  return nullptr;
+}
+
 /// Get indices from operation.
 static ValueRange getIndices(Operation *op) {
   if (auto load = dyn_cast<memref::LoadOp>(op))
@@ -73,8 +96,6 @@ static Value getMemref(Operation *op) {
     return ref.getSource();
   return nullptr;
 }
-
-DbTransforms::DbTransforms(MLIRContext *context) : context_(context) {}
 
 /// Check if allocation is coarse-grained (all sizes == 1).
 bool DbTransforms::isCoarseGrained(DbAllocOp alloc) {
@@ -117,81 +138,37 @@ bool DbTransforms::createDbRefPattern(
   return true;
 }
 
-/// Split indices at splitPoint: (outer[0:split], inner[split:end])
-std::pair<SmallVector<Value>, SmallVector<Value>>
-DbTransforms::splitIndices(ValueRange indices, unsigned splitPoint,
-                           OpBuilder &builder, Location loc) {
-  SmallVector<Value> outer, inner;
-  for (auto indexed : llvm::enumerate(indices)) {
-    if (indexed.index() < splitPoint)
-      outer.push_back(indexed.value());
-    else
-      inner.push_back(indexed.value());
-  }
-
-  auto addZeroIfEmpty = [&](SmallVector<Value> &vec) {
-    if (vec.empty())
-      vec.push_back(builder.create<arith::ConstantIndexOp>(loc, 0));
-  };
-
-  addZeroIfEmpty(outer);
-  addZeroIfEmpty(inner);
-  return {outer, inner};
-}
-
-/// Subtract offsets from indices element-wise.
-/// Same SSA value -> constant 0. Cross-scope values unchanged.
-SmallVector<Value> DbTransforms::applyOffsets(ArrayRef<Value> indices,
-                                              ArrayRef<Value> offsets,
-                                              OpBuilder &builder,
-                                              Location loc) {
-  SmallVector<Value> adjusted;
-  Block *insertBlock = builder.getInsertionBlock();
-
-  for (auto indexed : llvm::enumerate(indices)) {
-    Value idx = indexed.value();
-    if (indexed.index() < offsets.size()) {
-      Value offset = offsets[indexed.index()];
-      if (idx == offset)
-        idx = builder.create<arith::ConstantIndexOp>(loc, 0);
-      else if (isVisibleIn(idx, insertBlock) &&
-               isVisibleIn(offset, insertBlock))
-        idx = builder.create<arith::SubIOp>(loc, idx, offset);
-    }
-    adjusted.push_back(idx);
-  }
-
-  if (adjusted.empty())
-    adjusted.push_back(builder.create<arith::ConstantIndexOp>(loc, 0));
-  return adjusted;
-}
-
 /// Transform global indices to local coordinates using ViewCoordinateMap.
-/// Indexed dims -> 0, sliced dims -> global - offset.
+///
+/// Transformation rules:
+///   - Indexed dimensions [0, numIndexedDims): local = 0
+///   - Sliced dimensions [numIndexedDims, end):
+///     * If globalIdx == offset: local = 0
+///     * If globalIdx = offset + delta (provable): local = delta
+///     * Otherwise: local = globalIdx (conservative, no transformation)
+///
 SmallVector<Value>
 DbTransforms::localizeCoordinates(ArrayRef<Value> globalIndices,
                                   const ViewCoordinateMap &map,
                                   OpBuilder &builder, Location loc) {
   SmallVector<Value> localIndices;
-  Block *insertBlock = builder.getInsertionBlock();
 
   for (unsigned d = 0; d < globalIndices.size(); ++d) {
     Value globalIdx = globalIndices[d];
 
     if (d < map.numIndexedDims) {
+      /// Indexed dimension: local index is always 0
       localIndices.push_back(builder.create<arith::ConstantIndexOp>(loc, 0));
     } else {
       unsigned offsetIdx = d - map.numIndexedDims;
       if (offsetIdx < map.sliceOffsets.size()) {
         Value offset = map.sliceOffsets[offsetIdx];
-        if (globalIdx == offset) {
-          localIndices.push_back(
-              builder.create<arith::ConstantIndexOp>(loc, 0));
-        } else if (isVisibleIn(globalIdx, insertBlock) &&
-                   isVisibleIn(offset, insertBlock)) {
-          localIndices.push_back(
-              builder.create<arith::SubIOp>(loc, globalIdx, offset));
+        /// Use getOffsetDelta for safe coordinate transformation
+        /// Only subtract when globalIdx = offset + delta is provable
+        if (Value delta = getOffsetDelta(globalIdx, offset, builder, loc)) {
+          localIndices.push_back(delta);
         } else {
+          /// Cannot prove derivation - keep original index (conservative)
           localIndices.push_back(globalIdx);
         }
       } else {
@@ -218,8 +195,20 @@ bool DbTransforms::rewriteAccessWithDbPattern(
   OpBuilder::InsertionGuard IG(builder);
   builder.setInsertionPoint(op);
   Location loc = op->getLoc();
-  auto [outerIndices, innerIndices] =
-      splitIndices(getIndices(op), outerCount, builder, loc);
+
+  /// Split indices at outerCount: (outer[0:count], inner[count:end])
+  SmallVector<Value> outerIndices, innerIndices;
+  ValueRange indices = getIndices(op);
+  for (auto indexed : llvm::enumerate(indices)) {
+    if (indexed.index() < outerCount)
+      outerIndices.push_back(indexed.value());
+    else
+      innerIndices.push_back(indexed.value());
+  }
+  if (outerIndices.empty())
+    outerIndices.push_back(builder.create<arith::ConstantIndexOp>(loc, 0));
+  if (innerIndices.empty())
+    innerIndices.push_back(builder.create<arith::ConstantIndexOp>(loc, 0));
 
   return createDbRefPattern(op, dbPtr, elementType, outerIndices, innerIndices,
                             builder, opsToRemove);
@@ -280,20 +269,17 @@ DbAllocOp DbTransforms::promoteAllocation(DbAllocOp alloc, int promoteCount,
   auto newAlloc = builder.create<DbAllocOp>(
       loc, alloc.getMode(), alloc.getRoute(), alloc.getAllocType(),
       alloc.getDbMode(), alloc.getElementType(), address, sizes, elemSizes);
-
-  for (auto attr : alloc->getAttrs()) {
-    if (attr.getName().getValue() == "operandSegmentSizes")
-      continue;
-    newAlloc->setAttr(attr.getName(), attr.getValue());
-  }
+  transferAttributes(alloc, newAlloc);
 
   return newAlloc;
 }
 
 /// Rewrite all uses after allocation promotion.
 /// Collects load/store/db_ref users and rewrites them with new index mapping.
+/// Also updates all acquires to reference the full allocation extent.
 LogicalResult DbTransforms::rewriteAllUses(DbAllocOp oldAlloc,
-                                           DbAllocOp newAlloc) {
+                                           DbAllocOp newAlloc,
+                                           OpBuilder &builder) {
   if (!oldAlloc || !newAlloc)
     return failure();
 
@@ -301,8 +287,6 @@ LogicalResult DbTransforms::rewriteAllUses(DbAllocOp oldAlloc,
   bool newCoarse = isCoarseGrained(newAlloc);
   unsigned newOuterRank = newAlloc.getSizes().size();
   unsigned newInnerRank = newAlloc.getElementSizes().size();
-
-  OpBuilder builder(context_);
   llvm::SetVector<Operation *> opsToRemove, loadStoreUsers;
   SmallVector<DbAcquireOp> acquires;
   SmallPtrSet<Value, 8> visited;
@@ -343,15 +327,23 @@ LogicalResult DbTransforms::rewriteAllUses(DbAllocOp oldAlloc,
     };
 
     if (oldCoarse && !newCoarse) {
-      /// Coarse -> Fine: move inner indices to outer
+      /// Coarse -> Fine: move leading inner indices to outer, keep remaining
+      /// Example: sizes=[1],elemSizes=[N,M] -> sizes=[N],elemSizes=[M]
+      ///   oldInner=[%i,%j] -> newOuter=[%i], newInner=[%j]
       for (unsigned i = 0; i < newOuterRank; ++i) {
         if (i < oldInner.size())
           newOuter.push_back(oldInner[i]);
         else
           newOuter.push_back(zero());
       }
-      for (unsigned i = 0; i < newInnerRank; ++i)
-        newInner.push_back(zero());
+      /// Use remaining oldInner indices for newInner (those not moved to outer)
+      for (unsigned i = 0; i < newInnerRank; ++i) {
+        unsigned srcIdx = newOuterRank + i;
+        if (srcIdx < oldInner.size())
+          newInner.push_back(oldInner[srcIdx]);
+        else
+          newInner.push_back(zero());
+      }
     } else if (!oldCoarse && newCoarse) {
       /// Fine -> Coarse: move outer indices to inner
       for (unsigned i = 0; i < newOuterRank; ++i)
@@ -415,9 +407,38 @@ LogicalResult DbTransforms::rewriteAllUses(DbAllocOp oldAlloc,
       opsToRemove.insert(sourceRef.getOperation());
   }
 
+  /// Update acquires: source operands, result types, AND offsets/sizes
+  MemRefType newPtrType = newAlloc.getPtr().getType().cast<MemRefType>();
+  ValueRange allocSizes = newAlloc.getSizes();
+
   for (DbAcquireOp acquire : acquires) {
     acquire.getSourceGuidMutable().assign(newAlloc.getGuid());
     acquire.getSourcePtrMutable().assign(newAlloc.getPtr());
+
+    /// Update acquire's ptr result type to match new source
+    Type oldAcqPtrType = acquire.getPtr().getType();
+    if (oldAcqPtrType != newPtrType) {
+      acquire.getPtr().setType(newPtrType);
+
+      /// Also update EDT block argument type if this acquire feeds an EDT
+      auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(acquire);
+      if (blockArg && blockArg.getType() != newPtrType)
+        blockArg.setType(newPtrType);
+    }
+
+    /// Update acquire offsets and sizes to full allocation extent.
+    if (!allocSizes.empty()) {
+      OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPoint(acquire);
+      Value zero = builder.create<arith::ConstantIndexOp>(acquire.getLoc(), 0);
+      SmallVector<Value> fullOffsets(allocSizes.size(), zero);
+      SmallVector<Value> fullSizes(allocSizes.begin(), allocSizes.end());
+
+      acquire.getOffsetsMutable().assign(fullOffsets);
+      acquire.getSizesMutable().assign(fullSizes);
+      acquire.getOffsetHintsMutable().assign(fullOffsets);
+      acquire.getSizeHintsMutable().assign(fullSizes);
+    }
   }
 
   oldAlloc.getGuid().replaceAllUsesWith(newAlloc.getGuid());
@@ -425,10 +446,11 @@ LogicalResult DbTransforms::rewriteAllUses(DbAllocOp oldAlloc,
   if (oldAlloc.use_empty())
     opsToRemove.insert(oldAlloc.getOperation());
 
-  for (auto it = opsToRemove.rbegin(); it != opsToRemove.rend(); ++it) {
-    if ((*it)->use_empty())
-      (*it)->erase();
-  }
+  /// Remove the old allocation and all its users
+  OpRemovalManager removalMgr;
+  for (Operation *op : opsToRemove)
+    removalMgr.markForRemoval(op);
+  removalMgr.removeAllMarked();
 
   return success();
 }

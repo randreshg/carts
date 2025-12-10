@@ -546,8 +546,8 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     }
   }
 
-  /// Extract GUIDs and acquire modes from dependencies
-  SmallVector<Value> depGuids;
+  /// Extract GUIDs, acquire modes, and bounds validity from dependencies.
+  SmallVector<Value> depGuids, boundsValids;
   SmallVector<int32_t> acquireModes;
   SmallVector<bool> twinDiffHints;
   for (Value dep : deps) {
@@ -567,6 +567,16 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     Value depGuid =
         dbAcquireOp ? dbAcquireOp.getGuid() : depDbAcquireOp.getGuid();
     depGuids.push_back(depGuid);
+
+    /// Get bounds_valid if present
+    Value boundsValid =
+        dbAcquireOp
+            ? dbAcquireOp.getBoundsValid()
+            : (depDbAcquireOp ? depDbAcquireOp.getBoundsValid() : Value());
+    /// Create "true" constant for deps that don't need bounds checking
+    if (!boundsValid)
+      boundsValid = AC->create<arith::ConstantIntOp>(loc, 1, 1);
+    boundsValids.push_back(boundsValid);
 
     DbAllocOp allocForHint =
         dyn_cast_or_null<DbAllocOp>(arts::getUnderlyingDbAlloc(dep));
@@ -625,8 +635,8 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     twinDiffAttr =
         DenseBoolArrayAttr::get(AC->getBuilder().getContext(), twinDiffHints);
 
-  AC->create<RecordDepOp>(loc, edtGuid, depGuids, modeAttr, acquireAttr,
-                          twinDiffAttr);
+  AC->create<RecordDepOp>(loc, edtGuid, depGuids, boundsValids, modeAttr,
+                          acquireAttr, twinDiffAttr);
 
   return success();
 }
@@ -763,13 +773,14 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
                                  dbAcquire.getOffsets().end());
       SmallVector<Value> sizes(dbAcquire.getSizes().begin(),
                                dbAcquire.getSizes().end());
+      Value boundsValid = dbAcquire.getBoundsValid();
       indices = resolveParam(indices, dbAcquire.getLoc());
       offsets = resolveParam(offsets, dbAcquire.getLoc());
       sizes = resolveParam(sizes, dbAcquire.getLoc());
       auto depDbAcquire = AC->create<arts::DepDbAcquireOp>(
           dbAcquire.getLoc(), dbAcquire.getResult(0).getType(),
           dbAcquire.getResult(1).getType(), depv, baseOffset, indices, offsets,
-          sizes);
+          sizes, boundsValid);
       /// Replace the uses of the dbAcquire with the depDbAcquire
       dbAcquire.getResult(0).replaceAllUsesWith(depDbAcquire.getResult(0));
       dbAcquire.getResult(1).replaceAllUsesWith(depDbAcquire.getResult(1));

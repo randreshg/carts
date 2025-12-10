@@ -274,12 +274,6 @@ void MemrefAnalyzer::analyzeAllocation(Operation *allocOp,
   metadata->accessStats.readCount = reads;
   metadata->accessStats.writeCount = writes;
 
-  if (metadata->accessStats.totalAccesses &&
-      *metadata->accessStats.totalAccesses > 0) {
-    metadata->accessStats.readWriteRatio =
-        static_cast<double>(reads) / *metadata->accessStats.totalAccesses;
-  }
-
   auto [firstId, lastId] = computeLifetime(memref, scopeOp);
   metadata->firstUseId = firstId;
   metadata->lastUseId = lastId;

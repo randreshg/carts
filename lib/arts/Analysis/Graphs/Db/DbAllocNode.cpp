@@ -100,23 +100,78 @@ bool DbAllocNode::isParallelFriendly() const {
   return true;
 }
 
-bool DbAllocNode::shouldSliceAlloc() const {
-  bool canSlice = false;
-  if (accessedInParallelLoop && *accessedInParallelLoop) {
-    if (!hasLoopCarriedDeps || !*hasLoopCarriedDeps)
-      canSlice = true;
-  }
+bool DbAllocNode::canBePartitioned() {
+  ARTS_DEBUG("canBePartitioned for alloc " << hierId);
 
-  if (hasUniformAccess && *hasUniformAccess) {
-    if (dominantAccessPattern) {
-      auto pattern = *dominantAccessPattern;
-      if (pattern == AccessPatternType::Sequential ||
-          pattern == AccessPatternType::Strided)
-        canSlice = true;
+  auto skip = [&](StringRef reason) {
+    ARTS_DEBUG("  SKIP alloc " << hierId << ": " << reason);
+    return false;
+  };
+
+  /// Step 1: Allocation-level metadata checks
+  ARTS_DEBUG_REGION({
+    ARTS_DBGS() << "  accessedInParallelLoop="
+                << (accessedInParallelLoop
+                        ? (*accessedInParallelLoop ? "true" : "false")
+                        : "nullopt")
+                << "\n";
+    ARTS_DBGS() << "  hasLoopCarriedDeps="
+                << (hasLoopCarriedDeps
+                        ? (*hasLoopCarriedDeps ? "true" : "false")
+                        : "nullopt")
+                << "\n";
+    ARTS_DBGS() << "  hasUniformAccess="
+                << (hasUniformAccess ? (*hasUniformAccess ? "true" : "false")
+                                     : "nullopt")
+                << "\n";
+    ARTS_DBGS() << "  dominantAccessPattern="
+                << (dominantAccessPattern ? std::to_string(static_cast<int>(
+                                                *dominantAccessPattern))
+                                          : "nullopt")
+                << "\n";
+  });
+
+  bool allocLevelOk = false;
+  if (accessedInParallelLoop && *accessedInParallelLoop) {
+    if (!hasLoopCarriedDeps || !*hasLoopCarriedDeps) {
+      ARTS_DEBUG("  alloc-level OK (parallel loop, no loop-carried deps)");
+      allocLevelOk = true;
     }
   }
 
-  return canSlice;
+  if (!allocLevelOk && hasUniformAccess && *hasUniformAccess) {
+    if (dominantAccessPattern) {
+      auto pattern = *dominantAccessPattern;
+      if (pattern == AccessPatternType::Sequential ||
+          pattern == AccessPatternType::Strided) {
+        ARTS_DEBUG(
+            "  alloc-level OK (uniform access, sequential/strided pattern)");
+        allocLevelOk = true;
+      }
+    }
+  }
+
+  if (!allocLevelOk)
+    return skip("allocation metadata does not support partitioning");
+
+  /// Step 2: Recursively check ALL acquire children
+  /// If ANY acquire fails, the entire allocation cannot be partitioned
+  if (acquireNodes.empty()) {
+    ARTS_DEBUG("  No acquire nodes - trivially partitionable");
+    return true;
+  }
+
+  ARTS_DEBUG("  Checking " << acquireNodes.size() << " acquire children...");
+  for (const auto &acqNode : acquireNodes) {
+    if (!acqNode)
+      continue;
+    if (!acqNode->canBePartitioned()) {
+      return skip("acquire child failed canBePartitioned()");
+    }
+  }
+
+  ARTS_DEBUG("  PASS: alloc " << hierId << " can be partitioned");
+  return true;
 }
 
 bool DbAllocNode::isFineGrained() const {

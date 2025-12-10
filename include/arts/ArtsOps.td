@@ -178,7 +178,8 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     Variadic<Index>:$offsets,
     Variadic<Index>:$sizes,
     Variadic<Index>:$offset_hints,
-    Variadic<Index>:$size_hints
+    Variadic<Index>:$size_hints,
+    Optional<I1>:$bounds_valid
   );
   let results = (outs MemRefOf<[I64]>:$guid, AnyMemRef:$ptr);
   let assemblyFormat = [{
@@ -189,6 +190,7 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     ( `sizes` `[` $sizes^ `]` )?
     ( `offset_hints` `[` $offset_hints^ `]` )?
     ( `size_hints` `[` $size_hints^ `]` )?
+    ( `bounds_valid` `(` $bounds_valid^ `)` )?
     attr-dict `->` `(` type($guid) `,` type($ptr) `)`
   }];
   let hasVerifier = 1;
@@ -202,7 +204,8 @@ def DbAcquireOp : Arts_Op<"db_acquire",
                    CArg<"SmallVector<Value>", "{}">:$offsets,
                    CArg<"SmallVector<Value>", "{}">:$sizes,
                    CArg<"SmallVector<Value>", "{}">:$offset_hints,
-                   CArg<"SmallVector<Value>", "{}">:$size_hints)>,
+                   CArg<"SmallVector<Value>", "{}">:$size_hints,
+                   CArg<"Value", "{}">:$bounds_valid)>,
     OpBuilder<(ins "ArtsMode":$mode,
                    "Value":$source_guid,
                    "Value":$source_ptr,
@@ -211,7 +214,8 @@ def DbAcquireOp : Arts_Op<"db_acquire",
                    CArg<"SmallVector<Value>", "{}">:$offsets,
                    CArg<"SmallVector<Value>", "{}">:$sizes,
                    CArg<"SmallVector<Value>", "{}">:$offset_hints,
-                   CArg<"SmallVector<Value>", "{}">:$size_hints)>
+                   CArg<"SmallVector<Value>", "{}">:$size_hints,
+                   CArg<"Value", "{}">:$bounds_valid)>
   ];
   let extraClassDeclaration = [{
     /// Set the twin_diff attribute for this acquire operation.
@@ -737,7 +741,7 @@ def EdtParamUnpackOp : Arts_Op<"edt_param_unpack", [Pure]> {
   let assemblyFormat = "$memref `:` type($memref) attr-dict `:` `(` type($unpacked) `)`";
 }
 
-def RecordDepOp : Arts_Op<"rec_dep", [MemoryEffects<[MemWrite]>]> {
+def RecordDepOp : Arts_Op<"rec_dep", [MemoryEffects<[MemWrite]>, AttrSizedOperandSegments]> {
   let summary = "Record in-dependencies for EDT.";
   let description = [{
     Records all in-dependencies (datablocks) for the EDT in order.
@@ -754,16 +758,25 @@ def RecordDepOp : Arts_Op<"rec_dep", [MemoryEffects<[MemWrite]>]> {
     runtime should enable twin-diff reuse for that datablock. Lowering enables
     twin-diff by default for safety; an explicit `false` entry opts out when
     analysis proves the dependency accesses are disjoint.
+
+    The optional bounds_valids operand list contains i1 values corresponding to
+    each datablock. When present and false for a datablock, artsRecordDep is
+    skipped for that dependency (used for out-of-bounds stencil indices).
   }];
   let arguments = (ins
     I64:$edt_guid,
     Variadic<AnyType>:$datablocks,
+    Variadic<I1>:$bounds_valids,
     DefaultValuedAttr<DepAccessModeAttr, "::mlir::arts::DepAccessMode::direct">:$access_mode,
     OptionalAttr<DenseI32ArrayAttr>:$acquire_modes,
     OptionalAttr<DenseBoolArrayAttr>:$twin_diff
   );
   let hasVerifier = 1;
-  let assemblyFormat = "$edt_guid `(` $datablocks `:` type($datablocks) `)` attr-dict";
+  let assemblyFormat = [{
+    $edt_guid `(` $datablocks `:` type($datablocks) `)`
+    ( `bounds_valids` `(` $bounds_valids^ `)` )?
+    attr-dict
+  }];
 }
 
 def IncrementDepOp : Arts_Op<"inc_dep", [MemoryEffects<[MemWrite]>]> {
@@ -815,13 +828,18 @@ def DepDbAcquireOp : Arts_Op<"dep_db_acquire", [Pure, AttrSizedOperandSegments]>
     offset with optional subregion access (indices, offsets, sizes).
     Used within outlined EDT functions to access datablocks that were
     passed as dependencies, similar to DbAcquireOp but from dependency structures.
+
+    The optional bounds_valid operand indicates whether the indices are within
+    bounds of the source datablock. When present and false, the dependency
+    recording should be skipped (used for stencil boundary conditions).
   }];
   let arguments = (ins
     AnyType:$dep_struct,
     Index:$offset,
     Variadic<AnyType>:$indices,
     Variadic<Index>:$offsets,
-    Variadic<Index>:$sizes
+    Variadic<Index>:$sizes,
+    Optional<I1>:$bounds_valid
   );
   let results = (outs AnyType:$guid, AnyType:$ptr);
   let assemblyFormat = [{
@@ -830,6 +848,7 @@ def DepDbAcquireOp : Arts_Op<"dep_db_acquire", [Pure, AttrSizedOperandSegments]>
     ( `indices` `[` $indices^ `:` type($indices) `]` )?
     ( `offsets` `[` $offsets^ `]` )?
     ( `sizes` `[` $sizes^ `]` )?
+    ( `bounds_valid` `(` $bounds_valid^ `)` )?
     attr-dict `:` type($dep_struct) `->` type($guid) `,` type($ptr)
   }];
 }

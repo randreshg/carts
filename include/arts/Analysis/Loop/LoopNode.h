@@ -14,7 +14,9 @@
 #include "arts/Analysis/Graphs/Base/NodeBase.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "mlir/IR/Operation.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/raw_ostream.h"
+#include <optional>
 #include <string>
 
 namespace mlir {
@@ -49,10 +51,46 @@ public:
     return N->getKind() == NodeKind::Loop;
   }
 
+  //===--------------------------------------------------------------------===//
+  // Induction Variable Analysis
+  //===--------------------------------------------------------------------===//
+
+  /// Get the induction variable for this loop
+  Value getInductionVar() const;
+
+  /// Check if a value depends on this loop's induction variable.
+  /// Walks the def-use chain to find IV dependencies.
+  bool dependsOnInductionVar(Value v);
+
+  /// Analyzed index expression relative to induction variable.
+  /// Represents: index = iv * multiplier + offset
+  struct IVExpr {
+    bool dependsOnIV = false;
+    std::optional<int64_t> offset;     // e.g., -1 for i-1, +1 for i+1
+    std::optional<int64_t> multiplier; // e.g., 2 for 2*i
+    bool isAnalyzable() const { return dependsOnIV && offset.has_value(); }
+  };
+
+  /// Analyze an index expression to extract IV relationship.
+  /// Returns IVExpr with offset/multiplier if analyzable.
+  IVExpr analyzeIndexExpr(Value index);
+
+  /// Get constant lower bound if available
+  std::optional<int64_t> getLowerBoundConstant() const;
+
+  /// Get constant upper bound if available
+  std::optional<int64_t> getUpperBoundConstant() const;
+
+  /// Clear the IV dependency cache (call when IR changes)
+  void clearIVCache() { ivDependencyCache.clear(); }
+
 private:
   Operation *loopOp;
   std::string hierId;
   DenseSet<EdgeBase *> edges;
+
+  /// Cache for IV dependency analysis to avoid repeated traversals
+  DenseMap<Value, bool> ivDependencyCache;
 };
 
 } // namespace arts

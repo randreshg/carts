@@ -98,6 +98,16 @@ void replaceUses(DenseMap<Value, Value> &rewireMap);
 void replaceInRegion(Region &region, Value from, Value to);
 void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap,
                      bool clear = true);
+
+///===----------------------------------------------------------------------===///
+/// Attribute Transfer Utilities
+///===----------------------------------------------------------------------===///
+
+/// Transfer attributes from source to destination operation.
+/// Excludes auto-generated attributes (operandSegmentSizes, resultSegmentSizes)
+void transferAttributes(Operation *src, Operation *dst,
+                        ArrayRef<StringRef> excludes = {});
+
 } // namespace arts
 } // namespace mlir
 

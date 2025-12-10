@@ -21,6 +21,7 @@ examples=(
   array
   deps
   dotproduct
+  jacobi
   matrix
   matrixmul
   parallel

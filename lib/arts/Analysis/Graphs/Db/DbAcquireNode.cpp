@@ -17,6 +17,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <limits>
@@ -156,11 +157,12 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
   }
 
   /// Get the in/out mode based on the memory accesses
-  collectAccesses(useInEdt);
-  if (loads.size() > 0) {
+  bool hasLoadAccesses = hasLoads();
+  bool hasStoreAccesses = hasStores();
+  if (hasLoadAccesses && !hasStoreAccesses) {
     inCount = 1;
     outCount = 0;
-  } else if (stores.size() > 0) {
+  } else if (hasStoreAccesses && !hasLoadAccesses) {
     inCount = 0;
     outCount = 1;
   } else {
@@ -188,12 +190,27 @@ void DbAcquireNode::forEachChildNode(
     fn(n.get());
 }
 
-bool DbAcquireNode::isEligibleForSlicing() {
+/// canBePartitioned - Check if this acquire can be partitioned.
+///
+/// This is called by DbAllocNode::canBePartitioned() for hierarchical
+/// validation. The check includes:
+/// 1. Must be used by a task EDT (not broadcast/reduce)
+/// 2. Must have memory accesses (loads/stores)
+/// 3. Parent allocation must be parallel-friendly
+/// 4. EDT must contain parallel loop metadata
+/// 5. Access pattern must be compatible with partition offset:
+///    - First dynamic index of [DbRefOp indices + load/store indices]
+///      must be derived from the partition offset
+/// 6. Recursively validates ALL nested acquire children
+///
+/// Returns true only if this acquire AND all its nested children pass.
+bool DbAcquireNode::canBePartitioned() {
   auto skip = [&](StringRef reason) {
     ARTS_DEBUG("Skipping acquire " << dbAcquireOp << ": " << reason);
     return false;
   };
 
+  /// Step 1: Basic validation
   if (!dbAcquireOp)
     return skip("invalid acquire operation");
 
@@ -201,7 +218,7 @@ bool DbAcquireNode::isEligibleForSlicing() {
   if (!edt || edt.getType() != EdtType::task)
     return skip("not a task EDT");
 
-  if (loads.empty() && stores.empty())
+  if (!hasMemoryAccesses())
     return skip("no memory accesses");
 
   DbAllocNode *allocNode = getRootAlloc();
@@ -214,6 +231,7 @@ bool DbAcquireNode::isEligibleForSlicing() {
   if (!allocNode->isParallelFriendly())
     return skip("memref metadata is not marked as parallel-friendly");
 
+  /// Step 2: EDT and loop metadata validation
   ArtsAnalysisManager &AM = analysis->getAnalysisManager();
   EdtAnalysis &edtAnalysis = AM.getEdtAnalysis();
 
@@ -229,6 +247,7 @@ bool DbAcquireNode::isEligibleForSlicing() {
   if (!edtNode->hasParallelLoopMetadata())
     return skip("worker EDT does not contain parallel loop metadata");
 
+  /// Step 3: Partition offset/size extraction and validation
   DbAcquireOp mutableAcquire = DbAcquireOp(dbAcquireOp.getOperation());
 
   /// Prefer explicit offset/size hints if they exist.
@@ -258,6 +277,248 @@ bool DbAcquireNode::isEligibleForSlicing() {
     partitionSize = mutableAcquire.getSizes().front();
   }
 
+  /// Validate access pattern compatibility with partition offset.
+  /// An acquire is only eligible if its memory access first index
+  /// is derived from the partition offset (for chunked parallel access).
+  if (partitionOffset) {
+    if (!canPartitionWithOffset(partitionOffset))
+      return skip("first index of memory access not derived from partition "
+                  "offset");
+  }
+
+  /// Step 4: Recursively check ALL nested acquire children
+  /// If ANY child fails, this acquire cannot be partitioned
+  if (!childAcquires.empty()) {
+    ARTS_DEBUG("  Checking " << childAcquires.size()
+                             << " nested acquire children...");
+    for (const auto &childAcq : childAcquires) {
+      if (!childAcq)
+        continue;
+      if (!childAcq->canBePartitioned()) {
+        return skip("nested acquire child failed canBePartitioned()");
+      }
+    }
+  }
+
+  ARTS_DEBUG("  PASS: acquire " << dbAcquireOp << " can be partitioned");
+  return true;
+}
+
+/// Check if a value is probably derived from base via arithmetic operations.
+/// Recursively walks through add/mul/sub operations to find if base is
+/// transitively reachable. This handles complex index computations like:
+///   globalIdx = lowerBound + (chunkOffset + localIter) * step
+/// where we want to check if globalIdx is derived from chunkOffset.
+static bool isDerivedFrom(Value value, Value base, int depth = 0) {
+  /// Prevent infinite recursion
+  if (depth > 10)
+    return false;
+
+  if (value == base)
+    return true;
+
+  /// Walk through arithmetic operations recursively
+  if (auto addOp = value.getDefiningOp<arith::AddIOp>()) {
+    if (isDerivedFrom(addOp.getLhs(), base, depth + 1) ||
+        isDerivedFrom(addOp.getRhs(), base, depth + 1))
+      return true;
+  }
+  if (auto mulOp = value.getDefiningOp<arith::MulIOp>()) {
+    if (isDerivedFrom(mulOp.getLhs(), base, depth + 1) ||
+        isDerivedFrom(mulOp.getRhs(), base, depth + 1))
+      return true;
+  }
+  if (auto subOp = value.getDefiningOp<arith::SubIOp>()) {
+    if (isDerivedFrom(subOp.getLhs(), base, depth + 1) ||
+        isDerivedFrom(subOp.getRhs(), base, depth + 1))
+      return true;
+  }
+
+  return false;
+}
+
+void DbAcquireNode::collectAccessOperations(
+    DenseMap<DbRefOp, SetVector<Operation *>> &dbRefToMemOps) {
+
+  if (!edtUser || !useInEdt)
+    return;
+
+  /// Start from the block argument inside the EDT (not the acquire result)
+  /// The acquire's ptr result becomes a block argument when passed to the EDT
+
+  /// Worklist-based traversal through the use chain
+  SmallVector<Value, 16> worklist;
+  SetVector<Value> visited;
+  worklist.push_back(useInEdt);
+
+  while (!worklist.empty()) {
+    Value current = worklist.pop_back_val();
+    if (!visited.insert(current))
+      continue;
+
+    for (Operation *user : current.getUsers()) {
+      /// Only consider operations inside the EDT
+      if (!edtUser.getBody().isAncestor(user->getParentRegion()))
+        continue;
+
+      if (auto dbRef = dyn_cast<DbRefOp>(user)) {
+        /// Initialize entry for this DbRefOp
+        dbRefToMemOps.try_emplace(dbRef);
+
+        /// Continue walking through the result
+        Value refResult = dbRef.getResult();
+        worklist.push_back(refResult);
+
+        /// Collect memory ops that use this DbRefOp's result
+        for (Operation *memUser : refResult.getUsers()) {
+          if (!edtUser.getBody().isAncestor(memUser->getParentRegion()))
+            continue;
+          if (isa<memref::LoadOp, memref::StoreOp>(memUser)) {
+            dbRefToMemOps[dbRef].insert(memUser);
+          }
+        }
+      }
+    }
+  }
+}
+
+///===----------------------------------------------------------------------===///
+// Helper methods for querying memory access counts
+///===----------------------------------------------------------------------===///
+
+bool DbAcquireNode::hasLoads() {
+  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+  collectAccessOperations(dbRefToMemOps);
+  for (auto &[dbRef, memOps] : dbRefToMemOps) {
+    for (Operation *op : memOps) {
+      if (isa<memref::LoadOp>(op))
+        return true;
+    }
+  }
+  return false;
+}
+
+bool DbAcquireNode::hasStores() {
+  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+  collectAccessOperations(dbRefToMemOps);
+  for (auto &[dbRef, memOps] : dbRefToMemOps) {
+    for (Operation *op : memOps) {
+      if (isa<memref::StoreOp>(op))
+        return true;
+    }
+  }
+  return false;
+}
+
+bool DbAcquireNode::hasMemoryAccesses() {
+  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+  collectAccessOperations(dbRefToMemOps);
+  for (auto &[dbRef, memOps] : dbRefToMemOps) {
+    if (!memOps.empty())
+      return true;
+  }
+  return false;
+}
+
+size_t DbAcquireNode::countLoads() {
+  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+  collectAccessOperations(dbRefToMemOps);
+  size_t count = 0;
+  for (auto &[dbRef, memOps] : dbRefToMemOps) {
+    for (Operation *op : memOps) {
+      if (isa<memref::LoadOp>(op))
+        ++count;
+    }
+  }
+  return count;
+}
+
+size_t DbAcquireNode::countStores() {
+  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+  collectAccessOperations(dbRefToMemOps);
+  size_t count = 0;
+  for (auto &[dbRef, memOps] : dbRefToMemOps) {
+    for (Operation *op : memOps) {
+      if (isa<memref::StoreOp>(op))
+        ++count;
+    }
+  }
+  return count;
+}
+
+bool DbAcquireNode::canPartitionWithOffset(Value offset) {
+  ARTS_DEBUG("canPartitionWithOffset: checking offset " << offset);
+  if (!offset) {
+    ARTS_DEBUG("  -> FAIL: offset is null");
+    return false;
+  }
+
+  /// Collect accesses: DbRefOp -> [memOps...]
+  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+  collectAccessOperations(dbRefToMemOps);
+
+  ARTS_DEBUG("  Found " << dbRefToMemOps.size() << " DbRefOps");
+
+  /// If no accesses, allow partitioning (vacuously true)
+  if (dbRefToMemOps.empty()) {
+    ARTS_DEBUG("  -> PASS: no accesses to check (vacuously true)");
+    return true;
+  }
+
+  /// Validate each DbRefOp and its children
+  for (auto &[dbRef, memOps] : dbRefToMemOps) {
+    /// Get DbRefOp indices (structural - outer dimensions)
+    ValueRange dbRefIndices = dbRef.getIndices();
+
+    ARTS_DEBUG("  DbRefOp with " << memOps.size() << " memOps");
+
+    for (Operation *memOp : memOps) {
+      /// Get memory op indices (data - inner dimensions)
+      ValueRange memIndices;
+      if (auto load = dyn_cast<memref::LoadOp>(memOp))
+        memIndices = load.getIndices();
+      else if (auto store = dyn_cast<memref::StoreOp>(memOp))
+        memIndices = store.getIndices();
+      else
+        continue;
+
+      /// Build full index chain: [DbRefOp indices...] + [memOp indices...]
+      SmallVector<Value> fullChain;
+      fullChain.append(dbRefIndices.begin(), dbRefIndices.end());
+      fullChain.append(memIndices.begin(), memIndices.end());
+
+      if (fullChain.empty())
+        continue;
+
+      /// Find first DYNAMIC (non-constant) index
+      Value firstDynIdx;
+      for (Value idx : fullChain) {
+        int64_t constVal;
+        if (!arts::getConstantIndex(idx, constVal)) {
+          firstDynIdx = idx;
+          break;
+        }
+      }
+
+      if (!firstDynIdx) {
+        /// All indices constant - OK
+        ARTS_DEBUG("    " << *memOp << " -> all constant, OK");
+        continue;
+      }
+
+      bool derived = isDerivedFrom(firstDynIdx, offset);
+      ARTS_DEBUG("    " << *memOp);
+      ARTS_DEBUG("      firstDynamic: " << firstDynIdx);
+      ARTS_DEBUG("      isDerivedFrom: " << (derived ? "true" : "false"));
+
+      if (!derived) {
+        ARTS_DEBUG("  -> FAIL: first dynamic index not derived from offset");
+        return false;
+      }
+    }
+  }
+
+  ARTS_DEBUG("  -> PASS: all accesses validated");
   return true;
 }
 
@@ -267,12 +528,21 @@ LogicalResult DbAcquireNode::computeChunkInfo(Value &chunkOffset,
   if (!edt)
     return failure();
 
+  /// Lets use the hints if they are set
   if (partitionOffset && partitionSize) {
+    /// Validate that the array accesses use indices derived from the partition
+    /// offset
+    if (!canPartitionWithOffset(partitionOffset)) {
+      ARTS_DEBUG("Partition hints set but array access not derivable from "
+                 "offset - skipping partition");
+      return failure();
+    }
     chunkOffset = partitionOffset;
     chunkSize = partitionSize;
     return success();
   }
 
+  /// Otherwise, we need to compute the chunk info from the EDT
   scf::ForOp chunkLoop;
   scf::WhileOp chunkWhile;
   edt.walk([&](scf::ForOp forOp) {
@@ -405,29 +675,25 @@ SmallVector<Value, 4> DbAcquireNode::computeInvariantIndices() {
   SmallVector<Value, 4> result;
   const size_t rank = dbAcquireOp.getSizes().size();
 
-  SmallVector<Operation *> memoryAccesses;
-  getMemoryAccesses(memoryAccesses, true, true);
-  ARTS_DEBUG("Found " << memoryAccesses.size() << " memory accesses");
+  /// Collect accesses using the new API
+  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+  collectAccessOperations(dbRefToMemOps);
+
+  ARTS_DEBUG("Found " << dbRefToMemOps.size() << " DbRefOps");
 
   SmallVector<Value, 4> candidate(rank, Value());
   SmallVector<bool, 4> invalid(rank, false);
 
   auto &edtRegion = edtUser.getBody();
-  for (Operation *acc : memoryAccesses) {
-    ValueRange idxs;
-    if (auto ld = dyn_cast<memref::LoadOp>(acc))
-      idxs = ld.getIndices();
-    else if (auto dbLd = dyn_cast<DbRefOp>(acc))
-      idxs = dbLd.getIndices();
-    else if (auto st = dyn_cast<memref::StoreOp>(acc))
-      idxs = st.getIndices();
-    else
+
+  /// Check DbRefOp indices for invariance (block selection level)
+  for (auto &[dbRef, memOps] : dbRefToMemOps) {
+    if (!edtRegion.isAncestor(dbRef->getParentRegion()))
       continue;
 
-    if (!edtRegion.isAncestor(acc->getParentRegion()))
-      continue;
-
+    ValueRange idxs = dbRef.getIndices();
     auto minRank = std::min<size_t>(rank, idxs.size());
+
     for (size_t d = 0; d < minRank; ++d) {
       if (invalid[d])
         continue;
@@ -439,6 +705,7 @@ SmallVector<Value, 4> DbAcquireNode::computeInvariantIndices() {
     }
   }
 
+  /// Find invariant prefix
   for (size_t d = 0; d < rank; ++d) {
     if (!candidate[d] || invalid[d])
       break;
@@ -549,54 +816,4 @@ bool DbAcquireNode::hasDisjointPartitionWith(const DbAcquireNode *other) const {
   }
 
   return false;
-}
-
-/// Collect all memory accesses (loads/stores) that transitively use a value.
-void DbAcquireNode::collectAccesses(Value db) {
-  SmallVector<Value, 8> worklist{db};
-  DenseSet<Value> visited;
-  visited.reserve(16);
-
-  while (!worklist.empty()) {
-    Value v = worklist.pop_back_val();
-    if (!visited.insert(v).second)
-      continue;
-
-    for (Operation *user : v.getUsers()) {
-      /// Follow through casts
-      if (auto castOp = dyn_cast<memref::CastOp>(user)) {
-        worklist.push_back(castOp.getResult());
-        continue;
-      }
-
-      /// Track memref and LLVM stores
-      if (isa<memref::StoreOp, LLVM::StoreOp>(user)) {
-        stores.push_back(user);
-        continue;
-      }
-
-      /// Track memref loads
-      if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
-        loads.push_back(user);
-        Type resultTy = loadOp.getResult().getType();
-        if (isa<MemRefType>(resultTy))
-          worklist.push_back(loadOp.getResult());
-        continue;
-      }
-
-      if (auto dbRefOp = dyn_cast<DbRefOp>(user)) {
-        references.push_back(user);
-        Type resultTy = dbRefOp.getResult().getType();
-        if (isa<MemRefType>(resultTy))
-          worklist.push_back(dbRefOp.getResult());
-        continue;
-      }
-
-      /// Track LLVM loads
-      if (auto loadOp = dyn_cast<LLVM::LoadOp>(user)) {
-        loads.push_back(user);
-        continue;
-      }
-    }
-  }
 }

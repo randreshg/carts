@@ -15,8 +15,6 @@ void AccessStats::importFromJson(const llvm::json::Object &json) {
     writeCount = *val;
   if (auto val = json.getInteger(AttrNames::MemrefMetadata::TotalAccesses))
     totalAccesses = *val;
-  if (auto val = json.getNumber(AttrNames::MemrefMetadata::ReadWriteRatio))
-    readWriteRatio = *val;
 }
 
 void AccessStats::exportToJson(llvm::json::Object &json) const {
@@ -26,6 +24,4 @@ void AccessStats::exportToJson(llvm::json::Object &json) const {
     json[AttrNames::MemrefMetadata::WriteCount] = *writeCount;
   if (totalAccesses)
     json[AttrNames::MemrefMetadata::TotalAccesses] = *totalAccesses;
-  if (readWriteRatio)
-    json[AttrNames::MemrefMetadata::ReadWriteRatio] = *readWriteRatio;
 }

@@ -29,6 +29,7 @@ external/*/cmake_install.cmake
 
 # CARTS generated executables
 *_arts
+*_arts_metadata
 
 # CARTS generated metadata/logs
 *.json

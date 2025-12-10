@@ -767,7 +767,8 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
         }
         auto acquireOp = builder.create<DbAcquireOp>(
             edt.getLoc(), dep.mode, acqGuid, acqPtr, acquireIndices,
-            acquireOffsets, acquireSizes);
+            acquireOffsets, acquireSizes, /*offsetHints=*/SmallVector<Value>{},
+            /*sizeHints=*/SmallVector<Value>{}, /*boundsValid=*/Value());
 
         /// Twin-diff decision for fine-grained acquires:
         /// When DbControlOps provide indexed access patterns (from OpenMP
@@ -808,8 +809,7 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       ARTS_DEBUG(" - Using coarse-grained acquire");
 
       /// For coarse-grained acquires, all acquires for the same DbAllocOp have
-      /// identical parameters (offsets=[0], sizes=[1]). Skip duplicates to avoid
-      /// creating orphaned acquires that aren't used by any EDT.
+      /// identical parameters (offsets=[0], sizes=[1]).
       if (!processedCoarseAllocs.insert(dbAllocOp.getOperation()).second) {
         ARTS_DEBUG("   - Skipping duplicate coarse-grained acquire for "
                    "already-processed DbAllocOp");
@@ -983,7 +983,7 @@ void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
   ARTS_DEBUG(" - Rewriting " << users.size() << " operations in parent EDT");
 
   OpBuilder builder(module.getContext());
-  DbTransforms transforms(module.getContext());
+  DbTransforms transforms;
 
   /// Coarse-grained: db_ref[0] + load/store[indices]
   /// Fine-grained: db_ref[indices] + load/store[0]
@@ -1014,7 +1014,7 @@ void CreateDbsPass::rewriteUsesEverywhere(Operation *alloc, DbAllocOp dbAlloc) {
   }
 
   OpBuilder builder(module.getContext());
-  DbTransforms transforms(module.getContext());
+  DbTransforms transforms;
 
   /// Coarse-grained: db_ref[0] + load/store[indices]
   /// Fine-grained: db_ref[indices] + load/store[0]
@@ -1081,7 +1081,7 @@ void CreateDbsPass::rewriteUsesInEdt(EdtOp edt,
 
   /// Rewrite each tracked operation with DbRefOp pattern
   OpBuilder builder(edt.getContext());
-  DbTransforms transforms(edt.getContext());
+  DbTransforms transforms;
 
   for (Operation *op : operations) {
     /// Apply scope mapping to operands before rewriting

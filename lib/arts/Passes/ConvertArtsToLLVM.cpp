@@ -2,8 +2,7 @@
 // File: ConvertArtsToLLVM.cpp
 //
 // This file implements a pass to convert ARTS dialect operations into
-// LLVM dialect operations. Since preprocessing is handled by a separate
-// pass, this pass focuses purely on ARTS-specific conversion logic.
+// LLVM dialect operations.
 ///==========================================================================///
 
 /// Dialects
@@ -247,10 +246,8 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
     ArrayRef<bool> twinDiffValues =
         twinDiffAttr ? *twinDiffAttr : ArrayRef<bool>{};
 
-    /// Get acquire modes if available
-    // std::optional<ArrayRef<int32_t>> acquireModes = std::nullopt;
-    // if (auto accessModeAttr = op.getAccessMode().getValue())
-    //   accessMode = accessModeAttr.getValue();
+    /// Get bounds validity flags for stencil boundary guarding
+    auto boundsValids = op.getBoundsValids();
 
     /// Create shared slot counter for all dependencies
     auto slotTy = MemRefType::get({}, AC->Int32);
@@ -266,8 +263,11 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
         acquireMode = acquireModeValues[dbIdx];
       bool twinDiff =
           (dbIdx < twinDiffValues.size()) ? twinDiffValues[dbIdx] : false;
+      /// Get bounds_valid for this dependency if available
+      Value boundsValid =
+          (dbIdx < boundsValids.size()) ? boundsValids[dbIdx] : Value();
       recordDepsForDb(dbGuid, edtGuid, sharedSlotAlloc, accessMode, acquireMode,
-                      twinDiff, loc);
+                      twinDiff, boundsValid, loc);
       ++dbIdx;
     }
 
@@ -279,7 +279,7 @@ private:
   void recordDepsForDb(Value dbGuid, Value edtGuid, Value sharedSlotAlloc,
                        DepAccessMode accessMode,
                        std::optional<int32_t> acquireMode, bool twinDiff,
-                       Location loc) const {
+                       Value boundsValid, Location loc) const {
     SmallVector<Value> dbSizes, dbOffsets, dbIndices;
     bool isSingle = false;
 
@@ -307,15 +307,21 @@ private:
                           [&](Value linearIndex) {
                             recordSingleDb(dbGuid, edtGuid, sharedSlotAlloc,
                                            linearIndex, accessMode, acquireMode,
-                                           twinDiff, depStruct, baseOffset,
-                                           loc);
+                                           twinDiff, boundsValid, depStruct,
+                                           baseOffset, loc);
                           });
   }
 
+  /// Record a single datablock dependency for an EDT slot.
+  /// For stencil patterns with boundsValid (e.g., u[i-1] when i=0), we use:
+  ///   if (boundsValid) artsRecordDep(...) else artsSignalEdtNull(...)
+  /// artsSignalEdtNull uses ARTS_NULL mode to satisfy the slot without data,
+  /// avoiding deadlock (all slots must be filled) and routing errors.
   void recordSingleDb(Value dbGuid, Value edtGuid, Value slotAlloc,
                       Value linearIndex, DepAccessMode accessMode,
                       std::optional<int32_t> acquireMode, bool twinDiff,
-                      Value depStruct, Value baseOffset, Location loc) const {
+                      Value boundsValid, Value depStruct, Value baseOffset,
+                      Location loc) const {
     /// Load dbGuid value - check if we actually have depStruct (from
     /// DepDbAcquireOp) or if this specific dependency is from DbAcquireOp
     Value dbGuidValue;
@@ -350,10 +356,36 @@ private:
     int32_t modeInt = acquireMode.value_or(static_cast<int32_t>(DbMode::write));
     Value modeValue = AC->createIntConstant(modeInt, AC->Int32, loc);
     Value twinDiffVal = AC->createIntConstant(twinDiff ? 1 : 0, AC->Int1, loc);
-    AC->createRuntimeCall(
-        types::ARTSRTL_artsRecordDep,
-        {dbGuidValue, edtGuidValue, currentSlotI32, modeValue, twinDiffVal},
-        loc);
+
+    /// If boundsValid is present, conditionally record dep or signal slot.
+    /// This guards out-of-bounds stencil indices (e.g., u[i-1] when i=0).
+    if (boundsValid) {
+      /// Create if-else: valid branch records dep, invalid branch signals dummy
+      auto ifOp =
+          AC->create<scf::IfOp>(loc, boundsValid, /*withElseRegion=*/true);
+
+      /// Then block: boundsValid=true -> normal artsRecordDep
+      AC->setInsertionPointToStart(&ifOp.getThenRegion().front());
+      AC->createRuntimeCall(
+          types::ARTSRTL_artsRecordDep,
+          {dbGuidValue, edtGuidValue, currentSlotI32, modeValue, twinDiffVal},
+          loc);
+
+      /// Else block: boundsValid=false -> artsSignalEdtNull to satisfy slot
+      /// without actual data (avoids deadlock from dep count mismatch).
+      /// Uses ARTS_NULL mode which won't misinterpret 0 as a GUID for routing.
+      AC->setInsertionPointToStart(&ifOp.getElseRegion().front());
+      AC->createRuntimeCall(types::ARTSRTL_artsSignalEdtNull,
+                            {edtGuidValue, currentSlotI32}, loc);
+
+      AC->setInsertionPointAfter(ifOp);
+    } else {
+      /// No boundsValid condition -> normal unconditional recordDep
+      AC->createRuntimeCall(
+          types::ARTSRTL_artsRecordDep,
+          {dbGuidValue, edtGuidValue, currentSlotI32, modeValue, twinDiffVal},
+          loc);
+    }
 
     /// Increment the shared slot counter for next dependency
     auto oneI32 = AC->createIntConstant(1, AC->Int32, loc);

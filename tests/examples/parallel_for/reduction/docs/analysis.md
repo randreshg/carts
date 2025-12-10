@@ -13,13 +13,13 @@ Walk through these steps and stop as soon as you spot something odd.
    ```bash
    carts build
    carts cgeist parallel_for.c -O0 --print-debug-info -S --raise-scf-to-affine &> parallel_for_seq.mlir
-   carts run parallel_for_seq.mlir --collect-metadata &> parallel_for_seq_metadata.mlir
+   carts run parallel_for_seq.mlir --collect-metadata &> parallel_for_arts_metadata.mlir
    carts cgeist parallel_for.c -O0 --print-debug-info -S -fopenmp --raise-scf-to-affine &> parallel_for.mlir
    ```
 
    Peek at `.carts-metadata.json` to keep the loop/memref ids handy while debugging. For reference: loop `27` (init a/b), loop `34` (parallel add into c), loop `42` (the reduction), memrefs `17/20/21` (a/b/c).
 
-3. **Baseline sanity (sequential IR):** skim `parallel_for_seq_metadata.mlir` and confirm the reduction loop is tagged with `hasReductions = true` and `reductionKinds = ["add"]`, and that the identity is zero. This gives you the expected shape of the computation before any arts transforms.
+3. **Baseline sanity (sequential IR):** skim `parallel_for_arts_metadata.mlir` and confirm the reduction loop is tagged with `hasReductions = true` and `reductionKinds = ["add"]`, and that the identity is zero. This gives you the expected shape of the computation before any arts transforms.
 
 4. **OpenMP -> Arts lowering checkpoint:** stop early to make sure the OpenMP reduction is converted sensibly before the db pass.
 

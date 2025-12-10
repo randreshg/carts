@@ -5,6 +5,7 @@ message(STATUS "POLYGEIST_LIBRARY_DIR: ${POLYGEIST_BUILD_DIR}/lib")
 add_mlir_dialect_library(MLIRArtsTransforms
   ArtsInliner.cpp
   ConvertOpenMPToArts.cpp
+  DeadCodeElimination.cpp
   Edt.cpp
   CreateDbs.cpp
   CollectMetadata.cpp

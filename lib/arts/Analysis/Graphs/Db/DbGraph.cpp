@@ -259,8 +259,8 @@ void DbGraph::print(llvm::raw_ostream &os) {
         os << "\n";
 
         /// Show number of reads and writes
-        auto loads = acqNode->getLoads().size();
-        auto stores = acqNode->getStores().size();
+        auto loads = acqNode->countLoads();
+        auto stores = acqNode->countStores();
         os << "      EDT Uses - Reads: " << loads << ", Writes: " << stores
            << "\n";
       });

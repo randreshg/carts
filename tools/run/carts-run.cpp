@@ -239,13 +239,12 @@ void setupInitialCleanup(OpPassManager &optPM) {
   optPM.addPass(createLowerAffinePass());
   optPM.addPass(createCSEPass());
   optPM.addPass(polygeist::createCanonicalizeForPass());
-  optPM.addPass(polygeist::createPolygeistCanonicalizePass());
 }
 
 /// OpenMP to ARTS conversion pass.
 void setupOpenMPToArts(PassManager &pm) {
   pm.addPass(arts::createConvertOpenMPtoArtsPass());
-  pm.addPass(createSymbolDCEPass());
+  pm.addPass(arts::createDeadCodeEliminationPass());
   pm.addPass(createCSEPass());
 }
 
@@ -253,6 +252,7 @@ void setupOpenMPToArts(PassManager &pm) {
 void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createEdtPass(AM, false));
   pm.addPass(arts::createEdtInvariantCodeMotionPass());
+  pm.addPass(arts::createDeadCodeEliminationPass());
   pm.addPass(createSymbolDCEPass());
   pm.addPass(createCSEPass());
   pm.addPass(arts::createEdtPtrRematerializationPass());

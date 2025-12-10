@@ -276,9 +276,10 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
                                  acquireOp.getOffsetHints().end());
   SmallVector<Value> sizeHints(acquireOp.getSizeHints().begin(),
                                acquireOp.getSizeHints().end());
+  Value boundsValid = acquireOp.getBoundsValid();
   auto newAcquireOp = AC->create<DbAcquireOp>(
       acquireOp.getLoc(), acquireOp.getMode(), sourceGuid, sourcePtr, indices,
-      offsets, sizes, offsetHints, sizeHints);
+      offsets, sizes, offsetHints, sizeHints, boundsValid);
   for (auto &attr : acquireOp->getAttrs()) {
     if (attr.getName().getValue().starts_with("arts."))
       newAcquireOp->setAttr(attr.getName(), attr.getValue());
