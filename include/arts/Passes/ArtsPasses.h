@@ -30,6 +30,7 @@ std::unique_ptr<Pass> createCollectMetadataPass(bool exportMetadata,
                                                 llvm::StringRef metadataFile);
 std::unique_ptr<Pass> createCanonicalizeMemrefsPass();
 std::unique_ptr<Pass> createConvertOpenMPtoArtsPass();
+std::unique_ptr<Pass> createDeadCodeEliminationPass();
 std::unique_ptr<Pass> createEdtPass(ArtsAnalysisManager *AM, bool runAnalysis);
 std::unique_ptr<Pass> createConcurrencyPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createCreateDbsPass(ArtsAnalysisManager *AM);

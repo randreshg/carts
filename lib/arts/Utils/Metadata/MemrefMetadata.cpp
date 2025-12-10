@@ -170,8 +170,6 @@ bool MemrefMetadata::importFromOp() {
   accessStats.totalAccesses = getIntFromAttr(attr.getTotalAccesses());
   accessStats.readCount = getIntFromAttr(attr.getReadCount());
   accessStats.writeCount = getIntFromAttr(attr.getWriteCount());
-  if (attr.getReadWriteRatio())
-    accessStats.readWriteRatio = attr.getReadWriteRatio().getValueAsDouble();
   allAccessesAffine = getBoolFromAttr(attr.getAllAccessesAffine());
   hasAffineAccesses = getBoolFromAttr(attr.getHasAffineAccesses());
   hasNonAffineAccesses = getBoolFromAttr(attr.getHasNonAffineAccesses());
@@ -236,11 +234,6 @@ Attribute MemrefMetadata::getMetadataAttr() const {
     return v ? builder.getBoolAttr(*v) : BoolAttr();
   };
 
-  /// Helper to convert optional double to FloatAttr
-  auto toFloatAttr = [&](const std::optional<double> &v) -> FloatAttr {
-    return v ? builder.getF64FloatAttr(*v) : FloatAttr();
-  };
-
   /// Helper to convert AccessPatternType enum to IntegerAttr
   auto toAccessPatternAttr =
       [&](const std::optional<AccessPatternType> &v) -> IntegerAttr {
@@ -275,8 +268,7 @@ Attribute MemrefMetadata::getMetadataAttr() const {
       toIntAttr(rank), builder.getStringAttr(allocationId),
       /// Access pattern analysis
       toIntAttr(accessStats.totalAccesses), toIntAttr(accessStats.readCount),
-      toIntAttr(accessStats.writeCount),
-      toFloatAttr(accessStats.readWriteRatio), toBoolAttr(allAccessesAffine),
+      toIntAttr(accessStats.writeCount), toBoolAttr(allAccessesAffine),
       toBoolAttr(hasAffineAccesses), toBoolAttr(hasNonAffineAccesses),
       /// Memory characteristics
       toIntAttr(memoryFootprint), toBoolAttr(isFlattenedArrayFlag),
@@ -301,10 +293,6 @@ void MemrefMetadata::exportToJson(llvm::json::Object &json) const {
   auto setBool = [&](const std::optional<bool> &v, llvm::StringRef key) {
     if (v)
       json[key] = static_cast<bool>(*v);
-  };
-  auto setF64 = [&](const std::optional<double> &v, llvm::StringRef key) {
-    if (v)
-      json[key] = static_cast<double>(*v);
   };
   setI64(rank, AttrNames::MemrefMetadata::Rank);
   if (!allocationId.empty())
@@ -360,10 +348,6 @@ void MemrefMetadata::importFromJson(const llvm::json::Object &json) {
   auto getBool = [&](llvm::StringRef key, std::optional<bool> &out) {
     if (auto v = json.getBoolean(key))
       out = static_cast<bool>(*v);
-  };
-  auto getF64 = [&](llvm::StringRef key, std::optional<double> &out) {
-    if (auto v = json.getNumber(key))
-      out = static_cast<double>(*v);
   };
   getI64(AttrNames::MemrefMetadata::Rank, rank);
   if (auto str = json.getString(AttrNames::MemrefMetadata::AllocationId))

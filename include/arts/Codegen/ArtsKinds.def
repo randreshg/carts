@@ -304,6 +304,13 @@ __ARTS_RTL_ATTRS(artsSignalEdtValue, ControlAttrs, EmptyAttrs,
 __ARTS_RTL(artsSignalEdtPtr, Void, ArtsGuid, Int32, VoidPtr, Int32)
 __ARTS_RTL_ATTRS(artsSignalEdtPtr, ControlAttrs, EmptyAttrs,
                  ParamAttrs(EmptyAttrs, ZExt, ReadOnlyPtrAttrs, ZExt))
+
+/// void artsSignalEdtNull(ArtsGuid edtGuid, uint32_t slot);
+/// Satisfies an EDT slot without providing any data. Used for boundary
+/// conditions where a dependency should be skipped (e.g., stencil edges).
+__ARTS_RTL(artsSignalEdtNull, Void, ArtsGuid, Int32)
+__ARTS_RTL_ATTRS(artsSignalEdtNull, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, ZExt))
 /// }
 
 

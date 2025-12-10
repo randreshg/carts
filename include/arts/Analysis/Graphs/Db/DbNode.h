@@ -8,7 +8,6 @@
 #include "arts/Analysis/Graphs/Base/NodeBase.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/Metadata/MemrefMetadata.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
 #include <memory>
@@ -58,9 +57,9 @@ public:
   /// string datablock
   bool isParallelFriendly() const;
 
-  /// Check if this allocation should be sliced for parallel execution
-  /// Returns true if the memref can be safely sliced based on access patterns
-  bool shouldSliceAlloc() const;
+  /// Check if this allocation can be partitioned for parallel execution.
+  /// Validates allocation metadata and recursively checks all acquires.
+  bool canBePartitioned();
 
   /// Check if this allocation is already fine-grained
   /// (all elementSizes are constant 1, meaning each datablock holds one
@@ -134,19 +133,21 @@ public:
 
   EdtOp getEdtUser() const { return edtUser; }
   Value getUseInEdt() const { return useInEdt; }
-  void getMemoryAccesses(SmallVector<Operation *> &memAccesses,
-                         bool load = true, bool store = true) {
-    memAccesses.clear();
-    memAccesses.reserve((load ? loads.size() : 0) +
-                        (store ? stores.size() : 0));
-    if (load)
-      memAccesses.append(loads.begin(), loads.end());
-    if (store)
-      memAccesses.append(stores.begin(), stores.end());
-  }
-  SmallVector<Operation *, 16> &getLoads() { return loads; }
-  SmallVector<Operation *, 16> &getStores() { return stores; }
-  SmallVector<Operation *, 16> &getReferences() { return references; }
+
+  /// Collect access operations mapping DbRefOp to its memory operations.
+  /// All data accesses go through DbRefOp, this preserves that relationship.
+  /// This is the primary API for accessing memory operations.
+  void collectAccessOperations(
+      DenseMap<DbRefOp, SetVector<Operation *>> &dbRefToMemOps);
+
+  /// Helper methods for querying memory access counts.
+  /// These use collectAccessOperations internally.
+  bool hasLoads();
+  bool hasStores();
+  bool hasMemoryAccesses();
+  size_t countLoads();
+  size_t countStores();
+
   DbAcquireOp getDbAcquireOp() const { return dbAcquireOp; }
   DbReleaseOp getDbReleaseOp() const { return dbReleaseOp; }
 
@@ -155,15 +156,23 @@ public:
   DbAcquireNode *getOrCreateAcquireNode(DbAcquireOp op);
   void forEachChildNode(const std::function<void(NodeBase *)> &fn) const;
 
-  /// Check if this acquire node is eligible for slicing
-  bool isEligibleForSlicing();
+  /// Check if this acquire can be partitioned for parallel execution.
+  /// Validates EDT type, memory accesses, access patterns, and nested children.
+  bool canBePartitioned();
+
+  /// Check if array accesses use indices derived from the given offset.
+  /// Returns true if partitioning is safe (first index = offset + delta).
+  bool canPartitionWithOffset(Value offset);
+
   LogicalResult computeChunkInfo(Value &chunkOffset, Value &chunkSize);
   LogicalResult computeChunkInfoFromWhile(scf::WhileOp whileOp,
                                           Value &chunkOffset, Value &chunkSize);
+
   void setPartitionInfo(Value offset, Value size) {
     partitionOffset = offset;
     partitionSize = size;
   }
+
   std::pair<Value, Value> getPartitionInfo() const {
     return {partitionOffset, partitionSize};
   }
@@ -188,16 +197,11 @@ private:
   Value useInEdt;
   Value partitionOffset;
   Value partitionSize;
-  /// Memory accesses (loads/stores) inside the EDT
-  SmallVector<Operation *, 16> loads, stores, references;
 
 public:
   uint64_t inCount = 0, outCount = 0;
   uint64_t beginIndex = 0, endIndex = 0;
   unsigned long long estimatedBytes = 0;
-
-  /// Helper functions
-  void collectAccesses(Value db);
 
   /// Nested acquire storage
   unsigned nextChildId = 1;

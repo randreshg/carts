@@ -75,6 +75,6 @@ void LoopAnalysis::collectEnclosingLoops(
       }
     }
   }
-  // Reverse to get outermost-to-innermost order
+  /// Reverse to get outermost-to-innermost order
   std::reverse(enclosingLoops.begin(), enclosingLoops.end());
 }

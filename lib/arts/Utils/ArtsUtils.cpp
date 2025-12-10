@@ -380,10 +380,18 @@ getEdtBlockArgumentForAcquire(DbAcquireOp acquireOp) {
   return {edtUser, blockArg};
 }
 
+/// Maximum recursion depth for value tracing to prevent stack overflow
+static constexpr unsigned kMaxTraceDepth = 64;
+
 /// Internal helper to trace the underlying value through various operations,
-/// with cycle detection to avoid infinite recursion.
-static Value getUnderlyingValueImpl(Value v, SmallPtrSet<Value, 8> &visited) {
+/// with cycle detection and depth limit to avoid infinite recursion.
+static Value getUnderlyingValueImpl(Value v, SmallPtrSet<Value, 16> &visited,
+                                    unsigned depth) {
   if (!v)
+    return nullptr;
+
+  /// Depth limit to prevent stack overflow
+  if (depth > kMaxTraceDepth)
     return nullptr;
 
   /// Check for cycles
@@ -399,7 +407,7 @@ static Value getUnderlyingValueImpl(Value v, SmallPtrSet<Value, 8> &visited) {
       ValueRange deps = edt.getDependencies();
       if (argIndex < deps.size()) {
         Value operand = deps[argIndex];
-        return getUnderlyingValueImpl(operand, visited);
+        return getUnderlyingValueImpl(operand, visited, depth + 1);
       } else {
         return v;
       }
@@ -413,19 +421,20 @@ static Value getUnderlyingValueImpl(Value v, SmallPtrSet<Value, 8> &visited) {
             op))
       return v;
     else if (auto dbAcquire = dyn_cast<DbAcquireOp>(op))
-      return getUnderlyingValueImpl(dbAcquire.getSourcePtr(), visited);
+      return getUnderlyingValueImpl(dbAcquire.getSourcePtr(), visited,
+                                    depth + 1);
     else if (auto dbGep = dyn_cast<DbGepOp>(op))
-      return getUnderlyingValueImpl(dbGep.getBasePtr(), visited);
+      return getUnderlyingValueImpl(dbGep.getBasePtr(), visited, depth + 1);
     else if (auto dbControl = dyn_cast<DbControlOp>(op))
-      return getUnderlyingValueImpl(dbControl.getPtr(), visited);
+      return getUnderlyingValueImpl(dbControl.getPtr(), visited, depth + 1);
     else if (auto subview = dyn_cast<memref::SubViewOp>(op))
-      return getUnderlyingValueImpl(subview.getSource(), visited);
+      return getUnderlyingValueImpl(subview.getSource(), visited, depth + 1);
     else if (auto castOp = dyn_cast<memref::CastOp>(op))
-      return getUnderlyingValueImpl(castOp.getSource(), visited);
+      return getUnderlyingValueImpl(castOp.getSource(), visited, depth + 1);
     else if (auto p2m = dyn_cast<polygeist::Pointer2MemrefOp>(op))
-      return getUnderlyingValueImpl(p2m.getSource(), visited);
+      return getUnderlyingValueImpl(p2m.getSource(), visited, depth + 1);
     else if (auto m2p = dyn_cast<polygeist::Memref2PointerOp>(op))
-      return getUnderlyingValueImpl(m2p.getSource(), visited);
+      return getUnderlyingValueImpl(m2p.getSource(), visited, depth + 1);
     else if (isa<arts::UndefOp>(op))
       return nullptr;
     else
@@ -468,8 +477,8 @@ Value stripNumericCasts(Value value) {
 /// Traces the underlying root allocation value for the given value, unwinding
 /// through various MLIR operations.
 Value getUnderlyingValue(Value v) {
-  SmallPtrSet<Value, 8> visited;
-  return getUnderlyingValueImpl(v, visited);
+  SmallPtrSet<Value, 16> visited;
+  return getUnderlyingValueImpl(v, visited, 0);
 }
 
 /// Retrieves the underlying operation that defines the root value for the
@@ -708,6 +717,30 @@ void collectWhileBounds(Value cond, Value iterArg, SmallVector<Value> &bounds) {
       bounds.push_back(cmp.getLhs());
       return;
     }
+  }
+}
+
+///===----------------------------------------------------------------------===///
+/// Attribute Transfer Utilities
+///===----------------------------------------------------------------------===///
+
+void transferAttributes(Operation *src, Operation *dst,
+                        ArrayRef<StringRef> excludes) {
+  /// Build set of attributes to exclude
+  llvm::SmallDenseSet<StringRef> excludeSet;
+  /// Always exclude auto-generated MLIR attributes
+  excludeSet.insert("operandSegmentSizes");
+  excludeSet.insert("resultSegmentSizes");
+  /// Exclude builder-set attributes for ARTS ops
+  excludeSet.insert("mode");
+  /// Add any additional excludes
+  for (StringRef name : excludes)
+    excludeSet.insert(name);
+
+  /// Transfer all non-excluded attributes
+  for (NamedAttribute attr : src->getAttrs()) {
+    if (!excludeSet.contains(attr.getName().getValue()))
+      dst->setAttr(attr.getName(), attr.getValue());
   }
 }
 

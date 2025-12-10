@@ -17,7 +17,8 @@ namespace arts {
 /// ViewCoordinateMap - Global to Local Coordinate Transformation
 ///
 /// DbAcquireOp specifies a view into a datablock with:
-///   - indices: Pin specific elements in leading dimensions (reduces dimensionality)
+///   - indices: Pin specific elements in leading dimensions (reduces
+///   dimensionality)
 ///   - offsets: Starting position for the acquired slice
 ///   - sizes: Extent of the acquired slice
 ///
@@ -28,7 +29,13 @@ namespace arts {
 ///
 /// Transformation rules:
 ///   - Indexed dimensions [0, numIndexedDims): local = 0
-///   - Sliced dimensions [numIndexedDims, end): local = global - offset
+///   - Sliced dimensions [numIndexedDims, end):
+///     * If globalIdx == offset: local = 0
+///     * If globalIdx = offset + delta (provable): local = delta
+///     * Otherwise: local = globalIdx (conservative, no transformation)
+///
+/// We subtract offset when we can prove the global index is
+/// derived from the partition offset.
 ///===----------------------------------------------------------------------===///
 struct ViewCoordinateMap {
   /// Number of leading dimensions pinned by DbAcquireOp::indices.
@@ -46,7 +53,7 @@ struct ViewCoordinateMap {
 
 class DbTransforms {
 public:
-  explicit DbTransforms(MLIRContext *context);
+  DbTransforms() = default;
 
   /// Rewrite memref access to use db_ref pattern.
   bool rewriteAccessWithDbPattern(Operation *op, Value dbPtr, Type elementType,
@@ -58,7 +65,9 @@ public:
                               OpBuilder &builder, bool trimLeadingOnes = false);
 
   /// Rewrite all uses of an allocation after promotion.
-  LogicalResult rewriteAllUses(DbAllocOp oldAlloc, DbAllocOp newAlloc);
+  /// Updates acquire sources, result types, AND offsets/sizes to full extent.
+  LogicalResult rewriteAllUses(DbAllocOp oldAlloc, DbAllocOp newAlloc,
+                               OpBuilder &builder);
 
   /// Rebase operation indices to acquired view's local coordinates.
   bool rebaseToAcquireView(Operation *op, DbAcquireOp acquire, Value dbPtr,
@@ -81,16 +90,6 @@ private:
                           ArrayRef<Value> outerIndices,
                           ArrayRef<Value> innerIndices, OpBuilder &builder,
                           llvm::SetVector<Operation *> &opsToRemove);
-
-  std::pair<SmallVector<Value>, SmallVector<Value>>
-  splitIndices(ValueRange indices, unsigned splitPoint, OpBuilder &builder,
-               Location loc);
-
-  SmallVector<Value> applyOffsets(ArrayRef<Value> indices,
-                                  ArrayRef<Value> offsets, OpBuilder &builder,
-                                  Location loc);
-
-  MLIRContext *context_;
 };
 
 } // namespace arts

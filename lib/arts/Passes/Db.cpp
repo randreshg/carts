@@ -33,6 +33,7 @@
 ///===----------------------------------------------------------------------===///
 
 /// Dialects
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -47,10 +48,9 @@
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
-#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
+#include "arts/Analysis/Loop/LoopNode.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
-#include "arts/Utils/OperationAttributes.h"
 /// Other
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
@@ -63,23 +63,15 @@
 #include "arts/Analysis/Graphs/Edt/EdtGraph.h"
 #include "arts/Analysis/Graphs/Edt/EdtNode.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
-#include <iterator>
-#include <limits>
 
 #include "arts/Transforms/DbTransforms.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/Metadata/ArtsMetadata.h"
-#include "arts/Utils/Metadata/LoopMetadata.h"
-#include "arts/Utils/Metadata/MemrefMetadata.h"
 ARTS_DEBUG_SETUP(db);
 
 using namespace mlir;
@@ -105,14 +97,17 @@ struct DbPass : public arts::DbBase<DbPass> {
   bool adjustDbModes();
   bool partitionDb();
 
+  /// Stencil bounds analysis
+  void analyzeStencilBounds();
+  void generateBoundsValid(DbAcquireOp acquireOp,
+                           ArrayRef<int64_t> boundsCheckFlags, Value loopIV);
+
   /// Graph rebuild
   void invalidateAndRebuildGraph();
   FailureOr<DbAllocOp> promoteAllocForChunking(DbAllocOp allocOp,
                                                DbAllocNode *allocNode);
-  bool updateAcquireForChunk(DbAcquireOp acqOp, DbAllocOp promotedAlloc,
-                             Value chunkOffset, Value chunkSize);
-  bool normalizeRootAcquires(DbAllocOp allocOp);
-  bool rewriteAcquireUsersForChunk(DbAcquireOp acqOp, Value chunkOffset);
+  void updateAcquireForChunk(DbAcquireOp acqOp, Value chunkOffset,
+                             Value chunkSize);
 
 private:
   ModuleOp module;
@@ -138,8 +133,15 @@ void DbPass::runOnOperation() {
   /// Graph construction and analysis
   invalidateAndRebuildGraph();
 
+  /// Always adjust DB modes
   changed |= adjustDbModes();
-  changed |= partitionDb();
+
+  /// Partitio DBs and analyze stencil patterns for bounds checking
+  if (enablePartitioning) {
+    changed |= partitionDb();
+    analyzeStencilBounds();
+  }
+
 
   if (changed) {
     /// If the module has changed, adjust the db modes again
@@ -166,8 +168,8 @@ bool DbPass::adjustDbModes() {
 
     /// First, adjust per-acquire modes
     graph.forEachAcquireNode([&](DbAcquireNode *acqNode) {
-      bool hasLoads = !acqNode->getLoads().empty();
-      bool hasStores = !acqNode->getStores().empty();
+      bool hasLoads = acqNode->hasLoads();
+      bool hasStores = acqNode->hasStores();
 
       DbAcquireOp acqOp = acqNode->getDbAcquireOp();
       ArtsMode newMode = ArtsMode::in;
@@ -208,19 +210,6 @@ bool DbPass::adjustDbModes() {
         if (auto *acqNode = dyn_cast<DbAcquireNode>(child))
           collectModes(acqNode);
       });
-
-      /// Use metadata from allocNode's info
-      if (allocNode->accessStats.readWriteRatio) {
-        double ratio = *allocNode->accessStats.readWriteRatio;
-        ArtsMode metadataMode = ArtsMode::inout;
-        if (ratio > 0.9)
-          metadataMode = ArtsMode::in;
-        else if (ratio < 0.1)
-          metadataMode = ArtsMode::out;
-        maxMode = combineAccessModes(maxMode, metadataMode);
-        ARTS_DEBUG("  Using metadata read/write ratio: " << ratio << " -> "
-                                                         << metadataMode);
-      }
 
       /// Update the alloc mode
       DbAllocOp allocOp = allocNode->getDbAllocOp();
@@ -264,8 +253,6 @@ bool DbPass::adjustDbModes() {
 ///   5. Final pass: any unset acquires get twin_diff=TRUE (safe default)
 ///===----------------------------------------------------------------------===///
 bool DbPass::partitionDb() {
-  if (!enablePartitioning)
-    return false;
   ARTS_DEBUG_HEADER(PartitionDb);
   bool changed = false;
   OpBuilder attrBuilder(module.getContext());
@@ -288,69 +275,86 @@ bool DbPass::partitionDb() {
   DenseMap<DbAllocOp, std::pair<DbAllocNode *, SmallVector<AcqChunkInfo, 4>>>
       allocsToPromote;
 
-  /// Walk the module,
+  /// Walk the module and check each allocation using hierarchical validation.
+  /// DbAllocNode::canBePartitioned() recursively validates all acquire
+  /// children.
   module.walk([&](func::FuncOp func) {
     DbGraph &graph = AM->getDbGraph(func);
 
-    SmallVector<DbAcquireNode *, 16> candidates;
-    /// Walk the graph, and collect the eligible acquire nodes
-    graph.forEachAcquireNode([&](DbAcquireNode *acqNode) {
-      if (!acqNode->isEligibleForSlicing())
-        return;
-
-      /// If the parent allocation node is not eligible for slicing, skip
-      DbAllocNode *allocNode = acqNode->getRootAlloc();
-      if (!allocNode || !allocNode->shouldSliceAlloc())
-        return;
-
-      /// Add the acquire node to the candidates list
-      candidates.push_back(acqNode);
-    });
-
-    /// For each eligible acquire node, compute the chunk info and promote the
-    /// allocation
-    for (DbAcquireNode *node : candidates) {
-      Value chunkOffset, chunkSize;
-      auto [cachedOffset, cachedSize] = node->getPartitionInfo();
-      DbAllocNode *allocNode = node->getRootAlloc();
-      if (allocNode && allocNode->getDbAllocOp())
-        partitionAttempt.insert(allocNode->getDbAllocOp().getOperation());
-      if (cachedOffset && cachedSize) {
-        chunkOffset = cachedOffset;
-        chunkSize = cachedSize;
-        ARTS_DEBUG("  Using cached chunk info for acquire "
-                   << node->getDbAcquireOp() << " offset=" << chunkOffset
-                   << " size=" << chunkSize);
-      } else if (failed(node->computeChunkInfo(chunkOffset, chunkSize))) {
-        ARTS_DEBUG("  Failed to compute chunk info for acquire "
-                   << node->getDbAcquireOp());
-        if (allocNode && allocNode->getDbAllocOp())
-          partitionFailed.insert(allocNode->getDbAllocOp().getOperation());
-        continue;
-      } else {
-        node->setPartitionInfo(chunkOffset, chunkSize);
-        ARTS_DEBUG("  Computed chunk info for acquire "
-                   << node->getDbAcquireOp() << " offset=" << chunkOffset
-                   << " size=" << chunkSize);
-      }
-
+    /// Iterate through allocations and use unified canBePartitioned() API
+    graph.forEachAllocNode([&](DbAllocNode *allocNode) {
       if (!allocNode)
-        continue;
+        return;
 
       DbAllocOp allocOp = allocNode->getDbAllocOp();
-      DbAcquireOp acqOp = node->getDbAcquireOp();
+      if (!allocOp)
+        return;
 
-      /// Collect this (acquire, offset, size) tuple for this alloc
+      partitionAttempt.insert(allocOp.getOperation());
+
+      /// Hierarchical validation
+      ARTS_DEBUG("Checking allocation: " << allocOp);
+      if (!allocNode->canBePartitioned()) {
+        ARTS_DEBUG("  SKIP: canBePartitioned() returned false");
+        partitionFailed.insert(allocOp.getOperation());
+        return;
+      }
+
+      /// All validation passed - now compute chunk info for each acquire
+      bool allValid = true;
+      SmallVector<std::tuple<DbAcquireNode *, Value, Value>, 4> validatedAcqs;
+
+      allocNode->forEachChildNode([&](NodeBase *child) {
+        if (!allValid)
+          return;
+        auto *acqNode = dyn_cast<DbAcquireNode>(child);
+        if (!acqNode)
+          return;
+
+        Value chunkOffset, chunkSize;
+        auto [cachedOffset, cachedSize] = acqNode->getPartitionInfo();
+
+        if (cachedOffset && cachedSize) {
+          /// Partition offset already validated in canBePartitioned()
+          chunkOffset = cachedOffset;
+          chunkSize = cachedSize;
+          ARTS_DEBUG("  Using cached chunk info for acquire "
+                     << acqNode->getDbAcquireOp() << " offset=" << chunkOffset
+                     << " size=" << chunkSize);
+        } else if (failed(acqNode->computeChunkInfo(chunkOffset, chunkSize))) {
+          ARTS_DEBUG("  Failed to compute chunk info for acquire "
+                     << acqNode->getDbAcquireOp());
+          allValid = false;
+          return;
+        } else {
+          acqNode->setPartitionInfo(chunkOffset, chunkSize);
+          ARTS_DEBUG("  Computed chunk info for acquire "
+                     << acqNode->getDbAcquireOp() << " offset=" << chunkOffset
+                     << " size=" << chunkSize);
+        }
+
+        validatedAcqs.push_back({acqNode, chunkOffset, chunkSize});
+      });
+
+      if (!allValid) {
+        ARTS_DEBUG("  Skipping alloc " << allocOp
+                                       << ": not all acquires could compute "
+                                          "chunk info");
+        partitionFailed.insert(allocOp.getOperation());
+        return;
+      }
+
+      /// All acquires validated - add to promotion list
       auto &[nodePtr, acquireList] = allocsToPromote[allocOp];
       if (!nodePtr)
         nodePtr = allocNode;
-      acquireList.push_back(std::make_tuple(acqOp, chunkOffset, chunkSize));
-    }
+      for (auto &[node, offset, size] : validatedAcqs) {
+        acquireList.push_back({node->getDbAcquireOp(), offset, size});
+      }
+    });
   });
 
-  /// Now promote allocations and update acquires (OUTSIDE the walk)
-  /// Copy to vector to avoid iterator invalidation when keys (Operation*) get
-  /// erased
+  /// Now promote allocations and update acquires
   SmallVector<std::tuple<DbAllocOp, DbAllocNode *,
                          SmallVector<std::tuple<DbAcquireOp, Value, Value>, 4>>>
       allocsToProcess;
@@ -359,6 +363,7 @@ bool DbPass::partitionDb() {
     allocsToProcess.push_back(
         {cast<DbAllocOp>(allocOpPtr), allocNode, std::move(acquireList)});
   }
+
   /// Clear map to avoid using dangling pointers
   allocsToPromote.clear();
 
@@ -381,7 +386,6 @@ bool DbPass::partitionDb() {
       changed = true;
     }
 
-    changed |= normalizeRootAcquires(promoted);
     bool chunkRewrite = false;
 
     /// Update all acquires for this alloc
@@ -389,11 +393,10 @@ bool DbPass::partitionDb() {
       if (!acqOp)
         continue;
 
-      if (updateAcquireForChunk(acqOp, promoted, chunkOffset, chunkSize)) {
-        changed = true;
-        chunkRewrite = true;
-        setTwinAttr(acqOp, false);
-      }
+      updateAcquireForChunk(acqOp, chunkOffset, chunkSize);
+      changed = true;
+      chunkRewrite = true;
+      setTwinAttr(acqOp, false);
 
       /// Verify the transformation
       if (acqOp.getOffsets().empty() || acqOp.getSizes().empty()) {
@@ -421,7 +424,7 @@ bool DbPass::partitionDb() {
   /// Analyze acquires that weren't partitioned using DbAliasAnalysis and
   /// partition hints. This allows us to disable twin-diff for allocations
   /// where we can PROVE non-overlapping access even without full partitioning.
-  ARTS_DEBUG("  Enhanced overlap analysis for unpartitioned allocations:");
+  ARTS_DEBUG("  Overlap analysis for unpartitioned allocations:");
   module.walk([&](func::FuncOp func) {
     DbGraph &graph = AM->getDbGraph(func);
 
@@ -502,15 +505,17 @@ FailureOr<DbAllocOp> DbPass::promoteAllocForChunking(DbAllocOp allocOp,
     return allocOp;
 
   OpBuilder builder(allocOp);
-  DbTransforms transforms(module.getContext());
+  DbTransforms transforms;
 
-  // Promote 1 dimension with trimLeadingOnes for chunking pattern
-  auto newAlloc =
-      transforms.promoteAllocation(allocOp, 1, builder, /*trimLeadingOnes=*/true);
+  /// TODO: Derive promoteCount from partition info dimensions.
+  /// Currently we always promote 1 dimension for the common chunking pattern.
+  /// For multi-dimensional partitioning, examine partition info dimensions.
+  auto newAlloc = transforms.promoteAllocation(allocOp, 1, builder,
+                                               /*trimLeadingOnes=*/true);
   if (!newAlloc)
     return failure();
 
-  if (failed(transforms.rewriteAllUses(allocOp, newAlloc))) {
+  if (failed(transforms.rewriteAllUses(allocOp, newAlloc, builder))) {
     newAlloc.erase();
     return failure();
   }
@@ -518,68 +523,10 @@ FailureOr<DbAllocOp> DbPass::promoteAllocForChunking(DbAllocOp allocOp,
   return newAlloc;
 }
 
-bool DbPass::normalizeRootAcquires(DbAllocOp allocOp) {
-  if (!allocOp)
-    return false;
-
-  ValueRange allocSizes = allocOp.getSizes();
-  if (allocSizes.empty())
-    return false;
-
-  /// Normalization ensures that the root acquire mirrors the promoted alloc
-  /// (offset 0 / full size). Worker acquires can then safely slice without
-  /// guessing the original extent.
-  SmallVector<DbAcquireOp> acquires;
-  for (Operation *user : allocOp.getPtr().getUsers())
-    if (auto acq = dyn_cast<DbAcquireOp>(user))
-      acquires.push_back(acq);
-
-  if (acquires.empty())
-    return false;
-
-  bool changed = false;
-  OpBuilder builder(allocOp.getContext());
-  for (DbAcquireOp acq : acquires) {
-    auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(acq);
-    /// Skip worker EDT acquires; they will be chunked separately.
-    if (edt && edt.getType() == EdtType::task)
-      continue;
-
-    bool needsRewrite = acq.getSizes().size() != allocSizes.size() ||
-                        !std::equal(acq.getSizes().begin(),
-                                    acq.getSizes().end(), allocSizes.begin());
-    if (!needsRewrite)
-      continue;
-
-    builder.setInsertionPoint(acq);
-    Value zero = builder.create<arith::ConstantIndexOp>(acq.getLoc(), 0);
-    SmallVector<Value> offsets(allocSizes.size(), zero);
-    SmallVector<Value> sizes(allocSizes.begin(), allocSizes.end());
-    acq.getOffsetsMutable().assign(offsets);
-    acq.getSizesMutable().assign(sizes);
-    acq.getOffsetHintsMutable().assign(offsets);
-    acq.getSizeHintsMutable().assign(sizes);
-    changed = true;
-    ARTS_DEBUG("  Normalized acquire " << acq << " to full allocation extents");
-  }
-
-  return changed;
-}
-
-bool DbPass::rewriteAcquireUsersForChunk(DbAcquireOp acqOp, Value chunkOffset) {
-  SmallVector<Value> chunkOffsets{chunkOffset};
-  acqOp.getOffsetsMutable().assign(chunkOffsets);
-
-  OpBuilder builder(acqOp.getContext());
-  DbTransforms transforms(module.getContext());
-
-  return transforms.rebaseAllUsersToAcquireView(acqOp, builder);
-}
-
-bool DbPass::updateAcquireForChunk(DbAcquireOp acqOp, DbAllocOp promotedAlloc,
-                                   Value chunkOffset, Value chunkSize) {
+void DbPass::updateAcquireForChunk(DbAcquireOp acqOp, Value chunkOffset,
+                                   Value chunkSize) {
   if (!acqOp)
-    return false;
+    return;
 
   SmallVector<Value> offsets{chunkOffset};
   SmallVector<Value> sizes{chunkSize};
@@ -590,8 +537,202 @@ bool DbPass::updateAcquireForChunk(DbAcquireOp acqOp, DbAllocOp promotedAlloc,
   acqOp.getOffsetHintsMutable().assign(offsets);
   acqOp.getSizeHintsMutable().assign(sizes);
 
-  (void)rewriteAcquireUsersForChunk(acqOp, chunkOffset);
-  return true;
+  /// Rebase users to local coordinates
+  OpBuilder builder(acqOp.getContext());
+  DbTransforms transforms;
+  (void)transforms.rebaseAllUsersToAcquireView(acqOp, builder);
+}
+
+///===----------------------------------------------------------------------===///
+/// Analyze stencil patterns to detect out-of-bounds indices
+///
+/// For stencil patterns like depend(in: u[i-1], u[i], u[i+1]), the boundary
+/// iterations may access out-of-bounds indices (e.g., u[-1] when i=0).
+/// This analysis detects such patterns by:
+/// 1. Finding DbAcquireOps with indexed dependencies
+/// 2. Using LoopAnalysis::collectEnclosingLoops() to find enclosing loops
+/// 3. Using LoopNode::analyzeIndexExpr to detect offset patterns (e.g., i-1,
+/// i+1)
+/// 4. Generating runtime bounds checks and replacing DbAcquireOps with
+/// bounds_valid
+///===----------------------------------------------------------------------===///
+
+/// Check if op is in else branch of `if (iv == 0)` where iv is the loop IV.
+/// If so, we know iv > 0 (since loop starts at 0), so idx = iv-1 >= 0.
+static bool isLowerBoundGuaranteedByControlFlow(Operation *op, Value loopIV) {
+  if (!loopIV)
+    return false;
+
+  /// Helper: check if value matches loopIV (directly or via index_cast)
+  auto matchesIV = [&loopIV](Value v) {
+    if (v == loopIV)
+      return true;
+    if (auto cast = v.getDefiningOp<arith::IndexCastOp>())
+      return cast.getIn() == loopIV;
+    return false;
+  };
+
+  /// Helper: check if value is constant 0
+  auto isZero = [](Value v) {
+    if (auto c = v.getDefiningOp<arith::ConstantIntOp>())
+      return c.value() == 0;
+    if (auto c = v.getDefiningOp<arith::ConstantIndexOp>())
+      return c.value() == 0;
+    return false;
+  };
+
+  /// Walk up parent chain looking for scf.if with condition `iv == 0`
+  for (Operation *p = op->getParentOp(); p; p = p->getParentOp()) {
+    auto ifOp = dyn_cast<scf::IfOp>(p);
+    if (!ifOp || ifOp.getElseRegion().empty())
+      continue;
+
+    /// Check if we're in else region
+    if (!ifOp.getElseRegion().isAncestor(op->getParentRegion()))
+      continue;
+
+    /// Check if condition is `iv == 0`
+    auto cmp = ifOp.getCondition().getDefiningOp<arith::CmpIOp>();
+    if (!cmp || cmp.getPredicate() != arith::CmpIPredicate::eq)
+      continue;
+
+    Value lhs = cmp.getLhs(), rhs = cmp.getRhs();
+    if ((matchesIV(lhs) && isZero(rhs)) || (matchesIV(rhs) && isZero(lhs))) {
+      ARTS_DEBUG("  Lower bound guaranteed by control flow (else of iv==0)");
+      return true;
+    }
+  }
+  return false;
+}
+
+void DbPass::analyzeStencilBounds() {
+  ARTS_DEBUG_HEADER(AnalyzeStencilBounds);
+
+  LoopAnalysis &loopAnalysis = AM->getLoopAnalysis();
+
+  /// Collect DbAcquireOps that need bounds checking along with flags and loopIV
+  SmallVector<std::tuple<DbAcquireOp, SmallVector<int64_t>, Value>> toModify;
+
+  module.walk([&](DbAcquireOp acquireOp) {
+    /// Skip if already has bounds_valid
+    if (acquireOp.getBoundsValid())
+      return;
+
+    auto indices = acquireOp.getIndices();
+    if (indices.empty())
+      return;
+
+    /// Use LoopAnalysis to find enclosing loops
+    SmallVector<LoopNode *> enclosingLoops;
+    loopAnalysis.collectEnclosingLoops(acquireOp, enclosingLoops);
+    if (enclosingLoops.empty())
+      return;
+
+    /// Use innermost enclosing loop for IV analysis
+    LoopNode *loopNode = enclosingLoops.back();
+
+    /// Compute boundsCheckFlags using analyzeIndexExpr (ONCE per index)
+    SmallVector<int64_t> boundsCheckFlags;
+    bool needsBoundsCheck = false;
+
+    for (Value idx : indices) {
+      int64_t flag = 0;
+      LoopNode::IVExpr expr = loopNode->analyzeIndexExpr(idx);
+      if (expr.isAnalyzable() && expr.offset.has_value() && *expr.offset != 0) {
+        flag = 1;
+        needsBoundsCheck = true;
+        ARTS_DEBUG("  Index with offset " << *expr.offset
+                                          << " needs bounds check");
+      } else if (expr.dependsOnIV && !expr.isAnalyzable()) {
+        flag = 1;
+        needsBoundsCheck = true;
+        ARTS_DEBUG("  Complex IV-dependent index needs bounds check");
+      }
+      boundsCheckFlags.push_back(flag);
+    }
+
+    if (needsBoundsCheck) {
+      Value loopIV = loopNode->getInductionVar();
+      toModify.push_back({acquireOp, std::move(boundsCheckFlags), loopIV});
+    }
+  });
+
+  /// Generate boundsValid and update DbAcquireOps
+  for (auto &[acquireOp, flags, loopIV] : toModify) {
+    generateBoundsValid(acquireOp, flags, loopIV);
+  }
+
+  ARTS_DEBUG_FOOTER(AnalyzeStencilBounds);
+}
+
+/// Generate runtime bounds checks and create new DbAcquireOp with bounds_valid
+void DbPass::generateBoundsValid(DbAcquireOp acquireOp,
+                                 ArrayRef<int64_t> boundsCheckFlags,
+                                 Value loopIV) {
+  Location loc = acquireOp.getLoc();
+  OpBuilder builder(acquireOp);
+
+  auto indices = acquireOp.getIndices();
+  SmallVector<Value> sourceSizes = getSizesFromDb(acquireOp.getSourcePtr());
+
+  /// Check if lower bound is guaranteed by control flow (inside else of `if iv==0`)
+  bool lowerBoundGuarded =
+      isLowerBoundGuaranteedByControlFlow(acquireOp, loopIV);
+
+  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+  Value boundsValid;
+
+  for (size_t i = 0; i < boundsCheckFlags.size() && i < indices.size(); ++i) {
+    if (boundsCheckFlags[i] != 0 && i < sourceSizes.size()) {
+      Value idx = indices[i];
+      Value size = sourceSizes[i];
+      Value dimValid;
+
+      if (lowerBoundGuarded) {
+        /// Only check upper bound: idx < size (lower bound guaranteed by control flow)
+        dimValid = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
+                                                 idx, size);
+      } else {
+        /// Full check: 0 <= idx < size
+        Value geZero = builder.create<arith::CmpIOp>(
+            loc, arith::CmpIPredicate::sge, idx, zero);
+        Value ltSize = builder.create<arith::CmpIOp>(
+            loc, arith::CmpIPredicate::slt, idx, size);
+        dimValid = builder.create<arith::AndIOp>(loc, geZero, ltSize);
+      }
+
+      boundsValid =
+          boundsValid
+              ? builder.create<arith::AndIOp>(loc, boundsValid, dimValid)
+              : dimValid;
+    }
+  }
+
+  if (!boundsValid)
+    return;
+
+  /// Recreate DbAcquireOp with bounds_valid
+  SmallVector<Value> indicesVec(indices.begin(), indices.end());
+  SmallVector<Value> offsetsVec(acquireOp.getOffsets().begin(),
+                                acquireOp.getOffsets().end());
+  SmallVector<Value> sizesVec(acquireOp.getSizes().begin(),
+                              acquireOp.getSizes().end());
+  SmallVector<Value> offsetHintsVec(acquireOp.getOffsetHints().begin(),
+                                    acquireOp.getOffsetHints().end());
+  SmallVector<Value> sizeHintsVec(acquireOp.getSizeHints().begin(),
+                                  acquireOp.getSizeHints().end());
+
+  auto newAcquire = builder.create<DbAcquireOp>(
+      loc, acquireOp.getMode(), acquireOp.getSourceGuid(),
+      acquireOp.getSourcePtr(), indicesVec, offsetsVec, sizesVec,
+      offsetHintsVec, sizeHintsVec, boundsValid);
+  transferAttributes(acquireOp, newAcquire);
+
+  acquireOp.getGuid().replaceAllUsesWith(newAcquire.getGuid());
+  acquireOp.getPtr().replaceAllUsesWith(newAcquire.getPtr());
+  acquireOp.erase();
+
+  ARTS_DEBUG("Added bounds_valid to DbAcquireOp: " << newAcquire);
 }
 
 ///===----------------------------------------------------------------------===///

@@ -264,7 +264,6 @@ def MemrefMetadataAttr : Arts_Attr<"MemrefMetadata", "memref_metadata"> {
     OptionalParameter<"::mlir::IntegerAttr">:$totalAccesses,
     OptionalParameter<"::mlir::IntegerAttr">:$readCount,
     OptionalParameter<"::mlir::IntegerAttr">:$writeCount,
-    OptionalParameter<"::mlir::FloatAttr">:$readWriteRatio,
     OptionalParameter<"::mlir::BoolAttr">:$allAccessesAffine,
     OptionalParameter<"::mlir::BoolAttr">:$hasAffineAccesses,
     OptionalParameter<"::mlir::BoolAttr">:$hasNonAffineAccesses,

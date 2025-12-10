@@ -402,18 +402,33 @@ show_usage() {
 run_cgeist() {
     local input_file="$1"
     shift
-    
+
     if [[ ! -f "$input_file" ]]; then
         carts_error "Input file '$input_file' not found"
         exit 1
     fi
-    
+
     # Use shared include and sysroot configuration populated during host detection
     local include_paths=("${CARTS_INCLUDE_FLAGS[@]}")
     local extra_cflags=("${CARTS_CGEIST_SYSROOT_FLAGS[@]}")
 
     # Always add --raise-scf-to-affine for affine analysis
     local affine_flags=("--raise-scf-to-affine")
+
+    # Filter out --arts-config and its argument (not supported by cgeist)
+    local filtered_args=()
+    local skip_next=false
+    for arg in "$@"; do
+        if [[ "$skip_next" == "true" ]]; then
+            skip_next=false
+            continue
+        fi
+        if [[ "$arg" == "--arts-config" ]]; then
+            skip_next=true
+            continue
+        fi
+        filtered_args+=("$arg")
+    done
 
     if [[ -n "$CARTS_VERBOSE" ]]; then
         carts_debug "Running cgeist with include paths:"
@@ -422,10 +437,10 @@ run_cgeist() {
             carts_debug "Additional cgeist flags: ${extra_cflags[*]}"
         fi
         carts_debug "Affine flags: ${affine_flags[*]}"
-        carts_debug "Command: ${POLYGEIST_INSTALL_DIR}/bin/cgeist ${include_paths[*]} ${extra_cflags[*]} ${affine_flags[*]} $input_file $*"
+        carts_debug "Command: ${POLYGEIST_INSTALL_DIR}/bin/cgeist ${include_paths[*]} ${extra_cflags[*]} ${affine_flags[*]} $input_file ${filtered_args[*]}"
     fi
 
-    "${POLYGEIST_INSTALL_DIR}/bin/cgeist" "${include_paths[@]}" "${extra_cflags[@]}" "${affine_flags[@]}" "$input_file" "$@"
+    "${POLYGEIST_INSTALL_DIR}/bin/cgeist" "${include_paths[@]}" "${extra_cflags[@]}" "${affine_flags[@]}" "$input_file" "${filtered_args[@]}"
 }
 
 
@@ -1239,6 +1254,7 @@ run_local_clean() {
         "*.tmp"
         ".artsPrintLock"
         ".carts-metadata.json"
+        "*_arts_metadata.mlir"
     )
 
     # Directories to remove
@@ -1577,7 +1593,7 @@ run_execute() {
     local original_verbose="$CARTS_VERBOSE"
     unset CARTS_VERBOSE
     
-    if ! carts cgeist "$input_file" "${cgeist_flags[@]}" > "${base_name}.mlir"; then
+    if ! carts cgeist "$input_file" "${cgeist_flags[@]}" "${execute_args[@]}" > "${base_name}.mlir"; then
         carts_error "Failed to convert C++ to MLIR"
         exit 1
     fi
@@ -1734,7 +1750,7 @@ run_execute_dual() {
     unset CARTS_VERBOSE
 
     # Always generate debug info for source location matching
-    if ! carts cgeist "$input_file" "$std_flag" "-O0" "-S" "--print-debug-info" > "${base_name}_seq.mlir"; then
+    if ! carts cgeist "$input_file" "$std_flag" "-O0" "-S" "--print-debug-info" "${execute_args[@]}" > "${base_name}_seq.mlir"; then
         carts_error "Failed to convert C++ to MLIR (sequential)"
         exit 1
     fi
@@ -1743,7 +1759,7 @@ run_execute_dual() {
     carts_step "[2/5]: Collecting metadata"
     carts_info "Running metadata analysis on sequential code..."
 
-    if ! carts run "${base_name}_seq.mlir" --collect-metadata -o "${base_name}_seq_metadata.mlir"; then
+    if ! carts run "${base_name}_seq.mlir" --collect-metadata -o "${base_name}_arts_metadata.mlir"; then
         carts_error "Failed to collect metadata"
         exit 1
     fi
@@ -1761,7 +1777,7 @@ run_execute_dual() {
     carts_info "Compiling with OpenMP directives..."
 
     # Also generate debug info for parallel compilation to match source locations
-    if ! carts cgeist "$input_file" "$std_flag" "-fopenmp" "-O0" "-S" "--print-debug-info" > "${base_name}.mlir"; then
+    if ! carts cgeist "$input_file" "$std_flag" "-fopenmp" "-O0" "-S" "--print-debug-info" "${execute_args[@]}" > "${base_name}.mlir"; then
         carts_error "Failed to convert C++ to MLIR (parallel)"
         exit 1
     fi

@@ -19,16 +19,6 @@ struct AccessStats {
   std::optional<int64_t> readCount;
   std::optional<int64_t> writeCount;
   std::optional<int64_t> totalAccesses;
-  std::optional<double> readWriteRatio;
-
-  /// Compute read/write ratio from counts
-  void computeRatio() {
-    if (readCount && writeCount) {
-      int64_t total = *readCount + *writeCount;
-      if (total > 0)
-        readWriteRatio = static_cast<double>(*readCount) / total;
-    }
-  }
 
   /// Compute total accesses from counts
   void computeTotal() {
