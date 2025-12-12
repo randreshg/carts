@@ -142,7 +142,6 @@ void DbPass::runOnOperation() {
     analyzeStencilBounds();
   }
 
-
   if (changed) {
     /// If the module has changed, adjust the db modes again
     // changed |= adjustDbModes();
@@ -312,26 +311,15 @@ bool DbPass::partitionDb() {
           return;
 
         Value chunkOffset, chunkSize;
-        auto [cachedOffset, cachedSize] = acqNode->getPartitionInfo();
-
-        if (cachedOffset && cachedSize) {
-          /// Partition offset already validated in canBePartitioned()
-          chunkOffset = cachedOffset;
-          chunkSize = cachedSize;
-          ARTS_DEBUG("  Using cached chunk info for acquire "
-                     << acqNode->getDbAcquireOp() << " offset=" << chunkOffset
-                     << " size=" << chunkSize);
-        } else if (failed(acqNode->computeChunkInfo(chunkOffset, chunkSize))) {
+        if (failed(acqNode->computeChunkInfo(chunkOffset, chunkSize))) {
           ARTS_DEBUG("  Failed to compute chunk info for acquire "
                      << acqNode->getDbAcquireOp());
           allValid = false;
           return;
-        } else {
-          acqNode->setPartitionInfo(chunkOffset, chunkSize);
-          ARTS_DEBUG("  Computed chunk info for acquire "
-                     << acqNode->getDbAcquireOp() << " offset=" << chunkOffset
-                     << " size=" << chunkSize);
         }
+        ARTS_DEBUG("  Computed chunk info for acquire "
+                   << acqNode->getDbAcquireOp() << " offset=" << chunkOffset
+                   << " size=" << chunkSize);
 
         validatedAcqs.push_back({acqNode, chunkOffset, chunkSize});
       });
@@ -675,7 +663,8 @@ void DbPass::generateBoundsValid(DbAcquireOp acquireOp,
   auto indices = acquireOp.getIndices();
   SmallVector<Value> sourceSizes = getSizesFromDb(acquireOp.getSourcePtr());
 
-  /// Check if lower bound is guaranteed by control flow (inside else of `if iv==0`)
+  /// Check if lower bound is guaranteed by control flow (inside else of `if
+  /// iv==0`)
   bool lowerBoundGuarded =
       isLowerBoundGuaranteedByControlFlow(acquireOp, loopIV);
 
@@ -689,7 +678,8 @@ void DbPass::generateBoundsValid(DbAcquireOp acquireOp,
       Value dimValid;
 
       if (lowerBoundGuarded) {
-        /// Only check upper bound: idx < size (lower bound guaranteed by control flow)
+        /// Only check upper bound: idx < size (lower bound guaranteed by
+        /// control flow)
         dimValid = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt,
                                                  idx, size);
       } else {

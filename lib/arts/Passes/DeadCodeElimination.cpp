@@ -1,19 +1,25 @@
 ///==========================================================================///
 /// File: DeadCodeElimination.cpp
 ///
-/// This pass performs dead code elimination for memref operations.
+/// This pass performs dead code elimination for ARTS and memref operations.
 /// It removes:
 /// - Dead loads (loads whose results are unused)
 /// - Dead stores (stores to allocas that are never loaded)
 /// - Dead allocas (allocas with no remaining uses)
+/// - Dead arts.undef operations (undef values with no uses)
+/// - Trivially empty EDTs (EDTs with only yield/barrier/release ops)
+/// - Dead datablocks (db_alloc where both guid and ptr are unused)
 ///
 /// This is particularly useful after openmp-to-arts conversion where OMP
-/// dependency proxy allocas become unused.
+/// dependency proxy allocas become unused, and after EDT lowering where
+/// placeholder undef values may remain.
 ///==========================================================================///
 
 #include "ArtsPassDetails.h"
+#include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsDebug.h"
+#include "arts/Utils/OpRemovalManager.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
@@ -42,11 +48,18 @@ struct DeadCodeEliminationPass
       changed = false;
       iterations++;
 
+      /// Memref DCE
       unsigned removedLoads = removeDeadLoads(module);
       unsigned removedStores = removeDeadStores(module);
       unsigned removedAllocas = removeDeadAllocas(module);
 
-      unsigned removed = removedLoads + removedStores + removedAllocas;
+      /// ARTS-specific DCE
+      unsigned removedUndefs = removeDeadUndefs(module);
+      unsigned removedEdts = removeEmptyEdts(module);
+      unsigned removedDbs = removeDeadDbs(module);
+
+      unsigned removed = removedLoads + removedStores + removedAllocas +
+                         removedUndefs + removedEdts + removedDbs;
       totalRemoved += removed;
       changed = (removed > 0);
     }
@@ -123,6 +136,71 @@ struct DeadCodeEliminationPass
       op->erase();
 
     return toRemove.size();
+  }
+
+  ///===----------------------------------------------------------------------===///
+  /// ARTS-specific Dead Code Elimination
+  ///===----------------------------------------------------------------------===///
+
+  /// Remove arts.undef operations whose results have no uses
+  /// These are created as placeholders during EDT outlining and may remain
+  /// after transformation if not all uses were replaced.
+  unsigned removeDeadUndefs(ModuleOp module) {
+    OpRemovalManager removalMgr;
+    module.walk([&](UndefOp undef) { removalMgr.markForRemoval(undef); });
+    ARTS_DEBUG(" - Removing " << removalMgr.size() << " undef operations");
+    removalMgr.removeAllMarked(module, /*recursive=*/true);
+    return 0;
+  }
+
+  /// Remove trivially empty EDTs (only yield/barrier/release ops)
+  unsigned removeEmptyEdts(ModuleOp module) {
+    OpRemovalManager removalMgr;
+    module.walk([&](EdtOp edt) {
+      bool hasWork = false;
+      for (Operation &op : edt.getBody().front()) {
+        if (isa<arts::YieldOp>(op) || isa<arts::BarrierOp>(op))
+          continue;
+        if (isa<arts::DbReleaseOp>(op))
+          continue;
+        hasWork = true;
+        break;
+      }
+      if (hasWork)
+        return;
+
+      /// Remove the EDT and any single-use acquires that only feed it.
+      for (Value dep : edt.getDependencies()) {
+        if (auto acq = dep.getDefiningOp<arts::DbAcquireOp>()) {
+          bool ptrOnlyUsedHere =
+              acq.getPtr() == dep && acq.getPtr().hasOneUse();
+          bool guidUnused = acq.getGuid().use_empty();
+          if (ptrOnlyUsedHere && guidUnused)
+            removalMgr.markForRemoval(acq);
+        }
+      }
+
+      removalMgr.markForRemoval(edt);
+    });
+    auto opsToRemoveSize = removalMgr.getOpsToRemove().size();
+    removalMgr.removeAllMarked(module, /*recursive=*/true);
+    return opsToRemoveSize;
+  }
+
+  /// Remove arts.db_alloc operations where both guid and ptr are unused
+  unsigned removeDeadDbs(ModuleOp module) {
+    OpRemovalManager removalMgr;
+
+    module.walk([&](DbAllocOp dbAlloc) {
+      if (dbAlloc.getGuid().use_empty() && dbAlloc.getPtr().use_empty()) {
+        ARTS_DEBUG("Removing dead db_alloc: " << dbAlloc);
+        removalMgr.markForRemoval(dbAlloc);
+      }
+    });
+
+    auto opsToRemoveSize = removalMgr.getOpsToRemove().size();
+    removalMgr.removeAllMarked(module, /*recursive=*/true);
+    return opsToRemoveSize;
   }
 
   /// Remove dead symbols (functions/globals) that are private and unused

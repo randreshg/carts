@@ -1,4 +1,7 @@
 add_subdirectory(arts)
 
-# Pure C test utilities library
+# Test utilities library
 add_subdirectory(arts/Utils/Testing)
+
+# Benchmark utilities library
+add_subdirectory(arts/Utils/Benchmarks)

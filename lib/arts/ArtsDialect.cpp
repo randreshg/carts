@@ -426,7 +426,10 @@ buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
         arts::getElementMemRefType(elementType, elementSizes);
     SmallVector<int64_t> shape;
     shape.assign(sizes.size(), ShapedType::kDynamic);
-    ptrType = MemRefType::get(shape, MemRefType::get({}, pointerElementType));
+    /// Use element type directly without extra rank-0 wrapper
+    /// This produces memref<?xmemref<?xf32>> instead of
+    /// memref<?xmemref<memref<?xf32>>>
+    ptrType = MemRefType::get(shape, pointerElementType);
   }
   state.addTypes({guidType, ptrType});
 
@@ -484,10 +487,14 @@ void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
 }
 
 MemRefType DbAllocOp::getAllocatedElementType() {
-  return MemRefType::get(
-      {}, arts::getElementMemRefType(
-              getElementType(), SmallVector<Value>(getElementSizes().begin(),
-                                                   getElementSizes().end())));
+  /// For nested memrefs (float **), return the inner memref type directly.
+  auto ptrType = getPtr().getType().cast<MemRefType>();
+  if (auto innerMemRefType = ptrType.getElementType().dyn_cast<MemRefType>())
+    return innerMemRefType;
+
+  return arts::getElementMemRefType(
+      getElementType(),
+      SmallVector<Value>(getElementSizes().begin(), getElementSizes().end()));
 }
 
 ///===----------------------------------------------------------------------===///
@@ -710,7 +717,7 @@ void DbRefOp::build(OpBuilder &builder, OperationState &state, Value source,
   /// The dbref
   DbAllocOp dbAllocOp = dyn_cast<DbAllocOp>(arts::getUnderlyingDbAlloc(source));
   assert(dbAllocOp && "Expected dbAllocOp");
-  state.addTypes(dbAllocOp.getAllocatedElementType().getElementType());
+  state.addTypes(dbAllocOp.getAllocatedElementType());
   state.addOperands(source);
   state.addOperands(indices);
   state.addAttribute(
@@ -760,7 +767,7 @@ LogicalResult DbRefOp::verify() {
 
   /// Verify output type
   auto resultType = getResult().getType().cast<MemRefType>();
-  if (resultType != dbAllocOp.getAllocatedElementType().getElementType())
+  if (resultType != dbAllocOp.getAllocatedElementType())
     return emitOpError("result type must match source element type\n")
            << *getOperation();
   return success();

@@ -38,3 +38,4 @@ external/*/cmake_install.cmake
 *.tmp
 *.csv
 
+.python-cache

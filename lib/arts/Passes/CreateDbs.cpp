@@ -940,19 +940,9 @@ void CreateDbsPass::insertDbFreeForDbAlloc(DbAllocOp dbAlloc, Operation *alloc,
     opsToRemove.insert(*deallocOp);
 
   /// Determine where to insert DbFreeOp based on where dbAlloc is located
-  Operation *insertionPoint = nullptr;
-
-  /// Check if dbAlloc is within an EDT
-  if (EdtOp parentEdt = dbAlloc->getParentOfType<EdtOp>()) {
-    /// Insert before EDT terminator
-    Block &edtBlock = parentEdt.getBody().front();
-    insertionPoint = edtBlock.getTerminator();
-
-  } else {
-    /// Insert at the end of the block containing dbAlloc to ensure dominance
-    Block *allocBlock = dbAlloc->getBlock();
-    insertionPoint = allocBlock->getTerminator();
-  }
+  /// Insert at the end of the block containing dbAlloc
+  Block *allocBlock = dbAlloc->getBlock();
+  Operation *insertionPoint = allocBlock->getTerminator();
 
   /// Insert DbFreeOp if we found a valid insertion point
   assert(insertionPoint && "Could not find insertion point for DbFreeOp");
@@ -970,7 +960,7 @@ void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
   assert(memrefInfo.dbAllocOp && "No DbAllocOp found");
 
   auto dbAlloc = memrefInfo.dbAllocOp;
-  Type elementMemRefType = dbAlloc.getAllocatedElementType().getElementType();
+  Type elementMemRefType = dbAlloc.getAllocatedElementType();
 
   /// Collect users in the parent edt
   SmallVector<Operation *, 8> users;
@@ -999,7 +989,7 @@ void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
 /// is used when the allocation is not inside an EDT, but is still shared with
 /// EDTs and the host needs to see the updated data.
 void CreateDbsPass::rewriteUsesEverywhere(Operation *alloc, DbAllocOp dbAlloc) {
-  Type elementMemRefType = dbAlloc.getAllocatedElementType().getElementType();
+  Type elementMemRefType = dbAlloc.getAllocatedElementType();
 
   SmallVector<Operation *> users;
   for (auto &use : alloc->getUses()) {
@@ -1040,14 +1030,15 @@ void CreateDbsPass::rewriteUsesInEdt(EdtOp edt,
   ARTS_DEBUG(" - Rewriting " << operations.size() << " operations in EDT");
 
   /// Get the element type from the acquired datablock
-  /// For fine-grained: memref<?xmemref<memref<?xT>>> -> extract memref<?xT>
+  /// For fine-grained: memref<?xmemref<?xT>> -> extract memref<?xT>
+  /// The outer dimension is the datablock index, inner is the element memref
   Type elementMemRefType = dbAcquireArg.getType();
   if (auto outerMemrefType = elementMemRefType.dyn_cast<MemRefType>()) {
     if (auto innerMemrefType =
             outerMemrefType.getElementType().dyn_cast<MemRefType>()) {
-      /// Fine-grained: outer type is memref<?xmemref<memref<?xT>>>
-      /// Extract the innermost memref type: memref<?xT>
-      elementMemRefType = innerMemrefType.getElementType();
+      /// Fine-grained: outer type is memref<?xmemref<?xT>>
+      /// Extract the element memref type: memref<?xT>
+      elementMemRefType = innerMemrefType;
     }
   }
 
