@@ -31,11 +31,10 @@ namespace arts {
 ///   - Indexed dimensions [0, numIndexedDims): local = 0
 ///   - Sliced dimensions [numIndexedDims, end):
 ///     * If globalIdx == offset: local = 0
-///     * If globalIdx = offset + delta (provable): local = delta
-///     * Otherwise: local = globalIdx (conservative, no transformation)
+///     * If globalIdx = offset + delta (provable): local = delta 
+///     * Otherwise: local = globalIdx - offset (explicit subtraction)
 ///
-/// We subtract offset when we can prove the global index is
-/// derived from the partition offset.
+/// We always compute local = global - offset for sliced dimensions.
 ///===----------------------------------------------------------------------===///
 struct ViewCoordinateMap {
   /// Number of leading dimensions pinned by DbAcquireOp::indices.

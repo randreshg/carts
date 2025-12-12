@@ -128,10 +128,13 @@ void OpRemovalManager::removeOpImpl(Operation *op, OpBuilder &builder,
         dependents.push_back(user);
   }
 
-  /// If this is a terminator, mark its parent for removal
+  /// If this is a terminator, mark the parent for removal.
   if (op->hasTrait<OpTrait::IsTerminator>()) {
-    if (Operation *parent = op->getParentOp())
+    if (Operation *parent = op->getParentOp()) {
       markForRemoval(parent);
+      ARTS_DEBUG("   - Skipping terminator removal, marked parent instead");
+    }
+    return;
   }
 
   /// In non-recursive mode, never erase operations that still have uses; keep
@@ -139,10 +142,27 @@ void OpRemovalManager::removeOpImpl(Operation *op, OpBuilder &builder,
   if (!recursive && !op->use_empty())
     return;
 
-  /// Drop all uses of this operation's results to dereference them
+  /// Check if any user is a terminator - if so, we cannot safely remove this
+  /// op because dropping uses would leave null operands in the terminator.
+  bool hasTerminatorUser = false;
+  for (Value result : op->getResults()) {
+    for (Operation *user : result.getUsers()) {
+      if (user->hasTrait<OpTrait::IsTerminator>()) {
+        hasTerminatorUser = true;
+        break;
+      }
+    }
+    if (hasTerminatorUser)
+      break;
+  }
+
+  if (hasTerminatorUser) {
+    replaceWithUndef(op, builder);
+    ARTS_DEBUG("   - Replaced uses with undef (terminator user)");
+  }
   op->dropAllUses();
 
-  /// Erase the operation immediately since all uses have been dropped
+  /// Erase the operation immediately since all uses have been handled
   op->erase();
 
   /// No recursion requested
