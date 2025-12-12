@@ -214,6 +214,8 @@ void setupCanonicalizeMemrefs(PassManager &pm) {
   pm.addPass(createInlinerPass());
   pm.addPass(arts::createArtsInlinerPass());
   pm.addPass(arts::createCanonicalizeMemrefsPass());
+  pm.addPass(arts::createDeadCodeEliminationPass());
+  pm.addPass(createCSEPass());
 }
 
 /// Metadata collection pass.
@@ -295,7 +297,7 @@ void setupConcurrency(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 
 /// Concurrency optimization passes.
 void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
-  pm.addPass(arts::createEdtPass(AM, /*runAnalysis=*/false));
+  pm.addPass(arts::createDeadCodeEliminationPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(arts::createDbPass(AM, /*enablePartitioning=*/true));

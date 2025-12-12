@@ -35,7 +35,6 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
-#include <string>
 
 ARTS_DEBUG_SETUP(canonicalize_memrefs);
 
@@ -91,6 +90,10 @@ struct AllocPattern {
   SmallVector<AccessInfo> accesses;
   SmallVector<DepInfo> dependencies;
 
+  /// Outer wrapper allocas that store the root allocation value
+  /// (created when inlined alloc_Nd returns to caller's variable)
+  SmallVector<Value> outerWrapperAliases;
+
   /// Get outermost init loop
   scf::ForOp getOutermostInitLoop() const {
     return initLoops.empty() ? scf::ForOp() : initLoops[0];
@@ -130,6 +133,66 @@ static Value materializeOpFoldResult(OpFoldResult ofr, OpBuilder &builder,
     return builder.create<arith::ConstantIndexOp>(
         loc, attr.cast<IntegerAttr>().getInt());
   return nullptr;
+}
+
+/// Trace a value through wrapper loads back to the root allocation.
+///   %inner_wrapper = memref.alloca() : memref<memref<?x...>>
+///   %root_alloc = memref.alloc(...)
+///   memref.store %root_alloc, %inner_wrapper[]
+///   %result = memref.load %inner_wrapper[]  /// val is this load result
+static Value traceWrapperLoadToAlloc(Value val) {
+  constexpr int MAX_DEPTH = 10;
+  for (int depth = 0; depth < MAX_DEPTH; ++depth) {
+    auto loadOp = val.getDefiningOp<memref::LoadOp>();
+    if (!loadOp)
+      break;
+
+    Value wrapper = loadOp.getMemref();
+    auto wrapperType = wrapper.getType().dyn_cast<MemRefType>();
+    if (!wrapperType || wrapperType.getRank() != 0)
+      break;
+
+    /// Find store to this wrapper
+    Value nextVal;
+    for (Operation *user : wrapper.getUsers()) {
+      if (auto storeOp = dyn_cast<memref::StoreOp>(user)) {
+        if (storeOp.getMemref() == wrapper) {
+          Value storedVal = storeOp.getValue();
+          /// Check if direct allocation (through casts)
+          Value underlying = arts::getUnderlyingValue(storedVal);
+          if (underlying && underlying.getDefiningOp<memref::AllocOp>())
+            return underlying;
+          /// Otherwise continue tracing through nested loads
+          nextVal = storedVal;
+          break;
+        }
+      }
+    }
+    if (!nextVal)
+      break;
+    val = nextVal;
+  }
+  return Value();
+}
+
+/// Check if a rank-0 wrapper alloca's loads are stored to another wrapper.
+/// This indicates it's an inner wrapper from an inlined alloc_Nd pattern.
+static bool isInnerWrapperOfInlinedPattern(Value alloc) {
+  for (Operation *user : alloc.getUsers()) {
+    if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+      for (Operation *loadUser : loadOp.getResult().getUsers()) {
+        if (auto storeOp = dyn_cast<memref::StoreOp>(loadUser)) {
+          auto storeDest = storeOp.getMemref();
+          auto storeDestType = storeDest.getType().dyn_cast<MemRefType>();
+          if (storeDestType && storeDestType.getRank() == 0 &&
+              storeDest.getDefiningOp<memref::AllocaOp>()) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
 }
 
 ///===----------------------------------------------------------------------===///
@@ -340,16 +403,93 @@ CanonicalizeMemrefsPass::detectPattern(Value alloc) {
           Value underlying = arts::getUnderlyingValue(storedVal);
           if (underlying && underlying.getDefiningOp<memref::AllocOp>()) {
             pattern.wrapperAlloca = alloc;
-            pattern.rootAlloc = storedVal; // Keep cast result for SROA
+            pattern.rootAlloc = storedVal; /// Keep cast result for SROA
             pattern.storeToWrapper = storeOp;
             allocType = storedVal.getType().cast<MemRefType>();
             break;
           }
+
+          /// Handle inlined alloc_Nd pattern: stored value is a load from
+          /// another wrapper (the inner wrapper from inlined function)
+          ///   %inner_wrapper = memref.alloca() : memref<memref<?x...>>
+          ///   %root_alloc = memref.alloc(...)
+          ///   memref.store %root_alloc, %inner_wrapper[]
+          ///   %result = memref.load %inner_wrapper[]  /// storedVal is this
+          ///   memref.store %result, %outer_wrapper[]  /// current store
+          if (auto loadOp = storedVal.getDefiningOp<memref::LoadOp>()) {
+            Value loadSource = loadOp.getMemref();
+            auto loadSourceType = loadSource.getType().dyn_cast<MemRefType>();
+            /// Check if load source is a rank-0 wrapper alloca
+            if (loadSourceType && loadSourceType.getRank() == 0 &&
+                loadSourceType.getElementType().isa<MemRefType>() &&
+                loadSource.getDefiningOp<memref::AllocaOp>()) {
+              /// Trace through inner wrapper to find root allocation
+              Value rootAlloc = traceWrapperLoadToAlloc(storedVal);
+              if (rootAlloc) {
+                ARTS_DEBUG("  Detected inlined alloc_Nd pattern");
+                pattern.wrapperAlloca = alloc;
+                pattern.rootAlloc = rootAlloc;
+                pattern.storeToWrapper = storeOp;
+                allocType = rootAlloc.getType().cast<MemRefType>();
+                break;
+              }
+            }
+          }
         }
       }
     }
-    if (!pattern.wrapperAlloca)
+    if (!pattern.wrapperAlloca) {
+      /// Check if this is an inner wrapper from an inlined alloc_Nd pattern.
+      /// If so, skip it - will be handled when processing the outer wrapper.
+      if (isInnerWrapperOfInlinedPattern(alloc)) {
+        ARTS_DEBUG("  Skipping inner wrapper of inlined alloc_Nd pattern");
+        return std::nullopt;
+      }
+      /// Cleanup: rank-0 wrapper with no store → mark removal, replace trivial
+      /// uses (loads) with undef to unblock pass and remove noise wrappers.
+      llvm::DenseSet<Operation *> cleanup;
+      OpBuilder cleanupBuilder(alloc.getContext());
+
+      for (Operation *user : llvm::make_early_inc_range(alloc.getUsers())) {
+        if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+          cleanupBuilder.setInsertionPoint(loadOp);
+          auto memType = loadOp.getType().cast<MemRefType>();
+          SmallVector<Value> dynSizes;
+          for (int64_t d = 0; d < memType.getRank(); ++d) {
+            if (memType.isDynamicDim(d)) {
+              dynSizes.push_back(cleanupBuilder.create<arith::ConstantIndexOp>(
+                  loadOp.getLoc(), 0));
+            }
+          }
+          Value repl = cleanupBuilder.create<memref::AllocOp>(
+              loadOp.getLoc(), memType, dynSizes);
+          loadOp.replaceAllUsesWith(repl);
+          cleanup.insert(loadOp);
+        } else if (auto affineLoad = dyn_cast<affine::AffineLoadOp>(user)) {
+          cleanupBuilder.setInsertionPoint(affineLoad);
+          auto memType = affineLoad.getType().cast<MemRefType>();
+          SmallVector<Value> dynSizes;
+          for (int64_t d = 0; d < memType.getRank(); ++d) {
+            if (memType.isDynamicDim(d)) {
+              dynSizes.push_back(cleanupBuilder.create<arith::ConstantIndexOp>(
+                  affineLoad.getLoc(), 0));
+            }
+          }
+          Value repl = cleanupBuilder.create<memref::AllocOp>(
+              affineLoad.getLoc(), memType, dynSizes);
+          affineLoad.replaceAllUsesWith(repl);
+          cleanup.insert(affineLoad);
+        } else if (isa<memref::DeallocOp>(user)) {
+          cleanup.insert(user);
+        }
+      }
+
+      for (auto *op : cleanup)
+        removalMgr.markForRemoval(op);
+      removalMgr.markForRemoval(alloc.getDefiningOp());
+
       return std::nullopt;
+    }
   }
 
   /// At this point we have:
@@ -372,13 +512,13 @@ CanonicalizeMemrefsPass::detectPattern(Value alloc) {
   ///   %wrapper = memref.alloca() : memref<memref<?xi32>>
   ///   %alloc = memref.alloc(%N) : memref<?xi32>
   ///   memref.store %alloc, %wrapper[]
-  ///   %loaded = memref.load %wrapper[]   // Creates new SSA value!
-  ///   // All accesses use %loaded[i], not %alloc[i]
+  ///   %loaded = memref.load %wrapper[]   /// Creates new SSA value!
+  ///   /// All accesses use %loaded[i], not %alloc[i]
   ///
   /// After canonicalization (SROA):
   ///   %alloc = memref.alloc(%N) : memref<?xi32>
-  ///   // All uses of %loaded replaced with %alloc
-  ///   // Wrapper alloca removed
+  ///   /// All uses of %loaded replaced with %alloc
+  ///   /// Wrapper alloca removed
   ///
   if (pattern.wrapperAlloca && !elemType.isa<MemRefType>()) {
     ARTS_DEBUG("Detected simple wrapper pattern (1D array)");
@@ -528,8 +668,9 @@ CanonicalizeMemrefsPass::detectPattern(Value alloc) {
     }
   }
 
-  if (!foundLoop)
+  if (!foundLoop) {
     return std::nullopt;
+  }
 
   /// Check if the outermost init loop has results (produces values)
   /// If so, we cannot simply remove it - the results are used by surrounding
@@ -540,6 +681,35 @@ CanonicalizeMemrefsPass::detectPattern(Value alloc) {
                << outermostLoop.getNumResults()
                << " results that would break control flow");
     return std::nullopt;
+  }
+
+  /// Detect outer wrapper aliases: after inlining alloc_Nd(), the pattern is:
+  ///   %loaded = load %innerWrapper[]
+  ///   store %loaded, %outerWrapper[]
+  /// The actual element accesses use %outerWrapper, not %innerWrapper.
+  if (pattern.wrapperAlloca) {
+    for (Operation *wrapperUser : pattern.wrapperAlloca.getUsers()) {
+      if (auto loadOp = dyn_cast<memref::LoadOp>(wrapperUser)) {
+        if (loadOp.getMemref() != pattern.wrapperAlloca)
+          continue;
+        /// This load returns the root allocation value
+        for (Operation *loadUser : loadOp.getResult().getUsers()) {
+          if (auto storeOp = dyn_cast<memref::StoreOp>(loadUser)) {
+            if (storeOp.getValue() != loadOp.getResult())
+              continue;
+            /// Found a store of the loaded value - check if dest is an alloca
+            if (auto outerAlloca =
+                    storeOp.getMemref().getDefiningOp<memref::AllocaOp>()) {
+              /// Skip if it's the same as our wrapper
+              if (outerAlloca.getResult() == pattern.wrapperAlloca)
+                continue;
+              pattern.outerWrapperAliases.push_back(outerAlloca.getResult());
+              ARTS_DEBUG("  Found outer wrapper alias: " << outerAlloca);
+            }
+          }
+        }
+      }
+    }
   }
 
   return pattern;
@@ -554,6 +724,11 @@ void CanonicalizeMemrefsPass::collectAllAccesses(AllocPattern &pattern) {
   if (pattern.wrapperAlloca)
     roots.push_back(pattern.wrapperAlloca);
   roots.push_back(pattern.rootAlloc);
+
+  /// Add outer wrapper aliases as roots - element accesses may come through
+  /// these after inlining alloc_Nd functions
+  for (Value outerWrapper : pattern.outerWrapperAliases)
+    roots.push_back(outerWrapper);
 
   for (Value root : roots) {
     if (!root)
@@ -887,9 +1062,34 @@ LogicalResult CanonicalizeMemrefsPass::transformPattern(AllocPattern &pattern,
 
   /// 3. Transform element accesses
   for (auto &access : pattern.accesses) {
-    /// Add chain ops to removal set
-    for (auto *op : access.chainOps)
-      toRemove.insert(op);
+    /// Add chain ops to removal set ONLY if they have no other uses.
+    /// Some chain ops (like intermediate loads) may be used in multiple
+    /// places (e.g., scf.if branches) and should not be removed.
+    for (auto *op : access.chainOps) {
+      bool hasOtherUses = false;
+      for (Value result : op->getResults()) {
+        for (Operation *user : result.getUsers()) {
+          /// Skip if this is the terminal op for this access
+          if (user == access.terminalOp)
+            continue;
+          /// Skip if user is already marked for removal
+          if (toRemove.count(user))
+            continue;
+            /// Skip if user is a terminator
+          if (user->hasTrait<OpTrait::IsTerminator>()) {
+            hasOtherUses = true;
+            break;
+          }
+          /// Any other user means we should preserve this op
+          hasOtherUses = true;
+          break;
+        }
+        if (hasOtherUses)
+          break;
+      }
+      if (!hasOtherUses)
+        toRemove.insert(op);
+    }
 
     switch (access.kind) {
     case AccessInfo::Kind::ElementLoad: {
@@ -992,6 +1192,19 @@ LogicalResult CanonicalizeMemrefsPass::transformPattern(AllocPattern &pattern,
   if (pattern.storeToWrapper)
     toRemove.insert(pattern.storeToWrapper);
 
+  /// 7.5. Mark outer wrapper allocas for removal
+  /// After rewriting element accesses, the outer wrappers are no longer needed.
+  for (Value outerWrapper : pattern.outerWrapperAliases) {
+    if (auto *defOp = outerWrapper.getDefiningOp()) {
+      /// Only mark the outer wrapper alloca if it has no remaining uses
+      /// after our element access rewrites
+      if (defOp->use_empty()) {
+        toRemove.insert(defOp);
+        ARTS_DEBUG("  Marking unused outer wrapper alloca for removal");
+      }
+    }
+  }
+
   /// 8. Queue all ops for removal
   for (auto *op : toRemove)
     removalMgr.markForRemoval(op);
@@ -1017,7 +1230,7 @@ LogicalResult CanonicalizeMemrefsPass::transformPattern(AllocPattern &pattern,
 ///
 /// After:
 ///   %alloc = memref.alloc(%N) : memref<?xi32>
-///   memref.store %val, %alloc[%i]   // Direct use of %alloc
+///   memref.store %val, %alloc[%i]   /// Direct use of %alloc
 ///
 LogicalResult
 CanonicalizeMemrefsPass::transformSimpleWrapper(AllocPattern &pattern,
@@ -1127,8 +1340,99 @@ void CanonicalizeMemrefsPass::handleDeallocations(
   /// 1. Direct dealloc of rootAlloc
   /// 2. Dealloc loop that frees inner arrays then outer array
   /// 3. Loads from wrapper used for deallocation
+  ///
+  /// For N-dimensional arrays (float ***, float ****, etc.), the deallocation
+  /// pattern is recursive:
+  ///   %val = load %wrapper[]
+  ///   for %i {
+  ///     %row = load %val[%i]
+  ///     for %j {
+  ///       %inner = load %row[%j]
+  ///       dealloc %inner
+  ///     }
+  ///     dealloc %row
+  ///   }
+  ///   dealloc %val
+
+  /// Build patternValues set for tracing
+  llvm::DenseSet<Value> patternValues;
+  patternValues.insert(pattern.rootAlloc);
+  if (pattern.wrapperAlloca)
+    patternValues.insert(pattern.wrapperAlloca);
+  for (auto *allocOp : pattern.nestedAllocs) {
+    if (auto alloc = dyn_cast<memref::AllocOp>(allocOp))
+      patternValues.insert(alloc.getResult());
+  }
+
+  /// Recursive helper: Check if a value eventually leads to deallocation
+  /// through chains of loads. Returns true if any path leads to dealloc.
+  std::function<bool(Value, int)> isEventuallyDeallocated;
+  isEventuallyDeallocated = [&](Value v, int depth) -> bool {
+    if (depth > 10)
+      return false; /// Prevent infinite recursion
+    for (Operation *user : v.getUsers()) {
+      if (isa<memref::DeallocOp>(user))
+        return true;
+      if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+        /// If load returns a memref (not scalar), recurse
+        if (loadOp.getResult().getType().isa<MemRefType>()) {
+          if (isEventuallyDeallocated(loadOp.getResult(), depth + 1))
+            return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  /// Recursive helper: Collect ALL dealloc-related ops from a value
+  /// This handles N-dimensional deallocation patterns
+  std::function<void(Value, int)> collectDeallocChain;
+  collectDeallocChain = [&](Value val, int depth) {
+    if (!val || depth > 10)
+      return;
+
+    for (Operation *user : val.getUsers()) {
+      if (toRemove.count(user))
+        continue;
+
+      /// Direct dealloc
+      if (auto deallocOp = dyn_cast<memref::DeallocOp>(user)) {
+        toRemove.insert(deallocOp);
+        ARTS_DEBUG("    Marking dealloc at depth " << depth);
+        continue;
+      }
+
+      /// Load from this value
+      if (auto loadOp = dyn_cast<memref::LoadOp>(user)) {
+        if (loadOp.getMemref() != val)
+          continue;
+
+        /// Check if this load eventually leads to deallocation
+        bool eventuallyDeallocated = false;
+        Value loadResult = loadOp.getResult();
+
+        /// For memref results, check recursively
+        if (loadResult.getType().isa<MemRefType>()) {
+          eventuallyDeallocated =
+              isEventuallyDeallocated(loadResult, depth + 1);
+        } else {
+          /// Scalar result - not a dealloc path
+          continue;
+        }
+
+        if (eventuallyDeallocated) {
+          /// Mark this load and recurse into its result
+          toRemove.insert(loadOp);
+          ARTS_DEBUG("    Marking intermediate load at depth " << depth);
+          collectDeallocChain(loadResult, depth + 1);
+        }
+        continue;
+      }
+    }
+  };
 
   /// Helper to collect all dealloc-related ops starting from a value
+  /// (preserved for compatibility with existing code paths)
   std::function<void(Value)> collectDeallocOps = [&](Value val) {
     if (!val)
       return;
@@ -1153,23 +1457,25 @@ void CanonicalizeMemrefsPass::handleDeallocations(
         if (loadOp.getMemref() != val)
           continue;
 
-        /// Check if this load is used for deallocation
+        /// Use recursive check for N-level patterns
         bool usedForDealloc = false;
-        for (Operation *loadUser : loadOp.getResult().getUsers()) {
-          if (isa<memref::DeallocOp>(loadUser)) {
-            usedForDealloc = true;
-            break;
+        Value loadResult = loadOp.getResult();
+        if (loadResult.getType().isa<MemRefType>()) {
+          usedForDealloc = isEventuallyDeallocated(loadResult, 0);
+        } else {
+          /// For scalar loads, check direct dealloc (shouldn't happen)
+          for (Operation *loadUser : loadResult.getUsers()) {
+            if (isa<memref::DeallocOp>(loadUser)) {
+              usedForDealloc = true;
+              break;
+            }
           }
         }
 
         if (usedForDealloc) {
-          /// Mark the load and its dealloc users
+          /// Mark the load and recursively collect its dealloc chain
           toRemove.insert(loadOp);
-          for (Operation *loadUser : loadOp.getResult().getUsers()) {
-            if (auto deallocOp = dyn_cast<memref::DeallocOp>(loadUser)) {
-              toRemove.insert(deallocOp);
-            }
-          }
+          collectDeallocChain(loadResult, 1);
         }
         continue;
       }
@@ -1180,16 +1486,6 @@ void CanonicalizeMemrefsPass::handleDeallocations(
         /// For N-level nesting, need to check against rootAlloc, wrapper, and
         /// all nestedAllocs
         bool isDeallocLoop = false;
-
-        /// Build set of values that are part of our pattern
-        llvm::DenseSet<Value> patternValues;
-        patternValues.insert(pattern.rootAlloc);
-        if (pattern.wrapperAlloca)
-          patternValues.insert(pattern.wrapperAlloca);
-        for (auto *allocOp : pattern.nestedAllocs) {
-          if (auto alloc = dyn_cast<memref::AllocOp>(allocOp))
-            patternValues.insert(alloc.getResult());
-        }
 
         forOp.walk([&](memref::DeallocOp deallocOp) {
           /// Check if the dealloc is of a load from our pattern
@@ -1253,6 +1549,60 @@ void CanonicalizeMemrefsPass::handleDeallocations(
           }
         }
       }
+    }
+  }
+
+  /// Additional pass: Walk ALL ForOps to find deallocation loops
+  /// This handles N-level nested patterns (3D, 4D, etc.) where the ForOp
+  /// is not a direct user of the pattern values, but contains operations
+  /// that use values derived from the pattern through chains of loads.
+  {
+    /// Build patternValues set for tracing
+    llvm::DenseSet<Value> patternValues;
+    patternValues.insert(pattern.rootAlloc);
+    if (pattern.wrapperAlloca)
+      patternValues.insert(pattern.wrapperAlloca);
+    for (auto *allocOp : pattern.nestedAllocs) {
+      if (auto alloc = dyn_cast<memref::AllocOp>(allocOp))
+        patternValues.insert(alloc.getResult());
+    }
+
+    /// Find parent function and walk all ForOps
+    if (auto parentFunc = pattern.rootAlloc.getDefiningOp()
+                              ->getParentOfType<func::FuncOp>()) {
+      parentFunc.walk([&](scf::ForOp forOp) {
+        /// Skip if already marked for removal
+        if (toRemove.count(forOp))
+          return;
+
+        /// Check if this loop contains deallocations that trace back to pattern
+        bool isDeallocLoop = false;
+        forOp.walk([&](memref::DeallocOp deallocOp) {
+          if (isDeallocLoop)
+            return; /// Already found one
+
+          /// Trace through loads to see if dealloc comes from pattern
+          Value current = deallocOp.getMemref();
+          for (int depth = 0; depth < 10 && current; ++depth) {
+            if (patternValues.count(current)) {
+              isDeallocLoop = true;
+              return;
+            }
+            /// Try to trace through loads
+            if (auto loadOp = current.getDefiningOp<memref::LoadOp>()) {
+              current = loadOp.getMemref();
+            } else {
+              break;
+            }
+          }
+        });
+
+        if (isDeallocLoop) {
+          toRemove.insert(forOp);
+          ARTS_DEBUG("  Marking dealloc loop (N-level) for removal at "
+                     << forOp.getLoc());
+        }
+      });
     }
   }
 
@@ -1334,11 +1684,11 @@ bool CanonicalizeMemrefsPass::isLoadFromValue(Value maybeLoad, Value source) {
 ///
 /// For 3-level (float ***x):
 ///   for (b) {
-///     alloc_1 = malloc(...)           // Level 1: memref<?xmemref<?xf32>>
+///     alloc_1 = malloc(...)           /// Level 1: memref<?xmemref<?xf32>>
 ///     store alloc_1, root[b]
 ///     for (c) {
-///       row = load root[b]            // Load from ROOT, not from alloc_1!
-///       alloc_2 = malloc(...)         // Level 2: memref<?xf32>
+///       row = load root[b]            /// Load from ROOT, not from alloc_1!
+///       alloc_2 = malloc(...)         /// Level 2: memref<?xf32>
 ///       store alloc_2, row[c]
 ///     }
 ///   }
@@ -1410,8 +1760,8 @@ bool CanonicalizeMemrefsPass::extractNestedAllocations(Value storedVal,
 
   /// For nested stores, the target is loaded from ROOT (possibly via wrapper),
   /// not from innerAlloc. Example:
-  ///   %row = load %root[%i]    // Load from root
-  ///   store %alloc, %row[%j]   // Store to loaded row
+  ///   %row = load %root[%i]    /// Load from root
+  ///   store %alloc, %row[%j]   /// Store to loaded row
   forOp.walk([&](memref::StoreOp nestedStore) {
     if (foundNested)
       return WalkResult::interrupt();
@@ -1663,7 +2013,7 @@ void CanonicalizeMemrefsPass::handleDependencies(ModuleOp module,
   ARTS_DEBUG("=== Dependency Handling Complete ===");
 }
 
-} // namespace
+} /// namespace
 
 ///===----------------------------------------------------------------------===///
 /// Pass Registration
@@ -1674,5 +2024,5 @@ namespace arts {
 std::unique_ptr<Pass> createCanonicalizeMemrefsPass() {
   return std::make_unique<CanonicalizeMemrefsPass>();
 }
-} // namespace arts
-} // namespace mlir
+} /// namespace arts
+} /// namespace mlir

@@ -1090,6 +1090,20 @@ struct YieldPattern : public ArtsToLLVMPattern<YieldOp> {
   }
 };
 
+/// Pattern to convert arts.undef to polygeist.undef
+
+struct UndefPattern : public ArtsToLLVMPattern<UndefOp> {
+  using ArtsToLLVMPattern::ArtsToLLVMPattern;
+
+  LogicalResult matchAndRewrite(UndefOp op,
+                                PatternRewriter &rewriter) const override {
+    ARTS_INFO("Lowering Undef Op " << op);
+    Type resultType = op.getResult().getType();
+    rewriter.replaceOpWithNewOp<polygeist::UndefOp>(op, resultType);
+    return success();
+  }
+};
+
 ///===----------------------------------------------------------------------===///
 // Pass Implementation
 ///===----------------------------------------------------------------------===///
@@ -1166,7 +1180,7 @@ void ConvertArtsToLLVMPass::runOnOperation() {
     RewritePatternSet otherPatterns(context);
     otherPatterns.add<DbAllocPattern, DbFreePattern>(context, AC);
     otherPatterns.add<DbNumElementsPattern>(context, AC);
-    otherPatterns.add<YieldPattern>(context, AC);
+    otherPatterns.add<YieldPattern, UndefPattern>(context, AC);
     if (failed(applyPatternsAndFoldGreedily(module, std::move(otherPatterns),
                                             config))) {
       ARTS_ERROR("Failed to apply other conversion patterns");

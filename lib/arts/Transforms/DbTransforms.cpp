@@ -126,7 +126,15 @@ bool DbTransforms::createDbRefPattern(
   builder.setInsertionPoint(op);
   Location loc = op->getLoc();
 
-  auto dbRef = builder.create<DbRefOp>(loc, elementType, dbPtr, outerIndices);
+  /// During promotion, dbPtr may reference old allocation before replacement.
+  Type resultType = elementType;
+  if (!resultType || !resultType.isa<MemRefType>()) {
+    if (auto dbAllocOp =
+            dyn_cast_or_null<DbAllocOp>(arts::getUnderlyingDbAlloc(dbPtr)))
+      resultType = dbAllocOp.getAllocatedElementType();
+  }
+
+  auto dbRef = builder.create<DbRefOp>(loc, resultType, dbPtr, outerIndices);
   if (auto load = dyn_cast<memref::LoadOp>(op)) {
     auto newLoad = builder.create<memref::LoadOp>(loc, dbRef, innerIndices);
     load.replaceAllUsesWith(newLoad.getResult());
@@ -145,7 +153,7 @@ bool DbTransforms::createDbRefPattern(
 ///   - Sliced dimensions [numIndexedDims, end):
 ///     * If globalIdx == offset: local = 0
 ///     * If globalIdx = offset + delta (provable): local = delta
-///     * Otherwise: local = globalIdx (conservative, no transformation)
+///     * Otherwise: local = globalIdx - offset (explicit subtraction)
 ///
 SmallVector<Value>
 DbTransforms::localizeCoordinates(ArrayRef<Value> globalIndices,
@@ -163,13 +171,11 @@ DbTransforms::localizeCoordinates(ArrayRef<Value> globalIndices,
       unsigned offsetIdx = d - map.numIndexedDims;
       if (offsetIdx < map.sliceOffsets.size()) {
         Value offset = map.sliceOffsets[offsetIdx];
-        /// Use getOffsetDelta for safe coordinate transformation
-        /// Only subtract when globalIdx = offset + delta is provable
         if (Value delta = getOffsetDelta(globalIdx, offset, builder, loc)) {
           localIndices.push_back(delta);
         } else {
-          /// Cannot prove derivation - keep original index (conservative)
-          localIndices.push_back(globalIdx);
+          Value local = builder.create<arith::SubIOp>(loc, globalIdx, offset);
+          localIndices.push_back(local);
         }
       } else {
         localIndices.push_back(globalIdx);
@@ -289,6 +295,7 @@ LogicalResult DbTransforms::rewriteAllUses(DbAllocOp oldAlloc,
   unsigned newInnerRank = newAlloc.getElementSizes().size();
   llvm::SetVector<Operation *> opsToRemove, loadStoreUsers;
   SmallVector<DbAcquireOp> acquires;
+  SmallVector<DbRefOp> dbRefUsers;
   SmallPtrSet<Value, 8> visited;
 
   std::function<void(Value)> collectUses = [&](Value value) {
@@ -304,8 +311,10 @@ LogicalResult DbTransforms::rewriteAllUses(DbAllocOp oldAlloc,
         if (store.getMemref() == value)
           loadStoreUsers.insert(store.getOperation());
       } else if (auto ref = dyn_cast<DbRefOp>(user)) {
-        if (ref.getSource() == value)
+        if (ref.getSource() == value) {
+          dbRefUsers.push_back(ref);
           collectUses(ref.getResult());
+        }
       } else if (auto acquire = dyn_cast<DbAcquireOp>(user)) {
         acquires.push_back(acquire);
         auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(acquire);
@@ -379,7 +388,7 @@ LogicalResult DbTransforms::rewriteAllUses(DbAllocOp oldAlloc,
     return {newOuter, newInner};
   };
 
-  Type elementType = newAlloc.getAllocatedElementType().getElementType();
+  Type elementType = newAlloc.getAllocatedElementType();
   for (Operation *op : loadStoreUsers) {
     Location loc = op->getLoc();
     OpBuilder::InsertionGuard IG(builder);
@@ -441,6 +450,31 @@ LogicalResult DbTransforms::rewriteAllUses(DbAllocOp oldAlloc,
     }
   }
 
+  /// Recreate DbRefOps with new element type (after acquires updated).
+  Type newElementType = newAlloc.getAllocatedElementType();
+  for (DbRefOp dbRef : dbRefUsers) {
+    if (opsToRemove.contains(dbRef.getOperation()))
+      continue;
+
+    OpBuilder::InsertionGuard IG(builder);
+    builder.setInsertionPoint(dbRef);
+
+    Value newSource = dbRef.getSource();
+    if (newSource == oldAlloc.getPtr())
+      newSource = newAlloc.getPtr();
+
+    SmallVector<Value> oldOuter(dbRef.getIndices().begin(),
+                                dbRef.getIndices().end());
+    SmallVector<Value> newOuter, unused;
+    std::tie(newOuter, unused) =
+        buildIndexMapping(oldOuter, {}, dbRef.getLoc());
+
+    auto newRef = builder.create<DbRefOp>(dbRef.getLoc(), newElementType,
+                                          newSource, newOuter);
+    dbRef.replaceAllUsesWith(newRef.getResult());
+    opsToRemove.insert(dbRef.getOperation());
+  }
+
   oldAlloc.getGuid().replaceAllUsesWith(newAlloc.getGuid());
   oldAlloc.getPtr().replaceAllUsesWith(newAlloc.getPtr());
   if (oldAlloc.use_empty())
@@ -476,9 +510,13 @@ bool DbTransforms::rebaseToAcquireView(
       return false;
 
     auto localIndices = localizeCoordinates(refIndices, map, builder, loc);
-    auto newRef = builder.create<DbRefOp>(loc, dbRef.getResult().getType(),
-                                          dbPtr ? dbPtr : dbRef.getSource(),
-                                          localIndices);
+    Value source = dbPtr ? dbPtr : dbRef.getSource();
+    Type resultType = dbRef.getResult().getType();
+    if (auto dbAllocOp =
+            dyn_cast_or_null<DbAllocOp>(arts::getUnderlyingDbAlloc(source)))
+      resultType = dbAllocOp.getAllocatedElementType();
+    auto newRef =
+        builder.create<DbRefOp>(loc, resultType, source, localIndices);
     dbRef.replaceAllUsesWith(newRef.getResult());
     opsToRemove.insert(op);
     return true;
@@ -554,6 +592,11 @@ bool DbTransforms::rebaseAllUsersToAcquireView(DbAcquireOp acquire,
   llvm::SetVector<Operation *> opsToRemove;
   bool rewritten = false;
 
+  Type derivedType = targetType;
+  if (auto dbAllocOp =
+          dyn_cast_or_null<DbAllocOp>(arts::getUnderlyingDbAlloc(blockArg)))
+    derivedType = dbAllocOp.getAllocatedElementType();
+
   for (Operation *user : users) {
     if (auto ref = dyn_cast<DbRefOp>(user)) {
       OpBuilder::InsertionGuard IG(builder);
@@ -562,13 +605,13 @@ bool DbTransforms::rebaseAllUsersToAcquireView(DbAcquireOp acquire,
                                     ref.getIndices().end());
       auto localIndices =
           localizeCoordinates(refIndices, map, builder, ref.getLoc());
-      auto newRef = builder.create<DbRefOp>(ref.getLoc(), targetType, blockArg,
+      auto newRef = builder.create<DbRefOp>(ref.getLoc(), derivedType, blockArg,
                                             localIndices);
       ref.replaceAllUsesWith(newRef.getResult());
       opsToRemove.insert(ref.getOperation());
       rewritten = true;
     } else {
-      if (rebaseToAcquireView(user, acquire, blockArg, targetType, builder,
+      if (rebaseToAcquireView(user, acquire, blockArg, derivedType, builder,
                               opsToRemove))
         rewritten = true;
     }
