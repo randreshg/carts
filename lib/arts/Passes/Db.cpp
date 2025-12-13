@@ -260,6 +260,10 @@ bool DbPass::partitionDb() {
   auto setTwinAttr = [&](DbAcquireOp acq, bool useTwinDiff) {
     if (!acq)
       return;
+    // Apply single-node heuristic
+    if (AM->getHeuristicsConfig().shouldDisableTwinDiff())
+      useTwinDiff = false;
+
     if (acq.hasTwinDiff() && acq.getTwinDiff() == useTwinDiff)
       return;
     acq.setTwinDiff(useTwinDiff);
@@ -296,6 +300,14 @@ bool DbPass::partitionDb() {
       if (!allocNode->canBePartitioned()) {
         ARTS_DEBUG("  SKIP: canBePartitioned() returned false");
         partitionFailed.insert(allocOp.getOperation());
+        return;
+      }
+
+      /// H1: Skip partitioning for read-only allocations on single-node.
+      if (AM->getHeuristicsConfig().shouldPreferCoarseForReadOnly(
+              allocOp.getMode())) {
+        ARTS_DEBUG(
+            "  SKIP: H1 heuristic - read-only on single-node, keep coarse");
         return;
       }
 
