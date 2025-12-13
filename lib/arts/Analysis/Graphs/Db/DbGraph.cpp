@@ -10,6 +10,8 @@
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/Metadata/LocationMetadata.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/JSON.h"
@@ -538,83 +540,113 @@ void DbGraph::computeReuseCandidates() {
 void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
   using namespace llvm::json;
 
-  Object root;
+  if (!includeAnalysis) {
+    // Original graph visualization format
+    Object root;
 
-  Array nodesArr;
-  for (const auto &kv : allocNodes) {
-    DbAllocNode *allocNode = kv.second.get();
-    nodesArr.push_back(Object{{"id", sanitizeString(allocNode->getHierId())},
-                              {"group", "db"},
-                              {"nodeKind", "DbAlloc"}});
-    allocNode->forEachChildNode([&](NodeBase *child) {
-      if (auto *acq = dyn_cast<DbAcquireNode>(child)) {
-        nodesArr.push_back(Object{{"id", sanitizeString(acq->getHierId())},
-                                  {"group", "db"},
-                                  {"nodeKind", "DbAcquire"}});
-      }
-    });
-  }
-
-  root["nodes"] = std::move(nodesArr);
-  root["edges"] = llvm::json::Array();
-
-  /// Include analysis data if requested
-  if (includeAnalysis) {
-    auto modeToString = [](ArtsMode m) -> std::string {
-      switch (m) {
-      case ArtsMode::in:
-        return "in";
-      case ArtsMode::out:
-        return "out";
-      default:
-        return "inout";
-      }
-    };
-
-    /// Summary info
-    root["info"] = Object{
-        {"peakLiveDbs", (uint64_t)peakLiveDbs},
-        {"peakBytes", std::to_string(peakBytes)},
-    };
-
-    /// Allocs
-    Array allocs;
+    Array nodesArr;
     for (const auto &kv : allocNodes) {
       DbAllocNode *allocNode = kv.second.get();
-      const DbAllocNode &M = *allocNode;
-      Object A;
-      A["id"] = sanitizeString(allocNode->getHierId());
-      A["allocIndex"] = (uint64_t)M.beginIndex;
-      A["endIndex"] = (uint64_t)M.endIndex;
-      A["numAcquires"] = (uint64_t)M.numAcquires;
-      if (M.memoryFootprint)
-        A["staticBytes"] = std::to_string(*M.memoryFootprint);
-      A["criticalSpan"] = (uint64_t)M.criticalSpan;
-      A["criticalPath"] = (uint64_t)M.criticalPath;
-      A["totalAccessBytes"] = std::to_string(M.totalAccessBytes);
-      A["isLongLived"] = (bool)M.isLongLived;
-
-      /// Iterate through graph structure (not M.acquireNodes which no longer
-      /// exists)
-      Array intervals;
+      nodesArr.push_back(Object{{"id", sanitizeString(allocNode->getHierId())},
+                                {"group", "db"},
+                                {"nodeKind", "DbAlloc"}});
       allocNode->forEachChildNode([&](NodeBase *child) {
-        auto *acqNode = dyn_cast<DbAcquireNode>(child);
-        if (!acqNode)
-          return;
-        Object I;
-        I["begin"] = (uint64_t)acqNode->beginIndex;
-        I["end"] = (uint64_t)acqNode->endIndex;
-        I["mode"] = modeToString(cast<DbAcquireOp>(acqNode->getOp()).getMode());
-        I["estimatedBytes"] = std::to_string(acqNode->estimatedBytes);
-        intervals.push_back(std::move(I));
+        if (auto *acq = dyn_cast<DbAcquireNode>(child)) {
+          nodesArr.push_back(Object{{"id", sanitizeString(acq->getHierId())},
+                                    {"group", "db"},
+                                    {"nodeKind", "DbAcquire"}});
+        }
       });
-      A["intervals"] = std::move(intervals);
-      allocs.push_back(std::move(A));
     }
-    root["allocs"] = std::move(allocs);
 
-    /// Reuse candidates (emitted once we plumb them through JSON)
+    root["nodes"] = std::move(nodesArr);
+    root["edges"] = llvm::json::Array();
+    os << llvm::json::Value(std::move(root)) << "\n";
+    return;
   }
 
-  os << llvm::json::Value(std::move(root)) << "\n";
+  /// ArtsMate-compatible DB entities export
+  Array dbs;
+
+  for (const auto &kv : allocNodes) {
+    DbAllocNode *allocNode = kv.second.get();
+    DbAllocOp allocOp = allocNode->getDbAllocOp();
+    const MemrefMetadata &meta = *allocNode;
+
+    Object db;
+
+    /// ARTS ID from metadata manager
+    if (!meta.allocationId.empty()) {
+      int64_t artsId = analysis->getAnalysisManager()
+                           .getMetadataManager()
+                           .getIdRegistry()
+                           .getIdForLocation(meta.allocationId);
+      if (artsId != 0)
+        db["arts_id"] = artsId;
+    }
+
+    /// Granularity
+    db["granularity"] = allocNode->isFineGrained() ? "fine" : "coarse";
+
+    /// Helper: extract static value or null for dynamic
+    auto extractSizes = [](OperandRange values) -> Array {
+      Array arr;
+      for (Value v : values) {
+        if (auto cst = v.getDefiningOp<arith::ConstantIndexOp>())
+          arr.push_back(cst.value());
+        /// Dynamic dimension
+        else
+          arr.push_back(nullptr);
+      }
+      return arr;
+    };
+
+    /// Outer sizes (DB grid dimensions)
+    Array outerSizes = extractSizes(allocOp.getSizes());
+    /// Coarse allocation = single DB
+    if (outerSizes.empty())
+      outerSizes.push_back(1);
+    db["outer_sizes"] = std::move(outerSizes);
+
+    /// Inner sizes (each DB's payload)
+    Array innerSizes = extractSizes(allocOp.getElementSizes());
+    db["inner_sizes"] = std::move(innerSizes);
+
+    /// Element type
+    Type elemType = allocOp.getElementType();
+    std::string dtype;
+    if (auto intType = dyn_cast<IntegerType>(elemType))
+      dtype = "i" + std::to_string(intType.getWidth());
+    else if (auto floatType = dyn_cast<FloatType>(elemType))
+      dtype = "f" + std::to_string(floatType.getWidth());
+    else
+      dtype = "unknown";
+    db["dtype"] = dtype;
+
+    /// Access mode from DbAllocOp
+    ArtsMode mode = allocOp.getMode();
+    if (mode == ArtsMode::in)
+      db["access_mode"] = "in";
+    else if (mode == ArtsMode::out)
+      db["access_mode"] = "out";
+    else
+      db["access_mode"] = "inout";
+
+    /// Twin diff (default false, updated by passes)
+    db["twin_diff"] = false;
+
+    /// Heuristic (populated by HeuristicsConfig)
+    db["heuristic"] = nullptr;
+
+    /// Source location
+    auto loc = LocationMetadata::fromLocation(allocOp->getLoc());
+    if (loc.isValid())
+      db["loc"] = loc.file + ":" + std::to_string(loc.line);
+    else
+      db["loc"] = "unknown";
+
+    dbs.push_back(std::move(db));
+  }
+
+  os << llvm::json::Value(std::move(dbs)) << "\n";
 }
