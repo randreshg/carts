@@ -202,6 +202,52 @@ private:
                         BlockArgument dbAcquireArg);
   void rewriteUsesInParentEdt(MemrefInfo &memrefInfo);
   void rewriteUsesEverywhere(Operation *alloc, DbAllocOp dbAlloc);
+
+  ///===----------------------------------------------------------------------===///
+  /// Helper Functions for Heuristic Decisions
+  ///===----------------------------------------------------------------------===///
+
+  /// Computes the number of outer DBs for fine-grained allocation.
+  /// Returns the product of pinned dimensions, or kMaxOuterDBs+1 if dynamic.
+  static int64_t computeOuterDBs(MemRefType memRefType,
+                                 unsigned pinnedDimCount) {
+    int64_t outerDBs = 1;
+    for (unsigned d = 0; d < pinnedDimCount; ++d) {
+      /// Conservative
+      if (memRefType.isDynamicDim(d))
+        return HeuristicsConfig::kMaxOuterDBs + 1; 
+      outerDBs *= memRefType.getDimSize(d);
+    }
+    return outerDBs;
+  }
+
+  /// Computes maximum dependencies per EDT for cost model evaluation.
+  static int64_t computeMaxDepsPerEDT(const MemrefInfo &info) {
+    int64_t maxDeps = 0;
+    for (const auto &[edt, deps] : info.edtToDeps)
+      maxDeps = std::max(maxDeps, static_cast<int64_t>(deps.size()));
+    return maxDeps;
+  }
+
+  /// Computes total inner bytes (product of unpinned dimensions * element
+  /// size).
+  static int64_t computeInnerBytes(MemRefType memRefType,
+                                   unsigned pinnedDimCount) {
+    int64_t innerBytes = 1;
+    Type elementType = memRefType.getElementType();
+    while (auto nested = elementType.dyn_cast<MemRefType>())
+      elementType = nested.getElementType();
+    int64_t elemSize = elementType.isIntOrFloat()
+                           ? (elementType.getIntOrFloatBitWidth() + 7) / 8
+                           : 8;
+
+    for (unsigned d = pinnedDimCount; d < memRefType.getRank(); ++d) {
+      if (memRefType.isDynamicDim(d))
+        return HeuristicsConfig::kMinInnerBytes + 1; // Assume large enough
+      innerBytes *= memRefType.getDimSize(d);
+    }
+    return innerBytes * elemSize;
+  }
 };
 } // namespace
 
@@ -533,6 +579,28 @@ void CreateDbsPass::createDbAllocOps() {
                                     accessPatternInfo.pinnedDimCount > 0 &&
                                     accessPatternInfo.allAccessesHaveIndices;
 
+    auto &heuristics = AM->getHeuristicsConfig();
+
+    /// H1: Read-only on single-node -> prefer coarse
+    if (useFineGrainedAllocation &&
+        heuristics.shouldPreferCoarseForReadOnly(info.accessMode)) {
+      ARTS_DEBUG(" - H1: Read-only on single-node, preferring coarse");
+      useFineGrainedAllocation = false;
+    }
+
+    /// H2: Apply cost model on single-node
+    if (useFineGrainedAllocation && heuristics.isSingleNode()) {
+      int64_t outerDBs =
+          computeOuterDBs(memRefType, accessPatternInfo.pinnedDimCount);
+      int64_t depsPerEDT = computeMaxDepsPerEDT(info);
+      int64_t innerBytes =
+          computeInnerBytes(memRefType, accessPatternInfo.pinnedDimCount);
+
+      if (!heuristics.shouldUseFineGrained(outerDBs, depsPerEDT, innerBytes)) {
+        useFineGrainedAllocation = false;
+      }
+    }
+
     if (useFineGrainedAllocation) {
       info.usedFineGrained = true;
       const auto pinnedDimCount = accessPatternInfo.pinnedDimCount;
@@ -853,9 +921,9 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       ///
       /// The Db.cpp pass may later disable twin-diff if it can prove
       /// non-overlap through successful partitioning or alias analysis.
-      acquireOp.setTwinDiff(true);
-      ARTS_DEBUG("   - Coarse-grained acquire: twin_diff=true (conservative, "
-                 "potential overlap)");
+      bool useTwinDiff = !AM->getHeuristicsConfig().shouldDisableTwinDiff();
+      acquireOp.setTwinDiff(useTwinDiff);
+      ARTS_DEBUG("   - Coarse-grained acquire: twin_diff=" << useTwinDiff);
 
       /// Add corresponding block argument for the acquired/reused view
       Value acquirePtr = acquireOp.getPtr();

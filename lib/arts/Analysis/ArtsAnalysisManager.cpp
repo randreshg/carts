@@ -79,6 +79,12 @@ const StringAnalysis &ArtsAnalysisManager::getStringAnalysis() const {
   return *stringAnalysis;
 }
 
+HeuristicsConfig &ArtsAnalysisManager::getHeuristicsConfig() {
+  if (!heuristicsConfig)
+    heuristicsConfig = std::make_unique<HeuristicsConfig>(abstractMachine);
+  return *heuristicsConfig;
+}
+
 DbGraph &ArtsAnalysisManager::getDbGraph(func::FuncOp func) {
   return getDbAnalysis().getOrCreateGraph(func);
 }

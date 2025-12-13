@@ -1,0 +1,72 @@
+///==========================================================================///
+/// File: HeuristicsConfig.h
+///
+/// This file defines the HeuristicsConfig class which centralizes all
+/// compile-time heuristic decision logic for single-rank and other
+/// optimizations in the CARTS compiler framework.
+///==========================================================================///
+
+#ifndef ARTS_ANALYSIS_HEURISTICSCONFIG_H
+#define ARTS_ANALYSIS_HEURISTICSCONFIG_H
+
+#include "arts/ArtsDialect.h"
+#include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
+
+namespace mlir {
+namespace arts {
+
+/// Centralized heuristics configuration for compile-time optimizations.
+/// Provides decision methods for single-rank and other optimizations.
+class HeuristicsConfig {
+public:
+  explicit HeuristicsConfig(const mlir::arts::ArtsAbstractMachine &machine);
+
+  //===--------------------------------------------------------------------===//
+  // Machine Queries
+  //===--------------------------------------------------------------------===//
+
+  /// Returns true if running on a single node (nodeCount == 1)
+  bool isSingleNode() const;
+
+  /// Returns true if machine config is valid
+  bool isValid() const;
+
+  //===--------------------------------------------------------------------===//
+  // H4: Twin-diff Heuristic
+  //===--------------------------------------------------------------------===//
+
+  /// Returns true if twin_diff should be disabled.
+  /// On single-node, twin_diff is pure overhead (no remote recipient).
+  bool shouldDisableTwinDiff() const;
+
+  //===--------------------------------------------------------------------===//
+  // H1: Read-only Allocation Heuristic
+  //===--------------------------------------------------------------------===//
+
+  /// Returns true if read-only memrefs should prefer coarse allocation.
+  /// On single-node with read-only access, fine-graining adds overhead
+  /// without relieving any write contention.
+  bool shouldPreferCoarseForReadOnly(mlir::arts::ArtsMode accessMode) const;
+
+  //===--------------------------------------------------------------------===//
+  // H2: Cost Model Heuristic
+  //===--------------------------------------------------------------------===//
+
+  /// Cost model thresholds (hardcoded defaults)
+  static constexpr int64_t kMaxOuterDBs = 1024;
+  static constexpr int64_t kMaxDepsPerEDT = 8;
+  static constexpr int64_t kMinInnerBytes = 64;
+
+  /// Evaluates cost model for fine-grained allocation decision.
+  /// Returns true if fine-grained allocation is recommended.
+  bool shouldUseFineGrained(int64_t outerDBs, int64_t depsPerEDT,
+                            int64_t innerBytes) const;
+
+private:
+  const mlir::arts::ArtsAbstractMachine &machine;
+};
+
+} // namespace arts
+} // namespace mlir
+
+#endif // ARTS_ANALYSIS_HEURISTICSCONFIG_H

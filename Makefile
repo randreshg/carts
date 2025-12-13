@@ -185,14 +185,14 @@ carts-run-only:
 install: arts-download polygeist-download llvm-lit arts polygeist build
 
 uninstall:
-	cat $(BUILD_DIR)/install_manifest.txt | xargs rm -f -r
-	rm -rf $(BUILD_DIR)
+	cat $(CARTS_BUILD_DIR)/install_manifest.txt | xargs rm -f -r
+	rm -rf $(CARTS_BUILD_DIR)
 
 fulluninstall: uninstall arts-clean
 	rm -f .arts
 
 clean:
-	make -C $(BUILD_DIR) clean -j
-	rm -rf $(BUILD_DIR)
+	make -C $(CARTS_BUILD_DIR) clean -j
+	rm -rf $(CARTS_BUILD_DIR)
 
 .PHONY: all build install postinstall uninstall fulluninstall clean test llvm-runtimes arts-download polygeist-download llvm llvm-lit
