@@ -299,7 +299,7 @@ bool DbPass::partitionDb() {
         return;
       }
 
-      /// All validation passed - now compute chunk info for each acquire
+      /// All validation passed
       bool allValid = true;
       SmallVector<std::tuple<DbAcquireNode *, Value, Value>, 4> validatedAcqs;
 

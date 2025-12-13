@@ -81,14 +81,25 @@ LogicalResult OpRemovalManager::verifyAllUsersMarked(Value value,
 }
 
 void OpRemovalManager::removeAllMarked() {
-  /// Remove all operations marked for removal
-  /// Only remove operations that have no uses and haven't been erased already
+  /// Track erased operations to avoid use-after-free when an operation
+  /// was erased as a nested child of a previously-erased operation
+  SmallPtrSet<Operation *, 32> erased;
+
   for (Operation *op : opsToRemove) {
+    if (!op || erased.contains(op))
+      continue;
+
     /// Check if operation is still alive (not already erased as a child)
-    /// If the operation has been erased, its parent will be null
-    if (op && op->getBlock() && op->use_empty()) {
-      op->erase();
-    }
+    Block *block = op->getBlock();
+    if (!block)
+      continue;
+
+    if (!op->use_empty())
+      continue;
+
+    /// Mark all nested operations as erased before erasing parent
+    op->walk([&](Operation *nested) { erased.insert(nested); });
+    op->erase();
   }
   opsToRemove.clear();
 }
@@ -100,35 +111,34 @@ void OpRemovalManager::removeAllMarked() {
 void OpRemovalManager::removeOpImpl(Operation *op, OpBuilder &builder,
                                     SmallPtrSet<Operation *, 32> &seen,
                                     bool recursive) {
-  /// Check if operation is still valid
   if (!op)
     return;
 
-  /// Check if operation is still properly linked in the IR
+  /// Check seen BEFORE any dereference to avoid use-after-free.
+  if (!seen.insert(op).second)
+    return;
+
+  /// Now safe to dereference - check if operation is still linked in IR
   Block *block = op->getBlock();
   if (!block)
     return;
 
-  /// Additional check: ensure the block has a valid parent operation
   Operation *parentOp = block->getParentOp();
   if (!parentOp)
     return;
 
-  /// Already visited
-  if (!seen.insert(op).second)
-    return;
-
   ARTS_DEBUG("   - Removing operation: " << *op);
 
-  /// Get dependents before modifying uses
-  SmallVector<Operation *, 8> dependents;
+  /// Collect unique dependents before modifying uses 
+  SmallPtrSet<Operation *, 8> dependentSet;
   if (recursive) {
     for (Value result : op->getResults())
       for (Operation *user : result.getUsers())
-        dependents.push_back(user);
+        if (!seen.contains(user))
+          dependentSet.insert(user);
   }
 
-  /// If this is a terminator, mark the parent for removal.
+  /// If this is a terminator, mark the parent for removal
   if (op->hasTrait<OpTrait::IsTerminator>()) {
     if (Operation *parent = op->getParentOp()) {
       markForRemoval(parent);
@@ -137,13 +147,11 @@ void OpRemovalManager::removeOpImpl(Operation *op, OpBuilder &builder,
     return;
   }
 
-  /// In non-recursive mode, never erase operations that still have uses; keep
-  /// the IR well-formed for subsequent passes.
+  /// In non-recursive mode, never erase operations that still have uses
   if (!recursive && !op->use_empty())
     return;
 
-  /// Check if any user is a terminator - if so, we cannot safely remove this
-  /// op because dropping uses would leave null operands in the terminator.
+  /// Check if any user is a terminator
   bool hasTerminatorUser = false;
   for (Value result : op->getResults()) {
     for (Operation *user : result.getUsers()) {
@@ -162,15 +170,18 @@ void OpRemovalManager::removeOpImpl(Operation *op, OpBuilder &builder,
   }
   op->dropAllUses();
 
-  /// Erase the operation immediately since all uses have been handled
+  /// Mark all nested operations as seen before erasing to prevent
+  /// use-after-free if they're also in the removal list
+  for (Region &region : op->getRegions())
+    region.walk([&](Operation *nested) { seen.insert(nested); });
+
   op->erase();
 
-  /// No recursion requested
   if (!recursive)
     return;
 
   /// Remove dependents recursively
-  for (Operation *userOp : dependents)
+  for (Operation *userOp : dependentSet)
     removeOpImpl(userOp, builder, seen, recursive);
 }
 

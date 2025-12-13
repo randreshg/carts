@@ -190,6 +190,136 @@ void DbAcquireNode::forEachChildNode(
     fn(n.get());
 }
 
+/// Check if a value is probably derived from base via arithmetic operations.
+/// Recursively walks through add/mul/sub operations to find if base is
+/// transitively reachable. This handles complex index computations like:
+///   globalIdx = lowerBound + (chunkOffset + localIter) * step
+/// where we want to check if globalIdx is derived from chunkOffset.
+static bool isDerivedFrom(Value value, Value base, int depth = 0) {
+  /// Prevent infinite recursion
+  if (depth > 10)
+    return false;
+
+  if (value == base)
+    return true;
+
+  /// Walk through arithmetic operations recursively
+  if (auto addOp = value.getDefiningOp<arith::AddIOp>()) {
+    if (isDerivedFrom(addOp.getLhs(), base, depth + 1) ||
+        isDerivedFrom(addOp.getRhs(), base, depth + 1))
+      return true;
+  }
+  if (auto mulOp = value.getDefiningOp<arith::MulIOp>()) {
+    if (isDerivedFrom(mulOp.getLhs(), base, depth + 1) ||
+        isDerivedFrom(mulOp.getRhs(), base, depth + 1))
+      return true;
+  }
+  if (auto subOp = value.getDefiningOp<arith::SubIOp>()) {
+    if (isDerivedFrom(subOp.getLhs(), base, depth + 1) ||
+        isDerivedFrom(subOp.getRhs(), base, depth + 1))
+      return true;
+  }
+
+  return false;
+}
+
+///===----------------------------------------------------------------------===///
+/// Stencil-Aware Access Bounds Analysis
+///
+/// For stencil patterns like A[i-1], A[i], A[i+1], we need to analyze the
+/// actual memory access bounds rather than using iteration hints directly.
+///
+/// The index expression is typically: chunkOffset + loopIV + constant
+/// We extract the constant to determine the offset adjustment needed.
+///===----------------------------------------------------------------------===///
+
+/// Represents analyzed access bounds for an array
+struct AccessBoundsInfo {
+  int64_t minOffset = 0;  /// Min constant offset from chunk_base
+  int64_t maxOffset = 0;  /// Max constant offset from chunk_base
+  bool isStencil = false; /// True if min != max (multiple offsets detected)
+  bool valid = false;     /// True if analysis succeeded
+};
+
+/// Extract the constant offset from an index expression.
+/// Tries to express idx as: chunkOffset + loopIV + constant
+static std::optional<int64_t> extractConstantOffset(Value idx, Value loopIV,
+                                                    Value chunkOffset) {
+  int64_t accumulator = 0;
+  Value current = idx;
+
+  while (true) {
+    if (auto addOp = current.getDefiningOp<arith::AddIOp>()) {
+      Value lhs = addOp.getLhs();
+      Value rhs = addOp.getRhs();
+
+      int64_t constVal;
+      if (arts::getConstantIndex(rhs, constVal)) {
+        accumulator += constVal;
+        current = lhs;
+      } else if (arts::getConstantIndex(lhs, constVal)) {
+        accumulator += constVal;
+        current = rhs;
+      } else {
+        bool lhsHasOffset = isDerivedFrom(lhs, chunkOffset);
+        bool rhsHasOffset = isDerivedFrom(rhs, chunkOffset);
+        bool lhsHasIV = isDerivedFrom(lhs, loopIV);
+        bool rhsHasIV = isDerivedFrom(rhs, loopIV);
+
+        /// Base pattern: one side has offset, other has IV
+        if ((lhsHasOffset && rhsHasIV) || (rhsHasOffset && lhsHasIV))
+          return accumulator;
+
+        /// Continue drilling into the side that has the offset
+        if (lhsHasOffset)
+          current = lhs;
+        else if (rhsHasOffset)
+          current = rhs;
+        else
+          break;
+      }
+    } else if (auto subOp = current.getDefiningOp<arith::SubIOp>()) {
+      Value lhs = subOp.getLhs();
+      Value rhs = subOp.getRhs();
+
+      int64_t constVal;
+      if (arts::getConstantIndex(rhs, constVal)) {
+        accumulator -= constVal;
+        current = lhs;
+        continue;
+      }
+
+      /// Handle sub(globalIdx, chunkOffset) - local index pattern
+      if (rhs == chunkOffset || isDerivedFrom(rhs, chunkOffset)) {
+        current = lhs;
+        continue;
+      }
+
+      break;
+    } else {
+      break;
+    }
+  }
+
+  /// Verify we reached an expression derived from both chunkOffset and loopIV
+  if (isDerivedFrom(current, chunkOffset) && isDerivedFrom(current, loopIV))
+    return accumulator;
+
+  /// Handle the case where current IS the base expression (no constants)
+  if (current == idx && isDerivedFrom(idx, chunkOffset) &&
+      isDerivedFrom(idx, loopIV))
+    return 0;
+
+  return std::nullopt;
+}
+
+/// Analyze all memory accesses to compute actual bounds relative to chunk base.
+/// For stencil patterns like A[i-1], A[i], A[i+1], this extracts the min/max
+/// offsets. For uniform access like B[i+1], this extracts the constant
+/// adjustment.
+static AccessBoundsInfo analyzeAccessBounds(DbAcquireNode *node,
+                                            Value chunkOffset, Value loopIV);
+
 /// canBePartitioned - Check if this acquire can be partitioned.
 ///
 /// This is called by DbAllocNode::canBePartitioned() for hierarchical
@@ -225,8 +355,9 @@ bool DbAcquireNode::canBePartitioned() {
   if (!allocNode)
     return skip("missing allocation node");
 
-  if (allocNode->hasUniformAccess && !*allocNode->hasUniformAccess)
-    return skip("non-uniform access");
+  /// Note: Non-uniform access (stencil patterns) is allowed if we can analyze
+  /// the access bounds. The check is done later after extracting partition
+  /// info. See Level 2 stencil-aware partitioning in analysis.md.
 
   if (!allocNode->isParallelFriendly())
     return skip("memref metadata is not marked as parallel-friendly");
@@ -286,67 +417,195 @@ bool DbAcquireNode::canBePartitioned() {
                   "offset");
   }
 
-  /// Step 4: Recursively check ALL nested acquire children
-  /// If ANY child fails, this acquire cannot be partitioned
-  if (!childAcquires.empty()) {
-    ARTS_DEBUG("  Checking " << childAcquires.size()
-                             << " nested acquire children...");
-    for (const auto &childAcq : childAcquires) {
-      if (!childAcq)
+  /// Validate partition hints and compute adjusted chunk info for stencil
+  /// patterns (A[i-1], A[i], A[i+1]) and uniform access with offset (B[i+1]).
+  if (partitionOffset && partitionSize) {
+    LoopAnalysis &loopAnalysis = AM.getLoopAnalysis();
+
+    DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+    collectAccessOperations(dbRefToMemOps);
+
+    /// Find the first dynamic index from memory operations
+    Value firstDynIdx;
+    for (auto &[dbRef, memOps] : dbRefToMemOps) {
+      ValueRange dbRefIndices = dbRef.getIndices();
+      for (Operation *memOp : memOps) {
+        ValueRange memIndices;
+        if (auto load = dyn_cast<memref::LoadOp>(memOp))
+          memIndices = load.getIndices();
+        else if (auto store = dyn_cast<memref::StoreOp>(memOp))
+          memIndices = store.getIndices();
+        else
+          continue;
+
+        SmallVector<Value> fullChain;
+        fullChain.append(dbRefIndices.begin(), dbRefIndices.end());
+        fullChain.append(memIndices.begin(), memIndices.end());
+
+        for (Value idx : fullChain) {
+          int64_t constVal;
+          if (!arts::getConstantIndex(idx, constVal)) {
+            firstDynIdx = idx;
+            break;
+          }
+        }
+        if (firstDynIdx)
+          break;
+      }
+      if (firstDynIdx)
+        break;
+    }
+
+    if (!firstDynIdx)
+      return skip("no dynamic index found in memory accesses");
+
+    SmallVector<scf::ForOp, 4> forLoops;
+    edt.walk([&](scf::ForOp forOp) {
+      forLoops.push_back(forOp);
+      return WalkResult::advance();
+    });
+
+    if (forLoops.empty())
+      return skip("partition hints require chunk loop for validation");
+
+    /// Find the loop whose IV the first dynamic index depends on
+    scf::ForOp chunkLoop;
+    for (scf::ForOp forOp : forLoops) {
+      LoopNode *loopNode = loopAnalysis.getOrCreateLoopNode(forOp);
+      if (!loopNode)
         continue;
-      if (!childAcq->canBePartitioned()) {
-        return skip("nested acquire child failed canBePartitioned()");
+
+      if (loopNode->dependsOnInductionVar(firstDynIdx) &&
+          isDerivedFrom(firstDynIdx, partitionOffset)) {
+        chunkLoop = forOp;
+        break;
+      }
+    }
+
+    if (!chunkLoop)
+      return skip("no loop found where index depends on both IV and offset");
+
+    Value loopIV = chunkLoop.getInductionVar();
+    AccessBoundsInfo bounds =
+        analyzeAccessBounds(this, partitionOffset, loopIV);
+
+    if (!bounds.valid)
+      return skip("access bounds analysis failed");
+
+    OpBuilder builder(dbAcquireOp);
+    Location loc = dbAcquireOp.getLoc();
+    builder.setInsertionPoint(dbAcquireOp);
+
+    Value adjustedOffset = partitionOffset;
+    Value adjustedSize = partitionSize;
+
+    if (bounds.minOffset != 0) {
+      Value adjustment =
+          builder.create<arith::ConstantIndexOp>(loc, bounds.minOffset);
+      adjustedOffset =
+          builder.create<arith::AddIOp>(loc, partitionOffset, adjustment);
+    }
+
+    int64_t sizeAdjustment = bounds.maxOffset - bounds.minOffset;
+    if (sizeAdjustment != 0) {
+      Value adjustment =
+          builder.create<arith::ConstantIndexOp>(loc, sizeAdjustment);
+      adjustedSize =
+          builder.create<arith::AddIOp>(loc, partitionSize, adjustment);
+    }
+
+    computedChunkInfo = std::make_pair(adjustedOffset, adjustedSize);
+  }
+
+  /// Recursively check nested acquire children
+  for (const auto &childAcq : childAcquires) {
+    if (childAcq && !childAcq->canBePartitioned())
+      return skip("nested acquire child failed canBePartitioned()");
+  }
+
+  ARTS_DEBUG("PASS: acquire can be partitioned: " << dbAcquireOp);
+  return true;
+}
+
+/// Analyze memory accesses to compute bounds relative to chunk base.
+static AccessBoundsInfo analyzeAccessBounds(DbAcquireNode *node,
+                                            Value chunkOffset, Value loopIV) {
+  AccessBoundsInfo bounds;
+  bounds.minOffset = std::numeric_limits<int64_t>::max();
+  bounds.maxOffset = std::numeric_limits<int64_t>::min();
+
+  if (!node || !chunkOffset || !loopIV)
+    return bounds;
+
+  DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+  node->collectAccessOperations(dbRefToMemOps);
+
+  if (dbRefToMemOps.empty()) {
+    bounds.minOffset = 0;
+    bounds.maxOffset = 0;
+    bounds.valid = true;
+    return bounds;
+  }
+
+  bool foundAny = false;
+
+  for (auto &[dbRef, memOps] : dbRefToMemOps) {
+    ValueRange dbRefIndices = dbRef.getIndices();
+
+    for (Operation *memOp : memOps) {
+      ValueRange memIndices;
+      if (auto load = dyn_cast<memref::LoadOp>(memOp))
+        memIndices = load.getIndices();
+      else if (auto store = dyn_cast<memref::StoreOp>(memOp))
+        memIndices = store.getIndices();
+      else
+        continue;
+
+      SmallVector<Value> fullChain;
+      fullChain.append(dbRefIndices.begin(), dbRefIndices.end());
+      fullChain.append(memIndices.begin(), memIndices.end());
+
+      if (fullChain.empty())
+        continue;
+
+      /// Find first dynamic index
+      Value firstDynIdx;
+      for (Value idx : fullChain) {
+        int64_t constVal;
+        if (!arts::getConstantIndex(idx, constVal)) {
+          firstDynIdx = idx;
+          break;
+        }
+      }
+
+      if (!firstDynIdx)
+        continue;
+
+      auto constOffset =
+          extractConstantOffset(firstDynIdx, loopIV, chunkOffset);
+      if (constOffset) {
+        foundAny = true;
+        bounds.minOffset = std::min(bounds.minOffset, *constOffset);
+        bounds.maxOffset = std::max(bounds.maxOffset, *constOffset);
+      } else {
+        return bounds;
       }
     }
   }
 
-  ARTS_DEBUG("  PASS: acquire " << dbAcquireOp << " can be partitioned");
-  return true;
-}
-
-/// Check if a value is probably derived from base via arithmetic operations.
-/// Recursively walks through add/mul/sub operations to find if base is
-/// transitively reachable. This handles complex index computations like:
-///   globalIdx = lowerBound + (chunkOffset + localIter) * step
-/// where we want to check if globalIdx is derived from chunkOffset.
-static bool isDerivedFrom(Value value, Value base, int depth = 0) {
-  /// Prevent infinite recursion
-  if (depth > 10)
-    return false;
-
-  if (value == base)
-    return true;
-
-  /// Walk through arithmetic operations recursively
-  if (auto addOp = value.getDefiningOp<arith::AddIOp>()) {
-    if (isDerivedFrom(addOp.getLhs(), base, depth + 1) ||
-        isDerivedFrom(addOp.getRhs(), base, depth + 1))
-      return true;
-  }
-  if (auto mulOp = value.getDefiningOp<arith::MulIOp>()) {
-    if (isDerivedFrom(mulOp.getLhs(), base, depth + 1) ||
-        isDerivedFrom(mulOp.getRhs(), base, depth + 1))
-      return true;
-  }
-  if (auto subOp = value.getDefiningOp<arith::SubIOp>()) {
-    if (isDerivedFrom(subOp.getLhs(), base, depth + 1) ||
-        isDerivedFrom(subOp.getRhs(), base, depth + 1))
-      return true;
+  if (foundAny) {
+    bounds.isStencil = (bounds.minOffset != bounds.maxOffset);
+    bounds.valid = true;
   }
 
-  return false;
+  return bounds;
 }
 
 void DbAcquireNode::collectAccessOperations(
     DenseMap<DbRefOp, SetVector<Operation *>> &dbRefToMemOps) {
-
   if (!edtUser || !useInEdt)
     return;
 
-  /// Start from the block argument inside the EDT (not the acquire result)
-  /// The acquire's ptr result becomes a block argument when passed to the EDT
-
-  /// Worklist-based traversal through the use chain
   SmallVector<Value, 16> worklist;
   SetVector<Value> visited;
   worklist.push_back(useInEdt);
@@ -357,25 +616,20 @@ void DbAcquireNode::collectAccessOperations(
       continue;
 
     for (Operation *user : current.getUsers()) {
-      /// Only consider operations inside the EDT
       if (!edtUser.getBody().isAncestor(user->getParentRegion()))
         continue;
 
       if (auto dbRef = dyn_cast<DbRefOp>(user)) {
-        /// Initialize entry for this DbRefOp
         dbRefToMemOps.try_emplace(dbRef);
 
-        /// Continue walking through the result
         Value refResult = dbRef.getResult();
         worklist.push_back(refResult);
 
-        /// Collect memory ops that use this DbRefOp's result
         for (Operation *memUser : refResult.getUsers()) {
           if (!edtUser.getBody().isAncestor(memUser->getParentRegion()))
             continue;
-          if (isa<memref::LoadOp, memref::StoreOp>(memUser)) {
+          if (isa<memref::LoadOp, memref::StoreOp>(memUser))
             dbRefToMemOps[dbRef].insert(memUser);
-          }
         }
       }
     }
@@ -447,33 +701,19 @@ size_t DbAcquireNode::countStores() {
 }
 
 bool DbAcquireNode::canPartitionWithOffset(Value offset) {
-  ARTS_DEBUG("canPartitionWithOffset: checking offset " << offset);
-  if (!offset) {
-    ARTS_DEBUG("  -> FAIL: offset is null");
+  if (!offset)
     return false;
-  }
 
-  /// Collect accesses: DbRefOp -> [memOps...]
   DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
   collectAccessOperations(dbRefToMemOps);
 
-  ARTS_DEBUG("  Found " << dbRefToMemOps.size() << " DbRefOps");
-
-  /// If no accesses, allow partitioning (vacuously true)
-  if (dbRefToMemOps.empty()) {
-    ARTS_DEBUG("  -> PASS: no accesses to check (vacuously true)");
+  if (dbRefToMemOps.empty())
     return true;
-  }
 
-  /// Validate each DbRefOp and its children
   for (auto &[dbRef, memOps] : dbRefToMemOps) {
-    /// Get DbRefOp indices (structural - outer dimensions)
     ValueRange dbRefIndices = dbRef.getIndices();
 
-    ARTS_DEBUG("  DbRefOp with " << memOps.size() << " memOps");
-
     for (Operation *memOp : memOps) {
-      /// Get memory op indices (data - inner dimensions)
       ValueRange memIndices;
       if (auto load = dyn_cast<memref::LoadOp>(memOp))
         memIndices = load.getIndices();
@@ -482,7 +722,6 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
       else
         continue;
 
-      /// Build full index chain: [DbRefOp indices...] + [memOp indices...]
       SmallVector<Value> fullChain;
       fullChain.append(dbRefIndices.begin(), dbRefIndices.end());
       fullChain.append(memIndices.begin(), memIndices.end());
@@ -490,7 +729,7 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
       if (fullChain.empty())
         continue;
 
-      /// Find first DYNAMIC (non-constant) index
+      /// Find first dynamic index
       Value firstDynIdx;
       for (Value idx : fullChain) {
         int64_t constVal;
@@ -500,49 +739,29 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
         }
       }
 
-      if (!firstDynIdx) {
-        /// All indices constant - OK
-        ARTS_DEBUG("    " << *memOp << " -> all constant, OK");
+      if (!firstDynIdx)
         continue;
-      }
 
-      bool derived = isDerivedFrom(firstDynIdx, offset);
-      ARTS_DEBUG("    " << *memOp);
-      ARTS_DEBUG("      firstDynamic: " << firstDynIdx);
-      ARTS_DEBUG("      isDerivedFrom: " << (derived ? "true" : "false"));
-
-      if (!derived) {
-        ARTS_DEBUG("  -> FAIL: first dynamic index not derived from offset");
+      if (!isDerivedFrom(firstDynIdx, offset))
         return false;
-      }
     }
   }
 
-  ARTS_DEBUG("  -> PASS: all accesses validated");
   return true;
 }
 
 LogicalResult DbAcquireNode::computeChunkInfo(Value &chunkOffset,
                                               Value &chunkSize) {
+  if (computedChunkInfo) {
+    chunkOffset = computedChunkInfo->first;
+    chunkSize = computedChunkInfo->second;
+    return success();
+  }
+
   EdtOp edt = getEdtUser();
   if (!edt)
     return failure();
 
-  /// Lets use the hints if they are set
-  if (partitionOffset && partitionSize) {
-    /// Validate that the array accesses use indices derived from the partition
-    /// offset
-    if (!canPartitionWithOffset(partitionOffset)) {
-      ARTS_DEBUG("Partition hints set but array access not derivable from "
-                 "offset - skipping partition");
-      return failure();
-    }
-    chunkOffset = partitionOffset;
-    chunkSize = partitionSize;
-    return success();
-  }
-
-  /// Otherwise, we need to compute the chunk info from the EDT
   scf::ForOp chunkLoop;
   scf::WhileOp chunkWhile;
   edt.walk([&](scf::ForOp forOp) {
@@ -553,6 +772,48 @@ LogicalResult DbAcquireNode::computeChunkInfo(Value &chunkOffset,
     chunkWhile = whileOp;
     return WalkResult::interrupt();
   });
+
+  if (partitionOffset && partitionSize) {
+    if (!canPartitionWithOffset(partitionOffset))
+      return failure();
+
+    if (chunkLoop) {
+      Value loopIV = chunkLoop.getInductionVar();
+      AccessBoundsInfo bounds =
+          analyzeAccessBounds(this, partitionOffset, loopIV);
+
+      if (bounds.valid) {
+        OpBuilder builder(dbAcquireOp);
+        Location loc = dbAcquireOp.getLoc();
+        builder.setInsertionPoint(dbAcquireOp);
+
+        if (bounds.minOffset != 0) {
+          Value adjustment =
+              builder.create<arith::ConstantIndexOp>(loc, bounds.minOffset);
+          chunkOffset =
+              builder.create<arith::AddIOp>(loc, partitionOffset, adjustment);
+        } else {
+          chunkOffset = partitionOffset;
+        }
+
+        int64_t sizeAdjustment = bounds.maxOffset - bounds.minOffset;
+        if (sizeAdjustment != 0) {
+          Value adjustment =
+              builder.create<arith::ConstantIndexOp>(loc, sizeAdjustment);
+          chunkSize =
+              builder.create<arith::AddIOp>(loc, partitionSize, adjustment);
+        } else {
+          chunkSize = partitionSize;
+        }
+
+        return success();
+      }
+    }
+
+    chunkOffset = partitionOffset;
+    chunkSize = partitionSize;
+    return success();
+  }
 
   if (chunkWhile) {
     if (succeeded(
@@ -664,29 +925,20 @@ void DbAcquireNode::print(llvm::raw_ostream &os) const {
   os << "\n";
 }
 
-/// Compute a maximal prefix of invariant indices (one per leading dimension
-/// of the acquired memref) that are uniform across the EDT. These indices
-/// can be used to coarsen the acquire by pinning leading dimensions.
-/// The returned Values are SSA values already present in the IR; this API
-/// does not materialize new constants or perform replacements.
+/// Compute a maximal prefix of invariant indices that are uniform across the
+/// EDT. These can be used to coarsen the acquire by pinning leading dimensions.
 SmallVector<Value, 4> DbAcquireNode::computeInvariantIndices() {
-  ARTS_DEBUG("Starting invariant indices computation for " << dbAcquireOp);
-
   SmallVector<Value, 4> result;
   const size_t rank = dbAcquireOp.getSizes().size();
 
-  /// Collect accesses using the new API
   DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
   collectAccessOperations(dbRefToMemOps);
-
-  ARTS_DEBUG("Found " << dbRefToMemOps.size() << " DbRefOps");
 
   SmallVector<Value, 4> candidate(rank, Value());
   SmallVector<bool, 4> invalid(rank, false);
 
   auto &edtRegion = edtUser.getBody();
 
-  /// Check DbRefOp indices for invariance (block selection level)
   for (auto &[dbRef, memOps] : dbRefToMemOps) {
     if (!edtRegion.isAncestor(dbRef->getParentRegion()))
       continue;
@@ -705,7 +957,6 @@ SmallVector<Value, 4> DbAcquireNode::computeInvariantIndices() {
     }
   }
 
-  /// Find invariant prefix
   for (size_t d = 0; d < rank; ++d) {
     if (!candidate[d] || invalid[d])
       break;
@@ -714,12 +965,6 @@ SmallVector<Value, 4> DbAcquireNode::computeInvariantIndices() {
     result.push_back(candidate[d]);
   }
 
-  ARTS_DEBUG_REGION({
-    ARTS_DEBUG(" - Invariant indices:");
-    for (size_t d = 0; d < result.size(); ++d) {
-      ARTS_DEBUG("   - Dimension " << d << ": " << result[d]);
-    }
-  });
   return result;
 }
 
@@ -731,7 +976,6 @@ bool DbAcquireNode::isWorkerIndexedAccess() const {
   if (!op)
     return false;
 
-  /// Need mutable reference to call non-const getters (op is Operation*)
   DbAcquireOp mutableOp(op);
   auto offsets = mutableOp.getOffsetHints();
   auto sizes = mutableOp.getSizeHints();
@@ -739,22 +983,12 @@ bool DbAcquireNode::isWorkerIndexedAccess() const {
   if (offsets.empty() || sizes.empty())
     return false;
 
-  /// Check size is constant 1 (unit access per worker)
   int64_t sz = 0;
   if (!arts::getConstantIndex(sizes[0], sz) || sz != 1)
     return false;
 
-  /// Check offset is a BlockArgument (varying per EDT/iteration)
-  Value offset = offsets[0];
-  if (isa<BlockArgument>(offset)) {
-    /// This is indexed by loop induction var or EDT parameter
-    /// Each invocation gets different offset -> disjoint by construction
-    ARTS_DEBUG(
-        "Worker-indexed pattern detected: offset is BlockArg with size=1");
-    return true;
-  }
-
-  return false;
+  /// Offset is a BlockArgument means each invocation gets different offset
+  return isa<BlockArgument>(offsets[0]);
 }
 
 bool DbAcquireNode::hasDisjointPartitionWith(const DbAcquireNode *other) const {
@@ -771,7 +1005,6 @@ bool DbAcquireNode::hasDisjointPartitionWith(const DbAcquireNode *other) const {
   auto offsetsB = acqB.getOffsetHints();
   auto sizesB = acqB.getSizeHints();
 
-  /// Need at least one dimension of offset/size hints
   if (offsetsA.empty() || sizesA.empty() || offsetsB.empty() || sizesB.empty())
     return false;
 
@@ -780,7 +1013,7 @@ bool DbAcquireNode::hasDisjointPartitionWith(const DbAcquireNode *other) const {
   Value offB = offsetsB[0];
   Value sizeB = sizesB[0];
 
-  /// Try constant range disjointness first
+  /// Check constant range disjointness
   int64_t offAVal = 0, sizeAVal = 0, offBVal = 0, sizeBVal = 0;
   if (arts::getConstantIndex(offA, offAVal) &&
       arts::getConstantIndex(sizeA, sizeAVal) &&
@@ -788,12 +1021,8 @@ bool DbAcquireNode::hasDisjointPartitionWith(const DbAcquireNode *other) const {
       arts::getConstantIndex(sizeB, sizeBVal)) {
     int64_t endA = offAVal + sizeAVal;
     int64_t endB = offBVal + sizeBVal;
-    if (endA <= offBVal || endB <= offAVal) {
-      ARTS_DEBUG("Partition hints prove disjoint: constant ranges ["
-                 << offAVal << "," << endA << ") vs [" << offBVal << "," << endB
-                 << ")");
+    if (endA <= offBVal || endB <= offAVal)
       return true;
-    }
   }
 
   /// Check worker-indexed pattern: different BlockArguments with size=1
@@ -806,13 +1035,9 @@ bool DbAcquireNode::hasDisjointPartitionWith(const DbAcquireNode *other) const {
   if (sizeAIsOne && sizeBIsOne) {
     auto blockArgA = dyn_cast<BlockArgument>(offA);
     auto blockArgB = dyn_cast<BlockArgument>(offB);
-    if (blockArgA && blockArgB && blockArgA != blockArgB) {
-      if (blockArgA.getOwner() != blockArgB.getOwner()) {
-        ARTS_DEBUG(
-            "Partition hints prove disjoint: different BlockArgs with size=1");
-        return true;
-      }
-    }
+    if (blockArgA && blockArgB && blockArgA != blockArgB &&
+        blockArgA.getOwner() != blockArgB.getOwner())
+      return true;
   }
 
   return false;
