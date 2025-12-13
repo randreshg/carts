@@ -260,9 +260,22 @@ bool DbPass::partitionDb() {
   auto setTwinAttr = [&](DbAcquireOp acq, bool useTwinDiff) {
     if (!acq)
       return;
+
+    bool originalUseTwinDiff = useTwinDiff;
+
     // Apply single-node heuristic
-    if (AM->getHeuristicsConfig().shouldDisableTwinDiff())
+    if (AM->getHeuristicsConfig().shouldDisableTwinDiff()) {
       useTwinDiff = false;
+
+      /// Record H4 decision for diagnostics
+      if (originalUseTwinDiff != useTwinDiff) {
+        // Get ARTS ID for this acquire operation
+        int64_t artsId =
+            AM->getMetadataManager().getIdRegistry().get(acq.getOperation());
+        AM->getHeuristicsConfig().recordDecision(
+            "H4", true, "single-node execution disables twin-diff", artsId);
+      }
+    }
 
     if (acq.hasTwinDiff() && acq.getTwinDiff() == useTwinDiff)
       return;

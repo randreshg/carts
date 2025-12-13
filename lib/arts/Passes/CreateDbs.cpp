@@ -215,7 +215,7 @@ private:
     for (unsigned d = 0; d < pinnedDimCount; ++d) {
       /// Conservative
       if (memRefType.isDynamicDim(d))
-        return HeuristicsConfig::kMaxOuterDBs + 1; 
+        return HeuristicsConfig::kMaxOuterDBs + 1;
       outerDBs *= memRefType.getDimSize(d);
     }
     return outerDBs;
@@ -586,6 +586,12 @@ void CreateDbsPass::createDbAllocOps() {
         heuristics.shouldPreferCoarseForReadOnly(info.accessMode)) {
       ARTS_DEBUG(" - H1: Read-only on single-node, preferring coarse");
       useFineGrainedAllocation = false;
+
+      /// Record H1 decision for diagnostics
+      heuristics.recordDecision(
+          "H1", true,
+          "read-only access on single-node prefers coarse allocation",
+          0); // ARTS ID will be set when DB is created
     }
 
     /// H2: Apply cost model on single-node
@@ -598,6 +604,16 @@ void CreateDbsPass::createDbAllocOps() {
 
       if (!heuristics.shouldUseFineGrained(outerDBs, depsPerEDT, innerBytes)) {
         useFineGrainedAllocation = false;
+
+        /// Record H2 decision for diagnostics
+        llvm::StringMap<int64_t> inputs = {
+            {"outerDBs", outerDBs},
+            {"depsPerEDT", depsPerEDT},
+            {"innerBytes", innerBytes},
+        };
+        heuristics.recordDecision(
+            "H2", false, "cost model determined coarse allocation is better", 0,
+            inputs);
       }
     }
 
