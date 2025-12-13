@@ -53,6 +53,10 @@ RUN ln -s /usr/bin/clang-18 /usr/bin/clang && \
     ln -s /usr/bin/clang++-18 /usr/bin/clang++ && \
     ln -s /usr/bin/llvm-config-18 /usr/bin/llvm-config
 
+# Install Poetry (Python dependency manager)
+RUN curl -sSL https://install.python-poetry.org | python3 - && \
+    ln -s /root/.local/bin/poetry /usr/local/bin/poetry
+
 # Install Node.js and npm (latest LTS version)
 RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - && \
     apt-get install -y nodejs && \
