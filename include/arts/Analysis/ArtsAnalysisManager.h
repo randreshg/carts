@@ -12,6 +12,7 @@
 
 #include "arts/Analysis/Db/DbAnalysis.h"
 #include "arts/Analysis/Edt/EdtAnalysis.h"
+#include "arts/Analysis/HeuristicsConfig.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Analysis/StringAnalysis.h"
@@ -43,6 +44,7 @@ public:
   EdtAnalysis &getEdtAnalysis();
   LoopAnalysis &getLoopAnalysis();
   StringAnalysis &getStringAnalysis();
+  HeuristicsConfig &getHeuristicsConfig();
 
   /// Graph getters
   DbGraph &getDbGraph(func::FuncOp func);
@@ -82,6 +84,7 @@ private:
 
   std::unique_ptr<DbAnalysis> dbAnalysis;
   std::unique_ptr<EdtAnalysis> edtAnalysis;
+  std::unique_ptr<HeuristicsConfig> heuristicsConfig;
   std::unique_ptr<LoopAnalysis> loopAnalysis;
   std::unique_ptr<StringAnalysis> stringAnalysis;
   std::unique_ptr<ArtsMetadataManager> metadataManager;
