@@ -68,3 +68,38 @@ bool HeuristicsConfig::shouldUseFineGrained(int64_t outerDBs,
 
   return acceptable;
 }
+
+void HeuristicsConfig::recordDecision(llvm::StringRef heuristic, bool applied,
+                                      llvm::StringRef rationale, int64_t artsId,
+                                      const llvm::StringMap<int64_t> &inputs) {
+  decisions_.push_back(
+      {heuristic.str(), applied, rationale.str(), artsId, inputs});
+  ARTS_DEBUG("Recorded heuristic decision: " << heuristic
+                                             << " applied=" << applied
+                                             << " for ARTS ID " << artsId);
+}
+
+llvm::ArrayRef<HeuristicDecision> HeuristicsConfig::getDecisions() const {
+  return decisions_;
+}
+
+void HeuristicsConfig::exportDecisionsToJson(llvm::json::OStream &J) const {
+  J.attributeArray("heuristic_decisions", [&]() {
+    for (const auto &decision : decisions_) {
+      J.object([&]() {
+        J.attribute("heuristic", decision.heuristic);
+        J.attribute("applied", decision.applied);
+        J.attribute("rationale", decision.rationale);
+        J.attribute("affected_arts_id", decision.affectedArtsId);
+
+        if (!decision.costModelInputs.empty()) {
+          J.attributeObject("cost_model_inputs", [&]() {
+            for (const auto &input : decision.costModelInputs) {
+              J.attribute(input.first(), input.second);
+            }
+          });
+        }
+      });
+    }
+  });
+}

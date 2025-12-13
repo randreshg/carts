@@ -11,9 +11,19 @@
 
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
+#include "llvm/Support/JSON.h"
 
 namespace mlir {
 namespace arts {
+
+/// Records a single heuristic decision for diagnostics export
+struct HeuristicDecision {
+  std::string heuristic;
+  bool applied;
+  std::string rationale;
+  int64_t affectedArtsId;
+  llvm::StringMap<int64_t> costModelInputs;
+};
 
 /// Centralized heuristics configuration for compile-time optimizations.
 /// Provides decision methods for single-rank and other optimizations.
@@ -62,8 +72,24 @@ public:
   bool shouldUseFineGrained(int64_t outerDBs, int64_t depsPerEDT,
                             int64_t innerBytes) const;
 
+  //===--------------------------------------------------------------------===//
+  // Decision Recording for Diagnostics
+  //===--------------------------------------------------------------------===//
+
+  /// Records a heuristic decision for diagnostics export
+  void recordDecision(llvm::StringRef heuristic, bool applied,
+                      llvm::StringRef rationale, int64_t artsId,
+                      const llvm::StringMap<int64_t> &inputs = {});
+
+  /// Returns all recorded heuristic decisions
+  llvm::ArrayRef<HeuristicDecision> getDecisions() const;
+
+  /// Exports recorded decisions to JSON
+  void exportDecisionsToJson(llvm::json::OStream &J) const;
+
 private:
   const mlir::arts::ArtsAbstractMachine &machine;
+  llvm::SmallVector<HeuristicDecision> decisions_; ///< Recorded decisions
 };
 
 } // namespace arts

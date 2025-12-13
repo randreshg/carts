@@ -117,27 +117,105 @@ void ArtsAnalysisManager::print(llvm::raw_ostream &os) {
   }
 }
 
+void ArtsAnalysisManager::captureDiagnostics() {
+  using namespace llvm::json;
+
+  Object root;
+
+  /// Aggregate EDTs from all functions
+  Array allEdts;
+  for (auto func : module.getOps<func::FuncOp>()) {
+    std::string edtJsonStr;
+    llvm::raw_string_ostream edtStream(edtJsonStr);
+    getEdtGraph(func).exportToJson(edtStream, /*includeAnalysis=*/true);
+
+    auto edtArray = llvm::json::parse(edtJsonStr);
+    if (edtArray && edtArray->getAsArray()) {
+      for (auto &edt : *edtArray->getAsArray())
+        allEdts.push_back(std::move(edt));
+    }
+  }
+  root["edts"] = std::move(allEdts);
+
+  /// Aggregate DBs from all functions
+  Array allDbs;
+  for (auto func : module.getOps<func::FuncOp>()) {
+    std::string dbJsonStr;
+    llvm::raw_string_ostream dbStream(dbJsonStr);
+    getDbGraph(func).exportToJson(dbStream, /*includeAnalysis=*/true);
+
+    auto dbArray = llvm::json::parse(dbJsonStr);
+    if (dbArray && dbArray->getAsArray()) {
+      for (auto &db : *dbArray->getAsArray())
+        allDbs.push_back(std::move(db));
+    }
+  }
+  root["dbs"] = std::move(allDbs);
+
+  /// Machine configuration
+  Object machine;
+  machine["node_count"] = getAbstractMachine().getNodeCount();
+  machine["single_node"] = getAbstractMachine().getNodeCount() == 1;
+  root["machine"] = std::move(machine);
+
+  /// Heuristic decisions
+  Array heuristicDecisions;
+  for (const auto &decision : getHeuristicsConfig().getDecisions()) {
+    Object d;
+    d["heuristic"] = decision.heuristic;
+    d["applied"] = decision.applied;
+    d["rationale"] = decision.rationale;
+    d["affected_arts_id"] = decision.affectedArtsId;
+    if (!decision.costModelInputs.empty()) {
+      Object inputs;
+      for (const auto &input : decision.costModelInputs)
+        inputs[input.first()] = input.second;
+      d["cost_model_inputs"] = std::move(inputs);
+    }
+    heuristicDecisions.push_back(std::move(d));
+  }
+  root["heuristic_decisions"] = std::move(heuristicDecisions);
+
+  /// Store as cached JSON
+  std::string jsonStr;
+  llvm::raw_string_ostream stream(jsonStr);
+  stream << llvm::json::Value(std::move(root));
+  cachedDiagnosticJson = stream.str();
+}
+
 void ArtsAnalysisManager::exportToJson(llvm::raw_ostream &os,
                                        bool includeAnalysis) {
   using namespace llvm::json;
 
-  Object root;
-  root["module"] = module.getName() ? module.getName()->str() : "unnamed";
-  root["built"] = built;
-  root["valid"] = true;
+  if (!includeAnalysis) {
+    Object root;
+    root["module"] = module.getName() ? module.getName()->str() : "unnamed";
+    root["built"] = built;
+    root["valid"] = true;
 
-  /// Export graphs via analysis objects
-  Array functions;
-  for (auto func : module.getOps<func::FuncOp>()) {
-    Object funcObj;
-    funcObj["function"] = func.getName().str();
-    Object graphs;
-    graphs["db"] = "available";
-    graphs["edt"] = "available";
-    funcObj["graphs"] = std::move(graphs);
-    functions.push_back(std::move(funcObj));
+    Array functions;
+    for (auto func : module.getOps<func::FuncOp>()) {
+      Object funcObj;
+      funcObj["function"] = func.getName().str();
+      Object graphs;
+      graphs["db"] = "available";
+      graphs["edt"] = "available";
+      funcObj["graphs"] = std::move(graphs);
+      functions.push_back(std::move(funcObj));
+    }
+    root["functions"] = std::move(functions);
+    os << llvm::json::Value(std::move(root)) << "\n";
+    return;
   }
-  root["functions"] = std::move(functions);
 
-  os << llvm::json::Value(std::move(root)) << "\n";
+  /// Use cached diagnostics if available
+  if (cachedDiagnosticJson) {
+    os << *cachedDiagnosticJson << "\n";
+    return;
+  }
+
+  /// Fallback: generate on-demand
+  captureDiagnostics();
+  if (cachedDiagnosticJson)
+    os << *cachedDiagnosticJson << "\n";
 }

@@ -91,6 +91,16 @@ static cl::opt<uint64_t>
                  cl::desc("Stride multiplier for arts ids (EDTs/DBs)"),
                  cl::init(1000));
 
+static cl::opt<bool>
+    Diagnose("diagnose",
+             cl::desc("Export diagnostic information about compilation"),
+             cl::init(false));
+
+static cl::opt<std::string>
+    DiagnoseOutput("diagnose-output",
+                   cl::desc("Output file for diagnostic JSON export"),
+                   cl::value_desc("filename"), cl::init(""));
+
 ///===----------------------------------------------------------------------===///
 // Pipeline Stop Options
 ///===----------------------------------------------------------------------===///
@@ -364,8 +374,10 @@ void setupLLVMIREmission(PassManager &pm) {
 }
 
 /// Configure the pass manager with the optimization passes.
-LogicalResult setupPassManager(ModuleOp module, MLIRContext &context,
-                               PipelineStage stopAt = PipelineStage::Complete) {
+LogicalResult
+setupPassManager(ModuleOp module, MLIRContext &context,
+                 PipelineStage stopAt = PipelineStage::Complete,
+                 std::unique_ptr<arts::ArtsAnalysisManager> *outAM = nullptr) {
   /// Create module-level analysis manager for caching across functions
   std::unique_ptr<arts::ArtsAnalysisManager> AM =
       std::make_unique<arts::ArtsAnalysisManager>(module, ArtsConfig);
@@ -514,6 +526,10 @@ LogicalResult setupPassManager(ModuleOp module, MLIRContext &context,
   if (stopAt == PipelineStage::Epochs)
     return success();
 
+  /// Capture diagnostic data
+  if (outAM)
+    AM->captureDiagnostics();
+
   /// Pre-lowering
   {
     PassManager pm(&context);
@@ -564,6 +580,10 @@ LogicalResult setupPassManager(ModuleOp module, MLIRContext &context,
     }
   }
 
+  /// Return analysis manager if requested
+  if (outAM)
+    *outAM = std::move(AM);
+
   return success();
 }
 
@@ -595,8 +615,29 @@ int main(int argc, char **argv) {
   }
 
   /// Run the pass pipeline once.
-  if (failed(setupPassManager(module.get(), context, StopAt))) {
+  std::unique_ptr<arts::ArtsAnalysisManager> AM;
+  if (failed(setupPassManager(module.get(), context, StopAt,
+                              Diagnose ? &AM : nullptr))) {
     return 1;
+  }
+
+  /// Export diagnostics if requested
+  if (Diagnose && AM) {
+    if (!DiagnoseOutput.empty()) {
+      /// Export to file
+      std::error_code EC;
+      llvm::raw_fd_ostream outputFile(DiagnoseOutput, EC);
+      if (EC) {
+        ARTS_ERROR(
+            "Could not open diagnostics output file: " << DiagnoseOutput);
+        return 1;
+      }
+      AM->exportToJson(outputFile, /*includeAnalysis=*/true);
+      outputFile.close();
+    } else {
+      /// Export to stdout
+      AM->exportToJson(llvm::outs(), /*includeAnalysis=*/true);
+    }
   }
 
   /// Translate the optimized module to LLVM IR and write output.

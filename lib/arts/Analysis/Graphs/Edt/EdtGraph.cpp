@@ -13,6 +13,7 @@
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/Loop/LoopNode.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/Metadata/LocationMetadata.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
@@ -185,36 +186,104 @@ void EdtGraph::print(llvm::raw_ostream &os) {
 void EdtGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
   using namespace llvm::json;
 
-  Object root;
-  Array nodesArr;
-  forEachNode([&](NodeBase *node) {
-    nodesArr.push_back(Object{{"id", sanitizeString(node->getHierId())},
-                              {"group", "edt"},
-                              {"nodeKind", "EdtTask"}});
-  });
+  if (!includeAnalysis) {
+    /// Original graph visualization format
+    Object root;
+    Array nodesArr;
+    forEachNode([&](NodeBase *node) {
+      nodesArr.push_back(Object{{"id", sanitizeString(node->getHierId())},
+                                {"group", "edt"},
+                                {"nodeKind", "EdtTask"}});
+    });
 
-  Array edgesArr;
-  forEachNode([&](NodeBase *from) {
-    for (auto *edge : from->getOutEdges()) {
-      edgesArr.push_back(
-          Object{{"from", sanitizeString(edge->getFrom()->getHierId())},
-                 {"to", sanitizeString(edge->getTo()->getHierId())},
-                 {"edgeKind", "Dep"},
-                 {"label", edge->getType().str()}});
-    }
-  });
+    Array edgesArr;
+    forEachNode([&](NodeBase *from) {
+      for (auto *edge : from->getOutEdges()) {
+        edgesArr.push_back(
+            Object{{"from", sanitizeString(edge->getFrom()->getHierId())},
+                   {"to", sanitizeString(edge->getTo()->getHierId())},
+                   {"edgeKind", "Dep"},
+                   {"label", edge->getType().str()}});
+      }
+    });
 
-  root["nodes"] = std::move(nodesArr);
-  root["edges"] = std::move(edgesArr);
-
-  /// Include analysis data if requested
-  if (includeAnalysis) {
-    /// Add EDT-specific analysis data here if needed in the future
-    root["analysis"] = Object{{"numTasks", size()},
-                              {"function", getFunction().getName().str()}};
+    root["nodes"] = std::move(nodesArr);
+    root["edges"] = std::move(edgesArr);
+    os << llvm::json::Value(std::move(root)) << "\n";
+    return;
   }
 
-  os << llvm::json::Value(std::move(root)) << "\n";
+  /// ArtsMate-compatible EDT entities export
+  Array edts;
+
+  forEachNode([&](NodeBase *node) {
+    auto *edtNode = cast<EdtNode>(node);
+    const EdtInfo &info = edtNode->getInfo();
+    EdtOp edtOp = edtNode->getEdtOp();
+
+    Object edt;
+
+    /// ARTS ID
+    int64_t artsId = analysisManager->getMetadataManager().getIdRegistry().get(
+        edtNode->getOp());
+    if (artsId != 0)
+      edt["arts_id"] = artsId;
+
+    /// EDT type (task for now)
+    edt["type"] = "task";
+
+    /// Concurrency scope
+    edt["concurrency"] = "intranode";
+
+    /// Dependencies from EdtInfo's dbAllocsRead/Written
+    Array deps;
+    auto &idRegistry = analysisManager->getMetadataManager().getIdRegistry();
+
+    /// Collect all accessed DBs with their modes
+    DenseMap<DbAllocOp, std::string> dbModes;
+    for (DbAllocOp db : info.dbAllocsRead)
+      dbModes[db] = "in";
+    for (DbAllocOp db : info.dbAllocsWritten) {
+      if (dbModes.count(db))
+        dbModes[db] = "inout"; /// Both read and written
+      else
+        dbModes[db] = "out";
+    }
+
+    for (auto &[dbOp, mode] : dbModes) {
+      int64_t dbId = idRegistry.get(dbOp.getOperation());
+      if (dbId != 0)
+        deps.push_back(Object{{"db", dbId}, {"mode", mode}});
+    }
+    edt["deps"] = std::move(deps);
+
+    /// Loop metadata
+    bool inLoop = edtNode->hasParallelLoopMetadata();
+    edt["in_loop"] = inLoop;
+
+    if (inLoop && !edtNode->getAssociatedLoops().empty()) {
+      LoopNode *loop = edtNode->getAssociatedLoops()[0];
+      auto lb = loop->getLowerBoundConstant();
+      auto ub = loop->getUpperBoundConstant();
+      Array bounds;
+      bounds.push_back(lb ? llvm::json::Value(*lb)
+                          : llvm::json::Value(nullptr));
+      bounds.push_back(ub ? llvm::json::Value(*ub)
+                          : llvm::json::Value(nullptr));
+      edt["loop_bounds"] = std::move(bounds);
+    }
+
+    /// Source location
+    auto loc = LocationMetadata::fromLocation(edtOp->getLoc());
+    if (loc.isValid())
+      edt["loc"] = loc.file + ":" + std::to_string(loc.line);
+    else
+      edt["loc"] = "unknown";
+
+    edts.push_back(std::move(edt));
+  });
+
+  os << llvm::json::Value(std::move(edts)) << "\n";
 }
 
 /// Helper to populate and sort children cache for a node

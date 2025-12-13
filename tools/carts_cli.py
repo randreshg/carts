@@ -18,12 +18,15 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+from rich.table import Table
 from rich.text import Text
 from rich import box
+import json
 
 # ============================================================================
 # Constants and Enums
 # ============================================================================
+
 
 class Platform(Enum):
     MACOS = "macos"
@@ -64,6 +67,7 @@ CLEAN_DIR_PATTERNS = [
 # Platform Configuration
 # ============================================================================
 
+
 @dataclass
 class PlatformConfig:
     """Platform-specific configuration for CARTS compilation.
@@ -98,14 +102,22 @@ class PlatformConfig:
 
     # Compiler flags (populated by _setup_*_flags methods)
     include_flags: List[str] = field(default_factory=list)        # -I flags
-    cgeist_sysroot_flags: List[str] = field(default_factory=list) # --sysroot for cgeist
-    clang_sysroot_flags: List[str] = field(default_factory=list)  # -isysroot for clang
-    clang_library_flags: List[str] = field(default_factory=list)  # -L flags for clang
-    compile_library_flags: List[str] = field(default_factory=list)# -L flags for final link
-    clang_libraries: List[str] = field(default_factory=list)      # -l flags for clang
-    compile_libraries: List[str] = field(default_factory=list)    # -l flags for final link
-    compile_flags: List[str] = field(default_factory=list)        # General compile flags
-    linker_flags: List[str] = field(default_factory=list)         # Linker-specific flags
+    cgeist_sysroot_flags: List[str] = field(
+        default_factory=list)  # --sysroot for cgeist
+    clang_sysroot_flags: List[str] = field(
+        default_factory=list)  # -isysroot for clang
+    clang_library_flags: List[str] = field(
+        default_factory=list)  # -L flags for clang
+    compile_library_flags: List[str] = field(
+        default_factory=list)  # -L flags for final link
+    clang_libraries: List[str] = field(
+        default_factory=list)      # -l flags for clang
+    compile_libraries: List[str] = field(
+        default_factory=list)    # -l flags for final link
+    compile_flags: List[str] = field(
+        default_factory=list)        # General compile flags
+    linker_flags: List[str] = field(
+        default_factory=list)         # Linker-specific flags
     linker_path: Optional[Path] = None  # Path to LLD linker
     linker_type: Optional[str] = None   # "lld" or "lld-link"
 
@@ -158,7 +170,8 @@ class PlatformConfig:
 
     def _setup_paths(self) -> None:
         """Setup include and library paths."""
-        self.llvm_include_path = self.llvm_install_dir / "lib" / "clang" / "18" / "include"
+        self.llvm_include_path = self.llvm_install_dir / \
+            "lib" / "clang" / "18" / "include"
 
         # Detect LLVM library path
         aarch64_path = self.llvm_install_dir / "lib" / "aarch64-unknown-linux-gnu"
@@ -172,7 +185,8 @@ class PlatformConfig:
             self.llvm_lib_path = self.llvm_install_dir / "lib"
 
         # macOS SDK path
-        self.macos_sdk_path = Path("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
+        self.macos_sdk_path = Path(
+            "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk")
 
     def _setup_platform_flags(self) -> None:
         """Setup platform-specific flags."""
@@ -187,7 +201,8 @@ class PlatformConfig:
         """Setup macOS-specific flags."""
         if self.macos_sdk_path and self.macos_sdk_path.exists():
             self.system_include_path = self.macos_sdk_path / "usr" / "include"
-            self.system_cxx_include_path = self.macos_sdk_path / "usr" / "include" / "c++" / "v1"
+            self.system_cxx_include_path = self.macos_sdk_path / \
+                "usr" / "include" / "c++" / "v1"
 
             self.include_flags.extend([
                 f"-I{self.system_include_path}",
@@ -219,15 +234,19 @@ class PlatformConfig:
 
     def _setup_windows_flags(self) -> None:
         """Setup Windows-specific flags."""
-        sdk_dir = os.environ.get("WindowsSdkDir", os.environ.get("WINDOWSSDKDIR", ""))
-        sdk_version = os.environ.get("WindowsSDKVersion", os.environ.get("WINDOWSSDKVERSION", ""))
+        sdk_dir = os.environ.get(
+            "WindowsSdkDir", os.environ.get("WINDOWSSDKDIR", ""))
+        sdk_version = os.environ.get(
+            "WindowsSDKVersion", os.environ.get("WINDOWSSDKVERSION", ""))
         vc_tools_dir = os.environ.get("VCToolsInstallDir", "")
         arch = os.environ.get("CARTS_WINDOWS_ARCH", "x64")
 
         if not sdk_dir or not sdk_version:
-            raise RuntimeError("Windows SDK environment not detected. Run from VS developer prompt.")
+            raise RuntimeError(
+                "Windows SDK environment not detected. Run from VS developer prompt.")
         if not vc_tools_dir:
-            raise RuntimeError("VCToolsInstallDir not set. Run from VS developer prompt.")
+            raise RuntimeError(
+                "VCToolsInstallDir not set. Run from VS developer prompt.")
 
         sdk_dir = sdk_dir.rstrip("/\\")
         sdk_version = sdk_version.rstrip("/\\")
@@ -305,7 +324,8 @@ class PlatformConfig:
 
         if self.linker_path:
             if self.platform == Platform.WINDOWS:
-                self.linker_flags.extend(["-fuse-ld=lld", f"--ld-path={self.linker_path}"])
+                self.linker_flags.extend(
+                    ["-fuse-ld=lld", f"--ld-path={self.linker_path}"])
             else:
                 self.linker_flags.append(f"--ld-path={self.linker_path}")
 
@@ -335,31 +355,38 @@ class PlatformConfig:
 
 console = Console()
 
+
 def print_header(title: str) -> None:
     """Print a styled header."""
     console.print()
     console.print(Panel(Text(title, style="bold cyan"), box=box.DOUBLE))
     console.print()
 
+
 def print_step(msg: str) -> None:
     """Print a step indicator."""
     console.print(f"[bold blue]->[/bold blue] {msg}")
+
 
 def print_success(msg: str) -> None:
     """Print a success message."""
     console.print(f"[bold green]OK[/bold green] {msg}")
 
+
 def print_error(msg: str) -> None:
     """Print an error message."""
     console.print(f"[bold red]ERROR[/bold red] {msg}", style="red")
+
 
 def print_warning(msg: str) -> None:
     """Print a warning message."""
     console.print(f"[bold yellow]WARNING[/bold yellow] {msg}")
 
+
 def print_info(msg: str) -> None:
     """Print an info message."""
     console.print(f"[dim cyan]INFO[/dim cyan] {msg}")
+
 
 def print_debug(msg: str) -> None:
     """Print a debug message (only in verbose mode)."""
@@ -372,6 +399,7 @@ def print_debug(msg: str) -> None:
 
 _config: Optional[PlatformConfig] = None
 _verbose: bool = False
+
 
 def get_config() -> PlatformConfig:
     """Get or create the platform configuration."""
@@ -438,14 +466,16 @@ def run_command_with_output(
     """Run a command, optionally redirecting stdout to a file."""
     if is_verbose():
         if output_file:
-            print_debug(f"Running: {' '.join(str(c) for c in cmd)} > {output_file}")
+            print_debug(
+                f"Running: {' '.join(str(c) for c in cmd)} > {output_file}")
         else:
             print_debug(f"Running: {' '.join(str(c) for c in cmd)}")
 
     try:
         if output_file:
             with open(output_file, 'w') as f:
-                result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, cwd=cwd, text=True)
+                result = subprocess.run(
+                    cmd, stdout=f, stderr=subprocess.PIPE, cwd=cwd, text=True)
                 if result.returncode != 0 and result.stderr:
                     console.print(result.stderr, style="red")
                 return result.returncode
@@ -482,7 +512,8 @@ app.add_typer(docker_app, name="docker")
 
 @app.callback()
 def main_callback(
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose output"),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Enable verbose output"),
 ):
     """CARTS - Compiler for Asynchronous Runtime Systems"""
     set_verbose(verbose)
@@ -498,17 +529,22 @@ def main_callback(
 def build(
     clean: bool = typer.Option(False, "--clean", "-c", help="Clean build"),
     arts: bool = typer.Option(False, "--arts", "-a", help="Build only ARTS"),
-    polygeist: bool = typer.Option(False, "--polygeist", "-p", help="Build only Polygeist"),
+    polygeist: bool = typer.Option(
+        False, "--polygeist", "-p", help="Build only Polygeist"),
     llvm: bool = typer.Option(False, "--llvm", "-l", help="Build only LLVM"),
-    debug: bool = typer.Option(False, "--debug", help="Enable debug build with logging"),
-    info: bool = typer.Option(False, "--info", help="Enable info-level logging"),
-    introspection: bool = typer.Option(False, "--introspection", "-i", help="Enable ARTS introspection"),
+    debug: bool = typer.Option(
+        False, "--debug", help="Enable debug build with logging"),
+    info: bool = typer.Option(
+        False, "--info", help="Enable info-level logging"),
+    introspection: bool = typer.Option(
+        False, "--introspection", "-i", help="Enable ARTS introspection"),
 ):
     """Build CARTS project using system clang."""
     config = get_config()
 
     print_header("CARTS Build")
-    console.print(f"Platform: [cyan]{config.platform.value}[/cyan] ({config.arch})")
+    console.print(
+        f"Platform: [cyan]{config.platform.value}[/cyan] ({config.arch})")
 
     makefile = config.carts_dir / "Makefile"
     if not makefile.is_file():
@@ -534,7 +570,8 @@ def build(
     if info:
         make_vars.append("ARTS_INFO_ENABLED=ON")
     if debug:
-        make_vars.extend(["ARTS_DEBUG_ENABLED=ON", "ARTS_INFO_ENABLED=ON", "ARTS_BUILD_TYPE=Debug"])
+        make_vars.extend(
+            ["ARTS_DEBUG_ENABLED=ON", "ARTS_INFO_ENABLED=ON", "ARTS_BUILD_TYPE=Debug"])
 
     # Pass platform-specific linker path to make
     if config.linker_path:
@@ -668,11 +705,16 @@ def run_cmd(
     ctx: typer.Context,
     input_file: Path = typer.Argument(..., help="Input MLIR file"),
     output: Optional[Path] = typer.Option(None, "-o", help="Output file"),
-    stop_at: Optional[str] = typer.Option(None, "--stop-at", help="Stop at pipeline stage"),
-    all_stages: bool = typer.Option(False, "--all-stages", help="Dump all pipeline stages"),
-    emit_llvm: bool = typer.Option(False, "--emit-llvm", help="Emit LLVM IR output"),
-    collect_metadata: bool = typer.Option(False, "--collect-metadata", help="Collect and export metadata"),
-    optimize: bool = typer.Option(False, "--O3", help="Enable O3 optimizations"),
+    stop_at: Optional[str] = typer.Option(
+        None, "--stop-at", help="Stop at pipeline stage"),
+    all_stages: bool = typer.Option(
+        False, "--all-stages", help="Dump all pipeline stages"),
+    emit_llvm: bool = typer.Option(
+        False, "--emit-llvm", help="Emit LLVM IR output"),
+    collect_metadata: bool = typer.Option(
+        False, "--collect-metadata", help="Collect and export metadata"),
+    optimize: bool = typer.Option(
+        False, "--O3", help="Enable O3 optimizations"),
     debug: bool = typer.Option(False, "-g", help="Enable debug info emission"),
 ):
     """Run CARTS MLIR transformations."""
@@ -753,7 +795,8 @@ def _run_all_stages(
         for stage in PIPELINE_STAGES:
             progress.update(task, description=f"Stage: {stage}")
             out_file = out_dir / f"{stem}_{stage}.mlir"
-            cmd = base_cmd + [f"--stop-at={stage}", "-o", str(out_file)] + extra_args
+            cmd = base_cmd + [f"--stop-at={stage}",
+                              "-o", str(out_file)] + extra_args
             run_subprocess(cmd, check=False)
             progress.advance(task)
 
@@ -844,11 +887,19 @@ def compile(
 def execute(
     ctx: typer.Context,
     input_file: Path = typer.Argument(..., help="Input C/C++ file"),
-    output: Optional[Path] = typer.Option(None, "-o", help="Output executable"),
-    optimize: bool = typer.Option(False, "-O3", help="Enable dual compilation mode"),
+    output: Optional[Path] = typer.Option(
+        None, "-o", help="Output executable"),
+    optimize: bool = typer.Option(
+        False, "-O3", help="Enable dual compilation mode"),
     debug: bool = typer.Option(False, "-g", help="Generate debug symbols"),
-    run_args: Optional[str] = typer.Option(None, "--run-args", help="Arguments for carts run"),
-    compile_args: Optional[str] = typer.Option(None, "--compile-args", help="Arguments for carts compile"),
+    diagnose: bool = typer.Option(
+        False, "--diagnose", help="Export diagnostic information"),
+    diagnose_output: Optional[Path] = typer.Option(
+        None, "--diagnose-output", help="Output file for diagnostics"),
+    run_args: Optional[str] = typer.Option(
+        None, "--run-args", help="Arguments for carts run"),
+    compile_args: Optional[str] = typer.Option(
+        None, "--compile-args", help="Arguments for carts compile"),
 ):
     """Complete pipeline: C++ -> executable."""
     config = get_config()
@@ -878,20 +929,27 @@ def execute(
     run_passthrough_args: List[str] = []
 
     # Args that should go to carts-run, not cgeist
-    run_only_args = {"--arts-config", "--metadata-file", "--concurrency", "--concurrency-opt"}
+    run_only_args = {"--arts-config", "--metadata-file", "--concurrency",
+                     "--concurrency-opt", "--diagnose", "--diagnose-output"}
 
-    # Check if -O3 is in passthrough args (handles "execute file.c -O3 ..." case)
+    # Check if -O3 or --diagnose is in passthrough args
     passthrough_optimize = False
+    passthrough_diagnose = False
+    passthrough_diagnose_output = None
 
     args_iter = iter(ctx.args) if ctx.args else iter([])
     for arg in args_iter:
         if arg == "-O3":
-            # -O3 triggers dual compilation mode
             passthrough_optimize = True
-            # Don't pass -O3 to cgeist - it's our mode flag
+        elif arg == "--diagnose":
+            passthrough_diagnose = True
+        elif arg == "--diagnose-output":
+            try:
+                passthrough_diagnose_output = Path(next(args_iter))
+            except StopIteration:
+                pass
         elif arg in run_only_args:
             run_passthrough_args.append(arg)
-            # These args take a value, consume next arg
             if arg in ("--arts-config", "--metadata-file"):
                 try:
                     run_passthrough_args.append(next(args_iter))
@@ -903,13 +961,17 @@ def execute(
     # Merge run_passthrough_args into extra_run_args
     extra_run_args.extend(run_passthrough_args)
 
-    # Use optimize flag from either typer option or passthrough args
+    # Combine typer options with passthrough args
     use_dual_mode = optimize or passthrough_optimize
+    use_diagnose = diagnose or passthrough_diagnose
+    final_diagnose_output = diagnose_output or passthrough_diagnose_output
 
     if use_dual_mode:
-        _execute_dual(config, input_file, output_name, debug, extra_run_args, extra_compile_args, cgeist_args)
+        _execute_dual(config, input_file, output_name, debug,
+                      extra_run_args, extra_compile_args, cgeist_args)
     else:
-        _execute_simple(config, input_file, output_name, debug, extra_run_args, extra_compile_args, cgeist_args)
+        _execute_simple(config, input_file, output_name, debug, extra_run_args,
+                        extra_compile_args, cgeist_args, use_diagnose, final_diagnose_output)
 
 
 # -----------------------------------------------------------------------------
@@ -968,6 +1030,8 @@ def _execute_simple(
     run_args: List[str],
     compile_args: List[str],
     passthrough_args: Optional[List[str]] = None,
+    diagnose: bool = False,
+    diagnose_output: Optional[Path] = None,
 ) -> None:
     """Simple 3-step pipeline: cgeist -> run -> compile."""
     base_name = input_file.stem
@@ -992,7 +1056,8 @@ def _execute_simple(
     ) as progress:
         # Step 1: Convert C/C++ to MLIR with OpenMP
         task = progress.add_task("[1/3] Converting C++ to MLIR...", total=None)
-        cmd = _build_cgeist_cmd(config, input_file, std_flag, passthrough_args, with_openmp=True)
+        cmd = _build_cgeist_cmd(
+            config, input_file, std_flag, passthrough_args, with_openmp=True)
         if run_command_with_output(cmd, mlir_file) != 0:
             print_error("Failed to convert C++ to MLIR")
             raise typer.Exit(1)
@@ -1000,10 +1065,17 @@ def _execute_simple(
         print_success(f"[1/3] {mlir_file}")
 
         # Step 2: Apply ARTS transformations
-        task = progress.add_task("[2/3] Applying ARTS transformations...", total=None)
+        task = progress.add_task(
+            "[2/3] Applying ARTS transformations...", total=None)
         cmd = [str(carts_run_bin), str(mlir_file), "--O3", "--emit-llvm"]
         if debug:
             cmd.append("-g")
+        if diagnose:
+            cmd.append("--diagnose")
+            # When diagnose is enabled without explicit output, use default file
+            effective_diagnose_output = diagnose_output or Path(
+                f"{base_name}-diagnose.json")
+            cmd.extend(["--diagnose-output", str(effective_diagnose_output)])
         cmd.extend(run_args)
         if run_command_with_output(cmd, ll_file) != 0:
             print_error("Failed to apply ARTS transformations")
@@ -1012,8 +1084,10 @@ def _execute_simple(
         print_success(f"[2/3] {ll_file}")
 
         # Step 3: Link with ARTS runtime
-        task = progress.add_task("[3/3] Compiling to executable...", total=None)
-        cmd = _build_compile_cmd(config, ll_file, output_name, debug, compile_args)
+        task = progress.add_task(
+            "[3/3] Compiling to executable...", total=None)
+        cmd = _build_compile_cmd(
+            config, ll_file, output_name, debug, compile_args)
         if run_subprocess(cmd, check=False).returncode != 0:
             print_error("Failed to compile to executable")
             raise typer.Exit(1)
@@ -1056,7 +1130,8 @@ def _execute_dual(
     print_header("CARTS Execute Pipeline")
     console.print(f"Input:  [cyan]{input_file}[/cyan]")
     console.print(f"Output: [cyan]{output_name}[/cyan]")
-    console.print(f"Mode:   [yellow]Dual compilation (metadata extraction)[/yellow]")
+    console.print(
+        f"Mode:   [yellow]Dual compilation (metadata extraction)[/yellow]")
     console.print()
 
     carts_run_bin = config.carts_install_dir / "bin" / "carts-run"
@@ -1085,7 +1160,8 @@ def _execute_dual(
 
         # Step 2: Extract metadata from sequential MLIR
         task = progress.add_task("[2/5] Collecting metadata...", total=None)
-        cmd = [str(carts_run_bin), str(seq_mlir), "--collect-metadata", "-o", str(metadata_mlir)]
+        cmd = [str(carts_run_bin), str(seq_mlir),
+               "--collect-metadata", "-o", str(metadata_mlir)]
         if run_subprocess(cmd, check=False).returncode != 0:
             print_error("Failed to collect metadata")
             raise typer.Exit(1)
@@ -1119,7 +1195,8 @@ def _execute_dual(
 
         # Step 5: Link with ARTS runtime
         task = progress.add_task("[5/5] Final compilation...", total=None)
-        cmd = _build_compile_cmd(config, ll_file, output_name, debug, compile_args)
+        cmd = _build_compile_cmd(
+            config, ll_file, output_name, debug, compile_args)
         if run_subprocess(cmd, check=False).returncode != 0:
             print_error("Failed final compilation")
             raise typer.Exit(1)
@@ -1150,7 +1227,8 @@ def _execute_dual(
 )
 def benchmarks(
     ctx: typer.Context,
-    help_flag: bool = typer.Option(False, "--help", "-h", is_eager=True, help="Show help"),
+    help_flag: bool = typer.Option(
+        False, "--help", "-h", is_eager=True, help="Show help"),
 ):
     """Build and manage CARTS benchmarks.
 
@@ -1163,7 +1241,8 @@ def benchmarks(
       carts benchmarks clean --all
     """
     config = get_config()
-    benchmark_runner = config.carts_dir / "external" / "carts-benchmarks" / "benchmark_runner.py"
+    benchmark_runner = config.carts_dir / "external" / \
+        "carts-benchmarks" / "benchmark_runner.py"
 
     if not benchmark_runner.is_file():
         print_error(f"Benchmark runner not found at {benchmark_runner}")
@@ -1191,11 +1270,16 @@ def benchmarks(
 @app.command()
 def examples(
     name: Optional[str] = typer.Argument(None, help="Example name to run"),
-    all_examples: bool = typer.Option(False, "--all", "-a", help="Run all examples"),
-    list_only: bool = typer.Option(False, "--list", "-l", help="List available examples"),
-    clean_flag: bool = typer.Option(False, "--clean", "-c", help="Clean example artifacts"),
-    json_output: Optional[Path] = typer.Option(None, "--json", "-j", help="Export results to JSON"),
-    verbose_flag: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    all_examples: bool = typer.Option(
+        False, "--all", "-a", help="Run all examples"),
+    list_only: bool = typer.Option(
+        False, "--list", "-l", help="List available examples"),
+    clean_flag: bool = typer.Option(
+        False, "--clean", "-c", help="Clean example artifacts"),
+    json_output: Optional[Path] = typer.Option(
+        None, "--json", "-j", help="Export results to JSON"),
+    verbose_flag: bool = typer.Option(
+        False, "--verbose", "-v", help="Verbose output"),
 ):
     """Run and manage CARTS examples.
 
@@ -1294,9 +1378,12 @@ def _get_poetry_python(script_dir: Path) -> Optional[str]:
 
 @app.command()
 def setup(
-    skip_build: bool = typer.Option(False, "--skip-build", help="Skip building"),
-    add_to_path: bool = typer.Option(False, "--add-to-path", help="Add carts to PATH"),
-    deps_only: bool = typer.Option(False, "--deps-only", help="Install dependencies only"),
+    skip_build: bool = typer.Option(
+        False, "--skip-build", help="Skip building"),
+    add_to_path: bool = typer.Option(
+        False, "--add-to-path", help="Add carts to PATH"),
+    deps_only: bool = typer.Option(
+        False, "--deps-only", help="Install dependencies only"),
 ):
     """Set up CARTS environment."""
     config = get_config()
@@ -1324,7 +1411,8 @@ def setup(
 
 @app.command()
 def clean(
-    docker_clean: bool = typer.Option(False, "--docker", "-d", help="Clean Docker artifacts"),
+    docker_clean: bool = typer.Option(
+        False, "--docker", "-d", help="Clean Docker artifacts"),
 ):
     """Clean generated files in current directory."""
     if docker_clean:
@@ -1398,8 +1486,10 @@ def _run_docker_clean() -> None:
 
 @app.command()
 def check(
-    suite: str = typer.Option("all", "--suite", "-s", help="Test suite: all, arts"),
-    verbose_tests: bool = typer.Option(False, "-v", help="Verbose test output"),
+    suite: str = typer.Option("all", "--suite", "-s",
+                              help="Test suite: all, arts"),
+    verbose_tests: bool = typer.Option(
+        False, "-v", help="Verbose test output"),
 ):
     """Run CARTS test suite using llvm-lit."""
     config = get_config()
@@ -1452,15 +1542,18 @@ def check(
     # Setup PYTHONPATH for lit module
     try:
         result = subprocess.run(
-            ["python3", "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+            ["python3", "-c",
+                "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
             capture_output=True,
             text=True,
         )
         python_version = result.stdout.strip()
-        llvm_python_path = config.llvm_install_dir / "lib" / f"python{python_version}" / "site-packages"
+        llvm_python_path = config.llvm_install_dir / "lib" / \
+            f"python{python_version}" / "site-packages"
         if llvm_python_path.is_dir():
             env_pythonpath = os.environ.get("PYTHONPATH", "")
-            os.environ["PYTHONPATH"] = f"{llvm_python_path}:{env_pythonpath}" if env_pythonpath else str(llvm_python_path)
+            os.environ["PYTHONPATH"] = f"{llvm_python_path}:{env_pythonpath}" if env_pythonpath else str(
+                llvm_python_path)
     except Exception:
         pass
 
@@ -1476,9 +1569,297 @@ def check(
     if result.returncode == 0:
         print_success("CARTS test suite completed successfully!")
     else:
-        print_error(f"CARTS test suite failed with exit code {result.returncode}")
+        print_error(
+            f"CARTS test suite failed with exit code {result.returncode}")
 
     raise typer.Exit(result.returncode)
+
+
+# ============================================================================
+# Report Command
+# ============================================================================
+
+@app.command()
+def report(
+    # Input sources (at least one required)
+    results: Optional[Path] = typer.Option(None, "--results", "-r",
+                                           help="JSON from 'carts benchmarks run' (scaling analysis)"),
+    counters: Optional[Path] = typer.Option(None, "--counters", "-c",
+                                            help="Counter directory with n*_t*.json files (hotspot analysis)"),
+    metadata: Optional[Path] = typer.Option(None, "--metadata", "-m",
+                                            help="CARTS metadata JSON for source location mapping"),
+
+    # Output control
+    format: str = typer.Option("table", "--format", "-f",
+                               help="Output format: table, csv, json"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o",
+                                          help="Write to file instead of stdout"),
+    top: int = typer.Option(20, "--top", "-n",
+                            help="Limit rows in hotspot output"),
+
+    # Tuning
+    stride: int = typer.Option(1000, "--stride",
+                               help="EDT arts_id stride for metadata lookup"),
+):
+    """Analyze benchmark results and/or runtime counters."""
+    if not results and not counters:
+        print_error("Must specify at least --results or --counters")
+        raise typer.Exit(1)
+
+    # Load and analyze results
+    if results:
+        try:
+            with open(results) as f:
+                results_data = json.load(f)
+        except Exception as e:
+            print_error(f"Failed to load results JSON: {e}")
+            raise typer.Exit(1)
+
+    if counters:
+        if not counters.is_dir():
+            print_error(f"Counters directory not found: {counters}")
+            raise typer.Exit(1)
+
+        # Load counter data
+        edts, dbs = _load_counter_metrics(counters)
+
+        # Load metadata for source mapping if available
+        meta = {}
+        if metadata:
+            if not metadata.is_file():
+                print_error(f"Metadata file not found: {metadata}")
+                raise typer.Exit(1)
+            meta = _load_metadata(metadata)
+
+    # Generate reports (print directly to console)
+    if results:
+        _print_scaling_table(results_data)
+
+    if counters:
+        _print_hotspot_table(edts, dbs, meta, stride, top)
+
+    # Note: --output with --format csv/json would need separate handling
+    if output and format != "table":
+        print_info(f"Use --format csv or json with --output for file export")
+
+
+def _load_counter_metrics(counter_dir: Path) -> Tuple[Dict[int, Dict], Dict[int, Dict]]:
+    """Load and merge all n*_t*.json counter files."""
+    edts, dbs = {}, {}
+
+    for path in sorted(counter_dir.glob("n*_t*.json")):
+        try:
+            data = json.loads(path.read_text())
+        except Exception:
+            continue
+
+        arts = data.get("artsIdMetrics", {})
+
+        for edt in arts.get("edts", []):
+            if not isinstance(edt, dict):
+                continue
+            aid = edt.get("arts_id", 0)
+            if aid <= 0:
+                continue
+            rec = edts.setdefault(aid, {"invocations": 0, "total_exec_ns": 0})
+            rec["invocations"] += edt.get("invocations", 0)
+            rec["total_exec_ns"] += edt.get("total_exec_ns", 0)
+
+        for db in arts.get("dbs", []):
+            if not isinstance(db, dict):
+                continue
+            aid = db.get("arts_id", 0)
+            if aid <= 0:
+                continue
+            rec = dbs.setdefault(
+                aid, {"invocations": 0, "bytes_local": 0, "bytes_remote": 0})
+            rec["invocations"] += db.get("invocations", 0)
+            rec["bytes_local"] += db.get("bytes_local", 0)
+            rec["bytes_remote"] += db.get("bytes_remote", 0)
+
+    return edts, dbs
+
+
+def _load_metadata(metadata_path: Path) -> Dict[int, Dict]:
+    """Load CARTS metadata for source location mapping."""
+    data = json.loads(metadata_path.read_text())
+    meta = {}
+
+    for obj in data.get("loops", {}).values():
+        aid = obj.get("arts_id", 0)
+        if aid > 0:
+            meta[aid] = {"kind": "loop",
+                         "location": obj.get("location_key", "")}
+
+    for obj in data.get("memrefs", {}).values():
+        aid = obj.get("arts_id", 0)
+        if aid > 0:
+            meta[aid] = {"kind": "memref",
+                         "allocation": obj.get("allocation_id", "")}
+
+    return meta
+
+
+def _get_kernel_time(run_result: Dict) -> Optional[float]:
+    """Extract total kernel time from run result."""
+    timings = run_result.get("kernel_timings", {})
+    if timings:
+        return sum(timings.values())
+    return None
+
+
+def _print_scaling_table(results_data: Dict) -> None:
+    """Print scaling metrics table."""
+    results = results_data.get("results", [])
+
+    # Group by benchmark
+    by_bench = {}
+    for r in results:
+        if "thread_count" in r:  # Thread sweep results
+            by_bench.setdefault(r["name"], []).append(r)
+
+    for bench, runs in by_bench.items():
+        runs = sorted(runs, key=lambda r: r["thread_count"])
+        if not runs:
+            continue
+
+        # Prefer kernel time for speedup (more meaningful), fall back to total time
+        use_kernel_time = all(_get_kernel_time(r["run_arts"]) for r in runs)
+
+        if use_kernel_time:
+            t1_arts = _get_kernel_time(runs[0]["run_arts"])
+            t1_omp = _get_kernel_time(
+                runs[0]["run_omp"]) or runs[0]["run_omp"]["duration_sec"]
+            time_label = "Kernel"
+        else:
+            t1_arts = runs[0]["run_arts"]["duration_sec"]
+            t1_omp = runs[0]["run_omp"]["duration_sec"]
+            time_label = "Total"
+
+        table = Table(title=f"{bench} - Strong Scaling ({time_label} Time)")
+        table.add_column("Threads", justify="right")
+        table.add_column("ARTS", justify="right")
+        table.add_column("OMP", justify="right")
+        table.add_column("S(p)", justify="right", style="cyan")
+        table.add_column("E(p)", justify="right")
+        table.add_column("vs OMP", justify="right")
+
+        for r in runs:
+            p = r["thread_count"]
+
+            if use_kernel_time:
+                t_arts = _get_kernel_time(r["run_arts"])
+                t_omp = _get_kernel_time(
+                    r["run_omp"]) or r["run_omp"]["duration_sec"]
+            else:
+                t_arts = r["run_arts"]["duration_sec"]
+                t_omp = r["run_omp"]["duration_sec"]
+
+            speedup = t1_arts / t_arts if t_arts > 0 else 0.0
+            eff = speedup / p if p > 0 else 0.0
+            diff = ((t_arts - t_omp) / t_omp) * 100 if t_omp > 0 else 0.0
+
+            # Color the vs OMP column based on performance
+            if diff <= 5:
+                diff_str = f"[green]{diff:+.1f}%[/]"
+            elif diff <= 20:
+                diff_str = f"[yellow]{diff:+.1f}%[/]"
+            else:
+                diff_str = f"[red]{diff:+.1f}%[/]"
+
+            table.add_row(
+                str(p),
+                f"{t_arts:.4f}s" if t_arts < 1 else f"{t_arts:.2f}s",
+                f"{t_omp:.4f}s" if t_omp < 1 else f"{t_omp:.2f}s",
+                f"{speedup:.2f}x",
+                f"{eff:.1%}",
+                diff_str
+            )
+
+        console.print(table)
+        console.print()
+
+
+def _print_hotspot_table(edts: Dict, dbs: Dict, meta: Dict, stride: int, top: int) -> None:
+    """Print hotspot ranking tables."""
+    # EDT hotspots by total execution time
+    if edts:
+        edt_rows = []
+        for aid, rec in edts.items():
+            base = aid // stride if stride > 0 else aid
+            meta_entry = meta.get(base, {})
+            loc = meta_entry.get("location", "")
+            # Show base arts_id if no location found (helps debugging metadata gaps)
+            if not loc:
+                loc = f"[dim]base={base}[/]"
+            edt_rows.append({
+                "arts_id": aid,
+                "base": base,
+                "invocations": rec["invocations"],
+                "total_ns": rec["total_exec_ns"],
+                "avg_ns": rec["total_exec_ns"] // max(1, rec["invocations"]),
+                "location": loc,
+            })
+        edt_rows.sort(key=lambda r: r["total_ns"], reverse=True)
+
+        table = Table(title=f"EDT Hotspots (Top {min(top, len(edt_rows))})")
+        table.add_column("Rank", justify="right")
+        table.add_column("arts_id", justify="right")
+        table.add_column("Invocations", justify="right")
+        table.add_column("Total Time", justify="right")
+        table.add_column("Avg Time", justify="right")
+        table.add_column("Location / Source")
+
+        for i, r in enumerate(edt_rows[:top], 1):
+            table.add_row(
+                str(i),
+                str(r["arts_id"]),
+                f"{r['invocations']:,}",
+                f"{r['total_ns']/1e9:.3f}s",
+                f"{r['avg_ns']/1e6:.2f}ms",
+                r["location"],
+            )
+        console.print(table)
+        console.print()
+
+    # DB hotspots by remote bytes (prioritized)
+    if dbs:
+        db_rows = []
+        for aid, rec in dbs.items():
+            meta_entry = meta.get(aid, {})
+            alloc = meta_entry.get("allocation", "")
+            # Show arts_id if no allocation found
+            if not alloc:
+                alloc = f"[dim]id={aid}[/]"
+            db_rows.append({
+                "arts_id": aid,
+                "invocations": rec["invocations"],
+                "local_mb": rec["bytes_local"] / (1024**2),
+                "remote_mb": rec["bytes_remote"] / (1024**2),
+                "allocation": alloc,
+            })
+        db_rows.sort(key=lambda r: (
+            r["remote_mb"], r["local_mb"]), reverse=True)
+
+        table = Table(
+            title=f"DB Hotspots (Top {min(top, len(db_rows))} by Remote)")
+        table.add_column("Rank", justify="right")
+        table.add_column("arts_id", justify="right")
+        table.add_column("Invocations", justify="right")
+        table.add_column("Local (MB)", justify="right")
+        table.add_column("Remote (MB)", justify="right")
+        table.add_column("Allocation / Source")
+
+        for i, r in enumerate(db_rows[:top], 1):
+            table.add_row(
+                str(i),
+                str(r["arts_id"]),
+                f"{r['invocations']:,}",
+                f"{r['local_mb']:.1f}",
+                f"{r['remote_mb']:.1f}",
+                r["allocation"],
+            )
+        console.print(table)
 
 
 # ============================================================================
@@ -1509,7 +1890,8 @@ def _get_docker_script(name: str) -> Tuple[Path, Path]:
 def docker_callback(ctx: typer.Context):
     """Docker operations for multi-node execution."""
     if ctx.invoked_subcommand is None:
-        console.print("Docker command requires a subcommand. Use --help for options.")
+        console.print(
+            "Docker command requires a subcommand. Use --help for options.")
         raise typer.Exit(1)
 
 
@@ -1533,7 +1915,8 @@ def docker_run(
 
 @docker_app.command(name="build")
 def docker_build(
-    force: bool = typer.Option(False, "--force", "-f", help="Force rebuild from scratch"),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Force rebuild from scratch"),
 ):
     """Build Docker image and workspace."""
     docker_dir, _ = _get_docker_script("build")
@@ -1549,12 +1932,16 @@ def docker_build(
 @docker_app.command(name="update")
 def docker_update(
     arts: bool = typer.Option(False, "--arts", "-a", help="Rebuild ARTS"),
-    polygeist: bool = typer.Option(False, "--polygeist", "-p", help="Rebuild Polygeist"),
+    polygeist: bool = typer.Option(
+        False, "--polygeist", "-p", help="Rebuild Polygeist"),
     llvm: bool = typer.Option(False, "--llvm", "-l", help="Rebuild LLVM"),
-    carts_rebuild: bool = typer.Option(False, "--carts", "-c", help="Rebuild CARTS"),
+    carts_rebuild: bool = typer.Option(
+        False, "--carts", "-c", help="Rebuild CARTS"),
     force: bool = typer.Option(False, "--force", "-f", help="Force rebuild"),
-    debug_mode: bool = typer.Option(False, "--debug", help="Build with debug logging"),
-    info_mode: bool = typer.Option(False, "--info", help="Build with info logging"),
+    debug_mode: bool = typer.Option(
+        False, "--debug", help="Build with debug logging"),
+    info_mode: bool = typer.Option(
+        False, "--info", help="Build with info logging"),
 ):
     """Update Docker containers."""
     docker_dir, _ = _get_docker_script("update")

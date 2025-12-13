@@ -73,6 +73,9 @@ public:
   /// Print summary of analysis objects and their graphs
   void print(llvm::raw_ostream &os);
 
+  /// Capture diagnostic data
+  void captureDiagnostics();
+
   /// Export analysis objects and graphs to JSON
   void exportToJson(llvm::raw_ostream &os, bool includeAnalysis = false);
 
@@ -88,6 +91,9 @@ private:
   std::unique_ptr<LoopAnalysis> loopAnalysis;
   std::unique_ptr<StringAnalysis> stringAnalysis;
   std::unique_ptr<ArtsMetadataManager> metadataManager;
+
+  /// Cached diagnostic data (captured before LLVM lowering)
+  std::optional<std::string> cachedDiagnosticJson;
 };
 
 } // namespace arts
