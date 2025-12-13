@@ -198,6 +198,9 @@ private:
   Value partitionOffset;
   Value partitionSize;
 
+  /// Cached adjusted chunk info
+  std::optional<std::pair<Value, Value>> computedChunkInfo;
+
 public:
   uint64_t inCount = 0, outCount = 0;
   uint64_t beginIndex = 0, endIndex = 0;
