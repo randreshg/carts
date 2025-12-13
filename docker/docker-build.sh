@@ -112,6 +112,10 @@ if [[ "$WORKSPACE_EXISTS" == "false" || "$FORCE_MODE" == "true" ]]; then
         git config --global gc.auto 256; \
         git clone --branch $GIT_BRANCH --depth 1 --single-branch --no-tags --progress $GIT_URL /opt/carts; \
         cd /opt/carts; \
+        echo 'Installing Python dependencies...'; \
+        cd tools && poetry install; \
+        cd ../external/carts-benchmarks && poetry install; \
+        cd /opt/carts; \
         export MAKEFLAGS='-j$DOCKER_CPUS'; \
         export CMAKE_BUILD_PARALLEL_LEVEL=$DOCKER_CPUS; \
         python3 -u tools/setup/carts-setup.py; \
