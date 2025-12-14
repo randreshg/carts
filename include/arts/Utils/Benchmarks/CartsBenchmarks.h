@@ -57,7 +57,9 @@ static inline double carts_bench_get_time(void) {
 #ifdef _OPENMP
   return omp_get_wtime();
 #else
-  return (double)clock() / CLOCKS_PER_SEC;
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 #endif
 }
 
