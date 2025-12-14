@@ -484,12 +484,21 @@ app.add_typer(docker_app, name="docker")
 # Command Callbacks
 # ============================================================================
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main_callback(
+    ctx: typer.Context,
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="Enable verbose output"),
+    help_flag: bool = typer.Option(
+        False, "--help", "-h", is_eager=True, help="Show help and exit"),
 ):
     """CARTS - Compiler for Asynchronous Runtime Systems"""
+    # Handle -h/--help globally
+    if help_flag:
+        if ctx.invoked_subcommand is None:
+            typer.echo(ctx.get_help())
+            raise typer.Exit()
+
     set_verbose(verbose)
     if verbose:
         os.environ["CARTS_VERBOSE"] = "1"
@@ -565,7 +574,8 @@ def build(
 
     # Always pass counter config path for ARTS builds
     if arts:
-        profile_name = COUNTER_PROFILES.get(counters_level, "counter.profile-none.cfg")
+        profile_name = COUNTER_PROFILES.get(
+            counters_level, "counter.profile-none.cfg")
         counter_config = config.carts_dir / "external" / "arts" / profile_name
         make_vars.append(f"COUNTER_CONFIG_PATH={counter_config}")
 
@@ -699,7 +709,9 @@ def clang(
 @app.command(name="run", context_settings={"allow_extra_args": True, "allow_interspersed_args": False})
 def run_cmd(
     ctx: typer.Context,
-    input_file: Path = typer.Argument(..., help="Input MLIR file"),
+    help_flag: bool = typer.Option(
+        False, "--help", "-h", is_eager=True, help="Show help for carts-run"),
+    input_file: Optional[Path] = typer.Argument(None, help="Input MLIR file"),
     output: Optional[Path] = typer.Option(None, "-o", help="Output file"),
     stop_at: Optional[str] = typer.Option(
         None, "--stop-at", help="Stop at pipeline stage"),
@@ -715,8 +727,22 @@ def run_cmd(
 ):
     """Run CARTS MLIR transformations."""
     config = get_config()
-
     carts_run_bin = config.carts_install_dir / "bin" / "carts-run"
+
+    # Pass --help through to carts-run binary to show MLIR options
+    if help_flag:
+        result = run_subprocess([str(carts_run_bin), "--help"], check=False)
+        raise typer.Exit(result.returncode)
+
+    # Also check ctx.args in case help comes after the input file
+    if ctx.args and ("--help" in ctx.args or "-h" in ctx.args):
+        result = run_subprocess([str(carts_run_bin), "--help"], check=False)
+        raise typer.Exit(result.returncode)
+
+    # input_file is required if not showing help
+    if input_file is None:
+        print_error("Input file is required")
+        raise typer.Exit(1)
 
     if all_stages:
         # Handle --all-stages mode
@@ -1263,31 +1289,29 @@ def benchmarks(
 # Examples Command
 # ============================================================================
 
-@app.command()
+@app.command(
+    context_settings={
+        "allow_extra_args": True,
+        "allow_interspersed_args": False,
+        "ignore_unknown_options": True,
+    }
+)
 def examples(
-    name: Optional[str] = typer.Argument(None, help="Example name to run"),
-    all_examples: bool = typer.Option(
-        False, "--all", "-a", help="Run all examples"),
-    list_only: bool = typer.Option(
-        False, "--list", "-l", help="List available examples"),
-    clean_flag: bool = typer.Option(
-        False, "--clean", "-c", help="Clean example artifacts"),
-    json_output: Optional[Path] = typer.Option(
-        None, "--json", "-j", help="Export results to JSON"),
-    verbose_flag: bool = typer.Option(
-        False, "--verbose", "-v", help="Verbose output"),
-    config_file: Optional[Path] = typer.Option(
-        None, "--config", help="ARTS configuration file to use when running examples"),
+    ctx: typer.Context,
+    help_flag: bool = typer.Option(
+        False, "--help", "-h", is_eager=True, help="Show help"),
 ):
     """Run and manage CARTS examples.
 
-Commands:
-  carts examples --list                    # List all available examples
-  carts examples <name>                    # Run a specific example
-  carts examples --all                     # Run all examples
-  carts examples --clean [name]            # Clean example artifacts
-  carts examples --clean --all             # Clean all examples
-"""
+    Commands: list-examples, run, clean
+
+    Examples:
+      carts examples list-examples           # List all available examples
+      carts examples run <name>              # Run a specific example
+      carts examples run --all              # Run all examples
+      carts examples clean [name]            # Clean example artifacts
+      carts examples clean --all            # Clean all examples
+    """
     config = get_config()
     examples_runner = config.carts_dir / "tools" / "examples_runner.py"
 
@@ -1295,51 +1319,15 @@ Commands:
         print_error(f"Examples runner not found at {examples_runner}")
         raise typer.Exit(1)
 
-    # Determine poetry Python
-    script_dir = Path(__file__).parent.resolve()
-    poetry_python = _get_poetry_python(script_dir)
+    cmd = [sys.executable, str(examples_runner)]
 
-    if not poetry_python:
-        print_error("Python with dependencies not found")
-        raise typer.Exit(1)
+    # Pass --help to the examples runner to show its commands
+    if help_flag:
+        cmd.append("--help")
 
-    # Build command based on action
-    cmd = [str(poetry_python), str(examples_runner)]
-
-    if list_only:
-        cmd.append("list-examples")
-        if verbose_flag:
-            cmd.append("--verbose")
-    elif clean_flag:
-        cmd.append("clean")
-        if all_examples:
-            cmd.append("--all")
-        elif name:
-            cmd.append(name)
-        else:
-            cmd.append("--all")
-        if verbose_flag:
-            cmd.append("--verbose")
-    else:
-        # Run mode
-        cmd.append("run")
-        if all_examples:
-            cmd.append("--all")
-        elif name:
-            cmd.append(name)
-        else:
-            # No name and no --all: show help
-            cmd = [str(poetry_python), str(examples_runner), "--help"]
-
-        if verbose_flag:
-            cmd.append("--verbose")
-        if json_output:
-            cmd.extend(["--json", str(json_output)])
-        if config_file:
-            if not config_file.is_file():
-                print_error(f"Config file not found: {config_file}")
-                raise typer.Exit(1)
-            cmd.extend(["--config", str(config_file)])
+    # Pass through all extra args (e.g., run, list-examples, --verbose, etc.)
+    if ctx.args:
+        cmd.extend(ctx.args)
 
     result = run_subprocess(cmd, check=False)
     raise typer.Exit(result.returncode)
