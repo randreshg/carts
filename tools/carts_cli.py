@@ -499,6 +499,14 @@ def main_callback(
 # Build Command
 # ============================================================================
 
+# Counter profile mapping: level -> config file name
+COUNTER_PROFILES = {
+    0: "counter.profile-none.cfg",      # All OFF - baseline performance
+    1: "counter.profile-artsid-only.cfg",  # ArtsID metrics for hotspot analysis
+    2: "counter.profile-deep.cfg",       # Full captures for deep profiling
+}
+
+
 @app.command()
 def build(
     clean: bool = typer.Option(False, "--clean", "-c", help="Clean build"),
@@ -506,12 +514,12 @@ def build(
     polygeist: bool = typer.Option(
         False, "--polygeist", "-p", help="Build only Polygeist"),
     llvm: bool = typer.Option(False, "--llvm", "-l", help="Build only LLVM"),
-    debug: bool = typer.Option(
-        False, "--debug", help="Enable debug build with logging"),
-    info: bool = typer.Option(
-        False, "--info", help="Enable info-level logging"),
-    introspection: bool = typer.Option(
-        False, "--introspection", "-i", help="Enable ARTS introspection"),
+    debug_level: int = typer.Option(
+        0, "--debug",
+        help="Debug level: 0=off (default), 1=info, 2=full debug"),
+    counters_level: int = typer.Option(
+        0, "--counters",
+        help="Counter profile: 0=off (default), 1=artsid, 2=deep"),
 ):
     """Build CARTS project using system clang."""
     config = get_config()
@@ -539,13 +547,27 @@ def build(
 
     # Build make variables
     make_vars = []
-    if introspection:
-        make_vars.extend(["ARTS_USE_COUNTERS=ON", "ARTS_USE_METRICS=ON"])
-    if info:
+
+    # Debug levels: 0=off, 1=info, 2=full debug
+    if debug_level >= 2:
+        make_vars.extend([
+            "ARTS_DEBUG_ENABLED=ON",
+            "ARTS_INFO_ENABLED=ON",
+            "ARTS_BUILD_TYPE=Debug"
+        ])
+    elif debug_level >= 1:
         make_vars.append("ARTS_INFO_ENABLED=ON")
-    if debug:
-        make_vars.extend(
-            ["ARTS_DEBUG_ENABLED=ON", "ARTS_INFO_ENABLED=ON", "ARTS_BUILD_TYPE=Debug"])
+
+    # Counter levels: 0=off, 1=artsid, 2=deep
+    # Levels 1+ require USE_COUNTERS and USE_METRICS
+    if counters_level >= 1:
+        make_vars.extend(["ARTS_USE_COUNTERS=ON", "ARTS_USE_METRICS=ON"])
+
+    # Always pass counter config path for ARTS builds
+    if arts:
+        profile_name = COUNTER_PROFILES.get(counters_level, "counter.profile-none.cfg")
+        counter_config = config.carts_dir / "external" / "arts" / profile_name
+        make_vars.append(f"COUNTER_CONFIG_PATH={counter_config}")
 
     # Pass platform-specific linker path to make
     if config.linker_path:
