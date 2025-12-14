@@ -10,10 +10,21 @@ import subprocess
 import argparse
 from pathlib import Path
 
+# Import shared styles
+sys.path.insert(0, str(Path(__file__).parent.parent.resolve()))
+from carts_styles import (
+    print_header,
+    print_step,
+    print_success,
+    print_error,
+    print_warning,
+    print_info,
+)
+
 
 def run_command(cmd, cwd=None, check=True, realtime=False):
     """Run a command and return the result."""
-    print(f"Running: {' '.join(cmd) if isinstance(cmd, list) else cmd}")
+    print_info(f"Running: {' '.join(cmd) if isinstance(cmd, list) else cmd}")
     sys.stdout.flush()
 
     if realtime:
@@ -31,7 +42,7 @@ def run_command(cmd, cwd=None, check=True, realtime=False):
             process.wait()
             return process.returncode == 0
         except Exception as e:
-            print(f"Error: {e}")
+            print_error(f"Error: {e}")
             sys.stdout.flush()
             return False
     else:
@@ -44,9 +55,9 @@ def run_command(cmd, cwd=None, check=True, realtime=False):
             sys.stdout.flush()
             return result.returncode == 0
         except subprocess.CalledProcessError as e:
-            print(f"Error: {e}")
+            print_error(f"Error: {e}")
             if e.stderr:
-                print(f"stderr: {e.stderr}")
+                print_error(f"stderr: {e.stderr}")
             sys.stdout.flush()
             return False
 
@@ -64,8 +75,8 @@ def setup_project():
     """Set up the CARTS project."""
     project_root = Path(__file__).resolve().parent.parent.parent
 
-    print("Setting up CARTS project...")
-    print(f"Project root: {project_root}")
+    print_info("Setting up CARTS project...")
+    print_info(f"Project root: {project_root}")
 
     # Create necessary directories
     dirs_to_create = ['.install', 'build', 'external']
@@ -73,10 +84,10 @@ def setup_project():
         (project_root / dir_name).mkdir(exist_ok=True)
 
     # Initialize and update submodules to latest commits
-    print("Initializing and updating git submodules to latest commits...")
+    print_info("Initializing and updating git submodules to latest commits...")
     # Configure git to use HTTPS instead of SSH for GitHub
     if not run_command("git submodule update --init --recursive", cwd=project_root, realtime=True):
-        print("Failed to initialize/update submodules")
+        print_error("Failed to initialize/update submodules")
         return False
 
     return True
@@ -86,11 +97,11 @@ def build_project():
     """Build and install the CARTS project using the correct build order."""
     project_root = Path(__file__).resolve().parent.parent.parent
 
-    print("Building and installing CARTS project...")
-    print("Following correct build order:")
+    print_info("Building and installing CARTS project...")
+    print_info("Following correct build order:")
 
     # First, add carts to PATH (handle Docker environment)
-    print("Step 0: Adding CARTS to PATH...")
+    print_step("Adding CARTS to PATH...", step_num=0, total=5)
     carts_script_dir = project_root / 'tools'
 
     # In Docker, we can directly export PATH for this session
@@ -98,36 +109,36 @@ def build_project():
     current_path = os.environ.get('PATH', '')
     if str(carts_script_dir) not in current_path:
         os.environ['PATH'] = f"{carts_script_dir}:{current_path}"
-        print(f"Added {carts_script_dir} to PATH for this session")
+        print_success(f"Added {carts_script_dir} to PATH for this session")
 
     # Also add to shell profiles for future sessions
     add_to_path()
 
     # Step 1: Build LLVM first
-    print("Step 1: Building LLVM...")
+    print_step("Building LLVM...", step_num=1, total=5)
     if not run_command("carts build --llvm", cwd=project_root, realtime=True):
-        print("Failed to build LLVM")
+        print_error("Failed to build LLVM")
         return False
 
     # Step 2: Build Polygeist (depends on LLVM)
-    print("Step 2: Building Polygeist...")
+    print_step("Building Polygeist...", step_num=2, total=5)
     if not run_command("carts build --polygeist", cwd=project_root, realtime=True):
-        print("Failed to build Polygeist")
+        print_error("Failed to build Polygeist")
         return False
 
     # Step 3: Build ARTS runtime
-    print("Step 3: Building ARTS runtime...")
+    print_step("Building ARTS runtime...", step_num=3, total=5)
     if not run_command("carts build --arts", cwd=project_root, realtime=True):
-        print("Failed to build ARTS runtime")
+        print_error("Failed to build ARTS runtime")
         return False
 
     # Step 4: Build CARTS (depends on everything above)
-    print("Step 4: Building CARTS...")
+    print_step("Building CARTS...", step_num=4, total=5)
     if not run_command("carts build", cwd=project_root, realtime=True):
-        print("Failed to build CARTS")
+        print_error("Failed to build CARTS")
         return False
 
-    print("All build steps completed successfully!")
+    print_success("All build steps completed successfully!")
     return True
 
 
@@ -137,13 +148,12 @@ def add_to_path():
     carts_script_dir = project_root / 'tools'
 
     if not (carts_script_dir / 'carts').exists():
-        print(
-            "Error: CARTS script not found. Please ensure you're in the correct directory.")
+        print_error("CARTS script not found. Please ensure you're in the correct directory.")
         return False
 
     # Check if carts is already in current PATH
     if check_command_exists('carts'):
-        print("carts command is already available in your PATH")
+        print_success("carts command is already available in your PATH")
         return True
 
     # Detect shell profile
@@ -155,8 +165,8 @@ def add_to_path():
         if not shell_profile.exists():
             shell_profile = Path.home() / '.bash_profile'
     else:
-        print("Unsupported shell. Please manually add to your shell profile:")
-        print(f"export PATH=\"{carts_script_dir}:$PATH\"")
+        print_warning("Unsupported shell. Please manually add to your shell profile:")
+        print_info(f"export PATH=\"{carts_script_dir}:$PATH\"")
         return False
 
     # Check if already added to shell profile
@@ -165,16 +175,16 @@ def add_to_path():
             content = f.read()
             # Check for exact path match
             if str(carts_script_dir) in content:
-                print("CARTS is already configured in your shell profile")
-                print("Try: source ~/.zshrc (or restart your terminal)")
+                print_info("CARTS is already configured in your shell profile")
+                print_info("Try: source ~/.zshrc (or restart your terminal)")
                 return True
 
     # Add to shell profile
     with open(shell_profile, 'a') as f:
         f.write(f"\n# CARTS\nexport PATH=\"{carts_script_dir}:$PATH\"\n")
 
-    print(f"Added CARTS to {shell_profile}")
-    print("Run 'source ~/.zshrc' or restart your terminal to use 'carts'")
+    print_success(f"Added CARTS to {shell_profile}")
+    print_info("Run 'source ~/.zshrc' or restart your terminal to use 'carts'")
     return True
 
 
@@ -187,28 +197,28 @@ def main():
 
     args = parser.parse_args()
 
-    print("=== CARTS Setup Script ===")
+    print_header("CARTS Setup Script")
     sys.stdout.flush()
 
     # Handle add-to-path first (no dependency installation)
     if args.add_to_path:
         if add_to_path():
-            print("CARTS added to PATH successfully!")
-            print("You can now use 'carts' from anywhere")
+            print_success("CARTS added to PATH successfully!")
+            print_info("You can now use 'carts' from anywhere")
         else:
             sys.exit(1)
         return
 
     if not args.skip_build:
         if not setup_project():
-            print("Failed to set up project")
+            print_error("Failed to set up project")
             sys.exit(1)
 
         if not build_project():
-            print("Failed to build project")
+            print_error("Failed to build project")
             sys.exit(1)
 
-    print("\n=== Setup Complete! ===")
+    print_header("Setup Complete!")
 
 if __name__ == "__main__":
     main()
