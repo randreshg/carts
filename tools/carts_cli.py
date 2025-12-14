@@ -15,13 +15,25 @@ import shutil
 import sys
 
 import typer
-from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.table import Table
 from rich.text import Text
 from rich import box
 import json
+
+# Import shared styles
+from carts_styles import (
+    Colors,
+    console,
+    print_header,
+    print_step,
+    print_success,
+    print_error,
+    print_warning,
+    print_info,
+    print_debug,
+)
 
 # ============================================================================
 # Constants and Enums
@@ -352,45 +364,7 @@ class PlatformConfig:
 # ============================================================================
 # Rich Console Setup
 # ============================================================================
-
-console = Console()
-
-
-def print_header(title: str) -> None:
-    """Print a styled header."""
-    console.print()
-    console.print(Panel(Text(title, style="bold cyan"), box=box.DOUBLE))
-    console.print()
-
-
-def print_step(msg: str) -> None:
-    """Print a step indicator."""
-    console.print(f"[bold blue]->[/bold blue] {msg}")
-
-
-def print_success(msg: str) -> None:
-    """Print a success message."""
-    console.print(f"[bold green]OK[/bold green] {msg}")
-
-
-def print_error(msg: str) -> None:
-    """Print an error message."""
-    console.print(f"[bold red]ERROR[/bold red] {msg}", style="red")
-
-
-def print_warning(msg: str) -> None:
-    """Print a warning message."""
-    console.print(f"[bold yellow]WARNING[/bold yellow] {msg}")
-
-
-def print_info(msg: str) -> None:
-    """Print an info message."""
-    console.print(f"[dim cyan]INFO[/dim cyan] {msg}")
-
-
-def print_debug(msg: str) -> None:
-    """Print a debug message (only in verbose mode)."""
-    console.print(f"[dim]DEBUG[/dim] {msg}", style="dim")
+# Console and print functions are imported from carts_styles
 
 
 # ============================================================================
@@ -544,7 +518,7 @@ def build(
 
     print_header("CARTS Build")
     console.print(
-        f"Platform: [cyan]{config.platform.value}[/cyan] ({config.arch})")
+        f"Platform: [{Colors.INFO}]{config.platform.value}[/{Colors.INFO}] ({config.arch})")
 
     makefile = config.carts_dir / "Makefile"
     if not makefile.is_file():
@@ -561,7 +535,7 @@ def build(
     else:
         target = "build"
 
-    console.print(f"Target: [cyan]{target}[/cyan]")
+    console.print(f"Target: [{Colors.INFO}]{target}[/{Colors.INFO}]")
 
     # Build make variables
     make_vars = []
@@ -1040,9 +1014,9 @@ def _execute_simple(
     passthrough_args = passthrough_args or []
 
     print_header("CARTS Execute Pipeline")
-    console.print(f"Input:  [cyan]{input_file}[/cyan]")
-    console.print(f"Output: [cyan]{output_name}[/cyan]")
-    console.print(f"Mode:   [dim]Simple (3-step)[/dim]")
+    console.print(f"Input:  [{Colors.INFO}]{input_file}[/{Colors.INFO}]")
+    console.print(f"Output: [{Colors.INFO}]{output_name}[/{Colors.INFO}]")
+    console.print(f"Mode:   [{Colors.DIM}]Simple (3-step)[/{Colors.DIM}]")
     console.print()
 
     carts_run_bin = config.carts_install_dir / "bin" / "carts-run"
@@ -1096,9 +1070,9 @@ def _execute_simple(
 
     console.print()
     console.print(Panel(
-        f"[bold green]Generated:[/bold green] {output_name}\n"
-        f"[dim]MLIR: {mlir_file}[/dim]\n"
-        f"[dim]LLVM IR: {ll_file}[/dim]",
+        f"[{Colors.SUCCESS}]Generated:[/{Colors.SUCCESS}] {output_name}\n"
+        f"[{Colors.DIM}]MLIR: {mlir_file}[/{Colors.DIM}]\n"
+        f"[{Colors.DIM}]LLVM IR: {ll_file}[/{Colors.DIM}]",
         title="Success",
         border_style="green",
     ))
@@ -1128,10 +1102,10 @@ def _execute_dual(
     passthrough_args = passthrough_args or []
 
     print_header("CARTS Execute Pipeline")
-    console.print(f"Input:  [cyan]{input_file}[/cyan]")
-    console.print(f"Output: [cyan]{output_name}[/cyan]")
+    console.print(f"Input:  [{Colors.INFO}]{input_file}[/{Colors.INFO}]")
+    console.print(f"Output: [{Colors.INFO}]{output_name}[/{Colors.INFO}]")
     console.print(
-        f"Mode:   [yellow]Dual compilation (metadata extraction)[/yellow]")
+        f"Mode:   [{Colors.WARNING}]Dual compilation (metadata extraction)[/{Colors.WARNING}]")
     console.print()
 
     carts_run_bin = config.carts_install_dir / "bin" / "carts-run"
@@ -1205,11 +1179,11 @@ def _execute_dual(
 
     console.print()
     files_info = (
-        f"[bold green]Generated:[/bold green] {output_name}\n"
-        f"[dim]Sequential: {seq_mlir}[/dim]\n"
-        f"[dim]Metadata: {metadata_json}[/dim]\n"
-        f"[dim]Parallel: {par_mlir}[/dim]\n"
-        f"[dim]LLVM IR: {ll_file}[/dim]"
+        f"[{Colors.SUCCESS}]Generated:[/{Colors.SUCCESS}] {output_name}\n"
+        f"[{Colors.DIM}]Sequential: {seq_mlir}[/{Colors.DIM}]\n"
+        f"[{Colors.DIM}]Metadata: {metadata_json}[/{Colors.DIM}]\n"
+        f"[{Colors.DIM}]Parallel: {par_mlir}[/{Colors.DIM}]\n"
+        f"[{Colors.DIM}]LLVM IR: {ll_file}[/{Colors.DIM}]"
     )
     console.print(Panel(files_info, title="Success", border_style="green"))
 
@@ -1280,6 +1254,8 @@ def examples(
         None, "--json", "-j", help="Export results to JSON"),
     verbose_flag: bool = typer.Option(
         False, "--verbose", "-v", help="Verbose output"),
+    config_file: Optional[Path] = typer.Option(
+        None, "--config", help="ARTS configuration file to use when running examples"),
 ):
     """Run and manage CARTS examples.
 
@@ -1337,6 +1313,11 @@ Commands:
             cmd.append("--verbose")
         if json_output:
             cmd.extend(["--json", str(json_output)])
+        if config_file:
+            if not config_file.is_file():
+                print_error(f"Config file not found: {config_file}")
+                raise typer.Exit(1)
+            cmd.extend(["--config", str(config_file)])
 
     result = run_subprocess(cmd, check=False)
     raise typer.Exit(result.returncode)
@@ -1535,7 +1516,7 @@ def check(
         print_error(f"Test path not found: {test_path}")
         raise typer.Exit(1)
 
-    console.print(f"Test suite: [cyan]{suite}[/cyan]")
+    console.print(f"Test suite: [{Colors.INFO}]{suite}[/{Colors.INFO}]")
     console.print(f"Test path: [dim]{test_path}[/dim]")
     console.print()
 
@@ -1761,11 +1742,11 @@ def _print_scaling_table(results_data: Dict) -> None:
 
             # Color the vs OMP column based on performance
             if diff <= 5:
-                diff_str = f"[green]{diff:+.1f}%[/]"
+                diff_str = f"[{Colors.PASS}]{diff:+.1f}%[/]"
             elif diff <= 20:
-                diff_str = f"[yellow]{diff:+.1f}%[/]"
+                diff_str = f"[{Colors.WARNING}]{diff:+.1f}%[/]"
             else:
-                diff_str = f"[red]{diff:+.1f}%[/]"
+                diff_str = f"[{Colors.FAIL}]{diff:+.1f}%[/]"
 
             table.add_row(
                 str(p),

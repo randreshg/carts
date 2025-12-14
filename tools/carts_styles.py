@@ -104,45 +104,80 @@ class Status(str, Enum):
 # Output Helpers
 # ============================================================================
 
-def print_header(title: str) -> None:
-    """Print a styled header panel."""
+def print_header(title: str, subtitle: Optional[str] = None) -> None:
+    """Print a styled header panel with optional subtitle."""
     console.print()
-    console.print(Panel(Text(title, style=Colors.HEADER), box=box.DOUBLE))
+    header_text = Text(title, style=Colors.HEADER)
+    if subtitle:
+        header_text.append("\n", style=Colors.DIM)
+        header_text.append(subtitle, style=Colors.DIM)
+    console.print(
+        Panel(
+            header_text,
+            box=box.HEAVY,
+            border_style="cyan",
+            padding=(0, 1),
+        )
+    )
+    console.print()
+
+
+def print_footer(title: str, style: str = "green") -> None:
+    """Print a styled footer panel."""
+    console.print()
+    # Use HEAVY box matching header style
+    console.print(
+        Panel(
+            Text(title, style=style),
+            box=box.HEAVY,
+            border_style=style,
+            padding=(0, 1),
+        )
+    )
     console.print()
 
 
 def print_step(msg: str, step_num: Optional[int] = None, total: Optional[int] = None) -> None:
-    """Print a step indicator."""
+    """Print a step indicator with enhanced formatting."""
     if step_num is not None and total is not None:
-        prefix = f"[{step_num}/{total}]"
+        # Step format: [1/5] with arrow symbol
+        prefix = f"[{Colors.STEP}][{step_num}/{total}][/{Colors.STEP}]"
+        arrow = f"[{Colors.STEP}]▶[/{Colors.STEP}]"
+        console.print(f"  {prefix} {arrow} {msg}")
     else:
-        prefix = "->"
-    console.print(f"[{Colors.STEP}]{prefix}[/{Colors.STEP}] {msg}")
+        # Simple arrow for steps without numbering
+        arrow = f"[{Colors.STEP}]▶[/{Colors.STEP}]"
+        console.print(f"  {arrow} {msg}")
 
 
 def print_success(msg: str) -> None:
-    """Print a success message."""
-    console.print(f"[{Colors.SUCCESS}]OK[/{Colors.SUCCESS}] {msg}")
+    """Print a success message with icon."""
+    icon = f"[{Colors.SUCCESS}]{Symbols.PASS}[/{Colors.SUCCESS}]"
+    console.print(f"  {icon} [{Colors.SUCCESS}]{msg}[/{Colors.SUCCESS}]")
 
 
 def print_error(msg: str) -> None:
-    """Print an error message."""
-    console.print(f"[{Colors.ERROR}]ERROR[/{Colors.ERROR}] {msg}", style="red")
+    """Print an error message with icon."""
+    icon = f"[{Colors.ERROR}]{Symbols.FAIL}[/{Colors.ERROR}]"
+    console.print(f"  {icon} [{Colors.ERROR}]{msg}[/{Colors.ERROR}]")
 
 
 def print_warning(msg: str) -> None:
-    """Print a warning message."""
-    console.print(f"[{Colors.WARNING}]WARNING[/{Colors.WARNING}] {msg}")
+    """Print a warning message with icon."""
+    icon = f"[{Colors.WARNING}]{Symbols.WARNING}[/{Colors.WARNING}]"
+    console.print(f"  {icon} [{Colors.WARNING}]{msg}[/{Colors.WARNING}]")
 
 
 def print_info(msg: str) -> None:
-    """Print an info message."""
-    console.print(f"[{Colors.INFO}]INFO[/{Colors.INFO}] {msg}")
+    """Print an info message with icon."""
+    icon = f"[{Colors.INFO}]{Symbols.INFO}[/{Colors.INFO}]"
+    console.print(f"  {icon} [{Colors.INFO}]{msg}[/{Colors.INFO}]")
 
 
 def print_debug(msg: str) -> None:
-    """Print a debug message."""
-    console.print(f"[{Colors.DEBUG}]DEBUG[/{Colors.DEBUG}] {msg}", style=Colors.DEBUG)
+    """Print a debug message with icon."""
+    icon = f"[{Colors.DEBUG}]●[/{Colors.DEBUG}]"
+    console.print(f"  {icon} [{Colors.DEBUG}]{msg}[/{Colors.DEBUG}]", style=Colors.DEBUG)
 
 
 def print_status(name: str, status: Status, note: str = "") -> None:
@@ -165,6 +200,8 @@ class Symbols:
     SKIP = "\u25cb"      # ○
     TIMEOUT = "\u23f1"   # ⏱
     RUNNING = "\u25cf"   # ●
+    INFO = "\u2139"      # ℹ
+    WARNING = "\u26a0"   # ⚠
 
 
 # ============================================================================

@@ -13,6 +13,20 @@ Usage:
 """
 
 from __future__ import annotations
+from carts_styles import (
+    Colors,
+    Symbols,
+    console,
+    format_summary_line,
+    print_debug,
+    print_error,
+    print_info,
+    print_step,
+    print_success,
+    print_warning,
+    status_symbol,
+    VERSION,
+)
 
 import json
 import os
@@ -42,49 +56,13 @@ from rich.table import Table
 from rich.text import Text
 
 # Import shared styles
-try:
-    from carts_styles import (
-        Colors,
-        Symbols,
-        console,
-        format_summary_line,
-        print_debug,
-        print_error,
-        print_info,
-        print_step,
-        print_success,
-        print_warning,
-        status_symbol,
-        VERSION,
-    )
-except ImportError:
-    # Fallback if running standalone
-    from rich.console import Console
-    console = Console()
-    VERSION = "0.1.0"
+import sys
+from pathlib import Path
 
-    class Colors:
-        PASS = "green"
-        FAIL = "red"
-        DIM = "dim"
-
-    class Symbols:
-        PASS = "\u2713"
-        FAIL = "\u2717"
-        SKIP = "\u25cb"
-
-    def print_step(m, **kw): console.print(f"-> {m}")
-    def print_success(m): console.print(f"[green]OK[/green] {m}")
-    def print_error(m): console.print(f"[red]ERROR[/red] {m}")
-    def print_warning(m): console.print(f"[yellow]WARNING[/yellow] {m}")
-    def print_info(m): console.print(f"[cyan]INFO[/cyan] {m}")
-    def print_debug(m): console.print(f"[dim]DEBUG[/dim] {m}")
-    def format_summary_line(p, f, s):
-        return f"[green]{Symbols.PASS} {p}[/] passed  [red]{Symbols.FAIL} {f}[/] failed  [dim]{Symbols.SKIP} {s}[/] skipped"
-    def status_symbol(s):
-        if s in ("PASS", "pass"): return f"[green]{Symbols.PASS}[/]"
-        elif s in ("FAIL", "fail"): return f"[red]{Symbols.FAIL}[/]"
-        else: return f"[dim]{Symbols.SKIP}[/]"
+# Add tools directory to path for imports
+tools_dir = Path(__file__).parent.resolve()
+if str(tools_dir) not in sys.path:
+    sys.path.insert(0, str(tools_dir))
 
 
 # ============================================================================
@@ -128,7 +106,8 @@ DEFAULT_EXAMPLES = [
 ]
 
 # Directories to skip when discovering examples
-SKIP_DIRS = {".git", ".svn", ".hg", "build", "logs", "__pycache__", ".cache", ".claude"}
+SKIP_DIRS = {".git", ".svn", ".hg", "build",
+             "logs", "__pycache__", ".cache", ".claude"}
 
 # File extensions for source files
 SOURCE_EXTENSIONS = {".c", ".cpp"}
@@ -205,7 +184,8 @@ def discover_examples(examples_dir: Path) -> List[ExampleInfo]:
 
             if item.is_dir():
                 # Check if this directory has source files (is an example)
-                source_files = list(item.glob("*.c")) + list(item.glob("*.cpp"))
+                source_files = list(item.glob("*.c")) + \
+                    list(item.glob("*.cpp"))
                 if source_files:
                     name = f"{prefix}{item.name}" if prefix else item.name
                     source_file = source_files[0]  # Take first source file
@@ -293,6 +273,7 @@ def run_example_binary(
     example: ExampleInfo,
     verbose: bool = False,
     timeout: int = 60,
+    config_file: Optional[Path] = None,
 ) -> Tuple[bool, float, int, str]:
     """
     Run the compiled example binary.
@@ -311,6 +292,17 @@ def run_example_binary(
     # Build command with args
     cmd = [str(executable)] + example.args
 
+    # Set up environment with config file if provided
+    env = os.environ.copy()
+    if config_file:
+        # Resolve to absolute path
+        config_path = config_file.resolve()
+        if not config_path.is_file():
+            return False, 0.0, -1, f"Config file not found: {config_path}"
+        env["artsConfig"] = str(config_path)
+        if verbose:
+            print_debug(f"Using config file: {config_path}")
+
     if verbose:
         print_debug(f"Running: {' '.join(cmd)}")
 
@@ -321,6 +313,7 @@ def run_example_binary(
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=env,
         )
         duration = time.time() - start_time
         output = result.stdout + result.stderr
@@ -367,6 +360,7 @@ def run_single_example(
     verbose: bool = False,
     build_timeout: int = 120,
     run_timeout: int = 60,
+    config_file: Optional[Path] = None,
 ) -> ExampleResult:
     """Run a single example: build and execute."""
     # Step 1: Build
@@ -388,7 +382,7 @@ def run_single_example(
 
     # Step 2: Run
     run_ok, run_duration, exit_code, run_output = run_example_binary(
-        example, verbose=verbose, timeout=run_timeout
+        example, verbose=verbose, timeout=run_timeout, config_file=config_file
     )
 
     if not run_ok:
@@ -460,10 +454,12 @@ def create_live_table(
             table.add_row(name, build_col, run_col, note_col)
         elif name == in_progress:
             # Currently running
-            table.add_row(f"[bold]{name}[/]", "[yellow]\u23f3...[/]", "[dim]-[/]", "[dim]-[/]")
+            table.add_row(
+                f"[bold]{name}[/]", "[yellow]\u23f3...[/]", "[dim]-[/]", "[dim]-[/]")
         else:
             # Pending
-            table.add_row(f"[dim]{name}[/]", "[dim]-[/]", "[dim]-[/]", "[dim]-[/]")
+            table.add_row(f"[dim]{name}[/]", "[dim]-[/]",
+                          "[dim]-[/]", "[dim]-[/]")
 
     return table
 
@@ -475,7 +471,8 @@ def create_live_summary(
 ) -> Text:
     """Create a one-line summary for live display."""
     passed = sum(1 for r in results.values() if r.run_status == "PASS")
-    failed = sum(1 for r in results.values() if r.run_status in ("FAIL", "TIMEOUT"))
+    failed = sum(1 for r in results.values()
+                 if r.run_status in ("FAIL", "TIMEOUT"))
     pending = total - len(results)
 
     text = Text()
@@ -501,7 +498,8 @@ def create_live_display(
 def create_summary_panel(results: List[ExampleResult], duration: float) -> Panel:
     """Create a summary panel."""
     passed = sum(1 for r in results if r.run_status == "PASS")
-    failed = sum(1 for r in results if r.run_status in ("FAIL", "TIMEOUT", "CRASH"))
+    failed = sum(1 for r in results if r.run_status in (
+        "FAIL", "TIMEOUT", "CRASH"))
     skipped = sum(1 for r in results if r.run_status == "SKIP")
 
     content = (
@@ -527,7 +525,8 @@ app = typer.Typer(
 
 @app.command()
 def list_examples(
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed info"),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Show detailed info"),
 ):
     """List all available CARTS examples."""
     examples_dir = get_examples_dir()
@@ -542,7 +541,8 @@ def list_examples(
         print_warning("No examples found")
         raise typer.Exit(0)
 
-    console.print(f"\n[bold]Available CARTS Examples[/bold] ({len(examples)} total)\n")
+    console.print(
+        f"\n[bold]Available CARTS Examples[/bold] ({len(examples)} total)\n")
 
     # Group by parent directory
     grouped: Dict[str, List[ExampleInfo]] = {}
@@ -579,11 +579,18 @@ def list_examples(
 @app.command()
 def run(
     name: Optional[str] = typer.Argument(None, help="Example name to run"),
-    all_examples: bool = typer.Option(False, "--all", "-a", help="Run all examples"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
-    json_output: Optional[Path] = typer.Option(None, "--json", "-j", help="Export results to JSON"),
-    build_timeout: int = typer.Option(120, "--build-timeout", help="Build timeout in seconds"),
-    run_timeout: int = typer.Option(60, "--run-timeout", help="Run timeout in seconds"),
+    all_examples: bool = typer.Option(
+        False, "--all", "-a", help="Run all examples"),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Verbose output"),
+    json_output: Optional[Path] = typer.Option(
+        None, "--json", "-j", help="Export results to JSON"),
+    build_timeout: int = typer.Option(
+        120, "--build-timeout", help="Build timeout in seconds"),
+    run_timeout: int = typer.Option(
+        60, "--run-timeout", help="Run timeout in seconds"),
+    config: Optional[Path] = typer.Option(
+        None, "--config", help="ARTS configuration file to use when running examples"),
 ):
     """Run CARTS example(s)."""
     examples_dir = get_examples_dir()
@@ -638,7 +645,8 @@ def run(
         for example in examples:
             # Update display to show current example as in-progress
             elapsed = time.time() - start_time
-            live.update(create_live_display(examples, results_dict, example.name, elapsed))
+            live.update(create_live_display(
+                examples, results_dict, example.name, elapsed))
 
             # Run example
             result = run_single_example(
@@ -646,6 +654,7 @@ def run(
                 verbose=verbose,
                 build_timeout=build_timeout,
                 run_timeout=run_timeout,
+                config_file=config,
             )
 
             # Update results
@@ -660,7 +669,8 @@ def run(
 
             # Refresh display with completed result
             elapsed = time.time() - start_time
-            live.update(create_live_display(examples, results_dict, None, elapsed))
+            live.update(create_live_display(
+                examples, results_dict, None, elapsed))
 
     # Final summary panel
     total_duration = time.time() - start_time
@@ -691,8 +701,10 @@ def run(
 @app.command()
 def clean(
     name: Optional[str] = typer.Argument(None, help="Example name to clean"),
-    all_examples: bool = typer.Option(False, "--all", "-a", help="Clean all examples"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    all_examples: bool = typer.Option(
+        False, "--all", "-a", help="Clean all examples"),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Verbose output"),
 ):
     """Clean example build artifacts."""
     examples_dir = get_examples_dir()
@@ -745,7 +757,8 @@ def clean(
                 cleaned += 1
 
     if cleaned > 0:
-        print_success(f"Cleaned {cleaned} files/directories from {len(examples)} example(s)")
+        print_success(
+            f"Cleaned {cleaned} files/directories from {len(examples)} example(s)")
     else:
         print_info("Nothing to clean")
 

@@ -6,7 +6,7 @@
 set -e
 
 # Source common print functions
-source "$(dirname "$0")/../tools/config/carts-print.sh"
+source "$(dirname "$0")/docker-print.sh"
 
 carts_header "CARTS Docker Kill"
 carts_info "Killing all processes in ARTS containers"
