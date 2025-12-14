@@ -37,7 +37,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Source common print functions
-source "$(dirname "$0")/../tools/config/carts-print.sh"
+source "$(dirname "$0")/docker-print.sh"
 
 carts_header "CARTS Docker Build"
 carts_info "Building CARTS Docker base image with all dependencies"

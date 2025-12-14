@@ -6,7 +6,7 @@
 set -e
 
 # Source common print functions
-source "$(dirname "$0")/../tools/config/carts-print.sh"
+source "$(dirname "$0")/docker-print.sh"
 
 # Parse command line arguments
 FORCE_MODE=false

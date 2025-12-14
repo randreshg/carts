@@ -6,6 +6,7 @@
 compile_commands.json
 build/
 CMakeFiles/
+core
 core.*
 .cursor/*
 !.cursor/rules/
@@ -14,6 +15,7 @@ core.*
 .docs/
 .tasks/
 counters/
+.artsPrintLock
 
 # External dependencies
 external/*/build/
@@ -43,3 +45,6 @@ external/*/cmake_install.cmake
 !CMakeLists.txt
 
 .python-cache
+__pycache__/
+*.pyc
+*.pyo
