@@ -107,13 +107,22 @@ llvm-clean:
 
 # ARTS
 ARTS_BUILD_TYPE ?= Release
-# Introspection 
+# Introspection
 # Use ARTS_USE_COUNTERS=ON and ARTS_USE_METRICS=ON to enable introspection
 ARTS_USE_COUNTERS ?= OFF
 ARTS_USE_METRICS ?= OFF
-# Logging levels 
+# Logging levels
 ARTS_INFO_ENABLED ?= OFF
 ARTS_DEBUG_ENABLED ?= OFF
+# Counter configuration profile (defaults to no counters for baseline performance)
+# Available profiles: counter.profile-none.cfg, counter.profile-artsid-only.cfg, counter.profile-deep.cfg
+COUNTER_CONFIG_PATH ?= $(ARTS_DIR)/counter.profile-none.cfg
+
+# Configuration hash file for ARTS build caching
+ARTS_CONFIG_HASH_FILE := $(ARTS_BUILD_DIR)/.arts-build-config
+
+# Compute current configuration as a string for hashing
+ARTS_CONFIG_STRING := $(ARTS_BUILD_TYPE)|$(ARTS_USE_COUNTERS)|$(ARTS_USE_METRICS)|$(ARTS_INFO_ENABLED)|$(ARTS_DEBUG_ENABLED)|$(COUNTER_CONFIG_PATH)|$(CARTS_LINKER_PATH)
 
 arts-download:
 	@if [ ! -d "$(ARTS_DIR)/.git" ]; then \
@@ -123,22 +132,33 @@ arts-download:
 		echo "ARTS submodule already initialized."; \
 	fi
 arts:
-	echo "Building ARTS (build_type=$(ARTS_BUILD_TYPE), counters=$(ARTS_USE_COUNTERS), metrics=$(ARTS_USE_METRICS), info=$(ARTS_INFO_ENABLED), debug=$(ARTS_DEBUG_ENABLED))..."; \
-	mkdir -p $(ARTS_BUILD_DIR); \
+	@mkdir -p $(ARTS_BUILD_DIR); \
 	mkdir -p $(ARTS_INSTALL_DIR); \
-	cmake -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) \
-		-DCMAKE_C_COMPILER=clang \
-		-DCMAKE_CXX_COMPILER=clang++ \
-		-DCMAKE_BUILD_TYPE=$(ARTS_BUILD_TYPE) \
-		-DUSE_GPU=OFF \
-		-DUSE_SMART_DB=ON \
-		-DUSE_COUNTERS=$(ARTS_USE_COUNTERS) \
-		-DUSE_METRICS=$(ARTS_USE_METRICS) \
-		-DARTS_INFO_ENABLED=$(ARTS_INFO_ENABLED) \
-		-DARTS_DEBUG_ENABLED=$(ARTS_DEBUG_ENABLED) \
-		-DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR) \
-		-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-		-DARTS_USE_LINKER="$(CARTS_LINKER_PATH)"; 
+	CURRENT_HASH=$$(echo "$(ARTS_CONFIG_STRING)" | shasum -a 256 | cut -d' ' -f1); \
+	STORED_HASH=""; \
+	if [ -f "$(ARTS_CONFIG_HASH_FILE)" ]; then \
+		STORED_HASH=$$(cat "$(ARTS_CONFIG_HASH_FILE)"); \
+	fi; \
+	if [ "$$CURRENT_HASH" = "$$STORED_HASH" ] && [ -f "$(ARTS_BUILD_DIR)/Makefile" ]; then \
+		echo "ARTS configuration unchanged, skipping cmake..."; \
+	else \
+		echo "Building ARTS (build_type=$(ARTS_BUILD_TYPE), counters=$(ARTS_USE_COUNTERS), metrics=$(ARTS_USE_METRICS), info=$(ARTS_INFO_ENABLED), debug=$(ARTS_DEBUG_ENABLED), counter_config=$(notdir $(COUNTER_CONFIG_PATH)))..."; \
+		cmake -B $(ARTS_BUILD_DIR) -S $(ARTS_DIR) \
+			-DCMAKE_C_COMPILER=clang \
+			-DCMAKE_CXX_COMPILER=clang++ \
+			-DCMAKE_BUILD_TYPE=$(ARTS_BUILD_TYPE) \
+			-DUSE_GPU=OFF \
+			-DUSE_SMART_DB=ON \
+			-DUSE_COUNTERS=$(ARTS_USE_COUNTERS) \
+			-DUSE_METRICS=$(ARTS_USE_METRICS) \
+			-DARTS_INFO_ENABLED=$(ARTS_INFO_ENABLED) \
+			-DARTS_DEBUG_ENABLED=$(ARTS_DEBUG_ENABLED) \
+			-DCOUNTER_CONFIG_PATH=$(COUNTER_CONFIG_PATH) \
+			-DCMAKE_INSTALL_PREFIX=$(ARTS_INSTALL_DIR) \
+			-DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+			-DARTS_USE_LINKER="$(CARTS_LINKER_PATH)"; \
+		echo "$$CURRENT_HASH" > "$(ARTS_CONFIG_HASH_FILE)"; \
+	fi; \
 	make -C $(ARTS_BUILD_DIR) install -j;
 arts-clean:
 	rm -f -r $(ARTS_BUILD_DIR)
