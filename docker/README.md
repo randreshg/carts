@@ -91,6 +91,25 @@ cd docker
 ./docker-update.sh -f                 # Force rebuild everything
 ```
 
+### 5. Commit Container Changes to Image (When Needed)
+```bash
+./docker-commit.sh                    # Commit arts-node-1 state to arts-node:built image
+```
+
+**What this does**:
+- Extracts workspace content from the volume mounted in arts-node-1
+- Creates a temporary container from arts-node-base (without volume mount)
+- Copies workspace content into the container's filesystem at `/opt/carts`
+- Commits the container to update `arts-node:built` image
+- Future volume initializations will use this updated image
+
+**When to use**:
+- After making changes in arts-node-1 that you want to persist in the image
+- Before distributing or backing up the Docker image
+- To update the base image that volumes are initialized from
+
+**Time**: 1-2 minutes (depending on workspace size)
+
 **What this does**:
 - Pulls latest changes from CARTS, Polygeist, ARTS runtime, and LLVM repositories
 - By default, only rebuilds components that have detected changes
@@ -202,6 +221,8 @@ Each Docker script has a specific purpose:
 - **`docker-run.sh`**: Starts the multi-node Docker containers and sets up the ARTS runtime environment. This script configures SSH between containers and generates the multi-node ARTS configuration file. If an example file is provided as an argument, it will also build and execute the example distributedly across the containers.
 
 - **`docker-update.sh`**: Intelligent update script that detects changes in CARTS, Polygeist, ARTS runtime, and LLVM repositories. Only rebuilds components that have actually changed, saving time during development.
+
+- **`docker-commit.sh`**: Commits the current state of arts-node-1 container (including workspace volume content) to update the `arts-node:built` image. Use this to persist changes made in containers back to the image for future volume initializations.
 
 - **`docker-clean.sh`**: Complete cleanup script that removes all Docker containers, images, and networks related to CARTS. Use this to reset the Docker environment.
 
