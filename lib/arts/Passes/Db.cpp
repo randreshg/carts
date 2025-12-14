@@ -292,8 +292,6 @@ bool DbPass::partitionDb() {
       allocsToPromote;
 
   /// Walk the module and check each allocation using hierarchical validation.
-  /// DbAllocNode::canBePartitioned() recursively validates all acquire
-  /// children.
   module.walk([&](func::FuncOp func) {
     DbGraph &graph = AM->getDbGraph(func);
 
@@ -671,9 +669,8 @@ void DbPass::analyzeStencilBounds() {
   });
 
   /// Generate boundsValid and update DbAcquireOps
-  for (auto &[acquireOp, flags, loopIV] : toModify) {
+  for (auto &[acquireOp, flags, loopIV] : toModify)
     generateBoundsValid(acquireOp, flags, loopIV);
-  }
 
   ARTS_DEBUG_FOOTER(AnalyzeStencilBounds);
 }
