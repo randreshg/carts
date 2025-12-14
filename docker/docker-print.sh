@@ -20,3 +20,10 @@ carts_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 carts_step() { echo -e "${CYAN}->${NC} ${BOLD}$1${NC}"; }
 carts_header() { echo -e "\n${BOLD}${CYAN}=== $1 ===${NC}\n"; }
 carts_line() { echo -e "${CYAN}- - - - - - - - - - - - - - - - - - - - -${NC}"; }
+carts_next_steps() {
+    echo -e "${CYAN}Next steps:${NC}"
+    while [[ $# -gt 0 ]]; do
+        echo -e "  ${CYAN}•${NC} $1"
+        shift
+    done
+}
