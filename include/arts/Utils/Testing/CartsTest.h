@@ -64,7 +64,7 @@ extern "C" {
 #endif
 
 ///===----------------------------------------------------------------------===///
-/// Timing Utilities (inline - simple enough for Polygeist)
+/// Timing Utilities
 ///===----------------------------------------------------------------------===///
 
 /// Global timer start value
