@@ -221,10 +221,47 @@ def find_example(examples_dir: Path, name: str) -> Optional[ExampleInfo]:
 # Example Execution
 # ============================================================================
 
+# Patterns to clean before running examples
+CLEAN_PATTERNS = [
+    "*.mlir", "*.ll", "*.o", "*_arts", "*_omp",
+    ".carts-metadata.json", ".artsPrintLock",
+]
+CLEAN_DIRS = ["build", "counter", "counters", "logs"]
+
+
+def clean_example(example: ExampleInfo, verbose: bool = False) -> int:
+    """Clean build artifacts from an example directory.
+
+    Returns: number of files/directories removed
+    """
+    cleaned = 0
+
+    # Clean files
+    for pattern in CLEAN_PATTERNS:
+        for f in example.path.glob(pattern):
+            if f.is_file():
+                if verbose:
+                    print_debug(f"Removing {f}")
+                f.unlink()
+                cleaned += 1
+
+    # Clean directories
+    for dirname in CLEAN_DIRS:
+        d = example.path / dirname
+        if d.is_dir():
+            if verbose:
+                print_debug(f"Removing directory {d}")
+            shutil.rmtree(d)
+            cleaned += 1
+
+    return cleaned
+
+
 def run_carts_execute(
     example: ExampleInfo,
     verbose: bool = False,
     timeout: int = 120,
+    config_file: Optional[Path] = None,
 ) -> Tuple[bool, float, str]:
     """
     Run carts execute -O3 for an example.
@@ -243,6 +280,14 @@ def run_carts_execute(
     # Build command
     source_name = example.source_file.name
     cmd = [str(carts_cli), "execute", source_name, "-O3"]
+
+    # Pass config file to carts-run for compile-time abstract machine config
+    if config_file:
+        config_path = config_file.resolve()
+        if config_path.is_file():
+            cmd.extend(["--arts-config", str(config_path)])
+            if verbose:
+                print_debug(f"Using config file for build: {config_path}")
 
     if verbose:
         print_debug(f"Running: {' '.join(cmd)} in {example.path}")
@@ -274,6 +319,7 @@ def run_example_binary(
     verbose: bool = False,
     timeout: int = 60,
     config_file: Optional[Path] = None,
+    trace: bool = False,
 ) -> Tuple[bool, float, int, str]:
     """
     Run the compiled example binary.
@@ -318,6 +364,14 @@ def run_example_binary(
         duration = time.time() - start_time
         output = result.stdout + result.stderr
 
+        # Print output to terminal if trace is enabled
+        if trace and output:
+            console.print(f"\n[dim]{'─' * 60}[/dim]")
+            console.print(f"[bold cyan]Output: {executable.name}[/bold cyan]")
+            console.print(f"[dim]{'─' * 60}[/dim]")
+            console.print(output.strip())
+            console.print(f"[dim]{'─' * 60}[/dim]\n")
+
         return result.returncode == 0, duration, result.returncode, output
 
     except subprocess.TimeoutExpired:
@@ -361,11 +415,15 @@ def run_single_example(
     build_timeout: int = 120,
     run_timeout: int = 60,
     config_file: Optional[Path] = None,
+    trace: bool = False,
 ) -> ExampleResult:
-    """Run a single example: build and execute."""
+    """Run a single example: clean, build and execute."""
+    # Step 0: Clean previous build artifacts
+    clean_example(example, verbose=verbose)
+
     # Step 1: Build
     build_ok, build_duration, build_output = run_carts_execute(
-        example, verbose=verbose, timeout=build_timeout
+        example, verbose=verbose, timeout=build_timeout, config_file=config_file
     )
 
     if not build_ok:
@@ -382,7 +440,7 @@ def run_single_example(
 
     # Step 2: Run
     run_ok, run_duration, exit_code, run_output = run_example_binary(
-        example, verbose=verbose, timeout=run_timeout, config_file=config_file
+        example, verbose=verbose, timeout=run_timeout, config_file=config_file, trace=trace
     )
 
     if not run_ok:
@@ -591,6 +649,8 @@ def run(
         60, "--run-timeout", help="Run timeout in seconds"),
     config: Optional[Path] = typer.Option(
         None, "--config", help="ARTS configuration file to use when running examples"),
+    trace: bool = typer.Option(
+        False, "--trace", "-t", help="Print example output to terminal"),
 ):
     """Run CARTS example(s)."""
     examples_dir = get_examples_dir()
@@ -655,6 +715,7 @@ def run(
                 build_timeout=build_timeout,
                 run_timeout=run_timeout,
                 config_file=config,
+                trace=trace,
             )
 
             # Update results
@@ -725,36 +786,12 @@ def clean(
         print_error("Specify an example name or use --all")
         raise typer.Exit(1)
 
-    # Patterns to clean
-    clean_patterns = [
-        "*.mlir", "*.ll", "*.o", "*_arts", "*_omp",
-        ".carts-metadata.json", ".artsPrintLock",
-    ]
-    clean_dirs = ["build", "counter", "counters", "logs"]
-
     cleaned = 0
 
     for example in examples:
         if verbose:
             print_info(f"Cleaning {example.name}")
-
-        # Clean files
-        for pattern in clean_patterns:
-            for f in example.path.glob(pattern):
-                if f.is_file():
-                    if verbose:
-                        print_debug(f"Removing {f}")
-                    f.unlink()
-                    cleaned += 1
-
-        # Clean directories
-        for dirname in clean_dirs:
-            d = example.path / dirname
-            if d.is_dir():
-                if verbose:
-                    print_debug(f"Removing directory {d}")
-                shutil.rmtree(d)
-                cleaned += 1
+        cleaned += clean_example(example, verbose=verbose)
 
     if cleaned > 0:
         print_success(
