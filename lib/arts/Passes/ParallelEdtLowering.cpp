@@ -147,6 +147,9 @@ private:
             AttrNames::Operation::Workers))
       return builder.create<arith::ConstantIndexOp>(
           loc, workersAttribute.getValue());
+    /// Check concurrency type to decide which runtime query to use
+    if (parallelEdt.getConcurrency() == EdtConcurrency::internode)
+      return builder.create<GetTotalNodesOp>(loc).getResult();
     return builder.create<GetTotalWorkersOp>(loc).getResult();
   }
 

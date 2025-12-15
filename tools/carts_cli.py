@@ -68,7 +68,7 @@ PIPELINE_STAGES = [
 CLEAN_FILE_PATTERNS = [
     "*.mlir", "*.ll", "*.o", "*.so", "*.dylib", "*.a", "*.exe",
     "DbGraph_*.dot", "*.log", "*.tmp", ".artsPrintLock",
-    ".carts-metadata.json", "*_arts_metadata.mlir",
+    ".carts-metadata.json", "*_arts_metadata.mlir", "core",
 ]
 
 CLEAN_DIR_PATTERNS = [

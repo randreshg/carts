@@ -753,6 +753,8 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
   if (auto workers = parallelEdt->getAttrOfType<workersAttr>(
           AttrNames::Operation::Workers))
     numWorkers = AC->createIndexConstant(workers.getValue(), loc);
+  else if (parallelEdt.getConcurrency() == EdtConcurrency::internode)
+    numWorkers = AC->create<GetTotalNodesOp>(loc).getResult();
   else
     numWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
 
@@ -1191,6 +1193,8 @@ void ForLoweringPass::lowerForWithDbRewiring(ArtsCodegen &AC, ForOp forOp,
   if (auto workers = originalParallel->getAttrOfType<workersAttr>(
           AttrNames::Operation::Workers))
     numWorkers = AC.createIndexConstant(workers.getValue(), loc);
+  else if (originalParallel.getConcurrency() == EdtConcurrency::internode)
+    numWorkers = AC.create<GetTotalNodesOp>(loc).getResult();
   else
     numWorkers = AC.create<GetTotalWorkersOp>(loc).getResult();
 
@@ -1381,6 +1385,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   if (auto workers = originalParallel->getAttrOfType<workersAttr>(
           AttrNames::Operation::Workers))
     loopInfo.totalWorkers = AC->createIndexConstant(workers.getValue(), loc);
+  else if (originalParallel.getConcurrency() == EdtConcurrency::internode)
+    loopInfo.totalWorkers = AC->create<GetTotalNodesOp>(loc).getResult();
   else
     loopInfo.totalWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
 
