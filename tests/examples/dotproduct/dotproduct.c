@@ -3,7 +3,7 @@
 #include <stdlib.h>
 
 #include "arts/Utils/Testing/CartsTest.h"
-#define DEBUG 0
+// #define DEBUG 0
 
 int main(int argc, char **argv) {
   CARTS_TIMER_START();
@@ -27,9 +27,7 @@ int main(int argc, char **argv) {
     b[i] = i * 2;
   }
 
-#if DEBUG
-  printf("Performing parallel dot product...\n");
-#endif
+  CARTS_DEBUG_PRINT("Performing parallel dot product...\n");
 
   double t_start = omp_get_wtime();
 /// Parallel loop for dot product calculation

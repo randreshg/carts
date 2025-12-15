@@ -291,7 +291,7 @@ void setupDbOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 /// EDT optimization passes.
 void setupEdtOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(arts::createEdtPass(AM, true));
+  pm.addPass(arts::createEdtPass(AM, /*runAnalysis*/true));
   pm.addPass(createCSEPass());
 }
 
@@ -307,9 +307,15 @@ void setupConcurrency(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 
 /// Concurrency optimization passes.
 void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
+  /// Remove dead code after the concurrency pass.
   pm.addPass(arts::createDeadCodeEliminationPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
+  /// Convert parallel EDTs into single EDTs.
+  pm.addPass(arts::createEdtPass(AM, /*runAnalysis*/false));
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCSEPass());
+  /// Enable partitioning, we need to run the db pass again after the concurrency pass.
   pm.addPass(arts::createDbPass(AM, /*enablePartitioning=*/true));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());

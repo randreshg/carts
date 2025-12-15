@@ -33,6 +33,32 @@
 #include <omp.h>
 #endif
 
+///--------------------------------------------------------------------------///
+/// Debug control
+///
+/// CARTS_DEBUG provides a single flag that examples can use for conditional
+/// printing without each file defining its own DEBUG macro.
+///
+/// Priority:
+///   1) If CARTS_DEBUG is already defined (e.g. via compiler flags), keep it.
+///   2) Otherwise, if DEBUG is defined, map CARTS_DEBUG to 1.
+///   3) Otherwise, CARTS_DEBUG is 0.
+///--------------------------------------------------------------------------///
+#ifndef CARTS_DEBUG
+#if defined(DEBUG)
+#define CARTS_DEBUG 1
+#else
+#define CARTS_DEBUG 0
+#endif
+#endif
+
+/// Debug print macro - expands to printf when CARTS_DEBUG is 1, no-op otherwise.
+#if CARTS_DEBUG
+#define CARTS_DEBUG_PRINT(...) printf(__VA_ARGS__)
+#else
+#define CARTS_DEBUG_PRINT(...) ((void)0)
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
