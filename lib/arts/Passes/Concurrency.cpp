@@ -218,16 +218,19 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
     concurrencyType = EdtConcurrency::intranode;
     ARTS_INFO("Setting EDT parallelism: single-node execution with 1 worker");
   } else {
-    /// Unknown configuration - let runtime handle it
-    ARTS_INFO(
-        "Unable to determine parallelism statically; deferring to runtime");
-    return;
+    /// Unknown configuration - default to intranode with runtime-determined workers
+    /// The EDT will query worker count at runtime via GetTotalWorkersOp
+    numWorkers = 0;
+    concurrencyType = EdtConcurrency::intranode;
+    ARTS_INFO("Unknown configuration; defaulting to intranode with runtime "
+              "worker count");
   }
 
   /// Set the attributes on the EDT operation
   OpBuilder builder(edtOp.getContext());
   edtOp.setConcurrency(concurrencyType);
-  edtOp.setWorkersAttr(workersAttr::get(builder.getContext(), numWorkers));
+  if (numWorkers > 0)
+    edtOp.setWorkersAttr(workersAttr::get(builder.getContext(), numWorkers));
   ARTS_INFO("Set EDT concurrency="
             << (concurrencyType == EdtConcurrency::internode ? "internode"
                                                              : "intranode")
