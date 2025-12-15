@@ -14,82 +14,79 @@ namespace mlir {
 namespace arts {
 
 ///===----------------------------------------------------------------------===///
-/// ViewCoordinateMap - Global to Local Coordinate Transformation
+/// DbAllocPromotion - Allocation Promotion Transformation
 ///
-/// DbAcquireOp specifies a view into a datablock with:
-///   - indices: Pin specific elements in leading dimensions (reduces
-///   dimensionality)
-///   - offsets: Starting position for the acquired slice
-///   - sizes: Extent of the acquired slice
+/// Encapsulates the transformation of a coarse-grained allocation to a
+/// fine-grained (chunked or element-wise) allocation. All inputs are provided
+/// at construction, and apply() executes the transformation.
 ///
-/// Example: 2D array with indices=[%row], offsets=[%col_start], sizes=[%n]
-///   Global: arr[%row, %col]
-///   Local:  view[0, %col - %col_start]
-///         dimension 0 is pinned (indexed), dimension 1 is sliced
+/// Mode is derived automatically from rank comparison:
+///   oldInnerRank == newInnerRank -> Chunked (div/mod on first index)
+///   oldInnerRank > newInnerRank  -> Element-wise (redistribute indices)
 ///
-/// Transformation rules:
-///   - Indexed dimensions [0, numIndexedDims): local = 0
-///   - Sliced dimensions [numIndexedDims, end):
-///     * If globalIdx == offset: local = 0
-///     * If globalIdx = offset + delta (provable): local = delta 
-///     * Otherwise: local = globalIdx - offset (explicit subtraction)
-///
-/// We always compute local = global - offset for sliced dimensions.
+/// Usage:
+///   DbAllocPromotion promotion(oldAlloc, newOuterSizes, newInnerSizes,
+///                              acquires, elementOffsets, elementSizes);
+///   auto newAlloc = promotion.apply(builder);
 ///===----------------------------------------------------------------------===///
-struct ViewCoordinateMap {
-  /// Number of leading dimensions pinned by DbAcquireOp::indices.
-  /// For these dimensions, the local coordinate is always 0.
-  unsigned numIndexedDims = 0;
-
-  /// Offsets for sliced dimensions (from DbAcquireOp::offsets).
-  /// Applied to dimensions starting at index numIndexedDims.
-  /// local[d] = global[d] - sliceOffsets[d - numIndexedDims]
-  SmallVector<Value> sliceOffsets;
-
-  /// Create coordinate map from a DbAcquireOp.
-  static ViewCoordinateMap fromAcquire(DbAcquireOp acquire);
-};
-
-class DbTransforms {
+class DbAllocPromotion {
 public:
-  DbTransforms() = default;
+  /// Constructor: all inputs provided upfront.
+  DbAllocPromotion(DbAllocOp oldAlloc, ValueRange newOuterSizes,
+                   ValueRange newInnerSizes, ArrayRef<DbAcquireOp> acquires,
+                   ArrayRef<Value> elementOffsets,
+                   ArrayRef<Value> elementSizes);
 
-  /// Rewrite memref access to use db_ref pattern.
-  bool rewriteAccessWithDbPattern(Operation *op, Value dbPtr, Type elementType,
-                                  unsigned outerCount, OpBuilder &builder,
-                                  llvm::SetVector<Operation *> &opsToRemove);
+  /// Apply the transformation: create new allocation and rewrite all uses.
+  FailureOr<DbAllocOp> apply(OpBuilder &builder);
 
-  /// Promote dimensions from elementSizes to sizes.
-  DbAllocOp promoteAllocation(DbAllocOp alloc, int promoteCount,
-                              OpBuilder &builder, bool trimLeadingOnes = false);
-
-  /// Rewrite all uses of an allocation after promotion.
-  /// Updates acquire sources, result types, AND offsets/sizes to full extent.
-  LogicalResult rewriteAllUses(DbAllocOp oldAlloc, DbAllocOp newAlloc,
-                               OpBuilder &builder);
-
-  /// Rebase operation indices to acquired view's local coordinates.
-  bool rebaseToAcquireView(Operation *op, DbAcquireOp acquire, Value dbPtr,
-                           Type elementType, OpBuilder &builder,
-                           llvm::SetVector<Operation *> &opsToRemove);
-
-  /// Rebase all users of acquired blockArg to local coordinates.
-  bool rebaseAllUsersToAcquireView(DbAcquireOp acquire, OpBuilder &builder);
-
-  /// Check if allocation is coarse-grained (all sizes == 1).
-  static bool isCoarseGrained(DbAllocOp alloc);
-
-  /// Transform global indices to local (view) coordinates using the map.
-  SmallVector<Value> localizeCoordinates(ArrayRef<Value> globalIndices,
-                                         const ViewCoordinateMap &map,
-                                         OpBuilder &builder, Location loc);
+  /// Check if this is a chunked transformation (vs element-wise).
+  bool isChunked() const { return isChunked_; }
 
 private:
-  bool createDbRefPattern(Operation *op, Value dbPtr, Type elementType,
-                          ArrayRef<Value> outerIndices,
-                          ArrayRef<Value> innerIndices, OpBuilder &builder,
-                          llvm::SetVector<Operation *> &opsToRemove);
+  DbAllocOp oldAlloc_;
+  SmallVector<Value> newOuterSizes_;
+  SmallVector<Value> newInnerSizes_;
+
+  /// Partition info per acquire
+  SmallVector<DbAcquireOp> acquires_;
+  SmallVector<Value> elementOffsets_;
+  SmallVector<Value> elementSizes_;
+
+  /// Derived at construction from rank comparison
+  bool isChunked_;
+  Value chunkSize_;
+
+  /// Rewrite a single acquire with its partition info
+  void rewriteAcquire(DbAcquireOp acquire, Value elemOffset, Value elemSize,
+                      DbAllocOp newAlloc, OpBuilder &builder);
+
+  /// Rewrite a DbRefOp with transformed indices
+  void rewriteDbRef(DbRefOp ref, DbAllocOp newAlloc, OpBuilder &builder);
 };
+
+///===----------------------------------------------------------------------===///
+/// db - Datablock Access Pattern Transformations
+///===----------------------------------------------------------------------===///
+namespace db {
+
+/// Check if allocation is coarse-grained (all sizes == 1).
+bool isCoarseGrained(DbAllocOp alloc);
+
+/// Rewrite memref access to use db_ref pattern.
+bool rewriteAccessWithDbPattern(Operation *op, Value dbPtr, Type elementType,
+                                unsigned outerCount, OpBuilder &builder,
+                                llvm::SetVector<Operation *> &opsToRemove);
+
+/// Rebase operation indices to acquired view's local coordinates.
+bool rebaseToAcquireView(Operation *op, DbAcquireOp acquire, Value dbPtr,
+                         Type elementType, OpBuilder &builder,
+                         llvm::SetVector<Operation *> &opsToRemove);
+
+/// Rebase all users of acquired blockArg to local coordinates.
+bool rebaseAllUsersToAcquireView(DbAcquireOp acquire, OpBuilder &builder);
+
+} // namespace db
 
 } // namespace arts
 } // namespace mlir

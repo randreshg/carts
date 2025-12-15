@@ -12,6 +12,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "llvm/Support/JSON.h"
+#include <optional>
 
 namespace mlir {
 namespace arts {
@@ -23,6 +24,22 @@ struct HeuristicDecision {
   std::string rationale;
   int64_t affectedArtsId;
   llvm::StringMap<int64_t> costModelInputs;
+};
+
+/// Source of partitioning decision (affects priority)
+enum class PartitioningSource {
+  UserProvided, // User specified depend clause (omp task) - respect it
+  ParallelFor,  // parallel_for without deps - prioritize chunking
+  Fallback      // Default/unknown - apply standard H2
+};
+
+/// Mode-dependent chunking thresholds (derived from MemoryConfig)
+struct ChunkingThresholds {
+  int64_t maxOuterDBs;         // Max total datablocks
+  int64_t maxTotalDBsPerEDT;   // Max DBs per EDT (grid-aware!)
+  int64_t minInnerBytes;       // Min chunk size in bytes
+  int64_t optimalInnerBytes;   // Optimal chunk (L2 cache fit)
+  int64_t minElementsPerChunk; // Min elements per chunk
 };
 
 /// Centralized heuristics configuration for compile-time optimizations.
@@ -59,18 +76,42 @@ public:
   bool shouldPreferCoarseForReadOnly(mlir::arts::ArtsMode accessMode) const;
 
   //===--------------------------------------------------------------------===//
-  // H2: Cost Model Heuristic
+  // H2: Cost Model Heuristic (Memory-Aware)
   //===--------------------------------------------------------------------===//
 
-  /// Cost model thresholds (hardcoded defaults)
+  /// Legacy cost model thresholds (for backward compatibility)
   static constexpr int64_t kMaxOuterDBs = 1024;
   static constexpr int64_t kMaxDepsPerEDT = 8;
   static constexpr int64_t kMinInnerBytes = 64;
 
+  /// Get mode-dependent thresholds (computed from MemoryConfig)
+  const ChunkingThresholds &getThresholds() const { return thresholds_; }
+
+  /// Compute minimum inner bytes based on execution mode and memory tier
+  int64_t computeMinInnerBytes() const;
+
+  /// Compute optimal inner bytes for cache efficiency
+  int64_t computeOptimalInnerBytes() const;
+
   /// Evaluates cost model for fine-grained allocation decision.
-  /// Returns true if fine-grained allocation is recommended.
-  bool shouldUseFineGrained(int64_t outerDBs, int64_t depsPerEDT,
-                            int64_t innerBytes) const;
+  /// Uses partial evaluation: rejects early if any known value fails,
+  /// returns nullopt if some values unknown but no known failures.
+  ///
+  /// Return values:
+  /// - true: All values known and pass -> use fine-grained (chunking)
+  /// - false: A known value failed -> use coarse (element-wise)
+  /// - nullopt: Known values pass but some unknown -> caller decides
+  /// Evaluates cost model for fine-grained allocation decision.
+  /// Parameters:
+  /// - totalDBs: Total number of datablocks (grid-aware: product of outer
+  /// sizes)
+  /// - totalDBsPerEDT: Total DBs accessed per EDT (grid-aware)
+  /// - innerBytes: Chunk size in bytes
+  /// - source: Where this decision comes from (affects priority)
+  std::optional<bool> shouldUseFineGrained(
+      std::optional<int64_t> totalDBs, std::optional<int64_t> totalDBsPerEDT,
+      std::optional<int64_t> innerBytes,
+      PartitioningSource source = PartitioningSource::Fallback) const;
 
   //===--------------------------------------------------------------------===//
   // Decision Recording for Diagnostics
@@ -90,6 +131,10 @@ public:
 private:
   const mlir::arts::ArtsAbstractMachine &machine;
   llvm::SmallVector<HeuristicDecision> decisions_; ///< Recorded decisions
+  ChunkingThresholds thresholds_; ///< Mode-dependent thresholds
+
+  /// Initialize thresholds based on machine config
+  void initializeThresholds();
 };
 
 } // namespace arts

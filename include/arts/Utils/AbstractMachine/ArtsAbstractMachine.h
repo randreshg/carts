@@ -10,11 +10,48 @@
 #pragma once
 
 #include <cassert>
+#include <cstdint>
 #include <string>
 #include <vector>
 
 namespace mlir {
 namespace arts {
+
+/// Memory tier classification for heuristic threshold derivation.
+/// Users set this in arts.cfg [MEMORY] section - sensible defaults are derived.
+enum class MemoryTier {
+  SMALL,  // Embedded/IoT: L2~64KB, net~100Mbps
+  MEDIUM, // Desktop/laptop: L2~256KB, net~1Gbps (default)
+  LARGE,  // Workstation/server: L2~1MB, net~10Gbps
+  HPC     // Cluster/supercomputer: L2~2MB+, net~100Gbps
+};
+
+/// Execution mode classification for chunking decisions.
+enum class ExecutionMode {
+  SingleThreaded, // nodeCount=1, threads=1
+  IntraNode,      // nodeCount=1, threads>1
+  InterNode       // nodeCount>1
+};
+
+/// Memory configuration (tier-based with optional overrides).
+/// Provides orders of magnitude for memory hierarchy parameters.
+struct MemoryConfig {
+  MemoryTier tier = MemoryTier::MEDIUM;
+
+  // Derived from tier (or overridden in config)
+  int64_t l2OrderKB = 256;         // Order of magnitude for L2 cache
+  int64_t l3OrderMB = 8;           // Order of magnitude for L3 cache
+  int64_t networkOrderMbps = 1000; // Network bandwidth order
+  int64_t latencyOrderUs = 100;    // Network latency order
+
+  /// Apply tier defaults (called after parsing tier, before overrides)
+  void applyTierDefaults();
+
+  /// Computed values based on tier/overrides
+  int64_t getMinChunkBytes() const;
+  int64_t getOptimalChunkBytes(int threads) const;
+  int64_t getNetworkChunkBytes() const;
+};
 
 class ArtsAbstractMachine {
 public:
@@ -67,6 +104,24 @@ public:
   }
   int getTotalWorkerThreads() const { return threads * nodeCount; }
   int getTotalGpuThreads() const { return hasGpuSupport() ? gpu : 0; }
+
+  /// Memory Configuration (for heuristics)
+  const MemoryConfig &getMemoryConfig() const { return memoryConfig; }
+
+  /// Execution Mode (derived from nodeCount/threads)
+  ExecutionMode getExecutionMode() const {
+    if (nodeCount > 1)
+      return ExecutionMode::InterNode;
+    if (threads > 1)
+      return ExecutionMode::IntraNode;
+    return ExecutionMode::SingleThreaded;
+  }
+
+  /// Total parallelism (for threshold calculations)
+  int getTotalParallelism() const { return nodeCount * threads; }
+
+  /// Should chunking be prioritized? (true for distributed execution)
+  bool shouldPrioritizeChunking() const { return nodeCount > 1; }
 
   /// Get abstractMachine description as a formatted string
   std::string getMachineDescription() const;
@@ -147,6 +202,9 @@ private:
   /// Configuration file status
   bool configFileExists = false;
   bool isValidFlag = false;
+
+  /// Memory configuration (tier + optional overrides)
+  MemoryConfig memoryConfig;
 };
 
 } // namespace arts
