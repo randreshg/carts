@@ -7,6 +7,8 @@
 
 #define TOLERANCE 1e-6
 
+#define DEBUG 0
+
 int main(int argc, char *argv[]) {
   CARTS_TIMER_START();
   /// Check for the correct number of arguments
@@ -45,6 +47,7 @@ int main(int argc, char *argv[]) {
     }
   }
 
+#if DEBUG
   /// Print A and B
   printf("Matrix A:\n");
   for (int i = 0; i < N; i++) {
@@ -61,6 +64,7 @@ int main(int argc, char *argv[]) {
       printf("%6.2f ", B[i][j]);
     printf("\n");
   }
+#endif
 
   /// Parallel computation
   double t_start = omp_get_wtime();

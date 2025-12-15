@@ -153,6 +153,11 @@ struct ParallelRegionAnalysis {
       if (auto forOp = dyn_cast<ForOp>(&op)) {
         analysis.forOps.push_back(forOp);
         seenFor = true;
+      } else if (isa<DbReleaseOp>(&op)) {
+        /// Skip db_release ops - these are cleanup operations, not real work.
+        /// They'll be handled when the original parallel is cleaned up or
+        /// when the EDTs containing them are erased.
+        continue;
       } else {
         if (!seenFor)
           analysis.opsBeforeFor.push_back(&op);
