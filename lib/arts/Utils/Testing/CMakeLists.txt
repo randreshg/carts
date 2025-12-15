@@ -9,3 +9,8 @@ set_target_properties(CartsTest PROPERTIES
 install(TARGETS CartsTest
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
+
+# Install the header file
+install(FILES ${CMAKE_SOURCE_DIR}/include/arts/Utils/Testing/CartsTest.h
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/arts/Utils/Testing
+)

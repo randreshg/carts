@@ -20,7 +20,7 @@ int main(int argc, char *argv[]) {
 
   srand(time(NULL));
   const int random = rand() % 11;
-  printf("\nRandom number: %d\n", random);
+  CARTS_DEBUG_PRINT("\nRandom number: %d\n", random);
 #pragma omp parallel
   {
 #pragma omp single
@@ -58,19 +58,19 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  /// Print the computed matrices
-  printf("Matrix A:\n");
+  /// Print the computed matrices (debug only)
+  CARTS_DEBUG_PRINT("Matrix A:\n");
   for (int i = 0; i < N; i++) {
     for (int j = 0; j < N; j++)
-      printf("%6.2f ", A[i][j]);
-    printf("\n");
+      CARTS_DEBUG_PRINT("%6.2f ", A[i][j]);
+    CARTS_DEBUG_PRINT("\n");
   }
 
-  printf("\nMatrix B:\n");
+  CARTS_DEBUG_PRINT("\nMatrix B:\n");
   for (int i = 0; i < N; i++) {
     for (int j = 0; j < N; j++)
-      printf("%6.2f ", B[i][j]);
-    printf("\n");
+      CARTS_DEBUG_PRINT("%6.2f ", B[i][j]);
+    CARTS_DEBUG_PRINT("\n");
   }
 
   /// Verification of the result.
