@@ -105,7 +105,8 @@ struct DbPass : public arts::DbBase<DbPass> {
   /// Graph rebuild
   void invalidateAndRebuildGraph();
   FailureOr<DbAllocOp> promoteAllocForChunking(DbAllocOp allocOp,
-                                               DbAllocNode *allocNode);
+                                               DbAllocNode *allocNode,
+                                               Value chunkSize = nullptr);
   void updateAcquireForChunk(DbAcquireOp acqOp, Value chunkOffset,
                              Value chunkSize);
 
@@ -381,7 +382,14 @@ bool DbPass::partitionDb() {
   for (auto &[allocOp, allocNode, acquireList] : allocsToProcess) {
     ARTS_DEBUG("Promoting alloc with " << acquireList.size() << " acquires");
 
-    auto promotedOr = promoteAllocForChunking(allocOp, allocNode);
+    /// Extract chunk size from first acquire (all have same chunk size from
+    /// loop partitioning). This allows chunked allocation instead of
+    /// element-wise when the loop has been partitioned into workers.
+    Value chunkSize = nullptr;
+    if (!acquireList.empty())
+      chunkSize = std::get<2>(acquireList[0]);
+
+    auto promotedOr = promoteAllocForChunking(allocOp, allocNode, chunkSize);
     if (failed(promotedOr)) {
       partitionFailed.insert(allocOp.getOperation());
       continue;
@@ -502,9 +510,12 @@ bool DbPass::partitionDb() {
 }
 
 /// Promote coarse allocation for chunking.
-/// sizes=[1], elementSizes=[N] -> sizes=[N], elementSizes=[1]
+/// If chunkSize is provided: sizes=[1], elementSizes=[N] -> sizes=[numChunks],
+/// elementSizes=[chunkSize] Otherwise (element-wise fallback): sizes=[1],
+/// elementSizes=[N] -> sizes=[N], elementSizes=[1]
 FailureOr<DbAllocOp> DbPass::promoteAllocForChunking(DbAllocOp allocOp,
-                                                     DbAllocNode *allocNode) {
+                                                     DbAllocNode *allocNode,
+                                                     Value chunkSize) {
   if (!allocOp || !allocOp.getOperation())
     return failure();
 
@@ -515,12 +526,91 @@ FailureOr<DbAllocOp> DbPass::promoteAllocForChunking(DbAllocOp allocOp,
   if (allocNode && allocNode->isFineGrained())
     return allocOp;
 
-  OpBuilder builder(allocOp);
-  DbTransforms transforms;
+  /// Multi-dimensional allocations are not supported for chunking.
+  /// Fall through to element-wise promotion for multi-D.
+  if (allocOp.getElementSizes().size() > 1) {
+    ARTS_DEBUG("  Skipping chunked allocation for multi-dimensional array "
+               "(dims="
+               << allocOp.getElementSizes().size() << ")");
+    /// Fall through to element-wise promotion
+  }
 
-  /// TODO: Derive promoteCount from partition info dimensions.
-  /// Currently we always promote 1 dimension for the common chunking pattern.
-  /// For multi-dimensional partitioning, examine partition info dimensions.
+  OpBuilder builder(allocOp);
+  Location loc = allocOp.getLoc();
+  builder.setInsertionPoint(allocOp);
+
+  /// Try to use chunked allocation if chunkSize is provided and valid.
+  /// Use extractChunkSizeFromHint to handle both direct constants and
+  /// minui(remaining, chunkSize) patterns from ForLowering.
+  /// Only for 1D allocations.
+  int64_t chunkSizeVal = 0;
+  if (allocOp.getElementSizes().size() == 1) {
+    if (auto extracted = arts::extractChunkSizeFromHint(chunkSize);
+        extracted && *extracted > 1) {
+      chunkSizeVal = *extracted;
+    }
+  }
+
+  if (chunkSizeVal > 0) {
+    /// Get total elements from the first elementSize dimension
+    Value totalElementsVal = allocOp.getElementSizes()[0];
+    int64_t totalElements = 0;
+    if (arts::getConstantIndex(totalElementsVal, totalElements) &&
+        totalElements > chunkSizeVal) {
+      /// Compute number of chunks: ceil(totalElements / chunkSize)
+      int64_t numChunks = (totalElements + chunkSizeVal - 1) / chunkSizeVal;
+
+      /// Check H2 heuristic: only use chunked if it's reasonable
+      auto &heuristics = AM->getHeuristicsConfig();
+      /// Compute actual element size in bytes from the element type
+      Type elemType = allocOp.getElementType();
+      unsigned elemBytes = 4; // default to 4 bytes (float)
+      if (elemType.isIntOrFloat())
+        elemBytes = (elemType.getIntOrFloatBitWidth() + 7) / 8;
+      int64_t innerBytes = chunkSizeVal * elemBytes;
+      if (heuristics.shouldUseFineGrained(numChunks, /*depsPerEDT=*/1,
+                                          innerBytes)) {
+        ARTS_DEBUG("  Using chunked allocation: " << numChunks << " chunks of "
+                                                  << chunkSizeVal
+                                                  << " elements");
+
+        /// Create new allocation with chunked granularity
+        SmallVector<Value> newSizes{
+            builder.create<arith::ConstantIndexOp>(loc, numChunks)};
+        SmallVector<Value> newElementSizes{
+            builder.create<arith::ConstantIndexOp>(loc, chunkSizeVal)};
+
+        Value address = allocOp.getAddress();
+        auto newAlloc = builder.create<DbAllocOp>(
+            loc, allocOp.getMode(), allocOp.getRoute(), allocOp.getAllocType(),
+            allocOp.getDbMode(), allocOp.getElementType(), address, newSizes,
+            newElementSizes);
+
+        /// Transfer metadata from original allocation
+        if (allocOp->hasAttr("arts.id"))
+          newAlloc->setAttr("arts.id", allocOp->getAttr("arts.id"));
+        if (allocOp->hasAttr("arts.memref"))
+          newAlloc->setAttr("arts.memref", allocOp->getAttr("arts.memref"));
+
+        /// Rewrite all uses to reference the new allocation
+        DbTransforms transforms;
+        if (failed(transforms.rewriteAllUses(allocOp, newAlloc, builder))) {
+          newAlloc.erase();
+          /// Fall through to element-wise promotion
+        } else {
+          return newAlloc;
+        }
+      } else {
+        ARTS_DEBUG("  H2 rejects chunked allocation: numChunks="
+                   << numChunks << " innerBytes=" << innerBytes);
+      }
+    }
+  }
+
+  /// Fallback: element-wise promotion
+  /// sizes=[1], elementSizes=[N] -> sizes=[N], elementSizes=[1]
+  ARTS_DEBUG("  Falling back to element-wise promotion");
+  DbTransforms transforms;
   auto newAlloc = transforms.promoteAllocation(allocOp, 1, builder,
                                                /*trimLeadingOnes=*/true);
   if (!newAlloc)
@@ -534,22 +624,65 @@ FailureOr<DbAllocOp> DbPass::promoteAllocForChunking(DbAllocOp allocOp,
   return newAlloc;
 }
 
-void DbPass::updateAcquireForChunk(DbAcquireOp acqOp, Value chunkOffset,
-                                   Value chunkSize) {
+void DbPass::updateAcquireForChunk(DbAcquireOp acqOp, Value elementOffset,
+                                   Value elementSize) {
   if (!acqOp)
     return;
 
-  SmallVector<Value> offsets{chunkOffset};
-  SmallVector<Value> sizes{chunkSize};
+  OpBuilder builder(acqOp);
+  builder.setInsertionPoint(acqOp);
+  Location loc = acqOp.getLoc();
+
+  SmallVector<Value> offsets;
+  SmallVector<Value> sizes;
+
+  /// Get the allocation to check if it's chunked
+  Operation *allocOp = arts::getUnderlyingDbAlloc(acqOp.getSourceGuid());
+  if (auto alloc = dyn_cast_or_null<DbAllocOp>(allocOp)) {
+    if (!alloc.getElementSizes().empty()) {
+      int64_t allocChunkSize;
+      if (arts::getConstantIndex(alloc.getElementSizes()[0], allocChunkSize) &&
+          allocChunkSize > 1) {
+        /// Chunked allocation: convert element-space to chunk-space
+        Value chunkSizeVal =
+            builder.create<arith::ConstantIndexOp>(loc, allocChunkSize);
+
+        /// chunkSpaceOffset = elementOffset / allocChunkSize
+        Value chunkSpaceOffset =
+            builder.create<arith::DivUIOp>(loc, elementOffset, chunkSizeVal);
+
+        /// chunkCount = ceil(elementSize / allocChunkSize)
+        Value adjusted = builder.create<arith::AddIOp>(
+            loc, elementSize,
+            builder.create<arith::ConstantIndexOp>(loc, allocChunkSize - 1));
+        Value chunkSpaceSize =
+            builder.create<arith::DivUIOp>(loc, adjusted, chunkSizeVal);
+
+        offsets.push_back(chunkSpaceOffset);
+        sizes.push_back(chunkSpaceSize);
+
+        acqOp.getOffsetsMutable().assign(offsets);
+        acqOp.getSizesMutable().assign(sizes);
+        acqOp.getOffsetHintsMutable().assign(offsets);
+        acqOp.getSizeHintsMutable().assign(sizes);
+
+        /// Rebase users to local coordinates
+        DbTransforms transforms;
+        (void)transforms.rebaseAllUsersToAcquireView(acqOp, builder);
+        return;
+      }
+    }
+  }
+
+  /// Fallback: use element-space
+  offsets.push_back(elementOffset);
+  sizes.push_back(elementSize);
   acqOp.getOffsetsMutable().assign(offsets);
   acqOp.getSizesMutable().assign(sizes);
-  /// Provide hints mirroring the chosen slice so downstream passes can keep
-  /// worker-aware chunking stable.
   acqOp.getOffsetHintsMutable().assign(offsets);
   acqOp.getSizeHintsMutable().assign(sizes);
 
   /// Rebase users to local coordinates
-  OpBuilder builder(acqOp.getContext());
   DbTransforms transforms;
   (void)transforms.rebaseAllUsersToAcquireView(acqOp, builder);
 }

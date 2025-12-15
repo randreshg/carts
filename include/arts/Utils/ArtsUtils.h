@@ -83,6 +83,7 @@ Value castToIndex(Value value, OpBuilder &builder, Location loc);
 ///===----------------------------------------------------------------------===///
 // Pattern Recognition and Analysis Utilities
 ///===----------------------------------------------------------------------===///
+std::optional<int64_t> extractChunkSizeFromHint(Value sizeHint, int depth = 0);
 Value extractOriginalSize(Value numerator, Value denominator,
                           OpBuilder &builder, Location loc);
 Value extractArrayIndexFromByteOffset(Value byteOffset, Type elemType);

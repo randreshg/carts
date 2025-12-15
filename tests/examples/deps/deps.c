@@ -4,12 +4,11 @@
 #include <time.h>
 
 #include "arts/Utils/Testing/CartsTest.h"
+#define DEBUG 0
 
 int main() {
   CARTS_TIMER_START();
-  printf("-----------------\nMain function\n-----------------\n");
-  int a = 0;
-  int b = 0;
+  int a = 0, b = 0;
   srand(time(NULL));
 
 #pragma omp parallel
@@ -38,7 +37,6 @@ int main() {
 
   printf("Parallel region DONE\n");
   printf("A: %d, B: %d\n", a, b);
-  printf("-----------------\nMain function DONE\n-----------------\n");
 
   // Verify: b should be a + 5
   if (b == a + 5) {

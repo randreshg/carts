@@ -4,6 +4,7 @@
 #include <time.h>
 
 #include "arts/Utils/Testing/CartsTest.h"
+// #define DEBUG 0
 
 int main(int argc, char *argv[]) {
   CARTS_TIMER_START();
@@ -16,7 +17,9 @@ int main(int argc, char *argv[]) {
   int *B = (int *)malloc(N * sizeof(int));
   srand(time(NULL));
 
+#if DEBUG
   printf("Initializing arrays A and B with size %d\n", N);
+#endif
 
 #pragma omp parallel
   {
@@ -26,32 +29,44 @@ int main(int argc, char *argv[]) {
 #pragma omp task depend(inout : A[i])
         {
           A[i] = i;
+#if DEBUG
           printf("Task %d - 0: Initializing A[%d] = %d\n", i, i, A[i]);
+#endif
         }
 
         if (i == 0) {
 #pragma omp task depend(in : A[i]) depend(inout : B[i])
           {
+#if DEBUG
             printf("Task %d - 1 -> Input: A[%d] = %d\n", i, i, A[i]);
+#endif
             B[i] = A[i] + 5;
+#if DEBUG
             printf("Task %d - 1: Computing B[%d] = %d\n", i, i, B[i]);
+#endif
           }
         } else {
 #pragma omp task depend(in : A[i]) depend(in : B[i - 1]) depend(inout : B[i])
           {
+#if DEBUG
             printf("Task %d - 2 -> Input: A[%d] = %d, B[%d] = %d\n", i, i, A[i],
                    i - 1, B[i - 1]);
+#endif
             B[i] = A[i] + B[i - 1] + 5;
+#if DEBUG
             printf("Task %d - 2: Computing B[%d] = %d\n", i, i, B[i]);
+#endif
           }
         }
       }
     }
   }
 
+#if DEBUG
   printf("Final arrays:\n");
   for (int i = 0; i < N; i++)
     printf("A[%d] = %d, B[%d] = %d\n", i, A[i], i, B[i]);
+#endif
 
   // Verify: A[i] = i, B[i] = sum(A[0..i]) + 5*(i+1)
   int correct = 1;

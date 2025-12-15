@@ -173,6 +173,43 @@ DbTransforms::localizeCoordinates(ArrayRef<Value> globalIndices,
         Value offset = map.sliceOffsets[offsetIdx];
         if (Value delta = getOffsetDelta(globalIdx, offset, builder, loc)) {
           localIndices.push_back(delta);
+        } else if (auto divOp = globalIdx.getDefiningOp<arith::DivUIOp>()) {
+          /// globalIdx is a chunk index from divui. Check if offset is already
+          /// in chunk-space (e.g., from DivUIOp with same divisor) to avoid
+          /// double-conversion.
+          int64_t chunkSize;
+          if (arts::getConstantIndex(divOp.getRhs(), chunkSize) &&
+              chunkSize > 1) {
+            /// Check if offset is already in chunk-space
+            bool offsetAlreadyChunkSpace = false;
+            if (auto offsetDivOp = offset.getDefiningOp<arith::DivUIOp>()) {
+              int64_t offsetDivisor;
+              if (arts::getConstantIndex(offsetDivOp.getRhs(), offsetDivisor) &&
+                  offsetDivisor == chunkSize) {
+                offsetAlreadyChunkSpace = true;
+              }
+            }
+
+            if (offsetAlreadyChunkSpace) {
+              /// Both globalIdx and offset are in chunk-space, subtract
+              /// directly
+              Value local =
+                  builder.create<arith::SubIOp>(loc, globalIdx, offset);
+              localIndices.push_back(local);
+            } else {
+              /// offset is in element-space, convert to chunk-space
+              Value chunkSizeVal =
+                  builder.create<arith::ConstantIndexOp>(loc, chunkSize);
+              Value chunkOffset =
+                  builder.create<arith::DivUIOp>(loc, offset, chunkSizeVal);
+              Value local =
+                  builder.create<arith::SubIOp>(loc, globalIdx, chunkOffset);
+              localIndices.push_back(local);
+            }
+          } else {
+            Value local = builder.create<arith::SubIOp>(loc, globalIdx, offset);
+            localIndices.push_back(local);
+          }
         } else {
           Value local = builder.create<arith::SubIOp>(loc, globalIdx, offset);
           localIndices.push_back(local);
@@ -336,22 +373,46 @@ LogicalResult DbTransforms::rewriteAllUses(DbAllocOp oldAlloc,
     };
 
     if (oldCoarse && !newCoarse) {
-      /// Coarse -> Fine: move leading inner indices to outer, keep remaining
-      /// Example: sizes=[1],elemSizes=[N,M] -> sizes=[N],elemSizes=[M]
-      ///   oldInner=[%i,%j] -> newOuter=[%i], newInner=[%j]
-      for (unsigned i = 0; i < newOuterRank; ++i) {
-        if (i < oldInner.size())
-          newOuter.push_back(oldInner[i]);
-        else
-          newOuter.push_back(zero());
-      }
-      /// Use remaining oldInner indices for newInner (those not moved to outer)
-      for (unsigned i = 0; i < newInnerRank; ++i) {
-        unsigned srcIdx = newOuterRank + i;
-        if (srcIdx < oldInner.size())
-          newInner.push_back(oldInner[srcIdx]);
-        else
-          newInner.push_back(zero());
+      /// Coarse -> Fine/Chunked transformation
+      /// Check if this is chunked allocation (elemSize > 1) vs element-wise
+      int64_t chunkSize = 1;
+      if (!newAlloc.getElementSizes().empty())
+        arts::getConstantIndex(newAlloc.getElementSizes()[0], chunkSize);
+
+      if (chunkSize > 1 && !oldInner.empty()) {
+        /// Chunked allocation: compute div/mod for proper indexing
+        /// newOuter = oldInner[0] / chunkSize (which datablock)
+        /// newInner = oldInner[0] % chunkSize (offset within datablock)
+        Value idx = oldInner[0];
+        Value chunkSizeVal =
+            builder.create<arith::ConstantIndexOp>(loc, chunkSize);
+        newOuter.push_back(
+            builder.create<arith::DivUIOp>(loc, idx, chunkSizeVal));
+        newInner.push_back(
+            builder.create<arith::RemUIOp>(loc, idx, chunkSizeVal));
+
+        /// Handle additional inner indices if present (beyond first)
+        for (unsigned i = 1;
+             i < oldInner.size() && newInner.size() < newInnerRank; ++i)
+          newInner.push_back(oldInner[i]);
+      } else {
+        /// Element-wise: move leading inner indices to outer, keep remaining
+        /// Example: sizes=[1],elemSizes=[N,M] -> sizes=[N],elemSizes=[M]
+        ///   oldInner=[%i,%j] -> newOuter=[%i], newInner=[%j]
+        for (unsigned i = 0; i < newOuterRank; ++i) {
+          if (i < oldInner.size())
+            newOuter.push_back(oldInner[i]);
+          else
+            newOuter.push_back(zero());
+        }
+        /// Use remaining oldInner indices for newInner (not moved to outer)
+        for (unsigned i = 0; i < newInnerRank; ++i) {
+          unsigned srcIdx = newOuterRank + i;
+          if (srcIdx < oldInner.size())
+            newInner.push_back(oldInner[srcIdx]);
+          else
+            newInner.push_back(zero());
+        }
       }
     } else if (!oldCoarse && newCoarse) {
       /// Fine -> Coarse: move outer indices to inner
@@ -435,18 +496,55 @@ LogicalResult DbTransforms::rewriteAllUses(DbAllocOp oldAlloc,
         blockArg.setType(newPtrType);
     }
 
-    /// Update acquire offsets and sizes to full allocation extent.
-    if (!allocSizes.empty()) {
+    /// Transform acquire offsets/sizes for chunked allocation.
+    /// For chunked allocation (elemSize > 1), convert element-space offsets
+    /// to chunk-space by dividing by chunk size.
+    /// Example: offset=1048576, chunkSize=1048576 -> chunkOffset=1
+    if (!allocSizes.empty() && !newAlloc.getElementSizes().empty()) {
+      int64_t chunkSize = 1;
+      arts::getConstantIndex(newAlloc.getElementSizes()[0], chunkSize);
+
       OpBuilder::InsertionGuard guard(builder);
       builder.setInsertionPoint(acquire);
-      Value zero = builder.create<arith::ConstantIndexOp>(acquire.getLoc(), 0);
-      SmallVector<Value> fullOffsets(allocSizes.size(), zero);
-      SmallVector<Value> fullSizes(allocSizes.begin(), allocSizes.end());
+      Location loc = acquire.getLoc();
 
-      acquire.getOffsetsMutable().assign(fullOffsets);
-      acquire.getSizesMutable().assign(fullSizes);
-      acquire.getOffsetHintsMutable().assign(fullOffsets);
-      acquire.getSizeHintsMutable().assign(fullSizes);
+      if (chunkSize > 1) {
+        /// Chunked allocation: convert element offsets to chunk offsets
+        Value chunkSizeVal =
+            builder.create<arith::ConstantIndexOp>(loc, chunkSize);
+        SmallVector<Value> chunkOffsets, chunkSizes;
+
+        for (Value offset : acquire.getOffsets()) {
+          Value chunkOffset =
+              builder.create<arith::DivUIOp>(loc, offset, chunkSizeVal);
+          chunkOffsets.push_back(chunkOffset);
+        }
+        for (Value size : acquire.getSizes()) {
+          /// For sizes, use ceiling division to handle partial chunks
+          /// ceil(size/chunkSize) = (size + chunkSize - 1) / chunkSize
+          Value adjusted = builder.create<arith::AddIOp>(
+              loc, size,
+              builder.create<arith::ConstantIndexOp>(loc, chunkSize - 1));
+          Value chunkCount =
+              builder.create<arith::DivUIOp>(loc, adjusted, chunkSizeVal);
+          chunkSizes.push_back(chunkCount);
+        }
+
+        acquire.getOffsetsMutable().assign(chunkOffsets);
+        acquire.getSizesMutable().assign(chunkSizes);
+        acquire.getOffsetHintsMutable().assign(chunkOffsets);
+        acquire.getSizeHintsMutable().assign(chunkSizes);
+      } else {
+        /// Element-wise: use full allocation extent
+        Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+        SmallVector<Value> fullOffsets(allocSizes.size(), zero);
+        SmallVector<Value> fullSizes(allocSizes.begin(), allocSizes.end());
+
+        acquire.getOffsetsMutable().assign(fullOffsets);
+        acquire.getSizesMutable().assign(fullSizes);
+        acquire.getOffsetHintsMutable().assign(fullOffsets);
+        acquire.getSizeHintsMutable().assign(fullSizes);
+      }
     }
   }
 

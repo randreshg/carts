@@ -40,18 +40,9 @@ constexpr StringLiteral HasUniformStride = "has_uniform_stride";
 constexpr StringLiteral HasGatherScatter = "has_gather_scatter";
 constexpr StringLiteral DataMovementPattern = "data_movement_pattern";
 constexpr StringLiteral SuggestedPartitioning = "suggested_partitioning";
-constexpr StringLiteral SuggestedChunkSize = "suggested_chunk_size";
-constexpr StringLiteral MemoryFootprintPerIter = "memory_footprint_per_iter";
 constexpr StringLiteral HasInterIterationDeps = "has_inter_iteration_deps";
-constexpr StringLiteral DependenceDistance = "dependence_distance";
-constexpr StringLiteral MemrefCount = "memref_count";
-constexpr StringLiteral ReadOnlyMemrefCount = "read_only_memref_count";
-constexpr StringLiteral WriteOnlyMemrefCount = "write_only_memref_count";
-constexpr StringLiteral ReadWriteMemrefCount = "read_write_memref_count";
 constexpr StringLiteral MemrefsWithLoopCarriedDeps =
     "memrefs_with_loop_carried_deps";
-constexpr StringLiteral PoorTemporalLocalityMemrefs =
-    "poor_temporal_locality_memrefs";
 constexpr StringLiteral ParallelClassification = "parallel_classification";
 constexpr StringLiteral LocationKey = "location_key";
 } // namespace LoopMetadata
@@ -117,19 +108,12 @@ public:
 
   /// Partitioning hints
   std::optional<Partitioning> suggestedPartitioning;
-  std::optional<int64_t> suggestedChunkSize, memoryFootprintPerIter;
 
   /// Dependency information
   std::optional<bool> hasInterIterationDeps;
-  std::optional<int64_t> dependenceDistance;
 
   /// Aggregated memref usage information
-  std::optional<int64_t> memrefCount;
-  std::optional<int64_t> readOnlyMemrefCount;
-  std::optional<int64_t> writeOnlyMemrefCount;
-  std::optional<int64_t> readWriteMemrefCount;
   std::optional<int64_t> memrefsWithLoopCarriedDeps;
-  std::optional<int64_t> poorTemporalLocalityMemrefCount;
   std::optional<ParallelClassification> parallelClassification;
 
   /// Source Location
@@ -168,7 +152,7 @@ public:
   ///   - hasInterIterationDeps = false
   ///   - memrefsWithLoopCarriedDeps = 0
   ///   - parallelClassification = Likely
-  ///   - Clears reductionKinds and dependenceDistance
+  ///   - Clears reductionKinds
   static LoopMetadataAttr
   createParallelizedMetadata(MLIRContext *ctx, const LoopMetadataAttr &base);
 

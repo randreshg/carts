@@ -15,7 +15,6 @@
 #include "arts/Analysis/Metadata/DependenceAnalyzer.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
-#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Operation.h"
 #include <optional>
 
@@ -44,7 +43,6 @@ private:
   void analyzeMemoryAccesses(Operation *loopOp, LoopMetadata *metadata);
   LoopMetadata::DataMovement classifyDataMovement(LoopMetadata *metadata);
   void suggestPartitioning(LoopMetadata *metadata);
-  void computeMemoryFootprintPerIter(Operation *loopOp, LoopMetadata *metadata);
   void finalizeParallelFlag(Operation *loopOp, LoopMetadata *metadata);
   void detectReductions(Operation *loopOp, LoopMetadata *metadata);
   std::optional<LoopMetadata::ReductionKind>
