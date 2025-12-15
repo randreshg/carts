@@ -5,7 +5,7 @@
 
 #include "arts/Utils/Testing/CartsTest.h"
 
-#define DEBUG 0
+// #define DEBUG 0
 // 1D stencil computation: output[i] = input[i-1] + input[i] + input[i+1]
 int main(int argc, char *argv[]) {
   CARTS_TIMER_START();
@@ -29,9 +29,7 @@ int main(int argc, char *argv[]) {
     output[i] = 0;
   }
 
-#if DEBUG
-  printf("1D Stencil: N=%d\n", N);
-#endif
+  CARTS_DEBUG_PRINT("1D Stencil: N=%d\n", N);
 
 #pragma omp parallel
   {
@@ -46,15 +44,11 @@ int main(int argc, char *argv[]) {
 #pragma omp task depend(in : input[i - 1], input[i], input[i + 1])             \
     depend(out : output[i])
         {
-#if DEBUG
-          printf("Task %d: Computing output[%d] from input[%d:%d]\n", i, i,
-                 i - 1, i + 2);
-#endif
+          CARTS_DEBUG_PRINT("Task %d: Computing output[%d] from input[%d:%d]\n", i, i,
+                   i - 1, i + 2);
           output[i] = input[i - 1] + input[i] + input[i + 1];
-#if DEBUG
-          printf("Task %d: output[%d] = %d + %d + %d = %d\n", i, i,
-                 input[i - 1], input[i], input[i + 1], output[i]);
-#endif
+          CARTS_DEBUG_PRINT("Task %d: output[%d] = %d + %d + %d = %d\n", i, i,
+                   input[i - 1], input[i], input[i + 1], output[i]);
         }
       }
     }

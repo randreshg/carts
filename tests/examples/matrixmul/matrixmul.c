@@ -7,8 +7,6 @@
 
 #define TOLERANCE 1e-6
 
-#define DEBUG 0
-
 int main(int argc, char *argv[]) {
   CARTS_TIMER_START();
   /// Check for the correct number of arguments
@@ -47,24 +45,22 @@ int main(int argc, char *argv[]) {
     }
   }
 
-#if DEBUG
-  /// Print A and B
-  printf("Matrix A:\n");
+  /// Print A and B (debug only)
+  CARTS_DEBUG_PRINT("Matrix A:\n");
   for (int i = 0; i < N; i++) {
-    printf("  ");
+    CARTS_DEBUG_PRINT("  ");
     for (int j = 0; j < N; j++)
-      printf("%6.2f ", A[i][j]);
-    printf("\n");
+      CARTS_DEBUG_PRINT("%6.2f ", A[i][j]);
+    CARTS_DEBUG_PRINT("\n");
   }
 
-  printf("\nMatrix B:\n");
+  CARTS_DEBUG_PRINT("\nMatrix B:\n");
   for (int i = 0; i < N; i++) {
-    printf("  ");
+    CARTS_DEBUG_PRINT("  ");
     for (int j = 0; j < N; j++)
-      printf("%6.2f ", B[i][j]);
-    printf("\n");
+      CARTS_DEBUG_PRINT("%6.2f ", B[i][j]);
+    CARTS_DEBUG_PRINT("\n");
   }
-#endif
 
   /// Parallel computation
   double t_start = omp_get_wtime();
@@ -98,13 +94,13 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  /// Print C parallel
-  printf("\nMatrix C (Parallel Result):\n");
+  /// Print C parallel (debug only)
+  CARTS_DEBUG_PRINT("\nMatrix C (Parallel Result):\n");
   for (int i = 0; i < N; i++) {
-    printf("  ");
+    CARTS_DEBUG_PRINT("  ");
     for (int j = 0; j < N; j++)
-      printf("%8.2f ", C_parallel[i][j]);
-    printf("\n");
+      CARTS_DEBUG_PRINT("%8.2f ", C_parallel[i][j]);
+    CARTS_DEBUG_PRINT("\n");
   }
 
   /// Verification
