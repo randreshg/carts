@@ -4,7 +4,7 @@
 
 #include "arts/Utils/Testing/CartsTest.h"
 
-#define DEBUG 0
+// #define DEBUG 0
 
 int main(int argc, char **argv) {
   CARTS_TIMER_START();
@@ -24,12 +24,10 @@ int main(int argc, char **argv) {
     b[i] = (i * 2) + randomNumber;
   }
 
-#if DEBUG
-  /// Print initial values
-  printf("Initial values:\n");
+  /// Print initial values (debug only)
+  CARTS_DEBUG_PRINT("Initial values:\n");
   for (int i = 0; i < N; i++)
-    printf("a[%d] = %d, b[%d] = %d\n", i, a[i], i, b[i]);
-#endif
+    CARTS_DEBUG_PRINT("a[%d] = %d, b[%d] = %d\n", i, a[i], i, b[i]);
 
   /// Parallel region with worksharing loop - vector addition
   printf("Parallel region:\n");
