@@ -353,29 +353,42 @@ def run_example_binary(
         print_debug(f"Running: {' '.join(cmd)}")
 
     try:
-        result = subprocess.run(
+        # Use Popen to capture partial output on timeout
+        process = subprocess.Popen(
             cmd,
             cwd=example.path,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
             env=env,
         )
-        duration = time.time() - start_time
-        output = result.stdout + result.stderr
 
-        # Print output to terminal if trace is enabled
-        if trace and output:
-            console.print(f"\n[dim]{'─' * 60}[/dim]")
-            console.print(f"[bold cyan]Output: {executable.name}[/bold cyan]")
-            console.print(f"[dim]{'─' * 60}[/dim]")
-            console.print(output.strip())
-            console.print(f"[dim]{'─' * 60}[/dim]\n")
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+            duration = time.time() - start_time
+            output = stdout + stderr
 
-        return result.returncode == 0, duration, result.returncode, output
+            # Print output to terminal if trace is enabled
+            if trace and output:
+                console.print(f"\n[dim]{'─' * 60}[/dim]")
+                console.print(f"[bold cyan]Output: {executable.name}[/bold cyan]")
+                console.print(f"[dim]{'─' * 60}[/dim]")
+                console.print(output.strip())
+                console.print(f"[dim]{'─' * 60}[/dim]\n")
 
-    except subprocess.TimeoutExpired:
-        return False, timeout, -1, "Execution timed out"
+            return process.returncode == 0, duration, process.returncode, output
+
+        except subprocess.TimeoutExpired:
+            process.kill()
+            # Capture any partial output that was produced before timeout
+            stdout, stderr = process.communicate()
+            duration = time.time() - start_time
+            partial_output = stdout + stderr
+            timeout_msg = "Execution timed out"
+            if partial_output.strip():
+                timeout_msg += f"\n\nPartial output:\n{partial_output}"
+            return False, duration, -1, timeout_msg
+
     except Exception as e:
         return False, time.time() - start_time, -1, str(e)
 

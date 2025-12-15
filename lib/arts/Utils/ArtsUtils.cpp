@@ -11,6 +11,7 @@
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/CSE.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "polygeist/Ops.h"
 #include <algorithm>
 #include <cassert>
@@ -627,6 +628,47 @@ Value castToIndex(Value value, OpBuilder &builder, Location loc) {
 ///===----------------------------------------------------------------------===///
 // Pattern Recognition and Analysis Utilities
 ///===----------------------------------------------------------------------===///
+
+/// Extract chunk size from ForLowering's size hint.
+/// Patterns handled:
+///   Case 1: Direct constant %c1048576 -> returns 1048576
+///   Case 2: minui(%remaining, %c1048576) -> returns larger constant
+///   Case 3: Nested minui -> recursively finds largest constant
+std::optional<int64_t> extractChunkSizeFromHint(Value sizeHint, int depth) {
+  if (!sizeHint || depth > 2)
+    return std::nullopt;
+
+  /// Case 1: Direct constant
+  int64_t val;
+  if (arts::getConstantIndex(sizeHint, val))
+    return val;
+
+  /// Case 2/3: minui pattern - return the larger constant (nominal size)
+  if (auto minOp = sizeHint.getDefiningOp<arith::MinUIOp>()) {
+    int64_t lhsVal = 0, rhsVal = 0;
+    bool hasLhs = arts::getConstantIndex(minOp.getLhs(), lhsVal);
+    bool hasRhs = arts::getConstantIndex(minOp.getRhs(), rhsVal);
+
+    if (hasLhs && hasRhs)
+      return std::max(lhsVal, rhsVal);
+    if (hasLhs)
+      return lhsVal;
+    if (hasRhs)
+      return rhsVal;
+
+    /// Recurse for nested minui
+    auto lhsExtracted = extractChunkSizeFromHint(minOp.getLhs(), depth + 1);
+    auto rhsExtracted = extractChunkSizeFromHint(minOp.getRhs(), depth + 1);
+    if (lhsExtracted && rhsExtracted)
+      return std::max(*lhsExtracted, *rhsExtracted);
+    if (lhsExtracted)
+      return lhsExtracted;
+    if (rhsExtracted)
+      return rhsExtracted;
+  }
+
+  return std::nullopt;
+}
 
 /// Extract original size from (N * scale) / scale pattern.
 /// Common in malloc size calculations: malloc(N * sizeof(T)) / sizeof(T) -> N.
