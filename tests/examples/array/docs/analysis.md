@@ -157,7 +157,7 @@ Walk through these steps and fix any problem that you find in the way
 
 5. **Finally lets carts execute and check**
 ```bash
-   carts execute array.c
+   carts execute array.c -O3
    ./array_arts 8
 ```
 

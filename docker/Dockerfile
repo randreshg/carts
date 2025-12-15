@@ -42,6 +42,7 @@ RUN wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /etc
     llvm-18-dev \
     clang-18 \
     clang++-18 \
+    clangd-18 \
     libclang-rt-18-dev \
     libasan6 \
     libtsan2 \
@@ -51,6 +52,7 @@ RUN wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | gpg --dearmor -o /etc
 # Create symlinks for easier access
 RUN ln -s /usr/bin/clang-18 /usr/bin/clang && \
     ln -s /usr/bin/clang++-18 /usr/bin/clang++ && \
+    ln -s /usr/bin/clangd-18 /usr/bin/clangd && \
     ln -s /usr/bin/llvm-config-18 /usr/bin/llvm-config
 
 # Install Poetry (Python dependency manager)

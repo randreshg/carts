@@ -579,6 +579,11 @@ void CreateDbsPass::createDbAllocOps() {
                                     accessPatternInfo.pinnedDimCount > 0 &&
                                     accessPatternInfo.allAccessesHaveIndices;
 
+    /// If we already have precise db_control dependencies (indexed accesses),
+    /// prioritize keeping that partitioning even if the H2 cost model would
+    /// normally force coarse mode.
+    const bool hasIndexedControlDeps = useFineGrainedAllocation;
+
     auto &heuristics = AM->getHeuristicsConfig();
 
     /// H1: Read-only on single-node -> prefer coarse
@@ -595,7 +600,8 @@ void CreateDbsPass::createDbAllocOps() {
     }
 
     /// H2: Apply cost model on single-node
-    if (useFineGrainedAllocation && heuristics.isSingleNode()) {
+    if (useFineGrainedAllocation && heuristics.isSingleNode() &&
+        !hasIndexedControlDeps) {
       int64_t outerDBs =
           computeOuterDBs(memRefType, accessPatternInfo.pinnedDimCount);
       int64_t depsPerEDT = computeMaxDepsPerEDT(info);
