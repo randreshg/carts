@@ -1063,16 +1063,14 @@ void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
   ARTS_DEBUG(" - Rewriting " << users.size() << " operations in parent EDT");
 
   OpBuilder builder(module.getContext());
-  DbTransforms transforms;
 
   /// Coarse-grained: db_ref[0] + load/store[indices]
   /// Fine-grained: db_ref[indices] + load/store[0]
-  bool isCoarse = DbTransforms::isCoarseGrained(dbAlloc);
+  bool isCoarse = db::isCoarseGrained(dbAlloc);
   unsigned outerCount = isCoarse ? 0 : dbAlloc.getSizes().size();
   for (Operation *user : users)
-    transforms.rewriteAccessWithDbPattern(user, dbAlloc.getPtr(),
-                                          elementMemRefType, outerCount,
-                                          builder, opsToRemove);
+    db::rewriteAccessWithDbPattern(user, dbAlloc.getPtr(), elementMemRefType,
+                                   outerCount, builder, opsToRemove);
 }
 
 /// Rewrite all uses of an allocation to point to the new db_alloc pointer. This
@@ -1094,16 +1092,14 @@ void CreateDbsPass::rewriteUsesEverywhere(Operation *alloc, DbAllocOp dbAlloc) {
   }
 
   OpBuilder builder(module.getContext());
-  DbTransforms transforms;
 
   /// Coarse-grained: db_ref[0] + load/store[indices]
   /// Fine-grained: db_ref[indices] + load/store[0]
-  bool isCoarse = DbTransforms::isCoarseGrained(dbAlloc);
+  bool isCoarse = db::isCoarseGrained(dbAlloc);
   unsigned outerCount = isCoarse ? 0 : dbAlloc.getSizes().size();
   for (Operation *user : users)
-    transforms.rewriteAccessWithDbPattern(user, dbAlloc.getPtr(),
-                                          elementMemRefType, outerCount,
-                                          builder, opsToRemove);
+    db::rewriteAccessWithDbPattern(user, dbAlloc.getPtr(), elementMemRefType,
+                                   outerCount, builder, opsToRemove);
 }
 
 ///===----------------------------------------------------------------------===///
@@ -1162,7 +1158,6 @@ void CreateDbsPass::rewriteUsesInEdt(EdtOp edt,
 
   /// Rewrite each tracked operation with DbRefOp pattern
   OpBuilder builder(edt.getContext());
-  DbTransforms transforms;
 
   for (Operation *op : operations) {
     /// Apply scope mapping to operands before rewriting
@@ -1180,14 +1175,14 @@ void CreateDbsPass::rewriteUsesInEdt(EdtOp edt,
         outerCount = load.getIndices().size();
       else if (auto store = dyn_cast<memref::StoreOp>(op))
         outerCount = store.getIndices().size();
-      transforms.rewriteAccessWithDbPattern(op, dbAcquireArg, elementMemRefType,
-                                            outerCount, builder, opsToRemove);
+      db::rewriteAccessWithDbPattern(op, dbAcquireArg, elementMemRefType,
+                                     outerCount, builder, opsToRemove);
     } else if (acquireIndices.empty()) {
-      transforms.rewriteAccessWithDbPattern(op, dbAcquireArg, elementMemRefType,
-                                            0, builder, opsToRemove);
+      db::rewriteAccessWithDbPattern(op, dbAcquireArg, elementMemRefType, 0,
+                                     builder, opsToRemove);
     } else if (auto acquireOp = dyn_cast<DbAcquireOp>(dbOp)) {
-      transforms.rebaseToAcquireView(op, acquireOp, dbAcquireArg,
-                                     elementMemRefType, builder, opsToRemove);
+      db::rebaseToAcquireView(op, acquireOp, dbAcquireArg, elementMemRefType,
+                              builder, opsToRemove);
     }
   }
 }

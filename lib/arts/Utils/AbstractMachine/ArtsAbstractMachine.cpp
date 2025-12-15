@@ -23,6 +23,61 @@ ARTS_DEBUG_SETUP(abstract_machine);
 namespace mlir {
 namespace arts {
 
+//===----------------------------------------------------------------------===//
+// MemoryConfig Implementation
+//===----------------------------------------------------------------------===//
+
+void MemoryConfig::applyTierDefaults() {
+  switch (tier) {
+  case MemoryTier::SMALL:
+    l2OrderKB = 64;
+    l3OrderMB = 1;
+    networkOrderMbps = 100;
+    latencyOrderUs = 1000;
+    break;
+  case MemoryTier::MEDIUM:
+    l2OrderKB = 256;
+    l3OrderMB = 8;
+    networkOrderMbps = 1000;
+    latencyOrderUs = 100;
+    break;
+  case MemoryTier::LARGE:
+    l2OrderKB = 1024;
+    l3OrderMB = 32;
+    networkOrderMbps = 10000;
+    latencyOrderUs = 10;
+    break;
+  case MemoryTier::HPC:
+    l2OrderKB = 2048;
+    l3OrderMB = 64;
+    networkOrderMbps = 100000;
+    latencyOrderUs = 1;
+    break;
+  }
+}
+
+int64_t MemoryConfig::getMinChunkBytes() const {
+  // Minimum is always cache-line aligned (64 bytes)
+  return 64;
+}
+
+int64_t MemoryConfig::getOptimalChunkBytes(int threads) const {
+  // Optimal chunk fits in L2 per thread
+  if (threads <= 0)
+    threads = 1;
+  return (l2OrderKB * 1024) / threads;
+}
+
+int64_t MemoryConfig::getNetworkChunkBytes() const {
+  // Amortize network latency: latency × bandwidth
+  // latencyUs * (Mbps / 8) = bytes to transfer during one RTT
+  return (latencyOrderUs * networkOrderMbps) / 8;
+}
+
+//===----------------------------------------------------------------------===//
+// ArtsAbstractMachine Implementation
+//===----------------------------------------------------------------------===//
+
 ArtsAbstractMachine::ArtsAbstractMachine(const std::string &configFile) {
   ARTS_DEBUG_HEADER(AbstractMachine);
 
@@ -72,6 +127,7 @@ bool ArtsAbstractMachine::parseFromFile(const std::string &path) {
   configFileExists = true;
   std::string line;
   bool inArtsSection = false;
+  bool inMemorySection = false;
   int lineNumber = 0;
 
   while (std::getline(in, line)) {
@@ -84,12 +140,14 @@ bool ArtsAbstractMachine::parseFromFile(const std::string &path) {
     }
     if (line.front() == '[' && line.back() == ']') {
       inArtsSection = (line == "[ARTS]");
-      ARTS_DEBUG("Line " << lineNumber << " (section): " << line
-                         << " - inArtsSection="
-                         << (inArtsSection ? "true" : "false"));
+      inMemorySection = (line == "[MEMORY]");
+      ARTS_DEBUG(
+          "Line " << lineNumber << " (section): " << line << " - inArtsSection="
+                  << (inArtsSection ? "true" : "false") << " - inMemorySection="
+                  << (inMemorySection ? "true" : "false"));
       continue;
     }
-    if (!inArtsSection) {
+    if (!inArtsSection && !inMemorySection) {
       ARTS_DEBUG("Line " << lineNumber << " (skipped): " << line);
       continue;
     }
@@ -103,107 +161,152 @@ bool ArtsAbstractMachine::parseFromFile(const std::string &path) {
     std::string val = trim(line.substr(pos + 1));
     ARTS_DEBUG("Line " << lineNumber << " (config): " << key << "=" << val);
 
-    /// Core Configuration
-    if (key == "threads") {
-      threads = parseInt(val);
-      ARTS_DEBUG("Set threads=" << threads);
-    } else if (key == "tMT") {
-      tMT = parseInt(val, 0);
-      ARTS_DEBUG("Set tMT=" << tMT);
-    } else if (key == "nodeCount") {
-      nodeCount = parseInt(val);
-      ARTS_DEBUG("Set nodeCount=" << nodeCount);
-    } else if (key == "nodes") {
-      nodes = splitCSV(val);
-      ARTS_DEBUG("Set nodes=" << val << " (parsed " << nodes.size()
-                              << " nodes)");
-    } else if (key == "masterNode") {
-      masterNode = val;
-      ARTS_DEBUG("Set masterNode=" << masterNode);
-    } else if (key == "launcher") {
-      launcher = val;
-      ARTS_DEBUG("Set launcher=" << launcher);
+    /// [ARTS] Section Parsing
+    if (inArtsSection) {
+      /// Core Configuration
+      if (key == "threads") {
+        threads = parseInt(val);
+        ARTS_DEBUG("Set threads=" << threads);
+      } else if (key == "tMT") {
+        tMT = parseInt(val, 0);
+        ARTS_DEBUG("Set tMT=" << tMT);
+      } else if (key == "nodeCount") {
+        nodeCount = parseInt(val);
+        ARTS_DEBUG("Set nodeCount=" << nodeCount);
+      } else if (key == "nodes") {
+        nodes = splitCSV(val);
+        ARTS_DEBUG("Set nodes=" << val << " (parsed " << nodes.size()
+                                << " nodes)");
+      } else if (key == "masterNode") {
+        masterNode = val;
+        ARTS_DEBUG("Set masterNode=" << masterNode);
+      } else if (key == "launcher") {
+        launcher = val;
+        ARTS_DEBUG("Set launcher=" << launcher);
+      }
+
+      /// GPU Configuration
+      else if (key == "scheduler")
+        scheduler = parseInt(val, 0);
+      else if (key == "gpu")
+        gpu = parseInt(val, 0);
+      else if (key == "gpuRouteTableSize")
+        gpuRouteTableSize = parseInt(val, 12);
+      else if (key == "freeDbAfterGpuRun")
+        freeDbAfterGpuRun = parseBool(val, false);
+      else if (key == "deleteZerosGpuGc")
+        deleteZerosGpuGc = parseBool(val, true);
+      else if (key == "runGpuGcIdle")
+        runGpuGcIdle = parseBool(val, true);
+      else if (key == "runGpuGcPreEdt")
+        runGpuGcPreEdt = parseBool(val, false);
+      else if (key == "gpuLocality")
+        gpuLocality = parseInt(val, 0);
+      else if (key == "gpuFit")
+        gpuFit = parseInt(val, 0);
+      else if (key == "gpuLCSync")
+        gpuLCSync = parseInt(val, 0);
+      else if (key == "gpuBufferOn")
+        gpuBufferOn = parseBool(val, true);
+      else if (key == "gpuMaxMemory")
+        gpuMaxMemory = parseInt(val, -1);
+      else if (key == "gpuMaxEdts")
+        gpuMaxEdts = parseInt(val, -1);
+      else if (key == "gpuP2P")
+        gpuP2P = parseBool(val, false);
+
+      /// Network Configuration
+      else if (key == "outgoing")
+        outgoing = parseInt(val, 1);
+      else if (key == "incoming")
+        incoming = parseInt(val, 1);
+      else if (key == "ports")
+        ports = parseInt(val, 1);
+      else if (key == "protocol")
+        protocol = val;
+      else if (key == "port")
+        port = parseInt(val, 34739);
+      else if (key == "netInterface")
+        netInterface = val;
+
+      /// Hardware Configuration
+      else if (key == "pinStride")
+        pinStride = parseInt(val, 1);
+      else if (key == "printTopology")
+        printTopology = parseBool(val, false);
+      else if (key == "workerInitDequeSize")
+        workerInitDequeSize = parseInt(val, 2048);
+      else if (key == "routeTableSize")
+        routeTableSize = parseInt(val, 16);
+      else if (key == "coreDump")
+        coreDump = parseBool(val, true);
+
+      /// Performance Monitoring
+      else if (key == "counterFolder")
+        counterFolder = val;
+      else if (key == "counterStartPoint")
+        counterStartPoint = parseInt(val, 1);
+      else if (key == "killMode")
+        killMode = parseBool(val, false);
+
+      /// Introspection
+      else if (key == "introspectiveConf")
+        introspectiveConf = val;
+      else if (key == "introspectiveFolder")
+        introspectiveFolder = val;
+      else if (key == "introspectiveTraceLevel")
+        introspectiveTraceLevel = parseInt(val, 0);
+      else if (key == "introspectiveStartPoint")
+        introspectiveStartPoint = parseInt(val, 1);
     }
 
-    /// GPU Configuration
-    else if (key == "scheduler")
-      scheduler = parseInt(val, 0);
-    else if (key == "gpu")
-      gpu = parseInt(val, 0);
-    else if (key == "gpuRouteTableSize")
-      gpuRouteTableSize = parseInt(val, 12);
-    else if (key == "freeDbAfterGpuRun")
-      freeDbAfterGpuRun = parseBool(val, false);
-    else if (key == "deleteZerosGpuGc")
-      deleteZerosGpuGc = parseBool(val, true);
-    else if (key == "runGpuGcIdle")
-      runGpuGcIdle = parseBool(val, true);
-    else if (key == "runGpuGcPreEdt")
-      runGpuGcPreEdt = parseBool(val, false);
-    else if (key == "gpuLocality")
-      gpuLocality = parseInt(val, 0);
-    else if (key == "gpuFit")
-      gpuFit = parseInt(val, 0);
-    else if (key == "gpuLCSync")
-      gpuLCSync = parseInt(val, 0);
-    else if (key == "gpuBufferOn")
-      gpuBufferOn = parseBool(val, true);
-    else if (key == "gpuMaxMemory")
-      gpuMaxMemory = parseInt(val, -1);
-    else if (key == "gpuMaxEdts")
-      gpuMaxEdts = parseInt(val, -1);
-    else if (key == "gpuP2P")
-      gpuP2P = parseBool(val, false);
-
-    /// Network Configuration
-    else if (key == "outgoing")
-      outgoing = parseInt(val, 1);
-    else if (key == "incoming")
-      incoming = parseInt(val, 1);
-    else if (key == "ports")
-      ports = parseInt(val, 1);
-    else if (key == "protocol")
-      protocol = val;
-    else if (key == "port")
-      port = parseInt(val, 34739);
-    else if (key == "netInterface")
-      netInterface = val;
-
-    /// Hardware Configuration
-    else if (key == "pinStride")
-      pinStride = parseInt(val, 1);
-    else if (key == "printTopology")
-      printTopology = parseBool(val, false);
-    else if (key == "workerInitDequeSize")
-      workerInitDequeSize = parseInt(val, 2048);
-    else if (key == "routeTableSize")
-      routeTableSize = parseInt(val, 16);
-    else if (key == "coreDump")
-      coreDump = parseBool(val, true);
-
-    /// Performance Monitoring
-    else if (key == "counterFolder")
-      counterFolder = val;
-    else if (key == "counterStartPoint")
-      counterStartPoint = parseInt(val, 1);
-    else if (key == "killMode")
-      killMode = parseBool(val, false);
-
-    /// Introspection
-    else if (key == "introspectiveConf")
-      introspectiveConf = val;
-    else if (key == "introspectiveFolder")
-      introspectiveFolder = val;
-    else if (key == "introspectiveTraceLevel")
-      introspectiveTraceLevel = parseInt(val, 0);
-    else if (key == "introspectiveStartPoint")
-      introspectiveStartPoint = parseInt(val, 1);
+    /// [MEMORY] Section Parsing
+    if (inMemorySection) {
+      if (key == "memoryTier") {
+        std::string lower = val;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (lower == "small")
+          memoryConfig.tier = MemoryTier::SMALL;
+        else if (lower == "medium")
+          memoryConfig.tier = MemoryTier::MEDIUM;
+        else if (lower == "large")
+          memoryConfig.tier = MemoryTier::LARGE;
+        else if (lower == "hpc")
+          memoryConfig.tier = MemoryTier::HPC;
+        else
+          ARTS_WARN("Unknown memoryTier: " << val << ", using MEDIUM");
+        // Apply tier defaults immediately
+        memoryConfig.applyTierDefaults();
+        ARTS_DEBUG("Set memoryTier=" << val);
+      }
+      // Optional overrides (applied after tier defaults)
+      else if (key == "l2OrderKB") {
+        memoryConfig.l2OrderKB = parseInt(val, memoryConfig.l2OrderKB);
+        ARTS_DEBUG("Override l2OrderKB=" << memoryConfig.l2OrderKB);
+      } else if (key == "l3OrderMB") {
+        memoryConfig.l3OrderMB = parseInt(val, memoryConfig.l3OrderMB);
+        ARTS_DEBUG("Override l3OrderMB=" << memoryConfig.l3OrderMB);
+      } else if (key == "networkOrderMbps") {
+        memoryConfig.networkOrderMbps =
+            parseInt(val, memoryConfig.networkOrderMbps);
+        ARTS_DEBUG(
+            "Override networkOrderMbps=" << memoryConfig.networkOrderMbps);
+      } else if (key == "latencyOrderUs") {
+        memoryConfig.latencyOrderUs =
+            parseInt(val, memoryConfig.latencyOrderUs);
+        ARTS_DEBUG("Override latencyOrderUs=" << memoryConfig.latencyOrderUs);
+      }
+    }
   }
 
   ARTS_DEBUG("Finished parsing configuration file");
   ARTS_INFO("Final configuration - threads=" << threads
                                              << ", nodeCount=" << nodeCount
                                              << ", launcher=" << launcher);
+  ARTS_DEBUG("Memory config - tier=" << static_cast<int>(memoryConfig.tier)
+                                     << ", l2OrderKB=" << memoryConfig.l2OrderKB
+                                     << ", networkOrderMbps="
+                                     << memoryConfig.networkOrderMbps);
 
   return true;
 }

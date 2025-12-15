@@ -18,6 +18,152 @@ ARTS_DEBUG_SETUP(db_transforms);
 using namespace mlir;
 using namespace mlir::arts;
 
+namespace {
+
+///===----------------------------------------------------------------------===///
+/// ViewCoordinateMap - Global to Local Coordinate Transformation
+///
+/// DbAcquireOp specifies a view into a datablock with:
+///   - indices: Pin specific elements in leading dimensions (reduces
+///   dimensionality)
+///   - offsets: Starting position for the acquired slice
+///   - sizes: Extent of the acquired slice
+///
+/// Example: 2D array with indices=[%row], offsets=[%col_start], sizes=[%n]
+///   Global: arr[%row, %col]
+///   Local:  view[0, %col - %col_start]
+///         dimension 0 is pinned (indexed), dimension 1 is sliced
+///
+/// Transformation rules:
+///   - Indexed dimensions [0, numIndexedDims): local = 0
+///   - Sliced dimensions [numIndexedDims, end):
+///     * If globalIdx == offset: local = 0
+///     * If globalIdx = offset + delta (provable): local = delta
+///     * Otherwise: local = globalIdx - offset (explicit subtraction)
+///
+/// We always compute local = global - offset for sliced dimensions.
+///===----------------------------------------------------------------------===///
+struct ViewCoordinateMap {
+  /// Number of leading dimensions pinned by DbAcquireOp::indices.
+  /// For these dimensions, the local coordinate is always 0.
+  unsigned numIndexedDims = 0;
+
+  /// Offsets for sliced dimensions (from DbAcquireOp::offsets).
+  /// Applied to dimensions starting at index numIndexedDims.
+  /// local[d] = global[d] - sliceOffsets[d - numIndexedDims]
+  SmallVector<Value> sliceOffsets;
+
+  /// Create coordinate map from a DbAcquireOp.
+  static ViewCoordinateMap fromAcquire(DbAcquireOp acquire);
+};
+
+///===----------------------------------------------------------------------===///
+/// IndexRedistributor - Consolidates index mapping logic for allocation
+/// promotion
+///
+/// Handles redistribution of indices between outer (db_ref) and inner
+/// (load/store) dimensions based on allocation mode:
+///
+/// CHUNKED mode: div/mod on first index
+///   newOuter = [index / chunkSize]
+///   newInner = [index % chunkSize, remaining...]
+///
+/// ELEMENT-WISE mode: redistribute indices
+///   newOuter = [loadStoreIndices[0..outerRank]]
+///   newInner = [loadStoreIndices[outerRank..]]
+///===----------------------------------------------------------------------===///
+struct IndexRedistributor {
+  unsigned outerRank;
+  unsigned innerRank;
+  bool isChunked;
+  Value chunkSize; // Only valid if isChunked
+
+  /// Redistribute indices between outer and inner (for db_refs outside EDTs).
+  std::pair<SmallVector<Value>, SmallVector<Value>>
+  redistribute(ValueRange loadStoreIndices, OpBuilder &builder,
+               Location loc) const {
+    SmallVector<Value> newOuter, newInner;
+    auto zero = [&]() {
+      return builder.create<arith::ConstantIndexOp>(loc, 0);
+    };
+
+    if (isChunked && chunkSize) {
+      // CHUNKED: div/mod on first load/store index
+      if (!loadStoreIndices.empty()) {
+        Value idx = loadStoreIndices[0];
+        newOuter.push_back(builder.create<arith::DivUIOp>(loc, idx, chunkSize));
+        newInner.push_back(builder.create<arith::RemUIOp>(loc, idx, chunkSize));
+        for (unsigned i = 1;
+             i < loadStoreIndices.size() && newInner.size() < innerRank; ++i)
+          newInner.push_back(loadStoreIndices[i]);
+      }
+    } else {
+      // ELEMENT-WISE: redistribute indices from load/store to outer
+      for (unsigned i = 0; i < outerRank; ++i) {
+        if (i < loadStoreIndices.size())
+          newOuter.push_back(loadStoreIndices[i]);
+        else
+          newOuter.push_back(zero());
+      }
+      for (unsigned i = 0; i < innerRank; ++i) {
+        unsigned srcIdx = outerRank + i;
+        if (srcIdx < loadStoreIndices.size())
+          newInner.push_back(loadStoreIndices[srcIdx]);
+        else
+          newInner.push_back(zero());
+      }
+    }
+
+    // Ensure non-empty
+    if (newOuter.empty())
+      newOuter.push_back(zero());
+    if (newInner.empty())
+      newInner.push_back(zero());
+
+    return {newOuter, newInner};
+  }
+
+  /// Redistribute indices with offset localization (for acquires inside EDTs).
+  /// Element-wise only - localizes global indices to acquired slice.
+  std::pair<SmallVector<Value>, SmallVector<Value>>
+  redistributeWithOffset(ValueRange loadStoreIndices, Value elemOffset,
+                         OpBuilder &builder, Location loc) const {
+    SmallVector<Value> newOuter, newInner;
+    auto zero = [&]() {
+      return builder.create<arith::ConstantIndexOp>(loc, 0);
+    };
+
+    for (unsigned i = 0; i < outerRank; ++i) {
+      if (i < loadStoreIndices.size()) {
+        // Localize the global index to the acquired slice
+        Value globalIdx = loadStoreIndices[i];
+        Value localIdx =
+            builder.create<arith::SubIOp>(loc, globalIdx, elemOffset);
+        newOuter.push_back(localIdx);
+      } else {
+        newOuter.push_back(zero());
+      }
+    }
+    for (unsigned i = 0; i < innerRank; ++i) {
+      unsigned srcIdx = outerRank + i;
+      if (srcIdx < loadStoreIndices.size())
+        newInner.push_back(loadStoreIndices[srcIdx]);
+      else
+        newInner.push_back(zero());
+    }
+
+    // Ensure non-empty
+    if (newOuter.empty())
+      newOuter.push_back(zero());
+    if (newInner.empty())
+      newInner.push_back(zero());
+
+    return {newOuter, newInner};
+  }
+};
+
+} // namespace
+
 ///===----------------------------------------------------------------------===///
 /// Coordinate Localization - Global to Local Index Transformation
 ///
@@ -98,7 +244,7 @@ static Value getMemref(Operation *op) {
 }
 
 /// Check if allocation is coarse-grained (all sizes == 1).
-bool DbTransforms::isCoarseGrained(DbAllocOp alloc) {
+bool db::isCoarseGrained(DbAllocOp alloc) {
   return llvm::all_of(alloc.getSizes(), [](Value v) {
     int64_t val;
     return arts::getConstantIndex(v, val) && val == 1;
@@ -115,10 +261,11 @@ ViewCoordinateMap ViewCoordinateMap::fromAcquire(DbAcquireOp acquire) {
 }
 
 /// Create db_ref + load/store pattern from outer/inner indices.
-bool DbTransforms::createDbRefPattern(
-    Operation *op, Value dbPtr, Type elementType, ArrayRef<Value> outerIndices,
-    ArrayRef<Value> innerIndices, OpBuilder &builder,
-    llvm::SetVector<Operation *> &opsToRemove) {
+/// File-local helper function.
+static bool createDbRefPattern(Operation *op, Value dbPtr, Type elementType,
+                               ArrayRef<Value> outerIndices,
+                               ArrayRef<Value> innerIndices, OpBuilder &builder,
+                               llvm::SetVector<Operation *> &opsToRemove) {
   if (!isa<memref::LoadOp, memref::StoreOp>(op))
     return false;
 
@@ -155,10 +302,10 @@ bool DbTransforms::createDbRefPattern(
 ///     * If globalIdx = offset + delta (provable): local = delta
 ///     * Otherwise: local = globalIdx - offset (explicit subtraction)
 ///
-SmallVector<Value>
-DbTransforms::localizeCoordinates(ArrayRef<Value> globalIndices,
-                                  const ViewCoordinateMap &map,
-                                  OpBuilder &builder, Location loc) {
+static SmallVector<Value> localizeCoordinates(ArrayRef<Value> globalIndices,
+                                              const ViewCoordinateMap &map,
+                                              OpBuilder &builder,
+                                              Location loc) {
   SmallVector<Value> localIndices;
 
   for (unsigned d = 0; d < globalIndices.size(); ++d) {
@@ -229,9 +376,10 @@ DbTransforms::localizeCoordinates(ArrayRef<Value> globalIndices,
 /// Rewrite memref load/store to db_ref pattern.
 /// Before: load %mem[%i, %j]
 /// After:  %ref = db_ref %db[%i]; load %ref[%j]  (outerCount=1)
-bool DbTransforms::rewriteAccessWithDbPattern(
-    Operation *op, Value dbPtr, Type elementType, unsigned outerCount,
-    OpBuilder &builder, llvm::SetVector<Operation *> &opsToRemove) {
+bool db::rewriteAccessWithDbPattern(Operation *op, Value dbPtr,
+                                    Type elementType, unsigned outerCount,
+                                    OpBuilder &builder,
+                                    llvm::SetVector<Operation *> &opsToRemove) {
   if (!isa<memref::LoadOp, memref::StoreOp>(op))
     return false;
 
@@ -257,340 +405,10 @@ bool DbTransforms::rewriteAccessWithDbPattern(
                             builder, opsToRemove);
 }
 
-/// Promote dimensions from elementSizes to sizes.
-/// promoteCount=1: sizes=[1], elementSizes=[N] -> sizes=[N], elementSizes=[1]
-/// trimLeadingOnes: remove leading size=1 values
-DbAllocOp DbTransforms::promoteAllocation(DbAllocOp alloc, int promoteCount,
-                                          OpBuilder &builder,
-                                          bool trimLeadingOnes) {
-  if (!alloc || promoteCount == 0)
-    return nullptr;
-
-  SmallVector<Value> sizes(alloc.getSizes());
-  SmallVector<Value> elemSizes(alloc.getElementSizes());
-  unsigned count = std::abs(promoteCount);
-  if ((promoteCount > 0 && count > elemSizes.size()) ||
-      (promoteCount < 0 && count > sizes.size()))
-    return nullptr;
-
-  Location loc = alloc.getLoc();
-  OpBuilder::InsertionGuard IG(builder);
-  builder.setInsertionPoint(alloc);
-
-  if (promoteCount > 0) {
-    for (unsigned i = 0; i < count; ++i) {
-      sizes.push_back(elemSizes.front());
-      elemSizes.erase(elemSizes.begin());
-    }
-  } else {
-    for (unsigned i = 0; i < count; ++i) {
-      elemSizes.insert(elemSizes.begin(), sizes.back());
-      sizes.pop_back();
-    }
-  }
-
-  /// Trim leading size=1 values if requested
-  if (trimLeadingOnes) {
-    SmallVector<Value> trimmedSizes;
-    for (Value size : sizes) {
-      int64_t cst;
-      if (trimmedSizes.empty() && arts::getConstantIndex(size, cst) && cst == 1)
-        continue;
-      trimmedSizes.push_back(size);
-    }
-    sizes = std::move(trimmedSizes);
-  }
-
-  auto ensureNonEmpty = [&](SmallVector<Value> &vec) {
-    if (vec.empty())
-      vec.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
-  };
-  ensureNonEmpty(sizes);
-  ensureNonEmpty(elemSizes);
-
-  Value address = alloc.getAddress();
-  auto newAlloc = builder.create<DbAllocOp>(
-      loc, alloc.getMode(), alloc.getRoute(), alloc.getAllocType(),
-      alloc.getDbMode(), alloc.getElementType(), address, sizes, elemSizes);
-  transferAttributes(alloc, newAlloc);
-
-  return newAlloc;
-}
-
-/// Rewrite all uses after allocation promotion.
-/// Collects load/store/db_ref users and rewrites them with new index mapping.
-/// Also updates all acquires to reference the full allocation extent.
-LogicalResult DbTransforms::rewriteAllUses(DbAllocOp oldAlloc,
-                                           DbAllocOp newAlloc,
-                                           OpBuilder &builder) {
-  if (!oldAlloc || !newAlloc)
-    return failure();
-
-  bool oldCoarse = isCoarseGrained(oldAlloc);
-  bool newCoarse = isCoarseGrained(newAlloc);
-  unsigned newOuterRank = newAlloc.getSizes().size();
-  unsigned newInnerRank = newAlloc.getElementSizes().size();
-  llvm::SetVector<Operation *> opsToRemove, loadStoreUsers;
-  SmallVector<DbAcquireOp> acquires;
-  SmallVector<DbRefOp> dbRefUsers;
-  SmallPtrSet<Value, 8> visited;
-
-  std::function<void(Value)> collectUses = [&](Value value) {
-    if (!value || !visited.insert(value).second)
-      return;
-
-    for (OpOperand &use : value.getUses()) {
-      Operation *user = use.getOwner();
-      if (auto load = dyn_cast<memref::LoadOp>(user)) {
-        if (load.getMemref() == value)
-          loadStoreUsers.insert(load.getOperation());
-      } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
-        if (store.getMemref() == value)
-          loadStoreUsers.insert(store.getOperation());
-      } else if (auto ref = dyn_cast<DbRefOp>(user)) {
-        if (ref.getSource() == value) {
-          dbRefUsers.push_back(ref);
-          collectUses(ref.getResult());
-        }
-      } else if (auto acquire = dyn_cast<DbAcquireOp>(user)) {
-        acquires.push_back(acquire);
-        auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(acquire);
-        if (blockArg)
-          collectUses(blockArg);
-      }
-    }
-  };
-
-  collectUses(oldAlloc.getPtr());
-
-  auto buildIndexMapping =
-      [&](ArrayRef<Value> oldOuter, ArrayRef<Value> oldInner,
-          Location loc) -> std::pair<SmallVector<Value>, SmallVector<Value>> {
-    SmallVector<Value> newOuter, newInner;
-
-    auto zero = [&]() {
-      return builder.create<arith::ConstantIndexOp>(loc, 0);
-    };
-
-    if (oldCoarse && !newCoarse) {
-      /// Coarse -> Fine/Chunked transformation
-      /// Check if this is chunked allocation (elemSize > 1) vs element-wise
-      int64_t chunkSize = 1;
-      if (!newAlloc.getElementSizes().empty())
-        arts::getConstantIndex(newAlloc.getElementSizes()[0], chunkSize);
-
-      if (chunkSize > 1 && !oldInner.empty()) {
-        /// Chunked allocation: compute div/mod for proper indexing
-        /// newOuter = oldInner[0] / chunkSize (which datablock)
-        /// newInner = oldInner[0] % chunkSize (offset within datablock)
-        Value idx = oldInner[0];
-        Value chunkSizeVal =
-            builder.create<arith::ConstantIndexOp>(loc, chunkSize);
-        newOuter.push_back(
-            builder.create<arith::DivUIOp>(loc, idx, chunkSizeVal));
-        newInner.push_back(
-            builder.create<arith::RemUIOp>(loc, idx, chunkSizeVal));
-
-        /// Handle additional inner indices if present (beyond first)
-        for (unsigned i = 1;
-             i < oldInner.size() && newInner.size() < newInnerRank; ++i)
-          newInner.push_back(oldInner[i]);
-      } else {
-        /// Element-wise: move leading inner indices to outer, keep remaining
-        /// Example: sizes=[1],elemSizes=[N,M] -> sizes=[N],elemSizes=[M]
-        ///   oldInner=[%i,%j] -> newOuter=[%i], newInner=[%j]
-        for (unsigned i = 0; i < newOuterRank; ++i) {
-          if (i < oldInner.size())
-            newOuter.push_back(oldInner[i]);
-          else
-            newOuter.push_back(zero());
-        }
-        /// Use remaining oldInner indices for newInner (not moved to outer)
-        for (unsigned i = 0; i < newInnerRank; ++i) {
-          unsigned srcIdx = newOuterRank + i;
-          if (srcIdx < oldInner.size())
-            newInner.push_back(oldInner[srcIdx]);
-          else
-            newInner.push_back(zero());
-        }
-      }
-    } else if (!oldCoarse && newCoarse) {
-      /// Fine -> Coarse: move outer indices to inner
-      for (unsigned i = 0; i < newOuterRank; ++i)
-        newOuter.push_back(zero());
-      for (unsigned i = 0; i < newInnerRank; ++i) {
-        if (i < oldOuter.size())
-          newInner.push_back(oldOuter[i]);
-        else if (i - oldOuter.size() < oldInner.size())
-          newInner.push_back(oldInner[i - oldOuter.size()]);
-        else
-          newInner.push_back(zero());
-      }
-    } else {
-      /// Same granularity
-      for (unsigned i = 0; i < newOuterRank; ++i) {
-        if (i < oldOuter.size())
-          newOuter.push_back(oldOuter[i]);
-        else
-          newOuter.push_back(zero());
-      }
-      for (unsigned i = 0; i < newInnerRank; ++i) {
-        if (i < oldInner.size())
-          newInner.push_back(oldInner[i]);
-        else
-          newInner.push_back(zero());
-      }
-    }
-
-    if (newOuter.empty())
-      newOuter.push_back(zero());
-    if (newInner.empty())
-      newInner.push_back(zero());
-    return {newOuter, newInner};
-  };
-
-  Type elementType = newAlloc.getAllocatedElementType();
-  for (Operation *op : loadStoreUsers) {
-    Location loc = op->getLoc();
-    OpBuilder::InsertionGuard IG(builder);
-    builder.setInsertionPoint(op);
-
-    SmallVector<Value> oldOuter, oldInner;
-    Value memref = getMemref(op);
-    if (!memref)
-      continue;
-
-    DbRefOp sourceRef;
-    if (auto ref = memref.getDefiningOp<DbRefOp>()) {
-      oldOuter.append(ref.getIndices().begin(), ref.getIndices().end());
-      memref = ref.getSource();
-      sourceRef = ref;
-    }
-
-    ValueRange indices = getIndices(op);
-    oldInner.append(indices.begin(), indices.end());
-
-    auto [newOuter, newInner] = buildIndexMapping(oldOuter, oldInner, loc);
-    bool created = createDbRefPattern(op, memref, elementType, newOuter,
-                                      newInner, builder, opsToRemove);
-    if (created && sourceRef && sourceRef.getResult().hasOneUse())
-      opsToRemove.insert(sourceRef.getOperation());
-  }
-
-  /// Update acquires: source operands, result types, AND offsets/sizes
-  MemRefType newPtrType = newAlloc.getPtr().getType().cast<MemRefType>();
-  ValueRange allocSizes = newAlloc.getSizes();
-
-  for (DbAcquireOp acquire : acquires) {
-    acquire.getSourceGuidMutable().assign(newAlloc.getGuid());
-    acquire.getSourcePtrMutable().assign(newAlloc.getPtr());
-
-    /// Update acquire's ptr result type to match new source
-    Type oldAcqPtrType = acquire.getPtr().getType();
-    if (oldAcqPtrType != newPtrType) {
-      acquire.getPtr().setType(newPtrType);
-
-      /// Also update EDT block argument type if this acquire feeds an EDT
-      auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(acquire);
-      if (blockArg && blockArg.getType() != newPtrType)
-        blockArg.setType(newPtrType);
-    }
-
-    /// Transform acquire offsets/sizes for chunked allocation.
-    /// For chunked allocation (elemSize > 1), convert element-space offsets
-    /// to chunk-space by dividing by chunk size.
-    /// Example: offset=1048576, chunkSize=1048576 -> chunkOffset=1
-    if (!allocSizes.empty() && !newAlloc.getElementSizes().empty()) {
-      int64_t chunkSize = 1;
-      arts::getConstantIndex(newAlloc.getElementSizes()[0], chunkSize);
-
-      OpBuilder::InsertionGuard guard(builder);
-      builder.setInsertionPoint(acquire);
-      Location loc = acquire.getLoc();
-
-      if (chunkSize > 1) {
-        /// Chunked allocation: convert element offsets to chunk offsets
-        Value chunkSizeVal =
-            builder.create<arith::ConstantIndexOp>(loc, chunkSize);
-        SmallVector<Value> chunkOffsets, chunkSizes;
-
-        for (Value offset : acquire.getOffsets()) {
-          Value chunkOffset =
-              builder.create<arith::DivUIOp>(loc, offset, chunkSizeVal);
-          chunkOffsets.push_back(chunkOffset);
-        }
-        for (Value size : acquire.getSizes()) {
-          /// For sizes, use ceiling division to handle partial chunks
-          /// ceil(size/chunkSize) = (size + chunkSize - 1) / chunkSize
-          Value adjusted = builder.create<arith::AddIOp>(
-              loc, size,
-              builder.create<arith::ConstantIndexOp>(loc, chunkSize - 1));
-          Value chunkCount =
-              builder.create<arith::DivUIOp>(loc, adjusted, chunkSizeVal);
-          chunkSizes.push_back(chunkCount);
-        }
-
-        acquire.getOffsetsMutable().assign(chunkOffsets);
-        acquire.getSizesMutable().assign(chunkSizes);
-        acquire.getOffsetHintsMutable().assign(chunkOffsets);
-        acquire.getSizeHintsMutable().assign(chunkSizes);
-      } else {
-        /// Element-wise: use full allocation extent
-        Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
-        SmallVector<Value> fullOffsets(allocSizes.size(), zero);
-        SmallVector<Value> fullSizes(allocSizes.begin(), allocSizes.end());
-
-        acquire.getOffsetsMutable().assign(fullOffsets);
-        acquire.getSizesMutable().assign(fullSizes);
-        acquire.getOffsetHintsMutable().assign(fullOffsets);
-        acquire.getSizeHintsMutable().assign(fullSizes);
-      }
-    }
-  }
-
-  /// Recreate DbRefOps with new element type (after acquires updated).
-  Type newElementType = newAlloc.getAllocatedElementType();
-  for (DbRefOp dbRef : dbRefUsers) {
-    if (opsToRemove.contains(dbRef.getOperation()))
-      continue;
-
-    OpBuilder::InsertionGuard IG(builder);
-    builder.setInsertionPoint(dbRef);
-
-    Value newSource = dbRef.getSource();
-    if (newSource == oldAlloc.getPtr())
-      newSource = newAlloc.getPtr();
-
-    SmallVector<Value> oldOuter(dbRef.getIndices().begin(),
-                                dbRef.getIndices().end());
-    SmallVector<Value> newOuter, unused;
-    std::tie(newOuter, unused) =
-        buildIndexMapping(oldOuter, {}, dbRef.getLoc());
-
-    auto newRef = builder.create<DbRefOp>(dbRef.getLoc(), newElementType,
-                                          newSource, newOuter);
-    dbRef.replaceAllUsesWith(newRef.getResult());
-    opsToRemove.insert(dbRef.getOperation());
-  }
-
-  oldAlloc.getGuid().replaceAllUsesWith(newAlloc.getGuid());
-  oldAlloc.getPtr().replaceAllUsesWith(newAlloc.getPtr());
-  if (oldAlloc.use_empty())
-    opsToRemove.insert(oldAlloc.getOperation());
-
-  /// Remove the old allocation and all its users
-  OpRemovalManager removalMgr;
-  for (Operation *op : opsToRemove)
-    removalMgr.markForRemoval(op);
-  removalMgr.removeAllMarked();
-
-  return success();
-}
-
 /// Rebase operation indices to acquired view's local coordinates.
-bool DbTransforms::rebaseToAcquireView(
-    Operation *op, DbAcquireOp acquire, Value dbPtr, Type elementType,
-    OpBuilder &builder, llvm::SetVector<Operation *> &opsToRemove) {
+bool db::rebaseToAcquireView(Operation *op, DbAcquireOp acquire, Value dbPtr,
+                             Type elementType, OpBuilder &builder,
+                             llvm::SetVector<Operation *> &opsToRemove) {
 
   ViewCoordinateMap map = ViewCoordinateMap::fromAcquire(acquire);
   unsigned expectedOuterCount = acquire.getSizes().size();
@@ -659,8 +477,7 @@ bool DbTransforms::rebaseToAcquireView(
 }
 
 /// Rebase all users of acquired blockArg to local coordinates.
-bool DbTransforms::rebaseAllUsersToAcquireView(DbAcquireOp acquire,
-                                               OpBuilder &builder) {
+bool db::rebaseAllUsersToAcquireView(DbAcquireOp acquire, OpBuilder &builder) {
   auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(acquire);
   if (!blockArg)
     return false;
@@ -720,4 +537,345 @@ bool DbTransforms::rebaseAllUsersToAcquireView(DbAcquireOp acquire,
       op->erase();
 
   return rewritten;
+}
+
+///===----------------------------------------------------------------------===///
+/// DbAllocPromotion Implementation
+///===----------------------------------------------------------------------===///
+
+DbAllocPromotion::DbAllocPromotion(DbAllocOp oldAlloc, ValueRange newOuterSizes,
+                                   ValueRange newInnerSizes,
+                                   ArrayRef<DbAcquireOp> acquires,
+                                   ArrayRef<Value> elementOffsets,
+                                   ArrayRef<Value> elementSizes)
+    : oldAlloc_(oldAlloc), newOuterSizes_(newOuterSizes),
+      newInnerSizes_(newInnerSizes), acquires_(acquires),
+      elementOffsets_(elementOffsets), elementSizes_(elementSizes) {
+  /// Derive mode from rank comparison and element size:
+  /// - Element-wise: newInnerSizes = [1] (single element per DB)
+  /// - Chunked: same inner rank, size > 1 (div/mod on first index)
+  /// - Otherwise: redistribute indices
+  unsigned oldInnerRank = oldAlloc.getElementSizes().size();
+  unsigned newInnerRank = newInnerSizes.size();
+
+  /// Check if this is element-wise allocation (1 element per DB)
+  /// This takes priority over rank comparison since 1D element-wise
+  /// has the same rank but requires different index handling.
+  bool isElementWise = false;
+  if (newInnerRank == 1) {
+    int64_t innerVal;
+    if (arts::getConstantIndex(newInnerSizes[0], innerVal) && innerVal == 1)
+      isElementWise = true;
+  }
+
+  /// Element-wise uses index redistribution (outer=globalIdx, inner=0)
+  /// Chunked uses coordinate localization (outer=idx/chunk, inner=idx%chunk)
+  isChunked_ = !isElementWise && (oldInnerRank == newInnerRank);
+  chunkSize_ =
+      (isChunked_ && !newInnerSizes.empty()) ? newInnerSizes[0] : Value();
+}
+
+FailureOr<DbAllocOp> DbAllocPromotion::apply(OpBuilder &builder) {
+  if (!oldAlloc_)
+    return failure();
+
+  Location loc = oldAlloc_.getLoc();
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPoint(oldAlloc_);
+
+  /// 1. Create new allocation with the given sizes
+  auto newAlloc = builder.create<DbAllocOp>(
+      loc, oldAlloc_.getMode(), oldAlloc_.getRoute(), oldAlloc_.getAllocType(),
+      oldAlloc_.getDbMode(), oldAlloc_.getElementType(), oldAlloc_.getAddress(),
+      newOuterSizes_, newInnerSizes_);
+
+  /// 2. Transfer metadata/attributes from old to new allocation
+  transferAttributes(oldAlloc_, newAlloc);
+
+  /// 3. Rewrite all acquires with their partition info
+  for (unsigned i = 0; i < acquires_.size(); ++i) {
+    rewriteAcquire(acquires_[i], elementOffsets_[i], elementSizes_[i], newAlloc,
+                   builder);
+  }
+
+  /// 4. Collect and rewrite DbRefs outside of EDTs
+  llvm::SetVector<Operation *> opsToRemove;
+  SmallVector<DbRefOp> dbRefUsers;
+  llvm::SmallPtrSet<Value, 8> visited;
+
+  std::function<void(Value)> collectDbRefs = [&](Value value) {
+    if (!value || !visited.insert(value).second)
+      return;
+    for (OpOperand &use : value.getUses()) {
+      Operation *user = use.getOwner();
+      if (auto ref = dyn_cast<DbRefOp>(user)) {
+        if (ref.getSource() == value) {
+          dbRefUsers.push_back(ref);
+          collectDbRefs(ref.getResult());
+        }
+      }
+    }
+  };
+  collectDbRefs(oldAlloc_.getPtr());
+
+  for (DbRefOp ref : dbRefUsers) {
+    rewriteDbRef(ref, newAlloc, builder);
+    opsToRemove.insert(ref.getOperation());
+  }
+
+  /// 5. Replace all uses of old allocation with new
+  oldAlloc_.getGuid().replaceAllUsesWith(newAlloc.getGuid());
+  oldAlloc_.getPtr().replaceAllUsesWith(newAlloc.getPtr());
+  if (oldAlloc_.use_empty())
+    opsToRemove.insert(oldAlloc_.getOperation());
+
+  /// 6. Clean up removed operations
+  OpRemovalManager removalMgr;
+  for (Operation *op : opsToRemove)
+    removalMgr.markForRemoval(op);
+  removalMgr.removeAllMarked();
+
+  return newAlloc;
+}
+
+void DbAllocPromotion::rewriteAcquire(DbAcquireOp acquire, Value elemOffset,
+                                      Value elemSize, DbAllocOp newAlloc,
+                                      OpBuilder &builder) {
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPoint(acquire);
+  Location loc = acquire.getLoc();
+
+  /// Update source to new allocation
+  acquire.getSourceGuidMutable().assign(newAlloc.getGuid());
+  acquire.getSourcePtrMutable().assign(newAlloc.getPtr());
+
+  /// Update acquire's ptr result type to match new source
+  MemRefType newPtrType = newAlloc.getPtr().getType().cast<MemRefType>();
+  Type oldAcqPtrType = acquire.getPtr().getType();
+  if (oldAcqPtrType != newPtrType) {
+    acquire.getPtr().setType(newPtrType);
+
+    /// Also update EDT block argument type if this acquire feeds an EDT
+    auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(acquire);
+    if (blockArg && blockArg.getType() != newPtrType)
+      blockArg.setType(newPtrType);
+  }
+
+  /// Transform offset/size based on mode
+  SmallVector<Value> newOffsets, newSizes;
+
+  if (isChunked_ && chunkSize_) {
+    /// CHUNKED: element-space → chunk-space
+    /// chunkOffset = elementOffset / chunkSize
+    /// chunkCount = ceil(elementSize / chunkSize)
+    Value chunkOffset =
+        builder.create<arith::DivUIOp>(loc, elemOffset, chunkSize_);
+
+    /// ceil(size/chunkSize) = (size + chunkSize - 1) / chunkSize
+    Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
+    Value chunkMinusOne = builder.create<arith::SubIOp>(loc, chunkSize_, one);
+    Value adjusted =
+        builder.create<arith::AddIOp>(loc, elemSize, chunkMinusOne);
+    Value chunkCount =
+        builder.create<arith::DivUIOp>(loc, adjusted, chunkSize_);
+
+    newOffsets.push_back(chunkOffset);
+    newSizes.push_back(chunkCount);
+
+    /// For chunked mode, use coordinate localization
+    acquire.getOffsetsMutable().assign(newOffsets);
+    acquire.getSizesMutable().assign(newSizes);
+    acquire.getOffsetHintsMutable().assign(newOffsets);
+    acquire.getSizeHintsMutable().assign(newSizes);
+
+    db::rebaseAllUsersToAcquireView(acquire, builder);
+  } else {
+    /// ELEMENT-WISE: already in datablock space, no offset transformation
+    newOffsets.push_back(elemOffset);
+    newSizes.push_back(elemSize);
+
+    acquire.getOffsetsMutable().assign(newOffsets);
+    acquire.getSizesMutable().assign(newSizes);
+    acquire.getOffsetHintsMutable().assign(newOffsets);
+    acquire.getSizeHintsMutable().assign(newSizes);
+
+    /// For element-wise promotion, we need to redistribute indices between
+    /// db_ref and load/store operations because the rank changed.
+    /// Example: old inner rank=2 (memref<?x?xf64>), new inner rank=1
+    /// (memref<?xf64>)
+    ///   Old: db_ref[0] -> memref<?x?xf64>, load %ref[row,col]
+    ///   New: db_ref[row] -> memref<?xf64>, load %ref[col]
+    auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(acquire);
+    if (!blockArg)
+      return;
+
+    unsigned newOuterRank = newOuterSizes_.size();
+    unsigned newInnerRank = newInnerSizes_.size();
+    Type newElementType = newAlloc.getAllocatedElementType();
+
+    llvm::SetVector<Operation *> opsToRemove;
+
+    /// Collect all db_ref users
+    SmallVector<DbRefOp> dbRefs;
+    for (Operation *user : blockArg.getUsers()) {
+      if (auto ref = dyn_cast<DbRefOp>(user))
+        dbRefs.push_back(ref);
+    }
+
+    /// Helper to create zero index
+    auto zero = [&](OpBuilder &b, Location l) {
+      return b.create<arith::ConstantIndexOp>(l, 0);
+    };
+
+    /// Transform each db_ref and its load/store users
+    for (DbRefOp ref : dbRefs) {
+      /// Collect load/store users of this db_ref
+      SmallVector<Operation *> refUsers(ref.getResult().getUsers().begin(),
+                                        ref.getResult().getUsers().end());
+
+      bool hasLoadStoreUsers = false;
+      for (Operation *user : refUsers) {
+        if (!isa<memref::LoadOp, memref::StoreOp>(user))
+          continue;
+
+        hasLoadStoreUsers = true;
+        OpBuilder::InsertionGuard ig(builder);
+        builder.setInsertionPoint(user);
+        Location userLoc = user->getLoc();
+
+        /// Get load/store indices
+        ValueRange oldInner;
+        if (auto load = dyn_cast<memref::LoadOp>(user))
+          oldInner = load.getIndices();
+        else if (auto store = dyn_cast<memref::StoreOp>(user))
+          oldInner = store.getIndices();
+
+        /// Use IndexRedistributor to compute new outer/inner indices with
+        /// offset IMPORTANT: Must localize indices by subtracting elemOffset
+        /// since the acquired view starts at elemOffset, not at 0.
+        IndexRedistributor redistributor{newOuterRank, newInnerRank, false,
+                                         Value()};
+        auto [newOuter, newInner] = redistributor.redistributeWithOffset(
+            oldInner, elemOffset, builder, userLoc);
+
+        /// Create new db_ref with transformed outer indices
+        auto newRef = builder.create<DbRefOp>(userLoc, newElementType, blockArg,
+                                              newOuter);
+
+        /// Create new load/store with transformed inner indices
+        if (auto load = dyn_cast<memref::LoadOp>(user)) {
+          auto newLoad =
+              builder.create<memref::LoadOp>(userLoc, newRef, newInner);
+          load.replaceAllUsesWith(newLoad.getResult());
+        } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
+          builder.create<memref::StoreOp>(userLoc, store.getValue(), newRef,
+                                          newInner);
+        }
+        opsToRemove.insert(user);
+      }
+
+      /// For db_refs without load/store users (or after all load/stores are
+      /// replaced), we still need to update the db_ref type to match the new
+      /// allocation element type. Create a replacement with correct type.
+      if (!hasLoadStoreUsers && !ref.getResult().use_empty()) {
+        OpBuilder::InsertionGuard ig(builder);
+        builder.setInsertionPoint(ref);
+        Location refLoc = ref.getLoc();
+
+        /// Keep original indices but update result type
+        SmallVector<Value> indices(ref.getIndices().begin(),
+                                   ref.getIndices().end());
+        if (indices.empty())
+          indices.push_back(zero(builder, refLoc));
+
+        auto newRef =
+            builder.create<DbRefOp>(refLoc, newElementType, blockArg, indices);
+        ref.replaceAllUsesWith(newRef.getResult());
+      }
+
+      /// Mark old db_ref for removal
+      opsToRemove.insert(ref.getOperation());
+    }
+
+    /// Remove old operations
+    for (Operation *op : opsToRemove)
+      if (op->use_empty())
+        op->erase();
+  }
+}
+
+void DbAllocPromotion::rewriteDbRef(DbRefOp ref, DbAllocOp newAlloc,
+                                    OpBuilder &builder) {
+  Location loc = ref.getLoc();
+  Type newElementType = newAlloc.getAllocatedElementType();
+  Value newSource = (ref.getSource() == oldAlloc_.getPtr()) ? newAlloc.getPtr()
+                                                            : ref.getSource();
+
+  unsigned newOuterRank = newOuterSizes_.size();
+  unsigned newInnerRank = newInnerSizes_.size();
+
+  /// Collect load/store users of this db_ref
+  SmallVector<Operation *> refUsers(ref.getResult().getUsers().begin(),
+                                    ref.getResult().getUsers().end());
+  llvm::SetVector<Operation *> opsToRemove;
+
+  auto zero = [&](OpBuilder &b, Location l) {
+    return b.create<arith::ConstantIndexOp>(l, 0);
+  };
+
+  bool hasLoadStoreUsers = false;
+  for (Operation *user : refUsers) {
+    if (!isa<memref::LoadOp, memref::StoreOp>(user))
+      continue;
+
+    hasLoadStoreUsers = true;
+    OpBuilder::InsertionGuard ig(builder);
+    builder.setInsertionPoint(user);
+    Location userLoc = user->getLoc();
+
+    /// Get load/store indices
+    ValueRange loadStoreIndices;
+    if (auto load = dyn_cast<memref::LoadOp>(user))
+      loadStoreIndices = load.getIndices();
+    else if (auto store = dyn_cast<memref::StoreOp>(user))
+      loadStoreIndices = store.getIndices();
+
+    /// Use IndexRedistributor to compute new outer/inner indices
+    IndexRedistributor redistributor{newOuterRank, newInnerRank, isChunked_,
+                                     chunkSize_};
+    auto [newOuter, newInner] =
+        redistributor.redistribute(loadStoreIndices, builder, userLoc);
+
+    /// Create new db_ref with transformed outer indices
+    auto newRef =
+        builder.create<DbRefOp>(userLoc, newElementType, newSource, newOuter);
+
+    /// Create new load/store with transformed inner indices
+    if (auto load = dyn_cast<memref::LoadOp>(user)) {
+      auto newLoad = builder.create<memref::LoadOp>(userLoc, newRef, newInner);
+      load.replaceAllUsesWith(newLoad.getResult());
+    } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
+      builder.create<memref::StoreOp>(userLoc, store.getValue(), newRef,
+                                      newInner);
+    }
+    opsToRemove.insert(user);
+  }
+
+  /// For db_refs without load/store users, just update the db_ref type
+  if (!hasLoadStoreUsers && !ref.getResult().use_empty()) {
+    OpBuilder::InsertionGuard ig(builder);
+    builder.setInsertionPoint(ref);
+    SmallVector<Value> indices(ref.getIndices().begin(),
+                               ref.getIndices().end());
+    if (indices.empty())
+      indices.push_back(zero(builder, loc));
+    auto newRef =
+        builder.create<DbRefOp>(loc, newElementType, newSource, indices);
+    ref.replaceAllUsesWith(newRef.getResult());
+  }
+
+  /// Remove old load/store operations
+  for (Operation *op : opsToRemove)
+    if (op->use_empty())
+      op->erase();
 }

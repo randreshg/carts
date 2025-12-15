@@ -104,11 +104,9 @@ struct DbPass : public arts::DbBase<DbPass> {
 
   /// Graph rebuild
   void invalidateAndRebuildGraph();
-  FailureOr<DbAllocOp> promoteAllocForChunking(DbAllocOp allocOp,
-                                               DbAllocNode *allocNode,
-                                               Value chunkSize = nullptr);
-  void updateAcquireForChunk(DbAcquireOp acqOp, Value chunkOffset,
-                             Value chunkSize);
+  FailureOr<DbAllocOp> promoteAllocForChunking(
+      DbAllocOp allocOp, DbAllocNode *allocNode,
+      ArrayRef<std::tuple<DbAcquireOp, Value, Value>> acquireInfo);
 
 private:
   ModuleOp module;
@@ -382,14 +380,8 @@ bool DbPass::partitionDb() {
   for (auto &[allocOp, allocNode, acquireList] : allocsToProcess) {
     ARTS_DEBUG("Promoting alloc with " << acquireList.size() << " acquires");
 
-    /// Extract chunk size from first acquire (all have same chunk size from
-    /// loop partitioning). This allows chunked allocation instead of
-    /// element-wise when the loop has been partitioned into workers.
-    Value chunkSize = nullptr;
-    if (!acquireList.empty())
-      chunkSize = std::get<2>(acquireList[0]);
-
-    auto promotedOr = promoteAllocForChunking(allocOp, allocNode, chunkSize);
+    /// Promote allocation with partition info for all acquires
+    auto promotedOr = promoteAllocForChunking(allocOp, allocNode, acquireList);
     if (failed(promotedOr)) {
       partitionFailed.insert(allocOp.getOperation());
       continue;
@@ -398,45 +390,20 @@ bool DbPass::partitionDb() {
     DbAllocOp promoted = promotedOr.value();
     partitionAttempt.insert(promoted.getOperation());
     if (promoted.getOperation() == allocOp.getOperation()) {
-      ARTS_DEBUG("  Alloc already promoted, updating acquires");
+      ARTS_DEBUG("  Alloc already promoted");
     } else {
-      /// allocOp has been erased, can't access it
       ARTS_DEBUG("  Promoted alloc to sizes=" << promoted.getSizes().size());
       changed = true;
     }
 
-    bool chunkRewrite = false;
-
-    /// Update all acquires for this alloc
+    /// Set twin_diff=false for all acquires (partition info already applied)
     for (auto &[acqOp, chunkOffset, chunkSize] : acquireList) {
       if (!acqOp)
         continue;
-
-      updateAcquireForChunk(acqOp, chunkOffset, chunkSize);
-      changed = true;
-      chunkRewrite = true;
       setTwinAttr(acqOp, false);
-
-      /// Verify the transformation
-      if (acqOp.getOffsets().empty() || acqOp.getSizes().empty()) {
-        ARTS_DEBUG("  WARNING: Acquire offsets or sizes empty after update");
-      } else {
-        ARTS_DEBUG("  Verified: Acquire has offsets="
-                   << acqOp.getOffsets().size()
-                   << " sizes=" << acqOp.getSizes().size());
-      }
-
-      Operation *underlyingAlloc =
-          arts::getUnderlyingDbAlloc(acqOp.getSourcePtr());
-      if (underlyingAlloc && underlyingAlloc != promoted.getOperation()) {
-        ARTS_DEBUG(
-            "  WARNING: Acquire source ptr doesn't match promoted alloc");
-      }
     }
-    if (chunkRewrite)
-      partitionSuccess.insert(promoted.getOperation());
-    else
-      partitionFailed.insert(promoted.getOperation());
+
+    partitionSuccess.insert(promoted.getOperation());
   }
 
   /// AFTER partition attempts, BEFORE final default pass:
@@ -509,182 +476,210 @@ bool DbPass::partitionDb() {
   return changed;
 }
 
-/// Promote coarse allocation for chunking.
-/// If chunkSize is provided: sizes=[1], elementSizes=[N] -> sizes=[numChunks],
-/// elementSizes=[chunkSize] Otherwise (element-wise fallback): sizes=[1],
-/// elementSizes=[N] -> sizes=[N], elementSizes=[1]
-FailureOr<DbAllocOp> DbPass::promoteAllocForChunking(DbAllocOp allocOp,
-                                                     DbAllocNode *allocNode,
-                                                     Value chunkSize) {
+/// Promote coarse allocation using DbAllocPromotion.
+/// Computes new outer/inner sizes based on heuristics and applies the
+/// transformation with partition info for all acquires.
+FailureOr<DbAllocOp> DbPass::promoteAllocForChunking(
+    DbAllocOp allocOp, DbAllocNode *allocNode,
+    ArrayRef<std::tuple<DbAcquireOp, Value, Value>> acquireInfo) {
   if (!allocOp || !allocOp.getOperation())
     return failure();
 
   if (allocOp.getElementSizes().empty())
     return failure();
 
-  // Already fine-grained - no promotion needed
+  /// Already fine-grained - no promotion needed
   if (allocNode && allocNode->isFineGrained())
     return allocOp;
-
-  /// Multi-dimensional allocations are not supported for chunking.
-  /// Fall through to element-wise promotion for multi-D.
-  if (allocOp.getElementSizes().size() > 1) {
-    ARTS_DEBUG("  Skipping chunked allocation for multi-dimensional array "
-               "(dims="
-               << allocOp.getElementSizes().size() << ")");
-    /// Fall through to element-wise promotion
-  }
 
   OpBuilder builder(allocOp);
   Location loc = allocOp.getLoc();
   builder.setInsertionPoint(allocOp);
 
-  /// Try to use chunked allocation if chunkSize is provided and valid.
+  /// Extract chunk size from first acquire's partition info.
   /// Use extractChunkSizeFromHint to handle both direct constants and
   /// minui(remaining, chunkSize) patterns from ForLowering.
-  /// Only for 1D allocations.
   int64_t chunkSizeVal = 0;
-  if (allocOp.getElementSizes().size() == 1) {
+  if (!acquireInfo.empty()) {
+    Value chunkSize = std::get<2>(acquireInfo[0]);
     if (auto extracted = arts::extractChunkSizeFromHint(chunkSize);
         extracted && *extracted > 1) {
       chunkSizeVal = *extracted;
     }
   }
 
-  if (chunkSizeVal > 0) {
-    /// Get total elements from the first elementSize dimension
+  /// Compute element size in bytes for H2 heuristic
+  Type elemType = allocOp.getElementType();
+  unsigned elemBytes = 4; /// default to 4 bytes (float)
+  if (elemType.isIntOrFloat())
+    elemBytes = (elemType.getIntOrFloatBitWidth() + 7) / 8;
+
+  SmallVector<Value> newOuterSizes, newInnerSizes;
+
+  ///==========================================================================
+  /// N-D First-Dimension Chunking: For N-D allocations (N >= 2)
+  /// Chunks the first dimension, preserves remaining dimensions.
+  /// Example: sizes=[1], elemSizes=[1000,1000] -> sizes=[16],
+  /// elemSizes=[63,1000] Uses partial evaluation: numChunks depends on dim 0,
+  /// innerBytes on dims 1..N
+  ///==========================================================================
+  if (allocOp.getElementSizes().size() >= 2 && chunkSizeVal > 0) {
+    ValueRange elemSizes = allocOp.getElementSizes();
+    Value firstDimVal = elemSizes[0];
+
+    /// Compute numChunks (requires dim 0 to be constant)
+    std::optional<int64_t> numChunksOpt;
+    int64_t firstDimConst;
+    if (arts::getConstantIndex(firstDimVal, firstDimConst) &&
+        firstDimConst > chunkSizeVal) {
+      numChunksOpt = (firstDimConst + chunkSizeVal - 1) / chunkSizeVal;
+    }
+    /// If dim 0 is runtime -> numChunksOpt stays nullopt
+
+    /// Compute innerBytes (requires dims 1..N to be constant)
+    /// Key insight: innerBytes does NOT depend on dim 0!
+    std::optional<int64_t> innerBytesOpt;
+    int64_t innerElements = chunkSizeVal; /// Start with chunk size
+    bool innerConstant = true;
+    for (unsigned i = 1; i < elemSizes.size(); ++i) {
+      int64_t dimSize;
+      if (arts::getConstantIndex(elemSizes[i], dimSize))
+        innerElements *= dimSize;
+      else
+        innerConstant = false;
+    }
+    if (innerConstant) {
+      innerBytesOpt = innerElements * elemBytes;
+    }
+    /// If any dim 1..N is runtime → innerBytesOpt stays nullopt
+
+    /// Call H2 with partial information (uses reject-early semantics)
+    /// Use ParallelFor source since we're in promoteAllocForChunking
+    /// (DbControlOps would have made this fine-grained already)
+    auto &heuristics = AM->getHeuristicsConfig();
+    auto decision = heuristics.shouldUseFineGrained(
+        numChunksOpt,                   /// May be nullopt if dim 0 is runtime
+        std::optional<int64_t>(1),      /// depsPerEDT always known
+        innerBytesOpt,                  /// May be nullopt if dims 1..N runtime
+        PartitioningSource::ParallelFor /// Prioritize chunking for parallel_for
+    );
+
+    /// decision: true=approved, false=rejected, nullopt=partial pass
+    bool useChunked = !decision.has_value() || decision.value();
+
+    if (useChunked) {
+      ARTS_DEBUG("  Using "
+                 << elemSizes.size()
+                 << "D first-dim chunking with chunkSize=" << chunkSizeVal);
+
+      /// Generate runtime numChunks computation
+      Value chunkSizeValue =
+          builder.create<arith::ConstantIndexOp>(loc, chunkSizeVal);
+      Value numChunksVal =
+          builder.create<arith::CeilDivUIOp>(loc, firstDimVal, chunkSizeValue);
+
+      /// Build new sizes: [numChunks] (may be runtime)
+      newOuterSizes.push_back(numChunksVal);
+
+      /// Build new elementSizes: [chunkSize, D2, D3, ..., DN]
+      newInnerSizes.push_back(chunkSizeValue);
+      for (unsigned i = 1; i < elemSizes.size(); ++i)
+        newInnerSizes.push_back(elemSizes[i]); /// Copy remaining dims
+    }
+  }
+
+  ///==========================================================================
+  /// 1D Chunking: For 1D allocations only
+  /// Example: sizes=[1], elemSizes=[16M] -> sizes=[16], elemSizes=[1M]
+  /// Uses partial evaluation for runtime-valued total elements
+  ///==========================================================================
+  if (newOuterSizes.empty() && allocOp.getElementSizes().size() == 1 &&
+      chunkSizeVal > 0) {
     Value totalElementsVal = allocOp.getElementSizes()[0];
-    int64_t totalElements = 0;
+
+    /// Compute numChunks (requires total elements to be constant)
+    std::optional<int64_t> numChunksOpt;
+    int64_t totalElements;
     if (arts::getConstantIndex(totalElementsVal, totalElements) &&
         totalElements > chunkSizeVal) {
-      /// Compute number of chunks: ceil(totalElements / chunkSize)
-      int64_t numChunks = (totalElements + chunkSizeVal - 1) / chunkSizeVal;
+      numChunksOpt = (totalElements + chunkSizeVal - 1) / chunkSizeVal;
+    }
+    /// If total elements is runtime → numChunksOpt stays nullopt
 
-      /// Check H2 heuristic: only use chunked if it's reasonable
-      auto &heuristics = AM->getHeuristicsConfig();
-      /// Compute actual element size in bytes from the element type
-      Type elemType = allocOp.getElementType();
-      unsigned elemBytes = 4; // default to 4 bytes (float)
-      if (elemType.isIntOrFloat())
-        elemBytes = (elemType.getIntOrFloatBitWidth() + 7) / 8;
-      int64_t innerBytes = chunkSizeVal * elemBytes;
-      if (heuristics.shouldUseFineGrained(numChunks, /*depsPerEDT=*/1,
-                                          innerBytes)) {
-        ARTS_DEBUG("  Using chunked allocation: " << numChunks << " chunks of "
-                                                  << chunkSizeVal
-                                                  << " elements");
+    /// innerBytes is always known for 1D (chunkSize * elemBytes)
+    int64_t innerBytes = chunkSizeVal * elemBytes;
 
-        /// Create new allocation with chunked granularity
-        SmallVector<Value> newSizes{
-            builder.create<arith::ConstantIndexOp>(loc, numChunks)};
-        SmallVector<Value> newElementSizes{
-            builder.create<arith::ConstantIndexOp>(loc, chunkSizeVal)};
+    /// Call H2 with partial information
+    /// Use ParallelFor source since we're in promoteAllocForChunking
+    auto &heuristics = AM->getHeuristicsConfig();
+    auto decision = heuristics.shouldUseFineGrained(
+        numChunksOpt,              /// May be nullopt if totalElements runtime
+        std::optional<int64_t>(1), /// depsPerEDT always known
+        std::optional<int64_t>(innerBytes), /// Always known for 1D
+        PartitioningSource::ParallelFor /// Prioritize chunking for parallel_for
+    );
 
-        Value address = allocOp.getAddress();
-        auto newAlloc = builder.create<DbAllocOp>(
-            loc, allocOp.getMode(), allocOp.getRoute(), allocOp.getAllocType(),
-            allocOp.getDbMode(), allocOp.getElementType(), address, newSizes,
-            newElementSizes);
+    /// decision: true=approved, false=rejected, nullopt=partial pass
+    bool useChunked = !decision.has_value() || decision.value();
 
-        /// Transfer metadata from original allocation
-        if (allocOp->hasAttr("arts.id"))
-          newAlloc->setAttr("arts.id", allocOp->getAttr("arts.id"));
-        if (allocOp->hasAttr("arts.memref"))
-          newAlloc->setAttr("arts.memref", allocOp->getAttr("arts.memref"));
+    if (useChunked) {
+      ARTS_DEBUG(
+          "  Using 1D chunked allocation with chunkSize=" << chunkSizeVal);
 
-        /// Rewrite all uses to reference the new allocation
-        DbTransforms transforms;
-        if (failed(transforms.rewriteAllUses(allocOp, newAlloc, builder))) {
-          newAlloc.erase();
-          /// Fall through to element-wise promotion
-        } else {
-          return newAlloc;
-        }
-      } else {
-        ARTS_DEBUG("  H2 rejects chunked allocation: numChunks="
-                   << numChunks << " innerBytes=" << innerBytes);
-      }
+      /// Generate runtime numChunks computation
+      Value chunkSizeValue =
+          builder.create<arith::ConstantIndexOp>(loc, chunkSizeVal);
+      Value numChunksVal = builder.create<arith::CeilDivUIOp>(
+          loc, totalElementsVal, chunkSizeValue);
+
+      newOuterSizes.push_back(numChunksVal);
+      newInnerSizes.push_back(chunkSizeValue);
+    } else {
+      ARTS_DEBUG(
+          "  H2 rejects 1D chunked allocation: innerBytes=" << innerBytes);
     }
   }
 
-  /// Fallback: element-wise promotion
-  /// sizes=[1], elementSizes=[N] -> sizes=[N], elementSizes=[1]
-  ARTS_DEBUG("  Falling back to element-wise promotion");
-  DbTransforms transforms;
-  auto newAlloc = transforms.promoteAllocation(allocOp, 1, builder,
-                                               /*trimLeadingOnes=*/true);
-  if (!newAlloc)
-    return failure();
+  ///==========================================================================
+  /// Element-wise fallback: sizes=[1], elementSizes=[N] -> sizes=[N],
+  /// elementSizes=[1]
+  ///==========================================================================
+  if (newOuterSizes.empty()) {
+    ARTS_DEBUG("  Falling back to element-wise promotion");
 
-  if (failed(transforms.rewriteAllUses(allocOp, newAlloc, builder))) {
-    newAlloc.erase();
-    return failure();
-  }
-
-  return newAlloc;
-}
-
-void DbPass::updateAcquireForChunk(DbAcquireOp acqOp, Value elementOffset,
-                                   Value elementSize) {
-  if (!acqOp)
-    return;
-
-  OpBuilder builder(acqOp);
-  builder.setInsertionPoint(acqOp);
-  Location loc = acqOp.getLoc();
-
-  SmallVector<Value> offsets;
-  SmallVector<Value> sizes;
-
-  /// Get the allocation to check if it's chunked
-  Operation *allocOp = arts::getUnderlyingDbAlloc(acqOp.getSourceGuid());
-  if (auto alloc = dyn_cast_or_null<DbAllocOp>(allocOp)) {
-    if (!alloc.getElementSizes().empty()) {
-      int64_t allocChunkSize;
-      if (arts::getConstantIndex(alloc.getElementSizes()[0], allocChunkSize) &&
-          allocChunkSize > 1) {
-        /// Chunked allocation: convert element-space to chunk-space
-        Value chunkSizeVal =
-            builder.create<arith::ConstantIndexOp>(loc, allocChunkSize);
-
-        /// chunkSpaceOffset = elementOffset / allocChunkSize
-        Value chunkSpaceOffset =
-            builder.create<arith::DivUIOp>(loc, elementOffset, chunkSizeVal);
-
-        /// chunkCount = ceil(elementSize / allocChunkSize)
-        Value adjusted = builder.create<arith::AddIOp>(
-            loc, elementSize,
-            builder.create<arith::ConstantIndexOp>(loc, allocChunkSize - 1));
-        Value chunkSpaceSize =
-            builder.create<arith::DivUIOp>(loc, adjusted, chunkSizeVal);
-
-        offsets.push_back(chunkSpaceOffset);
-        sizes.push_back(chunkSpaceSize);
-
-        acqOp.getOffsetsMutable().assign(offsets);
-        acqOp.getSizesMutable().assign(sizes);
-        acqOp.getOffsetHintsMutable().assign(offsets);
-        acqOp.getSizeHintsMutable().assign(sizes);
-
-        /// Rebase users to local coordinates
-        DbTransforms transforms;
-        (void)transforms.rebaseAllUsersToAcquireView(acqOp, builder);
-        return;
-      }
+    /// Move first element dimension to outer, remaining stay as inner
+    ValueRange elemSizes = allocOp.getElementSizes();
+    if (!elemSizes.empty()) {
+      newOuterSizes.push_back(elemSizes[0]);
+      for (unsigned i = 1; i < elemSizes.size(); ++i)
+        newInnerSizes.push_back(elemSizes[i]);
     }
+
+    /// Ensure non-empty inner sizes
+    if (newInnerSizes.empty())
+      newInnerSizes.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
   }
 
-  /// Fallback: use element-space
-  offsets.push_back(elementOffset);
-  sizes.push_back(elementSize);
-  acqOp.getOffsetsMutable().assign(offsets);
-  acqOp.getSizesMutable().assign(sizes);
-  acqOp.getOffsetHintsMutable().assign(offsets);
-  acqOp.getSizeHintsMutable().assign(sizes);
+  /// Extract partition info from acquireInfo
+  SmallVector<DbAcquireOp> acquires;
+  SmallVector<Value> elementOffsets, elementSizes;
+  for (auto &[acqOp, offset, size] : acquireInfo) {
+    acquires.push_back(acqOp);
+    elementOffsets.push_back(offset);
+    elementSizes.push_back(size);
+  }
 
-  /// Rebase users to local coordinates
-  DbTransforms transforms;
-  (void)transforms.rebaseAllUsersToAcquireView(acqOp, builder);
+  /// Create DbAllocPromotion and apply
+  DbAllocPromotion promotion(allocOp, newOuterSizes, newInnerSizes, acquires,
+                             elementOffsets, elementSizes);
+  auto result = promotion.apply(builder);
+
+  /// Transfer metadata if successful
+  if (succeeded(result)) {
+    AM->getMetadataManager().transferMetadata(allocOp, result.value());
+  }
+
+  return result;
 }
 
 ///===----------------------------------------------------------------------===///
