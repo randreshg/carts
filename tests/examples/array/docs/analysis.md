@@ -149,13 +149,19 @@ Walk through these steps and fix any problem that you find in the way
 
    Lets analyze the code after running the pipeline and verify if it matches the expected output.
 
-4. **Finally lets carts execute and check**
+4. **Analyze the concurrency-opt output**
+    ```bash
+      carts run array.mlir --concurrency-opt &> array_concurrency_opt.mlir
+    ```
+    And verify the pattern of the Conditional Stencil Pattern 
+
+5. **Finally lets carts execute and check**
 ```bash
    carts execute array.c
    ./array_arts 8
 ```
 
----
+Keep in mind the part below:
 
 ## Conditional Stencil Pattern (No Bounds Checking Needed)
 

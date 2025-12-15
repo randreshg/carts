@@ -213,7 +213,7 @@ private:
         return;
 
       uint64_t readOnly = 0, writeOnly = 0, readWrite = 0;
-      uint64_t memrefsWithDeps = 0, poorTemporal = 0;
+      uint64_t memrefsWithDeps = 0;
       for (auto &entry : usage) {
         LoopMemrefUsage &info = entry.second;
         bool hasReads = info.readCount > 0;
@@ -227,27 +227,15 @@ private:
 
         if (info.hasLoopCarriedDeps)
           memrefsWithDeps++;
-        if (info.memrefMetadata) {
-          if (info.memrefMetadata->temporalLocality &&
-              *info.memrefMetadata->temporalLocality ==
-                  TemporalLocalityLevel::Poor)
-            poorTemporal++;
-        }
       }
 
-      loopMeta->memrefCount = static_cast<int64_t>(usage.size());
-      loopMeta->readOnlyMemrefCount = readOnly;
-      loopMeta->writeOnlyMemrefCount = writeOnly;
-      loopMeta->readWriteMemrefCount = readWrite;
       loopMeta->memrefsWithLoopCarriedDeps = memrefsWithDeps;
-      loopMeta->poorTemporalLocalityMemrefCount = poorTemporal;
 
       bool hasLoopLevelDeps =
           loopMeta->hasInterIterationDeps && *loopMeta->hasInterIterationDeps;
       bool sequential = hasLoopLevelDeps || memrefsWithDeps > 0;
-      bool hasWrites =
-          (writeOnly + readWrite) > 0 ||
-          loopMeta->accessStats.writeCount.value_or(0) > 0;
+      bool hasWrites = (writeOnly + readWrite) > 0 ||
+                       loopMeta->accessStats.writeCount.value_or(0) > 0;
       LoopMetadata::ParallelClassification classification =
           LoopMetadata::ParallelClassification::Unknown;
       if (sequential) {

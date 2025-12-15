@@ -44,6 +44,7 @@ static void replaceWorkerIds(Operation *op, Value workerId) {
 }
 
 /// Guard all single EDTs nested under `op` to run only on worker 0.
+/// We inline the EDT body directly into the if-block.
 static void guardSingleEdts(Operation *op, Value workerId) {
   SmallVector<EdtOp> singleEdts;
   op->walk([&](EdtOp edt) {
@@ -65,13 +66,25 @@ static void guardSingleEdts(Operation *op, Value workerId) {
     auto ifOp = builder.create<scf::IfOp>(loc, TypeRange{}, isZero,
                                           /*withElseRegion=*/false);
 
-    // Move EDT into then block
+    /// Inline the EDT body
     Block *thenBlock = &ifOp.getThenRegion().front();
-    edt->moveBefore(thenBlock->getTerminator());
+    Block &edtBody = edt.getBody().front();
 
-    // Fix EDT type
-    edt.setType(EdtType::task);
-    edt->removeAttr(AttrNames::Operation::Nowait);
+    /// Replace uses of EDT's block arguments with the EDT's dependencies..
+    ValueRange deps = edt.getDependencies();
+    for (auto [blockArg, dep] :
+         llvm::zip(edtBody.getArguments(), deps)) {
+      blockArg.replaceAllUsesWith(dep);
+    }
+
+    /// Move all operations (except terminator) from EDT body to if-block
+    for (Operation &bodyOp :
+         llvm::make_early_inc_range(edtBody.without_terminator())) {
+      bodyOp.moveBefore(thenBlock->getTerminator());
+    }
+
+    /// Erase the now-empty EDT
+    edt.erase();
   }
 }
 

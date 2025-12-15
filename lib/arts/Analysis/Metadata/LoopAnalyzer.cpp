@@ -50,10 +50,8 @@ void LoopAnalyzer::analyzeAffineLoop(affine::AffineForOp forOp,
   analyzeMemoryAccesses(forOp, metadata);
 
   metadata->hasInterIterationDeps = depAnalyzer.hasInterIterationDeps(forOp);
-  metadata->dependenceDistance = depAnalyzer.getMinDependenceDistance(forOp);
   metadata->dataMovementPattern = classifyDataMovement(metadata);
   suggestPartitioning(metadata);
-  computeMemoryFootprintPerIter(forOp, metadata);
   detectReductions(forOp.getOperation(), metadata);
   finalizeParallelFlag(forOp.getOperation(), metadata);
 }
@@ -110,7 +108,6 @@ void LoopAnalyzer::analyzeSCFLoop(Operation *loopOp, LoopMetadata *metadata) {
   metadata->hasInterIterationDeps = depAnalyzer.hasInterIterationDeps(loopOp);
   metadata->dataMovementPattern = classifyDataMovement(metadata);
   suggestPartitioning(metadata);
-  computeMemoryFootprintPerIter(loopOp, metadata);
   /// TODO: Add reduction detection when available
   detectReductions(loopOp, metadata);
   finalizeParallelFlag(loopOp, metadata);
@@ -186,45 +183,19 @@ void LoopAnalyzer::suggestPartitioning(LoopMetadata *metadata) {
   if (metadata->tripCount && *metadata->tripCount > 0) {
     int64_t tripCount = *metadata->tripCount;
     if (tripCount < 100) {
-      /// Small loops: use block scheduling with small chunks
+      /// Small loops: use block scheduling
       metadata->suggestedPartitioning = LoopMetadata::Partitioning::Block;
-      metadata->suggestedChunkSize = std::max<int64_t>(1, tripCount / 4);
     } else if (tripCount < 10000) {
-      /// Medium loops: use block scheduling with moderate chunks
+      /// Medium loops: use block scheduling
       metadata->suggestedPartitioning = LoopMetadata::Partitioning::Block;
-      metadata->suggestedChunkSize = std::max<int64_t>(32, tripCount / 64);
     } else {
       /// Large loops: use dynamic scheduling for better load balancing
       metadata->suggestedPartitioning = LoopMetadata::Partitioning::Dynamic;
-      metadata->suggestedChunkSize = std::max<int64_t>(64, tripCount / 128);
     }
   } else {
     /// Unknown trip count: suggest auto partitioning
     metadata->suggestedPartitioning = LoopMetadata::Partitioning::Auto;
   }
-}
-
-void LoopAnalyzer::computeMemoryFootprintPerIter(Operation *loopOp,
-                                                 LoopMetadata *metadata) {
-  int64_t footprint = 0;
-
-  DenseSet<Value> uniqueMemrefs;
-  loopOp->walk([&](Operation *op) {
-    if (Value memref = accessAnalyzer.getAccessedMemref(op))
-      uniqueMemrefs.insert(memref);
-  });
-
-  /// Sum up element sizes of all accessed memrefs
-  for (Value memref : uniqueMemrefs) {
-    if (auto memrefType = memref.getType().dyn_cast<MemRefType>()) {
-      Type elemType = memrefType.getElementType();
-      uint64_t elemBytes = arts::getElementTypeByteSize(elemType);
-      if (elemBytes > 0)
-        footprint += static_cast<int64_t>(elemBytes);
-    }
-  }
-
-  metadata->memoryFootprintPerIter = footprint;
 }
 
 void LoopAnalyzer::detectReductions(Operation *loopOp, LoopMetadata *metadata) {

@@ -171,33 +171,14 @@ bool LoopMetadata::importFromOp() {
   /// Partitioning hints
   suggestedPartitioning =
       Partitioning(getIntFromAttr(attr.getSuggestedPartitioning()).value_or(0));
-  suggestedChunkSize = getIntFromAttr(attr.getSuggestedChunkSize()).value_or(0);
-  memoryFootprintPerIter =
-      getIntFromAttr(attr.getMemoryFootprintPerIter()).value_or(0);
 
   /// Dependency information
   hasInterIterationDeps = getBoolFromAttr(attr.getHasInterIterationDeps());
-  dependenceDistance = getIntFromAttr(attr.getDependenceDistance()).value_or(0);
 
-  auto assignOptionalInt = [&](const std::optional<int64_t> &value,
-                               std::optional<int64_t> &target) {
-    if (value)
-      target = *value;
-    else
-      target.reset();
-  };
-
-  assignOptionalInt(getIntFromAttr(attr.getMemrefCount()), memrefCount);
-  assignOptionalInt(getIntFromAttr(attr.getReadOnlyMemrefCount()),
-                    readOnlyMemrefCount);
-  assignOptionalInt(getIntFromAttr(attr.getWriteOnlyMemrefCount()),
-                    writeOnlyMemrefCount);
-  assignOptionalInt(getIntFromAttr(attr.getReadWriteMemrefCount()),
-                    readWriteMemrefCount);
-  assignOptionalInt(getIntFromAttr(attr.getMemrefsWithLoopCarriedDeps()),
-                    memrefsWithLoopCarriedDeps);
-  assignOptionalInt(getIntFromAttr(attr.getPoorTemporalLocalityMemrefs()),
-                    poorTemporalLocalityMemrefCount);
+  if (auto value = getIntFromAttr(attr.getMemrefsWithLoopCarriedDeps()))
+    memrefsWithLoopCarriedDeps = *value;
+  else
+    memrefsWithLoopCarriedDeps.reset();
   if (auto value = getIntFromAttr(attr.getParallelClassification()))
     parallelClassification = static_cast<ParallelClassification>(value.value());
   else
@@ -232,31 +213,11 @@ void LoopMetadata::importFromJson(const llvm::json::Object &json) {
   suggestedPartitioning = Partitioning(
       json.getInteger(AttrNames::LoopMetadata::SuggestedPartitioning)
           .value_or(0));
-  suggestedChunkSize =
-      json.getInteger(AttrNames::LoopMetadata::SuggestedChunkSize).value_or(0);
-  memoryFootprintPerIter =
-      json.getInteger(AttrNames::LoopMetadata::MemoryFootprintPerIter)
-          .value_or(0);
   hasInterIterationDeps =
       json.getBoolean(AttrNames::LoopMetadata::HasInterIterationDeps)
           .value_or(false);
-  dependenceDistance =
-      json.getInteger(AttrNames::LoopMetadata::DependenceDistance).value_or(0);
-  memrefCount =
-      json.getInteger(AttrNames::LoopMetadata::MemrefCount).value_or(0);
-  readOnlyMemrefCount =
-      json.getInteger(AttrNames::LoopMetadata::ReadOnlyMemrefCount).value_or(0);
-  writeOnlyMemrefCount =
-      json.getInteger(AttrNames::LoopMetadata::WriteOnlyMemrefCount)
-          .value_or(0);
-  readWriteMemrefCount =
-      json.getInteger(AttrNames::LoopMetadata::ReadWriteMemrefCount)
-          .value_or(0);
   memrefsWithLoopCarriedDeps =
       json.getInteger(AttrNames::LoopMetadata::MemrefsWithLoopCarriedDeps)
-          .value_or(0);
-  poorTemporalLocalityMemrefCount =
-      json.getInteger(AttrNames::LoopMetadata::PoorTemporalLocalityMemrefs)
           .value_or(0);
   parallelClassification = ParallelClassification::Unknown;
   if (auto i = json.getInteger(AttrNames::LoopMetadata::ParallelClassification))
@@ -286,23 +247,10 @@ void LoopMetadata::exportToJson(llvm::json::Object &json) const {
   json[AttrNames::LoopMetadata::SuggestedPartitioning.str()] =
       static_cast<int64_t>(
           suggestedPartitioning.value_or(Partitioning::Unknown));
-  json[AttrNames::LoopMetadata::SuggestedChunkSize.str()] = suggestedChunkSize;
-  json[AttrNames::LoopMetadata::MemoryFootprintPerIter.str()] =
-      memoryFootprintPerIter;
   json[AttrNames::LoopMetadata::HasInterIterationDeps.str()] =
       hasInterIterationDeps;
-  json[AttrNames::LoopMetadata::DependenceDistance.str()] = dependenceDistance;
-  json[AttrNames::LoopMetadata::MemrefCount.str()] = memrefCount.value_or(0);
-  json[AttrNames::LoopMetadata::ReadOnlyMemrefCount.str()] =
-      readOnlyMemrefCount.value_or(0);
-  json[AttrNames::LoopMetadata::WriteOnlyMemrefCount.str()] =
-      writeOnlyMemrefCount.value_or(0);
-  json[AttrNames::LoopMetadata::ReadWriteMemrefCount.str()] =
-      readWriteMemrefCount.value_or(0);
   json[AttrNames::LoopMetadata::MemrefsWithLoopCarriedDeps.str()] =
       memrefsWithLoopCarriedDeps.value_or(0);
-  json[AttrNames::LoopMetadata::PoorTemporalLocalityMemrefs.str()] =
-      poorTemporalLocalityMemrefCount.value_or(0);
   if (parallelClassification)
     json[AttrNames::LoopMetadata::ParallelClassification.str()] =
         static_cast<int64_t>(*parallelClassification);
@@ -363,13 +311,8 @@ Attribute LoopMetadata::getMetadataAttr() const {
       /// Partitioning hints
       builder.getI64IntegerAttr(static_cast<int64_t>(
           suggestedPartitioning.value_or(Partitioning::Unknown))),
-      toIntAttr(suggestedChunkSize), toIntAttr(memoryFootprintPerIter),
       /// Dependency information
-      toBoolAttr(hasInterIterationDeps), toIntAttr(dependenceDistance),
-      toIntAttr(memrefCount), toIntAttr(readOnlyMemrefCount),
-      toIntAttr(writeOnlyMemrefCount), toIntAttr(readWriteMemrefCount),
-      toIntAttr(memrefsWithLoopCarriedDeps),
-      toIntAttr(poorTemporalLocalityMemrefCount),
+      toBoolAttr(hasInterIterationDeps), toIntAttr(memrefsWithLoopCarriedDeps),
       toEnumAttr(parallelClassification, ParallelClassification::Unknown),
       /// Source location
       builder.getStringAttr(locationMetadata.getKey()));
@@ -415,12 +358,7 @@ LoopMetadataAttr LoopMetadata::toAttribute(MLIRContext *ctx) const {
           dataMovementPattern.value_or(DataMovement::Unknown))),
       builder.getI64IntegerAttr(static_cast<int64_t>(
           suggestedPartitioning.value_or(Partitioning::Unknown))),
-      toIntAttr(suggestedChunkSize), toIntAttr(memoryFootprintPerIter),
-      toBoolAttr(hasInterIterationDeps), toIntAttr(dependenceDistance),
-      toIntAttr(memrefCount), toIntAttr(readOnlyMemrefCount),
-      toIntAttr(writeOnlyMemrefCount), toIntAttr(readWriteMemrefCount),
-      toIntAttr(memrefsWithLoopCarriedDeps),
-      toIntAttr(poorTemporalLocalityMemrefCount),
+      toBoolAttr(hasInterIterationDeps), toIntAttr(memrefsWithLoopCarriedDeps),
       toEnumAttr(parallelClassification, ParallelClassification::Unknown),
       builder.getStringAttr(locationMetadata.getKey()));
 }
@@ -437,7 +375,6 @@ LoopMetadata::createParallelizedMetadata(MLIRContext *ctx,
   /// - memrefsWithLoopCarriedDeps = 0
   /// - parallelClassification = Likely
   /// - reductionKinds = null (cleared)
-  /// - dependenceDistance = null (cleared)
   /// All other fields are copied from base.
 
   return LoopMetadataAttr::get(
@@ -454,16 +391,10 @@ LoopMetadata::createParallelizedMetadata(MLIRContext *ctx,
       base.getHasUniformStride(), base.getHasGatherScatter(),
       base.getDataMovementPattern(),
       /// Partitioning hints - copied from base
-      base.getSuggestedPartitioning(), base.getSuggestedChunkSize(),
-      base.getMemoryFootprintPerIter(),
+      base.getSuggestedPartitioning(),
       /// Dependency info - updated for parallelization
       builder.getBoolAttr(false), // hasInterIterationDeps (broken by partials)
-      nullptr,                    // dependenceDistance (cleared)
-      /// Memref stats - copied from base, except loop-carried deps
-      base.getMemrefCount(), base.getReadOnlyMemrefCount(),
-      base.getWriteOnlyMemrefCount(), base.getReadWriteMemrefCount(),
       builder.getI64IntegerAttr(0), // memrefsWithLoopCarriedDeps = 0
-      base.getPoorTemporalLocalityMemrefs(),
       /// Classification - now Likely parallel
       builder.getI64IntegerAttr(
           static_cast<int64_t>(ParallelClassification::Likely)),
