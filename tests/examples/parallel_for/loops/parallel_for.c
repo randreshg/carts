@@ -5,7 +5,7 @@
 
 #include "arts/Utils/Testing/CartsTest.h"
 
-#define DEBUG 0
+// #define DEBUG 0
 
 int main(int argc, char **argv) {
   CARTS_TIMER_START();
@@ -27,12 +27,10 @@ int main(int argc, char **argv) {
     d[i] = 0;
   }
 
-#if DEBUG
-  printf("Initial values:\n");
+  CARTS_DEBUG_PRINT("Initial values:\n");
   for (int i = 0; i < N; i++)
-    printf("a[%d] = %d, b[%d] = %d, c[%d] = %d, d[%d] = %d\n", i, a[i], i, b[i],
-           i, c[i], i, d[i]);
-#endif
+    CARTS_DEBUG_PRINT("a[%d] = %d, b[%d] = %d, c[%d] = %d, d[%d] = %d\n", i, a[i], i,
+             b[i], i, c[i], i, d[i]);
 
   /// Single parallel region with back-to-back for loops
 #pragma omp parallel
