@@ -319,6 +319,23 @@ EdtLoweringPass::createOutlinedFunction(EdtOp edtOp,
   auto outlinedFunc = AC->create<func::FuncOp>(loc, funcName, AC->EdtFn);
   outlinedFunc.setPrivate();
 
+  /// Mark pointer parameters with attributes to enable LLVM optimizations.
+  /// Without these attributes, LLVM cannot prove aliasing properties, which
+  /// prevents hoisting of loop-invariant loads and other optimizations.
+  auto unitAttr = AC->getBuilder().getUnitAttr();
+
+  /// Arg 1 (paramv): Static parameters array - never modified during EDT
+  outlinedFunc.setArgAttr(1, "llvm.noalias", unitAttr);
+  outlinedFunc.setArgAttr(1, "llvm.readonly", unitAttr);
+  outlinedFunc.setArgAttr(1, "llvm.nofree", unitAttr);
+  outlinedFunc.setArgAttr(1, "llvm.nocapture", unitAttr);
+
+  /// Arg 3 (depv): Deps array - struct pointers never modified, enables LICM
+  outlinedFunc.setArgAttr(3, "llvm.noalias", unitAttr);
+  outlinedFunc.setArgAttr(3, "llvm.readonly", unitAttr);
+  outlinedFunc.setArgAttr(3, "llvm.nofree", unitAttr);
+  outlinedFunc.setArgAttr(3, "llvm.nocapture", unitAttr);
+
   ARTS_INFO("Created outlined function: " << funcName);
   return outlinedFunc;
 }
