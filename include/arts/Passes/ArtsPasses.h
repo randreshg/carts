@@ -34,22 +34,23 @@ std::unique_ptr<Pass> createDeadCodeEliminationPass();
 std::unique_ptr<Pass> createEdtPass(ArtsAnalysisManager *AM, bool runAnalysis);
 std::unique_ptr<Pass> createConcurrencyPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createCreateDbsPass(ArtsAnalysisManager *AM);
-std::unique_ptr<Pass> createDbPass(ArtsAnalysisManager *AM,
-                                   bool enablePartitioning = true);
+std::unique_ptr<Pass> createDbPass(ArtsAnalysisManager *AM);
+std::unique_ptr<Pass> createDbPartitioningPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createCreateEpochsPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug);
 std::unique_ptr<Pass> createEdtInvariantCodeMotionPass();
-std::unique_ptr<Pass> createArtsDataPointerHoistingPass();
-std::unique_ptr<Pass> createArtsAliasScopeGenPass();
-std::unique_ptr<Pass> createArtsLoopVectorizationHintsPass();
-std::unique_ptr<Pass> createArtsScalarReplacementPass();
+std::unique_ptr<Pass> createDataPointerHoistingPass();
+std::unique_ptr<Pass> createAliasScopeGenPass();
+std::unique_ptr<Pass> createLoopVectorizationHintsPass();
+std::unique_ptr<Pass> createScalarReplacementPass();
 std::unique_ptr<Pass> createEdtPtrRematerializationPass();
 std::unique_ptr<Pass> createDbLoweringPass(uint64_t idStride = 1000);
 std::unique_ptr<Pass> createEpochLoweringPass();
 std::unique_ptr<Pass> createParallelEdtLoweringPass();
 std::unique_ptr<Pass> createEdtLoweringPass(uint64_t idStride = 1000);
 std::unique_ptr<Pass> createForLoweringPass();
+std::unique_ptr<Pass> createLoopFusionPass(ArtsAnalysisManager *AM);
 } // namespace arts
 } // namespace mlir
 

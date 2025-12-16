@@ -105,16 +105,41 @@ def DeadCodeElimination : Pass<"arts-dce", "mlir::ModuleOp"> {
 }
 
 def Db : Pass<"db", "mlir::ModuleOp"> {
-  let summary = "Analyze and optimize the datablocks in the program";
+  let summary = "Adjust datablock modes based on access patterns";
+  let description = [{
+    Adjusts the mode (in/out/inout) of datablock allocations and acquires
+    based on the actual load/store operations performed on them.
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect"
+  ];
+  let constructor = "mlir::arts::createDbPass(nullptr)";
+}
+
+def DbPartitioning : Pass<"db-partitioning", "mlir::ModuleOp"> {
+  let summary = "Partition datablocks for fine-grained parallel access";
+  let description = [{
+    Transforms coarse-grained datablock allocations to fine-grained (chunked)
+    allocations for better parallelism. Also handles:
+    - Twin-diff attribute assignment for distributed synchronization
+    - Stencil bounds analysis and runtime bounds checking
+
+    Twin-Diff Policy:
+    - DEFAULT: twin_diff = TRUE (safe, handles potential overlap at runtime)
+    - DISABLE: Only when we can PROVE non-overlapping access patterns
+  }];
   let dependentDialects = [
     "memref::MemRefDialect",
     "LLVM::LLVMDialect",
     "func::FuncDialect",
     "arts::ArtsDialect",
     "arith::ArithDialect",
+    "scf::SCFDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createDbPass(nullptr)";
+  let constructor = "mlir::arts::createDbPartitioningPass(nullptr)";
 }
 
 def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {
@@ -249,7 +274,7 @@ def ArtsDataPointerHoisting : Pass<"arts-data-pointer-hoisting", "mlir::ModuleOp
     "LLVM::LLVMDialect",
     "scf::SCFDialect"
   ];
-  let constructor = "mlir::arts::createArtsDataPointerHoistingPass()";
+  let constructor = "mlir::arts::createDataPointerHoistingPass()";
 }
 
 def EdtPtrRematerialization : Pass<"edt-ptr-rematerialization", "mlir::ModuleOp"> {
@@ -323,6 +348,24 @@ def EdtLowering : Pass<"edt-lowering", "mlir::ModuleOp"> {
     "polygeist::PolygeistDialect"
   ];
   let constructor = "mlir::arts::createEdtLoweringPass()";
+}
+
+def ArtsLoopFusion : Pass<"arts-loop-fusion", "mlir::ModuleOp"> {
+  let summary = "Fuse independent arts.for loops within parallel EDTs";
+  let description = [{
+    Identifies consecutive arts.for operations within parallel EDTs that:
+    1. Have compatible iteration bounds
+    2. Access disjoint sets of memory locations (no data dependencies)
+    Uses LoopAnalysis for enhanced dependency checking.
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "arith::ArithDialect",
+    "scf::SCFDialect"
+  ];
+  let constructor = "mlir::arts::createLoopFusionPass(nullptr)";
 }
 
 #endif // CARTS_PASSES

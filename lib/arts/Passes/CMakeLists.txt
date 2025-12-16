@@ -4,14 +4,15 @@ message(STATUS "POLYGEIST_LIBRARY_DIR: ${POLYGEIST_BUILD_DIR}/lib")
 
 add_mlir_dialect_library(MLIRArtsTransforms
   ArtsInliner.cpp
-  ArtsDataPointerHoisting.cpp
-  ArtsAliasScopeGen.cpp
-  ArtsLoopVectorizationHints.cpp
-  ArtsScalarReplacement.cpp
+  DataPointerHoisting.cpp
+  AliasScopeGen.cpp
+  LoopVectorizationHints.cpp
+  ScalarReplacement.cpp
   ConvertOpenMPToArts.cpp
   DeadCodeElimination.cpp
   Edt.cpp
   CreateDbs.cpp
+  DbPartitioning.cpp
   CollectMetadata.cpp
   CanonicalizeMemrefs.cpp
   Db.cpp
@@ -24,6 +25,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   EdtPtrRematerialization.cpp
   DbLowering.cpp
   ForLowering.cpp
+  LoopFusion.cpp
   ParallelEdtLowering.cpp
   EdtLowering.cpp
   Concurrency.cpp
