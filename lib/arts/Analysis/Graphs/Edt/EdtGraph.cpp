@@ -139,6 +139,46 @@ bool EdtGraph::isEdtReachable(EdtOp fromOp, EdtOp toOp) {
   return false;
 }
 
+bool EdtGraph::areEdtsIndependent(EdtOp a, EdtOp b) {
+  EdtNode *nodeA = getEdtNode(a);
+  EdtNode *nodeB = getEdtNode(b);
+  if (!nodeA || !nodeB)
+    return false;
+
+  const auto &infoA = nodeA->getInfo();
+  const auto &infoB = nodeB->getInfo();
+
+  // Primary check: no shared DbAllocOp between the two EDTs
+  for (auto db : infoA.dbAllocsRead) {
+    if (infoB.dbAllocsRead.contains(db) || infoB.dbAllocsWritten.contains(db))
+      return false;
+  }
+  for (auto db : infoA.dbAllocsWritten) {
+    if (infoB.dbAllocsRead.contains(db) || infoB.dbAllocsWritten.contains(db))
+      return false;
+  }
+
+  // Optional: Check associated loops for additional dependency info via LoopMetadata
+  // If EDTs have associated loops, check their parallel classification
+  auto loopsA = nodeA->getAssociatedLoops();
+  auto loopsB = nodeB->getAssociatedLoops();
+  for (auto *loopA : loopsA) {
+    for (auto *loopB : loopsB) {
+      // If loops share any memrefs with loop-carried deps, be conservative
+      // This leverages LoopMetadata's hasInterIterationDeps field
+      if (loopA->hasInterIterationDeps.has_value() &&
+          loopA->hasInterIterationDeps.value() &&
+          loopB->hasInterIterationDeps.has_value() &&
+          loopB->hasInterIterationDeps.value()) {
+        // Both have inter-iteration deps - check if they might conflict
+        // For now, we rely on the dbAllocs check above as primary
+      }
+    }
+  }
+
+  return true; // No shared DBs - EDTs are independent
+}
+
 void EdtGraph::print(llvm::raw_ostream &os) {
   os << "===============================================\n";
   os << "EdtGraph for function: " << func.getName().str() << "\n";

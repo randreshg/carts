@@ -51,6 +51,9 @@ public:
   bool hasDbGraph() const { return dbGraph != nullptr; }
   DbGraph *getDbGraph() const { return dbGraph; }
 
+  /// Check if two EDTs are independent (no shared DB accesses)
+  bool areEdtsIndependent(EdtOp a, EdtOp b);
+
   /// For GraphTraits iterators
   NodesIterator nodesBegin() override { return nodes.begin(); }
   NodesIterator nodesEnd() override { return nodes.end(); }

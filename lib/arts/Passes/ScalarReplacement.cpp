@@ -1,5 +1,5 @@
 ///==========================================================================///
-/// File: ArtsScalarReplacement.cpp
+/// File: ScalarReplacement.cpp
 ///
 /// This pass transforms memory-based reduction patterns in scf.for loops
 /// to register-based iter_args patterns to enable LLVM vectorization.
@@ -185,8 +185,13 @@ static std::optional<ReductionPattern> detectReductionPattern(scf::ForOp forOp) 
       if (!loadMemref)
         continue;
 
-      // Check if load is from the same location as store
-      if (loadMemref == storeMemref && indicesEqual(loadIndices, storeIndices)) {
+      // Check if load is from the same location as store.
+      // Also ensure the load has only one use (the accumulation op)
+      // to avoid dangling references when erasing the old loop.
+      // Additionally, the memref must be defined OUTSIDE the loop so that
+      // we can create new loads/stores outside the loop that use it.
+      if (loadMemref == storeMemref && indicesEqual(loadIndices, storeIndices) &&
+          loadOp->hasOneUse() && isLoopInvariant(storeMemref, forOp)) {
         pattern.loadOp = loadOp;
         pattern.storeOp = storeOp;
         pattern.reduceOp = accOp;
@@ -244,8 +249,7 @@ static LogicalResult transformReduction(ReductionPattern &pattern,
   mapper.map(forOp.getInductionVar(), newForOp.getInductionVar());
   mapper.map(pattern.loadOp->getResult(0), accArg);
 
-  // Erase the auto-generated yield terminator - we'll create a new one
-  // Safety check: only try to get terminator if block has one
+  /// Erase the auto-generated yield terminator.
   if (!newBody->empty()) {
     Operation *existingTerminator = &newBody->back();
     if (existingTerminator && existingTerminator->hasTrait<OpTrait::IsTerminator>())
@@ -298,9 +302,9 @@ static LogicalResult transformReduction(ReductionPattern &pattern,
   return success();
 }
 
-struct ArtsScalarReplacementPass
-    : public PassWrapper<ArtsScalarReplacementPass, OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ArtsScalarReplacementPass)
+struct ScalarReplacementPass
+    : public PassWrapper<ScalarReplacementPass, OperationPass<ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScalarReplacementPass)
 
   StringRef getArgument() const override { return "arts-scalar-replacement"; }
   StringRef getDescription() const override {
@@ -316,7 +320,7 @@ struct ArtsScalarReplacementPass
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
-    ARTS_INFO_HEADER(ArtsScalarReplacementPass);
+    ARTS_INFO_HEADER(ScalarReplacementPass);
 
     int transformed = 0;
 
@@ -351,7 +355,7 @@ struct ArtsScalarReplacementPass
     }
 
     ARTS_INFO("Transformed " << transformed << " reduction patterns");
-    ARTS_INFO_FOOTER(ArtsScalarReplacementPass);
+    ARTS_INFO_FOOTER(ScalarReplacementPass);
   }
 };
 
@@ -363,8 +367,8 @@ struct ArtsScalarReplacementPass
 namespace mlir {
 namespace arts {
 
-std::unique_ptr<Pass> createArtsScalarReplacementPass() {
-  return std::make_unique<ArtsScalarReplacementPass>();
+std::unique_ptr<Pass> createScalarReplacementPass() {
+  return std::make_unique<ScalarReplacementPass>();
 }
 
 } // namespace arts
