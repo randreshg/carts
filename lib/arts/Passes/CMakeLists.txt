@@ -4,6 +4,10 @@ message(STATUS "POLYGEIST_LIBRARY_DIR: ${POLYGEIST_BUILD_DIR}/lib")
 
 add_mlir_dialect_library(MLIRArtsTransforms
   ArtsInliner.cpp
+  ArtsDataPointerHoisting.cpp
+  ArtsAliasScopeGen.cpp
+  ArtsLoopVectorizationHints.cpp
+  ArtsScalarReplacement.cpp
   ConvertOpenMPToArts.cpp
   DeadCodeElimination.cpp
   Edt.cpp
