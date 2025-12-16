@@ -870,8 +870,13 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
         ///      depend index
         ///   3. Each EDT has exclusive read/write access to its indexed element
         /// Therefore, twin-diff is NOT needed - we can safely disable it.
-        acquireOp.setTwinDiff(false);
-        ARTS_DEBUG("   - Fine-grained acquire: twin_diff=false");
+        TwinDiffContext twinCtx;
+        twinCtx.proof = TwinDiffProof::IndexedControl;
+        twinCtx.artsId = AM->getMetadataManager().getIdRegistry().get(
+            acquireOp.getOperation());
+        bool useTwinDiff = AM->getHeuristicsConfig().shouldUseTwinDiff(twinCtx);
+        acquireOp.setTwinDiff(useTwinDiff);
+        ARTS_DEBUG("   - Fine-grained acquire: twin_diff=" << useTwinDiff);
 
         /// Add corresponding block argument for each acquired/reused view
         Value acquirePtr = acquireOp.getPtr();
@@ -950,9 +955,14 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       ///   - Without twin-diff, concurrent writes cause DATA CORRUPTION
       ///   - The runtime twin-diff mechanism safely merges partial updates
       ///
-      /// The Db.cpp pass may later disable twin-diff if it can prove
+      /// The DbPartitioning pass may later disable twin-diff if it can prove
       /// non-overlap through successful partitioning or alias analysis.
-      bool useTwinDiff = !AM->getHeuristicsConfig().shouldDisableTwinDiff();
+      TwinDiffContext twinCtx;
+      twinCtx.proof = TwinDiffProof::None;
+      twinCtx.isCoarseAllocation = true;
+      twinCtx.artsId = AM->getMetadataManager().getIdRegistry().get(
+          acquireOp.getOperation());
+      bool useTwinDiff = AM->getHeuristicsConfig().shouldUseTwinDiff(twinCtx);
       acquireOp.setTwinDiff(useTwinDiff);
       ARTS_DEBUG("   - Coarse-grained acquire: twin_diff=" << useTwinDiff);
 

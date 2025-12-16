@@ -3,17 +3,23 @@
 ///===----------------------------------------------------------------------===///
 
 #include "arts/Analysis/Metadata/LoopAnalyzer.h"
+#include "arts/Analysis/Metadata/ArtsMetadataManager.h"
+#include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
 #include "mlir/Analysis/SliceAnalysis.h"
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
+#include "mlir/Dialect/Affine/Analysis/Utils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
+#include "mlir/Dialect/Affine/LoopUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+
+ARTS_DEBUG_SETUP(loop_analyzer);
 
 using namespace mlir;
 using namespace mlir::arts;
@@ -264,4 +270,112 @@ void LoopAnalyzer::finalizeParallelFlag(Operation *loopOp,
           scf::WhileOp>(loopOp)) {
     metadata->potentiallyParallel = true;
   }
+}
+
+///===----------------------------------------------------------------------===///
+// Loop Reordering Analysis
+///===----------------------------------------------------------------------===///
+
+void LoopAnalyzer::analyzeLoopReordering(affine::AffineForOp outerLoop,
+                                         LoopMetadata *metadata,
+                                         ArtsMetadataManager &manager) {
+  /// 1. Extract perfect nest
+  SmallVector<affine::AffineForOp, 4> nest;
+  affine::getPerfectlyNestedLoops(nest, outerLoop);
+
+  if (nest.size() < 2) {
+    ARTS_DEBUG("Loop reordering: nest size < 2, skipping");
+    return; /// Nothing to reorder
+  }
+
+  /// 2. Check if perfectly nested (body has only inner loop + terminator)
+  for (unsigned i = 0; i < nest.size() - 1; ++i) {
+    auto &bodyOps = nest[i].getBody()->getOperations();
+    /// Perfect nest means: inner loop + yield (terminator)
+    if (bodyOps.size() != 2) {
+      ARTS_DEBUG("Loop reordering: not perfectly nested at level " << i);
+      return;
+    }
+  }
+
+  /// 3. Compute optimal order
+  SmallVector<unsigned> optimalPerm = computeOptimalOrder(nest);
+
+  /// 4. Check if different from current order
+  bool needsReorder = false;
+  for (unsigned i = 0; i < nest.size(); ++i) {
+    if (optimalPerm[i] != i) {
+      needsReorder = true;
+      break;
+    }
+  }
+  if (!needsReorder) {
+    ARTS_DEBUG("Loop reordering: already optimal");
+    return; /// Already optimal - don't export anything
+  }
+
+  /// 5. Check if reordering is legal (dependence analysis)
+  if (!affine::isValidLoopInterchangePermutation(nest, optimalPerm)) {
+    ARTS_DEBUG("Loop reordering: permutation not valid (dependence conflict)");
+    return; /// Can't reorder - don't export
+  }
+
+  /// 6. Build reorderNestTo using arts.ids
+  metadata->reorderNestTo.clear();
+  for (unsigned i = 0; i < optimalPerm.size(); ++i) {
+    affine::AffineForOp targetLoop = nest[optimalPerm[i]];
+    /// Get arts.id for this loop (ensure metadata exists)
+    auto *loopMeta = manager.getLoopMetadata(targetLoop);
+    if (!loopMeta) {
+      ARTS_DEBUG("Loop reordering: missing metadata for loop in nest");
+      metadata->reorderNestTo.clear();
+      return;
+    }
+    auto artsId = loopMeta->getMetadataId();
+    if (!artsId) {
+      ARTS_DEBUG("Loop reordering: missing arts.id for loop in nest");
+      metadata->reorderNestTo.clear();
+      return;
+    }
+    metadata->reorderNestTo.push_back(*artsId);
+  }
+
+  ARTS_DEBUG("Loop reordering: set reorderNestTo with "
+             << metadata->reorderNestTo.size() << " loops");
+}
+
+SmallVector<unsigned>
+LoopAnalyzer::computeOptimalOrder(ArrayRef<affine::AffineForOp> nest) {
+  /// Default: identity permutation
+  SmallVector<unsigned> perm;
+  for (unsigned i = 0; i < nest.size(); ++i)
+    perm.push_back(i);
+
+  if (nest.size() < 2)
+    return perm;
+
+  /// ARTS-aware optimization strategy:
+  /// 1. Outer loop (index 0) often becomes parallel → PRESERVE POSITION
+  /// 2. Inner loops should have stride-1 access for cache efficiency
+  /// 3. For matmul A[i][k]*B[k][j]: make j innermost (B[k][j] stride-1)
+
+  /// For 3-deep nests (common in matrix operations), try i-k-j order
+  /// This is a heuristic for the common matmul pattern
+  if (nest.size() == 3) {
+    /// Check if we have matmul-like access pattern:
+    /// A[i][k] * B[k][j] -> C[i][j]
+    /// Original: i-j-k, Optimal: i-k-j (swap positions 1 and 2)
+
+    /// For now, use simple heuristic: swap middle and inner loops
+    /// This gives i-k-j from i-j-k, which is optimal for matmul
+    perm = {0, 2, 1};
+    ARTS_DEBUG("Loop reordering: trying i-k-j order for 3-deep nest");
+  }
+
+  /// TODO: Implement full stride analysis for general cases
+  /// - Analyze memory access patterns in innermost loop
+  /// - Compute stride for each memref along each loop dimension
+  /// - Choose order that minimizes non-unit strides in inner loops
+
+  return perm;
 }

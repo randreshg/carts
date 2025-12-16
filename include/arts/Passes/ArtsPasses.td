@@ -368,4 +368,36 @@ def ArtsLoopFusion : Pass<"arts-loop-fusion", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createLoopFusionPass(nullptr)";
 }
 
+def LoopReordering : Pass<"loop-reordering", "mlir::ModuleOp"> {
+  let summary = "Reorder inner loops for cache-optimal access patterns";
+  let description = [{
+    Applies loop reordering transformations based on metadata collected during
+    the CollectMetadata phase. This pass reads the `reorder_nest_to` field from
+    LoopMetadata (populated by LoopAnalyzer::analyzeLoopReordering) which contains
+    the target order as a sequence of arts.ids.
+
+    For example, a matrix multiplication with i-j-k order:
+      for i: A[i][k] * B[k][j] -> C[i][j]  // B[k][j] has poor locality
+
+    Gets reordered to i-k-j order:
+      for i: for k: for j: ...  // B[k][j] now has stride-1 access
+
+    This pass MUST run BEFORE CreateDbs because:
+    1. CreateDbs uses SSA indices from DbControlOps
+    2. DbPartitioning analyzes loop IV relationships for chunk bounds
+    3. If loops reordered AFTER CreateDbs, SSA values change and chunk computation fails
+
+    The reordering is computed during CollectMetadata on affine loops using
+    MLIR's isValidLoopInterchangePermutation() for dependence-safe validation.
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "arith::ArithDialect",
+    "scf::SCFDialect"
+  ];
+  let constructor = "mlir::arts::createLoopReorderingPass(nullptr)";
+}
+
 #endif // CARTS_PASSES

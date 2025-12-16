@@ -126,6 +126,8 @@ private:
     module.walk([&](affine::AffineForOp forOp) {
       auto *metadata = manager.addLoopMetadata(forOp);
       analyzer.analyzeAffineLoop(forOp, metadata);
+      /// Analyze loop reordering opportunities for perfect nests
+      analyzer.analyzeLoopReordering(forOp, metadata, manager);
       ARTS_DEBUG("  Analyzed affine.for at "
                  << metadata->locationMetadata.getKey());
     });
