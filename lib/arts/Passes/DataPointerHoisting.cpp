@@ -1,9 +1,28 @@
 ///==========================================================================///
-/// File: ArtsDataPointerHoisting.cpp
+/// File: DataPointerHoisting.cpp
 ///
 /// This pass hoists data pointer loads from the ARTS deps struct out of loops.
 /// Without this optimization, pointer loads from deps happen O(n^k) times for
 /// k-nested loops, causing severe performance degradation.
+///
+/// Before (O(n^2) loads - pointer loaded every iteration):
+///   scf.for %i = ... {
+///     scf.for %j = ... {
+///       %ptr = llvm.load %dep_ptr_addr : !llvm.ptr  // Redundant load!
+///       %val = polygeist.load %ptr[%i, %j] : f64
+///     }
+///   }
+///
+/// After (O(1) loads - pointer loaded once before loop nest):
+///   %ptr = llvm.load %dep_ptr_addr : !llvm.ptr  // Hoisted out
+///   scf.for %i = ... {
+///     scf.for %j = ... {
+///       %val = polygeist.load %ptr[%i, %j] : f64
+///     }
+///   }
+///
+/// LLVM's LICM cannot hoist these loads without TBAA metadata proving
+/// they don't alias with data stores.
 ///==========================================================================///
 
 #include "ArtsPassDetails.h"
@@ -111,16 +130,16 @@ static bool hoistLoadOutOfLoop(LLVM::LoadOp loadOp, scf::ForOp outermostLoop) {
   return true;
 }
 
-struct ArtsDataPointerHoistingPass
-    : public arts::ArtsDataPointerHoistingBase<ArtsDataPointerHoistingPass> {
+struct DataPointerHoistingPass
+    : public arts::ArtsDataPointerHoistingBase<DataPointerHoistingPass> {
   void runOnOperation() override;
 };
 
 } // end anonymous namespace
 
-void ArtsDataPointerHoistingPass::runOnOperation() {
+void DataPointerHoistingPass::runOnOperation() {
   ModuleOp module = getOperation();
-  ARTS_INFO_HEADER(ArtsDataPointerHoistingPass);
+  ARTS_INFO_HEADER(DataPointerHoistingPass);
 
   int hoistedCount = 0;
 
@@ -167,7 +186,7 @@ void ArtsDataPointerHoistingPass::runOnOperation() {
   });
 
   ARTS_INFO("Hoisted " << hoistedCount << " data pointer loads out of loops");
-  ARTS_INFO_FOOTER(ArtsDataPointerHoistingPass);
+  ARTS_INFO_FOOTER(DataPointerHoistingPass);
 }
 
 ///===----------------------------------------------------------------------===///
@@ -176,8 +195,8 @@ void ArtsDataPointerHoistingPass::runOnOperation() {
 namespace mlir {
 namespace arts {
 
-std::unique_ptr<Pass> createArtsDataPointerHoistingPass() {
-  return std::make_unique<ArtsDataPointerHoistingPass>();
+std::unique_ptr<Pass> createDataPointerHoistingPass() {
+  return std::make_unique<DataPointerHoistingPass>();
 }
 
 } // namespace arts

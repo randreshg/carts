@@ -909,8 +909,17 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       SmallVector<Value> acquireIndices, acquireOffsets, acquireSizes;
       acquireOffsets.push_back(
           builder.create<arith::ConstantIndexOp>(edt.getLoc(), 0));
-      acquireSizes.push_back(
-          builder.create<arith::ConstantIndexOp>(edt.getLoc(), 1));
+      // For coarse-grained acquire on fine-grained allocations, acquire ALL
+      // chunks. Use the DbAllocOp's sizes instead of hardcoded 1.
+      SmallVector<Value> allocSizes(dbAllocOp.getSizes().begin(),
+                                    dbAllocOp.getSizes().end());
+      if (allocSizes.empty()) {
+        acquireSizes.push_back(
+            builder.create<arith::ConstantIndexOp>(edt.getLoc(), 1));
+      } else {
+        for (Value s : allocSizes)
+          acquireSizes.push_back(s);
+      }
 
       /// Source guid and ptr are the source of the acquire
       Value acqGuid = sourceGuid;
@@ -1178,8 +1187,20 @@ void CreateDbsPass::rewriteUsesInEdt(EdtOp edt,
       db::rewriteAccessWithDbPattern(op, dbAcquireArg, elementMemRefType,
                                      outerCount, builder, opsToRemove);
     } else if (acquireIndices.empty()) {
-      db::rewriteAccessWithDbPattern(op, dbAcquireArg, elementMemRefType, 0,
-                                     builder, opsToRemove);
+      // For coarse-grained acquire (acquireOffsets not empty but acquireIndices
+      // empty), calculate outerCount based on element type rank to properly
+      // distribute indices. outerCount = totalIndices - innerRank ensures inner
+      // indices match element type rank.
+      unsigned innerRank = elementMemRefType.cast<MemRefType>().getRank();
+      unsigned totalIndices = 0;
+      if (auto load = dyn_cast<memref::LoadOp>(op))
+        totalIndices = load.getIndices().size();
+      else if (auto store = dyn_cast<memref::StoreOp>(op))
+        totalIndices = store.getIndices().size();
+      unsigned outerCount =
+          (totalIndices > innerRank) ? (totalIndices - innerRank) : 0;
+      db::rewriteAccessWithDbPattern(op, dbAcquireArg, elementMemRefType,
+                                     outerCount, builder, opsToRemove);
     } else if (auto acquireOp = dyn_cast<DbAcquireOp>(dbOp)) {
       db::rebaseToAcquireView(op, acquireOp, dbAcquireArg, elementMemRefType,
                               builder, opsToRemove);

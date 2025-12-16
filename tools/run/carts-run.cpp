@@ -282,7 +282,7 @@ void setupCreateDbs(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 
 /// Db creation and optimization passes.
 void setupDbOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
-  pm.addPass(arts::createDbPass(AM, /*enablePartitioning=*/false));
+  pm.addPass(arts::createDbPass(AM));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createMem2Reg());
@@ -292,6 +292,7 @@ void setupDbOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 void setupEdtOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createEdtPass(AM, /*runAnalysis*/true));
+  pm.addPass(arts::createLoopFusionPass(AM));
   pm.addPass(createCSEPass());
 }
 
@@ -315,12 +316,11 @@ void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createEdtPass(AM, /*runAnalysis*/false));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
-  /// Enable partitioning, we need to run the db pass again after the concurrency pass.
-  pm.addPass(arts::createDbPass(AM, /*enablePartitioning=*/true));
+  pm.addPass(arts::createDbPass(AM));
+  pm.addPass(arts::createDbPartitioningPass(AM));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createMem2Reg());
-  // pm.addPass(createConcurrencyOptPass());
 }
 
 /// Epoch creation passes.
@@ -344,14 +344,12 @@ void setupPreLowering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createEdtLoweringPass(ArtsIdStride));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
-  /// Hoist data pointer loads from deps struct out of loops.
-  /// Must run after EdtLowering when llvm.load operations exist.
-  pm.addPass(arts::createArtsDataPointerHoistingPass());
+  /// Hoist data pointer loads out of loops (must run after EdtLowering).
+  pm.addPass(arts::createDataPointerHoistingPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
-  /// Transform memory-based reduction patterns to register-based iter_args
-  /// to enable LLVM vectorization.
-  pm.addPass(arts::createArtsScalarReplacementPass());
+  /// Transform memory-based reductions to register-based iter_args.
+  pm.addPass(arts::createScalarReplacementPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(arts::createEpochLoweringPass());
@@ -385,12 +383,10 @@ void setupLLVMIREmission(PassManager &pm) {
   pm.addPass(createCSEPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(polygeist::createConvertPolygeistToLLVMPass());
-  // Generate alias scope metadata for ARTS data arrays. Must run AFTER
-  // ConvertPolygeistToLLVM so scopes are attached to LLVM::LoadOp/StoreOp.
-  pm.addPass(arts::createArtsAliasScopeGenPass());
-  // Attach LLVM loop vectorization hints to EDT loop backedges.
-  // This encourages LLVM's vectorizer without affecting FP precision.
-  pm.addPass(arts::createArtsLoopVectorizationHintsPass());
+  /// Generate alias scope metadata (must run after ConvertPolygeistToLLVM).
+  pm.addPass(arts::createAliasScopeGenPass());
+  /// Attach LLVM loop vectorization hints to EDT loop backedges.
+  pm.addPass(arts::createLoopVectorizationHintsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
 }

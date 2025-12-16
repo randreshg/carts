@@ -1,18 +1,24 @@
 ///==========================================================================///
-/// File: ArtsLoopVectorizationHints.cpp
+/// File: LoopVectorizationHints.cpp
 ///
 /// This pass attaches LLVM loop vectorization hints to loop backedges in EDT
 /// functions. It uses MLIR's native LoopAnnotationAttr which automatically
 /// translates to !llvm.loop metadata during LLVM IR emission.
 ///
+/// Before (no vectorization hints - LLVM may not vectorize):
+///   llvm.br ^loop_header  // Loop backedge
+///
+/// After (vectorization hints encourage LLVM's loop vectorizer):
+///   llvm.br ^loop_header {
+///     loop_annotation = #llvm.loop_annotation<
+///       vectorize = #llvm.loop_vectorize<disable = false, width = 2>,
+///       interleave = #llvm.loop_interleave<count = 4>
+///     >
+///   }
+///
 /// The pass identifies conditional branches that form loop backedges (branches
 /// to blocks that dominate the branch) and attaches vectorization hints
 /// (width=2 for doubles, interleave=4) to encourage LLVM's loop vectorizer.
-///
-/// This is a cleaner approach than using -ffast-math CLI flags because:
-/// 1. It doesn't affect floating-point precision
-/// 2. It's targeted only at EDT loops
-/// 3. It uses MLIR's existing infrastructure
 ///==========================================================================///
 
 #include "ArtsPassDetails.h"
@@ -83,10 +89,10 @@ static LLVM::LoopAnnotationAttr createVectorizationHints(MLIRContext *ctx) {
       /*endLoc=*/FusedLoc());
 }
 
-struct ArtsLoopVectorizationHintsPass
-    : public PassWrapper<ArtsLoopVectorizationHintsPass,
+struct LoopVectorizationHintsPass
+    : public PassWrapper<LoopVectorizationHintsPass,
                          OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ArtsLoopVectorizationHintsPass)
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LoopVectorizationHintsPass)
 
   StringRef getArgument() const override {
     return "arts-loop-vectorization-hints";
@@ -102,7 +108,7 @@ struct ArtsLoopVectorizationHintsPass
   void runOnOperation() override {
     ModuleOp module = getOperation();
     MLIRContext *ctx = &getContext();
-    ARTS_INFO_HEADER(ArtsLoopVectorizationHintsPass);
+    ARTS_INFO_HEADER(LoopVectorizationHintsPass);
 
     int totalHints = 0;
 
@@ -164,7 +170,7 @@ struct ArtsLoopVectorizationHintsPass
 
     ARTS_INFO("Total: attached vectorization hints to " << totalHints
               << " loop backedges");
-    ARTS_INFO_FOOTER(ArtsLoopVectorizationHintsPass);
+    ARTS_INFO_FOOTER(LoopVectorizationHintsPass);
   }
 };
 
@@ -176,8 +182,8 @@ struct ArtsLoopVectorizationHintsPass
 namespace mlir {
 namespace arts {
 
-std::unique_ptr<Pass> createArtsLoopVectorizationHintsPass() {
-  return std::make_unique<ArtsLoopVectorizationHintsPass>();
+std::unique_ptr<Pass> createLoopVectorizationHintsPass() {
+  return std::make_unique<LoopVectorizationHintsPass>();
 }
 
 } // namespace arts

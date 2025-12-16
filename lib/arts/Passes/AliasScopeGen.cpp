@@ -1,16 +1,36 @@
 ///==========================================================================///
-/// File: ArtsAliasScopeGen.cpp
+/// File: AliasScopeGen.cpp
 ///
 /// This pass generates LLVM alias scope metadata for ARTS data arrays to enable
 /// LLVM optimizations like vectorization. Without this metadata, LLVM cannot
 /// prove that distinct data arrays don't overlap.
+///
+/// Before (LLVM cannot prove arrays don't alias - no vectorization):
+///   %ptr_A = llvm.load %deps[0].ptr : !llvm.ptr
+///   %ptr_B = llvm.load %deps[1].ptr : !llvm.ptr
+///   scf.for %i = ... {
+///     %a = llvm.load %ptr_A[%i] : f64
+///     %b = llvm.load %ptr_B[%i] : f64
+///     llvm.store %result, %ptr_A[%i]  // May alias with %ptr_B - blocks opt!
+///   }
+///
+/// After (distinct alias scopes enable vectorization):
+///   llvm.experimental.noalias.scope.decl %scope_A
+///   llvm.experimental.noalias.scope.decl %scope_B
+///   %ptr_A = llvm.load %deps[0].ptr : !llvm.ptr
+///   %ptr_B = llvm.load %deps[1].ptr : !llvm.ptr
+///   scf.for %i = ... {
+///     %a = llvm.load %ptr_A[%i] {alias_scopes=[@scope_A]}
+///     %b = llvm.load %ptr_B[%i] {alias_scopes=[@scope_B]}
+///     llvm.store %result, %ptr_A[%i] {alias_scopes=[@scope_A]}
+///   }
 ///
 /// The pass identifies data pointer loads from the deps struct and attaches
 /// alias scope metadata to all memory accesses using those pointers. Each
 /// data array gets a unique scope, and accesses are marked as not aliasing
 /// with other arrays.
 ///
-/// CRITICAL: This pass must emit llvm.experimental.noalias.scope.decl intrinsics
+/// This pass must emit llvm.experimental.noalias.scope.decl intrinsics
 /// at function entry for LLVM to recognize the alias scopes.
 ///==========================================================================///
 
@@ -100,8 +120,6 @@ static void createAliasScopes(MLIRContext *ctx,
 }
 
 /// Emit llvm.experimental.noalias.scope.decl intrinsics at function entry.
-/// CRITICAL: Without these declarations, LLVM's alias analysis doesn't
-/// recognize the alias scopes and they have no effect.
 static void emitScopeDeclarations(LLVM::LLVMFuncOp funcOp,
                                    SmallVectorImpl<DataPointerInfo> &dataPointers) {
   if (dataPointers.empty() || funcOp.getBody().empty())
@@ -178,10 +196,6 @@ static DataPointerInfo *findSourceDataPointer(
 }
 
 /// Attach alias scope attributes to a load/store operation.
-/// Uses the proper AliasAnalysisOpInterface setters.
-/// NOTE: We only set alias_scopes, NOT noalias_scopes.
-/// Setting overly aggressive noalias_scopes was found to BLOCK optimizations
-/// by creating false dependencies that prevent CSE, LICM, and vectorization.
 static void attachAliasScopes(Operation *op, DataPointerInfo &source,
                               SmallVectorImpl<DataPointerInfo> &allPointers) {
   MLIRContext *ctx = op->getContext();
@@ -193,8 +207,6 @@ static void attachAliasScopes(Operation *op, DataPointerInfo &source,
   // Use the proper AliasAnalysisOpInterface methods if available
   if (auto loadOp = dyn_cast<LLVM::LoadOp>(op)) {
     loadOp.setAliasScopesAttr(aliasScopesAttr);
-    // NOTE: Deliberately NOT setting noalias_scopes - let LLVM's alias analysis
-    // determine non-aliasing from the scope membership rather than explicit noalias
   } else if (auto storeOp = dyn_cast<LLVM::StoreOp>(op)) {
     storeOp.setAliasScopesAttr(aliasScopesAttr);
   } else {
@@ -204,15 +216,11 @@ static void attachAliasScopes(Operation *op, DataPointerInfo &source,
 }
 
 /// Process memory accesses in the function.
-/// FIX: Use Value comparison (not LoadOp pointer equality) to skip data pointer
-/// loads themselves. After ArtsDataPointerHoisting moves loads, the original
-/// LoadOp comparison fails because the op was moved.
 static int processMemoryAccesses(LLVM::LLVMFuncOp funcOp,
                                   SmallVectorImpl<DataPointerInfo> &dataPointers) {
   int count = 0;
 
-  // Build set of data pointer VALUES (not ops) for efficient skip checking.
-  // This correctly handles hoisted loads because we compare the Value result.
+  /// Build set of data pointer values to skip when processing.
   DenseSet<Value> dataPointerValues;
   for (auto &info : dataPointers) {
     dataPointerValues.insert(info.ptr);
@@ -255,9 +263,9 @@ static int processMemoryAccesses(LLVM::LLVMFuncOp funcOp,
   return count;
 }
 
-struct ArtsAliasScopeGenPass
-    : public PassWrapper<ArtsAliasScopeGenPass, OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ArtsAliasScopeGenPass)
+struct AliasScopeGenPass
+    : public PassWrapper<AliasScopeGenPass, OperationPass<ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(AliasScopeGenPass)
 
   StringRef getArgument() const override { return "arts-alias-scope-gen"; }
   StringRef getDescription() const override {
@@ -271,7 +279,7 @@ struct ArtsAliasScopeGenPass
   void runOnOperation() override {
     ModuleOp module = getOperation();
     MLIRContext *ctx = &getContext();
-    ARTS_INFO_HEADER(ArtsAliasScopeGenPass);
+    ARTS_INFO_HEADER(AliasScopeGenPass);
 
     int totalCount = 0;
     int totalDecls = 0;
@@ -290,8 +298,7 @@ struct ArtsAliasScopeGenPass
         return;
       }
 
-      // FIX: Check array count limit (following Polly's approach)
-      // Alias scope metadata grows quadratically with number of arrays.
+      /// Check array count limit (alias scope metadata grows quadratically).
       if (dataPointers.size() > MaxArraysForAliasScopes) {
         ARTS_INFO("Skipping alias scopes for " << funcOp.getName()
                   << ": " << dataPointers.size() << " arrays exceeds limit ("
@@ -302,15 +309,10 @@ struct ArtsAliasScopeGenPass
       ARTS_INFO("Found " << dataPointers.size() << " data pointer loads in "
                          << funcOp.getName());
 
-      // Create alias scopes
       createAliasScopes(ctx, dataPointers);
-
-      // FIX: Emit scope declarations at function entry
-      // CRITICAL: Without these, LLVM doesn't recognize the alias scopes
       emitScopeDeclarations(funcOp, dataPointers);
       totalDecls += dataPointers.size();
 
-      // Process memory accesses
       int count = processMemoryAccesses(funcOp, dataPointers);
       totalCount += count;
 
@@ -319,7 +321,7 @@ struct ArtsAliasScopeGenPass
 
     ARTS_INFO("Total: emitted " << totalDecls << " scope declarations, "
               << "attached alias scopes to " << totalCount << " memory accesses");
-    ARTS_INFO_FOOTER(ArtsAliasScopeGenPass);
+    ARTS_INFO_FOOTER(AliasScopeGenPass);
   }
 };
 
@@ -331,8 +333,8 @@ struct ArtsAliasScopeGenPass
 namespace mlir {
 namespace arts {
 
-std::unique_ptr<Pass> createArtsAliasScopeGenPass() {
-  return std::make_unique<ArtsAliasScopeGenPass>();
+std::unique_ptr<Pass> createAliasScopeGenPass() {
+  return std::make_unique<AliasScopeGenPass>();
 }
 
 } // namespace arts

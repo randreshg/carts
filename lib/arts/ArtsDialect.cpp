@@ -740,13 +740,25 @@ LogicalResult DbRefOp::verify() {
            << *getOperation();
   }
 
-  /// If the underlying datablock is coarse-grained (all outer sizes are 1),
-  /// every db_ref index must be constant zero. Using any other value would
-  /// select a non-existent datablock slice.
-  bool isCoarse = !outerSizes.empty() && llvm::all_of(outerSizes, [](Value v) {
-    int64_t val;
-    return arts::getConstantIndex(v, val) && val == 1;
-  });
+  /// If the underlying datablock ALLOCATION is coarse-grained (all outer sizes
+  /// are 1), every db_ref index must be constant zero. Using any other value
+  /// would select a non-existent datablock slice.
+  /// Note: We check the DbAllocOp's sizes, not the DbAcquireOp's sizes, because
+  /// a coarse-grained acquire on a fine-grained allocation should still allow
+  /// indexing into the individual chunks of the fine-grained structure.
+  SmallVector<Value> allocSizes = outerSizes;
+  if (auto dbAcquire = dyn_cast<DbAcquireOp>(underlyingDbOp)) {
+    if (auto dbAlloc = dyn_cast_or_null<DbAllocOp>(
+            arts::getUnderlyingDbAlloc(dbAcquire.getSourcePtr()))) {
+      allocSizes = SmallVector<Value>(dbAlloc.getSizes().begin(),
+                                      dbAlloc.getSizes().end());
+    }
+  }
+  bool isCoarse =
+      !allocSizes.empty() && llvm::all_of(allocSizes, [](Value v) {
+        int64_t val;
+        return arts::getConstantIndex(v, val) && val == 1;
+      });
   if (isCoarse) {
     for (Value idx : getIndices()) {
       int64_t val;

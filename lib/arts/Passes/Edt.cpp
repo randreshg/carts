@@ -564,7 +564,10 @@ bool EdtPass::removeRedundantBarriersWithGraphs(func::FuncOp func,
     bool redundant = true;
     for (arts::EdtOp a : beforeTasks) {
       for (arts::EdtOp b : afterTasks) {
-        if (!graph.isEdtReachable(a, b)) {
+        bool connected = graph.isEdtReachable(a, b);
+        bool independent = graph.areEdtsIndependent(a, b);
+        // Barrier redundant if: connected (dependency already enforced) OR independent (no dependency needed)
+        if (!connected && !independent) {
           redundant = false;
           break;
         }
