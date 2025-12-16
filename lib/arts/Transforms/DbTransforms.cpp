@@ -575,6 +575,208 @@ DbAllocPromotion::DbAllocPromotion(DbAllocOp oldAlloc, ValueRange newOuterSizes,
       (isChunked_ && !newInnerSizes.empty()) ? newInnerSizes[0] : Value();
 }
 
+///===----------------------------------------------------------------------===///
+/// AcquireViewMap and Mode-Aware Coordinate Localization
+///===----------------------------------------------------------------------===///
+
+DbAllocPromotion::AcquireViewMap
+DbAllocPromotion::AcquireViewMap::fromAcquire(DbAcquireOp acquire,
+                                              bool isEdtBlockArg) {
+  AcquireViewMap map;
+  map.numIndexedDims = acquire.getIndices().size();
+  map.sliceOffsets.assign(acquire.getOffsets().begin(),
+                          acquire.getOffsets().end());
+  /// Capture element-level offsets from offset_hints
+  map.elementOffsets.assign(acquire.getOffsetHints().begin(),
+                            acquire.getOffsetHints().end());
+  map.isEdtBlockArg = isEdtBlockArg;
+  return map;
+}
+
+SmallVector<Value>
+DbAllocPromotion::localizeIndices(ArrayRef<Value> globalIndices,
+                                  const AcquireViewMap &map, OpBuilder &builder,
+                                  Location loc) const {
+  SmallVector<Value> localIndices;
+  auto zero = [&]() {
+    return builder.create<arith::ConstantIndexOp>(loc, 0);
+  };
+
+  for (unsigned d = 0; d < globalIndices.size(); ++d) {
+    Value globalIdx = globalIndices[d];
+
+    if (d < map.numIndexedDims) {
+      /// Indexed dimension: local index is always 0
+      localIndices.push_back(zero());
+      continue;
+    }
+
+    unsigned offsetIdx = d - map.numIndexedDims;
+    if (offsetIdx >= map.sliceOffsets.size()) {
+      /// No offset for this dimension, keep as-is
+      localIndices.push_back(globalIdx);
+      continue;
+    }
+
+    Value offset = map.sliceOffsets[offsetIdx];
+
+    ///===------------------------------------------------------------------===///
+    /// MODE-AWARE LOCALIZATION - The Critical Fix
+    ///===------------------------------------------------------------------===///
+    if (isChunked_ && map.isEdtBlockArg) {
+      /// CHUNKED MODE + EDT BLOCK ARG:
+      /// The block argument already represents the localized acquired view.
+      /// db_ref indices are relative to the acquired slice, NOT global.
+      /// Example: acquire chunks[1..2], db_ref[0] accesses first acquired chunk
+      /// NO transformation needed - indices are already local.
+      localIndices.push_back(globalIdx);
+    } else {
+      /// ALL OTHER CASES: Transform global index to local
+      /// local = global - offset
+      ///
+      /// Try to recognize "offset + delta" patterns for cleaner IR
+      if (Value delta = getOffsetDelta(globalIdx, offset, builder, loc)) {
+        localIndices.push_back(delta);
+      } else {
+        /// Explicit subtraction for general case
+        localIndices.push_back(
+            builder.create<arith::SubIOp>(loc, globalIdx, offset));
+      }
+    }
+  }
+
+  if (localIndices.empty())
+    localIndices.push_back(zero());
+
+  return localIndices;
+}
+
+SmallVector<Value>
+DbAllocPromotion::localizeElementIndices(ArrayRef<Value> globalIndices,
+                                         const AcquireViewMap &map,
+                                         OpBuilder &builder,
+                                         Location loc) const {
+  SmallVector<Value> localIndices;
+
+  /// For chunked mode inside EDT, element indices need localization
+  /// using the element offset hints from the acquire
+  if (isChunked_ && map.isEdtBlockArg && !map.elementOffsets.empty()) {
+    Value elementOffset = map.elementOffsets[0];
+
+    for (Value globalIdx : globalIndices) {
+      /// Try to recognize "offset + delta" pattern for cleaner IR
+      /// Example: (offset + i) - offset = i
+      if (Value delta = getOffsetDelta(globalIdx, elementOffset, builder, loc)) {
+        localIndices.push_back(delta);
+      } else {
+        /// Explicit subtraction: local = global - elementOffset
+        localIndices.push_back(
+            builder.create<arith::SubIOp>(loc, globalIdx, elementOffset));
+      }
+    }
+    return localIndices;
+  }
+
+  /// Non-chunked or no element offsets: indices unchanged
+  localIndices.assign(globalIndices.begin(), globalIndices.end());
+  return localIndices;
+}
+
+bool DbAllocPromotion::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder) {
+  auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(acquire);
+  if (!blockArg)
+    return false;
+
+  /// Determine element type from users or allocation
+  Type targetType;
+  for (Operation *user : blockArg.getUsers()) {
+    if (auto ref = dyn_cast<DbRefOp>(user)) {
+      targetType = ref.getResult().getType();
+      break;
+    }
+  }
+  if (!targetType) {
+    targetType = blockArg.getType();
+    if (auto outer = targetType.dyn_cast<MemRefType>())
+      if (auto inner = outer.getElementType().dyn_cast<MemRefType>())
+        targetType = inner;
+  }
+  if (!targetType || !targetType.isa<MemRefType>())
+    return false;
+
+  /// Create mode-aware coordinate map for EDT block argument
+  AcquireViewMap map =
+      AcquireViewMap::fromAcquire(acquire, /*isEdtBlockArg=*/true);
+
+  SmallVector<Operation *> users(blockArg.getUsers().begin(),
+                                 blockArg.getUsers().end());
+  llvm::SetVector<Operation *> opsToRemove;
+  bool rewritten = false;
+
+  Type derivedType = targetType;
+  if (auto dbAlloc =
+          dyn_cast_or_null<DbAllocOp>(arts::getUnderlyingDbAlloc(blockArg)))
+    derivedType = dbAlloc.getAllocatedElementType();
+
+  for (Operation *user : users) {
+    if (auto ref = dyn_cast<DbRefOp>(user)) {
+      OpBuilder::InsertionGuard IG(builder);
+      builder.setInsertionPoint(ref);
+
+      SmallVector<Value> refIndices(ref.getIndices().begin(),
+                                    ref.getIndices().end());
+
+      /// Use mode-aware localization for db_ref indices (chunk-level)
+      auto localIndices =
+          localizeIndices(refIndices, map, builder, ref.getLoc());
+
+      auto newRef = builder.create<DbRefOp>(ref.getLoc(), derivedType, blockArg,
+                                            localIndices);
+      ref.replaceAllUsesWith(newRef.getResult());
+      opsToRemove.insert(ref.getOperation());
+      rewritten = true;
+
+      /// For chunked mode: also localize memref.load/store indices on db_ref result
+      /// These use element-level indices that need adjustment via offset_hints
+      if (isChunked_ && !map.elementOffsets.empty()) {
+        SmallVector<Operation *> refUsers(newRef.getResult().getUsers().begin(),
+                                          newRef.getResult().getUsers().end());
+        for (Operation *refUser : refUsers) {
+          if (auto load = dyn_cast<memref::LoadOp>(refUser)) {
+            OpBuilder::InsertionGuard IG2(builder);
+            builder.setInsertionPoint(load);
+            SmallVector<Value> loadIndices(load.getIndices().begin(),
+                                           load.getIndices().end());
+            auto localElemIndices = localizeElementIndices(
+                loadIndices, map, builder, load.getLoc());
+            auto newLoad = builder.create<memref::LoadOp>(
+                load.getLoc(), newRef.getResult(), localElemIndices);
+            load.replaceAllUsesWith(newLoad.getResult());
+            opsToRemove.insert(load);
+          }
+          if (auto store = dyn_cast<memref::StoreOp>(refUser)) {
+            OpBuilder::InsertionGuard IG2(builder);
+            builder.setInsertionPoint(store);
+            SmallVector<Value> storeIndices(store.getIndices().begin(),
+                                            store.getIndices().end());
+            auto localElemIndices = localizeElementIndices(
+                storeIndices, map, builder, store.getLoc());
+            builder.create<memref::StoreOp>(store.getLoc(), store.getValue(),
+                                            newRef.getResult(), localElemIndices);
+            opsToRemove.insert(store);
+          }
+        }
+      }
+    }
+  }
+
+  for (Operation *op : opsToRemove)
+    if (op->use_empty())
+      op->erase();
+
+  return rewritten;
+}
+
 FailureOr<DbAllocOp> DbAllocPromotion::apply(OpBuilder &builder) {
   if (!oldAlloc_)
     return failure();
@@ -683,12 +885,19 @@ void DbAllocPromotion::rewriteAcquire(DbAcquireOp acquire, Value elemOffset,
     newSizes.push_back(chunkCount);
 
     /// For chunked mode, use coordinate localization
+    /// offsets/sizes: chunk-space (for acquire positioning)
+    /// offset_hints/size_hints: element-space (for memref localization)
     acquire.getOffsetsMutable().assign(newOffsets);
     acquire.getSizesMutable().assign(newSizes);
-    acquire.getOffsetHintsMutable().assign(newOffsets);
-    acquire.getSizeHintsMutable().assign(newSizes);
 
-    db::rebaseAllUsersToAcquireView(acquire, builder);
+    /// Preserve element-space offsets in hints for memref index localization
+    SmallVector<Value> elementHints = {elemOffset};
+    SmallVector<Value> sizeHints = {elemSize};
+    acquire.getOffsetHintsMutable().assign(elementHints);
+    acquire.getSizeHintsMutable().assign(sizeHints);
+
+    /// Use mode-aware rebase for chunked mode EDT users
+    rebaseEdtUsers(acquire, builder);
   } else {
     /// ELEMENT-WISE: already in datablock space, no offset transformation
     newOffsets.push_back(elemOffset);
