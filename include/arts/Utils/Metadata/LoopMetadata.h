@@ -45,6 +45,8 @@ constexpr StringLiteral MemrefsWithLoopCarriedDeps =
     "memrefs_with_loop_carried_deps";
 constexpr StringLiteral ParallelClassification = "parallel_classification";
 constexpr StringLiteral LocationKey = "location_key";
+/// Loop reordering: target order by arts.id (empty = no reordering needed)
+constexpr StringLiteral ReorderNestTo = "reorder_nest_to";
 } // namespace LoopMetadata
 } // namespace AttrNames
 
@@ -118,6 +120,11 @@ public:
 
   /// Source Location
   LocationMetadata locationMetadata;
+
+  /// Loop reordering: target order by arts.id (empty = no reordering needed)
+  /// Populated during CollectMetadata if reordering is beneficial.
+  /// Used by LoopReorderingPass to apply the transformation.
+  SmallVector<int64_t> reorderNestTo;
 
   //===-------------------------------------------------------------===//
   // Constructors

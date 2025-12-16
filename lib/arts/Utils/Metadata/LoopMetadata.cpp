@@ -224,6 +224,14 @@ void LoopMetadata::importFromJson(const llvm::json::Object &json) {
     parallelClassification = static_cast<ParallelClassification>(*i);
   locationMetadata = LocationMetadata::fromKey(
       json.getString(AttrNames::LoopMetadata::LocationKey).value_or(""));
+
+  /// Loop reordering: import target order (arts.ids)
+  reorderNestTo.clear();
+  if (auto *arr = json.getArray(AttrNames::LoopMetadata::ReorderNestTo)) {
+    for (const auto &e : *arr)
+      if (auto id = e.getAsInteger())
+        reorderNestTo.push_back(*id);
+  }
 }
 
 void LoopMetadata::exportToJson(llvm::json::Object &json) const {
@@ -256,6 +264,14 @@ void LoopMetadata::exportToJson(llvm::json::Object &json) const {
         static_cast<int64_t>(*parallelClassification);
   json[AttrNames::LoopMetadata::LocationKey.str()] =
       locationMetadata.getKey().str();
+
+  /// Loop reordering: export target order only if non-empty
+  if (!reorderNestTo.empty()) {
+    llvm::json::Array arr;
+    for (auto id : reorderNestTo)
+      arr.push_back(id);
+    json[AttrNames::LoopMetadata::ReorderNestTo.str()] = std::move(arr);
+  }
 }
 
 void LoopMetadata::exportToOp() {

@@ -110,6 +110,7 @@ enum class PipelineStage {
   CollectMetadata,
   OpenMPToArts,
   EdtTransforms,
+  LoopReordering,
   CreateDbs,
   DbOpt,
   EdtOpt,
@@ -134,6 +135,8 @@ static cl::opt<PipelineStage> StopAt(
                           "Stop after OpenMP to Arts conversion"),
                clEnumValN(PipelineStage::EdtTransforms, "edt-transforms",
                           "Stop after EDT transformations"),
+               clEnumValN(PipelineStage::LoopReordering, "loop-reordering",
+                          "Stop after loop reordering optimization"),
                clEnumValN(PipelineStage::CreateDbs, "create-dbs",
                           "Stop after Dbs creation"),
                clEnumValN(PipelineStage::DbOpt, "db-opt",
@@ -268,6 +271,13 @@ void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(createSymbolDCEPass());
   pm.addPass(createCSEPass());
   pm.addPass(arts::createEdtPtrRematerializationPass());
+}
+
+/// Loop reordering pass - applies optimal loop orders for cache efficiency.
+/// MUST run BEFORE CreateDbs to preserve SSA value relationships.
+void setupLoopReordering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
+  pm.addPass(arts::createLoopReorderingPass(AM));
+  pm.addPass(createCSEPass());
 }
 
 /// Db creation pass.
@@ -464,6 +474,20 @@ setupPassManager(ModuleOp module, MLIRContext &context,
     }
   }
   if (stopAt == PipelineStage::EdtTransforms)
+    return success();
+
+  /// Loop reordering - reorder inner loops for cache-optimal access patterns
+  /// MUST run BEFORE CreateDbs to preserve SSA value relationships
+  {
+    PassManager pm(&context);
+    setupLoopReordering(pm, AM.get());
+    if (failed(pm.run(module))) {
+      ARTS_ERROR("Error when applying loop reordering");
+      module->dump();
+      return failure();
+    }
+  }
+  if (stopAt == PipelineStage::LoopReordering)
     return success();
 
   /// Create Dbs

@@ -26,6 +26,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   DbLowering.cpp
   ForLowering.cpp
   LoopFusion.cpp
+  LoopReordering.cpp
   ParallelEdtLowering.cpp
   EdtLowering.cpp
   Concurrency.cpp

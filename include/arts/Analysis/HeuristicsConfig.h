@@ -33,6 +33,21 @@ enum class PartitioningSource {
   Fallback      // Default/unknown - apply standard H2
 };
 
+/// Proof method for why twin-diff can be disabled
+enum class TwinDiffProof {
+  None,             // No proof - use safe default (twin_diff=true)
+  IndexedControl,   // DbControlOps provided indexed access (proven isolation)
+  PartitionSuccess, // Partitioning proved non-overlapping chunks
+  AliasAnalysis,    // DbAliasAnalysis proved disjoint acquires
+};
+
+/// Context for twin-diff decisions (for centralized decision-making)
+struct TwinDiffContext {
+  TwinDiffProof proof = TwinDiffProof::None;
+  bool isCoarseAllocation = false;
+  std::optional<int64_t> artsId;
+};
+
 /// Mode-dependent chunking thresholds (derived from MemoryConfig)
 struct ChunkingThresholds {
   int64_t maxOuterDBs;         // Max total datablocks
@@ -64,7 +79,18 @@ public:
 
   /// Returns true if twin_diff should be disabled.
   /// On single-node, twin_diff is pure overhead (no remote recipient).
+  /// DEPRECATED: Use shouldUseTwinDiff(TwinDiffContext) for new code.
   bool shouldDisableTwinDiff() const;
+
+  /// Consolidated twin-diff decision based on context and proof method.
+  /// Returns true if twin_diff should be ENABLED (safe default).
+  /// Returns false if twin_diff can be safely DISABLED (proven non-overlap).
+  ///
+  /// Decision priority:
+  /// 1. Single-node (H4): Always disable (no remote recipient)
+  /// 2. Proof-based: Disable if proof of non-overlap exists
+  /// 3. Default: Enable (safe, handles potential overlap at runtime)
+  bool shouldUseTwinDiff(const TwinDiffContext &context);
 
   //===--------------------------------------------------------------------===//
   // H1: Read-only Allocation Heuristic

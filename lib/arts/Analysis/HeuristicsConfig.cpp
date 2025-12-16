@@ -106,6 +106,46 @@ bool HeuristicsConfig::shouldDisableTwinDiff() const {
   return isSingleNode();
 }
 
+bool HeuristicsConfig::shouldUseTwinDiff(const TwinDiffContext &context) {
+  int64_t artsId = context.artsId.value_or(0);
+
+  /// H4: Single-node disables twin-diff unconditionally
+  /// - No remote owner to send diffs to
+  /// - Twin allocation + memcpy + diff computation are wasted
+  if (isSingleNode()) {
+    recordDecision("H4-TwinDiff", true, "single-node disables twin-diff",
+                   artsId, {});
+    return false;
+  }
+
+  /// Proof-based decisions (multi-node only)
+  switch (context.proof) {
+  case TwinDiffProof::IndexedControl:
+    recordDecision("TwinDiff-IndexedControl", true,
+                   "DbControlOps guarantee indexed access (proven isolation)",
+                   artsId, {});
+    return false;
+
+  case TwinDiffProof::PartitionSuccess:
+    recordDecision("TwinDiff-Partition", true,
+                   "successful partitioning proves non-overlapping chunks",
+                   artsId, {});
+    return false;
+
+  case TwinDiffProof::AliasAnalysis:
+    recordDecision("TwinDiff-Alias", true,
+                   "alias analysis proves disjoint acquires", artsId, {});
+    return false;
+
+  case TwinDiffProof::None:
+  default:
+    recordDecision("TwinDiff-SafeDefault", true,
+                   "no proof of non-overlap, using safe default (twin_diff=true)",
+                   artsId, {});
+    return true; // Safe default - handles potential overlap at runtime
+  }
+}
+
 bool HeuristicsConfig::shouldPreferCoarseForReadOnly(
     ArtsMode accessMode) const {
   /// H1: Read-only memrefs on single-node should prefer coarse allocation

@@ -21,6 +21,8 @@
 namespace mlir {
 namespace arts {
 
+class ArtsMetadataManager; // Forward declaration
+
 ///===----------------------------------------------------------------------===///
 // LoopAnalyzer - Loop analysis
 ///===----------------------------------------------------------------------===///
@@ -35,6 +37,12 @@ public:
   void analyzeAffineLoop(affine::AffineForOp forOp, LoopMetadata *metadata);
   void analyzeSCFLoop(Operation *loopOp, LoopMetadata *metadata);
 
+  /// Analyze loop nest for reordering opportunities.
+  /// Only sets reorderNestTo if reordering is beneficial and legal.
+  void analyzeLoopReordering(affine::AffineForOp outerLoop,
+                             LoopMetadata *metadata,
+                             ArtsMetadataManager &manager);
+
 private:
   MLIRContext *context;
   AccessAnalyzer &accessAnalyzer;
@@ -47,6 +55,10 @@ private:
   void detectReductions(Operation *loopOp, LoopMetadata *metadata);
   std::optional<LoopMetadata::ReductionKind>
   inferReductionKind(Operation *op) const;
+
+  /// Compute optimal loop order for cache efficiency (ARTS-aware).
+  /// Returns identity permutation if no beneficial reordering found.
+  SmallVector<unsigned> computeOptimalOrder(ArrayRef<affine::AffineForOp> nest);
 };
 
 } // namespace arts

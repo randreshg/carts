@@ -169,25 +169,17 @@ bool DbPartitioningPass::partitionDb() {
   OpBuilder attrBuilder(module.getContext());
 
   /// Helper lambda to set twin-diff attribute on a DbAcquireOp.
-  auto setTwinAttr = [&](DbAcquireOp acq, bool useTwinDiff) {
+  /// Uses the consolidated TwinDiffProof to make decisions via HeuristicsConfig.
+  auto setTwinAttr = [&](DbAcquireOp acq, TwinDiffProof proof) {
     if (!acq)
       return;
 
-    bool originalUseTwinDiff = useTwinDiff;
+    TwinDiffContext twinCtx;
+    twinCtx.proof = proof;
+    twinCtx.artsId =
+        AM->getMetadataManager().getIdRegistry().get(acq.getOperation());
 
-    // Apply single-node heuristic
-    if (AM->getHeuristicsConfig().shouldDisableTwinDiff()) {
-      useTwinDiff = false;
-
-      /// Record H4 decision for diagnostics
-      if (originalUseTwinDiff != useTwinDiff) {
-        // Get ARTS ID for this acquire operation
-        int64_t artsId =
-            AM->getMetadataManager().getIdRegistry().get(acq.getOperation());
-        AM->getHeuristicsConfig().recordDecision(
-            "H4", true, "single-node execution disables twin-diff", artsId);
-      }
-    }
+    bool useTwinDiff = AM->getHeuristicsConfig().shouldUseTwinDiff(twinCtx);
 
     if (acq.hasTwinDiff() && acq.getTwinDiff() == useTwinDiff)
       return;
@@ -313,7 +305,7 @@ bool DbPartitioningPass::partitionDb() {
     for (auto &[acqOp, chunkOffset, chunkSize] : acquireList) {
       if (!acqOp)
         continue;
-      setTwinAttr(acqOp, false);
+      setTwinAttr(acqOp, TwinDiffProof::PartitionSuccess);
     }
 
     partitionSuccess.insert(promoted.getOperation());
@@ -355,7 +347,7 @@ bool DbPartitioningPass::partitionDb() {
           if (auto *acqNode = dyn_cast<DbAcquireNode>(child)) {
             DbAcquireOp acqOp = acqNode->getDbAcquireOp();
             if (acqOp && !acqOp.hasTwinDiff()) {
-              setTwinAttr(acqOp, false);
+              setTwinAttr(acqOp, TwinDiffProof::AliasAnalysis);
               ARTS_DEBUG("      acquire "
                          << acqNode->getHierId()
                          << ": proven disjoint -> twin_diff=false");
@@ -374,7 +366,7 @@ bool DbPartitioningPass::partitionDb() {
       "  Final pass: Setting safe default twin_diff=true for unset acquires");
   module.walk([&](DbAcquireOp acq) {
     if (!acq.hasTwinDiff()) {
-      setTwinAttr(acq, true);
+      setTwinAttr(acq, TwinDiffProof::None);
       ARTS_DEBUG("    Default twin_diff=true for unset acquire");
     }
   });
