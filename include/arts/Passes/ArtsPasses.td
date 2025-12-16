@@ -212,6 +212,46 @@ def EdtInvariantCodeMotion : Pass<"edt-invariant-code-motion", "mlir::ModuleOp">
   let constructor = "mlir::arts::createEdtInvariantCodeMotionPass()";
 }
 
+def ArtsDataPointerHoisting : Pass<"arts-data-pointer-hoisting", "mlir::ModuleOp"> {
+  let summary = "Hoist data pointer loads from deps struct out of loops";
+  let description = [{
+    This pass hoists llvm.load operations that extract data pointers from the
+    ARTS deps struct (artsEdtDep_t.ptr field) to before enclosing loops.
+
+    The deps struct contains pointers to data arrays. Without hoisting, these
+    pointer loads happen inside innermost loops (O(n^3) loads for 3-nested loops).
+    With hoisting, the pointers are loaded once before the loop nest (O(1) loads).
+
+    This is critical for performance because LLVM's LICM cannot hoist these loads
+    without TBAA metadata proving they don't alias with data stores.
+
+    Example transformation:
+    ```mlir
+    scf.for %i = ... {
+      scf.for %j = ... {
+        %ptr = llvm.load %dep_ptr_addr : !llvm.ptr -> !llvm.ptr  // Load every iteration
+        %val = polygeist.load %ptr[%i, %j] : memref<?x?xf64>
+      }
+    }
+    ```
+    becomes:
+    ```mlir
+    %ptr = llvm.load %dep_ptr_addr : !llvm.ptr -> !llvm.ptr  // Load once
+    scf.for %i = ... {
+      scf.for %j = ... {
+        %val = polygeist.load %ptr[%i, %j] : memref<?x?xf64>
+      }
+    }
+    ```
+  }];
+  let dependentDialects = [
+    "arts::ArtsDialect",
+    "LLVM::LLVMDialect",
+    "scf::SCFDialect"
+  ];
+  let constructor = "mlir::arts::createArtsDataPointerHoistingPass()";
+}
+
 def EdtPtrRematerialization : Pass<"edt-ptr-rematerialization", "mlir::ModuleOp"> {
   let summary = "Rematerialize pointer dependencies in EDTs.";
   let description = [{

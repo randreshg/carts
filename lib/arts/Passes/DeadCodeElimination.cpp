@@ -9,10 +9,15 @@
 /// - Dead arts.undef operations (undef values with no uses)
 /// - Trivially empty EDTs (EDTs with only yield/barrier/release ops)
 /// - Dead datablocks (db_alloc where both guid and ptr are unused)
+/// - Unused acquires (db_acquire with no memory ops and unused guid)
+/// - Unused EDT dependencies (EDT block args with no uses + backing acquires)
 ///
 /// This is particularly useful after openmp-to-arts conversion where OMP
 /// dependency proxy allocas become unused, and after EDT lowering where
-/// placeholder undef values may remain.
+/// placeholder undef values may remain. The unused EDT dependency removal is
+/// critical for enabling fine-grained datablock partitioning - phantom acquires
+/// (acquires for arrays visible in a parallel scope but not accessed in an EDT)
+/// can block the Db pass from computing chunk info for all acquires.
 ///==========================================================================///
 
 #include "ArtsPassDetails.h"
@@ -20,6 +25,7 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/OpRemovalManager.h"
+#include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/SymbolTable.h"
@@ -57,9 +63,12 @@ struct DeadCodeEliminationPass
       unsigned removedUndefs = removeDeadUndefs(module);
       unsigned removedEdts = removeEmptyEdts(module);
       unsigned removedDbs = removeDeadDbs(module);
+      unsigned removedAcquires = removeUnusedAcquires(module);
+      unsigned removedEdtDeps = removeUnusedEdtDependencies(module);
 
       unsigned removed = removedLoads + removedStores + removedAllocas +
-                         removedUndefs + removedEdts + removedDbs;
+                         removedUndefs + removedEdts + removedDbs +
+                         removedAcquires + removedEdtDeps;
       totalRemoved += removed;
       changed = (removed > 0);
     }
@@ -201,6 +210,123 @@ struct DeadCodeEliminationPass
     auto opsToRemoveSize = removalMgr.getOpsToRemove().size();
     removalMgr.removeAllMarked(module, /*recursive=*/true);
     return opsToRemoveSize;
+  }
+
+  /// Remove unused db_acquire operations whose ptr and guid are both unused.
+  /// This handles "phantom acquires" - acquires generated for arrays visible
+  /// in a parallel scope but not actually accessed in a particular EDT.
+  unsigned removeUnusedAcquires(ModuleOp module) {
+    SmallVector<Operation *> toRemove;
+
+    module.walk([&](DbAcquireOp acquire) {
+      /// Check if ptr has any uses at all (memory ops, EDT args, etc.)
+      bool ptrUsed = !acquire.getPtr().use_empty();
+
+      /// Check if guid is used (for signaling/dependencies)
+      bool guidUsed = !acquire.getGuid().use_empty();
+
+      if (!ptrUsed && !guidUsed) {
+        ARTS_DEBUG("Removing unused acquire: " << acquire);
+        toRemove.push_back(acquire);
+      }
+    });
+
+    for (auto *op : toRemove)
+      op->erase();
+
+    return toRemove.size();
+  }
+
+  /// Check if a block argument has only DbReleaseOp uses (no real memory ops)
+  bool hasOnlyReleaseUses(BlockArgument arg) {
+    for (Operation *user : arg.getUsers()) {
+      if (!isa<DbReleaseOp>(user))
+        return false;
+    }
+    return true;
+  }
+
+  /// Remove unused EDT dependencies and their backing acquires.
+  /// This handles "phantom acquires" - acquires for arrays visible in a
+  /// parallel scope but not actually accessed in a particular EDT.
+  /// The acquire's ptr is used as EDT dependency, but the corresponding
+  /// block argument inside the EDT body has no real memory uses (only releases).
+  unsigned removeUnusedEdtDependencies(ModuleOp module) {
+    unsigned removed = 0;
+
+    module.walk([&](EdtOp edt) {
+      Block &body = edt.getBody().front();
+      SmallVector<unsigned> unusedArgIndices;
+
+      /// Find block arguments with no real uses (only DbReleaseOp uses)
+      for (unsigned i = 0; i < body.getNumArguments(); ++i) {
+        BlockArgument arg = body.getArgument(i);
+        if (arg.use_empty() || hasOnlyReleaseUses(arg))
+          unusedArgIndices.push_back(i);
+      }
+
+      if (unusedArgIndices.empty())
+        return;
+
+      /// Collect acquires to remove (those with single use = this EDT dep)
+      SmallVector<DbAcquireOp> acquiresToRemove;
+      ValueRange deps = edt.getDependencies();
+
+      for (unsigned idx : unusedArgIndices) {
+        if (idx >= deps.size())
+          continue;
+        Value dep = deps[idx];
+        if (auto acq = dep.getDefiningOp<DbAcquireOp>()) {
+          /// Only remove if ptr has single use (this EDT) and guid unused
+          if (acq.getPtr() == dep && acq.getPtr().hasOneUse() &&
+              acq.getGuid().use_empty()) {
+            acquiresToRemove.push_back(acq);
+            ARTS_DEBUG("Will remove phantom acquire: " << acq);
+          }
+        }
+      }
+
+      /// Build new dependency list excluding unused ones
+      SmallVector<Value> newDeps;
+      for (unsigned i = 0; i < deps.size(); ++i) {
+        if (!llvm::is_contained(unusedArgIndices, i))
+          newDeps.push_back(deps[i]);
+      }
+
+      /// First, remove DbReleaseOp operations that use the unused args
+      for (unsigned idx : unusedArgIndices) {
+        if (idx >= body.getNumArguments())
+          continue;
+        BlockArgument arg = body.getArgument(idx);
+        SmallVector<Operation *> releasesToRemove;
+        for (Operation *user : arg.getUsers()) {
+          if (isa<DbReleaseOp>(user))
+            releasesToRemove.push_back(user);
+        }
+        for (Operation *op : releasesToRemove)
+          op->erase();
+      }
+
+      /// Remove unused block arguments IN REVERSE ORDER to preserve indices
+      for (auto it = unusedArgIndices.rbegin(); it != unusedArgIndices.rend();
+           ++it) {
+        body.eraseArgument(*it);
+      }
+
+      /// Update EDT dependencies using existing API
+      edt.setDependencies(newDeps);
+
+      /// Erase unused acquires
+      for (auto acq : acquiresToRemove) {
+        acq.erase();
+        removed++;
+      }
+
+      ARTS_DEBUG("Removed " << unusedArgIndices.size()
+                            << " unused deps from EDT");
+    });
+
+    return removed;
   }
 
   /// Remove dead symbols (functions/globals) that are private and unused

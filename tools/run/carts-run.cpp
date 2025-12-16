@@ -344,6 +344,16 @@ void setupPreLowering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createEdtLoweringPass(ArtsIdStride));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
+  /// Hoist data pointer loads from deps struct out of loops.
+  /// Must run after EdtLowering when llvm.load operations exist.
+  pm.addPass(arts::createArtsDataPointerHoistingPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCSEPass());
+  /// Transform memory-based reduction patterns to register-based iter_args
+  /// to enable LLVM vectorization.
+  pm.addPass(arts::createArtsScalarReplacementPass());
+  pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  pm.addPass(createCSEPass());
   pm.addPass(arts::createEpochLoweringPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
@@ -375,6 +385,12 @@ void setupLLVMIREmission(PassManager &pm) {
   pm.addPass(createCSEPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(polygeist::createConvertPolygeistToLLVMPass());
+  // Generate alias scope metadata for ARTS data arrays. Must run AFTER
+  // ConvertPolygeistToLLVM so scopes are attached to LLVM::LoadOp/StoreOp.
+  pm.addPass(arts::createArtsAliasScopeGenPass());
+  // Attach LLVM loop vectorization hints to EDT loop backedges.
+  // This encourages LLVM's vectorizer without affecting FP precision.
+  pm.addPass(arts::createArtsLoopVectorizationHintsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
 }
