@@ -63,6 +63,58 @@ private:
 
   /// Rewrite a DbRefOp with transformed indices
   void rewriteDbRef(DbRefOp ref, DbAllocOp newAlloc, OpBuilder &builder);
+
+  ///===--------------------------------------------------------------------===///
+  /// AcquireViewMap - Coordinate mapping for acquired datablock views
+  ///
+  /// Captures information needed to transform global indices to local indices
+  /// relative to an acquired view. The transformation behavior depends on:
+  ///   - Promotion mode (chunked vs element-wise) from parent DbAllocPromotion
+  ///   - Whether the view is accessed via EDT block argument (already local)
+  ///===--------------------------------------------------------------------===///
+  struct AcquireViewMap {
+    /// Number of leading dimensions pinned by DbAcquireOp::indices
+    /// For these dimensions, local index is always 0
+    unsigned numIndexedDims = 0;
+
+    /// Offsets for sliced dimensions (from DbAcquireOp::offsets)
+    /// In chunked mode, these are chunk-space offsets
+    SmallVector<Value> sliceOffsets;
+
+    /// Element-level offsets (from DbAcquireOp::offset_hints)
+    /// Used to localize memref indices inside EDT for chunked mode
+    SmallVector<Value> elementOffsets;
+
+    /// Whether this map is for an EDT block argument
+    /// Critical for chunked mode: EDT block args represent already-localized views
+    bool isEdtBlockArg = false;
+
+    /// Create coordinate map from acquire operation
+    static AcquireViewMap fromAcquire(DbAcquireOp acquire,
+                                      bool isEdtBlockArg = false);
+  };
+
+  /// Localize global indices to acquired view's local coordinates
+  /// Mode-aware: handles chunked vs element-wise differently
+  ///
+  /// For chunked mode + EDT block arg: indices are already local, no transform
+  /// For chunked mode + outside EDT: subtract chunk offset
+  /// For element-wise: subtract element offset
+  SmallVector<Value> localizeIndices(ArrayRef<Value> globalIndices,
+                                     const AcquireViewMap &map,
+                                     OpBuilder &builder, Location loc) const;
+
+  /// Localize memref element indices using element offset hints
+  /// For chunked mode inside EDT, element indices need adjustment
+  /// Example: global index 17 with element offset 17 becomes local index 0
+  SmallVector<Value> localizeElementIndices(ArrayRef<Value> globalIndices,
+                                            const AcquireViewMap &map,
+                                            OpBuilder &builder,
+                                            Location loc) const;
+
+  /// Rebase all users of an acquired EDT block argument to local coordinates
+  /// Mode-aware replacement for db::rebaseAllUsersToAcquireView
+  bool rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder);
 };
 
 ///===----------------------------------------------------------------------===///
