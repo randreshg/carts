@@ -601,6 +601,10 @@ __ARTS_ATTRS_SET(ArgPtrAttrs,
 
 __ARTS_ATTRS_SET(ReturnPtrAttrs, SmallVector<StringRef>({"llvm.noalias"}))
 
+/// Attributes for EDT deps parameter - enables LLVM LICM to hoist pointer loads
+__ARTS_ATTRS_SET(EdtDepsAttrs,
+    SmallVector<StringRef>({"llvm.noalias", "llvm.readonly", "llvm.nofree", "llvm.nocapture"}))
+
 __ARTS_ATTRS_SET(EmptyAttrs, SmallVector<StringRef>({}))
 
 __ARTS_ATTRS_SET(SExt, SmallVector<StringRef>({"llvm.signext"}))

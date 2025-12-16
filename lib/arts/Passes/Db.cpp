@@ -573,10 +573,24 @@ FailureOr<DbAllocOp> DbPass::promoteAllocForChunking(
                  << "D first-dim chunking with chunkSize=" << chunkSizeVal);
 
       /// Generate runtime numChunks computation
+      /// Compute ceiling division manually: (firstDim + chunkSize - 1) / chunkSize
+      /// Using arith.divui instead of arith.ceildivui for reliable LLVM lowering
+      Type i64Type = builder.getI64Type();
+      Value firstDimI64 =
+          builder.create<arith::IndexCastOp>(loc, i64Type, firstDimVal);
+      Value chunkSizeI64 =
+          builder.create<arith::ConstantIntOp>(loc, chunkSizeVal, 64);
+      Value oneI64 = builder.create<arith::ConstantIntOp>(loc, 1, 64);
+      /// numChunks = (firstDim + chunkSize - 1) / chunkSize
+      Value sum = builder.create<arith::AddIOp>(loc, firstDimI64, chunkSizeI64);
+      Value sumMinusOne = builder.create<arith::SubIOp>(loc, sum, oneI64);
+      Value numChunksI64 =
+          builder.create<arith::DivUIOp>(loc, sumMinusOne, chunkSizeI64);
+      Value numChunksVal = builder.create<arith::IndexCastOp>(
+          loc, builder.getIndexType(), numChunksI64);
+      /// Keep chunkSizeValue as index for elementSizes
       Value chunkSizeValue =
           builder.create<arith::ConstantIndexOp>(loc, chunkSizeVal);
-      Value numChunksVal =
-          builder.create<arith::CeilDivUIOp>(loc, firstDimVal, chunkSizeValue);
 
       /// Build new sizes: [numChunks] (may be runtime)
       newOuterSizes.push_back(numChunksVal);
@@ -627,10 +641,24 @@ FailureOr<DbAllocOp> DbPass::promoteAllocForChunking(
           "  Using 1D chunked allocation with chunkSize=" << chunkSizeVal);
 
       /// Generate runtime numChunks computation
+      /// Compute ceiling division manually: (totalElements + chunkSize - 1) / chunkSize
+      /// Using arith.divui instead of arith.ceildivui for reliable LLVM lowering
+      Type i64Type = builder.getI64Type();
+      Value totalElementsI64 =
+          builder.create<arith::IndexCastOp>(loc, i64Type, totalElementsVal);
+      Value chunkSizeI64 =
+          builder.create<arith::ConstantIntOp>(loc, chunkSizeVal, 64);
+      Value oneI64 = builder.create<arith::ConstantIntOp>(loc, 1, 64);
+      /// numChunks = (totalElements + chunkSize - 1) / chunkSize
+      Value sum = builder.create<arith::AddIOp>(loc, totalElementsI64, chunkSizeI64);
+      Value sumMinusOne = builder.create<arith::SubIOp>(loc, sum, oneI64);
+      Value numChunksI64 =
+          builder.create<arith::DivUIOp>(loc, sumMinusOne, chunkSizeI64);
+      Value numChunksVal = builder.create<arith::IndexCastOp>(
+          loc, builder.getIndexType(), numChunksI64);
+      /// Keep chunkSizeValue as index for elementSizes
       Value chunkSizeValue =
           builder.create<arith::ConstantIndexOp>(loc, chunkSizeVal);
-      Value numChunksVal = builder.create<arith::CeilDivUIOp>(
-          loc, totalElementsVal, chunkSizeValue);
 
       newOuterSizes.push_back(numChunksVal);
       newInnerSizes.push_back(chunkSizeValue);

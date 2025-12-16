@@ -659,19 +659,39 @@ DbAllocPromotion::localizeElementIndices(ArrayRef<Value> globalIndices,
   SmallVector<Value> localIndices;
 
   /// For chunked mode inside EDT, element indices need localization
-  /// using the element offset hints from the acquire
+  /// using the element offset hints from the acquire.
+  ///
+  /// CRITICAL: Only localize dimensions that have corresponding offsets.
+  /// Remaining dimensions pass through unchanged.
+  ///
+  /// Examples (elementOffsets, globalIndices -> result):
+  ///   1D: [off], [i]           -> [i - off]
+  ///   2D: [row_off], [row,col] -> [row - row_off, col]
+  ///   3D: [off_i], [i,j,k]     -> [i - off_i, j, k]
+  ///
   if (isChunked_ && map.isEdtBlockArg && !map.elementOffsets.empty()) {
-    Value elementOffset = map.elementOffsets[0];
+    size_t numOffsetsProvided = map.elementOffsets.size();
 
-    for (Value globalIdx : globalIndices) {
-      /// Try to recognize "offset + delta" pattern for cleaner IR
-      /// Example: (offset + i) - offset = i
-      if (Value delta = getOffsetDelta(globalIdx, elementOffset, builder, loc)) {
-        localIndices.push_back(delta);
+    for (size_t i = 0; i < globalIndices.size(); ++i) {
+      Value globalIdx = globalIndices[i];
+
+      if (i < numOffsetsProvided) {
+        /// This dimension has a corresponding element offset - localize it
+        Value elementOffset = map.elementOffsets[i];
+
+        /// Try to recognize "offset + delta" pattern for cleaner IR
+        /// Example: (offset + i) - offset = i
+        if (Value delta =
+                getOffsetDelta(globalIdx, elementOffset, builder, loc)) {
+          localIndices.push_back(delta);
+        } else {
+          /// Explicit subtraction: local = global - elementOffset
+          localIndices.push_back(
+              builder.create<arith::SubIOp>(loc, globalIdx, elementOffset));
+        }
       } else {
-        /// Explicit subtraction: local = global - elementOffset
-        localIndices.push_back(
-            builder.create<arith::SubIOp>(loc, globalIdx, elementOffset));
+        /// This dimension was NOT chunked - pass through unchanged
+        localIndices.push_back(globalIdx);
       }
     }
     return localIndices;
