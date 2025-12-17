@@ -397,6 +397,10 @@ void setupLLVMIREmission(PassManager &pm) {
   pm.addPass(arts::createAliasScopeGenPass());
   /// Attach LLVM loop vectorization hints to EDT loop backedges.
   pm.addPass(arts::createLoopVectorizationHintsPass());
+  /// Insert software prefetch hints for strided memory accesses.
+  /// NOTE: Currently disabled due to performance regression on tight loops.
+  /// TODO: Re-enable after fixing prefetch distance calculation for innermost loops.
+  // pm.addPass(arts::createPrefetchHintsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
 }
