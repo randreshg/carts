@@ -368,6 +368,21 @@ def ArtsLoopFusion : Pass<"arts-loop-fusion", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createLoopFusionPass(nullptr)";
 }
 
+def PrefetchHints : Pass<"prefetch-hints", "mlir::ModuleOp"> {
+  let summary = "Insert software prefetch hints for strided memory accesses";
+  let description = [{
+    Inserts software prefetch intrinsics for strided memory accesses in EDT
+    functions. Targets large-stride accesses (row accesses in 2D arrays) where
+    hardware prefetchers are ineffective.
+  }];
+  let dependentDialects = [
+    "arts::ArtsDialect",
+    "LLVM::LLVMDialect",
+    "arith::ArithDialect"
+  ];
+  let constructor = "mlir::arts::createPrefetchHintsPass()";
+}
+
 def LoopReordering : Pass<"loop-reordering", "mlir::ModuleOp"> {
   let summary = "Reorder inner loops for cache-optimal access patterns";
   let description = [{
