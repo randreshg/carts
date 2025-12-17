@@ -101,6 +101,25 @@ static cl::opt<std::string>
                    cl::desc("Output file for diagnostic JSON export"),
                    cl::value_desc("filename"), cl::init(""));
 
+/// Loop transforms options (Stage: loop-reordering)
+static cl::opt<bool> LoopTransformsEnableMatmul(
+    "loop-transforms-enable-matmul",
+    cl::desc("Enable reduction-aware matmul transforms (dot -> update form)"),
+    cl::init(true));
+
+static cl::opt<bool> LoopTransformsEnableTiling(
+    "loop-transforms-enable-tiling",
+    cl::desc("Enable tiling for loop transforms"), cl::init(true));
+
+static cl::opt<int64_t> LoopTransformsTileJ(
+    "loop-transforms-tile-j",
+    cl::desc("Tile size for j-dimension in loop transforms"), cl::init(64));
+
+static cl::opt<int64_t> LoopTransformsMinTripCount(
+    "loop-transforms-min-trip-count",
+    cl::desc("Minimum constant trip count required to apply tiling"),
+    cl::init(128));
+
 ///===----------------------------------------------------------------------===///
 // Pipeline Stop Options
 ///===----------------------------------------------------------------------===///
@@ -277,6 +296,9 @@ void setupEdtTransforms(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 /// MUST run BEFORE CreateDbs to preserve SSA value relationships.
 void setupLoopReordering(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createLoopReorderingPass(AM));
+  pm.addPass(arts::createLoopTransformsPass(
+      AM, LoopTransformsEnableMatmul, LoopTransformsEnableTiling,
+      LoopTransformsTileJ, LoopTransformsMinTripCount));
   pm.addPass(createCSEPass());
 }
 

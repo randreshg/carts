@@ -415,4 +415,34 @@ def LoopReordering : Pass<"loop-reordering", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createLoopReorderingPass(nullptr)";
 }
 
+def ArtsLoopTransforms : Pass<"arts-loop-transforms", "mlir::ModuleOp"> {
+  let summary = "Apply loop tiling/unrolling and reduction-aware matmul transforms";
+  let description = [{
+    Applies additional loop transformations not covered by LoopReordering:
+    - Reduction-aware matmul loop interchange (dot-product form -> k-j update form)
+    - Optional inner-loop tiling to improve cache locality and SIMD
+
+    This pass is intended to run BEFORE CreateDbs so that downstream DB creation,
+    partitioning, and lowering can see the transformed loop structure.
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "arith::ArithDialect",
+    "scf::SCFDialect"
+  ];
+  let constructor = "mlir::arts::createLoopTransformsPass(nullptr)";
+  let options = [
+    Option<"enableMatmul", "enable-matmul", "bool", /*default=*/"true",
+           "Enable reduction-aware matmul transforms.">,
+    Option<"enableTiling", "enable-tiling", "bool", /*default=*/"true",
+           "Enable inner-loop tiling (when patterns match).">,
+    Option<"tileJ", "tile-j", "int64_t", /*default=*/"64",
+           "Tile size for the j dimension (matmul-like inner loops).">,
+    Option<"minTripCount", "min-trip-count", "int64_t", /*default=*/"128",
+           "Minimum constant trip count required to apply tiling.">
+  ];
+}
+
 #endif // CARTS_PASSES

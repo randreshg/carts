@@ -951,8 +951,19 @@ def execute(
     run_passthrough_args: List[str] = []
 
     # Args that should go to carts-run, not cgeist
-    run_only_args = {"--arts-config", "--metadata-file", "--concurrency",
-                     "--concurrency-opt", "--diagnose", "--diagnose-output"}
+    run_only_args = {
+        "--arts-config",
+        "--metadata-file",
+        "--concurrency",
+        "--concurrency-opt",
+        "--diagnose",
+        "--diagnose-output",
+        # Loop transforms (carts-run flags)
+        "--loop-transforms-enable-matmul",
+        "--loop-transforms-enable-tiling",
+        "--loop-transforms-tile-j",
+        "--loop-transforms-min-trip-count",
+    }
 
     # Check if -O3 or --diagnose is in passthrough args
     passthrough_optimize = False
@@ -970,15 +981,25 @@ def execute(
                 passthrough_diagnose_output = Path(next(args_iter))
             except StopIteration:
                 pass
-        elif arg in run_only_args:
-            run_passthrough_args.append(arg)
-            if arg in ("--arts-config", "--metadata-file"):
-                try:
-                    run_passthrough_args.append(next(args_iter))
-                except StopIteration:
-                    pass
         else:
-            cgeist_args.append(arg)
+            # Support --flag=value forms for carts-run-only args.
+            flag_name = arg.split("=", 1)[0]
+            if flag_name in run_only_args:
+                run_passthrough_args.append(arg)
+                if flag_name in ("--arts-config", "--metadata-file") and "=" not in arg:
+                    try:
+                        run_passthrough_args.append(next(args_iter))
+                    except StopIteration:
+                        pass
+            elif arg in run_only_args:
+                run_passthrough_args.append(arg)
+                if arg in ("--arts-config", "--metadata-file"):
+                    try:
+                        run_passthrough_args.append(next(args_iter))
+                    except StopIteration:
+                        pass
+            else:
+                cgeist_args.append(arg)
 
     # Merge run_passthrough_args into extra_run_args
     extra_run_args.extend(run_passthrough_args)
