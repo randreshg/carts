@@ -26,7 +26,6 @@ using namespace mlir::arts;
 
 ///===----------------------------------------------------------------------===///
 // Arts dialect.
-///===----------------------------------------------------------------------===///
 void ArtsDialect::initialize() {
   /// Register operations
   addOperations<
@@ -49,9 +48,7 @@ void ArtsDialect::initialize() {
 
 #include "arts/ArtsOpsDialect.cpp.inc"
 
-///===----------------------------------------------------------------------===///
 // Arts Dialect Operations - method definitions
-///===----------------------------------------------------------------------===///
 #define GET_OP_CLASSES
 #include "arts/ArtsOps.cpp.inc"
 
@@ -124,26 +121,18 @@ bool isArtsOp(Operation *op) {
              arts::GetCurrentNodeOp>(op);
 }
 
-///===----------------------------------------------------------------------===///
 // Arts Dialect Types - method definitions
-///===----------------------------------------------------------------------===///
 #define GET_TYPEDEF_CLASSES
 #include "arts/ArtsOpsTypes.cpp.inc"
 
-///===----------------------------------------------------------------------===///
 // Arts Dialect Attributes - method definitions
-///===----------------------------------------------------------------------===///
 #define GET_ATTRDEF_CLASSES
 #include "arts/ArtsOpsAttributes.cpp.inc"
 
-///===----------------------------------------------------------------------===///
 // Arts Dialect Enums - method definitions
-///===----------------------------------------------------------------------===///
 #include "arts/ArtsOpsEnums.cpp.inc"
 
-///===----------------------------------------------------------------------===///
 // UndefOp
-///===----------------------------------------------------------------------===///
 class UndefToLLVM final : public OpRewritePattern<UndefOp> {
 public:
   using OpRewritePattern<UndefOp>::OpRewritePattern;
@@ -163,9 +152,7 @@ void UndefOp::getCanonicalizationPatterns(RewritePatternSet &results,
   results.insert<UndefToLLVM>(context);
 }
 
-///===----------------------------------------------------------------------===///
 // EdtOp
-///===----------------------------------------------------------------------===///
 SmallVector<Value> mlir::arts::EdtOp::getDependenciesAsVector() {
   SmallVector<Value> deps(getDependencies().begin(), getDependencies().end());
   return deps;
@@ -307,9 +294,7 @@ void EdtOp::getEffects(
   /// }
 }
 
-///===----------------------------------------------------------------------===///
 // ARTS Operation Builders
-///===----------------------------------------------------------------------===///
 void DbReleaseOp::build(OpBuilder &builder, OperationState &state,
                         Value source) {
   state.addOperands(source);
@@ -346,9 +331,7 @@ void DbControlOp::build(OpBuilder &builder, OperationState &state,
                      sizes);
 }
 
-///===----------------------------------------------------------------------===///
 // EDT Ops
-///===----------------------------------------------------------------------===///
 void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
                   EdtConcurrency concurrency) {
   build(builder, state, type, concurrency, ValueRange{});
@@ -375,9 +358,7 @@ void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
   bodyRegion->push_back(bodyBlock);
 }
 
-///===----------------------------------------------------------------------===///
 // EDT Create Ops
-///===----------------------------------------------------------------------===///
 
 void EdtCreateOp::build(OpBuilder &builder, OperationState &state,
                         Value param_memref, Value depCount) {
@@ -392,9 +373,7 @@ void EdtCreateOp::build(OpBuilder &builder, OperationState &state,
   state.addOperands({param_memref, depCount, route});
 }
 
-///===----------------------------------------------------------------------===///
 // DB operations builders
-///===----------------------------------------------------------------------===///
 /// DbAllocOp builders
 static void
 buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
@@ -497,9 +476,7 @@ MemRefType DbAllocOp::getAllocatedElementType() {
       SmallVector<Value>(getElementSizes().begin(), getElementSizes().end()));
 }
 
-///===----------------------------------------------------------------------===///
 /// DbAcquireOp twin_diff attribute accessors
-///===----------------------------------------------------------------------===///
 
 void DbAcquireOp::setTwinDiff(bool enabled) {
   (*this)->setAttr(AttrNames::Operation::ArtsTwinDiff,
@@ -757,12 +734,12 @@ LogicalResult DbRefOp::verify() {
   bool isCoarse =
       !allocSizes.empty() && llvm::all_of(allocSizes, [](Value v) {
         int64_t val;
-        return arts::getConstantIndex(v, val) && val == 1;
+        return ValueUtils::getConstantIndex(v, val) && val == 1;
       });
   if (isCoarse) {
     for (Value idx : getIndices()) {
       int64_t val;
-      if (!arts::getConstantIndex(idx, val) || val != 0)
+      if (!ValueUtils::getConstantIndex(idx, val) || val != 0)
         return emitOpError("Coarse-grained datablock expects db_ref indices ")
                << "to be constant zero\n"
                << *getOperation();
@@ -935,9 +912,93 @@ SmallVector<Value> getOffsetsFromDb(Value datablockPtr) {
   return {};
 }
 
-///===----------------------------------------------------------------------===///
+//===----------------------------------------------------------------------===//
+// Stride Computation Functions
+//===----------------------------------------------------------------------===//
+// These functions compute the linearization stride for row-major indexing.
+// For sizes = [D0, D1, D2, ...], stride = D1 * D2 * ... (TRAILING dimensions).
+// This follows row-major linearization: index = i0 * stride + ...
+//
+// IMPORTANT: The stride is the product of TRAILING dimensions, NOT all dims!
+// For element_sizes = [4, 16], stride = 16 (not 64)
+//===----------------------------------------------------------------------===//
+
+std::optional<int64_t> getStaticStride(ValueRange sizes) {
+  if (sizes.empty())
+    return std::nullopt;
+
+  // Single dimension [N]: stride = 1
+  if (sizes.size() == 1)
+    return 1;
+
+  // Multi-dimensional [D0, D1, ...]: stride = D1 * D2 * ... (skip D0!)
+  int64_t stride = 1;
+  for (size_t i = 1; i < sizes.size(); ++i) { // START AT 1
+    int64_t dim;
+    if (!ValueUtils::getConstantIndex(sizes[i], dim))
+      return std::nullopt; // Dynamic dimension
+    stride *= dim;
+  }
+  return stride;
+}
+
+std::optional<int64_t> getStaticStride(MemRefType memrefType) {
+  auto shape = memrefType.getShape();
+  if (shape.empty())
+    return std::nullopt;
+
+  if (shape.size() == 1)
+    return 1;
+
+  int64_t stride = 1;
+  for (size_t i = 1; i < shape.size(); ++i) { // START AT 1
+    if (shape[i] == ShapedType::kDynamic)
+      return std::nullopt;
+    stride *= shape[i];
+  }
+  return stride;
+}
+
+std::optional<int64_t> getStaticElementStride(arts::DbAllocOp alloc) {
+  return getStaticStride(alloc.getElementSizes());
+}
+
+std::optional<int64_t> getStaticOuterStride(arts::DbAllocOp alloc) {
+  return getStaticStride(alloc.getSizes());
+}
+
+Value getStrideValue(OpBuilder &builder, Location loc, ValueRange sizes) {
+  if (sizes.empty())
+    return nullptr;
+
+  // Single dimension [N]: stride = 1
+  if (sizes.size() == 1)
+    return builder.create<arith::ConstantIndexOp>(loc, 1);
+
+  // Try static first for efficiency
+  if (auto staticStride = getStaticStride(sizes))
+    return builder.create<arith::ConstantIndexOp>(loc, *staticStride);
+
+  // Dynamic: build multiplication chain for trailing dimensions
+  // stride = sizes[1] * sizes[2] * ... * sizes[n-1]
+  Value stride = sizes[1]; // Start at index 1 (skip first dimension!)
+  for (size_t i = 2; i < sizes.size(); ++i) {
+    stride = builder.create<arith::MulIOp>(loc, stride, sizes[i]);
+  }
+  return stride;
+}
+
+Value getElementStrideValue(OpBuilder &builder, Location loc,
+                            arts::DbAllocOp alloc) {
+  return getStrideValue(builder, loc, alloc.getElementSizes());
+}
+
+Value getOuterStrideValue(OpBuilder &builder, Location loc,
+                          arts::DbAllocOp alloc) {
+  return getStrideValue(builder, loc, alloc.getSizes());
+}
+
 // ForOp Canonicalization
-///===----------------------------------------------------------------------===///
 
 void arts::ForOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
                                               MLIRContext *context) {
@@ -948,15 +1009,4 @@ void arts::ForOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
   /// - Loop invariant code motion
 }
 
-///===----------------------------------------------------------------------===///
-// ReductionOp Builders
-///===----------------------------------------------------------------------===///
 
-void ReductionOp::build(OpBuilder &builder, OperationState &state, Value array,
-                        Value result, Value lower_bound, Value upper_bound,
-                        Value step, ReductionKind reduction_kind) {
-  state.addOperands({array, result, lower_bound, upper_bound, step});
-  state.addAttribute(
-      "reduction_kind",
-      ReductionKindAttr::get(builder.getContext(), reduction_kind));
-}

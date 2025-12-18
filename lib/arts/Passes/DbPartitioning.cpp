@@ -401,15 +401,17 @@ FailureOr<DbAllocOp> DbPartitioningPass::promoteAllocForChunking(
   Location loc = allocOp.getLoc();
   builder.setInsertionPoint(allocOp);
 
-  /// Extract chunk size from first acquire's partition info.
-  /// Use extractChunkSizeFromHint to handle both direct constants and
-  /// minui(remaining, chunkSize) patterns from ForLowering.
+  /// Extract MAX chunk size across ALL acquires.
+  /// Use extractChunkSizeForAllocation to include stencil halo adjustments,
+  /// since allocations need to be large enough for the largest adjusted size.
+  /// Example: if acquire A needs 64 rows and acquire B needs 66 (stencil halo),
+  /// allocation chunks should be 66 rows.
   int64_t chunkSizeVal = 0;
-  if (!acquireInfo.empty()) {
-    Value chunkSize = std::get<2>(acquireInfo[0]);
-    if (auto extracted = arts::extractChunkSizeFromHint(chunkSize);
-        extracted && *extracted > 1) {
+  for (const auto &[acqOp, offset, size] : acquireInfo) {
+    if (auto extracted = arts::extractChunkSizeForAllocation(size);
+        extracted && *extracted > chunkSizeVal) {
       chunkSizeVal = *extracted;
+      ARTS_DEBUG("  Acquire " << acqOp << " needs chunk size " << *extracted);
     }
   }
 
@@ -435,7 +437,7 @@ FailureOr<DbAllocOp> DbPartitioningPass::promoteAllocForChunking(
     /// Compute numChunks (requires dim 0 to be constant)
     std::optional<int64_t> numChunksOpt;
     int64_t firstDimConst;
-    if (arts::getConstantIndex(firstDimVal, firstDimConst) &&
+    if (ValueUtils::getConstantIndex(firstDimVal, firstDimConst) &&
         firstDimConst > chunkSizeVal) {
       numChunksOpt = (firstDimConst + chunkSizeVal - 1) / chunkSizeVal;
     }
@@ -448,7 +450,7 @@ FailureOr<DbAllocOp> DbPartitioningPass::promoteAllocForChunking(
     bool innerConstant = true;
     for (unsigned i = 1; i < elemSizes.size(); ++i) {
       int64_t dimSize;
-      if (arts::getConstantIndex(elemSizes[i], dimSize))
+      if (ValueUtils::getConstantIndex(elemSizes[i], dimSize))
         innerElements *= dimSize;
       else
         innerConstant = false;
@@ -520,7 +522,7 @@ FailureOr<DbAllocOp> DbPartitioningPass::promoteAllocForChunking(
     /// Compute numChunks (requires total elements to be constant)
     std::optional<int64_t> numChunksOpt;
     int64_t totalElements;
-    if (arts::getConstantIndex(totalElementsVal, totalElements) &&
+    if (ValueUtils::getConstantIndex(totalElementsVal, totalElements) &&
         totalElements > chunkSizeVal) {
       numChunksOpt = (totalElements + chunkSizeVal - 1) / chunkSizeVal;
     }

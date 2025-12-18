@@ -542,53 +542,6 @@ def AtomicAddOp : Arts_Op<"atomic_add", [MemoryEffects<[MemWrite]>]> {
   let assemblyFormat = "`(` $addr `,` $value `:` type($addr) `,` type($value) `)` attr-dict";
 }
 
-///===----------------------------------------------------------------------===///
-/// arts.reduction
-///===----------------------------------------------------------------------===///
-def ReductionOp : Arts_Op<"reduction", [MemoryEffects<[MemWrite]>]> {
-  let summary = "Parallel reduction operation in ARTS";
-  let description = [{
-    Performs a parallel reduction operation across multiple workers.
-    This operation encapsulates the complex reduction pattern that was previously
-    handled manually in the OpenMP to ARTS conversion.
-    
-    The operation:
-    1. Distributes work across available workers
-    2. Each worker computes a partial reduction
-    3. Synchronizes workers with a barrier
-    4. Performs final reduction in a single worker
-    
-    - array: the input array to reduce over
-    - result: the output location for the final reduction result (must contain initial value)
-    - lower_bound: starting index for the reduction
-    - upper_bound: ending index for the reduction  
-    - step: step size for iteration
-    - reduction_kind: the type of reduction (add, mul, min, max, etc.)
-  }];
-
-  let arguments = (ins 
-    AnyMemRef:$array,
-    AnyMemRef:$result,
-    Index:$lower_bound,
-    Index:$upper_bound,
-    Index:$step,
-    ReductionKindAttr:$reduction_kind
-  );
-  
-  let results = (outs);
-  let assemblyFormat = [{
-    `(` $array `:` type($array) `,` $result `:` type($result) `,` 
-        $lower_bound `,` $upper_bound `,` $step `,` 
-        $reduction_kind `)` attr-dict
-  }];
-  
-  let skipDefaultBuilders = 1;
-  let builders = [
-    OpBuilder<(ins "Value":$array, "Value":$result,
-                   "Value":$lower_bound, "Value":$upper_bound, "Value":$step,
-                   "ReductionKind":$reduction_kind)>
-  ];
-}
 
 ///===----------------------------------------------------------------------===///
 /// arts.get_total_workers

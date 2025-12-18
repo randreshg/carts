@@ -128,17 +128,6 @@ def EdtConcurrency : Arts_I32Enum<"EdtConcurrency",
 /// Enum attribute for EDT concurrency types
 def EdtConcurrencyAttr : Arts_I32EnumAttr<"concurrency", EdtConcurrency>;
 
-/// Enum info for reduction kinds
-def ReductionKind : Arts_I32Enum<"ReductionKind",
-    "ARTS reduction operation kind",
-    [
-      I32EnumAttrCase<"add", 0, "add">,
-      I32EnumAttrCase<"mul", 1, "mul">
-    ]>;
-
-/// Enum attribute for reduction kinds
-def ReductionKindAttr : Arts_I32EnumAttr<"reduction_kind", ReductionKind>;
-
 /// Enum info for dependency access modes
 def DepAccessMode : Arts_I32Enum<"DepAccessMode",
     "Dependency GUID access mode",
@@ -149,6 +138,19 @@ def DepAccessMode : Arts_I32Enum<"DepAccessMode",
 
 /// Enum attribute for dependency access modes
 def DepAccessModeAttr : Arts_I32EnumAttr<"dep_access", DepAccessMode>;
+
+/// Enum info for DB promotion modes
+/// Used to track how a DbAcquire was promoted (chunked vs element-wise)
+def PromotionMode : Arts_I32Enum<"PromotionMode",
+    "DB allocation promotion mode",
+    [
+      I32EnumAttrCase<"none", 0, "none">,
+      I32EnumAttrCase<"chunked", 1, "chunked">,
+      I32EnumAttrCase<"element_wise", 2, "element_wise">
+    ]>;
+
+/// Enum attribute for DB promotion modes
+def PromotionModeAttr : Arts_I32EnumAttr<"promotion_mode", PromotionMode>;
 
 /// Integer attribute for storing number of workers for EDT operations
 def WorkersAttr : AttrDef<ArtsDialect, "workers"> {
