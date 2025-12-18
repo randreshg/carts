@@ -144,10 +144,9 @@ void ConcurrencyPass::updateRuntimeQueryOperations() {
 void ConcurrencyPass::adjustDbModes() {
   /// For each EDT that has parallelism strategy set, adjust datablock modes
   module.walk([&](EdtOp edtOp) {
+    /// No parallelism strategy set
     if (!edtOp.getWorkers().has_value())
-      return; /// No parallelism strategy set
-
-    bool isInterNode = (edtOp.getConcurrency() == EdtConcurrency::internode);
+      return;
 
     /// Set Datablock mode based on access mode
     std::function<void(Operation *)> adjustDbMode = [&](Operation *op) {
@@ -218,8 +217,8 @@ void ConcurrencyPass::applyEdtParallelismStrategy(EdtOp edtOp) {
     concurrencyType = EdtConcurrency::intranode;
     ARTS_INFO("Setting EDT parallelism: single-node execution with 1 worker");
   } else {
-    /// Unknown configuration - default to intranode with runtime-determined workers
-    /// The EDT will query worker count at runtime via GetTotalWorkersOp
+    /// Unknown configuration - default to intranode with runtime-determined
+    /// workers The EDT will query worker count at runtime via GetTotalWorkersOp
     numWorkers = 0;
     concurrencyType = EdtConcurrency::intranode;
     ARTS_INFO("Unknown configuration; defaulting to intranode with runtime "

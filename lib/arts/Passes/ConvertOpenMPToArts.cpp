@@ -18,6 +18,7 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/OperationAttributes.h"
+#include "arts/Utils/ValueUtils.h"
 /// Others
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -256,11 +257,7 @@ struct TaskToARTSPattern : public OpRewritePattern<omp::TaskOp> {
           for (size_t i = 0; i < allIndices.size() && i < allSizes.size();
                ++i) {
             /// Check if this dimension has size == 1 (pinned) or > 1 (chunk)
-            bool isPinned = false;
-            if (auto constOp =
-                    allSizes[i].getDefiningOp<arith::ConstantIndexOp>()) {
-              isPinned = (constOp.value() == 1);
-            }
+            bool isPinned = ValueUtils::isOneConstant(allSizes[i]);
 
             if (isPinned) {
               pinnedIndices.push_back(allIndices[i]);
@@ -415,7 +412,7 @@ private:
     assert(module && "Module is required");
 
     for (auto [attr, value] : llvm::zip(reds.getValue(), reductionVars)) {
-      redAccs.push_back(arts::getUnderlyingValue(value));
+      redAccs.push_back(ValueUtils::getUnderlyingValue(value));
       if (auto symRef = dyn_cast<SymbolRefAttr>(attr)) {
         auto decl = dyn_cast_or_null<omp::ReductionDeclareOp>(
             module.lookupSymbol(symRef.getLeafReference()));
@@ -642,12 +639,14 @@ struct CallToARTSPattern : public OpRewritePattern<func::CallOp> {
                                 PatternRewriter &rewriter) const override {
     auto callee = callOp.getCallee();
     if (callee == "omp_get_thread_num") {
-      /// Use Worker by default - Concurrency pass will convert to Node for internode EDTs
+      /// Use Worker by default - Concurrency pass will convert to Node for
+      /// internode EDTs
       rewriter.replaceOpWithNewOp<arts::GetCurrentWorkerOp>(callOp);
       return success();
     }
     if (callee == "omp_get_num_threads" || callee == "omp_get_max_threads") {
-      /// Use Worker by default - Concurrency pass will convert to Node for internode EDTs
+      /// Use Worker by default - Concurrency pass will convert to Node for
+      /// internode EDTs
       rewriter.replaceOpWithNewOp<arts::GetTotalWorkersOp>(callOp);
       return success();
     }
@@ -684,7 +683,7 @@ void ConvertOpenMPToArtsPass::runOnOperation() {
   GreedyRewriteConfig config;
   (void)applyPatternsAndFoldGreedily(module, std::move(patterns), config);
 
-  OpRemovalManager::removeUndefOps(module);
+  RemovalUtils::removeUndefOps(module);
   ARTS_INFO_FOOTER(ConvertOpenMPToArtsPass);
   ARTS_DEBUG_REGION(module.dump(););
 }

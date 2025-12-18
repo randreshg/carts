@@ -20,6 +20,7 @@
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/Metadata/IdRegistry.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -253,7 +254,7 @@ LogicalResult EdtLoweringPass::lowerEdt(EdtOp edtOp) {
   /// Calculate total dependency count as the sum of elements of all deps
   Value depCount = AC->createIntConstant(0, AC->Int32, loc);
   for (Value dep : edtDeps) {
-    SmallVector<Value> sizes = getSizesFromDb(dep);
+    SmallVector<Value> sizes = DatablockUtils::getSizesFromDb(dep);
     Value numElements = AC->create<DbNumElementsOp>(loc, sizes);
     numElements = AC->castToInt(AC->Int32, numElements, loc);
     depCount = AC->create<arith::AddIOp>(loc, depCount, numElements);
@@ -570,7 +571,7 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
   for (Value dep : deps) {
     /// Handle both DbAcquireOp and DepDbAcquireOp as dependency sources, even
     /// when they are threaded through block arguments.
-    Operation *underlyingDb = arts::getUnderlyingDb(dep);
+    Operation *underlyingDb = DatablockUtils::getUnderlyingDb(dep);
     auto dbAcquireOp = dyn_cast_or_null<DbAcquireOp>(underlyingDb);
     auto depDbAcquireOp = dyn_cast_or_null<DepDbAcquireOp>(underlyingDb);
     if (!dbAcquireOp && !depDbAcquireOp) {
@@ -596,10 +597,10 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     boundsValids.push_back(boundsValid);
 
     DbAllocOp allocForHint =
-        dyn_cast_or_null<DbAllocOp>(arts::getUnderlyingDbAlloc(dep));
+        dyn_cast_or_null<DbAllocOp>(DatablockUtils::getUnderlyingDbAlloc(dep));
     if (dbAcquireOp && !allocForHint)
       allocForHint = dyn_cast<DbAllocOp>(
-          arts::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()));
+          DatablockUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()));
 
     /// Extract acquire mode: Convert ArtsMode to DbMode enum
     ArtsMode artsMode = ArtsMode::inout;
@@ -742,7 +743,7 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
   auto computeBaseOffset = [&](size_t depIndex, Location loc) {
     Value base = AC->createIndexConstant(0, loc);
     for (size_t i = 0; i < depIndex; ++i) {
-      SmallVector<Value> prevSizes = getSizesFromDb(originalDeps[i]);
+      SmallVector<Value> prevSizes = DatablockUtils::getSizesFromDb(originalDeps[i]);
       SmallVector<Value> prevResolved = resolveParam(prevSizes, loc);
       Value prevElems = AC->computeTotalElements(prevResolved, loc);
       base = AC->create<arith::AddIOp>(loc, base, prevElems);
@@ -761,12 +762,12 @@ void EdtLoweringPass::transformDepUses(ArrayRef<Value> originalDeps, Value depv,
     AC->setInsertionPoint(placeholder.getDefiningOp());
     Value baseOffset = computeBaseOffset(depIndex, loc);
     SmallVector<Value> depSizes =
-        resolveParam(getSizesFromDb(originalDeps[depIndex]), loc);
+        resolveParam(DatablockUtils::getSizesFromDb(originalDeps[depIndex]), loc);
     SmallVector<Value> depStrides = AC->computeStridesFromSizes(depSizes, loc);
 
     /// Replace remaining uses of the dependency placeholder with the dependency
     bool isSingleElement =
-        dbHasSingleSize(originalDeps[depIndex].getDefiningOp<DbAcquireOp>());
+        DatablockUtils::dbHasSingleSize(originalDeps[depIndex].getDefiningOp<DbAcquireOp>());
 
     /// Get the users of the dependency placeholder
     SmallVector<Operation *, 16> users, dbAcquireUsers;

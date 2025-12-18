@@ -73,6 +73,7 @@
 #include "arts/Transforms/DbTransforms.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/DatablockUtils.h"
 ARTS_DEBUG_SETUP(db_partitioning);
 
 using namespace mlir;
@@ -169,7 +170,8 @@ bool DbPartitioningPass::partitionDb() {
   OpBuilder attrBuilder(module.getContext());
 
   /// Helper lambda to set twin-diff attribute on a DbAcquireOp.
-  /// Uses the consolidated TwinDiffProof to make decisions via HeuristicsConfig.
+  /// Uses the consolidated TwinDiffProof to make decisions via
+  /// HeuristicsConfig.
   auto setTwinAttr = [&](DbAcquireOp acq, TwinDiffProof proof) {
     if (!acq)
       return;
@@ -649,15 +651,6 @@ static bool isLowerBoundGuaranteedByControlFlow(Operation *op, Value loopIV) {
     return false;
   };
 
-  /// Helper: check if value is constant 0
-  auto isZero = [](Value v) {
-    if (auto c = v.getDefiningOp<arith::ConstantIntOp>())
-      return c.value() == 0;
-    if (auto c = v.getDefiningOp<arith::ConstantIndexOp>())
-      return c.value() == 0;
-    return false;
-  };
-
   /// Walk up parent chain looking for scf.if with condition `iv == 0`
   for (Operation *p = op->getParentOp(); p; p = p->getParentOp()) {
     auto ifOp = dyn_cast<scf::IfOp>(p);
@@ -674,7 +667,8 @@ static bool isLowerBoundGuaranteedByControlFlow(Operation *op, Value loopIV) {
       continue;
 
     Value lhs = cmp.getLhs(), rhs = cmp.getRhs();
-    if ((matchesIV(lhs) && isZero(rhs)) || (matchesIV(rhs) && isZero(lhs))) {
+    if ((matchesIV(lhs) && ValueUtils::isZeroConstant(rhs)) ||
+        (matchesIV(rhs) && ValueUtils::isZeroConstant(lhs))) {
       ARTS_DEBUG("  Lower bound guaranteed by control flow (else of iv==0)");
       return true;
     }
@@ -749,7 +743,7 @@ void DbPartitioningPass::generateBoundsValid(DbAcquireOp acquireOp,
   OpBuilder builder(acquireOp);
 
   auto indices = acquireOp.getIndices();
-  SmallVector<Value> sourceSizes = getSizesFromDb(acquireOp.getSourcePtr());
+  SmallVector<Value> sourceSizes = DatablockUtils::getSizesFromDb(acquireOp.getSourcePtr());
 
   /// Check if lower bound is guaranteed by control flow (inside else of `if
   /// iv==0`)

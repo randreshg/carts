@@ -18,6 +18,7 @@
 
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "polygeist/Ops.h"
 
@@ -226,7 +227,7 @@ LogicalResult EdtOp::verify() {
       if (llvm::is_contained(blockArgs, operand)) {
         /// Verify that the operand is a DbAcquireOp
         DbAcquireOp underlyingAcquire =
-            dyn_cast<DbAcquireOp>(arts::getUnderlyingDb(operand));
+            dyn_cast<DbAcquireOp>(DatablockUtils::getUnderlyingDb(operand));
         if (!underlyingAcquire) {
           op->emitOpError("EDT region uses block argument '")
               << operand << "' as a DbAcquire value.";
@@ -501,14 +502,14 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
                         SmallVector<Value> sizes,
                         SmallVector<Value> offsetHints,
                         SmallVector<Value> sizeHints, Value boundsValid) {
-  auto sourceDb = arts::getUnderlyingDb(sourcePtr);
+  auto sourceDb = DatablockUtils::getUnderlyingDb(sourcePtr);
   auto sourceDbAlloc =
-      dyn_cast<DbAllocOp>(arts::getUnderlyingDbAlloc(sourcePtr));
+      dyn_cast<DbAllocOp>(DatablockUtils::getUnderlyingDbAlloc(sourcePtr));
   assert(sourceDb && "Expected sourceDb");
   assert(sourceDbAlloc && "Expected sourceDbAlloc");
 
   /// Get the sizes from the source datablock
-  auto sourceSizes = getSizesFromDb(sourceDb);
+  auto sourceSizes = DatablockUtils::getSizesFromDb(sourceDb);
   const uint64_t sourceRank = sourceSizes.size();
   const uint64_t pinnedDims = indices.size();
   assert(pinnedDims <= sourceRank && "Number of indices exceeds source rank");
@@ -635,7 +636,7 @@ LogicalResult DbAcquireOp::verify() {
   }
 
   /// Get the source pointer type and rank
-  auto srcRank = getSizesFromDb(getSourcePtr()).size();
+  auto srcRank = DatablockUtils::getSizesFromDb(getSourcePtr()).size();
   auto dbIndices = getIndices().size();
 
   /// Check that indices don't exceed source rank
@@ -659,8 +660,8 @@ LogicalResult DbAcquireOp::verify() {
 
   /// Check if the source has a single size of 1 and we are using indices
   if (dbIndices > 0) {
-    Operation *sourceDb = getUnderlyingDb(getSourcePtr());
-    if (dbHasSingleSize(sourceDb)) {
+    Operation *sourceDb = DatablockUtils::getUnderlyingDb(getSourcePtr());
+    if (DatablockUtils::dbHasSingleSize(sourceDb)) {
       return emitOpError(
           "Cannot use indices on single-element datablock (size=1)");
     }
@@ -669,13 +670,13 @@ LogicalResult DbAcquireOp::verify() {
   auto offsetHints = getOffsetHints();
   if (!offsetHints.empty() && offsetHints.size() != dbSizes) {
     return emitOpError("offset_hints must match the number of sizes when set (")
-           << offsetHints.size() << " vs " << dbSizes << ")";
+           << offsetHints.size() << " vs " << dbSizes << ")" << *getOperation();
   }
 
   auto sizeHints = getSizeHints();
   if (!sizeHints.empty() && sizeHints.size() != dbSizes) {
     return emitOpError("size_hints must match the number of sizes when set (")
-           << sizeHints.size() << " vs " << dbSizes << ")";
+           << sizeHints.size() << " vs " << dbSizes << ")" << *getOperation();
   }
 
   /// NOTE: We do NOT warn about unused ptr results here because:
@@ -692,7 +693,8 @@ LogicalResult DbAcquireOp::verify() {
 void DbRefOp::build(OpBuilder &builder, OperationState &state, Value source,
                     ArrayRef<Value> indices) {
   /// The dbref
-  DbAllocOp dbAllocOp = dyn_cast<DbAllocOp>(arts::getUnderlyingDbAlloc(source));
+  DbAllocOp dbAllocOp =
+      dyn_cast<DbAllocOp>(DatablockUtils::getUnderlyingDbAlloc(source));
   assert(dbAllocOp && "Expected dbAllocOp");
   state.addTypes(dbAllocOp.getAllocatedElementType());
   state.addOperands(source);
@@ -703,13 +705,13 @@ void DbRefOp::build(OpBuilder &builder, OperationState &state, Value source,
 }
 
 LogicalResult DbRefOp::verify() {
-  auto underlyingDbOp = arts::getUnderlyingDb(getSource());
+  auto underlyingDbOp = DatablockUtils::getUnderlyingDb(getSource());
   if (!underlyingDbOp)
     return emitOpError("source must be a datablock operation\n")
            << *getOperation();
 
   /// Verify outer indices
-  auto outerSizes = getSizesFromDb(underlyingDbOp);
+  auto outerSizes = DatablockUtils::getSizesFromDb(underlyingDbOp);
   if (getIndices().size() != outerSizes.size()) {
     return emitOpError("expects ")
            << outerSizes.size() << " index operands (got "
@@ -726,16 +728,15 @@ LogicalResult DbRefOp::verify() {
   SmallVector<Value> allocSizes = outerSizes;
   if (auto dbAcquire = dyn_cast<DbAcquireOp>(underlyingDbOp)) {
     if (auto dbAlloc = dyn_cast_or_null<DbAllocOp>(
-            arts::getUnderlyingDbAlloc(dbAcquire.getSourcePtr()))) {
+            DatablockUtils::getUnderlyingDbAlloc(dbAcquire.getSourcePtr()))) {
       allocSizes = SmallVector<Value>(dbAlloc.getSizes().begin(),
                                       dbAlloc.getSizes().end());
     }
   }
-  bool isCoarse =
-      !allocSizes.empty() && llvm::all_of(allocSizes, [](Value v) {
-        int64_t val;
-        return ValueUtils::getConstantIndex(v, val) && val == 1;
-      });
+  bool isCoarse = !allocSizes.empty() && llvm::all_of(allocSizes, [](Value v) {
+    int64_t val;
+    return ValueUtils::getConstantIndex(v, val) && val == 1;
+  });
   if (isCoarse) {
     for (Value idx : getIndices()) {
       int64_t val;
@@ -750,7 +751,7 @@ LogicalResult DbRefOp::verify() {
   DbAllocOp dbAllocOp = nullptr;
   if (auto dbAcquire = dyn_cast<DbAcquireOp>(underlyingDbOp)) {
     dbAllocOp = dyn_cast<DbAllocOp>(
-        arts::getUnderlyingDbAlloc(dbAcquire.getSourcePtr()));
+        DatablockUtils::getUnderlyingDbAlloc(dbAcquire.getSourcePtr()));
   } else
     dbAllocOp = dyn_cast<DbAllocOp>(underlyingDbOp);
 
@@ -841,163 +842,6 @@ void OmpDepOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
                                     static_cast<int32_t>(sizes.size())}));
 }
 
-///==========================================================================///
-/// Utility functions for Arts dialect operations
-///==========================================================================///
-
-/// Helper function to extract sizes from a datablock pointer
-/// by finding the original DbAllocOp or DbAcquireOp that created it
-SmallVector<Value> getSizesFromDb(Operation *dbOp) {
-  if (auto allocOp = dyn_cast<DbAllocOp>(dbOp)) {
-    return SmallVector<Value>(allocOp.getSizes().begin(),
-                              allocOp.getSizes().end());
-  }
-  if (auto acquireOp = dyn_cast<DbAcquireOp>(dbOp)) {
-    return SmallVector<Value>(acquireOp.getSizes().begin(),
-                              acquireOp.getSizes().end());
-  }
-  if (auto depDbAcquireOp = dyn_cast<DepDbAcquireOp>(dbOp)) {
-    return SmallVector<Value>(depDbAcquireOp.getSizes().begin(),
-                              depDbAcquireOp.getSizes().end());
-  }
-  return {};
-}
-
-SmallVector<Value> getElementSizesFromDb(Operation *dbOp) {
-  if (auto allocOp = dyn_cast<DbAllocOp>(dbOp)) {
-    return SmallVector<Value>(allocOp.getElementSizes().begin(),
-                              allocOp.getElementSizes().end());
-  }
-  return {};
-}
-
-SmallVector<Value> getSizesFromDb(Value datablockPtr) {
-  /// Use getUnderlyingDb to find the original DB operation
-  Operation *underlyingDb = arts::getUnderlyingDb(datablockPtr);
-  if (!underlyingDb)
-    return {};
-
-  return getSizesFromDb(underlyingDb);
-}
-
-/// Check if a datablock operation has a single size of 1
-bool dbHasSingleSize(Operation *dbOp) {
-  if (!dbOp)
-    return false;
-
-  SmallVector<Value> sizes = getSizesFromDb(dbOp);
-
-  if (sizes.empty())
-    return false;
-
-  /// Check if there's exactly one size and it's constant 1
-  if (sizes.size() != 1)
-    return false;
-
-  if (auto constSize = sizes[0].getDefiningOp<arith::ConstantIndexOp>())
-    return constSize.value() == 1;
-
-  return false;
-}
-
-SmallVector<Value> getOffsetsFromDb(Value datablockPtr) {
-  Operation *underlyingDb = arts::getUnderlyingDb(datablockPtr);
-  if (!underlyingDb)
-    return {};
-
-  if (auto acquireOp = dyn_cast<DbAcquireOp>(underlyingDb))
-    return SmallVector<Value>(acquireOp.getOffsets().begin(),
-                              acquireOp.getOffsets().end());
-
-  return {};
-}
-
-//===----------------------------------------------------------------------===//
-// Stride Computation Functions
-//===----------------------------------------------------------------------===//
-// These functions compute the linearization stride for row-major indexing.
-// For sizes = [D0, D1, D2, ...], stride = D1 * D2 * ... (TRAILING dimensions).
-// This follows row-major linearization: index = i0 * stride + ...
-//
-// IMPORTANT: The stride is the product of TRAILING dimensions, NOT all dims!
-// For element_sizes = [4, 16], stride = 16 (not 64)
-//===----------------------------------------------------------------------===//
-
-std::optional<int64_t> getStaticStride(ValueRange sizes) {
-  if (sizes.empty())
-    return std::nullopt;
-
-  // Single dimension [N]: stride = 1
-  if (sizes.size() == 1)
-    return 1;
-
-  // Multi-dimensional [D0, D1, ...]: stride = D1 * D2 * ... (skip D0!)
-  int64_t stride = 1;
-  for (size_t i = 1; i < sizes.size(); ++i) { // START AT 1
-    int64_t dim;
-    if (!ValueUtils::getConstantIndex(sizes[i], dim))
-      return std::nullopt; // Dynamic dimension
-    stride *= dim;
-  }
-  return stride;
-}
-
-std::optional<int64_t> getStaticStride(MemRefType memrefType) {
-  auto shape = memrefType.getShape();
-  if (shape.empty())
-    return std::nullopt;
-
-  if (shape.size() == 1)
-    return 1;
-
-  int64_t stride = 1;
-  for (size_t i = 1; i < shape.size(); ++i) { // START AT 1
-    if (shape[i] == ShapedType::kDynamic)
-      return std::nullopt;
-    stride *= shape[i];
-  }
-  return stride;
-}
-
-std::optional<int64_t> getStaticElementStride(arts::DbAllocOp alloc) {
-  return getStaticStride(alloc.getElementSizes());
-}
-
-std::optional<int64_t> getStaticOuterStride(arts::DbAllocOp alloc) {
-  return getStaticStride(alloc.getSizes());
-}
-
-Value getStrideValue(OpBuilder &builder, Location loc, ValueRange sizes) {
-  if (sizes.empty())
-    return nullptr;
-
-  // Single dimension [N]: stride = 1
-  if (sizes.size() == 1)
-    return builder.create<arith::ConstantIndexOp>(loc, 1);
-
-  // Try static first for efficiency
-  if (auto staticStride = getStaticStride(sizes))
-    return builder.create<arith::ConstantIndexOp>(loc, *staticStride);
-
-  // Dynamic: build multiplication chain for trailing dimensions
-  // stride = sizes[1] * sizes[2] * ... * sizes[n-1]
-  Value stride = sizes[1]; // Start at index 1 (skip first dimension!)
-  for (size_t i = 2; i < sizes.size(); ++i) {
-    stride = builder.create<arith::MulIOp>(loc, stride, sizes[i]);
-  }
-  return stride;
-}
-
-Value getElementStrideValue(OpBuilder &builder, Location loc,
-                            arts::DbAllocOp alloc) {
-  return getStrideValue(builder, loc, alloc.getElementSizes());
-}
-
-Value getOuterStrideValue(OpBuilder &builder, Location loc,
-                          arts::DbAllocOp alloc) {
-  return getStrideValue(builder, loc, alloc.getSizes());
-}
-
 // ForOp Canonicalization
 
 void arts::ForOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
@@ -1008,5 +852,3 @@ void arts::ForOp::getCanonicalizationPatterns(RewritePatternSet &patterns,
   /// - Loop fusion for adjacent loops
   /// - Loop invariant code motion
 }
-
-

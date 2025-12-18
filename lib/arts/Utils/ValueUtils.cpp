@@ -2,28 +2,30 @@
 /// File: ValueUtils.cpp
 /// Defines utility functions for working with Index and Constant values.
 ///==========================================================================///
-#include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/ValueUtils.h"
 #include "arts/ArtsDialect.h"
+#include "arts/Utils/ArtsUtils.h"
+#include "polygeist/Ops.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/CSE.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include <algorithm>
 #include <cassert>
 
 // For getElementTypeByteSize
 #include "mlir/IR/BuiltinTypes.h"
 
-/// Debug
-#include "arts/Utils/ArtsDebug.h"
 
 namespace mlir {
 namespace arts {
 
 ///===----------------------------------------------------------------------===///
-/// Value Analysis Utilities
+/// Constant Value Analysis
 ///===----------------------------------------------------------------------===///
 
 /// Checks if the given value is a constant, including constant-like operations
@@ -40,6 +42,10 @@ bool ValueUtils::isValueConstant(Value val) {
     return true;
   return false;
 }
+
+///===----------------------------------------------------------------------===///
+/// Constant Value Analysis
+///===----------------------------------------------------------------------===///
 
 /// Attempts to extract a constant index value from the given value, supporting
 /// both constant index operations and constant operations with integer
@@ -70,6 +76,115 @@ bool ValueUtils::isNonZeroIndex(Value v) {
   return true;
 }
 
+/// Generic constant value extraction supporting both index and integer
+/// constants.
+std::optional<int64_t> ValueUtils::getConstantValue(Value v) {
+  int64_t val;
+  if (getConstantIndex(v, val))
+    return val;
+  return std::nullopt;
+}
+
+/// Extract a constant floating-point value from a Value.
+std::optional<double> ValueUtils::getConstantFloat(Value v) {
+  if (!v)
+    return std::nullopt;
+  if (auto c = v.getDefiningOp<arith::ConstantOp>()) {
+    if (auto floatAttr = dyn_cast<FloatAttr>(c.getValue())) {
+      return floatAttr.getValueAsDouble();
+    }
+  }
+  return std::nullopt;
+}
+
+/// Check if a value is a zero constant (float or integer).
+bool ValueUtils::isZeroConstant(Value v) {
+  if (auto cst = getConstantValue(v))
+    return *cst == 0;
+  if (auto cst = getConstantFloat(v))
+    return *cst == 0.0;
+  return false;
+}
+
+/// Check if a value is a one constant (float or integer).
+bool ValueUtils::isOneConstant(Value v) {
+  if (auto cst = getConstantValue(v))
+    return *cst == 1;
+  if (auto cst = getConstantFloat(v))
+    return *cst == 1.0;
+  return false;
+}
+
+///===----------------------------------------------------------------------===///
+/// Value Type Conversion and Casting
+///===----------------------------------------------------------------------===///
+
+/// Strip numeric cast operations to find the underlying value.
+/// Traverses through index casts, sign/zero extensions, truncations, and
+/// float extensions/truncations.
+Value ValueUtils::stripNumericCasts(Value value) {
+  while (true) {
+    if (auto idxCast = value.getDefiningOp<arith::IndexCastOp>()) {
+      value = idxCast.getIn();
+      continue;
+    }
+    if (auto ext = value.getDefiningOp<arith::ExtSIOp>()) {
+      value = ext.getIn();
+      continue;
+    }
+    if (auto ext = value.getDefiningOp<arith::ExtUIOp>()) {
+      value = ext.getIn();
+      continue;
+    }
+    if (auto trunc = value.getDefiningOp<arith::TruncIOp>()) {
+      value = trunc.getIn();
+      continue;
+    }
+    if (auto extF = value.getDefiningOp<arith::ExtFOp>()) {
+      value = extF.getIn();
+      continue;
+    }
+    if (auto truncF = value.getDefiningOp<arith::TruncFOp>()) {
+      value = truncF.getIn();
+      continue;
+    }
+    break;
+  }
+  return value;
+}
+
+///===----------------------------------------------------------------------===///
+/// Value Type Conversion and Casting
+///===----------------------------------------------------------------------===///
+
+/// Cast a value to index type if needed.
+Value ValueUtils::castToIndex(Value value, OpBuilder &builder, Location loc) {
+  if (!value)
+    return value;
+  if (value.getType().isIndex())
+    return value;
+  if (value.getType().isIntOrIndex())
+    return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
+                                              value);
+  return value;
+}
+
+/// Ensure a value is of index type, casting if necessary.
+Value ValueUtils::ensureIndexType(Value value, OpBuilder &builder, Location loc) {
+  if (!value)
+    return Value();
+  if (value.getType().isa<IndexType>())
+    return value;
+  if (auto intTy = value.getType().dyn_cast<IntegerType>())
+    return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
+                                              value);
+  return Value();
+}
+
+///===----------------------------------------------------------------------===///
+/// Value Dependencies and Analysis
+///===----------------------------------------------------------------------===///
+
 /// Check if a value depends on a base value through arithmetic operations.
 /// Used to determine data dependencies in index expressions.
 bool ValueUtils::dependsOn(Value value, Value base, int depth) {
@@ -98,171 +213,52 @@ bool ValueUtils::dependsOn(Value value, Value base, int depth) {
   return false;
 }
 
-/// Try to infer a constant linearization stride from an index expression:
-/// looks for mul(constant, X) where X depends on elemOffset.
-std::optional<int64_t> ValueUtils::inferConstantStride(Value globalIndex,
-                                                       Value elemOffset) {
+/// Try to infer a constant linearization stride from an index expression.
+/// Looks for mul(constant, X) where X depends on elemOffset.
+std::optional<int64_t>
+ValueUtils::inferConstantStride(Value globalIndex, Value elemOffset) {
   if (!globalIndex || !elemOffset)
     return std::nullopt;
 
-  SmallVector<Value> worklist{globalIndex};
-  DenseSet<Value> visited;
+  /// Strip casts to get to the core expression
+  Value stripped = stripNumericCasts(globalIndex);
 
-  auto getConstIdx = [](Value v) -> std::optional<int64_t> {
-    int64_t cst;
-    if (ValueUtils::getConstantIndex(v, cst))
-      return cst;
-    return std::nullopt;
-  };
+  /// Look for mul(constant, X) pattern where X depends on elemOffset
+  if (auto mulOp = stripped.getDefiningOp<arith::MulIOp>()) {
+    Value lhs = mulOp.getLhs();
+    Value rhs = mulOp.getRhs();
 
-  while (!worklist.empty()) {
-    Value cur = worklist.pop_back_val();
-    if (!visited.insert(cur).second)
-      continue;
-
-    if (auto mul = cur.getDefiningOp<arith::MulIOp>()) {
-      Value lhs = mul.getLhs();
-      Value rhs = mul.getRhs();
-
-      if (auto lhsCst = getConstIdx(lhs)) {
-        if (*lhsCst > 1 && ValueUtils::dependsOn(rhs, elemOffset))
-          return lhsCst;
-      }
-      if (auto rhsCst = getConstIdx(rhs)) {
-        if (*rhsCst > 1 && ValueUtils::dependsOn(lhs, elemOffset))
-          return rhsCst;
-      }
-
-      worklist.push_back(lhs);
-      worklist.push_back(rhs);
-      continue;
-    }
-
-    if (auto add = cur.getDefiningOp<arith::AddIOp>()) {
-      worklist.push_back(add.getLhs());
-      worklist.push_back(add.getRhs());
-      continue;
-    }
-    if (auto sub = cur.getDefiningOp<arith::SubIOp>()) {
-      worklist.push_back(sub.getLhs());
-      worklist.push_back(sub.getRhs());
-      continue;
+    /// Check if one operand is a constant and the other depends on elemOffset
+    int64_t constVal;
+    if (getConstantIndex(lhs, constVal)) {
+      /// Pattern: mul(constant, X) - check if X depends on elemOffset
+      if (dependsOn(rhs, elemOffset))
+        return constVal;
+    } else if (getConstantIndex(rhs, constVal)) {
+      /// Pattern: mul(X, constant) - check if X depends on elemOffset
+      if (dependsOn(lhs, elemOffset))
+        return constVal;
     }
   }
 
   return std::nullopt;
 }
 
-/// Strip numeric cast operations to find the underlying value.
-/// Traverses through index casts, sign/zero extensions, and truncations.
-Value ValueUtils::stripNumericCasts(Value value) {
-  while (true) {
-    if (auto idxCast = value.getDefiningOp<arith::IndexCastOp>()) {
-      value = idxCast.getIn();
-      continue;
-    }
-    if (auto ext = value.getDefiningOp<arith::ExtSIOp>()) {
-      value = ext.getIn();
-      continue;
-    }
-    if (auto ext = value.getDefiningOp<arith::ExtUIOp>()) {
-      value = ext.getIn();
-      continue;
-    }
-    if (auto trunc = value.getDefiningOp<arith::TruncIOp>()) {
-      value = trunc.getIn();
-      continue;
-    }
-    break;
-  }
-  return value;
-}
-
-/// Cast a value to index type if needed.
-Value ValueUtils::castToIndex(Value value, OpBuilder &builder, Location loc) {
-  if (!value)
-    return value;
-  if (value.getType().isIndex())
-    return value;
-  if (value.getType().isIntOrIndex())
-    return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
-                                              value);
-  return value;
-}
-
-/// Ensure a value is of index type, casting if necessary.
-Value ValueUtils::ensureIndexType(Value value, OpBuilder &builder, Location loc) {
-  if (!value)
-    return Value();
-  if (value.getType().isa<IndexType>())
-    return value;
-  if (auto intTy = value.getType().dyn_cast<IntegerType>())
-    return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
-                                              value);
-  return Value();
-}
-
-/// Extract array index from byte offset pattern: bytes = (index * elemBytes).
-/// Handles common patterns where GEP indices are scaled by element byte size.
-/// Returns the logical array index or null Value if pattern doesn't match.
-Value ValueUtils::extractArrayIndexFromByteOffset(Value byteOffset, Type elemType) {
-  /// Strip any index casts to get to the core computation
-  Value idxSource = byteOffset;
-  while (auto castOp = idxSource.getDefiningOp<arith::IndexCastOp>())
-    idxSource = castOp.getIn();
-
-  /// Look for multiplication: index * elemBytes
-  auto mulOp = idxSource.getDefiningOp<arith::MulIOp>();
-  if (!mulOp)
-    return Value();
-
-  int64_t elemSize = getElementTypeByteSize(elemType);
-  if (elemSize == 0)
-    return Value();
-
-  /// Identify which operand is the constant element size
-  auto isElementSizeConstant = [elemSize](Value v) -> bool {
-    if (auto constIdx = v.getDefiningOp<arith::ConstantIndexOp>())
-      return constIdx.value() == elemSize;
-    if (auto constInt = v.getDefiningOp<arith::ConstantIntOp>())
-      return constInt.value() == elemSize && constInt.getType().isInteger(64);
-    return false;
-  };
-
-  Value lhs = mulOp.getLhs();
-  Value rhs = mulOp.getRhs();
-
-  if (isElementSizeConstant(lhs))
-    return rhs;
-  if (isElementSizeConstant(rhs))
-    return lhs;
-  /// Pattern doesn't match expected form
-  return Value();
-}
-
-/// Generic constant value extraction supporting both index and integer constants.
-std::optional<int64_t> ValueUtils::getConstantValue(Value v) {
-  if (auto constOp = v.getDefiningOp<arith::ConstantIndexOp>())
-    return constOp.value();
-  if (auto constOp = v.getDefiningOp<arith::ConstantIntOp>())
-    return constOp.value();
-  return std::nullopt;
-}
-
-/// Extract constant offset from an index expression involving loop IV and chunk offset.
-/// This function analyzes arithmetic expressions to extract constant offsets from
-/// expressions like: chunkOffset + loopIV + constant.
+/// Extract constant offset from an index expression involving loop IV and chunk
+/// offset. This function analyzes arithmetic expressions to extract constant
+/// offsets from expressions like: chunkOffset + loopIV + constant.
 ///
 /// Examples:
 ///   chunkOffset + loopIV -> offset = 0
 ///   chunkOffset + loopIV + 5 -> offset = 5
 ///   chunkOffset + loopIV - 1 -> offset = -1 (stencil pattern)
-std::optional<int64_t> ValueUtils::extractConstantOffset(Value idx, Value loopIV,
-                                                         Value chunkOffset) {
+std::optional<int64_t>
+ValueUtils::extractConstantOffset(Value idx, Value loopIV, Value chunkOffset) {
   int64_t accumulator = 0;
   Value current = idx;
 
-  /// Helper to check if a value is one of our base values (loopIV or chunkOffset)
+  /// Helper to check if a value is one of our base values (loopIV or
+  /// chunkOffset)
   auto isBaseValue = [&](Value v) -> bool {
     return v == loopIV || v == chunkOffset;
   };
@@ -341,6 +337,135 @@ std::optional<int64_t> ValueUtils::extractConstantOffset(Value idx, Value loopIV
   }
 
   return std::nullopt;
+}
+
+/// Extract array index from byte offset pattern: bytes = (index * elemBytes).
+/// Handles common patterns where GEP indices are scaled by element byte size.
+/// Returns the logical array index or null Value if pattern doesn't match.
+Value ValueUtils::extractArrayIndexFromByteOffset(Value byteOffset,
+                                                  Type elemType) {
+  /// Strip any index casts to get to the core computation
+  Value idxSource = byteOffset;
+  while (auto castOp = idxSource.getDefiningOp<arith::IndexCastOp>())
+    idxSource = castOp.getIn();
+
+  /// Look for multiplication: index * elemBytes
+  auto mulOp = idxSource.getDefiningOp<arith::MulIOp>();
+  if (!mulOp)
+    return Value();
+
+  int64_t elemSize = getElementTypeByteSize(elemType);
+  if (elemSize == 0)
+    return Value();
+
+  /// Identify which operand is the constant element size
+  auto isElementSizeConstant = [elemSize](Value v) -> bool {
+    if (auto constIdx = v.getDefiningOp<arith::ConstantIndexOp>())
+      return constIdx.value() == elemSize;
+    if (auto constInt = v.getDefiningOp<arith::ConstantIntOp>())
+      return constInt.value() == elemSize && constInt.getType().isInteger(64);
+    return false;
+  };
+
+  Value lhs = mulOp.getLhs();
+  Value rhs = mulOp.getRhs();
+
+  if (isElementSizeConstant(lhs))
+    return rhs;
+  if (isElementSizeConstant(rhs))
+    return lhs;
+  /// Pattern doesn't match expected form
+  return Value();
+}
+
+///===----------------------------------------------------------------------===///
+/// Underlying Value Tracing
+///===----------------------------------------------------------------------===///
+
+/// Maximum recursion depth for value tracing to prevent stack overflow
+static constexpr unsigned kMaxTraceDepth = 64;
+
+/// Internal helper to trace the underlying value through various operations,
+/// with cycle detection and depth limit to avoid infinite recursion.
+static Value getUnderlyingValueImpl(Value v, SmallPtrSet<Value, 16> &visited,
+                                    unsigned depth) {
+  if (!v)
+    return nullptr;
+
+  /// Depth limit to prevent stack overflow
+  if (depth > kMaxTraceDepth)
+    return nullptr;
+
+  /// Check for cycles
+  if (!visited.insert(v).second)
+    return nullptr;
+
+  if (v.isa<BlockArgument>()) {
+    Block *block = v.getParentBlock();
+    Operation *owner = block->getParentOp();
+    if (auto edt = dyn_cast<EdtOp>(owner)) {
+      unsigned argIndex = v.cast<BlockArgument>().getArgNumber();
+      /// Block arguments correspond to dependencies
+      ValueRange deps = edt.getDependencies();
+      if (argIndex < deps.size()) {
+        Value operand = deps[argIndex];
+        return getUnderlyingValueImpl(operand, visited, depth + 1);
+      } else {
+        return v;
+      }
+    } else {
+      /// Function argument
+      return v;
+    }
+  } else if (auto op = v.getDefiningOp()) {
+    /// Handle different operation types
+    if (isa<DbAllocOp, memref::AllocOp, memref::AllocaOp, memref::GetGlobalOp>(
+            op))
+      return v;
+    else if (auto dbAcquire = dyn_cast<DbAcquireOp>(op))
+      return getUnderlyingValueImpl(dbAcquire.getSourcePtr(), visited,
+                                    depth + 1);
+    else if (auto dbGep = dyn_cast<DbGepOp>(op))
+      return getUnderlyingValueImpl(dbGep.getBasePtr(), visited, depth + 1);
+    else if (auto dbControl = dyn_cast<DbControlOp>(op))
+      return getUnderlyingValueImpl(dbControl.getPtr(), visited, depth + 1);
+    else if (auto subview = dyn_cast<memref::SubViewOp>(op))
+      return getUnderlyingValueImpl(subview.getSource(), visited, depth + 1);
+    else if (auto castOp = dyn_cast<memref::CastOp>(op))
+      return getUnderlyingValueImpl(castOp.getSource(), visited, depth + 1);
+    else if (auto p2m = dyn_cast<polygeist::Pointer2MemrefOp>(op))
+      return getUnderlyingValueImpl(p2m.getSource(), visited, depth + 1);
+    else if (auto m2p = dyn_cast<polygeist::Memref2PointerOp>(op))
+      return getUnderlyingValueImpl(m2p.getSource(), visited, depth + 1);
+    else if (isa<arts::UndefOp>(op))
+      return nullptr;
+    else
+      return nullptr;
+  } else {
+    /// Value has no defining operation and is not a block argument
+    return nullptr;
+  }
+}
+
+/// Traces the underlying root allocation value for the given value, unwinding
+/// through various MLIR operations.
+Value ValueUtils::getUnderlyingValue(Value v) {
+  SmallPtrSet<Value, 16> visited;
+  return getUnderlyingValueImpl(v, visited, 0);
+}
+
+/// Retrieves the underlying operation that defines the root value for the
+/// given value.
+Operation *ValueUtils::getUnderlyingOperation(Value v) {
+  Value underlyingValue = getUnderlyingValue(v);
+  if (!underlyingValue)
+    return nullptr;
+
+  /// If the underlying value is a result of an operation, return that operation
+  if (auto definingOp = underlyingValue.getDefiningOp())
+    return definingOp;
+
+  return nullptr;
 }
 
 } // namespace arts

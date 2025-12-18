@@ -368,7 +368,7 @@ SmallVector<Operation *> ArtsMetadataManager::getMemrefOperations() const {
 ///===----------------------------------------------------------------------===///
 
 void ArtsMetadataManager::printStatistics(llvm::raw_ostream &os) const {
-  uint64_t loopCount = 0, memrefCount = 0, locationCount = 0, valueCount = 0;
+  uint64_t loopCount = 0, memrefCount = 0;
 
   for (const auto &entry : metadataMap_) {
     StringRef name = entry.second->getMetadataName();
@@ -376,8 +376,6 @@ void ArtsMetadataManager::printStatistics(llvm::raw_ostream &os) const {
       ++loopCount;
     else if (name == AttrNames::MemrefMetadata::Name)
       ++memrefCount;
-    else if (name == AttrNames::ValueMetadata::Name)
-      ++valueCount;
   }
 
   os << "ArtsMetadataManager Statistics:\n";

@@ -1,0 +1,112 @@
+///==========================================================================///
+/// File: ValueUtils.h
+///
+/// Utility class for working with MLIR Values, constants, and casts.
+///==========================================================================///
+
+#ifndef CARTS_UTILS_VALUEUTILS_H
+#define CARTS_UTILS_VALUEUTILS_H
+
+#include "mlir/IR/Builders.h"
+#include "mlir/IR/Location.h"
+#include "mlir/IR/Value.h"
+#include <optional>
+
+namespace mlir {
+namespace arts {
+
+///===----------------------------------------------------------------------===///
+/// Value Utilities
+///===----------------------------------------------------------------------===///
+/// Utility class for working with MLIR Values, constants, and casts.
+class ValueUtils {
+public:
+  ///===----------------------------------------------------------------------===///
+  /// Constant Value Analysis
+  ///===----------------------------------------------------------------------===///
+  /// Functions for checking and extracting constant values
+
+  /// Checks if the given value is a constant, including constant-like
+  /// operations such as constant indices and constant operations.
+  static bool isValueConstant(Value val);
+
+  /// Attempts to extract a constant index value from the given value,
+  /// supporting both constant index operations and constant operations with
+  /// integer attributes.
+  static bool getConstantIndex(Value v, int64_t &out);
+
+  /// Generic constant value extraction supporting both index and integer
+  /// constants.
+  static std::optional<int64_t> getConstantValue(Value v);
+
+  /// Extract a constant floating-point value from a Value.
+  static std::optional<double> getConstantFloat(Value v);
+
+  /// Check if a value is a zero constant (float or integer).
+  static bool isZeroConstant(Value v);
+
+  /// Check if a value is a one constant (float or integer).
+  static bool isOneConstant(Value v);
+
+  /// Determines if the given value represents a non-zero index, returning true
+  /// for non-zero constants or unknown (non-constant) values.
+  static bool isNonZeroIndex(Value v);
+
+  ///===----------------------------------------------------------------------===///
+  /// Value Type Conversion and Casting
+  ///===----------------------------------------------------------------------===///
+  /// Functions for type conversions and stripping casts
+
+  /// Strip numeric cast operations to find the underlying value.
+  /// Traverses through index casts, sign/zero extensions, truncations, and
+  /// float extensions/truncations.
+  static Value stripNumericCasts(Value value);
+
+  /// Cast a value to index type if needed.
+  static Value castToIndex(Value value, OpBuilder &builder, Location loc);
+
+  /// Ensure a value is of index type, casting if necessary.
+  static Value ensureIndexType(Value value, OpBuilder &builder, Location loc);
+
+  ///===----------------------------------------------------------------------===///
+  /// Value Dependencies and Analysis
+  ///===----------------------------------------------------------------------===///
+  /// Functions for analyzing value relationships and extracting patterns
+
+  /// Check if a value depends on a base value through arithmetic operations.
+  /// Used to determine data dependencies in index expressions.
+  static bool dependsOn(Value value, Value base, int depth = 0);
+
+  /// Try to infer a constant linearization stride from an index expression.
+  /// Looks for mul(constant, X) where X depends on elemOffset.
+  static std::optional<int64_t> inferConstantStride(Value globalIndex,
+                                                    Value elemOffset);
+
+  /// Extract constant offset from an index expression involving loop IV and
+  /// chunk offset.
+  static std::optional<int64_t> extractConstantOffset(Value idx, Value loopIV,
+                                                      Value chunkOffset);
+
+  /// Extract array index from byte offset pattern: bytes = (index * elemBytes).
+  /// Handles common patterns where GEP indices are scaled by element byte size.
+  /// Returns the logical array index or null Value if pattern doesn't match.
+  static Value extractArrayIndexFromByteOffset(Value byteOffset, Type elemType);
+
+  ///===----------------------------------------------------------------------===///
+  /// Underlying Value Tracing
+  ///===----------------------------------------------------------------------===///
+  /// Functions for tracing values back to their root allocation
+
+  /// Traces the underlying root allocation value for the given value, unwinding
+  /// through various MLIR operations.
+  static Value getUnderlyingValue(Value v);
+
+  /// Retrieves the underlying operation that defines the root value for the
+  /// given value.
+  static Operation *getUnderlyingOperation(Value v);
+};
+
+} // namespace arts
+} // namespace mlir
+
+#endif // CARTS_UTILS_VALUEUTILS_H

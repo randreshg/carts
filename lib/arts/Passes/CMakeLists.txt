@@ -7,7 +7,6 @@ add_mlir_dialect_library(MLIRArtsTransforms
   DataPointerHoisting.cpp
   AliasScopeGen.cpp
   LoopVectorizationHints.cpp
-  PrefetchHints.cpp
   ScalarReplacement.cpp
   ConvertOpenMPToArts.cpp
   DeadCodeElimination.cpp

@@ -87,7 +87,7 @@ void EdtPass::runOnOperation() {
 
   /// Remove ops marked for removal
   ARTS_DEBUG("Ops to remove: " << opsToRemove.size());
-  OpRemovalManager removalMgr;
+  RemovalUtils removalMgr;
   for (Operation *op : opsToRemove) {
     ARTS_DEBUG("  Marking for removal: " << op->getName().getStringRef());
     for (Value result : op->getResults()) {
@@ -229,7 +229,6 @@ bool EdtPass::convertParallelWithAcquiresToSync(
   ARTS_DEBUG("Converting parallel with " << innerAcquires.size()
                                          << " inner acquires to sync");
 
-
   /// Step 1: Build mapping from inner acquire source → outer acquire
   /// Inner acquire sources from block arg, which maps to parallel's dependency
   DenseMap<DbAcquireOp, DbAcquireOp> innerToOuterAcquire;
@@ -264,8 +263,8 @@ bool EdtPass::convertParallelWithAcquiresToSync(
   }
 
   /// Step 2: For each inner acquire used by single, rewire outer acquire
-  DenseMap<Value, Value> oldPtrToNewPtr; 
-  SmallVector<Value> syncDeps;           
+  DenseMap<Value, Value> oldPtrToNewPtr;
+  SmallVector<Value> syncDeps;
 
   for (Value singleDep : singleOp.getDependencies()) {
     /// Find which inner acquire produced this dependency
@@ -288,8 +287,7 @@ bool EdtPass::convertParallelWithAcquiresToSync(
     auto newAcq = builder.create<DbAcquireOp>(
         outerAcq.getLoc(), innerAcq.getMode(), // Use inner's mode (<inout>)
         outerAcq.getSourceGuid(), outerAcq.getSourcePtr(),
-        outerAcq.getPtr().getType(),
-        SmallVector<Value>(outerAcq.getIndices()),
+        outerAcq.getPtr().getType(), SmallVector<Value>(outerAcq.getIndices()),
         SmallVector<Value>(outerAcq.getOffsets()),
         SmallVector<Value>(outerAcq.getSizes()));
 
@@ -312,8 +310,8 @@ bool EdtPass::convertParallelWithAcquiresToSync(
 
   /// Step 3: Create sync EDT with rewired dependencies
   OpBuilder builder(parallelOp);
-  auto syncEdt = builder.create<EdtOp>(loc, EdtType::sync,
-                                       singleOp.getConcurrency());
+  auto syncEdt =
+      builder.create<EdtOp>(loc, EdtType::sync, singleOp.getConcurrency());
 
   /// Setup region and block arguments
   Region &syncRegion = syncEdt.getRegion();
@@ -422,8 +420,8 @@ EdtOp EdtPass::createEdtWithMergedDepsAndRegion(
   /// Create new EDT operation with merged dependencies and intranode
   /// concurrency. Create with empty deps first, then set them after adding
   /// block args.
-  auto newEdt = builder.create<arts::EdtOp>(loc, newType,
-                                            EdtConcurrency::intranode);
+  auto newEdt =
+      builder.create<arts::EdtOp>(loc, newType, EdtConcurrency::intranode);
 
   /// Setup block and block arguments
   Region &newRegion = newEdt.getRegion();
@@ -566,7 +564,8 @@ bool EdtPass::removeRedundantBarriersWithGraphs(func::FuncOp func,
       for (arts::EdtOp b : afterTasks) {
         bool connected = graph.isEdtReachable(a, b);
         bool independent = graph.areEdtsIndependent(a, b);
-        // Barrier redundant if: connected (dependency already enforced) OR independent (no dependency needed)
+        // Barrier redundant if: connected (dependency already enforced) OR
+        // independent (no dependency needed)
         if (!connected && !independent) {
           redundant = false;
           break;

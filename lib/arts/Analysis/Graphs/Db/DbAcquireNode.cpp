@@ -11,6 +11,7 @@
 #include "arts/Analysis/Graphs/Edt/EdtNode.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/EdtUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -127,7 +128,7 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
   }
 
   /// Use utility function to get EDT and block argument
-  auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(dbAcquireOp);
+  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(dbAcquireOp);
   edtUser = edt;
   useInEdt = blockArg;
 
@@ -928,7 +929,7 @@ SmallVector<Value, 4> DbAcquireNode::computeInvariantIndices() {
   for (size_t d = 0; d < rank; ++d) {
     if (!candidate[d] || invalid[d])
       break;
-    if (!arts::isInvariantInEdt(edtRegion, candidate[d]))
+    if (!EdtUtils::isInvariantInEdt(edtRegion, candidate[d]))
       break;
     result.push_back(candidate[d]);
   }

@@ -368,21 +368,6 @@ def ArtsLoopFusion : Pass<"arts-loop-fusion", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createLoopFusionPass(nullptr)";
 }
 
-def PrefetchHints : Pass<"prefetch-hints", "mlir::ModuleOp"> {
-  let summary = "Insert software prefetch hints for strided memory accesses";
-  let description = [{
-    Inserts software prefetch intrinsics for strided memory accesses in EDT
-    functions. Targets large-stride accesses (row accesses in 2D arrays) where
-    hardware prefetchers are ineffective.
-  }];
-  let dependentDialects = [
-    "arts::ArtsDialect",
-    "LLVM::LLVMDialect",
-    "arith::ArithDialect"
-  ];
-  let constructor = "mlir::arts::createPrefetchHintsPass()";
-}
-
 def LoopReordering : Pass<"loop-reordering", "mlir::ModuleOp"> {
   let summary = "Reorder inner loops for cache-optimal access patterns";
   let description = [{
@@ -424,6 +409,34 @@ def ArtsLoopTransforms : Pass<"arts-loop-transforms", "mlir::ModuleOp"> {
     Option<"minTripCount", "min-trip-count", "int64_t", /*default=*/"128",
            "Minimum constant trip count required to apply tiling.">
   ];
+}
+
+def ScalarReplacement : Pass<"arts-scalar-replacement", "mlir::ModuleOp"> {
+  let summary = "Transform memory-based reductions to register-based iter_args";
+  let description = [{
+    This pass transforms memory-based reduction patterns in scf.for loops
+    to register-based iter_args patterns to enable LLVM vectorization.
+  }];
+  let dependentDialects = [
+    "scf::SCFDialect",
+    "memref::MemRefDialect",
+    "arith::ArithDialect",
+    "polygeist::PolygeistDialect"
+  ];
+  let constructor = "mlir::arts::createScalarReplacementPass()";
+}
+
+def LoopVectorizationHints : Pass<"arts-loop-vectorization-hints", "mlir::ModuleOp"> {
+  let summary = "Attach LLVM loop vectorization hints to EDT function loops";
+  let description = [{
+    This pass attaches LLVM loop optimization hints to loop backedges in EDT
+    functions. It uses MLIR's native LoopAnnotationAttr which automatically
+    translates to !llvm.loop metadata during LLVM IR emission.
+  }];
+  let dependentDialects = [
+    "LLVM::LLVMDialect"
+  ];
+  let constructor = "mlir::arts::createLoopVectorizationHintsPass()";
 }
 
 #endif // CARTS_PASSES

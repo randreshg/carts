@@ -162,9 +162,9 @@ static int addNonNegativeAssumptions(LLVM::LLVMFuncOp funcOp,
 
 /// Collect all blocks belonging to a loop given its header and latch.
 static SmallPtrSet<Block *, 16> getLoopBlocks(Block *headerBlock,
-                                               Block *latchBlock,
-                                               DominanceInfo &domInfo,
-                                               LLVM::LLVMFuncOp funcOp) {
+                                              Block *latchBlock,
+                                              DominanceInfo &domInfo,
+                                              LLVM::LLVMFuncOp funcOp) {
   SmallPtrSet<Block *, 16> loopBlocks;
   for (Block &block : funcOp.getBody()) {
     if (domInfo.dominates(headerBlock, &block))
@@ -177,14 +177,14 @@ static SmallPtrSet<Block *, 16> getLoopBlocks(Block *headerBlock,
 /// The 'reassoc' flag is critical for reduction vectorization as it allows
 /// LLVM to reorder floating-point operations in loop-carried dependencies.
 static int addFastMathFlagsToFPOps(const SmallPtrSet<Block *, 16> &loopBlocks,
-                                    MLIRContext *ctx) {
+                                   MLIRContext *ctx) {
   int count = 0;
   auto fmfAttr = LLVM::FastmathFlagsAttr::get(
       ctx, LLVM::FastmathFlags::reassoc | LLVM::FastmathFlags::contract);
 
   for (Block *block : loopBlocks) {
     for (Operation &op : *block) {
-      // Handle FAddOp
+      /// Handle FAddOp
       if (auto faddOp = dyn_cast<LLVM::FAddOp>(&op)) {
         auto existing = faddOp.getFastmathFlags();
         if (existing == LLVM::FastmathFlags::none) {
@@ -193,7 +193,7 @@ static int addFastMathFlagsToFPOps(const SmallPtrSet<Block *, 16> &loopBlocks,
         }
         continue;
       }
-      // Handle FMulOp
+      /// Handle FMulOp
       if (auto fmulOp = dyn_cast<LLVM::FMulOp>(&op)) {
         auto existing = fmulOp.getFastmathFlags();
         if (existing == LLVM::FastmathFlags::none) {
@@ -202,7 +202,7 @@ static int addFastMathFlagsToFPOps(const SmallPtrSet<Block *, 16> &loopBlocks,
         }
         continue;
       }
-      // Handle FSubOp
+      /// Handle FSubOp
       if (auto fsubOp = dyn_cast<LLVM::FSubOp>(&op)) {
         auto existing = fsubOp.getFastmathFlags();
         if (existing == LLVM::FastmathFlags::none) {
@@ -211,7 +211,7 @@ static int addFastMathFlagsToFPOps(const SmallPtrSet<Block *, 16> &loopBlocks,
         }
         continue;
       }
-      // Handle FDivOp
+      /// Handle FDivOp
       if (auto fdivOp = dyn_cast<LLVM::FDivOp>(&op)) {
         auto existing = fdivOp.getFastmathFlags();
         if (existing == LLVM::FastmathFlags::none) {
@@ -326,24 +326,11 @@ createOuterLoopHints(MLIRContext *ctx, bool mustProgress, unsigned unrollCount,
 }
 
 struct LoopVectorizationHintsPass
-    : public PassWrapper<LoopVectorizationHintsPass, OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(LoopVectorizationHintsPass)
-
+    : public LoopVectorizationHintsBase<LoopVectorizationHintsPass> {
   unsigned vectorWidth = 0;
   unsigned interleaveCount = 4;
   bool enableScalable = false;
   bool enableMustProgress = true;
-
-  StringRef getArgument() const override {
-    return "arts-loop-vectorization-hints";
-  }
-  StringRef getDescription() const override {
-    return "Attach LLVM loop vectorization hints to EDT function loops";
-  }
-
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<LLVM::LLVMDialect>();
-  }
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -449,7 +436,7 @@ struct LoopVectorizationHintsPass
           innermostCount++;
           ARTS_DEBUG_TYPE("Innermost loop - full vectorization hints at "
                           << brOp.getLoc());
-          // Add fast-math flags to FP operations in innermost loops
+          /// Add fast-math flags to FP operations in innermost loops
           auto loopBlocks =
               getLoopBlocks(destBlock, currentBlock, domInfo, funcOp);
           fastMathFlagsInFunc += addFastMathFlagsToFPOps(loopBlocks, ctx);
@@ -482,7 +469,7 @@ struct LoopVectorizationHintsPass
           innermostCount++;
           ARTS_DEBUG_TYPE("Innermost loop (cond) - full vectorization hints at "
                           << condBr.getLoc());
-          // Add fast-math flags to FP operations in innermost loops
+          /// Add fast-math flags to FP operations in innermost loops
           auto loopBlocks =
               getLoopBlocks(headerBlock, currentBlock, domInfo, funcOp);
           fastMathFlagsInFunc += addFastMathFlagsToFPOps(loopBlocks, ctx);
@@ -515,7 +502,7 @@ struct LoopVectorizationHintsPass
   }
 };
 
-} // end anonymous namespace
+} // namespace
 
 ///===----------------------------------------------------------------------===///
 /// Pass creation and registration

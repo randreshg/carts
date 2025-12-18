@@ -1,9 +1,9 @@
 ///==========================================================================///
-/// File: OpRemovalManager.cpp
-/// Implements the OpRemovalManager class for deferred operation removal.
+/// File: RemovalUtils.cpp
+/// Implements the RemovalUtils class for deferred operation removal.
 ///==========================================================================///
 
-#include "arts/Utils/OpRemovalManager.h"
+#include "arts/Utils/RemovalUtils.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -11,16 +11,16 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 
-ARTS_DEBUG_SETUP(op_removal_manager);
+ARTS_DEBUG_SETUP(removal_utils);
 
 namespace mlir {
 namespace arts {
 
 ///===----------------------------------------------------------------------===///
-/// OpRemovalManager Implementation
+/// RemovalUtils Implementation
 ///===----------------------------------------------------------------------===///
 
-void OpRemovalManager::markForRemoval(Operation *op) {
+void RemovalUtils::markForRemoval(Operation *op) {
   if (!op)
     return;
   if (isMarkedForRemoval(op))
@@ -47,12 +47,12 @@ void OpRemovalManager::markForRemoval(Operation *op) {
   opsToRemove.insert(op);
 }
 
-bool OpRemovalManager::isMarkedForRemoval(Operation *op) const {
+bool RemovalUtils::isMarkedForRemoval(Operation *op) const {
   return opsToRemove.contains(op);
 }
 
-LogicalResult OpRemovalManager::verifyAllUsersMarked(Value value,
-                                                     StringRef allocName) {
+LogicalResult RemovalUtils::verifyAllUsersMarked(Value value,
+                                                 StringRef allocName) {
   unsigned totalUsers = 0;
   SmallVector<Operation *> unmarkedUsers;
 
@@ -80,7 +80,7 @@ LogicalResult OpRemovalManager::verifyAllUsersMarked(Value value,
   return success();
 }
 
-void OpRemovalManager::removeAllMarked() {
+void RemovalUtils::removeAllMarked() {
   /// Track erased operations to avoid use-after-free when an operation
   /// was erased as a nested child of a previously-erased operation
   SmallPtrSet<Operation *, 32> erased;
@@ -108,7 +108,7 @@ void OpRemovalManager::removeAllMarked() {
 /// Recursive Removal Implementation
 ///===----------------------------------------------------------------------===///
 
-void OpRemovalManager::removeOpImpl(Operation *op, OpBuilder &builder,
+void RemovalUtils::removeOpImpl(Operation *op, OpBuilder &builder,
                                     SmallPtrSet<Operation *, 32> &seen,
                                     bool recursive) {
   if (!op)
@@ -185,7 +185,7 @@ void OpRemovalManager::removeOpImpl(Operation *op, OpBuilder &builder,
     removeOpImpl(userOp, builder, seen, recursive);
 }
 
-void OpRemovalManager::removeAllMarked(ModuleOp module, bool recursive) {
+void RemovalUtils::removeAllMarked(ModuleOp module, bool recursive) {
   if (opsToRemove.empty())
     return;
 
@@ -215,14 +215,14 @@ void OpRemovalManager::removeAllMarked(ModuleOp module, bool recursive) {
 /// Static Utility Methods
 ///===----------------------------------------------------------------------===///
 
-void OpRemovalManager::removeUndefOps(ModuleOp module) {
-  OpRemovalManager mgr;
+void RemovalUtils::removeUndefOps(ModuleOp module) {
+  RemovalUtils mgr;
   module.walk([&](arts::UndefOp op) { mgr.markForRemoval(op); });
   ARTS_DEBUG(" - Removing " << mgr.size() << " undef operations");
   mgr.removeAllMarked(module, /*recursive=*/true);
 }
 
-void OpRemovalManager::replaceWithUndef(Operation *op, OpBuilder &builder) {
+void RemovalUtils::replaceWithUndef(Operation *op, OpBuilder &builder) {
   if (!op || op->getNumResults() == 0)
     return;
 
