@@ -59,7 +59,7 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
   unsigned long long totalElems = 1;
   for (Value v : dbAcquireOp.getSizes()) {
     int64_t cst = 0;
-    if (!arts::getConstantIndex(v, cst)) {
+    if (!ValueUtils::getConstantIndex(v, cst)) {
       hasUnknown = true;
       break;
     }
@@ -220,6 +220,29 @@ static bool isDerivedFrom(Value value, Value base, int depth = 0) {
       return true;
   }
 
+  /// Walk through type cast operations - index computations often involve
+  /// i32 arithmetic followed by index_cast to index type
+  if (auto indexCast = value.getDefiningOp<arith::IndexCastOp>()) {
+    if (isDerivedFrom(indexCast.getIn(), base, depth + 1))
+      return true;
+  }
+  if (auto indexCastUI = value.getDefiningOp<arith::IndexCastUIOp>()) {
+    if (isDerivedFrom(indexCastUI.getIn(), base, depth + 1))
+      return true;
+  }
+  if (auto extSI = value.getDefiningOp<arith::ExtSIOp>()) {
+    if (isDerivedFrom(extSI.getIn(), base, depth + 1))
+      return true;
+  }
+  if (auto extUI = value.getDefiningOp<arith::ExtUIOp>()) {
+    if (isDerivedFrom(extUI.getIn(), base, depth + 1))
+      return true;
+  }
+  if (auto trunc = value.getDefiningOp<arith::TruncIOp>()) {
+    if (isDerivedFrom(trunc.getIn(), base, depth + 1))
+      return true;
+  }
+
   return false;
 }
 
@@ -243,75 +266,6 @@ struct AccessBoundsInfo {
 
 /// Extract the constant offset from an index expression.
 /// Tries to express idx as: chunkOffset + loopIV + constant
-static std::optional<int64_t> extractConstantOffset(Value idx, Value loopIV,
-                                                    Value chunkOffset) {
-  int64_t accumulator = 0;
-  Value current = idx;
-
-  while (true) {
-    if (auto addOp = current.getDefiningOp<arith::AddIOp>()) {
-      Value lhs = addOp.getLhs();
-      Value rhs = addOp.getRhs();
-
-      int64_t constVal;
-      if (arts::getConstantIndex(rhs, constVal)) {
-        accumulator += constVal;
-        current = lhs;
-      } else if (arts::getConstantIndex(lhs, constVal)) {
-        accumulator += constVal;
-        current = rhs;
-      } else {
-        bool lhsHasOffset = isDerivedFrom(lhs, chunkOffset);
-        bool rhsHasOffset = isDerivedFrom(rhs, chunkOffset);
-        bool lhsHasIV = isDerivedFrom(lhs, loopIV);
-        bool rhsHasIV = isDerivedFrom(rhs, loopIV);
-
-        /// Base pattern: one side has offset, other has IV
-        if ((lhsHasOffset && rhsHasIV) || (rhsHasOffset && lhsHasIV))
-          return accumulator;
-
-        /// Continue drilling into the side that has the offset
-        if (lhsHasOffset)
-          current = lhs;
-        else if (rhsHasOffset)
-          current = rhs;
-        else
-          break;
-      }
-    } else if (auto subOp = current.getDefiningOp<arith::SubIOp>()) {
-      Value lhs = subOp.getLhs();
-      Value rhs = subOp.getRhs();
-
-      int64_t constVal;
-      if (arts::getConstantIndex(rhs, constVal)) {
-        accumulator -= constVal;
-        current = lhs;
-        continue;
-      }
-
-      /// Handle sub(globalIdx, chunkOffset) - local index pattern
-      if (rhs == chunkOffset || isDerivedFrom(rhs, chunkOffset)) {
-        current = lhs;
-        continue;
-      }
-
-      break;
-    } else {
-      break;
-    }
-  }
-
-  /// Verify we reached an expression derived from both chunkOffset and loopIV
-  if (isDerivedFrom(current, chunkOffset) && isDerivedFrom(current, loopIV))
-    return accumulator;
-
-  /// Handle the case where current IS the base expression (no constants)
-  if (current == idx && isDerivedFrom(idx, chunkOffset) &&
-      isDerivedFrom(idx, loopIV))
-    return 0;
-
-  return std::nullopt;
-}
 
 /// Analyze all memory accesses to compute actual bounds relative to chunk base.
 /// For stencil patterns like A[i-1], A[i], A[i+1], this extracts the min/max
@@ -394,9 +348,9 @@ bool DbAcquireNode::canBePartitioned() {
   auto hasMeaningfulSlice = [&](Value off, Value size) -> bool {
     int64_t offConst = 0, sizeConst = 0;
     bool isDefaultOffset =
-        arts::getConstantIndex(off, offConst) && offConst == 0;
+        ValueUtils::getConstantIndex(off, offConst) && offConst == 0;
     bool isDefaultSize =
-        arts::getConstantIndex(size, sizeConst) && sizeConst == 1;
+        ValueUtils::getConstantIndex(size, sizeConst) && sizeConst == 1;
     return !(isDefaultOffset && isDefaultSize);
   };
 
@@ -444,7 +398,7 @@ bool DbAcquireNode::canBePartitioned() {
 
         for (Value idx : fullChain) {
           int64_t constVal;
-          if (!arts::getConstantIndex(idx, constVal)) {
+          if (!ValueUtils::getConstantIndex(idx, constVal)) {
             firstDynIdx = idx;
             break;
           }
@@ -492,6 +446,11 @@ bool DbAcquireNode::canBePartitioned() {
     if (!bounds.valid)
       return skip("access bounds analysis failed");
 
+    ARTS_DEBUG("  Bounds analysis for acquire "
+               << dbAcquireOp << ": minOffset=" << bounds.minOffset
+               << ", maxOffset=" << bounds.maxOffset
+               << ", isStencil=" << bounds.isStencil);
+
     OpBuilder builder(dbAcquireOp);
     Location loc = dbAcquireOp.getLoc();
     builder.setInsertionPoint(dbAcquireOp);
@@ -499,11 +458,20 @@ bool DbAcquireNode::canBePartitioned() {
     Value adjustedOffset = partitionOffset;
     Value adjustedSize = partitionSize;
 
-    if (bounds.minOffset != 0) {
-      Value adjustment =
+    if (bounds.minOffset < 0) {
+      /// Clamp to zero: max(partitionOffset - |minOffset|, 0)
+      Value absAdj =
+          builder.create<arith::ConstantIndexOp>(loc, -bounds.minOffset);
+      Value cond = builder.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::uge, partitionOffset, absAdj);
+      Value sub = builder.create<arith::SubIOp>(loc, partitionOffset, absAdj);
+      Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+      adjustedOffset = builder.create<arith::SelectOp>(loc, cond, sub, zero);
+    } else if (bounds.minOffset > 0) {
+      Value adj =
           builder.create<arith::ConstantIndexOp>(loc, bounds.minOffset);
       adjustedOffset =
-          builder.create<arith::AddIOp>(loc, partitionOffset, adjustment);
+          builder.create<arith::AddIOp>(loc, partitionOffset, adj);
     }
 
     int64_t sizeAdjustment = bounds.maxOffset - bounds.minOffset;
@@ -572,7 +540,7 @@ static AccessBoundsInfo analyzeAccessBounds(DbAcquireNode *node,
       Value firstDynIdx;
       for (Value idx : fullChain) {
         int64_t constVal;
-        if (!arts::getConstantIndex(idx, constVal)) {
+        if (!ValueUtils::getConstantIndex(idx, constVal)) {
           firstDynIdx = idx;
           break;
         }
@@ -582,7 +550,7 @@ static AccessBoundsInfo analyzeAccessBounds(DbAcquireNode *node,
         continue;
 
       auto constOffset =
-          extractConstantOffset(firstDynIdx, loopIV, chunkOffset);
+          ValueUtils::extractConstantOffset(firstDynIdx, loopIV, chunkOffset);
       if (constOffset) {
         foundAny = true;
         bounds.minOffset = std::min(bounds.minOffset, *constOffset);
@@ -733,7 +701,7 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
       Value firstDynIdx;
       for (Value idx : fullChain) {
         int64_t constVal;
-        if (!arts::getConstantIndex(idx, constVal)) {
+        if (!ValueUtils::getConstantIndex(idx, constVal)) {
           firstDynIdx = idx;
           break;
         }
@@ -891,13 +859,13 @@ LogicalResult DbAcquireNode::computeChunkInfoFromWhile(scf::WhileOp whileOp,
 
   OpBuilder builder(dbAcquireOp);
   Location loc = dbAcquireOp.getLoc();
-  Value startIdx = arts::ensureIndexType(initValue, builder, loc);
+  Value startIdx = ValueUtils::ensureIndexType(initValue, builder, loc);
   if (!startIdx)
     return failure();
 
   SmallVector<Value> chunkSizes;
   for (Value bound : bounds) {
-    Value boundIdx = arts::ensureIndexType(bound, builder, loc);
+    Value boundIdx = ValueUtils::ensureIndexType(bound, builder, loc);
     if (!boundIdx)
       continue;
     chunkSizes.push_back(
@@ -984,7 +952,7 @@ bool DbAcquireNode::isWorkerIndexedAccess() const {
     return false;
 
   int64_t sz = 0;
-  if (!arts::getConstantIndex(sizes[0], sz) || sz != 1)
+  if (!ValueUtils::getConstantIndex(sizes[0], sz) || sz != 1)
     return false;
 
   /// Offset is a BlockArgument means each invocation gets different offset
@@ -1015,10 +983,10 @@ bool DbAcquireNode::hasDisjointPartitionWith(const DbAcquireNode *other) const {
 
   /// Check constant range disjointness
   int64_t offAVal = 0, sizeAVal = 0, offBVal = 0, sizeBVal = 0;
-  if (arts::getConstantIndex(offA, offAVal) &&
-      arts::getConstantIndex(sizeA, sizeAVal) &&
-      arts::getConstantIndex(offB, offBVal) &&
-      arts::getConstantIndex(sizeB, sizeBVal)) {
+  if (ValueUtils::getConstantIndex(offA, offAVal) &&
+      ValueUtils::getConstantIndex(sizeA, sizeAVal) &&
+      ValueUtils::getConstantIndex(offB, offBVal) &&
+      ValueUtils::getConstantIndex(sizeB, sizeBVal)) {
     int64_t endA = offAVal + sizeAVal;
     int64_t endB = offBVal + sizeBVal;
     if (endA <= offBVal || endB <= offAVal)
@@ -1028,9 +996,9 @@ bool DbAcquireNode::hasDisjointPartitionWith(const DbAcquireNode *other) const {
   /// Check worker-indexed pattern: different BlockArguments with size=1
   int64_t sizeAConst = 0, sizeBConst = 0;
   bool sizeAIsOne =
-      arts::getConstantIndex(sizeA, sizeAConst) && sizeAConst == 1;
+      ValueUtils::getConstantIndex(sizeA, sizeAConst) && sizeAConst == 1;
   bool sizeBIsOne =
-      arts::getConstantIndex(sizeB, sizeBConst) && sizeBConst == 1;
+      ValueUtils::getConstantIndex(sizeB, sizeBConst) && sizeBConst == 1;
 
   if (sizeAIsOne && sizeBIsOne) {
     auto blockArgA = dyn_cast<BlockArgument>(offA);

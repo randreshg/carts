@@ -232,6 +232,24 @@ void LoopMetadata::importFromJson(const llvm::json::Object &json) {
       if (auto id = e.getAsInteger())
         reorderNestTo.push_back(*id);
   }
+
+  /// Per-dimension dependency analysis
+  dimensionDeps.clear();
+  if (auto *arr = json.getArray(AttrNames::LoopMetadata::DimensionDeps)) {
+    for (const auto &e : *arr) {
+      if (auto *obj = e.getAsObject()) {
+        DimensionDependency dep;
+        dep.importFromJson(*obj);
+        dimensionDeps.push_back(dep);
+      }
+    }
+  }
+
+  /// Outermost parallelizable dimension
+  if (auto dim = json.getInteger(AttrNames::LoopMetadata::OutermostParallelDim))
+    outermostParallelDim = *dim;
+  else
+    outermostParallelDim.reset();
 }
 
 void LoopMetadata::exportToJson(llvm::json::Object &json) const {
@@ -272,6 +290,22 @@ void LoopMetadata::exportToJson(llvm::json::Object &json) const {
       arr.push_back(id);
     json[AttrNames::LoopMetadata::ReorderNestTo.str()] = std::move(arr);
   }
+
+  /// Per-dimension dependency analysis: export only if non-empty
+  if (!dimensionDeps.empty()) {
+    llvm::json::Array arr;
+    for (const auto &dep : dimensionDeps) {
+      llvm::json::Object obj;
+      dep.exportToJson(obj);
+      arr.push_back(std::move(obj));
+    }
+    json[AttrNames::LoopMetadata::DimensionDeps.str()] = std::move(arr);
+  }
+
+  /// Outermost parallelizable dimension: export only if set
+  if (outermostParallelDim)
+    json[AttrNames::LoopMetadata::OutermostParallelDim.str()] =
+        *outermostParallelDim;
 }
 
 void LoopMetadata::exportToOp() {
@@ -377,6 +411,27 @@ LoopMetadataAttr LoopMetadata::toAttribute(MLIRContext *ctx) const {
       toBoolAttr(hasInterIterationDeps), toIntAttr(memrefsWithLoopCarriedDeps),
       toEnumAttr(parallelClassification, ParallelClassification::Unknown),
       builder.getStringAttr(locationMetadata.getKey()));
+}
+
+///===----------------------------------------------------------------------===///
+/// DimensionDependency JSON serialization
+///===----------------------------------------------------------------------===///
+void DimensionDependency::importFromJson(const llvm::json::Object &json) {
+  dimension = json.getInteger("dimension").value_or(0);
+  hasCarriedDep = json.getBoolean("has_carried_dep").value_or(false);
+  if (auto dist = json.getInteger("distance"))
+    distance = *dist;
+  else
+    distance.reset();
+  // Note: dependentMemrefs not serialized (Values don't persist across sessions)
+}
+
+void DimensionDependency::exportToJson(llvm::json::Object &json) const {
+  json["dimension"] = dimension;
+  json["has_carried_dep"] = hasCarriedDep;
+  if (distance)
+    json["distance"] = *distance;
+  // Note: dependentMemrefs not serialized (Values don't persist across sessions)
 }
 
 LoopMetadataAttr

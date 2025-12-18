@@ -47,8 +47,25 @@ constexpr StringLiteral ParallelClassification = "parallel_classification";
 constexpr StringLiteral LocationKey = "location_key";
 /// Loop reordering: target order by arts.id (empty = no reordering needed)
 constexpr StringLiteral ReorderNestTo = "reorder_nest_to";
+/// Per-dimension dependency analysis for nested loops
+constexpr StringLiteral DimensionDeps = "dimension_deps";
+constexpr StringLiteral OutermostParallelDim = "outermost_parallel_dim";
 } // namespace LoopMetadata
 } // namespace AttrNames
+
+/// Per-dimension dependency info for nested loops.
+/// Allows tracking which specific loop dimension carries dependencies,
+/// enabling parallelization of outer loops even when inner loops have deps.
+struct DimensionDependency {
+  int64_t dimension = 0;                   // 0 = outermost, 1 = next, etc.
+  bool hasCarriedDep = false;              // Does THIS dimension carry deps?
+  std::optional<int64_t> distance;         // Dependence distance if known
+  SmallVector<Value> dependentMemrefs;     // Which memrefs cause deps (optional)
+
+  /// For JSON serialization
+  void importFromJson(const llvm::json::Object &json);
+  void exportToJson(llvm::json::Object &json) const;
+};
 
 ///===--------------------------------------------------------------------===///
 /// LoopMetadata - Manages metadata for loop operations
@@ -125,6 +142,20 @@ public:
   /// Populated during CollectMetadata if reordering is beneficial.
   /// Used by LoopReorderingPass to apply the transformation.
   SmallVector<int64_t> reorderNestTo;
+
+  /// Per-dimension dependency analysis for nested loops.
+  /// Each entry describes whether a specific nesting level carries dependencies.
+  /// Key insight: inner loop deps don't prevent outer loop parallelism.
+  /// Example: for(i) { for(j) { A[i][j] = f(A[i][j-1]) } }
+  ///   - dimensionDeps[0] = {dim=0, hasCarriedDep=false} // i-loop is parallel
+  ///   - dimensionDeps[1] = {dim=1, hasCarriedDep=true}  // j-loop has A[i][j-1] dep
+  SmallVector<DimensionDependency> dimensionDeps;
+
+  /// The outermost dimension that can be parallelized (0 = outermost).
+  /// -1 means no dimension is parallelizable.
+  /// This allows ForLowering to parallelize only the outer loop even when
+  /// inner loops have dependencies (e.g., Seidel-2D: parallelize i, sequential j).
+  std::optional<int64_t> outermostParallelDim;
 
   //===-------------------------------------------------------------===//
   // Constructors

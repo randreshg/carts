@@ -532,9 +532,9 @@ static scf::ForOp createTiledForIfBeneficial(
   OpBuilder::InsertionGuard guard(b);
 
   int64_t stepC = 0, lbC = 0, ubC = 0;
-  bool hasConstStep = getConstantIndex(originalLoop.getStep(), stepC);
-  bool hasConstLb = getConstantIndex(originalLoop.getLowerBound(), lbC);
-  bool hasConstUb = getConstantIndex(originalLoop.getUpperBound(), ubC);
+  bool hasConstStep = ValueUtils::getConstantIndex(originalLoop.getStep(), stepC);
+  bool hasConstLb = ValueUtils::getConstantIndex(originalLoop.getLowerBound(), lbC);
+  bool hasConstUb = ValueUtils::getConstantIndex(originalLoop.getUpperBound(), ubC);
   if (!hasConstStep || stepC != 1 || !hasConstLb || !hasConstUb)
     return nullptr;
 
@@ -565,9 +565,9 @@ static bool isTilingApplicable(scf::ForOp loop, int64_t tileSize,
   if (!loop || tileSize <= 1)
     return false;
   int64_t stepC = 0, lbC = 0, ubC = 0;
-  bool hasConstStep = getConstantIndex(loop.getStep(), stepC);
-  bool hasConstLb = getConstantIndex(loop.getLowerBound(), lbC);
-  bool hasConstUb = getConstantIndex(loop.getUpperBound(), ubC);
+  bool hasConstStep = ValueUtils::getConstantIndex(loop.getStep(), stepC);
+  bool hasConstLb = ValueUtils::getConstantIndex(loop.getLowerBound(), lbC);
+  bool hasConstUb = ValueUtils::getConstantIndex(loop.getUpperBound(), ubC);
   if (!hasConstStep || stepC != 1 || !hasConstLb || !hasConstUb)
     return false;
   int64_t trip = ubC - lbC;

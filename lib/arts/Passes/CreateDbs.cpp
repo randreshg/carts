@@ -857,7 +857,7 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
         }
         auto acquireOp = builder.create<DbAcquireOp>(
             edt.getLoc(), dep.mode, acqGuid, acqPtr, acquireIndices,
-            acquireOffsets, acquireSizes, /*offsetHints=*/SmallVector<Value>{},
+            acquireOffsets, acquireSizes, /*offsetHints=*/acquireIndices,
             /*sizeHints=*/SmallVector<Value>{}, /*boundsValid=*/Value());
 
         /// Twin-diff decision for fine-grained acquires:

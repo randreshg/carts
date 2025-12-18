@@ -358,7 +358,7 @@ struct WsloopToARTSPattern : public OpRewritePattern<omp::WsLoopOp> {
     std::optional<int64_t> staticChunkSize;
     if (auto chunk = op.getScheduleChunkVar()) {
       int64_t chunkVal;
-      if (getConstantIndex(chunk, chunkVal) && chunkVal > 0)
+      if (ValueUtils::getConstantIndex(chunk, chunkVal) && chunkVal > 0)
         staticChunkSize = chunkVal;
     }
 

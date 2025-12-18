@@ -273,6 +273,40 @@ void LoopAnalyzer::finalizeParallelFlag(Operation *loopOp,
 }
 
 ///===----------------------------------------------------------------------===///
+// Per-Dimension Dependency Analysis
+///===----------------------------------------------------------------------===///
+
+void LoopAnalyzer::analyzeLoopNestDependences(affine::AffineForOp outerLoop,
+                                               LoopMetadata *metadata) {
+  // Use DependenceAnalyzer to get per-dimension dependency info
+  auto result = depAnalyzer.analyzeLoopNestDependences(outerLoop);
+
+  // Copy results to metadata
+  metadata->dimensionDeps = std::move(result.dimensionDeps);
+  metadata->outermostParallelDim = result.outermostParallelDim;
+
+  // Debug output
+  if (metadata->dimensionDeps.empty()) {
+    ARTS_DEBUG("Per-dimension deps: single loop or no nest");
+    return;
+  }
+
+  ARTS_DEBUG("Per-dimension deps analysis for loop nest:");
+  for (const auto &dep : metadata->dimensionDeps) {
+    ARTS_DEBUG("  dim " << dep.dimension << ": "
+                        << (dep.hasCarriedDep ? "carries deps" : "parallel")
+                        << (dep.distance ? " (dist=" + std::to_string(*dep.distance) + ")"
+                                         : ""));
+  }
+
+  if (metadata->outermostParallelDim) {
+    ARTS_DEBUG("Outermost parallel dimension: " << *metadata->outermostParallelDim);
+  } else {
+    ARTS_DEBUG("No parallelizable dimension found");
+  }
+}
+
+///===----------------------------------------------------------------------===///
 // Loop Reordering Analysis
 ///===----------------------------------------------------------------------===///
 

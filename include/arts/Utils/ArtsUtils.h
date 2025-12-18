@@ -15,6 +15,7 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Region.h"
 #include "mlir/IR/Value.h"
+#include <optional>
 
 namespace mlir {
 namespace arts {
@@ -27,9 +28,53 @@ bool simplifyIR(ModuleOp module, DominanceInfo &domInfo);
 ///===----------------------------------------------------------------------===///
 /// Value Analysis Utilities
 ///===----------------------------------------------------------------------===///
-bool isValueConstant(Value val);
-bool getConstantIndex(Value v, int64_t &out);
-bool isNonZeroIndex(Value v);
+/// Utility class for working with Index and Constant values
+class ValueUtils {
+public:
+  /// Checks if the given value is a constant, including constant-like operations
+  /// such as constant indices and constant operations.
+  static bool isValueConstant(Value val);
+
+  /// Attempts to extract a constant index value from the given value, supporting
+  /// both constant index operations and constant operations with integer
+  /// attributes.
+  static bool getConstantIndex(Value v, int64_t &out);
+
+  /// Determines if the given value represents a non-zero index, returning true
+  /// for non-zero constants or unknown (non-constant) values.
+  static bool isNonZeroIndex(Value v);
+
+  /// Check if a value depends on a base value through arithmetic operations.
+  /// Used to determine data dependencies in index expressions.
+  static bool dependsOn(Value value, Value base, int depth = 0);
+
+  /// Try to infer a constant linearization stride from an index expression.
+  /// Looks for mul(constant, X) where X depends on elemOffset.
+  static std::optional<int64_t> inferConstantStride(Value globalIndex,
+                                                    Value elemOffset);
+
+  /// Strip numeric cast operations to find the underlying value.
+  /// Traverses through index casts, sign/zero extensions, and truncations.
+  static Value stripNumericCasts(Value value);
+
+  /// Cast a value to index type if needed.
+  static Value castToIndex(Value value, OpBuilder &builder, Location loc);
+
+  /// Ensure a value is of index type, casting if necessary.
+  static Value ensureIndexType(Value value, OpBuilder &builder, Location loc);
+
+  /// Extract array index from byte offset pattern: bytes = (index * elemBytes).
+  /// Handles common patterns where GEP indices are scaled by element byte size.
+  /// Returns the logical array index or null Value if pattern doesn't match.
+  static Value extractArrayIndexFromByteOffset(Value byteOffset, Type elemType);
+
+  /// Generic constant value extraction supporting both index and integer constants.
+  static std::optional<int64_t> getConstantValue(Value v);
+
+  /// Extract constant offset from an index expression involving loop IV and chunk offset.
+  static std::optional<int64_t> extractConstantOffset(Value idx, Value loopIV,
+                                                      Value chunkOffset);
+};
 
 ///===----------------------------------------------------------------------===///
 /// Type and Size Utilities
@@ -84,6 +129,8 @@ Value castToIndex(Value value, OpBuilder &builder, Location loc);
 // Pattern Recognition and Analysis Utilities
 ///===----------------------------------------------------------------------===///
 std::optional<int64_t> extractChunkSizeFromHint(Value sizeHint, int depth = 0);
+std::optional<int64_t> extractChunkSizeForAllocation(Value sizeHint,
+                                                     int depth = 0);
 Value extractOriginalSize(Value numerator, Value denominator,
                           OpBuilder &builder, Location loc);
 Value extractArrayIndexFromByteOffset(Value byteOffset, Type elemType);

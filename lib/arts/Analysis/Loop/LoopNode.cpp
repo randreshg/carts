@@ -8,6 +8,7 @@
 #include "arts/Analysis/ArtsAnalysisManager.h"
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
+#include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "llvm/ADT/TypeSwitch.h"
@@ -113,11 +114,7 @@ LoopNode::IVExpr LoopNode::analyzeIndexExpr(Value index) {
 
   /// Helper to get constant value from arith ops
   auto getConstantValue = [](Value v) -> std::optional<int64_t> {
-    if (auto constOp = v.getDefiningOp<arith::ConstantIndexOp>())
-      return constOp.value();
-    if (auto constOp = v.getDefiningOp<arith::ConstantIntOp>())
-      return constOp.value();
-    return std::nullopt;
+    return ValueUtils::getConstantValue(v);
   };
 
   /// Handle arith::AddIOp: iv + constant or constant + iv

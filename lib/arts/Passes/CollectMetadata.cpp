@@ -128,6 +128,9 @@ private:
       analyzer.analyzeAffineLoop(forOp, metadata);
       /// Analyze loop reordering opportunities for perfect nests
       analyzer.analyzeLoopReordering(forOp, metadata, manager);
+      /// Analyze per-dimension dependencies for stencil optimization
+      /// This enables outer loop parallelization even when inner loops have deps
+      analyzer.analyzeLoopNestDependences(forOp, metadata);
       ARTS_DEBUG("  Analyzed affine.for at "
                  << metadata->locationMetadata.getKey());
     });
@@ -235,7 +238,23 @@ private:
 
       bool hasLoopLevelDeps =
           loopMeta->hasInterIterationDeps && *loopMeta->hasInterIterationDeps;
-      bool sequential = hasLoopLevelDeps || memrefsWithDeps > 0;
+
+      // Use per-dimension analysis if available: outer loop may be parallel
+      // even if inner loops have dependencies (e.g., Seidel-2D pattern)
+      bool outerLoopParallelizable = false;
+      if (loopMeta->outermostParallelDim.has_value() &&
+          *loopMeta->outermostParallelDim == 0) {
+        // Dimension 0 (this loop) doesn't carry dependencies
+        outerLoopParallelizable = true;
+        ARTS_DEBUG("  Per-dimension analysis: outer loop (dim 0) is parallel");
+      }
+
+      // A loop is sequential only if:
+      // 1. It has loop-level deps AND per-dimension analysis didn't prove outer is safe
+      // 2. OR it has memrefs with loop-carried deps AND per-dimension didn't prove safe
+      bool sequential = (hasLoopLevelDeps || memrefsWithDeps > 0) &&
+                        !outerLoopParallelizable;
+
       bool hasWrites = (writeOnly + readWrite) > 0 ||
                        loopMeta->accessStats.writeCount.value_or(0) > 0;
       LoopMetadata::ParallelClassification classification =
@@ -243,6 +262,11 @@ private:
       if (sequential) {
         classification = LoopMetadata::ParallelClassification::Sequential;
         loopMeta->potentiallyParallel = false;
+      } else if (outerLoopParallelizable) {
+        // Per-dimension analysis proved outer loop is safe to parallelize
+        classification = LoopMetadata::ParallelClassification::Likely;
+        loopMeta->potentiallyParallel = true;
+        ARTS_DEBUG("  Enabling parallel for outer loop via per-dimension analysis");
       } else if (!hasWrites) {
         classification = LoopMetadata::ParallelClassification::ReadOnly;
         loopMeta->potentiallyParallel = true;

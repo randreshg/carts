@@ -6,6 +6,7 @@
 #define ARTS_ANALYSIS_METADATA_DEPENDENCEANALYZER_H
 
 #include "arts/Analysis/Metadata/AccessAnalyzer.h"
+#include "arts/Utils/Metadata/LoopMetadata.h"
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -126,6 +127,69 @@ public:
     return analyzeAffineLoopDependences(forOp, std::nullopt).minDistance;
   }
 
+  /// Result of per-dimension dependency analysis for a loop nest.
+  struct LoopNestDependenceResult {
+    SmallVector<DimensionDependency> dimensionDeps;
+    std::optional<int64_t> outermostParallelDim; // -1 if none parallelizable
+  };
+
+  /// Analyze a loop nest for per-dimension dependencies.
+  /// Key insight: inner loop deps don't prevent outer loop parallelism.
+  ///
+  /// Example: for(i) { for(j) { A[i][j] = f(A[i][j-1]) } }
+  /// Result:
+  ///   - dimensionDeps[0] = {dim=0, hasCarriedDep=false} // i-loop parallelizable
+  ///   - dimensionDeps[1] = {dim=1, hasCarriedDep=true}  // j-loop has deps
+  ///   - outermostParallelDim = 0
+  ///
+  /// This allows Seidel-2D to parallelize the i-loop even though j-loop is sequential.
+  LoopNestDependenceResult
+  analyzeLoopNestDependences(affine::AffineForOp outermostLoop) const {
+    LoopNestDependenceResult result;
+
+    // Collect the loop nest (outermost to innermost)
+    SmallVector<affine::AffineForOp, 4> nest;
+    affine::AffineForOp current = outermostLoop;
+    while (current) {
+      nest.push_back(current);
+      // Find immediate inner affine.for
+      affine::AffineForOp inner;
+      current.getBody()->walk([&](affine::AffineForOp innerFor) {
+        if (innerFor->getParentOp() == current.getOperation()) {
+          inner = innerFor;
+          return WalkResult::interrupt();
+        }
+        return WalkResult::advance();
+      });
+      current = inner;
+    }
+
+    if (nest.empty())
+      return result;
+
+    // Analyze per-dimension dependencies
+    result.outermostParallelDim = std::nullopt;
+    for (size_t dim = 0; dim < nest.size(); ++dim) {
+      DimensionDependency depInfo;
+      depInfo.dimension = dim;
+
+      // Check if this specific loop dimension carries dependencies
+      auto summary =
+          analyzeAffineLoopDependencesAtDimension(nest, dim);
+      depInfo.hasCarriedDep = summary.hasDependence;
+      depInfo.distance = summary.minDistance;
+
+      result.dimensionDeps.push_back(depInfo);
+
+      // Track outermost parallelizable dimension
+      if (!depInfo.hasCarriedDep && !result.outermostParallelDim) {
+        result.outermostParallelDim = dim;
+      }
+    }
+
+    return result;
+  }
+
 private:
   MLIRContext *context [[maybe_unused]];
   AccessAnalyzer &accessAnalyzer [[maybe_unused]];
@@ -174,6 +238,46 @@ private:
 
     if (!current || *candidate < *current)
       current = candidate;
+  }
+
+  /// Check if a dependence component at the target dimension is loop-carried.
+  /// Returns true if the distance bounds indicate a non-zero distance.
+  static bool isDimensionCarried(const affine::DependenceComponent &comp) {
+    // A dimension carries a dependency if its distance is not zero.
+    // Zero distance means same iteration (no loop-carried dep for this dim).
+    bool lbZero = comp.lb && *comp.lb == 0;
+    bool ubZero = comp.ub && *comp.ub == 0;
+    if (lbZero && ubZero)
+      return false; // Same iteration in this dimension
+    return true;
+  }
+
+  /// Analyze dependencies for a specific loop dimension in the nest.
+  /// Key insight: Only checks if the TARGET dimension carries dependencies,
+  /// allowing outer loops to be parallelized even if inner loops have deps.
+  ///
+  /// For Seidel-2D: for(i) { for(j) { A[i][j] = f(A[i][j-1]) } }
+  ///   - analyzeAtDimension(nest, 0) → false (i doesn't carry deps)
+  ///   - analyzeAtDimension(nest, 1) → true  (j carries A[i][j-1] dep)
+  DependenceSummary analyzeAffineLoopDependencesAtDimension(
+      ArrayRef<affine::AffineForOp> nest, size_t targetDim) const {
+    DependenceSummary summary;
+
+    if (nest.empty() || targetDim >= nest.size())
+      return summary;
+
+    // The target loop we're checking for carried dependencies
+    affine::AffineForOp targetLoop = nest[targetDim];
+
+    // Use the existing single-loop analysis for the target loop
+    // This is safer than trying to compute per-dimension components manually
+    auto singleLoopResult = analyzeAffineLoopDependences(targetLoop, std::nullopt);
+
+    // If there's a dependency carried by THIS loop, mark it
+    summary.hasDependence = singleLoopResult.hasDependence;
+    summary.minDistance = singleLoopResult.minDistance;
+
+    return summary;
   }
 
   DependenceSummary

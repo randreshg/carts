@@ -151,8 +151,16 @@ bool DbAllocNode::canBePartitioned() {
     }
   }
 
-  if (!allocLevelOk)
-    return skip("allocation metadata does not support partitioning");
+  /// NOTE: We do NOT reject based on allocation-level metadata alone.
+  /// Non-uniform access (stencil patterns like A[i-1], A[i], A[i+1]) can
+  /// still be partitioned if the acquire-level analysis succeeds.
+  /// The acquire-level canPartitionWithOffset() validates that indices
+  /// are derived from the partition offset, and analyzeAccessBounds()
+  /// correctly computes stencil halo adjustments.
+  if (!allocLevelOk) {
+    ARTS_DEBUG("  alloc-level metadata inconclusive - deferring to "
+               "acquire-level validation");
+  }
 
   /// Step 2: Recursively check ALL acquire children
   /// If ANY acquire fails, the entire allocation cannot be partitioned
@@ -187,7 +195,7 @@ bool DbAllocNode::isFineGrained() const {
   /// This means each datablock holds exactly one element
   return llvm::all_of(elementSizes, [](Value v) {
     int64_t cst;
-    return arts::getConstantIndex(v, cst) && cst == 1;
+    return ValueUtils::getConstantIndex(v, cst) && cst == 1;
   });
 }
 
