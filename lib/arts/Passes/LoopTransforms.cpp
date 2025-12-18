@@ -82,70 +82,20 @@ static bool isFloatReduction(ReductionKind kind) {
   return kind == ReductionKind::IAdd || kind == ReductionKind::IMul;
 }
 
-/// Strip cast operations (float and integer) to find the underlying value.
-static Value stripCasts(Value v) {
-  while (v) {
-    if (auto ext = v.getDefiningOp<arith::ExtFOp>())
-      v = ext.getIn();
-    else if (auto trunc = v.getDefiningOp<arith::TruncFOp>())
-      v = trunc.getIn();
-    else if (auto extSI = v.getDefiningOp<arith::ExtSIOp>())
-      v = extSI.getIn();
-    else if (auto extUI = v.getDefiningOp<arith::ExtUIOp>())
-      v = extUI.getIn();
-    else if (auto truncI = v.getDefiningOp<arith::TruncIOp>())
-      v = truncI.getIn();
-    else
-      break;
-  }
-  return v;
-}
-
-/// Try to extract a constant floating-point value.
-static std::optional<double> getConstFloat(Value v) {
-  if (!v)
-    return std::nullopt;
-  if (auto cst = v.getDefiningOp<arith::ConstantOp>()) {
-    if (auto fa = dyn_cast<FloatAttr>(cst.getValue()))
-      return fa.getValueAsDouble();
-  }
-  return std::nullopt;
-}
-
-/// Try to extract a constant integer value.
-static std::optional<int64_t> getConstInt(Value v) {
-  if (!v)
-    return std::nullopt;
-  if (auto cst = v.getDefiningOp<arith::ConstantOp>()) {
-    if (auto ia = dyn_cast<IntegerAttr>(cst.getValue()))
-      return ia.getInt();
-  }
-  return std::nullopt;
-}
-
-/// Create a constant for the given type (float or integer).
-static Value getOrCreateConstant(OpBuilder &b, Location loc, Type ty,
-                                 double floatVal, int64_t intVal) {
-  if (ty.isF32())
-    return b.create<arith::ConstantFloatOp>(loc, APFloat((float)floatVal),
-                                            b.getF32Type());
-  if (ty.isF64())
-    return b.create<arith::ConstantFloatOp>(loc, APFloat(floatVal),
-                                            b.getF64Type());
-  if (ty.isIntOrIndex()) {
-    return b.create<arith::ConstantIntOp>(loc, intVal, ty);
-  }
-  return Value();
-}
-
 /// Create zero constant for the given type.
 static Value getOrCreateZero(OpBuilder &b, Location loc, Type ty) {
-  return getOrCreateConstant(b, loc, ty, 0.0, 0);
+  return b.create<arith::ConstantOp>(loc, ty, b.getZeroAttr(ty));
 }
 
 /// Create one constant for the given type.
 static Value getOrCreateOne(OpBuilder &b, Location loc, Type ty) {
-  return getOrCreateConstant(b, loc, ty, 1.0, 1);
+  if (ty.isF32())
+    return b.create<arith::ConstantOp>(loc, FloatAttr::get(ty, 1.0f));
+  if (ty.isF64())
+    return b.create<arith::ConstantOp>(loc, FloatAttr::get(ty, 1.0));
+  if (ty.isIntOrIndex())
+    return b.create<arith::ConstantOp>(loc, ty, b.getIntegerAttr(ty, 1));
+  return Value();
 }
 
 /// Match a multiplication operation (float or integer).
@@ -262,15 +212,15 @@ static bool matchAlphaBeta(Value storeVal, Value sumVal, Value oldCVal,
 
   /// Helper: match sum term either sum or mul(sum, alpha)
   auto matchSumTerm = [&](Value v, Value &alpha) -> bool {
-    v = stripCasts(v);
+    v = ValueUtils::stripNumericCasts(v);
     if (v == sumVal) {
       alpha = Value(); /// implies 1.0
       return true;
     }
     Value a, b;
     if (matchMulFOp(v, a, b)) {
-      a = stripCasts(a);
-      b = stripCasts(b);
+      a = ValueUtils::stripNumericCasts(a);
+      b = ValueUtils::stripNumericCasts(b);
       if (a == sumVal) {
         alpha = b;
         return true;
@@ -285,15 +235,15 @@ static bool matchAlphaBeta(Value storeVal, Value sumVal, Value oldCVal,
 
   /// Helper: match C term either oldC or mul(oldC, beta)
   auto matchCTerm = [&](Value v, Value &beta) -> bool {
-    v = stripCasts(v);
+    v = ValueUtils::stripNumericCasts(v);
     if (v == oldCVal) {
       beta = Value(); /// implies 1.0
       return true;
     }
     Value a, b;
     if (matchMulFOp(v, a, b)) {
-      a = stripCasts(a);
-      b = stripCasts(b);
+      a = ValueUtils::stripNumericCasts(a);
+      b = ValueUtils::stripNumericCasts(b);
       if (a == oldCVal) {
         beta = b;
         return true;
@@ -307,7 +257,7 @@ static bool matchAlphaBeta(Value storeVal, Value sumVal, Value oldCVal,
   };
 
   /// Pattern 1: store = sum (alpha=1, beta=0)
-  if (stripCasts(storeVal) == sumVal) {
+  if (ValueUtils::stripNumericCasts(storeVal) == sumVal) {
     outAlpha = Value(); /// implies 1.0
     outBeta = Value();  /// implies 0.0 (created by caller)
     return true;
@@ -317,8 +267,8 @@ static bool matchAlphaBeta(Value storeVal, Value sumVal, Value oldCVal,
   {
     Value a, b;
     if (matchMulFOp(storeVal, a, b)) {
-      a = stripCasts(a);
-      b = stripCasts(b);
+      a = ValueUtils::stripNumericCasts(a);
+      b = ValueUtils::stripNumericCasts(b);
       if (a == sumVal) {
         outAlpha = b;
         outBeta = Value();
@@ -441,7 +391,7 @@ static bool matchMatmulDotInArtsFor(ForOp artsFor, MatmulDotMatch &out) {
     return false;
 
   auto findLoad = [&](Value v) -> memref::LoadOp {
-    v = stripCasts(v);
+    v = ValueUtils::stripNumericCasts(v);
     return v.getDefiningOp<memref::LoadOp>();
   };
   loadA = findLoad(mulLhs);
@@ -532,9 +482,12 @@ static scf::ForOp createTiledForIfBeneficial(
   OpBuilder::InsertionGuard guard(b);
 
   int64_t stepC = 0, lbC = 0, ubC = 0;
-  bool hasConstStep = ValueUtils::getConstantIndex(originalLoop.getStep(), stepC);
-  bool hasConstLb = ValueUtils::getConstantIndex(originalLoop.getLowerBound(), lbC);
-  bool hasConstUb = ValueUtils::getConstantIndex(originalLoop.getUpperBound(), ubC);
+  bool hasConstStep =
+      ValueUtils::getConstantIndex(originalLoop.getStep(), stepC);
+  bool hasConstLb =
+      ValueUtils::getConstantIndex(originalLoop.getLowerBound(), lbC);
+  bool hasConstUb =
+      ValueUtils::getConstantIndex(originalLoop.getUpperBound(), ubC);
   if (!hasConstStep || stepC != 1 || !hasConstLb || !hasConstUb)
     return nullptr;
 
@@ -574,24 +527,6 @@ static bool isTilingApplicable(scf::ForOp loop, int64_t tileSize,
   return trip >= minTripCount;
 }
 
-/// Check if a value is a zero constant (float or integer).
-static bool isZeroConstant(Value v) {
-  if (auto floatVal = getConstFloat(v))
-    return *floatVal == 0.0;
-  if (auto intVal = getConstInt(v))
-    return *intVal == 0;
-  return false;
-}
-
-/// Check if a value is a one constant (float or integer).
-static bool isOneConstant(Value v) {
-  if (auto floatVal = getConstFloat(v))
-    return *floatVal == 1.0;
-  if (auto intVal = getConstInt(v))
-    return *intVal == 1;
-  return false;
-}
-
 static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
                                           int64_t tileJ, int64_t minTripCount) {
   scf::ForOp jLoop = m.jLoop;
@@ -620,9 +555,9 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
     auto cOld =
         ib.create<memref::LoadOp>(iloc, m.memC, ValueRange{iIndex, jIV});
     Value scaled;
-    if (isZeroConstant(beta)) {
+    if (ValueUtils::isZeroConstant(beta)) {
       scaled = zero;
-    } else if (isOneConstant(beta)) {
+    } else if (ValueUtils::isOneConstant(beta)) {
       scaled = cOld;
     } else {
       scaled = createMul(ib, iloc, cOld, beta, kind);
@@ -675,7 +610,7 @@ static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
     aLoad = b.create<memref::LoadOp>(loc, m.memA, ValueRange{iIndex, kIV});
 
   Value aAlpha;
-  if (isOneConstant(alpha))
+  if (ValueUtils::isOneConstant(alpha))
     aAlpha = aLoad;
   else
     aAlpha = createMul(b, loc, aLoad, alpha, kind);
@@ -771,15 +706,11 @@ struct LoopTransformsPass
       /// Pattern 1: Dot-product to k-j update form transformation
       /// This is ARTS-specific reduction distribution that exposes better
       /// parallelism and cache locality for matmul-like patterns.
-      ///
-      /// Note: Hoisting and general LICM are now handled by affine passes
-      /// in Stage 2 (via --enable-affine-opt). This pass focuses solely on
-      /// ARTS-specific reduction pattern distribution.
       MatmulDotMatch dot;
       if (matchMatmulDotInArtsFor(fo, dot)) {
         /// Conservative profitability gates:
         /// - Only rewrite when B is accessed as B[k,j] (k varies in dot-product
-        /// =>
+        /// => strided), since the rewrite makes j the inner dimension and
         ///   strided), since the rewrite makes j the inner dimension and
         ///   enables stride-1 access.
         /// - Require tiling to be enabled and applicable to avoid exploding C
@@ -805,12 +736,6 @@ struct LoopTransformsPass
         rewrites++;
         continue;
       }
-
-      /// Pattern 2 (update-form hoisting) has been REMOVED.
-      /// Hoisting is now handled by affine LICM in Stage 2 via
-      /// --enable-affine-opt flag. This provides better separation of concerns:
-      /// - Generic MLIR passes: LICM, tiling, simplify (Stage 2, affine.for)
-      /// - ARTS-specific passes: reduction distribution (Stage 6, arts.for)
     }
 
     ARTS_INFO("LoopTransformsPass: applied " << rewrites << " rewrite(s)");

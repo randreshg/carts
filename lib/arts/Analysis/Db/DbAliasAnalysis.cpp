@@ -8,6 +8,7 @@
 #include "arts/Analysis/Graphs/Db/DbGraph.h"
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/ValueUtils.h"
 
 #include "arts/Utils/ArtsDebug.h"
 ARTS_DEBUG_SETUP(db_alias);
@@ -268,10 +269,10 @@ Value DbAliasAnalysis::getUnderlyingValue(const NodeBase &node) {
     return op->getResult(0);
   } else if (isa<DbAcquireOp>(op)) {
     Value sourcePtr = cast<DbAcquireOp>(op).getSourcePtr();
-    return arts::getUnderlyingValue(sourcePtr);
+    return ValueUtils::getUnderlyingValue(sourcePtr);
   } else if (isa<DbReleaseOp>(op)) {
     Value source = cast<DbReleaseOp>(op).getSource();
-    return arts::getUnderlyingValue(source);
+    return ValueUtils::getUnderlyingValue(source);
   }
   llvm_unreachable("Invalid DB node type");
 }

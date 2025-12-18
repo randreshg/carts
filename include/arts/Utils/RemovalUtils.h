@@ -1,12 +1,12 @@
 ///==========================================================================///
-/// File: OpRemovalManager.h
+/// File: RemovalUtils.h
 ///
-/// This file defines the OpRemovalManager class which manages deferred
+/// This file defines the RemovalUtils class which manages deferred
 /// operation removal with safety checks and verification utilities.
 ///==========================================================================///
 
-#ifndef ARTS_UTILS_OPREMOVALMANAGER_H
-#define ARTS_UTILS_OPREMOVALMANAGER_H
+#ifndef ARTS_UTILS_REMOVALUTILS_H
+#define ARTS_UTILS_REMOVALUTILS_H
 
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -21,29 +21,15 @@ namespace mlir {
 namespace arts {
 
 ///===----------------------------------------------------------------------===///
-/// OpRemovalManager - Manages deferred operation removal
+/// RemovalUtils - Manages deferred operation removal
 ///
 /// Tracks operations to be removed and provides utilities for safe removal
 /// with verification. Operations are not removed immediately but queued for
 /// later removal to avoid iterator invalidation during transformation passes.
-///
-/// Features:
-/// - Automatic ancestor/descendant relationship handling
-/// - Verification that all value users are marked before removal
-/// - Safe removal order to avoid dangling references
-/// - Debug logging for unmarked users
-///
-/// Usage:
-///   OpRemovalManager removalMgr;
-///   removalMgr.markForRemoval(op1);
-///   removalMgr.markForRemoval(op2);
-///   if (failed(removalMgr.verifyAllUsersMarked(value, "allocation")))
-///     return failure();
-///   removalMgr.removeAllMarked();
 ///===----------------------------------------------------------------------===///
-class OpRemovalManager {
+class RemovalUtils {
 public:
-  OpRemovalManager() = default;
+  RemovalUtils() = default;
 
   /// Mark an operation for removal
   /// Automatically handles ancestor/descendant relationships:
@@ -116,4 +102,4 @@ SmallVector<Operation *> collectStores(Value memref);
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_UTILS_OPREMOVALMANAGER_H
+#endif // ARTS_UTILS_REMOVALUTILS_H

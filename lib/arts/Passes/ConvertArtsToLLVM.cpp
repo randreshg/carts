@@ -18,6 +18,7 @@
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/OperationAttributes.h"
+#include "arts/Utils/ValueUtils.h"
 /// Others
 #include "mlir/Analysis/DataLayoutAnalysis.h"
 #include "mlir/IR/Builders.h"
@@ -87,8 +88,7 @@ static inline void getDbInfo(OpType op, SmallVector<Value> &sizesOut,
     return;
   }
   if (sizesOut.size() == 1) {
-    if (auto constTotal = sizesOut[0].getDefiningOp<arith::ConstantIndexOp>())
-      isSingleElement = (constTotal.value() == 1);
+    isSingleElement = mlir::arts::ValueUtils::isOneConstant(sizesOut[0]);
   }
 }
 } // namespace

@@ -17,7 +17,8 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/OpRemovalManager.h"
+#include "arts/Utils/ValueUtils.h"
+#include "arts/Utils/RemovalUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -159,7 +160,7 @@ static Value traceWrapperLoadToAlloc(Value val) {
         if (storeOp.getMemref() == wrapper) {
           Value storedVal = storeOp.getValue();
           /// Check if direct allocation (through casts)
-          Value underlying = arts::getUnderlyingValue(storedVal);
+          Value underlying = ValueUtils::getUnderlyingValue(storedVal);
           if (underlying && underlying.getDefiningOp<memref::AllocOp>())
             return underlying;
           /// Otherwise continue tracing through nested loads
@@ -205,7 +206,7 @@ struct CanonicalizeMemrefsPass
   void runOnOperation() override;
 
 private:
-  OpRemovalManager removalMgr;
+  RemovalUtils removalMgr;
   DominanceInfo *domInfo = nullptr;
   OpBuilder *globalBuilder = nullptr;
 
@@ -400,7 +401,7 @@ CanonicalizeMemrefsPass::detectPattern(Value alloc) {
           ///   %alloc = memref.alloc() : memref<10xf64>
           ///   %cast = memref.cast %alloc : memref<10xf64> to memref<?xf64>
           ///   memref.store %cast, %wrapper[]
-          Value underlying = arts::getUnderlyingValue(storedVal);
+          Value underlying = ValueUtils::getUnderlyingValue(storedVal);
           if (underlying && underlying.getDefiningOp<memref::AllocOp>()) {
             pattern.wrapperAlloca = alloc;
             pattern.rootAlloc = storedVal; /// Keep cast result for SROA
@@ -530,7 +531,7 @@ CanonicalizeMemrefsPass::detectPattern(Value alloc) {
 
     if (allocType.getRank() >= 1) {
       /// Get underlying allocation (traces through casts)
-      Value underlying = arts::getUnderlyingValue(pattern.rootAlloc);
+      Value underlying = ValueUtils::getUnderlyingValue(pattern.rootAlloc);
       auto underlyingAlloc =
           underlying ? underlying.getDefiningOp<memref::AllocOp>() : nullptr;
       auto underlyingType =
@@ -1710,7 +1711,7 @@ bool CanonicalizeMemrefsPass::extractNestedAllocations(Value storedVal,
   }
 
   /// Trace through casts to find the underlying allocation
-  Value underlying = arts::getUnderlyingValue(storedVal);
+  Value underlying = ValueUtils::getUnderlyingValue(storedVal);
   auto innerAlloc = underlying ? underlying.getDefiningOp<memref::AllocOp>()
                                : storedVal.getDefiningOp<memref::AllocOp>();
   if (!innerAlloc) {

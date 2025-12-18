@@ -129,7 +129,8 @@ private:
       /// Analyze loop reordering opportunities for perfect nests
       analyzer.analyzeLoopReordering(forOp, metadata, manager);
       /// Analyze per-dimension dependencies for stencil optimization
-      /// This enables outer loop parallelization even when inner loops have deps
+      /// This enables outer loop parallelization even when inner loops have
+      /// deps
       analyzer.analyzeLoopNestDependences(forOp, metadata);
       ARTS_DEBUG("  Analyzed affine.for at "
                  << metadata->locationMetadata.getKey());
@@ -250,10 +251,12 @@ private:
       }
 
       // A loop is sequential only if:
-      // 1. It has loop-level deps AND per-dimension analysis didn't prove outer is safe
-      // 2. OR it has memrefs with loop-carried deps AND per-dimension didn't prove safe
-      bool sequential = (hasLoopLevelDeps || memrefsWithDeps > 0) &&
-                        !outerLoopParallelizable;
+      // 1. It has loop-level deps AND per-dimension analysis didn't prove outer
+      // is safe
+      // 2. OR it has memrefs with loop-carried deps AND per-dimension didn't
+      // prove safe
+      bool sequential =
+          (hasLoopLevelDeps || memrefsWithDeps > 0) && !outerLoopParallelizable;
 
       bool hasWrites = (writeOnly + readWrite) > 0 ||
                        loopMeta->accessStats.writeCount.value_or(0) > 0;
@@ -266,7 +269,8 @@ private:
         // Per-dimension analysis proved outer loop is safe to parallelize
         classification = LoopMetadata::ParallelClassification::Likely;
         loopMeta->potentiallyParallel = true;
-        ARTS_DEBUG("  Enabling parallel for outer loop via per-dimension analysis");
+        ARTS_DEBUG(
+            "  Enabling parallel for outer loop via per-dimension analysis");
       } else if (!hasWrites) {
         classification = LoopMetadata::ParallelClassification::ReadOnly;
         loopMeta->potentiallyParallel = true;

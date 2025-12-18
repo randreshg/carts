@@ -44,22 +44,22 @@ namespace {
 /// Information about a detected reduction pattern
 struct ReductionPattern {
   scf::ForOp forOp;
-  Operation *loadOp;      // memref.load or polygeist.load
-  Operation *storeOp;     // memref.store or polygeist.store
-  Operation *reduceOp;    // arith.addf/mulf/etc.
-  Value memref;           // The memref being accessed
-  SmallVector<Value> indices;  // Loop-invariant indices
+  Operation *loadOp;          /// memref.load or polygeist.load
+  Operation *storeOp;         /// memref.store or polygeist.store
+  Operation *reduceOp;        /// arith.addf/mulf/etc.
+  Value memref;               /// The memref being accessed
+  SmallVector<Value> indices; /// Loop-invariant indices
 };
 
 /// Check if a value is loop-invariant (not dependent on the induction variable)
 static bool isLoopInvariant(Value val, scf::ForOp forOp) {
-  // Block argument of the loop (induction variable) is NOT invariant
+  /// Block argument of the loop (induction variable) is NOT invariant
   if (auto blockArg = dyn_cast<BlockArgument>(val)) {
     if (blockArg.getOwner() == forOp.getBody())
       return false;
   }
 
-  // Check if defining op is inside the loop
+  /// Check if defining op is inside the loop
   if (Operation *defOp = val.getDefiningOp()) {
     if (forOp.getBody()->findAncestorOpInBlock(*defOp))
       return false;
@@ -79,25 +79,23 @@ static bool areIndicesLoopInvariant(ArrayRef<Value> indices, scf::ForOp forOp) {
 
 /// Get the memref and indices from a load operation
 static std::pair<Value, SmallVector<Value>> getLoadInfo(Operation *op) {
-  if (auto load = dyn_cast<memref::LoadOp>(op)) {
+  if (auto load = dyn_cast<memref::LoadOp>(op))
     return {load.getMemRef(), SmallVector<Value>(load.getIndices())};
-  }
-  // Handle polygeist.load (DynLoadOp)
-  if (auto dynLoad = dyn_cast<polygeist::DynLoadOp>(op)) {
+
+  /// Handle polygeist.load (DynLoadOp)
+  if (auto dynLoad = dyn_cast<polygeist::DynLoadOp>(op))
     return {dynLoad.getMemref(), SmallVector<Value>(dynLoad.getIndices())};
-  }
   return {Value(), {}};
 }
 
 /// Get the memref and indices from a store operation
 static std::pair<Value, SmallVector<Value>> getStoreInfo(Operation *op) {
-  if (auto store = dyn_cast<memref::StoreOp>(op)) {
+  if (auto store = dyn_cast<memref::StoreOp>(op))
     return {store.getMemRef(), SmallVector<Value>(store.getIndices())};
-  }
-  // Handle polygeist.store (DynStoreOp)
-  if (auto dynStore = dyn_cast<polygeist::DynStoreOp>(op)) {
+  
+    /// Handle polygeist.store (DynStoreOp)
+  if (auto dynStore = dyn_cast<polygeist::DynStoreOp>(op))
     return {dynStore.getMemref(), SmallVector<Value>(dynStore.getIndices())};
-  }
   return {Value(), {}};
 }
 
@@ -127,20 +125,22 @@ static bool isAccumulationOp(Operation *op) {
              arith::MaximumFOp, arith::MinimumFOp>(op);
 }
 
-/// Check if an operation is a direct child of a block (not inside nested regions)
+/// Check if an operation is a direct child of a block (not inside nested
+/// regions)
 static bool isDirectChildOf(Operation *op, Block *block) {
   return op->getBlock() == block;
 }
 
 /// Detect reduction pattern in a for loop
-static std::optional<ReductionPattern> detectReductionPattern(scf::ForOp forOp) {
+static std::optional<ReductionPattern>
+detectReductionPattern(scf::ForOp forOp) {
   ReductionPattern pattern;
   pattern.forOp = forOp;
 
   Block *body = forOp.getBody();
 
-  // Collect loads and stores that are DIRECT children of the loop body
-  // (not inside nested regions - those need to be transformed first)
+  /// Collect loads and stores that are DIRECT children of the loop body
+  /// (not inside nested regions - those need to be transformed first)
   SmallVector<Operation *> loads, stores;
   for (Operation &op : body->without_terminator()) {
     if (isa<memref::LoadOp, polygeist::DynLoadOp>(&op))
@@ -149,13 +149,14 @@ static std::optional<ReductionPattern> detectReductionPattern(scf::ForOp forOp) 
       stores.push_back(&op);
   }
 
-  // For each store, check if there's a matching load with loop-invariant indices
+  /// For each store, check if there's a matching load with loop-invariant
+  /// indices
   for (Operation *storeOp : stores) {
     auto [storeMemref, storeIndices] = getStoreInfo(storeOp);
     if (!storeMemref || storeIndices.empty())
       continue;
 
-    // Check if indices are loop-invariant
+    /// Check if indices are loop-invariant
     if (!areIndicesLoopInvariant(storeIndices, forOp))
       continue;
 
@@ -163,19 +164,20 @@ static std::optional<ReductionPattern> detectReductionPattern(scf::ForOp forOp) 
     if (!storedValue)
       continue;
 
-    // Check if stored value comes from an accumulation operation
+    /// Check if stored value comes from an accumulation operation
     Operation *accOp = storedValue.getDefiningOp();
     if (!accOp)
       continue;
 
-    // The accumulation op must also be a direct child of the loop body
+    /// The accumulation op must also be a direct child of the loop body
     if (!isDirectChildOf(accOp, body))
       continue;
 
     if (!isAccumulationOp(accOp))
       continue;
 
-    // Check if one operand of the accumulation is loaded from the same location
+    /// Check if one operand of the accumulation is loaded from the same
+    /// location
     for (Value operand : accOp->getOperands()) {
       Operation *loadOp = operand.getDefiningOp();
       if (!loadOp)
@@ -185,13 +187,14 @@ static std::optional<ReductionPattern> detectReductionPattern(scf::ForOp forOp) 
       if (!loadMemref)
         continue;
 
-      // Check if load is from the same location as store.
-      // Also ensure the load has only one use (the accumulation op)
-      // to avoid dangling references when erasing the old loop.
-      // Additionally, the memref must be defined OUTSIDE the loop so that
-      // we can create new loads/stores outside the loop that use it.
-      if (loadMemref == storeMemref && indicesEqual(loadIndices, storeIndices) &&
-          loadOp->hasOneUse() && isLoopInvariant(storeMemref, forOp)) {
+      /// Check if load is from the same location as store.
+      /// Also ensure the load has only one use (the accumulation op)
+      /// to avoid dangling references when erasing the old loop.
+      /// Additionally, the memref must be defined OUTSIDE the loop so that
+      /// we can create new loads/stores outside the loop that use it.
+      if (loadMemref == storeMemref &&
+          indicesEqual(loadIndices, storeIndices) && loadOp->hasOneUse() &&
+          isLoopInvariant(storeMemref, forOp)) {
         pattern.loadOp = loadOp;
         pattern.storeOp = storeOp;
         pattern.reduceOp = accOp;
@@ -210,41 +213,41 @@ static std::optional<ReductionPattern> detectReductionPattern(scf::ForOp forOp) 
 
 /// Transform a reduction pattern to use iter_args
 static LogicalResult transformReduction(ReductionPattern &pattern,
-                                         IRRewriter &rewriter) {
+                                        IRRewriter &rewriter) {
   scf::ForOp forOp = pattern.forOp;
   Location loc = forOp.getLoc();
 
-  // Load initial value before the loop
+  /// Load initial value before the loop
   rewriter.setInsertionPoint(forOp);
 
   Value initValue;
   if (auto load = dyn_cast<memref::LoadOp>(pattern.loadOp)) {
-    initValue = rewriter.create<memref::LoadOp>(
-        loc, load.getMemRef(), load.getIndices());
+    initValue = rewriter.create<memref::LoadOp>(loc, load.getMemRef(),
+                                                load.getIndices());
   } else if (auto dynLoad = dyn_cast<polygeist::DynLoadOp>(pattern.loadOp)) {
-    // For polygeist.load (DynLoadOp), create new load before the loop
+    /// For polygeist.load (DynLoadOp), create new load before the loop
     initValue = rewriter.create<polygeist::DynLoadOp>(
         loc, dynLoad.getResult().getType(), dynLoad.getMemref(),
         dynLoad.getIndices(), dynLoad.getSizes());
   }
 
-  // Create new ForOp with iter_args
+  /// Create new ForOp with iter_args
   SmallVector<Value> iterArgs = {initValue};
-  auto newForOp = rewriter.create<scf::ForOp>(
-      loc, forOp.getLowerBound(), forOp.getUpperBound(), forOp.getStep(),
-      iterArgs);
+  auto newForOp = rewriter.create<scf::ForOp>(loc, forOp.getLowerBound(),
+                                              forOp.getUpperBound(),
+                                              forOp.getStep(), iterArgs);
 
-  // Copy attributes (like arts.loop metadata)
+  /// Copy attributes (like arts.loop metadata)
   newForOp->setAttrs(forOp->getAttrs());
 
-  // Get the accumulator iter_arg
+  /// Get the accumulator iter_arg
   Value accArg = newForOp.getRegionIterArg(0);
 
-  // Clone the loop body, replacing load with iter_arg
+  /// Clone the loop body, replacing load with iter_arg
   Block *oldBody = forOp.getBody();
   Block *newBody = newForOp.getBody();
 
-  // Map old values to new values
+  /// Map old values to new values
   IRMapping mapper;
   mapper.map(forOp.getInductionVar(), newForOp.getInductionVar());
   mapper.map(pattern.loadOp->getResult(0), accArg);
@@ -252,49 +255,51 @@ static LogicalResult transformReduction(ReductionPattern &pattern,
   /// Erase the auto-generated yield terminator.
   if (!newBody->empty()) {
     Operation *existingTerminator = &newBody->back();
-    if (existingTerminator && existingTerminator->hasTrait<OpTrait::IsTerminator>())
+    if (existingTerminator &&
+        existingTerminator->hasTrait<OpTrait::IsTerminator>())
       rewriter.eraseOp(existingTerminator);
   }
 
   rewriter.setInsertionPointToEnd(newBody);
 
-  // Clone operations except the load and store
+  /// Clone operations except the load and store
   Value newAccValue;
   for (Operation &op : oldBody->without_terminator()) {
     if (&op == pattern.loadOp)
-      continue;  // Skip the load - replaced by iter_arg
+      continue; /// Skip the load - replaced by iter_arg
     if (&op == pattern.storeOp)
-      continue;  // Skip the store - replaced by yield
+      continue; /// Skip the store - replaced by yield
 
     Operation *cloned = rewriter.clone(op, mapper);
 
-    // Track the accumulation result
+    /// Track the accumulation result
     if (&op == pattern.reduceOp)
       newAccValue = cloned->getResult(0);
   }
 
-  // Create yield with the accumulated value
+  /// Create yield with the accumulated value
   if (!newAccValue) {
-    // This can happen if reduceOp is inside a nested region - shouldn't reach here
-    // with our detection checks, but guard against it anyway
+    /// This can happen if reduceOp is inside a nested region - shouldn't reach
+    /// here with our detection checks, but guard against it anyway
     return failure();
   }
   rewriter.create<scf::YieldOp>(loc, ValueRange{newAccValue});
 
-  // Store final result after the loop
+  /// Store final result after the loop
   rewriter.setInsertionPointAfter(newForOp);
   Value finalValue = newForOp.getResult(0);
 
   if (auto store = dyn_cast<memref::StoreOp>(pattern.storeOp)) {
     rewriter.create<memref::StoreOp>(loc, finalValue, store.getMemRef(),
-                                      store.getIndices());
+                                     store.getIndices());
   } else if (auto dynStore = dyn_cast<polygeist::DynStoreOp>(pattern.storeOp)) {
-    // For polygeist.store (DynStoreOp), create new store with updated value
-    rewriter.create<polygeist::DynStoreOp>(loc, finalValue, dynStore.getMemref(),
-                                           dynStore.getIndices(), dynStore.getSizes());
+    /// For polygeist.store (DynStoreOp), create new store with updated value
+    rewriter.create<polygeist::DynStoreOp>(
+        loc, finalValue, dynStore.getMemref(), dynStore.getIndices(),
+        dynStore.getSizes());
   }
 
-  // Erase the old loop
+  /// Erase the old loop
   rewriter.eraseOp(forOp);
 
   ARTS_INFO("Transformed reduction pattern to iter_args at " << loc);
@@ -303,40 +308,24 @@ static LogicalResult transformReduction(ReductionPattern &pattern,
 }
 
 struct ScalarReplacementPass
-    : public PassWrapper<ScalarReplacementPass, OperationPass<ModuleOp>> {
-  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(ScalarReplacementPass)
-
-  StringRef getArgument() const override { return "arts-scalar-replacement"; }
-  StringRef getDescription() const override {
-    return "Transform memory-based reductions to register-based iter_args";
-  }
-
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<scf::SCFDialect>();
-    registry.insert<memref::MemRefDialect>();
-    registry.insert<arith::ArithDialect>();
-    registry.insert<polygeist::PolygeistDialect>();
-  }
-
+    : public ScalarReplacementBase<ScalarReplacementPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
     ARTS_INFO_HEADER(ScalarReplacementPass);
 
     int transformed = 0;
 
-    // Walk all scf.for loops and try to transform reductions
-    // Do this iteratively as transformations change the IR
+    /// Walk all scf.for loops and try to transform reductions
+    /// Do this iteratively as transformations change the IR
     bool changed = true;
     while (changed) {
       changed = false;
 
       SmallVector<scf::ForOp> forOps;
-      module.walk([&](scf::ForOp forOp) {
-        forOps.push_back(forOp);
-      });
+      module.walk([&](scf::ForOp forOp) { forOps.push_back(forOp); });
 
       for (scf::ForOp forOp : forOps) {
-        // Skip loops that already have iter_args
+        /// Skip loops that already have iter_args
         if (!forOp.getInitArgs().empty())
           continue;
 
@@ -344,12 +333,12 @@ struct ScalarReplacementPass
         if (!pattern)
           continue;
 
-        // Transform the pattern
+        /// Transform the pattern
         IRRewriter rewriter(module.getContext());
         if (succeeded(transformReduction(*pattern, rewriter))) {
           transformed++;
           changed = true;
-          break;  // Start over after transformation
+          break; /// Start over after transformation
         }
       }
     }
@@ -359,7 +348,7 @@ struct ScalarReplacementPass
   }
 };
 
-} // end anonymous namespace
+} // namespace
 
 ///===----------------------------------------------------------------------===///
 /// Pass creation and registration

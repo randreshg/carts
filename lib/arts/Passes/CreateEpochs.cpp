@@ -14,6 +14,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/EdtUtils.h"
 /// Other
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
@@ -97,7 +98,7 @@ static void processBarrierOp(BarrierOp barrier) {
       return;
     if (isa<YieldOp>(op))
       return;
-    if (!isReachable(op, barrier))
+    if (!EdtUtils::isReachable(op, barrier))
       return;
     reachableOps.push_back(op);
   });

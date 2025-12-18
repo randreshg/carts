@@ -11,20 +11,13 @@
 /// - Dead datablocks (db_alloc where both guid and ptr are unused)
 /// - Unused acquires (db_acquire with no memory ops and unused guid)
 /// - Unused EDT dependencies (EDT block args with no uses + backing acquires)
-///
-/// This is particularly useful after openmp-to-arts conversion where OMP
-/// dependency proxy allocas become unused, and after EDT lowering where
-/// placeholder undef values may remain. The unused EDT dependency removal is
-/// critical for enabling fine-grained datablock partitioning - phantom acquires
-/// (acquires for arrays visible in a parallel scope but not accessed in an EDT)
-/// can block the Db pass from computing chunk info for all acquires.
 ///==========================================================================///
 
 #include "ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsDebug.h"
-#include "arts/Utils/OpRemovalManager.h"
+#include "arts/Utils/RemovalUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -155,7 +148,7 @@ struct DeadCodeEliminationPass
   /// These are created as placeholders during EDT outlining and may remain
   /// after transformation if not all uses were replaced.
   unsigned removeDeadUndefs(ModuleOp module) {
-    OpRemovalManager removalMgr;
+    RemovalUtils removalMgr;
     module.walk([&](UndefOp undef) { removalMgr.markForRemoval(undef); });
     ARTS_DEBUG(" - Removing " << removalMgr.size() << " undef operations");
     removalMgr.removeAllMarked(module, /*recursive=*/true);
@@ -164,7 +157,7 @@ struct DeadCodeEliminationPass
 
   /// Remove trivially empty EDTs (only yield/barrier/release ops)
   unsigned removeEmptyEdts(ModuleOp module) {
-    OpRemovalManager removalMgr;
+    RemovalUtils removalMgr;
     module.walk([&](EdtOp edt) {
       bool hasWork = false;
       for (Operation &op : edt.getBody().front()) {
@@ -198,7 +191,7 @@ struct DeadCodeEliminationPass
 
   /// Remove arts.db_alloc operations where both guid and ptr are unused
   unsigned removeDeadDbs(ModuleOp module) {
-    OpRemovalManager removalMgr;
+    RemovalUtils removalMgr;
 
     module.walk([&](DbAllocOp dbAlloc) {
       if (dbAlloc.getGuid().use_empty() && dbAlloc.getPtr().use_empty()) {
@@ -250,7 +243,8 @@ struct DeadCodeEliminationPass
   /// This handles "phantom acquires" - acquires for arrays visible in a
   /// parallel scope but not actually accessed in a particular EDT.
   /// The acquire's ptr is used as EDT dependency, but the corresponding
-  /// block argument inside the EDT body has no real memory uses (only releases).
+  /// block argument inside the EDT body has no real memory uses (only
+  /// releases).
   unsigned removeUnusedEdtDependencies(ModuleOp module) {
     unsigned removed = 0;
 

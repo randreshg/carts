@@ -6,7 +6,9 @@
 #include "arts/Transforms/DbTransforms.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/OpRemovalManager.h"
+#include "arts/Utils/EdtUtils.h"
+#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/RemovalUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "llvm/ADT/DenseSet.h"
@@ -445,7 +447,7 @@ void ChunkedRewriter::rewriteDbRefUsers(
       if (auto memrefType = newElementType.dyn_cast<MemRefType>()) {
         if (memrefType.getRank() >= 2) {
           // Multi-dimensional memref with single index = linearized access
-          if (auto staticStride = getStaticStride(memrefType)) {
+          if (auto staticStride = DatablockUtils::DatablockUtils::getStaticStride(memrefType)) {
             if (*staticStride > 1) {
               isLinearized = true;
               stride = builder.create<arith::ConstantIndexOp>(userLoc, *staticStride);
@@ -595,10 +597,10 @@ void ElementWiseRewriter::rewriteDbRefUsers(
     if (elementIndices.size() == 1 && oldElementSizes_.size() >= 2) {
       // Multi-dimensional old element with single index = linearized access
       // Use stored oldElementSizes_ for proper stride (static or dynamic)
-      stride = getStrideValue(builder, userLoc, oldElementSizes_);
+      stride = DatablockUtils::DatablockUtils::getStrideValue(builder, userLoc, oldElementSizes_);
       if (stride) {
         // Check if stride > 1 (for static case)
-        if (auto staticStride = getStaticStride(oldElementSizes_)) {
+        if (auto staticStride = DatablockUtils::DatablockUtils::getStaticStride(oldElementSizes_)) {
           if (*staticStride > 1) {
             isLinearized = true;
             LLVM_DEBUG(llvm::dbgs()
@@ -767,7 +769,7 @@ ElementWiseRewriter::localizeCoordinates(ArrayRef<Value> globalIndices,
     if (oldElementSizes_.size() >= 2) {
       // Multi-dimensional old element with single index = linearized access
       // Use stored oldElementSizes_ for proper stride (static or dynamic)
-      Value stride = getStrideValue(builder, loc, oldElementSizes_);
+      Value stride = DatablockUtils::DatablockUtils::getStrideValue(builder, loc, oldElementSizes_);
       if (stride) {
         // THE KEY FIX: scale offset by stride before subtracting!
         // localLinear = globalLinear - (offset * stride)
@@ -775,7 +777,7 @@ ElementWiseRewriter::localizeCoordinates(ArrayRef<Value> globalIndices,
         Value localLinear =
             builder.create<arith::SubIOp>(loc, globalLinear, scaledOffset);
 
-        if (auto staticStride = getStaticStride(oldElementSizes_)) {
+        if (auto staticStride = DatablockUtils::DatablockUtils::getStaticStride(oldElementSizes_)) {
           LLVM_DEBUG(llvm::dbgs()
                      << "  LINEARIZED: scaling offset by stride=" << *staticStride
                      << " from oldElementSizes\n");
@@ -959,7 +961,7 @@ static bool createDbRefPattern(Operation *op, Value dbPtr, Type elementType,
   Type resultType = elementType;
   if (!resultType || !resultType.isa<MemRefType>()) {
     if (auto dbAllocOp =
-            dyn_cast_or_null<DbAllocOp>(arts::getUnderlyingDbAlloc(dbPtr)))
+            dyn_cast_or_null<DbAllocOp>(DatablockUtils::getUnderlyingDbAlloc(dbPtr)))
       resultType = dbAllocOp.getAllocatedElementType();
   }
 
@@ -1128,7 +1130,7 @@ bool db::rebaseToAcquireView(Operation *op, DbAcquireOp acquire, Value dbPtr,
   ValueRange oldElementSizes;
 
   if (auto dbAllocOp = dyn_cast_or_null<DbAllocOp>(
-          arts::getUnderlyingDbAlloc(acquire.getSourcePtr()))) {
+          DatablockUtils::getUnderlyingDbAlloc(acquire.getSourcePtr()))) {
     innerRank = dbAllocOp.getElementSizes().size();
     oldElementSizes = dbAllocOp.getElementSizes();
     ARTS_DEBUG("db::rebaseToAcquireView: found DbAllocOp, oldElementSizes.size()="
@@ -1155,7 +1157,7 @@ bool db::rebaseToAcquireView(Operation *op, DbAcquireOp acquire, Value dbPtr,
     Value source = dbPtr ? dbPtr : dbRef.getSource();
     Type resultType = dbRef.getResult().getType();
     if (auto dbAllocOp =
-            dyn_cast_or_null<DbAllocOp>(arts::getUnderlyingDbAlloc(source)))
+            dyn_cast_or_null<DbAllocOp>(DatablockUtils::getUnderlyingDbAlloc(source)))
       resultType = dbAllocOp.getAllocatedElementType();
 
     /// Use DbRewriter for mode-aware index localization
@@ -1183,7 +1185,7 @@ bool db::rebaseToAcquireView(Operation *op, DbAcquireOp acquire, Value dbPtr,
       /// We need OLD element sizes (e.g., [4,16]) to detect linearized access.
       if (!isLinearized && !oldElementSizes.empty()) {
         if (oldElementSizes.size() >= 2) {
-          if (auto staticStride = getStaticStride(oldElementSizes)) {
+          if (auto staticStride = DatablockUtils::getStaticStride(oldElementSizes)) {
             if (*staticStride > 1) {
               isLinearized = true;
               stride = builder.create<arith::ConstantIndexOp>(loc, *staticStride);
@@ -1193,7 +1195,7 @@ bool db::rebaseToAcquireView(Operation *op, DbAcquireOp acquire, Value dbPtr,
           } else {
             // Dynamic stride - still linearized, compute at runtime
             isLinearized = true;
-            stride = getStrideValue(builder, loc, oldElementSizes);
+            stride = DatablockUtils::getStrideValue(builder, loc, oldElementSizes);
             ARTS_DEBUG("rebaseToAcquireView: isLinearized=true with dynamic stride");
           }
         }
@@ -1231,7 +1233,7 @@ bool db::rebaseToAcquireView(Operation *op, DbAcquireOp acquire, Value dbPtr,
                     [&](Value v) { return isVisibleIn(v, insertBlock); }))
     return false;
 
-  Operation *underlyingDb = arts::getUnderlyingDb(getMemref(op));
+  Operation *underlyingDb = DatablockUtils::getUnderlyingDb(getMemref(op));
   if (underlyingDb) {
     bool allZero = llvm::all_of(opIndices, [](Value v) {
       int64_t cst;
@@ -1263,7 +1265,7 @@ bool db::rebaseToAcquireView(Operation *op, DbAcquireOp acquire, Value dbPtr,
     /// We need OLD element sizes (e.g., [4,16]) to detect linearized access.
     if (!isLinearized && !oldElementSizes.empty()) {
       if (oldElementSizes.size() >= 2) {
-        if (auto staticStride = getStaticStride(oldElementSizes)) {
+        if (auto staticStride = DatablockUtils::getStaticStride(oldElementSizes)) {
           if (*staticStride > 1) {
             isLinearized = true;
             stride = builder.create<arith::ConstantIndexOp>(loc, *staticStride);
@@ -1273,7 +1275,7 @@ bool db::rebaseToAcquireView(Operation *op, DbAcquireOp acquire, Value dbPtr,
         } else {
           // Dynamic stride - still linearized, compute at runtime
           isLinearized = true;
-          stride = getStrideValue(builder, loc, oldElementSizes);
+          stride = DatablockUtils::getStrideValue(builder, loc, oldElementSizes);
           ARTS_DEBUG("rebaseToAcquireView (load/store): isLinearized=true with dynamic stride");
         }
       }
@@ -1305,7 +1307,7 @@ bool db::rebaseToAcquireView(Operation *op, DbAcquireOp acquire, Value dbPtr,
 bool db::rebaseAllUsersToAcquireView(DbAcquireOp acquire, OpBuilder &builder) {
   ARTS_DEBUG("db::rebaseAllUsersToAcquireView - entering");
 
-  auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(acquire);
+  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
   if (!blockArg)
     return false;
 
@@ -1356,7 +1358,7 @@ bool db::rebaseAllUsersToAcquireView(DbAcquireOp acquire, OpBuilder &builder) {
   ValueRange oldElementSizes;
 
   if (auto dbAllocOp = dyn_cast_or_null<DbAllocOp>(
-          arts::getUnderlyingDbAlloc(acquire.getSourcePtr()))) {
+          DatablockUtils::getUnderlyingDbAlloc(acquire.getSourcePtr()))) {
     innerRank = dbAllocOp.getElementSizes().size();
     oldElementSizes = dbAllocOp.getElementSizes();
   }
@@ -1378,7 +1380,7 @@ bool db::rebaseAllUsersToAcquireView(DbAcquireOp acquire, OpBuilder &builder) {
 
   Type derivedType = targetType;
   if (auto dbAllocOp =
-          dyn_cast_or_null<DbAllocOp>(arts::getUnderlyingDbAlloc(blockArg)))
+          dyn_cast_or_null<DbAllocOp>(DatablockUtils::getUnderlyingDbAlloc(blockArg)))
     derivedType = dbAllocOp.getAllocatedElementType();
 
   for (Operation *user : users) {
@@ -1410,7 +1412,7 @@ bool db::rebaseAllUsersToAcquireView(DbAcquireOp acquire, OpBuilder &builder) {
         /// We need OLD element sizes (e.g., [4,16]) to detect linearized access.
         if (!isLinearized && !oldElementSizes.empty()) {
           if (oldElementSizes.size() >= 2) {
-            if (auto staticStride = getStaticStride(oldElementSizes)) {
+            if (auto staticStride = DatablockUtils::getStaticStride(oldElementSizes)) {
               if (*staticStride > 1) {
                 isLinearized = true;
                 stride = builder.create<arith::ConstantIndexOp>(loc, *staticStride);
@@ -1420,7 +1422,7 @@ bool db::rebaseAllUsersToAcquireView(DbAcquireOp acquire, OpBuilder &builder) {
             } else {
               // Dynamic stride - still linearized, compute at runtime
               isLinearized = true;
-              stride = getStrideValue(builder, loc, oldElementSizes);
+              stride = DatablockUtils::getStrideValue(builder, loc, oldElementSizes);
               ARTS_DEBUG("rebaseAllUsers: isLinearized=true with dynamic stride");
             }
           }
@@ -1637,7 +1639,7 @@ bool DbAllocPromotion::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
                                        Value startChunk) {
   ARTS_DEBUG("DbAllocPromotion::rebaseEdtUsers - isChunked=" << isChunked_);
 
-  auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(acquire);
+  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
   if (!blockArg)
     return false;
 
@@ -1663,7 +1665,7 @@ bool DbAllocPromotion::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
 
   Type derivedType = targetType;
   if (auto dbAlloc =
-          dyn_cast_or_null<DbAllocOp>(arts::getUnderlyingDbAlloc(blockArg)))
+          dyn_cast_or_null<DbAllocOp>(DatablockUtils::getUnderlyingDbAlloc(blockArg)))
     derivedType = dbAlloc.getAllocatedElementType();
 
   /// Get element offset from hints for element-wise mode
@@ -1762,7 +1764,7 @@ FailureOr<DbAllocOp> DbAllocPromotion::apply(OpBuilder &builder) {
     opsToRemove.insert(oldAlloc_.getOperation());
 
   /// 6. Clean up removed operations
-  OpRemovalManager removalMgr;
+  RemovalUtils removalMgr;
   for (Operation *op : opsToRemove)
     removalMgr.markForRemoval(op);
   removalMgr.removeAllMarked();
@@ -1790,7 +1792,7 @@ void DbAllocPromotion::rewriteAcquire(DbAcquireOp acquire, Value elemOffset,
     acquire.getPtr().setType(newPtrType);
 
     /// Also update EDT block argument type if this acquire feeds an EDT
-    auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(acquire);
+    auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
     if (blockArg && blockArg.getType() != newPtrType)
       blockArg.setType(newPtrType);
   }
@@ -1872,7 +1874,7 @@ void DbAllocPromotion::rewriteAcquire(DbAcquireOp acquire, Value elemOffset,
     ///
     /// For element_sizes = [D0, D1, D2, ...], stride = D1 * D2 * ...
     /// This is the product of TRAILING dimensions, NOT all dimensions!
-    if (auto staticStride = getStaticElementStride(oldAlloc_)) {
+    if (auto staticStride = DatablockUtils::getStaticElementStride(oldAlloc_)) {
       if (*staticStride > 1) {
         acquire->setAttr("element_stride",
             builder.getIndexAttr(*staticStride));
@@ -1888,7 +1890,7 @@ void DbAllocPromotion::rewriteAcquire(DbAcquireOp acquire, Value elemOffset,
     /// (memref<?xf64>)
     ///   Old: db_ref[0] -> memref<?x?xf64>, load %ref[row,col]
     ///   New: db_ref[row] -> memref<?xf64>, load %ref[col]
-    auto [edt, blockArg] = arts::getEdtBlockArgumentForAcquire(acquire);
+    auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
     if (!blockArg)
       return;
 
@@ -1965,7 +1967,7 @@ void DbAllocPromotion::rewriteAcquire(DbAcquireOp acquire, Value elemOffset,
           ARTS_DEBUG("rewriteAcquire: oldElementSizes.size()=" << oldElementSizes.size());
           if (oldElementSizes.size() >= 2) {
             // Multi-dimensional: need stride computation
-            if (auto staticStride = getStaticElementStride(oldAlloc_)) {
+            if (auto staticStride = DatablockUtils::getStaticElementStride(oldAlloc_)) {
               if (*staticStride > 1) {
                 stride = builder.create<arith::ConstantIndexOp>(userLoc, *staticStride);
                 ARTS_DEBUG("Element-wise linearized: using OLD allocation stride="
@@ -1973,7 +1975,7 @@ void DbAllocPromotion::rewriteAcquire(DbAcquireOp acquire, Value elemOffset,
               }
             } else {
               // Dynamic dimensions - use helper to compute stride
-              stride = getElementStrideValue(builder, userLoc, oldAlloc_);
+              stride = DatablockUtils::getElementStrideValue(builder, userLoc, oldAlloc_);
             }
           }
           // Single dimension: stride = 1, no scaling needed

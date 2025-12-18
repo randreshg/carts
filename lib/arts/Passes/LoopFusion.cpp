@@ -6,27 +6,27 @@
 ///
 /// Before (2 separate loops with implicit barrier between them):
 ///   arts.edt <parallel> {
-///     arts.for(%c0) to(%N) {  // Stage 1: E = A * B
+///     arts.for(%c0) to(%N) {  /// Stage 1: E = A * B
 ///       %E_view = arts.db_acquire ...
-///       // compute E[i]
+///       /// compute E[i]
 ///       arts.db_release %E_view
 ///     }
-///     // implicit barrier here
-///     arts.for(%c0) to(%N) {  // Stage 2: F = C * D (independent!)
+///     /// implicit barrier here
+///     arts.for(%c0) to(%N) {  /// Stage 2: F = C * D (independent!)
 ///       %F_view = arts.db_acquire ...
-///       // compute F[i]
+///       /// compute F[i]
 ///       arts.db_release %F_view
 ///     }
 ///   }
 ///
 /// After (independent loops fused, no barrier):
 ///   arts.edt <parallel> {
-///     arts.for(%c0) to(%N) {  // Fused: E & F computed together
+///     arts.for(%c0) to(%N) {  /// Fused: E & F computed together
 ///       %E_view = arts.db_acquire ...
-///       // compute E[i]
+///       /// compute E[i]
 ///       arts.db_release %E_view
 ///       %F_view = arts.db_acquire ...
-///       // compute F[i]
+///       /// compute F[i]
 ///       arts.db_release %F_view
 ///     }
 ///   }
@@ -41,6 +41,7 @@
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/DatablockUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/IR/IRMapping.h"
@@ -60,7 +61,7 @@ struct LoopFusionPass : public arts::ArtsLoopFusionBase<LoopFusionPass> {
   void runOnOperation() override {
     ModuleOp module = getOperation();
 
-    // Get LoopAnalysis from ArtsAnalysisManager
+    /// Get LoopAnalysis from ArtsAnalysisManager
     LoopAnalysis &loopAnalysis = AM->getLoopAnalysis();
 
     module.walk([&](EdtOp parallelEdt) {
@@ -80,7 +81,7 @@ struct LoopFusionPass : public arts::ArtsLoopFusionBase<LoopFusionPass> {
           ForOp a = forOps[i];
           ForOp b = forOps[i + 1];
 
-          // Skip if barrier between them
+          /// Skip if barrier between them
           Operation *next = a->getNextNode();
           while (next && next != b.getOperation()) {
             if (isa<BarrierOp>(next))
@@ -90,7 +91,8 @@ struct LoopFusionPass : public arts::ArtsLoopFusionBase<LoopFusionPass> {
           if (next != b.getOperation())
             continue;
 
-          if (haveCompatibleBounds(a, b) && areIndependent(a, b, loopAnalysis)) {
+          if (haveCompatibleBounds(a, b) &&
+              areIndependent(a, b, loopAnalysis)) {
             ARTS_INFO("Fusing independent for loops");
             fuseForOps(a, b);
             forOps.erase(forOps.begin() + i + 1);
@@ -113,16 +115,10 @@ private:
 } // namespace
 
 bool LoopFusionPass::haveCompatibleBounds(ForOp a, ForOp b) {
-  auto getConst = [](Value v) -> std::optional<int64_t> {
-    if (auto c = v.getDefiningOp<arith::ConstantIndexOp>())
-      return c.value();
-    return std::nullopt;
-  };
-
-  auto aLower = getConst(a.getLowerBound()[0]);
-  auto bLower = getConst(b.getLowerBound()[0]);
-  auto aUpper = getConst(a.getUpperBound()[0]);
-  auto bUpper = getConst(b.getUpperBound()[0]);
+  auto aLower = ValueUtils::getConstantValue(a.getLowerBound()[0]);
+  auto bLower = ValueUtils::getConstantValue(b.getLowerBound()[0]);
+  auto aUpper = ValueUtils::getConstantValue(a.getUpperBound()[0]);
+  auto bUpper = ValueUtils::getConstantValue(b.getUpperBound()[0]);
 
   if (aLower && bLower && *aLower != *bLower)
     return false;
@@ -155,8 +151,8 @@ DenseSet<Operation *> LoopFusionPass::getDbAccesses(ForOp forOp) {
     else
       return;
 
-    // Use ArtsUtils to trace to the underlying datablock
-    if (Operation *db = getUnderlyingDb(memref)) {
+    /// Use ArtsUtils to trace to the underlying datablock
+    if (Operation *db = DatablockUtils::getUnderlyingDb(memref)) {
       accesses.insert(db);
       ARTS_DEBUG("  Access -> underlying DB: " << *db);
     }
@@ -166,9 +162,9 @@ DenseSet<Operation *> LoopFusionPass::getDbAccesses(ForOp forOp) {
 }
 
 bool LoopFusionPass::areIndependent(ForOp a, ForOp b,
-                                        LoopAnalysis &loopAnalysis) {
-  // First check: no shared datablock accesses between loops
-  ARTS_DEBUG("=== Checking independence between two ForOps ===");
+                                    LoopAnalysis &loopAnalysis) {
+  /// First check: no shared datablock accesses between loops
+  ARTS_INFO("Checking independence between two ForOps");
   ARTS_DEBUG("Loop A:");
   auto aAccesses = getDbAccesses(a);
   ARTS_DEBUG("Loop B:");
@@ -181,23 +177,23 @@ bool LoopFusionPass::areIndependent(ForOp a, ForOp b,
     }
   }
 
-  // Second check: use LoopAnalysis to verify no cross-loop dependencies
+  /// Second check: use LoopAnalysis to verify no cross-loop dependencies
   LoopNode *loopNodeA = loopAnalysis.getLoopNode(a.getOperation());
   LoopNode *loopNodeB = loopAnalysis.getLoopNode(b.getOperation());
 
   if (loopNodeA && loopNodeB) {
-    // Check parallel classification from loop metadata
+    /// Check parallel classification from loop metadata
     auto classA = loopNodeA->parallelClassification;
     auto classB = loopNodeB->parallelClassification;
 
-    // If either loop is Sequential due to dependencies, be conservative
+    /// If either loop is Sequential due to dependencies, be conservative
     if (classA == LoopMetadata::ParallelClassification::Sequential ||
         classB == LoopMetadata::ParallelClassification::Sequential) {
       ARTS_DEBUG("One of the loops is Sequential - not fusing");
       return false;
     }
 
-    // Check for inter-iteration dependencies
+    /// Check for inter-iteration dependencies
     if (loopNodeA->hasInterIterationDeps.has_value() &&
         loopNodeA->hasInterIterationDeps.value()) {
       ARTS_DEBUG("Loop A has inter-iteration dependencies");
@@ -209,7 +205,7 @@ bool LoopFusionPass::areIndependent(ForOp a, ForOp b,
   }
 
   ARTS_DEBUG("Loops are independent - can fuse");
-  return true; // No shared memrefs - loops are independent
+  return true; /// No shared memrefs - loops are independent
 }
 
 void LoopFusionPass::fuseForOps(ForOp first, ForOp second) {
