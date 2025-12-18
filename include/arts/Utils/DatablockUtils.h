@@ -69,7 +69,10 @@ public:
   static SmallVector<Value> getOffsetsFromDb(Value datablockPtr);
 
   /// Check if a datablock operation has a single size of 1.
-  static bool dbHasSingleSize(Operation *dbOp);
+  static bool hasSingleSize(Operation *dbOp);
+
+  /// Check if allocation is coarse-grained (all sizes == 1).
+  static bool isCoarseGrained(DbAllocOp alloc);
 
   ///===----------------------------------------------------------------------===///
   /// Datablock Stride Computation
