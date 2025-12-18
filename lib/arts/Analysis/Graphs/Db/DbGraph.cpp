@@ -10,6 +10,7 @@
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -139,7 +140,7 @@ DbAcquireNode *DbGraph::getOrCreateAcquireNode(DbAcquireOp op) {
 
   /// Use getUnderlyingDbAlloc to trace through acquires to find the ultimate
   /// DbAllocOp
-  Operation *allocOp = getUnderlyingDbAlloc(sourcePtr);
+  Operation *allocOp = DatablockUtils::getUnderlyingDbAlloc(sourcePtr);
   if (!allocOp) {
     ARTS_ERROR("Cannot get underlying DB alloc for acquire");
     return nullptr;
@@ -155,7 +156,7 @@ DbAcquireNode *DbGraph::getOrCreateAcquireNode(DbAcquireOp op) {
 
   /// Get the immediate underlying DB from sourcePtr to determine if this is a
   /// nested acquire
-  Operation *immediateUnderlying = getUnderlyingDb(sourcePtr, 0);
+  Operation *immediateUnderlying = DatablockUtils::getUnderlyingDb(sourcePtr, 0);
   if (!immediateUnderlying) {
     ARTS_ERROR("Cannot get immediate underlying DB for acquire");
     return nullptr;

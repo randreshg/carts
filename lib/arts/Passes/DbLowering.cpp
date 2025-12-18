@@ -15,6 +15,8 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/EdtUtils.h"
+#include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/Metadata/IdRegistry.h"
 #include "arts/Utils/OperationAttributes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -70,7 +72,7 @@ void DbLoweringPass::runOnOperation() {
   ARTS_INFO_HEADER(DbLowering);
   ARTS_DEBUG_REGION(module.dump(););
   convertDbAllocOps();
-  OpRemovalManager removalMgr;
+  RemovalUtils removalMgr;
   for (Operation *op : opsToRemove)
     removalMgr.markForRemoval(op);
   removalMgr.removeAllMarked(module, /*recursive=*/false);
@@ -375,7 +377,7 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
 
   /// Find the EDT that uses this acquire op and the corresponding block
   /// argument
-  auto [edtUser, blockArg] = arts::getEdtBlockArgumentForAcquire(acquireOp);
+  auto [edtUser, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquireOp);
   if (!edtUser || !blockArg) {
     ARTS_DEBUG("  - Acquire has no EDT consumer; replacing uses directly");
     rewriteBlockUses(acquireOp.getPtr(), newPtr ? newPtr : acquireOp.getPtr());
@@ -403,7 +405,7 @@ Value DbLoweringPass::getLLVMPtr(Value base, ValueRange opIndices,
   if (opIndices.empty())
     return AC->castToLLVMPtr(base, loc);
 
-  SmallVector<Value> sizes = getSizesFromDb(base);
+  SmallVector<Value> sizes = DatablockUtils::getSizesFromDb(base);
   SmallVector<Value> strides = AC->computeStridesFromSizes(sizes, loc);
   SmallVector<Value> indices(opIndices.begin(), opIndices.end());
   return AC->create<DbGepOp>(loc, AC->getLLVMPointerType(base), base, indices,

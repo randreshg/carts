@@ -8,13 +8,13 @@
 /// Before (O(n^2) loads - pointer loaded every iteration):
 ///   scf.for %i = ... {
 ///     scf.for %j = ... {
-///       %ptr = llvm.load %dep_ptr_addr : !llvm.ptr  // Redundant load!
+///       %ptr = llvm.load %dep_ptr_addr : !llvm.ptr  /// Redundant load!
 ///       %val = polygeist.load %ptr[%i, %j] : f64
 ///     }
 ///   }
 ///
 /// After (O(1) loads - pointer loaded once before loop nest):
-///   %ptr = llvm.load %dep_ptr_addr : !llvm.ptr  // Hoisted out
+///   %ptr = llvm.load %dep_ptr_addr : !llvm.ptr  /// Hoisted out
 ///   scf.for %i = ... {
 ///     scf.for %j = ... {
 ///       %val = polygeist.load %ptr[%i, %j] : f64
@@ -53,26 +53,24 @@ static bool isDefinedOutside(Region &region, Value value) {
 static bool isDepsPtrLoad(LLVM::LoadOp loadOp) {
   Value addr = loadOp.getAddr();
 
-  // Check if loading a pointer type (ptr -> ptr)
+  /// Check if loading a pointer type (ptr -> ptr)
   auto resultType = loadOp.getResult().getType();
   if (!isa<LLVM::LLVMPointerType>(resultType))
     return false;
 
-  // Check if the address comes from arts.dep_gep or arts.db_gep
+  /// Check if the address comes from arts.dep_gep or arts.db_gep
   if (auto defOp = addr.getDefiningOp()) {
-    // arts.dep_gep returns (guid, ptr) - we want loads from the ptr result
-    if (defOp->getName().getStringRef() == "arts.dep_gep" ||
-        defOp->getName().getStringRef() == "arts.db_gep") {
+    /// arts.dep_gep returns (guid, ptr) - we want loads from the ptr result
+    if (dyn_cast<DepGepOp>(defOp) || dyn_cast<DbGepOp>(defOp))
       return true;
-    }
 
-    // Also check for GEP chains that access struct fields
+    /// Also check for GEP chains that access struct fields
     if (auto gepOp = dyn_cast<LLVM::GEPOp>(defOp)) {
-      // GEP into a struct type accessing field 2 (ptr field)
+      /// GEP into a struct type accessing field 2 (ptr field)
       auto sourceType = gepOp.getSourceElementType();
       if (auto structType = dyn_cast<LLVM::LLVMStructType>(sourceType)) {
-        // artsEdtDep_t is struct { i64, i32, ptr, i32, i1 }
-        // Field 2 is the ptr field
+        /// artsEdtDep_t is struct { i64, i32, ptr, i32, i1 }
+        /// Field 2 is the ptr field
         return true;
       }
     }
@@ -87,9 +85,8 @@ static scf::ForOp findOutermostLoop(Operation *op) {
   Operation *parent = op->getParentOp();
 
   while (parent) {
-    if (auto forOp = dyn_cast<scf::ForOp>(parent)) {
+    if (auto forOp = dyn_cast<scf::ForOp>(parent))
       outermost = forOp;
-    }
     parent = parent->getParentOp();
   }
 
@@ -107,7 +104,7 @@ static bool allOperandsDefinedOutside(Operation *op, Region &region) {
 
 /// Hoist a load and its address computation (GEP) out of loops
 static bool hoistLoadOutOfLoop(LLVM::LoadOp loadOp, scf::ForOp outermostLoop) {
-  // Get the address defining op (should be a GEP or arts op)
+  /// Get the address defining op (should be a GEP or arts op)
   Value addr = loadOp.getAddr();
   Operation *addrOp = addr.getDefiningOp();
 
@@ -116,14 +113,15 @@ static bool hoistLoadOutOfLoop(LLVM::LoadOp loadOp, scf::ForOp outermostLoop) {
 
   Region &loopRegion = outermostLoop.getRegion();
 
-  // Check if we can hoist - all operands of the address op must be loop-invariant
+  /// Check if we can hoist - all operands of the address op must be
+  /// loop-invariant
   if (!allOperandsDefinedOutside(addrOp, loopRegion))
     return false;
 
-  // Move the address computation before the loop
+  /// Move the address computation before the loop
   addrOp->moveBefore(outermostLoop);
 
-  // Move the load before the loop
+  /// Move the load before the loop
   loadOp->moveBefore(outermostLoop);
 
   ARTS_INFO("Hoisted data pointer load: " << loadOp);
@@ -135,7 +133,7 @@ struct DataPointerHoistingPass
   void runOnOperation() override;
 };
 
-} // end anonymous namespace
+} // namespace
 
 void DataPointerHoistingPass::runOnOperation() {
   ModuleOp module = getOperation();
@@ -143,28 +141,28 @@ void DataPointerHoistingPass::runOnOperation() {
 
   int hoistedCount = 0;
 
-  // Process each function
+  /// Process each function
   module.walk([&](func::FuncOp funcOp) {
-    // Only process EDT functions (start with __arts_edt_)
+    /// Only process EDT functions (start with __arts_edt_)
     if (!funcOp.getName().starts_with("__arts_edt_"))
       return;
 
     ARTS_DEBUG_TYPE("Processing EDT function: " << funcOp.getName());
 
-    // Collect loads to hoist (don't modify while iterating)
+    /// Collect loads to hoist (don't modify while iterating)
     SmallVector<std::pair<LLVM::LoadOp, scf::ForOp>> loadsToHoist;
 
     funcOp.walk([&](LLVM::LoadOp loadOp) {
-      // Check if this is a deps pointer load
+      /// Check if this is a deps pointer load
       if (!isDepsPtrLoad(loadOp))
         return;
 
-      // Find outermost enclosing loop
+      /// Find outermost enclosing loop
       scf::ForOp outermostLoop = findOutermostLoop(loadOp);
       if (!outermostLoop)
         return;
 
-      // Check if address operands are loop-invariant
+      /// Check if address operands are loop-invariant
       Value addr = loadOp.getAddr();
       Operation *addrOp = addr.getDefiningOp();
       if (!addrOp)
@@ -177,11 +175,10 @@ void DataPointerHoistingPass::runOnOperation() {
       loadsToHoist.push_back({loadOp, outermostLoop});
     });
 
-    // Now hoist the collected loads
+    /// Now hoist the collected loads
     for (auto &[loadOp, outermostLoop] : loadsToHoist) {
-      if (hoistLoadOutOfLoop(loadOp, outermostLoop)) {
+      if (hoistLoadOutOfLoop(loadOp, outermostLoop))
         hoistedCount++;
-      }
     }
   });
 

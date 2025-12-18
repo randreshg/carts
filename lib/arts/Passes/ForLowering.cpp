@@ -24,6 +24,7 @@
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "arts/Utils/OperationAttributes.h"
 
@@ -123,15 +124,15 @@ struct ReductionInfo {
 
 ///===----------------------------------------------------------------------===///
 // ParallelRegionAnalysis - Analyze parallel EDT contents for splitting
-///===----------------------------------------------------------------------===///
 /// Categorizes operations in a parallel EDT relative to arts.for operations.
 /// Used to split the parallel region into pre-for and post-for sections.
+///===----------------------------------------------------------------------===///
 struct ParallelRegionAnalysis {
   SmallVector<Operation *, 8> opsBeforeFor;
   SmallVector<ForOp, 4> forOps;
   SmallVector<Operation *, 8> opsAfterFor;
 
-  /// Track which block arguments (datablocks) are used by post-for operations.
+  /// Track which block arguments (DBs) are used by post-for operations.
   /// Used for datablock reacquisition when creating continuation parallel.
   SetVector<BlockArgument> depsUsedByFor, depsUsedAfterFor;
 
@@ -169,7 +170,7 @@ struct ParallelRegionAnalysis {
     return analysis;
   }
 
-  /// Analyze which block arguments (datablocks) are used by for and post-for
+  /// Analyze which block arguments (DBs) are used by for and post-for
   /// operations. Must be called after analyze() and before creating
   /// continuation parallel.
   void analyzeDependenciesForSplit(EdtOp parallelEdt) {
@@ -222,44 +223,6 @@ static Value createZeroValue(ArtsCodegen *AC, Type elemType, Location loc) {
   return Value();
 }
 
-///===----------------------------------------------------------------------===///
-// DB Rewiring Helpers - Trace dependencies back to DbAllocOp
-/// Trace a dependency back to its root DbAllocOp.
-/// Returns {guid, ptr} from the DbAllocOp, or nullopt if not found.
-/// This is critical for the parallel region splitting transformation:
-/// - Before: Task EDTs acquire from parallel EDT's block arguments
-///   DbAllocOp -> DbAcquireOp (for parallel) -> block_arg -> DbAcquireOp (task)
-/// - After: Task EDTs acquire directly from DbAllocOp
-///   DbAllocOp -> DbAcquireOp (for task EDT)
-///===----------------------------------------------------------------------===///
-static std::optional<std::pair<Value, Value>> traceToDbAlloc(Value dep) {
-  /// Case 1: Direct DbAllocOp result (either guid or ptr)
-  if (auto allocOp = dep.getDefiningOp<DbAllocOp>())
-    return std::make_pair(allocOp.getGuid(), allocOp.getPtr());
-
-  /// Case 2: DbAcquireOp - trace through sourceGuid or sourcePtr
-  if (auto acqOp = dep.getDefiningOp<DbAcquireOp>()) {
-    /// Prefer tracing through sourceGuid if it exists
-    if (Value srcGuid = acqOp.getSourceGuid())
-      return traceToDbAlloc(srcGuid);
-    /// Otherwise trace through sourcePtr
-    if (Value srcPtr = acqOp.getSourcePtr())
-      return traceToDbAlloc(srcPtr);
-  }
-
-  /// Case 3: Block argument - trace through parent EDT's dependencies
-  if (auto blockArg = dep.dyn_cast<BlockArgument>()) {
-    Operation *parentOp = blockArg.getOwner()->getParentOp();
-    if (auto parentEdt = dyn_cast<EdtOp>(parentOp)) {
-      unsigned idx = blockArg.getArgNumber();
-      ValueRange parentDeps = parentEdt.getDependencies();
-      if (idx < parentDeps.size())
-        return traceToDbAlloc(parentDeps[idx]);
-    }
-  }
-
-  return std::nullopt;
-}
 
 ///===----------------------------------------------------------------------===///
 // ForLowering Pass Implementation
@@ -304,7 +267,7 @@ private:
                               ParallelRegionAnalysis &analysis, Location loc);
 
   /// Create a continuation parallel EDT for post-for work.
-  /// Reacquires all datablocks from the original parallel EDT.
+  /// Reacquires all DBs from the original parallel EDT.
   EdtOp createContinuationParallel(ArtsCodegen &AC, EdtOp originalParallel,
                                    ParallelRegionAnalysis &analysis,
                                    Location loc);
@@ -320,7 +283,6 @@ private:
 
 ///===----------------------------------------------------------------------===///
 // LoopInfo Implementation - Work Partitioning Logic
-///===----------------------------------------------------------------------===///
 /// LoopInfo computes how to distribute loop iterations across workers using
 /// block distribution. This ensures balanced work with minimal overhead.
 ///===----------------------------------------------------------------------===///
@@ -346,7 +308,6 @@ void LoopInfo::initialize() {
 
   ///===--------------------------------------------------------------------===///
   /// Compute total chunks: ceil(totalIterations / chunkSize)
-  ///===--------------------------------------------------------------------===///
   /// Formula: totalChunks = (totalIterations + chunkSize - 1) / chunkSize
   Value adjustedIterations = AC->create<arith::AddIOp>(
       loc, totalIterations,
@@ -360,7 +321,6 @@ void LoopInfo::computeWorkerIterationsBlock(Value workerId) {
 
   ///===--------------------------------------------------------------------===///
   /// Block Distribution Strategy with Chunk Size Support
-  ///===--------------------------------------------------------------------===///
   /// This function computes the iteration bounds for a specific worker using
   /// block distribution. When a chunk size is specified (e.g., schedule(static,
   /// 4)), we distribute chunks to workers rather than individual iterations.
@@ -486,7 +446,7 @@ void ForLoweringPass::lowerParallelEdt(EdtOp parallelEdt) {
 
   ARTS_INFO(" - Found " << analysis.forOps.size() << " arts.for operation(s)");
 
-  /// Analyze which datablocks are used by for and post-for operations
+  /// Analyze which DBs are used by for and post-for operations
   analysis.analyzeDependenciesForSplit(parallelEdt);
 
   bool hasPreFor = analysis.hasWorkBefore();
@@ -809,7 +769,7 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
       /// rather than using the acquire ptr directly
       if (idx < existingResultPtrs.size()) {
         Value existingPtr = existingResultPtrs[idx];
-        auto allocInfo = traceToDbAlloc(existingPtr);
+        auto allocInfo = DatablockUtils::DatablockUtils::traceToDbAlloc(existingPtr);
         if (allocInfo) {
           auto [rootGuid, rootPtr] = *allocInfo;
           redInfo.finalResultGuids.push_back(rootGuid);
@@ -1304,7 +1264,7 @@ EdtOp ForLoweringPass::createContinuationParallel(
   /// Track which original arg indices map to which new dep indices
   SmallVector<unsigned> origArgIndices;
 
-  /// Reacquire datablocks used by post-for operations
+  /// Reacquire DBs used by post-for operations
   for (BlockArgument origArg : analysis.depsUsedAfterFor) {
     unsigned idx = origArg.getArgNumber();
     if (idx >= originalDeps.size()) {
@@ -1315,7 +1275,7 @@ EdtOp ForLoweringPass::createContinuationParallel(
     Value dep = originalDeps[idx];
 
     /// Trace back to original DbAllocOp
-    auto allocInfo = traceToDbAlloc(dep);
+    auto allocInfo = DatablockUtils::traceToDbAlloc(dep);
     if (!allocInfo) {
       ARTS_ERROR("Could not trace dependency to DbAllocOp for arg " << idx);
       continue;
@@ -1471,7 +1431,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
       continue;
 
     /// Rewiring: Trace to DbAllocOp and acquire from there
-    auto allocInfo = traceToDbAlloc(parentDep);
+    auto allocInfo = DatablockUtils::traceToDbAlloc(parentDep);
     if (!allocInfo) {
       ARTS_ERROR("Could not trace dependency " << idx << " to DbAllocOp");
       continue;
@@ -1479,8 +1439,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     auto [rootGuid, rootPtr] = *allocInfo;
 
     /// Get offsets/sizes from parent acquire for hints
-    SmallVector<Value> chunkOffsets = getOffsetsFromDb(parentDep);
-    SmallVector<Value> chunkSizes = getSizesFromDb(parentDep);
+    SmallVector<Value> chunkOffsets = DatablockUtils::getOffsetsFromDb(parentDep);
+    SmallVector<Value> chunkSizes = DatablockUtils::getSizesFromDb(parentDep);
     if (chunkOffsets.empty())
       chunkOffsets.push_back(AC->createIndexConstant(0, loc));
     if (chunkSizes.empty())

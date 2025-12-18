@@ -158,8 +158,9 @@ bool EdtGraph::areEdtsIndependent(EdtOp a, EdtOp b) {
       return false;
   }
 
-  // Optional: Check associated loops for additional dependency info via LoopMetadata
-  // If EDTs have associated loops, check their parallel classification
+  // Optional: Check associated loops for additional dependency info via
+  // LoopMetadata If EDTs have associated loops, check their parallel
+  // classification
   auto loopsA = nodeA->getAssociatedLoops();
   auto loopsB = nodeB->getAssociatedLoops();
   for (auto *loopA : loopsA) {

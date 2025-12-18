@@ -43,7 +43,6 @@ std::unique_ptr<Pass> createEdtInvariantCodeMotionPass();
 std::unique_ptr<Pass> createDataPointerHoistingPass();
 std::unique_ptr<Pass> createAliasScopeGenPass();
 std::unique_ptr<Pass> createLoopVectorizationHintsPass();
-std::unique_ptr<Pass> createPrefetchHintsPass();
 std::unique_ptr<Pass> createScalarReplacementPass();
 std::unique_ptr<Pass> createEdtPtrRematerializationPass();
 std::unique_ptr<Pass> createDbLoweringPass(uint64_t idStride = 1000);

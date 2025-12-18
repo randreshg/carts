@@ -21,6 +21,7 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
+#include "arts/Utils/OperationAttributes.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -34,6 +35,21 @@ using namespace mlir;
 using namespace mlir::arts;
 
 namespace {
+
+/// Copy loop attributes (arts.id and arts.loop) from source to target
+/// operation.
+static void copyLoopAttributes(Operation *source, Operation *target) {
+  if (!source || !target)
+    return;
+
+  /// Copy arts.id attribute
+  if (auto idAttr = source->getAttr(AttrNames::Operation::ArtsId))
+    target->setAttr(AttrNames::Operation::ArtsId, idAttr);
+
+  /// Copy arts.loop attribute
+  if (auto loopAttr = source->getAttr(AttrNames::LoopMetadata::Name))
+    target->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
+}
 
 /// Clear hasReductions for loops that no longer contain reduction operations
 /// (e.g., init loops created by loop distribution).
@@ -187,14 +203,16 @@ private:
     SmallVector<Operation *, 4> loopsInCurrentOrder;
 
     /// First, add the outer arts.for
-    if (auto idAttr = outerLoop->getAttrOfType<IntegerAttr>("arts.id")) {
+    if (auto idAttr = outerLoop->getAttrOfType<IntegerAttr>(
+            AttrNames::Operation::ArtsId)) {
       loopById[idAttr.getInt()] = outerLoop.getOperation();
       loopsInCurrentOrder.push_back(outerLoop.getOperation());
     }
 
     /// Walk inner scf.for loops and collect them
     outerLoop->walk([&](scf::ForOp innerFor) {
-      if (auto idAttr = innerFor->getAttrOfType<IntegerAttr>("arts.id")) {
+      if (auto idAttr = innerFor->getAttrOfType<IntegerAttr>(
+              AttrNames::Operation::ArtsId)) {
         loopById[idAttr.getInt()] = innerFor.getOperation();
         loopsInCurrentOrder.push_back(innerFor.getOperation());
       }
@@ -249,7 +267,6 @@ private:
       /// Check if we need to swap the inner two loops
       /// targetLoops[1] and targetLoops[2] are the desired order for inner
       /// loops
-
       scf::ForOp firstInner = dyn_cast<scf::ForOp>(loopsInCurrentOrder[1]);
       scf::ForOp secondInner = dyn_cast<scf::ForOp>(loopsInCurrentOrder[2]);
 
@@ -355,18 +372,12 @@ private:
         });
 
     /// Copy attributes from original loops
-    if (auto idAttr = secondInner->getAttr("arts.id"))
-      newOuterLoop->setAttr("arts.id", idAttr);
-    if (auto loopAttr = secondInner->getAttr("arts.loop"))
-      newOuterLoop->setAttr("arts.loop", loopAttr);
+    copyLoopAttributes(secondInner.getOperation(), newOuterLoop.getOperation());
 
     auto &innerLoops = newOuterLoop.getBody()->getOperations();
     for (Operation &op : innerLoops) {
       if (auto forOp = dyn_cast<scf::ForOp>(&op)) {
-        if (auto idAttr = firstInner->getAttr("arts.id"))
-          forOp->setAttr("arts.id", idAttr);
-        if (auto loopAttr = firstInner->getAttr("arts.loop"))
-          forOp->setAttr("arts.loop", loopAttr);
+        copyLoopAttributes(firstInner.getOperation(), forOp.getOperation());
         break;
       }
     }
@@ -438,11 +449,12 @@ private:
         });
 
     /// Copy j loop attributes to init loop (sanitize: init has no reductions)
-    if (auto idAttr = firstInner->getAttr("arts.id"))
-      initLoop->setAttr("arts.id", idAttr);
-    if (auto loopAttr = firstInner->getAttr("arts.loop"))
-      initLoop->setAttr("arts.loop", sanitizeLoopMetadataForInitLoop(
-                                         loopAttr, firstInner->getContext()));
+    if (auto idAttr = firstInner->getAttr(AttrNames::Operation::ArtsId))
+      initLoop->setAttr(AttrNames::Operation::ArtsId, idAttr);
+    if (auto loopAttr = firstInner->getAttr(AttrNames::LoopMetadata::Name))
+      initLoop->setAttr(
+          AttrNames::LoopMetadata::Name,
+          sanitizeLoopMetadataForInitLoop(loopAttr, firstInner->getContext()));
 
     /// STEP 2: Create the interchanged reduction loop (for k: for j: reduce)
     auto newOuterLoop = builder.create<scf::ForOp>(
@@ -471,19 +483,13 @@ private:
         });
 
     /// Copy k loop attributes to new outer loop
-    if (auto idAttr = secondInner->getAttr("arts.id"))
-      newOuterLoop->setAttr("arts.id", idAttr);
-    if (auto loopAttr = secondInner->getAttr("arts.loop"))
-      newOuterLoop->setAttr("arts.loop", loopAttr);
+    copyLoopAttributes(secondInner.getOperation(), newOuterLoop.getOperation());
 
     /// Copy j loop attributes to new inner loop
     auto &innerLoops = newOuterLoop.getBody()->getOperations();
     for (Operation &op : innerLoops) {
       if (auto forOp = dyn_cast<scf::ForOp>(&op)) {
-        if (auto idAttr = firstInner->getAttr("arts.id"))
-          forOp->setAttr("arts.id", idAttr);
-        if (auto loopAttr = firstInner->getAttr("arts.loop"))
-          forOp->setAttr("arts.loop", loopAttr);
+        copyLoopAttributes(firstInner.getOperation(), forOp.getOperation());
         break;
       }
     }
