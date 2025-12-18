@@ -3,34 +3,36 @@ message(STATUS "POLYGEIST_INCLUDE_DIR: ${POLYGEIST_BUILD_DIR}/include")
 message(STATUS "POLYGEIST_LIBRARY_DIR: ${POLYGEIST_BUILD_DIR}/lib")
 
 add_mlir_dialect_library(MLIRArtsTransforms
-  ArtsInliner.cpp
-  DataPointerHoisting.cpp
-  AliasScopeGen.cpp
-  LoopVectorizationHints.cpp
-  ScalarReplacement.cpp
-  ConvertOpenMPToArts.cpp
-  DeadCodeElimination.cpp
-  Edt.cpp
-  CreateDbs.cpp
-  DbPartitioning.cpp
-  CollectMetadata.cpp
-  CanonicalizeMemrefs.cpp
-  Db.cpp
-  CreateEpochs.cpp
-  ConvertArtsToLLVM.cpp
-  EpochLowering.cpp
-  EdtLowering.cpp
-  EdtPtrRematerialization.cpp
-  EdtInvariantCodeMotion.cpp
-  EdtPtrRematerialization.cpp
-  DbLowering.cpp
-  ForLowering.cpp
-  LoopFusion.cpp
-  LoopReordering.cpp
-  LoopTransforms.cpp
-  ParallelEdtLowering.cpp
-  EdtLowering.cpp
-  Concurrency.cpp
+  # Transformation passes
+  Transformations/CollectMetadata.cpp
+  Transformations/CreateDbs.cpp
+  Transformations/CreateEpochs.cpp
+  Transformations/Concurrency.cpp
+  Transformations/ConvertOpenMPToArts.cpp
+  Transformations/ConvertArtsToLLVM.cpp
+  Transformations/DbLowering.cpp
+  Transformations/EdtLowering.cpp
+  Transformations/EpochLowering.cpp
+  Transformations/ForLowering.cpp
+  Transformations/ParallelEdtLowering.cpp
+  Transformations/LoopReordering.cpp
+  Transformations/EdtPtrRematerialization.cpp
+  
+  # Optimization passes
+  Optimizations/AliasScopeGen.cpp
+  Optimizations/DeadCodeElimination.cpp
+  Optimizations/ArtsInliner.cpp
+  Optimizations/CanonicalizeMemrefs.cpp
+  Optimizations/DataPointerHoisting.cpp
+  Optimizations/EdtInvariantCodeMotion.cpp
+  Optimizations/LoopFusion.cpp
+  Optimizations/LoopTransforms.cpp
+  Optimizations/LoopVectorizationHints.cpp
+  Optimizations/ScalarReplacement.cpp
+  Optimizations/Db.cpp
+  Optimizations/DbPartitioning.cpp
+  Optimizations/Edt.cpp
+  
   ${CARTS_TRANSFORMS_SOURCE_FILES}
   ${CARTS_UTILS_SOURCE_FILES}
   ${CARTS_CODEGEN_SOURCE_FILES}

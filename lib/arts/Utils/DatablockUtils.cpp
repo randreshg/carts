@@ -153,7 +153,7 @@ SmallVector<Value> DatablockUtils::getSizesFromDb(Value datablockPtr) {
   return getSizesFromDb(underlyingDb);
 }
 
-bool DatablockUtils::dbHasSingleSize(Operation *dbOp) {
+bool DatablockUtils::hasSingleSize(Operation *dbOp) {
   if (!dbOp)
     return false;
 
@@ -167,6 +167,13 @@ bool DatablockUtils::dbHasSingleSize(Operation *dbOp) {
     return false;
 
   return ValueUtils::isOneConstant(sizes[0]);
+}
+
+bool DatablockUtils::isCoarseGrained(DbAllocOp alloc) {
+  return llvm::all_of(alloc.getSizes(), [](Value v) {
+    int64_t val;
+    return ValueUtils::getConstantIndex(v, val) && val == 1;
+  });
 }
 
 SmallVector<Value> DatablockUtils::getOffsetsFromDb(Value datablockPtr) {
