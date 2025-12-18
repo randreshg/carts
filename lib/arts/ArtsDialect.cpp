@@ -661,22 +661,25 @@ LogicalResult DbAcquireOp::verify() {
   /// Check if the source has a single size of 1 and we are using indices
   if (dbIndices > 0) {
     Operation *sourceDb = DatablockUtils::getUnderlyingDb(getSourcePtr());
-    if (DatablockUtils::dbHasSingleSize(sourceDb)) {
+    if (DatablockUtils::hasSingleSize(sourceDb)) {
       return emitOpError(
-          "Cannot use indices on single-element datablock (size=1)");
+                 "Cannot use indices on single-element datablock (size=1)\n")
+             << *getOperation();
     }
   }
 
   auto offsetHints = getOffsetHints();
   if (!offsetHints.empty() && offsetHints.size() != dbSizes) {
     return emitOpError("offset_hints must match the number of sizes when set (")
-           << offsetHints.size() << " vs " << dbSizes << ")" << *getOperation();
+           << offsetHints.size() << " vs " << dbSizes << ")\n"
+           << *getOperation();
   }
 
   auto sizeHints = getSizeHints();
   if (!sizeHints.empty() && sizeHints.size() != dbSizes) {
     return emitOpError("size_hints must match the number of sizes when set (")
-           << sizeHints.size() << " vs " << dbSizes << ")" << *getOperation();
+           << sizeHints.size() << " vs " << dbSizes << ")\n"
+           << *getOperation();
   }
 
   /// NOTE: We do NOT warn about unused ptr results here because:
