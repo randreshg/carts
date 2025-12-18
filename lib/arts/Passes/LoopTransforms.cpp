@@ -1,26 +1,18 @@
 ///==========================================================================///
-/// File: LoopTransforms.cpp
+/// LoopTransforms.cpp - Reduction distribution for iter_args matmul patterns
 ///
-/// Additional loop transformations that complement LoopReordering.
+/// Transforms dot-product form to k-j update form for better cache locality.
+/// Handles patterns with scf.for iter_args (e.g., gemm).
 ///
-/// Primary target (PolyBench-like GEMM/2MM/3MM):
-///   Detect dot-product style matmul kernels inside `arts.for`:
-///     for j:
-///       sum = 0
-///       for k: sum += A[i,k] * B[k,j]
-///       C[i,j] = alpha*sum + beta*C[i,j]
+/// Example (gemm):
 ///
-///   Rewrite to a reduction-aware k-j update form that exposes stride-1 B and
-///   C:
-///     for j: C[i,j] = beta*C[i,j]
-///     for k:
-///       a = alpha*A[i,k]
-///       for j: C[i,j] += a * B[k,j]
+///   for j:                           for j: C[i,j] = 0
+///     sum = for k iter_args:   =>    for k:
+///       sum += A[i,k]*B[k,j]           a = A[i,k]              // hoisted
+///     C[i,j] = sum                     for j: C[i,j] += a*B[k,j]  // stride-1
 ///
-///   Optionally tile the inner j loop(s) to improve cache locality/SIMD.
-///
-/// This pass is designed to run BEFORE CreateDbs so that DB creation and
-/// partitioning can "see" the transformed loop structure.
+/// See LoopReordering.cpp for explicit-init patterns (e.g., 2mm, 3mm).
+/// Supports FAdd/IAdd reductions. Must run BEFORE CreateDbs.
 ///==========================================================================///
 
 #include "ArtsPassDetails.h"
@@ -32,9 +24,6 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/IR/IRMapping.h"
-#include "mlir/IR/Matchers.h"
-#include "mlir/IR/PatternMatch.h"
 
 ARTS_DEBUG_SETUP(loop_transforms);
 
@@ -76,18 +65,43 @@ static Attribute sanitizeLoopMetadataNoReductions(Attribute attr,
       /*locationKey=*/loopAttr.getLocationKey());
 }
 
+/// Reduction operation kind - supports both float and integer operations.
+enum class ReductionKind {
+  Unknown,
+  FAdd, /// sum += A*B (float)
+  IAdd, /// sum += A*B (integer)
+  FMul, /// product *= A*B (float, future)
+  IMul, /// product *= A*B (integer, future)
+};
+
+static bool isFloatReduction(ReductionKind kind) {
+  return kind == ReductionKind::FAdd || kind == ReductionKind::FMul;
+}
+
+[[maybe_unused]] static bool isIntegerReduction(ReductionKind kind) {
+  return kind == ReductionKind::IAdd || kind == ReductionKind::IMul;
+}
+
+/// Strip cast operations (float and integer) to find the underlying value.
 static Value stripCasts(Value v) {
   while (v) {
     if (auto ext = v.getDefiningOp<arith::ExtFOp>())
       v = ext.getIn();
     else if (auto trunc = v.getDefiningOp<arith::TruncFOp>())
       v = trunc.getIn();
+    else if (auto extSI = v.getDefiningOp<arith::ExtSIOp>())
+      v = extSI.getIn();
+    else if (auto extUI = v.getDefiningOp<arith::ExtUIOp>())
+      v = extUI.getIn();
+    else if (auto truncI = v.getDefiningOp<arith::TruncIOp>())
+      v = truncI.getIn();
     else
       break;
   }
   return v;
 }
 
+/// Try to extract a constant floating-point value.
 static std::optional<double> getConstFloat(Value v) {
   if (!v)
     return std::nullopt;
@@ -98,17 +112,63 @@ static std::optional<double> getConstFloat(Value v) {
   return std::nullopt;
 }
 
-static Value getOrCreateFloatConstant(OpBuilder &b, Location loc, Type ty,
-                                      double value) {
+/// Try to extract a constant integer value.
+static std::optional<int64_t> getConstInt(Value v) {
+  if (!v)
+    return std::nullopt;
+  if (auto cst = v.getDefiningOp<arith::ConstantOp>()) {
+    if (auto ia = dyn_cast<IntegerAttr>(cst.getValue()))
+      return ia.getInt();
+  }
+  return std::nullopt;
+}
+
+/// Create a constant for the given type (float or integer).
+static Value getOrCreateConstant(OpBuilder &b, Location loc, Type ty,
+                                 double floatVal, int64_t intVal) {
   if (ty.isF32())
-    return b.create<arith::ConstantFloatOp>(loc, APFloat((float)value),
+    return b.create<arith::ConstantFloatOp>(loc, APFloat((float)floatVal),
                                             b.getF32Type());
   if (ty.isF64())
-    return b.create<arith::ConstantFloatOp>(loc, APFloat((double)value),
+    return b.create<arith::ConstantFloatOp>(loc, APFloat(floatVal),
                                             b.getF64Type());
+  if (ty.isIntOrIndex()) {
+    return b.create<arith::ConstantIntOp>(loc, intVal, ty);
+  }
   return Value();
 }
 
+/// Create zero constant for the given type.
+static Value getOrCreateZero(OpBuilder &b, Location loc, Type ty) {
+  return getOrCreateConstant(b, loc, ty, 0.0, 0);
+}
+
+/// Create one constant for the given type.
+static Value getOrCreateOne(OpBuilder &b, Location loc, Type ty) {
+  return getOrCreateConstant(b, loc, ty, 1.0, 1);
+}
+
+/// Match a multiplication operation (float or integer).
+[[maybe_unused]] static bool matchMulOp(Value v, Value &lhs, Value &rhs,
+                                        ReductionKind &kind) {
+  if (!v)
+    return false;
+  if (auto mul = v.getDefiningOp<arith::MulFOp>()) {
+    lhs = mul.getLhs();
+    rhs = mul.getRhs();
+    kind = ReductionKind::FAdd; /// Multiplication in add-reduction context
+    return true;
+  }
+  if (auto mul = v.getDefiningOp<arith::MulIOp>()) {
+    lhs = mul.getLhs();
+    rhs = mul.getRhs();
+    kind = ReductionKind::IAdd;
+    return true;
+  }
+  return false;
+}
+
+/// Match multiplication (float only) for backward compatibility.
 static bool matchMulFOp(Value v, Value &lhs, Value &rhs) {
   if (!v)
     return false;
@@ -120,6 +180,27 @@ static bool matchMulFOp(Value v, Value &lhs, Value &rhs) {
   return false;
 }
 
+/// Match an addition operation (float or integer).
+[[maybe_unused]] static bool matchAddOp(Value v, Value &lhs, Value &rhs,
+                                        ReductionKind &kind) {
+  if (!v)
+    return false;
+  if (auto add = v.getDefiningOp<arith::AddFOp>()) {
+    lhs = add.getLhs();
+    rhs = add.getRhs();
+    kind = ReductionKind::FAdd;
+    return true;
+  }
+  if (auto add = v.getDefiningOp<arith::AddIOp>()) {
+    lhs = add.getLhs();
+    rhs = add.getRhs();
+    kind = ReductionKind::IAdd;
+    return true;
+  }
+  return false;
+}
+
+/// Match addition (float only) for backward compatibility.
 static bool matchAddFOp(Value v, Value &lhs, Value &rhs) {
   if (!v)
     return false;
@@ -131,7 +212,27 @@ static bool matchAddFOp(Value v, Value &lhs, Value &rhs) {
   return false;
 }
 
-struct MatmulDotMatch {
+/// Create a multiplication operation for the appropriate type.
+static Value createMul(OpBuilder &b, Location loc, Value lhs, Value rhs,
+                       ReductionKind kind) {
+  if (isFloatReduction(kind))
+    return b.create<arith::MulFOp>(loc, lhs, rhs);
+  else
+    return b.create<arith::MulIOp>(loc, lhs, rhs);
+}
+
+/// Create an addition operation for the appropriate type.
+static Value createAdd(OpBuilder &b, Location loc, Value lhs, Value rhs,
+                       ReductionKind kind) {
+  if (isFloatReduction(kind))
+    return b.create<arith::AddFOp>(loc, lhs, rhs);
+  else
+    return b.create<arith::AddIOp>(loc, lhs, rhs);
+}
+
+/// Reduction dot-product pattern match result.
+/// Supports both floating-point and integer reduction operations.
+struct ReductionDotMatch {
   ForOp outerI;
   scf::ForOp jLoop;
   scf::ForOp kLoop;
@@ -145,21 +246,11 @@ struct MatmulDotMatch {
   Value alpha;
   Value beta;
   Type elemTy;
+  ReductionKind kind = ReductionKind::FAdd; /// Default to float-add
 };
 
-struct MatmulUpdateMatch {
-  ForOp outerI;
-  scf::ForOp kLoop; /// outer reduction/update loop
-  scf::ForOp jLoop; /// inner update loop
-  Value memA;
-  Value memB;
-  Value memC;
-  bool aIsKI = false; /// A[k,i] vs A[i,k]
-  bool bIsKJ = true;  /// B[k,j] vs B[j,k]
-  Value iIndex;
-  Value alpha; /// optional (null => 1.0)
-  Type elemTy;
-};
+/// Backward-compatible alias.
+using MatmulDotMatch = ReductionDotMatch;
 
 /// Extract (alpha, beta) from a store value that combines the dot-product sum
 /// with the previous C value.
@@ -292,7 +383,14 @@ static bool matchMatmulDotInArtsFor(ForOp artsFor, MatmulDotMatch &out) {
 
   Value sumVal = kLoop.getResult(0);
   Type elemTy = sumVal.getType();
-  if (!elemTy.isF32() && !elemTy.isF64())
+
+  /// Determine reduction kind based on element type.
+  ReductionKind kind = ReductionKind::Unknown;
+  if (elemTy.isF32() || elemTy.isF64())
+    kind = ReductionKind::FAdd;
+  else if (elemTy.isIntOrIndex())
+    kind = ReductionKind::IAdd;
+  else
     return false;
 
   /// Find store to C after kLoop in jLoop.
@@ -320,28 +418,38 @@ static bool matchMatmulDotInArtsFor(ForOp artsFor, MatmulDotMatch &out) {
     }
   }
 
-  /// Find mulf in kLoop body that multiplies loads from A and B.
+  /// Find multiplication (float or integer) in kLoop body.
   memref::LoadOp loadA = nullptr, loadB = nullptr;
-  arith::MulFOp mul = nullptr;
+  Value mulLhs, mulRhs;
+  Operation *mulOp = nullptr;
+
   for (Operation &op : kLoop.getBody()->without_terminator()) {
     if (auto m = dyn_cast<arith::MulFOp>(&op)) {
-      mul = m;
+      mulOp = &op;
+      mulLhs = m.getLhs();
+      mulRhs = m.getRhs();
+      break;
+    }
+    if (auto m = dyn_cast<arith::MulIOp>(&op)) {
+      mulOp = &op;
+      mulLhs = m.getLhs();
+      mulRhs = m.getRhs();
       break;
     }
   }
-  if (!mul)
+  if (!mulOp)
     return false;
 
   auto findLoad = [&](Value v) -> memref::LoadOp {
     v = stripCasts(v);
     return v.getDefiningOp<memref::LoadOp>();
   };
-  loadA = findLoad(mul.getLhs());
-  loadB = findLoad(mul.getRhs());
+  loadA = findLoad(mulLhs);
+  loadB = findLoad(mulRhs);
   if (!loadA || !loadB) {
     /// Try swapped
-    loadA = findLoad(mul.getRhs());
-    loadB = findLoad(mul.getLhs());
+    loadA = findLoad(mulRhs);
+    loadB = findLoad(mulLhs);
   }
   if (!loadA || !loadB)
     return false;
@@ -397,232 +505,21 @@ static bool matchMatmulDotInArtsFor(ForOp artsFor, MatmulDotMatch &out) {
   if (!matchAlphaBeta(storeC.getValueToStore(), sumVal, oldCVal, alpha, beta))
     return false;
 
-  out = MatmulDotMatch{artsFor,
-                       jLoop,
-                       kLoop,
-                       loadA.getMemref(),
-                       loadB.getMemref(),
-                       storeC.getMemref(),
-                       aIsKI,
-                       bIsKJ,
-                       sumVal,
-                       iIndex,
-                       alpha,
-                       beta,
-                       elemTy};
+  out = ReductionDotMatch{artsFor,
+                          jLoop,
+                          kLoop,
+                          loadA.getMemref(),
+                          loadB.getMemref(),
+                          storeC.getMemref(),
+                          aIsKI,
+                          bIsKJ,
+                          sumVal,
+                          iIndex,
+                          alpha,
+                          beta,
+                          elemTy,
+                          kind};
   return true;
-}
-
-static bool matchMatmulUpdateInArtsFor(ForOp artsFor, MatmulUpdateMatch &out) {
-  /// Match the "already update-form" produced by LoopReordering auto-detect:
-  ///   arts.for(i) {
-  ///     scf.for(k) {
-  ///       scf.for(j) {
-  ///         C[i,j] = C[i,j] + (alpha*A[i,k])*B[k,j]
-  ///       }
-  ///     }
-  ///   }
-  //
-  /// This pattern is common in PolyBench 3mm after LoopReordering performs
-  /// distribution + interchange on memory-based reductions.
-
-  /// Find candidate k loops directly under arts.for.
-  for (Operation &op : artsFor.getBody()->without_terminator()) {
-    auto kLoop = dyn_cast<scf::ForOp>(&op);
-    if (!kLoop || !kLoop.getInitArgs().empty())
-      continue;
-
-    /// Find the first nested scf.for under kLoop: treat as j loop.
-    scf::ForOp jLoop = nullptr;
-    for (Operation &kop : kLoop.getBody()->without_terminator()) {
-      if (auto jl = dyn_cast<scf::ForOp>(&kop)) {
-        jLoop = jl;
-        break;
-      }
-    }
-    if (!jLoop || !jLoop.getInitArgs().empty())
-      continue;
-
-    /// Conservative: require kLoop body to contain only the jLoop.
-    {
-      int nonTermOps = 0;
-      for (Operation &kop : kLoop.getBody()->without_terminator()) {
-        (void)kop;
-        nonTermOps++;
-      }
-      if (nonTermOps != 1)
-        continue;
-    }
-
-    Value jIV = jLoop.getInductionVar();
-    Value kIV = kLoop.getInductionVar();
-
-    /// Find store to C in j loop.
-    memref::StoreOp storeC = nullptr;
-    for (Operation &jop : jLoop.getBody()->without_terminator()) {
-      if (auto st = dyn_cast<memref::StoreOp>(&jop)) {
-        storeC = st;
-        break;
-      }
-    }
-    if (!storeC)
-      continue;
-
-    if (storeC.getIndices().size() != 2)
-      continue;
-
-    Value iIndex = storeC.getIndices()[0];
-    if (storeC.getIndices()[1] != jIV)
-      continue;
-
-    Type elemTy = storeC.getValueToStore().getType();
-    if (!elemTy.isF32() && !elemTy.isF64())
-      continue;
-
-    /// Match store value: addf(cOld, prod)
-    Value addL, addR;
-    if (!matchAddFOp(storeC.getValueToStore(), addL, addR))
-      continue;
-
-    auto findCLoad = [&](Value v) -> memref::LoadOp {
-      v = stripCasts(v);
-      auto ld = v.getDefiningOp<memref::LoadOp>();
-      if (!ld)
-        return nullptr;
-      if (ld.getMemref() != storeC.getMemref())
-        return nullptr;
-      if (ld.getIndices() != storeC.getIndices())
-        return nullptr;
-      return ld;
-    };
-
-    memref::LoadOp loadC = findCLoad(addL);
-    Value prodVal = addR;
-    if (!loadC) {
-      loadC = findCLoad(addR);
-      prodVal = addL;
-    }
-    if (!loadC)
-      continue;
-
-    /// Match prod: mulf(x, y) where x/y are loads (optionally scaled by alpha).
-    Value mulX, mulY;
-    if (!matchMulFOp(prodVal, mulX, mulY))
-      continue;
-
-    struct ScaledLoad {
-      memref::LoadOp load;
-      Value scale; /// optional scalar multiply (null => 1.0)
-    };
-    auto extractScaledLoad = [&](Value v) -> std::optional<ScaledLoad> {
-      v = stripCasts(v);
-      if (auto ld = v.getDefiningOp<memref::LoadOp>())
-        return ScaledLoad{ld, Value()};
-
-      Value a, b;
-      if (matchMulFOp(v, a, b)) {
-        a = stripCasts(a);
-        b = stripCasts(b);
-        if (auto ld = a.getDefiningOp<memref::LoadOp>())
-          return ScaledLoad{ld, b};
-        if (auto ld = b.getDefiningOp<memref::LoadOp>())
-          return ScaledLoad{ld, a};
-      }
-      return std::nullopt;
-    };
-
-    auto sx = extractScaledLoad(mulX);
-    auto sy = extractScaledLoad(mulY);
-    if (!sx || !sy)
-      continue;
-
-    auto classify = [&](memref::LoadOp ld, bool &isA, bool &isB, bool &aIsKI,
-                        bool &bIsKJ) {
-      isA = false;
-      isB = false;
-      aIsKI = false;
-      bIsKJ = true;
-      if (ld.getIndices().size() != 2)
-        return;
-      Value idx0 = ld.getIndices()[0];
-      Value idx1 = ld.getIndices()[1];
-
-      bool usesK = (idx0 == kIV) || (idx1 == kIV);
-      bool usesJ = (idx0 == jIV) || (idx1 == jIV);
-      bool usesI = (idx0 == iIndex) || (idx1 == iIndex);
-
-      /// A: uses {i,k} but not j.
-      if (usesK && usesI && !usesJ) {
-        isA = true;
-        aIsKI = (idx0 == kIV);
-        return;
-      }
-      /// B: uses {k,j} but not i.
-      if (usesK && usesJ && !usesI) {
-        isB = true;
-        bIsKJ = (idx0 == kIV);
-        return;
-      }
-    };
-
-    bool xIsA = false, xIsB = false, yIsA = false, yIsB = false;
-    bool xAIsKI = false, xBIsKJ = true;
-    bool yAIsKI = false, yBIsKJ = true;
-    classify(sx->load, xIsA, xIsB, xAIsKI, xBIsKJ);
-    classify(sy->load, yIsA, yIsB, yAIsKI, yBIsKJ);
-
-    /// We need one A and one B.
-    memref::LoadOp loadA = nullptr;
-    memref::LoadOp loadB = nullptr;
-    bool aIsKI = false;
-    bool bIsKJ = true;
-
-    if (xIsA && yIsB) {
-      loadA = sx->load;
-      loadB = sy->load;
-      aIsKI = xAIsKI;
-      bIsKJ = yBIsKJ;
-    } else if (xIsB && yIsA) {
-      loadA = sy->load;
-      loadB = sx->load;
-      aIsKI = yAIsKI;
-      bIsKJ = xBIsKJ;
-    } else {
-      continue;
-    }
-
-    /// Choose alpha from whichever multiplicand is scaled (if any). We allow
-    /// scaling on either A or B and always hoist it onto A (commutative).
-    Value alpha;
-    Value alphaX = sx->scale;
-    Value alphaY = sy->scale;
-    if (alphaX && alphaY)
-      continue;
-    if (alphaX)
-      alpha = alphaX;
-    if (alphaY)
-      alpha = alphaY;
-
-    /// Require A load to be inside jLoop so we actually have something to
-    /// hoist.
-    if (!jLoop->isAncestor(loadA.getOperation()))
-      continue;
-
-    out = MatmulUpdateMatch{artsFor,
-                            kLoop,
-                            jLoop,
-                            loadA.getMemref(),
-                            loadB.getMemref(),
-                            storeC.getMemref(),
-                            aIsKI,
-                            bIsKJ,
-                            iIndex,
-                            alpha,
-                            elemTy};
-    return true;
-  }
-
-  return false;
 }
 
 static scf::ForOp createTiledForIfBeneficial(
@@ -677,8 +574,26 @@ static bool isTilingApplicable(scf::ForOp loop, int64_t tileSize,
   return trip >= minTripCount;
 }
 
-static void rewriteMatmulDotToKJUpdate(const MatmulDotMatch &m, int64_t tileJ,
-                                       int64_t minTripCount) {
+/// Check if a value is a zero constant (float or integer).
+static bool isZeroConstant(Value v) {
+  if (auto floatVal = getConstFloat(v))
+    return *floatVal == 0.0;
+  if (auto intVal = getConstInt(v))
+    return *intVal == 0;
+  return false;
+}
+
+/// Check if a value is a one constant (float or integer).
+static bool isOneConstant(Value v) {
+  if (auto floatVal = getConstFloat(v))
+    return *floatVal == 1.0;
+  if (auto intVal = getConstInt(v))
+    return *intVal == 1;
+  return false;
+}
+
+static void rewriteReductionDotToKJUpdate(const ReductionDotMatch &m,
+                                          int64_t tileJ, int64_t minTripCount) {
   scf::ForOp jLoop = m.jLoop;
   scf::ForOp kLoop = m.kLoop;
 
@@ -688,9 +603,10 @@ static void rewriteMatmulDotToKJUpdate(const MatmulDotMatch &m, int64_t tileJ,
   Value alpha = m.alpha;
   Value beta = m.beta;
   Value iIndex = m.iIndex;
+  ReductionKind kind = m.kind;
 
-  Value one = getOrCreateFloatConstant(b, loc, m.elemTy, 1.0);
-  Value zero = getOrCreateFloatConstant(b, loc, m.elemTy, 0.0);
+  Value one = getOrCreateOne(b, loc, m.elemTy);
+  Value zero = getOrCreateZero(b, loc, m.elemTy);
   if (!one || !zero)
     return;
 
@@ -704,12 +620,12 @@ static void rewriteMatmulDotToKJUpdate(const MatmulDotMatch &m, int64_t tileJ,
     auto cOld =
         ib.create<memref::LoadOp>(iloc, m.memC, ValueRange{iIndex, jIV});
     Value scaled;
-    if (auto betaC = getConstFloat(beta); betaC && *betaC == 0.0) {
+    if (isZeroConstant(beta)) {
       scaled = zero;
-    } else if (auto betaC = getConstFloat(beta); betaC && *betaC == 1.0) {
+    } else if (isOneConstant(beta)) {
       scaled = cOld;
     } else {
-      scaled = ib.create<arith::MulFOp>(iloc, cOld, beta);
+      scaled = createMul(ib, iloc, cOld, beta, kind);
     }
     ib.create<memref::StoreOp>(iloc, scaled, m.memC, ValueRange{iIndex, jIV});
   };
@@ -759,10 +675,10 @@ static void rewriteMatmulDotToKJUpdate(const MatmulDotMatch &m, int64_t tileJ,
     aLoad = b.create<memref::LoadOp>(loc, m.memA, ValueRange{iIndex, kIV});
 
   Value aAlpha;
-  if (auto alphaC = getConstFloat(alpha); alphaC && *alphaC == 1.0)
+  if (isOneConstant(alpha))
     aAlpha = aLoad;
   else
-    aAlpha = b.create<arith::MulFOp>(loc, aLoad, alpha);
+    aAlpha = createMul(b, loc, aLoad, alpha, kind);
 
   Operation *aAlphaOp = aAlpha.getDefiningOp();
   if (!aAlphaOp)
@@ -778,8 +694,8 @@ static void rewriteMatmulDotToKJUpdate(const MatmulDotMatch &m, int64_t tileJ,
 
     auto cOld =
         ub.create<memref::LoadOp>(uloc, m.memC, ValueRange{iIndex, jIV});
-    auto prod = ub.create<arith::MulFOp>(uloc, aAlpha, bVal);
-    auto cNew = ub.create<arith::AddFOp>(uloc, cOld, prod);
+    Value prod = createMul(ub, uloc, aAlpha, bVal, kind);
+    Value cNew = createAdd(ub, uloc, cOld, prod, kind);
     ub.create<memref::StoreOp>(uloc, cNew, m.memC, ValueRange{iIndex, jIV});
   };
 
@@ -825,92 +741,6 @@ static void rewriteMatmulDotToKJUpdate(const MatmulDotMatch &m, int64_t tileJ,
   jLoop.erase();
 }
 
-static void rewriteMatmulUpdateToHoistAndTile(const MatmulUpdateMatch &m,
-                                              bool enableTiling, int64_t tileJ,
-                                              int64_t minTripCount) {
-  scf::ForOp kLoop = m.kLoop;
-  scf::ForOp jLoop = m.jLoop;
-
-  OpBuilder b(jLoop);
-  Location loc = jLoop.getLoc();
-
-  Value one = getOrCreateFloatConstant(b, loc, m.elemTy, 1.0);
-  if (!one)
-    return;
-
-  Value alpha = m.alpha ? m.alpha : one;
-
-  /// Insert the hoisted A load (and alpha scaling) at the start of k loop.
-  b.setInsertionPointToStart(kLoop.getBody());
-  Value kIV = kLoop.getInductionVar();
-
-  Value aLoad;
-  if (m.aIsKI)
-    aLoad = b.create<memref::LoadOp>(loc, m.memA, ValueRange{kIV, m.iIndex});
-  else
-    aLoad = b.create<memref::LoadOp>(loc, m.memA, ValueRange{m.iIndex, kIV});
-
-  Value aAlpha = aLoad;
-  if (auto alphaC = getConstFloat(alpha); !(alphaC && *alphaC == 1.0))
-    aAlpha = b.create<arith::MulFOp>(loc, aLoad, alpha);
-
-  Operation *anchor = aAlpha.getDefiningOp();
-  if (!anchor)
-    return;
-
-  auto emitUpdateBody = [&](OpBuilder &ub, Location uloc, Value jIV) {
-    Value bVal;
-    if (m.bIsKJ)
-      bVal = ub.create<memref::LoadOp>(uloc, m.memB, ValueRange{kIV, jIV});
-    else
-      bVal = ub.create<memref::LoadOp>(uloc, m.memB, ValueRange{jIV, kIV});
-
-    auto cOld =
-        ub.create<memref::LoadOp>(uloc, m.memC, ValueRange{m.iIndex, jIV});
-    auto prod = ub.create<arith::MulFOp>(uloc, aAlpha, bVal);
-    auto cNew = ub.create<arith::AddFOp>(uloc, cOld, prod);
-    ub.create<memref::StoreOp>(uloc, cNew, m.memC, ValueRange{m.iIndex, jIV});
-  };
-
-  b.setInsertionPointAfter(anchor);
-
-  bool createdTiled = false;
-  if (enableTiling && tileJ > 1) {
-    if (auto tiledOuter = createTiledForIfBeneficial(
-            b, loc, jLoop, tileJ, minTripCount,
-            [&](OpBuilder &tb, Location tloc, Value jIV) {
-              emitUpdateBody(tb, tloc, jIV);
-            })) {
-      /// Attach original j loop metadata to the new innermost j loop.
-      for (Operation &op : tiledOuter.getBody()->without_terminator()) {
-        if (auto innerJ = dyn_cast<scf::ForOp>(&op)) {
-          if (auto idAttr = jLoop->getAttr("arts.id"))
-            innerJ->setAttr("arts.id", idAttr);
-          if (auto loopAttr = jLoop->getAttr("arts.loop"))
-            innerJ->setAttr("arts.loop", sanitizeLoopMetadataNoReductions(
-                                             loopAttr, b.getContext()));
-          break;
-        }
-      }
-      createdTiled = true;
-    }
-  }
-
-  if (!createdTiled) {
-    auto newJ = b.create<scf::ForOp>(loc, jLoop.getLowerBound(),
-                                     jLoop.getUpperBound(), jLoop.getStep());
-    if (auto idAttr = jLoop->getAttr("arts.id"))
-      newJ->setAttr("arts.id", idAttr);
-    if (auto loopAttr = jLoop->getAttr("arts.loop"))
-      newJ->setAttr("arts.loop",
-                    sanitizeLoopMetadataNoReductions(loopAttr, b.getContext()));
-    b.setInsertionPointToStart(newJ.getBody());
-    emitUpdateBody(b, loc, newJ.getInductionVar());
-  }
-
-  jLoop.erase();
-}
-
 struct LoopTransformsPass
     : public arts::ArtsLoopTransformsBase<LoopTransformsPass> {
   LoopTransformsPass(ArtsAnalysisManager *AM, bool enableMatmul,
@@ -938,6 +768,13 @@ struct LoopTransformsPass
       if (!enableMatmul)
         continue;
 
+      /// Pattern 1: Dot-product to k-j update form transformation
+      /// This is ARTS-specific reduction distribution that exposes better
+      /// parallelism and cache locality for matmul-like patterns.
+      ///
+      /// Note: Hoisting and general LICM are now handled by affine passes
+      /// in Stage 2 (via --enable-affine-opt). This pass focuses solely on
+      /// ARTS-specific reduction pattern distribution.
       MatmulDotMatch dot;
       if (matchMatmulDotInArtsFor(fo, dot)) {
         /// Conservative profitability gates:
@@ -948,54 +785,32 @@ struct LoopTransformsPass
         /// - Require tiling to be enabled and applicable to avoid exploding C
         ///   traffic for tiny loops.
         if (!dot.bIsKJ) {
-          ARTS_DEBUG("Skipping matmul dot rewrite: B is indexed as B[j,k] "
+          ARTS_DEBUG("Skipping reduction distribution: B is indexed as B[j,k] "
                      "(already friendly for k-inner dot-product)");
           continue;
         }
         if (!enableTiling ||
             !isTilingApplicable(dot.jLoop, tileJ, minTripCount)) {
-          ARTS_DEBUG(
-              "Skipping matmul dot rewrite: tiling disabled or not applicable "
-              "(requires constant step=1 and tripCount >= minTripCount)");
+          ARTS_DEBUG("Skipping reduction distribution: tiling disabled or not "
+                     "applicable (requires constant step=1 and tripCount >= "
+                     "minTripCount)");
           continue;
         }
 
-        ARTS_INFO("Detected matmul dot-product pattern inside arts.for; "
+        ARTS_INFO("Detected reduction dot-product pattern inside arts.for; "
                   << "rewriting to k-j update form");
 
         int64_t effectiveTileJ = enableTiling ? tileJ : 1;
-        rewriteMatmulDotToKJUpdate(dot, effectiveTileJ, minTripCount);
+        rewriteReductionDotToKJUpdate(dot, effectiveTileJ, minTripCount);
         rewrites++;
         continue;
       }
 
-      MatmulUpdateMatch upd;
-      if (!matchMatmulUpdateInArtsFor(fo, upd))
-        continue;
-
-      /// Profitability: only bother if we can make B stride-1 (k,j) and either
-      /// tile or at least hoist A out of the inner loop.
-      if (!upd.bIsKJ) {
-        ARTS_DEBUG(
-            "Skipping matmul update optimization: B is indexed as B[j,k]");
-        continue;
-      }
-
-      bool canTile =
-          enableTiling && isTilingApplicable(upd.jLoop, tileJ, minTripCount);
-      if (!canTile && !enableTiling) {
-        /// Hoisting-only is still fine, but keep the same default safety gate:
-        /// if tiling is disabled globally, skip update-form rewrites to avoid
-        /// unexpected IR churn in non-performance builds.
-        ARTS_DEBUG("Skipping matmul update optimization: tiling disabled");
-        continue;
-      }
-
-      ARTS_INFO("Detected matmul update-form pattern inside arts.for; "
-                << "hoisting A and tiling j where applicable");
-      rewriteMatmulUpdateToHoistAndTile(upd, /*enableTiling=*/canTile, tileJ,
-                                        minTripCount);
-      rewrites++;
+      /// Pattern 2 (update-form hoisting) has been REMOVED.
+      /// Hoisting is now handled by affine LICM in Stage 2 via
+      /// --enable-affine-opt flag. This provides better separation of concerns:
+      /// - Generic MLIR passes: LICM, tiling, simplify (Stage 2, affine.for)
+      /// - ARTS-specific passes: reduction distribution (Stage 6, arts.for)
     }
 
     ARTS_INFO("LoopTransformsPass: applied " << rewrites << " rewrite(s)");
