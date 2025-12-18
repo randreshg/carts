@@ -390,20 +390,6 @@ def LoopReordering : Pass<"loop-reordering", "mlir::ModuleOp"> {
     the CollectMetadata phase. This pass reads the `reorder_nest_to` field from
     LoopMetadata (populated by LoopAnalyzer::analyzeLoopReordering) which contains
     the target order as a sequence of arts.ids.
-
-    For example, a matrix multiplication with i-j-k order:
-      for i: A[i][k] * B[k][j] -> C[i][j]  // B[k][j] has poor locality
-
-    Gets reordered to i-k-j order:
-      for i: for k: for j: ...  // B[k][j] now has stride-1 access
-
-    This pass MUST run BEFORE CreateDbs because:
-    1. CreateDbs uses SSA indices from DbControlOps
-    2. DbPartitioning analyzes loop IV relationships for chunk bounds
-    3. If loops reordered AFTER CreateDbs, SSA values change and chunk computation fails
-
-    The reordering is computed during CollectMetadata on affine loops using
-    MLIR's isValidLoopInterchangePermutation() for dependence-safe validation.
   }];
   let dependentDialects = [
     "memref::MemRefDialect",
@@ -416,14 +402,9 @@ def LoopReordering : Pass<"loop-reordering", "mlir::ModuleOp"> {
 }
 
 def ArtsLoopTransforms : Pass<"arts-loop-transforms", "mlir::ModuleOp"> {
-  let summary = "Apply loop tiling/unrolling and reduction-aware matmul transforms";
+  let summary = "ARTS-specific reduction distribution for matmul-like patterns";
   let description = [{
-    Applies additional loop transformations not covered by LoopReordering:
-    - Reduction-aware matmul loop interchange (dot-product form -> k-j update form)
-    - Optional inner-loop tiling to improve cache locality and SIMD
-
-    This pass is intended to run BEFORE CreateDbs so that downstream DB creation,
-    partitioning, and lowering can see the transformed loop structure.
+    Applies ARTS-specific loop transformations for reduction patterns inside arts.for.
   }];
   let dependentDialects = [
     "memref::MemRefDialect",
@@ -435,7 +416,7 @@ def ArtsLoopTransforms : Pass<"arts-loop-transforms", "mlir::ModuleOp"> {
   let constructor = "mlir::arts::createLoopTransformsPass(nullptr)";
   let options = [
     Option<"enableMatmul", "enable-matmul", "bool", /*default=*/"true",
-           "Enable reduction-aware matmul transforms.">,
+           "Enable reduction distribution for matmul-like patterns.">,
     Option<"enableTiling", "enable-tiling", "bool", /*default=*/"true",
            "Enable inner-loop tiling (when patterns match).">,
     Option<"tileJ", "tile-j", "int64_t", /*default=*/"64",
