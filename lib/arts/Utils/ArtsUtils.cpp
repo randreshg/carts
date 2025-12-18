@@ -38,54 +38,6 @@ bool simplifyIR(ModuleOp module, DominanceInfo &domInfo) {
 }
 
 ///===----------------------------------------------------------------------===///
-/// Value Analysis Utilities
-///===----------------------------------------------------------------------===///
-
-/// Checks if the given value is a constant, including constant-like operations
-/// such as constant indices and constant operations.
-bool isValueConstant(Value val) {
-  Operation *defOp = val.getDefiningOp();
-  if (!defOp)
-    return false;
-
-  if (defOp->hasTrait<OpTrait::ConstantLike>())
-    return true;
-
-  if (isa<arith::ConstantIndexOp>(defOp) || isa<arith::ConstantOp>(defOp))
-    return true;
-  return false;
-};
-
-/// Attempts to extract a constant index value from the given value, supporting
-/// both constant index operations and constant operations with integer
-/// attributes.
-bool getConstantIndex(Value v, int64_t &out) {
-  if (!v)
-    return false;
-  if (auto c = v.getDefiningOp<arith::ConstantIndexOp>()) {
-    out = c.value();
-    return true;
-  }
-  if (auto c = v.getDefiningOp<arith::ConstantOp>()) {
-    if (auto intAttr = dyn_cast<IntegerAttr>(c.getValue())) {
-      out = intAttr.getInt();
-      return true;
-    }
-  }
-  return false;
-}
-
-/// Determines if the given value represents a non-zero index, returning true
-/// for non-zero constants or unknown (non-constant) values.
-bool isNonZeroIndex(Value v) {
-  if (!v)
-    return false;
-  if (auto c = v.getDefiningOp<arith::ConstantIndexOp>())
-    return c.value() != 0;
-  return true;
-}
-
-///===----------------------------------------------------------------------===///
 /// Type and Size Utilities
 ///===----------------------------------------------------------------------===///
 
@@ -167,8 +119,8 @@ bool allSameValue(ValueRange values) {
 /// Check if two values represent equivalent scaling factors.
 /// Used to recognize patterns like (N * sizeof(T)) / sizeof(T) -> N.
 bool scalesAreEquivalent(Value lhs, Value rhs) {
-  Value a = stripNumericCasts(lhs);
-  Value b = stripNumericCasts(rhs);
+  Value a = ValueUtils::stripNumericCasts(lhs);
+  Value b = ValueUtils::stripNumericCasts(rhs);
   if (a == b)
     return true;
 
@@ -235,7 +187,7 @@ bool isInvariantInEdt(Region &edtRegion, Value value) {
     if (!visited.insert(v).second)
       return true;
 
-    if (isValueConstant(v))
+    if (ValueUtils::isValueConstant(v))
       return true;
 
     if (auto blockArg = v.dyn_cast<BlockArgument>()) {
@@ -450,30 +402,6 @@ static Value getUnderlyingValueImpl(Value v, SmallPtrSet<Value, 16> &visited,
 /// Underlying Value Tracing Utilities
 ///===----------------------------------------------------------------------===///
 
-/// Strip numeric cast operations to find the underlying value.
-/// Traverses through index casts, sign/zero extensions, and truncations.
-Value stripNumericCasts(Value value) {
-  while (true) {
-    if (auto idxCast = value.getDefiningOp<arith::IndexCastOp>()) {
-      value = idxCast.getIn();
-      continue;
-    }
-    if (auto ext = value.getDefiningOp<arith::ExtSIOp>()) {
-      value = ext.getIn();
-      continue;
-    }
-    if (auto ext = value.getDefiningOp<arith::ExtUIOp>()) {
-      value = ext.getIn();
-      continue;
-    }
-    if (auto trunc = value.getDefiningOp<arith::TruncIOp>()) {
-      value = trunc.getIn();
-      continue;
-    }
-    break;
-  }
-  return value;
-}
 
 /// Traces the underlying root allocation value for the given value, unwinding
 /// through various MLIR operations.
@@ -613,17 +541,6 @@ void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap,
 // Type Casting and Conversion Utilities
 ///===----------------------------------------------------------------------===///
 
-/// Cast a value to index type if needed.
-Value castToIndex(Value value, OpBuilder &builder, Location loc) {
-  if (!value)
-    return value;
-  if (value.getType().isIndex())
-    return value;
-  if (value.getType().isIntOrIndex())
-    return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
-                                              value);
-  return value;
-}
 
 ///===----------------------------------------------------------------------===///
 // Pattern Recognition and Analysis Utilities
@@ -634,20 +551,22 @@ Value castToIndex(Value value, OpBuilder &builder, Location loc) {
 ///   Case 1: Direct constant %c1048576 -> returns 1048576
 ///   Case 2: minui(%remaining, %c1048576) -> returns larger constant
 ///   Case 3: Nested minui -> recursively finds largest constant
+///   Case 4: addi(%baseSize, %halo) -> recurse on non-constant operand
+///           (for stencil patterns where chunkSize = baseChunk + haloAdjust)
 std::optional<int64_t> extractChunkSizeFromHint(Value sizeHint, int depth) {
-  if (!sizeHint || depth > 2)
+  if (!sizeHint || depth > 4)
     return std::nullopt;
 
   /// Case 1: Direct constant
   int64_t val;
-  if (arts::getConstantIndex(sizeHint, val))
+  if (ValueUtils::getConstantIndex(sizeHint, val))
     return val;
 
   /// Case 2/3: minui pattern - return the larger constant (nominal size)
   if (auto minOp = sizeHint.getDefiningOp<arith::MinUIOp>()) {
     int64_t lhsVal = 0, rhsVal = 0;
-    bool hasLhs = arts::getConstantIndex(minOp.getLhs(), lhsVal);
-    bool hasRhs = arts::getConstantIndex(minOp.getRhs(), rhsVal);
+    bool hasLhs = ValueUtils::getConstantIndex(minOp.getLhs(), lhsVal);
+    bool hasRhs = ValueUtils::getConstantIndex(minOp.getRhs(), rhsVal);
 
     if (hasLhs && hasRhs)
       return std::max(lhsVal, rhsVal);
@@ -667,6 +586,115 @@ std::optional<int64_t> extractChunkSizeFromHint(Value sizeHint, int depth) {
       return rhsExtracted;
   }
 
+  /// Case 4: addi pattern - stencil halo adjustment
+  /// For stencil patterns, chunkSize = addi(baseChunkSize, haloAdjustment)
+  /// where haloAdjustment is a small constant (e.g., 2 for i-1, i, i+1 pattern)
+  /// We want to extract baseChunkSize, which is the actual partition chunk size
+  if (auto addOp = sizeHint.getDefiningOp<arith::AddIOp>()) {
+    int64_t lhsVal = 0, rhsVal = 0;
+    bool hasLhsConst = ValueUtils::getConstantIndex(addOp.getLhs(), lhsVal);
+    bool hasRhsConst = ValueUtils::getConstantIndex(addOp.getRhs(), rhsVal);
+
+    /// If one operand is a small constant (halo adjustment), recurse on the
+    /// other
+    if (hasRhsConst && std::abs(rhsVal) <= 16) {
+      /// rhsVal is halo adjustment, lhs is base chunk size
+      return extractChunkSizeFromHint(addOp.getLhs(), depth + 1);
+    }
+    if (hasLhsConst && std::abs(lhsVal) <= 16) {
+      /// lhsVal is halo adjustment, rhs is base chunk size
+      return extractChunkSizeFromHint(addOp.getRhs(), depth + 1);
+    }
+
+    /// Both constants or both large - try both sides
+    auto lhsExtracted = extractChunkSizeFromHint(addOp.getLhs(), depth + 1);
+    auto rhsExtracted = extractChunkSizeFromHint(addOp.getRhs(), depth + 1);
+    if (lhsExtracted)
+      return lhsExtracted;
+    if (rhsExtracted)
+      return rhsExtracted;
+  }
+
+  return std::nullopt;
+}
+
+/// Extract chunk size INCLUDING any halo adjustments for allocation sizing.
+/// Unlike extractChunkSizeFromHint which extracts BASE size for loop bound
+/// matching, this function preserves stencil halo adjustments since allocations
+/// need to be large enough to hold the full adjusted size.
+///
+/// Examples:
+///   minui(%remaining, %c64) -> 64
+///   addi(minui(%remaining, %c64), %c2) -> 66 (base + halo)
+std::optional<int64_t> extractChunkSizeForAllocation(Value sizeHint,
+                                                     int depth) {
+  if (!sizeHint || depth > 4)
+    return std::nullopt;
+
+  /// Case 1: Direct constant
+  int64_t val;
+  if (ValueUtils::getConstantIndex(sizeHint, val))
+    return val;
+
+  /// Case 2: minui pattern - return the larger constant (nominal size)
+  if (auto minOp = sizeHint.getDefiningOp<arith::MinUIOp>()) {
+    int64_t lhsVal = 0, rhsVal = 0;
+    bool hasLhs = ValueUtils::getConstantIndex(minOp.getLhs(), lhsVal);
+    bool hasRhs = ValueUtils::getConstantIndex(minOp.getRhs(), rhsVal);
+
+    if (hasLhs && hasRhs)
+      return std::max(lhsVal, rhsVal);
+    if (hasLhs)
+      return lhsVal;
+    if (hasRhs)
+      return rhsVal;
+
+    /// Recurse for nested minui
+    auto lhsExtracted =
+        extractChunkSizeForAllocation(minOp.getLhs(), depth + 1);
+    auto rhsExtracted =
+        extractChunkSizeForAllocation(minOp.getRhs(), depth + 1);
+    if (lhsExtracted && rhsExtracted)
+      return std::max(*lhsExtracted, *rhsExtracted);
+    if (lhsExtracted)
+      return lhsExtracted;
+    if (rhsExtracted)
+      return rhsExtracted;
+  }
+
+  /// Case 3: addi pattern - INCLUDE the halo adjustment for allocation
+  /// For stencil patterns: chunkSize = addi(baseChunkSize, haloAdjustment)
+  /// Allocation needs full size: base + halo
+  if (auto addOp = sizeHint.getDefiningOp<arith::AddIOp>()) {
+    int64_t lhsVal = 0, rhsVal = 0;
+    bool hasLhsConst = ValueUtils::getConstantIndex(addOp.getLhs(), lhsVal);
+    bool hasRhsConst = ValueUtils::getConstantIndex(addOp.getRhs(), rhsVal);
+
+    /// If one operand is a small constant (halo), add it to the extracted base
+    if (hasRhsConst && std::abs(rhsVal) <= 16) {
+      auto baseSize =
+          extractChunkSizeForAllocation(addOp.getLhs(), depth + 1);
+      if (baseSize)
+        return *baseSize + rhsVal; /// base + halo
+    }
+    if (hasLhsConst && std::abs(lhsVal) <= 16) {
+      auto baseSize =
+          extractChunkSizeForAllocation(addOp.getRhs(), depth + 1);
+      if (baseSize)
+        return *baseSize + lhsVal; /// base + halo
+    }
+
+    /// Both operands non-constant - try both sides
+    auto lhsExtracted =
+        extractChunkSizeForAllocation(addOp.getLhs(), depth + 1);
+    auto rhsExtracted =
+        extractChunkSizeForAllocation(addOp.getRhs(), depth + 1);
+    if (lhsExtracted)
+      return lhsExtracted;
+    if (rhsExtracted)
+      return rhsExtracted;
+  }
+
   return std::nullopt;
 }
 
@@ -674,79 +702,32 @@ std::optional<int64_t> extractChunkSizeFromHint(Value sizeHint, int depth) {
 /// Common in malloc size calculations: malloc(N * sizeof(T)) / sizeof(T) -> N.
 Value extractOriginalSize(Value numerator, Value denominator,
                           OpBuilder &builder, Location loc) {
-  Value stripped = stripNumericCasts(numerator);
+  Value stripped = ValueUtils::stripNumericCasts(numerator);
   if (auto mul = stripped.getDefiningOp<arith::MulIOp>()) {
     Value lhs = mul.getLhs();
     Value rhs = mul.getRhs();
     if (scalesAreEquivalent(lhs, denominator))
-      return castToIndex(stripNumericCasts(rhs), builder, loc);
+      return ValueUtils::castToIndex(ValueUtils::stripNumericCasts(rhs), builder, loc);
     if (scalesAreEquivalent(rhs, denominator))
-      return castToIndex(stripNumericCasts(lhs), builder, loc);
+      return ValueUtils::castToIndex(ValueUtils::stripNumericCasts(lhs), builder, loc);
   }
   return Value();
 }
 
-/// Extract array index from byte offset pattern: bytes = (index * elemBytes).
-/// Handles common patterns where GEP indices are scaled by element byte size.
-/// Returns the logical array index or null Value if pattern doesn't match.
-Value extractArrayIndexFromByteOffset(Value byteOffset, Type elemType) {
-  /// Strip any index casts to get to the core computation
-  Value idxSource = byteOffset;
-  while (auto castOp = idxSource.getDefiningOp<arith::IndexCastOp>())
-    idxSource = castOp.getIn();
 
-  /// Look for multiplication: index * elemBytes
-  auto mulOp = idxSource.getDefiningOp<arith::MulIOp>();
-  if (!mulOp)
-    return Value();
-
-  int64_t elemSize = getElementTypeByteSize(elemType);
-  if (elemSize == 0)
-    return Value();
-
-  /// Identify which operand is the constant element size
-  auto isElementSizeConstant = [elemSize](Value v) -> bool {
-    if (auto constIdx = v.getDefiningOp<arith::ConstantIndexOp>())
-      return constIdx.value() == elemSize;
-    if (auto constInt = v.getDefiningOp<arith::ConstantIntOp>())
-      return constInt.value() == elemSize && constInt.getType().isInteger(64);
-    return false;
-  };
-
-  Value lhs = mulOp.getLhs();
-  Value rhs = mulOp.getRhs();
-
-  if (isElementSizeConstant(lhs))
-    return rhs;
-  if (isElementSizeConstant(rhs))
-    return lhs;
-  /// Pattern doesn't match expected form
-  return Value();
-}
-
-Value ensureIndexType(Value value, OpBuilder &builder, Location loc) {
-  if (!value)
-    return Value();
-  if (value.getType().isa<IndexType>())
-    return value;
-  if (auto intTy = value.getType().dyn_cast<IntegerType>())
-    return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
-                                              value);
-  return Value();
-}
 
 void collectWhileBounds(Value cond, Value iterArg, SmallVector<Value> &bounds) {
   if (!cond)
     return;
-  cond = stripNumericCasts(cond);
+  cond = ValueUtils::stripNumericCasts(cond);
   if (auto andOp = cond.getDefiningOp<arith::AndIOp>()) {
     collectWhileBounds(andOp.getLhs(), iterArg, bounds);
     collectWhileBounds(andOp.getRhs(), iterArg, bounds);
     return;
   }
   if (auto cmp = cond.getDefiningOp<arith::CmpIOp>()) {
-    auto lhs = stripNumericCasts(cmp.getLhs());
-    auto rhs = stripNumericCasts(cmp.getRhs());
+    auto lhs = ValueUtils::stripNumericCasts(cmp.getLhs());
+    auto rhs = ValueUtils::stripNumericCasts(cmp.getRhs());
     auto pred = cmp.getPredicate();
     auto isLessPred =
         pred == arith::CmpIPredicate::slt || pred == arith::CmpIPredicate::ult;

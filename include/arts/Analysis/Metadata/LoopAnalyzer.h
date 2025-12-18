@@ -43,6 +43,17 @@ public:
                              LoopMetadata *metadata,
                              ArtsMetadataManager &manager);
 
+  /// Analyze loop nest for per-dimension dependencies.
+  /// Populates dimensionDeps and outermostParallelDim in metadata.
+  /// Key insight: inner loop deps don't prevent outer loop parallelism.
+  ///
+  /// Example: for(i) { for(j) { A[i][j] = f(A[i][j-1]) } }
+  ///   - dimensionDeps[0] = {dim=0, hasCarriedDep=false} // i-loop parallelizable
+  ///   - dimensionDeps[1] = {dim=1, hasCarriedDep=true}  // j-loop has deps
+  ///   - outermostParallelDim = 0
+  void analyzeLoopNestDependences(affine::AffineForOp outerLoop,
+                                  LoopMetadata *metadata);
+
 private:
   MLIRContext *context;
   AccessAnalyzer &accessAnalyzer;

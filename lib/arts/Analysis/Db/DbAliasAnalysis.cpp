@@ -39,7 +39,7 @@ std::optional<ConstantSlice> extractConstantSlice(DbAcquireOp op) {
     storage.reserve(range.size());
     for (Value v : range) {
       int64_t cst = 0;
-      if (!arts::getConstantIndex(v, cst))
+      if (!ValueUtils::getConstantIndex(v, cst))
         return false;
       storage.push_back(cst);
     }
