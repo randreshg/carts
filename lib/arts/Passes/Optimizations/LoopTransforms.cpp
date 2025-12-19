@@ -78,10 +78,6 @@ static bool isFloatReduction(ReductionKind kind) {
   return kind == ReductionKind::FAdd || kind == ReductionKind::FMul;
 }
 
-[[maybe_unused]] static bool isIntegerReduction(ReductionKind kind) {
-  return kind == ReductionKind::IAdd || kind == ReductionKind::IMul;
-}
-
 /// Create zero constant for the given type.
 static Value getOrCreateZero(OpBuilder &b, Location loc, Type ty) {
   return b.create<arith::ConstantOp>(loc, ty, b.getZeroAttr(ty));

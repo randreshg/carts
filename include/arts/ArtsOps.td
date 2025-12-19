@@ -145,6 +145,7 @@ def DbAllocOp : Arts_Op<"db_alloc", [
   ];
   let extraClassDeclaration = [{
     MemRefType getAllocatedElementType();
+    LogicalResult verify();
   }];
 }
 

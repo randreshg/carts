@@ -164,7 +164,6 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
   Value newPtr = newAllocOp.getPtr();
   assert(oldPtr && newPtr && "expected pointer values");
 
-  /// Get element sizes
   SmallVector<Value> elementSizes(newAllocOp.getElementSizes().begin(),
                                   newAllocOp.getElementSizes().end());
 

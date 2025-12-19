@@ -1,27 +1,28 @@
 ///==========================================================================///
 /// File: DbChunkedRewriter.h
-///
-/// Implementation for chunked (div/mod) mode index localization.
 ///==========================================================================///
 
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBCHUNKEDREWRITER_H
 #define ARTS_TRANSFORMS_DATABLOCK_DBCHUNKEDREWRITER_H
 
-#include "arts/Transforms/Datablock/DbRewriter.h"
+#include "arts/ArtsDialect.h"
 #include "mlir/IR/Builders.h"
 #include "llvm/ADT/SetVector.h"
 
 namespace mlir {
 namespace arts {
 
+// Forward declaration
+class ArtsCodegen;
+
 ///===----------------------------------------------------------------------===///
-/// DbChunkedRewriter - Implementation for chunked (div/mod) mode
+/// DbChunkedRewriter 
 ///
 /// For chunked allocations:
 ///   dbRefIdx = (globalRow / chunkSize) - startChunk
 ///   memrefIdx = globalRow % chunkSize
 ///===----------------------------------------------------------------------===///
-class DbChunkedRewriter : public DbRewriter {
+class DbChunkedRewriter {
   Value chunkSize_;  /// Elements per chunk
   Value startChunk_; /// First chunk this partition acquires
   Value elemOffset_; /// Element offset (for stride computation)
@@ -30,32 +31,44 @@ class DbChunkedRewriter : public DbRewriter {
 
 public:
   DbChunkedRewriter(Value chunkSize, Value startChunk, Value elemOffset,
-                  unsigned outerRank, unsigned innerRank);
+                    unsigned outerRank, unsigned innerRank);
 
+  /// Result of localizing indices - defined locally, not from base class
+  struct LocalizedIndices {
+    SmallVector<Value> dbRefIndices;  /// Indices for arts.db_ref operation
+    SmallVector<Value> memrefIndices; /// Indices for memref load/store
+  };
+
+  /// Transform global multi-dimensional indices to local
+  /// For chunked mode: dbRefIdx = global / chunkSize - startChunk
+  ///                   memrefIdx = global % chunkSize
   LocalizedIndices localize(ArrayRef<Value> globalIndices, OpBuilder &builder,
-                            Location loc) override;
+                            Location loc);
 
+  /// Transform a linearized global index (for flattened 1D memrefs)
   LocalizedIndices localizeLinearized(Value globalLinearIndex, Value stride,
-                                      OpBuilder &builder,
-                                      Location loc) override;
+                                      OpBuilder &builder, Location loc);
 
+  /// Rebase a list of operations
+  void rebaseOps(ArrayRef<Operation *> ops, Value dbPtr, Type elementType,
+                 ArtsCodegen &AC, llvm::SetVector<Operation *> &opsToRemove);
+
+  /// Rewrite all uses of an allocation in the parent region
+  void rewriteUsesInParentRegion(Operation *alloc, DbAllocOp dbAlloc,
+                                 ArtsCodegen &AC,
+                                 llvm::SetVector<Operation *> &opsToRemove);
+
+  /// Rewrite a DbRefOp and its load/store users
   void rewriteDbRefUsers(DbRefOp ref, Value blockArg, Type newElementType,
                          OpBuilder &builder,
-                         llvm::SetVector<Operation *> &opsToRemove) override;
+                         llvm::SetVector<Operation *> &opsToRemove);
 
+  /// Mode-aware coordinate localization
   SmallVector<Value> localizeCoordinates(ArrayRef<Value> globalIndices,
                                          ArrayRef<Value> sliceOffsets,
                                          unsigned numIndexedDims,
                                          Type elementType, OpBuilder &builder,
-                                         Location loc) override;
-
-  bool
-  rebaseToAcquireViewImpl(Operation *op, DbAcquireOp acquire, Value dbPtr,
-                          Type elementType, ArtsCodegen &AC,
-                          llvm::SetVector<Operation *> &opsToRemove) override;
-
-  bool rebaseAllUsersToAcquireViewImpl(DbAcquireOp acquire,
-                                       ArtsCodegen &AC) override;
+                                         Location loc);
 };
 
 } // namespace arts

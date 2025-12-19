@@ -74,7 +74,10 @@ uint64_t getElementTypeByteSize(Type elemTy) {
 /// Gets the element memref type for a given element type and sizes.
 MemRefType getElementMemRefType(Type elementType,
                                 ArrayRef<Value> elementSizes) {
-  SmallVector<int64_t> elementShape(elementSizes.size(), ShapedType::kDynamic);
+  /// Enforce scalar payloads use a single trailing dimension of 1 instead of
+  /// an empty shape to keep rank handling uniform across the pipeline.
+  const size_t rank = elementSizes.empty() ? 1 : elementSizes.size();
+  SmallVector<int64_t> elementShape(rank, ShapedType::kDynamic);
   return MemRefType::get(elementShape, elementType);
 }
 
