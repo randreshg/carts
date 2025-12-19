@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <dlfcn.h>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -61,12 +62,49 @@ static int carts_benchmarks_should_report_init(void) {
 }
 
 ///===----------------------------------------------------------------------===///
+/// ARTS Init Time (process start -> entering mainBody)
+///===----------------------------------------------------------------------===///
+
+static uint64_t carts_benchmarks_process_start_ns = 0;
+static int carts_benchmarks_reported_arts_init = 0;
+
+__attribute__((constructor)) static void carts_benchmarks_ctor(void) {
+  carts_benchmarks_process_start_ns = carts_e2e_timer_get_time_ns();
+}
+
+static int carts_benchmarks_is_arts_binary(void) {
+  // OpenMP reference binaries do not link against ARTS, but CARTS-generated
+  // binaries do. Use symbol presence as a robust discriminator even when
+  // `artsConfig` env var is not set (e.g., using ./arts.cfg in CWD).
+  return dlsym(RTLD_DEFAULT, "artsRT") != nullptr;
+}
+
+__attribute__((noinline)) static void carts_benchmarks_report_arts_init(void) {
+  if (!carts_benchmarks_should_report_init())
+    return;
+  if (__sync_lock_test_and_set(&carts_benchmarks_reported_arts_init, 1))
+    return;
+
+  uint64_t start_ns = carts_benchmarks_process_start_ns;
+  if (!start_ns)
+    start_ns = carts_e2e_timer_get_time_ns();
+  uint64_t now_ns = carts_e2e_timer_get_time_ns();
+  double elapsed_sec = (double)(now_ns - start_ns) * 1e-9;
+  printf("init.arts: %.9fs\n", elapsed_sec);
+  fflush(stdout);
+}
+
+///===----------------------------------------------------------------------===///
 /// Benchmark Start Hook
 ///===----------------------------------------------------------------------===///
 
 __attribute__((noinline)) void carts_benchmarks_start(void) {
-  // Intended to be called only by OpenMP reference builds (CARTS_BENCHMARKS_OMP),
-  // but is safe as a no-op when OpenMP is not enabled.
+  if (carts_benchmarks_is_arts_binary()) {
+    carts_benchmarks_report_arts_init();
+    return;
+  }
+
+  // OpenMP reference path. Safe as a no-op when OpenMP is not enabled.
 #ifdef _OPENMP
   uint64_t t0 = carts_e2e_timer_get_time_ns();
   carts_benchmarks_warmup_omp();

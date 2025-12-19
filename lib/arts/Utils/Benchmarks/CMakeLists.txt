@@ -5,12 +5,12 @@ add_library(CartsBenchmarks STATIC
 # Compile with -O0 to prevent empty parallel region optimization
 target_compile_options(CartsBenchmarks PRIVATE -O0)
 
-# Enable OpenMP for thread pool warmup
-find_package(OpenMP)
-if(OpenMP_CXX_FOUND)
-  target_link_libraries(CartsBenchmarks PRIVATE OpenMP::OpenMP_CXX)
-  target_compile_definitions(CartsBenchmarks PRIVATE _OPENMP)
-endif()
+# Enable OpenMP for thread pool warmup (required for single-node ARTS vs OMP comparisons)
+find_package(OpenMP REQUIRED)
+target_link_libraries(CartsBenchmarks PRIVATE OpenMP::OpenMP_CXX)
+
+# dlsym (Linux needs ${CMAKE_DL_LIBS}; macOS resolves in libSystem)
+target_link_libraries(CartsBenchmarks PRIVATE ${CMAKE_DL_LIBS})
 
 set_target_properties(CartsBenchmarks PROPERTIES
   OUTPUT_NAME cartsbenchmarks

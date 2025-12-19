@@ -74,6 +74,7 @@ EXAMPLE_ARGS: Dict[str, List[str]] = {
     "array": ["100"],
     "dotproduct": ["100"],
     "matrix": ["100"],
+    "matrix_chunked": ["64"],
     "matrixmul": ["64", "16"],
     "rowdep": ["64"],
     "stencil": ["100"],
@@ -84,26 +85,6 @@ EXAMPLE_ARGS: Dict[str, List[str]] = {
     "parallel_for/single": ["100"],
     "parallel_for/stencil": ["100"],
 }
-
-# Default examples list (order matters for testing)
-DEFAULT_EXAMPLES = [
-    "array",
-    "deps",
-    "dotproduct",
-    "jacobi",
-    "matrix",
-    "matrixmul",
-    "parallel",
-    "parallel_for/block",
-    "parallel_for/chunk",
-    "parallel_for/loops",
-    "parallel_for/reduction",
-    "parallel_for/single",
-    "parallel_for/stencil",
-    "rowdep",
-    "smith-waterman",
-    "stencil",
-]
 
 # Directories to skip when discovering examples
 SKIP_DIRS = {".git", ".svn", ".hg", "build",
@@ -673,13 +654,8 @@ def run(
         raise typer.Exit(1)
 
     if all_examples:
-        # Run all examples
+        # Run all discovered examples (no hardcoded filtering)
         examples = discover_examples(examples_dir)
-        # Filter to default list if available
-        default_set = set(DEFAULT_EXAMPLES)
-        examples = [ex for ex in examples if ex.name in default_set]
-        if not examples:
-            examples = discover_examples(examples_dir)
     elif name:
         # Run specific example
         example = find_example(examples_dir, name)
