@@ -477,6 +477,14 @@ MemRefType DbAllocOp::getAllocatedElementType() {
       SmallVector<Value>(getElementSizes().begin(), getElementSizes().end()));
 }
 
+LogicalResult DbAllocOp::verify() {
+  /// Enforce invariant: elementSizes must be non-empty (scalars use [1]).
+  if (getElementSizes().empty())
+    return emitOpError(
+        "elementSizes must be non-empty; use a single size of 1 for scalars");
+  return success();
+}
+
 /// DbAcquireOp twin_diff attribute accessors
 
 void DbAcquireOp::setTwinDiff(bool enabled) {

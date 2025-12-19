@@ -5,9 +5,8 @@
 ///==========================================================================///
 
 #include "arts/Transforms/Datablock/DbAllocPromotion.h"
-#include "arts/Transforms/Datablock/DbRewriter.h"
-#include "arts/Transforms/Datablock/IndexRedistributor.h"
-#include "arts/Transforms/Datablock/PartitionDescriptor.h"
+#include "arts/Transforms/Datablock/DbChunkedRewriter.h"
+#include "arts/Transforms/Datablock/DbElementWiseRewriter.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
@@ -50,6 +49,44 @@ static Value getOffsetDelta(Value value, Value base, OpBuilder &builder,
   }
   /// Cannot prove derivation - do NOT subtract
   return nullptr;
+}
+
+/// Element-wise localization helper for load/store indices.
+static std::pair<SmallVector<Value>, SmallVector<Value>>
+localizeElementWiseIndices(ValueRange indices, Value elemOffset, Value stride,
+                           OpBuilder &builder, Location loc) {
+  SmallVector<Value> outer, inner;
+  auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
+
+  if (indices.empty()) {
+    outer.push_back(zero());
+    inner.push_back(zero());
+    return {outer, inner};
+  }
+
+  if (stride && indices.size() == 1) {
+    Value scaledOffset =
+        builder.create<arith::MulIOp>(loc, elemOffset, stride);
+    Value localLinear =
+        builder.create<arith::SubIOp>(loc, indices[0], scaledOffset);
+    Value globalRow =
+        builder.create<arith::DivUIOp>(loc, indices[0], stride);
+    Value dbRefIdx =
+        builder.create<arith::SubIOp>(loc, globalRow, elemOffset);
+    outer.push_back(dbRefIdx);
+    inner.push_back(localLinear);
+    return {outer, inner};
+  }
+
+  Value globalRow = indices[0];
+  Value localRow =
+      builder.create<arith::SubIOp>(loc, globalRow, elemOffset);
+  outer.push_back(localRow);
+  for (unsigned i = 1; i < indices.size(); ++i)
+    inner.push_back(indices[i]);
+  if (inner.empty())
+    inner.push_back(zero());
+  return {outer, inner};
 }
 
 } // namespace
@@ -252,13 +289,9 @@ bool DbAllocPromotion::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
   if (!acquire.getSizeHints().empty())
     elemSize = acquire.getSizeHints()[0];
 
-  /// Create DbRewriter based on mode - THE KEY SIMPLIFICATION
-  /// All index localization logic is now in the rewriter classes
+  /// Create the appropriate rewriter based on mode - fully standalone, no base class
+  /// Each rewriter owns its own index localization logic
   /// Pass old element sizes for proper stride computation (static or dynamic)
-  auto rewriter =
-      DbRewriter::create(isChunked_, chunkSize_, startChunk, elemOffset,
-                         elemSize, newOuterSizes_.size(), newInnerSizes_.size(),
-                         oldAlloc_.getElementSizes());
 
   SmallVector<Operation *> users(blockArg.getUsers().begin(),
                                  blockArg.getUsers().end());
@@ -267,11 +300,19 @@ bool DbAllocPromotion::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
 
   for (Operation *user : users) {
     if (auto ref = dyn_cast<DbRefOp>(user)) {
-      /// Use DbRewriter to handle all index transformation
-      /// This encapsulates chunked vs element-wise logic and linearized
-      /// handling
-      rewriter->rewriteDbRefUsers(ref, blockArg, derivedType, builder,
-                                  opsToRemove);
+      /// Use the appropriate rewriter based on mode - fully standalone, no base class
+      if (isChunked_) {
+        DbChunkedRewriter rewriter(chunkSize_, startChunk, elemOffset,
+                                   newOuterSizes_.size(), newInnerSizes_.size());
+        rewriter.rewriteDbRefUsers(ref, blockArg, derivedType, builder,
+                                   opsToRemove);
+      } else {
+        DbElementWiseRewriter rewriter(elemOffset, elemSize,
+                                       newOuterSizes_.size(), newInnerSizes_.size(),
+                                       oldAlloc_.getElementSizes());
+        rewriter.rewriteDbRefUsers(ref, blockArg, derivedType, builder,
+                                   opsToRemove);
+      }
       rewritten = true;
     }
   }
@@ -381,10 +422,8 @@ void DbAllocPromotion::rewriteAcquire(DbAcquireOp acquire, Value elemOffset,
     /// CHUNKED: element-space → chunk-space
     ///
     /// DISJOINT MODEL: Physical chunks are disjoint and indexed by chunkSize_.
-    /// This MUST match IndexRedistributor used for initialization:
-    ///   - Chunk 0: rows [0, chunkSize_)
-    ///   - Chunk 1: rows [chunkSize_, 2*chunkSize_)
-    ///   - etc.
+    /// Chunk layout: chunk 0 -> rows [0, chunkSize_), chunk 1 -> rows
+    /// [chunkSize_, 2*chunkSize_), etc.
     ///
     /// For stencil patterns, a partition may span MULTIPLE physical chunks
     /// because the chunk boundary doesn't align with partition boundary.
@@ -416,13 +455,7 @@ void DbAllocPromotion::rewriteAcquire(DbAcquireOp acquire, Value elemOffset,
     acquire.getOffsetsMutable().assign(newOffsets);
     acquire.getSizesMutable().assign(newSizes);
 
-    /// Set promotion mode attribute for downstream passes to identify chunked
-    /// mode
-    acquire->setAttr(
-        "promotion_mode",
-        PromotionModeAttr::get(builder.getContext(), PromotionMode::chunked));
-
-    /// Store element-space offsets in hints for ViewCoordinateMap localization
+    /// Store element-space offsets in hints for localization
     /// offset_hints = {elemOffset} - pure element-space, no coordinate mixing
     /// size_hints = {elemSize} - pure element-space
     SmallVector<Value> offsetHints = {elemOffset};
@@ -442,11 +475,6 @@ void DbAllocPromotion::rewriteAcquire(DbAcquireOp acquire, Value elemOffset,
     acquire.getSizesMutable().assign(newSizes);
     acquire.getOffsetHintsMutable().assign(newOffsets);
     acquire.getSizeHintsMutable().assign(newSizes);
-
-    /// Set promotion mode attribute for element-wise mode
-    acquire->setAttr("promotion_mode",
-                     PromotionModeAttr::get(builder.getContext(),
-                                            PromotionMode::element_wise));
 
     /// CRITICAL FIX: Store the OLD allocation's stride for linearized access!
     /// After element-wise promotion, the new element type has size=1, but
@@ -474,8 +502,6 @@ void DbAllocPromotion::rewriteAcquire(DbAcquireOp acquire, Value elemOffset,
     if (!blockArg)
       return;
 
-    unsigned newOuterRank = newOuterSizes_.size();
-    unsigned newInnerRank = newInnerSizes_.size();
     Type newElementType = newAlloc.getAllocatedElementType();
 
     llvm::SetVector<Operation *> opsToRemove;
@@ -515,90 +541,37 @@ void DbAllocPromotion::rewriteAcquire(DbAcquireOp acquire, Value elemOffset,
         else if (auto store = dyn_cast<memref::StoreOp>(user))
           oldInner = store.getIndices();
 
-        /// Use PartitionDescriptor for correct index localization
-        /// CRITICAL FIX: For linearized memrefs, the offset must be scaled
-        /// by stride before subtracting!
-        PartitionDescriptor desc =
-            PartitionDescriptor::forElementWise(elemOffset, elemSize);
-
-        PartitionDescriptor::LocalizedIndices localized;
         ARTS_DEBUG("rewriteAcquire: load/store user has "
                    << oldInner.size() << " indices (1=linearized)");
-        if (oldInner.size() == 1) {
-          /// Single index - this is a LINEARIZED access!
-          /// CRITICAL FIX: Must scale offset by stride before subtracting.
-          ///
-          /// For element-wise promotion, the "stride" is the total number of
-          /// elements in each row of the ORIGINAL allocation (before
-          /// promotion).
-          /// - OLD memref<16xf32> -> stride = 16
-          /// - OLD memref<16x32xf32> -> stride = 16*32 = 512
-          ///
-          /// BUG FIX: We MUST use OLD allocation's element sizes, NOT new ones!
-          /// After element-wise promotion, newElementType is memref<1xf32>
-          /// which gives stride=1 (WRONG!). The original had memref<16xf32>
-          /// with stride=16.
-          Value stride;
-
-          /// CRITICAL FIX: Get stride from OLD allocation's element sizes!
-          /// This is the correct stride for linearized index localization.
-          ///
-          /// For element_sizes = [D0, D1, D2, ...], stride = D1 * D2 * ...
-          /// This is the product of TRAILING dimensions, NOT all dimensions!
-          auto oldElementSizes = oldAlloc_.getElementSizes();
-          ARTS_DEBUG("rewriteAcquire: oldElementSizes.size()="
-                     << oldElementSizes.size());
-          if (oldElementSizes.size() >= 2) {
-            // Multi-dimensional: need stride computation
-            if (auto staticStride =
-                    DatablockUtils::getStaticElementStride(oldAlloc_)) {
-              if (*staticStride > 1) {
-                stride = builder.create<arith::ConstantIndexOp>(userLoc,
-                                                                *staticStride);
-                ARTS_DEBUG(
-                    "Element-wise linearized: using OLD allocation stride="
-                    << *staticStride << " (trailing elementSizes product)");
-              }
-            } else {
-              // Dynamic dimensions - use helper to compute stride
-              stride = DatablockUtils::getElementStrideValue(builder, userLoc,
-                                                             oldAlloc_);
-            }
-          }
-          // Single dimension: stride = 1, no scaling needed
-
-          if (stride) {
-            // Use the linearized localization with stride
-            // CRITICAL FIX: This scales the offset by stride before
-            // subtracting!
-            localized =
-                desc.localizeLinearized(oldInner[0], stride, newOuterRank,
-                                        newInnerRank, builder, userLoc);
+        Value stride;
+        auto oldElementSizes = oldAlloc_.getElementSizes();
+        if (oldInner.size() == 1 && oldElementSizes.size() >= 2) {
+          if (auto staticStride =
+                  DatablockUtils::getStaticElementStride(oldAlloc_)) {
+            if (*staticStride > 1)
+              stride =
+                  builder.create<arith::ConstantIndexOp>(userLoc, *staticStride);
           } else {
-            // Fallback: treat as multi-dimensional localization
-            SmallVector<Value> indices(oldInner.begin(), oldInner.end());
-            localized = desc.localize(indices, newOuterRank, newInnerRank,
-                                      builder, userLoc);
+            stride =
+                DatablockUtils::getElementStrideValue(builder, userLoc, oldAlloc_);
           }
-        } else {
-          /// Multi-dimensional indices - use regular localize
-          SmallVector<Value> indices(oldInner.begin(), oldInner.end());
-          localized = desc.localize(indices, newOuterRank, newInnerRank,
-                                    builder, userLoc);
         }
+
+        auto [outerIdx, innerIdx] = localizeElementWiseIndices(
+            oldInner, elemOffset, stride, builder, userLoc);
 
         /// Create new db_ref with transformed outer indices
         auto newRef = builder.create<DbRefOp>(userLoc, newElementType, blockArg,
-                                              localized.dbRefIndices);
+                                              outerIdx);
 
         /// Create new load/store with transformed inner indices
         if (auto load = dyn_cast<memref::LoadOp>(user)) {
-          auto newLoad = builder.create<memref::LoadOp>(
-              userLoc, newRef, localized.memrefIndices);
+          auto newLoad =
+              builder.create<memref::LoadOp>(userLoc, newRef, innerIdx);
           load.replaceAllUsesWith(newLoad.getResult());
         } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
           builder.create<memref::StoreOp>(userLoc, store.getValue(), newRef,
-                                          localized.memrefIndices);
+                                          innerIdx);
         }
         opsToRemove.insert(user);
       }
@@ -669,11 +642,38 @@ void DbAllocPromotion::rewriteDbRef(DbRefOp ref, DbAllocOp newAlloc,
     else if (auto store = dyn_cast<memref::StoreOp>(user))
       loadStoreIndices = store.getIndices();
 
-    /// Use IndexRedistributor to compute new outer/inner indices
-    IndexRedistributor redistributor{newOuterRank, newInnerRank, isChunked_,
-                                     chunkSize_};
-    auto [newOuter, newInner] =
-        redistributor.redistribute(loadStoreIndices, builder, userLoc);
+    SmallVector<Value> newOuter, newInner;
+    auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(userLoc, 0); };
+
+    if (isChunked_) {
+      Value cs = chunkSize_ ? chunkSize_ : zero();
+      if (!loadStoreIndices.empty()) {
+        Value idx0 = loadStoreIndices.front();
+        newOuter.push_back(builder.create<arith::DivUIOp>(userLoc, idx0, cs));
+        newInner.push_back(builder.create<arith::RemUIOp>(userLoc, idx0, cs));
+        for (unsigned i = 1; i < loadStoreIndices.size(); ++i)
+          newInner.push_back(loadStoreIndices[i]);
+      }
+    } else {
+      for (unsigned i = 0; i < newOuterRank; ++i) {
+        if (i < loadStoreIndices.size())
+          newOuter.push_back(loadStoreIndices[i]);
+        else
+          newOuter.push_back(zero());
+      }
+      for (unsigned i = 0; i < newInnerRank; ++i) {
+        unsigned src = newOuterRank + i;
+        if (src < loadStoreIndices.size())
+          newInner.push_back(loadStoreIndices[src]);
+        else
+          newInner.push_back(zero());
+      }
+    }
+
+    if (newOuter.empty())
+      newOuter.push_back(zero());
+    if (newInner.empty())
+      newInner.push_back(zero());
 
     /// Create new db_ref with transformed outer indices
     auto newRef =

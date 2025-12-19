@@ -189,6 +189,34 @@ SmallVector<Value> DatablockUtils::getOffsetsFromDb(Value datablockPtr) {
 }
 
 ///===----------------------------------------------------------------------===///
+/// Partition Mode Detection
+///===----------------------------------------------------------------------===///
+
+PartitionMode DatablockUtils::getPartitionMode(DbAcquireOp acquire) {
+  /// Element-wise: has explicit indices (from OpenMP depend(in: A[i][j]))
+  if (!acquire.getIndices().empty())
+    return PartitionMode::ElementWise;
+
+  /// Chunked: has offsets but no indices (from OpenMP depend(in: A[i:size]))
+  if (!acquire.getOffsets().empty())
+    return PartitionMode::Chunked;
+
+  /// Default: coarse-grained (acquires entire datablock)
+  return PartitionMode::Coarse;
+}
+
+PartitionMode DatablockUtils::getPartitionMode(DbAllocOp alloc) {
+  /// Can only detect coarse from alloc structure (all sizes == 1)
+  if (isCoarseGrained(alloc))
+    return PartitionMode::Coarse;
+
+  /// Fine-grained allocations could be either ElementWise or Chunked.
+  /// The actual mode is determined at acquire time based on DbAcquireOp
+  /// structure. Default to ElementWise for fine-grained allocations.
+  return PartitionMode::ElementWise;
+}
+
+///===----------------------------------------------------------------------===///
 /// Datablock Stride Computation
 ///===----------------------------------------------------------------------===///
 

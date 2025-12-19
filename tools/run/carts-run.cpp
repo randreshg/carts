@@ -7,6 +7,7 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Affine/Passes.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/DLTI/DLTI.h"
 #include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -414,6 +415,8 @@ void setupAdditionalOptimizations(OpPassManager &optPM) {
 void setupLLVMIREmission(PassManager &pm) {
   pm.addPass(createCSEPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
+  /// Expand arith ops like CeilDivUI that don't have direct LLVM lowering.
+  pm.addPass(arith::createArithExpandOpsPass());
   pm.addPass(polygeist::createConvertPolygeistToLLVMPass());
   /// Generate alias scope metadata (must run after ConvertPolygeistToLLVM).
   pm.addPass(arts::createAliasScopeGenPass());
