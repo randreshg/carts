@@ -28,7 +28,9 @@
 #ifndef CARTS_BENCHMARKS_H
 #define CARTS_BENCHMARKS_H
 
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 
 #ifdef _OPENMP
@@ -40,7 +42,66 @@ extern "C" {
 #endif
 
 ///===----------------------------------------------------------------------===///
-/// Timing Utilities (inline - Polygeist compatible)
+/// Benchmark Start/Stop (call to set up fair timing)
+///===----------------------------------------------------------------------===///
+
+/// Pre-warm OMP thread pool. Implemented in CartsBenchmarks.cpp (compiled -O0).
+void carts_benchmarks_warmup_omp(void);
+
+/// Benchmark start hook for fair timing comparisons.
+/// For OpenMP reference builds this warms up the OMP thread pool and may emit
+/// `init.omp: <sec>s` when CARTS_BENCHMARKS_REPORT_INIT=1.
+/// Implemented in CartsBenchmarks.cpp (compiled -O0).
+void carts_benchmarks_start(void);
+
+/// For OMP: calls extern warmup function to initialize thread pool before
+/// timing. For ARTS: no-op (ARTS initializes at startup).
+#ifdef CARTS_BENCHMARKS_OMP
+#define CARTS_BENCHMARKS_START() carts_benchmarks_start()
+#else
+#define CARTS_BENCHMARKS_START() ((void)0)
+#endif
+
+#define CARTS_BENCHMARKS_STOP() ((void)0)
+
+///===----------------------------------------------------------------------===///
+/// End-to-End Timing (high-precision wall clock via std::chrono::steady_clock)
+///
+/// Use for fair ARTS vs OMP comparison. Measures wall clock time including
+/// DAG construction (ARTS) and parallel region overhead (OMP).
+///
+/// Usage:
+///   CARTS_E2E_TIMER_START("kernel_name");
+///   kernel(...);
+///   CARTS_E2E_TIMER_STOP();
+///
+/// Output format:
+///   e2e.kernel_name: 0.123456789s
+///===----------------------------------------------------------------------===///
+
+/// Global timer state for E2E timing
+static uint64_t _carts_e2e_timer_start_ns = 0;
+static const char *_carts_e2e_timer_name = NULL;
+
+/// Get current time in nanoseconds (implemented in CartsBenchmarks.cpp)
+uint64_t carts_e2e_timer_get_time_ns(void);
+
+#define CARTS_E2E_TIMER_START(name)                                            \
+  do {                                                                         \
+    _carts_e2e_timer_name = name;                                              \
+    _carts_e2e_timer_start_ns = carts_e2e_timer_get_time_ns();                 \
+  } while (0)
+
+#define CARTS_E2E_TIMER_STOP()                                                 \
+  do {                                                                         \
+    uint64_t elapsed_ns =                                                      \
+        carts_e2e_timer_get_time_ns() - _carts_e2e_timer_start_ns;             \
+    printf("e2e.%s: %.9fs\n", _carts_e2e_timer_name,                           \
+           (double)elapsed_ns * 1e-9);                                         \
+  } while (0)
+
+///===----------------------------------------------------------------------===///
+/// Legacy Timing Utilities (inline - Polygeist compatible)
 ///===----------------------------------------------------------------------===///
 
 /// Global timer start value for program-level timing

@@ -1941,6 +1941,25 @@ std::optional<DepInfo> CanonicalizeMemrefsPass::extractDepInfo(
     return info;
   }
 
+  /// Pattern 2.5: memref.cast - look through to source
+  /// Chunked dependencies generate: subview -> cast -> depend
+  /// We need to look through the cast to find the underlying subview.
+  if (auto castOp = dyn_cast_or_null<memref::CastOp>(defOp)) {
+    Value castSource = castOp.getSource();
+    if (auto subview =
+            castSource.getDefiningOp<memref::SubViewOp>()) {
+      info.source = subview.getSource();
+      for (auto offset : subview.getMixedOffsets())
+        info.indices.push_back(materializeOpFoldResult(offset, builder, loc));
+      for (auto size : subview.getMixedSizes())
+        info.sizes.push_back(materializeOpFoldResult(size, builder, loc));
+      return info;
+    }
+    /// Cast of something other than subview - use cast source as-is
+    info.source = castSource;
+    return info;
+  }
+
   /// Pattern 3: SubView - chunk dependency
   if (auto subview = dyn_cast_or_null<memref::SubViewOp>(defOp)) {
     info.source = subview.getSource();

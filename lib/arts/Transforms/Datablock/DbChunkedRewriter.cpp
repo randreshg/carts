@@ -1,7 +1,5 @@
 ///==========================================================================///
 /// File: DbChunkedRewriter.cpp
-///
-/// Implementation of DbChunkedRewriter for chunked mode index localization.
 ///==========================================================================///
 
 #include "arts/Transforms/Datablock/DbChunkedRewriter.h"
@@ -19,20 +17,35 @@ ARTS_DEBUG_SETUP(db_transforms);
 using namespace mlir;
 using namespace mlir::arts;
 
+namespace {
+
+/// Helper to get indices from load/store operations
+static ValueRange getIndicesFromOp(Operation *op) {
+  if (auto load = dyn_cast<memref::LoadOp>(op))
+    return load.getIndices();
+  if (auto store = dyn_cast<memref::StoreOp>(op))
+    return store.getIndices();
+  if (auto ref = dyn_cast<DbRefOp>(op))
+    return ref.getIndices();
+  return {};
+}
+
+} // namespace
+
 DbChunkedRewriter::DbChunkedRewriter(Value chunkSize, Value startChunk,
-                                 Value elemOffset, unsigned outerRank,
-                                 unsigned innerRank)
+                                     Value elemOffset, unsigned outerRank,
+                                     unsigned innerRank)
     : chunkSize_(chunkSize), startChunk_(startChunk), elemOffset_(elemOffset),
       outerRank_(outerRank), innerRank_(innerRank) {}
 
-DbRewriter::LocalizedIndices
+DbChunkedRewriter::LocalizedIndices
 DbChunkedRewriter::localize(ArrayRef<Value> globalIndices, OpBuilder &builder,
-                          Location loc) {
+                            Location loc) {
   LocalizedIndices result;
   auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
 
   ARTS_DEBUG("DbChunkedRewriter::localize with " << globalIndices.size()
-                                               << " indices");
+                                                 << " indices");
   LLVM_DEBUG(llvm::dbgs() << "DbChunkedRewriter::localize with "
                           << globalIndices.size() << " indices\n");
 
@@ -64,9 +77,9 @@ DbChunkedRewriter::localize(ArrayRef<Value> globalIndices, OpBuilder &builder,
   return result;
 }
 
-DbRewriter::LocalizedIndices
+DbChunkedRewriter::LocalizedIndices
 DbChunkedRewriter::localizeLinearized(Value globalLinearIndex, Value stride,
-                                    OpBuilder &builder, Location loc) {
+                                      OpBuilder &builder, Location loc) {
   LocalizedIndices result;
 
   ARTS_DEBUG("DbChunkedRewriter::localizeLinearized - using div/mod");
@@ -93,6 +106,73 @@ DbChunkedRewriter::localizeLinearized(Value globalLinearIndex, Value stride,
   return result;
 }
 
+void DbChunkedRewriter::rebaseOps(ArrayRef<Operation *> ops, Value dbPtr,
+                                  Type elementType, ArtsCodegen &AC,
+                                  llvm::SetVector<Operation *> &opsToRemove) {
+  ARTS_DEBUG("DbChunkedRewriter::rebaseOps with " << ops.size() << " ops");
+  LLVM_DEBUG(llvm::dbgs() << "DbChunkedRewriter::rebaseOps: processing "
+                          << ops.size() << " operations\n");
+
+  for (Operation *op : ops) {
+    OpBuilder::InsertionGuard IG(AC.getBuilder());
+    AC.setInsertionPoint(op);
+    Location loc = op->getLoc();
+
+    // Handle DbRefOp specially - rewrite its users
+    if (auto dbRef = dyn_cast<DbRefOp>(op)) {
+      rewriteDbRefUsers(dbRef, dbPtr, elementType, AC.getBuilder(),
+                        opsToRemove);
+      continue;
+    }
+
+    // Handle load/store operations
+    if (!isa<memref::LoadOp, memref::StoreOp>(op))
+      continue;
+
+    ValueRange indices = getIndicesFromOp(op);
+    if (indices.empty())
+      continue;
+
+    // Detect linearized access for multi-dimensional memrefs
+    bool isLinearized = false;
+    Value stride;
+    if (indices.size() == 1) {
+      if (auto memrefType = elementType.dyn_cast<MemRefType>()) {
+        if (memrefType.getRank() >= 2) {
+          if (auto staticStride = DatablockUtils::getStaticStride(memrefType)) {
+            if (*staticStride > 1) {
+              isLinearized = true;
+              stride = AC.createIndexConstant(*staticStride, loc);
+            }
+          }
+        }
+      }
+    }
+
+    LocalizedIndices localized;
+    if (isLinearized && stride) {
+      localized = localizeLinearized(indices[0], stride, AC.getBuilder(), loc);
+    } else {
+      SmallVector<Value> indicesVec(indices.begin(), indices.end());
+      localized = localize(indicesVec, AC.getBuilder(), loc);
+    }
+
+    // Create db_ref + load/store pattern
+    auto dbRef =
+        AC.create<DbRefOp>(loc, elementType, dbPtr, localized.dbRefIndices);
+
+    if (auto load = dyn_cast<memref::LoadOp>(op)) {
+      auto newLoad = AC.create<memref::LoadOp>(loc, dbRef.getResult(),
+                                               localized.memrefIndices);
+      load.replaceAllUsesWith(newLoad.getResult());
+    } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
+      AC.create<memref::StoreOp>(loc, store.getValue(), dbRef.getResult(),
+                                 localized.memrefIndices);
+    }
+    opsToRemove.insert(op);
+  }
+}
+
 void DbChunkedRewriter::rewriteDbRefUsers(
     DbRefOp ref, Value blockArg, Type newElementType, OpBuilder &builder,
     llvm::SetVector<Operation *> &opsToRemove) {
@@ -117,24 +197,18 @@ void DbChunkedRewriter::rewriteDbRefUsers(
       continue;
 
     // Detect linearized access: single index accessing multi-element memref
-    // CRITICAL FIX: For linearization stride, we need product of TRAILING dims
-    // (not total elements). For [D0, D1, ...], stride = D1 * D2 * ...
     bool isLinearized = false;
     Value stride;
     if (elementIndices.size() == 1) {
       if (auto memrefType = newElementType.dyn_cast<MemRefType>()) {
         if (memrefType.getRank() >= 2) {
-          // Multi-dimensional memref with single index = linearized access
-          if (auto staticStride =
-                  DatablockUtils::DatablockUtils::getStaticStride(memrefType)) {
+          if (auto staticStride = DatablockUtils::getStaticStride(memrefType)) {
             if (*staticStride > 1) {
               isLinearized = true;
               stride = builder.create<arith::ConstantIndexOp>(userLoc,
                                                               *staticStride);
             }
           }
-          // Note: Dynamic dimensions not handled here - caller should
-          // provide stride via element_stride attribute on the acquire
         }
       }
     }
@@ -166,11 +240,10 @@ void DbChunkedRewriter::rewriteDbRefUsers(
   opsToRemove.insert(ref.getOperation());
 }
 
-SmallVector<Value>
-DbChunkedRewriter::localizeCoordinates(ArrayRef<Value> globalIndices,
-                                     ArrayRef<Value> sliceOffsets,
-                                     unsigned numIndexedDims, Type elementType,
-                                     OpBuilder &builder, Location loc) {
+SmallVector<Value> DbChunkedRewriter::localizeCoordinates(
+    ArrayRef<Value> globalIndices, ArrayRef<Value> sliceOffsets,
+    unsigned numIndexedDims, Type elementType, OpBuilder &builder,
+    Location loc) {
   SmallVector<Value> result;
   auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
 
@@ -214,18 +287,33 @@ DbChunkedRewriter::localizeCoordinates(ArrayRef<Value> globalIndices,
   return result;
 }
 
-bool DbChunkedRewriter::rebaseToAcquireViewImpl(
-    Operation *op, DbAcquireOp acquire, Value dbPtr, Type elementType,
-    ArtsCodegen &AC, llvm::SetVector<Operation *> &opsToRemove) {
-  // Delegate to the existing standalone function for now
-  // The chunked mode handling is already correct in the standalone
-  // as it uses div/mod which doesn't need stride scaling
-  return DbRewriter::rebaseToAcquireView(op, acquire, dbPtr, elementType, AC,
-                                         opsToRemove);
-}
+void DbChunkedRewriter::rewriteUsesInParentRegion(
+    Operation *alloc, DbAllocOp dbAlloc, ArtsCodegen &AC,
+    llvm::SetVector<Operation *> &opsToRemove) {
+  ARTS_DEBUG("DbChunkedRewriter::rewriteUsesInParentRegion");
 
-bool DbChunkedRewriter::rebaseAllUsersToAcquireViewImpl(DbAcquireOp acquire,
-                                                      ArtsCodegen &AC) {
-  // Delegate to existing function - chunked mode is already handled correctly
-  return DbRewriter::rebaseAllUsersToAcquireView(acquire, AC);
+  // Collect users of the original allocation (excluding DbAllocOp and EDT uses)
+  SmallVector<Operation *> users;
+  for (auto &use : alloc->getUses()) {
+    Operation *user = use.getOwner();
+    // Skip the DbAllocOp itself
+    if (user == dbAlloc.getOperation())
+      continue;
+    // Skip uses inside EDTs - those are rewritten via acquires separately
+    if (user->getParentOfType<EdtOp>())
+      continue;
+    users.push_back(user);
+  }
+
+  if (users.empty()) {
+    ARTS_DEBUG("  No users to rewrite in parent region");
+    return;
+  }
+
+  ARTS_DEBUG("  Rewriting " << users.size()
+                            << " main body accesses with chunked indexing");
+
+  // Use rebaseOps with the collected users - chunked div/mod transformation
+  Type elementMemRefType = dbAlloc.getAllocatedElementType();
+  rebaseOps(users, dbAlloc.getPtr(), elementMemRefType, AC, opsToRemove);
 }

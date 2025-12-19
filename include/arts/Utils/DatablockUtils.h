@@ -19,6 +19,22 @@ namespace mlir {
 namespace arts {
 
 ///===----------------------------------------------------------------------===///
+/// Partition Mode Enum
+///===----------------------------------------------------------------------===///
+/// Partition mode for datablock access patterns.
+/// Determined from DbAcquireOp structure - no attributes needed!
+///
+/// Mode detection logic (from DbAcquireOp):
+///   - ElementWise: indices non-empty (from OpenMP depend(in: A[i][j]))
+///   - Chunked: indices empty, offsets non-empty (from OpenMP depend(in: A[i:K]))
+///   - Coarse: both empty (acquires entire datablock)
+enum class PartitionMode {
+  Coarse,      /// No partitioning - acquires entire datablock
+  ElementWise, /// Uses indices to select individual elements
+  Chunked      /// Uses offsets/sizes to select chunks
+};
+
+///===----------------------------------------------------------------------===///
 /// Datablock Utilities
 ///===----------------------------------------------------------------------===///
 /// Utility class for working with ARTS datablocks (DbAllocOp, DbAcquireOp).
@@ -73,6 +89,33 @@ public:
 
   /// Check if allocation is coarse-grained (all sizes == 1).
   static bool isCoarseGrained(DbAllocOp alloc);
+
+  ///===----------------------------------------------------------------------===///
+  /// Partition Mode Detection
+  ///===----------------------------------------------------------------------===///
+  /// Structure-based mode detection - no attributes needed!
+
+  /// Get partition mode from DbAcquireOp structure.
+  /// - ElementWise: indices non-empty
+  /// - Chunked: indices empty, offsets non-empty
+  /// - Coarse: both empty
+  static PartitionMode getPartitionMode(DbAcquireOp acquire);
+
+  /// Get partition mode from DbAllocOp (limited - can only detect coarse).
+  /// Fine-grained allocations default to ElementWise since the actual mode
+  /// is determined at acquire time.
+  static PartitionMode getPartitionMode(DbAllocOp alloc);
+
+  /// Convenience predicates for DbAcquireOp
+  static bool isChunked(DbAcquireOp acquire) {
+    return getPartitionMode(acquire) == PartitionMode::Chunked;
+  }
+  static bool isElementWise(DbAcquireOp acquire) {
+    return getPartitionMode(acquire) == PartitionMode::ElementWise;
+  }
+  static bool isCoarse(DbAcquireOp acquire) {
+    return getPartitionMode(acquire) == PartitionMode::Coarse;
+  }
 
   ///===----------------------------------------------------------------------===///
   /// Datablock Stride Computation

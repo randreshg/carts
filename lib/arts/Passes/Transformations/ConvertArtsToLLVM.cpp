@@ -940,19 +940,24 @@ struct DbAcquirePattern : public ArtsToLLVMPattern<DbAcquireOp> {
                                  op.getIndices().end());
       SmallVector<Value> strides =
           AC->computeStridesFromSizes(sourceSizes, loc);
-      /// Guid llvm type
-      auto guidMT = op.getGuid().getType().dyn_cast<MemRefType>();
+      /// Guid llvm type - underlying storage is always linear (rank-1)
+      /// regardless of DbAcquireOp's multi-dimensional sizes
+      auto origGuidMT = op.getGuid().getType().dyn_cast<MemRefType>();
       auto llvmGuidType = LLVM::LLVMPointerType::get(
-          AC->getContext(), guidMT.getMemorySpaceAsInt());
+          AC->getContext(), origGuidMT.getMemorySpaceAsInt());
       auto loadedGuid =
           AC->create<DbGepOp>(loc, llvmGuidType, sourceGuid, indices, strides);
-      /// Ptr llvm type
-      auto ptrMT = op.getPtr().getType().dyn_cast<MemRefType>();
+      /// Ptr llvm type - same: underlying storage is linear
+      auto origPtrMT = op.getPtr().getType().dyn_cast<MemRefType>();
       auto llvmPtrType = LLVM::LLVMPointerType::get(
-          AC->getContext(), ptrMT.getMemorySpaceAsInt());
+          AC->getContext(), origPtrMT.getMemorySpaceAsInt());
       auto loadedPtr =
           AC->create<DbGepOp>(loc, llvmPtrType, sourcePtr, indices, strides);
-      /// Convert to memref type
+      /// Convert to memref type - use rank-1 linear memrefs since underlying
+      /// storage from DbAllocOp is always linearized. The multi-dimensional
+      /// sizes in DbAcquireOp are for logical indexing, not physical layout.
+      auto guidMT = MemRefType::get({ShapedType::kDynamic}, AC->Int64);
+      auto ptrMT = MemRefType::get({ShapedType::kDynamic}, AC->llvmPtr);
       auto guidMemref =
           AC->create<polygeist::Pointer2MemrefOp>(loc, guidMT, loadedGuid);
       auto ptrMemref =
