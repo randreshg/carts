@@ -53,11 +53,8 @@ void LoopAnalyzer::analyzeAffineLoop(affine::AffineForOp forOp,
   }
   metadata->nestingLevel = nestLevel;
   metadata->potentiallyParallel = isLoopParallel(forOp);
-  analyzeMemoryAccesses(forOp, metadata);
 
   metadata->hasInterIterationDeps = depAnalyzer.hasInterIterationDeps(forOp);
-  metadata->dataMovementPattern = classifyDataMovement(metadata);
-  suggestPartitioning(metadata);
   detectReductions(forOp.getOperation(), metadata);
   finalizeParallelFlag(forOp.getOperation(), metadata);
 }
@@ -110,98 +107,9 @@ void LoopAnalyzer::analyzeSCFLoop(Operation *loopOp, LoopMetadata *metadata) {
     (void)whileOp;
   }
 
-  analyzeMemoryAccesses(loopOp, metadata);
   metadata->hasInterIterationDeps = depAnalyzer.hasInterIterationDeps(loopOp);
-  metadata->dataMovementPattern = classifyDataMovement(metadata);
-  suggestPartitioning(metadata);
-  /// TODO: Add reduction detection when available
   detectReductions(loopOp, metadata);
   finalizeParallelFlag(loopOp, metadata);
-}
-
-void LoopAnalyzer::analyzeMemoryAccesses(Operation *loopOp,
-                                         LoopMetadata *metadata) {
-  int64_t reads = 0, writes = 0;
-  bool hasUniformStride = true;
-  bool hasGatherScatter = false;
-
-  DenseSet<Value> accessedMemrefs;
-
-  loopOp->walk([&](Operation *op) {
-    if (accessAnalyzer.isMemoryAccess(op)) {
-      if (isa<affine::AffineLoadOp, memref::LoadOp>(op)) {
-        reads++;
-      } else if (isa<affine::AffineStoreOp, memref::StoreOp>(op)) {
-        writes++;
-      }
-
-      /// Track accessed memrefs
-      if (Value memref = accessAnalyzer.getAccessedMemref(op)) {
-        accessedMemrefs.insert(memref);
-
-        /// Check for stride-1 access
-        if (!accessAnalyzer.hasStrideOneAccess(memref, loopOp)) {
-          hasUniformStride = false;
-        }
-
-        /// Check for gather/scatter (non-affine accesses)
-        if (!accessAnalyzer.isAffineAccess(op)) {
-          hasGatherScatter = true;
-        }
-      }
-    }
-  });
-
-  metadata->accessStats.readCount = reads;
-  metadata->accessStats.writeCount = writes;
-  metadata->hasUniformStride = hasUniformStride;
-  metadata->hasGatherScatter = hasGatherScatter;
-}
-
-LoopMetadata::DataMovement
-LoopAnalyzer::classifyDataMovement(LoopMetadata *metadata) {
-  /// Classify based on access patterns
-  if (metadata->hasGatherScatter) {
-    if (metadata->accessStats.writeCount.value_or(0) >
-        metadata->accessStats.readCount.value_or(0))
-      return LoopMetadata::DataMovement::Scatter;
-    else
-      return LoopMetadata::DataMovement::Gather;
-  }
-
-  if (metadata->hasUniformStride && *metadata->hasUniformStride)
-    return LoopMetadata::DataMovement::Streaming;
-
-  /// Check for tiled access (multiple memrefs with structured access)
-  if (metadata->accessStats.readCount.value_or(0) > 0 &&
-      metadata->accessStats.writeCount.value_or(0) > 0)
-    return LoopMetadata::DataMovement::Tiled;
-
-  return LoopMetadata::DataMovement::Unknown;
-}
-
-void LoopAnalyzer::suggestPartitioning(LoopMetadata *metadata) {
-  /// Don't suggest partitioning for sequential loops
-  if (!metadata->potentiallyParallel)
-    return;
-
-  /// Suggest partitioning based on trip count
-  if (metadata->tripCount && *metadata->tripCount > 0) {
-    int64_t tripCount = *metadata->tripCount;
-    if (tripCount < 100) {
-      /// Small loops: use block scheduling
-      metadata->suggestedPartitioning = LoopMetadata::Partitioning::Block;
-    } else if (tripCount < 10000) {
-      /// Medium loops: use block scheduling
-      metadata->suggestedPartitioning = LoopMetadata::Partitioning::Block;
-    } else {
-      /// Large loops: use dynamic scheduling for better load balancing
-      metadata->suggestedPartitioning = LoopMetadata::Partitioning::Dynamic;
-    }
-  } else {
-    /// Unknown trip count: suggest auto partitioning
-    metadata->suggestedPartitioning = LoopMetadata::Partitioning::Auto;
-  }
 }
 
 void LoopAnalyzer::detectReductions(Operation *loopOp, LoopMetadata *metadata) {
@@ -277,7 +185,7 @@ void LoopAnalyzer::finalizeParallelFlag(Operation *loopOp,
 ///===----------------------------------------------------------------------===///
 
 void LoopAnalyzer::analyzeLoopNestDependences(affine::AffineForOp outerLoop,
-                                               LoopMetadata *metadata) {
+                                              LoopMetadata *metadata) {
   // Use DependenceAnalyzer to get per-dimension dependency info
   auto result = depAnalyzer.analyzeLoopNestDependences(outerLoop);
 
@@ -293,14 +201,17 @@ void LoopAnalyzer::analyzeLoopNestDependences(affine::AffineForOp outerLoop,
 
   ARTS_DEBUG("Per-dimension deps analysis for loop nest:");
   for (const auto &dep : metadata->dimensionDeps) {
-    ARTS_DEBUG("  dim " << dep.dimension << ": "
-                        << (dep.hasCarriedDep ? "carries deps" : "parallel")
-                        << (dep.distance ? " (dist=" + std::to_string(*dep.distance) + ")"
-                                         : ""));
+    ARTS_DEBUG(
+        "  dim " << dep.dimension << ": "
+                 << (dep.hasCarriedDep ? "carries deps" : "parallel")
+                 << (dep.distance
+                         ? " (dist=" + std::to_string(*dep.distance) + ")"
+                         : ""));
   }
 
   if (metadata->outermostParallelDim) {
-    ARTS_DEBUG("Outermost parallel dimension: " << *metadata->outermostParallelDim);
+    ARTS_DEBUG(
+        "Outermost parallel dimension: " << *metadata->outermostParallelDim);
   } else {
     ARTS_DEBUG("No parallelizable dimension found");
   }

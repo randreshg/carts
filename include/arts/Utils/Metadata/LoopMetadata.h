@@ -11,7 +11,6 @@
 #define ARTS_UTILS_LOOPMETADATA_H
 
 #include "arts/ArtsDialect.h"
-#include "arts/Utils/Metadata/AccessStats.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
 #include "mlir/IR/Builders.h"
@@ -32,14 +31,8 @@ constexpr StringLiteral Name = "arts.loop";
 constexpr StringLiteral PotentiallyParallel = "potentially_parallel";
 constexpr StringLiteral HasReductions = "has_reductions";
 constexpr StringLiteral ReductionKinds = "reduction_kinds";
-constexpr StringLiteral ReadCount = "read_count";
-constexpr StringLiteral WriteCount = "write_count";
 constexpr StringLiteral TripCount = "trip_count";
 constexpr StringLiteral NestingLevel = "nesting_level";
-constexpr StringLiteral HasUniformStride = "has_uniform_stride";
-constexpr StringLiteral HasGatherScatter = "has_gather_scatter";
-constexpr StringLiteral DataMovementPattern = "data_movement_pattern";
-constexpr StringLiteral SuggestedPartitioning = "suggested_partitioning";
 constexpr StringLiteral HasInterIterationDeps = "has_inter_iteration_deps";
 constexpr StringLiteral MemrefsWithLoopCarriedDeps =
     "memrefs_with_loop_carried_deps";
@@ -57,10 +50,10 @@ constexpr StringLiteral OutermostParallelDim = "outermost_parallel_dim";
 /// Allows tracking which specific loop dimension carries dependencies,
 /// enabling parallelization of outer loops even when inner loops have deps.
 struct DimensionDependency {
-  int64_t dimension = 0;                   // 0 = outermost, 1 = next, etc.
-  bool hasCarriedDep = false;              // Does THIS dimension carry deps?
-  std::optional<int64_t> distance;         // Dependence distance if known
-  SmallVector<Value> dependentMemrefs;     // Which memrefs cause deps (optional)
+  int64_t dimension = 0;               // 0 = outermost, 1 = next, etc.
+  bool hasCarriedDep = false;          // Does THIS dimension carry deps?
+  std::optional<int64_t> distance;     // Dependence distance if known
+  SmallVector<Value> dependentMemrefs; // Which memrefs cause deps (optional)
 
   /// For JSON serialization
   void importFromJson(const llvm::json::Object &json);
@@ -83,24 +76,6 @@ public:
   const char *reductionKindToString(ReductionKind kind) const;
   ReductionKind stringToReductionKind(llvm::StringRef str) const;
 
-  /// Data movement patterns for loops
-  enum class DataMovement {
-    Streaming,
-    Tiled,
-    Random,
-    Stencil,
-    Gather,
-    Scatter,
-    Unknown
-  };
-  const char *dataMovementToString(DataMovement pattern) const;
-  DataMovement stringToDataMovement(llvm::StringRef str) const;
-
-  /// Loop partitioning strategies
-  enum class Partitioning { Block, Dynamic, Guided, Auto, Unknown };
-  const char *partitioningToString(Partitioning strategy) const;
-  Partitioning stringToPartitioning(llvm::StringRef str) const;
-
   /// Parallel classification for loops
   enum class ParallelClassification { Unknown, ReadOnly, Likely, Sequential };
   const char *
@@ -115,18 +90,8 @@ public:
   bool potentiallyParallel = false, hasReductions = false;
   SmallVector<ReductionKind> reductionKinds;
 
-  /// Memory access patterns
-  AccessStats accessStats;
-
   /// Loop structure information
   std::optional<int64_t> tripCount, nestingLevel;
-
-  /// Access pattern analysis
-  std::optional<bool> hasUniformStride, hasGatherScatter;
-  std::optional<DataMovement> dataMovementPattern;
-
-  /// Partitioning hints
-  std::optional<Partitioning> suggestedPartitioning;
 
   /// Dependency information
   std::optional<bool> hasInterIterationDeps;
@@ -144,17 +109,19 @@ public:
   SmallVector<int64_t> reorderNestTo;
 
   /// Per-dimension dependency analysis for nested loops.
-  /// Each entry describes whether a specific nesting level carries dependencies.
-  /// Key insight: inner loop deps don't prevent outer loop parallelism.
-  /// Example: for(i) { for(j) { A[i][j] = f(A[i][j-1]) } }
+  /// Each entry describes whether a specific nesting level carries
+  /// dependencies. Key insight: inner loop deps don't prevent outer loop
+  /// parallelism. Example: for(i) { for(j) { A[i][j] = f(A[i][j-1]) } }
   ///   - dimensionDeps[0] = {dim=0, hasCarriedDep=false} // i-loop is parallel
-  ///   - dimensionDeps[1] = {dim=1, hasCarriedDep=true}  // j-loop has A[i][j-1] dep
+  ///   - dimensionDeps[1] = {dim=1, hasCarriedDep=true}  // j-loop has
+  ///   A[i][j-1] dep
   SmallVector<DimensionDependency> dimensionDeps;
 
   /// The outermost dimension that can be parallelized (0 = outermost).
   /// -1 means no dimension is parallelizable.
   /// This allows ForLowering to parallelize only the outer loop even when
-  /// inner loops have dependencies (e.g., Seidel-2D: parallelize i, sequential j).
+  /// inner loops have dependencies (e.g., Seidel-2D: parallelize i, sequential
+  /// j).
   std::optional<int64_t> outermostParallelDim;
 
   //===-------------------------------------------------------------===//

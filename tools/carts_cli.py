@@ -1011,7 +1011,8 @@ def execute(
 
     if use_dual_mode:
         _execute_dual(config, input_file, output_name, debug,
-                      extra_run_args, extra_compile_args, cgeist_args)
+                      extra_run_args, extra_compile_args, cgeist_args,
+                      use_diagnose, final_diagnose_output)
     else:
         _execute_simple(config, input_file, output_name, debug, extra_run_args,
                         extra_compile_args, cgeist_args, use_diagnose, final_diagnose_output)
@@ -1155,6 +1156,8 @@ def _execute_dual(
     run_args: List[str],
     compile_args: List[str],
     passthrough_args: Optional[List[str]] = None,
+    diagnose: bool = False,
+    diagnose_output: Optional[Path] = None,
 ) -> None:
     """Dual 5-step pipeline with metadata extraction.
 
@@ -1229,6 +1232,11 @@ def _execute_dual(
         cmd = [str(carts_run_bin), str(par_mlir), "--O3", "--emit-llvm"]
         if debug:
             cmd.append("-g")
+        if diagnose:
+            cmd.append("--diagnose")
+            effective_diagnose_output = diagnose_output or Path(
+                f"{base_name}-diagnose.json")
+            cmd.extend(["--diagnose-output", str(effective_diagnose_output)])
         cmd.extend(run_args)
         if run_command_with_output(cmd, ll_file) != 0:
             print_error("Failed ARTS transformations")

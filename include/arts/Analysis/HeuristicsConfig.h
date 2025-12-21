@@ -15,14 +15,24 @@
 #include <optional>
 
 namespace mlir {
+
+class Operation;
+
 namespace arts {
 
-/// Records a single heuristic decision for diagnostics export
+class IdRegistry;
+
+/// Records a single heuristic decision for diagnostics export.
+/// Follows PGO pattern: compute compile-time → runtime mapping for correlation.
 struct HeuristicDecision {
   std::string heuristic;
   bool applied;
   std::string rationale;
-  int64_t affectedArtsId;
+  int64_t affectedArtsId;  /// Target operation arts_id (e.g., DbAcquireOp)
+  int64_t affectedAllocId; /// Parent allocation arts_id (e.g., DbAllocOp)
+  llvm::SmallVector<int64_t>
+      affectedDbIds;          /// Runtime DB IDs this decision affects
+  std::string sourceLocation; /// Source location for ArtsMate correlation
   llvm::StringMap<int64_t> costModelInputs;
 };
 
@@ -45,7 +55,7 @@ enum class TwinDiffProof {
 struct TwinDiffContext {
   TwinDiffProof proof = TwinDiffProof::None;
   bool isCoarseAllocation = false;
-  std::optional<int64_t> artsId;
+  Operation *op = nullptr; /// The operation this decision applies to
 };
 
 /// Mode-dependent chunking thresholds (derived from MemoryConfig)
@@ -61,7 +71,8 @@ struct ChunkingThresholds {
 /// Provides decision methods for single-rank and other optimizations.
 class HeuristicsConfig {
 public:
-  explicit HeuristicsConfig(const mlir::arts::ArtsAbstractMachine &machine);
+  HeuristicsConfig(const mlir::arts::ArtsAbstractMachine &machine,
+                   IdRegistry &idRegistry);
 
   //===--------------------------------------------------------------------===//
   // Machine Queries
@@ -143,9 +154,11 @@ public:
   // Decision Recording for Diagnostics
   //===--------------------------------------------------------------------===//
 
-  /// Records a heuristic decision for diagnostics export
+  /// Records a heuristic decision for diagnostics export.
+  /// Preferred interface: pass the affected Operation* and let the config
+  /// resolve the artsId automatically via IdRegistry.
   void recordDecision(llvm::StringRef heuristic, bool applied,
-                      llvm::StringRef rationale, int64_t artsId,
+                      llvm::StringRef rationale, Operation *op,
                       const llvm::StringMap<int64_t> &inputs = {});
 
   /// Returns all recorded heuristic decisions
@@ -156,8 +169,9 @@ public:
 
 private:
   const mlir::arts::ArtsAbstractMachine &machine;
-  llvm::SmallVector<HeuristicDecision> decisions_; ///< Recorded decisions
-  ChunkingThresholds thresholds_; ///< Mode-dependent thresholds
+  IdRegistry &idRegistry_;
+  llvm::SmallVector<HeuristicDecision> decisions_;
+  ChunkingThresholds thresholds_;
 
   /// Initialize thresholds based on machine config
   void initializeThresholds();

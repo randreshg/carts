@@ -268,8 +268,8 @@ bool DbAllocNode::canProveNonOverlapping() const {
   if (allAcquiresWorkerIndexed())
     return true;
 
-  /// Get alias analysis from DbAnalysis
-  DbAliasAnalysis *aliasAnalysis = analysis->getAliasAnalysis();
+  /// Get alias analysis from DbAnalysis (may be null during export)
+  DbAliasAnalysis *aliasAnalysis = analysis ? analysis->getAliasAnalysis() : nullptr;
 
   /// Check all acquire pairs using enhanced analysis
   for (size_t i = 0; i < acquireNodes.size(); ++i) {
@@ -280,13 +280,16 @@ bool DbAllocNode::canProveNonOverlapping() const {
       if (!acqA || !acqB)
         continue;
 
-      /// Method 3: Use DbAliasAnalysis overlap estimation
-      auto overlap = aliasAnalysis->estimateOverlap(
-          const_cast<DbAcquireNode *>(acqA), const_cast<DbAcquireNode *>(acqB));
-      if (overlap == DbAliasAnalysis::OverlapKind::Disjoint) {
-        /// Proven disjoint by alias analysis
-        ARTS_DEBUG("Pair (" << i << "," << j << "): Disjoint (aliasAnalysis)");
-        continue;
+      /// Method 3: Use DbAliasAnalysis overlap estimation (if available)
+      if (aliasAnalysis) {
+        auto overlap = aliasAnalysis->estimateOverlap(
+            const_cast<DbAcquireNode *>(acqA),
+            const_cast<DbAcquireNode *>(acqB));
+        if (overlap == DbAliasAnalysis::OverlapKind::Disjoint) {
+          /// Proven disjoint by alias analysis
+          ARTS_DEBUG("Pair (" << i << "," << j << "): Disjoint (aliasAnalysis)");
+          continue;
+        }
       }
 
       /// Method 4: Check offset_hints/size_hints from ForLowering

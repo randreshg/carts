@@ -5,6 +5,7 @@ message(STATUS "POLYGEIST_LIBRARY_DIR: ${POLYGEIST_BUILD_DIR}/lib")
 add_mlir_dialect_library(MLIRArtsTransforms
   # Transformation passes
   Transformations/CollectMetadata.cpp
+  Transformations/VerifyMetadata.cpp
   Transformations/CreateDbs.cpp
   Transformations/CreateEpochs.cpp
   Transformations/Concurrency.cpp
