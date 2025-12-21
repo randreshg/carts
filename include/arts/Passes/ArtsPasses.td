@@ -439,4 +439,33 @@ def LoopVectorizationHints : Pass<"arts-loop-vectorization-hints", "mlir::Module
   let constructor = "mlir::arts::createLoopVectorizationHintsPass()";
 }
 
+def VerifyMetadata : Pass<"verify-metadata", "mlir::ModuleOp"> {
+  let summary = "Verify metadata coverage for loops and memrefs";
+  let description = [{
+    This pass verifies that all loops and memrefs in the program have associated
+    metadata from the CollectMetadata pass. It counts:
+    - affine.for, scf.for, scf.parallel operations
+    - memref.alloc, memref.alloca operations
+
+    And compares against entries in the ArtsMetadataManager. Emits warnings for
+    any entities missing metadata, and optionally fails compilation if coverage
+    is incomplete.
+
+    This pass is automatically run when --diagnose is enabled to ensure the
+    diagnose output contains complete information for all entities.
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "affine::AffineDialect",
+    "scf::SCFDialect"
+  ];
+  let options = [
+    Option<"failOnMissing", "fail-on-missing", "bool", "false",
+           "Fail compilation if any entities are missing metadata">
+  ];
+  let constructor = "mlir::arts::createVerifyMetadataPass(nullptr)";
+}
+
 #endif // CARTS_PASSES

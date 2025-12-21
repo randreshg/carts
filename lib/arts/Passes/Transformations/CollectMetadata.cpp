@@ -87,8 +87,7 @@ struct CollectMetadataPass : public CollectMetadataBase<CollectMetadataPass> {
     auto reuseAnalyzer = std::make_unique<ReuseAnalyzer>(*accessAnalyzer);
     auto memrefAnalyzer = std::make_unique<MemrefAnalyzer>(
         *accessAnalyzer, *reuseAnalyzer, *manager, *depAnalyzer);
-    auto loopAnalyzer =
-        std::make_unique<LoopAnalyzer>(context, *accessAnalyzer, *depAnalyzer);
+    auto loopAnalyzer = std::make_unique<LoopAnalyzer>(*depAnalyzer);
 
     ///  Collect loop metadata
     ARTS_DEBUG("Collecting loop metadata...");
@@ -218,15 +217,13 @@ private:
       if (usage.empty())
         return;
 
-      uint64_t readOnly = 0, writeOnly = 0, readWrite = 0;
+      uint64_t writeOnly = 0, readWrite = 0;
       uint64_t memrefsWithDeps = 0;
       for (auto &entry : usage) {
         LoopMemrefUsage &info = entry.second;
         bool hasReads = info.readCount > 0;
         bool hasWrites = info.writeCount > 0;
-        if (hasReads && !hasWrites)
-          readOnly++;
-        else if (!hasReads && hasWrites)
+        if (!hasReads && hasWrites)
           writeOnly++;
         else if (hasReads && hasWrites)
           readWrite++;
@@ -258,8 +255,7 @@ private:
       bool sequential =
           (hasLoopLevelDeps || memrefsWithDeps > 0) && !outerLoopParallelizable;
 
-      bool hasWrites = (writeOnly + readWrite) > 0 ||
-                       loopMeta->accessStats.writeCount.value_or(0) > 0;
+      bool hasWrites = (writeOnly + readWrite) > 0;
       LoopMetadata::ParallelClassification classification =
           LoopMetadata::ParallelClassification::Unknown;
       if (sequential) {

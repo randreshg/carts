@@ -6,8 +6,12 @@
 ///==========================================================================///
 
 #include "arts/Analysis/ArtsAnalysisManager.h"
+#include "arts/Analysis/Graphs/Edt/EdtGraph.h"
+#include "arts/Analysis/Graphs/Edt/EdtNode.h"
+#include "arts/Analysis/Loop/LoopNode.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
@@ -62,6 +66,7 @@ ArtsMetadataManager &ArtsAnalysisManager::getMetadataManager() {
   if (!metadataManager) {
     metadataManager =
         std::make_unique<ArtsMetadataManager>(module.getContext());
+    metadataManager->getIdRegistry().initializeFromModule(module);
     metadataManager->importFromJsonFile(module, ".carts-metadata.json");
   }
   return *metadataManager;
@@ -80,8 +85,12 @@ const StringAnalysis &ArtsAnalysisManager::getStringAnalysis() const {
 }
 
 HeuristicsConfig &ArtsAnalysisManager::getHeuristicsConfig() {
-  if (!heuristicsConfig)
-    heuristicsConfig = std::make_unique<HeuristicsConfig>(abstractMachine);
+  if (!heuristicsConfig) {
+    /// Ensure MetadataManager and IdRegistry are initialized first
+    auto &idRegistry = getMetadataManager().getIdRegistry();
+    heuristicsConfig =
+        std::make_unique<HeuristicsConfig>(abstractMachine, idRegistry);
+  }
   return *heuristicsConfig;
 }
 
@@ -122,8 +131,68 @@ void ArtsAnalysisManager::captureDiagnostics() {
 
   Object root;
 
-  /// Aggregate EDTs from all functions
-  Array allEdts;
+  /// Version
+  root["version"] = "1.0";
+
+  /// Program information
+  Object program;
+  program["name"] = module.getName() ? module.getName()->str() : "unnamed";
+  /// Try to get source file from first function's location
+  for (auto func : module.getOps<func::FuncOp>()) {
+    auto loc = func.getLoc();
+    if (auto fileLoc = dyn_cast<FileLineColLoc>(loc)) {
+      program["source_file"] = fileLoc.getFilename().str();
+      break;
+    }
+  }
+  root["program"] = std::move(program);
+
+  /// Machine configuration (expanded)
+  Object machine;
+  const auto &am = getAbstractMachine();
+  machine["node_count"] = am.getNodeCount();
+  machine["threads"] = am.getThreads();
+
+  /// Execution mode as string
+  switch (am.getExecutionMode()) {
+  case ExecutionMode::SingleThreaded:
+    machine["execution_mode"] = "SingleThreaded";
+    break;
+  case ExecutionMode::IntraNode:
+    machine["execution_mode"] = "IntraNode";
+    break;
+  case ExecutionMode::InterNode:
+    machine["execution_mode"] = "InterNode";
+    break;
+  }
+
+  /// Memory tier as string
+  switch (am.getMemoryConfig().tier) {
+  case MemoryTier::SMALL:
+    machine["memory_tier"] = "SMALL";
+    break;
+  case MemoryTier::MEDIUM:
+    machine["memory_tier"] = "MEDIUM";
+    break;
+  case MemoryTier::LARGE:
+    machine["memory_tier"] = "LARGE";
+    break;
+  case MemoryTier::HPC:
+    machine["memory_tier"] = "HPC";
+    break;
+  }
+
+  /// Cache sizes for ArtsMate reasoning
+  const auto &memCfg = am.getMemoryConfig();
+  machine["l2_cache_kb"] = memCfg.l2OrderKB;
+  machine["l3_cache_mb"] = memCfg.l3OrderMB;
+
+  root["machine"] = std::move(machine);
+
+  /// Unified entities array
+  Array entities;
+
+  /// Collect EDTs from all functions (entity_type = "edt")
   for (auto func : module.getOps<func::FuncOp>()) {
     std::string edtJsonStr;
     llvm::raw_string_ostream edtStream(edtJsonStr);
@@ -131,14 +200,16 @@ void ArtsAnalysisManager::captureDiagnostics() {
 
     auto edtArray = llvm::json::parse(edtJsonStr);
     if (edtArray && edtArray->getAsArray()) {
-      for (auto &edt : *edtArray->getAsArray())
-        allEdts.push_back(std::move(edt));
+      for (auto &edt : *edtArray->getAsArray()) {
+        if (auto *obj = edt.getAsObject()) {
+          (*obj)["entity_type"] = "edt";
+          entities.push_back(std::move(edt));
+        }
+      }
     }
   }
-  root["edts"] = std::move(allEdts);
 
-  /// Aggregate DBs from all functions
-  Array allDbs;
+  /// Collect DBs from all functions (entity_type = "db")
   for (auto func : module.getOps<func::FuncOp>()) {
     std::string dbJsonStr;
     llvm::raw_string_ostream dbStream(dbJsonStr);
@@ -146,35 +217,114 @@ void ArtsAnalysisManager::captureDiagnostics() {
 
     auto dbArray = llvm::json::parse(dbJsonStr);
     if (dbArray && dbArray->getAsArray()) {
-      for (auto &db : *dbArray->getAsArray())
-        allDbs.push_back(std::move(db));
+      for (auto &db : *dbArray->getAsArray()) {
+        if (auto *obj = db.getAsObject()) {
+          (*obj)["entity_type"] = "db";
+          entities.push_back(std::move(db));
+        }
+      }
     }
   }
-  root["dbs"] = std::move(allDbs);
 
-  /// Machine configuration
-  Object machine;
-  machine["node_count"] = getAbstractMachine().getNodeCount();
-  machine["single_node"] = getAbstractMachine().getNodeCount() == 1;
-  root["machine"] = std::move(machine);
+  /// Build reverse mapping: loop Operation* → containing EDT arts_id
+  DenseMap<Operation *, int64_t> loopToEdtMap;
+  auto &idRegistry = getMetadataManager().getIdRegistry();
+  for (auto func : module.getOps<func::FuncOp>()) {
+    auto &edtGraph = getEdtGraph(func);
+    edtGraph.forEachNode([&](NodeBase *node) {
+      auto *edtNode = dyn_cast<EdtNode>(node);
+      if (!edtNode)
+        return;
+      int64_t edtId = idRegistry.get(edtNode->getOp());
+      if (edtId == 0)
+        return;
+      for (auto *loop : edtNode->getAssociatedLoops()) {
+        loopToEdtMap[loop->getOp()] = edtId;
+      }
+    });
+  }
 
-  /// Heuristic decisions
-  Array heuristicDecisions;
+  /// Collect loops from MetadataManager (entity_type = "loop")
+  /// Flattened properties - no nested static_analysis
+  auto &mm = getMetadataManager();
+  for (auto *loopOp : mm.getLoopOperations()) {
+    auto *meta = mm.getLoopMetadata(loopOp);
+    if (!meta)
+      continue;
+
+    Object loop;
+
+    /// ARTS ID
+    int64_t artsId = mm.getIdRegistry().get(loopOp);
+    if (artsId != 0)
+      loop["arts_id"] = artsId;
+
+    loop["entity_type"] = "loop";
+
+    /// Source location
+    if (meta->locationMetadata.isValid())
+      loop["source_location"] = meta->locationMetadata.file + ":" +
+                                std::to_string(meta->locationMetadata.line);
+    else
+      loop["source_location"] = "unknown";
+
+    /// Containing EDT (bidirectional relationship)
+    if (auto it = loopToEdtMap.find(loopOp); it != loopToEdtMap.end())
+      loop["containing_edt_id"] = it->second;
+
+    /// Core loop properties (flattened - no nested static_analysis)
+    loop["potentially_parallel"] = meta->potentiallyParallel;
+
+    if (meta->tripCount)
+      loop["trip_count"] = *meta->tripCount;
+    if (meta->nestingLevel)
+      loop["nesting_level"] = *meta->nestingLevel;
+
+    /// Loop reordering legality (for ArtsMate to know if hint is safe)
+    loop["reorder_legal"] = !meta->reorderNestTo.empty();
+    loop["was_reordered"] = false; /// TODO: Track if reordering was applied
+
+    entities.push_back(std::move(loop));
+  }
+
+  root["entities"] = std::move(entities);
+
+  /// Export applied optimizations with PGO-style mapping for ArtsMate
+  /// correlation Pattern: compile-time decision -> affected runtime DB IDs
+  Array appliedOptimizations;
   for (const auto &decision : getHeuristicsConfig().getDecisions()) {
+    if (!decision.applied)
+      continue; /// Skip rejected - ArtsMate decides what to suggest
+
     Object d;
+    d["target_id"] = decision.affectedArtsId;
+    d["type"] = decision.heuristic;
     d["heuristic"] = decision.heuristic;
-    d["applied"] = decision.applied;
-    d["rationale"] = decision.rationale;
-    d["affected_arts_id"] = decision.affectedArtsId;
-    if (!decision.costModelInputs.empty()) {
-      Object inputs;
-      for (const auto &input : decision.costModelInputs)
-        inputs[input.first()] = input.second;
-      d["cost_model_inputs"] = std::move(inputs);
+
+    /// PGO-style mapping: compile-time → runtime correlation
+    if (decision.affectedAllocId != 0)
+      d["alloc_id"] = decision.affectedAllocId;
+
+    if (!decision.affectedDbIds.empty()) {
+      Array dbIds;
+      for (int64_t id : decision.affectedDbIds)
+        dbIds.push_back(id);
+      d["affected_db_ids"] = std::move(dbIds);
     }
-    heuristicDecisions.push_back(std::move(d));
+
+    if (!decision.sourceLocation.empty())
+      d["source_location"] = decision.sourceLocation;
+
+    if (!decision.costModelInputs.empty()) {
+      Object params;
+      for (const auto &input : decision.costModelInputs)
+        params[input.first()] = input.second;
+      d["parameters"] = std::move(params);
+    }
+
+    appliedOptimizations.push_back(std::move(d));
   }
-  root["heuristic_decisions"] = std::move(heuristicDecisions);
+  root["applied_optimizations"] = std::move(appliedOptimizations);
 
   /// Store as cached JSON
   std::string jsonStr;

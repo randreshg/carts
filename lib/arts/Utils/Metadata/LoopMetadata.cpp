@@ -49,64 +49,6 @@ LoopMetadata::stringToReductionKind(llvm::StringRef str) const {
       .Default(ReductionKind::Unknown);
 }
 
-const char *LoopMetadata::dataMovementToString(DataMovement pattern) const {
-  switch (pattern) {
-  case DataMovement::Streaming:
-    return "streaming";
-  case DataMovement::Tiled:
-    return "tiled";
-  case DataMovement::Random:
-    return "random";
-  case DataMovement::Stencil:
-    return "stencil";
-  case DataMovement::Gather:
-    return "gather";
-  case DataMovement::Scatter:
-    return "scatter";
-  case DataMovement::Unknown:
-    return "unknown";
-  }
-  return "unknown";
-}
-
-LoopMetadata::DataMovement
-LoopMetadata::stringToDataMovement(llvm::StringRef str) const {
-  return llvm::StringSwitch<DataMovement>(str)
-      .Case("streaming", DataMovement::Streaming)
-      .Case("tiled", DataMovement::Tiled)
-      .Case("random", DataMovement::Random)
-      .Case("stencil", DataMovement::Stencil)
-      .Case("gather", DataMovement::Gather)
-      .Case("scatter", DataMovement::Scatter)
-      .Default(DataMovement::Unknown);
-}
-
-const char *LoopMetadata::partitioningToString(Partitioning strategy) const {
-  switch (strategy) {
-  case Partitioning::Block:
-    return "block";
-  case Partitioning::Dynamic:
-    return "dynamic";
-  case Partitioning::Guided:
-    return "guided";
-  case Partitioning::Auto:
-    return "auto";
-  case Partitioning::Unknown:
-    return "unknown";
-  }
-  return "unknown";
-}
-
-LoopMetadata::Partitioning
-LoopMetadata::stringToPartitioning(llvm::StringRef str) const {
-  return llvm::StringSwitch<Partitioning>(str)
-      .Case("block", Partitioning::Block)
-      .Case("dynamic", Partitioning::Dynamic)
-      .Case("guided", Partitioning::Guided)
-      .Case("auto", Partitioning::Auto)
-      .Default(Partitioning::Unknown);
-}
-
 const char *LoopMetadata::parallelClassificationToString(
     ParallelClassification classification) const {
   switch (classification) {
@@ -154,23 +96,9 @@ bool LoopMetadata::importFromOp() {
           stringToReductionKind(kind.cast<StringAttr>().str()));
   }
 
-  /// Memory access patterns
-  accessStats.readCount = getIntFromAttr(attr.getReadCount());
-  accessStats.writeCount = getIntFromAttr(attr.getWriteCount());
-
   /// Loop structure information
   tripCount = getIntFromAttr(attr.getTripCount()).value_or(0);
   nestingLevel = getIntFromAttr(attr.getNestingLevel()).value_or(0);
-
-  /// Access pattern analysis
-  hasUniformStride = getBoolFromAttr(attr.getHasUniformStride());
-  hasGatherScatter = getBoolFromAttr(attr.getHasGatherScatter());
-  dataMovementPattern =
-      DataMovement(getIntFromAttr(attr.getDataMovementPattern()).value_or(0));
-
-  /// Partitioning hints
-  suggestedPartitioning =
-      Partitioning(getIntFromAttr(attr.getSuggestedPartitioning()).value_or(0));
 
   /// Dependency information
   hasInterIterationDeps = getBoolFromAttr(attr.getHasInterIterationDeps());
@@ -199,20 +127,9 @@ void LoopMetadata::importFromJson(const llvm::json::Object &json) {
       if (auto i = e.getAsInteger())
         reductionKinds.push_back(static_cast<ReductionKind>(*i));
   }
-  accessStats.importFromJson(json);
   tripCount = json.getInteger(AttrNames::LoopMetadata::TripCount).value_or(0);
   nestingLevel =
       json.getInteger(AttrNames::LoopMetadata::NestingLevel).value_or(0);
-  hasUniformStride = json.getBoolean(AttrNames::LoopMetadata::HasUniformStride)
-                         .value_or(false);
-  hasGatherScatter = json.getBoolean(AttrNames::LoopMetadata::HasGatherScatter)
-                         .value_or(false);
-  dataMovementPattern =
-      DataMovement(json.getInteger(AttrNames::LoopMetadata::DataMovementPattern)
-                       .value_or(0));
-  suggestedPartitioning = Partitioning(
-      json.getInteger(AttrNames::LoopMetadata::SuggestedPartitioning)
-          .value_or(0));
   hasInterIterationDeps =
       json.getBoolean(AttrNames::LoopMetadata::HasInterIterationDeps)
           .value_or(false);
@@ -263,16 +180,8 @@ void LoopMetadata::exportToJson(llvm::json::Object &json) const {
       kinds.push_back(static_cast<int64_t>(k));
     json[AttrNames::LoopMetadata::ReductionKinds.str()] = std::move(kinds);
   }
-  accessStats.exportToJson(json);
   json[AttrNames::LoopMetadata::TripCount.str()] = tripCount;
   json[AttrNames::LoopMetadata::NestingLevel.str()] = nestingLevel;
-  json[AttrNames::LoopMetadata::HasUniformStride.str()] = hasUniformStride;
-  json[AttrNames::LoopMetadata::HasGatherScatter.str()] = hasGatherScatter;
-  json[AttrNames::LoopMetadata::DataMovementPattern.str()] =
-      static_cast<int64_t>(dataMovementPattern.value_or(DataMovement::Unknown));
-  json[AttrNames::LoopMetadata::SuggestedPartitioning.str()] =
-      static_cast<int64_t>(
-          suggestedPartitioning.value_or(Partitioning::Unknown));
   json[AttrNames::LoopMetadata::HasInterIterationDeps.str()] =
       hasInterIterationDeps;
   json[AttrNames::LoopMetadata::MemrefsWithLoopCarriedDeps.str()] =
@@ -349,18 +258,8 @@ Attribute LoopMetadata::getMetadataAttr() const {
       /// Parallelism analysis
       builder.getBoolAttr(potentiallyParallel),
       builder.getBoolAttr(hasReductions), reductionKindsAttr,
-      /// Memory access patterns
-      builder.getI64IntegerAttr(accessStats.readCount.value_or(0)),
-      builder.getI64IntegerAttr(accessStats.writeCount.value_or(0)),
       /// Loop structure information
       toIntAttr(tripCount), toIntAttr(nestingLevel),
-      /// Access pattern analysis
-      toBoolAttr(hasUniformStride), toBoolAttr(hasGatherScatter),
-      builder.getI64IntegerAttr(static_cast<int64_t>(
-          dataMovementPattern.value_or(DataMovement::Unknown))),
-      /// Partitioning hints
-      builder.getI64IntegerAttr(static_cast<int64_t>(
-          suggestedPartitioning.value_or(Partitioning::Unknown))),
       /// Dependency information
       toBoolAttr(hasInterIterationDeps), toIntAttr(memrefsWithLoopCarriedDeps),
       toEnumAttr(parallelClassification, ParallelClassification::Unknown),
@@ -400,14 +299,7 @@ LoopMetadataAttr LoopMetadata::toAttribute(MLIRContext *ctx) const {
   return LoopMetadataAttr::get(
       ctx, builder.getBoolAttr(potentiallyParallel),
       builder.getBoolAttr(hasReductions), reductionKindsAttr,
-      builder.getI64IntegerAttr(accessStats.readCount.value_or(0)),
-      builder.getI64IntegerAttr(accessStats.writeCount.value_or(0)),
       toIntAttr(tripCount), toIntAttr(nestingLevel),
-      toBoolAttr(hasUniformStride), toBoolAttr(hasGatherScatter),
-      builder.getI64IntegerAttr(static_cast<int64_t>(
-          dataMovementPattern.value_or(DataMovement::Unknown))),
-      builder.getI64IntegerAttr(static_cast<int64_t>(
-          suggestedPartitioning.value_or(Partitioning::Unknown))),
       toBoolAttr(hasInterIterationDeps), toIntAttr(memrefsWithLoopCarriedDeps),
       toEnumAttr(parallelClassification, ParallelClassification::Unknown),
       builder.getStringAttr(locationMetadata.getKey()));
@@ -423,7 +315,8 @@ void DimensionDependency::importFromJson(const llvm::json::Object &json) {
     distance = *dist;
   else
     distance.reset();
-  // Note: dependentMemrefs not serialized (Values don't persist across sessions)
+  // Note: dependentMemrefs not serialized (Values don't persist across
+  // sessions)
 }
 
 void DimensionDependency::exportToJson(llvm::json::Object &json) const {
@@ -431,7 +324,8 @@ void DimensionDependency::exportToJson(llvm::json::Object &json) const {
   json["has_carried_dep"] = hasCarriedDep;
   if (distance)
     json["distance"] = *distance;
-  // Note: dependentMemrefs not serialized (Values don't persist across sessions)
+  // Note: dependentMemrefs not serialized (Values don't persist across
+  // sessions)
 }
 
 LoopMetadataAttr
@@ -454,15 +348,8 @@ LoopMetadata::createParallelizedMetadata(MLIRContext *ctx,
       builder.getBoolAttr(true),  // potentiallyParallel
       builder.getBoolAttr(false), // hasReductions (handled via partials)
       nullptr,                    // reductionKinds (cleared)
-      /// Memory access patterns - copied from base
-      base.getReadCount(), base.getWriteCount(),
       /// Loop structure - copied from base
       base.getTripCount(), base.getNestingLevel(),
-      /// Access patterns - copied from base
-      base.getHasUniformStride(), base.getHasGatherScatter(),
-      base.getDataMovementPattern(),
-      /// Partitioning hints - copied from base
-      base.getSuggestedPartitioning(),
       /// Dependency info - updated for parallelization
       builder.getBoolAttr(false), // hasInterIterationDeps (broken by partials)
       builder.getI64IntegerAttr(0), // memrefsWithLoopCarriedDeps = 0

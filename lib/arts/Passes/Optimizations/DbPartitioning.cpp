@@ -178,8 +178,7 @@ bool DbPartitioningPass::partitionDb() {
 
     TwinDiffContext twinCtx;
     twinCtx.proof = proof;
-    twinCtx.artsId =
-        AM->getMetadataManager().getIdRegistry().get(acq.getOperation());
+    twinCtx.op = acq.getOperation();
 
     bool useTwinDiff = AM->getHeuristicsConfig().shouldUseTwinDiff(twinCtx);
 
@@ -743,7 +742,8 @@ void DbPartitioningPass::generateBoundsValid(DbAcquireOp acquireOp,
   OpBuilder builder(acquireOp);
 
   auto indices = acquireOp.getIndices();
-  SmallVector<Value> sourceSizes = DatablockUtils::getSizesFromDb(acquireOp.getSourcePtr());
+  SmallVector<Value> sourceSizes =
+      DatablockUtils::getSizesFromDb(acquireOp.getSourcePtr());
 
   /// Check if lower bound is guaranteed by control flow (inside else of `if
   /// iv==0`)

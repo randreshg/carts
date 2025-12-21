@@ -11,7 +11,6 @@
 #ifndef ARTS_ANALYSIS_METADATA_LOOPANALYZER_H
 #define ARTS_ANALYSIS_METADATA_LOOPANALYZER_H
 
-#include "arts/Analysis/Metadata/AccessAnalyzer.h"
 #include "arts/Analysis/Metadata/DependenceAnalyzer.h"
 #include "arts/Utils/Metadata/LoopMetadata.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -28,10 +27,7 @@ class ArtsMetadataManager; // Forward declaration
 ///===----------------------------------------------------------------------===///
 class LoopAnalyzer {
 public:
-  LoopAnalyzer(MLIRContext *context, AccessAnalyzer &accessAnalyzer,
-               DependenceAnalyzer &depAnalyzer)
-      : context(context), accessAnalyzer(accessAnalyzer),
-        depAnalyzer(depAnalyzer) {}
+  LoopAnalyzer(DependenceAnalyzer &depAnalyzer) : depAnalyzer(depAnalyzer) {}
 
   /// Populate metadata for loop operations
   void analyzeAffineLoop(affine::AffineForOp forOp, LoopMetadata *metadata);
@@ -48,20 +44,16 @@ public:
   /// Key insight: inner loop deps don't prevent outer loop parallelism.
   ///
   /// Example: for(i) { for(j) { A[i][j] = f(A[i][j-1]) } }
-  ///   - dimensionDeps[0] = {dim=0, hasCarriedDep=false} // i-loop parallelizable
+  ///   - dimensionDeps[0] = {dim=0, hasCarriedDep=false} // i-loop
+  ///   parallelizable
   ///   - dimensionDeps[1] = {dim=1, hasCarriedDep=true}  // j-loop has deps
   ///   - outermostParallelDim = 0
   void analyzeLoopNestDependences(affine::AffineForOp outerLoop,
                                   LoopMetadata *metadata);
 
 private:
-  MLIRContext *context;
-  AccessAnalyzer &accessAnalyzer;
   DependenceAnalyzer &depAnalyzer;
 
-  void analyzeMemoryAccesses(Operation *loopOp, LoopMetadata *metadata);
-  LoopMetadata::DataMovement classifyDataMovement(LoopMetadata *metadata);
-  void suggestPartitioning(LoopMetadata *metadata);
   void finalizeParallelFlag(Operation *loopOp, LoopMetadata *metadata);
   void detectReductions(Operation *loopOp, LoopMetadata *metadata);
   std::optional<LoopMetadata::ReductionKind>

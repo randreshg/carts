@@ -218,18 +218,9 @@ def LoopMetadataAttr : Arts_Attr<"LoopMetadata", "loop_metadata"> {
     "::mlir::BoolAttr":$potentiallyParallel,
     "::mlir::BoolAttr":$hasReductions,
     OptionalParameter<"::mlir::ArrayAttr">:$reductionKinds,
-    /// Memory access patterns
-    "::mlir::IntegerAttr":$readCount,
-    "::mlir::IntegerAttr":$writeCount,
     /// Loop structure information
     OptionalParameter<"::mlir::IntegerAttr">:$tripCount,
     OptionalParameter<"::mlir::IntegerAttr">:$nestingLevel,
-    /// Access pattern analysis
-    OptionalParameter<"::mlir::BoolAttr">:$hasUniformStride,
-    OptionalParameter<"::mlir::BoolAttr">:$hasGatherScatter,
-    OptionalParameter<"::mlir::IntegerAttr">:$dataMovementPattern,
-    /// Partitioning hints
-    OptionalParameter<"::mlir::IntegerAttr">:$suggestedPartitioning,
     /// Dependency information
     OptionalParameter<"::mlir::BoolAttr">:$hasInterIterationDeps,
     OptionalParameter<"::mlir::IntegerAttr">:$memrefsWithLoopCarriedDeps,
