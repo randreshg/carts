@@ -156,7 +156,8 @@ DbAcquireNode *DbGraph::getOrCreateAcquireNode(DbAcquireOp op) {
 
   /// Get the immediate underlying DB from sourcePtr to determine if this is a
   /// nested acquire
-  Operation *immediateUnderlying = DatablockUtils::getUnderlyingDb(sourcePtr, 0);
+  Operation *immediateUnderlying =
+      DatablockUtils::getUnderlyingDb(sourcePtr, 0);
   if (!immediateUnderlying) {
     ARTS_ERROR("Cannot get immediate underlying DB for acquire");
     return nullptr;
@@ -576,15 +577,12 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
 
     Object db;
 
-    /// ARTS ID from metadata manager
-    if (!meta.allocationId.empty()) {
-      int64_t artsId = analysis->getAnalysisManager()
-                           .getMetadataManager()
-                           .getIdRegistry()
-                           .getIdForLocation(meta.allocationId);
-      if (artsId != 0)
-        db["arts_id"] = artsId;
-    }
+    /// ARTS ID from operation attribute (set by DbAllocNode constructor)
+    int64_t artsId =
+        analysis->getAnalysisManager().getMetadataManager().getIdRegistry().get(
+            allocNode->getOp());
+    if (artsId != 0)
+      db["arts_id"] = artsId;
 
     /// Granularity
     db["granularity"] = allocNode->isFineGrained() ? "fine" : "coarse";
@@ -645,6 +643,129 @@ void DbGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
       db["loc"] = loc.file + ":" + std::to_string(loc.line);
     else
       db["loc"] = "unknown";
+
+    /// Static analysis data from DbAllocNode
+    Object staticAnalysis;
+
+    /// Lifetime metrics
+    staticAnalysis["begin_index"] = (int64_t)allocNode->beginIndex;
+    staticAnalysis["end_index"] = (int64_t)allocNode->endIndex;
+    staticAnalysis["critical_span"] = (int64_t)allocNode->criticalSpan;
+    staticAnalysis["critical_path"] = (int64_t)allocNode->criticalPath;
+    staticAnalysis["is_long_lived"] = allocNode->isLongLived;
+
+    /// Access metrics
+    staticAnalysis["total_access_bytes"] = (int64_t)allocNode->totalAccessBytes;
+    staticAnalysis["num_acquires"] = (int64_t)allocNode->numAcquires;
+    staticAnalysis["max_loop_depth"] = (int64_t)allocNode->maxLoopDepth;
+
+    /// Parallelization and partitioning hints
+    staticAnalysis["is_parallel_friendly"] = allocNode->isParallelFriendly();
+    staticAnalysis["can_be_partitioned"] = allocNode->canBePartitioned();
+    staticAnalysis["is_fine_grained"] = allocNode->isFineGrained();
+
+    /// Twin-diff analysis
+    staticAnalysis["has_single_writer"] = allocNode->hasSingleWriter();
+    staticAnalysis["all_acquires_worker_indexed"] =
+        allocNode->allAcquiresWorkerIndexed();
+    staticAnalysis["can_prove_non_overlapping"] =
+        allocNode->canProveNonOverlapping();
+
+    /// String datablock flag
+    staticAnalysis["is_string_backed"] = allocNode->isStringDatablock();
+
+    /// Memory footprint from MemrefMetadata
+    if (meta.memoryFootprint.has_value())
+      staticAnalysis["memory_footprint_bytes"] = *meta.memoryFootprint;
+
+    /// Access pattern from MemrefMetadata
+    if (meta.dominantAccessPattern.has_value()) {
+      std::string pattern;
+      switch (*meta.dominantAccessPattern) {
+      case AccessPatternType::Unknown:
+        pattern = "unknown";
+        break;
+      case AccessPatternType::Sequential:
+        pattern = "sequential";
+        break;
+      case AccessPatternType::Strided:
+        pattern = "strided";
+        break;
+      case AccessPatternType::Random:
+        pattern = "random";
+        break;
+      case AccessPatternType::GatherScatter:
+        pattern = "gather_scatter";
+        break;
+      }
+      staticAnalysis["access_pattern"] = pattern;
+    }
+
+    db["static_analysis"] = std::move(staticAnalysis);
+
+    /// Export child acquire nodes
+    Array acquires;
+    allocNode->forEachChildNode([&](NodeBase *child) {
+      auto *acqNode = dyn_cast<DbAcquireNode>(child);
+      if (!acqNode)
+        return;
+
+      DbAcquireOp acqOp = acqNode->getDbAcquireOp();
+      if (!acqOp)
+        return;
+
+      Object acq;
+
+      /// ARTS ID from operation attribute
+      int64_t acqArtsId = analysis->getAnalysisManager()
+                              .getMetadataManager()
+                              .getIdRegistry()
+                              .get(acqNode->getOp());
+      if (acqArtsId != 0)
+        acq["arts_id"] = acqArtsId;
+
+      /// Access mode
+      ArtsMode acqMode = acqOp.getMode();
+      if (acqMode == ArtsMode::in)
+        acq["access_mode"] = "in";
+      else if (acqMode == ArtsMode::out)
+        acq["access_mode"] = "out";
+      else
+        acq["access_mode"] = "inout";
+
+      /// Twin diff setting
+      acq["twin_diff"] = acqOp.hasTwinDiff() ? acqOp.getTwinDiff() : false;
+
+      /// Source location
+      auto acqLoc = LocationMetadata::fromLocation(acqOp->getLoc());
+      if (acqLoc.isValid())
+        acq["loc"] = acqLoc.file + ":" + std::to_string(acqLoc.line);
+
+      /// Acquire offsets and sizes (which datablocks are being acquired)
+      auto extractValues = [](OperandRange values) -> Array {
+        Array arr;
+        for (Value v : values) {
+          if (auto cst = v.getDefiningOp<arith::ConstantIndexOp>())
+            arr.push_back(cst.value());
+          else
+            arr.push_back(nullptr);
+        }
+        return arr;
+      };
+
+      Array offsets = extractValues(acqOp.getOffsets());
+      if (!offsets.empty())
+        acq["offsets"] = std::move(offsets);
+
+      Array sizes = extractValues(acqOp.getSizes());
+      if (!sizes.empty())
+        acq["sizes"] = std::move(sizes);
+
+      acquires.push_back(std::move(acq));
+    });
+
+    if (!acquires.empty())
+      db["acquires"] = std::move(acquires);
 
     dbs.push_back(std::move(db));
   }

@@ -131,7 +131,7 @@ public:
     return N->getKind() == NodeKind::DbAcquire;
   }
 
-  EdtOp getEdtUser() const { return edtUser; }
+  EdtOp getEdtUser() const { return EdtOp(edtUserOp); }
   Value getUseInEdt() const { return useInEdt; }
 
   /// Collect access operations mapping DbRefOp to its memory operations.
@@ -187,13 +187,13 @@ public:
 
 private:
   DbAcquireOp dbAcquireOp;
-  DbReleaseOp dbReleaseOp;
-  Operation *op;
-  NodeBase *parent;
-  DbAllocNode *rootAlloc;
-  DbAnalysis *analysis;
+  DbReleaseOp dbReleaseOp{nullptr};
+  Operation *op = nullptr;
+  NodeBase *parent = nullptr;
+  DbAllocNode *rootAlloc = nullptr;
+  DbAnalysis *analysis = nullptr;
   std::string hierId;
-  EdtOp edtUser;
+  Operation *edtUserOp = nullptr;
   Value useInEdt;
   Value partitionOffset;
   Value partitionSize;

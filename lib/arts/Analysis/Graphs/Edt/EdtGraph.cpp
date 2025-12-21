@@ -286,7 +286,7 @@ void EdtGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
       dbModes[db] = "in";
     for (DbAllocOp db : info.dbAllocsWritten) {
       if (dbModes.count(db))
-        dbModes[db] = "inout"; /// Both read and written
+        dbModes[db] = "inout";
       else
         dbModes[db] = "out";
     }
@@ -297,6 +297,18 @@ void EdtGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
         deps.push_back(Object{{"db", dbId}, {"mode", mode}});
     }
     edt["deps"] = std::move(deps);
+
+    /// Associated loops (EDT ↔ Loop bidirectional relationship)
+    if (!edtNode->getAssociatedLoops().empty()) {
+      Array loopIds;
+      for (LoopNode *loop : edtNode->getAssociatedLoops()) {
+        int64_t loopId = idRegistry.get(loop->getOp());
+        if (loopId != 0)
+          loopIds.push_back(loopId);
+      }
+      if (!loopIds.empty())
+        edt["loop_ids"] = std::move(loopIds);
+    }
 
     /// Loop metadata
     bool inLoop = edtNode->hasParallelLoopMetadata();
@@ -320,6 +332,60 @@ void EdtGraph::exportToJson(llvm::raw_ostream &os, bool includeAnalysis) const {
       edt["loc"] = loc.file + ":" + std::to_string(loc.line);
     else
       edt["loc"] = "unknown";
+
+    /// Static analysis data from EdtInfo
+    Object staticAnalysis;
+
+    /// Basic counts
+    staticAnalysis["total_ops"] = (int64_t)info.totalOps;
+    staticAnalysis["num_loads"] = (int64_t)info.numLoads;
+    staticAnalysis["num_stores"] = (int64_t)info.numStores;
+    staticAnalysis["num_calls"] = (int64_t)info.numCalls;
+
+    /// Memory traffic estimation
+    staticAnalysis["bytes_read"] = (int64_t)info.bytesRead;
+    staticAnalysis["bytes_written"] = (int64_t)info.bytesWritten;
+
+    /// Compute vs memory bound classification
+    staticAnalysis["compute_to_mem_ratio"] = info.computeToMemRatio;
+    staticAnalysis["is_compute_bound"] = info.computeToMemRatio > 1.0;
+
+    /// Structural info
+    staticAnalysis["max_loop_depth"] = (int64_t)info.maxLoopDepth;
+    staticAnalysis["order_index"] = (int64_t)info.orderIndex;
+
+    /// Access classification
+    staticAnalysis["is_read_only"] = info.isReadOnly();
+    staticAnalysis["is_write_only"] = info.isWriteOnly();
+    staticAnalysis["is_read_write"] = info.isReadWrite();
+
+    /// Per-DB access bytes (which DBs are hot)
+    if (!info.dbAllocAccessBytes.empty()) {
+      Object dbAccessBytes;
+      for (const auto &entry : info.dbAllocAccessBytes) {
+        DbAllocOp dbOp = entry.first;
+        uint64_t bytes = entry.second;
+        int64_t dbId = idRegistry.get(dbOp.getOperation());
+        if (dbId != 0)
+          dbAccessBytes[std::to_string(dbId)] = (int64_t)bytes;
+      }
+      staticAnalysis["db_access_bytes"] = std::move(dbAccessBytes);
+    }
+
+    /// Per-DB access counts
+    if (!info.dbAllocAccessCount.empty()) {
+      Object dbAccessCount;
+      for (const auto &entry : info.dbAllocAccessCount) {
+        DbAllocOp dbOp = entry.first;
+        uint64_t count = entry.second;
+        int64_t dbId = idRegistry.get(dbOp.getOperation());
+        if (dbId != 0)
+          dbAccessCount[std::to_string(dbId)] = (int64_t)count;
+      }
+      staticAnalysis["db_access_count"] = std::move(dbAccessCount);
+    }
+
+    edt["static_analysis"] = std::move(staticAnalysis);
 
     edts.push_back(std::move(edt));
   });

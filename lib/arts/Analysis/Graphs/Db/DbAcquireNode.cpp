@@ -129,10 +129,10 @@ DbAcquireNode::DbAcquireNode(DbAcquireOp op, NodeBase *parent,
 
   /// Use utility function to get EDT and block argument
   auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(dbAcquireOp);
-  edtUser = edt;
+  edtUserOp = edt.getOperation();
   useInEdt = blockArg;
 
-  if (!edtUser || !useInEdt) {
+  if (!edtUserOp || !useInEdt) {
     ARTS_ERROR("DbAcquireOp ptr result is not used by an EDT or another "
                "acquire.\n"
                "  Acquire op: "
@@ -290,6 +290,11 @@ static AccessBoundsInfo analyzeAccessBounds(DbAcquireNode *node,
 ///
 /// Returns true only if this acquire AND all its nested children pass.
 bool DbAcquireNode::canBePartitioned() {
+  /// Early check: if no EDT user, this acquire can't be partitioned
+  /// (happens for nested acquires where parent acquire is consumed by child)
+  if (!edtUserOp)
+    return false;
+
   auto skip = [&](StringRef reason) {
     ARTS_DEBUG("Skipping acquire " << dbAcquireOp << ": " << reason);
     return false;
@@ -300,7 +305,7 @@ bool DbAcquireNode::canBePartitioned() {
     return skip("invalid acquire operation");
 
   EdtOp edt = getEdtUser();
-  if (!edt || edt.getType() != EdtType::task)
+  if (!edt || !edt.getOperation() || edt.getType() != EdtType::task)
     return skip("not a task EDT");
 
   if (!hasMemoryAccesses())
@@ -463,16 +468,14 @@ bool DbAcquireNode::canBePartitioned() {
       /// Clamp to zero: max(partitionOffset - |minOffset|, 0)
       Value absAdj =
           builder.create<arith::ConstantIndexOp>(loc, -bounds.minOffset);
-      Value cond = builder.create<arith::CmpIOp>(
-          loc, arith::CmpIPredicate::uge, partitionOffset, absAdj);
+      Value cond = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
+                                                 partitionOffset, absAdj);
       Value sub = builder.create<arith::SubIOp>(loc, partitionOffset, absAdj);
       Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
       adjustedOffset = builder.create<arith::SelectOp>(loc, cond, sub, zero);
     } else if (bounds.minOffset > 0) {
-      Value adj =
-          builder.create<arith::ConstantIndexOp>(loc, bounds.minOffset);
-      adjustedOffset =
-          builder.create<arith::AddIOp>(loc, partitionOffset, adj);
+      Value adj = builder.create<arith::ConstantIndexOp>(loc, bounds.minOffset);
+      adjustedOffset = builder.create<arith::AddIOp>(loc, partitionOffset, adj);
     }
 
     int64_t sizeAdjustment = bounds.maxOffset - bounds.minOffset;
@@ -572,8 +575,9 @@ static AccessBoundsInfo analyzeAccessBounds(DbAcquireNode *node,
 
 void DbAcquireNode::collectAccessOperations(
     DenseMap<DbRefOp, SetVector<Operation *>> &dbRefToMemOps) {
-  if (!edtUser || !useInEdt)
+  if (!edtUserOp || !useInEdt)
     return;
+  EdtOp edtUser = getEdtUser();
 
   SmallVector<Value, 16> worklist;
   SetVector<Value> visited;
@@ -906,6 +910,9 @@ SmallVector<Value, 4> DbAcquireNode::computeInvariantIndices() {
   SmallVector<Value, 4> candidate(rank, Value());
   SmallVector<bool, 4> invalid(rank, false);
 
+  EdtOp edtUser = getEdtUser();
+  if (!edtUser)
+    return result;
   auto &edtRegion = edtUser.getBody();
 
   for (auto &[dbRef, memOps] : dbRefToMemOps) {

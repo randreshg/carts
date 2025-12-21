@@ -79,6 +79,30 @@ public:
   /// Export analysis objects and graphs to JSON
   void exportToJson(llvm::raw_ostream &os, bool includeAnalysis = false);
 
+  /// Metadata coverage data (set by VerifyMetadataPass)
+  struct MetadataCoverage {
+    int64_t loopsAnalyzed = 0;
+    int64_t loopsTotal = 0;
+    int64_t memrefsAnalyzed = 0;
+    int64_t memrefsTotal = 0;
+    bool hasData = false;
+  };
+
+  /// Set metadata coverage data (called by VerifyMetadataPass)
+  void setMetadataCoverage(int64_t loopsAnalyzed, int64_t loopsTotal,
+                           int64_t memrefsAnalyzed, int64_t memrefsTotal) {
+    metadataCoverage_.loopsAnalyzed = loopsAnalyzed;
+    metadataCoverage_.loopsTotal = loopsTotal;
+    metadataCoverage_.memrefsAnalyzed = memrefsAnalyzed;
+    metadataCoverage_.memrefsTotal = memrefsTotal;
+    metadataCoverage_.hasData = true;
+  }
+
+  /// Get metadata coverage data
+  const MetadataCoverage &getMetadataCoverage() const {
+    return metadataCoverage_;
+  }
+
 private:
   ModuleOp module;
   std::string configFile;
@@ -94,6 +118,9 @@ private:
 
   /// Cached diagnostic data (captured before LLVM lowering)
   std::optional<std::string> cachedDiagnosticJson;
+
+  /// Metadata coverage from VerifyMetadataPass
+  MetadataCoverage metadataCoverage_;
 };
 
 } // namespace arts

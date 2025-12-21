@@ -97,10 +97,9 @@ static cl::opt<bool>
              cl::desc("Export diagnostic information about compilation"),
              cl::init(false));
 
-static cl::opt<std::string>
-    DiagnoseOutput("diagnose-output",
-                   cl::desc("Output file for diagnostic JSON export"),
-                   cl::value_desc("filename"), cl::init(""));
+static cl::opt<std::string> DiagnoseOutput(
+    "diagnose-output", cl::desc("Output file for diagnostic JSON export"),
+    cl::value_desc("filename"), cl::init(".carts-diagnose.json"));
 
 /// Loop transforms options (Stage: loop-reordering)
 static cl::opt<bool> LoopTransformsEnableMatmul(
@@ -108,9 +107,10 @@ static cl::opt<bool> LoopTransformsEnableMatmul(
     cl::desc("Enable reduction-aware matmul transforms (dot -> update form)"),
     cl::init(true));
 
-static cl::opt<bool> LoopTransformsEnableTiling(
-    "loop-transforms-enable-tiling",
-    cl::desc("Enable tiling for loop transforms"), cl::init(true));
+static cl::opt<bool>
+    LoopTransformsEnableTiling("loop-transforms-enable-tiling",
+                               cl::desc("Enable tiling for loop transforms"),
+                               cl::init(true));
 
 static cl::opt<int64_t> LoopTransformsTileJ(
     "loop-transforms-tile-j",
@@ -324,7 +324,7 @@ void setupDbOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
 /// EDT optimization passes.
 void setupEdtOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  pm.addPass(arts::createEdtPass(AM, /*runAnalysis*/true));
+  pm.addPass(arts::createEdtPass(AM, /*runAnalysis*/ true));
   pm.addPass(arts::createLoopFusionPass(AM));
   pm.addPass(createCSEPass());
 }
@@ -346,7 +346,7 @@ void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   /// Convert parallel EDTs into single EDTs.
-  pm.addPass(arts::createEdtPass(AM, /*runAnalysis*/false));
+  pm.addPass(arts::createEdtPass(AM, /*runAnalysis*/ false));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(arts::createDbPass(AM));
@@ -424,7 +424,8 @@ void setupLLVMIREmission(PassManager &pm) {
   pm.addPass(arts::createLoopVectorizationHintsPass());
   /// Insert software prefetch hints for strided memory accesses.
   /// NOTE: Currently disabled due to performance regression on tight loops.
-  /// TODO: Re-enable after fixing prefetch distance calculation for innermost loops.
+  /// TODO: Re-enable after fixing prefetch distance calculation for innermost
+  /// loops.
   // pm.addPass(arts::createPrefetchHintsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
@@ -597,9 +598,10 @@ setupPassManager(ModuleOp module, MLIRContext &context,
   if (stopAt == PipelineStage::Epochs)
     return success();
 
-  /// Capture diagnostic data
-  if (outAM)
+  /// Capture diagnostic data for --diagnose output
+  if (outAM) {
     AM->captureDiagnostics();
+  }
 
   /// Pre-lowering
   {

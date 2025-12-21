@@ -57,6 +57,8 @@ std::unique_ptr<Pass> createLoopTransformsPass(ArtsAnalysisManager *AM,
                                                bool enableTiling = true,
                                                int64_t tileJ = 64,
                                                int64_t minTripCount = 128);
+std::unique_ptr<Pass> createVerifyMetadataPass(ArtsAnalysisManager *AM,
+                                               bool failOnMissing = false);
 } // namespace arts
 } // namespace mlir
 

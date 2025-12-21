@@ -636,8 +636,7 @@ void CreateDbsPass::createDbAllocOps() {
       /// Record H1 decision for diagnostics
       heuristics.recordDecision(
           "H1", true,
-          "read-only access on single-node prefers coarse allocation",
-          0); /// ARTS ID will be set when DB is created
+          "read-only access on single-node prefers coarse allocation", alloc);
     }
 
     /// H2: Apply cost model on single-node
@@ -659,8 +658,8 @@ void CreateDbsPass::createDbAllocOps() {
             {"innerBytes", innerBytes},
         };
         heuristics.recordDecision(
-            "H2", false, "cost model determined coarse allocation is better", 0,
-            inputs);
+            "H2", false, "cost model determined coarse allocation is better",
+            alloc, inputs);
       }
     }
 
@@ -1062,8 +1061,7 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
         /// Therefore, twin-diff is NOT needed - we can safely disable it.
         TwinDiffContext twinCtx;
         twinCtx.proof = TwinDiffProof::IndexedControl;
-        twinCtx.artsId = AM->getMetadataManager().getIdRegistry().get(
-            acquireOp.getOperation());
+        twinCtx.op = acquireOp.getOperation();
         bool useTwinDiff = AM->getHeuristicsConfig().shouldUseTwinDiff(twinCtx);
         acquireOp.setTwinDiff(useTwinDiff);
         ARTS_DEBUG("   - Fine-grained acquire: twin_diff=" << useTwinDiff);
@@ -1157,8 +1155,7 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       TwinDiffContext twinCtx;
       twinCtx.proof = TwinDiffProof::None;
       twinCtx.isCoarseAllocation = true;
-      twinCtx.artsId = AM->getMetadataManager().getIdRegistry().get(
-          acquireOp.getOperation());
+      twinCtx.op = acquireOp.getOperation();
       bool useTwinDiff = AM->getHeuristicsConfig().shouldUseTwinDiff(twinCtx);
       acquireOp.setTwinDiff(useTwinDiff);
       ARTS_DEBUG("   - Coarse-grained acquire: twin_diff=" << useTwinDiff);
