@@ -143,10 +143,11 @@ public:
 
   /// Create mode-specific rewriter based on plan.
   /// Returns a rewriter for localization of indices within EDT bodies.
-  static std::unique_ptr<DbRewriterBase> createRewriter(
-      const DbRewritePlan &plan, Value chunkSize, Value startChunk,
-      Value elemOffset, Value elemSize, unsigned outerRank, unsigned innerRank,
-      ValueRange oldElementSizes, OpBuilder &builder, Location loc);
+  static std::unique_ptr<DbRewriterBase>
+  createRewriter(const DbRewritePlan &plan, Value chunkSize, Value startChunk,
+                 Value elemOffset, Value elemSize, unsigned outerRank,
+                 unsigned innerRank, ValueRange oldElementSizes,
+                 OpBuilder &builder, Location loc);
 
 private:
   DbAllocOp oldAlloc_;

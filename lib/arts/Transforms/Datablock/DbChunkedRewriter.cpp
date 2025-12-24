@@ -63,9 +63,10 @@ LocalizedIndices DbChunkedRewriter::localize(ArrayRef<Value> globalIndices,
   return result;
 }
 
-LocalizedIndices
-DbChunkedRewriter::localizeLinearized(Value globalLinearIndex, Value stride,
-                                      OpBuilder &builder, Location loc) {
+LocalizedIndices DbChunkedRewriter::localizeLinearized(Value globalLinearIndex,
+                                                       Value stride,
+                                                       OpBuilder &builder,
+                                                       Location loc) {
   LocalizedIndices result;
 
   ARTS_DEBUG("DbChunkedRewriter::localizeLinearized - using div/mod");

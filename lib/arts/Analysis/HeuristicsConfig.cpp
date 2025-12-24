@@ -249,9 +249,9 @@ RewriterMode HeuristicsConfig::getRecommendedPartitioningMode(
       totalDBsPerEDT = 1;
     }
 
-    auto h2Result = shouldUseFineGrained(
-        totalDBs, totalDBsPerEDT, context.chunkSize,
-        PartitioningSource::ParallelFor);
+    auto h2Result =
+        shouldUseFineGrained(totalDBs, totalDBsPerEDT, context.chunkSize,
+                             PartitioningSource::ParallelFor);
 
     if (h2Result.has_value()) {
       if (*h2Result) {

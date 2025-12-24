@@ -44,11 +44,11 @@ int main(int argc, char *argv[]) {
 #pragma omp task depend(in : input[i - 1], input[i], input[i + 1])             \
     depend(out : output[i])
         {
-          CARTS_DEBUG_PRINT("Task %d: Computing output[%d] from input[%d:%d]\n", i, i,
-                   i - 1, i + 2);
+          CARTS_DEBUG_PRINT("Task %d: Computing output[%d] from input[%d:%d]\n",
+                            i, i, i - 1, i + 2);
           output[i] = input[i - 1] + input[i] + input[i + 1];
           CARTS_DEBUG_PRINT("Task %d: output[%d] = %d + %d + %d = %d\n", i, i,
-                   input[i - 1], input[i], input[i + 1], output[i]);
+                            input[i - 1], input[i], input[i + 1], output[i]);
         }
       }
     }

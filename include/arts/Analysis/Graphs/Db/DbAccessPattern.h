@@ -18,10 +18,10 @@ namespace arts {
 /// Used to reason about mixed access patterns across a single allocation
 /// and to select appropriate rewriter modes in DbPartitioning.
 enum class AccessPattern {
-  Unknown,  /// Pattern not yet analyzed or unrecognizable
-  Uniform,  /// Regular access (offsets only, no stencil bounds detected)
-  Stencil,  /// Neighbor-dependent access (halo detected, e.g., A[i-1], A[i+1])
-  Indexed   /// Explicit indices or irregular access patterns
+  Unknown, /// Pattern not yet analyzed or unrecognizable
+  Uniform, /// Regular access (offsets only, no stencil bounds detected)
+  Stencil, /// Neighbor-dependent access (halo detected, e.g., A[i-1], A[i+1])
+  Indexed  /// Explicit indices or irregular access patterns
 };
 
 /// Stencil bounds information for halo-aware localization.
@@ -45,9 +45,9 @@ struct StencilBounds {
 /// Summary of per-acquire access patterns at allocation level.
 /// Used to determine partitioning strategy for an entire allocation.
 struct AcquirePatternSummary {
-  bool hasUniform = false;  /// At least one acquire uses uniform access
-  bool hasStencil = false;  /// At least one acquire uses stencil access
-  bool hasIndexed = false;  /// At least one acquire uses indexed access
+  bool hasUniform = false; /// At least one acquire uses uniform access
+  bool hasStencil = false; /// At least one acquire uses stencil access
+  bool hasIndexed = false; /// At least one acquire uses indexed access
 
   /// Returns true if multiple different patterns are present
   bool isMixed() const {

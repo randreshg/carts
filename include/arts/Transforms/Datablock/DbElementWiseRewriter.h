@@ -37,9 +37,10 @@ namespace arts {
 ///                      memrefIdx = remaining dimensions unchanged
 ///   Linearized:        localLinear = globalLinear - (elemOffset * stride)
 class DbElementWiseRewriter : public DbRewriterBase {
-  Value elemOffset_;                ///< First element this partition owns
-  Value elemSize_;                  ///< Number of elements owned
-  SmallVector<Value> oldElementSizes_; ///< Old allocation's element sizes for stride
+  Value elemOffset_; /// First element this partition owns
+  Value elemSize_;   /// Number of elements owned
+  SmallVector<Value>
+      oldElementSizes_; /// Old allocation's element sizes for stride
 
 public:
   DbElementWiseRewriter(Value elemOffset, Value elemSize, unsigned outerRank,

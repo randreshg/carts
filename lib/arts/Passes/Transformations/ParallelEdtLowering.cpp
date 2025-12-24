@@ -72,8 +72,7 @@ static void guardSingleEdts(Operation *op, Value workerId) {
 
     /// Replace uses of EDT's block arguments with the EDT's dependencies..
     ValueRange deps = edt.getDependencies();
-    for (auto [blockArg, dep] :
-         llvm::zip(edtBody.getArguments(), deps)) {
+    for (auto [blockArg, dep] : llvm::zip(edtBody.getArguments(), deps)) {
       blockArg.replaceAllUsesWith(dep);
     }
 

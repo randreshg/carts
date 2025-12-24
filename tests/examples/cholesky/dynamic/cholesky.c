@@ -78,8 +78,7 @@ int main(int argc, char *argv[]) {
       {
         for (unsigned i = k_block; i < k_block + kb; i++) {
           for (unsigned j = k_block; j < i; j++) {
-            L_parallel[i][i] -=
-                L_parallel[i][j] * L_parallel[i][j];
+            L_parallel[i][i] -= L_parallel[i][j] * L_parallel[i][j];
           }
           /// Avoid sqrt of negative due to floating point inaccuracies
           if (L_parallel[i][i] < 0.0)
@@ -88,8 +87,7 @@ int main(int argc, char *argv[]) {
 
           for (unsigned j = i + 1; j < k_block + kb; j++) {
             for (unsigned m = k_block; m < i; m++) {
-              L_parallel[j][i] -=
-                  L_parallel[j][m] * L_parallel[i][m];
+              L_parallel[j][i] -= L_parallel[j][m] * L_parallel[i][m];
             }
             /// Handle division by zero if diagonal element L_ii is zero
             if (L_parallel[i][i] != 0.0)
@@ -102,9 +100,10 @@ int main(int argc, char *argv[]) {
       }
 
       /// Task 2: Update panel of blocks below diagonal (TRSM-like operation)
-      for (unsigned j_block = k_block + kb; j_block < N; j_block += BLOCK_SIZE) {
+      for (unsigned j_block = k_block + kb; j_block < N;
+           j_block += BLOCK_SIZE) {
         unsigned jb = (j_block + BLOCK_SIZE > N) ? N - j_block : BLOCK_SIZE;
-#pragma omp task depend(in : L_parallel[k_block][k_block])                \
+#pragma omp task depend(in : L_parallel[k_block][k_block])                     \
     depend(inout : L_parallel[j_block][k_block])
         {
           /// Column index in L_kk and panel L_jk
@@ -135,8 +134,8 @@ int main(int argc, char *argv[]) {
              i_block_trail += BLOCK_SIZE) {
           int ib_trail =
               (i_block_trail + BLOCK_SIZE > N) ? N - i_block_trail : BLOCK_SIZE;
-#pragma omp task depend(in : L_parallel[i_block_trail][k_block],          \
-                            L_parallel[j_block_trail][k_block])           \
+#pragma omp task depend(in : L_parallel[i_block_trail][k_block],               \
+                            L_parallel[j_block_trail][k_block])                \
     depend(inout : L_parallel[i_block_trail][j_block_trail])
           {
             for (unsigned row_target = i_block_trail;
@@ -146,7 +145,8 @@ int main(int argc, char *argv[]) {
                 /// Update only lower triangular part of the target block
                 if (row_target >= col_target) {
                   double sum_update = 0.0;
-                  for (unsigned m_sum = k_block; m_sum < k_block + kb; m_sum++) {
+                  for (unsigned m_sum = k_block; m_sum < k_block + kb;
+                       m_sum++) {
                     sum_update += L_parallel[row_target][m_sum] *
                                   L_parallel[col_target][m_sum];
                   }
@@ -181,8 +181,7 @@ int main(int argc, char *argv[]) {
 
     for (unsigned j = k + 1; j < N; j++) {
       for (unsigned i = j; i < N; i++) {
-        L_sequential[i][j] -=
-            L_sequential[i][k] * L_sequential[j][k];
+        L_sequential[i][j] -= L_sequential[i][k] * L_sequential[j][k];
       }
     }
   }

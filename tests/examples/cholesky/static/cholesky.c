@@ -66,8 +66,7 @@ int main() {
       {
         for (int i = k_block; i < k_block + kb; i++) {
           for (int j = k_block; j < i; j++) {
-            L_parallel[i][i] -=
-                L_parallel[i][j] * L_parallel[i][j];
+            L_parallel[i][i] -= L_parallel[i][j] * L_parallel[i][j];
           }
           /// Avoid sqrt of negative due to floating point inaccuracies
           if (L_parallel[i][i] < 0.0)
@@ -76,8 +75,7 @@ int main() {
 
           for (unsigned j = i + 1; j < k_block + kb; j++) {
             for (int m = k_block; m < i; m++) {
-              L_parallel[j][i] -=
-                  L_parallel[j][m] * L_parallel[i][m];
+              L_parallel[j][i] -= L_parallel[j][m] * L_parallel[i][m];
             }
             /// Handle division by zero if diagonal element L_ii is zero
             if (L_parallel[i][i] != 0.0)
@@ -92,7 +90,7 @@ int main() {
       /// Task 2: Update panel of blocks below diagonal (TRSM-like operation)
       for (int j_block = k_block + kb; j_block < N; j_block += BLOCK_SIZE) {
         int jb = (j_block + BLOCK_SIZE > N) ? N - j_block : BLOCK_SIZE;
-#pragma omp task depend(in : L_parallel[k_block][k_block])                \
+#pragma omp task depend(in : L_parallel[k_block][k_block])                     \
     depend(inout : L_parallel[j_block][k_block])
         {
           /// Column index in L_kk and panel L_jk
@@ -123,8 +121,8 @@ int main() {
              i_block_trail += BLOCK_SIZE) {
           int ib_trail =
               (i_block_trail + BLOCK_SIZE > N) ? N - i_block_trail : BLOCK_SIZE;
-#pragma omp task depend(in : L_parallel[i_block_trail][k_block],          \
-                            L_parallel[j_block_trail][k_block])           \
+#pragma omp task depend(in : L_parallel[i_block_trail][k_block],               \
+                            L_parallel[j_block_trail][k_block])                \
     depend(inout : L_parallel[i_block_trail][j_block_trail])
           {
             for (int row_target = i_block_trail;
@@ -169,8 +167,7 @@ int main() {
 
     for (int j = k + 1; j < N; j++) {
       for (int i = j; i < N; i++) {
-        L_sequential[i][j] -=
-            L_sequential[i][k] * L_sequential[j][k];
+        L_sequential[i][j] -= L_sequential[i][k] * L_sequential[j][k];
       }
     }
   }

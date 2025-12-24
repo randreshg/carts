@@ -50,9 +50,9 @@ public:
   ///===----------------------------------------------------------------------===///
   /// Functions for querying EDT block arguments
 
-  /// Finds the EdtOp that uses a DbAcquireOp and returns the corresponding block
-  /// argument.
-  /// Returns {EdtOp, BlockArgument} pair, or {nullptr, BlockArgument()} if not found.
+  /// Finds the EdtOp that uses a DbAcquireOp and returns the corresponding
+  /// block argument. Returns {EdtOp, BlockArgument} pair, or {nullptr,
+  /// BlockArgument()} if not found.
   static std::pair<EdtOp, BlockArgument>
   getEdtBlockArgumentForAcquire(DbAcquireOp acquireOp);
 };

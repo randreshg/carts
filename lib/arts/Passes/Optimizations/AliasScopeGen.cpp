@@ -142,7 +142,6 @@ emitScopeDeclarations(LLVM::LLVMFuncOp funcOp,
   }
 }
 
-
 /// Find which data pointer (if any) a memory access address is derived from
 static DataPointerInfo *
 findSourceDataPointer(Value addr,
