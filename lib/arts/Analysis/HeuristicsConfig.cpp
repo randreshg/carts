@@ -2,11 +2,12 @@
 /// File: HeuristicsConfig.cpp
 ///
 /// This file implements the HeuristicsConfig class which centralizes all
-/// compile-time heuristic decision logic for single-rank and other
-/// optimizations in the CARTS compiler framework.
+/// compile-time heuristic decision logic.
 ///==========================================================================///
 
 #include "arts/Analysis/HeuristicsConfig.h"
+#include "arts/Analysis/Graphs/Db/DbAccessPattern.h"
+#include "arts/Transforms/Datablock/DbRewriter.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/Metadata/IdRegistry.h"
@@ -30,8 +31,6 @@ HeuristicsConfig::HeuristicsConfig(const ArtsAbstractMachine &machine,
 void HeuristicsConfig::initializeThresholds() {
   /// Compute thresholds based on execution mode and memory tier
   auto mode = machine.getExecutionMode();
-  const auto &mem = machine.getMemoryConfig();
-
   /// Set DB limits based on execution mode
   switch (mode) {
   case ExecutionMode::SingleThreaded:
@@ -53,49 +52,28 @@ void HeuristicsConfig::initializeThresholds() {
 
   /// Compute memory-aware thresholds
   thresholds_.minInnerBytes = computeMinInnerBytes();
-  thresholds_.optimalInnerBytes = computeOptimalInnerBytes();
 
   ARTS_DEBUG("Thresholds initialized: maxOuterDBs="
              << thresholds_.maxOuterDBs
              << ", maxTotalDBsPerEDT=" << thresholds_.maxTotalDBsPerEDT
-             << ", minInnerBytes=" << thresholds_.minInnerBytes
-             << ", optimalInnerBytes=" << thresholds_.optimalInnerBytes);
+             << ", minInnerBytes=" << thresholds_.minInnerBytes);
 }
 
 int64_t HeuristicsConfig::computeMinInnerBytes() const {
   auto mode = machine.getExecutionMode();
-  const auto &mem = machine.getMemoryConfig();
 
   switch (mode) {
   case ExecutionMode::SingleThreaded:
     /// Cache-line aligned (64 bytes)
     return 64;
   case ExecutionMode::IntraNode:
-    /// L2 per thread: fit chunk in per-core cache
-    return (mem.l2OrderKB * 1024) / std::max(1, machine.getThreads());
+    /// Keep a modest lower bound to avoid tiny chunks
+    return 1024;
   case ExecutionMode::InterNode:
-    /// Amortize network: latency × bandwidth
-    /// latencyUs * (Mbps / 8) = bytes to transfer during one RTT
-    return (mem.latencyOrderUs * mem.networkOrderMbps) / 8;
+    /// Avoid tiny chunks for distributed execution
+    return 4096;
   }
   return 64; /// Fallback
-}
-
-int64_t HeuristicsConfig::computeOptimalInnerBytes() const {
-  auto mode = machine.getExecutionMode();
-  const auto &mem = machine.getMemoryConfig();
-
-  switch (mode) {
-  case ExecutionMode::SingleThreaded:
-    return 256; /// 4 cache lines
-  case ExecutionMode::IntraNode:
-    /// Half of L2 per thread for optimal cache usage
-    return (mem.l2OrderKB * 1024) / (2 * std::max(1, machine.getThreads()));
-  case ExecutionMode::InterNode:
-    /// L3 shared across nodes
-    return (mem.l3OrderMB * 1024 * 1024) / std::max(1, machine.getNodeCount());
-  }
-  return 256; /// Fallback
 }
 
 bool HeuristicsConfig::isSingleNode() const {
@@ -103,13 +81,6 @@ bool HeuristicsConfig::isSingleNode() const {
 }
 
 bool HeuristicsConfig::isValid() const { return machine.isValid(); }
-
-bool HeuristicsConfig::shouldDisableTwinDiff() const {
-  /// H4: On single-node, twin_diff is pure overhead
-  /// - No remote owner to send diffs to
-  /// - Twin allocation + memcpy + diff computation are wasted
-  return isSingleNode();
-}
 
 bool HeuristicsConfig::shouldUseTwinDiff(const TwinDiffContext &context) {
   Operation *op = context.op;
@@ -230,6 +201,76 @@ std::optional<bool> HeuristicsConfig::shouldUseFineGrained(
              << ", innerBytes="
              << (innerBytes ? std::to_string(*innerBytes) : "?") << ")");
   return std::nullopt;
+}
+
+RewriterMode HeuristicsConfig::getRecommendedPartitioningMode(
+    const PartitioningModeContext &context) const {
+  /// H3: Partitioning mode selection based on access patterns
+  ///
+  /// Decision flow:
+  /// 1. Stencil patterns → ElementWise (until ESD infrastructure ready)
+  /// 2. Uniform + chunk hints + H2 cost model passes → Chunked
+  /// 3. Indexed patterns → ElementWise (irregular access)
+  /// 4. Default → ElementWise (safest, works for all patterns)
+
+  ARTS_DEBUG("H3: getRecommendedPartitioningMode pattern="
+             << static_cast<int>(context.pattern)
+             << ", hasChunkHints=" << context.hasChunkHints);
+
+  /// Stencil patterns: Use ElementWise until ESD infrastructure is ready
+  /// Future: When ESD is implemented, stencil patterns can use Stencil mode
+  if (context.pattern == AccessPattern::Stencil) {
+    ARTS_DEBUG("  H3: Stencil pattern -> ElementWise (ESD not yet ready)");
+    return RewriterMode::ElementWise;
+  }
+
+  /// Indexed patterns: ElementWise is safest for irregular access
+  if (context.pattern == AccessPattern::Indexed) {
+    ARTS_DEBUG("  H3: Indexed pattern -> ElementWise (irregular access)");
+    return RewriterMode::ElementWise;
+  }
+
+  /// Uniform patterns: Consider chunking if conditions are met
+  if (context.pattern == AccessPattern::Uniform) {
+    /// Need chunk hints to determine chunk boundaries
+    if (!context.hasChunkHints) {
+      ARTS_DEBUG("  H3: Uniform but no chunk hints -> ElementWise");
+      return RewriterMode::ElementWise;
+    }
+
+    /// Evaluate H2 cost model if we have enough information
+    std::optional<int64_t> totalDBs;
+    std::optional<int64_t> totalDBsPerEDT;
+
+    if (context.totalElements && context.chunkSize && *context.chunkSize > 0) {
+      totalDBs = (*context.totalElements + *context.chunkSize - 1) /
+                 *context.chunkSize;
+      /// Assume 1 DB per EDT for uniform access (typical parallel_for)
+      totalDBsPerEDT = 1;
+    }
+
+    auto h2Result = shouldUseFineGrained(
+        totalDBs, totalDBsPerEDT, context.chunkSize,
+        PartitioningSource::ParallelFor);
+
+    if (h2Result.has_value()) {
+      if (*h2Result) {
+        ARTS_DEBUG("  H3: Uniform + hints + H2 pass -> Chunked");
+        return RewriterMode::Chunked;
+      } else {
+        ARTS_DEBUG("  H3: Uniform + hints but H2 reject -> ElementWise");
+        return RewriterMode::ElementWise;
+      }
+    }
+
+    /// H2 couldn't decide (partial info) - default to ElementWise for safety
+    ARTS_DEBUG("  H3: Uniform + hints but H2 partial -> ElementWise (safe)");
+    return RewriterMode::ElementWise;
+  }
+
+  /// Unknown pattern: default to ElementWise
+  ARTS_DEBUG("  H3: Unknown pattern -> ElementWise (default)");
+  return RewriterMode::ElementWise;
 }
 
 void HeuristicsConfig::recordDecision(llvm::StringRef heuristic, bool applied,

@@ -11,7 +11,7 @@
 
 /// Arts
 #include "arts/ArtsDialect.h"
-#include "arts/Transforms/EdtPtrRematerialization.h"
+#include "arts/Transforms/Edt/EdtPtrRematerialization.h"
 #include "arts/Utils/ArtsUtils.h"
 
 /// Others

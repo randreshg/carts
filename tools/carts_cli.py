@@ -240,8 +240,8 @@ class PlatformConfig:
 
         self.clang_library_flags.extend(["-L/usr/lib", "-L/usr/lib64"])
         self.compile_library_flags.extend(["-L/usr/lib", "-L/usr/lib64"])
-        self.clang_libraries.extend(["-lpthread", "-lrt"])
-        self.compile_libraries.extend(["-lpthread", "-lrt"])
+        self.clang_libraries.extend(["-lpthread", "-lrt", "-lstdc++"])
+        self.compile_libraries.extend(["-lpthread", "-lrt", "-lstdc++"])
         self.compile_flags.extend(["-fno-pie", "-no-pie"])
 
     def _setup_windows_flags(self) -> None:
@@ -1034,7 +1034,8 @@ def _build_cgeist_cmd(
     cmd = [str(config.polygeist_install_dir / "bin" / "cgeist")]
     cmd.extend(config.include_flags)
     cmd.extend(config.cgeist_sysroot_flags)
-    cmd.extend(["--raise-scf-to-affine", std_flag, "-O0", "-S"])
+    cmd.extend(["--raise-scf-to-affine", std_flag, "-O0", "-S",
+                 "-D_POSIX_C_SOURCE=199309L"])  # Required for clock_gettime
     if with_openmp:
         cmd.append("-fopenmp")
     if with_debug_info:

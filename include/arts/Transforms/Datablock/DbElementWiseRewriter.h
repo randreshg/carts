@@ -1,47 +1,49 @@
 ///==========================================================================///
 /// File: DbElementWiseRewriter.h
+///
+/// Index rewriter for element-wise (fine-grained) datablock allocation.
+/// Each element of the partitioned dimension gets its own datablock.
+///
+/// Partitioning policy:
+/// - Element-wise is the default fallback when chunk hints are missing,
+///   access is stencil/mixed/irregular, or chunking is not beneficial.
+/// - This preserves concurrency at the cost of more datablocks.
+///
+/// Example (A[100][50], elemOffset=25):
+///   Access A[27][10]:
+///     dbRefIdx = 27 - 25 = 2
+///     memrefIdx = 10
+///
+/// Equations:
+///   dbRefIdx   = globalRow - elemOffset
+///   memrefIdx  = remaining dimensions unchanged
+///   localLinear = globalLinear - (elemOffset * stride)
+///
 ///==========================================================================///
 
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBELEMENTWISEREWRITER_H
 #define ARTS_TRANSFORMS_DATABLOCK_DBELEMENTWISEREWRITER_H
 
-#include "arts/ArtsDialect.h"
-#include "mlir/IR/Builders.h"
-#include "llvm/ADT/SetVector.h"
+#include "arts/Transforms/Datablock/DbRewriterBase.h"
 
 namespace mlir {
 namespace arts {
 
-// Forward declaration
-class ArtsCodegen;
-
-///===----------------------------------------------------------------------===///
-/// DbElementWiseRewriter
+/// Index rewriter for element-wise (fine-grained) datablock allocation.
+/// Implements subtraction-based offset adjustment for fine-grained parallelism.
 ///
-/// For element-wise allocations:
-///   dbRefIdx = globalRow - elemOffset
-///   memrefIdx = remaining dimensions
-///
-/// For linearized indices, scales offset by stride
-///   localLinear = globalLinear - (elemOffset * stride)
-///===----------------------------------------------------------------------===///
-class DbElementWiseRewriter {
-  Value elemOffset_; /// First element this partition owns
-  Value elemSize_;   /// Number of elements owned
-  unsigned outerRank_;
-  unsigned innerRank_;
-  SmallVector<Value>
-      oldElementSizes_; /// Old allocation's element sizes for stride
+/// Index Localization Formulas:
+///   Multi-dimensional: dbRefIdx = globalRow - elemOffset
+///                      memrefIdx = remaining dimensions unchanged
+///   Linearized:        localLinear = globalLinear - (elemOffset * stride)
+class DbElementWiseRewriter : public DbRewriterBase {
+  Value elemOffset_;                ///< First element this partition owns
+  Value elemSize_;                  ///< Number of elements owned
+  SmallVector<Value> oldElementSizes_; ///< Old allocation's element sizes for stride
 
 public:
   DbElementWiseRewriter(Value elemOffset, Value elemSize, unsigned outerRank,
                         unsigned innerRank, ValueRange oldElementSizes = {});
-
-  /// Result of localizing indices - defined locally, not from base class
-  struct LocalizedIndices {
-    SmallVector<Value> dbRefIndices;  /// Indices for arts.db_ref operation
-    SmallVector<Value> memrefIndices; /// Indices for memref load/store
-  };
 
 private:
   /// Split indices into outer/db_ref and inner/memref groups.
@@ -53,18 +55,24 @@ public:
   /// For element-wise mode: split indices by outer/inner rank and
   /// subtract elemOffset from the first outer index.
   LocalizedIndices localize(ArrayRef<Value> globalIndices, OpBuilder &builder,
-                            Location loc);
+                            Location loc) override;
+
+  /// Transform a linearized global index
+  /// localLinear = globalLinear - (elemOffset * stride)
+  LocalizedIndices localizeLinearized(Value globalLinearIndex, Value stride,
+                                      OpBuilder &builder,
+                                      Location loc) override;
+
+  /// Rewrite a DbRefOp and its load/store users
+  void rewriteDbRefUsers(DbRefOp ref, Value blockArg, Type newElementType,
+                         OpBuilder &builder,
+                         llvm::SetVector<Operation *> &opsToRemove) override;
 
   /// Localize indices against a fine-grained acquire view.
   LocalizedIndices localizeForFineGrained(ValueRange globalIndices,
                                           ValueRange acquireIndices,
                                           ValueRange acquireOffsets,
                                           OpBuilder &builder, Location loc);
-
-  /// Transform a linearized global index
-  /// localLinear = globalLinear - (elemOffset * stride)
-  LocalizedIndices localizeLinearized(Value globalLinearIndex, Value stride,
-                                      OpBuilder &builder, Location loc);
 
   /// Rewrite a single load/store using db_ref + load/store pattern.
   void rewriteAccessWithDbPattern(Operation *op, Value dbPtr, Type elementType,
@@ -79,11 +87,6 @@ public:
   void rewriteUsesInParentRegion(Operation *alloc, DbAllocOp dbAlloc,
                                  ArtsCodegen &AC,
                                  llvm::SetVector<Operation *> &opsToRemove);
-
-  /// Rewrite a DbRefOp and its load/store users
-  void rewriteDbRefUsers(DbRefOp ref, Value blockArg, Type newElementType,
-                         OpBuilder &builder,
-                         llvm::SetVector<Operation *> &opsToRemove);
 
   /// Element-wise localizeCoordinates scales offset by stride
   /// for linearized accesses

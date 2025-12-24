@@ -349,8 +349,9 @@ void setupConcurrencyOpt(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(arts::createEdtPass(AM, /*runAnalysis*/ false));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
-  pm.addPass(arts::createDbPass(AM));
+  /// Partition DBs and run DbPass again to adjust modes
   pm.addPass(arts::createDbPartitioningPass(AM));
+  pm.addPass(arts::createDbPass(AM));
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(createCSEPass());
   pm.addPass(createMem2Reg());
@@ -361,7 +362,6 @@ void setupEpochs(PassManager &pm, arts::ArtsAnalysisManager *AM) {
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
   pm.addPass(arts::createCreateEpochsPass());
   pm.addPass(polygeist::createPolygeistCanonicalizePass());
-  // pm.addPass(arts::createEpochsPass());
   // pm.addPass(createMem2Reg());
   // pm.addPass(polygeist::createPolygeistCanonicalizePass());
 }
@@ -421,7 +421,7 @@ void setupLLVMIREmission(PassManager &pm) {
   /// Generate alias scope metadata (must run after ConvertPolygeistToLLVM).
   pm.addPass(arts::createAliasScopeGenPass());
   /// Attach LLVM loop vectorization hints to EDT loop backedges.
-  pm.addPass(arts::createLoopVectorizationHintsPass());
+  // pm.addPass(arts::createLoopVectorizationHintsPass());
   /// Insert software prefetch hints for strided memory accesses.
   /// NOTE: Currently disabled due to performance regression on tight loops.
   /// TODO: Re-enable after fixing prefetch distance calculation for innermost

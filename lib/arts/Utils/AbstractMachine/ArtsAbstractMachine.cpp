@@ -24,57 +24,6 @@ namespace mlir {
 namespace arts {
 
 //===----------------------------------------------------------------------===//
-// MemoryConfig Implementation
-//===----------------------------------------------------------------------===//
-
-void MemoryConfig::applyTierDefaults() {
-  switch (tier) {
-  case MemoryTier::SMALL:
-    l2OrderKB = 64;
-    l3OrderMB = 1;
-    networkOrderMbps = 100;
-    latencyOrderUs = 1000;
-    break;
-  case MemoryTier::MEDIUM:
-    l2OrderKB = 256;
-    l3OrderMB = 8;
-    networkOrderMbps = 1000;
-    latencyOrderUs = 100;
-    break;
-  case MemoryTier::LARGE:
-    l2OrderKB = 1024;
-    l3OrderMB = 32;
-    networkOrderMbps = 10000;
-    latencyOrderUs = 10;
-    break;
-  case MemoryTier::HPC:
-    l2OrderKB = 2048;
-    l3OrderMB = 64;
-    networkOrderMbps = 100000;
-    latencyOrderUs = 1;
-    break;
-  }
-}
-
-int64_t MemoryConfig::getMinChunkBytes() const {
-  // Minimum is always cache-line aligned (64 bytes)
-  return 64;
-}
-
-int64_t MemoryConfig::getOptimalChunkBytes(int threads) const {
-  // Optimal chunk fits in L2 per thread
-  if (threads <= 0)
-    threads = 1;
-  return (l2OrderKB * 1024) / threads;
-}
-
-int64_t MemoryConfig::getNetworkChunkBytes() const {
-  // Amortize network latency: latency × bandwidth
-  // latencyUs * (Mbps / 8) = bytes to transfer during one RTT
-  return (latencyOrderUs * networkOrderMbps) / 8;
-}
-
-//===----------------------------------------------------------------------===//
 // ArtsAbstractMachine Implementation
 //===----------------------------------------------------------------------===//
 
@@ -127,7 +76,6 @@ bool ArtsAbstractMachine::parseFromFile(const std::string &path) {
   configFileExists = true;
   std::string line;
   bool inArtsSection = false;
-  bool inMemorySection = false;
   int lineNumber = 0;
 
   while (std::getline(in, line)) {
@@ -140,14 +88,12 @@ bool ArtsAbstractMachine::parseFromFile(const std::string &path) {
     }
     if (line.front() == '[' && line.back() == ']') {
       inArtsSection = (line == "[ARTS]");
-      inMemorySection = (line == "[MEMORY]");
-      ARTS_DEBUG(
-          "Line " << lineNumber << " (section): " << line << " - inArtsSection="
-                  << (inArtsSection ? "true" : "false") << " - inMemorySection="
-                  << (inMemorySection ? "true" : "false"));
+      ARTS_DEBUG("Line " << lineNumber << " (section): " << line
+                         << " - inArtsSection="
+                         << (inArtsSection ? "true" : "false"));
       continue;
     }
-    if (!inArtsSection && !inMemorySection) {
+    if (!inArtsSection) {
       ARTS_DEBUG("Line " << lineNumber << " (skipped): " << line);
       continue;
     }
@@ -260,54 +206,12 @@ bool ArtsAbstractMachine::parseFromFile(const std::string &path) {
         introspectiveStartPoint = parseInt(val, 1);
     }
 
-    /// [MEMORY] Section Parsing
-    if (inMemorySection) {
-      if (key == "memoryTier") {
-        std::string lower = val;
-        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        if (lower == "small")
-          memoryConfig.tier = MemoryTier::SMALL;
-        else if (lower == "medium")
-          memoryConfig.tier = MemoryTier::MEDIUM;
-        else if (lower == "large")
-          memoryConfig.tier = MemoryTier::LARGE;
-        else if (lower == "hpc")
-          memoryConfig.tier = MemoryTier::HPC;
-        else
-          ARTS_WARN("Unknown memoryTier: " << val << ", using MEDIUM");
-        // Apply tier defaults immediately
-        memoryConfig.applyTierDefaults();
-        ARTS_DEBUG("Set memoryTier=" << val);
-      }
-      // Optional overrides (applied after tier defaults)
-      else if (key == "l2OrderKB") {
-        memoryConfig.l2OrderKB = parseInt(val, memoryConfig.l2OrderKB);
-        ARTS_DEBUG("Override l2OrderKB=" << memoryConfig.l2OrderKB);
-      } else if (key == "l3OrderMB") {
-        memoryConfig.l3OrderMB = parseInt(val, memoryConfig.l3OrderMB);
-        ARTS_DEBUG("Override l3OrderMB=" << memoryConfig.l3OrderMB);
-      } else if (key == "networkOrderMbps") {
-        memoryConfig.networkOrderMbps =
-            parseInt(val, memoryConfig.networkOrderMbps);
-        ARTS_DEBUG(
-            "Override networkOrderMbps=" << memoryConfig.networkOrderMbps);
-      } else if (key == "latencyOrderUs") {
-        memoryConfig.latencyOrderUs =
-            parseInt(val, memoryConfig.latencyOrderUs);
-        ARTS_DEBUG("Override latencyOrderUs=" << memoryConfig.latencyOrderUs);
-      }
-    }
   }
 
   ARTS_DEBUG("Finished parsing configuration file");
   ARTS_INFO("Final configuration - threads=" << threads
                                              << ", nodeCount=" << nodeCount
                                              << ", launcher=" << launcher);
-  ARTS_DEBUG("Memory config - tier=" << static_cast<int>(memoryConfig.tier)
-                                     << ", l2OrderKB=" << memoryConfig.l2OrderKB
-                                     << ", networkOrderMbps="
-                                     << memoryConfig.networkOrderMbps);
-
   return true;
 }
 
