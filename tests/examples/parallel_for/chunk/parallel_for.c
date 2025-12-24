@@ -45,8 +45,8 @@ int main(int argc, char **argv) {
   }
   CARTS_DEBUG_PRINT("// Results:\n");
   for (int i = 0; i < N; i++)
-    CARTS_DEBUG_PRINT("c[%d] = %d, a[%d] = %d, b[%d] = %d\n", i, c[i], i, a[i], i,
-             b[i]);
+    CARTS_DEBUG_PRINT("c[%d] = %d, a[%d] = %d, b[%d] = %d\n", i, c[i], i, a[i],
+                      i, b[i]);
 
   free(a);
   free(b);

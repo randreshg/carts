@@ -166,26 +166,6 @@ void ArtsAnalysisManager::captureDiagnostics() {
     break;
   }
 
-  /// Memory tier as string
-  switch (am.getMemoryConfig().tier) {
-  case MemoryTier::SMALL:
-    machine["memory_tier"] = "SMALL";
-    break;
-  case MemoryTier::MEDIUM:
-    machine["memory_tier"] = "MEDIUM";
-    break;
-  case MemoryTier::LARGE:
-    machine["memory_tier"] = "LARGE";
-    break;
-  case MemoryTier::HPC:
-    machine["memory_tier"] = "HPC";
-    break;
-  }
-
-  /// Cache sizes for ArtsMate reasoning
-  const auto &memCfg = am.getMemoryConfig();
-  machine["l2_cache_kb"] = memCfg.l2OrderKB;
-  machine["l3_cache_mb"] = memCfg.l3OrderMB;
 
   root["machine"] = std::move(machine);
 

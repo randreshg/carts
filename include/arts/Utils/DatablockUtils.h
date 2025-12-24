@@ -26,7 +26,8 @@ namespace arts {
 ///
 /// Mode detection logic (from DbAcquireOp):
 ///   - ElementWise: indices non-empty (from OpenMP depend(in: A[i][j]))
-///   - Chunked: indices empty, offsets non-empty (from OpenMP depend(in: A[i:K]))
+///   - Chunked: indices empty, offsets non-empty (from OpenMP depend(in:
+///   A[i:K]))
 ///   - Coarse: both empty (acquires entire datablock)
 enum class PartitionMode {
   Coarse,      /// No partitioning - acquires entire datablock
@@ -49,14 +50,15 @@ public:
   /// Returns {guid, ptr} from the DbAllocOp, or nullopt if not found.
   /// This is critical for the parallel region splitting transformation:
   /// - Before: Task EDTs acquire from parallel EDT's block arguments
-  ///   DbAllocOp -> DbAcquireOp (for parallel) -> block_arg -> DbAcquireOp (task)
+  ///   DbAllocOp -> DbAcquireOp (for parallel) -> block_arg -> DbAcquireOp
+  ///   (task)
   /// - After: Task EDTs acquire directly from DbAllocOp
   ///   DbAllocOp -> DbAcquireOp (for task EDT)
   static std::optional<std::pair<Value, Value>> traceToDbAlloc(Value dep);
 
-  /// Finds the datablock-related operation (DbAllocOp or DbAcquireOp) associated
-  /// with the given value. The depth parameter prevents infinite recursion in
-  /// circular acquire chains.
+  /// Finds the datablock-related operation (DbAllocOp or DbAcquireOp)
+  /// associated with the given value. The depth parameter prevents infinite
+  /// recursion in circular acquire chains.
   static Operation *getUnderlyingDb(Value v, unsigned depth = 0);
 
   /// Finds the DbAllocOp associated with the given value.
@@ -121,8 +123,9 @@ public:
   /// Datablock Stride Computation
   ///===----------------------------------------------------------------------===///
   /// Functions for computing strides for row-major indexing.
-  /// For sizes = [D0, D1, D2, ...], stride = D1 * D2 * ... (TRAILING dimensions).
-  /// This follows row-major linearization: index = i0 * stride + ...
+  /// For sizes = [D0, D1, D2, ...], stride = D1 * D2 * ... (TRAILING
+  /// dimensions). This follows row-major linearization: index = i0 * stride +
+  /// ...
   ///
   /// Examples:
   ///   [4, 16]     -> stride = 16
@@ -149,13 +152,16 @@ public:
   /// If any trailing dimension is dynamic, generates arith::MulIOp chain.
   /// For single-dimension [N], returns constant 1.
   /// Returns nullptr if sizes is empty.
-  static Value getStrideValue(OpBuilder &builder, Location loc, ValueRange sizes);
+  static Value getStrideValue(OpBuilder &builder, Location loc,
+                              ValueRange sizes);
 
   /// Get element stride Value from DbAllocOp (uses getElementSizes()).
-  static Value getElementStrideValue(OpBuilder &builder, Location loc, DbAllocOp alloc);
+  static Value getElementStrideValue(OpBuilder &builder, Location loc,
+                                     DbAllocOp alloc);
 
   /// Get outer stride Value from DbAllocOp (uses getSizes()).
-  static Value getOuterStrideValue(OpBuilder &builder, Location loc, DbAllocOp alloc);
+  static Value getOuterStrideValue(OpBuilder &builder, Location loc,
+                                   DbAllocOp alloc);
 };
 
 } // namespace arts

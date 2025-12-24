@@ -25,7 +25,8 @@ int main(int argc, char *argv[]) {
 #pragma omp task depend(inout : A[i])
         {
           A[i] = i;
-          CARTS_DEBUG_PRINT("Task %d - 0: Initializing A[%d] = %d\n", i, i, A[i]);
+          CARTS_DEBUG_PRINT("Task %d - 0: Initializing A[%d] = %d\n", i, i,
+                            A[i]);
         }
 
         if (i == 0) {
@@ -33,15 +34,17 @@ int main(int argc, char *argv[]) {
           {
             CARTS_DEBUG_PRINT("Task %d - 1 -> Input: A[%d] = %d\n", i, i, A[i]);
             B[i] = A[i] + 5;
-            CARTS_DEBUG_PRINT("Task %d - 1: Computing B[%d] = %d\n", i, i, B[i]);
+            CARTS_DEBUG_PRINT("Task %d - 1: Computing B[%d] = %d\n", i, i,
+                              B[i]);
           }
         } else {
 #pragma omp task depend(in : A[i]) depend(in : B[i - 1]) depend(inout : B[i])
           {
-            CARTS_DEBUG_PRINT("Task %d - 2 -> Input: A[%d] = %d, B[%d] = %d\n", i, i,
-                     A[i], i - 1, B[i - 1]);
+            CARTS_DEBUG_PRINT("Task %d - 2 -> Input: A[%d] = %d, B[%d] = %d\n",
+                              i, i, A[i], i - 1, B[i - 1]);
             B[i] = A[i] + B[i - 1] + 5;
-            CARTS_DEBUG_PRINT("Task %d - 2: Computing B[%d] = %d\n", i, i, B[i]);
+            CARTS_DEBUG_PRINT("Task %d - 2: Computing B[%d] = %d\n", i, i,
+                              B[i]);
           }
         }
       }

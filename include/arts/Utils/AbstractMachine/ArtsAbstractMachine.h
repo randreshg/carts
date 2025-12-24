@@ -170,7 +170,6 @@ private:
   /// Configuration file status
   bool configFileExists = false;
   bool isValidFlag = false;
-
 };
 
 } // namespace arts
