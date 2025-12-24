@@ -1472,9 +1472,18 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   }
 
   /// Create task EDT
-  Value routeValue = AC->createIntConstant(0, AC->Int32, loc);
+  /// Inherit concurrency from parent parallel EDT - if internode, route to worker node
+  EdtConcurrency taskConcurrency = originalParallel.getConcurrency();
+  Value routeValue;
+  if (taskConcurrency == EdtConcurrency::internode) {
+    /// Route to the worker node (workerIdPlaceholder is the node ID)
+    routeValue = AC->castToInt(AC->Int32, workerIdPlaceholder, loc);
+    ARTS_DEBUG("  - Using internode routing: worker " << workerIdPlaceholder);
+  } else {
+    routeValue = AC->createIntConstant(0, AC->Int32, loc);
+  }
   auto taskEdt = AC->create<EdtOp>(
-      loc, EdtType::task, EdtConcurrency::intranode, routeValue, ValueRange{});
+      loc, EdtType::task, taskConcurrency, routeValue, ValueRange{});
 
   Block &taskBlock = taskEdt.getBody().front();
   AC->setInsertionPointToStart(&taskBlock);

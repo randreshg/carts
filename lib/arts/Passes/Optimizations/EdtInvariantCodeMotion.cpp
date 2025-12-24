@@ -12,7 +12,7 @@
 #include "arts/ArtsDialect.h"
 
 /// Others
-#include "arts/Transforms/EdtInvariantCodeMotion.h"
+#include "arts/Transforms/Edt/EdtInvariantCodeMotion.h"
 
 /// LLVM support
 #include "llvm/Support/Debug.h"

@@ -75,7 +75,14 @@ public:
 
   /// Check if a value depends on a base value through arithmetic operations.
   /// Used to determine data dependencies in index expressions.
+  /// Traces through: add, sub, mul, div, rem, index casts, ext, trunc.
   static bool dependsOn(Value value, Value base, int depth = 0);
+
+  /// Check if a pointer/memref value is derived from a source value.
+  /// Used for alias analysis and scope generation.
+  /// Traces through: GEP, Pointer2Memref, Memref2Pointer, SubView, Cast, View,
+  /// ReinterpretCast, and similar pointer-manipulating operations.
+  static bool isDerivedFromPtr(Value value, Value source);
 
   /// Try to infer a constant linearization stride from an index expression.
   /// Looks for mul(constant, X) where X depends on elemOffset.

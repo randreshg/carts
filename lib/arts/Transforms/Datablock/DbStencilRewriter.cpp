@@ -1,39 +1,84 @@
 ///==========================================================================///
-/// File: DbChunkedRewriter.cpp
+/// File: DbStencilRewriter.cpp
+///
+/// Implementation of stencil-aware index localization.
+/// Current default for stencil is element-wise; ESD is the planned path.
 ///==========================================================================///
 
-#include "arts/Transforms/Datablock/DbChunkedRewriter.h"
+#include "arts/Transforms/Datablock/DbStencilRewriter.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "llvm/Support/Debug.h"
 
-#define DEBUG_TYPE "db_transforms"
+#define DEBUG_TYPE "db_stencil"
 
-ARTS_DEBUG_SETUP(db_transforms);
+ARTS_DEBUG_SETUP(db_stencil);
 
 using namespace mlir;
 using namespace mlir::arts;
 
 /// Note: getIndicesFromOp() is now in DbRewriterBase.h
 
-DbChunkedRewriter::DbChunkedRewriter(Value chunkSize, Value startChunk,
-                                     Value elemOffset, unsigned outerRank,
+DbStencilRewriter::DbStencilRewriter(Value baseChunkSize, Value startChunk,
+                                     Value haloLeft, Value haloRight,
+                                     Value totalRows, unsigned outerRank,
                                      unsigned innerRank)
-    : DbRewriterBase(outerRank, innerRank), chunkSize_(chunkSize),
-      startChunk_(startChunk), elemOffset_(elemOffset) {}
+    : DbRewriterBase(outerRank, innerRank), baseChunkSize_(baseChunkSize),
+      startChunk_(startChunk), haloLeft_(haloLeft), haloRight_(haloRight),
+      totalRows_(totalRows) {}
 
-LocalizedIndices DbChunkedRewriter::localize(ArrayRef<Value> globalIndices,
-                                             OpBuilder &builder, Location loc) {
+Value DbStencilRewriter::clampToBounds(Value globalIdx, OpBuilder &builder,
+                                       Location loc) {
+  /// Clamp global index to valid array bounds [0, totalRows-1]
+  /// This handles boundary workers where stencil would access out-of-bounds.
+  /// The kernel's boundary guard (if condition) prevents actual use of
+  /// clamped values - we just need to avoid invalid memory accesses.
+
+  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+
+  /// Clamp lower bound: max(globalIdx, 0)
+  /// Use signed comparison since globalIdx could be negative for u[i-1] at i=0
+  Value clamped = builder.create<arith::MaxSIOp>(loc, globalIdx, zero);
+
+  /// Clamp upper bound: min(clamped, totalRows - 1)
+  if (totalRows_) {
+    Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
+    Value lastRow = builder.create<arith::SubIOp>(loc, totalRows_, one);
+    clamped = builder.create<arith::MinSIOp>(loc, clamped, lastRow);
+  }
+
+  ARTS_DEBUG("DbStencilRewriter::clampToBounds");
+
+  return clamped;
+}
+
+Value DbStencilRewriter::computeLocalIndex(Value globalIdx, Value chunkStart,
+                                           OpBuilder &builder, Location loc) {
+  /// Compute local index within the stencil-local chunk:
+  ///   localIdx = globalIdx - chunkStart + haloLeft
+  ///
+  /// Example: Worker 1 (rows 64-127), haloLeft=1
+  ///   globalIdx=64 -> 64 - 64 + 1 = 1 (first local data row)
+  ///   globalIdx=63 -> 63 - 64 + 1 = 0 (left halo row)
+
+  Value shifted = builder.create<arith::SubIOp>(loc, globalIdx, chunkStart);
+  Value localIdx = builder.create<arith::AddIOp>(loc, shifted, haloLeft_);
+
+  ARTS_DEBUG("DbStencilRewriter::computeLocalIndex");
+
+  return localIdx;
+}
+
+LocalizedIndices
+DbStencilRewriter::localize(ArrayRef<Value> globalIndices, OpBuilder &builder,
+                            Location loc) {
   LocalizedIndices result;
   auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
 
-  ARTS_DEBUG("DbChunkedRewriter::localize with " << globalIndices.size()
+  ARTS_DEBUG("DbStencilRewriter::localize with " << globalIndices.size()
                                                  << " indices");
-  LLVM_DEBUG(llvm::dbgs() << "DbChunkedRewriter::localize with "
-                          << globalIndices.size() << " indices\n");
 
   if (globalIndices.empty()) {
     result.dbRefIndices.push_back(zero());
@@ -41,50 +86,61 @@ LocalizedIndices DbChunkedRewriter::localize(ArrayRef<Value> globalIndices,
     return result;
   }
 
-  // CHUNKED: dim 0 gets div/mod, rest pass through
   Value globalRow = globalIndices[0];
 
-  // dbRefIdx = (globalRow / chunkSize) - startChunk
-  Value physChunk = builder.create<arith::DivUIOp>(loc, globalRow, chunkSize_);
-  Value relChunk = builder.create<arith::SubIOp>(loc, physChunk, startChunk_);
-  result.dbRefIndices.push_back(relChunk);
+  /// For stencil mode, each worker acquires a SINGLE chunk with halo space.
+  /// The dbRefIdx is always 0 (relative to the single acquired chunk).
+  result.dbRefIndices.push_back(zero());
 
-  // memrefIdx[0] = globalRow % chunkSize
-  Value localRow = builder.create<arith::RemUIOp>(loc, globalRow, chunkSize_);
+  /// Clamp global index to valid bounds for boundary workers
+  Value clampedRow = clampToBounds(globalRow, builder, loc);
+
+  /// Compute chunk start (base row for this worker's partition)
+  /// chunkStart = startChunk * baseChunkSize
+  Value chunkStart =
+      builder.create<arith::MulIOp>(loc, startChunk_, baseChunkSize_);
+
+  /// Compute local index with halo offset
+  Value localRow = computeLocalIndex(clampedRow, chunkStart, builder, loc);
   result.memrefIndices.push_back(localRow);
 
-  // Remaining dimensions pass through unchanged
+  /// Remaining dimensions pass through unchanged
   for (unsigned i = 1; i < globalIndices.size(); ++i)
     result.memrefIndices.push_back(globalIndices[i]);
 
-  LLVM_DEBUG(llvm::dbgs() << "  -> dbRef: " << result.dbRefIndices.size()
-                          << ", memref: " << result.memrefIndices.size()
-                          << "\n");
+  ARTS_DEBUG("DbStencilRewriter::localize -> dbRef: "
+             << result.dbRefIndices.size()
+             << ", memref: " << result.memrefIndices.size());
   return result;
 }
 
 LocalizedIndices
-DbChunkedRewriter::localizeLinearized(Value globalLinearIndex, Value stride,
+DbStencilRewriter::localizeLinearized(Value globalLinearIndex, Value stride,
                                       OpBuilder &builder, Location loc) {
   LocalizedIndices result;
+  auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
 
-  ARTS_DEBUG("DbChunkedRewriter::localizeLinearized - using div/mod");
-  LLVM_DEBUG(llvm::dbgs() << "DbChunkedRewriter::localizeLinearized\n");
+  ARTS_DEBUG("DbStencilRewriter::localizeLinearized");
 
-  // De-linearize: globalLinear = globalRow * stride + col
+  /// De-linearize: globalLinear = globalRow * stride + col
   Value globalRow =
       builder.create<arith::DivUIOp>(loc, globalLinearIndex, stride);
   Value col = builder.create<arith::RemUIOp>(loc, globalLinearIndex, stride);
 
-  // dbRefIdx = (globalRow / chunkSize) - startChunk
-  Value physChunk = builder.create<arith::DivUIOp>(loc, globalRow, chunkSize_);
-  Value relChunk = builder.create<arith::SubIOp>(loc, physChunk, startChunk_);
-  result.dbRefIndices.push_back(relChunk);
+  /// For stencil mode, dbRefIdx is always 0 (single chunk)
+  result.dbRefIndices.push_back(zero());
 
-  // localRow = globalRow % chunkSize
-  Value localRow = builder.create<arith::RemUIOp>(loc, globalRow, chunkSize_);
+  /// Clamp global row to valid bounds
+  Value clampedRow = clampToBounds(globalRow, builder, loc);
 
-  // Re-linearize: localLinear = localRow * stride + col
+  /// Compute chunk start
+  Value chunkStart =
+      builder.create<arith::MulIOp>(loc, startChunk_, baseChunkSize_);
+
+  /// Compute local row with halo offset
+  Value localRow = computeLocalIndex(clampedRow, chunkStart, builder, loc);
+
+  /// Re-linearize: localLinear = localRow * stride + col
   Value localLinear = builder.create<arith::MulIOp>(loc, localRow, stride);
   localLinear = builder.create<arith::AddIOp>(loc, localLinear, col);
   result.memrefIndices.push_back(localLinear);
@@ -92,26 +148,24 @@ DbChunkedRewriter::localizeLinearized(Value globalLinearIndex, Value stride,
   return result;
 }
 
-void DbChunkedRewriter::rebaseOps(ArrayRef<Operation *> ops, Value dbPtr,
+void DbStencilRewriter::rebaseOps(ArrayRef<Operation *> ops, Value dbPtr,
                                   Type elementType, ArtsCodegen &AC,
                                   llvm::SetVector<Operation *> &opsToRemove) {
-  ARTS_DEBUG("DbChunkedRewriter::rebaseOps with " << ops.size() << " ops");
-  LLVM_DEBUG(llvm::dbgs() << "DbChunkedRewriter::rebaseOps: processing "
-                          << ops.size() << " operations\n");
+  ARTS_DEBUG("DbStencilRewriter::rebaseOps with " << ops.size() << " ops");
 
   for (Operation *op : ops) {
     OpBuilder::InsertionGuard IG(AC.getBuilder());
     AC.setInsertionPoint(op);
     Location loc = op->getLoc();
 
-    // Handle DbRefOp specially - rewrite its users
+    /// Handle DbRefOp specially - rewrite its users
     if (auto dbRef = dyn_cast<DbRefOp>(op)) {
       rewriteDbRefUsers(dbRef, dbPtr, elementType, AC.getBuilder(),
                         opsToRemove);
       continue;
     }
 
-    // Handle load/store operations
+    /// Handle load/store operations
     if (!isa<memref::LoadOp, memref::StoreOp>(op))
       continue;
 
@@ -119,7 +173,7 @@ void DbChunkedRewriter::rebaseOps(ArrayRef<Operation *> ops, Value dbPtr,
     if (indices.empty())
       continue;
 
-    // Detect linearized access for multi-dimensional memrefs
+    /// Detect linearized access for multi-dimensional memrefs
     bool isLinearized = false;
     Value stride;
     if (indices.size() == 1) {
@@ -143,7 +197,7 @@ void DbChunkedRewriter::rebaseOps(ArrayRef<Operation *> ops, Value dbPtr,
       localized = localize(indicesVec, AC.getBuilder(), loc);
     }
 
-    // Create db_ref + load/store pattern
+    /// Create db_ref + load/store pattern
     auto dbRef =
         AC.create<DbRefOp>(loc, elementType, dbPtr, localized.dbRefIndices);
 
@@ -159,10 +213,10 @@ void DbChunkedRewriter::rebaseOps(ArrayRef<Operation *> ops, Value dbPtr,
   }
 }
 
-void DbChunkedRewriter::rewriteDbRefUsers(
+void DbStencilRewriter::rewriteDbRefUsers(
     DbRefOp ref, Value blockArg, Type newElementType, OpBuilder &builder,
     llvm::SetVector<Operation *> &opsToRemove) {
-  LLVM_DEBUG(llvm::dbgs() << "DbChunkedRewriter::rewriteDbRefUsers\n");
+  ARTS_DEBUG("DbStencilRewriter::rewriteDbRefUsers");
 
   SmallVector<Operation *> refUsers(ref.getResult().getUsers().begin(),
                                     ref.getResult().getUsers().end());
@@ -182,7 +236,7 @@ void DbChunkedRewriter::rewriteDbRefUsers(
     if (elementIndices.empty())
       continue;
 
-    // Detect linearized access: single index accessing multi-element memref
+    /// Detect linearized access
     bool isLinearized = false;
     Value stride;
     if (elementIndices.size() == 1) {
@@ -224,82 +278,4 @@ void DbChunkedRewriter::rewriteDbRefUsers(
     }
   }
   opsToRemove.insert(ref.getOperation());
-}
-
-SmallVector<Value> DbChunkedRewriter::localizeCoordinates(
-    ArrayRef<Value> globalIndices, ArrayRef<Value> sliceOffsets,
-    unsigned numIndexedDims, Type elementType, OpBuilder &builder,
-    Location loc) {
-  SmallVector<Value> result;
-  auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
-
-  LLVM_DEBUG(llvm::dbgs() << "DbChunkedRewriter::localizeCoordinates with "
-                          << globalIndices.size() << " indices\n");
-
-  // Handle empty case
-  if (globalIndices.empty()) {
-    result.push_back(zero());
-    return result;
-  }
-
-  // CHUNKED MODE: first sliced dimension uses div by chunkSize
-  for (unsigned d = 0; d < globalIndices.size(); ++d) {
-    Value globalIdx = globalIndices[d];
-
-    if (d < numIndexedDims) {
-      // Indexed dimension: local index is always 0
-      result.push_back(zero());
-    } else if (d == numIndexedDims && chunkSize_) {
-      // First sliced dimension: compute chunk-relative index
-      // dbRefIdx = (globalIdx / chunkSize) - startChunk
-      Value physChunk =
-          builder.create<arith::DivUIOp>(loc, globalIdx, chunkSize_);
-      Value relChunk =
-          builder.create<arith::SubIOp>(loc, physChunk, startChunk_);
-      result.push_back(relChunk);
-      LLVM_DEBUG(llvm::dbgs() << "  Dim " << d << ": div/mod by chunkSize\n");
-    } else if (d - numIndexedDims < sliceOffsets.size()) {
-      // Other sliced dimensions: subtract offset
-      unsigned offsetIdx = d - numIndexedDims;
-      Value offset = sliceOffsets[offsetIdx];
-      Value local = builder.create<arith::SubIOp>(loc, globalIdx, offset);
-      result.push_back(local);
-    } else {
-      // Pass through unchanged
-      result.push_back(globalIdx);
-    }
-  }
-
-  return result;
-}
-
-void DbChunkedRewriter::rewriteUsesInParentRegion(
-    Operation *alloc, DbAllocOp dbAlloc, ArtsCodegen &AC,
-    llvm::SetVector<Operation *> &opsToRemove) {
-  ARTS_DEBUG("DbChunkedRewriter::rewriteUsesInParentRegion");
-
-  // Collect users of the original allocation (excluding DbAllocOp and EDT uses)
-  SmallVector<Operation *> users;
-  for (auto &use : alloc->getUses()) {
-    Operation *user = use.getOwner();
-    // Skip the DbAllocOp itself
-    if (user == dbAlloc.getOperation())
-      continue;
-    // Skip uses inside EDTs - those are rewritten via acquires separately
-    if (user->getParentOfType<EdtOp>())
-      continue;
-    users.push_back(user);
-  }
-
-  if (users.empty()) {
-    ARTS_DEBUG("  No users to rewrite in parent region");
-    return;
-  }
-
-  ARTS_DEBUG("  Rewriting " << users.size()
-                            << " main body accesses with chunked indexing");
-
-  // Use rebaseOps with the collected users - chunked div/mod transformation
-  Type elementMemRefType = dbAlloc.getAllocatedElementType();
-  rebaseOps(users, dbAlloc.getPtr(), elementMemRefType, AC, opsToRemove);
 }

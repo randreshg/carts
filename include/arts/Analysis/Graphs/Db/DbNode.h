@@ -6,11 +6,13 @@
 #define ARTS_ANALYSIS_GRAPHS_DB_DBNODE_H
 
 #include "arts/Analysis/Graphs/Base/NodeBase.h"
+#include "arts/Analysis/Graphs/Db/DbAccessPattern.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/Metadata/MemrefMetadata.h"
 #include "llvm/Support/raw_ostream.h"
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace mlir {
@@ -79,6 +81,16 @@ public:
   /// worker-indexed patterns, and single-writer detection.
   bool canProveNonOverlapping() const;
 
+  /// Collect acquire access patterns and summarize them at allocation level.
+  /// Returns AcquirePatternSummary (defined in DbAccessPattern.h)
+  AcquirePatternSummary summarizeAcquirePatterns() const;
+
+  /// Returns true if any acquire is stencil-like.
+  bool hasStencilAccess() const;
+
+  /// Returns true if allocation mixes different access patterns.
+  bool hasMixedAccessPatterns() const;
+
   /// Analysis metadata
   uint64_t inCount = 0, outCount = 0;
   uint64_t beginIndex = 0, endIndex = 0;
@@ -108,6 +120,8 @@ private:
 ////===----------------------------------------------------------------------===////
 class DbAcquireNode : public NodeBase {
 public:
+  /// AccessPattern enum is now defined in DbAccessPattern.h
+
   DbAcquireNode(DbAcquireOp op, NodeBase *parent, DbAllocNode *rootAlloc,
                 DbAnalysis *analysis, std::string initialHierId = "");
 
@@ -168,6 +182,16 @@ public:
   LogicalResult computeChunkInfoFromWhile(scf::WhileOp whileOp,
                                           Value &chunkOffset, Value &chunkSize);
 
+  /// StencilBounds struct is now defined in DbAccessPattern.h
+
+  /// Get stencil bounds for this acquire (computed during canBePartitioned)
+  const std::optional<StencilBounds> &getStencilBounds() const {
+    return stencilBounds_;
+  }
+
+  /// Classify this acquire's access pattern using current analysis state.
+  AccessPattern getAccessPattern() const;
+
   void setPartitionInfo(Value offset, Value size) {
     partitionOffset = offset;
     partitionSize = size;
@@ -175,6 +199,10 @@ public:
 
   std::pair<Value, Value> getPartitionInfo() const {
     return {partitionOffset, partitionSize};
+  }
+
+  const std::optional<std::pair<Value, Value>> &getOriginalBounds() const {
+    return originalBounds_;
   }
 
   /// Check if this acquire uses worker-indexed pattern: offsets[%workerId] with
@@ -200,6 +228,9 @@ private:
 
   /// Cached adjusted chunk info
   std::optional<std::pair<Value, Value>> computedChunkInfo;
+  std::optional<std::pair<Value, Value>> originalBounds_;
+  std::optional<StencilBounds> stencilBounds_;
+  mutable std::optional<AccessPattern> accessPattern_;
 
 public:
   uint64_t inCount = 0, outCount = 0;

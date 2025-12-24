@@ -1,36 +1,55 @@
 ///==========================================================================///
 /// File: DbPartitioning.cpp
 /// Datablock partitioning and chunking transformations.
-/// Split from Db.cpp for better separation of concerns.
-///==========================================================================///
+/// This pass chooses a datablock partitioning strategy with two goals:
+///   1) Preserve correctness via conservative twin-diff use.
+///   2) Maximize concurrency while avoiding unnecessary data movement.
+///
+/// Key points:
+///   - Chunking only occurs when chunk hints/info are available; otherwise we
+///     fall back to element-wise to preserve parallelism (safe default).
+///   - Concurrency is part of the decision: if chunking cannot be justified
+///     by hints and cost model, element-wise is preferred over coarse.
+///   - Twin-diff stays enabled unless we can prove disjoint access after
+///     partitioning; this avoids corruption from overlapping writes.
+///   - Stencil/mixed patterns default to element-wise for now; a future path
+///     will evaluate ESD (slice-get deps) per STENCIL_ESD_IMPLEMENTATION_PLAN.md.
+///
+/// Decision Flow (allocation-level):
+///
+///   canBePartitioned()? ──no──> keep coarse
+///            │
+///            yes
+///            │
+///   H1: read-only + single-node? ──yes──> keep coarse
+///            │
+///            no
+///            │
+///   access-pattern summary (per-acquire → alloc):
+///     - any stencil? → element-wise (default for now)
+///     - mixed patterns? → element-wise (safe fallback)
+///     - uniform only? → evaluate H2 for chunking
+///            │
+///   H2 (cost model, concurrency-aware): if passes → chunked, else → element-wise
+///            │
+///   Note: Chunked is only possible when chunk info/hints exist; otherwise
+///         fallback is element-wise to preserve concurrency.
+///
+/// Compact equation:
+///   Decision =
+///     if !canBePartitioned -> Coarse
+///     else if H1 -> Coarse
+///     else if hasStencil || mixed -> ElementWise
+///     else if H2 && hasChunkInfo -> Chunked
+///     else -> ElementWise
 ///
 ///===----------------------------------------------------------------------===///
-/// Twin-Diff Policy for Distributed Datablock Synchronization
-///===----------------------------------------------------------------------===///
+/// Twin-Diff Policy - See HeuristicsConfig::shouldUseTwinDiff()
 ///
-/// In distributed execution, when multiple workers write to a shared datablock,
-/// we must ensure data consistency. Twin-diff is a runtime mechanism that:
-///   1. Allocates a shadow copy ("twin") of the datablock
-///   2. Tracks which regions were modified during EDT execution
-///   3. Sends only the changed regions to other nodes (bandwidth optimization)
+/// Decision: Single-node OR proof exists --> DISABLE
+///           Otherwise                   --> ENABLE (safe default)
 ///
-/// Policy:
-///   - DEFAULT: twin_diff = TRUE (safe, handles potential overlap at runtime)
-///   - DISABLE: Only when we can PROVE non-overlapping access patterns
-///
-/// Proof Methods (in order of application):
-///   1. Fine-grained allocation with DbControlOps (from OpenMP depend clauses)
-///      - Set in CreateDbs.cpp when DbControlOps guarantee isolation
-///   2. Successful partitioning with proven disjoint acquires
-///      - Checked in partitionDb() after successful chunk promotion
-///   3. DbAliasAnalysis proving disjoint acquires via offset/size analysis
-///      - Uses constant slice extraction and range comparison
-///
-/// Safety Guarantee:
-///   When twin-diff is DISABLED but workers write overlapping regions,
-///   DATA CORRUPTION will occur. Therefore, we use a conservative default
-///   (twin_diff=TRUE) and only disable when we have positive proof of safety.
-///
+/// Proof methods: IndexedControl, PartitionSuccess, AliasAnalysis
 ///===----------------------------------------------------------------------===///
 
 /// Dialects
@@ -69,6 +88,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 
 #include "arts/Transforms/DbTransforms.h"
 #include "arts/Utils/ArtsDebug.h"
@@ -81,6 +101,79 @@ using namespace mlir::func;
 using namespace mlir::arith;
 using namespace mlir::polygeist;
 using namespace mlir::arts;
+
+namespace {
+static DbRewritePlan makeRewritePlan(bool useChunked,
+                                     ArrayRef<Value> newInnerSizes) {
+  RewriterMode mode =
+      useChunked ? RewriterMode::Chunked : RewriterMode::ElementWise;
+  Value chunkSize =
+      useChunked && !newInnerSizes.empty() ? newInnerSizes[0] : Value();
+  return {mode, chunkSize, std::nullopt};
+}
+
+static int64_t getMaxChunkSizeFromHints(ArrayRef<DbRewriteAcquire> acquireInfo) {
+  int64_t chunkSizeVal = 0;
+  for (const auto &info : acquireInfo) {
+    if (auto extracted = arts::extractChunkSizeFromHint(info.elemSize);
+        extracted && *extracted > chunkSizeVal) {
+      chunkSizeVal = *extracted;
+      ARTS_DEBUG("  Acquire " << info.acquire << " base chunk size "
+                              << *extracted);
+    }
+  }
+  return chunkSizeVal;
+}
+
+static unsigned getElementBytes(Type elemType) {
+  if (elemType.isIntOrFloat())
+    return (elemType.getIntOrFloatBitWidth() + 7) / 8;
+  return 4;
+}
+
+static std::optional<int64_t> computeNumChunksOpt(Value dimVal,
+                                                  int64_t chunkSizeVal) {
+  int64_t dimConst;
+  if (ValueUtils::getConstantIndex(dimVal, dimConst) &&
+      dimConst > chunkSizeVal) {
+    return (dimConst + chunkSizeVal - 1) / chunkSizeVal;
+  }
+  return std::nullopt;
+}
+
+static std::optional<int64_t> computeInnerBytesOpt(ValueRange elemSizes,
+                                                   int64_t chunkSizeVal,
+                                                   unsigned elemBytes) {
+  int64_t innerElements = chunkSizeVal;
+  for (unsigned i = 1; i < elemSizes.size(); ++i) {
+    int64_t dimSize;
+    if (!ValueUtils::getConstantIndex(elemSizes[i], dimSize))
+      return std::nullopt;
+    innerElements *= dimSize;
+  }
+  return innerElements * elemBytes;
+}
+
+static Value buildNumChunksValue(OpBuilder &builder, Location loc,
+                                 Value dimVal, int64_t chunkSizeVal) {
+  Type i64Type = builder.getI64Type();
+  Value dimI64 = builder.create<arith::IndexCastOp>(loc, i64Type, dimVal);
+  Value chunkSizeI64 =
+      builder.create<arith::ConstantIntOp>(loc, chunkSizeVal, 64);
+  Value oneI64 = builder.create<arith::ConstantIntOp>(loc, 1, 64);
+  /// numChunks = (dim + chunkSize - 1) / chunkSize
+  Value sum = builder.create<arith::AddIOp>(loc, dimI64, chunkSizeI64);
+  Value sumMinusOne = builder.create<arith::SubIOp>(loc, sum, oneI64);
+  Value numChunksI64 = builder.create<arith::DivUIOp>(loc, sumMinusOne, chunkSizeI64);
+  return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
+                                            numChunksI64);
+}
+
+static Value buildChunkSizeValue(OpBuilder &builder, Location loc,
+                                 int64_t chunkSizeVal) {
+  return builder.create<arith::ConstantIndexOp>(loc, chunkSizeVal);
+}
+} // namespace
 
 ///===----------------------------------------------------------------------===///
 // Pass Implementation
@@ -107,7 +200,7 @@ struct DbPartitioningPass
   void invalidateAndRebuildGraph();
   FailureOr<DbAllocOp> promoteAllocForChunking(
       DbAllocOp allocOp, DbAllocNode *allocNode,
-      ArrayRef<std::tuple<DbAcquireOp, Value, Value>> acquireInfo);
+      ArrayRef<DbRewriteAcquire> acquireInfo);
 
 private:
   ModuleOp module;
@@ -166,6 +259,9 @@ void DbPartitioningPass::runOnOperation() {
 ///===----------------------------------------------------------------------===///
 bool DbPartitioningPass::partitionDb() {
   ARTS_DEBUG_HEADER(PartitionDb);
+  ///==========================================================================
+  /// Partitioning Decision Summary (see top-of-file for flowchart/equation)
+  ///==========================================================================
   bool changed = false;
   OpBuilder attrBuilder(module.getContext());
 
@@ -192,7 +288,7 @@ bool DbPartitioningPass::partitionDb() {
       partitionFailed;
 
   /// Collect all (alloc, acquire, offset, size) tuples
-  using AcqChunkInfo = std::tuple<DbAcquireOp, Value, Value>;
+  using AcqChunkInfo = DbRewriteAcquire;
   DenseMap<DbAllocOp, std::pair<DbAllocNode *, SmallVector<AcqChunkInfo, 4>>>
       allocsToPromote;
 
@@ -272,7 +368,7 @@ bool DbPartitioningPass::partitionDb() {
 
   /// Now promote allocations and update acquires
   SmallVector<std::tuple<DbAllocOp, DbAllocNode *,
-                         SmallVector<std::tuple<DbAcquireOp, Value, Value>, 4>>>
+                         SmallVector<DbRewriteAcquire, 4>>>
       allocsToProcess;
   for (auto &[allocOpPtr, nodeAndList] : allocsToPromote) {
     auto &[allocNode, acquireList] = nodeAndList;
@@ -382,12 +478,12 @@ bool DbPartitioningPass::partitionDb() {
   return changed;
 }
 
-/// Promote coarse allocation using DbAllocPromotion.
+/// Rewrite coarse allocation using DbRewriter.
 /// Computes new outer/inner sizes based on heuristics and applies the
 /// transformation with partition info for all acquires.
 FailureOr<DbAllocOp> DbPartitioningPass::promoteAllocForChunking(
     DbAllocOp allocOp, DbAllocNode *allocNode,
-    ArrayRef<std::tuple<DbAcquireOp, Value, Value>> acquireInfo) {
+    ArrayRef<DbRewriteAcquire> acquireInfo) {
   if (!allocOp || !allocOp.getOperation())
     return failure();
 
@@ -402,17 +498,25 @@ FailureOr<DbAllocOp> DbPartitioningPass::promoteAllocForChunking(
   Location loc = allocOp.getLoc();
   builder.setInsertionPoint(allocOp);
 
-  /// Extract MAX chunk size across ALL acquires.
-  /// Use extractChunkSizeForAllocation to include stencil halo adjustments,
-  /// since allocations need to be large enough for the largest adjusted size.
-  /// Example: if acquire A needs 64 rows and acquire B needs 66 (stencil halo),
-  /// allocation chunks should be 66 rows.
+  /// Extract MAX BASE chunk size across ALL acquires (WITHOUT stencil halo).
+  /// Use extractChunkSizeFromHint to get the base worker iteration count,
+  /// ensuring chunk boundaries align with worker iteration boundaries.
+  ///
+  /// Why base size (not halo-adjusted size):
+  /// - Worker iterations: [0-63], [64-127], [128-191], [192-255] (64 each)
+  /// - With 64-row chunks: boundaries align perfectly, each worker writes to 1 chunk
+  /// - With 66-row chunks: misalignment causes Worker 1 to need chunks 0 AND 1 for WRITE
+  ///   (rows 64-65 fall in chunk 0), creating a race condition with Worker 0
+  ///
+  /// Stencil halo access (e.g., row 63 for Worker 1) is handled by multi-chunk
+  /// acquire spanning adjacent chunks. Index localization uses globalRow % chunkSize,
+  /// which is always in [0, chunkSize-1], so 64 rows per chunk is sufficient.
   int64_t chunkSizeVal = 0;
   for (const auto &[acqOp, offset, size] : acquireInfo) {
-    if (auto extracted = arts::extractChunkSizeForAllocation(size);
+    if (auto extracted = arts::extractChunkSizeFromHint(size);
         extracted && *extracted > chunkSizeVal) {
       chunkSizeVal = *extracted;
-      ARTS_DEBUG("  Acquire " << acqOp << " needs chunk size " << *extracted);
+      ARTS_DEBUG("  Acquire " << acqOp << " base chunk size " << *extracted);
     }
   }
 
@@ -423,6 +527,30 @@ FailureOr<DbAllocOp> DbPartitioningPass::promoteAllocForChunking(
     elemBytes = (elemType.getIntOrFloatBitWidth() + 7) / 8;
 
   SmallVector<Value> newOuterSizes, newInnerSizes;
+  bool useChunked = false;
+
+  ///==========================================================================
+  /// Access-pattern consistency (per-acquire → alloc-level decision)
+  ///
+  /// Each DbAcquire can have its own access pattern (uniform vs stencil vs
+  /// indexed). We summarize patterns at the allocation level and decide whether
+  /// we should avoid chunking altogether.
+  ///
+  /// Current default policy:
+  ///   - Any stencil access => element-wise (for now)
+  ///   - Mixed patterns     => element-wise (safe fallback)
+  ///
+  /// This keeps partitioning explicit and avoids accidental chunking for
+  /// stencil-heavy or mixed-phase allocations.
+  ///==========================================================================
+  bool forceElementWise = false;
+  if (allocNode) {
+    auto summary = allocNode->summarizeAcquirePatterns();
+    if (summary.hasStencil || summary.isMixed())
+      forceElementWise = true;
+    if (forceElementWise)
+      ARTS_DEBUG("  Access-pattern policy -> element-wise (stencil or mixed)");
+  }
 
   ///==========================================================================
   /// N-D First-Dimension Chunking: For N-D allocations (N >= 2)
@@ -431,7 +559,8 @@ FailureOr<DbAllocOp> DbPartitioningPass::promoteAllocForChunking(
   /// elemSizes=[63,1000] Uses partial evaluation: numChunks depends on dim 0,
   /// innerBytes on dims 1..N
   ///==========================================================================
-  if (allocOp.getElementSizes().size() >= 2 && chunkSizeVal > 0) {
+  if (!forceElementWise && allocOp.getElementSizes().size() >= 2 &&
+      chunkSizeVal > 0) {
     ValueRange elemSizes = allocOp.getElementSizes();
     Value firstDimVal = elemSizes[0];
 
@@ -473,12 +602,13 @@ FailureOr<DbAllocOp> DbPartitioningPass::promoteAllocForChunking(
     );
 
     /// decision: true=approved, false=rejected, nullopt=partial pass
-    bool useChunked = !decision.has_value() || decision.value();
+    bool chunkingApproved = !decision.has_value() || decision.value();
 
-    if (useChunked) {
+    if (chunkingApproved) {
       ARTS_DEBUG("  Using "
                  << elemSizes.size()
                  << "D first-dim chunking with chunkSize=" << chunkSizeVal);
+      useChunked = true;
 
       /// Generate runtime numChunks computation
       /// Compute ceiling division manually: (firstDim + chunkSize - 1) /
@@ -516,7 +646,8 @@ FailureOr<DbAllocOp> DbPartitioningPass::promoteAllocForChunking(
   /// Example: sizes=[1], elemSizes=[16M] -> sizes=[16], elemSizes=[1M]
   /// Uses partial evaluation for runtime-valued total elements
   ///==========================================================================
-  if (newOuterSizes.empty() && allocOp.getElementSizes().size() == 1 &&
+  if (!forceElementWise && newOuterSizes.empty() &&
+      allocOp.getElementSizes().size() == 1 &&
       chunkSizeVal > 0) {
     Value totalElementsVal = allocOp.getElementSizes()[0];
 
@@ -543,11 +674,12 @@ FailureOr<DbAllocOp> DbPartitioningPass::promoteAllocForChunking(
     );
 
     /// decision: true=approved, false=rejected, nullopt=partial pass
-    bool useChunked = !decision.has_value() || decision.value();
+    bool chunkingApproved = !decision.has_value() || decision.value();
 
-    if (useChunked) {
+    if (chunkingApproved) {
       ARTS_DEBUG(
           "  Using 1D chunked allocation with chunkSize=" << chunkSizeVal);
+      useChunked = true;
 
       /// Generate runtime numChunks computation
       /// Compute ceiling division manually: (totalElements + chunkSize - 1) /
@@ -599,19 +731,11 @@ FailureOr<DbAllocOp> DbPartitioningPass::promoteAllocForChunking(
       newInnerSizes.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
   }
 
-  /// Extract partition info from acquireInfo
-  SmallVector<DbAcquireOp> acquires;
-  SmallVector<Value> elementOffsets, elementSizes;
-  for (auto &[acqOp, offset, size] : acquireInfo) {
-    acquires.push_back(acqOp);
-    elementOffsets.push_back(offset);
-    elementSizes.push_back(size);
-  }
+  DbRewritePlan plan = makeRewritePlan(useChunked, newInnerSizes);
 
-  /// Create DbAllocPromotion and apply
-  DbAllocPromotion promotion(allocOp, newOuterSizes, newInnerSizes, acquires,
-                             elementOffsets, elementSizes);
-  auto result = promotion.apply(builder);
+  /// Create DbRewriter and apply (dispatcher: no policy inside)
+  DbRewriter rewriter(allocOp, newOuterSizes, newInnerSizes, acquireInfo, plan);
+  auto result = rewriter.apply(builder);
 
   /// Transfer metadata if successful
   if (succeeded(result)) {
