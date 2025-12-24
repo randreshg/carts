@@ -8,7 +8,7 @@
 /// - Stencil/mixed patterns default to element-wise today.
 /// - Planned path (see STENCIL_ESD_IMPLEMENTATION_PLAN.md): ESD uses chunk
 ///   ownership + slice gets (ARTS_PTR deps) with fixed depc slots.
-/// 
+///
 /// Example (row stencil, chunk rows [start, end)):
 ///   left halo row  = start-1, right halo row = end
 ///   offsetBytes    = rowIndex * rowBytes

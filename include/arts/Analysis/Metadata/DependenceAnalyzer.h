@@ -138,11 +138,13 @@ public:
   ///
   /// Example: for(i) { for(j) { A[i][j] = f(A[i][j-1]) } }
   /// Result:
-  ///   - dimensionDeps[0] = {dim=0, hasCarriedDep=false} // i-loop parallelizable
+  ///   - dimensionDeps[0] = {dim=0, hasCarriedDep=false} // i-loop is
+  ///   parallelizable
   ///   - dimensionDeps[1] = {dim=1, hasCarriedDep=true}  // j-loop has deps
   ///   - outermostParallelDim = 0
   ///
-  /// This allows Seidel-2D to parallelize the i-loop even though j-loop is sequential.
+  /// This allows Seidel-2D to parallelize the i-loop even though j-loop is
+  /// sequential.
   LoopNestDependenceResult
   analyzeLoopNestDependences(affine::AffineForOp outermostLoop) const {
     LoopNestDependenceResult result;
@@ -174,8 +176,7 @@ public:
       depInfo.dimension = dim;
 
       // Check if this specific loop dimension carries dependencies
-      auto summary =
-          analyzeAffineLoopDependencesAtDimension(nest, dim);
+      auto summary = analyzeAffineLoopDependencesAtDimension(nest, dim);
       depInfo.hasCarriedDep = summary.hasDependence;
       depInfo.distance = summary.minDistance;
 
@@ -259,8 +260,9 @@ private:
   /// For Seidel-2D: for(i) { for(j) { A[i][j] = f(A[i][j-1]) } }
   ///   - analyzeAtDimension(nest, 0) → false (i doesn't carry deps)
   ///   - analyzeAtDimension(nest, 1) → true  (j carries A[i][j-1] dep)
-  DependenceSummary analyzeAffineLoopDependencesAtDimension(
-      ArrayRef<affine::AffineForOp> nest, size_t targetDim) const {
+  DependenceSummary
+  analyzeAffineLoopDependencesAtDimension(ArrayRef<affine::AffineForOp> nest,
+                                          size_t targetDim) const {
     DependenceSummary summary;
 
     if (nest.empty() || targetDim >= nest.size())
@@ -271,7 +273,8 @@ private:
 
     // Use the existing single-loop analysis for the target loop
     // This is safer than trying to compute per-dimension components manually
-    auto singleLoopResult = analyzeAffineLoopDependences(targetLoop, std::nullopt);
+    auto singleLoopResult =
+        analyzeAffineLoopDependences(targetLoop, std::nullopt);
 
     // If there's a dependency carried by THIS loop, mark it
     summary.hasDependence = singleLoopResult.hasDependence;

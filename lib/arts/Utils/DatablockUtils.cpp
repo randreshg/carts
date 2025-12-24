@@ -22,7 +22,8 @@ using namespace mlir::arts;
 /// Datablock Tracing Utilities
 ///===----------------------------------------------------------------------===///
 
-std::optional<std::pair<Value, Value>> DatablockUtils::traceToDbAlloc(Value dep) {
+std::optional<std::pair<Value, Value>>
+DatablockUtils::traceToDbAlloc(Value dep) {
   /// Case 1: Direct DbAllocOp result (either guid or ptr)
   if (auto allocOp = dep.getDefiningOp<DbAllocOp>())
     return std::make_pair(allocOp.getGuid(), allocOp.getPtr());
@@ -264,7 +265,8 @@ std::optional<int64_t> DatablockUtils::getStaticOuterStride(DbAllocOp alloc) {
   return getStaticStride(alloc.getSizes());
 }
 
-Value DatablockUtils::getStrideValue(OpBuilder &builder, Location loc, ValueRange sizes) {
+Value DatablockUtils::getStrideValue(OpBuilder &builder, Location loc,
+                                     ValueRange sizes) {
   if (sizes.empty())
     return nullptr;
 
@@ -285,10 +287,12 @@ Value DatablockUtils::getStrideValue(OpBuilder &builder, Location loc, ValueRang
   return stride;
 }
 
-Value DatablockUtils::getElementStrideValue(OpBuilder &builder, Location loc, DbAllocOp alloc) {
+Value DatablockUtils::getElementStrideValue(OpBuilder &builder, Location loc,
+                                            DbAllocOp alloc) {
   return getStrideValue(builder, loc, alloc.getElementSizes());
 }
 
-Value DatablockUtils::getOuterStrideValue(OpBuilder &builder, Location loc, DbAllocOp alloc) {
+Value DatablockUtils::getOuterStrideValue(OpBuilder &builder, Location loc,
+                                          DbAllocOp alloc) {
   return getStrideValue(builder, loc, alloc.getSizes());
 }

@@ -17,8 +17,8 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/ValueUtils.h"
 #include "arts/Utils/RemovalUtils.h"
+#include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -1076,7 +1076,7 @@ LogicalResult CanonicalizeMemrefsPass::transformPattern(AllocPattern &pattern,
           /// Skip if user is already marked for removal
           if (toRemove.count(user))
             continue;
-            /// Skip if user is a terminator
+          /// Skip if user is a terminator
           if (user->hasTrait<OpTrait::IsTerminator>()) {
             hasOtherUses = true;
             break;
@@ -1946,8 +1946,7 @@ std::optional<DepInfo> CanonicalizeMemrefsPass::extractDepInfo(
   /// We need to look through the cast to find the underlying subview.
   if (auto castOp = dyn_cast_or_null<memref::CastOp>(defOp)) {
     Value castSource = castOp.getSource();
-    if (auto subview =
-            castSource.getDefiningOp<memref::SubViewOp>()) {
+    if (auto subview = castSource.getDefiningOp<memref::SubViewOp>()) {
       info.source = subview.getSource();
       for (auto offset : subview.getMixedOffsets())
         info.indices.push_back(materializeOpFoldResult(offset, builder, loc));
@@ -2033,7 +2032,7 @@ void CanonicalizeMemrefsPass::handleDependencies(ModuleOp module,
   ARTS_DEBUG("=== Dependency Handling Complete ===");
 }
 
-} /// namespace
+} // namespace
 
 ///===----------------------------------------------------------------------===///
 /// Pass Registration
@@ -2044,5 +2043,5 @@ namespace arts {
 std::unique_ptr<Pass> createCanonicalizeMemrefsPass() {
   return std::make_unique<CanonicalizeMemrefsPass>();
 }
-} /// namespace arts
-} /// namespace mlir
+} // namespace arts
+} // namespace mlir

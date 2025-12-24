@@ -223,7 +223,6 @@ static Value createZeroValue(ArtsCodegen *AC, Type elemType, Location loc) {
   return Value();
 }
 
-
 ///===----------------------------------------------------------------------===///
 // ForLowering Pass Implementation
 ///===----------------------------------------------------------------------===///
@@ -769,7 +768,7 @@ ReductionInfo ForLoweringPass::allocatePartialAccumulators(ArtsCodegen *AC,
       /// rather than using the acquire ptr directly
       if (idx < existingResultPtrs.size()) {
         Value existingPtr = existingResultPtrs[idx];
-        auto allocInfo = DatablockUtils::DatablockUtils::traceToDbAlloc(existingPtr);
+        auto allocInfo = DatablockUtils::traceToDbAlloc(existingPtr);
         if (allocInfo) {
           auto [rootGuid, rootPtr] = *allocInfo;
           redInfo.finalResultGuids.push_back(rootGuid);
@@ -1439,7 +1438,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     auto [rootGuid, rootPtr] = *allocInfo;
 
     /// Get offsets/sizes from parent acquire for hints
-    SmallVector<Value> chunkOffsets = DatablockUtils::getOffsetsFromDb(parentDep);
+    SmallVector<Value> chunkOffsets =
+        DatablockUtils::getOffsetsFromDb(parentDep);
     SmallVector<Value> chunkSizes = DatablockUtils::getSizesFromDb(parentDep);
     if (chunkOffsets.empty())
       chunkOffsets.push_back(AC->createIndexConstant(0, loc));
@@ -1472,7 +1472,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   }
 
   /// Create task EDT
-  /// Inherit concurrency from parent parallel EDT - if internode, route to worker node
+  /// Inherit concurrency from parent parallel EDT - if internode, route to
+  /// worker node
   EdtConcurrency taskConcurrency = originalParallel.getConcurrency();
   Value routeValue;
   if (taskConcurrency == EdtConcurrency::internode) {
@@ -1482,8 +1483,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
   } else {
     routeValue = AC->createIntConstant(0, AC->Int32, loc);
   }
-  auto taskEdt = AC->create<EdtOp>(
-      loc, EdtType::task, taskConcurrency, routeValue, ValueRange{});
+  auto taskEdt = AC->create<EdtOp>(loc, EdtType::task, taskConcurrency,
+                                   routeValue, ValueRange{});
 
   Block &taskBlock = taskEdt.getBody().front();
   AC->setInsertionPointToStart(&taskBlock);

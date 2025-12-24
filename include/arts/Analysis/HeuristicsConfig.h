@@ -9,6 +9,7 @@
 #ifndef ARTS_ANALYSIS_HEURISTICSCONFIG_H
 #define ARTS_ANALYSIS_HEURISTICSCONFIG_H
 
+#include "arts/Analysis/Graphs/Db/DbAccessPattern.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
 #include "llvm/Support/JSON.h"
@@ -25,7 +26,6 @@ class IdRegistry;
 /// Forward declarations to avoid circular includes
 enum class RewriterMode;
 enum class AccessPattern;
-struct StencilBounds;
 
 /// Records a single heuristic decision for diagnostics export.
 /// Follows PGO pattern: compute compile-time → runtime mapping for correlation.
@@ -73,10 +73,10 @@ struct ChunkingThresholds {
 
 /// Context for partitioning mode decisions (H3 heuristic)
 struct PartitioningModeContext {
-  AccessPattern pattern;                   /// Dominant access pattern
-  bool hasChunkHints = false;              /// Chunk hints available
-  std::optional<int64_t> totalElements;    /// Total elements in allocation
-  std::optional<int64_t> chunkSize;        /// Chunk size if known
+  AccessPattern pattern;                      /// Dominant access pattern
+  bool hasChunkHints = false;                 /// Chunk hints available
+  std::optional<int64_t> totalElements;       /// Total elements in allocation
+  std::optional<int64_t> chunkSize;           /// Chunk size if known
   std::optional<StencilBounds> stencilBounds; /// Stencil bounds if detected
 };
 
@@ -164,8 +164,8 @@ public:
   /// - Stencil patterns → ElementWise (until ESD infrastructure ready)
   /// - Uniform + chunk hints + H2 passes → Chunked
   /// - Default → ElementWise (safest, works for all patterns)
-  RewriterMode getRecommendedPartitioningMode(
-      const PartitioningModeContext &context) const;
+  RewriterMode
+  getRecommendedPartitioningMode(const PartitioningModeContext &context) const;
 
   //===--------------------------------------------------------------------===//
   // Decision Recording for Diagnostics

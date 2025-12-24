@@ -205,7 +205,6 @@ bool ArtsAbstractMachine::parseFromFile(const std::string &path) {
       else if (key == "introspectiveStartPoint")
         introspectiveStartPoint = parseInt(val, 1);
     }
-
   }
 
   ARTS_DEBUG("Finished parsing configuration file");

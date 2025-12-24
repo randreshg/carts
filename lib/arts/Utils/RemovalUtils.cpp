@@ -109,8 +109,8 @@ void RemovalUtils::removeAllMarked() {
 ///===----------------------------------------------------------------------===///
 
 void RemovalUtils::removeOpImpl(Operation *op, OpBuilder &builder,
-                                    SmallPtrSet<Operation *, 32> &seen,
-                                    bool recursive) {
+                                SmallPtrSet<Operation *, 32> &seen,
+                                bool recursive) {
   if (!op)
     return;
 
@@ -129,7 +129,7 @@ void RemovalUtils::removeOpImpl(Operation *op, OpBuilder &builder,
 
   ARTS_DEBUG("   - Removing operation: " << *op);
 
-  /// Collect unique dependents before modifying uses 
+  /// Collect unique dependents before modifying uses
   SmallPtrSet<Operation *, 8> dependentSet;
   if (recursive) {
     for (Value result : op->getResults())

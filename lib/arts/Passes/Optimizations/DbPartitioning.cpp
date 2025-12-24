@@ -13,7 +13,6 @@
 ///   - Twin-diff stays enabled unless we can prove disjoint access after
 ///     partitioning; this avoids corruption from overlapping writes.
 ///   - Stencil/mixed patterns default to element-wise for now; a future path
-///     will evaluate ESD (slice-get deps) per STENCIL_ESD_IMPLEMENTATION_PLAN.md.
 ///
 /// Decision Flow (allocation-level):
 ///
@@ -30,7 +29,8 @@
 ///     - mixed patterns? → element-wise (safe fallback)
 ///     - uniform only? → evaluate H2 for chunking
 ///            │
-///   H2 (cost model, concurrency-aware): if passes → chunked, else → element-wise
+///   H2 (cost model, concurrency-aware): if passes → chunked, else →
+///   element-wise
 ///            │
 ///   Note: Chunked is only possible when chunk info/hints exist; otherwise
 ///         fallback is element-wise to preserve concurrency.
@@ -111,68 +111,6 @@ static DbRewritePlan makeRewritePlan(bool useChunked,
       useChunked && !newInnerSizes.empty() ? newInnerSizes[0] : Value();
   return {mode, chunkSize, std::nullopt};
 }
-
-static int64_t getMaxChunkSizeFromHints(ArrayRef<DbRewriteAcquire> acquireInfo) {
-  int64_t chunkSizeVal = 0;
-  for (const auto &info : acquireInfo) {
-    if (auto extracted = arts::extractChunkSizeFromHint(info.elemSize);
-        extracted && *extracted > chunkSizeVal) {
-      chunkSizeVal = *extracted;
-      ARTS_DEBUG("  Acquire " << info.acquire << " base chunk size "
-                              << *extracted);
-    }
-  }
-  return chunkSizeVal;
-}
-
-static unsigned getElementBytes(Type elemType) {
-  if (elemType.isIntOrFloat())
-    return (elemType.getIntOrFloatBitWidth() + 7) / 8;
-  return 4;
-}
-
-static std::optional<int64_t> computeNumChunksOpt(Value dimVal,
-                                                  int64_t chunkSizeVal) {
-  int64_t dimConst;
-  if (ValueUtils::getConstantIndex(dimVal, dimConst) &&
-      dimConst > chunkSizeVal) {
-    return (dimConst + chunkSizeVal - 1) / chunkSizeVal;
-  }
-  return std::nullopt;
-}
-
-static std::optional<int64_t> computeInnerBytesOpt(ValueRange elemSizes,
-                                                   int64_t chunkSizeVal,
-                                                   unsigned elemBytes) {
-  int64_t innerElements = chunkSizeVal;
-  for (unsigned i = 1; i < elemSizes.size(); ++i) {
-    int64_t dimSize;
-    if (!ValueUtils::getConstantIndex(elemSizes[i], dimSize))
-      return std::nullopt;
-    innerElements *= dimSize;
-  }
-  return innerElements * elemBytes;
-}
-
-static Value buildNumChunksValue(OpBuilder &builder, Location loc,
-                                 Value dimVal, int64_t chunkSizeVal) {
-  Type i64Type = builder.getI64Type();
-  Value dimI64 = builder.create<arith::IndexCastOp>(loc, i64Type, dimVal);
-  Value chunkSizeI64 =
-      builder.create<arith::ConstantIntOp>(loc, chunkSizeVal, 64);
-  Value oneI64 = builder.create<arith::ConstantIntOp>(loc, 1, 64);
-  /// numChunks = (dim + chunkSize - 1) / chunkSize
-  Value sum = builder.create<arith::AddIOp>(loc, dimI64, chunkSizeI64);
-  Value sumMinusOne = builder.create<arith::SubIOp>(loc, sum, oneI64);
-  Value numChunksI64 = builder.create<arith::DivUIOp>(loc, sumMinusOne, chunkSizeI64);
-  return builder.create<arith::IndexCastOp>(loc, builder.getIndexType(),
-                                            numChunksI64);
-}
-
-static Value buildChunkSizeValue(OpBuilder &builder, Location loc,
-                                 int64_t chunkSizeVal) {
-  return builder.create<arith::ConstantIndexOp>(loc, chunkSizeVal);
-}
 } // namespace
 
 ///===----------------------------------------------------------------------===///
@@ -198,9 +136,9 @@ struct DbPartitioningPass
 
   /// Graph rebuild
   void invalidateAndRebuildGraph();
-  FailureOr<DbAllocOp> promoteAllocForChunking(
-      DbAllocOp allocOp, DbAllocNode *allocNode,
-      ArrayRef<DbRewriteAcquire> acquireInfo);
+  FailureOr<DbAllocOp>
+  promoteAllocForChunking(DbAllocOp allocOp, DbAllocNode *allocNode,
+                          ArrayRef<DbRewriteAcquire> acquireInfo);
 
 private:
   ModuleOp module;
@@ -367,8 +305,8 @@ bool DbPartitioningPass::partitionDb() {
   });
 
   /// Now promote allocations and update acquires
-  SmallVector<std::tuple<DbAllocOp, DbAllocNode *,
-                         SmallVector<DbRewriteAcquire, 4>>>
+  SmallVector<
+      std::tuple<DbAllocOp, DbAllocNode *, SmallVector<DbRewriteAcquire, 4>>>
       allocsToProcess;
   for (auto &[allocOpPtr, nodeAndList] : allocsToPromote) {
     auto &[allocNode, acquireList] = nodeAndList;
@@ -504,13 +442,16 @@ FailureOr<DbAllocOp> DbPartitioningPass::promoteAllocForChunking(
   ///
   /// Why base size (not halo-adjusted size):
   /// - Worker iterations: [0-63], [64-127], [128-191], [192-255] (64 each)
-  /// - With 64-row chunks: boundaries align perfectly, each worker writes to 1 chunk
-  /// - With 66-row chunks: misalignment causes Worker 1 to need chunks 0 AND 1 for WRITE
+  /// - With 64-row chunks: boundaries align perfectly, each worker writes to 1
+  /// chunk
+  /// - With 66-row chunks: misalignment causes Worker 1 to need chunks 0 AND 1
+  /// for WRITE
   ///   (rows 64-65 fall in chunk 0), creating a race condition with Worker 0
   ///
   /// Stencil halo access (e.g., row 63 for Worker 1) is handled by multi-chunk
-  /// acquire spanning adjacent chunks. Index localization uses globalRow % chunkSize,
-  /// which is always in [0, chunkSize-1], so 64 rows per chunk is sufficient.
+  /// acquire spanning adjacent chunks. Index localization uses globalRow %
+  /// chunkSize, which is always in [0, chunkSize-1], so 64 rows per chunk is
+  /// sufficient.
   int64_t chunkSizeVal = 0;
   for (const auto &[acqOp, offset, size] : acquireInfo) {
     if (auto extracted = arts::extractChunkSizeFromHint(size);
@@ -647,8 +588,7 @@ FailureOr<DbAllocOp> DbPartitioningPass::promoteAllocForChunking(
   /// Uses partial evaluation for runtime-valued total elements
   ///==========================================================================
   if (!forceElementWise && newOuterSizes.empty() &&
-      allocOp.getElementSizes().size() == 1 &&
-      chunkSizeVal > 0) {
+      allocOp.getElementSizes().size() == 1 && chunkSizeVal > 0) {
     Value totalElementsVal = allocOp.getElementSizes()[0];
 
     /// Compute numChunks (requires total elements to be constant)

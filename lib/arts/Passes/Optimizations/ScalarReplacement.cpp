@@ -92,8 +92,8 @@ static std::pair<Value, SmallVector<Value>> getLoadInfo(Operation *op) {
 static std::pair<Value, SmallVector<Value>> getStoreInfo(Operation *op) {
   if (auto store = dyn_cast<memref::StoreOp>(op))
     return {store.getMemRef(), SmallVector<Value>(store.getIndices())};
-  
-    /// Handle polygeist.store (DynStoreOp)
+
+  /// Handle polygeist.store (DynStoreOp)
   if (auto dynStore = dyn_cast<polygeist::DynStoreOp>(op))
     return {dynStore.getMemref(), SmallVector<Value>(dynStore.getIndices())};
   return {Value(), {}};

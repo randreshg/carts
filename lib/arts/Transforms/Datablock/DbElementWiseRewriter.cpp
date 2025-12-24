@@ -54,9 +54,9 @@ LocalizedIndices DbElementWiseRewriter::splitIndices(ValueRange globalIndices,
   return result;
 }
 
-LocalizedIndices
-DbElementWiseRewriter::localize(ArrayRef<Value> globalIndices,
-                                OpBuilder &builder, Location loc) {
+LocalizedIndices DbElementWiseRewriter::localize(ArrayRef<Value> globalIndices,
+                                                 OpBuilder &builder,
+                                                 Location loc) {
   ARTS_DEBUG("DbElementWiseRewriter::localize with " << globalIndices.size()
                                                      << " indices");
   LLVM_DEBUG(llvm::dbgs() << "DbElementWiseRewriter::localize with "
@@ -112,12 +112,9 @@ DbElementWiseRewriter::localizeLinearized(Value globalLinearIndex, Value stride,
   return result;
 }
 
-LocalizedIndices
-DbElementWiseRewriter::localizeForFineGrained(ValueRange globalIndices,
-                                              ValueRange acquireIndices,
-                                              ValueRange acquireOffsets,
-                                              OpBuilder &builder,
-                                              Location loc) {
+LocalizedIndices DbElementWiseRewriter::localizeForFineGrained(
+    ValueRange globalIndices, ValueRange acquireIndices,
+    ValueRange acquireOffsets, OpBuilder &builder, Location loc) {
   LocalizedIndices result;
   auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
 

@@ -52,7 +52,8 @@
 #endif
 #endif
 
-/// Debug print macro - expands to printf when CARTS_DEBUG is 1, no-op otherwise.
+/// Debug print macro - expands to printf when CARTS_DEBUG is 1, no-op
+/// otherwise.
 #if CARTS_DEBUG
 #define CARTS_DEBUG_PRINT(...) printf(__VA_ARGS__)
 #else

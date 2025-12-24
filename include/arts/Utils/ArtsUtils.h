@@ -49,7 +49,6 @@ bool scalesAreEquivalent(Value a, Value b);
 ///===----------------------------------------------------------------------===///
 ArtsMode combineAccessModes(ArtsMode mode1, ArtsMode mode2);
 
-
 ///===----------------------------------------------------------------------===///
 // Type Casting and Conversion Utilities
 ///===----------------------------------------------------------------------===///

@@ -5,7 +5,6 @@
 #include "arts/Utils/ValueUtils.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Utils/ArtsUtils.h"
-#include "polygeist/Ops.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -14,6 +13,7 @@
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/CSE.h"
+#include "polygeist/Ops.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include <algorithm>
 #include <cassert>
@@ -21,13 +21,15 @@
 // For getElementTypeByteSize
 #include "mlir/IR/BuiltinTypes.h"
 
-
 namespace mlir {
 namespace arts {
 
 ///===----------------------------------------------------------------------===///
 /// Constant Value Analysis
 ///===----------------------------------------------------------------------===///
+
+/// Maximum recursion depth for value tracing to prevent stack overflow
+static constexpr unsigned kMaxTraceDepth = 64;
 
 /// Checks if the given value is a constant, including constant-like operations
 /// such as constant indices and constant operations.
@@ -171,7 +173,8 @@ Value ValueUtils::castToIndex(Value value, OpBuilder &builder, Location loc) {
 }
 
 /// Ensure a value is of index type, casting if necessary.
-Value ValueUtils::ensureIndexType(Value value, OpBuilder &builder, Location loc) {
+Value ValueUtils::ensureIndexType(Value value, OpBuilder &builder,
+                                  Location loc) {
   if (!value)
     return Value();
   if (value.getType().isa<IndexType>())
@@ -216,8 +219,8 @@ bool ValueUtils::dependsOn(Value value, Value base, int depth) {
 
 /// Internal helper for isDerivedFromPtr with cycle detection and depth limit.
 static bool isDerivedFromPtrImpl(Value value, Value source,
-                                  SmallPtrSetImpl<Value> &visited,
-                                  unsigned depth) {
+                                 SmallPtrSetImpl<Value> &visited,
+                                 unsigned depth) {
   /// Depth limit to prevent stack overflow
   if (depth > kMaxTraceDepth)
     return false;
@@ -247,7 +250,8 @@ static bool isDerivedFromPtrImpl(Value value, Value source,
 
   /// ARTS datablock operations
   if (auto dbAcquire = dyn_cast<DbAcquireOp>(defOp))
-    return isDerivedFromPtrImpl(dbAcquire.getSourcePtr(), source, visited, depth + 1);
+    return isDerivedFromPtrImpl(dbAcquire.getSourcePtr(), source, visited,
+                                depth + 1);
 
   if (auto dbGep = dyn_cast<DbGepOp>(defOp))
     return isDerivedFromPtrImpl(dbGep.getBasePtr(), source, visited, depth + 1);
@@ -261,14 +265,17 @@ static bool isDerivedFromPtrImpl(Value value, Value source,
 
   /// Polygeist pointer/memref conversions
   if (auto ptr2memref = dyn_cast<polygeist::Pointer2MemrefOp>(defOp))
-    return isDerivedFromPtrImpl(ptr2memref.getSource(), source, visited, depth + 1);
+    return isDerivedFromPtrImpl(ptr2memref.getSource(), source, visited,
+                                depth + 1);
 
   if (auto memref2ptr = dyn_cast<polygeist::Memref2PointerOp>(defOp))
-    return isDerivedFromPtrImpl(memref2ptr.getSource(), source, visited, depth + 1);
+    return isDerivedFromPtrImpl(memref2ptr.getSource(), source, visited,
+                                depth + 1);
 
   /// MemRef operations
   if (auto subview = dyn_cast<memref::SubViewOp>(defOp))
-    return isDerivedFromPtrImpl(subview.getSource(), source, visited, depth + 1);
+    return isDerivedFromPtrImpl(subview.getSource(), source, visited,
+                                depth + 1);
 
   if (auto cast = dyn_cast<memref::CastOp>(defOp))
     return isDerivedFromPtrImpl(cast.getSource(), source, visited, depth + 1);
@@ -277,12 +284,14 @@ static bool isDerivedFromPtrImpl(Value value, Value source,
     return isDerivedFromPtrImpl(view.getSource(), source, visited, depth + 1);
 
   if (auto reinterpretCast = dyn_cast<memref::ReinterpretCastOp>(defOp))
-    return isDerivedFromPtrImpl(reinterpretCast.getSource(), source, visited, depth + 1);
+    return isDerivedFromPtrImpl(reinterpretCast.getSource(), source, visited,
+                                depth + 1);
 
   /// Fallback: check if operation has source as first operand
   /// (handles polygeist.subindex and other similar operations)
   if (defOp->getNumOperands() > 0)
-    return isDerivedFromPtrImpl(defOp->getOperand(0), source, visited, depth + 1);
+    return isDerivedFromPtrImpl(defOp->getOperand(0), source, visited,
+                                depth + 1);
 
   return false;
 }
@@ -296,8 +305,8 @@ bool ValueUtils::isDerivedFromPtr(Value value, Value source) {
 
 /// Try to infer a constant linearization stride from an index expression.
 /// Looks for mul(constant, X) where X depends on elemOffset.
-std::optional<int64_t>
-ValueUtils::inferConstantStride(Value globalIndex, Value elemOffset) {
+std::optional<int64_t> ValueUtils::inferConstantStride(Value globalIndex,
+                                                       Value elemOffset) {
   if (!globalIndex || !elemOffset)
     return std::nullopt;
 
@@ -463,9 +472,6 @@ Value ValueUtils::extractArrayIndexFromByteOffset(Value byteOffset,
 /// Underlying Value Tracing
 ///===----------------------------------------------------------------------===///
 
-/// Maximum recursion depth for value tracing to prevent stack overflow
-static constexpr unsigned kMaxTraceDepth = 64;
-
 /// Internal helper to trace the underlying value through various operations,
 /// with cycle detection and depth limit to avoid infinite recursion.
 static Value getUnderlyingValueImpl(Value v, SmallPtrSet<Value, 16> &visited,
@@ -517,7 +523,8 @@ static Value getUnderlyingValueImpl(Value v, SmallPtrSet<Value, 16> &visited,
     else if (auto view = dyn_cast<memref::ViewOp>(op))
       return getUnderlyingValueImpl(view.getSource(), visited, depth + 1);
     else if (auto reinterpret = dyn_cast<memref::ReinterpretCastOp>(op))
-      return getUnderlyingValueImpl(reinterpret.getSource(), visited, depth + 1);
+      return getUnderlyingValueImpl(reinterpret.getSource(), visited,
+                                    depth + 1);
     else if (auto p2m = dyn_cast<polygeist::Pointer2MemrefOp>(op))
       return getUnderlyingValueImpl(p2m.getSource(), visited, depth + 1);
     else if (auto m2p = dyn_cast<polygeist::Memref2PointerOp>(op))

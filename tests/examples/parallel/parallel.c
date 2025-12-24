@@ -6,7 +6,8 @@
 
 int main() {
   CARTS_TIMER_START();
-  printf("Parallel region execution - Number of threads: %d\n", omp_get_num_threads());
+  printf("Parallel region execution - Number of threads: %d\n",
+         omp_get_num_threads());
 #pragma omp parallel
   {
     int tid = omp_get_thread_num();

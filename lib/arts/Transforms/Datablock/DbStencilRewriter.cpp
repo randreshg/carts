@@ -71,9 +71,8 @@ Value DbStencilRewriter::computeLocalIndex(Value globalIdx, Value chunkStart,
   return localIdx;
 }
 
-LocalizedIndices
-DbStencilRewriter::localize(ArrayRef<Value> globalIndices, OpBuilder &builder,
-                            Location loc) {
+LocalizedIndices DbStencilRewriter::localize(ArrayRef<Value> globalIndices,
+                                             OpBuilder &builder, Location loc) {
   LocalizedIndices result;
   auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
 
@@ -114,9 +113,10 @@ DbStencilRewriter::localize(ArrayRef<Value> globalIndices, OpBuilder &builder,
   return result;
 }
 
-LocalizedIndices
-DbStencilRewriter::localizeLinearized(Value globalLinearIndex, Value stride,
-                                      OpBuilder &builder, Location loc) {
+LocalizedIndices DbStencilRewriter::localizeLinearized(Value globalLinearIndex,
+                                                       Value stride,
+                                                       OpBuilder &builder,
+                                                       Location loc) {
   LocalizedIndices result;
   auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
 

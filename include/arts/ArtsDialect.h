@@ -58,5 +58,4 @@ bool isArtsOp(mlir::Operation *op);
 #define GET_OP_CLASSES
 #include "arts/ArtsOps.h.inc"
 
-
 #endif // CARTS_DIALECT_H

@@ -5,10 +5,10 @@
 ///==========================================================================///
 
 #include "arts/Transforms/Datablock/DbRewriter.h"
+#include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Transforms/Datablock/DbChunkedRewriter.h"
 #include "arts/Transforms/Datablock/DbElementWiseRewriter.h"
 #include "arts/Transforms/Datablock/DbStencilRewriter.h"
-#include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DatablockUtils.h"
@@ -29,23 +29,20 @@ ARTS_DEBUG_SETUP(db_transforms);
 using namespace mlir;
 using namespace mlir::arts;
 
-namespace {
-} // namespace
+namespace {} // namespace
 
 DbRewriter::DbRewriter(DbAllocOp oldAlloc, ValueRange newOuterSizes,
                        ValueRange newInnerSizes,
                        ArrayRef<DbRewriteAcquire> acquires,
                        const DbRewritePlan &plan)
     : oldAlloc_(oldAlloc), newOuterSizes_(newOuterSizes),
-      newInnerSizes_(newInnerSizes), acquires_(acquires),
-      plan_(plan) {
-}
+      newInnerSizes_(newInnerSizes), acquires_(acquires), plan_(plan) {}
 
 bool DbRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
-                                      Value startChunk) {
+                                Value startChunk) {
   ARTS_DEBUG("DbRewriter::rebaseEdtUsers - mode="
-             << (plan_.mode == RewriterMode::Stencil    ? "Stencil"
-                 : plan_.mode == RewriterMode::Chunked  ? "Chunked"
+             << (plan_.mode == RewriterMode::Stencil   ? "Stencil"
+                 : plan_.mode == RewriterMode::Chunked ? "Chunked"
                                                        : "ElementWise"));
 
   auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
@@ -85,9 +82,9 @@ bool DbRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
   if (!acquire.getSizeHints().empty())
     elemSize = acquire.getSizeHints()[0];
 
-  /// Create the appropriate rewriter based on mode - fully standalone, no base class
-  /// Each rewriter owns its own index localization logic
-  /// Pass old element sizes for proper stride computation (static or dynamic)
+  /// Create the appropriate rewriter based on mode - fully standalone, no base
+  /// class Each rewriter owns its own index localization logic Pass old element
+  /// sizes for proper stride computation (static or dynamic)
 
   SmallVector<Operation *> users(blockArg.getUsers().begin(),
                                  blockArg.getUsers().end());
@@ -97,10 +94,10 @@ bool DbRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
   for (Operation *user : users) {
     if (auto ref = dyn_cast<DbRefOp>(user)) {
       /// Create the appropriate rewriter based on mode
-      auto rewriter = createRewriter(
-          plan_, plan_.chunkSize, startChunk, elemOffset, elemSize,
-          newOuterSizes_.size(), newInnerSizes_.size(),
-          oldAlloc_.getElementSizes(), builder, ref.getLoc());
+      auto rewriter =
+          createRewriter(plan_, plan_.chunkSize, startChunk, elemOffset,
+                         elemSize, newOuterSizes_.size(), newInnerSizes_.size(),
+                         oldAlloc_.getElementSizes(), builder, ref.getLoc());
 
       rewriter->rewriteDbRefUsers(ref, blockArg, derivedType, builder,
                                   opsToRemove);
@@ -117,8 +114,8 @@ bool DbRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
 
 FailureOr<DbAllocOp> DbRewriter::apply(OpBuilder &builder) {
   ARTS_DEBUG("DbRewriter::apply - mode="
-             << (plan_.mode == RewriterMode::Stencil    ? "Stencil"
-                 : plan_.mode == RewriterMode::Chunked  ? "Chunked"
+             << (plan_.mode == RewriterMode::Stencil   ? "Stencil"
+                 : plan_.mode == RewriterMode::Chunked ? "Chunked"
                                                        : "ElementWise")
              << ", acquires=" << acquires_.size());
 
@@ -182,15 +179,15 @@ FailureOr<DbAllocOp> DbRewriter::apply(OpBuilder &builder) {
   return newAlloc;
 }
 
-void DbRewriter::rewriteAcquire(const DbRewriteAcquire &info, DbAllocOp newAlloc,
-                                OpBuilder &builder) {
+void DbRewriter::rewriteAcquire(const DbRewriteAcquire &info,
+                                DbAllocOp newAlloc, OpBuilder &builder) {
   DbAcquireOp acquire = info.acquire;
   Value elemOffset = info.elemOffset;
   Value elemSize = info.elemSize;
 
   ARTS_DEBUG("DbRewriter::rewriteAcquire - mode="
-             << (plan_.mode == RewriterMode::Stencil    ? "Stencil"
-                 : plan_.mode == RewriterMode::Chunked  ? "Chunked"
+             << (plan_.mode == RewriterMode::Stencil   ? "Stencil"
+                 : plan_.mode == RewriterMode::Chunked ? "Chunked"
                                                        : "ElementWise"));
 
   OpBuilder::InsertionGuard guard(builder);
@@ -222,7 +219,8 @@ void DbRewriter::rewriteAcquire(const DbRewriteAcquire &info, DbAllocOp newAlloc
 
   /// Both Chunked and Stencil modes use chunk-based allocation
   bool usesChunks = (plan_.mode == RewriterMode::Chunked ||
-                     plan_.mode == RewriterMode::Stencil) && plan_.chunkSize;
+                     plan_.mode == RewriterMode::Stencil) &&
+                    plan_.chunkSize;
 
   if (usesChunks) {
     /// CHUNKED/STENCIL: element-space → chunk-space
@@ -236,8 +234,8 @@ void DbRewriter::rewriteAcquire(const DbRewriteAcquire &info, DbAllocOp newAlloc
       /// Each worker acquires exactly ONE stencil-local chunk.
       /// Chunk index is computed using BASE coordinate space, not extended.
       ///
-      /// plan_.chunkSize is EXTENDED (e.g., 27 = 25 base + 1 left + 1 right halo)
-      /// elemOffset is EXTENDED (e.g., 24 = max(0, 25 - 1) for Worker 1)
+      /// plan_.chunkSize is EXTENDED (e.g., 27 = 25 base + 1 left + 1 right
+      /// halo) elemOffset is EXTENDED (e.g., 24 = max(0, 25 - 1) for Worker 1)
       ///
       /// We need to recover base offset and use base chunk size for division:
       ///   baseChunkSize = plan_.chunkSize - haloLeft - haloRight
@@ -251,8 +249,10 @@ void DbRewriter::rewriteAcquire(const DbRewriteAcquire &info, DbAllocOp newAlloc
           loc, plan_.stencilInfo->haloRight);
 
       /// Compute base chunk size
-      Value baseChunkSize = builder.create<arith::SubIOp>(loc, plan_.chunkSize, haloLeft);
-      baseChunkSize = builder.create<arith::SubIOp>(loc, baseChunkSize, haloRight);
+      Value baseChunkSize =
+          builder.create<arith::SubIOp>(loc, plan_.chunkSize, haloLeft);
+      baseChunkSize =
+          builder.create<arith::SubIOp>(loc, baseChunkSize, haloRight);
 
       /// Recover base offset from extended offset
       /// elemOffset is extended: max(0, baseOffset - haloLeft)
@@ -261,23 +261,26 @@ void DbRewriter::rewriteAcquire(const DbRewriteAcquire &info, DbAllocOp newAlloc
       Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
       Value isZero = builder.create<arith::CmpIOp>(
           loc, arith::CmpIPredicate::eq, elemOffset, zero);
-      Value adjustedOffset = builder.create<arith::AddIOp>(loc, elemOffset, haloLeft);
-      Value baseOffset = builder.create<arith::SelectOp>(loc, isZero, zero, adjustedOffset);
+      Value adjustedOffset =
+          builder.create<arith::AddIOp>(loc, elemOffset, haloLeft);
+      Value baseOffset =
+          builder.create<arith::SelectOp>(loc, isZero, zero, adjustedOffset);
 
       /// Compute chunk index using base coordinates
-      startChunk = builder.create<arith::DivUIOp>(loc, baseOffset, baseChunkSize);
+      startChunk =
+          builder.create<arith::DivUIOp>(loc, baseOffset, baseChunkSize);
 
       /// Single-chunk model: each worker acquires exactly 1 chunk
       chunkCount = one;
 
       ARTS_DEBUG("  Stencil: baseChunkSize=" << baseChunkSize
-                 << ", baseOffset=" << baseOffset
-                 << ", startChunk=" << startChunk);
+                                             << ", baseOffset=" << baseOffset
+                                             << ", startChunk=" << startChunk);
     } else {
       /// CHUNKED MODE: Multi-chunk div/mod model
-      /// DISJOINT MODEL: Physical chunks are disjoint and indexed by plan_.chunkSize.
-      /// Chunk layout: chunk 0 -> rows [0, plan_.chunkSize), chunk 1 -> rows
-      /// [plan_.chunkSize, 2*plan_.chunkSize), etc.
+      /// DISJOINT MODEL: Physical chunks are disjoint and indexed by
+      /// plan_.chunkSize. Chunk layout: chunk 0 -> rows [0, plan_.chunkSize),
+      /// chunk 1 -> rows [plan_.chunkSize, 2*plan_.chunkSize), etc.
       ///
       /// A partition may span MULTIPLE physical chunks if chunk boundary
       /// doesn't align with partition boundary.
@@ -288,14 +291,16 @@ void DbRewriter::rewriteAcquire(const DbRewriteAcquire &info, DbAllocOp newAlloc
       ///   - chunkCount = 2
 
       /// Compute start chunk index using physical chunk size
-      startChunk = builder.create<arith::DivUIOp>(loc, elemOffset, plan_.chunkSize);
+      startChunk =
+          builder.create<arith::DivUIOp>(loc, elemOffset, plan_.chunkSize);
 
       /// Compute end position (elemOffset + elemSize - 1)
       Value endPos = builder.create<arith::AddIOp>(loc, elemOffset, elemSize);
       endPos = builder.create<arith::SubIOp>(loc, endPos, one);
 
       /// Compute end chunk index
-      Value endChunk = builder.create<arith::DivUIOp>(loc, endPos, plan_.chunkSize);
+      Value endChunk =
+          builder.create<arith::DivUIOp>(loc, endPos, plan_.chunkSize);
 
       /// Clamp endChunk to valid range (numChunks - 1)
       if (!newOuterSizes_.empty()) {
@@ -361,7 +366,7 @@ void DbRewriter::rewriteAcquire(const DbRewriteAcquire &info, DbAllocOp newAlloc
 }
 
 void DbRewriter::rewriteDbRef(DbRefOp ref, DbAllocOp newAlloc,
-                                    OpBuilder &builder) {
+                              OpBuilder &builder) {
   Location loc = ref.getLoc();
   Type newElementType = newAlloc.getAllocatedElementType();
   Value newSource = (ref.getSource() == oldAlloc_.getPtr()) ? newAlloc.getPtr()
@@ -397,7 +402,9 @@ void DbRewriter::rewriteDbRef(DbRefOp ref, DbAllocOp newAlloc,
       loadStoreIndices = store.getIndices();
 
     SmallVector<Value> newOuter, newInner;
-    auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(userLoc, 0); };
+    auto zero = [&]() {
+      return builder.create<arith::ConstantIndexOp>(userLoc, 0);
+    };
 
     /// Both Chunked and Stencil modes use div/mod for main body accesses
     bool usesChunks = (plan_.mode == RewriterMode::Chunked ||
@@ -472,26 +479,30 @@ std::unique_ptr<DbRewriterBase> DbRewriter::createRewriter(
     Value elemOffset, Value elemSize, unsigned outerRank, unsigned innerRank,
     ValueRange oldElementSizes, OpBuilder &builder, Location loc) {
 
-  ARTS_DEBUG("DbRewriter::createRewriter mode=" << getRewriterModeName(plan.mode));
+  ARTS_DEBUG(
+      "DbRewriter::createRewriter mode=" << getRewriterModeName(plan.mode));
 
   switch (plan.mode) {
   case RewriterMode::Stencil: {
     assert(plan.stencilInfo && "Stencil mode requires stencil info");
 
     /// Create halo values from plan.stencilInfo
-    Value haloLeft = builder.create<arith::ConstantIndexOp>(
-        loc, plan.stencilInfo->haloLeft);
+    Value haloLeft =
+        builder.create<arith::ConstantIndexOp>(loc, plan.stencilInfo->haloLeft);
     Value haloRight = builder.create<arith::ConstantIndexOp>(
         loc, plan.stencilInfo->haloRight);
 
     /// plan.chunkSize is the EXTENDED size (includes halo).
     /// DbStencilRewriter needs the BASE chunk size for computing chunkStart.
     /// baseChunkSize = extendedChunkSize - haloLeft - haloRight
-    Value baseChunkSize = builder.create<arith::SubIOp>(loc, chunkSize, haloLeft);
-    baseChunkSize = builder.create<arith::SubIOp>(loc, baseChunkSize, haloRight);
+    Value baseChunkSize =
+        builder.create<arith::SubIOp>(loc, chunkSize, haloLeft);
+    baseChunkSize =
+        builder.create<arith::SubIOp>(loc, baseChunkSize, haloRight);
 
     ARTS_DEBUG("  Stencil: haloLeft=" << plan.stencilInfo->haloLeft
-               << ", haloRight=" << plan.stencilInfo->haloRight);
+                                      << ", haloRight="
+                                      << plan.stencilInfo->haloRight);
 
     return std::make_unique<DbStencilRewriter>(
         baseChunkSize, startChunk, haloLeft, haloRight,
@@ -499,13 +510,15 @@ std::unique_ptr<DbRewriterBase> DbRewriter::createRewriter(
   }
 
   case RewriterMode::Chunked: {
-    ARTS_DEBUG("  Chunked: outerRank=" << outerRank << ", innerRank=" << innerRank);
+    ARTS_DEBUG("  Chunked: outerRank=" << outerRank
+                                       << ", innerRank=" << innerRank);
     return std::make_unique<DbChunkedRewriter>(
         chunkSize, startChunk, elemOffset, outerRank, innerRank);
   }
 
   case RewriterMode::ElementWise: {
-    ARTS_DEBUG("  ElementWise: outerRank=" << outerRank << ", innerRank=" << innerRank);
+    ARTS_DEBUG("  ElementWise: outerRank=" << outerRank
+                                           << ", innerRank=" << innerRank);
     return std::make_unique<DbElementWiseRewriter>(
         elemOffset, elemSize, outerRank, innerRank, oldElementSizes);
   }

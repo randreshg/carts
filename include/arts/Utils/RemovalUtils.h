@@ -76,7 +76,7 @@ private:
   /// Recursively remove an operation and its dependents
   /// @param op The operation to remove
   /// @param builder Builder for creating replacement operations if needed
-  /// @param seen Set of operations already visited 
+  /// @param seen Set of operations already visited
   /// @param recursive If true, recursively remove dependent operations
   void removeOpImpl(Operation *op, OpBuilder &builder,
                     SmallPtrSet<Operation *, 32> &seen, bool recursive);

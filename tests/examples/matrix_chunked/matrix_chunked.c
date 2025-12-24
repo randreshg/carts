@@ -8,16 +8,17 @@
 /// which should trigger chunked datablock allocation.
 ///==========================================================================///
 
+#include "arts/Utils/Testing/CartsTest.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include "arts/Utils/Testing/CartsTest.h"
 
 #define BLOCK_SIZE 4
 
 int main(int argc, char *argv[]) {
   CARTS_TIMER_START();
   if (argc < 2) {
-    printf("Usage: %s N (N must be multiple of BLOCK_SIZE=%d)\n", argv[0], BLOCK_SIZE);
+    printf("Usage: %s N (N must be multiple of BLOCK_SIZE=%d)\n", argv[0],
+           BLOCK_SIZE);
     exit(EXIT_FAILURE);
   }
   const unsigned N = atoi(argv[1]);
@@ -41,7 +42,8 @@ int main(int argc, char *argv[]) {
       // Process in chunks - each task handles BLOCK_SIZE elements
       for (unsigned i = 0; i < N; i += BLOCK_SIZE) {
         // Chunk dependency: depend on A[i:BLOCK_SIZE] not A[i]
-#pragma omp task firstprivate(i) depend(in: A[i:BLOCK_SIZE]) depend(out: B[i:BLOCK_SIZE])
+#pragma omp task firstprivate(i) depend(in : A[i : BLOCK_SIZE])                \
+    depend(out : B[i : BLOCK_SIZE])
         {
           for (unsigned j = 0; j < BLOCK_SIZE; j++) {
             B[i + j] = A[i + j] * 2.0;

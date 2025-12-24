@@ -221,11 +221,6 @@ void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap,
 }
 
 ///===----------------------------------------------------------------------===///
-// Type Casting and Conversion Utilities
-///===----------------------------------------------------------------------===///
-
-
-///===----------------------------------------------------------------------===///
 // Pattern Recognition and Analysis Utilities
 ///===----------------------------------------------------------------------===///
 
@@ -355,14 +350,12 @@ std::optional<int64_t> extractChunkSizeForAllocation(Value sizeHint,
 
     /// If one operand is a small constant (halo), add it to the extracted base
     if (hasRhsConst && std::abs(rhsVal) <= 16) {
-      auto baseSize =
-          extractChunkSizeForAllocation(addOp.getLhs(), depth + 1);
+      auto baseSize = extractChunkSizeForAllocation(addOp.getLhs(), depth + 1);
       if (baseSize)
         return *baseSize + rhsVal; /// base + halo
     }
     if (hasLhsConst && std::abs(lhsVal) <= 16) {
-      auto baseSize =
-          extractChunkSizeForAllocation(addOp.getRhs(), depth + 1);
+      auto baseSize = extractChunkSizeForAllocation(addOp.getRhs(), depth + 1);
       if (baseSize)
         return *baseSize + lhsVal; /// base + halo
     }
@@ -390,14 +383,14 @@ Value extractOriginalSize(Value numerator, Value denominator,
     Value lhs = mul.getLhs();
     Value rhs = mul.getRhs();
     if (scalesAreEquivalent(lhs, denominator))
-      return ValueUtils::castToIndex(ValueUtils::stripNumericCasts(rhs), builder, loc);
+      return ValueUtils::castToIndex(ValueUtils::stripNumericCasts(rhs),
+                                     builder, loc);
     if (scalesAreEquivalent(rhs, denominator))
-      return ValueUtils::castToIndex(ValueUtils::stripNumericCasts(lhs), builder, loc);
+      return ValueUtils::castToIndex(ValueUtils::stripNumericCasts(lhs),
+                                     builder, loc);
   }
   return Value();
 }
-
-
 
 void collectWhileBounds(Value cond, Value iterArg, SmallVector<Value> &bounds) {
   if (!cond)
