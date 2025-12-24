@@ -12,6 +12,7 @@
 #include "arts/Analysis/Loop/LoopAnalysis.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/EdtUtils.h"
+#include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -196,56 +197,6 @@ void DbAcquireNode::forEachChildNode(
 /// transitively reachable. This handles complex index computations like:
 ///   globalIdx = lowerBound + (chunkOffset + localIter) * step
 /// where we want to check if globalIdx is derived from chunkOffset.
-static bool isDerivedFrom(Value value, Value base, int depth = 0) {
-  /// Prevent infinite recursion
-  if (depth > 10)
-    return false;
-
-  if (value == base)
-    return true;
-
-  /// Walk through arithmetic operations recursively
-  if (auto addOp = value.getDefiningOp<arith::AddIOp>()) {
-    if (isDerivedFrom(addOp.getLhs(), base, depth + 1) ||
-        isDerivedFrom(addOp.getRhs(), base, depth + 1))
-      return true;
-  }
-  if (auto mulOp = value.getDefiningOp<arith::MulIOp>()) {
-    if (isDerivedFrom(mulOp.getLhs(), base, depth + 1) ||
-        isDerivedFrom(mulOp.getRhs(), base, depth + 1))
-      return true;
-  }
-  if (auto subOp = value.getDefiningOp<arith::SubIOp>()) {
-    if (isDerivedFrom(subOp.getLhs(), base, depth + 1) ||
-        isDerivedFrom(subOp.getRhs(), base, depth + 1))
-      return true;
-  }
-
-  /// Walk through type cast operations - index computations often involve
-  /// i32 arithmetic followed by index_cast to index type
-  if (auto indexCast = value.getDefiningOp<arith::IndexCastOp>()) {
-    if (isDerivedFrom(indexCast.getIn(), base, depth + 1))
-      return true;
-  }
-  if (auto indexCastUI = value.getDefiningOp<arith::IndexCastUIOp>()) {
-    if (isDerivedFrom(indexCastUI.getIn(), base, depth + 1))
-      return true;
-  }
-  if (auto extSI = value.getDefiningOp<arith::ExtSIOp>()) {
-    if (isDerivedFrom(extSI.getIn(), base, depth + 1))
-      return true;
-  }
-  if (auto extUI = value.getDefiningOp<arith::ExtUIOp>()) {
-    if (isDerivedFrom(extUI.getIn(), base, depth + 1))
-      return true;
-  }
-  if (auto trunc = value.getDefiningOp<arith::TruncIOp>()) {
-    if (isDerivedFrom(trunc.getIn(), base, depth + 1))
-      return true;
-  }
-
-  return false;
-}
 
 ///===----------------------------------------------------------------------===///
 /// Stencil-Aware Access Bounds Analysis
@@ -380,6 +331,7 @@ bool DbAcquireNode::canBePartitioned() {
   /// Validate partition hints and compute adjusted chunk info for stencil
   /// patterns (A[i-1], A[i], A[i+1]) and uniform access with offset (B[i+1]).
   if (partitionOffset && partitionSize) {
+    originalBounds_ = std::make_pair(partitionOffset, partitionSize);
     LoopAnalysis &loopAnalysis = AM.getLoopAnalysis();
 
     DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
@@ -436,7 +388,7 @@ bool DbAcquireNode::canBePartitioned() {
         continue;
 
       if (loopNode->dependsOnInductionVar(firstDynIdx) &&
-          isDerivedFrom(firstDynIdx, partitionOffset)) {
+          ValueUtils::dependsOn(firstDynIdx, partitionOffset)) {
         chunkLoop = forOp;
         break;
       }
@@ -456,6 +408,14 @@ bool DbAcquireNode::canBePartitioned() {
                << dbAcquireOp << ": minOffset=" << bounds.minOffset
                << ", maxOffset=" << bounds.maxOffset
                << ", isStencil=" << bounds.isStencil);
+
+    /// Store stencil bounds for later use by DbRewriter
+    StencilBounds sb;
+    sb.minOffset = bounds.minOffset;
+    sb.maxOffset = bounds.maxOffset;
+    sb.isStencil = bounds.isStencil;
+    sb.valid = bounds.valid;
+    stencilBounds_ = sb;
 
     OpBuilder builder(dbAcquireOp);
     Location loc = dbAcquireOp.getLoc();
@@ -497,6 +457,28 @@ bool DbAcquireNode::canBePartitioned() {
 
   ARTS_DEBUG("PASS: acquire can be partitioned: " << dbAcquireOp);
   return true;
+}
+
+AccessPattern DbAcquireNode::getAccessPattern() const {
+  if (accessPattern_)
+    return *accessPattern_;
+
+  /// Stencil classification requires bounds analysis to have run.
+  if (stencilBounds_ && stencilBounds_->valid && stencilBounds_->isStencil) {
+    accessPattern_ = AccessPattern::Stencil;
+    return *accessPattern_;
+  }
+
+  /// Explicit indices imply element-wise or irregular access.
+  DbAcquireOp acqOp = const_cast<DbAcquireOp &>(dbAcquireOp);
+  if (!acqOp.getIndices().empty()) {
+    accessPattern_ = AccessPattern::Indexed;
+    return *accessPattern_;
+  }
+
+  /// Default to uniform access for offset-based or coarse acquires.
+  accessPattern_ = AccessPattern::Uniform;
+  return *accessPattern_;
 }
 
 /// Analyze memory accesses to compute bounds relative to chunk base.
@@ -715,7 +697,7 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
       if (!firstDynIdx)
         continue;
 
-      if (!isDerivedFrom(firstDynIdx, offset))
+      if (!ValueUtils::dependsOn(firstDynIdx, offset))
         return false;
     }
   }
@@ -747,6 +729,8 @@ LogicalResult DbAcquireNode::computeChunkInfo(Value &chunkOffset,
   });
 
   if (partitionOffset && partitionSize) {
+    if (!originalBounds_)
+      originalBounds_ = std::make_pair(partitionOffset, partitionSize);
     if (!canPartitionWithOffset(partitionOffset))
       return failure();
 
@@ -756,6 +740,16 @@ LogicalResult DbAcquireNode::computeChunkInfo(Value &chunkOffset,
           analyzeAccessBounds(this, partitionOffset, loopIV);
 
       if (bounds.valid) {
+        /// Store stencil bounds for DbRewriter
+        if (!stencilBounds_) {
+          StencilBounds sb;
+          sb.minOffset = bounds.minOffset;
+          sb.maxOffset = bounds.maxOffset;
+          sb.isStencil = bounds.isStencil;
+          sb.valid = bounds.valid;
+          stencilBounds_ = sb;
+        }
+
         OpBuilder builder(dbAcquireOp);
         Location loc = dbAcquireOp.getLoc();
         builder.setInsertionPoint(dbAcquireOp);

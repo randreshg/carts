@@ -17,32 +17,19 @@ ARTS_DEBUG_SETUP(db_transforms);
 using namespace mlir;
 using namespace mlir::arts;
 
-namespace {
-
-/// Helper to get indices from load/store operations
-static ValueRange getIndicesFromOp(Operation *op) {
-  if (auto load = dyn_cast<memref::LoadOp>(op))
-    return load.getIndices();
-  if (auto store = dyn_cast<memref::StoreOp>(op))
-    return store.getIndices();
-  if (auto ref = dyn_cast<DbRefOp>(op))
-    return ref.getIndices();
-  return {};
-}
-
-} // namespace
+/// Note: getIndicesFromOp() is now in DbRewriterBase.h
 
 DbElementWiseRewriter::DbElementWiseRewriter(Value elemOffset, Value elemSize,
                                              unsigned outerRank,
                                              unsigned innerRank,
                                              ValueRange oldElementSizes)
-    : elemOffset_(elemOffset), elemSize_(elemSize), outerRank_(outerRank),
-      innerRank_(innerRank),
+    : DbRewriterBase(outerRank, innerRank), elemOffset_(elemOffset),
+      elemSize_(elemSize),
       oldElementSizes_(oldElementSizes.begin(), oldElementSizes.end()) {}
 
-DbElementWiseRewriter::LocalizedIndices
-DbElementWiseRewriter::splitIndices(ValueRange globalIndices,
-                                    OpBuilder &builder, Location loc) {
+LocalizedIndices DbElementWiseRewriter::splitIndices(ValueRange globalIndices,
+                                                     OpBuilder &builder,
+                                                     Location loc) {
   LocalizedIndices result;
   auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
 
@@ -67,7 +54,7 @@ DbElementWiseRewriter::splitIndices(ValueRange globalIndices,
   return result;
 }
 
-DbElementWiseRewriter::LocalizedIndices
+LocalizedIndices
 DbElementWiseRewriter::localize(ArrayRef<Value> globalIndices,
                                 OpBuilder &builder, Location loc) {
   ARTS_DEBUG("DbElementWiseRewriter::localize with " << globalIndices.size()
@@ -95,7 +82,7 @@ DbElementWiseRewriter::localize(ArrayRef<Value> globalIndices,
   return result;
 }
 
-DbElementWiseRewriter::LocalizedIndices
+LocalizedIndices
 DbElementWiseRewriter::localizeLinearized(Value globalLinearIndex, Value stride,
                                           OpBuilder &builder, Location loc) {
   LocalizedIndices result;
@@ -125,7 +112,7 @@ DbElementWiseRewriter::localizeLinearized(Value globalLinearIndex, Value stride,
   return result;
 }
 
-DbElementWiseRewriter::LocalizedIndices
+LocalizedIndices
 DbElementWiseRewriter::localizeForFineGrained(ValueRange globalIndices,
                                               ValueRange acquireIndices,
                                               ValueRange acquireOffsets,

@@ -10,7 +10,7 @@
 
 /// Arts
 #include "arts/ArtsDialect.h"
-#include "arts/Transforms/EdtPtrRematerialization.h"
+#include "arts/Transforms/Edt/EdtPtrRematerialization.h"
 
 /// LLVM
 #include "llvm/ADT/SmallVector.h"

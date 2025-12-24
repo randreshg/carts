@@ -45,6 +45,7 @@
 
 #include "arts/ArtsDialect.h"
 #include "arts/Passes/ArtsPasses.h"
+#include "arts/Utils/ValueUtils.h"
 
 #include "arts/Utils/ArtsDebug.h"
 ARTS_DEBUG_SETUP(arts_alias_scope_gen);
@@ -141,49 +142,13 @@ emitScopeDeclarations(LLVM::LLVMFuncOp funcOp,
   }
 }
 
-/// Check if a value is derived from a given pointer through GEPs,
-/// pointer-to-memref conversions, and other address computations.
-static bool isDerivedFrom(Value val, Value source) {
-  if (val == source)
-    return true;
-
-  if (auto defOp = val.getDefiningOp()) {
-    if (auto gepOp = dyn_cast<LLVM::GEPOp>(defOp))
-      return isDerivedFrom(gepOp.getBase(), source);
-
-    if (auto ptr2memref = dyn_cast<polygeist::Pointer2MemrefOp>(defOp))
-      return isDerivedFrom(ptr2memref.getSource(), source);
-
-    if (auto memref2ptr = dyn_cast<polygeist::Memref2PointerOp>(defOp))
-      return isDerivedFrom(memref2ptr.getSource(), source);
-
-    if (auto subview = dyn_cast<memref::SubViewOp>(defOp))
-      return isDerivedFrom(subview.getSource(), source);
-
-    if (auto cast = dyn_cast<memref::CastOp>(defOp))
-      return isDerivedFrom(cast.getSource(), source);
-
-    if (auto view = dyn_cast<memref::ViewOp>(defOp))
-      return isDerivedFrom(view.getSource(), source);
-
-    if (auto reinterpretCast = dyn_cast<memref::ReinterpretCastOp>(defOp))
-      return isDerivedFrom(reinterpretCast.getSource(), source);
-
-    /// Fallback: check if operation has source as first operand
-    /// (handles polygeist.subindex and other similar operations)
-    if (defOp->getNumOperands() > 0)
-      return isDerivedFrom(defOp->getOperand(0), source);
-  }
-
-  return false;
-}
 
 /// Find which data pointer (if any) a memory access address is derived from
 static DataPointerInfo *
 findSourceDataPointer(Value addr,
                       SmallVectorImpl<DataPointerInfo> &dataPointers) {
   for (auto &info : dataPointers) {
-    if (isDerivedFrom(addr, info.ptr))
+    if (ValueUtils::isDerivedFromPtr(addr, info.ptr))
       return &info;
   }
   return nullptr;

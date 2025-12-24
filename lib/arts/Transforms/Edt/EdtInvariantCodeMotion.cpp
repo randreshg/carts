@@ -10,7 +10,7 @@
 
 /// Arts
 #include "arts/ArtsDialect.h"
-#include "arts/Transforms/EdtInvariantCodeMotion.h"
+#include "arts/Transforms/Edt/EdtInvariantCodeMotion.h"
 
 /// Others
 #include "mlir/IR/OpDefinition.h"

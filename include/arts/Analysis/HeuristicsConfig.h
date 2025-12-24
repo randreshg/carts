@@ -22,6 +22,11 @@ namespace arts {
 
 class IdRegistry;
 
+/// Forward declarations to avoid circular includes
+enum class RewriterMode;
+enum class AccessPattern;
+struct StencilBounds;
+
 /// Records a single heuristic decision for diagnostics export.
 /// Follows PGO pattern: compute compile-time → runtime mapping for correlation.
 struct HeuristicDecision {
@@ -38,17 +43,17 @@ struct HeuristicDecision {
 
 /// Source of partitioning decision (affects priority)
 enum class PartitioningSource {
-  UserProvided, // User specified depend clause (omp task) - respect it
-  ParallelFor,  // parallel_for without deps - prioritize chunking
-  Fallback      // Default/unknown - apply standard H2
+  UserProvided, /// User specified depend clause (omp task) - respect it
+  ParallelFor,  /// parallel_for without deps - prioritize chunking
+  Fallback      /// Default/unknown - apply standard H2
 };
 
 /// Proof method for why twin-diff can be disabled
 enum class TwinDiffProof {
-  None,             // No proof - use safe default (twin_diff=true)
+  None,             /// No proof - use safe default (twin_diff=true)
   IndexedControl,   // DbControlOps provided indexed access (proven isolation)
-  PartitionSuccess, // Partitioning proved non-overlapping chunks
-  AliasAnalysis,    // DbAliasAnalysis proved disjoint acquires
+  PartitionSuccess, /// Partitioning proved non-overlapping chunks
+  AliasAnalysis,    /// DbAliasAnalysis proved disjoint acquires
 };
 
 /// Context for twin-diff decisions (for centralized decision-making)
@@ -58,13 +63,21 @@ struct TwinDiffContext {
   Operation *op = nullptr; /// The operation this decision applies to
 };
 
-/// Mode-dependent chunking thresholds (derived from MemoryConfig)
+/// Mode-dependent chunking thresholds
 struct ChunkingThresholds {
-  int64_t maxOuterDBs;         // Max total datablocks
-  int64_t maxTotalDBsPerEDT;   // Max DBs per EDT (grid-aware!)
-  int64_t minInnerBytes;       // Min chunk size in bytes
-  int64_t optimalInnerBytes;   // Optimal chunk (L2 cache fit)
-  int64_t minElementsPerChunk; // Min elements per chunk
+  int64_t maxOuterDBs;         /// Max total datablocks
+  int64_t maxTotalDBsPerEDT;   /// Max DBs per EDT (grid-aware!)
+  int64_t minInnerBytes;       /// Min chunk size in bytes
+  int64_t minElementsPerChunk; /// Min elements per chunk
+};
+
+/// Context for partitioning mode decisions (H3 heuristic)
+struct PartitioningModeContext {
+  AccessPattern pattern;                   /// Dominant access pattern
+  bool hasChunkHints = false;              /// Chunk hints available
+  std::optional<int64_t> totalElements;    /// Total elements in allocation
+  std::optional<int64_t> chunkSize;        /// Chunk size if known
+  std::optional<StencilBounds> stencilBounds; /// Stencil bounds if detected
 };
 
 /// Centralized heuristics configuration for compile-time optimizations.
@@ -87,11 +100,6 @@ public:
   //===--------------------------------------------------------------------===//
   // H4: Twin-diff Heuristic
   //===--------------------------------------------------------------------===//
-
-  /// Returns true if twin_diff should be disabled.
-  /// On single-node, twin_diff is pure overhead (no remote recipient).
-  /// DEPRECATED: Use shouldUseTwinDiff(TwinDiffContext) for new code.
-  bool shouldDisableTwinDiff() const;
 
   /// Consolidated twin-diff decision based on context and proof method.
   /// Returns true if twin_diff should be ENABLED (safe default).
@@ -121,14 +129,11 @@ public:
   static constexpr int64_t kMaxDepsPerEDT = 8;
   static constexpr int64_t kMinInnerBytes = 64;
 
-  /// Get mode-dependent thresholds (computed from MemoryConfig)
+  /// Get mode-dependent thresholds
   const ChunkingThresholds &getThresholds() const { return thresholds_; }
 
-  /// Compute minimum inner bytes based on execution mode and memory tier
+  /// Compute minimum inner bytes
   int64_t computeMinInnerBytes() const;
-
-  /// Compute optimal inner bytes for cache efficiency
-  int64_t computeOptimalInnerBytes() const;
 
   /// Evaluates cost model for fine-grained allocation decision.
   /// Uses partial evaluation: rejects early if any known value fails,
@@ -149,6 +154,18 @@ public:
       std::optional<int64_t> totalDBs, std::optional<int64_t> totalDBsPerEDT,
       std::optional<int64_t> innerBytes,
       PartitioningSource source = PartitioningSource::Fallback) const;
+
+  //===--------------------------------------------------------------------===//
+  // H3: Partitioning Mode Heuristic
+  //===--------------------------------------------------------------------===//
+
+  /// Recommend partitioning mode based on access patterns and context.
+  /// Decision logic:
+  /// - Stencil patterns → ElementWise (until ESD infrastructure ready)
+  /// - Uniform + chunk hints + H2 passes → Chunked
+  /// - Default → ElementWise (safest, works for all patterns)
+  RewriterMode getRecommendedPartitioningMode(
+      const PartitioningModeContext &context) const;
 
   //===--------------------------------------------------------------------===//
   // Decision Recording for Diagnostics

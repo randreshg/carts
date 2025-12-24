@@ -135,9 +135,9 @@ Walk through these steps and stop as soon as you spot something odd.
    }
    }
    ```
-5. **Concurrency-opt checkpoint (DbAllocPromotion - Chunked Mode):**
+5. **Concurrency-opt checkpoint (DbRewriter - Chunked Mode):**
 
-   The concurrency-opt pass applies DbAllocPromotion to transform coarse-grained allocations
+   The concurrency-opt pass applies DbRewriter to transform coarse-grained allocations
    to chunked allocations for better parallelism. This is where coordinate localization happens.
 
    ```bash
@@ -155,7 +155,7 @@ Walk through these steps and stop as soon as you spot something odd.
    func.func @main() -> i32 attributes {llvm.linkage = #llvm.linkage<external>} {
       ...
       /// Chunked allocation: 6 chunks of 17 elements each (covers 100 elements total)
-      /// DbAllocPromotion transforms sizes[1] elementSizes[100] → sizes[6] elementSizes[17]
+      /// DbRewriter transforms sizes[1] elementSizes[100] → sizes[6] elementSizes[17]
       %guid, %ptr = arts.db_alloc[...] sizes[%c6] elementType(i32) elementSizes[%c17] {...}
 
       /// Single task for the "single" region (unchanged from before)
@@ -198,7 +198,7 @@ Walk through these steps and stop as soon as you spot something odd.
                   /// db_ref[%c0] gives local chunk view (chunk index is 0 within the acquired view)
                   %36 = arts.db_ref %arg2[%c0] : memref<?xmemref<?xi32>> -> memref<?xi32>
                   /// CRITICAL: memref indices use LOCAL coordinates (%arg3), NOT global (%26+%arg3)
-                  /// DbAllocPromotion::localizeElementIndices() transforms global → local
+                  /// DbRewriter::localizeElementIndices() transforms global → local
                   /// Pattern: global = %26 + %arg3, offset_hint = %26, so local = %arg3
                   %37 = memref.load %36[%arg3] : memref<?xi32>
                   %38 = arith.muli %37, %c2_i32 : i32
@@ -222,7 +222,7 @@ Walk through these steps and stop as soon as you spot something odd.
    }
    ```
 
-   **Coordinate Localization Summary (DbAllocPromotion class):**
+   **Coordinate Localization Summary (DbRewriter class):**
 
    | Coordinate Space | Example (chunk 1) | Used For |
    |------------------|-------------------|----------|
@@ -232,7 +232,7 @@ Walk through these steps and stop as soon as you spot something odd.
 
    The `offset_hints` attribute preserves element-space offsets so that
    `localizeElementIndices()` can transform global memref indices to local ones
-   inside EDT bodies. This is handled by `DbAllocPromotion::rebaseEdtUsers()`.
+   inside EDT bodies. This is handled by `DbRewriter::rebaseEdtUsers()`.
 
 6. **Pre-lowering (ParallelEDTLowering / EpochLowering):**
 
@@ -260,7 +260,7 @@ Walk through these steps and stop as soon as you spot something odd.
 
 **Problem:** Runtime crash (SIGSEGV) when accessing chunked datablocks inside EDT bodies.
 
-**Root Cause:** After DbAllocPromotion transformed coarse-grained allocations to chunked form,
+**Root Cause:** After DbRewriter transformed coarse-grained allocations to chunked form,
 memref.load/store operations inside EDT bodies still used global element indices instead of
 local indices relative to the acquired chunk.
 
@@ -274,7 +274,7 @@ scf.for %arg3 = %c0 to %31 step %c1 {
 }
 ```
 
-**Fix:** Added `localizeElementIndices()` method to `DbAllocPromotion` class that transforms
+**Fix:** Added `localizeElementIndices()` method to `DbRewriter` class that transforms
 global memref indices to local coordinates using the `offset_hints` attribute:
 
 ```mlir

@@ -309,3 +309,37 @@ bool DbAllocNode::canProveNonOverlapping() const {
   ARTS_DEBUG("All acquire pairs proven disjoint");
   return true; /// All pairs proven disjoint
 }
+
+AcquirePatternSummary DbAllocNode::summarizeAcquirePatterns() const {
+  AcquirePatternSummary summary;
+
+  for (const auto &acqNode : acquireNodes) {
+    if (!acqNode)
+      continue;
+    auto pattern = acqNode->getAccessPattern();
+    switch (pattern) {
+    case AccessPattern::Uniform:
+      summary.hasUniform = true;
+      break;
+    case AccessPattern::Stencil:
+      summary.hasStencil = true;
+      break;
+    case AccessPattern::Indexed:
+      summary.hasIndexed = true;
+      break;
+    case AccessPattern::Unknown:
+    default:
+      break;
+    }
+  }
+
+  return summary;
+}
+
+bool DbAllocNode::hasStencilAccess() const {
+  return summarizeAcquirePatterns().hasStencil;
+}
+
+bool DbAllocNode::hasMixedAccessPatterns() const {
+  return summarizeAcquirePatterns().isMixed();
+}

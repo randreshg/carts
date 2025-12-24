@@ -586,12 +586,12 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
         dbAcquireOp ? dbAcquireOp.getGuid() : depDbAcquireOp.getGuid();
     depGuids.push_back(depGuid);
 
-    /// Get bounds_valid if present
+    /// Get bounds_valid if present.
     Value boundsValid =
         dbAcquireOp
             ? dbAcquireOp.getBoundsValid()
             : (depDbAcquireOp ? depDbAcquireOp.getBoundsValid() : Value());
-    /// Create "true" constant for deps that don't need bounds checking
+    /// Create "true" constant for deps that don't have explicit bounds checking
     if (!boundsValid)
       boundsValid = AC->create<arith::ConstantIntOp>(loc, 1, 1);
     boundsValids.push_back(boundsValid);

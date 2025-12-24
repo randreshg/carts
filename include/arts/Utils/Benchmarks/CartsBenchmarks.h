@@ -28,6 +28,9 @@
 #ifndef CARTS_BENCHMARKS_H
 #define CARTS_BENCHMARKS_H
 
+/// Required for clock_gettime() and CLOCK_MONOTONIC on POSIX systems
+#define _POSIX_C_SOURCE 199309L
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
