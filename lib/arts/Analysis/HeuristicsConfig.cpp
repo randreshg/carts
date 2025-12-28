@@ -6,26 +6,45 @@
 ///==========================================================================///
 
 #include "arts/Analysis/HeuristicsConfig.h"
-#include "arts/Analysis/Graphs/Db/DbAccessPattern.h"
+#include "arts/Analysis/Heuristics/PartitioningHeuristics.h"
 #include "arts/Transforms/Datablock/DbRewriter.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/Metadata/IdRegistry.h"
 #include "arts/Utils/Metadata/LocationMetadata.h"
 #include "arts/Utils/ValueUtils.h"
+#include "llvm/ADT/STLExtras.h"
 
 ARTS_DEBUG_SETUP(heuristics)
 
 using namespace mlir;
 using namespace mlir::arts;
 
+namespace {
+/// Compute minimum inner bytes based on execution mode
+static int64_t computeMinInnerBytes(const ArtsAbstractMachine &machine) {
+  auto mode = machine.getExecutionMode();
+  switch (mode) {
+  case ExecutionMode::SingleThreaded:
+    return 64; /// Cache-line aligned
+  case ExecutionMode::IntraNode:
+    return 1024; /// Modest lower bound
+  case ExecutionMode::InterNode:
+    return 4096; /// Avoid tiny chunks for distributed
+  }
+  return 64; /// Fallback
+}
+} // namespace
+
 HeuristicsConfig::HeuristicsConfig(const ArtsAbstractMachine &machine,
                                    IdRegistry &idRegistry)
     : machine(machine), idRegistry_(idRegistry) {
   initializeThresholds();
+  initializeDefaultHeuristics();
   ARTS_DEBUG("HeuristicsConfig initialized: singleNode="
              << isSingleNode() << ", valid=" << isValid()
-             << ", minInnerBytes=" << thresholds_.minInnerBytes);
+             << ", minInnerBytes=" << thresholds_.minInnerBytes
+             << ", partitioningHeuristics=" << partitioningHeuristics_.size());
 }
 
 void HeuristicsConfig::initializeThresholds() {
@@ -51,7 +70,7 @@ void HeuristicsConfig::initializeThresholds() {
   }
 
   /// Compute memory-aware thresholds
-  thresholds_.minInnerBytes = computeMinInnerBytes();
+  thresholds_.minInnerBytes = computeMinInnerBytes(machine);
 
   ARTS_DEBUG("Thresholds initialized: maxOuterDBs="
              << thresholds_.maxOuterDBs
@@ -59,28 +78,15 @@ void HeuristicsConfig::initializeThresholds() {
              << ", minInnerBytes=" << thresholds_.minInnerBytes);
 }
 
-int64_t HeuristicsConfig::computeMinInnerBytes() const {
-  auto mode = machine.getExecutionMode();
-
-  switch (mode) {
-  case ExecutionMode::SingleThreaded:
-    /// Cache-line aligned (64 bytes)
-    return 64;
-  case ExecutionMode::IntraNode:
-    /// Keep a modest lower bound to avoid tiny chunks
-    return 1024;
-  case ExecutionMode::InterNode:
-    /// Avoid tiny chunks for distributed execution
-    return 4096;
-  }
-  return 64; /// Fallback
-}
-
 bool HeuristicsConfig::isSingleNode() const {
   return machine.getNodeCount() == 1;
 }
 
 bool HeuristicsConfig::isValid() const { return machine.isValid(); }
+
+//===----------------------------------------------------------------------===//
+// H4: Twin-Diff Heuristic
+//===----------------------------------------------------------------------===//
 
 bool HeuristicsConfig::shouldUseTwinDiff(const TwinDiffContext &context) {
   Operation *op = context.op;
@@ -122,156 +128,9 @@ bool HeuristicsConfig::shouldUseTwinDiff(const TwinDiffContext &context) {
   }
 }
 
-bool HeuristicsConfig::shouldPreferCoarseForReadOnly(
-    ArtsMode accessMode) const {
-  /// H1: Read-only memrefs on single-node should prefer coarse allocation
-  /// - No write contention to relieve via fine-graining
-  /// - Coarse reduces DB count and per-EDT dependency overhead
-  return isSingleNode() && accessMode == ArtsMode::in;
-}
-
-std::optional<bool> HeuristicsConfig::shouldUseFineGrained(
-    std::optional<int64_t> totalDBs, std::optional<int64_t> totalDBsPerEDT,
-    std::optional<int64_t> innerBytes, PartitioningSource source) const {
-  /// H2: Cost model for fine-grained allocation with partial eval
-  /// Uses reject-early semantics: if any known value fails, return false.
-  /// If all known values pass but some unknown, return nullopt.
-
-  /// For ParallelFor source: be more permissive (prioritize chunking)
-  /// For UserProvided source: this shouldn't be called (handled at call site)
-  bool prioritizeChunking = (source == PartitioningSource::ParallelFor);
-
-  ARTS_DEBUG("  H2: source=" << static_cast<int>(source)
-                             << ", prioritizeChunking=" << prioritizeChunking);
-
-  /// Multi-node: always fine-grained (chunking for network efficiency)
-  if (!isSingleNode()) {
-    ARTS_DEBUG("  H2: multi-node -> fine-grained (chunking)");
-    return true;
-  }
-
-  /// Get mode-dependent thresholds
-  int64_t maxDBs = thresholds_.maxOuterDBs;
-  int64_t maxDBsPerEDT = thresholds_.maxTotalDBsPerEDT;
-  int64_t minBytes = thresholds_.minInnerBytes;
-
-  /// REJECT EARLY: If any known value fails its check, return false immediately
-  if (totalDBs.has_value() && *totalDBs > maxDBs) {
-    ARTS_DEBUG("  H2 REJECT: totalDBs=" << *totalDBs << " > " << maxDBs);
-    return false;
-  }
-  if (totalDBsPerEDT.has_value() && *totalDBsPerEDT > maxDBsPerEDT) {
-    ARTS_DEBUG("  H2 REJECT: totalDBsPerEDT=" << *totalDBsPerEDT << " > "
-                                              << maxDBsPerEDT);
-    return false;
-  }
-  if (innerBytes.has_value() && *innerBytes < minBytes) {
-    /// For ParallelFor, only reject if MUCH smaller than threshold
-    if (!prioritizeChunking || *innerBytes < (minBytes / 4)) {
-      ARTS_DEBUG("  H2 REJECT: innerBytes=" << *innerBytes << " < "
-                                            << minBytes);
-      return false;
-    }
-    ARTS_DEBUG("  H2 WARNING: innerBytes="
-               << *innerBytes << " < " << minBytes
-               << " but allowing due to ParallelFor priority");
-  }
-
-  /// If ALL values known and ALL passed, return true
-  if (totalDBs && totalDBsPerEDT && innerBytes) {
-    ARTS_DEBUG("  H2 APPROVE: totalDBs=" << *totalDBs << ", totalDBsPerEDT="
-                                         << *totalDBsPerEDT
-                                         << ", innerBytes=" << *innerBytes);
-    return true;
-  }
-
-  /// Some values unknown but no known failures
-  /// For ParallelFor: be optimistic and approve chunking
-  if (prioritizeChunking) {
-    ARTS_DEBUG("  H2 OPTIMISTIC: ParallelFor -> approve chunking despite "
-               "unknown values");
-    return true;
-  }
-
-  /// Default: can't fully decide
-  ARTS_DEBUG("  H2 PARTIAL: known values pass, but some unknown"
-             << " (totalDBs=" << (totalDBs ? std::to_string(*totalDBs) : "?")
-             << ", totalDBsPerEDT="
-             << (totalDBsPerEDT ? std::to_string(*totalDBsPerEDT) : "?")
-             << ", innerBytes="
-             << (innerBytes ? std::to_string(*innerBytes) : "?") << ")");
-  return std::nullopt;
-}
-
-RewriterMode HeuristicsConfig::getRecommendedPartitioningMode(
-    const PartitioningModeContext &context) const {
-  /// H3: Partitioning mode selection based on access patterns
-  ///
-  /// Decision flow:
-  /// 1. Stencil patterns → ElementWise (until ESD infrastructure ready)
-  /// 2. Uniform + chunk hints + H2 cost model passes → Chunked
-  /// 3. Indexed patterns → ElementWise (irregular access)
-  /// 4. Default → ElementWise (safest, works for all patterns)
-
-  ARTS_DEBUG("H3: getRecommendedPartitioningMode pattern="
-             << static_cast<int>(context.pattern)
-             << ", hasChunkHints=" << context.hasChunkHints);
-
-  /// Stencil patterns: Use ElementWise until ESD infrastructure is ready
-  /// Future: When ESD is implemented, stencil patterns can use Stencil mode
-  if (context.pattern == AccessPattern::Stencil) {
-    ARTS_DEBUG("  H3: Stencil pattern -> ElementWise (ESD not yet ready)");
-    return RewriterMode::ElementWise;
-  }
-
-  /// Indexed patterns: ElementWise is safest for irregular access
-  if (context.pattern == AccessPattern::Indexed) {
-    ARTS_DEBUG("  H3: Indexed pattern -> ElementWise (irregular access)");
-    return RewriterMode::ElementWise;
-  }
-
-  /// Uniform patterns: Consider chunking if conditions are met
-  if (context.pattern == AccessPattern::Uniform) {
-    /// Need chunk hints to determine chunk boundaries
-    if (!context.hasChunkHints) {
-      ARTS_DEBUG("  H3: Uniform but no chunk hints -> ElementWise");
-      return RewriterMode::ElementWise;
-    }
-
-    /// Evaluate H2 cost model if we have enough information
-    std::optional<int64_t> totalDBs;
-    std::optional<int64_t> totalDBsPerEDT;
-
-    if (context.totalElements && context.chunkSize && *context.chunkSize > 0) {
-      totalDBs = (*context.totalElements + *context.chunkSize - 1) /
-                 *context.chunkSize;
-      /// Assume 1 DB per EDT for uniform access (typical parallel_for)
-      totalDBsPerEDT = 1;
-    }
-
-    auto h2Result =
-        shouldUseFineGrained(totalDBs, totalDBsPerEDT, context.chunkSize,
-                             PartitioningSource::ParallelFor);
-
-    if (h2Result.has_value()) {
-      if (*h2Result) {
-        ARTS_DEBUG("  H3: Uniform + hints + H2 pass -> Chunked");
-        return RewriterMode::Chunked;
-      } else {
-        ARTS_DEBUG("  H3: Uniform + hints but H2 reject -> ElementWise");
-        return RewriterMode::ElementWise;
-      }
-    }
-
-    /// H2 couldn't decide (partial info) - default to ElementWise for safety
-    ARTS_DEBUG("  H3: Uniform + hints but H2 partial -> ElementWise (safe)");
-    return RewriterMode::ElementWise;
-  }
-
-  /// Unknown pattern: default to ElementWise
-  ARTS_DEBUG("  H3: Unknown pattern -> ElementWise (default)");
-  return RewriterMode::ElementWise;
-}
+//===----------------------------------------------------------------------===//
+// Decision Recording for Diagnostics
+//===----------------------------------------------------------------------===//
 
 void HeuristicsConfig::recordDecision(llvm::StringRef heuristic, bool applied,
                                       llvm::StringRef rationale, Operation *op,
@@ -364,6 +223,67 @@ void HeuristicsConfig::recordDecision(llvm::StringRef heuristic, bool applied,
 
 llvm::ArrayRef<HeuristicDecision> HeuristicsConfig::getDecisions() const {
   return decisions_;
+}
+
+//===----------------------------------------------------------------------===//
+// H1: Unified Partitioning Heuristics Registry
+//===----------------------------------------------------------------------===//
+
+void HeuristicsConfig::initializeDefaultHeuristics() {
+  // Get all default partitioning heuristics from factory
+  auto defaults = createDefaultPartitioningHeuristics();
+  for (auto &h : defaults) {
+    registerHeuristic(std::move(h));
+  }
+
+  // Sort by priority (highest first)
+  llvm::sort(partitioningHeuristics_, [](const auto &a, const auto &b) {
+    return a->getPriority() > b->getPriority();
+  });
+
+  ARTS_DEBUG("Registered " << partitioningHeuristics_.size()
+                           << " partitioning heuristics");
+  for (const auto &h : partitioningHeuristics_) {
+    ARTS_DEBUG("  - " << h->getName() << " (priority=" << h->getPriority()
+                      << "): " << h->getDescription());
+  }
+}
+
+void HeuristicsConfig::registerHeuristic(
+    std::unique_ptr<PartitioningHeuristic> h) {
+  ARTS_DEBUG("Registering heuristic: " << h->getName());
+  partitioningHeuristics_.push_back(std::move(h));
+}
+
+PartitioningDecision
+HeuristicsConfig::getPartitioningMode(const PartitioningContext &ctx) {
+  ARTS_DEBUG("getPartitioningMode: canElementWise="
+             << ctx.canElementWise << ", canChunked=" << ctx.canChunked
+             << ", pinnedDimCount=" << ctx.pinnedDimCount
+             << ", accessMode=" << static_cast<int>(ctx.accessMode));
+
+  // Evaluate heuristics in priority order
+  for (const auto &heuristic : partitioningHeuristics_) {
+    auto decision = heuristic->evaluate(ctx);
+    if (decision.has_value()) {
+      // Record the decision for diagnostics
+      recordDecision(heuristic->getName(), true, decision->rationale, nullptr,
+                     {});
+      ARTS_DEBUG("Heuristic " << heuristic->getName()
+                              << " applied: " << decision->rationale);
+      return *decision;
+    }
+  }
+
+  // Fallback: coarse allocation
+  PartitioningDecision fallback;
+  fallback.mode = RewriterMode::ElementWise;
+  fallback.outerRank = 0;
+  fallback.innerRank = ctx.memrefRank; // All dims are inner for coarse
+  fallback.rationale = "No heuristic applied, using coarse fallback";
+  recordDecision("Fallback", true, fallback.rationale, nullptr, {});
+  ARTS_DEBUG("Fallback applied: " << fallback.rationale);
+  return fallback;
 }
 
 void HeuristicsConfig::exportDecisionsToJson(llvm::json::OStream &J) const {

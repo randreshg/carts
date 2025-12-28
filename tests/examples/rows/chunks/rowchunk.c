@@ -17,12 +17,6 @@ int main(int argc, char *argv[]) {
   /// Allocate using array-of-arrays pattern
   float **A = (float **)malloc(ROWS * sizeof(float *));
   float **B = (float **)malloc(ROWS * sizeof(float *));
-
-  if (!A || !B) {
-    printf("Memory allocation failed\n");
-    return 1;
-  }
-
   for (int i = 0; i < ROWS; i++) {
     A[i] = (float *)malloc(COLS * sizeof(float));
     B[i] = (float *)malloc(COLS * sizeof(float));

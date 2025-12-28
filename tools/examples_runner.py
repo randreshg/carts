@@ -69,23 +69,6 @@ if str(tools_dir) not in sys.path:
 # Constants
 # ============================================================================
 
-# Default runtime arguments for examples
-EXAMPLE_ARGS: Dict[str, List[str]] = {
-    "array": ["100"],
-    "dotproduct": ["100"],
-    "matrix": ["100"],
-    "matrix_chunked": ["64"],
-    "matrixmul": ["64", "16"],
-    "rowdep": ["64"],
-    "stencil": ["100"],
-    "parallel_for/block": ["100"],
-    "parallel_for/chunk": ["100"],
-    "parallel_for/loops": ["100"],
-    "parallel_for/reduction": ["100"],
-    "parallel_for/single": ["100"],
-    "parallel_for/stencil": ["100"],
-}
-
 # Directories to skip when discovering examples
 SKIP_DIRS = {".git", ".svn", ".hg", "build",
              "logs", "__pycache__", ".cache", ".claude"}
@@ -171,7 +154,8 @@ def discover_examples(examples_dir: Path) -> List[ExampleInfo]:
                     name = f"{prefix}{item.name}" if prefix else item.name
                     source_file = source_files[0]  # Take first source file
                     has_config = (item / "arts.cfg").is_file()
-                    args = EXAMPLE_ARGS.get(name, [])
+                    # Examples now handle default arguments internally
+                    args = []
 
                     examples.append(ExampleInfo(
                         name=name,
@@ -301,6 +285,7 @@ def run_example_binary(
     timeout: int = 60,
     config_file: Optional[Path] = None,
     trace: bool = False,
+    runtime_args: Optional[List[str]] = None,
 ) -> Tuple[bool, float, int, str]:
     """
     Run the compiled example binary.
@@ -316,8 +301,9 @@ def run_example_binary(
     if not executable.is_file():
         return False, 0.0, -1, f"Executable not found: {executable}"
 
-    # Build command with args
-    cmd = [str(executable)] + example.args
+    # Build command with args - use runtime_args if provided, otherwise empty (defaults in code)
+    args = runtime_args if runtime_args is not None else []
+    cmd = [str(executable)] + args
 
     # Set up environment with config file if provided
     env = os.environ.copy()
@@ -410,6 +396,7 @@ def run_single_example(
     run_timeout: int = 60,
     config_file: Optional[Path] = None,
     trace: bool = False,
+    runtime_args: Optional[List[str]] = None,
 ) -> ExampleResult:
     """Run a single example: clean, build and execute."""
     # Step 0: Clean previous build artifacts
@@ -434,7 +421,8 @@ def run_single_example(
 
     # Step 2: Run
     run_ok, run_duration, exit_code, run_output = run_example_binary(
-        example, verbose=verbose, timeout=run_timeout, config_file=config_file, trace=trace
+        example, verbose=verbose, timeout=run_timeout, config_file=config_file, trace=trace,
+        runtime_args=runtime_args or []
     )
 
     if not run_ok:
@@ -575,7 +563,7 @@ app = typer.Typer(
 )
 
 
-@app.command()
+@app.command(name="list")
 def list_examples(
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="Show detailed info"),
@@ -628,8 +616,14 @@ def list_examples(
         console.print()
 
 
-@app.command()
+@app.command(
+    context_settings={
+        "allow_extra_args": True,
+        "allow_interspersed_args": False,
+    }
+)
 def run(
+    ctx: typer.Context,
     name: Optional[str] = typer.Argument(None, help="Example name to run"),
     all_examples: bool = typer.Option(
         False, "--all", "-a", help="Run all examples"),
@@ -646,7 +640,14 @@ def run(
     trace: bool = typer.Option(
         False, "--trace", "-t", help="Print example output to terminal"),
 ):
-    """Run CARTS example(s)."""
+    """Run CARTS example(s).
+
+    Examples:
+        carts examples run array              # Run with default size
+        carts examples run array 100          # Run with size 100
+        carts examples run matrixmul 64 16     # Run with custom sizes
+        carts examples run --all              # Run all examples with defaults
+    """
     examples_dir = get_examples_dir()
 
     if not examples_dir.is_dir():
@@ -671,6 +672,14 @@ def run(
     if not examples:
         print_warning("No examples to run")
         raise typer.Exit(0)
+
+    # Extract runtime arguments (everything after the example name)
+    # Only use runtime args if running a single example (not --all)
+    runtime_args: List[str] = []
+    if not all_examples and name and ctx.args:
+        # ctx.args contains all extra arguments after the example name
+        # These are the runtime arguments to pass to the executable
+        runtime_args = ctx.args
 
     # Run examples
     results: List[ExampleResult] = []
@@ -697,6 +706,10 @@ def run(
             live.update(create_live_display(
                 examples, results_dict, example.name, elapsed))
 
+            # Use runtime args only when running a single example (not --all)
+            # When --all is used, runtime_args is empty, so all examples use defaults
+            example_runtime_args = runtime_args if not all_examples else []
+
             # Run example
             result = run_single_example(
                 example,
@@ -705,6 +718,7 @@ def run(
                 run_timeout=run_timeout,
                 config_file=config,
                 trace=trace,
+                runtime_args=example_runtime_args,
             )
 
             # Update results

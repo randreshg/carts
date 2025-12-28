@@ -8,12 +8,7 @@
 #define TOLERANCE 10e-6
 
 int main(int argc, char *argv[]) {
-  if (argc != 2) {
-    fprintf(stderr, "Usage: %s <N>\n", argv[0]);
-    return 1;
-  }
-
-  const unsigned N = atoi(argv[1]);
+  const unsigned N = (argc >= 2) ? atoi(argv[1]) : 64;
   srand(time(NULL));
 
   double **A = (double **)malloc(N * sizeof(double *));

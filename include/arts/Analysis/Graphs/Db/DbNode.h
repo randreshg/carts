@@ -180,7 +180,8 @@ public:
 
   LogicalResult computeChunkInfo(Value &chunkOffset, Value &chunkSize);
   LogicalResult computeChunkInfoFromWhile(scf::WhileOp whileOp,
-                                          Value &chunkOffset, Value &chunkSize);
+                                          Value &chunkOffset, Value &chunkSize,
+                                          Value *offsetForCheck = nullptr);
 
   /// StencilBounds struct is now defined in DbAccessPattern.h
 

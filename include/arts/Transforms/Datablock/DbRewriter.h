@@ -93,9 +93,12 @@ struct DbRewriteAcquire {
   Value elemSize;
 };
 
+/// Forward declaration for PartitioningDecision
+struct PartitioningDecision;
+
 /// Rewriter plan chosen by DbPartitioning.
 struct DbRewritePlan {
-  RewriterMode mode;
+  RewriterMode mode = RewriterMode::ElementWise;
   Value chunkSize; ///< Valid for Chunked/Stencil; empty for ElementWise
   std::optional<StencilInfo> stencilInfo;
 
@@ -106,6 +109,12 @@ struct DbRewritePlan {
   /// When 0, auto-compute from mode defaults.
   unsigned outerRank = 0;
   unsigned innerRank = 0;
+
+  /// Default constructor
+  DbRewritePlan() = default;
+
+  /// Construct from PartitioningDecision (copies mode, outerRank, innerRank)
+  explicit DbRewritePlan(const PartitioningDecision &decision);
 
   /// Validate plan consistency.
   /// Returns true if the plan has all required fields for its mode.
