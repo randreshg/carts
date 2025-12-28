@@ -39,6 +39,9 @@
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
+#include "arts/Transforms/Datablock/DbChunkedRewriter.h"
+#include "arts/Transforms/Datablock/DbElementWiseRewriter.h"
+#include "arts/Transforms/Datablock/DbRewriter.h"
 #include "arts/Transforms/DbTransforms.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DatablockUtils.h"
@@ -99,9 +102,12 @@ private:
     EdtOp parentEdt = nullptr;
     ArtsMode accessMode = ArtsMode::uninitialized;
     bool usedFineGrained = false;
-    bool usedChunked = false;      /// True if chunked allocation was used
-    SmallVector<Value> chunkSizes; /// Chunk sizes for chunked allocation
+    bool usedChunked = false;
+    SmallVector<Value> chunkSizes;
     DbAllocOp dbAllocOp = nullptr;
+
+    /// The computed allocation strategy plan
+    std::optional<DbRewritePlan> rewritePlan;
 
     /// Structure to track a specific DB access (mode + indices + chunks)
     struct DbDep {
@@ -230,8 +236,8 @@ private:
                                 Operation *dbOp,
                                 SmallVector<Value> &acquireIndices,
                                 SmallVector<Value> &acquireOffsets,
-                                BlockArgument dbAcquireArg, unsigned outerRank,
-                                unsigned innerRank, bool useChunkedRewriter);
+                                BlockArgument dbAcquireArg,
+                                const DbRewritePlan &plan);
   void rewriteUsesInParentEdt(MemrefInfo &memrefInfo);
   void rewriteUsesEverywhereCoarse(Operation *alloc, DbAllocOp dbAlloc);
 
@@ -502,16 +508,6 @@ void CreateDbsPass::collectControlDbOps() {
                           opIndices.begin());
       };
 
-      /// TODO: Implement affine/symbolic analysis for better index matching
-      /// Current limitation: SSA value equality fails when semantically
-      /// equivalent but syntactically different values are used (e.g., loop IVs
-      /// vs. external values). Future approaches:
-      /// 1. Affine expression analysis to determine symbolic equivalence
-      /// 2. Value tracking through block arguments and control flow
-      /// 3. Polyhedral analysis for complex access patterns
-      /// For now, we rely on coarse-grained fallback when strict matching
-      /// fails.
-
       /// Walk the user EDT and collect operations that match the indices
       userEdt.walk([&](Operation *op) {
         if (auto load = dyn_cast<memref::LoadOp>(op)) {
@@ -608,84 +604,99 @@ void CreateDbsPass::createDbAllocOps() {
     while (auto nestedMemRef = elementType.dyn_cast<MemRefType>())
       elementType = nestedMemRef.getElementType();
 
-    /// Determine allocation granularity based on index access pattern
-    /// - If all accesses use a consistent dimension, allocate fine-grained DBs
-    /// - Otherwise, use coarse-grained allocation (single DB with full memref)
+    /// Determine allocation granularity using unified heuristics
     SmallVector<Value> sizes, elementSizes;
     const bool isRankZero = memRefType.getRank() == 0;
     const unsigned rank = std::max<unsigned>(1, memRefType.getRank());
     const auto accessPatternInfo = info.getAccessPatternInfo();
-    bool useFineGrainedAllocation = !isRankZero &&
-                                    accessPatternInfo.isConsistent &&
-                                    accessPatternInfo.pinnedDimCount > 0 &&
-                                    accessPatternInfo.allAccessesHaveIndices;
-
-    /// If we already have precise db_control dependencies (indexed accesses),
-    /// prioritize keeping that partitioning even if the H2 cost model would
-    /// normally force coarse mode.
-    const bool hasIndexedControlDeps = useFineGrainedAllocation;
 
     auto &heuristics = AM->getHeuristicsConfig();
 
-    /// H1: Read-only on single-node -> prefer coarse
-    if (useFineGrainedAllocation &&
-        heuristics.shouldPreferCoarseForReadOnly(info.accessMode)) {
-      ARTS_DEBUG(" - H1: Read-only on single-node, preferring coarse");
-      useFineGrainedAllocation = false;
+    /// Build PartitioningContext for unified heuristic evaluation
+    PartitioningContext ctx;
+    ctx.machine = &AM->getAbstractMachine();
+    ctx.memrefRank = memRefType.getRank();
+    ctx.canElementWise = !isRankZero && accessPatternInfo.isConsistent &&
+                         accessPatternInfo.pinnedDimCount > 0 &&
+                         accessPatternInfo.allAccessesHaveIndices;
+    ctx.canChunked = !isRankZero && accessPatternInfo.hasChunkDeps &&
+                     accessPatternInfo.chunkSizesAreConsistent &&
+                     accessPatternInfo.chunkDimCount > 0;
+    ctx.pinnedDimCount = accessPatternInfo.pinnedDimCount;
+    ctx.accessMode = info.accessMode;
+    ctx.isUniformAccess = accessPatternInfo.isConsistent;
+    ctx.depsPerEDT = computeMaxDepsPerEDT(info);
 
-      /// Record H1 decision for diagnostics
-      heuristics.recordDecision(
-          "H1", true,
-          "read-only access on single-node prefers coarse allocation", alloc);
+    /// Extract static chunk size for cost model if available
+    if (ctx.canChunked && !accessPatternInfo.chunkSizes.empty()) {
+      if (auto cst = accessPatternInfo.chunkSizes[0]
+                         .getDefiningOp<arith::ConstantIndexOp>())
+        ctx.chunkSize = cst.value();
     }
 
-    /// H2: Apply cost model on single-node
-    if (useFineGrainedAllocation && heuristics.isSingleNode() &&
-        !hasIndexedControlDeps) {
-      int64_t outerDBs =
-          computeOuterDBs(memRefType, accessPatternInfo.pinnedDimCount);
-      int64_t depsPerEDT = computeMaxDepsPerEDT(info);
-      int64_t innerBytes =
-          computeInnerBytes(memRefType, accessPatternInfo.pinnedDimCount);
-
-      if (!heuristics.shouldUseFineGrained(outerDBs, depsPerEDT, innerBytes)) {
-        useFineGrainedAllocation = false;
-
-        /// Record H2 decision for diagnostics
-        llvm::StringMap<int64_t> inputs = {
-            {"outerDBs", outerDBs},
-            {"depsPerEDT", depsPerEDT},
-            {"innerBytes", innerBytes},
-        };
-        heuristics.recordDecision(
-            "H2", false, "cost model determined coarse allocation is better",
-            alloc, inputs);
+    /// Compute total elements for cost model if statically known
+    int64_t totalElements = 1;
+    bool allStaticDims = true;
+    for (unsigned d = 0; d < memRefType.getRank(); ++d) {
+      if (memRefType.isDynamicDim(d)) {
+        allStaticDims = false;
+        break;
       }
+      totalElements *= memRefType.getDimSize(d);
     }
+    if (allStaticDims)
+      ctx.totalElements = totalElements;
 
-    /// Check for chunked allocation pattern
-    /// Chunked deps have: indices=[], offsets=[offset], sizes=[chunkSize]
-    bool useChunkedAllocation = !isRankZero && !useFineGrainedAllocation &&
-                                accessPatternInfo.hasChunkDeps &&
-                                accessPatternInfo.chunkSizesAreConsistent &&
-                                accessPatternInfo.chunkDimCount > 0;
+    /// Get partitioning decision from unified heuristics
+    /// The decision is FINAL - heuristics already respect capabilities
+    PartitioningDecision decision = heuristics.getPartitioningMode(ctx);
 
-    if (useFineGrainedAllocation) {
+    ARTS_DEBUG(" - Heuristic decision: " << decision.rationale);
+    ARTS_DEBUG("   mode=" << (decision.isChunked() ? "Chunked" : "ElementWise")
+                          << ", outerRank=" << decision.outerRank
+                          << ", innerRank=" << decision.innerRank);
+
+    /// Build sizes/elementSizes based on the decision
+    if (decision.isChunked()) {
       info.usedFineGrained = true;
-      const auto pinnedDimCount = accessPatternInfo.pinnedDimCount;
+      info.usedChunked = true;
+      info.chunkSizes.assign(accessPatternInfo.chunkSizes.begin(),
+                             accessPatternInfo.chunkSizes.end());
 
-      /// All indexed dimensions go into sizes (outer array
-      /// dimensions) Non-indexed dimensions go into elementSizes (inner
-      /// datablock dimensions)
-      ///
-      /// Example: memref<?x?x?xf64> with indices [i,j] (indexing dims 0,1)
-      ///   sizes=[N,M], elementSizes=[K] -> memref<?x?xmemref<?xf64>>
-      ///   Acquire: indices=[i,j] -> selects one memref<?xf64> datablock
-      ///
-      /// This allows fine-grained element-level distribution based on all
-      /// indexed dimensions, with db_acquire using indices to directly select
-      /// datablocks from the N-dimensional outer array.
+      /// Chunked allocation: divide first dimension into chunks
+      /// numChunks = ceildiv(dim0, chunkSize)
+      /// sizes = [numChunks], elementSizes = [chunkSize, remaining dims]
+      Value chunkSize = accessPatternInfo.chunkSizes[0];
+      Value dim0;
+      if (memRefType.isDynamicDim(0)) {
+        dim0 = AC->create<arts::DbDimOp>(loc, allocValue, (int64_t)0);
+      } else {
+        dim0 = AC->createIndexConstant(memRefType.getDimSize(0), loc);
+      }
+      Value numChunks = AC->create<arith::CeilDivUIOp>(loc, dim0, chunkSize);
+      sizes.push_back(numChunks);
+      elementSizes.push_back(chunkSize);
 
+      /// Remaining dimensions go to elementSizes
+      for (unsigned i = 1; i < rank; ++i) {
+        if (memRefType.isDynamicDim(i)) {
+          elementSizes.push_back(
+              AC->create<arts::DbDimOp>(loc, allocValue, (int64_t)i));
+        } else {
+          elementSizes.push_back(
+              AC->createIndexConstant(memRefType.getDimSize(i), loc));
+        }
+      }
+
+      ARTS_DEBUG(" - Using chunked allocation: numChunks computed at runtime, "
+                 << "elementSizes has " << elementSizes.size() << " dims");
+    } else if (decision.isFineGrained()) {
+      info.usedFineGrained = true;
+      const unsigned pinnedDimCount = decision.outerRank;
+
+      /// Fine-grained element-wise allocation:
+      /// All indexed dimensions go into sizes (outer array dimensions)
+      /// Non-indexed dimensions go into elementSizes (inner datablock dims)
       ARTS_DEBUG(" - Using fine-grained allocation with "
                  << pinnedDimCount << " pinned dimensions");
 
@@ -713,52 +724,10 @@ void CreateDbsPass::createDbAllocOps() {
 
       ARTS_DEBUG("   - Created fine-grained DB: Outer rank="
                  << sizes.size() << ", Inner rank=" << elementSizes.size());
-    } else if (useChunkedAllocation) {
-      info.usedFineGrained = true; /// Chunked is a form of fine-grained
-      info.usedChunked = true;
-      info.chunkSizes.assign(accessPatternInfo.chunkSizes.begin(),
-                             accessPatternInfo.chunkSizes.end());
-
-      /// Chunked allocation: divide first dimension into chunks
-      /// numChunks = ceildiv(dim0, chunkSize)
-      /// sizes = [numChunks], elementSizes = [chunkSize, remaining dims]
-      ///
-      /// Example: memref<?xf64> with chunkSize=4
-      ///   dim0=16 -> numChunks=4, sizes=[4], elementSizes=[4]
-      ///   Acquire: offsets=[i], sizes=[4] -> selects chunk containing i
-
-      Value chunkSize = accessPatternInfo.chunkSizes[0];
-      Value dim0;
-      if (memRefType.isDynamicDim(0)) {
-        dim0 = AC->create<arts::DbDimOp>(loc, allocValue, (int64_t)0);
-      } else {
-        dim0 = AC->createIndexConstant(memRefType.getDimSize(0), loc);
-      }
-
-      /// numChunks = ceildiv(dim0, chunkSize)
-      Value numChunks = AC->create<arith::CeilDivUIOp>(loc, dim0, chunkSize);
-      sizes.push_back(numChunks);
-
-      /// First element dimension is the chunk size
-      elementSizes.push_back(chunkSize);
-
-      /// Remaining dimensions go to elementSizes
-      for (unsigned i = 1; i < rank; ++i) {
-        if (memRefType.isDynamicDim(i)) {
-          elementSizes.push_back(
-              AC->create<arts::DbDimOp>(loc, allocValue, (int64_t)i));
-        } else {
-          elementSizes.push_back(
-              AC->createIndexConstant(memRefType.getDimSize(i), loc));
-        }
-      }
-
-      ARTS_DEBUG(" - Using chunked allocation: numChunks computed at runtime, "
-                 << "elementSizes has " << elementSizes.size() << " dims");
     } else {
       /// Coarse-grained: all dimensions go to elementSizes, single DB. For
       /// rank-0 memrefs, model them as a 1-D memref of size 1.
-      ARTS_DEBUG(" - Falling back to coarse-grained allocation");
+      ARTS_DEBUG(" - Using coarse-grained allocation");
       elementSizes.reserve(rank);
       for (unsigned i = 0; i < rank; ++i) {
         if (!isRankZero && memRefType.isDynamicDim(i)) {
@@ -780,6 +749,15 @@ void CreateDbsPass::createDbAllocOps() {
     auto dbAllocOp = AC->create<DbAllocOp>(loc, mode, route, allocType, dbMode,
                                            elementType, sizes, elementSizes);
 
+    /// Set partition attribute based on heuristic decision
+    PromotionMode promotionMode = decision.isChunked() ? PromotionMode::chunked
+                                  : decision.isFineGrained()
+                                      ? PromotionMode::element_wise
+                                      : PromotionMode::none;
+    setPartitionMode(dbAllocOp, promotionMode);
+    ARTS_DEBUG(
+        " - Set partition attribute: " << static_cast<int>(promotionMode));
+
     /// Transfer metadata from original allocation to DbAllocOp
     if (AM->getMetadataManager().transferMetadata(alloc, dbAllocOp)) {
       ARTS_DEBUG(
@@ -787,6 +765,23 @@ void CreateDbsPass::createDbAllocOps() {
     } else {
       ARTS_DEBUG("  No metadata found for original allocation");
     }
+
+    /// Create and store the rewrite plan directly from heuristic decision
+    DbRewritePlan plan(decision);
+    if (decision.isChunked())
+      plan.chunkSize = accessPatternInfo.chunkSizes[0];
+    info.rewritePlan = plan;
+
+    /// Record allocation strategy decision for diagnostics
+    std::string modeName =
+        plan.mode == RewriterMode::Chunked
+            ? "Chunked"
+            : (plan.outerRank > 0 ? "FineGrained" : "Coarse");
+    heuristics.recordDecision(
+        "AllocationStrategy", true, "Selected " + modeName + " allocation mode",
+        alloc,
+        {{"outerRank", static_cast<int64_t>(plan.outerRank)},
+         {"innerRank", static_cast<int64_t>(plan.innerRank)}});
 
     /// Store mappings for later use
     info.dbAllocOp = dbAllocOp;
@@ -801,64 +796,40 @@ void CreateDbsPass::createDbAllocOps() {
     /// the datablock contents as well.
     if (info.parentEdt) {
       rewriteUsesInParentEdt(info);
-    } else if (useChunkedAllocation) {
-      Value chunkSize = accessPatternInfo.chunkSizes[0];
+    } else {
+      /// Use stored plan for parent region rewrites
       Value startChunk = AC->createIndexConstant(0, loc);
       Value elemOffset = AC->createIndexConstant(0, loc);
-      unsigned outerRank = sizes.size();
-      unsigned innerRank = elementSizes.size();
-
-      DbChunkedRewriter rewriter(chunkSize, startChunk, elemOffset, outerRank,
-                                 innerRank);
-      rewriter.rewriteUsesInParentRegion(alloc, dbAllocOp, *AC, opsToRemove);
-
-    } else if (useFineGrainedAllocation) {
-      /// Element-wise mode: simple index splitting
-      Value elemOffset = AC->createIndexConstant(0, loc);
       Value elemSize = AC->createIndexConstant(1, loc);
-      unsigned outerRank = sizes.size();
-      unsigned innerRank = elementSizes.size();
 
-      DbElementWiseRewriter rewriter(elemOffset, elemSize, outerRank, innerRank,
-                                     {});
-      rewriter.rewriteUsesInParentRegion(alloc, dbAllocOp, *AC, opsToRemove);
+      if (plan.mode == RewriterMode::Chunked) {
+        DbChunkedRewriter rewriter(plan.chunkSize, startChunk, elemOffset,
+                                   plan.outerRank, plan.innerRank);
+        rewriter.rewriteUsesInParentRegion(alloc, dbAllocOp, *AC, opsToRemove);
+      } else {
+        DbElementWiseRewriter rewriter(elemOffset, elemSize, plan.outerRank,
+                                       plan.innerRank, {});
+        /// Step 1: Rewrite parent region uses (skips EDTs by design)
+        rewriter.rewriteUsesInParentRegion(alloc, dbAllocOp, *AC, opsToRemove);
 
-    } else {
-      /// Coarse-grained: use element-wise rewriter
-      Value elemOffset = AC->createIndexConstant(0, loc);
-      Value elemSize = AC->createIndexConstant(1, loc);
-      unsigned outerRank = 0; /// db_ref gets [0]
-      unsigned innerRank =
-          elementSizes.size(); /// all indices go to inner memref
-
-      DbElementWiseRewriter rewriter(elemOffset, elemSize, outerRank, innerRank,
-                                     {});
-
-      /// Step 1: Rewrite parent region uses (skips EDTs by design)
-      rewriter.rewriteUsesInParentRegion(alloc, dbAllocOp, *AC, opsToRemove);
-
-      /// Step 2: Rewrite EDT uses that DON'T have explicit dependencies
-      /// (EDTs with dependencies will be rewritten via DbAcquires later)
-      auto &info = memrefInfo[alloc];
-      Type elementMemRefType = dbAllocOp.getAllocatedElementType();
-
-      SmallVector<Operation *> edtUsesToRewrite;
-      for (auto &use : alloc->getUses()) {
-        Operation *user = use.getOwner();
-        if (user == dbAllocOp.getOperation())
-          continue;
-
-        if (auto parentEdt = user->getParentOfType<EdtOp>()) {
-          /// Only rewrite if this EDT has NO explicit dependency for this alloc
-          if (info.edtToDeps.count(parentEdt) == 0) {
-            edtUsesToRewrite.push_back(user);
+        /// Step 2: For coarse mode, also rewrite EDT uses without explicit deps
+        if (plan.outerRank == 0) {
+          Type elementMemRefType = dbAllocOp.getAllocatedElementType();
+          SmallVector<Operation *> edtUsesToRewrite;
+          for (auto &use : alloc->getUses()) {
+            Operation *user = use.getOwner();
+            if (user == dbAllocOp.getOperation())
+              continue;
+            if (auto parentEdt = user->getParentOfType<EdtOp>()) {
+              if (info.edtToDeps.count(parentEdt) == 0)
+                edtUsesToRewrite.push_back(user);
+            }
+          }
+          if (!edtUsesToRewrite.empty()) {
+            rewriter.rebaseOps(edtUsesToRewrite, dbAllocOp.getPtr(),
+                               elementMemRefType, *AC, opsToRemove);
           }
         }
-      }
-
-      if (!edtUsesToRewrite.empty()) {
-        rewriter.rebaseOps(edtUsesToRewrite, dbAllocOp.getPtr(),
-                           elementMemRefType, *AC, opsToRemove);
       }
     }
   }
@@ -982,24 +953,19 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
         SmallVector<Value> acquireOffsets(depOffsets.begin(), depOffsets.end());
         assert(sourceSizes.size() >= depIndices.size() &&
                "Sizes must be greater than or equal to indices");
-        uint64_t acquireRank = sourceSizes.size() - depIndices.size();
 
         /// CHUNKED MODE: Convert element offset to chunk index for DbAcquireOp
-        /// For chunked allocation:
-        ///   dep.offsets = element offset (0, 4, 8, 12)
-        ///   dep.sizes = chunk size (4)
-        /// DbAcquireOp needs: offsets = chunk index = elementOffset / chunkSize
-        /// BUT: EDT rewriting still needs original element offsets
-        bool isChunkedDep = depIndices.empty() && !depOffsets.empty() &&
-                            !dep.sizes.empty() && info.usedChunked;
+        /// Use stored plan instead of recomputing chunked detection
+        const auto &plan = info.rewritePlan.value();
+        bool isChunkedDep = plan.mode == RewriterMode::Chunked &&
+                            depIndices.empty() && !depOffsets.empty();
         SmallVector<Value> rewriteOffsets(depOffsets.begin(), depOffsets.end());
         if (isChunkedDep) {
-          Value chunkSize = dep.sizes[0];
           Value elemOffset = depOffsets[0];
           Location loc = edt.getLoc();
 
           Value chunkIndex =
-              AC->create<arith::DivUIOp>(loc, elemOffset, chunkSize);
+              AC->create<arith::DivUIOp>(loc, elemOffset, plan.chunkSize);
           acquireOffsets.clear();
           acquireOffsets.push_back(chunkIndex);
           ARTS_DEBUG(
@@ -1074,18 +1040,10 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
         dependencyOperands.push_back(acquirePtr);
 
         /// Rewrite uses in edt
-        /// Use rewriteOffsets (original element offsets) for EDT rewriting,
-        /// not acquireOffsets (chunk indices) which are only for DbAcquireOp
         SmallVector<Operation *> opsToRewrite(dep.operations.begin(),
                                               dep.operations.end());
-        unsigned outerRank = dbAllocOp.getSizes().size();
-        unsigned innerRank = 0;
-        if (auto memrefType =
-                dbAllocOp.getAllocatedElementType().dyn_cast<MemRefType>())
-          innerRank = memrefType.getRank();
         rewriteOpsToUseDbAcquire(edt, opsToRewrite, acquireOp, acquireIndices,
-                                 rewriteOffsets, dbAcquireArg, outerRank,
-                                 innerRank, info.usedChunked);
+                                 rewriteOffsets, dbAcquireArg, plan);
 
         /// Insert release for each acquire before EDT terminator
         OpBuilder::InsertionGuard IG(AC->getBuilder());
@@ -1212,15 +1170,9 @@ void CreateDbsPass::createDbAcquireOps(EdtOp edt,
       }
 
       if (!opsToRewrite.empty()) {
-        unsigned outerRank =
-            info.usedFineGrained ? dbAllocOp.getSizes().size() : 0;
-        unsigned innerRank = 0;
-        if (auto memrefType =
-                dbAllocOp.getAllocatedElementType().dyn_cast<MemRefType>())
-          innerRank = memrefType.getRank();
         rewriteOpsToUseDbAcquire(edt, opsToRewrite, acquireOp, acquireIndices,
-                                 acquireOffsets, dbAcquireArg, outerRank,
-                                 innerRank, info.usedChunked);
+                                 acquireOffsets, dbAcquireArg,
+                                 info.rewritePlan.value());
       }
 
       /// Insert release for this acquire before EDT terminator
@@ -1333,35 +1285,32 @@ void CreateDbsPass::rewriteUsesEverywhereCoarse(Operation *alloc,
 ///===----------------------------------------------------------------------===///
 /// Rewrite Operations to Use DbAcquire
 /// Rewrite loads/stores in an EDT to use acquired datablocks
-/// Finds all operations that use external values and match the acquire indices
+/// Uses the stored DbRewritePlan to avoid recomputing allocation decisions
 ///===----------------------------------------------------------------------===///
 void CreateDbsPass::rewriteOpsToUseDbAcquire(
     EdtOp edt, SmallVector<Operation *> &operations, Operation *dbOp,
     SmallVector<Value> &acquireIndices, SmallVector<Value> &acquireOffsets,
-    BlockArgument dbAcquireArg, unsigned outerRank, unsigned innerRank,
-    bool useChunkedRewriter) {
+    BlockArgument dbAcquireArg, const DbRewritePlan &plan) {
   ARTS_DEBUG(" - Rewriting " << operations.size() << " operations in EDT");
 
   /// Get the element type from the acquired datablock
   /// For fine-grained: memref<?xmemref<?xT>> -> extract memref<?xT>
-  /// The outer dimension is the datablock index, inner is the element memref
   Type elementMemRefType = dbAcquireArg.getType();
   if (auto outerMemrefType = elementMemRefType.dyn_cast<MemRefType>()) {
     if (auto innerMemrefType =
             outerMemrefType.getElementType().dyn_cast<MemRefType>()) {
-      /// Fine-grained: outer type is memref<?xmemref<?xT>>
-      /// Extract the element memref type: memref<?xT>
       elementMemRefType = innerMemrefType;
     }
   }
   ARTS_DEBUG(" - Element memref type: " << elementMemRefType);
 
+  /// Use stored ranks from plan, with fallback for innerRank
+  unsigned innerRank = plan.innerRank;
   if (innerRank == 0)
     if (auto memrefType = elementMemRefType.dyn_cast<MemRefType>())
       innerRank = memrefType.getRank();
 
   /// Build value mapping from parent EDT block args/acquires to this EDT's args
-  /// This ensures operations inside this EDT use the correct scoped values
   IRMapping scopeMapping;
   Block &edtBlock = edt.getBody().front();
   auto deps = edt.getDependenciesAsVector();
@@ -1369,18 +1318,12 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
   for (auto [idx, blockArg] : llvm::enumerate(edtBlock.getArguments())) {
     if (idx < deps.size()) {
       Value externalDep = deps[idx];
-
-      /// Map parent block args -> this EDT's block args
       if (auto parentArg = externalDep.dyn_cast<BlockArgument>()) {
         scopeMapping.map(parentArg, blockArg);
-        ARTS_DEBUG("   - Mapping parent block arg to local: "
-                   << parentArg << " -> " << blockArg);
+        ARTS_DEBUG("   - Mapping parent block arg to local");
       }
-
-      /// Map acquire ptr results -> this EDT's block args
       if (auto acquireOp = externalDep.getDefiningOp<DbAcquireOp>()) {
         scopeMapping.map(acquireOp.getPtr(), blockArg);
-        /// Also map the source ptr of the acquire for chained acquires
         if (Value srcPtr = acquireOp.getSourcePtr())
           scopeMapping.map(srcPtr, blockArg);
         ARTS_DEBUG("   - Mapping acquire result to local block arg");
@@ -1393,6 +1336,7 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
     ARTS_DEBUG(" - Rewriting operation: " << *op);
     OpBuilder::InsertionGuard ig(AC->getBuilder());
     AC->setInsertionPoint(op);
+
     /// Apply scope mapping to operands before rewriting
     for (OpOperand &operand : op->getOpOperands()) {
       Value mappedVal = scopeMapping.lookupOrDefault(operand.get());
@@ -1402,72 +1346,39 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
       }
     }
 
-    if (useChunkedRewriter) {
-      /// Chunked mode: Use DbChunkedRewriter to apply div/mod index
-      /// localization.
-      ARTS_DEBUG(" - Attempting chunked rewriting with offsets: " << *op);
+    if (plan.mode == RewriterMode::Chunked) {
+      /// Chunked mode: Use DbChunkedRewriter with stored chunk size
+      ARTS_DEBUG(" - Using DbChunkedRewriter with stored plan");
+      Location loc = op->getLoc();
+      Value startOffset = acquireOffsets.empty()
+                              ? AC->createIndexConstant(0, loc)
+                              : acquireOffsets[0];
 
-      /// We must have the chunk size from DbAllocOp.elementSizes.
-      Value chunkSize;
-      if (auto acquireOp = dyn_cast<DbAcquireOp>(dbOp)) {
-        if (Value sourcePtr = acquireOp.getSourcePtr()) {
-          if (auto *dbAllocOp =
-                  DatablockUtils::getUnderlyingDbAlloc(sourcePtr)) {
-            if (auto dbAlloc = dyn_cast<DbAllocOp>(dbAllocOp)) {
-              auto elemSizes = dbAlloc.getElementSizes();
-              if (!elemSizes.empty())
-                chunkSize = elemSizes[0];
-            }
-          }
-        }
-      }
+      /// Compute startChunk using stored chunkSize from plan
+      Value startChunk =
+          AC->create<arith::DivUIOp>(loc, startOffset, plan.chunkSize);
+      Value elemOffset = AC->createIndexConstant(0, loc);
 
-      /// If we have a chunk size, proceed with chunked rewriting
-      if (chunkSize) {
-        auto acquireOp = cast<DbAcquireOp>(dbOp);
-        Location loc = op->getLoc();
-        Value startOffset = acquireOffsets.empty()
-                                ? AC->createIndexConstant(0, loc)
-                                : acquireOffsets[0];
-
-        /// Compute startChunk = startOffset / chunkSize
-        Value startChunk =
-            AC->create<arith::DivUIOp>(loc, startOffset, chunkSize);
-
-        /// Element offset within chunk is 0 for chunk-aligned access
-        Value elemOffset = AC->createIndexConstant(0, loc);
-
-        unsigned chunkOuterRank = outerRank;
-        if (chunkOuterRank == 0)
+      unsigned chunkOuterRank = plan.outerRank;
+      if (chunkOuterRank == 0)
+        if (auto acquireOp = dyn_cast<DbAcquireOp>(dbOp))
           chunkOuterRank = acquireOp.getSizes().size();
 
-        /// Create rewriter and apply chunked localization
-        ARTS_DEBUG(" - Using DbChunkedRewriter with dynamic chunk size");
-        DbChunkedRewriter rewriter(chunkSize, startChunk, elemOffset,
-                                   chunkOuterRank, innerRank);
-        llvm::SetVector<Operation *> localOpsToRemove;
-        rewriter.rebaseOps({op}, dbAcquireArg, elementMemRefType, *AC,
-                           localOpsToRemove);
-        for (Operation *toRemove : localOpsToRemove)
-          opsToRemove.insert(toRemove);
-      } else {
-        /// Cannot determine chunk size - fall back to layout-based rewriting
-        ARTS_WARN(" - Could not determine chunk size from DbAllocOp, "
-                  "falling back to layout-based rewriting");
-        Value elemOffset = AC->createIndexConstant(0, op->getLoc());
-        Value elemSize = AC->createIndexConstant(1, op->getLoc());
-        DbElementWiseRewriter rewriter(elemOffset, elemSize, outerRank,
-                                       innerRank, {});
-        rewriter.rewriteAccessWithDbPattern(op, dbAcquireArg, elementMemRefType,
-                                            *AC, opsToRemove);
-      }
+      DbChunkedRewriter rewriter(plan.chunkSize, startChunk, elemOffset,
+                                 chunkOuterRank, innerRank);
+      llvm::SetVector<Operation *> localOpsToRemove;
+      rewriter.rebaseOps({op}, dbAcquireArg, elementMemRefType, *AC,
+                         localOpsToRemove);
+      for (Operation *toRemove : localOpsToRemove)
+        opsToRemove.insert(toRemove);
       continue;
     }
 
+    /// ElementWise mode
     Value elemOffset = AC->createIndexConstant(0, op->getLoc());
     Value elemSize = AC->createIndexConstant(1, op->getLoc());
-    DbElementWiseRewriter rewriter(elemOffset, elemSize, outerRank, innerRank,
-                                   {});
+    DbElementWiseRewriter rewriter(elemOffset, elemSize, plan.outerRank,
+                                   innerRank, {});
 
     if (auto load = dyn_cast<memref::LoadOp>(op)) {
       auto localized = rewriter.localizeForFineGrained(

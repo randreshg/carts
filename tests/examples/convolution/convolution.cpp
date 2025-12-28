@@ -114,20 +114,21 @@ int main(int argc, char **argv) {
 #pragma omp task firstprivate(start_row, task_id)
         {
           printf("Task %d running\n", task_id + 1);
-          for (int i = start_row;
-               (i < start_row + block_size) && (i < output_size); ++i) {
-            for (int j = 0; j < output_size; ++j) {
-              double tmp = 0.0;
-              for (int k = 0; k < kernel_size; ++k) {
-                for (int l = 0; l < kernel_size; ++l) {
-                  const int A_row = i + k;
-                  const int A_col = j + l;
-                  if (A_row < A_size && A_col < A_size) {
-                    tmp += A[A_row][A_col] * Kernel[k][l];
+          for (int ii = 0; ii < block_size; ++ii) {
+            const int i = start_row + ii;
+            if (i < output_size) {
+              for (int j = 0; j < output_size; ++j) {
+                double tmp = 0.0;
+                for (int k = 0; k < kernel_size; ++k) {
+                  for (int l = 0; l < kernel_size; ++l) {
+                    const int A_row = i + k;
+                    const int A_col = j + l;
+                    if (A_row < A_size && A_col < A_size)
+                      tmp += A[A_row][A_col] * Kernel[k][l];
                   }
                 }
+                C_parallel[i][j] = tmp;
               }
-              C_parallel[i][j] = tmp;
             }
           }
         }
@@ -145,9 +146,8 @@ int main(int argc, char **argv) {
         for (int l = 0; l < kernel_size; ++l) {
           const int A_row = i + k;
           const int A_col = j + l;
-          if (A_row < A_size && A_col < A_size) {
+          if (A_row < A_size && A_col < A_size)
             tmp += A[A_row][A_col] * Kernel[k][l];
-          }
         }
       }
       C_serial[i][j] = tmp;

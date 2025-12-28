@@ -1,11 +1,13 @@
 #ifndef CARTS_UTILS_OPERATIONATTRIBUTES_H
 #define CARTS_UTILS_OPERATIONATTRIBUTES_H
 
+#include "arts/ArtsDialect.h"
 #include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
 #include "llvm/ADT/StringRef.h"
 #include <cstdint>
+#include <optional>
 
 namespace mlir {
 namespace arts {
@@ -21,6 +23,7 @@ constexpr StringLiteral ArtsCreateId = "arts.create_id";
 constexpr StringLiteral ArtsTwinDiff = "arts.twin_diff";
 constexpr StringLiteral OutlinedFunc = "outlined_func";
 constexpr StringLiteral Nowait = "nowait";
+constexpr StringLiteral Partition = "arts.partition";
 } // namespace Operation
 
 } // namespace AttrNames
@@ -40,6 +43,23 @@ inline void setArtsId(Operation *op, int64_t id) {
   auto *ctx = op->getContext();
   auto type = IntegerType::get(ctx, 64);
   op->setAttr(AttrNames::Operation::ArtsId, IntegerAttr::get(type, id));
+}
+
+/// Helper accessors for arts.partition attribute (PromotionMode).
+inline std::optional<PromotionMode> getPartitionMode(Operation *op) {
+  if (!op)
+    return std::nullopt;
+  if (auto attr =
+          op->getAttrOfType<PromotionModeAttr>(AttrNames::Operation::Partition))
+    return attr.getValue();
+  return std::nullopt;
+}
+
+inline void setPartitionMode(Operation *op, PromotionMode mode) {
+  if (!op)
+    return;
+  op->setAttr(AttrNames::Operation::Partition,
+              PromotionModeAttr::get(op->getContext(), mode));
 }
 
 } // namespace arts

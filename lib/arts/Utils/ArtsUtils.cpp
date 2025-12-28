@@ -227,8 +227,8 @@ void replaceInRegion(Region &region, DenseMap<Value, Value> &rewireMap,
 /// Extract chunk size from ForLowering's size hint.
 /// Patterns handled:
 ///   Case 1: Direct constant %c1048576 -> returns 1048576
-///   Case 2: minui(%remaining, %c1048576) -> returns larger constant
-///   Case 3: Nested minui -> recursively finds largest constant
+///   Case 2: minui/minsi(%remaining, %c1048576) -> returns larger constant
+///   Case 3: Nested minui/minsi -> recursively finds largest constant
 ///   Case 4: addi(%baseSize, %halo) -> recurse on non-constant operand
 ///           (for stencil patterns where chunkSize = baseChunk + haloAdjust)
 std::optional<int64_t> extractChunkSizeFromHint(Value sizeHint, int depth) {
@@ -240,7 +240,7 @@ std::optional<int64_t> extractChunkSizeFromHint(Value sizeHint, int depth) {
   if (ValueUtils::getConstantIndex(sizeHint, val))
     return val;
 
-  /// Case 2/3: minui pattern - return the larger constant (nominal size)
+  /// Case 2/3: minui/minsi pattern - return the larger constant (nominal size)
   if (auto minOp = sizeHint.getDefiningOp<arith::MinUIOp>()) {
     int64_t lhsVal = 0, rhsVal = 0;
     bool hasLhs = ValueUtils::getConstantIndex(minOp.getLhs(), lhsVal);
@@ -254,6 +254,28 @@ std::optional<int64_t> extractChunkSizeFromHint(Value sizeHint, int depth) {
       return rhsVal;
 
     /// Recurse for nested minui
+    auto lhsExtracted = extractChunkSizeFromHint(minOp.getLhs(), depth + 1);
+    auto rhsExtracted = extractChunkSizeFromHint(minOp.getRhs(), depth + 1);
+    if (lhsExtracted && rhsExtracted)
+      return std::max(*lhsExtracted, *rhsExtracted);
+    if (lhsExtracted)
+      return lhsExtracted;
+    if (rhsExtracted)
+      return rhsExtracted;
+  }
+  if (auto minOp = sizeHint.getDefiningOp<arith::MinSIOp>()) {
+    int64_t lhsVal = 0, rhsVal = 0;
+    bool hasLhs = ValueUtils::getConstantIndex(minOp.getLhs(), lhsVal);
+    bool hasRhs = ValueUtils::getConstantIndex(minOp.getRhs(), rhsVal);
+
+    if (hasLhs && hasRhs)
+      return std::max(lhsVal, rhsVal);
+    if (hasLhs)
+      return lhsVal;
+    if (hasRhs)
+      return rhsVal;
+
+    /// Recurse for nested minsi
     auto lhsExtracted = extractChunkSizeFromHint(minOp.getLhs(), depth + 1);
     auto rhsExtracted = extractChunkSizeFromHint(minOp.getRhs(), depth + 1);
     if (lhsExtracted && rhsExtracted)
@@ -314,7 +336,7 @@ std::optional<int64_t> extractChunkSizeForAllocation(Value sizeHint,
   if (ValueUtils::getConstantIndex(sizeHint, val))
     return val;
 
-  /// Case 2: minui pattern - return the larger constant (nominal size)
+  /// Case 2: minui/minsi pattern - return the larger constant (nominal size)
   if (auto minOp = sizeHint.getDefiningOp<arith::MinUIOp>()) {
     int64_t lhsVal = 0, rhsVal = 0;
     bool hasLhs = ValueUtils::getConstantIndex(minOp.getLhs(), lhsVal);
@@ -328,6 +350,30 @@ std::optional<int64_t> extractChunkSizeForAllocation(Value sizeHint,
       return rhsVal;
 
     /// Recurse for nested minui
+    auto lhsExtracted =
+        extractChunkSizeForAllocation(minOp.getLhs(), depth + 1);
+    auto rhsExtracted =
+        extractChunkSizeForAllocation(minOp.getRhs(), depth + 1);
+    if (lhsExtracted && rhsExtracted)
+      return std::max(*lhsExtracted, *rhsExtracted);
+    if (lhsExtracted)
+      return lhsExtracted;
+    if (rhsExtracted)
+      return rhsExtracted;
+  }
+  if (auto minOp = sizeHint.getDefiningOp<arith::MinSIOp>()) {
+    int64_t lhsVal = 0, rhsVal = 0;
+    bool hasLhs = ValueUtils::getConstantIndex(minOp.getLhs(), lhsVal);
+    bool hasRhs = ValueUtils::getConstantIndex(minOp.getRhs(), rhsVal);
+
+    if (hasLhs && hasRhs)
+      return std::max(lhsVal, rhsVal);
+    if (hasLhs)
+      return lhsVal;
+    if (hasRhs)
+      return rhsVal;
+
+    /// Recurse for nested minsi
     auto lhsExtracted =
         extractChunkSizeForAllocation(minOp.getLhs(), depth + 1);
     auto rhsExtracted =

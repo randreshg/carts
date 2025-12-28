@@ -18,7 +18,9 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Dominance.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -215,6 +217,201 @@ struct AccessBoundsInfo {
   bool isStencil = false; /// True if min != max (multiple offsets detected)
   bool valid = false;     /// True if analysis succeeded
 };
+
+static Value traceValueToDominating(Value value, Operation *insertBefore,
+                                    OpBuilder &builder, DominanceInfo &domInfo,
+                                    Location loc, unsigned depth = 0) {
+  if (!value || depth > 16)
+    return nullptr;
+
+  if (domInfo.properlyDominates(value, insertBefore))
+    return value;
+
+  if (auto blockArg = value.dyn_cast<BlockArgument>())
+    return nullptr;
+
+  Operation *defOp = value.getDefiningOp();
+  if (!defOp)
+    return nullptr;
+
+  auto trace = [&](Value operand) -> Value {
+    return traceValueToDominating(operand, insertBefore, builder, domInfo, loc,
+                                  depth + 1);
+  };
+
+  builder.setInsertionPoint(insertBefore);
+
+  if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
+    Value lhs = trace(addOp.getLhs());
+    Value rhs = trace(addOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::AddIOp>(loc, lhs, rhs);
+  }
+
+  if (auto subOp = dyn_cast<arith::SubIOp>(defOp)) {
+    Value lhs = trace(subOp.getLhs());
+    Value rhs = trace(subOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::SubIOp>(loc, lhs, rhs);
+  }
+
+  if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
+    Value lhs = trace(mulOp.getLhs());
+    Value rhs = trace(mulOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::MulIOp>(loc, lhs, rhs);
+  }
+
+  if (auto divOp = dyn_cast<arith::DivSIOp>(defOp)) {
+    Value lhs = trace(divOp.getLhs());
+    Value rhs = trace(divOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::DivSIOp>(loc, lhs, rhs);
+  }
+
+  if (auto divOp = dyn_cast<arith::DivUIOp>(defOp)) {
+    Value lhs = trace(divOp.getLhs());
+    Value rhs = trace(divOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::DivUIOp>(loc, lhs, rhs);
+  }
+
+  if (auto divOp = dyn_cast<arith::CeilDivSIOp>(defOp)) {
+    Value lhs = trace(divOp.getLhs());
+    Value rhs = trace(divOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::CeilDivSIOp>(loc, lhs, rhs);
+  }
+
+  if (auto divOp = dyn_cast<arith::CeilDivUIOp>(defOp)) {
+    Value lhs = trace(divOp.getLhs());
+    Value rhs = trace(divOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::CeilDivUIOp>(loc, lhs, rhs);
+  }
+
+  if (auto maxOp = dyn_cast<arith::MaxSIOp>(defOp)) {
+    Value lhs = trace(maxOp.getLhs());
+    Value rhs = trace(maxOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::MaxSIOp>(loc, lhs, rhs);
+  }
+
+  if (auto minOp = dyn_cast<arith::MinSIOp>(defOp)) {
+    Value lhs = trace(minOp.getLhs());
+    Value rhs = trace(minOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::MinSIOp>(loc, lhs, rhs);
+  }
+
+  if (auto minOp = dyn_cast<arith::MinUIOp>(defOp)) {
+    Value lhs = trace(minOp.getLhs());
+    Value rhs = trace(minOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::MinUIOp>(loc, lhs, rhs);
+  }
+
+  if (auto maxOp = dyn_cast<arith::MaxUIOp>(defOp)) {
+    Value lhs = trace(maxOp.getLhs());
+    Value rhs = trace(maxOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::MaxUIOp>(loc, lhs, rhs);
+  }
+
+  if (auto remOp = dyn_cast<arith::RemSIOp>(defOp)) {
+    Value lhs = trace(remOp.getLhs());
+    Value rhs = trace(remOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::RemSIOp>(loc, lhs, rhs);
+  }
+
+  if (auto remOp = dyn_cast<arith::RemUIOp>(defOp)) {
+    Value lhs = trace(remOp.getLhs());
+    Value rhs = trace(remOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::RemUIOp>(loc, lhs, rhs);
+  }
+
+  if (auto cmpOp = dyn_cast<arith::CmpIOp>(defOp)) {
+    Value lhs = trace(cmpOp.getLhs());
+    Value rhs = trace(cmpOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::CmpIOp>(loc, cmpOp.getPredicate(), lhs, rhs);
+  }
+
+  if (auto andOp = dyn_cast<arith::AndIOp>(defOp)) {
+    Value lhs = trace(andOp.getLhs());
+    Value rhs = trace(andOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::AndIOp>(loc, lhs, rhs);
+  }
+
+  if (auto orOp = dyn_cast<arith::OrIOp>(defOp)) {
+    Value lhs = trace(orOp.getLhs());
+    Value rhs = trace(orOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::OrIOp>(loc, lhs, rhs);
+  }
+
+  if (auto xorOp = dyn_cast<arith::XOrIOp>(defOp)) {
+    Value lhs = trace(xorOp.getLhs());
+    Value rhs = trace(xorOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::XOrIOp>(loc, lhs, rhs);
+  }
+
+  if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
+    Value cond = trace(selectOp.getCondition());
+    Value trueVal = trace(selectOp.getTrueValue());
+    Value falseVal = trace(selectOp.getFalseValue());
+    if (cond && trueVal && falseVal)
+      return builder.create<arith::SelectOp>(loc, cond, trueVal, falseVal);
+  }
+
+  if (auto castOp = dyn_cast<arith::IndexCastOp>(defOp)) {
+    Value inner = trace(castOp.getIn());
+    if (!inner)
+      return nullptr;
+    if (inner.getType() == castOp.getType())
+      return inner;
+    return builder.create<arith::IndexCastOp>(loc, castOp.getType(), inner);
+  }
+
+  if (auto castOp = dyn_cast<arith::IndexCastUIOp>(defOp)) {
+    Value inner = trace(castOp.getIn());
+    if (!inner)
+      return nullptr;
+    if (inner.getType() == castOp.getType())
+      return inner;
+    return builder.create<arith::IndexCastUIOp>(loc, castOp.getType(), inner);
+  }
+
+  if (auto castOp = dyn_cast<arith::ExtSIOp>(defOp)) {
+    Value inner = trace(castOp.getIn());
+    if (inner)
+      return builder.create<arith::ExtSIOp>(loc, castOp.getType(), inner);
+  }
+
+  if (auto castOp = dyn_cast<arith::ExtUIOp>(defOp)) {
+    Value inner = trace(castOp.getIn());
+    if (inner)
+      return builder.create<arith::ExtUIOp>(loc, castOp.getType(), inner);
+  }
+
+  if (auto castOp = dyn_cast<arith::TruncIOp>(defOp)) {
+    Value inner = trace(castOp.getIn());
+    if (inner)
+      return builder.create<arith::TruncIOp>(loc, castOp.getType(), inner);
+  }
+
+  if (auto constOp = dyn_cast<arith::ConstantOp>(defOp))
+    return builder.create<arith::ConstantOp>(loc, constOp.getType(),
+                                             constOp.getValue());
+  if (auto constIdxOp = dyn_cast<arith::ConstantIndexOp>(defOp))
+    return builder.create<arith::ConstantIndexOp>(loc, constIdxOp.value());
+
+  return nullptr;
+}
 
 /// Extract the constant offset from an index expression.
 /// Tries to express idx as: chunkOffset + loopIV + constant
@@ -658,6 +855,7 @@ size_t DbAcquireNode::countStores() {
 bool DbAcquireNode::canPartitionWithOffset(Value offset) {
   if (!offset)
     return false;
+  Value offsetStripped = ValueUtils::stripNumericCasts(offset);
 
   DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
   collectAccessOperations(dbRefToMemOps);
@@ -697,7 +895,7 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
       if (!firstDynIdx)
         continue;
 
-      if (!ValueUtils::dependsOn(firstDynIdx, offset))
+      if (!LoopNode::dependsOnLoopInitNormalized(firstDynIdx, offsetStripped))
         return false;
     }
   }
@@ -707,35 +905,89 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
 
 LogicalResult DbAcquireNode::computeChunkInfo(Value &chunkOffset,
                                               Value &chunkSize) {
+  ARTS_DEBUG("computeChunkInfo for acquire: " << dbAcquireOp);
   if (computedChunkInfo) {
     chunkOffset = computedChunkInfo->first;
     chunkSize = computedChunkInfo->second;
+    ARTS_DEBUG("  using cached chunk info");
     return success();
   }
 
   EdtOp edt = getEdtUser();
-  if (!edt)
+  if (!edt) {
+    ARTS_DEBUG("  no EDT user found");
     return failure();
+  }
 
-  scf::ForOp chunkLoop;
+  SmallVector<scf::ForOp> forLoops;
   scf::WhileOp chunkWhile;
   edt.walk([&](scf::ForOp forOp) {
-    chunkLoop = forOp;
-    return WalkResult::interrupt();
+    forLoops.push_back(forOp);
+    return WalkResult::advance();
   });
   edt.walk([&](scf::WhileOp whileOp) {
     chunkWhile = whileOp;
     return WalkResult::interrupt();
   });
+  if (chunkWhile)
+    ARTS_DEBUG("  found scf.while at " << chunkWhile.getLoc());
+  if (!forLoops.empty())
+    ARTS_DEBUG("  found " << forLoops.size() << " scf.for loops in EDT");
 
   if (partitionOffset && partitionSize) {
+    ARTS_DEBUG("  using offset/size hints: " << partitionOffset << " / "
+                                             << partitionSize);
     if (!originalBounds_)
       originalBounds_ = std::make_pair(partitionOffset, partitionSize);
     if (!canPartitionWithOffset(partitionOffset))
       return failure();
 
-    if (chunkLoop) {
-      Value loopIV = chunkLoop.getInductionVar();
+    Value firstDynIdx;
+    DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
+    collectAccessOperations(dbRefToMemOps);
+    for (auto &[dbRef, memOps] : dbRefToMemOps) {
+      ValueRange dbRefIndices = dbRef.getIndices();
+      for (Operation *memOp : memOps) {
+        ValueRange memIndices;
+        if (auto load = dyn_cast<memref::LoadOp>(memOp))
+          memIndices = load.getIndices();
+        else if (auto store = dyn_cast<memref::StoreOp>(memOp))
+          memIndices = store.getIndices();
+        else
+          continue;
+
+        SmallVector<Value> fullChain;
+        fullChain.append(dbRefIndices.begin(), dbRefIndices.end());
+        fullChain.append(memIndices.begin(), memIndices.end());
+
+        for (Value idx : fullChain) {
+          int64_t constVal;
+          if (!ValueUtils::getConstantIndex(idx, constVal)) {
+            firstDynIdx = idx;
+            break;
+          }
+        }
+        if (firstDynIdx)
+          break;
+      }
+      if (firstDynIdx)
+        break;
+    }
+
+    scf::ForOp boundsLoop;
+    if (firstDynIdx) {
+      for (scf::ForOp loop : forLoops) {
+        Value loopIV = loop.getInductionVar();
+        if (ValueUtils::dependsOn(firstDynIdx, loopIV) &&
+            ValueUtils::dependsOn(firstDynIdx, partitionOffset)) {
+          boundsLoop = loop;
+          break;
+        }
+      }
+    }
+
+    if (boundsLoop) {
+      Value loopIV = boundsLoop.getInductionVar();
       AccessBoundsInfo bounds =
           analyzeAccessBounds(this, partitionOffset, loopIV);
 
@@ -783,88 +1035,273 @@ LogicalResult DbAcquireNode::computeChunkInfo(Value &chunkOffset,
   }
 
   if (chunkWhile) {
-    if (succeeded(
-            computeChunkInfoFromWhile(chunkWhile, chunkOffset, chunkSize)))
+    Value offsetForCheck;
+    if (succeeded(computeChunkInfoFromWhile(chunkWhile, chunkOffset, chunkSize,
+                                            &offsetForCheck))) {
+      Value checkOffset = offsetForCheck ? offsetForCheck : chunkOffset;
+      if (!canPartitionWithOffset(checkOffset))
+        return failure();
       return success();
+    }
+    ARTS_DEBUG("  computeChunkInfoFromWhile failed");
+    return failure();
   }
 
-  if (!chunkLoop)
-    return failure();
-
-  chunkSize = chunkLoop.getUpperBound();
-
   Value ptrArg = getUseInEdt();
-  if (!ptrArg)
+  if (!ptrArg) {
+    ARTS_DEBUG("  no EDT block argument for acquire");
     return failure();
+  }
 
-  Value offsetCandidate;
-  for (Operation *user : ptrArg.getUsers()) {
-    auto refOp = dyn_cast<DbRefOp>(user);
-    if (!refOp || !chunkLoop->isAncestor(refOp))
-      continue;
+  if (forLoops.empty()) {
+    ARTS_DEBUG("  no scf.for found in EDT");
+    return failure();
+  }
 
-    Value refVal = refOp.getResult();
-    for (Operation *memUser : refVal.getUsers()) {
-      auto storeOp = dyn_cast<memref::StoreOp>(memUser);
-      if (!storeOp || !chunkLoop->isAncestor(storeOp))
+  auto loopDepth = [](scf::ForOp loop) -> int {
+    int depth = 0;
+    for (Operation *parent = loop->getParentOp(); parent;
+         parent = parent->getParentOp()) {
+      if (isa<scf::ForOp>(parent))
+        ++depth;
+    }
+    return depth;
+  };
+
+  llvm::sort(forLoops, [&](scf::ForOp a, scf::ForOp b) {
+    return loopDepth(a) < loopDepth(b);
+  });
+
+  OpBuilder builder(dbAcquireOp);
+  Location loc = dbAcquireOp.getLoc();
+  builder.setInsertionPoint(dbAcquireOp);
+
+  LoopAnalysis &loopAnalysis = analysis->getAnalysisManager().getLoopAnalysis();
+
+  Value offsetForCheck;
+  auto tryComputeFromFor = [&](scf::ForOp loop) -> LogicalResult {
+    Value offsetCandidate;
+    LoopNode *loopNode = loopAnalysis.getOrCreateLoopNode(loop);
+    if (!loopNode)
+      return failure();
+    Value loopIV = loopNode->getInductionVar();
+    auto dependsOnIV = [&](Value v) -> bool {
+      return loopNode->dependsOnInductionVarNormalized(v);
+    };
+    auto isInvariant = [&](Value v) -> bool {
+      return loopNode->isValueLoopInvariant(v);
+    };
+    auto pickCandidateFromIndex = [&](Value idx) -> Value {
+      Value stripped = ValueUtils::stripNumericCasts(idx);
+      if (stripped == loopIV)
+        return builder.create<arith::ConstantIndexOp>(loc, 0);
+
+      if (auto addOp = stripped.getDefiningOp<arith::AddIOp>()) {
+        Value lhs = addOp.getLhs();
+        Value rhs = addOp.getRhs();
+        bool lhsIV = dependsOnIV(lhs);
+        bool rhsIV = dependsOnIV(rhs);
+        if (lhsIV && !rhsIV && isInvariant(rhs))
+          return rhs;
+        if (rhsIV && !lhsIV && isInvariant(lhs))
+          return lhs;
+      }
+      return Value();
+    };
+    for (Operation *user : ptrArg.getUsers()) {
+      auto refOp = dyn_cast<DbRefOp>(user);
+      if (!refOp || !loop->isAncestor(refOp))
         continue;
 
-      if (storeOp.getIndices().empty())
-        continue;
-      Value idx = storeOp.getIndices().front();
-      auto addOp = idx.getDefiningOp<arith::AddIOp>();
-      if (!addOp)
-        continue;
+      Value refVal = refOp.getResult();
+      for (Operation *memUser : refVal.getUsers()) {
+        ValueRange memIndices;
+        if (auto loadOp = dyn_cast<memref::LoadOp>(memUser))
+          memIndices = loadOp.getIndices();
+        else if (auto storeOp = dyn_cast<memref::StoreOp>(memUser))
+          memIndices = storeOp.getIndices();
+        else
+          continue;
 
-      Value iv = chunkLoop.getInductionVar();
-      if (addOp.getOperand(0) == iv)
-        offsetCandidate = addOp.getOperand(1);
-      else if (addOp.getOperand(1) == iv)
-        offsetCandidate = addOp.getOperand(0);
+        if (!loop->isAncestor(memUser))
+          continue;
 
+        if (memIndices.empty())
+          continue;
+        Value idx = memIndices.front();
+        offsetCandidate = pickCandidateFromIndex(idx);
+
+        if (offsetCandidate)
+          break;
+      }
       if (offsetCandidate)
         break;
     }
-    if (offsetCandidate)
-      break;
+
+    if (!offsetCandidate) {
+      ARTS_DEBUG("  no offset candidate found in loop at " << loop.getLoc());
+      return failure();
+    }
+
+    AccessBoundsInfo bounds =
+        analyzeAccessBounds(this, offsetCandidate, loopIV);
+    if (!bounds.valid) {
+      ARTS_DEBUG("  bounds analysis failed for loop at " << loop.getLoc());
+      return failure();
+    }
+
+    if (!stencilBounds_) {
+      StencilBounds sb;
+      sb.minOffset = bounds.minOffset;
+      sb.maxOffset = bounds.maxOffset;
+      sb.isStencil = bounds.isStencil;
+      sb.valid = bounds.valid;
+      stencilBounds_ = sb;
+    }
+
+    func::FuncOp func = dbAcquireOp->getParentOfType<func::FuncOp>();
+    if (!func)
+      return failure();
+    DominanceInfo domInfo(func);
+
+    Value offsetDom = traceValueToDominating(offsetCandidate, dbAcquireOp,
+                                             builder, domInfo, loc);
+    Value sizeDom = traceValueToDominating(loop.getUpperBound(), dbAcquireOp,
+                                           builder, domInfo, loc);
+    if (!offsetDom || !sizeDom) {
+      ARTS_DEBUG("  offset/size does not dominate for loop at "
+                 << loop.getLoc());
+      return failure();
+    }
+
+    Value adjustedOffset = ValueUtils::ensureIndexType(offsetDom, builder, loc);
+    Value adjustedSize = ValueUtils::ensureIndexType(sizeDom, builder, loc);
+    if (!adjustedOffset || !adjustedSize)
+      return failure();
+
+    if (bounds.minOffset < 0) {
+      Value absAdj =
+          builder.create<arith::ConstantIndexOp>(loc, -bounds.minOffset);
+      Value cond = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
+                                                 adjustedOffset, absAdj);
+      Value sub = builder.create<arith::SubIOp>(loc, adjustedOffset, absAdj);
+      Value zeroIdx = builder.create<arith::ConstantIndexOp>(loc, 0);
+      adjustedOffset = builder.create<arith::SelectOp>(loc, cond, sub, zeroIdx);
+    } else if (bounds.minOffset > 0) {
+      Value adj = builder.create<arith::ConstantIndexOp>(loc, bounds.minOffset);
+      adjustedOffset = builder.create<arith::AddIOp>(loc, adjustedOffset, adj);
+    }
+
+    int64_t sizeAdjustment = bounds.maxOffset - bounds.minOffset;
+    if (sizeAdjustment != 0) {
+      Value adjustment =
+          builder.create<arith::ConstantIndexOp>(loc, sizeAdjustment);
+      adjustedSize =
+          builder.create<arith::AddIOp>(loc, adjustedSize, adjustment);
+    }
+
+    chunkOffset = adjustedOffset;
+    chunkSize = adjustedSize;
+    offsetForCheck = offsetCandidate;
+    ARTS_DEBUG("  selected loop " << loop.getLoc() << " chunkOffset="
+                                  << chunkOffset << " chunkSize=" << chunkSize);
+    return success();
+  };
+
+  for (scf::ForOp loop : forLoops) {
+    if (succeeded(tryComputeFromFor(loop))) {
+      Value checkOffset = offsetForCheck ? offsetForCheck : chunkOffset;
+      if (!canPartitionWithOffset(checkOffset))
+        return failure();
+      return success();
+    }
   }
 
-  if (!offsetCandidate)
-    return failure();
-
-  chunkOffset = offsetCandidate;
-  return success();
+  ARTS_DEBUG("  no suitable scf.for loop found for chunk info");
+  return failure();
 }
 
 LogicalResult DbAcquireNode::computeChunkInfoFromWhile(scf::WhileOp whileOp,
                                                        Value &chunkOffset,
-                                                       Value &chunkSize) {
+                                                       Value &chunkSize,
+                                                       Value *offsetForCheck) {
   if (!whileOp || !dbAcquireOp)
     return failure();
-  if (whileOp.getInits().size() != 1)
-    return failure();
-
-  Value initValue = whileOp.getInits().front();
   Block &before = whileOp.getBefore().front();
   auto condition = dyn_cast<scf::ConditionOp>(before.getTerminator());
-  if (!condition || before.getNumArguments() != 1)
+  if (!condition)
     return failure();
 
-  SmallVector<Value> bounds;
-  arts::collectWhileBounds(condition.getCondition(), before.getArgument(0),
-                           bounds);
-  if (bounds.empty())
+  LoopAnalysis &loopAnalysis = analysis->getAnalysisManager().getLoopAnalysis();
+  LoopNode *loopNode = loopAnalysis.getOrCreateLoopNode(whileOp);
+  if (!loopNode)
+    return failure();
+
+  Value loopIV = loopNode->getInductionVar();
+  auto ivArg = loopIV.dyn_cast<BlockArgument>();
+  if (!ivArg)
+    return failure();
+  if (ivArg.getOwner() != &before)
+    return failure();
+
+  unsigned ivIndex = ivArg.getArgNumber();
+  if (ivIndex >= whileOp.getInits().size())
+    return failure();
+  Value initValue = whileOp.getInits()[ivIndex];
+  if (offsetForCheck)
+    *offsetForCheck = initValue;
+
+  SmallVector<Value> whileBounds;
+  arts::collectWhileBounds(condition.getCondition(), loopIV, whileBounds);
+  if (whileBounds.empty())
     return failure();
 
   OpBuilder builder(dbAcquireOp);
   Location loc = dbAcquireOp.getLoc();
-  Value startIdx = ValueUtils::ensureIndexType(initValue, builder, loc);
+  builder.setInsertionPoint(dbAcquireOp);
+  func::FuncOp func = dbAcquireOp->getParentOfType<func::FuncOp>();
+  if (!func)
+    return failure();
+  DominanceInfo domInfo(func);
+
+  Value initDom =
+      traceValueToDominating(initValue, dbAcquireOp, builder, domInfo, loc);
+  if (!initDom)
+    return failure();
+
+  Value startIdx = ValueUtils::ensureIndexType(initDom, builder, loc);
   if (!startIdx)
     return failure();
 
   SmallVector<Value> chunkSizes;
-  for (Value bound : bounds) {
-    Value boundIdx = ValueUtils::ensureIndexType(bound, builder, loc);
+  Value initStripped = ValueUtils::stripNumericCasts(initValue);
+  for (Value bound : whileBounds) {
+    Value boundStripped = ValueUtils::stripNumericCasts(bound);
+    if (auto addOp = boundStripped.getDefiningOp<arith::AddIOp>()) {
+      Value lhs = addOp.getLhs();
+      Value rhs = addOp.getRhs();
+      Value lhsStripped = ValueUtils::stripNumericCasts(lhs);
+      Value rhsStripped = ValueUtils::stripNumericCasts(rhs);
+      Value chunkCandidate;
+      if (lhsStripped == initStripped)
+        chunkCandidate = rhs;
+      else if (rhsStripped == initStripped)
+        chunkCandidate = lhs;
+
+      if (chunkCandidate) {
+        Value chunkDom = traceValueToDominating(chunkCandidate, dbAcquireOp,
+                                                builder, domInfo, loc);
+        Value chunkIdx = ValueUtils::ensureIndexType(chunkDom, builder, loc);
+        if (chunkIdx) {
+          chunkSizes.push_back(chunkIdx);
+          continue;
+        }
+      }
+    }
+
+    Value boundDom =
+        traceValueToDominating(bound, dbAcquireOp, builder, domInfo, loc);
+    Value boundIdx = ValueUtils::ensureIndexType(boundDom, builder, loc);
     if (!boundIdx)
       continue;
     chunkSizes.push_back(
@@ -881,8 +1318,44 @@ LogicalResult DbAcquireNode::computeChunkInfoFromWhile(scf::WhileOp whileOp,
   Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
   minSize = builder.create<arith::MaxSIOp>(loc, minSize, zero);
 
-  chunkOffset = startIdx;
-  chunkSize = minSize;
+  AccessBoundsInfo bounds = analyzeAccessBounds(this, initValue, loopIV);
+  if (!bounds.valid)
+    return failure();
+
+  if (!stencilBounds_) {
+    StencilBounds sb;
+    sb.minOffset = bounds.minOffset;
+    sb.maxOffset = bounds.maxOffset;
+    sb.isStencil = bounds.isStencil;
+    sb.valid = bounds.valid;
+    stencilBounds_ = sb;
+  }
+
+  Value adjustedOffset = startIdx;
+  Value adjustedSize = minSize;
+
+  if (bounds.minOffset < 0) {
+    Value absAdj =
+        builder.create<arith::ConstantIndexOp>(loc, -bounds.minOffset);
+    Value cond = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::uge,
+                                               startIdx, absAdj);
+    Value sub = builder.create<arith::SubIOp>(loc, startIdx, absAdj);
+    Value zeroIdx = builder.create<arith::ConstantIndexOp>(loc, 0);
+    adjustedOffset = builder.create<arith::SelectOp>(loc, cond, sub, zeroIdx);
+  } else if (bounds.minOffset > 0) {
+    Value adj = builder.create<arith::ConstantIndexOp>(loc, bounds.minOffset);
+    adjustedOffset = builder.create<arith::AddIOp>(loc, startIdx, adj);
+  }
+
+  int64_t sizeAdjustment = bounds.maxOffset - bounds.minOffset;
+  if (sizeAdjustment != 0) {
+    Value adjustment =
+        builder.create<arith::ConstantIndexOp>(loc, sizeAdjustment);
+    adjustedSize = builder.create<arith::AddIOp>(loc, minSize, adjustment);
+  }
+
+  chunkOffset = adjustedOffset;
+  chunkSize = adjustedSize;
   return success();
 }
 

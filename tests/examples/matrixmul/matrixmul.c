@@ -9,17 +9,20 @@
 
 int main(int argc, char *argv[]) {
   CARTS_TIMER_START();
-  /// Check for the correct number of arguments
-  if (argc != 3) {
-    /// E.g. ./matrixmul 8 2
-    printf("Usage: %s <matrix_size> <block_size>\n", argv[0]);
+  if (argc < 3) {
+    printf("Usage: %s <N> <BS>\n", argv[0]);
+    printf("  N:  Matrix size (positive integer)\n");
+    printf("  BS: Block size (positive integer, must divide N)\n");
     return EXIT_FAILURE;
   }
-
   const int N = atoi(argv[1]);
   const int BS = atoi(argv[2]);
   if (N <= 0 || BS <= 0) {
     printf("Matrix size and block size must be positive integers.\n");
+    return EXIT_FAILURE;
+  }
+  if (N % BS != 0) {
+    printf("Block size (BS=%d) must evenly divide matrix size (N=%d).\n", BS, N);
     return EXIT_FAILURE;
   }
 

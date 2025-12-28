@@ -9,12 +9,7 @@
 // 1D stencil computation: output[i] = input[i-1] + input[i] + input[i+1]
 int main(int argc, char *argv[]) {
   CARTS_TIMER_START();
-  if (argc < 2) {
-    printf("Usage: %s N\n", argv[0]);
-    return 1;
-  }
-
-  int N = atoi(argv[1]);
+  int N = (argc >= 2) ? atoi(argv[1]) : 100;
   if (N < 3) {
     printf("N must be at least 3\n");
     return 1;
