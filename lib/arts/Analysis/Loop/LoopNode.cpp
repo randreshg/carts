@@ -11,10 +11,35 @@
 #include "arts/Utils/ArtsUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/TypeSwitch.h"
 
 using namespace mlir;
 using namespace mlir::arts;
+
+static Value getWhileInductionVar(scf::WhileOp whileOp) {
+  if (!whileOp)
+    return Value();
+
+  Block &before = whileOp.getBefore().front();
+  if (before.getNumArguments() == 0)
+    return Value();
+
+  auto condition = dyn_cast<scf::ConditionOp>(before.getTerminator());
+  if (!condition)
+    return before.getArgument(0);
+
+  Value cond = condition.getCondition();
+  for (BlockArgument arg : before.getArguments()) {
+    SmallVector<Value> bounds;
+    collectWhileBounds(cond, arg, bounds);
+    if (!bounds.empty())
+      return arg;
+  }
+
+  return before.getArgument(0);
+}
 
 LoopNode::LoopNode(Operation *loopOp, LoopAnalysis *loopAnalysis)
     : NodeBase(), LoopMetadata(loopOp), loopOp(loopOp) {
@@ -35,6 +60,8 @@ void LoopNode::print(llvm::raw_ostream &os) const {
     os << " scf.for";
   else if (isa<scf::ParallelOp>(loopOp))
     os << " scf.parallel";
+  else if (isa<scf::WhileOp>(loopOp))
+    os << " scf.while";
 
   if (tripCount.has_value())
     os << " trip=" << tripCount.value();
@@ -55,6 +82,7 @@ Value LoopNode::getInductionVar() const {
         return op.getInductionVars().empty() ? Value()
                                              : op.getInductionVars()[0];
       })
+      .Case<scf::WhileOp>([](auto op) { return getWhileInductionVar(op); })
       .Default([](Operation *) { return Value(); });
 }
 
@@ -90,6 +118,116 @@ bool LoopNode::dependsOnInductionVar(Value v) {
 
   ivDependencyCache[v] = depends;
   return depends;
+}
+
+bool LoopNode::dependsOnInductionVarNormalized(Value v) {
+  return dependsOnInductionVar(ValueUtils::stripNumericCasts(v));
+}
+
+static bool dependsOnLoopInitImpl(Value value, Value base, unsigned depth) {
+  if (!value || !base || depth > 8)
+    return false;
+  if (value == base)
+    return true;
+
+  if (auto blockArg = value.dyn_cast<BlockArgument>()) {
+    Operation *parentOp = blockArg.getOwner()->getParentOp();
+    if (auto forOp = dyn_cast_or_null<scf::ForOp>(parentOp)) {
+      if (blockArg == forOp.getInductionVar())
+        return dependsOnLoopInitImpl(forOp.getLowerBound(), base, depth + 1);
+    } else if (auto whileOp = dyn_cast_or_null<scf::WhileOp>(parentOp)) {
+      unsigned idx = blockArg.getArgNumber();
+      if (idx < whileOp.getInits().size())
+        return dependsOnLoopInitImpl(whileOp.getInits()[idx], base, depth + 1);
+    } else if (auto parallelOp = dyn_cast_or_null<scf::ParallelOp>(parentOp)) {
+      auto ivs = parallelOp.getInductionVars();
+      for (auto it : llvm::enumerate(ivs)) {
+        if (blockArg == it.value()) {
+          auto lbs = parallelOp.getLowerBound();
+          if (it.index() < lbs.size())
+            return dependsOnLoopInitImpl(lbs[it.index()], base, depth + 1);
+          break;
+        }
+      }
+    }
+    return false;
+  }
+
+  Operation *op = value.getDefiningOp();
+  if (!op)
+    return false;
+
+  if (!isa<arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::DivSIOp,
+           arith::DivUIOp, arith::RemSIOp, arith::RemUIOp, arith::IndexCastOp,
+           arith::IndexCastUIOp, arith::ExtSIOp, arith::ExtUIOp,
+           arith::TruncIOp>(op))
+    return false;
+
+  for (Value operand : op->getOperands())
+    if (dependsOnLoopInitImpl(operand, base, depth + 1))
+      return true;
+
+  return false;
+}
+
+bool LoopNode::dependsOnLoopInit(Value value, Value base) {
+  return dependsOnLoopInitImpl(value, base, 0);
+}
+
+bool LoopNode::dependsOnLoopInitNormalized(Value value, Value base) {
+  Value vStripped = ValueUtils::stripNumericCasts(value);
+  Value bStripped = ValueUtils::stripNumericCasts(base);
+  return dependsOnLoopInitImpl(vStripped, bStripped, 0);
+}
+
+bool LoopNode::isValueLoopInvariant(Value v) {
+  if (!loopOp)
+    return false;
+  v = ValueUtils::stripNumericCasts(v);
+
+  llvm::SmallPtrSet<Value, 16> visited;
+  std::function<bool(Value)> isInvariant = [&](Value val) -> bool {
+    if (!val)
+      return false;
+    if (!visited.insert(val).second)
+      return true;
+
+    if (ValueUtils::isValueConstant(val))
+      return true;
+
+    if (auto blockArg = val.dyn_cast<BlockArgument>()) {
+      Block *owner = blockArg.getOwner();
+      if (!owner)
+        return false;
+      Operation *parentOp = owner->getParentOp();
+      if (parentOp && (parentOp == loopOp || loopOp->isAncestor(parentOp)))
+        return false;
+      return true;
+    }
+
+    Operation *defOp = val.getDefiningOp();
+    if (!defOp)
+      return false;
+
+    if (!loopOp->isAncestor(defOp)) {
+      for (Value operand : defOp->getOperands())
+        if (!isInvariant(operand))
+          return false;
+      return true;
+    }
+
+    if (!isa<arith::AddIOp, arith::SubIOp, arith::MulIOp, arith::DivSIOp,
+             arith::DivUIOp, arith::IndexCastOp, arith::ExtSIOp, arith::ExtUIOp,
+             arith::TruncIOp>(defOp))
+      return false;
+
+    for (Value operand : defOp->getOperands())
+      if (!isInvariant(operand))
+        return false;
+    return true;
+  };
+
+  return isInvariant(v);
 }
 
 LoopNode::IVExpr LoopNode::analyzeIndexExpr(Value index) {
@@ -182,6 +320,16 @@ std::optional<int64_t> LoopNode::getLowerBoundConstant() const {
     if (auto constOp =
             forOp.getLowerBound().getDefiningOp<arith::ConstantIndexOp>())
       return constOp.value();
+  } else if (auto whileOp = dyn_cast<scf::WhileOp>(loopOp)) {
+    Value iv = getInductionVar();
+    auto arg = iv.dyn_cast<BlockArgument>();
+    if (!arg)
+      return std::nullopt;
+    unsigned argIndex = arg.getArgNumber();
+    if (argIndex >= whileOp.getInits().size())
+      return std::nullopt;
+    Value init = ValueUtils::stripNumericCasts(whileOp.getInits()[argIndex]);
+    return ValueUtils::getConstantValue(init);
   }
   return std::nullopt;
 }
@@ -191,6 +339,32 @@ std::optional<int64_t> LoopNode::getUpperBoundConstant() const {
     if (auto constOp =
             forOp.getUpperBound().getDefiningOp<arith::ConstantIndexOp>())
       return constOp.value();
+  } else if (auto whileOp = dyn_cast<scf::WhileOp>(loopOp)) {
+    Value iv = getInductionVar();
+    auto arg = iv.dyn_cast<BlockArgument>();
+    if (!arg)
+      return std::nullopt;
+
+    Block &before = whileOp.getBefore().front();
+    auto condition = dyn_cast<scf::ConditionOp>(before.getTerminator());
+    if (!condition)
+      return std::nullopt;
+
+    SmallVector<Value> bounds;
+    collectWhileBounds(condition.getCondition(), arg, bounds);
+    if (bounds.empty())
+      return std::nullopt;
+
+    std::optional<int64_t> minBound;
+    for (Value bound : bounds) {
+      Value stripped = ValueUtils::stripNumericCasts(bound);
+      auto cst = ValueUtils::getConstantValue(stripped);
+      if (!cst)
+        return std::nullopt;
+      if (!minBound || *cst < *minBound)
+        minBound = *cst;
+    }
+    return minBound;
   }
   return std::nullopt;
 }

@@ -28,6 +28,8 @@ void LoopAnalysis::run() {
   module.walk([&](Operation *op) {
     if (!isLoopOperation(op))
       return;
+    if (auto whileOp = dyn_cast<scf::WhileOp>(op))
+      ARTS_DEBUG("Discovered scf.while at " << whileOp.getLoc());
     loopNodes[op] = std::make_unique<LoopNode>(op, this);
   });
 
@@ -44,7 +46,8 @@ void LoopAnalysis::run() {
 ///===----------------------------------------------------------------------===///
 
 bool LoopAnalysis::isLoopOperation(Operation *op) const {
-  return isa<scf::ForOp, affine::AffineForOp, scf::ParallelOp>(op);
+  return isa<scf::ForOp, affine::AffineForOp, scf::ParallelOp, scf::WhileOp>(
+      op);
 }
 
 LoopNode *LoopAnalysis::getOrCreateLoopNode(Operation *loopOp) {

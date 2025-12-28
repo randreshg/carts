@@ -5,6 +5,7 @@
 ///==========================================================================///
 
 #include "arts/Transforms/Datablock/DbRewriter.h"
+#include "arts/Analysis/Heuristics/PartitioningHeuristics.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Transforms/Datablock/DbChunkedRewriter.h"
 #include "arts/Transforms/Datablock/DbElementWiseRewriter.h"
@@ -31,6 +32,16 @@ using namespace mlir::arts;
 
 namespace {} // namespace
 
+///===----------------------------------------------------------------------===///
+/// DbRewritePlan constructor from PartitioningDecision
+///===----------------------------------------------------------------------===///
+DbRewritePlan::DbRewritePlan(const PartitioningDecision &decision)
+    : mode(decision.mode), outerRank(decision.outerRank),
+      innerRank(decision.innerRank) {}
+
+///===----------------------------------------------------------------------===///
+/// DbRewriter implementation
+///===----------------------------------------------------------------------===///
 DbRewriter::DbRewriter(DbAllocOp oldAlloc, ValueRange newOuterSizes,
                        ValueRange newInnerSizes,
                        ArrayRef<DbRewriteAcquire> acquires,

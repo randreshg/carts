@@ -5,11 +5,7 @@
 
 int main(int argc, char *argv[]) {
   CARTS_TIMER_START();
-  if (argc < 2) {
-    printf("Usage: %s <matrix_size>\n", argv[0]);
-    return EXIT_FAILURE;
-  }
-  const int N = atoi(argv[1]);
+  const int N = (argc >= 2) ? atoi(argv[1]) : 64;
 
   /// Allocate matrices
   double **A = (double **)malloc(N * sizeof(double *));

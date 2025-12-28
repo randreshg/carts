@@ -9,12 +9,7 @@ static inline int clamp(int x, int lo, int hi) {
 
 int main(int argc, char **argv) {
   CARTS_TIMER_START();
-  if (argc < 2) {
-    printf("Usage: %s <size>\n", argv[0]);
-    return 1;
-  }
-
-  int N = atoi(argv[1]);
+  int N = (argc >= 2) ? atoi(argv[1]) : 100;
   if (N < 3) {
     printf("Size must be >= 3\n");
     return 1;

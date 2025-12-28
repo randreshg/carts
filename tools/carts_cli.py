@@ -1330,15 +1330,18 @@ def examples(
     ctx: typer.Context,
     help_flag: bool = typer.Option(
         False, "--help", "-h", is_eager=True, help="Show help"),
+    clean: bool = typer.Option(
+        False, "--clean", help="Clean all example artifacts"),
 ):
     """Run and manage CARTS examples.
 
-    Commands: list-examples, run, clean
+    Commands: list, run, clean
 
     Examples:
-      carts examples list-examples           # List all available examples
+      carts examples list                    # List all available examples
       carts examples run <name>              # Run a specific example
       carts examples run --all              # Run all examples
+      carts examples --clean                 # Clean all example artifacts
       carts examples clean [name]            # Clean example artifacts
       carts examples clean --all            # Clean all examples
     """
@@ -1351,11 +1354,17 @@ def examples(
 
     cmd = [sys.executable, str(examples_runner)]
 
+    # Handle --clean flag
+    if clean:
+        cmd.extend(["clean", "--all"])
+        result = run_subprocess(cmd, check=False)
+        raise typer.Exit(result.returncode)
+
     # Pass --help to the examples runner to show its commands
     if help_flag:
         cmd.append("--help")
 
-    # Pass through all extra args (e.g., run, list-examples, --verbose, etc.)
+    # Pass through all extra args (e.g., run, list, --verbose, etc.)
     if ctx.args:
         cmd.extend(ctx.args)
 

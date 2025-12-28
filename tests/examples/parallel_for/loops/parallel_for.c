@@ -9,12 +9,7 @@
 
 int main(int argc, char **argv) {
   CARTS_TIMER_START();
-  if (argc < 2) {
-    printf("Usage: %s <size>\n", argv[0]);
-    return 1;
-  }
-
-  int N = atoi(argv[1]);
+  const int N = (argc >= 2) ? atoi(argv[1]) : 100;
   int *a = (int *)malloc(N * sizeof(int));
   int *b = (int *)malloc(N * sizeof(int));
   int *c = (int *)malloc(N * sizeof(int));

@@ -6,11 +6,7 @@
 
 int main(int argc, char *argv[]) {
   CARTS_TIMER_START();
-  if (argc < 2) {
-    printf("Usage: %s N\n", argv[0]);
-    exit(EXIT_FAILURE);
-  }
-  const unsigned N = atoi(argv[1]);
+  const unsigned N = (argc >= 2) ? atoi(argv[1]) : 100;
   double **A = (double **)malloc(N * sizeof(double *));
   double **B = (double **)malloc(N * sizeof(double *));
   for (int i = 0; i < N; i++) {

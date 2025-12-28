@@ -1,4 +1,4 @@
-# Array example analysis
+# Matrix deps example analysis
 
 Walk through these steps and fix any problem that you find in the way
 

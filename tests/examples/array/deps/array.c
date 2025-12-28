@@ -6,11 +6,7 @@
 #include "arts/Utils/Testing/CartsTest.h"
 int main(int argc, char *argv[]) {
   CARTS_TIMER_START();
-  if (argc < 2) {
-    printf("Usage: %s N\n", argv[0]);
-    return 1;
-  }
-  int N = atoi(argv[1]);
+  const int N = (argc >= 2) ? atoi(argv[1]) : 100;
   int *A = (int *)malloc(N * sizeof(int));
   int *B = (int *)malloc(N * sizeof(int));
   srand(time(NULL));

@@ -5,7 +5,7 @@ Walk through these steps and fix any problem that you find in the way
 1. **Navigate to the array example directory:**
 
    ```bash
-   cd ~/Documents/carts/tests/examples/array
+   cd ~/Documents/carts/tests/examples/array/deps
    ```
 
 2. **Build carts if any changes were made:**

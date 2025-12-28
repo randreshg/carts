@@ -8,11 +8,7 @@
 
 int main(int argc, char **argv) {
   CARTS_TIMER_START();
-  if (argc < 2) {
-    printf("Usage: %s <size>\n", argv[0]);
-    return 1;
-  }
-  int N = atoi(argv[1]);
+  const int N = (argc >= 2) ? atoi(argv[1]) : 100;
   int *a = (int *)malloc(N * sizeof(int));
   int *b = (int *)malloc(N * sizeof(int));
   int *c = (int *)malloc(N * sizeof(int));
@@ -28,7 +24,7 @@ int main(int argc, char **argv) {
     CARTS_DEBUG_PRINT("a[%d] = %d, b[%d] = %d\n", i, a[i], i, b[i]);
 
   /// Parallel region with worksharing loop - vector addition
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for
   for (int i = 0; i < N; i++)
     c[i] = a[i] + b[i];
 
