@@ -6,6 +6,8 @@
 #include <ctime>
 #include <omp.h>
 
+#include "arts/Utils/Testing/CartsTest.h"
+
 void print_usage(const char *program_name) {
   printf("Usage: %s [options]\n", program_name);
   printf("Options:\n");
@@ -16,6 +18,7 @@ void print_usage(const char *program_name) {
 }
 
 int main(int argc, char **argv) {
+  CARTS_TIMER_START();
   int matrix_size = 200;
   int kernel_size = 5;
   int num_tasks = 4;
@@ -167,11 +170,6 @@ int main(int argc, char **argv) {
     }
   }
 
-  if (errors == 0)
-    printf("Result: PASS\n");
-  else
-    printf("Result: FAIL\n");
-
   // Memory cleanup
   for (int i = 0; i < matrix_size; ++i)
     delete[] A[i];
@@ -188,5 +186,9 @@ int main(int argc, char **argv) {
   delete[] C_parallel;
   delete[] C_serial;
 
-  return errors > 0 ? EXIT_FAILURE : EXIT_SUCCESS;
+  if (errors == 0) {
+    CARTS_TEST_PASS();
+  } else {
+    CARTS_TEST_FAIL("convolution verification failed");
+  }
 }
