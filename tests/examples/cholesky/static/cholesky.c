@@ -4,11 +4,14 @@
 #include <stdlib.h>
 #include <time.h>
 
+#include "arts/Utils/Testing/CartsTest.h"
+
 #define BLOCK_SIZE 16
 #define TOLERANCE 1e-6
 #define N 128
 
 int main() {
+  CARTS_TIMER_START();
   srand(time(NULL));
 
   double A[N][N];
@@ -206,20 +209,9 @@ int main() {
     }
   }
 
-  printf("Parallel Cholesky %s! (Max error: %.2e)\n",
-         parallel_correct ? "verification passed" : "verification FAILED",
-         max_par_err);
-  printf("Sequential Cholesky %s! (Max error: %.2e)\n",
-         sequential_correct ? "verification passed" : "verification FAILED",
-         max_seq_err);
-  printf("Parallel time: %.4fs\nSequential time: %.4fs\n", parallel_time,
-         sequential_time);
-
-  /// Verify results
-  if (parallel_correct)
-    printf("Result: CORRECT\n");
-  else
-    printf("Result: INCORRECT\n");
-
-  return 0;
+  if (parallel_correct) {
+    CARTS_TEST_PASS();
+  } else {
+    CARTS_TEST_FAIL("cholesky verification failed");
+  }
 }

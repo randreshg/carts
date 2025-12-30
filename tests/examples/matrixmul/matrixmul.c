@@ -9,14 +9,8 @@
 
 int main(int argc, char *argv[]) {
   CARTS_TIMER_START();
-  if (argc < 3) {
-    printf("Usage: %s <N> <BS>\n", argv[0]);
-    printf("  N:  Matrix size (positive integer)\n");
-    printf("  BS: Block size (positive integer, must divide N)\n");
-    return EXIT_FAILURE;
-  }
-  const int N = atoi(argv[1]);
-  const int BS = atoi(argv[2]);
+  const int N = (argc >= 2) ? atoi(argv[1]) : 64;
+  const int BS = (argc >= 3) ? atoi(argv[2]) : 16;
   if (N <= 0 || BS <= 0) {
     printf("Matrix size and block size must be positive integers.\n");
     return EXIT_FAILURE;
