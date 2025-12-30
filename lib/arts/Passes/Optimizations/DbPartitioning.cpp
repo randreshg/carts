@@ -70,8 +70,9 @@ static PromotionMode toPromotionMode(RewriterMode mode) {
   switch (mode) {
   case RewriterMode::Chunked:
     return PromotionMode::chunked;
+  case RewriterMode::Stencil:
+    return PromotionMode::chunked;
   case RewriterMode::ElementWise:
-  case RewriterMode::Stencil: // Stencil uses element-wise attribute for now
     return PromotionMode::element_wise;
   }
   return PromotionMode::none;
@@ -718,7 +719,7 @@ bool DbPartitioningPass::partitionDb() {
 ///   1. Check existing partition attribute - skip if already partitioned
 ///   2. Analyze each acquire's PartitionMode and collect AcquireInfo
 ///   3. Build PartitioningContext with per-acquire voting info
-///   4. Evaluate heuristics 
+///   4. Evaluate heuristics
 ///   5. Apply partitioning decision (outerRank/innerRank)
 ///   6. Set partition attribute on new alloc
 FailureOr<DbAllocOp>
@@ -848,7 +849,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   /// Set capabilities based on mode consistency
   if (modesConsistent) {
     ARTS_DEBUG(
-      "  Consistent partition mode: " << static_cast<int>(consistentMode));
+        "  Consistent partition mode: " << static_cast<int>(consistentMode));
     /// All consistent and coarse → no partitioning needed
     if (consistentMode == PartitionMode::Coarse) {
       ARTS_DEBUG("  Coarse mode - no partitioning needed");
@@ -965,7 +966,46 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
   /// Step 6: Apply DbRewriter
   DbRewritePlan plan(decision);
-  plan.chunkSize = chunkSizeForPlan; /// Dynamic Value supported!
+  plan.chunkSize = chunkSizeForPlan;
+
+  /// ESD: Populate stencilInfo for Stencil mode
+  if (decision.mode == RewriterMode::Stencil && allocNode) {
+    StencilInfo stencilInfo;
+    stencilInfo.haloLeft = 0;
+    stencilInfo.haloRight = 0;
+
+    /// Collect stencil bounds from acquire nodes
+    allocNode->forEachChildNode([&](NodeBase *child) {
+      auto *acqNode = dyn_cast<DbAcquireNode>(child);
+      if (!acqNode)
+        return;
+      auto stencilBounds = acqNode->getStencilBounds();
+      if (stencilBounds && stencilBounds->hasHalo()) {
+        stencilInfo.haloLeft =
+            std::max(stencilInfo.haloLeft, stencilBounds->haloLeft());
+        stencilInfo.haloRight =
+            std::max(stencilInfo.haloRight, stencilBounds->haloRight());
+      }
+    });
+
+    /// Get total rows from first element dimension
+    if (!allocOp.getElementSizes().empty()) {
+      if (auto staticSize =
+              arts::extractChunkSizeFromHint(allocOp.getElementSizes()[0]))
+        stencilInfo.totalRows =
+            builder.create<arith::ConstantIndexOp>(loc, *staticSize);
+      else
+        stencilInfo.totalRows = allocOp.getElementSizes()[0];
+    }
+
+    /// Note: byte_offset/byte_size for ESD is computed in EdtLowering from
+    /// element_offsets/element_sizes, using allocation's elementSizes for
+    /// stride
+    plan.stencilInfo = stencilInfo;
+    ARTS_DEBUG("  Stencil mode: haloLeft=" << stencilInfo.haloLeft
+                                           << ", haloRight="
+                                           << stencilInfo.haloRight);
+  }
 
   /// Build DbRewriteAcquire list from AcquirePartitionInfo
   SmallVector<DbRewriteAcquire> rewriteAcquires;

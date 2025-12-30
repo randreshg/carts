@@ -564,10 +564,13 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     }
   }
 
-  /// Extract GUIDs, acquire modes, and bounds validity from dependencies.
+  /// Extract GUIDs, acquire modes, bounds validity, and ESD byte offsets.
   SmallVector<Value> depGuids, boundsValids;
+  SmallVector<Value> byteOffsets, byteSizes;
   SmallVector<int32_t> acquireModes;
   SmallVector<bool> twinDiffHints;
+  bool hasEsdDeps = false;
+
   for (Value dep : deps) {
     /// Handle both DbAcquireOp and DepDbAcquireOp as dependency sources, even
     /// when they are threaded through block arguments.
@@ -595,6 +598,61 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     if (!boundsValid)
       boundsValid = AC->create<arith::ConstantIntOp>(loc, 1, 1);
     boundsValids.push_back(boundsValid);
+
+    /// ESD: Check for partial acquisition (element_offsets/element_sizes)
+    /// When element_offsets is non-empty, compute byte_offset and byte_size
+    /// using the allocation's elementSizes for linearization.
+    Value byteOffset, byteSize;
+    if (dbAcquireOp && !dbAcquireOp.getElementOffsets().empty()) {
+      /// Get elementSizes from underlying allocation for stride computation
+      auto alloc = dyn_cast_or_null<DbAllocOp>(
+          DatablockUtils::getUnderlyingDbAlloc(dbAcquireOp.getSourcePtr()));
+
+      if (alloc && !alloc.getElementSizes().empty()) {
+        auto elementSizes = alloc.getElementSizes();
+        auto elemOffsets = dbAcquireOp.getElementOffsets();
+        auto elemSizes = dbAcquireOp.getElementSizes();
+
+        /// Get scalar type size from the element type
+        Type elementType = alloc.getElementType();
+        if (auto memrefType = elementType.dyn_cast<MemRefType>())
+          elementType = memrefType.getElementType();
+        Value scalarSize = AC->create<polygeist::TypeSizeOp>(
+            loc, IndexType::get(AC->getContext()), elementType);
+
+        /// Compute byte_offset = linearize(element_offsets, elementSizes) * scalarSize
+        /// For 2D: byte_offset = (elemOffsets[0] * elementSizes[1] + elemOffsets[1]) * scalarSize
+        Value linearOffset = AC->create<arith::ConstantIndexOp>(loc, 0);
+        for (size_t i = 0; i < elemOffsets.size(); ++i) {
+          /// Compute stride for this dimension (product of trailing dims)
+          Value stride = AC->create<arith::ConstantIndexOp>(loc, 1);
+          for (size_t j = i + 1; j < elementSizes.size(); ++j) {
+            stride = AC->create<arith::MulIOp>(loc, stride, elementSizes[j]);
+          }
+          Value dimOffset = AC->create<arith::MulIOp>(loc, elemOffsets[i], stride);
+          linearOffset = AC->create<arith::AddIOp>(loc, linearOffset, dimOffset);
+        }
+        byteOffset = AC->create<arith::MulIOp>(loc, linearOffset, scalarSize);
+
+        /// Compute byte_size = product(element_sizes) * scalarSize
+        Value totalElements = AC->create<arith::ConstantIndexOp>(loc, 1);
+        for (Value sz : elemSizes) {
+          totalElements = AC->create<arith::MulIOp>(loc, totalElements, sz);
+        }
+        byteSize = AC->create<arith::MulIOp>(loc, totalElements, scalarSize);
+        hasEsdDeps = true;
+      } else {
+        /// Fallback: no allocation info available
+        byteOffset = AC->create<arith::ConstantIndexOp>(loc, 0);
+        byteSize = AC->create<arith::ConstantIndexOp>(loc, 0);
+      }
+    } else {
+      /// No partial acquisition - use zero for standard dependency
+      byteOffset = AC->create<arith::ConstantIndexOp>(loc, 0);
+      byteSize = AC->create<arith::ConstantIndexOp>(loc, 0);
+    }
+    byteOffsets.push_back(byteOffset);
+    byteSizes.push_back(byteSize);
 
     DbAllocOp allocForHint =
         dyn_cast_or_null<DbAllocOp>(DatablockUtils::getUnderlyingDbAlloc(dep));
@@ -653,8 +711,15 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     twinDiffAttr =
         DenseBoolArrayAttr::get(AC->getBuilder().getContext(), twinDiffHints);
 
-  AC->create<RecordDepOp>(loc, edtGuid, depGuids, boundsValids, modeAttr,
-                          acquireAttr, twinDiffAttr);
+  /// Only include byte offsets if we have ESD dependencies
+  SmallVector<Value> finalByteOffsets, finalByteSizes;
+  if (hasEsdDeps) {
+    finalByteOffsets = byteOffsets;
+    finalByteSizes = byteSizes;
+  }
+
+  AC->create<RecordDepOp>(loc, edtGuid, depGuids, boundsValids, finalByteOffsets,
+                          finalByteSizes, modeAttr, acquireAttr, twinDiffAttr);
 
   return success();
 }
