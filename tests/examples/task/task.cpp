@@ -6,7 +6,10 @@
 #include <stdlib.h>
 #include <time.h>
 
+#include "arts/Utils/Testing/CartsTest.h"
+
 int main() {
+  CARTS_TIMER_START();
   srand(time(NULL));
   printf("Main EDT: Starting...\n");
 
@@ -30,5 +33,5 @@ int main() {
 
   shared_number++;
   printf("EDT 3: The final number is %d - %d.\n", shared_number, random_number);
-  return 0;
+  CARTS_TEST_PASS();
 }

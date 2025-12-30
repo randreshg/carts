@@ -4,7 +4,10 @@
 #include <omp.h>
 #include <time.h>
 
+#include "arts/Utils/Testing/CartsTest.h"
+
 int main() {
+  CARTS_TIMER_START();
   srand(time(NULL));
   printf("Main EDT: Starting concurrent dynamic memory example...\n");
 
@@ -90,5 +93,5 @@ int main() {
 
   free(task1_data);
   free(task2_data);
-  return 0;
+  CARTS_TEST_PASS();
 }
