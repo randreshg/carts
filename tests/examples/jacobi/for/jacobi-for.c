@@ -94,20 +94,11 @@ int main(void) {
   double **unew = (double **)malloc(nx * sizeof(double *));
   double **unew_seq = (double **)malloc(nx * sizeof(double *));
 
-  if (!f || !u || !unew || !unew_seq) {
-    printf("Memory allocation failed\n");
-    return 1;
-  }
-
   for (int i = 0; i < nx; i++) {
     f[i] = (double *)malloc(ny * sizeof(double));
     u[i] = (double *)malloc(ny * sizeof(double));
     unew[i] = (double *)malloc(ny * sizeof(double));
     unew_seq[i] = (double *)malloc(ny * sizeof(double));
-    if (!f[i] || !u[i] || !unew[i] || !unew_seq[i]) {
-      printf("Memory allocation failed\n");
-      return 1;
-    }
   }
 
   // Initialize arrays

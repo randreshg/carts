@@ -85,6 +85,141 @@ Uniformity ensures that each EDT observes the same partitioning contract.
 | Inconsistent chunk sizes     | Unsafe              | Coarse required            |
 +------------------------------+----------------------+----------------------------+
 
+## Per-Acquire Voting
+
+A single allocation may have multiple acquires with different characteristics. The system collects per-acquire information and aggregates it to make allocation-level decisions.
+
+### Why Per-Acquire Voting
+
+Consider an allocation with two acquires:
+- Acquire #1: READ mode (in) - could use coarse
+- Acquire #2: WRITE mode (out) - benefits from fine-grained
+
+Without per-acquire voting, the system might choose coarse based on the first acquire alone. With voting, the write acquire's need for fine-grained partitioning takes priority.
+
+### AcquireInfo Structure
+
+Each acquire contributes:
+
++---------------------+-----------------------------+----------------------------------------+
+| Field               | Type                        | Description                            |
++---------------------+-----------------------------+----------------------------------------+
+| accessMode          | in/out/inout                | Read, write, or read-write access      |
+| canElementWise      | bool                        | Has indexed dependencies               |
+| canChunked          | bool                        | Has chunk/offset dependencies          |
+| pinnedDimCount      | unsigned                    | Dimensions with indexed access         |
++---------------------+-----------------------------+----------------------------------------+
+
+### Aggregation Helpers
+
++----------------------+--------------------------------------------+--------------------------------+
+| Helper               | Logic                                      | Used By                        |
++----------------------+--------------------------------------------+--------------------------------+
+| hasWriteAccess()     | Any acquire is out or inout                | H1.2 (optimistic path)         |
+| allReadOnly()        | ALL acquires are in mode                   | H1.1 (read-only check)         |
+| anyCanElementWise()  | Any acquire can use element-wise           | H1.4 (multi-node)              |
+| anyCanChunked()      | Any acquire can use chunked                | H1.4 (multi-node)              |
+| maxPinnedDimCount()  | Maximum pinnedDimCount across acquires     | H1.2 (outerRank decision)      |
++----------------------+--------------------------------------------+--------------------------------+
+
+### Write-Priority Rule
+
+Write modes have priority over read modes because:
+- Concurrent writes benefit from fine-grained partitioning
+- Read-only access can safely share coarse datablocks
+- If ANY acquire is write, fine-grained is preferred
+
+## Heuristic Per-Acquire Behavior
+
++------------+----------------------------+---------------------------------------------+
+| Heuristic  | Per-Acquire Check          | Behavior                                    |
++------------+----------------------------+---------------------------------------------+
+| H1.1       | allReadOnly()              | Only applies if ALL acquires are read-only  |
+| H1.2       | hasWriteAccess()           | Allows element-wise even without indices    |
+| H1.4       | anyCanChunked/ElementWise  | Uses any-acquire capability for multi-node  |
+| H1.5       | accessPatterns summary     | Already aggregates stencil/mixed patterns   |
++------------+----------------------------+---------------------------------------------+
+
+## Heuristic Evaluation Flowchart
+
+Heuristics are evaluated in priority order (highest first). The first heuristic
+that returns a decision wins.
+
+                            +------------------+
+                            |      START       |
+                            +------------------+
+                                     |
+                                     v
+                   +----------------------------------+
+                   | Build PartitioningContext        |
+                   | - Collect per-acquire info       |
+                   | - Summarize access patterns      |
+                   +----------------------------------+
+                                     |
+                                     v
+    +----------------------------------------------------------------+
+    | H1.1 (priority=100): Read-Only Single-Node                     |
+    | Condition: allReadOnly() && nodeCount==1 && !canFineGrained    |
+    +----------------------------------------------------------------+
+                  |                              |
+             [applies]                      [skip]
+                  |                              |
+                  v                              v
+           +----------+        +------------------------------------------+
+           | COARSE   |        | H1.5 (priority=95): Stencil Pattern     |
+           +----------+        | Condition: hasStencil || isMixed        |
+                               +------------------------------------------+
+                                        |                    |
+                                   [applies]            [skip]
+                                        |                    |
+                                        v                    v
+                              +---------------+   +----------------------------------+
+                              | Mixed->ElemWise|   | H1.4 (priority=90): Multi-Node  |
+                              | Stencil->Stencil|   | Condition: nodeCount > 1        |
+                              +---------------+   +----------------------------------+
+                                                          |                |
+                                                     [applies]         [skip]
+                                                          |                |
+                                                          v                v
+                                              +----------------+  +---------------------------+
+                                              | chunked or     |  | H1.3 (priority=80):      |
+                                              | element-wise   |  | Access Uniformity        |
+                                              +----------------+  | Condition: !isUniform &&  |
+                                                                  |   !canFineGrained        |
+                                                                  +---------------------------+
+                                                                        |              |
+                                                                   [applies]       [skip]
+                                                                        |              |
+                                                                        v              v
+                                                                  +----------+  +-----------------+
+                                                                  | COARSE   |  | H1.2 (priority=50)
+                                                                  +----------+  | Cost Model      |
+                                                                                +-----------------+
+                                                                                       |
+                                                                                       v
+                                                            +-------------------------------------+
+                                                            | Evaluate chunked vs element-wise   |
+                                                            | - If canChunked && costOK: Chunked |
+                                                            | - If canElemWise: ElementWise      |
+                                                            | - If hasWriteAccess: ElementWise   |
+                                                            +-------------------------------------+
+                                                                               |
+                                                                               v
+                                                                        +-----------+
+                                                                        | DECISION  |
+                                                                        +-----------+
+
+## Decision Equation
+
+  Decision =
+    if !canBePartitioned              -> Coarse
+    else if H1.1 (read-only + single) -> Coarse
+    else if H1.5 (stencil/mixed)      -> Stencil or ElementWise
+    else if H1.4 (multi-node)         -> Chunked or ElementWise
+    else if H1.3 (!uniform)           -> Coarse
+    else if H1.2 (cost model)         -> Chunked or ElementWise
+    else                              -> Coarse (fallback)
+
 ## When Chunked Beats Element-wise
 
 Chunked mode is favored when the access pattern is contiguous and block-shaped, and the system expects locality benefits to outweigh overhead.
@@ -104,3 +239,5 @@ Chunked mode is favored when the access pattern is contiguous and block-shaped, 
 - Partitioning is only enabled when it is safe and consistent across all acquires.
 - Explicit intent signals (indices or chunk bounds) are honored when possible.
 - Environment constraints (single vs multi-node) affect whether fine-grain is worth it.
+- Per-acquire voting enables fine-grained decisions when acquires have different access modes.
+- Write modes get priority: if any acquire writes, fine-grained partitioning is preferred.
