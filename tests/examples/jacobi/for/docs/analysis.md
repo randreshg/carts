@@ -94,7 +94,7 @@ This should show coarse-grained allocation (single DB for entire arrays). The ke
 Run ForLowering to see how the parallel loops are decomposed:
 
 ```bash
-carts run jacobi-for.mlir --for-lowering &> jacobi-for_for-lowering.mlir
+carts run jacobi-for.mlir --concurrency &> jacobi-for_concurrency.mlir
 ```
 
 This pass:
@@ -125,8 +125,8 @@ carts run jacobi-for.mlir --complete &> jacobi-for_complete.mlir
 ### 8. Execute and verify
 
 ```bash
-carts execute jacobi-for.c
-./jacobi-for_arts
+carts execute jacobi-for.c -O3
+./jacobi-for_arts 
 ```
 
 Expected output:
@@ -139,55 +139,3 @@ RMS error: 0.000000e+00
 Max error: 0.000000e+00
 Test PASSED
 ```
-
-## Testing Different Partitioning Strategies
-
-To test different partitioning approaches, you can modify the CARTS partitioning heuristics or use debug flags:
-
-### Force Element-Wise Partitioning
-
-```bash
-carts run jacobi-for.mlir --debug-only=create_dbs:element_wise --complete
-```
-
-### Force Chunk-Wise Partitioning
-
-```bash
-carts run jacobi-for.mlir --debug-only=create_dbs:chunk_wise --complete
-```
-
-### Analyze Halo Exchange
-
-```bash
-carts run jacobi-for.mlir --debug-only=db_partitioning:halo --complete
-```
-
-## Expected Partitioning Behavior
-
-For this example, CARTS should ideally choose **EHP (Enhanced Hybrid Partitioning)**:
-
-1. **Loop 1 (Copy)**: Uses chunked ownership (efficient bulk writes)
-2. **Loop 2 (Stencil)**: Uses hybrid halo strips or ESD slice gets (optimal communication)
-
-This demonstrates the key insight from the stencil partitioning analysis: different loops on the same data may require different partitioning strategies.
-
-## Performance Analysis
-
-Compare the different strategies by measuring:
-- **DB count**: Fewer DBs = lower metadata overhead
-- **Network bytes**: Optimal halo exchange vs wasteful chunk transfers
-- **Dependency edges**: Fewer slots per EDT = faster readiness
-
-Use the counters from `arts.cfg` to measure runtime behavior:
-
-```bash
-# After execution, check counters
-cat ./counters/*
-```
-
-## Related Documentation
-
-- `docs/heuristics/partitioning/stencil.md`: Comprehensive analysis of stencil partitioning strategies
-- `tests/examples/jacobi/deps/docs/analysis.md`: Task-dependency version comparison
-- `tests/examples/stencil/`: Pure stencil example
-- `tests/examples/rowchunk/`: Row-chunking without stencils

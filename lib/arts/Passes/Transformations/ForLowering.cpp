@@ -54,14 +54,15 @@ using namespace mlir::arts;
 namespace {
 
 ///===----------------------------------------------------------------------===///
-// LoopInfo - Information about a loop within a parallel EDT
-///===----------------------------------------------------------------------===///
+/// LoopInfo - Information about a loop within a parallel EDT
+///
 /// LoopInfo encapsulates worker partitioning for arts.for inside a parallel
 /// EDT. It implements a simple block distribution:
 ///   - chunkSizeCeil = ceil(totalIterations / numWorkers)
 ///   - start = workerId * chunkSizeCeil
 ///   - count = min(chunkSizeCeil, max(0, totalIterations - start))
 ///   - hasWork = start < totalIterations
+///===----------------------------------------------------------------------===///
 class LoopInfo {
 public:
   LoopInfo(ArtsCodegen *AC, ForOp forOp, Value numWorkers)
