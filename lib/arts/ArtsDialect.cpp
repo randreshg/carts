@@ -509,7 +509,9 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
                         SmallVector<Value> indices, SmallVector<Value> offsets,
                         SmallVector<Value> sizes,
                         SmallVector<Value> offsetHints,
-                        SmallVector<Value> sizeHints, Value boundsValid) {
+                        SmallVector<Value> sizeHints, Value boundsValid,
+                        SmallVector<Value> elementOffsets,
+                        SmallVector<Value> elementSizes) {
   auto sourceDb = DatablockUtils::getUnderlyingDb(sourcePtr);
   auto sourceDbAlloc =
       dyn_cast<DbAllocOp>(DatablockUtils::getUnderlyingDbAlloc(sourcePtr));
@@ -568,9 +570,12 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
   state.addOperands(sizeHints);
   if (boundsValid)
     state.addOperands(boundsValid);
+  state.addOperands(elementOffsets);
+  state.addOperands(elementSizes);
 
   /// Build operand segment sizes: [source_guid(0/1), source_ptr=1, indices,
-  /// offsets, sizes, offsetHints, sizeHints, boundsValid(0/1)]
+  /// offsets, sizes, offsetHints, sizeHints, boundsValid(0/1),
+  /// element_offsets, element_sizes]
   state.addAttribute(
       "operandSegmentSizes",
       builder.getDenseI32ArrayAttr(
@@ -578,7 +583,9 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
            static_cast<int32_t>(offsets.size()),
            static_cast<int32_t>(sizes.size()),
            static_cast<int32_t>(offsetHints.size()),
-           static_cast<int32_t>(sizeHints.size()), boundsValid ? 1 : 0}));
+           static_cast<int32_t>(sizeHints.size()), boundsValid ? 1 : 0,
+           static_cast<int32_t>(elementOffsets.size()),
+           static_cast<int32_t>(elementSizes.size())}));
 }
 
 /// DbAcquireOp builder with explicit ptr type (for block arguments)
@@ -587,7 +594,9 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
                         Type ptrType, SmallVector<Value> indices,
                         SmallVector<Value> offsets, SmallVector<Value> sizes,
                         SmallVector<Value> offsetHints,
-                        SmallVector<Value> sizeHints, Value boundsValid) {
+                        SmallVector<Value> sizeHints, Value boundsValid,
+                        SmallVector<Value> elementOffsets,
+                        SmallVector<Value> elementSizes) {
   /// When sourceGuid is null and sourcePtr is a block argument,
   /// we can't trace back to find the DB, so we use explicit sizes/offsets
 
@@ -622,6 +631,8 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
   state.addOperands(sizeHints);
   if (boundsValid)
     state.addOperands(boundsValid);
+  state.addOperands(elementOffsets);
+  state.addOperands(elementSizes);
 
   /// Build operand segment sizes
   state.addAttribute(
@@ -631,7 +642,9 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
            static_cast<int32_t>(offsets.size()),
            static_cast<int32_t>(sizes.size()),
            static_cast<int32_t>(offsetHints.size()),
-           static_cast<int32_t>(sizeHints.size()), boundsValid ? 1 : 0}));
+           static_cast<int32_t>(sizeHints.size()), boundsValid ? 1 : 0,
+           static_cast<int32_t>(elementOffsets.size()),
+           static_cast<int32_t>(elementSizes.size())}));
 }
 
 LogicalResult DbAcquireOp::verify() {
@@ -790,6 +803,26 @@ LogicalResult RecordDepOp::verify() {
              << ")\n"
              << *getOperation();
   }
+
+  /// ESD byte_offsets/byte_sizes validation: if present, must match dbCount
+  if (!getByteOffsets().empty() && getByteOffsets().size() != dbCount)
+    return emitOpError("byte_offsets entries (")
+           << getByteOffsets().size() << ") must match datablocks (" << dbCount
+           << ")\n"
+           << *getOperation();
+
+  if (!getByteSizes().empty() && getByteSizes().size() != dbCount)
+    return emitOpError("byte_sizes entries (")
+           << getByteSizes().size() << ") must match datablocks (" << dbCount
+           << ")\n"
+           << *getOperation();
+
+  /// byte_offsets and byte_sizes must be provided together
+  if (getByteOffsets().empty() != getByteSizes().empty())
+    return emitOpError(
+               "byte_offsets and byte_sizes must be provided together\n")
+           << *getOperation();
+
   return success();
 }
 
