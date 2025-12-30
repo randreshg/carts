@@ -139,3 +139,157 @@ RMS error: 0.000000e+00
 Max error: 0.000000e+00
 Test PASSED
 ```
+
+---
+
+## DbPartitioning Analysis Results
+
+This section documents the actual DbPartitioning behavior observed when running the jacobi-for example through the CARTS pipeline (as of December 2024).
+
+### Partitioning Decisions Per Array
+
+The `--concurrency-opt` pass reveals the following partitioning decisions:
+
+| Array | Allocation ID | Partition Mode | Rationale |
+|-------|---------------|----------------|-----------|
+| `f` | jacobi-for.c:92:16 | `chunked` | Read-only, uniform access |
+| `u` | jacobi-for.c:93:16 | `element_wise` | Stencil pattern detected |
+| `unew` | jacobi-for.c:94:19 | `chunked` | Write-only per iteration, uniform access |
+
+### Stencil Detection in Loop 2
+
+DbPartitioning correctly identifies the stencil access pattern on array `u`:
+
+```
+Access patterns: hasUniform=false, hasStencil=true
+```
+
+For the stencil loop, the acquire for `u` uses extended ranges:
+
+```mlir
+// Compute offset including left halo
+%51 = arith.cmpi uge, %36, %c1 : index
+%52 = arith.subi %36, %c1 : index
+%53 = arith.select %51, %52, %c0 : index  // offset = max(i-1, 0)
+
+// Compute size including both halos
+%54 = arith.addi %41, %c2 : index         // size = chunkSize + 2
+
+// Acquire with extended range
+%guid_12, %ptr_13 = arts.db_acquire[<in>] (%guid_4, %ptr_5)
+                    offsets[%53] sizes[%54]
+```
+
+This correctly extends the acquire range to include:
+- **Left halo**: row `i-1` (when `i > 0`)
+- **Right halo**: row `i+chunkSize` (when within bounds)
+
+### Current Implementation: Element-Wise for Stencil
+
+The current DbPartitioning maps `RewriterMode::Stencil` to `element_wise` partitioning:
+
+```cpp
+case RewriterMode::Stencil: // Stencil uses element-wise attribute for now
+  return PromotionMode::element_wise;
+```
+
+This means each row of `u` becomes its own datablock. For the stencil loop:
+- Worker k acquires DBs for rows `[k*7-1, k*7+7+1)` (with bounds checking)
+- The acquire fetches only the needed row DBs
+- **Advantage**: Precise data movement (only halo rows are fetched)
+- **Disadvantage**: Many DBs (100 DBs for 100 rows)
+
+### ESD Implementation Status
+
+The ESD (Ephemeral Slice Dependencies) runtime infrastructure is now complete:
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| `artsRecordDepAt()` | Implemented | `external/arts/core/src/runtime/memory/DbFunctions.c` |
+| `artsSignalEdtPtrWithGuid()` | Implemented | `external/arts/core/src/runtime/compute/EdtFunctions.c` |
+| `artsDependent.byteOffset/size` | Extended | `external/arts/core/inc/arts/runtime/RT.h` |
+| Distributed protocol | Implemented | `RemoteProtocol.h`, `RemoteFunctions.c`, `Server.c` |
+| `RecordDepOp` with byte_offsets | Extended | `include/arts/ArtsOps.td` |
+| EdtLowering halo extraction | Implemented | `lib/arts/Passes/Transformations/EdtLowering.cpp` |
+| RecordDepPattern lowering | Updated | `lib/arts/Passes/Transformations/ConvertArtsToLLVM.cpp` |
+
+**Missing Link**: DbPartitioning needs to be updated to:
+1. Use chunked partitioning for stencil patterns (instead of element-wise)
+2. Set `halo_left`, `halo_right`, `element_bytes` attributes on `DbAcquireOp`
+3. This enables EdtLowering to create `RecordDepOp` with `byte_offsets`/`byte_sizes`
+
+### ESD Data Flow (When Fully Connected)
+
+```
+1. DbPartitioning detects stencil pattern
+   → Sets halo_left, halo_right, element_bytes on DbAcquireOp
+   → Uses chunked partitioning (not element-wise)
+
+2. EdtLowering extracts halo info from DbAcquireOp
+   → Computes byte_offset = halo_left * element_bytes
+   → Creates RecordDepOp with byte_offsets and byte_sizes
+
+3. ConvertArtsToLLVM lowers to artsRecordDepAt(...)
+   → Stores byteOffset/size in artsDependent struct
+
+4. Runtime: When DB is ready, artsPersistentEventSatisfy
+   → Checks for ESD deps (byteOffset != 0)
+   → Computes slicePtr = dbData + byteOffset
+   → Calls artsSignalEdtPtrWithGuid(edt, slot, dbGuid, slicePtr, size)
+
+5. EDT receives:
+   → depv[slot].guid = original DB GUID
+   → depv[slot].ptr = pointer to slice
+   → depv[slot].mode = ARTS_PTR
+```
+
+### Verification Results
+
+The jacobi-for test passes with zero error:
+
+```
+$ carts execute jacobi-for.c -O3
+$ ./jacobi-for_arts
+
+Jacobi-For Test: 100 x 100 grid, 10 iterations
+Demonstrating uniform (Loop 1) vs stencil (Loop 2) access patterns
+Running sequential version for verification...
+Running parallel version with #pragma omp parallel for...
+RMS error: 0.000000e+00
+Max error: 0.000000e+00
+[CARTS] jacobi-for.c: PASS (0.0031s)
+```
+
+### Future Work: Connect ESD to DbPartitioning
+
+To fully enable ESD for stencil patterns:
+
+1. **Modify `toPromotionMode()`** in DbPartitioning.cpp:
+   ```cpp
+   case RewriterMode::Stencil:
+     return PromotionMode::chunked;  // Use chunked, not element_wise
+   ```
+
+2. **Set halo attributes** on DbAcquireOp during stencil rewriting:
+   ```cpp
+   acquireOp.setHaloLeftAttr(builder.getIndexAttr(haloLeft));
+   acquireOp.setHaloRightAttr(builder.getIndexAttr(haloRight));
+   acquireOp.setElementBytesAttr(builder.getIndexAttr(elementBytes));
+   ```
+
+3. **EdtLowering** will then automatically:
+   - Extract these attributes
+   - Compute byte offsets
+   - Generate `artsRecordDepAt()` calls with ESD parameters
+
+4. **Runtime** will deliver slices as `ARTS_PTR` dependencies instead of fetching whole DBs
+
+### Trade-off Summary (Current vs ESD)
+
+| Metric | Current (Element-Wise) | ESD (When Connected) |
+|--------|------------------------|---------------------|
+| DB count | O(Nrows) = 100 | O(Nchunks) = ~16 |
+| Bytes transferred | Optimal (halo rows) | Optimal (halo bytes) |
+| Dependency slots | ~chunkSize + 2 | 3 (chunk + 2 halos) |
+| Runtime overhead | Higher (many DBs) | Lower (few DBs) |
+| Implementation | Complete | Runtime complete, DbPartitioning connection pending |

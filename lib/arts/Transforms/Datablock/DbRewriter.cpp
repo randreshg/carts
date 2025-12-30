@@ -241,52 +241,108 @@ void DbRewriter::rewriteAcquire(const DbRewriteAcquire &info,
 
     if (plan_.mode == RewriterMode::Stencil && plan_.stencilInfo &&
         plan_.stencilInfo->hasHalo()) {
-      /// STENCIL MODE: Single-chunk model
-      /// Each worker acquires exactly ONE stencil-local chunk.
-      /// Chunk index is computed using BASE coordinate space, not extended.
-      ///
-      /// plan_.chunkSize is EXTENDED (e.g., 27 = 25 base + 1 left + 1 right
-      /// halo) elemOffset is EXTENDED (e.g., 24 = max(0, 25 - 1) for Worker 1)
-      ///
-      /// We need to recover base offset and use base chunk size for division:
-      ///   baseChunkSize = plan_.chunkSize - haloLeft - haloRight
-      ///   baseOffset = elemOffset + haloLeft (if elemOffset > 0)
-      ///              = 0 (if elemOffset == 0, may be clamped Worker 0)
-      ///   startChunk = baseOffset / baseChunkSize
+      /// STENCIL MODE with ESD: 3-acquire pattern
+      /// Each worker acquires:
+      ///   1. Owned chunk (full chunk)
+      ///   2. Left halo (partial slice from previous chunk)
+      ///   3. Right halo (partial slice from next chunk)
 
-      Value haloLeft = builder.create<arith::ConstantIndexOp>(
-          loc, plan_.stencilInfo->haloLeft);
-      Value haloRight = builder.create<arith::ConstantIndexOp>(
-          loc, plan_.stencilInfo->haloRight);
-
-      /// Compute base chunk size
-      Value baseChunkSize =
-          builder.create<arith::SubIOp>(loc, plan_.chunkSize, haloLeft);
-      baseChunkSize =
-          builder.create<arith::SubIOp>(loc, baseChunkSize, haloRight);
-
-      /// Recover base offset from extended offset
-      /// elemOffset is extended: max(0, baseOffset - haloLeft)
-      /// If elemOffset == 0, baseOffset = 0 (Worker 0 or actual 0 start)
-      /// If elemOffset > 0, baseOffset = elemOffset + haloLeft
       Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
-      Value isZero = builder.create<arith::CmpIOp>(
-          loc, arith::CmpIPredicate::eq, elemOffset, zero);
-      Value adjustedOffset =
-          builder.create<arith::AddIOp>(loc, elemOffset, haloLeft);
+      int64_t haloLeftVal = plan_.stencilInfo->haloLeft;
+      int64_t haloRightVal = plan_.stencilInfo->haloRight;
+
+      // Recover base offset from extended offset.
+      // Extended offset = max(0, baseOffset - haloLeft)
+      // So: baseOffset = elemOffset + haloLeft (unless elemOffset=0 -> first chunk)
+      Value haloLeftConst =
+          builder.create<arith::ConstantIndexOp>(loc, haloLeftVal);
       Value baseOffset =
-          builder.create<arith::SelectOp>(loc, isZero, zero, adjustedOffset);
+          builder.create<arith::AddIOp>(loc, elemOffset, haloLeftConst);
 
-      /// Compute chunk index using base coordinates
+      // For first chunk (elemOffset=0), baseOffset should be 0, not haloLeft
+      Value isFirstWorker = builder.create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::eq, elemOffset, zero);
+      baseOffset =
+          builder.create<arith::SelectOp>(loc, isFirstWorker, zero, baseOffset);
+
+      // Compute chunk index for owned chunk
       startChunk =
-          builder.create<arith::DivUIOp>(loc, baseOffset, baseChunkSize);
-
-      /// Single-chunk model: each worker acquires exactly 1 chunk
+          builder.create<arith::DivUIOp>(loc, baseOffset, plan_.chunkSize);
       chunkCount = one;
 
-      ARTS_DEBUG("  Stencil: baseChunkSize=" << baseChunkSize
-                                             << ", baseOffset=" << baseOffset
-                                             << ", startChunk=" << startChunk);
+      ARTS_DEBUG("  Stencil ESD: chunkIdx=" << startChunk
+                                            << ", haloLeft=" << haloLeftVal
+                                            << ", haloRight=" << haloRightVal);
+
+      /// Get inner dimension size for partial acquisition
+      Value innerDim = newInnerSizes_.empty()
+                           ? builder.create<arith::ConstantIndexOp>(loc, 1)
+                           : newInnerSizes_[0];
+
+      /// Get number of chunks for boundary checking
+      Value numChunks = newOuterSizes_.empty()
+                            ? builder.create<arith::ConstantIndexOp>(loc, 1)
+                            : newOuterSizes_[0];
+      Value lastChunkIdx = builder.create<arith::SubIOp>(loc, numChunks, one);
+
+      /// Create LEFT HALO acquire (partial: last haloLeft rows of prev chunk)
+      if (haloLeftVal > 0) {
+        Value leftChunkIdx =
+            builder.create<arith::SubIOp>(loc, startChunk, one);
+
+        // element_offsets: start at (chunkSize - haloLeft) within prev chunk
+        Value leftElemOffset = builder.create<arith::SubIOp>(
+            loc, plan_.chunkSize,
+            builder.create<arith::ConstantIndexOp>(loc, haloLeftVal));
+
+        // bounds_valid = (startChunk != 0): valid only if not first chunk
+        Value leftValid = builder.create<arith::CmpIOp>(
+            loc, arith::CmpIPredicate::ne, startChunk, zero);
+
+        auto leftHalo = builder.create<DbAcquireOp>(
+            loc, ArtsMode::in, newAlloc.getGuid(), newAlloc.getPtr(),
+            /*indices=*/SmallVector<Value>{},
+            /*offsets=*/SmallVector<Value>{leftChunkIdx},
+            /*sizes=*/SmallVector<Value>{one},
+            /*offset_hints=*/SmallVector<Value>{},
+            /*size_hints=*/SmallVector<Value>{},
+            /*bounds_valid=*/leftValid,
+            /*element_offsets=*/SmallVector<Value>{leftElemOffset, zero},
+            /*element_sizes=*/
+            SmallVector<Value>{
+                builder.create<arith::ConstantIndexOp>(loc, haloLeftVal),
+                innerDim});
+
+        addHaloAcquireToEdt(acquire, leftHalo, builder);
+        ARTS_DEBUG("  Created left halo acquire");
+      }
+
+      /// Create RIGHT HALO acquire (partial: first haloRight rows of next chunk)
+      if (haloRightVal > 0) {
+        Value rightChunkIdx =
+            builder.create<arith::AddIOp>(loc, startChunk, one);
+
+        // bounds_valid = (startChunk != lastChunk): valid only if not last chunk
+        Value rightValid = builder.create<arith::CmpIOp>(
+            loc, arith::CmpIPredicate::ne, startChunk, lastChunkIdx);
+
+        auto rightHalo = builder.create<DbAcquireOp>(
+            loc, ArtsMode::in, newAlloc.getGuid(), newAlloc.getPtr(),
+            /*indices=*/SmallVector<Value>{},
+            /*offsets=*/SmallVector<Value>{rightChunkIdx},
+            /*sizes=*/SmallVector<Value>{one},
+            /*offset_hints=*/SmallVector<Value>{},
+            /*size_hints=*/SmallVector<Value>{},
+            /*bounds_valid=*/rightValid,
+            /*element_offsets=*/SmallVector<Value>{zero, zero},
+            /*element_sizes=*/
+            SmallVector<Value>{
+                builder.create<arith::ConstantIndexOp>(loc, haloRightVal),
+                innerDim});
+
+        addHaloAcquireToEdt(acquire, rightHalo, builder);
+        ARTS_DEBUG("  Created right halo acquire");
+      }
     } else {
       /// CHUNKED MODE: Multi-chunk div/mod model
       /// DISJOINT MODEL: Physical chunks are disjoint and indexed by
@@ -538,4 +594,28 @@ std::unique_ptr<DbRewriterBase> DbRewriter::createRewriter(
   }
 
   llvm_unreachable("Unknown RewriterMode");
+}
+
+void DbRewriter::addHaloAcquireToEdt(DbAcquireOp originalAcq,
+                                     DbAcquireOp haloAcq, OpBuilder &builder) {
+  ARTS_DEBUG("DbRewriter::addHaloAcquireToEdt");
+
+  /// Find the EDT that uses the original acquire
+  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(originalAcq);
+  if (!edt) {
+    ARTS_DEBUG("  No EDT found for acquire - skipping halo addition");
+    return;
+  }
+
+  /// Add the halo acquire's ptr as a new EDT dependency
+  /// The appendDependency method updates the EDT operands
+  edt.appendDependency(haloAcq.getPtr());
+
+  /// Add corresponding block argument to EDT body
+  Block &edtBody = edt.getBody().front();
+  edtBody.addArgument(haloAcq.getPtr().getType(), haloAcq.getLoc());
+
+  ARTS_DEBUG("  Added halo dep to EDT, now has "
+             << edt.getDependencies().size() << " deps and "
+             << edtBody.getNumArguments() << " block args");
 }

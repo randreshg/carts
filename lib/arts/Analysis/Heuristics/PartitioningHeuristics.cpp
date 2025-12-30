@@ -241,34 +241,37 @@ std::optional<PartitioningDecision>
 StencilPatternHeuristic::evaluate(const PartitioningContext &ctx) const {
   const auto &patterns = ctx.accessPatterns;
 
-  ///  Case 1: Mixed patterns → Element-wise
-  ///  Mixed patterns (e.g., uniform + stencil on same allocation) require
-  ///  element-wise partitioning for fine-grained ownership handling.
-  if (patterns.isMixed()) {
+  /// Case 1: Has indexed access → Element-wise (unpredictable access pattern)
+  /// Indexed access patterns cannot be handled by chunked partitioning since
+  /// the access locations are data-dependent.
+  if (patterns.hasIndexed) {
     PartitioningDecision decision;
     decision.mode = RewriterMode::ElementWise;
-    decision.outerRank = 1; ///  Partition outermost dimension
-    decision.innerRank = ctx.memrefRank > 0 ? ctx.memrefRank - 1 : 0;
-    decision.rationale = "H1.5: Mixed access patterns require element-wise";
-    ARTS_DEBUG("H1.5 applied: " << decision.rationale);
-    return decision;
-  }
-
-  ///  Case 2: Pure stencil → Stencil mode (ESD)
-  ///  Pure stencil patterns use the stencil rewriter for halo-aware
-  ///  partitioning. DbStencilRewriter currently delegates to element-wise as
-  ///  placeholder.
-  if (patterns.hasStencil && !patterns.hasUniform && !patterns.hasIndexed) {
-    PartitioningDecision decision;
-    decision.mode = RewriterMode::Stencil; ///  Use stencil rewriter
     decision.outerRank = 1;
     decision.innerRank = ctx.memrefRank > 0 ? ctx.memrefRank - 1 : 0;
-    decision.rationale = "H1.5: Pure stencil pattern uses ESD mode";
+    decision.rationale = "H1.5: Indexed access requires element-wise";
     ARTS_DEBUG("H1.5 applied: " << decision.rationale);
     return decision;
   }
 
-  ///  Not a stencil/mixed pattern - let other heuristics decide
+  /// Case 2: Has stencil (with or without uniform) → Stencil mode (chunked + ESD)
+  /// Chunked + ESD handles both access patterns:
+  /// - Uniform access: worker accesses only its owned chunk (no halo needed)
+  /// - Stencil access: worker accesses owned chunk + ESD delivers halos
+  /// The ESD machinery activates when element_offsets is non-empty on db_acquire.
+  if (patterns.hasStencil) {
+    PartitioningDecision decision;
+    decision.mode = RewriterMode::Stencil;
+    decision.outerRank = 1;
+    decision.innerRank = ctx.memrefRank > 0 ? ctx.memrefRank - 1 : 0;
+    decision.rationale = patterns.hasUniform
+        ? "H1.5: Mixed (uniform+stencil) uses Stencil mode - chunked handles both"
+        : "H1.5: Pure stencil uses ESD mode";
+    ARTS_DEBUG("H1.5 applied: " << decision.rationale);
+    return decision;
+  }
+
+  /// Not a stencil pattern - let other heuristics decide
   return std::nullopt;
 }
 

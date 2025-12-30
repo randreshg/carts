@@ -249,6 +249,10 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
     /// Get bounds validity flags for stencil boundary guarding
     auto boundsValids = op.getBoundsValids();
 
+    /// Get ESD byte_offsets and byte_sizes for halo dependencies
+    auto byteOffsets = op.getByteOffsets();
+    auto byteSizes = op.getByteSizes();
+
     /// Create shared slot counter for all dependencies
     auto slotTy = MemRefType::get({}, AC->Int32);
     Value sharedSlotAlloc = AC->create<memref::AllocaOp>(loc, slotTy);
@@ -266,8 +270,12 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
       /// Get bounds_valid for this dependency if available
       Value boundsValid =
           (dbIdx < boundsValids.size()) ? boundsValids[dbIdx] : Value();
+      /// Get ESD byte offset/size for this dependency if available
+      Value byteOffset =
+          (dbIdx < byteOffsets.size()) ? byteOffsets[dbIdx] : Value();
+      Value byteSize = (dbIdx < byteSizes.size()) ? byteSizes[dbIdx] : Value();
       recordDepsForDb(dbGuid, edtGuid, sharedSlotAlloc, accessMode, acquireMode,
-                      twinDiff, boundsValid, loc);
+                      twinDiff, boundsValid, byteOffset, byteSize, loc);
       ++dbIdx;
     }
 
@@ -310,7 +318,8 @@ private:
   void recordDepsForDb(Value dbGuid, Value edtGuid, Value sharedSlotAlloc,
                        DepAccessMode accessMode,
                        std::optional<int32_t> acquireMode, bool twinDiff,
-                       Value boundsValid, Location loc) const {
+                       Value boundsValid, Value byteOffset, Value byteSize,
+                       Location loc) const {
     SmallVector<Value> dbSizes, dbOffsets, dbIndices;
     bool isSingle = false;
     Value depStruct = nullptr;
@@ -335,7 +344,8 @@ private:
                             recordSingleDb(dbGuid, edtGuid, sharedSlotAlloc,
                                            linearIndex, accessMode, acquireMode,
                                            twinDiff, boundsValid, depStruct,
-                                           baseOffset, totalDBs, loc);
+                                           baseOffset, totalDBs, byteOffset,
+                                           byteSize, loc);
                           });
   }
 
@@ -344,14 +354,20 @@ private:
   ///   if (effectiveBoundsValid) artsRecordDep(...) else artsSignalEdtNull(...)
   /// When totalDBs is present, effectiveBoundsValid = boundsValid AND
   /// indexInBounds.
+  /// For ESD (Ephemeral Slice Dependencies) with byteOffset/byteSize, we call
+  /// artsRecordDepAt instead of artsRecordDep.
   void recordSingleDb(Value dbGuid, Value edtGuid, Value slotAlloc,
                       Value linearIndex, DepAccessMode accessMode,
                       std::optional<int32_t> acquireMode, bool twinDiff,
                       Value boundsValid, Value depStruct, Value baseOffset,
-                      Value totalDBs, Location loc) const {
+                      Value totalDBs, Value byteOffset, Value byteSize,
+                      Location loc) const {
     const bool useDepv = depStruct && baseOffset &&
                          (accessMode == DepAccessMode::from_depv ||
                           dbGuid.getDefiningOp<DepDbAcquireOp>());
+
+    /// Check if this is an ESD dependency (has byte offset/size)
+    const bool isEsdDep = byteOffset && byteSize;
 
     /// Extend boundsValid with DB index check for stencil cases
     Value effectiveBoundsValid = boundsValid;
@@ -376,6 +392,14 @@ private:
     Value modeValue = AC->createIntConstant(modeInt, AC->Int32, loc);
     Value twinDiffVal = AC->createIntConstant(twinDiff ? 1 : 0, AC->Int1, loc);
 
+    /// Prepare ESD values if needed (cast Index to Int64)
+    Value byteOffsetI64 = nullptr;
+    Value byteSizeI64 = nullptr;
+    if (isEsdDep) {
+      byteOffsetI64 = AC->castToInt(AC->Int64, byteOffset, loc);
+      byteSizeI64 = AC->castToInt(AC->Int64, byteSize, loc);
+    }
+
     if (effectiveBoundsValid) {
       /// Guarded path: load inside if-block to prevent out-of-bounds access
       auto ifOp = AC->create<scf::IfOp>(loc, effectiveBoundsValid,
@@ -384,10 +408,20 @@ private:
       AC->setInsertionPointToStart(&ifOp.getThenRegion().front());
       Value dbGuidValue = loadDbGuidValue(dbGuid, linearIndex, useDepv,
                                           depStruct, baseOffset, loc);
-      AC->createRuntimeCall(
-          types::ARTSRTL_artsRecordDep,
-          {dbGuidValue, edtGuidValue, currentSlotI32, modeValue, twinDiffVal},
-          loc);
+      if (isEsdDep) {
+        /// ESD path: use artsRecordDepAt for halo dependencies
+        AC->createRuntimeCall(types::ARTSRTL_artsRecordDepAt,
+                              {dbGuidValue, edtGuidValue, currentSlotI32,
+                               modeValue, twinDiffVal, byteOffsetI64,
+                               byteSizeI64},
+                              loc);
+      } else {
+        /// Standard path: use artsRecordDep
+        AC->createRuntimeCall(
+            types::ARTSRTL_artsRecordDep,
+            {dbGuidValue, edtGuidValue, currentSlotI32, modeValue, twinDiffVal},
+            loc);
+      }
 
       AC->setInsertionPointToStart(&ifOp.getElseRegion().front());
       AC->createRuntimeCall(types::ARTSRTL_artsSignalEdtNull,
@@ -398,10 +432,20 @@ private:
       /// Unconditional path: no bounds check needed
       Value dbGuidValue = loadDbGuidValue(dbGuid, linearIndex, useDepv,
                                           depStruct, baseOffset, loc);
-      AC->createRuntimeCall(
-          types::ARTSRTL_artsRecordDep,
-          {dbGuidValue, edtGuidValue, currentSlotI32, modeValue, twinDiffVal},
-          loc);
+      if (isEsdDep) {
+        /// ESD path: use artsRecordDepAt for halo dependencies
+        AC->createRuntimeCall(types::ARTSRTL_artsRecordDepAt,
+                              {dbGuidValue, edtGuidValue, currentSlotI32,
+                               modeValue, twinDiffVal, byteOffsetI64,
+                               byteSizeI64},
+                              loc);
+      } else {
+        /// Standard path: use artsRecordDep
+        AC->createRuntimeCall(
+            types::ARTSRTL_artsRecordDep,
+            {dbGuidValue, edtGuidValue, currentSlotI32, modeValue, twinDiffVal},
+            loc);
+      }
     }
 
     /// Increment slot counter

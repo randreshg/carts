@@ -1,17 +1,14 @@
 ///==========================================================================///
 /// File: DbStencilRewriter.h
 ///
-/// Specialized index rewriter for stencil access patterns.
-/// Current default for stencil is element-wise; ESD is the planned path.
+/// Stencil-aware index localization for ESD (Ephemeral Slice Dependencies).
 ///
-/// Partitioning policy:
-/// - Stencil/mixed patterns default to element-wise today.
-/// - Planned path (see STENCIL_ESD_IMPLEMENTATION_PLAN.md): ESD uses chunk
-///   ownership + slice gets (ARTS_PTR deps) with fixed depc slots.
+/// Index Localization Formula:
+///   dbRefIdx  = 0           (single extended chunk per worker)
+///   memrefIdx = globalIdx - elemOffset  (with bounds clamping)
 ///
-/// Example (row stencil, chunk rows [start, end)):
-///   left halo row  = start-1, right halo row = end
-///   offsetBytes    = rowIndex * rowBytes
+/// The elemOffset accounts for halo extension so that stencil neighbor
+/// accesses (globalIdx-1, globalIdx+1) map to valid local indices.
 ///==========================================================================///
 
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBSTENCILREWRITER_H
@@ -22,51 +19,36 @@
 namespace mlir {
 namespace arts {
 
-/// Specialized index rewriter for stencil access patterns.
-/// Implements halo-aware clamping and offset adjustment.
-///
-/// Index Localization Formulas:
-///   dbRefIdx = 0 (single chunk with halo)
-///   memrefIdx = clamp(globalIdx, 0, totalRows-1) - chunkStart + haloLeft
+/// Stencil-aware index rewriter using subtraction-based localization.
 class DbStencilRewriter : public DbRewriterBase {
-  /// Stencil-specific members (kept for future ESD implementation)
-  Value baseChunkSize_, startChunk_, haloLeft_, haloRight_, totalRows_;
-  Value elemOffset_, elemSize_;
-  SmallVector<Value> oldElementSizes_;
+  Value elemOffset_; ///< Extended offset (accounts for halo)
+  Value elemSize_;   ///< Extended size (chunk + halos)
 
 public:
-  DbStencilRewriter(Value baseChunkSize, Value startChunk, Value haloLeft,
+  /// Constructor. Only elemOffset and elemSize are used for localization;
+  /// other parameters are accepted for API compatibility.
+  DbStencilRewriter(Value chunkSize, Value startChunk, Value haloLeft,
                     Value haloRight, Value totalRows, unsigned outerRank,
                     unsigned innerRank, Value elemOffset, Value elemSize,
                     ValueRange oldElementSizes);
 
-  /// Transform global multi-dimensional indices to local with halo offset.
+  /// Transform global indices to local: localIdx = globalIdx - elemOffset_
   LocalizedIndices localize(ArrayRef<Value> globalIndices, OpBuilder &builder,
                             Location loc) override;
 
-  /// Transform a linearized global index (for flattened 1D memrefs)
+  /// Transform linearized global index (for flattened memrefs)
   LocalizedIndices localizeLinearized(Value globalLinearIndex, Value stride,
                                       OpBuilder &builder,
                                       Location loc) override;
 
-  /// Rewrite a DbRefOp and its load/store users
+  /// Rewrite DbRefOp users with localized indices
   void rewriteDbRefUsers(DbRefOp ref, Value blockArg, Type newElementType,
                          OpBuilder &builder,
                          llvm::SetVector<Operation *> &opsToRemove) override;
 
-  /// Rebase a list of operations with stencil-aware localization
+  /// Rebase operations with stencil-aware localization
   void rebaseOps(ArrayRef<Operation *> ops, Value dbPtr, Type elementType,
                  ArtsCodegen &AC, llvm::SetVector<Operation *> &opsToRemove);
-
-private:
-  /// Clamp global index to valid array bounds [0, totalRows-1]
-  /// Handles boundary workers where stencil would access out-of-bounds
-  Value clampToBounds(Value globalIdx, OpBuilder &builder, Location loc);
-
-  /// Compute local index with halo offset
-  /// localIdx = clampedGlobalIdx - chunkStart + haloLeft
-  Value computeLocalIndex(Value globalIdx, Value chunkStart, OpBuilder &builder,
-                          Location loc);
 };
 
 } // namespace arts

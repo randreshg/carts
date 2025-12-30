@@ -415,6 +415,18 @@ __ARTS_RTL(artsDbGetGuid, ArtsGuid, VoidPtr)
 __ARTS_RTL_ATTRS(artsDbGetGuid, PureAttrs, EmptyAttrs,
                  ParamAttrs(ReadOnlyPtrAttrs))
 
+/// void artsRecordDepAt(artsGuid_t dbSrc, artsGuid_t edtDest,
+///                       uint32_t edtSlot, artsType_t acquireMode,
+///                       bool useTwinDiff, uint64_t byteOffset, uint64_t size);
+/// Extended artsRecordDep that stores byte offset and size in the dependency.
+/// When the DB becomes ready, the runtime signals the EDT slot with:
+///   - If byteOffset != 0: db_ptr + byteOffset as ARTS_PTR (preserves DB GUID)
+///   - If byteOffset == 0: standard DB pin behavior
+/// Used for ESD stencil halo fetching with proper dependency semantics.
+__ARTS_RTL(artsRecordDepAt, Void, ArtsGuid, ArtsGuid, Int32, ArtsType, Int1, Int64, Int64)
+__ARTS_RTL_ATTRS(artsRecordDepAt, ControlAttrs, EmptyAttrs,
+                 ParamAttrs(EmptyAttrs, EmptyAttrs, ZExt, ZExt, ZExt, ZExt, ZExt))
+
 /// }
 
 ///===----------------------------------------------------------------------===///

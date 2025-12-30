@@ -169,6 +169,13 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     When source_guid is absent (nullptr), it means this acquire is chaining from
     a parent EDT's acquire where only the ptr was passed through block arguments.
 
+    ESD partial acquisition (optional, for stencil halo fetching):
+    - element_offsets: Offset within the chunk (element-level, not byte-level)
+    - element_sizes: Size within the chunk (element-level)
+    When these are set, EdtLowering computes byte_offset/byte_size using the
+    allocation's elementSizes and generates RecordDepOp with byte_offsets for
+    ESD (Ephemeral Slice Dependencies) partial chunk acquisition.
+
     Returns (guid, ptr) tuple for the acquired datablock.
   }];
   let arguments = (ins
@@ -180,7 +187,9 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     Variadic<Index>:$sizes,
     Variadic<Index>:$offset_hints,
     Variadic<Index>:$size_hints,
-    Optional<I1>:$bounds_valid
+    Optional<I1>:$bounds_valid,
+    Variadic<Index>:$element_offsets,
+    Variadic<Index>:$element_sizes
   );
   let results = (outs MemRefOf<[I64]>:$guid, AnyMemRef:$ptr);
   let assemblyFormat = [{
@@ -192,6 +201,8 @@ def DbAcquireOp : Arts_Op<"db_acquire",
     ( `offset_hints` `[` $offset_hints^ `]` )?
     ( `size_hints` `[` $size_hints^ `]` )?
     ( `bounds_valid` `(` $bounds_valid^ `)` )?
+    ( `element_offsets` `[` $element_offsets^ `]` )?
+    ( `element_sizes` `[` $element_sizes^ `]` )?
     attr-dict `->` `(` type($guid) `,` type($ptr) `)`
   }];
   let hasVerifier = 1;
@@ -206,7 +217,9 @@ def DbAcquireOp : Arts_Op<"db_acquire",
                    CArg<"SmallVector<Value>", "{}">:$sizes,
                    CArg<"SmallVector<Value>", "{}">:$offset_hints,
                    CArg<"SmallVector<Value>", "{}">:$size_hints,
-                   CArg<"Value", "{}">:$bounds_valid)>,
+                   CArg<"Value", "{}">:$bounds_valid,
+                   CArg<"SmallVector<Value>", "{}">:$element_offsets,
+                   CArg<"SmallVector<Value>", "{}">:$element_sizes)>,
     OpBuilder<(ins "ArtsMode":$mode,
                    "Value":$source_guid,
                    "Value":$source_ptr,
@@ -216,7 +229,9 @@ def DbAcquireOp : Arts_Op<"db_acquire",
                    CArg<"SmallVector<Value>", "{}">:$sizes,
                    CArg<"SmallVector<Value>", "{}">:$offset_hints,
                    CArg<"SmallVector<Value>", "{}">:$size_hints,
-                   CArg<"Value", "{}">:$bounds_valid)>
+                   CArg<"Value", "{}">:$bounds_valid,
+                   CArg<"SmallVector<Value>", "{}">:$element_offsets,
+                   CArg<"SmallVector<Value>", "{}">:$element_sizes)>
   ];
   let extraClassDeclaration = [{
     /// Set the twin_diff attribute for this acquire operation.
@@ -229,6 +244,9 @@ def DbAcquireOp : Arts_Op<"db_acquire",
 
     /// Get twin_diff value. Returns true (safe default) if not explicitly set.
     bool getTwinDiff();
+
+    /// Check if this acquire has element-level offset/size info (ESD partial acquisition)
+    bool hasElementOffsets() { return !getElementOffsets().empty(); }
   }];
 }
 
@@ -716,11 +734,21 @@ def RecordDepOp : Arts_Op<"rec_dep", [MemoryEffects<[MemWrite]>, AttrSizedOperan
     The optional bounds_valids operand list contains i1 values corresponding to
     each datablock. When present and false for a datablock, artsRecordDep is
     skipped for that dependency (used for out-of-bounds stencil indices).
+
+    The optional byte_offsets and byte_sizes operand lists enable ESD (Ephemeral
+    Slice Dependencies) for stencil patterns. When a datablock has a non-zero
+    byte_offset, the runtime uses artsRecordDepAt which:
+    - Waits for the DB to be ready (proper dependency semantics)
+    - Signals the EDT slot with db_ptr + byte_offset as ARTS_PTR
+    - Preserves the original DB GUID for tracking
+    When byte_offset is 0, standard artsRecordDep is used.
   }];
   let arguments = (ins
     I64:$edt_guid,
     Variadic<AnyType>:$datablocks,
     Variadic<I1>:$bounds_valids,
+    Variadic<Index>:$byte_offsets,
+    Variadic<Index>:$byte_sizes,
     DefaultValuedAttr<DepAccessModeAttr, "::mlir::arts::DepAccessMode::direct">:$access_mode,
     OptionalAttr<DenseI32ArrayAttr>:$acquire_modes,
     OptionalAttr<DenseBoolArrayAttr>:$twin_diff
@@ -729,6 +757,8 @@ def RecordDepOp : Arts_Op<"rec_dep", [MemoryEffects<[MemWrite]>, AttrSizedOperan
   let assemblyFormat = [{
     $edt_guid `(` $datablocks `:` type($datablocks) `)`
     ( `bounds_valids` `(` $bounds_valids^ `)` )?
+    ( `byte_offsets` `(` $byte_offsets^ `)` )?
+    ( `byte_sizes` `(` $byte_sizes^ `)` )?
     attr-dict
   }];
 }

@@ -966,9 +966,343 @@ Critical rule: depc is fixed
   - on physical boundaries, satisfy missing halo slots with SignalEdtNull or dummy ptr
 ```
 
-This provides the same “2 rows moved” bandwidth property as halo strips, but without creating extra halo DBs/events.
+This provides the same "2 rows moved" bandwidth property as halo strips, but without creating extra halo DBs/events.
 
-### A Full-Iteration “Timeline” View (Hybrid)
+---
+
+## 8.5 ESD Implementation Details
+
+This section documents the complete ESD implementation in CARTS, including runtime functions, data structures, MLIR lowering, and distributed protocol support.
+
+### 8.5.1 Runtime Functions
+
+The ESD implementation adds three key runtime functions:
+
+#### `artsRecordDepAt` - Record Dependency at Byte Offset
+
+Located in `external/arts/core/src/runtime/memory/DbFunctions.c`:
+
+```c
+void artsRecordDepAt(artsGuid_t dbSrc, artsGuid_t edtDest, uint32_t edtSlot,
+                     artsType_t acquireMode, bool useTwinDiff,
+                     uint64_t byteOffset, uint64_t size) {
+  // If byteOffset=0 and size=0, fall back to standard artsRecordDep
+  if (byteOffset == 0 && size == 0) {
+    artsRecordDep(dbSrc, edtDest, edtSlot, acquireMode, useTwinDiff);
+    return;
+  }
+
+  // Look up the DB locally or send remote request
+  struct artsDb *dbRes = (struct artsDb *)artsRouteTableLookupItem(dbSrc);
+  if (dbRes != NULL)
+    artsAddDependenceToPersistentEventWithByteOffset(
+        dbRes->eventGuid, edtDest, edtSlot, acquireMode, useTwinDiff,
+        byteOffset, size);
+  else
+    artsRemoteDbAddDependenceWithByteOffset(dbSrc, edtDest, edtSlot,
+                                            acquireMode, useTwinDiff,
+                                            byteOffset, size);
+
+  if (acquireMode == ARTS_DB_WRITE)
+    artsDbIncrementLatch(dbSrc);
+}
+```
+
+This function extends `artsRecordDep` to store byte offset and size in the dependency, enabling slice-based signaling.
+
+#### `artsSignalEdtPtrWithGuid` - Signal EDT with Pointer While Preserving DB GUID
+
+Located in `external/arts/core/src/runtime/compute/EdtFunctions.c`:
+
+```c
+void artsSignalEdtPtrWithGuid(artsGuid_t edtGuid, uint32_t slot,
+                              artsGuid_t dbGuid, void *ptr, unsigned int size) {
+  internalSignalEdt(edtGuid, slot, dbGuid, ARTS_PTR, ptr, size);
+}
+```
+
+This function signals an EDT slot with `ARTS_PTR` mode but preserves the original DB GUID in `depv[slot].guid`. This allows the EDT to know which DB the slice came from while receiving the slice data as a pointer.
+
+#### `artsAddDependenceToPersistentEventWithByteOffset` - Extended Event Registration
+
+Located in `external/arts/core/src/runtime/sync/EventFunctions.c`:
+
+```c
+void artsAddDependenceToPersistentEventWithByteOffset(
+    artsGuid_t eventGuid, artsGuid_t edtGuid, uint32_t slot,
+    artsType_t acquireMode, bool useTwinDiff,
+    uint64_t byteOffset, uint64_t size) {
+  // Similar to artsAddDependenceToPersistentEventWithModeAndDiff
+  // but stores byteOffset and size in the dependent entry
+  struct artsDependent *dependent = allocateDependent();
+  dependent->addr = edtGuid;
+  dependent->slot = slot;
+  dependent->acquireMode = acquireMode;
+  dependent->useTwinDiff = useTwinDiff;
+  dependent->byteOffset = byteOffset;  // ESD: byte offset into DB
+  dependent->size = size;               // ESD: size of slice in bytes
+  // ... add to event's dependent list
+}
+```
+
+### 8.5.2 Data Structure Extensions
+
+The `artsDependent` struct in `external/arts/core/inc/arts/runtime/RT.h` was extended with two new fields:
+
+```c
+struct artsDependent {
+  uint8_t type;
+  volatile unsigned int slot;
+  volatile artsGuid_t addr;
+  volatile eventCallback_t callback;
+  volatile bool doneWriting;
+  artsType_t acquireMode;
+  bool useTwinDiff;
+  uint64_t byteOffset; ///< ESD: byte offset into DB (0 = full DB)
+  uint64_t size;       ///< ESD: size of slice in bytes (0 = full DB)
+};
+```
+
+When `byteOffset != 0` or `size != 0`, the signaling logic treats this as an ESD dependency and delivers only the slice.
+
+### 8.5.3 Signaling Flow
+
+When a persistent event fires in `artsPersistentEventSatisfy` (EventFunctions.c), the signaling logic checks for ESD dependencies:
+
+```c
+// For each dependent[j] in the event's list:
+if (dependent[j].byteOffset != 0 || dependent[j].size != 0) {
+  // ESD path: signal with slice pointer
+  struct artsDb *db = (struct artsDb *)artsRouteTableLookupItem(event->data);
+  if (db) {
+    void *dbData = (void *)(db + 1);  // Data follows DB header
+    void *slicePtr = (void *)(((char *)dbData) + dependent[j].byteOffset);
+    artsSignalEdtPtrWithGuid(dependent[j].addr, dependent[j].slot,
+                             event->data, slicePtr,
+                             (unsigned int)dependent[j].size);
+  }
+} else {
+  // Standard path: signal with DB GUID
+  internalSignalEdtWithMode(dependent[j].addr, dependent[j].slot,
+                            event->data, ...);
+}
+```
+
+The EDT receives:
+- `depv[slot].guid` = original DB GUID
+- `depv[slot].ptr` = pointer to the slice (at byteOffset into DB data)
+- `depv[slot].mode` = `ARTS_PTR`
+
+### 8.5.4 MLIR Lowering Path
+
+#### RecordDepOp Extension
+
+The `arts.rec_dep` operation in MLIR was extended with optional `byte_offsets` and `byte_sizes` operands:
+
+```mlir
+arts.rec_dep %dbGuid, %edtGuid, %slot, %mode, %twinDiff,
+             byte_offsets = [%offset], byte_sizes = [%size]
+```
+
+#### EdtLowering: Byte Offset Extraction from DbAcquireOp
+
+In `lib/arts/Passes/Transformations/EdtLowering.cpp`, when lowering an EDT with stencil dependencies, the pass extracts halo information from `DbAcquireOp`:
+
+```cpp
+// ESD: Check for stencil/halo byte offset information
+Value byteOffset, byteSize;
+if (dbAcquireOp && dbAcquireOp.getHaloLeft() && dbAcquireOp.getElementBytes()) {
+  // Compute byte_offset = halo_left * element_bytes
+  byteOffset = AC->create<arith::MulIOp>(loc, dbAcquireOp.getHaloLeft(),
+                                         dbAcquireOp.getElementBytes());
+  // Compute byte_size = (halo_left + halo_right) * element_bytes
+  Value haloTotal = dbAcquireOp.getHaloLeft();
+  if (dbAcquireOp.getHaloRight()) {
+    haloTotal = AC->create<arith::AddIOp>(loc, haloTotal,
+                                          dbAcquireOp.getHaloRight());
+  }
+  byteSize = AC->create<arith::MulIOp>(loc, haloTotal,
+                                       dbAcquireOp.getElementBytes());
+  hasEsdDeps = true;
+} else {
+  byteOffset = AC->create<arith::ConstantIndexOp>(loc, 0);
+  byteSize = AC->create<arith::ConstantIndexOp>(loc, 0);
+}
+```
+
+The `DbAcquireOp` attributes used:
+- `halo_left`: Number of elements in left halo
+- `halo_right`: Number of elements in right halo
+- `element_bytes`: Size of each element in bytes
+
+#### RecordDepPattern: Lowering to Runtime Call
+
+In `lib/arts/Passes/Transformations/ConvertArtsToLLVM.cpp`, the `RecordDepPattern` lowers `arts.rec_dep` to the appropriate runtime call:
+
+```cpp
+// If byte_offsets/byte_sizes are present and non-zero, call artsRecordDepAt
+if (hasNonZeroByteOffsets) {
+  rewriter.create<LLVM::CallOp>(loc, artsRecordDepAtFunc,
+    ValueRange{dbGuid, edtGuid, slot, mode, twinDiff, byteOffset, byteSize});
+} else {
+  rewriter.create<LLVM::CallOp>(loc, artsRecordDepFunc,
+    ValueRange{dbGuid, edtGuid, slot, mode, twinDiff});
+}
+```
+
+### 8.5.5 Distributed Protocol Support
+
+For cross-rank ESD dependencies, the following protocol extensions were added:
+
+#### New Message Type
+
+In `external/arts/core/inc/arts/network/RemoteProtocol.h`:
+
+```c
+enum artsServerMessageType {
+  // ... existing messages ...
+  ARTS_REMOTE_DB_ADD_DEPENDENCE_WITH_BYTE_OFFSET_MSG, ///< ESD: byte-offset dep
+};
+```
+
+#### Packet Structure
+
+```c
+struct __attribute__((__packed__)) artsRemoteDbAddDependenceWithByteOffsetPacket {
+  struct artsRemotePacket header;
+  artsGuid_t dbSrc;
+  artsGuid_t edtDest;
+  uint32_t edtSlot;
+  artsType_t acquireMode;
+  uint8_t useTwinDiff;
+  uint8_t reserved[3];
+  uint64_t byteOffset; ///< Byte offset into DB for slice
+  uint64_t size;       ///< Size of slice in bytes
+};
+```
+
+#### Remote Send Function
+
+In `external/arts/core/src/runtime/network/RemoteFunctions.c`:
+
+```c
+void artsRemoteDbAddDependenceWithByteOffset(artsGuid_t dbSrc,
+                                             artsGuid_t edtDest,
+                                             uint32_t edtSlot,
+                                             artsType_t acquireMode,
+                                             bool useTwinDiff,
+                                             uint64_t byteOffset,
+                                             uint64_t size) {
+  struct artsRemoteDbAddDependenceWithByteOffsetPacket packet;
+  packet.dbSrc = dbSrc;
+  packet.edtDest = edtDest;
+  packet.edtSlot = edtSlot;
+  packet.acquireMode = acquireMode;
+  packet.useTwinDiff = useTwinDiff ? 1 : 0;
+  memset(packet.reserved, 0, sizeof(packet.reserved));
+  packet.byteOffset = byteOffset;
+  packet.size = size;
+  artsFillPacketHeader(&packet.header, sizeof(packet),
+                       ARTS_REMOTE_DB_ADD_DEPENDENCE_WITH_BYTE_OFFSET_MSG);
+  artsRemoteSendRequestAsync(artsGuidGetRank(dbSrc), (char *)&packet,
+                             sizeof(packet));
+}
+```
+
+#### Handler Registration
+
+In `external/arts/core/src/runtime/Server.c`:
+
+```c
+case ARTS_REMOTE_DB_ADD_DEPENDENCE_WITH_BYTE_OFFSET_MSG: {
+  artsRemoteHandleDbAddDependenceWithByteOffset(packet);
+  break;
+}
+```
+
+### 8.5.6 Summary of ESD Data Flow
+
+```
+1. DbPartitioning detects stencil pattern, sets halo_left/halo_right on DbAcquireOp
+
+2. EdtLowering extracts halo info, computes byte_offset = halo_left * element_bytes
+
+3. RecordDepOp is created with byte_offsets and byte_sizes
+
+4. ConvertArtsToLLVM lowers to artsRecordDepAt(dbGuid, edtGuid, slot, mode,
+                                               twinDiff, byteOffset, size)
+
+5. Runtime: artsRecordDepAt stores byteOffset/size in artsDependent struct
+
+6. When DB is ready: artsPersistentEventSatisfy checks for ESD deps
+   - Computes slicePtr = dbData + byteOffset
+   - Calls artsSignalEdtPtrWithGuid(edt, slot, dbGuid, slicePtr, size)
+
+7. EDT receives: depv[slot].guid = dbGuid, depv[slot].ptr = slicePtr
+```
+
+---
+
+### 8.6 Chunk Index Calculation for Stencil Mode
+
+In stencil mode, chunk indices must be computed consistently for both READ and WRITE acquires.
+
+#### The Key Insight
+
+The allocation uses `plan_.chunkSize` (e.g., 7 rows per chunk). This chunk size is the actual physical size in the datablock allocation:
+
+```mlir
+arts.db_alloc sizes=[15] elementSizes=[%c7, %c100]  // 15 chunks, 7 rows each
+```
+
+The "base chunk size" concept (owned rows per worker, excluding halos) is relevant for **iteration scheduling** but NOT for **chunk index calculation**:
+
+- **Chunk index** = which chunk contains a given row
+- **Row r** maps to **chunk r / chunkSize**
+
+#### Incorrect vs Correct Calculation
+
+```cpp
+// INCORRECT (old code): used baseChunkSize for chunk index
+Value baseChunkSize = plan_.chunkSize - haloLeft - haloRight;  // e.g., 7-1-1 = 5
+startChunk = baseOffset / baseChunkSize;  // WRONG! Maps row 78 to chunk 15
+
+// CORRECT: use plan_.chunkSize (allocation chunk size)
+startChunk = baseOffset / plan_.chunkSize;  // Maps row 78 to chunk 11
+```
+
+#### Example: Jacobi with 100 rows, 15 workers
+
+- `plan_.chunkSize = 7` (allocation uses 7 rows per chunk)
+- `baseChunkSize = 7 - 1 - 1 = 5` (owned rows per worker, excluding halos)
+- `numChunks = ceil(100/7) = 15` (chunks 0-14)
+
+For Worker 11 with `firstIteration = 77`:
+- `baseOffset = 77 + 1 = 78` (adjusted for halo)
+- Incorrect: `startChunk = 78 / 5 = 15` → **OUT OF BOUNDS** (only 0-14 exist)
+- Correct: `startChunk = 78 / 7 = 11` → Valid chunk index
+
+#### Implementation in DbRewriter.cpp
+
+The stencil mode chunk index calculation now always uses `plan_.chunkSize`:
+
+```cpp
+if (plan_.mode == RewriterMode::Stencil && plan_.stencilInfo &&
+    plan_.stencilInfo->hasHalo()) {
+  // Recover base offset from extended offset
+  Value adjustedOffset = builder.create<arith::AddIOp>(loc, elemOffset, haloLeft);
+  Value baseOffset = builder.create<arith::SelectOp>(loc, isZero, zero, adjustedOffset);
+
+  // Use allocation chunk size for chunk index (NOT baseChunkSize)
+  startChunk = builder.create<arith::DivUIOp>(loc, baseOffset, plan_.chunkSize);
+}
+```
+
+Both READ and WRITE acquires use the same chunk layout because the datablock allocation defines that layout.
+
+---
+
+### A Full-Iteration "Timeline" View (Hybrid)
 
 This shows how halo exchange fits between the two phases:
 

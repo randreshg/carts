@@ -183,6 +183,12 @@ private:
   /// hints.
   bool rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
                       Value startChunk = nullptr);
+
+  /// Add a halo acquire to the EDT that uses the original acquire.
+  /// This adds the halo acquire as a new EDT dependency and creates
+  /// a corresponding block argument.
+  void addHaloAcquireToEdt(DbAcquireOp originalAcq, DbAcquireOp haloAcq,
+                           OpBuilder &builder);
 };
 
 } // namespace arts

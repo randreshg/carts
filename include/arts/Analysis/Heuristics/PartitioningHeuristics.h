@@ -102,7 +102,9 @@ struct PartitioningDecision {
 
   bool isCoarse() const { return outerRank == 0; }
   bool isFineGrained() const { return outerRank > 0; }
-  bool isChunked() const { return mode == RewriterMode::Chunked; }
+  bool isChunked() const {
+    return mode == RewriterMode::Chunked || mode == RewriterMode::Stencil;
+  }
 };
 
 struct ChunkingThresholds {
