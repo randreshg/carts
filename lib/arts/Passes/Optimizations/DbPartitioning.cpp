@@ -5,51 +5,9 @@
 ///   1) Preserve correctness via conservative twin-diff use.
 ///   2) Maximize concurrency while avoiding unnecessary data movement.
 ///
-/// Key points:
-///   - Chunking only occurs when chunk hints/info are available; otherwise we
-///     fall back to element-wise to preserve parallelism (safe default).
-///   - Concurrency is part of the decision: if chunking cannot be justified
-///     by hints and cost model, element-wise is preferred over coarse.
-///   - Twin-diff stays enabled unless we can prove disjoint access after
-///     partitioning; this avoids corruption from overlapping writes.
-///   - Stencil/mixed patterns default to element-wise for now; a future path
+/// For detailed documentation on partitioning decisions and per-acquire voting,
+/// see: docs/heuristics/partitioning/partitioning.md
 ///
-/// Decision Flow (allocation-level):
-///
-///   canBePartitioned()? ──no──> keep coarse
-///            │
-///            yes
-///            │
-///   H1: read-only + single-node? ──yes──> keep coarse
-///            │
-///            no
-///            │
-///   access-pattern summary (per-acquire → alloc):
-///     - any stencil? → element-wise (default for now)
-///     - mixed patterns? → element-wise (safe fallback)
-///     - uniform only? → evaluate H2 for chunking
-///            │
-///   H2 (cost model, concurrency-aware): if passes → chunked, else →
-///   element-wise
-///            │
-///   Note: Chunked is only possible when chunk info/hints exist; otherwise
-///         fallback is element-wise to preserve concurrency.
-///
-/// Compact equation:
-///   Decision =
-///     if !canBePartitioned -> Coarse
-///     else if H1 -> Coarse
-///     else if hasStencil || mixed -> ElementWise
-///     else if H2 && hasChunkInfo -> Chunked
-///     else -> ElementWise
-///
-///===----------------------------------------------------------------------===///
-/// Twin-Diff Policy - See HeuristicsConfig::shouldUseTwinDiff()
-///
-/// Decision: Single-node OR proof exists --> DISABLE
-///           Otherwise                   --> ENABLE (safe default)
-///
-/// Proof methods: IndexedControl, PartitionSuccess, AliasAnalysis
 ///===----------------------------------------------------------------------===///
 
 /// Dialects
@@ -108,16 +66,13 @@ namespace {
 ///===----------------------------------------------------------------------===///
 /// Partition Mode Conversion Helper
 ///===----------------------------------------------------------------------===///
-
-/// Convert PartitionMode (structure-based) to PromotionMode (attribute)
-static PromotionMode toPromotionMode(PartitionMode mode) {
+static PromotionMode toPromotionMode(RewriterMode mode) {
   switch (mode) {
-  case PartitionMode::Chunked:
+  case RewriterMode::Chunked:
     return PromotionMode::chunked;
-  case PartitionMode::ElementWise:
+  case RewriterMode::ElementWise:
+  case RewriterMode::Stencil: // Stencil uses element-wise attribute for now
     return PromotionMode::element_wise;
-  case PartitionMode::Coarse:
-    return PromotionMode::none;
   }
   return PromotionMode::none;
 }
@@ -756,15 +711,16 @@ bool DbPartitioningPass::partitionDb() {
   return changed;
 }
 
-/// Partition an allocation based on per-acquire analysis and heuristics.
-/// This function implements the partition attribute-aware flow:
+/// Partition an allocation based on per-acquire voting and heuristics.
+/// See docs/heuristics/partitioning/partitioning.md for detailed documentation.
+///
+/// Flow:
 ///   1. Check existing partition attribute - skip if already partitioned
-///   2. Analyze each acquire's PartitionMode (Coarse, ElementWise, Chunked)
-///   3. Check consistency across all acquires
-///   4. Query heuristics for partitioning decision (outerRank/innerRank)
-///   5. Compute sizes from decision
-///   6. Apply DbRewriter
-///   7. Set partition attribute on new alloc
+///   2. Analyze each acquire's PartitionMode and collect AcquireInfo
+///   3. Build PartitioningContext with per-acquire voting info
+///   4. Evaluate heuristics 
+///   5. Apply partitioning decision (outerRank/innerRank)
+///   6. Set partition attribute on new alloc
 FailureOr<DbAllocOp>
 DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   if (!allocOp || !allocOp.getOperation())
@@ -838,41 +794,85 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     return allocOp;
   }
 
-  /// Step 2: Check consistency across all acquires
+  /// Step 2: Determine partition capabilities from acquires
   const auto &reference = acquireInfos.front();
+  PartitionMode consistentMode = reference.mode;
+  bool modesConsistent = true;
+
   for (size_t i = 1; i < acquireInfos.size(); ++i) {
     if (!reference.isConsistentWith(acquireInfos[i])) {
-      ARTS_DEBUG(
-          "  Inconsistent partition modes across acquires - keeping original");
-      heuristics.recordDecision(
-          "Partition-Inconsistent", false,
-          "inconsistent partition modes across acquires, respecting CreateDbs "
-          "decision",
-          allocOp.getOperation(),
-          {{"acquireCount", static_cast<int64_t>(acquireInfos.size())}});
-      return allocOp;
+      modesConsistent = false;
+      ARTS_DEBUG("  Inconsistent partition modes across acquires");
+      break;
     }
-  }
-
-  PartitionMode consistentMode = reference.mode;
-  ARTS_DEBUG(
-      "  Consistent partition mode: " << static_cast<int>(consistentMode));
-
-  /// Coarse mode means no partitioning
-  if (consistentMode == PartitionMode::Coarse) {
-    ARTS_DEBUG("  Coarse mode - no partitioning needed");
-    heuristics.recordDecision(
-        "Partition-CoarseMode", false,
-        "all acquires are coarse mode, no partitioning needed",
-        allocOp.getOperation(), {});
-    return allocOp;
   }
 
   /// Step 3: Build PartitioningContext
   PartitioningContext ctx;
   ctx.machine = &AM->getAbstractMachine();
-  ctx.canElementWise = (consistentMode == PartitionMode::ElementWise);
-  ctx.canChunked = (consistentMode == PartitionMode::Chunked);
+
+  /// Get access patterns FIRST - needed by H1.5 StencilPatternHeuristic
+  if (allocNode) {
+    ctx.accessPatterns = allocNode->summarizeAcquirePatterns();
+    ARTS_DEBUG("  Access patterns: hasUniform="
+               << ctx.accessPatterns.hasUniform
+               << ", hasStencil=" << ctx.accessPatterns.hasStencil
+               << ", hasIndexed=" << ctx.accessPatterns.hasIndexed
+               << ", isMixed=" << ctx.accessPatterns.isMixed());
+  }
+
+  /// Populate per-acquire info for heuristic voting
+  if (allocNode) {
+    size_t idx = 0;
+    allocNode->forEachChildNode([&](NodeBase *child) {
+      auto *acqNode = dyn_cast<DbAcquireNode>(child);
+      if (!acqNode || idx >= acquireInfos.size())
+        return;
+
+      AcquireInfo info;
+      info.accessMode = acqNode->getDbAcquireOp().getMode();
+      info.canElementWise =
+          (acquireInfos[idx].mode == PartitionMode::ElementWise);
+      info.canChunked = (acquireInfos[idx].mode == PartitionMode::Chunked);
+      info.pinnedDimCount = info.canElementWise ? 1 : 0;
+
+      ctx.acquires.push_back(info);
+      ARTS_DEBUG("    Acquire["
+                 << idx << "]: mode=" << static_cast<int>(info.accessMode)
+                 << ", canEW=" << info.canElementWise
+                 << ", canChunked=" << info.canChunked);
+      ++idx;
+    });
+  }
+
+  /// Set capabilities based on mode consistency
+  if (modesConsistent) {
+    ARTS_DEBUG(
+      "  Consistent partition mode: " << static_cast<int>(consistentMode));
+    /// All consistent and coarse → no partitioning needed
+    if (consistentMode == PartitionMode::Coarse) {
+      ARTS_DEBUG("  Coarse mode - no partitioning needed");
+      heuristics.recordDecision(
+          "Partition-CoarseMode", false,
+          "all acquires are coarse mode, no partitioning needed",
+          allocOp.getOperation(), {});
+      return allocOp;
+    }
+    ctx.canElementWise = (consistentMode == PartitionMode::ElementWise);
+    ctx.canChunked = (consistentMode == PartitionMode::Chunked);
+  } else {
+    /// Inconsistent modes: use per-acquire voting to determine capabilities
+    ctx.canElementWise = ctx.anyCanElementWise();
+    ctx.canChunked = ctx.anyCanChunked();
+    // If neither is true but we have acquires, allow element-wise as fallback
+    if (!ctx.canElementWise && !ctx.canChunked && !ctx.acquires.empty())
+      ctx.canElementWise = true;
+    ARTS_DEBUG("  Inconsistent modes - using per-acquire voting: canEW="
+               << ctx.canElementWise << ", canChunked=" << ctx.canChunked);
+  }
+
+  /// Set pinnedDimCount from per-acquire info (max across all acquires)
+  ctx.pinnedDimCount = ctx.maxPinnedDimCount();
 
   /// Get access mode from allocNode
   if (allocNode)
@@ -892,23 +892,6 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     ctx.memrefRank = memrefType.getRank();
   else
     ctx.memrefRank = allocOp.getElementSizes().size();
-
-  /// Check for stencil or mixed patterns -> force element-wise
-  if (allocNode) {
-    auto summary = allocNode->summarizeAcquirePatterns();
-    if (summary.hasStencil || summary.isMixed()) {
-      ctx.canChunked = false;
-      ctx.canElementWise = true;
-      ARTS_DEBUG("  Access-pattern policy -> element-wise (stencil or mixed)");
-      heuristics.recordDecision(
-          "Partition-StencilOrMixed", true,
-          summary.hasStencil ? "stencil pattern detected, forcing element-wise"
-                             : "mixed patterns detected, forcing element-wise",
-          allocOp.getOperation(),
-          {{"hasStencil", summary.hasStencil ? 1 : 0},
-           {"isMixed", summary.isMixed() ? 1 : 0}});
-    }
-  }
 
   /// Step 4: Query heuristics → PartitioningDecision
   PartitioningDecision decision = heuristics.getPartitioningMode(ctx);
@@ -999,7 +982,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
 
   /// Step 7: Set partition attribute on new alloc
   if (succeeded(result)) {
-    setPartitionMode(*result, toPromotionMode(consistentMode));
+    setPartitionMode(*result, toPromotionMode(decision.mode));
     AM->getMetadataManager().transferMetadata(allocOp, result.value());
 
     /// Record successful partition decision

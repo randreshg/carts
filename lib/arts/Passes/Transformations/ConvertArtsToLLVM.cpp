@@ -276,73 +276,93 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
   }
 
 private:
+  /// Load the GUID value for a dependency, handling both direct and depv paths.
+  Value loadDbGuidValue(Value dbGuid, Value linearIndex, bool useDepv,
+                        Value depStruct, Value baseOffset, Location loc) const {
+    if (useDepv) {
+      Value finalOffset =
+          AC->create<arith::AddIOp>(loc, baseOffset, linearIndex);
+      auto depGep =
+          AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depStruct,
+                               finalOffset, ValueRange(), ValueRange());
+      return AC->create<LLVM::LoadOp>(loc, AC->Int64, depGep.getGuid());
+    }
+    return AC->create<memref::LoadOp>(loc, dbGuid, ValueRange{linearIndex});
+  }
+
+  /// Get totalDBs from source allocation for bounds checking (stencil cases).
+  /// Returns nullptr if boundsValid is not present or allocation not found.
+  Value getTotalDBsForBoundsCheck(Value dbGuid, Value boundsValid) const {
+    if (!boundsValid)
+      return nullptr;
+
+    DbAllocOp allocOp = nullptr;
+    if (auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>())
+      allocOp = dbAcquireOp.getSourceGuid().getDefiningOp<DbAllocOp>();
+    else if (auto depDbAcquireOp = dbGuid.getDefiningOp<DepDbAcquireOp>())
+      allocOp = depDbAcquireOp.getGuid().getDefiningOp<DbAllocOp>();
+
+    if (allocOp && !allocOp.getSizes().empty())
+      return allocOp.getSizes()[0];
+    return nullptr;
+  }
+
   void recordDepsForDb(Value dbGuid, Value edtGuid, Value sharedSlotAlloc,
                        DepAccessMode accessMode,
                        std::optional<int32_t> acquireMode, bool twinDiff,
                        Value boundsValid, Location loc) const {
     SmallVector<Value> dbSizes, dbOffsets, dbIndices;
     bool isSingle = false;
-
-    /// Extract base offset and dep_struct for THIS specific dependency
     Value depStruct = nullptr;
     Value baseOffset = nullptr;
 
     /// Handle both DbAcquireOp and DepDbAcquireOp as sources
     if (auto dbAcquireOp = dbGuid.getDefiningOp<DbAcquireOp>()) {
       getDbInfo(dbAcquireOp, dbSizes, dbOffsets, dbIndices, isSingle);
-      /// depStruct and baseOffset remain null for DbAcquireOp
     } else if (auto depDbAcquireOp = dbGuid.getDefiningOp<DepDbAcquireOp>()) {
       getDbInfo(depDbAcquireOp, dbSizes, dbOffsets, dbIndices, isSingle);
-      /// For DepDbAcquireOp, always extract dep_struct and base offset
       depStruct = depDbAcquireOp.getDepStruct();
       baseOffset = depDbAcquireOp.getOffset();
     } else {
-      ARTS_ERROR("dbGuid must come from DbAcquireOp or DepDbAcquireOp"
-                 << dbGuid);
       llvm_unreachable("dbGuid must come from DbAcquireOp or DepDbAcquireOp");
     }
 
-    /// Use shared slot counter and iterate over all db elements
+    /// Get totalDBs for bounds check (only for stencil cases)
+    Value totalDBs = getTotalDBsForBoundsCheck(dbGuid, boundsValid);
+
     AC->iterateDbElements(dbGuid, edtGuid, dbSizes, dbOffsets, isSingle, loc,
                           [&](Value linearIndex) {
                             recordSingleDb(dbGuid, edtGuid, sharedSlotAlloc,
                                            linearIndex, accessMode, acquireMode,
                                            twinDiff, boundsValid, depStruct,
-                                           baseOffset, loc);
+                                           baseOffset, totalDBs, loc);
                           });
   }
 
   /// Record a single datablock dependency for an EDT slot.
-  /// For stencil patterns with boundsValid (e.g., u[i-1] when i=0), we use:
-  ///   if (boundsValid) artsRecordDep(...) else artsSignalEdtNull(...)
-  /// artsSignalEdtNull uses ARTS_NULL mode to satisfy the slot without data,
-  /// avoiding deadlock (all slots must be filled) and routing errors.
+  /// For stencil patterns with boundsValid, we guard the load and call:
+  ///   if (effectiveBoundsValid) artsRecordDep(...) else artsSignalEdtNull(...)
+  /// When totalDBs is present, effectiveBoundsValid = boundsValid AND
+  /// indexInBounds.
   void recordSingleDb(Value dbGuid, Value edtGuid, Value slotAlloc,
                       Value linearIndex, DepAccessMode accessMode,
                       std::optional<int32_t> acquireMode, bool twinDiff,
                       Value boundsValid, Value depStruct, Value baseOffset,
-                      Location loc) const {
-    /// Load dbGuid value - check if we actually have depStruct (from
-    /// DepDbAcquireOp) or if this specific dependency is from DbAcquireOp
-    Value dbGuidValue;
+                      Value totalDBs, Location loc) const {
     const bool useDepv = depStruct && baseOffset &&
                          (accessMode == DepAccessMode::from_depv ||
                           dbGuid.getDefiningOp<DepDbAcquireOp>());
-    if (useDepv) {
-      /// Access GUID via DepGepOp from EDT depv structure
-      /// Must add baseOffset to linearIndex to get correct position in depv
-      Value finalOffset =
-          AC->create<arith::AddIOp>(loc, baseOffset, linearIndex);
-      auto depGep =
-          AC->create<DepGepOp>(loc, AC->llvmPtr, AC->llvmPtr, depStruct,
-                               finalOffset, ValueRange(), ValueRange());
-      dbGuidValue = AC->create<LLVM::LoadOp>(loc, AC->Int64, depGep.getGuid());
-    } else {
-      /// Direct access via memref.load for DbAcquireOp
-      dbGuidValue =
-          AC->create<memref::LoadOp>(loc, dbGuid, ValueRange{linearIndex});
+
+    /// Extend boundsValid with DB index check for stencil cases
+    Value effectiveBoundsValid = boundsValid;
+    if (totalDBs) {
+      Value indexInBounds = AC->create<arith::CmpIOp>(
+          loc, arith::CmpIPredicate::ult, linearIndex, totalDBs);
+      effectiveBoundsValid =
+          AC->create<arith::AndIOp>(loc, boundsValid, indexInBounds);
     }
 
+    /// Prepare common values
     Value edtGuidValue = edtGuid;
     if (auto mt = edtGuid.getType().dyn_cast<MemRefType>()) {
       auto zeroIndex = AC->createIndexConstant(0, loc);
@@ -352,42 +372,39 @@ private:
     edtGuidValue = AC->castToInt(AC->Int64, edtGuidValue, loc);
 
     auto currentSlotI32 = AC->create<memref::LoadOp>(loc, slotAlloc);
-
     int32_t modeInt = acquireMode.value_or(static_cast<int32_t>(DbMode::write));
     Value modeValue = AC->createIntConstant(modeInt, AC->Int32, loc);
     Value twinDiffVal = AC->createIntConstant(twinDiff ? 1 : 0, AC->Int1, loc);
 
-    /// If boundsValid is present, conditionally record dep or signal slot.
-    /// This guards out-of-bounds stencil indices (e.g., u[i-1] when i=0).
-    if (boundsValid) {
-      /// Create if-else: valid branch records dep, invalid branch signals dummy
-      auto ifOp =
-          AC->create<scf::IfOp>(loc, boundsValid, /*withElseRegion=*/true);
+    if (effectiveBoundsValid) {
+      /// Guarded path: load inside if-block to prevent out-of-bounds access
+      auto ifOp = AC->create<scf::IfOp>(loc, effectiveBoundsValid,
+                                        /*withElseRegion=*/true);
 
-      /// Then block: boundsValid=true -> normal artsRecordDep
       AC->setInsertionPointToStart(&ifOp.getThenRegion().front());
+      Value dbGuidValue = loadDbGuidValue(dbGuid, linearIndex, useDepv,
+                                          depStruct, baseOffset, loc);
       AC->createRuntimeCall(
           types::ARTSRTL_artsRecordDep,
           {dbGuidValue, edtGuidValue, currentSlotI32, modeValue, twinDiffVal},
           loc);
 
-      /// Else block: boundsValid=false -> artsSignalEdtNull to satisfy slot
-      /// without actual data (avoids deadlock from dep count mismatch).
-      /// Uses ARTS_NULL mode which won't misinterpret 0 as a GUID for routing.
       AC->setInsertionPointToStart(&ifOp.getElseRegion().front());
       AC->createRuntimeCall(types::ARTSRTL_artsSignalEdtNull,
                             {edtGuidValue, currentSlotI32}, loc);
 
       AC->setInsertionPointAfter(ifOp);
     } else {
-      /// No boundsValid condition -> normal unconditional recordDep
+      /// Unconditional path: no bounds check needed
+      Value dbGuidValue = loadDbGuidValue(dbGuid, linearIndex, useDepv,
+                                          depStruct, baseOffset, loc);
       AC->createRuntimeCall(
           types::ARTSRTL_artsRecordDep,
           {dbGuidValue, edtGuidValue, currentSlotI32, modeValue, twinDiffVal},
           loc);
     }
 
-    /// Increment the shared slot counter for next dependency
+    /// Increment slot counter
     auto oneI32 = AC->createIntConstant(1, AC->Int32, loc);
     auto incrementedSlot =
         AC->create<arith::AddIOp>(loc, currentSlotI32, oneI32);

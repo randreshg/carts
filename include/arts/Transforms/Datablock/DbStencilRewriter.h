@@ -29,16 +29,16 @@ namespace arts {
 ///   dbRefIdx = 0 (single chunk with halo)
 ///   memrefIdx = clamp(globalIdx, 0, totalRows-1) - chunkStart + haloLeft
 class DbStencilRewriter : public DbRewriterBase {
-  Value baseChunkSize_; ///< Base elements per chunk (before halo)
-  Value startChunk_;    ///< First chunk this partition acquires
-  Value haloLeft_;      ///< Left halo size (|minOffset|)
-  Value haloRight_;     ///< Right halo size (|maxOffset|)
-  Value totalRows_;     ///< Total rows in array (for boundary clamping)
+  /// Stencil-specific members (kept for future ESD implementation)
+  Value baseChunkSize_, startChunk_, haloLeft_, haloRight_, totalRows_;
+  Value elemOffset_, elemSize_;
+  SmallVector<Value> oldElementSizes_;
 
 public:
   DbStencilRewriter(Value baseChunkSize, Value startChunk, Value haloLeft,
                     Value haloRight, Value totalRows, unsigned outerRank,
-                    unsigned innerRank);
+                    unsigned innerRank, Value elemOffset, Value elemSize,
+                    ValueRange oldElementSizes);
 
   /// Transform global multi-dimensional indices to local with halo offset.
   LocalizedIndices localize(ArrayRef<Value> globalIndices, OpBuilder &builder,

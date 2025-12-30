@@ -515,9 +515,11 @@ std::unique_ptr<DbRewriterBase> DbRewriter::createRewriter(
                                       << ", haloRight="
                                       << plan.stencilInfo->haloRight);
 
+    /// Pass element-wise params for delegation (placeholder until ESD ready)
     return std::make_unique<DbStencilRewriter>(
         baseChunkSize, startChunk, haloLeft, haloRight,
-        plan.stencilInfo->totalRows, outerRank, innerRank);
+        plan.stencilInfo->totalRows, outerRank, innerRank, elemOffset, elemSize,
+        oldElementSizes);
   }
 
   case RewriterMode::Chunked: {

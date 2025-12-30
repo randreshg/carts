@@ -1,8 +1,9 @@
-//===- PartitioningHeuristics.cpp - H1.x partitioning heuristics ----------===//
-//
-// This file implements all H1.x partitioning heuristics for the CARTS compiler.
-//
-//===----------------------------------------------------------------------===//
+///==========================================================================///
+/// File: PartitioningHeuristics.cpp
+///
+/// This file implements all H1.x partitioning heuristics for the CARTS
+/// compiler.
+///==========================================================================///
 
 #include "arts/Analysis/Heuristics/PartitioningHeuristics.h"
 #include "arts/Utils/AbstractMachine/ArtsAbstractMachine.h"
@@ -21,16 +22,21 @@ ReadOnlySingleNodeHeuristic::evaluate(const PartitioningContext &ctx) const {
   if (!ctx.machine)
     return std::nullopt;
 
-  // Only applies: single-node + read-only + NO explicit chunked/element-wise intent
-  // If canChunked or canElementWise is true, the code structure indicates the
-  // programmer intended fine-grained access - respect that intent.
-  if (ctx.machine->getNodeCount() == 1 && ctx.accessMode == ArtsMode::in &&
-      !ctx.canChunked && !ctx.canElementWise) {
+  ///  Only applies: single-node + ALL acquires read-only + NO fine-grained
+  ///  intent If ANY acquire has write access, we need fine-grained for
+  ///  concurrency. Use allReadOnly() for per-acquire voting, fall back to
+  ///  accessMode if no per-acquire info available (backward compatibility).
+  bool isReadOnly = !ctx.acquires.empty() ? ctx.allReadOnly()
+                                          : (ctx.accessMode == ArtsMode::in);
+
+  if (ctx.machine->getNodeCount() == 1 && isReadOnly && !ctx.canChunked &&
+      !ctx.canElementWise) {
     PartitioningDecision decision;
     decision.mode = RewriterMode::ElementWise;
-    decision.outerRank = 0; // Coarse
-    decision.innerRank = ctx.memrefRank; // All dims are inner for coarse
-    decision.rationale = "H1.1: Read-only on single-node prefers coarse";
+    decision.outerRank = 0;              ///  Coarse
+    decision.innerRank = ctx.memrefRank; ///  All dims are inner for coarse
+    decision.rationale =
+        "H1.1: All acquires read-only on single-node prefers coarse";
     ARTS_DEBUG("H1.1 applied: " << decision.rationale);
     return decision;
   }
@@ -47,7 +53,7 @@ CostModelHeuristic::evaluate(const PartitioningContext &ctx) const {
   if (!ctx.machine)
     return std::nullopt;
 
-  // Must have at least one fine-grained option available
+  ///  Must have at least one fine-grained option available
   if (!ctx.canElementWise && !ctx.canChunked)
     return std::nullopt;
 
@@ -59,34 +65,45 @@ CostModelHeuristic::evaluate(const PartitioningContext &ctx) const {
              << ", elementWise="
              << (elementWiseCost ? std::to_string(*elementWiseCost) : "N/A"));
 
-  // Neither option has a computable cost
+  ///  Neither option has a computable cost
   if (!chunkedCost && !elementWiseCost) {
-    // Optimistic path: if canChunked is true, the code structure indicates
-    // chunked intent (e.g., loop + chunk size deps). Honor that intent even
-    // when we can't compute exact cost (dynamic chunk size / array size).
+    ///  Optimistic path: if canChunked is true, the code structure indicates
+    ///  chunked intent (e.g., loop + chunk size deps). Honor that intent even
+    ///  when we can't compute exact cost (dynamic chunk size / array size).
     if (ctx.canChunked) {
       PartitioningDecision decision;
       decision.mode = RewriterMode::Chunked;
       decision.outerRank = 1;
-      decision.innerRank = ctx.memrefRank; // Chunked preserves conceptual rank
+      decision.innerRank =
+          ctx.memrefRank; ///  Chunked preserves conceptual rank
       decision.rationale = "H1.2: Optimistic chunking (dynamic sizes)";
       ARTS_DEBUG("H1.2 applied (optimistic): " << decision.rationale);
       return decision;
     }
-    // Similarly for element-wise
-    if (ctx.canElementWise && ctx.pinnedDimCount > 0) {
+    ///  Similarly for element-wise: allow if pinnedDimCount > 0 OR if write
+    ///  access exists (write benefits from fine-grained even without indexed
+    ///  deps)
+    if (ctx.canElementWise &&
+        (ctx.pinnedDimCount > 0 || ctx.hasWriteAccess())) {
       PartitioningDecision decision;
       decision.mode = RewriterMode::ElementWise;
-      decision.outerRank = ctx.pinnedDimCount;
-      decision.innerRank = ctx.memrefRank - ctx.pinnedDimCount;
-      decision.rationale = "H1.2: Optimistic element-wise (dynamic sizes)";
+      ///  Use pinnedDimCount if available, otherwise default to 1 for write
+      ///  access
+      decision.outerRank = ctx.pinnedDimCount > 0 ? ctx.pinnedDimCount : 1;
+      decision.innerRank = ctx.memrefRank > decision.outerRank
+                               ? ctx.memrefRank - decision.outerRank
+                               : 0;
+      decision.rationale =
+          ctx.pinnedDimCount > 0
+              ? "H1.2: Optimistic element-wise (dynamic sizes)"
+              : "H1.2: Write access benefits from element-wise partitioning";
       ARTS_DEBUG("H1.2 applied (optimistic): " << decision.rationale);
       return decision;
     }
     return std::nullopt;
   }
 
-  // Prefer chunked if available and has better/equal cost
+  ///  Prefer chunked if available and has better/equal cost
   bool preferChunked =
       chunkedCost.has_value() &&
       (!elementWiseCost.has_value() || *chunkedCost >= *elementWiseCost);
@@ -95,7 +112,7 @@ CostModelHeuristic::evaluate(const PartitioningContext &ctx) const {
   if (preferChunked && ctx.canChunked) {
     decision.mode = RewriterMode::Chunked;
     decision.outerRank = 1;
-    decision.innerRank = ctx.memrefRank; // Chunked preserves conceptual rank
+    decision.innerRank = ctx.memrefRank; ///  Chunked preserves conceptual rank
     decision.rationale = "H1.2: Cost model prefers chunked";
   } else if (ctx.canElementWise) {
     decision.mode = RewriterMode::ElementWise;
@@ -118,7 +135,7 @@ CostModelHeuristic::evaluateChunkedCost(const PartitioningContext &ctx) const {
   int64_t chunkCount =
       (*ctx.totalElements + *ctx.chunkSize - 1) / *ctx.chunkSize;
 
-  // Threshold checks (can be made configurable via HeuristicsConfig)
+  ///  Threshold checks (can be made configurable via HeuristicsConfig)
   constexpr int64_t kMaxChunks = 1024;
   constexpr int64_t kMinChunkBytes = 64;
 
@@ -128,7 +145,7 @@ CostModelHeuristic::evaluateChunkedCost(const PartitioningContext &ctx) const {
     return std::nullopt;
   }
 
-  // Assume f64 (8 bytes) for byte calculation
+  ///  Assume f64 (8 bytes) for byte calculation
   int64_t chunkBytes = *ctx.chunkSize * 8;
   if (chunkBytes < kMinChunkBytes) {
     ARTS_DEBUG("  H1.2 chunked rejected: chunkBytes=" << chunkBytes << " < "
@@ -136,7 +153,7 @@ CostModelHeuristic::evaluateChunkedCost(const PartitioningContext &ctx) const {
     return std::nullopt;
   }
 
-  // Score: higher = better (fewer chunks preferred)
+  ///  Score: higher = better (fewer chunks preferred)
   int64_t score = 100 - (chunkCount / 10);
   ARTS_DEBUG("  H1.2 chunked score=" << score << " (chunkCount=" << chunkCount
                                      << ")");
@@ -148,7 +165,7 @@ std::optional<int64_t> CostModelHeuristic::evaluateElementWiseCost(
   if (!ctx.canElementWise || ctx.pinnedDimCount == 0)
     return std::nullopt;
 
-  // Base score for element-wise
+  ///  Base score for element-wise
   int64_t score = 50;
   ARTS_DEBUG("  H1.2 element-wise score=" << score);
   return score;
@@ -160,12 +177,12 @@ std::optional<int64_t> CostModelHeuristic::evaluateElementWiseCost(
 
 std::optional<PartitioningDecision>
 AccessUniformityHeuristic::evaluate(const PartitioningContext &ctx) const {
-  // Non-uniform access with no fine-grained option -> coarse
+  ///  Non-uniform access with no fine-grained option -> coarse
   if (!ctx.isUniformAccess && !ctx.canElementWise && !ctx.canChunked) {
     PartitioningDecision decision;
     decision.mode = RewriterMode::ElementWise;
     decision.outerRank = 0;
-    decision.innerRank = ctx.memrefRank; // All dims are inner for coarse
+    decision.innerRank = ctx.memrefRank; ///  All dims are inner for coarse
     decision.rationale = "H1.3: Non-uniform access prefers coarse";
     ARTS_DEBUG("H1.3 applied: " << decision.rationale);
     return decision;
@@ -183,21 +200,30 @@ MultiNodeHeuristic::evaluate(const PartitioningContext &ctx) const {
   if (!ctx.machine)
     return std::nullopt;
 
-  // Only applies to multi-node deployments
+  ///  Only applies to multi-node deployments
   if (ctx.machine->getNodeCount() <= 1)
     return std::nullopt;
 
+  ///  Use per-acquire voting: check both aggregate and per-acquire capabilities
+  bool canDoChunked = ctx.canChunked || ctx.anyCanChunked();
+  bool canDoElementWise = ctx.canElementWise || ctx.anyCanElementWise();
+
   PartitioningDecision decision;
-  if (ctx.canChunked) {
+  if (canDoChunked) {
     decision.mode = RewriterMode::Chunked;
     decision.outerRank = 1;
-    decision.innerRank = ctx.memrefRank; // Chunked preserves conceptual rank
+    decision.innerRank = ctx.memrefRank; ///  Chunked preserves conceptual rank
     decision.rationale =
         "H1.4: Multi-node prefers chunked for network efficiency";
-  } else if (ctx.canElementWise) {
+  } else if (canDoElementWise) {
     decision.mode = RewriterMode::ElementWise;
-    decision.outerRank = ctx.pinnedDimCount;
-    decision.innerRank = ctx.memrefRank - ctx.pinnedDimCount;
+    ///  Use maxPinnedDimCount if available, otherwise default to 1
+    unsigned outerRank =
+        ctx.pinnedDimCount > 0 ? ctx.pinnedDimCount : ctx.maxPinnedDimCount();
+    decision.outerRank = outerRank > 0 ? outerRank : 1;
+    decision.innerRank = ctx.memrefRank > decision.outerRank
+                             ? ctx.memrefRank - decision.outerRank
+                             : 0;
     decision.rationale = "H1.4: Multi-node prefers fine-grained";
   } else {
     return std::nullopt;
@@ -208,6 +234,45 @@ MultiNodeHeuristic::evaluate(const PartitioningContext &ctx) const {
 }
 
 //===----------------------------------------------------------------------===//
+// H1.5: Stencil Pattern
+//===----------------------------------------------------------------------===//
+
+std::optional<PartitioningDecision>
+StencilPatternHeuristic::evaluate(const PartitioningContext &ctx) const {
+  const auto &patterns = ctx.accessPatterns;
+
+  ///  Case 1: Mixed patterns → Element-wise
+  ///  Mixed patterns (e.g., uniform + stencil on same allocation) require
+  ///  element-wise partitioning for fine-grained ownership handling.
+  if (patterns.isMixed()) {
+    PartitioningDecision decision;
+    decision.mode = RewriterMode::ElementWise;
+    decision.outerRank = 1; ///  Partition outermost dimension
+    decision.innerRank = ctx.memrefRank > 0 ? ctx.memrefRank - 1 : 0;
+    decision.rationale = "H1.5: Mixed access patterns require element-wise";
+    ARTS_DEBUG("H1.5 applied: " << decision.rationale);
+    return decision;
+  }
+
+  ///  Case 2: Pure stencil → Stencil mode (ESD)
+  ///  Pure stencil patterns use the stencil rewriter for halo-aware
+  ///  partitioning. DbStencilRewriter currently delegates to element-wise as
+  ///  placeholder.
+  if (patterns.hasStencil && !patterns.hasUniform && !patterns.hasIndexed) {
+    PartitioningDecision decision;
+    decision.mode = RewriterMode::Stencil; ///  Use stencil rewriter
+    decision.outerRank = 1;
+    decision.innerRank = ctx.memrefRank > 0 ? ctx.memrefRank - 1 : 0;
+    decision.rationale = "H1.5: Pure stencil pattern uses ESD mode";
+    ARTS_DEBUG("H1.5 applied: " << decision.rationale);
+    return decision;
+  }
+
+  ///  Not a stencil/mixed pattern - let other heuristics decide
+  return std::nullopt;
+}
+
+//===----------------------------------------------------------------------===//
 // Factory Function
 //===----------------------------------------------------------------------===//
 
@@ -215,8 +280,9 @@ llvm::SmallVector<std::unique_ptr<PartitioningHeuristic>>
 mlir::arts::createDefaultPartitioningHeuristics() {
   llvm::SmallVector<std::unique_ptr<PartitioningHeuristic>> heuristics;
 
-  // Add heuristics (will be sorted by priority in HeuristicsConfig)
+  ///  Add heuristics (will be sorted by priority in HeuristicsConfig)
   heuristics.push_back(std::make_unique<ReadOnlySingleNodeHeuristic>());
+  heuristics.push_back(std::make_unique<StencilPatternHeuristic>());
   heuristics.push_back(std::make_unique<MultiNodeHeuristic>());
   heuristics.push_back(std::make_unique<AccessUniformityHeuristic>());
   heuristics.push_back(std::make_unique<CostModelHeuristic>());

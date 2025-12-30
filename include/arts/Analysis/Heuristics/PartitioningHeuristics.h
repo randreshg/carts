@@ -1,15 +1,16 @@
-//===- PartitioningHeuristics.h - H1.x partitioning heuristics --*- C++ -*-===//
-//
-// This file defines all H1.x partitioning heuristics for the CARTS compiler.
+///==========================================================================///
+/// File: PartitioningHeuristics.h
+///
+/// This file defines all H1.x partitioning heuristics for the CARTS compiler.
 // These heuristics determine the optimal datablock partitioning strategy
-// (coarse, element-wise, or chunked) based on access patterns and machine
-// configuration.
-//
-//===----------------------------------------------------------------------===//
+/// (coarse, element-wise, or chunked) based on access patterns and machine
+/// configuration.
+///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_HEURISTICS_PARTITIONINGHEURISTICS_H
 #define ARTS_ANALYSIS_HEURISTICS_PARTITIONINGHEURISTICS_H
 
+#include "arts/Analysis/Graphs/Db/DbAccessPattern.h"
 #include "arts/Analysis/Heuristics/HeuristicBase.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Transforms/Datablock/DbRewriter.h"
@@ -26,32 +27,68 @@ class ArtsAbstractMachine;
 // Context and Decision Structures
 //===----------------------------------------------------------------------===//
 
+/// Per-acquire info for heuristic voting.
+struct AcquireInfo {
+  ArtsMode accessMode = ArtsMode::uninitialized;
+  bool canElementWise = false;
+  bool canChunked = false;
+  unsigned pinnedDimCount = 0;
+};
+
 /// Context for partitioning decisions - all inputs needed by H1.x heuristics.
-///
-/// This struct encapsulates all the information that partitioning heuristics
-/// need to make a decision: machine configuration, DB partitioning
-/// capabilities, access patterns, and data characteristics.
 struct PartitioningContext {
   /// Machine configuration (node count, execution mode, etc.)
   const ArtsAbstractMachine *machine = nullptr;
 
-  // DB partitioning capabilities
-  bool canElementWise = false; /// Has indexed deps (fine-grained possible)
-  bool canChunked = false;     /// Has chunk deps (offset/size based)
-  unsigned pinnedDimCount = 0; /// Dimensions with indexed access
-
-  // DB info
-  ArtsMode accessMode = ArtsMode::uninitialized; /// Read/Write/ReadWrite
-  std::optional<int64_t> totalElements;          /// Total allocation size
-  std::optional<int64_t> chunkSize;              /// Chunk size if known
-  std::optional<int64_t> depsPerEDT;             /// Max deps per EDT
-
-  // Access pattern info
-  bool isUniformAccess = false;  /// All EDTs access same pattern
-  bool isStencilPattern = false; /// Stencil access detected
-
-  // Memref info
+  ///  DB partitioning capabilities
+  bool canElementWise = false, canChunked = false;
+  unsigned pinnedDimCount = 0;
+  ArtsMode accessMode = ArtsMode::uninitialized;
+  std::optional<int64_t> totalElements, chunkSize, depsPerEDT;
+  bool isUniformAccess = false; /// All EDTs access same pattern
+  AcquirePatternSummary accessPatterns;
+  ///  Memref info
   unsigned memrefRank = 0; /// Total rank of the memref being partitioned
+
+  ///  Per-acquire info for voting (populated from DbAcquireNodes)
+  SmallVector<AcquireInfo> acquires;
+
+  ///  Aggregation helpers for per-acquire voting
+
+  /// Returns true if any acquire has write access (out or inout).
+  bool hasWriteAccess() const {
+    return llvm::any_of(acquires, [](const AcquireInfo &a) {
+      return a.accessMode == ArtsMode::out || a.accessMode == ArtsMode::inout;
+    });
+  }
+
+  /// Returns true if ALL acquires are read-only (in mode).
+  bool allReadOnly() const {
+    return !acquires.empty() &&
+           llvm::all_of(acquires, [](const AcquireInfo &a) {
+             return a.accessMode == ArtsMode::in;
+           });
+  }
+
+  /// Returns true if any acquire can use element-wise partitioning.
+  bool anyCanElementWise() const {
+    return llvm::any_of(acquires,
+                        [](const AcquireInfo &a) { return a.canElementWise; });
+  }
+
+  /// Returns true if any acquire can use chunked partitioning.
+  bool anyCanChunked() const {
+    return llvm::any_of(acquires,
+                        [](const AcquireInfo &a) { return a.canChunked; });
+  }
+
+  /// Returns the maximum pinnedDimCount across all acquires.
+  unsigned maxPinnedDimCount() const {
+    unsigned maxVal = 0;
+    for (const auto &a : acquires)
+      maxVal = std::max(maxVal, a.pinnedDimCount);
+    return maxVal;
+  }
 };
 
 /// Result of a partitioning decision.
@@ -60,30 +97,16 @@ struct PartitioningContext {
 /// mode, grid dimensions, and a human-readable rationale for diagnostics.
 struct PartitioningDecision {
   RewriterMode mode = RewriterMode::ElementWise; /// Chunked or ElementWise
-  unsigned outerRank = 0; /// Outer grid rank (0 = coarse allocation)
-  unsigned innerRank = 0; /// Inner element rank
-  std::string rationale;  /// Human-readable explanation
+  unsigned outerRank = 0, innerRank = 0;
+  std::string rationale;
 
-  /// Returns true if this is a coarse (single-DB) allocation
   bool isCoarse() const { return outerRank == 0; }
-
-  /// Returns true if this is a fine-grained (multi-DB) allocation
   bool isFineGrained() const { return outerRank > 0; }
-
-  /// Returns true if using chunked rewriter mode
   bool isChunked() const { return mode == RewriterMode::Chunked; }
 };
 
-/// Mode-dependent chunking thresholds for H1.2 cost model.
-///
-/// These thresholds determine when fine-grained allocation is beneficial
-/// based on the expected number of datablocks, dependencies per EDT, and
-/// minimum chunk sizes.
 struct ChunkingThresholds {
-  int64_t maxOuterDBs;         /// Max total datablocks before rejecting
-  int64_t maxTotalDBsPerEDT;   /// Max DBs per EDT (grid-aware!)
-  int64_t minInnerBytes;       /// Min chunk size in bytes
-  int64_t minElementsPerChunk; /// Min elements per chunk
+  int64_t maxOuterDBs, maxTotalDBsPerEDT, minInnerBytes, minElementsPerChunk;
 };
 
 //===----------------------------------------------------------------------===//
@@ -91,30 +114,20 @@ struct ChunkingThresholds {
 //===----------------------------------------------------------------------===//
 
 /// Abstract base class for all H1.x partitioning heuristics.
-///
-/// Each partitioning heuristic evaluates a PartitioningContext and optionally
-/// returns a PartitioningDecision. Returning std::nullopt means the heuristic
-/// does not apply to this context.
 class PartitioningHeuristic : public HeuristicBase {
 public:
   /// Evaluate this heuristic given the context.
-  ///
-  /// @param ctx The partitioning context containing all decision inputs
-  /// @return A PartitioningDecision if this heuristic applies, std::nullopt
-  /// otherwise
   virtual std::optional<PartitioningDecision>
   evaluate(const PartitioningContext &ctx) const = 0;
 };
 
 //===----------------------------------------------------------------------===//
-// H1.1: Read-Only Single-Node Heuristic
+/// H1.1: Read-Only Single-Node Heuristic
+/// Read-only allocations on single-node prefer coarse allocation.
+///  Rationale: On a single node with read-only access, there is no write
+///  contention to relieve via fine-graining. Coarse allocation reduces
+///  datablock count and per-EDT dependency overhead.
 //===----------------------------------------------------------------------===//
-
-/// H1.1: Read-only allocations on single-node prefer coarse allocation.
-///
-/// Rationale: On a single node with read-only access, there is no write
-/// contention to relieve via fine-graining. Coarse allocation reduces
-/// datablock count and per-EDT dependency overhead.
 class ReadOnlySingleNodeHeuristic : public PartitioningHeuristic {
 public:
   llvm::StringRef getName() const override { return "H1.1"; }
@@ -123,7 +136,7 @@ public:
     return "Read-only single-node prefers coarse allocation";
   }
 
-  int getPriority() const override { return 100; } // Highest priority
+  int getPriority() const override { return 100; }
 
   std::optional<PartitioningDecision>
   evaluate(const PartitioningContext &ctx) const override;
@@ -131,13 +144,11 @@ public:
 
 //===----------------------------------------------------------------------===//
 // H1.2: Cost Model Heuristic
-//===----------------------------------------------------------------------===//
-
-/// H1.2: Cost model evaluation for fine-grained strategies.
-///
+/// Cost model evaluation for fine-grained strategies.
 /// Evaluates both chunked and element-wise allocation costs and returns
 /// the better option. Uses threshold-based rejection for infeasible configs
 /// and scoring for tie-breaking.
+//===----------------------------------------------------------------------===//
 class CostModelHeuristic : public PartitioningHeuristic {
 public:
   llvm::StringRef getName() const override { return "H1.2"; }
@@ -146,31 +157,27 @@ public:
     return "Cost model evaluation for fine-grained allocation";
   }
 
-  int getPriority() const override { return 50; } // Medium priority
+  int getPriority() const override { return 50; }
 
   std::optional<PartitioningDecision>
   evaluate(const PartitioningContext &ctx) const override;
 
 private:
-  /// Evaluate cost for chunked allocation strategy.
-  /// Returns a score (higher = better) or nullopt if infeasible.
   std::optional<int64_t>
   evaluateChunkedCost(const PartitioningContext &ctx) const;
 
   /// Evaluate cost for element-wise allocation strategy.
-  /// Returns a score (higher = better) or nullopt if infeasible.
   std::optional<int64_t>
   evaluateElementWiseCost(const PartitioningContext &ctx) const;
 };
 
 //===----------------------------------------------------------------------===//
 // H1.3: Access Uniformity Heuristic
-//===----------------------------------------------------------------------===//
-
-/// H1.3: Non-uniform access patterns prefer coarse allocation.
-///
+/// Non-uniform access patterns prefer coarse allocation.
 /// When access patterns are non-uniform and no fine-grained option is
 /// available, default to coarse allocation to avoid complexity.
+//===----------------------------------------------------------------------===//
+
 class AccessUniformityHeuristic : public PartitioningHeuristic {
 public:
   llvm::StringRef getName() const override { return "H1.3"; }
@@ -179,7 +186,7 @@ public:
     return "Non-uniform access prefers coarse allocation";
   }
 
-  int getPriority() const override { return 80; } // High priority
+  int getPriority() const override { return 80; }
 
   std::optional<PartitioningDecision>
   evaluate(const PartitioningContext &ctx) const override;
@@ -187,12 +194,10 @@ public:
 
 //===----------------------------------------------------------------------===//
 // H1.4: Multi-Node Heuristic
-//===----------------------------------------------------------------------===//
-
-/// H1.4: Multi-node deployments prefer fine-grained for network efficiency.
-///
+/// Multi-node deployments prefer fine-grained for network efficiency.
 /// On multi-node systems, fine-grained partitioning reduces data transfer
 /// by allowing nodes to acquire only the data they need.
+//===----------------------------------------------------------------------===//
 class MultiNodeHeuristic : public PartitioningHeuristic {
 public:
   llvm::StringRef getName() const override { return "H1.4"; }
@@ -201,7 +206,28 @@ public:
     return "Multi-node prefers fine-grained for network efficiency";
   }
 
-  int getPriority() const override { return 90; } // High priority
+  int getPriority() const override { return 90; }
+
+  std::optional<PartitioningDecision>
+  evaluate(const PartitioningContext &ctx) const override;
+};
+
+//===----------------------------------------------------------------------===//
+// H1.5: Stencil Pattern Heuristic
+/// Stencil and mixed pattern handling.
+/// Handles access patterns that require special partitioning:
+/// - Mixed patterns (uniform+stencil, etc.) → Element-wise for fine granularity
+/// - Pure stencil patterns → Stencil mode (ESD) for halo-aware partitioning
+//===----------------------------------------------------------------------===//
+class StencilPatternHeuristic : public PartitioningHeuristic {
+public:
+  llvm::StringRef getName() const override { return "H1.5"; }
+
+  llvm::StringRef getDescription() const override {
+    return "Stencil and mixed pattern handling";
+  }
+
+  int getPriority() const override { return 95; }
 
   std::optional<PartitioningDecision>
   evaluate(const PartitioningContext &ctx) const override;
@@ -212,12 +238,9 @@ public:
 //===----------------------------------------------------------------------===//
 
 /// Create all default partitioning heuristics.
-///
-/// Returns a vector of heuristics in registration order. The caller should
-/// sort by priority if needed.
 llvm::SmallVector<std::unique_ptr<PartitioningHeuristic>>
 createDefaultPartitioningHeuristics();
 
 } // namespace mlir::arts
 
-#endif // ARTS_ANALYSIS_HEURISTICS_PARTITIONINGHEURISTICS_H
+#endif ///  ARTS_ANALYSIS_HEURISTICS_PARTITIONINGHEURISTICS_H
