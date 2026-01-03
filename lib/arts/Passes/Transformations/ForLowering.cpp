@@ -1447,7 +1447,19 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     if (chunkSizes.empty())
       chunkSizes.push_back(AC->createIndexConstant(1, loc));
 
-    /// Create acquire directly from DbAllocOp with chunk hints
+    /// Create acquire directly from DbAllocOp with chunk hints.
+    /// Offset/size hints must be in element space (global index), not
+    /// iteration space, so we fold in lowerBound (and step) here.
+    Value offsetHint = chunkOffset;
+    Value sizeHint = loopInfo.workerIterationCount;
+    if (!forOp.getLowerBound().empty()) {
+      Value step = forOp.getStep()[0];
+      Value scaledOffset = AC->create<arith::MulIOp>(loc, chunkOffset, step);
+      offsetHint = AC->create<arith::AddIOp>(loc, forOp.getLowerBound()[0],
+                                             scaledOffset);
+      sizeHint =
+          AC->create<arith::MulIOp>(loc, loopInfo.workerIterationCount, step);
+    }
     auto chunkAcqOp = AC->create<DbAcquireOp>(
         loc, parentAcqOp.getMode(),
         rootGuid, /// From DbAllocOp
@@ -1456,8 +1468,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
         SmallVector<Value>(parentAcqOp.getIndices().begin(),
                            parentAcqOp.getIndices().end()),
         chunkOffsets, chunkSizes,
-        /*offset_hints=*/SmallVector<Value>{chunkOffset},
-        /*size_hints=*/SmallVector<Value>{loopInfo.workerIterationCount});
+        /*offset_hints=*/SmallVector<Value>{offsetHint},
+        /*size_hints=*/SmallVector<Value>{sizeHint});
 
     Value acquirePtr = chunkAcqOp.getResult(1);
 
