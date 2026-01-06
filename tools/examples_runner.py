@@ -76,6 +76,45 @@ SKIP_DIRS = {".git", ".svn", ".hg", "build",
 # File extensions for source files
 SOURCE_EXTENSIONS = {".c", ".cpp"}
 
+# Default ARTS config (in examples directory)
+DEFAULT_ARTS_CONFIG = Path(__file__).parent.parent / "tests" / "examples" / "arts.cfg"
+
+
+# ============================================================================
+# ARTS Config Parsing Functions
+# ============================================================================
+
+def parse_arts_cfg(path: Optional[Path]) -> Dict[str, str]:
+    """Parse an ARTS config file (arts.cfg) into a key/value dict.
+
+    This parser is intentionally simple: it ignores section headers and
+    supports `key=value` lines, stripping whitespace and inline comments.
+    """
+    if not path or not path.exists():
+        return {}
+
+    values: Dict[str, str] = {}
+    try:
+        for raw in path.read_text().splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith("#") or line.startswith(";"):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                continue
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            # Strip common inline comments.
+            value = value.split("#", 1)[0].split(";", 1)[0].strip()
+            if key:
+                values[key] = value
+    except Exception:
+        return {}
+    return values
+
 
 # ============================================================================
 # Data Classes
@@ -635,8 +674,8 @@ def run(
         120, "--build-timeout", help="Build timeout in seconds"),
     run_timeout: int = typer.Option(
         60, "--run-timeout", help="Run timeout in seconds"),
-    config: Optional[Path] = typer.Option(
-        None, "--config", help="ARTS configuration file to use when running examples"),
+    arts_config: Optional[Path] = typer.Option(
+        None, "--arts-config", help="ARTS configuration file to use when running examples"),
     trace: bool = typer.Option(
         False, "--trace", "-t", help="Print example output to terminal"),
 ):
@@ -673,13 +712,23 @@ def run(
         print_warning("No examples to run")
         raise typer.Exit(0)
 
-    # Extract runtime arguments (everything after the example name)
-    # Only use runtime args if running a single example (not --all)
+    # Extract --arts-config from ctx.args if present (due to allow_extra_args=True)
+    # and separate runtime arguments for the executable
     runtime_args: List[str] = []
-    if not all_examples and name and ctx.args:
-        # ctx.args contains all extra arguments after the example name
-        # These are the runtime arguments to pass to the executable
-        runtime_args = ctx.args
+    if ctx.args:
+        args_copy = list(ctx.args)
+        i = 0
+        while i < len(args_copy):
+            if args_copy[i] == '--arts-config' and i + 1 < len(args_copy):
+                arts_config = Path(args_copy[i + 1])
+                args_copy.pop(i)  # remove --arts-config
+                args_copy.pop(i)  # remove the path
+            else:
+                i += 1
+        
+        # Remaining args are runtime arguments for the executable (only for single examples)
+        if not all_examples and name:
+            runtime_args = args_copy
 
     # Run examples
     results: List[ExampleResult] = []
@@ -690,6 +739,48 @@ def run(
     # Print header (matching benchmark runner style)
     console.print(f"\n[bold]CARTS Examples Runner v{VERSION}[/]")
     console.print("\u2501" * 30)
+
+    # Show effective ARTS configuration
+    if examples:
+        # Multiple examples without custom config: each uses its own local config
+        if len(examples) > 1 and not arts_config:
+            console.print("ARTS Config: using local")
+        else:
+            # Single example or custom config: show specific values
+            sample_example = examples[0]
+
+            # Determine effective config file and source in one pass
+            if arts_config:
+                effective_config = arts_config
+                config_source = "custom"
+            elif (sample_example.path / "arts.cfg").exists():
+                effective_config = sample_example.path / "arts.cfg"
+                config_source = "local"
+            else:
+                effective_config = DEFAULT_ARTS_CONFIG
+                config_source = "default"
+
+            # Parse ARTS config values once
+            cfg = parse_arts_cfg(effective_config)
+            arts_threads = int(cfg.get("threads", "1"))
+            arts_nodes = int(cfg.get("nodeCount", "1"))
+            arts_launcher = cfg.get("launcher", "ssh")
+            arts_nodes_list = [n.strip() for n in cfg.get("nodes", "localhost").split(",") if n.strip()]
+
+            # Build config display items efficiently
+            arts_config_items = [f"arts-threads={arts_threads}",
+                                f"arts-nodes={arts_nodes}",
+                                f"arts-launcher={arts_launcher}"]
+
+            # Only show node list if it's not just localhost
+            if arts_nodes_list != ["localhost"]:
+                node_display = ','.join(arts_nodes_list[:3])
+                if len(arts_nodes_list) > 3:
+                    node_display += "..."
+                arts_config_items.append(f"arts-node-list=[{node_display}]")
+
+            console.print(f"ARTS Config ({config_source}): {', '.join(arts_config_items)}")
+
     console.print(f"Examples: {len(examples)}\n")
 
     # Run with live-updating table
@@ -716,7 +807,7 @@ def run(
                 verbose=verbose,
                 build_timeout=build_timeout,
                 run_timeout=run_timeout,
-                config_file=config,
+                config_file=arts_config,
                 trace=trace,
                 runtime_args=example_runtime_args,
             )
