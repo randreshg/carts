@@ -27,3 +27,8 @@ carts_next_steps() {
         shift
     done
 }
+
+carts_container_status() {
+    echo -e "${CYAN}Container status:${NC}"
+    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "^(NAMES|arts-node-)" || echo -e "  ${YELLOW}No containers running${NC}"
+}
