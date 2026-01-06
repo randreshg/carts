@@ -56,9 +56,6 @@ tools/
    
    # Run benchmarks
    carts benchmarks --target_examples matrixmul
-   
-   # Launch ArtsUI (dashboard, graphs, reports)
-   carts ui
    ```
 
 > **Important**: Project build uses **system clang**, while ARTS operations use **installed LLVM**
@@ -79,8 +76,32 @@ Performance testing and benchmarking tool.
 python3 tools/benchmark/carts-benchmark --help
 ```
 
-### Reports (ArtsUI)
-Use `carts ui` and open the Reports tab. The UI aggregates CSV/JSON from `examples/output_benchmarks/` and renders plots.
+### Examples (`carts examples`)
+Run and test CARTS examples.
+
+```bash
+# List available examples
+carts examples list
+
+# Run a specific example
+carts examples run array/chunks
+
+# Run with custom ARTS configuration
+carts examples run array/chunks --arts-config /path/to/arts.cfg
+
+# Run all examples
+carts examples run --all
+```
+
+**ARTS Configuration Priority:**
+1. **Custom config** (`--arts-config /path/to/config.cfg`)
+2. **Local config** (`example_dir/arts.cfg`)
+3. **Global default** (`tests/examples/arts.cfg`)
+
+The runner displays the effective ARTS configuration before execution:
+- Single example: shows specific config values (threads, nodes, launcher)
+- Multiple examples without `--arts-config`: shows "ARTS Config: using local"
+- Multiple examples with `--arts-config`: shows specific custom config values
 
 ## Environment Setup
 
