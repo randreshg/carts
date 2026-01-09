@@ -231,17 +231,28 @@ class PlatformConfig:
     def _setup_linux_flags(self) -> None:
         """Setup Linux-specific flags."""
         self.system_include_path = Path("/usr/include")
-        self.system_cxx_include_path = Path("/usr/include/c++/v1")
+
+        # Detect libstdc++ include path (numeric version directories like /usr/include/c++/14)
+        cxx_base = Path("/usr/include/c++")
+        if cxx_base.is_dir():
+            libstdcxx_versions = [
+                d for d in cxx_base.iterdir() if d.is_dir() and d.name.isdigit()
+            ]
+            if libstdcxx_versions:
+                latest = max(libstdcxx_versions, key=lambda p: int(p.name))
+                self.system_cxx_include_path = latest
+            else:
+                self.system_cxx_include_path = None
+        else:
+            self.system_cxx_include_path = None
 
         self.include_flags.extend([
             f"-I{self.system_include_path}",
             f"-I{self.system_cxx_include_path}",
-        ])
+        ] if self.system_cxx_include_path else [f"-I{self.system_include_path}"])
 
         self.clang_library_flags.extend(["-L/usr/lib", "-L/usr/lib64"])
         self.compile_library_flags.extend(["-L/usr/lib", "-L/usr/lib64"])
-        self.clang_libraries.extend(["-lpthread", "-lrt", "-lstdc++"])
-        self.compile_libraries.extend(["-lpthread", "-lrt", "-lstdc++"])
         self.compile_flags.extend(["-fno-pie", "-no-pie"])
 
     def _setup_windows_flags(self) -> None:
