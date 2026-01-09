@@ -258,6 +258,13 @@ class PlatformConfig:
         else:
             self.system_cxx_include_path = None
 
+        if self.system_cxx_include_path is None:
+            print_warning(
+                "Could not detect libstdc++ include path. "
+                "C++ compilation may fail. Ensure libstdc++ is installed "
+                "(e.g., 'apt install libstdc++-dev' or 'dnf install libstdc++-devel')."
+            )
+
         self.include_flags.extend([
             f"-I{self.system_include_path}",
             f"-I{self.system_cxx_include_path}",
