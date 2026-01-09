@@ -253,6 +253,9 @@ class PlatformConfig:
 
         self.clang_library_flags.extend(["-L/usr/lib", "-L/usr/lib64"])
         self.compile_library_flags.extend(["-L/usr/lib", "-L/usr/lib64"])
+        # Ensure standard Linux libraries are linked when needed.
+        self.clang_library_flags.extend(["-lpthread", "-lrt", "-lstdc++"])
+        self.compile_library_flags.extend(["-lpthread", "-lrt", "-lstdc++"])
         self.compile_flags.extend(["-fno-pie", "-no-pie"])
 
     def _setup_windows_flags(self) -> None:
