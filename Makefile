@@ -75,7 +75,7 @@ llvm:
 		-DCMAKE_C_COMPILER=clang \
 		-DCMAKE_CXX_COMPILER=clang++ \
 		-DLLVM_ENABLE_PROJECTS='mlir;clang;lld;openmp' \
-		-DLLVM_ENABLE_RUNTIMES='libcxx;libcxxabi;libunwind' \
+		-DLLVM_ENABLE_RUNTIMES='libcxx;libcxxabi;libunwind;compiler-rt' \
 		-DLLVM_TARGETS_TO_BUILD='host' \
 		-DLLVM_OPTIMIZED_TABLEGEN=ON \
 		-DLLVM_ENABLE_ASSERTIONS=ON \
@@ -148,7 +148,6 @@ arts:
 			-DCMAKE_CXX_COMPILER=clang++ \
 			-DCMAKE_BUILD_TYPE=$(ARTS_BUILD_TYPE) \
 			-DUSE_GPU=OFF \
-			-DUSE_SMART_DB=ON \
 			-DUSE_COUNTERS=$(ARTS_USE_COUNTERS) \
 			-DUSE_METRICS=$(ARTS_USE_METRICS) \
 			-DARTS_INFO_ENABLED=$(ARTS_INFO_ENABLED) \
