@@ -232,7 +232,7 @@ class PlatformConfig:
     def _is_version_dir(name: str) -> bool:
         """Check if a directory name looks like a version (e.g., '14', '11.4.0')."""
         parts = name.split(".")
-        return all(part.isdigit() for part in parts) and len(parts) >= 1
+        return all(part.isdigit() for part in parts)
 
     @staticmethod
     def _parse_version(name: str) -> tuple:
