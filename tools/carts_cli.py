@@ -228,18 +228,30 @@ class PlatformConfig:
         if self.arch == "x86_64":
             self.compile_flags.extend(["-fno-pie", "-Wl,-no_pie"])
 
+    @staticmethod
+    def _is_version_dir(name: str) -> bool:
+        """Check if a directory name looks like a version (e.g., '14', '11.4.0')."""
+        parts = name.split(".")
+        return all(part.isdigit() for part in parts) and len(parts) >= 1
+
+    @staticmethod
+    def _parse_version(name: str) -> tuple:
+        """Parse a version string into a tuple for comparison (e.g., '11.4.0' -> (11, 4, 0))."""
+        return tuple(int(part) for part in name.split("."))
+
     def _setup_linux_flags(self) -> None:
         """Setup Linux-specific flags."""
         self.system_include_path = Path("/usr/include")
 
-        # Detect libstdc++ include path (numeric version directories like /usr/include/c++/14)
+        # Detect libstdc++ include path (version directories like /usr/include/c++/14 or /usr/include/c++/11.4.0)
         cxx_base = Path("/usr/include/c++")
         if cxx_base.is_dir():
             libstdcxx_versions = [
-                d for d in cxx_base.iterdir() if d.is_dir() and d.name.isdigit()
+                d for d in cxx_base.iterdir()
+                if d.is_dir() and self._is_version_dir(d.name)
             ]
             if libstdcxx_versions:
-                latest = max(libstdcxx_versions, key=lambda p: int(p.name))
+                latest = max(libstdcxx_versions, key=lambda p: self._parse_version(p.name))
                 self.system_cxx_include_path = latest
             else:
                 self.system_cxx_include_path = None
@@ -253,7 +265,6 @@ class PlatformConfig:
 
         self.clang_library_flags.extend(["-L/usr/lib", "-L/usr/lib64"])
         self.compile_library_flags.extend(["-L/usr/lib", "-L/usr/lib64"])
-        # Ensure standard Linux libraries are linked when needed.
         self.clang_library_flags.extend(["-lpthread", "-lrt", "-lstdc++"])
         self.compile_library_flags.extend(["-lpthread", "-lrt", "-lstdc++"])
         self.compile_flags.extend(["-fno-pie", "-no-pie"])
