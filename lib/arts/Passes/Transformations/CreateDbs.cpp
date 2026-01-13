@@ -62,6 +62,7 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
 #include "polygeist/Ops.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include <cstdint>
@@ -96,7 +97,7 @@ private:
   DenseMap<Operation *, Operation *> dbPtrToOriginalAlloc;
   SetVector<Operation *> opsToRemove;
 
-  /// Consolidated structure to track all usage information for a memref
+  /// Structure to track all usage information for a memref
   struct MemrefInfo {
     Operation *alloc = nullptr;
     EdtOp parentEdt = nullptr;
@@ -206,32 +207,18 @@ private:
     }
   };
 
-  /// Map from memref value to its consolidated usage information
   DenseMap<Operation *, MemrefInfo> memrefInfo;
-
-  /// Map an edtOp to its external values
   DenseMap<EdtOp, SetVector<Value>> edtExternalValues;
 
-  /// Helper functions
   void collectMemrefs();
   void collectControlDbOps();
   void createDbAllocOps();
-
-  /// Helper functions for collectControlDbOps
   void createDbAcquireOps(EdtOp edt, SetVector<Value> &externalDeps);
-
-  /// Checks if the parent EDT already has an acquired handle for the given
-  /// DbAllocOp.
   Value findParentAcquireSource(EdtOp edt, Operation *dbAllocOp,
                                 bool requiresIndexedAccess = false);
 
-  /// Infer allocation type from the defining operation
   DbAllocType inferAllocType(Operation *alloc);
-
-  /// Insert DbFreeOp for a DbAllocOp at the appropriate location
   void insertDbFreeForDbAlloc(DbAllocOp dbAlloc, Operation *alloc);
-
-  /// Rewrite uses of datablocks
   void rewriteOpsToUseDbAcquire(EdtOp edt, SmallVector<Operation *> &operations,
                                 Operation *dbOp,
                                 SmallVector<Value> &acquireIndices,
