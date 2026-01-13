@@ -79,66 +79,71 @@ void ConcurrencyPass::runOnOperation() {
 
 void ConcurrencyPass::updateRuntimeQueryOperations() {
   ARTS_DEBUG("Updating runtime query operations");
-  /// For each EDT that has parallelism strategy set, update runtime query
-  /// operations
+
+  /// Collect operations to replace - avoid modifying IR during walk
+  /// which can cause iterator invalidation and dominance issues.
+  SmallVector<GetCurrentWorkerOp, 4> workersToNodes;
+  SmallVector<GetTotalWorkersOp, 4> totalWorkersToNodes;
+  SmallVector<GetCurrentNodeOp, 4> nodesToWorkers;
+  SmallVector<GetTotalNodesOp, 4> totalNodesToWorkers;
+
+  /// Phase 1: Collect operations to replace
   module.walk([&](EdtOp edtOp) {
     bool isInterNode = (edtOp.getConcurrency() == EdtConcurrency::internode);
 
-    OpBuilder builder(edtOp.getContext());
-
-    /// Walk through operations in the EDT body and update runtime queries
     edtOp.walk([&](Operation *op) {
       if (auto getWorkerOp = dyn_cast<GetCurrentWorkerOp>(op)) {
-        if (isInterNode) {
-          /// For internode parallelism, replace get_current_worker with
-          /// get_current_node
-          ARTS_INFO("Replacing arts.get_current_worker with "
-                    "arts.get_current_node in internode EDT");
-          builder.setInsertionPoint(getWorkerOp);
-          auto getNodeOp =
-              builder.create<GetCurrentNodeOp>(getWorkerOp.getLoc());
-          getWorkerOp.replaceAllUsesWith(getNodeOp.getResult());
-          getWorkerOp.erase();
-        }
+        if (isInterNode)
+          workersToNodes.push_back(getWorkerOp);
       } else if (auto getTotalWorkersOp = dyn_cast<GetTotalWorkersOp>(op)) {
-        if (isInterNode) {
-          /// For internode parallelism, replace get_total_workers with
-          /// get_total_nodes
-          ARTS_INFO("Replacing arts.get_total_workers with "
-                    "arts.get_total_nodes in internode EDT");
-          builder.setInsertionPoint(getTotalWorkersOp);
-          auto getTotalNodesOp =
-              builder.create<GetTotalNodesOp>(getTotalWorkersOp.getLoc());
-          getTotalWorkersOp.replaceAllUsesWith(getTotalNodesOp.getResult());
-          getTotalWorkersOp.erase();
-        }
+        if (isInterNode)
+          totalWorkersToNodes.push_back(getTotalWorkersOp);
       } else if (auto getNodeOp = dyn_cast<GetCurrentNodeOp>(op)) {
-        if (!isInterNode) {
-          /// For intranode parallelism, replace get_current_node with
-          /// get_current_worker
-          ARTS_INFO("Replacing arts.get_current_node with "
-                    "arts.get_current_worker in intranode EDT");
-          builder.setInsertionPoint(getNodeOp);
-          auto getWorkerOp =
-              builder.create<GetCurrentWorkerOp>(getNodeOp.getLoc());
-          getNodeOp.replaceAllUsesWith(getWorkerOp.getResult());
-          getNodeOp.erase();
-        }
+        if (!isInterNode)
+          nodesToWorkers.push_back(getNodeOp);
       } else if (auto getTotalNodesOp = dyn_cast<GetTotalNodesOp>(op)) {
-        if (!isInterNode) {
-          /// For intranode parallelism, replace get_total_nodes with
-          /// get_total_workers
-          ARTS_INFO("Replacing arts.get_total_nodes with "
-                    "arts.get_total_workers in intranode EDT");
-          builder.setInsertionPoint(getTotalNodesOp);
-          auto getTotalWorkersOp =
-              builder.create<GetTotalWorkersOp>(getTotalNodesOp.getLoc());
-          getTotalNodesOp.replaceAllUsesWith(getTotalWorkersOp.getResult());
-          getTotalNodesOp.erase();
-        }
+        if (!isInterNode)
+          totalNodesToWorkers.push_back(getTotalNodesOp);
       }
     });
   });
+
+  /// Phase 2: Replace collected operations (safe - no iteration happening)
+  for (auto op : workersToNodes) {
+    ARTS_INFO("Replacing arts.get_current_worker with "
+              "arts.get_current_node in internode EDT");
+    OpBuilder builder(op);
+    auto newOp = builder.create<GetCurrentNodeOp>(op.getLoc());
+    op.replaceAllUsesWith(newOp.getResult());
+    op.erase();
+  }
+
+  for (auto op : totalWorkersToNodes) {
+    ARTS_INFO("Replacing arts.get_total_workers with "
+              "arts.get_total_nodes in internode EDT");
+    OpBuilder builder(op);
+    auto newOp = builder.create<GetTotalNodesOp>(op.getLoc());
+    op.replaceAllUsesWith(newOp.getResult());
+    op.erase();
+  }
+
+  for (auto op : nodesToWorkers) {
+    ARTS_INFO("Replacing arts.get_current_node with "
+              "arts.get_current_worker in intranode EDT");
+    OpBuilder builder(op);
+    auto newOp = builder.create<GetCurrentWorkerOp>(op.getLoc());
+    op.replaceAllUsesWith(newOp.getResult());
+    op.erase();
+  }
+
+  for (auto op : totalNodesToWorkers) {
+    ARTS_INFO("Replacing arts.get_total_nodes with "
+              "arts.get_total_workers in intranode EDT");
+    OpBuilder builder(op);
+    auto newOp = builder.create<GetTotalWorkersOp>(op.getLoc());
+    op.replaceAllUsesWith(newOp.getResult());
+    op.erase();
+  }
 }
 
 void ConcurrencyPass::adjustDbModes() {

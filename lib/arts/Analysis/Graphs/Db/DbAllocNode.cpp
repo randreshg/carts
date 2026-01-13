@@ -329,7 +329,6 @@ AcquirePatternSummary DbAllocNode::summarizeAcquirePatterns() const {
     case AccessPattern::Indexed:
       summary.hasIndexed = true;
       break;
-    case AccessPattern::Unknown:
     default:
       break;
     }
