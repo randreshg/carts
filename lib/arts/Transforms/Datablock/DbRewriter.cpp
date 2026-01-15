@@ -239,6 +239,41 @@ void DbRewriter::rewriteAcquire(const DbRewriteAcquire &info,
     Value startChunk;
     Value chunkCount;
 
+    /// MIXED MODE: Handle full-range coarse acquires
+    if (info.isFullRange) {
+      // FULL RANGE: offset=0, size=numChunks (access entire allocation)
+      Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+      startChunk = zero;
+
+      // Get total number of chunks from plan or allocation
+      if (plan_.numChunks) {
+        chunkCount = plan_.numChunks;
+      } else if (!newOuterSizes_.empty()) {
+        chunkCount = newOuterSizes_[0];
+      } else {
+        chunkCount = one;
+      }
+
+      ARTS_DEBUG("  Mixed mode: coarse acquire gets full range [0, "
+                 << chunkCount << ")");
+
+      newOffsets.push_back(zero);
+      newSizes.push_back(chunkCount);
+
+      // Update acquire offsets/sizes
+      acquire.getOffsetsMutable().assign(newOffsets);
+      acquire.getSizesMutable().assign(newSizes);
+
+      // Clear hints for full-range (no longer needed)
+      acquire.getOffsetHintsMutable().clear();
+      acquire.getSizeHintsMutable().clear();
+
+      // Rebase EDT users with startChunk=0 for full-range access
+      // The div/mod localization will use absolute chunk indices
+      rebaseEdtUsers(acquire, builder, startChunk);
+      return;
+    }
+
     if (plan_.mode == RewriterMode::Stencil && plan_.stencilInfo &&
         plan_.stencilInfo->hasHalo()) {
       /// STENCIL MODE with ESD: 3-acquire pattern

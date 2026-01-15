@@ -226,6 +226,62 @@ struct AtomicAddPattern : public ArtsToLLVMPattern<AtomicAddOp> {
   }
 };
 
+/// Pattern to convert __builtin_object_size calls to llvm.objectsize intrinsic.
+///
+/// Polygeist's cgeist bypasses Clang's CodeGen, so __builtin_object_size is
+/// emitted as a regular function call instead of the llvm.objectsize intrinsic.
+///
+/// __builtin_object_size(ptr, type) -> llvm.objectsize(ptr, min, null_unknown,
+/// dynamic)
+///
+/// Parameter mapping (from Clang's CGBuiltin.cpp):
+///   - ptr: First argument
+///   - min: (type & 2) != 0  (bit 1 of type parameter)
+///   - null_is_unknown: Always true for GCC compatibility
+///   - dynamic: false (true only for __builtin_dynamic_object_size)
+struct BuiltinObjectSizePattern : public OpRewritePattern<func::CallOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(func::CallOp callOp,
+                                PatternRewriter &rewriter) const override {
+    auto callee = callOp.getCallee();
+    if (callee != "__builtin_object_size")
+      return failure();
+
+    Location loc = callOp.getLoc();
+
+    // Get ptr argument (memref) and convert to llvm.ptr
+    Value memrefArg = callOp.getOperand(0);
+    Value ptr = rewriter.create<polygeist::Memref2PointerOp>(
+        loc, LLVM::LLVMPointerType::get(rewriter.getContext()), memrefArg);
+
+    Value typeArg = callOp.getOperand(1);
+
+    // Extract type value to compute min flag: min = (type & 2) != 0
+    bool minFlag = false;
+    if (auto constOp = typeArg.getDefiningOp<arith::ConstantOp>()) {
+      if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
+        minFlag = (intAttr.getInt() & 2) != 0;
+      }
+    }
+
+    // Create boolean constants for intrinsic parameters
+    Type i1Type = rewriter.getI1Type();
+    Value min = rewriter.create<LLVM::ConstantOp>(loc, i1Type, minFlag);
+    Value nullIsUnknown = rewriter.create<LLVM::ConstantOp>(loc, i1Type, true);
+    Value dynamic = rewriter.create<LLVM::ConstantOp>(loc, i1Type, false);
+
+    // Create llvm.call_intrinsic for llvm.objectsize
+    Type resultType = callOp.getResult(0).getType();
+    auto intrinsicOp = rewriter.create<LLVM::CallIntrinsicOp>(
+        loc, resultType, "llvm.objectsize",
+        ValueRange{ptr, min, nullIsUnknown, dynamic});
+
+    rewriter.replaceOp(callOp, intrinsicOp.getResults());
+    return success();
+  }
+};
+
 /// Pattern to convert arts.record_dep operations
 struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
   using ArtsToLLVMPattern::ArtsToLLVMPattern;
@@ -580,7 +636,8 @@ struct EdtParamPackPattern : public ArtsToLLVMPattern<EdtParamPackOp> {
 
       for (unsigned i = 0; i < params.size(); ++i) {
         auto index = AC->createIndexConstant(i, loc);
-        auto castParam = AC->castParameter(AC->Int64, params[i], loc);
+        auto castParam = AC->castParameter(
+            AC->Int64, params[i], loc, ArtsCodegen::ParameterCastMode::Bitwise);
         AC->create<memref::StoreOp>(loc, castParam, allocOp, ValueRange{index});
       }
     } else {
@@ -613,7 +670,8 @@ struct EdtParamUnpackPattern : public ArtsToLLVMPattern<EdtParamUnpackOp> {
       auto loadedParam =
           AC->create<memref::LoadOp>(op.getLoc(), paramMemref, ValueRange{idx});
       auto castedParam =
-          AC->castParameter(results[i].getType(), loadedParam, op.getLoc());
+          AC->castParameter(results[i].getType(), loadedParam, op.getLoc(),
+                            ArtsCodegen::ParameterCastMode::Bitwise);
       newResults.push_back(castedParam);
     }
 
@@ -1282,6 +1340,9 @@ void ConvertArtsToLLVMPass::populateCorePatterns(RewritePatternSet &patterns) {
 
   /// Synchronization patterns
   patterns.add<BarrierPattern, AtomicAddPattern>(context, AC);
+
+  /// Builtin patterns (Polygeist emits these as calls, not intrinsics)
+  patterns.add<BuiltinObjectSizePattern>(context);
 
   /// Epoch patterns
   patterns.add<CreateEpochPattern, WaitOnEpochPattern>(context, AC);

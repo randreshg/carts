@@ -174,17 +174,18 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
 
     /// DbRef Ops iterate over the outer sizes of the DBAllocOp.
     if (auto dbRefOp = dyn_cast<DbRefOp>(userOp)) {
-      /// Extract the !llvm.ptr from newPtr using db_gep at dbRefOp location
       SmallVector<Value> dbRefIndices(dbRefOp.getIndices().begin(),
                                       dbRefOp.getIndices().end());
-      Value llvmPtr = getLLVMPtr(newPtr, dbRefIndices, dbRefOp.getLoc());
-      auto loadedLlvmPtr = AC->create<LLVM::LoadOp>(dbRefOp.getLoc(),
-                                                    llvmPtr.getType(), llvmPtr);
-      /// Cast the !llvm.ptr to the appropriate memref type at dbRefOp location
       auto originalMemrefType =
           dbRefOp.getResult().getType().cast<MemRefType>();
-      Value castedMemref = AC->create<polygeist::Pointer2MemrefOp>(
-          dbRefOp.getLoc(), originalMemrefType, loadedLlvmPtr);
+      auto createCastedMemref = [&](Location loc) -> Value {
+        Value llvmPtr = getLLVMPtr(newPtr, dbRefIndices, loc);
+        auto loadedLlvmPtr =
+            AC->create<LLVM::LoadOp>(loc, llvmPtr.getType(), llvmPtr);
+        loadedLlvmPtr.setVolatile_(true);
+        return AC->create<polygeist::Pointer2MemrefOp>(loc, originalMemrefType,
+                                                       loadedLlvmPtr);
+      };
 
       /// Rewrite uses of the DbRefOp so we propagate the element sizes
       for (auto &dbRefUse :
@@ -193,6 +194,7 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
         AC->setInsertionPoint(userOp);
 
         if (auto loadOp = dyn_cast<memref::LoadOp>(userOp)) {
+          Value castedMemref = createCastedMemref(loadOp.getLoc());
           SmallVector<Value> indices(loadOp.getIndices().begin(),
                                      loadOp.getIndices().end());
           auto dynLoad = AC->create<polygeist::DynLoadOp>(
@@ -201,6 +203,7 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
           loadOp.getResult().replaceAllUsesWith(dynLoad.getResult());
           opsToRemove.insert(loadOp);
         } else if (auto storeOp = dyn_cast<memref::StoreOp>(userOp)) {
+          Value castedMemref = createCastedMemref(storeOp.getLoc());
           SmallVector<Value> indices(storeOp.getIndices().begin(),
                                      storeOp.getIndices().end());
           AC->create<polygeist::DynStoreOp>(
@@ -209,6 +212,7 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
           opsToRemove.insert(storeOp);
         } else {
           /// For other users, replace with the casted memref
+          Value castedMemref = createCastedMemref(userOp->getLoc());
           dbRefUse.set(castedMemref);
         }
       }
@@ -295,14 +299,16 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
       if (auto dbRefOp = dyn_cast<DbRefOp>(blockUserOp)) {
         SmallVector<Value> dbRefIndices(dbRefOp.getIndices().begin(),
                                         dbRefOp.getIndices().end());
-        Value llvmPtr =
-            getLLVMPtr(replacementBase, dbRefIndices, dbRefOp.getLoc());
-        auto loadedLlvmPtr = AC->create<LLVM::LoadOp>(
-            dbRefOp.getLoc(), llvmPtr.getType(), llvmPtr);
         auto originalMemrefType =
             dbRefOp.getResult().getType().cast<MemRefType>();
-        Value castedMemref = AC->create<polygeist::Pointer2MemrefOp>(
-            dbRefOp.getLoc(), originalMemrefType, loadedLlvmPtr);
+        auto createCastedMemref = [&](Location loc) -> Value {
+          Value llvmPtr = getLLVMPtr(replacementBase, dbRefIndices, loc);
+          auto loadedLlvmPtr =
+              AC->create<LLVM::LoadOp>(loc, llvmPtr.getType(), llvmPtr);
+          loadedLlvmPtr.setVolatile_(true);
+          return AC->create<polygeist::Pointer2MemrefOp>(
+              loc, originalMemrefType, loadedLlvmPtr);
+        };
 
         /// Propagate the element sizes to the uses of the DbRefOp
         for (auto &dbRefUse :
@@ -311,6 +317,7 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
           AC->setInsertionPoint(userOp);
 
           if (auto loadOp = dyn_cast<memref::LoadOp>(userOp)) {
+            Value castedMemref = createCastedMemref(loadOp.getLoc());
             SmallVector<Value> loadIndices(loadOp.getIndices().begin(),
                                            loadOp.getIndices().end());
             auto dynLoad = AC->create<polygeist::DynLoadOp>(
@@ -319,6 +326,7 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
             loadOp.getResult().replaceAllUsesWith(dynLoad.getResult());
             opsToRemove.insert(loadOp);
           } else if (auto storeOp = dyn_cast<memref::StoreOp>(userOp)) {
+            Value castedMemref = createCastedMemref(storeOp.getLoc());
             SmallVector<Value> storeIndices(storeOp.getIndices().begin(),
                                             storeOp.getIndices().end());
             AC->create<polygeist::DynStoreOp>(
@@ -327,6 +335,7 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
             opsToRemove.insert(storeOp);
           } else {
             /// For other users, replace with the casted memref
+            Value castedMemref = createCastedMemref(userOp->getLoc());
             dbRefUse.set(castedMemref);
           }
         }

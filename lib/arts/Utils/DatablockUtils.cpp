@@ -202,6 +202,11 @@ PartitionMode DatablockUtils::getPartitionMode(DbAcquireOp acquire) {
   if (!acquire.getOffsets().empty())
     return PartitionMode::Chunked;
 
+  /// Chunked hints: offsets/sizes inferred by lowering
+  /// (offset_hints/size_hints)
+  if (!acquire.getOffsetHints().empty() || !acquire.getSizeHints().empty())
+    return PartitionMode::Chunked;
+
   /// Default: coarse-grained (acquires entire datablock)
   return PartitionMode::Coarse;
 }
