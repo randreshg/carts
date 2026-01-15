@@ -1,5 +1,5 @@
 ///==========================================================================///
-/// DbAccessPattern.h - Unified access pattern types for datablock operations
+/// File: DbAccessPattern.h
 ///
 /// This file defines common types for access pattern classification and
 /// stencil bounds analysis used across DbAllocNode, DbAcquireNode, and
@@ -29,7 +29,7 @@ struct StencilBounds {
 
 /// Summary of per-acquire access patterns at allocation level.
 struct AcquirePatternSummary {
-  bool hasUniform = false, hasStencil = false, hasIndexed = false; 
+  bool hasUniform = false, hasStencil = false, hasIndexed = false;
 
   /// Returns true if multiple different patterns are present
   bool isMixed() const {

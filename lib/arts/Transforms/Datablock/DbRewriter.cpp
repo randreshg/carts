@@ -1,26 +1,23 @@
 ///==========================================================================///
 /// File: DbRewriter.cpp
 ///
-/// Implementation of DbRewriter for allocation rewrite transformation.
+/// Abstract base class for datablock allocation transformation.
+/// Provides factory pattern for creating mode-specific rewriters.
 ///==========================================================================///
 
 #include "arts/Transforms/Datablock/DbRewriter.h"
 #include "arts/Analysis/Heuristics/PartitioningHeuristics.h"
-#include "arts/Codegen/ArtsCodegen.h"
-#include "arts/Transforms/Datablock/DbChunkedRewriter.h"
-#include "arts/Transforms/Datablock/DbElementWiseRewriter.h"
-#include "arts/Transforms/Datablock/DbStencilRewriter.h"
+#include "arts/Transforms/Datablock/Chunked/DbChunkedIndexer.h"
+#include "arts/Transforms/Datablock/Chunked/DbChunkedRewriter.h"
+#include "arts/Transforms/Datablock/ElementWise/DbElementWiseIndexer.h"
+#include "arts/Transforms/Datablock/ElementWise/DbElementWiseRewriter.h"
+#include "arts/Transforms/Datablock/Stencil/DbStencilIndexer.h"
+#include "arts/Transforms/Datablock/Stencil/DbStencilRewriter.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/ArtsUtils.h"
-#include "arts/Utils/DatablockUtils.h"
-#include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/RemovalUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
-#include "llvm/Support/Debug.h"
-#include <cassert>
 #include <functional>
 
 #define DEBUG_TYPE "db_transforms"
@@ -30,8 +27,6 @@ ARTS_DEBUG_SETUP(db_transforms);
 using namespace mlir;
 using namespace mlir::arts;
 
-namespace {} // namespace
-
 ///===----------------------------------------------------------------------===///
 /// DbRewritePlan constructor from PartitioningDecision
 ///===----------------------------------------------------------------------===///
@@ -40,8 +35,9 @@ DbRewritePlan::DbRewritePlan(const PartitioningDecision &decision)
       innerRank(decision.innerRank) {}
 
 ///===----------------------------------------------------------------------===///
-/// DbRewriter implementation
+/// DbRewriter - Abstract Base Class
 ///===----------------------------------------------------------------------===///
+
 DbRewriter::DbRewriter(DbAllocOp oldAlloc, ValueRange newOuterSizes,
                        ValueRange newInnerSizes,
                        ArrayRef<DbRewriteAcquire> acquires,
@@ -49,86 +45,39 @@ DbRewriter::DbRewriter(DbAllocOp oldAlloc, ValueRange newOuterSizes,
     : oldAlloc_(oldAlloc), newOuterSizes_(newOuterSizes),
       newInnerSizes_(newInnerSizes), acquires_(acquires), plan_(plan) {}
 
-bool DbRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
-                                Value startChunk) {
-  ARTS_DEBUG("DbRewriter::rebaseEdtUsers - mode="
-             << (plan_.mode == RewriterMode::Stencil   ? "Stencil"
-                 : plan_.mode == RewriterMode::Chunked ? "Chunked"
-                                                       : "ElementWise"));
+///===----------------------------------------------------------------------===///
+/// Factory Method - Creates appropriate subclass based on mode
+///===----------------------------------------------------------------------===///
 
-  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
-  if (!blockArg)
-    return false;
+std::unique_ptr<DbRewriter> DbRewriter::create(
+    DbAllocOp oldAlloc, ValueRange newOuterSizes, ValueRange newInnerSizes,
+    ArrayRef<DbRewriteAcquire> acquires, const DbRewritePlan &plan) {
+  ARTS_DEBUG("DbRewriter::create mode=" << getRewriterModeName(plan.mode));
 
-  LLVM_DEBUG(llvm::dbgs() << "DbRewriter::rebaseEdtUsers - mode="
-                          << static_cast<int>(plan_.mode) << "\n");
+  switch (plan.mode) {
+  case RewriterMode::ElementWise:
+    return std::make_unique<DbElementWiseRewriter>(
+        oldAlloc, newOuterSizes, newInnerSizes, acquires, plan);
 
-  /// Determine element type from users or allocation
-  Type targetType;
-  for (Operation *user : blockArg.getUsers()) {
-    if (auto ref = dyn_cast<DbRefOp>(user)) {
-      targetType = ref.getResult().getType();
-      break;
-    }
-  }
-  if (!targetType) {
-    targetType = blockArg.getType();
-    if (auto outer = targetType.dyn_cast<MemRefType>())
-      if (auto inner = outer.getElementType().dyn_cast<MemRefType>())
-        targetType = inner;
-  }
-  if (!targetType || !targetType.isa<MemRefType>())
-    return false;
+  case RewriterMode::Chunked:
+    return std::make_unique<DbChunkedRewriter>(oldAlloc, newOuterSizes,
+                                               newInnerSizes, acquires, plan);
 
-  Type derivedType = targetType;
-  if (auto dbAlloc = dyn_cast_or_null<DbAllocOp>(
-          DatablockUtils::getUnderlyingDbAlloc(blockArg)))
-    derivedType = dbAlloc.getAllocatedElementType();
-
-  /// Get element offset from hints for element-wise mode
-  Value elemOffset;
-  Value elemSize;
-  if (!acquire.getOffsetHints().empty())
-    elemOffset = acquire.getOffsetHints()[0];
-  if (!acquire.getSizeHints().empty())
-    elemSize = acquire.getSizeHints()[0];
-
-  /// Create the appropriate rewriter based on mode - fully standalone, no base
-  /// class Each rewriter owns its own index localization logic Pass old element
-  /// sizes for proper stride computation (static or dynamic)
-
-  SmallVector<Operation *> users(blockArg.getUsers().begin(),
-                                 blockArg.getUsers().end());
-  llvm::SetVector<Operation *> opsToRemove;
-  bool rewritten = false;
-
-  for (Operation *user : users) {
-    if (auto ref = dyn_cast<DbRefOp>(user)) {
-      /// Create the appropriate rewriter based on mode
-      auto rewriter =
-          createRewriter(plan_, plan_.chunkSize, startChunk, elemOffset,
-                         elemSize, newOuterSizes_.size(), newInnerSizes_.size(),
-                         oldAlloc_.getElementSizes(), builder, ref.getLoc());
-
-      rewriter->rewriteDbRefUsers(ref, blockArg, derivedType, builder,
-                                  opsToRemove);
-      rewritten = true;
-    }
+  case RewriterMode::Stencil:
+    return std::make_unique<DbStencilRewriter>(oldAlloc, newOuterSizes,
+                                               newInnerSizes, acquires, plan);
   }
 
-  for (Operation *op : opsToRemove)
-    if (op->use_empty())
-      op->erase();
-
-  return rewritten;
+  llvm_unreachable("Unknown RewriterMode");
 }
 
+///===----------------------------------------------------------------------===///
+/// Template Method - Shared workflow for all modes
+///===----------------------------------------------------------------------===///
+
 FailureOr<DbAllocOp> DbRewriter::apply(OpBuilder &builder) {
-  ARTS_DEBUG("DbRewriter::apply - mode="
-             << (plan_.mode == RewriterMode::Stencil   ? "Stencil"
-                 : plan_.mode == RewriterMode::Chunked ? "Chunked"
-                                                       : "ElementWise")
-             << ", acquires=" << acquires_.size());
+  ARTS_DEBUG("DbRewriter::apply - mode=" << getRewriterModeName(plan_.mode)
+                                         << ", acquires=" << acquires_.size());
 
   if (!oldAlloc_)
     return failure();
@@ -146,11 +95,11 @@ FailureOr<DbAllocOp> DbRewriter::apply(OpBuilder &builder) {
   /// 2. Transfer metadata/attributes from old to new allocation
   transferAttributes(oldAlloc_, newAlloc);
 
-  /// 3. Rewrite all acquires with their partition info
+  /// 3. Rewrite all acquires with their partition info (virtual dispatch)
   for (const auto &info : acquires_)
-    rewriteAcquire(info, newAlloc, builder);
+    transformAcquire(info, newAlloc, builder);
 
-  /// 4. Collect and rewrite DbRefs outside of EDTs
+  /// 4. Collect and rewrite DbRefs outside of EDTs (virtual dispatch)
   llvm::SetVector<Operation *> opsToRemove;
   SmallVector<DbRefOp> dbRefUsers;
   llvm::SmallPtrSet<Value, 8> visited;
@@ -171,7 +120,7 @@ FailureOr<DbAllocOp> DbRewriter::apply(OpBuilder &builder) {
   collectDbRefs(oldAlloc_.getPtr());
 
   for (DbRefOp ref : dbRefUsers) {
-    rewriteDbRef(ref, newAlloc, builder);
+    transformDbRef(ref, newAlloc, builder);
     opsToRemove.insert(ref.getOperation());
   }
 
@@ -190,467 +139,70 @@ FailureOr<DbAllocOp> DbRewriter::apply(OpBuilder &builder) {
   return newAlloc;
 }
 
-void DbRewriter::rewriteAcquire(const DbRewriteAcquire &info,
-                                DbAllocOp newAlloc, OpBuilder &builder) {
-  DbAcquireOp acquire = info.acquire;
-  Value elemOffset = info.elemOffset;
-  Value elemSize = info.elemSize;
-
-  ARTS_DEBUG("DbRewriter::rewriteAcquire - mode="
-             << (plan_.mode == RewriterMode::Stencil   ? "Stencil"
-                 : plan_.mode == RewriterMode::Chunked ? "Chunked"
-                                                       : "ElementWise"));
-
-  OpBuilder::InsertionGuard guard(builder);
-  builder.setInsertionPoint(acquire);
-  Location loc = acquire.getLoc();
-  SmallVector<Value> originalOffsetHints(acquire.getOffsetHints().begin(),
-                                         acquire.getOffsetHints().end());
-  SmallVector<Value> originalSizeHints(acquire.getSizeHints().begin(),
-                                       acquire.getSizeHints().end());
-
-  /// Update source to new allocation
-  acquire.getSourceGuidMutable().assign(newAlloc.getGuid());
-  acquire.getSourcePtrMutable().assign(newAlloc.getPtr());
-
-  /// Update acquire's ptr result type to match new source
-  MemRefType newPtrType = newAlloc.getPtr().getType().cast<MemRefType>();
-  Type oldAcqPtrType = acquire.getPtr().getType();
-  if (oldAcqPtrType != newPtrType) {
-    acquire.getPtr().setType(newPtrType);
-
-    /// Also update EDT block argument type if this acquire feeds an EDT
-    auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
-    if (blockArg && blockArg.getType() != newPtrType)
-      blockArg.setType(newPtrType);
-  }
-
-  /// Transform offset/size based on mode
-  SmallVector<Value> newOffsets, newSizes;
-
-  /// Both Chunked and Stencil modes use chunk-based allocation
-  bool usesChunks = (plan_.mode == RewriterMode::Chunked ||
-                     plan_.mode == RewriterMode::Stencil) &&
-                    plan_.chunkSize;
-
-  if (usesChunks) {
-    /// CHUNKED/STENCIL: element-space → chunk-space
-    Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
-    Value startChunk;
-    Value chunkCount;
-
-    /// MIXED MODE: Handle full-range coarse acquires
-    if (info.isFullRange) {
-      // FULL RANGE: offset=0, size=numChunks (access entire allocation)
-      Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
-      startChunk = zero;
-
-      // Get total number of chunks from plan or allocation
-      if (plan_.numChunks) {
-        chunkCount = plan_.numChunks;
-      } else if (!newOuterSizes_.empty()) {
-        chunkCount = newOuterSizes_[0];
-      } else {
-        chunkCount = one;
-      }
-
-      ARTS_DEBUG("  Mixed mode: coarse acquire gets full range [0, "
-                 << chunkCount << ")");
-
-      newOffsets.push_back(zero);
-      newSizes.push_back(chunkCount);
-
-      // Update acquire offsets/sizes
-      acquire.getOffsetsMutable().assign(newOffsets);
-      acquire.getSizesMutable().assign(newSizes);
-
-      // Clear hints for full-range (no longer needed)
-      acquire.getOffsetHintsMutable().clear();
-      acquire.getSizeHintsMutable().clear();
-
-      // Rebase EDT users with startChunk=0 for full-range access
-      // The div/mod localization will use absolute chunk indices
-      rebaseEdtUsers(acquire, builder, startChunk);
-      return;
-    }
-
-    if (plan_.mode == RewriterMode::Stencil && plan_.stencilInfo &&
-        plan_.stencilInfo->hasHalo()) {
-      /// STENCIL MODE with ESD: 3-acquire pattern
-      /// Each worker acquires:
-      ///   1. Owned chunk (full chunk)
-      ///   2. Left halo (partial slice from previous chunk)
-      ///   3. Right halo (partial slice from next chunk)
-
-      Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
-      int64_t haloLeftVal = plan_.stencilInfo->haloLeft;
-      int64_t haloRightVal = plan_.stencilInfo->haloRight;
-
-      // Recover base offset from extended offset.
-      // Extended offset = max(0, baseOffset - haloLeft)
-      // So: baseOffset = elemOffset + haloLeft (unless elemOffset=0 -> first chunk)
-      Value haloLeftConst =
-          builder.create<arith::ConstantIndexOp>(loc, haloLeftVal);
-      Value baseOffset =
-          builder.create<arith::AddIOp>(loc, elemOffset, haloLeftConst);
-
-      // For first chunk (elemOffset=0), baseOffset should be 0, not haloLeft
-      Value isFirstWorker = builder.create<arith::CmpIOp>(
-          loc, arith::CmpIPredicate::eq, elemOffset, zero);
-      baseOffset =
-          builder.create<arith::SelectOp>(loc, isFirstWorker, zero, baseOffset);
-
-      // Compute chunk index for owned chunk
-      startChunk =
-          builder.create<arith::DivUIOp>(loc, baseOffset, plan_.chunkSize);
-      chunkCount = one;
-
-      ARTS_DEBUG("  Stencil ESD: chunkIdx=" << startChunk
-                                            << ", haloLeft=" << haloLeftVal
-                                            << ", haloRight=" << haloRightVal);
-
-      /// Get inner dimension size for partial acquisition
-      Value innerDim = newInnerSizes_.empty()
-                           ? builder.create<arith::ConstantIndexOp>(loc, 1)
-                           : newInnerSizes_[0];
-
-      /// Get number of chunks for boundary checking
-      Value numChunks = newOuterSizes_.empty()
-                            ? builder.create<arith::ConstantIndexOp>(loc, 1)
-                            : newOuterSizes_[0];
-      Value lastChunkIdx = builder.create<arith::SubIOp>(loc, numChunks, one);
-
-      /// Create LEFT HALO acquire (partial: last haloLeft rows of prev chunk)
-      if (haloLeftVal > 0) {
-        Value leftChunkIdx =
-            builder.create<arith::SubIOp>(loc, startChunk, one);
-
-        // element_offsets: start at (chunkSize - haloLeft) within prev chunk
-        Value leftElemOffset = builder.create<arith::SubIOp>(
-            loc, plan_.chunkSize,
-            builder.create<arith::ConstantIndexOp>(loc, haloLeftVal));
-
-        // bounds_valid = (startChunk != 0): valid only if not first chunk
-        Value leftValid = builder.create<arith::CmpIOp>(
-            loc, arith::CmpIPredicate::ne, startChunk, zero);
-
-        auto leftHalo = builder.create<DbAcquireOp>(
-            loc, ArtsMode::in, newAlloc.getGuid(), newAlloc.getPtr(),
-            /*indices=*/SmallVector<Value>{},
-            /*offsets=*/SmallVector<Value>{leftChunkIdx},
-            /*sizes=*/SmallVector<Value>{one},
-            /*offset_hints=*/SmallVector<Value>{},
-            /*size_hints=*/SmallVector<Value>{},
-            /*bounds_valid=*/leftValid,
-            /*element_offsets=*/SmallVector<Value>{leftElemOffset, zero},
-            /*element_sizes=*/
-            SmallVector<Value>{
-                builder.create<arith::ConstantIndexOp>(loc, haloLeftVal),
-                innerDim});
-
-        addHaloAcquireToEdt(acquire, leftHalo, builder);
-        ARTS_DEBUG("  Created left halo acquire");
-      }
-
-      /// Create RIGHT HALO acquire (partial: first haloRight rows of next chunk)
-      if (haloRightVal > 0) {
-        Value rightChunkIdx =
-            builder.create<arith::AddIOp>(loc, startChunk, one);
-
-        // bounds_valid = (startChunk != lastChunk): valid only if not last chunk
-        Value rightValid = builder.create<arith::CmpIOp>(
-            loc, arith::CmpIPredicate::ne, startChunk, lastChunkIdx);
-
-        auto rightHalo = builder.create<DbAcquireOp>(
-            loc, ArtsMode::in, newAlloc.getGuid(), newAlloc.getPtr(),
-            /*indices=*/SmallVector<Value>{},
-            /*offsets=*/SmallVector<Value>{rightChunkIdx},
-            /*sizes=*/SmallVector<Value>{one},
-            /*offset_hints=*/SmallVector<Value>{},
-            /*size_hints=*/SmallVector<Value>{},
-            /*bounds_valid=*/rightValid,
-            /*element_offsets=*/SmallVector<Value>{zero, zero},
-            /*element_sizes=*/
-            SmallVector<Value>{
-                builder.create<arith::ConstantIndexOp>(loc, haloRightVal),
-                innerDim});
-
-        addHaloAcquireToEdt(acquire, rightHalo, builder);
-        ARTS_DEBUG("  Created right halo acquire");
-      }
-    } else {
-      /// CHUNKED MODE: Multi-chunk div/mod model
-      /// DISJOINT MODEL: Physical chunks are disjoint and indexed by
-      /// plan_.chunkSize. Chunk layout: chunk 0 -> rows [0, plan_.chunkSize),
-      /// chunk 1 -> rows [plan_.chunkSize, 2*plan_.chunkSize), etc.
-      ///
-      /// A partition may span MULTIPLE physical chunks if chunk boundary
-      /// doesn't align with partition boundary.
-      ///
-      /// Example: plan_.chunkSize=66, worker 1 needs rows 63-128
-      ///   - startChunk = 63/66 = 0
-      ///   - endChunk = 128/66 = 1
-      ///   - chunkCount = 2
-
-      /// Compute start chunk index using physical chunk size
-      startChunk =
-          builder.create<arith::DivUIOp>(loc, elemOffset, plan_.chunkSize);
-
-      /// Compute end position (elemOffset + elemSize - 1)
-      Value endPos = builder.create<arith::AddIOp>(loc, elemOffset, elemSize);
-      endPos = builder.create<arith::SubIOp>(loc, endPos, one);
-
-      /// Compute end chunk index
-      Value endChunk =
-          builder.create<arith::DivUIOp>(loc, endPos, plan_.chunkSize);
-
-      /// Clamp endChunk to valid range (numChunks - 1)
-      if (!newOuterSizes_.empty()) {
-        Value numChunks = newOuterSizes_[0];
-        Value maxChunk = builder.create<arith::SubIOp>(loc, numChunks, one);
-        endChunk = builder.create<arith::MinUIOp>(loc, endChunk, maxChunk);
-      }
-
-      /// Compute chunk count = endChunk - startChunk + 1
-      chunkCount = builder.create<arith::SubIOp>(loc, endChunk, startChunk);
-      chunkCount = builder.create<arith::AddIOp>(loc, chunkCount, one);
-    }
-
-    newOffsets.push_back(startChunk);
-    newSizes.push_back(chunkCount);
-
-    acquire.getOffsetsMutable().assign(newOffsets);
-    acquire.getSizesMutable().assign(newSizes);
-
-    /// Preserve original loop bounds hints when available; otherwise fall back
-    /// to element-space offsets/sizes for localization.
-    SmallVector<Value> offsetHints = originalOffsetHints.empty()
-                                         ? SmallVector<Value>{elemOffset}
-                                         : originalOffsetHints;
-    SmallVector<Value> sizeHints = originalSizeHints.empty()
-                                       ? SmallVector<Value>{elemSize}
-                                       : originalSizeHints;
-    acquire.getOffsetHintsMutable().assign(offsetHints);
-    acquire.getSizeHintsMutable().assign(sizeHints);
-
-    /// Use mode-aware rebase for chunked mode EDT users
-    /// Pass startChunk directly to avoid recomputation
-    rebaseEdtUsers(acquire, builder, startChunk);
-  } else {
-    /// ELEMENT-WISE: already in datablock space, no offset transformation
-    newOffsets.push_back(elemOffset);
-    newSizes.push_back(elemSize);
-
-    acquire.getOffsetsMutable().assign(newOffsets);
-    acquire.getSizesMutable().assign(newSizes);
-    acquire.getOffsetHintsMutable().assign(newOffsets);
-    acquire.getSizeHintsMutable().assign(newSizes);
-
-    /// CRITICAL FIX: Store the OLD allocation's stride for linearized access!
-    /// After element-wise rewrite, the new element type has size=1, but
-    /// linearized accesses need the ORIGINAL stride to properly scale offsets.
-    ///
-    /// For element_sizes = [D0, D1, D2, ...], stride = D1 * D2 * ...
-    /// This is the product of TRAILING dimensions, NOT all dimensions!
-    if (auto staticStride = DatablockUtils::getStaticElementStride(oldAlloc_)) {
-      if (*staticStride > 1) {
-        acquire->setAttr("element_stride", builder.getIndexAttr(*staticStride));
-        LLVM_DEBUG(
-            llvm::dbgs()
-            << "Element-wise rewrite: stored stride=" << *staticStride
-            << " (trailing elementSizes product) in acquire attribute\n");
-      }
-    }
-
-    /// Rebase EDT users via the element-wise rewriter.
-    rebaseEdtUsers(acquire, builder);
-  }
+///===----------------------------------------------------------------------===///
+/// Indexer Factory Methods - Used by subclasses for index localization
+///===----------------------------------------------------------------------===///
+std::unique_ptr<DbIndexerBase>
+DbRewriter::createElementWiseIndexer(Value elemOffset, Value elemSize,
+                                     unsigned outerRank, unsigned innerRank,
+                                     ValueRange oldElementSizes) {
+  ARTS_DEBUG("  ElementWise indexer: outerRank=" << outerRank << ", innerRank="
+                                                 << innerRank);
+  return std::make_unique<DbElementWiseIndexer>(elemOffset, elemSize, outerRank,
+                                                innerRank, oldElementSizes);
 }
 
-void DbRewriter::rewriteDbRef(DbRefOp ref, DbAllocOp newAlloc,
-                              OpBuilder &builder) {
-  Location loc = ref.getLoc();
-  Type newElementType = newAlloc.getAllocatedElementType();
-  Value newSource = (ref.getSource() == oldAlloc_.getPtr()) ? newAlloc.getPtr()
-                                                            : ref.getSource();
-
-  unsigned newOuterRank = newOuterSizes_.size();
-  unsigned newInnerRank = newInnerSizes_.size();
-
-  /// Collect load/store users of this db_ref
-  SmallVector<Operation *> refUsers(ref.getResult().getUsers().begin(),
-                                    ref.getResult().getUsers().end());
-  llvm::SetVector<Operation *> opsToRemove;
-
-  auto zero = [&](OpBuilder &b, Location l) {
-    return b.create<arith::ConstantIndexOp>(l, 0);
-  };
-
-  bool hasLoadStoreUsers = false;
-  for (Operation *user : refUsers) {
-    if (!isa<memref::LoadOp, memref::StoreOp>(user))
-      continue;
-
-    hasLoadStoreUsers = true;
-    OpBuilder::InsertionGuard ig(builder);
-    builder.setInsertionPoint(user);
-    Location userLoc = user->getLoc();
-
-    /// Get load/store indices
-    ValueRange loadStoreIndices;
-    if (auto load = dyn_cast<memref::LoadOp>(user))
-      loadStoreIndices = load.getIndices();
-    else if (auto store = dyn_cast<memref::StoreOp>(user))
-      loadStoreIndices = store.getIndices();
-
-    SmallVector<Value> newOuter, newInner;
-    auto zero = [&]() {
-      return builder.create<arith::ConstantIndexOp>(userLoc, 0);
-    };
-
-    /// Both Chunked and Stencil modes use div/mod for main body accesses
-    bool usesChunks = (plan_.mode == RewriterMode::Chunked ||
-                       plan_.mode == RewriterMode::Stencil);
-
-    if (usesChunks) {
-      Value cs = plan_.chunkSize ? plan_.chunkSize : zero();
-      if (!loadStoreIndices.empty()) {
-        Value idx0 = loadStoreIndices.front();
-        newOuter.push_back(builder.create<arith::DivUIOp>(userLoc, idx0, cs));
-        newInner.push_back(builder.create<arith::RemUIOp>(userLoc, idx0, cs));
-        for (unsigned i = 1; i < loadStoreIndices.size(); ++i)
-          newInner.push_back(loadStoreIndices[i]);
-      }
-    } else {
-      for (unsigned i = 0; i < newOuterRank; ++i) {
-        if (i < loadStoreIndices.size())
-          newOuter.push_back(loadStoreIndices[i]);
-        else
-          newOuter.push_back(zero());
-      }
-      for (unsigned i = 0; i < newInnerRank; ++i) {
-        unsigned src = newOuterRank + i;
-        if (src < loadStoreIndices.size())
-          newInner.push_back(loadStoreIndices[src]);
-        else
-          newInner.push_back(zero());
-      }
-    }
-
-    if (newOuter.empty())
-      newOuter.push_back(zero());
-    if (newInner.empty())
-      newInner.push_back(zero());
-
-    /// Create new db_ref with transformed outer indices
-    auto newRef =
-        builder.create<DbRefOp>(userLoc, newElementType, newSource, newOuter);
-
-    /// Create new load/store with transformed inner indices
-    if (auto load = dyn_cast<memref::LoadOp>(user)) {
-      auto newLoad = builder.create<memref::LoadOp>(userLoc, newRef, newInner);
-      load.replaceAllUsesWith(newLoad.getResult());
-    } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
-      builder.create<memref::StoreOp>(userLoc, store.getValue(), newRef,
-                                      newInner);
-    }
-    opsToRemove.insert(user);
-  }
-
-  /// For db_refs without load/store users, just update the db_ref type
-  if (!hasLoadStoreUsers && !ref.getResult().use_empty()) {
-    OpBuilder::InsertionGuard ig(builder);
-    builder.setInsertionPoint(ref);
-    SmallVector<Value> indices(ref.getIndices().begin(),
-                               ref.getIndices().end());
-    if (indices.empty())
-      indices.push_back(zero(builder, loc));
-    auto newRef =
-        builder.create<DbRefOp>(loc, newElementType, newSource, indices);
-    ref.replaceAllUsesWith(newRef.getResult());
-  }
-
-  /// Remove old load/store operations
-  for (Operation *op : opsToRemove)
-    if (op->use_empty())
-      op->erase();
+std::unique_ptr<DbIndexerBase>
+DbRewriter::createChunkedIndexer(Value chunkSize, Value startChunk,
+                                 Value elemOffset, unsigned outerRank,
+                                 unsigned innerRank) {
+  ARTS_DEBUG("  Chunked indexer: outerRank=" << outerRank
+                                             << ", innerRank=" << innerRank);
+  return std::make_unique<DbChunkedIndexer>(chunkSize, startChunk, elemOffset,
+                                            outerRank, innerRank);
 }
 
-std::unique_ptr<DbRewriterBase> DbRewriter::createRewriter(
-    const DbRewritePlan &plan, Value chunkSize, Value startChunk,
-    Value elemOffset, Value elemSize, unsigned outerRank, unsigned innerRank,
-    ValueRange oldElementSizes, OpBuilder &builder, Location loc) {
+std::unique_ptr<DbIndexerBase> DbRewriter::createStencilIndexer(
+    const StencilInfo &info, Value chunkSize, Value elemOffset,
+    unsigned outerRank, unsigned innerRank, Value ownedArg, Value leftHaloArg,
+    Value rightHaloArg, OpBuilder &builder, Location loc) {
+  /// Create halo values from StencilInfo
+  Value haloLeft = builder.create<arith::ConstantIndexOp>(loc, info.haloLeft);
+  Value haloRight = builder.create<arith::ConstantIndexOp>(loc, info.haloRight);
+
+  ARTS_DEBUG("  Stencil indexer: haloLeft=" << info.haloLeft << ", haloRight="
+                                            << info.haloRight);
+
+  return std::make_unique<DbStencilIndexer>(
+      haloLeft, haloRight, chunkSize, outerRank, innerRank, elemOffset,
+      ownedArg, leftHaloArg, rightHaloArg);
+}
+
+std::unique_ptr<DbIndexerBase>
+DbRewriter::createIndexer(const DbRewritePlan &plan, Value startChunk,
+                          Value elemOffset, Value elemSize, unsigned outerRank,
+                          unsigned innerRank, ValueRange oldElementSizes,
+                          OpBuilder &builder, Location loc, Value ownedArg,
+                          Value leftHaloArg, Value rightHaloArg) {
 
   ARTS_DEBUG(
-      "DbRewriter::createRewriter mode=" << getRewriterModeName(plan.mode));
+      "DbRewriter::createIndexer mode=" << getRewriterModeName(plan.mode));
 
   switch (plan.mode) {
-  case RewriterMode::Stencil: {
+  case RewriterMode::ElementWise:
+    return createElementWiseIndexer(elemOffset, elemSize, outerRank, innerRank,
+                                    oldElementSizes);
+
+  case RewriterMode::Chunked:
+    return createChunkedIndexer(plan.chunkSize, startChunk, elemOffset,
+                                outerRank, innerRank);
+
+  case RewriterMode::Stencil:
     assert(plan.stencilInfo && "Stencil mode requires stencil info");
-
-    /// Create halo values from plan.stencilInfo
-    Value haloLeft =
-        builder.create<arith::ConstantIndexOp>(loc, plan.stencilInfo->haloLeft);
-    Value haloRight = builder.create<arith::ConstantIndexOp>(
-        loc, plan.stencilInfo->haloRight);
-
-    /// plan.chunkSize is the EXTENDED size (includes halo).
-    /// DbStencilRewriter needs the BASE chunk size for computing chunkStart.
-    /// baseChunkSize = extendedChunkSize - haloLeft - haloRight
-    Value baseChunkSize =
-        builder.create<arith::SubIOp>(loc, chunkSize, haloLeft);
-    baseChunkSize =
-        builder.create<arith::SubIOp>(loc, baseChunkSize, haloRight);
-
-    ARTS_DEBUG("  Stencil: haloLeft=" << plan.stencilInfo->haloLeft
-                                      << ", haloRight="
-                                      << plan.stencilInfo->haloRight);
-
-    /// Pass element-wise params for delegation (placeholder until ESD ready)
-    return std::make_unique<DbStencilRewriter>(
-        baseChunkSize, startChunk, haloLeft, haloRight,
-        plan.stencilInfo->totalRows, outerRank, innerRank, elemOffset, elemSize,
-        oldElementSizes);
-  }
-
-  case RewriterMode::Chunked: {
-    ARTS_DEBUG("  Chunked: outerRank=" << outerRank
-                                       << ", innerRank=" << innerRank);
-    return std::make_unique<DbChunkedRewriter>(
-        chunkSize, startChunk, elemOffset, outerRank, innerRank);
-  }
-
-  case RewriterMode::ElementWise: {
-    ARTS_DEBUG("  ElementWise: outerRank=" << outerRank
-                                           << ", innerRank=" << innerRank);
-    return std::make_unique<DbElementWiseRewriter>(
-        elemOffset, elemSize, outerRank, innerRank, oldElementSizes);
-  }
+    return createStencilIndexer(*plan.stencilInfo, plan.chunkSize, elemOffset,
+                                outerRank, innerRank, ownedArg, leftHaloArg,
+                                rightHaloArg, builder, loc);
   }
 
   llvm_unreachable("Unknown RewriterMode");
-}
-
-void DbRewriter::addHaloAcquireToEdt(DbAcquireOp originalAcq,
-                                     DbAcquireOp haloAcq, OpBuilder &builder) {
-  ARTS_DEBUG("DbRewriter::addHaloAcquireToEdt");
-
-  /// Find the EDT that uses the original acquire
-  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(originalAcq);
-  if (!edt) {
-    ARTS_DEBUG("  No EDT found for acquire - skipping halo addition");
-    return;
-  }
-
-  /// Add the halo acquire's ptr as a new EDT dependency
-  /// The appendDependency method updates the EDT operands
-  edt.appendDependency(haloAcq.getPtr());
-
-  /// Add corresponding block argument to EDT body
-  Block &edtBody = edt.getBody().front();
-  edtBody.addArgument(haloAcq.getPtr().getType(), haloAcq.getLoc());
-
-  ARTS_DEBUG("  Added halo dep to EDT, now has "
-             << edt.getDependencies().size() << " deps and "
-             << edtBody.getNumArguments() << " block args");
 }

@@ -170,7 +170,6 @@ void ArtsAnalysisManager::captureDiagnostics() {
     break;
   }
 
-
   root["machine"] = std::move(machine);
 
   /// Unified entities array

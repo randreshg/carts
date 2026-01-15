@@ -1,10 +1,10 @@
-//===- HeuristicBase.h - Abstract interface for heuristics -----*- C++ -*-===//
-//
-// This file defines the abstract base class for all heuristics in the CARTS
-// compiler framework. Heuristics are used to make compile-time optimization
-// decisions based on program analysis and machine configuration.
-//
-//===----------------------------------------------------------------------===//
+///==========================================================================///
+/// File: HeuristicBase.h
+///
+/// This file defines the abstract base class for all heuristics in the CARTS
+/// compiler framework. Heuristics are used to make compile-time optimization
+/// decisions based on program analysis and machine configuration.
+///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_HEURISTICS_HEURISTICBASE_H
 #define ARTS_ANALYSIS_HEURISTICS_HEURISTICBASE_H
@@ -14,16 +14,6 @@
 namespace mlir::arts {
 
 /// Abstract base class for all heuristics.
-///
-/// Heuristics are compile-time decision functions that analyze program
-/// characteristics and machine configuration to recommend optimization
-/// strategies. Each heuristic has:
-/// - A unique name for diagnostics (e.g., "H1.1", "H1.2")
-/// - A human-readable description
-/// - A priority that determines evaluation order
-///
-/// Heuristics are evaluated in priority order (highest first), and the first
-/// heuristic that returns a decision wins.
 class HeuristicBase {
 public:
   virtual ~HeuristicBase() = default;

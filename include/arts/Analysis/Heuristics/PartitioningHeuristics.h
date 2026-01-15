@@ -3,8 +3,6 @@
 ///
 /// This file defines all H1.x partitioning heuristics for the CARTS compiler.
 // These heuristics determine the optimal datablock partitioning strategy
-/// (coarse, element-wise, or chunked) based on access patterns and machine
-/// configuration.
 ///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_HEURISTICS_PARTITIONINGHEURISTICS_H
@@ -14,6 +12,7 @@
 #include "arts/Analysis/Heuristics/HeuristicBase.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Transforms/Datablock/DbRewriter.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include <memory>
 #include <optional>
@@ -99,6 +98,16 @@ struct PartitioningDecision {
   RewriterMode mode = RewriterMode::ElementWise; /// Chunked or ElementWise
   unsigned outerRank = 0, innerRank = 0;
   std::string rationale;
+
+  static PartitioningDecision coarse(const PartitioningContext &ctx,
+                                     llvm::StringRef reason) {
+    PartitioningDecision decision;
+    decision.mode = RewriterMode::ElementWise;
+    decision.outerRank = 0;
+    decision.innerRank = ctx.memrefRank; /// All dims are inner for coarse
+    decision.rationale = reason.str();
+    return decision;
+  }
 
   bool isCoarse() const { return outerRank == 0; }
   bool isFineGrained() const { return outerRank > 0; }

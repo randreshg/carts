@@ -9,18 +9,22 @@
 /// Pointer-result uses are updated; GUID uses remain unchanged.
 /// db_acquire/release ops are recreated with the new handles.
 ///==========================================================================///
+
 #include "../ArtsPassDetails.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsDebug.h"
-#include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/RemovalUtils.h"
+#include "arts/Utils/ValueUtils.h"
 #include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/Metadata/IdRegistry.h"
 #include "arts/Utils/OperationAttributes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Location.h"
@@ -29,13 +33,136 @@
 #include "mlir/Support/LLVM.h"
 #include "polygeist/Ops.h"
 
-#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include <cstdint>
+#include <functional>
 
 ARTS_DEBUG_SETUP(db_lowering);
 using namespace mlir;
 using namespace arts;
+
+namespace {
+/// Layout information for a datablock allocation (used by DbCopy/DbSync).
+struct LayoutInfo {
+  DbAllocOp alloc;
+  PromotionMode mode = PromotionMode::coarse;
+  SmallVector<Value> sizes;
+  SmallVector<Value> elementSizes;
+  unsigned outerRank = 0;
+  unsigned innerRank = 0;
+};
+
+static DbAllocOp getAllocFromPtr(Value ptr) {
+  Operation *allocOp = DatablockUtils::getUnderlyingDbAlloc(ptr);
+  return dyn_cast_or_null<DbAllocOp>(allocOp);
+}
+
+static LayoutInfo buildLayoutInfo(DbAllocOp alloc, PromotionMode mode,
+                                  OpBuilder &builder, Location loc) {
+  LayoutInfo info;
+  info.alloc = alloc;
+  info.mode = mode;
+  info.sizes.assign(alloc.getSizes().begin(), alloc.getSizes().end());
+  info.elementSizes.assign(alloc.getElementSizes().begin(),
+                           alloc.getElementSizes().end());
+  if (info.sizes.empty())
+    info.sizes.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
+  if (info.elementSizes.empty())
+    info.elementSizes.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
+  info.outerRank = (mode == PromotionMode::coarse) ? 0 : info.sizes.size();
+  info.innerRank = info.elementSizes.size();
+  return info;
+}
+
+/// Get logical dimensions (total elements) for a layout.
+static SmallVector<Value> getLogicalDims(const LayoutInfo &info,
+                                         OpBuilder &builder, Location loc) {
+  SmallVector<Value> dims;
+  switch (info.mode) {
+  case PromotionMode::coarse:
+    dims.append(info.elementSizes.begin(), info.elementSizes.end());
+    break;
+  case PromotionMode::fine_grained:
+    dims.append(info.sizes.begin(), info.sizes.end());
+    dims.append(info.elementSizes.begin(), info.elementSizes.end());
+    break;
+  case PromotionMode::chunked: {
+    Value firstDim = info.elementSizes.front();
+    if (!info.sizes.empty()) {
+      firstDim =
+          builder.create<arith::MulIOp>(loc, info.sizes.front(), firstDim);
+    }
+    dims.push_back(firstDim);
+    for (size_t i = 1; i < info.elementSizes.size(); ++i)
+      dims.push_back(info.elementSizes[i]);
+    break;
+  }
+  }
+  if (dims.empty())
+    dims.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
+  return dims;
+}
+
+/// Trim trailing unit dimensions from a vector.
+static void trimTrailingUnitDims(SmallVector<Value> &dims) {
+  int64_t value = 0;
+  while (!dims.empty() && ValueUtils::getConstantIndex(dims.back(), value) &&
+         value == 1) {
+    dims.pop_back();
+  }
+}
+
+/// Map global indices to (outer, inner) indices for a specific layout.
+static void mapGlobalToLayout(ArrayRef<Value> globalIndices,
+                              const LayoutInfo &info, OpBuilder &builder,
+                              Location loc, SmallVector<Value> &outerIndices,
+                              SmallVector<Value> &innerIndices) {
+  outerIndices.clear();
+  innerIndices.clear();
+  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+
+  if (info.mode == PromotionMode::coarse) {
+    innerIndices.append(globalIndices.begin(), globalIndices.end());
+    if (innerIndices.empty())
+      innerIndices.push_back(zero);
+    return;
+  }
+
+  if (info.mode == PromotionMode::fine_grained) {
+    for (unsigned i = 0; i < info.outerRank; ++i) {
+      if (i < globalIndices.size())
+        outerIndices.push_back(globalIndices[i]);
+      else
+        outerIndices.push_back(zero);
+    }
+    for (unsigned i = info.outerRank; i < globalIndices.size(); ++i)
+      innerIndices.push_back(globalIndices[i]);
+    while (innerIndices.size() < info.innerRank)
+      innerIndices.push_back(zero);
+    if (innerIndices.empty())
+      innerIndices.push_back(zero);
+    return;
+  }
+
+  // Chunked: assume chunking along the leading dimension
+  Value g0 = globalIndices.empty() ? zero : globalIndices.front();
+  Value chunkSize = info.elementSizes.empty()
+                        ? builder.create<arith::ConstantIndexOp>(loc, 1)
+                        : info.elementSizes.front();
+  outerIndices.push_back(builder.create<arith::DivUIOp>(loc, g0, chunkSize));
+  while (outerIndices.size() < info.outerRank)
+    outerIndices.push_back(zero);
+
+  innerIndices.push_back(builder.create<arith::RemUIOp>(loc, g0, chunkSize));
+  for (unsigned i = 1; i < globalIndices.size(); ++i)
+    innerIndices.push_back(globalIndices[i]);
+  while (innerIndices.size() < info.innerRank)
+    innerIndices.push_back(zero);
+  if (innerIndices.empty())
+    innerIndices.push_back(zero);
+}
+} // namespace
+
 namespace {
 struct DbLoweringPass : public arts::DbLoweringBase<DbLoweringPass> {
   DbLoweringPass(uint64_t idStride = IdRegistry::DefaultStride)
@@ -44,14 +171,12 @@ struct DbLoweringPass : public arts::DbLoweringBase<DbLoweringPass> {
   void runOnOperation() override;
 
 private:
-  /// Processes all DB allocation ops, converting to opaque pointers.
+  void lowerDbCopyOps();
+  void lowerDbSyncOps();
   void convertDbAllocOps();
-  /// Updates all users of the old DB alloc to use the new one.
   void updateAllocUsers(DbAllocOp oldAllocOp, DbAllocOp newAllocOp);
-  /// Processes a single DbAcquireOp and its nested acquire operations.
   void updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid, Value newPtr,
                           SmallVector<Value> elementSizes);
-  /// Helper function to get LLVM pointer from a base value and indices.
   Value getLLVMPtr(Value base, ValueRange opIndices, Location loc);
 
 private:
@@ -71,13 +196,263 @@ void DbLoweringPass::runOnOperation() {
   AC = new ArtsCodegen(module, false);
   ARTS_INFO_HEADER(DbLowering);
   ARTS_DEBUG_REGION(module.dump(););
+
+  lowerDbCopyOps();
+  lowerDbSyncOps();
   convertDbAllocOps();
+
   RemovalUtils removalMgr;
   for (Operation *op : opsToRemove)
     removalMgr.markForRemoval(op);
   removalMgr.removeAllMarked(module, /*recursive=*/false);
   ARTS_INFO_FOOTER(DbLoweringPass);
   ARTS_DEBUG_REGION(module.dump(););
+}
+
+///===----------------------------------------------------------------------===///
+/// Lower DbCopyOp to new DbAllocOp + data copy loop
+///===----------------------------------------------------------------------===///
+void DbLoweringPass::lowerDbCopyOps() {
+  SmallVector<DbCopyOp, 4> copyOps;
+  module.walk([&](DbCopyOp op) { copyOps.push_back(op); });
+
+  if (copyOps.empty())
+    return;
+
+  ARTS_DEBUG("Lowering " << copyOps.size() << " DbCopyOps");
+
+  auto insertDbFree = [&](DbAllocOp allocOp, OpBuilder &builder) {
+    Block *allocBlock = allocOp->getBlock();
+    if (!allocBlock)
+      return;
+    Operation *terminator = allocBlock->getTerminator();
+    if (!terminator)
+      return;
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPoint(terminator);
+    builder.create<DbFreeOp>(allocOp.getLoc(), allocOp.getGuid());
+    builder.create<DbFreeOp>(allocOp.getLoc(), allocOp.getPtr());
+  };
+
+  for (DbCopyOp copyOp : copyOps) {
+    DbAllocOp sourceAlloc = getAllocFromPtr(copyOp.getSourcePtr());
+    if (!sourceAlloc) {
+      ARTS_DEBUG("  DbCopyLowering: missing source alloc for " << copyOp);
+      continue;
+    }
+
+    OpBuilder builder(copyOp);
+    builder.setInsertionPoint(copyOp);
+    Location loc = copyOp.getLoc();
+
+    PromotionMode destMode = copyOp.getDestPartition();
+    PromotionMode sourceMode =
+        getPartitionMode(sourceAlloc.getOperation())
+            .value_or(PromotionMode::coarse);
+
+    SmallVector<Value> newSizes;
+    SmallVector<Value> newElementSizes;
+    Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
+
+    if (destMode == PromotionMode::fine_grained &&
+        sourceAlloc.getElementSizes().size() == 1 &&
+        sourceAlloc.getSizes().size() == 1) {
+      // Chunked -> Fine-grained: total elements = numChunks * chunkSize
+      Value numChunks = sourceAlloc.getSizes().front();
+      Value chunkSize = sourceAlloc.getElementSizes().front();
+      Value totalSize =
+          builder.create<arith::MulIOp>(loc, numChunks, chunkSize);
+      newSizes.push_back(totalSize);
+      newElementSizes.push_back(one);
+    } else {
+      newSizes.append(sourceAlloc.getSizes().begin(),
+                      sourceAlloc.getSizes().end());
+      newElementSizes.append(sourceAlloc.getElementSizes().begin(),
+                             sourceAlloc.getElementSizes().end());
+      if (newSizes.empty())
+        newSizes.push_back(one);
+      if (newElementSizes.empty())
+        newElementSizes.push_back(one);
+    }
+
+    DbAllocOp destAlloc = builder.create<DbAllocOp>(
+        loc, sourceAlloc.getMode(), sourceAlloc.getRoute(),
+        sourceAlloc.getAllocType(), sourceAlloc.getDbMode(),
+        sourceAlloc.getElementType(), Value(), newSizes, newElementSizes);
+    if (destMode != PromotionMode::coarse)
+      setPartitionMode(destAlloc.getOperation(), destMode);
+    insertDbFree(destAlloc, builder);
+
+    LayoutInfo sourceInfo =
+        buildLayoutInfo(sourceAlloc, sourceMode, builder, loc);
+    LayoutInfo destInfo = buildLayoutInfo(destAlloc, destMode, builder, loc);
+    destInfo.sizes = newSizes;
+    destInfo.elementSizes = newElementSizes;
+    destInfo.outerRank =
+        (destMode == PromotionMode::coarse) ? 0 : newSizes.size();
+    destInfo.innerRank = newElementSizes.size();
+
+    SmallVector<Value> logicalDims = getLogicalDims(sourceInfo, builder, loc);
+    Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+    SmallVector<Value> ivs;
+
+    std::function<void(size_t, OpBuilder &)> buildLoopNest =
+        [&](size_t dim, OpBuilder &nestBuilder) {
+          if (dim == logicalDims.size()) {
+            SmallVector<Value> srcOuter, srcInner;
+            SmallVector<Value> dstOuter, dstInner;
+            mapGlobalToLayout(ivs, sourceInfo, nestBuilder, loc, srcOuter,
+                              srcInner);
+            mapGlobalToLayout(ivs, destInfo, nestBuilder, loc, dstOuter,
+                              dstInner);
+
+            Value srcBase = sourceAlloc.getPtr();
+            if (sourceInfo.outerRank > 0) {
+              srcBase = nestBuilder.create<DbRefOp>(
+                  loc, sourceAlloc.getAllocatedElementType(), srcBase,
+                  srcOuter);
+            }
+            Value dstBase = destAlloc.getPtr();
+            if (destInfo.outerRank > 0) {
+              dstBase = nestBuilder.create<DbRefOp>(
+                  loc, destAlloc.getAllocatedElementType(), dstBase, dstOuter);
+            }
+
+            Value val =
+                nestBuilder.create<memref::LoadOp>(loc, srcBase, srcInner);
+            nestBuilder.create<memref::StoreOp>(loc, val, dstBase, dstInner);
+            return;
+          }
+
+          Value ub = logicalDims[dim];
+          auto loop = nestBuilder.create<scf::ForOp>(loc, zero, ub, one);
+          OpBuilder innerBuilder = OpBuilder::atBlockBegin(loop.getBody());
+          ivs.push_back(loop.getInductionVar());
+          buildLoopNest(dim + 1, innerBuilder);
+          ivs.pop_back();
+        };
+
+    ARTS_DEBUG("  DbCopyLowering: building copy loop for " << copyOp);
+    buildLoopNest(0, builder);
+
+    copyOp.getGuid().replaceAllUsesWith(destAlloc.getGuid());
+    copyOp.getPtr().replaceAllUsesWith(destAlloc.getPtr());
+    opsToRemove.insert(copyOp.getOperation());
+  }
+}
+
+///===----------------------------------------------------------------------===///
+/// Lower DbSyncOp to data copy loop
+///===----------------------------------------------------------------------===///
+void DbLoweringPass::lowerDbSyncOps() {
+  SmallVector<DbSyncOp, 4> syncOps;
+  module.walk([&](DbSyncOp op) { syncOps.push_back(op); });
+
+  if (syncOps.empty())
+    return;
+
+  ARTS_DEBUG("Lowering " << syncOps.size() << " DbSyncOps");
+
+  for (DbSyncOp syncOp : syncOps) {
+    DbAllocOp destAlloc = getAllocFromPtr(syncOp.getDestPtr());
+    DbAllocOp sourceAlloc = getAllocFromPtr(syncOp.getSourcePtr());
+    if (!destAlloc || !sourceAlloc) {
+      ARTS_DEBUG("  DbSyncLowering: missing alloc for " << syncOp);
+      opsToRemove.insert(syncOp.getOperation());
+      continue;
+    }
+
+    OpBuilder builder(syncOp);
+    builder.setInsertionPoint(syncOp);
+    Location loc = syncOp.getLoc();
+
+    PromotionMode destMode =
+        getPartitionMode(destAlloc.getOperation()).value_or(PromotionMode::coarse);
+    PromotionMode sourceMode =
+        getPartitionMode(sourceAlloc.getOperation()).value_or(PromotionMode::coarse);
+
+    LayoutInfo destInfo = buildLayoutInfo(destAlloc, destMode, builder, loc);
+    LayoutInfo sourceInfo = buildLayoutInfo(sourceAlloc, sourceMode, builder, loc);
+
+    SmallVector<Value> sourceLogical =
+        getLogicalDims(sourceInfo, builder, loc);
+    SmallVector<Value> destLogical = getLogicalDims(destInfo, builder, loc);
+    trimTrailingUnitDims(sourceLogical);
+    trimTrailingUnitDims(destLogical);
+    if (sourceLogical.size() != destLogical.size()) {
+      ARTS_DEBUG("  DbSyncLowering: logical rank mismatch for " << syncOp);
+      opsToRemove.insert(syncOp.getOperation());
+      continue;
+    }
+
+    SmallVector<Value> offsets;
+    SmallVector<Value> sizes;
+    if (!syncOp.getFullSync()) {
+      offsets.assign(syncOp.getElementOffsets().begin(),
+                     syncOp.getElementOffsets().end());
+      sizes.assign(syncOp.getElementSizes().begin(),
+                   syncOp.getElementSizes().end());
+    }
+
+    if (sizes.empty())
+      sizes.append(sourceLogical.begin(), sourceLogical.end());
+    if (offsets.empty()) {
+      Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+      offsets.assign(sizes.size(), zero);
+    }
+
+    if (offsets.size() != sizes.size() ||
+        sizes.size() != sourceLogical.size()) {
+      ARTS_DEBUG("  DbSyncLowering: invalid offset/size for " << syncOp);
+      opsToRemove.insert(syncOp.getOperation());
+      continue;
+    }
+
+    Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
+    SmallVector<Value> ivs;
+
+    std::function<void(size_t, OpBuilder &)> buildLoopNest =
+        [&](size_t dim, OpBuilder &nestBuilder) {
+          if (dim == sizes.size()) {
+            SmallVector<Value> srcOuter, srcInner;
+            SmallVector<Value> dstOuter, dstInner;
+            mapGlobalToLayout(ivs, sourceInfo, nestBuilder, loc, srcOuter,
+                              srcInner);
+            mapGlobalToLayout(ivs, destInfo, nestBuilder, loc, dstOuter,
+                              dstInner);
+
+            Value srcBase = syncOp.getSourcePtr();
+            if (sourceInfo.outerRank > 0) {
+              srcBase = nestBuilder.create<DbRefOp>(
+                  loc, sourceAlloc.getAllocatedElementType(), srcBase,
+                  srcOuter);
+            }
+            Value dstBase = syncOp.getDestPtr();
+            if (destInfo.outerRank > 0) {
+              dstBase = nestBuilder.create<DbRefOp>(
+                  loc, destAlloc.getAllocatedElementType(), dstBase, dstOuter);
+            }
+
+            Value val =
+                nestBuilder.create<memref::LoadOp>(loc, srcBase, srcInner);
+            nestBuilder.create<memref::StoreOp>(loc, val, dstBase, dstInner);
+            return;
+          }
+
+          Value lb = offsets[dim];
+          Value ub = nestBuilder.create<arith::AddIOp>(loc, offsets[dim],
+                                                       sizes[dim]);
+          auto loop = nestBuilder.create<scf::ForOp>(loc, lb, ub, one);
+          OpBuilder innerBuilder = OpBuilder::atBlockBegin(loop.getBody());
+          ivs.push_back(loop.getInductionVar());
+          buildLoopNest(dim + 1, innerBuilder);
+          ivs.pop_back();
+        };
+
+    ARTS_DEBUG("  DbSyncLowering: building sync loop for " << syncOp);
+    buildLoopNest(0, builder);
+    opsToRemove.insert(syncOp.getOperation());
+  }
 }
 
 ///===----------------------------------------------------------------------===///
@@ -108,7 +483,6 @@ void DbLoweringPass::convertDbAllocOps() {
       continue;
     }
 
-    /// Create new DbAllocOp with opaque pointer element type
     SmallVector<Value> sizes(oldOp.getSizes().begin(), oldOp.getSizes().end());
     SmallVector<Value> elementSizes(oldOp.getElementSizes().begin(),
                                     oldOp.getElementSizes().end());
@@ -134,8 +508,7 @@ void DbLoweringPass::convertDbAllocOps() {
     if (!baseId)
       baseId = idRegistry.getOrCreate(oldOp);
 
-    /// Set the create id for the new operation - We multiply the base id by the
-    /// stride to get the create id
+    // Set create_id = base_id * stride
     if (baseId) {
       int64_t createId = baseId * static_cast<int64_t>(idStride);
       newOp->setAttr(AttrNames::Operation::ArtsCreateId,
@@ -153,13 +526,11 @@ void DbLoweringPass::convertDbAllocOps() {
 ///===----------------------------------------------------------------------===///
 void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
                                       DbAllocOp newAllocOp) {
-  /// Replace all uses of the old GUID with the new GUID.
   Value oldGuid = oldAllocOp.getGuid();
   Value newGuid = newAllocOp.getGuid();
   assert(oldGuid && newGuid && "expected guid values");
   oldGuid.replaceAllUsesWith(newGuid);
 
-  /// Replace all uses of the old pointer with the new pointer.
   Value oldPtr = oldAllocOp.getPtr();
   Value newPtr = newAllocOp.getPtr();
   assert(oldPtr && newPtr && "expected pointer values");
@@ -167,12 +538,10 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
   SmallVector<Value> elementSizes(newAllocOp.getElementSizes().begin(),
                                   newAllocOp.getElementSizes().end());
 
-  /// Process each use of the old pointer
   for (auto &use : llvm::make_early_inc_range(oldPtr.getUses())) {
     Operation *userOp = use.getOwner();
     AC->setInsertionPoint(userOp);
 
-    /// DbRef Ops iterate over the outer sizes of the DBAllocOp.
     if (auto dbRefOp = dyn_cast<DbRefOp>(userOp)) {
       SmallVector<Value> dbRefIndices(dbRefOp.getIndices().begin(),
                                       dbRefOp.getIndices().end());
@@ -187,7 +556,6 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
                                                        loadedLlvmPtr);
       };
 
-      /// Rewrite uses of the DbRefOp so we propagate the element sizes
       for (auto &dbRefUse :
            llvm::make_early_inc_range(dbRefOp.getResult().getUses())) {
         Operation *userOp = dbRefUse.getOwner();
@@ -211,7 +579,6 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
               indices, elementSizes);
           opsToRemove.insert(storeOp);
         } else {
-          /// For other users, replace with the casted memref
           Value castedMemref = createCastedMemref(userOp->getLoc());
           dbRefUse.set(castedMemref);
         }
@@ -265,8 +632,6 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
 void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
                                         Value newPtr,
                                         SmallVector<Value> elementSizes) {
-  /// Preserve the absence of a source GUID for nested acquires that only
-  /// thread the pointer through EDT block arguments.
   Value oldSourceGuid = acquireOp.getSourceGuid();
   Value sourceGuid = oldSourceGuid ? newGuid : Value();
   Value sourcePtr = newPtr ? newPtr : acquireOp.getPtr();
@@ -281,10 +646,15 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
                                  acquireOp.getOffsetHints().end());
   SmallVector<Value> sizeHints(acquireOp.getSizeHints().begin(),
                                acquireOp.getSizeHints().end());
+  SmallVector<Value> elementOffsets(acquireOp.getElementOffsets().begin(),
+                                    acquireOp.getElementOffsets().end());
+  SmallVector<Value> acquireElementSizes(acquireOp.getElementSizes().begin(),
+                                         acquireOp.getElementSizes().end());
   Value boundsValid = acquireOp.getBoundsValid();
   auto newAcquireOp = AC->create<DbAcquireOp>(
       acquireOp.getLoc(), acquireOp.getMode(), sourceGuid, sourcePtr, indices,
-      offsets, sizes, offsetHints, sizeHints, boundsValid);
+      offsets, sizes, offsetHints, sizeHints, boundsValid, elementOffsets,
+      acquireElementSizes);
   for (auto &attr : acquireOp->getAttrs()) {
     if (attr.getName().getValue().starts_with("arts."))
       newAcquireOp->setAttr(attr.getName(), attr.getValue());
@@ -310,7 +680,6 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
               loc, originalMemrefType, loadedLlvmPtr);
         };
 
-        /// Propagate the element sizes to the uses of the DbRefOp
         for (auto &dbRefUse :
              llvm::make_early_inc_range(dbRefOp.getResult().getUses())) {
           Operation *userOp = dbRefUse.getOwner();
@@ -334,7 +703,6 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
                 storeIndices, elementSizes);
             opsToRemove.insert(storeOp);
           } else {
-            /// For other users, replace with the casted memref
             Value castedMemref = createCastedMemref(userOp->getLoc());
             dbRefUse.set(castedMemref);
           }
@@ -370,7 +738,6 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
       }
 
       if (auto nestedAcquireOp = dyn_cast<DbAcquireOp>(blockUserOp)) {
-        /// Recursively process nested acquire operations
         updateAcquireUsers(nestedAcquireOp, newGuid, replacementBase,
                            elementSizes);
         continue;
@@ -383,8 +750,6 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
     }
   };
 
-  /// Find the EDT that uses this acquire op and the corresponding block
-  /// argument
   auto [edtUser, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquireOp);
   if (!edtUser || !blockArg) {
     ARTS_DEBUG("  - Acquire has no EDT consumer; replacing uses directly");
@@ -394,13 +759,8 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
     return;
   }
 
-  /// Update the block argument type to match the new lowered type
   blockArg.setType(newPtr.getType());
-
-  /// Handle the uses of the block argument within the EDT
   rewriteBlockUses(blockArg, blockArg);
-
-  /// Replace the old acquire op with the new one
   acquireOp->replaceAllUsesWith(newAcquireOp);
   opsToRemove.insert(acquireOp);
 }
