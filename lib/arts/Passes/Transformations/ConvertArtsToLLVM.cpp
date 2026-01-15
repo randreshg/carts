@@ -259,6 +259,7 @@ struct RecordDepPattern : public ArtsToLLVMPattern<RecordDepOp> {
     Value zeroI32 = AC->createIntConstant(0, AC->Int32, loc);
     AC->create<memref::StoreOp>(loc, zeroI32, sharedSlotAlloc);
 
+
     /// Add dependencies for each datablock using shared slot counter
     unsigned dbIdx = 0;
     for (Value dbGuid : op.getDatablocks()) {
@@ -349,13 +350,37 @@ private:
                           });
   }
 
+  /// Emit the appropriate runtime call for recording a dependency.
+  /// Standard path: artsRecordDep(dbGuid, edtGuid, slot, mode, twinDiff)
+  /// ESD path: artsRecordDepAt(dbGuid, edtGuid, slot, mode, twinDiff, offset, size)
+  void emitRecordDepCall(Value dbGuidValue, Value edtGuidValue,
+                         Value currentSlotI32, Value modeValue, Value twinDiffVal,
+                         Value byteOffsetI64, Value byteSizeI64,
+                         Location loc) const {
+    if (byteOffsetI64 && byteSizeI64) {
+      /// ESD path: partial slice dependency with byte offset/size
+      AC->createRuntimeCall(types::ARTSRTL_artsRecordDepAt,
+                            {dbGuidValue, edtGuidValue, currentSlotI32,
+                             modeValue, twinDiffVal, byteOffsetI64, byteSizeI64},
+                            loc);
+    } else {
+      /// Standard path: full datablock dependency
+      AC->createRuntimeCall(
+          types::ARTSRTL_artsRecordDep,
+          {dbGuidValue, edtGuidValue, currentSlotI32, modeValue, twinDiffVal},
+          loc);
+    }
+  }
+
   /// Record a single datablock dependency for an EDT slot.
-  /// For stencil patterns with boundsValid, we guard the load and call:
-  ///   if (effectiveBoundsValid) artsRecordDep(...) else artsSignalEdtNull(...)
-  /// When totalDBs is present, effectiveBoundsValid = boundsValid AND
-  /// indexInBounds.
-  /// For ESD (Ephemeral Slice Dependencies) with byteOffset/byteSize, we call
-  /// artsRecordDepAt instead of artsRecordDep.
+  ///
+  /// Two main paths:
+  /// 1. Guarded (boundsValid set): if-else to handle boundary workers
+  ///    - Then: artsRecordDep[At] for valid indices
+  ///    - Else: artsSignalEdtNull for out-of-bounds
+  /// 2. Unconditional: direct artsRecordDep[At] call
+  ///
+  /// Within each path, ESD vs standard is handled by emitRecordDepCall.
   void recordSingleDb(Value dbGuid, Value edtGuid, Value slotAlloc,
                       Value linearIndex, DepAccessMode accessMode,
                       std::optional<int32_t> acquireMode, bool twinDiff,
@@ -365,9 +390,6 @@ private:
     const bool useDepv = depStruct && baseOffset &&
                          (accessMode == DepAccessMode::from_depv ||
                           dbGuid.getDefiningOp<DepDbAcquireOp>());
-
-    /// Check if this is an ESD dependency (has byte offset/size)
-    const bool isEsdDep = byteOffset && byteSize;
 
     /// Extend boundsValid with DB index check for stencil cases
     Value effectiveBoundsValid = boundsValid;
@@ -393,59 +415,37 @@ private:
     Value twinDiffVal = AC->createIntConstant(twinDiff ? 1 : 0, AC->Int1, loc);
 
     /// Prepare ESD values if needed (cast Index to Int64)
-    Value byteOffsetI64 = nullptr;
-    Value byteSizeI64 = nullptr;
-    if (isEsdDep) {
-      byteOffsetI64 = AC->castToInt(AC->Int64, byteOffset, loc);
-      byteSizeI64 = AC->castToInt(AC->Int64, byteSize, loc);
-    }
+    Value byteOffsetI64 = (byteOffset && byteSize)
+                              ? AC->castToInt(AC->Int64, byteOffset, loc)
+                              : nullptr;
+    Value byteSizeI64 = (byteOffset && byteSize)
+                            ? AC->castToInt(AC->Int64, byteSize, loc)
+                            : nullptr;
 
     if (effectiveBoundsValid) {
-      /// Guarded path: load inside if-block to prevent out-of-bounds access
+      /// GUARDED PATH: boundary workers may have invalid indices
       auto ifOp = AC->create<scf::IfOp>(loc, effectiveBoundsValid,
                                         /*withElseRegion=*/true);
 
+      /// Then: valid index - record the dependency
       AC->setInsertionPointToStart(&ifOp.getThenRegion().front());
       Value dbGuidValue = loadDbGuidValue(dbGuid, linearIndex, useDepv,
                                           depStruct, baseOffset, loc);
-      if (isEsdDep) {
-        /// ESD path: use artsRecordDepAt for halo dependencies
-        AC->createRuntimeCall(types::ARTSRTL_artsRecordDepAt,
-                              {dbGuidValue, edtGuidValue, currentSlotI32,
-                               modeValue, twinDiffVal, byteOffsetI64,
-                               byteSizeI64},
-                              loc);
-      } else {
-        /// Standard path: use artsRecordDep
-        AC->createRuntimeCall(
-            types::ARTSRTL_artsRecordDep,
-            {dbGuidValue, edtGuidValue, currentSlotI32, modeValue, twinDiffVal},
-            loc);
-      }
+      emitRecordDepCall(dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
+                        twinDiffVal, byteOffsetI64, byteSizeI64, loc);
 
+      /// Else: invalid index - signal null dependency
       AC->setInsertionPointToStart(&ifOp.getElseRegion().front());
       AC->createRuntimeCall(types::ARTSRTL_artsSignalEdtNull,
                             {edtGuidValue, currentSlotI32}, loc);
 
       AC->setInsertionPointAfter(ifOp);
     } else {
-      /// Unconditional path: no bounds check needed
+      /// UNCONDITIONAL PATH: all indices are valid
       Value dbGuidValue = loadDbGuidValue(dbGuid, linearIndex, useDepv,
                                           depStruct, baseOffset, loc);
-      if (isEsdDep) {
-        /// ESD path: use artsRecordDepAt for halo dependencies
-        AC->createRuntimeCall(types::ARTSRTL_artsRecordDepAt,
-                              {dbGuidValue, edtGuidValue, currentSlotI32,
-                               modeValue, twinDiffVal, byteOffsetI64,
-                               byteSizeI64},
-                              loc);
-      } else {
-        /// Standard path: use artsRecordDep
-        AC->createRuntimeCall(
-            types::ARTSRTL_artsRecordDep,
-            {dbGuidValue, edtGuidValue, currentSlotI32, modeValue, twinDiffVal},
-            loc);
-      }
+      emitRecordDepCall(dbGuidValue, edtGuidValue, currentSlotI32, modeValue,
+                        twinDiffVal, byteOffsetI64, byteSizeI64, loc);
     }
 
     /// Increment slot counter

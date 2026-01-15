@@ -562,5 +562,205 @@ Operation *ValueUtils::getUnderlyingOperation(Value v) {
   return nullptr;
 }
 
+///===----------------------------------------------------------------------===//
+/// Value Reconstruction for Dominance
+///===----------------------------------------------------------------------===//
+
+Value ValueUtils::traceValueToDominating(Value value, Operation *insertBefore,
+                                         OpBuilder &builder,
+                                         DominanceInfo &domInfo, Location loc,
+                                         unsigned depth) {
+  if (!value || depth > 16)
+    return nullptr;
+
+  if (domInfo.properlyDominates(value, insertBefore))
+    return value;
+
+  if (auto blockArg = value.dyn_cast<BlockArgument>())
+    return nullptr;
+
+  Operation *defOp = value.getDefiningOp();
+  if (!defOp)
+    return nullptr;
+
+  auto trace = [&](Value operand) -> Value {
+    return traceValueToDominating(operand, insertBefore, builder, domInfo, loc,
+                                  depth + 1);
+  };
+
+  builder.setInsertionPoint(insertBefore);
+
+  if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
+    Value lhs = trace(addOp.getLhs());
+    Value rhs = trace(addOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::AddIOp>(loc, lhs, rhs);
+  }
+
+  if (auto subOp = dyn_cast<arith::SubIOp>(defOp)) {
+    Value lhs = trace(subOp.getLhs());
+    Value rhs = trace(subOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::SubIOp>(loc, lhs, rhs);
+  }
+
+  if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
+    Value lhs = trace(mulOp.getLhs());
+    Value rhs = trace(mulOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::MulIOp>(loc, lhs, rhs);
+  }
+
+  if (auto divOp = dyn_cast<arith::DivSIOp>(defOp)) {
+    Value lhs = trace(divOp.getLhs());
+    Value rhs = trace(divOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::DivSIOp>(loc, lhs, rhs);
+  }
+
+  if (auto divOp = dyn_cast<arith::DivUIOp>(defOp)) {
+    Value lhs = trace(divOp.getLhs());
+    Value rhs = trace(divOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::DivUIOp>(loc, lhs, rhs);
+  }
+
+  if (auto divOp = dyn_cast<arith::CeilDivSIOp>(defOp)) {
+    Value lhs = trace(divOp.getLhs());
+    Value rhs = trace(divOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::CeilDivSIOp>(loc, lhs, rhs);
+  }
+
+  if (auto divOp = dyn_cast<arith::CeilDivUIOp>(defOp)) {
+    Value lhs = trace(divOp.getLhs());
+    Value rhs = trace(divOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::CeilDivUIOp>(loc, lhs, rhs);
+  }
+
+  if (auto maxOp = dyn_cast<arith::MaxSIOp>(defOp)) {
+    Value lhs = trace(maxOp.getLhs());
+    Value rhs = trace(maxOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::MaxSIOp>(loc, lhs, rhs);
+  }
+
+  if (auto minOp = dyn_cast<arith::MinSIOp>(defOp)) {
+    Value lhs = trace(minOp.getLhs());
+    Value rhs = trace(minOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::MinSIOp>(loc, lhs, rhs);
+  }
+
+  if (auto minOp = dyn_cast<arith::MinUIOp>(defOp)) {
+    Value lhs = trace(minOp.getLhs());
+    Value rhs = trace(minOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::MinUIOp>(loc, lhs, rhs);
+  }
+
+  if (auto maxOp = dyn_cast<arith::MaxUIOp>(defOp)) {
+    Value lhs = trace(maxOp.getLhs());
+    Value rhs = trace(maxOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::MaxUIOp>(loc, lhs, rhs);
+  }
+
+  if (auto remOp = dyn_cast<arith::RemSIOp>(defOp)) {
+    Value lhs = trace(remOp.getLhs());
+    Value rhs = trace(remOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::RemSIOp>(loc, lhs, rhs);
+  }
+
+  if (auto remOp = dyn_cast<arith::RemUIOp>(defOp)) {
+    Value lhs = trace(remOp.getLhs());
+    Value rhs = trace(remOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::RemUIOp>(loc, lhs, rhs);
+  }
+
+  if (auto cmpOp = dyn_cast<arith::CmpIOp>(defOp)) {
+    Value lhs = trace(cmpOp.getLhs());
+    Value rhs = trace(cmpOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::CmpIOp>(loc, cmpOp.getPredicate(), lhs, rhs);
+  }
+
+  if (auto andOp = dyn_cast<arith::AndIOp>(defOp)) {
+    Value lhs = trace(andOp.getLhs());
+    Value rhs = trace(andOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::AndIOp>(loc, lhs, rhs);
+  }
+
+  if (auto orOp = dyn_cast<arith::OrIOp>(defOp)) {
+    Value lhs = trace(orOp.getLhs());
+    Value rhs = trace(orOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::OrIOp>(loc, lhs, rhs);
+  }
+
+  if (auto xorOp = dyn_cast<arith::XOrIOp>(defOp)) {
+    Value lhs = trace(xorOp.getLhs());
+    Value rhs = trace(xorOp.getRhs());
+    if (lhs && rhs)
+      return builder.create<arith::XOrIOp>(loc, lhs, rhs);
+  }
+
+  if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
+    Value cond = trace(selectOp.getCondition());
+    Value trueVal = trace(selectOp.getTrueValue());
+    Value falseVal = trace(selectOp.getFalseValue());
+    if (cond && trueVal && falseVal)
+      return builder.create<arith::SelectOp>(loc, cond, trueVal, falseVal);
+  }
+
+  if (auto castOp = dyn_cast<arith::IndexCastOp>(defOp)) {
+    Value inner = trace(castOp.getIn());
+    if (!inner)
+      return nullptr;
+    if (inner.getType() == castOp.getType())
+      return inner;
+    return builder.create<arith::IndexCastOp>(loc, castOp.getType(), inner);
+  }
+
+  if (auto castOp = dyn_cast<arith::IndexCastUIOp>(defOp)) {
+    Value inner = trace(castOp.getIn());
+    if (!inner)
+      return nullptr;
+    if (inner.getType() == castOp.getType())
+      return inner;
+    return builder.create<arith::IndexCastUIOp>(loc, castOp.getType(), inner);
+  }
+
+  if (auto castOp = dyn_cast<arith::ExtSIOp>(defOp)) {
+    Value inner = trace(castOp.getIn());
+    if (inner)
+      return builder.create<arith::ExtSIOp>(loc, castOp.getType(), inner);
+  }
+
+  if (auto castOp = dyn_cast<arith::ExtUIOp>(defOp)) {
+    Value inner = trace(castOp.getIn());
+    if (inner)
+      return builder.create<arith::ExtUIOp>(loc, castOp.getType(), inner);
+  }
+
+  if (auto castOp = dyn_cast<arith::TruncIOp>(defOp)) {
+    Value inner = trace(castOp.getIn());
+    if (inner)
+      return builder.create<arith::TruncIOp>(loc, castOp.getType(), inner);
+  }
+
+  if (auto constOp = dyn_cast<arith::ConstantOp>(defOp))
+    return builder.create<arith::ConstantOp>(loc, constOp.getType(),
+                                             constOp.getValue());
+  if (auto constIdxOp = dyn_cast<arith::ConstantIndexOp>(defOp))
+    return builder.create<arith::ConstantIndexOp>(loc, constIdxOp.value());
+
+  return nullptr;
+}
+
 } // namespace arts
 } // namespace mlir

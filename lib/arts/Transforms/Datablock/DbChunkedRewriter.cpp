@@ -1,14 +1,32 @@
 ///==========================================================================///
 /// File: DbChunkedRewriter.cpp
+///
+/// Chunked rewriter: uniform chunks with div/mod localization.
+///
+/// Example transformation (N=100 rows, chunkSize=25, 4 workers):
+///
+///   BEFORE:
+///     %db = arts.db_alloc memref<100x10xf64>
+///     arts.db_acquire %db [0] [100]            // worker acquires all rows
+///     %ref = arts.db_ref %db[%i]
+///     memref.load %ref[%j]                     // global row j
+///
+///   AFTER:
+///     %db = arts.db_alloc memref<4x25x10xf64>  // 4 chunks of 25 rows
+///     arts.db_acquire %db [%chunk] [1]         // worker 1: chunk[1]
+///     %ref = arts.db_ref %db[%j / 25]          // chunk = j / chunkSize
+///     memref.load %ref[%j % 25]                // local = j % chunkSize
+///
+/// Index localization: chunk = global / chunkSize, local = global % chunkSize
 ///==========================================================================///
 
 #include "arts/Transforms/Datablock/DbChunkedRewriter.h"
-#include "arts/Codegen/ArtsCodegen.h"
+#include "arts/Transforms/Datablock/DbChunkedIndexer.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/EdtUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "llvm/Support/Debug.h"
 
 #define DEBUG_TYPE "db_transforms"
 
@@ -17,290 +35,240 @@ ARTS_DEBUG_SETUP(db_transforms);
 using namespace mlir;
 using namespace mlir::arts;
 
-/// Note: getIndicesFromOp() is now in DbRewriterBase.h
+void DbChunkedRewriter::transformAcquire(const DbRewriteAcquire &info,
+                                          DbAllocOp newAlloc,
+                                          OpBuilder &builder) {
+  DbAcquireOp acquire = info.acquire;
+  Value elemOffset = info.elemOffset;
+  Value elemSize = info.elemSize;
 
-DbChunkedRewriter::DbChunkedRewriter(Value chunkSize, Value startChunk,
-                                     Value elemOffset, unsigned outerRank,
-                                     unsigned innerRank)
-    : DbRewriterBase(outerRank, innerRank), chunkSize_(chunkSize),
-      startChunk_(startChunk), elemOffset_(elemOffset) {}
+  ARTS_DEBUG("DbChunkedRewriter::transformAcquire");
 
-LocalizedIndices DbChunkedRewriter::localize(ArrayRef<Value> globalIndices,
-                                             OpBuilder &builder, Location loc) {
-  LocalizedIndices result;
-  auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPoint(acquire);
+  Location loc = acquire.getLoc();
+  SmallVector<Value> originalOffsetHints(acquire.getOffsetHints().begin(),
+                                         acquire.getOffsetHints().end());
+  SmallVector<Value> originalSizeHints(acquire.getSizeHints().begin(),
+                                       acquire.getSizeHints().end());
 
-  ARTS_DEBUG("DbChunkedRewriter::localize with " << globalIndices.size()
-                                                 << " indices");
-  LLVM_DEBUG(llvm::dbgs() << "DbChunkedRewriter::localize with "
-                          << globalIndices.size() << " indices\n");
+  /// Update source to new allocation
+  acquire.getSourceGuidMutable().assign(newAlloc.getGuid());
+  acquire.getSourcePtrMutable().assign(newAlloc.getPtr());
 
-  if (globalIndices.empty()) {
-    result.dbRefIndices.push_back(zero());
-    result.memrefIndices.push_back(zero());
-    return result;
+  /// Update acquire's ptr result type to match new source
+  MemRefType newPtrType = newAlloc.getPtr().getType().cast<MemRefType>();
+  Type oldAcqPtrType = acquire.getPtr().getType();
+  if (oldAcqPtrType != newPtrType) {
+    acquire.getPtr().setType(newPtrType);
+
+    /// Also update EDT block argument type if this acquire feeds an EDT
+    auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+    if (blockArg && blockArg.getType() != newPtrType)
+      blockArg.setType(newPtrType);
   }
 
-  // CHUNKED: dim 0 gets div/mod, rest pass through
-  Value globalRow = globalIndices[0];
+  /// CHUNKED MODE: Multi-chunk div/mod model
+  /// DISJOINT MODEL: Physical chunks are disjoint and indexed by
+  /// plan_.chunkSize. Chunk layout: chunk 0 -> rows [0, plan_.chunkSize),
+  /// chunk 1 -> rows [plan_.chunkSize, 2*plan_.chunkSize), etc.
+  ///
+  /// A partition may span MULTIPLE physical chunks if chunk boundary
+  /// doesn't align with partition boundary.
+  ///
+  /// Example: plan_.chunkSize=66, worker 1 needs rows 63-128
+  ///   - startChunk = 63/66 = 0
+  ///   - endChunk = 128/66 = 1
+  ///   - chunkCount = 2
 
-  // dbRefIdx = (globalRow / chunkSize) - startChunk
-  Value physChunk = builder.create<arith::DivUIOp>(loc, globalRow, chunkSize_);
-  Value relChunk = builder.create<arith::SubIOp>(loc, physChunk, startChunk_);
-  result.dbRefIndices.push_back(relChunk);
+  Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
 
-  // memrefIdx[0] = globalRow % chunkSize
-  Value localRow = builder.create<arith::RemUIOp>(loc, globalRow, chunkSize_);
-  result.memrefIndices.push_back(localRow);
+  /// Compute start chunk index using physical chunk size
+  Value startChunk =
+      builder.create<arith::DivUIOp>(loc, elemOffset, plan_.chunkSize);
 
-  // Remaining dimensions pass through unchanged
-  for (unsigned i = 1; i < globalIndices.size(); ++i)
-    result.memrefIndices.push_back(globalIndices[i]);
+  /// Compute end position (elemOffset + elemSize - 1)
+  Value endPos = builder.create<arith::AddIOp>(loc, elemOffset, elemSize);
+  endPos = builder.create<arith::SubIOp>(loc, endPos, one);
 
-  LLVM_DEBUG(llvm::dbgs() << "  -> dbRef: " << result.dbRefIndices.size()
-                          << ", memref: " << result.memrefIndices.size()
-                          << "\n");
-  return result;
-}
+  /// Compute end chunk index
+  Value endChunk =
+      builder.create<arith::DivUIOp>(loc, endPos, plan_.chunkSize);
 
-LocalizedIndices DbChunkedRewriter::localizeLinearized(Value globalLinearIndex,
-                                                       Value stride,
-                                                       OpBuilder &builder,
-                                                       Location loc) {
-  LocalizedIndices result;
-
-  ARTS_DEBUG("DbChunkedRewriter::localizeLinearized - using div/mod");
-  LLVM_DEBUG(llvm::dbgs() << "DbChunkedRewriter::localizeLinearized\n");
-
-  // De-linearize: globalLinear = globalRow * stride + col
-  Value globalRow =
-      builder.create<arith::DivUIOp>(loc, globalLinearIndex, stride);
-  Value col = builder.create<arith::RemUIOp>(loc, globalLinearIndex, stride);
-
-  // dbRefIdx = (globalRow / chunkSize) - startChunk
-  Value physChunk = builder.create<arith::DivUIOp>(loc, globalRow, chunkSize_);
-  Value relChunk = builder.create<arith::SubIOp>(loc, physChunk, startChunk_);
-  result.dbRefIndices.push_back(relChunk);
-
-  // localRow = globalRow % chunkSize
-  Value localRow = builder.create<arith::RemUIOp>(loc, globalRow, chunkSize_);
-
-  // Re-linearize: localLinear = localRow * stride + col
-  Value localLinear = builder.create<arith::MulIOp>(loc, localRow, stride);
-  localLinear = builder.create<arith::AddIOp>(loc, localLinear, col);
-  result.memrefIndices.push_back(localLinear);
-
-  return result;
-}
-
-void DbChunkedRewriter::rebaseOps(ArrayRef<Operation *> ops, Value dbPtr,
-                                  Type elementType, ArtsCodegen &AC,
-                                  llvm::SetVector<Operation *> &opsToRemove) {
-  ARTS_DEBUG("DbChunkedRewriter::rebaseOps with " << ops.size() << " ops");
-  LLVM_DEBUG(llvm::dbgs() << "DbChunkedRewriter::rebaseOps: processing "
-                          << ops.size() << " operations\n");
-
-  for (Operation *op : ops) {
-    OpBuilder::InsertionGuard IG(AC.getBuilder());
-    AC.setInsertionPoint(op);
-    Location loc = op->getLoc();
-
-    // Handle DbRefOp specially - rewrite its users
-    if (auto dbRef = dyn_cast<DbRefOp>(op)) {
-      rewriteDbRefUsers(dbRef, dbPtr, elementType, AC.getBuilder(),
-                        opsToRemove);
-      continue;
-    }
-
-    // Handle load/store operations
-    if (!isa<memref::LoadOp, memref::StoreOp>(op))
-      continue;
-
-    ValueRange indices = getIndicesFromOp(op);
-    if (indices.empty())
-      continue;
-
-    // Detect linearized access for multi-dimensional memrefs
-    bool isLinearized = false;
-    Value stride;
-    if (indices.size() == 1) {
-      if (auto memrefType = elementType.dyn_cast<MemRefType>()) {
-        if (memrefType.getRank() >= 2) {
-          if (auto staticStride = DatablockUtils::getStaticStride(memrefType)) {
-            if (*staticStride > 1) {
-              isLinearized = true;
-              stride = AC.createIndexConstant(*staticStride, loc);
-            }
-          }
-        }
-      }
-    }
-
-    LocalizedIndices localized;
-    if (isLinearized && stride) {
-      localized = localizeLinearized(indices[0], stride, AC.getBuilder(), loc);
-    } else {
-      SmallVector<Value> indicesVec(indices.begin(), indices.end());
-      localized = localize(indicesVec, AC.getBuilder(), loc);
-    }
-
-    // Create db_ref + load/store pattern
-    auto dbRef =
-        AC.create<DbRefOp>(loc, elementType, dbPtr, localized.dbRefIndices);
-
-    if (auto load = dyn_cast<memref::LoadOp>(op)) {
-      auto newLoad = AC.create<memref::LoadOp>(loc, dbRef.getResult(),
-                                               localized.memrefIndices);
-      load.replaceAllUsesWith(newLoad.getResult());
-    } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
-      AC.create<memref::StoreOp>(loc, store.getValue(), dbRef.getResult(),
-                                 localized.memrefIndices);
-    }
-    opsToRemove.insert(op);
+  /// Clamp endChunk to valid range (numChunks - 1)
+  if (!newOuterSizes_.empty()) {
+    Value numChunks = newOuterSizes_[0];
+    Value maxChunk = builder.create<arith::SubIOp>(loc, numChunks, one);
+    endChunk = builder.create<arith::MinUIOp>(loc, endChunk, maxChunk);
   }
+
+  /// Compute chunk count = endChunk - startChunk + 1
+  Value chunkCount = builder.create<arith::SubIOp>(loc, endChunk, startChunk);
+  chunkCount = builder.create<arith::AddIOp>(loc, chunkCount, one);
+
+  /// Set offsets/sizes for chunked mode
+  SmallVector<Value> newOffsets, newSizes;
+  newOffsets.push_back(startChunk);
+  newSizes.push_back(chunkCount);
+
+  acquire.getOffsetsMutable().assign(newOffsets);
+  acquire.getSizesMutable().assign(newSizes);
+
+  /// Preserve original loop bounds hints when available; otherwise fall back
+  /// to element-space offsets/sizes for localization.
+  SmallVector<Value> offsetHints = originalOffsetHints.empty()
+                                       ? SmallVector<Value>{elemOffset}
+                                       : originalOffsetHints;
+  SmallVector<Value> sizeHints = originalSizeHints.empty()
+                                     ? SmallVector<Value>{elemSize}
+                                     : originalSizeHints;
+  acquire.getOffsetHintsMutable().assign(offsetHints);
+  acquire.getSizeHintsMutable().assign(sizeHints);
+
+  /// Use mode-aware rebase for chunked mode EDT users
+  /// Pass startChunk directly to avoid recomputation
+  rebaseEdtUsers(acquire, builder, startChunk);
 }
 
-void DbChunkedRewriter::rewriteDbRefUsers(
-    DbRefOp ref, Value blockArg, Type newElementType, OpBuilder &builder,
-    llvm::SetVector<Operation *> &opsToRemove) {
-  LLVM_DEBUG(llvm::dbgs() << "DbChunkedRewriter::rewriteDbRefUsers\n");
+void DbChunkedRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
+                                        OpBuilder &builder) {
+  Location loc = ref.getLoc();
+  Type newElementType = newAlloc.getAllocatedElementType();
+  Value newSource = (ref.getSource() == oldAlloc_.getPtr()) ? newAlloc.getPtr()
+                                                            : ref.getSource();
 
+  /// Collect load/store users of this db_ref
   SmallVector<Operation *> refUsers(ref.getResult().getUsers().begin(),
                                     ref.getResult().getUsers().end());
-  for (Operation *refUser : refUsers) {
-    OpBuilder::InsertionGuard IG(builder);
-    builder.setInsertionPoint(refUser);
-    Location userLoc = refUser->getLoc();
+  llvm::SetVector<Operation *> opsToRemove;
 
-    ValueRange elementIndices;
-    if (auto load = dyn_cast<memref::LoadOp>(refUser))
-      elementIndices = load.getIndices();
-    else if (auto store = dyn_cast<memref::StoreOp>(refUser))
-      elementIndices = store.getIndices();
-    else
+  bool hasLoadStoreUsers = false;
+  for (Operation *user : refUsers) {
+    if (!isa<memref::LoadOp, memref::StoreOp>(user))
       continue;
 
-    if (elementIndices.empty())
-      continue;
+    hasLoadStoreUsers = true;
+    OpBuilder::InsertionGuard ig(builder);
+    builder.setInsertionPoint(user);
+    Location userLoc = user->getLoc();
 
-    // Detect linearized access: single index accessing multi-element memref
-    bool isLinearized = false;
-    Value stride;
-    if (elementIndices.size() == 1) {
-      if (auto memrefType = newElementType.dyn_cast<MemRefType>()) {
-        if (memrefType.getRank() >= 2) {
-          if (auto staticStride = DatablockUtils::getStaticStride(memrefType)) {
-            if (*staticStride > 1) {
-              isLinearized = true;
-              stride = builder.create<arith::ConstantIndexOp>(userLoc,
-                                                              *staticStride);
-            }
-          }
-        }
-      }
+    /// Get load/store indices
+    ValueRange loadStoreIndices;
+    if (auto load = dyn_cast<memref::LoadOp>(user))
+      loadStoreIndices = load.getIndices();
+    else if (auto store = dyn_cast<memref::StoreOp>(user))
+      loadStoreIndices = store.getIndices();
+
+    SmallVector<Value> newOuter, newInner;
+    auto zero = [&]() {
+      return builder.create<arith::ConstantIndexOp>(userLoc, 0);
+    };
+
+    /// CHUNKED: div/mod for chunk selection
+    Value cs = plan_.chunkSize ? plan_.chunkSize : zero();
+    if (!loadStoreIndices.empty()) {
+      Value idx0 = loadStoreIndices.front();
+      newOuter.push_back(builder.create<arith::DivUIOp>(userLoc, idx0, cs));
+      newInner.push_back(builder.create<arith::RemUIOp>(userLoc, idx0, cs));
+      for (unsigned i = 1; i < loadStoreIndices.size(); ++i)
+        newInner.push_back(loadStoreIndices[i]);
     }
 
-    LocalizedIndices localized;
-    if (isLinearized && stride) {
-      localized =
-          localizeLinearized(elementIndices[0], stride, builder, userLoc);
-    } else {
-      SmallVector<Value> indices(elementIndices.begin(), elementIndices.end());
-      localized = localize(indices, builder, userLoc);
-    }
+    if (newOuter.empty())
+      newOuter.push_back(zero());
+    if (newInner.empty())
+      newInner.push_back(zero());
 
-    auto newRef = builder.create<DbRefOp>(userLoc, newElementType, blockArg,
-                                          localized.dbRefIndices);
+    /// Create new db_ref with transformed outer indices
+    auto newRef =
+        builder.create<DbRefOp>(userLoc, newElementType, newSource, newOuter);
 
-    if (auto load = dyn_cast<memref::LoadOp>(refUser)) {
-      auto newLoad = builder.create<memref::LoadOp>(userLoc, newRef.getResult(),
-                                                    localized.memrefIndices);
+    /// Create new load/store with transformed inner indices
+    if (auto load = dyn_cast<memref::LoadOp>(user)) {
+      auto newLoad = builder.create<memref::LoadOp>(userLoc, newRef, newInner);
       load.replaceAllUsesWith(newLoad.getResult());
-      opsToRemove.insert(load);
-    } else if (auto store = dyn_cast<memref::StoreOp>(refUser)) {
-      builder.create<memref::StoreOp>(userLoc, store.getValue(),
-                                      newRef.getResult(),
-                                      localized.memrefIndices);
-      opsToRemove.insert(store);
+    } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
+      builder.create<memref::StoreOp>(userLoc, store.getValue(), newRef,
+                                      newInner);
     }
+    opsToRemove.insert(user);
   }
-  opsToRemove.insert(ref.getOperation());
+
+  /// For db_refs without load/store users, just update the db_ref type
+  if (!hasLoadStoreUsers && !ref.getResult().use_empty()) {
+    OpBuilder::InsertionGuard ig(builder);
+    builder.setInsertionPoint(ref);
+    SmallVector<Value> indices(ref.getIndices().begin(),
+                               ref.getIndices().end());
+    if (indices.empty())
+      indices.push_back(builder.create<arith::ConstantIndexOp>(loc, 0));
+    auto newRef =
+        builder.create<DbRefOp>(loc, newElementType, newSource, indices);
+    ref.replaceAllUsesWith(newRef.getResult());
+  }
+
+  /// Remove old load/store operations
+  for (Operation *op : opsToRemove)
+    if (op->use_empty())
+      op->erase();
 }
 
-SmallVector<Value> DbChunkedRewriter::localizeCoordinates(
-    ArrayRef<Value> globalIndices, ArrayRef<Value> sliceOffsets,
-    unsigned numIndexedDims, Type elementType, OpBuilder &builder,
-    Location loc) {
-  SmallVector<Value> result;
-  auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
+bool DbChunkedRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
+                                        Value startChunk) {
+  ARTS_DEBUG("DbChunkedRewriter::rebaseEdtUsers");
 
-  LLVM_DEBUG(llvm::dbgs() << "DbChunkedRewriter::localizeCoordinates with "
-                          << globalIndices.size() << " indices\n");
+  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+  if (!blockArg)
+    return false;
 
-  // Handle empty case
-  if (globalIndices.empty()) {
-    result.push_back(zero());
-    return result;
+  /// Determine element type from users or allocation
+  Type targetType;
+  for (Operation *user : blockArg.getUsers()) {
+    if (auto ref = dyn_cast<DbRefOp>(user)) {
+      targetType = ref.getResult().getType();
+      break;
+    }
   }
+  if (!targetType) {
+    targetType = blockArg.getType();
+    if (auto outer = targetType.dyn_cast<MemRefType>())
+      if (auto inner = outer.getElementType().dyn_cast<MemRefType>())
+        targetType = inner;
+  }
+  if (!targetType || !targetType.isa<MemRefType>())
+    return false;
 
-  // CHUNKED MODE: first sliced dimension uses div by chunkSize
-  for (unsigned d = 0; d < globalIndices.size(); ++d) {
-    Value globalIdx = globalIndices[d];
+  Type derivedType = targetType;
+  if (auto dbAlloc = dyn_cast_or_null<DbAllocOp>(
+          DatablockUtils::getUnderlyingDbAlloc(blockArg)))
+    derivedType = dbAlloc.getAllocatedElementType();
 
-    if (d < numIndexedDims) {
-      // Indexed dimension: local index is always 0
-      result.push_back(zero());
-    } else if (d == numIndexedDims && chunkSize_) {
-      // First sliced dimension: compute chunk-relative index
-      // dbRefIdx = (globalIdx / chunkSize) - startChunk
-      Value physChunk =
-          builder.create<arith::DivUIOp>(loc, globalIdx, chunkSize_);
-      Value relChunk =
-          builder.create<arith::SubIOp>(loc, physChunk, startChunk_);
-      result.push_back(relChunk);
-      LLVM_DEBUG(llvm::dbgs() << "  Dim " << d << ": div/mod by chunkSize\n");
-    } else if (d - numIndexedDims < sliceOffsets.size()) {
-      // Other sliced dimensions: subtract offset
-      unsigned offsetIdx = d - numIndexedDims;
-      Value offset = sliceOffsets[offsetIdx];
-      Value local = builder.create<arith::SubIOp>(loc, globalIdx, offset);
-      result.push_back(local);
-    } else {
-      // Pass through unchanged
-      result.push_back(globalIdx);
+  /// Get element offset from hints
+  Value elemOffset;
+  if (!acquire.getOffsetHints().empty())
+    elemOffset = acquire.getOffsetHints()[0];
+
+  /// Create chunked indexer
+  auto indexer = std::make_unique<DbChunkedIndexer>(
+      plan_.chunkSize, startChunk, elemOffset, newOuterSizes_.size(),
+      newInnerSizes_.size());
+
+  SmallVector<Operation *> users(blockArg.getUsers().begin(),
+                                 blockArg.getUsers().end());
+  llvm::SetVector<Operation *> opsToRemove;
+  bool rewritten = false;
+
+  for (Operation *user : users) {
+    if (auto ref = dyn_cast<DbRefOp>(user)) {
+      indexer->transformDbRefUsers(ref, blockArg, derivedType, builder,
+                                 opsToRemove);
+      rewritten = true;
     }
   }
 
-  return result;
-}
+  for (Operation *op : opsToRemove)
+    if (op->use_empty())
+      op->erase();
 
-void DbChunkedRewriter::rewriteUsesInParentRegion(
-    Operation *alloc, DbAllocOp dbAlloc, ArtsCodegen &AC,
-    llvm::SetVector<Operation *> &opsToRemove) {
-  ARTS_DEBUG("DbChunkedRewriter::rewriteUsesInParentRegion");
-
-  // Collect users of the original allocation (excluding DbAllocOp and EDT uses)
-  SmallVector<Operation *> users;
-  for (auto &use : alloc->getUses()) {
-    Operation *user = use.getOwner();
-    // Skip the DbAllocOp itself
-    if (user == dbAlloc.getOperation())
-      continue;
-    // Skip uses inside EDTs - those are rewritten via acquires separately
-    if (user->getParentOfType<EdtOp>())
-      continue;
-    users.push_back(user);
-  }
-
-  if (users.empty()) {
-    ARTS_DEBUG("  No users to rewrite in parent region");
-    return;
-  }
-
-  ARTS_DEBUG("  Rewriting " << users.size()
-                            << " main body accesses with chunked indexing");
-
-  // Use rebaseOps with the collected users - chunked div/mod transformation
-  Type elementMemRefType = dbAlloc.getAllocatedElementType();
-  rebaseOps(users, dbAlloc.getPtr(), elementMemRefType, AC, opsToRemove);
+  return rewritten;
 }

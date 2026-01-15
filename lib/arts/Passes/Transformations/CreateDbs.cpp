@@ -39,8 +39,8 @@
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
-#include "arts/Transforms/Datablock/DbChunkedRewriter.h"
-#include "arts/Transforms/Datablock/DbElementWiseRewriter.h"
+#include "arts/Transforms/Datablock/DbChunkedIndexer.h"
+#include "arts/Transforms/Datablock/DbElementWiseIndexer.h"
 #include "arts/Transforms/Datablock/DbRewriter.h"
 #include "arts/Transforms/DbTransforms.h"
 #include "arts/Utils/ArtsUtils.h"
@@ -790,14 +790,14 @@ void CreateDbsPass::createDbAllocOps() {
       Value elemSize = AC->createIndexConstant(1, loc);
 
       if (plan.mode == RewriterMode::Chunked) {
-        DbChunkedRewriter rewriter(plan.chunkSize, startChunk, elemOffset,
+        DbChunkedIndexer indexer(plan.chunkSize, startChunk, elemOffset,
                                    plan.outerRank, plan.innerRank);
-        rewriter.rewriteUsesInParentRegion(alloc, dbAllocOp, *AC, opsToRemove);
+        indexer.transformUsesInParentRegion(alloc, dbAllocOp, *AC, opsToRemove);
       } else {
-        DbElementWiseRewriter rewriter(elemOffset, elemSize, plan.outerRank,
+        DbElementWiseIndexer indexer(elemOffset, elemSize, plan.outerRank,
                                        plan.innerRank, {});
         /// Step 1: Rewrite parent region uses (skips EDTs by design)
-        rewriter.rewriteUsesInParentRegion(alloc, dbAllocOp, *AC, opsToRemove);
+        indexer.transformUsesInParentRegion(alloc, dbAllocOp, *AC, opsToRemove);
 
         /// Step 2: For coarse mode, also rewrite EDT uses without explicit deps
         if (plan.outerRank == 0) {
@@ -813,7 +813,7 @@ void CreateDbsPass::createDbAllocOps() {
             }
           }
           if (!edtUsesToRewrite.empty()) {
-            rewriter.rebaseOps(edtUsesToRewrite, dbAllocOp.getPtr(),
+            indexer.transformOps(edtUsesToRewrite, dbAllocOp.getPtr(),
                                elementMemRefType, *AC, opsToRemove);
           }
         }
@@ -1228,10 +1228,10 @@ void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
   unsigned innerRank = elementMemRefType.cast<MemRefType>().getRank();
   Value elemOffset = AC->createIndexConstant(0, dbAlloc.getLoc());
   Value elemSize = AC->createIndexConstant(1, dbAlloc.getLoc());
-  DbElementWiseRewriter rewriter(elemOffset, elemSize, outerRank, innerRank,
+  DbElementWiseIndexer indexer(elemOffset, elemSize, outerRank, innerRank,
                                  {});
   for (Operation *user : users)
-    rewriter.rewriteAccessWithDbPattern(user, dbAlloc.getPtr(),
+    indexer.transformAccess(user, dbAlloc.getPtr(),
                                         elementMemRefType, *AC, opsToRemove);
 }
 
@@ -1261,11 +1261,11 @@ void CreateDbsPass::rewriteUsesEverywhereCoarse(Operation *alloc,
   /// Coarse-grained: outerCount=0, all indices go to inner load/store
   Value elemOffset = AC->createIndexConstant(0, dbAlloc.getLoc());
   Value elemSize = AC->createIndexConstant(1, dbAlloc.getLoc());
-  DbElementWiseRewriter rewriter(elemOffset, elemSize, 0,
+  DbElementWiseIndexer indexer(elemOffset, elemSize, 0,
                                  elementMemRefType.cast<MemRefType>().getRank(),
                                  {});
   for (Operation *user : users)
-    rewriter.rewriteAccessWithDbPattern(user, dbAlloc.getPtr(),
+    indexer.transformAccess(user, dbAlloc.getPtr(),
                                         elementMemRefType, *AC, opsToRemove);
 }
 
@@ -1334,8 +1334,8 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
     }
 
     if (plan.mode == RewriterMode::Chunked) {
-      /// Chunked mode: Use DbChunkedRewriter with stored chunk size
-      ARTS_DEBUG(" - Using DbChunkedRewriter with stored plan");
+      /// Chunked mode: Use DbChunkedIndexer with stored chunk size
+      ARTS_DEBUG(" - Using DbChunkedIndexer with stored plan");
       Location loc = op->getLoc();
       Value startOffset = acquireOffsets.empty()
                               ? AC->createIndexConstant(0, loc)
@@ -1351,10 +1351,10 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
         if (auto acquireOp = dyn_cast<DbAcquireOp>(dbOp))
           chunkOuterRank = acquireOp.getSizes().size();
 
-      DbChunkedRewriter rewriter(plan.chunkSize, startChunk, elemOffset,
+      DbChunkedIndexer indexer(plan.chunkSize, startChunk, elemOffset,
                                  chunkOuterRank, innerRank);
       llvm::SetVector<Operation *> localOpsToRemove;
-      rewriter.rebaseOps({op}, dbAcquireArg, elementMemRefType, *AC,
+      indexer.transformOps({op}, dbAcquireArg, elementMemRefType, *AC,
                          localOpsToRemove);
       for (Operation *toRemove : localOpsToRemove)
         opsToRemove.insert(toRemove);
@@ -1364,11 +1364,11 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
     /// ElementWise mode
     Value elemOffset = AC->createIndexConstant(0, op->getLoc());
     Value elemSize = AC->createIndexConstant(1, op->getLoc());
-    DbElementWiseRewriter rewriter(elemOffset, elemSize, plan.outerRank,
+    DbElementWiseIndexer indexer(elemOffset, elemSize, plan.outerRank,
                                    innerRank, {});
 
     if (auto load = dyn_cast<memref::LoadOp>(op)) {
-      auto localized = rewriter.localizeForFineGrained(
+      auto localized = indexer.localizeForFineGrained(
           load.getIndices(), acquireIndices, acquireOffsets, AC->getBuilder(),
           op->getLoc());
       auto dbRef = AC->create<DbRefOp>(op->getLoc(), elementMemRefType,
@@ -1378,7 +1378,7 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
       load.replaceAllUsesWith(newLoad.getResult());
       opsToRemove.insert(op);
     } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
-      auto localized = rewriter.localizeForFineGrained(
+      auto localized = indexer.localizeForFineGrained(
           store.getIndices(), acquireIndices, acquireOffsets, AC->getBuilder(),
           op->getLoc());
       auto dbRef = AC->create<DbRefOp>(op->getLoc(), elementMemRefType,
@@ -1388,7 +1388,7 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
       opsToRemove.insert(op);
     } else {
       llvm::SetVector<Operation *> localOpsToRemove;
-      rewriter.rebaseOps({op}, dbAcquireArg, elementMemRefType, *AC,
+      indexer.transformOps({op}, dbAcquireArg, elementMemRefType, *AC,
                          localOpsToRemove);
       for (Operation *toRemove : localOpsToRemove)
         opsToRemove.insert(toRemove);

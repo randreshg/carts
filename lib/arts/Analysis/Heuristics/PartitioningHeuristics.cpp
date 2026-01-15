@@ -260,13 +260,25 @@ StencilPatternHeuristic::evaluate(const PartitioningContext &ctx) const {
   /// - Stencil access: worker accesses owned chunk + ESD delivers halos
   /// The ESD machinery activates when element_offsets is non-empty on db_acquire.
   if (patterns.hasStencil) {
+    if (!ctx.canChunked) {
+      PartitioningDecision decision;
+      decision.mode = RewriterMode::ElementWise;
+      decision.outerRank = 1;
+      decision.innerRank = ctx.memrefRank > 0 ? ctx.memrefRank - 1 : 0;
+      decision.rationale =
+          "H1.5: Stencil detected but chunked unsupported; fallback to element-wise";
+      ARTS_DEBUG("H1.5 applied: " << decision.rationale);
+      return decision;
+    }
+
     PartitioningDecision decision;
     decision.mode = RewriterMode::Stencil;
     decision.outerRank = 1;
     decision.innerRank = ctx.memrefRank > 0 ? ctx.memrefRank - 1 : 0;
-    decision.rationale = patterns.hasUniform
-        ? "H1.5: Mixed (uniform+stencil) uses Stencil mode - chunked handles both"
-        : "H1.5: Pure stencil uses ESD mode";
+    decision.rationale =
+        patterns.hasUniform
+            ? "H1.5: Mixed (uniform+stencil) uses Stencil mode - chunked handles both"
+            : "H1.5: Pure stencil uses ESD mode";
     ARTS_DEBUG("H1.5 applied: " << decision.rationale);
     return decision;
   }

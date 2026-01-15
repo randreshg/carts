@@ -1,267 +1,429 @@
 ///==========================================================================///
 /// File: DbStencilRewriter.cpp
 ///
-/// Stencil-aware index localization for the ESD (Ephemeral Slice Dependencies)
-/// partitioning strategy.
+/// Stencil rewriter: 3-buffer halo for stencil patterns (e.g., jacobi).
 ///
-/// ESD creates 3 separate acquires per stencil array:
-///   1. Owned chunk - the worker's assigned rows
-///   2. Left halo  - partial slice from previous chunk (via element_offsets)
-///   3. Right halo - partial slice from next chunk (via element_offsets)
+/// Example transformation (N=100 rows, chunkSize=25, halo=1):
 ///
-/// Index Localization:
-///   localRow = globalRow - elemOffset_
+///   BEFORE:
+///     %db = arts.db_alloc memref<100x10xf64>
+///     arts.db_acquire %db [0] [100]
+///     %ref = arts.db_ref %db[%i]
+///     memref.load %ref[%j-1], %ref[%j], %ref[%j+1]  // stencil access
 ///
-/// Where elemOffset_ accounts for halo extension (e.g., if owned rows start
-/// at 25 and haloLeft=1, elemOffset_=24 so globalRow=24 maps to localRow=0).
+///   AFTER (worker 1, rows 25-49):
+///     %db = arts.db_alloc memref<4x25x10xf64>
+///     %owned = arts.db_acquire %db [1] [1]          // chunk 1
+///     %left  = arts.db_acquire %db [0] [1] elem_offset=24  // row 24
+///     %right = arts.db_acquire %db [2] [1] elem_offset=0   // row 50
 ///
-/// Boundary Safety:
-///   At array boundaries, stencil accesses may reference invalid indices.
-///   We clamp to valid bounds; the kernel's boundary guard prevents actual
-///   use of clamped values.
+///     // Load selects buffer based on localRow:
+///     //   localRow < 0        → left halo
+///     //   0 <= localRow < 25  → owned
+///     //   localRow >= 25      → right halo
+///
+/// Index localization: 3-way select based on (globalRow - baseOffset)
 ///==========================================================================///
 
 #include "arts/Transforms/Datablock/DbStencilRewriter.h"
-#include "arts/Codegen/ArtsCodegen.h"
+#include "arts/Transforms/Datablock/DbStencilIndexer.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/EdtUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 
-#define DEBUG_TYPE "db_stencil"
+#define DEBUG_TYPE "db_transforms"
 
-ARTS_DEBUG_SETUP(db_stencil);
+ARTS_DEBUG_SETUP(db_transforms);
 
 using namespace mlir;
 using namespace mlir::arts;
 
-//===----------------------------------------------------------------------===//
-// Constructor
-//===----------------------------------------------------------------------===//
+void DbStencilRewriter::transformAcquire(const DbRewriteAcquire &info,
+                                          DbAllocOp newAlloc,
+                                          OpBuilder &builder) {
+  DbAcquireOp acquire = info.acquire;
+  Value elemOffset = info.elemOffset;
+  Value elemSize = info.elemSize;
 
-DbStencilRewriter::DbStencilRewriter(Value chunkSize, Value startChunk,
-                                     Value haloLeft, Value haloRight,
-                                     Value totalRows, unsigned outerRank,
-                                     unsigned innerRank, Value elemOffset,
-                                     Value elemSize, ValueRange oldElementSizes)
-    : DbRewriterBase(outerRank, innerRank), elemOffset_(elemOffset),
-      elemSize_(elemSize) {
-}
+  ARTS_DEBUG("DbStencilRewriter::transformAcquire");
 
-//===----------------------------------------------------------------------===//
-// Helper: Clamp index to valid bounds
-//===----------------------------------------------------------------------===//
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPoint(acquire);
+  Location loc = acquire.getLoc();
+  SmallVector<Value> originalOffsetHints(acquire.getOffsetHints().begin(),
+                                         acquire.getOffsetHints().end());
+  SmallVector<Value> originalSizeHints(acquire.getSizeHints().begin(),
+                                       acquire.getSizeHints().end());
 
-/// Clamp localRow to [0, elemSize-1] to prevent out-of-bounds access.
-static Value clampToValidBounds(Value localRow, Value elemSize,
-                                OpBuilder &builder, Location loc) {
-  if (!elemSize)
-    return localRow;
+  /// Update source to new allocation
+  acquire.getSourceGuidMutable().assign(newAlloc.getGuid());
+  acquire.getSourcePtrMutable().assign(newAlloc.getPtr());
+
+  /// Update acquire's ptr result type to match new source
+  MemRefType newPtrType = newAlloc.getPtr().getType().cast<MemRefType>();
+  Type oldAcqPtrType = acquire.getPtr().getType();
+  if (oldAcqPtrType != newPtrType) {
+    acquire.getPtr().setType(newPtrType);
+
+    /// Also update EDT block argument type if this acquire feeds an EDT
+    auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+    if (blockArg && blockArg.getType() != newPtrType)
+      blockArg.setType(newPtrType);
+  }
+
+  /// STENCIL MODE with ESD: 3-acquire pattern
+  /// Each worker acquires:
+  ///   1. Owned chunk (full chunk)
+  ///   2. Left halo (partial slice from previous chunk)
+  ///   3. Right halo (partial slice from next chunk)
+
+  assert(plan_.stencilInfo && plan_.stencilInfo->hasHalo() &&
+         "Stencil mode requires stencil info with halo");
 
   Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
   Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
-  Value lastValidIdx = builder.create<arith::SubIOp>(loc, elemSize, one);
+  int64_t haloLeftVal = plan_.stencilInfo->haloLeft;
+  int64_t haloRightVal = plan_.stencilInfo->haloRight;
 
-  /// clamp(localRow, 0, lastValidIdx)
-  Value clamped = builder.create<arith::MaxSIOp>(loc, localRow, zero);
-  return builder.create<arith::MinSIOp>(loc, clamped, lastValidIdx);
-}
+  /// Recover base offset from extended offset.
+  /// Extended offset = max(0, baseOffset - haloLeft)
+  /// So: baseOffset = elemOffset + haloLeft (unless elemOffset=0 -> first chunk)
+  Value haloLeftConst =
+      builder.create<arith::ConstantIndexOp>(loc, haloLeftVal);
+  Value baseOffset =
+      builder.create<arith::AddIOp>(loc, elemOffset, haloLeftConst);
 
-//===----------------------------------------------------------------------===//
-// Helper: Detect and get stride for linearized access
-//===----------------------------------------------------------------------===//
+  /// For first chunk (elemOffset=0), baseOffset should be 0, not haloLeft
+  Value isFirstWorker = builder.create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::eq, elemOffset, zero);
+  baseOffset =
+      builder.create<arith::SelectOp>(loc, isFirstWorker, zero, baseOffset);
 
-/// Returns stride if the access pattern is linearized (single index into
-/// multi-dimensional memref), otherwise returns nullptr.
-static Value getLinearizedStride(ValueRange indices, Type elementType,
-                                 OpBuilder &builder, Location loc) {
-  if (indices.size() != 1)
-    return nullptr;
+  /// Compute chunk index for owned chunk
+  Value startChunk =
+      builder.create<arith::DivUIOp>(loc, baseOffset, plan_.chunkSize);
+  Value chunkCount = one;
 
-  auto memrefType = elementType.dyn_cast<MemRefType>();
-  if (!memrefType || memrefType.getRank() < 2)
-    return nullptr;
+  ARTS_DEBUG("  Stencil ESD: chunkIdx=" << startChunk
+                                        << ", haloLeft=" << haloLeftVal
+                                        << ", haloRight=" << haloRightVal);
 
-  auto staticStride = DatablockUtils::getStaticStride(memrefType);
-  if (!staticStride || *staticStride <= 1)
-    return nullptr;
+  /// Get inner dimension size for partial acquisition
+  auto buildHaloOffsets = [&](Value rowOffset) {
+    SmallVector<Value> offsets;
+    offsets.push_back(rowOffset);
+    for (size_t i = 1; i < newInnerSizes_.size(); ++i)
+      offsets.push_back(zero);
+    return offsets;
+  };
 
-  return builder.create<arith::ConstantIndexOp>(loc, *staticStride);
-}
+  auto buildHaloSizes = [&](int64_t haloRows) {
+    SmallVector<Value> sizes;
+    sizes.push_back(builder.create<arith::ConstantIndexOp>(loc, haloRows));
+    for (size_t i = 1; i < newInnerSizes_.size(); ++i)
+      sizes.push_back(newInnerSizes_[i]);
+    return sizes;
+  };
 
-//===----------------------------------------------------------------------===//
-// Index Localization
-//===----------------------------------------------------------------------===//
+  /// Get number of chunks for boundary checking
+  Value numChunks = newOuterSizes_.empty()
+                        ? builder.create<arith::ConstantIndexOp>(loc, 1)
+                        : newOuterSizes_[0];
+  Value lastChunkIdx = builder.create<arith::SubIOp>(loc, numChunks, one);
 
-LocalizedIndices DbStencilRewriter::localize(ArrayRef<Value> globalIndices,
-                                             OpBuilder &builder, Location loc) {
-  LocalizedIndices result;
-  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+  /// Create LEFT HALO acquire (partial: last haloLeft rows of prev chunk)
+  unsigned leftHaloArgIdx = ~0u;
+  if (haloLeftVal > 0) {
+    Value leftChunkIdx = builder.create<arith::SubIOp>(loc, startChunk, one);
 
-  ARTS_DEBUG("DbStencilRewriter::localize - " << globalIndices.size()
-                                              << " indices");
+    /// element_offsets: start at (chunkSize - haloLeft) within prev chunk
+    Value leftElemOffset = builder.create<arith::SubIOp>(
+        loc, plan_.chunkSize,
+        builder.create<arith::ConstantIndexOp>(loc, haloLeftVal));
 
-  if (globalIndices.empty()) {
-    result.dbRefIndices.push_back(zero);
-    result.memrefIndices.push_back(zero);
-    return result;
+    /// bounds_valid = (startChunk != 0): valid only if not first chunk
+    Value leftValid = builder.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ne, startChunk, zero);
+
+    auto leftHalo = builder.create<DbAcquireOp>(
+        loc, ArtsMode::in, newAlloc.getGuid(), newAlloc.getPtr(),
+        /*indices=*/SmallVector<Value>{},
+        /*offsets=*/SmallVector<Value>{leftChunkIdx},
+        /*sizes=*/SmallVector<Value>{one},
+        /*offset_hints=*/SmallVector<Value>{},
+        /*size_hints=*/SmallVector<Value>{},
+        /*bounds_valid=*/leftValid,
+        /*element_offsets=*/buildHaloOffsets(leftElemOffset),
+        /*element_sizes=*/buildHaloSizes(haloLeftVal));
+
+    addHaloAcquireToEdt(acquire, leftHalo, builder);
+    /// Track left halo block arg index (it's the last one added)
+    auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+    if (edt)
+      leftHaloArgIdx = edt.getBody().front().getNumArguments() - 1;
+    ARTS_DEBUG("  Created left halo acquire, argIdx=" << leftHaloArgIdx);
   }
 
-  /// Each worker owns a single extended chunk, so dbRef index is always 0
-  result.dbRefIndices.push_back(zero);
+  /// Create RIGHT HALO acquire (partial: first haloRight rows of next chunk)
+  unsigned rightHaloArgIdx = ~0u;
+  if (haloRightVal > 0) {
+    Value rightChunkIdx = builder.create<arith::AddIOp>(loc, startChunk, one);
 
-  /// localRow = globalRow - elemOffset_
-  Value globalRow = globalIndices[0];
-  Value localRow =
-      elemOffset_ ? builder.create<arith::SubIOp>(loc, globalRow, elemOffset_)
-                  : globalRow;
+    /// bounds_valid = (startChunk != lastChunk): valid only if not last chunk
+    Value rightValid = builder.create<arith::CmpIOp>(
+        loc, arith::CmpIPredicate::ne, startChunk, lastChunkIdx);
 
-  /// Clamp for boundary safety
-  localRow = clampToValidBounds(localRow, elemSize_, builder, loc);
-  result.memrefIndices.push_back(localRow);
+    auto rightHalo = builder.create<DbAcquireOp>(
+        loc, ArtsMode::in, newAlloc.getGuid(), newAlloc.getPtr(),
+        /*indices=*/SmallVector<Value>{},
+        /*offsets=*/SmallVector<Value>{rightChunkIdx},
+        /*sizes=*/SmallVector<Value>{one},
+        /*offset_hints=*/SmallVector<Value>{},
+        /*size_hints=*/SmallVector<Value>{},
+        /*bounds_valid=*/rightValid,
+        /*element_offsets=*/buildHaloOffsets(zero),
+        /*element_sizes=*/buildHaloSizes(haloRightVal));
 
-  /// Pass through remaining dimensions unchanged
-  for (size_t i = 1; i < globalIndices.size(); ++i)
-    result.memrefIndices.push_back(globalIndices[i]);
+    addHaloAcquireToEdt(acquire, rightHalo, builder);
+    /// Track right halo block arg index (it's the last one added)
+    auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+    if (edt)
+      rightHaloArgIdx = edt.getBody().front().getNumArguments() - 1;
+    ARTS_DEBUG("  Created right halo acquire, argIdx=" << rightHaloArgIdx);
+  }
 
-  return result;
+  /// Store halo block arg indices for the 3-buffer selection approach
+  auto [edt, ownedBlockArg] =
+      EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+  if (edt && (haloLeftVal > 0 || haloRightVal > 0)) {
+    unsigned ownedArgIdx = ownedBlockArg.getArgNumber();
+
+    ARTS_DEBUG("  3-buffer selection: owned=" << ownedArgIdx
+                                               << ", left=" << leftHaloArgIdx
+                                               << ", right=" << rightHaloArgIdx);
+
+    /// Store halo arg indices as acquire attributes for rebaseEdtUsers
+    acquire->setAttr("left_halo_arg_idx",
+                     builder.getIndexAttr(leftHaloArgIdx));
+    acquire->setAttr("right_halo_arg_idx",
+                     builder.getIndexAttr(rightHaloArgIdx));
+  }
+
+  /// Set acquire offsets/sizes for stencil mode
+  SmallVector<Value> newOffsets, newSizes;
+  newOffsets.push_back(startChunk);
+  newSizes.push_back(chunkCount);
+  acquire.getOffsetsMutable().assign(newOffsets);
+  acquire.getSizesMutable().assign(newSizes);
+
+  /// Set hints for stencil mode - use element-space offset/size
+  SmallVector<Value> offsetHints = originalOffsetHints.empty()
+                                       ? SmallVector<Value>{elemOffset}
+                                       : originalOffsetHints;
+  SmallVector<Value> sizeHints = originalSizeHints.empty()
+                                     ? SmallVector<Value>{elemSize}
+                                     : originalSizeHints;
+  acquire.getOffsetHintsMutable().assign(offsetHints);
+  acquire.getSizeHintsMutable().assign(sizeHints);
+
+  /// Rebase EDT users with 3-buffer stencil mode
+  rebaseEdtUsers(acquire, builder, startChunk);
 }
 
-LocalizedIndices DbStencilRewriter::localizeLinearized(Value globalLinearIdx,
-                                                       Value stride,
-                                                       OpBuilder &builder,
-                                                       Location loc) {
-  LocalizedIndices result;
-  Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
+void DbStencilRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
+                                        OpBuilder &builder) {
+  Location loc = ref.getLoc();
+  Type newElementType = newAlloc.getAllocatedElementType();
+  Value newSource = (ref.getSource() == oldAlloc_.getPtr()) ? newAlloc.getPtr()
+                                                            : ref.getSource();
 
-  ARTS_DEBUG("DbStencilRewriter::localizeLinearized");
+  /// Collect load/store users of this db_ref
+  SmallVector<Operation *> refUsers(ref.getResult().getUsers().begin(),
+                                    ref.getResult().getUsers().end());
+  llvm::SetVector<Operation *> opsToRemove;
 
-  /// De-linearize: row = linear / stride, col = linear % stride
-  Value globalRow =
-      builder.create<arith::DivUIOp>(loc, globalLinearIdx, stride);
-  Value col = builder.create<arith::RemUIOp>(loc, globalLinearIdx, stride);
+  bool hasLoadStoreUsers = false;
+  for (Operation *user : refUsers) {
+    if (!isa<memref::LoadOp, memref::StoreOp>(user))
+      continue;
 
-  /// Each worker owns a single extended chunk
-  result.dbRefIndices.push_back(zero);
+    hasLoadStoreUsers = true;
+    OpBuilder::InsertionGuard ig(builder);
+    builder.setInsertionPoint(user);
+    Location userLoc = user->getLoc();
 
-  /// localRow = globalRow - elemOffset_
-  Value localRow =
-      elemOffset_ ? builder.create<arith::SubIOp>(loc, globalRow, elemOffset_)
-                  : globalRow;
+    /// Get load/store indices
+    ValueRange loadStoreIndices;
+    if (auto load = dyn_cast<memref::LoadOp>(user))
+      loadStoreIndices = load.getIndices();
+    else if (auto store = dyn_cast<memref::StoreOp>(user))
+      loadStoreIndices = store.getIndices();
 
-  /// Clamp for boundary safety
-  localRow = clampToValidBounds(localRow, elemSize_, builder, loc);
+    SmallVector<Value> newOuter, newInner;
+    auto zero = [&]() {
+      return builder.create<arith::ConstantIndexOp>(userLoc, 0);
+    };
 
-  /// Re-linearize: localLinear = localRow * stride + col
-  Value localLinear = builder.create<arith::MulIOp>(loc, localRow, stride);
-  localLinear = builder.create<arith::AddIOp>(loc, localLinear, col);
-  result.memrefIndices.push_back(localLinear);
+    /// STENCIL: div/mod for chunk selection (same as chunked)
+    Value cs = plan_.chunkSize ? plan_.chunkSize : zero();
+    if (!loadStoreIndices.empty()) {
+      Value idx0 = loadStoreIndices.front();
+      newOuter.push_back(builder.create<arith::DivUIOp>(userLoc, idx0, cs));
+      newInner.push_back(builder.create<arith::RemUIOp>(userLoc, idx0, cs));
+      for (unsigned i = 1; i < loadStoreIndices.size(); ++i)
+        newInner.push_back(loadStoreIndices[i]);
+    }
 
-  return result;
+    if (newOuter.empty())
+      newOuter.push_back(zero());
+    if (newInner.empty())
+      newInner.push_back(zero());
+
+    /// Create new db_ref with transformed outer indices
+    auto newRef =
+        builder.create<DbRefOp>(userLoc, newElementType, newSource, newOuter);
+
+    /// Create new load/store with transformed inner indices
+    if (auto load = dyn_cast<memref::LoadOp>(user)) {
+      auto newLoad = builder.create<memref::LoadOp>(userLoc, newRef, newInner);
+      load.replaceAllUsesWith(newLoad.getResult());
+    } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
+      builder.create<memref::StoreOp>(userLoc, store.getValue(), newRef,
+                                      newInner);
+    }
+    opsToRemove.insert(user);
+  }
+
+  /// For db_refs without load/store users, just update the db_ref type
+  if (!hasLoadStoreUsers && !ref.getResult().use_empty()) {
+    OpBuilder::InsertionGuard ig(builder);
+    builder.setInsertionPoint(ref);
+    SmallVector<Value> indices(ref.getIndices().begin(),
+                               ref.getIndices().end());
+    if (indices.empty())
+      indices.push_back(builder.create<arith::ConstantIndexOp>(loc, 0));
+    auto newRef =
+        builder.create<DbRefOp>(loc, newElementType, newSource, indices);
+    ref.replaceAllUsesWith(newRef.getResult());
+  }
+
+  /// Remove old load/store operations
+  for (Operation *op : opsToRemove)
+    if (op->use_empty())
+      op->erase();
 }
 
-//===----------------------------------------------------------------------===//
-// Operation Rewriting
-//===----------------------------------------------------------------------===//
+bool DbStencilRewriter::rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
+                                        Value startChunk) {
+  ARTS_DEBUG("DbStencilRewriter::rebaseEdtUsers (3-buffer mode)");
 
-void DbStencilRewriter::rewriteDbRefUsers(
-    DbRefOp ref, Value blockArg, Type newElementType, OpBuilder &builder,
-    llvm::SetVector<Operation *> &opsToRemove) {
-  ARTS_DEBUG("DbStencilRewriter::rewriteDbRefUsers");
+  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+  if (!blockArg)
+    return false;
 
-  SmallVector<Operation *> users(ref.getResult().getUsers().begin(),
-                                 ref.getResult().getUsers().end());
+  /// Determine element type from users or allocation
+  Type targetType;
+  for (Operation *user : blockArg.getUsers()) {
+    if (auto ref = dyn_cast<DbRefOp>(user)) {
+      targetType = ref.getResult().getType();
+      break;
+    }
+  }
+  if (!targetType) {
+    targetType = blockArg.getType();
+    if (auto outer = targetType.dyn_cast<MemRefType>())
+      if (auto inner = outer.getElementType().dyn_cast<MemRefType>())
+        targetType = inner;
+  }
+  if (!targetType || !targetType.isa<MemRefType>())
+    return false;
+
+  Type derivedType = targetType;
+  if (auto dbAlloc = dyn_cast_or_null<DbAllocOp>(
+          DatablockUtils::getUnderlyingDbAlloc(blockArg)))
+    derivedType = dbAlloc.getAllocatedElementType();
+
+  /// Get element offset from hints
+  Value elemOffset;
+  if (!acquire.getOffsetHints().empty())
+    elemOffset = acquire.getOffsetHints()[0];
+
+  /// For stencil mode, get the 3 block args (owned, left halo, right halo)
+  Value leftHaloArg, rightHaloArg;
+  Block &edtBody = edt.getBody().front();
+
+  /// Read halo arg indices from acquire attributes
+  if (auto leftIdxAttr =
+          acquire->getAttrOfType<IntegerAttr>("left_halo_arg_idx")) {
+    unsigned leftIdx = leftIdxAttr.getInt();
+    if (leftIdx < edtBody.getNumArguments())
+      leftHaloArg = edtBody.getArgument(leftIdx);
+  }
+  if (auto rightIdxAttr =
+          acquire->getAttrOfType<IntegerAttr>("right_halo_arg_idx")) {
+    unsigned rightIdx = rightIdxAttr.getInt();
+    if (rightIdx < edtBody.getNumArguments())
+      rightHaloArg = edtBody.getArgument(rightIdx);
+  }
+
+  ARTS_DEBUG("  Stencil 3-buffer: owned=" << blockArg
+             << ", left=" << (leftHaloArg ? "valid" : "null")
+             << ", right=" << (rightHaloArg ? "valid" : "null"));
+
+  /// Create stencil indexer with 3-buffer mode
+  Location loc = acquire.getLoc();
+  Value haloLeft =
+      builder.create<arith::ConstantIndexOp>(loc, plan_.stencilInfo->haloLeft);
+  Value haloRight =
+      builder.create<arith::ConstantIndexOp>(loc, plan_.stencilInfo->haloRight);
+
+  auto indexer = std::make_unique<DbStencilIndexer>(
+      haloLeft, haloRight, plan_.chunkSize, newOuterSizes_.size(),
+      newInnerSizes_.size(), elemOffset, blockArg, leftHaloArg, rightHaloArg);
+
+  SmallVector<Operation *> users(blockArg.getUsers().begin(),
+                                 blockArg.getUsers().end());
+  llvm::SetVector<Operation *> opsToRemove;
+  bool rewritten = false;
 
   for (Operation *user : users) {
-    OpBuilder::InsertionGuard guard(builder);
-    builder.setInsertionPoint(user);
-    Location loc = user->getLoc();
-
-    /// Extract indices from load/store
-    ValueRange indices;
-    if (auto load = dyn_cast<memref::LoadOp>(user))
-      indices = load.getIndices();
-    else if (auto store = dyn_cast<memref::StoreOp>(user))
-      indices = store.getIndices();
-    else
-      continue;
-
-    if (indices.empty())
-      continue;
-
-    /// Localize indices (handles linearized access automatically)
-    LocalizedIndices localized;
-    if (Value stride =
-            getLinearizedStride(indices, newElementType, builder, loc))
-      localized = localizeLinearized(indices[0], stride, builder, loc);
-    else
-      localized = localize(SmallVector<Value>(indices), builder, loc);
-
-    /// Create new db_ref with localized indices
-    auto newRef = builder.create<DbRefOp>(loc, newElementType, blockArg,
-                                          localized.dbRefIndices);
-
-    /// Replace load/store with new version using localized memref indices
-    if (auto load = dyn_cast<memref::LoadOp>(user)) {
-      auto newLoad = builder.create<memref::LoadOp>(loc, newRef.getResult(),
-                                                    localized.memrefIndices);
-      load.replaceAllUsesWith(newLoad.getResult());
-      opsToRemove.insert(load);
-    } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
-      builder.create<memref::StoreOp>(loc, store.getValue(), newRef.getResult(),
-                                      localized.memrefIndices);
-      opsToRemove.insert(store);
+    if (auto ref = dyn_cast<DbRefOp>(user)) {
+      indexer->transformDbRefUsers(ref, blockArg, derivedType, builder,
+                                 opsToRemove);
+      rewritten = true;
     }
   }
 
-  opsToRemove.insert(ref.getOperation());
+  for (Operation *op : opsToRemove)
+    if (op->use_empty())
+      op->erase();
+
+  return rewritten;
 }
 
-void DbStencilRewriter::rebaseOps(ArrayRef<Operation *> ops, Value dbPtr,
-                                  Type elementType, ArtsCodegen &AC,
-                                  llvm::SetVector<Operation *> &opsToRemove) {
-  ARTS_DEBUG("DbStencilRewriter::rebaseOps - " << ops.size() << " ops");
+void DbStencilRewriter::addHaloAcquireToEdt(DbAcquireOp originalAcq,
+                                             DbAcquireOp haloAcq,
+                                             OpBuilder &builder) {
+  ARTS_DEBUG("DbStencilRewriter::addHaloAcquireToEdt");
 
-  for (Operation *op : ops) {
-    OpBuilder::InsertionGuard guard(AC.getBuilder());
-    AC.setInsertionPoint(op);
-    Location loc = op->getLoc();
-
-    /// DbRefOp: delegate to rewriteDbRefUsers
-    if (auto dbRef = dyn_cast<DbRefOp>(op)) {
-      rewriteDbRefUsers(dbRef, dbPtr, elementType, AC.getBuilder(),
-                        opsToRemove);
-      continue;
-    }
-
-    /// Only handle load/store operations
-    if (!isa<memref::LoadOp, memref::StoreOp>(op))
-      continue;
-
-    ValueRange indices = getIndicesFromOp(op);
-    if (indices.empty())
-      continue;
-
-    /// Localize indices
-    LocalizedIndices localized;
-    if (Value stride =
-            getLinearizedStride(indices, elementType, AC.getBuilder(), loc))
-      localized = localizeLinearized(indices[0], stride, AC.getBuilder(), loc);
-    else
-      localized = localize(SmallVector<Value>(indices), AC.getBuilder(), loc);
-
-    /// Create db_ref + load/store
-    auto dbRef =
-        AC.create<DbRefOp>(loc, elementType, dbPtr, localized.dbRefIndices);
-
-    if (auto load = dyn_cast<memref::LoadOp>(op)) {
-      auto newLoad = AC.create<memref::LoadOp>(loc, dbRef.getResult(),
-                                               localized.memrefIndices);
-      load.replaceAllUsesWith(newLoad.getResult());
-    } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
-      AC.create<memref::StoreOp>(loc, store.getValue(), dbRef.getResult(),
-                                 localized.memrefIndices);
-    }
-    opsToRemove.insert(op);
+  /// Find the EDT that uses the original acquire
+  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(originalAcq);
+  if (!edt) {
+    ARTS_DEBUG("  No EDT found for acquire - skipping halo addition");
+    return;
   }
+
+  /// Add the halo acquire's ptr as a new EDT dependency
+  /// The appendDependency method updates the EDT operands
+  edt.appendDependency(haloAcq.getPtr());
+
+  /// Add corresponding block argument to EDT body
+  Block &edtBody = edt.getBody().front();
+  edtBody.addArgument(haloAcq.getPtr().getType(), haloAcq.getLoc());
+
+  ARTS_DEBUG("  Added halo dep to EDT, now has "
+             << edt.getDependencies().size() << " deps and "
+             << edtBody.getNumArguments() << " block args");
 }

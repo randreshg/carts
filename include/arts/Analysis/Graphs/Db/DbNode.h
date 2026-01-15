@@ -72,6 +72,10 @@ public:
   /// If true, twin-diff is not needed (no write conflicts possible).
   bool hasSingleWriter() const;
 
+  /// Check if any writer uses non-constant offset/size hints.
+  /// This implies multiple runtime writers may touch the same DB.
+  bool hasDynamicWriterOffsets() const;
+
   /// Check if all acquires use worker-indexed pattern (array[workerId] size=1).
   /// If true, all accesses are inherently disjoint.
   bool allAcquiresWorkerIndexed() const;
@@ -154,8 +158,9 @@ public:
   void collectAccessOperations(
       DenseMap<DbRefOp, SetVector<Operation *>> &dbRefToMemOps);
 
-  /// Helper methods for querying memory access counts.
-  /// These use collectAccessOperations internally.
+  /// Helper methods for querying memory access.
+  void forEachMemoryAccess(llvm::function_ref<void(Operation *, bool)> callback);
+
   bool hasLoads();
   bool hasStores();
   bool hasMemoryAccesses();
@@ -165,14 +170,18 @@ public:
   DbAcquireOp getDbAcquireOp() const { return dbAcquireOp; }
   DbReleaseOp getDbReleaseOp() const { return dbReleaseOp; }
 
-  SmallVector<Value, 4> computeInvariantIndices();
-
   DbAcquireNode *getOrCreateAcquireNode(DbAcquireOp op);
   void forEachChildNode(const std::function<void(NodeBase *)> &fn) const;
 
   /// Check if this acquire can be partitioned for parallel execution.
   /// Validates EDT type, memory accesses, access patterns, and nested children.
   bool canBePartitioned();
+
+  /// Check EDT type, memory accesses, and parallel loop metadata.
+  bool hasValidEdtAndAccesses();
+
+  /// Extract chunk offset/size and validate access patterns.
+  bool computePartitionBounds();
 
   /// Check if array accesses use indices derived from the given offset.
   /// Returns true if partitioning is safe (first index = offset + delta).
@@ -182,6 +191,10 @@ public:
   LogicalResult computeChunkInfoFromWhile(scf::WhileOp whileOp,
                                           Value &chunkOffset, Value &chunkSize,
                                           Value *offsetForCheck = nullptr);
+  LogicalResult computeChunkInfoFromHints(Value &chunkOffset, Value &chunkSize);
+  LogicalResult computeChunkInfoFromForLoop(ArrayRef<scf::ForOp> forLoops,
+                                            Value &chunkOffset, Value &chunkSize,
+                                            Value *offsetForCheck = nullptr);
 
   /// StencilBounds struct is now defined in DbAccessPattern.h
 

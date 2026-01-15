@@ -1,54 +1,40 @@
 ///==========================================================================///
 /// File: DbStencilRewriter.h
 ///
-/// Stencil-aware index localization for ESD (Ephemeral Slice Dependencies).
-///
-/// Index Localization Formula:
-///   dbRefIdx  = 0           (single extended chunk per worker)
-///   memrefIdx = globalIdx - elemOffset  (with bounds clamping)
-///
-/// The elemOffset accounts for halo extension so that stencil neighbor
-/// accesses (globalIdx-1, globalIdx+1) map to valid local indices.
+/// Stencil rewriter: ESD-based stencil with 3-buffer halo.
+/// Creates owned chunk + left/right halo acquires for boundary data.
 ///==========================================================================///
 
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBSTENCILREWRITER_H
 #define ARTS_TRANSFORMS_DATABLOCK_DBSTENCILREWRITER_H
 
-#include "arts/Transforms/Datablock/DbRewriterBase.h"
+#include "arts/Transforms/Datablock/DbRewriter.h"
 
 namespace mlir {
 namespace arts {
 
-/// Stencil-aware index rewriter using subtraction-based localization.
-class DbStencilRewriter : public DbRewriterBase {
-  Value elemOffset_; ///< Extended offset (accounts for halo)
-  Value elemSize_;   ///< Extended size (chunk + halos)
-
+class DbStencilRewriter : public DbRewriter {
 public:
-  /// Constructor. Only elemOffset and elemSize are used for localization;
-  /// other parameters are accepted for API compatibility.
-  DbStencilRewriter(Value chunkSize, Value startChunk, Value haloLeft,
-                    Value haloRight, Value totalRows, unsigned outerRank,
-                    unsigned innerRank, Value elemOffset, Value elemSize,
-                    ValueRange oldElementSizes);
+  DbStencilRewriter(DbAllocOp oldAlloc, ValueRange newOuterSizes,
+                    ValueRange newInnerSizes,
+                    ArrayRef<DbRewriteAcquire> acquires,
+                    const DbRewritePlan &plan)
+      : DbRewriter(oldAlloc, newOuterSizes, newInnerSizes, acquires, plan) {}
 
-  /// Transform global indices to local: localIdx = globalIdx - elemOffset_
-  LocalizedIndices localize(ArrayRef<Value> globalIndices, OpBuilder &builder,
-                            Location loc) override;
+protected:
+  void transformAcquire(const DbRewriteAcquire &info, DbAllocOp newAlloc,
+                        OpBuilder &builder) override;
 
-  /// Transform linearized global index (for flattened memrefs)
-  LocalizedIndices localizeLinearized(Value globalLinearIndex, Value stride,
-                                      OpBuilder &builder,
-                                      Location loc) override;
+  void transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
+                      OpBuilder &builder) override;
 
-  /// Rewrite DbRefOp users with localized indices
-  void rewriteDbRefUsers(DbRefOp ref, Value blockArg, Type newElementType,
-                         OpBuilder &builder,
-                         llvm::SetVector<Operation *> &opsToRemove) override;
+  bool rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
+                      Value startChunk = nullptr) override;
 
-  /// Rebase operations with stencil-aware localization
-  void rebaseOps(ArrayRef<Operation *> ops, Value dbPtr, Type elementType,
-                 ArtsCodegen &AC, llvm::SetVector<Operation *> &opsToRemove);
+private:
+  /// Add a halo acquire as a new EDT dependency.
+  void addHaloAcquireToEdt(DbAcquireOp originalAcq, DbAcquireOp haloAcq,
+                           OpBuilder &builder);
 };
 
 } // namespace arts
