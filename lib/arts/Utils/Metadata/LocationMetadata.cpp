@@ -96,8 +96,11 @@ LocationMetadata LocationMetadata::fromLocation(Location loc) {
     if (!fusedLoc.getLocations().empty())
       return fromLocation(fusedLoc.getLocations()[0]);
   }
-  // Handle CallSiteLoc - prefer callee location
+  // Handle CallSiteLoc - prefer caller location for per-callsite metadata
   else if (auto callLoc = loc.dyn_cast<CallSiteLoc>()) {
+    LocationMetadata callerMeta = fromLocation(callLoc.getCaller());
+    if (callerMeta.isValid())
+      return callerMeta;
     return fromLocation(callLoc.getCallee());
   }
   // Handle NameLoc - check child location

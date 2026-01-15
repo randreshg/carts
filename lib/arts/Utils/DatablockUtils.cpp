@@ -230,16 +230,16 @@ std::optional<int64_t> DatablockUtils::getStaticStride(ValueRange sizes) {
   if (sizes.empty())
     return std::nullopt;
 
-  // Single dimension [N]: stride = 1
+  /// Single dimension [N]: stride = 1
   if (sizes.size() == 1)
     return 1;
 
-  // Multi-dimensional [D0, D1, ...]: stride = D1 * D2 * ... (skip D0!)
+  /// Multi-dimensional [D0, D1, ...]: stride = D1 * D2 * ... (skip D0!)
   int64_t stride = 1;
-  for (size_t i = 1; i < sizes.size(); ++i) { // START AT 1
+  for (size_t i = 1; i < sizes.size(); ++i) { /// START AT 1
     int64_t dim;
     if (!ValueUtils::getConstantIndex(sizes[i], dim))
-      return std::nullopt; // Dynamic dimension
+      return std::nullopt; /// Dynamic dimension
     stride *= dim;
   }
   return stride;
@@ -254,7 +254,7 @@ std::optional<int64_t> DatablockUtils::getStaticStride(MemRefType memrefType) {
     return 1;
 
   int64_t stride = 1;
-  for (size_t i = 1; i < shape.size(); ++i) { // START AT 1
+  for (size_t i = 1; i < shape.size(); ++i) { /// START AT 1
     if (shape[i] == ShapedType::kDynamic)
       return std::nullopt;
     stride *= shape[i];
@@ -275,20 +275,19 @@ Value DatablockUtils::getStrideValue(OpBuilder &builder, Location loc,
   if (sizes.empty())
     return nullptr;
 
-  // Single dimension [N]: stride = 1
+  /// Single dimension [N]: stride = 1
   if (sizes.size() == 1)
     return builder.create<arith::ConstantIndexOp>(loc, 1);
 
-  // Try static first for efficiency
+  /// Try static first for efficiency
   if (auto staticStride = getStaticStride(sizes))
     return builder.create<arith::ConstantIndexOp>(loc, *staticStride);
 
-  // Dynamic: build multiplication chain for trailing dimensions
-  // stride = sizes[1] * sizes[2] * ... * sizes[n-1]
-  Value stride = sizes[1]; // Start at index 1 (skip first dimension!)
-  for (size_t i = 2; i < sizes.size(); ++i) {
+  /// Dynamic: build multiplication chain for trailing dimensions
+  /// stride = sizes[1] * sizes[2] * ... * sizes[n-1]
+  Value stride = sizes[1];
+  for (size_t i = 2; i < sizes.size(); ++i)
     stride = builder.create<arith::MulIOp>(loc, stride, sizes[i]);
-  }
   return stride;
 }
 
@@ -300,4 +299,126 @@ Value DatablockUtils::getElementStrideValue(OpBuilder &builder, Location loc,
 Value DatablockUtils::getOuterStrideValue(OpBuilder &builder, Location loc,
                                           DbAllocOp alloc) {
   return getStrideValue(builder, loc, alloc.getSizes());
+}
+
+///===----------------------------------------------------------------------===//
+/// Access Mode and Hints Analysis
+///===----------------------------------------------------------------------===//
+
+bool DatablockUtils::hasStaticHints(DbAcquireOp acqOp) {
+  auto offsets = acqOp.getOffsetHints();
+  auto sizes = acqOp.getSizeHints();
+  int64_t val = 0;
+  bool offConst =
+      offsets.empty() || ValueUtils::getConstantIndex(offsets[0], val);
+  bool sizeConst = sizes.empty() || ValueUtils::getConstantIndex(sizes[0], val);
+  return offConst && sizeConst;
+}
+
+bool DatablockUtils::isWriterMode(ArtsMode mode) {
+  return mode == ArtsMode::out || mode == ArtsMode::inout;
+}
+
+///===----------------------------------------------------------------------===///
+/// Offset Dependency and Chunk Size Analysis
+///===----------------------------------------------------------------------===///
+
+/// Check if a value depends on a partition offset (ignoring numeric casts).
+bool DatablockUtils::dependsOnOffset(Value v, Value offset) {
+  if (!v || !offset)
+    return false;
+  Value vStripped = ValueUtils::stripNumericCasts(v);
+  Value oStripped = ValueUtils::stripNumericCasts(offset);
+  return ValueUtils::dependsOn(vStripped, oStripped);
+}
+
+/// Try to extract an offset-independent base chunk size from size hints.
+/// This peels remainder-aware patterns like min(base, total - offset).
+Value DatablockUtils::extractBaseChunkSizeCandidate(Value offsetHint,
+                                                    Value sizeHint, int depth) {
+  if (!sizeHint || depth > 6)
+    return Value();
+
+  if (!offsetHint || !dependsOnOffset(sizeHint, offsetHint))
+    return sizeHint;
+
+  Operation *defOp = sizeHint.getDefiningOp();
+  if (!defOp)
+    return Value();
+
+  if (auto minOp = dyn_cast<arith::MinUIOp>(defOp)) {
+    Value lhs = minOp.getLhs();
+    Value rhs = minOp.getRhs();
+    bool lhsDep = dependsOnOffset(lhs, offsetHint);
+    bool rhsDep = dependsOnOffset(rhs, offsetHint);
+    if (lhsDep && !rhsDep)
+      return extractBaseChunkSizeCandidate(offsetHint, rhs, depth + 1);
+    if (rhsDep && !lhsDep)
+      return extractBaseChunkSizeCandidate(offsetHint, lhs, depth + 1);
+    if (Value cand = extractBaseChunkSizeCandidate(offsetHint, lhs, depth + 1))
+      return cand;
+    return extractBaseChunkSizeCandidate(offsetHint, rhs, depth + 1);
+  }
+
+  if (auto minOp = dyn_cast<arith::MinSIOp>(defOp)) {
+    Value lhs = minOp.getLhs();
+    Value rhs = minOp.getRhs();
+    bool lhsDep = dependsOnOffset(lhs, offsetHint);
+    bool rhsDep = dependsOnOffset(rhs, offsetHint);
+    if (lhsDep && !rhsDep)
+      return extractBaseChunkSizeCandidate(offsetHint, rhs, depth + 1);
+    if (rhsDep && !lhsDep)
+      return extractBaseChunkSizeCandidate(offsetHint, lhs, depth + 1);
+    if (Value cand = extractBaseChunkSizeCandidate(offsetHint, lhs, depth + 1))
+      return cand;
+    return extractBaseChunkSizeCandidate(offsetHint, rhs, depth + 1);
+  }
+
+  if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
+    Value tVal = selectOp.getTrueValue();
+    Value fVal = selectOp.getFalseValue();
+    bool tDep = dependsOnOffset(tVal, offsetHint);
+    bool fDep = dependsOnOffset(fVal, offsetHint);
+    if (tDep && !fDep)
+      return extractBaseChunkSizeCandidate(offsetHint, fVal, depth + 1);
+    if (fDep && !tDep)
+      return extractBaseChunkSizeCandidate(offsetHint, tVal, depth + 1);
+    if (Value cand = extractBaseChunkSizeCandidate(offsetHint, tVal, depth + 1))
+      return cand;
+    return extractBaseChunkSizeCandidate(offsetHint, fVal, depth + 1);
+  }
+
+  if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
+    int64_t lhsConst = 0, rhsConst = 0;
+    bool lhsIsConst = ValueUtils::getConstantIndex(addOp.getLhs(), lhsConst);
+    bool rhsIsConst = ValueUtils::getConstantIndex(addOp.getRhs(), rhsConst);
+    if (lhsIsConst && lhsConst >= -16 && lhsConst <= 16)
+      return extractBaseChunkSizeCandidate(offsetHint, addOp.getRhs(),
+                                           depth + 1);
+    if (rhsIsConst && rhsConst >= -16 && rhsConst <= 16)
+      return extractBaseChunkSizeCandidate(offsetHint, addOp.getLhs(),
+                                           depth + 1);
+  }
+
+  if (auto subOp = dyn_cast<arith::SubIOp>(defOp)) {
+    int64_t rhsConst = 0;
+    if (ValueUtils::getConstantIndex(subOp.getRhs(), rhsConst) &&
+        rhsConst >= -16 && rhsConst <= 16)
+      return extractBaseChunkSizeCandidate(offsetHint, subOp.getLhs(),
+                                           depth + 1);
+  }
+
+  return Value();
+}
+
+/// Find the EDT operation that uses a DbControlOp result.
+/// Returns the first EDT operation that uses the DbControlOp's result,
+/// or nullptr if no EDT user is found.
+Operation *DatablockUtils::findUserEdt(DbControlOp dbControl) {
+  for (Operation *user : dbControl.getResult().getUsers()) {
+    if (auto edt = dyn_cast<EdtOp>(user)) {
+      return edt;
+    }
+  }
+  return nullptr;
 }

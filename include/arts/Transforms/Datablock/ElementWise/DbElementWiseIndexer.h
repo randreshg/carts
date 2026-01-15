@@ -1,7 +1,7 @@
 ///==========================================================================///
-/// File: DbElementWiseRewriter.h
+/// File: DbElementWiseIndexer.h
 ///
-/// Index rewriter for element-wise (fine-grained) datablock allocation.
+/// Index localizer for element-wise (fine-grained) datablock allocation.
 /// Each element of the partitioned dimension gets its own datablock.
 ///
 /// Partitioning policy:
@@ -21,30 +21,29 @@
 ///
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DATABLOCK_DBELEMENTWISEREWRITER_H
-#define ARTS_TRANSFORMS_DATABLOCK_DBELEMENTWISEREWRITER_H
+#ifndef ARTS_TRANSFORMS_DATABLOCK_DBELEMENTWISEINDEXER_H
+#define ARTS_TRANSFORMS_DATABLOCK_DBELEMENTWISEINDEXER_H
 
-#include "arts/Transforms/Datablock/DbRewriterBase.h"
+#include "arts/Transforms/Datablock/DbIndexerBase.h"
 
 namespace mlir {
 namespace arts {
 
-/// Index rewriter for element-wise (fine-grained) datablock allocation.
+/// Index localizer for element-wise (fine-grained) datablock allocation.
 /// Implements subtraction-based offset adjustment for fine-grained parallelism.
 ///
 /// Index Localization Formulas:
 ///   Multi-dimensional: dbRefIdx = globalRow - elemOffset
 ///                      memrefIdx = remaining dimensions unchanged
 ///   Linearized:        localLinear = globalLinear - (elemOffset * stride)
-class DbElementWiseRewriter : public DbRewriterBase {
-  Value elemOffset_; /// First element this partition owns
-  Value elemSize_;   /// Number of elements owned
-  SmallVector<Value>
-      oldElementSizes_; /// Old allocation's element sizes for stride
+class DbElementWiseIndexer : public DbIndexerBase {
+  Value elemOffset_;
+  Value elemSize_;
+  SmallVector<Value> oldElementSizes_;
 
 public:
-  DbElementWiseRewriter(Value elemOffset, Value elemSize, unsigned outerRank,
-                        unsigned innerRank, ValueRange oldElementSizes = {});
+  DbElementWiseIndexer(Value elemOffset, Value elemSize, unsigned outerRank,
+                       unsigned innerRank, ValueRange oldElementSizes = {});
 
 private:
   /// Split indices into outer/db_ref and inner/memref groups.
@@ -64,10 +63,10 @@ public:
                                       OpBuilder &builder,
                                       Location loc) override;
 
-  /// Rewrite a DbRefOp and its load/store users
-  void rewriteDbRefUsers(DbRefOp ref, Value blockArg, Type newElementType,
-                         OpBuilder &builder,
-                         llvm::SetVector<Operation *> &opsToRemove) override;
+  /// Transform a DbRefOp and its load/store users
+  void transformDbRefUsers(DbRefOp ref, Value blockArg, Type newElementType,
+                           OpBuilder &builder,
+                           llvm::SetVector<Operation *> &opsToRemove) override;
 
   /// Localize indices against a fine-grained acquire view.
   LocalizedIndices localizeForFineGrained(ValueRange globalIndices,
@@ -75,19 +74,19 @@ public:
                                           ValueRange acquireOffsets,
                                           OpBuilder &builder, Location loc);
 
-  /// Rewrite a single load/store using db_ref + load/store pattern.
-  void rewriteAccessWithDbPattern(Operation *op, Value dbPtr, Type elementType,
-                                  ArtsCodegen &AC,
-                                  llvm::SetVector<Operation *> &opsToRemove);
+  /// Transform a single load/store using db_ref + load/store pattern.
+  void transformAccess(Operation *op, Value dbPtr, Type elementType,
+                       ArtsCodegen &AC,
+                       llvm::SetVector<Operation *> &opsToRemove);
 
-  /// Rebase a list of operations
-  void rebaseOps(ArrayRef<Operation *> ops, Value dbPtr, Type elementType,
-                 ArtsCodegen &AC, llvm::SetVector<Operation *> &opsToRemove);
+  /// Transform a list of operations
+  void transformOps(ArrayRef<Operation *> ops, Value dbPtr, Type elementType,
+                    ArtsCodegen &AC, llvm::SetVector<Operation *> &opsToRemove);
 
-  /// Rewrite all uses of an allocation in the parent region
-  void rewriteUsesInParentRegion(Operation *alloc, DbAllocOp dbAlloc,
-                                 ArtsCodegen &AC,
-                                 llvm::SetVector<Operation *> &opsToRemove);
+  /// Transform all uses of an allocation in the parent region
+  void transformUsesInParentRegion(Operation *alloc, DbAllocOp dbAlloc,
+                                   ArtsCodegen &AC,
+                                   llvm::SetVector<Operation *> &opsToRemove);
 
   /// Element-wise localizeCoordinates scales offset by stride
   /// for linearized accesses
@@ -101,4 +100,4 @@ public:
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DATABLOCK_DBELEMENTWISEREWRITER_H
+#endif // ARTS_TRANSFORMS_DATABLOCK_DBELEMENTWISEINDEXER_H

@@ -91,6 +91,15 @@ bool HeuristicsConfig::isValid() const { return machine.isValid(); }
 bool HeuristicsConfig::shouldUseTwinDiff(const TwinDiffContext &context) {
   Operation *op = context.op;
 
+  /// Temporary global disable: twin-diff is not yet fully supported.
+  /// When re-enabled, remove this early return and the #if 0 block below.
+  recordDecision("TwinDiff-Disabled", true,
+                 "twin-diff disabled globally (temporary)", op, {});
+  return false;
+
+  /// Twin-diff heuristics (disabled - to be re-enabled when runtime supports
+  /// it)
+#if 0 
   /// H4: Single-node disables twin-diff unconditionally
   /// - No remote owner to send diffs to
   /// - Twin allocation + memcpy + diff computation are wasted
@@ -124,8 +133,9 @@ bool HeuristicsConfig::shouldUseTwinDiff(const TwinDiffContext &context) {
     recordDecision(
         "TwinDiff-SafeDefault", true,
         "no proof of non-overlap, using safe default (twin_diff=true)", op, {});
-    return true; // Safe default - handles potential overlap at runtime
+    return true;
   }
+#endif
 }
 
 //===----------------------------------------------------------------------===//
@@ -230,13 +240,13 @@ llvm::ArrayRef<HeuristicDecision> HeuristicsConfig::getDecisions() const {
 //===----------------------------------------------------------------------===//
 
 void HeuristicsConfig::initializeDefaultHeuristics() {
-  // Get all default partitioning heuristics from factory
+  /// Get all default partitioning heuristics from factory
   auto defaults = createDefaultPartitioningHeuristics();
   for (auto &h : defaults) {
     registerHeuristic(std::move(h));
   }
 
-  // Sort by priority (highest first)
+  /// Sort by priority (highest first)
   llvm::sort(partitioningHeuristics_, [](const auto &a, const auto &b) {
     return a->getPriority() > b->getPriority();
   });
@@ -262,11 +272,11 @@ HeuristicsConfig::getPartitioningMode(const PartitioningContext &ctx) {
              << ", pinnedDimCount=" << ctx.pinnedDimCount
              << ", accessMode=" << static_cast<int>(ctx.accessMode));
 
-  // Evaluate heuristics in priority order
+  /// Evaluate heuristics in priority order
   for (const auto &heuristic : partitioningHeuristics_) {
     auto decision = heuristic->evaluate(ctx);
     if (decision.has_value()) {
-      // Record the decision for diagnostics
+      /// Record the decision for diagnostics
       recordDecision(heuristic->getName(), true, decision->rationale, nullptr,
                      {});
       ARTS_DEBUG("Heuristic " << heuristic->getName()
@@ -275,12 +285,9 @@ HeuristicsConfig::getPartitioningMode(const PartitioningContext &ctx) {
     }
   }
 
-  // Fallback: coarse allocation
-  PartitioningDecision fallback;
-  fallback.mode = RewriterMode::ElementWise;
-  fallback.outerRank = 0;
-  fallback.innerRank = ctx.memrefRank; // All dims are inner for coarse
-  fallback.rationale = "No heuristic applied, using coarse fallback";
+  /// Fallback: coarse allocation
+  PartitioningDecision fallback = PartitioningDecision::coarse(
+      ctx, "No heuristic applied, using coarse fallback");
   recordDecision("Fallback", true, fallback.rationale, nullptr, {});
   ARTS_DEBUG("Fallback applied: " << fallback.rationale);
   return fallback;

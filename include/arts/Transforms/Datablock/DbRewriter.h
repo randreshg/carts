@@ -1,37 +1,15 @@
 ///==========================================================================///
 /// File: DbRewriter.h
 ///
-/// - Apply the selected rewriter (chunked/element-wise/stencil placeholder).
-/// - Rewrite DbAcquire/DbRef users to the new allocation.
-/// - Clean up old ops once rewrites are complete.
-///
-/// Dispatch flow (high level):
-///   DbPartitioning decides -> DbRewriter constructs -> apply() rewrites.
-///
-/// Flowchart (dispatch + cleanup):
-///
-///   DbPartitioning
-///        │
-///        │  mode + sizes + offsets + chunkSize + (optional stencil info)
-///        ▼
-///   DbRewriter::apply()
-///        │
-///        ├─ create new db.alloc (new sizes)
-///        ├─ rewrite each db.acquire (offsets/sizes + EDT block args)
-///        ├─ rebase EDT users via specialized rewriter:
-///        │     ├─ ElementWise → DbElementWiseRewriter
-///        │     ├─ Chunked     → DbChunkedRewriter
-///        │     └─ Stencil     → DbStencilRewriter (placeholder)
-///        ├─ rewrite db_ref users outside EDTs
-///        ├─ replace old alloc uses
-///        └─ erase old ops (cleanup)
+/// Abstract base class for datablock allocation transformation.
+/// Provides factory pattern for creating mode-specific rewriters.
 ///==========================================================================///
 
 #ifndef ARTS_TRANSFORMS_DATABLOCK_DBREWRITER_H
 #define ARTS_TRANSFORMS_DATABLOCK_DBREWRITER_H
 
 #include "arts/ArtsDialect.h"
-#include "arts/Transforms/Datablock/DbRewriterBase.h"
+#include "arts/Transforms/Datablock/DbIndexerBase.h"
 #include "mlir/IR/Builders.h"
 #include "llvm/ADT/SmallVector.h"
 #include <memory>
@@ -40,23 +18,10 @@
 namespace mlir {
 namespace arts {
 
-///===----------------------------------------------------------------------===///
+///===----------------------------------------------------------------------===//
 /// Rewriter modes for datablock partitioning
-///===----------------------------------------------------------------------===///
-enum class RewriterMode {
-  /// Element-wise: Each element is a separate datablock.
-  /// Index transform: outer[globalIdx], inner[0]
-  ElementWise,
-
-  /// Chunked: Uniform chunks with div/mod localization.
-  /// Index transform: dbRef[globalRow/chunkSize - startChunk],
-  ///                  memref[globalRow % chunkSize, ...]
-  Chunked,
-
-  /// Stencil: Reserved for future ESD-based stencil localization (not default).
-  /// Rewriter: DbStencilRewriter
-  Stencil
-};
+///===----------------------------------------------------------------------===//
+enum class RewriterMode { ElementWise, Chunked, Stencil };
 
 /// Check if mode requires chunk size parameter
 inline bool requiresChunkSize(RewriterMode mode) {
@@ -76,12 +41,13 @@ inline StringRef getRewriterModeName(RewriterMode mode) {
   return "Unknown";
 }
 
-///===----------------------------------------------------------------------===///
-/// Stencil info for future stencil localization (ESD placeholder)
+///===----------------------------------------------------------------------===//
+/// Stencil info for ESD halo-based localization
+///===----------------------------------------------------------------------===//
 struct StencilInfo {
-  int64_t haloLeft = 0;  /// Left halo size (|minOffset|)
-  int64_t haloRight = 0; /// Right halo size (|maxOffset|)
-  Value totalRows;       /// Total rows in array (for boundary clamping)
+  int64_t haloLeft = 0;
+  int64_t haloRight = 0;
+  Value totalRows;
 
   bool hasHalo() const { return haloLeft > 0 || haloRight > 0; }
 };
@@ -91,8 +57,6 @@ struct DbRewriteAcquire {
   DbAcquireOp acquire;
   Value elemOffset;
   Value elemSize;
-  /// Full-range access for coarse acquires in mixed mode.
-  /// When true, this acquire gets offset=0, size=numChunks (accesses all chunks).
   bool isFullRange = false;
 };
 
@@ -102,30 +66,19 @@ struct PartitioningDecision;
 /// Rewriter plan chosen by DbPartitioning.
 struct DbRewritePlan {
   RewriterMode mode = RewriterMode::ElementWise;
-  Value chunkSize; ///< Valid for Chunked/Stencil; empty for ElementWise
+  Value chunkSize; /// Valid for Chunked/Stencil; empty for ElementWise
   std::optional<StencilInfo> stencilInfo;
-
-  /// Explicit rank configuration for flexible partitioning.
-  /// Specifying outerRank and innerRank directly allows:
-  /// - Inner->Outer promotion (increasing outerRank)
-  /// - Outer->Inner demotion (decreasing outerRank)
-  /// When 0, auto-compute from mode defaults.
   unsigned outerRank = 0;
   unsigned innerRank = 0;
 
-  /// Mixed mode support: allocation is chunked but some acquires are coarse.
-  /// When true, coarse acquires get full-range access (offset=0, size=numChunks).
+  /// Mixed mode support
   bool isMixedMode = false;
-  Value numChunks; ///< Total chunks for full-range coarse acquires
+  Value numChunks;
 
   /// Default constructor
   DbRewritePlan() = default;
-
-  /// Construct from PartitioningDecision (copies mode, outerRank, innerRank)
   explicit DbRewritePlan(const PartitioningDecision &decision);
 
-  /// Validate plan consistency.
-  /// Returns true if the plan has all required fields for its mode.
   bool isValid() const {
     switch (mode) {
     case RewriterMode::Stencil:
@@ -139,64 +92,83 @@ struct DbRewritePlan {
   }
 };
 
+///===----------------------------------------------------------------------===//
+/// DbRewriter - Abstract base for allocation transformation
+///===----------------------------------------------------------------------===//
 class DbRewriter {
 public:
-  /// Constructor: all inputs provided upfront.
-  /// Mode and mode-specific parameters are provided by the caller.
-  DbRewriter(DbAllocOp oldAlloc, ValueRange newOuterSizes,
-             ValueRange newInnerSizes, ArrayRef<DbRewriteAcquire> acquires,
-             const DbRewritePlan &plan);
+  virtual ~DbRewriter() = default;
 
-  /// Apply the transformation: create new allocation and rewrite all uses.
+  /// Factory method - creates the appropriate subclass based on plan.mode
+  static std::unique_ptr<DbRewriter>
+  create(DbAllocOp oldAlloc, ValueRange newOuterSizes, ValueRange newInnerSizes,
+         ArrayRef<DbRewriteAcquire> acquires, const DbRewritePlan &plan);
+
+  /// Main entry point - shared workflow (template method pattern)
+  /// Non-virtual: defines the transformation steps, calls virtual hooks.
   FailureOr<DbAllocOp> apply(OpBuilder &builder);
 
-  /// Get the rewriter mode for this transformation.
+  /// Accessors
   RewriterMode getMode() const { return plan_.mode; }
-
-  /// Convenience accessors
   bool isElementWise() const { return plan_.mode == RewriterMode::ElementWise; }
   bool isChunked() const { return plan_.mode == RewriterMode::Chunked; }
   bool isStencil() const { return plan_.mode == RewriterMode::Stencil; }
 
-  /// Create mode-specific rewriter based on plan.
-  /// Returns a rewriter for localization of indices within EDT bodies.
-  static std::unique_ptr<DbRewriterBase>
-  createRewriter(const DbRewritePlan &plan, Value chunkSize, Value startChunk,
-                 Value elemOffset, Value elemSize, unsigned outerRank,
-                 unsigned innerRank, ValueRange oldElementSizes,
-                 OpBuilder &builder, Location loc);
+protected:
+  /// Protected constructor - use create() factory instead
+  DbRewriter(DbAllocOp oldAlloc, ValueRange newOuterSizes,
+             ValueRange newInnerSizes, ArrayRef<DbRewriteAcquire> acquires,
+             const DbRewritePlan &plan);
 
-private:
+  //===--------------------------------------------------------------------===//
+  // Virtual hooks - mode-specific behavior
+  //===--------------------------------------------------------------------===//
+
+
+  virtual void transformAcquire(const DbRewriteAcquire &info,
+                                DbAllocOp newAlloc, OpBuilder &builder) = 0;
+
+  /// Transform a DbRefOp outside EDT with mode-specific index logic.
+  virtual void transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
+                              OpBuilder &builder) = 0;
+
+  /// Rebase EDT users with mode-specific index localization.
+  virtual bool rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
+                              Value startChunk = nullptr) = 0;
+
+  //===--------------------------------------------------------------------===//
+  // Shared state
+  //===--------------------------------------------------------------------===//
+
   DbAllocOp oldAlloc_;
-  SmallVector<Value> newOuterSizes_;
-  SmallVector<Value> newInnerSizes_;
-
-  /// Partition info per acquire
+  SmallVector<Value> newOuterSizes_, newInnerSizes_;
   SmallVector<DbRewriteAcquire> acquires_;
-
-  /// Provided by the caller
   DbRewritePlan plan_;
 
-  /// Rewrite a single acquire with its partition info
-  void rewriteAcquire(const DbRewriteAcquire &info, DbAllocOp newAlloc,
-                      OpBuilder &builder);
+  //===--------------------------------------------------------------------===//
+  // Indexer factory - used by subclasses for index localization
+  //===--------------------------------------------------------------------===//
 
-  /// Rewrite a DbRefOp with transformed indices
-  void rewriteDbRef(DbRefOp ref, DbAllocOp newAlloc, OpBuilder &builder);
+  static std::unique_ptr<DbIndexerBase>
+  createIndexer(const DbRewritePlan &plan, Value startChunk, Value elemOffset,
+                Value elemSize, unsigned outerRank, unsigned innerRank,
+                ValueRange oldElementSizes, OpBuilder &builder, Location loc,
+                Value ownedArg = nullptr, Value leftHaloArg = nullptr,
+                Value rightHaloArg = nullptr);
 
-  /// Rebase all users of an acquired EDT block argument to local coordinates
-  /// Mode-aware replacement for db::rebaseAllUsersToAcquireView
-  /// For chunked mode, startChunk should be passed from rewriteAcquire to avoid
-  /// recomputation. If nullptr in chunked mode, falls back to reading from
-  /// hints.
-  bool rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
-                      Value startChunk = nullptr);
+  static std::unique_ptr<DbIndexerBase>
+  createElementWiseIndexer(Value elemOffset, Value elemSize, unsigned outerRank,
+                           unsigned innerRank, ValueRange oldElementSizes);
 
-  /// Add a halo acquire to the EDT that uses the original acquire.
-  /// This adds the halo acquire as a new EDT dependency and creates
-  /// a corresponding block argument.
-  void addHaloAcquireToEdt(DbAcquireOp originalAcq, DbAcquireOp haloAcq,
-                           OpBuilder &builder);
+  static std::unique_ptr<DbIndexerBase>
+  createChunkedIndexer(Value chunkSize, Value startChunk, Value elemOffset,
+                       unsigned outerRank, unsigned innerRank);
+
+  static std::unique_ptr<DbIndexerBase>
+  createStencilIndexer(const StencilInfo &info, Value chunkSize,
+                       Value elemOffset, unsigned outerRank, unsigned innerRank,
+                       Value ownedArg, Value leftHaloArg, Value rightHaloArg,
+                       OpBuilder &builder, Location loc);
 };
 
 } // namespace arts

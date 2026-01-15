@@ -2,9 +2,7 @@
 /// File: ArtsAnalysisManager.h
 ///
 /// This file defines the ArtsAnalysisManager for centralized management
-/// of all ARTS analysis objects. Provides a clean interface that exposes
-/// only analysis objects, while internally managing graphs through
-/// the respective analysis classes.
+/// of all ARTS analysis objects.
 ///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_ARTSANALYSISMANAGER_H

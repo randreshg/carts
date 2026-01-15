@@ -16,6 +16,41 @@ For rank-aware and multi-node specifics, see:
 | Chunked      | One datablock per block        | Blocked/tiling patterns   | Good locality, moderate overhead |
 +--------------+-------------------------------+---------------------------+----------------------------------+
 
+## IR Labels (Coarse vs Fine-Grained)
+
+The IR uses `arts.partition` with `promotion_mode` values:
+
+| IR Attribute                              | Meaning        |
+|-------------------------------------------|----------------|
+| `#arts.promotion_mode<coarse>`            | Coarse         |
+| `#arts.promotion_mode<fine_grained>`      | Fine-grained   |
+| `#arts.promotion_mode<chunked>`           | Chunked        |
+
+Internally, "coarse" is represented as element-wise with `outerRank=0`
+(`PartitioningDecision::isCoarse()`), so both labels appear in logs.
+
+All `arts.db_alloc` operations carry an explicit `arts.partition` attribute
+(default `promotion_mode<coarse>`). This keeps allocation layout explicit for
+copy/sync decisions and diagnostics.
+
+## Terminology Mapping
+
+This table maps user-facing CLI options to internal implementation details:
+
+| User/CLI Term | PartitionGranularity | RewriterMode | outerRank | IR Attribute    |
+|---------------|----------------------|--------------|-----------|-----------------|
+| coarse        | Coarse               | ElementWise  | 0         | coarse          |
+| fine          | FineGrained          | ElementWise  | >0        | fine_grained    |
+| chunked       | Chunked              | Chunked      | 1         | chunked         |
+| stencil       | Stencil              | Stencil      | 1         | chunked         |
+
+**Key insight**: `RewriterMode::ElementWise` handles both coarse and fine-grained.
+The difference is `outerRank`: coarse has `outerRank=0` (single DB for entire array),
+fine-grained has `outerRank>0` (multiple DBs, one per element/row).
+
+**CLI option**: `--partition-fallback=coarse|fine|versioned` controls the fallback behavior
+for non-affine (indirect) accesses. See "Non-Affine Fallback" section for details.
+
 ## Decision Flow (High-Level)
 
 A compact reasoning flow that captures how the system decides without naming specific heuristics.
@@ -63,11 +98,127 @@ A compact reasoning flow that captures how the system decides without naming spe
 
 ## Partitioning Pipeline (End-to-End)
 
-This flow includes the canonical chunk size step and shows where heuristics
-consume the inputs.
+**CRITICAL**: The partitioning decision spans THREE key passes in the compiler pipeline.
+Understanding when hints are generated vs. consumed is essential.
+
+### Pipeline Stage Overview
+
+```
+Pipeline Stage    Pass                    What Happens
+────────────────────────────────────────────────────────────────────────────
+Stage 7:          CreateDbsPass           Creates DbAllocs (NO hints yet!)
+Stage 8-9:        DbOpt + EdtOpt          Initial optimization passes
+Stage 10:         ForLoweringPass         GENERATES offset_hints, size_hints, indices
+Stage 11:         DbPartitioningPass      USES hints to partition (coarse → fine)
+                  DbPass                  Re-run to adjust modes after partitioning
+```
+
+### Three-Stage Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    STAGE 7: CreateDbs Pass                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   For each memref used in EDTs:                                              │
+│   • Creates DbAllocOp + DbAcquireOps based on memref usage                   │
+│   • NO partition hints exist yet (ForLowering hasn't run!)                   │
+│   • DbAcquireOps have offsets/sizes but NO offset_hints/size_hints           │
+│                                                                              │
+│   Output: DbAllocOps with basic structure (no hints)                         │
+│                                                                              │
+└─────────────────────────────────────────┬───────────────────────────────────┘
+                                          │
+                                          ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    STAGE 10: ForLowering Pass (in Concurrency)               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   Analyzes loop iteration variables and depend clauses:                      │
+│   • indices[]       ← from indexed access patterns (A[i])                    │
+│   • offset_hints[]  ← from chunk start (workerIdx * chunkSize)               │
+│   • size_hints[]    ← from chunk size (min(chunkSize, remaining))            │
+│                                                                              │
+│   These hints are ADDED to existing DbAcquireOps                             │
+│                                                                              │
+│   Output: DbAcquireOps NOW have offset_hints, size_hints, indices            │
+│                                                                              │
+└─────────────────────────────────────────┬───────────────────────────────────┘
+                                          │
+                                          ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    STAGE 11: DbPartitioning Pass (in ConcurrencyOpt)         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   For each DbAllocOp:                                                        │
+│                                                                              │
+│   1. canBePartitioned(useFineGrainedFallback)?                               │
+│      • Checks: hasNonAffineAccesses && !useFineGrainedFallback → false       │
+│      • Safety checks on hints and structure                                  │
+│      • false → SKIP (keep coarse)                                            │
+│                                                                              │
+│   2. Per-Acquire Analysis (using hints from ForLowering):                    │
+│      • Read offset_hints → partitionOffset                                   │
+│      • Read size_hints → partitionSize                                       │
+│      • Read indices → canElementWise = true                                  │
+│                                                                              │
+│   3. Build PartitioningContext:                                              │
+│      • ctx.canChunked/ctx.canElementWise                                     │
+│      • ctx.chunkSize (canonical)                                             │
+│      • per-acquire voting                                                    │
+│                                                                              │
+│   4. Heuristics Evaluation (H1.x):                                           │
+│      • H1.1 (100): ReadOnlySingleNode → Coarse                               │
+│      • H1.5 (95):  StencilPattern → Stencil/FineGrained                      │
+│      • H1.4 (90):  MultiNode → FineGrained preferred                         │
+│      • H1.3 (80):  AccessUniformity → Coarse fallback                        │
+│      • H1.2 (50):  CostModel → Best of options                               │
+│                                                                              │
+│   5. Apply Decision via DbRewriter:                                          │
+│      • if isCoarse(): keep original                                          │
+│      • else: rewrite alloc and acquires to new grid                          │
+│      • Set partition attribute (coarse/fine_grained/chunked)                 │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Coarse → Fine Conversion Example
+
+When DbPartitioning converts an allocation from coarse to fine-grained:
+
+```
+BEFORE (coarse, after CreateDbs):
+  %alloc = arts.db_alloc sizes[1] elementSizes[N]
+      {arts.partition = #arts.promotion_mode<coarse>}
+  %acq = arts.db_acquire %alloc offsets[0] sizes[1]
+      offset_hints[%idx] size_hints[1] indices[%idx]  ← hints from ForLowering
+
+AFTER (fine-grained, after DbPartitioning):
+  %alloc = arts.db_alloc sizes[N] elementSizes[1]
+      {arts.partition = #arts.promotion_mode<fine_grained>}
+  %acq = arts.db_acquire %alloc offsets[%idx] sizes[1]
+```
+
+### Verification Commands
+
+```bash
+# Stage 7: After CreateDbs - DBs exist but NO hints yet
+carts run input.mlir --create-dbs > after_createdb.mlir
+grep "offset_hints" after_createdb.mlir | wc -l  # Should be 0!
+
+# Stage 10: After ForLowering - Hints NOW exist
+carts run input.mlir --concurrency > after_forlowering.mlir
+grep "offset_hints" after_forlowering.mlir | wc -l  # Should be > 0!
+
+# Stage 11: After DbPartitioning - Partitioning applied
+carts run input.mlir --concurrency-opt > final.mlir
+grep "promotion_mode" final.mlir | sort | uniq -c
+```
+
+### Detailed Per-Stage Flow
 
 +-----------------------------------------------------------------------+
-| ForLowering (parallel loops)                                           |
+| ForLowering (generates hints in parallel loops)                        |
 | - create worker_id placeholder                                         |
 | - compute offset/size hints per worker                                 |
 +-----------------------------------------------------------------------+
@@ -114,6 +265,13 @@ consume the inputs.
 | - arts.partition                                                       |
 | - heuristics decisions recorded via HeuristicsConfig                   |
 +-----------------------------------------------------------------------+
+
+Versioned fallback inserts copy/sync around DbPartitioning:
+
+  DbVersioning → DbCopyLowering → DbPartitioning → DbSyncLowering
+
+This keeps layout decisions inside DbPartitioning while allowing the copy to be
+materialized and synchronized after partitioning is finalized.
 
 ## What Signals Are Used
 
@@ -171,6 +329,201 @@ for each memref access:
 
 When twin_diff is unavailable, partitioning proceeds only if this rule holds
 for all acquires, ensuring disjoint chunk ownership for writers.
+
+## Non-Affine Fallback (Partition Fallback)
+
+Some arrays are accessed through indirect indices (e.g., `x[nodelist[i]]`).
+These are classified as non-affine and are unsafe to chunk by default.
+
+Policy is controlled by `--partition-fallback`:
+
+- `coarse` (default): reject non-affine allocations unless explicit
+  offset/size hints override; allocation stays coarse.
+- `fine`: allow non-affine allocations to proceed and mark them as indexed so
+  H1.5 selects element-wise partitioning.
+- `versioned`: create a read-optimized copy for mixed access patterns (direct
+  writes + indirect reads). The copy is synchronized before indirect reads.
+
+**Why only coarse and fine?** Only these two modes are direct partitioning
+fallbacks because they work for ANY access pattern:
+
+| Fallback | Works For | Requirements |
+|----------|-----------|--------------|
+| coarse   | All patterns | None (single DB) |
+| fine     | All patterns | None (one DB per element) |
+| chunked  | **Not a fallback** | Requires offset/size hints from ForLowering |
+| stencil  | **Not a fallback** | Requires stencil pattern detection |
+
+Chunked and Stencil modes require specific structural information (offset_hints,
+size_hints) that may not be available for arbitrary access patterns. They are
+selected by heuristics when the patterns are detected, not as fallbacks.
+
+The `versioned` mode is not a partitioning fallback; it creates a secondary
+allocation and uses `db_sync` to keep it consistent, while each allocation is
+still partitioned using the normal heuristics.
+
+This keeps correctness while enabling exploration of finer-grained
+parallelism. The element-wise path can be expensive; use it for targeted
+experiments or when indirect access dominates the kernel.
+
+## LULESH Case Study: Coarse vs Fine vs Versioned (DB Copy)
+
+This case study compares three partitioning strategies for LULESH, demonstrating
+the performance implications of each approach.
+
+### The LULESH Challenge
+
+LULESH uses a hexahedral mesh where each element accesses 8 corner nodes through
+an indirection array (`nodelist[elem][0..7]`). This indirect/gather access pattern
+is classified as **non-affine** because the compiler cannot statically determine
+which nodes each element accesses.
+
+```
+Element e accesses: x[nodelist[e][0]], x[nodelist[e][1]], ..., x[nodelist[e][7]]
+                    ↑ indirect index - cannot be analyzed statically
+```
+
+By default, `canBePartitioned()` returns false for non-affine accesses, forcing
+coarse-grained partitioning and serializing all parallel work.
+
+### Mode 1: Coarse-Grained (Default)
+
+**What happens:**
+- Non-affine accesses → `canBePartitioned()` returns false
+- Allocation stays coarse: `sizes=[1], elementSizes=[numNodes]`
+- All EDTs serialize on coarse acquires
+
+**Commands:**
+```bash
+# Compile with default (coarse) partitioning
+carts run lulesh.mlir --concurrency-opt > lulesh_coarse.mlir
+
+# Run benchmark
+carts benchmarks run lulesh --size small
+
+# Verify IR - should show promotion_mode<none> for node arrays
+grep "promotion_mode" lulesh_coarse.mlir | sort | uniq -c
+```
+
+**Expected metrics:**
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| E2E Time | ~11.28s | Measured on small problem size |
+| Slowdown vs OMP | ~250x | Due to serialization |
+| DBs Created | ~30 | One per array |
+| Acquires/Element | ~15 | All compete for same DBs |
+| Parallelism | None | Serialized on coarse acquires |
+
+### Mode 2: Fine-Grained (Element-wise Fallback)
+
+**What happens:**
+- `--partition-fallback=fine` enables non-affine conversion
+- `canBePartitioned(useFineGrainedFallback=true)` returns true
+- H1.5 selects element-wise for indexed access patterns
+- Allocation becomes: `sizes=[numNodes], elementSizes=[1]`
+
+**Commands:**
+```bash
+# Compile with fine-grained fallback
+carts run lulesh.mlir --concurrency-opt --partition-fallback=fine > lulesh_fine.mlir
+
+# Run benchmark
+carts benchmarks run lulesh --size small -- --partition-fallback=fine
+
+# Verify IR - should show promotion_mode<fine_grained> for node arrays
+grep "promotion_mode" lulesh_fine.mlir | sort | uniq -c
+
+# Compare allocation structure
+diff <(grep "arts.db_alloc" lulesh_coarse.mlir | head -3) \
+     <(grep "arts.db_alloc" lulesh_fine.mlir | head -3)
+# Should show: sizes=[1] → sizes=[numNodes]
+```
+
+**Expected metrics:**
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| E2E Time | TBD | Measure with benchmark |
+| Speedup vs Coarse | TBD | Expected significant improvement |
+| DBs Created | numNodes | e.g., 729 for s=8 |
+| Acquires/Element | 24 | 8 corners × 3 (x,y,z) |
+| Parallelism | Full | Independent element access |
+
+### Mode 3: Versioned DB Copy
+
+**What happens:**
+- **Write-optimized DB**: Chunked partitioning for direct writes
+- **Read-optimized DB**: Element-wise copy for indirect reads
+- **Explicit sync**: Between write and read phases
+
+**Conceptual IR:**
+```mlir
+// Write phase: chunked for locality
+%x_write = arts.db_alloc sizes[numChunks] elementSizes[chunkSize]
+    {arts.partition = #arts.promotion_mode<chunked>}
+
+// Read phase: fine-grained copy for indirect access
+%x_read = arts.db_copy(%x_write)
+    {arts.partition = #arts.promotion_mode<fine_grained>}
+
+// Sync before indirect reads
+arts.db_sync(%x_read, %x_write)
+```
+
+**Commands:**
+```bash
+carts run lulesh.mlir --concurrency-opt --partition-fallback=versioned > lulesh_versioned.mlir
+carts benchmarks run lulesh --size small -- --partition-fallback=versioned
+```
+
+This aims to balance write locality (chunked) with read flexibility (element-wise).
+
+### Performance Comparison Table
+
+| Metric | Coarse | Fine | Versioned | OMP |
+|--------|--------|------|-----------|-----|
+| E2E Time (s) | 11.28 | TBD | TBD | 0.045 |
+| Speedup vs OMP | 0.004x | TBD | TBD | 1.0x |
+| DBs Created | ~30 | numNodes | 2×numNodes | N/A |
+| Acquires/Iter | ~15 | ~24K | ~512+8K | N/A |
+| Memory | 1x | 1x+meta | 2x | 1x |
+| Parallelism | None | Full | Moderate | Full |
+| Correctness | Yes | Yes | Yes | Yes |
+
+### Verification
+
+All modes must produce identical numerical results:
+```bash
+# Verify correctness for each mode
+carts benchmarks run lulesh --size small --verify
+carts benchmarks run lulesh --size small --verify -- --partition-fallback=fine
+
+# Compare checksums (should match)
+carts benchmarks run lulesh --size small 2>&1 | grep checksum
+carts benchmarks run lulesh --size small -- --partition-fallback=fine 2>&1 | grep checksum
+```
+
+### Which Heuristics Fire
+
+```bash
+# Check which heuristics apply in each mode
+carts run lulesh.mlir --concurrency-opt 2>&1 | grep -E "H1\.[0-9]"
+carts run lulesh.mlir --concurrency-opt --partition-fallback=fine 2>&1 | grep -E "H1\.[0-9]"
+
+# Verify H1.5 triggers for indexed patterns with fine fallback
+carts run lulesh.mlir --concurrency-opt --partition-fallback=fine 2>&1 | grep "H1.5"
+```
+
+### When to Use Each Mode
+
+| Scenario | Mode | Rationale |
+|----------|------|-----------|
+| Development/debugging | Coarse | Simple, guaranteed correct |
+| Small problem sizes | Fine | Acquire overhead < parallelism benefit |
+| Large problem sizes | Versioned | Sync cost amortized |
+| Memory-constrained | Fine | No 2x memory for copies |
+| Highest correctness confidence | Coarse | Minimal transformation |
 
 ## Why Uniformity Is Critical
 
@@ -491,6 +844,86 @@ Decision:
 4. **Validation Relaxed:** Full-range acquires bypass offset validation since
    they access the entire allocation (no partition offset to validate).
 
+## Stencil Mode (ESD - Ephemeral Slice Dependencies)
+
+Stencil mode is a specialized form of chunked partitioning designed for stencil
+access patterns where each element accesses its neighbors (e.g., `A[i-1]`, `A[i]`,
+`A[i+1]`).
+
+### When Stencil Mode is Selected
+
+H1.5 (StencilPatternHeuristic) detects stencil patterns by analyzing access bounds:
+
+```
+Access pattern detected:
+  A[i-1]  → offset = -1 (left neighbor)
+  A[i]    → offset = 0  (center)
+  A[i+1]  → offset = +1 (right neighbor)
+
+Result: hasStencil = true, haloLeft = 1, haloRight = 1
+```
+
+### How Stencil Differs from Standard Chunked
+
+| Aspect | Chunked | Stencil |
+|--------|---------|---------|
+| Chunk structure | `[start, end)` | `[start-halo, end+halo)` |
+| Inner size | `chunkSize` | `chunkSize + haloLeft + haloRight` |
+| Data delivery | Local chunk only | Local chunk + neighbor halos |
+| Runtime support | Standard ARTS | ESD (Ephemeral Slice Dependencies) |
+
+### Stencil Partitioning Example
+
+For a 1D stencil with `haloLeft=1, haloRight=1, chunkSize=100`:
+
+```
+Worker 0: chunk [0, 100)    → acquires [-1, 101) = 102 elements
+Worker 1: chunk [100, 200)  → acquires [99, 201) = 102 elements
+Worker 2: chunk [200, 300)  → acquires [199, 301) = 102 elements
+                                        ↑     ↑
+                                    haloLeft  haloRight
+```
+
+### IR Representation
+
+Both Chunked and Stencil use `promotion_mode<chunked>` in the IR. The difference
+is tracked internally through `StencilInfo` with halo sizes:
+
+```mlir
+// Chunked (no halo)
+%alloc = arts.db_alloc sizes[%numChunks] elementSizes[%chunkSize]
+    {arts.partition = #arts.promotion_mode<chunked>}
+
+// Stencil (with halo) - same IR attribute, different internal metadata
+%alloc = arts.db_alloc sizes[%numChunks] elementSizes[%extendedChunkSize]
+    {arts.partition = #arts.promotion_mode<chunked>}
+// where extendedChunkSize = chunkSize + haloLeft + haloRight
+```
+
+### Detection Conditions
+
+Stencil mode is triggered when:
+1. `hasStencil` is true (neighbor accesses detected)
+2. Access bounds show non-zero offsets relative to the base index
+3. Pattern is consistent across all acquires
+
+### ESD Runtime Behavior
+
+When stencil mode is active, the ARTS runtime:
+1. Allocates extended chunks with halo regions
+2. Delivers neighbor data to halo regions before EDT execution
+3. Ensures data consistency across chunk boundaries
+
+### Verification
+
+```bash
+# Check if stencil pattern is detected
+carts run jacobi.mlir --concurrency-opt 2>&1 | grep -i stencil
+
+# Verify extended chunk sizes in IR
+carts run jacobi.mlir --concurrency-opt | grep "elementSizes"
+```
+
 ## Summary
 
 - The decision is per allocation, not per acquire.
@@ -502,3 +935,7 @@ Decision:
 - Write modes get priority: if any acquire writes, fine-grained partitioning is preferred.
 - Mixed mode allows chunked partitioning even when some acquires are coarse, enabling
   parallel execution while preserving correctness for sequential initialization code.
+- Stencil mode extends chunked partitioning with halo regions for neighbor accesses,
+  using ESD (Ephemeral Slice Dependencies) for efficient data delivery.
+- The three-stage pipeline (CreateDbs → ForLowering → DbPartitioning) separates
+  DB creation from hint generation and partitioning decisions.

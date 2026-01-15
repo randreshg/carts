@@ -1,35 +1,54 @@
 ///==========================================================================///
-/// File: DbElementWiseRewriter.cpp
+/// File: DbElementWiseIndexer.cpp
+///
+/// Element-wise index localization for datablock partitioning.
+///
+/// Example transformation (N=100 elements, 4 workers):
+///
+///   BEFORE (single allocation, global indices):
+///     %db = arts.db_alloc memref<100xf64>
+///     arts.edt {
+///       %ref = arts.db_ref %db[%i]           // global element i
+///       memref.load %ref[%j]                 // element-local index j
+///     }
+///
+///   AFTER (partitioned, local indices):
+///     %db = arts.db_alloc memref<100x1xf64>  // outer=100, inner=1
+///     arts.edt(%elemOffset, %elemSize) {
+///       %local = %i - %elemOffset            // localize index
+///       %ref = arts.db_ref %db[%local]       // worker-local element
+///       memref.load %ref[%j]                 // unchanged element-local
+///     }
+///
+/// Index localization formula: local = global - elemOffset
+///
+/// For linearized access (single index into multi-dim element):
+///   localLinear = globalLinear - (elemOffset * stride)
 ///==========================================================================///
 
-#include "arts/Transforms/Datablock/DbElementWiseRewriter.h"
+#include "arts/Transforms/Datablock/ElementWise/DbElementWiseIndexer.h"
 #include "arts/Codegen/ArtsCodegen.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "llvm/Support/Debug.h"
-
-#define DEBUG_TYPE "db_transforms"
 
 ARTS_DEBUG_SETUP(db_transforms);
 
 using namespace mlir;
 using namespace mlir::arts;
 
-/// Note: getIndicesFromOp() is now in DbRewriterBase.h
-
-DbElementWiseRewriter::DbElementWiseRewriter(Value elemOffset, Value elemSize,
-                                             unsigned outerRank,
-                                             unsigned innerRank,
-                                             ValueRange oldElementSizes)
-    : DbRewriterBase(outerRank, innerRank), elemOffset_(elemOffset),
+DbElementWiseIndexer::DbElementWiseIndexer(Value elemOffset, Value elemSize,
+                                           unsigned outerRank,
+                                           unsigned innerRank,
+                                           ValueRange oldElementSizes)
+    : DbIndexerBase(outerRank, innerRank), elemOffset_(elemOffset),
       elemSize_(elemSize),
       oldElementSizes_(oldElementSizes.begin(), oldElementSizes.end()) {}
 
-LocalizedIndices DbElementWiseRewriter::splitIndices(ValueRange globalIndices,
-                                                     OpBuilder &builder,
-                                                     Location loc) {
+LocalizedIndices DbElementWiseIndexer::splitIndices(ValueRange globalIndices,
+                                                    OpBuilder &builder,
+                                                    Location loc) {
   LocalizedIndices result;
   auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
 
@@ -54,13 +73,11 @@ LocalizedIndices DbElementWiseRewriter::splitIndices(ValueRange globalIndices,
   return result;
 }
 
-LocalizedIndices DbElementWiseRewriter::localize(ArrayRef<Value> globalIndices,
-                                                 OpBuilder &builder,
-                                                 Location loc) {
-  ARTS_DEBUG("DbElementWiseRewriter::localize with " << globalIndices.size()
-                                                     << " indices");
-  LLVM_DEBUG(llvm::dbgs() << "DbElementWiseRewriter::localize with "
-                          << globalIndices.size() << " indices\n");
+LocalizedIndices DbElementWiseIndexer::localize(ArrayRef<Value> globalIndices,
+                                                OpBuilder &builder,
+                                                Location loc) {
+  ARTS_DEBUG("DbElementWiseIndexer::localize with " << globalIndices.size()
+                                                    << " indices");
 
   if (outerRank_ == 0)
     return splitIndices(ValueRange(globalIndices), builder, loc);
@@ -76,21 +93,18 @@ LocalizedIndices DbElementWiseRewriter::localize(ArrayRef<Value> globalIndices,
         builder.create<arith::SubIOp>(loc, result.dbRefIndices[0], elemOffset_);
   }
 
-  LLVM_DEBUG(llvm::dbgs() << "  -> dbRef: " << result.dbRefIndices.size()
-                          << ", memref: " << result.memrefIndices.size()
-                          << "\n");
+  ARTS_DEBUG("  -> dbRef: " << result.dbRefIndices.size()
+                            << ", memref: " << result.memrefIndices.size());
   return result;
 }
 
 LocalizedIndices
-DbElementWiseRewriter::localizeLinearized(Value globalLinearIndex, Value stride,
-                                          OpBuilder &builder, Location loc) {
+DbElementWiseIndexer::localizeLinearized(Value globalLinearIndex, Value stride,
+                                         OpBuilder &builder, Location loc) {
   LocalizedIndices result;
 
   ARTS_DEBUG(
-      "DbElementWiseRewriter::localizeLinearized - scaling offset by stride");
-  LLVM_DEBUG(llvm::dbgs() << "DbElementWiseRewriter::localizeLinearized\n"
-                          << "  THE KEY FIX: scaling offset by stride!\n");
+      "DbElementWiseIndexer::localizeLinearized - scaling offset by stride");
 
   ///   globalLinear = (elemOffset + localRow) * stride + col
   ///   localLinear  = localRow * stride + col
@@ -112,17 +126,14 @@ DbElementWiseRewriter::localizeLinearized(Value globalLinearIndex, Value stride,
   return result;
 }
 
-LocalizedIndices DbElementWiseRewriter::localizeForFineGrained(
+LocalizedIndices DbElementWiseIndexer::localizeForFineGrained(
     ValueRange globalIndices, ValueRange acquireIndices,
     ValueRange acquireOffsets, OpBuilder &builder, Location loc) {
   LocalizedIndices result;
   auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
 
-  ARTS_DEBUG("DbElementWiseRewriter::localizeForFineGrained with "
+  ARTS_DEBUG("DbElementWiseIndexer::localizeForFineGrained with "
              << globalIndices.size() << " indices");
-  LLVM_DEBUG(
-      llvm::dbgs() << "DbElementWiseRewriter::localizeForFineGrained with "
-                   << globalIndices.size() << " indices\n");
 
   if (globalIndices.empty()) {
     result.dbRefIndices.push_back(zero());
@@ -156,7 +167,7 @@ LocalizedIndices DbElementWiseRewriter::localizeForFineGrained(
   return result;
 }
 
-void DbElementWiseRewriter::rewriteAccessWithDbPattern(
+void DbElementWiseIndexer::transformAccess(
     Operation *op, Value dbPtr, Type elementType, ArtsCodegen &AC,
     llvm::SetVector<Operation *> &opsToRemove) {
   if (!isa<memref::LoadOp, memref::StoreOp>(op))
@@ -183,12 +194,11 @@ void DbElementWiseRewriter::rewriteAccessWithDbPattern(
   opsToRemove.insert(op);
 }
 
-void DbElementWiseRewriter::rebaseOps(
+void DbElementWiseIndexer::transformOps(
     ArrayRef<Operation *> ops, Value dbPtr, Type elementType, ArtsCodegen &AC,
     llvm::SetVector<Operation *> &opsToRemove) {
-  ARTS_DEBUG("DbElementWiseRewriter::rebaseOps with " << ops.size() << " ops");
-  LLVM_DEBUG(llvm::dbgs() << "DbElementWiseRewriter::rebaseOps: processing "
-                          << ops.size() << " operations\n");
+  ARTS_DEBUG("DbElementWiseIndexer::transformOps with " << ops.size()
+                                                        << " ops");
 
   for (Operation *op : ops) {
     OpBuilder::InsertionGuard IG(AC.getBuilder());
@@ -197,8 +207,8 @@ void DbElementWiseRewriter::rebaseOps(
 
     /// Handle DbRefOp specially - rewrite its users
     if (auto dbRef = dyn_cast<DbRefOp>(op)) {
-      rewriteDbRefUsers(dbRef, dbPtr, elementType, AC.getBuilder(),
-                        opsToRemove);
+      transformDbRefUsers(dbRef, dbPtr, elementType, AC.getBuilder(),
+                          opsToRemove);
       continue;
     }
 
@@ -223,15 +233,12 @@ void DbElementWiseRewriter::rebaseOps(
                 DatablockUtils::getStaticStride(oldElementSizes_)) {
           if (*staticStride > 1) {
             isLinearized = true;
-            LLVM_DEBUG(llvm::dbgs()
-                       << "DbElementWiseRewriter: linearized stride="
-                       << *staticStride << " from oldElementSizes\n");
+            ARTS_DEBUG("transformOps: linearized stride=" << *staticStride);
           }
         } else {
           /// Dynamic stride - always use it
           isLinearized = true;
-          LLVM_DEBUG(llvm::dbgs() << "DbElementWiseRewriter: using dynamic "
-                                     "stride from oldElementSizes\n");
+          ARTS_DEBUG("transformOps: using dynamic stride from oldElementSizes");
         }
       }
     }
@@ -260,10 +267,10 @@ void DbElementWiseRewriter::rebaseOps(
   }
 }
 
-void DbElementWiseRewriter::rewriteDbRefUsers(
+void DbElementWiseIndexer::transformDbRefUsers(
     DbRefOp ref, Value blockArg, Type newElementType, OpBuilder &builder,
     llvm::SetVector<Operation *> &opsToRemove) {
-  LLVM_DEBUG(llvm::dbgs() << "DbElementWiseRewriter::rewriteDbRefUsers\n");
+  ARTS_DEBUG("DbElementWiseIndexer::transformDbRefUsers");
 
   SmallVector<Operation *> refUsers(ref.getResult().getUsers().begin(),
                                     ref.getResult().getUsers().end());
@@ -295,15 +302,14 @@ void DbElementWiseRewriter::rewriteDbRefUsers(
                 DatablockUtils::getStaticStride(oldElementSizes_)) {
           if (*staticStride > 1) {
             isLinearized = true;
-            LLVM_DEBUG(llvm::dbgs()
-                       << "DbElementWiseRewriter: linearized stride="
-                       << *staticStride << " from oldElementSizes\n");
+            ARTS_DEBUG(
+                "transformDbRefUsers: linearized stride=" << *staticStride);
           }
         } else {
           /// Dynamic stride - always use it
           isLinearized = true;
-          LLVM_DEBUG(llvm::dbgs() << "DbElementWiseRewriter: using dynamic "
-                                     "stride from oldElementSizes\n");
+          ARTS_DEBUG(
+              "transformDbRefUsers: using dynamic stride from oldElementSizes");
         }
       }
     }
@@ -335,15 +341,15 @@ void DbElementWiseRewriter::rewriteDbRefUsers(
   opsToRemove.insert(ref.getOperation());
 }
 
-SmallVector<Value> DbElementWiseRewriter::localizeCoordinates(
+SmallVector<Value> DbElementWiseIndexer::localizeCoordinates(
     ArrayRef<Value> globalIndices, ArrayRef<Value> sliceOffsets,
     unsigned numIndexedDims, Type elementType, OpBuilder &builder,
     Location loc) {
   SmallVector<Value> result;
   auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
 
-  LLVM_DEBUG(llvm::dbgs() << "DbElementWiseRewriter::localizeCoordinates with "
-                          << globalIndices.size() << " indices\n");
+  ARTS_DEBUG("DbElementWiseIndexer::localizeCoordinates with "
+             << globalIndices.size() << " indices");
 
   /// Handle empty case
   if (globalIndices.empty()) {
@@ -368,13 +374,10 @@ SmallVector<Value> DbElementWiseRewriter::localizeCoordinates(
 
         if (auto staticStride =
                 DatablockUtils::getStaticStride(oldElementSizes_)) {
-          LLVM_DEBUG(llvm::dbgs()
-                     << "  LINEARIZED: scaling offset by stride="
-                     << *staticStride << " from oldElementSizes\n");
+          ARTS_DEBUG(
+              "  localizeCoordinates: LINEARIZED, stride=" << *staticStride);
         } else {
-          LLVM_DEBUG(
-              llvm::dbgs()
-              << "  LINEARIZED: using dynamic stride from oldElementSizes\n");
+          ARTS_DEBUG("  localizeCoordinates: LINEARIZED, dynamic stride");
         }
         result.push_back(localLinear);
         return result;
@@ -408,10 +411,10 @@ SmallVector<Value> DbElementWiseRewriter::localizeCoordinates(
   return result;
 }
 
-void DbElementWiseRewriter::rewriteUsesInParentRegion(
+void DbElementWiseIndexer::transformUsesInParentRegion(
     Operation *alloc, DbAllocOp dbAlloc, ArtsCodegen &AC,
     llvm::SetVector<Operation *> &opsToRemove) {
-  ARTS_DEBUG("DbElementWiseRewriter::rewriteUsesInParentRegion");
+  ARTS_DEBUG("DbElementWiseIndexer::transformUsesInParentRegion");
 
   /// Collect users of the original allocation
   SmallVector<Operation *> users;
@@ -438,6 +441,5 @@ void DbElementWiseRewriter::rewriteUsesInParentRegion(
   Type elementMemRefType = dbAlloc.getAllocatedElementType();
 
   for (Operation *op : users)
-    rewriteAccessWithDbPattern(op, dbAlloc.getPtr(), elementMemRefType, AC,
-                               opsToRemove);
+    transformAccess(op, dbAlloc.getPtr(), elementMemRefType, AC, opsToRemove);
 }

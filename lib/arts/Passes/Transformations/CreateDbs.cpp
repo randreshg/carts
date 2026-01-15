@@ -39,9 +39,9 @@
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/ArtsDialect.h"
 #include "arts/Codegen/ArtsCodegen.h"
-#include "arts/Transforms/Datablock/DbChunkedRewriter.h"
-#include "arts/Transforms/Datablock/DbElementWiseRewriter.h"
+#include "arts/Transforms/Datablock/Chunked/DbChunkedIndexer.h"
 #include "arts/Transforms/Datablock/DbRewriter.h"
+#include "arts/Transforms/Datablock/ElementWise/DbElementWiseIndexer.h"
 #include "arts/Transforms/DbTransforms.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DatablockUtils.h"
@@ -139,12 +139,14 @@ private:
       /// Minimum number of pinned dimensions across all accesses
       unsigned pinnedDimCount = 0;
 
-      /// Chunk dependency tracking (from DbControlOp.offsets/sizes)
-      bool hasChunkDeps = false;     /// Any deps have offsets/sizes?
-      unsigned chunkDimCount = 0;    /// Number of chunk dimensions
-      SmallVector<Value> chunkSizes; /// SSA values for chunk sizes
-      bool chunkSizesAreConsistent =
-          true; /// All deps use same chunk size count?
+      /// Any deps have offsets/sizes?
+      bool hasChunkDeps = false;
+      /// Number of chunk dimensions
+      unsigned chunkDimCount = 0;
+      /// SSA values for chunk sizes
+      SmallVector<Value> chunkSizes;
+      /// All deps use same chunk size count?
+      bool chunkSizesAreConsistent = true;
     };
 
     AccessPatternInfo getAccessPatternInfo() const {
@@ -469,13 +471,8 @@ void CreateDbsPass::collectControlDbOps() {
                << " offsets, " << sizes.size() << " sizes");
 
     /// Get user EDT
-    EdtOp userEdt = nullptr;
-    for (Operation *user : dbControl.getResult().getUsers()) {
-      if (auto edt = dyn_cast<EdtOp>(user)) {
-        userEdt = edt;
-        break;
-      }
-    }
+    EdtOp userEdt =
+        dyn_cast_or_null<EdtOp>(DatablockUtils::findUserEdt(dbControl));
 
     SmallVector<Value, 4> indexValues(indices.begin(), indices.end());
     SmallVector<Value, 4> offsetValues(offsets.begin(), offsets.end());
@@ -745,8 +742,8 @@ void CreateDbsPass::createDbAllocOps() {
     /// Set partition attribute based on heuristic decision
     PromotionMode promotionMode = decision.isChunked() ? PromotionMode::chunked
                                   : decision.isFineGrained()
-                                      ? PromotionMode::element_wise
-                                      : PromotionMode::none;
+                                      ? PromotionMode::fine_grained
+                                      : PromotionMode::coarse;
     setPartitionMode(dbAllocOp, promotionMode);
     ARTS_DEBUG(
         " - Set partition attribute: " << static_cast<int>(promotionMode));
@@ -761,17 +758,45 @@ void CreateDbsPass::createDbAllocOps() {
 
     /// Create and store the rewrite plan directly from heuristic decision
     DbRewritePlan plan(decision);
-    if (decision.isChunked())
-      plan.chunkSize = accessPatternInfo.chunkSizes[0];
+    if (decision.isChunked()) {
+      Value chunkSize = accessPatternInfo.chunkSizes.empty()
+                            ? Value()
+                            : accessPatternInfo.chunkSizes[0];
+      Value offsetHint;
+      Value sizeHint;
+      for (const auto &[edtOp, deps] : info.edtToDeps) {
+        for (const auto &dep : deps) {
+          if (dep.offsets.empty() || dep.sizes.empty())
+            continue;
+          offsetHint = dep.offsets.front();
+          sizeHint = dep.sizes.front();
+          if (Value base = DatablockUtils::extractBaseChunkSizeCandidate(
+                  offsetHint, sizeHint)) {
+            chunkSize = base;
+          }
+          break;
+        }
+        if (offsetHint)
+          break;
+      }
+
+      Value one = AC->createIndexConstant(1, loc);
+      if (!chunkSize) {
+        ARTS_DEBUG("  Missing chunk size; defaulting to 1");
+        chunkSize = one;
+      } else {
+        /// Clamp to at least 1 to avoid divide-by-zero in chunked indexing.
+        chunkSize = AC->create<arith::MaxUIOp>(loc, chunkSize, one);
+      }
+      plan.chunkSize = chunkSize;
+    }
     info.rewritePlan = plan;
 
     /// Record allocation strategy decision for diagnostics
-    std::string modeName =
-        plan.mode == RewriterMode::Chunked
-            ? "Chunked"
-            : (plan.outerRank > 0 ? "FineGrained" : "Coarse");
     heuristics.recordDecision(
-        "AllocationStrategy", true, "Selected " + modeName + " allocation mode",
+        "AllocationStrategy", true,
+        "Selected " + std::string(getRewriterModeName(plan.mode)) +
+            " allocation mode",
         alloc,
         {{"outerRank", static_cast<int64_t>(plan.outerRank)},
          {"innerRank", static_cast<int64_t>(plan.innerRank)}});
@@ -796,14 +821,14 @@ void CreateDbsPass::createDbAllocOps() {
       Value elemSize = AC->createIndexConstant(1, loc);
 
       if (plan.mode == RewriterMode::Chunked) {
-        DbChunkedRewriter rewriter(plan.chunkSize, startChunk, elemOffset,
-                                   plan.outerRank, plan.innerRank);
-        rewriter.rewriteUsesInParentRegion(alloc, dbAllocOp, *AC, opsToRemove);
+        DbChunkedIndexer indexer(plan.chunkSize, startChunk, elemOffset,
+                                 plan.outerRank, plan.innerRank);
+        indexer.transformUsesInParentRegion(alloc, dbAllocOp, *AC, opsToRemove);
       } else {
-        DbElementWiseRewriter rewriter(elemOffset, elemSize, plan.outerRank,
-                                       plan.innerRank, {});
+        DbElementWiseIndexer indexer(elemOffset, elemSize, plan.outerRank,
+                                     plan.innerRank, {});
         /// Step 1: Rewrite parent region uses (skips EDTs by design)
-        rewriter.rewriteUsesInParentRegion(alloc, dbAllocOp, *AC, opsToRemove);
+        indexer.transformUsesInParentRegion(alloc, dbAllocOp, *AC, opsToRemove);
 
         /// Step 2: For coarse mode, also rewrite EDT uses without explicit deps
         if (plan.outerRank == 0) {
@@ -819,8 +844,8 @@ void CreateDbsPass::createDbAllocOps() {
             }
           }
           if (!edtUsesToRewrite.empty()) {
-            rewriter.rebaseOps(edtUsesToRewrite, dbAllocOp.getPtr(),
-                               elementMemRefType, *AC, opsToRemove);
+            indexer.transformOps(edtUsesToRewrite, dbAllocOp.getPtr(),
+                                 elementMemRefType, *AC, opsToRemove);
           }
         }
       }
@@ -1299,11 +1324,10 @@ void CreateDbsPass::rewriteUsesInParentEdt(MemrefInfo &memrefInfo) {
   unsigned innerRank = elementMemRefType.cast<MemRefType>().getRank();
   Value elemOffset = AC->createIndexConstant(0, dbAlloc.getLoc());
   Value elemSize = AC->createIndexConstant(1, dbAlloc.getLoc());
-  DbElementWiseRewriter rewriter(elemOffset, elemSize, outerRank, innerRank,
-                                 {});
+  DbElementWiseIndexer indexer(elemOffset, elemSize, outerRank, innerRank, {});
   for (Operation *user : users)
-    rewriter.rewriteAccessWithDbPattern(user, dbAlloc.getPtr(),
-                                        elementMemRefType, *AC, opsToRemove);
+    indexer.transformAccess(user, dbAlloc.getPtr(), elementMemRefType, *AC,
+                            opsToRemove);
 }
 
 /// Rewrite all uses of a coarse-grained allocation in the parent region.
@@ -1332,12 +1356,12 @@ void CreateDbsPass::rewriteUsesEverywhereCoarse(Operation *alloc,
   /// Coarse-grained: outerCount=0, all indices go to inner load/store
   Value elemOffset = AC->createIndexConstant(0, dbAlloc.getLoc());
   Value elemSize = AC->createIndexConstant(1, dbAlloc.getLoc());
-  DbElementWiseRewriter rewriter(elemOffset, elemSize, 0,
-                                 elementMemRefType.cast<MemRefType>().getRank(),
-                                 {});
+  DbElementWiseIndexer indexer(elemOffset, elemSize, 0,
+                               elementMemRefType.cast<MemRefType>().getRank(),
+                               {});
   for (Operation *user : users)
-    rewriter.rewriteAccessWithDbPattern(user, dbAlloc.getPtr(),
-                                        elementMemRefType, *AC, opsToRemove);
+    indexer.transformAccess(user, dbAlloc.getPtr(), elementMemRefType, *AC,
+                            opsToRemove);
 }
 
 ///===----------------------------------------------------------------------===///
@@ -1405,8 +1429,8 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
     }
 
     if (plan.mode == RewriterMode::Chunked) {
-      /// Chunked mode: Use DbChunkedRewriter with stored chunk size
-      ARTS_DEBUG(" - Using DbChunkedRewriter with stored plan");
+      /// Chunked mode: Use DbChunkedIndexer with stored chunk size
+      ARTS_DEBUG(" - Using DbChunkedIndexer with stored plan");
       Location loc = op->getLoc();
       Value startOffset = acquireOffsets.empty()
                               ? AC->createIndexConstant(0, loc)
@@ -1422,11 +1446,11 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
         if (auto acquireOp = dyn_cast<DbAcquireOp>(dbOp))
           chunkOuterRank = acquireOp.getSizes().size();
 
-      DbChunkedRewriter rewriter(plan.chunkSize, startChunk, elemOffset,
-                                 chunkOuterRank, innerRank);
+      DbChunkedIndexer indexer(plan.chunkSize, startChunk, elemOffset,
+                               chunkOuterRank, innerRank);
       llvm::SetVector<Operation *> localOpsToRemove;
-      rewriter.rebaseOps({op}, dbAcquireArg, elementMemRefType, *AC,
-                         localOpsToRemove);
+      indexer.transformOps({op}, dbAcquireArg, elementMemRefType, *AC,
+                           localOpsToRemove);
       for (Operation *toRemove : localOpsToRemove)
         opsToRemove.insert(toRemove);
       continue;
@@ -1435,11 +1459,11 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
     /// ElementWise mode
     Value elemOffset = AC->createIndexConstant(0, op->getLoc());
     Value elemSize = AC->createIndexConstant(1, op->getLoc());
-    DbElementWiseRewriter rewriter(elemOffset, elemSize, plan.outerRank,
-                                   innerRank, {});
+    DbElementWiseIndexer indexer(elemOffset, elemSize, plan.outerRank,
+                                 innerRank, {});
 
     if (auto load = dyn_cast<memref::LoadOp>(op)) {
-      auto localized = rewriter.localizeForFineGrained(
+      auto localized = indexer.localizeForFineGrained(
           load.getIndices(), acquireIndices, acquireOffsets, AC->getBuilder(),
           op->getLoc());
       auto dbRef = AC->create<DbRefOp>(op->getLoc(), elementMemRefType,
@@ -1449,7 +1473,7 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
       load.replaceAllUsesWith(newLoad.getResult());
       opsToRemove.insert(op);
     } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
-      auto localized = rewriter.localizeForFineGrained(
+      auto localized = indexer.localizeForFineGrained(
           store.getIndices(), acquireIndices, acquireOffsets, AC->getBuilder(),
           op->getLoc());
       auto dbRef = AC->create<DbRefOp>(op->getLoc(), elementMemRefType,
@@ -1459,8 +1483,8 @@ void CreateDbsPass::rewriteOpsToUseDbAcquire(
       opsToRemove.insert(op);
     } else {
       llvm::SetVector<Operation *> localOpsToRemove;
-      rewriter.rebaseOps({op}, dbAcquireArg, elementMemRefType, *AC,
-                         localOpsToRemove);
+      indexer.transformOps({op}, dbAcquireArg, elementMemRefType, *AC,
+                           localOpsToRemove);
       for (Operation *toRemove : localOpsToRemove)
         opsToRemove.insert(toRemove);
     }

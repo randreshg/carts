@@ -32,6 +32,7 @@ add_mlir_dialect_library(MLIRArtsTransforms
   Optimizations/ScalarReplacement.cpp
   Optimizations/Db.cpp
   Optimizations/DbPartitioning.cpp
+  Optimizations/DbVersioning.cpp
   Optimizations/Edt.cpp
   
   ${CARTS_TRANSFORMS_SOURCE_FILES}

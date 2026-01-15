@@ -62,6 +62,18 @@ inline void setPartitionMode(Operation *op, PromotionMode mode) {
               PromotionModeAttr::get(op->getContext(), mode));
 }
 
+inline llvm::StringRef getPartitionModeLabel(PromotionMode mode) {
+  switch (mode) {
+  case PromotionMode::coarse:
+    return "coarse";
+  case PromotionMode::chunked:
+    return "chunked";
+  case PromotionMode::fine_grained:
+    return "fine_grained";
+  }
+  return "unknown";
+}
+
 } // namespace arts
 } // namespace mlir
 

@@ -1,5 +1,5 @@
 ///==========================================================================///
-/// ArtsMetadataManager.h - Centralized Metadata Management
+/// File: ArtsMetadataManager.h
 ///
 /// Centralized interface for managing metadata collection, attachment, and
 /// recovery across MLIR operations.

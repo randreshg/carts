@@ -1,12 +1,8 @@
-///===----------------------------------------------------------------------===///
-// MemrefAnalyzer.h - Memory Reference Analysis for Metadata Collection
-///===----------------------------------------------------------------------===///
-//
-// This file defines the MemrefAnalyzer class, which performs comprehensive
-// analysis of memory allocations including access patterns, reuse distance,
-// and lifetime analysis.
-//
-///===----------------------------------------------------------------------===///
+///==========================================================================///
+/// File: MemrefAnalyzer.h
+///
+/// Memory Reference Analysis for Metadata Collection
+///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_METADATA_MEMREFANALYZER_H
 #define ARTS_ANALYSIS_METADATA_MEMREFANALYZER_H
@@ -28,7 +24,7 @@ class ArtsMetadataManager;
 class DependenceAnalyzer;
 
 ///===----------------------------------------------------------------------===///
-// ReuseAnalyzer - Stack distance algorithm for reuse distance computation
+/// ReuseAnalyzer - Stack distance algorithm for reuse distance computation
 ///===----------------------------------------------------------------------===///
 class ReuseAnalyzer {
 public:
@@ -50,7 +46,7 @@ private:
 };
 
 ///===----------------------------------------------------------------------===///
-// MemrefAnalyzer - Memory allocation analysis
+/// MemrefAnalyzer - Memory allocation analysis
 ///===----------------------------------------------------------------------===///
 class MemrefAnalyzer {
 public:

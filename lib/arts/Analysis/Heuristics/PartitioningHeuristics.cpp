@@ -31,12 +31,9 @@ ReadOnlySingleNodeHeuristic::evaluate(const PartitioningContext &ctx) const {
 
   if (ctx.machine->getNodeCount() == 1 && isReadOnly && !ctx.canChunked &&
       !ctx.canElementWise) {
-    PartitioningDecision decision;
-    decision.mode = RewriterMode::ElementWise;
-    decision.outerRank = 0;              ///  Coarse
-    decision.innerRank = ctx.memrefRank; ///  All dims are inner for coarse
-    decision.rationale =
-        "H1.1: All acquires read-only on single-node prefers coarse";
+    PartitioningDecision decision =
+        PartitioningDecision::coarse(
+            ctx, "H1.1: All acquires read-only on single-node prefers coarse");
     ARTS_DEBUG("H1.1 applied: " << decision.rationale);
     return decision;
   }
@@ -179,11 +176,9 @@ std::optional<PartitioningDecision>
 AccessUniformityHeuristic::evaluate(const PartitioningContext &ctx) const {
   ///  Non-uniform access with no fine-grained option -> coarse
   if (!ctx.isUniformAccess && !ctx.canElementWise && !ctx.canChunked) {
-    PartitioningDecision decision;
-    decision.mode = RewriterMode::ElementWise;
-    decision.outerRank = 0;
-    decision.innerRank = ctx.memrefRank; ///  All dims are inner for coarse
-    decision.rationale = "H1.3: Non-uniform access prefers coarse";
+    PartitioningDecision decision =
+        PartitioningDecision::coarse(
+            ctx, "H1.3: Non-uniform access prefers coarse");
     ARTS_DEBUG("H1.3 applied: " << decision.rationale);
     return decision;
   }
@@ -254,19 +249,32 @@ StencilPatternHeuristic::evaluate(const PartitioningContext &ctx) const {
     return decision;
   }
 
-  /// Case 2: Has stencil (with or without uniform) → Stencil mode (chunked + ESD)
-  /// Chunked + ESD handles both access patterns:
+  /// Case 2: Has stencil (with or without uniform) → Stencil mode (chunked +
+  /// ESD) Chunked + ESD handles both access patterns:
   /// - Uniform access: worker accesses only its owned chunk (no halo needed)
   /// - Stencil access: worker accesses owned chunk + ESD delivers halos
-  /// The ESD machinery activates when element_offsets is non-empty on db_acquire.
+  /// The ESD machinery activates when element_offsets is non-empty on
+  /// db_acquire.
   if (patterns.hasStencil) {
+    if (!ctx.canChunked) {
+      PartitioningDecision decision;
+      decision.mode = RewriterMode::ElementWise;
+      decision.outerRank = 1;
+      decision.innerRank = ctx.memrefRank > 0 ? ctx.memrefRank - 1 : 0;
+      decision.rationale = "H1.5: Stencil detected but chunked unsupported; "
+                           "fallback to element-wise";
+      ARTS_DEBUG("H1.5 applied: " << decision.rationale);
+      return decision;
+    }
+
     PartitioningDecision decision;
     decision.mode = RewriterMode::Stencil;
     decision.outerRank = 1;
     decision.innerRank = ctx.memrefRank > 0 ? ctx.memrefRank - 1 : 0;
     decision.rationale = patterns.hasUniform
-        ? "H1.5: Mixed (uniform+stencil) uses Stencil mode - chunked handles both"
-        : "H1.5: Pure stencil uses ESD mode";
+                             ? "H1.5: Mixed (uniform+stencil) uses Stencil "
+                               "mode - chunked handles both"
+                             : "H1.5: Pure stencil uses ESD mode";
     ARTS_DEBUG("H1.5 applied: " << decision.rationale);
     return decision;
   }

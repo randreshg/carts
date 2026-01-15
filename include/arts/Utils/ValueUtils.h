@@ -8,6 +8,7 @@
 #define CARTS_UTILS_VALUEUTILS_H
 
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Value.h"
 #include <optional>
@@ -111,6 +112,20 @@ public:
   /// Retrieves the underlying operation that defines the root value for the
   /// given value.
   static Operation *getUnderlyingOperation(Value v);
+
+  ///===----------------------------------------------------------------------===//
+  /// Value Reconstruction for Dominance
+  ///===----------------------------------------------------------------------===//
+
+  /// Trace a value to a dominating point by reconstructing arithmetic ops.
+  /// If the value already dominates insertBefore, returns it directly.
+  /// Otherwise, recursively traces through arithmetic operations and recreates
+  /// them at the insertion point to create an equivalent dominating value.
+  /// Returns nullptr if the value cannot be traced/reconstructed.
+  static Value traceValueToDominating(Value value, Operation *insertBefore,
+                                      OpBuilder &builder,
+                                      DominanceInfo &domInfo, Location loc,
+                                      unsigned depth = 0);
 };
 
 } // namespace arts

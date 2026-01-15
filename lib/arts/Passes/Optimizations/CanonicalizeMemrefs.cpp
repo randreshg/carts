@@ -83,7 +83,8 @@ struct AllocPattern {
   SmallVector<Value> dimensions;
   SmallVector<Value> hoistedDimensions;
   Type finalElementType;
-  SmallVector<scf::ForOp> initLoops;
+  SmallVector<Operation *> initLoops;
+  SmallVector<Operation *> initStores;
   SmallVector<Operation *> nestedAllocs;
   Operation *storeToWrapper;
 
@@ -96,8 +97,8 @@ struct AllocPattern {
   SmallVector<Value> outerWrapperAliases;
 
   /// Get outermost init loop
-  scf::ForOp getOutermostInitLoop() const {
-    return initLoops.empty() ? scf::ForOp() : initLoops[0];
+  Operation *getOutermostInitLoop() const {
+    return initLoops.empty() ? nullptr : initLoops[0];
   }
 };
 
@@ -112,6 +113,15 @@ static bool isScalarTokenContainer(memref::AllocaOp allocaOp) {
     return false;
   return type.getRank() == 0 || (type.getRank() == 1 && type.hasStaticShape() &&
                                  type.getNumElements() <= 1);
+}
+
+/// Return the nearest loop-like op that contains the given operation.
+static Operation *findNearestLoop(Operation *op) {
+  for (Operation *cur = op->getParentOp(); cur; cur = cur->getParentOp()) {
+    if (isa<scf::ForOp, affine::AffineForOp, omp::WsLoopOp>(cur))
+      return cur;
+  }
+  return nullptr;
 }
 
 /// Find the value stored to a token container alloca
@@ -254,8 +264,9 @@ private:
   void handleDependencies(ModuleOp module, OpBuilder &builder);
 
   /// N-level nested allocation helpers
-  bool extractNestedAllocations(Value storedVal, scf::ForOp forOp,
-                                AllocPattern &pattern, int depth);
+  bool extractNestedAllocations(Value storedVal, Operation *loopOp,
+                                memref::StoreOp storeOp, AllocPattern &pattern,
+                                int depth);
   bool isLoadFromValue(Value maybeLoad, Value source);
   bool tracesToRootAlloc(Value val, AllocPattern &pattern);
   std::optional<DepInfo> extractDepInfo(Value depVar, omp::TaskOp taskOp,
@@ -602,13 +613,15 @@ CanonicalizeMemrefsPass::detectPattern(Value alloc) {
   /// Helper lambda to check a store and extract loop/inner alloc
   /// Uses recursive extraction to support N-level nesting
   auto checkStoreForPattern = [&](memref::StoreOp storeOp) -> bool {
-    if (auto forOp = storeOp->getParentOfType<scf::ForOp>()) {
-      Value storedVal = storeOp.getValue();
-      if (extractNestedAllocations(storedVal, forOp, pattern, /*depth=*/0)) {
-        ARTS_DEBUG("  Found " << pattern.initLoops.size()
-                              << "-level nested allocation pattern");
-        return true;
-      }
+    Operation *loopOp = findNearestLoop(storeOp.getOperation());
+    if (!loopOp)
+      return false;
+    Value storedVal = storeOp.getValue();
+    if (extractNestedAllocations(storedVal, loopOp, storeOp, pattern,
+                                 /*depth=*/0)) {
+      ARTS_DEBUG("  Found " << pattern.initLoops.size()
+                            << "-level nested allocation pattern");
+      return true;
     }
     return false;
   };
@@ -676,10 +689,10 @@ CanonicalizeMemrefsPass::detectPattern(Value alloc) {
   /// Check if the outermost init loop has results (produces values)
   /// If so, we cannot simply remove it - the results are used by surrounding
   /// code
-  auto outermostLoop = pattern.getOutermostInitLoop();
-  if (outermostLoop && outermostLoop.getNumResults() > 0) {
+  auto *outermostLoop = pattern.getOutermostInitLoop();
+  if (outermostLoop && outermostLoop->getNumResults() > 0) {
     ARTS_DEBUG("  Skipping pattern: init loop has "
-               << outermostLoop.getNumResults()
+               << outermostLoop->getNumResults()
                << " results that would break control flow");
     return std::nullopt;
   }
@@ -1180,11 +1193,19 @@ LogicalResult CanonicalizeMemrefsPass::transformPattern(AllocPattern &pattern,
   /// For N-level nesting, we need to remove ALL init loops, not just the
   /// outermost The initLoops vector contains loops from outermost to innermost
   if (!pattern.initLoops.empty()) {
-    /// Remove the outermost init loop (which contains all nested loops)
-    toRemove.insert(pattern.initLoops[0]);
-    ARTS_DEBUG("  Marking outermost init loop for removal (contains "
-               << pattern.initLoops.size() << " nested loops)");
+    /// Remove the outermost init loop unless it is an OpenMP wsloop.
+    /// Parallel init loops can include non-allocation work, so keep them.
+    Operation *outermost = pattern.initLoops[0];
+    if (!isa<omp::WsLoopOp>(outermost)) {
+      toRemove.insert(outermost);
+      ARTS_DEBUG("  Marking outermost init loop for removal (contains "
+                 << pattern.initLoops.size() << " nested loops)");
+    } else {
+      ARTS_DEBUG("  Keeping omp.wsloop init loop to preserve parallel work");
+    }
   }
+  for (auto *op : pattern.initStores)
+    toRemove.insert(op);
   toRemove.insert(pattern.rootAlloc.getDefiningOp());
   for (auto *op : pattern.nestedAllocs)
     toRemove.insert(op);
@@ -1699,10 +1720,9 @@ bool CanonicalizeMemrefsPass::isLoadFromValue(Value maybeLoad, Value source) {
 /// directly.
 ///
 /// Returns true if a complete pattern was found (reaching scalar element type)
-bool CanonicalizeMemrefsPass::extractNestedAllocations(Value storedVal,
-                                                       scf::ForOp forOp,
-                                                       AllocPattern &pattern,
-                                                       int depth) {
+bool CanonicalizeMemrefsPass::extractNestedAllocations(
+    Value storedVal, Operation *loopOp, memref::StoreOp storeOp,
+    AllocPattern &pattern, int depth) {
   /// Limit recursion depth to prevent infinite loops
   constexpr int MAX_DEPTH = 10;
   if (depth >= MAX_DEPTH) {
@@ -1720,7 +1740,8 @@ bool CanonicalizeMemrefsPass::extractNestedAllocations(Value storedVal,
   }
 
   /// Record this init loop and allocation
-  pattern.initLoops.push_back(forOp);
+  pattern.initLoops.push_back(loopOp);
+  pattern.initStores.push_back(storeOp);
   pattern.nestedAllocs.push_back(innerAlloc);
 
   auto innerType = innerAlloc.getType().cast<MemRefType>();
@@ -1734,7 +1755,7 @@ bool CanonicalizeMemrefsPass::extractNestedAllocations(Value storedVal,
     }
     innerSize = innerAlloc.getDynamicSizes()[0];
   } else {
-    OpBuilder innerB(forOp);
+    OpBuilder innerB(loopOp);
     innerSize = innerB.create<arith::ConstantIndexOp>(innerAlloc.getLoc(),
                                                       innerType.getDimSize(0));
   }
@@ -1763,13 +1784,13 @@ bool CanonicalizeMemrefsPass::extractNestedAllocations(Value storedVal,
   /// not from innerAlloc. Example:
   ///   %row = load %root[%i]    /// Load from root
   ///   store %alloc, %row[%j]   /// Store to loaded row
-  forOp.walk([&](memref::StoreOp nestedStore) {
+  loopOp->walk([&](memref::StoreOp nestedStore) {
     if (foundNested)
       return WalkResult::interrupt();
 
-    /// Check if this store is inside a nested for loop
-    auto nestedForOp = nestedStore->getParentOfType<scf::ForOp>();
-    if (!nestedForOp || nestedForOp == forOp) {
+    /// Check if this store is inside a nested loop
+    Operation *nestedLoop = findNearestLoop(nestedStore.getOperation());
+    if (!nestedLoop || nestedLoop == loopOp) {
       /// Not in a nested loop, skip
       return WalkResult::advance();
     }
@@ -1779,8 +1800,8 @@ bool CanonicalizeMemrefsPass::extractNestedAllocations(Value storedVal,
     /// Check if the store target traces back to the root allocation
     /// through a chain of loads (depth determines expected chain length)
     if (tracesToRootAlloc(storeMem, pattern)) {
-      if (extractNestedAllocations(nestedStore.getValue(), nestedForOp, pattern,
-                                   depth + 1)) {
+      if (extractNestedAllocations(nestedStore.getValue(), nestedLoop,
+                                   nestedStore, pattern, depth + 1)) {
         foundNested = true;
         return WalkResult::interrupt();
       }
