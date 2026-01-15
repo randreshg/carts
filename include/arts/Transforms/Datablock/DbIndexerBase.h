@@ -1,21 +1,17 @@
 ///==========================================================================///
-/// DbRewriterBase.h - Abstract base class for index rewriters
+/// DbIndexerBase.h - Abstract base class for index localizers
 ///
 /// This file defines the common interface and shared utilities for all
-/// datablock index rewriters (Chunked, ElementWise, Stencil).
+/// datablock index localizers (Chunked, ElementWise, Stencil).
 ///
 /// Key abstractions:
 /// - LocalizedIndices: Result struct for index localization
 /// - getIndicesFromOp(): Helper to extract indices from load/store/ref ops
-/// - DbRewriterBase: Abstract base class with pure virtual localize methods
-///
-/// Design note: Chunked and ElementWise use fundamentally different arithmetic
-/// (div/mod vs subtraction), so they remain separate classes. The base class
-/// extracts common patterns without forcing artificial unification.
+/// - DbIndexerBase: Abstract base class with pure virtual localize methods
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DATABLOCK_DBREWRITERBASE_H
-#define ARTS_TRANSFORMS_DATABLOCK_DBREWRITERBASE_H
+#ifndef ARTS_TRANSFORMS_DATABLOCK_DBINDEXERBASE_H
+#define ARTS_TRANSFORMS_DATABLOCK_DBINDEXERBASE_H
 
 #include "arts/ArtsDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -27,14 +23,13 @@ namespace mlir {
 namespace arts {
 
 /// Shared result structure for index localization.
-/// Used by all rewriter modes to return the transformed indices.
+/// Used by all indexer modes to return the transformed indices.
 struct LocalizedIndices {
   SmallVector<Value> dbRefIndices;  ///< Indices for arts.db_ref operation
   SmallVector<Value> memrefIndices; ///< Indices for memref load/store
 };
 
 /// Shared helper - extract indices from load/store/ref operations.
-/// This function was duplicated across all three rewriters.
 inline ValueRange getIndicesFromOp(Operation *op) {
   if (auto load = dyn_cast<memref::LoadOp>(op))
     return load.getIndices();
@@ -48,29 +43,28 @@ inline ValueRange getIndicesFromOp(Operation *op) {
 /// Forward declaration
 class ArtsCodegen;
 
-/// Abstract base class for datablock index rewriters.
+/// Abstract base class for datablock index localizers.
 ///
 /// Each derived class implements mode-specific localization:
-/// - DbChunkedRewriter: div/mod localization for chunked allocation
-/// - DbElementWiseRewriter: subtraction-based offset adjustment
-/// - DbStencilRewriter: halo-aware clamping and offset
-class DbRewriterBase {
+/// - DbChunkedIndexer: div/mod localization for chunked allocation
+/// - DbElementWiseIndexer: subtraction-based offset adjustment
+/// - DbStencilIndexer: halo-aware clamping and offset
+class DbIndexerBase {
 protected:
   unsigned outerRank_; ///< Dimensions for DB grid indexing
   unsigned innerRank_; ///< Dimensions for element indexing within DB
 
 public:
-  DbRewriterBase(unsigned outerRank, unsigned innerRank)
+  DbIndexerBase(unsigned outerRank, unsigned innerRank)
       : outerRank_(outerRank), innerRank_(innerRank) {}
 
-  virtual ~DbRewriterBase() = default;
+  virtual ~DbIndexerBase() = default;
 
   //===--------------------------------------------------------------------===//
   // Pure virtual methods - mode-specific localization
   //===--------------------------------------------------------------------===//
 
   /// Transform global multi-dimensional indices to local coordinates.
-  /// Each rewriter mode implements different localization logic.
   virtual LocalizedIndices localize(ArrayRef<Value> globalIndices,
                                     OpBuilder &builder, Location loc) = 0;
 
@@ -79,14 +73,10 @@ public:
                                               Value stride, OpBuilder &builder,
                                               Location loc) = 0;
 
-  /// Rewrite a DbRefOp and its load/store users to use local coordinates.
-  /// Each rewriter has different stride detection logic:
-  /// - Chunked: derives stride from MemRefType
-  /// - ElementWise: uses stored oldElementSizes_
-  /// - Stencil: uses halo-aware bounds
-  virtual void rewriteDbRefUsers(DbRefOp ref, Value blockArg,
-                                 Type newElementType, OpBuilder &builder,
-                                 llvm::SetVector<Operation *> &opsToRemove) = 0;
+  /// Transform a DbRefOp and its load/store users to use local coordinates.
+  virtual void transformDbRefUsers(DbRefOp ref, Value blockArg,
+                                   Type newElementType, OpBuilder &builder,
+                                   llvm::SetVector<Operation *> &opsToRemove) = 0;
 
   //===--------------------------------------------------------------------===//
   // Accessors
@@ -99,4 +89,4 @@ public:
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DATABLOCK_DBREWRITERBASE_H
+#endif // ARTS_TRANSFORMS_DATABLOCK_DBINDEXERBASE_H

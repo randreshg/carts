@@ -1,14 +1,13 @@
 ///==========================================================================///
-/// File: DbPartitioning.cpp
-/// Datablock partitioning and chunking transformations.
-/// This pass chooses a datablock partitioning strategy with two goals:
-///   1) Preserve correctness via conservative twin-diff use.
-///   2) Maximize concurrency while avoiding unnecessary data movement.
+/// DbPartitioning.cpp - Datablock partitioning decision pass
 ///
-/// For detailed documentation on partitioning decisions and per-acquire voting,
-/// see: docs/heuristics/partitioning/partitioning.md
+/// Analyzes allocations and selects partitioning strategies:
+///   Phase 1: Per-acquire analysis (chunk offset/size, capabilities)
+///   Phase 2: Heuristic voting → RewriterMode (Coarse/ElementWise/Chunked/Stencil)
+///   Phase 3: Size computation and rewriter application
 ///
-///===----------------------------------------------------------------------===///
+/// Twin-diff is enabled when disjoint access cannot be proven.
+///==========================================================================///
 
 /// Dialects
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
@@ -78,9 +77,7 @@ static PromotionMode toPromotionMode(RewriterMode mode) {
   return PromotionMode::none;
 }
 
-///===----------------------------------------------------------------------===///
-/// AcquirePartitionInfo - Partition info computed per-acquire
-///===----------------------------------------------------------------------===///
+/// Per-acquire partition analysis results for Phase 1.
 struct AcquirePartitionInfo {
   DbAcquireOp acquire;
   PartitionMode mode;    /// From DatablockUtils::getPartitionMode
@@ -88,18 +85,42 @@ struct AcquirePartitionInfo {
   Value partitionSize;   /// Computed chunk/element size (dynamic!)
   bool isValid = false;
 
-  /// Check consistency with another acquire
+  /// Check consistency with another acquire.
+  /// Returns true if both acquires can use the same partitioning strategy.
   bool isConsistentWith(const AcquirePartitionInfo &other) const {
     if (mode != other.mode)
       return false;
-    /// For Chunked mode, sizes must be same SSA value
+    /// For Chunked mode, sizes must be same SSA value to ensure
+    /// uniform chunk boundaries across all acquires
     if (mode == PartitionMode::Chunked && partitionSize != other.partitionSize)
       return false;
     return true;
   }
 };
 
-/// Compute partition info for a single acquire
+/// Extract partition offset with cascading fallback: info → node → hints → offsets.
+static Value getPartitionOffset(DbAcquireNode *acqNode,
+                                const AcquirePartitionInfo *info) {
+  if (info && info->partitionOffset)
+    return info->partitionOffset;
+
+  auto [offset, size] = acqNode->getPartitionInfo();
+  if (offset)
+    return offset;
+
+  DbAcquireOp acqOp = acqNode->getDbAcquireOp();
+  auto hints = acqOp.getOffsetHints();
+  if (!hints.empty())
+    return hints.front();
+
+  auto offsets = acqOp.getOffsets();
+  if (!offsets.empty())
+    return offsets.front();
+
+  return nullptr;
+}
+
+/// Analyze a single acquire to determine its partition mode and chunk info.
 static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
                                                         DbAcquireNode *acqNode,
                                                         OpBuilder &builder,
@@ -141,14 +162,7 @@ static AcquirePartitionInfo computeAcquirePartitionInfo(DbAcquireOp acquire,
   return info;
 }
 
-///===----------------------------------------------------------------------===///
-/// Compute sizes from PartitioningDecision (uses outerRank/innerRank)
-///
-/// Allocation modes:
-///   - Coarse: sizes=[1], elementSizes=all dims (single datablock)
-///   - ElementWise: sizes=first outerRank dims, elementSizes=remaining dims
-///   - Chunked: sizes=[numChunks], elementSizes=[chunkSize, remaining dims]
-///===----------------------------------------------------------------------===///
+/// Compute outer/inner sizes from PartitioningDecision.
 static void computeSizesFromDecision(DbAllocOp allocOp,
                                      const PartitioningDecision &decision,
                                      Value chunkSize,
@@ -213,8 +227,6 @@ static void computeSizesFromDecision(DbAllocOp allocOp,
 }
 
 /// Trace a value through EDT block arguments to find a dominating value.
-/// If the value is an EDT block argument, trace to the corresponding
-/// dependency. Recursively handles nested EDT structures.
 static Value traceValueThroughEdt(Value v, DbAllocOp allocOp,
                                   DominanceInfo &domInfo, unsigned depth = 0) {
   if (!v || depth > 16)
@@ -249,17 +261,108 @@ static Value traceValueThroughEdt(Value v, DbAllocOp allocOp,
   return nullptr;
 }
 
-/// Trace back through the defining operation to recreate chunk size
-/// at a point that dominates the allocation.
-///
-/// Handles common patterns:
-///   - arith.divsi %N, %num_tasks  (block_size = N / tasks)
-///   - arith.divui %N, %num_tasks
-///   - arith.ceildivsi/ceildivui for ceiling division
-///   - index_cast wrapping any of the above
-///
-/// Also traces operands through EDT block arguments when needed.
-///
+/// Trace chunk size through arithmetic ops to recreate at allocation point.
+/// Supports division, bounds (minsi/maxsi), select, arithmetic, and casts.
+/// For minsi/select, uses partial operand fallback when only one arm traces.
+static Value traceBackChunkSize(Value chunkSize, DbAllocOp allocOp,
+                                OpBuilder &builder, DominanceInfo &domInfo,
+                                Location loc);
+
+/// Check if operand dominates allocation, or trace through EDT block args.
+static Value getDominatingOperand(Value operand, DbAllocOp allocOp,
+                                  DominanceInfo &domInfo) {
+  if (domInfo.properlyDominates(operand, allocOp))
+    return operand;
+  return traceValueThroughEdt(operand, allocOp, domInfo);
+}
+
+/// Check dominance first, then attempt full trace-back with reconstruction.
+static Value getTracedOrDominatingOperand(Value operand, DbAllocOp allocOp,
+                                          OpBuilder &builder,
+                                          DominanceInfo &domInfo,
+                                          Location loc) {
+  if (Value dom = getDominatingOperand(operand, allocOp, domInfo))
+    return dom;
+  return traceBackChunkSize(operand, allocOp, builder, domInfo, loc);
+}
+
+/// Trace binary op: trace both operands, recreate if both succeed.
+template <typename OpType>
+static Value traceBinaryOp(OpType op, DbAllocOp allocOp, OpBuilder &builder,
+                           DominanceInfo &domInfo, Location loc,
+                           StringRef opName) {
+  Value lhs = getTracedOrDominatingOperand(op.getLhs(), allocOp, builder,
+                                           domInfo, loc);
+  Value rhs = getTracedOrDominatingOperand(op.getRhs(), allocOp, builder,
+                                           domInfo, loc);
+  if (lhs && rhs) {
+    builder.setInsertionPoint(allocOp);
+    ARTS_DEBUG("  Recreating " << opName << " at allocation point");
+    return builder.create<OpType>(loc, lhs, rhs);
+  }
+  return nullptr;
+}
+
+/// Trace minsi with partial operand fallback.
+static Value traceMinSI(arith::MinSIOp minOp, DbAllocOp allocOp,
+                        OpBuilder &builder, DominanceInfo &domInfo,
+                        Location loc) {
+  Value lhsTraced = getTracedOrDominatingOperand(minOp.getLhs(), allocOp,
+                                                 builder, domInfo, loc);
+  Value rhsTraced = getTracedOrDominatingOperand(minOp.getRhs(), allocOp,
+                                                 builder, domInfo, loc);
+  if (lhsTraced && rhsTraced) {
+    ARTS_DEBUG("  Recreating minsi at allocation point");
+    return builder.create<arith::MinSIOp>(loc, lhsTraced, rhsTraced);
+  }
+  /// Partial operand fallback: use whichever operand traces successfully
+  /// This handles patterns like minsi(start_row + block_size, output_size)
+  /// where block_size dominates but start_row doesn't
+  if (rhsTraced && !lhsTraced) {
+    ARTS_DEBUG("  Using rhs of minsi as max chunk size");
+    return rhsTraced;
+  }
+  if (lhsTraced && !rhsTraced) {
+    ARTS_DEBUG("  Using lhs of minsi as max chunk size");
+    return lhsTraced;
+  }
+  return nullptr;
+}
+
+/// Trace select with partial operand fallback; uses max if condition doesn't dominate.
+static Value traceSelect(arith::SelectOp selectOp, DbAllocOp allocOp,
+                         OpBuilder &builder, DominanceInfo &domInfo,
+                         Location loc) {
+  Value trueTraced = getTracedOrDominatingOperand(selectOp.getTrueValue(),
+                                                  allocOp, builder, domInfo, loc);
+  Value falseTraced = getTracedOrDominatingOperand(selectOp.getFalseValue(),
+                                                   allocOp, builder, domInfo, loc);
+  ARTS_DEBUG("  Select trace: true=" << (trueTraced ? "ok" : "no")
+                                     << " false=" << (falseTraced ? "ok" : "no"));
+
+  if (trueTraced && falseTraced) {
+    Value condDom = getDominatingOperand(selectOp.getCondition(), allocOp, domInfo);
+    builder.setInsertionPoint(allocOp);
+    if (condDom) {
+      ARTS_DEBUG("  Recreating select at allocation point");
+      return builder.create<arith::SelectOp>(loc, condDom, trueTraced, falseTraced);
+    }
+    /// Condition doesn't dominate - use max of arms as safe upper bound
+    ARTS_DEBUG("  Select condition doesn't dominate - using max of arms");
+    return builder.create<arith::MaxSIOp>(loc, trueTraced, falseTraced);
+  }
+  /// Partial operand fallback: use whichever arm traces successfully
+  if (trueTraced && !falseTraced) {
+    ARTS_DEBUG("  Using true arm of select as max chunk size");
+    return trueTraced;
+  }
+  if (falseTraced && !trueTraced) {
+    ARTS_DEBUG("  Using false arm of select as max chunk size");
+    return falseTraced;
+  }
+  return nullptr;
+}
+
 static Value traceBackChunkSize(Value chunkSize, DbAllocOp allocOp,
                                 OpBuilder &builder, DominanceInfo &domInfo,
                                 Location loc) {
@@ -278,74 +381,21 @@ static Value traceBackChunkSize(Value chunkSize, DbAllocOp allocOp,
 
   ARTS_DEBUG("  Trace-back: examining " << defOp->getName().getStringRef());
 
-  /// Helper to get dominating operand - direct or via EDT trace
-  auto getDominatingOperand = [&](Value operand) -> Value {
-    if (domInfo.properlyDominates(operand, allocOp))
-      return operand;
-    /// Try to trace through EDT block arguments
-    return traceValueThroughEdt(operand, allocOp, domInfo);
-  };
+  //===--------------------------------------------------------------------===//
+  // Division patterns (block_size = N / tasks)
+  //===--------------------------------------------------------------------===//
+  if (auto op = dyn_cast<arith::DivSIOp>(defOp))
+    return traceBinaryOp(op, allocOp, builder, domInfo, loc, "divsi");
+  if (auto op = dyn_cast<arith::DivUIOp>(defOp))
+    return traceBinaryOp(op, allocOp, builder, domInfo, loc, "divui");
+  if (auto op = dyn_cast<arith::CeilDivSIOp>(defOp))
+    return traceBinaryOp(op, allocOp, builder, domInfo, loc, "ceildivsi");
+  if (auto op = dyn_cast<arith::CeilDivUIOp>(defOp))
+    return traceBinaryOp(op, allocOp, builder, domInfo, loc, "ceildivui");
 
-  /// Helper to get a dominating operand - check dominance first, then
-  /// trace-back This order is important: values like scf.while results may
-  /// dominate directly
-  auto getTracedOrDominatingOperand = [&](Value operand) -> Value {
-    /// First check if it dominates directly (handles scf.while results, etc.)
-    if (Value dom = getDominatingOperand(operand))
-      return dom;
-    /// Only try trace-back if direct dominance check fails
-    return traceBackChunkSize(operand, allocOp, builder, domInfo, loc);
-  };
-
-  /// Pattern 1: arith.divsi
-  if (auto divOp = dyn_cast<arith::DivSIOp>(defOp)) {
-    Value lhs = getTracedOrDominatingOperand(divOp.getLhs());
-    Value rhs = getTracedOrDominatingOperand(divOp.getRhs());
-    if (lhs && rhs) {
-      builder.setInsertionPoint(allocOp);
-      ARTS_DEBUG("  Recreating divsi at allocation point");
-      return builder.create<arith::DivSIOp>(loc, lhs, rhs);
-    } else {
-      ARTS_DEBUG("  divsi operands don't dominate: lhs="
-                 << (lhs ? "ok" : "no") << " rhs=" << (rhs ? "ok" : "no"));
-    }
-  }
-
-  /// Pattern 2: arith.divui
-  if (auto divOp = dyn_cast<arith::DivUIOp>(defOp)) {
-    Value lhs = getTracedOrDominatingOperand(divOp.getLhs());
-    Value rhs = getTracedOrDominatingOperand(divOp.getRhs());
-    if (lhs && rhs) {
-      builder.setInsertionPoint(allocOp);
-      ARTS_DEBUG("  Recreating divui at allocation point");
-      return builder.create<arith::DivUIOp>(loc, lhs, rhs);
-    }
-  }
-
-  /// Pattern 3: arith.ceildivsi
-  if (auto divOp = dyn_cast<arith::CeilDivSIOp>(defOp)) {
-    Value lhs = getTracedOrDominatingOperand(divOp.getLhs());
-    Value rhs = getTracedOrDominatingOperand(divOp.getRhs());
-    if (lhs && rhs) {
-      builder.setInsertionPoint(allocOp);
-      ARTS_DEBUG("  Recreating ceildivsi at allocation point");
-      return builder.create<arith::CeilDivSIOp>(loc, lhs, rhs);
-    }
-  }
-
-  /// Pattern 4: arith.ceildivui
-  if (auto divOp = dyn_cast<arith::CeilDivUIOp>(defOp)) {
-    Value lhs = getTracedOrDominatingOperand(divOp.getLhs());
-    Value rhs = getTracedOrDominatingOperand(divOp.getRhs());
-    if (lhs && rhs) {
-      builder.setInsertionPoint(allocOp);
-      ARTS_DEBUG("  Recreating ceildivui at allocation point");
-      return builder.create<arith::CeilDivUIOp>(loc, lhs, rhs);
-    }
-  }
-
-  /// Pattern 5: Recursive trace-back for index_cast
-  /// e.g., index_cast(divsi(...))
+  //===--------------------------------------------------------------------===//
+  // Cast pattern (unwrap and trace source)
+  //===--------------------------------------------------------------------===//
   if (auto castOp = dyn_cast<arith::IndexCastOp>(defOp)) {
     if (Value inner = traceBackChunkSize(castOp.getIn(), allocOp, builder,
                                          domInfo, loc)) {
@@ -354,113 +404,36 @@ static Value traceBackChunkSize(Value chunkSize, DbAllocOp allocOp,
         return inner;
       return builder.create<arith::IndexCastOp>(loc, castOp.getType(), inner);
     }
+    return nullptr;
   }
 
-  /// Pattern 6: arith.maxsi - clamping chunk size to non-negative
-  /// e.g., maxsi(divsi(...), 0)
-  if (auto maxOp = dyn_cast<arith::MaxSIOp>(defOp)) {
-    Value lhs = maxOp.getLhs();
-    Value rhs = maxOp.getRhs();
-    Value lhsTraced = getTracedOrDominatingOperand(lhs);
-    Value rhsTraced = getTracedOrDominatingOperand(rhs);
-    if (lhsTraced && rhsTraced) {
-      ARTS_DEBUG("  Recreating maxsi at allocation point");
-      return builder.create<arith::MaxSIOp>(loc, lhsTraced, rhsTraced);
-    }
-  }
+  //===--------------------------------------------------------------------===//
+  // Bounds patterns (clamping with max/min)
+  //===--------------------------------------------------------------------===//
+  if (auto op = dyn_cast<arith::MaxSIOp>(defOp))
+    return traceBinaryOp(op, allocOp, builder, domInfo, loc, "maxsi");
+  if (auto op = dyn_cast<arith::MinSIOp>(defOp))
+    return traceMinSI(op, allocOp, builder, domInfo, loc);
 
-  /// Pattern 6.5: arith.select - conditional chunk size (e.g., abs/min guards)
-  if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
-    Value trueVal = selectOp.getTrueValue();
-    Value falseVal = selectOp.getFalseValue();
-    Value trueTraced = getTracedOrDominatingOperand(trueVal);
-    Value falseTraced = getTracedOrDominatingOperand(falseVal);
-    ARTS_DEBUG("  Select trace: true=" << (trueTraced ? "ok" : "no")
-                                       << " false="
-                                       << (falseTraced ? "ok" : "no"));
-    if (trueTraced && falseTraced) {
-      Value condDom = getDominatingOperand(selectOp.getCondition());
-      builder.setInsertionPoint(allocOp);
-      if (condDom) {
-        ARTS_DEBUG("  Recreating select at allocation point");
-        return builder.create<arith::SelectOp>(loc, condDom, trueTraced,
-                                               falseTraced);
-      }
-      ARTS_DEBUG("  Select condition doesn't dominate - using max of arms");
-      return builder.create<arith::MaxSIOp>(loc, trueTraced, falseTraced);
-    }
-    if (trueTraced && !falseTraced) {
-      ARTS_DEBUG("  Using true arm of select as max chunk size");
-      return trueTraced;
-    }
-    if (falseTraced && !trueTraced) {
-      ARTS_DEBUG("  Using false arm of select as max chunk size");
-      return falseTraced;
-    }
-  }
+  //===--------------------------------------------------------------------===//
+  // Conditional pattern (select with fallback)
+  //===--------------------------------------------------------------------===//
+  if (auto op = dyn_cast<arith::SelectOp>(defOp))
+    return traceSelect(op, allocOp, builder, domInfo, loc);
 
-  /// Pattern 7: arith.minsi - clamping chunk size to max bound
-  /// For allocation, we use the MAX chunk size (the clamping bound).
-  /// Pattern: minsi(variable_bound, max_chunk) -> use max_chunk for allocation
-  if (auto minOp = dyn_cast<arith::MinSIOp>(defOp)) {
-    Value lhs = minOp.getLhs();
-    Value rhs = minOp.getRhs();
-    Value lhsTraced = getTracedOrDominatingOperand(lhs);
-    Value rhsTraced = getTracedOrDominatingOperand(rhs);
-    if (lhsTraced && rhsTraced) {
-      ARTS_DEBUG("  Recreating minsi at allocation point");
-      return builder.create<arith::MinSIOp>(loc, lhsTraced, rhsTraced);
-    }
-    /// If only one operand traces successfully, use it as max chunk size
-    /// This handles: minsi(start_row + block_size, output_size) where
-    /// block_size dominates but start_row doesn't
-    if (rhsTraced && !lhsTraced) {
-      ARTS_DEBUG("  Using rhs of minsi as max chunk size");
-      return rhsTraced;
-    }
-    if (lhsTraced && !rhsTraced) {
-      ARTS_DEBUG("  Using lhs of minsi as max chunk size");
-      return lhsTraced;
-    }
-  }
+  //===--------------------------------------------------------------------===//
+  // Arithmetic patterns (add, sub, mul)
+  //===--------------------------------------------------------------------===//
+  if (auto op = dyn_cast<arith::SubIOp>(defOp))
+    return traceBinaryOp(op, allocOp, builder, domInfo, loc, "subi");
+  if (auto op = dyn_cast<arith::AddIOp>(defOp))
+    return traceBinaryOp(op, allocOp, builder, domInfo, loc, "addi");
+  if (auto op = dyn_cast<arith::MulIOp>(defOp))
+    return traceBinaryOp(op, allocOp, builder, domInfo, loc, "muli");
 
-  /// Pattern 8: arith.subi - subtraction in chunk size computation
-  if (auto subOp = dyn_cast<arith::SubIOp>(defOp)) {
-    Value lhs = subOp.getLhs();
-    Value rhs = subOp.getRhs();
-    Value lhsTraced = getTracedOrDominatingOperand(lhs);
-    Value rhsTraced = getTracedOrDominatingOperand(rhs);
-    if (lhsTraced && rhsTraced) {
-      ARTS_DEBUG("  Recreating subi at allocation point");
-      return builder.create<arith::SubIOp>(loc, lhsTraced, rhsTraced);
-    }
-  }
-
-  /// Pattern 9: arith.addi - addition in chunk size computation
-  if (auto addOp = dyn_cast<arith::AddIOp>(defOp)) {
-    Value lhs = addOp.getLhs();
-    Value rhs = addOp.getRhs();
-    Value lhsTraced = getTracedOrDominatingOperand(lhs);
-    Value rhsTraced = getTracedOrDominatingOperand(rhs);
-    if (lhsTraced && rhsTraced) {
-      ARTS_DEBUG("  Recreating addi at allocation point");
-      return builder.create<arith::AddIOp>(loc, lhsTraced, rhsTraced);
-    }
-  }
-
-  /// Pattern 10: arith.muli - multiplication in chunk size computation
-  if (auto mulOp = dyn_cast<arith::MulIOp>(defOp)) {
-    Value lhs = mulOp.getLhs();
-    Value rhs = mulOp.getRhs();
-    Value lhsTraced = getTracedOrDominatingOperand(lhs);
-    Value rhsTraced = getTracedOrDominatingOperand(rhs);
-    if (lhsTraced && rhsTraced) {
-      ARTS_DEBUG("  Recreating muli at allocation point");
-      return builder.create<arith::MulIOp>(loc, lhsTraced, rhsTraced);
-    }
-  }
-
-  /// Pattern 11: arith.constant - constants can just be recreated
+  //===--------------------------------------------------------------------===//
+  // Constant patterns (recreate at allocation point)
+  //===--------------------------------------------------------------------===//
   if (auto constOp = dyn_cast<arith::ConstantOp>(defOp)) {
     builder.setInsertionPoint(allocOp);
     ARTS_DEBUG("  Recreating constant at allocation point");
@@ -473,15 +446,11 @@ static Value traceBackChunkSize(Value chunkSize, DbAllocOp allocOp,
     return builder.create<arith::ConstantIndexOp>(loc, constIdxOp.value());
   }
 
-  return nullptr; /// Cannot trace back
+  return nullptr; /// Cannot trace back - unsupported pattern
 }
 
 } // namespace
 
-///===----------------------------------------------------------------------===///
-// Pass Implementation
-// Partition Datablocks for fine-grained parallel access
-///===----------------------------------------------------------------------===///
 namespace {
 struct DbPartitioningPass
     : public arts::DbPartitioningBase<DbPartitioningPass> {
@@ -491,15 +460,31 @@ struct DbPartitioningPass
 
   void runOnOperation() override;
 
-  /// Partitioning
+  ///===--------------------------------------------------------------------===///
+  /// Main Partitioning Methods
+  ///===--------------------------------------------------------------------===///
+
+  /// Main partitioning entry point.
+  /// Iterates over allocations, applies rewriters, and determines twin-diff.
   bool partitionDb();
 
-  /// Stencil bounds analysis
+  ///===--------------------------------------------------------------------===///
+  /// Stencil Bounds Analysis
+  ///===--------------------------------------------------------------------===///
+
+  /// Analyze stencil access patterns and generate bounds check flags.
   void analyzeStencilBounds();
+
+  /// Generate runtime bounds validation for stencil accesses.
+  /// Creates conditional guards for out-of-bounds stencil offsets.
   void generateBoundsValid(DbAcquireOp acquireOp,
                            ArrayRef<int64_t> boundsCheckFlags, Value loopIV);
 
-  /// Graph rebuild
+  ///===--------------------------------------------------------------------===///
+  /// Graph Management
+  ///===--------------------------------------------------------------------===///
+
+  /// Invalidate and rebuild the datablock graph after transformations.
   void invalidateAndRebuildGraph();
 
   /// Partition an allocation based on per-acquire analysis and heuristics
@@ -537,30 +522,7 @@ void DbPartitioningPass::runOnOperation() {
   ARTS_DEBUG_REGION(module.dump(););
 }
 
-///===----------------------------------------------------------------------===///
-/// partitionDb - Partition datablocks and set twin-diff attributes
-///===----------------------------------------------------------------------===///
-///
-/// This function performs two key tasks:
-/// 1. PARTITIONING: Attempts to promote coarse-grained allocations to
-///    fine-grained ones by computing chunk info (offset, size) for each
-///    acquire. This allows workers to access disjoint regions of the DB.
-///
-/// 2. TWIN-DIFF ASSIGNMENT: Sets the twin_diff attribute on each DbAcquireOp
-///    based on whether overlapping access can be ruled out:
-///    - twin_diff=FALSE: Only when partitioning succeeds AND we can prove
-///      that all acquires access disjoint regions. This is safe because
-///      workers won't write to overlapping memory.
-///    - twin_diff=TRUE: When partitioning fails OR we cannot prove disjoint
-///      access. The runtime will use the twin-diff mechanism to track changes
-///      and merge updates correctly.
-/// Decision Flow:
-///   1. Collect candidates for partitioning (eligible acquires with chunk info)
-///   2. For each allocation, attempt promotion and update acquires
-///   3. If chunk rewrite succeeds -> twin_diff=FALSE (proven disjoint)
-///   4. If chunk rewrite fails -> twin_diff=TRUE (potential overlap)
-///   5. Final pass: any unset acquires get twin_diff=TRUE (safe default)
-///===----------------------------------------------------------------------===///
+/// Partition allocations and set twin-diff attributes based on disjoint access proof.
 bool DbPartitioningPass::partitionDb() {
   ARTS_DEBUG_HEADER(PartitionDb);
   ///==========================================================================
@@ -591,8 +553,7 @@ bool DbPartitioningPass::partitionDb() {
   llvm::SmallPtrSet<Operation *, 8> partitionAttempt, partitionSuccess,
       partitionFailed;
 
-  /// Walk the module and partition each allocation.
-  /// partitionAlloc handles all validation and analysis internally.
+  // PHASE 1: Partition allocations
   module.walk([&](func::FuncOp func) {
     DbGraph &graph = AM->getDbGraph(func);
 
@@ -631,21 +592,24 @@ bool DbPartitioningPass::partitionDb() {
         changed = true;
         partitionSuccess.insert(promoted.getOperation());
 
-        /// Set twin_diff=false for all child acquires (partition success)
-        allocNode->forEachChildNode([&](NodeBase *child) {
-          if (auto *acqNode = dyn_cast<DbAcquireNode>(child)) {
-            setTwinAttr(acqNode->getDbAcquireOp(),
-                        TwinDiffProof::PartitionSuccess);
-          }
-        });
+        bool disjoint = allocNode->canProveNonOverlapping();
+        if (disjoint) {
+          /// Set twin_diff=false for all child acquires (partition success)
+          allocNode->forEachChildNode([&](NodeBase *child) {
+            if (auto *acqNode = dyn_cast<DbAcquireNode>(child)) {
+              setTwinAttr(acqNode->getDbAcquireOp(),
+                          TwinDiffProof::PartitionSuccess);
+            }
+          });
+        } else {
+          ARTS_DEBUG("  Partitioned alloc has potential overlap; "
+                     "keeping twin_diff enabled");
+        }
       }
     });
   });
 
-  /// AFTER partition attempts, BEFORE final default pass:
-  /// Analyze acquires that weren't partitioned using DbAliasAnalysis and
-  /// partition hints. This allows us to disable twin-diff for allocations
-  /// where we can PROVE non-overlapping access even without full partitioning.
+  // PHASE 2: Overlap analysis for unpartitioned allocations
   ARTS_DEBUG("  Overlap analysis for unpartitioned allocations:");
   module.walk([&](func::FuncOp func) {
     DbGraph &graph = AM->getDbGraph(func);
@@ -692,7 +656,7 @@ bool DbPartitioningPass::partitionDb() {
     });
   });
 
-  /// Safe default - enable twin-diff for any unanalyzed acquires
+  // PHASE 3: Default twin_diff=true for remaining acquires
   ARTS_DEBUG(
       "  Final pass: Setting safe default twin_diff=true for unset acquires");
   module.walk([&](DbAcquireOp acq) {
@@ -712,16 +676,7 @@ bool DbPartitioningPass::partitionDb() {
   return changed;
 }
 
-/// Partition an allocation based on per-acquire voting and heuristics.
-/// See docs/heuristics/partitioning/partitioning.md for detailed documentation.
-///
-/// Flow:
-///   1. Check existing partition attribute - skip if already partitioned
-///   2. Analyze each acquire's PartitionMode and collect AcquireInfo
-///   3. Build PartitioningContext with per-acquire voting info
-///   4. Evaluate heuristics
-///   5. Apply partitioning decision (outerRank/innerRank)
-///   6. Set partition attribute on new alloc
+/// Analyze allocation acquires and apply appropriate partitioning rewriter.
 FailureOr<DbAllocOp>
 DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   if (!allocOp || !allocOp.getOperation())
@@ -808,11 +763,11 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     }
   }
 
-  /// Step 3: Build PartitioningContext
+  /// Step 3: Build PartitioningContext and check for non-leading offsets
   PartitioningContext ctx;
   ctx.machine = &AM->getAbstractMachine();
+  bool canUseChunked = true;  /// Assume chunked is possible until proven otherwise
 
-  /// Get access patterns FIRST - needed by H1.5 StencilPatternHeuristic
   if (allocNode) {
     ctx.accessPatterns = allocNode->summarizeAcquirePatterns();
     ARTS_DEBUG("  Access patterns: hasUniform="
@@ -820,21 +775,33 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                << ", hasStencil=" << ctx.accessPatterns.hasStencil
                << ", hasIndexed=" << ctx.accessPatterns.hasIndexed
                << ", isMixed=" << ctx.accessPatterns.isMixed());
-  }
 
-  /// Populate per-acquire info for heuristic voting
-  if (allocNode) {
+    // Build per-acquire capabilities for heuristic voting
     size_t idx = 0;
     allocNode->forEachChildNode([&](NodeBase *child) {
       auto *acqNode = dyn_cast<DbAcquireNode>(child);
       if (!acqNode || idx >= acquireInfos.size())
         return;
 
+      const auto &acqInfo = acquireInfos[idx];
+
+      /// Check for non-leading partition offset (disables chunked mode).
+      /// Non-leading means the first array index isn't directly derived from
+      /// the partition offset, so chunk-based indexing won't work correctly.
+      if (canUseChunked && acqInfo.mode == PartitionMode::Chunked) {
+        Value offsetForCheck = getPartitionOffset(acqNode, &acqInfo);
+        if (offsetForCheck && !acqNode->canPartitionWithOffset(offsetForCheck)) {
+          ARTS_DEBUG("  Non-leading partition offset detected; "
+                     "disabling chunked partitioning for allocation");
+          canUseChunked = false;
+        }
+      }
+
+      /// Build AcquireInfo for heuristic voting
       AcquireInfo info;
       info.accessMode = acqNode->getDbAcquireOp().getMode();
-      info.canElementWise =
-          (acquireInfos[idx].mode == PartitionMode::ElementWise);
-      info.canChunked = (acquireInfos[idx].mode == PartitionMode::Chunked);
+      info.canElementWise = (acqInfo.mode == PartitionMode::ElementWise);
+      info.canChunked = canUseChunked && (acqInfo.mode == PartitionMode::Chunked);
       info.pinnedDimCount = info.canElementWise ? 1 : 0;
 
       ctx.acquires.push_back(info);
@@ -846,11 +813,11 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     });
   }
 
-  /// Set capabilities based on mode consistency
+  // Determine allocation-level capabilities from per-acquire analysis
   if (modesConsistent) {
     ARTS_DEBUG(
         "  Consistent partition mode: " << static_cast<int>(consistentMode));
-    /// All consistent and coarse → no partitioning needed
+    /// All consistent and coarse -> no partitioning needed
     if (consistentMode == PartitionMode::Coarse) {
       ARTS_DEBUG("  Coarse mode - no partitioning needed");
       heuristics.recordDecision(
@@ -860,12 +827,12 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
       return allocOp;
     }
     ctx.canElementWise = (consistentMode == PartitionMode::ElementWise);
-    ctx.canChunked = (consistentMode == PartitionMode::Chunked);
+    ctx.canChunked = canUseChunked && (consistentMode == PartitionMode::Chunked);
   } else {
     /// Inconsistent modes: use per-acquire voting to determine capabilities
     ctx.canElementWise = ctx.anyCanElementWise();
-    ctx.canChunked = ctx.anyCanChunked();
-    // If neither is true but we have acquires, allow element-wise as fallback
+    ctx.canChunked = ctx.anyCanChunked(); /// Uses per-acquire canChunked flags
+    /// If neither is true but we have acquires, allow element-wise as fallback
     if (!ctx.canElementWise && !ctx.canChunked && !ctx.acquires.empty())
       ctx.canElementWise = true;
     ARTS_DEBUG("  Inconsistent modes - using per-acquire voting: canEW="
@@ -880,12 +847,18 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
     ctx.accessMode = allocOp.getMode();
 
   /// Get chunk size for Chunked mode (extract static value if possible)
+  /// Look for chunk size from ANY valid Chunked acquire, not just the reference.
+  /// This handles cases where modes are inconsistent (e.g., one Coarse, one Chunked).
   Value dynamicChunkSize;
-  if (consistentMode == PartitionMode::Chunked && reference.partitionSize) {
-    dynamicChunkSize = reference.partitionSize;
-    if (auto staticSize =
-            arts::extractChunkSizeFromHint(reference.partitionSize))
-      ctx.chunkSize = *staticSize;
+  for (const auto &info : acquireInfos) {
+    if (info.isValid && info.mode == PartitionMode::Chunked && info.partitionSize) {
+      dynamicChunkSize = info.partitionSize;
+      if (auto staticSize = arts::extractChunkSizeFromHint(info.partitionSize)) {
+        ctx.chunkSize = *staticSize;
+        ARTS_DEBUG("  Extracted chunk size from valid acquire: " << *staticSize);
+      }
+      break;
+    }
   }
 
   /// Get memref rank
@@ -912,7 +885,43 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
                                  << ", outerRank=" << decision.outerRank
                                  << ", innerRank=" << decision.innerRank);
 
-  /// Step 5: Compute sizes from decision (uses outerRank/innerRank)
+  /// Step 5a: Compute stencilInfo early (needed for inner size calculation)
+  /// Must be done before computeSizesFromDecision() for stencil mode.
+  std::optional<StencilInfo> stencilInfo;
+  if (decision.mode == RewriterMode::Stencil && allocNode) {
+    StencilInfo info;
+    info.haloLeft = 0;
+    info.haloRight = 0;
+
+    /// Collect stencil bounds from acquire nodes
+    allocNode->forEachChildNode([&](NodeBase *child) {
+      auto *acqNode = dyn_cast<DbAcquireNode>(child);
+      if (!acqNode)
+        return;
+      auto stencilBounds = acqNode->getStencilBounds();
+      if (stencilBounds && stencilBounds->hasHalo()) {
+        info.haloLeft = std::max(info.haloLeft, stencilBounds->haloLeft());
+        info.haloRight = std::max(info.haloRight, stencilBounds->haloRight());
+      }
+    });
+
+    /// Get total rows from first element dimension
+    if (!allocOp.getElementSizes().empty()) {
+      if (auto staticSize =
+              arts::extractChunkSizeFromHint(allocOp.getElementSizes()[0]))
+        info.totalRows =
+            builder.create<arith::ConstantIndexOp>(loc, *staticSize);
+      else
+        info.totalRows = allocOp.getElementSizes()[0];
+    }
+
+    stencilInfo = info;
+    ARTS_DEBUG("  Stencil mode (early): haloLeft=" << info.haloLeft
+                                                   << ", haloRight="
+                                                   << info.haloRight);
+  }
+
+  /// Step 5b: Compute sizes from decision (uses outerRank/innerRank)
   /// For chunked mode, we need a chunk size value that dominates the allocOp.
   /// Prefer static chunk size (recreate as constant), fall back to dynamic only
   /// if it dominates.
@@ -948,11 +957,29 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
           return allocOp;
         }
       }
+    } else {
+      /// No chunk size available (neither static nor dynamic) - fall back to coarse
+      ARTS_DEBUG("  No chunk size available for chunked mode - falling back to coarse");
+      heuristics.recordDecision(
+          "Partition-NoChunkSize", false,
+          "chunked mode requested but no chunk size available",
+          allocOp.getOperation(), {});
+      return allocOp;
     }
   }
 
+  /// For stencil mode, inner size must be EXTENDED (base + halos) to hold halo data.
+  /// But plan.chunkSize stays as BASE for chunk index computation in DbRewriter.
+  Value innerChunkSize = chunkSizeForPlan;
+  if (stencilInfo && stencilInfo->hasHalo() && chunkSizeForPlan) {
+    int64_t haloTotal = stencilInfo->haloLeft + stencilInfo->haloRight;
+    Value haloConst = builder.create<arith::ConstantIndexOp>(loc, haloTotal);
+    innerChunkSize = builder.create<arith::AddIOp>(loc, chunkSizeForPlan, haloConst);
+    ARTS_DEBUG("  Extended inner size for stencil: base + " << haloTotal);
+  }
+
   SmallVector<Value> newOuterSizes, newInnerSizes;
-  computeSizesFromDecision(allocOp, decision, chunkSizeForPlan, newOuterSizes,
+  computeSizesFromDecision(allocOp, decision, innerChunkSize, newOuterSizes,
                            newInnerSizes);
 
   if (newOuterSizes.empty()) {
@@ -968,57 +995,37 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   DbRewritePlan plan(decision);
   plan.chunkSize = chunkSizeForPlan;
 
-  /// ESD: Populate stencilInfo for Stencil mode
-  if (decision.mode == RewriterMode::Stencil && allocNode) {
-    StencilInfo stencilInfo;
-    stencilInfo.haloLeft = 0;
-    stencilInfo.haloRight = 0;
-
-    /// Collect stencil bounds from acquire nodes
-    allocNode->forEachChildNode([&](NodeBase *child) {
-      auto *acqNode = dyn_cast<DbAcquireNode>(child);
-      if (!acqNode)
-        return;
-      auto stencilBounds = acqNode->getStencilBounds();
-      if (stencilBounds && stencilBounds->hasHalo()) {
-        stencilInfo.haloLeft =
-            std::max(stencilInfo.haloLeft, stencilBounds->haloLeft());
-        stencilInfo.haloRight =
-            std::max(stencilInfo.haloRight, stencilBounds->haloRight());
-      }
-    });
-
-    /// Get total rows from first element dimension
-    if (!allocOp.getElementSizes().empty()) {
-      if (auto staticSize =
-              arts::extractChunkSizeFromHint(allocOp.getElementSizes()[0]))
-        stencilInfo.totalRows =
-            builder.create<arith::ConstantIndexOp>(loc, *staticSize);
-      else
-        stencilInfo.totalRows = allocOp.getElementSizes()[0];
-    }
-
-    /// Note: byte_offset/byte_size for ESD is computed in EdtLowering from
-    /// element_offsets/element_sizes, using allocation's elementSizes for
-    /// stride
-    plan.stencilInfo = stencilInfo;
-    ARTS_DEBUG("  Stencil mode: haloLeft=" << stencilInfo.haloLeft
-                                           << ", haloRight="
-                                           << stencilInfo.haloRight);
+  /// ESD: Use early-computed stencilInfo for Stencil mode
+  if (stencilInfo) {
+    plan.stencilInfo = *stencilInfo;
   }
 
   /// Build DbRewriteAcquire list from AcquirePartitionInfo
+  /// Include ALL acquires - invalid ones get Coarse fallback (offset=0, size=totalSize)
   SmallVector<DbRewriteAcquire> rewriteAcquires;
+  Value zero = builder.create<arith::ConstantIndexOp>(allocOp.getLoc(), 0);
   for (const auto &info : acquireInfos) {
-    if (info.isValid && info.acquire) {
-      rewriteAcquires.push_back(
-          {info.acquire, info.partitionOffset, info.partitionSize});
+    if (info.acquire) {
+      if (info.isValid) {
+        /// Valid acquire: use computed partition offset/size
+        rewriteAcquires.push_back(
+            {info.acquire, info.partitionOffset, info.partitionSize});
+      } else {
+        /// Invalid acquire: use Coarse fallback (full size access)
+        /// The acquire still needs rewriting to use the new allocation structure
+        Value totalSize = allocOp.getElementSizes().empty()
+                              ? zero
+                              : allocOp.getElementSizes().front();
+        rewriteAcquires.push_back({info.acquire, zero, totalSize});
+        ARTS_DEBUG("  Invalid acquire " << info.acquire
+                                        << " rewritten with Coarse fallback");
+      }
     }
   }
 
-  DbRewriter rewriter(allocOp, newOuterSizes, newInnerSizes, rewriteAcquires,
-                      plan);
-  auto result = rewriter.apply(builder);
+  auto rewriter = DbRewriter::create(allocOp, newOuterSizes, newInnerSizes,
+                                      rewriteAcquires, plan);
+  auto result = rewriter->apply(builder);
 
   /// Step 7: Set partition attribute on new alloc
   if (succeeded(result)) {
@@ -1046,22 +1053,7 @@ DbPartitioningPass::partitionAlloc(DbAllocOp allocOp, DbAllocNode *allocNode) {
   return result;
 }
 
-///===----------------------------------------------------------------------===///
-/// Analyze stencil patterns to detect out-of-bounds indices
-///
-/// For stencil patterns like depend(in: u[i-1], u[i], u[i+1]), the boundary
-/// iterations may access out-of-bounds indices (e.g., u[-1] when i=0).
-/// This analysis detects such patterns by:
-/// 1. Finding DbAcquireOps with indexed dependencies
-/// 2. Using LoopAnalysis::collectEnclosingLoops() to find enclosing loops
-/// 3. Using LoopNode::analyzeIndexExpr to detect offset patterns (e.g., i-1,
-/// i+1)
-/// 4. Generating runtime bounds checks and replacing DbAcquireOps with
-/// bounds_valid
-///===----------------------------------------------------------------------===///
-
-/// Check if op is in else branch of `if (iv == 0)` where iv is the loop IV.
-/// If so, we know iv > 0 (since loop starts at 0), so idx = iv-1 >= 0.
+/// Check if op is in the else branch of `if (iv == 0)`, guaranteeing iv > 0.
 static bool isLowerBoundGuaranteedByControlFlow(Operation *op, Value loopIV) {
   if (!loopIV)
     return false;
@@ -1159,7 +1151,7 @@ void DbPartitioningPass::analyzeStencilBounds() {
   ARTS_DEBUG_FOOTER(AnalyzeStencilBounds);
 }
 
-/// Generate runtime bounds checks and create new DbAcquireOp with bounds_valid
+/// Generate bounds_valid for stencil acquires; skips lower bound if control-flow guarded.
 void DbPartitioningPass::generateBoundsValid(DbAcquireOp acquireOp,
                                              ArrayRef<int64_t> boundsCheckFlags,
                                              Value loopIV) {
@@ -1232,9 +1224,6 @@ void DbPartitioningPass::generateBoundsValid(DbAcquireOp acquireOp,
   ARTS_DEBUG("Added bounds_valid to DbAcquireOp: " << newAcquire);
 }
 
-///===----------------------------------------------------------------------===///
-/// Invalidate and rebuild the graph
-///===----------------------------------------------------------------------===///
 void DbPartitioningPass::invalidateAndRebuildGraph() {
   module.walk([&](func::FuncOp func) {
     AM->invalidateFunction(func);
@@ -1242,9 +1231,6 @@ void DbPartitioningPass::invalidateAndRebuildGraph() {
   });
 }
 
-////===----------------------------------------------------------------------===////
-/// Pass creation
-////===----------------------------------------------------------------------===////
 namespace mlir {
 namespace arts {
 std::unique_ptr<Pass> createDbPartitioningPass(ArtsAnalysisManager *AM) {
