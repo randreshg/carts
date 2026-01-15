@@ -443,8 +443,38 @@ Value ArtsCodegen::createPtr(Value source, Location loc) {
 
 /// Casting
 Value ArtsCodegen::castParameter(mlir::Type targetType, Value source,
-                                 Location loc) {
+                                 Location loc, ParameterCastMode mode) {
   assert(targetType.isIntOrIndexOrFloat() && "Target type should be a number");
+  if (mode == ParameterCastMode::Bitwise) {
+    auto srcType = source.getType();
+    if (auto dstIntType = targetType.dyn_cast<IntegerType>()) {
+      if (auto srcFloatType = srcType.dyn_cast<FloatType>()) {
+        unsigned srcBits = srcFloatType.getWidth();
+        unsigned dstBits = dstIntType.getWidth();
+        if (srcBits == dstBits)
+          return create<arith::BitcastOp>(loc, dstIntType, source);
+        auto srcIntType = IntegerType::get(getContext(), srcBits);
+        Value intBits = create<arith::BitcastOp>(loc, srcIntType, source);
+        if (srcBits < dstBits)
+          return create<arith::ExtUIOp>(loc, dstIntType, intBits);
+        return create<arith::TruncIOp>(loc, dstIntType, intBits);
+      }
+    } else if (auto dstFloatType = targetType.dyn_cast<FloatType>()) {
+      if (auto srcIntType = srcType.dyn_cast<IntegerType>()) {
+        unsigned srcBits = srcIntType.getWidth();
+        unsigned dstBits = dstFloatType.getWidth();
+        if (srcBits == dstBits)
+          return create<arith::BitcastOp>(loc, dstFloatType, source);
+        auto dstIntType = IntegerType::get(getContext(), dstBits);
+        Value intBits = source;
+        if (srcBits < dstBits)
+          intBits = create<arith::ExtUIOp>(loc, dstIntType, source);
+        else
+          intBits = create<arith::TruncIOp>(loc, dstIntType, source);
+        return create<arith::BitcastOp>(loc, dstFloatType, intBits);
+      }
+    }
+  }
   /// If target type is an integer
   if (targetType.isa<IntegerType>())
     return castToInt(targetType, source, loc);

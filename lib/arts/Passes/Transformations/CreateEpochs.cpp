@@ -38,28 +38,37 @@ static void setIsTaskAttr(EdtOp op) {
   op.setTypeAttr(newTypeAttr);
 }
 
-/// Helper function to process synchronous EDT ops.
-static void processSyncEdtOp(EdtOp op) {
-  /// Only process EDT ops with sync attribute.
-  if (op.getTypeAttr().getValue() != EdtType::sync)
+static bool isInsideEpoch(EdtOp op) {
+  return op->getParentOfType<EpochOp>() != nullptr;
+}
+
+static void wrapEdtInEpoch(EdtOp op, bool demoteToTask) {
+  if (isInsideEpoch(op))
     return;
-  ARTS_DEBUG("Processing Sync EDT Op: " << op);
   auto loc = op.getLoc();
   OpBuilder builder(op);
   auto epochOp = builder.create<EpochOp>(loc);
   auto &epochBlock = epochOp.getBody().emplaceBlock();
   builder.setInsertionPointToEnd(&epochBlock);
   builder.create<YieldOp>(loc);
-
-  /// Move the EDT op to the end of the new block.
   op->moveBefore(&epochBlock, --epochBlock.end());
 
-  /// Remove the sync attribute and mark the op as a task.
-  clearIsSyncAttr(op);
-  setIsTaskAttr(op);
+  if (demoteToTask) {
+    clearIsSyncAttr(op);
+    setIsTaskAttr(op);
+  }
 }
 
-/// Helper function to process barrier ops
+/// Helper function to process synchronous EDT ops.
+static void processSyncEdtOp(EdtOp op) {
+  /// Only process EDT ops with sync attribute.
+  if (op.getTypeAttr().getValue() != EdtType::sync)
+    return;
+  ARTS_DEBUG("Processing Sync EDT Op: " << op);
+  wrapEdtInEpoch(op, /*demoteToTask=*/true);
+}
+
+/// Helper function to process barrier ops.
 static Region *findCommonRegion(Region *a, Region *b) {
   if (!a)
     return b;

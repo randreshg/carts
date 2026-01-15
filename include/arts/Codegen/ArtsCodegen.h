@@ -104,7 +104,12 @@ public:
   Value createIndexConstant(int value, Location loc);
   Value createIntConstant(int value, Type type, Location loc);
   Value createPtr(Value source, Location loc);
-  Value castParameter(Type targetType, Value source, Location loc);
+  enum class ParameterCastMode {
+    Numeric,
+    Bitwise,
+  };
+  Value castParameter(Type targetType, Value source, Location loc,
+                      ParameterCastMode mode = ParameterCastMode::Numeric);
   Value castPtr(Type targetType, Value source, Location loc);
   Value castToIndex(Value source, Location loc);
   Value castToFloat(Type targetType, Value source, Location loc);

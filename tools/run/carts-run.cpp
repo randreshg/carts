@@ -442,7 +442,8 @@ setupPassManager(ModuleOp module, MLIRContext &context,
                  std::unique_ptr<arts::ArtsAnalysisManager> *outAM = nullptr) {
   /// Create module-level analysis manager for caching across functions
   std::unique_ptr<arts::ArtsAnalysisManager> AM =
-      std::make_unique<arts::ArtsAnalysisManager>(module, ArtsConfig);
+      std::make_unique<arts::ArtsAnalysisManager>(module, ArtsConfig,
+                                                  MetadataFile);
 
   /// Canonicalize memrefs
   {

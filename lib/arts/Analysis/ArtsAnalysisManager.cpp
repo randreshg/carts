@@ -20,8 +20,12 @@ using namespace mlir;
 using namespace mlir::arts;
 
 ArtsAnalysisManager::ArtsAnalysisManager(ModuleOp module,
-                                         const std::string &configFile)
-    : module(module), configFile(configFile), abstractMachine(configFile) {}
+                                         const std::string &configFile,
+                                         const std::string &metadataFile)
+    : module(module), configFile(configFile),
+      metadataFile(metadataFile.empty() ? ".carts-metadata.json"
+                                        : metadataFile),
+      abstractMachine(configFile) {}
 
 ArtsAnalysisManager::~ArtsAnalysisManager() {}
 
@@ -67,7 +71,7 @@ ArtsMetadataManager &ArtsAnalysisManager::getMetadataManager() {
     metadataManager =
         std::make_unique<ArtsMetadataManager>(module.getContext());
     metadataManager->getIdRegistry().initializeFromModule(module);
-    metadataManager->importFromJsonFile(module, ".carts-metadata.json");
+    metadataManager->importFromJsonFile(module, metadataFile);
   }
   return *metadataManager;
 }
