@@ -261,8 +261,6 @@ void DbLoweringPass::updateAllocUsers(DbAllocOp oldAllocOp,
 void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
                                         Value newPtr,
                                         SmallVector<Value> elementSizes) {
-  /// Preserve the absence of a source GUID for nested acquires that only
-  /// thread the pointer through EDT block arguments.
   Value oldSourceGuid = acquireOp.getSourceGuid();
   Value sourceGuid = oldSourceGuid ? newGuid : Value();
   Value sourcePtr = newPtr ? newPtr : acquireOp.getPtr();
@@ -277,10 +275,15 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
                                  acquireOp.getOffsetHints().end());
   SmallVector<Value> sizeHints(acquireOp.getSizeHints().begin(),
                                acquireOp.getSizeHints().end());
+  SmallVector<Value> elementOffsets(acquireOp.getElementOffsets().begin(),
+                                    acquireOp.getElementOffsets().end());
+  SmallVector<Value> acquireElementSizes(acquireOp.getElementSizes().begin(),
+                                         acquireOp.getElementSizes().end());
   Value boundsValid = acquireOp.getBoundsValid();
   auto newAcquireOp = AC->create<DbAcquireOp>(
       acquireOp.getLoc(), acquireOp.getMode(), sourceGuid, sourcePtr, indices,
-      offsets, sizes, offsetHints, sizeHints, boundsValid);
+      offsets, sizes, offsetHints, sizeHints, boundsValid, elementOffsets,
+      acquireElementSizes);
   for (auto &attr : acquireOp->getAttrs()) {
     if (attr.getName().getValue().starts_with("arts."))
       newAcquireOp->setAttr(attr.getName(), attr.getValue());

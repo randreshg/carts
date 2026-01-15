@@ -162,6 +162,17 @@ public:
   /// Get outer stride Value from DbAllocOp (uses getSizes()).
   static Value getOuterStrideValue(OpBuilder &builder, Location loc,
                                    DbAllocOp alloc);
+
+  ///===----------------------------------------------------------------------===//
+  /// Access Mode and Hints Analysis
+  ///===----------------------------------------------------------------------===//
+
+  /// Check if a DbAcquireOp has static (constant) offset and size hints.
+  /// Returns true if both offset and size hints are either empty or constant.
+  static bool hasStaticHints(DbAcquireOp acqOp);
+
+  /// Check if an ArtsMode is a writer mode (out or inout).
+  static bool isWriterMode(ArtsMode mode);
 };
 
 } // namespace arts

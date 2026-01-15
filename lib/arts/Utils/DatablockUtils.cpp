@@ -225,16 +225,16 @@ std::optional<int64_t> DatablockUtils::getStaticStride(ValueRange sizes) {
   if (sizes.empty())
     return std::nullopt;
 
-  // Single dimension [N]: stride = 1
+  /// Single dimension [N]: stride = 1
   if (sizes.size() == 1)
     return 1;
 
-  // Multi-dimensional [D0, D1, ...]: stride = D1 * D2 * ... (skip D0!)
+  /// Multi-dimensional [D0, D1, ...]: stride = D1 * D2 * ... (skip D0!)
   int64_t stride = 1;
-  for (size_t i = 1; i < sizes.size(); ++i) { // START AT 1
+  for (size_t i = 1; i < sizes.size(); ++i) { /// START AT 1
     int64_t dim;
     if (!ValueUtils::getConstantIndex(sizes[i], dim))
-      return std::nullopt; // Dynamic dimension
+      return std::nullopt; /// Dynamic dimension
     stride *= dim;
   }
   return stride;
@@ -249,7 +249,7 @@ std::optional<int64_t> DatablockUtils::getStaticStride(MemRefType memrefType) {
     return 1;
 
   int64_t stride = 1;
-  for (size_t i = 1; i < shape.size(); ++i) { // START AT 1
+  for (size_t i = 1; i < shape.size(); ++i) { /// START AT 1
     if (shape[i] == ShapedType::kDynamic)
       return std::nullopt;
     stride *= shape[i];
@@ -270,20 +270,19 @@ Value DatablockUtils::getStrideValue(OpBuilder &builder, Location loc,
   if (sizes.empty())
     return nullptr;
 
-  // Single dimension [N]: stride = 1
+  /// Single dimension [N]: stride = 1
   if (sizes.size() == 1)
     return builder.create<arith::ConstantIndexOp>(loc, 1);
 
-  // Try static first for efficiency
+  /// Try static first for efficiency
   if (auto staticStride = getStaticStride(sizes))
     return builder.create<arith::ConstantIndexOp>(loc, *staticStride);
 
-  // Dynamic: build multiplication chain for trailing dimensions
-  // stride = sizes[1] * sizes[2] * ... * sizes[n-1]
-  Value stride = sizes[1]; // Start at index 1 (skip first dimension!)
-  for (size_t i = 2; i < sizes.size(); ++i) {
+  /// Dynamic: build multiplication chain for trailing dimensions
+  /// stride = sizes[1] * sizes[2] * ... * sizes[n-1]
+  Value stride = sizes[1];
+  for (size_t i = 2; i < sizes.size(); ++i)
     stride = builder.create<arith::MulIOp>(loc, stride, sizes[i]);
-  }
   return stride;
 }
 
@@ -295,4 +294,22 @@ Value DatablockUtils::getElementStrideValue(OpBuilder &builder, Location loc,
 Value DatablockUtils::getOuterStrideValue(OpBuilder &builder, Location loc,
                                           DbAllocOp alloc) {
   return getStrideValue(builder, loc, alloc.getSizes());
+}
+
+///===----------------------------------------------------------------------===//
+/// Access Mode and Hints Analysis
+///===----------------------------------------------------------------------===//
+
+bool DatablockUtils::hasStaticHints(DbAcquireOp acqOp) {
+  auto offsets = acqOp.getOffsetHints();
+  auto sizes = acqOp.getSizeHints();
+  int64_t val = 0;
+  bool offConst =
+      offsets.empty() || ValueUtils::getConstantIndex(offsets[0], val);
+  bool sizeConst = sizes.empty() || ValueUtils::getConstantIndex(sizes[0], val);
+  return offConst && sizeConst;
+}
+
+bool DatablockUtils::isWriterMode(ArtsMode mode) {
+  return mode == ArtsMode::out || mode == ArtsMode::inout;
 }

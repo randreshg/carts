@@ -8,6 +8,8 @@
 #include "arts/Analysis/Graphs/Db/DbNode.h"
 #include "arts/Analysis/Metadata/ArtsMetadataManager.h"
 #include "arts/Utils/ArtsUtils.h"
+#include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/OperationAttributes.h"
 #include "arts/Utils/Metadata/ArtsMetadata.h"
 #include "arts/Utils/Metadata/MemrefMetadata.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -30,16 +32,10 @@ DbAllocNode::DbAllocNode(DbAllocOp op, DbAnalysis *analysis)
   assert(op && "DbAllocOp is required to create DbAllocNode");
   assert(op.getOperation() && "Operation is required to create DbAllocNode");
 
-  /// Verify operation is valid
-  Operation *opPtr = op.getOperation();
-  if (!opPtr) {
-    ARTS_ERROR("Cannot create DbAllocNode: operation pointer is null");
-    return;
-  }
   analysis->getAnalysisManager()
       .getMetadataManager()
       .getIdRegistry()
-      .getOrCreate(opPtr);
+      .getOrCreate(op.getOperation());
 
   /// Import metadata from operation attributes, falling back to manager
   bool hasMetadata = importFromOp();
@@ -162,20 +158,64 @@ bool DbAllocNode::canBePartitioned() {
                "acquire-level validation");
   }
 
-  /// Step 2: Recursively check ALL acquire children
-  /// If ANY acquire fails, the entire allocation cannot be partitioned
+  /// Step 2: Check ALL acquire children and track stencil patterns
+  /// For stencil patterns (uniform write + stencil read), we allow partitioning
+  /// even if the uniform write acquire fails offset validation. H1.5 will use
+  /// ESD mode which handles mixed access patterns correctly.
   if (acquireNodes.empty()) {
     ARTS_DEBUG("  No acquire nodes - trivially partitionable");
     return true;
   }
 
   ARTS_DEBUG("  Checking " << acquireNodes.size() << " acquire children...");
+
+  bool anyPassed = false;
+  bool anyHasStencilBounds = false;
+  bool allFailed = true;
+
   for (const auto &acqNode : acquireNodes) {
     if (!acqNode)
       continue;
-    if (!acqNode->canBePartitioned()) {
-      return skip("acquire child failed canBePartitioned()");
+
+    bool passed = acqNode->canBePartitioned();
+    if (passed) {
+      anyPassed = true;
+      allFailed = false;
+      /// Check if this acquire has stencil bounds (minOffset != maxOffset)
+      if (auto bounds = acqNode->getStencilBounds()) {
+        if (bounds->valid && bounds->isStencil) {
+          anyHasStencilBounds = true;
+          ARTS_DEBUG("  Acquire has stencil bounds: minOffset="
+                     << bounds->minOffset << ", maxOffset=" << bounds->maxOffset);
+        }
+      }
+    } else {
+      ARTS_DEBUG("  Acquire failed canBePartitioned()");
     }
+  }
+
+  /// Summarize access patterns (for logging)
+  AcquirePatternSummary patterns = summarizeAcquirePatterns();
+  ARTS_DEBUG("  Access patterns: hasUniform=" << patterns.hasUniform
+             << ", hasStencil=" << patterns.hasStencil
+             << ", hasIndexed=" << patterns.hasIndexed
+             << ", isMixed=" << patterns.isMixed());
+
+  /// Allow partitioning if ANY acquire passed with stencil bounds
+  /// This handles mixed access patterns (uniform write + stencil read)
+  if (anyHasStencilBounds) {
+    ARTS_DEBUG("  Stencil bounds detected - allowing partition for H1.5 ESD mode");
+    return true;
+  }
+
+  /// If all acquires failed, reject the allocation
+  if (allFailed) {
+    return skip("all acquire children failed canBePartitioned()");
+  }
+
+  /// If at least one passed (but no stencil bounds), allow partitioning
+  if (anyPassed) {
+    ARTS_DEBUG("  At least one acquire passed validation");
   }
 
   ARTS_DEBUG("  PASS: alloc " << hierId << " can be partitioned");
@@ -214,18 +254,43 @@ bool DbAllocNode::hasSingleWriter() const {
       continue;
 
     ArtsMode mode = acqOp.getMode();
-    if (mode == ArtsMode::out || mode == ArtsMode::inout)
-      writeCount++;
+    if (!DatablockUtils::isWriterMode(mode))
+      continue;
 
-    /// Early exit - more than one writer
+    writeCount++;
     if (writeCount > 1)
+      return false;
+
+    /// A single DbAcquireOp can still represent many writers if it is
+    /// partitioned by dynamic loop hints. Treat as multi-writer.
+    if (!DatablockUtils::hasStaticHints(acqOp))
       return false;
   }
 
   if (writeCount <= 1) {
     ARTS_DEBUG("Single writer detected (" << writeCount
-                                          << " writers) → no overlap possible");
+                                          << " writers) -> no overlap possible");
     return true;
+  }
+
+  return false;
+}
+
+bool DbAllocNode::hasDynamicWriterOffsets() const {
+  for (const auto &acqNode : acquireNodes) {
+    if (!acqNode)
+      continue;
+    DbAcquireOp acqOp = acqNode->getDbAcquireOp();
+    if (!acqOp)
+      continue;
+
+    if (!DatablockUtils::isWriterMode(acqOp.getMode()))
+      continue;
+
+    if (!DatablockUtils::hasStaticHints(acqOp)) {
+      ARTS_DEBUG("Writer acquire has dynamic offset/size hints");
+      return true;
+    }
   }
 
   return false;
@@ -251,9 +316,16 @@ bool DbAllocNode::canProveNonOverlapping() const {
   if (acquireNodes.empty())
     return true;
 
-  /// Single acquire = non-overlapping with itself
-  if (acquireNodes.size() == 1)
-    return true;
+  /// Single acquire is only safe when it does not represent a loop-partitioned
+  /// writer (dynamic offset/size hints can imply multiple runtime instances).
+  if (acquireNodes.size() == 1) {
+    const auto *single = acquireNodes.front().get();
+    if (!single)
+      return true;
+    DbAcquireOp acqOp = single->getDbAcquireOp();
+    if (DatablockUtils::hasStaticHints(acqOp))
+      return true;
+  }
 
   ARTS_DEBUG("Analyzing overlap for " << acquireNodes.size() << " acquires");
 
@@ -261,6 +333,26 @@ bool DbAllocNode::canProveNonOverlapping() const {
   /// If only one EDT writes, there's no possibility of write conflicts
   if (hasSingleWriter())
     return true;
+
+  /// Dynamic writer offsets can represent multiple runtime writers.
+  if (hasDynamicWriterOffsets()) {
+    ARTS_DEBUG("Dynamic writer offsets -> potential overlap");
+    return false;
+  }
+
+  /// If the allocation is not actually partitioned, disjoint offset hints are
+  /// insufficient to prove non-overlap because each EDT still acquires the full
+  /// DB copy (remote updates would clobber each other). Require twin-diff.
+  bool isPartitioned = false;
+  if (dbAllocOp) {
+    auto &mutableAlloc = const_cast<DbAllocOp &>(dbAllocOp);
+    if (auto mode = getPartitionMode(mutableAlloc.getOperation()))
+      isPartitioned = (*mode != PromotionMode::none);
+  }
+  if (!isPartitioned) {
+    ARTS_DEBUG("Unpartitioned alloc with multiple writers -> potential overlap");
+    return false;
+  }
 
   /// Method 2: All worker-indexed = disjoint
   /// If all acquires use the pattern array[workerId] with size=1,

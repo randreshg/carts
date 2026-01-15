@@ -1,443 +1,239 @@
 ///==========================================================================///
 /// File: DbElementWiseRewriter.cpp
+///
+/// Element-wise rewriter: each element is a separate datablock.
+///
+/// Example transformation (N=100 elements, 4 workers):
+///
+///   BEFORE:
+///     %db = arts.db_alloc memref<100xf64>
+///     arts.db_acquire %db [0] [100]        // worker acquires all
+///     %ref = arts.db_ref %db[%i]
+///     memref.load %ref[%j]                 // global index j
+///
+///   AFTER:
+///     %db = arts.db_alloc memref<100x1xf64>  // outer=100, inner=1
+///     arts.db_acquire %db [%offset] [%size] // worker 0: [0][25]
+///     %ref = arts.db_ref %db[%i]
+///     memref.load %ref[0]                   // local index (always 0)
+///
+/// Index localization: local = global - elemOffset
 ///==========================================================================///
 
 #include "arts/Transforms/Datablock/DbElementWiseRewriter.h"
-#include "arts/Codegen/ArtsCodegen.h"
+#include "arts/Transforms/Datablock/DbElementWiseIndexer.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DatablockUtils.h"
+#include "arts/Utils/EdtUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
-#include "llvm/Support/Debug.h"
-
-#define DEBUG_TYPE "db_transforms"
 
 ARTS_DEBUG_SETUP(db_transforms);
 
 using namespace mlir;
 using namespace mlir::arts;
 
-/// Note: getIndicesFromOp() is now in DbRewriterBase.h
+void DbElementWiseRewriter::transformAcquire(const DbRewriteAcquire &info,
+                                              DbAllocOp newAlloc,
+                                              OpBuilder &builder) {
+  DbAcquireOp acquire = info.acquire;
+  Value elemOffset = info.elemOffset;
+  Value elemSize = info.elemSize;
 
-DbElementWiseRewriter::DbElementWiseRewriter(Value elemOffset, Value elemSize,
-                                             unsigned outerRank,
-                                             unsigned innerRank,
-                                             ValueRange oldElementSizes)
-    : DbRewriterBase(outerRank, innerRank), elemOffset_(elemOffset),
-      elemSize_(elemSize),
-      oldElementSizes_(oldElementSizes.begin(), oldElementSizes.end()) {}
+  ARTS_DEBUG("DbElementWiseRewriter::transformAcquire");
 
-LocalizedIndices DbElementWiseRewriter::splitIndices(ValueRange globalIndices,
-                                                     OpBuilder &builder,
-                                                     Location loc) {
-  LocalizedIndices result;
-  auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPoint(acquire);
 
-  if (globalIndices.empty()) {
-    result.dbRefIndices.push_back(zero());
-    result.memrefIndices.push_back(zero());
-    return result;
+  /// Update source to new allocation
+  acquire.getSourceGuidMutable().assign(newAlloc.getGuid());
+  acquire.getSourcePtrMutable().assign(newAlloc.getPtr());
+
+  /// Update acquire's ptr result type to match new source
+  MemRefType newPtrType = newAlloc.getPtr().getType().cast<MemRefType>();
+  Type oldAcqPtrType = acquire.getPtr().getType();
+  if (oldAcqPtrType != newPtrType) {
+    acquire.getPtr().setType(newPtrType);
+
+    /// Also update EDT block argument type if this acquire feeds an EDT
+    auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+    if (blockArg && blockArg.getType() != newPtrType)
+      blockArg.setType(newPtrType);
   }
 
-  for (unsigned i = 0; i < globalIndices.size(); ++i) {
-    if (i < outerRank_)
-      result.dbRefIndices.push_back(globalIndices[i]);
-    else
-      result.memrefIndices.push_back(globalIndices[i]);
-  }
+  /// ELEMENT-WISE: already in datablock space, no offset transformation
+  SmallVector<Value> newOffsets, newSizes;
+  newOffsets.push_back(elemOffset);
+  newSizes.push_back(elemSize);
 
-  if (result.dbRefIndices.empty())
-    result.dbRefIndices.push_back(zero());
-  if (result.memrefIndices.empty())
-    result.memrefIndices.push_back(zero());
+  acquire.getOffsetsMutable().assign(newOffsets);
+  acquire.getSizesMutable().assign(newSizes);
+  acquire.getOffsetHintsMutable().assign(newOffsets);
+  acquire.getSizeHintsMutable().assign(newSizes);
 
-  return result;
-}
-
-LocalizedIndices DbElementWiseRewriter::localize(ArrayRef<Value> globalIndices,
-                                                 OpBuilder &builder,
-                                                 Location loc) {
-  ARTS_DEBUG("DbElementWiseRewriter::localize with " << globalIndices.size()
-                                                     << " indices");
-  LLVM_DEBUG(llvm::dbgs() << "DbElementWiseRewriter::localize with "
-                          << globalIndices.size() << " indices\n");
-
-  if (outerRank_ == 0)
-    return splitIndices(ValueRange(globalIndices), builder, loc);
-
-  if (globalIndices.empty())
-    return splitIndices(ValueRange(globalIndices), builder, loc);
-
-  /// Element-wise: split indices by outer/inner rank and subtract elemOffset
-  LocalizedIndices result =
-      splitIndices(ValueRange(globalIndices), builder, loc);
-  if (!result.dbRefIndices.empty()) {
-    result.dbRefIndices[0] =
-        builder.create<arith::SubIOp>(loc, result.dbRefIndices[0], elemOffset_);
-  }
-
-  LLVM_DEBUG(llvm::dbgs() << "  -> dbRef: " << result.dbRefIndices.size()
-                          << ", memref: " << result.memrefIndices.size()
-                          << "\n");
-  return result;
-}
-
-LocalizedIndices
-DbElementWiseRewriter::localizeLinearized(Value globalLinearIndex, Value stride,
-                                          OpBuilder &builder, Location loc) {
-  LocalizedIndices result;
-
-  ARTS_DEBUG(
-      "DbElementWiseRewriter::localizeLinearized - scaling offset by stride");
-  LLVM_DEBUG(llvm::dbgs() << "DbElementWiseRewriter::localizeLinearized\n"
-                          << "  THE KEY FIX: scaling offset by stride!\n");
-
-  ///   globalLinear = (elemOffset + localRow) * stride + col
-  ///   localLinear  = localRow * stride + col
-  ///   Therefore:
-  ///   localLinear  = globalLinear - (elemOffset * stride)
-
-  Value scaledOffset = builder.create<arith::MulIOp>(loc, elemOffset_, stride);
-  Value localLinear =
-      builder.create<arith::SubIOp>(loc, globalLinearIndex, scaledOffset);
-
-  /// For element-wise, dbRef index = row index relative to start
-  Value globalRow =
-      builder.create<arith::DivUIOp>(loc, globalLinearIndex, stride);
-  Value dbRefIdx = builder.create<arith::SubIOp>(loc, globalRow, elemOffset_);
-
-  result.dbRefIndices.push_back(dbRefIdx);
-  result.memrefIndices.push_back(localLinear);
-
-  return result;
-}
-
-LocalizedIndices DbElementWiseRewriter::localizeForFineGrained(
-    ValueRange globalIndices, ValueRange acquireIndices,
-    ValueRange acquireOffsets, OpBuilder &builder, Location loc) {
-  LocalizedIndices result;
-  auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
-
-  ARTS_DEBUG("DbElementWiseRewriter::localizeForFineGrained with "
-             << globalIndices.size() << " indices");
-  LLVM_DEBUG(
-      llvm::dbgs() << "DbElementWiseRewriter::localizeForFineGrained with "
-                   << globalIndices.size() << " indices\n");
-
-  if (globalIndices.empty()) {
-    result.dbRefIndices.push_back(zero());
-    result.memrefIndices.push_back(zero());
-    return result;
-  }
-
-  for (unsigned i = 0; i < globalIndices.size(); ++i) {
-    Value globalIdx = globalIndices[i];
-
-    if (i < outerRank_) {
-      Value localIdx = globalIdx;
-      if (i < acquireIndices.size()) {
-        localIdx =
-            builder.create<arith::SubIOp>(loc, globalIdx, acquireIndices[i]);
-      } else if (!acquireOffsets.empty() && i == acquireIndices.size()) {
-        localIdx =
-            builder.create<arith::SubIOp>(loc, globalIdx, acquireOffsets[0]);
-      }
-      result.dbRefIndices.push_back(localIdx);
-    } else {
-      result.memrefIndices.push_back(globalIdx);
+  /// Store original stride for linearized access (stride = D1 * D2 * ...)
+  if (auto staticStride = DatablockUtils::getStaticElementStride(oldAlloc_)) {
+    if (*staticStride > 1) {
+      acquire->setAttr("element_stride", builder.getIndexAttr(*staticStride));
+      ARTS_DEBUG("Element-wise rewrite: stored stride=" << *staticStride);
     }
   }
 
-  if (result.dbRefIndices.empty())
-    result.dbRefIndices.push_back(zero());
-  if (result.memrefIndices.empty())
-    result.memrefIndices.push_back(zero());
-
-  return result;
+  /// Rebase EDT users via the element-wise indexer
+  rebaseEdtUsers(acquire, builder);
 }
 
-void DbElementWiseRewriter::rewriteAccessWithDbPattern(
-    Operation *op, Value dbPtr, Type elementType, ArtsCodegen &AC,
-    llvm::SetVector<Operation *> &opsToRemove) {
-  if (!isa<memref::LoadOp, memref::StoreOp>(op))
-    return;
+void DbElementWiseRewriter::transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
+                                            OpBuilder &builder) {
+  Location loc = ref.getLoc();
+  Type newElementType = newAlloc.getAllocatedElementType();
+  Value newSource = (ref.getSource() == oldAlloc_.getPtr()) ? newAlloc.getPtr()
+                                                            : ref.getSource();
 
-  OpBuilder::InsertionGuard ig(AC.getBuilder());
-  AC.setInsertionPoint(op);
-  Location loc = op->getLoc();
+  unsigned newOuterRank = newOuterSizes_.size();
+  unsigned newInnerRank = newInnerSizes_.size();
 
-  ValueRange indices = getIndicesFromOp(op);
-  LocalizedIndices localized = splitIndices(indices, AC.getBuilder(), loc);
-
-  auto dbRef =
-      AC.create<DbRefOp>(loc, elementType, dbPtr, localized.dbRefIndices);
-
-  if (auto load = dyn_cast<memref::LoadOp>(op)) {
-    auto newLoad = AC.create<memref::LoadOp>(loc, dbRef.getResult(),
-                                             localized.memrefIndices);
-    load.replaceAllUsesWith(newLoad.getResult());
-  } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
-    AC.create<memref::StoreOp>(loc, store.getValue(), dbRef.getResult(),
-                               localized.memrefIndices);
-  }
-  opsToRemove.insert(op);
-}
-
-void DbElementWiseRewriter::rebaseOps(
-    ArrayRef<Operation *> ops, Value dbPtr, Type elementType, ArtsCodegen &AC,
-    llvm::SetVector<Operation *> &opsToRemove) {
-  ARTS_DEBUG("DbElementWiseRewriter::rebaseOps with " << ops.size() << " ops");
-  LLVM_DEBUG(llvm::dbgs() << "DbElementWiseRewriter::rebaseOps: processing "
-                          << ops.size() << " operations\n");
-
-  for (Operation *op : ops) {
-    OpBuilder::InsertionGuard IG(AC.getBuilder());
-    AC.setInsertionPoint(op);
-    Location loc = op->getLoc();
-
-    /// Handle DbRefOp specially - rewrite its users
-    if (auto dbRef = dyn_cast<DbRefOp>(op)) {
-      rewriteDbRefUsers(dbRef, dbPtr, elementType, AC.getBuilder(),
-                        opsToRemove);
-      continue;
-    }
-
-    /// Handle load/store operations
-    if (!isa<memref::LoadOp, memref::StoreOp>(op))
-      continue;
-
-    ValueRange indices = getIndicesFromOp(op);
-    if (indices.empty())
-      continue;
-
-    /// Detect linearized access for multi-dimensional elements
-    bool isLinearized = false;
-    Value stride;
-    if (outerRank_ == 1 && indices.size() == 1 &&
-        oldElementSizes_.size() >= 2) {
-      /// Multi-dimensional old element with single index = linearized access
-      stride = DatablockUtils::getStrideValue(AC.getBuilder(), loc,
-                                              oldElementSizes_);
-      if (stride) {
-        if (auto staticStride =
-                DatablockUtils::getStaticStride(oldElementSizes_)) {
-          if (*staticStride > 1) {
-            isLinearized = true;
-            LLVM_DEBUG(llvm::dbgs()
-                       << "DbElementWiseRewriter: linearized stride="
-                       << *staticStride << " from oldElementSizes\n");
-          }
-        } else {
-          /// Dynamic stride - always use it
-          isLinearized = true;
-          LLVM_DEBUG(llvm::dbgs() << "DbElementWiseRewriter: using dynamic "
-                                     "stride from oldElementSizes\n");
-        }
-      }
-    }
-
-    LocalizedIndices localized;
-    if (isLinearized && stride) {
-      localized = localizeLinearized(indices[0], stride, AC.getBuilder(), loc);
-    } else {
-      SmallVector<Value> indicesVec(indices.begin(), indices.end());
-      localized = localize(indicesVec, AC.getBuilder(), loc);
-    }
-
-    /// Create db_ref + load/store pattern
-    auto dbRef =
-        AC.create<DbRefOp>(loc, elementType, dbPtr, localized.dbRefIndices);
-
-    if (auto load = dyn_cast<memref::LoadOp>(op)) {
-      auto newLoad = AC.create<memref::LoadOp>(loc, dbRef.getResult(),
-                                               localized.memrefIndices);
-      load.replaceAllUsesWith(newLoad.getResult());
-    } else if (auto store = dyn_cast<memref::StoreOp>(op)) {
-      AC.create<memref::StoreOp>(loc, store.getValue(), dbRef.getResult(),
-                                 localized.memrefIndices);
-    }
-    opsToRemove.insert(op);
-  }
-}
-
-void DbElementWiseRewriter::rewriteDbRefUsers(
-    DbRefOp ref, Value blockArg, Type newElementType, OpBuilder &builder,
-    llvm::SetVector<Operation *> &opsToRemove) {
-  LLVM_DEBUG(llvm::dbgs() << "DbElementWiseRewriter::rewriteDbRefUsers\n");
-
+  /// Collect load/store users of this db_ref
   SmallVector<Operation *> refUsers(ref.getResult().getUsers().begin(),
                                     ref.getResult().getUsers().end());
-  for (Operation *refUser : refUsers) {
-    OpBuilder::InsertionGuard IG(builder);
-    builder.setInsertionPoint(refUser);
-    Location userLoc = refUser->getLoc();
+  llvm::SetVector<Operation *> opsToRemove;
 
-    ValueRange elementIndices;
-    if (auto load = dyn_cast<memref::LoadOp>(refUser))
-      elementIndices = load.getIndices();
-    else if (auto store = dyn_cast<memref::StoreOp>(refUser))
-      elementIndices = store.getIndices();
-    else
+  bool hasLoadStoreUsers = false;
+  for (Operation *user : refUsers) {
+    if (!isa<memref::LoadOp, memref::StoreOp>(user))
       continue;
 
-    if (elementIndices.empty())
-      continue;
+    hasLoadStoreUsers = true;
+    OpBuilder::InsertionGuard ig(builder);
+    builder.setInsertionPoint(user);
+    Location userLoc = user->getLoc();
 
-    /// Detect linearized access: single index accessing multi-element memref
-    bool isLinearized = false;
-    Value stride;
-    if (outerRank_ == 1 && elementIndices.size() == 1 &&
-        oldElementSizes_.size() >= 2) {
-      stride =
-          DatablockUtils::getStrideValue(builder, userLoc, oldElementSizes_);
-      if (stride) {
-        if (auto staticStride =
-                DatablockUtils::getStaticStride(oldElementSizes_)) {
-          if (*staticStride > 1) {
-            isLinearized = true;
-            LLVM_DEBUG(llvm::dbgs()
-                       << "DbElementWiseRewriter: linearized stride="
-                       << *staticStride << " from oldElementSizes\n");
-          }
-        } else {
-          /// Dynamic stride - always use it
-          isLinearized = true;
-          LLVM_DEBUG(llvm::dbgs() << "DbElementWiseRewriter: using dynamic "
-                                     "stride from oldElementSizes\n");
-        }
-      }
+    /// Get load/store indices
+    ValueRange loadStoreIndices;
+    if (auto load = dyn_cast<memref::LoadOp>(user))
+      loadStoreIndices = load.getIndices();
+    else if (auto store = dyn_cast<memref::StoreOp>(user))
+      loadStoreIndices = store.getIndices();
+
+    SmallVector<Value> newOuter, newInner;
+    auto zero = [&]() {
+      return builder.create<arith::ConstantIndexOp>(userLoc, 0);
+    };
+
+    /// ElementWise: direct mapping of indices
+    for (unsigned i = 0; i < newOuterRank; ++i) {
+      if (i < loadStoreIndices.size())
+        newOuter.push_back(loadStoreIndices[i]);
+      else
+        newOuter.push_back(zero());
+    }
+    for (unsigned i = 0; i < newInnerRank; ++i) {
+      unsigned src = newOuterRank + i;
+      if (src < loadStoreIndices.size())
+        newInner.push_back(loadStoreIndices[src]);
+      else
+        newInner.push_back(zero());
     }
 
-    LocalizedIndices localized;
-    if (isLinearized && stride) {
-      localized =
-          localizeLinearized(elementIndices[0], stride, builder, userLoc);
-    } else {
-      SmallVector<Value> indices(elementIndices.begin(), elementIndices.end());
-      localized = localize(indices, builder, userLoc);
-    }
+    if (newOuter.empty())
+      newOuter.push_back(zero());
+    if (newInner.empty())
+      newInner.push_back(zero());
 
-    auto newRef = builder.create<DbRefOp>(userLoc, newElementType, blockArg,
-                                          localized.dbRefIndices);
+    /// Create new db_ref with transformed outer indices
+    auto newRef =
+        builder.create<DbRefOp>(userLoc, newElementType, newSource, newOuter);
 
-    if (auto load = dyn_cast<memref::LoadOp>(refUser)) {
-      auto newLoad = builder.create<memref::LoadOp>(userLoc, newRef.getResult(),
-                                                    localized.memrefIndices);
+    /// Create new load/store with transformed inner indices
+    if (auto load = dyn_cast<memref::LoadOp>(user)) {
+      auto newLoad = builder.create<memref::LoadOp>(userLoc, newRef, newInner);
       load.replaceAllUsesWith(newLoad.getResult());
-      opsToRemove.insert(load);
-    } else if (auto store = dyn_cast<memref::StoreOp>(refUser)) {
-      builder.create<memref::StoreOp>(userLoc, store.getValue(),
-                                      newRef.getResult(),
-                                      localized.memrefIndices);
-      opsToRemove.insert(store);
+    } else if (auto store = dyn_cast<memref::StoreOp>(user)) {
+      builder.create<memref::StoreOp>(userLoc, store.getValue(), newRef,
+                                      newInner);
     }
+    opsToRemove.insert(user);
   }
-  opsToRemove.insert(ref.getOperation());
+
+  /// For db_refs without load/store users, just update the db_ref type
+  if (!hasLoadStoreUsers && !ref.getResult().use_empty()) {
+    OpBuilder::InsertionGuard ig(builder);
+    builder.setInsertionPoint(ref);
+    SmallVector<Value> indices(ref.getIndices().begin(),
+                               ref.getIndices().end());
+    if (indices.empty())
+      indices.push_back(builder.create<arith::ConstantIndexOp>(loc, 0));
+    auto newRef =
+        builder.create<DbRefOp>(loc, newElementType, newSource, indices);
+    ref.replaceAllUsesWith(newRef.getResult());
+  }
+
+  /// Remove old load/store operations
+  for (Operation *op : opsToRemove)
+    if (op->use_empty())
+      op->erase();
 }
 
-SmallVector<Value> DbElementWiseRewriter::localizeCoordinates(
-    ArrayRef<Value> globalIndices, ArrayRef<Value> sliceOffsets,
-    unsigned numIndexedDims, Type elementType, OpBuilder &builder,
-    Location loc) {
-  SmallVector<Value> result;
-  auto zero = [&]() { return builder.create<arith::ConstantIndexOp>(loc, 0); };
+bool DbElementWiseRewriter::rebaseEdtUsers(DbAcquireOp acquire,
+                                            OpBuilder &builder,
+                                            Value /*startChunk*/) {
+  ARTS_DEBUG("DbElementWiseRewriter::rebaseEdtUsers");
 
-  LLVM_DEBUG(llvm::dbgs() << "DbElementWiseRewriter::localizeCoordinates with "
-                          << globalIndices.size() << " indices\n");
+  auto [edt, blockArg] = EdtUtils::getEdtBlockArgumentForAcquire(acquire);
+  if (!blockArg)
+    return false;
 
-  /// Handle empty case
-  if (globalIndices.empty()) {
-    result.push_back(zero());
-    return result;
-  }
-
-  /// Detect linearized access
-  if (globalIndices.size() == 1 && !sliceOffsets.empty()) {
-    Value globalLinear = globalIndices[0];
-    Value offset = sliceOffsets[0];
-
-    /// Check if this needs stride scaling (old element has multiple dimensions)
-    if (oldElementSizes_.size() >= 2) {
-      Value stride =
-          DatablockUtils::getStrideValue(builder, loc, oldElementSizes_);
-      if (stride) {
-        /// localLinear = globalLinear - (offset * stride)
-        Value scaledOffset = builder.create<arith::MulIOp>(loc, offset, stride);
-        Value localLinear =
-            builder.create<arith::SubIOp>(loc, globalLinear, scaledOffset);
-
-        if (auto staticStride =
-                DatablockUtils::getStaticStride(oldElementSizes_)) {
-          LLVM_DEBUG(llvm::dbgs()
-                     << "  LINEARIZED: scaling offset by stride="
-                     << *staticStride << " from oldElementSizes\n");
-        } else {
-          LLVM_DEBUG(
-              llvm::dbgs()
-              << "  LINEARIZED: using dynamic stride from oldElementSizes\n");
-        }
-        result.push_back(localLinear);
-        return result;
-      }
+  /// Determine element type from users or allocation
+  Type targetType;
+  for (Operation *user : blockArg.getUsers()) {
+    if (auto ref = dyn_cast<DbRefOp>(user)) {
+      targetType = ref.getResult().getType();
+      break;
     }
-
-    /// Non-linearized single index: simple subtraction
-    Value local = builder.create<arith::SubIOp>(loc, globalLinear, offset);
-    result.push_back(local);
-    return result;
   }
+  if (!targetType) {
+    targetType = blockArg.getType();
+    if (auto outer = targetType.dyn_cast<MemRefType>())
+      if (auto inner = outer.getElementType().dyn_cast<MemRefType>())
+        targetType = inner;
+  }
+  if (!targetType || !targetType.isa<MemRefType>())
+    return false;
 
-  /// Multi-dimensional: subtract offset from first sliced dimension only
-  for (unsigned d = 0; d < globalIndices.size(); ++d) {
-    Value globalIdx = globalIndices[d];
+  Type derivedType = targetType;
+  if (auto dbAlloc = dyn_cast_or_null<DbAllocOp>(
+          DatablockUtils::getUnderlyingDbAlloc(blockArg)))
+    derivedType = dbAlloc.getAllocatedElementType();
 
-    if (d < numIndexedDims) {
-      /// Indexed dimension: local index is always 0
-      result.push_back(zero());
-    } else if (d == numIndexedDims && !sliceOffsets.empty()) {
-      /// First sliced dimension: subtract element offset
-      Value offset = sliceOffsets[0];
-      Value local = builder.create<arith::SubIOp>(loc, globalIdx, offset);
-      result.push_back(local);
-    } else {
-      /// Pass through unchanged
-      result.push_back(globalIdx);
+  /// Get element offset from hints
+  Value elemOffset;
+  Value elemSize;
+  if (!acquire.getOffsetHints().empty())
+    elemOffset = acquire.getOffsetHints()[0];
+  if (!acquire.getSizeHints().empty())
+    elemSize = acquire.getSizeHints()[0];
+
+  /// Create element-wise indexer
+  auto indexer = std::make_unique<DbElementWiseIndexer>(
+      elemOffset, elemSize, newOuterSizes_.size(), newInnerSizes_.size(),
+      oldAlloc_.getElementSizes());
+
+  SmallVector<Operation *> users(blockArg.getUsers().begin(),
+                                 blockArg.getUsers().end());
+  llvm::SetVector<Operation *> opsToRemove;
+  bool rewritten = false;
+
+  for (Operation *user : users) {
+    if (auto ref = dyn_cast<DbRefOp>(user)) {
+      indexer->transformDbRefUsers(ref, blockArg, derivedType, builder,
+                                 opsToRemove);
+      rewritten = true;
     }
   }
 
-  return result;
-}
+  for (Operation *op : opsToRemove)
+    if (op->use_empty())
+      op->erase();
 
-void DbElementWiseRewriter::rewriteUsesInParentRegion(
-    Operation *alloc, DbAllocOp dbAlloc, ArtsCodegen &AC,
-    llvm::SetVector<Operation *> &opsToRemove) {
-  ARTS_DEBUG("DbElementWiseRewriter::rewriteUsesInParentRegion");
-
-  /// Collect users of the original allocation
-  SmallVector<Operation *> users;
-  for (auto &use : alloc->getUses()) {
-    Operation *user = use.getOwner();
-    /// Skip the DbAllocOp itself
-    if (user == dbAlloc.getOperation())
-      continue;
-    /// Skip uses inside EDTs - those are rewritten via acquires separately
-    if (user->getParentOfType<EdtOp>())
-      continue;
-    users.push_back(user);
-  }
-
-  if (users.empty()) {
-    ARTS_DEBUG("  No users to rewrite in parent region");
-    return;
-  }
-
-  ARTS_DEBUG("  Rewriting "
-             << users.size()
-             << " main body accesses with element-wise indexing");
-
-  Type elementMemRefType = dbAlloc.getAllocatedElementType();
-
-  for (Operation *op : users)
-    rewriteAccessWithDbPattern(op, dbAlloc.getPtr(), elementMemRefType, AC,
-                               opsToRemove);
+  return rewritten;
 }
