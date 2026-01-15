@@ -438,11 +438,6 @@ static AccessBoundsInfo analyzeAccessBounds(DbAcquireNode *node,
 ///
 /// Returns true only if this acquire AND all its nested children pass.
 bool DbAcquireNode::canBePartitioned() {
-  /// Early check: if no EDT user, this acquire can't be partitioned
-  /// (happens for nested acquires where parent acquire is consumed by child)
-  if (!edtUserOp)
-    return false;
-
   auto skip = [&](StringRef reason) {
     ARTS_DEBUG("Skipping acquire " << dbAcquireOp << ": " << reason);
     return false;
@@ -452,11 +447,35 @@ bool DbAcquireNode::canBePartitioned() {
   if (!dbAcquireOp)
     return skip("invalid acquire operation");
 
+  /// Allow non-EDT acquires to be treated as full-range if we can size them.
+  if (!edtUserOp) {
+    if (!hasMemoryAccesses()) {
+      ARTS_DEBUG("No EDT user and no memory accesses - full-range acquire");
+      return true;
+    }
+    DbAllocNode *allocNode = getRootAlloc();
+    if (allocNode) {
+      DbAllocOp allocOp = allocNode->getDbAllocOp();
+      if (allocOp && !allocOp.getElementSizes().empty()) {
+        ARTS_DEBUG("No EDT user - full-range acquire with alloc sizes");
+        return true;
+      }
+    }
+    return skip("no EDT user and missing allocation sizes");
+  }
+
   EdtOp edt = getEdtUser();
-  if (!edt || !edt.getOperation() || edt.getType() != EdtType::task)
+  if (!edt || !edt.getOperation())
+    return skip("missing EDT");
+
+  bool hasMemAccesses = hasMemoryAccesses();
+  bool isTaskEdt = (edt.getType() == EdtType::task);
+  bool isPassThrough = !isTaskEdt && !hasMemAccesses;
+
+  if (!isTaskEdt && !isPassThrough)
     return skip("not a task EDT");
 
-  if (!hasMemoryAccesses())
+  if (isTaskEdt && !hasMemAccesses)
     return skip("no memory accesses");
 
   DbAllocNode *allocNode = getRootAlloc();
@@ -483,8 +502,11 @@ bool DbAcquireNode::canBePartitioned() {
   if (!edtNode)
     return skip("missing EDT node");
 
-  if (!edtNode->hasParallelLoopMetadata())
-    return skip("worker EDT does not contain parallel loop metadata");
+  if (isTaskEdt && !edtNode->hasParallelLoopMetadata()) {
+    ARTS_DEBUG("Skipping parallel loop metadata check: treating as full-range");
+    partitionOffset = Value();
+    partitionSize = Value();
+  }
 
   /// Step 3: Partition offset/size extraction and validation
   DbAcquireOp mutableAcquire = DbAcquireOp(dbAcquireOp.getOperation());
@@ -519,10 +541,10 @@ bool DbAcquireNode::canBePartitioned() {
   /// Validate access pattern compatibility with partition offset.
   /// An acquire is only eligible if its memory access first index
   /// is derived from the partition offset (for chunked parallel access).
-  if (partitionOffset) {
-    if (!canPartitionWithOffset(partitionOffset))
-      return skip("first index of memory access not derived from partition "
-                  "offset");
+  if (partitionOffset && !canPartitionWithOffset(partitionOffset)) {
+    ARTS_DEBUG("Partition offset not derived from access; using full-range");
+    partitionOffset = Value();
+    partitionSize = Value();
   }
 
   /// Validate partition hints and compute adjusted chunk info for stencil
@@ -565,8 +587,16 @@ bool DbAcquireNode::canBePartitioned() {
         break;
     }
 
-    if (!firstDynIdx)
+    bool offsetIsZero = ValueUtils::isZeroConstant(
+        ValueUtils::stripNumericCasts(partitionOffset));
+    if (!firstDynIdx) {
+      if (offsetIsZero) {
+        ARTS_DEBUG("  No dynamic index - allowing zero-offset partition hints");
+        computedChunkInfo = std::make_pair(partitionOffset, partitionSize);
+        return true;
+      }
       return skip("no dynamic index found in memory accesses");
+    }
 
     SmallVector<scf::ForOp, 4> forLoops;
     edt.walk([&](scf::ForOp forOp) {
@@ -578,21 +608,56 @@ bool DbAcquireNode::canBePartitioned() {
       return skip("partition hints require chunk loop for validation");
 
     /// Find the loop whose IV the first dynamic index depends on
+    auto loopDepth = [](scf::ForOp loop) -> int {
+      int depth = 0;
+      for (Operation *parent = loop->getParentOp(); parent;
+           parent = parent->getParentOp()) {
+        if (isa<scf::ForOp>(parent))
+          ++depth;
+      }
+      return depth;
+    };
+
     scf::ForOp chunkLoop;
+    int bestDepth = -1;
+    bool foundPreferred = false;
+
     for (scf::ForOp forOp : forLoops) {
       LoopNode *loopNode = loopAnalysis.getOrCreateLoopNode(forOp);
       if (!loopNode)
         continue;
 
-      if (loopNode->dependsOnInductionVar(firstDynIdx) &&
-          ValueUtils::dependsOn(firstDynIdx, partitionOffset)) {
+      if (!loopNode->dependsOnInductionVar(firstDynIdx))
+        continue;
+      if (!offsetIsZero &&
+          !ValueUtils::dependsOn(firstDynIdx, partitionOffset))
+        continue;
+
+      Value loopIV = forOp.getInductionVar();
+      bool offsetDependsOnIV =
+          !offsetIsZero && partitionOffset &&
+          ValueUtils::dependsOn(partitionOffset, loopIV);
+      bool isPreferred = !offsetDependsOnIV;
+      int depth = loopDepth(forOp);
+
+      if (isPreferred) {
+        if (!foundPreferred || depth > bestDepth) {
+          foundPreferred = true;
+          bestDepth = depth;
+          chunkLoop = forOp;
+        }
+      } else if (!foundPreferred && depth > bestDepth) {
+        bestDepth = depth;
         chunkLoop = forOp;
-        break;
       }
     }
 
-    if (!chunkLoop)
-      return skip("no loop found where index depends on both IV and offset");
+    if (!chunkLoop) {
+      return skip(offsetIsZero
+                      ? "no loop found where index depends on IV"
+                      : "no loop found where index depends on both IV and "
+                        "offset");
+    }
 
     Value loopIV = chunkLoop.getInductionVar();
     AccessBoundsInfo bounds =
@@ -712,16 +777,20 @@ static AccessBoundsInfo analyzeAccessBounds(DbAcquireNode *node,
       else
         continue;
 
-      SmallVector<Value> fullChain;
-      fullChain.append(dbRefIndices.begin(), dbRefIndices.end());
-      fullChain.append(memIndices.begin(), memIndices.end());
+      /// Prefer memref indices for offset validation; fall back to db_ref
+      /// indices only when no memref indices are present.
+      SmallVector<Value> indexChain;
+      if (!memIndices.empty())
+        indexChain.append(memIndices.begin(), memIndices.end());
+      else
+        indexChain.append(dbRefIndices.begin(), dbRefIndices.end());
 
-      if (fullChain.empty())
+      if (indexChain.empty())
         continue;
 
       /// Find first dynamic index
       Value firstDynIdx;
-      for (Value idx : fullChain) {
+      for (Value idx : indexChain) {
         int64_t constVal;
         if (!ValueUtils::getConstantIndex(idx, constVal)) {
           firstDynIdx = idx;
@@ -856,6 +925,8 @@ bool DbAcquireNode::canPartitionWithOffset(Value offset) {
   if (!offset)
     return false;
   Value offsetStripped = ValueUtils::stripNumericCasts(offset);
+  if (ValueUtils::isZeroConstant(offsetStripped))
+    return true;
 
   DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
   collectAccessOperations(dbRefToMemOps);
@@ -913,11 +984,36 @@ LogicalResult DbAcquireNode::computeChunkInfo(Value &chunkOffset,
     return success();
   }
 
+  auto fullRangeFallback = [&](StringRef reason) -> LogicalResult {
+    DbAllocNode *allocNode = getRootAlloc();
+    if (!allocNode) {
+      ARTS_DEBUG("  no allocation node for full-range fallback");
+      return failure();
+    }
+    DbAllocOp allocOp = allocNode->getDbAllocOp();
+    if (!allocOp || allocOp.getElementSizes().empty()) {
+      ARTS_DEBUG("  missing element sizes for full-range fallback");
+      return failure();
+    }
+
+    OpBuilder builder(dbAcquireOp);
+    Location loc = dbAcquireOp.getLoc();
+    builder.setInsertionPoint(dbAcquireOp);
+
+    chunkOffset = builder.create<arith::ConstantIndexOp>(loc, 0);
+    chunkSize = allocOp.getElementSizes().front();
+    ARTS_DEBUG("  full-range fallback (" << reason << ")");
+    return success();
+  };
+
   EdtOp edt = getEdtUser();
   if (!edt) {
     ARTS_DEBUG("  no EDT user found");
-    return failure();
+    return fullRangeFallback("no EDT user");
   }
+
+  if (!hasMemoryAccesses() && !partitionOffset && !partitionSize)
+    return fullRangeFallback("pass-through acquire");
 
   SmallVector<scf::ForOp> forLoops;
   scf::WhileOp chunkWhile;
@@ -940,7 +1036,9 @@ LogicalResult DbAcquireNode::computeChunkInfo(Value &chunkOffset,
     if (!originalBounds_)
       originalBounds_ = std::make_pair(partitionOffset, partitionSize);
     if (!canPartitionWithOffset(partitionOffset))
-      return failure();
+      return fullRangeFallback("offset hints not derived from access");
+    bool offsetIsZero = ValueUtils::isZeroConstant(
+        ValueUtils::stripNumericCasts(partitionOffset));
 
     Value firstDynIdx;
     DenseMap<DbRefOp, SetVector<Operation *>> dbRefToMemOps;
@@ -974,14 +1072,43 @@ LogicalResult DbAcquireNode::computeChunkInfo(Value &chunkOffset,
         break;
     }
 
+    auto loopDepth = [](scf::ForOp loop) -> int {
+      int depth = 0;
+      for (Operation *parent = loop->getParentOp(); parent;
+           parent = parent->getParentOp()) {
+        if (isa<scf::ForOp>(parent))
+          ++depth;
+      }
+      return depth;
+    };
+
     scf::ForOp boundsLoop;
+    int bestDepth = -1;
+    bool foundPreferred = false;
     if (firstDynIdx) {
       for (scf::ForOp loop : forLoops) {
         Value loopIV = loop.getInductionVar();
-        if (ValueUtils::dependsOn(firstDynIdx, loopIV) &&
-            ValueUtils::dependsOn(firstDynIdx, partitionOffset)) {
+        if (!ValueUtils::dependsOn(firstDynIdx, loopIV))
+          continue;
+        if (!offsetIsZero &&
+            !ValueUtils::dependsOn(firstDynIdx, partitionOffset))
+          continue;
+
+        bool offsetDependsOnIV =
+            !offsetIsZero && partitionOffset &&
+            ValueUtils::dependsOn(partitionOffset, loopIV);
+        bool isPreferred = !offsetDependsOnIV;
+        int depth = loopDepth(loop);
+
+        if (isPreferred) {
+          if (!foundPreferred || depth > bestDepth) {
+            foundPreferred = true;
+            bestDepth = depth;
+            boundsLoop = loop;
+          }
+        } else if (!foundPreferred && depth > bestDepth) {
+          bestDepth = depth;
           boundsLoop = loop;
-          break;
         }
       }
     }
@@ -1040,22 +1167,22 @@ LogicalResult DbAcquireNode::computeChunkInfo(Value &chunkOffset,
                                             &offsetForCheck))) {
       Value checkOffset = offsetForCheck ? offsetForCheck : chunkOffset;
       if (!canPartitionWithOffset(checkOffset))
-        return failure();
+        return fullRangeFallback("scf.while offset not derived from access");
       return success();
     }
     ARTS_DEBUG("  computeChunkInfoFromWhile failed");
-    return failure();
+    return fullRangeFallback("scf.while chunk info");
   }
 
   Value ptrArg = getUseInEdt();
   if (!ptrArg) {
     ARTS_DEBUG("  no EDT block argument for acquire");
-    return failure();
+    return fullRangeFallback("missing EDT block argument");
   }
 
   if (forLoops.empty()) {
     ARTS_DEBUG("  no scf.for found in EDT");
-    return failure();
+    return fullRangeFallback("no scf.for in EDT");
   }
 
   auto loopDepth = [](scf::ForOp loop) -> int {
@@ -1212,13 +1339,13 @@ LogicalResult DbAcquireNode::computeChunkInfo(Value &chunkOffset,
     if (succeeded(tryComputeFromFor(loop))) {
       Value checkOffset = offsetForCheck ? offsetForCheck : chunkOffset;
       if (!canPartitionWithOffset(checkOffset))
-        return failure();
+        return fullRangeFallback("scf.for offset not derived from access");
       return success();
     }
   }
 
   ARTS_DEBUG("  no suitable scf.for loop found for chunk info");
-  return failure();
+  return fullRangeFallback("no suitable scf.for loop");
 }
 
 LogicalResult DbAcquireNode::computeChunkInfoFromWhile(scf::WhileOp whileOp,

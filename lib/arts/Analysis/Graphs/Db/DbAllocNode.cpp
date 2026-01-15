@@ -108,6 +108,27 @@ bool DbAllocNode::canBePartitioned() {
     return false;
   };
 
+  if (hasNonAffineAccesses && *hasNonAffineAccesses) {
+    /// Check if any acquire has offset/size hints from ForLowering.
+    /// If hints exist, trust ForLowering's parallel loop analysis over
+    /// the static non-affine classification (e.g., indirect indexing A[B[i]]
+    /// can still be chunkable when the parallel loop structure is valid).
+    bool hasAcquireWithHints = false;
+    for (const auto &acqNode : acquireNodes) {
+      if (!acqNode)
+        continue;
+      DbAcquireOp acqOp = acqNode->getDbAcquireOp();
+      if (acqOp && (!acqOp.getOffsetHints().empty() ||
+                    !acqOp.getSizeHints().empty())) {
+        hasAcquireWithHints = true;
+        ARTS_DEBUG("  Found acquire with hints - allowing non-affine alloc");
+        break;
+      }
+    }
+    if (!hasAcquireWithHints)
+      return skip("memref has non-affine accesses (no hints to override)");
+  }
+
   /// Step 1: Allocation-level metadata checks
   ARTS_DEBUG_REGION({
     ARTS_DBGS() << "  accessedInParallelLoop="
@@ -163,20 +184,25 @@ bool DbAllocNode::canBePartitioned() {
   }
 
   /// Step 2: Recursively check ALL acquire children
-  /// If ANY acquire fails, the entire allocation cannot be partitioned
+  /// Require all acquires to be rewriteable for safe partitioning.
   if (acquireNodes.empty()) {
     ARTS_DEBUG("  No acquire nodes - trivially partitionable");
     return true;
   }
 
   ARTS_DEBUG("  Checking " << acquireNodes.size() << " acquire children...");
+  bool allPartitionable = true;
   for (const auto &acqNode : acquireNodes) {
     if (!acqNode)
       continue;
     if (!acqNode->canBePartitioned()) {
-      return skip("acquire child failed canBePartitioned()");
+      allPartitionable = false;
+      ARTS_DEBUG("  acquire child failed canBePartitioned()");
     }
   }
+
+  if (!allPartitionable)
+    return skip("one or more acquire children failed canBePartitioned()");
 
   ARTS_DEBUG("  PASS: alloc " << hierId << " can be partitioned");
   return true;

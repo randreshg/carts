@@ -33,7 +33,8 @@ class EdtGraph;
 /// Centralized manager for all ARTS analysis objects.
 class ArtsAnalysisManager {
 public:
-  ArtsAnalysisManager(ModuleOp module, const std::string &configFile = "");
+  ArtsAnalysisManager(ModuleOp module, const std::string &configFile = "",
+                      const std::string &metadataFile = "");
   ~ArtsAnalysisManager();
 
   /// Invalidate all analysis objects and graphs
@@ -58,6 +59,9 @@ public:
 
   /// Get the configuration file path
   const std::string &getConfigFile() const { return configFile; }
+
+  /// Get the metadata file path
+  const std::string &getMetadataFile() const { return metadataFile; }
 
   /// Get the ARTS abstract machine
   ArtsAbstractMachine &getAbstractMachine() { return abstractMachine; }
@@ -106,6 +110,7 @@ public:
 private:
   ModuleOp module;
   std::string configFile;
+  std::string metadataFile;
   ArtsAbstractMachine abstractMachine;
   bool built = false;
 

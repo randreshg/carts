@@ -35,6 +35,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/LogicalResult.h"
 
@@ -87,6 +88,13 @@ public:
 
   /// Compute worker-specific iteration bounds for block distribution
   void computeWorkerIterationsBlock(Value workerId);
+
+  /// Recompute worker bounds INSIDE a task EDT region.
+  /// This is needed because the original computeWorkerIterationsBlock creates
+  /// SSA values outside the task EDT, causing dominance errors.
+  /// This method recreates all necessary values inside the current insertion
+  /// point.
+  void recomputeWorkerBoundsInside(Value workerId, Value insideTotalWorkers);
 
 private:
   void initialize();
@@ -204,6 +212,117 @@ struct ParallelRegionAnalysis {
       collectUsedBlockArgs(op, depsUsedAfterFor);
   }
 };
+
+/// Check if an operation can be safely cloned into a new region.
+static bool canCloneOperation(Operation *op) {
+  if (!op)
+    return false;
+  if (op->hasTrait<OpTrait::ConstantLike>())
+    return true;
+  if (isMemoryEffectFree(op))
+    return true;
+  if (isa<arts::DbRefOp>(op))
+    return true;
+  if (isa<memref::LoadOp>(op))
+    return true;
+  return false;
+}
+
+/// Collect external values needed by operations in a block (including nested
+/// regions).
+static void collectExternalValues(Block &sourceBlock, Region *boundaryRegion,
+                                  SetVector<Value> &externalValues,
+                                  const DenseSet<Operation *> &opsToSkip) {
+  Region *sourceRegion = sourceBlock.getParent();
+
+  for (Operation &op : sourceBlock.without_terminator()) {
+    if (opsToSkip.contains(&op))
+      continue;
+
+    op.walk([&](Operation *nestedOp) {
+      for (Value operand : nestedOp->getOperands()) {
+        if (auto blockArg = operand.dyn_cast<BlockArgument>()) {
+          Region *ownerRegion = blockArg.getOwner()->getParent();
+          if (sourceRegion->isAncestor(ownerRegion))
+            continue;
+          if (boundaryRegion->isAncestor(ownerRegion))
+            continue;
+        }
+        if (Operation *defOp = operand.getDefiningOp()) {
+          if (sourceRegion->isAncestor(defOp->getParentRegion()))
+            continue;
+          if (!boundaryRegion->isAncestor(defOp->getParentRegion()))
+            externalValues.insert(operand);
+        }
+      }
+    });
+  }
+}
+
+/// Clone external values into the target region in dependency order.
+static bool cloneExternalValues(SetVector<Value> &externalValues,
+                                Region *boundaryRegion, IRMapping &mapper,
+                                OpBuilder &builder) {
+  SmallVector<Value> remainingValues(externalValues.begin(),
+                                     externalValues.end());
+
+  bool progress = true;
+  while (progress && !remainingValues.empty()) {
+    progress = false;
+    SmallVector<Value> stillRemaining;
+
+    for (Value val : remainingValues) {
+      if (mapper.contains(val)) {
+        progress = true;
+        continue;
+      }
+
+      Operation *defOp = val.getDefiningOp();
+      if (!defOp) {
+        stillRemaining.push_back(val);
+        continue;
+      }
+
+      if (!canCloneOperation(defOp)) {
+        stillRemaining.push_back(val);
+        continue;
+      }
+
+      bool allOperandsAvailable = true;
+      for (Value operand : defOp->getOperands()) {
+        if (mapper.contains(operand))
+          continue;
+        if (auto blockArg = operand.dyn_cast<BlockArgument>()) {
+          Region *ownerRegion = blockArg.getOwner()->getParent();
+          if (boundaryRegion->isAncestor(ownerRegion))
+            continue;
+        }
+        if (Operation *opDef = operand.getDefiningOp()) {
+          if (boundaryRegion->isAncestor(opDef->getParentRegion()))
+            continue;
+        }
+        allOperandsAvailable = false;
+        break;
+      }
+
+      if (!allOperandsAvailable) {
+        stillRemaining.push_back(val);
+        continue;
+      }
+
+      Operation *clonedOp = builder.clone(*defOp, mapper);
+      for (auto [oldResult, newResult] :
+           llvm::zip(defOp->getResults(), clonedOp->getResults())) {
+        mapper.map(oldResult, newResult);
+      }
+      progress = true;
+    }
+
+    remainingValues = std::move(stillRemaining);
+  }
+
+  return remainingValues.empty();
+}
 
 /// Create a zero/identity value matching the provided element type.
 static Value createZeroValue(ArtsCodegen *AC, Type elemType, Location loc) {
@@ -407,6 +526,111 @@ void LoopInfo::computeWorkerIterationsBlock(Value workerId) {
                                             workerIterationCount, zeroIndex);
 }
 
+void LoopInfo::recomputeWorkerBoundsInside(Value workerId,
+                                           Value insideTotalWorkers) {
+  Location loc = forOp.getLoc();
+
+  /// Cast worker values to index type
+  Type indexType = AC->getBuilder().getIndexType();
+  Value workerIdIndex =
+      workerId.getType().isIndex()
+          ? workerId
+          : AC->create<arith::IndexCastOp>(loc, indexType, workerId);
+  Value totalWorkersIndex =
+      insideTotalWorkers.getType().isIndex()
+          ? insideTotalWorkers
+          : AC->create<arith::IndexCastOp>(loc, indexType, insideTotalWorkers);
+
+  Value oneIndex = AC->createIndexConstant(1, loc);
+  Value zeroIndex = AC->createIndexConstant(0, loc);
+
+  /// Clone loop bounds and their dependencies into the current region
+  SetVector<Value> boundsToClone;
+  Region *currentRegion = AC->getBuilder().getInsertionBlock()->getParent();
+
+  std::function<void(Value)> collectWithDeps = [&](Value val) {
+    if (boundsToClone.contains(val))
+      return;
+    if (Operation *defOp = val.getDefiningOp()) {
+      if (!currentRegion->isAncestor(defOp->getParentRegion())) {
+        for (Value operand : defOp->getOperands())
+          collectWithDeps(operand);
+        boundsToClone.insert(val);
+      }
+    }
+  };
+
+  collectWithDeps(upperBound);
+  collectWithDeps(lowerBound);
+  collectWithDeps(loopStep);
+  collectWithDeps(chunkSize);
+
+  IRMapping boundsMapper;
+  cloneExternalValues(boundsToClone, currentRegion, boundsMapper,
+                      AC->getBuilder());
+
+  Value localUpperBound = boundsMapper.lookupOrDefault(upperBound);
+  Value localLowerBound = boundsMapper.lookupOrDefault(lowerBound);
+  Value localLoopStep = boundsMapper.lookupOrDefault(loopStep);
+  Value localChunkSize = boundsMapper.lookupOrDefault(chunkSize);
+
+  /// totalIterations = ceil((upper - lower) / step)
+  Value range =
+      AC->create<arith::SubIOp>(loc, localUpperBound, localLowerBound);
+  Value adjustedRange = AC->create<arith::AddIOp>(
+      loc, range, AC->create<arith::SubIOp>(loc, localLoopStep, oneIndex));
+  Value localTotalIterations =
+      AC->create<arith::DivUIOp>(loc, adjustedRange, localLoopStep);
+
+  /// totalChunks = ceil(totalIterations / chunkSize)
+  Value adjustedIterations = AC->create<arith::AddIOp>(
+      loc, localTotalIterations,
+      AC->create<arith::SubIOp>(loc, localChunkSize, oneIndex));
+  Value localTotalChunks =
+      AC->create<arith::DivUIOp>(loc, adjustedIterations, localChunkSize);
+
+  /// chunksPerWorkerCeil = ceil(totalChunks / totalWorkers)
+  Value workersMinusOne =
+      AC->create<arith::SubIOp>(loc, totalWorkersIndex, oneIndex);
+  Value adjustedChunks =
+      AC->create<arith::AddIOp>(loc, localTotalChunks, workersMinusOne);
+  Value chunksPerWorkerCeil =
+      AC->create<arith::DivUIOp>(loc, adjustedChunks, totalWorkersIndex);
+
+  Value workerFirstChunkIdx =
+      AC->create<arith::MulIOp>(loc, workerIdIndex, chunksPerWorkerCeil);
+
+  /// Handle workers beyond totalChunks
+  Value needZeroChunks = AC->create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::uge, workerFirstChunkIdx, localTotalChunks);
+  Value remainingChunks =
+      AC->create<arith::SubIOp>(loc, localTotalChunks, workerFirstChunkIdx);
+  Value remainingChunksNonNeg = AC->create<arith::SelectOp>(
+      loc, needZeroChunks, zeroIndex, remainingChunks);
+  Value workerChunkCount = AC->create<arith::MinUIOp>(loc, chunksPerWorkerCeil,
+                                                      remainingChunksNonNeg);
+
+  /// Convert chunks to iterations
+  workerFirstChunk =
+      AC->create<arith::MulIOp>(loc, workerFirstChunkIdx, localChunkSize);
+
+  Value workerMaxIterations =
+      AC->create<arith::MulIOp>(loc, workerChunkCount, localChunkSize);
+
+  /// Handle last worker overflow
+  Value needZeroIters = AC->create<arith::CmpIOp>(
+      loc, arith::CmpIPredicate::uge, workerFirstChunk, localTotalIterations);
+  Value remainingIters =
+      AC->create<arith::SubIOp>(loc, localTotalIterations, workerFirstChunk);
+  Value remainingItersNonNeg = AC->create<arith::SelectOp>(
+      loc, needZeroIters, zeroIndex, remainingIters);
+
+  workerIterationCount = AC->create<arith::MinUIOp>(loc, workerMaxIterations,
+                                                    remainingItersNonNeg);
+
+  ARTS_DEBUG("  Recomputed worker bounds inside task EDT");
+}
+
 ///===----------------------------------------------------------------------===///
 // Pass Entry Point
 ///===----------------------------------------------------------------------===///
@@ -477,8 +701,16 @@ void ForLoweringPass::lowerParallelEdt(EdtOp parallelEdt) {
     lowerForWithDbRewiring(AC, forOp, parallelEdt, analysis, loc);
 
   /// Step 3: Create continuation parallel for post-for work (if any)
-  if (hasPostFor)
-    createContinuationParallel(AC, parallelEdt, analysis, loc);
+  /// Skip if opsAfterFor only contains db_release operations - task EDTs
+  /// already release their acquired DBs, so continuation would be redundant
+  /// and can cause hangs due to parallel EDT coordination issues.
+  if (hasPostFor) {
+    bool onlyReleases = llvm::all_of(analysis.opsAfterFor, [](Operation *op) {
+      return isa<DbReleaseOp>(op);
+    });
+    if (!onlyReleases)
+      createContinuationParallel(AC, parallelEdt, analysis, loc);
+  }
 
   /// Step 4: Clean up original parallel EDT
   /// First, erase the operations that have been moved/lowered externally
@@ -1414,8 +1646,8 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     ARTS_DEBUG("  - Acquired worker-local partial accumulator slot");
   }
 
-  /// DB Rewiring: Acquire directly from DbAllocOp instead of block arguments
   SmallVector<Value> taskDeps;
+  SmallVector<std::pair<BlockArgument, Value>> parallelArgToAcquire;
   ARTS_DEBUG("  - Processing " << parentDeps.size()
                                << " parent dependencies with DB rewiring");
 
@@ -1481,6 +1713,7 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
     });
 
     taskDeps.push_back(acquirePtr);
+    parallelArgToAcquire.push_back({parallelArg, acquirePtr});
     ARTS_DEBUG("    - Created rewired acquire for dep " << idx);
   }
 
@@ -1522,37 +1755,54 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
   taskEdt.setDependencies(taskDeps);
 
-  /// Create iteration loop
+  /// Map parallelArg → taskArg for cloning pre-for operations
+  for (auto [parallelArg, acquirePtr] : parallelArgToAcquire) {
+    if (Value taskArg = mapper.lookupOrNull(acquirePtr))
+      mapper.map(parallelArg, taskArg);
+  }
+
+  /// Get the logical worker ID for recomputing bounds inside the EDT.
+  /// For internode tasks, use GetCurrentNodeOp since the EDT is routed to a
+  /// specific node. For intranode tasks, use workerIdPlaceholder directly -
+  /// it's the scf.for iteration variable (0 to numWorkers-1) and is captured
+  /// in the EDT body automatically.
+  Value taskWorkerId;
+  if (taskConcurrency == EdtConcurrency::internode) {
+    taskWorkerId = AC->create<GetCurrentNodeOp>(loc).getResult();
+  } else {
+    taskWorkerId = workerIdPlaceholder;
+  }
+
+  Value insideTotalWorkers;
+  if (auto workers = originalParallel->getAttrOfType<workersAttr>(
+          AttrNames::Operation::Workers))
+    insideTotalWorkers = AC->createIndexConstant(workers.getValue(), loc);
+  else if (taskConcurrency == EdtConcurrency::internode)
+    insideTotalWorkers = AC->create<GetTotalNodesOp>(loc).getResult();
+  else
+    insideTotalWorkers = AC->create<GetTotalWorkersOp>(loc).getResult();
+
+  loopInfo.recomputeWorkerBoundsInside(taskWorkerId, insideTotalWorkers);
+  chunkOffset = loopInfo.workerFirstChunk;
+
   scf::ForOp iterLoop =
       AC->create<scf::ForOp>(loc, zero, loopInfo.workerIterationCount, one);
 
-  /// Set loop metadata on the chunked iteration loop.
-  /// When handling reductions, update metadata to reflect that the chunked loop
-  /// is now parallel for input arrays (but ONLY if there are no stencil/memref
-  /// loop-carried dependencies).
+  /// Set loop metadata, marking as parallel if only reduction deps existed
   if (Attribute loopAttr = getLoopMetadataAttr(forOp)) {
     if (!reductionVarIndex.empty()) {
-      /// We have reductions - check if we can mark as parallel
       if (auto origMeta = dyn_cast<LoopMetadataAttr>(loopAttr)) {
-        /// Check if the ONLY source of inter-iteration deps was the reduction.
-        /// If there are memref-based loop-carried deps (stencil patterns like
-        /// a[i] = a[i-1] + a[i+1]), we CANNOT mark as parallel even after
-        /// handling the reduction via partial accumulators.
         int64_t memrefDeps = 0;
         if (auto attr = origMeta.getMemrefsWithLoopCarriedDeps())
           memrefDeps = attr.getInt();
 
         if (memrefDeps == 0) {
-          /// Safe: only scalar reduction deps existed, now broken by partial
-          /// accumulators.
           auto parallelMeta = LoopMetadata::createParallelizedMetadata(
               forOp.getContext(), origMeta);
           iterLoop->setAttr(AttrNames::LoopMetadata::Name, parallelMeta);
           ARTS_DEBUG("  Updated loop metadata: potentiallyParallel=true "
                      "(reduction-only deps, no stencil patterns)");
         } else {
-          /// NOT safe: there are stencil/memref loop-carried deps that are NOT
-          /// broken by handling reductions. Keep original metadata.
           iterLoop->setAttr(AttrNames::LoopMetadata::Name, loopAttr);
           ARTS_DEBUG("  Keeping original metadata: memrefsWithLoopCarriedDeps="
                      << memrefDeps << " (stencil patterns detected)");
@@ -1586,17 +1836,60 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
                                 opsToSkip, redMapper, myAccumulator);
   }
 
+  Block &forBody = forOp.getRegion().front();
+  Region *taskEdtRegion = iterLoop->getParentRegion();
+
+  /// Collect external values needed by the loop body and induction variable
+  SetVector<Value> externalValues;
+  collectExternalValues(forBody, taskEdtRegion, externalValues, opsToSkip);
+
+  Value origStep = forOp.getStep()[0];
+  Value origLowerBound = forOp.getLowerBound()[0];
+
+  Region *forBodyRegion = forBody.getParent();
+  std::function<void(Value)> collectWithDeps = [&](Value val) {
+    if (externalValues.contains(val))
+      return;
+    if (Operation *defOp = val.getDefiningOp()) {
+      if (forBodyRegion->isAncestor(defOp->getParentRegion()))
+        return;
+      if (!taskEdtRegion->isAncestor(defOp->getParentRegion())) {
+        for (Value operand : defOp->getOperands())
+          collectWithDeps(operand);
+        externalValues.insert(val);
+      }
+    }
+  };
+
+  collectWithDeps(origStep);
+  collectWithDeps(origLowerBound);
+
+  /// Collect transitive dependencies
+  SmallVector<Value> valuesToProcess(externalValues.begin(),
+                                     externalValues.end());
+  for (Value val : valuesToProcess) {
+    if (Operation *defOp = val.getDefiningOp()) {
+      for (Value operand : defOp->getOperands())
+        collectWithDeps(operand);
+    }
+  }
+
+  if (!cloneExternalValues(externalValues, taskEdtRegion, redMapper,
+                           AC->getBuilder())) {
+    ARTS_WARN("Some external values could not be cloned - they may need to be "
+              "passed as EDT dependencies");
+  }
+
   /// Map induction variable
   Value localIter = iterLoop.getInductionVar();
   Value globalIter = AC->create<arith::AddIOp>(loc, chunkOffset, localIter);
-  Value globalIterScaled =
-      AC->create<arith::MulIOp>(loc, globalIter, forOp.getStep()[0]);
-  Value globalIdx = AC->create<arith::AddIOp>(loc, forOp.getLowerBound()[0],
-                                              globalIterScaled);
+  Value stepVal = redMapper.lookupOrDefault(origStep);
+  Value lowerBoundVal = redMapper.lookupOrDefault(origLowerBound);
+  Value globalIterScaled = AC->create<arith::MulIOp>(loc, globalIter, stepVal);
+  Value globalIdx =
+      AC->create<arith::AddIOp>(loc, lowerBoundVal, globalIterScaled);
 
-  Block &forBody = forOp.getRegion().front();
-
-  /// Map LLVM undef to identity value
+  /// Map undef to identity value
   for (Operation &op : forBody.without_terminator()) {
     for (Value operand : op.getOperands()) {
       if (auto undef = operand.getDefiningOp<LLVM::UndefOp>()) {
@@ -1611,29 +1904,6 @@ EdtOp ForLoweringPass::createTaskEdtWithRewiring(
 
   if (forBody.getNumArguments() > 0)
     redMapper.map(forBody.getArgument(0), globalIdx);
-
-  /// Clone external constants
-  SetVector<Value> constantsToClone;
-  Region *taskEdtRegion = iterLoop->getParentRegion();
-  for (Operation &op : forBody.without_terminator()) {
-    if (opsToSkip.contains(&op))
-      continue;
-    for (Value operand : op.getOperands()) {
-      if (Operation *defOp = operand.getDefiningOp()) {
-        if (defOp->hasTrait<OpTrait::ConstantLike>() &&
-            !taskEdtRegion->isAncestor(defOp->getParentRegion())) {
-          constantsToClone.insert(operand);
-        }
-      }
-    }
-  }
-
-  for (Value constant : constantsToClone) {
-    if (Operation *defOp = constant.getDefiningOp()) {
-      Operation *clonedConst = AC->getBuilder().clone(*defOp);
-      redMapper.map(constant, clonedConst->getResult(0));
-    }
-  }
 
   /// Clone loop body
   for (Operation &op : forBody.without_terminator()) {

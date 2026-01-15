@@ -99,7 +99,7 @@ public:
 
   /// Get partition mode from DbAcquireOp structure.
   /// - ElementWise: indices non-empty
-  /// - Chunked: indices empty, offsets non-empty
+  /// - Chunked: indices empty, offsets non-empty (or offset/size hints present)
   /// - Coarse: both empty
   static PartitionMode getPartitionMode(DbAcquireOp acquire);
 

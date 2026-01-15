@@ -91,6 +91,9 @@ struct DbRewriteAcquire {
   DbAcquireOp acquire;
   Value elemOffset;
   Value elemSize;
+  /// Full-range access for coarse acquires in mixed mode.
+  /// When true, this acquire gets offset=0, size=numChunks (accesses all chunks).
+  bool isFullRange = false;
 };
 
 /// Forward declaration for PartitioningDecision
@@ -109,6 +112,11 @@ struct DbRewritePlan {
   /// When 0, auto-compute from mode defaults.
   unsigned outerRank = 0;
   unsigned innerRank = 0;
+
+  /// Mixed mode support: allocation is chunked but some acquires are coarse.
+  /// When true, coarse acquires get full-range access (offset=0, size=numChunks).
+  bool isMixedMode = false;
+  Value numChunks; ///< Total chunks for full-range coarse acquires
 
   /// Default constructor
   DbRewritePlan() = default;

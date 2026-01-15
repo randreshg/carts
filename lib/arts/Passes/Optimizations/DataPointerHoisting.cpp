@@ -58,10 +58,10 @@ static bool isDepsPtrLoad(LLVM::LoadOp loadOp) {
   if (!isa<LLVM::LLVMPointerType>(resultType))
     return false;
 
-  /// Check if the address comes from arts.dep_gep or arts.db_gep
+  /// Check if the address comes from arts.dep_gep
   if (auto defOp = addr.getDefiningOp()) {
     /// arts.dep_gep returns (guid, ptr) - we want loads from the ptr result
-    if (dyn_cast<DepGepOp>(defOp) || dyn_cast<DbGepOp>(defOp))
+    if (dyn_cast<DepGepOp>(defOp))
       return true;
 
     /// Also check for GEP chains that access struct fields
@@ -102,8 +102,19 @@ static bool allOperandsDefinedOutside(Operation *op, Region &region) {
   return true;
 }
 
+/// Check if all operands dominate the insertion point.
+static bool allOperandsDominate(Operation *op, Operation *insertPoint,
+                                DominanceInfo &domInfo) {
+  for (Value operand : op->getOperands()) {
+    if (!domInfo.properlyDominates(operand, insertPoint))
+      return false;
+  }
+  return true;
+}
+
 /// Hoist a load and its address computation (GEP) out of loops
-static bool hoistLoadOutOfLoop(LLVM::LoadOp loadOp, scf::ForOp outermostLoop) {
+static bool hoistLoadOutOfLoop(LLVM::LoadOp loadOp, scf::ForOp outermostLoop,
+                               DominanceInfo &domInfo) {
   /// Get the address defining op (should be a GEP or arts op)
   Value addr = loadOp.getAddr();
   Operation *addrOp = addr.getDefiningOp();
@@ -114,8 +125,11 @@ static bool hoistLoadOutOfLoop(LLVM::LoadOp loadOp, scf::ForOp outermostLoop) {
   Region &loopRegion = outermostLoop.getRegion();
 
   /// Check if we can hoist - all operands of the address op must be
-  /// loop-invariant
+  /// loop-invariant and dominate the insertion point.
   if (!allOperandsDefinedOutside(addrOp, loopRegion))
+    return false;
+
+  if (!allOperandsDominate(addrOp, outermostLoop, domInfo))
     return false;
 
   /// Move the address computation before the loop
@@ -152,7 +166,11 @@ void DataPointerHoistingPass::runOnOperation() {
     /// Collect loads to hoist (don't modify while iterating)
     SmallVector<std::pair<LLVM::LoadOp, scf::ForOp>> loadsToHoist;
 
+    DominanceInfo domInfo(funcOp);
     funcOp.walk([&](LLVM::LoadOp loadOp) {
+      if (loadOp.getVolatile_())
+        return;
+
       /// Check if this is a deps pointer load
       if (!isDepsPtrLoad(loadOp))
         return;
@@ -161,6 +179,9 @@ void DataPointerHoistingPass::runOnOperation() {
       scf::ForOp outermostLoop = findOutermostLoop(loadOp);
       if (!outermostLoop)
         return;
+      /// Be conservative: only hoist loads that are directly in the loop body.
+      if (loadOp->getParentOp() != outermostLoop)
+        return;
 
       /// Check if address operands are loop-invariant
       Value addr = loadOp.getAddr();
@@ -168,8 +189,14 @@ void DataPointerHoistingPass::runOnOperation() {
       if (!addrOp)
         return;
 
+      if (addrOp->getParentOp() != outermostLoop)
+        return;
+
       Region &loopRegion = outermostLoop.getRegion();
       if (!allOperandsDefinedOutside(addrOp, loopRegion))
+        return;
+
+      if (!allOperandsDominate(addrOp, outermostLoop, domInfo))
         return;
 
       loadsToHoist.push_back({loadOp, outermostLoop});
@@ -177,7 +204,7 @@ void DataPointerHoistingPass::runOnOperation() {
 
     /// Now hoist the collected loads
     for (auto &[loadOp, outermostLoop] : loadsToHoist) {
-      if (hoistLoadOutOfLoop(loadOp, outermostLoop))
+      if (hoistLoadOutOfLoop(loadOp, outermostLoop, domInfo))
         hoistedCount++;
     }
   });

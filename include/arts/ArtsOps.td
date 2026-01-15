@@ -250,7 +250,7 @@ def DbAcquireOp : Arts_Op<"db_acquire",
   }];
 }
 
-def DbRefOp : Arts_Op<"db_ref", [Pure]> {
+def DbRefOp : Arts_Op<"db_ref", []> {
   let summary = "References an outer datablock element.";
   let description = [{
     References an element from a datablock handle using only the outer

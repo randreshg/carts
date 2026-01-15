@@ -54,7 +54,9 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/OpDefinition.h"
@@ -62,7 +64,6 @@
 #include "mlir/IR/Value.h"
 #include "mlir/Pass/Pass.h"
 #include "polygeist/Ops.h"
-#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include <cstdint>
@@ -216,6 +217,9 @@ private:
   void createDbAcquireOps(EdtOp edt, SetVector<Value> &externalDeps);
   Value findParentAcquireSource(EdtOp edt, Operation *dbAllocOp,
                                 bool requiresIndexedAccess = false);
+  void initializeGlobalDbIfNeeded(Operation *alloc, DbAllocOp dbAllocOp,
+                                  ArrayRef<Value> sizes, DbAllocType allocType,
+                                  const PartitioningDecision &decision);
 
   DbAllocType inferAllocType(Operation *alloc);
   void insertDbFreeForDbAlloc(DbAllocOp dbAlloc, Operation *alloc);
@@ -736,6 +740,8 @@ void CreateDbsPass::createDbAllocOps() {
     auto dbAllocOp = AC->create<DbAllocOp>(loc, mode, route, allocType, dbMode,
                                            elementType, sizes, elementSizes);
 
+    initializeGlobalDbIfNeeded(alloc, dbAllocOp, sizes, allocType, decision);
+
     /// Set partition attribute based on heuristic decision
     PromotionMode promotionMode = decision.isChunked() ? PromotionMode::chunked
                                   : decision.isFineGrained()
@@ -820,6 +826,71 @@ void CreateDbsPass::createDbAllocOps() {
       }
     }
   }
+}
+
+/// Initialize global constants for single coarse-grained DBs.
+void CreateDbsPass::initializeGlobalDbIfNeeded(
+    Operation *alloc, DbAllocOp dbAllocOp, ArrayRef<Value> sizes,
+    DbAllocType allocType, const PartitioningDecision &decision) {
+  if (allocType != DbAllocType::global || decision.isChunked() ||
+      decision.isFineGrained())
+    return;
+
+  auto getGlobal = dyn_cast<memref::GetGlobalOp>(alloc);
+  if (!getGlobal)
+    return;
+
+  auto globalOp = SymbolTable::lookupNearestSymbolFrom<memref::GlobalOp>(
+      getGlobal, getGlobal.getNameAttr());
+  if (!globalOp || !globalOp.getInitialValue().has_value())
+    return;
+
+  Location loc = alloc->getLoc();
+  OpBuilder::InsertionGuard initGuard(AC->getBuilder());
+  AC->setInsertionPointAfter(dbAllocOp);
+  Value globalMemref = AC->create<memref::GetGlobalOp>(loc, globalOp.getType(),
+                                                       getGlobal.getNameAttr());
+
+  SmallVector<Value> zeroIndices;
+  zeroIndices.reserve(sizes.size());
+  for (size_t i = 0; i < sizes.size(); ++i)
+    zeroIndices.push_back(AC->createIndexConstant(0, loc));
+  Value dbRef = AC->create<DbRefOp>(loc, dbAllocOp.getPtr(), zeroIndices);
+
+  auto memRefType = globalOp.getType().cast<MemRefType>();
+  unsigned rank = memRefType.getRank();
+  if (rank == 0) {
+    Value initVal = AC->create<memref::LoadOp>(loc, globalMemref);
+    AC->create<memref::StoreOp>(loc, initVal, dbRef);
+    return;
+  }
+
+  SmallVector<Value> indices;
+  indices.reserve(rank);
+  auto emitLoopCopy = [&](auto &self, unsigned dim) -> void {
+    if (dim == rank) {
+      Value initVal = AC->create<memref::LoadOp>(loc, globalMemref, indices);
+      AC->create<memref::StoreOp>(loc, initVal, dbRef, indices);
+      return;
+    }
+
+    Value lower = AC->createIndexConstant(0, loc);
+    Value upper;
+    if (memRefType.isDynamicDim(dim)) {
+      upper = AC->create<memref::DimOp>(loc, globalMemref, dim);
+    } else {
+      upper = AC->createIndexConstant(memRefType.getDimSize(dim), loc);
+    }
+    Value step = AC->createIndexConstant(1, loc);
+
+    auto loop = AC->create<scf::ForOp>(loc, lower, upper, step);
+    OpBuilder::InsertionGuard loopGuard(AC->getBuilder());
+    AC->setInsertionPointToStart(loop.getBody());
+    indices.push_back(loop.getInductionVar());
+    self(self, dim + 1);
+    indices.pop_back();
+  };
+  emitLoopCopy(emitLoopCopy, 0);
 }
 
 /// Find parent scope's acquired handle for a datablock
