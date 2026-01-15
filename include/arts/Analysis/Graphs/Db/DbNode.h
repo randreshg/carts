@@ -1,5 +1,7 @@
 ///==========================================================================///
-/// Db/DbNode.h - Db-specific nodes derived from NodeBase
+/// File: DbNode.h
+///
+/// Db-specific nodes derived from NodeBase
 ///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_GRAPHS_DB_DBNODE_H
@@ -55,13 +57,15 @@ public:
     return N->getKind() == NodeKind::DbAlloc;
   }
 
-  /// Returns true if the memref is accessed in parallel loops and is not a
-  /// string datablock
+  /// Returns true if the memref is accessed in parallel loops (or has
+  /// ForLowering partition hints) and is not a string datablock.
   bool isParallelFriendly() const;
 
   /// Check if this allocation can be partitioned for parallel execution.
   /// Validates allocation metadata and recursively checks all acquires.
-  bool canBePartitioned();
+  /// @param useFineGrainedFallback If true, non-affine accesses use element-wise
+  ///        partitioning instead of blocking. Default: false (block non-affine).
+  bool canBePartitioned(bool useFineGrainedFallback = false);
 
   /// Check if this allocation is already fine-grained
   /// (all elementSizes are constant 1, meaning each datablock holds one
@@ -71,6 +75,10 @@ public:
   /// Check if at most one acquire writes to this allocation.
   /// If true, twin-diff is not needed (no write conflicts possible).
   bool hasSingleWriter() const;
+
+  /// Check if any writer uses non-constant offset/size hints.
+  /// This implies multiple runtime writers may touch the same DB.
+  bool hasDynamicWriterOffsets() const;
 
   /// Check if all acquires use worker-indexed pattern (array[workerId] size=1).
   /// If true, all accesses are inherently disjoint.
@@ -83,7 +91,10 @@ public:
 
   /// Collect acquire access patterns and summarize them at allocation level.
   /// Returns AcquirePatternSummary (defined in DbAccessPattern.h)
-  AcquirePatternSummary summarizeAcquirePatterns() const;
+  /// @param useFineGrainedFallback If true, non-affine accesses mark hasIndexed
+  ///        to trigger element-wise partitioning via H1.5 heuristic.
+  AcquirePatternSummary summarizeAcquirePatterns(
+      bool useFineGrainedFallback = false) const;
 
   /// Returns true if any acquire is stencil-like.
   bool hasStencilAccess() const;
@@ -154,25 +165,36 @@ public:
   void collectAccessOperations(
       DenseMap<DbRefOp, SetVector<Operation *>> &dbRefToMemOps);
 
-  /// Helper methods for querying memory access counts.
-  /// These use collectAccessOperations internally.
+  /// Helper methods for querying memory access.
+  void
+  forEachMemoryAccess(llvm::function_ref<void(Operation *, bool)> callback);
+
   bool hasLoads();
   bool hasStores();
   bool hasMemoryAccesses();
   size_t countLoads();
   size_t countStores();
+  bool hasIndirectAccess() const;
 
   DbAcquireOp getDbAcquireOp() const { return dbAcquireOp; }
   DbReleaseOp getDbReleaseOp() const { return dbReleaseOp; }
-
-  SmallVector<Value, 4> computeInvariantIndices();
 
   DbAcquireNode *getOrCreateAcquireNode(DbAcquireOp op);
   void forEachChildNode(const std::function<void(NodeBase *)> &fn) const;
 
   /// Check if this acquire can be partitioned for parallel execution.
   /// Validates EDT type, memory accesses, access patterns, and nested children.
-  bool canBePartitioned();
+  /// @param useFineGrainedFallback If true, skip offset validation for non-affine
+  ///        accesses (element-wise partitioning doesn't need offset-based chunks).
+  bool canBePartitioned(bool useFineGrainedFallback = false);
+
+  /// Check EDT type, memory accesses, and parallel loop metadata.
+  bool hasValidEdtAndAccesses(bool useFineGrainedFallback = false);
+
+  /// Extract chunk offset/size and validate access patterns.
+  /// @param useFineGrainedFallback If true, skip offset validation for non-affine
+  ///        accesses (element-wise partitioning doesn't need offset-based chunks).
+  bool computePartitionBounds(bool useFineGrainedFallback = false);
 
   /// Check if array accesses use indices derived from the given offset.
   /// Returns true if partitioning is safe (first index = offset + delta).
@@ -182,6 +204,11 @@ public:
   LogicalResult computeChunkInfoFromWhile(scf::WhileOp whileOp,
                                           Value &chunkOffset, Value &chunkSize,
                                           Value *offsetForCheck = nullptr);
+  LogicalResult computeChunkInfoFromHints(Value &chunkOffset, Value &chunkSize);
+  LogicalResult computeChunkInfoFromForLoop(ArrayRef<scf::ForOp> forLoops,
+                                            Value &chunkOffset,
+                                            Value &chunkSize,
+                                            Value *offsetForCheck = nullptr);
 
   /// StencilBounds struct is now defined in DbAccessPattern.h
 

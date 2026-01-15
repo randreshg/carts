@@ -424,6 +424,9 @@ buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
   state.addAttribute("allocType", allocTypeAttr);
   state.addAttribute("dbMode", dbModeAttr);
   state.addAttribute("elementType", elementTypeAttr);
+  state.addAttribute(AttrNames::Operation::Partition,
+                     PromotionModeAttr::get(builder.getContext(),
+                                            PromotionMode::coarse));
 
   /// Add operands
   state.addOperands(route);

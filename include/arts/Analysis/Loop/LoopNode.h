@@ -2,10 +2,6 @@
 /// File: LoopNode.h
 ///
 /// LoopNode represents a loop operation with integrated metadata.
-/// Inherits from both NodeBase (for graph structure) and LoopMetadata
-/// (for loop properties and analysis results).
-///
-/// Owned by LoopAnalysis, accessed via getLoopNode(Operation*).
 ///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_LOOPNODE_H
@@ -41,8 +37,10 @@ public:
   void print(llvm::raw_ostream &os) const override;
   Operation *getOp() const override { return loopOp; }
 
-  void addInEdge(EdgeBase *edge) override { /* unused for loop nodes */ }
-  void addOutEdge(EdgeBase *edge) override { /* unused for loop nodes */ }
+  void addInEdge(EdgeBase *edge) override { /* unused for loop nodes */
+  }
+  void addOutEdge(EdgeBase *edge) override { /* unused for loop nodes */
+  }
   const DenseSet<EdgeBase *> &getInEdges() const override { return edges; }
   const DenseSet<EdgeBase *> &getOutEdges() const override { return edges; }
 

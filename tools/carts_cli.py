@@ -995,6 +995,8 @@ def execute(
         "--loop-transforms-enable-tiling",
         "--loop-transforms-tile-j",
         "--loop-transforms-min-trip-count",
+        # Partitioning options
+        "--partition-fallback",
     }
 
     # Check if -O3 or --diagnose is in passthrough args

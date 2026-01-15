@@ -620,8 +620,9 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
         Value scalarSize = AC->create<polygeist::TypeSizeOp>(
             loc, IndexType::get(AC->getContext()), elementType);
 
-        /// Compute byte_offset = linearize(element_offsets, elementSizes) * scalarSize
-        /// For 2D: byte_offset = (elemOffsets[0] * elementSizes[1] + elemOffsets[1]) * scalarSize
+        /// Compute byte_offset = linearize(element_offsets, elementSizes) *
+        /// scalarSize For 2D: byte_offset = (elemOffsets[0] * elementSizes[1] +
+        /// elemOffsets[1]) * scalarSize
         Value linearOffset = AC->create<arith::ConstantIndexOp>(loc, 0);
         for (size_t i = 0; i < elemOffsets.size(); ++i) {
           /// Compute stride for this dimension (product of trailing dims)
@@ -629,8 +630,10 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
           for (size_t j = i + 1; j < elementSizes.size(); ++j) {
             stride = AC->create<arith::MulIOp>(loc, stride, elementSizes[j]);
           }
-          Value dimOffset = AC->create<arith::MulIOp>(loc, elemOffsets[i], stride);
-          linearOffset = AC->create<arith::AddIOp>(loc, linearOffset, dimOffset);
+          Value dimOffset =
+              AC->create<arith::MulIOp>(loc, elemOffsets[i], stride);
+          linearOffset =
+              AC->create<arith::AddIOp>(loc, linearOffset, dimOffset);
         }
         byteOffset = AC->create<arith::MulIOp>(loc, linearOffset, scalarSize);
 
@@ -718,8 +721,9 @@ EdtLoweringPass::insertDepManagement(Location loc, Value edtGuid,
     finalByteSizes = byteSizes;
   }
 
-  AC->create<RecordDepOp>(loc, edtGuid, depGuids, boundsValids, finalByteOffsets,
-                          finalByteSizes, modeAttr, acquireAttr, twinDiffAttr);
+  AC->create<RecordDepOp>(loc, edtGuid, depGuids, boundsValids,
+                          finalByteOffsets, finalByteSizes, modeAttr,
+                          acquireAttr, twinDiffAttr);
 
   return success();
 }

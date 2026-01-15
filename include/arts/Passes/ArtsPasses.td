@@ -129,6 +129,10 @@ def DbPartitioning : Pass<"db-partitioning", "mlir::ModuleOp"> {
     Twin-Diff Policy:
     - DEFAULT: twin_diff = TRUE (safe, handles potential overlap at runtime)
     - DISABLE: Only when we can PROVE non-overlapping access patterns
+
+    Partition Fallback (--partition-fallback):
+    - coarse (default): Non-affine accesses block partitioning, use coarse allocation
+    - fine: Non-affine accesses use element-wise (fine-grained) partitioning
   }];
   let dependentDialects = [
     "memref::MemRefDialect",
@@ -139,7 +143,28 @@ def DbPartitioning : Pass<"db-partitioning", "mlir::ModuleOp"> {
     "scf::SCFDialect",
     "polygeist::PolygeistDialect"
   ];
-  let constructor = "mlir::arts::createDbPartitioningPass(nullptr)";
+  let options = [
+    Option<"useFineGrainedFallback", "fine-grained-fallback", "bool", "false",
+           "Use fine-grained (element-wise) fallback for non-affine accesses">
+  ];
+  let constructor = "mlir::arts::createDbPartitioningPass(nullptr, false)";
+}
+
+def DbVersioning : Pass<"db-versioning", "mlir::ModuleOp"> {
+  let summary = "Create copy/sync pairs for mixed access patterns";
+  let description = [{
+    Inserts arts.db_copy and arts.db_sync for allocations with mixed access
+    patterns (direct writes + indirect reads). This enables separate
+    read-optimized versions of data.
+  }];
+  let dependentDialects = [
+    "memref::MemRefDialect",
+    "func::FuncDialect",
+    "arts::ArtsDialect",
+    "arith::ArithDialect",
+    "scf::SCFDialect"
+  ];
+  let constructor = "mlir::arts::createDbVersioningPass(nullptr)";
 }
 
 def CreateDbs : Pass<"create-dbs", "mlir::ModuleOp"> {

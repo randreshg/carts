@@ -1,7 +1,7 @@
 ///==========================================================================///
-/// File: DbChunkedRewriter.h
+/// File: DbChunkedIndexer.h
 ///
-/// Index rewriter for chunked datablock allocation.
+/// Index localizer for chunked datablock allocation.
 /// Multiple elements are grouped into chunks for coarse-grained parallelism.
 ///
 /// Partitioning policy:
@@ -22,24 +22,24 @@
 ///   memrefIdx = globalRow % chunkSize
 ///==========================================================================///
 
-#ifndef ARTS_TRANSFORMS_DATABLOCK_DBCHUNKEDREWRITER_H
-#define ARTS_TRANSFORMS_DATABLOCK_DBCHUNKEDREWRITER_H
+#ifndef ARTS_TRANSFORMS_DATABLOCK_DBCHUNKEDINDEXER_H
+#define ARTS_TRANSFORMS_DATABLOCK_DBCHUNKEDINDEXER_H
 
-#include "arts/Transforms/Datablock/DbRewriterBase.h"
+#include "arts/Transforms/Datablock/DbIndexerBase.h"
 
 namespace mlir {
 namespace arts {
 
-/// Index rewriter for chunked datablock allocation.
+/// Index localizer for chunked datablock allocation.
 /// Implements div/mod localization for coarse-grained parallelism.
-class DbChunkedRewriter : public DbRewriterBase {
-  Value chunkSize_;  ///< Elements per chunk
-  Value startChunk_; ///< First chunk this partition acquires
-  Value elemOffset_; ///< Element offset (for stride computation)
+class DbChunkedIndexer : public DbIndexerBase {
+  Value chunkSize_;
+  Value startChunk_;
+  Value elemOffset_;
 
 public:
-  DbChunkedRewriter(Value chunkSize, Value startChunk, Value elemOffset,
-                    unsigned outerRank, unsigned innerRank);
+  DbChunkedIndexer(Value chunkSize, Value startChunk, Value elemOffset,
+                   unsigned outerRank, unsigned innerRank);
 
   /// Transform global multi-dimensional indices to local
   /// For chunked mode: dbRefIdx = global / chunkSize - startChunk
@@ -52,19 +52,19 @@ public:
                                       OpBuilder &builder,
                                       Location loc) override;
 
-  /// Rewrite a DbRefOp and its load/store users
-  void rewriteDbRefUsers(DbRefOp ref, Value blockArg, Type newElementType,
-                         OpBuilder &builder,
-                         llvm::SetVector<Operation *> &opsToRemove) override;
+  /// Transform a DbRefOp and its load/store users
+  void transformDbRefUsers(DbRefOp ref, Value blockArg, Type newElementType,
+                           OpBuilder &builder,
+                           llvm::SetVector<Operation *> &opsToRemove) override;
 
-  /// Rebase a list of operations
-  void rebaseOps(ArrayRef<Operation *> ops, Value dbPtr, Type elementType,
-                 ArtsCodegen &AC, llvm::SetVector<Operation *> &opsToRemove);
+  /// Transform a list of operations
+  void transformOps(ArrayRef<Operation *> ops, Value dbPtr, Type elementType,
+                    ArtsCodegen &AC, llvm::SetVector<Operation *> &opsToRemove);
 
-  /// Rewrite all uses of an allocation in the parent region
-  void rewriteUsesInParentRegion(Operation *alloc, DbAllocOp dbAlloc,
-                                 ArtsCodegen &AC,
-                                 llvm::SetVector<Operation *> &opsToRemove);
+  /// Transform all uses of an allocation in the parent region
+  void transformUsesInParentRegion(Operation *alloc, DbAllocOp dbAlloc,
+                                   ArtsCodegen &AC,
+                                   llvm::SetVector<Operation *> &opsToRemove);
 
   /// Mode-aware coordinate localization
   SmallVector<Value> localizeCoordinates(ArrayRef<Value> globalIndices,
@@ -77,4 +77,4 @@ public:
 } // namespace arts
 } // namespace mlir
 
-#endif // ARTS_TRANSFORMS_DATABLOCK_DBCHUNKEDREWRITER_H
+#endif // ARTS_TRANSFORMS_DATABLOCK_DBCHUNKEDINDEXER_H

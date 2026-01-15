@@ -1,6 +1,8 @@
-///===----------------------------------------------------------------------===///
-// DependenceAnalyzer.h - Dependence Analysis Helper
-///===----------------------------------------------------------------------===///
+///==========================================================================///
+/// File: DependenceAnalyzer.h
+///
+/// Dependence Analysis Helper
+///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_METADATA_DEPENDENCEANALYZER_H
 #define ARTS_ANALYSIS_METADATA_DEPENDENCEANALYZER_H
@@ -18,7 +20,7 @@ namespace mlir {
 namespace arts {
 
 ///===----------------------------------------------------------------------===///
-// DependenceAnalyzer - Helper for analyzing loop dependencies
+/// DependenceAnalyzer - Helper for analyzing loop dependencies
 ///===----------------------------------------------------------------------===///
 class DependenceAnalyzer {
 public:

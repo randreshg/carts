@@ -1,6 +1,8 @@
-///===----------------------------------------------------------------------===///
-// AccessAnalyzer.h - Memory Access Analysis Helper
-///===----------------------------------------------------------------------===///
+///==========================================================================///
+/// File: AccessAnalyzer.h
+///
+/// Memory Access Analysis Helper
+///==========================================================================///
 
 #ifndef ARTS_ANALYSIS_METADATA_ACCESSANALYZER_H
 #define ARTS_ANALYSIS_METADATA_ACCESSANALYZER_H

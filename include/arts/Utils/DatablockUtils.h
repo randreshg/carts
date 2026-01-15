@@ -23,17 +23,7 @@ namespace arts {
 ///===----------------------------------------------------------------------===///
 /// Partition mode for datablock access patterns.
 /// Determined from DbAcquireOp structure - no attributes needed!
-///
-/// Mode detection logic (from DbAcquireOp):
-///   - ElementWise: indices non-empty (from OpenMP depend(in: A[i][j]))
-///   - Chunked: indices empty, offsets non-empty (from OpenMP depend(in:
-///   A[i:K]))
-///   - Coarse: both empty (acquires entire datablock)
-enum class PartitionMode {
-  Coarse,      /// No partitioning - acquires entire datablock
-  ElementWise, /// Uses indices to select individual elements
-  Chunked      /// Uses offsets/sizes to select chunks
-};
+enum class PartitionMode { Coarse, ElementWise, Chunked };
 
 ///===----------------------------------------------------------------------===///
 /// Datablock Utilities
@@ -48,12 +38,6 @@ public:
 
   /// Trace a dependency back to its root DbAllocOp.
   /// Returns {guid, ptr} from the DbAllocOp, or nullopt if not found.
-  /// This is critical for the parallel region splitting transformation:
-  /// - Before: Task EDTs acquire from parallel EDT's block arguments
-  ///   DbAllocOp -> DbAcquireOp (for parallel) -> block_arg -> DbAcquireOp
-  ///   (task)
-  /// - After: Task EDTs acquire directly from DbAllocOp
-  ///   DbAllocOp -> DbAcquireOp (for task EDT)
   static std::optional<std::pair<Value, Value>> traceToDbAlloc(Value dep);
 
   /// Finds the datablock-related operation (DbAllocOp or DbAcquireOp)
@@ -98,23 +82,19 @@ public:
   /// Structure-based mode detection - no attributes needed!
 
   /// Get partition mode from DbAcquireOp structure.
-  /// - ElementWise: indices non-empty
-  /// - Chunked: indices empty, offsets non-empty (or offset/size hints present)
-  /// - Coarse: both empty
   static PartitionMode getPartitionMode(DbAcquireOp acquire);
 
-  /// Get partition mode from DbAllocOp (limited - can only detect coarse).
-  /// Fine-grained allocations default to ElementWise since the actual mode
-  /// is determined at acquire time.
+  /// Get partition mode from DbAllocOp
   static PartitionMode getPartitionMode(DbAllocOp alloc);
 
-  /// Convenience predicates for DbAcquireOp
   static bool isChunked(DbAcquireOp acquire) {
     return getPartitionMode(acquire) == PartitionMode::Chunked;
   }
+
   static bool isElementWise(DbAcquireOp acquire) {
     return getPartitionMode(acquire) == PartitionMode::ElementWise;
   }
+
   static bool isCoarse(DbAcquireOp acquire) {
     return getPartitionMode(acquire) == PartitionMode::Coarse;
   }
@@ -162,6 +142,34 @@ public:
   /// Get outer stride Value from DbAllocOp (uses getSizes()).
   static Value getOuterStrideValue(OpBuilder &builder, Location loc,
                                    DbAllocOp alloc);
+
+  ///===----------------------------------------------------------------------===//
+  /// Access Mode and Hints Analysis
+  ///===----------------------------------------------------------------------===//
+
+  /// Check if a DbAcquireOp has static (constant) offset and size hints.
+  /// Returns true if both offset and size hints are either empty or constant.
+  static bool hasStaticHints(DbAcquireOp acqOp);
+
+  /// Check if an ArtsMode is a writer mode (out or inout).
+  static bool isWriterMode(ArtsMode mode);
+
+  ///===----------------------------------------------------------------------===///
+  /// Offset Dependency and Chunk Size Analysis
+  ///===----------------------------------------------------------------------===///
+  /// Functions for analyzing value dependencies on offsets and extracting
+  /// base chunk sizes from size hints.
+
+  /// Check if a value depends on a partition offset (ignoring numeric casts).
+  /// Used to determine data dependencies in index expressions for partitioning.
+  static bool dependsOnOffset(Value v, Value offset);
+
+  /// Try to extract an offset-independent base chunk size from size hints.
+  static Value extractBaseChunkSizeCandidate(Value offsetHint, Value sizeHint,
+                                             int depth = 0);
+
+  /// Find the EDT operation that uses a DbControlOp result.
+  static Operation *findUserEdt(DbControlOp dbControl);
 };
 
 } // namespace arts

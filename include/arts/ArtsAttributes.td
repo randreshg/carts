@@ -140,13 +140,16 @@ def DepAccessMode : Arts_I32Enum<"DepAccessMode",
 def DepAccessModeAttr : Arts_I32EnumAttr<"dep_access", DepAccessMode>;
 
 /// Enum info for DB promotion modes
-/// Used to track how a DbAcquire was promoted (chunked vs element-wise)
+/// Used to track how a DbAllocOp was partitioned:
+///   - coarse: Single DB for entire array (outerRank=0)
+///   - chunked: Fixed-size chunks
+///   - fine_grained: One DB per element/row (outerRank>0)
 def PromotionMode : Arts_I32Enum<"PromotionMode",
     "DB allocation promotion mode",
     [
-      I32EnumAttrCase<"none", 0, "none">,
+      I32EnumAttrCase<"coarse", 0, "coarse">,
       I32EnumAttrCase<"chunked", 1, "chunked">,
-      I32EnumAttrCase<"element_wise", 2, "element_wise">
+      I32EnumAttrCase<"fine_grained", 2, "fine_grained">
     ]>;
 
 /// Enum attribute for DB promotion modes
