@@ -23,9 +23,9 @@ This setup allows testing the partitioning heuristics described in `docs/heurist
 ```c
 #pragma omp parallel for private(j)
 for (i = 0; i < nx; i++) {
-  for (j = 0; j < ny; j++) {
-    u[i][j] = unew[i][j];  // Each worker writes ONLY its assigned rows
-  }
+   /// Each worker writes ONLY its assigned rows
+  for (j = 0; j < ny; j++)
+    u[i][j] = unew[i][j];
 }
 ```
 
@@ -38,10 +38,9 @@ for (i = 0; i < nx; i++) {
 ```c
 #pragma omp parallel for private(j)
 for (i = 0; i < nx; i++) {
-  for (j = 0; j < ny; j++) {
-    // 5-point stencil: reads u[i-1], u[i], u[i+1]
+   /// 5-point stencil: reads u[i-1], u[i], u[i+1]
+  for (j = 0; j < ny; j++)
     unew[i][j] = 0.25 * (u[i-1][j] + u[i][j+1] + u[i][j-1] + u[i+1][j] + f[i][j] * dx * dy);
-  }
 }
 ```
 
@@ -75,6 +74,7 @@ carts run jacobi-for.mlir --convert-openmp-to-arts &> jacobi-for_omp-to-arts.mli
 ```
 
 You should see:
+
 - Both loops converted to `arts.for` with `parallel` mode
 - Loop 1: Simple parallel loop over rows
 - Loop 2: Parallel loop with stencil dependencies
@@ -98,6 +98,7 @@ carts run jacobi-for.mlir --concurrency &> jacobi-for_concurrency.mlir
 ```
 
 This pass:
+
 - Converts `arts.for` to worker-specific `scf.for` loops
 - Adds `offset_hints` and `size_hints` for partitioning
 - Creates epochs for synchronization between Loop 1 and Loop 2
@@ -111,6 +112,7 @@ carts run jacobi-for.mlir --db-partitioning --debug-only=db_partitioning &> jaco
 ```
 
 Analyze how CARTS decides to partition the `u` array:
+
 - **Element-wise** (row DBs): Precise but creates many DBs
 - **Chunk-wise** (chunk DBs): Few DBs but wasteful for stencils
 - **Hybrid** (chunks + halo strips): Balance of both
@@ -130,6 +132,7 @@ carts execute jacobi-for.c -O3
 ```
 
 Expected output:
+
 ```
 Jacobi-For Test: 100 x 100 grid, 10 iterations
 Demonstrating uniform (Loop 1) vs stencil (Loop 2) access patterns
@@ -170,17 +173,18 @@ For the stencil loop, the acquire for `u` uses extended ranges:
 // Compute offset including left halo
 %51 = arith.cmpi uge, %36, %c1 : index
 %52 = arith.subi %36, %c1 : index
-%53 = arith.select %51, %52, %c0 : index  // offset = max(i-1, 0)
+%53 = arith.select %51, %52, %c0 : index  /// offset = max(i-1, 0)
 
-// Compute size including both halos
-%54 = arith.addi %41, %c2 : index         // size = chunkSize + 2
+/// Compute size including both halos
+%54 = arith.addi %41, %c2 : index         /// size = chunkSize + 2
 
-// Acquire with extended range
+/// Acquire with extended range
 %guid_12, %ptr_13 = arts.db_acquire[<in>] (%guid_4, %ptr_5)
                     offsets[%53] sizes[%54]
 ```
 
 This correctly extends the acquire range to include:
+
 - **Left halo**: row `i-1` (when `i > 0`)
 - **Right halo**: row `i+chunkSize` (when within bounds)
 
@@ -189,11 +193,13 @@ This correctly extends the acquire range to include:
 The current DbPartitioning maps `RewriterMode::Stencil` to `element_wise` partitioning:
 
 ```cpp
-case RewriterMode::Stencil: // Stencil uses element-wise attribute for now
+/// Stencil uses element-wise attribute for now
+case RewriterMode::Stencil: 
   return PromotionMode::element_wise;
 ```
 
 This means each row of `u` becomes its own datablock. For the stencil loop:
+
 - Worker k acquires DBs for rows `[k*7-1, k*7+7+1)` (with bounds checking)
 - The acquire fetches only the needed row DBs
 - **Advantage**: Precise data movement (only halo rows are fetched)
@@ -214,6 +220,7 @@ The ESD (Ephemeral Slice Dependencies) runtime infrastructure is now complete:
 | RecordDepPattern lowering | Updated | `lib/arts/Passes/Transformations/ConvertArtsToLLVM.cpp` |
 
 **Missing Link**: DbPartitioning needs to be updated to:
+
 1. Use chunked partitioning for stencil patterns (instead of element-wise)
 2. Set `halo_left`, `halo_right`, `element_bytes` attributes on `DbAcquireOp`
 3. This enables EdtLowering to create `RecordDepOp` with `byte_offsets`/`byte_sizes`
@@ -265,12 +272,15 @@ Max error: 0.000000e+00
 To fully enable ESD for stencil patterns:
 
 1. **Modify `toPromotionMode()`** in DbPartitioning.cpp:
+
    ```cpp
+   /// Use chunked, not element_wise
    case RewriterMode::Stencil:
-     return PromotionMode::chunked;  // Use chunked, not element_wise
+     return PromotionMode::chunked;  
    ```
 
 2. **Set halo attributes** on DbAcquireOp during stencil rewriting:
+
    ```cpp
    acquireOp.setHaloLeftAttr(builder.getIndexAttr(haloLeft));
    acquireOp.setHaloRightAttr(builder.getIndexAttr(haloRight));

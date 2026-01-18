@@ -41,6 +41,19 @@ inline StringRef getRewriterModeName(RewriterMode mode) {
   return "Unknown";
 }
 
+/// Convert RewriterMode to PartitionMode
+inline PartitionMode toPartitionMode(RewriterMode mode) {
+  switch (mode) {
+  case RewriterMode::Chunked:
+    return PartitionMode::chunked;
+  case RewriterMode::Stencil:
+    return PartitionMode::chunked;
+  case RewriterMode::ElementWise:
+    return PartitionMode::fine_grained;
+  }
+  return PartitionMode::coarse;
+}
+
 ///===----------------------------------------------------------------------===//
 /// Stencil info for ESD halo-based localization
 ///===----------------------------------------------------------------------===//
@@ -58,6 +71,7 @@ struct DbRewriteAcquire {
   Value elemOffset;
   Value elemSize;
   bool isFullRange = false;
+  bool skipRebase = false;
 };
 
 /// Forward declaration for PartitioningDecision
@@ -66,7 +80,7 @@ struct PartitioningDecision;
 /// Rewriter plan chosen by DbPartitioning.
 struct DbRewritePlan {
   RewriterMode mode = RewriterMode::ElementWise;
-  Value chunkSize; /// Valid for Chunked/Stencil; empty for ElementWise
+  Value chunkSize;
   std::optional<StencilInfo> stencilInfo;
   unsigned outerRank = 0;
   unsigned innerRank = 0;
@@ -109,10 +123,10 @@ public:
   FailureOr<DbAllocOp> apply(OpBuilder &builder);
 
   /// Accessors
-  RewriterMode getMode() const { return plan_.mode; }
-  bool isElementWise() const { return plan_.mode == RewriterMode::ElementWise; }
-  bool isChunked() const { return plan_.mode == RewriterMode::Chunked; }
-  bool isStencil() const { return plan_.mode == RewriterMode::Stencil; }
+  RewriterMode getMode() const { return plan.mode; }
+  bool isElementWise() const { return plan.mode == RewriterMode::ElementWise; }
+  bool isChunked() const { return plan.mode == RewriterMode::Chunked; }
+  bool isStencil() const { return plan.mode == RewriterMode::Stencil; }
 
 protected:
   /// Protected constructor - use create() factory instead
@@ -120,34 +134,29 @@ protected:
              ValueRange newInnerSizes, ArrayRef<DbRewriteAcquire> acquires,
              const DbRewritePlan &plan);
 
-  //===--------------------------------------------------------------------===//
-  // Virtual hooks - mode-specific behavior
-  //===--------------------------------------------------------------------===//
-
+  ///===--------------------------------------------------------------------===///
+  /// Virtual hooks
+  ///===--------------------------------------------------------------------===///
 
   virtual void transformAcquire(const DbRewriteAcquire &info,
                                 DbAllocOp newAlloc, OpBuilder &builder) = 0;
-
-  /// Transform a DbRefOp outside EDT with mode-specific index logic.
   virtual void transformDbRef(DbRefOp ref, DbAllocOp newAlloc,
                               OpBuilder &builder) = 0;
-
-  /// Rebase EDT users with mode-specific index localization.
   virtual bool rebaseEdtUsers(DbAcquireOp acquire, OpBuilder &builder,
                               Value startChunk = nullptr) = 0;
 
-  //===--------------------------------------------------------------------===//
-  // Shared state
-  //===--------------------------------------------------------------------===//
+  ///===--------------------------------------------------------------------===///
+  /// Shared state
+  ///===--------------------------------------------------------------------===///
 
-  DbAllocOp oldAlloc_;
-  SmallVector<Value> newOuterSizes_, newInnerSizes_;
-  SmallVector<DbRewriteAcquire> acquires_;
-  DbRewritePlan plan_;
+  DbAllocOp oldAlloc;
+  SmallVector<Value> newOuterSizes, newInnerSizes;
+  SmallVector<DbRewriteAcquire> acquires;
+  DbRewritePlan plan;
 
-  //===--------------------------------------------------------------------===//
-  // Indexer factory - used by subclasses for index localization
-  //===--------------------------------------------------------------------===//
+  ///===--------------------------------------------------------------------===///
+  /// Indexer factory - used by subclasses for index localization
+  ///===--------------------------------------------------------------------===///
 
   static std::unique_ptr<DbIndexerBase>
   createIndexer(const DbRewritePlan &plan, Value startChunk, Value elemOffset,

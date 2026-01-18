@@ -2,6 +2,7 @@
 /// File: ArtsDialect.cpp
 /// Defines the Arts dialect and the operations within it.
 ///==========================================================================///
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -17,6 +18,7 @@
 #include <cstdint>
 
 #include "arts/ArtsDialect.h"
+#include "arts/Transforms/Datablock/DbRewriter.h"
 #include "arts/Utils/ArtsUtils.h"
 #include "arts/Utils/DatablockUtils.h"
 #include "arts/Utils/OperationAttributes.h"
@@ -25,8 +27,6 @@
 using namespace mlir;
 using namespace mlir::arts;
 
-///===----------------------------------------------------------------------===///
-// Arts dialect.
 void ArtsDialect::initialize() {
   /// Register operations
   addOperations<
@@ -92,7 +92,7 @@ struct RemoveUnusedDbAcquire : public OpRewritePattern<DbAcquireOp> {
 
   LogicalResult matchAndRewrite(DbAcquireOp op,
                                 PatternRewriter &rewriter) const override {
-    // Check if both guid and ptr results are unused
+    /// Check if both guid and ptr results are unused
     if (op.getGuid().use_empty() && op.getPtr().use_empty()) {
       rewriter.eraseOp(op);
       return success();
@@ -122,18 +122,18 @@ bool isArtsOp(Operation *op) {
              arts::GetCurrentNodeOp>(op);
 }
 
-// Arts Dialect Types - method definitions
+/// Arts Dialect Types
 #define GET_TYPEDEF_CLASSES
 #include "arts/ArtsOpsTypes.cpp.inc"
 
-// Arts Dialect Attributes - method definitions
+/// Arts Dialect Attributes
 #define GET_ATTRDEF_CLASSES
 #include "arts/ArtsOpsAttributes.cpp.inc"
 
-// Arts Dialect Enums - method definitions
+/// Arts Dialect Enums
 #include "arts/ArtsOpsEnums.cpp.inc"
 
-// UndefOp
+/// UndefOp
 class UndefToLLVM final : public OpRewritePattern<UndefOp> {
 public:
   using OpRewritePattern<UndefOp>::OpRewritePattern;
@@ -153,7 +153,7 @@ void UndefOp::getCanonicalizationPatterns(RewritePatternSet &results,
   results.insert<UndefToLLVM>(context);
 }
 
-// EdtOp
+/// EdtOp
 SmallVector<Value> mlir::arts::EdtOp::getDependenciesAsVector() {
   SmallVector<Value> deps(getDependencies().begin(), getDependencies().end());
   return deps;
@@ -295,7 +295,7 @@ void EdtOp::getEffects(
   /// }
 }
 
-// ARTS Operation Builders
+/// ARTS Operation Builders
 void DbReleaseOp::build(OpBuilder &builder, OperationState &state,
                         Value source) {
   state.addOperands(source);
@@ -332,7 +332,7 @@ void DbControlOp::build(OpBuilder &builder, OperationState &state,
                      sizes);
 }
 
-// EDT Ops
+/// EDT Ops
 void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
                   EdtConcurrency concurrency) {
   build(builder, state, type, concurrency, ValueRange{});
@@ -359,7 +359,7 @@ void EdtOp::build(OpBuilder &builder, OperationState &state, EdtType type,
   bodyRegion->push_back(bodyBlock);
 }
 
-// EDT Create Ops
+/// EDT Create Ops
 
 void EdtCreateOp::build(OpBuilder &builder, OperationState &state,
                         Value param_memref, Value depCount) {
@@ -374,13 +374,14 @@ void EdtCreateOp::build(OpBuilder &builder, OperationState &state,
   state.addOperands({param_memref, depCount, route});
 }
 
-// DB operations builders
+/// DB operations builders
 /// DbAllocOp builders
 static void
 buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
                      Value route, DbAllocType allocType, DbMode dbMode,
                      Type elementType, Value address, SmallVector<Value> sizes,
-                     SmallVector<Value> elementSizes, Type pointerType) {
+                     SmallVector<Value> elementSizes, Type pointerType,
+                     PartitionMode partitionMode = PartitionMode::coarse) {
   /// Auto-compute GUID type to match datablock dimensionality
   /// 0 or 1 size -> memref<?xi64>, n sizes -> memref<?x?x...xi64>
   SmallVector<int64_t> guidShape;
@@ -424,9 +425,9 @@ buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
   state.addAttribute("allocType", allocTypeAttr);
   state.addAttribute("dbMode", dbModeAttr);
   state.addAttribute("elementType", elementTypeAttr);
-  state.addAttribute(AttrNames::Operation::Partition,
-                     PromotionModeAttr::get(builder.getContext(),
-                                            PromotionMode::coarse));
+  state.addAttribute(
+      AttrNames::Operation::Partition,
+      PartitionModeAttr::get(builder.getContext(), partitionMode));
 
   /// Add operands
   state.addOperands(route);
@@ -435,8 +436,8 @@ buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
   state.addOperands(sizes);
   state.addOperands(elementSizes);
 
-  /// Build operand segment sizes: [route=1, address(0/1), sizes,
-  /// elementSizes]
+  /// Build operand segment sizes:
+  /// [route=1, address(0/1), sizes, elementSizes]
   state.addAttribute("operandSegmentSizes",
                      builder.getDenseI32ArrayAttr(
                          {1, static_cast<int32_t>(address ? 1 : 0),
@@ -447,26 +448,31 @@ buildDbAllocOpCommon(OpBuilder &builder, OperationState &state, ArtsMode mode,
 void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
                       Value route, DbAllocType allocType, DbMode dbMode,
                       Type elementType, Value address, SmallVector<Value> sizes,
-                      SmallVector<Value> elementSizes) {
+                      SmallVector<Value> elementSizes,
+                      PartitionMode partitionMode) {
   buildDbAllocOpCommon(builder, state, mode, route, allocType, dbMode,
-                       elementType, address, sizes, elementSizes, nullptr);
+                       elementType, address, sizes, elementSizes, nullptr,
+                       partitionMode);
 }
 
 void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
                       Value route, DbAllocType allocType, DbMode dbMode,
                       Type elementType, SmallVector<Value> sizes,
-                      SmallVector<Value> elementSizes) {
+                      SmallVector<Value> elementSizes,
+                      PartitionMode partitionMode) {
   buildDbAllocOpCommon(builder, state, mode, route, allocType, dbMode,
-                       elementType, Value{}, sizes, elementSizes, nullptr);
+                       elementType, Value{}, sizes, elementSizes, nullptr,
+                       partitionMode);
 }
 
 void DbAllocOp::build(OpBuilder &builder, OperationState &state, ArtsMode mode,
                       Value route, DbAllocType allocType, DbMode dbMode,
                       Type elementType, Type pointerType,
-                      SmallVector<Value> sizes,
-                      SmallVector<Value> elementSizes) {
+                      SmallVector<Value> sizes, SmallVector<Value> elementSizes,
+                      PartitionMode partitionMode) {
   buildDbAllocOpCommon(builder, state, mode, route, allocType, dbMode,
-                       elementType, Value{}, sizes, elementSizes, pointerType);
+                       elementType, Value{}, sizes, elementSizes, pointerType,
+                       partitionMode);
 }
 
 MemRefType DbAllocOp::getAllocatedElementType() {
@@ -488,7 +494,7 @@ LogicalResult DbAllocOp::verify() {
   return success();
 }
 
-/// DbAcquireOp twin_diff attribute accessors
+/// DbAcquireOp twin_diff attribute accessors.
 
 void DbAcquireOp::setTwinDiff(bool enabled) {
   (*this)->setAttr(AttrNames::Operation::ArtsTwinDiff,
@@ -510,9 +516,8 @@ bool DbAcquireOp::getTwinDiff() {
 void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
                         ArtsMode mode, Value sourceGuid, Value sourcePtr,
                         SmallVector<Value> indices, SmallVector<Value> offsets,
-                        SmallVector<Value> sizes,
-                        SmallVector<Value> offsetHints,
-                        SmallVector<Value> sizeHints, Value boundsValid,
+                        SmallVector<Value> sizes, Value chunkIndex,
+                        Value chunkSize, Value boundsValid,
                         SmallVector<Value> elementOffsets,
                         SmallVector<Value> elementSizes) {
   auto sourceDb = DatablockUtils::getUnderlyingDb(sourcePtr);
@@ -569,26 +574,38 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
   state.addOperands(indices);
   state.addOperands(offsets);
   state.addOperands(sizes);
-  state.addOperands(offsetHints);
-  state.addOperands(sizeHints);
+  if (chunkIndex)
+    state.addOperands(chunkIndex);
+  if (chunkSize)
+    state.addOperands(chunkSize);
   if (boundsValid)
     state.addOperands(boundsValid);
   state.addOperands(elementOffsets);
   state.addOperands(elementSizes);
 
   /// Build operand segment sizes: [source_guid(0/1), source_ptr=1, indices,
-  /// offsets, sizes, offsetHints, sizeHints, boundsValid(0/1),
+  /// offsets, sizes, chunk_index(0/1), chunk_size(0/1), boundsValid(0/1),
   /// element_offsets, element_sizes]
   state.addAttribute(
       "operandSegmentSizes",
       builder.getDenseI32ArrayAttr(
           {sourceGuid ? 1 : 0, 1, static_cast<int32_t>(indices.size()),
            static_cast<int32_t>(offsets.size()),
-           static_cast<int32_t>(sizes.size()),
-           static_cast<int32_t>(offsetHints.size()),
-           static_cast<int32_t>(sizeHints.size()), boundsValid ? 1 : 0,
+           static_cast<int32_t>(sizes.size()), chunkIndex ? 1 : 0,
+           chunkSize ? 1 : 0, boundsValid ? 1 : 0,
            static_cast<int32_t>(elementOffsets.size()),
            static_cast<int32_t>(elementSizes.size())}));
+
+  /// Initialize partition attribute from parent allocation's mode.
+  if (auto parentMode = getPartitionMode(sourceDbAlloc.getOperation())) {
+    state.addAttribute(
+        AttrNames::Operation::Partition,
+        PartitionModeAttr::get(builder.getContext(), *parentMode));
+  } else {
+    state.addAttribute(
+        AttrNames::Operation::Partition,
+        PartitionModeAttr::get(builder.getContext(), PartitionMode::coarse));
+  }
 }
 
 /// DbAcquireOp builder with explicit ptr type (for block arguments)
@@ -596,8 +613,7 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
                         ArtsMode mode, Value sourceGuid, Value sourcePtr,
                         Type ptrType, SmallVector<Value> indices,
                         SmallVector<Value> offsets, SmallVector<Value> sizes,
-                        SmallVector<Value> offsetHints,
-                        SmallVector<Value> sizeHints, Value boundsValid,
+                        Value chunkIndex, Value chunkSize, Value boundsValid,
                         SmallVector<Value> elementOffsets,
                         SmallVector<Value> elementSizes) {
   /// When sourceGuid is null and sourcePtr is a block argument,
@@ -630,24 +646,37 @@ void DbAcquireOp::build(OpBuilder &builder, OperationState &state,
   state.addOperands(indices);
   state.addOperands(offsets);
   state.addOperands(sizes);
-  state.addOperands(offsetHints);
-  state.addOperands(sizeHints);
+  if (chunkIndex)
+    state.addOperands(chunkIndex);
+  if (chunkSize)
+    state.addOperands(chunkSize);
   if (boundsValid)
     state.addOperands(boundsValid);
   state.addOperands(elementOffsets);
   state.addOperands(elementSizes);
 
-  /// Build operand segment sizes
+  /// Build operand segment sizes: [source_guid(0/1), source_ptr=1, indices,
+  /// offsets, sizes, chunk_index(0/1), chunk_size(0/1), boundsValid(0/1),
+  /// element_offsets, element_sizes]
   state.addAttribute(
       "operandSegmentSizes",
       builder.getDenseI32ArrayAttr(
           {sourceGuid ? 1 : 0, 1, static_cast<int32_t>(indices.size()),
            static_cast<int32_t>(offsets.size()),
-           static_cast<int32_t>(sizes.size()),
-           static_cast<int32_t>(offsetHints.size()),
-           static_cast<int32_t>(sizeHints.size()), boundsValid ? 1 : 0,
+           static_cast<int32_t>(sizes.size()), chunkIndex ? 1 : 0,
+           chunkSize ? 1 : 0, boundsValid ? 1 : 0,
            static_cast<int32_t>(elementOffsets.size()),
            static_cast<int32_t>(elementSizes.size())}));
+
+  /// Initialize partition attribute.
+  PartitionMode partitionMode = PartitionMode::coarse;
+  if (auto *allocOp = DatablockUtils::getUnderlyingDbAlloc(sourcePtr)) {
+    if (auto parentMode = getPartitionMode(allocOp))
+      partitionMode = *parentMode;
+  }
+  state.addAttribute(
+      AttrNames::Operation::Partition,
+      PartitionModeAttr::get(builder.getContext(), partitionMode));
 }
 
 LogicalResult DbAcquireOp::verify() {
@@ -692,17 +721,11 @@ LogicalResult DbAcquireOp::verify() {
     }
   }
 
-  auto offsetHints = getOffsetHints();
-  if (!offsetHints.empty() && offsetHints.size() != dbSizes) {
-    return emitOpError("offset_hints must match the number of sizes when set (")
-           << offsetHints.size() << " vs " << dbSizes << ")\n"
-           << *getOperation();
-  }
-
-  auto sizeHints = getSizeHints();
-  if (!sizeHints.empty() && sizeHints.size() != dbSizes) {
-    return emitOpError("size_hints must match the number of sizes when set (")
-           << sizeHints.size() << " vs " << dbSizes << ")\n"
+  /// Chunk hint validation
+  bool hasChunkIndex = getChunkIndex() != nullptr;
+  bool hasChunkSize = getChunkSize() != nullptr;
+  if (hasChunkIndex != hasChunkSize) {
+    return emitOpError("chunk_hint requires both chunk_index and chunk_size\n")
            << *getOperation();
   }
 

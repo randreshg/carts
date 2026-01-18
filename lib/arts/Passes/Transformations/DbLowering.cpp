@@ -16,11 +16,11 @@
 #include "arts/Passes/ArtsPasses.h"
 #include "arts/Utils/ArtsDebug.h"
 #include "arts/Utils/DatablockUtils.h"
-#include "arts/Utils/RemovalUtils.h"
-#include "arts/Utils/ValueUtils.h"
 #include "arts/Utils/EdtUtils.h"
 #include "arts/Utils/Metadata/IdRegistry.h"
 #include "arts/Utils/OperationAttributes.h"
+#include "arts/Utils/RemovalUtils.h"
+#include "arts/Utils/ValueUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -45,7 +45,7 @@ namespace {
 /// Layout information for a datablock allocation (used by DbCopy/DbSync).
 struct LayoutInfo {
   DbAllocOp alloc;
-  PromotionMode mode = PromotionMode::coarse;
+  PartitionMode mode = PartitionMode::coarse;
   SmallVector<Value> sizes;
   SmallVector<Value> elementSizes;
   unsigned outerRank = 0;
@@ -57,7 +57,7 @@ static DbAllocOp getAllocFromPtr(Value ptr) {
   return dyn_cast_or_null<DbAllocOp>(allocOp);
 }
 
-static LayoutInfo buildLayoutInfo(DbAllocOp alloc, PromotionMode mode,
+static LayoutInfo buildLayoutInfo(DbAllocOp alloc, PartitionMode mode,
                                   OpBuilder &builder, Location loc) {
   LayoutInfo info;
   info.alloc = alloc;
@@ -69,7 +69,7 @@ static LayoutInfo buildLayoutInfo(DbAllocOp alloc, PromotionMode mode,
     info.sizes.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
   if (info.elementSizes.empty())
     info.elementSizes.push_back(builder.create<arith::ConstantIndexOp>(loc, 1));
-  info.outerRank = (mode == PromotionMode::coarse) ? 0 : info.sizes.size();
+  info.outerRank = (mode == PartitionMode::coarse) ? 0 : info.sizes.size();
   info.innerRank = info.elementSizes.size();
   return info;
 }
@@ -79,14 +79,14 @@ static SmallVector<Value> getLogicalDims(const LayoutInfo &info,
                                          OpBuilder &builder, Location loc) {
   SmallVector<Value> dims;
   switch (info.mode) {
-  case PromotionMode::coarse:
+  case PartitionMode::coarse:
     dims.append(info.elementSizes.begin(), info.elementSizes.end());
     break;
-  case PromotionMode::fine_grained:
+  case PartitionMode::fine_grained:
     dims.append(info.sizes.begin(), info.sizes.end());
     dims.append(info.elementSizes.begin(), info.elementSizes.end());
     break;
-  case PromotionMode::chunked: {
+  case PartitionMode::chunked: {
     Value firstDim = info.elementSizes.front();
     if (!info.sizes.empty()) {
       firstDim =
@@ -121,14 +121,14 @@ static void mapGlobalToLayout(ArrayRef<Value> globalIndices,
   innerIndices.clear();
   Value zero = builder.create<arith::ConstantIndexOp>(loc, 0);
 
-  if (info.mode == PromotionMode::coarse) {
+  if (info.mode == PartitionMode::coarse) {
     innerIndices.append(globalIndices.begin(), globalIndices.end());
     if (innerIndices.empty())
       innerIndices.push_back(zero);
     return;
   }
 
-  if (info.mode == PromotionMode::fine_grained) {
+  if (info.mode == PartitionMode::fine_grained) {
     for (unsigned i = 0; i < info.outerRank; ++i) {
       if (i < globalIndices.size())
         outerIndices.push_back(globalIndices[i]);
@@ -144,7 +144,7 @@ static void mapGlobalToLayout(ArrayRef<Value> globalIndices,
     return;
   }
 
-  // Chunked: assume chunking along the leading dimension
+  /// Chunked: assume chunking along the leading dimension
   Value g0 = globalIndices.empty() ? zero : globalIndices.front();
   Value chunkSize = info.elementSizes.empty()
                         ? builder.create<arith::ConstantIndexOp>(loc, 1)
@@ -161,7 +161,7 @@ static void mapGlobalToLayout(ArrayRef<Value> globalIndices,
   if (innerIndices.empty())
     innerIndices.push_back(zero);
 }
-} // namespace
+} /// namespace
 
 namespace {
 struct DbLoweringPass : public arts::DbLoweringBase<DbLoweringPass> {
@@ -186,7 +186,7 @@ private:
   ArtsCodegen *AC = nullptr;
   IdRegistry idRegistry;
 };
-} // namespace
+} /// namespace
 
 ///===----------------------------------------------------------------------===///
 /// Lower datablock allocations to use opaque pointers
@@ -245,19 +245,18 @@ void DbLoweringPass::lowerDbCopyOps() {
     builder.setInsertionPoint(copyOp);
     Location loc = copyOp.getLoc();
 
-    PromotionMode destMode = copyOp.getDestPartition();
-    PromotionMode sourceMode =
-        getPartitionMode(sourceAlloc.getOperation())
-            .value_or(PromotionMode::coarse);
+    PartitionMode destMode = copyOp.getDestPartition();
+    PartitionMode sourceMode = getPartitionMode(sourceAlloc.getOperation())
+                                   .value_or(PartitionMode::coarse);
 
     SmallVector<Value> newSizes;
     SmallVector<Value> newElementSizes;
     Value one = builder.create<arith::ConstantIndexOp>(loc, 1);
 
-    if (destMode == PromotionMode::fine_grained &&
+    if (destMode == PartitionMode::fine_grained &&
         sourceAlloc.getElementSizes().size() == 1 &&
         sourceAlloc.getSizes().size() == 1) {
-      // Chunked -> Fine-grained: total elements = numChunks * chunkSize
+      /// Chunked -> Fine-grained: total elements = numChunks * chunkSize
       Value numChunks = sourceAlloc.getSizes().front();
       Value chunkSize = sourceAlloc.getElementSizes().front();
       Value totalSize =
@@ -278,9 +277,8 @@ void DbLoweringPass::lowerDbCopyOps() {
     DbAllocOp destAlloc = builder.create<DbAllocOp>(
         loc, sourceAlloc.getMode(), sourceAlloc.getRoute(),
         sourceAlloc.getAllocType(), sourceAlloc.getDbMode(),
-        sourceAlloc.getElementType(), Value(), newSizes, newElementSizes);
-    if (destMode != PromotionMode::coarse)
-      setPartitionMode(destAlloc.getOperation(), destMode);
+        sourceAlloc.getElementType(), Value(), newSizes, newElementSizes,
+        destMode);
     insertDbFree(destAlloc, builder);
 
     LayoutInfo sourceInfo =
@@ -289,7 +287,7 @@ void DbLoweringPass::lowerDbCopyOps() {
     destInfo.sizes = newSizes;
     destInfo.elementSizes = newElementSizes;
     destInfo.outerRank =
-        (destMode == PromotionMode::coarse) ? 0 : newSizes.size();
+        (destMode == PartitionMode::coarse) ? 0 : newSizes.size();
     destInfo.innerRank = newElementSizes.size();
 
     SmallVector<Value> logicalDims = getLogicalDims(sourceInfo, builder, loc);
@@ -366,16 +364,16 @@ void DbLoweringPass::lowerDbSyncOps() {
     builder.setInsertionPoint(syncOp);
     Location loc = syncOp.getLoc();
 
-    PromotionMode destMode =
-        getPartitionMode(destAlloc.getOperation()).value_or(PromotionMode::coarse);
-    PromotionMode sourceMode =
-        getPartitionMode(sourceAlloc.getOperation()).value_or(PromotionMode::coarse);
+    PartitionMode destMode = getPartitionMode(destAlloc.getOperation())
+                                 .value_or(PartitionMode::coarse);
+    PartitionMode sourceMode = getPartitionMode(sourceAlloc.getOperation())
+                                   .value_or(PartitionMode::coarse);
 
     LayoutInfo destInfo = buildLayoutInfo(destAlloc, destMode, builder, loc);
-    LayoutInfo sourceInfo = buildLayoutInfo(sourceAlloc, sourceMode, builder, loc);
+    LayoutInfo sourceInfo =
+        buildLayoutInfo(sourceAlloc, sourceMode, builder, loc);
 
-    SmallVector<Value> sourceLogical =
-        getLogicalDims(sourceInfo, builder, loc);
+    SmallVector<Value> sourceLogical = getLogicalDims(sourceInfo, builder, loc);
     SmallVector<Value> destLogical = getLogicalDims(destInfo, builder, loc);
     trimTrailingUnitDims(sourceLogical);
     trimTrailingUnitDims(destLogical);
@@ -440,8 +438,8 @@ void DbLoweringPass::lowerDbSyncOps() {
           }
 
           Value lb = offsets[dim];
-          Value ub = nestBuilder.create<arith::AddIOp>(loc, offsets[dim],
-                                                       sizes[dim]);
+          Value ub =
+              nestBuilder.create<arith::AddIOp>(loc, offsets[dim], sizes[dim]);
           auto loop = nestBuilder.create<scf::ForOp>(loc, lb, ub, one);
           OpBuilder innerBuilder = OpBuilder::atBlockBegin(loop.getBody());
           ivs.push_back(loop.getInductionVar());
@@ -492,15 +490,18 @@ void DbLoweringPass::convertDbAllocOps() {
     SmallVector<int64_t> shape;
     shape.assign(sizes.size(), ShapedType::kDynamic);
     auto ptrType = MemRefType::get(shape, elementType);
+    PartitionMode partitionMode =
+        getPartitionMode(oldOp.getOperation()).value_or(PartitionMode::coarse);
     DbAllocOp newOp = AC->create<DbAllocOp>(
         oldOp.getLoc(), oldOp.getMode(), oldOp.getRoute(), DbAllocType::heap,
-        oldOp.getDbMode(), oldOp.getElementType(), ptrType, sizes,
-        elementSizes);
+        oldOp.getDbMode(), oldOp.getElementType(), ptrType, sizes, elementSizes,
+        partitionMode);
     ARTS_DEBUG("  - New DbAllocOp: " << newOp);
     for (auto &attr : oldOp->getAttrs()) {
       if (!attr.getName().getValue().starts_with("arts."))
         continue;
-      if (attr.getName() == AttrNames::Operation::ArtsCreateId)
+      if (attr.getName() == AttrNames::Operation::ArtsCreateId ||
+          attr.getName() == AttrNames::Operation::Partition)
         continue;
       newOp->setAttr(attr.getName(), attr.getValue());
     }
@@ -508,7 +509,7 @@ void DbLoweringPass::convertDbAllocOps() {
     if (!baseId)
       baseId = idRegistry.getOrCreate(oldOp);
 
-    // Set create_id = base_id * stride
+    /// Set create_id = base_id * stride
     if (baseId) {
       int64_t createId = baseId * static_cast<int64_t>(idStride);
       newOp->setAttr(AttrNames::Operation::ArtsCreateId,
@@ -642,10 +643,8 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
                              acquireOp.getOffsets().end());
   SmallVector<Value> sizes(acquireOp.getSizes().begin(),
                            acquireOp.getSizes().end());
-  SmallVector<Value> offsetHints(acquireOp.getOffsetHints().begin(),
-                                 acquireOp.getOffsetHints().end());
-  SmallVector<Value> sizeHints(acquireOp.getSizeHints().begin(),
-                               acquireOp.getSizeHints().end());
+  Value chunkIndex = acquireOp.getChunkIndex();
+  Value chunkSize = acquireOp.getChunkSize();
   SmallVector<Value> elementOffsets(acquireOp.getElementOffsets().begin(),
                                     acquireOp.getElementOffsets().end());
   SmallVector<Value> acquireElementSizes(acquireOp.getElementSizes().begin(),
@@ -653,7 +652,7 @@ void DbLoweringPass::updateAcquireUsers(DbAcquireOp acquireOp, Value newGuid,
   Value boundsValid = acquireOp.getBoundsValid();
   auto newAcquireOp = AC->create<DbAcquireOp>(
       acquireOp.getLoc(), acquireOp.getMode(), sourceGuid, sourcePtr, indices,
-      offsets, sizes, offsetHints, sizeHints, boundsValid, elementOffsets,
+      offsets, sizes, chunkIndex, chunkSize, boundsValid, elementOffsets,
       acquireElementSizes);
   for (auto &attr : acquireOp->getAttrs()) {
     if (attr.getName().getValue().starts_with("arts."))
@@ -781,7 +780,7 @@ Value DbLoweringPass::getLLVMPtr(Value base, ValueRange opIndices,
 }
 
 ///===----------------------------------------------------------------------===///
-// Pass creation
+/// Pass creation
 ///===----------------------------------------------------------------------===///
 namespace mlir {
 namespace arts {
@@ -792,5 +791,5 @@ std::unique_ptr<Pass> createDbLoweringPass() {
 std::unique_ptr<Pass> createDbLoweringPass(uint64_t idStride) {
   return std::make_unique<DbLoweringPass>(idStride);
 }
-} // namespace arts
-} // namespace mlir
+} /// namespace arts
+} /// namespace mlir

@@ -35,9 +35,9 @@ std::unique_ptr<Pass> createEdtPass(ArtsAnalysisManager *AM, bool runAnalysis);
 std::unique_ptr<Pass> createConcurrencyPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createCreateDbsPass(ArtsAnalysisManager *AM);
 std::unique_ptr<Pass> createDbPass(ArtsAnalysisManager *AM);
-std::unique_ptr<Pass> createDbPartitioningPass(ArtsAnalysisManager *AM,
-                                               bool useFineGrainedFallback = false);
-std::unique_ptr<Pass> createDbVersioningPass(ArtsAnalysisManager *AM);
+std::unique_ptr<Pass>
+createDbPartitioningPass(ArtsAnalysisManager *AM,
+                         bool useFineGrainedFallback = false);
 std::unique_ptr<Pass> createCreateEpochsPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass();
 std::unique_ptr<Pass> createConvertArtsToLLVMPass(bool debug);
@@ -65,7 +65,7 @@ std::unique_ptr<Pass> createVerifyMetadataPass(ArtsAnalysisManager *AM,
 } // namespace mlir
 
 namespace mlir {
-// Forward declaration from Dialect.h
+/// Forward declaration from Dialect.h
 template <typename ConcreteDialect>
 void registerDialect(DialectRegistry &registry);
 

@@ -48,12 +48,11 @@ class ArtsCodegen;
 /// - DbStencilIndexer: halo-aware clamping and offset
 class DbIndexerBase {
 protected:
-  unsigned outerRank_;
-  unsigned innerRank_;
+  unsigned outerRank, innerRank;
 
 public:
   DbIndexerBase(unsigned outerRank, unsigned innerRank)
-      : outerRank_(outerRank), innerRank_(innerRank) {}
+      : outerRank(outerRank), innerRank(innerRank) {}
 
   virtual ~DbIndexerBase() = default;
 
@@ -72,8 +71,8 @@ public:
                       OpBuilder &builder,
                       llvm::SetVector<Operation *> &opsToRemove) = 0;
 
-  unsigned getOuterRank() const { return outerRank_; }
-  unsigned getInnerRank() const { return innerRank_; }
+  unsigned getOuterRank() const { return outerRank; }
+  unsigned getInnerRank() const { return innerRank; }
 };
 
 } // namespace arts

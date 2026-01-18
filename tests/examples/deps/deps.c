@@ -38,10 +38,9 @@ int main() {
   printf("Parallel region DONE\n");
   printf("A: %d, B: %d\n", a, b);
 
-  // Verify: b should be a + 5
-  if (b == a + 5) {
+  /// Verify: b should be a + 5
+  if (b == a + 5)
     CARTS_TEST_PASS();
-  } else {
+  else
     CARTS_TEST_FAIL("dependency violation: b != a + 5");
-  }
 }

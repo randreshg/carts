@@ -51,11 +51,11 @@ int main(int argc, char *argv[]) {
   for (int i = 0; i < N; i++)
     CARTS_DEBUG_PRINT("A[%d] = %d, B[%d] = %d\n", i, A[i], i, B[i]);
 
-  // Verify: A[i] = i, B[i] = sum(A[0..i]) + 5*(i+1)
+  /// Verify: A[i] = i, B[i] = sum(A[0..i]) + 5*(i+1)
   int correct = 1;
   for (int i = 0; i < N; i++) {
     int expected_B = (i == 0) ? A[0] + 5 : A[i] + B[i - 1] + 5;
-    // Check iteratively: B[i] = i*(i+1)/2 + 5*(i+1)
+    /// Check iteratively: B[i] = i*(i+1)/2 + 5*(i+1)
     int sum_A = i * (i + 1) / 2;
     expected_B = sum_A + 5 * (i + 1);
     if (A[i] != i || B[i] != expected_B) {

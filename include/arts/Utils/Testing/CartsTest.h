@@ -10,18 +10,16 @@
 ///   int main(int argc, char *argv[]) {
 ///       CARTS_TIMER_START();
 ///       // ... computation ...
-///       if (result == expected) {
+///       if (result == expected)
 ///           CARTS_TEST_PASS();
-///       } else {
+///       else
 ///           CARTS_TEST_FAIL("result mismatch");
-///       }
+///
 ///   }
 ///
 /// Output format:
 ///   [CARTS] example_name: PASS (0.1234s)
 ///   [CARTS] example_name: FAIL - reason
-///
-/// Note: Link with libcartstest (-lcartstest) for the implementation.
 ///===----------------------------------------------------------------------===///
 
 #ifndef CARTS_TEST_H

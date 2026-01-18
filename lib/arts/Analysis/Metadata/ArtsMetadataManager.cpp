@@ -66,7 +66,7 @@ ArtsMetadataManager::getMemrefMetadata(Operation *op) const {
 }
 
 MemrefMetadata *ArtsMetadataManager::getMemrefMetadataById(int64_t artsId) {
-  for (auto &entry : metadataMap_) {
+  for (auto &entry : metadataMap) {
     if (entry.second->getMetadataName() != AttrNames::MemrefMetadata::Name)
       continue;
     if (entry.second->getMetadataId() == artsId)
@@ -77,7 +77,7 @@ MemrefMetadata *ArtsMetadataManager::getMemrefMetadataById(int64_t artsId) {
 
 const MemrefMetadata *
 ArtsMetadataManager::getMemrefMetadataById(int64_t artsId) const {
-  for (const auto &entry : metadataMap_) {
+  for (const auto &entry : metadataMap) {
     if (entry.second->getMetadataName() != AttrNames::MemrefMetadata::Name)
       continue;
     if (entry.second->getMetadataId() == artsId)
@@ -161,7 +161,7 @@ bool ArtsMetadataManager::ensureMemrefMetadata(Operation *op) {
 }
 
 ///===----------------------------------------------------------------------===///
-// Batch Operations
+/// Batch Operations
 ///===----------------------------------------------------------------------===///
 
 /// Walk all operations and import metadata from those with arts.* attributes
@@ -170,9 +170,9 @@ void ArtsMetadataManager::importFromOperations(ModuleOp module) {
 
   uint64_t importCount = 0;
   module.walk([&](Operation *op) {
-    uint64_t before = metadataMap_.size();
+    uint64_t before = metadataMap.size();
     importFromOperation(op);
-    if (metadataMap_.size() > before)
+    if (metadataMap.size() > before)
       importCount++;
   });
 
@@ -182,7 +182,7 @@ void ArtsMetadataManager::importFromOperations(ModuleOp module) {
 
 /// Export all metadata objects to their respective operations
 void ArtsMetadataManager::exportToOperations() {
-  for (auto &entry : metadataMap_)
+  for (auto &entry : metadataMap)
     entry.second->exportToOp();
 }
 
@@ -207,12 +207,12 @@ void ArtsMetadataManager::collectFromModule(ModuleOp module) {
       return;
 
     opsWithArtsAttrs++;
-    uint64_t before = metadataMap_.size();
+    uint64_t before = metadataMap.size();
 
     /// Try to import metadata based on operation type
     importFromOperation(op);
 
-    if (metadataMap_.size() > before)
+    if (metadataMap.size() > before)
       importedCount++;
   });
 
@@ -224,13 +224,13 @@ void ArtsMetadataManager::collectFromModule(ModuleOp module) {
 }
 
 ///===----------------------------------------------------------------------===///
-// JSON Import/Export
+/// JSON Import/Export
 ///===----------------------------------------------------------------------===///
 
 bool ArtsMetadataManager::importFromJson(llvm::StringRef jsonStr) {
   ARTS_DEBUG_HEADER(ArtsMetadataManager::importFromJson);
 
-  // Parse JSON
+  /// Parse JSON
   auto json = llvm::json::parse(jsonStr);
   if (!json) {
     ARTS_ERROR("Failed to parse JSON: " << toString(json.takeError()));
@@ -270,8 +270,8 @@ bool ArtsMetadataManager::importFromJsonFile(ModuleOp module,
 std::string ArtsMetadataManager::exportToJson() const {
   llvm::json::Object root, loops, memrefs, locations, values;
 
-  // Export all metadata objects to JSON
-  for (const auto &entry : metadataMap_) {
+  /// Export all metadata objects to JSON
+  for (const auto &entry : metadataMap) {
     const ArtsMetadata *metadata = entry.second.get();
 
     llvm::json::Object metadataJson;
@@ -321,21 +321,21 @@ bool ArtsMetadataManager::exportToJsonFile(llvm::StringRef filename) const {
   }
 
   file << jsonStr;
-  ARTS_DEBUG("Successfully exported " << metadataMap_.size()
+  ARTS_DEBUG("Successfully exported " << metadataMap.size()
                                       << " metadata entries");
   return true;
 }
 
 ///===----------------------------------------------------------------------===///
-// Iteration and Inspection
+/// Iteration and Inspection
 ///===----------------------------------------------------------------------===///
 
 SmallVector<Operation *>
 ArtsMetadataManager::getOperationsWithMetadata() const {
   SmallVector<Operation *> ops;
-  ops.reserve(metadataMap_.size());
+  ops.reserve(metadataMap.size());
 
-  for (const auto &entry : metadataMap_)
+  for (const auto &entry : metadataMap)
     ops.push_back(entry.first);
 
   return ops;
@@ -344,7 +344,7 @@ ArtsMetadataManager::getOperationsWithMetadata() const {
 SmallVector<Operation *> ArtsMetadataManager::getLoopOperations() const {
   SmallVector<Operation *> ops;
 
-  for (const auto &entry : metadataMap_) {
+  for (const auto &entry : metadataMap) {
     if (entry.second->getMetadataName() == AttrNames::LoopMetadata::Name)
       ops.push_back(entry.first);
   }
@@ -355,7 +355,7 @@ SmallVector<Operation *> ArtsMetadataManager::getLoopOperations() const {
 SmallVector<Operation *> ArtsMetadataManager::getMemrefOperations() const {
   SmallVector<Operation *> ops;
 
-  for (const auto &entry : metadataMap_) {
+  for (const auto &entry : metadataMap) {
     if (entry.second->getMetadataName() == AttrNames::MemrefMetadata::Name)
       ops.push_back(entry.first);
   }
@@ -364,13 +364,13 @@ SmallVector<Operation *> ArtsMetadataManager::getMemrefOperations() const {
 }
 
 ///===----------------------------------------------------------------------===///
-// Debug and Utilities
+/// Metadata Helpers
 ///===----------------------------------------------------------------------===///
 
 void ArtsMetadataManager::printStatistics(llvm::raw_ostream &os) const {
   uint64_t loopCount = 0, memrefCount = 0;
 
-  for (const auto &entry : metadataMap_) {
+  for (const auto &entry : metadataMap) {
     StringRef name = entry.second->getMetadataName();
     if (name == AttrNames::LoopMetadata::Name)
       ++loopCount;
@@ -379,7 +379,7 @@ void ArtsMetadataManager::printStatistics(llvm::raw_ostream &os) const {
   }
 
   os << "ArtsMetadataManager Statistics:\n";
-  os << "  Total metadata entries: " << metadataMap_.size() << "\n";
+  os << "  Total metadata entries: " << metadataMap.size() << "\n";
   os << "  Loop metadata: " << loopCount << "\n";
   os << "  Memref metadata: " << memrefCount << "\n";
 }
@@ -394,7 +394,7 @@ void ArtsMetadataManager::dump() const {
     ARTS_DBGS() << "\nDetailed Metadata:\n";
     ARTS_DBGS() << "------------------\n";
 
-    for (const auto &entry : metadataMap_) {
+    for (const auto &entry : metadataMap) {
       Operation *op = entry.first;
       const ArtsMetadata *metadata = entry.second.get();
 
@@ -415,7 +415,7 @@ bool ArtsMetadataManager::loadJsonCache() {
     return !(loopJsonCache.empty() && memrefJsonCache.empty());
 
   if (!metadataFilePath.empty())
-    idRegistry_.loadFromJson(metadataFilePath);
+    idRegistry.loadFromJson(metadataFilePath);
 
   if (!serializedMetadataCache.empty())
     return loadJsonCacheFromString(serializedMetadataCache);
@@ -469,7 +469,7 @@ bool ArtsMetadataManager::populateJsonCaches(const llvm::json::Object &root) {
       };
       store(entry.first);
       if (auto idVal = obj->getInteger(AttrNames::Metadata::ArtsId)) {
-        idRegistry_.recordUsedId(*idVal);
+        idRegistry.recordUsedId(*idVal);
         store(std::to_string(*idVal));
       }
       if (auto loc = obj->getString(AttrNames::LoopMetadata::LocationKey))
@@ -488,7 +488,7 @@ bool ArtsMetadataManager::populateJsonCaches(const llvm::json::Object &root) {
       };
       store(entry.first);
       if (auto idVal = obj->getInteger(AttrNames::Metadata::ArtsId)) {
-        idRegistry_.recordUsedId(*idVal);
+        idRegistry.recordUsedId(*idVal);
         store(std::to_string(*idVal));
       }
       if (auto allocId =
@@ -520,13 +520,13 @@ bool ArtsMetadataManager::attachMetadataFromJson(
     metadata->importFromJson(*it->second);
     initializeMetadata(metadata.get());
     metadata->exportToOp();
-    metadataMap_[op] = std::move(metadata);
+    metadataMap[op] = std::move(metadata);
   } else {
     auto metadata = std::make_unique<MemrefMetadata>(op);
     metadata->importFromJson(*it->second);
     initializeMetadata(metadata.get());
     metadata->exportToOp();
-    metadataMap_[op] = std::move(metadata);
+    metadataMap[op] = std::move(metadata);
   }
 
   return true;
@@ -580,7 +580,7 @@ bool ArtsMetadataManager::attachLoopMetadataNearLocation(
   metadata->importFromJson(*bestMatch);
   initializeMetadata(metadata.get());
   metadata->exportToOp();
-  metadataMap_[op] = std::move(metadata);
+  metadataMap[op] = std::move(metadata);
   ARTS_DEBUG("Attached loop metadata near location " << loc.getKey());
   return true;
 }
@@ -596,7 +596,7 @@ void ArtsMetadataManager::initializeMetadata(ArtsMetadata *metadata) {
   if (id.has_value()) {
     /// Set the arts.id attribute on the operation if it doesn't have one
     if (!op->getAttrOfType<IntegerAttr>(ArtsMetadata::IdAttrName))
-      idRegistry_.set(op, id.value());
+      idRegistry.set(op, id.value());
   } else {
     /// No ID in metadata, try to get/assign from operation
     id = assignOperationId(op);
@@ -604,25 +604,25 @@ void ArtsMetadataManager::initializeMetadata(ArtsMetadata *metadata) {
 
   /// If still no ID, assign a new one (should not happen if op has location)
   if (!id.has_value())
-    id = ArtsId(idRegistry_.allocateSequential());
+    id = ArtsId(idRegistry.allocateSequential());
 
   metadata->setMetadataId(id);
-  idRegistry_.recordUsedId(id.value());
+  idRegistry.recordUsedId(id.value());
 }
 
 ArtsId ArtsMetadataManager::assignOperationId(Operation *op) {
   assert(op && "Operation must always be available");
 
   /// Try to get or create a deterministic ID based on location
-  int64_t id = idRegistry_.getOrCreate(op);
+  int64_t id = idRegistry.getOrCreate(op);
 
   /// If no deterministic ID available (no location), use sequential fallback
   if (id == 0) {
-    id = idRegistry_.allocateSequential();
-    idRegistry_.set(op, id);
+    id = idRegistry.allocateSequential();
+    idRegistry.set(op, id);
   }
 
-  idRegistry_.recordUsedId(id);
+  idRegistry.recordUsedId(id);
   return ArtsId(id);
 }
 
@@ -635,8 +635,8 @@ bool ArtsMetadataManager::transferMetadata(Operation *sourceOp,
     return false;
 
   /// Check if source has metadata
-  auto it = metadataMap_.find(sourceOp);
-  if (it == metadataMap_.end())
+  auto it = metadataMap.find(sourceOp);
+  if (it == metadataMap.end())
     return false;
 
   /// Get the metadata and preserve arts_id
@@ -650,7 +650,7 @@ bool ArtsMetadataManager::transferMetadata(Operation *sourceOp,
   if (preservedId.has_value()) {
     metadata->setMetadataId(preservedId);
     /// Also set the arts.id attribute on the target operation
-    idRegistry_.set(targetOp, preservedId.value());
+    idRegistry.set(targetOp, preservedId.value());
   } else {
     /// Assign new ID if source didn't have one
     ArtsId newId = assignOperationId(targetOp);
@@ -658,13 +658,13 @@ bool ArtsMetadataManager::transferMetadata(Operation *sourceOp,
   }
 
   /// Move metadata to target operation in the map
-  metadataMap_.erase(it);
-  metadataMap_[targetOp] = std::move(metadata);
+  metadataMap.erase(it);
+  metadataMap[targetOp] = std::move(metadata);
 
   /// Export metadata to target operation
-  metadataMap_[targetOp]->exportToOp();
+  metadataMap[targetOp]->exportToOp();
 
-  ArtsId newArtsId = metadataMap_[targetOp]->getMetadataId();
+  ArtsId newArtsId = metadataMap[targetOp]->getMetadataId();
   ARTS_DEBUG(
       "Transferred metadata from "
       << *sourceOp << " to " << *targetOp << " (arts_id="
@@ -700,14 +700,14 @@ void ArtsMetadataManager::importFromOperation(Operation *op) {
     if (loopMeta->importFromOp()) {
       initializeMetadata(loopMeta.get());
       ARTS_DEBUG("Imported LoopMetadata for operation: " << op->getName());
-      metadataMap_[op] = std::move(loopMeta);
+      metadataMap[op] = std::move(loopMeta);
     }
   } else if (isMemrefAllocOp(op)) {
     auto memrefMeta = std::make_unique<MemrefMetadata>(op);
     if (memrefMeta->importFromOp()) {
       initializeMetadata(memrefMeta.get());
       ARTS_DEBUG("Imported MemrefMetadata for operation: " << op->getName());
-      metadataMap_[op] = std::move(memrefMeta);
+      metadataMap[op] = std::move(memrefMeta);
     }
   }
 }

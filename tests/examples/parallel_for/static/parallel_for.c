@@ -13,11 +13,12 @@ int main(int argc, char **argv) {
   int *b = (int *)malloc(N * sizeof(int));
   int *c = (int *)malloc(N * sizeof(int));
 
-  // Initialize arrays
+  /// Initialize arrays
   for (int i = 0; i < N; i++) {
     a[i] = i;
     b[i] = i * 2;
   }
+
   /// Print initial values (debug only)
   CARTS_DEBUG_PRINT("Initial values:\n");
   for (int i = 0; i < N; i++)
@@ -31,7 +32,7 @@ int main(int argc, char **argv) {
 
   printf("Parallel region completed\n");
 
-  /// Results:
+  /// Results
   bool success = true;
   for (int i = 0; i < N; i++) {
     if (c[i] != a[i] + b[i]) {
@@ -39,6 +40,7 @@ int main(int argc, char **argv) {
       break;
     }
   }
+
   CARTS_DEBUG_PRINT("// Results:\n");
   for (int i = 0; i < N; i++)
     CARTS_DEBUG_PRINT("c[%d] = %d, a[%d] = %d, b[%d] = %d\n", i, c[i], i, a[i],
@@ -48,9 +50,8 @@ int main(int argc, char **argv) {
   free(b);
   free(c);
 
-  if (success) {
+  if (success)
     CARTS_TEST_PASS();
-  } else {
+  else
     CARTS_TEST_FAIL("vector addition mismatch");
-  }
 }

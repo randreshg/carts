@@ -2,22 +2,21 @@
 /// File: DbElementWiseIndexer.cpp
 ///
 /// Element-wise index localization for datablock partitioning.
-///
 /// Example transformation (N=100 elements, 4 workers):
 ///
 ///   BEFORE (single allocation, global indices):
 ///     %db = arts.db_alloc memref<100xf64>
 ///     arts.edt {
-///       %ref = arts.db_ref %db[%i]           // global element i
-///       memref.load %ref[%j]                 // element-local index j
+///       %ref = arts.db_ref %db[%i]           /// global element i
+///       memref.load %ref[%j]                 /// element-local index j
 ///     }
 ///
 ///   AFTER (partitioned, local indices):
-///     %db = arts.db_alloc memref<100x1xf64>  // outer=100, inner=1
+///     %db = arts.db_alloc memref<100x1xf64>  /// outer=100, inner=1
 ///     arts.edt(%elemOffset, %elemSize) {
-///       %local = %i - %elemOffset            // localize index
-///       %ref = arts.db_ref %db[%local]       // worker-local element
-///       memref.load %ref[%j]                 // unchanged element-local
+///       %local = %i - %elemOffset            /// localize index
+///       %ref = arts.db_ref %db[%local]       /// worker-local element
+///       memref.load %ref[%j]                 /// unchanged element-local
 ///     }
 ///
 /// Index localization formula: local = global - elemOffset
@@ -42,9 +41,9 @@ DbElementWiseIndexer::DbElementWiseIndexer(Value elemOffset, Value elemSize,
                                            unsigned outerRank,
                                            unsigned innerRank,
                                            ValueRange oldElementSizes)
-    : DbIndexerBase(outerRank, innerRank), elemOffset_(elemOffset),
-      elemSize_(elemSize),
-      oldElementSizes_(oldElementSizes.begin(), oldElementSizes.end()) {}
+    : DbIndexerBase(outerRank, innerRank), elemOffset(elemOffset),
+      elemSize(elemSize),
+      oldElementSizes(oldElementSizes.begin(), oldElementSizes.end()) {}
 
 LocalizedIndices DbElementWiseIndexer::splitIndices(ValueRange globalIndices,
                                                     OpBuilder &builder,
@@ -59,7 +58,7 @@ LocalizedIndices DbElementWiseIndexer::splitIndices(ValueRange globalIndices,
   }
 
   for (unsigned i = 0; i < globalIndices.size(); ++i) {
-    if (i < outerRank_)
+    if (i < outerRank)
       result.dbRefIndices.push_back(globalIndices[i]);
     else
       result.memrefIndices.push_back(globalIndices[i]);
@@ -79,7 +78,7 @@ LocalizedIndices DbElementWiseIndexer::localize(ArrayRef<Value> globalIndices,
   ARTS_DEBUG("DbElementWiseIndexer::localize with " << globalIndices.size()
                                                     << " indices");
 
-  if (outerRank_ == 0)
+  if (outerRank == 0)
     return splitIndices(ValueRange(globalIndices), builder, loc);
 
   if (globalIndices.empty())
@@ -90,7 +89,7 @@ LocalizedIndices DbElementWiseIndexer::localize(ArrayRef<Value> globalIndices,
       splitIndices(ValueRange(globalIndices), builder, loc);
   if (!result.dbRefIndices.empty()) {
     result.dbRefIndices[0] =
-        builder.create<arith::SubIOp>(loc, result.dbRefIndices[0], elemOffset_);
+        builder.create<arith::SubIOp>(loc, result.dbRefIndices[0], elemOffset);
   }
 
   ARTS_DEBUG("  -> dbRef: " << result.dbRefIndices.size()
@@ -111,14 +110,14 @@ DbElementWiseIndexer::localizeLinearized(Value globalLinearIndex, Value stride,
   ///   Therefore:
   ///   localLinear  = globalLinear - (elemOffset * stride)
 
-  Value scaledOffset = builder.create<arith::MulIOp>(loc, elemOffset_, stride);
+  Value scaledOffset = builder.create<arith::MulIOp>(loc, elemOffset, stride);
   Value localLinear =
       builder.create<arith::SubIOp>(loc, globalLinearIndex, scaledOffset);
 
   /// For element-wise, dbRef index = row index relative to start
   Value globalRow =
       builder.create<arith::DivUIOp>(loc, globalLinearIndex, stride);
-  Value dbRefIdx = builder.create<arith::SubIOp>(loc, globalRow, elemOffset_);
+  Value dbRefIdx = builder.create<arith::SubIOp>(loc, globalRow, elemOffset);
 
   result.dbRefIndices.push_back(dbRefIdx);
   result.memrefIndices.push_back(localLinear);
@@ -144,7 +143,7 @@ LocalizedIndices DbElementWiseIndexer::localizeForFineGrained(
   for (unsigned i = 0; i < globalIndices.size(); ++i) {
     Value globalIdx = globalIndices[i];
 
-    if (i < outerRank_) {
+    if (i < outerRank) {
       Value localIdx = globalIdx;
       if (i < acquireIndices.size()) {
         localIdx =
@@ -223,14 +222,13 @@ void DbElementWiseIndexer::transformOps(
     /// Detect linearized access for multi-dimensional elements
     bool isLinearized = false;
     Value stride;
-    if (outerRank_ == 1 && indices.size() == 1 &&
-        oldElementSizes_.size() >= 2) {
+    if (outerRank == 1 && indices.size() == 1 && oldElementSizes.size() >= 2) {
       /// Multi-dimensional old element with single index = linearized access
-      stride = DatablockUtils::getStrideValue(AC.getBuilder(), loc,
-                                              oldElementSizes_);
+      stride =
+          DatablockUtils::getStrideValue(AC.getBuilder(), loc, oldElementSizes);
       if (stride) {
         if (auto staticStride =
-                DatablockUtils::getStaticStride(oldElementSizes_)) {
+                DatablockUtils::getStaticStride(oldElementSizes)) {
           if (*staticStride > 1) {
             isLinearized = true;
             ARTS_DEBUG("transformOps: linearized stride=" << *staticStride);
@@ -293,13 +291,13 @@ void DbElementWiseIndexer::transformDbRefUsers(
     /// Detect linearized access: single index accessing multi-element memref
     bool isLinearized = false;
     Value stride;
-    if (outerRank_ == 1 && elementIndices.size() == 1 &&
-        oldElementSizes_.size() >= 2) {
+    if (outerRank == 1 && elementIndices.size() == 1 &&
+        oldElementSizes.size() >= 2) {
       stride =
-          DatablockUtils::getStrideValue(builder, userLoc, oldElementSizes_);
+          DatablockUtils::getStrideValue(builder, userLoc, oldElementSizes);
       if (stride) {
         if (auto staticStride =
-                DatablockUtils::getStaticStride(oldElementSizes_)) {
+                DatablockUtils::getStaticStride(oldElementSizes)) {
           if (*staticStride > 1) {
             isLinearized = true;
             ARTS_DEBUG(
@@ -363,9 +361,9 @@ SmallVector<Value> DbElementWiseIndexer::localizeCoordinates(
     Value offset = sliceOffsets[0];
 
     /// Check if this needs stride scaling (old element has multiple dimensions)
-    if (oldElementSizes_.size() >= 2) {
+    if (oldElementSizes.size() >= 2) {
       Value stride =
-          DatablockUtils::getStrideValue(builder, loc, oldElementSizes_);
+          DatablockUtils::getStrideValue(builder, loc, oldElementSizes);
       if (stride) {
         /// localLinear = globalLinear - (offset * stride)
         Value scaledOffset = builder.create<arith::MulIOp>(loc, offset, stride);
@@ -373,7 +371,7 @@ SmallVector<Value> DbElementWiseIndexer::localizeCoordinates(
             builder.create<arith::SubIOp>(loc, globalLinear, scaledOffset);
 
         if (auto staticStride =
-                DatablockUtils::getStaticStride(oldElementSizes_)) {
+                DatablockUtils::getStaticStride(oldElementSizes)) {
           ARTS_DEBUG(
               "  localizeCoordinates: LINEARIZED, stride=" << *staticStride);
         } else {
